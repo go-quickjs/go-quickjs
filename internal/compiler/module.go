@@ -208,7 +208,8 @@ func (c *compiler) compileExportDecl(n *ast.ExportDecl) {
 // throwing.
 func (c *compiler) hoistModuleBindings(body []ast.Stmt) {
 	var names []string
-	collectVarNames(body, &names)
+	// Module code is strict, so Annex B's block-function alias does not apply.
+	collectVarNamesIn(body, &names, true)
 	for _, s := range body {
 		collectLexicalNames(s, &names)
 	}

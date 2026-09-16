@@ -73,13 +73,14 @@ func (c *compiler) predeclareFunction(fd *ast.FuncDecl) {
 // emitAnnexBFunctionAlias copies a block-scoped function into the var binding
 // that shares its name.
 func (c *compiler) emitAnnexBFunctionAlias(name string) {
-	// The function-scoped binding is the outermost one with this name, since a
-	// var is hoisted before any block is entered.
-	for i := range c.locals {
-		if c.locals[i].name != name {
+	// The innermost enclosing binding decides: a var of the same name is what
+	// the alias writes to, and anything lexical suppresses it. The function's
+	// own block-scoped binding is skipped, since it is the thing being aliased.
+	for i := len(c.locals) - 1; i >= 0; i-- {
+		if c.locals[i].name != name || c.locals[i].depth >= c.depth {
 			continue
 		}
-		if c.locals[i].kind == bindVar && c.locals[i].depth < c.depth {
+		if c.locals[i].kind == bindVar {
 			c.emit(bytecode.OpDup, 0, 0)
 			c.emit(bytecode.OpSetLocal, c.locals[i].slot, 0)
 		}

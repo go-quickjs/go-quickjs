@@ -92,7 +92,7 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 	// Hoist var declarations and nested function declarations to the top of
 	// the function, as their scope requires.
 	var varNames []string
-	collectVarNames(fn.Body, &varNames)
+	collectVarNamesIn(fn.Body, &varNames, c.fn.Strict)
 	for _, n := range varNames {
 		if _, exists := c.resolveLocal(n); !exists {
 			slot := c.declare(n, bindVar, fn.Start)

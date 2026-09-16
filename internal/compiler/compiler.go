@@ -539,7 +539,7 @@ func (c *compiler) addUpvalue(name string, index uint32, fromParent, mutable, td
 // object, which is where script-level declarations live.
 func (c *compiler) hoistGlobals(body []ast.Stmt) {
 	var names []string
-	collectVarNames(body, &names)
+	collectVarNamesIn(body, &names, c.fn.Strict)
 	for _, n := range names {
 		c.emit(bytecode.OpDefineGlobalVar, c.nameIdx(n), 0)
 	}
@@ -549,70 +549,173 @@ func (c *compiler) hoistGlobals(body []ast.Stmt) {
 // declarations, descending through every construct that does not introduce a
 // new function scope.
 func collectVarNames(body []ast.Stmt, out *[]string) {
-	for _, s := range body {
-		collectVarNamesStmt(s, out)
+	collectVarNamesIn(body, out, false)
+}
+
+// collectVarNamesIn gathers the names a function's var-scoped bindings cover.
+//
+// Real `var` declarations and top-level function declarations are
+// unconditional. A function declared inside a block is included only because of
+// Annex B, which gives it a var-scoped alias -- and only where that alias would
+// be legal: a `let` of the same name anywhere between the block and the
+// function top level suppresses it, and strict mode suppresses it outright.
+func collectVarNamesIn(body []ast.Stmt, out *[]string, strict bool) {
+	c := &varCollector{out: *out, strict: strict}
+	c.stmts(body)
+	*out = c.out
+}
+
+// varCollector walks a function body tracking the lexical scopes in effect, so
+// that Annex B's alias can be suppressed where an enclosing block already binds
+// the name.
+type varCollector struct {
+	out    []string
+	strict bool
+	// lexical is the stack of enclosing block scopes, innermost last. It is
+	// empty at the function's own top level, where a function declaration is
+	// var-scoped outright rather than by Annex B.
+	lexical [][]lexName
+}
+
+func (c *varCollector) add(name string) { c.out = append(c.out, name) }
+
+// stmts walks a statement list as one lexical scope.
+func (c *varCollector) stmts(list []ast.Stmt) {
+	for _, s := range list {
+		c.stmt(s)
 	}
 }
 
-func collectVarNamesStmt(s ast.Stmt, out *[]string) {
+// block walks a nested statement list, which is a scope of its own.
+func (c *varCollector) block(list []ast.Stmt) {
+	var names []lexName
+	for _, s := range list {
+		names = lexicalNamesOf(s, names)
+	}
+	c.lexical = append(c.lexical, names)
+	c.stmts(list)
+	c.lexical = c.lexical[:len(c.lexical)-1]
+}
+
+// nested walks a single statement that stands where a block could.
+func (c *varCollector) nested(s ast.Stmt) {
+	if s == nil {
+		return
+	}
+	if b, ok := s.(*ast.BlockStmt); ok {
+		c.block(b.Body)
+		return
+	}
+	c.stmt(s)
+}
+
+// shadowed reports whether an enclosing block binds the name lexically.
+func (c *varCollector) shadowed(name string) bool {
+	for _, scope := range c.lexical {
+		for i := range scope {
+			if scope[i].name == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (c *varCollector) stmt(s ast.Stmt) {
 	switch n := s.(type) {
 	case *ast.VarDecl:
 		if n.Kind != ast.DeclVar {
 			return
 		}
+		var names []string
 		for _, d := range n.Decls {
-			collectPatternNames(d.Target, out)
+			collectPatternNames(d.Target, &names)
 		}
+		c.out = append(c.out, names...)
+
 	case *ast.FuncDecl:
-		if n.Fn.Name != nil {
-			*out = append(*out, n.Fn.Name.Name)
+		if n.Fn.Name == nil {
+			return
 		}
+		name := n.Fn.Name.Name
+		if len(c.lexical) == 0 {
+			// At the function's own top level the binding is var-scoped
+			// outright, whatever the mode.
+			c.add(name)
+			return
+		}
+		// Inside a block it exists only by Annex B, which strict mode does not
+		// grant and which an async or generator declaration never gets.
+		if c.strict || n.Fn.Async || n.Fn.Generator || c.shadowed(name) {
+			return
+		}
+		c.add(name)
+
 	case *ast.BlockStmt:
-		collectVarNames(n.Body, out)
+		c.block(n.Body)
 	case *ast.IfStmt:
-		collectVarNamesStmt(n.Cons, out)
-		if n.Alt != nil {
-			collectVarNamesStmt(n.Alt, out)
-		}
+		c.nested(n.Cons)
+		c.nested(n.Alt)
 	case *ast.ForStmt:
-		if n.Init != nil {
-			collectVarNamesStmt(n.Init, out)
-		}
-		collectVarNamesStmt(n.Body, out)
+		c.forScope(n.Init, n.Body)
 	case *ast.ForInStmt:
-		if d, ok := n.Left.(*ast.VarDecl); ok {
-			collectVarNamesStmt(d, out)
-		}
-		collectVarNamesStmt(n.Body, out)
+		c.forScope(stmtOrNil(n.Left), n.Body)
 	case *ast.ForOfStmt:
-		if d, ok := n.Left.(*ast.VarDecl); ok {
-			collectVarNamesStmt(d, out)
-		}
-		collectVarNamesStmt(n.Body, out)
+		c.forScope(stmtOrNil(n.Left), n.Body)
 	case *ast.WhileStmt:
-		collectVarNamesStmt(n.Body, out)
+		c.nested(n.Body)
 	case *ast.DoWhileStmt:
-		collectVarNamesStmt(n.Body, out)
+		c.nested(n.Body)
 	case *ast.TryStmt:
-		collectVarNames(n.Block, out)
+		c.block(n.Block)
 		if n.Catch != nil {
-			collectVarNames(n.Catch.Body, out)
+			c.block(n.Catch.Body)
 		}
-		collectVarNames(n.Finally, out)
+		if n.Finally != nil {
+			c.block(n.Finally)
+		}
 	case *ast.SwitchStmt:
+		// All the clauses share one block scope.
+		var body []ast.Stmt
 		for _, cs := range n.Cases {
-			collectVarNames(cs.Body, out)
+			body = append(body, cs.Body...)
 		}
+		c.block(body)
 	case *ast.LabeledStmt:
-		collectVarNamesStmt(n.Body, out)
+		c.nested(n.Body)
 	case *ast.WithStmt:
-		collectVarNamesStmt(n.Body, out)
+		c.nested(n.Body)
 	case *ast.ExportDecl:
 		// A declaration wrapped in an export still binds its names.
 		if n.Decl != nil {
-			collectVarNamesStmt(n.Decl, out)
+			c.stmt(n.Decl)
 		}
 	}
+}
+
+// forScope walks a loop head and body as one scope, which is what a `let` in
+// the head is scoped to.
+func (c *varCollector) forScope(init ast.Stmt, body ast.Stmt) {
+	var names []lexName
+	if vd, ok := init.(*ast.VarDecl); ok && vd.Kind != ast.DeclVar {
+		for _, d := range vd.Decls {
+			names = patternNames(d.Target, names)
+		}
+	}
+	c.lexical = append(c.lexical, names)
+	if init != nil {
+		c.stmt(init)
+	}
+	c.nested(body)
+	c.lexical = c.lexical[:len(c.lexical)-1]
+}
+
+// stmtOrNil unwraps a for-in or for-of head that may not be a statement.
+func stmtOrNil(n ast.Node) ast.Stmt {
+	if s, ok := n.(ast.Stmt); ok {
+		return s
+	}
+	return nil
 }
 
 // collectPatternNames gathers the identifiers a binding pattern introduces.

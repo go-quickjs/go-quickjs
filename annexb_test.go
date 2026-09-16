@@ -46,8 +46,19 @@ func TestAnnexB(t *testing.T) {
 		// It is only assigned once the declaration is reached.
 		{`(function () { var before = typeof f; { function f() {} } return before; })()`,
 			"undefined"},
-		// Strict mode keeps the function inside its block.
+		{`{ function g() {} } typeof g`, "function"},
+
+		// The alias exists only where it would be legal. Strict mode does not
+		// grant it, an async or generator declaration never gets one, and a
+		// lexical binding of the same name anywhere in between suppresses it.
 		{`(function () { "use strict"; { function f() {} } return typeof f; })()`, "undefined"},
+		{`(function () { { async function f() {} } return typeof f; })()`, "undefined"},
+		{`(function () { { function* f() {} } return typeof f; })()`, "undefined"},
+		{`(function () { { let f = 1; { function f() {} } } return typeof f; })()`, "undefined"},
+		{`{ let f = 1; { function f() {} } } typeof f`, "undefined"},
+		// A binding of a different name does not.
+		{`(function () { for (let f of [1]) { function g() {} } return typeof g; })()`,
+			"function"},
 	}
 
 	for _, tc := range cases {
