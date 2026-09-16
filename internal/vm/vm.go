@@ -1645,6 +1645,12 @@ func (r *Runtime) makeClosure(f *frame, c Value) *Object {
 }
 
 func ctorKindOf(fn *bytecode.Function) ctorKind {
+	// A generator or async function has a prototype property but is not a
+	// constructor: there is no object for `new` to build, since calling one
+	// produces an iterator or a promise.
+	if fn.Generator || fn.Async {
+		return ctorNone
+	}
 	switch fn.Kind {
 	case bytecode.KindNormal:
 		return ctorBase
@@ -1700,21 +1706,48 @@ func (r *Runtime) getIndexed(obj, key Value) (Value, error) {
 
 // construct implements the `new` operator.
 func (r *Runtime) construct(callee Value, args []Value) (Value, error) {
+	return r.constructWithTarget(callee, args, callee)
+}
+
+// isConstructor reports whether a value responds to new.
+func isConstructor(v Value) bool {
+	if !v.IsObject() {
+		return false
+	}
+	o := v.Object()
+	if p := proxyOf(o); p != nil {
+		return p.target != nil && isConstructor(Obj(p.target))
+	}
+	fd := o.fn()
+	return fd != nil && fd.ctorKind != ctorNone
+}
+
+// constructWithTarget builds an object with one constructor while another
+// decides what it is.
+//
+// The two differ whenever a subclass is involved: `new D()` on a class derived
+// from B eventually runs B's constructor, but the object is a D, so the
+// prototype comes from D. Reflect.construct exposes the same split directly.
+func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Value) (Value, error) {
 	if !callee.IsObject() {
 		return Undefined, r.throwTypeError("%s is not a constructor", r.describe(callee))
 	}
 	o := callee.Object()
 	if p := proxyOf(o); p != nil {
-		return r.proxyConstruct(p, args, callee)
+		return r.proxyConstruct(p, args, newTarget)
 	}
 	fd := o.fn()
 	if fd == nil || fd.ctorKind == ctorNone {
 		return Undefined, r.throwTypeError("%s is not a constructor", fd.nameOr("value"))
 	}
 
-	// The new object's prototype comes from the constructor's .prototype
-	// property, falling back to Object.prototype when that is not an object.
-	protoVal, err := r.getProp(o, atomPrototype, callee)
+	// The new object's prototype comes from new.target's .prototype property,
+	// falling back to Object.prototype when that is not an object.
+	target := o
+	if newTarget.IsObject() {
+		target = newTarget.Object()
+	}
+	protoVal, err := r.getProp(target, atomPrototype, Obj(target))
 	if err != nil {
 		return Undefined, err
 	}
@@ -1724,13 +1757,20 @@ func (r *Runtime) construct(callee Value, args []Value) (Value, error) {
 	}
 	this := Obj(newObject(proto, ClassObject))
 
-	res, err := r.callObject(o, this, args, callee)
+	res, err := r.callObject(o, this, args, newTarget)
 	if err != nil {
 		return Undefined, err
 	}
 	// A constructor that returns an object overrides the newly created one;
 	// any other return value is ignored.
 	if res.IsObject() {
+		// A native constructor builds its own object, because an Error needs a
+		// stack and an Array needs array storage. It knows nothing of
+		// new.target, so the prototype new.target chose is put back -- which is
+		// what makes Reflect.construct(Array, [], F) produce an F.
+		if fd.native != nil && res.Object() != this.Object() && target != o {
+			res.Object().proto = proto
+		}
 		return res, nil
 	}
 	return this, nil

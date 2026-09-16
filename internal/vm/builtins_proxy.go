@@ -421,7 +421,7 @@ func (r *Runtime) proxyConstruct(p *proxyData, args []Value, newTarget Value) (V
 		return Undefined, err
 	}
 	if !ok {
-		return r.construct(Obj(p.target), args)
+		return r.constructWithTarget(Obj(p.target), args, newTarget)
 	}
 	res, err := r.call(fn, Obj(p.handler), []Value{
 		Obj(p.target), Obj(r.newArrayFrom(args)), newTarget,
@@ -672,6 +672,20 @@ func (r *Runtime) initReflectBuiltins() {
 	})
 
 	r.defMethod(rf, "construct", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		target := arg(args, 0)
+		if !isConstructor(target) {
+			return Undefined, rt.throwTypeError("Reflect.construct requires a constructor")
+		}
+		// new.target defaults to the constructor being run, which is what makes
+		// the two-argument form behave like new.
+		newTarget := target
+		if len(args) > 2 {
+			newTarget = args[2]
+			if !isConstructor(newTarget) {
+				return Undefined, rt.throwTypeError(
+					"the new.target given to Reflect.construct is not a constructor")
+			}
+		}
 		var callArgs []Value
 		if list := arg(args, 1); !list.IsNullish() {
 			var err error
@@ -679,6 +693,6 @@ func (r *Runtime) initReflectBuiltins() {
 				return Undefined, err
 			}
 		}
-		return rt.construct(arg(args, 0), callArgs)
+		return rt.constructWithTarget(target, callArgs, newTarget)
 	})
 }
