@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"fmt"
 	"github.com/go-quickjs/go-quickjs/internal/ast"
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jsnum"
@@ -383,16 +384,33 @@ func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
 		name = cls.Name.Name
 	}
 
-	ctor := c.synthesizeConstructor(cls)
+	// A computed field key is evaluated once, when the class is defined, not
+	// once per instance -- `class C { [log()] = 1 }` calls log once however
+	// many instances are made. The key is stashed in a hidden binding of the
+	// enclosing scope, which the constructor then reads as an upvalue; the
+	// names begin with a character no identifier may contain, so nothing a
+	// script writes can collide with one.
+	keyNames := make([]string, len(cls.Fields))
+	for i, f := range cls.Fields {
+		if !f.Computed {
+			continue
+		}
+		keyNames[i] = fmt.Sprintf("%%key%d", c.hiddenCount)
+		c.hiddenCount++
+	}
+
+	ctor := c.synthesizeConstructor(cls, keyNames)
 	if cls.Extends != nil {
 		// The parent is evaluated before the constructor is built, as the
 		// heritage clause is an expression that may have side effects.
 		c.compileExpr(cls.Extends)
+		c.evalComputedFieldKeys(cls, keyNames)
 		c.compileFunctionLiteral(ctor, name)
 		c.emit(bytecode.OpSwap, 0, 0)
 		// stack: ctor parent
 		c.emitAt(cls.Start, bytecode.OpNewClass, 0, 0)
 	} else {
+		c.evalComputedFieldKeys(cls, keyNames)
 		c.compileFunctionLiteral(ctor, name)
 	}
 
@@ -418,20 +436,26 @@ func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
 
 	// Static fields are assigned after the class object exists, with the
 	// constructor as `this`.
-	for _, f := range cls.Fields {
+	for i, f := range cls.Fields {
 		if !f.Static {
 			continue
 		}
 		c.emit(bytecode.OpDup, 0, 0)
+		if f.Computed {
+			// The key was evaluated when the class was defined; only the value
+			// is produced here.
+			c.compileIdentRead(&ast.Ident{Name: keyNames[i], Start: f.Start})
+		}
 		if f.Value != nil {
 			c.compileExprNamed(f.Value, classFieldName(f.Key, f.Computed))
 		} else {
 			c.emit(bytecode.OpPushUndef, 0, 0)
 		}
 		if f.Computed {
-			c.errorf(f.Start, "a computed static field name is not yet supported")
+			c.emit(bytecode.OpDefineIndex, 0, 0)
+		} else {
+			c.emit(bytecode.OpDefineField, c.nameIdx(propKeyName(f.Key)), 0)
 		}
-		c.emit(bytecode.OpDefineField, c.nameIdx(propKeyName(f.Key)), 0)
 		c.emit(bytecode.OpDrop, 0, 0)
 	}
 
@@ -461,19 +485,24 @@ func (c *compiler) compileClassMember(m ast.Property, fn *ast.FuncLit) {
 	if m.Static {
 		// The constructor is the target and stays on the stack.
 		c.emit(bytecode.OpDup, 0, 0)
-		c.compileMethodValue(fn, key)
-		c.emit(bytecode.OpSetHomeObject, 0, 0)
-		c.emitClassMemberDefine(m, key)
-		c.emit(bytecode.OpDrop, 0, 0)
-		return
+	} else {
+		c.emit(bytecode.OpDup, 0, 0)
+		c.emit(bytecode.OpGetProp, c.nameIdx("prototype"), 0)
 	}
-
-	c.emit(bytecode.OpDup, 0, 0)
-	c.emit(bytecode.OpGetProp, c.nameIdx("prototype"), 0)
+	// A computed key is evaluated before the method it names, which is
+	// observable when it has a side effect, and leaves the stack in the
+	// [target, key, value] order the define instructions expect.
+	homeDepth := uint32(1)
+	if m.Computed {
+		c.compileExpr(m.Key)
+		c.emit(bytecode.OpToPropertyKey, 0, 0)
+		// The key now sits between the target and the function.
+		homeDepth = 2
+	}
 	c.compileMethodValue(fn, key)
 	// The home object is what `super` resolves against, so a method has to
 	// remember the object it was defined on.
-	c.emit(bytecode.OpSetHomeObject, 0, 0)
+	c.emit(bytecode.OpSetHomeObject, homeDepth, 0)
 	c.emitClassMemberDefine(m, key)
 	c.emit(bytecode.OpDrop, 0, 0)
 }
@@ -482,12 +511,15 @@ func (c *compiler) compileClassMember(m ast.Property, fn *ast.FuncLit) {
 // its target.
 func (c *compiler) emitClassMemberDefine(m ast.Property, key string) {
 	if m.Computed {
-		// The key was not pushed, so it is evaluated now and the value moved
-		// above it.
-		c.compileExpr(m.Key)
-		c.emit(bytecode.OpToPropertyKey, 0, 0)
-		c.emit(bytecode.OpSwap, 0, 0)
-		c.emit(bytecode.OpDefineIndex, 0, 0)
+		// The key is already on the stack, beneath the value.
+		switch m.Kind {
+		case ast.PropGet:
+			c.emit(bytecode.OpDefineGetterIndex, 0, 0)
+		case ast.PropSet:
+			c.emit(bytecode.OpDefineSetterIndex, 0, 0)
+		default:
+			c.emit(bytecode.OpDefineIndex, 0, 0)
+		}
 		return
 	}
 	switch m.Kind {
@@ -511,7 +543,22 @@ func (c *compiler) emitClassMemberDefine(m ast.Property, key string) {
 //
 // Compiling fields as statements rather than as separate initializer functions
 // means they see the constructor's scope and `this` for free.
-func (c *compiler) synthesizeConstructor(cls *ast.ClassLit) *ast.FuncLit {
+// evalComputedFieldKeys evaluates each computed field key and stores it in its
+// hidden binding, leaving the operand stack as it found it.
+func (c *compiler) evalComputedFieldKeys(cls *ast.ClassLit, keyNames []string) {
+	for i, f := range cls.Fields {
+		if !f.Computed {
+			continue
+		}
+		slot := c.declare(keyNames[i], bindConst, f.Start)
+		c.compileExpr(f.Key)
+		c.emit(bytecode.OpToPropertyKey, 0, 0)
+		c.emit(bytecode.OpSetLocal, slot, 0)
+		c.markInitialized(keyNames[i])
+	}
+}
+
+func (c *compiler) synthesizeConstructor(cls *ast.ClassLit, keyNames []string) *ast.FuncLit {
 	var declared *ast.FuncLit
 	for _, m := range cls.Members {
 		if fn, ok := m.Value.(*ast.FuncLit); ok && fn.Kind == ast.FuncConstructor {
@@ -520,12 +567,15 @@ func (c *compiler) synthesizeConstructor(cls *ast.ClassLit) *ast.FuncLit {
 	}
 
 	var fieldInit []ast.Stmt
-	for _, f := range cls.Fields {
+	for i, f := range cls.Fields {
 		if f.Static {
 			continue
 		}
-		if f.Computed {
-			c.errorf(f.Start, "a computed instance field name is not yet supported")
+		key, computed := f.Key, f.Computed
+		if computed {
+			// Read the key the class definition already computed rather than
+			// evaluating the expression again for every instance.
+			key = &ast.Ident{Name: keyNames[i], Start: f.Start}
 		}
 		value := f.Value
 		if value == nil {
@@ -537,7 +587,8 @@ func (c *compiler) synthesizeConstructor(cls *ast.ClassLit) *ast.FuncLit {
 				Op: "=",
 				Target: &ast.Member{
 					Object:   &ast.This{Start: f.Start},
-					Property: f.Key,
+					Property: key,
+					Computed: computed,
 					Start:    f.Start,
 				},
 				Value: value,

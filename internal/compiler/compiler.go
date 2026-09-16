@@ -111,7 +111,11 @@ type compiler struct {
 
 	locals   []localVar
 	nextSlot uint32
-	depth    int
+	// hiddenCount names the compiler-generated bindings, which are spelled
+	// with a character no identifier may contain so that nothing a script
+	// writes can collide with one.
+	hiddenCount int
+	depth       int
 
 	// nameIndex and constIndex deduplicate the tables, so that a name or
 	// constant used many times costs one entry.

@@ -595,14 +595,21 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			fnVal := pop()
 			obj := peek(0)
 			if obj.IsObject() && fnVal.IsObject() {
-				var getter, setter *Object
-				if in.Op == bytecode.OpDefineGetter {
-					getter = fnVal.Object()
-				} else {
-					setter = fnVal.Object()
-				}
-				r.defineAccessor(obj.Object(), cl.names[in.A], getter, setter,
-					propEnumerable|propConfigurable)
+				r.defineHalfAccessor(obj.Object(), cl.names[in.A], fnVal.Object(),
+					in.Op == bytecode.OpDefineGetter)
+			}
+		case bytecode.OpDefineGetterIndex, bytecode.OpDefineSetterIndex:
+			fnVal := pop()
+			key := pop()
+			obj := peek(0)
+			k, err := r.toPropertyKey(key)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			if obj.IsObject() && fnVal.IsObject() {
+				r.defineHalfAccessor(obj.Object(), k, fnVal.Object(),
+					in.Op == bytecode.OpDefineGetterIndex)
 			}
 		case bytecode.OpSetProtoOf:
 			val := pop()
@@ -1213,10 +1220,12 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				goto onError
 			}
 		case bytecode.OpSetHomeObject:
-			// stack: home fn; `super` inside the method resolves against home.
+			// `super` inside the method resolves against the home object,
+			// which sits A slots below the function -- one normally, two when
+			// a computed key was pushed in between.
 			if fnVal := peek(0); fnVal.IsObject() {
-				if fd := fnVal.Object().fn(); fd != nil && peek(1).IsObject() {
-					fd.homeObject = peek(1).Object()
+				if home := peek(int(in.A)); fnVal.Object().fn() != nil && home.IsObject() {
+					fnVal.Object().fn().homeObject = home.Object()
 				}
 			}
 		case bytecode.OpDefineMethod:
@@ -1350,6 +1359,21 @@ func (r *Runtime) unwindToHandler(f *frame, sp *int, err error) bool {
 	}
 	f.pc = h.pc
 	return true
+}
+
+// defineHalfAccessor installs one half of an accessor, leaving the other half
+// as whatever a previous definition put there.
+//
+// A get/set pair written separately reaches this twice, and the second must not
+// discard the first.
+func (r *Runtime) defineHalfAccessor(o *Object, key Atom, fn *Object, isGetter bool) {
+	var getter, setter *Object
+	if isGetter {
+		getter = fn
+	} else {
+		setter = fn
+	}
+	r.defineAccessor(o, key, getter, setter, propEnumerable|propConfigurable)
 }
 
 // unwindToFinally transfers control to the innermost finally handler, carrying

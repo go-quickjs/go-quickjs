@@ -251,12 +251,20 @@ func (c *compiler) compileObjectLit(n *ast.ObjectLit) {
 			c.emit(bytecode.OpCopyDataProps, 0, 0)
 			continue
 		case ast.PropGet, ast.PropSet:
+			if p.Computed {
+				op := bytecode.OpDefineGetterIndex
+				if p.Kind == ast.PropSet {
+					op = bytecode.OpDefineSetterIndex
+				}
+				c.compileExpr(p.Key)
+				c.emit(bytecode.OpToPropertyKey, 0, 0)
+				c.compileExpr(p.Value)
+				c.emit(op, 0, 0)
+				continue
+			}
 			op := bytecode.OpDefineGetter
 			if p.Kind == ast.PropSet {
 				op = bytecode.OpDefineSetter
-			}
-			if p.Computed {
-				c.errorf(p.Start, "computed accessor names are not yet supported")
 			}
 			c.compileExpr(p.Value)
 			c.emit(op, c.nameIdx(propKeyName(p.Key)), 0)
@@ -821,6 +829,21 @@ func (c *compiler) assignTo(target ast.Expr, initializing bool) {
 		// target's subexpressions were already evaluated; a plain assignment
 		// goes through compileMemberStore so that it can order them correctly.
 		c.compileMemberStoreFromValue(t)
+
+	case *ast.ArrayPattern:
+		// A destructuring assignment, rather than a declaration: the leaves are
+		// existing references. It arises from `[a] = b` and from a for-of head
+		// whose target is a pattern.
+		c.compileArrayPattern(t, ast.DeclVar, false)
+
+	case *ast.ObjectPattern:
+		c.compileObjectPattern(t, ast.DeclVar, false)
+
+	case *ast.AssignPattern:
+		// `[a = 1]` as an assignment target: the default applies to the value
+		// on the stack before it reaches the reference underneath.
+		c.applyDefault(t.Default, nameOf(t.Target))
+		c.assignTo(t.Target, initializing)
 
 	default:
 		c.errorf(target.Pos(), "invalid assignment target")

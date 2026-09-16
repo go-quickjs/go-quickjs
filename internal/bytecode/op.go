@@ -82,10 +82,14 @@ const (
 	// the object expression.
 	OpGetPropThis
 	OpGetIndexThis
-	OpDefineField   // define an own data property, ignoring setters
-	OpDefineIndex   // as above with a computed key
-	OpDefineGetter  // define an accessor's getter half
-	OpDefineSetter  // define an accessor's setter half
+	OpDefineField  // define an own data property, ignoring setters
+	OpDefineIndex  // as above with a computed key
+	OpDefineGetter // define an accessor's getter half
+	OpDefineSetter // define an accessor's setter half
+	// The computed-key forms of the accessor definitions, which take the key
+	// from the stack beneath the function.
+	OpDefineGetterIndex
+	OpDefineSetterIndex
 	OpGetLength     // a fast path for the very common `.length`
 	OpSetProtoOf    // set __proto__ from an object literal
 	OpCopyDataProps // object spread: copy own enumerable properties
@@ -275,7 +279,9 @@ var opNames = [opCount]string{
 	OpGetPropThis: "get_prop_this", OpGetIndexThis: "get_index_this",
 	OpDefineField: "define_field", OpDefineIndex: "define_index",
 	OpDefineGetter: "define_getter", OpDefineSetter: "define_setter",
-	OpGetLength: "get_length", OpSetProtoOf: "set_proto_of",
+	OpDefineGetterIndex: "define_getter_index",
+	OpDefineSetterIndex: "define_setter_index",
+	OpGetLength:         "get_length", OpSetProtoOf: "set_proto_of",
 	OpCopyDataProps: "copy_data_props",
 
 	OpGetPrivate: "get_private", OpSetPrivate: "set_private",
