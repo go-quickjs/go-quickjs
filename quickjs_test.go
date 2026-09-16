@@ -1336,3 +1336,76 @@ func TestDateUsesTheHostClock(t *testing.T) {
 		t.Errorf("new Date() = %s, want the injected time", got)
 	}
 }
+
+func TestRegExp(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`/ab/.test("xaby")`, "true"},
+		{`/ab/.test("xyz")`, "false"},
+		{`/a(b)c/.exec("abc")[1]`, "b"},
+		{`/a(b)c/.exec("abc").index`, "0"},
+		{`String(/nope/.exec("abc"))`, "null"},
+		{`String(/ab/gi)`, "/ab/gi"},
+		{`/ab/gi.flags`, "gi"},
+		{`/ab/g.source`, "ab"},
+		{`/ab/g.global`, "true"},
+		{`/ab/.global`, "false"},
+		{`new RegExp("a+", "g").test("aaa")`, "true"},
+		// A literal produces a fresh object each evaluation, so lastIndex is
+		// not shared between them.
+		{`/a/g.lastIndex`, "0"},
+		{`const re = /a/g; re.test("aa"); re.lastIndex`, "1"},
+		{`/A/i.test("a")`, "true"},
+		{`/\u{1F600}/u.test("😀")`, "true"},
+		{`/(?<y>\d{4})/.exec("2024").groups.y`, "2024"},
+		// A group that did not participate is undefined, not empty.
+		{`String(/(a)?b/.exec("b")[1])`, "undefined"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}
+
+func TestStringRegExpMethods(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`"2024-03-15".match(/(\d+)-(\d+)-(\d+)/).slice(1).join("/")`, "2024/03/15"},
+		{`"a1b2c3".match(/\d/g).join("")`, "123"},
+		{`String("abc".match(/z/))`, "null"},
+		{`"hello world".replace(/o/g, "0")`, "hell0 w0rld"},
+		{`"hello".replace(/l/, "L")`, "heLlo"},
+		{`"John Smith".replace(/(\w+) (\w+)/, "$2 $1")`, "Smith John"},
+		{`"aaa".replace(/a/g, (m, i) => i)`, "012"},
+		{`"a-b-c".split(/-/).join(",")`, "a,b,c"},
+		{`"abc".search(/b/)`, "1"},
+		{`"abc".search(/z/)`, "-1"},
+		{`[..."a1b2".matchAll(/\d/g)].length`, "2"},
+		{`[..."a1b2".matchAll(/\d/g)][0][0]`, "1"},
+		// A plain string separator is matched literally, not as a pattern.
+		{`"a.b".split(".").length`, "2"},
+		{`"test".replace("t", "T")`, "Test"},
+		{`"a1b".replace(/\d/, "$&$&")`, "a11b"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}
+
+func TestRegExpSyntaxErrorIsThrown(t *testing.T) {
+	checkEval(t, `try { new RegExp("(") } catch (e) { e.name }`, "SyntaxError")
+}
+
+func TestCatastrophicRegExpIsBounded(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	// A backtracking engine has an exponential worst case. A hostile pattern
+	// must fail rather than stall the host.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rt.Eval(`/(a+)+b/.test("` + strings.Repeat("a", 60) + `")`)
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("a catastrophic pattern did not terminate")
+	}
+}

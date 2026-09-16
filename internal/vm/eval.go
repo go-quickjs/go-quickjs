@@ -44,9 +44,9 @@ func (r *Runtime) materialize(c bytecode.Constant) Value {
 		tmpl := r.prepare(c.Fn)
 		return Value{num: mkTag(KindObject, 0), ref: tmpl}
 	case bytecode.ConstRegExp:
-		// Regular expressions are not yet implemented; the pattern is kept so
-		// that the failure names it.
-		return Str(NewString("/" + c.Str + "/" + c.Flags))
+		// A regexp literal is built fresh each time it is evaluated, so the
+		// pool entry stays unmaterialized and OpNewRegExp reads it directly.
+		return Undefined
 	}
 	return Undefined
 }

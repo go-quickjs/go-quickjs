@@ -389,10 +389,6 @@ func (r *Runtime) initStringBuiltins() {
 		if sepVal.IsUndefined() {
 			return Obj(rt.newArrayFrom([]Value{Str(s)})), nil
 		}
-		sep, err := rt.toString(sepVal)
-		if err != nil {
-			return Undefined, err
-		}
 		limit := math.MaxInt32
 		if lv := arg(args, 1); !lv.IsUndefined() {
 			n, err := rt.toUint32(lv)
@@ -400,6 +396,13 @@ func (r *Runtime) initStringBuiltins() {
 				return Undefined, err
 			}
 			limit = int(n)
+		}
+		if sepVal.IsObject() && sepVal.Object().class == ClassRegExp {
+			return rt.regexpSplit(sepVal, s, limit)
+		}
+		sep, err := rt.toString(sepVal)
+		if err != nil {
+			return Undefined, err
 		}
 		var out []Value
 		if sep.Len() == 0 {
@@ -532,6 +535,11 @@ func (r *Runtime) stringReplace(thisStr thisStrFunc, this Value, args []Value, a
 	s, err := thisStr(r, this)
 	if err != nil {
 		return Undefined, err
+	}
+	// A regular expression separator takes an entirely different path, since
+	// it can capture groups and match variable text.
+	if pat := arg(args, 0); pat.IsObject() && pat.Object().class == ClassRegExp {
+		return r.regexpReplace(pat, s, arg(args, 1), all)
 	}
 	pattern, err := r.toString(arg(args, 0))
 	if err != nil {

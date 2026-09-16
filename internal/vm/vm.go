@@ -1073,6 +1073,18 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 			}
 			push(v)
 
+		case bytecode.OpNewRegExp:
+			// The constant holds the pattern text; a fresh object is built on
+			// each evaluation, since a literal produces a new RegExp with its
+			// own lastIndex every time it is reached.
+			c := cl.fn.Constants[in.A]
+			v, err := r.newRegExp(c.Str, c.Flags)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			push(v)
+
 		case bytecode.OpNewTarget:
 			push(f.newTarget)
 		case bytecode.OpPushCallee:

@@ -219,6 +219,8 @@ func (r *Runtime) initGlobals() {
 	r.initSymbolBuiltins()
 	r.initErrorBuiltins()
 	r.initMathBuiltins()
+	r.initRegExpBuiltins()
+	r.initStringRegExpMethods()
 	r.initDateBuiltins()
 	r.initMapBuiltins()
 	r.initSetBuiltins()
