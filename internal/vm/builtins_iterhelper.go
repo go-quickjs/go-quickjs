@@ -132,13 +132,17 @@ func (r *Runtime) initIteratorHelpers() {
 			case helperTake, helperDrop:
 				n, err := rt.toNumber(arg(args, 0))
 				if err != nil {
+					// The conversion may run a valueOf that throws, and the
+					// underlying iterator is abandoned either way.
+					rt.closeIterator(this)
 					return Undefined, err
 				}
-				if math.IsNaN(n) {
-					// NaN would otherwise compare false against every bound and
-					// silently behave as zero.
+				// NaN would otherwise compare false against every bound and
+				// silently behave as zero, and a count past the integer range
+				// cannot be counted down to.
+				if math.IsNaN(n) || (!math.IsInf(n, 0) && n > maxArrayLength) {
 					rt.closeIterator(this)
-					return Undefined, rt.throwRangeError("%s requires a number", name)
+					return Undefined, rt.throwRangeError("%s requires a count in range", name)
 				}
 				n = math.Trunc(n)
 				if n < 0 {
@@ -232,11 +236,17 @@ func (r *Runtime) initHelperPrototype() {
 		if !h.done {
 			h.done = true
 			// Abandoning a helper abandons everything beneath it, so a
-			// generator upstream gets to run its finally blocks.
+			// generator upstream gets to run its finally blocks. An error from
+			// doing so reaches the caller, because nothing else is in flight
+			// to take precedence over it.
 			if h.hasInner {
-				rt.closeIterator(h.inner)
+				if err := rt.closeIteratorErr(h.inner); err != nil {
+					return Undefined, err
+				}
 			}
-			rt.closeIterator(h.iter)
+			if err := rt.closeIteratorErr(h.iter); err != nil {
+				return Undefined, err
+			}
 		}
 		return Obj(rt.iterResult(Undefined, true)), nil
 	})
@@ -301,10 +311,11 @@ func (r *Runtime) advanceHelper(h *iterHelperData) (Value, bool, error) {
 	case helperTake:
 		if h.counter >= h.limit {
 			// Reaching the limit closes the source rather than leaving it
-			// suspended, which is what makes take safe over a generator.
+			// suspended, which is what makes take safe over a generator. This
+			// is an ordinary completion, so a failure to close is reported
+			// rather than swallowed.
 			h.done = true
-			r.closeIterator(h.iter)
-			return Undefined, false, nil
+			return Undefined, false, r.closeIteratorErr(h.iter)
 		}
 		h.counter++
 		return r.pull(h)
@@ -394,10 +405,14 @@ func (r *Runtime) flattenable(v Value) (Value, Value, error) {
 	if err != nil {
 		return Undefined, Undefined, err
 	}
-	if !isCallable(method) {
+	if method.IsNullish() {
 		// An object that is already an iterator, with a next method but no
-		// Symbol.iterator, is accepted directly.
+		// Symbol.iterator, is accepted directly. A Symbol.iterator that is
+		// present but not callable is a mistake, not an absence.
 		return r.getIteratorDirect(v)
+	}
+	if !isCallable(method) {
+		return Undefined, Undefined, r.throwTypeError("Symbol.iterator is not a function")
 	}
 	iter, err := r.call(method, v, nil)
 	if err != nil {
@@ -429,12 +444,15 @@ func (r *Runtime) initIteratorTerminals(p *Object) {
 			}
 			cont, err := visit(v, i)
 			if err != nil {
+				// The visitor's error is the one in flight, so a failure to
+				// close is swallowed behind it.
 				rt.closeIterator(iter)
 				return err
 			}
 			if !cont {
-				rt.closeIterator(iter)
-				return nil
+				// Stopping early is an ordinary completion, so a failure to
+				// close is the result.
+				return rt.closeIteratorErr(iter)
 			}
 		}
 	}
@@ -587,7 +605,8 @@ func (r *Runtime) iteratorFrom(v Value) (Value, error) {
 		if err != nil {
 			return Undefined, err
 		}
-		if isCallable(method) {
+		switch {
+		case isCallable(method):
 			it, err := r.call(method, v, nil)
 			if err != nil {
 				return Undefined, err
@@ -599,11 +618,15 @@ func (r *Runtime) iteratorFrom(v Value) (Value, error) {
 			if err != nil {
 				return Undefined, err
 			}
-		} else {
+		case method.IsNullish():
+			// No Symbol.iterator at all: the object is taken to be an iterator
+			// already. One that is present but not callable is a mistake.
 			iter, next, err = r.getIteratorDirect(v)
 			if err != nil {
 				return Undefined, err
 			}
+		default:
+			return Undefined, r.throwTypeError("Symbol.iterator is not a function")
 		}
 	default:
 		return Undefined, r.throwTypeError("Iterator.from requires an object or a string")

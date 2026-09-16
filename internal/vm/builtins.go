@@ -1408,11 +1408,27 @@ func (r *Runtime) iterate(v Value, fn func(Value) error) error {
 // closeIterator calls an iterator's return method, ignoring any error since the
 // original failure is what matters.
 func (r *Runtime) closeIterator(iter Value) {
+	// The error is discarded: this form is for closing during an abrupt
+	// completion, where the completion already in flight is the one that
+	// matters.
+	_ = r.closeIteratorErr(iter)
+}
+
+// closeIteratorErr closes an iterator and reports what went wrong.
+//
+// Closing during an ordinary completion -- a helper's own return(), or take
+// reaching its limit -- has nothing else in flight, so a failure there is the
+// result rather than something to swallow.
+func (r *Runtime) closeIteratorErr(iter Value) error {
 	ret, err := r.getValueProp(iter, atomReturn)
-	if err != nil || !isCallable(ret) {
-		return
+	if err != nil {
+		return err
 	}
-	_, _ = r.call(ret, iter, nil)
+	if !isCallable(ret) {
+		return nil
+	}
+	_, err = r.call(ret, iter, nil)
+	return err
 }
 
 // newArrayIterator builds an iterator over an array's elements.

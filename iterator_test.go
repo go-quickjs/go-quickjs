@@ -268,3 +268,105 @@ func TestSubclassingBuiltins(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// A helper owns the iterator beneath it, and closing it is not always
+// best-effort: when nothing else is in flight, a failure to close is the
+// result rather than something to swallow.
+func TestIteratorHelperClosing(t *testing.T) {
+	const thrower = `
+	  var closed = false;
+	  function source() {
+	    return {
+	      i: 0,
+	      next() { return {value: this.i++, done: false}; },
+	      get return() { throw new TypeError("from return"); },
+	      [Symbol.iterator]() { return this; },
+	    };
+	  }
+	`
+	// Calling return() on a helper surfaces whatever closing the source threw.
+	for _, src := range []string{
+		thrower + `var it = source().map(x => x); it.next(); it.return();`,
+		thrower + `var it = source().filter(x => true); it.next(); it.return();`,
+		thrower + `var it = source().drop(0); it.next(); it.return();`,
+		// take reaching its limit closes as an ordinary completion.
+		thrower + `source().take(1).toArray();`,
+		// So does a terminal that stops early.
+		thrower + `source().every(x => false);`,
+		thrower + `source().find(x => true);`,
+		thrower + `source().some(x => true);`,
+	} {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil {
+			t.Errorf("%s: no error, want the close failure to surface", src)
+		}
+		rt.Close()
+	}
+
+	// An argument that fails to convert still abandons the iterator.
+	rt := quickjs.New()
+	defer rt.Close()
+	v, err := rt.Eval(`
+		var closed = false;
+		var it = {
+		  next: () => ({done: false, value: 1}),
+		  return() { closed = true; return {done: true}; },
+		  [Symbol.iterator]() { return this; },
+		};
+		try {
+		  Iterator.prototype.drop.call(it, {valueOf() { throw new Error("x"); }});
+		} catch (e) {}
+		String(closed);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.String() != "true" {
+		t.Errorf("a failed conversion should still close the iterator, got %s", v.String())
+	}
+}
+
+// TestIteratorHelperLimits pins the range a take or drop count must be in.
+func TestIteratorHelperLimits(t *testing.T) {
+	for _, src := range []string{
+		`[1].values().drop()`,
+		`[1].values().drop(undefined)`,
+		`[1].values().drop(NaN)`,
+		`[1].values().drop(-1)`,
+		// A finite count past the integer range cannot be counted down to.
+		`[1].values().drop(Number.MAX_SAFE_INTEGER + 1)`,
+		`[1].values().take(NaN)`,
+		`[1].values().take(Number.MAX_SAFE_INTEGER + 1)`,
+	} {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil {
+			t.Errorf("%s: accepted, want RangeError", src)
+		}
+		rt.Close()
+	}
+
+	// Infinity is fine: it simply never runs out.
+	rt := quickjs.New()
+	defer rt.Close()
+	if v, err := rt.Eval(`[1, 2].values().take(Infinity).toArray().join(",")`); err != nil {
+		t.Fatal(err)
+	} else if v.String() != "1,2" {
+		t.Errorf("take(Infinity) = %q", v.String())
+	}
+
+	// Symbol.iterator present but not callable is a mistake, not an absence.
+	if _, err := rt.Eval(`Iterator.from({[Symbol.iterator]: 0, next: () => ({done: true})})`); err == nil {
+		t.Error("a non-callable Symbol.iterator should be a TypeError")
+	}
+	// Absent, it means the object is already an iterator.
+	if v, err := rt.Eval(`
+		var n = 0;
+		Array.from(Iterator.from({
+		  [Symbol.iterator]: undefined,
+		  next: () => n < 2 ? {value: n++, done: false} : {done: true},
+		})).join(",")`); err != nil {
+		t.Fatal(err)
+	} else if v.String() != "0,1" {
+		t.Errorf("Iterator.from with no Symbol.iterator = %q", v.String())
+	}
+}
