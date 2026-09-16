@@ -40,6 +40,12 @@ func (r *Runtime) call(fn Value, this Value, args []Value) (Value, error) {
 // callObject invokes a function object, dispatching to a native
 // implementation, a bound function or compiled bytecode.
 func (r *Runtime) callObject(o *Object, this Value, args []Value, newTarget Value) (Value, error) {
+	if p := proxyOf(o); p != nil {
+		if !newTarget.IsUndefined() {
+			return r.proxyConstruct(p, args, newTarget)
+		}
+		return r.proxyCall(p, this, args)
+	}
 	fd := o.fn()
 	if fd == nil {
 		return Undefined, r.throwTypeError("value is not a function")
@@ -1310,6 +1316,9 @@ func (r *Runtime) construct(callee Value, args []Value) (Value, error) {
 		return Undefined, r.throwTypeError("%s is not a constructor", r.describe(callee))
 	}
 	o := callee.Object()
+	if p := proxyOf(o); p != nil {
+		return r.proxyConstruct(p, args, callee)
+	}
 	fd := o.fn()
 	if fd == nil || fd.ctorKind == ctorNone {
 		return Undefined, r.throwTypeError("%s is not a constructor", fd.nameOr("value"))

@@ -1535,3 +1535,90 @@ func TestAsyncFunctions(t *testing.T) {
 	checkAsync(t,
 		`var r = ""; async function f() { const a = await 1, b = await 2; r = a + b; } f()`, `r`, "3")
 }
+
+func TestProxy(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`new Proxy({a:1}, {}).a`, "1"},
+		{`new Proxy({}, {get: (t,k) => "got:" + k}).x`, "got:x"},
+		{`const p = new Proxy({}, {set: (t,k,v) => { t[k] = v*2; return true }}); p.n = 5; p.n`, "10"},
+		{`"x" in new Proxy({}, {has: () => true})`, "true"},
+		{`Object.keys(new Proxy({a:1,b:2}, {})).join(",")`, "a,b"},
+		{`new Proxy(function(){ return 1 }, {})()`, "1"},
+		{`new Proxy(function(){}, {apply: () => 42})()`, "42"},
+		{`new (new Proxy(class { constructor() { this.v = 1 } }, {}))().v`, "1"},
+		// A trap that forwards sees the untrapped behaviour.
+		{`new Proxy({a:5}, {get: (t,k) => Reflect.get(t,k)}).a`, "5"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}
+
+func TestProxyRevocable(t *testing.T) {
+	checkEval(t, `
+		const {proxy, revoke} = Proxy.revocable({a:1}, {});
+		const before = proxy.a;
+		revoke();
+		try { proxy.a; "not reached" } catch (e) { before + ",revoked" }`, "1,revoked")
+}
+
+func TestReflect(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`Reflect.has({a:1}, "a")`, "true"},
+		{`Reflect.get({a:5}, "a")`, "5"},
+		{`const o = {}; Reflect.set(o, "k", 1); o.k`, "1"},
+		{`Reflect.ownKeys({a:1,b:2}).join(",")`, "a,b"},
+		{`Reflect.getPrototypeOf([]) === Array.prototype`, "true"},
+		{`Reflect.apply(Math.max, null, [1,5,2])`, "5"},
+		{`Reflect.construct(Array, [1,2,3]).length`, "3"},
+		{`Reflect.deleteProperty({a:1}, "a")`, "true"},
+		{`Reflect.isExtensible({})`, "true"},
+		{`const o = {}; Reflect.defineProperty(o, "x", {value: 3}); o.x`, "3"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}
+
+func TestTypedArrays(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`new Int8Array(3).length`, "3"},
+		{`const a = new Int32Array(3); a[0] = 42; a[0]`, "42"},
+		{`new Uint8Array([1,2,3]).join(",")`, "1,2,3"},
+		{`new Int32Array(4).byteLength`, "16"},
+		{`Int32Array.BYTES_PER_ELEMENT`, "4"},
+		// Integer types wrap; the clamped type saturates instead.
+		{`const a = new Uint8Array(1); a[0] = 300; a[0]`, "44"},
+		{`const a = new Uint8ClampedArray(1); a[0] = 300; a[0]`, "255"},
+		{`const a = new Int8Array(1); a[0] = 200; a[0]`, "-56"},
+		{`const a = new Float64Array(1); a[0] = 1.5; a[0]`, "1.5"},
+		// Writing past the end is ignored rather than growing the array.
+		{`const a = new Int32Array(1); a[5] = 1; a.length`, "1"},
+		{`new Int32Array([1,2,3,4]).subarray(1,3).join(",")`, "2,3"},
+		{`new Int32Array([1,2,3,4]).slice(1,3).join(",")`, "2,3"},
+		{`new Int32Array([1,2,3]).map(x => x*2).join(",")`, "2,4,6"},
+		{`[...new Int32Array([1,2])].join(",")`, "1,2"},
+		{`const a = new Int32Array(2); a.set([7,8]); a.join(",")`, "7,8"},
+		{`new BigInt64Array([1n, 2n]).join(",")`, "1,2"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}
+
+func TestArrayBufferViewsAlias(t *testing.T) {
+	// Two views over the same buffer share storage; that aliasing is the whole
+	// reason typed arrays exist.
+	checkEval(t, `
+		const b = new ArrayBuffer(8);
+		const x = new Int32Array(b), y = new Int32Array(b);
+		x[0] = 7;
+		y[0]`, "7")
+	// slice copies, subarray aliases.
+	checkEval(t, `
+		const a = new Int32Array([1,2,3]);
+		const s = a.subarray(0,1); s[0] = 9; a[0]`, "9")
+	checkEval(t, `
+		const a = new Int32Array([1,2,3]);
+		const s = a.slice(0,1); s[0] = 9; a[0]`, "1")
+}

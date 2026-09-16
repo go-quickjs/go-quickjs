@@ -65,6 +65,12 @@ type Runtime struct {
 	// rng backs Math.random, created on first use.
 	rng *rand.Rand
 
+	// arrayBufferProto and typedArrayProto are held here rather than in
+	// intrinsics because the typed array constructors are generated in a loop
+	// and need to reach them by name.
+	arrayBufferProto *Object
+	typedArrayProto  *Object
+
 	// clock and timeZone supply Date with the current time and the local zone.
 	// They are fields rather than direct calls to the time package so that a
 	// host can give a sandboxed script a fixed clock, or none at all.

@@ -392,9 +392,16 @@ func (r *Runtime) objectKeysLike(v Value, mode keysMode) (Value, error) {
 	if err != nil {
 		return Undefined, err
 	}
+	keys := o.ownKeys(false, r.atoms)
+	if p := proxyOf(o); p != nil {
+		var err error
+		if keys, err = r.proxyOwnKeys(p); err != nil {
+			return Undefined, err
+		}
+	}
 	var out []Value
-	for _, k := range o.ownKeys(false, r.atoms) {
-		if !r.isEnumerable(o, k) {
+	for _, k := range keys {
+		if p := proxyOf(o); p == nil && !r.isEnumerable(o, k) {
 			continue
 		}
 		switch mode {

@@ -146,8 +146,15 @@ func (o *Object) IsExtensible() bool { return o.flags&objExtensible != 0 }
 
 // IsCallable reports whether the object can be called.
 func (o *Object) IsCallable() bool {
-	_, ok := o.data.(*funcData)
-	return ok
+	if _, ok := o.data.(*funcData); ok {
+		return true
+	}
+	// A proxy is callable exactly when its target is, which is what makes the
+	// apply and construct traps reachable.
+	if p, ok := o.data.(*proxyData); ok {
+		return p.target.IsCallable()
+	}
+	return false
 }
 
 // IsArray reports whether the object is an ordinary array.

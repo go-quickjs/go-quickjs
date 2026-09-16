@@ -12,6 +12,11 @@ package vm
 // object being searched when a getter is inherited, which is what lets a
 // prototype accessor read the properties of the instance it was called on.
 func (r *Runtime) getProp(obj *Object, key Atom, receiver Value) (Value, error) {
+	// A proxy intercepts the operation before anything else happens, including
+	// the prototype walk, since the trap decides what the chain even is.
+	if p := proxyOf(obj); p != nil {
+		return r.proxyGet(p, key, receiver)
+	}
 	for o := obj; o != nil; o = o.proto {
 		// Dense elements come first, since an array index is the hottest key.
 		if key.IsIndex() {
@@ -56,6 +61,12 @@ func (r *Runtime) getExoticNamed(o *Object, key Atom) (Value, bool, error) {
 				return Int(s.Len()), true, nil
 			}
 		}
+	case ClassTypedArray:
+		if key == atomLength {
+			if t, ok := o.data.(*typedArrayData); ok {
+				return Int(t.length), true, nil
+			}
+		}
 	case ClassFunction:
 		// name and length are materialized on first read rather than created
 		// with every function, since most functions are never asked.
@@ -77,9 +88,19 @@ func (r *Runtime) getExoticNamed(o *Object, key Atom) (Value, bool, error) {
 
 // getExoticIndex handles index reads that are not backed by dense storage.
 func (r *Runtime) getExoticIndex(o *Object, idx uint32) (Value, bool, error) {
-	if o.class == ClassStringWrapper {
+	switch o.class {
+	case ClassStringWrapper:
 		if s, ok := o.data.(*String); ok && int(idx) < s.Len() {
 			return Str(s.Substring(int(idx), int(idx)+1)), true, nil
+		}
+	case ClassTypedArray:
+		// A typed array's elements live in its buffer, so an index never
+		// reaches the property table.
+		if t, ok := o.data.(*typedArrayData); ok {
+			if t.storage().detached {
+				return Undefined, true, nil
+			}
+			return t.getElem(int(idx)), true, nil
 		}
 	}
 	return Undefined, false, nil
@@ -125,6 +146,9 @@ func (r *Runtime) getValueProp(v Value, key Atom) (Value, error) {
 // setProp assigns a property, honouring setters found on the prototype chain
 // and the non-writability of inherited data properties.
 func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, strict bool) error {
+	if p := proxyOf(obj); p != nil {
+		return r.proxySet(p, key, val, receiver, strict)
+	}
 	// Walk the chain looking for an accessor or a non-writable data property,
 	// either of which changes what a plain assignment does.
 	for o := obj; o != nil; o = o.proto {
@@ -182,6 +206,16 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 // createOwnProp adds a new own data property, applying the exotic rules of
 // arrays and respecting extensibility.
 func (r *Runtime) createOwnProp(o *Object, key Atom, val Value, strict bool) error {
+	// A typed array's indexed writes go into its buffer. An index past the end
+	// is ignored rather than added, which is what makes a typed array fixed.
+	if o.class == ClassTypedArray && key.IsIndex() {
+		if t, ok := o.data.(*typedArrayData); ok {
+			if t.storage().detached {
+				return nil
+			}
+			return r.setElem(t, int(key.Index()), val)
+		}
+	}
 	if o.class == ClassArray {
 		if key == atomLength {
 			n, err := r.toArrayLength(val)
@@ -242,6 +276,12 @@ func (r *Runtime) setValueProp(v Value, key Atom, val Value, strict bool) error 
 
 // hasProp implements the `in` operator, walking the prototype chain.
 func (r *Runtime) hasProp(o *Object, key Atom) bool {
+	if p := proxyOf(o); p != nil {
+		// A trap may throw, which this signature cannot report; the error
+		// surfaces on the next operation that can.
+		res, err := r.proxyHas(p, key)
+		return err == nil && res
+	}
 	for ; o != nil; o = o.proto {
 		if r.hasOwnProp(o, key) {
 			return true
@@ -278,6 +318,9 @@ func (r *Runtime) hasOwnProp(o *Object, key Atom) bool {
 
 // deleteProp implements the delete operator.
 func (r *Runtime) deleteProp(o *Object, key Atom, strict bool) (bool, error) {
+	if p := proxyOf(o); p != nil {
+		return r.proxyDelete(p, key, strict)
+	}
 	if key.IsIndex() {
 		i := key.Index()
 		if int(i) < len(o.elems) && !isHole(o.elems[i]) {
