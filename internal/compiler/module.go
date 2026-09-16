@@ -116,10 +116,17 @@ func (c *compiler) collectExport(n *ast.ExportDecl) {
 	case len(n.Specifiers) > 0:
 		for _, spec := range n.Specifiers {
 			if n.Source != "" {
-				// A re-export imports under a private name and exports that.
+				// A re-export imports under a name no identifier can spell,
+				// and exports that. Using the public name would shadow a
+				// binding the module declares itself -- which happens whenever
+				// a module re-exports a name it also defines, including the
+				// degenerate case of re-exporting from its own specifier.
+				local := "*re*" + n.Source + ":" + spec.Local
 				c.module.Imports = append(c.module.Imports, ImportRequest{
-					Specifier: n.Source, Local: spec.Local, Imported: spec.Local,
+					Specifier: n.Source, Local: local, Imported: spec.Local,
 				})
+				c.module.Exports[spec.Exported] = local
+				continue
 			}
 			c.module.Exports[spec.Exported] = spec.Local
 		}

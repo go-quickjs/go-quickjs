@@ -230,7 +230,7 @@ func (r *Runtime) SetModuleCompiler(fn func(specifier, source string) (*Module, 
 func (r *Runtime) bindImport(m *Module, imp moduleImport, src *Module) {
 	if imp.namespace {
 		// A namespace import is the source module's environment itself.
-		m.env.setOwnRaw(r.atoms.intern(imp.local), Obj(src.env), propEnumerable)
+		m.env.setOwnRaw(r.atoms.intern(imp.local), Obj(src.env), moduleBindingFlags(imp.local))
 		return
 	}
 	name := imp.imported
@@ -256,7 +256,27 @@ func (r *Runtime) forwardBinding(env *Object, as string, src *Module, local stri
 	// An imported binding is read-only; assigning to one is a TypeError, which
 	// falls out of defining no setter in strict mode, and module code is
 	// always strict.
-	r.defineAccessor(env, r.atoms.intern(as), getter, nil, propEnumerable)
+	r.defineAccessor(env, r.atoms.intern(as), getter, nil, moduleBindingFlags(as))
+}
+
+// moduleBindingFlags decides whether a module binding is part of the namespace.
+//
+// A module's environment doubles as its namespace object, so anything the
+// compiler puts there for its own use -- the slot behind `export default`, or
+// the private name a re-export imports under -- would otherwise show up as an
+// export. Those names begin with a character no identifier may contain, which
+// is what makes them safe to recognize.
+func moduleBindingFlags(name string) propFlags {
+	if isInternalModuleName(name) {
+		return 0
+	}
+	return propEnumerable
+}
+
+// isInternalModuleName reports whether a binding is one the compiler
+// synthesized rather than one the source named.
+func isInternalModuleName(name string) bool {
+	return len(name) > 0 && name[0] == '*'
 }
 
 // EvaluateModule runs a module's body, evaluating its dependencies first.

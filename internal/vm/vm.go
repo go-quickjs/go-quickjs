@@ -471,10 +471,13 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			name := cl.names[in.A]
 			env := cl.scope()
 			if !r.hasOwnProp(env, name) {
-				env.setOwnRaw(name, Undefined, propWritable|propEnumerable)
+				env.setOwnRaw(name, Undefined,
+					propWritable|moduleBindingFlags(r.atoms.name(name)))
 			}
 		case bytecode.OpDefineGlobalFunc:
-			cl.scope().setOwnRaw(cl.names[in.A], pop(), propWritable|propEnumerable)
+			name := cl.names[in.A]
+			cl.scope().setOwnRaw(name, pop(),
+				propWritable|moduleBindingFlags(r.atoms.name(name)))
 
 		// --- Properties ---------------------------------------------------
 		case bytecode.OpGetProp:
