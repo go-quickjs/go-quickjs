@@ -275,6 +275,7 @@ func (c *compiler) compileObjectLit(n *ast.ObjectLit) {
 				c.emit(bytecode.OpToPropertyKey, 0, 0)
 				c.compileExpr(p.Value)
 				c.emit(bytecode.OpSetFuncName, nameKind, 0)
+				c.emit(bytecode.OpSetHomeObject, 2, 0)
 				c.emit(op, 0, 0)
 				continue
 			}
@@ -283,6 +284,7 @@ func (c *compiler) compileObjectLit(n *ast.ObjectLit) {
 				op = bytecode.OpDefineSetter
 			}
 			c.compileExprNamed(p.Value, prefix+propKeyName(p.Key))
+			c.emit(bytecode.OpSetHomeObject, 1, 0)
 			c.emit(op, c.nameIdx(propKeyName(p.Key)), 0)
 			continue
 		}
@@ -301,12 +303,21 @@ func (c *compiler) compileObjectLit(n *ast.ObjectLit) {
 			c.compileExpr(p.Value)
 			if p.Method {
 				c.emit(bytecode.OpSetFuncName, 0, 0)
+				// A shorthand method may use super, which resolves against the
+				// literal it is defined in.
+				c.emit(bytecode.OpSetHomeObject, 2, 0)
 			}
 			c.emit(bytecode.OpDefineIndex, 0, 0)
 			continue
 		}
 		key := propKeyName(p.Key)
 		c.compileExprNamed(p.Value, key)
+		if p.Method {
+			// A shorthand method may use super, which resolves against the
+			// literal it is defined in. A plain `k: function(){}` may not, and
+			// deliberately does not get a home object.
+			c.emit(bytecode.OpSetHomeObject, 1, 0)
+		}
 		c.emit(bytecode.OpDefineField, c.nameIdx(key), 0)
 	}
 }

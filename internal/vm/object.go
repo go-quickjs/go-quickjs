@@ -458,6 +458,17 @@ type funcData struct {
 	// homeObject is the object a method was defined on, which `super` resolves
 	// against.
 	homeObject *Object
+	// arrow marks a function with no bindings of its own. An arrow does not
+	// get this, new.target, super or arguments from its call: it uses the ones
+	// in scope where it was written, which is the whole reason to reach for
+	// one instead of an ordinary function.
+	arrow bool
+	// lexThis, lexNewTarget and lexArgs hold what an arrow captured from the
+	// frame that created it.
+	lexThis      Value
+	lexNewTarget Value
+	lexArgs      []Value
+
 	// boundTarget, boundThis and boundArgs are set for a function produced by
 	// Function.prototype.bind.
 	boundTarget *Object

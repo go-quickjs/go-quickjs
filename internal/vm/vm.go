@@ -90,6 +90,12 @@ func (r *Runtime) callObject(o *Object, this Value, args []Value, newTarget Valu
 		return Undefined, r.throwTypeError("function has no implementation")
 	}
 
+	// An arrow ignores the this and new.target it was called with.
+	if fd.arrow {
+		this = fd.lexThis
+		newTarget = fd.lexNewTarget
+	}
+
 	// A generator or async function does not run its body on call. A generator
 	// returns an object whose next method drives it; an async function starts
 	// immediately but returns a promise at its first await.
@@ -1547,12 +1553,32 @@ func (r *Runtime) makeClosure(f *frame, c Value) *Object {
 
 	o := newObject(r.proto.function, ClassFunction)
 	kind := ctorKindOf(tmpl.fn)
-	o.data = &funcData{
+	fd := &funcData{
 		closure:  child,
 		name:     tmpl.fn.Name,
 		length:   tmpl.fn.ParamCount,
 		ctorKind: kind,
 	}
+	if tmpl.fn.Kind == bytecode.KindArrow {
+		// An arrow captures its surroundings rather than receiving them from
+		// the call. Nesting works because an arrow created inside another has
+		// already inherited them, so reading the creating frame is enough.
+		fd.arrow = true
+		fd.lexThis = f.this
+		fd.lexNewTarget = f.newTarget
+		fd.lexArgs = f.args
+		if f.callee != nil {
+			if outer := f.callee.fn(); outer != nil {
+				// super resolves against the enclosing method's home object.
+				fd.homeObject = outer.homeObject
+				fd.parentCtor = outer.parentCtor
+				if outer.arrow {
+					fd.lexArgs = outer.lexArgs
+				}
+			}
+		}
+	}
+	o.data = fd
 
 	// A constructible function carries a fresh .prototype object, which is what
 	// `new` gives the instance and where a class hangs its methods. An arrow or
@@ -1561,6 +1587,11 @@ func (r *Runtime) makeClosure(f *frame, c Value) *Object {
 		proto := newObject(r.proto.object, ClassObject)
 		proto.setOwnRaw(atomConstructor, Obj(o), propWritable|propConfigurable)
 		o.setOwnRaw(atomPrototype, Obj(proto), propWritable)
+		// A constructor's home object is its own prototype, which is what
+		// makes `super.m()` inside a constructor find the parent's method.
+		// Nothing outside a class can name super, so setting it on every
+		// constructible function is harmless.
+		fd.homeObject = proto
 	}
 	return o
 }
