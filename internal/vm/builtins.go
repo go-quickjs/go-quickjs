@@ -290,8 +290,8 @@ func (r *Runtime) initObjectBuiltins() {
 			}
 		}
 		if len(o.elems) > 0 {
+			o.markSparse()
 			o.elems = nil
-			o.flags |= objHasSparseElements
 		}
 		return v, nil
 	})
@@ -713,6 +713,8 @@ func (r *Runtime) initArrayBuiltins() {
 		return Obj(rt.newArrayFrom(args)), nil
 	})
 
+	r.proto.arrayCtor = ctor
+
 	r.defMethod(ctor, "isArray", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		v := arg(args, 0)
 		return Bool(v.IsObject() && v.Object().IsArray()), nil
@@ -825,7 +827,14 @@ func (r *Runtime) initArrayBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		out := newObject(rt.proto.array, ClassArray)
+		count := end - start
+		if count < 0 {
+			count = 0
+		}
+		out, err := rt.arraySpeciesCreate(this, count)
+		if err != nil {
+			return Undefined, err
+		}
 		for i := start; i < end; i++ {
 			v, present, err := a.at(rt, i)
 			if err != nil {
@@ -833,12 +842,19 @@ func (r *Runtime) initArrayBuiltins() {
 			}
 			if !present {
 				// A hole in the source stays a hole in the result.
-				out.elems = append(out.elems, elemHole)
+				if err := out.pushHole(rt); err != nil {
+					return Undefined, err
+				}
 				continue
 			}
-			out.elems = append(out.elems, v)
+			if err := out.push(rt, v); err != nil {
+				return Undefined, err
+			}
 		}
-		return Obj(out), nil
+		if err := out.setLength(rt, count); err != nil {
+			return Undefined, err
+		}
+		return out.value(), nil
 	})
 
 	r.defMethod(p, "indexOf", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -973,18 +989,30 @@ func (r *Runtime) initArrayBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		out := newObject(rt.proto.array, ClassArray)
+		out, err := rt.arraySpeciesCreate(Obj(a.o), 0)
+		if err != nil {
+			return Undefined, err
+		}
 		// The receiver counts as the first argument: it is spread when it is an
 		// array and appended whole otherwise, just like the rest.
 		items := append([]Value{Obj(a.o)}, args...)
 		for _, item := range items {
-			if !item.IsObject() || !item.Object().IsArray() {
-				out.elems = append(out.elems, item)
+			spread, err := rt.isConcatSpreadable(item)
+			if err != nil {
+				return Undefined, err
+			}
+			if !spread {
+				if err := out.push(rt, item); err != nil {
+					return Undefined, err
+				}
 				continue
 			}
 			src, err := rt.viewArrayLike(item)
 			if err != nil {
 				return Undefined, err
+			}
+			if out.n+src.n > maxArrayLength {
+				return Undefined, rt.throwTypeError("the result would be too long")
 			}
 			for i := int64(0); i < src.n; i++ {
 				v, present, err := src.at(rt, i)
@@ -992,13 +1020,21 @@ func (r *Runtime) initArrayBuiltins() {
 					return Undefined, err
 				}
 				if !present {
-					out.elems = append(out.elems, elemHole)
+					if err := out.pushHole(rt); err != nil {
+						return Undefined, err
+					}
 					continue
 				}
-				out.elems = append(out.elems, v)
+				if err := out.push(rt, v); err != nil {
+					return Undefined, err
+				}
 			}
 		}
-		return Obj(out), nil
+		n := out.n
+		if err := out.setLength(rt, n); err != nil {
+			return Undefined, err
+		}
+		return out.value(), nil
 	})
 
 	r.defMethod(p, "reverse", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -1049,7 +1085,10 @@ func (r *Runtime) initArrayBuiltins() {
 	})
 
 	r.defIterationMethod(p, "map", func(rt *Runtime, a *arrayLike, cb Value, thisArg Value) (Value, error) {
-		out := rt.newArrayOfLength(a.n)
+		out, err := rt.arraySpeciesCreate(Obj(a.o), a.n)
+		if err != nil {
+			return Undefined, err
+		}
 		for i := int64(0); i < a.n; i++ {
 			el, present, err := a.at(rt, i)
 			if err != nil {
@@ -1057,20 +1096,27 @@ func (r *Runtime) initArrayBuiltins() {
 			}
 			if !present {
 				// A hole in the source stays a hole in the result.
-				out.elems = append(out.elems, elemHole)
+				if err := out.pushHole(rt); err != nil {
+					return Undefined, err
+				}
 				continue
 			}
 			v, err := rt.call(cb, thisArg, []Value{el, Float(float64(i)), Obj(a.o)})
 			if err != nil {
 				return Undefined, err
 			}
-			out.elems = append(out.elems, v)
+			if err := out.push(rt, v); err != nil {
+				return Undefined, err
+			}
 		}
-		return Obj(out), nil
+		return out.value(), nil
 	})
 
 	r.defIterationMethod(p, "filter", func(rt *Runtime, a *arrayLike, cb Value, thisArg Value) (Value, error) {
-		out := newObject(rt.proto.array, ClassArray)
+		out, err := rt.arraySpeciesCreate(Obj(a.o), 0)
+		if err != nil {
+			return Undefined, err
+		}
 		for i := int64(0); i < a.n; i++ {
 			el, present, err := a.at(rt, i)
 			if err != nil {
@@ -1084,10 +1130,12 @@ func (r *Runtime) initArrayBuiltins() {
 				return Undefined, err
 			}
 			if keep.Truthy() {
-				out.elems = append(out.elems, el)
+				if err := out.push(rt, el); err != nil {
+					return Undefined, err
+				}
 			}
 		}
-		return Obj(out), nil
+		return out.value(), nil
 	})
 
 	r.defIterationMethod(p, "find", func(rt *Runtime, a *arrayLike, cb Value, thisArg Value) (Value, error) {

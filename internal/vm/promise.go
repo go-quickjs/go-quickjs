@@ -491,50 +491,43 @@ func (r *Runtime) promiseCombinator(ctor Value, iterable Value, kind combinatorK
 		return Obj(result), nil
 	}
 
-	var items []Value
-	if err := r.iterate(iterable, func(v Value) error {
-		items = append(items, v)
-		return nil
-	}); err != nil {
-		fail(thrownValue(err))
-		return Obj(result), nil
-	}
-
-	if len(items) == 0 {
-		switch kind {
-		case combinatorAll, combinatorAllSettled:
-			settle(Obj(r.newArrayFrom(nil)))
-		case combinatorAny:
-			fail(Obj(r.newError(errAggregate, "all promises were rejected")))
+	// The elements are resolved as they arrive rather than collected first,
+	// because the resolve is allowed to throw and that has to stop the
+	// iteration: an iterator that never finishes on its own would otherwise be
+	// drained forever. The count starts at one for the iteration itself, so
+	// that a run of already-settled promises cannot conclude the whole thing
+	// before the last element has been seen.
+	var values []Value
+	remaining := 1
+	finish := func() {
+		remaining--
+		if remaining != 0 {
+			return
 		}
-		// Promise.race over nothing stays pending forever, which is what the
-		// specification says.
-		return Obj(result), nil
+		if kind == combinatorAny {
+			fail(Obj(r.newError(errAggregate, "all promises were rejected")))
+			return
+		}
+		settle(Obj(r.newArrayFrom(values)))
 	}
 
-	values := make([]Value, len(items))
-	for i := range values {
-		values[i] = Undefined
-	}
-	remaining := len(items)
+	iterErr := r.iterate(iterable, func(item Value) error {
+		idx := len(values)
+		values = append(values, Undefined)
+		remaining++
 
-	for i, item := range items {
-		idx := i
 		// Every element goes through the constructor's resolve, so a plain
 		// value works too and a subclass gets to see it.
 		pv, err := r.call(resolveFn, ctor, []Value{item})
 		if err != nil {
-			fail(thrownValue(err))
-			return Obj(result), nil
+			return err
 		}
 		thenFn, err := r.getValueProp(pv, r.atoms.intern("then"))
 		if err != nil {
-			fail(thrownValue(err))
-			return Obj(result), nil
+			return err
 		}
 		if !isCallable(thenFn) {
-			fail(thrownValue(r.throwTypeError("the resolved value is not thenable")))
-			return Obj(result), nil
+			return r.throwTypeError("the resolved value is not thenable")
 		}
 
 		onFulfilled := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
@@ -551,10 +544,7 @@ func (r *Runtime) promiseCombinator(ctor Value, iterable Value, kind combinatorK
 			default:
 				values[idx] = v
 			}
-			remaining--
-			if remaining == 0 {
-				settle(Obj(rt.newArrayFrom(values)))
-			}
+			finish()
 			return Undefined, nil
 		})
 
@@ -573,22 +563,30 @@ func (r *Runtime) promiseCombinator(ctor Value, iterable Value, kind combinatorK
 			default: // any
 				values[idx] = reason
 			}
-			remaining--
-			if remaining == 0 {
-				if kind == combinatorAny {
-					fail(Obj(rt.newError(errAggregate, "all promises were rejected")))
-					return Undefined, nil
-				}
-				settle(Obj(rt.newArrayFrom(values)))
-			}
+			finish()
 			return Undefined, nil
 		})
 
-		if _, err := r.call(thenFn, pv, []Value{Obj(onFulfilled), Obj(onRejected)}); err != nil {
-			fail(thrownValue(err))
-			return Obj(result), nil
-		}
+		_, err = r.call(thenFn, pv, []Value{Obj(onFulfilled), Obj(onRejected)})
+		return err
+	})
+	if iterErr != nil {
+		fail(thrownValue(iterErr))
+		return Obj(result), nil
 	}
+
+	if len(values) == 0 {
+		switch kind {
+		case combinatorAll, combinatorAllSettled:
+			settle(Obj(r.newArrayFrom(nil)))
+		case combinatorAny:
+			fail(Obj(r.newError(errAggregate, "all promises were rejected")))
+		}
+		// Promise.race over nothing stays pending forever, which is what the
+		// specification says.
+		return Obj(result), nil
+	}
+	finish()
 	return Obj(result), nil
 }
 

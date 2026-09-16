@@ -2244,8 +2244,8 @@ func freezeArray(o *Object) *Object {
 			o.setOwnRaw(internIndex(uint32(i)), el, propEnumerable)
 		}
 	}
+	o.markSparse()
 	o.elems = nil
-	o.flags |= objHasSparseElements
 	o.flags &^= objExtensible
 	for i := range o.props {
 		o.props[i].flags &^= propWritable | propConfigurable

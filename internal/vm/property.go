@@ -278,7 +278,7 @@ func (r *Runtime) createOwnProp(o *Object, key Atom, val Value, strict bool) err
 			}
 			// Too sparse for dense storage; fall through to an ordinary
 			// property and remember that the array is no longer dense.
-			o.flags |= objHasSparseElements
+			o.noteArrayIndex(key.Index())
 		}
 	} else if key.IsIndex() && int(key.Index()) <= len(o.elems) && len(o.elems) > 0 {
 		// A non-array that already has dense storage keeps using it.
@@ -378,13 +378,10 @@ func (r *Runtime) deleteProp(o *Object, key Atom, strict bool) (bool, error) {
 	if key.IsIndex() {
 		i := key.Index()
 		if int(i) < len(o.elems) && !isHole(o.elems[i]) {
-			// Deleting from the middle leaves a hole; deleting the last
-			// element shortens the dense storage.
-			if int(i) == len(o.elems)-1 {
-				o.elems = o.elems[:i]
-			} else {
-				o.elems[i] = elemHole
-			}
+			// Deleting leaves a hole wherever it happens, including at the
+			// end: an array's length is a number rather than a count of what
+			// is present, so `delete a[a.length - 1]` does not shorten it.
+			o.elems[i] = elemHole
 			return true, nil
 		}
 	}
@@ -412,8 +409,8 @@ func (r *Runtime) defineOwnProp(o *Object, key Atom, val Value, flags propFlags)
 	// of dense storage, which cannot express attributes.
 	if key.IsIndex() && int(key.Index()) < len(o.elems) && flags != propDefault {
 		i := key.Index()
+		o.markSparse()
 		o.elems[i] = elemHole
-		o.flags |= objHasSparseElements
 	}
 	o.setOwnRaw(key, val, flags)
 	return nil
@@ -428,8 +425,8 @@ func (r *Runtime) defineAccessor(o *Object, key Atom, getter, setter *Object, fl
 	// dense element takes it as a data property with default attributes, which
 	// would otherwise shadow the accessor being defined here.
 	if key.IsIndex() && int(key.Index()) < len(o.elems) {
+		o.markSparse()
 		o.elems[key.Index()] = elemHole
-		o.flags |= objHasSparseElements
 	}
 	if p := o.getOwnVisible(key); p != nil && p.isAccessor() {
 		if a := p.getterSetter(); a != nil {

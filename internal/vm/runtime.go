@@ -145,6 +145,9 @@ type intrinsics struct {
 	regexpStringIter *Object
 	// regexpCtor is %RegExp%, the fallback when a species lookup finds none.
 	regexpCtor *Object
+	// arrayCtor is %Array%, which a species lookup compares against to decide
+	// whether a plain array will do.
+	arrayCtor *Object
 
 	// nativeErrors are the prototypes of TypeError, RangeError and friends,
 	// indexed by errorKind.

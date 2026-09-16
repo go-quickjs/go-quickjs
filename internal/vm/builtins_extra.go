@@ -35,66 +35,143 @@ func (r *Runtime) initArrayExtras2() {
 	p := r.proto.array
 
 	r.defMethod(p, "splice", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.toObject(this)
+		a, err := rt.viewArrayLike(this)
 		if err != nil {
 			return Undefined, err
 		}
-		n := len(o.elems)
-		start, err := rt.relativeIndex(arg(args, 0), n, 0)
+		start, err := rt.relativeIndex64(arg(args, 0), a.n, 0)
 		if err != nil {
 			return Undefined, err
 		}
 		// With no second argument splice removes everything from start; with
 		// one it removes that many. The difference is observable, so the
 		// argument count is checked rather than the value.
-		count := n - start
-		if len(args) >= 2 {
+		var removeCount int64
+		var inserted []Value
+		switch {
+		case len(args) == 0:
+			removeCount = 0
+		case len(args) == 1:
+			removeCount = a.n - start
+		default:
 			c, err := rt.toInteger(args[1])
 			if err != nil {
 				return Undefined, err
 			}
-			count = clampInt(int(c), 0, n-start)
-		}
-
-		start, mid := clipRange(o, start, start+count)
-		removed := append([]Value(nil), o.elems[start:mid]...)
-		var inserted []Value
-		if len(args) > 2 {
+			removeCount = int64(clampFloatIndex(c, int(a.n-start)))
 			inserted = args[2:]
 		}
+		if a.n+int64(len(inserted))-removeCount > maxArrayLength {
+			return Undefined, rt.throwTypeError("the result would be too long")
+		}
 
-		next := make([]Value, 0, len(o.elems)-(mid-start)+len(inserted))
-		next = append(next, o.elems[:start]...)
-		next = append(next, inserted...)
-		next = append(next, o.elems[mid:]...)
-		o.elems = next
+		out, err := rt.arraySpeciesCreate(this, removeCount)
+		if err != nil {
+			return Undefined, err
+		}
+		for k := int64(0); k < removeCount; k++ {
+			v, present, err := a.at(rt, start+k)
+			if err != nil {
+				return Undefined, err
+			}
+			if !present {
+				if err := out.pushHole(rt); err != nil {
+					return Undefined, err
+				}
+				continue
+			}
+			if err := out.push(rt, v); err != nil {
+				return Undefined, err
+			}
+		}
+		if err := out.setLength(rt, removeCount); err != nil {
+			return Undefined, err
+		}
 
-		return Obj(rt.newArrayFrom(removed)), nil
+		// The tail moves by the difference between what went and what came,
+		// left or right depending on the sign, so that the elements it passes
+		// over are never overwritten before they are read.
+		add := int64(len(inserted))
+		switch {
+		case add < removeCount:
+			for k := start; k < a.n-removeCount; k++ {
+				v, present, err := a.at(rt, k+removeCount)
+				if err != nil {
+					return Undefined, err
+				}
+				if err := a.put(rt, k+add, v, present); err != nil {
+					return Undefined, err
+				}
+			}
+			for k := a.n; k > a.n-removeCount+add; k-- {
+				if err := a.remove(rt, k-1); err != nil {
+					return Undefined, err
+				}
+			}
+		case add > removeCount:
+			for k := a.n - removeCount; k > start; k-- {
+				v, present, err := a.at(rt, k+removeCount-1)
+				if err != nil {
+					return Undefined, err
+				}
+				if err := a.put(rt, k+add-1, v, present); err != nil {
+					return Undefined, err
+				}
+			}
+		}
+		for i, v := range inserted {
+			if err := a.set(rt, start+int64(i), v); err != nil {
+				return Undefined, err
+			}
+		}
+		if err := a.setLength(rt, a.n-removeCount+add); err != nil {
+			return Undefined, err
+		}
+		return out.value(), nil
 	})
 
 	r.defMethod(p, "copyWithin", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.toObject(this)
+		a, err := rt.viewArrayLike(this)
 		if err != nil {
 			return Undefined, err
 		}
-		n := len(o.elems)
-		target, err := rt.relativeIndex(arg(args, 0), n, 0)
+		target, err := rt.relativeIndex64(arg(args, 0), a.n, 0)
 		if err != nil {
 			return Undefined, err
 		}
-		start, err := rt.relativeIndex(arg(args, 1), n, 0)
+		start, err := rt.relativeIndex64(arg(args, 1), a.n, 0)
 		if err != nil {
 			return Undefined, err
 		}
-		end, err := rt.relativeIndex(arg(args, 2), n, n)
+		end, err := rt.relativeIndex64(arg(args, 2), a.n, a.n)
 		if err != nil {
 			return Undefined, err
 		}
-		start, end = clipRange(o, start, end)
-		target, _ = clipRange(o, target, target)
-		if start < end {
-			// copy handles the overlapping case correctly in both directions.
-			copy(o.elems[target:], o.elems[start:end])
+		count := end - start
+		if n := a.n - target; n < count {
+			count = n
+		}
+		if count <= 0 {
+			return this, nil
+		}
+		// Copying backwards when the ranges overlap the other way is what stops
+		// an element being overwritten before it has been read.
+		step := int64(1)
+		if start < target && target < start+count {
+			start += count - 1
+			target += count - 1
+			step = -1
+		}
+		for ; count > 0; count-- {
+			v, present, err := a.at(rt, start)
+			if err != nil {
+				return Undefined, err
+			}
+			if err := a.put(rt, target, v, present); err != nil {
+				return Undefined, err
+			}
+			start += step
+			target += step
 		}
 		return this, nil
 	})

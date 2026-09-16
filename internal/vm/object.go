@@ -125,6 +125,12 @@ type Object struct {
 	// index rather than a map lookup.
 	elems []Value
 
+	// arrayLen is an array's length once it stops being dense. It cannot be
+	// derived from the keys present at that point, because a length may be far
+	// beyond the highest index -- `a.length = 4294967295` leaves no keys at all
+	// -- and because an array is not required to have its last index present.
+	arrayLen uint32
+
 	class Class
 	flags objFlags
 
@@ -417,15 +423,34 @@ func (o *Object) setElem(i uint32, v Value) bool {
 // any higher index properties stored sparsely.
 func (o *Object) arrayLength() uint32 {
 	n := uint32(len(o.elems))
-	if o.flags&objHasSparseElements != 0 {
-		for i := range o.props {
-			p := &o.props[i]
-			if p.flags&propDeleted == 0 && p.key.IsIndex() && p.key.Index() >= n {
-				n = p.key.Index() + 1
-			}
-		}
+	if o.flags&objHasSparseElements != 0 && o.arrayLen > n {
+		return o.arrayLen
 	}
 	return n
+}
+
+// markSparse moves an array out of dense storage, recording the length it had.
+//
+// The length has to be remembered rather than derived from the keys present,
+// because they no longer tell you: `a.length = 4294967295` leaves an array with
+// no keys at all and a length of four billion, and `delete a[a.length - 1]`
+// leaves one whose highest key is below its length.
+//
+// It must be called before the dense elements are moved or dropped.
+func (o *Object) markSparse() {
+	if o.flags&objHasSparseElements == 0 {
+		o.arrayLen = uint32(len(o.elems))
+		o.flags |= objHasSparseElements
+	}
+}
+
+// noteArrayIndex extends an array's length to cover an index stored outside its
+// dense elements.
+func (o *Object) noteArrayIndex(i uint32) {
+	o.markSparse()
+	if i+1 > o.arrayLen {
+		o.arrayLen = i + 1
+	}
 }
 
 // setArrayLength truncates or extends an array.
@@ -435,16 +460,25 @@ func (o *Object) setArrayLength(n uint32) {
 		// Truncating releases the discarded values for collection.
 		clear(o.elems[n:])
 		o.elems = o.elems[:n]
+		if o.flags&objHasSparseElements != 0 {
+			o.arrayLen = n
+		}
 	case int(n) > len(o.elems):
 		// Extending an array only makes it longer; the new slots are holes.
+		// Beyond a short run they are not materialized at all, since a length
+		// of four billion is a number rather than four billion holes.
 		const maxHoleRun = 1024
-		if int(n)-len(o.elems) <= maxHoleRun {
+		if o.flags&objHasSparseElements == 0 && int(n)-len(o.elems) <= maxHoleRun {
 			for len(o.elems) < int(n) {
 				o.elems = append(o.elems, elemHole)
 			}
 		} else {
-			o.flags |= objHasSparseElements
-			o.setOwnRaw(atomLength, Uint32(n), propWritable)
+			o.markSparse()
+			o.arrayLen = n
+		}
+	default:
+		if o.flags&objHasSparseElements != 0 {
+			o.arrayLen = n
 		}
 	}
 	if o.flags&objHasSparseElements != 0 {

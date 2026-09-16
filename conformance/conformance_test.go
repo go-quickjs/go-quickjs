@@ -37,6 +37,10 @@ var (
 		"restrict the run to a comma-separated list of directories under test/")
 	maxFailures = flag.Int("conformance.max-failures", 40,
 		"how many failures to print before summarizing")
+	workers = flag.Int("conformance.workers", 0,
+		"how many tests to run at once; zero means one per core")
+	allocReport = flag.Int64("conformance.alloc-report", 0,
+		"log any test allocating more than this many bytes; implies one worker")
 	testTimeout = flag.Duration("conformance.timeout", 5*time.Second,
 		"how long any one test may run before being counted as a timeout")
 )
@@ -123,8 +127,17 @@ func TestConformance(t *testing.T) {
 	}
 	outcomes := make([]outcome, len(tests))
 	next := int64(-1)
+	n := *workers
+	if n <= 0 {
+		n = runtime.NumCPU()
+	}
+	if *allocReport > 0 {
+		// Attributing an allocation to a test means nothing else may be
+		// running at the time.
+		n = 1
+	}
 	var wg sync.WaitGroup
-	for w := 0; w < runtime.NumCPU(); w++ {
+	for w := 0; w < n; w++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -132,6 +145,17 @@ func TestConformance(t *testing.T) {
 				i := int(atomic.AddInt64(&next, 1))
 				if i >= len(tests) {
 					return
+				}
+				if *allocReport > 0 {
+					var before, after runtime.MemStats
+					runtime.ReadMemStats(&before)
+					res, reason := runOne(suite, tests[i])
+					runtime.ReadMemStats(&after)
+					if d := after.TotalAlloc - before.TotalAlloc; d > uint64(*allocReport) {
+						t.Logf("ALLOC %s: %d MB", tests[i].Name(), d/(1<<20))
+					}
+					outcomes[i] = outcome{res, reason}
+					continue
 				}
 				res, reason := runOne(suite, tests[i])
 				outcomes[i] = outcome{res, reason}
@@ -237,7 +261,15 @@ func runOne(suite *conformance.Suite, tc *conformance.Test) (result, string) {
 		return resultSkip, err.Error()
 	}
 
-	rt := quickjs.New(quickjs.WithMaxCallDepth(400))
+	// The stack is sized to what 400 frames can actually reach rather than to
+	// the default, because the runner has one Runtime per core in flight and
+	// allocates a fresh one per test: the default six megabytes of slots is
+	// more than the depth limit permits anyone to use, and churning it eighty
+	// thousand times over is what it takes to run the machine out of memory.
+	rt := quickjs.New(
+		quickjs.WithMaxCallDepth(400),
+		quickjs.WithStackSize(64*1024),
+	)
 	defer rt.Close()
 
 	// The suite's async tests report completion through print.
