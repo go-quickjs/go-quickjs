@@ -109,8 +109,6 @@ type matcher struct {
 	emptyMarks []int
 
 	steps int
-	// multiline affects the ^ and $ assertions and is read from the flags.
-	multiline bool
 
 	// useAnchor and anchorEnd require a match to finish at an exact position,
 	// which is how lookbehind is evaluated: the body is run forwards from each
@@ -128,7 +126,6 @@ func (re *Regexp) exec(in *input, start int) ([]int, error) {
 		caps:       make([]int, 2*(re.groupCount+1)),
 		counters:   make([]int, re.prog.counters),
 		emptyMarks: make([]int, re.prog.emptyChecks),
-		multiline:  re.flags&FlagMultiline != 0,
 	}
 
 	for pos := start; pos <= in.length(); {
@@ -248,7 +245,10 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 				pc++
 				break
 			}
-			if m.multiline {
+			// Multiline is carried by the instruction rather than read from
+			// the pattern's flags, because an inline modifier can turn it on
+			// or off for part of the pattern.
+			if in.arg != 0 {
 				if r, _ := m.in.before(pos); isLineTerminator(r) {
 					pc++
 					break
@@ -261,7 +261,7 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 				pc++
 				break
 			}
-			if m.multiline {
+			if in.arg != 0 {
 				if r, _ := m.in.at(pos); isLineTerminator(r) {
 					pc++
 					break
@@ -445,7 +445,6 @@ func (m *matcher) runLook(idx, pos int) (bool, error) {
 		caps:       m.caps,
 		counters:   make([]int, m.prog.counters),
 		emptyMarks: make([]int, m.prog.emptyChecks),
-		multiline:  m.multiline,
 		steps:      m.steps,
 	}
 	for i := range sub.emptyMarks {

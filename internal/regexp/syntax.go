@@ -154,7 +154,26 @@ type nodeGroup struct {
 }
 
 // nodeAssert is a zero-width assertion.
-type nodeAssert struct{ kind assertKind }
+//
+// multiline is recorded per assertion rather than read from the pattern's flags
+// at match time, because an inline modifier can turn m on or off for part of a
+// pattern and the two halves must disagree.
+type nodeAssert struct {
+	kind      assertKind
+	multiline bool
+}
+
+// nodeModifier is a group that changes i, m or s for what it contains:
+// `(?i:...)` turns one on, `(?-i:...)` turns it off, `(?i-m:...)` does both.
+//
+// It exists so that a pattern can be case-insensitive in one place without
+// being so everywhere, which otherwise takes two patterns or a hand-expanded
+// character class. The flags it carries are the ones in effect inside it,
+// already resolved against the enclosing ones.
+type nodeModifier struct {
+	flags Flags
+	item  node
+}
 
 type assertKind uint8
 
@@ -191,5 +210,6 @@ func (nodeAlt) isNode()      {}
 func (nodeRepeat) isNode()   {}
 func (nodeGroup) isNode()    {}
 func (nodeAssert) isNode()   {}
+func (nodeModifier) isNode() {}
 func (nodeLook) isNode()     {}
 func (*nodeBackref) isNode() {}

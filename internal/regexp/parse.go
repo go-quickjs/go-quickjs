@@ -302,10 +302,10 @@ func (p *parser) parseAtom() (n node, quantifiable bool, err error) {
 	switch r := p.peek(); r {
 	case '^':
 		p.pos++
-		return nodeAssert{kind: assertStart}, false, nil
+		return nodeAssert{kind: assertStart, multiline: p.flags&FlagMultiline != 0}, false, nil
 	case '$':
 		p.pos++
-		return nodeAssert{kind: assertEnd}, false, nil
+		return nodeAssert{kind: assertEnd, multiline: p.flags&FlagMultiline != 0}, false, nil
 	case '.':
 		p.pos++
 		return nodeAny{dotAll: p.flags&FlagDotAll != 0}, true, nil
@@ -365,6 +365,9 @@ func (p *parser) parseGroup() (node, bool, error) {
 				return nil, false, p.errorf("unterminated group")
 			}
 			return nodeGroup{item: inner}, true, nil
+
+		case isModifierStart(p.peek()):
+			return p.parseModifierGroup()
 
 		case p.eat('='):
 			return p.finishLook(false, false)
@@ -785,4 +788,76 @@ func (p *parser) parseClassAtom() (r rune, isClass bool, set *charSet, err error
 	}
 	c, err := p.parseCharEscape()
 	return c, false, nil, err
+}
+
+// isModifierStart reports whether a character can begin an inline modifier.
+func isModifierStart(r rune) bool {
+	return r == 'i' || r == 'm' || r == 's' || r == '-'
+}
+
+// parseModifierGroup parses `(?flags:...)` and `(?flags-flags:...)`.
+//
+// The flags apply only to what the group contains, so the parser's own flags
+// are changed for the inner parse and restored afterwards. Everything that
+// depends on them -- whether `.` matches a newline, whether `^` is per-line,
+// whether a literal folds case -- is decided while parsing or compiling that
+// subtree, so restoring is enough to confine them.
+func (p *parser) parseModifierGroup() (node, bool, error) {
+	var add, remove Flags
+	seen := map[rune]bool{}
+
+	readFlags := func(into *Flags) error {
+		for {
+			r := p.peek()
+			var f Flags
+			switch r {
+			case 'i':
+				f = FlagIgnoreCase
+			case 'm':
+				f = FlagMultiline
+			case 's':
+				f = FlagDotAll
+			default:
+				return nil
+			}
+			// A flag may appear once across both halves: `(?i-i:)` is as much a
+			// contradiction as `(?ii:)` is a repeat.
+			if seen[r] {
+				return p.errorf("duplicate modifier %q", string(r))
+			}
+			seen[r] = true
+			*into |= f
+			p.pos++
+		}
+	}
+
+	if err := readFlags(&add); err != nil {
+		return nil, false, err
+	}
+	if p.eat('-') {
+		if err := readFlags(&remove); err != nil {
+			return nil, false, err
+		}
+		if remove == 0 {
+			return nil, false, p.errorf("a modifier group must name a flag to remove")
+		}
+	} else if add == 0 {
+		return nil, false, p.errorf("a modifier group must name a flag")
+	}
+	if !p.eat(':') {
+		return nil, false, p.errorf("a modifier group must be followed by \":\"")
+	}
+
+	saved := p.flags
+	p.flags = (p.flags | add) &^ remove
+	inner, err := p.parseAlternation()
+	innerFlags := p.flags
+	p.flags = saved
+	if err != nil {
+		return nil, false, err
+	}
+	if !p.eat(')') {
+		return nil, false, p.errorf("unterminated group")
+	}
+	return nodeModifier{flags: innerFlags, item: inner}, true, nil
 }

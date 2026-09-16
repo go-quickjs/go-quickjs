@@ -150,12 +150,20 @@ func (c *compiler) compile(n node) {
 	case nodeRepeat:
 		c.compileRepeat(t)
 
+	case nodeModifier:
+		// The flags apply only inside, so they are swapped in for the subtree
+		// and restored afterwards.
+		saved := c.flags
+		c.flags = t.flags
+		c.compile(t.item)
+		c.flags = saved
+
 	case nodeAssert:
 		switch t.kind {
 		case assertStart:
-			c.emit(instr{op: opAssertStart})
+			c.emit(instr{op: opAssertStart, arg: boolArg(t.multiline)})
 		case assertEnd:
-			c.emit(instr{op: opAssertEnd})
+			c.emit(instr{op: opAssertEnd, arg: boolArg(t.multiline)})
 		case assertWordBoundary:
 			c.emit(instr{op: opWordBoundary})
 		default:
@@ -314,6 +322,8 @@ func canMatchEmpty(n node) bool {
 	switch t := n.(type) {
 	case nodeEmpty, nodeAssert, nodeLook:
 		return true
+	case nodeModifier:
+		return canMatchEmpty(t.item)
 	case nodeChar, nodeAny, nodeClass:
 		return false
 	case *nodeBackref:
@@ -339,4 +349,12 @@ func canMatchEmpty(n node) bool {
 		return t.min == 0 || canMatchEmpty(t.item)
 	}
 	return true
+}
+
+// boolArg packs a per-instruction flag into the generic arg field.
+func boolArg(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

@@ -67,7 +67,6 @@ var unsupportedFeatures = map[string]string{
 	"Intl-enumeration":              "no internationalization API",
 	"ShadowRealm":                   "no shadow realms",
 	"regexp-duplicate-named-groups": "no duplicate named groups",
-	"regexp-modifiers":              "no inline regexp modifiers",
 	"json-parse-with-source":        "no JSON source access",
 	"Intl.DurationFormat":           "no internationalization API",
 	"legacy-regexp":                 "no legacy RegExp statics",
