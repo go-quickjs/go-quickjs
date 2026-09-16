@@ -749,6 +749,7 @@ func (r *Runtime) initArrayBuiltins() {
 	})
 
 	r.initArrayFromAsync(ctor)
+	r.defSpecies(ctor)
 
 	r.defMethod(ctor, "from", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		src := arg(args, 0)

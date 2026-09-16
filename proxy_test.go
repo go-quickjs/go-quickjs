@@ -110,3 +110,44 @@ func TestProxyTraps(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// A subclass's methods have to produce instances of the subclass, which is what
+// Symbol.species decides.
+func TestSpecies(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`[Promise, Array, RegExp, Map, Set, ArrayBuffer]
+		    .map(c => c[Symbol.species] === c).join(",")`, "true,true,true,true,true,true"},
+		{`class P extends Promise {} String(P.resolve(1) instanceof P)`, "true"},
+		{`class P extends Promise {} String(P.reject(1) instanceof P)`, "true"},
+		{`class P extends Promise {} String(P.resolve(1).then(x => x) instanceof P)`, "true"},
+		{`class P extends Promise {} String(P.resolve(1).catch(x => x) instanceof P)`, "true"},
+		// An ordinary promise is unaffected.
+		{`String(Promise.resolve(1) instanceof Promise)`, "true"},
+		{`var p = Promise.resolve(1); String(Promise.resolve(p) === p)`, "true"},
+		// The accessor has a getter and no setter, and is configurable.
+		{`var d = Object.getOwnPropertyDescriptor(Promise, Symbol.species);
+		  [typeof d.get, String(d.set), d.configurable, d.enumerable].join(",")`,
+			"function,undefined,true,false"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+
+	// A receiver that is not a constructor is refused rather than silently
+	// producing an intrinsic promise.
+	for _, src := range []string{`Promise.resolve.call(null, 1)`, `Promise.reject.call(1, 1)`} {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil {
+			t.Errorf("%s: no error, want TypeError", src)
+		}
+		rt.Close()
+	}
+}

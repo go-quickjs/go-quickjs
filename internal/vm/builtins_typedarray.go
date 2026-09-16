@@ -222,6 +222,7 @@ func (r *Runtime) initArrayBufferBuiltins() {
 		o.data = &arrayBufferData{bytes: make([]byte, n)}
 		return Obj(o), nil
 	})
+	r.defSpecies(ctor)
 
 	r.defMethod(ctor, "isView", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		v := arg(args, 0)

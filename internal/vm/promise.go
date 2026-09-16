@@ -214,6 +214,125 @@ func (r *Runtime) promiseThen(o *Object, onFulfilled, onRejected Value) *Object 
 	return result
 }
 
+// promiseCapability is a promise together with the two functions that settle
+// it, which is how the specification hands one around.
+//
+// It exists so that a subclass can take part: Promise.resolve called on a
+// subclass has to produce an instance of that subclass, which means going
+// through its constructor rather than building an intrinsic promise.
+type promiseCapability struct {
+	promise *Object
+	resolve Value
+	reject  Value
+}
+
+// newPromiseCapability builds a promise using the given constructor.
+func (r *Runtime) newPromiseCapability(ctor Value) (*promiseCapability, error) {
+	if !ctor.IsObject() {
+		return nil, r.throwTypeError("a promise constructor is required")
+	}
+	if ctor.Object() == r.promiseCtor {
+		// The intrinsic constructor is known not to do anything observable, so
+		// the whole executor dance is skipped.
+		o := r.newPromise()
+		return &promiseCapability{
+			promise: o,
+			resolve: Obj(r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
+				rt.resolvePromise(o, arg(a, 0))
+				return Undefined, nil
+			})),
+			reject: Obj(r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
+				rt.rejectPromise(o, arg(a, 0))
+				return Undefined, nil
+			})),
+		}, nil
+	}
+
+	// The two slots start as undefined rather than as the zero Value, so that
+	// the guard below can tell "not yet supplied" from "supplied".
+	cap := &promiseCapability{resolve: Undefined, reject: Undefined}
+	executor := r.newNativeFunc("", 2, func(rt *Runtime, _ Value, a []Value) (Value, error) {
+		if !cap.resolve.IsUndefined() || !cap.reject.IsUndefined() {
+			return Undefined, rt.throwTypeError("the promise resolvers were supplied twice")
+		}
+		cap.resolve, cap.reject = arg(a, 0), arg(a, 1)
+		return Undefined, nil
+	})
+	res, err := r.construct(ctor, []Value{Obj(executor)})
+	if err != nil {
+		return nil, err
+	}
+	if !isCallable(cap.resolve) || !isCallable(cap.reject) {
+		return nil, r.throwTypeError("the promise constructor did not supply resolve and reject")
+	}
+	if !res.IsObject() {
+		return nil, r.throwTypeError("the promise constructor did not return an object")
+	}
+	cap.promise = res.Object()
+	return cap, nil
+}
+
+// speciesConstructor finds the constructor a derived object should be built
+// with, which is what lets a subclass decide what its methods return.
+func (r *Runtime) speciesConstructor(o *Object, fallback *Object) (Value, error) {
+	c, err := r.getProp(o, atomConstructor, Obj(o))
+	if err != nil {
+		return Undefined, err
+	}
+	if c.IsUndefined() {
+		return Obj(fallback), nil
+	}
+	if !c.IsObject() {
+		return Undefined, r.throwTypeError("the constructor property must be an object")
+	}
+	sp, err := r.getProp(c.Object(), r.atoms.internSymbol(r.wellKnown.species), c)
+	if err != nil {
+		return Undefined, err
+	}
+	if sp.IsNullish() {
+		return Obj(fallback), nil
+	}
+	if !sp.IsObject() || sp.Object().fn() == nil || sp.Object().fn().ctorKind == ctorNone {
+		return Undefined, r.throwTypeError("the species is not a constructor")
+	}
+	return sp, nil
+}
+
+// defSpecies gives a constructor the Symbol.species accessor, which by default
+// simply hands back the constructor a method was reached through.
+func (r *Runtime) defSpecies(ctor *Object) {
+	get := r.newNativeFunc("get [Symbol.species]", 0,
+		func(rt *Runtime, this Value, args []Value) (Value, error) { return this, nil })
+	r.defineAccessor(ctor, r.atoms.internSymbol(r.wellKnown.species), get, nil, propConfigurable)
+}
+
+// promiseThenSpecies is then with the result built by the species constructor,
+// so that a subclass's then returns an instance of the subclass.
+func (r *Runtime) promiseThenSpecies(o *Object, onFulfilled, onRejected Value) (Value, error) {
+	ctor, err := r.speciesConstructor(o, r.promiseCtor)
+	if err != nil {
+		return Undefined, err
+	}
+	if ctor.IsObject() && ctor.Object() == r.promiseCtor {
+		return Obj(r.promiseThen(o, onFulfilled, onRejected)), nil
+	}
+	cap, err := r.newPromiseCapability(ctor)
+	if err != nil {
+		return Undefined, err
+	}
+	// The intrinsic machinery settles an ordinary promise, whose outcome is
+	// then forwarded through the subclass's own resolvers.
+	inner := r.promiseThen(o, onFulfilled, onRejected)
+	r.promiseThen(inner,
+		Obj(r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
+			return rt.call(cap.resolve, Undefined, []Value{arg(a, 0)})
+		})),
+		Obj(r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
+			return rt.call(cap.reject, Undefined, []Value{arg(a, 0)})
+		})))
+	return Obj(cap.promise), nil
+}
+
 func (r *Runtime) initPromiseBuiltins() {
 	r.proto.promise = newObject(r.proto.object, ClassObject)
 	p := r.proto.promise
@@ -239,20 +358,46 @@ func (r *Runtime) initPromiseBuiltins() {
 		return Obj(o), nil
 	})
 
+	r.promiseCtor = ctor
+	r.defSpecies(ctor)
+
 	r.defMethod(ctor, "resolve", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		v := arg(args, 0)
-		// An existing promise is returned unchanged rather than wrapped.
-		if v.IsObject() && v.Object().class == ClassPromise {
-			return v, nil
+		if !this.IsObject() {
+			return Undefined, rt.throwTypeError("Promise.resolve requires a constructor receiver")
 		}
-		o := rt.newPromise()
-		rt.resolvePromise(o, v)
-		return Obj(o), nil
+		// A promise already built by this very constructor is handed back
+		// unchanged rather than wrapped in another.
+		if v.IsObject() && v.Object().class == ClassPromise {
+			c, err := rt.getProp(v.Object(), atomConstructor, v)
+			if err != nil {
+				return Undefined, err
+			}
+			if c.SameValue(this) {
+				return v, nil
+			}
+		}
+		cap, err := rt.newPromiseCapability(this)
+		if err != nil {
+			return Undefined, err
+		}
+		if _, err := rt.call(cap.resolve, Undefined, []Value{v}); err != nil {
+			return Undefined, err
+		}
+		return Obj(cap.promise), nil
 	})
 	r.defMethod(ctor, "reject", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o := rt.newPromise()
-		rt.rejectPromise(o, arg(args, 0))
-		return Obj(o), nil
+		if !this.IsObject() {
+			return Undefined, rt.throwTypeError("Promise.reject requires a constructor receiver")
+		}
+		cap, err := rt.newPromiseCapability(this)
+		if err != nil {
+			return Undefined, err
+		}
+		if _, err := rt.call(cap.reject, Undefined, []Value{arg(args, 0)}); err != nil {
+			return Undefined, err
+		}
+		return Obj(cap.promise), nil
 	})
 
 	r.defMethod(ctor, "all", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -272,13 +417,13 @@ func (r *Runtime) initPromiseBuiltins() {
 		if _, err := rt.promiseOf(this, "Promise.prototype.then"); err != nil {
 			return Undefined, err
 		}
-		return Obj(rt.promiseThen(this.Object(), arg(args, 0), arg(args, 1))), nil
+		return rt.promiseThenSpecies(this.Object(), arg(args, 0), arg(args, 1))
 	})
 	r.defMethod(p, "catch", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if _, err := rt.promiseOf(this, "Promise.prototype.catch"); err != nil {
 			return Undefined, err
 		}
-		return Obj(rt.promiseThen(this.Object(), Undefined, arg(args, 0))), nil
+		return rt.promiseThenSpecies(this.Object(), Undefined, arg(args, 0))
 	})
 	r.defMethod(p, "finally", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if _, err := rt.promiseOf(this, "Promise.prototype.finally"); err != nil {

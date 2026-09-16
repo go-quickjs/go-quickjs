@@ -48,7 +48,7 @@ func (r *Runtime) initRegExpBuiltins() {
 	r.proto.regexp = newObject(r.proto.object, ClassObject)
 	p := r.proto.regexp
 
-	r.newCtor("RegExp", 2, p, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	reCtor := r.newCtor("RegExp", 2, p, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		pattern := arg(args, 0)
 		flagsArg := arg(args, 1)
 
@@ -85,6 +85,7 @@ func (r *Runtime) initRegExpBuiltins() {
 		}
 		return rt.newRegExp(source, flags)
 	})
+	r.defSpecies(reCtor)
 
 	r.defGetter(p, "source", func(rt *Runtime, this Value, args []Value) (Value, error) {
 		re, err := rt.regexpOf(this, "RegExp.prototype.source")

@@ -174,6 +174,7 @@ func (r *Runtime) initMapBuiltins() {
 		}
 		return Obj(o), nil
 	})
+	r.defSpecies(ctor)
 	_ = ctor
 
 	r.defMethod(p, "get", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -265,7 +266,7 @@ func (r *Runtime) initSetBuiltins() {
 	r.proto.setProto = newObject(r.proto.object, ClassObject)
 	p := r.proto.setProto
 
-	r.newCtor("Set", 0, p, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	setCtor := r.newCtor("Set", 0, p, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		o := newObject(rt.proto.setProto, ClassSet)
 		m := newJSMap(false)
 		o.data = m
@@ -280,6 +281,7 @@ func (r *Runtime) initSetBuiltins() {
 		}
 		return Obj(o), nil
 	})
+	r.defSpecies(setCtor)
 
 	r.defMethod(p, "add", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		m, err := rt.mapOf(this, ClassSet, "Set.prototype.add")
