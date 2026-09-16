@@ -1,0 +1,9 @@
+# Build artifacts
+/qjs
+/bin/
+*.test
+*.out
+
+# Profiling output
+*.prof
+*.pprof
