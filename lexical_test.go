@@ -165,3 +165,53 @@ func TestYieldStarForwards(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// TestTopLevelAwait pins that a module may await at its top level, which is
+// what lets it finish loading something before its importers run.
+func TestTopLevelAwait(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`export var v = await 9;`, "9"},
+		{`var p = Promise.resolve(42); export var v = await p;`, "42"},
+		{`async function f() { return await 1; } export var v = await f();`, "1"},
+		{`try { await Promise.reject(new Error("x")); } catch (e) {}
+		  export var v = "caught";`, "caught"},
+		{`var out = []; for await (const x of [1, 2]) out.push(x);
+		  export var v = out.join(",");`, "1,2"},
+		// A module without one is unaffected.
+		{`export var v = 1;`, "1"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		ns, err := rt.EvalModule("m.js", tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+			rt.Close()
+			continue
+		}
+		got, err := ns.Get("v")
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got.String() != tc.want {
+			t.Errorf("%s: v = %q, want %q", tc.src, got.String(), tc.want)
+		}
+		rt.Close()
+	}
+
+	// A rejected top-level await fails the module.
+	rt := quickjs.New()
+	defer rt.Close()
+	if _, err := rt.EvalModule("m.js", `await Promise.reject(new TypeError("bang"));`); err == nil {
+		t.Error("a rejected top-level await should fail the module")
+	}
+
+	// await is reserved throughout module code, even inside a plain function
+	// where no await expression would be legal.
+	for _, src := range []string{`var await = 1;`, `function f() { var await = 1; }`} {
+		rt := quickjs.New()
+		if _, err := rt.EvalModule("m.js", src); err == nil {
+			t.Errorf("%s: accepted, want SyntaxError", src)
+		}
+		rt.Close()
+	}
+}

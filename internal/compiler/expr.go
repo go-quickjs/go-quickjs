@@ -126,7 +126,7 @@ func (c *compiler) compileExprNamed(e ast.Expr, name string) {
 
 	case *ast.Await:
 		c.compileExpr(n.Arg)
-		c.emitAt(n.Start, bytecode.OpAwait, 0, 0)
+		c.emitAwait(n.Start)
 
 	case *ast.Super:
 		c.errorf(n.Start, "\"super\" is only valid as a call or a property access")
@@ -1063,7 +1063,7 @@ func (c *compiler) compileYield(n *ast.Yield) {
 	start := c.here()
 	if async {
 		c.emit(bytecode.OpIterSendAsync, 0, 0)
-		c.emit(bytecode.OpAwait, 0, 0)
+		c.emitAwait(n.Start)
 	} else {
 		c.emit(bytecode.OpIterSend, 0, 0)
 	}
@@ -1076,4 +1076,16 @@ func (c *compiler) compileYield(n *ast.Yield) {
 	// cursor beneath it is removed rather than the value.
 	c.emit(bytecode.OpSwap, 0, 0)
 	c.emit(bytecode.OpDrop, 0, 0)
+}
+
+// emitAwait emits an await, marking a module's body asynchronous.
+//
+// A top-level await makes the module an async function: the interpreter has to
+// suspend the body rather than let the await escape the frame as an error, and
+// the module's completion becomes a promise.
+func (c *compiler) emitAwait(pos int) {
+	if c.fn.IsModule {
+		c.fn.Async = true
+	}
+	c.emitAt(pos, bytecode.OpAwait, 0, 0)
 }

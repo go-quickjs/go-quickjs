@@ -518,6 +518,8 @@ func (p *parser) parsePrimary() ast.Expr {
 			p.errorf("\"arguments\" is not available here")
 		}
 		if p.module && name == "await" {
+			// Reached only where `await` was not consumed as an operator, which
+			// is every position a module forbids it in.
 			p.errorf("\"await\" is reserved in module code")
 		}
 		p.next()

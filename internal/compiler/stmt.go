@@ -394,7 +394,7 @@ func (c *compiler) compileForAwaitBody(left ast.Node, body ast.Stmt) {
 	c.pushLoop("", true)
 
 	c.emit(bytecode.OpAsyncIterNext, 0, 0)
-	c.emit(bytecode.OpAwait, 0, 0)
+	c.emitAwait(start)
 	exit := c.emitJump(bytecode.OpIterResultOrJump)
 
 	c.beginScope()

@@ -317,13 +317,48 @@ func (r *Runtime) EvaluateModule(m *Module) (Value, error) {
 	cl := r.prepare(m.fn)
 	cl.env = m.env
 	// Module code has undefined as its top-level `this`.
-	v, err := r.run(cl, Undefined, nil, Undefined, nil)
+	v, err := r.runModuleBody(m, cl)
 	if err != nil {
 		m.state, m.err = ModuleFailed, err
 		return Undefined, err
 	}
 	m.state = ModuleEvaluated
 	return v, nil
+}
+
+// runModuleBody evaluates a module, driving it as an async function when it
+// uses top-level await.
+//
+// A module with a top-level await is asynchronous, so its body suspends and its
+// completion is a promise. EvaluateModule is synchronous, so the microtask
+// queue is drained here: a module awaiting something already settled finishes
+// before this returns, which is every case that does not depend on a host
+// timer. One that never settles leaves the module evaluating, and its failure
+// -- if any -- surfaces as a rejection rather than being lost.
+func (r *Runtime) runModuleBody(m *Module, cl *closure) (Value, error) {
+	if !m.fn.Async {
+		return r.run(cl, Undefined, nil, Undefined, nil)
+	}
+
+	gen, err := r.newGenerator(cl, Undefined, nil, nil, true)
+	if err != nil {
+		return Undefined, err
+	}
+	promise := r.runAsync(gen.data.(*generator))
+	if err := r.DrainJobs(); err != nil {
+		return Undefined, err
+	}
+
+	p, _ := promise.Object().data.(*promiseData)
+	if p != nil && p.state == promiseRejected {
+		p.handled = true
+		return Undefined, r.throw(p.value)
+	}
+	if p != nil && p.state == promiseFulfilled {
+		return p.value, nil
+	}
+	// Still pending: the module is waiting on something the host must settle.
+	return Undefined, nil
 }
 
 // resolvedNameOf asks the loader what a specifier resolves to, so that the

@@ -137,7 +137,10 @@ func Parse(src string, opts Options) (prog *ast.Program, err error) {
 		lex:    lexer.New(src),
 		strict: opts.Strict || opts.Module,
 		module: opts.Module,
-		labels: make(map[string]bool),
+		// A module's top level is an await context: top-level await is what
+		// lets a module finish loading something before its importers run.
+		allowAwait: opts.Module,
+		labels:     make(map[string]bool),
 	}
 	// The recursive-descent routines report errors by panicking with a
 	// *Error, which keeps their signatures free of error returns. Nothing else
@@ -346,11 +349,14 @@ func (p *parser) checkBindingName(name string, tok lexer.Token) {
 	if p.allowYield && name == "yield" {
 		p.errorAt(tok, "cannot bind \"yield\" inside a generator")
 	}
+	if p.module && name == "await" {
+		// Module code reserves await outright, not only where an await
+		// expression would be legal, so a nested plain function cannot use it
+		// as a name either.
+		p.errorAt(tok, "\"await\" is reserved in module code")
+	}
 	if p.allowAwait && name == "await" {
 		p.errorAt(tok, "cannot bind \"await\" inside an async function")
-	}
-	if p.module && name == "await" {
-		p.errorAt(tok, "cannot bind \"await\" at the top level of a module")
 	}
 	if p.noArguments && name == "await" {
 		// A class field initializer and a static block are always in a context
