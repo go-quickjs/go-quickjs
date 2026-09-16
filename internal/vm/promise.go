@@ -401,16 +401,16 @@ func (r *Runtime) initPromiseBuiltins() {
 	})
 
 	r.defMethod(ctor, "all", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		return rt.promiseCombinator(arg(args, 0), combinatorAll)
+		return rt.promiseCombinator(this, arg(args, 0), combinatorAll)
 	})
 	r.defMethod(ctor, "allSettled", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		return rt.promiseCombinator(arg(args, 0), combinatorAllSettled)
+		return rt.promiseCombinator(this, arg(args, 0), combinatorAllSettled)
 	})
 	r.defMethod(ctor, "race", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		return rt.promiseCombinator(arg(args, 0), combinatorRace)
+		return rt.promiseCombinator(this, arg(args, 0), combinatorRace)
 	})
 	r.defMethod(ctor, "any", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		return rt.promiseCombinator(arg(args, 0), combinatorAny)
+		return rt.promiseCombinator(this, arg(args, 0), combinatorAny)
 	})
 
 	r.defMethod(p, "then", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -465,24 +465,33 @@ const (
 )
 
 // promiseCombinator implements Promise.all and its relatives.
-func (r *Runtime) promiseCombinator(iterable Value, kind combinatorKind) (Value, error) {
-	result := r.newPromise()
+func (r *Runtime) promiseCombinator(ctor Value, iterable Value, kind combinatorKind) (Value, error) {
+	// The receiver is the constructor, so a subclass's Promise.all yields an
+	// instance of the subclass. Anything that is not a constructor is refused
+	// before the iterable is touched.
+	cap, err := r.newPromiseCapability(ctor)
+	if err != nil {
+		return Undefined, err
+	}
+	result := cap.promise
+	settle := func(v Value) { r.call(cap.resolve, Undefined, []Value{v}) }
+	fail := func(v Value) { r.call(cap.reject, Undefined, []Value{v}) }
 
 	var items []Value
 	if err := r.iterate(iterable, func(v Value) error {
 		items = append(items, v)
 		return nil
 	}); err != nil {
-		r.rejectPromise(result, thrownValue(err))
+		fail(thrownValue(err))
 		return Obj(result), nil
 	}
 
 	if len(items) == 0 {
 		switch kind {
 		case combinatorAll, combinatorAllSettled:
-			r.resolvePromise(result, Obj(r.newArrayFrom(nil)))
+			settle(Obj(r.newArrayFrom(nil)))
 		case combinatorAny:
-			r.rejectPromise(result, Obj(r.newError(errAggregate, "all promises were rejected")))
+			fail(Obj(r.newError(errAggregate, "all promises were rejected")))
 		}
 		// Promise.race over nothing stays pending forever, which is what the
 		// specification says.
@@ -504,7 +513,7 @@ func (r *Runtime) promiseCombinator(iterable Value, kind combinatorKind) (Value,
 			v := arg(a, 0)
 			switch kind {
 			case combinatorRace, combinatorAny:
-				rt.resolvePromise(result, v)
+				settle(v)
 				return Undefined, nil
 			case combinatorAllSettled:
 				o := newObject(rt.proto.object, ClassObject)
@@ -516,7 +525,7 @@ func (r *Runtime) promiseCombinator(iterable Value, kind combinatorKind) (Value,
 			}
 			remaining--
 			if remaining == 0 {
-				rt.resolvePromise(result, Obj(rt.newArrayFrom(values)))
+				settle(Obj(rt.newArrayFrom(values)))
 			}
 			return Undefined, nil
 		})
@@ -526,7 +535,7 @@ func (r *Runtime) promiseCombinator(iterable Value, kind combinatorKind) (Value,
 			switch kind {
 			case combinatorAll, combinatorRace:
 				// One rejection settles the whole thing.
-				rt.rejectPromise(result, reason)
+				fail(reason)
 				return Undefined, nil
 			case combinatorAllSettled:
 				o := newObject(rt.proto.object, ClassObject)
@@ -539,10 +548,10 @@ func (r *Runtime) promiseCombinator(iterable Value, kind combinatorKind) (Value,
 			remaining--
 			if remaining == 0 {
 				if kind == combinatorAny {
-					rt.rejectPromise(result, Obj(rt.newError(errAggregate, "all promises were rejected")))
+					fail(Obj(rt.newError(errAggregate, "all promises were rejected")))
 					return Undefined, nil
 				}
-				rt.resolvePromise(result, Obj(rt.newArrayFrom(values)))
+				settle(Obj(rt.newArrayFrom(values)))
 			}
 			return Undefined, nil
 		})
