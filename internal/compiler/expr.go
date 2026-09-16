@@ -110,6 +110,9 @@ func (c *compiler) compileExprNamed(e ast.Expr, name string) {
 	case *ast.OptionalChain:
 		c.compileOptionalChain(n)
 
+	case *ast.Super:
+		c.errorf(n.Start, "\"super\" is only valid as a call or a property access")
+
 	case *ast.Spread:
 		c.errorf(n.Start, "spread is not valid here")
 
@@ -372,6 +375,23 @@ func (c *compiler) compileUpdate(n *ast.Update) {
 
 	case *ast.Member:
 		c.compileExpr(target.Object)
+		if pn, private := target.Property.(*ast.PrivateName); private {
+			// A private member is reached through its own accessors, which do
+			// not consult the prototype chain the way a property does.
+			name := c.nameIdx("#" + pn.Name)
+			c.emit(bytecode.OpDup, 0, 0)
+			c.emit(bytecode.OpGetPrivate, name, 0)
+			c.emit(bytecode.OpToNumber, 0, 0)
+			if !n.Prefix {
+				c.emit(bytecode.OpInsert2, 0, 0)
+				c.emitAt(n.Start, op, 0, 0)
+			} else {
+				c.emitAt(n.Start, op, 0, 0)
+				c.emit(bytecode.OpInsert2, 0, 0)
+			}
+			c.emit(bytecode.OpSetPrivate, name, 0)
+			return
+		}
 		if target.Computed {
 			c.compileExpr(target.Property)
 			c.emit(bytecode.OpToPropertyKey, 0, 0)
@@ -446,6 +466,15 @@ func (c *compiler) compileMemberKey(m *ast.Member) {
 }
 
 func (c *compiler) compileMemberRead(n *ast.Member) {
+	if _, isSuper := n.Object.(*ast.Super); isSuper {
+		c.compileSuperMemberGet(n)
+		return
+	}
+	if pn, ok := n.Property.(*ast.PrivateName); ok {
+		c.compileExpr(n.Object)
+		c.emitAt(n.Start, bytecode.OpGetPrivate, c.nameIdx("#"+pn.Name), 0)
+		return
+	}
 	c.compileExpr(n.Object)
 	if n.Computed {
 		c.compileExpr(n.Property)
@@ -461,6 +490,36 @@ func (c *compiler) compileMemberRead(n *ast.Member) {
 }
 
 func (c *compiler) compileCall(n *ast.Call) {
+	// super(...) invokes the parent constructor with the current `this`.
+	if _, isSuper := n.Callee.(*ast.Super); isSuper {
+		if hasSpread(n.Args) {
+			c.compileSpreadArguments(n.Args)
+			c.emitAt(n.Start, bytecode.OpSuperCall, 0, 1)
+			return
+		}
+		argc := c.compileArguments(n.Args)
+		c.emitAt(n.Start, bytecode.OpSuperCall, uint32(argc), 0)
+		return
+	}
+	// A private method call fetches through the private slot, keeping the
+	// receiver for `this`.
+	if m, ok := n.Callee.(*ast.Member); ok {
+		if pn, isPrivate := m.Property.(*ast.PrivateName); isPrivate {
+			c.compileExpr(m.Object)
+			c.emit(bytecode.OpDup, 0, 0)
+			c.emit(bytecode.OpGetPrivate, c.nameIdx("#"+pn.Name), 0)
+			argc := c.compileArguments(n.Args)
+			c.emitAt(n.Start, bytecode.OpCallMethod, uint32(argc), 0)
+			return
+		}
+		if _, isSuper := m.Object.(*ast.Super); isSuper {
+			c.emit(bytecode.OpPushThis, 0, 0)
+			c.compileSuperMemberGet(m)
+			argc := c.compileArguments(n.Args)
+			c.emitAt(n.Start, bytecode.OpCallMethod, uint32(argc), 0)
+			return
+		}
+	}
 	if hasSpread(n.Args) {
 		c.compileSpreadCall(n)
 		return
@@ -818,6 +877,13 @@ func compoundOpcode(op string) bytecode.Op {
 // The order matters: each part may have side effects, and the specification
 // fixes the order in which they happen.
 func (c *compiler) compileMemberStore(m *ast.Member, emitValue func()) {
+	if pn, ok := m.Property.(*ast.PrivateName); ok {
+		c.compileExpr(m.Object)
+		emitValue()
+		c.emit(bytecode.OpInsert2, 0, 0)
+		c.emitAt(m.Start, bytecode.OpSetPrivate, c.nameIdx("#"+pn.Name), 0)
+		return
+	}
 	c.compileExpr(m.Object)
 	if m.Computed {
 		c.compileExpr(m.Property)
@@ -838,6 +904,13 @@ func (c *compiler) compileMemberStore(m *ast.Member, emitValue func()) {
 // compileMemberStoreFromValue stores a value that is already on the stack into
 // a member target, which is what a compound assignment needs after combining.
 func (c *compiler) compileMemberStoreFromValue(m *ast.Member) {
+	if pn, ok := m.Property.(*ast.PrivateName); ok {
+		c.compileExpr(m.Object)
+		c.emit(bytecode.OpSwap, 0, 0)
+		c.emit(bytecode.OpInsert2, 0, 0)
+		c.emit(bytecode.OpSetPrivate, c.nameIdx("#"+pn.Name), 0)
+		return
+	}
 	// The value is on top; the object and key have to go beneath it.
 	if m.Computed {
 		c.compileExpr(m.Object)
@@ -854,4 +927,15 @@ func (c *compiler) compileMemberStoreFromValue(m *ast.Member) {
 	c.emit(bytecode.OpSwap, 0, 0)
 	c.emit(bytecode.OpInsert2, 0, 0)
 	c.emit(bytecode.OpSetProp, c.nameIdx(propKeyName(m.Property)), 0)
+}
+
+// compileSuperMemberGet reads a property through super, which looks it up on
+// the home object's prototype rather than on the receiver.
+func (c *compiler) compileSuperMemberGet(m *ast.Member) {
+	if m.Computed {
+		c.compileExpr(m.Property)
+		c.emit(bytecode.OpGetSuperIndex, 0, 0)
+		return
+	}
+	c.emit(bytecode.OpGetSuperProp, c.nameIdx(propKeyName(m.Property)), 0)
 }

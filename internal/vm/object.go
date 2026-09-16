@@ -48,6 +48,12 @@ const (
 	// than removed so that the index map stays valid and enumeration order is
 	// preserved for the properties that remain.
 	propDeleted
+	// propPrivate marks a private class member. Private members are stored as
+	// ordinary properties under a key that source cannot spell, but they are
+	// not properties in the language's sense: they are invisible to
+	// enumeration, to Object.getOwnPropertyNames, to JSON, and to `in`. Only
+	// the private accessors reach them.
+	propPrivate
 )
 
 // propDefault is the attribute set for an ordinary assignment.
@@ -179,11 +185,24 @@ func (o *Object) buildIndex() {
 }
 
 // getOwn returns an own property, excluding dense elements.
+//
+// It sees private members, so it is the lookup the private accessors use.
+// Every path reachable from source goes through getOwnVisible instead.
 func (o *Object) getOwn(key Atom) *Property {
 	if i := o.findOwn(key); i >= 0 {
 		return &o.props[i]
 	}
 	return nil
+}
+
+// getOwnVisible returns an own property that source can observe, which excludes
+// private class members.
+func (o *Object) getOwnVisible(key Atom) *Property {
+	p := o.getOwn(key)
+	if p != nil && p.flags&propPrivate != 0 {
+		return nil
+	}
+	return p
 }
 
 // setOwnRaw installs a property, replacing any existing one, without consulting
@@ -259,7 +278,7 @@ func (o *Object) ownKeys(includeSymbols bool, atoms *atomTable) []Atom {
 
 	for i := range o.props {
 		p := &o.props[i]
-		if p.flags&propDeleted != 0 || p.key.IsIndex() {
+		if p.flags&(propDeleted|propPrivate) != 0 || p.key.IsIndex() {
 			continue
 		}
 		if atoms.IsSymbol(p.key) {
@@ -271,7 +290,7 @@ func (o *Object) ownKeys(includeSymbols bool, atoms *atomTable) []Atom {
 	if includeSymbols {
 		for i := range o.props {
 			p := &o.props[i]
-			if p.flags&propDeleted != 0 || p.key.IsIndex() {
+			if p.flags&(propDeleted|propPrivate) != 0 || p.key.IsIndex() {
 				continue
 			}
 			if atoms.IsSymbol(p.key) {
@@ -421,6 +440,8 @@ type funcData struct {
 	boundTarget *Object
 	boundThis   Value
 	boundArgs   []Value
+	// parentCtor is the constructor a derived class's super() invokes.
+	parentCtor *Object
 	// fields holds a class's instance field initializers, run by the
 	// constructor before the body.
 	fields []classField

@@ -1153,3 +1153,98 @@ func TestHoistedFunctionSeesLaterLet(t *testing.T) {
 		let later = "bound";
 		f()`, "bound")
 }
+
+func TestClassInheritance(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`class A { m() { return 1; } } class B extends A {} new B().m()`, "1"},
+		{`class A { constructor(x) { this.x = x; } }
+		  class B extends A { constructor(x) { super(x * 2); } }
+		  new B(3).x`, "6"},
+		// An implicit derived constructor forwards its arguments.
+		{`class A { constructor(x) { this.x = x; } } class B extends A {} new B(4).x`, "4"},
+		{`class A {} class B extends A {} new B() instanceof A`, "true"},
+		{`class A {} class B extends A {} new B() instanceof B`, "true"},
+		// Static members are inherited, which has no analogue in most class
+		// systems.
+		{`class A { static s() { return 1; } } class B extends A {} B.s()`, "1"},
+		{`class A {} class B extends A {} Object.getPrototypeOf(B) === A`, "true"},
+		{`class A {} class B extends A {} Object.getPrototypeOf(B.prototype) === A.prototype`, "true"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}
+
+func TestSuper(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`class A { m() { return "a"; } }
+		  class B extends A { m() { return super.m() + "b"; } }
+		  new B().m()`, "ab"},
+		{`class A { get v() { return 1; } }
+		  class B extends A { get v() { return super.v + 1; } }
+		  new B().v`, "2"},
+		// super.m() keeps the current receiver as `this`.
+		{`class A { m() { return this.n; } }
+		  class B extends A { constructor() { super(); this.n = 7; } m() { return super.m(); } }
+		  new B().m()`, "7"},
+		{`class A { constructor() { this.v = 1; } }
+		  class B extends A { constructor() { super(); this.w = 2; } }
+		  const b = new B(); b.v + b.w`, "3"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}
+
+func TestClassFields(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`class A { x = 1; } new A().x`, "1"},
+		{`class A { x; } String(new A().x)`, "undefined"},
+		// A later field may refer to an earlier one through `this`.
+		{`class A { x = 1; y = this.x + 1; } new A().y`, "2"},
+		{`class A { static s = 7; } A.s`, "7"},
+		{`class A { static { A.z = 3; } } A.z`, "3"},
+		// Fields are own properties of the instance, not the prototype.
+		{`class A { x = 1; } A.prototype.hasOwnProperty("x")`, "false"},
+		{`class A { x = 1; } new A().hasOwnProperty("x")`, "true"},
+		// A derived class's fields are initialized after super() runs.
+		{`class A { constructor() { this.fromBase = 1; } }
+		  class B extends A { own = this.fromBase + 1; }
+		  new B().own`, "2"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}
+
+func TestPrivateClassMembers(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`class A { #p = 5; get() { return this.#p; } } new A().get()`, "5"},
+		{`class A { #m() { return 4; } call() { return this.#m(); } } new A().call()`, "4"},
+		{`class Counter { #n = 0; inc() { this.#n++; return this.#n; } }
+		  const c = new Counter(); c.inc(); c.inc()`, "2"},
+		// A private member is invisible to every reflective operation.
+		{`class A { #p = 5; } Object.keys(new A()).length`, "0"},
+		{`class A { #p = 5; } JSON.stringify(new A())`, "{}"},
+		{`class A { #p = 5; } Object.getOwnPropertyNames(new A()).length`, "0"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}
+
+func TestPrivateMemberOnWrongObjectThrows(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	// Reaching for a private field on an object that does not have one is an
+	// error, not undefined: the field is part of the class's shape.
+	_, err := rt.Eval(`
+		class A { #p = 1; static read(o) { return o.#p; } }
+		A.read({})`)
+	if err == nil {
+		t.Fatal("expected a TypeError for a private member on a foreign object")
+	}
+	if !strings.Contains(err.Error(), "private") {
+		t.Errorf("error = %v, want one mentioning the private member", err)
+	}
+}

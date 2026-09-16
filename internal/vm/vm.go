@@ -979,6 +979,100 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 				}
 			}
 
+		// --- Private class members ----------------------------------------
+		case bytecode.OpGetPrivate:
+			obj := pop()
+			if !obj.IsObject() {
+				vmErr = r.throwTypeError("cannot read a private member of %s", r.describe(obj))
+				goto onError
+			}
+			v, err := r.getPrivate(obj.Object(), cl.names[in.A])
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			push(v)
+		case bytecode.OpSetPrivate:
+			val := pop()
+			obj := pop()
+			if !obj.IsObject() {
+				vmErr = r.throwTypeError("cannot write a private member of %s", r.describe(obj))
+				goto onError
+			}
+			// A private member is invisible to every reflective operation,
+			// which the flag rather than the attributes expresses.
+			obj.Object().setOwnRaw(cl.names[in.A], val, propWritable|propPrivate)
+		case bytecode.OpDefinePrivate:
+			val := pop()
+			target := peek(0)
+			if target.IsObject() {
+				target.Object().setOwnRaw(cl.names[in.A], val, propWritable|propPrivate)
+			}
+		case bytecode.OpPrivateIn:
+			obj := pop()
+			push(Bool(obj.IsObject() && obj.Object().getOwn(cl.names[in.A]) != nil))
+
+		// --- Classes ------------------------------------------------------
+		case bytecode.OpNewClass:
+			// stack: ctor parent
+			parent := pop()
+			ctorVal := peek(0)
+			if err := r.linkClass(ctorVal, parent); err != nil {
+				vmErr = err
+				goto onError
+			}
+		case bytecode.OpSetHomeObject:
+			// stack: home fn; `super` inside the method resolves against home.
+			if fnVal := peek(0); fnVal.IsObject() {
+				if fd := fnVal.Object().fn(); fd != nil && peek(1).IsObject() {
+					fd.homeObject = peek(1).Object()
+				}
+			}
+		case bytecode.OpDefineMethod:
+			// A class method is not enumerable, unlike an object literal's.
+			val := pop()
+			target := peek(0)
+			if target.IsObject() {
+				target.Object().setOwnRaw(cl.names[in.A], val,
+					propWritable|propConfigurable)
+			}
+		case bytecode.OpSuperCall:
+			var args []Value
+			if in.B != 0 {
+				// The spread form gathered the arguments into an array.
+				if a := pop(); a.IsObject() {
+					args = a.Object().elems
+				}
+			} else {
+				argc := int(in.A)
+				args = append([]Value(nil), r.stack[sp-argc:sp]...)
+				sp -= argc
+			}
+			if err := r.superCall(f, args); err != nil {
+				vmErr = err
+				goto onError
+			}
+			push(Undefined)
+		case bytecode.OpGetSuperProp:
+			v, err := r.superGet(f, cl.names[in.A])
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			push(v)
+		case bytecode.OpGetSuperIndex:
+			key, err := r.toPropertyKey(pop())
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			v, err := r.superGet(f, key)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			push(v)
+
 		case bytecode.OpNewTarget:
 			push(f.newTarget)
 		case bytecode.OpPushCallee:
@@ -1411,4 +1505,136 @@ func (r *Runtime) bigArith(op bytecode.Op, a, b *BigInt) (Value, error) {
 		return Undefined, r.throwTypeError("unsupported BigInt operation")
 	}
 	return Big(out), nil
+}
+
+// linkClass wires a derived class to its parent.
+//
+// Two chains are established. The prototypes are linked so that an instance
+// inherits the parent's methods, and the constructors are linked so that a
+// static method is visible on the subclass -- which is the part that surprises
+// people, since it has no analogue in most class systems.
+func (r *Runtime) linkClass(ctorVal, parent Value) error {
+	if !ctorVal.IsObject() {
+		return r.throwTypeError("a class constructor must be a function")
+	}
+	ctor := ctorVal.Object()
+	fd := ctor.fn()
+	if fd == nil {
+		return r.throwTypeError("a class constructor must be a function")
+	}
+
+	// `class X extends null` produces a class whose instances have no
+	// prototype, which is legal.
+	if parent.IsNull() {
+		if p, err := r.getProp(ctor, atomPrototype, ctorVal); err == nil && p.IsObject() {
+			p.Object().proto = nil
+		}
+		fd.ctorKind = ctorDerived
+		return nil
+	}
+	if !parent.IsObject() || !parent.Object().IsCallable() {
+		return r.throwTypeError("a class may only extend a constructor or null")
+	}
+	parentObj := parent.Object()
+
+	protoVal, err := r.getProp(ctor, atomPrototype, ctorVal)
+	if err != nil {
+		return err
+	}
+	parentProtoVal, err := r.getProp(parentObj, atomPrototype, parent)
+	if err != nil {
+		return err
+	}
+	if protoVal.IsObject() && parentProtoVal.IsObject() {
+		protoVal.Object().proto = parentProtoVal.Object()
+	}
+	// Static inheritance.
+	ctor.proto = parentObj
+
+	fd.ctorKind = ctorDerived
+	fd.parentCtor = parentObj
+	return nil
+}
+
+// superCall invokes the parent constructor on the current instance.
+//
+// The specification has a derived constructor receive `this` from its parent
+// rather than creating it, with the binding uninitialized until super()
+// returns. Here the instance is created up front and the parent runs against
+// it, which gives the same result for every hierarchy that does not observe
+// the difference through new.target or a base constructor that returns an
+// object of its own.
+func (r *Runtime) superCall(f *frame, args []Value) error {
+	parent := r.parentConstructorOf(f)
+	if parent == nil {
+		return r.throwTypeError("\"super\" is only valid in a derived constructor")
+	}
+	_, err := r.callObject(parent, f.this, args, Obj(parent))
+	return err
+}
+
+// parentConstructorOf finds the constructor a frame's super() refers to.
+func (r *Runtime) parentConstructorOf(f *frame) *Object {
+	if f.callee == nil {
+		return nil
+	}
+	fd := f.callee.fn()
+	if fd == nil {
+		return nil
+	}
+	if fd.parentCtor != nil {
+		return fd.parentCtor
+	}
+	// A method reaches the parent through its home object rather than through
+	// a stored link.
+	if fd.homeObject != nil && fd.homeObject.proto != nil {
+		if ctor := fd.homeObject.proto.getOwn(atomConstructor); ctor != nil &&
+			ctor.value.IsObject() {
+			return ctor.value.Object()
+		}
+	}
+	return nil
+}
+
+// superGet reads a property through super, resolving it on the home object's
+// prototype while leaving `this` as the current receiver.
+func (r *Runtime) superGet(f *frame, key Atom) (Value, error) {
+	if f.callee == nil {
+		return Undefined, r.throwTypeError("\"super\" is only valid inside a method")
+	}
+	fd := f.callee.fn()
+	if fd == nil || fd.homeObject == nil {
+		return Undefined, r.throwTypeError("\"super\" is only valid inside a method")
+	}
+	start := fd.homeObject.proto
+	if start == nil {
+		return Undefined, nil
+	}
+	// The receiver stays the instance, so an inherited getter sees the right
+	// object.
+	return r.getProp(start, key, f.this)
+}
+
+// getPrivate reads a private class member.
+//
+// Unlike an ordinary property, a missing private member is an error rather than
+// undefined: the field is part of the class's shape, so reaching for one on an
+// object that does not have it is a bug the language reports rather than
+// papering over.
+func (r *Runtime) getPrivate(o *Object, key Atom) (Value, error) {
+	for cur := o; cur != nil; cur = cur.proto {
+		if p := cur.getOwn(key); p != nil {
+			if p.isAccessor() {
+				a := p.getterSetter()
+				if a == nil || a.getter == nil {
+					return Undefined, r.throwTypeError(
+						"private member %s has no getter", r.atoms.name(key))
+				}
+				return r.call(Obj(a.getter), Obj(o), nil)
+			}
+			return p.value, nil
+		}
+	}
+	return Undefined, r.throwTypeError(
+		"private member %s is not present on this object", r.atoms.name(key))
 }

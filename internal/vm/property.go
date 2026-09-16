@@ -27,7 +27,7 @@ func (r *Runtime) getProp(obj *Object, key Atom, receiver Value) (Value, error) 
 			return v, err
 		}
 
-		if p := o.getOwn(key); p != nil {
+		if p := o.getOwnVisible(key); p != nil {
 			if p.isAccessor() {
 				a := p.getterSetter()
 				if a == nil || a.getter == nil {
@@ -139,7 +139,7 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 				break
 			}
 		}
-		p := o.getOwn(key)
+		p := o.getOwnVisible(key)
 		if p == nil {
 			continue
 		}
@@ -273,7 +273,7 @@ func (r *Runtime) hasOwnProp(o *Object, key Atom) bool {
 	if key == atomName && o.class == ClassFunction {
 		return true
 	}
-	return o.getOwn(key) != nil
+	return o.getOwnVisible(key) != nil
 }
 
 // deleteProp implements the delete operator.
@@ -322,7 +322,7 @@ func (r *Runtime) defineOwnProp(o *Object, key Atom, val Value, flags propFlags)
 // accessor for the same key so that `get x` and `set x` combine.
 func (r *Runtime) defineAccessor(o *Object, key Atom, getter, setter *Object, flags propFlags) {
 	flags |= propAccessor
-	if p := o.getOwn(key); p != nil && p.isAccessor() {
+	if p := o.getOwnVisible(key); p != nil && p.isAccessor() {
 		if a := p.getterSetter(); a != nil {
 			if getter != nil {
 				a.getter = getter

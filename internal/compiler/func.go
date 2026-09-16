@@ -351,66 +351,250 @@ func (c *compiler) applyDefault(def ast.Expr, name string) {
 // compileClass compiles a class definition, leaving the constructor on the
 // stack.
 //
-// A class is built out of ordinary pieces: the constructor is a function whose
-// .prototype carries the methods, and the static members are properties of the
-// constructor itself.
+// A class is assembled from ordinary parts: the constructor is a function whose
+// .prototype carries the methods, static members are properties of the
+// constructor itself, and instance fields are compiled into the top of the
+// constructor body. Inheritance links both chains -- prototypes for instance
+// members, constructors for static ones -- which is what makes a static method
+// visible on a subclass.
 func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
-	if cls.Extends != nil {
-		c.errorf(cls.Start, "class inheritance is not yet supported")
-	}
-	if len(cls.Fields) > 0 {
-		c.errorf(cls.Start, "class fields are not yet supported")
-	}
-	if len(cls.StaticBlocks) > 0 {
-		c.errorf(cls.Start, "static blocks are not yet supported")
-	}
-
 	name := inferredName
 	if cls.Name != nil {
 		name = cls.Name.Name
 	}
 
-	// Find the constructor, or synthesize an empty one.
-	var ctor *ast.FuncLit
-	for _, m := range cls.Members {
-		if fn, ok := m.Value.(*ast.FuncLit); ok && fn.Kind == ast.FuncConstructor {
-			ctor = fn
-		}
+	ctor := c.synthesizeConstructor(cls)
+	if cls.Extends != nil {
+		// The parent is evaluated before the constructor is built, as the
+		// heritage clause is an expression that may have side effects.
+		c.compileExpr(cls.Extends)
+		c.compileFunctionLiteral(ctor, name)
+		c.emit(bytecode.OpSwap, 0, 0)
+		// stack: ctor parent
+		c.emitAt(cls.Start, bytecode.OpNewClass, 0, 0)
+	} else {
+		c.compileFunctionLiteral(ctor, name)
 	}
-	if ctor == nil {
-		// A class with no explicit constructor still has one; it simply does
-		// nothing.
-		ctor = &ast.FuncLit{Kind: ast.FuncConstructor, Start: cls.Start}
-	}
-	ctorLit := *ctor
-	ctorLit.Name = nil
-	c.compileFunctionLiteral(&ctorLit, name)
 
-	// Attach the methods to the constructor's prototype, and the static
-	// members to the constructor itself.
+	// A class has an inner binding for its own name, in scope throughout the
+	// body. It is what lets a static block or a method refer to the class
+	// before the outer binding is initialized, and it is a separate, immutable
+	// binding that shadows the outer one.
+	c.beginScope()
+	if name != "" {
+		c.emit(bytecode.OpDup, 0, 0)
+		slot := c.declare(name, bindConst, cls.Start)
+		c.emit(bytecode.OpSetLocal, slot, 0)
+		c.markInitialized(name)
+	}
+
 	for _, m := range cls.Members {
 		fn, ok := m.Value.(*ast.FuncLit)
 		if !ok || fn.Kind == ast.FuncConstructor {
 			continue
 		}
-		if m.Computed {
-			c.errorf(m.Start, "computed class member names are not yet supported")
-		}
-		key := propKeyName(m.Key)
+		c.compileClassMember(m, fn)
+	}
 
-		if m.Static {
-			// The constructor is the target, so it is duplicated for the
-			// define and left in place afterwards.
-			c.compileMethodValue(fn, key)
-			c.emitDefineMember(m.Kind, key)
+	// Static fields are assigned after the class object exists, with the
+	// constructor as `this`.
+	for _, f := range cls.Fields {
+		if !f.Static {
 			continue
 		}
 		c.emit(bytecode.OpDup, 0, 0)
-		c.emit(bytecode.OpGetProp, c.nameIdx("prototype"), 0)
-		c.compileMethodValue(fn, key)
-		c.emitDefineMember(m.Kind, key)
+		if f.Value != nil {
+			c.compileExprNamed(f.Value, classFieldName(f.Key, f.Computed))
+		} else {
+			c.emit(bytecode.OpPushUndef, 0, 0)
+		}
+		if f.Computed {
+			c.errorf(f.Start, "a computed static field name is not yet supported")
+		}
+		c.emit(bytecode.OpDefineField, c.nameIdx(propKeyName(f.Key)), 0)
 		c.emit(bytecode.OpDrop, 0, 0)
 	}
+
+	for _, block := range cls.StaticBlocks {
+		// A static block is an immediately invoked method whose `this` is the
+		// class. OpCallMethod takes the receiver from beneath the callee, so
+		// the constructor is duplicated into that slot.
+		c.emit(bytecode.OpDup, 0, 0)
+		c.compileFunctionLiteral(&ast.FuncLit{
+			Kind:  ast.FuncMethod,
+			Body:  block,
+			Start: cls.Start,
+		}, "")
+		c.emit(bytecode.OpCallMethod, 0, 0)
+		c.emit(bytecode.OpDrop, 0, 0)
+	}
+	c.endScope()
+}
+
+// compileClassMember attaches one method or accessor to the class.
+func (c *compiler) compileClassMember(m ast.Property, fn *ast.FuncLit) {
+	key := ""
+	if !m.Computed {
+		key = propKeyName(m.Key)
+	}
+
+	if m.Static {
+		// The constructor is the target and stays on the stack.
+		c.emit(bytecode.OpDup, 0, 0)
+		c.compileMethodValue(fn, key)
+		c.emit(bytecode.OpSetHomeObject, 0, 0)
+		c.emitClassMemberDefine(m, key)
+		c.emit(bytecode.OpDrop, 0, 0)
+		return
+	}
+
+	c.emit(bytecode.OpDup, 0, 0)
+	c.emit(bytecode.OpGetProp, c.nameIdx("prototype"), 0)
+	c.compileMethodValue(fn, key)
+	// The home object is what `super` resolves against, so a method has to
+	// remember the object it was defined on.
+	c.emit(bytecode.OpSetHomeObject, 0, 0)
+	c.emitClassMemberDefine(m, key)
+	c.emit(bytecode.OpDrop, 0, 0)
+}
+
+// emitClassMemberDefine installs a member whose value is on the stack above
+// its target.
+func (c *compiler) emitClassMemberDefine(m ast.Property, key string) {
+	if m.Computed {
+		// The key was not pushed, so it is evaluated now and the value moved
+		// above it.
+		c.compileExpr(m.Key)
+		c.emit(bytecode.OpToPropertyKey, 0, 0)
+		c.emit(bytecode.OpSwap, 0, 0)
+		c.emit(bytecode.OpDefineIndex, 0, 0)
+		return
+	}
+	switch m.Kind {
+	case ast.PropGet:
+		c.emit(bytecode.OpDefineGetter, c.nameIdx(key), 0)
+	case ast.PropSet:
+		c.emit(bytecode.OpDefineSetter, c.nameIdx(key), 0)
+	default:
+		// A class method is not enumerable, unlike an object literal's, and a
+		// private one is additionally hidden from every reflective operation.
+		if _, private := m.Key.(*ast.PrivateName); private {
+			c.emit(bytecode.OpDefinePrivate, c.nameIdx(key), 0)
+			return
+		}
+		c.emit(bytecode.OpDefineMethod, c.nameIdx(key), 0)
+	}
+}
+
+// synthesizeConstructor builds the function that `new` will call, prefixing the
+// instance field initializers to whatever body the class declared.
+//
+// Compiling fields as statements rather than as separate initializer functions
+// means they see the constructor's scope and `this` for free.
+func (c *compiler) synthesizeConstructor(cls *ast.ClassLit) *ast.FuncLit {
+	var declared *ast.FuncLit
+	for _, m := range cls.Members {
+		if fn, ok := m.Value.(*ast.FuncLit); ok && fn.Kind == ast.FuncConstructor {
+			declared = fn
+		}
+	}
+
+	var fieldInit []ast.Stmt
+	for _, f := range cls.Fields {
+		if f.Static {
+			continue
+		}
+		if f.Computed {
+			c.errorf(f.Start, "a computed instance field name is not yet supported")
+		}
+		value := f.Value
+		if value == nil {
+			// A field with no initializer is still created, holding undefined.
+			value = &ast.Ident{Name: "undefined", Start: f.Start}
+		}
+		fieldInit = append(fieldInit, &ast.ExprStmt{
+			X: &ast.Assign{
+				Op: "=",
+				Target: &ast.Member{
+					Object:   &ast.This{Start: f.Start},
+					Property: f.Key,
+					Start:    f.Start,
+				},
+				Value: value,
+				Start: f.Start,
+			},
+			Start: f.Start,
+		})
+	}
+
+	if declared == nil {
+		// A class with no explicit constructor still has one. A derived class
+		// forwards its arguments to the parent, which is what the implicit
+		// `constructor(...args) { super(...args); }` does.
+		body := fieldInit
+		if cls.Extends != nil {
+			body = append([]ast.Stmt{implicitSuperCall(cls.Start)}, body...)
+		}
+		return &ast.FuncLit{Kind: ast.FuncConstructor, Body: body, Start: cls.Start}
+	}
+
+	lit := *declared
+	lit.Name = nil
+	if len(fieldInit) > 0 {
+		// Fields are initialized before the constructor body runs. In a derived
+		// class they must follow super(), which the body itself calls, so they
+		// are placed after the first statement when that statement is a super
+		// call.
+		if cls.Extends != nil && startsWithSuperCall(lit.Body) {
+			merged := append([]ast.Stmt{lit.Body[0]}, fieldInit...)
+			lit.Body = append(merged, lit.Body[1:]...)
+		} else {
+			lit.Body = append(append([]ast.Stmt{}, fieldInit...), lit.Body...)
+		}
+	}
+	return &lit
+}
+
+// implicitSuperCall builds `super(...arguments)` for a derived class that
+// declares no constructor.
+func implicitSuperCall(pos int) ast.Stmt {
+	return &ast.ExprStmt{
+		X: &ast.Call{
+			Callee: &ast.Super{Start: pos},
+			Args: []ast.Expr{&ast.Spread{
+				Arg:   &ast.Ident{Name: "arguments", Start: pos},
+				Start: pos,
+			}},
+			Start: pos,
+		},
+		Start: pos,
+	}
+}
+
+// startsWithSuperCall reports whether a constructor body begins with super().
+func startsWithSuperCall(body []ast.Stmt) bool {
+	if len(body) == 0 {
+		return false
+	}
+	es, ok := body[0].(*ast.ExprStmt)
+	if !ok {
+		return false
+	}
+	call, ok := es.X.(*ast.Call)
+	if !ok {
+		return false
+	}
+	_, isSuper := call.Callee.(*ast.Super)
+	return isSuper
+}
+
+// classFieldName returns the name to infer for an anonymous function assigned
+// to a class field.
+func classFieldName(key ast.Expr, computed bool) string {
+	if computed {
+		return ""
+	}
+	return propKeyName(key)
 }
 
 // compileMethodValue emits a method's closure.
@@ -418,18 +602,6 @@ func (c *compiler) compileMethodValue(fn *ast.FuncLit, name string) {
 	lit := *fn
 	lit.Name = nil
 	c.compileFunctionLiteral(&lit, name)
-}
-
-// emitDefineMember installs a class member on the object beneath it.
-func (c *compiler) emitDefineMember(kind ast.PropKind, key string) {
-	switch kind {
-	case ast.PropGet:
-		c.emit(bytecode.OpDefineGetter, c.nameIdx(key), 0)
-	case ast.PropSet:
-		c.emit(bytecode.OpDefineSetter, c.nameIdx(key), 0)
-	default:
-		c.emit(bytecode.OpDefineField, c.nameIdx(key), 0)
-	}
 }
 
 // formatKeyNumber renders a numeric property key the way ToString would, so

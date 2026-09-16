@@ -60,7 +60,7 @@ func (r *Runtime) initObjectBuiltins() {
 				return True, nil
 			}
 		}
-		if prop := o.getOwn(key); prop != nil {
+		if prop := o.getOwnVisible(key); prop != nil {
 			return Bool(prop.flags&propEnumerable != 0), nil
 		}
 		return False, nil
@@ -372,7 +372,7 @@ func (r *Runtime) isEnumerable(o *Object, key Atom) bool {
 			return true
 		}
 	}
-	if p := o.getOwn(key); p != nil {
+	if p := o.getOwnVisible(key); p != nil {
 		return p.flags&propEnumerable != 0
 	}
 	return false
@@ -430,7 +430,7 @@ func (r *Runtime) describeProperty(o *Object, key Atom) Value {
 			return Obj(d)
 		}
 	}
-	p := o.getOwn(key)
+	p := o.getOwnVisible(key)
 	if p == nil {
 		return Undefined
 	}

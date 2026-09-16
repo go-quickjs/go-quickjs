@@ -266,7 +266,7 @@ func lineMapper(text string) func(int) int32 {
 // emit appends an instruction and returns its program counter.
 func (c *compiler) emit(op bytecode.Op, a, b uint32) int {
 	c.fn.Code = append(c.fn.Code, bytecode.Instr{Op: op, A: a, B: b})
-	c.adjustStack(op, a)
+	c.adjustStack(op, a, b)
 	return len(c.fn.Code) - 1
 }
 
@@ -284,8 +284,8 @@ func (c *compiler) emitAt(pos int, op bytecode.Op, a, b uint32) int {
 }
 
 // adjustStack tracks the operand stack depth so the frame can be sized.
-func (c *compiler) adjustStack(op bytecode.Op, a uint32) {
-	c.stackDepth += stackEffect(op, a)
+func (c *compiler) adjustStack(op bytecode.Op, a, b uint32) {
+	c.stackDepth += stackEffect(op, a, b)
 	if c.stackDepth > c.maxStack {
 		c.maxStack = c.stackDepth
 	}
@@ -595,7 +595,7 @@ func collectPatternNames(target ast.Expr, out *[]string) {
 // It exists so that MaxStack can be computed without simulating execution. An
 // overestimate merely wastes a few slots per frame; an underestimate would
 // corrupt the stack, so anything uncertain is rounded up.
-func stackEffect(op bytecode.Op, a uint32) int {
+func stackEffect(op bytecode.Op, a, b uint32) int {
 	switch op {
 	case bytecode.OpPushConst, bytecode.OpPushUndef, bytecode.OpPushNull,
 		bytecode.OpPushTrue, bytecode.OpPushFalse, bytecode.OpPushThis,
@@ -606,6 +606,7 @@ func stackEffect(op bytecode.Op, a uint32) int {
 		bytecode.OpGetGlobalOpt, bytecode.OpDup, bytecode.OpClosure,
 		bytecode.OpNewObject, bytecode.OpNewTarget, bytecode.OpPushCallee,
 		bytecode.OpGetArguments, bytecode.OpRestParam,
+		bytecode.OpGetSuperProp,
 		bytecode.OpGetPropThis,
 		bytecode.OpIsNullish:
 		return 1
@@ -671,6 +672,22 @@ func stackEffect(op bytecode.Op, a uint32) int {
 		return -1
 	case bytecode.OpObjectRest:
 		return -int(a)
+	case bytecode.OpSuperCall:
+		// Pops the arguments, or the argument array in the spread form.
+		if b != 0 {
+			return -1
+		}
+		return -int(a) + 1
+	case bytecode.OpNewClass:
+		// Pops the parent, leaving the constructor.
+		return -1
+	case bytecode.OpSetHomeObject, bytecode.OpDefineMethod,
+		bytecode.OpDefinePrivate:
+		return -1
+	case bytecode.OpSetPrivate:
+		return -2
+	case bytecode.OpGetPrivate:
+		return 0
 	case bytecode.OpRethrow:
 		// Pops the completion record.
 		return -2
