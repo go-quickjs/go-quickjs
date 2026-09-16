@@ -86,3 +86,54 @@ func TestRegExpModifierErrors(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// A property escape may name its property and value in any spelling Unicode
+// publishes, so all of these describe the same class.
+func TestRegExpPropertyEscapes(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`String(/\p{Script=Latin}/u.test("a"))`, "true"},
+		{`String(/\p{Script=Latn}/u.test("a"))`, "true"},
+		{`String(/\p{sc=Latn}/u.test("a"))`, "true"},
+		{`String(/\p{sc=Grek}/u.test("α"))`, "true"},
+		// The abbreviation is sometimes the longer string.
+		{`String(/\p{Script=Han}/u.test("一"))`, "true"},
+		{`String(/\p{Script=Hani}/u.test("一"))`, "true"},
+
+		{`String(/\p{General_Category=Lowercase_Letter}/u.test("a"))`, "true"},
+		{`String(/\p{gc=Ll}/u.test("a"))`, "true"},
+		{`String(/\p{Lowercase_Letter}/u.test("a"))`, "true"},
+		{`String(/\p{Lu}/u.test("A")) + "," + String(/\p{Lu}/u.test("a"))`, "true,false"},
+
+		{`String(/\p{Alpha}/u.test("a")) + "," + String(/\p{Alpha}/u.test("1"))`, "true,false"},
+		{`String(/\p{Alphabetic}/u.test("a"))`, "true"},
+		{`String(/\p{AHex}/u.test("f")) + "," + String(/\p{AHex}/u.test("g"))`, "true,false"},
+		{`String(/\p{White_Space}/u.test(" "))`, "true"},
+		{`String(/\p{Cased}/u.test("a")) + "," + String(/\p{Cased}/u.test("1"))`, "true,false"},
+		{`String(/\p{ID_Start}/u.test("a")) + "," + String(/\p{ID_Start}/u.test("$"))`,
+			"true,false"},
+
+		{`String(/\p{Any}/u.test("x")) + "," + String(/\p{ASCII}/u.test("x"))`, "true,true"},
+		// The negated form.
+		{`String(/\P{Script=Latn}/u.test("a"))`, "false"},
+		{`String(/\P{Lu}/u.test("a"))`, "true"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+
+	for _, src := range []string{`/\p{Nope}/u`, `/\p{Script=Nope}/u`, `/\p{gc=Nope}/u`} {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil {
+			t.Errorf("%s: accepted an unknown property", src)
+		}
+		rt.Close()
+	}
+}

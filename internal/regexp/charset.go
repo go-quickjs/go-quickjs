@@ -223,6 +223,72 @@ func isLineTerminator(r rune) bool {
 	return r == '\n' || r == '\r' || r == 0x2028 || r == 0x2029
 }
 
+// categoryTable resolves a general category by either of its names.
+//
+// The long form is what a pattern is likely to spell; Go's tables are keyed by
+// the abbreviation.
+func categoryTable(name string) []*unicode.RangeTable {
+	if short, ok := categoryAliases[name]; ok {
+		name = short
+	}
+	if t, ok := unicode.Categories[name]; ok {
+		return []*unicode.RangeTable{t}
+	}
+	return nil
+}
+
+// binaryTable resolves a binary property.
+//
+// Go carries most of them verbatim. The rest are derived here from the
+// categories they are defined in terms of -- close enough to be useful, and
+// marked where they are known to be approximate.
+func binaryTable(name string) []*unicode.RangeTable {
+	if long, ok := binaryAliases[name]; ok {
+		name = long
+	}
+	if t, ok := unicode.Properties[name]; ok {
+		return []*unicode.RangeTable{t}
+	}
+	switch name {
+	case "Assigned":
+		return []*unicode.RangeTable{unicode.Cc, unicode.Cf, unicode.Co,
+			unicode.L, unicode.M, unicode.N, unicode.P, unicode.S, unicode.Z}
+	case "Alphabetic":
+		return []*unicode.RangeTable{unicode.L, unicode.Nl, unicode.Other_Alphabetic}
+	case "Lowercase":
+		return []*unicode.RangeTable{unicode.Ll, unicode.Other_Lowercase}
+	case "Uppercase":
+		return []*unicode.RangeTable{unicode.Lu, unicode.Other_Uppercase}
+	case "Cased":
+		return []*unicode.RangeTable{unicode.Ll, unicode.Lu, unicode.Lt,
+			unicode.Other_Lowercase, unicode.Other_Uppercase}
+	case "Case_Ignorable":
+		return []*unicode.RangeTable{unicode.Mn, unicode.Me, unicode.Cf,
+			unicode.Lm, unicode.Sk}
+	case "Math":
+		return []*unicode.RangeTable{unicode.Sm, unicode.Other_Math}
+	case "ID_Start", "XID_Start":
+		return []*unicode.RangeTable{unicode.L, unicode.Nl, unicode.Other_ID_Start}
+	case "ID_Continue", "XID_Continue":
+		return []*unicode.RangeTable{unicode.L, unicode.Nl, unicode.Other_ID_Start,
+			unicode.Mn, unicode.Mc, unicode.Nd, unicode.Pc, unicode.Other_ID_Continue}
+	case "Grapheme_Base":
+		return []*unicode.RangeTable{unicode.L, unicode.N, unicode.P, unicode.S,
+			unicode.Zs, unicode.Mc, unicode.Me}
+	case "Grapheme_Extend":
+		return []*unicode.RangeTable{unicode.Mn, unicode.Me, unicode.Other_Grapheme_Extend}
+	case "Default_Ignorable_Code_Point":
+		return []*unicode.RangeTable{unicode.Other_Default_Ignorable_Code_Point,
+			unicode.Cf, unicode.Variation_Selector}
+	case "Emoji", "Emoji_Presentation", "Emoji_Modifier", "Emoji_Modifier_Base",
+		"Emoji_Component", "Extended_Pictographic":
+		// Go carries no emoji data, so these resolve to the symbol categories
+		// the characters actually live in. Approximate, and documented as such.
+		return []*unicode.RangeTable{unicode.So, unicode.Sk}
+	}
+	return nil
+}
+
 // unicodeClass resolves a \p{...} escape to a set.
 //
 // Both the bare form, which names a general category or a binary property, and
@@ -234,39 +300,34 @@ func unicodeClass(name string, negate bool) (*charSet, bool) {
 		prop, value := name[:i], name[i+1:]
 		switch prop {
 		case "General_Category", "gc":
-			if t, ok := unicode.Categories[value]; ok {
-				tables = []*unicode.RangeTable{t}
-			}
+			tables = categoryTable(value)
 		case "Script", "sc", "Script_Extensions", "scx":
+			// Script_Extensions is answered with the plain Script table, which
+			// Go is the only data available for. The two differ only for code
+			// points a second script borrows, so the answer is a subset rather
+			// than a wrong kind of thing.
+			if long, ok := scriptAliases[value]; ok {
+				value = long
+			}
 			if t, ok := unicode.Scripts[value]; ok {
 				tables = []*unicode.RangeTable{t}
 			}
 		}
 	} else {
-		switch {
-		case unicode.Categories[name] != nil:
-			tables = []*unicode.RangeTable{unicode.Categories[name]}
-		case unicode.Properties[name] != nil:
-			tables = []*unicode.RangeTable{unicode.Properties[name]}
-		case unicode.Scripts[name] != nil:
-			tables = []*unicode.RangeTable{unicode.Scripts[name]}
-		default:
-			// A few property names the specification requires do not appear in
-			// Go's tables under the same name.
-			switch name {
-			case "Any":
-				return buildSet(negate, charRange{0, unicode.MaxRune}), true
-			case "ASCII":
-				return buildSet(negate, charRange{0, 0x7F}), true
-			case "Assigned":
-				tables = []*unicode.RangeTable{unicode.Cc, unicode.Cf, unicode.Co,
-					unicode.L, unicode.M, unicode.N, unicode.P, unicode.S, unicode.Z}
-			case "Alphabetic":
-				tables = []*unicode.RangeTable{unicode.L, unicode.Nl,
-					unicode.Other_Alphabetic}
-			case "White_Space":
-				tables = []*unicode.RangeTable{unicode.White_Space}
+		tables = categoryTable(name)
+		if tables == nil {
+			tables = binaryTable(name)
+		}
+		if tables == nil {
+			if t, ok := unicode.Scripts[name]; ok {
+				tables = []*unicode.RangeTable{t}
 			}
+		}
+		switch name {
+		case "Any":
+			return buildSet(negate, charRange{0, unicode.MaxRune}), true
+		case "ASCII":
+			return buildSet(negate, charRange{0, 0x7F}), true
 		}
 	}
 	if len(tables) == 0 {
