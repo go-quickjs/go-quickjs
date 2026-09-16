@@ -387,6 +387,21 @@ func (r *Runtime) initStringBuiltins() {
 	})
 
 	r.defMethod(p, "split", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		// The separator is asked for its symbol method first, so anything can
+		// act as one.
+		if sep := arg(args, 0); !sep.IsNullish() {
+			m, err := rt.getValueProp(sep, rt.atoms.internSymbol(rt.wellKnown.split))
+			if err != nil {
+				return Undefined, err
+			}
+			if isCallable(m) {
+				if this.IsNullish() {
+					return Undefined, rt.throwTypeError(
+						"String.prototype.split called on %s", this.Kind())
+				}
+				return rt.call(m, sep, []Value{this, arg(args, 1)})
+			}
+		}
 		s, err := thisStr(rt, this)
 		if err != nil {
 			return Undefined, err
@@ -538,14 +553,36 @@ func (r *Runtime) padString(thisStr thisStrFunc, this Value, args []Value, atSta
 
 // stringReplace implements replace and replaceAll for a string pattern.
 func (r *Runtime) stringReplace(thisStr thisStrFunc, this Value, args []Value, all bool) (Value, error) {
+	// The pattern is asked for its symbol method first, so that a subclass --
+	// or anything else -- can define how it replaces. replaceAll additionally
+	// insists on the global flag, since replacing once would silently do the
+	// wrong thing.
+	if pat := arg(args, 0); !pat.IsNullish() {
+		if all && pat.IsObject() && pat.Object().class == ClassRegExp {
+			flags, err := r.getValueProp(pat, r.atoms.intern("flags"))
+			if err != nil {
+				return Undefined, err
+			}
+			if flags.IsString() && !strings.Contains(flags.String().Go(), "g") {
+				return Undefined, r.throwTypeError(
+					"replaceAll requires a global regular expression")
+			}
+		}
+		m, err := r.getValueProp(pat, r.atoms.internSymbol(r.wellKnown.replace))
+		if err != nil {
+			return Undefined, err
+		}
+		if isCallable(m) {
+			if this.IsNullish() {
+				return Undefined, r.throwTypeError(
+					"String.prototype.replace called on %s", this.Kind())
+			}
+			return r.call(m, pat, []Value{this, arg(args, 1)})
+		}
+	}
 	s, err := thisStr(r, this)
 	if err != nil {
 		return Undefined, err
-	}
-	// A regular expression separator takes an entirely different path, since
-	// it can capture groups and match variable text.
-	if pat := arg(args, 0); pat.IsObject() && pat.Object().class == ClassRegExp {
-		return r.regexpReplace(pat, s, arg(args, 1), all)
 	}
 	pattern, err := r.toString(arg(args, 0))
 	if err != nil {

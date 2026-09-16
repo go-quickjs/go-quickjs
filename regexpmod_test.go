@@ -137,3 +137,61 @@ func TestRegExpPropertyEscapes(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// String.prototype.match and its relatives reach their pattern through a symbol
+// method, which is what lets a RegExp subclass -- or any object at all -- define
+// how it matches.
+func TestRegExpSymbolMethods(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`typeof RegExp.prototype[Symbol.match]`, "function"},
+		{`typeof RegExp.prototype[Symbol.matchAll]`, "function"},
+		{`typeof RegExp.prototype[Symbol.replace]`, "function"},
+		{`typeof RegExp.prototype[Symbol.search]`, "function"},
+		{`typeof RegExp.prototype[Symbol.split]`, "function"},
+
+		// Anything with the method acts as a pattern.
+		{`var o = {[Symbol.replace](s, r) { return "custom:" + s + ":" + r; }};
+		  "abc".replace(o, "X")`, "custom:abc:X"},
+		{`var o = {[Symbol.match](s) { return ["m:" + s]; }}; "abc".match(o)[0]`, "m:abc"},
+		{`var o = {[Symbol.split]() { return ["a", "b"]; }}; "xyz".split(o).join("-")`, "a-b"},
+		{`var o = {[Symbol.search]() { return 42; }}; String("abc".search(o))`, "42"},
+		{`var o = {[Symbol.matchAll]() { return [1, 2][Symbol.iterator](); }};
+		  [..."x".matchAll(o)].join(",")`, "1,2"},
+		// Including a subclass that overrides one.
+		{`class R extends RegExp { [Symbol.replace]() { return "sub"; } }
+		  "x".replace(new R("x"), "y")`, "sub"},
+
+		// And the ordinary paths are unchanged.
+		{`"abc".replace(/b/, "X")`, "aXc"},
+		{`"aXbXc".replace(/x/gi, "-")`, "a-b-c"},
+		{`"abc".replace("b", "Y")`, "aYc"},
+		{`"aaa".replaceAll("a", "b")`, "bbb"},
+		{`"a1b2".split(/\d/).join("-")`, "a-b-"},
+		{`"a,b".split(",").join("-")`, "a-b"},
+		{`"abc".match(/(b)(c)/).slice(1).join(",")`, "b,c"},
+		{`[..."a1b2".matchAll(/\d/g)].map(m => m[0]).join(",")`, "1,2"},
+		{`"abc".replace(/b/, m => m.toUpperCase())`, "aBc"},
+		{`"abc".replace(/(b)/, "[$1]")`, "a[b]c"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+
+	// replaceAll and matchAll insist on the global flag, because doing the job
+	// once would silently be the wrong answer.
+	for _, src := range []string{`"a".replaceAll(/a/, "b")`, `"a".matchAll(/a/)`} {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil {
+			t.Errorf("%s: no error, want TypeError", src)
+		}
+		rt.Close()
+	}
+}

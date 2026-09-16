@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"math"
 	"strings"
 
 	"github.com/go-quickjs/go-quickjs/internal/regexp"
@@ -86,6 +87,7 @@ func (r *Runtime) initRegExpBuiltins() {
 		return rt.newRegExp(source, flags)
 	})
 	r.defSpecies(reCtor)
+	r.initRegExpSymbolMethods(p)
 
 	r.defGetter(p, "source", func(rt *Runtime, this Value, args []Value) (Value, error) {
 		re, err := rt.regexpOf(this, "RegExp.prototype.source")
@@ -269,93 +271,194 @@ func (r *Runtime) toRegExp(v Value, extraFlags string) (Value, error) {
 func (r *Runtime) initStringRegExpMethods() {
 	p := r.proto.str
 
-	thisString := func(rt *Runtime, this Value) (*String, error) {
-		if this.IsNullish() {
-			return nil, rt.throwTypeError("String.prototype method called on %s", this.Kind())
-		}
-		return rt.toString(this)
-	}
-
+	// Each of these dispatches through the corresponding symbol method, which
+	// is what lets a RegExp subclass -- or any object at all -- define how it
+	// matches. The regexp behaviour lives on RegExp.prototype under the symbol;
+	// only the fallback for a non-regexp argument is here.
 	r.defMethod(p, "match", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		s, err := thisString(rt, this)
-		if err != nil {
-			return Undefined, err
-		}
-		reVal, err := rt.toRegExp(arg(args, 0), "")
-		if err != nil {
-			return Undefined, err
-		}
-		re, _ := rt.regexpOf(reVal, "String.prototype.match")
-
-		// Without the global flag, match is exec: one result with its groups.
-		if re.Flags()&regexp.FlagGlobal == 0 {
-			return rt.regexpExec(reVal, s)
-		}
-		// With it, match returns every matched substring and no group
-		// information, which is a different shape entirely.
-		reVal.Object().setOwnRaw(atomLastIndex, Int(0), propWritable)
-		var out []Value
-		err = rt.forEachMatch(re, s, func(units []uint16, caps []int) error {
-			out = append(out, Str(NewString(wtf8.FromUTF16(units[caps[0]:caps[1]]))))
-			return nil
-		})
-		if err != nil {
-			return Undefined, err
-		}
-		if len(out) == 0 {
-			return Null, nil
-		}
-		return Obj(rt.newArrayFrom(out)), nil
+		return rt.dispatchStringRegExp(this, args, rt.wellKnown.match, "", nil)
 	})
 
 	r.defMethod(p, "matchAll", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		s, err := thisString(rt, this)
-		if err != nil {
-			return Undefined, err
+		// matchAll is the one that insists on the global flag, and it checks
+		// before dispatching so that a non-global regexp is refused whatever
+		// its symbol method would have done.
+		if re := arg(args, 0); re.IsObject() && re.Object().class == ClassRegExp {
+			flags, err := rt.getValueProp(re, rt.atoms.intern("flags"))
+			if err != nil {
+				return Undefined, err
+			}
+			if flags.IsString() && !strings.Contains(flags.String().Go(), "g") {
+				return Undefined, rt.throwTypeError(
+					"matchAll requires a global regular expression")
+			}
 		}
-		reVal, err := rt.toRegExp(arg(args, 0), "g")
-		if err != nil {
-			return Undefined, err
-		}
-		re, _ := rt.regexpOf(reVal, "String.prototype.matchAll")
-		if re.Flags()&regexp.FlagGlobal == 0 {
-			return Undefined, rt.throwTypeError("matchAll requires a global regular expression")
-		}
-
-		// The results are collected up front rather than produced lazily,
-		// which is observable only if the pattern's lastIndex is mutated
-		// mid-iteration.
-		var results []Value
-		units := wtf8.ToUTF16(s.Go())
-		err = rt.forEachMatch(re, s, func(u []uint16, caps []int) error {
-			results = append(results, Obj(rt.buildMatchResult(re, units, caps, s)))
-			return nil
-		})
-		if err != nil {
-			return Undefined, err
-		}
-		return rt.newArrayIterator(Obj(rt.newArrayFrom(results)))
+		return rt.dispatchStringRegExp(this, args, rt.wellKnown.matchAll, "g", nil)
 	})
 
 	r.defMethod(p, "search", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		s, err := thisString(rt, this)
-		if err != nil {
-			return Undefined, err
-		}
-		reVal, err := rt.toRegExp(arg(args, 0), "")
-		if err != nil {
-			return Undefined, err
-		}
-		re, _ := rt.regexpOf(reVal, "String.prototype.search")
-		caps, err := re.Match(wtf8.ToUTF16(s.Go()), 0)
-		if err != nil {
-			return Undefined, rt.throwError(errSyntax, "%s", err.Error())
-		}
-		if caps == nil {
-			return Int(-1), nil
-		}
-		return Int(caps[0]), nil
+		return rt.dispatchStringRegExp(this, args, rt.wellKnown.search, "", nil)
 	})
+}
+
+// dispatchStringRegExp implements the shape every String method that takes a
+// pattern shares.
+//
+// The argument is asked for its symbol method first, so that anything can act
+// as a pattern; only when it has none is it coerced to a RegExp and the
+// intrinsic used. extra is appended to the arguments the symbol method
+// receives, which is how replace passes its replacement along.
+func (r *Runtime) dispatchStringRegExp(this Value, args []Value, sym *Symbol,
+	addFlags string, extra []Value) (Value, error) {
+	if this.IsNullish() {
+		return Undefined, r.throwTypeError("String.prototype method called on %s", this.Kind())
+	}
+	pattern := arg(args, 0)
+	if !pattern.IsNullish() {
+		method, err := r.getValueProp(pattern, r.atoms.internSymbol(sym))
+		if err != nil {
+			return Undefined, err
+		}
+		if isCallable(method) {
+			return r.call(method, pattern, append([]Value{this}, extra...))
+		}
+	}
+	s, err := r.toString(this)
+	if err != nil {
+		return Undefined, err
+	}
+	reVal, err := r.toRegExp(pattern, addFlags)
+	if err != nil {
+		return Undefined, err
+	}
+	method, err := r.getValueProp(reVal, r.atoms.internSymbol(sym))
+	if err != nil {
+		return Undefined, err
+	}
+	if !isCallable(method) {
+		return Undefined, r.throwTypeError("the pattern has no matching method")
+	}
+	return r.call(method, reVal, append([]Value{Str(s)}, extra...))
+}
+
+// initRegExpSymbolMethods defines the five symbol methods that carry the actual
+// regexp behaviour.
+//
+// They live on RegExp.prototype rather than inside the String methods because
+// that is where a subclass can override them, and because String.prototype
+// reaches them by lookup rather than by knowing what a RegExp is.
+func (r *Runtime) initRegExpSymbolMethods(p *Object) {
+	r.defSymbolMethod(p, r.wellKnown.match, "[Symbol.match]", 1,
+		func(rt *Runtime, this Value, args []Value) (Value, error) {
+			re, err := rt.regexpOf(this, "RegExp.prototype[Symbol.match]")
+			if err != nil {
+				return Undefined, err
+			}
+			s, err := rt.toString(arg(args, 0))
+			if err != nil {
+				return Undefined, err
+			}
+			// Without the global flag, match is exec: one result with its
+			// groups.
+			if re.Flags()&regexp.FlagGlobal == 0 {
+				return rt.regexpExec(this, s)
+			}
+			// With it, match returns every matched substring and no group
+			// information, which is a different shape entirely.
+			this.Object().setOwnRaw(atomLastIndex, Int(0), propWritable)
+			var out []Value
+			err = rt.forEachMatch(re, s, func(units []uint16, caps []int) error {
+				out = append(out, Str(NewString(wtf8.FromUTF16(units[caps[0]:caps[1]]))))
+				return nil
+			})
+			if err != nil {
+				return Undefined, err
+			}
+			if len(out) == 0 {
+				return Null, nil
+			}
+			return Obj(rt.newArrayFrom(out)), nil
+		})
+
+	r.defSymbolMethod(p, r.wellKnown.matchAll, "[Symbol.matchAll]", 1,
+		func(rt *Runtime, this Value, args []Value) (Value, error) {
+			re, err := rt.regexpOf(this, "RegExp.prototype[Symbol.matchAll]")
+			if err != nil {
+				return Undefined, err
+			}
+			s, err := rt.toString(arg(args, 0))
+			if err != nil {
+				return Undefined, err
+			}
+			// The results are collected up front rather than produced lazily,
+			// which is observable only if lastIndex is mutated mid-iteration.
+			var results []Value
+			units := wtf8.ToUTF16(s.Go())
+			err = rt.forEachMatch(re, s, func(u []uint16, caps []int) error {
+				results = append(results, Obj(rt.buildMatchResult(re, units, caps, s)))
+				return nil
+			})
+			if err != nil {
+				return Undefined, err
+			}
+			return rt.newArrayIterator(Obj(rt.newArrayFrom(results)))
+		})
+
+	r.defSymbolMethod(p, r.wellKnown.search, "[Symbol.search]", 1,
+		func(rt *Runtime, this Value, args []Value) (Value, error) {
+			re, err := rt.regexpOf(this, "RegExp.prototype[Symbol.search]")
+			if err != nil {
+				return Undefined, err
+			}
+			s, err := rt.toString(arg(args, 0))
+			if err != nil {
+				return Undefined, err
+			}
+			caps, err := re.Match(wtf8.ToUTF16(s.Go()), 0)
+			if err != nil {
+				return Undefined, rt.throwError(errSyntax, "%s", err.Error())
+			}
+			if caps == nil {
+				return Int(-1), nil
+			}
+			return Int(caps[0]), nil
+		})
+
+	r.defSymbolMethod(p, r.wellKnown.split, "[Symbol.split]", 2,
+		func(rt *Runtime, this Value, args []Value) (Value, error) {
+			if _, err := rt.regexpOf(this, "RegExp.prototype[Symbol.split]"); err != nil {
+				return Undefined, err
+			}
+			s, err := rt.toString(arg(args, 0))
+			if err != nil {
+				return Undefined, err
+			}
+			limit := math.MaxInt32
+			if lv := arg(args, 1); !lv.IsUndefined() {
+				n, err := rt.toUint32(lv)
+				if err != nil {
+					return Undefined, err
+				}
+				limit = int(n)
+			}
+			return rt.regexpSplit(this, s, limit)
+		})
+
+	r.defSymbolMethod(p, r.wellKnown.replace, "[Symbol.replace]", 2,
+		func(rt *Runtime, this Value, args []Value) (Value, error) {
+			if _, err := rt.regexpOf(this, "RegExp.prototype[Symbol.replace]"); err != nil {
+				return Undefined, err
+			}
+			s, err := rt.toString(arg(args, 0))
+			if err != nil {
+				return Undefined, err
+			}
+			// The global flag decides whether every match is replaced, so
+			// the caller does not have to say.
+			re, _ := rt.regexpOf(this, "")
+			all := re.Flags()&regexp.FlagGlobal != 0
+			return rt.regexpReplace(this, s, arg(args, 1), all)
+		})
 }
 
 // forEachMatch walks every non-overlapping match of a global pattern.
