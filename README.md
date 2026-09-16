@@ -14,49 +14,74 @@ fmt.Println(v) // 2-4-6
 
 ## Status
 
-**This is a work in progress and is not ready for production use.** The core
-language runs, but several major features are missing. The table below is
-current; anything marked missing will fail with a clear error rather than
-silently misbehaving.
+The language is substantially complete: expressions, closures, classes with
+inheritance and private members, destructuring, generators, `async`/`await`,
+Promises, regular expressions, modules, Proxy and typed arrays all work, and
+are exercised against [test262], the official ECMAScript conformance suite.
 
-### Working
+It is not finished. See [Conformance](#conformance) for measured coverage and
+[Not implemented](#not-implemented) for the known gaps.
+
+### Implemented
 
 | Area | Notes |
 |---|---|
-| Expressions and operators | Full precedence, `??`, `?.`, `**`, BigInt arithmetic |
+| Expressions and operators | Full precedence, `??`, `?.`, `**`, BigInt |
 | Variables | `var`, `let`, `const`, temporal dead zone, closures |
 | Control flow | `if`, `for`, `for-in`, `for-of`, `while`, `do`, `switch`, labelled `break`/`continue` |
-| Functions | Declarations, expressions, arrows, defaults, recursion, named function expressions |
-| Closures | Per-iteration `let` capture, shared bindings |
-| Objects | Literals, computed keys, getters/setters, spread, `__proto__` |
-| Classes | Constructors, methods, accessors, statics, prototype chain |
-| Arrays | Literals, spread, and most of `Array.prototype` |
-| Destructuring | Array and object patterns, defaults, nesting |
-| Strings | Most of `String.prototype`, templates, full lone-surrogate support |
-| Exceptions | `throw`, `try`/`catch`, stack traces |
-| Built-ins | `Object`, `Function`, `Array`, `String`, `Number`, `Boolean`, `Symbol`, `Error`, `Math`, `JSON` |
+| Functions | Declarations, expressions, arrows, defaults, rest parameters, `arguments` |
+| Classes | Constructors, methods, accessors, statics, `extends`, `super`, fields, private members, static blocks |
+| Destructuring | Array and object patterns, defaults, nesting, rest elements |
+| Exceptions | `throw`, `try`/`catch`/`finally`, stack traces |
+| Iteration | Iterator protocol, spread, generators, `yield*` |
+| Asynchrony | `Promise` with correct microtask ordering, `async`/`await` |
+| Regular expressions | Backtracking engine: backreferences, lookahead, lookbehind, named groups, Unicode property escapes |
+| Modules | `import`/`export`, live bindings, cycles, namespace imports |
+| Built-ins | `Object`, `Function`, `Array`, `String`, `Number`, `Boolean`, `Symbol`, `BigInt`, `Error`, `Math`, `JSON`, `Date`, `RegExp`, `Map`, `Set`, `WeakMap`, `WeakSet`, `Promise`, `Proxy`, `Reflect`, `ArrayBuffer`, typed arrays |
 | Go interop | Function binding, marshalling, `context.Context` cancellation |
 
-### Not yet implemented
+### Not implemented
 
-| Area | Status |
-|---|---|
-| `RegExp` | Not implemented; a literal raises an error |
-| Generators, `async`/`await`, `Promise` | Not implemented |
-| `Map`, `Set`, `WeakMap`, `WeakSet` | Not implemented |
-| `Date` | Not implemented |
-| `Proxy`, `Reflect` | Not implemented |
-| Typed arrays, `ArrayBuffer` | Not implemented |
-| Modules (`import`/`export`) | Not implemented |
-| Class inheritance (`extends`, `super`) | Parses, not compiled |
-| Class fields and private members | Parses, not compiled |
-| Rest parameters and rest in destructuring | Parses, not compiled |
-| Spread in call arguments | Parses, not compiled |
-| `try`/`finally` | Parses, not compiled |
-| `arguments` object | Not implemented |
-| Tagged templates | Not implemented |
-| Top-level `let`/`const` across `Eval` calls | Compiled as program locals, so they do not persist; `var` does |
-| `eval`, the `Function` constructor | Deliberately disabled — see Sandboxing |
+`Intl`, `Temporal`, `Atomics`, `SharedArrayBuffer`, `WeakRef`,
+`FinalizationRegistry`, `ShadowRealm`, decorators, `DataView`, resizable
+ArrayBuffers, iterator helpers, and the newer proposals test262 tracks.
+
+`eval` and the `Function` constructor are deliberately disabled — see
+[Sandboxing](#sandboxing).
+
+Known semantic gaps, each covered by a test that documents it:
+
+- A module's top-level `let` and `const` have no temporal dead zone, because
+  module bindings live in the module's environment object so that exports can
+  forward to them.
+- A top-level `let` or `const` in a script does not persist across `Eval` calls;
+  a top-level `var` does.
+- `super()` runs the parent constructor against an instance created up front,
+  rather than receiving `this` from it. The two agree except where a base
+  constructor returns an object of its own.
+
+## Conformance
+
+The engine is tested against test262. The suite is not vendored; point the
+runner at a checkout:
+
+```
+git clone --depth 1 https://github.com/tc39/test262 /tmp/test262
+TEST262_DIR=/tmp/test262 go test ./conformance -timeout 120m
+```
+
+The runner honours each test's frontmatter: the harness files to include, the
+strict and sloppy variants, the expected-failure phase and type, and the feature
+tags. A test tagged with a feature the engine does not implement is skipped
+rather than counted against it.
+
+Useful flags:
+
+```
+-conformance.dir=language/expressions   # restrict to one area
+-conformance.report=/tmp/failures.txt   # write every failure for triage
+-conformance.timeout=2s                 # bound any one test
+```
 
 ## Calling Go from JavaScript
 
@@ -113,12 +138,31 @@ err := v.Decode(&out)
 Decoding into `any` produces the natural Go form: `nil`, `bool`, `float64`,
 `string`, `[]any` or `map[string]any`.
 
+## Modules
+
+Imports are resolved through a loader the host supplies. A runtime without one
+rejects every import, which is the default:
+
+```go
+rt.SetModuleLoader(func(specifier, referrer string) (source, resolved string, err error) {
+    b, err := os.ReadFile(filepath.Join(root, specifier))
+    return string(b), specifier, err
+})
+
+ns, err := rt.EvalModule("main.js", `import {greet} from "./greet.js"; greet();`)
+```
+
+`EvalModule` returns the module's namespace, through which its exports can be
+read. Bindings are live: an importer sees the exporter's current value, not a
+copy taken at link time.
+
 ## Sandboxing
 
-A runtime has no I/O, no network access, no timers and no filesystem unless the
-host adds them. There is no `require`, no `process`, and no `fetch`. The
-`Function` constructor is disabled, so a script cannot compile new code from a
-string and escape static review.
+A runtime has no I/O, no network access, no timers, no filesystem and no module
+loader unless the host adds them. There is no `require`, no `process`, no
+`fetch`. The `Function` constructor is disabled, so a script cannot compile new
+code from a string and escape static review. `Date` reads the clock through an
+injectable hook rather than the process clock.
 
 Bounds are set at construction:
 
@@ -131,7 +175,9 @@ rt := quickjs.New(
 ```
 
 Runaway recursion raises a catchable `RangeError` rather than overflowing the
-goroutine stack.
+goroutine stack. Deeply nested source is rejected at parse time for the same
+reason — a goroutine stack overflow cannot be caught, so it would take the host
+down.
 
 Wall-clock bounds come from a `context.Context`, which the interpreter polls as
 it executes, so an infinite loop is interrupted rather than hanging the process:
@@ -145,7 +191,8 @@ _, err := rt.EvalContext(ctx, `while (true) {}`)
 ```
 
 An interruption is deliberately **not** catchable from script, so a sandboxed
-program cannot defeat its own timeout with `try`/`catch`.
+program cannot defeat its own timeout with `try`/`catch`. A catastrophically
+backtracking regular expression fails with an error rather than stalling.
 
 ## Concurrency
 
@@ -163,6 +210,13 @@ a pointer stored in an interface does not — and a type check is a mask and
 compare. The invariant this rests on is that a genuine NaN must never collide
 with a tag, so every number is normalized on the way in.
 
+**The interpreter allocates nothing per call.** One contiguous slice backs both
+locals and operands; a frame is a window into it. Neither that slice nor the
+frame stack is ever grown, which is what makes it safe for a closure to hold a
+pointer into a live frame and for the interpreter to hold a `*frame` across
+nested calls. Exhausting either is the stack limit, reported as the same
+"maximum call stack size exceeded" a browser gives.
+
 **Strings are UTF-8 with an ASCII fast path, and concatenation builds a rope.**
 Repeated `s += x` is how scripts build large strings, and copying each time is
 quadratic. Ropes defer the copy; flattening is iterative because a rope from a
@@ -174,33 +228,37 @@ ordinary one-code-unit string. Go cannot represent one — `WriteRune` substitut
 U+FFFD — so `internal/wtf8` encodes them in WTF-8. Well-formed text is
 bit-identical to UTF-8.
 
-**Property keys are interned to integers**, with array indices encoded in the
-key itself so that `a[i]` over a large range does not grow the intern table.
-Objects keep properties in insertion order and only build a lookup map past
-eight properties, below which scanning a contiguous slice wins.
+**The regexp engine backtracks, because it has to.** Go's `regexp` is RE2, which
+buys linear time by refusing backreferences, lookahead and lookbehind — exactly
+what JavaScript requires. Backtracking brings an exponential worst case, so the
+matcher gives up after a step budget rather than letting a hostile pattern stall
+the host.
 
-**The interpreter allocates nothing per call.** One contiguous slice backs both
-locals and operands; a frame is a window into it. The slice is never grown,
-which is what makes it safe for a closure to hold a pointer into a live frame,
-and it gives the stack limit for free.
+**Generators save their frame rather than running on a goroutine.** A goroutine
+per generator is simpler but leaks one for every generator never exhausted.
+Saving the frame works because `yield` is only valid inside the generator's own
+body, so at suspension its frame is the top of the stack.
+
+**Promise reactions never run synchronously.** Settling queues them; the queue
+drains between turns. That ordering guarantee is the point of the design.
 
 ## Benchmarks
 
 On an Apple M5 Max:
 
 ```
-BenchmarkFibonacci-18       1000    1206022 ns/op    24 B/op    1 allocs/op
-BenchmarkEvalArithmetic-18  919164     1161 ns/op  2536 B/op   22 allocs/op
-BenchmarkPropertyAccess-18  695341     1723 ns/op  3320 B/op   28 allocs/op
-BenchmarkCallGoFunction-18  930800     1305 ns/op  3104 B/op   33 allocs/op
+BenchmarkFibonacci-18        806µs/op     24 B/op     1 allocs/op
+BenchmarkPropertyAccess-18  1.78µs/op   3352 B/op    28 allocs/op
+BenchmarkCallGoFunction-18  1.34µs/op   3104 B/op    33 allocs/op
 ```
 
-`fib(20)` costs one allocation because the interpreter loop itself allocates
-nothing; the arithmetic benchmarks include parsing and compiling the source
-each iteration.
+`fib(20)` costs one allocation because the interpreter loop allocates nothing
+per call; the other benchmarks include parsing and compiling their source each
+iteration.
 
 ## License
 
 MIT, matching the upstream project.
 
 [QuickJS-NG]: https://github.com/quickjs-ng/quickjs
+[test262]: https://github.com/tc39/test262
