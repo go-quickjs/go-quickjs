@@ -1197,9 +1197,10 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				vmErr = r.throwTypeError("cannot write a private member of %s", r.describe(obj))
 				goto onError
 			}
-			// A private member is invisible to every reflective operation,
-			// which the flag rather than the attributes expresses.
-			obj.Object().setOwnRaw(cl.names[in.A], val, propWritable|propPrivate)
+			if err := r.setPrivate(obj.Object(), cl.names[in.A], val); err != nil {
+				vmErr = err
+				goto onError
+			}
 		case bytecode.OpDefinePrivate:
 			val := pop()
 			target := peek(0)
@@ -1208,7 +1209,19 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 		case bytecode.OpPrivateIn:
 			obj := pop()
-			push(Bool(obj.IsObject() && obj.Object().getOwn(cl.names[in.A]) != nil))
+			// The prototype chain is walked because a private method lives on
+			// the prototype rather than the instance, and `#m in obj` has to
+			// find it there just as reading this.#m does.
+			found := false
+			if obj.IsObject() {
+				for cur := obj.Object(); cur != nil; cur = cur.proto {
+					if cur.getOwn(cl.names[in.A]) != nil {
+						found = true
+						break
+					}
+				}
+			}
+			push(Bool(found))
 
 		// --- Classes ------------------------------------------------------
 		case bytecode.OpNewClass:
@@ -1926,6 +1939,41 @@ func (r *Runtime) superGet(f *frame, key Atom) (Value, error) {
 // undefined: the field is part of the class's shape, so reaching for one on an
 // object that does not have it is a bug the language reports rather than
 // papering over.
+// setPrivate writes a private member, running a private setter if the class
+// declared one.
+//
+// A private accessor is stored as an ordinary accessor property carrying the
+// private flag, so the write has to look for one rather than always installing
+// a data property -- otherwise `set #m(v)` would be shadowed the first time
+// anything assigned to #m.
+func (r *Runtime) setPrivate(o *Object, key Atom, val Value) error {
+	for cur := o; cur != nil; cur = cur.proto {
+		p := cur.getOwn(key)
+		if p == nil {
+			continue
+		}
+		if p.isAccessor() {
+			a := p.getterSetter()
+			if a == nil || a.setter == nil {
+				return r.throwTypeError("private member %s has no setter", r.atoms.name(key))
+			}
+			_, err := r.call(Obj(a.setter), Obj(o), []Value{val})
+			return err
+		}
+		if cur == o {
+			p.value = val
+			return nil
+		}
+		// A private method found on a prototype is not writable through an
+		// instance; only a field, which lives on the instance itself, is.
+		return r.throwTypeError("private method %s is read-only", r.atoms.name(key))
+	}
+	// A private member is invisible to every reflective operation, which the
+	// flag rather than the attributes expresses.
+	o.setOwnRaw(key, val, propWritable|propPrivate)
+	return nil
+}
+
 func (r *Runtime) getPrivate(o *Object, key Atom) (Value, error) {
 	for cur := o; cur != nil; cur = cur.proto {
 		if p := cur.getOwn(key); p != nil {

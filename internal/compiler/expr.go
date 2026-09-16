@@ -79,6 +79,14 @@ func (c *compiler) compileExprNamed(e ast.Expr, name string) {
 		c.compileUpdate(n)
 
 	case *ast.Binary:
+		// `#x in obj` asks whether an object carries a class's private field,
+		// which is the only way to tell one of that class's instances from a
+		// lookalike without a try/catch around a private read.
+		if pn, ok := n.Left.(*ast.PrivateName); ok && n.Op == "in" {
+			c.compileExpr(n.Right)
+			c.emitAt(n.Start, bytecode.OpPrivateIn, c.nameIdx("#"+pn.Name), 0)
+			break
+		}
 		c.compileExpr(n.Left)
 		c.compileExpr(n.Right)
 		c.emitAt(n.Start, binaryOpcode(n.Op), 0, 0)
@@ -834,9 +842,14 @@ func (c *compiler) assignTo(target ast.Expr, initializing bool) {
 		// A destructuring assignment, rather than a declaration: the leaves are
 		// existing references. It arises from `[a] = b` and from a for-of head
 		// whose target is a pattern.
+		//
+		// The pattern compilers consume the source, while assignTo leaves it
+		// for its caller, so it is duplicated first.
+		c.emit(bytecode.OpDup, 0, 0)
 		c.compileArrayPattern(t, ast.DeclVar, false)
 
 	case *ast.ObjectPattern:
+		c.emit(bytecode.OpDup, 0, 0)
 		c.compileObjectPattern(t, ast.DeclVar, false)
 
 	case *ast.AssignPattern:
