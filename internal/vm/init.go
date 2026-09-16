@@ -237,4 +237,5 @@ func (r *Runtime) initGlobals() {
 	r.initWeakCollections()
 	r.initJSONBuiltins()
 	r.initGlobalFunctions()
+	r.initExtraBuiltins()
 }

@@ -1,0 +1,868 @@
+package vm
+
+import (
+	"math"
+	"math/bits"
+	"strconv"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/go-quickjs/go-quickjs/internal/jsnum"
+	"github.com/go-quickjs/go-quickjs/internal/wtf8"
+)
+
+// The remainder of the standard library.
+//
+// These are split out from builtins.go only for size. Each is an ordinary
+// method; the ones with behaviour worth explaining carry a comment where the
+// surprise is.
+
+func (r *Runtime) initExtraBuiltins() {
+	r.initArrayExtras2()
+	r.initObjectExtras()
+	r.initStringExtras()
+	r.initNumberExtras()
+	r.initMathExtras()
+	r.initURIFunctions()
+	r.initPromiseExtras()
+}
+
+// ---------------------------------------------------------------------------
+// Array
+// ---------------------------------------------------------------------------
+
+func (r *Runtime) initArrayExtras2() {
+	p := r.proto.array
+
+	r.defMethod(p, "splice", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		o, err := rt.toObject(this)
+		if err != nil {
+			return Undefined, err
+		}
+		n := len(o.elems)
+		start, err := rt.relativeIndex(arg(args, 0), n, 0)
+		if err != nil {
+			return Undefined, err
+		}
+		// With no second argument splice removes everything from start; with
+		// one it removes that many. The difference is observable, so the
+		// argument count is checked rather than the value.
+		count := n - start
+		if len(args) >= 2 {
+			c, err := rt.toInteger(args[1])
+			if err != nil {
+				return Undefined, err
+			}
+			count = clampInt(int(c), 0, n-start)
+		}
+
+		removed := append([]Value(nil), o.elems[start:start+count]...)
+		var inserted []Value
+		if len(args) > 2 {
+			inserted = args[2:]
+		}
+
+		next := make([]Value, 0, n-count+len(inserted))
+		next = append(next, o.elems[:start]...)
+		next = append(next, inserted...)
+		next = append(next, o.elems[start+count:]...)
+		o.elems = next
+
+		return Obj(rt.newArrayFrom(removed)), nil
+	})
+
+	r.defMethod(p, "copyWithin", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		o, err := rt.toObject(this)
+		if err != nil {
+			return Undefined, err
+		}
+		n := len(o.elems)
+		target, err := rt.relativeIndex(arg(args, 0), n, 0)
+		if err != nil {
+			return Undefined, err
+		}
+		start, err := rt.relativeIndex(arg(args, 1), n, 0)
+		if err != nil {
+			return Undefined, err
+		}
+		end, err := rt.relativeIndex(arg(args, 2), n, n)
+		if err != nil {
+			return Undefined, err
+		}
+		if start < end {
+			// copy handles the overlapping case correctly in both directions.
+			copy(o.elems[target:], o.elems[start:end])
+		}
+		return this, nil
+	})
+
+	r.defMethod(p, "reduceRight", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		o, err := rt.toObject(this)
+		if err != nil {
+			return Undefined, err
+		}
+		cb := arg(args, 0)
+		if !isCallable(cb) {
+			return Undefined, rt.throwTypeError("reduceRight requires a function")
+		}
+		i := len(o.elems) - 1
+		var acc Value
+		if len(args) > 1 {
+			acc = args[1]
+		} else {
+			for i >= 0 {
+				if el, ok := elemAt(o, i); ok {
+					acc = el
+					i--
+					break
+				}
+				i--
+			}
+			if i < -1 {
+				return Undefined, rt.throwTypeError("reduceRight of an empty array with no initial value")
+			}
+		}
+		for ; i >= 0; i-- {
+			el, ok := elemAt(o, i)
+			if !ok {
+				continue
+			}
+			acc, err = rt.call(cb, Undefined, []Value{acc, el, Int(i), Obj(o)})
+			if err != nil {
+				return Undefined, err
+			}
+		}
+		return acc, nil
+	})
+
+	r.defIterationMethod(p, "findLast", func(rt *Runtime, o *Object, cb Value, thisArg Value) (Value, error) {
+		for i := len(o.elems) - 1; i >= 0; i-- {
+			el, _ := elemAt(o, i)
+			ok, err := rt.call(cb, thisArg, []Value{el, Int(i), Obj(o)})
+			if err != nil {
+				return Undefined, err
+			}
+			if ok.Truthy() {
+				return el, nil
+			}
+		}
+		return Undefined, nil
+	})
+
+	r.defIterationMethod(p, "findLastIndex", func(rt *Runtime, o *Object, cb Value, thisArg Value) (Value, error) {
+		for i := len(o.elems) - 1; i >= 0; i-- {
+			el, _ := elemAt(o, i)
+			ok, err := rt.call(cb, thisArg, []Value{el, Int(i), Obj(o)})
+			if err != nil {
+				return Undefined, err
+			}
+			if ok.Truthy() {
+				return Int(i), nil
+			}
+		}
+		return Int(-1), nil
+	})
+
+	r.defIterationMethod(p, "flatMap", func(rt *Runtime, o *Object, cb Value, thisArg Value) (Value, error) {
+		n := len(o.elems)
+		var out []Value
+		for i := 0; i < n; i++ {
+			el, ok := elemAt(o, i)
+			if !ok {
+				continue
+			}
+			v, err := rt.call(cb, thisArg, []Value{el, Int(i), Obj(o)})
+			if err != nil {
+				return Undefined, err
+			}
+			// flatMap flattens exactly one level, never more.
+			if v.IsObject() && v.Object().IsArray() {
+				out = append(out, v.Object().elems...)
+				continue
+			}
+			out = append(out, v)
+		}
+		return Obj(rt.newArrayFrom(out)), nil
+	})
+
+	// The iteration-protocol methods.
+	r.defMethod(p, "values", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		return rt.newArrayIterator(this)
+	})
+	r.defMethod(p, "keys", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		o, err := rt.toObject(this)
+		if err != nil {
+			return Undefined, err
+		}
+		keys := make([]Value, len(o.elems))
+		for i := range keys {
+			keys[i] = Int(i)
+		}
+		return rt.newArrayIterator(Obj(rt.newArrayFrom(keys)))
+	})
+	r.defMethod(p, "entries", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		o, err := rt.toObject(this)
+		if err != nil {
+			return Undefined, err
+		}
+		entries := make([]Value, len(o.elems))
+		for i, el := range o.elems {
+			if isHole(el) {
+				el = Undefined
+			}
+			entries[i] = Obj(rt.newArrayFrom([]Value{Int(i), el}))
+		}
+		return rt.newArrayIterator(Obj(rt.newArrayFrom(entries)))
+	})
+
+	// The change-by-copy methods, which return a new array rather than
+	// mutating the receiver.
+	r.defMethod(p, "toReversed", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		o, err := rt.toObject(this)
+		if err != nil {
+			return Undefined, err
+		}
+		out := make([]Value, len(o.elems))
+		for i, el := range o.elems {
+			if isHole(el) {
+				el = Undefined
+			}
+			out[len(o.elems)-1-i] = el
+		}
+		return Obj(rt.newArrayFrom(out)), nil
+	})
+
+	r.defMethod(p, "toSorted", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		o, err := rt.toObject(this)
+		if err != nil {
+			return Undefined, err
+		}
+		copyArr := rt.newArrayFrom(o.elems)
+		fn, err := rt.getValueProp(Obj(copyArr), rt.atoms.intern("sort"))
+		if err != nil {
+			return Undefined, err
+		}
+		if _, err := rt.call(fn, Obj(copyArr), args); err != nil {
+			return Undefined, err
+		}
+		return Obj(copyArr), nil
+	})
+
+	r.defMethod(p, "with", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		o, err := rt.toObject(this)
+		if err != nil {
+			return Undefined, err
+		}
+		n := len(o.elems)
+		i, err := rt.toInteger(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		if i < 0 {
+			i += float64(n)
+		}
+		if i < 0 || int(i) >= n {
+			return Undefined, rt.throwRangeError("invalid index")
+		}
+		out := append([]Value(nil), o.elems...)
+		out[int(i)] = arg(args, 1)
+		return Obj(rt.newArrayFrom(out)), nil
+	})
+}
+
+func clampInt(v, lo, hi int) int {
+	switch {
+	case v < lo:
+		return lo
+	case v > hi:
+		return hi
+	}
+	return v
+}
+
+// ---------------------------------------------------------------------------
+// Object
+// ---------------------------------------------------------------------------
+
+func (r *Runtime) initObjectExtras() {
+	ctorVal, err := r.getProp(r.global, r.atoms.intern("Object"), Obj(r.global))
+	if err != nil || !ctorVal.IsObject() {
+		return
+	}
+	ctor := ctorVal.Object()
+
+	r.defMethod(ctor, "hasOwn", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		o, err := rt.toObject(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		key, err := rt.toPropertyKey(arg(args, 1))
+		if err != nil {
+			return Undefined, err
+		}
+		return Bool(rt.hasOwnProp(o, key)), nil
+	})
+
+	r.defMethod(ctor, "getOwnPropertySymbols", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		o, err := rt.toObject(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		var out []Value
+		for _, k := range o.ownKeys(true, rt.atoms) {
+			if sym := rt.atoms.symbol(k); sym != nil {
+				out = append(out, Sym(sym))
+			}
+		}
+		return Obj(rt.newArrayFrom(out)), nil
+	})
+
+	r.defMethod(ctor, "getOwnPropertyDescriptors", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		o, err := rt.toObject(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		out := newObject(rt.proto.object, ClassObject)
+		for _, k := range o.ownKeys(true, rt.atoms) {
+			out.setOwnRaw(k, rt.describeProperty(o, k), propDefault)
+		}
+		return Obj(out), nil
+	})
+
+	r.defMethod(ctor, "seal", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		v := arg(args, 0)
+		if !v.IsObject() {
+			return v, nil
+		}
+		o := v.Object()
+		o.flags &^= objExtensible
+		// Sealing makes properties non-configurable but leaves them writable,
+		// which is the difference from freezing.
+		for i := range o.props {
+			o.props[i].flags &^= propConfigurable
+		}
+		return v, nil
+	})
+
+	r.defMethod(ctor, "isSealed", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		v := arg(args, 0)
+		if !v.IsObject() {
+			return True, nil
+		}
+		o := v.Object()
+		if o.IsExtensible() {
+			return False, nil
+		}
+		for i := range o.props {
+			if o.props[i].flags&propDeleted != 0 {
+				continue
+			}
+			if o.props[i].flags&propConfigurable != 0 {
+				return False, nil
+			}
+		}
+		return Bool(len(o.elems) == 0), nil
+	})
+
+	r.defMethod(ctor, "groupBy", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		cb := arg(args, 1)
+		if !isCallable(cb) {
+			return Undefined, rt.throwTypeError("Object.groupBy requires a function")
+		}
+		// The result has a null prototype, so a group named "toString" does not
+		// collide with an inherited method.
+		out := newObject(nil, ClassObject)
+		i := 0
+		err := rt.iterate(arg(args, 0), func(v Value) error {
+			keyVal, err := rt.call(cb, Undefined, []Value{v, Int(i)})
+			i++
+			if err != nil {
+				return err
+			}
+			key, err := rt.toPropertyKey(keyVal)
+			if err != nil {
+				return err
+			}
+			group := out.getOwn(key)
+			if group == nil {
+				arr := rt.newArrayFrom([]Value{v})
+				out.setOwnRaw(key, Obj(arr), propDefault)
+				return nil
+			}
+			if group.value.IsObject() {
+				g := group.value.Object()
+				g.elems = append(g.elems, v)
+			}
+			return nil
+		})
+		if err != nil {
+			return Undefined, err
+		}
+		return Obj(out), nil
+	})
+
+	// The legacy accessor helpers, which predate Object.defineProperty.
+	p := r.proto.object
+	r.defMethod(p, "__defineGetter__", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		o, err := rt.toObject(this)
+		if err != nil {
+			return Undefined, err
+		}
+		key, err := rt.toPropertyKey(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		fn := arg(args, 1)
+		if !isCallable(fn) {
+			return Undefined, rt.throwTypeError("__defineGetter__ requires a function")
+		}
+		rt.defineAccessor(o, key, fn.Object(), nil, propEnumerable|propConfigurable)
+		return Undefined, nil
+	})
+	r.defMethod(p, "__defineSetter__", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		o, err := rt.toObject(this)
+		if err != nil {
+			return Undefined, err
+		}
+		key, err := rt.toPropertyKey(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		fn := arg(args, 1)
+		if !isCallable(fn) {
+			return Undefined, rt.throwTypeError("__defineSetter__ requires a function")
+		}
+		rt.defineAccessor(o, key, nil, fn.Object(), propEnumerable|propConfigurable)
+		return Undefined, nil
+	})
+	r.defMethod(p, "__lookupGetter__", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		return rt.lookupAccessor(this, arg(args, 0), true)
+	})
+	r.defMethod(p, "__lookupSetter__", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		return rt.lookupAccessor(this, arg(args, 0), false)
+	})
+
+	// __proto__ as an accessor, which is how it is specified.
+	getProto := r.newNativeFunc("get __proto__", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		o, err := rt.toObject(this)
+		if err != nil {
+			return Undefined, err
+		}
+		if o.proto == nil {
+			return Null, nil
+		}
+		return Obj(o.proto), nil
+	})
+	setProto := r.newNativeFunc("set __proto__", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		if !this.IsObject() {
+			return Undefined, nil
+		}
+		switch pv := arg(args, 0); {
+		case pv.IsObject():
+			this.Object().proto = pv.Object()
+		case pv.IsNull():
+			this.Object().proto = nil
+		}
+		return Undefined, nil
+	})
+	r.defineAccessor(p, atomProto, getProto, setProto, propConfigurable)
+}
+
+func (r *Runtime) lookupAccessor(this, key Value, wantGetter bool) (Value, error) {
+	o, err := r.toObject(this)
+	if err != nil {
+		return Undefined, err
+	}
+	k, err := r.toPropertyKey(key)
+	if err != nil {
+		return Undefined, err
+	}
+	for cur := o; cur != nil; cur = cur.proto {
+		p := cur.getOwnVisible(k)
+		if p == nil {
+			continue
+		}
+		if !p.isAccessor() {
+			return Undefined, nil
+		}
+		a := p.getterSetter()
+		if a == nil {
+			return Undefined, nil
+		}
+		if wantGetter && a.getter != nil {
+			return Obj(a.getter), nil
+		}
+		if !wantGetter && a.setter != nil {
+			return Obj(a.setter), nil
+		}
+		return Undefined, nil
+	}
+	return Undefined, nil
+}
+
+// ---------------------------------------------------------------------------
+// String
+// ---------------------------------------------------------------------------
+
+func (r *Runtime) initStringExtras() {
+	p := r.proto.str
+
+	thisStr := func(rt *Runtime, this Value) (*String, error) {
+		if this.IsNullish() {
+			return nil, rt.throwTypeError("String.prototype method called on %s", this.Kind())
+		}
+		return rt.toString(this)
+	}
+
+	r.defMethod(p, "substr", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		s, err := thisStr(rt, this)
+		if err != nil {
+			return Undefined, err
+		}
+		start, err := rt.relativeIndex(arg(args, 0), s.Len(), 0)
+		if err != nil {
+			return Undefined, err
+		}
+		// substr takes a length, not an end index, which is what distinguishes
+		// it from the substring it is so easily confused with.
+		length := s.Len() - start
+		if lv := arg(args, 1); !lv.IsUndefined() {
+			n, err := rt.toInteger(lv)
+			if err != nil {
+				return Undefined, err
+			}
+			length = clampInt(int(n), 0, s.Len()-start)
+		}
+		return Str(s.Substring(start, start+length)), nil
+	})
+
+	// trimLeft and trimRight are the older names, kept as aliases.
+	for _, pair := range [][2]string{{"trimLeft", "trimStart"}, {"trimRight", "trimEnd"}} {
+		alias, target := pair[0], pair[1]
+		if v, err := r.getProp(p, r.atoms.intern(target), Obj(p)); err == nil && isCallable(v) {
+			p.setOwnRaw(r.atoms.intern(alias), v, propWritable|propConfigurable)
+		}
+	}
+
+	r.defMethod(p, "normalize", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		s, err := thisStr(rt, this)
+		if err != nil {
+			return Undefined, err
+		}
+		if f := arg(args, 0); !f.IsUndefined() {
+			fs, err := rt.toString(f)
+			if err != nil {
+				return Undefined, err
+			}
+			switch fs.Go() {
+			case "NFC", "NFD", "NFKC", "NFKD":
+			default:
+				return Undefined, rt.throwRangeError("invalid normalization form")
+			}
+		}
+		// Normalization tables are not implemented, so the string is returned
+		// unchanged. That is correct for text already in NFC, which is the
+		// overwhelming majority, and wrong otherwise.
+		return Str(s), nil
+	})
+
+	r.defMethod(p, "localeCompare", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		s, err := thisStr(rt, this)
+		if err != nil {
+			return Undefined, err
+		}
+		o, err := rt.toString(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		// Without a collation table this is a code-unit comparison, which
+		// agrees with a locale-aware one for ASCII.
+		return Int(s.Compare(o)), nil
+	})
+
+	r.defMethod(p, "toLocaleUpperCase", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		s, err := thisStr(rt, this)
+		if err != nil {
+			return Undefined, err
+		}
+		return Str(NewString(strings.ToUpper(s.Go()))), nil
+	})
+	r.defMethod(p, "toLocaleLowerCase", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		s, err := thisStr(rt, this)
+		if err != nil {
+			return Undefined, err
+		}
+		return Str(NewString(strings.ToLower(s.Go()))), nil
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Number
+// ---------------------------------------------------------------------------
+
+func (r *Runtime) initNumberExtras() {
+	p := r.proto.number
+
+	r.defMethod(p, "toExponential", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		n, err := rt.thisNumber(this)
+		if err != nil {
+			return Undefined, err
+		}
+		if math.IsNaN(n) || math.IsInf(n, 0) {
+			return Str(NewString(jsnum.FormatFloat(n))), nil
+		}
+		digits := -1
+		if d := arg(args, 0); !d.IsUndefined() {
+			v, err := rt.toInteger(d)
+			if err != nil {
+				return Undefined, err
+			}
+			if v < 0 || v > 100 {
+				return Undefined, rt.throwRangeError("toExponential() argument must be between 0 and 100")
+			}
+			digits = int(v)
+		}
+		s := strconv.FormatFloat(n, 'e', digits, 64)
+		return Str(NewString(fixExponent(s))), nil
+	})
+
+	r.defMethod(p, "toPrecision", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		n, err := rt.thisNumber(this)
+		if err != nil {
+			return Undefined, err
+		}
+		d := arg(args, 0)
+		if d.IsUndefined() {
+			return Str(NewString(jsnum.FormatFloat(n))), nil
+		}
+		if math.IsNaN(n) || math.IsInf(n, 0) {
+			return Str(NewString(jsnum.FormatFloat(n))), nil
+		}
+		v, err := rt.toInteger(d)
+		if err != nil {
+			return Undefined, err
+		}
+		if v < 1 || v > 100 {
+			return Undefined, rt.throwRangeError("toPrecision() argument must be between 1 and 100")
+		}
+		s := strconv.FormatFloat(n, 'g', int(v), 64)
+		return Str(NewString(fixExponent(s))), nil
+	})
+
+	r.defMethod(p, "toLocaleString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		n, err := rt.thisNumber(this)
+		if err != nil {
+			return Undefined, err
+		}
+		return Str(NewString(jsnum.FormatFloat(n))), nil
+	})
+}
+
+// fixExponent rewrites Go's exponent form into JavaScript's, which uses no
+// zero padding: 1e+05 becomes 1e+5.
+func fixExponent(s string) string {
+	i := strings.IndexAny(s, "eE")
+	if i < 0 {
+		return s
+	}
+	mant, exp := s[:i], s[i+1:]
+	sign := ""
+	if len(exp) > 0 && (exp[0] == '+' || exp[0] == '-') {
+		sign, exp = string(exp[0]), exp[1:]
+	}
+	exp = strings.TrimLeft(exp, "0")
+	if exp == "" {
+		exp = "0"
+	}
+	if sign == "" {
+		sign = "+"
+	}
+	return mant + "e" + sign + exp
+}
+
+// ---------------------------------------------------------------------------
+// Math
+// ---------------------------------------------------------------------------
+
+func (r *Runtime) initMathExtras() {
+	mVal, err := r.getProp(r.global, r.atoms.intern("Math"), Obj(r.global))
+	if err != nil || !mVal.IsObject() {
+		return
+	}
+	m := mVal.Object()
+
+	r.defMethod(m, "clz32", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		n, err := rt.toUint32(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		return Int(bits.LeadingZeros32(n)), nil
+	})
+
+	r.defMethod(m, "imul", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		a, err := rt.toInt32(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		b, err := rt.toInt32(arg(args, 1))
+		if err != nil {
+			return Undefined, err
+		}
+		// The product wraps to 32 bits, which is the whole point of imul.
+		return Int32(a * b), nil
+	})
+}
+
+// ---------------------------------------------------------------------------
+// URI handling
+// ---------------------------------------------------------------------------
+
+func (r *Runtime) initURIFunctions() {
+	// The four URI functions differ only in which characters they leave alone.
+	const (
+		uriReserved  = ";/?:@&=+$,#"
+		uriUnescaped = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()"
+	)
+
+	encode := func(name, keep string) {
+		r.defMethod(r.global, name, 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+			s, err := rt.toString(arg(args, 0))
+			if err != nil {
+				return Undefined, err
+			}
+			out, ok := encodeURIWith(s.Go(), keep)
+			if !ok {
+				return Undefined, rt.throwError(errURI, "URI malformed")
+			}
+			return Str(NewString(out)), nil
+		})
+	}
+	encode("encodeURI", uriUnescaped+uriReserved)
+	encode("encodeURIComponent", uriUnescaped)
+
+	decode := func(name, keep string) {
+		r.defMethod(r.global, name, 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+			s, err := rt.toString(arg(args, 0))
+			if err != nil {
+				return Undefined, err
+			}
+			out, ok := decodeURIWith(s.Go(), keep)
+			if !ok {
+				return Undefined, rt.throwError(errURI, "URI malformed")
+			}
+			return Str(NewString(out)), nil
+		})
+	}
+	decode("decodeURI", uriReserved)
+	decode("decodeURIComponent", "")
+
+	r.defMethod(r.global, "queueMicrotask", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		fn := arg(args, 0)
+		if !isCallable(fn) {
+			return Undefined, rt.throwTypeError("queueMicrotask requires a function")
+		}
+		rt.enqueueJob(func() {
+			// A microtask that throws has nowhere to report, so the error is
+			// dropped rather than propagated into an unrelated turn.
+			_, _ = rt.call(fn, Undefined, nil)
+		})
+		return Undefined, nil
+	})
+}
+
+// encodeURIWith percent-encodes every character outside keep.
+//
+// A lone surrogate has no UTF-8 encoding, so it is rejected, which is what
+// makes encodeURIComponent("\uD800") throw.
+func encodeURIWith(s, keep string) (string, bool) {
+	var sb strings.Builder
+	for i := 0; i < len(s); {
+		c := s[i]
+		if c < utf8.RuneSelf {
+			if strings.IndexByte(keep, c) >= 0 {
+				sb.WriteByte(c)
+			} else {
+				writePercent(&sb, c)
+			}
+			i++
+			continue
+		}
+		if _, isSurrogate := wtf8.DecodeSurrogateAt(s, i); isSurrogate {
+			return "", false
+		}
+		_, size := utf8.DecodeRuneInString(s[i:])
+		for j := 0; j < size; j++ {
+			writePercent(&sb, s[i+j])
+		}
+		i += size
+	}
+	return sb.String(), true
+}
+
+func writePercent(sb *strings.Builder, c byte) {
+	const hex = "0123456789ABCDEF"
+	sb.WriteByte('%')
+	sb.WriteByte(hex[c>>4])
+	sb.WriteByte(hex[c&0xF])
+}
+
+// decodeURIWith reverses the encoding, leaving the characters in keep encoded.
+func decodeURIWith(s, keep string) (string, bool) {
+	var buf []byte
+	for i := 0; i < len(s); {
+		if s[i] != '%' {
+			buf = append(buf, s[i])
+			i++
+			continue
+		}
+		if i+2 >= len(s) {
+			return "", false
+		}
+		v, err := strconv.ParseUint(s[i+1:i+3], 16, 8)
+		if err != nil {
+			return "", false
+		}
+		b := byte(v)
+		// A reserved character stays in its encoded form for decodeURI, which
+		// is what keeps a decoded URI still parseable.
+		if b < utf8.RuneSelf && strings.IndexByte(keep, b) >= 0 {
+			buf = append(buf, s[i:i+3]...)
+		} else {
+			buf = append(buf, b)
+		}
+		i += 3
+	}
+	if !utf8.Valid(buf) {
+		return "", false
+	}
+	return string(buf), true
+}
+
+// ---------------------------------------------------------------------------
+// Promise
+// ---------------------------------------------------------------------------
+
+func (r *Runtime) initPromiseExtras() {
+	ctorVal, err := r.getProp(r.global, r.atoms.intern("Promise"), Obj(r.global))
+	if err != nil || !ctorVal.IsObject() {
+		return
+	}
+	ctor := ctorVal.Object()
+
+	r.defMethod(ctor, "withResolvers", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		p := rt.newPromise()
+		resolve := rt.newNativeFunc("resolve", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
+			rt.resolvePromise(p, arg(a, 0))
+			return Undefined, nil
+		})
+		reject := rt.newNativeFunc("reject", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
+			rt.rejectPromise(p, arg(a, 0))
+			return Undefined, nil
+		})
+		out := newObject(rt.proto.object, ClassObject)
+		out.setOwnRaw(rt.atoms.intern("promise"), Obj(p), propDefault)
+		out.setOwnRaw(rt.atoms.intern("resolve"), Obj(resolve), propDefault)
+		out.setOwnRaw(rt.atoms.intern("reject"), Obj(reject), propDefault)
+		return Obj(out), nil
+	})
+}

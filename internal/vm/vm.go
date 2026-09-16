@@ -936,6 +936,13 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 			push(Str(s))
 		case bytecode.OpToPropertyKey:
+			// A string or symbol is already a property key and must be left
+			// alone; stringifying a symbol here would turn a computed symbol
+			// key into an ordinary named one.
+			v := peek(0)
+			if v.IsString() || v.IsSymbol() {
+				break
+			}
 			k, err := r.toPropertyKey(pop())
 			if err != nil {
 				vmErr = err
