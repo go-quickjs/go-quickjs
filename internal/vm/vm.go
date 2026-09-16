@@ -883,12 +883,18 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			push(v)
 		case bytecode.OpReturn:
 			v := pop()
-			// Returning out of a for-of abandons it, so its iterator is closed
-			// before the frame goes away.
-			r.closeIteratorsIn(f.base, sp)
+			// Anything still on the operand stack at a return is a for-of
+			// cursor being abandoned, so its iterator is closed before the
+			// frame goes away. An ordinary return leaves the stack empty, and
+			// the comparison keeps that path free of a call.
+			if sp > f.base {
+				r.closeIteratorsIn(f.base, sp)
+			}
 			return v, nil
 		case bytecode.OpReturnUndef:
-			r.closeIteratorsIn(f.base, sp)
+			if sp > f.base {
+				r.closeIteratorsIn(f.base, sp)
+			}
 			return Undefined, nil
 
 		// --- Construction -------------------------------------------------

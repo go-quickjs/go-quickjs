@@ -28,17 +28,48 @@ type scopeChecker struct {
 }
 
 // lexScope is the set of names one scope binds lexically.
+//
+// A slice rather than a map: a scope binds a handful of names at most, so a
+// linear scan beats hashing, and a scope that binds nothing -- by far the
+// common case -- costs no allocation at all.
 type lexScope struct {
-	names map[string]int
+	names []lexName
 	// catchParam names a simple catch parameter. Web reality requires
 	// `try {} catch (e) { var e; }` to keep working, so that one collision is
 	// permitted where every other is an error.
 	catchParam string
 }
 
+// lexName is one lexically bound name and where it was declared.
+type lexName struct {
+	name string
+	pos  int
+}
+
+func (s *lexScope) has(name string) bool {
+	for i := range s.names {
+		if s.names[i].name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// add records a name, ignoring a repeat: a duplicate lexical declaration is
+// reported by the compiler proper, and this pass only asks whether the name is
+// bound at all.
+func add(names []lexName, name string, pos int) []lexName {
+	for i := range names {
+		if names[i].name == name {
+			return names
+		}
+	}
+	return append(names, lexName{name: name, pos: pos})
+}
+
 // checkScopes reports the var/lexical collisions in a program.
 func (c *compiler) checkScopes(body []ast.Stmt) {
-	sc := &scopeChecker{c: c}
+	sc := scopeChecker{c: c}
 	sc.block(body, nil)
 }
 
@@ -46,15 +77,12 @@ func (c *compiler) checkScopes(body []ast.Stmt) {
 //
 // extra holds names the construct binds outside the list itself: a `for (let
 // x;;)` head, or a catch parameter.
-func (s *scopeChecker) block(body []ast.Stmt, extra map[string]int) {
+func (s *scopeChecker) block(body []ast.Stmt, extra []lexName) {
 	scope := lexScope{names: extra}
-	if scope.names == nil {
-		scope.names = make(map[string]int)
-	}
 	// Every lexical name in the list is in scope throughout it, so they are all
 	// collected before any statement is walked.
 	for _, st := range body {
-		lexicalNamesOf(st, scope.names)
+		scope.names = lexicalNamesOf(st, scope.names)
 	}
 	s.scopes = append(s.scopes, scope)
 	for _, st := range body {
@@ -66,17 +94,17 @@ func (s *scopeChecker) block(body []ast.Stmt, extra map[string]int) {
 // catchBlock walks a catch clause, recording a simple parameter as the one
 // name a var may legally redeclare.
 func (s *scopeChecker) catchBlock(cc *ast.CatchClause) {
-	extra := make(map[string]int)
+	var extra []lexName
 	simple := ""
 	if cc.Param != nil {
-		collectPatternNamesAt(cc.Param, extra)
+		extra = patternNames(cc.Param, extra)
 		if id, ok := cc.Param.(*ast.Ident); ok {
 			simple = id.Name
 		}
 	}
 	scope := lexScope{names: extra, catchParam: simple}
 	for _, st := range cc.Body {
-		lexicalNamesOf(st, scope.names)
+		scope.names = lexicalNamesOf(st, scope.names)
 	}
 	s.scopes = append(s.scopes, scope)
 	for _, st := range cc.Body {
@@ -102,12 +130,8 @@ func (s *scopeChecker) stmt(st ast.Stmt) {
 	switch n := st.(type) {
 	case *ast.VarDecl:
 		if n.Kind == ast.DeclVar {
-			names := make(map[string]int)
 			for _, d := range n.Decls {
-				collectPatternNamesAt(d.Target, names)
-			}
-			for name, pos := range names {
-				s.checkVar(name, pos)
+				s.checkVarPattern(d.Target)
 			}
 		}
 		// A declarator's initializer may contain a function, whose body is
@@ -127,8 +151,7 @@ func (s *scopeChecker) stmt(st ast.Stmt) {
 	case *ast.ForStmt:
 		// A `for (let x ...)` head binds x across the head and the body, so
 		// both are walked inside one scope.
-		extra := headNames(n.Init)
-		s.scopes = append(s.scopes, lexScope{names: extra})
+		s.scopes = append(s.scopes, lexScope{names: headNames(n.Init)})
 		s.stmt(n.Init)
 		s.expr(n.Test)
 		s.expr(n.Update)
@@ -152,13 +175,11 @@ func (s *scopeChecker) stmt(st ast.Stmt) {
 	case *ast.SwitchStmt:
 		s.expr(n.Disc)
 		// All the clauses of a switch share one block scope.
-		var body []ast.Stmt
+		var scope lexScope
 		for _, cl := range n.Cases {
-			body = append(body, cl.Body...)
-		}
-		scope := lexScope{names: make(map[string]int)}
-		for _, x := range body {
-			lexicalNamesOf(x, scope.names)
+			for _, x := range cl.Body {
+				scope.names = lexicalNamesOf(x, scope.names)
+			}
 		}
 		s.scopes = append(s.scopes, scope)
 		for _, cl := range n.Cases {
@@ -210,10 +231,10 @@ func (s *scopeChecker) stmt(st ast.Stmt) {
 
 // forIn walks the shared shape of for-in and for-of.
 func (s *scopeChecker) forIn(left ast.Node, right ast.Expr, body ast.Stmt) {
-	extra := make(map[string]int)
+	var extra []lexName
 	if vd, ok := left.(*ast.VarDecl); ok && vd.Kind != ast.DeclVar {
 		for _, d := range vd.Decls {
-			collectPatternNamesAt(d.Target, extra)
+			extra = patternNames(d.Target, extra)
 		}
 	}
 	s.expr(right)
@@ -226,28 +247,37 @@ func (s *scopeChecker) forIn(left ast.Node, right ast.Expr, body ast.Stmt) {
 }
 
 // headNames returns the names a three-clause for head binds lexically.
-func headNames(init ast.Stmt) map[string]int {
-	names := make(map[string]int)
+func headNames(init ast.Stmt) []lexName {
+	var names []lexName
 	if vd, ok := init.(*ast.VarDecl); ok && vd.Kind != ast.DeclVar {
 		for _, d := range vd.Decls {
-			collectPatternNamesAt(d.Target, names)
+			names = patternNames(d.Target, names)
 		}
 	}
 	return names
 }
 
-// checkVar reports a var that collides with an enclosing lexical binding.
-func (s *scopeChecker) checkVar(name string, pos int) {
-	for i := len(s.scopes) - 1; i >= 0; i-- {
-		if _, ok := s.scopes[i].names[name]; !ok {
-			continue
-		}
-		if s.scopes[i].catchParam == name {
-			// The one permitted collision.
-			continue
-		}
-		s.c.errorf(pos, "identifier %q has already been declared", name)
+// checkVarPattern reports the names a var pattern binds that collide with an
+// enclosing lexical binding.
+func (s *scopeChecker) checkVarPattern(target ast.Expr) {
+	// The names are visited through the shared walker rather than collected
+	// first, so a var declaration costs no allocation.
+	pos := 0
+	if target != nil {
+		pos = target.Pos()
 	}
+	walkPatternNames(target, func(name string) {
+		for i := len(s.scopes) - 1; i >= 0; i-- {
+			if !s.scopes[i].has(name) {
+				continue
+			}
+			if s.scopes[i].catchParam == name {
+				// The one permitted collision.
+				continue
+			}
+			s.c.errorf(pos, "identifier %q has already been declared", name)
+		}
+	})
 }
 
 // function walks a function's body with a fresh scope stack, since a var inside
@@ -379,41 +409,61 @@ func (s *scopeChecker) expr(e ast.Expr) {
 
 // lexicalNamesOf adds the names a statement binds lexically in the scope that
 // directly contains it.
-func lexicalNamesOf(st ast.Stmt, out map[string]int) {
+func lexicalNamesOf(st ast.Stmt, out []lexName) []lexName {
 	switch n := st.(type) {
 	case *ast.VarDecl:
 		if n.Kind == ast.DeclVar {
-			return
+			return out
 		}
 		for _, d := range n.Decls {
-			collectPatternNamesAt(d.Target, out)
+			out = patternNames(d.Target, out)
 		}
 	case *ast.ClassDecl:
 		if n.Class != nil && n.Class.Name != nil {
-			out[n.Class.Name.Name] = n.Start
+			out = add(out, n.Class.Name.Name, n.Start)
 		}
 	case *ast.ExportDecl:
 		if n.Decl != nil {
-			lexicalNamesOf(n.Decl, out)
+			out = lexicalNamesOf(n.Decl, out)
 		}
 	}
+	return out
 	// A function declaration inside a block is deliberately not counted. It is
 	// lexical in strict mode, but Annex B gives it var-like behaviour in sloppy
 	// mode, and treating it as lexical here would reject code the web relies on.
 }
 
-// collectPatternNamesAt gathers the names a binding pattern introduces, keeping
-// each one's position for the error message.
-func collectPatternNamesAt(e ast.Expr, out map[string]int) {
-	var names []string
-	collectPatternNames(e, &names)
+// patternNames appends the names a binding pattern introduces, keeping each
+// one's position for the error message.
+func patternNames(e ast.Expr, out []lexName) []lexName {
 	pos := 0
-	if n, ok := e.(ast.Node); ok && n != nil {
-		pos = n.Pos()
+	if e != nil {
+		pos = e.Pos()
 	}
-	for _, name := range names {
-		if _, seen := out[name]; !seen {
-			out[name] = pos
+	walkPatternNames(e, func(name string) { out = add(out, name, pos) })
+	return out
+}
+
+// walkPatternNames visits the identifiers a binding pattern introduces.
+func walkPatternNames(e ast.Expr, visit func(string)) {
+	switch n := e.(type) {
+	case *ast.Ident:
+		visit(n.Name)
+	case *ast.ArrayPattern:
+		for _, el := range n.Elements {
+			if el != nil {
+				walkPatternNames(el, visit)
+			}
 		}
+		walkPatternNames(n.Rest, visit)
+	case *ast.ObjectPattern:
+		for _, p := range n.Props {
+			walkPatternNames(p.Value, visit)
+		}
+		walkPatternNames(n.Rest, visit)
+	case *ast.AssignPattern:
+		walkPatternNames(n.Target, visit)
+	case *ast.RestElement:
+		walkPatternNames(n.Arg, visit)
 	}
 }
