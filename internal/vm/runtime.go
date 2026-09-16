@@ -1,0 +1,406 @@
+package vm
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+)
+
+// Runtime holds all state for one JavaScript world: the intern table, the
+// global object, the intrinsic prototypes and the interpreter stack.
+//
+// A Runtime is not safe for concurrent use. Embedding hosts that need
+// parallelism create one Runtime per goroutine, which is also what isolates
+// untrusted scripts from each other.
+type Runtime struct {
+	atoms *atomTable
+
+	// global is the global object, and globalEnv is the scope that var and
+	// function declarations at the top level bind into.
+	global *Object
+
+	// intrinsics holds the prototypes and constructors that the specification
+	// requires to exist before any script runs.
+	proto intrinsics
+
+	// stack is the shared operand stack. Frames take contiguous windows of it,
+	// so a call does not allocate.
+	stack []Value
+	// frames is the call stack. Like the operand stack it is reused across
+	// calls, and its length bounds recursion depth.
+	frames []frame
+
+	// limits and their accounting.
+	maxFrames   int
+	memoryLimit int64
+	memoryUsed  int64
+
+	// ctx carries cancellation from the embedding host. The interpreter checks
+	// it periodically, which is how a timeout or a cancelled request stops a
+	// runaway script.
+	ctx context.Context
+	// interruptCounter counts down to the next cancellation check, so that the
+	// check costs one decrement per instruction rather than a context read.
+	interruptCounter int
+
+	// symbolRegistry backs Symbol.for and Symbol.keyFor.
+	symbolRegistry map[string]*Symbol
+
+	// wellKnown holds the well-known symbols, which the interpreter consults
+	// for iteration, coercion and instanceof.
+	wellKnown wellKnownSymbols
+
+	// jobs is the promise job queue, drained between turns.
+	jobs []job
+
+	// templateCache keeps the object identity that tagged templates require:
+	// the same template site must hand the same strings array to its tag on
+	// every evaluation.
+	templateCache map[*bytecode.Function][]*Object
+}
+
+// intrinsics holds the built-in prototypes and constructors.
+type intrinsics struct {
+	object     *Object
+	function   *Object
+	array      *Object
+	str        *Object
+	number     *Object
+	boolean    *Object
+	symbol     *Object
+	bigint     *Object
+	err        *Object
+	date       *Object
+	regexp     *Object
+	mapProto   *Object
+	setProto   *Object
+	promise    *Object
+	generator  *Object
+	iterator   *Object
+	arrayIter  *Object
+	stringIter *Object
+
+	// nativeErrors are the prototypes of TypeError, RangeError and friends,
+	// indexed by errorKind.
+	nativeErrors [errorKindCount]*Object
+	// errorCtors are the corresponding constructors.
+	errorCtors [errorKindCount]*Object
+}
+
+// wellKnownSymbols are the symbols the language itself uses.
+type wellKnownSymbols struct {
+	iterator           *Symbol
+	asyncIterator      *Symbol
+	hasInstance        *Symbol
+	toPrimitive        *Symbol
+	toStringTag        *Symbol
+	species            *Symbol
+	isConcatSpreadable *Symbol
+	unscopables        *Symbol
+	match              *Symbol
+	matchAll           *Symbol
+	replace            *Symbol
+	search             *Symbol
+	split              *Symbol
+}
+
+// closure is a function template paired with the upvalues it captured.
+type closure struct {
+	fn *bytecode.Function
+	// upvalues are the captured bindings, shared with the frames that own them
+	// until those frames return.
+	upvalues []*upvalue
+	// names maps the template's name table to atoms, resolved once when the
+	// template is first used so that property access needs no interning.
+	names []Atom
+	// consts caches the materialized constant pool for the same reason.
+	consts []Value
+	// realm is the runtime the closure belongs to.
+	realm *Runtime
+}
+
+// upvalue is a captured variable.
+//
+// While the owning frame is live the upvalue points into that frame's local
+// slice, so reads and writes see the same storage as the owner. When the frame
+// returns, the value is copied into the box and the pointer is redirected at
+// it, which is what keeps a closure working after its enclosing call has
+// finished.
+type upvalue struct {
+	// slot points at the live location, either into a frame's locals or at
+	// closed below.
+	slot *Value
+	// closed holds the value once the owning frame has returned.
+	closed Value
+}
+
+func (u *upvalue) get() Value  { return *u.slot }
+func (u *upvalue) set(v Value) { *u.slot = v }
+
+// close detaches the upvalue from a frame that is about to return.
+func (u *upvalue) close() {
+	u.closed = *u.slot
+	u.slot = &u.closed
+}
+
+// frame is one activation record.
+type frame struct {
+	cl *closure
+	// locals is a window into the runtime's shared local storage.
+	locals []Value
+	// base is the operand stack offset at which this frame's stack begins.
+	base int
+	pc   uint32
+
+	this      Value
+	newTarget Value
+	// argc is the number of arguments actually passed, which `arguments` and
+	// the rest parameter both need.
+	argc int
+	args []Value
+
+	// openUpvalues lists the upvalues that point into this frame's locals and
+	// must be closed when it returns.
+	openUpvalues []*upvalue
+
+	// handlers is the exception handler stack for this frame.
+	handlers []handler
+
+	// native names the Go function for a frame that is executing native code,
+	// so that stack traces can show it.
+	native string
+}
+
+// handler is a registered catch or finally target.
+type handler struct {
+	pc uint32
+	// stackDepth is the operand stack depth to restore before jumping, since an
+	// exception can be thrown with a partly-built expression on the stack.
+	stackDepth int
+	// isFinally marks a handler that must re-throw after running.
+	isFinally bool
+}
+
+// job is a queued promise reaction.
+type job struct {
+	fn   *Object
+	args []Value
+}
+
+// errorKind enumerates the standard error constructors.
+type errorKind uint8
+
+const (
+	errError errorKind = iota
+	errEval
+	errRange
+	errReference
+	errSyntax
+	errType
+	errURI
+	errAggregate
+	errorKindCount
+)
+
+var errorKindNames = [errorKindCount]string{
+	"Error", "EvalError", "RangeError", "ReferenceError",
+	"SyntaxError", "TypeError", "URIError", "AggregateError",
+}
+
+// Thrown carries a JavaScript exception through Go's error mechanism.
+//
+// Native code signals a throw by returning an error. Wrapping the thrown value
+// rather than formatting it keeps the original object identity, so that a
+// script can catch and inspect exactly what it threw even when the throw passed
+// through a Go implementation of a built-in.
+type Thrown struct {
+	Value Value
+	// stack is captured at throw time, because the frames are gone by the time
+	// a handler runs.
+	Stack []StackEntry
+}
+
+// StackEntry is one line of a JavaScript stack trace.
+type StackEntry struct {
+	Function string
+	Source   string
+	Line     int32
+}
+
+func (t *Thrown) Error() string {
+	// Formatting must not call back into the interpreter, because an error may
+	// be reported while the runtime is in an inconsistent state. Only the
+	// already-materialized message is used.
+	if t.Value.IsObject() {
+		o := t.Value.Object()
+		if p := o.getOwn(atomMessage); p != nil && !p.isAccessor() && p.value.IsString() {
+			name := "Error"
+			if np := o.getOwn(atomName); np != nil && !np.isAccessor() && np.value.IsString() {
+				name = np.value.String().Go()
+			} else if o.proto != nil {
+				if np := o.proto.getOwn(atomName); np != nil && !np.isAccessor() && np.value.IsString() {
+					name = np.value.String().Go()
+				}
+			}
+			return name + ": " + p.value.String().Go()
+		}
+	}
+	if t.Value.IsString() {
+		return "Uncaught " + t.Value.String().Go()
+	}
+	return "Uncaught " + t.Value.Kind().String()
+}
+
+// ---------------------------------------------------------------------------
+// Throwing
+// ---------------------------------------------------------------------------
+
+// throw builds a Thrown for an already-constructed value.
+func (r *Runtime) throw(v Value) error {
+	return &Thrown{Value: v, Stack: r.captureStack()}
+}
+
+// throwError constructs and throws one of the standard error types.
+func (r *Runtime) throwError(kind errorKind, format string, args ...any) error {
+	msg := format
+	if len(args) > 0 {
+		msg = fmt.Sprintf(format, args...)
+	}
+	return r.throw(Obj(r.newError(kind, msg)))
+}
+
+func (r *Runtime) throwTypeError(format string, args ...any) error {
+	return r.throwError(errType, format, args...)
+}
+
+func (r *Runtime) throwRangeError(format string, args ...any) error {
+	return r.throwError(errRange, format, args...)
+}
+
+func (r *Runtime) throwReferenceError(format string, args ...any) error {
+	return r.throwError(errReference, format, args...)
+}
+
+func (r *Runtime) throwSyntaxError(format string, args ...any) error {
+	return r.throwError(errSyntax, format, args...)
+}
+
+// newError builds an error object of the given kind.
+func (r *Runtime) newError(kind errorKind, msg string) *Object {
+	o := newObject(r.proto.nativeErrors[kind], ClassError)
+	o.setOwnRaw(atomMessage, Str(NewString(msg)), propWritable|propConfigurable)
+	// The stack is materialized eagerly, because the frames are unwound by the
+	// time anything reads it.
+	o.setOwnRaw(atomStack, Str(NewString(r.formatStack(msg, kind))), propWritable|propConfigurable)
+	return o
+}
+
+// captureStack snapshots the current call stack.
+func (r *Runtime) captureStack() []StackEntry {
+	if len(r.frames) == 0 {
+		return nil
+	}
+	out := make([]StackEntry, 0, len(r.frames))
+	for i := len(r.frames) - 1; i >= 0; i-- {
+		f := &r.frames[i]
+		if f.native != "" {
+			out = append(out, StackEntry{Function: f.native, Source: "native"})
+			continue
+		}
+		if f.cl == nil {
+			continue
+		}
+		out = append(out, StackEntry{
+			Function: f.cl.fn.Name,
+			Source:   f.cl.fn.Source,
+			Line:     f.cl.fn.LineAt(f.pc),
+		})
+	}
+	return out
+}
+
+// formatStack renders a stack trace in the conventional form.
+func (r *Runtime) formatStack(msg string, kind errorKind) string {
+	s := errorKindNames[kind]
+	if msg != "" {
+		s += ": " + msg
+	}
+	for _, e := range r.captureStack() {
+		name := e.Function
+		if name == "" {
+			name = "<anonymous>"
+		}
+		s += "\n    at " + name
+		if e.Source != "" {
+			s += " (" + e.Source
+			if e.Line > 0 {
+				s += ":" + itoa32(e.Line)
+			}
+			s += ")"
+		}
+	}
+	return s
+}
+
+func itoa32(v int32) string {
+	if v == 0 {
+		return "0"
+	}
+	neg := v < 0
+	if neg {
+		v = -v
+	}
+	var buf [12]byte
+	i := len(buf)
+	for v > 0 {
+		i--
+		buf[i] = byte('0' + v%10)
+		v /= 10
+	}
+	if neg {
+		i--
+		buf[i] = '-'
+	}
+	return string(buf[i:])
+}
+
+// ---------------------------------------------------------------------------
+// Resource limits
+// ---------------------------------------------------------------------------
+
+// checkInterrupt reports whether the host has cancelled execution.
+//
+// The context is consulted only every interruptCheckInterval instructions,
+// because reading a context's Done channel on every instruction would dominate
+// the interpreter loop.
+const interruptCheckInterval = 4096
+
+func (r *Runtime) checkInterrupt() error {
+	r.interruptCounter--
+	if r.interruptCounter > 0 {
+		return nil
+	}
+	r.interruptCounter = interruptCheckInterval
+	if r.ctx == nil {
+		return nil
+	}
+	select {
+	case <-r.ctx.Done():
+		return r.ctx.Err()
+	default:
+		return nil
+	}
+}
+
+// accountMemory charges n bytes against the runtime's budget.
+func (r *Runtime) accountMemory(n int64) error {
+	if r.memoryLimit <= 0 {
+		return nil
+	}
+	r.memoryUsed += n
+	if r.memoryUsed > r.memoryLimit {
+		return r.throwError(errRange, "out of memory")
+	}
+	return nil
+}
