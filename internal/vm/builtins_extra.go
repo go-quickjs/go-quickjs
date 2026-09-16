@@ -402,20 +402,38 @@ func (r *Runtime) initObjectExtras() {
 		if err != nil {
 			return Undefined, err
 		}
-		if o.proto == nil {
-			return Null, nil
+		if p := proxyOf(o); p != nil {
+			return rt.proxyGetPrototypeOf(p)
 		}
-		return Obj(o.proto), nil
+		return protoValue(o), nil
 	})
 	setProto := r.newNativeFunc("set __proto__", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		if this.IsNullish() {
+			return Undefined, rt.throwTypeError("cannot set __proto__ of %s", rt.describe(this))
+		}
+		proto := arg(args, 0)
+		// Anything that is not an object or null is simply ignored, which is
+		// the one place assigning a prototype is not an error.
+		if !proto.IsObject() && !proto.IsNull() {
+			return Undefined, nil
+		}
 		if !this.IsObject() {
 			return Undefined, nil
 		}
-		switch pv := arg(args, 0); {
-		case pv.IsObject():
-			this.Object().proto = pv.Object()
-		case pv.IsNull():
-			this.Object().proto = nil
+		if p := proxyOf(this.Object()); p != nil {
+			ok, err := rt.proxySetPrototypeOf(p, proto)
+			if err != nil {
+				return Undefined, err
+			}
+			if !ok {
+				return Undefined, rt.throwTypeError("cannot set the prototype of this object")
+			}
+			return Undefined, nil
+		}
+		// The chain is checked first: a cycle would make every property lookup
+		// walk it forever.
+		if !rt.setProtoOfChecked(this.Object(), proto) {
+			return Undefined, rt.throwTypeError("cannot set the prototype of this object")
 		}
 		return Undefined, nil
 	})

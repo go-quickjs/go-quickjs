@@ -151,3 +151,78 @@ func TestSpecies(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// TestDefinePropertyValidation pins the checks a script relies on when it
+// freezes an object and hands it out.
+func TestDefinePropertyValidation(t *testing.T) {
+	bad := []struct{ name, src string }{
+		{"redefining a non-configurable property",
+			`var o = {}; Object.defineProperty(o, "a", {value: 1});
+			 Object.defineProperty(o, "a", {value: 2})`},
+		{"turning a data property into an accessor",
+			`var o = {}; Object.defineProperty(o, "a", {value: 1});
+			 Object.defineProperty(o, "a", {get() {}})`},
+		{"making a non-configurable property configurable",
+			`var o = {}; Object.defineProperty(o, "a", {value: 1});
+			 Object.defineProperty(o, "a", {configurable: true})`},
+		{"making a read-only property writable",
+			`var o = {}; Object.defineProperty(o, "a", {value: 1, writable: false});
+			 Object.defineProperty(o, "a", {writable: true})`},
+		{"adding to a non-extensible object",
+			`Object.defineProperty(Object.preventExtensions({}), "a", {value: 1})`},
+		{"a descriptor that is not an object", `Object.defineProperty({}, "a", 1)`},
+		{"a getter that is not callable", `Object.defineProperty({}, "a", {get: 1})`},
+		{"both a value and a getter",
+			`Object.defineProperty({}, "a", {value: 1, get() {}})`},
+		{"a negative array length", `Object.defineProperty([], "length", {value: -1})`},
+		{"a fractional array length", `Object.defineProperty([], "length", {value: 1.5})`},
+		// A prototype cycle would make every lookup walk the ring forever.
+		{"a prototype cycle",
+			`var a = {}, b = Object.create(a); Object.setPrototypeOf(a, b)`},
+		{"a self prototype", `var a = {}; Object.setPrototypeOf(a, a)`},
+		{"a prototype cycle through __proto__",
+			`var a = {}, b = Object.create(a); a.__proto__ = b`},
+	}
+	for _, tc := range bad {
+		rt := quickjs.New()
+		if _, err := rt.Eval(tc.src); err == nil {
+			t.Errorf("%s: no error, want one", tc.name)
+		}
+		rt.Close()
+	}
+
+	ok := []struct{ src, want string }{
+		// Redefining with the identical value is allowed.
+		{`var o = {}; Object.defineProperty(o, "a", {value: 1});
+		  Object.defineProperty(o, "a", {value: 1}); String(o.a)`, "1"},
+		// A writable but non-configurable property may still change value, and
+		// may be made read-only once.
+		{`var o = {}; Object.defineProperty(o, "a", {value: 1, writable: true});
+		  Object.defineProperty(o, "a", {value: 2}); String(o.a)`, "2"},
+		{`var o = {}; Object.defineProperty(o, "a", {value: 1, writable: true});
+		  Object.defineProperty(o, "a", {writable: false});
+		  String(Object.getOwnPropertyDescriptor(o, "a").writable)`, "false"},
+		// Every attribute defaults to false.
+		{`var o = {}; Object.defineProperty(o, "a", {value: 1});
+		  JSON.stringify(Object.getOwnPropertyDescriptor(o, "a"))`,
+			`{"value":1,"writable":false,"enumerable":false,"configurable":false}`},
+		// Array length truncates.
+		{`var a = [1, 2, 3]; Object.defineProperty(a, "length", {value: 1}); a.join(",")`, "1"},
+		{`var a = []; Object.defineProperty(a, "2",
+		    {value: 9, enumerable: true, writable: true, configurable: true});
+		  String(a.length)`, "3"},
+		{`var a = {}, b = {}; Object.setPrototypeOf(a, b);
+		  String(Object.getPrototypeOf(a) === b)`, "true"},
+		{`var a = {}; Object.setPrototypeOf(a, null); String(Object.getPrototypeOf(a))`, "null"},
+	}
+	for _, tc := range ok {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}
