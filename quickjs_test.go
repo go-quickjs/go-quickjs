@@ -1757,3 +1757,36 @@ func TestDeepRecursionUnwindsCorrectly(t *testing.T) {
 		t.Errorf("sum(1000) = %d, want 500500", v.Int())
 	}
 }
+
+func TestAsyncGenerators(t *testing.T) {
+	// An async generator's next returns a promise, and its body may suspend on
+	// await as well as on yield.
+	checkAsync(t, `var r = ""; async function* g() { yield 1; yield 2 }
+		g().next().then(v => r = v.value + "," + v.done)`, `r`, "1,false")
+	checkAsync(t, `var r = ""; async function* g() { } g().next().then(v => r = String(v.done))`,
+		`r`, "true")
+	// An await inside is serviced internally and never reaches the caller.
+	checkAsync(t, `var r = ""; async function* g() { const x = await 5; yield x * 2 }
+		g().next().then(v => r = v.value)`, `r`, "10")
+	// A yielded promise is awaited, so the consumer sees the value.
+	checkAsync(t, `var r = ""; async function* g() { yield Promise.resolve(9) }
+		g().next().then(v => r = v.value)`, `r`, "9")
+	// An exception escaping the body rejects the promise.
+	checkAsync(t, `var r = ""; async function* g() { throw new Error("x") }
+		g().next().catch(e => r = "caught:" + e.message)`, `r`, "caught:x")
+	// Async generator methods on objects and classes.
+	checkAsync(t, `var r = ""; const o = { async *m() { yield 7 } }; o.m().next().then(v => r = v.value)`,
+		`r`, "7")
+	checkAsync(t, `var r = ""; class C { static async *m(a = 1) { yield a } }
+		C.m().next().then(v => r = v.value)`, `r`, "1")
+}
+
+func TestForAwaitOf(t *testing.T) {
+	checkAsync(t, `var r = ""; async function* g() { yield 1; yield 2 }
+		(async () => { for await (const v of g()) r += v })()`, `r`, "12")
+	checkAsync(t, `var r = ""; async function* g() { yield* [1,2,3] }
+		(async () => { for await (const v of g()) r += v })()`, `r`, "123")
+	// A plain iterable works too, with each value awaited.
+	checkAsync(t, `var r = ""; (async () => { for await (const v of [1, Promise.resolve(2)]) r += v })()`,
+		`r`, "12")
+}

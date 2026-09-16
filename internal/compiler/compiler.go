@@ -658,6 +658,12 @@ func stackEffect(op bytecode.Op, a, b uint32) int {
 		// Optional chaining keeps the tested value on both paths.
 		return 0
 
+	case bytecode.OpAsyncIterNext:
+		return 1
+	case bytecode.OpIterResultOrJump:
+		// Pops the result and pushes the value when it continues.
+		return 0
+
 	case bytecode.OpIterNextOrJump:
 		// Pushes the next value when it continues and nothing when it stops;
 		// the larger figure is the one MaxStack needs.

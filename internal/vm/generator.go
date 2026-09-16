@@ -110,7 +110,9 @@ func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Ob
 
 	proto := r.proto.generator
 	if async {
-		proto = r.proto.object
+		// An async generator has its own prototype, whose methods return
+		// promises.
+		proto = r.proto.asyncGenerator
 	}
 	o := newObject(proto, ClassGenerator)
 	o.data = g
@@ -129,22 +131,36 @@ func (r *Runtime) generatorOf(this Value, name string) (*generator, error) {
 	return g, nil
 }
 
+// resumeResult says how a resumption ended.
+type resumeResult struct {
+	value Value
+	// done marks the generator finishing rather than suspending.
+	done bool
+	// await marks a suspension caused by `await`, which an async generator
+	// must service before producing anything.
+	await bool
+}
+
 // resume runs a generator until its next suspension or completion.
-//
-// It returns the yielded or returned value and whether the generator finished.
 func (r *Runtime) resume(g *generator, sent Value, mode resumeMode) (Value, bool, error) {
+	res, err := r.resumeFull(g, sent, mode)
+	return res.value, res.done, err
+}
+
+// resumeFull runs a generator and reports what kind of suspension stopped it.
+func (r *Runtime) resumeFull(g *generator, sent Value, mode resumeMode) (resumeResult, error) {
 	switch g.state {
 	case genExecuting:
-		return Undefined, true, r.throwTypeError("the generator is already running")
+		return resumeResult{done: true}, r.throwTypeError("the generator is already running")
 	case genCompleted:
 		// A completed generator answers every request the same way.
 		switch mode {
 		case resumeThrow:
-			return Undefined, true, r.throw(sent)
+			return resumeResult{done: true}, r.throw(sent)
 		case resumeReturn:
-			return sent, true, nil
+			return resumeResult{value: sent, done: true}, nil
 		}
-		return Undefined, true, nil
+		return resumeResult{done: true}, nil
 	}
 
 	// A return or throw before the body starts finishes it without running.
@@ -152,22 +168,22 @@ func (r *Runtime) resume(g *generator, sent Value, mode resumeMode) (Value, bool
 		switch mode {
 		case resumeReturn:
 			g.state = genCompleted
-			return sent, true, nil
+			return resumeResult{value: sent, done: true}, nil
 		case resumeThrow:
 			g.state = genCompleted
-			return Undefined, true, r.throw(sent)
+			return resumeResult{done: true}, r.throw(sent)
 		}
 	}
 
 	if len(r.frames) >= r.maxFrames {
-		return Undefined, true, r.throwRangeError("maximum call stack size exceeded")
+		return resumeResult{done: true}, r.throwRangeError("maximum call stack size exceeded")
 	}
 
 	fn := g.cl.fn
 	// Only the operand stack needs a window; the locals live on the heap.
 	base := r.stackTop
 	if base+fn.MaxStack > len(r.stack) {
-		return Undefined, true, r.throwRangeError("maximum call stack size exceeded")
+		return resumeResult{done: true}, r.throwRangeError("maximum call stack size exceeded")
 	}
 	r.stackTop = base + fn.MaxStack
 
@@ -198,12 +214,11 @@ func (r *Runtime) resume(g *generator, sent Value, mode resumeMode) (Value, bool
 			// A throw at the suspension point behaves as if the yield itself
 			// had thrown, so it can be caught by a try inside the body.
 			g.state = genExecuting
-			v, done, err := r.runGeneratorFrom(g, f, base, sp, Undefined, r.throw(sent))
-			return v, done, err
+			return r.runGeneratorFrom(g, f, base, sp, Undefined, r.throw(sent))
 		case resumeReturn:
 			g.state = genCompleted
 			r.releaseGeneratorFrame(g, base)
-			return sent, true, nil
+			return resumeResult{value: sent, done: true}, nil
 		}
 	}
 	g.state = genExecuting
@@ -214,7 +229,7 @@ func (r *Runtime) resume(g *generator, sent Value, mode resumeMode) (Value, bool
 //
 // pending, when non-nil, is an exception injected at the suspension point,
 // which is how generator.throw() works.
-func (r *Runtime) runGeneratorFrom(g *generator, f *frame, base, sp int, sent Value, pending error) (Value, bool, error) {
+func (r *Runtime) runGeneratorFrom(g *generator, f *frame, base, sp int, sent Value, pending error) (resumeResult, error) {
 	if pending == nil && g.pc > 0 {
 		// Deliver the sent value as the yield expression's result.
 		r.stack[sp] = sent
@@ -231,16 +246,16 @@ func (r *Runtime) runGeneratorFrom(g *generator, f *frame, base, sp int, sent Va
 		g.openUpvalues = f.openUpvalues
 		g.state = genSuspendedYield
 		r.releaseGeneratorFrame(g, base)
-		return sig.value, false, nil
+		return resumeResult{value: sig.value, await: sig.await}, nil
 	}
 
 	g.state = genCompleted
 	g.stack = g.stack[:0]
 	r.releaseGeneratorFrame(g, base)
 	if err != nil {
-		return Undefined, true, err
+		return resumeResult{done: true}, err
 	}
-	return v, true, nil
+	return resumeResult{value: v, done: true}, nil
 }
 
 // releaseGeneratorFrame pops a generator's frame without closing its upvalues,
@@ -319,4 +334,92 @@ func (r *Runtime) iterResult(v Value, done bool) *Object {
 // isGeneratorTemplate reports whether a compiled function suspends.
 func isGeneratorTemplate(fn *bytecode.Function) bool {
 	return fn.Generator || fn.Async
+}
+
+// ---------------------------------------------------------------------------
+// Async generators
+// ---------------------------------------------------------------------------
+
+// An async generator is a generator whose next, return and throw methods return
+// promises, and whose body may suspend on `await` as well as on `yield`.
+//
+// Driving one means distinguishing the two kinds of suspension. An await is
+// serviced internally -- the awaited value is settled and the body resumed --
+// and is invisible to the caller. A yield settles the promise the caller is
+// holding. That is why resumeFull reports which kind stopped it.
+
+func (r *Runtime) initAsyncGeneratorBuiltins() {
+	r.proto.asyncGenerator = newObject(r.proto.object, ClassObject)
+	p := r.proto.asyncGenerator
+
+	drive := func(mode resumeMode) NativeFunc {
+		return func(rt *Runtime, this Value, args []Value) (Value, error) {
+			g, err := rt.generatorOf(this, "AsyncGenerator.prototype.next")
+			if err != nil {
+				// A method on the wrong receiver rejects rather than throws,
+				// because every async generator method returns a promise.
+				p := rt.newPromise()
+				rt.rejectPromise(p, thrownValue(err))
+				return Obj(p), nil
+			}
+			result := rt.newPromise()
+			rt.stepAsyncGenerator(g, result, arg(args, 0), mode)
+			return Obj(result), nil
+		}
+	}
+	r.defMethod(p, "next", 1, drive(resumeNext))
+	r.defMethod(p, "return", 1, drive(resumeReturn))
+	r.defMethod(p, "throw", 1, drive(resumeThrow))
+
+	r.defSymbolMethod(p, r.wellKnown.asyncIterator, "[Symbol.asyncIterator]", 0,
+		func(rt *Runtime, this Value, args []Value) (Value, error) {
+			return this, nil
+		})
+	r.defToStringTag(p, "AsyncGenerator")
+}
+
+// stepAsyncGenerator advances an async generator until it yields or finishes,
+// settling the promise the caller holds.
+func (r *Runtime) stepAsyncGenerator(g *generator, result *Object, sent Value, mode resumeMode) {
+	res, err := r.resumeFull(g, sent, mode)
+	if err != nil {
+		r.rejectPromise(result, thrownValue(err))
+		return
+	}
+
+	if res.await {
+		// An await is the generator's own business: settle the awaited value
+		// and resume, without the caller seeing anything.
+		awaited := r.toPromise(res.value)
+		onFulfilled := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
+			rt.stepAsyncGenerator(g, result, arg(a, 0), resumeNext)
+			return Undefined, nil
+		})
+		onRejected := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
+			rt.stepAsyncGenerator(g, result, arg(a, 0), resumeThrow)
+			return Undefined, nil
+		})
+		r.promiseThen(awaited, Obj(onFulfilled), Obj(onRejected))
+		return
+	}
+
+	// A yield or a return settles the caller's promise with an iterator result.
+	// The yielded value is awaited first, so that `yield somePromise` produces
+	// the value rather than the promise.
+	value := res.value
+	done := res.done
+	if !done {
+		awaited := r.toPromise(value)
+		onFulfilled := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
+			rt.resolvePromise(result, Obj(rt.iterResult(arg(a, 0), false)))
+			return Undefined, nil
+		})
+		onRejected := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
+			rt.rejectPromise(result, arg(a, 0))
+			return Undefined, nil
+		})
+		r.promiseThen(awaited, Obj(onFulfilled), Obj(onRejected))
+		return
+	}
+	r.resolvePromise(result, Obj(r.iterResult(value, true)))
 }

@@ -190,7 +190,13 @@ const (
 	OpIterNext // pushes value and a done flag
 	OpIterClose
 	OpIterNextOrJump // advances, or jumps to A when exhausted
-	OpSpreadIter     // spread an iterable onto the stack for a call
+	// OpAsyncIterNext calls the async iterator's next method and pushes the
+	// promise it returns, which OpAwait then settles.
+	OpAsyncIterNext
+	// OpIterResultOrJump unpacks an iterator result object, pushing its value
+	// or jumping to A when it reports done.
+	OpIterResultOrJump
+	OpSpreadIter // spread an iterable onto the stack for a call
 
 	// --- Exceptions -------------------------------------------------------
 	OpThrow
@@ -303,7 +309,9 @@ var opNames = [opCount]string{
 	OpForInStart: "for_in_start", OpForOfStart: "for_of_start",
 	OpForAwaitOfStart: "for_await_of_start", OpIterNext: "iter_next",
 	OpIterClose: "iter_close", OpIterNextOrJump: "iter_next_or_jump",
-	OpSpreadIter: "spread_iter",
+	OpAsyncIterNext:    "async_iter_next",
+	OpIterResultOrJump: "iter_result_or_jump",
+	OpSpreadIter:       "spread_iter",
 
 	OpThrow: "throw", OpPushCatch: "push_catch", OpPopCatch: "pop_catch",
 	OpPushFinally: "push_finally", OpRethrow: "rethrow",

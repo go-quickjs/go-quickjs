@@ -91,24 +91,25 @@ type Runtime struct {
 
 // intrinsics holds the built-in prototypes and constructors.
 type intrinsics struct {
-	object     *Object
-	function   *Object
-	array      *Object
-	str        *Object
-	number     *Object
-	boolean    *Object
-	symbol     *Object
-	bigint     *Object
-	err        *Object
-	date       *Object
-	regexp     *Object
-	mapProto   *Object
-	setProto   *Object
-	promise    *Object
-	generator  *Object
-	iterator   *Object
-	arrayIter  *Object
-	stringIter *Object
+	object         *Object
+	function       *Object
+	array          *Object
+	str            *Object
+	number         *Object
+	boolean        *Object
+	symbol         *Object
+	bigint         *Object
+	err            *Object
+	date           *Object
+	regexp         *Object
+	mapProto       *Object
+	setProto       *Object
+	promise        *Object
+	generator      *Object
+	asyncGenerator *Object
+	iterator       *Object
+	arrayIter      *Object
+	stringIter     *Object
 
 	// nativeErrors are the prototypes of TypeError, RangeError and friends,
 	// indexed by errorKind.

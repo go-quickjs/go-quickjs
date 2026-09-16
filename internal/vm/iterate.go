@@ -306,3 +306,78 @@ const (
 	completionThrow
 	completionReturn
 )
+
+// startForAwaitOf opens an async iterator over a value.
+//
+// Symbol.asyncIterator is preferred, but a plain iterable is accepted too: its
+// values are awaited individually, which is what makes `for await` work over an
+// array of promises.
+func (r *Runtime) startForAwaitOf(v Value) (Value, error) {
+	method, err := r.getValueProp(v, r.atoms.internSymbol(r.wellKnown.asyncIterator))
+	if err != nil {
+		return Undefined, err
+	}
+	if !isCallable(method) {
+		// Fall back to the synchronous protocol.
+		return r.startForOf(v)
+	}
+	iter, err := r.call(method, v, nil)
+	if err != nil {
+		return Undefined, err
+	}
+	next, err := r.getValueProp(iter, atomNext)
+	if err != nil {
+		return Undefined, err
+	}
+	if !isCallable(next) {
+		return Undefined, r.throwTypeError("the async iterator has no next method")
+	}
+	return r.newIterObject(&iterState{iter: iter, next: next}), nil
+}
+
+// asyncIterNext calls an async iterator's next method, returning the promise it
+// produces. A synchronous iterator is wrapped so that both protocols can be
+// driven by the same instruction sequence.
+func (r *Runtime) asyncIterNext(cursor Value) (Value, error) {
+	st := iterStateOf(cursor)
+	if st == nil {
+		return Undefined, r.throwTypeError("not an iterator")
+	}
+	if st.forIn {
+		return Undefined, r.throwTypeError("cannot iterate properties asynchronously")
+	}
+	res, err := r.call(st.next, st.iter, nil)
+	if err != nil {
+		return Undefined, err
+	}
+	// An async iterator already returns a promise for the whole result.
+	if res.IsObject() && res.Object().class == ClassPromise {
+		return res, nil
+	}
+
+	// A synchronous iterator returns a plain result object, whose value must
+	// be awaited individually: `for await (const v of [1, promise])` yields the
+	// promise's value, not the promise. So the result is rebuilt around the
+	// settled value rather than merely wrapped.
+	done, err := r.getValueProp(res, atomDone)
+	if err != nil {
+		return Undefined, err
+	}
+	value, err := r.getValueProp(res, atomValue)
+	if err != nil {
+		return Undefined, err
+	}
+	isDone := done.Truthy()
+
+	out := r.newPromise()
+	onFulfilled := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
+		rt.resolvePromise(out, Obj(rt.iterResult(arg(a, 0), isDone)))
+		return Undefined, nil
+	})
+	onRejected := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
+		rt.rejectPromise(out, arg(a, 0))
+		return Undefined, nil
+	})
+	r.promiseThen(r.toPromise(value), Obj(onFulfilled), Obj(onRejected))
+	return Obj(out), nil
+}

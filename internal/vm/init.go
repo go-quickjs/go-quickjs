@@ -228,6 +228,7 @@ func (r *Runtime) initGlobals() {
 	r.initProxyBuiltins()
 	r.initReflectBuiltins()
 	r.initGeneratorBuiltins()
+	r.initAsyncGeneratorBuiltins()
 	r.initPromiseBuiltins()
 	r.initRegExpBuiltins()
 	r.initStringRegExpMethods()

@@ -375,10 +375,43 @@ func (c *compiler) compileForOf(n *ast.ForOfStmt) {
 	c.compileExpr(n.Right)
 	if n.Await {
 		c.emit(bytecode.OpForAwaitOfStart, 0, 0)
-	} else {
-		c.emit(bytecode.OpForOfStart, 0, 0)
+		c.compileForAwaitBody(n.Left, n.Body)
+		return
 	}
+	c.emit(bytecode.OpForOfStart, 0, 0)
 	c.compileForBody(n.Left, n.Body)
+}
+
+// compileForAwaitBody emits the loop of a `for await`, which differs from the
+// synchronous form in that each step awaits the promise the iterator returns
+// before unpacking the result.
+func (c *compiler) compileForAwaitBody(left ast.Node, body ast.Stmt) {
+	start := c.here()
+	c.pushLoop("", true)
+
+	c.emit(bytecode.OpAsyncIterNext, 0, 0)
+	c.emit(bytecode.OpAwait, 0, 0)
+	exit := c.emitJump(bytecode.OpIterResultOrJump)
+
+	c.beginScope()
+	switch l := left.(type) {
+	case *ast.VarDecl:
+		if l.Kind != ast.DeclVar {
+			c.predeclareLexical(l)
+		}
+		c.initBinding(l.Decls[0].Target, l.Kind)
+	case ast.Expr:
+		c.assignTo(l, false)
+		c.emit(bytecode.OpDrop, 0, 0)
+	}
+	c.compileStatement(body)
+	c.endScope()
+
+	c.emit(bytecode.OpJump, uint32(start), 0)
+	c.patchJump(exit)
+	c.popLoop(start)
+	// Remove the cursor the start instruction left behind.
+	c.emit(bytecode.OpDrop, 0, 0)
 }
 
 // compileForBody emits the shared loop structure of for-in and for-of, with the

@@ -95,7 +95,13 @@ func (r *Runtime) callObject(o *Object, this Value, args []Value, newTarget Valu
 	if fn := fd.closure.fn; isGeneratorTemplate(fn) {
 		gen := r.newGenerator(fd.closure, this, args, o, fn.Async)
 		g := gen.data.(*generator)
-		if fn.Async {
+		switch {
+		case fn.Generator:
+			// An async generator is still a generator: it returns an object
+			// whose next method drives it, differing only in that the method
+			// returns a promise.
+			return Obj(gen), nil
+		case fn.Async:
 			return r.runAsync(g), nil
 		}
 		return Obj(gen), nil
@@ -1042,6 +1048,13 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				goto onError
 			}
 			push(cur)
+		case bytecode.OpForAwaitOfStart:
+			cur, err := r.startForAwaitOf(pop())
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			push(cur)
 		case bytecode.OpForOfStart:
 			cur, err := r.startForOf(pop())
 			if err != nil {
@@ -1061,6 +1074,35 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				break
 			}
 			push(v)
+		case bytecode.OpAsyncIterNext:
+			v, err := r.asyncIterNext(peek(0))
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			push(v)
+		case bytecode.OpIterResultOrJump:
+			res := pop()
+			if !res.IsObject() {
+				vmErr = r.throwTypeError("an iterator result must be an object")
+				goto onError
+			}
+			done, err := r.getValueProp(res, atomDone)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			if done.Truthy() {
+				f.pc = in.A
+				break
+			}
+			val, err := r.getValueProp(res, atomValue)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			push(val)
+
 		case bytecode.OpIterClose:
 			r.closeIter(peek(0))
 		case bytecode.OpSpreadIter:
