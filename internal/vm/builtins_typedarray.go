@@ -140,10 +140,14 @@ func (r *Runtime) setElem(t *typedArrayData, i int, v Value) error {
 	off := t.byteOffset + i*t.info().size
 
 	if t.info().big {
-		if !v.IsBigInt() {
-			return r.throwTypeError("a BigInt typed array requires a BigInt value")
+		// ToBigInt, not a type check: a string or a boolean converts, and only
+		// a Number is refused -- mixing the two kinds is almost always a
+		// mistake rather than a request to convert.
+		bv, err := r.toBigIntOperand(v)
+		if err != nil {
+			return err
 		}
-		binary.LittleEndian.PutUint64(b[off:], bigLowUint64(v.BigInt()))
+		binary.LittleEndian.PutUint64(b[off:], bigLowUint64(bv))
 		return nil
 	}
 
@@ -270,6 +274,24 @@ func (r *Runtime) initArrayBufferBuiltins() {
 	})
 
 	r.defToStringTag(abProto, "ArrayBuffer")
+}
+
+// DetachArrayBuffer releases a buffer's storage, as a transfer does.
+//
+// Every view over it then throws, which is what makes handing a buffer to
+// another owner safe: the original holder cannot keep reading through a view it
+// made earlier.
+func (r *Runtime) DetachArrayBuffer(v Value) error {
+	if !v.IsObject() || v.Object().class != ClassArrayBuffer {
+		return r.throwTypeError("an ArrayBuffer is required")
+	}
+	b, ok := v.Object().data.(*arrayBufferData)
+	if !ok {
+		return r.throwTypeError("the ArrayBuffer is uninitialized")
+	}
+	b.detached = true
+	b.bytes = nil
+	return nil
 }
 
 func (r *Runtime) bufferOf(this Value, name string) (*arrayBufferData, error) {
@@ -687,21 +709,7 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 				// there.
 				callArgs = []Value{Obj(rt.newNativeFunc("", 2,
 					func(rt *Runtime, _ Value, a []Value) (Value, error) {
-						x, err := rt.toNumber(arg(a, 0))
-						if err != nil {
-							return Undefined, err
-						}
-						y, err := rt.toNumber(arg(a, 1))
-						if err != nil {
-							return Undefined, err
-						}
-						switch {
-						case x < y:
-							return Int(-1), nil
-						case x > y:
-							return Int(1), nil
-						}
-						return Int(0), nil
+						return Int(compareNumeric(arg(a, 0), arg(a, 1))), nil
 					}))}
 			}
 			out, err := rt.call(fn, Obj(arr), callArgs)
@@ -825,4 +833,30 @@ func (r *Runtime) typedArrayKindOf(this Value, name string) (elemType, error) {
 		}
 	}
 	return 0, r.throwTypeError("%%TypedArray%%.%s requires a typed array constructor", name)
+}
+
+// compareNumeric orders two elements of a typed array.
+//
+// A BigInt array's elements are BigInts, which have no finite float64 form, so
+// they are compared as integers rather than converted.
+func compareNumeric(x, y Value) int {
+	if x.IsBigInt() && y.IsBigInt() {
+		return x.BigInt().Cmp(y.BigInt())
+	}
+	a, b := x.Number(), y.Number()
+	switch {
+	case a != a:
+		// NaN sorts last, and two NaNs are equal for this purpose.
+		if b != b {
+			return 0
+		}
+		return 1
+	case b != b:
+		return -1
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	}
+	return 0
 }

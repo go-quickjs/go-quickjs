@@ -119,6 +119,28 @@ func (r *Runtime) toBigIntValue(v Value) (Value, error) {
 	return Undefined, r.throwTypeError("cannot convert %s to a BigInt", r.describe(prim))
 }
 
+// toBigIntOperand implements ToBigInt, which is what an operation expecting a
+// BigInt uses.
+//
+// It differs from the BigInt function in one place, and deliberately: BigInt(1)
+// is 1n, but writing the Number 1 into a BigInt64Array is a TypeError. The
+// function is an explicit conversion the caller asked for; the operand position
+// is one where a Number almost always means the two kinds got mixed up.
+func (r *Runtime) toBigIntOperand(v Value) (*BigInt, error) {
+	prim, err := r.toPrimitive(v, hintNumber)
+	if err != nil {
+		return nil, err
+	}
+	if prim.IsNumber() {
+		return nil, r.throwTypeError("cannot convert a number to a BigInt")
+	}
+	out, err := r.toBigIntValue(prim)
+	if err != nil {
+		return nil, err
+	}
+	return out.BigInt(), nil
+}
+
 // bigIntAsN implements BigInt.asIntN and BigInt.asUintN, which truncate a
 // BigInt to a given number of bits.
 //

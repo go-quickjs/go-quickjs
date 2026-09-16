@@ -274,6 +274,19 @@ func (r *Runtime) Set(name string, v any) error {
 	return r.wrapError(r.rt.DefineProp(r.rt.Global(), r.rt.Intern(name), val))
 }
 
+// DetachArrayBuffer releases an ArrayBuffer's storage, as transferring it to
+// another owner does.
+//
+// Every view over the buffer then throws on access, which is what makes the
+// transfer safe: the previous owner cannot keep reading through a view it made
+// earlier. A host implementing structured cloning needs exactly this.
+func (r *Runtime) DetachArrayBuffer(v Value) error {
+	if r.closed {
+		return ErrClosed
+	}
+	return r.wrapError(r.rt.DetachArrayBuffer(v.v))
+}
+
 // wrapError converts an engine error into the public form.
 func (r *Runtime) wrapError(err error) error {
 	if err == nil {

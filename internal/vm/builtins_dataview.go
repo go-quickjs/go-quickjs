@@ -207,10 +207,11 @@ func (r *Runtime) dataViewSetter(spec dataViewType) NativeFunc {
 		)
 		v := arg(args, 1)
 		if spec.kind == elemBigInt64 || spec.kind == elemBigUint64 {
-			if !v.IsBigInt() {
-				return Undefined, rt.throwTypeError("%s requires a BigInt value", name)
+			bv, err := rt.toBigIntOperand(v)
+			if err != nil {
+				return Undefined, err
 			}
-			big = v.BigInt()
+			big = bv
 		} else {
 			num, err = rt.toNumber(v)
 			if err != nil {

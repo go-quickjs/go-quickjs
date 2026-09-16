@@ -205,6 +205,27 @@ func runOne(suite *conformance.Suite, tc *conformance.Test) (result, string) {
 	var printed []string
 	rt.Set("print", func(s string) { printed = append(printed, s) })
 
+	// $262 is the host object test262 expects. Only the parts this engine can
+	// honestly provide are defined; a test needing createRealm or agent asks
+	// for a capability the engine does not have and fails rather than being
+	// told a lie.
+	rt.Set("detachArrayBuffer", func(rt *quickjs.Runtime, v quickjs.Value) error {
+		return rt.DetachArrayBuffer(v)
+	})
+	rt.Set("evalScript", func(rt *quickjs.Runtime, src string) (quickjs.Value, error) {
+		return rt.Eval(src)
+	})
+	if _, err := rt.Eval(`
+		var $262 = {
+			global: globalThis,
+			detachArrayBuffer: detachArrayBuffer,
+			evalScript: evalScript,
+			gc: function () { throw new Error("gc is not supported"); },
+		};
+	`); err != nil {
+		return resultSkip, "could not install $262: " + err.Error()
+	}
+
 	// Several tests import a fixture file sitting beside them, so the loader
 	// resolves relative to the test's own directory.
 	dir := path.Dir(tc.Path)
