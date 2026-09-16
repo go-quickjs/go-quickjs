@@ -50,6 +50,11 @@ type Runtime struct {
 	// check costs one decrement per instruction rather than a context read.
 	interruptCounter int
 
+	// typedArrayCtor is %TypedArray%, and typedArrayProtos holds one prototype
+	// per element type.
+	typedArrayCtor   *Object
+	typedArrayProtos [11]*Object
+
 	// promiseCtor is the intrinsic Promise, which the capability machinery
 	// compares against to take its fast path.
 	promiseCtor *Object

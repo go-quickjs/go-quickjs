@@ -427,6 +427,13 @@ func (r *Runtime) isEnumerable(o *Object, key Atom) bool {
 		if _, ok := o.getElem(key.Index()); ok {
 			return true
 		}
+		// A typed array's elements live in a buffer rather than in the
+		// property table, but they are enumerable own properties.
+		if o.class == ClassTypedArray {
+			if t, ok := o.data.(*typedArrayData); ok && int(key.Index()) < t.length {
+				return true
+			}
+		}
 	}
 	if p := o.getOwnVisible(key); p != nil {
 		return p.flags&propEnumerable != 0
@@ -487,6 +494,16 @@ func (r *Runtime) describeProperty(o *Object, key Atom) Value {
 		if v, ok := o.getElem(key.Index()); ok {
 			d := newObject(r.proto.object, ClassObject)
 			r.setDescField(d, "value", v)
+			r.setDescField(d, "writable", True)
+			r.setDescField(d, "enumerable", True)
+			r.setDescField(d, "configurable", True)
+			return Obj(d)
+		}
+	}
+	if o.class == ClassTypedArray && key.IsIndex() {
+		if t, ok := o.data.(*typedArrayData); ok && int(key.Index()) < t.length {
+			d := newObject(r.proto.object, ClassObject)
+			r.setDescField(d, "value", t.getElem(int(key.Index())))
 			r.setDescField(d, "writable", True)
 			r.setDescField(d, "enumerable", True)
 			r.setDescField(d, "configurable", True)

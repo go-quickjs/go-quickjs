@@ -275,6 +275,16 @@ func (o *Object) deleteOwn(key Atom) bool {
 func (o *Object) ownKeys(includeSymbols bool, atoms *atomTable) []Atom {
 	keys := make([]Atom, 0, len(o.elems)+len(o.props)+2)
 
+	// A typed array's elements are backed by a buffer rather than by the
+	// property table, but they are own properties and must be listed.
+	if o.class == ClassTypedArray {
+		if t, ok := o.data.(*typedArrayData); ok {
+			for i := 0; i < t.length; i++ {
+				keys = append(keys, internIndex(uint32(i)))
+			}
+		}
+	}
+
 	// A function's length and name are synthesized on demand, but they are own
 	// properties and must be listed -- first, in that order, as they would have
 	// been had the function been built with them.

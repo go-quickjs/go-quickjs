@@ -221,6 +221,7 @@ func (r *Runtime) initGlobals() {
 	r.initNumberBuiltins()
 	r.initBooleanBuiltins()
 	r.initSymbolBuiltins()
+	r.initBigIntBuiltins()
 	r.initErrorBuiltins()
 	r.initMathBuiltins()
 	r.initArrayBufferBuiltins()

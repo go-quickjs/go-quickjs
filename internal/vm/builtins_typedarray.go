@@ -287,14 +287,33 @@ func (r *Runtime) initTypedArrayBuiltins() {
 	r.typedArrayProto = base
 	r.defineTypedArrayMethods(base)
 
+	// %TypedArray% itself is abstract: it exists to hold the shared methods and
+	// to be the prototype of the nine concrete constructors, never to be
+	// called.
+	abstract := newObject(r.proto.function, ClassFunction)
+	abstract.data = &funcData{
+		name: "TypedArray", length: 0, ctorKind: ctorBase,
+		native: func(rt *Runtime, this Value, args []Value) (Value, error) {
+			return Undefined, rt.throwTypeError("TypedArray is abstract and cannot be constructed")
+		},
+	}
+	abstract.setOwnRaw(atomPrototype, Obj(base), 0)
+	base.setOwnRaw(atomConstructor, Obj(abstract), propWritable|propConfigurable)
+	r.typedArrayCtor = abstract
+	r.defSpecies(abstract)
+	r.initTypedArrayStatics(abstract)
+
 	for kind := elemInt8; int(kind) < len(elemInfos); kind++ {
 		info := elemInfos[kind]
 		proto := newObject(base, ClassObject)
 		k := kind
+		r.typedArrayProtos[kind] = proto
 
 		ctor := r.newCtor(info.name, 3, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
 			return rt.constructTypedArray(k, proto, args)
 		})
+		// The concrete constructors inherit the statics from %TypedArray%.
+		ctor.proto = abstract
 		r.defConst(ctor, "BYTES_PER_ELEMENT", Int(info.size))
 		r.defConst(proto, "BYTES_PER_ELEMENT", Int(info.size))
 
@@ -572,7 +591,16 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 	})
 
 	// The callback-taking methods.
-	for _, name := range []string{"forEach", "map", "filter", "find", "findIndex", "some", "every"} {
+	// Every method that walks the elements is served the same way: the
+	// elements are read into a plain array and the ordinary Array method
+	// reused, which keeps one implementation of each rather than eleven.
+	//
+	// The ones that build a new collection then convert the result back, so
+	// that a Uint8Array's map yields a Uint8Array rather than a plain array.
+	for _, name := range []string{
+		"forEach", "map", "filter", "find", "findIndex", "findLast",
+		"findLastIndex", "some", "every", "reduce", "reduceRight",
+	} {
 		method := name
 		r.defMethod(p, method, 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 			t, err := rt.typedArrayOf(this, "TypedArray.prototype."+method)
@@ -594,9 +622,119 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 			if err != nil {
 				return Undefined, err
 			}
-			return rt.call(fn, arr, args)
+			out, err := rt.call(fn, arr, args)
+			if err != nil {
+				return Undefined, err
+			}
+			switch method {
+			case "map", "filter":
+				return rt.typedArrayFromValues(t.kind, out)
+			}
+			return out, nil
 		})
 	}
+
+	// The methods that take no callback, delegated the same way. Those that
+	// mutate copy the result back; those that build a new collection convert
+	// it to a view of the same kind.
+	type delegated struct {
+		name    string
+		length  int
+		mutates bool
+		rebuild bool
+	}
+	for _, m := range []delegated{
+		{"at", 1, false, false},
+		{"indexOf", 1, false, false},
+		{"lastIndexOf", 1, false, false},
+		{"includes", 1, false, false},
+		{"join", 1, false, false},
+		{"reverse", 0, true, false},
+		{"sort", 1, true, false},
+		{"copyWithin", 2, true, false},
+		{"toReversed", 0, false, true},
+		{"toSorted", 1, false, true},
+		{"with", 2, false, true},
+		{"entries", 0, false, false},
+		{"keys", 0, false, false},
+		{"values", 0, false, false},
+	} {
+		d := m
+		r.defMethod(p, d.name, d.length, func(rt *Runtime, this Value, args []Value) (Value, error) {
+			t, err := rt.typedArrayOf(this, "TypedArray.prototype."+d.name)
+			if err != nil {
+				return Undefined, err
+			}
+			vals := make([]Value, t.length)
+			for i := range vals {
+				vals[i] = t.getElem(i)
+			}
+			arr := rt.newArrayFrom(vals)
+			fn, err := rt.getValueProp(Obj(arr), rt.atoms.intern(d.name))
+			if err != nil {
+				return Undefined, err
+			}
+			callArgs := args
+			if (d.name == "sort" || d.name == "toSorted") && !isCallable(arg(args, 0)) {
+				// A typed array sorts numerically by default, where an ordinary
+				// array sorts by string: [10, 9] is [9, 10] here and [10, 9]
+				// there.
+				callArgs = []Value{Obj(rt.newNativeFunc("", 2,
+					func(rt *Runtime, _ Value, a []Value) (Value, error) {
+						x, err := rt.toNumber(arg(a, 0))
+						if err != nil {
+							return Undefined, err
+						}
+						y, err := rt.toNumber(arg(a, 1))
+						if err != nil {
+							return Undefined, err
+						}
+						switch {
+						case x < y:
+							return Int(-1), nil
+						case x > y:
+							return Int(1), nil
+						}
+						return Int(0), nil
+					}))}
+			}
+			out, err := rt.call(fn, Obj(arr), callArgs)
+			if err != nil {
+				return Undefined, err
+			}
+			switch {
+			case d.mutates:
+				// The plain array was reordered in place; the view has to be
+				// written back element by element, through the element type's
+				// own conversion.
+				for i := 0; i < t.length && i < len(arr.elems); i++ {
+					if err := rt.setElem(t, i, arr.elems[i]); err != nil {
+						return Undefined, err
+					}
+				}
+				return this, nil
+			case d.rebuild:
+				return rt.typedArrayFromValues(t.kind, out)
+			}
+			return out, nil
+		})
+	}
+
+	// The tag names the concrete type, so Object.prototype.toString reports
+	// [object Uint8Array] rather than [object Object]. It is a getter on the
+	// shared prototype because the nine types share it.
+	tag := r.newNativeFunc("get [Symbol.toStringTag]", 0,
+		func(rt *Runtime, this Value, args []Value) (Value, error) {
+			if !this.IsObject() || this.Object().class != ClassTypedArray {
+				return Undefined, nil
+			}
+			t, ok := this.Object().data.(*typedArrayData)
+			if !ok {
+				return Undefined, nil
+			}
+			return Str(NewString(t.info().name)), nil
+		})
+	r.defineAccessor(p, r.atoms.internSymbol(r.wellKnown.toStringTag), tag, nil, propConfigurable)
 
 	r.defSymbolMethod(p, r.wellKnown.iterator, "[Symbol.iterator]", 0,
 		func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -610,4 +748,75 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 			}
 			return rt.newArrayIterator(Obj(rt.newArrayFrom(vals)))
 		})
+}
+
+// typedArrayFromValues builds a view of the given kind holding the values of an
+// array.
+func (r *Runtime) typedArrayFromValues(kind elemType, v Value) (Value, error) {
+	var vals []Value
+	if v.IsObject() {
+		vals = v.Object().elems
+	}
+	o := newObject(r.typedArrayProtoFor(kind), ClassTypedArray)
+	t := r.allocTypedArray(o, kind, len(vals))
+	for i, el := range vals {
+		if err := r.setElem(t, i, el); err != nil {
+			return Undefined, err
+		}
+	}
+	return Obj(o), nil
+}
+
+// typedArrayProtoFor returns the prototype a view of the given element type
+// should have.
+func (r *Runtime) typedArrayProtoFor(kind elemType) *Object {
+	if p := r.typedArrayProtos[kind]; p != nil {
+		return p
+	}
+	return r.typedArrayProto
+}
+
+// initTypedArrayStatics defines from and of on %TypedArray%, which the concrete
+// constructors inherit.
+func (r *Runtime) initTypedArrayStatics(abstract *Object) {
+	r.defMethod(abstract, "of", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		kind, err := rt.typedArrayKindOf(this, "of")
+		if err != nil {
+			return Undefined, err
+		}
+		return rt.typedArrayFromValues(kind, Obj(rt.newArrayFrom(args)))
+	})
+
+	r.defMethod(abstract, "from", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		kind, err := rt.typedArrayKindOf(this, "from")
+		if err != nil {
+			return Undefined, err
+		}
+		// The source is collected with Array.from, so an iterable, an
+		// array-like and the mapping function all behave identically here.
+		from, err := rt.getValueProp(rt.global.getOwn(rt.atoms.intern("Array")).value,
+			rt.atoms.intern("from"))
+		if err != nil {
+			return Undefined, err
+		}
+		arr, err := rt.call(from, Undefined, args)
+		if err != nil {
+			return Undefined, err
+		}
+		return rt.typedArrayFromValues(kind, arr)
+	})
+}
+
+// typedArrayKindOf recovers the element type a static was reached through.
+func (r *Runtime) typedArrayKindOf(this Value, name string) (elemType, error) {
+	if this.IsObject() {
+		for kind := elemInt8; int(kind) < len(elemInfos); kind++ {
+			if p := r.typedArrayProtos[kind]; p != nil {
+				if c := p.getOwn(atomConstructor); c != nil && c.value.SameValue(this) {
+					return kind, nil
+				}
+			}
+		}
+	}
+	return 0, r.throwTypeError("%%TypedArray%%.%s requires a typed array constructor", name)
 }
