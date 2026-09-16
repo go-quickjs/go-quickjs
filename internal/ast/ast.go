@@ -654,3 +654,78 @@ func (*SwitchStmt) stmtNode()   {}
 func (*LabeledStmt) stmtNode()  {}
 func (*DebuggerStmt) stmtNode() {}
 func (*WithStmt) stmtNode()     {}
+
+// ---------------------------------------------------------------------------
+// Modules
+// ---------------------------------------------------------------------------
+
+// ImportSpecifier is one binding introduced by an import declaration.
+type ImportSpecifier struct {
+	// Imported is the name in the source module. It is empty for a default
+	// import and for a namespace import.
+	Imported string
+	// Local is the name bound in this module.
+	Local string
+	// Kind distinguishes the three forms, which resolve differently.
+	Kind  ImportKind
+	Start int
+}
+
+// ImportKind classifies an import specifier.
+type ImportKind uint8
+
+const (
+	// ImportNamed is `import {a as b} from "m"`.
+	ImportNamed ImportKind = iota
+	// ImportDefault is `import a from "m"`.
+	ImportDefault
+	// ImportNamespace is `import * as a from "m"`.
+	ImportNamespace
+)
+
+// ImportDecl is an import declaration.
+//
+// A declaration with no specifiers is a side-effect import: `import "m"`.
+type ImportDecl struct {
+	Specifiers []ImportSpecifier
+	Source     string
+	Start      int
+}
+
+// ExportSpecifier is one name an export declaration exposes.
+type ExportSpecifier struct {
+	// Local is the name inside this module, or inside Source when the
+	// declaration re-exports.
+	Local string
+	// Exported is the name other modules see.
+	Exported string
+	Start    int
+}
+
+// ExportDecl is an export declaration.
+//
+// The three shapes are distinguished by which fields are set: Decl for
+// `export const x = 1`, Specifiers for `export {a, b}`, and Source for a
+// re-export.
+type ExportDecl struct {
+	// Decl is the declaration being exported, if the export wraps one.
+	Decl Stmt
+	// Specifiers lists the names exported by an `export {}` clause.
+	Specifiers []ExportSpecifier
+	// Source names the module a re-export draws from.
+	Source string
+	// Default marks `export default`.
+	Default bool
+	// DefaultExpr holds the expression of `export default expr`.
+	DefaultExpr Expr
+	// All marks `export * from "m"`, with Alias set for the namespace form.
+	All   bool
+	Alias string
+	Start int
+}
+
+func (n *ImportDecl) Pos() int { return n.Start }
+func (n *ExportDecl) Pos() int { return n.Start }
+
+func (*ImportDecl) stmtNode() {}
+func (*ExportDecl) stmtNode() {}

@@ -16,18 +16,24 @@ func (c *compiler) compileStatements(body []ast.Stmt) {
 	//
 	// The lexical bindings start in their dead zone, so a read before the
 	// declaration is a ReferenceError rather than undefined.
-	for _, s := range body {
-		if vd, ok := s.(*ast.VarDecl); ok && vd.Kind != ast.DeclVar {
-			c.predeclareLexical(vd)
-		}
-		if cd, ok := s.(*ast.ClassDecl); ok && cd.Class.Name != nil {
-			c.declareLexicalName(cd.Class.Name.Name, bindLet, cd.Start)
+	// At a module's top level the lexical bindings already live in the module
+	// environment, installed by hoistModuleBindings, so declaring slots for
+	// them here would shadow the very properties the linker forwards to.
+	if !c.atModuleTopLevel() {
+		for _, s := range body {
+			if vd, ok := s.(*ast.VarDecl); ok && vd.Kind != ast.DeclVar {
+				c.predeclareLexical(vd)
+			}
+			if cd, ok := s.(*ast.ClassDecl); ok && cd.Class.Name != nil {
+				c.declareLexicalName(cd.Class.Name.Name, bindLet, cd.Start)
+			}
 		}
 	}
 	// Function declarations are hoisted and initialized immediately, so a call
-	// may precede the declaration textually.
+	// may precede the declaration textually. An exported one is hoisted too,
+	// which means looking through the export wrapper.
 	for _, s := range body {
-		if fd, ok := s.(*ast.FuncDecl); ok && fd.Fn.Name != nil {
+		if fd, ok := hoistableFunction(s); ok {
 			c.predeclareFunction(fd)
 		}
 	}
@@ -176,6 +182,12 @@ func (c *compiler) compileStatement(s ast.Stmt) {
 
 	case *ast.DebuggerStmt:
 		// No debugger is attached, so this is a no-op.
+
+	case *ast.ImportDecl:
+		c.compileImportDecl(n)
+
+	case *ast.ExportDecl:
+		c.compileExportDecl(n)
 
 	case *ast.WithStmt:
 		c.errorf(n.Start, "\"with\" is not supported")
@@ -622,4 +634,29 @@ func (c *compiler) emitPendingFinallys() {
 		c.compileStatements(c.finallys[i].body)
 		c.endScope()
 	}
+}
+
+// atModuleTopLevel reports whether the compiler is in a module's outermost
+// statement list, where bindings live in the module environment rather than in
+// frame slots.
+func (c *compiler) atModuleTopLevel() bool {
+	return c.module != nil && c.parent == nil && c.depth == 0
+}
+
+// hoistableFunction returns the function declaration a statement contains,
+// looking through an export wrapper.
+func hoistableFunction(s ast.Stmt) (*ast.FuncDecl, bool) {
+	switch n := s.(type) {
+	case *ast.FuncDecl:
+		if n.Fn.Name != nil {
+			return n, true
+		}
+	case *ast.ExportDecl:
+		if n.Decl != nil {
+			if fd, ok := n.Decl.(*ast.FuncDecl); ok && fd.Fn.Name != nil {
+				return fd, true
+			}
+		}
+	}
+	return nil, false
 }

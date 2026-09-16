@@ -58,6 +58,13 @@ func (p *parser) parseStatement() ast.Stmt {
 			return &ast.DebuggerStmt{Start: start}
 		case "with":
 			return p.parseWith()
+		case "import":
+			// `import(` and `import.meta` are expressions, not declarations.
+			if p.module && !p.importIsExpression() {
+				return p.parseImportDecl()
+			}
+		case "export":
+			return p.parseExportDecl()
 		}
 
 	case lexer.Ident:
@@ -530,4 +537,13 @@ func (p *parser) parseWith() ast.Stmt {
 	// `with` is represented as a labelled block carrying the object, since the
 	// compiler rejects it anyway outside sloppy mode.
 	return &ast.WithStmt{Object: obj, Body: body, Start: start}
+}
+
+// importIsExpression reports whether an `import` token begins a dynamic import
+// or import.meta rather than an import declaration.
+func (p *parser) importIsExpression() bool {
+	m := p.mark()
+	defer p.reset(m)
+	p.next()
+	return p.isPunct("(") || p.isPunct(".")
 }

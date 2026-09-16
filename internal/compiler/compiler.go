@@ -126,6 +126,10 @@ type compiler struct {
 	// labels, which is the next context pushed.
 	pendingLabel string
 
+	// module is non-nil while compiling module code, collecting the shape the
+	// linker needs.
+	module *ModuleInfo
+
 	// selfName is the name a named function expression uses to refer to
 	// itself, which resolves to the running closure rather than to a binding.
 	selfName string
@@ -579,6 +583,11 @@ func collectVarNamesStmt(s ast.Stmt, out *[]string) {
 		collectVarNamesStmt(n.Body, out)
 	case *ast.WithStmt:
 		collectVarNamesStmt(n.Body, out)
+	case *ast.ExportDecl:
+		// A declaration wrapped in an export still binds its names.
+		if n.Decl != nil {
+			collectVarNamesStmt(n.Decl, out)
+		}
 	}
 }
 

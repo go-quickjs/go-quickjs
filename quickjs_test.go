@@ -1622,3 +1622,104 @@ func TestArrayBufferViewsAlias(t *testing.T) {
 		const a = new Int32Array([1,2,3]);
 		const s = a.slice(0,1); s[0] = 9; a[0]`, "1")
 }
+
+func TestModules(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+
+	mods := map[string]string{
+		"math":     `export const pi = 3.14; export function add(a,b) { return a+b } export default "d";`,
+		"counter":  `export let n = 0; export function inc() { n++ }`,
+		"reexport": `export * from "math";`,
+	}
+	rt.SetModuleLoader(func(spec, referrer string) (string, string, error) {
+		src, ok := mods[spec]
+		if !ok {
+			return "", "", fmt.Errorf("module %q not found", spec)
+		}
+		return src, spec, nil
+	})
+
+	tests := []struct{ name, src, want string }{
+		{"named", `import {pi} from "math"; globalThis.r = pi;`, "3.14"},
+		{"function", `import {add} from "math"; globalThis.r = add(2,3);`, "5"},
+		{"default", `import d from "math"; globalThis.r = d;`, "d"},
+		{"namespace", `import * as m from "math"; globalThis.r = m.pi;`, "3.14"},
+		{"renamed", `import {pi as p} from "math"; globalThis.r = p;`, "3.14"},
+		{"re-export", `import {add} from "reexport"; globalThis.r = add(1,1);`, "2"},
+		{"own export", `export const x = 5; globalThis.r = x;`, "5"},
+	}
+	for i, tt := range tests {
+		if _, err := rt.EvalModule(fmt.Sprintf("entry%d", i), tt.src); err != nil {
+			t.Errorf("%s: %v", tt.name, err)
+			continue
+		}
+		got, err := rt.Get("r")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.String() != tt.want {
+			t.Errorf("%s: got %s, want %s", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestModuleBindingsAreLive(t *testing.T) {
+	// An importer reads through to the exporter's current value rather than a
+	// copy taken at link time.
+	rt := quickjs.New()
+	defer rt.Close()
+	rt.SetModuleLoader(func(spec, referrer string) (string, string, error) {
+		if spec != "counter" {
+			return "", "", fmt.Errorf("unknown module %q", spec)
+		}
+		return `export let n = 0; export function inc() { n++ }`, spec, nil
+	})
+	if _, err := rt.EvalModule("entry", `
+		import {n, inc} from "counter";
+		inc(); inc();
+		globalThis.r = n;`); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := rt.Get("r")
+	if got.String() != "2" {
+		t.Errorf("imported binding = %s, want 2; it is not live", got)
+	}
+}
+
+func TestModuleNamespaceIsReturned(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	ns, err := rt.EvalModule("entry", `export const a = 1; export const b = 2;`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	av, err := ns.Get("a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if av.Int() != 1 {
+		t.Errorf("namespace.a = %v, want 1", av)
+	}
+}
+
+func TestImportWithoutALoaderIsRejected(t *testing.T) {
+	// A runtime with no loader has no filesystem access, which is the default.
+	rt := quickjs.New()
+	defer rt.Close()
+	_, err := rt.EvalModule("entry", `import {x} from "anything";`)
+	if err == nil {
+		t.Fatal("an import should fail without a module loader")
+	}
+	if !strings.Contains(err.Error(), "module loader") {
+		t.Errorf("error = %v, want one mentioning the missing loader", err)
+	}
+}
+
+func TestImportIsRejectedInAScript(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	if _, err := rt.Eval(`import {x} from "m";`); err == nil {
+		t.Error("an import declaration should be rejected in script code")
+	}
+}

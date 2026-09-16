@@ -370,11 +370,12 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		// --- Globals ------------------------------------------------------
 		case bytecode.OpGetGlobal:
 			name := cl.names[in.A]
-			if !r.hasProp(r.global, name) {
+			env := cl.scope()
+			if !r.hasProp(env, name) {
 				vmErr = r.throwReferenceError("%s is not defined", r.atoms.name(name))
 				goto onError
 			}
-			v, err := r.getProp(r.global, name, Obj(r.global))
+			v, err := r.getProp(env, name, Obj(env))
 			if err != nil {
 				vmErr = err
 				goto onError
@@ -382,7 +383,8 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			push(v)
 		case bytecode.OpGetGlobalOpt:
 			// typeof on an undeclared name must not throw.
-			v, err := r.getProp(r.global, cl.names[in.A], Obj(r.global))
+			env := cl.scope()
+			v, err := r.getProp(env, cl.names[in.A], Obj(env))
 			if err != nil {
 				vmErr = err
 				goto onError
@@ -390,23 +392,25 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			push(v)
 		case bytecode.OpSetGlobal:
 			name := cl.names[in.A]
+			env := cl.scope()
 			// Strict mode refuses to create a global by assignment, which is
 			// the rule that catches a misspelled variable.
-			if cl.fn.Strict && !r.hasProp(r.global, name) {
+			if cl.fn.Strict && !r.hasProp(env, name) {
 				vmErr = r.throwReferenceError("%s is not defined", r.atoms.name(name))
 				goto onError
 			}
-			if err := r.setProp(r.global, name, pop(), Obj(r.global), cl.fn.Strict); err != nil {
+			if err := r.setProp(env, name, pop(), Obj(env), cl.fn.Strict); err != nil {
 				vmErr = err
 				goto onError
 			}
 		case bytecode.OpDefineGlobalVar:
 			name := cl.names[in.A]
-			if !r.hasOwnProp(r.global, name) {
-				r.global.setOwnRaw(name, Undefined, propWritable|propEnumerable)
+			env := cl.scope()
+			if !r.hasOwnProp(env, name) {
+				env.setOwnRaw(name, Undefined, propWritable|propEnumerable)
 			}
 		case bytecode.OpDefineGlobalFunc:
-			r.global.setOwnRaw(cl.names[in.A], pop(), propWritable|propEnumerable)
+			cl.scope().setOwnRaw(cl.names[in.A], pop(), propWritable|propEnumerable)
 
 		// --- Properties ---------------------------------------------------
 		case bytecode.OpGetProp:
@@ -467,7 +471,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// Deleting a binding only succeeds for a configurable global
 			// property, which is why a var declaration cannot be deleted.
 			name := cl.names[in.A]
-			ok, err := r.deleteProp(r.global, name, false)
+			ok, err := r.deleteProp(cl.scope(), name, false)
 			if err != nil {
 				vmErr = err
 				goto onError
@@ -1243,7 +1247,12 @@ func pointsAtOrAbove(p *Value, locals []Value, slot int) bool {
 // upvalues its descriptor names.
 func (r *Runtime) makeClosure(f *frame, c Value) *Object {
 	tmpl, _ := c.ref.(*closure)
-	child := &closure{fn: tmpl.fn, names: tmpl.names, consts: tmpl.consts, realm: r}
+	// The environment is inherited, so a function declared in a module sees
+	// the module's bindings rather than only the globals.
+	child := &closure{
+		fn: tmpl.fn, names: tmpl.names, consts: tmpl.consts,
+		realm: r, env: f.cl.env,
+	}
 
 	child.upvalues = make([]*upvalue, len(tmpl.fn.Upvalues))
 	for i, desc := range tmpl.fn.Upvalues {

@@ -65,6 +65,12 @@ type Runtime struct {
 	// rng backs Math.random, created on first use.
 	rng *rand.Rand
 
+	// modules maps a resolved specifier to its module, so that importing the
+	// same module twice yields the same instance.
+	modules       map[string]*Module
+	moduleLoader  ModuleLoader
+	compileModule func(specifier, source string) (*Module, error)
+
 	// arrayBufferProto and typedArrayProto are held here rather than in
 	// intrinsics because the typed array constructors are generated in a loop
 	// and need to reach them by name.
@@ -141,6 +147,11 @@ type closure struct {
 	consts []Value
 	// realm is the runtime the closure belongs to.
 	realm *Runtime
+	// env is the environment an unqualified name resolves against. It is nil
+	// for a script, whose names resolve on the global object, and the module
+	// environment for module code -- which inherits from the global object, so
+	// the prototype chain performs the scope lookup.
+	env *Object
 }
 
 // upvalue is a captured variable.

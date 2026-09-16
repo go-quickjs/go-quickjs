@@ -281,3 +281,85 @@ func (r *Runtime) SetTimeZone(loc *time.Location) {
 	}
 	r.rt.SetTimeZone(loc)
 }
+
+// ModuleLoader resolves a module specifier to its source.
+//
+// specifier is the text of the import, and referrer is the module that
+// contains it, empty for the entry point. The returned name is what the module
+// is cached under, so a loader that resolves two specifiers to the same module
+// must return the same name for both.
+//
+// A runtime with no loader rejects every import. That is the default, because
+// the engine has no filesystem access of its own and should not acquire any
+// implicitly.
+type ModuleLoader func(specifier, referrer string) (source string, resolved string, err error)
+
+// SetModuleLoader installs the loader used to resolve imports.
+func (r *Runtime) SetModuleLoader(fn ModuleLoader) {
+	if r.closed {
+		return
+	}
+	r.rt.SetModuleLoader(vm.ModuleLoader(fn))
+	// The compiler lives outside the vm package, so the runtime is given a
+	// callback rather than importing it.
+	r.rt.SetModuleCompiler(func(specifier, source string) (*vm.Module, error) {
+		return r.compileAndRegisterModule(specifier, source)
+	})
+}
+
+// compileAndRegisterModule parses, compiles and registers module source.
+func (r *Runtime) compileAndRegisterModule(specifier, source string) (*vm.Module, error) {
+	prog, err := parser.Parse(source, parser.Options{Module: true})
+	if err != nil {
+		return nil, &SyntaxError{err: err}
+	}
+	fn, info, err := compiler.CompileModule(prog, compiler.Options{Source: specifier, Text: source})
+	if err != nil {
+		return nil, &SyntaxError{err: err}
+	}
+	reqs := make([]vm.ModuleImportRequest, len(info.Imports))
+	for i, imp := range info.Imports {
+		reqs[i] = vm.ModuleImportRequest{
+			Specifier: imp.Specifier,
+			Local:     imp.Local,
+			Imported:  imp.Imported,
+			Namespace: imp.Namespace,
+			IsDefault: imp.IsDefault,
+		}
+	}
+	return r.rt.LoadModule(specifier, fn, reqs, info.Exports, info.StarExports)
+}
+
+// EvalModule compiles and runs source as an ECMAScript module.
+//
+// Imports are resolved through the loader installed with SetModuleLoader; a
+// runtime without one rejects any import. The returned value is the module's
+// namespace, through which its exports can be read.
+func (r *Runtime) EvalModule(specifier, source string) (Value, error) {
+	if r.closed {
+		return Value{}, ErrClosed
+	}
+	if r.rt == nil {
+		return Value{}, ErrClosed
+	}
+	// The compiler callback is needed even without a loader, so that the entry
+	// point itself can be compiled.
+	r.rt.SetModuleCompiler(func(spec, src string) (*vm.Module, error) {
+		return r.compileAndRegisterModule(spec, src)
+	})
+
+	mod, err := r.compileAndRegisterModule(specifier, source)
+	if err != nil {
+		return Value{}, err
+	}
+	if err := r.rt.Link(mod); err != nil {
+		return Value{}, r.wrapError(err)
+	}
+	if _, err := r.rt.EvaluateModule(mod); err != nil {
+		return Value{}, r.wrapError(err)
+	}
+	if err := r.rt.DrainJobs(); err != nil {
+		return Value{}, r.wrapError(err)
+	}
+	return Value{v: vmObj(mod.Namespace()), rt: r.rt}, nil
+}
