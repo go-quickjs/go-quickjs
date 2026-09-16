@@ -239,7 +239,23 @@ func (p *parser) parseTerm() (node, error) {
 		}
 	}
 	greedy := !p.eat('?')
+	// A quantifier applies to an atom, and a quantified atom is not one: x{1}*
+	// and x{1}{2} have no reading. The punctuation forms are caught when the
+	// next term tries to start with them, but a brace would otherwise be taken
+	// for a literal.
+	if p.quantifierFollows() {
+		return nil, p.errorf("nothing to repeat")
+	}
 	return nodeRepeat{item: atom, min: min, max: max, greedy: greedy}, nil
+}
+
+// quantifierFollows reports whether a quantifier starts at the current
+// position, without consuming it.
+func (p *parser) quantifierFollows() bool {
+	save := p.pos
+	_, _, ok, err := p.parseQuantifier()
+	p.pos = save
+	return ok || err != nil
 }
 
 // parseQuantifier reads *, +, ? or {n,m}, reporting whether one was present.
@@ -342,10 +358,11 @@ func (p *parser) parseAtom() (n node, quantifiable bool, err error) {
 	case ')':
 		return nil, false, nil
 	case '{':
-		// A lone brace is a literal unless it forms a quantifier, which
-		// parseTerm would have consumed.
-		if p.flags&FlagUnicode != 0 {
-			return nil, false, p.errorf("lone quantifier brackets")
+		// A lone brace is a literal, but only when it cannot start a
+		// quantifier: /{a}/ is the three characters, while /{1}/ is a
+		// quantifier with nothing to apply to.
+		if p.flags&FlagUnicode != 0 || p.quantifierFollows() {
+			return nil, false, p.errorf("nothing to repeat")
 		}
 		p.pos++
 		return nodeChar{r: '{'}, true, nil
