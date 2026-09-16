@@ -63,6 +63,9 @@ type parser struct {
 	allowSuperProp bool
 	allowSuperCall bool
 	allowNewTarget bool
+	// noArguments marks a context with no arguments object -- a class field
+	// initializer or a static block -- where naming one is an early error.
+	noArguments bool
 
 	// noIn suppresses `in` as a relational operator while parsing the head of a
 	// for statement, where `for (x in y)` must not be read as a comparison. It
@@ -309,6 +312,19 @@ func (p *parser) parseBindingIdent() *ast.Ident {
 	return id
 }
 
+// checkLexicalBindingName rejects names that a let, const or class declaration
+// may not introduce.
+//
+// `let` itself is the notable one: it is legal as a var or function name even
+// in sloppy mode, but never as a lexical binding, because `let let` would be
+// ambiguous with the declaration keyword.
+func (p *parser) checkLexicalBindingName(name string, tok lexer.Token) {
+	if name == "let" {
+		p.errorAt(tok, "\"let\" cannot be the name of a lexical binding")
+	}
+	p.checkBindingName(name, tok)
+}
+
 // checkBindingName rejects names that cannot be bound in the current context.
 func (p *parser) checkBindingName(name string, tok lexer.Token) {
 	if p.strict {
@@ -395,8 +411,11 @@ type funcContext struct {
 	allowSuperProp bool
 	allowSuperCall bool
 	allowNewTarget bool
-	strict         bool
-	labels         map[string]bool
+	// noArguments marks a context with no arguments object -- a class field
+	// initializer or a static block -- where naming one is an early error.
+	noArguments bool
+	strict      bool
+	labels      map[string]bool
 }
 
 func (p *parser) saveContext() funcContext {
@@ -404,8 +423,8 @@ func (p *parser) saveContext() funcContext {
 		inFunc: p.inFunc, inLoop: p.inLoop, inSwitch: p.inSwitch,
 		allowYield: p.allowYield, allowAwait: p.allowAwait,
 		allowSuperProp: p.allowSuperProp, allowSuperCall: p.allowSuperCall,
-		allowNewTarget: p.allowNewTarget,
-		strict:         p.strict, labels: p.labels,
+		allowNewTarget: p.allowNewTarget, noArguments: p.noArguments,
+		strict: p.strict, labels: p.labels,
 	}
 }
 
@@ -413,6 +432,6 @@ func (p *parser) restoreContext(c funcContext) {
 	p.inFunc, p.inLoop, p.inSwitch = c.inFunc, c.inLoop, c.inSwitch
 	p.allowYield, p.allowAwait = c.allowYield, c.allowAwait
 	p.allowSuperProp, p.allowSuperCall = c.allowSuperProp, c.allowSuperCall
-	p.allowNewTarget = c.allowNewTarget
+	p.allowNewTarget, p.noArguments = c.allowNewTarget, c.noArguments
 	p.strict, p.labels = c.strict, c.labels
 }

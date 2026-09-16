@@ -197,6 +197,7 @@ func Compile(prog *ast.Program, opts Options) (fn *bytecode.Function, err error)
 	// Top-level var and function declarations become properties of the global
 	// object rather than locals, which is what makes them visible to other
 	// scripts in the same realm.
+	c.checkScopes(prog.Body)
 	c.hoistGlobals(prog.Body)
 	c.compileStatements(prog.Body)
 
@@ -430,6 +431,9 @@ func (c *compiler) declare(name string, kind bindKind, pos int) uint32 {
 		}
 	}
 	// A `var` that names an existing binding in the same function reuses it.
+	// A var colliding with a lexical binding is rejected by checkScopes before
+	// compilation begins, since the rule is about the shape of the source
+	// rather than the order bindings happen to be created in.
 	if kind == bindVar {
 		for i := range c.locals {
 			if c.locals[i].name == name && c.locals[i].kind == bindVar {

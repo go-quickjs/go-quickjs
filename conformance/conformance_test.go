@@ -6,6 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -217,6 +219,22 @@ func runOne(suite *conformance.Suite, tc *conformance.Test) (result, string) {
 	// The suite's async tests report completion through print.
 	var printed []string
 	rt.Set("print", func(s string) { printed = append(printed, s) })
+
+	// Several tests import a fixture file sitting beside them, so the loader
+	// resolves relative to the test's own directory.
+	dir := path.Dir(tc.Path)
+	rt.SetModuleLoader(func(specifier, referrer string) (string, string, error) {
+		base := dir
+		if referrer != "" {
+			base = path.Dir(referrer)
+		}
+		resolved := path.Join(base, specifier)
+		b, err := os.ReadFile(filepath.Join(suite.Root, "test", filepath.FromSlash(resolved)))
+		if err != nil {
+			return "", "", err
+		}
+		return string(b), resolved, nil
+	})
 
 	// Some tests loop for a very long time, and a few loop forever. The
 	// context bounds every one of them, which is the same mechanism a host

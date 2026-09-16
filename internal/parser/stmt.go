@@ -148,7 +148,15 @@ func (p *parser) parseVarDecl(kind ast.DeclKind) *ast.VarDecl {
 
 	decl := &ast.VarDecl{Kind: kind, Start: start}
 	for {
+		nameTok := p.tok
 		target := p.parseBindingTarget()
+		if kind != ast.DeclVar {
+			var names []string
+			collectBindingNames(target, &names)
+			for _, n := range names {
+				p.checkLexicalBindingName(n, nameTok)
+			}
+		}
 		var init ast.Expr
 		if p.eatPunct("=") {
 			init = p.parseAssign()
@@ -546,4 +554,32 @@ func (p *parser) importIsExpression() bool {
 	defer p.reset(m)
 	p.next()
 	return p.isPunct("(") || p.isPunct(".")
+}
+
+// collectBindingNames gathers the identifiers a binding target introduces.
+func collectBindingNames(target ast.Expr, out *[]string) {
+	switch n := target.(type) {
+	case *ast.Ident:
+		*out = append(*out, n.Name)
+	case *ast.ArrayPattern:
+		for _, el := range n.Elements {
+			if el != nil {
+				collectBindingNames(el, out)
+			}
+		}
+		if n.Rest != nil {
+			collectBindingNames(n.Rest, out)
+		}
+	case *ast.ObjectPattern:
+		for _, prop := range n.Props {
+			collectBindingNames(prop.Value, out)
+		}
+		if n.Rest != nil {
+			collectBindingNames(n.Rest, out)
+		}
+	case *ast.AssignPattern:
+		collectBindingNames(n.Target, out)
+	case *ast.RestElement:
+		collectBindingNames(n.Arg, out)
+	}
 }

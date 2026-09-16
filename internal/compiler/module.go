@@ -62,6 +62,7 @@ func CompileModule(prog *ast.Program, opts Options) (fn *bytecode.Function, info
 	c.emit(bytecode.OpSetLocal, uint32(c.completionSlot), 0)
 
 	c.collectModuleShape(prog.Body)
+	c.checkScopes(prog.Body)
 	c.hoistModuleBindings(prog.Body)
 	c.compileStatements(prog.Body)
 

@@ -1,6 +1,8 @@
 package parser
 
 import (
+	"fmt"
+
 	"github.com/go-quickjs/go-quickjs/internal/ast"
 	"github.com/go-quickjs/go-quickjs/internal/lexer"
 )
@@ -507,6 +509,17 @@ func (p *parser) parsePrimary() ast.Expr {
 			}
 		}
 		name := p.tok.Value
+		// Strict mode reserves `yield`, and module code reserves `await`, even
+		// where they are merely referenced rather than bound.
+		if p.strict && name == "yield" {
+			p.errorf("\"yield\" is reserved in strict mode")
+		}
+		if p.noArguments && name == "arguments" {
+			p.errorf("\"arguments\" is not available here")
+		}
+		if p.module && name == "await" {
+			p.errorf("\"await\" is reserved in module code")
+		}
 		p.next()
 		return p.nodes.ident(name, start)
 
@@ -550,6 +563,9 @@ func (p *parser) parsePrimary() ast.Expr {
 				p.fail(err)
 			}
 			p.tok = tok
+			if err := checkRegExpFlags(tok.Flags); err != nil {
+				p.errorf("%s", err.Error())
+			}
 			re := &ast.RegexpLit{Pattern: tok.Value, Flags: tok.Flags, Start: start}
 			p.next()
 			return re
@@ -704,8 +720,20 @@ func (p *parser) parseObjectLiteral() ast.Expr {
 	defer func() { p.noIn = saved }()
 
 	lit := &ast.ObjectLit{Start: start}
+	sawProto := false
 	for !p.isPunct("}") {
-		lit.Props = append(lit.Props, p.parseObjectProperty())
+		prop := p.parseObjectProperty()
+		// Two __proto__ entries are an early error, because each would set the
+		// prototype and the second would silently win. Every other duplicate
+		// key is allowed.
+		if prop.Kind == ast.PropInit && !prop.Computed && !prop.Shorthand &&
+			!prop.Method && propertyKeyName(prop.Key) == "__proto__" {
+			if sawProto {
+				p.errorf("an object literal may have only one __proto__ property")
+			}
+			sawProto = true
+		}
+		lit.Props = append(lit.Props, prop)
 		if !p.isPunct("}") {
 			p.expectPunct(",")
 		}
@@ -854,4 +882,35 @@ func (p *parser) parsePropertyName() (ast.Expr, bool) {
 // which is either a complete template or the head of one with substitutions.
 func (p *parser) startsTemplate() bool {
 	return p.tok.Kind == lexer.Template || p.tok.Kind == lexer.TemplateHead
+}
+
+// propertyKeyName returns the textual key of a non-computed property.
+func propertyKeyName(key ast.Expr) string {
+	switch k := key.(type) {
+	case *ast.Ident:
+		return k.Name
+	case *ast.StringLit:
+		return k.Value
+	}
+	return ""
+}
+
+// checkRegExpFlags rejects an unknown or repeated flag on a literal.
+func checkRegExpFlags(flags string) error {
+	seen := map[rune]bool{}
+	for _, c := range flags {
+		if seen[c] {
+			return fmt.Errorf("duplicate regular expression flag %q", c)
+		}
+		seen[c] = true
+		switch c {
+		case 'd', 'g', 'i', 'm', 's', 'u', 'v', 'y':
+		default:
+			return fmt.Errorf("invalid regular expression flag %q", c)
+		}
+	}
+	if seen['u'] && seen['v'] {
+		return fmt.Errorf("the u and v regular expression flags cannot be combined")
+	}
+	return nil
 }

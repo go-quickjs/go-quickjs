@@ -53,6 +53,9 @@ func (p *parser) parseFunctionParamsAndBody(fn *ast.FuncLit) {
 	p.allowYield = fn.Generator
 	p.allowAwait = fn.Async
 	p.allowNewTarget = true
+	// A function has its own arguments object even when declared inside a
+	// class field initializer.
+	p.noArguments = false
 	p.labels = make(map[string]bool)
 
 	switch fn.Kind {
@@ -288,6 +291,14 @@ func (p *parser) parseParenOrArrow() ast.Expr {
 // function's parameters.
 func (p *parser) paramsFromCover(items []ast.Expr) []ast.Expr {
 	params := make([]ast.Expr, len(items))
+	for _, item := range items {
+		// Arrow parameters may not contain a yield or await expression, even
+		// though the enclosing context permits one. The cover grammar parsed
+		// them as ordinary expressions, so the check happens on reinterpretation.
+		if kind := containsSuspension(item); kind != "" {
+			p.errorf("%q is not allowed in arrow function parameters", kind)
+		}
+	}
 	for i, item := range items {
 		if rest, ok := item.(*ast.RestElement); ok {
 			if i != len(items)-1 {
@@ -417,13 +428,16 @@ func (p *parser) parseClass(isDecl bool) *ast.ClassLit {
 	p.expectPunct("{")
 	p.inClassBody = true
 	sawConstructor := false
+	// Private names must be unique within a class body, except that a getter
+	// and a setter may share one.
+	privateNames := map[string]privateKind{}
 
 	for !p.isPunct("}") {
 		// Stray semicolons between class members are permitted.
 		if p.eatPunct(";") {
 			continue
 		}
-		p.parseClassMember(cls, &sawConstructor)
+		p.parseClassMember(cls, &sawConstructor, privateNames)
 	}
 	p.expectPunct("}")
 	return cls
@@ -431,7 +445,7 @@ func (p *parser) parseClass(isDecl bool) *ast.ClassLit {
 
 // parseClassMember parses one method, field or static block and appends it to
 // the class.
-func (p *parser) parseClassMember(cls *ast.ClassLit, sawConstructor *bool) {
+func (p *parser) parseClassMember(cls *ast.ClassLit, sawConstructor *bool, privateNames map[string]privateKind) {
 	start := p.tok.Pos
 
 	// `static` is contextual: `static x` declares a static member, but
@@ -480,6 +494,7 @@ func (p *parser) parseClassMember(cls *ast.ClassLit, sawConstructor *bool) {
 		if p.startsPropertyName() && !p.isPunct("(") && !p.isPunct("=") &&
 			!p.isPunct(";") && !p.isPunct("}") {
 			key, computed := p.parsePropertyName()
+			p.checkClassMemberName(key, computed, isStatic, privateNames, kindOfAccessor(kind))
 			fn := p.parseMethodBody(fnKind, false, false)
 			p.checkAccessorArity(kind, fn)
 			cls.Members = append(cls.Members, ast.Property{
@@ -492,6 +507,7 @@ func (p *parser) parseClassMember(cls *ast.ClassLit, sawConstructor *bool) {
 	}
 
 	key, computed := p.parsePropertyName()
+	p.checkClassMemberName(key, computed, isStatic, privateNames, privateOther)
 
 	if p.isPunct("(") {
 		kind := ast.FuncMethod
@@ -525,6 +541,11 @@ func (p *parser) parseClassMember(cls *ast.ClassLit, sawConstructor *bool) {
 	if async || generator {
 		p.errorf("a class field cannot be async or a generator")
 	}
+	if !computed {
+		if name := propKeyText(key); name == "constructor" || (isStatic && name == "prototype") {
+			p.errorf("a class field cannot be named %q", name)
+		}
+	}
 	if !computed && isConstructorKey(key) {
 		p.errorf("a class field cannot be named \"constructor\"")
 	}
@@ -538,6 +559,9 @@ func (p *parser) parseClassMember(cls *ast.ClassLit, sawConstructor *bool) {
 		p.allowSuperCall = false
 		p.allowYield = false
 		p.allowAwait = false
+		// A field initializer runs in a context with no arguments object, so
+		// naming one is an early error rather than a runtime failure.
+		p.noArguments = true
 		p.labels = make(map[string]bool)
 		field.Value = p.parseAssign()
 		p.restoreContext(ctx)
@@ -559,6 +583,8 @@ func (p *parser) parseStaticBlock() []ast.Stmt {
 	p.allowYield = false
 	p.allowAwait = false
 	p.allowNewTarget = true
+	// Like a field initializer, a static block has no arguments object.
+	p.noArguments = true
 	p.labels = make(map[string]bool)
 
 	p.expectPunct("{")
@@ -576,4 +602,143 @@ func isConstructorKey(key ast.Expr) bool {
 		return k.Value == "constructor"
 	}
 	return false
+}
+
+// containsSuspension reports whether an expression contains a yield or await,
+// naming whichever it found.
+//
+// Arrow parameters forbid both, so the cover list has to be checked once it is
+// reinterpreted as a parameter list.
+func containsSuspension(e ast.Expr) string {
+	found := ""
+	var walk func(ast.Expr)
+	walk = func(n ast.Expr) {
+		if found != "" || n == nil {
+			return
+		}
+		switch v := n.(type) {
+		case *ast.Yield:
+			found = "yield"
+		case *ast.Await:
+			found = "await"
+		case *ast.AssignPattern:
+			walk(v.Target)
+			walk(v.Default)
+		case *ast.Assign:
+			walk(v.Target)
+			walk(v.Value)
+		case *ast.Binary:
+			walk(v.Left)
+			walk(v.Right)
+		case *ast.Logical:
+			walk(v.Left)
+			walk(v.Right)
+		case *ast.Conditional:
+			walk(v.Test)
+			walk(v.Cons)
+			walk(v.Alt)
+		case *ast.Unary:
+			walk(v.Operand)
+		case *ast.Call:
+			walk(v.Callee)
+			for _, a := range v.Args {
+				walk(a)
+			}
+		case *ast.ArrayLit:
+			for _, el := range v.Elements {
+				walk(el)
+			}
+		case *ast.ArrayPattern:
+			for _, el := range v.Elements {
+				walk(el)
+			}
+			walk(v.Rest)
+		case *ast.ObjectLit:
+			for _, prop := range v.Props {
+				walk(prop.Value)
+			}
+		case *ast.ObjectPattern:
+			for _, prop := range v.Props {
+				walk(prop.Value)
+			}
+			walk(v.Rest)
+		case *ast.RestElement:
+			walk(v.Arg)
+		case *ast.Sequence:
+			for _, x := range v.Exprs {
+				walk(x)
+			}
+		case *ast.Spread:
+			walk(v.Arg)
+		}
+	}
+	walk(e)
+	return found
+}
+
+// privateKind distinguishes the roles a private name can take, so that a getter
+// and a setter sharing one can be told from a genuine duplicate.
+type privateKind uint8
+
+const (
+	privateOther privateKind = iota
+	privateGetter
+	privateSetter
+)
+
+func kindOfAccessor(k ast.PropKind) privateKind {
+	if k == ast.PropSet {
+		return privateSetter
+	}
+	return privateGetter
+}
+
+// checkClassMemberName enforces the restrictions on what a class member may be
+// called.
+func (p *parser) checkClassMemberName(key ast.Expr, computed, isStatic bool,
+	privateNames map[string]privateKind, kind privateKind) {
+	if computed {
+		return
+	}
+	name := propKeyText(key)
+
+	// A static member may not be called "prototype": it would shadow the
+	// object the class's instances inherit from.
+	if isStatic && name == "prototype" {
+		p.errorf("a static class member cannot be named \"prototype\"")
+	}
+
+	pn, isPrivate := key.(*ast.PrivateName)
+	if !isPrivate {
+		return
+	}
+	// #constructor is never a legal private name.
+	if pn.Name == "constructor" {
+		p.errorf("a private name cannot be #constructor")
+	}
+	prev, seen := privateNames[pn.Name]
+	if !seen {
+		privateNames[pn.Name] = kind
+		return
+	}
+	// The one legal repeat is a getter paired with a setter.
+	paired := (prev == privateGetter && kind == privateSetter) ||
+		(prev == privateSetter && kind == privateGetter)
+	if !paired {
+		p.errorf("duplicate private name #%s", pn.Name)
+	}
+	privateNames[pn.Name] = privateOther
+}
+
+// propKeyText returns the textual form of a non-computed member name.
+func propKeyText(key ast.Expr) string {
+	switch k := key.(type) {
+	case *ast.Ident:
+		return k.Name
+	case *ast.StringLit:
+		return k.Value
+	case *ast.PrivateName:
+		return "#" + k.Name
+	}
+	return ""
 }
