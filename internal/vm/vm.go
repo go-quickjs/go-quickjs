@@ -846,8 +846,80 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 			goto onError
 		case bytecode.OpPushCatch:
 			f.handlers = append(f.handlers, handler{pc: in.A, stackDepth: sp})
+		case bytecode.OpPushFinally:
+			f.handlers = append(f.handlers, handler{pc: in.A, stackDepth: sp, isFinally: true})
 		case bytecode.OpPopCatch:
 			f.handlers = f.handlers[:len(f.handlers)-1]
+		case bytecode.OpRethrow:
+			// The finally block's completion record is on the stack: a marker
+			// saying whether the protected block fell through, returned or
+			// threw, and the associated value.
+			kind := pop()
+			val := pop()
+			switch completionKind(kind.Number()) {
+			case completionThrow:
+				vmErr = r.throw(val)
+				goto onError
+			case completionReturn:
+				return val, nil
+			}
+
+		// --- Parameters and arguments -------------------------------------
+		case bytecode.OpRestParam:
+			start := int(in.A)
+			var rest []Value
+			if start < len(f.args) {
+				rest = f.args[start:]
+			}
+			push(Obj(r.newArrayFrom(rest)))
+		case bytecode.OpGetArguments:
+			push(Obj(r.newArgumentsObject(f)))
+		case bytecode.OpArrayRest:
+			src := pop()
+			start := int(in.A)
+			var rest []Value
+			if src.IsObject() {
+				if el := src.Object().elems; start < len(el) {
+					rest = el[start:]
+				}
+			}
+			push(Obj(r.newArrayFrom(rest)))
+		case bytecode.OpObjectRest:
+			// The excluded keys sit above the source on the stack.
+			n := int(in.A)
+			excluded := r.stack[sp-n : sp]
+			src := r.stack[sp-n-1]
+			sp -= n + 1
+			rest, err := r.objectRest(src, excluded)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			push(rest)
+
+		// --- Calls with spread --------------------------------------------
+		case bytecode.OpCallSpread, bytecode.OpNewSpread:
+			argsVal := pop()
+			callee := pop()
+			var callArgs []Value
+			if argsVal.IsObject() {
+				callArgs = argsVal.Object().elems
+			}
+			var v Value
+			var err error
+			if in.Op == bytecode.OpNewSpread {
+				v, err = r.construct(callee, callArgs)
+			} else {
+				// A spread call always has an explicit receiver slot beneath
+				// the callee, which the compiler pushes as undefined for a
+				// plain call.
+				v, err = r.call(callee, pop(), callArgs)
+			}
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			push(v)
 
 		// --- Iteration ----------------------------------------------------
 		case bytecode.OpForInStart:
@@ -878,6 +950,16 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 			push(v)
 		case bytecode.OpIterClose:
 			r.closeIter(peek(0))
+		case bytecode.OpSpreadIter:
+			vals, err := r.spreadToStack(pop())
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			target := peek(0)
+			if target.IsObject() {
+				target.Object().elems = append(target.Object().elems, vals...)
+			}
 		case bytecode.OpArraySpread:
 			src := pop()
 			target := peek(0)
@@ -943,6 +1025,12 @@ func (r *Runtime) unwindToHandler(f *frame, sp *int, err error) bool {
 	*sp = h.stackDepth
 	r.stack[*sp] = thrown.Value
 	*sp++
+	if h.isFinally {
+		// A finally clause reproduces the original completion after it runs,
+		// so it receives a record rather than a bare value.
+		r.stack[*sp] = Float(float64(completionThrow))
+		*sp++
+	}
 	f.pc = h.pc
 	return true
 }

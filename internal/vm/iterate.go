@@ -239,3 +239,70 @@ func (r *Runtime) copyDataProps(target *Object, src Value) error {
 	}
 	return nil
 }
+
+// objectRest builds the rest object of an object destructuring pattern: every
+// own enumerable property of the source except those already bound.
+func (r *Runtime) objectRest(src Value, excluded []Value) (Value, error) {
+	out := newObject(r.proto.object, ClassObject)
+	if src.IsNullish() {
+		return Obj(out), nil
+	}
+	o, err := r.toObject(src)
+	if err != nil {
+		return Undefined, err
+	}
+
+	skip := make(map[Atom]bool, len(excluded))
+	for _, e := range excluded {
+		k, err := r.toPropertyKey(e)
+		if err != nil {
+			return Undefined, err
+		}
+		skip[k] = true
+	}
+
+	for _, k := range o.ownKeys(true, r.atoms) {
+		if skip[k] || !r.isEnumerable(o, k) {
+			continue
+		}
+		v, err := r.getProp(o, k, src)
+		if err != nil {
+			return Undefined, err
+		}
+		if err := r.defineOwnProp(out, k, v, propDefault); err != nil {
+			return Undefined, err
+		}
+	}
+	return Obj(out), nil
+}
+
+// newArgumentsObject materializes the arguments object for a call.
+//
+// It is the unmapped form, which is what strict mode requires and what every
+// modern function gets: the elements are a snapshot, not aliases of the
+// parameter slots.
+func (r *Runtime) newArgumentsObject(f *frame) *Object {
+	o := newObject(r.proto.object, ClassArguments)
+	o.elems = append(o.elems, f.args...)
+	o.setOwnRaw(atomLength, Int(len(f.args)), propWritable|propConfigurable)
+	if f.callee != nil {
+		o.setOwnRaw(atomCallee, Obj(f.callee), propWritable|propConfigurable)
+	}
+	// An arguments object is iterable, using the same iterator as an array.
+	o.setOwnRaw(r.atoms.internSymbol(r.wellKnown.iterator),
+		Obj(r.newNativeFunc("[Symbol.iterator]", 0,
+			func(rt *Runtime, this Value, args []Value) (Value, error) {
+				return rt.newArrayIterator(this)
+			})), propWritable|propConfigurable)
+	return o
+}
+
+// completionKind says how a protected block finished, which a finally clause
+// must reproduce after it runs.
+type completionKind uint8
+
+const (
+	completionNormal completionKind = iota
+	completionThrow
+	completionReturn
+)

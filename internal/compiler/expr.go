@@ -158,6 +158,9 @@ func (c *compiler) compileIdentRead(n *ast.Ident) {
 		c.emit(bytecode.OpPushCallee, 0, 0)
 		return
 	}
+	// A function that uses `arguments` binds it to a slot in its prologue, so
+	// the searches above will have found it. Reaching here means the reference
+	// is in a position with no arguments object at all, such as the top level.
 	c.emitAt(n.Start, bytecode.OpGetGlobal, c.nameIdx(n.Name), 0)
 }
 
@@ -458,6 +461,10 @@ func (c *compiler) compileMemberRead(n *ast.Member) {
 }
 
 func (c *compiler) compileCall(n *ast.Call) {
+	if hasSpread(n.Args) {
+		c.compileSpreadCall(n)
+		return
+	}
 	// A method call keeps the receiver on the stack so that `this` binds to it
 	// without evaluating the object expression twice.
 	if m, ok := n.Callee.(*ast.Member); ok && !m.Optional {
@@ -481,18 +488,72 @@ func (c *compiler) compileCall(n *ast.Call) {
 // compileArguments pushes a call's arguments and returns how many there are.
 func (c *compiler) compileArguments(args []ast.Expr) int {
 	for _, a := range args {
-		if _, ok := a.(*ast.Spread); ok {
-			c.errorf(a.Pos(), "spread arguments are not yet supported")
-		}
 		c.compileExpr(a)
 	}
 	return len(args)
 }
 
+// hasSpread reports whether an argument list contains a spread element, which
+// forces the slower call form that gathers arguments into an array.
+func hasSpread(args []ast.Expr) bool {
+	for _, a := range args {
+		if _, ok := a.(*ast.Spread); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// compileSpreadArguments builds an array holding a call's arguments, which is
+// how a call containing a spread element passes them.
+func (c *compiler) compileSpreadArguments(args []ast.Expr) {
+	c.emit(bytecode.OpNewArray, 0, 0)
+	for _, a := range args {
+		if sp, ok := a.(*ast.Spread); ok {
+			c.compileExpr(sp.Arg)
+			c.emit(bytecode.OpSpreadIter, 0, 0)
+			continue
+		}
+		c.compileExpr(a)
+		c.emit(bytecode.OpArrayPush, 0, 0)
+	}
+}
+
 func (c *compiler) compileNew(n *ast.New) {
+	if hasSpread(n.Args) {
+		c.compileExpr(n.Callee)
+		c.compileSpreadArguments(n.Args)
+		c.emitAt(n.Start, bytecode.OpNewSpread, 0, 0)
+		return
+	}
 	c.compileExpr(n.Callee)
 	argc := c.compileArguments(n.Args)
 	c.emitAt(n.Start, bytecode.OpNew, uint32(argc), 0)
+}
+
+// compileSpreadCall compiles a call whose arguments include a spread element.
+//
+// The receiver, the callee and an argument array are pushed in that order, so
+// that the instruction can supply `this` correctly for a method call.
+func (c *compiler) compileSpreadCall(n *ast.Call) {
+	if m, ok := n.Callee.(*ast.Member); ok && !m.Optional {
+		c.compileExpr(m.Object)
+		c.emit(bytecode.OpDup, 0, 0)
+		if m.Computed {
+			c.compileExpr(m.Property)
+			c.emit(bytecode.OpGetIndex, 0, 0)
+		} else {
+			c.emit(bytecode.OpGetProp, c.nameIdx(propKeyName(m.Property)), 0)
+		}
+		c.compileSpreadArguments(n.Args)
+		c.emitAt(n.Start, bytecode.OpCallSpread, 0, 0)
+		return
+	}
+	// A plain call has no receiver, so undefined stands in for one.
+	c.emit(bytecode.OpPushUndef, 0, 0)
+	c.compileExpr(n.Callee)
+	c.compileSpreadArguments(n.Args)
+	c.emitAt(n.Start, bytecode.OpCallSpread, 0, 0)
 }
 
 // chainJump is a pending short-circuit from an optional link.

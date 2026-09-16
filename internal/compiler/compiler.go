@@ -85,6 +85,24 @@ type loopCtx struct {
 	scopeDepth int
 }
 
+// finallyCtx tracks an enclosing finally clause.
+type finallyCtx struct {
+	// body is kept so that a break or continue leaving the clause can compile
+	// it inline, which a completion record cannot express.
+	body []ast.Stmt
+	// returns holds the program counters of returns routed through the clause,
+	// awaiting its start address.
+	returns []int
+}
+
+// completionKind mirrors the runtime's encoding of how a protected block
+// finished. The values must match those in the vm package.
+const (
+	completionNormal = 0
+	completionThrow  = 1
+	completionReturn = 2
+)
+
 // compiler holds the state for one function.
 type compiler struct {
 	fn     *bytecode.Function
@@ -101,6 +119,9 @@ type compiler struct {
 	constIndex map[constKey]uint32
 
 	loops []loopCtx
+	// finallys is the stack of enclosing finally clauses, which return, break
+	// and continue all have to account for.
+	finallys []finallyCtx
 	// pendingLabel carries a label from a labelled statement to the loop it
 	// labels, which is the next context pushed.
 	pendingLabel string
@@ -584,6 +605,7 @@ func stackEffect(op bytecode.Op, a uint32) int {
 		bytecode.OpGetUpvalueCheck, bytecode.OpGetGlobal,
 		bytecode.OpGetGlobalOpt, bytecode.OpDup, bytecode.OpClosure,
 		bytecode.OpNewObject, bytecode.OpNewTarget, bytecode.OpPushCallee,
+		bytecode.OpGetArguments, bytecode.OpRestParam,
 		bytecode.OpGetPropThis,
 		bytecode.OpIsNullish:
 		return 1
@@ -639,6 +661,19 @@ func stackEffect(op bytecode.Op, a uint32) int {
 		return -int(a)
 	case bytecode.OpNewArray, bytecode.OpConcat:
 		return -int(a) + 1
+
+	case bytecode.OpCallSpread:
+		// Pops the receiver, the callee and the argument array.
+		return -2
+	case bytecode.OpNewSpread:
+		return -1
+	case bytecode.OpSpreadIter:
+		return -1
+	case bytecode.OpObjectRest:
+		return -int(a)
+	case bytecode.OpRethrow:
+		// Pops the completion record.
+		return -2
 
 	case bytecode.OpInsert2, bytecode.OpInsert3, bytecode.OpInsert4:
 		return 1

@@ -8,22 +8,27 @@ import (
 // compileStatements compiles a statement list, hoisting the function
 // declarations it contains so that they are callable before their definition.
 func (c *compiler) compileStatements(body []ast.Stmt) {
-	// Function declarations are hoisted within their block: a call may precede
-	// the declaration textually.
-	for _, s := range body {
-		if fd, ok := s.(*ast.FuncDecl); ok && fd.Fn.Name != nil {
-			c.predeclareFunction(fd)
-		}
-	}
-	// Lexical declarations are hoisted into their dead zone, so that a
-	// reference before the declaration is a ReferenceError rather than
-	// resolving to an outer binding.
+	// Every binding of a scope exists before any of its code runs, so the
+	// lexical ones are created first. They must precede the function
+	// declarations: a hoisted function is compiled here, and if a let it
+	// refers to had no slot yet, the reference would wrongly resolve to a
+	// global that shadows it forever.
+	//
+	// The lexical bindings start in their dead zone, so a read before the
+	// declaration is a ReferenceError rather than undefined.
 	for _, s := range body {
 		if vd, ok := s.(*ast.VarDecl); ok && vd.Kind != ast.DeclVar {
 			c.predeclareLexical(vd)
 		}
 		if cd, ok := s.(*ast.ClassDecl); ok && cd.Class.Name != nil {
 			c.declareLexicalName(cd.Class.Name.Name, bindLet, cd.Start)
+		}
+	}
+	// Function declarations are hoisted and initialized immediately, so a call
+	// may precede the declaration textually.
+	for _, s := range body {
+		if fd, ok := s.(*ast.FuncDecl); ok && fd.Fn.Name != nil {
+			c.predeclareFunction(fd)
 		}
 	}
 	for _, s := range body {
@@ -132,10 +137,20 @@ func (c *compiler) compileStatement(s ast.Stmt) {
 	case *ast.ReturnStmt:
 		if n.Arg != nil {
 			c.compileExpr(n.Arg)
-			c.emitAt(n.Start, bytecode.OpReturn, 0, 0)
 		} else {
-			c.emitAt(n.Start, bytecode.OpReturnUndef, 0, 0)
+			c.emit(bytecode.OpPushUndef, 0, 0)
 		}
+		if len(c.finallys) > 0 {
+			// The finally clause must run before the function actually
+			// returns, so the return becomes a completion record it consumes.
+			c.emit(bytecode.OpPopCatch, 0, 0)
+			c.emit(bytecode.OpPushInt, uint32(completionReturn), 0)
+			c.emitAt(n.Start, bytecode.OpJump, 0, 0)
+			c.finallys[len(c.finallys)-1].returns = append(
+				c.finallys[len(c.finallys)-1].returns, c.here()-1)
+			break
+		}
+		c.emitAt(n.Start, bytecode.OpReturn, 0, 0)
 
 	case *ast.BreakStmt:
 		c.compileBreak(n)
@@ -385,6 +400,7 @@ func (c *compiler) compileForBody(left ast.Node, body ast.Stmt) {
 func (c *compiler) compileBreak(n *ast.BreakStmt) {
 	for i := len(c.loops) - 1; i >= 0; i-- {
 		if n.Label == "" || c.loops[i].label == n.Label {
+			c.emitPendingFinallys()
 			pc := c.emitJump(bytecode.OpJump)
 			c.loops[i].breaks = append(c.loops[i].breaks, pc)
 			return
@@ -399,6 +415,7 @@ func (c *compiler) compileContinue(n *ast.ContinueStmt) {
 			continue
 		}
 		if n.Label == "" || c.loops[i].label == n.Label {
+			c.emitPendingFinallys()
 			pc := c.emitJump(bytecode.OpJump)
 			c.loops[i].continues = append(c.loops[i].continues, pc)
 			return
@@ -429,9 +446,65 @@ func (c *compiler) compileLabeledLoop(label string, body ast.Stmt) {
 	c.compileStatement(body)
 }
 
+// compileTry compiles a try statement.
+//
+// A finally clause has to run however the protected block finished, so the
+// block's outcome is encoded as a completion record -- a value and a kind --
+// left on the stack for the finally code to reproduce afterwards. That is what
+// makes `return` inside a try still run the finally before returning.
 func (c *compiler) compileTry(n *ast.TryStmt) {
-	if n.Finally != nil {
-		c.errorf(n.Start, "\"finally\" is not yet supported")
+	if n.Finally == nil {
+		c.compileTryCatch(n)
+		return
+	}
+
+	finallyHandler := c.emitJump(bytecode.OpPushFinally)
+	c.finallys = append(c.finallys, finallyCtx{body: n.Finally})
+
+	// finallyStart is filled in once the clause's first instruction is known.
+	finallyStart := 0
+
+	// The catch clause, when present, sits inside the finally's protection so
+	// that a throw from the catch body still runs the finally.
+	if n.Catch != nil {
+		c.compileTryCatch(&ast.TryStmt{Block: n.Block, Catch: n.Catch, Start: n.Start})
+	} else {
+		c.beginScope()
+		c.compileStatements(n.Block)
+		c.endScope()
+	}
+
+	// Normal completion: drop the finally handler and fall into the clause
+	// with a record saying nothing unusual happened.
+	c.emit(bytecode.OpPopCatch, 0, 0)
+	c.emit(bytecode.OpPushUndef, 0, 0)
+	c.emit(bytecode.OpPushInt, uint32(completionNormal), 0)
+	finallyStart = c.here()
+
+	// The handler jumps here too, having pushed its own record, and so do any
+	// returns that were routed through the clause.
+	c.patchJump(finallyHandler)
+	ctx := c.finallys[len(c.finallys)-1]
+	c.finallys = c.finallys[:len(c.finallys)-1]
+	for _, pc := range ctx.returns {
+		c.patchJumpTo(pc, finallyStart)
+	}
+
+	c.beginScope()
+	c.compileStatements(n.Finally)
+	c.endScope()
+
+	// Reproduce the original completion: rethrow, return, or carry on.
+	c.emit(bytecode.OpRethrow, 0, 0)
+}
+
+// compileTryCatch compiles a try statement that has no finally clause.
+func (c *compiler) compileTryCatch(n *ast.TryStmt) {
+	if n.Catch == nil {
+		c.beginScope()
+		c.compileStatements(n.Block)
+		c.endScope()
+		return
 	}
 	catchPC := c.emitJump(bytecode.OpPushCatch)
 	c.beginScope()
@@ -531,4 +604,19 @@ func nameOf(target ast.Expr) string {
 		return id.Name
 	}
 	return ""
+}
+
+// emitPendingFinallys inlines the body of every enclosing finally clause before
+// a break or continue leaves it.
+//
+// A completion record cannot express "jump to that label", so the clause is
+// compiled a second time at the jump site rather than being routed through.
+// Finally clauses are small and rarely nested, so the duplication is bounded.
+func (c *compiler) emitPendingFinallys() {
+	for i := len(c.finallys) - 1; i >= 0; i-- {
+		c.emit(bytecode.OpPopCatch, 0, 0)
+		c.beginScope()
+		c.compileStatements(c.finallys[i].body)
+		c.endScope()
+	}
 }

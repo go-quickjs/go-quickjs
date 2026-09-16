@@ -94,6 +94,20 @@ const (
 	OpPrivateIn // `#x in obj`
 	OpGetPrivateMethod
 
+	// --- Parameters and arguments -----------------------------------------
+	// OpRestParam gathers the arguments from index A onwards into an array,
+	// which is what a rest parameter binds.
+	OpRestParam
+	// OpGetArguments materializes the arguments object.
+	OpGetArguments
+	// OpArrayRest pushes the elements of the array on the stack from index A
+	// onwards, for the rest element of an array pattern.
+	OpArrayRest
+	// OpObjectRest builds an object holding the source's own enumerable
+	// properties except the A keys sitting above it on the stack, for the rest
+	// element of an object pattern.
+	OpObjectRest
+
 	// --- Arithmetic -------------------------------------------------------
 	OpAdd
 	OpSub
@@ -145,7 +159,10 @@ const (
 	OpCall       // A = argument count; stack: callee args...
 	OpCallMethod // A = argument count; stack: this callee args...
 	OpNew        // A = argument count
-	OpCallSpread // arguments have been gathered into an array
+	// OpCallSpread and OpNewSpread take their arguments from an array on the
+	// stack rather than from individual slots, which is how a call containing
+	// a spread element is compiled.
+	OpCallSpread
 	OpNewSpread
 	OpSuperCall
 	OpReturn
@@ -250,6 +267,10 @@ var opNames = [opCount]string{
 	OpGetPrivate: "get_private", OpSetPrivate: "set_private",
 	OpDefinePrivate: "define_private", OpPrivateIn: "private_in",
 	OpGetPrivateMethod: "get_private_method",
+	OpRestParam:        "rest_param",
+	OpGetArguments:     "get_arguments",
+	OpArrayRest:        "array_rest",
+	OpObjectRest:       "object_rest",
 
 	OpAdd: "add", OpSub: "sub", OpMul: "mul", OpDiv: "div", OpMod: "mod",
 	OpPow: "pow", OpNeg: "neg", OpPos: "pos", OpInc: "inc", OpDec: "dec",

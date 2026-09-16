@@ -61,6 +61,17 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 		c.selfName = fn.Name.Name
 	}
 
+	// A function that mentions `arguments`, directly or through an arrow that
+	// captures it, materializes the object into a slot. The slot has to exist
+	// before the body is compiled, because an arrow can only capture a
+	// binding that is already there.
+	if c.fn.Kind != bytecode.KindArrow && referencesArguments(fn.Body) {
+		c.fn.UsesArguments = true
+		slot := c.declare("arguments", bindVar, fn.Start)
+		c.emit(bytecode.OpGetArguments, 0, 0)
+		c.emit(bytecode.OpSetLocal, slot, 0)
+	}
+
 	// Hoist var declarations and nested function declarations to the top of
 	// the function, as their scope requires.
 	var varNames []string
@@ -128,9 +139,23 @@ func (c *compiler) bindParameters(fn *ast.FuncLit) {
 			}
 
 		case *ast.RestElement:
+			// A rest parameter binds an array of whatever was passed beyond
+			// the declared ones, so its slot is filled from the frame's
+			// argument list rather than positionally.
 			c.fn.HasRest = true
-			c.declareParamTarget(param.Arg, i)
-			c.errorf(param.Start, "rest parameters are not yet supported")
+			c.emit(bytecode.OpRestParam, uint32(i), 0)
+			if id, ok := param.Arg.(*ast.Ident); ok {
+				slot := c.declare(id.Name, bindParam, id.Start)
+				c.emit(bytecode.OpSetLocal, slot, 0)
+			} else {
+				var names []string
+				collectPatternNames(param.Arg, &names)
+				for _, n := range names {
+					c.declare(n, bindLet, param.Pos())
+					c.markInitialized(n)
+				}
+				c.compileDestructuring(param.Arg, ast.DeclLet)
+			}
 
 		default:
 			// A destructuring parameter takes an anonymous slot, which the
@@ -150,7 +175,12 @@ func (c *compiler) bindParameters(fn *ast.FuncLit) {
 			c.compileDestructuring(p, ast.DeclLet)
 		}
 	}
+	// ParamCount is how many arguments the interpreter copies positionally, so
+	// it excludes a rest parameter, which is filled from the argument list.
 	c.fn.ParamCount = len(fn.Params)
+	if c.fn.HasRest {
+		c.fn.ParamCount--
+	}
 	_ = length
 }
 
@@ -225,9 +255,6 @@ func (c *compiler) compileDestructuringAssign(target ast.Expr) {
 // compileArrayPattern unpacks an array pattern. declaring selects between
 // creating bindings and assigning to existing references.
 func (c *compiler) compileArrayPattern(pat *ast.ArrayPattern, kind ast.DeclKind, declaring bool) {
-	if pat.Rest != nil {
-		c.errorf(pat.Start, "rest elements in destructuring are not yet supported")
-	}
 	for i, el := range pat.Elements {
 		if el == nil {
 			continue
@@ -238,14 +265,18 @@ func (c *compiler) compileArrayPattern(pat *ast.ArrayPattern, kind ast.DeclKind,
 		c.emit(bytecode.OpGetIndex, 0, 0)
 		c.bindPatternLeaf(el, kind, declaring)
 	}
+	if pat.Rest != nil {
+		// The rest element takes everything from the first index the named
+		// elements did not consume.
+		c.emit(bytecode.OpDup, 0, 0)
+		c.emit(bytecode.OpArrayRest, uint32(len(pat.Elements)), 0)
+		c.bindPatternLeaf(pat.Rest, kind, declaring)
+	}
 	c.emit(bytecode.OpDrop, 0, 0)
 }
 
 // compileObjectPattern unpacks an object pattern.
 func (c *compiler) compileObjectPattern(pat *ast.ObjectPattern, kind ast.DeclKind, declaring bool) {
-	if pat.Rest != nil {
-		c.errorf(pat.Start, "rest elements in destructuring are not yet supported")
-	}
 	for _, p := range pat.Props {
 		c.emit(bytecode.OpDup, 0, 0)
 		if p.Computed {
@@ -255,6 +286,22 @@ func (c *compiler) compileObjectPattern(pat *ast.ObjectPattern, kind ast.DeclKin
 			c.emit(bytecode.OpGetProp, c.nameIdx(propKeyName(p.Key)), 0)
 		}
 		c.bindPatternLeaf(p.Value, kind, declaring)
+	}
+	if pat.Rest != nil {
+		// The rest object holds every own enumerable property except the ones
+		// the pattern already bound, so those keys are pushed for the
+		// instruction to exclude.
+		c.emit(bytecode.OpDup, 0, 0)
+		for _, p := range pat.Props {
+			if p.Computed {
+				c.compileExpr(p.Key)
+				c.emit(bytecode.OpToPropertyKey, 0, 0)
+				continue
+			}
+			c.emit(bytecode.OpPushConst, c.stringConst(propKeyName(p.Key)), 0)
+		}
+		c.emit(bytecode.OpObjectRest, uint32(len(pat.Props)), 0)
+		c.bindPatternLeaf(pat.Rest, kind, declaring)
 	}
 	c.emit(bytecode.OpDrop, 0, 0)
 }

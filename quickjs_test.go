@@ -1047,3 +1047,109 @@ func TestPrototypeChain(t *testing.T) {
 		Derived.prototype = Object.create(Base.prototype);
 		new Derived().greet()`, "hi")
 }
+
+func TestRestParameters(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`function f(...a) { return a.length; } f(1,2,3)`, "3"},
+		{`function f(a, ...rest) { return rest.join(","); } f(1,2,3)`, "2,3"},
+		{`function f(...a) { return a.length; } f()`, "0"},
+		{`function f(...a) { return Array.isArray(a); } f(1)`, "true"},
+		// A rest parameter is excluded from length.
+		{`function f(a, ...rest) {} f.length`, "1"},
+		{`const f = (...a) => a.length; f(1,2)`, "2"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}
+
+func TestSpreadArguments(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`Math.max(...[1,5,2])`, "5"},
+		{`function f(a,b,c) { return a+b+c; } f(...[1,2,3])`, "6"},
+		{`function f(a,b,c) { return a+b+c; } f(1, ...[2,3])`, "6"},
+		{`function f(...a) { return a.join(","); } f(...[1,2], 3, ...[4])`, "1,2,3,4"},
+		{`[...[1,2],3].join(",")`, "1,2,3"},
+		{`[..."abc"].join("-")`, "a-b-c"},
+		// A spread call on a method still binds `this`.
+		{`const o = {n: 2, f(a) { return this.n * a; }}; o.f(...[3])`, "6"},
+		{`new (class { constructor(...a) { this.n = a.length; } })(1,2).n`, "2"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}
+
+func TestDestructuringRest(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`const [a, ...r] = [1,2,3]; r.join(",")`, "2,3"},
+		{`const [a, ...r] = [1]; r.length`, "0"},
+		{`const {a, ...r} = {a:1,b:2,c:3}; JSON.stringify(r)`, `{"b":2,"c":3}`},
+		{`const {a, ...r} = {a:1}; JSON.stringify(r)`, "{}"},
+		{`function f([a, ...r]) { return r.length; } f([1,2,3])`, "2"},
+		{`function f({a, ...r}) { return Object.keys(r).join(","); } f({a:1,b:2})`, "b"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}
+
+func TestArgumentsObject(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`(function() { return arguments.length; })(1,2,3)`, "3"},
+		{`(function() { return arguments[1]; })(1,2,3)`, "2"},
+		{`(function() { return [...arguments].join(","); })(1,2)`, "1,2"},
+		{`(function(a) { return arguments.length; })()`, "0"},
+		// An arrow has no arguments of its own and sees the enclosing one.
+		{`(function() { return (() => arguments.length)(); })(1,2)`, "2"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}
+
+func TestTryFinally(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`let x = 0; try { x = 1; } finally { x = 2; } x`, "2"},
+		{`try { 1 } finally { 2 }`, "2"},
+		{`let x = 0; try { throw 1 } catch (e) { x = e } finally { x += 10 } x`, "11"},
+		// The finally runs before the function returns, and does not change
+		// the returned value.
+		{`var log = ""; function f() { try { return "r"; } finally { log = "f"; } } f() + log`, "rf"},
+		{`function f() { try { return 1; } finally { } } f()`, "1"},
+		// A finally that a break passes through still runs.
+		{`var log = ""; for (;;) { try { break } finally { log = "f" } } log`, "f"},
+		{`var n = 0; for (let i = 0; i < 3; i++) { try { continue } finally { n++ } } n`, "3"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}
+
+func TestTryFinallyRethrows(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	// An exception must survive the finally clause.
+	var log string
+	rt.Set("record", func(s string) { log = s })
+	_, err := rt.Eval(`try { throw new Error("boom") } finally { record("ran") }`)
+	if err == nil {
+		t.Fatal("the exception should have been rethrown after the finally")
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Errorf("error = %v, want the original exception", err)
+	}
+	if log != "ran" {
+		t.Errorf("the finally clause did not run (log = %q)", log)
+	}
+}
+
+func TestHoistedFunctionSeesLaterLet(t *testing.T) {
+	// All bindings of a scope exist before any code runs, so a hoisted
+	// function that refers to a later let must resolve to that binding rather
+	// than to a global.
+	checkEval(t, `
+		function f() { return later; }
+		let later = "bound";
+		f()`, "bound")
+}
