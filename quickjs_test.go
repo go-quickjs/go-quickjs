@@ -1409,3 +1409,129 @@ func TestCatastrophicRegExpIsBounded(t *testing.T) {
 		t.Fatal("a catastrophic pattern did not terminate")
 	}
 }
+
+// evalThen runs setup, then reads an expression once the microtask queue has
+// drained, which is how an asynchronous result becomes observable.
+func evalThen(t *testing.T, setup, read string) string {
+	t.Helper()
+	rt := quickjs.New()
+	defer rt.Close()
+	if _, err := rt.Eval(setup); err != nil {
+		t.Fatalf("setup %q: %v", setup, err)
+	}
+	return evalString(t, rt, read)
+}
+
+func checkAsync(t *testing.T, setup, read, want string) {
+	t.Helper()
+	if got := evalThen(t, setup, read); got != want {
+		t.Errorf("%s\nreading %s\n got: %s\nwant: %s", setup, read, got, want)
+	}
+}
+
+func TestGenerators(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`function* g() { yield 1; yield 2; } [...g()].join(",")`, "1,2"},
+		{`function* g() { yield 1; return 9; } const it = g(); it.next().value + "," + it.next().value`, "1,9"},
+		{`function* g() { yield 1; } const it = g(); it.next(); it.next().done`, "true"},
+		{`function* g() { yield 1; } let s = ""; for (const v of g()) s += v; s`, "1"},
+		{`function* g() {} g().next().done`, "true"},
+		// A value sent in becomes the result of the yield that suspended.
+		{`function* g() { const x = yield 1; yield x * 2; } const it = g(); it.next(); it.next(5).value`, "10"},
+		// State persists across suspensions, including loop variables.
+		{`function* g() { let t = 0; for (let i = 0; i < 3; i++) t += yield i; return t; }
+		  const it = g(); it.next(); it.next(1); it.next(2); it.next(3).value`, "6"},
+		// A generator is its own iterator.
+		{`function* g() { yield 1; } const it = g(); it[Symbol.iterator]() === it`, "true"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}
+
+func TestGeneratorThrowAndReturn(t *testing.T) {
+	// throw() raises at the suspension point, so a try inside the body catches
+	// it.
+	checkEval(t, `
+		function* g() { try { yield 1; } catch (e) { yield "caught:" + e; } }
+		const it = g(); it.next(); it.throw("x").value`, "caught:x")
+	// return() finishes the generator.
+	checkEval(t, `
+		function* g() { yield 1; yield 2; }
+		const it = g(); it.next(); const r = it.return(9);
+		r.value + "," + r.done`, "9,true")
+	checkEval(t, `
+		function* g() { yield 1; }
+		const it = g(); it.return(); it.next().done`, "true")
+}
+
+func TestGeneratorDelegation(t *testing.T) {
+	checkEval(t, `
+		function* inner() { yield 1; yield 2; }
+		function* outer() { yield* inner(); yield 3; }
+		[...outer()].join(",")`, "1,2,3")
+	checkEval(t, `function* g() { yield* [1,2]; } [...g()].join(",")`, "1,2")
+	checkEval(t, `function* g() { yield* "ab"; } [...g()].join(",")`, "a,b")
+}
+
+func TestPromise(t *testing.T) {
+	checkAsync(t, `var out = ""; Promise.resolve(1).then(v => out = "got" + v)`, `out`, "got1")
+	checkAsync(t, `var r = ""; Promise.reject("x").catch(e => r = "c" + e)`, `r`, "cx")
+	checkAsync(t, `var r = []; Promise.resolve().then(() => r.push(1)).then(() => r.push(2))`,
+		`r.join(",")`, "1,2")
+	// A rejection propagates through a then that has no rejection handler.
+	checkAsync(t, `var r = ""; Promise.reject("e").then(v => r = "no").catch(e => r = "yes" + e)`,
+		`r`, "yese")
+	// A throwing handler rejects the promise it resolves.
+	checkAsync(t, `var r = ""; Promise.resolve(1).then(() => { throw "t" }).catch(e => r = "got" + e)`,
+		`r`, "gott")
+	// Resolving with a promise adopts it rather than nesting.
+	checkAsync(t, `var r = ""; Promise.resolve(Promise.resolve(5)).then(v => r = v)`, `r`, "5")
+	checkAsync(t, `var r = ""; new Promise(res => res(7)).then(v => r = v)`, `r`, "7")
+	checkAsync(t, `var r = ""; new Promise((_, rej) => rej("bad")).catch(e => r = e)`, `r`, "bad")
+	checkAsync(t, `var r = ""; Promise.resolve(1).finally(() => r += "f").then(v => r += v)`, `r`, "f1")
+}
+
+func TestPromiseOrderingIsAlwaysAsynchronous(t *testing.T) {
+	// A then callback must never run before the code that registered it has
+	// finished. This is the guarantee the whole design exists for.
+	checkAsync(t,
+		`var order = []; Promise.resolve().then(() => order.push("micro")); order.push("sync")`,
+		`order.join(",")`, "sync,micro")
+}
+
+func TestPromiseCombinators(t *testing.T) {
+	checkAsync(t, `var r = ""; Promise.all([1, Promise.resolve(2)]).then(v => r = v.join(","))`,
+		`r`, "1,2")
+	checkAsync(t, `var r = ""; Promise.all([Promise.reject("e"), 1]).catch(e => r = "c" + e)`,
+		`r`, "ce")
+	checkAsync(t, `var r = ""; Promise.all([]).then(v => r = v.length)`, `r`, "0")
+	checkAsync(t, `var r = ""; Promise.race([Promise.resolve("a")]).then(v => r = v)`, `r`, "a")
+	checkAsync(t,
+		`var r = ""; Promise.allSettled([Promise.resolve(1), Promise.reject(2)])
+		   .then(v => r = v.map(x => x.status).join(","))`,
+		`r`, "fulfilled,rejected")
+	checkAsync(t, `var r = ""; Promise.any([Promise.reject(1), Promise.resolve(2)]).then(v => r = v)`,
+		`r`, "2")
+}
+
+func TestAsyncFunctions(t *testing.T) {
+	checkEval(t, `async function f() { return 1; } typeof f().then`, "function")
+	checkAsync(t, `var r = ""; async function f() { r = await Promise.resolve("v"); } f()`, `r`, "v")
+	// Awaiting a plain value works too.
+	checkAsync(t, `var r = ""; (async () => { r = await 5; })()`, `r`, "5")
+	checkAsync(t, `var r = ""; async function f() { return 42; } f().then(v => r = v)`, `r`, "42")
+	// An exception escaping the body rejects the promise.
+	checkAsync(t, `var r = ""; async function f() { throw new Error("boom"); } f().catch(e => r = e.message)`,
+		`r`, "boom")
+	// A rejected await throws at the await, so a try can catch it.
+	checkAsync(t,
+		`var r = ""; (async () => { try { await Promise.reject("e"); } catch (x) { r = "caught" + x; } })()`,
+		`r`, "caughte")
+	// Awaiting in a loop keeps the frame's state.
+	checkAsync(t,
+		`var r = ""; async function f() { let s = 0; for (const x of [1,2,3]) s += await x; r = s; } f()`,
+		`r`, "6")
+	checkAsync(t,
+		`var r = ""; async function f() { const a = await 1, b = await 2; r = a + b; } f()`, `r`, "3")
+}

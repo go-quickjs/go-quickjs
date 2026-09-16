@@ -681,6 +681,10 @@ func stackEffect(op bytecode.Op, a, b uint32) int {
 	case bytecode.OpNewClass:
 		// Pops the parent, leaving the constructor.
 		return -1
+	case bytecode.OpYield, bytecode.OpAwait:
+		// Pops the operand and pushes the resumption value.
+		return 0
+
 	case bytecode.OpSetHomeObject, bytecode.OpDefineMethod,
 		bytecode.OpDefinePrivate:
 		return -1

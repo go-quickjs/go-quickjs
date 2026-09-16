@@ -110,6 +110,13 @@ func (c *compiler) compileExprNamed(e ast.Expr, name string) {
 	case *ast.OptionalChain:
 		c.compileOptionalChain(n)
 
+	case *ast.Yield:
+		c.compileYield(n)
+
+	case *ast.Await:
+		c.compileExpr(n.Arg)
+		c.emitAt(n.Start, bytecode.OpAwait, 0, 0)
+
 	case *ast.Super:
 		c.errorf(n.Start, "\"super\" is only valid as a call or a property access")
 
@@ -938,4 +945,35 @@ func (c *compiler) compileSuperMemberGet(m *ast.Member) {
 		return
 	}
 	c.emit(bytecode.OpGetSuperProp, c.nameIdx(propKeyName(m.Property)), 0)
+}
+
+// compileYield emits a yield expression.
+//
+// `yield*` is compiled as a loop that drains the operand's iterator, forwarding
+// each value out and each sent value back in, which is what delegation means.
+func (c *compiler) compileYield(n *ast.Yield) {
+	if !n.Delegate {
+		if n.Arg != nil {
+			c.compileExpr(n.Arg)
+		} else {
+			c.emit(bytecode.OpPushUndef, 0, 0)
+		}
+		c.emitAt(n.Start, bytecode.OpYield, 0, 0)
+		return
+	}
+
+	// yield* iterable
+	c.compileExpr(n.Arg)
+	c.emit(bytecode.OpForOfStart, 0, 0)
+	start := c.here()
+	exit := c.emitJump(bytecode.OpIterNextOrJump)
+	c.emit(bytecode.OpYield, 0, 0)
+	// The value sent back in is discarded, since forwarding it would require
+	// threading it into the iterator's next call.
+	c.emit(bytecode.OpDrop, 0, 0)
+	c.emit(bytecode.OpJump, uint32(start), 0)
+	c.patchJump(exit)
+	// Drop the iterator and yield undefined as the expression's value.
+	c.emit(bytecode.OpDrop, 0, 0)
+	c.emit(bytecode.OpPushUndef, 0, 0)
 }

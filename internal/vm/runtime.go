@@ -57,8 +57,10 @@ type Runtime struct {
 	// for iteration, coercion and instanceof.
 	wellKnown wellKnownSymbols
 
-	// jobs is the promise job queue, drained between turns.
-	jobs []job
+	// microtasks is the promise job queue, drained between turns. Reactions are
+	// never run synchronously: that ordering guarantee is what makes a then
+	// callback observe a consistent world.
+	microtasks []func()
 
 	// rng backs Math.random, created on first use.
 	rng *rand.Rand
@@ -185,6 +187,10 @@ type frame struct {
 	// handlers is the exception handler stack for this frame.
 	handlers []handler
 
+	// savedSP records the operand stack depth at a suspension, so that a
+	// generator saves exactly the live portion of its stack.
+	savedSP int
+
 	// native names the Go function for a frame that is executing native code,
 	// so that stack traces can show it.
 	native string
@@ -198,12 +204,6 @@ type handler struct {
 	stackDepth int
 	// isFinally marks a handler that must re-throw after running.
 	isFinally bool
-}
-
-// job is a queued promise reaction.
-type job struct {
-	fn   *Object
-	args []Value
 }
 
 // errorKind enumerates the standard error constructors.

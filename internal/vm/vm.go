@@ -75,6 +75,18 @@ func (r *Runtime) callObject(o *Object, this Value, args []Value, newTarget Valu
 	if fd.closure == nil {
 		return Undefined, r.throwTypeError("function has no implementation")
 	}
+
+	// A generator or async function does not run its body on call. A generator
+	// returns an object whose next method drives it; an async function starts
+	// immediately but returns a promise at its first await.
+	if fn := fd.closure.fn; isGeneratorTemplate(fn) {
+		gen := r.newGenerator(fd.closure, this, args, o, fn.Async)
+		g := gen.data.(*generator)
+		if fn.Async {
+			return r.runAsync(g), nil
+		}
+		return Obj(gen), nil
+	}
 	return r.run(fd.closure, this, args, newTarget, o)
 }
 
@@ -176,10 +188,20 @@ func (r *Runtime) bindParameters(f *frame, fn *bytecode.Function, args []Value) 
 
 // execute runs the interpreter loop for one frame.
 func (r *Runtime) execute(f *frame) (Value, error) {
+	return r.executeAt(f, f.base, nil)
+}
+
+// executeAt runs the interpreter loop starting from a given operand stack
+// depth, optionally with an exception already pending.
+//
+// The extra parameters exist for generators: resuming one restores its operand
+// stack, so execution starts part-way up, and generator.throw() injects an
+// exception at the suspension point so that a try inside the body can catch it.
+func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error) {
 	cl := f.cl
 	code := cl.fn.Code
 	// sp is the operand stack pointer, an absolute index into r.stack.
-	sp := f.base
+	sp := startSP
 
 	// push and pop are written against the local sp so that the compiler keeps
 	// it in a register; f.base and r.stack do not change during the loop.
@@ -198,6 +220,16 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 	// it because a goto may not jump over a declaration.
 	var vmErr error
 	var in bytecode.Instr
+
+	if pending != nil {
+		// An exception injected at the resumption point unwinds as if it had
+		// been raised by the suspended expression.
+		vmErr = pending
+		if !r.unwindToHandler(f, &sp, vmErr) {
+			return Undefined, vmErr
+		}
+		vmErr = nil
+	}
 
 	for {
 		if err := r.checkInterrupt(); err != nil {
@@ -1084,6 +1116,22 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 				goto onError
 			}
 			push(v)
+
+		// --- Suspension ---------------------------------------------------
+		case bytecode.OpYield, bytecode.OpAwait:
+			// The operand is popped before the depth is recorded, so that the
+			// saved stack holds only what is still live. Recording it first
+			// would save the yielded value too, and the resumption would then
+			// find an extra entry beneath the sent one.
+			yielded := pop()
+			f.savedSP = sp
+			return Undefined, &suspendSignal{
+				value: yielded,
+				await: in.Op == bytecode.OpAwait,
+			}
+		case bytecode.OpInitialYield:
+			f.savedSP = sp
+			return Undefined, &suspendSignal{value: Undefined}
 
 		case bytecode.OpNewTarget:
 			push(f.newTarget)

@@ -166,6 +166,12 @@ func (r *Runtime) EvalContext(ctx context.Context, src string) (Value, error) {
 	if err != nil {
 		return Value{}, r.wrapError(err)
 	}
+	// Promise reactions are queued rather than run synchronously, so the queue
+	// is drained before returning; otherwise a then callback registered by the
+	// script would never run.
+	if err := r.rt.DrainJobs(); err != nil {
+		return Value{}, r.wrapError(err)
+	}
 	return Value{v: v, rt: r.rt}, nil
 }
 
@@ -180,6 +186,9 @@ func (r *Runtime) EvalFile(name, src string) (Value, error) {
 	}
 	v, err := r.rt.Run(fn)
 	if err != nil {
+		return Value{}, r.wrapError(err)
+	}
+	if err := r.rt.DrainJobs(); err != nil {
 		return Value{}, r.wrapError(err)
 	}
 	return Value{v: v, rt: r.rt}, nil
