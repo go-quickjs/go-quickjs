@@ -226,3 +226,41 @@ func TestDefinePropertyValidation(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// A combinator resolves every element through the constructor's own resolve,
+// which is what lets a subclass see each value go past.
+func TestPromiseCombinatorUsesReceiver(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var calls = 0;
+		  class P extends Promise { static resolve(v) { calls++; return super.resolve(v); } }
+		  P.all([1, 2]); String(calls)`, "2"},
+		{`class P extends Promise {} String(P.all([]) instanceof P)`, "true"},
+		{`class P extends Promise {} String(P.race([]) instanceof P)`, "true"},
+		{`class P extends Promise {} String(P.allSettled([]) instanceof P)`, "true"},
+
+		// A plain value still works, and so does a thenable.
+		{`var out; Promise.all([1, Promise.resolve(2)]).then(v => out = v.join(","));
+		  Promise.resolve().then(() => {}).then(() => {}).then(() => String(out))`,
+			"[object Promise]"},
+		{`var out; Promise.resolve({then(res) { res(7); }}).then(v => out = v);
+		  Promise.resolve().then(() => {}).then(() => String(out))`, "[object Promise]"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+
+	// The receiver has to be a constructor with a callable resolve.
+	rt := quickjs.New()
+	defer rt.Close()
+	if _, err := rt.Eval(`Promise.all.call(1, [])`); err == nil {
+		t.Error("Promise.all on a non-constructor should throw")
+	}
+}

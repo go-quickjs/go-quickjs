@@ -477,6 +477,20 @@ func (r *Runtime) promiseCombinator(ctor Value, iterable Value, kind combinatorK
 	settle := func(v Value) { r.call(cap.resolve, Undefined, []Value{v}) }
 	fail := func(v Value) { r.call(cap.reject, Undefined, []Value{v}) }
 
+	// The constructor's own resolve is looked up once, before anything is
+	// iterated, and used for every element. That is what lets a subclass see
+	// each value go past -- and looking it up once means a resolve that
+	// replaces itself mid-iteration does not take effect.
+	resolveFn, err := r.getProp(ctor.Object(), r.atoms.intern("resolve"), ctor)
+	if err != nil {
+		fail(thrownValue(err))
+		return Obj(result), nil
+	}
+	if !isCallable(resolveFn) {
+		fail(thrownValue(r.throwTypeError("the promise constructor has no resolve method")))
+		return Obj(result), nil
+	}
+
 	var items []Value
 	if err := r.iterate(iterable, func(v Value) error {
 		items = append(items, v)
@@ -506,8 +520,22 @@ func (r *Runtime) promiseCombinator(ctor Value, iterable Value, kind combinatorK
 
 	for i, item := range items {
 		idx := i
-		// Every element is coerced to a promise, so a plain value works too.
-		p := r.toPromise(item)
+		// Every element goes through the constructor's resolve, so a plain
+		// value works too and a subclass gets to see it.
+		pv, err := r.call(resolveFn, ctor, []Value{item})
+		if err != nil {
+			fail(thrownValue(err))
+			return Obj(result), nil
+		}
+		thenFn, err := r.getValueProp(pv, r.atoms.intern("then"))
+		if err != nil {
+			fail(thrownValue(err))
+			return Obj(result), nil
+		}
+		if !isCallable(thenFn) {
+			fail(thrownValue(r.throwTypeError("the resolved value is not thenable")))
+			return Obj(result), nil
+		}
 
 		onFulfilled := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
 			v := arg(a, 0)
@@ -556,7 +584,10 @@ func (r *Runtime) promiseCombinator(ctor Value, iterable Value, kind combinatorK
 			return Undefined, nil
 		})
 
-		r.promiseThen(p, Obj(onFulfilled), Obj(onRejected))
+		if _, err := r.call(thenFn, pv, []Value{Obj(onFulfilled), Obj(onRejected)}); err != nil {
+			fail(thrownValue(err))
+			return Obj(result), nil
+		}
 	}
 	return Obj(result), nil
 }
