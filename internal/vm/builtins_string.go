@@ -418,9 +418,6 @@ func (r *Runtime) initStringBuiltins() {
 			}
 			limit = int(n)
 		}
-		if sepVal.IsObject() && sepVal.Object().class == ClassRegExp {
-			return rt.regexpSplit(sepVal, s, limit)
-		}
 		sep, err := rt.toString(sepVal)
 		if err != nil {
 			return Undefined, err

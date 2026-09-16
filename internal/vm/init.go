@@ -121,6 +121,7 @@ func (r *Runtime) initIntrinsics() {
 	r.proto.iterator = newObject(r.proto.object, ClassObject)
 	r.proto.arrayIter = newObject(r.proto.iterator, ClassObject)
 	r.proto.stringIter = newObject(r.proto.iterator, ClassObject)
+	r.proto.regexpStringIter = newObject(r.proto.iterator, ClassObject)
 
 	// Error.prototype and the native error prototypes chained from it.
 	r.proto.err = newObject(r.proto.object, ClassError)

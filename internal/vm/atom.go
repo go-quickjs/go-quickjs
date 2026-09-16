@@ -75,6 +75,7 @@ const (
 	atomToJSON
 	atomThen
 	atomDefault
+	atomExec
 	atomStaticAtomCount
 )
 
@@ -86,7 +87,7 @@ var staticAtomNames = [...]string{
 	"string", "boolean", "symbol", "bigint", "arguments", "caller", "callee",
 	"message", "stack", "__proto__", "next", "done", "return", "throw", "raw",
 	"index", "input", "groups", "lastIndex", "source", "flags", "global",
-	"toJSON", "then", "default",
+	"toJSON", "then", "default", "exec",
 }
 
 // atomEntry is one interned key: either a string or a symbol.

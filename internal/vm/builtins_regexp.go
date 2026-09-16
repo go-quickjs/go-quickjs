@@ -1,7 +1,6 @@
 package vm
 
 import (
-	"math"
 	"strings"
 
 	"github.com/go-quickjs/go-quickjs/internal/regexp"
@@ -87,11 +86,20 @@ func (r *Runtime) initRegExpBuiltins() {
 		return rt.newRegExp(source, flags)
 	})
 	r.defSpecies(reCtor)
+	r.proto.regexpCtor = reCtor
 	r.initRegExpSymbolMethods(p)
 
 	r.defGetter(p, "source", func(rt *Runtime, this Value, args []Value) (Value, error) {
+		if !this.IsObject() {
+			return Undefined, rt.throwTypeError("RegExp.prototype.source called on a non-object")
+		}
 		re, err := rt.regexpOf(this, "RegExp.prototype.source")
 		if err != nil {
+			// RegExp.prototype is itself not a RegExp, and reporting "(?:)"
+			// for it is what keeps String(RegExp.prototype) working.
+			if this.Object() == rt.proto.regexp {
+				return Str(NewString("(?:)")), nil
+			}
 			return Undefined, err
 		}
 		if re.Source() == "" {
@@ -99,50 +107,75 @@ func (r *Runtime) initRegExpBuiltins() {
 			// back to the constructor.
 			return Str(NewString("(?:)")), nil
 		}
-		return Str(NewString(re.Source())), nil
-	})
-	r.defGetter(p, "flags", func(rt *Runtime, this Value, args []Value) (Value, error) {
-		re, err := rt.regexpOf(this, "RegExp.prototype.flags")
-		if err != nil {
-			return Undefined, err
-		}
-		return Str(NewString(re.Flags().String())), nil
+		return Str(NewString(escapeRegExpSource(re.Source()))), nil
 	})
 
-	// Each flag is exposed as its own getter.
-	flagGetters := []struct {
-		name string
-		bit  regexp.Flags
-	}{
-		{"global", regexp.FlagGlobal},
-		{"ignoreCase", regexp.FlagIgnoreCase},
-		{"multiline", regexp.FlagMultiline},
-		{"dotAll", regexp.FlagDotAll},
-		{"unicode", regexp.FlagUnicode},
-		{"sticky", regexp.FlagSticky},
-		{"hasIndices", regexp.FlagHasIndices},
-	}
-	for _, fg := range flagGetters {
+	// flags is assembled from the individual getters rather than from the
+	// compiled pattern, so that overriding one of them is honoured by
+	// everything that reads flags -- which is every method that matches.
+	r.defGetter(p, "flags", func(rt *Runtime, this Value, args []Value) (Value, error) {
+		if !this.IsObject() {
+			return Undefined, rt.throwTypeError("RegExp.prototype.flags called on a non-object")
+		}
+		var sb strings.Builder
+		for _, fg := range regExpFlagNames {
+			v, err := rt.getValueProp(this, rt.atoms.intern(fg.name))
+			if err != nil {
+				return Undefined, err
+			}
+			if v.Truthy() {
+				sb.WriteByte(fg.letter)
+			}
+		}
+		return Str(NewString(sb.String())), nil
+	})
+
+	// Each flag is exposed as its own getter. Read on RegExp.prototype itself,
+	// which carries no pattern, they answer undefined rather than throwing, so
+	// that feature detection does not have to guard every one.
+	for _, fg := range regExpFlagNames {
 		bit, name := fg.bit, fg.name
 		r.defGetter(p, name, func(rt *Runtime, this Value, args []Value) (Value, error) {
 			re, err := rt.regexpOf(this, "RegExp.prototype."+name)
 			if err != nil {
+				if this.IsObject() && this.Object() == rt.proto.regexp {
+					return Undefined, nil
+				}
 				return Undefined, err
 			}
-			return Bool(re.Flags()&bit != 0), nil
+			// The v flag turns on the u behaviour internally, but the two
+			// are alternatives to a script: /a/v.unicode is false.
+			fl := re.Flags()
+			if fl&regexp.FlagUnicodeSets != 0 {
+				fl &^= regexp.FlagUnicode
+			}
+			return Bool(fl&bit != 0), nil
 		})
 	}
 
+	// toString is written against source and flags rather than the pattern, so
+	// that a subclass overriding either is reflected in what it prints.
 	r.defMethod(p, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		re, err := rt.regexpOf(this, "RegExp.prototype.toString")
+		if !this.IsObject() {
+			return Undefined, rt.throwTypeError("RegExp.prototype.toString called on a non-object")
+		}
+		src, err := rt.getValueProp(this, atomSource)
 		if err != nil {
 			return Undefined, err
 		}
-		src := re.Source()
-		if src == "" {
-			src = "(?:)"
+		srcStr, err := rt.toString(src)
+		if err != nil {
+			return Undefined, err
 		}
-		return Str(NewString("/" + src + "/" + re.Flags().String())), nil
+		flags, err := rt.getValueProp(this, atomFlags)
+		if err != nil {
+			return Undefined, err
+		}
+		flagStr, err := rt.toString(flags)
+		if err != nil {
+			return Undefined, err
+		}
+		return Str(NewString("/" + srcStr.Go() + "/" + flagStr.Go())), nil
 	})
 
 	r.defMethod(p, "exec", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -350,363 +383,82 @@ func (r *Runtime) dispatchStringRegExp(this Value, args []Value, sym *Symbol,
 func (r *Runtime) initRegExpSymbolMethods(p *Object) {
 	r.defSymbolMethod(p, r.wellKnown.match, "[Symbol.match]", 1,
 		func(rt *Runtime, this Value, args []Value) (Value, error) {
-			re, err := rt.regexpOf(this, "RegExp.prototype[Symbol.match]")
-			if err != nil {
-				return Undefined, err
-			}
-			s, err := rt.toString(arg(args, 0))
-			if err != nil {
-				return Undefined, err
-			}
-			// Without the global flag, match is exec: one result with its
-			// groups.
-			if re.Flags()&regexp.FlagGlobal == 0 {
-				return rt.regexpExec(this, s)
-			}
-			// With it, match returns every matched substring and no group
-			// information, which is a different shape entirely.
-			this.Object().setOwnRaw(atomLastIndex, Int(0), propWritable)
-			var out []Value
-			err = rt.forEachMatch(re, s, func(units []uint16, caps []int) error {
-				out = append(out, Str(NewString(wtf8.FromUTF16(units[caps[0]:caps[1]]))))
-				return nil
-			})
-			if err != nil {
-				return Undefined, err
-			}
-			if len(out) == 0 {
-				return Null, nil
-			}
-			return Obj(rt.newArrayFrom(out)), nil
+			return rt.regExpSymbolMatch(this, args)
 		})
-
 	r.defSymbolMethod(p, r.wellKnown.matchAll, "[Symbol.matchAll]", 1,
 		func(rt *Runtime, this Value, args []Value) (Value, error) {
-			re, err := rt.regexpOf(this, "RegExp.prototype[Symbol.matchAll]")
-			if err != nil {
-				return Undefined, err
-			}
-			s, err := rt.toString(arg(args, 0))
-			if err != nil {
-				return Undefined, err
-			}
-			// The results are collected up front rather than produced lazily,
-			// which is observable only if lastIndex is mutated mid-iteration.
-			var results []Value
-			units := wtf8.ToUTF16(s.Go())
-			err = rt.forEachMatch(re, s, func(u []uint16, caps []int) error {
-				results = append(results, Obj(rt.buildMatchResult(re, units, caps, s)))
-				return nil
-			})
-			if err != nil {
-				return Undefined, err
-			}
-			return rt.newArrayIterator(Obj(rt.newArrayFrom(results)))
+			return rt.regExpSymbolMatchAll(this, args)
 		})
-
 	r.defSymbolMethod(p, r.wellKnown.search, "[Symbol.search]", 1,
 		func(rt *Runtime, this Value, args []Value) (Value, error) {
-			re, err := rt.regexpOf(this, "RegExp.prototype[Symbol.search]")
-			if err != nil {
-				return Undefined, err
-			}
-			s, err := rt.toString(arg(args, 0))
-			if err != nil {
-				return Undefined, err
-			}
-			caps, err := re.Match(wtf8.ToUTF16(s.Go()), 0)
-			if err != nil {
-				return Undefined, rt.throwError(errSyntax, "%s", err.Error())
-			}
-			if caps == nil {
-				return Int(-1), nil
-			}
-			return Int(caps[0]), nil
+			return rt.regExpSymbolSearch(this, args)
 		})
-
 	r.defSymbolMethod(p, r.wellKnown.split, "[Symbol.split]", 2,
 		func(rt *Runtime, this Value, args []Value) (Value, error) {
-			if _, err := rt.regexpOf(this, "RegExp.prototype[Symbol.split]"); err != nil {
-				return Undefined, err
-			}
-			s, err := rt.toString(arg(args, 0))
-			if err != nil {
-				return Undefined, err
-			}
-			limit := math.MaxInt32
-			if lv := arg(args, 1); !lv.IsUndefined() {
-				n, err := rt.toUint32(lv)
-				if err != nil {
-					return Undefined, err
-				}
-				limit = int(n)
-			}
-			return rt.regexpSplit(this, s, limit)
+			return rt.regExpSymbolSplit(this, args)
 		})
-
 	r.defSymbolMethod(p, r.wellKnown.replace, "[Symbol.replace]", 2,
 		func(rt *Runtime, this Value, args []Value) (Value, error) {
-			if _, err := rt.regexpOf(this, "RegExp.prototype[Symbol.replace]"); err != nil {
-				return Undefined, err
-			}
-			s, err := rt.toString(arg(args, 0))
-			if err != nil {
-				return Undefined, err
-			}
-			// The global flag decides whether every match is replaced, so
-			// the caller does not have to say.
-			re, _ := rt.regexpOf(this, "")
-			all := re.Flags()&regexp.FlagGlobal != 0
-			return rt.regexpReplace(this, s, arg(args, 1), all)
+			return rt.regExpSymbolReplace(this, args)
 		})
+
+	// The iterator matchAll returns has its own prototype, so that adding a
+	// method to it does not add one to every array iterator.
+	r.defToStringTag(r.proto.regexpStringIter, "RegExp String Iterator")
 }
 
-// forEachMatch walks every non-overlapping match of a global pattern.
+// regExpFlagNames pairs each flag's property name with the letter it
+// contributes to the flags string, in the order the string uses.
+var regExpFlagNames = []struct {
+	name   string
+	letter byte
+	bit    regexp.Flags
+}{
+	{"hasIndices", 'd', regexp.FlagHasIndices},
+	{"global", 'g', regexp.FlagGlobal},
+	{"ignoreCase", 'i', regexp.FlagIgnoreCase},
+	{"multiline", 'm', regexp.FlagMultiline},
+	{"dotAll", 's', regexp.FlagDotAll},
+	{"unicode", 'u', regexp.FlagUnicode},
+	{"unicodeSets", 'v', regexp.FlagUnicodeSets},
+	{"sticky", 'y', regexp.FlagSticky},
+}
+
+// escapeRegExpSource makes a pattern safe to sit between two slashes.
 //
-// An empty match advances the position by one, which is what stops a pattern
-// like /a*/g from looping forever on a string it matches emptily.
-func (r *Runtime) forEachMatch(re *regexp.Regexp, s *String, fn func([]uint16, []int) error) error {
-	units := wtf8.ToUTF16(s.Go())
-	pos := 0
-	for pos <= len(units) {
-		caps, err := re.Match(units, pos)
-		if err != nil {
-			return r.throwError(errSyntax, "%s", err.Error())
-		}
-		if caps == nil {
-			return nil
-		}
-		if err := fn(units, caps); err != nil {
-			return err
-		}
-		if caps[1] == caps[0] {
-			pos = caps[1] + 1
-			continue
-		}
-		pos = caps[1]
+// A literal cannot contain an unescaped slash or line terminator, so a pattern
+// built by the constructor from a string that does has to be escaped before it
+// can be printed -- otherwise new RegExp("/") would print as /// and not parse
+// back.
+func escapeRegExpSource(src string) string {
+	if !strings.ContainsAny(src, "/\n\r\u2028\u2029") {
+		return src
 	}
-	return nil
-}
-
-// regexpReplace implements String.prototype.replace and replaceAll when the
-// pattern is a regular expression.
-func (r *Runtime) regexpReplace(reVal Value, s *String, repl Value, all bool) (Value, error) {
-	re, err := r.regexpOf(reVal, "String.prototype.replace")
-	if err != nil {
-		return Undefined, err
-	}
-	global := all || re.Flags()&regexp.FlagGlobal != 0
-
-	units := wtf8.ToUTF16(s.Go())
 	var sb strings.Builder
-	last := 0
-	pos := 0
-
-	for pos <= len(units) {
-		caps, err := re.Match(units, pos)
-		if err != nil {
-			return Undefined, r.throwError(errSyntax, "%s", err.Error())
-		}
-		if caps == nil {
-			break
-		}
-		sb.WriteString(wtf8.FromUTF16(units[last:caps[0]]))
-
-		text, err := r.expandReplacement(re, units, caps, s, repl)
-		if err != nil {
-			return Undefined, err
-		}
-		sb.WriteString(text)
-		last = caps[1]
-
-		if !global {
-			break
-		}
-		if caps[1] == caps[0] {
-			// An empty match must advance, or the loop would not terminate.
-			if caps[1] < len(units) {
-				sb.WriteString(wtf8.FromUTF16(units[caps[1] : caps[1]+1]))
-			}
-			last = caps[1] + 1
-			pos = caps[1] + 1
+	escaped := false
+	for _, c := range src {
+		switch {
+		case escaped:
+			sb.WriteRune(c)
+			escaped = false
 			continue
-		}
-		pos = caps[1]
-	}
-
-	if last < len(units) {
-		sb.WriteString(wtf8.FromUTF16(units[last:]))
-	}
-	if global {
-		reVal.Object().setOwnRaw(atomLastIndex, Int(0), propWritable)
-	}
-	return Str(NewString(sb.String())), nil
-}
-
-// expandReplacement produces the text one match is replaced with.
-func (r *Runtime) expandReplacement(re *regexp.Regexp, units []uint16, caps []int, input *String, repl Value) (string, error) {
-	n := len(caps) / 2
-
-	if isCallable(repl) {
-		// A replacement function receives the match, each group, the offset and
-		// the whole input.
-		callArgs := make([]Value, 0, n+2)
-		for i := 0; i < n; i++ {
-			lo, hi := caps[2*i], caps[2*i+1]
-			if lo < 0 {
-				callArgs = append(callArgs, Undefined)
-				continue
-			}
-			callArgs = append(callArgs, Str(NewString(wtf8.FromUTF16(units[lo:hi]))))
-		}
-		callArgs = append(callArgs, Int(caps[0]), Str(input))
-		res, err := r.call(repl, Undefined, callArgs)
-		if err != nil {
-			return "", err
-		}
-		s, err := r.toString(res)
-		if err != nil {
-			return "", err
-		}
-		return s.Go(), nil
-	}
-
-	s, err := r.toString(repl)
-	if err != nil {
-		return "", err
-	}
-	return r.expandDollarPatterns(s.Go(), re, units, caps), nil
-}
-
-// expandDollarPatterns substitutes the $ forms in a replacement string.
-func (r *Runtime) expandDollarPatterns(repl string, re *regexp.Regexp, units []uint16, caps []int) string {
-	if !strings.ContainsRune(repl, '$') {
-		return repl
-	}
-	n := len(caps) / 2
-	group := func(i int) string {
-		if i < 0 || i >= n {
-			return ""
-		}
-		lo, hi := caps[2*i], caps[2*i+1]
-		if lo < 0 {
-			return ""
-		}
-		return wtf8.FromUTF16(units[lo:hi])
-	}
-
-	var sb strings.Builder
-	for i := 0; i < len(repl); i++ {
-		if repl[i] != '$' || i+1 >= len(repl) {
-			sb.WriteByte(repl[i])
+		case c == '\\':
+			sb.WriteRune(c)
+			escaped = true
 			continue
-		}
-		switch c := repl[i+1]; {
-		case c == '$':
-			sb.WriteByte('$')
-			i++
-		case c == '&':
-			sb.WriteString(group(0))
-			i++
-		case c == '`':
-			sb.WriteString(wtf8.FromUTF16(units[:caps[0]]))
-			i++
-		case c == '\'':
-			sb.WriteString(wtf8.FromUTF16(units[caps[1]:]))
-			i++
-		case c == '<':
-			// A named group reference.
-			end := strings.IndexByte(repl[i+2:], '>')
-			if end < 0 {
-				sb.WriteByte('$')
-				continue
-			}
-			name := repl[i+2 : i+2+end]
-			if idx, ok := re.GroupNames()[name]; ok {
-				sb.WriteString(group(idx))
-			}
-			i += 2 + end
-		case c >= '0' && c <= '9':
-			// Two digits are preferred when they name a real group, so $12
-			// means group 12 if it exists and group 1 followed by "2" if not.
-			idx := int(c - '0')
-			consumed := 1
-			if i+2 < len(repl) && repl[i+2] >= '0' && repl[i+2] <= '9' {
-				two := idx*10 + int(repl[i+2]-'0')
-				if two < n {
-					idx = two
-					consumed = 2
-				}
-			}
-			if idx == 0 || idx >= n {
-				sb.WriteByte('$')
-				continue
-			}
-			sb.WriteString(group(idx))
-			i += consumed
+		case c == '/':
+			sb.WriteString("\\/")
+		case c == '\n':
+			sb.WriteString("\\n")
+		case c == '\r':
+			sb.WriteString("\\r")
+		case c == '\u2028':
+			sb.WriteString("\\u2028")
+		case c == '\u2029':
+			sb.WriteString("\\u2029")
 		default:
-			sb.WriteByte('$')
+			sb.WriteRune(c)
 		}
 	}
 	return sb.String()
-}
-
-// regexpSplit implements String.prototype.split with a pattern separator.
-func (r *Runtime) regexpSplit(reVal Value, s *String, limit int) (Value, error) {
-	re, err := r.regexpOf(reVal, "String.prototype.split")
-	if err != nil {
-		return Undefined, err
-	}
-	units := wtf8.ToUTF16(s.Go())
-	var out []Value
-
-	if len(units) == 0 {
-		// Splitting an empty string yields one empty piece unless the pattern
-		// matches it, in which case it yields none.
-		caps, err := re.Match(units, 0)
-		if err != nil {
-			return Undefined, r.throwError(errSyntax, "%s", err.Error())
-		}
-		if caps == nil {
-			out = append(out, Str(s))
-		}
-		return Obj(r.newArrayFrom(out)), nil
-	}
-
-	last := 0
-	pos := 0
-	for pos < len(units) && len(out) < limit {
-		caps, err := re.Match(units, pos)
-		if err != nil {
-			return Undefined, r.throwError(errSyntax, "%s", err.Error())
-		}
-		if caps == nil || caps[0] >= len(units) {
-			break
-		}
-		if caps[1] == last {
-			// A separator that matches emptily at the current position would
-			// not make progress.
-			pos++
-			continue
-		}
-		out = append(out, Str(NewString(wtf8.FromUTF16(units[last:caps[0]]))))
-		// A capturing separator contributes its groups to the result.
-		for i := 1; i < len(caps)/2 && len(out) < limit; i++ {
-			lo, hi := caps[2*i], caps[2*i+1]
-			if lo < 0 {
-				out = append(out, Undefined)
-				continue
-			}
-			out = append(out, Str(NewString(wtf8.FromUTF16(units[lo:hi]))))
-		}
-		last = caps[1]
-		pos = caps[1]
-		if caps[1] == caps[0] {
-			pos++
-		}
-	}
-	if len(out) < limit {
-		out = append(out, Str(NewString(wtf8.FromUTF16(units[last:]))))
-	}
-	return Obj(r.newArrayFrom(out)), nil
 }

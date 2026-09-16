@@ -141,6 +141,10 @@ type intrinsics struct {
 	iterator       *Object
 	arrayIter      *Object
 	stringIter     *Object
+	// regexpStringIter is the prototype matchAll's iterator inherits from.
+	regexpStringIter *Object
+	// regexpCtor is %RegExp%, the fallback when a species lookup finds none.
+	regexpCtor *Object
 
 	// nativeErrors are the prototypes of TypeError, RangeError and friends,
 	// indexed by errorKind.
