@@ -16,8 +16,9 @@ fmt.Println(v) // 2-4-6
 
 The language is substantially complete: expressions, closures, classes with
 inheritance and private members, destructuring, generators, `async`/`await`,
-Promises, regular expressions, modules, Proxy and typed arrays all work, and
-are exercised against [test262], the official ECMAScript conformance suite.
+Promises, regular expressions, modules with top-level `await`, Proxy and typed
+arrays all work, and are exercised against [test262], the official ECMAScript
+conformance suite.
 
 It is not finished. See [Conformance](#conformance) for measured coverage and
 [Not implemented](#not-implemented) for the known gaps.
@@ -36,18 +37,17 @@ It is not finished. See [Conformance](#conformance) for measured coverage and
 | Iteration | Iterator protocol, spread, generators, `yield*` |
 | Asynchrony | `Promise` with correct microtask ordering, `async`/`await` |
 | Regular expressions | Backtracking engine: backreferences, lookahead, lookbehind, named groups, Unicode property escapes |
-| Modules | `import`/`export`, live bindings, cycles, namespace imports |
-| Built-ins | `Object`, `Function`, `Array`, `String`, `Number`, `Boolean`, `Symbol`, `BigInt`, `Error`, `Math`, `JSON`, `Date`, `RegExp`, `Map`, `Set`, `WeakMap`, `WeakSet`, `Promise`, `Proxy`, `Reflect`, `ArrayBuffer`, typed arrays |
+| Modules | `import`/`export`, live bindings, cycles, namespace imports, dynamic `import()`, top-level `await` |
+| Iterator helpers | `map`, `filter`, `take`, `drop`, `flatMap`, `reduce`, `toArray` and the rest, lazily |
+| Built-ins | `Object`, `Function`, `Array`, `String`, `Number`, `Boolean`, `Symbol`, `BigInt`, `Error`, `Math`, `JSON`, `Date`, `RegExp`, `Map`, `Set`, `WeakMap`, `WeakSet`, `WeakRef`, `FinalizationRegistry`, `Promise`, `Proxy`, `Reflect`, `ArrayBuffer`, `DataView`, typed arrays |
+| Recent additions | Set operations, `Array.fromAsync`, `Object.groupBy`, `Promise.try`, `RegExp.escape`, `Error.isError`, `Math.sumPrecise`, `Uint8Array` base64 and hex |
 | Go interop | Function binding, marshalling, `context.Context` cancellation |
 
 ### Not implemented
 
-`Intl`, `Temporal`, `Atomics`, `SharedArrayBuffer`, `WeakRef`,
-`FinalizationRegistry`, `ShadowRealm`, decorators, `DataView`, resizable
-ArrayBuffers, iterator helpers, and the newer proposals test262 tracks.
-
-`eval` and the `Function` constructor are deliberately disabled — see
-[Sandboxing](#sandboxing).
+`Intl`, `Temporal`, `Atomics`, `SharedArrayBuffer`, `ShadowRealm`, decorators,
+resizable ArrayBuffers, `using` declarations, and the newer proposals test262
+tracks.
 
 Known semantic gaps, each covered by a test that documents it:
 
@@ -56,9 +56,15 @@ Known semantic gaps, each covered by a test that documents it:
   forward to them.
 - A top-level `let` or `const` in a script does not persist across `Eval` calls;
   a top-level `var` does.
-- `super()` runs the parent constructor against an instance created up front,
-  rather than receiving `this` from it. The two agree except where a base
-  constructor returns an object of its own.
+- `WeakRef` holds its target strongly and `FinalizationRegistry` never calls
+  back. Go's collector has no hook that would let them do otherwise, and the
+  specification never requires that anything be collected — only that a
+  collected target stop being observable. The cost is retention, not wrong
+  answers.
+- `Script_Extensions` in a regular expression answers with the plain `Script`
+  table, which differs only for code points a second script borrows, and the
+  emoji property escapes resolve to the symbol categories their characters live
+  in. Go ships neither data set.
 
 ## Conformance
 
@@ -160,9 +166,13 @@ copy taken at link time.
 
 A runtime has no I/O, no network access, no timers, no filesystem and no module
 loader unless the host adds them. There is no `require`, no `process`, no
-`fetch`. The `Function` constructor is disabled, so a script cannot compile new
-code from a string and escape static review. `Date` reads the clock through an
-injectable hook rather than the process clock.
+`fetch`. `Date` reads the clock through an injectable hook rather than the
+process clock.
+
+`WithoutCodeGeneration()` removes `eval` and the `Function` constructor. Neither
+grants a script a capability it does not already have — code it could `eval`, it
+could also write inline — but both defeat review of the source a host is about
+to run, which matters when that source is audited before use.
 
 Bounds are set at construction:
 
@@ -177,7 +187,9 @@ rt := quickjs.New(
 Runaway recursion raises a catchable `RangeError` rather than overflowing the
 goroutine stack. Deeply nested source is rejected at parse time for the same
 reason — a goroutine stack overflow cannot be caught, so it would take the host
-down.
+down. A panic anywhere inside the engine is caught at the `Eval` boundary and
+returned as `ErrInternal`: a host running untrusted code must not be taken down
+by the code it is sandboxing.
 
 Wall-clock bounds come from a `context.Context`, which the interpreter polls as
 it executes, so an infinite loop is interrupted rather than hanging the process:
@@ -242,14 +254,29 @@ body, so at suspension its frame is the top of the stack.
 **Promise reactions never run synchronously.** Settling queues them; the queue
 drains between turns. That ordering guarantee is the point of the design.
 
+**The Array methods read through the property protocol, not the element
+slice.** Nearly all of them are generic — `Array.prototype.map.call(arguments,
+f)` is supposed to work — and a hole has to fall through to the prototype while
+an index redefined as an accessor has to be called. There is a fast path for the
+case that dominates, a dense array whose element really is there: such an
+element shadows anything on the prototype and cannot be an accessor, so taking
+it directly is not observable.
+
+**An arrow function captures its surroundings when the closure is made.** It has
+no `this`, `new.target`, `super` or `arguments` of its own, so they are read
+from the creating frame and the arrow ignores whatever its own call supplies.
+Nesting needs no extra work: an arrow created inside another has already
+inherited them.
+
 ## Benchmarks
 
 On an Apple M5 Max:
 
 ```
+BenchmarkEvalArithmetic-18  1.22µs/op   2632 B/op    23 allocs/op
 BenchmarkFibonacci-18        806µs/op     24 B/op     1 allocs/op
-BenchmarkPropertyAccess-18  1.78µs/op   3352 B/op    28 allocs/op
-BenchmarkCallGoFunction-18  1.34µs/op   3104 B/op    33 allocs/op
+BenchmarkPropertyAccess-18  1.79µs/op   3416 B/op    29 allocs/op
+BenchmarkCallGoFunction-18  1.41µs/op   3200 B/op    34 allocs/op
 ```
 
 `fib(20)` costs one allocation because the interpreter loop allocates nothing
