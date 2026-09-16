@@ -51,6 +51,10 @@ const (
 	bindConst
 	bindParam
 	bindFunction
+	// bindFunctionLexical is an async or generator function declared inside a
+	// block. Annex B's tolerance of a repeated function declaration covers only
+	// plain ones, so these collide like any other lexical binding.
+	bindFunctionLexical
 	// bindCatch is a catch clause's parameter, which behaves like let but may
 	// be shadowed by a var of the same name.
 	bindCatch
@@ -427,11 +431,22 @@ func (c *compiler) endScope() {
 // declare adds a binding to the current scope and returns its slot.
 func (c *compiler) declare(name string, kind bindKind, pos int) uint32 {
 	// A redeclaration in the same scope is an error for lexical bindings.
-	if kind != bindVar && kind != bindFunction {
+	// A function declaration inside a block is a lexical binding and collides
+	// like one. At a function's own top level it is var-scoped instead, which
+	// is why `function f(){} function f(){}` is legal there and not in a block.
+	lexicalFn := (kind == bindFunction || kind == bindFunctionLexical) && c.depth > 0
+	if (kind != bindVar && kind != bindFunction && kind != bindFunctionLexical) || lexicalFn {
 		for i := len(c.locals) - 1; i >= 0 && c.locals[i].depth == c.depth; i-- {
-			if c.locals[i].name == name {
-				c.errorf(pos, "identifier %q has already been declared", name)
+			if c.locals[i].name != name {
+				continue
 			}
+			// Two plain function declarations in one sloppy-mode block name the
+			// same binding rather than colliding, which Annex B requires and
+			// the web depends on.
+			if !c.fn.Strict && kind == bindFunction && c.locals[i].kind == bindFunction {
+				return c.locals[i].slot
+			}
+			c.errorf(pos, "identifier %q has already been declared", name)
 		}
 	}
 	// A `var` that names an existing binding in the same function reuses it.
@@ -449,11 +464,12 @@ func (c *compiler) declare(name string, kind bindKind, pos int) uint32 {
 	slot := c.nextSlot
 	c.nextSlot++
 	c.locals = append(c.locals, localVar{
-		name:        name,
-		kind:        kind,
-		slot:        slot,
-		depth:       c.depth,
-		initialized: kind == bindVar || kind == bindParam || kind == bindFunction,
+		name:  name,
+		kind:  kind,
+		slot:  slot,
+		depth: c.depth,
+		initialized: kind == bindVar || kind == bindParam ||
+			kind == bindFunction || kind == bindFunctionLexical,
 	})
 	return slot
 }

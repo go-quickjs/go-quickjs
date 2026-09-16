@@ -51,7 +51,11 @@ func (c *compiler) predeclareFunction(fd *ast.FuncDecl) {
 		c.emit(bytecode.OpDefineGlobalFunc, c.nameIdx(name), 0)
 		return
 	}
-	slot := c.declare(name, bindFunction, fd.Start)
+	kind := bindFunction
+	if fd.Fn.Async || fd.Fn.Generator {
+		kind = bindFunctionLexical
+	}
+	slot := c.declare(name, kind, fd.Start)
 	c.emit(bytecode.OpSetLocal, slot, 0)
 }
 

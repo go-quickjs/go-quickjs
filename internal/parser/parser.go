@@ -327,6 +327,13 @@ func (p *parser) checkLexicalBindingName(name string, tok lexer.Token) {
 
 // checkBindingName rejects names that cannot be bound in the current context.
 func (p *parser) checkBindingName(name string, tok lexer.Token) {
+	// A reserved word written with an escape lexes as an identifier, because
+	// `\u0069f` is not the keyword `if`. It is still not a legal identifier
+	// though -- the restriction is on the name, not on how it was spelled --
+	// so it is caught here rather than by the keyword check.
+	if lexer.IsReservedWord(name) {
+		p.errorAt(tok, "%q is a reserved word", name)
+	}
 	if p.strict {
 		switch name {
 		case "eval", "arguments":
