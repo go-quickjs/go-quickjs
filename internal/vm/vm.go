@@ -827,7 +827,12 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				vmErr = err
 				goto onError
 			}
-			push(Bool(r.hasProp(obj.Object(), k)))
+			has, err := r.hasPropErr(obj.Object(), k)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			push(Bool(has))
 		case bytecode.OpInstanceOf:
 			ctor, obj := pop(), pop()
 			ok, err := r.instanceOf(obj, ctor)

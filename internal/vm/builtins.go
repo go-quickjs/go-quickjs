@@ -172,24 +172,33 @@ func (r *Runtime) initObjectBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		if o.proto == nil {
-			return Null, nil
+		if p := proxyOf(o); p != nil {
+			return rt.proxyGetPrototypeOf(p)
 		}
-		return Obj(o.proto), nil
+		return protoValue(o), nil
 	})
 
 	r.defMethod(ctor, "setPrototypeOf", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		target := arg(args, 0)
+		proto := arg(args, 1)
+		if !proto.IsObject() && !proto.IsNull() {
+			return Undefined, rt.throwTypeError("the prototype must be an object or null")
+		}
 		if !target.IsObject() {
 			return target, nil
 		}
-		switch pv := arg(args, 1); {
-		case pv.IsObject():
-			target.Object().proto = pv.Object()
-		case pv.IsNull():
-			target.Object().proto = nil
-		default:
-			return Undefined, rt.throwTypeError("the prototype must be an object or null")
+		if p := proxyOf(target.Object()); p != nil {
+			ok, err := rt.proxySetPrototypeOf(p, proto)
+			if err != nil {
+				return Undefined, err
+			}
+			if !ok {
+				return Undefined, rt.throwTypeError("cannot set the prototype of this object")
+			}
+			return target, nil
+		}
+		if !setProtoOf(target.Object(), proto) {
+			return Undefined, rt.throwTypeError("cannot set the prototype of a non-extensible object")
 		}
 		return target, nil
 	})
@@ -202,6 +211,18 @@ func (r *Runtime) initObjectBuiltins() {
 		key, err := rt.toPropertyKey(arg(args, 1))
 		if err != nil {
 			return Undefined, err
+		}
+		if p := proxyOf(target.Object()); p != nil {
+			ok, err := rt.proxyDefineProperty(p, key, arg(args, 2))
+			if err != nil {
+				return Undefined, err
+			}
+			if !ok {
+				return Undefined, rt.throwTypeError(
+					"the proxy \"defineProperty\" trap returned false for %q",
+					rt.atoms.name(key))
+			}
+			return target, nil
 		}
 		// A function's name and length are synthesized on demand, so they have
 		// to exist before a redefinition can be checked against them.
@@ -244,6 +265,9 @@ func (r *Runtime) initObjectBuiltins() {
 		key, err := rt.toPropertyKey(arg(args, 1))
 		if err != nil {
 			return Undefined, err
+		}
+		if p := proxyOf(o); p != nil {
+			return rt.proxyGetOwnPropertyDescriptor(p, key)
 		}
 		return rt.describeProperty(o, key), nil
 	})
@@ -298,15 +322,34 @@ func (r *Runtime) initObjectBuiltins() {
 	})
 
 	r.defMethod(ctor, "preventExtensions", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		if v := arg(args, 0); v.IsObject() {
-			v.Object().flags &^= objExtensible
+		v := arg(args, 0)
+		if !v.IsObject() {
+			return v, nil
 		}
-		return arg(args, 0), nil
+		if p := proxyOf(v.Object()); p != nil {
+			ok, err := rt.proxyPreventExtensions(p)
+			if err != nil {
+				return Undefined, err
+			}
+			if !ok {
+				return Undefined, rt.throwTypeError("cannot prevent extensions on this object")
+			}
+			return v, nil
+		}
+		v.Object().flags &^= objExtensible
+		return v, nil
 	})
 
 	r.defMethod(ctor, "isExtensible", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		v := arg(args, 0)
-		return Bool(v.IsObject() && v.Object().IsExtensible()), nil
+		if !v.IsObject() {
+			return False, nil
+		}
+		if p := proxyOf(v.Object()); p != nil {
+			ok, err := rt.proxyIsExtensible(p)
+			return Bool(ok), err
+		}
+		return Bool(v.Object().IsExtensible()), nil
 	})
 
 	r.defMethod(ctor, "is", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {

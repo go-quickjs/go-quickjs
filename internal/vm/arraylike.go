@@ -111,10 +111,7 @@ func (a *arrayLike) has(r *Runtime, i int64) (bool, error) {
 	if _, fast := a.dense(i); fast {
 		return true, nil
 	}
-	if p := proxyOf(a.o); p != nil {
-		return r.proxyHas(p, r.indexKey(i))
-	}
-	return r.hasProp(a.o, r.indexKey(i)), nil
+	return r.hasPropErr(a.o, r.indexKey(i))
 }
 
 // at reads the index, reporting whether it was present at all.

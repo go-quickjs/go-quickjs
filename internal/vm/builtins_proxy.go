@@ -99,6 +99,16 @@ func (r *Runtime) proxyHas(p *proxyData, key Atom) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	if !res.Truthy() {
+		// A property that cannot be deleted cannot be denied either.
+		if prop := p.target.getOwnVisible(key); prop != nil {
+			if prop.flags&propConfigurable == 0 || !p.target.IsExtensible() {
+				return false, r.throwTypeError(
+					"the proxy \"has\" trap denied the non-configurable property %q",
+					r.atoms.name(key))
+			}
+		}
+	}
 	return res.Truthy(), nil
 }
 
@@ -114,6 +124,13 @@ func (r *Runtime) proxyDelete(p *proxyData, key Atom, strict bool) (bool, error)
 	res, err := r.call(fn, Obj(p.handler), []Value{Obj(p.target), r.keyToValue(key)})
 	if err != nil {
 		return false, err
+	}
+	if res.Truthy() {
+		if prop := p.target.getOwnVisible(key); prop != nil && prop.flags&propConfigurable == 0 {
+			return false, r.throwTypeError(
+				"the proxy \"deleteProperty\" trap deleted the non-configurable property %q",
+				r.atoms.name(key))
+		}
 	}
 	return res.Truthy(), nil
 }
@@ -136,14 +153,243 @@ func (r *Runtime) proxyOwnKeys(p *proxyData) ([]Atom, error) {
 		return nil, err
 	}
 	keys := make([]Atom, 0, len(items))
+	seen := make(map[Atom]bool, len(items))
 	for _, it := range items {
+		// Only a property key is a property key: a number in the list is a
+		// mistake rather than something to coerce.
+		if !it.IsString() && !it.IsSymbol() {
+			return nil, r.throwTypeError(
+				"the proxy \"ownKeys\" trap must return strings and symbols")
+		}
 		k, err := r.toPropertyKey(it)
 		if err != nil {
 			return nil, err
 		}
+		if seen[k] {
+			return nil, r.throwTypeError(
+				"the proxy \"ownKeys\" trap returned %q twice", r.atoms.name(k))
+		}
+		seen[k] = true
 		keys = append(keys, k)
 	}
+
+	// A key that cannot be deleted has to be listed, and a non-extensible
+	// target's list has to be exactly its own.
+	for _, k := range p.target.ownKeys(true, r.atoms) {
+		if seen[k] {
+			continue
+		}
+		if prop := p.target.getOwnVisible(k); prop != nil && prop.flags&propConfigurable == 0 {
+			return nil, r.throwTypeError(
+				"the proxy \"ownKeys\" trap omitted the non-configurable property %q",
+				r.atoms.name(k))
+		}
+		if !p.target.IsExtensible() {
+			return nil, r.throwTypeError(
+				"the proxy \"ownKeys\" trap omitted a property of a non-extensible target")
+		}
+	}
+	if !p.target.IsExtensible() {
+		own := make(map[Atom]bool)
+		for _, k := range p.target.ownKeys(true, r.atoms) {
+			own[k] = true
+		}
+		for _, k := range keys {
+			if !own[k] {
+				return nil, r.throwTypeError(
+					"the proxy \"ownKeys\" trap invented %q on a non-extensible target",
+					r.atoms.name(k))
+			}
+		}
+	}
 	return keys, nil
+}
+
+// The invariants.
+//
+// A trap may lie, but not about anything a caller could already have observed
+// and relied on. A non-configurable property cannot be made to disappear, a
+// non-extensible object cannot gain one, and a prototype that cannot change
+// cannot be reported as something else. Enforcing that is most of what
+// separates a proxy from an object with clever getters, and is why each trap
+// below compares its answer against the target before returning it.
+
+// proxyGetPrototypeOf implements the getPrototypeOf trap.
+func (r *Runtime) proxyGetPrototypeOf(p *proxyData) (Value, error) {
+	fn, ok, err := r.trap(p, "getPrototypeOf")
+	if err != nil {
+		return Undefined, err
+	}
+	if !ok {
+		return protoValue(p.target), nil
+	}
+	res, err := r.call(fn, Obj(p.handler), []Value{Obj(p.target)})
+	if err != nil {
+		return Undefined, err
+	}
+	if !res.IsObject() && !res.IsNull() {
+		return Undefined, r.throwTypeError(
+			"the proxy \"getPrototypeOf\" trap must return an object or null")
+	}
+	// A target that can still change its prototype may be reported as
+	// anything; one that cannot must be reported truthfully.
+	if !p.target.IsExtensible() && !res.SameValue(protoValue(p.target)) {
+		return Undefined, r.throwTypeError(
+			"the proxy \"getPrototypeOf\" trap disagrees with a non-extensible target")
+	}
+	return res, nil
+}
+
+// proxySetPrototypeOf implements the setPrototypeOf trap.
+func (r *Runtime) proxySetPrototypeOf(p *proxyData, proto Value) (bool, error) {
+	fn, ok, err := r.trap(p, "setPrototypeOf")
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return setProtoOf(p.target, proto), nil
+	}
+	res, err := r.call(fn, Obj(p.handler), []Value{Obj(p.target), proto})
+	if err != nil {
+		return false, err
+	}
+	if !res.Truthy() {
+		return false, nil
+	}
+	if !p.target.IsExtensible() && !proto.SameValue(protoValue(p.target)) {
+		return false, r.throwTypeError(
+			"the proxy \"setPrototypeOf\" trap changed the prototype of a non-extensible target")
+	}
+	return true, nil
+}
+
+// proxyIsExtensible implements the isExtensible trap.
+func (r *Runtime) proxyIsExtensible(p *proxyData) (bool, error) {
+	fn, ok, err := r.trap(p, "isExtensible")
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return p.target.IsExtensible(), nil
+	}
+	res, err := r.call(fn, Obj(p.handler), []Value{Obj(p.target)})
+	if err != nil {
+		return false, err
+	}
+	// Extensibility is not something a proxy may misreport at all: a caller
+	// that saw an object as sealed must not later see it as open.
+	if res.Truthy() != p.target.IsExtensible() {
+		return false, r.throwTypeError(
+			"the proxy \"isExtensible\" trap disagrees with its target")
+	}
+	return res.Truthy(), nil
+}
+
+// proxyPreventExtensions implements the preventExtensions trap.
+func (r *Runtime) proxyPreventExtensions(p *proxyData) (bool, error) {
+	fn, ok, err := r.trap(p, "preventExtensions")
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		p.target.flags &^= objExtensible
+		return true, nil
+	}
+	res, err := r.call(fn, Obj(p.handler), []Value{Obj(p.target)})
+	if err != nil {
+		return false, err
+	}
+	if res.Truthy() && p.target.IsExtensible() {
+		return false, r.throwTypeError(
+			"the proxy \"preventExtensions\" trap reported success on an extensible target")
+	}
+	return res.Truthy(), nil
+}
+
+// proxyGetOwnPropertyDescriptor implements the getOwnPropertyDescriptor trap.
+func (r *Runtime) proxyGetOwnPropertyDescriptor(p *proxyData, key Atom) (Value, error) {
+	fn, ok, err := r.trap(p, "getOwnPropertyDescriptor")
+	if err != nil {
+		return Undefined, err
+	}
+	if !ok {
+		return r.describeProperty(p.target, key), nil
+	}
+	res, err := r.call(fn, Obj(p.handler), []Value{Obj(p.target), r.keyToValue(key)})
+	if err != nil {
+		return Undefined, err
+	}
+	if !res.IsObject() && !res.IsUndefined() {
+		return Undefined, r.throwTypeError(
+			"the proxy \"getOwnPropertyDescriptor\" trap must return an object or undefined")
+	}
+	target := p.target.getOwnVisible(key)
+	if res.IsUndefined() {
+		// A property that cannot be deleted cannot be hidden either, and one
+		// cannot be removed from a non-extensible object.
+		if target != nil && target.flags&propConfigurable == 0 {
+			return Undefined, r.throwTypeError(
+				"the proxy \"getOwnPropertyDescriptor\" trap hid the non-configurable property %q",
+				r.atoms.name(key))
+		}
+		if target != nil && !p.target.IsExtensible() {
+			return Undefined, r.throwTypeError(
+				"the proxy \"getOwnPropertyDescriptor\" trap hid a property of a non-extensible target")
+		}
+		return Undefined, nil
+	}
+	if target == nil && !p.target.IsExtensible() {
+		return Undefined, r.throwTypeError(
+			"the proxy \"getOwnPropertyDescriptor\" trap invented a property on a non-extensible target")
+	}
+	return res, nil
+}
+
+// proxyDefineProperty implements the defineProperty trap.
+func (r *Runtime) proxyDefineProperty(p *proxyData, key Atom, desc Value) (bool, error) {
+	fn, ok, err := r.trap(p, "defineProperty")
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return true, r.definePropertyFromDescriptor(p.target, key, desc)
+	}
+	res, err := r.call(fn, Obj(p.handler), []Value{Obj(p.target), r.keyToValue(key), desc})
+	if err != nil {
+		return false, err
+	}
+	if !res.Truthy() {
+		return false, nil
+	}
+	if p.target.getOwnVisible(key) == nil && !p.target.IsExtensible() {
+		return false, r.throwTypeError(
+			"the proxy \"defineProperty\" trap added a property to a non-extensible target")
+	}
+	return true, nil
+}
+
+// protoValue renders an object's prototype as the null-or-object a trap sees.
+func protoValue(o *Object) Value {
+	if o.proto == nil {
+		return Null
+	}
+	return Obj(o.proto)
+}
+
+// setProtoOf assigns a prototype, refusing when the object is sealed against it.
+func setProtoOf(o *Object, proto Value) bool {
+	if !o.IsExtensible() {
+		return proto.SameValue(protoValue(o))
+	}
+	switch {
+	case proto.IsObject():
+		o.proto = proto.Object()
+	case proto.IsNull():
+		o.proto = nil
+	default:
+		return false
+	}
+	return true
 }
 
 // keyToValue converts an atom back to the string or symbol a trap receives.
@@ -283,7 +529,8 @@ func (r *Runtime) initReflectBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		return Bool(rt.hasProp(target.Object(), key)), nil
+		has, err := rt.hasPropErr(target.Object(), key)
+		return Bool(has), err
 	})
 
 	r.defMethod(rf, "deleteProperty", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -328,10 +575,10 @@ func (r *Runtime) initReflectBuiltins() {
 		if !target.IsObject() {
 			return Undefined, rt.throwTypeError("Reflect.getPrototypeOf requires an object")
 		}
-		if p := target.Object().proto; p != nil {
-			return Obj(p), nil
+		if p := proxyOf(target.Object()); p != nil {
+			return rt.proxyGetPrototypeOf(p)
 		}
-		return Null, nil
+		return protoValue(target.Object()), nil
 	})
 
 	r.defMethod(rf, "setPrototypeOf", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -339,15 +586,15 @@ func (r *Runtime) initReflectBuiltins() {
 		if !target.IsObject() {
 			return Undefined, rt.throwTypeError("Reflect.setPrototypeOf requires an object")
 		}
-		switch pv := arg(args, 1); {
-		case pv.IsObject():
-			target.Object().proto = pv.Object()
-		case pv.IsNull():
-			target.Object().proto = nil
-		default:
-			return False, nil
+		proto := arg(args, 1)
+		if !proto.IsObject() && !proto.IsNull() {
+			return Undefined, rt.throwTypeError("the prototype must be an object or null")
 		}
-		return True, nil
+		if p := proxyOf(target.Object()); p != nil {
+			ok, err := rt.proxySetPrototypeOf(p, proto)
+			return Bool(ok), err
+		}
+		return Bool(setProtoOf(target.Object(), proto)), nil
 	})
 
 	r.defMethod(rf, "defineProperty", 3, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -359,6 +606,11 @@ func (r *Runtime) initReflectBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
+		if p := proxyOf(target.Object()); p != nil {
+			ok, err := rt.proxyDefineProperty(p, key, arg(args, 2))
+			return Bool(ok), err
+		}
+		rt.materializeFunctionProp(target.Object(), key)
 		if err := rt.definePropertyFromDescriptor(target.Object(), key, arg(args, 2)); err != nil {
 			return False, nil
 		}
@@ -374,6 +626,9 @@ func (r *Runtime) initReflectBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
+		if p := proxyOf(target.Object()); p != nil {
+			return rt.proxyGetOwnPropertyDescriptor(p, key)
+		}
 		return rt.describeProperty(target.Object(), key), nil
 	})
 
@@ -382,6 +637,10 @@ func (r *Runtime) initReflectBuiltins() {
 		if !target.IsObject() {
 			return Undefined, rt.throwTypeError("Reflect.isExtensible requires an object")
 		}
+		if p := proxyOf(target.Object()); p != nil {
+			ok, err := rt.proxyIsExtensible(p)
+			return Bool(ok), err
+		}
 		return Bool(target.Object().IsExtensible()), nil
 	})
 
@@ -389,6 +648,10 @@ func (r *Runtime) initReflectBuiltins() {
 		target := arg(args, 0)
 		if !target.IsObject() {
 			return Undefined, rt.throwTypeError("Reflect.preventExtensions requires an object")
+		}
+		if p := proxyOf(target.Object()); p != nil {
+			ok, err := rt.proxyPreventExtensions(p)
+			return Bool(ok), err
 		}
 		target.Object().flags &^= objExtensible
 		return True, nil

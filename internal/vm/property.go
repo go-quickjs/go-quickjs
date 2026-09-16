@@ -317,18 +317,27 @@ func (r *Runtime) setValueProp(v Value, key Atom, val Value, strict bool) error 
 
 // hasProp implements the `in` operator, walking the prototype chain.
 func (r *Runtime) hasProp(o *Object, key Atom) bool {
+	// A trap may throw, which this signature cannot report. Callers that can
+	// report use hasPropErr; this form is for the ones that cannot, where
+	// treating a failed trap as absence is the only available answer.
+	res, _ := r.hasPropErr(o, key)
+	return res
+}
+
+// hasPropErr is hasProp with the error a proxy trap may produce.
+//
+// The `in` operator and Reflect.has both go through it, because a trap that
+// violates an invariant has to be reported rather than turned into a false.
+func (r *Runtime) hasPropErr(o *Object, key Atom) (bool, error) {
 	if p := proxyOf(o); p != nil {
-		// A trap may throw, which this signature cannot report; the error
-		// surfaces on the next operation that can.
-		res, err := r.proxyHas(p, key)
-		return err == nil && res
+		return r.proxyHas(p, key)
 	}
 	for ; o != nil; o = o.proto {
 		if r.hasOwnProp(o, key) {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 // hasOwnProp reports whether the object itself has the property.
