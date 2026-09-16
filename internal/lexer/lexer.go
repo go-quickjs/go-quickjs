@@ -48,26 +48,45 @@ func New(src string) *Lexer {
 // Pos returns the current byte offset.
 func (l *Lexer) Pos() int { return l.pos }
 
-// Seek rewinds or advances the scanner to a byte offset previously obtained
-// from Token.Pos or Pos. The parser uses it to re-scan a region it had to look
-// ahead over (arrow function parameters, for example).
-func (l *Lexer) Seek(pos, line int) {
+// Seek rewinds or advances the scanner to a position previously obtained from
+// Pos, Line and LineStart. The parser uses it to re-scan a region it had to
+// look ahead over.
+//
+// The caller supplies lineStart rather than letting the lexer recover it,
+// because searching backwards for the preceding newline would be linear in the
+// length of the line and this is called once per identifier.
+func (l *Lexer) Seek(pos, line, lineStart int) {
 	l.pos = pos
 	l.line = line
-	// Recover the line start so columns stay accurate after a seek.
-	l.lineStart = strings.LastIndexByte(l.src[:pos], '\n') + 1
+	l.lineStart = lineStart
 }
 
 // Line returns the current 1-based line number.
 func (l *Lexer) Line() int { return l.line }
+
+// LineStart returns the byte offset of the current line's first byte.
+func (l *Lexer) LineStart() int { return l.lineStart }
 
 func (l *Lexer) errf(pos int, format string, args ...any) *Error {
 	return &Error{
 		Msg:  fmt.Sprintf(format, args...),
 		Pos:  pos,
 		Line: l.line,
-		Col:  utf8.RuneCountInString(l.src[l.lineStart:min(pos, len(l.src))]) + 1,
+		Col:  l.Column(pos, l.lineStart),
 	}
+}
+
+// Column returns the 1-based column of pos, given the byte offset of the start
+// of its line. It is called only when reporting a position to a human, because
+// counting runes for every token would make scanning quadratic in line length.
+func (l *Lexer) Column(pos, lineStart int) int {
+	if pos > len(l.src) {
+		pos = len(l.src)
+	}
+	if lineStart > pos {
+		lineStart = pos
+	}
+	return utf8.RuneCountInString(l.src[lineStart:pos]) + 1
 }
 
 func (l *Lexer) atEnd() bool { return l.pos >= len(l.src) }
@@ -183,7 +202,7 @@ func (l *Lexer) Next() (Token, error) {
 	tok := Token{
 		Pos:           l.pos,
 		Line:          l.line,
-		Col:           utf8.RuneCountInString(l.src[l.lineStart:min(l.pos, len(l.src))]) + 1,
+		LineStart:     l.lineStart,
 		NewlineBefore: l.nlBefore,
 	}
 	if l.atEnd() {
@@ -318,6 +337,8 @@ func (l *Lexer) scanTemplate(tok Token, head bool) (Token, error) {
 		c := l.src[l.pos]
 		switch c {
 		case '`':
+			// The literal ends here, so this part is either a complete
+			// no-substitution template or the tail of one.
 			raw := l.src[start+1 : l.pos]
 			l.pos++
 			if head {
@@ -326,20 +347,23 @@ func (l *Lexer) scanTemplate(tok Token, head bool) (Token, error) {
 				tok.Kind = TemplateTail
 			}
 			tok.Raw = normalizeTemplateRaw(raw)
+			tok.TemplateValid = valid
 			if valid {
 				tok.Value = cooked.String()
 			}
 			return tok, nil
 		case '$':
 			if l.peekByte(1) == '{' {
+				// A substitution follows, so this part is a head or a middle.
 				raw := l.src[start+1 : l.pos]
 				l.pos += 2
 				if head {
-					tok.Kind = Template
+					tok.Kind = TemplateHead
 				} else {
 					tok.Kind = TemplateMid
 				}
 				tok.Raw = normalizeTemplateRaw(raw)
+				tok.TemplateValid = valid
 				if valid {
 					tok.Value = cooked.String()
 				}

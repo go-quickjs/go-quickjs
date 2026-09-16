@@ -19,9 +19,12 @@ const (
 	Number
 	BigInt
 	String
-	Template    // `no substitution` or the head `a${
-	TemplateMid // }b${
-	TemplateTail
+	// The four template kinds distinguish where a part sits in the literal,
+	// which the parser needs in order to know whether a substitution follows.
+	Template     // `no substitution`
+	TemplateHead // `a${
+	TemplateMid  // }b${
+	TemplateTail // }c`
 	Regexp
 	Punct
 )
@@ -42,7 +45,7 @@ func (k Kind) String() string {
 		return "bigint"
 	case String:
 		return "string"
-	case Template, TemplateMid, TemplateTail:
+	case Template, TemplateHead, TemplateMid, TemplateTail:
 		return "template"
 	case Regexp:
 		return "regexp"
@@ -67,13 +70,21 @@ type Token struct {
 	Raw string
 	// Flags holds the trailing flags of a regexp literal.
 	Flags string
+	// TemplateValid reports whether a template part's escape sequences were all
+	// well formed. An invalid escape is fatal for an untagged template but not
+	// for a tagged one, where the cooked value simply becomes undefined, so the
+	// lexer records it rather than failing.
+	TemplateValid bool
 	// NewlineBefore reports whether a LineTerminator preceded this token. This
 	// is what drives automatic semicolon insertion and the restricted
 	// productions (return/throw/break/continue, postfix ++/--).
 	NewlineBefore bool
 	Pos           int // byte offset of the token start
 	Line          int // 1-based
-	Col           int // 1-based, in runes
+	// LineStart is the byte offset of the first byte of Line. Columns are
+	// derived from it on demand rather than measured for every token, because
+	// counting runes eagerly makes scanning a long line quadratic.
+	LineStart int
 }
 
 // Is reports whether the token is of kind k with the given text.
@@ -104,8 +115,12 @@ func (t Token) String() string {
 // reservedWords are the ECMAScript reserved words. Contextual keywords (async,
 // let, static, get, set, of, ...) are deliberately absent: they lex as
 // identifiers and the parser decides what they mean from position.
+//
+// "yield" and "await" are contextual too. Each is an operator only inside a
+// generator or async function respectively, and an ordinary identifier
+// everywhere else, so `var yield = 1` is legal sloppy-mode code.
 var reservedWords = map[string]bool{
-	"await": true, "break": true, "case": true, "catch": true, "class": true,
+	"break": true, "case": true, "catch": true, "class": true,
 	"const": true, "continue": true, "debugger": true, "default": true,
 	"delete": true, "do": true, "else": true, "enum": true, "export": true,
 	"extends": true, "false": true, "finally": true, "for": true,
@@ -113,7 +128,7 @@ var reservedWords = map[string]bool{
 	"instanceof": true, "new": true, "null": true, "return": true,
 	"super": true, "switch": true, "this": true, "throw": true, "true": true,
 	"try": true, "typeof": true, "var": true, "void": true, "while": true,
-	"with": true, "yield": true,
+	"with": true,
 }
 
 // IsReservedWord reports whether name is a reserved word and so cannot be used

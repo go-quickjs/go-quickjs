@@ -238,7 +238,11 @@ type Binary struct {
 type Logical struct {
 	Op          string
 	Left, Right Expr
-	Start       int
+	// Paren records that the expression was parenthesized in the source. It is
+	// kept only because mixing ?? with && or || is a syntax error unless
+	// parentheses make the grouping explicit.
+	Paren bool
+	Start int
 }
 
 // Assign is an assignment, possibly compound. For a destructuring assignment
@@ -523,6 +527,14 @@ type LabeledStmt struct {
 // DebuggerStmt is `debugger`.
 type DebuggerStmt struct{ Start int }
 
+// WithStmt is `with (obj) body`. It is legal only in sloppy mode, and the
+// parser rejects it under strict mode before the compiler ever sees it.
+type WithStmt struct {
+	Object Expr
+	Body   Stmt
+	Start  int
+}
+
 // ---------------------------------------------------------------------------
 // Interface conformance
 // ---------------------------------------------------------------------------
@@ -619,6 +631,7 @@ func (n *TryStmt) Pos() int      { return n.Start }
 func (n *SwitchStmt) Pos() int   { return n.Start }
 func (n *LabeledStmt) Pos() int  { return n.Start }
 func (n *DebuggerStmt) Pos() int { return n.Start }
+func (n *WithStmt) Pos() int     { return n.Start }
 
 func (*ExprStmt) stmtNode()     {}
 func (*BlockStmt) stmtNode()    {}
@@ -640,3 +653,4 @@ func (*TryStmt) stmtNode()      {}
 func (*SwitchStmt) stmtNode()   {}
 func (*LabeledStmt) stmtNode()  {}
 func (*DebuggerStmt) stmtNode() {}
+func (*WithStmt) stmtNode()     {}

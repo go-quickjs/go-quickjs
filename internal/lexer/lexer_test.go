@@ -260,8 +260,9 @@ func TestTemplateLiteral(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if head.Kind != Template || head.Value != "a" {
-		t.Fatalf("head = %v %q, want Template \"a\"", head.Kind, head.Value)
+	// A head is distinct from a complete template: it promises a substitution.
+	if head.Kind != TemplateHead || head.Value != "a" {
+		t.Fatalf("head = %v %q, want TemplateHead \"a\"", head.Kind, head.Value)
 	}
 	// x
 	if tok, _ := l.Next(); tok.Value != "x" {
@@ -285,6 +286,22 @@ func TestTemplateLiteral(t *testing.T) {
 	}
 	if tail.Kind != TemplateTail || tail.Value != "c" {
 		t.Errorf("tail = %v %q, want TemplateTail \"c\"", tail.Kind, tail.Value)
+	}
+}
+
+func TestNoSubstitutionTemplateIsNotAHead(t *testing.T) {
+	// A template with no substitutions must not be reported as a head, or the
+	// parser would go looking for an expression that is not there.
+	l := New("`abc`")
+	tok, err := l.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok.Kind != Template {
+		t.Errorf("kind = %v, want Template", tok.Kind)
+	}
+	if tok.Value != "abc" {
+		t.Errorf("value = %q, want \"abc\"", tok.Value)
 	}
 }
 
@@ -320,7 +337,7 @@ func TestSeekRestoresPosition(t *testing.T) {
 	l := New("a b c")
 	first, _ := l.Next()
 	second, _ := l.Next()
-	l.Seek(second.Pos, second.Line)
+	l.Seek(second.Pos, second.Line, second.LineStart)
 	again, _ := l.Next()
 	if again.Value != second.Value {
 		t.Errorf("after seek got %q, want %q", again.Value, second.Value)
@@ -336,13 +353,39 @@ func TestBOMIsSkipped(t *testing.T) {
 }
 
 func TestLineAndColumnTracking(t *testing.T) {
-	toks := scanAll(t, "a;\n  bc;\n")
-	if toks[0].Line != 1 || toks[0].Col != 1 {
-		t.Errorf("`a` at %d:%d, want 1:1", toks[0].Line, toks[0].Col)
+	src := "a;\n  bc;\n"
+	l := New(src)
+	var toks []Token
+	for {
+		tok, err := l.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tok.Kind == EOF {
+			break
+		}
+		toks = append(toks, tok)
 	}
-	// `bc` is the fourth token (a ; bc ;) and starts at column 3 of line 2.
-	if toks[2].Line != 2 || toks[2].Col != 3 {
-		t.Errorf("`bc` at %d:%d, want 2:3", toks[2].Line, toks[2].Col)
+	if col := l.Column(toks[0].Pos, toks[0].LineStart); toks[0].Line != 1 || col != 1 {
+		t.Errorf("`a` at %d:%d, want 1:1", toks[0].Line, col)
+	}
+	// `bc` is the third token (a ; bc ;) and starts at column 3 of line 2.
+	if col := l.Column(toks[2].Pos, toks[2].LineStart); toks[2].Line != 2 || col != 3 {
+		t.Errorf("`bc` at %d:%d, want 2:3", toks[2].Line, col)
+	}
+}
+
+func TestColumnCountsRunesNotBytes(t *testing.T) {
+	// A column is a rune offset, so multi-byte characters count once.
+	src := "变量 x"
+	l := New(src)
+	l.Next() // 变量
+	tok, err := l.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if col := l.Column(tok.Pos, tok.LineStart); col != 4 {
+		t.Errorf("`x` at column %d, want 4", col)
 	}
 }
 
