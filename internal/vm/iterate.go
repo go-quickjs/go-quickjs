@@ -396,6 +396,36 @@ func (r *Runtime) startForAwaitOf(v Value) (Value, error) {
 	return r.newIterObject(&iterState{iter: iter, next: next}), nil
 }
 
+// iterSend calls a cursor's next method with a value, which is what `yield*`
+// needs: the value its own caller sent in has to reach the delegate, or a
+// generator delegating to another cannot be driven at all.
+//
+// The raw iterator result is returned rather than an unpacked value, because
+// the caller needs the done flag and the returned value separately.
+func (r *Runtime) iterSend(cursor Value, sent Value, async bool) (Value, error) {
+	st := iterStateOf(cursor)
+	if st == nil {
+		return Undefined, r.throwTypeError("not an iterator")
+	}
+	if st.forIn {
+		return Undefined, r.throwTypeError("cannot delegate to a property enumeration")
+	}
+	res, err := r.call(st.next, st.iter, []Value{sent})
+	if err != nil {
+		return Undefined, err
+	}
+	if !async {
+		return res, nil
+	}
+	// An async iterator hands back a promise for the whole result; a
+	// synchronous one hands back a plain result whose value still has to be
+	// awaited, so it is wrapped in a promise the same way.
+	if res.IsObject() && res.Object().class == ClassPromise {
+		return res, nil
+	}
+	return Obj(r.toPromise(res)), nil
+}
+
 // asyncIterNext calls an async iterator's next method, returning the promise it
 // produces. A synchronous iterator is wrapped so that both protocols can be
 // driven by the same instruction sequence.

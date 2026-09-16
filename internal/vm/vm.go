@@ -1126,6 +1126,38 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				goto onError
 			}
 			push(v)
+		case bytecode.OpIterSend, bytecode.OpIterSendAsync:
+			sent := pop()
+			res, err := r.iterSend(peek(0), sent, in.Op == bytecode.OpIterSendAsync)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			push(res)
+		case bytecode.OpIterUnpack:
+			res := pop()
+			if !res.IsObject() {
+				vmErr = r.throwTypeError("an iterator result must be an object")
+				goto onError
+			}
+			done, err := r.getValueProp(res, atomDone)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			val, err := r.getValueProp(res, atomValue)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			push(val)
+			if done.Truthy() {
+				// The cursor is exhausted, so nothing is left to close.
+				if st := iterStateOf(peek(1)); st != nil {
+					st.done = true
+				}
+				f.pc = in.A
+			}
 		case bytecode.OpIterResultOrJump:
 			res := pop()
 			if !res.IsObject() {

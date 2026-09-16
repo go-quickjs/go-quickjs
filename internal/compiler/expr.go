@@ -1027,17 +1027,42 @@ func (c *compiler) compileYield(n *ast.Yield) {
 	}
 
 	// yield* iterable
-	c.compileExpr(n.Arg)
-	c.emit(bytecode.OpForOfStart, 0, 0)
-	start := c.here()
-	exit := c.emitJump(bytecode.OpIterNextOrJump)
-	c.emit(bytecode.OpYield, 0, 0)
-	// The value sent back in is discarded, since forwarding it would require
-	// threading it into the iterator's next call.
-	c.emit(bytecode.OpDrop, 0, 0)
-	c.emit(bytecode.OpJump, uint32(start), 0)
-	c.patchJump(exit)
-	// Drop the iterator and yield undefined as the expression's value.
-	c.emit(bytecode.OpDrop, 0, 0)
+	//
+	// The loop forwards in both directions: each value the delegate produces is
+	// yielded out, and each value the caller sends back in is passed to the
+	// delegate's next. Without that a generator delegating to another cannot be
+	// driven at all, since the inner one never receives anything.
+	//
+	// An async generator delegates over Symbol.asyncIterator, and awaits each
+	// result. Falling back to Symbol.iterator when there is no async one is the
+	// job of the start instruction, not of a second lookup here -- consulting
+	// Symbol.iterator after an asyncIterator getter has thrown is observable.
+	async := c.fn.Async
+	if async {
+		c.compileExpr(n.Arg)
+		c.emit(bytecode.OpForAwaitOfStart, 0, 0)
+	} else {
+		c.compileExpr(n.Arg)
+		c.emit(bytecode.OpForOfStart, 0, 0)
+	}
+	// The first next receives undefined; after that it receives whatever the
+	// caller sent to the outer generator.
 	c.emit(bytecode.OpPushUndef, 0, 0)
+
+	start := c.here()
+	if async {
+		c.emit(bytecode.OpIterSendAsync, 0, 0)
+		c.emit(bytecode.OpAwait, 0, 0)
+	} else {
+		c.emit(bytecode.OpIterSend, 0, 0)
+	}
+	exit := c.emitJump(bytecode.OpIterUnpack)
+	c.emit(bytecode.OpYield, 0, 0)
+	c.emit(bytecode.OpJump, uint32(start), 0)
+
+	c.patchJump(exit)
+	// The delegate's return value is the value of the whole expression, so the
+	// cursor beneath it is removed rather than the value.
+	c.emit(bytecode.OpSwap, 0, 0)
+	c.emit(bytecode.OpDrop, 0, 0)
 }

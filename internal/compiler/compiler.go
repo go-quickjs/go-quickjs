@@ -744,9 +744,14 @@ func stackEffect(op bytecode.Op, a, b uint32) int {
 		// Pops the operand and pushes the resumption value.
 		return 0
 
-	case bytecode.OpSetHomeObject, bytecode.OpDefineMethod,
-		bytecode.OpDefinePrivate:
+	case bytecode.OpDefineMethod, bytecode.OpDefinePrivate:
 		return -1
+	case bytecode.OpSetHomeObject, bytecode.OpSetFuncName:
+		// Both read the stack without changing it.
+		return 0
+	case bytecode.OpDefineGetterIndex, bytecode.OpDefineSetterIndex:
+		// Pops the key and the function, leaving the target.
+		return -2
 	case bytecode.OpSetPrivate:
 		return -2
 	case bytecode.OpGetPrivate:
