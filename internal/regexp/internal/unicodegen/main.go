@@ -24,6 +24,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf16"
+	"unicode/utf8"
 )
 
 // charRange mirrors the one in the regexp package.
@@ -69,7 +71,81 @@ func main() {
 		}
 		props = append(props, p)
 	}
-	emit(os.Stdout, version, props)
+
+	// The properties of strings live one directory down and have a different
+	// shape: a list of sequences rather than a set of code points.
+	strFiles, _ := filepath.Glob(filepath.Join(dir, "strings", "*.js"))
+	sort.Strings(strFiles)
+	var strProps []stringProperty
+	for _, f := range strFiles {
+		if strings.Contains(filepath.Base(f), "-negative") {
+			continue
+		}
+		p, err := parseStrings(f)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", f, err)
+			os.Exit(1)
+		}
+		// RGI_Emoji is by definition the union of the other five plus
+		// Basic_Emoji, so it is assembled at run time rather than stored twice.
+		if p.name == "RGI_Emoji" {
+			continue
+		}
+		strProps = append(strProps, p)
+	}
+	emit(os.Stdout, version, props, strProps)
+}
+
+// stringProperty is a property of strings: a list of code point sequences.
+type stringProperty struct {
+	name      string
+	sequences [][]rune
+}
+
+var reMatchString = regexp.MustCompile(`^\s*"((?:[^"\\]|\\.)*)",?\s*$`)
+
+// parseStrings reads one property-of-strings test's matched sequences.
+func parseStrings(path string) (stringProperty, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return stringProperty{}, err
+	}
+	defer f.Close()
+
+	p := stringProperty{name: strings.TrimSuffix(filepath.Base(path), ".js")}
+	in := false
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	for sc.Scan() {
+		line := sc.Text()
+		switch {
+		case strings.Contains(line, "matchStrings:"):
+			in = true
+			continue
+		case strings.Contains(line, "nonMatchStrings:"):
+			in = false
+			continue
+		}
+		if !in {
+			continue
+		}
+		m := reMatchString.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		seq, err := unquoteJS(m[1])
+		if err != nil {
+			return stringProperty{}, fmt.Errorf("%s: %v", m[1], err)
+		}
+		p.sequences = append(p.sequences, seq)
+	}
+	if err := sc.Err(); err != nil {
+		return stringProperty{}, err
+	}
+	if len(p.sequences) == 0 {
+		return stringProperty{}, fmt.Errorf("no matched strings found")
+	}
+	return p, nil
 }
 
 // parse reads one generated test's matched set and the spellings it covers.
@@ -143,6 +219,86 @@ func parse(path string) (property, string, error) {
 	return p, version, nil
 }
 
+// unquoteJS decodes the escapes a JavaScript string literal may contain into
+// code points, pairing surrogates so that a sequence is a list of characters
+// rather than of code units.
+func unquoteJS(s string) ([]rune, error) {
+	var out []rune
+	for i := 0; i < len(s); {
+		if s[i] != '\\' {
+			r, n := utf8.DecodeRuneInString(s[i:])
+			out = append(out, r)
+			i += n
+			continue
+		}
+		i++
+		if i >= len(s) {
+			return nil, fmt.Errorf("trailing backslash")
+		}
+		switch c := s[i]; c {
+		case 'u':
+			i++
+			if i < len(s) && s[i] == '{' {
+				j := strings.IndexByte(s[i:], '}')
+				if j < 0 {
+					return nil, fmt.Errorf("unterminated \\u{}")
+				}
+				n, err := strconv.ParseUint(s[i+1:i+j], 16, 32)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, rune(n))
+				i += j + 1
+				continue
+			}
+			if i+4 > len(s) {
+				return nil, fmt.Errorf("short \\u escape")
+			}
+			n, err := strconv.ParseUint(s[i:i+4], 16, 32)
+			if err != nil {
+				return nil, err
+			}
+			i += 4
+			r := rune(n)
+			// A high surrogate followed by a low one is one character.
+			if utf16.IsSurrogate(r) && i+6 <= len(s) && s[i] == '\\' && s[i+1] == 'u' {
+				if lo, err := strconv.ParseUint(s[i+2:i+6], 16, 32); err == nil {
+					if c := utf16.DecodeRune(r, rune(lo)); c != utf8.RuneError {
+						out = append(out, c)
+						i += 6
+						continue
+					}
+				}
+			}
+			out = append(out, r)
+		case 'x':
+			if i+3 > len(s) {
+				return nil, fmt.Errorf("short \\x escape")
+			}
+			n, err := strconv.ParseUint(s[i+1:i+3], 16, 32)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, rune(n))
+			i += 3
+		case 'n':
+			out = append(out, '\n')
+			i++
+		case 't':
+			out = append(out, '\t')
+			i++
+		case 'r':
+			out = append(out, '\r')
+			i++
+		default:
+			r, n := utf8.DecodeRuneInString(s[i:])
+			out = append(out, r)
+			i += n
+		}
+	}
+	return out, nil
+}
+
 func parseRune(s string) rune {
 	n, err := strconv.ParseUint(strings.TrimPrefix(s, "0x"), 16, 32)
 	if err != nil {
@@ -190,7 +346,7 @@ func appendVarint(sb *strings.Builder, n uint32) {
 	}
 }
 
-func emit(out *os.File, version string, props []property) {
+func emit(out *os.File, version string, props []property, strProps []stringProperty) {
 	// Each set is encoded once; the spellings that name it share the offset.
 	var data strings.Builder
 	offsets := map[string]int{}
@@ -253,6 +409,34 @@ const UnicodeVersion = %q
 
 	const width = 100
 	s := data.String()
+	for i := 0; i < len(s); i += width {
+		j := i + width
+		if j > len(s) {
+			j = len(s)
+		}
+		sep := " +"
+		if j == len(s) {
+			sep = ""
+		}
+		fmt.Fprintf(w, "\t%q%s\n", s[i:j], sep)
+	}
+
+	// The properties of strings, each a count of sequences followed by that
+	// many (length, code points...) groups.
+	var sd strings.Builder
+	fmt.Fprintf(w, "\nvar unicodeStringProperties = map[string]uint32{\n")
+	for _, p := range strProps {
+		fmt.Fprintf(w, "\t%q: %d,\n", p.name, sd.Len())
+		appendVarint(&sd, uint32(len(p.sequences)))
+		for _, seq := range p.sequences {
+			appendVarint(&sd, uint32(len(seq)))
+			for _, c := range seq {
+				appendVarint(&sd, uint32(c))
+			}
+		}
+	}
+	fmt.Fprintf(w, "}\n\nconst unicodeStringPropertyData = \"\" +\n")
+	s = sd.String()
 	for i := 0; i < len(s); i += width {
 		j := i + width
 		if j > len(s) {

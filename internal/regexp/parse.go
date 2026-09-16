@@ -524,6 +524,22 @@ func (p *parser) parseEscape() (node, bool, error) {
 			return nodeChar{r: r}, true, nil
 		}
 		p.pos++
+		if p.flags&FlagUnicodeSets != 0 {
+			save := p.pos
+			name, err := p.readPropertyName()
+			if err != nil {
+				return nil, false, err
+			}
+			if v, ok := unicodeStringPropertyValue(name); ok {
+				if r == 'P' {
+					return nil, false, p.errorf("a property of strings cannot be negated")
+				}
+				// A property of strings compiles to an alternation, which is
+				// what it denotes; quantifying it groups it first.
+				return v.node(), true, nil
+			}
+			p.pos = save
+		}
 		set, err := p.parseUnicodeProperty(r == 'P')
 		if err != nil {
 			return nil, false, err
@@ -589,21 +605,38 @@ func (p *parser) shorthandClass(r rune) *charSet {
 	return base
 }
 
-// parseUnicodeProperty parses the body of a \p{...} escape.
-func (p *parser) parseUnicodeProperty(negate bool) (*charSet, error) {
+// readPropertyName reads the body of a \p{...} escape.
+func (p *parser) readPropertyName() (string, error) {
 	if !p.eat('{') {
-		return nil, p.errorf("invalid \\p escape")
+		return "", p.errorf("invalid \\p escape")
 	}
 	var sb strings.Builder
 	for !p.atEnd() && p.peek() != '}' {
 		sb.WriteRune(p.next())
 	}
 	if !p.eat('}') {
-		return nil, p.errorf("unterminated \\p escape")
+		return "", p.errorf("unterminated \\p escape")
 	}
-	set, ok := unicodeClass(sb.String(), negate)
+	return sb.String(), nil
+}
+
+// parseUnicodeProperty parses a \p{...} escape that denotes code points.
+func (p *parser) parseUnicodeProperty(negate bool) (*charSet, error) {
+	name, err := p.readPropertyName()
+	if err != nil {
+		return nil, err
+	}
+	set, ok := unicodeClass(name, negate)
 	if !ok {
-		return nil, p.errorf("unknown Unicode property %q", sb.String())
+		// A property of strings is a property, but only under v and only where
+		// something that can match more than one character is allowed.
+		if _, isStr := unicodeStringProperties[name]; isStr || name == "RGI_Emoji" {
+			if p.flags&FlagUnicodeSets == 0 {
+				return nil, p.errorf("%q is a property of strings, which needs the v flag", name)
+			}
+			return nil, p.errorf("%q is a property of strings, which a character class range cannot use", name)
+		}
+		return nil, p.errorf("unknown Unicode property %q", name)
 	}
 	return set, nil
 }

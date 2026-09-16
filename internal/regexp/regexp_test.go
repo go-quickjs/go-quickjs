@@ -396,3 +396,97 @@ func BenchmarkCaptureGroups(b *testing.B) {
 		}
 	}
 }
+
+// A property of strings denotes sequences rather than code points, which is the
+// thing the v flag adds: the set of emoji a platform should render cannot be
+// written as a character class at all.
+func TestUnicodeStringProperties(t *testing.T) {
+	cases := []struct {
+		pattern, flags, input string
+		want                  bool
+	}{
+		{`^\p{RGI_Emoji}+$`, "v", "\U0001F1E6\U0001F1E8", true},
+		{`^\p{Basic_Emoji}+$`, "v", "\U0001F004", true},
+		{`^\p{Emoji_Keycap_Sequence}+$`, "v", "1️⃣", true},
+		{`^\p{Emoji_Keycap_Sequence}+$`, "v", "1️", false},
+		{`^\p{RGI_Emoji_Flag_Sequence}+$`, "v", "\U0001F1E6\U0001F1E8", true},
+		{`^\p{RGI_Emoji_ZWJ_Sequence}+$`, "v",
+			"\U0001F468‍\U0001F469‍\U0001F467", true},
+		// RGI_Emoji is the union of the others, assembled rather than stored.
+		{`^\p{RGI_Emoji}+$`, "v", "1️⃣", true},
+		{`^\p{RGI_Emoji}+$`, "v", "a", false},
+
+		// One inside a class takes part in the set operations.
+		{`^[\p{RGI_Emoji}]+$`, "v", "\U0001F1E6\U0001F1E8", true},
+		{`^[\p{Basic_Emoji}--\q{\u{1F004}}]+$`, "v", "\U0001F004", false},
+		{`^[\p{RGI_Emoji}&&\p{Basic_Emoji}]+$`, "v", "\U0001F004", true},
+		{`^[\q{a}\p{Basic_Emoji}]+$`, "v", "a", true},
+	}
+	for _, tc := range cases {
+		re, err := Compile(tc.pattern, tc.flags)
+		if err != nil {
+			t.Errorf("/%s/%s: %v", tc.pattern, tc.flags, err)
+			continue
+		}
+		m, err := re.MatchString(tc.input, 0)
+		if err != nil {
+			t.Errorf("/%s/%s: %v", tc.pattern, tc.flags, err)
+			continue
+		}
+		if got := m != nil; got != tc.want {
+			t.Errorf("/%s/%s matched %q: got %v, want %v",
+				tc.pattern, tc.flags, tc.input, got, tc.want)
+		}
+	}
+
+	bad := []struct{ pattern, flags string }{
+		// It needs the v flag, since u has nothing that can match two
+		// characters.
+		{`\p{RGI_Emoji}`, "u"},
+		// There is no sensible "every string but these".
+		{`\P{RGI_Emoji}`, "v"},
+		{`[^\p{RGI_Emoji}]`, "v"},
+		// And a range endpoint has to be one character.
+		{`[a-\p{RGI_Emoji}]`, "v"},
+	}
+	for _, tc := range bad {
+		if _, err := Compile(tc.pattern, tc.flags); err == nil {
+			t.Errorf("/%s/%s: accepted, want a syntax error", tc.pattern, tc.flags)
+		}
+	}
+}
+
+// The property tables are keyed by every spelling the language allows, so a
+// name outside them is not a property escape at all.
+func TestUnicodePropertyNames(t *testing.T) {
+	for _, name := range []string{
+		"General_Category=Lu", "gc=Lu", "Lu", "Lowercase_Letter",
+		"Script=Latin", "Script=Latn", "sc=Latn", "scx=Adlm",
+		"Script_Extensions=Adlam", "ASCII", "Any", "Assigned", "White_Space",
+	} {
+		if _, ok := unicodeClass(name, false); !ok {
+			t.Errorf("\\p{%s} should be a property", name)
+		}
+	}
+	for _, name := range []string{
+		// Properties that exist in Unicode but that the language does not
+		// admit, because they are defined only to derive others.
+		"Other_Alphabetic", "Full_Composition_Exclusion", "Expands_On_NFC",
+		"Grapheme_Link", "Hyphen", "Prepended_Concatenation_Mark",
+		// Properties no engine is asked to carry.
+		"Line_Break", "Block=Adlam",
+		// A bare script, which has to be written Script=Latin.
+		"Latin", "Adlam",
+		// Spelled loosely, which is deliberately not matched loosely.
+		"ascii", "lu", "General_category=Lu",
+		// A binary property given a value.
+		"ASCII=Y", "ASCII=Yes",
+		// A non-binary property given none.
+		"General_Category", "Script", "Script_Extensions",
+		"", "=", "=Latin",
+	} {
+		if _, ok := unicodeClass(name, false); ok {
+			t.Errorf("\\p{%s} should not be a property", name)
+		}
+	}
+}

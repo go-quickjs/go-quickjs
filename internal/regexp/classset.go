@@ -345,6 +345,12 @@ func (p *parser) parseClassSetChars() (*classSetValue, error) {
 	case classAtomSet:
 		v.set.addSet(set)
 		return v, nil
+	case classAtomStringSet:
+		v.set.addSet(set)
+		for _, s := range strs {
+			v.addString(s)
+		}
+		return v, nil
 	case classAtomStrings:
 		for _, s := range strs {
 			v.addString(s)
@@ -380,6 +386,9 @@ const (
 	classAtomChar classAtomKind = iota
 	classAtomSet
 	classAtomStrings
+	// classAtomStringSet is a property of strings, which contributes both code
+	// points and sequences.
+	classAtomStringSet
 )
 
 // parseClassSetAtom parses one atom of a `v`-mode class.
@@ -419,9 +428,22 @@ func (p *parser) parseClassSetAtom() (rune, classAtomKind, *charSet, [][]rune, e
 		return 0, classAtomSet, p.shorthandClass(c), nil, nil
 	case 'p', 'P':
 		p.pos++
-		set, err := p.parseUnicodeProperty(c == 'P')
+		negated := c == 'P'
+		name, err := p.readPropertyName()
 		if err != nil {
 			return 0, 0, nil, nil, err
+		}
+		if v, ok := unicodeStringPropertyValue(name); ok {
+			// There is no sensible "every string but these", so a property of
+			// strings cannot be negated.
+			if negated {
+				return 0, 0, nil, nil, p.errorf("a property of strings cannot be negated")
+			}
+			return 0, classAtomStringSet, v.set, v.strings, nil
+		}
+		set, ok := unicodeClass(name, negated)
+		if !ok {
+			return 0, 0, nil, nil, p.errorf("unknown Unicode property %q", name)
 		}
 		return 0, classAtomSet, set, nil, nil
 	case 'q':
@@ -488,4 +510,68 @@ func isClassSetReservedDouble(r rune) bool {
 		return true
 	}
 	return false
+}
+
+// unicodeStringPropertyValue decodes a property of strings.
+//
+// These exist only under the v flag, because a class that can match more than
+// one character is the thing v adds. \p{RGI_Emoji} is the reason: the set of
+// emoji a platform should render is a set of sequences, not of code points, and
+// no amount of character-class notation expresses it.
+func unicodeStringPropertyValue(name string) (*classSetValue, bool) {
+	// RGI_Emoji is by definition the union of the others, so it is assembled
+	// rather than stored a second time.
+	if name == "RGI_Emoji" {
+		v := newClassSetValue()
+		for _, part := range rgiEmojiParts {
+			p, ok := unicodeStringPropertyValue(part)
+			if !ok {
+				return nil, false
+			}
+			v.union(p)
+		}
+		return v, true
+	}
+	off, ok := unicodeStringProperties[name]
+	if !ok {
+		return nil, false
+	}
+	v := newClassSetValue()
+	p := int(off)
+	n, p := decodeStringVarint(p)
+	for i := uint32(0); i < n; i++ {
+		var length uint32
+		length, p = decodeStringVarint(p)
+		seq := make([]rune, length)
+		for j := range seq {
+			var c uint32
+			c, p = decodeStringVarint(p)
+			seq[j] = rune(c)
+		}
+		// A one-character sequence is a code point, which is what makes
+		// [\p{Basic_Emoji}] hold both kinds without distinguishing them.
+		v.addString(seq)
+	}
+	v.set.normalize()
+	return v, true
+}
+
+// rgiEmojiParts are the properties RGI_Emoji is defined as the union of.
+var rgiEmojiParts = []string{
+	"Basic_Emoji", "Emoji_Keycap_Sequence", "RGI_Emoji_Flag_Sequence",
+	"RGI_Emoji_Modifier_Sequence", "RGI_Emoji_Tag_Sequence",
+	"RGI_Emoji_ZWJ_Sequence",
+}
+
+// decodeStringVarint reads one varint from the string-property table.
+func decodeStringVarint(p int) (uint32, int) {
+	var v uint32
+	for shift := 0; ; shift += 5 {
+		d := digitValues[unicodeStringPropertyData[p]]
+		p++
+		v |= uint32(d&31) << shift
+		if d&32 == 0 {
+			return v, p
+		}
+	}
 }
