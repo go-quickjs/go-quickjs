@@ -454,6 +454,9 @@ func (r *Runtime) initProxyBuiltins() {
 	}
 
 	ctor := r.newCtor("Proxy", 2, proxyProto, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		if err := rt.requireNew("Proxy"); err != nil {
+			return Undefined, err
+		}
 		o, err := makeProxy(rt, args)
 		if err != nil {
 			return Undefined, err

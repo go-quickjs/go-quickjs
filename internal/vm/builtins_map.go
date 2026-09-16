@@ -151,6 +151,9 @@ func (r *Runtime) initMapBuiltins() {
 	p := r.proto.mapProto
 
 	ctor := r.newCtor("Map", 0, p, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		if err := rt.requireNew("Map"); err != nil {
+			return Undefined, err
+		}
 		o := newObject(rt.proto.mapProto, ClassMap)
 		m := newJSMap(false)
 		o.data = m
@@ -175,6 +178,41 @@ func (r *Runtime) initMapBuiltins() {
 		return Obj(o), nil
 	})
 	r.defSpecies(ctor)
+
+	// Map.groupBy differs from Object.groupBy in what it returns: a Map can be
+	// keyed by anything, where an object's keys are strings and symbols only.
+	r.defMethod(ctor, "groupBy", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		cb := arg(args, 1)
+		if !isCallable(cb) {
+			return Undefined, rt.throwTypeError("Map.groupBy requires a function")
+		}
+		m := newJSMap(false)
+		i := 0
+		err := rt.iterate(arg(args, 0), func(v Value) error {
+			key, err := rt.call(cb, Undefined, []Value{v, Int(i)})
+			i++
+			if err != nil {
+				return err
+			}
+			key = normalizeZero(key)
+			group, ok := m.get(rt, key)
+			if !ok {
+				m.set(rt, key, Obj(rt.newArrayFrom([]Value{v})))
+				return nil
+			}
+			if group.IsObject() {
+				g := group.Object()
+				g.elems = append(g.elems, v)
+			}
+			return nil
+		})
+		if err != nil {
+			return Undefined, err
+		}
+		o := newObject(rt.proto.mapProto, ClassMap)
+		o.data = m
+		return Obj(o), nil
+	})
 	_ = ctor
 
 	r.defMethod(p, "get", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -267,6 +305,9 @@ func (r *Runtime) initSetBuiltins() {
 	p := r.proto.setProto
 
 	setCtor := r.newCtor("Set", 0, p, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		if err := rt.requireNew("Set"); err != nil {
+			return Undefined, err
+		}
 		o := newObject(rt.proto.setProto, ClassSet)
 		m := newJSMap(false)
 		o.data = m
@@ -365,6 +406,9 @@ func (r *Runtime) initWeakCollections() {
 	// that distinguishes them here.
 	wmProto := newObject(r.proto.object, ClassObject)
 	r.newCtor("WeakMap", 0, wmProto, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		if err := rt.requireNew("WeakMap"); err != nil {
+			return Undefined, err
+		}
 		o := newObject(wmProto, ClassWeakMap)
 		o.data = newJSMap(true)
 		return Obj(o), nil
@@ -408,6 +452,9 @@ func (r *Runtime) initWeakCollections() {
 
 	wsProto := newObject(r.proto.object, ClassObject)
 	r.newCtor("WeakSet", 0, wsProto, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		if err := rt.requireNew("WeakSet"); err != nil {
+			return Undefined, err
+		}
 		o := newObject(wsProto, ClassWeakSet)
 		o.data = newJSMap(true)
 		return Obj(o), nil

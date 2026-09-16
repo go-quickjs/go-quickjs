@@ -195,6 +195,20 @@ func (r *Runtime) newCtor(name string, length int, proto *Object, fn NativeFunc)
 	return c
 }
 
+// requireNew reports an error when a constructor that has no call behaviour is
+// invoked without new.
+//
+// Most built-in constructors double as conversion functions -- Number(x),
+// String(x), Array(n) -- but the ones that carry internal slots do not: there
+// is nothing sensible for Map(x) to return, so it is a mistake rather than a
+// shorthand.
+func (r *Runtime) requireNew(name string) error {
+	if r.Constructing() {
+		return nil
+	}
+	return r.throwTypeError("%s requires new", name)
+}
+
 // arg returns the i'th argument, or undefined when it was not supplied.
 func arg(args []Value, i int) Value {
 	if i < len(args) {

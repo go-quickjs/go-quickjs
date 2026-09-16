@@ -211,6 +211,9 @@ func (r *Runtime) initArrayBufferBuiltins() {
 	r.arrayBufferProto = abProto
 
 	ctor := r.newCtor("ArrayBuffer", 1, abProto, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		if err := rt.requireNew("ArrayBuffer"); err != nil {
+			return Undefined, err
+		}
 		n, err := rt.toIndex(arg(args, 0))
 		if err != nil {
 			return Undefined, err
@@ -310,6 +313,9 @@ func (r *Runtime) initTypedArrayBuiltins() {
 		r.typedArrayProtos[kind] = proto
 
 		ctor := r.newCtor(info.name, 3, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
+			if err := rt.requireNew(info.name); err != nil {
+				return Undefined, err
+			}
 			return rt.constructTypedArray(k, proto, args)
 		})
 		// The concrete constructors inherit the statics from %TypedArray%.

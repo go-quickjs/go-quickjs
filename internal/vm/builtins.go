@@ -1719,8 +1719,23 @@ func (r *Runtime) initErrorBuiltins() {
 
 		ctor := r.newCtor(name, 1, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
 			o := newObject(rt.proto.nativeErrors[kind], ClassError)
+			// AggregateError takes the list of causes first, so its message is
+			// the second argument rather than the first.
+			msgArg, optsArg := arg(args, 0), arg(args, 1)
+			if kind == errAggregate {
+				msgArg, optsArg = arg(args, 1), arg(args, 2)
+				var errs []Value
+				if err := rt.iterate(arg(args, 0), func(v Value) error {
+					errs = append(errs, v)
+					return nil
+				}); err != nil {
+					return Undefined, err
+				}
+				o.setOwnRaw(rt.atoms.intern("errors"), Obj(rt.newArrayFrom(errs)),
+					propWritable|propConfigurable)
+			}
 			msg := ""
-			if m := arg(args, 0); !m.IsUndefined() {
+			if m := msgArg; !m.IsUndefined() {
 				s, err := rt.toString(m)
 				if err != nil {
 					return Undefined, err
@@ -1729,7 +1744,7 @@ func (r *Runtime) initErrorBuiltins() {
 				o.setOwnRaw(atomMessage, Str(s), propWritable|propConfigurable)
 			}
 			// The cause option, when present, is attached as an own property.
-			if opts := arg(args, 1); opts.IsObject() {
+			if opts := optsArg; opts.IsObject() {
 				causeKey := rt.atoms.intern("cause")
 				if rt.hasProp(opts.Object(), causeKey) {
 					cause, err := rt.getProp(opts.Object(), causeKey, opts)

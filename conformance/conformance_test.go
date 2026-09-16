@@ -69,6 +69,7 @@ var unsupportedFeatures = map[string]string{
 	"json-parse-with-source":        "no JSON source access",
 	"Intl.DurationFormat":           "no internationalization API",
 	"legacy-regexp":                 "no legacy RegExp statics",
+	"error-stack-accessor":          "Error stack is an own data property",
 	"String.prototype.replaceAll":   "",
 	"IsHTMLDDA":                     "no document.all emulation",
 	"cross-realm":                   "no realms API",
