@@ -594,7 +594,7 @@ func (r *Runtime) initReflectBuiltins() {
 			ok, err := rt.proxySetPrototypeOf(p, proto)
 			return Bool(ok), err
 		}
-		return Bool(setProtoOf(target.Object(), proto)), nil
+		return Bool(rt.setProtoOfChecked(target.Object(), proto)), nil
 	})
 
 	r.defMethod(rf, "defineProperty", 3, func(rt *Runtime, this Value, args []Value) (Value, error) {

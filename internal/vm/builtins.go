@@ -197,8 +197,8 @@ func (r *Runtime) initObjectBuiltins() {
 			}
 			return target, nil
 		}
-		if !setProtoOf(target.Object(), proto) {
-			return Undefined, rt.throwTypeError("cannot set the prototype of a non-extensible object")
+		if !rt.setProtoOfChecked(target.Object(), proto) {
+			return Undefined, rt.throwTypeError("cannot set the prototype of this object")
 		}
 		return target, nil
 	})
@@ -545,73 +545,6 @@ func (r *Runtime) defineProperties(target *Object, props Value) error {
 }
 
 // definePropertyFromDescriptor applies one descriptor object.
-func (r *Runtime) definePropertyFromDescriptor(target *Object, key Atom, desc Value) error {
-	if !desc.IsObject() {
-		return r.throwTypeError("a property descriptor must be an object")
-	}
-	d := desc.Object()
-
-	read := func(name Atom) (Value, bool, error) {
-		if !r.hasProp(d, name) {
-			return Undefined, false, nil
-		}
-		v, err := r.getProp(d, name, desc)
-		return v, true, err
-	}
-
-	getter, hasGet, err := read(atomGet)
-	if err != nil {
-		return err
-	}
-	setter, hasSet, err := read(atomSet)
-	if err != nil {
-		return err
-	}
-	value, hasValue, err := read(atomValue)
-	if err != nil {
-		return err
-	}
-	writable, hasWritable, err := read(atomWritable)
-	if err != nil {
-		return err
-	}
-	enumerable, hasEnumerable, err := read(atomEnumerable)
-	if err != nil {
-		return err
-	}
-	configurable, hasConfigurable, err := read(atomConfigurable)
-	if err != nil {
-		return err
-	}
-
-	if (hasGet || hasSet) && (hasValue || hasWritable) {
-		return r.throwTypeError("a property descriptor cannot be both an accessor and a data descriptor")
-	}
-
-	var flags propFlags
-	if hasEnumerable && enumerable.Truthy() {
-		flags |= propEnumerable
-	}
-	if hasConfigurable && configurable.Truthy() {
-		flags |= propConfigurable
-	}
-
-	if hasGet || hasSet {
-		var g, s *Object
-		if hasGet && getter.IsObject() {
-			g = getter.Object()
-		}
-		if hasSet && setter.IsObject() {
-			s = setter.Object()
-		}
-		r.defineAccessor(target, key, g, s, flags)
-		return nil
-	}
-	if hasWritable && writable.Truthy() {
-		flags |= propWritable
-	}
-	return r.defineOwnProp(target, key, value, flags)
-}
 
 // ---------------------------------------------------------------------------
 // Function
