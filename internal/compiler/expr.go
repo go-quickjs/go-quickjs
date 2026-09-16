@@ -235,8 +235,10 @@ func (c *compiler) compileArrayLit(n *ast.ArrayLit) {
 	for _, el := range n.Elements {
 		switch {
 		case el == nil:
-			// A hole still advances the length.
-			c.emit(bytecode.OpPushUndef, 0, 0)
+			// A hole advances the length without creating a property, which is
+			// what makes `1 in [1,,3]` false and what the iteration methods
+			// skip.
+			c.emit(bytecode.OpPushUninitialized, 0, 0)
 			c.emit(bytecode.OpArrayPush, 0, 0)
 		default:
 			if sp, ok := el.(*ast.Spread); ok {

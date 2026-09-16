@@ -1481,6 +1481,20 @@ func (r *Runtime) defineHalfAccessor(o *Object, key Atom, fn *Object, isGetter b
 	r.defineAccessor(o, key, getter, setter, propEnumerable|propConfigurable)
 }
 
+// tick advances the interrupt counter from outside the interpreter loop.
+//
+// A built-in that walks a long sequence without running any bytecode -- an
+// Array method over an array-like with an enormous length, say -- would
+// otherwise be unstoppable, which is exactly the hang the context bound exists
+// to prevent.
+func (r *Runtime) tick() error {
+	r.interruptCounter--
+	if r.interruptCounter <= 0 {
+		return r.checkInterruptNow()
+	}
+	return nil
+}
+
 // unwindToFinally transfers control to the innermost finally handler, carrying
 // a return completion.
 //

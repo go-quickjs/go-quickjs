@@ -793,48 +793,108 @@ func (r *Runtime) initArrayBuiltins() {
 	})
 
 	r.defMethod(p, "slice", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.toObject(this)
+		a, err := rt.viewArrayLike(this)
 		if err != nil {
 			return Undefined, err
 		}
-		n := len(o.elems)
-		start, err := rt.relativeIndex(arg(args, 0), n, 0)
+		start, err := rt.relativeIndex64(arg(args, 0), a.n, 0)
 		if err != nil {
 			return Undefined, err
 		}
-		end, err := rt.relativeIndex(arg(args, 1), n, n)
+		end, err := rt.relativeIndex64(arg(args, 1), a.n, a.n)
 		if err != nil {
 			return Undefined, err
 		}
-		start, end = clipRange(o, start, end)
-		if start >= end {
-			return Obj(rt.newArrayFrom(nil)), nil
+		out := newObject(rt.proto.array, ClassArray)
+		for i := start; i < end; i++ {
+			v, present, err := a.at(rt, i)
+			if err != nil {
+				return Undefined, err
+			}
+			if !present {
+				// A hole in the source stays a hole in the result.
+				out.elems = append(out.elems, elemHole)
+				continue
+			}
+			out.elems = append(out.elems, v)
 		}
-		return Obj(rt.newArrayFrom(o.elems[start:end])), nil
+		return Obj(out), nil
 	})
 
 	r.defMethod(p, "indexOf", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.toObject(this)
+		a, err := rt.viewArrayLike(this)
 		if err != nil {
 			return Undefined, err
 		}
 		target := arg(args, 0)
-		for i, el := range o.elems {
-			if !isHole(el) && el.StrictEquals(target) {
-				return Int(i), nil
+		from, err := rt.relativeIndex64(arg(args, 1), a.n, 0)
+		if err != nil {
+			return Undefined, err
+		}
+		for i := from; i < a.n; i++ {
+			el, present, err := a.at(rt, i)
+			if err != nil {
+				return Undefined, err
+			}
+			// indexOf skips holes and compares with ===, so NaN is never found.
+			if present && el.StrictEquals(target) {
+				return Float(float64(i)), nil
+			}
+		}
+		return Int(-1), nil
+	})
+
+	r.defMethod(p, "lastIndexOf", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		a, err := rt.viewArrayLike(this)
+		if err != nil {
+			return Undefined, err
+		}
+		target := arg(args, 0)
+		from := a.n - 1
+		if len(args) > 1 {
+			n, err := rt.toInteger(args[1])
+			if err != nil {
+				return Undefined, err
+			}
+			if n < 0 {
+				n += float64(a.n)
+			}
+			if n < 0 {
+				return Int(-1), nil
+			}
+			if f := int64(n); f < from {
+				from = f
+			}
+		}
+		for i := from; i >= 0; i-- {
+			el, present, err := a.at(rt, i)
+			if err != nil {
+				return Undefined, err
+			}
+			if present && el.StrictEquals(target) {
+				return Float(float64(i)), nil
 			}
 		}
 		return Int(-1), nil
 	})
 
 	r.defMethod(p, "includes", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.toObject(this)
+		a, err := rt.viewArrayLike(this)
 		if err != nil {
 			return Undefined, err
 		}
 		target := arg(args, 0)
-		for _, el := range o.elems {
-			// includes uses SameValueZero, so NaN is found.
+		from, err := rt.relativeIndex64(arg(args, 1), a.n, 0)
+		if err != nil {
+			return Undefined, err
+		}
+		for i := from; i < a.n; i++ {
+			// includes compares with SameValueZero, so NaN is found, and it
+			// reads holes as undefined rather than skipping them.
+			el, err := a.get(rt, i)
+			if err != nil {
+				return Undefined, err
+			}
 			if el.SameValueZero(target) {
 				return True, nil
 			}
@@ -843,7 +903,7 @@ func (r *Runtime) initArrayBuiltins() {
 	})
 
 	r.defMethod(p, "join", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.toObject(this)
+		a, err := rt.viewArrayLike(this)
 		if err != nil {
 			return Undefined, err
 		}
@@ -856,12 +916,16 @@ func (r *Runtime) initArrayBuiltins() {
 			sep = ss.Go()
 		}
 		var sb strings.Builder
-		for i, el := range o.elems {
+		for i := int64(0); i < a.n; i++ {
 			if i > 0 {
 				sb.WriteString(sep)
 			}
+			el, err := a.get(rt, i)
+			if err != nil {
+				return Undefined, err
+			}
 			// null and undefined contribute nothing, unlike String(el).
-			if el.IsNullish() || isHole(el) {
+			if el.IsNullish() {
 				continue
 			}
 			s, err := rt.toString(el)
@@ -885,29 +949,60 @@ func (r *Runtime) initArrayBuiltins() {
 	})
 
 	r.defMethod(p, "concat", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.toObject(this)
+		a, err := rt.viewArrayLike(this)
 		if err != nil {
 			return Undefined, err
 		}
-		out := append([]Value(nil), o.elems...)
-		for _, a := range args {
-			// An array argument is spread; anything else is appended whole.
-			if a.IsObject() && a.Object().IsArray() {
-				out = append(out, a.Object().elems...)
+		out := newObject(rt.proto.array, ClassArray)
+		// The receiver counts as the first argument: it is spread when it is an
+		// array and appended whole otherwise, just like the rest.
+		items := append([]Value{Obj(a.o)}, args...)
+		for _, item := range items {
+			if !item.IsObject() || !item.Object().IsArray() {
+				out.elems = append(out.elems, item)
 				continue
 			}
-			out = append(out, a)
+			src, err := rt.viewArrayLike(item)
+			if err != nil {
+				return Undefined, err
+			}
+			for i := int64(0); i < src.n; i++ {
+				v, present, err := src.at(rt, i)
+				if err != nil {
+					return Undefined, err
+				}
+				if !present {
+					out.elems = append(out.elems, elemHole)
+					continue
+				}
+				out.elems = append(out.elems, v)
+			}
 		}
-		return Obj(rt.newArrayFrom(out)), nil
+		return Obj(out), nil
 	})
 
 	r.defMethod(p, "reverse", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.toObject(this)
+		a, err := rt.viewArrayLike(this)
 		if err != nil {
 			return Undefined, err
 		}
-		for i, j := 0, len(o.elems)-1; i < j; i, j = i+1, j-1 {
-			o.elems[i], o.elems[j] = o.elems[j], o.elems[i]
+		for lo, hi := int64(0), a.n-1; lo < hi; lo, hi = lo+1, hi-1 {
+			loVal, loHas, err := a.at(rt, lo)
+			if err != nil {
+				return Undefined, err
+			}
+			hiVal, hiHas, err := a.at(rt, hi)
+			if err != nil {
+				return Undefined, err
+			}
+			// A hole swapped in has to be deleted rather than written, or it
+			// would become an element holding undefined.
+			if err := a.put(rt, lo, hiVal, hiHas); err != nil {
+				return Undefined, err
+			}
+			if err := a.put(rt, hi, loVal, loHas); err != nil {
+				return Undefined, err
+			}
 		}
 		return this, nil
 	})
@@ -917,98 +1012,94 @@ func (r *Runtime) initArrayBuiltins() {
 	// specification requires: an element the callback appends is not visited,
 	// and one it removes is skipped. Re-reading the length each step would
 	// also let a callback that pushes loop forever.
-	r.defIterationMethod(p, "forEach", func(rt *Runtime, o *Object, cb Value, thisArg Value) (Value, error) {
-		n := len(o.elems)
-		for i := 0; i < n; i++ {
-			el, ok := elemAt(o, i)
-			if !ok {
+	r.defIterationMethod(p, "forEach", func(rt *Runtime, a *arrayLike, cb Value, thisArg Value) (Value, error) {
+		for i := int64(0); i < a.n; i++ {
+			el, present, err := a.at(rt, i)
+			if err != nil {
+				return Undefined, err
+			}
+			if !present {
 				continue
 			}
-			if _, err := rt.call(cb, thisArg, []Value{el, Int(i), Obj(o)}); err != nil {
+			if _, err := rt.call(cb, thisArg, []Value{el, Float(float64(i)), Obj(a.o)}); err != nil {
 				return Undefined, err
 			}
 		}
 		return Undefined, nil
 	})
 
-	r.defIterationMethod(p, "map", func(rt *Runtime, o *Object, cb Value, thisArg Value) (Value, error) {
-		n := len(o.elems)
-		out := make([]Value, n)
-		for i := 0; i < n; i++ {
-			el, ok := elemAt(o, i)
-			if !ok {
-				// A hole in the source stays a hole in the result.
-				out[i] = elemHole
-				continue
-			}
-			v, err := rt.call(cb, thisArg, []Value{el, Int(i), Obj(o)})
+	r.defIterationMethod(p, "map", func(rt *Runtime, a *arrayLike, cb Value, thisArg Value) (Value, error) {
+		out := rt.newArrayOfLength(a.n)
+		for i := int64(0); i < a.n; i++ {
+			el, present, err := a.at(rt, i)
 			if err != nil {
 				return Undefined, err
 			}
-			out[i] = v
-		}
-		return Obj(rt.newArrayFrom(out)), nil
-	})
-
-	r.defIterationMethod(p, "filter", func(rt *Runtime, o *Object, cb Value, thisArg Value) (Value, error) {
-		n := len(o.elems)
-		var out []Value
-		for i := 0; i < n; i++ {
-			el, ok := elemAt(o, i)
-			if !ok {
+			if !present {
+				// A hole in the source stays a hole in the result.
+				out.elems = append(out.elems, elemHole)
 				continue
 			}
-			keep, err := rt.call(cb, thisArg, []Value{el, Int(i), Obj(o)})
+			v, err := rt.call(cb, thisArg, []Value{el, Float(float64(i)), Obj(a.o)})
+			if err != nil {
+				return Undefined, err
+			}
+			out.elems = append(out.elems, v)
+		}
+		return Obj(out), nil
+	})
+
+	r.defIterationMethod(p, "filter", func(rt *Runtime, a *arrayLike, cb Value, thisArg Value) (Value, error) {
+		out := newObject(rt.proto.array, ClassArray)
+		for i := int64(0); i < a.n; i++ {
+			el, present, err := a.at(rt, i)
+			if err != nil {
+				return Undefined, err
+			}
+			if !present {
+				continue
+			}
+			keep, err := rt.call(cb, thisArg, []Value{el, Float(float64(i)), Obj(a.o)})
 			if err != nil {
 				return Undefined, err
 			}
 			if keep.Truthy() {
-				out = append(out, el)
+				out.elems = append(out.elems, el)
 			}
 		}
-		return Obj(rt.newArrayFrom(out)), nil
+		return Obj(out), nil
 	})
 
-	r.defIterationMethod(p, "find", func(rt *Runtime, o *Object, cb Value, thisArg Value) (Value, error) {
-		n := len(o.elems)
-		for i := 0; i < n; i++ {
-			// find visits holes, unlike filter and forEach, reporting them as
-			// undefined.
-			el, _ := elemAt(o, i)
-			ok, err := rt.call(cb, thisArg, []Value{el, Int(i), Obj(o)})
+	r.defIterationMethod(p, "find", func(rt *Runtime, a *arrayLike, cb Value, thisArg Value) (Value, error) {
+		v, _, err := rt.findIn(a, cb, thisArg, false)
+		return v, err
+	})
+
+	r.defIterationMethod(p, "findIndex", func(rt *Runtime, a *arrayLike, cb Value, thisArg Value) (Value, error) {
+		_, i, err := rt.findIn(a, cb, thisArg, false)
+		return Float(float64(i)), err
+	})
+
+	r.defIterationMethod(p, "findLast", func(rt *Runtime, a *arrayLike, cb Value, thisArg Value) (Value, error) {
+		v, _, err := rt.findIn(a, cb, thisArg, true)
+		return v, err
+	})
+
+	r.defIterationMethod(p, "findLastIndex", func(rt *Runtime, a *arrayLike, cb Value, thisArg Value) (Value, error) {
+		_, i, err := rt.findIn(a, cb, thisArg, true)
+		return Float(float64(i)), err
+	})
+
+	r.defIterationMethod(p, "some", func(rt *Runtime, a *arrayLike, cb Value, thisArg Value) (Value, error) {
+		for i := int64(0); i < a.n; i++ {
+			el, present, err := a.at(rt, i)
 			if err != nil {
 				return Undefined, err
 			}
-			if ok.Truthy() {
-				return el, nil
-			}
-		}
-		return Undefined, nil
-	})
-
-	r.defIterationMethod(p, "findIndex", func(rt *Runtime, o *Object, cb Value, thisArg Value) (Value, error) {
-		n := len(o.elems)
-		for i := 0; i < n; i++ {
-			el, _ := elemAt(o, i)
-			ok, err := rt.call(cb, thisArg, []Value{el, Int(i), Obj(o)})
-			if err != nil {
-				return Undefined, err
-			}
-			if ok.Truthy() {
-				return Int(i), nil
-			}
-		}
-		return Int(-1), nil
-	})
-
-	r.defIterationMethod(p, "some", func(rt *Runtime, o *Object, cb Value, thisArg Value) (Value, error) {
-		n := len(o.elems)
-		for i := 0; i < n; i++ {
-			el, ok := elemAt(o, i)
-			if !ok {
+			if !present {
 				continue
 			}
-			res, err := rt.call(cb, thisArg, []Value{el, Int(i), Obj(o)})
+			res, err := rt.call(cb, thisArg, []Value{el, Float(float64(i)), Obj(a.o)})
 			if err != nil {
 				return Undefined, err
 			}
@@ -1019,14 +1110,16 @@ func (r *Runtime) initArrayBuiltins() {
 		return False, nil
 	})
 
-	r.defIterationMethod(p, "every", func(rt *Runtime, o *Object, cb Value, thisArg Value) (Value, error) {
-		n := len(o.elems)
-		for i := 0; i < n; i++ {
-			el, ok := elemAt(o, i)
-			if !ok {
+	r.defIterationMethod(p, "every", func(rt *Runtime, a *arrayLike, cb Value, thisArg Value) (Value, error) {
+		for i := int64(0); i < a.n; i++ {
+			el, present, err := a.at(rt, i)
+			if err != nil {
+				return Undefined, err
+			}
+			if !present {
 				continue
 			}
-			res, err := rt.call(cb, thisArg, []Value{el, Int(i), Obj(o)})
+			res, err := rt.call(cb, thisArg, []Value{el, Float(float64(i)), Obj(a.o)})
 			if err != nil {
 				return Undefined, err
 			}
@@ -1038,48 +1131,7 @@ func (r *Runtime) initArrayBuiltins() {
 	})
 
 	r.defMethod(p, "reduce", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.toObject(this)
-		if err != nil {
-			return Undefined, err
-		}
-		cb := arg(args, 0)
-		if !isCallable(cb) {
-			return Undefined, rt.throwTypeError("reduce requires a function")
-		}
-		n := len(o.elems)
-		i := 0
-		var acc Value
-		if len(args) > 1 {
-			acc = args[1]
-		} else {
-			// Without an initial value the first present element seeds the
-			// accumulator, and an array with none is an error.
-			for i < n {
-				if el, ok := elemAt(o, i); ok {
-					acc = el
-					i++
-					break
-				}
-				i++
-			}
-			if i > n || acc.IsUndefined() && i == 0 {
-				return Undefined, rt.throwTypeError("reduce of an empty array with no initial value")
-			}
-			if i == 0 {
-				return Undefined, rt.throwTypeError("reduce of an empty array with no initial value")
-			}
-		}
-		for ; i < n; i++ {
-			el, ok := elemAt(o, i)
-			if !ok {
-				continue
-			}
-			acc, err = rt.call(cb, Undefined, []Value{acc, el, Int(i), Obj(o)})
-			if err != nil {
-				return Undefined, err
-			}
-		}
-		return acc, nil
+		return rt.reduceArray(this, args, false)
 	})
 
 	r.defMethod(p, "sort", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -1141,13 +1193,16 @@ func (r *Runtime) initArrayBuiltins() {
 }
 
 // iterationFn is the body of an array method that takes a callback.
-type iterationFn func(rt *Runtime, o *Object, cb Value, thisArg Value) (Value, error)
+type iterationFn func(rt *Runtime, a *arrayLike, cb Value, thisArg Value) (Value, error)
 
 // defIterationMethod defines an array method that takes a callback and an
 // optional `this` argument, which is the shape most of them share.
 func (r *Runtime) defIterationMethod(p *Object, name string, body iterationFn) {
 	r.defMethod(p, name, 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.toObject(this)
+		// The receiver is coerced and its length read before the callback is
+		// checked, which is the order the specification observes: a getter on
+		// length runs even when the callback turns out to be missing.
+		a, err := rt.viewArrayLike(this)
 		if err != nil {
 			return Undefined, err
 		}
@@ -1155,8 +1210,96 @@ func (r *Runtime) defIterationMethod(p *Object, name string, body iterationFn) {
 		if !isCallable(cb) {
 			return Undefined, rt.throwTypeError("%s requires a function", name)
 		}
-		return body(rt, o, cb, arg(args, 1))
+		return body(rt, a, cb, arg(args, 1))
 	})
+}
+
+// findIn backs find, findIndex, findLast and findLastIndex, which differ only
+// in the direction they walk and what they report.
+//
+// All four visit holes, unlike filter and forEach, reporting them as undefined:
+// they are looking for a position, and a hole is a position.
+func (r *Runtime) findIn(a *arrayLike, cb, thisArg Value, backwards bool) (Value, int64, error) {
+	for k := int64(0); k < a.n; k++ {
+		i := k
+		if backwards {
+			i = a.n - 1 - k
+		}
+		el, err := a.get(r, i)
+		if err != nil {
+			return Undefined, -1, err
+		}
+		ok, err := r.call(cb, thisArg, []Value{el, Float(float64(i)), Obj(a.o)})
+		if err != nil {
+			return Undefined, -1, err
+		}
+		if ok.Truthy() {
+			return el, i, nil
+		}
+	}
+	return Undefined, -1, nil
+}
+
+// reduceArray backs reduce and reduceRight.
+func (r *Runtime) reduceArray(this Value, args []Value, backwards bool) (Value, error) {
+	name := "reduce"
+	if backwards {
+		name = "reduceRight"
+	}
+	a, err := r.viewArrayLike(this)
+	if err != nil {
+		return Undefined, err
+	}
+	cb := arg(args, 0)
+	if !isCallable(cb) {
+		return Undefined, r.throwTypeError("%s requires a function", name)
+	}
+
+	k := int64(0)
+	var acc Value
+	seeded := len(args) > 1
+	if seeded {
+		acc = args[1]
+	}
+	// Without an initial value the first present element seeds the
+	// accumulator, and a list with none at all is an error rather than
+	// undefined -- the one case where reduce refuses to guess.
+	for !seeded && k < a.n {
+		i := k
+		if backwards {
+			i = a.n - 1 - k
+		}
+		el, present, err := a.at(r, i)
+		if err != nil {
+			return Undefined, err
+		}
+		k++
+		if present {
+			acc, seeded = el, true
+		}
+	}
+	if !seeded {
+		return Undefined, r.throwTypeError("%s of an empty array with no initial value", name)
+	}
+
+	for ; k < a.n; k++ {
+		i := k
+		if backwards {
+			i = a.n - 1 - k
+		}
+		el, present, err := a.at(r, i)
+		if err != nil {
+			return Undefined, err
+		}
+		if !present {
+			continue
+		}
+		acc, err = r.call(cb, Undefined, []Value{acc, el, Float(float64(i)), Obj(a.o)})
+		if err != nil {
+			return Undefined, err
+		}
+	}
+	return acc, nil
 }
 
 // relativeIndex resolves an index argument that may be negative, as slice and
@@ -1858,20 +2001,6 @@ func (r *Runtime) initArrayExtras() {
 			return Undefined, nil
 		}
 		return v, nil
-	})
-
-	r.defMethod(p, "lastIndexOf", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.toObject(this)
-		if err != nil {
-			return Undefined, err
-		}
-		target := arg(args, 0)
-		for i := len(o.elems) - 1; i >= 0; i-- {
-			if !isHole(o.elems[i]) && o.elems[i].StrictEquals(target) {
-				return Int(i), nil
-			}
-		}
-		return Int(-1), nil
 	})
 
 	r.defMethod(p, "fill", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {

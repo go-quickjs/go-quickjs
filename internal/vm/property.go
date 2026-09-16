@@ -390,6 +390,14 @@ func (r *Runtime) defineOwnProp(o *Object, key Atom, val Value, flags propFlags)
 // accessor for the same key so that `get x` and `set x` combine.
 func (r *Runtime) defineAccessor(o *Object, key Atom, getter, setter *Object, flags propFlags) {
 	flags |= propAccessor
+	// Dense storage holds plain values and cannot express an accessor, so an
+	// index being turned into one has to leave it. Everything that reads a
+	// dense element takes it as a data property with default attributes, which
+	// would otherwise shadow the accessor being defined here.
+	if key.IsIndex() && int(key.Index()) < len(o.elems) {
+		o.elems[key.Index()] = elemHole
+		o.flags |= objHasSparseElements
+	}
 	if p := o.getOwnVisible(key); p != nil && p.isAccessor() {
 		if a := p.getterSetter(); a != nil {
 			if getter != nil {

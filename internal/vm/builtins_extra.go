@@ -100,87 +100,38 @@ func (r *Runtime) initArrayExtras2() {
 	})
 
 	r.defMethod(p, "reduceRight", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.toObject(this)
-		if err != nil {
-			return Undefined, err
-		}
-		cb := arg(args, 0)
-		if !isCallable(cb) {
-			return Undefined, rt.throwTypeError("reduceRight requires a function")
-		}
-		i := len(o.elems) - 1
-		var acc Value
-		if len(args) > 1 {
-			acc = args[1]
-		} else {
-			for i >= 0 {
-				if el, ok := elemAt(o, i); ok {
-					acc = el
-					i--
-					break
-				}
-				i--
-			}
-			if i < -1 {
-				return Undefined, rt.throwTypeError("reduceRight of an empty array with no initial value")
-			}
-		}
-		for ; i >= 0; i-- {
-			el, ok := elemAt(o, i)
-			if !ok {
-				continue
-			}
-			acc, err = rt.call(cb, Undefined, []Value{acc, el, Int(i), Obj(o)})
-			if err != nil {
-				return Undefined, err
-			}
-		}
-		return acc, nil
+		return rt.reduceArray(this, args, true)
 	})
 
-	r.defIterationMethod(p, "findLast", func(rt *Runtime, o *Object, cb Value, thisArg Value) (Value, error) {
-		for i := len(o.elems) - 1; i >= 0; i-- {
-			el, _ := elemAt(o, i)
-			ok, err := rt.call(cb, thisArg, []Value{el, Int(i), Obj(o)})
-			if err != nil {
-				return Undefined, err
-			}
-			if ok.Truthy() {
-				return el, nil
-			}
-		}
-		return Undefined, nil
-	})
-
-	r.defIterationMethod(p, "findLastIndex", func(rt *Runtime, o *Object, cb Value, thisArg Value) (Value, error) {
-		for i := len(o.elems) - 1; i >= 0; i-- {
-			el, _ := elemAt(o, i)
-			ok, err := rt.call(cb, thisArg, []Value{el, Int(i), Obj(o)})
-			if err != nil {
-				return Undefined, err
-			}
-			if ok.Truthy() {
-				return Int(i), nil
-			}
-		}
-		return Int(-1), nil
-	})
-
-	r.defIterationMethod(p, "flatMap", func(rt *Runtime, o *Object, cb Value, thisArg Value) (Value, error) {
-		n := len(o.elems)
+	r.defIterationMethod(p, "flatMap", func(rt *Runtime, a *arrayLike, cb Value, thisArg Value) (Value, error) {
 		var out []Value
-		for i := 0; i < n; i++ {
-			el, ok := elemAt(o, i)
-			if !ok {
+		for i := int64(0); i < a.n; i++ {
+			el, present, err := a.at(rt, i)
+			if err != nil {
+				return Undefined, err
+			}
+			if !present {
 				continue
 			}
-			v, err := rt.call(cb, thisArg, []Value{el, Int(i), Obj(o)})
+			v, err := rt.call(cb, thisArg, []Value{el, Float(float64(i)), Obj(a.o)})
 			if err != nil {
 				return Undefined, err
 			}
 			// flatMap flattens exactly one level, never more.
 			if v.IsObject() && v.Object().IsArray() {
-				out = append(out, v.Object().elems...)
+				inner, err := rt.viewArrayLike(v)
+				if err != nil {
+					return Undefined, err
+				}
+				for j := int64(0); j < inner.n; j++ {
+					iv, present, err := inner.at(rt, j)
+					if err != nil {
+						return Undefined, err
+					}
+					if present {
+						out = append(out, iv)
+					}
+				}
 				continue
 			}
 			out = append(out, v)
