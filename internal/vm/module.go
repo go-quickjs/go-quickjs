@@ -183,6 +183,19 @@ func (r *Runtime) Link(m *Module) error {
 		}
 	}
 
+	// An export whose public name differs from the binding that backs it needs
+	// an entry in the namespace. The default export always does, since it is
+	// stored under a name no identifier can spell.
+	for exported, local := range m.exports {
+		if exported == local {
+			continue
+		}
+		if m.env.getOwn(r.atoms.intern(exported)) != nil {
+			continue
+		}
+		r.forwardBinding(m.env, exported, m, local)
+	}
+
 	m.state = ModuleLinked
 	return nil
 }
@@ -315,4 +328,41 @@ func (c *closure) scope() *Object {
 		return c.env
 	}
 	return c.realm.global
+}
+
+// initDynamicImport defines the global that `import(...)` compiles into a call
+// to.
+//
+// The parser turns `import(x)` into a call to an identifier named "import",
+// which cannot collide with anything a script could write, since `import` is a
+// reserved word.
+func (r *Runtime) initDynamicImport() {
+	fn := r.newNativeFunc("import", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		// A dynamic import always returns a promise, so a failure to resolve
+		// rejects rather than throws.
+		result := rt.newPromise()
+
+		spec, err := rt.toString(arg(args, 0))
+		if err != nil {
+			rt.rejectPromise(result, thrownValue(err))
+			return Obj(result), nil
+		}
+
+		mod, err := rt.loadDependency(spec.Go(), "")
+		if err != nil {
+			rt.rejectPromise(result, thrownValue(err))
+			return Obj(result), nil
+		}
+		if err := rt.Link(mod); err != nil {
+			rt.rejectPromise(result, thrownValue(err))
+			return Obj(result), nil
+		}
+		if _, err := rt.EvaluateModule(mod); err != nil {
+			rt.rejectPromise(result, thrownValue(err))
+			return Obj(result), nil
+		}
+		rt.resolvePromise(result, Obj(mod.env))
+		return Obj(result), nil
+	})
+	r.global.setOwnRaw(r.atoms.intern("import"), Obj(fn), propWritable|propConfigurable)
 }

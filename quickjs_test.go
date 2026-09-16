@@ -1821,3 +1821,54 @@ func TestWrapperConstructors(t *testing.T) {
 		checkEval(t, tt.src, tt.want)
 	}
 }
+
+func TestDynamicImport(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	rt.SetModuleLoader(func(spec, ref string) (string, string, error) {
+		if spec == "m" {
+			return `export const v = 42; export default "d";`, spec, nil
+		}
+		return "", "", fmt.Errorf("not found: %s", spec)
+	})
+
+	// A dynamic import always returns a promise, so a failure rejects rather
+	// than throws.
+	if _, err := rt.Eval(`var r = ""; import("m").then(ns => r = ns.v)`); err != nil {
+		t.Fatal(err)
+	}
+	if got := evalString(t, rt, `r`); got != "42" {
+		t.Errorf("named export = %s, want 42", got)
+	}
+
+	rt.Eval(`r = ""; import("m").then(ns => r = ns.default)`)
+	if got := evalString(t, rt, `r`); got != "d" {
+		t.Errorf("default export = %s, want d", got)
+	}
+
+	rt.Eval(`r = ""; import("nope").catch(() => r = "rejected")`)
+	if got := evalString(t, rt, `r`); got != "rejected" {
+		t.Errorf("a failed import should reject, got %s", got)
+	}
+
+	rt.Eval(`r = ""; (async () => { const ns = await import("m"); r = ns.v })()`)
+	if got := evalString(t, rt, `r`); got != "42" {
+		t.Errorf("awaited import = %s, want 42", got)
+	}
+}
+
+func TestStaticImportDefaultIsNamedInNamespace(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	ns, err := rt.EvalModule("entry", `export default 7;`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := ns.Get("default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Int() != 7 {
+		t.Errorf("namespace.default = %v, want 7", v)
+	}
+}

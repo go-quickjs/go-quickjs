@@ -239,4 +239,5 @@ func (r *Runtime) initGlobals() {
 	r.initJSONBuiltins()
 	r.initGlobalFunctions()
 	r.initExtraBuiltins()
+	r.initDynamicImport()
 }
