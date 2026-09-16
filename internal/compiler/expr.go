@@ -259,6 +259,13 @@ func (c *compiler) compileObjectLit(n *ast.ObjectLit) {
 			c.emit(bytecode.OpCopyDataProps, 0, 0)
 			continue
 		case ast.PropGet, ast.PropSet:
+			// An accessor is named after its property with a "get " or "set "
+			// prefix, which is what distinguishes the two halves in a stack
+			// trace.
+			nameKind, prefix := uint32(1), "get "
+			if p.Kind == ast.PropSet {
+				nameKind, prefix = 2, "set "
+			}
 			if p.Computed {
 				op := bytecode.OpDefineGetterIndex
 				if p.Kind == ast.PropSet {
@@ -267,6 +274,7 @@ func (c *compiler) compileObjectLit(n *ast.ObjectLit) {
 				c.compileExpr(p.Key)
 				c.emit(bytecode.OpToPropertyKey, 0, 0)
 				c.compileExpr(p.Value)
+				c.emit(bytecode.OpSetFuncName, nameKind, 0)
 				c.emit(op, 0, 0)
 				continue
 			}
@@ -274,7 +282,7 @@ func (c *compiler) compileObjectLit(n *ast.ObjectLit) {
 			if p.Kind == ast.PropSet {
 				op = bytecode.OpDefineSetter
 			}
-			c.compileExpr(p.Value)
+			c.compileExprNamed(p.Value, prefix+propKeyName(p.Key))
 			c.emit(op, c.nameIdx(propKeyName(p.Key)), 0)
 			continue
 		}
@@ -291,6 +299,9 @@ func (c *compiler) compileObjectLit(n *ast.ObjectLit) {
 			c.compileExpr(p.Key)
 			c.emit(bytecode.OpToPropertyKey, 0, 0)
 			c.compileExpr(p.Value)
+			if p.Method {
+				c.emit(bytecode.OpSetFuncName, 0, 0)
+			}
 			c.emit(bytecode.OpDefineIndex, 0, 0)
 			continue
 		}

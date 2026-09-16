@@ -90,6 +90,10 @@ const (
 	// from the stack beneath the function.
 	OpDefineGetterIndex
 	OpDefineSetterIndex
+	// OpSetFuncName names the function on top of the stack after the property
+	// key beneath it, which is how a method with a computed key gets a name.
+	// A is 0 for a plain method, 1 for a getter and 2 for a setter.
+	OpSetFuncName
 	OpGetLength     // a fast path for the very common `.length`
 	OpSetProtoOf    // set __proto__ from an object literal
 	OpCopyDataProps // object spread: copy own enumerable properties
@@ -281,6 +285,7 @@ var opNames = [opCount]string{
 	OpDefineGetter: "define_getter", OpDefineSetter: "define_setter",
 	OpDefineGetterIndex: "define_getter_index",
 	OpDefineSetterIndex: "define_setter_index",
+	OpSetFuncName:       "set_func_name",
 	OpGetLength:         "get_length", OpSetProtoOf: "set_proto_of",
 	OpCopyDataProps: "copy_data_props",
 

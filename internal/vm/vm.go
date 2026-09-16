@@ -598,6 +598,12 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				r.defineHalfAccessor(obj.Object(), cl.names[in.A], fnVal.Object(),
 					in.Op == bytecode.OpDefineGetter)
 			}
+		case bytecode.OpSetFuncName:
+			if fnVal := peek(0); fnVal.IsObject() {
+				if fd := fnVal.Object().fn(); fd != nil {
+					fd.name = functionNameFromKey(peek(1), in.A)
+				}
+			}
 		case bytecode.OpDefineGetterIndex, bytecode.OpDefineSetterIndex:
 			fnVal := pop()
 			key := pop()
@@ -1372,6 +1378,31 @@ func (r *Runtime) unwindToHandler(f *frame, sp *int, err error) bool {
 	}
 	f.pc = h.pc
 	return true
+}
+
+// functionNameFromKey derives a method's name from its property key.
+//
+// A symbol-keyed method is named after the symbol's description in brackets,
+// and one whose symbol has no description is anonymous, which is the only way
+// to name a function that cannot be spelled as an identifier.
+func functionNameFromKey(key Value, kind uint32) string {
+	name := ""
+	switch {
+	case key.IsSymbol():
+		sym := key.Symbol()
+		if sym.HasDescription {
+			name = "[" + sym.Description + "]"
+		}
+	case key.IsString():
+		name = key.String().Go()
+	}
+	switch kind {
+	case 1:
+		return "get " + name
+	case 2:
+		return "set " + name
+	}
+	return name
 }
 
 // defineHalfAccessor installs one half of an accessor, leaving the other half

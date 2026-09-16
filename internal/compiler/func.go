@@ -481,6 +481,15 @@ func (c *compiler) compileClassMember(m ast.Property, fn *ast.FuncLit) {
 	if !m.Computed {
 		key = propKeyName(m.Key)
 	}
+	// An accessor is named after its property with a "get " or "set " prefix.
+	nameKind := uint32(0)
+	methodName := key
+	switch m.Kind {
+	case ast.PropGet:
+		nameKind, methodName = 1, "get "+key
+	case ast.PropSet:
+		nameKind, methodName = 2, "set "+key
+	}
 
 	if m.Static {
 		// The constructor is the target and stays on the stack.
@@ -499,7 +508,11 @@ func (c *compiler) compileClassMember(m ast.Property, fn *ast.FuncLit) {
 		// The key now sits between the target and the function.
 		homeDepth = 2
 	}
-	c.compileMethodValue(fn, key)
+	c.compileMethodValue(fn, methodName)
+	if m.Computed {
+		// The name is only knowable once the key has been evaluated.
+		c.emit(bytecode.OpSetFuncName, nameKind, 0)
+	}
 	// The home object is what `super` resolves against, so a method has to
 	// remember the object it was defined on.
 	c.emit(bytecode.OpSetHomeObject, homeDepth, 0)

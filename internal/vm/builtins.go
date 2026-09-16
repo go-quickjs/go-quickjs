@@ -203,6 +203,9 @@ func (r *Runtime) initObjectBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
+		// A function's name and length are synthesized on demand, so they have
+		// to exist before a redefinition can be checked against them.
+		rt.materializeFunctionProp(target.Object(), key)
 		if err := rt.definePropertyFromDescriptor(target.Object(), key, arg(args, 2)); err != nil {
 			return Undefined, err
 		}
@@ -437,6 +440,7 @@ func (r *Runtime) describeProperty(o *Object, key Atom) Value {
 			return Obj(d)
 		}
 	}
+	r.materializeFunctionProp(o, key)
 	p := o.getOwnVisible(key)
 	if p == nil {
 		return Undefined

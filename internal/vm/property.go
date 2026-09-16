@@ -86,6 +86,31 @@ func (r *Runtime) getExoticNamed(o *Object, key Atom) (Value, bool, error) {
 	return Undefined, false, nil
 }
 
+// materializeFunctionProp creates a function's name or length as a real own
+// property, so that anything looking at the property table rather than reading
+// through getProp finds it.
+//
+// They are synthesized on demand rather than created with every function -- a
+// program makes far more functions than it inspects -- but a descriptor query,
+// a redefinition or an ownKeys walk has to see the same property a read does.
+func (r *Runtime) materializeFunctionProp(o *Object, key Atom) {
+	if o.class != ClassFunction || (key != atomName && key != atomLength) {
+		return
+	}
+	fd := o.fn()
+	if fd == nil || o.getOwn(key) != nil {
+		return
+	}
+	// Both are non-writable, non-enumerable and configurable, which is what
+	// lets a script rename a function with defineProperty but not by
+	// assignment.
+	if key == atomName {
+		o.setOwnRaw(atomName, Str(NewString(fd.name)), propConfigurable)
+	} else {
+		o.setOwnRaw(atomLength, Int(fd.length), propConfigurable)
+	}
+}
+
 // getExoticIndex handles index reads that are not backed by dense storage.
 func (r *Runtime) getExoticIndex(o *Object, idx uint32) (Value, bool, error) {
 	switch o.class {
