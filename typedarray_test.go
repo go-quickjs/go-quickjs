@@ -120,3 +120,77 @@ func TestBigIntBuiltins(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// A callback receives the view itself as its third argument. A temporary array
+// standing in for it would be observable, which is what several hundred
+// conformance tests check.
+func TestTypedArrayCallbackReceivesView(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var seen; new Uint8Array([7]).forEach(function (v, i, a) { seen = a; });
+		  String(seen instanceof Uint8Array)`, "true"},
+		{`var seen; new Uint8Array([7]).map(function (v, i, a) { seen = a; return v; });
+		  String(seen instanceof Uint8Array)`, "true"},
+		{`var seen; new Uint8Array([7]).filter(function (v, i, a) { seen = a; return true; });
+		  String(seen instanceof Uint8Array)`, "true"},
+		{`var seen; new Uint8Array([7]).reduce(function (acc, v, i, a) { seen = a; return acc; }, 0);
+		  String(seen instanceof Uint8Array)`, "true"},
+		// And the receiver is the thisArg, not the view.
+		{`var seen; new Uint8Array([7]).forEach(function () { seen = this.tag; }, {tag: "t"});
+		  seen`, "t"},
+		// Indices and values are the view's own.
+		{`var out = []; new Uint8Array([9, 8]).forEach((v, i) => out.push(i + ":" + v));
+		  out.join(",")`, "0:9,1:8"},
+		{`new Uint8Array([1, 2, 3]).findLast(x => x < 3) + ""`, "2"},
+		{`new Uint8Array([1, 2, 3]).findLastIndex(x => x < 3) + ""`, "1"},
+		{`String(new Uint8Array([]).reduce((a, b) => a, 5))`, "5"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+
+	rt := quickjs.New()
+	defer rt.Close()
+	if _, err := rt.Eval(`new Uint8Array([]).reduce((a, b) => a)`); err == nil {
+		t.Error("reduce of an empty typed array with no initial value should throw")
+	}
+}
+
+// TestTypedArrayConstructorSources pins the three shapes the constructor
+// accepts, in the order Array.from uses.
+func TestTypedArrayConstructorSources(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`new Uint8Array([1, 2]).join(",")`, "1,2"},
+		{`new Uint8Array(new Set([1, 2])).join(",")`, "1,2"},
+		{`var it = {[Symbol.iterator]() { return [1, 2, 3][Symbol.iterator](); }};
+		  new Uint8Array(it).join(",")`, "1,2,3"},
+		// No iterator: the array-like protocol.
+		{`new Uint8Array({length: 2, 0: 7, 1: 8}).join(",")`, "7,8"},
+		{`String(new Uint8Array(3).length)`, "3"},
+		// From another view, element by element -- so the conversion happens
+		// per value rather than by reinterpreting the bytes.
+		{`new Uint8Array(new Int32Array([300, 2])).join(",")`, "44,2"},
+		{`new Int32Array(new Uint8Array([1, 2])).join(",")`, "1,2"},
+		// A BigInt view converts each element with ToBigInt, so strings work.
+		{`var it = {[Symbol.iterator]() { return ["0", "1"][Symbol.iterator](); }};
+		  new BigInt64Array(it).join(",")`, "0,1"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

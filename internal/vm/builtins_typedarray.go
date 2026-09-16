@@ -441,10 +441,38 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 		o.data = &typedArrayData{buffer: buf, kind: kind, byteOffset: int(off), length: length}
 		return Obj(o), nil
 
-	case first.IsObject():
-		// From an array-like or an iterable, which copies.
-		items, err := r.arrayToSlice(first)
+	case first.IsObject() && first.Object().class == ClassTypedArray:
+		// From another view, element by element, so the conversion between the
+		// two element types happens once per value rather than by
+		// reinterpreting the bytes.
+		src, err := r.typedArrayOf(first, "the TypedArray constructor")
 		if err != nil {
+			return Undefined, err
+		}
+		t := r.allocTypedArray(o, kind, src.length)
+		for i := 0; i < src.length; i++ {
+			if err := r.setElem(t, i, src.getElem(i)); err != nil {
+				return Undefined, err
+			}
+		}
+		return Obj(o), nil
+
+	case first.IsObject():
+		// From an iterable when it has one, and from the array-like protocol
+		// otherwise -- the same order Array.from uses.
+		var items []Value
+		method, err := r.getValueProp(first, r.atoms.internSymbol(r.wellKnown.iterator))
+		if err != nil {
+			return Undefined, err
+		}
+		if isCallable(method) {
+			if err := r.iterate(first, func(v Value) error {
+				items = append(items, v)
+				return nil
+			}); err != nil {
+				return Undefined, err
+			}
+		} else if items, err = r.arrayToSlice(first); err != nil {
 			return Undefined, err
 		}
 		t := r.allocTypedArray(o, kind, len(items))
@@ -669,18 +697,24 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 	})
 
 	// The callback-taking methods.
-	// Every method that walks the elements is served the same way: the
-	// elements are read into a plain array and the ordinary Array method
-	// reused, which keeps one implementation of each rather than eleven.
+	// The methods that take a callback are written against the view directly
+	// rather than delegated to the Array versions. The callback receives the
+	// view as its third argument and, with no thisArg, as nothing else -- a
+	// temporary array standing in for it would be observable, and is what
+	// several hundred tests check.
 	//
-	// The ones that build a new collection then convert the result back, so
-	// that a Uint8Array's map yields a Uint8Array rather than a plain array.
-	for _, name := range []string{
-		"forEach", "map", "filter", "find", "findIndex", "findLast",
-		"findLastIndex", "some", "every", "reduce", "reduceRight",
+	// The length is read once, as everywhere else: an element the callback
+	// writes is seen, but the view cannot grow underneath the loop.
+	type callbackMethod struct {
+		name   string
+		length int
+	}
+	for _, m := range []callbackMethod{
+		{"forEach", 1}, {"map", 1}, {"filter", 1}, {"find", 1}, {"findIndex", 1},
+		{"findLast", 1}, {"findLastIndex", 1}, {"some", 1}, {"every", 1},
 	} {
-		method := name
-		r.defMethod(p, method, 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		method := m.name
+		r.defMethod(p, method, m.length, func(rt *Runtime, this Value, args []Value) (Value, error) {
 			t, err := rt.typedArrayOf(this, "TypedArray.prototype."+method)
 			if err != nil {
 				return Undefined, err
@@ -689,26 +723,106 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 			if !isCallable(cb) {
 				return Undefined, rt.throwTypeError("%s requires a function", method)
 			}
-			// The elements are read into a plain array and the ordinary array
-			// method reused, which keeps one implementation of each.
-			vals := make([]Value, t.length)
-			for i := range vals {
-				vals[i] = t.getElem(i)
-			}
-			arr := Obj(rt.newArrayFrom(vals))
-			fn, err := rt.getValueProp(arr, rt.atoms.intern(method))
-			if err != nil {
-				return Undefined, err
-			}
-			out, err := rt.call(fn, arr, args)
-			if err != nil {
-				return Undefined, err
+			thisArg := arg(args, 1)
+			n := t.length
+
+			var kept []Value
+			out := make([]Value, 0, n)
+			backwards := method == "findLast" || method == "findLastIndex"
+			for k := 0; k < n; k++ {
+				i := k
+				if backwards {
+					i = n - 1 - k
+				}
+				el := t.getElem(i)
+				res, err := rt.call(cb, thisArg, []Value{el, Int(i), this})
+				if err != nil {
+					return Undefined, err
+				}
+				switch method {
+				case "map":
+					out = append(out, res)
+				case "filter":
+					if res.Truthy() {
+						kept = append(kept, el)
+					}
+				case "find", "findLast":
+					if res.Truthy() {
+						return el, nil
+					}
+				case "findIndex", "findLastIndex":
+					if res.Truthy() {
+						return Int(i), nil
+					}
+				case "some":
+					if res.Truthy() {
+						return True, nil
+					}
+				case "every":
+					if !res.Truthy() {
+						return False, nil
+					}
+				}
 			}
 			switch method {
-			case "map", "filter":
-				return rt.typedArrayFromValues(t.kind, out)
+			case "map":
+				return rt.newTypedArrayOf(t.kind, out)
+			case "filter":
+				return rt.newTypedArrayOf(t.kind, kept)
+			case "some":
+				return False, nil
+			case "every":
+				return True, nil
+			case "findIndex", "findLastIndex":
+				return Int(-1), nil
 			}
-			return out, nil
+			return Undefined, nil
+		})
+	}
+
+	for _, backwards := range []bool{false, true} {
+		reversed := backwards
+		name := "reduce"
+		if reversed {
+			name = "reduceRight"
+		}
+		r.defMethod(p, name, 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+			t, err := rt.typedArrayOf(this, "TypedArray.prototype."+name)
+			if err != nil {
+				return Undefined, err
+			}
+			cb := arg(args, 0)
+			if !isCallable(cb) {
+				return Undefined, rt.throwTypeError("%s requires a function", name)
+			}
+			n := t.length
+			k := 0
+			var acc Value
+			seeded := len(args) > 1
+			if seeded {
+				acc = args[1]
+			} else {
+				if n == 0 {
+					return Undefined, rt.throwTypeError(
+						"%s of an empty typed array with no initial value", name)
+				}
+				i := 0
+				if reversed {
+					i = n - 1
+				}
+				acc, k = t.getElem(i), 1
+			}
+			for ; k < n; k++ {
+				i := k
+				if reversed {
+					i = n - 1 - k
+				}
+				acc, err = rt.call(cb, Undefined, []Value{acc, t.getElem(i), Int(i), this})
+				if err != nil {
+					return Undefined, err
+				}
+			}
+			return acc, nil
 		})
 	}
 
@@ -812,6 +926,18 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 			}
 			return rt.newArrayIterator(Obj(rt.newArrayFrom(vals)))
 		})
+}
+
+// newTypedArrayOf builds a view of the given kind holding the given values.
+func (r *Runtime) newTypedArrayOf(kind elemType, vals []Value) (Value, error) {
+	o := newObject(r.typedArrayProtoFor(kind), ClassTypedArray)
+	t := r.allocTypedArray(o, kind, len(vals))
+	for i, el := range vals {
+		if err := r.setElem(t, i, el); err != nil {
+			return Undefined, err
+		}
+	}
+	return Obj(o), nil
 }
 
 // typedArrayFromValues builds a view of the given kind holding the values of an
