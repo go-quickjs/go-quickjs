@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf16"
 	"unicode/utf8"
 )
@@ -50,7 +51,9 @@ func parse(pattern string, flags Flags) (node, int, map[string]int, error) {
 	// Named groups have to be discovered before the body is parsed, because a
 	// reference may precede its definition and because the presence of any
 	// named group changes how \k is treated.
-	p.scanGroupNames()
+	if err := p.scanGroupNames(); err != nil {
+		return nil, 0, nil, err
+	}
 
 	n, err := p.parseAlternation()
 	if err != nil {
@@ -118,7 +121,7 @@ func (p *parser) eat(r rune) bool {
 
 // scanGroupNames makes a pass over the pattern recording every (?<name> group,
 // so that a backreference can be resolved wherever it appears.
-func (p *parser) scanGroupNames() {
+func (p *parser) scanGroupNames() error {
 	depth := 0
 	idx := 0
 	inClass := false
@@ -147,6 +150,11 @@ func (p *parser) scanGroupNames() {
 						j++
 					}
 					idx++
+					// A duplicate name would make match.groups ambiguous, so
+					// it is rejected rather than resolved to one of them.
+					if _, dup := p.groupNames[name.String()]; dup {
+						return p.errorf("duplicate group name %q", name.String())
+					}
 					p.groupNames[name.String()] = idx
 				}
 				continue
@@ -158,6 +166,7 @@ func (p *parser) scanGroupNames() {
 			}
 		}
 	}
+	return nil
 }
 
 // parseAlternation parses a sequence of alternatives separated by '|'.
@@ -429,8 +438,19 @@ func (p *parser) finishLook(behind, negate bool) (node, bool, error) {
 
 func (p *parser) parseGroupName() (string, error) {
 	var sb strings.Builder
+	first := true
 	for !p.atEnd() && p.peek() != '>' {
-		sb.WriteRune(p.next())
+		r := p.next()
+		// A group name is an identifier, so that it can be read back as
+		// match.groups.name without quoting.
+		if first && !isGroupNameStart(r) {
+			return "", p.errorf("a group name cannot start with %q", string(r))
+		}
+		if !first && !isGroupNamePart(r) {
+			return "", p.errorf("%q is not valid in a group name", string(r))
+		}
+		first = false
+		sb.WriteRune(r)
 	}
 	if !p.eat('>') {
 		return "", p.errorf("unterminated group name")
@@ -439,6 +459,17 @@ func (p *parser) parseGroupName() (string, error) {
 		return "", p.errorf("empty group name")
 	}
 	return sb.String(), nil
+}
+
+// isGroupNameStart and isGroupNamePart mirror the identifier rules, which is
+// what a group name has to satisfy.
+func isGroupNameStart(r rune) bool {
+	return r == '$' || r == '_' || unicode.IsLetter(r)
+}
+
+func isGroupNamePart(r rune) bool {
+	return isGroupNameStart(r) || r == 0x200C || r == 0x200D ||
+		unicode.IsDigit(r) || unicode.In(r, unicode.Mn, unicode.Mc, unicode.Pc)
 }
 
 // parseEscape parses a backslash sequence outside a character class.

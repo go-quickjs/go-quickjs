@@ -195,6 +195,27 @@ func (l *Lexer) skipSpace() error {
 
 func isLineTerminatorByte(c byte) bool { return c == '\n' || c == '\r' }
 
+// lineTerminatorWidth reports the width in bytes of a line terminator starting
+// at i, or 0 if there is none.
+//
+// U+2028 and U+2029 are line terminators too, which matters wherever a
+// construct may not span a line: a regular expression literal ends at one just
+// as it does at a newline, even though they are invisible in most editors.
+func lineTerminatorWidth(src string, i int) int {
+	if i >= len(src) {
+		return 0
+	}
+	if isLineTerminatorByte(src[i]) {
+		return 1
+	}
+	// Both are three bytes in UTF-8 and share their first two.
+	if i+2 < len(src) && src[i] == 0xE2 && src[i+1] == 0x80 &&
+		(src[i+2] == 0xA8 || src[i+2] == 0xA9) {
+		return 3
+	}
+	return 0
+}
+
 // Next scans and returns the next token, treating '/' as a division operator.
 func (l *Lexer) Next() (Token, error) {
 	l.nlBefore = false
@@ -278,13 +299,13 @@ func (l *Lexer) ScanRegExp(start Token) (Token, error) {
 			return tok, l.errf(tok.Pos, "unterminated regular expression")
 		}
 		c := l.src[l.pos]
-		if isLineTerminatorByte(c) {
+		if lineTerminatorWidth(l.src, l.pos) != 0 {
 			return tok, l.errf(tok.Pos, "unterminated regular expression")
 		}
 		switch c {
 		case '\\':
 			l.pos++
-			if l.atEnd() || isLineTerminatorByte(l.src[l.pos]) {
+			if l.atEnd() || lineTerminatorWidth(l.src, l.pos) != 0 {
 				return tok, l.errf(tok.Pos, "unterminated regular expression")
 			}
 			_, size := l.peekRune()
