@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
+	"time"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
@@ -61,6 +62,12 @@ type Runtime struct {
 
 	// rng backs Math.random, created on first use.
 	rng *rand.Rand
+
+	// clock and timeZone supply Date with the current time and the local zone.
+	// They are fields rather than direct calls to the time package so that a
+	// host can give a sandboxed script a fixed clock, or none at all.
+	clock    func() time.Time
+	timeZone *time.Location
 
 	// templateCache keeps the object identity that tagged templates require:
 	// the same template site must hand the same strings array to its tag on

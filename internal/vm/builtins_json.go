@@ -20,7 +20,7 @@ import (
 func (r *Runtime) initJSONBuiltins() {
 	j := newObject(r.proto.object, ClassJSONObject)
 	r.defValue(r.global, "JSON", Obj(j))
-	r.defConst(j, "[Symbol.toStringTag]", Str(NewString("JSON")))
+	r.defToStringTag(j, "JSON")
 
 	r.defMethod(j, "stringify", 3, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		indent, err := rt.jsonIndent(arg(args, 2))

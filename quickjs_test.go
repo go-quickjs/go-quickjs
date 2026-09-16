@@ -1248,3 +1248,91 @@ func TestPrivateMemberOnWrongObjectThrows(t *testing.T) {
 		t.Errorf("error = %v, want one mentioning the private member", err)
 	}
 }
+
+func TestMap(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`new Map().set(1,2).get(1)`, "2"},
+		{`new Map([[1,"a"],[2,"b"]]).size`, "2"},
+		{`new Map([[1,"a"]]).has(1)`, "true"},
+		{`String(new Map().get("missing"))`, "undefined"},
+		{`const m = new Map([[1,1]]); m.delete(1); m.size`, "0"},
+		{`new Map([[1,"a"],[2,"b"]]) .keys().next().value`, "1"},
+		// Iteration follows insertion order, which is observable.
+		{`const m = new Map(); m.set("z",1); m.set("a",2); [...m.keys()].join(",")`, "z,a"},
+		// Keys are compared by SameValueZero: NaN matches itself and -0 is +0.
+		{`const m = new Map(); m.set(NaN,"n"); m.get(NaN)`, "n"},
+		{`const m = new Map(); m.set(0,"z"); m.get(-0)`, "z"},
+		// Objects are keyed by identity, not by contents.
+		{`const m = new Map(); m.set({}, 1); String(m.get({}))`, "undefined"},
+		{`const k = {}; const m = new Map(); m.set(k,1); m.get(k)`, "1"},
+		{`let s = ""; new Map([[1,"a"],[2,"b"]]).forEach((v,k) => s += k+v); s`, "1a2b"},
+		{`Object.prototype.toString.call(new Map())`, "[object Map]"},
+		{`let n = 0; for (const [k,v] of new Map([[1,2],[3,4]])) n += k+v; n`, "10"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}
+
+func TestSet(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`new Set([1,2,2,3]).size`, "3"},
+		{`[...new Set([3,1,3,2])].join(",")`, "3,1,2"},
+		{`new Set([1]).has(1)`, "true"},
+		{`const s = new Set(); s.add(1).add(2); s.size`, "2"},
+		{`const s = new Set([1]); s.delete(1); s.size`, "0"},
+		{`Object.prototype.toString.call(new Set())`, "[object Set]"},
+		{`[...new Set("hello")].join("")`, "helo"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}
+
+func TestWeakCollections(t *testing.T) {
+	checkEval(t, `const wm = new WeakMap(); const k = {}; wm.set(k, 5); wm.get(k)`, "5")
+	checkEval(t, `const ws = new WeakSet(); const k = {}; ws.add(k); ws.has(k)`, "true")
+	// A primitive key is rejected, which is what distinguishes the weak forms.
+	checkEval(t, `try { new WeakMap().set(1, 2); "no" } catch (e) { "rejected" }`, "rejected")
+}
+
+func TestDate(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`new Date(0).getTime()`, "0"},
+		{`new Date(0).toISOString()`, "1970-01-01T00:00:00.000Z"},
+		{`new Date("2024-03-15T10:30:00Z").toISOString()`, "2024-03-15T10:30:00.000Z"},
+		{`new Date(Date.UTC(2024, 2, 15)).toISOString()`, "2024-03-15T00:00:00.000Z"},
+		// Months are zero-based.
+		{`new Date(Date.UTC(2024,0,1)).getUTCMonth()`, "0"},
+		{`new Date(Date.UTC(2024,0,15)).getUTCDate()`, "15"},
+		{`new Date(Date.UTC(2020,0,1)).getUTCDay()`, "3"},
+		// Out-of-range components roll over.
+		{`new Date(Date.UTC(2024,11,32)).toISOString()`, "2025-01-01T00:00:00.000Z"},
+		{`new Date("nonsense").getTime()`, "NaN"},
+		{`String(new Date("nonsense"))`, "Invalid Date"},
+		{`Date.parse("2024-01-01T00:00:00Z")`, "1704067200000"},
+		{`const d = new Date(0); d.setUTCFullYear(2000); d.getUTCFullYear()`, "2000"},
+		{`JSON.stringify({d: new Date(0)})`, `{"d":"1970-01-01T00:00:00.000Z"}`},
+		// Date is the only built-in whose default coercion hint is string.
+		{`new Date(0) - 0`, "0"},
+		{`typeof (new Date(0) + "")`, "string"},
+		{`Object.prototype.toString.call(new Date())`, "[object Date]"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}
+
+func TestDateUsesTheHostClock(t *testing.T) {
+	// A sandboxed runtime should not read the wall clock unless the host lets
+	// it, so the clock is injectable.
+	rt := quickjs.New()
+	defer rt.Close()
+	rt.SetClock(func() time.Time { return time.Unix(1700000000, 0) })
+	if got := evalString(t, rt, `Date.now()`); got != "1700000000000" {
+		t.Errorf("Date.now() = %s, want the injected time", got)
+	}
+	if got := evalString(t, rt, `new Date().toISOString()`); got != "2023-11-14T22:13:20.000Z" {
+		t.Errorf("new Date() = %s, want the injected time", got)
+	}
+}

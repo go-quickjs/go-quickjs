@@ -59,8 +59,16 @@ func (r *Runtime) toPrimitive(v Value, h hint) (Value, error) {
 		return res, nil
 	}
 
-	// The default hint behaves as the number hint for every built-in except
-	// Date, whose Symbol.toPrimitive is handled above.
+	return r.ordinaryToPrimitive(v, h)
+}
+
+// ordinaryToPrimitive is the fallback conversion: try valueOf and toString in
+// the order the hint implies, taking the first that returns a primitive.
+//
+// Date's Symbol.toPrimitive calls it directly, because Date differs only in
+// treating the default hint as string rather than as number.
+func (r *Runtime) ordinaryToPrimitive(v Value, h hint) (Value, error) {
+	o := v.Object()
 	order := [2]Atom{atomValueOf, atomToString}
 	if h == hintString {
 		order = [2]Atom{atomToString, atomValueOf}

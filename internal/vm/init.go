@@ -2,6 +2,7 @@ package vm
 
 import (
 	"context"
+	"time"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
@@ -45,6 +46,14 @@ func New(cfg Config) *Runtime {
 	r.initGlobals()
 	return r
 }
+
+// SetClock installs the source of the current time, which Date and Date.now
+// read. A nil clock means the process clock.
+func (r *Runtime) SetClock(fn func() time.Time) { r.clock = fn }
+
+// SetTimeZone installs the zone local time is expressed in. A nil zone means
+// the process zone.
+func (r *Runtime) SetTimeZone(loc *time.Location) { r.timeZone = loc }
 
 // SetContext installs the context the interpreter checks for cancellation.
 func (r *Runtime) SetContext(ctx context.Context) { r.ctx = ctx }
@@ -155,6 +164,16 @@ func (r *Runtime) defConst(target *Object, name string, v Value) {
 	target.setOwnRaw(r.atoms.intern(name), v, 0)
 }
 
+// defToStringTag sets Symbol.toStringTag, which is what
+// Object.prototype.toString reports for the object.
+//
+// The key must be the symbol itself; a property literally named
+// "[Symbol.toStringTag]" is an ordinary string key that nothing consults.
+func (r *Runtime) defToStringTag(target *Object, name string) {
+	target.setOwnRaw(r.atoms.internSymbol(r.wellKnown.toStringTag),
+		Str(NewString(name)), propConfigurable)
+}
+
 // defGetter defines a non-enumerable accessor with only a getter.
 func (r *Runtime) defGetter(target *Object, name string, fn NativeFunc) {
 	g := r.newNativeFunc("get "+name, 0, fn)
@@ -200,6 +219,10 @@ func (r *Runtime) initGlobals() {
 	r.initSymbolBuiltins()
 	r.initErrorBuiltins()
 	r.initMathBuiltins()
+	r.initDateBuiltins()
+	r.initMapBuiltins()
+	r.initSetBuiltins()
+	r.initWeakCollections()
 	r.initJSONBuiltins()
 	r.initGlobalFunctions()
 }

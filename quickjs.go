@@ -70,6 +70,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/go-quickjs/go-quickjs/internal/compiler"
 	"github.com/go-quickjs/go-quickjs/internal/parser"
@@ -249,4 +250,25 @@ func (r *Runtime) wrapError(err error) error {
 		}
 	}
 	return err
+}
+
+// SetClock installs the source of the current time that Date and Date.now read.
+//
+// A sandboxed runtime should not be able to read the wall clock unless the host
+// allows it, and a test should be able to pin time, so the clock is injectable.
+// Passing nil restores the process clock.
+func (r *Runtime) SetClock(fn func() time.Time) {
+	if r.closed {
+		return
+	}
+	r.rt.SetClock(fn)
+}
+
+// SetTimeZone installs the zone that local-time Date methods use. Passing nil
+// restores the process zone.
+func (r *Runtime) SetTimeZone(loc *time.Location) {
+	if r.closed {
+		return
+	}
+	r.rt.SetTimeZone(loc)
 }
