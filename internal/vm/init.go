@@ -247,5 +247,6 @@ func (r *Runtime) initGlobals() {
 	r.initIteratorHelpers()
 	r.initRecentBuiltins()
 	r.initExtraBuiltins()
+	r.initAnnexB()
 	r.initDynamicImport()
 }

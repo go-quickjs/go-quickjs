@@ -213,6 +213,10 @@ func (p *parser) parseSubStatement() ast.Stmt {
 		if p.strict {
 			p.errorf("a function declaration cannot be the body of a statement")
 		}
+		// Annex B defines it as a block containing the declaration, which is
+		// what gives it the hoisting a bare declaration here would not have.
+		start := p.tok.Pos
+		return &ast.BlockStmt{Body: []ast.Stmt{p.parseStatement()}, Start: start}
 	}
 	return p.parseStatement()
 }

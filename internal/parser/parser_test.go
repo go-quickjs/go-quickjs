@@ -406,8 +406,10 @@ func TestDeclarationCannotBeStatementBody(t *testing.T) {
 	checkError(t, "if (a) const x = 1;", "cannot be the body")
 	checkError(t, "if (a) class X {}", "cannot be the body")
 	checkError(t, "while (a) let x = 1;", "cannot be the body")
-	// Sloppy mode permits a function declaration as an if branch.
-	checkParse(t, "if (a) function f() {}", "(if a (decl (function f () ())))")
+	// Sloppy mode permits a function declaration as an if branch, and Annex B
+	// defines it as a block containing the declaration -- which is what gives
+	// it the hoisting a bare declaration in that position would not have.
+	checkParse(t, "if (a) function f() {}", "(if a block((decl (function f () ()))))")
 }
 
 func TestLetAsIdentifier(t *testing.T) {

@@ -56,7 +56,42 @@ func (c *compiler) predeclareFunction(fd *ast.FuncDecl) {
 		kind = bindFunctionLexical
 	}
 	slot := c.declare(name, kind, fd.Start)
+
+	// Annex B: a plain function declared inside a block is also assigned to a
+	// var-scoped binding of the same name, which is what makes
+	//
+	//	function outer() { { function f() {} } return f; }
+	//
+	// work in sloppy mode. The binding is created by hoisting like any other
+	// var; only the assignment happens here, when the declaration is reached.
+	if !c.fn.Strict && c.depth > 0 && kind == bindFunction {
+		c.emitAnnexBFunctionAlias(name)
+	}
 	c.emit(bytecode.OpSetLocal, slot, 0)
+}
+
+// emitAnnexBFunctionAlias copies a block-scoped function into the var binding
+// that shares its name.
+func (c *compiler) emitAnnexBFunctionAlias(name string) {
+	// The function-scoped binding is the outermost one with this name, since a
+	// var is hoisted before any block is entered.
+	for i := range c.locals {
+		if c.locals[i].name != name {
+			continue
+		}
+		if c.locals[i].kind == bindVar && c.locals[i].depth < c.depth {
+			c.emit(bytecode.OpDup, 0, 0)
+			c.emit(bytecode.OpSetLocal, c.locals[i].slot, 0)
+		}
+		return
+	}
+	// At a script's top level the var is a property of the global object
+	// rather than a slot, and hoistGlobals has already created it.
+	if c.parent == nil {
+		c.emit(bytecode.OpDup, 0, 0)
+		c.emit(bytecode.OpSetGlobal, c.nameIdx(name), 0)
+		c.emit(bytecode.OpDrop, 0, 0)
+	}
 }
 
 // predeclareLexical creates the bindings of a let or const declaration in
