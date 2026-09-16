@@ -195,3 +195,75 @@ func TestRegExpSymbolMethods(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// The v flag makes a character class a set expression rather than a flat list:
+// classes nest, -- subtracts, && intersects, and \q{} names whole strings. So
+// [\p{Letter}--[aeiou]] says what it means instead of enumerating the
+// difference by hand.
+func TestRegExpClassSets(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`String(/[[a-z][0-9]]/v.test("5"))`, "true"},
+		{`String(/[[a-z][0-9]]/v.test("!"))`, "false"},
+		{`[/[[a-z]--[aeiou]]/v.test("b"), /[[a-z]--[aeiou]]/v.test("a")].join(",")`,
+			"true,false"},
+		{`[/[[a-z]&&[b-d]]/v.test("c"), /[[a-z]&&[b-d]]/v.test("z")].join(",")`,
+			"true,false"},
+		{`[/[\p{ASCII}--[a-z]]/v.test("A"), /[\p{ASCII}--[a-z]]/v.test("a")].join(",")`,
+			"true,false"},
+		// Chained operators of the same kind.
+		{`String(/[[a-z]--[aeiou]--[xyz]]/v.test("x"))`, "false"},
+		{`String(/[\p{ASCII}&&\p{Letter}&&[a-c]]/v.test("b"))`, "true"},
+
+		// A class can denote strings, not just code points.
+		{`[/[\q{abc|d}]/v.test("abc"), /[\q{abc|d}]/v.test("d")].join(",")`, "true,true"},
+		{`"xabcy".replace(/[\q{abc}]/v, "-")`, "x-y"},
+		// Longest first: a class holding both must prefer the longer.
+		{`"abc".replace(/[\q{abc|a}]/v, "-")`, "-"},
+		// A one-character string is just a code point.
+		{`String(/[\q{a}]/v.test("a"))`, "true"},
+		{`String(/[\q{}]/v.test(""))`, "true"},
+
+		{`String(/[^a-z]/v.test("5"))`, "true"},
+		{`String(/[a-z]/v.test("m"))`, "true"},
+		// An escaped syntax character is itself.
+		{`String(/[\(]/v.test("("))`, "true"},
+		{`String(/[\-]/v.test("-"))`, "true"},
+
+		// u mode is unaffected: a bracket there is an ordinary character.
+		{`String(/[[a]/u.test("["))`, "true"},
+		{`String(/[a-z]/u.test("m"))`, "true"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+
+	bad := []struct{ name, src string }{
+		// Mixing operators has no agreed precedence, so it has to be bracketed.
+		{"mixed operators", `new RegExp("[a--b&&c]", "v")`},
+		// There is no sensible "every string but these".
+		{"negated string class", `new RegExp("[^\\q{ab}]", "v")`},
+		// The set syntax reserves these, so a pattern written today cannot
+		// change meaning when an operator is added.
+		{"unescaped paren", `new RegExp("[(]", "v")`},
+		{"unescaped brace", `new RegExp("[{]", "v")`},
+		{"reserved double", `new RegExp("[!!]", "v")`},
+		{"triple ampersand", `new RegExp("[a&&&b]", "v")`},
+		{"unterminated q", `new RegExp("[\\q{ab]", "v")`},
+		{"class as a range end", `new RegExp("[a-\\d]", "v")`},
+	}
+	for _, tc := range bad {
+		rt := quickjs.New()
+		if _, err := rt.Eval(tc.src); err == nil {
+			t.Errorf("%s: accepted, want SyntaxError", tc.name)
+		}
+		rt.Close()
+	}
+}

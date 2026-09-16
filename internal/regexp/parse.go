@@ -321,6 +321,15 @@ func (p *parser) parseAtom() (n node, quantifiable bool, err error) {
 	case '(':
 		return p.parseGroup()
 	case '[':
+		if p.flags&FlagUnicodeSets != 0 {
+			// The v flag makes a class a set expression rather than a flat
+			// list, and one that can denote strings as well as code points.
+			n, err := p.parseClassSet()
+			if err != nil {
+				return nil, false, err
+			}
+			return n, true, nil
+		}
 		set, err := p.parseClass()
 		if err != nil {
 			return nil, false, err
