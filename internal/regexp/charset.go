@@ -246,6 +246,13 @@ func binaryTable(name string) []*unicode.RangeTable {
 	if long, ok := binaryAliases[name]; ok {
 		name = long
 	}
+	// The language names a fixed set of binary properties, which is narrower
+	// than the set Unicode defines and narrower than the set Go carries. A
+	// property outside it is a syntax error rather than a class that happens to
+	// work here and nowhere else.
+	if !binaryProperties[name] {
+		return nil
+	}
 	if t, ok := unicode.Properties[name]; ok {
 		return []*unicode.RangeTable{t}
 	}
@@ -318,11 +325,9 @@ func unicodeClass(name string, negate bool) (*charSet, bool) {
 		if tables == nil {
 			tables = binaryTable(name)
 		}
-		if tables == nil {
-			if t, ok := unicode.Scripts[name]; ok {
-				tables = []*unicode.RangeTable{t}
-			}
-		}
+		// A bare name is a general category or a binary property and nothing
+		// else. A script has to be written Script=Latin, so that \p{Greek}
+		// cannot quietly change meaning when a property of that name appears.
 		switch name {
 		case "Any":
 			return buildSet(negate, charRange{0, unicode.MaxRune}), true

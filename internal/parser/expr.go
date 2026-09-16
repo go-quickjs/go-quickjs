@@ -5,6 +5,7 @@ import (
 
 	"github.com/go-quickjs/go-quickjs/internal/ast"
 	"github.com/go-quickjs/go-quickjs/internal/lexer"
+	"github.com/go-quickjs/go-quickjs/internal/regexp"
 )
 
 // binaryPrec maps a binary operator to its precedence. Higher binds tighter.
@@ -566,6 +567,12 @@ func (p *parser) parsePrimary() ast.Expr {
 			}
 			p.tok = tok
 			if err := checkRegExpFlags(tok.Flags); err != nil {
+				p.errorf("%s", err.Error())
+			}
+			// The pattern is an early error, so it is checked here rather than
+			// when control reaches the literal: /(/ fails to parse for the same
+			// reason an unbalanced parenthesis in the program text does.
+			if err := regexp.Validate(tok.Value, tok.Flags); err != nil {
 				p.errorf("%s", err.Error())
 			}
 			re := &ast.RegexpLit{Pattern: tok.Value, Flags: tok.Flags, Start: start}

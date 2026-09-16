@@ -35,6 +35,22 @@ func CompileFlags(source string, f Flags) (*Regexp, error) {
 	}, nil
 }
 
+// Validate reports whether a pattern and its flags are well formed.
+//
+// A regular expression literal is checked when the surrounding script is
+// parsed, not when control reaches it, so that /(/ is a syntax error in the
+// same way an unbalanced parenthesis in the program text is. Only the pattern
+// is parsed here: there is no point building a program for a literal that may
+// never be reached, and the one that is reached is compiled on first use.
+func Validate(source, flags string) error {
+	f, err := ParseFlags(flags)
+	if err != nil {
+		return &SyntaxError{Msg: err.Error(), Pattern: source}
+	}
+	_, _, _, err = parse(source, f)
+	return err
+}
+
 // Source returns the pattern text.
 func (re *Regexp) Source() string { return re.source }
 
