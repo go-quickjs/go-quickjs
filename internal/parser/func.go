@@ -129,6 +129,9 @@ func (p *parser) parseFunctionBody(fn *ast.FuncLit) []ast.Stmt {
 		p.checkStrictParams(fn.Params)
 	}
 	body = append(body, p.parseStatements(func() bool { return p.isPunct("}") })...)
+	// The closing brace has not been consumed yet, so its position plus one is
+	// where the function ends.
+	fn.End = p.tok.Pos + 1
 	p.expectPunct("}")
 	return body
 }
@@ -221,6 +224,9 @@ func (p *parser) parseArrowBody(params []ast.Expr, start int, async bool) ast.Ex
 		expr := p.parseAssign()
 		fn.Body = []ast.Stmt{&ast.ReturnStmt{Arg: expr, Start: bodyStart}}
 		fn.ExprBody = true
+		// A concise body ends wherever the expression did, which is just
+		// before whatever token follows.
+		fn.End = p.prevEnd
 	}
 	fn.Strict = p.strict
 	return fn
@@ -439,6 +445,7 @@ func (p *parser) parseClass(isDecl bool) *ast.ClassLit {
 		}
 		p.parseClassMember(cls, &sawConstructor, privateNames)
 	}
+	cls.End = p.tok.Pos + 1
 	p.expectPunct("}")
 	return cls
 }

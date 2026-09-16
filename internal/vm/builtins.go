@@ -600,12 +600,26 @@ func (r *Runtime) initFunctionBuiltins() {
 		if len(args) > 1 {
 			bound = append(bound, args[1:]...)
 		}
+		// The bound function's length is what remains of the target's after the
+		// arguments already supplied, which is what makes it still describe how
+		// many the caller has left to give.
+		length := 0
+		targetLen, err := rt.getProp(target, atomLength, this)
+		if err != nil {
+			return Undefined, err
+		}
+		if targetLen.IsNumber() {
+			if n := int(targetLen.Number()) - len(bound); n > 0 {
+				length = n
+			}
+		}
 		o := newObject(rt.proto.function, ClassFunction)
 		o.data = &funcData{
 			boundTarget: target,
 			boundThis:   arg(args, 0),
 			boundArgs:   bound,
 			name:        "bound " + target.fn().nameOr(""),
+			length:      length,
 			ctorKind:    target.fn().ctorKind,
 		}
 		return Obj(o), nil

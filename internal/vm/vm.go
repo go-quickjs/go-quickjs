@@ -153,6 +153,23 @@ func (r *Runtime) describe(v Value) string {
 func (r *Runtime) run(cl *closure, this Value, args []Value, newTarget Value, callee *Object) (Value, error) {
 	fn := cl.fn
 
+	// A sloppy-mode function's `this` is coerced: undefined and null become the
+	// global object, and a primitive becomes its wrapper. Strict mode leaves it
+	// exactly as passed, which is the difference that makes strict mode able to
+	// detect a missing receiver at all.
+	if !fn.Strict && fn.Kind != bytecode.KindArrow && newTarget.IsUndefined() {
+		switch {
+		case this.IsNullish():
+			this = Obj(r.global)
+		case !this.IsObject():
+			o, err := r.toObject(this)
+			if err != nil {
+				return Undefined, err
+			}
+			this = Obj(o)
+		}
+	}
+
 	if len(r.frames) >= r.maxFrames {
 		return Undefined, r.throwRangeError("maximum call stack size exceeded")
 	}

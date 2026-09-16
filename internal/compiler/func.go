@@ -49,6 +49,14 @@ func funcKindOf(fn *ast.FuncLit) bytecode.FuncKind {
 // compileFunctionBody compiles a function's parameters and body into the
 // receiver, which is a fresh compiler for that function.
 func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
+	// Function.prototype.toString returns the source as written, so the span
+	// is recorded rather than the text reconstructed -- a reconstruction would
+	// lose comments, spacing and the exact parameter syntax, all of which some
+	// code inspects.
+	if fn.End > fn.Start && fn.End <= len(c.opts.Text) {
+		c.fn.Text = c.opts.Text[fn.Start:fn.End]
+	}
+
 	// Parameters must occupy slots 0..n-1, because the interpreter copies
 	// arguments into those slots positionally. Nothing may be declared before
 	// them.
@@ -625,11 +633,17 @@ func (c *compiler) synthesizeConstructor(cls *ast.ClassLit, keyNames []string) *
 		if cls.Extends != nil {
 			body = append([]ast.Stmt{implicitSuperCall(cls.Start)}, body...)
 		}
-		return &ast.FuncLit{Kind: ast.FuncConstructor, Body: body, Start: cls.Start}
+		// The synthesized constructor stands in for the class as a whole, so
+		// its source span is the class's: `C.toString()` is the class text.
+		return &ast.FuncLit{
+			Kind: ast.FuncConstructor, Body: body,
+			Start: cls.Start, End: cls.End,
+		}
 	}
 
 	lit := *declared
 	lit.Name = nil
+	lit.Start, lit.End = cls.Start, cls.End
 	if len(fieldInit) > 0 {
 		// Fields are initialized before the constructor body runs. In a derived
 		// class they must follow super(), which the body itself calls, so they

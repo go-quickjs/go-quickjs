@@ -226,10 +226,15 @@ func runOne(suite *conformance.Suite, tc *conformance.Test) (result, string) {
 	ctx, cancel := context.WithTimeout(context.Background(), *testTimeout)
 	defer cancel()
 
-	if prelude != "" {
-		if _, err := rt.EvalContext(ctx, prelude); err != nil {
-			return resultFail, "harness failed: " + summarize(err)
-		}
+	// The harness is prepended to the test rather than evaluated separately,
+	// which is what test262's own interpreting guide asks for: a harness file
+	// declares its helpers with const, and a top-level const belongs to the
+	// script it appears in.
+	source := prelude + tc.Body()
+	if prelude != "" && tc.Strict {
+		// The strict directive has to stay at the very top of the combined
+		// script for it to be a directive at all.
+		source = "\"use strict\";\n" + prelude + tc.Source
 	}
 
 	// A module test goes through EvalModule so that import and export are in
@@ -237,9 +242,17 @@ func runOne(suite *conformance.Suite, tc *conformance.Test) (result, string) {
 	// visible because a module's environment inherits from the global object.
 	var runErr error
 	if tc.Meta.Flags["module"] {
+		// A module cannot have a script prepended to it, so the harness is
+		// evaluated on its own; a module's bindings live in an environment
+		// that inherits from the global object, so it still sees them.
+		if prelude != "" {
+			if _, err := rt.EvalContext(ctx, prelude); err != nil {
+				return resultFail, "harness failed: " + summarize(err)
+			}
+		}
 		_, runErr = rt.EvalModuleContext(ctx, tc.Path, tc.Body())
 	} else {
-		_, runErr = rt.EvalContext(ctx, tc.Body())
+		_, runErr = rt.EvalContext(ctx, source)
 	}
 	if runErr != nil && errors.Is(runErr, context.DeadlineExceeded) {
 		return resultFail, "timed out"

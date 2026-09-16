@@ -188,6 +188,9 @@ type FuncLit struct {
 	// single synthesized ReturnStmt.
 	ExprBody bool
 	Start    int
+	// End is the offset just past the function's last character, which is what
+	// lets Function.prototype.toString return the source as written.
+	End int
 }
 
 // ClassLit is a class declaration or expression.
@@ -201,6 +204,8 @@ type ClassLit struct {
 	// StaticBlocks are `static { ... }` blocks.
 	StaticBlocks [][]Stmt
 	Start        int
+	// End is the offset just past the class's closing brace.
+	End int
 }
 
 // ClassField is a class field definition.
