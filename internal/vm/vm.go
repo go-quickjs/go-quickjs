@@ -273,7 +273,18 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 	var vmErr error
 	var in bytecode.Instr
 
-	if pending != nil {
+	if ret, ok := pending.(*returnSignal); ok {
+		// generator.return() behaves as if a return statement ran at the
+		// suspension point, so it must run the finally blocks between there
+		// and the top of the body -- but must not be caught by a catch, which
+		// a return statement would not trigger either.
+		if !r.unwindToFinally(f, &sp, ret.value) {
+			// Nothing owes a finally, so the body simply ends -- but a for-of
+			// it was suspended inside still has to be told.
+			r.closeIteratorsIn(f.base, sp)
+			return ret.value, nil
+		}
+	} else if pending != nil {
 		// An exception injected at the resumption point unwinds as if it had
 		// been raised by the suspended expression.
 		vmErr = pending
@@ -871,8 +882,13 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 			push(v)
 		case bytecode.OpReturn:
-			return pop(), nil
+			v := pop()
+			// Returning out of a for-of abandons it, so its iterator is closed
+			// before the frame goes away.
+			r.closeIteratorsIn(f.base, sp)
+			return v, nil
 		case bytecode.OpReturnUndef:
+			r.closeIteratorsIn(f.base, sp)
 			return Undefined, nil
 
 		// --- Construction -------------------------------------------------
@@ -981,6 +997,12 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				vmErr = r.throw(val)
 				goto onError
 			case completionReturn:
+				// An enclosing finally has its own claim on the return: the
+				// value keeps unwinding until no finally is left.
+				if r.unwindToFinally(f, &sp, val) {
+					continue
+				}
+				r.closeIteratorsIn(f.base, sp)
 				return val, nil
 			}
 
@@ -1104,6 +1126,13 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 			push(val)
 
+		case bytecode.OpIterToArray:
+			arr, err := r.iterToArray(pop(), in.A)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			push(arr)
 		case bytecode.OpIterClose:
 			r.closeIter(peek(0))
 		case bytecode.OpSpreadIter:
@@ -1277,6 +1306,9 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		// frame. With none, it propagates to the caller, which repeats the
 		// search in its own frame.
 		if !r.unwindToHandler(f, &sp, vmErr) {
+			// The exception leaves this frame entirely, so every loop it was
+			// inside is being abandoned.
+			r.closeIteratorsIn(f.base, sp)
 			return Undefined, vmErr
 		}
 		vmErr = nil
@@ -1300,6 +1332,7 @@ func (r *Runtime) unwindToHandler(f *frame, sp *int, err error) bool {
 	// The stack may hold a partly-built expression from the point of the
 	// throw, so it is cut back to the depth the handler was registered at
 	// before the thrown value is pushed for the catch clause to bind.
+	r.closeIteratorsIn(h.stackDepth, *sp)
 	*sp = h.stackDepth
 	r.stack[*sp] = thrown.Value
 	*sp++
@@ -1311,6 +1344,30 @@ func (r *Runtime) unwindToHandler(f *frame, sp *int, err error) bool {
 	}
 	f.pc = h.pc
 	return true
+}
+
+// unwindToFinally transfers control to the innermost finally handler, carrying
+// a return completion.
+//
+// Catch handlers are discarded on the way rather than entered: a return is not
+// an exception, and `try { return } catch {}` does not run its catch.
+func (r *Runtime) unwindToFinally(f *frame, sp *int, value Value) bool {
+	for len(f.handlers) > 0 {
+		h := f.handlers[len(f.handlers)-1]
+		f.handlers = f.handlers[:len(f.handlers)-1]
+		if !h.isFinally {
+			continue
+		}
+		r.closeIteratorsIn(h.stackDepth, *sp)
+		*sp = h.stackDepth
+		r.stack[*sp] = value
+		*sp++
+		r.stack[*sp] = Float(float64(completionReturn))
+		*sp++
+		f.pc = h.pc
+		return true
+	}
+	return false
 }
 
 // closeUpvaluesFrom closes every upvalue pointing at or above a local slot,
@@ -1761,8 +1818,34 @@ func (r *Runtime) superCall(f *frame, args []Value) error {
 	if parent == nil {
 		return r.throwTypeError("\"super\" is only valid in a derived constructor")
 	}
-	_, err := r.callObject(parent, f.this, args, Obj(parent))
-	return err
+	// new.target is forwarded rather than replaced: inside a base constructor
+	// reached through super(), new.target is the derived class the caller
+	// actually wrote `new` against. An abstract base distinguishes the two --
+	// `new Iterator()` is an error while `new C()` for `class C extends
+	// Iterator` is not -- so the difference is observable.
+	newTarget := f.newTarget
+	if newTarget.IsUndefined() {
+		newTarget = Obj(parent)
+	}
+	res, err := r.callObject(parent, f.this, args, newTarget)
+	if err != nil {
+		return err
+	}
+	// A base constructor that builds its own object -- every native one does,
+	// because an Error needs a stack and an Array needs array storage -- hands
+	// it back instead of writing into the `this` passed in. The derived
+	// constructor adopts it, keeping the prototype that newTarget chose so
+	// that the result is still an instance of the derived class.
+	if res.IsObject() && (!f.this.IsObject() || res.Object() != f.this.Object()) {
+		if f.this.IsObject() {
+			res.Object().proto = f.this.Object().proto
+			// Fields the derived constructor set before super() would be lost,
+			// but writing to `this` before super() is already an error, so
+			// there is nothing to carry over.
+		}
+		f.this = res
+	}
+	return nil
 }
 
 // parentConstructorOf finds the constructor a frame's super() refers to.

@@ -74,6 +74,17 @@ type suspendSignal struct {
 
 func (*suspendSignal) Error() string { return "generator suspended" }
 
+// returnSignal is a forced return injected at a generator's suspension point by
+// generator.return().
+//
+// Like suspendSignal it travels as an error to reuse the return path, and like
+// it is deliberately not a *Thrown, so a catch inside the body ignores it. Only
+// a finally clause sees it, which is exactly what a return statement at that
+// position would do.
+type returnSignal struct{ value Value }
+
+func (*returnSignal) Error() string { return "generator returned" }
+
 // resumeMode says how a generator is being re-entered.
 type resumeMode uint8
 
@@ -216,9 +227,12 @@ func (r *Runtime) resumeFull(g *generator, sent Value, mode resumeMode) (resumeR
 			g.state = genExecuting
 			return r.runGeneratorFrom(g, f, base, sp, Undefined, r.throw(sent))
 		case resumeReturn:
-			g.state = genCompleted
-			r.releaseGeneratorFrame(g, base)
-			return resumeResult{value: sent, done: true}, nil
+			// A return at the suspension point is not simply the end of the
+			// generator: the try blocks the body is suspended inside still owe
+			// their finally clauses, and one of them may yield again or
+			// override the returned value.
+			g.state = genExecuting
+			return r.runGeneratorFrom(g, f, base, sp, Undefined, &returnSignal{value: sent})
 		}
 	}
 	g.state = genExecuting

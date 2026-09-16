@@ -50,6 +50,11 @@ type Runtime struct {
 	// check costs one decrement per instruction rather than a context read.
 	interruptCounter int
 
+	// iteratorCtor, helperProto and wrapProto back the iterator helpers.
+	iteratorCtor *Object
+	helperProto  *Object
+	wrapProto    *Object
+
 	// symbolRegistry backs Symbol.for and Symbol.keyFor.
 	symbolRegistry map[string]*Symbol
 

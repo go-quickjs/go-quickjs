@@ -1,5 +1,7 @@
 package vm
 
+import "github.com/go-quickjs/go-quickjs/internal/bytecode"
+
 // Loop iteration.
 //
 // for-in and for-of are driven by the same three instructions -- a start, a
@@ -152,6 +154,65 @@ func (r *Runtime) closeIter(cursor Value) {
 	}
 	st.done = true
 	r.closeIterator(st.iter)
+}
+
+// closeIteratorsIn closes the for-of cursors sitting in a region of the operand
+// stack that is about to be discarded.
+//
+// A cursor lives on the operand stack for as long as its loop is running, so
+// the cursors in a discarded region are exactly the for-of loops being left
+// abruptly -- by a throw unwinding to a handler, or by a return leaving the
+// frame. Closing them there rather than at each exit point means every abrupt
+// exit is covered by one rule, including ones the compiler cannot see, and a
+// generator being iterated still gets to run its finally blocks.
+//
+// Closing runs user code, which may itself throw; that error is discarded,
+// because the completion that caused the unwind is the one that matters.
+func (r *Runtime) closeIteratorsIn(from, to int) {
+	for i := to - 1; i >= from; i-- {
+		st := iterStateOf(r.stack[i])
+		if st == nil || st.forIn || st.done {
+			continue
+		}
+		st.done = true
+		r.closeIterator(st.iter)
+	}
+}
+
+// iterToArray drains an array-destructuring source into a dense array.
+//
+// Only as many values as the pattern names are pulled, so destructuring an
+// infinite generator terminates; the iterator is then closed, because the
+// pattern is done with it. A pattern with a rest element asks for all of them,
+// and the iterator ends exhausted.
+func (r *Runtime) iterToArray(src Value, want uint32) (Value, error) {
+	// A plain dense array with the standard iterator is copied directly. This
+	// is overwhelmingly the common case, and going through the protocol would
+	// allocate an iterator and a result object per element for no observable
+	// difference.
+	if src.IsObject() && src.Object().IsArray() && !r.hasOwnIterator(src.Object()) {
+		return src, nil
+	}
+
+	cursor, err := r.startForOf(src)
+	if err != nil {
+		return Undefined, err
+	}
+	out := newObject(r.proto.array, ClassArray)
+	for want == bytecode.IterAll || uint32(len(out.elems)) < want {
+		v, ok, err := r.iterNext(cursor)
+		if err != nil {
+			return Undefined, err
+		}
+		if !ok {
+			break
+		}
+		out.elems = append(out.elems, v)
+	}
+	// The pattern has what it needs, so anything still suspended upstream is
+	// told to stop.
+	r.closeIter(cursor)
+	return Obj(out), nil
 }
 
 // spreadInto appends the elements of an iterable to an array.

@@ -410,7 +410,10 @@ func (c *compiler) compileForAwaitBody(left ast.Node, body ast.Stmt) {
 	c.emit(bytecode.OpJump, uint32(start), 0)
 	c.patchJump(exit)
 	c.popLoop(start)
-	// Remove the cursor the start instruction left behind.
+	// A break arrives here with the iterator still open, so it is closed
+	// before the cursor is dropped. An exhausted one is already closed and the
+	// instruction leaves it alone.
+	c.emit(bytecode.OpIterClose, 0, 0)
 	c.emit(bytecode.OpDrop, 0, 0)
 }
 
@@ -441,7 +444,10 @@ func (c *compiler) compileForBody(left ast.Node, body ast.Stmt) {
 	c.emit(bytecode.OpJump, uint32(start), 0)
 	c.patchJump(exit)
 	c.popLoop(start)
-	// The iterator is left on the stack by ForOfStart and removed here.
+	// ForOfStart left the cursor on the stack. A break arrives here with the
+	// iterator still open, so it is closed before the cursor is dropped; an
+	// exhausted one is already closed and the instruction leaves it alone.
+	c.emit(bytecode.OpIterClose, 0, 0)
 	c.emit(bytecode.OpDrop, 0, 0)
 }
 

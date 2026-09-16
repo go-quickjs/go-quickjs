@@ -197,6 +197,10 @@ const (
 	// or jumping to A when it reports done.
 	OpIterResultOrJump
 	OpSpreadIter // spread an iterable onto the stack for a call
+	// OpIterToArray replaces an array-destructuring source with a dense array of
+	// the values its iterator produces. A is how many to pull, or IterAll when
+	// the pattern has a rest element and needs every one.
+	OpIterToArray
 
 	// --- Exceptions -------------------------------------------------------
 	OpThrow
@@ -312,6 +316,7 @@ var opNames = [opCount]string{
 	OpAsyncIterNext:    "async_iter_next",
 	OpIterResultOrJump: "iter_result_or_jump",
 	OpSpreadIter:       "spread_iter",
+	OpIterToArray:      "iter_to_array",
 
 	OpThrow: "throw", OpPushCatch: "push_catch", OpPopCatch: "pop_catch",
 	OpPushFinally: "push_finally", OpRethrow: "rethrow",
@@ -353,3 +358,7 @@ func itoa(v int) string {
 	}
 	return string(buf[i:])
 }
+
+// IterAll is OpIterToArray's operand when the whole iterator must be drained,
+// which a pattern with a rest element requires.
+const IterAll = ^uint32(0)

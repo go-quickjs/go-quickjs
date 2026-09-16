@@ -22,6 +22,8 @@ const (
 	ClassSet
 	ClassWeakMap
 	ClassWeakSet
+	ClassIteratorHelper
+	ClassIteratorWrap
 	ClassWeakRef
 	ClassFinalizationRegistry
 	ClassPromise

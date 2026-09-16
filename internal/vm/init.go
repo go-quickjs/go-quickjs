@@ -242,6 +242,7 @@ func (r *Runtime) initGlobals() {
 	r.initGlobalFunctions()
 	// Runs last, because each of its additions hangs off a constructor an
 	// earlier step installed.
+	r.initIteratorHelpers()
 	r.initRecentBuiltins()
 	r.initExtraBuiltins()
 	r.initDynamicImport()

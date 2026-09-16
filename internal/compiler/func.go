@@ -86,6 +86,15 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 	}
 
 	c.compileStatements(fn.Body)
+	if fn.Kind == ast.FuncConstructor {
+		// A constructor returns its `this` rather than undefined. That matters
+		// for a derived class, where super() may replace `this` with the
+		// object the base constructor built -- which is how `class E extends
+		// Error` ends up with a real Error, and `class A extends Array` with a
+		// real array.
+		c.emit(bytecode.OpPushThis, 0, 0)
+		c.emit(bytecode.OpReturn, 0, 0)
+	}
 	c.emit(bytecode.OpReturnUndef, 0, 0)
 	c.finish()
 }
@@ -255,6 +264,17 @@ func (c *compiler) compileDestructuringAssign(target ast.Expr) {
 // compileArrayPattern unpacks an array pattern. declaring selects between
 // creating bindings and assigning to existing references.
 func (c *compiler) compileArrayPattern(pat *ast.ArrayPattern, kind ast.DeclKind, declaring bool) {
+	// An array pattern unpacks through the iterator protocol, not through
+	// indexed access, so that `const [a] = new Set([1])` works and so that a
+	// generator only produces as many values as the pattern names. The source
+	// is drained into a dense array first, which keeps the unpacking below
+	// simple and makes holes and defaults fall out naturally.
+	want := uint32(len(pat.Elements))
+	if pat.Rest != nil {
+		want = bytecode.IterAll
+	}
+	c.emit(bytecode.OpIterToArray, want, 0)
+
 	for i, el := range pat.Elements {
 		if el == nil {
 			continue

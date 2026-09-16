@@ -187,6 +187,15 @@ func (r *Runtime) Constructing() bool {
 	return !r.frames[len(r.frames)-1].newTarget.IsUndefined()
 }
 
+// newTarget returns the new.target of the running native call, which a
+// constructor needs when its behaviour depends on whether it was subclassed.
+func (r *Runtime) newTarget() Value {
+	if len(r.frames) == 0 {
+		return Undefined
+	}
+	return r.frames[len(r.frames)-1].newTarget
+}
+
 // Evaluator compiles and runs source text, which eval and the Function
 // constructor need.
 //

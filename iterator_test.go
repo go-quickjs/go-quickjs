@@ -1,0 +1,270 @@
+package quickjs_test
+
+import (
+	"strings"
+	"testing"
+
+	quickjs "github.com/go-quickjs/go-quickjs"
+)
+
+func TestIteratorHelpers(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`[1,2,3].values().map(x => x * 2).toArray().join(",")`, "2,4,6"},
+		{`[1,2,3,4].values().filter(x => x % 2 === 0).toArray().join(",")`, "2,4"},
+		{`[1,2,3,4,5].values().take(2).toArray().join(",")`, "1,2"},
+		{`[1,2,3,4,5].values().drop(2).toArray().join(",")`, "3,4,5"},
+		{`[[1,2],[3]].values().flatMap(x => x).toArray().join(",")`, "1,2,3"},
+		{`String([1,2,3].values().reduce((a, b) => a + b))`, "6"},
+		{`String([1,2,3].values().reduce((a, b) => a + b, 10))`, "16"},
+		{`String([1,2,3].values().some(x => x > 2))`, "true"},
+		{`String([1,2,3].values().every(x => x > 0))`, "true"},
+		{`String([1,2,3].values().find(x => x > 1))`, "2"},
+		{`var out = []; [1,2].values().forEach(x => out.push(x)); out.join(",")`, "1,2"},
+		{`[10,20].values().map((x, i) => i + ":" + x).toArray().join(",")`, "0:10,1:20"},
+
+		// The whole point of the lazy helpers: a pipeline over an infinite
+		// source terminates as long as something downstream stops asking.
+		{`function* nat() { let i = 0; while (true) yield i++; }
+		  nat().take(5).toArray().join(",")`, "0,1,2,3,4"},
+		{`function* nat() { let i = 0; while (true) yield i++; }
+		  nat().map(x => x * x).filter(x => x % 2 === 0).take(3).toArray().join(",")`, "0,4,16"},
+
+		// A helper owns the iterator beneath it, so reaching a limit or
+		// throwing closes the source and its finally blocks run.
+		{`var closed = false;
+		  function* g() { try { yield 1; yield 2; } finally { closed = true; } }
+		  g().take(1).toArray(); String(closed)`, "true"},
+		{`var closed = false;
+		  function* g() { try { yield 1; } finally { closed = true; } }
+		  try { g().map(() => { throw new Error("x"); }).toArray(); } catch (e) {}
+		  String(closed)`, "true"},
+
+		{`Iterator.from([1,2,3]).toArray().join(",")`, "1,2,3"},
+		{`Iterator.from("ab").toArray().join(",")`, "a,b"},
+		// An object with only a next method is an iterator too.
+		{`var it = {i: 0, next() { return this.i < 3 ? {value: this.i++, done: false} : {done: true}; }};
+		  Iterator.from(it).map(x => x * 2).toArray().join(",")`, "0,2,4"},
+
+		{`Object.prototype.toString.call([].values().map(x => x))`, "[object Iterator Helper]"},
+		{`String([].values() instanceof Iterator)`, "true"},
+		{`String([1,2,3].values().take(Infinity).toArray().length)`, "3"},
+		{`[Iterator.prototype.map.length, Iterator.prototype.reduce.length,
+		   Iterator.prototype.toArray.length].join(",")`, "1,1,0"},
+
+		// flatMap flattens one level, over iterables only.
+		{`[new Set([1,2])].values().flatMap(x => x).toArray().join(",")`, "1,2"},
+
+		// Iterator is abstract, but subclassing it is the supported way to get
+		// the helpers on a custom iterator.
+		{`class C extends Iterator {
+		    #i = 0;
+		    next() { return this.#i < 3 ? {value: this.#i++, done: false} : {done: true}; }
+		  }
+		  new C().map(x => x * 2).toArray().join(",")`, "0,2,4"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}
+
+func TestIteratorHelperErrors(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`new Iterator()`, "TypeError"},
+		{`[1].values().take(-1)`, "RangeError"},
+		{`[1].values().drop(-1)`, "RangeError"},
+		// NaN would otherwise compare false against every bound and behave as
+		// zero.
+		{`[1].values().take(NaN)`, "RangeError"},
+		{`[1].values().map(1)`, "TypeError"},
+		{`Iterator.prototype.map.call(1, x => x)`, "TypeError"},
+		{`[].values().reduce((a, b) => a)`, "TypeError"},
+		{`Iterator.from(1)`, "TypeError"},
+		// Flattening a string into characters is almost never meant.
+		{`["a"].values().flatMap(x => x).toArray()`, "TypeError"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		_, err := rt.Eval(tc.src)
+		if err == nil {
+			t.Errorf("%s: no error, want %s", tc.src, tc.want)
+		} else if !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: got %v, want %s", tc.src, err, tc.want)
+		}
+		rt.Close()
+	}
+}
+
+// TestIteratorClosing pins that an iterator abandoned part-way through is told
+// so, which is what lets a generator run its finally blocks and release
+// whatever it was holding.
+func TestIteratorClosing(t *testing.T) {
+	const gen = `var closed = false;
+	  function* g() { try { yield 1; yield 2; } finally { closed = true; } }
+	  `
+	cases := []struct{ src, want string }{
+		{gen + `for (const x of g()) break; String(closed)`, "true"},
+		{gen + `try { for (const x of g()) { throw 0; } } catch (e) {} String(closed)`, "true"},
+		{gen + `(function () { for (const x of g()) return; })(); String(closed)`, "true"},
+		{gen + `outer: for (const x of g()) break outer; String(closed)`, "true"},
+		{gen + `outer: for (const x of [1,2]) { for (const y of g()) break outer; } String(closed)`, "true"},
+		// A pattern that names fewer elements than the iterator has is done
+		// with it.
+		{gen + `var [a] = g(); String(closed)`, "true"},
+		{gen + `function f([a]) {} f(g()); String(closed)`, "true"},
+		{gen + `var it = g(); it.next(); it.return(9); String(closed)`, "true"},
+		// Running to exhaustion closes it the ordinary way, and must not close
+		// it twice.
+		{gen + `for (const x of g()) {} String(closed)`, "true"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}
+
+// TestGeneratorReturnRunsFinally pins that generator.return() behaves as if a
+// return statement ran at the suspension point, rather than simply marking the
+// generator finished.
+func TestGeneratorReturnRunsFinally(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`function* g() { try { yield 1; } finally {} }
+		  var it = g(); it.next(); JSON.stringify(it.return(9))`, `{"value":9,"done":true}`},
+		// A finally that returns overrides the value, as it would for an
+		// ordinary return.
+		{`function* g() { try { yield 1; } finally { return 42; } }
+		  var it = g(); it.next(); JSON.stringify(it.return(9))`, `{"value":42,"done":true}`},
+		// A catch must not see it: a return statement would not trigger one.
+		{`var caught = false;
+		  function* g() { try { yield 1; } catch (e) { caught = true; } finally {} }
+		  var it = g(); it.next(); it.return(1); String(caught)`, "false"},
+		// A finally may yield again, suspending the generator once more.
+		{`function* g() { try { yield 1; } finally { yield 2; } }
+		  var it = g(); it.next(); JSON.stringify([it.return(9), it.next()])`,
+			`[{"value":2,"done":false},{"value":9,"done":true}]`},
+		// Every enclosing finally runs, innermost first.
+		{`var log = [];
+		  function* g() { try { try { yield 1; } finally { log.push("inner"); } }
+		                  finally { log.push("outer"); } }
+		  var it = g(); it.next(); it.return(0); log.join(",")`, "inner,outer"},
+		// The same nesting for an ordinary function, which had the same bug.
+		{`var log = [];
+		  function f() { try { try { return 1; } finally { log.push("inner"); } }
+		                 finally { log.push("outer"); } }
+		  f(); log.join(",")`, "inner,outer"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}
+
+// TestDestructuringUsesIterator pins that an array pattern unpacks through the
+// iterator protocol rather than by index, which is the difference between
+// destructuring a Set working and silently producing undefined.
+func TestDestructuringUsesIterator(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var [a] = new Set([1,2]); String(a)`, "1"},
+		{`var [a, b] = "xy"; a + b`, "xy"},
+		{`function* g() { yield 1; yield 2; } var [a, b] = g(); a + "," + b`, "1,2"},
+		{`var [a, ...r] = new Set([1,2,3]); a + "|" + r.join(",")`, "1|2,3"},
+		{`var [a] = new Map([[1,2]]); JSON.stringify(a)`, "[1,2]"},
+		{`var [a, b] = [1, 2]; a + "," + b`, "1,2"},
+		{`var [, b] = [1, 2]; String(b)`, "2"},
+		{`var [a = 5] = []; String(a)`, "5"},
+		{`function f([a, b]) { return a + b; } String(f(new Set([1, 2])))`, "3"},
+		// Only as many values as the pattern names are pulled, so an infinite
+		// generator terminates.
+		{`function* nat() { let i = 0; while (true) yield i++; }
+		  var [a, b, c] = nat(); a + "," + b + "," + c`, "0,1,2"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}
+
+// TestSubclassingBuiltins pins that super() adopts the object the base
+// constructor built. Every native constructor makes its own -- an Error needs a
+// stack, an Array needs array storage -- so a derived class that ignored the
+// result got an inert plain object.
+func TestSubclassingBuiltins(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`class E extends Error { constructor(m) { super(m); } }
+		  var e = new E("boom");
+		  [e.message, e instanceof Error, e instanceof E].join(",")`, "boom,true,true"},
+		{`class A extends Array {}
+		  var a = new A(); a.push(1); [a.length, a instanceof Array].join(",")`, "1,true"},
+		{`class T extends TypeError {}
+		  var e = new T("x"); [e.message, e instanceof TypeError, e instanceof Error].join(",")`,
+			"x,true,true"},
+		{`class S extends Set {} var s = new S([1,2]);
+		  [s.size, s instanceof Set, s instanceof S].join(",")`, "2,true,true"},
+		{`class M extends Map {} var m = new M(); m.set(1, 2);
+		  [m.get(1), m instanceof M].join(",")`, "2,true"},
+		{`class R extends RegExp {} var r = new R("a+");
+		  [r.test("aaa"), r instanceof R].join(",")`, "true,true"},
+		{`class D extends Date {} var d = new D(0);
+		  [d.getTime(), d instanceof D].join(",")`, "0,true"},
+		{`class U extends Uint8Array {} var u = new U(3); u[0] = 7;
+		  [u.length, u[0], u instanceof U].join(",")`, "3,7,true"},
+		{`class P extends Promise {} String(new P(r => r(1)) instanceof P)`, "true"},
+
+		// new.target is the class the caller wrote new against, all the way
+		// down to the base constructor.
+		{`class B { constructor() { this.nt = new.target.name; } } class D extends B {}
+		  new D().nt`, "D"},
+		{`class B { constructor() { this.nt = new.target.name; } } new B().nt`, "B"},
+
+		// An ordinary class hierarchy is unaffected.
+		{`class A { constructor() { this.a = 1; } }
+		  class B extends A { constructor() { super(); this.b = 2; } }
+		  var o = new B(); o.a + "," + o.b`, "1,2"},
+		{`class A { constructor() { this.v = 1; } } class B extends A {} class C extends B {}
+		  String(new C().v)`, "1"},
+		{`function F() { this.x = 1; } class G extends F {} String(new G().x)`, "1"},
+		// A base constructor returning its own object still wins.
+		{`class A { constructor() { return {custom: 1}; } } class B extends A {}
+		  String(new B().custom)`, "1"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}
