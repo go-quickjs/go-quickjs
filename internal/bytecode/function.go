@@ -134,7 +134,10 @@ type Function struct {
 	HasRest         bool
 	HasSimpleParams bool
 	UsesArguments   bool
-	UsesThis        bool
+	// UsesThis records whether the body can observe its `this`, which lets a
+	// sloppy-mode call skip substituting the global object when nothing would
+	// see the difference.
+	UsesThis bool
 	// IsExprBody marks a concise arrow body, which affects nothing at runtime
 	// but is useful when printing a function's source.
 	IsExprBody bool

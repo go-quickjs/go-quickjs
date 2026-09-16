@@ -18,7 +18,29 @@ func referencesArguments(body []ast.Stmt) bool {
 	return w.found
 }
 
-type argumentsScanner struct{ found bool }
+type argumentsScanner struct {
+	found bool
+	// seekThis looks for `this` and `super` instead of `arguments`, which needs
+	// the same walk: both are bindings an arrow shares with its enclosing
+	// function and an ordinary function does not.
+	seekThis bool
+}
+
+// referencesThis reports whether a function body can observe its `this`.
+//
+// It is asked so that a sloppy-mode call can skip substituting the global
+// object when nothing would see the difference -- which is most functions, and
+// the substitution costs a pointer write on every call.
+//
+// A direct eval could see it, so a body containing one counts as using it.
+func referencesThis(fn *ast.FuncLit) bool {
+	w := &argumentsScanner{seekThis: true}
+	for _, p := range fn.Params {
+		w.expr(p)
+	}
+	w.stmts(fn.Body)
+	return w.found
+}
 
 func (w *argumentsScanner) stmts(list []ast.Stmt) {
 	for _, s := range list {
@@ -107,11 +129,25 @@ func (w *argumentsScanner) expr(e ast.Expr) {
 	}
 	switch n := e.(type) {
 	case *ast.Ident:
-		if n.Name == "arguments" {
+		if w.seekThis {
+			// A direct eval can read `this`, so a body containing one is
+			// treated as using it.
+			if n.Name == "eval" {
+				w.found = true
+			}
+		} else if n.Name == "arguments" {
+			w.found = true
+		}
+	case *ast.This:
+		if w.seekThis {
+			w.found = true
+		}
+	case *ast.Super:
+		if w.seekThis {
 			w.found = true
 		}
 	case *ast.FuncLit:
-		// Only an arrow shares the enclosing arguments object.
+		// Only an arrow shares the enclosing this and arguments.
 		if n.Kind == ast.FuncArrow {
 			for _, p := range n.Params {
 				w.expr(p)

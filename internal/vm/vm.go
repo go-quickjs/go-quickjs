@@ -157,11 +157,14 @@ func (r *Runtime) run(cl *closure, this Value, args []Value, newTarget Value, ca
 	// global object, and a primitive becomes its wrapper. Strict mode leaves it
 	// exactly as passed, which is the difference that makes strict mode able to
 	// detect a missing receiver at all.
-	if !fn.Strict && fn.Kind != bytecode.KindArrow && newTarget.IsUndefined() {
-		switch {
-		case this.IsNullish():
-			this = Obj(r.global)
-		case !this.IsObject():
+	// The object case is tested first because it is the common one and costs a
+	// single mask: a method call already has an object receiver and needs no
+	// coercion at all.
+	if fn.UsesThis && !this.IsObject() && !fn.Strict &&
+		fn.Kind != bytecode.KindArrow && newTarget.IsUndefined() {
+		if this.IsNullish() {
+			this = r.globalThis
+		} else {
 			o, err := r.toObject(this)
 			if err != nil {
 				return Undefined, err

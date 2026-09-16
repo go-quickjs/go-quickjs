@@ -60,6 +60,8 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 	// Parameters must occupy slots 0..n-1, because the interpreter copies
 	// arguments into those slots positionally. Nothing may be declared before
 	// them.
+	c.fn.UsesThis = referencesThis(fn)
+
 	c.bindParameters(fn)
 	if fn.Generator || fn.Async {
 		// A generator's parameters are bound when it is called, so the

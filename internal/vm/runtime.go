@@ -50,6 +50,10 @@ type Runtime struct {
 	// check costs one decrement per instruction rather than a context read.
 	interruptCounter int
 
+	// globalThis is the global object as a Value, held once because a sloppy
+	// call with no receiver substitutes it on every call.
+	globalThis Value
+
 	// genFuncProto, asyncFuncProto and asyncGenFuncProto are the intrinsic
 	// prototypes of the three kinds of function that are not ordinary.
 	genFuncProto      *Object

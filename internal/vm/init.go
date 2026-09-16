@@ -206,6 +206,7 @@ func arg(args []Value, i int) Value {
 // initGlobals installs the global object and the standard library.
 func (r *Runtime) initGlobals() {
 	r.global = newObject(r.proto.object, ClassObject)
+	r.globalThis = Obj(r.global)
 
 	// The value properties of the global object.
 	r.global.setOwnRaw(atomUndefined, Undefined, 0)

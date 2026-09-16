@@ -264,3 +264,40 @@ func TestGeneratorFunctionIntrinsics(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// TestSloppyThisCoercion pins that a sloppy-mode function called without a
+// receiver gets the global object, and a primitive receiver gets its wrapper.
+// Strict mode leaves both exactly as passed, which is the difference that lets
+// it detect a missing receiver at all.
+func TestSloppyThisCoercion(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`function f() { return this === globalThis; } String(f())`, "true"},
+		{`function f() { this.x = 1; return this.x; } String(f())`, "1"},
+		// An arrow inside sees the coerced value, since it captures it.
+		{`function f() { return (() => this === globalThis)(); } String(f())`, "true"},
+		// So does a direct eval, and a parameter default.
+		{`function f() { return eval("this === globalThis"); } String(f())`, "true"},
+		{`function f(a = this) { return a === globalThis; } String(f())`, "true"},
+		// A primitive receiver becomes its wrapper.
+		{`function f() { return typeof this; } String(f.call(5))`, "object"},
+		{`function f() { return this.valueOf(); } String(f.call(5))`, "5"},
+
+		{`function f() { "use strict"; return this; } String(f())`, "undefined"},
+		{`function f() { "use strict"; return typeof this; } String(f.call(5))`, "number"},
+		// A method call already has an object receiver and is unaffected.
+		{`var o = {m() { return this === o; }}; String(o.m())`, "true"},
+		// Construction is unaffected: this is the new object.
+		{`function f() {} String(new f() instanceof f)`, "true"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}
