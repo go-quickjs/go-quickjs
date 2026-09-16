@@ -705,6 +705,8 @@ func (r *Runtime) initArrayBuiltins() {
 		return Obj(rt.newArrayFrom(args)), nil
 	})
 
+	r.initArrayFromAsync(ctor)
+
 	r.defMethod(ctor, "from", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		src := arg(args, 0)
 		mapFn := arg(args, 1)

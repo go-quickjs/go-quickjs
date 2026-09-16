@@ -60,7 +60,6 @@ var unsupportedFeatures = map[string]string{
 	"import-assertions":             "no module attributes",
 	"import-attributes":             "no module attributes",
 	"explicit-resource-management":  "no using declarations",
-	"Array.fromAsync":               "no async iteration helpers",
 	"source-phase-imports":          "no source phase imports",
 	"import-defer":                  "no deferred imports",
 	"tail-call-optimization":        "no tail calls",

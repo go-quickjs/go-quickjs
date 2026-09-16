@@ -196,3 +196,41 @@ func TestFunctionNameAndLength(t *testing.T) {
 		t.Error("assigning to a function's name in strict mode should throw")
 	}
 }
+
+// Array.from over an async iterable produces an array of promises rather than a
+// promise of an array, which is almost never what the caller wanted.
+// Array.fromAsync awaits each value and resolves once.
+func TestArrayFromAsync(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`Array.fromAsync([1, 2, 3]).then(a => r = a.join(","))`, "1,2,3"},
+		{`Array.fromAsync([Promise.resolve(1), 2]).then(a => r = a.join(","))`, "1,2"},
+		{`async function* g() { yield 1; yield 2; }
+		  Array.fromAsync(g()).then(a => r = a.join(","))`, "1,2"},
+		{`Array.fromAsync([1, 2], x => x * 2).then(a => r = a.join(","))`, "2,4"},
+		// The mapper may itself be async.
+		{`Array.fromAsync([1, 2], async x => x * 3).then(a => r = a.join(","))`, "3,6"},
+		// An array-like with no iterator is read by index.
+		{`Array.fromAsync({length: 2, 0: "a", 1: "b"}).then(a => r = a.join(","))`, "a,b"},
+		{`Array.fromAsync([1]).then(a => r = a instanceof Array)`, "true"},
+		// A rejection anywhere rejects the whole thing.
+		{`Array.fromAsync([Promise.reject(new Error("x"))]).catch(e => r = e.message)`, "x"},
+		{`Array.fromAsync(null).catch(e => r = e.constructor.name)`, "TypeError"},
+		{`Array.fromAsync([1], 1).catch(e => r = e.constructor.name)`, "TypeError"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		if _, err := rt.Eval("var r;" + tc.src); err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+			rt.Close()
+			continue
+		}
+		got, err := rt.Eval("String(r)")
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got.String() != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got.String(), tc.want)
+		}
+		rt.Close()
+	}
+}
