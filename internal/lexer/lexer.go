@@ -7,6 +7,8 @@ import (
 	"unicode"
 	"unicode/utf16"
 	"unicode/utf8"
+
+	"github.com/go-quickjs/go-quickjs/internal/wtf8"
 )
 
 // Error is a syntax error produced while scanning.
@@ -502,7 +504,10 @@ func (l *Lexer) scanEscape(sb *strings.Builder) error {
 		if err != nil {
 			return err
 		}
-		sb.WriteRune(r)
+		// A \u escape may denote a lone surrogate, which is a legal JavaScript
+		// string. WriteRune would replace it with U+FFFD, so it is encoded
+		// explicitly.
+		writeCodePoint(sb, r)
 	case '\r':
 		// Line continuation: produces nothing.
 		if l.peekByte(0) == '\n' {
@@ -763,6 +768,20 @@ func parseFloatLiteral(s string) (float64, error) {
 		return 0, err
 	}
 	return f, nil
+}
+
+// writeCodePoint appends a code point, encoding a lone surrogate as WTF-8.
+//
+// strings.Builder.WriteRune substitutes U+FFFD for a surrogate, because a
+// surrogate is not a Unicode scalar value. JavaScript strings may contain one,
+// so the encoding is done by hand.
+func writeCodePoint(sb *strings.Builder, r rune) {
+	if wtf8.IsSurrogate(r) {
+		var buf [3]byte
+		sb.Write(wtf8.AppendRune(buf[:0], r))
+		return
+	}
+	sb.WriteRune(r)
 }
 
 func isDigit(c byte) bool    { return c >= '0' && c <= '9' }

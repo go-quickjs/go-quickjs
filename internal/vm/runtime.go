@@ -24,9 +24,13 @@ type Runtime struct {
 	// requires to exist before any script runs.
 	proto intrinsics
 
-	// stack is the shared operand stack. Frames take contiguous windows of it,
-	// so a call does not allocate.
+	// stack backs every frame's locals and operands. It is allocated once at
+	// its full size and never grown, which is what lets an upvalue safely hold
+	// a pointer into a live frame's locals: the backing array never moves.
+	// Running out of it is exactly "maximum call stack size exceeded".
 	stack []Value
+	// stackTop is the first unused slot of stack.
+	stackTop int
 	// frames is the call stack. Like the operand stack it is reused across
 	// calls, and its length bounds recursion depth.
 	frames []frame

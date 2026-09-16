@@ -3,6 +3,8 @@ package lexer
 import (
 	"math"
 	"testing"
+
+	"github.com/go-quickjs/go-quickjs/internal/wtf8"
 )
 
 // scanAll tokenizes src with Next only, which treats '/' as division. Tests
@@ -427,5 +429,80 @@ func BenchmarkScanStringHeavy(b *testing.B) {
 				break
 			}
 		}
+	}
+}
+
+// TestLoneSurrogateEscapes checks that a \u escape denoting an unpaired
+// surrogate survives lexing.
+//
+// This is easy to get wrong in Go: strings.Builder.WriteRune substitutes
+// U+FFFD for a surrogate, so a naive lexer silently destroys "\uD83D".
+func TestLoneSurrogateEscapes(t *testing.T) {
+	tests := []struct {
+		name  string
+		src   string
+		units []uint16
+	}{
+		{"lone high", `"\uD83D"`, []uint16{0xD83D}},
+		{"lone low", `"\uDE00"`, []uint16{0xDE00}},
+		{"high then ascii", `"\uD83Dx"`, []uint16{0xD83D, 'x'}},
+		{"ascii then low", `"x\uDE00"`, []uint16{'x', 0xDE00}},
+		{"reversed pair", `"\uDE00\uD83D"`, []uint16{0xDE00, 0xD83D}},
+		{"two highs", `"\uD83D\uD83D"`, []uint16{0xD83D, 0xD83D}},
+		{"boundary low", `"\uDFFF"`, []uint16{0xDFFF}},
+		{"boundary high", `"\uD800"`, []uint16{0xD800}},
+		// A well-formed pair must be combined into one code point instead.
+		{"valid pair", "\"\\uD83D\\uDE00\"", []uint16{0xD83D, 0xDE00}},
+	}
+	for _, tt := range tests {
+		toks := scanAll(t, tt.src)
+		if len(toks) != 1 || toks[0].Kind != String {
+			t.Errorf("%s: expected one string token, got %v", tt.name, toks)
+			continue
+		}
+		got := wtf8.ToUTF16(toks[0].Value)
+		if len(got) != len(tt.units) {
+			t.Errorf("%s: got %d code units (%#x), want %d (%#x)",
+				tt.name, len(got), got, len(tt.units), tt.units)
+			continue
+		}
+		for i := range tt.units {
+			if got[i] != tt.units[i] {
+				t.Errorf("%s: unit %d = %#x, want %#x", tt.name, i, got[i], tt.units[i])
+			}
+		}
+	}
+}
+
+func TestValidSurrogatePairBecomesOneCodePoint(t *testing.T) {
+	// Two escapes forming a valid pair must combine, producing ordinary UTF-8
+	// rather than two encoded halves.
+	toks := scanAll(t, "\"\\uD83D\\uDE00\"")
+	if toks[0].Value != "\U0001F600" {
+		t.Errorf("value = % x, want the emoji encoded as UTF-8", toks[0].Value)
+	}
+	if len(toks[0].Value) != 4 {
+		t.Errorf("value is %d bytes, want 4", len(toks[0].Value))
+	}
+}
+
+func TestBracedSurrogateEscape(t *testing.T) {
+	// The \u{...} form can also name a surrogate.
+	toks := scanAll(t, `"\u{D83D}"`)
+	got := wtf8.ToUTF16(toks[0].Value)
+	if len(got) != 1 || got[0] != 0xD83D {
+		t.Errorf("got %#x, want a single 0xD83D", got)
+	}
+}
+
+func TestLoneSurrogateInTemplate(t *testing.T) {
+	l := New("`\\uD83D`")
+	tok, err := l.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := wtf8.ToUTF16(tok.Value)
+	if len(got) != 1 || got[0] != 0xD83D {
+		t.Errorf("template cooked value = %#x, want a single 0xD83D", got)
 	}
 }

@@ -1,10 +1,13 @@
 package vm
 
 import (
+	"math"
 	"math/big"
 	"strings"
 	"unicode/utf16"
 	"unicode/utf8"
+
+	"github.com/go-quickjs/go-quickjs/internal/wtf8"
 )
 
 // String is a JavaScript string.
@@ -71,7 +74,9 @@ func scanString(s string) (ascii bool, length int) {
 			i++
 			continue
 		}
-		if _, ok := decodeWTF8Surrogate(s, i); ok {
+		if _, ok := wtf8.DecodeSurrogateAt(s, i); ok {
+			// An encoded lone surrogate is one code unit despite being three
+			// bytes.
 			length++
 			i += 3
 			continue
@@ -188,58 +193,9 @@ func (s *String) units() []uint16 {
 		return nil
 	}
 	if s.u16 == nil {
-		s.u16 = toUTF16(s.Go())
+		s.u16 = wtf8.ToUTF16(s.Go())
 	}
 	return s.u16
-}
-
-// toUTF16 converts the internal UTF-8 form to UTF-16 code units.
-//
-// It cannot use utf16.Encode([]rune(s)), because a lone surrogate -- which
-// JavaScript permits and fromUnits stores in the WTF-8 encoding -- is not
-// valid UTF-8, so ranging over the string would replace it with U+FFFD and
-// lose the code unit.
-func toUTF16(s string) []uint16 {
-	out := make([]uint16, 0, len(s))
-	for i := 0; i < len(s); {
-		c := s[i]
-		if c < utf8.RuneSelf {
-			out = append(out, uint16(c))
-			i++
-			continue
-		}
-		if r, ok := decodeWTF8Surrogate(s, i); ok {
-			out = append(out, uint16(r))
-			i += 3
-			continue
-		}
-		r, size := utf8.DecodeRuneInString(s[i:])
-		if r > 0xFFFF {
-			hi, lo := utf16.EncodeRune(r)
-			out = append(out, uint16(hi), uint16(lo))
-		} else {
-			out = append(out, uint16(r))
-		}
-		i += size
-	}
-	return out
-}
-
-// decodeWTF8Surrogate recognizes the three-byte sequence that encodes a lone
-// surrogate and returns the code unit it denotes.
-//
-// The encoding is the ordinary three-byte UTF-8 layout applied to a value in
-// U+D800..U+DFFF, which always begins 0xED with a continuation byte in
-// 0xA0..0xBF.
-func decodeWTF8Surrogate(s string, i int) (rune, bool) {
-	if i+2 >= len(s) || s[i] != 0xED {
-		return 0, false
-	}
-	b1, b2 := s[i+1], s[i+2]
-	if b1 < 0xA0 || b1 > 0xBF || b2 < 0x80 || b2 > 0xBF {
-		return 0, false
-	}
-	return 0xD000 | rune(b1&0x3F)<<6 | rune(b2&0x3F), true
 }
 
 // CharCodeAt returns the UTF-16 code unit at i, or -1 if i is out of range.
@@ -298,36 +254,14 @@ func (s *String) Substring(start, end int) *String {
 	return fromUnits(s.units()[start:end])
 }
 
-// fromUnits builds a String from UTF-16 code units, preserving lone surrogates
-// by encoding them as WTF-8 rather than replacing them.
+// fromUnits builds a String from UTF-16 code units.
+//
+// Slicing between the halves of a surrogate pair is legal in JavaScript and
+// yields a lone surrogate, so the encoder must preserve one rather than
+// substituting U+FFFD.
 func fromUnits(u []uint16) *String {
-	var sb strings.Builder
-	sb.Grow(len(u))
-	ascii := true
-	for i := 0; i < len(u); i++ {
-		c := rune(u[i])
-		if c >= utf8.RuneSelf {
-			ascii = false
-		}
-		if utf16.IsSurrogate(c) && i+1 < len(u) {
-			if r := utf16.DecodeRune(c, rune(u[i+1])); r != utf8.RuneError {
-				sb.WriteRune(r)
-				i++
-				continue
-			}
-		}
-		if utf16.IsSurrogate(c) {
-			// A lone surrogate has no valid UTF-8 encoding; write the three
-			// bytes that WTF-8 assigns it so the code unit survives a round
-			// trip through the Go string.
-			sb.WriteByte(byte(0xE0 | (c >> 12)))
-			sb.WriteByte(byte(0x80 | ((c >> 6) & 0x3F)))
-			sb.WriteByte(byte(0x80 | (c & 0x3F)))
-			continue
-		}
-		sb.WriteRune(c)
-	}
-	return &String{s: sb.String(), length: len(u), ascii: ascii}
+	s := wtf8.FromUTF16(u)
+	return &String{s: s, length: len(u), ascii: wtf8.IsASCII(s)}
 }
 
 // Equals reports whether two strings have the same code units.
@@ -491,4 +425,23 @@ func (b *BigInt) String() string { return b.V.String() }
 func (b *BigInt) Float() float64 {
 	f, _ := new(big.Float).SetInt(&b.V).Float64()
 	return f
+}
+
+// bigIntFromFloat converts an integral float64 to a BigInt exactly, reporting
+// false for a value that is not an integer.
+//
+// The conversion goes through big.Float rather than int64 because a float64 can
+// hold integers far beyond the int64 range, and the comparison operators must
+// stay exact across that whole range.
+func bigIntFromFloat(f float64) (*BigInt, bool) {
+	if math.IsNaN(f) || math.IsInf(f, 0) || f != math.Trunc(f) {
+		return nil, false
+	}
+	b := &BigInt{}
+	if _, acc := new(big.Float).SetFloat64(f).Int(&b.V); acc != big.Exact {
+		// SetFloat64 on an integral value is always exact, so this only
+		// triggers on a value the guard above should already have rejected.
+		return nil, false
+	}
+	return b, true
 }

@@ -261,3 +261,162 @@ func BenchmarkNewStringASCII(b *testing.B) {
 		NewString("a moderately long ascii string for scanning")
 	}
 }
+
+// newStringFromUnits builds a String from raw UTF-16 code units, which is how a
+// script produces one via String.fromCharCode.
+func newStringFromUnits(units ...uint16) *String { return fromUnits(units) }
+
+// TestLoneSurrogateStringOperations checks that an unpaired surrogate behaves
+// like any other code unit through every string operation.
+//
+// JavaScript strings are not required to be well formed, so these are ordinary
+// values a script can produce and must keep working with.
+func TestLoneSurrogateStringOperations(t *testing.T) {
+	const hi, lo = 0xD83D, 0xDE00
+
+	t.Run("length counts one unit", func(t *testing.T) {
+		if got := newStringFromUnits(hi).Len(); got != 1 {
+			t.Errorf("Len() = %d, want 1", got)
+		}
+		if got := newStringFromUnits('a', hi, 'b').Len(); got != 3 {
+			t.Errorf("Len() = %d, want 3", got)
+		}
+		// A valid pair is still two units.
+		if got := newStringFromUnits(hi, lo).Len(); got != 2 {
+			t.Errorf("Len() of a pair = %d, want 2", got)
+		}
+	})
+
+	t.Run("charCodeAt reads it back", func(t *testing.T) {
+		s := newStringFromUnits('a', hi, 'b')
+		for i, want := range []int{'a', hi, 'b'} {
+			if got := s.CharCodeAt(i); got != want {
+				t.Errorf("CharCodeAt(%d) = %#x, want %#x", i, got, want)
+			}
+		}
+	})
+
+	t.Run("codePointAt does not combine an unpaired half", func(t *testing.T) {
+		// A high surrogate not followed by a low one is its own code point.
+		s := newStringFromUnits(hi, 'a')
+		if got := s.CodePointAt(0); got != hi {
+			t.Errorf("CodePointAt(0) = %#x, want %#x", got, hi)
+		}
+		// A valid pair does combine.
+		if got := newStringFromUnits(hi, lo).CodePointAt(0); got != 0x1F600 {
+			t.Errorf("CodePointAt(0) of a pair = %#x, want 0x1F600", got)
+		}
+	})
+
+	t.Run("substring preserves it", func(t *testing.T) {
+		s := newStringFromUnits('a', hi, lo, 'b')
+		// Splitting the pair leaves a lone surrogate on each side.
+		left, right := s.Substring(0, 2), s.Substring(2, 4)
+		if left.Len() != 2 || left.CharCodeAt(1) != hi {
+			t.Errorf("left half lost the high surrogate: %#x", left.CharCodeAt(1))
+		}
+		if right.Len() != 2 || right.CharCodeAt(0) != lo {
+			t.Errorf("right half lost the low surrogate: %#x", right.CharCodeAt(0))
+		}
+	})
+
+	t.Run("concat rejoins into a valid pair", func(t *testing.T) {
+		joined := newStringFromUnits(hi).Concat(newStringFromUnits(lo))
+		if joined.Len() != 2 {
+			t.Fatalf("Len() = %d, want 2", joined.Len())
+		}
+		if joined.CodePointAt(0) != 0x1F600 {
+			t.Errorf("rejoined halves = %#x, want 0x1F600", joined.CodePointAt(0))
+		}
+	})
+
+	t.Run("equality distinguishes surrogates", func(t *testing.T) {
+		if !newStringFromUnits(hi).Equals(newStringFromUnits(hi)) {
+			t.Error("identical lone surrogates should compare equal")
+		}
+		if newStringFromUnits(hi).Equals(newStringFromUnits(lo)) {
+			t.Error("different surrogates should not compare equal")
+		}
+		// A lone surrogate must not equal the replacement character, which is
+		// what a lossy encoding would turn it into.
+		if newStringFromUnits(hi).Equals(NewString("�")) {
+			t.Error("a lone surrogate should not equal U+FFFD")
+		}
+	})
+
+	t.Run("ordering is by code unit", func(t *testing.T) {
+		// 'a' (0x61) sorts before a surrogate (0xD83D).
+		if newStringFromUnits('a').Compare(newStringFromUnits(hi)) >= 0 {
+			t.Error("'a' should sort before a high surrogate")
+		}
+		// A high surrogate sorts before a low one.
+		if newStringFromUnits(hi).Compare(newStringFromUnits(lo)) >= 0 {
+			t.Error("a high surrogate should sort before a low one")
+		}
+	})
+
+	t.Run("indexOf finds one", func(t *testing.T) {
+		s := newStringFromUnits('a', 'b', hi, 'c')
+		if got := s.IndexOf(newStringFromUnits(hi), 0); got != 2 {
+			t.Errorf("IndexOf(lone surrogate) = %d, want 2", got)
+		}
+		if got := s.IndexOf(newStringFromUnits(lo), 0); got != -1 {
+			t.Errorf("IndexOf(absent surrogate) = %d, want -1", got)
+		}
+	})
+
+	t.Run("not treated as ASCII", func(t *testing.T) {
+		if newStringFromUnits(hi).ascii {
+			t.Error("a lone surrogate must not take the ASCII fast path")
+		}
+	})
+}
+
+// TestLoneSurrogateRoundTripsThroughGoString checks the boundary where a
+// JavaScript string is handed to Go code and back.
+func TestLoneSurrogateRoundTripsThroughGoString(t *testing.T) {
+	const hi = 0xD83D
+	original := newStringFromUnits('a', hi, 'b')
+
+	// Go() must not be lossy: rebuilding from the bytes gives the same units.
+	rebuilt := NewString(original.Go())
+	if rebuilt.Len() != original.Len() {
+		t.Fatalf("length changed: %d -> %d", original.Len(), rebuilt.Len())
+	}
+	for i := 0; i < original.Len(); i++ {
+		if rebuilt.CharCodeAt(i) != original.CharCodeAt(i) {
+			t.Errorf("unit %d changed: %#x -> %#x",
+				i, original.CharCodeAt(i), rebuilt.CharCodeAt(i))
+		}
+	}
+}
+
+// TestLoneSurrogateSurvivesRopeFlattening checks that the deferred-copy path
+// preserves surrogates too, including one split across a rope boundary.
+func TestLoneSurrogateSurvivesRopeFlattening(t *testing.T) {
+	const hi, lo = 0xD83D, 0xDE00
+	pad := NewString(strings.Repeat("x", 100))
+
+	// Build a rope whose two halves each end and begin with a surrogate half.
+	left := pad.Concat(newStringFromUnits(hi))
+	right := newStringFromUnits(lo).Concat(pad)
+	rope := left.Concat(right)
+
+	if rope.left == nil {
+		t.Fatal("expected a rope")
+	}
+	if got, want := rope.Len(), 100+1+1+100; got != want {
+		t.Fatalf("Len() = %d, want %d", got, want)
+	}
+	// Flattening must leave the two halves adjacent and readable.
+	if got := rope.CharCodeAt(100); got != hi {
+		t.Errorf("unit 100 = %#x, want %#x", got, hi)
+	}
+	if got := rope.CharCodeAt(101); got != lo {
+		t.Errorf("unit 101 = %#x, want %#x", got, lo)
+	}
+	// Adjacent halves form a valid pair once joined.
+	if got := rope.CodePointAt(100); got != 0x1F600 {
+		t.Errorf("CodePointAt(100) = %#x, want 0x1F600", got)
+	}
+}
