@@ -143,8 +143,7 @@ func (r *Runtime) setElem(t *typedArrayData, i int, v Value) error {
 		if !v.IsBigInt() {
 			return r.throwTypeError("a BigInt typed array requires a BigInt value")
 		}
-		u := v.BigInt().V.Uint64()
-		binary.LittleEndian.PutUint64(b[off:], u)
+		binary.LittleEndian.PutUint64(b[off:], bigLowUint64(v.BigInt()))
 		return nil
 	}
 

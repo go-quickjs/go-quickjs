@@ -225,6 +225,7 @@ func (r *Runtime) initGlobals() {
 	r.initMathBuiltins()
 	r.initArrayBufferBuiltins()
 	r.initTypedArrayBuiltins()
+	r.initDataViewBuiltins()
 	r.initProxyBuiltins()
 	r.initReflectBuiltins()
 	r.initGeneratorBuiltins()
