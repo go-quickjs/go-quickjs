@@ -389,7 +389,14 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 			push(v)
 		case bytecode.OpSetGlobal:
-			if err := r.setProp(r.global, cl.names[in.A], pop(), Obj(r.global), cl.fn.Strict); err != nil {
+			name := cl.names[in.A]
+			// Strict mode refuses to create a global by assignment, which is
+			// the rule that catches a misspelled variable.
+			if cl.fn.Strict && !r.hasProp(r.global, name) {
+				vmErr = r.throwReferenceError("%s is not defined", r.atoms.name(name))
+				goto onError
+			}
+			if err := r.setProp(r.global, name, pop(), Obj(r.global), cl.fn.Strict); err != nil {
 				vmErr = err
 				goto onError
 			}
@@ -456,6 +463,17 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				vmErr = err
 				goto onError
 			}
+		case bytecode.OpDeleteVar:
+			// Deleting a binding only succeeds for a configurable global
+			// property, which is why a var declaration cannot be deleted.
+			name := cl.names[in.A]
+			ok, err := r.deleteProp(r.global, name, false)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			push(Bool(ok))
+
 		case bytecode.OpDeleteProp:
 			key := pop()
 			obj := pop()

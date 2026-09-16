@@ -76,7 +76,30 @@ type parser struct {
 
 	// nodes batches the allocation of the most common node types. See arena.go.
 	nodes arena
+
+	// depth bounds nesting. A recursive-descent parser uses Go stack in
+	// proportion to how deeply the input nests, and a goroutine stack overflow
+	// is a process-wide crash rather than a catchable error, so pathological
+	// input is rejected before it gets that far.
+	depth int
 }
+
+// maxNestingDepth is the deepest expression or statement nesting accepted.
+//
+// Real code never approaches this; generated or hostile input can. The figure
+// is well below where the Go stack would be exhausted, leaving room for the
+// compiler, which recurses over the same tree.
+const maxNestingDepth = 1000
+
+// enter increases the nesting depth, failing if the input is too deep.
+func (p *parser) enter() {
+	p.depth++
+	if p.depth > maxNestingDepth {
+		p.errorf("the expression nests too deeply")
+	}
+}
+
+func (p *parser) leave() { p.depth-- }
 
 // parserMark records a position the parser can return to. It is used only for
 // the few one-token lookaheads that the cover grammar cannot express, such as

@@ -54,10 +54,11 @@ func (r *Runtime) materialize(c bytecode.Constant) Value {
 // Run executes a compiled top-level program and returns its completion value.
 func (r *Runtime) Run(fn *bytecode.Function) (Value, error) {
 	cl := r.prepare(fn)
-	// Top-level code runs with the global object as `this` in sloppy mode and
-	// with undefined in a module or under "use strict".
+	// `this` at the top level of a script is the global object regardless of
+	// strictness. Only a strict function invoked without a receiver, and module
+	// code, see undefined.
 	this := Obj(r.global)
-	if fn.Strict {
+	if fn.IsModule {
 		this = Undefined
 	}
 	return r.run(cl, this, nil, Undefined, nil)

@@ -87,6 +87,9 @@ func (c *compiler) markUninitialized(name string) {
 }
 
 func (c *compiler) compileStatement(s ast.Stmt) {
+	c.enter(s.Pos())
+	defer c.leave()
+
 	switch n := s.(type) {
 	case *ast.ExprStmt:
 		c.compileExpr(n.X)

@@ -72,6 +72,9 @@ func (p *parser) parseExprFrom(left ast.Expr) ast.Expr {
 
 // parseAssign parses an AssignmentExpression.
 func (p *parser) parseAssign() ast.Expr {
+	p.enter()
+	defer p.leave()
+
 	// `yield` is an operator rather than an identifier inside a generator.
 	if p.allowYield && p.isContextual("yield") {
 		return p.parseYield()

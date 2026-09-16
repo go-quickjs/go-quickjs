@@ -7,6 +7,9 @@ import (
 
 // parseStatement parses a single statement or declaration.
 func (p *parser) parseStatement() ast.Stmt {
+	p.enter()
+	defer p.leave()
+
 	start := p.tok.Pos
 
 	switch p.tok.Kind {

@@ -14,6 +14,9 @@ func (c *compiler) compileExpr(e ast.Expr) {
 // class the supplied name. `const f = () => {}` names the arrow "f", which is
 // observable through Function.prototype.name.
 func (c *compiler) compileExprNamed(e ast.Expr, name string) {
+	c.enter(e.Pos())
+	defer c.leave()
+
 	switch n := e.(type) {
 	case *ast.NumberLit:
 		c.compileNumber(n.Value)
@@ -320,8 +323,22 @@ func (c *compiler) compileUnary(n *ast.Unary) {
 			c.emitAt(n.Start, bytecode.OpDeleteProp, 0, 0)
 			return
 		}
-		// Deleting anything that is not a property reference evaluates the
-		// operand and yields true.
+		if id, ok := n.Operand.(*ast.Ident); ok {
+			// A local or captured binding cannot be deleted at all; a global
+			// can, but only if it is configurable, which a var declaration is
+			// not.
+			if _, isLocal := c.resolveLocal(id.Name); isLocal {
+				c.emit(bytecode.OpPushFalse, 0, 0)
+				return
+			}
+			if _, isUpvalue := c.resolveUpvalue(id.Name); isUpvalue {
+				c.emit(bytecode.OpPushFalse, 0, 0)
+				return
+			}
+			c.emitAt(n.Start, bytecode.OpDeleteVar, c.nameIdx(id.Name), 0)
+			return
+		}
+		// Deleting anything else evaluates the operand and yields true.
 		c.compileExpr(n.Operand)
 		c.emit(bytecode.OpDrop, 0, 0)
 		c.emit(bytecode.OpPushTrue, 0, 0)

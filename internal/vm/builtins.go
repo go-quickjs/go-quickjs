@@ -908,12 +908,18 @@ func (r *Runtime) initArrayBuiltins() {
 	})
 
 	// The iteration methods share a shape, so they are defined from a table.
+	// Every one of these captures the length once before iterating, as the
+	// specification requires: an element the callback appends is not visited,
+	// and one it removes is skipped. Re-reading the length each step would
+	// also let a callback that pushes loop forever.
 	r.defIterationMethod(p, "forEach", func(rt *Runtime, o *Object, cb Value, thisArg Value) (Value, error) {
-		for i := 0; i < len(o.elems); i++ {
-			if isHole(o.elems[i]) {
+		n := len(o.elems)
+		for i := 0; i < n; i++ {
+			el, ok := elemAt(o, i)
+			if !ok {
 				continue
 			}
-			if _, err := rt.call(cb, thisArg, []Value{o.elems[i], Int(i), Obj(o)}); err != nil {
+			if _, err := rt.call(cb, thisArg, []Value{el, Int(i), Obj(o)}); err != nil {
 				return Undefined, err
 			}
 		}
@@ -921,13 +927,16 @@ func (r *Runtime) initArrayBuiltins() {
 	})
 
 	r.defIterationMethod(p, "map", func(rt *Runtime, o *Object, cb Value, thisArg Value) (Value, error) {
-		out := make([]Value, len(o.elems))
-		for i := 0; i < len(o.elems); i++ {
-			if isHole(o.elems[i]) {
+		n := len(o.elems)
+		out := make([]Value, n)
+		for i := 0; i < n; i++ {
+			el, ok := elemAt(o, i)
+			if !ok {
+				// A hole in the source stays a hole in the result.
 				out[i] = elemHole
 				continue
 			}
-			v, err := rt.call(cb, thisArg, []Value{o.elems[i], Int(i), Obj(o)})
+			v, err := rt.call(cb, thisArg, []Value{el, Int(i), Obj(o)})
 			if err != nil {
 				return Undefined, err
 			}
@@ -937,28 +946,30 @@ func (r *Runtime) initArrayBuiltins() {
 	})
 
 	r.defIterationMethod(p, "filter", func(rt *Runtime, o *Object, cb Value, thisArg Value) (Value, error) {
+		n := len(o.elems)
 		var out []Value
-		for i := 0; i < len(o.elems); i++ {
-			if isHole(o.elems[i]) {
+		for i := 0; i < n; i++ {
+			el, ok := elemAt(o, i)
+			if !ok {
 				continue
 			}
-			keep, err := rt.call(cb, thisArg, []Value{o.elems[i], Int(i), Obj(o)})
+			keep, err := rt.call(cb, thisArg, []Value{el, Int(i), Obj(o)})
 			if err != nil {
 				return Undefined, err
 			}
 			if keep.Truthy() {
-				out = append(out, o.elems[i])
+				out = append(out, el)
 			}
 		}
 		return Obj(rt.newArrayFrom(out)), nil
 	})
 
 	r.defIterationMethod(p, "find", func(rt *Runtime, o *Object, cb Value, thisArg Value) (Value, error) {
-		for i := 0; i < len(o.elems); i++ {
-			el := o.elems[i]
-			if isHole(el) {
-				el = Undefined
-			}
+		n := len(o.elems)
+		for i := 0; i < n; i++ {
+			// find visits holes, unlike filter and forEach, reporting them as
+			// undefined.
+			el, _ := elemAt(o, i)
 			ok, err := rt.call(cb, thisArg, []Value{el, Int(i), Obj(o)})
 			if err != nil {
 				return Undefined, err
@@ -971,11 +982,9 @@ func (r *Runtime) initArrayBuiltins() {
 	})
 
 	r.defIterationMethod(p, "findIndex", func(rt *Runtime, o *Object, cb Value, thisArg Value) (Value, error) {
-		for i := 0; i < len(o.elems); i++ {
-			el := o.elems[i]
-			if isHole(el) {
-				el = Undefined
-			}
+		n := len(o.elems)
+		for i := 0; i < n; i++ {
+			el, _ := elemAt(o, i)
 			ok, err := rt.call(cb, thisArg, []Value{el, Int(i), Obj(o)})
 			if err != nil {
 				return Undefined, err
@@ -988,15 +997,17 @@ func (r *Runtime) initArrayBuiltins() {
 	})
 
 	r.defIterationMethod(p, "some", func(rt *Runtime, o *Object, cb Value, thisArg Value) (Value, error) {
-		for i := 0; i < len(o.elems); i++ {
-			if isHole(o.elems[i]) {
+		n := len(o.elems)
+		for i := 0; i < n; i++ {
+			el, ok := elemAt(o, i)
+			if !ok {
 				continue
 			}
-			ok, err := rt.call(cb, thisArg, []Value{o.elems[i], Int(i), Obj(o)})
+			res, err := rt.call(cb, thisArg, []Value{el, Int(i), Obj(o)})
 			if err != nil {
 				return Undefined, err
 			}
-			if ok.Truthy() {
+			if res.Truthy() {
 				return True, nil
 			}
 		}
@@ -1004,15 +1015,17 @@ func (r *Runtime) initArrayBuiltins() {
 	})
 
 	r.defIterationMethod(p, "every", func(rt *Runtime, o *Object, cb Value, thisArg Value) (Value, error) {
-		for i := 0; i < len(o.elems); i++ {
-			if isHole(o.elems[i]) {
+		n := len(o.elems)
+		for i := 0; i < n; i++ {
+			el, ok := elemAt(o, i)
+			if !ok {
 				continue
 			}
-			ok, err := rt.call(cb, thisArg, []Value{o.elems[i], Int(i), Obj(o)})
+			res, err := rt.call(cb, thisArg, []Value{el, Int(i), Obj(o)})
 			if err != nil {
 				return Undefined, err
 			}
-			if !ok.Truthy() {
+			if !res.Truthy() {
 				return False, nil
 			}
 		}
@@ -1028,27 +1041,35 @@ func (r *Runtime) initArrayBuiltins() {
 		if !isCallable(cb) {
 			return Undefined, rt.throwTypeError("reduce requires a function")
 		}
+		n := len(o.elems)
 		i := 0
 		var acc Value
 		if len(args) > 1 {
 			acc = args[1]
 		} else {
-			// Without an initial value the first element seeds the
-			// accumulator, and an empty array is an error.
-			for i < len(o.elems) && isHole(o.elems[i]) {
+			// Without an initial value the first present element seeds the
+			// accumulator, and an array with none is an error.
+			for i < n {
+				if el, ok := elemAt(o, i); ok {
+					acc = el
+					i++
+					break
+				}
 				i++
 			}
-			if i >= len(o.elems) {
+			if i > n || acc.IsUndefined() && i == 0 {
 				return Undefined, rt.throwTypeError("reduce of an empty array with no initial value")
 			}
-			acc = o.elems[i]
-			i++
+			if i == 0 {
+				return Undefined, rt.throwTypeError("reduce of an empty array with no initial value")
+			}
 		}
-		for ; i < len(o.elems); i++ {
-			if isHole(o.elems[i]) {
+		for ; i < n; i++ {
+			el, ok := elemAt(o, i)
+			if !ok {
 				continue
 			}
-			acc, err = rt.call(cb, Undefined, []Value{acc, o.elems[i], Int(i), Obj(o)})
+			acc, err = rt.call(cb, Undefined, []Value{acc, el, Int(i), Obj(o)})
 			if err != nil {
 				return Undefined, err
 			}
@@ -1880,4 +1901,21 @@ func (r *Runtime) flatten(elems []Value, depth int) []Value {
 		out = append(out, el)
 	}
 	return out
+}
+
+// elemAt reads a dense element defensively, reporting false for an index that
+// is out of range or holds a hole.
+//
+// A callback may shrink the array while an iteration method is running, so an
+// index that was valid when the length was captured may not be by the time it
+// is reached.
+func elemAt(o *Object, i int) (Value, bool) {
+	if i < 0 || i >= len(o.elems) {
+		return Undefined, false
+	}
+	v := o.elems[i]
+	if isHole(v) {
+		return Undefined, false
+	}
+	return v, true
 }

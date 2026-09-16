@@ -144,6 +144,11 @@ type compiler struct {
 	stackDepth int
 	maxStack   int
 
+	// recursionDepth bounds how deeply the compiler descends into the tree. The
+	// parser caps nesting too, but a function body nests independently of its
+	// caller's, so the limit is enforced on both sides.
+	recursionDepth int
+
 	// lastLine avoids emitting a duplicate line entry for every instruction.
 	lastLine int32
 	// lineOf maps a byte offset to a line, supplied by the caller.
@@ -163,6 +168,7 @@ func Compile(prog *ast.Program, opts Options) (fn *bytecode.Function, err error)
 	c := newCompiler(nil, opts)
 	c.fn.Name = "<main>"
 	c.fn.Strict = prog.Strict
+	c.fn.IsModule = prog.Module
 	c.fn.Source = opts.Source
 	c.lineOf = lineMapper(opts.Text)
 
@@ -295,6 +301,20 @@ func (c *compiler) adjustStack(op bytecode.Op, a, b uint32) {
 		c.stackDepth = 0
 	}
 }
+
+// maxCompileDepth bounds recursion over the syntax tree. A goroutine stack
+// overflow cannot be caught, so deeply nested input is rejected instead.
+const maxCompileDepth = 1000
+
+// enter increases the recursion depth, failing if the tree is too deep.
+func (c *compiler) enter(pos int) {
+	c.recursionDepth++
+	if c.recursionDepth > maxCompileDepth {
+		c.errorf(pos, "the expression nests too deeply")
+	}
+}
+
+func (c *compiler) leave() { c.recursionDepth-- }
 
 // emitJump emits a jump with a placeholder target and returns its program
 // counter so that patchJump can fill it in.
@@ -605,7 +625,7 @@ func stackEffect(op bytecode.Op, a, b uint32) int {
 		bytecode.OpGetUpvalueCheck, bytecode.OpGetGlobal,
 		bytecode.OpGetGlobalOpt, bytecode.OpDup, bytecode.OpClosure,
 		bytecode.OpNewObject, bytecode.OpNewTarget, bytecode.OpPushCallee,
-		bytecode.OpGetArguments, bytecode.OpRestParam,
+		bytecode.OpGetArguments, bytecode.OpRestParam, bytecode.OpDeleteVar,
 		bytecode.OpGetSuperProp,
 		bytecode.OpGetPropThis,
 		bytecode.OpIsNullish:

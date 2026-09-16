@@ -132,6 +132,9 @@ type Function struct {
 	// IsExprBody marks a concise arrow body, which affects nothing at runtime
 	// but is useful when printing a function's source.
 	IsExprBody bool
+	// IsModule marks module code, whose top-level `this` is undefined rather
+	// than the global object.
+	IsModule bool
 
 	// Source is the file or origin name used in stack traces.
 	Source string

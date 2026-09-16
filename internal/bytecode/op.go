@@ -74,6 +74,9 @@ const (
 	OpGetIndex   // obj key -> obj[key]
 	OpSetIndex   // obj key value ->
 	OpDeleteProp // obj key -> bool
+	// OpDeleteVar deletes a binding named by Names[A], which succeeds only for
+	// a configurable property of the global object.
+	OpDeleteVar
 	// OpGetPropThis and OpGetIndexThis leave the receiver beneath the fetched
 	// value, so that a method call can pass it as `this` without re-evaluating
 	// the object expression.
@@ -258,6 +261,7 @@ var opNames = [opCount]string{
 
 	OpGetProp: "get_prop", OpSetProp: "set_prop", OpGetIndex: "get_index",
 	OpSetIndex: "set_index", OpDeleteProp: "delete_prop",
+	OpDeleteVar:   "delete_var",
 	OpGetPropThis: "get_prop_this", OpGetIndexThis: "get_index_this",
 	OpDefineField: "define_field", OpDefineIndex: "define_index",
 	OpDefineGetter: "define_getter", OpDefineSetter: "define_setter",
