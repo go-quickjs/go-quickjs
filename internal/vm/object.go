@@ -264,7 +264,7 @@ func (o *Object) ownKeys(includeSymbols bool, atoms *atomTable) []Atom {
 	// A function's length and name are synthesized on demand, but they are own
 	// properties and must be listed -- first, in that order, as they would have
 	// been had the function been built with them.
-	if o.class == ClassFunction && o.fn() != nil {
+	if o.class == ClassFunction && o.fn() != nil && !o.fn().propsMaterialized {
 		if o.getOwn(atomLength) == nil {
 			keys = append(keys, atomLength)
 		}
@@ -458,6 +458,11 @@ type funcData struct {
 	// homeObject is the object a method was defined on, which `super` resolves
 	// against.
 	homeObject *Object
+	// propsMaterialized records that name and length have been turned into real
+	// properties, after which the synthesized reads must stop -- otherwise
+	// deleting one would have no effect.
+	propsMaterialized bool
+
 	// arrow marks a function with no bindings of its own. An arrow does not
 	// get this, new.target, super or arguments from its call: it uses the ones
 	// in scope where it was written, which is the whole reason to reach for

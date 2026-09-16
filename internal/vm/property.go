@@ -70,7 +70,7 @@ func (r *Runtime) getExoticNamed(o *Object, key Atom) (Value, bool, error) {
 	case ClassFunction:
 		// name and length are materialized on first read rather than created
 		// with every function, since most functions are never asked.
-		if fd := o.fn(); fd != nil {
+		if fd := o.fn(); fd != nil && !fd.propsMaterialized {
 			switch key {
 			case atomLength:
 				if o.getOwn(atomLength) == nil {
@@ -98,16 +98,20 @@ func (r *Runtime) materializeFunctionProp(o *Object, key Atom) {
 		return
 	}
 	fd := o.fn()
-	if fd == nil || o.getOwn(key) != nil {
+	if fd == nil || fd.propsMaterialized {
 		return
 	}
-	// Both are non-writable, non-enumerable and configurable, which is what
-	// lets a script rename a function with defineProperty but not by
-	// assignment.
-	if key == atomName {
-		o.setOwnRaw(atomName, Str(NewString(fd.name)), propConfigurable)
-	} else {
+	// Both are created together, because the synthesized reads stop as soon as
+	// either exists -- one of them is a flag on the function, not on the
+	// property. They are non-writable, non-enumerable and configurable, which
+	// is what lets a script rename a function with defineProperty, or delete
+	// the name outright, but not assign to it.
+	fd.propsMaterialized = true
+	if o.getOwn(atomLength) == nil {
 		o.setOwnRaw(atomLength, Int(fd.length), propConfigurable)
+	}
+	if o.getOwn(atomName) == nil {
+		o.setOwnRaw(atomName, Str(NewString(fd.name)), propConfigurable)
 	}
 }
 
@@ -186,6 +190,18 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 					return nil
 				}
 				break
+			}
+		}
+		// A function's name and length are synthesized rather than stored, so
+		// the walk would not otherwise find them -- and they are non-writable,
+		// which is what makes `f.name = "x"` silently do nothing.
+		if o.class == ClassFunction && (key == atomName || key == atomLength) {
+			if fd := o.fn(); fd != nil && !fd.propsMaterialized {
+				if strict {
+					return r.throwTypeError("cannot assign to read-only property %q",
+						r.atoms.name(key))
+				}
+				return nil
 			}
 		}
 		p := o.getOwnVisible(key)
@@ -332,11 +348,15 @@ func (r *Runtime) hasOwnProp(o *Object, key Atom) bool {
 		case ClassArray, ClassStringWrapper:
 			return true
 		case ClassFunction:
-			return true
+			if fd := o.fn(); fd == nil || !fd.propsMaterialized {
+				return true
+			}
 		}
 	}
 	if key == atomName && o.class == ClassFunction {
-		return true
+		if fd := o.fn(); fd == nil || !fd.propsMaterialized {
+			return true
+		}
 	}
 	return o.getOwnVisible(key) != nil
 }
@@ -359,6 +379,10 @@ func (r *Runtime) deleteProp(o *Object, key Atom, strict bool) (bool, error) {
 			return true, nil
 		}
 	}
+	// A function's name and length are configurable, so they can be deleted --
+	// but only once they exist as real properties rather than as something
+	// synthesized on every read.
+	r.materializeFunctionProp(o, key)
 	ok := o.deleteOwn(key)
 	if !ok && strict {
 		return false, r.throwTypeError("cannot delete non-configurable property %q",

@@ -156,3 +156,43 @@ func TestHugeArrayLikeIsInterruptible(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// TestFunctionNameAndLength pins that a function's name and length behave like
+// the own properties they are, even though they are synthesized on demand.
+func TestFunctionNameAndLength(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var f = function foo(a, b) {}; f.name + "," + f.length`, "foo,2"},
+		{`JSON.stringify(Object.getOwnPropertyDescriptor(function foo() {}, "name"))`,
+			`{"value":"foo","writable":false,"enumerable":false,"configurable":true}`},
+		{`JSON.stringify(Object.getOwnPropertyNames(function foo(a, b) {}))`,
+			`["length","name","prototype"]`},
+		// Non-writable: assignment does nothing rather than shadowing it.
+		{`var f = function foo() {}; f.name = "no"; f.name`, "foo"},
+		// But configurable: defineProperty and delete both work.
+		{`var f = function foo() {}; Object.defineProperty(f, "name", {value: "z"}); f.name`, "z"},
+		{`var f = function foo() {}; delete f.name;
+		  String(Object.getOwnPropertyDescriptor(f, "name"))`, "undefined"},
+		// After deleting it, the read falls through to Function.prototype.
+		{`var f = function foo() {}; delete f.name; f.name`, ""},
+		{`var f = function foo(a, b) {}; delete f.length; String(f.length)`, "0"},
+		{`Array.prototype.map.name + "," + Array.prototype.map.length`, "map,1"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+
+	// In strict mode the failed assignment throws instead of being ignored.
+	rt := quickjs.New()
+	defer rt.Close()
+	if _, err := rt.Eval(`"use strict"; var f = function foo() {}; f.name = "x";`); err == nil {
+		t.Error("assigning to a function's name in strict mode should throw")
+	}
+}
