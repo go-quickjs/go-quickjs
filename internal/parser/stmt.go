@@ -518,6 +518,7 @@ func (p *parser) parseSwitch() ast.Stmt {
 // parseLabeled parses a labelled statement, with the label and colon already
 // consumed.
 func (p *parser) parseLabeled(name string, start int) ast.Stmt {
+	p.checkLabelName(name, p.tok)
 	if _, exists := p.labels[name]; exists {
 		p.errorf("label %q is already in scope", name)
 	}

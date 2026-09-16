@@ -345,6 +345,25 @@ func (p *parser) checkBindingName(name string, tok lexer.Token) {
 	if p.module && name == "await" {
 		p.errorAt(tok, "cannot bind \"await\" at the top level of a module")
 	}
+	if p.noArguments && name == "await" {
+		// A class field initializer and a static block are always in a context
+		// where await is reserved, whatever encloses the class.
+		p.errorAt(tok, "cannot bind \"await\" here")
+	}
+}
+
+// checkLabelName rejects a label that names something reserved where it stands.
+//
+// A label is an IdentifierReference, so the same words that cannot be read as
+// identifiers cannot be used as labels either -- "yield" inside a generator,
+// "await" inside an async function or a module.
+func (p *parser) checkLabelName(name string, tok lexer.Token) {
+	switch {
+	case name == "yield" && (p.strict || p.allowYield):
+		p.errorAt(tok, "\"yield\" cannot be used as a label here")
+	case name == "await" && (p.allowAwait || p.module || p.noArguments):
+		p.errorAt(tok, "\"await\" cannot be used as a label here")
+	}
 }
 
 // ---------------------------------------------------------------------------

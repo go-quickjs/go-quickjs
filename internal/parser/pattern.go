@@ -18,8 +18,26 @@ func (p *parser) toPattern(e ast.Expr, binding bool) ast.Expr {
 	case *ast.Ident:
 		if binding {
 			p.checkBindingName(n.Name, p.tok)
-		} else if p.strict && (n.Name == "eval" || n.Name == "arguments") {
-			p.errorf("cannot assign to %q in strict mode", n.Name)
+			return n
+		}
+		// An assignment target is an IdentifierReference, so it may not be a
+		// word that is reserved where it stands -- which the cover grammar did
+		// not check, since as an expression it was only ever going to be a
+		// reference.
+		if p.strict {
+			switch n.Name {
+			case "eval", "arguments":
+				p.errorf("cannot assign to %q in strict mode", n.Name)
+			case "implements", "interface", "let", "package", "private",
+				"protected", "public", "static", "yield":
+				p.errorf("%q is reserved in strict mode", n.Name)
+			}
+		}
+		if p.allowYield && n.Name == "yield" {
+			p.errorf("cannot assign to \"yield\" inside a generator")
+		}
+		if (p.allowAwait || p.module) && n.Name == "await" {
+			p.errorf("cannot assign to \"await\" here")
 		}
 		return n
 
