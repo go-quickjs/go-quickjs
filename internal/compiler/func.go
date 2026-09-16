@@ -53,6 +53,12 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 	// arguments into those slots positionally. Nothing may be declared before
 	// them.
 	c.bindParameters(fn)
+	if fn.Generator || fn.Async {
+		// A generator's parameters are bound when it is called, so the
+		// prologue has to be separable from the body.
+		c.emit(bytecode.OpEndParams, 0, 0)
+		c.fn.ParamEnd = uint32(c.here())
+	}
 
 	// A named function expression can refer to itself by name. That reference
 	// resolves to the running closure rather than to a local, so no slot is

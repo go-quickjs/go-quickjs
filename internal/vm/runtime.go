@@ -209,6 +209,11 @@ type frame struct {
 	// parameter both read.
 	args []Value
 
+	// paramsOnly runs the frame's parameter prologue and stops there, which is
+	// how a generator binds its parameters when it is called rather than on
+	// its first resumption.
+	paramsOnly bool
+
 	// openUpvalues lists the upvalues that point into this frame's locals and
 	// must be closed when it returns.
 	openUpvalues []*upvalue

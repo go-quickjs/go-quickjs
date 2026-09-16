@@ -52,6 +52,11 @@ type generator struct {
 	openUpvalues []*upvalue
 
 	state genState
+	// started marks a generator whose body has begun, which decides whether a
+	// resumption delivers a sent value. The pc cannot answer that any more,
+	// since a generator starts partway in -- its parameter prologue runs when
+	// it is created.
+	started bool
 	// async marks a generator that backs an async function, whose suspensions
 	// are awaits rather than yields.
 	async bool
@@ -96,7 +101,7 @@ const (
 
 // newGenerator builds the generator object a call to a generator function
 // returns.
-func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Object, async bool) *Object {
+func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Object, async bool) (*Object, error) {
 	g := &generator{
 		cl:     cl,
 		this:   this,
@@ -106,7 +111,9 @@ func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Ob
 		async:  async,
 	}
 	// Parameters are bound now rather than on first resumption, because the
-	// specification evaluates them when the generator is created.
+	// specification evaluates them when the generator is created. A default
+	// value or a destructuring pattern therefore runs -- and can throw -- at
+	// the call rather than at the first next().
 	n := cl.fn.ParamCount
 	if n > len(g.locals) {
 		n = len(g.locals)
@@ -119,6 +126,10 @@ func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Ob
 		}
 	}
 
+	if err := r.bindGeneratorParams(g); err != nil {
+		return nil, err
+	}
+
 	proto := r.proto.generator
 	if async {
 		// An async generator has its own prototype, whose methods return
@@ -127,7 +138,50 @@ func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Ob
 	}
 	o := newObject(proto, ClassGenerator)
 	o.data = g
-	return o
+	return o, nil
+}
+
+// bindGeneratorParams runs a generator's parameter prologue, which evaluates
+// defaults and unpacks patterns.
+//
+// It runs on the caller's turn because the specification binds a generator's
+// parameters when the generator object is created: `function* g([x]) {}` called
+// with a non-iterable throws there, not at the first next(). The prologue
+// cannot yield, so it is safe to run to completion in a borrowed frame.
+func (r *Runtime) bindGeneratorParams(g *generator) error {
+	fn := g.cl.fn
+	if fn.ParamEnd == 0 {
+		return nil
+	}
+	if len(r.frames) >= r.maxFrames {
+		return r.throwRangeError("maximum call stack size exceeded")
+	}
+	base := r.stackTop
+	if base+fn.MaxStack > len(r.stack) {
+		return r.throwRangeError("maximum call stack size exceeded")
+	}
+	r.stackTop = base + fn.MaxStack
+
+	f := r.pushFrame()
+	*f = frame{
+		cl:         g.cl,
+		locals:     g.locals,
+		base:       base,
+		this:       g.this,
+		newTarget:  g.newTarget,
+		callee:     g.callee,
+		args:       g.args,
+		paramsOnly: true,
+	}
+	_, err := r.executeAt(f, base, nil)
+	// The body resumes where the prologue stopped.
+	g.pc = f.pc
+	g.openUpvalues = f.openUpvalues
+
+	r.frames = r.frames[:len(r.frames)-1]
+	clear(r.stack[base:r.stackTop])
+	r.stackTop = base
+	return err
 }
 
 // generatorOf recovers a generator from a receiver.
@@ -244,7 +298,7 @@ func (r *Runtime) resumeFull(g *generator, sent Value, mode resumeMode) (resumeR
 // pending, when non-nil, is an exception injected at the suspension point,
 // which is how generator.throw() works.
 func (r *Runtime) runGeneratorFrom(g *generator, f *frame, base, sp int, sent Value, pending error) (resumeResult, error) {
-	if pending == nil && g.pc > 0 {
+	if pending == nil && g.started {
 		// Deliver the sent value as the yield expression's result.
 		r.stack[sp] = sent
 		sp++
@@ -259,6 +313,7 @@ func (r *Runtime) runGeneratorFrom(g *generator, f *frame, base, sp int, sent Va
 		g.handlers = f.handlers
 		g.openUpvalues = f.openUpvalues
 		g.state = genSuspendedYield
+		g.started = true
 		r.releaseGeneratorFrame(g, base)
 		return resumeResult{value: sig.value, await: sig.await}, nil
 	}

@@ -98,6 +98,12 @@ type SourceLoc struct {
 // A template is immutable once compiled and is shared by every closure created
 // from it; the per-call state lives in the virtual machine's frame.
 type Function struct {
+	// ParamEnd is the pc just past the parameter prologue, which is where a
+	// generator's body proper begins. A generator binds its parameters when it
+	// is called and resumes from here, so that a destructuring error in a
+	// parameter throws at the call rather than at the first next().
+	ParamEnd uint32
+
 	Name string
 	// ParamCount is the number of declared parameters, which is what
 	// Function.prototype.length reports. It excludes the rest parameter and

@@ -216,6 +216,11 @@ const (
 	// when the result reports done. The value is pushed either way, since
 	// `yield*` evaluates to whatever the delegate returned.
 	OpIterUnpack
+	// OpEndParams marks the end of a generator's parameter prologue. It is a
+	// no-op except when the interpreter is running that prologue on its own,
+	// which is how a generator binds its parameters at call time rather than on
+	// its first resumption.
+	OpEndParams
 	// OpIterToArray replaces an array-destructuring source with a dense array of
 	// the values its iterator produces. A is how many to pull, or IterAll when
 	// the pattern has a rest element and needs every one.
@@ -341,6 +346,7 @@ var opNames = [opCount]string{
 	OpIterSend:         "iter_send",
 	OpIterSendAsync:    "iter_send_async",
 	OpIterUnpack:       "iter_unpack",
+	OpEndParams:        "end_params",
 	OpIterToArray:      "iter_to_array",
 
 	OpThrow: "throw", OpPushCatch: "push_catch", OpPopCatch: "pop_catch",

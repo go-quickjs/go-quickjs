@@ -94,7 +94,19 @@ func (r *Runtime) callObject(o *Object, this Value, args []Value, newTarget Valu
 	// returns an object whose next method drives it; an async function starts
 	// immediately but returns a promise at its first await.
 	if fn := fd.closure.fn; isGeneratorTemplate(fn) {
-		gen := r.newGenerator(fd.closure, this, args, o, fn.Async)
+		gen, err := r.newGenerator(fd.closure, this, args, o, fn.Async)
+		if err != nil {
+			// A generator binds its parameters at the call, so a destructuring
+			// error surfaces here rather than at the first next(). An async
+			// function turns it into a rejection instead, which is what makes
+			// an async function never throw synchronously.
+			if fn.Async && !fn.Generator {
+				p := r.newPromise()
+				r.rejectPromise(p, thrownValue(err))
+				return Obj(p), nil
+			}
+			return Undefined, err
+		}
 		g := gen.data.(*generator)
 		switch {
 		case fn.Generator:
@@ -1126,6 +1138,14 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				goto onError
 			}
 			push(v)
+		case bytecode.OpEndParams:
+			// Ordinarily nothing: the body simply continues. When the frame is
+			// running only the prologue, this is where it stops.
+			if f.paramsOnly {
+				// pc already points past this instruction, which is where the
+				// body proper begins.
+				return Undefined, nil
+			}
 		case bytecode.OpIterSend, bytecode.OpIterSendAsync:
 			sent := pop()
 			res, err := r.iterSend(peek(0), sent, in.Op == bytecode.OpIterSendAsync)
