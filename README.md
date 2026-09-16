@@ -82,23 +82,26 @@ tags. A test tagged with a feature the engine does not implement is skipped
 rather than counted against it.
 
 Measured coverage, as of the most recent run over `language/`, `annexB/` and the
-`built-ins/` areas listed below — 63,288 of 76,505 executed variants, 82.7%:
+`built-ins/` areas listed below — 64,849 of 75,771 executed variants, 85.6%:
 
 | Area | | Area | |
 |---|---|---|---|
-| `language` | 87.0% | `built-ins/Object` | 93.5% |
-| `built-ins/Array` | 86.3% | `built-ins/String` | 88.6% |
-| `built-ins/Number` | 92.0% | `built-ins/Set` | 90.3% |
-| `built-ins/Error` | 90.9% | `built-ins/Math` | 85.3% |
-| `built-ins/JSON` | 85.2% | `built-ins/Date` | 81.0% |
-| `built-ins/BigInt` | 80.3% | `built-ins/Map` | 78.9% |
-| `built-ins/DataView` | 77.6% | `built-ins/Function` | 76.4% |
-| `built-ins/Proxy` | 66.5% | `built-ins/Promise` | 62.5% |
-| `built-ins/RegExp` | 60.2% | `built-ins/TypedArray` | 47.3% |
+| `built-ins/Iterator` | 100% | `built-ins/global` | 100% |
+| `built-ins/Boolean` | 96.0% | `built-ins/Object` | 93.5% |
+| `built-ins/Number` | 92.0% | `built-ins/Error` | 90.9% |
+| `built-ins/Map` | 90.5% | `built-ins/Set` | 90.3% |
+| `built-ins/WeakMap` | 90.1% | `built-ins/String` | 89.1% |
+| `language` | 87.1% | `built-ins/Array` | 86.3% |
+| `built-ins/Math` | 85.3% | `built-ins/JSON` | 85.2% |
+| `built-ins/Date` | 81.0% | `built-ins/ArrayBuffer` | 80.2% |
+| `built-ins/DataView` | 79.4% | `built-ins/TypedArray` | 78.0% |
+| `built-ins/Promise` | 76.4% | `built-ins/Function` | 76.7% |
+| `annexB` | 74.9% | `built-ins/Proxy` | 66.5% |
+| `built-ins/RegExp` | 64.4% | | |
 
-The weakest areas are the ones with the most surface left: `RegExp` is short of
-the `v`-flag class syntax, `TypedArray` of the resizable-buffer rules, and
-`annexB` of the remaining legacy grammar.
+`RegExp` is the weakest, and most of what it is short of is the `v` flag's set
+notation — nested classes, differences and intersections, and `\q{}` string
+literals — which the pattern parser does not yet understand.
 
 Useful flags:
 
