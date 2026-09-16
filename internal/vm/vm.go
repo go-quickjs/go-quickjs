@@ -994,6 +994,8 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				out = emptyString
 			}
 			push(Str(out))
+		case bytecode.OpTemplateObject:
+			push(Obj(r.templateObject(cl.fn, int(in.A))))
 		case bytecode.OpSetName:
 			if v := peek(0); v.IsObject() {
 				if fd := v.Object().fn(); fd != nil && fd.name == "" {
@@ -2195,4 +2197,58 @@ func (r *Runtime) getPrivate(o *Object, key Atom) (Value, error) {
 	}
 	return Undefined, r.throwTypeError(
 		"private member %s is not present on this object", r.atoms.name(key))
+}
+
+// templateObject returns the strings a tagged template site hands its tag.
+//
+// It is built once per site and reused, because a tag is entitled to hang state
+// off the object and to compare it against one from a later call -- which is
+// the usual way a tag caches whatever it derived from the text.
+func (r *Runtime) templateObject(fn *bytecode.Function, idx int) *Object {
+	cache := r.templateCache[fn]
+	if cache == nil {
+		cache = make([]*Object, len(fn.Templates))
+		r.templateCache[fn] = cache
+	}
+	if o := cache[idx]; o != nil {
+		return o
+	}
+
+	t := fn.Templates[idx]
+	cooked := make([]Value, len(t.Cooked))
+	raw := make([]Value, len(t.Raw))
+	for i := range t.Cooked {
+		// A malformed escape has no cooked meaning. That is an error in an
+		// ordinary template and merely undefined here, so that a tag with its
+		// own escape conventions can read the raw text instead.
+		cooked[i] = Undefined
+		if t.CookedValid[i] {
+			cooked[i] = Str(NewString(t.Cooked[i]))
+		}
+		raw[i] = Str(NewString(t.Raw[i]))
+	}
+
+	o := r.newArrayFrom(cooked)
+	o.setOwnRaw(atomRaw, Obj(freezeArray(r.newArrayFrom(raw))), 0)
+	freezeArray(o)
+	cache[idx] = o
+	return o
+}
+
+// freezeArray makes an array's elements read-only, which the strings a tag
+// receives have to be: the same object is handed out again on the next call, so
+// a tag that wrote to it would be writing to every later call's argument.
+func freezeArray(o *Object) *Object {
+	for i, el := range o.elems {
+		if !isHole(el) {
+			o.setOwnRaw(internIndex(uint32(i)), el, propEnumerable)
+		}
+	}
+	o.elems = nil
+	o.flags |= objHasSparseElements
+	o.flags &^= objExtensible
+	for i := range o.props {
+		o.props[i].flags &^= propWritable | propConfigurable
+	}
+	return o
 }

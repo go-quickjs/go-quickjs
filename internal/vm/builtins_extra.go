@@ -144,29 +144,10 @@ func (r *Runtime) initArrayExtras2() {
 		return rt.newArrayIterator(this)
 	})
 	r.defMethod(p, "keys", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.toObject(this)
-		if err != nil {
-			return Undefined, err
-		}
-		keys := make([]Value, len(o.elems))
-		for i := range keys {
-			keys[i] = Int(i)
-		}
-		return rt.newArrayIterator(Obj(rt.newArrayFrom(keys)))
+		return rt.newArrayIteratorKind(this, iterKeys)
 	})
 	r.defMethod(p, "entries", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.toObject(this)
-		if err != nil {
-			return Undefined, err
-		}
-		entries := make([]Value, len(o.elems))
-		for i, el := range o.elems {
-			if isHole(el) {
-				el = Undefined
-			}
-			entries[i] = Obj(rt.newArrayFrom([]Value{Int(i), el}))
-		}
-		return rt.newArrayIterator(Obj(rt.newArrayFrom(entries)))
+		return rt.newArrayIteratorKind(this, iterEntries)
 	})
 
 	// The change-by-copy methods, which return a new array rather than

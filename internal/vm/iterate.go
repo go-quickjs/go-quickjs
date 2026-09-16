@@ -217,25 +217,40 @@ func (r *Runtime) iterToArray(src Value, want uint32) (Value, error) {
 
 // spreadInto appends the elements of an iterable to an array.
 func (r *Runtime) spreadInto(arr *Object, src Value) error {
-	// A dense array is copied directly, skipping the protocol entirely. This
-	// is by far the common case and avoids allocating an iterator and a result
-	// object per element.
-	if src.IsObject() && src.Object().IsArray() {
-		o := src.Object()
-		if !r.hasOwnIterator(o) {
-			for _, el := range o.elems {
-				if isHole(el) {
-					el = Undefined
-				}
-				arr.elems = append(arr.elems, el)
-			}
-			return nil
-		}
+	// A plain dense array is copied directly, skipping the protocol entirely.
+	// This is by far the common case and avoids allocating an iterator and a
+	// result object per element.
+	if els, ok := r.plainDenseElems(src); ok {
+		arr.elems = append(arr.elems, els...)
+		return nil
 	}
 	return r.iterate(src, func(v Value) error {
 		arr.elems = append(arr.elems, v)
 		return nil
 	})
+}
+
+// plainDenseElems returns an array's elements when reading them directly is
+// indistinguishable from walking it with the iteration protocol.
+//
+// Three things rule that out: an own Symbol.iterator, which would mean skipping
+// user code; elements that have moved into the property table, which freezing
+// and defineProperty both do; and a hole, which the protocol would look up the
+// prototype chain for rather than report as undefined.
+func (r *Runtime) plainDenseElems(src Value) ([]Value, bool) {
+	if !src.IsObject() {
+		return nil, false
+	}
+	o := src.Object()
+	if !o.IsArray() || o.flags&objHasSparseElements != 0 || r.hasOwnIterator(o) {
+		return nil, false
+	}
+	for _, el := range o.elems {
+		if isHole(el) {
+			return nil, false
+		}
+	}
+	return o.elems, true
 }
 
 // hasOwnIterator reports whether an array has had its Symbol.iterator replaced,
@@ -248,14 +263,8 @@ func (r *Runtime) hasOwnIterator(o *Object) bool {
 // spreadToStack collects an iterable's elements for a call's argument list.
 func (r *Runtime) spreadToStack(src Value) ([]Value, error) {
 	var out []Value
-	if src.IsObject() && src.Object().IsArray() && !r.hasOwnIterator(src.Object()) {
-		for _, el := range src.Object().elems {
-			if isHole(el) {
-				el = Undefined
-			}
-			out = append(out, el)
-		}
-		return out, nil
+	if els, ok := r.plainDenseElems(src); ok {
+		return append(out, els...), nil
 	}
 	err := r.iterate(src, func(v Value) error {
 		out = append(out, v)

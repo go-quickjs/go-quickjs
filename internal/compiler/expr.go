@@ -60,6 +60,9 @@ func (c *compiler) compileExprNamed(e ast.Expr, name string) {
 	case *ast.TemplateLit:
 		c.compileTemplate(n)
 
+	case *ast.TaggedTemplate:
+		c.compileTaggedTemplate(n)
+
 	case *ast.ArrayLit:
 		c.compileArrayLit(n)
 
@@ -190,6 +193,13 @@ func (c *compiler) compileTemplate(n *ast.TemplateLit) {
 	// template with k substitutions costs one concatenation rather than k.
 	parts := 0
 	for i, q := range n.Quasis {
+		// A part with a malformed escape has no cooked value. Only a tag can
+		// make sense of that, by reading the raw text instead; here there is
+		// nothing to build a string out of.
+		if !q.Valid {
+			c.errorf(n.Start, "invalid escape sequence in template literal")
+			return
+		}
 		if q.Cooked != "" || (i == 0 && len(n.Quasis) == 1) {
 			c.emit(bytecode.OpPushConst, c.stringConst(q.Cooked), 0)
 			parts++
@@ -207,6 +217,68 @@ func (c *compiler) compileTemplate(n *ast.TemplateLit) {
 	if parts > 1 {
 		c.emit(bytecode.OpConcat, uint32(parts), 0)
 	}
+}
+
+// compileTaggedTemplate compiles tag`a${x}b`.
+//
+// The tag is called with the site's strings as its first argument and the
+// substitutions as the rest, which is what lets a tag see the text the
+// substitutions were written between -- String.raw is the plain example.
+func (c *compiler) compileTaggedTemplate(n *ast.TaggedTemplate) {
+	idx := c.templateIdx(n.Quasi)
+
+	// A member tag keeps its receiver, exactly as an ordinary method call does,
+	// so that String.raw`x` has String as its `this`.
+	if m, ok := n.Tag.(*ast.Member); ok && !m.Optional {
+		if _, isSuper := m.Object.(*ast.Super); isSuper {
+			c.emit(bytecode.OpPushThis, 0, 0)
+			c.compileSuperMemberGet(m)
+		} else {
+			c.compileExpr(m.Object)
+			if m.Computed {
+				c.compileExpr(m.Property)
+				c.emit(bytecode.OpGetIndexThis, 0, 0)
+			} else {
+				c.emit(bytecode.OpGetPropThis, c.nameIdx(propKeyName(m.Property)), 0)
+			}
+		}
+		argc := c.compileTemplateArguments(idx, n.Quasi)
+		c.emitAt(n.Start, bytecode.OpCallMethod, uint32(argc), 0)
+		return
+	}
+
+	c.compileExpr(n.Tag)
+	argc := c.compileTemplateArguments(idx, n.Quasi)
+	c.emitAt(n.Start, bytecode.OpCall, uint32(argc), 0)
+}
+
+// compileTemplateArguments pushes the strings object and the substitutions.
+func (c *compiler) compileTemplateArguments(idx uint32, q *ast.TemplateLit) int {
+	c.emit(bytecode.OpTemplateObject, idx, 0)
+	for _, e := range q.Exprs {
+		c.compileExpr(e)
+	}
+	return 1 + len(q.Exprs)
+}
+
+// templateIdx records one tagged template site.
+//
+// Each site gets its own entry even when two are spelled the same, because the
+// object a site produces is reused across calls and comparing two of them is
+// how a tag tells its call sites apart.
+func (c *compiler) templateIdx(q *ast.TemplateLit) uint32 {
+	t := bytecode.TemplateStrings{
+		Cooked:      make([]string, len(q.Quasis)),
+		CookedValid: make([]bool, len(q.Quasis)),
+		Raw:         make([]string, len(q.Quasis)),
+	}
+	for i, e := range q.Quasis {
+		t.Cooked[i] = e.Cooked
+		t.CookedValid[i] = e.Valid
+		t.Raw[i] = e.Raw
+	}
+	c.fn.Templates = append(c.fn.Templates, t)
+	return uint32(len(c.fn.Templates) - 1)
 }
 
 func (c *compiler) compileArrayLit(n *ast.ArrayLit) {

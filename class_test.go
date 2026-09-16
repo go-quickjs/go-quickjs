@@ -79,3 +79,50 @@ func TestConstructNewTarget(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// An array iterator reads through the property table rather than the dense
+// element slice, which is what makes a frozen or sparse array iterate at all:
+// freezing moves the elements out of the dense slice so that they can be marked
+// read-only.
+func TestIteratingNonDenseArrays(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var a = [1, 2]; Object.freeze(a); [...a].join(",")`, "1,2"},
+		{`var a = [1, 2]; Object.freeze(a); Array.from(a).join(",")`, "1,2"},
+		{`var a = [1, 2]; Object.freeze(a);
+		  var o = []; for (const x of a) o.push(x); o.join(",")`, "1,2"},
+		{`var a = [1, 2]; Object.freeze(a); [...a.keys()].join(",")`, "0,1"},
+		{`var a = [1, 2]; Object.freeze(a);
+		  [...a.entries()].map(e => e.join(":")).join(",")`, "0:1,1:2"},
+		{`var a = [1, 2]; Object.seal(a); [...a].join(",")`, "1,2"},
+		{`var a = [1, 2]; Object.defineProperty(a, 0, {value: 9}); [...a].join(",")`, "9,2"},
+		{`function f(...r) { return r.join(","); }
+		  var a = [1, 2]; Object.freeze(a); f(...a)`, "1,2"},
+
+		// A hole is filled from the prototype chain, which the dense path
+		// would have reported as undefined.
+		{`Object.defineProperty(Array.prototype, 0, {value: "p", configurable: true});
+		  var a = [, 1]; [...a].join(",")`, "p,1"},
+		{`var a = [, 1]; [...a].map(String).join(",")`, "undefined,1"},
+
+		// Length is re-read as iteration proceeds, so an array that grows is
+		// seen doing so.
+		{`var a = [1]; var out = [];
+		  for (const x of a) { out.push(x); if (a.length < 3) a.push(a.length + 1); }
+		  out.join(",")`, "1,2,3"},
+
+		// And the ordinary dense path is unchanged.
+		{`[...[1, 2, 3]].join(",")`, "1,2,3"},
+		{`[...[1, 2].keys()].join(",")`, "0,1"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

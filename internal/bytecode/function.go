@@ -59,6 +59,19 @@ type UpvalueDesc struct {
 	TDZ bool
 }
 
+// TemplateStrings is the text of one tagged template site.
+//
+// Raw is what was written and Cooked is what the escapes mean, which differ
+// exactly where a tag would want to see the difference -- String.raw is the
+// whole reason both are kept. Cooked is nil where an escape is malformed, which
+// is an error in an ordinary template and merely undefined in a tagged one.
+type TemplateStrings struct {
+	Cooked []string
+	// CookedValid marks the entries of Cooked that mean anything.
+	CookedValid []bool
+	Raw         []string
+}
+
 // LocalDesc describes a local variable slot.
 type LocalDesc struct {
 	Name    string
@@ -124,6 +137,10 @@ type Function struct {
 	Names    []string
 	Locals   []LocalDesc
 	Upvalues []UpvalueDesc
+	// Templates holds one entry per tagged template site in this function. The
+	// object a site produces is built once and reused, because the tag is
+	// entitled to hang state off it and to compare it against a later call's.
+	Templates []TemplateStrings
 
 	Kind      FuncKind
 	Strict    bool

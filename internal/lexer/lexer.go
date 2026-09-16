@@ -395,7 +395,7 @@ func (l *Lexer) scanTemplate(tok Token, head bool) (Token, error) {
 			cooked.WriteByte('$')
 			l.pos++
 		case '\\':
-			if err := l.scanEscape(&cooked); err != nil {
+			if err := l.scanEscapeIn(&cooked, true); err != nil {
 				// Defer the error: it is only fatal for untagged templates,
 				// which the parser decides.
 				valid = false
@@ -468,6 +468,16 @@ func (l *Lexer) scanString(tok Token, quote byte) (Token, error) {
 
 // scanEscape consumes a backslash escape sequence and appends its value.
 func (l *Lexer) scanEscape(sb *strings.Builder) error {
+	return l.scanEscapeIn(sb, false)
+}
+
+// scanEscapeIn reads one escape sequence, rejecting the legacy octal forms when
+// it is part of a template.
+//
+// A template has no sloppy mode to fall back on -- it was introduced after the
+// octal escapes were already a mistake -- so \1 there is not a character but a
+// part with no cooked value at all, which a tag may still read the raw text of.
+func (l *Lexer) scanEscapeIn(sb *strings.Builder, inTemplate bool) error {
 	start := l.pos
 	l.pos++ // consume '\'
 	if l.atEnd() {
@@ -494,6 +504,9 @@ func (l *Lexer) scanEscape(sb *strings.Builder) error {
 		if c == '0' && !isDigit(l.peekByte(0)) {
 			sb.WriteByte(0)
 			return nil
+		}
+		if inTemplate {
+			return l.errf(start, "octal escape sequences are not allowed in templates")
 		}
 		v := int(c - '0')
 		limit := 2
@@ -537,6 +550,14 @@ func (l *Lexer) scanEscape(sb *strings.Builder) error {
 		l.newline()
 	case '\n':
 		l.newline()
+	case '8', '9':
+		// \8 and \9 are the two digits no octal escape ever meant, so they are
+		// an identity escape in a sloppy string and nothing at all in a
+		// template.
+		if inTemplate {
+			return l.errf(start, "\\%c is not an escape sequence", c)
+		}
+		sb.WriteByte(c)
 	default:
 		if c >= utf8.RuneSelf {
 			l.pos--

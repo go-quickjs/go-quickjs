@@ -189,7 +189,8 @@ const (
 	OpDefineMethod // attach a method to an object or class prototype
 	OpNewClass
 	OpNewRegExp
-	OpConcat // string concatenation for templates, A = part count
+	OpConcat         // string concatenation for templates, A = part count
+	OpTemplateObject // push the frozen strings array for Templates[A]
 
 	// --- Iteration --------------------------------------------------------
 	OpForInStart
@@ -336,6 +337,7 @@ var opNames = [opCount]string{
 	OpNewArrayFrom: "new_array_from", OpArrayPush: "array_push",
 	OpArraySpread: "array_spread", OpDefineMethod: "define_method",
 	OpNewClass: "new_class", OpNewRegExp: "new_regexp", OpConcat: "concat",
+	OpTemplateObject: "template_object",
 
 	OpForInStart: "for_in_start", OpForOfStart: "for_of_start",
 	OpForAwaitOfStart: "for_await_of_start", OpIterNext: "iter_next",

@@ -928,10 +928,10 @@ func (p *parser) parseModifierGroup() (node, bool, error) {
 		if err := readFlags(&remove); err != nil {
 			return nil, false, err
 		}
-		if remove == 0 {
-			return nil, false, p.errorf("a modifier group must name a flag to remove")
-		}
-	} else if add == 0 {
+	}
+	// Either half may be empty, but not both: (?:...) is the plain group, and
+	// (?-:...) would be a modifier group that modifies nothing.
+	if add == 0 && remove == 0 {
 		return nil, false, p.errorf("a modifier group must name a flag")
 	}
 	if !p.eat(':') {

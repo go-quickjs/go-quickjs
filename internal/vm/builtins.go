@@ -1431,29 +1431,65 @@ func (r *Runtime) closeIteratorErr(iter Value) error {
 	return err
 }
 
+// arrayIterKind says what an array iterator yields.
+type arrayIterKind uint8
+
+const (
+	iterValues arrayIterKind = iota
+	iterKeys
+	iterEntries
+)
+
 // newArrayIterator builds an iterator over an array's elements.
 func (r *Runtime) newArrayIterator(target Value) (Value, error) {
+	return r.newArrayIteratorKind(target, iterValues)
+}
+
+// newArrayIteratorKind builds an iterator over an array's indices, elements or
+// both.
+//
+// It reads length and each element as it goes rather than taking a snapshot,
+// because an array that grows or shrinks during iteration is meant to be seen
+// doing so. Reading through the property table rather than the dense elements
+// is what makes a frozen or sparse array iterate at all: freezing moves the
+// elements out of the dense slice.
+func (r *Runtime) newArrayIteratorKind(target Value, kind arrayIterKind) (Value, error) {
 	o, err := r.toObject(target)
 	if err != nil {
 		return Undefined, err
 	}
-	i := 0
+	a := &arrayLike{o: o}
+	i := int64(0)
+	done := false
+
 	iter := newObject(r.proto.arrayIter, ClassIterator)
 	r.defMethod(iter, "next", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		res := newObject(rt.proto.object, ClassObject)
-		if i >= len(o.elems) {
-			res.setOwnRaw(atomValue, Undefined, propDefault)
-			res.setOwnRaw(atomDone, True, propDefault)
-			return Obj(res), nil
+		if done {
+			return Obj(rt.iterResult(Undefined, true)), nil
 		}
-		v := o.elems[i]
-		if isHole(v) {
-			v = Undefined
+		n, err := rt.lengthOf(o)
+		if err != nil {
+			done = true
+			return Undefined, err
 		}
+		if i >= n {
+			done = true
+			return Obj(rt.iterResult(Undefined, true)), nil
+		}
+		idx := i
 		i++
-		res.setOwnRaw(atomValue, v, propDefault)
-		res.setOwnRaw(atomDone, False, propDefault)
-		return Obj(res), nil
+		if kind == iterKeys {
+			return Obj(rt.iterResult(Float(float64(idx)), false)), nil
+		}
+		v, err := a.get(rt, idx)
+		if err != nil {
+			done = true
+			return Undefined, err
+		}
+		if kind == iterEntries {
+			v = Obj(rt.newArrayFrom([]Value{Float(float64(idx)), v}))
+		}
+		return Obj(rt.iterResult(v, false)), nil
 	})
 	// An iterator is itself iterable, which is what makes `for (x of iter)`
 	// work on one directly.
