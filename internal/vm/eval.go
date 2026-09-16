@@ -269,6 +269,65 @@ func (r *Runtime) installEval() {
 			return v, nil
 		},
 	}
+
+	// The three function kinds that are not ordinary each have a constructor of
+	// their own. They are not global: the only way to name one is
+	// Object.getPrototypeOf(function* () {}).constructor, which is precisely
+	// what makes them worth defining -- code that reaches for one is
+	// introspecting, and finding Function there is wrong.
+	r.defDerivedFunctionCtor("GeneratorFunction", r.genFuncProto, ctor,
+		func(params, body string) string {
+			return "(function* anonymous(" + params + "\n) {\n" + body + "\n})"
+		})
+	r.defDerivedFunctionCtor("AsyncFunction", r.asyncFuncProto, ctor,
+		func(params, body string) string {
+			return "(async function anonymous(" + params + "\n) {\n" + body + "\n})"
+		})
+	r.defDerivedFunctionCtor("AsyncGeneratorFunction", r.asyncGenFuncProto, ctor,
+		func(params, body string) string {
+			return "(async function* anonymous(" + params + "\n) {\n" + body + "\n})"
+		})
+}
+
+// defDerivedFunctionCtor builds one of the intrinsic constructors that sit
+// alongside Function.
+func (r *Runtime) defDerivedFunctionCtor(name string, proto *Object, base *Object,
+	source func(params, body string) string) {
+	if proto == nil {
+		return
+	}
+	c := newObject(base, ClassFunction)
+	c.data = &funcData{
+		name: name, length: 1, ctorKind: ctorBase,
+		native: func(rt *Runtime, this Value, args []Value) (Value, error) {
+			if rt.evaluator == nil {
+				return Undefined, rt.throwTypeError("code generation from strings is disabled")
+			}
+			body := ""
+			if len(args) > 0 {
+				s, err := rt.toString(args[len(args)-1])
+				if err != nil {
+					return Undefined, err
+				}
+				body = s.Go()
+			}
+			var params []string
+			for _, a := range args[:max(0, len(args)-1)] {
+				s, err := rt.toString(a)
+				if err != nil {
+					return Undefined, err
+				}
+				params = append(params, s.Go())
+			}
+			v, err := rt.evaluator(source(joinComma(params), body), false)
+			if err != nil {
+				return Undefined, rt.wrapEvalError(err)
+			}
+			return v, nil
+		},
+	}
+	c.setOwnRaw(atomPrototype, Obj(proto), 0)
+	proto.setOwnRaw(atomConstructor, Obj(c), propConfigurable)
 }
 
 // wrapEvalError turns a compile failure into a thrown SyntaxError.

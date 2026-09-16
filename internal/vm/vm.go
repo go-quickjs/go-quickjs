@@ -1570,7 +1570,7 @@ func (r *Runtime) makeClosure(f *frame, c Value) *Object {
 		}
 	}
 
-	o := newObject(r.proto.function, ClassFunction)
+	o := newObject(r.funcProtoFor(tmpl.fn), ClassFunction)
 	kind := ctorKindOf(tmpl.fn)
 	fd := &funcData{
 		closure:  child,
@@ -1602,6 +1602,15 @@ func (r *Runtime) makeClosure(f *frame, c Value) *Object {
 	// A constructible function carries a fresh .prototype object, which is what
 	// `new` gives the instance and where a class hangs its methods. An arrow or
 	// a method is not constructible and does not get one.
+	if instance := r.instanceProtoFor(tmpl.fn); instance != nil {
+		// A generator function is not constructible, but it still has a
+		// .prototype: it is what the generator objects it produces inherit
+		// from. It carries no constructor back-reference, since nothing
+		// constructs it.
+		proto := newObject(instance, ClassObject)
+		o.setOwnRaw(atomPrototype, Obj(proto), propWritable)
+		return o
+	}
 	if kind != ctorNone {
 		proto := newObject(r.proto.object, ClassObject)
 		proto.setOwnRaw(atomConstructor, Obj(o), propWritable|propConfigurable)

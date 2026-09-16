@@ -232,6 +232,7 @@ func (r *Runtime) initGlobals() {
 	r.initReflectBuiltins()
 	r.initGeneratorBuiltins()
 	r.initAsyncGeneratorBuiltins()
+	r.initGeneratorFunctionIntrinsics()
 	r.initPromiseBuiltins()
 	r.initRegExpBuiltins()
 	r.initStringRegExpMethods()

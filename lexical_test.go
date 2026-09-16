@@ -215,3 +215,52 @@ func TestTopLevelAwait(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// TestGeneratorFunctionIntrinsics pins the prototype chain a generator, async or
+// async generator function sits on. All three are ordinary functions as far as
+// calling goes, but each has its own intrinsic prototype so that
+// Object.prototype.toString names it and a generator's .prototype inherits
+// next, return and throw.
+func TestGeneratorFunctionIntrinsics(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`function* g() {} Object.prototype.toString.call(g)`, "[object GeneratorFunction]"},
+		{`async function a() {} Object.prototype.toString.call(a)`, "[object AsyncFunction]"},
+		{`async function* g() {} Object.prototype.toString.call(g)`,
+			"[object AsyncGeneratorFunction]"},
+		{`function* g() {} Object.prototype.toString.call(g())`, "[object Generator]"},
+
+		{`function* g() {} String(Object.getPrototypeOf(g) === Function.prototype)`, "false"},
+		{`function* g() {} Object.getPrototypeOf(g).constructor.name`, "GeneratorFunction"},
+		{`async function a() {} Object.getPrototypeOf(a).constructor.name`, "AsyncFunction"},
+		{`async function* g() {} Object.getPrototypeOf(g).constructor.name`,
+			"AsyncGeneratorFunction"},
+		// A generator's .prototype is what its generator objects inherit from.
+		{`function* g() {}
+		  String(Object.getPrototypeOf(g.prototype) === Object.getPrototypeOf(g).prototype)`,
+			"true"},
+		{`function* g() {} typeof g.prototype.next`, "function"},
+		// It carries no constructor back-reference, since nothing constructs it.
+		{`function* g() {} String(Object.getOwnPropertyDescriptor(g.prototype, "constructor"))`,
+			"undefined"},
+
+		// A completed generator keeps answering the same way however many times
+		// it is asked.
+		{`function* g() { yield 1; } var it = g(); it.next(); it.next();
+		  JSON.stringify(it.next())`, `{"done":true}`},
+		{`function* g() { yield 1; } var it = g(); it.next(); it.next();
+		  String(it.next().value)`, "undefined"},
+		{`function* g() { return 5; } var it = g(); JSON.stringify(it.next())`,
+			`{"value":5,"done":true}`},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

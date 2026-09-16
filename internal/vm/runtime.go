@@ -50,6 +50,12 @@ type Runtime struct {
 	// check costs one decrement per instruction rather than a context read.
 	interruptCounter int
 
+	// genFuncProto, asyncFuncProto and asyncGenFuncProto are the intrinsic
+	// prototypes of the three kinds of function that are not ordinary.
+	genFuncProto      *Object
+	asyncFuncProto    *Object
+	asyncGenFuncProto *Object
+
 	// typedArrayCtor is %TypedArray%, and typedArrayProtos holds one prototype
 	// per element type.
 	typedArrayCtor   *Object

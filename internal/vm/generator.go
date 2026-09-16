@@ -197,6 +197,10 @@ func (r *Runtime) generatorOf(this Value, name string) (*generator, error) {
 }
 
 // resumeResult says how a resumption ended.
+//
+// value is Undefined rather than the zero Value wherever nothing was produced:
+// a zero Value is not undefined, and a completed generator has to keep
+// answering { value: undefined, done: true } however many times it is asked.
 type resumeResult struct {
 	value Value
 	// done marks the generator finishing rather than suspending.
@@ -216,16 +220,16 @@ func (r *Runtime) resume(g *generator, sent Value, mode resumeMode) (Value, bool
 func (r *Runtime) resumeFull(g *generator, sent Value, mode resumeMode) (resumeResult, error) {
 	switch g.state {
 	case genExecuting:
-		return resumeResult{done: true}, r.throwTypeError("the generator is already running")
+		return resumeResult{value: Undefined, done: true}, r.throwTypeError("the generator is already running")
 	case genCompleted:
 		// A completed generator answers every request the same way.
 		switch mode {
 		case resumeThrow:
-			return resumeResult{done: true}, r.throw(sent)
+			return resumeResult{value: Undefined, done: true}, r.throw(sent)
 		case resumeReturn:
 			return resumeResult{value: sent, done: true}, nil
 		}
-		return resumeResult{done: true}, nil
+		return resumeResult{value: Undefined, done: true}, nil
 	}
 
 	// A return or throw before the body starts finishes it without running.
@@ -236,19 +240,19 @@ func (r *Runtime) resumeFull(g *generator, sent Value, mode resumeMode) (resumeR
 			return resumeResult{value: sent, done: true}, nil
 		case resumeThrow:
 			g.state = genCompleted
-			return resumeResult{done: true}, r.throw(sent)
+			return resumeResult{value: Undefined, done: true}, r.throw(sent)
 		}
 	}
 
 	if len(r.frames) >= r.maxFrames {
-		return resumeResult{done: true}, r.throwRangeError("maximum call stack size exceeded")
+		return resumeResult{value: Undefined, done: true}, r.throwRangeError("maximum call stack size exceeded")
 	}
 
 	fn := g.cl.fn
 	// Only the operand stack needs a window; the locals live on the heap.
 	base := r.stackTop
 	if base+fn.MaxStack > len(r.stack) {
-		return resumeResult{done: true}, r.throwRangeError("maximum call stack size exceeded")
+		return resumeResult{value: Undefined, done: true}, r.throwRangeError("maximum call stack size exceeded")
 	}
 	r.stackTop = base + fn.MaxStack
 
@@ -322,7 +326,7 @@ func (r *Runtime) runGeneratorFrom(g *generator, f *frame, base, sp int, sent Va
 	g.stack = g.stack[:0]
 	r.releaseGeneratorFrame(g, base)
 	if err != nil {
-		return resumeResult{done: true}, err
+		return resumeResult{value: Undefined, done: true}, err
 	}
 	return resumeResult{value: v, done: true}, nil
 }
@@ -342,6 +346,53 @@ func (r *Runtime) releaseGeneratorFrame(g *generator, base int) {
 	}
 	clear(r.stack[base:r.stackTop])
 	r.stackTop = base
+}
+
+// initGeneratorFunctionIntrinsics builds the prototype chain a generator, async
+// or async generator function sits on.
+//
+// The three are ordinary functions as far as calling goes, but each has its own
+// intrinsic prototype so that Object.prototype.toString names it and so that a
+// generator's .prototype inherits next, return and throw. Without them every
+// one of these reports itself as a plain Function.
+func (r *Runtime) initGeneratorFunctionIntrinsics() {
+	// %GeneratorFunction.prototype%, which every generator function inherits.
+	r.genFuncProto = newObject(r.proto.function, ClassObject)
+	r.defToStringTag(r.genFuncProto, "GeneratorFunction")
+	r.genFuncProto.setOwnRaw(atomPrototype, Obj(r.proto.generator), propConfigurable)
+
+	r.asyncFuncProto = newObject(r.proto.function, ClassObject)
+	r.defToStringTag(r.asyncFuncProto, "AsyncFunction")
+
+	r.asyncGenFuncProto = newObject(r.proto.function, ClassObject)
+	r.defToStringTag(r.asyncGenFuncProto, "AsyncGeneratorFunction")
+	r.asyncGenFuncProto.setOwnRaw(atomPrototype, Obj(r.proto.asyncGenerator), propConfigurable)
+}
+
+// funcProtoFor returns the intrinsic prototype a compiled function object
+// should have.
+func (r *Runtime) funcProtoFor(fn *bytecode.Function) *Object {
+	switch {
+	case fn.Generator && fn.Async:
+		return r.asyncGenFuncProto
+	case fn.Generator:
+		return r.genFuncProto
+	case fn.Async:
+		return r.asyncFuncProto
+	}
+	return r.proto.function
+}
+
+// instanceProtoFor returns what a generator function's .prototype should
+// inherit from, or nil for a function whose .prototype is ordinary.
+func (r *Runtime) instanceProtoFor(fn *bytecode.Function) *Object {
+	switch {
+	case fn.Generator && fn.Async:
+		return r.proto.asyncGenerator
+	case fn.Generator:
+		return r.proto.generator
+	}
+	return nil
 }
 
 func (r *Runtime) initGeneratorBuiltins() {
