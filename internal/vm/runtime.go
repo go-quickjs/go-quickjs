@@ -67,8 +67,11 @@ type Runtime struct {
 
 	// modules maps a resolved specifier to its module, so that importing the
 	// same module twice yields the same instance.
-	modules       map[string]*Module
-	moduleLoader  ModuleLoader
+	modules      map[string]*Module
+	moduleLoader ModuleLoader
+	// evaluator compiles and runs source text for eval and the Function
+	// constructor. It is nil when code generation is disabled.
+	evaluator     Evaluator
 	compileModule func(specifier, source string) (*Module, error)
 
 	// arrayBufferProto and typedArrayProto are held here rather than in

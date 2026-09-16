@@ -173,3 +173,110 @@ func (r *Runtime) LooseEquals(a, b Value) (Value, error) {
 	}
 	return Bool(eq), nil
 }
+
+// Constructing reports whether the native function currently running was
+// invoked with `new`.
+//
+// The wrapper constructors need it: Boolean(x) produces a primitive while
+// new Boolean(x) produces an object, and nothing else distinguishes the two
+// calls from inside the implementation.
+func (r *Runtime) Constructing() bool {
+	if len(r.frames) == 0 {
+		return false
+	}
+	return !r.frames[len(r.frames)-1].newTarget.IsUndefined()
+}
+
+// Evaluator compiles and runs source text, which eval and the Function
+// constructor need.
+//
+// It is supplied by the host rather than implemented here, because the vm
+// package does not import the parser or the compiler.
+type Evaluator func(source string, directCall bool) (Value, error)
+
+// SetEvaluator installs eval and the Function constructor.
+func (r *Runtime) SetEvaluator(fn Evaluator) {
+	r.evaluator = fn
+	r.installEval()
+}
+
+// installEval defines the global eval and the Function constructor.
+func (r *Runtime) installEval() {
+	r.defMethod(r.global, "eval", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		src := arg(args, 0)
+		// eval returns anything that is not a string unchanged, which is what
+		// makes eval(42) safe.
+		if !src.IsString() {
+			return src, nil
+		}
+		if rt.evaluator == nil {
+			return Undefined, rt.throwTypeError("code generation from strings is disabled")
+		}
+		v, err := rt.evaluator(src.String().Go(), true)
+		if err != nil {
+			return Undefined, rt.wrapEvalError(err)
+		}
+		return v, nil
+	})
+
+	fnProto := r.proto.function
+	ctorVal, err := r.getProp(r.global, r.atoms.intern("Function"), Obj(r.global))
+	if err != nil || !ctorVal.IsObject() {
+		return
+	}
+	_ = fnProto
+	ctor := ctorVal.Object()
+	ctor.data = &funcData{
+		name:     "Function",
+		length:   1,
+		ctorKind: ctorBase,
+		native: func(rt *Runtime, this Value, args []Value) (Value, error) {
+			if rt.evaluator == nil {
+				return Undefined, rt.throwTypeError("code generation from strings is disabled")
+			}
+			// The last argument is the body; the rest are parameter lists,
+			// which are joined with commas exactly as written.
+			body := ""
+			if len(args) > 0 {
+				s, err := rt.toString(args[len(args)-1])
+				if err != nil {
+					return Undefined, err
+				}
+				body = s.Go()
+			}
+			var params []string
+			for _, a := range args[:max(0, len(args)-1)] {
+				s, err := rt.toString(a)
+				if err != nil {
+					return Undefined, err
+				}
+				params = append(params, s.Go())
+			}
+			src := "(function anonymous(" + joinComma(params) + "\n) {\n" + body + "\n})"
+			v, err := rt.evaluator(src, false)
+			if err != nil {
+				return Undefined, rt.wrapEvalError(err)
+			}
+			return v, nil
+		},
+	}
+}
+
+// wrapEvalError turns a compile failure into a thrown SyntaxError.
+func (r *Runtime) wrapEvalError(err error) error {
+	if _, ok := err.(*Thrown); ok {
+		return err
+	}
+	return r.throwError(errSyntax, "%s", err.Error())
+}
+
+func joinComma(parts []string) string {
+	out := ""
+	for i, p := range parts {
+		if i > 0 {
+			out += ","
+		}
+		out += p
+	}
+	return out
+}

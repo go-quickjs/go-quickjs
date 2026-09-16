@@ -12,19 +12,25 @@ func (r *Runtime) initStringBuiltins() {
 	p := r.proto.str
 
 	ctor := r.newCtor("String", 1, p, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		if len(args) == 0 {
-			return Str(emptyString), nil
+		s := emptyString
+		if len(args) > 0 {
+			// String(sym) is the only conversion that accepts a symbol; every
+			// implicit one throws. Under new, a symbol is still rejected.
+			if args[0].IsSymbol() && !rt.Constructing() {
+				return Str(NewString(args[0].Symbol().String())), nil
+			}
+			v, err := rt.toString(args[0])
+			if err != nil {
+				return Undefined, err
+			}
+			s = v
 		}
-		// String(sym) is the only conversion that accepts a symbol; every
-		// implicit one throws.
-		if args[0].IsSymbol() {
-			return Str(NewString(args[0].Symbol().String())), nil
+		if !rt.Constructing() {
+			return Str(s), nil
 		}
-		s, err := rt.toString(args[0])
-		if err != nil {
-			return Undefined, err
-		}
-		return Str(s), nil
+		o := newObject(rt.proto.str, ClassStringWrapper)
+		o.data = s
+		return Obj(o), nil
 	})
 
 	r.defMethod(ctor, "fromCharCode", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {

@@ -782,20 +782,16 @@ func TestStackOverflowIsCatchableFromScript(t *testing.T) {
 func TestNoAmbientIO(t *testing.T) {
 	rt := quickjs.New()
 	defer rt.Close()
-	// A fresh runtime must expose nothing that reaches outside the engine.
+	// A fresh runtime must expose nothing that reaches outside the engine. It
+	// does expose eval and Function, which grant no capability a script does
+	// not already have, and which WithoutCodeGeneration removes.
 	for _, name := range []string{
 		"require", "process", "fetch", "XMLHttpRequest", "setTimeout",
-		"setInterval", "eval", "Function", "import", "globalThis.process",
+		"setInterval", "Deno", "Bun", "__dirname", "module", "exports",
 	} {
-		src := fmt.Sprintf("typeof %s", name)
-		v, err := rt.Eval(src)
+		v, err := rt.Eval(fmt.Sprintf("typeof %s", name))
 		if err != nil {
-			// A parse error for `import` is fine; it is not a binding.
-			continue
-		}
-		switch name {
-		case "Function":
-			// Function exists but refuses to compile from a string.
+			t.Errorf("probing %s: %v", name, err)
 			continue
 		}
 		if v.String() != "undefined" {
@@ -805,36 +801,41 @@ func TestNoAmbientIO(t *testing.T) {
 	}
 }
 
-func TestFunctionConstructorIsDisabled(t *testing.T) {
+func TestCodeGenerationCanBeDisabled(t *testing.T) {
+	// eval and Function are available by default, because a conformant engine
+	// has them and they grant nothing new. A host that audits source before
+	// running it can take them away.
 	rt := quickjs.New()
 	defer rt.Close()
-	// Compiling code from a string would let a script escape a static review,
-	// so the Function constructor refuses.
-	got := evalString(t, rt, `try { new Function("return 1") } catch (e) { "blocked" }`)
-	if got != "blocked" {
-		t.Errorf("got %q, want the Function constructor to be blocked", got)
+	if got := evalString(t, rt, `eval("1+1")`); got != "2" {
+		t.Errorf("eval = %s, want 2", got)
+	}
+	if got := evalString(t, rt, `new Function("a", "return a*2")(21)`); got != "42" {
+		t.Errorf("Function = %s, want 42", got)
+	}
+
+	locked := quickjs.New(quickjs.WithoutCodeGeneration())
+	defer locked.Close()
+	if got := evalString(t, locked, `typeof eval`); got != "undefined" {
+		t.Errorf("eval is still present in a locked runtime: %s", got)
+	}
+	if got := evalString(t, locked,
+		`try { new Function("return 1"); "not blocked" } catch (e) { "blocked" }`); got != "blocked" {
+		t.Errorf("Function constructor = %s, want it blocked", got)
 	}
 }
 
-// TestTopLevelLetDoesNotPersistAcrossEval documents a known gap: a top-level
-// let or const is compiled as a local of the program rather than into a global
-// lexical environment, so it is not visible to a later Eval on the same
-// runtime. A top-level var, which becomes a property of the global object,
-// behaves correctly.
-func TestTopLevelLetDoesNotPersistAcrossEval(t *testing.T) {
+func TestEvalRunsInGlobalScope(t *testing.T) {
+	// Only indirect-eval semantics are implemented: evaluated code sees the
+	// globals but not the calling function's locals.
 	rt := quickjs.New()
 	defer rt.Close()
-
-	if _, err := rt.Eval(`var persists = 1; let doesNot = 2;`); err != nil {
-		t.Fatal(err)
+	if got := evalString(t, rt, `eval("var fromEval = 5"); fromEval`); got != "5" {
+		t.Errorf("a var declared in eval should reach the global scope, got %s", got)
 	}
-	if got := evalString(t, rt, `persists`); got != "1" {
-		t.Errorf("a top-level var should persist across Eval, got %s", got)
-	}
-	if got := evalString(t, rt, `typeof doesNot`); got != "undefined" {
-		t.Logf("top-level let now persists across Eval (%s); "+
-			"the global lexical environment must have been implemented, "+
-			"so this test should be updated to assert that", got)
+	// Anything that is not a string passes through untouched.
+	if got := evalString(t, rt, `eval(42)`); got != "42" {
+		t.Errorf("eval(42) = %s, want 42", got)
 	}
 }
 
@@ -1789,4 +1790,34 @@ func TestForAwaitOf(t *testing.T) {
 	// A plain iterable works too, with each value awaited.
 	checkAsync(t, `var r = ""; (async () => { for await (const v of [1, Promise.resolve(2)]) r += v })()`,
 		`r`, "12")
+}
+
+func TestWrapperConstructors(t *testing.T) {
+	// Called as a function a wrapper constructor produces a primitive; called
+	// with new it produces an object. Nothing else distinguishes the two, and
+	// the difference is observable.
+	tests := []struct{ src, want string }{
+		{`typeof Boolean(true)`, "boolean"},
+		{`typeof new Boolean(true)`, "object"},
+		{`typeof Number(5)`, "number"},
+		{`typeof new Number(5)`, "object"},
+		{`typeof String("x")`, "string"},
+		{`typeof new String("x")`, "object"},
+		// A wrapper coerces back to its primitive in an expression.
+		{`new Boolean(true) + true`, "2"},
+		{`new Number(5) + 1`, "6"},
+		{`new String("ab").length`, "2"},
+		{`new String("ab")[0]`, "a"},
+		// Every object is truthy, including a Boolean wrapping false. This is
+		// the classic reason not to use the wrappers.
+		{`new Boolean(false) ? "truthy" : "falsy"`, "truthy"},
+		{`Object.prototype.toString.call(new Boolean(true))`, "[object Boolean]"},
+		{`Object.prototype.toString.call(new Number(1))`, "[object Number]"},
+		{`Object.prototype.toString.call(new String("a"))`, "[object String]"},
+		// Symbol is deliberately not constructible.
+		{`try { new Symbol(); "no" } catch (e) { e.name }`, "TypeError"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
 }

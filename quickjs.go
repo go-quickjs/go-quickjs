@@ -90,9 +90,10 @@ type Runtime struct {
 type Option func(*config)
 
 type config struct {
-	memoryLimit  int64
-	stackSize    int
-	maxCallDepth int
+	memoryLimit      int64
+	stackSize        int
+	maxCallDepth     int
+	noCodeGeneration bool
 }
 
 // WithMemoryLimit caps the memory the runtime will account for. Exceeding it
@@ -122,11 +123,15 @@ func New(opts ...Option) *Runtime {
 	for _, o := range opts {
 		o(&c)
 	}
-	return &Runtime{rt: vm.New(vm.Config{
+	r := &Runtime{rt: vm.New(vm.Config{
 		MemoryLimit:  c.memoryLimit,
 		StackSize:    c.stackSize,
 		MaxCallDepth: c.maxCallDepth,
 	})}
+	if !c.noCodeGeneration {
+		r.installCodeGeneration()
+	}
+	return r
 }
 
 // Close releases the runtime. Using a Runtime after Close returns ErrClosed
@@ -362,4 +367,35 @@ func (r *Runtime) EvalModule(specifier, source string) (Value, error) {
 		return Value{}, r.wrapError(err)
 	}
 	return Value{v: vmObj(mod.Namespace()), rt: r.rt}, nil
+}
+
+// WithoutCodeGeneration disables eval and the Function constructor.
+//
+// Neither grants a script any capability it does not already have — code it
+// could eval, it could also write inline — but both defeat review of the source
+// a host is about to run, which matters when the source is audited before use.
+func WithoutCodeGeneration() Option {
+	return func(c *config) { c.noCodeGeneration = true }
+}
+
+// installCodeGeneration gives the runtime eval and the Function constructor.
+//
+// They live here rather than in the vm package because they need the parser and
+// compiler, which that package deliberately does not import.
+func (r *Runtime) installCodeGeneration() {
+	r.rt.SetEvaluator(func(source string, directCall bool) (vm.Value, error) {
+		// Only indirect-eval semantics are implemented: the code is evaluated
+		// in global scope and cannot see the calling function's locals. Direct
+		// eval would require the compiler to spill a function's slots into a
+		// scope object whenever it might contain one.
+		prog, err := parser.Parse(source, parser.Options{})
+		if err != nil {
+			return vm.Undefined, &SyntaxError{err: err}
+		}
+		fn, err := compiler.Compile(prog, compiler.Options{Source: "<eval>", Text: source})
+		if err != nil {
+			return vm.Undefined, &SyntaxError{err: err}
+		}
+		return r.rt.Run(fn)
+	})
 }

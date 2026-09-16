@@ -76,6 +76,7 @@ func (r *Runtime) callObject(o *Object, this Value, args []Value, newTarget Valu
 		f.cl = nil
 		f.native = fd.name
 		f.this = this
+		f.newTarget = newTarget
 		f.callee = o
 		f.args = args
 		f.handlers = f.handlers[:0]

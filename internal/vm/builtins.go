@@ -1288,14 +1288,20 @@ func (r *Runtime) initNumberBuiltins() {
 	p := r.proto.number
 
 	ctor := r.newCtor("Number", 1, p, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		if len(args) == 0 {
-			return Int(0), nil
+		n := float64(0)
+		if len(args) > 0 {
+			v, err := rt.toNumber(args[0])
+			if err != nil {
+				return Undefined, err
+			}
+			n = v
 		}
-		n, err := rt.toNumber(args[0])
-		if err != nil {
-			return Undefined, err
+		if !rt.Constructing() {
+			return Float(n), nil
 		}
-		return Float(n), nil
+		o := newObject(rt.proto.number, ClassNumberWrapper)
+		o.data = n
+		return Obj(o), nil
 	})
 
 	r.defConst(ctor, "MAX_SAFE_INTEGER", Float(maxSafeInteger))
@@ -1398,7 +1404,15 @@ func isFiniteInteger(f float64) bool {
 func (r *Runtime) initBooleanBuiltins() {
 	p := r.proto.boolean
 	r.newCtor("Boolean", 1, p, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		return Bool(arg(args, 0).Truthy()), nil
+		b := arg(args, 0).Truthy()
+		if !rt.Constructing() {
+			return Bool(b), nil
+		}
+		// Called with new, the result is a wrapper object whose valueOf gives
+		// the primitive back.
+		o := newObject(rt.proto.boolean, ClassBooleanWrapper)
+		o.data = b
+		return Obj(o), nil
 	})
 	r.defMethod(p, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		b, err := rt.thisBool(this)
@@ -1435,6 +1449,11 @@ func (r *Runtime) initSymbolBuiltins() {
 	p := r.proto.symbol
 
 	ctor := r.newCtor("Symbol", 0, p, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		if rt.Constructing() {
+			// Symbol is deliberately not constructible, so that every symbol
+			// is a primitive.
+			return Undefined, rt.throwTypeError("Symbol is not a constructor")
+		}
 		d := arg(args, 0)
 		if d.IsUndefined() {
 			return Sym(NewSymbol("", false)), nil
