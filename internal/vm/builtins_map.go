@@ -354,6 +354,7 @@ func (r *Runtime) initSetBuiltins() {
 			}
 			return rt.newMapIterator(m, mapIterValues), nil
 		})
+	r.initSetOps(p)
 	r.defToStringTag(p, "Set")
 }
 

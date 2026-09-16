@@ -66,17 +66,10 @@ var unsupportedFeatures = map[string]string{
 	"import-defer":                  "no deferred imports",
 	"tail-call-optimization":        "no tail calls",
 	"Intl-enumeration":              "no internationalization API",
-	"FinalizationRegistry":          "no finalization registry",
-	"WeakRef":                       "no weak references",
 	"ShadowRealm":                   "no shadow realms",
 	"regexp-duplicate-named-groups": "no duplicate named groups",
 	"regexp-modifiers":              "no inline regexp modifiers",
 	"uint8array-base64":             "no base64 helpers",
-	"Math.sumPrecise":               "no Math.sumPrecise",
-	"promise-try":                   "no Promise.try",
-	"Error.isError":                 "no Error.isError",
-	"RegExp.escape":                 "no RegExp.escape",
-	"set-methods":                   "no Set methods",
 	"json-parse-with-source":        "no JSON source access",
 	"Intl.DurationFormat":           "no internationalization API",
 	"legacy-regexp":                 "no legacy RegExp statics",
@@ -198,11 +191,6 @@ func runOne(suite *conformance.Suite, tc *conformance.Test) (result, string) {
 			return resultSkip, reason
 		}
 	}
-	// Modules are not implemented, so a module test is skipped rather than
-	// counted against the engine.
-	if tc.Meta.Flags["module"] {
-		return resultSkip, "modules are not implemented"
-	}
 	// CanBlockIsFalse and similar host hooks are not provided.
 	if tc.Meta.Flags["CanBlockIsFalse"] || tc.Meta.Flags["CanBlockIsTrue"] {
 		return resultSkip, "no agent support"
@@ -248,7 +236,15 @@ func runOne(suite *conformance.Suite, tc *conformance.Test) (result, string) {
 		}
 	}
 
-	_, runErr := rt.EvalContext(ctx, tc.Body())
+	// A module test goes through EvalModule so that import and export are in
+	// scope; the harness has already run as a script, and its globals are
+	// visible because a module's environment inherits from the global object.
+	var runErr error
+	if tc.Meta.Flags["module"] {
+		_, runErr = rt.EvalModule(tc.Path, tc.Body())
+	} else {
+		_, runErr = rt.EvalContext(ctx, tc.Body())
+	}
 	if runErr != nil && errors.Is(runErr, context.DeadlineExceeded) {
 		return resultFail, "timed out"
 	}

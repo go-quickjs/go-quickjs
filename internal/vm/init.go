@@ -226,6 +226,7 @@ func (r *Runtime) initGlobals() {
 	r.initArrayBufferBuiltins()
 	r.initTypedArrayBuiltins()
 	r.initDataViewBuiltins()
+	r.initWeakRefBuiltins()
 	r.initProxyBuiltins()
 	r.initReflectBuiltins()
 	r.initGeneratorBuiltins()
@@ -239,6 +240,9 @@ func (r *Runtime) initGlobals() {
 	r.initWeakCollections()
 	r.initJSONBuiltins()
 	r.initGlobalFunctions()
+	// Runs last, because each of its additions hangs off a constructor an
+	// earlier step installed.
+	r.initRecentBuiltins()
 	r.initExtraBuiltins()
 	r.initDynamicImport()
 }

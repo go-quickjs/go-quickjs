@@ -22,6 +22,8 @@ const (
 	ClassSet
 	ClassWeakMap
 	ClassWeakSet
+	ClassWeakRef
+	ClassFinalizationRegistry
 	ClassPromise
 	ClassGenerator
 	ClassAsyncGenerator
