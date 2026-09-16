@@ -251,6 +251,56 @@ func (r *Runtime) initArrayBufferBuiltins() {
 		return Int(len(b.bytes)), nil
 	})
 
+	// detached is how a script tells a transferred buffer from a live one
+	// without provoking a TypeError by touching it.
+	r.defGetter(abProto, "detached", func(rt *Runtime, this Value, args []Value) (Value, error) {
+		b, err := rt.bufferOf(this, "ArrayBuffer.prototype.detached")
+		if err != nil {
+			return Undefined, err
+		}
+		return Bool(b.detached), nil
+	})
+
+	// transfer hands the storage to a new buffer and detaches this one, which
+	// is what makes passing a large buffer around cost nothing: there is only
+	// ever one owner, so nothing has to be copied and nothing can be read
+	// through a stale view.
+	transfer := func(rt *Runtime, this Value, args []Value, name string) (Value, error) {
+		b, err := rt.bufferOf(this, name)
+		if err != nil {
+			return Undefined, err
+		}
+		if b.detached {
+			return Undefined, rt.throwTypeError("the ArrayBuffer has already been detached")
+		}
+		n := int64(len(b.bytes))
+		if lv := arg(args, 0); !lv.IsUndefined() {
+			if n, err = rt.toIndex(lv); err != nil {
+				return Undefined, err
+			}
+			if n > 1<<31 {
+				return Undefined, rt.throwRangeError("the ArrayBuffer length is too large")
+			}
+		}
+		// A longer target is zero-filled; a shorter one drops the tail.
+		out := make([]byte, n)
+		copy(out, b.bytes)
+		b.detached, b.bytes = true, nil
+
+		o := newObject(abProto, ClassArrayBuffer)
+		o.data = &arrayBufferData{bytes: out}
+		return Obj(o), nil
+	}
+	r.defMethod(abProto, "transfer", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		return transfer(rt, this, args, "ArrayBuffer.prototype.transfer")
+	})
+	r.defMethod(abProto, "transferToFixedLength", 0,
+		func(rt *Runtime, this Value, args []Value) (Value, error) {
+			// The two differ only for a resizable buffer, which this engine
+			// does not have, so they are the same operation here.
+			return transfer(rt, this, args, "ArrayBuffer.prototype.transferToFixedLength")
+		})
+
 	r.defMethod(abProto, "slice", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		b, err := rt.bufferOf(this, "ArrayBuffer.prototype.slice")
 		if err != nil {

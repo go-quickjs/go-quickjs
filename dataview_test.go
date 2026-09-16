@@ -91,3 +91,45 @@ func TestDataViewErrors(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// Transferring a buffer hands its storage to a new one and detaches the
+// original, which is what makes passing a large buffer around cost nothing:
+// there is only ever one owner, so nothing is copied and nothing can be read
+// through a stale view.
+func TestArrayBufferTransfer(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var b = new ArrayBuffer(8); var c = b.transfer();
+		  [b.detached, c.detached, c.byteLength].join(",")`, "true,false,8"},
+		// The bytes move rather than being copied and left behind.
+		{`var b = new ArrayBuffer(4); new Uint8Array(b)[0] = 7;
+		  String(new Uint8Array(b.transfer())[0])`, "7"},
+		// A longer target is zero-filled; a shorter one drops the tail.
+		{`String(new ArrayBuffer(4).transfer(8).byteLength)`, "8"},
+		{`String(new ArrayBuffer(8).transfer(2).byteLength)`, "2"},
+		{`var b = new ArrayBuffer(4); new Uint8Array(b)[3] = 9;
+		  String(new Uint8Array(b.transfer(2)).length)`, "2"},
+		{`String(new ArrayBuffer(1).detached)`, "false"},
+		{`typeof ArrayBuffer.prototype.transferToFixedLength`, "function"},
+		// A view over a detached buffer reads as undefined rather than throwing.
+		{`var b = new ArrayBuffer(4); var v = new Uint8Array(b); b.transfer();
+		  String(v[0])`, "undefined"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+
+	// A buffer can only be transferred once.
+	rt := quickjs.New()
+	defer rt.Close()
+	if _, err := rt.Eval(`var b = new ArrayBuffer(4); b.transfer(); b.transfer();`); err == nil {
+		t.Error("transferring a detached buffer should throw")
+	}
+}

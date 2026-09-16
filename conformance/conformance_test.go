@@ -70,6 +70,7 @@ var unsupportedFeatures = map[string]string{
 	"Intl.DurationFormat":           "no internationalization API",
 	"legacy-regexp":                 "no legacy RegExp statics",
 	"error-stack-accessor":          "Error stack is an own data property",
+	"immutable-arraybuffer":         "no immutable ArrayBuffers",
 	"joint-iteration":               "no Iterator.zip",
 	"iterator-sequencing":           "no Iterator.concat",
 	"iterator-includes":             "no Iterator.prototype.includes",
