@@ -56,16 +56,17 @@ func (r *Runtime) initArrayExtras2() {
 			count = clampInt(int(c), 0, n-start)
 		}
 
-		removed := append([]Value(nil), o.elems[start:start+count]...)
+		start, mid := clipRange(o, start, start+count)
+		removed := append([]Value(nil), o.elems[start:mid]...)
 		var inserted []Value
 		if len(args) > 2 {
 			inserted = args[2:]
 		}
 
-		next := make([]Value, 0, n-count+len(inserted))
+		next := make([]Value, 0, len(o.elems)-(mid-start)+len(inserted))
 		next = append(next, o.elems[:start]...)
 		next = append(next, inserted...)
-		next = append(next, o.elems[start+count:]...)
+		next = append(next, o.elems[mid:]...)
 		o.elems = next
 
 		return Obj(rt.newArrayFrom(removed)), nil
@@ -89,6 +90,8 @@ func (r *Runtime) initArrayExtras2() {
 		if err != nil {
 			return Undefined, err
 		}
+		start, end = clipRange(o, start, end)
+		target, _ = clipRange(o, target, target)
 		if start < end {
 			// copy handles the overlapping case correctly in both directions.
 			copy(o.elems[target:], o.elems[start:end])

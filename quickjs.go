@@ -70,6 +70,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"time"
 
 	"github.com/go-quickjs/go-quickjs/internal/compiler"
@@ -145,6 +146,30 @@ func (r *Runtime) Close() error {
 // ErrClosed is returned by a Runtime that has been closed.
 var ErrClosed = errors.New("quickjs: runtime is closed")
 
+// ErrInternal reports a bug in the engine itself, reached by running a script.
+//
+// A host embedding this package to run untrusted code must not be taken down by
+// the code it is sandboxing, so a panic anywhere inside the engine is caught at
+// the boundary and returned as an error instead. It is deliberately not a
+// JavaScript exception: a script cannot catch one, because after an internal
+// failure the runtime's invariants are no longer known to hold.
+//
+// Seeing one is always a bug worth reporting.
+var ErrInternal = errors.New("quickjs: internal error")
+
+// guard converts a panic inside the engine into an error.
+//
+// The runtime is marked closed, since continuing to use one whose invariants
+// may have been broken is worse than refusing to.
+func (r *Runtime) guard(err *error) {
+	p := recover()
+	if p == nil {
+		return
+	}
+	r.closed = true
+	*err = fmt.Errorf("%w: %v\n%s", ErrInternal, p, debug.Stack())
+}
+
 // Eval compiles and runs src, returning its completion value.
 func (r *Runtime) Eval(src string) (Value, error) {
 	return r.EvalContext(context.Background(), src)
@@ -156,10 +181,11 @@ func (r *Runtime) Eval(src string) (Value, error) {
 // when the context is cancelled or its deadline passes. The returned error
 // wraps ctx.Err() in that case, so errors.Is(err, context.DeadlineExceeded)
 // identifies a timeout.
-func (r *Runtime) EvalContext(ctx context.Context, src string) (Value, error) {
+func (r *Runtime) EvalContext(ctx context.Context, src string) (result Value, err error) {
 	if r.closed {
 		return Value{}, ErrClosed
 	}
+	defer r.guard(&err)
 	fn, err := compile(src, "<eval>")
 	if err != nil {
 		return Value{}, err
@@ -181,10 +207,11 @@ func (r *Runtime) EvalContext(ctx context.Context, src string) (Value, error) {
 }
 
 // EvalFile compiles and runs src, using name in stack traces.
-func (r *Runtime) EvalFile(name, src string) (Value, error) {
+func (r *Runtime) EvalFile(name, src string) (result Value, err error) {
 	if r.closed {
 		return Value{}, ErrClosed
 	}
+	defer r.guard(&err)
 	fn, err := compile(src, name)
 	if err != nil {
 		return Value{}, err
@@ -340,13 +367,14 @@ func (r *Runtime) compileAndRegisterModule(specifier, source string) (*vm.Module
 // Imports are resolved through the loader installed with SetModuleLoader; a
 // runtime without one rejects any import. The returned value is the module's
 // namespace, through which its exports can be read.
-func (r *Runtime) EvalModule(specifier, source string) (Value, error) {
+func (r *Runtime) EvalModule(specifier, source string) (v Value, err error) {
 	if r.closed {
 		return Value{}, ErrClosed
 	}
 	if r.rt == nil {
 		return Value{}, ErrClosed
 	}
+	defer r.guard(&err)
 	// The compiler callback is needed even without a loader, so that the entry
 	// point itself can be compiled.
 	r.rt.SetModuleCompiler(func(spec, src string) (*vm.Module, error) {

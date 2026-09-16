@@ -802,6 +802,7 @@ func (r *Runtime) initArrayBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
+		start, end = clipRange(o, start, end)
 		if start >= end {
 			return Obj(rt.newArrayFrom(nil)), nil
 		}
@@ -1883,6 +1884,7 @@ func (r *Runtime) initArrayExtras() {
 		if err != nil {
 			return Undefined, err
 		}
+		start, end = clipRange(o, start, end)
 		for i := start; i < end; i++ {
 			o.elems[i] = v
 		}
@@ -1937,4 +1939,31 @@ func elemAt(o *Object, i int) (Value, bool) {
 		return Undefined, false
 	}
 	return v, true
+}
+
+// clipRange re-clamps a range against an array's current length.
+//
+// Every index a built-in computes goes through ToInteger, which may call a
+// valueOf that mutates the array the indices were derived from:
+//
+//	var a = [1, 2, 3];
+//	a.fill(0, {valueOf() { a.length = 0; return 0; }});
+//
+// By the time the range is used it may name elements that no longer exist, so
+// it is clipped immediately before indexing rather than only when computed.
+func clipRange(o *Object, start, end int) (int, int) {
+	n := len(o.elems)
+	if start > n {
+		start = n
+	}
+	if end > n {
+		end = n
+	}
+	if start < 0 {
+		start = 0
+	}
+	if end < start {
+		end = start
+	}
+	return start, end
 }
