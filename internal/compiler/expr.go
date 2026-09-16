@@ -153,6 +153,11 @@ func (c *compiler) compileIdentRead(n *ast.Ident) {
 		}
 		return
 	}
+	// A named function expression's own name refers to the running closure.
+	if n.Name == c.selfName {
+		c.emit(bytecode.OpPushCallee, 0, 0)
+		return
+	}
 	c.emitAt(n.Start, bytecode.OpGetGlobal, c.nameIdx(n.Name), 0)
 }
 
@@ -348,8 +353,9 @@ func (c *compiler) compileUpdate(n *ast.Update) {
 	switch target := n.Operand.(type) {
 	case *ast.Ident:
 		c.compileIdentRead(target)
-		// The operand must be coerced first so that `x = "1"; x++` leaves a
-		// number behind and the postfix form yields the coerced value.
+		// The operand is coerced first, so that `x = "1"; x++` leaves a number
+		// behind and the postfix form yields the coerced value rather than the
+		// original string.
 		c.emit(bytecode.OpToNumber, 0, 0)
 		if !n.Prefix {
 			c.emit(bytecode.OpDup, 0, 0)
@@ -357,7 +363,7 @@ func (c *compiler) compileUpdate(n *ast.Update) {
 		c.emitAt(n.Start, op, 0, 0)
 		c.assignTo(target, false)
 		if !n.Prefix {
-			// Discard the updated value, leaving the original.
+			// Discard the updated value, leaving the original as the result.
 			c.emit(bytecode.OpDrop, 0, 0)
 		}
 
@@ -366,26 +372,33 @@ func (c *compiler) compileUpdate(n *ast.Update) {
 		if target.Computed {
 			c.compileExpr(target.Property)
 			c.emit(bytecode.OpToPropertyKey, 0, 0)
-			// obj key -> obj key value
 			c.emit(bytecode.OpDup2, 0, 0)
 			c.emit(bytecode.OpGetIndex, 0, 0)
 			c.emit(bytecode.OpToNumber, 0, 0)
+			// Postfix yields the old value, so it is copied down before the
+			// increment; prefix yields the new one, so the copy comes after.
 			if !n.Prefix {
 				c.emit(bytecode.OpInsert3, 0, 0)
+				c.emitAt(n.Start, op, 0, 0)
+			} else {
+				c.emitAt(n.Start, op, 0, 0)
+				c.emit(bytecode.OpInsert3, 0, 0)
 			}
-			c.emitAt(n.Start, op, 0, 0)
 			c.emit(bytecode.OpSetIndex, 0, 0)
-		} else {
-			name := c.nameIdx(propKeyName(target.Property))
-			c.emit(bytecode.OpDup, 0, 0)
-			c.emit(bytecode.OpGetProp, name, 0)
-			c.emit(bytecode.OpToNumber, 0, 0)
-			if !n.Prefix {
-				c.emit(bytecode.OpInsert2, 0, 0)
-			}
-			c.emitAt(n.Start, op, 0, 0)
-			c.emit(bytecode.OpSetProp, name, 0)
+			return
 		}
+		name := c.nameIdx(propKeyName(target.Property))
+		c.emit(bytecode.OpDup, 0, 0)
+		c.emit(bytecode.OpGetProp, name, 0)
+		c.emit(bytecode.OpToNumber, 0, 0)
+		if !n.Prefix {
+			c.emit(bytecode.OpInsert2, 0, 0)
+			c.emitAt(n.Start, op, 0, 0)
+		} else {
+			c.emitAt(n.Start, op, 0, 0)
+			c.emit(bytecode.OpInsert2, 0, 0)
+		}
+		c.emit(bytecode.OpSetProp, name, 0)
 
 	default:
 		c.errorf(n.Start, "invalid update target")
@@ -482,27 +495,55 @@ func (c *compiler) compileNew(n *ast.New) {
 	c.emitAt(n.Start, bytecode.OpNew, uint32(argc), 0)
 }
 
+// chainJump is a pending short-circuit from an optional link.
+//
+// live records how many stack slots the link had built up when it tested, so
+// that the landing pad can clear exactly those. A property access has one (the
+// object); a method call has two (the receiver and the function).
+type chainJump struct {
+	pc   int
+	live int
+}
+
 // compileOptionalChain compiles a chain, wiring every `?.` link to jump past
 // the rest of the chain when its base is nullish.
 func (c *compiler) compileOptionalChain(n *ast.OptionalChain) {
-	var jumps []int
+	var jumps []chainJump
 	c.compileChainLink(n.Base, &jumps)
-	end := c.here()
-	for _, pc := range jumps {
-		c.patchJumpTo(pc, end)
+	if len(jumps) == 0 {
+		return
+	}
+	done := c.emitJump(bytecode.OpJump)
+
+	// Each short circuit gets its own landing pad, because links differ in how
+	// much they left on the stack. Every pad produces undefined, which is the
+	// chain's value regardless of whether null or undefined triggered it.
+	var exits []int
+	for i, j := range jumps {
+		c.patchJumpTo(j.pc, c.here())
+		for range j.live {
+			c.emit(bytecode.OpDrop, 0, 0)
+		}
+		c.emit(bytecode.OpPushUndef, 0, 0)
+		// Every pad but the last has to jump over the ones that follow it.
+		if i < len(jumps)-1 {
+			exits = append(exits, c.emitJump(bytecode.OpJump))
+		}
+	}
+	c.patchJump(done)
+	for _, pc := range exits {
+		c.patchJump(pc)
 	}
 }
 
 // compileChainLink compiles one link of an optional chain, collecting the
-// short-circuit jumps so the caller can point them all at the chain's end.
-func (c *compiler) compileChainLink(e ast.Expr, jumps *[]int) {
+// short-circuit jumps so the caller can give each a landing pad.
+func (c *compiler) compileChainLink(e ast.Expr, jumps *[]chainJump) {
 	switch n := e.(type) {
 	case *ast.Member:
 		c.compileChainLink(n.Object, jumps)
 		if n.Optional {
-			// The value stays on the stack for the jump, which lands with
-			// undefined as the chain's result.
-			*jumps = append(*jumps, c.emitJump(bytecode.OpJumpIfNullish))
+			*jumps = append(*jumps, chainJump{pc: c.emitJump(bytecode.OpJumpIfNullish), live: 1})
 		}
 		if n.Computed {
 			c.compileExpr(n.Property)
@@ -515,7 +556,7 @@ func (c *compiler) compileChainLink(e ast.Expr, jumps *[]int) {
 		if m, ok := n.Callee.(*ast.Member); ok {
 			c.compileChainLink(m.Object, jumps)
 			if m.Optional {
-				*jumps = append(*jumps, c.emitJump(bytecode.OpJumpIfNullish))
+				*jumps = append(*jumps, chainJump{pc: c.emitJump(bytecode.OpJumpIfNullish), live: 1})
 			}
 			if m.Computed {
 				c.compileExpr(m.Property)
@@ -524,7 +565,9 @@ func (c *compiler) compileChainLink(e ast.Expr, jumps *[]int) {
 				c.emit(bytecode.OpGetPropThis, c.nameIdx(propKeyName(m.Property)), 0)
 			}
 			if n.Optional {
-				*jumps = append(*jumps, c.emitJump(bytecode.OpJumpIfNullish))
+				// The receiver is beneath the function here, so a short
+				// circuit has two slots to clear.
+				*jumps = append(*jumps, chainJump{pc: c.emitJump(bytecode.OpJumpIfNullish), live: 2})
 			}
 			argc := c.compileArguments(n.Args)
 			c.emit(bytecode.OpCallMethod, uint32(argc), 0)
@@ -532,7 +575,7 @@ func (c *compiler) compileChainLink(e ast.Expr, jumps *[]int) {
 		}
 		c.compileChainLink(n.Callee, jumps)
 		if n.Optional {
-			*jumps = append(*jumps, c.emitJump(bytecode.OpJumpIfNullish))
+			*jumps = append(*jumps, chainJump{pc: c.emitJump(bytecode.OpJumpIfNullish), live: 1})
 		}
 		argc := c.compileArguments(n.Args)
 		c.emit(bytecode.OpCall, uint32(argc), 0)
@@ -552,6 +595,12 @@ func (c *compiler) compileAssign(n *ast.Assign) {
 		if isPattern(n.Target) {
 			c.compileExpr(n.Value)
 			c.compileDestructuringAssign(n.Target)
+			return
+		}
+		if m, ok := n.Target.(*ast.Member); ok {
+			c.compileMemberStore(m, func() {
+				c.compileExprNamed(n.Value, "")
+			})
 			return
 		}
 		c.compileExprNamed(n.Value, nameOf(n.Target))
@@ -624,24 +673,10 @@ func (c *compiler) assignTo(target ast.Expr, initializing bool) {
 		c.emit(bytecode.OpSetGlobal, c.nameIdx(t.Name), 0)
 
 	case *ast.Member:
-		// The receiver and key must be evaluated before the value was pushed,
-		// but the value is already on top, so it is moved into place.
-		if t.Computed {
-			c.compileExpr(t.Object)
-			c.compileExpr(t.Property)
-			c.emit(bytecode.OpToPropertyKey, 0, 0)
-			// value obj key -> value obj key value
-			c.emit(bytecode.OpRot3, 0, 0)
-			c.emit(bytecode.OpDup, 0, 0)
-			c.emit(bytecode.OpRot4, 0, 0)
-			c.emit(bytecode.OpSetIndex, 0, 0)
-			return
-		}
-		c.compileExpr(t.Object)
-		c.emit(bytecode.OpSwap, 0, 0)
-		c.emit(bytecode.OpDup, 0, 0)
-		c.emit(bytecode.OpRot3, 0, 0)
-		c.emit(bytecode.OpSetProp, c.nameIdx(propKeyName(t.Property)), 0)
+		// Reached only from a compound assignment or an update, where the
+		// target's subexpressions were already evaluated; a plain assignment
+		// goes through compileMemberStore so that it can order them correctly.
+		c.compileMemberStoreFromValue(t)
 
 	default:
 		c.errorf(target.Pos(), "invalid assignment target")
@@ -713,4 +748,49 @@ func binaryOpcode(op string) bytecode.Op {
 func compoundOpcode(op string) bytecode.Op {
 	// Strip the trailing '=' and reuse the binary table.
 	return binaryOpcode(op[:len(op)-1])
+}
+
+// compileMemberStore compiles `obj.p = value` and `obj[k] = value`, evaluating
+// the object, then the key, then the value, and leaving the assigned value on
+// the stack as the expression's result.
+//
+// The order matters: each part may have side effects, and the specification
+// fixes the order in which they happen.
+func (c *compiler) compileMemberStore(m *ast.Member, emitValue func()) {
+	c.compileExpr(m.Object)
+	if m.Computed {
+		c.compileExpr(m.Property)
+		c.emit(bytecode.OpToPropertyKey, 0, 0)
+		emitValue()
+		// obj key value -> value obj key value, so the store consumes three
+		// and the result is left behind.
+		c.emit(bytecode.OpInsert3, 0, 0)
+		c.emitAt(m.Start, bytecode.OpSetIndex, 0, 0)
+		return
+	}
+	emitValue()
+	// obj value -> value obj value
+	c.emit(bytecode.OpInsert2, 0, 0)
+	c.emitAt(m.Start, bytecode.OpSetProp, c.nameIdx(propKeyName(m.Property)), 0)
+}
+
+// compileMemberStoreFromValue stores a value that is already on the stack into
+// a member target, which is what a compound assignment needs after combining.
+func (c *compiler) compileMemberStoreFromValue(m *ast.Member) {
+	// The value is on top; the object and key have to go beneath it.
+	if m.Computed {
+		c.compileExpr(m.Object)
+		c.compileExpr(m.Property)
+		c.emit(bytecode.OpToPropertyKey, 0, 0)
+		// value obj key -> obj key value
+		c.emit(bytecode.OpRot3, 0, 0)
+		c.emit(bytecode.OpInsert3, 0, 0)
+		c.emit(bytecode.OpSetIndex, 0, 0)
+		return
+	}
+	c.compileExpr(m.Object)
+	// value obj -> obj value
+	c.emit(bytecode.OpSwap, 0, 0)
+	c.emit(bytecode.OpInsert2, 0, 0)
+	c.emit(bytecode.OpSetProp, c.nameIdx(propKeyName(m.Property)), 0)
 }

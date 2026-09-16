@@ -64,9 +64,9 @@ func (c *compiler) predeclareLexical(vd *ast.VarDecl) {
 func (c *compiler) declareLexicalName(name string, kind bindKind, pos int) {
 	slot := c.declare(name, kind, pos)
 	// The slot starts as the uninitialized marker, which the checked accessors
-	// test for. Frame locals are cleared on entry, and the zero Value is a
-	// number, so the marker must be stored explicitly.
-	c.emit(bytecode.OpPushUndef, 0, 0)
+	// test for. Frame locals are cleared on entry, and the zero Value is the
+	// number 0, so the marker has to be stored explicitly.
+	c.emit(bytecode.OpPushUninitialized, 0, 0)
 	c.emit(bytecode.OpSetLocal, slot, 0)
 	c.markUninitialized(name)
 }
@@ -85,7 +85,13 @@ func (c *compiler) compileStatement(s ast.Stmt) {
 	switch n := s.(type) {
 	case *ast.ExprStmt:
 		c.compileExpr(n.X)
-		c.emit(bytecode.OpDrop, 0, 0)
+		if c.completionSlot >= 0 {
+			// At the top level an expression statement's value is the
+			// program's completion value, which eval returns.
+			c.emit(bytecode.OpSetLocal, uint32(c.completionSlot), 0)
+		} else {
+			c.emit(bytecode.OpDrop, 0, 0)
+		}
 
 	case *ast.VarDecl:
 		c.compileVarDecl(n)
@@ -277,11 +283,20 @@ func (c *compiler) compileDoWhile(n *ast.DoWhileStmt) {
 func (c *compiler) compileFor(n *ast.ForStmt) {
 	// The init clause's bindings live in a scope enclosing the loop.
 	c.beginScope()
+
+	// A let or const in the head is a fresh binding each iteration, so a
+	// closure created in one iteration must not see a later iteration's value.
+	// The slot where those bindings start is recorded here so that the end of
+	// each iteration can detach any closure that captured them.
+	firstSlot := c.nextSlot
+	perIteration := false
+
 	if n.Init != nil {
 		switch init := n.Init.(type) {
 		case *ast.VarDecl:
 			if init.Kind != ast.DeclVar {
 				c.predeclareLexical(init)
+				perIteration = true
 			}
 			c.compileVarDecl(init)
 		case *ast.ExprStmt:
@@ -301,6 +316,12 @@ func (c *compiler) compileFor(n *ast.ForStmt) {
 	c.compileStatement(n.Body)
 
 	updateAt := c.here()
+	if perIteration {
+		// Snapshot the loop variable into any closure that captured it, before
+		// the update clause changes it. This runs on the `continue` path too,
+		// because that is also the end of an iteration.
+		c.emit(bytecode.OpCloseUpvalues, firstSlot, 0)
+	}
 	if n.Update != nil {
 		c.compileExpr(n.Update)
 		c.emit(bytecode.OpDrop, 0, 0)

@@ -166,7 +166,11 @@ func (v Value) IsNumber() bool {
 }
 
 // IsUndefined reports whether the value is undefined.
-func (v Value) IsUndefined() bool { return v.num == Undefined.num && !v.IsNumber() }
+//
+// The comparison must go through the tag rather than comparing num against
+// Undefined.num: both are NaN bit patterns, and NaN is never equal to itself,
+// so a float comparison would always report false.
+func (v Value) IsUndefined() bool { return v.isTag(KindUndefined) }
 
 // IsNull reports whether the value is null.
 func (v Value) IsNull() bool { return v.isTag(KindNull) }

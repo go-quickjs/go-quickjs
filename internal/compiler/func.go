@@ -48,17 +48,18 @@ func funcKindOf(fn *ast.FuncLit) bytecode.FuncKind {
 // compileFunctionBody compiles a function's parameters and body into the
 // receiver, which is a fresh compiler for that function.
 func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
-	// A named function expression can refer to itself, so its own name is
-	// bound inside the body. A declaration's name binds in the enclosing scope
-	// instead and must not be redeclared here.
-	if fn.Name != nil && fn.Kind == ast.FuncNormal {
-		slot := c.declare(fn.Name.Name, bindConst, fn.Start)
-		// The binding is filled in by the caller through the closure itself;
-		// until then it reads as undefined rather than throwing.
-		_ = slot
-	}
-
+	// Parameters must occupy slots 0..n-1, because the interpreter copies
+	// arguments into those slots positionally. Nothing may be declared before
+	// them.
 	c.bindParameters(fn)
+
+	// A named function expression can refer to itself by name. That reference
+	// resolves to the running closure rather than to a local, so no slot is
+	// allocated for it: recording the name is enough for compileIdentRead to
+	// emit OpPushCallee instead of a variable read.
+	if fn.Name != nil {
+		c.selfName = fn.Name.Name
+	}
 
 	// Hoist var declarations and nested function declarations to the top of
 	// the function, as their scope requires.

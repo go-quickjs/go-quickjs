@@ -105,6 +105,19 @@ type compiler struct {
 	// labels, which is the next context pushed.
 	pendingLabel string
 
+	// selfName is the name a named function expression uses to refer to
+	// itself, which resolves to the running closure rather than to a binding.
+	selfName string
+
+	// completionSlot holds the local that accumulates the program's completion
+	// value -- what eval returns -- or -1 inside a function, where the
+	// completion value is whatever `return` produces instead.
+	//
+	// Each expression statement stores into it rather than discarding its
+	// value, so the last one evaluated wins even when it sits inside a block or
+	// a loop.
+	completionSlot int32
+
 	// stackDepth tracks the operand stack so that MaxStack can be recorded and
 	// the frame sized exactly once per function.
 	stackDepth int
@@ -142,12 +155,22 @@ func Compile(prog *ast.Program, opts Options) (fn *bytecode.Function, err error)
 		}
 	}()
 
+	// Reserve the completion-value slot before anything else, so that its index
+	// is stable, and seed it with undefined for a program whose last statement
+	// produces no value.
+	c.completionSlot = int32(c.nextSlot)
+	c.nextSlot++
+	c.emit(bytecode.OpPushUndef, 0, 0)
+	c.emit(bytecode.OpSetLocal, uint32(c.completionSlot), 0)
+
 	// Top-level var and function declarations become properties of the global
 	// object rather than locals, which is what makes them visible to other
 	// scripts in the same realm.
 	c.hoistGlobals(prog.Body)
 	c.compileStatements(prog.Body)
-	c.emit(bytecode.OpReturnUndef, 0, 0)
+
+	c.emit(bytecode.OpGetLocal, uint32(c.completionSlot), 0)
+	c.emit(bytecode.OpReturn, 0, 0)
 	c.finish()
 	return c.fn, nil
 }
@@ -159,6 +182,9 @@ func newCompiler(parent *compiler, opts Options) *compiler {
 		opts:       opts,
 		nameIndex:  make(map[string]uint32, 8),
 		constIndex: make(map[constKey]uint32, 8),
+		// A function has no completion value of its own; only the top-level
+		// program tracks one, and Compile overwrites this.
+		completionSlot: -1,
 	}
 	if parent != nil {
 		c.lineOf = parent.lineOf
@@ -552,11 +578,13 @@ func stackEffect(op bytecode.Op, a uint32) int {
 	switch op {
 	case bytecode.OpPushConst, bytecode.OpPushUndef, bytecode.OpPushNull,
 		bytecode.OpPushTrue, bytecode.OpPushFalse, bytecode.OpPushThis,
-		bytecode.OpPushInt, bytecode.OpPushEmptyString, bytecode.OpGetLocal,
+		bytecode.OpPushInt, bytecode.OpPushEmptyString,
+		bytecode.OpPushUninitialized, bytecode.OpGetLocal,
 		bytecode.OpGetLocalCheck, bytecode.OpGetUpvalue,
 		bytecode.OpGetUpvalueCheck, bytecode.OpGetGlobal,
 		bytecode.OpGetGlobalOpt, bytecode.OpDup, bytecode.OpClosure,
-		bytecode.OpNewObject, bytecode.OpNewTarget, bytecode.OpGetPropThis,
+		bytecode.OpNewObject, bytecode.OpNewTarget, bytecode.OpPushCallee,
+		bytecode.OpGetPropThis,
 		bytecode.OpIsNullish:
 		return 1
 
@@ -571,8 +599,17 @@ func stackEffect(op bytecode.Op, a uint32) int {
 		bytecode.OpDefineField, bytecode.OpDefineGetter,
 		bytecode.OpDefineSetter, bytecode.OpSetProtoOf,
 		bytecode.OpJumpIfFalseKeep, bytecode.OpJumpIfTrueKeep,
-		bytecode.OpJumpIfNullish, bytecode.OpJumpIfNotNullish:
+		bytecode.OpJumpIfNotNullish:
 		return -1
+
+	case bytecode.OpJumpIfNullish:
+		// Optional chaining keeps the tested value on both paths.
+		return 0
+
+	case bytecode.OpIterNextOrJump:
+		// Pushes the next value when it continues and nothing when it stops;
+		// the larger figure is the one MaxStack needs.
+		return 1
 
 	case bytecode.OpAdd, bytecode.OpSub, bytecode.OpMul, bytecode.OpDiv,
 		bytecode.OpMod, bytecode.OpPow, bytecode.OpBitAnd, bytecode.OpBitOr,

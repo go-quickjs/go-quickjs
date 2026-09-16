@@ -3,6 +3,7 @@ package vm
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
@@ -57,6 +58,9 @@ type Runtime struct {
 
 	// jobs is the promise job queue, drained between turns.
 	jobs []job
+
+	// rng backs Math.random, created on first use.
+	rng *rand.Rand
 
 	// templateCache keeps the object identity that tagged templates require:
 	// the same template site must hand the same strings array to its tag on
@@ -159,6 +163,9 @@ type frame struct {
 
 	this      Value
 	newTarget Value
+	// callee is the function object being executed, which a named function
+	// expression refers to by its own name.
+	callee *Object
 	// argc is the number of arguments actually passed, which `arguments` and
 	// the rest parameter both need.
 	argc int

@@ -125,6 +125,7 @@ func (r *Runtime) run(cl *closure, this Value, args []Value, newTarget Value, ca
 		base:      base + fn.LocalCount,
 		this:      this,
 		newTarget: newTarget,
+		callee:    callee,
 		argc:      len(args),
 		args:      args,
 	})
@@ -192,12 +193,20 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 	}
 	peek := func(n int) Value { return r.stack[sp-1-n] }
 
+	// vmErr carries a pending exception from wherever it is raised to the
+	// handler search at the bottom of the loop, and `in` is declared alongside
+	// it because a goto may not jump over a declaration.
+	var vmErr error
+	var in bytecode.Instr
+
 	for {
 		if err := r.checkInterrupt(); err != nil {
+			// An interrupt is the host stopping the script rather than a
+			// JavaScript exception, so it is not catchable.
 			return Undefined, err
 		}
 
-		in := code[f.pc]
+		in = code[f.pc]
 		f.pc++
 
 		switch in.Op {
@@ -208,6 +217,8 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 			push(cl.consts[in.A])
 		case bytecode.OpPushUndef:
 			push(Undefined)
+		case bytecode.OpPushUninitialized:
+			push(uninitialized)
 		case bytecode.OpPushNull:
 			push(Null)
 		case bytecode.OpPushTrue:
@@ -245,23 +256,28 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 			r.stack[sp-1] = a
 		case bytecode.OpInsert2:
 			// a b -> b a b
-			v := r.stack[sp-1]
+			b := r.stack[sp-1]
+			r.stack[sp] = b
 			r.stack[sp-1] = r.stack[sp-2]
-			r.stack[sp-2] = v
-			push(v)
+			r.stack[sp-2] = b
+			sp++
+		case bytecode.OpInsert3:
+			// a b c -> c a b c
+			c := r.stack[sp-1]
+			r.stack[sp] = c
 			r.stack[sp-1] = r.stack[sp-2]
 			r.stack[sp-2] = r.stack[sp-3]
-			r.stack[sp-3] = v
-		case bytecode.OpInsert3:
-			v := r.stack[sp-1]
-			copy(r.stack[sp-2:sp], r.stack[sp-3:sp-1])
-			r.stack[sp-3] = v
-			push(v)
+			r.stack[sp-3] = c
+			sp++
 		case bytecode.OpInsert4:
-			v := r.stack[sp-1]
-			copy(r.stack[sp-3:sp], r.stack[sp-4:sp-1])
-			r.stack[sp-4] = v
-			push(v)
+			// a b c d -> d a b c d
+			d := r.stack[sp-1]
+			r.stack[sp] = d
+			r.stack[sp-1] = r.stack[sp-2]
+			r.stack[sp-2] = r.stack[sp-3]
+			r.stack[sp-3] = r.stack[sp-4]
+			r.stack[sp-4] = d
+			sp++
 
 		// --- Locals -------------------------------------------------------
 		case bytecode.OpGetLocal:
@@ -317,23 +333,27 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 		case bytecode.OpGetGlobal:
 			name := cl.names[in.A]
 			if !r.hasProp(r.global, name) {
-				return Undefined, r.throwReferenceError("%s is not defined", r.atoms.name(name))
+				vmErr = r.throwReferenceError("%s is not defined", r.atoms.name(name))
+				goto onError
 			}
 			v, err := r.getProp(r.global, name, Obj(r.global))
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			push(v)
 		case bytecode.OpGetGlobalOpt:
 			// typeof on an undeclared name must not throw.
 			v, err := r.getProp(r.global, cl.names[in.A], Obj(r.global))
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			push(v)
 		case bytecode.OpSetGlobal:
 			if err := r.setProp(r.global, cl.names[in.A], pop(), Obj(r.global), cl.fn.Strict); err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 		case bytecode.OpDefineGlobalVar:
 			name := cl.names[in.A]
@@ -347,7 +367,8 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 		case bytecode.OpGetProp:
 			v, err := r.getValueProp(pop(), cl.names[in.A])
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			push(v)
 		case bytecode.OpGetPropThis:
@@ -355,21 +376,24 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 			recv := peek(0)
 			v, err := r.getValueProp(recv, cl.names[in.A])
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			push(v)
 		case bytecode.OpSetProp:
 			val := pop()
 			obj := pop()
 			if err := r.setValueProp(obj, cl.names[in.A], val, cl.fn.Strict); err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 		case bytecode.OpGetIndex:
 			key := pop()
 			obj := pop()
 			v, err := r.getIndexed(obj, key)
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			push(v)
 		case bytecode.OpGetIndexThis:
@@ -377,7 +401,8 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 			recv := peek(0)
 			v, err := r.getIndexed(recv, key)
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			push(v)
 		case bytecode.OpSetIndex:
@@ -386,17 +411,20 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 			obj := pop()
 			k, err := r.toPropertyKey(key)
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			if err := r.setValueProp(obj, k, val, cl.fn.Strict); err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 		case bytecode.OpDeleteProp:
 			key := pop()
 			obj := pop()
 			k, err := r.toPropertyKey(key)
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			if !obj.IsObject() {
 				push(True)
@@ -404,13 +432,15 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 			}
 			ok, err := r.deleteProp(obj.Object(), k, cl.fn.Strict)
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			push(Bool(ok))
 		case bytecode.OpGetLength:
 			v, err := r.getValueProp(pop(), atomLength)
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			push(v)
 		case bytecode.OpDefineField:
@@ -418,7 +448,8 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 			obj := peek(0)
 			if obj.IsObject() {
 				if err := r.defineOwnProp(obj.Object(), cl.names[in.A], val, propDefault); err != nil {
-					return Undefined, err
+					vmErr = err
+					goto onError
 				}
 			}
 		case bytecode.OpDefineIndex:
@@ -427,11 +458,13 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 			obj := peek(0)
 			k, err := r.toPropertyKey(key)
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			if obj.IsObject() {
 				if err := r.defineOwnProp(obj.Object(), k, val, propDefault); err != nil {
-					return Undefined, err
+					vmErr = err
+					goto onError
 				}
 			}
 		case bytecode.OpDefineGetter, bytecode.OpDefineSetter:
@@ -470,7 +503,8 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 			}
 			v, err := r.add(a, b)
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			push(v)
 		case bytecode.OpSub, bytecode.OpMul, bytecode.OpDiv, bytecode.OpMod,
@@ -482,7 +516,8 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 			}
 			v, err := r.arith(in.Op, a, b)
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			push(v)
 		case bytecode.OpNeg:
@@ -493,13 +528,15 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 			}
 			v, err := r.negate(a)
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			push(v)
 		case bytecode.OpPos:
 			n, err := r.toNumber(pop())
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			push(Float(n))
 		case bytecode.OpInc, bytecode.OpDec:
@@ -518,12 +555,14 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 			}
 			n, err := r.toNumeric(a)
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			if n.IsBigInt() {
 				v, err := r.arith(bytecode.OpAdd, n, Big(NewBigInt(int64(delta))))
 				if err != nil {
-					return Undefined, err
+					vmErr = err
+					goto onError
 				}
 				push(v)
 				break
@@ -535,11 +574,13 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 			b, a := pop(), pop()
 			x, err := r.toInt32(a)
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			y, err := r.toInt32(b)
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			switch in.Op {
 			case bytecode.OpBitAnd:
@@ -552,18 +593,21 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 		case bytecode.OpBitNot:
 			x, err := r.toInt32(pop())
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			push(Int32(^x))
 		case bytecode.OpShl, bytecode.OpShr:
 			b, a := pop(), pop()
 			x, err := r.toInt32(a)
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			y, err := r.toUint32(b)
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			// Only the low five bits of the shift count are used.
 			if in.Op == bytecode.OpShl {
@@ -575,11 +619,13 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 			b, a := pop(), pop()
 			x, err := r.toUint32(a)
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			y, err := r.toUint32(b)
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			push(Uint32(x >> (y & 31)))
 
@@ -588,7 +634,8 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 			b, a := pop(), pop()
 			eq, err := r.looseEquals(a, b)
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			push(Bool(eq == (in.Op == bytecode.OpEq)))
 		case bytecode.OpStrictEq:
@@ -607,24 +654,28 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 			}
 			c, err := r.compare(a, b)
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			push(Bool(relationalResult(in.Op, c)))
 		case bytecode.OpIn:
 			obj, key := pop(), pop()
 			if !obj.IsObject() {
-				return Undefined, r.throwTypeError("the right operand of \"in\" must be an object")
+				vmErr = r.throwTypeError("the right operand of \"in\" must be an object")
+				goto onError
 			}
 			k, err := r.toPropertyKey(key)
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			push(Bool(r.hasProp(obj.Object(), k)))
 		case bytecode.OpInstanceOf:
 			ctor, obj := pop(), pop()
 			ok, err := r.instanceOf(obj, ctor)
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			push(Bool(ok))
 		case bytecode.OpNot:
@@ -658,10 +709,11 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 				sp--
 			}
 		case bytecode.OpJumpIfNullish:
+			// Used by optional chaining, which keeps the value on both paths:
+			// as the chain's result when short-circuiting, and as the receiver
+			// of the next link otherwise.
 			if peek(0).IsNullish() {
 				f.pc = in.A
-			} else {
-				sp--
 			}
 		case bytecode.OpJumpIfNotNullish:
 			if !peek(0).IsNullish() {
@@ -678,7 +730,8 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 			sp -= argc + 1
 			v, err := r.call(callee, Undefined, args)
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			push(v)
 		case bytecode.OpCallMethod:
@@ -689,7 +742,8 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 			sp -= argc + 2
 			v, err := r.call(callee, this, args)
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			push(v)
 		case bytecode.OpNew:
@@ -699,7 +753,8 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 			sp -= argc + 1
 			v, err := r.construct(callee, args)
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			push(v)
 		case bytecode.OpReturn:
@@ -731,7 +786,8 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 			for i, p := range parts {
 				s, err := r.toString(p)
 				if err != nil {
-					return Undefined, err
+					vmErr = err
+					goto onError
 				}
 				if i == 0 {
 					out = s
@@ -755,45 +811,140 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 		case bytecode.OpToObject:
 			o, err := r.toObject(pop())
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			push(Obj(o))
 		case bytecode.OpToNumber:
 			n, err := r.toNumber(pop())
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			push(Float(n))
 		case bytecode.OpToString:
 			s, err := r.toString(pop())
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			push(Str(s))
 		case bytecode.OpToPropertyKey:
 			k, err := r.toPropertyKey(pop())
 			if err != nil {
-				return Undefined, err
+				vmErr = err
+				goto onError
 			}
 			push(Str(NewString(r.atoms.name(k))))
 
 		// --- Exceptions ---------------------------------------------------
 		case bytecode.OpThrow:
-			return Undefined, r.throw(pop())
+			vmErr = r.throw(pop())
+			goto onError
 		case bytecode.OpThrowTypeError:
-			return Undefined, r.throwTypeError("%s", r.atoms.name(cl.names[in.A]))
+			vmErr = r.throwTypeError("%s", r.atoms.name(cl.names[in.A]))
+			goto onError
 		case bytecode.OpPushCatch:
 			f.handlers = append(f.handlers, handler{pc: in.A, stackDepth: sp})
 		case bytecode.OpPopCatch:
 			f.handlers = f.handlers[:len(f.handlers)-1]
 
+		// --- Iteration ----------------------------------------------------
+		case bytecode.OpForInStart:
+			cur, err := r.startForIn(pop())
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			push(cur)
+		case bytecode.OpForOfStart:
+			cur, err := r.startForOf(pop())
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			push(cur)
+		case bytecode.OpIterNextOrJump:
+			// The cursor stays on the stack so that the loop can close it.
+			v, ok, err := r.iterNext(peek(0))
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			if !ok {
+				f.pc = in.A
+				break
+			}
+			push(v)
+		case bytecode.OpIterClose:
+			r.closeIter(peek(0))
+		case bytecode.OpArraySpread:
+			src := pop()
+			target := peek(0)
+			if target.IsObject() {
+				if err := r.spreadInto(target.Object(), src); err != nil {
+					vmErr = err
+					goto onError
+				}
+			}
+		case bytecode.OpCopyDataProps:
+			src := pop()
+			target := peek(0)
+			if target.IsObject() && !src.IsNullish() {
+				if err := r.copyDataProps(target.Object(), src); err != nil {
+					vmErr = err
+					goto onError
+				}
+			}
+
 		case bytecode.OpNewTarget:
 			push(f.newTarget)
+		case bytecode.OpPushCallee:
+			if f.callee == nil {
+				push(Undefined)
+				break
+			}
+			push(Obj(f.callee))
 
 		default:
-			return Undefined, r.throwTypeError("unimplemented opcode %s", in.Op)
+			vmErr = r.throwTypeError("unimplemented opcode %s", in.Op)
+			goto onError
 		}
+		continue
+
+	onError:
+		// An exception unwinds to the innermost handler registered in this
+		// frame. With none, it propagates to the caller, which repeats the
+		// search in its own frame.
+		if !r.unwindToHandler(f, &sp, vmErr) {
+			return Undefined, vmErr
+		}
+		vmErr = nil
 	}
+}
+
+// unwindToHandler transfers control to the innermost catch handler of a frame,
+// reporting false when the frame has none and the exception must propagate.
+//
+// Only a JavaScript exception is catchable. A host interruption -- a cancelled
+// context, or the stack limit being reached -- deliberately is not, so that a
+// script cannot defeat its own sandbox with try/catch.
+func (r *Runtime) unwindToHandler(f *frame, sp *int, err error) bool {
+	thrown, ok := err.(*Thrown)
+	if !ok || len(f.handlers) == 0 {
+		return false
+	}
+	h := f.handlers[len(f.handlers)-1]
+	f.handlers = f.handlers[:len(f.handlers)-1]
+
+	// The stack may hold a partly-built expression from the point of the
+	// throw, so it is cut back to the depth the handler was registered at
+	// before the thrown value is pushed for the catch clause to bind.
+	*sp = h.stackDepth
+	r.stack[*sp] = thrown.Value
+	*sp++
+	f.pc = h.pc
+	return true
 }
 
 // closeUpvaluesFrom closes every upvalue pointing at or above a local slot,

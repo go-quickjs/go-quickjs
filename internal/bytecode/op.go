@@ -23,6 +23,9 @@ const (
 	OpPushThis     // push the current this binding
 	OpPushInt      // push the int32 in A, sign-extended
 	OpPushEmptyString
+	// OpPushUninitialized stores the temporal-dead-zone marker, which a let or
+	// const binding holds until its declaration runs.
+	OpPushUninitialized
 
 	// --- Stack shuffling --------------------------------------------------
 	OpDup  // duplicate the top
@@ -193,6 +196,9 @@ const (
 	OpSetSuperProp
 	OpSetSuperIndex
 	OpNewTarget
+	// OpPushCallee pushes the function object currently executing, which is
+	// how a named function expression refers to itself.
+	OpPushCallee
 	OpToObject
 	OpToPropertyKey
 	OpToNumber
@@ -214,7 +220,8 @@ var opNames = [opCount]string{
 	OpNop: "nop", OpPushConst: "push_const", OpPushUndef: "push_undef",
 	OpPushNull: "push_null", OpPushTrue: "push_true", OpPushFalse: "push_false",
 	OpPushThis: "push_this", OpPushInt: "push_int",
-	OpPushEmptyString: "push_empty_string",
+	OpPushEmptyString:   "push_empty_string",
+	OpPushUninitialized: "push_uninitialized",
 
 	OpDup: "dup", OpDup2: "dup2", OpDrop: "drop", OpSwap: "swap",
 	OpRot3: "rot3", OpRot4: "rot4",
@@ -282,7 +289,8 @@ var opNames = [opCount]string{
 
 	OpGetSuperProp: "get_super_prop", OpGetSuperIndex: "get_super_index",
 	OpSetSuperProp: "set_super_prop", OpSetSuperIndex: "set_super_index",
-	OpNewTarget: "new_target", OpToObject: "to_object",
+	OpNewTarget: "new_target", OpPushCallee: "push_callee",
+	OpToObject:      "to_object",
 	OpToPropertyKey: "to_property_key", OpToNumber: "to_number",
 	OpToString: "to_string", OpWithPush: "with_push", OpWithPop: "with_pop",
 	OpSetName: "set_name", OpSetHomeObject: "set_home_object",
