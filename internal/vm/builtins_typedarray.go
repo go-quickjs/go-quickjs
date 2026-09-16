@@ -296,6 +296,14 @@ func (r *Runtime) initTypedArrayBuiltins() {
 		})
 		r.defConst(ctor, "BYTES_PER_ELEMENT", Int(info.size))
 		r.defConst(proto, "BYTES_PER_ELEMENT", Int(info.size))
+
+		if kind == elemUint8 {
+			// The base64 and hex conversions live only on Uint8Array: they are
+			// about bytes, and a view of wider elements would leave the caller
+			// reasoning about byte order.
+			r.uint8Proto = proto
+			r.initBase64Builtins(ctor, proto)
+		}
 	}
 }
 

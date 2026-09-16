@@ -50,6 +50,10 @@ type Runtime struct {
 	// check costs one decrement per instruction rather than a context read.
 	interruptCounter int
 
+	// uint8Proto is Uint8Array.prototype, which the base64 conversions need in
+	// order to build their results.
+	uint8Proto *Object
+
 	// iteratorCtor, helperProto and wrapProto back the iterator helpers.
 	iteratorCtor *Object
 	helperProto  *Object
