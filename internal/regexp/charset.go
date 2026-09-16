@@ -2,6 +2,7 @@ package regexp
 
 import (
 	"sort"
+	"sync"
 	"unicode"
 )
 
@@ -223,146 +224,76 @@ func isLineTerminator(r rune) bool {
 	return r == '\n' || r == '\r' || r == 0x2028 || r == 0x2029
 }
 
-// categoryTable resolves a general category by either of its names.
-//
-// The long form is what a pattern is likely to spell; Go's tables are keyed by
-// the abbreviation.
-func categoryTable(name string) []*unicode.RangeTable {
-	if short, ok := categoryAliases[name]; ok {
-		name = short
-	}
-	if t, ok := unicode.Categories[name]; ok {
-		return []*unicode.RangeTable{t}
-	}
-	return nil
-}
-
-// binaryTable resolves a binary property.
-//
-// Go carries most of them verbatim. The rest are derived here from the
-// categories they are defined in terms of -- close enough to be useful, and
-// marked where they are known to be approximate.
-func binaryTable(name string) []*unicode.RangeTable {
-	if long, ok := binaryAliases[name]; ok {
-		name = long
-	}
-	// The language names a fixed set of binary properties, which is narrower
-	// than the set Unicode defines and narrower than the set Go carries. A
-	// property outside it is a syntax error rather than a class that happens to
-	// work here and nowhere else.
-	if !binaryProperties[name] {
-		return nil
-	}
-	if t, ok := unicode.Properties[name]; ok {
-		return []*unicode.RangeTable{t}
-	}
-	switch name {
-	case "Assigned":
-		return []*unicode.RangeTable{unicode.Cc, unicode.Cf, unicode.Co,
-			unicode.L, unicode.M, unicode.N, unicode.P, unicode.S, unicode.Z}
-	case "Alphabetic":
-		return []*unicode.RangeTable{unicode.L, unicode.Nl, unicode.Other_Alphabetic}
-	case "Lowercase":
-		return []*unicode.RangeTable{unicode.Ll, unicode.Other_Lowercase}
-	case "Uppercase":
-		return []*unicode.RangeTable{unicode.Lu, unicode.Other_Uppercase}
-	case "Cased":
-		return []*unicode.RangeTable{unicode.Ll, unicode.Lu, unicode.Lt,
-			unicode.Other_Lowercase, unicode.Other_Uppercase}
-	case "Case_Ignorable":
-		return []*unicode.RangeTable{unicode.Mn, unicode.Me, unicode.Cf,
-			unicode.Lm, unicode.Sk}
-	case "Math":
-		return []*unicode.RangeTable{unicode.Sm, unicode.Other_Math}
-	case "ID_Start", "XID_Start":
-		return []*unicode.RangeTable{unicode.L, unicode.Nl, unicode.Other_ID_Start}
-	case "ID_Continue", "XID_Continue":
-		return []*unicode.RangeTable{unicode.L, unicode.Nl, unicode.Other_ID_Start,
-			unicode.Mn, unicode.Mc, unicode.Nd, unicode.Pc, unicode.Other_ID_Continue}
-	case "Grapheme_Base":
-		return []*unicode.RangeTable{unicode.L, unicode.N, unicode.P, unicode.S,
-			unicode.Zs, unicode.Mc, unicode.Me}
-	case "Grapheme_Extend":
-		return []*unicode.RangeTable{unicode.Mn, unicode.Me, unicode.Other_Grapheme_Extend}
-	case "Default_Ignorable_Code_Point":
-		return []*unicode.RangeTable{unicode.Other_Default_Ignorable_Code_Point,
-			unicode.Cf, unicode.Variation_Selector}
-	case "Emoji", "Emoji_Presentation", "Emoji_Modifier", "Emoji_Modifier_Base",
-		"Emoji_Component", "Extended_Pictographic":
-		// Go carries no emoji data, so these resolve to the symbol categories
-		// the characters actually live in. Approximate, and documented as such.
-		return []*unicode.RangeTable{unicode.So, unicode.Sk}
-	}
-	return nil
-}
-
 // unicodeClass resolves a \p{...} escape to a set.
 //
-// Both the bare form, which names a general category or a binary property, and
-// the Property=Value form are accepted.
+// The body is looked up verbatim, because the generated table is keyed by every
+// spelling the language allows -- \p{Script=Latin}, \p{sc=Latn} and
+// \p{Lowercase_Letter} are all keys of their own. A body that is not a key is
+// not a property escape, which is what makes \p{Other_Alphabetic} and
+// \p{ascii} syntax errors rather than empty classes.
 func unicodeClass(name string, negate bool) (*charSet, bool) {
-	var tables []*unicode.RangeTable
-
-	if i := indexByte(name, '='); i >= 0 {
-		prop, value := name[:i], name[i+1:]
-		switch prop {
-		case "General_Category", "gc":
-			tables = categoryTable(value)
-		case "Script", "sc", "Script_Extensions", "scx":
-			// Script_Extensions is answered with the plain Script table, which
-			// Go is the only data available for. The two differ only for code
-			// points a second script borrows, so the answer is a subset rather
-			// than a wrong kind of thing.
-			if long, ok := scriptAliases[value]; ok {
-				value = long
-			}
-			if t, ok := unicode.Scripts[value]; ok {
-				tables = []*unicode.RangeTable{t}
-			}
-		}
-	} else {
-		tables = categoryTable(name)
-		if tables == nil {
-			tables = binaryTable(name)
-		}
-		// A bare name is a general category or a binary property and nothing
-		// else. A script has to be written Script=Latin, so that \p{Greek}
-		// cannot quietly change meaning when a property of that name appears.
-		switch name {
-		case "Any":
-			return buildSet(negate, charRange{0, unicode.MaxRune}), true
-		case "ASCII":
-			return buildSet(negate, charRange{0, 0x7F}), true
-		}
-	}
-	if len(tables) == 0 {
+	rs, ok := unicodePropertyRanges(name)
+	if !ok {
 		return nil, false
 	}
+	return &charSet{ranges: rs, negated: negate}, true
+}
 
-	s := &charSet{negated: negate}
-	for _, t := range tables {
-		for _, r := range t.R16 {
-			if r.Stride == 1 {
-				s.addRange(rune(r.Lo), rune(r.Hi))
-				continue
-			}
-			for c := rune(r.Lo); c <= rune(r.Hi); c += rune(r.Stride) {
-				s.addChar(c)
-			}
-		}
-		for _, r := range t.R32 {
-			if r.Stride == 1 {
-				s.addRange(rune(r.Lo), rune(r.Hi))
-				continue
-			}
-			for c := rune(r.Lo); c <= rune(r.Hi); c += rune(r.Stride) {
-				s.addChar(c)
-			}
+// decodedProperties caches the ranges a property decodes to. A runtime is
+// single-goroutine, but two of them in different goroutines share this.
+var decodedProperties sync.Map // string -> []charRange
+
+// unicodePropertyRanges decodes one property's ranges, or reports that the name
+// is not a property at all.
+//
+// The returned slice is shared and must not be appended to; its capacity is cut
+// to its length so that a caller which does gets a copy instead.
+func unicodePropertyRanges(name string) ([]charRange, bool) {
+	if rs, ok := decodedProperties.Load(name); ok {
+		return rs.([]charRange), true
+	}
+	off, ok := unicodeProperties[name]
+	if !ok {
+		return nil, false
+	}
+	p := int(off)
+	n, p := decodeVarint(p)
+	rs := make([]charRange, n)
+	lo := rune(-1)
+	for i := range rs {
+		var gap, span uint32
+		gap, p = decodeVarint(p)
+		span, p = decodeVarint(p)
+		lo += rune(gap) + 1
+		rs[i] = charRange{lo, lo + rune(span)}
+		lo += rune(span)
+	}
+	rs = rs[:len(rs):len(rs)]
+	decodedProperties.Store(name, rs)
+	return rs, true
+}
+
+// decodeVarint reads one base-32 varint, returning it and the position after.
+func decodeVarint(p int) (uint32, int) {
+	var v uint32
+	for shift := 0; ; shift += 5 {
+		d := digitValues[unicodePropertyData[p]]
+		p++
+		v |= uint32(d&31) << shift
+		if d&32 == 0 {
+			return v, p
 		}
 	}
-	s.normalize()
-	return s, true
 }
+
+// digitValues inverts the alphabet the table is written in.
+var digitValues = func() (t [256]byte) {
+	const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz$_"
+	for i := 0; i < len(alphabet); i++ {
+		t[alphabet[i]] = byte(i)
+	}
+	return t
+}()
 
 func indexByte(s string, c byte) int {
 	for i := 0; i < len(s); i++ {
