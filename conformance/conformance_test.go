@@ -71,6 +71,7 @@ var unsupportedFeatures = map[string]string{
 	"legacy-regexp":                 "no legacy RegExp statics",
 	"error-stack-accessor":          "Error stack is an own data property",
 	"immutable-arraybuffer":         "no immutable ArrayBuffers",
+	"upsert":                        "no getOrInsert on Map or WeakMap",
 	"joint-iteration":               "no Iterator.zip",
 	"iterator-sequencing":           "no Iterator.concat",
 	"iterator-includes":             "no Iterator.prototype.includes",

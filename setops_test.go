@@ -193,3 +193,50 @@ func TestRecentBuiltins(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// Every collection constructor takes its contents from an iterable, and
+// undefined means an empty one.
+func TestCollectionConstructorSources(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var k = {}; String(new WeakMap([[k, 1]]).get(k))`, "1"},
+		{`var s = Symbol(); String(new WeakMap([[s, 1]]).get(s))`, "1"},
+		{`var k = {}; String(new WeakSet([k]).has(k))`, "true"},
+		{`String(new Map([[1, 2]]).get(1))`, "2"},
+		{`[...new Set([1, 2])].join(",")`, "1,2"},
+		{`String(new WeakMap().has({})) + "," + String(new Map(undefined).size)`, "false,0"},
+		{`String(new Set(null).size)`, "0"},
+		// A Map takes any iterable of entries, not just an array of arrays.
+		{`String(new Map(new Map([[1, 2]])).get(1))`, "2"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+
+	bad := []string{
+		// A weak key has to be something that could be collected.
+		`new WeakMap([[1, 2]])`,
+		`new WeakSet([1])`,
+		`new WeakMap([[Symbol.for("registered"), 1]])`,
+		// The argument has to be iterable.
+		`new WeakMap(1)`,
+		`new Map(1)`,
+		`new Set(1)`,
+		// And its entries have to be objects.
+		`new Map([1])`,
+	}
+	for _, src := range bad {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil {
+			t.Errorf("%s: no error, want TypeError", src)
+		}
+		rt.Close()
+	}
+}

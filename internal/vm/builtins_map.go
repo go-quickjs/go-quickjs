@@ -158,22 +158,11 @@ func (r *Runtime) initMapBuiltins() {
 		m := newJSMap(false)
 		o.data = m
 		// An iterable argument seeds the map with its [key, value] pairs.
-		if src := arg(args, 0); !src.IsNullish() {
-			err := rt.iterate(src, func(entry Value) error {
-				k, err := rt.getIndexed(entry, Int(0))
-				if err != nil {
-					return err
-				}
-				v, err := rt.getIndexed(entry, Int(1))
-				if err != nil {
-					return err
-				}
-				m.set(rt, k, v)
-				return nil
-			})
-			if err != nil {
-				return Undefined, err
-			}
+		if err := rt.eachEntry(arg(args, 0), func(k, v Value) error {
+			m.set(rt, k, v)
+			return nil
+		}); err != nil {
+			return Undefined, err
 		}
 		return Obj(o), nil
 	})
@@ -410,7 +399,18 @@ func (r *Runtime) initWeakCollections() {
 			return Undefined, err
 		}
 		o := newObject(wmProto, ClassWeakMap)
-		o.data = newJSMap(true)
+		m := newJSMap(true)
+		o.data = m
+		// An iterable of [key, value] pairs populates it, exactly as for Map.
+		if err := rt.eachEntry(arg(args, 0), func(k, v Value) error {
+			if !rt.canBeWeak(k) {
+				return rt.throwTypeError("a WeakMap key must be an object or an unregistered symbol")
+			}
+			m.set(rt, k, v)
+			return nil
+		}); err != nil {
+			return Undefined, err
+		}
 		return Obj(o), nil
 	})
 	r.defMethod(wmProto, "get", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -456,7 +456,17 @@ func (r *Runtime) initWeakCollections() {
 			return Undefined, err
 		}
 		o := newObject(wsProto, ClassWeakSet)
-		o.data = newJSMap(true)
+		m := newJSMap(true)
+		o.data = m
+		if err := rt.iterateOptional(arg(args, 0), func(v Value) error {
+			if !rt.canBeWeak(v) {
+				return rt.throwTypeError("a WeakSet value must be an object or an unregistered symbol")
+			}
+			m.set(rt, v, v)
+			return nil
+		}); err != nil {
+			return Undefined, err
+		}
 		return Obj(o), nil
 	})
 	r.defMethod(wsProto, "add", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -548,4 +558,35 @@ func (r *Runtime) newMapIterator(m *jsMap, kind mapIterKind) Value {
 			return this, nil
 		})
 	return Obj(iter)
+}
+
+// iterateOptional walks an iterable, treating undefined and null as empty.
+//
+// Every collection constructor takes its contents this way: `new Set()` and
+// `new Set(undefined)` both mean an empty one, and anything else has to be
+// iterable.
+func (r *Runtime) iterateOptional(v Value, visit func(Value) error) error {
+	if v.IsNullish() {
+		return nil
+	}
+	return r.iterate(v, visit)
+}
+
+// eachEntry walks an iterable of two-element entries, which is the shape Map
+// and WeakMap take.
+func (r *Runtime) eachEntry(v Value, visit func(k, value Value) error) error {
+	return r.iterateOptional(v, func(item Value) error {
+		if !item.IsObject() {
+			return r.throwTypeError("a collection entry must be an object")
+		}
+		k, err := r.getValueProp(item, internIndex(0))
+		if err != nil {
+			return err
+		}
+		val, err := r.getValueProp(item, internIndex(1))
+		if err != nil {
+			return err
+		}
+		return visit(k, val)
+	})
 }
