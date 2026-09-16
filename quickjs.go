@@ -367,7 +367,15 @@ func (r *Runtime) compileAndRegisterModule(specifier, source string) (*vm.Module
 // Imports are resolved through the loader installed with SetModuleLoader; a
 // runtime without one rejects any import. The returned value is the module's
 // namespace, through which its exports can be read.
-func (r *Runtime) EvalModule(specifier, source string) (v Value, err error) {
+func (r *Runtime) EvalModule(specifier, source string) (Value, error) {
+	return r.EvalModuleContext(context.Background(), specifier, source)
+}
+
+// EvalModuleContext is EvalModule with cancellation.
+//
+// A module can loop forever just as a script can, so a host running untrusted
+// modules needs the same bound EvalContext gives it.
+func (r *Runtime) EvalModuleContext(ctx context.Context, specifier, source string) (v Value, err error) {
 	if r.closed {
 		return Value{}, ErrClosed
 	}
@@ -375,6 +383,9 @@ func (r *Runtime) EvalModule(specifier, source string) (v Value, err error) {
 		return Value{}, ErrClosed
 	}
 	defer r.guard(&err)
+	r.rt.SetContext(ctx)
+	defer r.rt.SetContext(nil)
+
 	// The compiler callback is needed even without a loader, so that the entry
 	// point itself can be compiled.
 	r.rt.SetModuleCompiler(func(spec, src string) (*vm.Module, error) {

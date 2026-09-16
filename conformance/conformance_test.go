@@ -239,7 +239,7 @@ func runOne(suite *conformance.Suite, tc *conformance.Test) (result, string) {
 	// visible because a module's environment inherits from the global object.
 	var runErr error
 	if tc.Meta.Flags["module"] {
-		_, runErr = rt.EvalModule(tc.Path, tc.Body())
+		_, runErr = rt.EvalModuleContext(ctx, tc.Path, tc.Body())
 	} else {
 		_, runErr = rt.EvalContext(ctx, tc.Body())
 	}
