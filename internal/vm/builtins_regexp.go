@@ -316,14 +316,27 @@ func (r *Runtime) initStringRegExpMethods() {
 		// matchAll is the one that insists on the global flag, and it checks
 		// before dispatching so that a non-global regexp is refused whatever
 		// its symbol method would have done.
-		if re := arg(args, 0); re.IsObject() && re.Object().class == ClassRegExp {
-			flags, err := rt.getValueProp(re, rt.atoms.intern("flags"))
+		if re := arg(args, 0); !re.IsNullish() {
+			isRe, err := rt.isRegExp(re)
 			if err != nil {
 				return Undefined, err
 			}
-			if flags.IsString() && !strings.Contains(flags.String().Go(), "g") {
-				return Undefined, rt.throwTypeError(
-					"matchAll requires a global regular expression")
+			if isRe {
+				flags, err := rt.getValueProp(re, atomFlags)
+				if err != nil {
+					return Undefined, err
+				}
+				if flags.IsNullish() {
+					return Undefined, rt.throwTypeError("the pattern has no flags")
+				}
+				fs, err := rt.toString(flags)
+				if err != nil {
+					return Undefined, err
+				}
+				if !strings.Contains(fs.Go(), "g") {
+					return Undefined, rt.throwTypeError(
+						"matchAll requires a global regular expression")
+				}
 			}
 		}
 		return rt.dispatchStringRegExp(this, args, rt.wellKnown.matchAll, "g", nil)
@@ -352,7 +365,10 @@ func (r *Runtime) dispatchStringRegExp(this Value, args []Value, sym *Symbol,
 		if err != nil {
 			return Undefined, err
 		}
-		if isCallable(method) {
+		if !method.IsNullish() {
+			if !isCallable(method) {
+				return Undefined, r.throwTypeError("the pattern's method is not callable")
+			}
 			return r.call(method, pattern, append([]Value{this}, extra...))
 		}
 	}

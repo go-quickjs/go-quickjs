@@ -195,3 +195,83 @@ func TestRegExpSymbolReplaceIsInterruptible(t *testing.T) {
 		t.Errorf("got %v, want the deadline", err)
 	}
 }
+
+// The String methods that take a pattern ask it for its symbol method before
+// doing anything themselves, which is what lets anything act as a pattern. Who
+// gets asked, and in what order, is observable.
+func TestStringPatternDispatch(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// Only an object is asked. A primitive cannot carry the method itself,
+		// and reaching through to its wrapper prototype would let a change
+		// there rewrite every string replace in the program.
+		{`var asked = 0;
+		  Object.defineProperty(BigInt.prototype, Symbol.replace, {get() { asked++; }});
+		  "a1b1c".replaceAll(1n, "X") + "," + asked`, "aXbXc,0"},
+		{`var asked = 0;
+		  Object.defineProperty(String.prototype, Symbol.replace, {get() { asked++; }});
+		  "aba".replace("b", "X") + "," + asked`, "aXa,0"},
+
+		// An object is, and its method wins.
+		{`var o = {[Symbol.replace]: (s, r) => "from " + s};
+		  "abc".replace(o, "-")`, "from abc"},
+		{`var o = {[Symbol.split]: s => ["from", s]};
+		  "abc".split(o).join("|")`, "from|abc"},
+		{`var o = {[Symbol.match]: s => "m:" + s}; "abc".match(o)`, "m:abc"},
+
+		// A pattern presents itself as a regexp through Symbol.match, which is
+		// what the global-flag check consults -- not its class.
+		{`var o = {[Symbol.match]: true, flags: "g",
+		           [Symbol.replace]: () => "ok"};
+		  "abc".replaceAll(o, "-")`, "ok"},
+		// A real RegExp can disclaim being one.
+		{`var r = /a/; r[Symbol.match] = false; r[Symbol.replace] = () => "ok";
+		  "abc".replaceAll(r, "-")`, "ok"},
+
+		// Position arguments are clamped into the string.
+		{`["word".includes("w", 5), "word".includes("d", -1)].join(",")`, "false,true"},
+		{`["word".startsWith("", Infinity), "word".startsWith("w", -1)].join(",")`, "true,true"},
+		{`["word".endsWith("d", Infinity), "word".endsWith("", -1)].join(",")`, "true,true"},
+		{`["word".includes("or", 1), "word".includes("or", 2)].join(",")`, "true,false"},
+		{`["word".startsWith("or", 1), "word".startsWith("or", 2)].join(",")`, "true,false"},
+		{`["word".endsWith("or", 3), "word".endsWith("or", 4)].join(",")`, "true,false"},
+
+		{`"aaa".replaceAll("a", "-")`, "---"},
+		{`"aaa".replaceAll("", "-")`, "-a-a-a-"},
+		{`"".replaceAll("", "x")`, "x"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+
+	bad := []string{
+		// Present but not callable is a mistake, not an absence.
+		`"abc".replace({[Symbol.replace]: 1}, "-")`,
+		`"abc".split({[Symbol.split]: 1})`,
+		`"abc".match({[Symbol.match]: 1})`,
+		// Replacing every occurrence of a pattern that only matches once.
+		`"aaa".replaceAll(/a/, "-")`,
+		`"aaa".matchAll(/a/)`,
+		// A pattern claiming to be one but with no flags to read.
+		`"abc".replaceAll({[Symbol.match]: true, flags: null}, "-")`,
+		// The receiver is checked before the pattern is asked anything.
+		`String.prototype.replace.call(null, {get [Symbol.replace]() { throw 0; }}, "-")`,
+		`String.prototype.split.call(undefined, {get [Symbol.split]() { throw 0; }})`,
+	}
+	for _, src := range bad {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil {
+			t.Errorf("%s: accepted, want TypeError", src)
+		} else if !strings.Contains(err.Error(), "TypeError") {
+			t.Errorf("%s: got %v, want TypeError", src, err)
+		}
+		rt.Close()
+	}
+}

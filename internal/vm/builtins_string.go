@@ -231,7 +231,11 @@ func (r *Runtime) initStringBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		return Bool(s.IndexOf(needle, 0) >= 0), nil
+		from, err := rt.clampedPosition(arg(args, 1), s.Len())
+		if err != nil {
+			return Undefined, err
+		}
+		return Bool(s.IndexOf(needle, from) >= 0), nil
 	})
 
 	r.defMethod(p, "startsWith", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -239,15 +243,14 @@ func (r *Runtime) initStringBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		from := 0
-		if len(args) > 1 {
-			n, err := rt.toInteger(args[1])
-			if err != nil {
-				return Undefined, err
-			}
-			from = int(n)
+		from, err := rt.clampedPosition(arg(args, 1), s.Len())
+		if err != nil {
+			return Undefined, err
 		}
-		return Bool(s.IndexOf(needle, from) == from), nil
+		if from+needle.Len() > s.Len() {
+			return False, nil
+		}
+		return Bool(s.Substring(from, from+needle.Len()).Equals(needle)), nil
 	})
 
 	r.defMethod(p, "endsWith", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -255,13 +258,14 @@ func (r *Runtime) initStringBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
+		// The position names where the match must end rather than begin, and
+		// undefined means the end of the string rather than zero.
 		end := s.Len()
-		if len(args) > 1 && !args[1].IsUndefined() {
-			n, err := rt.toInteger(args[1])
-			if err != nil {
+		if ev := arg(args, 1); !ev.IsUndefined() {
+			var err error
+			if end, err = rt.clampedPosition(ev, s.Len()); err != nil {
 				return Undefined, err
 			}
-			end = int(n)
 		}
 		start := end - needle.Len()
 		if start < 0 {
@@ -387,6 +391,10 @@ func (r *Runtime) initStringBuiltins() {
 	})
 
 	r.defMethod(p, "split", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		if this.IsNullish() {
+			return Undefined, rt.throwTypeError(
+				"String.prototype.split called on %s", this.Kind())
+		}
 		// The separator is asked for its symbol method first, so anything can
 		// act as one.
 		if sep := arg(args, 0); !sep.IsNullish() {
@@ -394,10 +402,10 @@ func (r *Runtime) initStringBuiltins() {
 			if err != nil {
 				return Undefined, err
 			}
-			if isCallable(m) {
-				if this.IsNullish() {
+			if !m.IsNullish() {
+				if !isCallable(m) {
 					return Undefined, rt.throwTypeError(
-						"String.prototype.split called on %s", this.Kind())
+						"the separator's split method is not callable")
 				}
 				return rt.call(m, sep, []Value{this, arg(args, 1)})
 			}
@@ -550,29 +558,47 @@ func (r *Runtime) padString(thisStr thisStrFunc, this Value, args []Value, atSta
 
 // stringReplace implements replace and replaceAll for a string pattern.
 func (r *Runtime) stringReplace(thisStr thisStrFunc, this Value, args []Value, all bool) (Value, error) {
+	if this.IsNullish() {
+		return Undefined, r.throwTypeError("String.prototype.replace called on %s", this.Kind())
+	}
 	// The pattern is asked for its symbol method first, so that a subclass --
-	// or anything else -- can define how it replaces. replaceAll additionally
-	// insists on the global flag, since replacing once would silently do the
-	// wrong thing.
-	if pat := arg(args, 0); !pat.IsNullish() {
-		if all && pat.IsObject() && pat.Object().class == ClassRegExp {
-			flags, err := r.getValueProp(pat, r.atoms.intern("flags"))
+	// or anything else -- can define how it replaces. Only an object is asked:
+	// a primitive cannot carry the method itself, and reaching through to its
+	// wrapper prototype would let a change there rewrite every string replace
+	// in the program.
+	if pat := arg(args, 0); pat.IsObject() {
+		// replaceAll additionally insists on the global flag, since replacing
+		// once would silently do the wrong thing.
+		if all {
+			isRe, err := r.isRegExp(pat)
 			if err != nil {
 				return Undefined, err
 			}
-			if flags.IsString() && !strings.Contains(flags.String().Go(), "g") {
-				return Undefined, r.throwTypeError(
-					"replaceAll requires a global regular expression")
+			if isRe {
+				flags, err := r.getValueProp(pat, atomFlags)
+				if err != nil {
+					return Undefined, err
+				}
+				if flags.IsNullish() {
+					return Undefined, r.throwTypeError("the pattern has no flags")
+				}
+				fs, err := r.toString(flags)
+				if err != nil {
+					return Undefined, err
+				}
+				if !strings.Contains(fs.Go(), "g") {
+					return Undefined, r.throwTypeError(
+						"replaceAll requires a global regular expression")
+				}
 			}
 		}
 		m, err := r.getValueProp(pat, r.atoms.internSymbol(r.wellKnown.replace))
 		if err != nil {
 			return Undefined, err
 		}
-		if isCallable(m) {
-			if this.IsNullish() {
-				return Undefined, r.throwTypeError(
-					"String.prototype.replace called on %s", this.Kind())
+		if !m.IsNullish() {
+			if !isCallable(m) {
+				return Undefined, r.throwTypeError("the pattern's replace method is not callable")
 			}
 			return r.call(m, pat, []Value{this, arg(args, 1)})
 		}
@@ -690,4 +716,33 @@ const jsWhitespace = " \t\n\v\f\r" +
 // formatFixed implements Number.prototype.toFixed.
 func formatFixed(n float64, digits int) string {
 	return strconv.FormatFloat(n, 'f', digits, 64)
+}
+
+// clampedPosition narrows a position argument into a string, which is what
+// makes "word".includes("w", 5) false rather than a search from somewhere
+// outside the string.
+func (r *Runtime) clampedPosition(v Value, length int) (int, error) {
+	n, err := r.toInteger(v)
+	if err != nil {
+		return 0, err
+	}
+	return clampFloatIndex(n, length), nil
+}
+
+// isRegExp implements the IsRegExp abstract operation.
+//
+// It asks for Symbol.match rather than checking the class, so that an object
+// can present itself as a pattern -- or a real RegExp can disclaim being one.
+func (r *Runtime) isRegExp(v Value) (bool, error) {
+	if !v.IsObject() {
+		return false, nil
+	}
+	m, err := r.getValueProp(v, r.atoms.internSymbol(r.wellKnown.match))
+	if err != nil {
+		return false, err
+	}
+	if !m.IsUndefined() {
+		return m.Truthy(), nil
+	}
+	return v.Object().class == ClassRegExp, nil
 }
