@@ -162,7 +162,21 @@ func (o *Object) IsCallable() bool {
 }
 
 // IsArray reports whether the object is an ordinary array.
-func (o *Object) IsArray() bool { return o.class == ClassArray }
+func (o *Object) IsArray() bool {
+	// A proxy is an array exactly when its target is, all the way down: what
+	// Array.isArray and JSON.stringify both need to decide is whether the thing
+	// behaves like an array, not what kind of object it literally is.
+	for {
+		if o.class == ClassArray {
+			return true
+		}
+		p := proxyOf(o)
+		if p == nil {
+			return false
+		}
+		o = p.target
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Own property access

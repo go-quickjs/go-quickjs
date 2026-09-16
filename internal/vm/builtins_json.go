@@ -28,7 +28,19 @@ func (r *Runtime) initJSONBuiltins() {
 			return Undefined, err
 		}
 		enc := &jsonEncoder{rt: rt, indent: indent, seen: map[*Object]bool{}}
-		out, ok, err := enc.encode(arg(args, 0), "")
+		if err := enc.setReplacer(arg(args, 1)); err != nil {
+			return Undefined, err
+		}
+		// The value is presented to the replacer as a property of a wrapper
+		// object under the empty key, which is what gives the top-level call a
+		// holder to pass along.
+		root := newObject(rt.proto.object, ClassObject)
+		root.setOwnRaw(rt.atoms.intern(""), arg(args, 0), propDefault)
+		v, err := enc.apply(Obj(root), Str(emptyString), arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		out, ok, err := enc.encode(v, "")
 		if err != nil {
 			return Undefined, err
 		}
@@ -55,7 +67,15 @@ func (r *Runtime) initJSONBuiltins() {
 		if p.pos != len(p.src) {
 			return Undefined, rt.throwSyntaxError("unexpected trailing content in JSON at position %d", p.pos)
 		}
-		return v, nil
+		reviver := arg(args, 1)
+		if !isCallable(reviver) {
+			return v, nil
+		}
+		// The reviver walks the result bottom-up, so a nested value is already
+		// revived by the time its parent sees it.
+		root := newObject(rt.proto.object, ClassObject)
+		root.setOwnRaw(rt.atoms.intern(""), v, propDefault)
+		return rt.reviveJSON(root, Str(emptyString), reviver)
 	})
 }
 
@@ -89,22 +109,166 @@ type jsonEncoder struct {
 	indent string
 	// seen detects the cycles that would otherwise recurse forever.
 	seen map[*Object]bool
+
+	// replacer is the function form, called for every key.
+	replacer Value
+	// allowed is the array form: the property names to keep, in the order they
+	// were listed, which becomes the order of the output.
+	allowed    []Atom
+	hasAllowed bool
+}
+
+// setReplacer resolves the second argument, which is either a function called
+// for every key or a list of the keys to keep.
+func (e *jsonEncoder) setReplacer(v Value) error {
+	e.replacer = Undefined
+	if isCallable(v) {
+		e.replacer = v
+		return nil
+	}
+	if !v.IsObject() || !v.Object().IsArray() {
+		return nil
+	}
+	a, err := e.rt.viewArrayLike(v)
+	if err != nil {
+		return err
+	}
+	e.hasAllowed = true
+	seen := map[Atom]bool{}
+	for i := int64(0); i < a.n; i++ {
+		item, err := a.get(e.rt, i)
+		if err != nil {
+			return err
+		}
+		// Only strings and numbers name a property here; a Number or String
+		// wrapper counts too, which is why the check is on the unwrapped kind.
+		if item.IsObject() {
+			switch item.Object().class {
+			case ClassStringWrapper, ClassNumberWrapper:
+				item, err = e.rt.toPrimitive(item, hintString)
+				if err != nil {
+					return err
+				}
+			}
+		}
+		if !item.IsString() && !item.IsNumber() {
+			continue
+		}
+		key, err := e.rt.toPropertyKey(item)
+		if err != nil {
+			return err
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		e.allowed = append(e.allowed, key)
+	}
+	return nil
+}
+
+// apply runs toJSON and then the replacer on one value, in that order.
+func (e *jsonEncoder) apply(holder Value, key Value, v Value) (Value, error) {
+	if v.IsObject() || v.IsString() {
+		tj, err := e.rt.getValueProp(v, atomToJSON)
+		if err != nil {
+			return Undefined, err
+		}
+		if isCallable(tj) {
+			v, err = e.rt.call(tj, v, []Value{key})
+			if err != nil {
+				return Undefined, err
+			}
+		}
+	}
+	if isCallable(e.replacer) {
+		return e.rt.call(e.replacer, holder, []Value{key, v})
+	}
+	return v, nil
+}
+
+// reviveJSON walks a parsed value bottom-up, handing each entry to the reviver.
+//
+// A value the reviver returns undefined for is deleted, which is how a reviver
+// prunes what it does not want.
+func (r *Runtime) reviveJSON(holder *Object, key Value, reviver Value) (Value, error) {
+	k, err := r.toPropertyKey(key)
+	if err != nil {
+		return Undefined, err
+	}
+	val, err := r.getProp(holder, k, Obj(holder))
+	if err != nil {
+		return Undefined, err
+	}
+	if val.IsObject() {
+		o := val.Object()
+		if o.IsArray() {
+			a, err := r.viewArrayLike(val)
+			if err != nil {
+				return Undefined, err
+			}
+			for i := int64(0); i < a.n; i++ {
+				el, err := r.reviveJSON(o, Float(float64(i)), reviver)
+				if err != nil {
+					return Undefined, err
+				}
+				if el.IsUndefined() {
+					if err := a.remove(r, i); err != nil {
+						return Undefined, err
+					}
+					continue
+				}
+				if err := a.set(r, i, el); err != nil {
+					return Undefined, err
+				}
+			}
+		} else {
+			for _, pk := range o.ownKeys(false, r.atoms) {
+				if !r.isEnumerable(o, pk) {
+					continue
+				}
+				el, err := r.reviveJSON(o, r.keyToValue(pk), reviver)
+				if err != nil {
+					return Undefined, err
+				}
+				if el.IsUndefined() {
+					o.deleteOwn(pk)
+					continue
+				}
+				if err := r.defineOwnProp(o, pk, el, propDefault); err != nil {
+					return Undefined, err
+				}
+			}
+		}
+	}
+	return r.call(reviver, Obj(holder), []Value{key, val})
 }
 
 // encode renders one value, reporting false when it has no JSON form.
 func (e *jsonEncoder) encode(v Value, prefix string) (string, bool, error) {
-	// A toJSON method replaces the value entirely.
-	if v.IsObject() || v.IsString() {
-		tj, err := e.rt.getValueProp(v, atomToJSON)
-		if err != nil {
-			return "", false, err
-		}
-		if isCallable(tj) {
-			res, err := e.rt.call(tj, v, nil)
+	// toJSON and the replacer have already run: apply does both, and does it
+	// before the value is inspected, so that what they return is what gets
+	// encoded.
+	//
+	// A wrapper object stands for its primitive, which is what makes
+	// JSON.stringify(new Number(1)) produce 1 rather than {}.
+	if v.IsObject() {
+		switch v.Object().class {
+		case ClassNumberWrapper:
+			n, err := e.rt.toNumber(v)
 			if err != nil {
 				return "", false, err
 			}
-			v = res
+			v = Float(n)
+		case ClassStringWrapper:
+			sv, err := e.rt.toString(v)
+			if err != nil {
+				return "", false, err
+			}
+			v = Str(sv)
+		case ClassBooleanWrapper:
+			b, _ := v.Object().data.(bool)
+			v = Bool(b)
 		}
 	}
 
@@ -150,14 +314,22 @@ func (e *jsonEncoder) encode(v Value, prefix string) (string, bool, error) {
 	}
 
 	if o.IsArray() {
-		if len(o.elems) == 0 {
+		a, err := e.rt.viewArrayLike(v)
+		if err != nil {
+			return "", false, err
+		}
+		if a.n == 0 {
 			return "[]", true, nil
 		}
-		parts := make([]string, 0, len(o.elems))
-		for _, el := range o.elems {
-			if isHole(el) {
-				parts = append(parts, "null")
-				continue
+		parts := make([]string, 0, a.n)
+		for i := int64(0); i < a.n; i++ {
+			el, err := a.get(e.rt, i)
+			if err != nil {
+				return "", false, err
+			}
+			el, err = e.apply(v, Float(float64(i)), el)
+			if err != nil {
+				return "", false, err
 			}
 			s, ok, err := e.encode(el, inner)
 			if err != nil {
@@ -173,12 +345,40 @@ func (e *jsonEncoder) encode(v Value, prefix string) (string, bool, error) {
 		return "[" + open + strings.Join(parts, sep) + close + "]", true, nil
 	}
 
-	var parts []string
-	for _, k := range o.ownKeys(false, e.rt.atoms) {
-		if !e.rt.isEnumerable(o, k) {
-			continue
+	// An explicit key list fixes both which properties appear and their order;
+	// otherwise the object's own enumerable string keys are used.
+	keys := e.allowed
+	if !e.hasAllowed {
+		keys = nil
+		var own []Atom
+		if p := proxyOf(o); p != nil {
+			// A proxy's keys come from its ownKeys trap, which the plain
+			// property table would not reflect.
+			var err error
+			if own, err = e.rt.proxyOwnKeys(p); err != nil {
+				return "", false, err
+			}
+		} else {
+			own = o.ownKeys(false, e.rt.atoms)
 		}
+		for _, k := range own {
+			if e.rt.atoms.symbol(k) != nil {
+				continue
+			}
+			if !e.rt.isEnumerable(o, k) {
+				continue
+			}
+			keys = append(keys, k)
+		}
+	}
+
+	var parts []string
+	for _, k := range keys {
 		val, err := e.rt.getProp(o, k, v)
+		if err != nil {
+			return "", false, err
+		}
+		val, err = e.apply(v, e.rt.keyToValue(k), val)
 		if err != nil {
 			return "", false, err
 		}

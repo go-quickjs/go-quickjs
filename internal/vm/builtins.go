@@ -413,6 +413,16 @@ func (r *Runtime) classTag(o *Object) string {
 
 // isEnumerable reports whether a key is an enumerable own property.
 func (r *Runtime) isEnumerable(o *Object, key Atom) bool {
+	// A proxy answers through its getOwnPropertyDescriptor trap; reading the
+	// property table would see the proxy object itself, which has none.
+	if p := proxyOf(o); p != nil {
+		desc, err := r.proxyGetOwnPropertyDescriptor(p, key)
+		if err != nil || !desc.IsObject() {
+			return false
+		}
+		v, err := r.getValueProp(desc, atomEnumerable)
+		return err == nil && v.Truthy()
+	}
 	if key.IsIndex() {
 		if _, ok := o.getElem(key.Index()); ok {
 			return true
