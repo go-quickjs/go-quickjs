@@ -72,7 +72,14 @@ func (r *Runtime) callObject(o *Object, this Value, args []Value, newTarget Valu
 			return Undefined, r.throwRangeError("maximum call stack size exceeded")
 		}
 		// A native frame is pushed so that stack traces include it.
-		r.frames = append(r.frames, frame{native: fd.name, this: this})
+		f := r.pushFrame()
+		f.cl = nil
+		f.native = fd.name
+		f.this = this
+		f.callee = o
+		f.args = args
+		f.handlers = f.handlers[:0]
+		f.openUpvalues = f.openUpvalues[:0]
 		v, err := fd.native(r, this, args)
 		r.frames = r.frames[:len(r.frames)-1]
 		return v, err
@@ -134,20 +141,32 @@ func (r *Runtime) run(cl *closure, this Value, args []Value, newTarget Value, ca
 	r.stackTop = base + need
 
 	locals := r.stack[base : base+fn.LocalCount : base+fn.LocalCount]
-	// Locals must start clear: the window was last used by an unrelated frame.
-	clear(locals)
+	// Locals must start clear, since the window was last used by an unrelated
+	// frame and a stale value could be read by a binding whose declaration was
+	// never reached. The parameter slots are skipped because bindParameters
+	// overwrites every one of them immediately below; clearing a Value costs a
+	// write barrier, so the saving is real.
+	if n := fn.ParamCount; n < len(locals) {
+		clear(locals[n:])
+	}
 
-	r.frames = append(r.frames, frame{
-		cl:        cl,
-		locals:    locals,
-		base:      base + fn.LocalCount,
-		this:      this,
-		newTarget: newTarget,
-		callee:    callee,
-		argc:      len(args),
-		args:      args,
-	})
-	f := &r.frames[len(r.frames)-1]
+	f := r.pushFrame()
+	// The fields are assigned rather than the struct replaced, so that the
+	// handler and upvalue slices keep their backing arrays across calls. A
+	// frame is large enough that copying a fresh one, and reallocating those
+	// slices, showed up in the profile.
+	f.cl = cl
+	f.locals = locals
+	f.base = base + fn.LocalCount
+	f.pc = 0
+	f.this = this
+	f.newTarget = newTarget
+	f.callee = callee
+	f.args = args
+	f.openUpvalues = f.openUpvalues[:0]
+	f.handlers = f.handlers[:0]
+	f.native = ""
+	f.savedSP = 0
 
 	if err := r.bindParameters(f, fn, args); err != nil {
 		r.popFrame(base)
@@ -159,16 +178,36 @@ func (r *Runtime) run(cl *closure, this Value, args []Value, newTarget Value, ca
 	return v, err
 }
 
+// pushFrame extends the call stack by one and returns the new frame.
+//
+// The slice is resliced rather than appended to. Its capacity is fixed at
+// construction, so this can never reallocate -- which matters because the
+// interpreter holds a *frame across nested calls, and a reallocation would
+// silently leave those pointers aimed at the abandoned array.
+//
+// Reslicing also means the frame left behind at this depth keeps its handler
+// and upvalue slices, whose backing arrays the next call reuses.
+func (r *Runtime) pushFrame() *frame {
+	r.frames = r.frames[:len(r.frames)+1]
+	return &r.frames[len(r.frames)-1]
+}
+
 // popFrame releases a frame's stack window, closing any upvalues that pointed
 // into its locals so that closures created inside it keep working.
+//
+// The window is deliberately left dirty. Clearing it on the way out was the
+// single largest cost in the interpreter -- it doubled the zeroing work per
+// call, since the next frame to use the region clears its locals on entry
+// anyway. Nothing can read the stale values: locals are cleared before use, and
+// the compiler guarantees every operand slot is written before it is read.
+//
+// The cost is that values stay reachable from the stack until their slots are
+// reused, which delays collection but is bounded by the stack size.
 func (r *Runtime) popFrame(base int) {
 	f := &r.frames[len(r.frames)-1]
 	for _, u := range f.openUpvalues {
 		u.close()
 	}
-	// Clear the window so that the values it held can be collected rather than
-	// being pinned until the slots are reused.
-	clear(r.stack[base:r.stackTop])
 	r.stackTop = base
 	r.frames = r.frames[:len(r.frames)-1]
 }
@@ -238,10 +277,17 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 	}
 
 	for {
-		if err := r.checkInterrupt(); err != nil {
-			// An interrupt is the host stopping the script rather than a
-			// JavaScript exception, so it is not catchable.
-			return Undefined, err
+		// The cancellation check happens on every instruction, so the counter
+		// is decremented inline and only the rare expiry is a call. Reading a
+		// context's Done channel per instruction would dominate the loop, and
+		// so, measurably, did calling even a trivial helper.
+		r.interruptCounter--
+		if r.interruptCounter <= 0 {
+			if err := r.checkInterruptNow(); err != nil {
+				// An interrupt is the host stopping the script rather than a
+				// JavaScript exception, so it is not catchable.
+				return Undefined, err
+			}
 		}
 
 		in = code[f.pc]

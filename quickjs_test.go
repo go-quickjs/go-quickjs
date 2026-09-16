@@ -1723,3 +1723,37 @@ func TestImportIsRejectedInAScript(t *testing.T) {
 		t.Error("an import declaration should be rejected in script code")
 	}
 }
+
+func TestDeepRecursionDoesNotCorruptFrames(t *testing.T) {
+	// The interpreter holds a pointer to its frame across nested calls, so the
+	// frame stack must never be reallocated underneath it. A recursion deeper
+	// than any plausible initial capacity is what would expose that.
+	rt := quickjs.New(quickjs.WithMaxCallDepth(4000))
+	defer rt.Close()
+
+	v, err := rt.Eval(`
+		function down(n) { return n === 0 ? 0 : 1 + down(n - 1); }
+		down(2000)`)
+	if err != nil {
+		t.Fatalf("deep recursion failed: %v", err)
+	}
+	if v.Int() != 2000 {
+		t.Errorf("down(2000) = %d, want 2000", v.Int())
+	}
+}
+
+func TestDeepRecursionUnwindsCorrectly(t *testing.T) {
+	// Each frame must resume at the right instruction after the one above it
+	// returns, which a stale frame pointer would break.
+	rt := quickjs.New(quickjs.WithMaxCallDepth(4000))
+	defer rt.Close()
+	v, err := rt.Eval(`
+		function sum(n) { if (n === 0) return 0; const rest = sum(n - 1); return n + rest; }
+		sum(1000)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Int() != 500500 {
+		t.Errorf("sum(1000) = %d, want 500500", v.Int())
+	}
+}

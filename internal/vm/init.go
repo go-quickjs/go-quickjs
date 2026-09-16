@@ -31,9 +31,13 @@ func New(cfg Config) *Runtime {
 	}
 
 	r := &Runtime{
-		atoms:            newAtomTable(),
-		stack:            make([]Value, stackSize),
-		frames:           make([]frame, 0, 64),
+		atoms: newAtomTable(),
+		stack: make([]Value, stackSize),
+		// The frame stack is allocated at its full size and never grown, for
+		// the same reason the value stack is: the interpreter holds a *frame
+		// across nested calls, and a reallocation would leave those pointers
+		// aimed at the old array. Exhausting it is the call depth limit.
+		frames:           make([]frame, 0, maxFrames),
 		maxFrames:        maxFrames,
 		memoryLimit:      cfg.MemoryLimit,
 		interruptCounter: interruptCheckInterval,

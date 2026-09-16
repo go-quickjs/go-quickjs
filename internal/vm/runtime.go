@@ -192,9 +192,8 @@ type frame struct {
 	// callee is the function object being executed, which a named function
 	// expression refers to by its own name.
 	callee *Object
-	// argc is the number of arguments actually passed, which `arguments` and
-	// the rest parameter both need.
-	argc int
+	// args is the argument list as passed, which `arguments` and the rest
+	// parameter both read.
 	args []Value
 
 	// openUpvalues lists the upvalues that point into this frame's locals and
@@ -416,6 +415,15 @@ func (r *Runtime) checkInterrupt() error {
 	if r.interruptCounter > 0 {
 		return nil
 	}
+	return r.checkInterruptNow()
+}
+
+// checkInterruptNow performs the actual check and rearms the counter.
+//
+// It is separate from the decrement so that the interpreter can inline the
+// counter into its loop and call this only when it expires. The select is what
+// makes it unsuitable for inlining.
+func (r *Runtime) checkInterruptNow() error {
 	r.interruptCounter = interruptCheckInterval
 	if r.ctx == nil {
 		return nil

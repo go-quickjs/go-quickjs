@@ -1,6 +1,7 @@
 package conformance_test
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-quickjs/go-quickjs"
 	"github.com/go-quickjs/go-quickjs/conformance"
@@ -30,6 +32,8 @@ var (
 		"restrict the run to a comma-separated list of directories under test/")
 	maxFailures = flag.Int("conformance.max-failures", 40,
 		"how many failures to print before summarizing")
+	testTimeout = flag.Duration("conformance.timeout", 5*time.Second,
+		"how long any one test may run before being counted as a timeout")
 )
 
 // result is the outcome of one test.
@@ -214,13 +218,22 @@ func runOne(suite *conformance.Suite, tc *conformance.Test) (result, string) {
 	var printed []string
 	rt.Set("print", func(s string) { printed = append(printed, s) })
 
+	// Some tests loop for a very long time, and a few loop forever. The
+	// context bounds every one of them, which is the same mechanism a host
+	// would use and exercises it thoroughly as a side effect.
+	ctx, cancel := context.WithTimeout(context.Background(), *testTimeout)
+	defer cancel()
+
 	if prelude != "" {
-		if _, err := rt.Eval(prelude); err != nil {
+		if _, err := rt.EvalContext(ctx, prelude); err != nil {
 			return resultFail, "harness failed: " + summarize(err)
 		}
 	}
 
-	_, runErr := rt.Eval(tc.Body())
+	_, runErr := rt.EvalContext(ctx, tc.Body())
+	if runErr != nil && errors.Is(runErr, context.DeadlineExceeded) {
+		return resultFail, "timed out"
+	}
 
 	if neg := tc.Meta.Negative; neg != nil {
 		if runErr == nil {

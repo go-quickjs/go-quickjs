@@ -175,7 +175,8 @@ func (r *Runtime) resume(g *generator, sent Value, mode resumeMode) (Value, bool
 	copy(r.stack[base:], g.stack)
 	sp := base + len(g.stack)
 
-	r.frames = append(r.frames, frame{
+	gf := r.pushFrame()
+	*gf = frame{
 		cl:           g.cl,
 		locals:       g.locals,
 		base:         base,
@@ -183,12 +184,11 @@ func (r *Runtime) resume(g *generator, sent Value, mode resumeMode) (Value, bool
 		this:         g.this,
 		newTarget:    g.newTarget,
 		callee:       g.callee,
-		argc:         len(g.args),
 		args:         g.args,
 		handlers:     g.handlers,
 		openUpvalues: g.openUpvalues,
-	})
-	f := &r.frames[len(r.frames)-1]
+	}
+	f := gf
 
 	if g.state == genSuspendedYield {
 		// The value sent in becomes the result of the yield expression that
