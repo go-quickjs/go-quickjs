@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // Test is one test262 case with its metadata resolved.
@@ -65,8 +66,10 @@ type Negative struct {
 type Suite struct {
 	Root string
 	// harness caches the harness files, which every test includes and which
-	// would otherwise be re-read tens of thousands of times.
-	harness map[string]string
+	// would otherwise be re-read tens of thousands of times. The mutex is
+	// there because the runner works through the suite on several goroutines.
+	harnessMu sync.Mutex
+	harness   map[string]string
 }
 
 // Open locates a test262 checkout.
@@ -100,14 +103,19 @@ func isSuiteRoot(dir string) bool {
 
 // Harness returns the contents of a harness file.
 func (s *Suite) Harness(name string) (string, error) {
-	if src, ok := s.harness[name]; ok {
+	s.harnessMu.Lock()
+	src, ok := s.harness[name]
+	s.harnessMu.Unlock()
+	if ok {
 		return src, nil
 	}
 	b, err := os.ReadFile(filepath.Join(s.Root, "harness", name))
 	if err != nil {
 		return "", err
 	}
+	s.harnessMu.Lock()
 	s.harness[name] = string(b)
+	s.harnessMu.Unlock()
 	return string(b), nil
 }
 

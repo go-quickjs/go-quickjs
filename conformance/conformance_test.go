@@ -8,8 +8,11 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -110,14 +113,43 @@ func TestConformance(t *testing.T) {
 	}
 	t.Logf("loaded %d test variants from %s", len(tests), suite.Root)
 
+	// The tests are independent -- each gets its own Runtime, and a Runtime
+	// shares nothing with another -- so they are run on as many goroutines as
+	// there are cores. Serially the suite takes over an hour, which is long
+	// enough that nobody measures before committing.
+	type outcome struct {
+		res    result
+		reason string
+	}
+	outcomes := make([]outcome, len(tests))
+	next := int64(-1)
+	var wg sync.WaitGroup
+	for w := 0; w < runtime.NumCPU(); w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				i := int(atomic.AddInt64(&next, 1))
+				if i >= len(tests) {
+					return
+				}
+				res, reason := runOne(suite, tests[i])
+				outcomes[i] = outcome{res, reason}
+			}
+		}()
+	}
+	wg.Wait()
+
 	var (
 		pass, fail, skip int
 		failures         []string
 		byArea           = map[string]*areaStats{}
 	)
 
-	for _, tc := range tests {
-		res, reason := runOne(suite, tc)
+	// The tally is done afterwards and in order, so that the report reads the
+	// same however the work was divided.
+	for i, tc := range tests {
+		res, reason := outcomes[i].res, outcomes[i].reason
 		area := areaOf(tc.Path)
 		st := byArea[area]
 		if st == nil {
