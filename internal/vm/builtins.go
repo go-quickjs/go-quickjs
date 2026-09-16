@@ -1779,3 +1779,98 @@ func (r *Runtime) random() float64 {
 	}
 	return r.rng.Float64()
 }
+
+// initArrayExtras defines the array methods that take a relative index or are
+// otherwise recent additions.
+func (r *Runtime) initArrayExtras() {
+	p := r.proto.array
+
+	r.defMethod(p, "at", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		o, err := rt.toObject(this)
+		if err != nil {
+			return Undefined, err
+		}
+		i, err := rt.toInteger(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		// A negative index counts back from the end.
+		if i < 0 {
+			i += float64(len(o.elems))
+		}
+		if i < 0 || i >= float64(len(o.elems)) {
+			return Undefined, nil
+		}
+		v := o.elems[int(i)]
+		if isHole(v) {
+			return Undefined, nil
+		}
+		return v, nil
+	})
+
+	r.defMethod(p, "lastIndexOf", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		o, err := rt.toObject(this)
+		if err != nil {
+			return Undefined, err
+		}
+		target := arg(args, 0)
+		for i := len(o.elems) - 1; i >= 0; i-- {
+			if !isHole(o.elems[i]) && o.elems[i].StrictEquals(target) {
+				return Int(i), nil
+			}
+		}
+		return Int(-1), nil
+	})
+
+	r.defMethod(p, "fill", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		o, err := rt.toObject(this)
+		if err != nil {
+			return Undefined, err
+		}
+		v := arg(args, 0)
+		start, err := rt.relativeIndex(arg(args, 1), len(o.elems), 0)
+		if err != nil {
+			return Undefined, err
+		}
+		end, err := rt.relativeIndex(arg(args, 2), len(o.elems), len(o.elems))
+		if err != nil {
+			return Undefined, err
+		}
+		for i := start; i < end; i++ {
+			o.elems[i] = v
+		}
+		return this, nil
+	})
+
+	r.defMethod(p, "flat", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		o, err := rt.toObject(this)
+		if err != nil {
+			return Undefined, err
+		}
+		depth := 1.0
+		if d := arg(args, 0); !d.IsUndefined() {
+			depth, err = rt.toInteger(d)
+			if err != nil {
+				return Undefined, err
+			}
+		}
+		out := rt.flatten(o.elems, int(depth))
+		return Obj(rt.newArrayFrom(out)), nil
+	})
+}
+
+// flatten appends the elements of nested arrays up to the given depth.
+func (r *Runtime) flatten(elems []Value, depth int) []Value {
+	var out []Value
+	for _, el := range elems {
+		if isHole(el) {
+			continue
+		}
+		if depth > 0 && el.IsObject() && el.Object().IsArray() {
+			out = append(out, r.flatten(el.Object().elems, depth-1)...)
+			continue
+		}
+		out = append(out, el)
+	}
+	return out
+}

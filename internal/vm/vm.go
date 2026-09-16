@@ -989,11 +989,21 @@ func (r *Runtime) makeClosure(f *frame, c Value) *Object {
 	}
 
 	o := newObject(r.proto.function, ClassFunction)
+	kind := ctorKindOf(tmpl.fn)
 	o.data = &funcData{
 		closure:  child,
 		name:     tmpl.fn.Name,
 		length:   tmpl.fn.ParamCount,
-		ctorKind: ctorKindOf(tmpl.fn),
+		ctorKind: kind,
+	}
+
+	// A constructible function carries a fresh .prototype object, which is what
+	// `new` gives the instance and where a class hangs its methods. An arrow or
+	// a method is not constructible and does not get one.
+	if kind != ctorNone {
+		proto := newObject(r.proto.object, ClassObject)
+		proto.setOwnRaw(atomConstructor, Obj(o), propWritable|propConfigurable)
+		o.setOwnRaw(atomPrototype, Obj(proto), propWritable)
 	}
 	return o
 }

@@ -193,6 +193,7 @@ func (r *Runtime) initGlobals() {
 	r.initObjectBuiltins()
 	r.initFunctionBuiltins()
 	r.initArrayBuiltins()
+	r.initArrayExtras()
 	r.initStringBuiltins()
 	r.initNumberBuiltins()
 	r.initBooleanBuiltins()

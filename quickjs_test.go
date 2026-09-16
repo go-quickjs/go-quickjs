@@ -1011,3 +1011,39 @@ func BenchmarkCallGoFunction(b *testing.B) {
 		}
 	}
 }
+
+func TestClasses(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`class A { constructor(x) { this.x = x; } } new A(5).x`, "5"},
+		{`class A { m() { return 3; } } new A().m()`, "3"},
+		{`class A { get v() { return 7; } } new A().v`, "7"},
+		{`class A { set v(n) { this.n = n; } } const a = new A(); a.v = 4; a.n`, "4"},
+		{`class A { static s() { return 8; } } A.s()`, "8"},
+		// Methods live on the prototype, so they are shared between instances.
+		{`class A { m() {} } const a = new A(), b = new A(); a.m === b.m`, "true"},
+		{`class A {} new A() instanceof A`, "true"},
+		{`class A {} Object.getPrototypeOf(new A()) === A.prototype`, "true"},
+		{`class A { constructor() { this.v = 1; } } new A().constructor === A`, "true"},
+		// A class expression may be anonymous.
+		{`const C = class { m() { return 2; } }; new C().m()`, "2"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}
+
+func TestConstructorReturningObjectOverridesThis(t *testing.T) {
+	// A constructor that returns an object replaces the newly created one;
+	// returning anything else is ignored.
+	checkEval(t, `function F() { this.a = 1; return {a: 2}; } new F().a`, "2")
+	checkEval(t, `function F() { this.a = 1; return 5; } new F().a`, "1")
+}
+
+func TestPrototypeChain(t *testing.T) {
+	checkEval(t, `
+		function Base() {}
+		Base.prototype.greet = function() { return "hi"; };
+		function Derived() {}
+		Derived.prototype = Object.create(Base.prototype);
+		new Derived().greet()`, "hi")
+}

@@ -331,6 +331,8 @@ func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
 		}
 	}
 	if ctor == nil {
+		// A class with no explicit constructor still has one; it simply does
+		// nothing.
 		ctor = &ast.FuncLit{Kind: ast.FuncConstructor, Start: cls.Start}
 	}
 	ctorLit := *ctor
