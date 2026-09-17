@@ -338,3 +338,53 @@ func TestArrayIterationRespectsTheProtocol(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// An object pattern reads properties from its source, so the source has to be
+// something properties can be read from -- and that is checked before any of
+// them are, which is the only thing an empty pattern does.
+func TestObjectPatternRequiresCoercible(t *testing.T) {
+	bad := []string{
+		`var {} = null`,
+		`var {} = undefined`,
+		`var {a} = null`,
+		`var {a} = undefined`,
+		`({} = null)`,
+		`function f({}) {} f(null)`,
+		`function f({} = null) {} f()`,
+		`function* g({} = null) {} g()`,
+		`var C = class { m({} = null) {} }; C.prototype.m()`,
+		`var C = class { *m({} = null) {} }; C.prototype.m()`,
+		`var {a: {b}} = {a: null}`,
+		`for (var {} of [null]) {}`,
+		`try { throw null } catch ({}) {}`,
+	}
+	for _, src := range bad {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil {
+			t.Errorf("%s: accepted, want TypeError", src)
+		} else if !strings.Contains(err.Error(), "TypeError") {
+			t.Errorf("%s: got %v, want TypeError", src, err)
+		}
+		rt.Close()
+	}
+
+	cases := []struct{ src, want string }{
+		{`var {} = {}; "ok"`, "ok"},
+		{`var {a} = {a: 1}; String(a)`, "1"},
+		// A primitive that is coercible reads through its wrapper.
+		{`var {length} = "abc"; String(length)`, "3"},
+		{`var {constructor} = 5; String(constructor === Number)`, "true"},
+		{`var {a, ...r} = {a: 1, b: 2}; JSON.stringify(r)`, `{"b":2}`},
+		{`var {a = 5} = {}; String(a)`, "5"},
+	}
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

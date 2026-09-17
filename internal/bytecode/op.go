@@ -255,6 +255,7 @@ const (
 	// how a named function expression refers to itself.
 	OpPushCallee
 	OpToObject
+	OpCheckCoercible // throw if the value on top is null or undefined
 	OpToPropertyKey
 	OpToNumber
 	OpToString
@@ -361,8 +362,9 @@ var opNames = [opCount]string{
 	OpGetSuperProp: "get_super_prop", OpGetSuperIndex: "get_super_index",
 	OpSetSuperProp: "set_super_prop", OpSetSuperIndex: "set_super_index",
 	OpNewTarget: "new_target", OpPushCallee: "push_callee",
-	OpToObject:      "to_object",
-	OpToPropertyKey: "to_property_key", OpToNumber: "to_number",
+	OpToObject:       "to_object",
+	OpCheckCoercible: "check_coercible",
+	OpToPropertyKey:  "to_property_key", OpToNumber: "to_number",
 	OpToString: "to_string", OpWithPush: "with_push", OpWithPop: "with_pop",
 	OpSetName: "set_name", OpSetHomeObject: "set_home_object",
 	OpCheckCtorReturn: "check_ctor_return", OpCheckThisInit: "check_this_init",

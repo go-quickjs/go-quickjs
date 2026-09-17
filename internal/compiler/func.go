@@ -314,6 +314,10 @@ func (c *compiler) compileArrayPattern(pat *ast.ArrayPattern, kind ast.DeclKind,
 
 // compileObjectPattern unpacks an object pattern.
 func (c *compiler) compileObjectPattern(pat *ast.ObjectPattern, kind ast.DeclKind, declaring bool) {
+	// The source has to be something properties can be read from, and that is
+	// checked before any of them are -- which is the only thing an empty
+	// pattern does, and why `var {} = null` is an error at all.
+	c.emit(bytecode.OpCheckCoercible, 0, 0)
 	for _, p := range pat.Props {
 		c.emit(bytecode.OpDup, 0, 0)
 		if p.Computed {
@@ -473,10 +477,18 @@ func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
 		} else {
 			c.emit(bytecode.OpPushUndef, 0, 0)
 		}
-		if f.Computed {
+		switch {
+		case f.Computed:
 			c.emit(bytecode.OpDefineIndex, 0, 0)
-		} else {
-			c.emit(bytecode.OpDefineField, c.nameIdx(propKeyName(f.Key)), 0)
+		default:
+			if pn, private := f.Key.(*ast.PrivateName); private {
+				// A private field is hidden from every reflective operation,
+				// static or not, which the define instruction records rather
+				// than the attributes.
+				c.emit(bytecode.OpDefinePrivate, c.nameIdx("#"+pn.Name), 0)
+			} else {
+				c.emit(bytecode.OpDefineField, c.nameIdx(propKeyName(f.Key)), 0)
+			}
 		}
 		c.emit(bytecode.OpDrop, 0, 0)
 	}

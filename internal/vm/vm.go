@@ -1029,6 +1029,11 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 
 		// --- Conversions --------------------------------------------------
+		case bytecode.OpCheckCoercible:
+			if v := peek(0); v.IsNullish() {
+				vmErr = r.throwTypeError("cannot destructure %s", r.describe(v))
+				goto onError
+			}
 		case bytecode.OpToObject:
 			o, err := r.toObject(pop())
 			if err != nil {
