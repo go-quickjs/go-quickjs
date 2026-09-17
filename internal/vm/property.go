@@ -608,6 +608,14 @@ func (r *Runtime) deleteProp(o *Object, key Atom, strict bool) (bool, error) {
 			return true, nil
 		}
 	}
+	// A property a class synthesizes rather than stores cannot be removed: an
+	// array's length and a string wrapper's characters are all there for as
+	// long as the object is.
+	if (o.class == ClassArray && key == atomLength) ||
+		(o.class == ClassStringWrapper && r.hasExoticOwn(o, key)) {
+		return false, r.assignFailed(key, strict,
+			"cannot delete non-configurable property %q")
+	}
 	if key.IsIndex() {
 		i := key.Index()
 		if int(i) < len(o.elems) && !isHole(o.elems[i]) {

@@ -255,3 +255,54 @@ func TestSearchMethodsRefuseARegExp(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
 	}
 }
+
+// lastIndexOf converts its starting point after the search string, and counts
+// from it backwards: what it finds is the last occurrence starting at or before
+// that index.
+func TestLastIndexOfPosition(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`String("canal".lastIndexOf("a"))`, "3"},
+		{`String("canal".lastIndexOf("a", 2))`, "1"},
+		{`String("canal".lastIndexOf("a", 0))`, "-1"},
+		{`String("canal".lastIndexOf("x"))`, "-1"},
+		// undefined becomes NaN, which means the end rather than the start.
+		{`String("canal".lastIndexOf("a", undefined))`, "3"},
+		{`String("canal".lastIndexOf("a", NaN))`, "3"},
+		{`String("canal".lastIndexOf("a", -1))`, "-1"},
+		{`String("canal".lastIndexOf("a", Infinity))`, "3"},
+		{`String("abab".lastIndexOf(""))`, "4"},
+		{`String("abab".lastIndexOf("", 2))`, "2"},
+		// The search string is converted first, so its toString runs before
+		// the position's valueOf.
+		{`var order = []
+		  var a = {toString: function () { order.push("search"); return "a" }}
+		  var b = {valueOf: function () { order.push("position"); return 0 }}
+		  "canal".lastIndexOf(a, b); order.join()`, "search,position"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// A property a class synthesizes rather than stores cannot be deleted: it is
+// there for as long as the object is.
+func TestDeleteSynthesizedProperties(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`String(Reflect.deleteProperty(new String("str"), "length"))`, "false"},
+		{`String(Reflect.deleteProperty(new String("str"), "0"))`, "false"},
+		// One that names no character is absent already, so it goes.
+		{`String(Reflect.deleteProperty(new String("str"), "5"))`, "true"},
+		{`String(Reflect.deleteProperty([], "length"))`, "false"},
+		// An element is a property like any other, and deleting it leaves a
+		// hole rather than shortening the array.
+		{`var a = [1, 2]; String(delete a[0]) + "," + a.length + "," + (0 in a)`,
+			"true,2,false"},
+		{`var o = {}; String(delete o.missing)`, "true"},
+		{`(function () { "use strict"
+		  try { delete new String("x")[0]; return "no error" }
+		  catch (e) { return e.constructor.name } })()`, "TypeError"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

@@ -214,10 +214,28 @@ func (r *Runtime) initStringBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
+		// The starting point is converted after the search string, and NaN --
+		// which is what undefined becomes -- means the end of the string
+		// rather than the beginning.
+		end := s.Len()
+		if len(args) > 1 {
+			n, err := rt.toNumber(args[1])
+			if err != nil {
+				return Undefined, err
+			}
+			if !math.IsNaN(n) {
+				switch {
+				case n < 0:
+					end = 0
+				case n < float64(end):
+					end = int(n)
+				}
+			}
+		}
 		best := -1
-		for i := 0; ; {
+		for i := 0; i <= end; {
 			at := s.IndexOf(needle, i)
-			if at < 0 {
+			if at < 0 || at > end {
 				break
 			}
 			best = at
