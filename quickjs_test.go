@@ -1112,7 +1112,10 @@ func TestArgumentsObject(t *testing.T) {
 func TestTryFinally(t *testing.T) {
 	tests := []struct{ src, want string }{
 		{`let x = 0; try { x = 1; } finally { x = 2; } x`, "2"},
-		{`try { 1 } finally { 2 }`, "2"},
+		// The try block's value is the statement's; a finally clause runs for
+		// its effects and its value is discarded.
+		{`try { 1 } finally { 2 }`, "1"},
+		{`1; try { } finally { 2 }`, "undefined"},
 		{`let x = 0; try { throw 1 } catch (e) { x = e } finally { x += 10 } x`, "11"},
 		// The finally runs before the function returns, and does not change
 		// the returned value.

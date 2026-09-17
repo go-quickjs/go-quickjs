@@ -693,7 +693,10 @@ func (c *varCollector) nested(s ast.Stmt) {
 func (c *varCollector) shadowed(name string) bool {
 	for _, scope := range c.lexical {
 		for i := range scope {
-			if scope[i].name == name {
+			// A block function declaration binds the name lexically too, but
+			// it is the declaration being hoisted rather than something in its
+			// way.
+			if scope[i].name == name && !scope[i].fromFunc {
 				return true
 			}
 		}

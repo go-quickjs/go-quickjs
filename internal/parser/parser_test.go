@@ -402,10 +402,20 @@ func TestReturnOutsideFunctionIsAnError(t *testing.T) {
 }
 
 func TestDeclarationCannotBeStatementBody(t *testing.T) {
-	checkError(t, "if (a) let x = 1;", "cannot be the body")
 	checkError(t, "if (a) const x = 1;", "cannot be the body")
 	checkError(t, "if (a) class X {}", "cannot be the body")
-	checkError(t, "while (a) let x = 1;", "cannot be the body")
+	checkError(t, "if (a) let [x] = y;", "cannot be the body")
+	// A lexical declaration has no scope to bind into here, so `let` is an
+	// ordinary identifier and what follows it is the error. That is what lets
+	// `if (a) let\nx = 1` be two statements rather than a syntax error.
+	checkError(t, "if (a) let x = 1;", "expected ';'")
+	checkError(t, "while (a) let x = 1;", "expected ';'")
+	// A generator or an async function is never a statement's body: Annex B's
+	// allowance is for a plain function declaration and nothing else.
+	checkError(t, "if (a) function* g() {}", "cannot be the body")
+	checkError(t, "if (a) async function f() {}", "cannot be the body")
+	checkError(t, "l: function* g() {}", "cannot be labelled")
+	checkError(t, "l: async function f() {}", "cannot be labelled")
 	// Sloppy mode permits a function declaration as an if branch, and Annex B
 	// defines it as a block containing the declaration -- which is what gives
 	// it the hoisting a bare declaration in that position would not have.

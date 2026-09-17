@@ -72,6 +72,10 @@ type parser struct {
 	// sawUseStrict records whether the directive prologue just parsed carried
 	// a "use strict" of its own.
 	sawUseStrict bool
+	// noLetDeclaration marks a position where a lexical declaration is not a
+	// legal statement, so that `let` there is an ordinary identifier rather
+	// than the start of one.
+	noLetDeclaration bool
 	// noLabelledFunction marks the positions where a label may not be put on a
 	// function declaration: the body of an if or a loop, where a declaration
 	// has no scope to bind into.

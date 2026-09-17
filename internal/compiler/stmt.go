@@ -1,6 +1,8 @@
 package compiler
 
 import (
+	"fmt"
+
 	"github.com/go-quickjs/go-quickjs/internal/ast"
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
@@ -132,6 +134,20 @@ func (c *compiler) markUninitialized(name string) {
 	}
 }
 
+// resetCompletion sets the program's completion value to undefined, which the
+// control-flow statements do before they run.
+//
+// They report undefined rather than nothing when their body produces no value,
+// which is what makes `1; if (false) {}` undefined rather than 1 -- unlike a
+// block or an empty statement, which produce nothing and leave the value alone.
+func (c *compiler) resetCompletion() {
+	if c.completionSlot < 0 {
+		return
+	}
+	c.emit(bytecode.OpPushUndef, 0, 0)
+	c.emit(bytecode.OpSetLocal, uint32(c.completionSlot), 0)
+}
+
 func (c *compiler) compileStatement(s ast.Stmt) {
 	c.enter(s.Pos())
 	defer c.leave()
@@ -166,21 +182,27 @@ func (c *compiler) compileStatement(s ast.Stmt) {
 	case *ast.EmptyStmt:
 
 	case *ast.IfStmt:
+		c.resetCompletion()
 		c.compileIf(n)
 
 	case *ast.WhileStmt:
+		c.resetCompletion()
 		c.compileWhile(n)
 
 	case *ast.DoWhileStmt:
+		c.resetCompletion()
 		c.compileDoWhile(n)
 
 	case *ast.ForStmt:
+		c.resetCompletion()
 		c.compileFor(n)
 
 	case *ast.ForInStmt:
+		c.resetCompletion()
 		c.compileForIn(n)
 
 	case *ast.ForOfStmt:
+		c.resetCompletion()
 		c.compileForOf(n)
 
 	case *ast.ReturnStmt:
@@ -218,9 +240,11 @@ func (c *compiler) compileStatement(s ast.Stmt) {
 		c.emitAt(n.Start, bytecode.OpThrow, 0, 0)
 
 	case *ast.TryStmt:
+		c.resetCompletion()
 		c.compileTry(n)
 
 	case *ast.SwitchStmt:
+		c.resetCompletion()
 		c.compileSwitch(n)
 
 	case *ast.LabeledStmt:
@@ -243,6 +267,7 @@ func (c *compiler) compileStatement(s ast.Stmt) {
 		c.compileFieldInit(n)
 
 	case *ast.WithStmt:
+		c.resetCompletion()
 		c.compileWith(n)
 
 	default:
@@ -607,9 +632,23 @@ func (c *compiler) compileTry(n *ast.TryStmt) {
 		c.patchJumpTo(pc, finallyStart)
 	}
 
+	// What the finally clause produces is not the statement's value: the try
+	// block's is, so `try { 1 } finally { 2 }` is 1.
+	save := int32(-1)
+	if c.completionSlot >= 0 {
+		name := fmt.Sprintf("%%cv%d", *c.hiddenCount)
+		*c.hiddenCount++
+		save = int32(c.declare(name, bindVar, n.Start))
+		c.emit(bytecode.OpGetLocal, uint32(c.completionSlot), 0)
+		c.emit(bytecode.OpSetLocal, uint32(save), 0)
+	}
 	c.beginScope()
 	c.compileStatements(n.Finally)
 	c.endScope()
+	if save >= 0 {
+		c.emit(bytecode.OpGetLocal, uint32(save), 0)
+		c.emit(bytecode.OpSetLocal, uint32(c.completionSlot), 0)
+	}
 
 	// Reproduce the original completion: rethrow, return, or carry on.
 	c.emit(bytecode.OpRethrow, 0, 0)

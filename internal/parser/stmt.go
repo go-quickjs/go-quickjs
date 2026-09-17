@@ -10,6 +10,11 @@ func (p *parser) parseStatement() ast.Stmt {
 	p.enter()
 	defer p.leave()
 
+	// The restriction applies to this statement and no further: a `let`
+	// declaration nested anywhere inside it is fine.
+	noLet := p.noLetDeclaration
+	p.noLetDeclaration = false
+
 	start := p.tok.Pos
 
 	switch p.tok.Kind {
@@ -78,7 +83,7 @@ func (p *parser) parseStatement() ast.Stmt {
 		case "let":
 			// `let` is only a declaration when what follows can begin a binding.
 			// Otherwise it is an ordinary identifier, so `let = 1` still works.
-			if p.letStartsDeclaration() {
+			if !noLet && p.letStartsDeclaration() {
 				decl := p.parseVarDecl(ast.DeclLet)
 				p.semicolon()
 				return decl
@@ -126,6 +131,25 @@ func (p *parser) parseStatement() ast.Stmt {
 
 // letStartsDeclaration reports whether a `let` token begins a declaration
 // rather than being used as an identifier.
+// nextIsPunct reports whether the token after the current one is the given
+// punctuator, without consuming anything.
+func (p *parser) nextIsPunct(v string) bool {
+	m := p.mark()
+	defer p.reset(m)
+	p.next()
+	return p.isPunct(v)
+}
+
+// nextIsKeywordOnSameLine reports whether the token after the current one is
+// the given keyword with no line terminator before it, which is what makes
+// `async function` one thing rather than two.
+func (p *parser) nextIsKeywordOnSameLine(v string) bool {
+	m := p.mark()
+	defer p.reset(m)
+	p.next()
+	return p.isKeyword(v) && !p.tok.NewlineBefore
+}
+
 func (p *parser) letStartsDeclaration() bool {
 	m := p.mark()
 	defer p.reset(m)
@@ -219,10 +243,18 @@ func (p *parser) parseSubStatement(allowFunction bool) ast.Stmt {
 	switch {
 	case p.isKeyword("class"), p.isKeyword("const"):
 		p.errorf("a declaration cannot be the body of a statement")
-	case p.isContextual("let") && p.letStartsDeclaration():
+	case p.isContextual("let") && p.nextIsPunct("["):
+		// `let [` cannot begin an expression either, so there is nothing else
+		// this could be. Any other `let` here is an ordinary identifier, and
+		// `if (false) let\nx = 1` is two statements rather than an error.
 		p.errorf("a declaration cannot be the body of a statement")
+	case p.isContextual("async") && p.nextIsKeywordOnSameLine("function"):
+		// Annex B's allowance is for a plain function declaration and nothing
+		// else: an async function was introduced after the mistake was
+		// recognized, so there is nothing to be compatible with.
+		p.errorf("a function declaration cannot be the body of a statement")
 	case p.isKeyword("function"):
-		if p.strict || !allowFunction {
+		if p.strict || !allowFunction || p.nextIsPunct("*") {
 			p.errorf("a function declaration cannot be the body of a statement")
 		}
 		// Annex B defines it as a block containing the declaration, which is
@@ -236,6 +268,9 @@ func (p *parser) parseSubStatement(allowFunction bool) ast.Stmt {
 		saved := p.noLabelledFunction
 		p.noLabelledFunction = true
 		defer func() { p.noLabelledFunction = saved }()
+		// A lexical declaration has no scope to bind into here, so `let` is an
+		// ordinary identifier: `if (false) let\nx = 1` is two statements.
+		p.noLetDeclaration = true
 		return p.parseStatement()
 	}
 	return p.parseStatement()
@@ -558,6 +593,25 @@ func (p *parser) parseLabeled(name string, start int) ast.Stmt {
 	if p.noLabelledFunction && p.isKeyword("function") {
 		p.errorf("a labelled function declaration cannot be the body of a statement")
 	}
+	// A generator or an async function is never a labelled statement's body,
+	// labelled or not, in strict mode or sloppy: only a plain declaration is.
+	if (p.isKeyword("function") && p.nextIsPunct("*")) ||
+		(p.isContextual("async") && p.nextIsKeywordOnSameLine("function")) {
+		p.errorf("a function declaration cannot be labelled here")
+	}
+	// A labelled statement's body is a Statement, so a declaration cannot be
+	// one -- the label would have nothing to name.
+	switch {
+	case p.isKeyword("class"), p.isKeyword("const"):
+		p.errorf("a declaration cannot be labelled")
+	case p.isContextual("let") && p.nextIsPunct("["):
+		p.errorf("a declaration cannot be labelled")
+	case p.strict && p.isKeyword("function"):
+		p.errorf("a function declaration cannot be labelled in strict mode")
+	}
+	// A lexical declaration is not a statement, so `let` here is an ordinary
+	// identifier.
+	p.noLetDeclaration = true
 	// A nested label inherits the restriction: `while (x) a: b: function f(){}`
 	// is no better than one label.
 	body := p.parseStatement()

@@ -458,11 +458,51 @@ func (r *Runtime) defineArrayLength(o *Object, d *propDesc) (bool, error) {
 	if !writable && uint32(want) != o.arrayLength() {
 		return false, nil
 	}
-	o.setArrayLength(uint32(want))
+	reached := shrinkArray(o, uint32(want))
+	o.setArrayLength(reached)
+	// The writability change applies even when the shortening stopped short,
+	// which is what stops a second attempt from getting any further.
 	if d.hasWritable && !d.writable {
 		o.flags &^= objArrayLengthWritable
 	}
-	return true, nil
+	return reached == uint32(want), nil
+}
+
+// shrinkArray deletes an array's elements at or above a new length, highest
+// first, and reports the length it actually reached.
+//
+// It stops at the first element that refuses to go, leaving the length just
+// above it: an array never claims to be shorter than what it still holds. Only
+// an index redefined as non-configurable can refuse, so the dense elements --
+// which are configurable by construction -- always go.
+func shrinkArray(o *Object, newLen uint32) uint32 {
+	if newLen >= o.arrayLength() {
+		return newLen
+	}
+	stop := newLen
+	var keys []Atom
+	for i := range o.props {
+		p := &o.props[i]
+		if p.flags&propDeleted != 0 || !p.key.IsIndex() {
+			continue
+		}
+		if p.key.Index() >= newLen {
+			keys = append(keys, p.key)
+		}
+	}
+	sortAtomsByIndex(keys)
+	for j := len(keys) - 1; j >= 0; j-- {
+		p := o.getOwn(keys[j])
+		if p == nil {
+			continue
+		}
+		if p.flags&propConfigurable == 0 {
+			stop = keys[j].Index() + 1
+			break
+		}
+		o.deleteOwn(keys[j])
+	}
+	return stop
 }
 
 // toIndexLength converts a value to an array length, rejecting anything that

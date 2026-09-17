@@ -44,6 +44,11 @@ type lexScope struct {
 type lexName struct {
 	name string
 	pos  int
+	// fromFunc marks a name a function declaration in a block bound. It is
+	// lexical like any other, but Annex B may also hoist it out to the
+	// enclosing function, and only something else bound in the same place
+	// stops that.
+	fromFunc bool
 }
 
 func (s *lexScope) has(name string) bool {
@@ -59,12 +64,24 @@ func (s *lexScope) has(name string) bool {
 // reported by the compiler proper, and this pass only asks whether the name is
 // bound at all.
 func add(names []lexName, name string, pos int) []lexName {
+	return addKind(names, name, pos, false)
+}
+
+// addKind records a name, saying whether a function declaration bound it.
+//
+// A repeat is ignored, since this pass only asks whether the name is bound at
+// all -- except that a name bound by anything other than a function
+// declaration stops being one that Annex B may hoist.
+func addKind(names []lexName, name string, pos int, fromFunc bool) []lexName {
 	for i := range names {
 		if names[i].name == name {
+			if !fromFunc {
+				names[i].fromFunc = false
+			}
 			return names
 		}
 	}
-	return append(names, lexName{name: name, pos: pos})
+	return append(names, lexName{name: name, pos: pos, fromFunc: fromFunc})
 }
 
 // checkScopes reports the var/lexical collisions in a program.
@@ -443,16 +460,18 @@ func lexicalNamesOf(st ast.Stmt, out []lexName, inBlock bool) []lexName {
 			out = lexicalNamesOf(n.Decl, out, inBlock)
 		}
 	case *ast.FuncDecl:
-		// A plain function declaration inside a block is deliberately not
-		// counted. It is lexical in strict mode, but Annex B gives it var-like
-		// behaviour in sloppy mode, and treating it as lexical here would
-		// reject code the web relies on.
+		// A function declaration inside a block is a lexical binding of that
+		// block, so a var of the same name anywhere inside it collides. Annex
+		// B's allowance is about hoisting the binding out to the enclosing
+		// function, not about this rule: `{ function f() {} var f; }` is an
+		// error, while `var f; { function f() {} }` is not, because there the
+		// var is outside the block.
 		//
-		// An async function or a generator gets no such allowance: they were
-		// introduced after the mistake was recognized, so there is nothing to
-		// be compatible with and they are lexical everywhere.
-		if inBlock && n.Fn != nil && n.Fn.Name != nil && (n.Fn.Async || n.Fn.Generator) {
-			out = add(out, n.Fn.Name.Name, n.Start)
+		// At a function's own top level a plain declaration is var-scoped
+		// instead, which is why two of them there are legal.
+		if inBlock && n.Fn != nil && n.Fn.Name != nil {
+			out = addKind(out, n.Fn.Name.Name, n.Start,
+				!n.Fn.Async && !n.Fn.Generator)
 		}
 	}
 	return out

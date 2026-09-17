@@ -342,6 +342,13 @@ func TestBlockFunctionDeclarationKinds(t *testing.T) {
 		`throw 0; { async function f() {} var f; }`,
 		`throw 0; { let f; async function f() {} }`,
 		`throw 0; switch (0) { case 0: var f; async function f() {} }`,
+		// Annex B's allowance is about hoisting the binding out to the
+		// enclosing function, not about the clash: a var beside the
+		// declaration, or anywhere inside the same block, is still an error.
+		`throw 0; { var f; function f() {} }`,
+		`throw 0; { function f() {} var f; }`,
+		`throw 0; { function f() {} { var f; } }`,
+		`throw 0; function g() { { function f() {} { var f; } } }`,
 	}
 	for _, src := range bad {
 		rt := quickjs.New()
@@ -354,8 +361,16 @@ func TestBlockFunctionDeclarationKinds(t *testing.T) {
 	}
 
 	for _, src := range []string{
-		`{ var f; function f() {} } "ok"`,
 		`{ async function f() {} } "ok"`,
+		// A var outside the block is fine: that is exactly what the hoisting
+		// makes the declaration into.
+		`var f; { function f() {} } "ok"`,
+		`function g() { var f; { function f() {} } } "ok"`,
+		// Two plain declarations in one block name the same binding rather
+		// than colliding, which is the part Annex B does relax.
+		`{ function f() {} function f() {} } "ok"`,
+		// And the hoisting still happens.
+		`(function () { { function f() { return 1 } } return f() })()`,
 		// At the top level of a script or a function body they are var-scoped
 		// like a plain declaration.
 		`var f; async function f() {} "ok"`,

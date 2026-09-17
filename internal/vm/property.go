@@ -305,7 +305,12 @@ func (r *Runtime) createOwnProp(o *Object, key Atom, val Value, strict bool) err
 			if err != nil {
 				return err
 			}
-			o.setArrayLength(n)
+			reached := shrinkArray(o, n)
+			o.setArrayLength(reached)
+			if reached != n && strict {
+				return r.throwTypeError(
+					"cannot shorten the array past a non-configurable element")
+			}
 			return nil
 		}
 		if key.IsIndex() {
