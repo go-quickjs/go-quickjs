@@ -141,6 +141,10 @@ type compiler struct {
 	hiddenCount int
 	depth       int
 
+	// inFieldInit marks the initializer of a class field, which is a function
+	// of its own even though it is compiled into the constructor.
+	inFieldInit bool
+
 	// withDepth counts the `with` bodies enclosing the code being compiled.
 	// While it is non-zero every name is probed against the objects before the
 	// binding it would otherwise resolve to.

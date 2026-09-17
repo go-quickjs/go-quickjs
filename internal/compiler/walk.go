@@ -26,16 +26,20 @@ type argumentsScanner struct {
 	seekThis bool
 	// seekSuper narrows that to `super` alone.
 	seekSuper bool
+	// seekEval widens it back to include a direct eval, whose code may say
+	// anything.
+	seekEval bool
 }
 
-// containsSuper reports whether an expression mentions super outside any
-// function that would bind its own.
+// needsHomeObject reports whether an expression mentions super, or a direct
+// eval that might.
 //
 // It decides whether a static field initializer has to be an immediately
 // invoked method of the class, which is what gives super a home object to
-// resolve against. Only an initializer that needs one pays for the call.
-func containsSuper(e ast.Expr) bool {
-	w := &argumentsScanner{seekThis: true, seekSuper: true}
+// resolve against. Only an initializer that needs one pays for the call -- and
+// an eval counts, because what it will say cannot be known from here.
+func needsHomeObject(e ast.Expr) bool {
+	w := &argumentsScanner{seekThis: true, seekSuper: true, seekEval: true}
 	w.expr(e)
 	return w.found
 }
@@ -149,8 +153,9 @@ func (w *argumentsScanner) expr(e ast.Expr) {
 	switch n := e.(type) {
 	case *ast.Ident:
 		switch {
-		case w.seekSuper:
+		case w.seekSuper && !w.seekEval:
 			// Only a literal `super` counts here.
+		case w.seekSuper && n.Name != "eval":
 		case n.Name == "eval":
 			// A direct eval can read both `this` and `arguments`, so a body
 			// containing one is treated as using whichever is being looked

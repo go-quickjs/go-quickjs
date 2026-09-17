@@ -122,3 +122,52 @@ func TestDirectEvalRespectsCodeGenerationOff(t *testing.T) {
 		t.Errorf("typeof eval = %q, want undefined", v.String())
 	}
 }
+
+// What a direct eval may write is what the call site may write. A field
+// initializer is inside the constructor but is not it, so `super.x` is legal
+// there and `super()` is not: there is only one constructor, and it is not
+// this.
+func TestDirectEvalInheritsTheCallSiteContext(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`class A { m() { return 1 } } class B extends A { x = eval("super.m()") }
+		  String(new B().x)`, "1"},
+		{`class B {} class D extends B { constructor() { eval("super()"); return this } }
+		  String(new D() instanceof D)`, "true"},
+		{`class A { static m() { return 2 } } class B extends A { static x = eval("super.m()") }
+		  String(B.x)`, "2"},
+		// The evaluated code is not run at all when it cannot be parsed, so a
+		// side effect before the offending part does not happen.
+		{`var executed = false; var A = class {};
+		  var C = class extends A { x = eval("executed = true; () => super()[0]") };
+		  try { new C() } catch (e) {} String(executed)`, "false"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+
+	bad := []struct{ src, want string }{
+		{`var A = class {}; var C = class extends A { x = eval("() => super()[0]") }; new C()`,
+			"SyntaxError"},
+		// And outside a class there is no super at all.
+		{`function f() { return eval("super.x") } f()`, "SyntaxError"},
+		{`eval("super.x")`, "SyntaxError"},
+		{`function f() { return eval("new.target") } "ok"; eval("new.target")`, "SyntaxError"},
+	}
+	for _, tc := range bad {
+		rt := quickjs.New()
+		if _, err := rt.Eval(tc.src); err == nil {
+			t.Errorf("%s: accepted, want %s", tc.src, tc.want)
+		} else if !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: got %v, want %s", tc.src, err, tc.want)
+		}
+		rt.Close()
+	}
+}

@@ -142,6 +142,11 @@ func (c *compiler) allowSuperProp() bool {
 
 // allowSuperCall reports whether `super()` is legal at the current position.
 func (c *compiler) allowSuperCall() bool {
+	if c.inFieldInit {
+		// A field initializer is inside the constructor but is not it: there is
+		// only one constructor, and it is not this.
+		return false
+	}
 	switch c.fn.Kind {
 	case bytecode.KindDerivedConstructor:
 		return true

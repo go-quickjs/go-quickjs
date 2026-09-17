@@ -483,7 +483,7 @@ func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
 		switch {
 		case f.Value == nil:
 			c.emit(bytecode.OpPushUndef, 0, 0)
-		case containsSuper(f.Value):
+		case needsHomeObject(f.Value):
 			// A static initializer that mentions super is an immediately
 			// invoked method of the class, which is what gives it a home
 			// object to resolve super against. Only one that needs it pays for

@@ -761,6 +761,14 @@ func hoistableFunction(s ast.Stmt) (*ast.FuncDecl, bool) {
 // setter the prototype happens to have for the same name is not called, and a
 // private field is added rather than requiring one to be there already.
 func (c *compiler) compileFieldInit(n *ast.FieldInit) {
+	// A field initializer is a function of its own, even though it is compiled
+	// into the constructor: it may read `super.x`, because its home object is
+	// the class, but it may not call super() -- there is only one constructor
+	// and it is not this.
+	saved := c.inFieldInit
+	c.inFieldInit = true
+	defer func() { c.inFieldInit = saved }()
+
 	if pn, private := n.Key.(*ast.PrivateName); private {
 		c.emit(bytecode.OpPushThis, 0, 0)
 		c.compileExpr(n.Value)
