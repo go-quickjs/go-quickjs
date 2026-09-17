@@ -62,7 +62,7 @@ func (p *parser) parseFunctionParamsAndBody(fn *ast.FuncLit) {
 	case ast.FuncMethod, ast.FuncGetter, ast.FuncSetter:
 		p.allowSuperProp = true
 		p.allowSuperCall = false
-	case ast.FuncConstructor:
+	case ast.FuncConstructor, ast.FuncDerivedConstructor:
 		p.allowSuperProp = true
 		// allowSuperCall is set by the caller, which knows whether the class
 		// has a heritage clause.

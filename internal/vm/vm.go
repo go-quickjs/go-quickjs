@@ -456,6 +456,27 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			vmErr = r.throwTypeError("assignment to constant variable %q",
 				r.atoms.name(cl.names[in.A]))
 			goto onError
+		case bytecode.OpCheckCtorReturn:
+			// A derived constructor may return an object, which becomes the
+			// result, or nothing, in which case the object super() built is.
+			// Anything else would silently discard that object.
+			v := peek(0)
+			switch {
+			case v.IsObject():
+			case v.IsUndefined():
+				sp--
+				bound, ok := f.thisValue()
+				if !ok {
+					vmErr = r.throwError(errReference,
+						"a derived constructor must call super() before returning")
+					goto onError
+				}
+				push(bound)
+			default:
+				vmErr = r.throwTypeError(
+					"a derived constructor may only return an object or undefined")
+				goto onError
+			}
 		case bytecode.OpNipUnder:
 			// The top value stays; the A beneath it go.
 			n := int(in.A)

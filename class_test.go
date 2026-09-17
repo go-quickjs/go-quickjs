@@ -557,3 +557,56 @@ func TestNumberOfBigInt(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// A derived constructor may return an object, which becomes the result, or
+// nothing, in which case the object super() built is. Anything else would
+// silently discard that object, so it is a TypeError.
+func TestDerivedConstructorReturn(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`class B {} class D extends B { constructor() { super(); return {tag: 1} } }
+		  String(new D().tag)`, "1"},
+		{`class B {} class D extends B { constructor() { super(); return undefined } }
+		  String(new D() instanceof D)`, "true"},
+		{`class B {} class D extends B { constructor() { super(); return } }
+		  String(new D() instanceof D)`, "true"},
+		// Returning an object does not even need super() to have run.
+		{`class B {} class D extends B { constructor() { return {tag: 2} } }
+		  String(new D().tag)`, "2"},
+
+		// A base constructor has no such rule: it returns `this` for anything
+		// that is not an object.
+		{`class D { constructor() { return 1 } } String(new D() instanceof D)`, "true"},
+		{`class B { constructor() { return 1 } } class D extends B {}
+		  String(new D() instanceof D)`, "true"},
+		{`class D extends Array { constructor() { super(1, 2) } } new D().join(",")`, "1,2"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+
+	bad := []string{
+		`class B {} class D extends B { constructor() { super(); return 1 } } new D()`,
+		`class B {} class D extends B { constructor() { super(); return null } } new D()`,
+		`class B {} class D extends B { constructor() { super(); return "s" } } new D()`,
+		`class B {} class D extends B { constructor() { return 1 } } new D()`,
+		// Through a finally, which is where the return actually happens.
+		`class B {} class D extends B { constructor() { try { return 1 } finally {} } } new D()`,
+	}
+	for _, src := range bad {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil {
+			t.Errorf("%s: accepted, want TypeError", src)
+		} else if !strings.Contains(err.Error(), "TypeError") {
+			t.Errorf("%s: got %v, want TypeError", src, err)
+		}
+		rt.Close()
+	}
+}

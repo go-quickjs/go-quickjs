@@ -42,6 +42,8 @@ func funcKindOf(fn *ast.FuncLit) bytecode.FuncKind {
 		return bytecode.KindSetter
 	case ast.FuncConstructor:
 		return bytecode.KindConstructor
+	case ast.FuncDerivedConstructor:
+		return bytecode.KindDerivedConstructor
 	}
 	return bytecode.KindNormal
 }
@@ -103,7 +105,7 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 	}
 
 	c.compileStatements(fn.Body)
-	if fn.Kind == ast.FuncConstructor {
+	if fn.Kind == ast.FuncConstructor || fn.Kind == ast.FuncDerivedConstructor {
 		// A constructor returns its `this` rather than undefined. That matters
 		// for a derived class, where super() may replace `this` with the
 		// object the base constructor built -- which is how `class E extends
@@ -666,13 +668,14 @@ func (c *compiler) synthesizeConstructor(cls *ast.ClassLit, keyNames []string) *
 		// The synthesized constructor stands in for the class as a whole, so
 		// its source span is the class's: `C.toString()` is the class text.
 		return &ast.FuncLit{
-			Kind: ast.FuncConstructor, Body: body,
+			Kind: constructorKind(cls), Body: body,
 			Start: cls.Start, End: cls.End,
 		}
 	}
 
 	lit := *declared
 	lit.Name = nil
+	lit.Kind = constructorKind(cls)
 	lit.Start, lit.End = cls.Start, cls.End
 	if len(fieldInit) > 0 {
 		// Fields are initialized before the constructor body runs. In a derived
@@ -687,6 +690,15 @@ func (c *compiler) synthesizeConstructor(cls *ast.ClassLit, keyNames []string) *
 		}
 	}
 	return &lit
+}
+
+// constructorKind says whether a class's constructor is a derived one, which
+// decides what it may return and when its `this` is bound.
+func constructorKind(cls *ast.ClassLit) ast.FuncKind {
+	if cls.Extends != nil {
+		return ast.FuncDerivedConstructor
+	}
+	return ast.FuncConstructor
 }
 
 // implicitSuperCall builds `super(...arguments)` for a derived class that

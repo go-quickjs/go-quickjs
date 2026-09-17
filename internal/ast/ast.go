@@ -177,6 +177,10 @@ const (
 	FuncGetter
 	FuncSetter
 	FuncConstructor
+	// FuncDerivedConstructor is the constructor of a class with a heritage
+	// clause. It differs in what it may return and in when `this` is bound,
+	// both of which the compiler has to know.
+	FuncDerivedConstructor
 )
 
 // FuncLit is a function or arrow function, as a declaration or an expression.
