@@ -576,4 +576,19 @@ func TestReturnClosesThroughDestructuring(t *testing.T) {
 	for _, tc := range cases {
 		checkEval(t, tc.src, tc.want)
 	}
+
+	// A synchronous iterator whose value rejects is closed once, where the
+	// rejection is noticed, and not again as it unwinds.
+	checkAsync(t, `
+		var closed = 0
+		var src = {[Symbol.iterator]() { return {
+		  next() { return {value: Promise.reject("reject"), done: false} },
+		  return() { closed++ },
+		}}}
+		async function f() {
+		  var out = "none"
+		  try { for await (var _ of src); } catch (e) { out = String(e) }
+		  return closed + "," + out
+		}
+		f().then(v => { r = v })`, "r", "1,reject")
 }

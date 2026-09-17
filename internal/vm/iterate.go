@@ -641,8 +641,10 @@ func (r *Runtime) awaitIterResult(st *iterState, res Value) (Value, error) {
 		// A synchronous iterator that produced a rejected promise is done
 		// with: the loop will never ask it for another value, so it is closed
 		// here rather than left for the unwinding to reach. That is what makes
-		// a generator's finally run before the rejection is delivered.
+		// a generator's finally run before the rejection is delivered. The
+		// cursor is marked done so that the unwinding does not close it again.
 		if !isDone {
+			st.done = true
 			rt.closeIterator(st.iter)
 		}
 		rt.rejectPromise(out, arg(a, 0))
