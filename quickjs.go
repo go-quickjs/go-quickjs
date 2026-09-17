@@ -373,7 +373,7 @@ func (r *Runtime) compileAndRegisterModule(specifier, source string) (*vm.Module
 			IsDefault: imp.IsDefault,
 		}
 	}
-	return r.rt.LoadModule(specifier, fn, reqs, info.Exports, info.StarExports)
+	return r.rt.LoadModule(specifier, fn, reqs, info.Exports, info.StarExports, info.Requests)
 }
 
 // EvalModule compiles and runs source as an ECMAScript module.

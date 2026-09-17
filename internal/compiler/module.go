@@ -27,6 +27,14 @@ type ModuleInfo struct {
 	Exports map[string]string
 	// StarExports lists the modules re-exported wholesale.
 	StarExports []string
+	// Requests lists every module this one names, in the order it named them.
+	//
+	// It is separate from the lists above because those are about bindings,
+	// and this is about dependencies: `export {} from "m"` binds nothing and
+	// is still a dependency, and a star re-export is a dependency written
+	// among the imports rather than after all of them. Loading and evaluation
+	// follow this list, so they follow the source.
+	Requests []string
 }
 
 // ImportRequest is one import binding.
@@ -85,6 +93,7 @@ func (c *compiler) collectModuleShape(body []ast.Stmt) {
 	for _, s := range body {
 		switch n := s.(type) {
 		case *ast.ImportDecl:
+			c.module.Requests = append(c.module.Requests, n.Source)
 			for _, spec := range n.Specifiers {
 				if spec.Local == "arguments" || spec.Local == "eval" {
 					// Neither may be bound, and an import binding is a binding
@@ -105,6 +114,11 @@ func (c *compiler) collectModuleShape(body []ast.Stmt) {
 			}
 
 		case *ast.ExportDecl:
+			if n.Source != "" {
+				// Every `from "m"` is a dependency, whether or not it brings a
+				// binding with it.
+				c.module.Requests = append(c.module.Requests, n.Source)
+			}
 			c.collectExport(n)
 		}
 	}
@@ -371,6 +385,7 @@ func (c *compiler) checkModuleDeclarations(body []ast.Stmt) {
 	for _, s := range body {
 		switch n := s.(type) {
 		case *ast.ImportDecl:
+			c.module.Requests = append(c.module.Requests, n.Source)
 			for _, spec := range n.Specifiers {
 				declare(spec.Local, true, n.Start)
 			}

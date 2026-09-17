@@ -4114,3 +4114,79 @@ func TestCombinatorResolveThatThrows(t *testing.T) {
 		onRejected();
 		[after, count].join(",")`, "1,1")
 }
+
+// A module's dependencies are the modules it names, in the order it names
+// them: an `export ... from` is one whether or not it brings a binding with it,
+// and so is a star re-export, which is a line among the others rather than an
+// afterthought.
+func TestModuleDependencyOrder(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	mods := map[string]string{
+		"m1": `globalThis.order += "1"`,
+		"m2": `globalThis.order += "2"`,
+		"m3": `globalThis.order += "3"; export default 3`,
+		"m4": `globalThis.order += "4"; export default 4; export var four = 4`,
+		"m5": `globalThis.order += "5"`,
+		"m6": `globalThis.order += "6"; export var six = 6`,
+	}
+	rt.SetModuleLoader(func(spec, referrer string) (string, string, error) {
+		src, ok := mods[spec]
+		if !ok {
+			return "", "", fmt.Errorf("unknown module %q", spec)
+		}
+		return src, spec, nil
+	})
+	if err := rt.Set("order", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.EvalModule("entry", `
+		import {} from "m1";
+		import "m2";
+		import * as ns from "m3";
+		import dflt from "m4";
+		export {} from "m5";
+		export * from "m6";
+		globalThis.order += "entry"`); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := rt.Get("order")
+	if got.String() != "123456entry" {
+		t.Errorf("evaluation order = %s, want 123456entry", got)
+	}
+}
+
+// An exported name is not a binding of the module that exports it. `export {A
+// as B} from "m"` gives this module neither an A nor a B to read: it adds an
+// entry to the namespace, which is built from the export map rather than from
+// the module's scope.
+func TestIndirectExportBindsNothingLocally(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	const entry = `
+		import { B, results } from "middle";
+		export let A = 1;
+		globalThis.r = results.join(",") + "|" + B`
+	rt.SetModuleLoader(func(spec, referrer string) (string, string, error) {
+		switch spec {
+		case "middle":
+			// It re-exports a binding of the module importing it, which is a
+			// cycle, and reads both names on the way past.
+			return `export { A as B } from "entry";
+				export const results = [];
+				try { A } catch (e) { results.push(e.name, typeof A) }
+				try { B } catch (e) { results.push(e.name, typeof B) }`, spec, nil
+		case "entry":
+			return entry, spec, nil
+		}
+		return "", "", fmt.Errorf("unknown module %q", spec)
+	})
+	if _, err := rt.EvalModule("entry", entry); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := rt.Get("r")
+	want := "ReferenceError,undefined,ReferenceError,undefined|1"
+	if got.String() != want {
+		t.Errorf("results = %s, want %s", got, want)
+	}
+}

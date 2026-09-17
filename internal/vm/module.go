@@ -1,8 +1,6 @@
 package vm
 
 import (
-	"strings"
-
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
@@ -54,6 +52,12 @@ type Module struct {
 	exports map[string]string
 	// starExports lists the modules re-exported wholesale.
 	starExports []string
+	// requests lists every module this one names, in the order it named them.
+	// Loading and evaluation follow it, so a dependency runs before the module
+	// that asked for it and dependencies run in the order they were written --
+	// whether the line that named one imports a binding, re-exports one, or
+	// neither.
+	requests []string
 
 	state ModuleState
 	// err holds the failure of a module that threw while evaluating, which is
@@ -104,7 +108,7 @@ func (r *Runtime) newModule(specifier string, fn *bytecode.Function) *Module {
 }
 
 // LoadModule compiles and links a module, returning it without evaluating.
-func (r *Runtime) LoadModule(specifier string, fn *bytecode.Function, imports []ModuleImportRequest, exports map[string]string, starExports []string) (*Module, error) {
+func (r *Runtime) LoadModule(specifier string, fn *bytecode.Function, imports []ModuleImportRequest, exports map[string]string, starExports, requests []string) (*Module, error) {
 	if m, ok := r.modules[specifier]; ok {
 		return m, nil
 	}
@@ -122,6 +126,7 @@ func (r *Runtime) LoadModule(specifier string, fn *bytecode.Function, imports []
 		m.exports[k] = v
 	}
 	m.starExports = starExports
+	m.requests = requests
 
 	if r.modules == nil {
 		r.modules = make(map[string]*Module)
@@ -157,29 +162,28 @@ func (r *Runtime) Link(m *Module) error {
 	}
 	m.state = ModuleLinking
 
-	for _, imp := range m.imports {
-		src, err := r.loadDependency(imp.specifier, m.Specifier)
-		if err != nil {
-			m.state, m.err = ModuleFailed, err
-			return err
-		}
-		if err := r.Link(src); err != nil {
-			m.state, m.err = ModuleFailed, err
-			return err
-		}
-		if err := r.bindImport(m, imp, src); err != nil {
-			m.state, m.err = ModuleFailed, err
-			return err
-		}
-	}
-
-	for _, spec := range m.starExports {
+	// The dependencies are loaded and linked in the order they were named,
+	// before any binding is resolved: what a name resolves to may live in a
+	// module named on a later line.
+	for _, spec := range m.requests {
 		src, err := r.loadDependency(spec, m.Specifier)
 		if err != nil {
 			m.state, m.err = ModuleFailed, err
 			return err
 		}
 		if err := r.Link(src); err != nil {
+			m.state, m.err = ModuleFailed, err
+			return err
+		}
+	}
+
+	for _, imp := range m.imports {
+		src, err := r.loadDependency(imp.specifier, m.Specifier)
+		if err != nil {
+			m.state, m.err = ModuleFailed, err
+			return err
+		}
+		if err := r.bindImport(m, imp, src); err != nil {
 			m.state, m.err = ModuleFailed, err
 			return err
 		}
@@ -199,18 +203,9 @@ func (r *Runtime) Link(m *Module) error {
 		}
 	}
 
-	// An export whose public name differs from the binding that backs it needs
-	// an entry in the namespace. The default export always does, since it is
-	// stored under a name no identifier can spell.
-	for exported, local := range m.exports {
-		if exported == local || strings.HasPrefix(local, nsExportPrefix) {
-			continue
-		}
-		if m.env.getOwn(r.atoms.intern(exported)) != nil {
-			continue
-		}
-		r.forwardBinding(m.env, exported, m, local)
-	}
+	// An exported name is not a binding: `export { A as B } from "m"` gives
+	// this module no B to read, only an entry in its namespace, which is built
+	// from the export map rather than from the environment.
 	m.state = ModuleLinked
 	return nil
 }
@@ -377,13 +372,7 @@ func (r *Runtime) EvaluateModule(m *Module) (Value, error) {
 		_, err := r.EvaluateModule(dep)
 		return err
 	}
-	for _, imp := range m.imports {
-		if err := run(imp.specifier); err != nil {
-			m.state, m.err = ModuleFailed, err
-			return Undefined, err
-		}
-	}
-	for _, spec := range m.starExports {
+	for _, spec := range m.requests {
 		if err := run(spec); err != nil {
 			m.state, m.err = ModuleFailed, err
 			return Undefined, err
