@@ -218,6 +218,21 @@ func (r *Runtime) closeIteratorsIn(from, to int) {
 	}
 }
 
+// closeIteratorsReturning closes the for-of cursors in a region that a return
+// is leaving.
+//
+// Unlike a throw, a return carries no completion that outranks a failure in the
+// iterator's own return method, so the first such failure becomes the result.
+func (r *Runtime) closeIteratorsReturning(from, to int) error {
+	var first error
+	for i := to - 1; i >= from; i-- {
+		if err := r.iterCloseNormal(r.stack[i]); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
 // iterToArray drains an array-destructuring source into a dense array.
 //
 // Only as many values as the pattern names are pulled, so destructuring an

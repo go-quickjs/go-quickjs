@@ -407,8 +407,11 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		// a return statement would not trigger either.
 		if !r.unwindToFinally(f, &sp, ret.value) {
 			// Nothing owes a finally, so the body simply ends -- but a for-of
-			// it was suspended inside still has to be told.
-			r.closeIteratorsIn(f.base, sp)
+			// it was suspended inside still has to be told, and what its
+			// return method reports is the result.
+			if err := r.closeIteratorsReturning(f.base, sp); err != nil {
+				return Undefined, err
+			}
 			return ret.value, nil
 		}
 	} else if pending != nil {
@@ -1283,7 +1286,10 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// frame goes away. An ordinary return leaves the stack empty, and
 			// the comparison keeps that path free of a call.
 			if sp > f.base {
-				r.closeIteratorsIn(f.base, sp)
+				if err := r.closeIteratorsReturning(f.base, sp); err != nil {
+					vmErr = err
+					goto onError
+				}
 			}
 			if f.thisRef != nil {
 				v, vmErr = r.derivedResult(f, cl, v)
@@ -1294,7 +1300,10 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			return v, nil
 		case bytecode.OpReturnUndef:
 			if sp > f.base {
-				r.closeIteratorsIn(f.base, sp)
+				if err := r.closeIteratorsReturning(f.base, sp); err != nil {
+					vmErr = err
+					goto onError
+				}
 			}
 			if f.thisRef != nil {
 				v, err := r.derivedResult(f, cl, Undefined)
@@ -1581,7 +1590,10 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				if r.unwindToFinally(f, &sp, val) {
 					continue
 				}
-				r.closeIteratorsIn(f.base, sp)
+				if err := r.closeIteratorsReturning(f.base, sp); err != nil {
+					vmErr = err
+					goto onError
+				}
 				if f.thisRef != nil {
 					val, vmErr = r.derivedResult(f, cl, val)
 					if vmErr != nil {
@@ -1798,7 +1810,10 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				if r.unwindToFinally(f, &sp, val) {
 					continue
 				}
-				r.closeIteratorsIn(f.base, sp)
+				if err := r.closeIteratorsReturning(f.base, sp); err != nil {
+					vmErr = err
+					goto onError
+				}
 				if f.thisRef != nil {
 					val, vmErr = r.derivedResult(f, cl, val)
 					if vmErr != nil {
@@ -2314,11 +2329,17 @@ func (r *Runtime) unwindToFinally(f *frame, sp *int, value Value) bool {
 		if !h.isFinally {
 			continue
 		}
-		r.closeIteratorsIn(h.stackDepth, *sp)
+		// A for-of the return is leaving is told so, and a failure in its own
+		// return method replaces the return the unwind was carrying: the
+		// finally still runs, but on a throw.
+		kind := completionReturn
+		if err := r.closeIteratorsReturning(h.stackDepth, *sp); err != nil {
+			value, kind = thrownValue(err), completionThrow
+		}
 		*sp = h.stackDepth
 		r.stack[*sp] = value
 		*sp++
-		r.stack[*sp] = Float(float64(completionReturn))
+		r.stack[*sp] = Float(float64(kind))
 		*sp++
 		f.pc = h.pc
 		return true

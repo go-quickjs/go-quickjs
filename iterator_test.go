@@ -526,3 +526,54 @@ func TestLoopExitClosesIterators(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestReturnClosesThroughDestructuring covers a generator forced to return
+// while it is suspended inside a destructuring pattern. The pattern's iterator
+// is told, and what its return method reports is the result: unlike a throw, a
+// return carries nothing that outranks it.
+func TestReturnClosesThroughDestructuring(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var closed = 0
+		  var it = {next() { return {done: false, value: undefined} },
+		            return() { closed++; return {} }}
+		  var able = {[Symbol.iterator]() { return it }}
+		  function* g() { var a; [a = yield] = able }
+		  var i = g(); i.next()
+		  var r = i.return(9)
+		  closed + "," + r.value + "," + r.done`, "1,9,true"},
+		// A return method that hands back something other than an object is a
+		// TypeError, which the caller of return() sees.
+		{`var closed = 0
+		  var it = {next() { return {done: false, value: undefined} },
+		            return() { closed++; return null }}
+		  var able = {[Symbol.iterator]() { return it }}
+		  function* g() { var a; [a = yield] = able }
+		  var i = g(); i.next()
+		  var caught = "none"
+		  try { i.return(9) } catch (e) { caught = e.constructor.name }
+		  closed + "," + caught`, "1,TypeError"},
+		// A finally clause still runs, on a throw completion rather than the
+		// return the unwind was carrying.
+		{`var log = []
+		  var it = {next() { return {done: false, value: undefined} },
+		            return() { return null }}
+		  var able = {[Symbol.iterator]() { return it }}
+		  function* g() { try { var a; [a = yield] = able } finally { log.push("f") } }
+		  var i = g(); i.next()
+		  var caught = "none"
+		  try { i.return(9) } catch (e) { caught = e.constructor.name }
+		  log.join() + "," + caught`, "f,TypeError"},
+
+		// A throw keeps its own completion, so the close's failure is
+		// swallowed.
+		{`var it = {next() { return {done: false, value: undefined} },
+		            return() { return null }}
+		  var able = {[Symbol.iterator]() { return it }}
+		  function* g() { var a; [a = yield] = able }
+		  var i = g(); i.next()
+		  try { i.throw(new RangeError()) } catch (e) { e.constructor.name }`, "RangeError"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
