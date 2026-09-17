@@ -256,6 +256,13 @@ func (r *Runtime) initArrayExtras2() {
 		return rt.newArrayIteratorKind(this, iterEntries)
 	})
 
+	// toLocaleString asks each element how it would like to be written, which
+	// is the only difference from join -- and the whole point, since what a
+	// number or a date looks like is a per-element question.
+	r.defMethod(p, "toLocaleString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		return rt.arrayToLocaleString(this)
+	})
+
 	// The change-by-copy methods, which return a new array rather than
 	// mutating the receiver.
 	// The change-by-copy methods all read through the view and write a fresh
@@ -1007,4 +1014,46 @@ func (r *Runtime) initPromiseExtras() {
 		out.setOwnRaw(rt.atoms.intern("reject"), Obj(reject), propDefault)
 		return Obj(out), nil
 	})
+}
+
+// arrayToLocaleString joins an array-like by asking each element for its own
+// locale form.
+//
+// A hole or an element that is null or undefined contributes nothing, which is
+// what makes the result of [1, , 2] two separators and two numbers.
+func (r *Runtime) arrayToLocaleString(this Value) (Value, error) {
+	a, err := r.viewArrayLike(this)
+	if err != nil {
+		return Undefined, err
+	}
+	var sb strings.Builder
+	for i := int64(0); i < a.n; i++ {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		v, err := a.get(r, i)
+		if err != nil {
+			return Undefined, err
+		}
+		if v.IsNullish() {
+			continue
+		}
+		fn, err := r.getValueProp(v, r.atoms.intern("toLocaleString"))
+		if err != nil {
+			return Undefined, err
+		}
+		if !isCallable(fn) {
+			return Undefined, r.throwTypeError("toLocaleString is not a function")
+		}
+		res, err := r.call(fn, v, nil)
+		if err != nil {
+			return Undefined, err
+		}
+		s, err := r.toString(res)
+		if err != nil {
+			return Undefined, err
+		}
+		sb.WriteString(s.Go())
+	}
+	return Str(NewString(sb.String())), nil
 }

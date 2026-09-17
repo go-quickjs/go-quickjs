@@ -799,6 +799,13 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		return Str(out), nil
 	})
 
+	r.defMethod(p, "toLocaleString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		if _, err := rt.typedArrayOf(this, "TypedArray.prototype.toLocaleString"); err != nil {
+			return Undefined, err
+		}
+		return rt.arrayToLocaleString(this)
+	})
+
 	r.defMethod(p, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		fn, err := rt.getValueProp(this, rt.atoms.intern("join"))
 		if err != nil {

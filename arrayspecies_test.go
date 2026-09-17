@@ -477,3 +477,47 @@ func TestObjectToStringTags(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// toLocaleString asks each element how it would like to be written, which is
+// the only difference from join -- and the whole point, since what a number or
+// a date looks like is a per-element question.
+func TestArrayToLocaleString(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var n = 0; Number.prototype.toLocaleString = function () { n++; return "N" };
+		  [1, 2].toLocaleString() + "," + n`, "N,N,2"},
+		{`var n = 0; Number.prototype.toLocaleString = function () { n++; return "N" };
+		  new Uint8Array([1, 2]).toLocaleString() + "," + n`, "N,N,2"},
+		// null and undefined, and a hole, contribute nothing but still separate.
+		{`[1, undefined, 2].toLocaleString()`, "1,,2"},
+		{`[1, null, 2].toLocaleString()`, "1,,2"},
+		{`[, 1].toLocaleString()`, ",1"},
+		{`[].toLocaleString()`, ""},
+		{`new Uint8Array([1, 2, 3]).toLocaleString()`, "1,2,3"},
+		{`var o = {0: 1, length: 1}; Array.prototype.toLocaleString.call(o)`, "1"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+
+	for _, src := range []string{
+		`[{toLocaleString: 1}].toLocaleString()`,
+		`Array.prototype.toLocaleString.call(null)`,
+		// The typed array form validates its buffer, where the generic one is
+		// happy with anything array-like.
+		`Uint8Array.prototype.toLocaleString.call({length: 1})`,
+	} {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil {
+			t.Errorf("%s: accepted, want TypeError", src)
+		}
+		rt.Close()
+	}
+}
