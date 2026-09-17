@@ -281,6 +281,9 @@ type resumeResult struct {
 	// await marks a suspension caused by `await`, which an async generator
 	// must service before producing anything.
 	await bool
+	// delegate marks a suspension inside a `yield*`, whose value has already
+	// been through whatever awaiting it needed.
+	delegate bool
 }
 
 // result renders a resumption as the object a generator's next, return or
@@ -427,7 +430,9 @@ func (r *Runtime) finishResume(g *generator, f *frame, base int,
 		g.state = genSuspendedYield
 		g.started = true
 		r.releaseGeneratorFrame(g, base)
-		return resumeResult{value: sig.value, await: sig.await, raw: sig.raw}, nil
+		return resumeResult{
+			value: sig.value, await: sig.await, raw: sig.raw, delegate: sig.delegate,
+		}, nil
 	}
 
 	g.state = genCompleted
@@ -695,6 +700,13 @@ func (r *Runtime) stepAsyncGenerator(g *generator, sent Value, mode resumeMode) 
 	// the value rather than the promise.
 	if res.done {
 		r.finishAsyncRequest(g, false, Obj(r.iterResult(res.value, true)))
+		return
+	}
+	if res.delegate {
+		// `yield*` passes on what the delegate produced. Its result has
+		// already been awaited as a whole, and awaiting the value inside it
+		// again would unwrap a promise the delegate meant to hand over.
+		r.finishAsyncRequest(g, false, Obj(r.iterResult(res.value, false)))
 		return
 	}
 	awaited := r.toPromise(res.value)

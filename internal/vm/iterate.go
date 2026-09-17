@@ -29,6 +29,12 @@ type iterState struct {
 	// the protocol and costs no result object per step.
 	arr *Object
 
+	// asyncIter marks an iterator reached through Symbol.asyncIterator, whose
+	// results are awaited whole. A synchronous iterator driven asynchronously
+	// is the other case: its result is a plain object, and only the value
+	// inside it is awaited.
+	asyncIter bool
+
 	done bool
 }
 
@@ -551,7 +557,7 @@ func (r *Runtime) startForAwaitOf(v Value) (Value, error) {
 	if !isCallable(next) {
 		return Undefined, r.throwTypeError("the async iterator has no next method")
 	}
-	return r.newIterObject(&iterState{iter: iter, next: next}), nil
+	return r.newIterObject(&iterState{iter: iter, next: next, asyncIter: true}), nil
 }
 
 // iterSend calls a cursor's next method with a value, which is what `yield*`
@@ -588,13 +594,30 @@ func (r *Runtime) iterSend(cursor Value, sent Value, async bool) (Value, error) 
 	if !async {
 		return res, nil
 	}
-	// An async iterator hands back a promise for the whole result; a
-	// synchronous one hands back a plain result whose value still has to be
-	// awaited, so it is wrapped in a promise the same way.
-	if res.IsObject() && res.Object().class == ClassPromise {
-		return res, nil
+	return r.asyncResult(st, res), nil
+}
+
+// asyncResult turns what an iterator method returned into the promise the
+// awaiting instruction that follows expects.
+//
+// An async iterator's result is awaited whole by the instruction that follows,
+// whatever it is: `{value: promise}` from one of those yields the promise
+// itself rather than what it settles to. A synchronous iterator's result is a
+// plain object that needs no awaiting, but the value inside it does, so that
+// one is rebuilt around a promise for the value.
+func (r *Runtime) asyncResult(st *iterState, res Value) Value {
+	if st.asyncIter {
+		// Handed on as it is: the await that follows resolves it, and doing
+		// that here as well would look up the promise's constructor twice.
+		return res
 	}
-	return Obj(r.toPromise(res)), nil
+	out, err := r.awaitIterResult(st, res)
+	if err != nil {
+		p := r.newPromise()
+		r.rejectPromise(p, thrownValue(err))
+		return Obj(p)
+	}
+	return out
 }
 
 // asyncIterNext calls an async iterator's next method, returning the promise it
@@ -621,12 +644,7 @@ func (r *Runtime) asyncIterNext(cursor Value) (Value, error) {
 	if err != nil {
 		return Undefined, err
 	}
-	// An async iterator already returns a promise for the whole result.
-	if res.IsObject() && res.Object().class == ClassPromise {
-		return res, nil
-	}
-
-	return r.awaitIterResult(st, res)
+	return r.asyncResult(st, res), nil
 }
 
 // awaitIterResult turns a synchronous iterator's result into the promise a
@@ -832,11 +850,7 @@ func (r *Runtime) iterResume(cursor Value, sent Value, mode resumeMode,
 // delegateResult checks what a delegate's method handed back.
 func (r *Runtime) delegateResult(st *iterState, res Value, async bool) (Value, bool, error) {
 	if async {
-		if res.IsObject() && res.Object().class == ClassPromise {
-			return res, false, nil
-		}
-		out, err := r.awaitIterResult(st, res)
-		return out, false, err
+		return r.asyncResult(st, res), false, nil
 	}
 	if !res.IsObject() {
 		return Undefined, false, r.throwTypeError("an iterator result must be an object")

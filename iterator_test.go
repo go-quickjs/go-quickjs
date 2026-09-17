@@ -592,3 +592,58 @@ func TestReturnClosesThroughDestructuring(t *testing.T) {
 		}
 		f().then(v => { r = v })`, "r", "1,reject")
 }
+
+// An async iterator's result is awaited as a whole and its value is handed on
+// untouched; a synchronous one's result is a plain object whose value is what
+// gets awaited. `yield*` is where the difference shows.
+func TestAsyncDelegationAwaitsTheResultNotTheValue(t *testing.T) {
+	// A promise an async iterator puts in its result is yielded as itself:
+	// `yield*` passes on what the delegate produced without awaiting it again.
+	checkAsync(t, `var r = "";
+		var inner = Promise.resolve("unwrapped");
+		var asyncIter = {
+			[Symbol.asyncIterator]() { return this },
+			next() { return {done: false, value: inner} },
+			get return() { throw new Error("return should not be read") },
+			get throw() { throw new Error("throw should not be read") },
+		};
+		async function* f() { yield* asyncIter }
+		f().next().then(v => { r = String(v.value === inner) })`, `r`, "true")
+
+	// A synchronous delegate is the other way round: its value is awaited, so
+	// the loop sees what the promise settles to.
+	checkAsync(t, `var r = "";
+		async function* f() { yield* [Promise.resolve(1), 2] }
+		(async () => { for await (const v of f()) r += v })()`, `r`, "12")
+
+	// Whatever the delegate's throw returns is awaited whole, thenable or not,
+	// before its done and value are read.
+	checkAsync(t, `var log = []; var r = "";
+		var obj = {
+			[Symbol.asyncIterator]() {
+				return {
+					next() { return {value: "v1", done: false} },
+					throw(arg) {
+						log.push("throw " + arg);
+						return {
+							get then() {
+								log.push("then");
+								return function (resolve) {
+									resolve({
+										get done() { log.push("done"); return false },
+										get value() { log.push("value"); return "tv" },
+									});
+								};
+							},
+						};
+					},
+				};
+			},
+		};
+		async function* g() { yield* obj }
+		var it = g();
+		it.next()
+			.then(() => it.throw("arg"))
+			.then(v => { r = log.join(",") + "|" + v.value + "/" + v.done })`,
+		`r`, "throw arg,then,done,value|tv/false")
+}
