@@ -810,6 +810,14 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 					vmErr = err
 					goto onError
 				}
+				if p := env.getOwn(name); p != nil &&
+					p.flags&(propConfigurable|propAccessor) == 0 {
+					// A property that cannot be redefined is updated in place
+					// instead, so a non-configurable global keeps the
+					// attributes it was given.
+					p.value = pop()
+					break
+				}
 			}
 			env.setOwnRaw(name, pop(), flags)
 		case bytecode.OpDeclareGlobalLex:

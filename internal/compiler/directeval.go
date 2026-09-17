@@ -46,7 +46,7 @@ func (c *compiler) evalScopeIdx() uint32 {
 		Strict:         c.fn.Strict,
 		AllowSuperProp: c.allowSuperProp(),
 		AllowSuperCall: c.allowSuperCall(),
-		AllowNewTarget: c.fn.Kind != bytecode.KindNormal || c.parent != nil,
+		AllowNewTarget: c.allowNewTarget(),
 		InFieldInit:    c.inClassFieldInit(),
 		PrivateNames:   c.visiblePrivateNames(),
 		ArgumentNames:  c.paramScopeNames,
@@ -159,9 +159,35 @@ func (c *compiler) allowSuperProp() bool {
 		bytecode.KindClassFieldInit, bytecode.KindStaticBlock:
 		return true
 	case bytecode.KindArrow:
-		return c.parent != nil && c.parent.allowSuperProp()
+		if c.parent == nil {
+			// The arrow is the whole of an eval, so what it inherits is what
+			// the call site had.
+			return c.rootOpts().AllowSuperProp
+		}
+		return c.parent.allowSuperProp()
 	}
 	return false
+}
+
+// allowNewTarget reports whether new.target has a meaning at the current
+// position, which is what the evaluated code inherits.
+//
+// An arrow takes its enclosing function's, and at the top level of a script or
+// a module there is none to take: `() => eval("new.target")` written at the top
+// level is a syntax error inside the eval.
+func (c *compiler) allowNewTarget() bool {
+	if c.fn.Kind == bytecode.KindArrow {
+		if c.parent == nil {
+			return c.rootOpts().AllowNewTarget
+		}
+		return c.parent.allowNewTarget()
+	}
+	if c.parent == nil {
+		// A script, a module, or the top level of eval code, which has
+		// whatever its call site had.
+		return c.rootOpts().AllowNewTarget
+	}
+	return true
 }
 
 // inClassFieldInit reports whether the current position is inside a class
@@ -192,7 +218,10 @@ func (c *compiler) allowSuperCall() bool {
 	case bytecode.KindDerivedConstructor:
 		return true
 	case bytecode.KindArrow:
-		return c.parent != nil && c.parent.allowSuperCall()
+		if c.parent == nil {
+			return c.rootOpts().AllowSuperCall
+		}
+		return c.parent.allowSuperCall()
 	}
 	return false
 }

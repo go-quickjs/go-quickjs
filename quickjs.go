@@ -462,6 +462,9 @@ func (r *Runtime) installCodeGeneration() {
 			copts.PrivateNames = req.Scope.PrivateNames
 			copts.ArgumentNames = req.Scope.ArgumentNames
 			copts.InFieldInit = req.Scope.InFieldInit
+			copts.AllowSuperProp = req.Scope.AllowSuperProp
+			copts.AllowSuperCall = req.Scope.AllowSuperCall
+			copts.AllowNewTarget = req.Scope.AllowNewTarget
 		}
 		prog, err := parser.Parse(source, popts)
 		if err != nil {

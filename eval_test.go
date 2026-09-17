@@ -224,3 +224,40 @@ func TestEvalInAParameterDefault(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// new.target has a meaning only inside a function, and an arrow takes its
+// enclosing function's. At the top level there is none to take, so a direct
+// eval written in an arrow there may not mention it.
+func TestDirectEvalNewTargetScope(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"arrow at top level", `var f = () => eval("new.target")
+		  try { f(); "no error" } catch (e) { e.constructor.name }`, "SyntaxError"},
+		{"arrow in a function", `function g() { return (() => eval("String(new.target)"))() }
+		  g()`, "undefined"},
+		{"arrow in a constructor", `function C() { return (() => eval("new.target"))() }
+		  String(new C() === C)`, "true"},
+		{"function at top level", `function g() { return eval("String(new.target)") }
+		  g()`, "undefined"},
+		{"nested eval in an arrow", `var f = () => eval("eval('new.target')")
+		  try { f(); "no error" } catch (e) { e.constructor.name }`, "SyntaxError"},
+		{"nested eval in a function", `function g() { return eval("eval('String(new.target)')") }
+		  g()`, "undefined"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}
+
+// A function declaration that eval creates on the global object keeps the
+// attributes of a property it cannot redefine: a non-configurable global is
+// assigned to rather than replaced.
+func TestEvalFunctionKeepsNonConfigurableAttributes(t *testing.T) {
+	checkEval(t, `
+		Object.defineProperty(globalThis, "f", {
+			value: 1, writable: true, enumerable: true, configurable: false,
+		})
+		eval("function f() { return 2222 }")
+		var d = Object.getOwnPropertyDescriptor(globalThis, "f");
+		[typeof f, f(), d.writable, d.enumerable, d.configurable].join(",")`,
+		"function,2222,true,true,false")
+}

@@ -64,6 +64,12 @@ type Options struct {
 	// which are configurable where a script's are not: the evaluated code could
 	// have declared them anywhere, so nothing should be able to rely on them.
 	EvalConfigurable bool
+	// The contexts a direct eval inherits from its call site, which an eval
+	// nested inside it inherits in turn. The parser is told the same thing;
+	// these are here so that the compiler can pass them on.
+	AllowSuperProp bool
+	AllowSuperCall bool
+	AllowNewTarget bool
 }
 
 // bindKind classifies a binding, which decides its initialization and
