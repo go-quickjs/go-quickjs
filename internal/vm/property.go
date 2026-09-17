@@ -67,6 +67,15 @@ func (r *Runtime) getExoticNamed(o *Object, key Atom) (Value, bool, error) {
 				return Int(t.length), true, nil
 			}
 		}
+		// A numeric key is answered from the buffer or not at all. It is never
+		// looked for up the prototype chain, which is what stops
+		// Uint8Array.prototype[1.5] from being visible through an instance.
+		if ix := r.typedArrayIndex(o, key); ix.numeric {
+			if !ix.valid {
+				return Undefined, true, nil
+			}
+			return o.data.(*typedArrayData).getElem(ix.i), true, nil
+		}
 	case ClassFunction:
 		// name and length are materialized on first read rather than created
 		// with every function, since most functions are never asked.
@@ -113,6 +122,25 @@ func (r *Runtime) materializeFunctionProp(o *Object, key Atom) {
 	if o.getOwn(atomName) == nil {
 		o.setOwnRaw(atomName, Str(NewString(fd.name)), propConfigurable)
 	}
+}
+
+// toNumericForElement coerces a value as writing it to a typed array would,
+// and discards it.
+//
+// A write outside the array stores nothing, but the coercion still happens:
+// the specification orders it before the range check, and a valueOf on the
+// value being written can see that it did.
+func (r *Runtime) toNumericForElement(o *Object, v Value) (Value, error) {
+	t, ok := o.data.(*typedArrayData)
+	if !ok {
+		return Undefined, nil
+	}
+	if t.info().big {
+		_, err := r.toBigIntOperand(v)
+		return Undefined, err
+	}
+	_, err := r.toNumber(v)
+	return Undefined, err
 }
 
 // getExoticIndex handles index reads that are not backed by dense storage.
@@ -247,14 +275,17 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 // createOwnProp adds a new own data property, applying the exotic rules of
 // arrays and respecting extensibility.
 func (r *Runtime) createOwnProp(o *Object, key Atom, val Value, strict bool) error {
-	// A typed array's indexed writes go into its buffer. An index past the end
-	// is ignored rather than added, which is what makes a typed array fixed.
-	if o.class == ClassTypedArray && key.IsIndex() {
-		if t, ok := o.data.(*typedArrayData); ok {
-			if t.storage().detached {
-				return nil
+	// A typed array's numeric writes go into its buffer. One that names no
+	// element is dropped rather than added, which is what makes a typed array
+	// fixed -- and that covers a["-0"] and a["1.5"] as much as a[5].
+	if o.class == ClassTypedArray {
+		if ix := r.typedArrayIndex(o, key); ix.numeric {
+			if !ix.valid {
+				// The value is still coerced, which a valueOf can observe.
+				_, err := r.toNumericForElement(o, val)
+				return err
 			}
-			return r.setElem(t, int(key.Index()), val)
+			return r.setElem(o.data.(*typedArrayData), ix.i, val)
 		}
 	}
 	if o.class == ClassArray {
@@ -332,6 +363,14 @@ func (r *Runtime) hasPropErr(o *Object, key Atom) (bool, error) {
 	if p := proxyOf(o); p != nil {
 		return r.proxyHas(p, key)
 	}
+	if o.class == ClassTypedArray {
+		// A numeric key is answered from the buffer and the walk stops there,
+		// so a property of the same name on the prototype is not visible
+		// through an instance.
+		if ix := r.typedArrayIndex(o, key); ix.numeric {
+			return ix.valid, nil
+		}
+	}
 	for ; o != nil; o = o.proto {
 		if r.hasOwnProp(o, key) {
 			return true, nil
@@ -342,6 +381,13 @@ func (r *Runtime) hasPropErr(o *Object, key Atom) (bool, error) {
 
 // hasOwnProp reports whether the object itself has the property.
 func (r *Runtime) hasOwnProp(o *Object, key Atom) bool {
+	if o.class == ClassTypedArray {
+		// A numeric key is present exactly while it names an element, never in
+		// the property table.
+		if ix := r.typedArrayIndex(o, key); ix.numeric {
+			return ix.valid
+		}
+	}
 	if key.IsIndex() {
 		if _, ok := o.getElem(key.Index()); ok {
 			return true
@@ -374,6 +420,14 @@ func (r *Runtime) hasOwnProp(o *Object, key Atom) bool {
 func (r *Runtime) deleteProp(o *Object, key Atom, strict bool) (bool, error) {
 	if p := proxyOf(o); p != nil {
 		return r.proxyDelete(p, key, strict)
+	}
+	if o.class == ClassTypedArray {
+		// An element cannot be removed: the buffer has a slot for it whatever
+		// the script says. A numeric key that names no element is absent
+		// already, so deleting it succeeds trivially.
+		if ix := r.typedArrayIndex(o, key); ix.numeric {
+			return !ix.valid, nil
+		}
 	}
 	if key.IsIndex() {
 		i := key.Index()

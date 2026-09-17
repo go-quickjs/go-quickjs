@@ -140,6 +140,13 @@ func (r *Runtime) defineProperty(o *Object, key Atom, d *propDesc) (bool, error)
 	if key == atomLength && o.class == ClassArray {
 		return r.defineArrayLength(o, d)
 	}
+	// A numeric key on a typed array names a slot in its buffer, not a
+	// property, and the attributes of those are fixed.
+	if o.class == ClassTypedArray {
+		if ix := r.typedArrayIndex(o, key); ix.numeric {
+			return r.typedArrayDefine(o, ix, d)
+		}
+	}
 	// A function's name and length are synthesized, so they have to exist
 	// before a redefinition can be checked against them.
 	r.materializeFunctionProp(o, key)
@@ -215,6 +222,21 @@ func (r *Runtime) validateRedefine(cur *propDesc, d *propDesc) bool {
 // currentDescriptor reads an own property into descriptor form, or nil if there
 // is none.
 func (r *Runtime) currentDescriptor(o *Object, key Atom) *propDesc {
+	if o.class == ClassTypedArray {
+		ix := r.typedArrayIndex(o, key)
+		if ix.numeric {
+			if !ix.valid {
+				return nil
+			}
+			t := o.data.(*typedArrayData)
+			return &propDesc{
+				value: t.getElem(ix.i), hasValue: true,
+				writable: true, hasWritable: true,
+				enumerable: true, hasEnumerable: true,
+				configurable: true, hasConfigurable: true,
+			}
+		}
+	}
 	if key.IsIndex() {
 		if v, ok := o.getElem(key.Index()); ok {
 			// A dense element is a plain data property with every attribute on.

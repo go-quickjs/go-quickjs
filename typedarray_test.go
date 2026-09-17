@@ -316,3 +316,82 @@ func TestTypedArraySpecies(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// An element of a typed array lives in a buffer, and the object's internal
+// methods say so: an index is present only while it is in range, cannot be
+// deleted, cannot be turned into an accessor or made read-only, and a write
+// past the end is dropped rather than added.
+func TestTypedArrayIndicesAreNotProperties(t *testing.T) {
+	const a = `var a = new Uint8Array([1, 2]); `
+	cases := []struct{ src, want string }{
+		// Defining an index writes the element rather than adding a property.
+		{a + `Object.defineProperty(a, "0", {value: 9}); String(a[0])`, "9"},
+		{a + `JSON.stringify(Object.getOwnPropertyDescriptor(a, "0"))`,
+			`{"value":1,"writable":true,"enumerable":true,"configurable":true}`},
+		{a + `String(Object.getOwnPropertyDescriptor(a, "5"))`, "undefined"},
+
+		// Presence follows the range, and is never looked for up the prototype
+		// chain.
+		{a + `[("5" in a), ("1" in a)].join(",")`, "false,true"},
+		{a + `Uint8Array.prototype[5] = "p"; [String(a[5]), 5 in a].join(",")`,
+			"undefined,false"},
+
+		// An element cannot be removed; one that is not there is gone already.
+		{a + `[delete a[0], delete a[5]].join(",")`, "false,true"},
+		{a + `delete a[0]; a.join(",")`, "1,2"},
+
+		// A write past the end is dropped.
+		{a + `a[5] = 7; String(a[5])`, "undefined"},
+		{a + `a[5] = 7; String(a.hasOwnProperty("5"))`, "false"},
+
+		// A canonical numeric index string is the buffer's business whether or
+		// not it names an element, so these are dropped too -- while "01",
+		// which is not canonical, is an ordinary property.
+		{a + `a["-0"] = 7; String(a["-0"])`, "undefined"},
+		{a + `a["1.5"] = 7; String(a["1.5"])`, "undefined"},
+		{a + `a["NaN"] = 7; String(a["NaN"])`, "undefined"},
+		{a + `a["01"] = 7; String(a["01"])`, "7"},
+		{a + `a[" 1"] = 7; String(a[" 1"])`, "7"},
+		{a + `[("−0" in a), ("01" in a)].join(",")`, "false,false"},
+
+		// The coercion still happens for a write that stores nothing.
+		{a + `var seen = false; a[5] = {valueOf() { seen = true; return 1; }};
+		  String(seen)`, "true"},
+
+		{a + `Object.keys(a).join(",")`, "0,1"},
+		{a + `a.join(",")`, "1,2"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+
+	bad := []string{
+		// The attributes of an element are fixed, so a descriptor asking for
+		// others is refused rather than quietly ignored -- otherwise a script
+		// would believe it had frozen one.
+		a + `Object.defineProperty(a, "0", {get() { return 1; }})`,
+		a + `Object.defineProperty(a, "0", {value: 9, writable: false})`,
+		a + `Object.defineProperty(a, "0", {value: 9, configurable: false})`,
+		a + `Object.defineProperty(a, "0", {value: 9, enumerable: false})`,
+		// And an index outside the array names nothing to define.
+		a + `Object.defineProperty(a, "5", {value: 1})`,
+		a + `Object.defineProperty(a, "-0", {value: 1})`,
+	}
+	for _, src := range bad {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil {
+			t.Errorf("%s: accepted, want TypeError", src)
+		} else if !strings.Contains(err.Error(), "TypeError") {
+			t.Errorf("%s: got %v, want TypeError", src, err)
+		}
+		rt.Close()
+	}
+}
