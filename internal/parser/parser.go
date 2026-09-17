@@ -80,6 +80,11 @@ type parser struct {
 	// function declaration: the body of an if or a loop, where a declaration
 	// has no scope to bind into.
 	noLabelledFunction bool
+	// noAwaitIdent marks a class field initializer or a static block, where
+	// `await` may not be an identifier. Unlike noArguments it does not reach
+	// into a nested function: `static { (() => ({await})) }` is fine, because
+	// the rule is about what the block itself contains.
+	noAwaitIdent bool
 	// noArguments marks a context with no arguments object -- a class field
 	// initializer or a static block -- where naming one is an early error.
 	noArguments bool
@@ -370,7 +375,7 @@ func (p *parser) checkIdentReference(name string, tok lexer.Token) {
 	if p.allowYield && name == "yield" {
 		p.errorAt(tok, "\"yield\" is reserved inside a generator")
 	}
-	if (p.module || p.allowAwait || p.noArguments) && name == "await" {
+	if (p.module || p.allowAwait || p.noAwaitIdent) && name == "await" {
 		p.errorAt(tok, "\"await\" is reserved here")
 	}
 }
@@ -495,6 +500,11 @@ type funcContext struct {
 	allowSuperProp bool
 	allowSuperCall bool
 	allowNewTarget bool
+	// noAwaitIdent marks a class field initializer or a static block, where
+	// `await` may not be an identifier. Unlike noArguments it does not reach
+	// into a nested function: `static { (() => ({await})) }` is fine, because
+	// the rule is about what the block itself contains.
+	noAwaitIdent bool
 	// noArguments marks a context with no arguments object -- a class field
 	// initializer or a static block -- where naming one is an early error.
 	noArguments bool

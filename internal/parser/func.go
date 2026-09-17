@@ -56,6 +56,7 @@ func (p *parser) parseFunctionParamsAndBody(fn *ast.FuncLit) {
 	// A function has its own arguments object even when declared inside a
 	// class field initializer.
 	p.noArguments = false
+	p.noAwaitIdent = false
 	p.labels = make(map[string]bool)
 
 	switch fn.Kind {
@@ -293,6 +294,10 @@ func (p *parser) parseArrowBody(params []ast.Expr, start int, async bool) ast.Ex
 	p.inSwitch = false
 	p.noIn = false
 	p.labels = make(map[string]bool)
+	// A class static block forbids `await` as an identifier in what it
+	// contains, but not in a function written inside it: the rule is about the
+	// block's own statements.
+	p.noAwaitIdent = false
 	// An arrow body is always [~Yield]; `await` is available only when the
 	// arrow itself is async. Everything else -- this, super, new.target --
 	// is inherited from the enclosing function, so those flags are left alone.
@@ -670,8 +675,10 @@ func (p *parser) parseClassMember(cls *ast.ClassLit, sawConstructor *bool, priva
 		p.allowYield = false
 		p.allowAwait = false
 		// A field initializer runs in a context with no arguments object, so
-		// naming one is an early error rather than a runtime failure.
+		// naming one is an early error rather than a runtime failure, and
+		// `await` is not an identifier in it.
 		p.noArguments = true
+		p.noAwaitIdent = true
 		p.labels = make(map[string]bool)
 		field.Value = p.parseAssign()
 		p.restoreContext(ctx)
@@ -693,8 +700,10 @@ func (p *parser) parseStaticBlock() []ast.Stmt {
 	p.allowYield = false
 	p.allowAwait = false
 	p.allowNewTarget = true
-	// Like a field initializer, a static block has no arguments object.
+	// Like a field initializer, a static block has no arguments object, and
+	// `await` is not an identifier in it.
 	p.noArguments = true
+	p.noAwaitIdent = true
 	p.labels = make(map[string]bool)
 
 	p.expectPunct("{")
