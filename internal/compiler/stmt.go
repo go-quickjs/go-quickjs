@@ -783,6 +783,9 @@ func (c *compiler) bindCatchParam(param ast.Expr) {
 	if id, ok := param.(*ast.Ident); ok {
 		slot := c.declare(id.Name, bindCatch, id.Start)
 		c.emit(bytecode.OpSetLocal, slot, 0)
+		// The store is what binds it, so the clause's body assigns to an
+		// ordinary mutable binding rather than one still in a dead zone.
+		c.markInitialized(id.Name)
 		return
 	}
 	var names []string

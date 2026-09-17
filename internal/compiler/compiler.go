@@ -230,6 +230,10 @@ type compiler struct {
 	// module environment. They are declared in their dead zone, so the
 	// declaration compiles to an initialization rather than an assignment.
 	moduleLex map[string]bool
+	// pendingLocals holds what is known about each slot, gathered as scopes
+	// close so that a binding is still described after it has gone out of
+	// scope.
+	pendingLocals map[uint32]bytecode.LocalDesc
 	// exits records what the statements currently being compiled left in place
 	// for the duration of their bodies, innermost last.
 	exits []pendingExit
@@ -357,13 +361,11 @@ func (c *compiler) finish() {
 	c.fn.MaxStack = c.maxStack + 4 // headroom for the interpreter's own pushes
 	c.fn.Locals = make([]bytecode.LocalDesc, c.nextSlot)
 	for _, l := range c.locals {
-		if int(l.slot) < len(c.fn.Locals) {
-			c.fn.Locals[l.slot] = bytecode.LocalDesc{
-				Name:     l.name,
-				Mutable:  l.kind != bindConst,
-				TDZ:      l.kind == bindLet || l.kind == bindConst,
-				Captured: l.captured,
-			}
+		c.recordLocal(l)
+	}
+	for slot, d := range c.pendingLocals {
+		if int(slot) < len(c.fn.Locals) {
+			c.fn.Locals[slot] = d
 		}
 	}
 }
@@ -547,9 +549,30 @@ func (c *compiler) endScope() {
 	if needsClose {
 		c.emit(bytecode.OpCloseUpvalues, c.locals[i].slot, 0)
 	}
+	// What the interpreter needs to know about a binding is recorded before it
+	// goes out of scope, since the slot outlives the scope and an instruction
+	// compiled earlier may still name it.
+	for _, l := range c.locals[i:] {
+		c.recordLocal(l)
+	}
 	// Slots are not reclaimed: reusing them would let a closure created in one
 	// iteration of a loop observe a later iteration's value.
 	c.locals = c.locals[:i]
+}
+
+// recordLocal notes a binding's name and kind for the interpreter, which reads
+// them when reporting an assignment to a constant or a read before
+// initialization.
+func (c *compiler) recordLocal(l localVar) {
+	if c.pendingLocals == nil {
+		c.pendingLocals = map[uint32]bytecode.LocalDesc{}
+	}
+	c.pendingLocals[l.slot] = bytecode.LocalDesc{
+		Name:     l.name,
+		Mutable:  l.kind != bindConst,
+		TDZ:      l.kind == bindLet || l.kind == bindConst,
+		Captured: l.captured,
+	}
 }
 
 // declare adds a binding to the current scope and returns its slot.

@@ -3743,3 +3743,32 @@ func TestIdentifierExclusions(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// A catch clause's parameter is a binding like a let: it is initialized when
+// the clause is entered, and the body may assign to it.
+func TestCatchParameterIsMutable(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"assigned", `try { throw 1 } catch (e) { e = 2; String(e) }`, "2"},
+		{"in a function", `(function () {
+		  try { throw 1 } catch (e) { e = 2; return String(e) } })()`, "2"},
+		{"through a closure", `(function () {
+		  try { throw 1 } catch (e) {
+		    var f = function () { e = 3 }; f(); return String(e) } })()`, "3"},
+		{"destructured", `try { throw {e: 1} } catch ({e}) { e = 2; String(e) }`, "2"},
+		// Shadowing is what the scope is for: the assignment changes the
+		// parameter, not what the name meant outside.
+		{"shadows a let", `let e = "outer"
+		  try { throw "caught" } catch (e) { e = "inner" }
+		  e`, "outer"},
+		{"shadows a parameter", `(function (e) {
+		  try { throw "caught" } catch (e) { e = "inner" }
+		  return e })("param")`, "param"},
+		// A const still refuses, and says which one.
+		{"const still refuses", `(function () {
+		  try { const k = 1; k = 2 } catch (e) { return e.message } })()`,
+			`assignment to constant variable "k"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}
