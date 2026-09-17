@@ -647,3 +647,110 @@ func TestAsyncDelegationAwaitsTheResultNotTheValue(t *testing.T) {
 			.then(v => { r = log.join(",") + "|" + v.value + "/" + v.done })`,
 		`r`, "throw arg,then,done,value|tv/false")
 }
+
+// A result the iterator has handed over is its last word: if reading done or
+// value from it throws, the iteration is over and the iterator is not asked to
+// return. It was not the loop that gave up.
+func TestIteratorResultErrorsDoNotClose(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var returnCount = 0, iterationCount = 0
+		  var iterable = {}
+		  iterable[Symbol.iterator] = function () {
+		    return {
+		      next: function () { return {done: false, get value() { throw new RangeError() }} },
+		      return: function () { returnCount++; return {} }
+		    }
+		  }
+		  var caught = ""
+		  try { for (var x of iterable) { iterationCount++ } }
+		  catch (e) { caught = e.constructor.name }
+		  [caught, iterationCount, returnCount].join(",")`, "RangeError,0,0"},
+		{`var returnCount = 0
+		  var iterable = {}
+		  iterable[Symbol.iterator] = function () {
+		    return {
+		      next: function () { return {get done() { throw new RangeError() }} },
+		      return: function () { returnCount++; return {} }
+		    }
+		  }
+		  var caught = ""
+		  try { for (var x of iterable) {} } catch (e) { caught = e.constructor.name }
+		  caught + "," + returnCount`, "RangeError,0"},
+		// A loop that gives up early does close the iterator.
+		{`var returnCount = 0
+		  var iterable = {}
+		  iterable[Symbol.iterator] = function () {
+		    return {
+		      next: function () { return {done: false, value: 1} },
+		      return: function () { returnCount++; return {} }
+		    }
+		  }
+		  for (var x of iterable) { break }
+		  String(returnCount)`, "1"},
+		{`var returnCount = 0
+		  var iterable = {}
+		  iterable[Symbol.iterator] = function () {
+		    return {
+		      next: function () { return {done: false, value: 1} },
+		      return: function () { returnCount++; return {} }
+		    }
+		  }
+		  try { for (var x of iterable) { throw new RangeError() } } catch (e) {}
+		  String(returnCount)`, "1"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// A synchronous iterator driven asynchronously still has to hand back a result
+// object; anything else is a TypeError, which reaches the caller as a rejection
+// rather than a throw.
+func TestAsyncDelegationRequiresResultObjects(t *testing.T) {
+	checkAsync(t, `
+		var obj = {}
+		obj[Symbol.iterator] = function () {
+		  return {
+		    next: function () { return {value: 1, done: false} },
+		    return: function () { return 1 }
+		  }
+		}
+		async function* asyncg() { yield* obj }
+		var iter = asyncg()
+		var r = ""
+		iter.next().then(function () {
+		  iter.return().then(function (res) { r = "resolved:" + res.value },
+		    function (e) { r = "rejected:" + e.constructor.name })
+		})`, `r`, "rejected:TypeError")
+	checkAsync(t, `
+		var obj = {}
+		obj[Symbol.iterator] = function () {
+		  return {
+		    next: function () { return {value: 1, done: false} },
+		    throw: function () { return 1 }
+		  }
+		}
+		async function* asyncg() { yield* obj }
+		var iter = asyncg()
+		var r = ""
+		iter.next().then(function () {
+		  iter.throw(new Error("x")).then(function () { r = "resolved" },
+		    function (e) { r = "rejected:" + e.constructor.name })
+		})`, `r`, "rejected:TypeError")
+	// A delegate that finishes hands its own value back through the yield*.
+	checkAsync(t, `
+		var obj = {}
+		obj[Symbol.iterator] = function () {
+		  return {
+		    next: function () { return {value: 1, done: false} },
+		    return: function () { return {value: 9, done: true} }
+		  }
+		}
+		async function* asyncg() { yield* obj }
+		var iter = asyncg()
+		var r = ""
+		iter.next().then(function () {
+		  iter.return(5).then(function (res) { r = res.value + ":" + res.done },
+		    function (e) { r = "rejected:" + e.constructor.name })
+		})`, `r`, "9:true")
+}

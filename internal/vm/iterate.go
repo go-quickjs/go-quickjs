@@ -195,8 +195,12 @@ func (r *Runtime) iterNext(cursor Value) (Value, bool, error) {
 		st.done = true
 		return Undefined, false, r.throwTypeError("an iterator result must be an object")
 	}
+	// A result the iterator has handed over is the iterator's last word: if
+	// reading done or value from it throws, the iteration is over and the
+	// iterator is not asked to return. It was not the loop that gave up.
 	done, err := r.getValueProp(res, atomDone)
 	if err != nil {
+		st.done = true
 		return Undefined, false, err
 	}
 	if done.Truthy() {
@@ -205,6 +209,7 @@ func (r *Runtime) iterNext(cursor Value) (Value, bool, error) {
 	}
 	val, err := r.getValueProp(res, atomValue)
 	if err != nil {
+		st.done = true
 		return Undefined, false, err
 	}
 	return val, true, nil
@@ -668,6 +673,12 @@ func (r *Runtime) asyncIterNext(cursor Value) (Value, error) {
 // promise's value, not the promise. So the result is rebuilt around the settled
 // value rather than merely wrapped.
 func (r *Runtime) awaitIterResult(st *iterState, res Value) (Value, error) {
+	// A synchronous iterator driven asynchronously still has to hand back a
+	// result object. Anything else is a TypeError, which reaches the caller as
+	// a rejection rather than a throw.
+	if !res.IsObject() {
+		return Undefined, r.throwTypeError("an iterator result must be an object")
+	}
 	done, err := r.getValueProp(res, atomDone)
 	if err != nil {
 		return Undefined, err
