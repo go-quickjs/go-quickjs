@@ -419,7 +419,7 @@ func (r *Runtime) EvalModuleContext(ctx context.Context, specifier, source strin
 	if err := r.rt.DrainJobs(); err != nil {
 		return Value{}, r.wrapError(err)
 	}
-	return Value{v: vmObj(mod.Namespace()), rt: r.rt}, nil
+	return Value{v: vmObj(r.rt.ModuleNamespace(mod)), rt: r.rt}, nil
 }
 
 // WithoutCodeGeneration disables eval and the Function constructor.

@@ -36,9 +36,13 @@ type Module struct {
 	Specifier string
 	fn        *bytecode.Function
 
-	// env holds the module's top-level bindings, and doubles as its namespace
-	// object.
+	// env holds the module's top-level bindings. Its prototype is the global
+	// object, so that an unqualified name finds a module binding first and a
+	// global otherwise -- which is the opposite of what a namespace needs, and
+	// why the two are different objects.
 	env *Object
+	// ns is the module namespace object, built on first use.
+	ns *Object
 
 	// imports records what the module needs, resolved during linking.
 	imports []moduleImport
@@ -79,7 +83,7 @@ func (r *Runtime) SetModuleLoader(fn ModuleLoader) { r.moduleLoader = fn }
 
 // ModuleNamespace returns a module's namespace object, for a host that wants to
 // read its exports.
-func (m *Module) Namespace() *Object { return m.env }
+func (r *Runtime) ModuleNamespace(m *Module) *Object { return r.namespaceObject(m) }
 
 // newModule prepares a compiled module for linking.
 func (r *Runtime) newModule(specifier string, fn *bytecode.Function) *Module {
@@ -230,7 +234,8 @@ func (r *Runtime) SetModuleCompiler(fn func(specifier, source string) (*Module, 
 func (r *Runtime) bindImport(m *Module, imp moduleImport, src *Module) {
 	if imp.namespace {
 		// A namespace import is the source module's environment itself.
-		m.env.setOwnRaw(r.atoms.intern(imp.local), Obj(src.env), moduleBindingFlags(imp.local))
+		m.env.setOwnRaw(r.atoms.intern(imp.local), Obj(r.namespaceObject(src)),
+			moduleBindingFlags(imp.local))
 		return
 	}
 	name := imp.imported
@@ -416,7 +421,7 @@ func (r *Runtime) initDynamicImport() {
 			rt.rejectPromise(result, thrownValue(err))
 			return Obj(result), nil
 		}
-		rt.resolvePromise(result, Obj(mod.env))
+		rt.resolvePromise(result, Obj(rt.namespaceObject(mod)))
 		return Obj(result), nil
 	})
 	r.global.setOwnRaw(r.atoms.intern("import"), Obj(fn), propWritable|propConfigurable)

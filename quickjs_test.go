@@ -1872,3 +1872,82 @@ func TestStaticImportDefaultIsNamedInNamespace(t *testing.T) {
 		t.Errorf("namespace.default = %v, want 7", v)
 	}
 }
+
+// A module namespace is deliberately rigid: no prototype, not extensible,
+// nothing added or removed, nothing written. What a module exports is fixed
+// when it is compiled, so an object that let any of that change would be lying.
+//
+// The exports themselves are live, which is what makes a cycle between two
+// modules work, so the storage is an accessor while the object reports a data
+// property -- the one place the two have to disagree.
+func TestModuleNamespaceObject(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+
+	mods := map[string]string{
+		"m":    `export var x = 1; export default 2; export let later = 3;`,
+		"host": ``,
+	}
+	rt.SetModuleLoader(func(spec, referrer string) (string, string, error) {
+		src, ok := mods[spec]
+		if !ok {
+			return "", "", fmt.Errorf("module %q not found", spec)
+		}
+		return src, spec, nil
+	})
+
+	cases := []struct{ name, src, want string }{
+		{"tag", `ns[Symbol.toStringTag]`, "Module"},
+		{"toString", `Object.prototype.toString.call(ns)`, "[object Module]"},
+		{"no prototype", `String(Object.getPrototypeOf(ns))`, "null"},
+		{"not extensible", `String(Object.isExtensible(ns))`, "false"},
+		// The exports are listed in code unit order, and nothing the compiler
+		// put there for its own use appears.
+		{"keys", `Object.getOwnPropertyNames(ns).join("|")`, "default|later|x"},
+		{"enumerable keys", `Object.keys(ns).join("|")`, "default|later|x"},
+		{"values", `[ns.x, ns.default, ns.later].join(",")`, "1,2,3"},
+		{"spread", `JSON.stringify({...ns})`, `{"default":2,"later":3,"x":1}`},
+
+		// An export reports as a data property: writable, enumerable, and not
+		// configurable.
+		{"export descriptor", `var d = Object.getOwnPropertyDescriptor(ns, "x");
+		  [d.value, d.writable, d.enumerable, d.configurable].join("/")`, "1/true/true/false"},
+		{"tag descriptor", `var d = Object.getOwnPropertyDescriptor(ns, Symbol.toStringTag);
+		  [d.value, d.writable, d.enumerable, d.configurable].join("/")`,
+			"Module/false/false/false"},
+		{"absent", `String(Object.getOwnPropertyDescriptor(ns, "nope"))`, "undefined"},
+		{"has", `[("x" in ns), ("nope" in ns)].join(",")`, "true,false"},
+
+		// Nothing can be changed. In sloppy code the write simply does not
+		// happen; in strict code it throws.
+		{"write ignored", `ns.x = 9; String(ns.x)`, "1"},
+		{"delete false", `String(delete ns.x)`, "false"},
+		{"strict write", `(function () { "use strict";
+		  try { ns.x = 9; return "no error" } catch (e) { return e.constructor.name } })()`,
+			"TypeError"},
+		{"define", `try { Object.defineProperty(ns, "y", {value: 1}); "no error" }
+		  catch (e) { e.constructor.name }`, "TypeError"},
+		{"set prototype", `try { Object.setPrototypeOf(ns, {}); "no error" }
+		  catch (e) { e.constructor.name }`, "TypeError"},
+		// Setting it to null is what it already is, so that succeeds.
+		{"set prototype null", `String(Object.setPrototypeOf(ns, null) === ns)`, "true"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := rt.Eval(`
+				var out;
+				import("m").then(ns => { globalThis.ns = ns; out = "ready" });
+			`); err != nil {
+				t.Fatal(err)
+			}
+			v, err := rt.Eval(tc.src)
+			if err != nil {
+				t.Fatalf("%s: %v", tc.src, err)
+			}
+			if got := v.String(); got != tc.want {
+				t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+			}
+		})
+	}
+}

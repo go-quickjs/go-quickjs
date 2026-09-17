@@ -35,6 +35,9 @@ const (
 	ClassProxy
 	ClassIterator
 	ClassMathObject
+	// ClassModuleNamespace is the object `import * as ns` produces, whose
+	// properties are a module's exports and nothing else.
+	ClassModuleNamespace
 	ClassJSONObject
 )
 
@@ -58,6 +61,13 @@ const (
 	// enumeration, to Object.getOwnPropertyNames, to JSON, and to `in`. Only
 	// the private accessors reach them.
 	propPrivate
+	// propNamespaceExport marks a module namespace's export. It is stored as an
+	// accessor, because an export is live, but it reports as a data property:
+	// what a module exports is a value, not a way of computing one.
+	propNamespaceExport
+	// propNamespaceTag marks a namespace's Symbol.toStringTag, which is the one
+	// property of one that is not an export.
+	propNamespaceTag
 )
 
 // propDefault is the attribute set for an ordinary assignment.

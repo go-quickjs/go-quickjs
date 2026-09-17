@@ -222,6 +222,12 @@ func (r *Runtime) validateRedefine(cur *propDesc, d *propDesc) bool {
 // currentDescriptor reads an own property into descriptor form, or nil if there
 // is none.
 func (r *Runtime) currentDescriptor(o *Object, key Atom) *propDesc {
+	if o.class == ClassModuleNamespace {
+		// An export is stored as an accessor, because it is live, but it is a
+		// data property: what a module exports is a value, not a way of
+		// computing one.
+		return r.namespaceDescriptor(o, key)
+	}
 	if o.class == ClassTypedArray {
 		ix := r.typedArrayIndex(o, key)
 		if ix.numeric {
