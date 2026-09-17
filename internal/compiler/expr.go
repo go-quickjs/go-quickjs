@@ -543,8 +543,9 @@ func (c *compiler) compileUpdate(n *ast.Update) {
 		c.compileIdentRead(target)
 		// The operand is coerced first, so that `x = "1"; x++` leaves a number
 		// behind and the postfix form yields the coerced value rather than the
-		// original string.
-		c.emit(bytecode.OpToNumber, 0, 0)
+		// original string. To a numeric, not a number: a BigInt increments as
+		// a BigInt.
+		c.emit(bytecode.OpToNumeric, 0, 0)
 		if !n.Prefix {
 			c.emit(bytecode.OpDup, 0, 0)
 		}
@@ -572,7 +573,7 @@ func (c *compiler) compileUpdate(n *ast.Update) {
 			} else {
 				c.compileSuperMemberGet(target)
 			}
-			c.emit(bytecode.OpToNumber, 0, 0)
+			c.emit(bytecode.OpToNumeric, 0, 0)
 			// Postfix yields the old value, so it is copied down before the
 			// increment; prefix yields the new one, so the copy comes after.
 			if !n.Prefix {
@@ -597,7 +598,7 @@ func (c *compiler) compileUpdate(n *ast.Update) {
 			name, ref := c.privateName(pn, target.Start)
 			c.emit(bytecode.OpDup, 0, 0)
 			c.emit(bytecode.OpGetPrivate, name, ref)
-			c.emit(bytecode.OpToNumber, 0, 0)
+			c.emit(bytecode.OpToNumeric, 0, 0)
 			if !n.Prefix {
 				c.emit(bytecode.OpInsert2, 0, 0)
 				c.emitAt(n.Start, op, 0, 0)
@@ -613,7 +614,7 @@ func (c *compiler) compileUpdate(n *ast.Update) {
 			c.emit(bytecode.OpToPropertyKeyOfBase, 0, 0)
 			c.emit(bytecode.OpDup2, 0, 0)
 			c.emit(bytecode.OpGetIndex, 0, 0)
-			c.emit(bytecode.OpToNumber, 0, 0)
+			c.emit(bytecode.OpToNumeric, 0, 0)
 			// Postfix yields the old value, so it is copied down before the
 			// increment; prefix yields the new one, so the copy comes after.
 			if !n.Prefix {
@@ -629,7 +630,7 @@ func (c *compiler) compileUpdate(n *ast.Update) {
 		name := c.nameIdx(propKeyName(target.Property))
 		c.emit(bytecode.OpDup, 0, 0)
 		c.emit(bytecode.OpGetProp, name, 0)
-		c.emit(bytecode.OpToNumber, 0, 0)
+		c.emit(bytecode.OpToNumeric, 0, 0)
 		if !n.Prefix {
 			c.emit(bytecode.OpInsert2, 0, 0)
 			c.emitAt(n.Start, op, 0, 0)

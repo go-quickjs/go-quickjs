@@ -671,3 +671,23 @@ func (r *Runtime) toArrayLength(v Value) (uint32, error) {
 	}
 	return u, nil
 }
+
+// toElementValue converts a value to what a typed array's elements hold, which
+// is a BigInt for the 64-bit integer kinds and a Number for the rest.
+//
+// A method that writes one value to many elements converts it once, which a
+// valueOf that counts its calls can see.
+func (r *Runtime) toElementValue(t *typedArrayData, v Value) (Value, error) {
+	if t.info().big {
+		b, err := r.toBigIntOperand(v)
+		if err != nil {
+			return Undefined, err
+		}
+		return Big(b), nil
+	}
+	n, err := r.toNumber(v)
+	if err != nil {
+		return Undefined, err
+	}
+	return Float(n), nil
+}

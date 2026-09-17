@@ -443,7 +443,20 @@ func (r *Runtime) initTypedArrayBuiltins() {
 			if err := rt.requireNew(info.name); err != nil {
 				return Undefined, err
 			}
-			return rt.constructTypedArray(k, proto, args)
+			// A subclass's instances get its prototype, which new.target
+			// names -- unless it says something that is not an object, where
+			// the intrinsic one stands in.
+			p := proto
+			if nt := rt.newTarget(); nt.IsObject() {
+				custom, err := rt.getValueProp(nt, atomPrototype)
+				if err != nil {
+					return Undefined, err
+				}
+				if custom.IsObject() {
+					p = custom.Object()
+				}
+			}
+			return rt.constructTypedArray(k, p, args)
 		})
 		r.typedArrayCtors[kind] = ctor
 		// The concrete constructors inherit the statics from %TypedArray%.
@@ -480,19 +493,29 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 		if int(off)%info.size != 0 {
 			return Undefined, r.throwRangeError("the byte offset must be a multiple of %d", info.size)
 		}
-		if int(off) > len(b.bytes) {
-			return Undefined, r.throwRangeError("the byte offset is out of range")
-		}
-		length := (len(b.bytes) - int(off)) / info.size
+		var explicit int64 = -1
 		if lv := arg(args, 2); !lv.IsUndefined() {
 			n, err := r.toIndex(lv)
 			if err != nil {
 				return Undefined, err
 			}
-			if int(off)+int(n)*info.size > len(b.bytes) {
+			explicit = int64(n)
+		}
+		// Both arguments are coerced before the buffer is looked at: either
+		// coercion can run a valueOf that detaches it, and a detached buffer is
+		// what the view would have been over.
+		if b.detached {
+			return Undefined, r.throwTypeError("the buffer is detached")
+		}
+		if int(off) > len(b.bytes) {
+			return Undefined, r.throwRangeError("the byte offset is out of range")
+		}
+		length := (len(b.bytes) - int(off)) / info.size
+		if explicit >= 0 {
+			if int64(off)+explicit*int64(info.size) > int64(len(b.bytes)) {
 				return Undefined, r.throwRangeError("the view extends past the end of the buffer")
 			}
-			length = int(n)
+			length = int(explicit)
 		}
 		o.data = &typedArrayData{buffer: buf, kind: kind, byteOffset: int(off), length: length}
 		return Obj(o), nil
@@ -729,6 +752,13 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		if err != nil {
 			return Undefined, err
 		}
+		// The value is converted once, before the range is worked out: a
+		// valueOf that counts its calls must see exactly one, however many
+		// elements are filled.
+		v, err := rt.toElementValue(t, arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
 		start, err := rt.relativeIndex(arg(args, 1), t.length, 0)
 		if err != nil {
 			return Undefined, err
@@ -738,7 +768,7 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 			return Undefined, err
 		}
 		for i := start; i < end; i++ {
-			if err := rt.setElem(t, i, arg(args, 0)); err != nil {
+			if err := rt.setElem(t, i, v); err != nil {
 				return Undefined, err
 			}
 		}
@@ -1011,7 +1041,20 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 				}
 				return this, nil
 			case d.rebuild:
-				return rt.typedArrayFromValues(t.kind, out)
+				// A fresh view of the same kind holding the reordered values,
+				// which is what toSorted and toReversed produce.
+				var vals []Value
+				if out.IsObject() {
+					vals = out.Object().elems
+				}
+				o := newObject(rt.typedArrayProtoFor(t.kind), ClassTypedArray)
+				nt := rt.allocTypedArray(o, t.kind, len(vals))
+				for i, el := range vals {
+					if err := rt.setElem(nt, i, el); err != nil {
+						return Undefined, err
+					}
+				}
+				return Obj(o), nil
 			}
 			return out, nil
 		})
@@ -1061,21 +1104,6 @@ func (r *Runtime) newTypedArrayOf(kind elemType, vals []Value) (Value, error) {
 
 // typedArrayFromValues builds a view of the given kind holding the values of an
 // array.
-func (r *Runtime) typedArrayFromValues(kind elemType, v Value) (Value, error) {
-	var vals []Value
-	if v.IsObject() {
-		vals = v.Object().elems
-	}
-	o := newObject(r.typedArrayProtoFor(kind), ClassTypedArray)
-	t := r.allocTypedArray(o, kind, len(vals))
-	for i, el := range vals {
-		if err := r.setElem(t, i, el); err != nil {
-			return Undefined, err
-		}
-	}
-	return Obj(o), nil
-}
-
 // typedArrayProtoFor returns the prototype a view of the given element type
 // should have.
 func (r *Runtime) typedArrayProtoFor(kind elemType) *Object {
@@ -1089,17 +1117,17 @@ func (r *Runtime) typedArrayProtoFor(kind elemType) *Object {
 // constructors inherit.
 func (r *Runtime) initTypedArrayStatics(abstract *Object) {
 	r.defMethod(abstract, "of", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		kind, err := rt.typedArrayKindOf(this, "of")
-		if err != nil {
-			return Undefined, err
-		}
-		return rt.typedArrayFromValues(kind, Obj(rt.newArrayFrom(args)))
+		return rt.typedArrayFromValues(this, args)
 	})
 
 	r.defMethod(abstract, "from", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		kind, err := rt.typedArrayKindOf(this, "from")
-		if err != nil {
-			return Undefined, err
+		if !isConstructor(this) {
+			return Undefined, rt.throwTypeError(
+				"%%TypedArray%%.from requires a constructor receiver")
+		}
+		mapFn := arg(args, 1)
+		if !mapFn.IsUndefined() && !isCallable(mapFn) {
+			return Undefined, rt.throwTypeError("the map function is not callable")
 		}
 		// The source is collected with Array.from, so an iterable, an
 		// array-like and the mapping function all behave identically here.
@@ -1112,8 +1140,40 @@ func (r *Runtime) initTypedArrayStatics(abstract *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		return rt.typedArrayFromValues(kind, arr)
+		var vals []Value
+		if arr.IsObject() {
+			vals = arr.Object().elems
+		}
+		return rt.typedArrayFromValues(this, vals)
 	})
+}
+
+// typedArrayFromValues builds a view of the given length with the constructor
+// it was asked for, and fills it.
+//
+// The constructor is the receiver, so a subclass gets one of its own -- and
+// whatever it returns has to be a typed array long enough to hold them.
+func (r *Runtime) typedArrayFromValues(ctor Value, vals []Value) (Value, error) {
+	if !isConstructor(ctor) {
+		return Undefined, r.throwTypeError("a typed array constructor is required")
+	}
+	res, err := r.construct(ctor, []Value{Int(len(vals))})
+	if err != nil {
+		return Undefined, err
+	}
+	t, err := r.typedArrayOf(res, "the result")
+	if err != nil {
+		return Undefined, err
+	}
+	if t.length < len(vals) {
+		return Undefined, r.throwTypeError("the result is too short")
+	}
+	for i, el := range vals {
+		if err := r.setElem(t, i, el); err != nil {
+			return Undefined, err
+		}
+	}
+	return res, nil
 }
 
 // typedArrayKindOf recovers the element type a static was reached through.

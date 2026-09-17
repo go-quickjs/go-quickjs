@@ -474,3 +474,52 @@ func TestTypedArraySpeciesDefaultIsIntrinsic(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// A typed array method that writes one value to many elements converts it
+// once, which a valueOf that counts its calls can see -- and converts it the
+// way the element type asks: a BigInt for the 64-bit integer kinds.
+func TestTypedArrayValueConversion(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var n = 1, t = new Float64Array(2);
+		  t.fill({valueOf: function () { return n++ }});
+		  t.join(",") + "|" + n`, "1,1|2"},
+		{`var n = 1n, t = new BigInt64Array(2);
+		  t.fill({valueOf: function () { var v = n; n += 1n; return v }});
+		  t.join(",") + "|" + n`, "1,1|2"},
+
+		// The update operators work on a BigInt as a BigInt.
+		{`var n = 1n; n++; String(n)`, "2"},
+		{`var n = 1n; String(n++) + "," + String(n)`, "1,2"},
+		{`var n = 5n; String(--n)`, "4"},
+		{`var o = {v: 1n}; o.v++; String(o.v)`, "2"},
+		{`var a = [1n]; a[0]++; String(a[0])`, "2"},
+		{`var x = "1"; x++; String(x)`, "2"},
+
+		// from and of build their result with the constructor they were called
+		// on, so a subclass gets one of its own.
+		{`class T extends Uint8Array {}
+		  var t = T.from([1, 2]); [t instanceof T, t.join(",")].join("|")`, "true|1,2"},
+		{`class T extends Uint8Array {}
+		  var t = T.of(3, 4); [t instanceof T, t.join(",")].join("|")`, "true|3,4"},
+		{`BigInt64Array.from([1n, 2n]).join(",")`, "1,2"},
+
+		// Constructing over a buffer coerces both arguments before it looks at
+		// the buffer, and a detached one is a TypeError.
+		{`var b = new ArrayBuffer(8);
+		  try { new Uint8Array(b, {valueOf: function () {
+		    if (typeof structuredClone === "undefined") { b.transfer() } return 0
+		  }}) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`try { new Uint32Array(new ArrayBuffer(8), 3) } catch (e) { e.constructor.name }`,
+			"RangeError"},
+	}
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

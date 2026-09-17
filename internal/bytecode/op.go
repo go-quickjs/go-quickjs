@@ -319,6 +319,9 @@ const (
 	// used on is beneath it, and is required to be coercible first.
 	OpToPropertyKeyOfBase
 	OpToNumber
+	// OpToNumeric is OpToNumber except that a BigInt stays one, which is what
+	// the update operators need: `1n++` is 2n, not an error.
+	OpToNumeric
 	OpToString
 	// --- `with` -----------------------------------------------------------
 	// Inside a `with` body every name compiles to one of the probes below
@@ -466,7 +469,8 @@ var opNames = [opCount]string{
 	OpCheckCoercible:      "check_coercible",
 	OpToPropertyKey:       "to_property_key",
 	OpToPropertyKeyOfBase: "to_property_key_of_base", OpToNumber: "to_number",
-	OpToString: "to_string", OpWithPush: "with_push", OpWithPop: "with_pop",
+	OpToNumeric: "to_numeric",
+	OpToString:  "to_string", OpWithPush: "with_push", OpWithPop: "with_pop",
 	OpWithGet: "with_get", OpWithGetThis: "with_get_this", OpWithSet: "with_set",
 	OpWithDelete: "with_delete", OpWithTypeof: "with_typeof",
 	OpSetName: "set_name", OpSetHomeObject: "set_home_object",

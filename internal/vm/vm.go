@@ -1275,6 +1275,13 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				goto onError
 			}
 			push(Float(n))
+		case bytecode.OpToNumeric:
+			n, err := r.toNumeric(pop())
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			push(n)
 		case bytecode.OpToString:
 			s, err := r.toString(pop())
 			if err != nil {
