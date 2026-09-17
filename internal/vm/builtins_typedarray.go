@@ -366,6 +366,8 @@ func (r *Runtime) initArrayBufferBuiltins() {
 			return transfer(rt, this, args, "ArrayBuffer.prototype.transferToFixedLength")
 		})
 
+	r.arrayBufferCtor = ctor
+
 	r.defMethod(abProto, "slice", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		b, err := rt.bufferOf(this, "ArrayBuffer.prototype.slice")
 		if err != nil {
@@ -382,10 +384,36 @@ func (r *Runtime) initArrayBufferBuiltins() {
 		if start > end {
 			start = end
 		}
-		o := newObject(abProto, ClassArrayBuffer)
-		// slice copies, unlike a typed array view, which aliases.
-		o.data = &arrayBufferData{bytes: append([]byte(nil), b.bytes[start:end]...)}
-		return Obj(o), nil
+		// A subclass decides what its slice returns, which is what the species
+		// protocol is for. Everything it hands back is checked, because the
+		// copy is written into it.
+		ctor, err := rt.speciesConstructor(this.Object(), rt.arrayBufferCtor)
+		if err != nil {
+			return Undefined, err
+		}
+		res, err := rt.construct(ctor, []Value{Int(end - start)})
+		if err != nil {
+			return Undefined, err
+		}
+		if !res.IsObject() || res.Object().class != ClassArrayBuffer {
+			return Undefined, rt.throwTypeError("the species did not return an ArrayBuffer")
+		}
+		out, ok := res.Object().data.(*arrayBufferData)
+		if !ok || out.detached {
+			return Undefined, rt.throwTypeError("the species returned a detached ArrayBuffer")
+		}
+		if res.Object() == this.Object() {
+			return Undefined, rt.throwTypeError("the species returned the buffer being sliced")
+		}
+		if len(out.bytes) < end-start {
+			return Undefined, rt.throwTypeError("the species returned too small a buffer")
+		}
+		// Running the constructor may have detached the source, in which case
+		// there is nothing left to copy.
+		if !b.detached {
+			copy(out.bytes, b.bytes[start:end])
+		}
+		return res, nil
 	})
 
 	r.defToStringTag(abProto, "ArrayBuffer")

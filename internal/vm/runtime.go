@@ -146,7 +146,10 @@ type Runtime struct {
 	// intrinsics because the typed array constructors are generated in a loop
 	// and need to reach them by name.
 	arrayBufferProto *Object
-	typedArrayProto  *Object
+	// arrayBufferCtor is the intrinsic ArrayBuffer, which slice falls back to
+	// when the object names no species of its own.
+	arrayBufferCtor *Object
+	typedArrayProto *Object
 
 	// clock and timeZone supply Date with the current time and the local zone.
 	// They are fields rather than direct calls to the time package so that a

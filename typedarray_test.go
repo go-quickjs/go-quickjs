@@ -669,3 +669,40 @@ func TestTypedArrayIndexThroughReceiver(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestArrayBufferSliceSpecies covers ArrayBuffer.prototype.slice, which asks
+// the object what constructor to build the copy with and checks what it gets.
+func TestArrayBufferSliceSpecies(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var b = new ArrayBuffer(8)
+		  new Uint8Array(b).set([1, 2, 3])
+		  Array.from(new Uint8Array(b.slice(0, 3))).join()`, "1,2,3"},
+		{`String(new ArrayBuffer(8).slice(0).byteLength)`, "8"},
+		{`class B extends ArrayBuffer {}
+		  String(new B(8).slice(0) instanceof B)`, "true"},
+
+		// A constructor that is neither absent nor an object is a TypeError.
+		{`var b = new ArrayBuffer(8); b.constructor = null
+		  try { b.slice(0) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`var b = new ArrayBuffer(8); b.constructor = true
+		  try { b.slice(0) } catch (e) { e.constructor.name }`, "TypeError"},
+		// A species that is not a constructor, or does not build a buffer.
+		{`var b = new ArrayBuffer(8); b.constructor = {[Symbol.species]: {}}
+		  try { b.slice(0) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`var b = new ArrayBuffer(8); b.constructor = {[Symbol.species]: Object}
+		  try { b.slice(0) } catch (e) { e.constructor.name }`, "TypeError"},
+		// One that hands back the buffer being sliced, or too small a buffer.
+		{`var b = new ArrayBuffer(8)
+		  b.constructor = {[Symbol.species]: function () { return b }}
+		  try { b.slice(0) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`var b = new ArrayBuffer(8)
+		  b.constructor = {[Symbol.species]: function () { return new ArrayBuffer(1) }}
+		  try { b.slice(0) } catch (e) { e.constructor.name }`, "TypeError"},
+		// An absent constructor falls back to the intrinsic.
+		{`var b = new ArrayBuffer(8); b.constructor = undefined
+		  String(b.slice(0).byteLength)`, "8"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
