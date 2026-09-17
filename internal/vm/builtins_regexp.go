@@ -45,6 +45,25 @@ func (r *Runtime) newRegExp(source, flags string) (Value, error) {
 	return Obj(o), nil
 }
 
+// isRegExpLike reports whether a value says it is a regular expression.
+//
+// Symbol.match is what says so: a plain object that defines it truthily stands
+// in for one wherever the specification asks, which is how a library can supply
+// its own matcher. An actual RegExp with the property deleted says no.
+func (r *Runtime) isRegExpLike(v Value) (bool, error) {
+	if !v.IsObject() {
+		return false, nil
+	}
+	m, err := r.getValueProp(v, r.atoms.internSymbol(r.wellKnown.match))
+	if err != nil {
+		return false, err
+	}
+	if !m.IsUndefined() {
+		return m.Truthy(), nil
+	}
+	return v.Object().class == ClassRegExp, nil
+}
+
 func (r *Runtime) initRegExpBuiltins() {
 	r.proto.regexp = newObject(r.proto.object, ClassObject)
 	p := r.proto.regexp
@@ -53,11 +72,31 @@ func (r *Runtime) initRegExpBuiltins() {
 		pattern := arg(args, 0)
 		flagsArg := arg(args, 1)
 
-		// new RegExp(re) copies the pattern, taking its flags unless new ones
-		// are supplied.
-		if pattern.IsObject() && pattern.Object().class == ClassRegExp {
+		// Anything that says it is a regular expression is treated as one,
+		// which is what Symbol.match is for: a plain object that defines it
+		// truthily can stand in for one, and its source and flags are read
+		// rather than its string form.
+		isRE, err := rt.isRegExpLike(pattern)
+		if err != nil {
+			return Undefined, err
+		}
+		if rt.newTarget().IsUndefined() && isRE && flagsArg.IsUndefined() {
+			// Called rather than constructed, and given a regular expression
+			// of this very constructor, RegExp hands it straight back.
+			c, err := rt.getValueProp(pattern, atomConstructor)
+			if err != nil {
+				return Undefined, err
+			}
+			if c.IsObject() && c.Object() == rt.proto.regexpCtor {
+				return pattern, nil
+			}
+		}
+
+		var source, flags string
+		switch {
+		case pattern.IsObject() && pattern.Object().class == ClassRegExp:
 			d := pattern.Object().data.(*regexpData)
-			flags := d.re.Flags().String()
+			source, flags = d.re.Source(), d.re.Flags().String()
 			if !flagsArg.IsUndefined() {
 				s, err := rt.toString(flagsArg)
 				if err != nil {
@@ -65,24 +104,44 @@ func (r *Runtime) initRegExpBuiltins() {
 				}
 				flags = s.Go()
 			}
-			return rt.newRegExp(d.re.Source(), flags)
-		}
-
-		source := ""
-		if !pattern.IsUndefined() {
-			s, err := rt.toString(pattern)
+		case isRE:
+			src, err := rt.getValueProp(pattern, r.atoms.intern("source"))
+			if err != nil {
+				return Undefined, err
+			}
+			s, err := rt.toString(src)
 			if err != nil {
 				return Undefined, err
 			}
 			source = s.Go()
-		}
-		flags := ""
-		if !flagsArg.IsUndefined() {
-			s, err := rt.toString(flagsArg)
-			if err != nil {
-				return Undefined, err
+			fv := flagsArg
+			if fv.IsUndefined() {
+				if fv, err = rt.getValueProp(pattern, r.atoms.intern("flags")); err != nil {
+					return Undefined, err
+				}
 			}
-			flags = s.Go()
+			if !fv.IsUndefined() {
+				f, err := rt.toString(fv)
+				if err != nil {
+					return Undefined, err
+				}
+				flags = f.Go()
+			}
+		default:
+			if !pattern.IsUndefined() {
+				s, err := rt.toString(pattern)
+				if err != nil {
+					return Undefined, err
+				}
+				source = s.Go()
+			}
+			if !flagsArg.IsUndefined() {
+				f, err := rt.toString(flagsArg)
+				if err != nil {
+					return Undefined, err
+				}
+				flags = f.Go()
+			}
 		}
 		return rt.newRegExp(source, flags)
 	})

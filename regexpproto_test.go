@@ -275,3 +275,46 @@ func TestStringPatternDispatch(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// Anything that says it is a regular expression is treated as one, which is
+// what Symbol.match is for: a plain object that defines it truthily can stand
+// in for one, and its source and flags are read rather than its string form.
+func TestRegExpConstructorFromRegExpLike(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var o = {source: "abc", flags: "g"}; o[Symbol.match] = true;
+		  String(new RegExp(o))`, "/abc/g"},
+		{`var o = {source: "abc", flags: "g"}; o[Symbol.match] = true;
+		  String(new RegExp(o, "i"))`, "/abc/i"},
+		// An object that says no is stringified as before.
+		{`var o = {source: "abc", toString: function () { return "x" }};
+		  String(new RegExp(o))`, "/x/"},
+		// Called rather than constructed on a regular expression of this very
+		// constructor, RegExp hands it straight back.
+		{`var re = /a/g; String(RegExp(re) === re)`, "true"},
+		{`var re = /a/g; String(new RegExp(re) === re)`, "false"},
+		{`var re = /a/g; String(RegExp(re, "i") === re)`, "false"},
+		{`String(new RegExp("a", "g"))`, "/a/g"},
+
+		// RegExp.escape escapes a leading digit or letter numerically so the
+		// result cannot merge with what precedes it, and the syntax characters
+		// with a backslash.
+		{`RegExp.escape("$")`, `\$`},
+		{`RegExp.escape(".")`, `\.`},
+		{`RegExp.escape("_")`, "_"},
+		{`RegExp.escape("a")`, `\x61`},
+		{`RegExp.escape("ab")`, `\x61b`},
+		{`RegExp.escape(" ")`, `\x20`},
+		{`RegExp.escape(" ")`, `\u202f`},
+		{`RegExp.escape("-")`, `\x2d`},
+	}
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

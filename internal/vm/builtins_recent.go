@@ -82,10 +82,10 @@ func (r *Runtime) initErrorIsError() {
 //
 // Hand-rolled escaping is a recurring source of injection bugs, and the obvious
 // character class misses the cases that matter. This follows the specification:
-// a leading identifier character is escaped numerically so that the result can
-// never merge with whatever precedes it, punctuation that could be confused
-// with syntax is escaped even where it is harmless, and code units outside the
-// printable range are spelled out.
+// a leading digit or letter is escaped numerically so that the result can never
+// merge with whatever precedes it, punctuation that could be confused with
+// syntax is escaped even where it is harmless, and whitespace and lone
+// surrogates are spelled out.
 func (r *Runtime) initRegExpEscape() {
 	ctor, ok := r.globalFunc("RegExp")
 	if !ok {
@@ -102,13 +102,14 @@ func (r *Runtime) initRegExpEscape() {
 	})
 }
 
-// syntaxChars are the characters that mean something in a pattern.
+// syntaxChars are the characters that mean something in a pattern. A forward
+// slash joins them: the result has to be safe to splice into a literal too.
 const syntaxChars = `^$\.*+?()[]{}|/`
 
 // otherPunctuators are escaped numerically even though they are not syntax, so
 // that the result is safe to splice into a class or a group name as well as
 // into a pattern.
-const otherPunctuators = ",-=<>#&!%:;@~'`\"" + " "
+const otherPunctuators = ",-=<>#&!%:;@~'`" + `"`
 
 func escapeRegExp(s string) string {
 	var b strings.Builder
@@ -116,9 +117,10 @@ func escapeRegExp(s string) string {
 
 	units := wtf8.ToUTF16(s)
 	for i, u := range units {
-		// A leading identifier character is escaped numerically, so that the
-		// escaped string cannot combine with a preceding \ or a quantifier.
-		if i == 0 && isIdentifierCodeUnit(u) {
+		// A leading digit or letter is escaped numerically, so that the
+		// escaped string cannot combine with a quantifier or an escape
+		// immediately before it.
+		if i == 0 && isAsciiAlnum(u) {
 			b.WriteString(hexEscape(u))
 			continue
 		}
@@ -126,41 +128,44 @@ func escapeRegExp(s string) string {
 		case u < 128 && strings.ContainsRune(syntaxChars, rune(u)):
 			b.WriteByte('\\')
 			b.WriteRune(rune(u))
+		case u == '\t':
+			b.WriteString(`\t`)
+		case u == '\n':
+			b.WriteString(`\n`)
+		case u == '\v':
+			b.WriteString(`\v`)
+		case u == '\f':
+			b.WriteString(`\f`)
+		case u == '\r':
+			b.WriteString(`\r`)
 		case u < 128 && strings.ContainsRune(otherPunctuators, rune(u)):
 			b.WriteString(hexEscape(u))
+		case isPatternWhitespace(u) || (u >= 0xD800 && u <= 0xDFFF):
+			// Whitespace that is invisible in source, and a surrogate that has
+			// no character of its own, are both worth spelling out.
+			b.WriteString(hexEscape(u))
 		default:
-			switch u {
-			case '\t':
-				b.WriteString(`\t`)
-			case '\n':
-				b.WriteString(`\n`)
-			case '\v':
-				b.WriteString(`\v`)
-			case '\f':
-				b.WriteString(`\f`)
-			case '\r':
-				b.WriteString(`\r`)
-			case 0x00A0, 0x2028, 0x2029, 0xFEFF:
-				// Whitespace that is invisible in source, and so worth
-				// spelling out.
-				b.WriteString(hexEscape(u))
-			default:
-				if u < 0x20 || (u >= 0xD800 && u <= 0xDFFF) {
-					b.WriteString(hexEscape(u))
-				} else {
-					b.Write(wtf8.AppendRune(nil, rune(u)))
-				}
-			}
+			b.Write(wtf8.AppendRune(nil, rune(u)))
 		}
 	}
 	return b.String()
 }
 
-func isIdentifierCodeUnit(u uint16) bool {
-	return u == '_' || u == '$' ||
-		(u >= '0' && u <= '9') ||
-		(u >= 'a' && u <= 'z') ||
-		(u >= 'A' && u <= 'Z')
+// isAsciiAlnum reports whether a code unit is a decimal digit or an ASCII
+// letter, which is what the leading-character rule is about.
+func isAsciiAlnum(u uint16) bool {
+	return (u >= '0' && u <= '9') || (u >= 'a' && u <= 'z') || (u >= 'A' && u <= 'Z')
+}
+
+// isPatternWhitespace reports whether a code unit is WhiteSpace or a
+// LineTerminator, both of which the escape spells out numerically.
+func isPatternWhitespace(u uint16) bool {
+	switch u {
+	case 0x0009, 0x000A, 0x000B, 0x000C, 0x000D, 0x0020, 0x00A0,
+		0x1680, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000, 0xFEFF:
+		return true
+	}
+	return u >= 0x2000 && u <= 0x200A
 }
 
 // hexEscape spells a code unit as \xHH when it fits in a byte and \uHHHH
