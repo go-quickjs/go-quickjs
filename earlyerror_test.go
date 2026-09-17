@@ -545,3 +545,45 @@ func TestPrivateNameNeedsAClass(t *testing.T) {
 		              catch (e) { e.constructor.name + ": " + e.message }`, "ok")
 	}
 }
+
+// TestLegacySyntaxUnderStrict covers the two forms that predate strict mode:
+// the octal escapes and literals, and the numeric separator's one placement
+// that never meant anything.
+func TestLegacySyntaxUnderStrict(t *testing.T) {
+	// A leading zero is a literal all by itself, so there is nothing for a
+	// separator to sit between.
+	bad := []string{`0_0`, `0_1`, `0_7`, `0_8`, `0_9`, `0_0n`}
+	for _, src := range bad {
+		checkEval(t, `try { eval(`+jsQuote(src)+`); "no throw" }
+		              catch (e) { e.constructor.name }`, "SyntaxError")
+	}
+	for _, src := range []string{`1_000`, `0.5_1`, `0x1_0`, `0b1_0`, `0o1_0`, `1_0n`} {
+		checkEval(t, `try { eval(`+jsQuote(src)+`); "ok" }
+		              catch (e) { e.constructor.name }`, "ok")
+	}
+	checkEval(t, `String(1_000) + "," + String(0.5_1) + "," + String(0x1_0)`, "1000,0.51,16")
+
+	// An octal escape, or \8 and \9, where strict mode applies. The rule is
+	// about the body as a whole, so a directive carrying one is an error even
+	// when it comes before the "use strict".
+	strictBad := []string{
+		`"use strict"; "\1"`,
+		`"use strict"; "\08"`,
+		`"use strict"; "\8"`,
+		`"use strict"; "\9"`,
+		`"\1"; "use strict"`,
+		`"use strict"; var x = "\1"`,
+		`function f() { "use strict"; return "\1" }`,
+		`"use strict"; ({"\1": 1})`,
+	}
+	for _, src := range strictBad {
+		checkEval(t, `try { eval(`+jsQuote(src)+`); "no throw" }
+		              catch (e) { e.constructor.name }`, "SyntaxError")
+	}
+
+	// Sloppy mode keeps them, and \0 on its own is NUL in either.
+	checkEval(t, `eval('"\\1"').charCodeAt(0)`, "1")
+	checkEval(t, `eval('"\\8"')`, "8")
+	checkEval(t, `eval('"use strict"; "\\0"').charCodeAt(0)`, "0")
+	checkEval(t, `eval('"use strict"; "ok"')`, "ok")
+}

@@ -448,9 +448,21 @@ func (p *parser) checkLabelName(name string, tok lexer.Token) {
 func (p *parser) parseDirectivePrologue(atEnd func() bool) []ast.Stmt {
 	var out []ast.Stmt
 	p.sawUseStrict = false
+	// A directive written with an escape that predates strict mode is an error
+	// as soon as the prologue turns strict -- even when the directive came
+	// first, since the rule is about the body as a whole.
+	var legacyTok lexer.Token
+	defer func() {
+		if p.strict && legacyTok.Kind == lexer.String {
+			p.errorAt(legacyTok, "this escape sequence is not allowed in strict mode")
+		}
+	}()
 	for !atEnd() {
 		if p.tok.Kind != lexer.String {
 			break
+		}
+		if p.tok.LegacyEscape && legacyTok.Kind != lexer.String {
+			legacyTok = p.tok
 		}
 		// A string literal is only a directive if the whole statement is just
 		// that literal: `"use strict" + x` is an ordinary expression.

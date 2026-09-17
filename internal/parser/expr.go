@@ -523,6 +523,7 @@ func (p *parser) parsePrimary() ast.Expr {
 
 	case lexer.String:
 		v := p.tok.Value
+		p.checkLegacyEscape()
 		p.next()
 		return p.nodes.str(v, start)
 
@@ -635,6 +636,14 @@ func (p *parser) parsePrimary() ast.Expr {
 
 	p.unexpected()
 	return nil
+}
+
+// checkLegacyEscape rejects the string escapes that predate strict mode --
+// octal escapes, and \8 and \9 -- where strict mode applies.
+func (p *parser) checkLegacyEscape() {
+	if p.strict && p.tok.LegacyEscape {
+		p.errorf("this escape sequence is not allowed in strict mode")
+	}
 }
 
 // checkLegacyOctal rejects legacy octal and non-octal decimal literals in
@@ -933,6 +942,7 @@ func (p *parser) parsePropertyName(allowPrivate bool) (ast.Expr, bool) {
 	switch p.tok.Kind {
 	case lexer.String:
 		v := p.tok.Value
+		p.checkLegacyEscape()
 		p.next()
 		return p.nodes.str(v, start), false
 	case lexer.Number:

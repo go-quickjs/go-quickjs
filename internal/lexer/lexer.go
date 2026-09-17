@@ -38,6 +38,9 @@ type Lexer struct {
 	// nlBefore records whether a line terminator was skipped before the token
 	// currently being scanned.
 	nlBefore bool
+	// legacyEscape records that the string being scanned used an escape that
+	// predates strict mode, which the parser rejects where strict mode applies.
+	legacyEscape bool
 }
 
 // New returns a Lexer over src.
@@ -434,6 +437,7 @@ func normalizeTemplateRaw(raw string) string {
 func (l *Lexer) scanString(tok Token, quote byte) (Token, error) {
 	start := l.pos
 	l.pos++
+	l.legacyEscape = false
 	var sb strings.Builder
 	for {
 		if l.atEnd() {
@@ -443,6 +447,7 @@ func (l *Lexer) scanString(tok Token, quote byte) (Token, error) {
 		if c == quote {
 			l.pos++
 			tok.Kind, tok.Value, tok.Raw = String, sb.String(), l.src[start:l.pos]
+			tok.LegacyEscape = l.legacyEscape
 			return tok, nil
 		}
 		switch c {
@@ -509,6 +514,7 @@ func (l *Lexer) scanEscapeIn(sb *strings.Builder, inTemplate bool) error {
 		if inTemplate {
 			return l.errf(start, "octal escape sequences are not allowed in templates")
 		}
+		l.legacyEscape = true
 		v := int(c - '0')
 		limit := 2
 		if c >= '4' {
@@ -558,6 +564,7 @@ func (l *Lexer) scanEscapeIn(sb *strings.Builder, inTemplate bool) error {
 		if inTemplate {
 			return l.errf(start, "\\%c is not an escape sequence", c)
 		}
+		l.legacyEscape = true
 		sb.WriteByte(c)
 	default:
 		if c >= utf8.RuneSelf {
@@ -666,6 +673,11 @@ func (l *Lexer) scanNumber(tok Token) (Token, error) {
 	start := l.pos
 	tok.Kind = Number
 
+	if l.src[l.pos] == '0' && l.peekByte(1) == '_' {
+		// A leading zero is a literal all by itself, so there is nothing for a
+		// separator to sit between: 0_0 is not 00.
+		return tok, l.errf(l.pos+1, "a numeric separator may not follow a leading zero")
+	}
 	if l.src[l.pos] == '0' && l.pos+1 < len(l.src) {
 		switch lower(l.peekByte(1)) {
 		case 'x':

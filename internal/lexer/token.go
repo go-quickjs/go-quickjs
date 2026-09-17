@@ -75,6 +75,11 @@ type Token struct {
 	// for a tagged one, where the cooked value simply becomes undefined, so the
 	// lexer records it rather than failing.
 	TemplateValid bool
+	// LegacyEscape reports whether a string literal used one of the escape
+	// sequences that predate strict mode: an octal escape, or \8 and \9. The
+	// lexer records it rather than failing, because whether it is an error
+	// depends on a strictness the lexer does not know.
+	LegacyEscape bool
 	// Escaped reports whether an identifier was written with a unicode escape.
 	// Such a name is never a keyword -- \u0069f is an identifier -- and it is
 	// never a contextual keyword either, so `\u0067et x() {}` is a method named
