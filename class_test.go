@@ -620,3 +620,100 @@ func TestDerivedConstructorReturn(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// A private name is not a string. Two classes may spell one the same way
+// without sharing it, and neither may two evaluations of the same class: the
+// key is minted when the class is evaluated, and lives in a binding the body
+// closes over.
+func TestPrivateNamesAreUniquePerClassEvaluation(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// Two evaluations of one class expression.
+		{`function make() { return class { #x = 1; static read(o) { return o.#x } } }
+		  var A = make(), B = make();
+		  try { A.read(new B()) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`function make() { return class { #x = 1; static read(o) { return o.#x } } }
+		  var A = make(); String(A.read(new A()))`, "1"},
+
+		// An inner class that spells a name the outer one also spells.
+		{`class O {
+		    #x = 1;
+		    static probe(o) {
+		      class I { #x = 2; static read(v) { return v.#x } }
+		      try { return String(I.read(o)) } catch (e) { return e.constructor.name }
+		    }
+		  }
+		  O.probe(new O())`, "TypeError"},
+
+		// An object that merely inherits from the prototype is not an
+		// instance, whatever kind of member is asked for.
+		{`class C { #m() {} static probe(o) {
+		    try { o.#m() } catch (e) { return e.constructor.name }
+		  } }
+		  C.probe(Object.create(C.prototype))`, "TypeError"},
+		{`class C { get #g() { return 1 } static probe(o) {
+		    try { o.#g } catch (e) { return e.constructor.name }
+		  } }
+		  C.probe(Object.create(C.prototype))`, "TypeError"},
+		{`class C { #m() { return 1 } static has(o) { return #m in o } }
+		  [C.has(new C()), C.has(Object.create(C.prototype))].join(",")`, "true,false"},
+
+		// A private method belongs to the instance and is installed when the
+		// instance is made -- which in a derived class is when super() returns,
+		// not before.
+		{`class A { constructor() { this.probe = D.check(this) } }
+		  class D extends A {
+		    #m() {}
+		    constructor() { super() }
+		    static check(o) {
+		      try { o.#m(); return "installed" } catch (e) { return "not yet" }
+		    }
+		  }
+		  new D().probe`, "not yet"},
+		{`class A { constructor() {} }
+		  class D extends A { #m() { return 7 } constructor() { super() }
+		    read() { return this.#m() } }
+		  String(new D().read())`, "7"},
+
+		// The same function object for every instance, as the specification
+		// requires -- not one per instance.
+		{`class C { #m() {} static same(a, b) { return a.#m === b.#m } }
+		  String(C.same(new C(), new C()))`, "true"},
+
+		// A method cannot be written through; a field can.
+		{`class C { #m() {} static w(o) {
+		    try { o.#m = 1 } catch (e) { return e.constructor.name }
+		  } }
+		  C.w(new C())`, "TypeError"},
+		{`class C { #x = 1; static swap(o) { o.#x = 5; return o.#x } }
+		  String(C.swap(new C()))`, "5"},
+
+		// Nothing reflective reports a private member, accessor or not.
+		{`class C { get #g() { return 1 } #m() {} #f = 1 }
+		  var o = new C();
+		  [Object.getOwnPropertyNames(C.prototype).join("|"),
+		   Object.getOwnPropertyNames(o).length,
+		   Object.getOwnPropertySymbols(o).length,
+		   JSON.stringify(o)].join(",")`, "constructor,0,0,{}"},
+
+		// Static private members live on the constructor.
+		{`class C { static #s = 1; static #m() { return 2 } static get #g() { return 3 }
+		    static read() { return [C.#s, C.#m(), C.#g].join(",") } }
+		  C.read()`, "1,2,3"},
+
+		// super in a private method resolves against the prototype's prototype.
+		{`class A { hi() { return "a" } }
+		  class B extends A { #m() { return super.hi() } read() { return this.#m() } }
+		  new B().read()`, "a"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

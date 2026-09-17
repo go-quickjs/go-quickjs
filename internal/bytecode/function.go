@@ -81,7 +81,15 @@ type EvalScope struct {
 	InClassBody    bool
 	// PrivateNames are the private names of the enclosing classes, which
 	// evaluated code may refer to.
-	PrivateNames []string
+	PrivateNames []EvalPrivateName
+}
+
+// EvalPrivateName is one private name a direct eval's code can refer to,
+// together with the hidden binding that holds its key. The binding reaches the
+// evaluated code the way any other captured one does.
+type EvalPrivateName struct {
+	Name   string
+	Hidden string
 }
 
 // EvalBinding is one name a direct eval's code can reach.

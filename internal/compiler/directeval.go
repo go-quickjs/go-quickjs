@@ -116,11 +116,31 @@ func (c *compiler) visibleBindings() []bytecode.EvalBinding {
 
 // visiblePrivateNames lists the private names of the enclosing classes, which
 // evaluated code may refer to exactly as the surrounding code may.
-func (c *compiler) visiblePrivateNames() []string {
-	var out []string
+//
+// Each carries the hidden binding holding its key, which visibleBindings has
+// already captured: it is a local of one of the enclosing functions like any
+// other, so the evaluated code reaches it the same way.
+func (c *compiler) visiblePrivateNames() []bytecode.EvalPrivateName {
+	var out []bytecode.EvalPrivateName
+	seen := make(map[string]bool)
 	for s := c; s != nil; s = s.parent {
-		for _, scope := range s.privateScopes {
-			out = append(out, scope...)
+		for i := len(s.privateScopes) - 1; i >= 0; i-- {
+			for _, b := range s.privateScopes[i] {
+				if seen[b.name] {
+					continue
+				}
+				seen[b.name] = true
+				out = append(out, bytecode.EvalPrivateName{
+					Name: b.name, Hidden: b.hidden,
+				})
+			}
+		}
+	}
+	// An eval inside an eval reaches the names its own call site could.
+	for _, b := range c.rootOpts().PrivateNames {
+		if !seen[b.Name] {
+			seen[b.Name] = true
+			out = append(out, b)
 		}
 	}
 	return out

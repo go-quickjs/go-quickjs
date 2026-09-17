@@ -1519,13 +1519,15 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 
 		// --- Private class members ----------------------------------------
+		case bytecode.OpPrivateName:
+			push(r.newPrivateName(cl.names[in.A]))
 		case bytecode.OpGetPrivate:
 			obj := pop()
 			if !obj.IsObject() {
 				vmErr = r.throwTypeError("cannot read a private member of %s", r.describe(obj))
 				goto onError
 			}
-			v, err := r.getPrivate(obj.Object(), cl.names[in.A])
+			v, err := r.getPrivate(obj.Object(), privateKey(f, cl, in.B), cl.names[in.A])
 			if err != nil {
 				vmErr = err
 				goto onError
@@ -1538,7 +1540,8 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				vmErr = r.throwTypeError("cannot write a private member of %s", r.describe(obj))
 				goto onError
 			}
-			if err := r.setPrivate(obj.Object(), cl.names[in.A], val); err != nil {
+			err := r.setPrivate(obj.Object(), privateKey(f, cl, in.B), cl.names[in.A], val)
+			if err != nil {
 				vmErr = err
 				goto onError
 			}
@@ -1546,23 +1549,41 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			val := pop()
 			target := peek(0)
 			if target.IsObject() {
-				target.Object().setOwnRaw(cl.names[in.A], val, propWritable|propPrivate)
+				target.Object().setOwnRaw(privateKey(f, cl, in.B), val,
+					propWritable|propPrivate)
+			}
+		case bytecode.OpDefinePrivateGetter, bytecode.OpDefinePrivateSetter:
+			val := pop()
+			target := peek(0)
+			if target.IsObject() && val.IsObject() {
+				r.definePrivateAccessor(target.Object(), privateKey(f, cl, in.B),
+					val.Object(), in.Op == bytecode.OpDefinePrivateGetter)
 			}
 		case bytecode.OpPrivateIn:
 			obj := pop()
-			// The prototype chain is walked because a private method lives on
-			// the prototype rather than the instance, and `#m in obj` has to
-			// find it there just as reading this.#m does.
+			// An own property and nothing else: a private member belongs to the
+			// object that has it, and an object that merely inherits from an
+			// instance's prototype is not an instance.
 			found := false
 			if obj.IsObject() {
-				for cur := obj.Object(); cur != nil; cur = cur.proto {
-					if cur.getOwn(cl.names[in.A]) != nil {
-						found = true
-						break
-					}
-				}
+				found = obj.Object().getOwn(privateKey(f, cl, in.B)) != nil
 			}
 			push(Bool(found))
+		case bytecode.OpNewPrivateMethods:
+			push(r.newPrivateMethods())
+		case bytecode.OpAddPrivateMethod, bytecode.OpAddPrivateGetter,
+			bytecode.OpAddPrivateSetter:
+			fnVal := pop()
+			list := pop()
+			r.addPrivateMethod(list, privateKey(f, cl, in.B), fnVal, in.Op)
+		case bytecode.OpInstallPrivateMethods:
+			this, bound := f.thisValue()
+			if !bound {
+				vmErr = r.throwError(errReference,
+					"\"this\" is not bound until super() has been called")
+				goto onError
+			}
+			r.installPrivateMethods(this, pop())
 
 		// --- Classes ------------------------------------------------------
 		case bytecode.OpNewClass:
@@ -2415,51 +2436,49 @@ func (r *Runtime) superGet(f *frame, key Atom) (Value, error) {
 // private flag, so the write has to look for one rather than always installing
 // a data property -- otherwise `set #m(v)` would be shadowed the first time
 // anything assigned to #m.
-func (r *Runtime) setPrivate(o *Object, key Atom, val Value) error {
-	for cur := o; cur != nil; cur = cur.proto {
-		p := cur.getOwn(key)
-		if p == nil {
-			continue
-		}
-		if p.isAccessor() {
-			a := p.getterSetter()
-			if a == nil || a.setter == nil {
-				return r.throwTypeError("private member %s has no setter", r.atoms.name(key))
-			}
-			_, err := r.call(Obj(a.setter), Obj(o), []Value{val})
-			return err
-		}
-		if cur == o {
-			p.value = val
-			return nil
-		}
-		// A private method found on a prototype is not writable through an
-		// instance; only a field, which lives on the instance itself, is.
-		return r.throwTypeError("private method %s is read-only", r.atoms.name(key))
+func (r *Runtime) setPrivate(o *Object, key, name Atom, val Value) error {
+	// An own property and nothing else: a private member belongs to the object
+	// that has it, so an object that merely inherits from an instance's
+	// prototype is not one and cannot be written through.
+	p := o.getOwn(key)
+	if p == nil {
+		// A private field is added when the object is constructed and never
+		// afterwards, so writing one to an object that does not have it is a
+		// mistake rather than a way to add it.
+		return r.throwTypeError("private member %s is not present on this object",
+			r.atoms.name(name))
 	}
-	// A private field is added when the object is constructed and never
-	// afterwards, so writing one to an object that does not have it is a
-	// mistake rather than a way to add it.
-	return r.throwTypeError("private member %s is not present on this object",
-		r.atoms.name(key))
+	if p.isAccessor() {
+		a := p.getterSetter()
+		if a == nil || a.setter == nil {
+			return r.throwTypeError("private member %s has no setter", r.atoms.name(name))
+		}
+		_, err := r.call(Obj(a.setter), Obj(o), []Value{val})
+		return err
+	}
+	if p.flags&propWritable == 0 {
+		// A method is installed read-only, so this is one.
+		return r.throwTypeError("private method %s is read-only", r.atoms.name(name))
+	}
+	p.value = val
+	return nil
 }
 
-func (r *Runtime) getPrivate(o *Object, key Atom) (Value, error) {
-	for cur := o; cur != nil; cur = cur.proto {
-		if p := cur.getOwn(key); p != nil {
-			if p.isAccessor() {
-				a := p.getterSetter()
-				if a == nil || a.getter == nil {
-					return Undefined, r.throwTypeError(
-						"private member %s has no getter", r.atoms.name(key))
-				}
-				return r.call(Obj(a.getter), Obj(o), nil)
-			}
-			return p.value, nil
-		}
+func (r *Runtime) getPrivate(o *Object, key, name Atom) (Value, error) {
+	p := o.getOwn(key)
+	if p == nil {
+		return Undefined, r.throwTypeError(
+			"private member %s is not present on this object", r.atoms.name(name))
 	}
-	return Undefined, r.throwTypeError(
-		"private member %s is not present on this object", r.atoms.name(key))
+	if p.isAccessor() {
+		a := p.getterSetter()
+		if a == nil || a.getter == nil {
+			return Undefined, r.throwTypeError(
+				"private member %s has no getter", r.atoms.name(name))
+		}
+		return r.call(Obj(a.getter), Obj(o), nil)
+	}
+	return p.value, nil
 }
 
 // templateObject returns the strings a tagged template site hands its tag.

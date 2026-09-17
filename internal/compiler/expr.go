@@ -89,9 +89,9 @@ func (c *compiler) compileExprNamed(e ast.Expr, name string) {
 		// which is the only way to tell one of that class's instances from a
 		// lookalike without a try/catch around a private read.
 		if pn, ok := n.Left.(*ast.PrivateName); ok && n.Op == "in" {
-			c.checkPrivateName(pn, n.Start)
+			name, ref := c.privateName(pn, n.Start)
 			c.compileExpr(n.Right)
-			c.emitAt(n.Start, bytecode.OpPrivateIn, c.nameIdx("#"+pn.Name), 0)
+			c.emitAt(n.Start, bytecode.OpPrivateIn, name, ref)
 			break
 		}
 		c.compileExpr(n.Left)
@@ -544,12 +544,11 @@ func (c *compiler) compileUpdate(n *ast.Update) {
 	case *ast.Member:
 		c.compileExpr(target.Object)
 		if pn, private := target.Property.(*ast.PrivateName); private {
-			c.checkPrivateName(pn, target.Start)
 			// A private member is reached through its own accessors, which do
 			// not consult the prototype chain the way a property does.
-			name := c.nameIdx("#" + pn.Name)
+			name, ref := c.privateName(pn, target.Start)
 			c.emit(bytecode.OpDup, 0, 0)
-			c.emit(bytecode.OpGetPrivate, name, 0)
+			c.emit(bytecode.OpGetPrivate, name, ref)
 			c.emit(bytecode.OpToNumber, 0, 0)
 			if !n.Prefix {
 				c.emit(bytecode.OpInsert2, 0, 0)
@@ -558,7 +557,7 @@ func (c *compiler) compileUpdate(n *ast.Update) {
 				c.emitAt(n.Start, op, 0, 0)
 				c.emit(bytecode.OpInsert2, 0, 0)
 			}
-			c.emit(bytecode.OpSetPrivate, name, 0)
+			c.emit(bytecode.OpSetPrivate, name, ref)
 			return
 		}
 		if target.Computed {
@@ -640,9 +639,9 @@ func (c *compiler) compileMemberRead(n *ast.Member) {
 		return
 	}
 	if pn, ok := n.Property.(*ast.PrivateName); ok {
-		c.checkPrivateName(pn, n.Start)
+		name, ref := c.privateName(pn, n.Start)
 		c.compileExpr(n.Object)
-		c.emitAt(n.Start, bytecode.OpGetPrivate, c.nameIdx("#"+pn.Name), 0)
+		c.emitAt(n.Start, bytecode.OpGetPrivate, name, ref)
 		return
 	}
 	c.compileExpr(n.Object)
@@ -675,10 +674,10 @@ func (c *compiler) compileCall(n *ast.Call) {
 	// receiver for `this`.
 	if m, ok := n.Callee.(*ast.Member); ok {
 		if pn, isPrivate := m.Property.(*ast.PrivateName); isPrivate {
-			c.checkPrivateName(pn, m.Start)
+			name, ref := c.privateName(pn, m.Start)
 			c.compileExpr(m.Object)
 			c.emit(bytecode.OpDup, 0, 0)
-			c.emit(bytecode.OpGetPrivate, c.nameIdx("#"+pn.Name), 0)
+			c.emit(bytecode.OpGetPrivate, name, ref)
 			argc := c.compileArguments(n.Args)
 			c.emitAt(n.Start, bytecode.OpCallMethod, uint32(argc), 0)
 			return
@@ -962,13 +961,13 @@ func (c *compiler) compileMemberUpdate(m *ast.Member, op string, emitValue func(
 	if pn, private := m.Property.(*ast.PrivateName); private {
 		// A private name is not an expression, so there is nothing to evaluate
 		// twice; only the object is kept.
-		c.checkPrivateName(pn, m.Start)
+		name, ref := c.privateName(pn, m.Start)
 		c.compileExpr(m.Object)
 		c.emit(bytecode.OpDup, 0, 0)
-		c.emit(bytecode.OpGetPrivate, c.nameIdx("#"+pn.Name), 0)
+		c.emit(bytecode.OpGetPrivate, name, ref)
 		c.finishUpdate(op, emitValue, pos, 1, func() {
 			c.emit(bytecode.OpInsert2, 0, 0)
-			c.emit(bytecode.OpSetPrivate, c.nameIdx("#"+pn.Name), 0)
+			c.emit(bytecode.OpSetPrivate, name, ref)
 		})
 		return
 	}
@@ -1190,11 +1189,11 @@ func compoundOpcode(op string) bytecode.Op {
 // fixes the order in which they happen.
 func (c *compiler) compileMemberStore(m *ast.Member, emitValue func()) {
 	if pn, ok := m.Property.(*ast.PrivateName); ok {
-		c.checkPrivateName(pn, m.Start)
+		name, ref := c.privateName(pn, m.Start)
 		c.compileExpr(m.Object)
 		emitValue()
 		c.emit(bytecode.OpInsert2, 0, 0)
-		c.emitAt(m.Start, bytecode.OpSetPrivate, c.nameIdx("#"+pn.Name), 0)
+		c.emitAt(m.Start, bytecode.OpSetPrivate, name, ref)
 		return
 	}
 	c.compileExpr(m.Object)
@@ -1218,11 +1217,11 @@ func (c *compiler) compileMemberStore(m *ast.Member, emitValue func()) {
 // a member target, which is what a compound assignment needs after combining.
 func (c *compiler) compileMemberStoreFromValue(m *ast.Member) {
 	if pn, ok := m.Property.(*ast.PrivateName); ok {
-		c.checkPrivateName(pn, m.Start)
+		name, ref := c.privateName(pn, m.Start)
 		c.compileExpr(m.Object)
 		c.emit(bytecode.OpSwap, 0, 0)
 		c.emit(bytecode.OpInsert2, 0, 0)
-		c.emit(bytecode.OpSetPrivate, c.nameIdx("#"+pn.Name), 0)
+		c.emit(bytecode.OpSetPrivate, name, ref)
 		return
 	}
 	// The value is on top; the object and key have to go beneath it.

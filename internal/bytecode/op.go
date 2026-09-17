@@ -101,11 +101,35 @@ const (
 	OpCopyDataProps // object spread: copy own enumerable properties
 
 	// --- Private class members -------------------------------------------
+	// A private name's key is minted when its class is evaluated, so every
+	// instruction below takes it from a binding rather than from the name
+	// table. A is the name, which only an error message uses; B says where the
+	// key is: a slot of this function when its low bit is clear, one of its
+	// upvalues when it is set, and the index in the rest.
 	OpGetPrivate
 	OpSetPrivate
 	OpDefinePrivate
+	OpDefinePrivateGetter
+	OpDefinePrivateSetter
 	OpPrivateIn // `#x in obj`
 	OpGetPrivateMethod
+	// OpPrivateName mints the key for one private name of one class evaluation,
+	// which is what keeps two evaluations of the same class apart. A is the
+	// name, for the error messages an access through the key produces.
+	OpPrivateName
+	// OpNewPrivateMethods pushes the list of private methods and accessors an
+	// instance of a class carries, which OpAddPrivateMethod fills in as the
+	// class body is evaluated and OpInstallPrivateMethods copies onto each
+	// instance as it is made.
+	//
+	// They belong to the instance rather than to the prototype: an object that
+	// merely inherits from the prototype is not an instance, and asking it for
+	// a private member has to fail.
+	OpNewPrivateMethods
+	OpAddPrivateMethod
+	OpAddPrivateGetter
+	OpAddPrivateSetter
+	OpInstallPrivateMethods
 
 	// --- Parameters and arguments -----------------------------------------
 	// OpRestParam gathers the arguments from index A onwards into an array,
@@ -344,11 +368,19 @@ var opNames = [opCount]string{
 
 	OpGetPrivate: "get_private", OpSetPrivate: "set_private",
 	OpDefinePrivate: "define_private", OpPrivateIn: "private_in",
-	OpGetPrivateMethod: "get_private_method",
-	OpRestParam:        "rest_param",
-	OpGetArguments:     "get_arguments",
-	OpArrayRest:        "array_rest",
-	OpObjectRest:       "object_rest",
+	OpDefinePrivateGetter:   "define_private_getter",
+	OpDefinePrivateSetter:   "define_private_setter",
+	OpGetPrivateMethod:      "get_private_method",
+	OpPrivateName:           "private_name",
+	OpNewPrivateMethods:     "new_private_methods",
+	OpAddPrivateMethod:      "add_private_method",
+	OpAddPrivateGetter:      "add_private_getter",
+	OpAddPrivateSetter:      "add_private_setter",
+	OpInstallPrivateMethods: "install_private_methods",
+	OpRestParam:             "rest_param",
+	OpGetArguments:          "get_arguments",
+	OpArrayRest:             "array_rest",
+	OpObjectRest:            "object_rest",
 
 	OpAdd: "add", OpSub: "sub", OpMul: "mul", OpDiv: "div", OpMod: "mod",
 	OpPow: "pow", OpNeg: "neg", OpPos: "pos", OpInc: "inc", OpDec: "dec",

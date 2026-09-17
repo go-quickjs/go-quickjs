@@ -475,38 +475,61 @@ func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
 		c.hiddenCount++
 	}
 
-	ctor := c.synthesizeConstructor(cls, keyNames)
+	// The private names are visible throughout the body, including to a method
+	// written above the field it reads, so they are all collected before any of
+	// it is compiled. Each gets a hidden binding to hold the key this
+	// evaluation of the class mints for it.
+	privates := collectPrivateNames(cls)
+	c.nameHiddenBindings(privates)
+	installName := ""
+	for _, b := range privates {
+		if b.installed() {
+			installName = fmt.Sprintf("%%pm%d", c.hiddenCount)
+			c.hiddenCount++
+			break
+		}
+	}
+
+	ctor := c.synthesizeConstructor(cls, keyNames, installName)
 	if cls.Extends != nil {
 		// The parent is evaluated before the constructor is built, as the
 		// heritage clause is an expression that may have side effects -- and
 		// before the class's own private names come into scope, since the
 		// heritage clause is outside the body that declares them.
 		c.compileExpr(cls.Extends)
+	}
 
-		// The private names are visible throughout the body, including to a
-		// method written above the field it reads, so they are all collected
-		// before any of it is compiled.
-		c.pushPrivateScope(cls)
-		defer c.popPrivateScope()
+	// The body is a scope of its own, holding the class's inner name binding,
+	// its computed keys and its private names. Opening it per evaluation is
+	// what keeps two evaluations of the same class apart: each closes its
+	// bindings on the way out, so the methods of one do not share a cell with
+	// the methods of another.
+	c.beginScope()
+	c.pushPrivateScope(privates)
+	defer c.popPrivateScope()
+	c.emitPrivateKeys(privates, cls.Start)
+	if installName != "" {
+		// The list is created before the constructor is compiled and filled as
+		// the body is evaluated, so that a static block that constructs an
+		// instance finds the methods already there.
+		slot := c.declare(installName, bindConst, cls.Start)
+		c.emit(bytecode.OpNewPrivateMethods, 0, 0)
+		c.emit(bytecode.OpSetLocal, slot, 0)
+		c.markInitialized(installName)
+	}
 
-		c.evalComputedFieldKeys(cls, keyNames)
-		c.compileFunctionLiteral(ctor, name)
+	c.evalComputedFieldKeys(cls, keyNames)
+	c.compileFunctionLiteral(ctor, name)
+	if cls.Extends != nil {
 		c.emit(bytecode.OpSwap, 0, 0)
 		// stack: ctor parent
 		c.emitAt(cls.Start, bytecode.OpNewClass, 0, 0)
-	} else {
-		c.pushPrivateScope(cls)
-		defer c.popPrivateScope()
-
-		c.evalComputedFieldKeys(cls, keyNames)
-		c.compileFunctionLiteral(ctor, name)
 	}
 
 	// A class has an inner binding for its own name, in scope throughout the
 	// body. It is what lets a static block or a method refer to the class
 	// before the outer binding is initialized, and it is a separate, immutable
 	// binding that shadows the outer one.
-	c.beginScope()
 	if name != "" {
 		c.emit(bytecode.OpDup, 0, 0)
 		slot := c.declare(name, bindConst, cls.Start)
@@ -519,7 +542,7 @@ func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
 		if !ok || fn.Kind == ast.FuncConstructor {
 			continue
 		}
-		c.compileClassMember(m, fn)
+		c.compileClassMember(m, fn, installName)
 	}
 
 	// Static fields are assigned after the class object exists, with the
@@ -562,7 +585,8 @@ func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
 				// A private field is hidden from every reflective operation,
 				// static or not, which the define instruction records rather
 				// than the attributes.
-				c.emit(bytecode.OpDefinePrivate, c.nameIdx("#"+pn.Name), 0)
+				name, ref := c.privateName(pn, f.Start)
+				c.emit(bytecode.OpDefinePrivate, name, ref)
 			} else {
 				c.emit(bytecode.OpDefineField, c.nameIdx(propKeyName(f.Key)), 0)
 			}
@@ -590,7 +614,7 @@ func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
 }
 
 // compileClassMember attaches one method or accessor to the class.
-func (c *compiler) compileClassMember(m ast.Property, fn *ast.FuncLit) {
+func (c *compiler) compileClassMember(m ast.Property, fn *ast.FuncLit, installName string) {
 	key := ""
 	if !m.Computed {
 		key = propKeyName(m.Key)
@@ -603,6 +627,11 @@ func (c *compiler) compileClassMember(m ast.Property, fn *ast.FuncLit) {
 		nameKind, methodName = 1, "get "+key
 	case ast.PropSet:
 		nameKind, methodName = 2, "set "+key
+	}
+
+	if pn, private := m.Key.(*ast.PrivateName); private && !m.Static {
+		c.compilePrivateMethod(m, fn, pn, methodName, installName)
+		return
 	}
 
 	if m.Static {
@@ -649,20 +678,59 @@ func (c *compiler) emitClassMemberDefine(m ast.Property, key string) {
 		}
 		return
 	}
+	// A class method is not enumerable, unlike an object literal's, and a
+	// private one is additionally hidden from every reflective operation. Only
+	// a static private member reaches here; an instance one belongs to the
+	// instance and is handled above.
+	if pn, private := m.Key.(*ast.PrivateName); private {
+		name, ref := c.privateName(pn, m.Start)
+		switch m.Kind {
+		case ast.PropGet:
+			c.emit(bytecode.OpDefinePrivateGetter, name, ref)
+		case ast.PropSet:
+			c.emit(bytecode.OpDefinePrivateSetter, name, ref)
+		default:
+			c.emit(bytecode.OpDefinePrivate, name, ref)
+		}
+		return
+	}
 	switch m.Kind {
 	case ast.PropGet:
 		c.emit(bytecode.OpDefineGetter, c.nameIdx(key), 0)
 	case ast.PropSet:
 		c.emit(bytecode.OpDefineSetter, c.nameIdx(key), 0)
 	default:
-		// A class method is not enumerable, unlike an object literal's, and a
-		// private one is additionally hidden from every reflective operation.
-		if _, private := m.Key.(*ast.PrivateName); private {
-			c.emit(bytecode.OpDefinePrivate, c.nameIdx(key), 0)
-			return
-		}
 		c.emit(bytecode.OpDefineMethod, c.nameIdx(key), 0)
 	}
+}
+
+// compilePrivateMethod adds one private instance method or accessor to the list
+// each instance of the class is given.
+//
+// It is not defined on the prototype: an object that merely inherits from the
+// prototype is not an instance, and asking it for a private member has to fail.
+// The function is made once per class evaluation and shared by every instance,
+// so it is built here rather than in the constructor.
+func (c *compiler) compilePrivateMethod(m ast.Property, fn *ast.FuncLit,
+	pn *ast.PrivateName, methodName, installName string) {
+	name, ref := c.privateName(pn, m.Start)
+
+	// `super.x` in the method resolves against the prototype's prototype, so
+	// the prototype is its home object even though it is not defined there.
+	c.emit(bytecode.OpDup, 0, 0)
+	c.emit(bytecode.OpGetProp, c.nameIdx("prototype"), 0)
+	c.compileIdentRead(&ast.Ident{Name: installName, Start: m.Start})
+	c.compileMethodValue(fn, methodName)
+	c.emit(bytecode.OpSetHomeObject, 2, 0)
+	op := bytecode.OpAddPrivateMethod
+	switch m.Kind {
+	case ast.PropGet:
+		op = bytecode.OpAddPrivateGetter
+	case ast.PropSet:
+		op = bytecode.OpAddPrivateSetter
+	}
+	c.emit(op, name, ref)
+	c.emit(bytecode.OpDrop, 0, 0)
 }
 
 // synthesizeConstructor builds the function that `new` will call, prefixing the
@@ -685,7 +753,8 @@ func (c *compiler) evalComputedFieldKeys(cls *ast.ClassLit, keyNames []string) {
 	}
 }
 
-func (c *compiler) synthesizeConstructor(cls *ast.ClassLit, keyNames []string) *ast.FuncLit {
+func (c *compiler) synthesizeConstructor(cls *ast.ClassLit, keyNames []string,
+	installName string) *ast.FuncLit {
 	var declared *ast.FuncLit
 	for _, m := range cls.Members {
 		if fn, ok := m.Value.(*ast.FuncLit); ok && fn.Kind == ast.FuncConstructor {
@@ -694,6 +763,13 @@ func (c *compiler) synthesizeConstructor(cls *ast.ClassLit, keyNames []string) *
 	}
 
 	var fieldInit []ast.Stmt
+	if installName != "" {
+		// A private method belongs to the instance, and is put there where the
+		// specification puts it: once `this` exists, before any field runs.
+		fieldInit = append(fieldInit, &ast.InstallPrivateMethods{
+			Binding: installName, Start: cls.Start,
+		})
+	}
 	for i, f := range cls.Fields {
 		if f.Static {
 			continue

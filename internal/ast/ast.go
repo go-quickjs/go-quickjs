@@ -246,6 +246,18 @@ type FieldInit struct {
 	Start    int
 }
 
+// InstallPrivateMethods gives an instance the private methods and accessors of
+// its class, which it carries itself rather than inheriting.
+//
+// The compiler puts one at the head of a constructor's field initializers,
+// where the specification installs them: after super() has returned in a
+// derived class, and before any field is evaluated.
+type InstallPrivateMethods struct {
+	// Binding is the hidden name holding the list the class built.
+	Binding string
+	Start   int
+}
+
 // ClassField is a class field definition.
 type ClassField struct {
 	Key      Expr
@@ -660,51 +672,53 @@ func (*ObjectPattern) exprNode()  {}
 func (*AssignPattern) exprNode()  {}
 func (*RestElement) exprNode()    {}
 
-func (n *ExprStmt) Pos() int     { return n.Start }
-func (n *BlockStmt) Pos() int    { return n.Start }
-func (n *EmptyStmt) Pos() int    { return n.Start }
-func (n *VarDecl) Pos() int      { return n.Start }
-func (n *FuncDecl) Pos() int     { return n.Start }
-func (n *ClassDecl) Pos() int    { return n.Start }
-func (n *ReturnStmt) Pos() int   { return n.Start }
-func (n *IfStmt) Pos() int       { return n.Start }
-func (n *ForStmt) Pos() int      { return n.Start }
-func (n *ForInStmt) Pos() int    { return n.Start }
-func (n *ForOfStmt) Pos() int    { return n.Start }
-func (n *WhileStmt) Pos() int    { return n.Start }
-func (n *DoWhileStmt) Pos() int  { return n.Start }
-func (n *BreakStmt) Pos() int    { return n.Start }
-func (n *ContinueStmt) Pos() int { return n.Start }
-func (n *ThrowStmt) Pos() int    { return n.Start }
-func (n *TryStmt) Pos() int      { return n.Start }
-func (n *SwitchStmt) Pos() int   { return n.Start }
-func (n *LabeledStmt) Pos() int  { return n.Start }
-func (n *DebuggerStmt) Pos() int { return n.Start }
-func (n *WithStmt) Pos() int     { return n.Start }
-func (n *FieldInit) Pos() int    { return n.Start }
+func (n *ExprStmt) Pos() int              { return n.Start }
+func (n *BlockStmt) Pos() int             { return n.Start }
+func (n *EmptyStmt) Pos() int             { return n.Start }
+func (n *VarDecl) Pos() int               { return n.Start }
+func (n *FuncDecl) Pos() int              { return n.Start }
+func (n *ClassDecl) Pos() int             { return n.Start }
+func (n *ReturnStmt) Pos() int            { return n.Start }
+func (n *IfStmt) Pos() int                { return n.Start }
+func (n *ForStmt) Pos() int               { return n.Start }
+func (n *ForInStmt) Pos() int             { return n.Start }
+func (n *ForOfStmt) Pos() int             { return n.Start }
+func (n *WhileStmt) Pos() int             { return n.Start }
+func (n *DoWhileStmt) Pos() int           { return n.Start }
+func (n *BreakStmt) Pos() int             { return n.Start }
+func (n *ContinueStmt) Pos() int          { return n.Start }
+func (n *ThrowStmt) Pos() int             { return n.Start }
+func (n *TryStmt) Pos() int               { return n.Start }
+func (n *SwitchStmt) Pos() int            { return n.Start }
+func (n *LabeledStmt) Pos() int           { return n.Start }
+func (n *DebuggerStmt) Pos() int          { return n.Start }
+func (n *WithStmt) Pos() int              { return n.Start }
+func (n *InstallPrivateMethods) Pos() int { return n.Start }
+func (n *FieldInit) Pos() int             { return n.Start }
 
-func (*ExprStmt) stmtNode()     {}
-func (*BlockStmt) stmtNode()    {}
-func (*EmptyStmt) stmtNode()    {}
-func (*VarDecl) stmtNode()      {}
-func (*FuncDecl) stmtNode()     {}
-func (*ClassDecl) stmtNode()    {}
-func (*ReturnStmt) stmtNode()   {}
-func (*IfStmt) stmtNode()       {}
-func (*ForStmt) stmtNode()      {}
-func (*ForInStmt) stmtNode()    {}
-func (*ForOfStmt) stmtNode()    {}
-func (*WhileStmt) stmtNode()    {}
-func (*DoWhileStmt) stmtNode()  {}
-func (*BreakStmt) stmtNode()    {}
-func (*ContinueStmt) stmtNode() {}
-func (*ThrowStmt) stmtNode()    {}
-func (*TryStmt) stmtNode()      {}
-func (*SwitchStmt) stmtNode()   {}
-func (*LabeledStmt) stmtNode()  {}
-func (*DebuggerStmt) stmtNode() {}
-func (*WithStmt) stmtNode()     {}
-func (*FieldInit) stmtNode()    {}
+func (*ExprStmt) stmtNode()              {}
+func (*BlockStmt) stmtNode()             {}
+func (*EmptyStmt) stmtNode()             {}
+func (*VarDecl) stmtNode()               {}
+func (*FuncDecl) stmtNode()              {}
+func (*ClassDecl) stmtNode()             {}
+func (*ReturnStmt) stmtNode()            {}
+func (*IfStmt) stmtNode()                {}
+func (*ForStmt) stmtNode()               {}
+func (*ForInStmt) stmtNode()             {}
+func (*ForOfStmt) stmtNode()             {}
+func (*WhileStmt) stmtNode()             {}
+func (*DoWhileStmt) stmtNode()           {}
+func (*BreakStmt) stmtNode()             {}
+func (*ContinueStmt) stmtNode()          {}
+func (*ThrowStmt) stmtNode()             {}
+func (*TryStmt) stmtNode()               {}
+func (*SwitchStmt) stmtNode()            {}
+func (*LabeledStmt) stmtNode()           {}
+func (*DebuggerStmt) stmtNode()          {}
+func (*WithStmt) stmtNode()              {}
+func (*InstallPrivateMethods) stmtNode() {}
+func (*FieldInit) stmtNode()             {}
 
 // ---------------------------------------------------------------------------
 // Modules

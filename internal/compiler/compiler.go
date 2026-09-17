@@ -46,8 +46,8 @@ type Options struct {
 	EvalScope []bytecode.EvalBinding
 	// PrivateNames are the private names of the classes enclosing a direct
 	// eval's call site, which its code may refer to as the surrounding code
-	// may.
-	PrivateNames []string
+	// may, each with the hidden binding that holds its key.
+	PrivateNames []bytecode.EvalPrivateName
 	// EvalOwnVarScope marks eval code, whose top-level vars belong to the
 	// evaluated code rather than to the global object when it is strict.
 	EvalOwnVarScope bool
@@ -154,7 +154,7 @@ type compiler struct {
 	// compiled, innermost last, each holding the private names it declares. A
 	// reference to a name in none of them is a syntax error rather than a
 	// runtime one, which is why it is tracked here and not in the runtime.
-	privateScopes [][]string
+	privateScopes [][]privateBinding
 
 	// nameIndex and constIndex deduplicate the tables, so that a name or
 	// constant used many times costs one entry.
@@ -236,12 +236,6 @@ func Compile(prog *ast.Program, opts Options) (fn *bytecode.Function, err error)
 	c.nextSlot++
 	c.emit(bytecode.OpPushUndef, 0, 0)
 	c.emit(bytecode.OpSetLocal, uint32(c.completionSlot), 0)
-
-	// A direct eval's code is inside the class bodies its call site was inside,
-	// so their private names are in scope for it.
-	if len(opts.PrivateNames) > 0 {
-		c.privateScopes = append(c.privateScopes, opts.PrivateNames)
-	}
 
 	// Top-level var and function declarations become properties of the global
 	// object rather than locals, which is what makes them visible to other

@@ -235,6 +235,10 @@ func (c *compiler) compileStatement(s ast.Stmt) {
 	case *ast.ExportDecl:
 		c.compileExportDecl(n)
 
+	case *ast.InstallPrivateMethods:
+		c.compileIdentRead(&ast.Ident{Name: n.Binding, Start: n.Start})
+		c.emitAt(n.Start, bytecode.OpInstallPrivateMethods, 0, 0)
+
 	case *ast.FieldInit:
 		c.compileFieldInit(n)
 
@@ -774,9 +778,10 @@ func (c *compiler) compileFieldInit(n *ast.FieldInit) {
 	defer func() { c.inFieldInit = saved }()
 
 	if pn, private := n.Key.(*ast.PrivateName); private {
+		name, ref := c.privateName(pn, n.Start)
 		c.emit(bytecode.OpPushThis, 0, 0)
 		c.compileExpr(n.Value)
-		c.emitAt(n.Start, bytecode.OpDefinePrivate, c.nameIdx("#"+pn.Name), 0)
+		c.emitAt(n.Start, bytecode.OpDefinePrivate, name, ref)
 		c.emit(bytecode.OpDrop, 0, 0)
 		return
 	}
