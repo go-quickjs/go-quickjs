@@ -326,3 +326,34 @@ func TestWithAssignmentResolvesFirst(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// A var whose initializer runs inside a `with` body assigns to the object when
+// the object has that name. The store consumes its value either way: one that
+// left it behind would push whatever the enclosing loop was holding off its
+// own operands.
+func TestWithVarStoreLeavesTheStackAlone(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"assigns the object", `var o = {value: "v"}
+		  with (o) { var value = "assigned" }
+		  o.value + "," + typeof value`, "assigned,undefined"},
+		{"loop keeps going", `var o = {p1: "a", value: "v"}
+		  var seen = []
+		  for (var prop in o) { with (o) { var value = "x"; seen.push(prop) } }
+		  seen.join()`, "p1,value"},
+		{"loop with the store last", `var o = {p1: "a", value: "v"}
+		  var n = 0
+		  for (var prop in o) { n++; with (o) { var value = "x" } }
+		  String(n)`, "2"},
+		{"a name the object lacks", `var o = {p1: "a"}
+		  var seen = []
+		  for (var prop in o) { with (o) { var q = 1; seen.push(prop) } }
+		  seen.join() + "," + q`, "p1,1"},
+		{"nested loops", `var o = {a: 1, b: 2}
+		  var pairs = []
+		  for (var i in o) { for (var j in o) { with (o) { var a = 9; pairs.push(i + j) } } }
+		  pairs.join()`, "aa,ab,ba,bb"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}

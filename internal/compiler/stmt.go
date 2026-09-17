@@ -382,7 +382,18 @@ func (c *compiler) storeVar(name string, pos int) {
 	// initialization: the declaration hoists out of a `with` body, but the
 	// store happens inside it, where the object may be what is written to.
 	probe := c.withProbe(bytecode.OpWithSet, name)
-	defer c.patchWithProbe(probe)
+	if probe >= 0 {
+		// The probe peeks at the value and jumps over the static store, while
+		// the store itself consumes it. A copy for the store and a drop after
+		// both paths is what leaves the stack the same either way -- and a
+		// store that quietly left its value behind would push the loop it sits
+		// in off its own operands.
+		c.emit(bytecode.OpDup, 0, 0)
+		defer func() {
+			c.patchWithProbe(probe)
+			c.emit(bytecode.OpDrop, 0, 0)
+		}()
+	}
 
 	if l, ok := c.resolveLocal(name); ok {
 		c.emit(bytecode.OpSetLocal, l.slot, 0)
