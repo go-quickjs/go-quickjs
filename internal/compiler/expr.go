@@ -1063,6 +1063,13 @@ func (c *compiler) assignTo(target ast.Expr, initializing bool) {
 			return
 		}
 		if idx, ok := c.resolveUpvalue(t.Name); ok {
+			if c.fn.Upvalues[idx].TDZ && !initializing {
+				// The dead zone outranks constness: writing to a binding that
+				// does not exist yet is a ReferenceError whichever it is.
+				c.emit(bytecode.OpDup, 0, 0)
+				c.emitAt(t.Start, bytecode.OpSetUpvalueCheck, idx, 0)
+				return
+			}
 			if !c.fn.Upvalues[idx].Mutable && !initializing {
 				c.emitAt(t.Start, bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
 				return

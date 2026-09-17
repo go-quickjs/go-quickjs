@@ -512,18 +512,21 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		case bytecode.OpGetLocalCheck:
 			v := f.locals[in.A]
 			if v.IsUninitialized() {
-				return Undefined, r.throwReferenceError(
+				vmErr = r.throwReferenceError(
 					"cannot access %q before initialization", cl.fn.Locals[in.A].Name)
+				goto onError
 			}
 			push(v)
 		case bytecode.OpSetLocalCheck:
 			if f.locals[in.A].IsUninitialized() {
-				return Undefined, r.throwReferenceError(
+				vmErr = r.throwReferenceError(
 					"cannot access %q before initialization", cl.fn.Locals[in.A].Name)
+				goto onError
 			}
 			if !cl.fn.Locals[in.A].Mutable {
-				return Undefined, r.throwTypeError(
+				vmErr = r.throwTypeError(
 					"assignment to constant variable %q", cl.fn.Locals[in.A].Name)
+				goto onError
 			}
 			f.locals[in.A] = pop()
 
@@ -537,14 +540,21 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		case bytecode.OpGetUpvalueCheck:
 			v := cl.upvalues[in.A].get()
 			if v.IsUninitialized() {
-				return Undefined, r.throwReferenceError(
+				vmErr = r.throwReferenceError(
 					"cannot access %q before initialization", cl.fn.Upvalues[in.A].Name)
+				goto onError
 			}
 			push(v)
 		case bytecode.OpSetUpvalueCheck:
+			if cl.upvalues[in.A].get().IsUninitialized() {
+				vmErr = r.throwReferenceError(
+					"cannot access %q before initialization", cl.fn.Upvalues[in.A].Name)
+				goto onError
+			}
 			if !cl.fn.Upvalues[in.A].Mutable {
-				return Undefined, r.throwTypeError(
+				vmErr = r.throwTypeError(
 					"assignment to constant variable %q", cl.fn.Upvalues[in.A].Name)
+				goto onError
 			}
 			cl.upvalues[in.A].set(pop())
 		case bytecode.OpCloseUpvalues:

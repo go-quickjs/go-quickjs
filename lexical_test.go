@@ -301,3 +301,64 @@ func TestSloppyThisCoercion(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// A temporal dead zone violation is an ordinary runtime throw, not something
+// the engine reports on its own behalf: a `try` around it catches it like any
+// other error. It was not, which made every test262 case that asserts the
+// throw fail even though the throw itself was right.
+func TestDeadZoneIsCatchable(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// A read and a write, at the top level and inside a function.
+		{`var r; try { x } catch (e) { r = e.constructor.name } let x; r`,
+			"ReferenceError"},
+		{`var r; try { x = 1 } catch (e) { r = e.constructor.name } let x; r`,
+			"ReferenceError"},
+		{`function f() { try { x } catch (e) { return e.constructor.name } let x; }
+		  f()`, "ReferenceError"},
+		{`function f() { try { x = 1 } catch (e) { return e.constructor.name } let x; }
+		  f()`, "ReferenceError"},
+
+		// Through a closure, where the binding is reached as an upvalue.
+		{`function o() {
+		    function i() { try { y } catch (e) { return e.constructor.name } }
+		    var r = i(); let y; return r;
+		  } o()`, "ReferenceError"},
+		{`function o() {
+		    function i() { try { y = 1 } catch (e) { return e.constructor.name } }
+		    var r = i(); let y; return r;
+		  } o()`, "ReferenceError"},
+		// The dead zone outranks constness: the binding does not exist yet, so
+		// the complaint is that rather than that it cannot be written.
+		{`function o() {
+		    function i() { try { y = 1 } catch (e) { return e.constructor.name } }
+		    var r = i(); const y = 2; return r;
+		  } o()`, "ReferenceError"},
+		// Once it is initialized, writing to a const is the TypeError again.
+		{`function o() {
+		    const y = 1;
+		    function i() { try { y = 2 } catch (e) { return e.constructor.name } }
+		    return i();
+		  } o()`, "TypeError"},
+
+		// The destructuring form test262 uses: the pattern's target is in its
+		// dead zone, so the loop body never runs and the throw is catchable.
+		{`var n = 0, r;
+		  try { for ([x] of [[]]) { n += 1 } } catch (e) { r = e.constructor.name }
+		  let x; r + "," + n`, "ReferenceError,0"},
+
+		// A closure that runs after the binding is initialized sees it.
+		{`function o() { let y; function i() { y = 3 } i(); return y } String(o())`,
+			"3"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

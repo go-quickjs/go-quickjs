@@ -296,7 +296,11 @@ func (c *compiler) storeVar(name string, pos int) {
 		return
 	}
 	if idx, ok := c.resolveUpvalue(name); ok {
-		c.emit(bytecode.OpSetUpvalue, idx, 0)
+		if c.fn.Upvalues[idx].TDZ {
+			c.emit(bytecode.OpSetUpvalueCheck, idx, 0)
+		} else {
+			c.emit(bytecode.OpSetUpvalue, idx, 0)
+		}
 		return
 	}
 	c.emit(bytecode.OpSetGlobal, c.nameIdx(name), 0)
