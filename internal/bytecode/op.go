@@ -337,6 +337,10 @@ const (
 	OpCheckCtorReturn
 	OpCheckThisInit // a derived constructor must call super() before `this`
 	OpInitThis
+	// OpThrowDeleteSuper reports `delete super.x`, which parses and then fails:
+	// a super reference names a property of the home object's prototype, and
+	// there is no object it could be removed from.
+	OpThrowDeleteSuper
 
 	// --- Lexical parameters ------------------------------------------------
 	// A parameter list with a default, a pattern or a rest element binds its
@@ -467,7 +471,8 @@ var opNames = [opCount]string{
 	OpWithDelete: "with_delete", OpWithTypeof: "with_typeof",
 	OpSetName: "set_name", OpSetHomeObject: "set_home_object",
 	OpCheckCtorReturn: "check_ctor_return", OpCheckThisInit: "check_this_init",
-	OpInitThis: "init_this",
+	OpInitThis:         "init_this",
+	OpThrowDeleteSuper: "throw_delete_super",
 }
 
 func (op Op) String() string {

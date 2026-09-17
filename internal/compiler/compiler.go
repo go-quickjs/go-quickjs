@@ -887,6 +887,7 @@ func stackEffect(op bytecode.Op, a, b uint32) int {
 		bytecode.OpDefineGlobalFunc, bytecode.OpArrayPush,
 		bytecode.OpDefineField, bytecode.OpDefineGetter,
 		bytecode.OpDefineSetter, bytecode.OpSetProtoOf,
+		bytecode.OpSetSuperProp,
 		bytecode.OpJumpIfFalseKeep, bytecode.OpJumpIfTrueKeep,
 		bytecode.OpJumpIfNotNullish:
 		return -1
@@ -969,6 +970,10 @@ func stackEffect(op bytecode.Op, a, b uint32) int {
 		return -2
 	case bytecode.OpGetPrivate:
 		return 0
+	case bytecode.OpSetSuperIndex:
+		// Pops the key and the value.
+		return -2
+
 	case bytecode.OpRethrow:
 		// Pops the completion record.
 		return -2

@@ -872,9 +872,9 @@ func (p *parser) parseObjectProperty() ast.Property {
 	if !ok || computed {
 		p.errorf("expected \":\" after a property name")
 	}
-	if lexer.IsReservedWord(id.Name) {
-		p.errorAt(p.tok, "%q cannot be used as a shorthand property", id.Name)
-	}
+	// A shorthand is an identifier reference, so a word that cannot be referred
+	// to where it stands cannot be one.
+	p.checkIdentReference(id.Name, p.tok)
 	if p.isPunct("=") {
 		p.next()
 		def := p.parseAssign()

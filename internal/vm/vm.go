@@ -730,6 +730,12 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		case bytecode.OpDeleteProp:
 			key := pop()
 			obj := pop()
+			if obj.IsNullish() {
+				// There is nothing to delete from, which is a TypeError before
+				// the key is even converted.
+				vmErr = r.throwTypeError("cannot delete a property of %s", r.describe(obj))
+				goto onError
+			}
 			k, err := r.toPropertyKey(key)
 			if err != nil {
 				vmErr = err
@@ -1684,7 +1690,30 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				goto onError
 			}
 			push(v)
+		case bytecode.OpSetSuperProp:
+			val := pop()
+			if err := r.superSet(f, cl.names[in.A], val, cl.fn.Strict); err != nil {
+				vmErr = err
+				goto onError
+			}
+		case bytecode.OpSetSuperIndex:
+			val := pop()
+			key, err := r.toPropertyKey(pop())
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			if err := r.superSet(f, key, val, cl.fn.Strict); err != nil {
+				vmErr = err
+				goto onError
+			}
 		case bytecode.OpGetSuperIndex:
+			// The base is settled before the key is converted: a class with no
+			// prototype to read from fails whatever the key would have been.
+			if err := r.superBaseCheck(f); err != nil {
+				vmErr = err
+				goto onError
+			}
 			key, err := r.toPropertyKey(pop())
 			if err != nil {
 				vmErr = err
@@ -1725,6 +1754,19 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			f.savedSP = sp
 			return Undefined, &suspendSignal{value: Undefined}
 
+		case bytecode.OpCheckThisInit:
+			// A super reference reads `this` before it evaluates anything
+			// else, so a derived constructor that has not called super() fails
+			// here rather than after the key expression has run.
+			if _, bound := f.thisValue(); !bound {
+				vmErr = r.throwError(errReference,
+					"\"this\" is not bound until super() has been called")
+				goto onError
+			}
+		case bytecode.OpThrowDeleteSuper:
+			vmErr = r.throwError(errReference,
+				"a super reference cannot be deleted")
+			goto onError
 		case bytecode.OpNewTarget:
 			push(f.newTarget)
 		case bytecode.OpImportMeta:
@@ -2473,11 +2515,71 @@ func (r *Runtime) superGet(f *frame, key Atom) (Value, error) {
 	}
 	start := fd.homeObject.proto
 	if start == nil {
-		return Undefined, nil
+		// `class C extends null` leaves the home object with no prototype, so
+		// there is nothing to read from -- which the specification reports
+		// rather than answering undefined.
+		return Undefined, r.throwTypeError("\"super\" has no prototype to read from")
+	}
+	this, bound := f.thisValue()
+	if !bound {
+		return Undefined, r.throwError(errReference,
+			"\"this\" is not bound until super() has been called")
 	}
 	// The receiver stays the instance, so an inherited getter sees the right
 	// object.
-	return r.getProp(start, key, f.this)
+	return r.getProp(start, key, this)
+}
+
+// superBaseCheck reports whether a super reference has anything to read from,
+// which is settled before the key is converted.
+func (r *Runtime) superBaseCheck(f *frame) error {
+	if f.callee == nil {
+		return r.throwTypeError("\"super\" is only valid inside a method")
+	}
+	fd := f.callee.fn()
+	if fd == nil || fd.homeObject == nil {
+		return r.throwTypeError("\"super\" is only valid inside a method")
+	}
+	if _, bound := f.thisValue(); !bound {
+		return r.throwError(errReference,
+			"\"this\" is not bound until super() has been called")
+	}
+	if fd.homeObject.proto == nil {
+		return r.throwTypeError("\"super\" has no prototype to read from")
+	}
+	return nil
+}
+
+// superSet writes through a super reference.
+//
+// The lookup starts at the home object's prototype, but the receiver is the
+// instance -- so an inherited setter runs with the right `this`, and an
+// assignment that finds no setter lands on the instance rather than on the
+// prototype.
+func (r *Runtime) superSet(f *frame, key Atom, val Value, strict bool) error {
+	if f.callee == nil {
+		return r.throwTypeError("\"super\" is only valid inside a method")
+	}
+	fd := f.callee.fn()
+	if fd == nil || fd.homeObject == nil {
+		return r.throwTypeError("\"super\" is only valid inside a method")
+	}
+	this, bound := f.thisValue()
+	if !bound {
+		return r.throwError(errReference,
+			"\"this\" is not bound until super() has been called")
+	}
+	start := fd.homeObject.proto
+	if start == nil {
+		// With no prototype the assignment still lands on the instance.
+		if !this.IsObject() {
+			return r.throwTypeError("cannot assign to a super property of %s", r.describe(this))
+		}
+		_, err := r.setOnReceiver(this.Object(), key, val, strict)
+		return err
+	}
+	_, err := r.setProp(start, key, val, this, strict)
+	return err
 }
 
 // getPrivate reads a private class member.

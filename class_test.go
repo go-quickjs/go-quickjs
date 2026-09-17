@@ -727,3 +727,76 @@ func TestPrivateNamesAreUniquePerClassEvaluation(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// A super reference reads `this` first, then the key expression, and only then
+// looks at the home object's prototype -- so a derived constructor that has not
+// called super() fails before anything the key might do, and a class with no
+// prototype to read from fails whatever the key would have been.
+func TestSuperProperties(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// Writing through a super reference lands on the instance, unless the
+		// prototype has a setter, which runs with the instance as its `this`.
+		{`var o = {m() { super.x = 8; return this.x }}; String(o.m())`, "8"},
+		{`class X {} class Y extends X { m() { super.a = 1; return this.a } }
+		  String(new Y().m())`, "1"},
+		{`class A { set p(v) { this.got = v } }
+		  class B extends A { m() { super.p = 5; return this.got } }
+		  String(new B().m())`, "5"},
+		{`var o = {m() { super["k"] = 3; return this.k }}; String(o.m())`, "3"},
+		{`var o = {m() { "use strict"; super.x = 8; Object.freeze(o);
+		    try { super.y = 9 } catch (e) { return e.constructor.name } }};
+		  o.m()`, "TypeError"},
+
+		// Compound assignment and update read through the prototype and write
+		// to the instance.
+		{`class A {} A.prototype.c = 5;
+		  class B extends A { m() { return super.c++ } }
+		  var b = new B(); b.m() + "," + b.c`, "5,6"},
+		{`class A {} A.prototype.c = 5;
+		  class B extends A { m() { return ++super.c } }
+		  var b = new B(); b.m() + "," + b.c`, "6,6"},
+		{`class A {} A.prototype.k = 2;
+		  class B extends A { m() { return super["k"]++ } }
+		  var b = new B(); b.m() + "," + b.k`, "2,3"},
+		{`class A {} A.prototype.n = 1;
+		  class B extends A { m() { super.n += 2; return this.n } }
+		  String(new B().m())`, "3"},
+		{`class A {} class B extends A { m() { super.z ??= 7; return this.z } }
+		  String(new B().m())`, "7"},
+
+		// A class with no prototype has nothing to read from.
+		{`class C extends null { m() { try { super.x } catch (e) { return e.constructor.name } } }
+		  C.prototype.m()`, "TypeError"},
+
+		// delete parses and then throws, after the reference has been built --
+		// so `this` first, then the key expression, but not its conversion.
+		{`class X { m() { return 1 } }
+		  class Y extends X { m() { delete super.m } }
+		  try { new Y().m() } catch (e) { e.constructor.name }`, "ReferenceError"},
+		{`var log = [];
+		  var o = {m() {
+		    try { delete super[{toString: function () { log.push("k"); return "x" }}] }
+		    catch (e) { log.push(e.constructor.name) }
+		  }};
+		  o.m(); log.join(",")`, "ReferenceError"},
+		{`class Base { constructor() { throw new Error("base ran") } }
+		  class Derived extends Base { constructor() { delete super[(super(), 0)] } }
+		  try { new Derived() } catch (e) { e.constructor.name }`, "ReferenceError"},
+
+		// Deleting a property of nothing is a TypeError before the key is
+		// converted.
+		{`var n = null; try { delete n.x } catch (e) { e.constructor.name }`, "TypeError"},
+		{`var n; try { delete n[{toString: function () { throw new RangeError() }}] }
+		  catch (e) { e.constructor.name }`, "TypeError"},
+	}
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

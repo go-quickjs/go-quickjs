@@ -353,6 +353,28 @@ func (p *parser) checkLexicalBindingName(name string, tok lexer.Token) {
 	p.checkBindingName(name, tok)
 }
 
+// checkIdentReference rejects a name that cannot be referred to where it
+// stands, which a shorthand property is: `{implements}` is an identifier
+// reference, and strict mode reserves the word.
+func (p *parser) checkIdentReference(name string, tok lexer.Token) {
+	if lexer.IsReservedWord(name) {
+		p.errorAt(tok, "%q is a reserved word", name)
+	}
+	if p.strict {
+		switch name {
+		case "implements", "interface", "let", "package", "private", "protected",
+			"public", "static", "yield":
+			p.errorAt(tok, "%q is reserved in strict mode", name)
+		}
+	}
+	if p.allowYield && name == "yield" {
+		p.errorAt(tok, "\"yield\" is reserved inside a generator")
+	}
+	if (p.module || p.allowAwait || p.noArguments) && name == "await" {
+		p.errorAt(tok, "\"await\" is reserved here")
+	}
+}
+
 // checkBindingName rejects names that cannot be bound in the current context.
 func (p *parser) checkBindingName(name string, tok lexer.Token) {
 	// A reserved word written with an escape lexes as an identifier, because

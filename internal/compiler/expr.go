@@ -460,6 +460,20 @@ func (c *compiler) compileUnary(n *ast.Unary) {
 				c.errorf(n.Start, "a private name cannot be deleted: #%s", pn.Name)
 				return
 			}
+			if _, isSuper := m.Object.(*ast.Super); isSuper {
+				// `delete super.x` parses, and then throws: a super reference
+				// names a property of the home object's prototype, and there
+				// is no object it could be removed from. The reference is still
+				// built first, which means `this` and then the key expression
+				// -- but not the conversion of what that expression produced.
+				if m.Computed {
+					c.emit(bytecode.OpCheckThisInit, 0, 0)
+					c.compileExpr(m.Property)
+					c.emit(bytecode.OpDrop, 0, 0)
+				}
+				c.emitAt(n.Start, bytecode.OpThrowDeleteSuper, 0, 0)
+				return
+			}
 			c.compileExpr(m.Object)
 			c.compileMemberKey(m)
 			c.emitAt(n.Start, bytecode.OpDeleteProp, 0, 0)
@@ -542,6 +556,40 @@ func (c *compiler) compileUpdate(n *ast.Update) {
 		}
 
 	case *ast.Member:
+		if _, isSuper := target.Object.(*ast.Super); isSuper {
+			// A super reference has no object on the stack: the read starts at
+			// the home object's prototype and the write lands on `this`.
+			// The key, when there is one, stays beneath the value for the
+			// store; without one there is nothing under it, so the copy that
+			// carries the expression's result is a plain duplicate.
+			keep := bytecode.OpDup
+			if target.Computed {
+				c.compileExpr(target.Property)
+				c.emit(bytecode.OpToPropertyKey, 0, 0)
+				c.emit(bytecode.OpDup, 0, 0)
+				c.emit(bytecode.OpGetSuperIndex, 0, 0)
+				keep = bytecode.OpInsert2
+			} else {
+				c.compileSuperMemberGet(target)
+			}
+			c.emit(bytecode.OpToNumber, 0, 0)
+			// Postfix yields the old value, so it is copied down before the
+			// increment; prefix yields the new one, so the copy comes after.
+			if !n.Prefix {
+				c.emit(keep, 0, 0)
+				c.emitAt(n.Start, op, 0, 0)
+			} else {
+				c.emitAt(n.Start, op, 0, 0)
+				c.emit(keep, 0, 0)
+			}
+			if target.Computed {
+				c.emitAt(n.Start, bytecode.OpSetSuperIndex, 0, 0)
+			} else {
+				c.emitAt(n.Start, bytecode.OpSetSuperProp,
+					c.nameIdx(propKeyName(target.Property)), 0)
+			}
+			return
+		}
 		c.compileExpr(target.Object)
 		if pn, private := target.Property.(*ast.PrivateName); private {
 			// A private member is reached through its own accessors, which do
@@ -958,6 +1006,28 @@ func (c *compiler) compileAssign(n *ast.Assign) {
 // reading the property and writing it back have to address the same place even
 // if the read changed what is there.
 func (c *compiler) compileMemberUpdate(m *ast.Member, op string, emitValue func(), pos int) {
+	if _, isSuper := m.Object.(*ast.Super); isSuper {
+		// A super reference has no object on the stack: the read starts at the
+		// home object's prototype and the write lands on `this`.
+		if m.Computed {
+			c.compileExpr(m.Property)
+			c.emit(bytecode.OpToPropertyKey, 0, 0)
+			c.emit(bytecode.OpDup, 0, 0)
+			c.emitAt(m.Start, bytecode.OpGetSuperIndex, 0, 0)
+			c.finishUpdate(op, emitValue, pos, 1, func() {
+				c.emit(bytecode.OpInsert2, 0, 0)
+				c.emitAt(m.Start, bytecode.OpSetSuperIndex, 0, 0)
+			})
+			return
+		}
+		name := c.nameIdx(propKeyName(m.Property))
+		c.compileSuperMemberGet(m)
+		c.finishUpdate(op, emitValue, pos, 0, func() {
+			c.emit(bytecode.OpDup, 0, 0)
+			c.emitAt(m.Start, bytecode.OpSetSuperProp, name, 0)
+		})
+		return
+	}
 	if pn, private := m.Property.(*ast.PrivateName); private {
 		// A private name is not an expression, so there is nothing to evaluate
 		// twice; only the object is kept.
@@ -1188,6 +1258,24 @@ func compoundOpcode(op string) bytecode.Op {
 // The order matters: each part may have side effects, and the specification
 // fixes the order in which they happen.
 func (c *compiler) compileMemberStore(m *ast.Member, emitValue func()) {
+	if _, isSuper := m.Object.(*ast.Super); isSuper {
+		// A super reference has no object on the stack: the lookup starts at
+		// the home object's prototype, and the receiver is `this`.
+		if m.Computed {
+			c.compileExpr(m.Property)
+			emitValue()
+			// key value -> value key value, so the store consumes two and the
+			// result is left behind.
+			c.emit(bytecode.OpInsert2, 0, 0)
+			c.emitAt(m.Start, bytecode.OpSetSuperIndex, 0, 0)
+			return
+		}
+		emitValue()
+		c.emit(bytecode.OpDup, 0, 0)
+		c.emitAt(m.Start, bytecode.OpSetSuperProp,
+			c.nameIdx(propKeyName(m.Property)), 0)
+		return
+	}
 	if pn, ok := m.Property.(*ast.PrivateName); ok {
 		name, ref := c.privateName(pn, m.Start)
 		c.compileExpr(m.Object)
@@ -1216,6 +1304,20 @@ func (c *compiler) compileMemberStore(m *ast.Member, emitValue func()) {
 // compileMemberStoreFromValue stores a value that is already on the stack into
 // a member target, which is what a compound assignment needs after combining.
 func (c *compiler) compileMemberStoreFromValue(m *ast.Member) {
+	if _, isSuper := m.Object.(*ast.Super); isSuper {
+		// The value is on top and the key, if computed, has to go under it.
+		if m.Computed {
+			c.compileExpr(m.Property)
+			c.emit(bytecode.OpSwap, 0, 0)
+			c.emit(bytecode.OpInsert2, 0, 0)
+			c.emitAt(m.Start, bytecode.OpSetSuperIndex, 0, 0)
+			return
+		}
+		c.emit(bytecode.OpDup, 0, 0)
+		c.emitAt(m.Start, bytecode.OpSetSuperProp,
+			c.nameIdx(propKeyName(m.Property)), 0)
+		return
+	}
 	if pn, ok := m.Property.(*ast.PrivateName); ok {
 		name, ref := c.privateName(pn, m.Start)
 		c.compileExpr(m.Object)
@@ -1246,6 +1348,10 @@ func (c *compiler) compileMemberStoreFromValue(m *ast.Member) {
 // the home object's prototype rather than on the receiver.
 func (c *compiler) compileSuperMemberGet(m *ast.Member) {
 	if m.Computed {
+		// `this` is read before the key expression is evaluated, so a derived
+		// constructor that has not called super() fails before anything the
+		// key might do.
+		c.emit(bytecode.OpCheckThisInit, 0, 0)
 		c.compileExpr(m.Property)
 		c.emit(bytecode.OpGetSuperIndex, 0, 0)
 		return
