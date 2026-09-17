@@ -648,6 +648,27 @@ func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
 	}
 
 	ctor := c.synthesizeConstructor(cls, keyNames, installName)
+
+	// The body is a scope of its own, holding the class's inner name binding,
+	// its computed keys and its private names. Opening it per evaluation is
+	// what keeps two evaluations of the same class apart: each closes its
+	// bindings on the way out, so the methods of one do not share a cell with
+	// the methods of another.
+	c.beginScope()
+
+	// A class written with a name has an inner binding for it, in scope
+	// throughout the body and the heritage clause. It is immutable, and it is
+	// in its dead zone until the class exists: `class x extends x {}` is a
+	// ReferenceError rather than a lookup of whatever x is outside. A name the
+	// class only inferred -- `var C = class {}` -- binds nothing.
+	selfSlot, hasSelf := uint32(0), cls.Name != nil
+	if hasSelf {
+		selfSlot = c.declare(cls.Name.Name, bindConst, cls.Start)
+		c.emit(bytecode.OpPushUninitialized, 0, 0)
+		c.emit(bytecode.OpSetLocal, selfSlot, 0)
+		c.markUninitialized(cls.Name.Name)
+	}
+
 	if cls.Extends != nil {
 		// The parent is evaluated before the constructor is built, as the
 		// heritage clause is an expression that may have side effects -- and
@@ -656,12 +677,6 @@ func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
 		c.compileExpr(cls.Extends)
 	}
 
-	// The body is a scope of its own, holding the class's inner name binding,
-	// its computed keys and its private names. Opening it per evaluation is
-	// what keeps two evaluations of the same class apart: each closes its
-	// bindings on the way out, so the methods of one do not share a cell with
-	// the methods of another.
-	c.beginScope()
 	c.pushPrivateScope(privates)
 	defer c.popPrivateScope()
 	c.emitPrivateKeys(privates, cls.Start)
@@ -683,15 +698,14 @@ func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
 		c.emitAt(cls.Start, bytecode.OpNewClass, 0, 0)
 	}
 
-	// A class has an inner binding for its own name, in scope throughout the
-	// body. It is what lets a static block or a method refer to the class
-	// before the outer binding is initialized, and it is a separate, immutable
-	// binding that shadows the outer one.
-	if name != "" {
+	// The class now exists, which is what takes its own name out of the dead
+	// zone. That binding is what lets a static block or a method refer to the
+	// class before the outer binding is initialized, and it shadows the outer
+	// one rather than being it: assigning to it is a TypeError.
+	if hasSelf {
 		c.emit(bytecode.OpDup, 0, 0)
-		slot := c.declare(name, bindConst, cls.Start)
-		c.emit(bytecode.OpSetLocal, slot, 0)
-		c.markInitialized(name)
+		c.emit(bytecode.OpInitLocal, selfSlot, 0)
+		c.markInitialized(cls.Name.Name)
 	}
 
 	for _, m := range cls.Members {

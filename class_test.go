@@ -1079,3 +1079,37 @@ func TestSuperConstructorIsRead(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// A class written with a name binds that name inside its own body: an
+// immutable binding, in scope from the heritage clause onwards, that shadows
+// whatever the name means outside.
+func TestClassInnerNameBinding(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"method assignment", `class C { m() { C = 42 } }
+		  try { new C().m(); "no error" } catch (e) { e.constructor.name }`, "TypeError"},
+		{"constructor assignment", `try { new (class C { constructor() { C = 42 } }); "no error" }
+		  catch (e) { e.constructor.name }`, "TypeError"},
+		{"getter assignment", `class C { get x() { C = 42 } }
+		  try { new C().x; "no error" } catch (e) { e.constructor.name }`, "TypeError"},
+		{"static assignment", `class C { static m() { C = 42 } }
+		  try { C.m(); "no error" } catch (e) { e.constructor.name }`, "TypeError"},
+		// The binding is the class, whatever the outer name later becomes.
+		{"names the class", `var Cv = class C { m() { return C === Cv } }
+		  String(new Cv().m())`, "true"},
+		{"in the constructor", `var Cv = class C { constructor() { this.ok = C === Cv } }
+		  String(new Cv().ok)`, "true"},
+		{"outer rebound", `class C { m() { return C } }
+		  var saved = C; C = 1; String(new saved().m() === saved)`, "true"},
+		// It is in its dead zone until the class exists, which the heritage
+		// clause is inside of.
+		{"heritage dead zone", `try { var x = (class x extends x {}); "no error" }
+		  catch (e) { e.constructor.name }`, "ReferenceError"},
+		// A name the class only inferred binds nothing, so an assignment to it
+		// is an ordinary one.
+		{"inferred name", `var Cv = class { m() { Cv = 1; return "assigned" } }
+		  new Cv().m() + "," + Cv`, "assigned,1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}
