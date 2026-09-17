@@ -623,15 +623,15 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		if start > end {
 			start = end
 		}
-		// subarray shares the buffer, unlike slice, which copies.
-		o := newObject(this.Object().proto, ClassTypedArray)
-		o.data = &typedArrayData{
-			buffer:     t.buffer,
-			kind:       t.kind,
-			byteOffset: t.byteOffset + start*t.info().size,
-			length:     end - start,
-		}
-		return Obj(o), nil
+		// subarray shares the buffer, unlike slice, which copies. It is built
+		// through the species from that buffer rather than assembled here, so
+		// that a subclass gets an instance of itself over the same bytes.
+		res, _, err := rt.typedArraySpeciesCreate(this, t, []Value{
+			Obj(t.buffer),
+			Int(t.byteOffset + start*t.info().size),
+			Int(end - start),
+		})
+		return res, err
 	})
 
 	r.defMethod(p, "slice", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -650,14 +650,16 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		if start > end {
 			start = end
 		}
-		o := newObject(this.Object().proto, ClassTypedArray)
-		nt := rt.allocTypedArray(o, t.kind, end-start)
-		for i := 0; i < end-start; i++ {
+		res, nt, err := rt.newTypedArrayLike(this, t, end-start)
+		if err != nil {
+			return Undefined, err
+		}
+		for i := 0; i < end-start && i < nt.length; i++ {
 			if err := rt.setElem(nt, i, t.getElem(start+i)); err != nil {
 				return Undefined, err
 			}
 		}
-		return Obj(o), nil
+		return res, nil
 	})
 
 	r.defMethod(p, "fill", 3, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -814,9 +816,9 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 			}
 			switch method {
 			case "map":
-				return rt.newTypedArrayOf(t.kind, out)
+				return rt.fillTypedArrayLike(this, t, out)
 			case "filter":
-				return rt.newTypedArrayOf(t.kind, kept)
+				return rt.fillTypedArrayLike(this, t, kept)
 			case "some":
 				return False, nil
 			case "every":

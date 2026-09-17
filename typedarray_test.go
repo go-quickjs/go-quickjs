@@ -253,3 +253,66 @@ func TestTypedArrayFromEndlessIterable(t *testing.T) {
 		t.Errorf("got %v, want RangeError", err)
 	}
 }
+
+// slice, map, filter and subarray all produce a new view, and all four ask the
+// receiver what kind it should be. Unlike the Array versions the answer is
+// checked afterwards as well: a species may return any object at all, and
+// writing elements into one that is not a view would be writing into nothing.
+func TestTypedArraySpecies(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`class A extends Uint8Array {} String(new A([1, 2]).slice(0) instanceof A)`, "true"},
+		{`class A extends Uint8Array {} String(new A([1, 2]).map(x => x) instanceof A)`, "true"},
+		{`class A extends Uint8Array {}
+		  String(new A([1, 2]).filter(() => true) instanceof A)`, "true"},
+		{`class A extends Uint8Array {} var s = new A([1, 2, 3]).subarray(1);
+		  [s instanceof A, s.length].join(",")`, "true,2"},
+		// subarray shares the buffer, unlike slice, which copies.
+		{`var a = new Uint8Array([1, 2, 3]); var s = a.subarray(1); s[0] = 9;
+		  [a[1], s.buffer === a.buffer].join(",")`, "9,true"},
+		{`var a = new Uint8Array([1, 2, 3]); var s = a.slice(1); s[0] = 9;
+		  [a[1], s.buffer === a.buffer].join(",")`, "2,false"},
+
+		{`new Uint8Array([1, 2, 3]).slice(1).join(",")`, "2,3"},
+		{`new Uint8Array([1, 2, 3]).map(x => x * 2).join(",")`, "2,4,6"},
+		{`new Uint8Array([1, 2, 3]).filter(x => x > 1).join(",")`, "2,3"},
+		{`new Uint8Array([1, 2, 3]).subarray(1).join(",")`, "2,3"},
+		{`String(new Uint8Array([1, 2]).slice(0) instanceof Uint8Array)`, "true"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+
+	bad := []string{
+		// A BigInt view and a Number one cannot stand in for each other, so the
+		// substitution is refused rather than left to fail element by element.
+		`var a = new Uint8Array([1, 2]); a.constructor = {[Symbol.species]: BigInt64Array};
+		 a.slice(0)`,
+		`var a = new BigInt64Array([1n]); a.constructor = {[Symbol.species]: Uint8Array};
+		 a.map(x => x)`,
+		// Nor can something that is not a view at all.
+		`var a = new Uint8Array([1, 2]); a.constructor = {[Symbol.species]: Array};
+		 a.slice(0)`,
+		// Nor one too short to hold the result.
+		`var a = new Uint8Array([1, 2, 3]);
+		 a.constructor = {[Symbol.species]: function () { return new Uint8Array(1); }};
+		 a.slice(0)`,
+		`var a = new Uint8Array([1, 2]); a.constructor = {[Symbol.species]: 1}; a.slice(0)`,
+	}
+	for _, src := range bad {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil {
+			t.Errorf("%s: accepted, want TypeError", src)
+		} else if !strings.Contains(err.Error(), "TypeError") {
+			t.Errorf("%s: got %v, want TypeError", src, err)
+		}
+		rt.Close()
+	}
+}
