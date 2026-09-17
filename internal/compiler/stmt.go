@@ -35,8 +35,8 @@ func (c *compiler) compileStatements(body []ast.Stmt) {
 	// may precede the declaration textually. An exported one is hoisted too,
 	// which means looking through the export wrapper.
 	for _, s := range body {
-		if fd, ok := hoistableFunction(s); ok {
-			c.predeclareFunction(fd)
+		if fd, binding, ok := hoistableFunction(s); ok {
+			c.predeclareFunction(fd, binding)
 		}
 	}
 	for _, s := range body {
@@ -46,9 +46,15 @@ func (c *compiler) compileStatements(body []ast.Stmt) {
 
 // predeclareFunction creates the binding for a hoisted function declaration
 // and emits its definition up front.
-func (c *compiler) predeclareFunction(fd *ast.FuncDecl) {
-	name := fd.Fn.Name.Name
-	c.compileFunctionLiteral(fd.Fn, name)
+func (c *compiler) predeclareFunction(fd *ast.FuncDecl, name string) {
+	// `export default function () {}` is hoisted like any other function
+	// declaration, but the binding it creates has a name no identifier can
+	// spell -- while the function itself is called "default".
+	fnName := name
+	if fd.Fn.Name == nil {
+		fnName = "default"
+	}
+	c.compileFunctionLiteral(fd.Fn, fnName)
 	if c.parent == nil && c.depth == 0 && !c.evalVarsAreLocal() {
 		c.emit(bytecode.OpDefineGlobalFunc, c.nameIdx(name), boolBit(c.opts.EvalConfigurable))
 		return
@@ -784,22 +790,28 @@ func (c *compiler) atModuleTopLevel() bool {
 	return c.module != nil && c.parent == nil && c.depth == 0
 }
 
-// hoistableFunction returns the function declaration a statement contains,
-// looking through an export wrapper.
-func hoistableFunction(s ast.Stmt) (*ast.FuncDecl, bool) {
+// hoistableFunction returns the function declaration a statement contains and
+// the name it binds, looking through an export wrapper.
+//
+// `export default function () {}` is hoisted too, under the name the linker
+// looks for rather than under one of its own.
+func hoistableFunction(s ast.Stmt) (*ast.FuncDecl, string, bool) {
 	switch n := s.(type) {
 	case *ast.FuncDecl:
 		if n.Fn.Name != nil {
-			return n, true
+			return n, n.Fn.Name.Name, true
 		}
 	case *ast.ExportDecl:
-		if n.Decl != nil {
-			if fd, ok := n.Decl.(*ast.FuncDecl); ok && fd.Fn.Name != nil {
-				return fd, true
-			}
+		fd, ok := n.Decl.(*ast.FuncDecl)
+		switch {
+		case !ok:
+		case fd.Fn.Name != nil:
+			return fd, fd.Fn.Name.Name, true
+		case n.Default:
+			return fd, defaultBindingName, true
 		}
 	}
-	return nil, false
+	return nil, "", false
 }
 
 // compileFieldInit creates one instance field.

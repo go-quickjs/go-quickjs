@@ -1691,6 +1691,44 @@ func TestModuleBindingsAreLive(t *testing.T) {
 	}
 }
 
+// TestDefaultExportForms covers what `export default` binds. A declaration
+// with a name is exported through that binding, which keeps the export live;
+// anything else is bound under a name no identifier can spell.
+func TestDefaultExportForms(t *testing.T) {
+	cases := []struct{ dep, want string }{
+		// The function reassigns its own binding, which the namespace sees
+		// because the export is that binding rather than a copy of it.
+		{`export default function fn() { fn = 2; return 1 }`, "fn|1|number"},
+		{`export default function () { return 1 }`, "default|1|function"},
+		{`export default class C { static m() { return 1 } }`, "C|1|function"},
+		{`export default class { static m() { return 1 } }`, "default|1|function"},
+		{`export default {m() { return 1 }}`, "|1|object"},
+	}
+	for _, tc := range cases {
+		rt := quickjs.New()
+		dep := tc.dep
+		rt.SetModuleLoader(func(spec, referrer string) (string, string, error) {
+			if spec != "d" {
+				return "", "", fmt.Errorf("unknown module %q", spec)
+			}
+			return dep, spec, nil
+		})
+		_, err := rt.EvalModule("entry", `
+			import d from "d";
+			var name = typeof d === "function" ? d.name : "";
+			var called = d.m ? d.m() : d();
+			import("d").then(function (ns) {
+				globalThis.r = [name, called, typeof ns.default].join("|");
+			});`)
+		if err != nil {
+			t.Errorf("%s: %v", tc.dep, err)
+		} else if got, _ := rt.Get("r"); got.String() != tc.want {
+			t.Errorf("%s\n got: %s\nwant: %s", tc.dep, got, tc.want)
+		}
+		rt.Close()
+	}
+}
+
 func TestModuleNamespaceIsReturned(t *testing.T) {
 	rt := quickjs.New()
 	defer rt.Close()

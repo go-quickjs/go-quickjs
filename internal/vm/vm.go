@@ -125,7 +125,20 @@ func (r *Runtime) callObject(o *Object, this Value, args []Value, newTarget Valu
 		}
 		return Obj(gen), nil
 	}
+	// A class constructor has to be constructed. Calling one would run its
+	// body with no object to initialize -- and in a derived class with no
+	// `this` at all, since super() is what binds it.
+	if newTarget.IsUndefined() && isClassConstructorKind(fd.closure.fn.Kind) {
+		return Undefined, r.throwTypeError(
+			"class constructor %s cannot be invoked without \"new\"", fd.name)
+	}
 	return r.run(fd.closure, this, args, newTarget, o)
+}
+
+// isClassConstructorKind reports whether a function is a class's constructor,
+// which is the one kind that may only be constructed.
+func isClassConstructorKind(k bytecode.FuncKind) bool {
+	return k == bytecode.KindConstructor || k == bytecode.KindDerivedConstructor
 }
 
 // describe renders a value for an error message without risking a callback
@@ -2283,6 +2296,16 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 	fd := o.fn()
 	if fd == nil || fd.ctorKind == ctorNone {
 		return Undefined, r.throwTypeError("%s is not a constructor", fd.nameOr("value"))
+	}
+
+	// `new f.bind(...)()` builds an instance of what was bound rather than of
+	// the binding, which has no prototype property for the new object to take.
+	if newTarget.IsObject() && newTarget.Object() == o {
+		t := o
+		for td := t.fn(); td != nil && td.boundTarget != nil; td = t.fn() {
+			t = td.boundTarget
+		}
+		newTarget = Obj(t)
 	}
 
 	// The new object's prototype comes from new.target's .prototype property,

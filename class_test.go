@@ -884,3 +884,29 @@ func TestFunctionLengthAndNameOrder(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestClassConstructorRequiresNew covers calling a class constructor as a
+// function, which is a TypeError however it is reached.
+func TestClassConstructorRequiresNew(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`class C {} try { C() } catch (e) { e.constructor.name }`, "TypeError"},
+		{`class C extends Object {} try { C() } catch (e) { e.constructor.name }`, "TypeError"},
+		{`class C {} try { C.call({}) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`class C {} try { [1].map(C) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`class C {} try { Reflect.apply(C, null, []) } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		{`class C {} try { new (C.bind(null))() instanceof C } catch (e) { e.constructor.name }`,
+			"true"},
+		{`class C {} try { C.bind(null)() } catch (e) { e.constructor.name }`, "TypeError"},
+
+		// A method is not a constructor at all, and a plain function still is
+		// callable.
+		{`var o = {m() { return 1 }}; String(o.m())`, "1"},
+		{`function f() { return 1 } String(f())`, "1"},
+		{`class C { static m() { return 1 } } String(C.m())`, "1"},
+		{`class C { constructor() { this.x = 1 } } String(new C().x)`, "1"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

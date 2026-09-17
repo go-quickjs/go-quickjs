@@ -13,6 +13,11 @@ import (
 // This is what makes an export live -- the exported name and the module's own
 // binding are the same property.
 
+// defaultBindingName is what `export default` binds when what it exports has
+// no name of its own -- an anonymous function or class, or an expression. No
+// identifier can spell it, so it cannot collide with a module's own bindings.
+const defaultBindingName = "*default*"
+
 // ModuleInfo is what the compiler learned about a module's shape, which the
 // linker needs.
 type ModuleInfo struct {
@@ -143,7 +148,14 @@ func (c *compiler) collectExport(n *ast.ExportDecl) {
 		}
 
 	case n.Default:
-		c.module.Exports["default"] = "*default*"
+		// A named declaration is exported under its own binding, so that the
+		// export stays live: `export default function fn() {}` followed by
+		// `fn = 2` is seen through the namespace.
+		if names := declaredNames(n.Decl); len(names) > 0 {
+			c.module.Exports["default"] = names[0]
+			return
+		}
+		c.module.Exports["default"] = defaultBindingName
 
 	case n.Decl != nil:
 		for _, name := range declaredNames(n.Decl) {
@@ -184,21 +196,23 @@ func (c *compiler) compileExportDecl(n *ast.ExportDecl) {
 			// `export default class {}` declares no binding of its own, so it
 			// is the expression it looks like, named after the export.
 			c.compileClass(cd.Class, "default")
-			c.emit(bytecode.OpDefineGlobalFunc, c.nameIdx("*default*"), 0)
+			c.emit(bytecode.OpDefineGlobalFunc, c.nameIdx(defaultBindingName), 0)
+			return
+		}
+		if fd, ok := n.Decl.(*ast.FuncDecl); ok {
+			// A function declaration, named or not, was already emitted when
+			// the statement list hoisted it.
+			_ = fd
 			return
 		}
 		if n.Decl != nil {
+			// A named class: the export names its binding, which is all there
+			// is to do.
 			c.compileStatement(n.Decl)
-			// A default-exported declaration is also bound under the name the
-			// linker looks for.
-			if names := declaredNames(n.Decl); len(names) > 0 {
-				c.compileIdentRead(&ast.Ident{Name: names[0], Start: n.Start})
-				c.emit(bytecode.OpDefineGlobalFunc, c.nameIdx("*default*"), 0)
-			}
 			return
 		}
 		c.compileExprNamed(n.DefaultExpr, "default")
-		c.emit(bytecode.OpDefineGlobalFunc, c.nameIdx("*default*"), 0)
+		c.emit(bytecode.OpDefineGlobalFunc, c.nameIdx(defaultBindingName), 0)
 
 	case n.Decl != nil:
 		// A function declaration was already emitted when the statement list
