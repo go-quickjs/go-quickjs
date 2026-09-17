@@ -481,6 +481,12 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		vmErr = nil
 	}
 
+	// The program counter is kept in a local and written back to the frame at
+	// each instruction, so that fetching one is a single store rather than a
+	// load and a store. What the frame holds is what a stack trace taken from
+	// inside a call reads, which is the instruction after the one calling --
+	// the same as it ever was.
+	pc := f.pc
 	for {
 		// The cancellation check happens on every instruction, so the counter
 		// is decremented inline and only the rare expiry is a call. Reading a
@@ -495,8 +501,9 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 		}
 
-		in = code[f.pc]
-		f.pc++
+		in = code[pc]
+		pc++
+		f.pc = pc
 
 		switch in.Op {
 		case bytecode.OpNop:
@@ -1171,11 +1178,14 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 
 		// --- Arithmetic ---------------------------------------------------
 		case bytecode.OpAdd:
-			b, a := pop(), pop()
-			// The overwhelmingly common case is two numbers, so it is tested
-			// before the general algorithm.
+			// The two operands are read where they lie and the result written
+			// over the first of them: the overwhelmingly common case is two
+			// numbers, and a pop and a push for each would touch the same
+			// slots twice.
+			a, b := r.stack[sp-2], r.stack[sp-1]
+			sp--
 			if a.IsNumber() && b.IsNumber() {
-				push(Float(a.Number() + b.Number()))
+				r.stack[sp-1] = Float(a.Number() + b.Number())
 				break
 			}
 			v, err := r.add(a, b)
@@ -1183,12 +1193,13 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				vmErr = err
 				goto onError
 			}
-			push(v)
+			r.stack[sp-1] = v
 		case bytecode.OpSub, bytecode.OpMul, bytecode.OpDiv, bytecode.OpMod,
 			bytecode.OpPow:
-			b, a := pop(), pop()
+			a, b := r.stack[sp-2], r.stack[sp-1]
+			sp--
 			if a.IsNumber() && b.IsNumber() {
-				push(Float(numericOp(in.Op, a.Number(), b.Number())))
+				r.stack[sp-1] = Float(numericOp(in.Op, a.Number(), b.Number()))
 				break
 			}
 			v, err := r.arith(in.Op, a, b)
@@ -1196,7 +1207,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				vmErr = err
 				goto onError
 			}
-			push(v)
+			r.stack[sp-1] = v
 		case bytecode.OpNeg:
 			a := pop()
 			if a.IsNumber() {
@@ -1366,25 +1377,29 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 
 		// --- Comparison ---------------------------------------------------
 		case bytecode.OpEq, bytecode.OpNe:
-			b, a := pop(), pop()
+			a, b := r.stack[sp-2], r.stack[sp-1]
+			sp--
 			eq, err := r.looseEquals(a, b)
 			if err != nil {
 				vmErr = err
 				goto onError
 			}
-			push(Bool(eq == (in.Op == bytecode.OpEq)))
+			r.stack[sp-1] = Bool(eq == (in.Op == bytecode.OpEq))
 		case bytecode.OpStrictEq:
-			b, a := pop(), pop()
-			push(Bool(a.StrictEquals(b)))
+			a, b := r.stack[sp-2], r.stack[sp-1]
+			sp--
+			r.stack[sp-1] = Bool(a.StrictEquals(b))
 		case bytecode.OpStrictNe:
-			b, a := pop(), pop()
-			push(Bool(!a.StrictEquals(b)))
+			a, b := r.stack[sp-2], r.stack[sp-1]
+			sp--
+			r.stack[sp-1] = Bool(!a.StrictEquals(b))
 		case bytecode.OpLt, bytecode.OpLe, bytecode.OpGt, bytecode.OpGe:
-			b, a := pop(), pop()
+			a, b := r.stack[sp-2], r.stack[sp-1]
+			sp--
 			// Two numbers are compared directly, which also gets the NaN
 			// behaviour right without going through cmpUndefined.
 			if a.IsNumber() && b.IsNumber() {
-				push(Bool(compareFloats(in.Op, a.Number(), b.Number())))
+				r.stack[sp-1] = Bool(compareFloats(in.Op, a.Number(), b.Number()))
 				break
 			}
 			c, err := r.compare(a, b)
@@ -1392,7 +1407,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				vmErr = err
 				goto onError
 			}
-			push(Bool(relationalResult(in.Op, c)))
+			r.stack[sp-1] = Bool(relationalResult(in.Op, c))
 		case bytecode.OpIn:
 			obj, key := pop(), pop()
 			if !obj.IsObject() {
@@ -1427,24 +1442,24 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 
 		// --- Control flow -------------------------------------------------
 		case bytecode.OpJump:
-			f.pc = in.A
+			pc = in.A
 		case bytecode.OpJumpIfFalse:
 			if !pop().Truthy() {
-				f.pc = in.A
+				pc = in.A
 			}
 		case bytecode.OpJumpIfTrue:
 			if pop().Truthy() {
-				f.pc = in.A
+				pc = in.A
 			}
 		case bytecode.OpJumpIfFalseKeep:
 			if !peek(0).Truthy() {
-				f.pc = in.A
+				pc = in.A
 			} else {
 				sp--
 			}
 		case bytecode.OpJumpIfTrueKeep:
 			if peek(0).Truthy() {
-				f.pc = in.A
+				pc = in.A
 			} else {
 				sp--
 			}
@@ -1453,11 +1468,11 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// as the chain's result when short-circuiting, and as the receiver
 			// of the next link otherwise.
 			if peek(0).IsNullish() {
-				f.pc = in.A
+				pc = in.A
 			}
 		case bytecode.OpJumpIfNotNullish:
 			if !peek(0).IsNullish() {
-				f.pc = in.A
+				pc = in.A
 			} else {
 				sp--
 			}
@@ -1674,7 +1689,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			default:
 				push(v)
 			}
-			f.pc = in.B
+			pc = in.B
 		case bytecode.OpWithGetUnder:
 			name := cl.names[in.A&bytecode.WithNameMask]
 			o, found, err := r.withFound(f.withScopes, name,
@@ -1695,7 +1710,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// so that the write goes back where the read came from.
 			r.stack[sp-1] = Obj(o)
 			push(v)
-			f.pc = in.B
+			pc = in.B
 		case bytecode.OpWithResolve:
 			name := cl.names[in.A&bytecode.WithNameMask]
 			o, found, err := r.withFound(f.withScopes, name,
@@ -1727,7 +1742,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 			r.stack[sp-2] = v
 			sp--
-			f.pc = in.B
+			pc = in.B
 		case bytecode.OpWithSet:
 			name := cl.names[in.A&bytecode.WithNameMask]
 			o, found, err := r.withFound(f.withScopes, name,
@@ -1743,7 +1758,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				vmErr = err
 				goto onError
 			}
-			f.pc = in.B
+			pc = in.B
 		case bytecode.OpWithDelete:
 			name := cl.names[in.A&bytecode.WithNameMask]
 			o, found, err := r.withFound(f.withScopes, name,
@@ -1761,7 +1776,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				goto onError
 			}
 			push(Bool(ok))
-			f.pc = in.B
+			pc = in.B
 
 		case bytecode.OpCheckCoercible:
 			if v := peek(0); v.IsNullish() {
@@ -1851,6 +1866,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				// An enclosing finally has its own claim on the return: the
 				// value keeps unwinding until no finally is left.
 				if r.unwindToFinally(f, &sp, val) {
+					pc = f.pc
 					continue
 				}
 				if err := r.closeIteratorsReturning(f.base, sp); err != nil {
@@ -1989,7 +2005,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				goto onError
 			}
 			if !ok {
-				f.pc = in.A
+				pc = in.A
 				break
 			}
 			push(v)
@@ -2025,7 +2041,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				// return it is what the outer generator returns, awaited first
 				// when the generator is an async one.
 				push(res)
-				f.pc = in.B
+				pc = in.B
 				break
 			}
 			push(res)
@@ -2067,7 +2083,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// what it means: the delegate's return value, or -- when the outer
 			// generator was the one asked to return -- what it returns.
 			push(val)
-			f.pc = in.A
+			pc = in.A
 		case bytecode.OpIterSend, bytecode.OpIterSendAsync:
 			sent := pop()
 			res, err := r.iterSend(peek(0), sent, in.Op == bytecode.OpIterSendAsync)
@@ -2105,7 +2121,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				if st := iterStateOf(peek(1)); st != nil {
 					st.done = true
 				}
-				f.pc = in.A
+				pc = in.A
 			}
 		case bytecode.OpIterResultOrJump:
 			res := pop()
@@ -2119,7 +2135,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				goto onError
 			}
 			if done.Truthy() {
-				f.pc = in.A
+				pc = in.A
 				break
 			}
 			val, err := r.getValueProp(res, atomValue)
@@ -2455,6 +2471,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			r.closeIteratorsIn(f.base, sp)
 			return Undefined, vmErr
 		}
+		pc = f.pc
 		vmErr = nil
 	}
 }

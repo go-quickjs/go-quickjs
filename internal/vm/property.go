@@ -26,12 +26,17 @@ func (r *Runtime) getProp(obj *Object, key Atom, receiver Value) (Value, error) 
 				return v, nil
 			}
 			// A class with exotic index behaviour handles indices not present
-			// in its dense storage.
-			if v, ok, err := r.getExoticIndex(o, key.Index()); ok || err != nil {
+			// in its dense storage. An ordinary object has none, which is the
+			// common case and worth not asking about.
+			if o.class != ClassObject {
+				if v, ok, err := r.getExoticIndex(o, key.Index()); ok || err != nil {
+					return v, err
+				}
+			}
+		} else if o.class != ClassObject {
+			if v, ok, err := r.getExoticNamed(o, key); ok || err != nil {
 				return v, err
 			}
-		} else if v, ok, err := r.getExoticNamed(o, key); ok || err != nil {
-			return v, err
 		}
 
 		if p := o.getOwnVisible(key); p != nil {
@@ -261,7 +266,9 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 		}
 		// A function's name and length are synthesized rather than stored, so
 		// the walk would not otherwise find them -- and they are non-writable,
-		// which is what makes `f.name = "x"` silently do nothing.
+		// which is what makes `f.name = "x"` silently do nothing. An ordinary
+		// object synthesizes nothing, which is the common case and worth not
+		// asking about.
 		if o.class == ClassFunction && (key == atomName || key == atomLength) {
 			if fd := o.fn(); fd != nil && !fd.propsMaterialized {
 				return false, r.assignFailed(key, strict,
@@ -272,7 +279,7 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 		// wrapper's characters, a typed array's elements -- are own properties
 		// too, so the walk stops at them rather than looking for a setter
 		// further up that they shadow.
-		if r.hasExoticOwn(o, key) {
+		if o.class != ClassObject && r.hasExoticOwn(o, key) {
 			if o == obj && rcv == obj {
 				return r.createOwnProp(o, key, val, strict)
 			}
