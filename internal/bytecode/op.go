@@ -131,6 +131,10 @@ const (
 	OpGetPrivate
 	OpSetPrivate
 	OpDefinePrivate
+	// OpDefinePrivateMethod adds a private method, which differs from a field
+	// in being read-only: a method is not a place to store anything, so
+	// assigning to one fails rather than replacing it.
+	OpDefinePrivateMethod
 	OpDefinePrivateGetter
 	OpDefinePrivateSetter
 	OpPrivateIn // `#x in obj`
@@ -472,6 +476,7 @@ var opNames = [opCount]string{
 
 	OpGetPrivate: "get_private", OpSetPrivate: "set_private",
 	OpDefinePrivate: "define_private", OpPrivateIn: "private_in",
+	OpDefinePrivateMethod:   "define_private_method",
 	OpDefinePrivateGetter:   "define_private_getter",
 	OpDefinePrivateSetter:   "define_private_setter",
 	OpGetPrivateMethod:      "get_private_method",

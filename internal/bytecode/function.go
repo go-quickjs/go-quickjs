@@ -315,6 +315,7 @@ func (f *Function) disassembleTo(sb *strings.Builder, indent string) {
 			OpGetGlobal, OpGetGlobalOpt, OpSetGlobal, OpDefineGlobalVar,
 			OpDefineGlobalFunc, OpSetName, OpGetSuperProp, OpSetSuperProp,
 			OpGetPrivate, OpSetPrivate, OpDefinePrivate, OpPrivateIn,
+			OpDefinePrivateMethod,
 			OpGetPrivateMethod, OpDefineGetter, OpDefineSetter:
 			fmt.Fprintf(sb, " %d", in.A)
 			if int(in.A) < len(f.Names) {

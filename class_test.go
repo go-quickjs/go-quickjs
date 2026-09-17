@@ -1282,3 +1282,98 @@ func TestClassMemberGrammarEdges(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
 	}
 }
+
+// The static elements run once the class object exists, in the order they were
+// written: a static field and a static block are the same kind of thing there,
+// and a block between two fields runs between them.
+func TestStaticElementOrder(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var seq = []
+		  class C {
+		    static x = seq.push("first field")
+		    static { seq.push("first block") }
+		    static y = seq.push("second field")
+		    static { seq.push("second block") }
+		  }
+		  seq.join(",")`, "first field,first block,second field,second block"},
+		// Each sees what the ones before it left behind.
+		{`class C { static a = 1; static { this.b = this.a + 1 } static c = this.b + 1 }
+		  [C.a, C.b, C.c].join(",")`, "1,2,3"},
+		// A throw stops the rest of the class definition, the element it came
+		// from included.
+		{`var same = false, field = false, block = false, caught
+		  var thrown = new Error("stop")
+		  try {
+		    class C {
+		      static { throw thrown; same = true }
+		      static x = field = true
+		      static { block = true }
+		    }
+		  } catch (e) { caught = e }
+		  [caught === thrown, same, field, block].join(",")`, "true,false,false,false"},
+		// `this` in a static block is the class, and super.x reads from the
+		// parent class rather than from its prototype.
+		{`class B { static m() { return "B.m" } }
+		  class C extends B { static { this.r = super.m() } }
+		  C.r`, "B.m"},
+		// A static block is not a function body, so nothing returns from it.
+		{`try { eval("class C { static { return } }"); "no throw" }
+		  catch (e) { e.constructor.name }`, "SyntaxError"},
+		{`try { eval("class C { static { function f() { return 1 } this.r = f() } }; C.r") }
+		  catch (e) { e.constructor.name }`, "1"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// A private member is a member like any other: an object closed to new
+// properties takes none, and a private method is not a place to store anything.
+func TestPrivateMembersAreMembers(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// A base constructor that seals `this` refuses the subclass's field.
+		{`class B { constructor(seal) { if (seal) Object.preventExtensions(this) } }
+		  class C extends B {
+		    #v
+		    constructor(seal) { super(seal); this.#v = 42 }
+		    val() { return this.#v }
+		  }
+		  var out = [new C(false).val()]
+		  try { new C(true) } catch (e) { out.push(e.constructor.name) }
+		  out.join(",")`, "42,TypeError"},
+		{`class B { constructor() { Object.preventExtensions(this) } }
+		  class C extends B { #m() {} }
+		  try { new C(); "no throw" } catch (e) { e.constructor.name }`, "TypeError"},
+		{`class B { constructor() { return Object.preventExtensions({}) } }
+		  class C extends B { #x = 1 }
+		  try { new C(); "no throw" } catch (e) { e.constructor.name }`, "TypeError"},
+
+		// A method cannot be assigned to, on an instance or on the class.
+		{`class C { static #m() {} static assign() { this.#m = 0 } }
+		  try { C.assign(); "no throw" } catch (e) { e.constructor.name }`, "TypeError"},
+		{`class C {
+		    #m() { return 1 }
+		    assign() { this.#m = 0 }
+		    call() { return this.#m() }
+		  }
+		  var c = new C()
+		  var out = [c.call()]
+		  try { c.assign() } catch (e) { out.push(e.constructor.name) }
+		  out.join(",")`, "1,TypeError"},
+
+		// A field is writable, and an accessor writes through its setter.
+		{`class C { #x = 1; get() { return this.#x } set(v) { this.#x = v; return this.#x } }
+		  var c = new C(); [c.get(), c.set(5)].join(",")`, "1,5"},
+		{`class C { static #x = 1; static set(v) { C.#x = v; return C.#x } }
+		  String(C.set(5))`, "5"},
+		{`class C {
+		    get #a() { return 1 }
+		    set #a(v) { this.v = v }
+		    go() { this.#a = 7; return [this.#a, this.v].join("/") }
+		  }
+		  new C().go()`, "1/7"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

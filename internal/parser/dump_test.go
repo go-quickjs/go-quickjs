@@ -513,7 +513,7 @@ func dumpClass(sb *strings.Builder, cls *ast.ClassLit) {
 	}
 	for _, b := range cls.StaticBlocks {
 		sb.WriteString(" (static-block ")
-		dumpStmts(sb, b)
+		dumpStmts(sb, b.Body)
 		sb.WriteByte(')')
 	}
 	sb.WriteByte(')')

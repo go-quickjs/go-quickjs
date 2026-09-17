@@ -2,6 +2,8 @@ package compiler
 
 import (
 	"fmt"
+	"sort"
+
 	"github.com/go-quickjs/go-quickjs/internal/ast"
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jsnum"
@@ -763,28 +765,67 @@ func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
 		c.compileClassMember(m, fn, installName)
 	}
 
-	// A static field is initialized after the class object exists, by an
-	// immediately invoked method of the class. That is what makes `this` the
-	// constructor -- an initializer may read one static field to compute the
-	// next -- and what gives it a home object for `super.x`.
+	// The static elements run once the class object exists, in the order they
+	// were written: a field and a block are the same kind of thing here, and a
+	// block between two fields runs between them.
+	c.compileStaticElements(cls, keyNames)
+	c.endScope()
+}
+
+// compileStaticElements runs a class's static fields and static blocks, in
+// source order.
+//
+// Each is an immediately invoked method of the class. That is what makes `this`
+// the constructor -- an initializer may read one static field to compute the
+// next -- and what gives it a home object for `super.x`. OpCallMethod takes the
+// receiver from beneath the callee, so the constructor is duplicated into that
+// slot each time.
+func (c *compiler) compileStaticElements(cls *ast.ClassLit, keyNames []string) {
+	type element struct {
+		pos   int
+		field int // index into cls.Fields, or -1 for a block
+		block int // index into cls.StaticBlocks
+	}
+	var elements []element
 	for i, f := range cls.Fields {
-		if !f.Static {
+		if f.Static {
+			elements = append(elements, element{pos: f.Start, field: i})
+		}
+	}
+	for i, b := range cls.StaticBlocks {
+		elements = append(elements, element{pos: b.Start, field: -1, block: i})
+	}
+	sort.SliceStable(elements, func(i, j int) bool {
+		return elements[i].pos < elements[j].pos
+	})
+
+	for _, el := range elements {
+		c.emit(bytecode.OpDup, 0, 0)
+		if el.field < 0 {
+			c.compileFunctionLiteral(&ast.FuncLit{
+				Kind:  ast.FuncMethod,
+				Body:  cls.StaticBlocks[el.block].Body,
+				Start: cls.Start,
+			}, "")
+			// Its home object is the class, so `super.x` there reads from the
+			// parent class rather than from the parent's prototype.
+			c.emit(bytecode.OpSetHomeObject, 1, 0)
+			c.emit(bytecode.OpCallMethod, 0, 0)
+			c.emit(bytecode.OpDrop, 0, 0)
 			continue
 		}
+		f := cls.Fields[el.field]
 		key, computed := f.Key, f.Computed
 		if computed {
 			// Read the key the class definition already computed rather than
 			// evaluating the expression a second time.
-			key = &ast.Ident{Name: keyNames[i], Start: f.Start}
+			key = &ast.Ident{Name: keyNames[el.field], Start: f.Start}
 		}
 		value := f.Value
 		if value == nil {
 			// A field with no initializer is still created, holding undefined.
 			value = &ast.Ident{Name: "undefined", Start: f.Start}
 		}
-		// OpCallMethod takes the receiver from beneath the callee, so the
-		// constructor is duplicated into that slot.
-		c.emit(bytecode.OpDup, 0, 0)
 		c.compileFunctionLiteral(&ast.FuncLit{
 			Kind: ast.FuncMethod,
 			Body: []ast.Stmt{&ast.FieldInit{
@@ -797,24 +838,6 @@ func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
 		c.emit(bytecode.OpCallMethod, 0, 0)
 		c.emit(bytecode.OpDrop, 0, 0)
 	}
-
-	for _, block := range cls.StaticBlocks {
-		// A static block is an immediately invoked method whose `this` is the
-		// class. OpCallMethod takes the receiver from beneath the callee, so
-		// the constructor is duplicated into that slot.
-		c.emit(bytecode.OpDup, 0, 0)
-		c.compileFunctionLiteral(&ast.FuncLit{
-			Kind:  ast.FuncMethod,
-			Body:  block,
-			Start: cls.Start,
-		}, "")
-		// Its home object is the class, so `super.x` there reads from the
-		// parent class rather than from the parent's prototype.
-		c.emit(bytecode.OpSetHomeObject, 1, 0)
-		c.emit(bytecode.OpCallMethod, 0, 0)
-		c.emit(bytecode.OpDrop, 0, 0)
-	}
-	c.endScope()
 }
 
 // compileClassMember attaches one method or accessor to the class.
@@ -901,7 +924,7 @@ func (c *compiler) emitClassMemberDefine(m ast.Property, key string) {
 		case ast.PropSet:
 			c.emit(bytecode.OpDefinePrivateSetter, name, ref)
 		default:
-			c.emit(bytecode.OpDefinePrivate, name, ref)
+			c.emit(bytecode.OpDefinePrivateMethod, name, ref)
 		}
 		return
 	}

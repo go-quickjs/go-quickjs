@@ -972,3 +972,45 @@ func TestSubarrayConvertsBeforeChecking(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
 	}
 }
+
+// A typed array's elements are slots in a buffer, so a descriptor that does not
+// describe one is refused rather than applied. The refusal is reported like any
+// other: Object.defineProperty throws and Reflect.defineProperty answers false.
+func TestTypedArrayDefineRefusals(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var a = new Int8Array(2);
+		  [Reflect.defineProperty(a, "0", {value: 1, writable: false}),
+		   Reflect.defineProperty(a, "0", {value: 1, enumerable: false}),
+		   Reflect.defineProperty(a, "0", {value: 1, configurable: false}),
+		   Reflect.defineProperty(a, "0", {get: function () {}})].join(",")`,
+			"false,false,false,false"},
+		// An index outside the array names nothing, and nothing is where a
+		// property cannot be added.
+		{`var a = new Int8Array(2);
+		  [Reflect.defineProperty(a, "-1", {value: 1}),
+		   Reflect.defineProperty(a, "2", {value: 1}),
+		   Reflect.defineProperty(a, "-0", {value: 1}),
+		   Reflect.defineProperty(a, "1.5", {value: 1})].join(",")`,
+			"false,false,false,false"},
+		{`var a = new Int8Array(2)
+		  try { Object.defineProperty(a, "2", {value: 1}) } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		// A detached buffer has no slots at all.
+		{`var b = new ArrayBuffer(8); var a = new Int8Array(b)
+		  b.transfer();
+		  String(Reflect.defineProperty(a, "0", {value: 1}))`, "false"},
+		// What does describe an element is applied.
+		{`var a = new Int8Array(2);
+		  [Reflect.defineProperty(a, "0", {value: 7}), a[0]].join(",")`, "true,7"},
+		{`var a = new Int8Array(2);
+		  [Reflect.defineProperty(a, "0", {value: 7, writable: true, enumerable: true,
+		     configurable: true}), a[0]].join(",")`, "true,7"},
+		// A value that cannot be converted is still an error of its own.
+		{`var a = new Int8Array(2)
+		  try { Reflect.defineProperty(a, "0", {value: 1n}) } catch (e) { e.constructor.name }`,
+			"TypeError"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

@@ -2142,7 +2142,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				vmErr = err
 				goto onError
 			}
-		case bytecode.OpDefinePrivate:
+		case bytecode.OpDefinePrivate, bytecode.OpDefinePrivateMethod:
 			val := pop()
 			target := peek(0)
 			if target.IsObject() {
@@ -2155,7 +2155,19 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 						r.atoms.name(key))
 					goto onError
 				}
-				target.Object().setOwnRaw(key, val, propWritable|propPrivate)
+				if !target.Object().IsExtensible() {
+					// A private member is a member like any other: an object
+					// that has been closed to new ones takes none.
+					vmErr = r.throwTypeError(
+						"cannot add %s to a non-extensible object", r.atoms.name(key))
+					goto onError
+				}
+				flags := propFlags(propWritable | propPrivate)
+				if in.Op == bytecode.OpDefinePrivateMethod {
+					// A method is not a place to store anything.
+					flags = propPrivate
+				}
+				target.Object().setOwnRaw(key, val, flags)
 			}
 		case bytecode.OpDefinePrivateGetter, bytecode.OpDefinePrivateSetter:
 			val := pop()

@@ -345,7 +345,8 @@ func (s *scopeChecker) class(cl *ast.ClassLit) {
 		s.expr(f.Key)
 		s.expr(f.Value)
 	}
-	for _, blk := range cl.StaticBlocks {
+	for _, sb := range cl.StaticBlocks {
+		blk := sb.Body
 		saved := s.scopes
 		s.scopes = nil
 		s.block(blk, nil)

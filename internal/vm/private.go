@@ -133,6 +133,13 @@ func (r *Runtime) installPrivateMethods(this Value, list Value) error {
 			return r.throwTypeError("%s is already present on this object",
 				r.atoms.name(e.key))
 		}
+		if !o.IsExtensible() {
+			// A private member is a member like any other: an object closed to
+			// new ones takes none, which a base constructor that sealed `this`
+			// is what usually causes.
+			return r.throwTypeError("cannot add %s to a non-extensible object",
+				r.atoms.name(e.key))
+		}
 		switch e.op {
 		case bytecode.OpAddPrivateGetter:
 			r.definePrivateAccessor(o, e.key, e.fn, true)

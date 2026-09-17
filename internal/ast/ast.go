@@ -234,11 +234,19 @@ type ClassLit struct {
 	Members []Property
 	// Fields are the instance and static field initializers, in source order.
 	Fields []ClassField
-	// StaticBlocks are `static { ... }` blocks.
-	StaticBlocks [][]Stmt
+	// StaticBlocks are `static { ... }` blocks. They carry their position
+	// because they run interleaved with the static fields, in the order all of
+	// them were written.
+	StaticBlocks []StaticBlock
 	Start        int
 	// End is the offset just past the class's closing brace.
 	End int
+}
+
+// StaticBlock is one `static { ... }` block of a class.
+type StaticBlock struct {
+	Body  []Stmt
+	Start int
 }
 
 // FieldInit initializes one instance field, and exists only in the constructor

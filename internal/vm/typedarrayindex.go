@@ -94,18 +94,23 @@ func canonicalNumericIndex(name string) (float64, bool) {
 // way to store the answer, and pretending otherwise would let a script believe
 // it had frozen an element.
 func (r *Runtime) typedArrayDefine(o *Object, ix numericIndex, d *propDesc) (bool, error) {
+	// Every refusal here is reported rather than thrown: an element is a slot
+	// in a buffer, and a descriptor that does not describe one is simply not
+	// applicable. Object.defineProperty turns the refusal into a TypeError and
+	// Reflect.defineProperty answers false, as they do for any other.
 	if !ix.valid {
-		return false, r.throwTypeError("cannot define a property outside a typed array")
+		// An index outside the array names nothing, and nothing is where a
+		// property cannot be added.
+		return false, nil
 	}
 	switch {
-	case d.isAccessor():
-		return false, r.throwTypeError("a typed array element cannot be an accessor")
-	case d.hasConfigurable && !d.configurable:
-		return false, r.throwTypeError("a typed array element is always configurable")
-	case d.hasEnumerable && !d.enumerable:
-		return false, r.throwTypeError("a typed array element is always enumerable")
-	case d.hasWritable && !d.writable:
-		return false, r.throwTypeError("a typed array element is always writable")
+	case d.isAccessor(),
+		d.hasConfigurable && !d.configurable,
+		d.hasEnumerable && !d.enumerable,
+		d.hasWritable && !d.writable:
+		// An element is a writable, enumerable, configurable data property,
+		// and it cannot be made into anything else.
+		return false, nil
 	}
 	if !d.hasValue {
 		return true, nil

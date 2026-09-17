@@ -599,7 +599,10 @@ func (p *parser) parseClassMember(cls *ast.ClassLit, sawConstructor *bool, priva
 	}
 
 	if isStatic && p.isPunct("{") {
-		cls.StaticBlocks = append(cls.StaticBlocks, p.parseStaticBlock())
+		start := p.tok.Pos
+		cls.StaticBlocks = append(cls.StaticBlocks, ast.StaticBlock{
+			Body: p.parseStaticBlock(), Start: start,
+		})
 		return
 	}
 
@@ -730,7 +733,9 @@ func (p *parser) parseStaticBlock() []ast.Stmt {
 	ctx := p.saveContext()
 	defer p.restoreContext(ctx)
 
-	p.inFunc = true
+	// A static block is a body of statements, but not a function body: nothing
+	// returns from it, so `return` there is an error rather than a way out.
+	p.inFunc = false
 	p.inLoop = false
 	p.inSwitch = false
 	p.allowSuperProp = true
