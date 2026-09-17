@@ -75,6 +75,11 @@ type Token struct {
 	// for a tagged one, where the cooked value simply becomes undefined, so the
 	// lexer records it rather than failing.
 	TemplateValid bool
+	// Escaped reports whether an identifier was written with a unicode escape.
+	// Such a name is never a keyword -- \u0069f is an identifier -- and it is
+	// never a contextual keyword either, so `\u0067et x() {}` is a method named
+	// "get" rather than an accessor.
+	Escaped bool
 	// NewlineBefore reports whether a LineTerminator preceded this token. This
 	// is what drives automatic semicolon insertion and the restricted
 	// productions (return/throw/break/continue, postfix ++/--).

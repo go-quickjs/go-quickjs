@@ -225,3 +225,50 @@ func TestFunctionShapeEarlyErrors(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// A name written with a unicode escape is not a keyword, and not a contextual
+// keyword either. It is one rule: \u0069f is an identifier, and so
+// \u0067et is a property name rather than the start of an accessor.
+func TestEscapedKeywordsAreNames(t *testing.T) {
+	bad := []string{
+		`throw 0; ({ \u0067et m() {} });`,
+		`throw 0; ({ \u0073et m(v) {} });`,
+		`throw 0; ({ \u0061sync m() {} });`,
+		`throw 0; class C { \u0073tatic m() {} }`,
+		`throw 0; for (var x \u006ff [1]) {}`,
+		`throw 0; \u0076ar x = 1;`,
+		`throw 0; function* g() { \u0079ield 1; }`,
+		`throw 0; \u0066unction f() {}`,
+		`throw 0; \u0063lass C {}`,
+	}
+	for _, src := range bad {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil {
+			t.Errorf("%s: accepted, want SyntaxError", src)
+		} else if !strings.Contains(err.Error(), "SyntaxError") {
+			t.Errorf("%s: got %v, want SyntaxError", src, err)
+		}
+		rt.Close()
+	}
+
+	// Escaped or not, a name is a name.
+	cases := []struct{ src, want string }{
+		{`var get = 1; String(get)`, "1"},
+		{`var o = {get: 1}; String(o.get)`, "1"},
+		{`var async = 2; String(async)`, "2"},
+		// And the unescaped contextual keywords still work.
+		{`({get x() { return 1 }}).x + ""`, "1"},
+		{`class C { static m() { return 1 } } String(C.m())`, "1"},
+		{`for (var x of [1]) {} String(x)`, "1"},
+	}
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

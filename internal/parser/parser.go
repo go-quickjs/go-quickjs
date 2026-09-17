@@ -223,7 +223,11 @@ func (p *parser) isKeyword(v string) bool { return p.tok.IsKeyword(v) }
 // isContextual reports whether the current token is the given contextual
 // keyword, which the lexer returns as a plain identifier.
 func (p *parser) isContextual(name string) bool {
-	return p.tok.Kind == lexer.Ident && p.tok.Value == name
+	// A name written with escapes is not the contextual keyword: `\u0067et x()
+	// {}` defines a method named "get", not an accessor, and `\u0061sync f() {}`
+	// is a syntax error rather than an async method. The rule is the same one
+	// that makes \u0069f an identifier.
+	return p.tok.Kind == lexer.Ident && p.tok.Value == name && !p.tok.Escaped
 }
 
 // eatPunct consumes the given punctuator if present.

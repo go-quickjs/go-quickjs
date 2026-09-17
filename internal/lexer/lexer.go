@@ -257,9 +257,10 @@ func (l *Lexer) Next() (Token, error) {
 			return tok, err
 		}
 		tok.Value = name
-		// A name written with escapes is never a keyword (`if` is an
+		tok.Escaped = strings.Contains(l.src[tok.Pos:l.pos], "\\")
+		// A name written with escapes is never a keyword (`\u0069f` is an
 		// identifier, not `if`), which matters for correctness of `var if`.
-		if reservedWords[name] && !strings.Contains(l.src[tok.Pos:l.pos], "\\") {
+		if reservedWords[name] && !tok.Escaped {
 			tok.Kind = Keyword
 		} else {
 			tok.Kind = Ident
