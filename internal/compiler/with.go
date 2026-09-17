@@ -113,6 +113,16 @@ func (c *compiler) beginWithRef(n *ast.Ident) {
 	c.patchWithProbe(probe)
 }
 
+// resolveWithRef settles a reference without reading it, which is what a plain
+// assignment needs: the name is resolved before the value is evaluated, but
+// nothing is read from the binding it names.
+func (c *compiler) resolveWithRef(n *ast.Ident) {
+	limit := c.withLimit(n.Name)
+	c.emit(bytecode.OpPushUndef, 0, 0)
+	c.emit(bytecode.OpWithResolve,
+		c.nameIdx(n.Name)|uint32(limit)<<bytecode.WithLimitShift, 0)
+}
+
 // endWithRef writes the value on top back through the reference beginWithRef
 // resolved, leaving the value and removing the base.
 func (c *compiler) endWithRef(n *ast.Ident) {

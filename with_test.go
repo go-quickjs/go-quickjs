@@ -284,3 +284,45 @@ func TestWithReferenceResolvedOnce(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestWithAssignmentResolvesFirst covers a plain assignment inside a `with`
+// body. The name is resolved before the value is evaluated, so a value that
+// removes the property still writes to the object the name named.
+func TestWithAssignmentResolvesFirst(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`function t() {
+		    var x = 0
+		    var scope = {x: 1}
+		    with (scope) { x = (delete scope.x, 2) }
+		    return scope.x + "," + x
+		  }
+		  t()`, "2,0"},
+		{`function t() {
+		    var x = 0, s = {x: 1}
+		    with (s) { x = 5 }
+		    return s.x + "," + x
+		  }
+		  t()`, "5,0"},
+		// A name the object does not have still lands where it would have.
+		{`function t() {
+		    var x = 0, s = {}
+		    with (s) { x = 5 }
+		    return String(s.x) + "," + x
+		  }
+		  t()`, "undefined,5"},
+		// A strict reference to a binding the object no longer has is a
+		// ReferenceError.
+		{`var scope = {x: 1}
+		  var caught = ""
+		  with (scope) {
+		    (function () {
+		      "use strict"
+		      try { x = (delete scope.x, 2) } catch (e) { caught = e.constructor.name }
+		    })()
+		  }
+		  caught + "," + ("x" in scope)`, "ReferenceError,false"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

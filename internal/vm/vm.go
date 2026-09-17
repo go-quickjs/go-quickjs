@@ -1301,6 +1301,19 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			r.stack[sp-1] = Obj(o)
 			push(v)
 			f.pc = in.B
+		case bytecode.OpWithResolve:
+			name := cl.names[in.A&bytecode.WithNameMask]
+			o, found, err := r.withFound(f.withScopes, name,
+				int(in.A>>bytecode.WithLimitShift))
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			if found {
+				// The placeholder becomes the object the name resolved to; the
+				// value is evaluated next and written back to it.
+				r.stack[sp-1] = Obj(o)
+			}
 		case bytecode.OpWithPutUnder:
 			base := r.stack[sp-2]
 			if !base.IsObject() {

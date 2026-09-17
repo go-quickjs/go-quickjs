@@ -640,3 +640,32 @@ func TestFloat16Rounding(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestTypedArrayIndexThroughReceiver covers writing a numeric key through an
+// object whose prototype is a typed array. The view owns every numeric key,
+// whether or not it has an element there, so one it has no element for is
+// dropped rather than shadowed.
+func TestTypedArrayIndexThroughReceiver(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var env = Object.create(new Int32Array(10))
+		  env[99] = 1
+		  String(Object.getOwnPropertyDescriptor(env, "99"))`, "undefined"},
+		{`var env = Object.create(new Int32Array(10))
+		  env.NaN = 1
+		  String(Object.getOwnPropertyDescriptor(env, "NaN"))`, "undefined"},
+		{`var env = Object.create(new Int32Array(10))
+		  env["1.5"] = 1
+		  String(Object.getOwnPropertyDescriptor(env, "1.5"))`, "undefined"},
+		// A key the view does have is written on the receiver, shadowing it.
+		{`var env = Object.create(new Int32Array(10))
+		  env[0] = 7
+		  env.hasOwnProperty("0") + "," + env[0]`, "true,7"},
+		// A key that is not numeric at all is an ordinary property.
+		{`var env = Object.create(new Int32Array(10))
+		  env.x = 1
+		  env.hasOwnProperty("x") + "," + env.x`, "true,1"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

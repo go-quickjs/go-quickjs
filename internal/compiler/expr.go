@@ -1051,6 +1051,15 @@ func (c *compiler) compileAssign(n *ast.Assign) {
 			})
 			return
 		}
+		if id, ok := n.Target.(*ast.Ident); ok && c.withLimit(id.Name) > 0 {
+			// Inside a `with` body the name is resolved before the value is
+			// evaluated, so a value that removes the property still writes to
+			// the object the name named.
+			c.resolveWithRef(id)
+			c.compileExprNamed(n.Value, id.Name)
+			c.endWithRef(id)
+			return
+		}
 		c.compileExprNamed(n.Value, nameOf(n.Target))
 		c.assignTo(n.Target, false)
 

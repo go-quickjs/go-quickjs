@@ -267,6 +267,15 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 				err := r.createOwnProp(o, key, val, strict)
 				return err == nil, err
 			}
+			if o.class == ClassTypedArray {
+				if ix := r.typedArrayIndex(o, key); ix.numeric && !ix.valid {
+					// A numeric key naming no element of the view is dropped
+					// even when the write arrived through something else: the
+					// view owns every numeric key, so there is nothing for the
+					// receiver to shadow.
+					return true, nil
+				}
+			}
 			break
 		}
 		p := o.getOwnVisible(key)

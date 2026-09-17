@@ -367,7 +367,11 @@ const (
 	// since a getter may have deleted the property in between.
 	OpWithGetUnder // replace the placeholder base with the object, push the value, jump
 	OpWithPutUnder // store into the base beneath the value, drop it, and jump
-	OpSetName      // give an anonymous function the name in Names[A]
+	// OpWithResolve resolves a name against the `with` objects without reading
+	// it, which is what a plain assignment needs: the reference is settled
+	// before the value is evaluated, but nothing is read from it.
+	OpWithResolve
+	OpSetName // give an anonymous function the name in Names[A]
 	OpSetHomeObject
 	OpCheckCtorReturn
 	OpCheckThisInit // a derived constructor must call super() before `this`
@@ -509,7 +513,8 @@ var opNames = [opCount]string{
 	OpWithGet: "with_get", OpWithGetThis: "with_get_this", OpWithSet: "with_set",
 	OpWithDelete: "with_delete", OpWithTypeof: "with_typeof",
 	OpWithGetUnder: "with_get_under", OpWithPutUnder: "with_put_under",
-	OpSetName: "set_name", OpSetHomeObject: "set_home_object",
+	OpWithResolve: "with_resolve",
+	OpSetName:     "set_name", OpSetHomeObject: "set_home_object",
 	OpCheckCtorReturn: "check_ctor_return", OpCheckThisInit: "check_this_init",
 	OpInitThis:         "init_this",
 	OpThrowDeleteSuper: "throw_delete_super",
