@@ -924,3 +924,29 @@ func TestTypedArrayWithSortAndDelete(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
 	}
 }
+
+// %TypedArray%.from builds its result before it maps, so what the mapping does
+// to that result is visible: a mapping that detaches the buffer leaves the
+// writes with nowhere to go rather than failing.
+func TestTypedArrayFromMapsIntoTheResult(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"maps", `String(Int8Array.from([1, 2, 3], function (v) { return v * 2 }))`, "2,4,6"},
+		{"index and receiver", `var seen = []
+		  Int8Array.from([1, 2], function (v, i) { seen.push(v + ":" + i + ":" + this.tag); return v },
+		    {tag: "t"})
+		  seen.join()`, "1:0:t,2:1:t"},
+		{"result exists first", `var ab = new ArrayBuffer(3)
+		  var target = new Int8Array(ab)
+		  var result = Int32Array.from.call(function () { return target }, [0, 1, 2], function (v) {
+		    if (v === 1) { ab.transfer() }
+		    return v + 10
+		  })
+		  String(result === target) + "," + result.length`, "true,0"},
+		{"iterable source", `String(Int8Array.from(new Set([3, 4])))`, "3,4"},
+		{"refuses a bad mapper", `try { Int8Array.from([1], 1); "no error" }
+		  catch (e) { e.constructor.name }`, "TypeError"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}

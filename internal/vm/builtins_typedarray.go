@@ -1420,14 +1420,17 @@ func (r *Runtime) initTypedArrayStatics(abstract *Object) {
 		if !mapFn.IsUndefined() && !isCallable(mapFn) {
 			return Undefined, rt.throwTypeError("the map function is not callable")
 		}
-		// The source is collected with Array.from, so an iterable, an
-		// array-like and the mapping function all behave identically here.
+		// The source is collected with Array.from, so an iterable and an
+		// array-like behave identically here. The mapping is not left to it:
+		// the view has to exist before the mapping runs, because what the
+		// mapping does -- detaching the buffer, most of all -- is visible in
+		// where the values land.
 		from, err := rt.getValueProp(rt.global.getOwn(rt.atoms.intern("Array")).value,
 			rt.atoms.intern("from"))
 		if err != nil {
 			return Undefined, err
 		}
-		arr, err := rt.call(from, Undefined, args)
+		arr, err := rt.call(from, Undefined, []Value{arg(args, 0)})
 		if err != nil {
 			return Undefined, err
 		}
@@ -1435,7 +1438,22 @@ func (r *Runtime) initTypedArrayStatics(abstract *Object) {
 		if arr.IsObject() {
 			vals = arr.Object().elems
 		}
-		return rt.typedArrayFromValues(this, vals)
+		res, t, err := rt.typedArrayResultFor(this, len(vals))
+		if err != nil {
+			return Undefined, err
+		}
+		thisArg := arg(args, 2)
+		for i, el := range vals {
+			if !mapFn.IsUndefined() {
+				if el, err = rt.call(mapFn, thisArg, []Value{el, Int(i)}); err != nil {
+					return Undefined, err
+				}
+			}
+			if err := rt.setElem(t, i, el); err != nil {
+				return Undefined, err
+			}
+		}
+		return res, nil
 	})
 }
 
@@ -1445,19 +1463,9 @@ func (r *Runtime) initTypedArrayStatics(abstract *Object) {
 // The constructor is the receiver, so a subclass gets one of its own -- and
 // whatever it returns has to be a typed array long enough to hold them.
 func (r *Runtime) typedArrayFromValues(ctor Value, vals []Value) (Value, error) {
-	if !isConstructor(ctor) {
-		return Undefined, r.throwTypeError("a typed array constructor is required")
-	}
-	res, err := r.construct(ctor, []Value{Int(len(vals))})
+	res, t, err := r.typedArrayResultFor(ctor, len(vals))
 	if err != nil {
 		return Undefined, err
-	}
-	t, err := r.typedArrayOf(res, "the result")
-	if err != nil {
-		return Undefined, err
-	}
-	if t.length < len(vals) {
-		return Undefined, r.throwTypeError("the result is too short")
 	}
 	for i, el := range vals {
 		if err := r.setElem(t, i, el); err != nil {
@@ -1465,6 +1473,30 @@ func (r *Runtime) typedArrayFromValues(ctor Value, vals []Value) (Value, error) 
 		}
 	}
 	return res, nil
+}
+
+// typedArrayResultFor builds the view a static method returns, which is the
+// receiver's own construction rather than a fresh intrinsic one.
+//
+// It is checked as soon as it is built: a constructor that hands back something
+// that is not a typed array, or one too short to hold what is coming, is a
+// mistake reported before any of it is written.
+func (r *Runtime) typedArrayResultFor(ctor Value, n int) (Value, *typedArrayData, error) {
+	if !isConstructor(ctor) {
+		return Undefined, nil, r.throwTypeError("a typed array constructor is required")
+	}
+	res, err := r.construct(ctor, []Value{Int(n)})
+	if err != nil {
+		return Undefined, nil, err
+	}
+	t, err := r.typedArrayOf(res, "the result")
+	if err != nil {
+		return Undefined, nil, err
+	}
+	if t.length < n {
+		return Undefined, nil, r.throwTypeError("the result is too short")
+	}
+	return res, t, nil
 }
 
 // typedArrayKindOf recovers the element type a static was reached through.
