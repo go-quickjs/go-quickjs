@@ -2265,3 +2265,35 @@ func TestMappedArguments(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// A computed member access checks that there is something to look the key up
+// on before it converts the key. A key whose toString throws must not run at
+// all when the base is null.
+func TestComputedKeyOrdering(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var b = null, p = {toString: function () { throw new Error("key") }};
+		  try { b[p] } catch (e) { e.constructor.name }`, "TypeError"},
+		{`var b = null, p = {toString: function () { throw new Error("key") }};
+		  try { b[p] = 1 } catch (e) { e.constructor.name }`, "TypeError"},
+		{`var b = null, p = {toString: function () { throw new Error("key") }};
+		  try { b[p] ^= 1 } catch (e) { e.constructor.name }`, "TypeError"},
+		{`var b = null, p = {toString: function () { throw new Error("key") }};
+		  try { b[p]++ } catch (e) { e.constructor.name }`, "TypeError"},
+		// The property expression is still evaluated, and its own failure wins.
+		{`var b = null;
+		  try { b[(function () { throw new RangeError() })()] } catch (e) { e.constructor.name }`,
+			"RangeError"},
+		// An ordinary access is unaffected.
+		{`var o = {}; o[{toString: function () { return "k" }}] = 5; String(o.k)`, "5"},
+	}
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

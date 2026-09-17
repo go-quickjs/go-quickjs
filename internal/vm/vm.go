@@ -703,6 +703,10 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			val := pop()
 			key := pop()
 			obj := pop()
+			if obj.IsNullish() {
+				vmErr = r.throwTypeError("cannot set property of %s", r.describe(obj))
+				goto onError
+			}
 			k, err := r.toPropertyKey(key)
 			if err != nil {
 				vmErr = err
@@ -1272,6 +1276,15 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				goto onError
 			}
 			push(Str(s))
+		case bytecode.OpToPropertyKeyOfBase:
+			// The object the key will be looked up on sits beneath it, and is
+			// checked first: a key whose toString throws must not run at all
+			// when there is nothing to look it up on.
+			if base := peek(1); base.IsNullish() {
+				vmErr = r.throwTypeError("cannot read property of %s", r.describe(base))
+				goto onError
+			}
+			fallthrough
 		case bytecode.OpToPropertyKey:
 			// A string or symbol is already a property key and must be left
 			// alone; stringifying a symbol here would turn a computed symbol
@@ -1965,6 +1978,12 @@ func (r *Runtime) newArrayFrom(vals []Value) *Object {
 // getIndexed reads a computed property, taking a fast path for an array index
 // on a dense array.
 func (r *Runtime) getIndexed(obj, key Value) (Value, error) {
+	if obj.IsNullish() {
+		// The base is checked before the key is converted: a key whose
+		// toString throws must not run at all when there is nothing to read
+		// from.
+		return Undefined, r.throwTypeError("cannot read property of %s", r.describe(obj))
+	}
 	if obj.IsObject() && key.IsNumber() {
 		o := obj.Object()
 		// A mapped arguments object's indices are not what its dense storage

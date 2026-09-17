@@ -562,7 +562,7 @@ func (c *compiler) compileUpdate(n *ast.Update) {
 		}
 		if target.Computed {
 			c.compileExpr(target.Property)
-			c.emit(bytecode.OpToPropertyKey, 0, 0)
+			c.emit(bytecode.OpToPropertyKeyOfBase, 0, 0)
 			c.emit(bytecode.OpDup2, 0, 0)
 			c.emit(bytecode.OpGetIndex, 0, 0)
 			c.emit(bytecode.OpToNumber, 0, 0)
@@ -975,7 +975,7 @@ func (c *compiler) compileMemberUpdate(m *ast.Member, op string, emitValue func(
 	c.compileExpr(m.Object)
 	if m.Computed {
 		c.compileExpr(m.Property)
-		c.emit(bytecode.OpToPropertyKey, 0, 0)
+		c.emit(bytecode.OpToPropertyKeyOfBase, 0, 0)
 		c.emit(bytecode.OpDup2, 0, 0)
 		c.emitAt(m.Start, bytecode.OpGetIndex, 0, 0)
 		c.finishUpdate(op, emitValue, pos, 2, func() {
@@ -1199,7 +1199,7 @@ func (c *compiler) compileMemberStore(m *ast.Member, emitValue func()) {
 	c.compileExpr(m.Object)
 	if m.Computed {
 		c.compileExpr(m.Property)
-		c.emit(bytecode.OpToPropertyKey, 0, 0)
+		c.emit(bytecode.OpToPropertyKeyOfBase, 0, 0)
 		emitValue()
 		// obj key value -> value obj key value, so the store consumes three
 		// and the result is left behind.
@@ -1228,7 +1228,7 @@ func (c *compiler) compileMemberStoreFromValue(m *ast.Member) {
 	if m.Computed {
 		c.compileExpr(m.Object)
 		c.compileExpr(m.Property)
-		c.emit(bytecode.OpToPropertyKey, 0, 0)
+		c.emit(bytecode.OpToPropertyKeyOfBase, 0, 0)
 		// value obj key -> obj key value
 		c.emit(bytecode.OpRot3, 0, 0)
 		c.emit(bytecode.OpInsert3, 0, 0)

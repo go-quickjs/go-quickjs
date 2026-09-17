@@ -290,6 +290,9 @@ const (
 	OpToObject
 	OpCheckCoercible // throw if the value on top is null or undefined
 	OpToPropertyKey
+	// OpToPropertyKeyOfBase is OpToPropertyKey where the object the key will be
+	// used on is beneath it, and is required to be coercible first.
+	OpToPropertyKeyOfBase
 	OpToNumber
 	OpToString
 	// --- `with` -----------------------------------------------------------
@@ -429,10 +432,11 @@ var opNames = [opCount]string{
 	OpGetSuperProp: "get_super_prop", OpGetSuperIndex: "get_super_index",
 	OpSetSuperProp: "set_super_prop", OpSetSuperIndex: "set_super_index",
 	OpNewTarget: "new_target", OpImportMeta: "import_meta",
-	OpPushCallee:     "push_callee",
-	OpToObject:       "to_object",
-	OpCheckCoercible: "check_coercible",
-	OpToPropertyKey:  "to_property_key", OpToNumber: "to_number",
+	OpPushCallee:          "push_callee",
+	OpToObject:            "to_object",
+	OpCheckCoercible:      "check_coercible",
+	OpToPropertyKey:       "to_property_key",
+	OpToPropertyKeyOfBase: "to_property_key_of_base", OpToNumber: "to_number",
 	OpToString: "to_string", OpWithPush: "with_push", OpWithPop: "with_pop",
 	OpWithGet: "with_get", OpWithGetThis: "with_get_this", OpWithSet: "with_set",
 	OpWithDelete: "with_delete", OpWithTypeof: "with_typeof",
