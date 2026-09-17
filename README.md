@@ -20,7 +20,8 @@ Promises, regular expressions, modules with top-level `await`, Proxy and typed
 arrays all work, and are exercised against [test262], the official ECMAScript
 conformance suite.
 
-It is not finished. See [Conformance](#conformance) for measured coverage and
+96% of the test262 tests it runs pass. It is not finished: see
+[Conformance](#conformance) for the measurement and
 [Not implemented](#not-implemented) for the known gaps.
 
 ### Implemented
@@ -42,6 +43,7 @@ It is not finished. See [Conformance](#conformance) for measured coverage and
 | Iterator helpers | `map`, `filter`, `take`, `drop`, `flatMap`, `reduce`, `toArray` and the rest, lazily |
 | Built-ins | `Object`, `Function`, `Array`, `String`, `Number`, `Boolean`, `Symbol`, `BigInt`, `Error`, `Math`, `JSON`, `Date`, `RegExp`, `Map`, `Set`, `Promise`, `Proxy`, `Reflect`, `ArrayBuffer`, `DataView`, typed arrays |
 | Weak references | `WeakRef`, `FinalizationRegistry`, `WeakMap`, `WeakSet`, backed by Go's `weak.Pointer` and `runtime.AddCleanup`: a target really is released, and a registry really is called back |
+| Reflection | `Proxy` with every trap and its invariants, `Reflect`, property descriptors, mapped `arguments` |
 | Recent additions | Set operations, `Array.fromAsync`, `Object.groupBy`, `Promise.try`, `RegExp.escape`, `Error.isError`, `Math.sumPrecise`, `Uint8Array` base64 and hex |
 | Eval | Direct `eval` runs in the caller's scope — its variables, `this`, `new.target` and `super`; indirect `eval` runs in global scope |
 | Go interop | Function binding, marshalling, `context.Context` cancellation |
@@ -78,30 +80,27 @@ strict and sloppy variants, the expected-failure phase and type, and the feature
 tags. A test tagged with a feature the engine does not implement is skipped
 rather than counted against it.
 
-Measured coverage, as of the most recent run over the whole suite — 70,412 of
-77,270 executed variants, 91.1%. A test tagged with a feature the engine does
-not implement is skipped rather than counted, which is what the remaining 14,550
+Measured coverage, as of the most recent run over the whole suite — 74,249 of
+77,092 executed variants, 96.3%. A test tagged with a feature the engine does
+not implement is skipped rather than counted, which is what the remaining 14,728
 are. By area, worst first:
 
 | Area | | Area | |
 |---|---|---|---|
-| `language/eval-code` | 50.4% | `built-ins/AsyncFromSyncIteratorPrototype` | 31.6% |
-| `built-ins/TypedArrayConstructors` | 77.9% | `built-ins/Promise` | 79.4% |
-| `built-ins/Function` | 78.3% | `language/module-code` | 78.3% |
-| `built-ins/Proxy` | 69.9% | `built-ins/TypedArray` | 88.6% |
-| `built-ins/DataView` | 83.8% | `language/block-scope` | 79.4% |
-| `language/statements` | 91.0% | `language/expressions` | 91.4% |
-| `built-ins/Date` | 88.9% | `built-ins/ArrayBuffer` | 85.3% |
-| `built-ins/JSON` | 86.6% | `built-ins/Set` | 94.2% |
-| `built-ins/Array` | 94.4% | `built-ins/String` | 94.5% |
-| `built-ins/Object` | 96.1% | `built-ins/RegExp` | 96.5% |
-| `built-ins/Math` | 96.3% | `built-ins/Number` | 95.6% |
-
-The two largest absolute gaps are both about scope. Direct `eval` is evaluated
-as if it were indirect, so it cannot see the calling function's variables, and
-`with` is not implemented at all; between them they account for most of what
-`language/eval-code`, `language/block-scope` and the class tests that use either
-are short of.
+| `built-ins/AsyncFromSyncIteratorPrototype` | 36.8% | `built-ins/AsyncGeneratorPrototype` | 66.7% |
+| `language/global-code` | 72.0% | `language/computed-property-names` | 75.0% |
+| `language/comments` | 77.8% | `built-ins/Symbol` | 80.7% |
+| `built-ins/Uint8Array` | 82.4% | `language/line-terminators` | 82.9% |
+| `built-ins/ArrayBuffer` | 85.3% | `built-ins/BigInt` | 86.8% |
+| `built-ins/Date` | 88.9% | `built-ins/JSON` | 89.4% |
+| `built-ins/Promise` | 90.6% | `built-ins/TypedArrayConstructors` | 91.2% |
+| `language/eval-code` | 91.2% | `built-ins/DataView` | 92.5% |
+| `built-ins/TypedArray` | 93.4% | `built-ins/Set` | 94.5% |
+| `language/literals` | 94.9% | `built-ins/String` | 95.1% |
+| `built-ins/Function` | 95.7% | `built-ins/Number` | 95.9% |
+| `built-ins/RegExp` | 96.5% | `language/expressions` | 96.9% |
+| `built-ins/Array` | 97.0% | `built-ins/Proxy` | 97.0% |
+| `language/statements` | 97.7% | `built-ins/Object` | 98.5% |
 
 Useful flags:
 
