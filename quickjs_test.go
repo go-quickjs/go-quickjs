@@ -2766,3 +2766,34 @@ func TestYieldStarForwardsEveryResumption(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// A generator inherits from its function's own prototype object, which
+// inherits in turn from the shared one -- so what a script puts on
+// `g.prototype` every generator g makes has.
+func TestGeneratorInstancePrototype(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var f = function* () {}; f.prototype.x = 1; String(f().x)`, "1"},
+		{`var f = function* () {}; String(Object.getPrototypeOf(f()) === f.prototype)`,
+			"true"},
+		{`var f = async function* () {};
+		  String(Object.getPrototypeOf(f()) === f.prototype)`, "true"},
+		{`var f = function* () {};
+		  var shared = Object.getPrototypeOf(Object.getPrototypeOf(f()));
+		  shared[Symbol.toStringTag]`, "Generator"},
+		{`var f = async function* () {};
+		  var shared = Object.getPrototypeOf(Object.getPrototypeOf(f()));
+		  shared[Symbol.toStringTag]`, "AsyncGenerator"},
+		{`function* g() { yield 1 } [...g()].join(",")`, "1"},
+		{`Object.prototype.toString.call((function* () {})())`, "[object Generator]"},
+	}
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

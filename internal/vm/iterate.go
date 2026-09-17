@@ -769,7 +769,8 @@ func (r *Runtime) iterResume(cursor Value, sent Value, mode resumeMode,
 		}
 		if async {
 			// The result is a promise; whether it says done is only known once
-			// it settles, so the ordinary path handles it.
+			// it settles, so the instruction that reads it afterwards decides,
+			// which is why it is told what kind of resumption this was.
 			return out, false, nil
 		}
 		if !out.IsObject() {

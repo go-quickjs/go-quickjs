@@ -1,6 +1,8 @@
 package compiler
 
 import (
+	"fmt"
+
 	"github.com/go-quickjs/go-quickjs/internal/ast"
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
@@ -1416,11 +1418,17 @@ func (c *compiler) compileYield(n *ast.Yield) {
 	// The first next receives undefined; after that it receives whatever the
 	// caller sent to the outer generator, and the kind says which of the three
 	// methods to send it to.
+	kindSlot := c.declare(fmt.Sprintf("%%ys%d", *c.hiddenCount), bindVar, n.Start)
+	*c.hiddenCount++
 	c.emit(bytecode.OpPushUndef, 0, 0)
 	c.emit(bytecode.OpPushInt, 0, 0)
 
 	start := c.here()
-	// stack: cursor sent kind
+	// stack: cursor sent kind. The kind is kept in a binding of its own so
+	// that it survives the await an async delegation performs, which is where
+	// a return has to be told apart from an exhausted delegate.
+	c.emit(bytecode.OpDup, 0, 0)
+	c.emit(bytecode.OpSetLocal, kindSlot, 0)
 	if async {
 		c.emit(bytecode.OpIterResume, 1, 0)
 		c.emitAwait(n.Start)
@@ -1433,7 +1441,7 @@ func (c *compiler) compileYield(n *ast.Yield) {
 		// is, so nothing reads its value on the way past.
 		raw = 1
 	}
-	exit := c.emitJumpB(bytecode.OpIterUnpack, raw)
+	exit := c.emitJumpB(bytecode.OpIterUnpackDelegate, kindSlot<<1|raw)
 	c.emit(bytecode.OpYieldStar, raw, 0)
 	c.emit(bytecode.OpJump, uint32(start), 0)
 

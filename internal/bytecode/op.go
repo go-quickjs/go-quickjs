@@ -245,6 +245,15 @@ const (
 	// return simply ends, which is what lets `yield*` over a plain iterator
 	// work at all.
 	OpIterResume
+	// OpIterUnpackDelegate reads the result of one `yield*` step. A is where to
+	// jump when the delegation is over; B packs the local holding the kind of
+	// resumption that produced the result with a flag saying whether the
+	// result object is yielded as it is.
+	//
+	// A result that says done ends the delegation -- as a return of the outer
+	// generator when that is what was forwarded, and as the value of the
+	// yield* otherwise.
+	OpIterUnpackDelegate
 	// OpIterSend calls the cursor's next method with the value on top of the
 	// stack, which is how `yield*` forwards what its caller sent in. The cursor
 	// stays beneath, and the raw iterator result replaces the sent value.
@@ -458,15 +467,16 @@ var opNames = [opCount]string{
 	OpForInStart: "for_in_start", OpForOfStart: "for_of_start",
 	OpForAwaitOfStart: "for_await_of_start", OpIterNext: "iter_next",
 	OpIterClose: "iter_close", OpIterNextOrJump: "iter_next_or_jump",
-	OpAsyncIterNext:    "async_iter_next",
-	OpIterResultOrJump: "iter_result_or_jump",
-	OpSpreadIter:       "spread_iter",
-	OpIterSend:         "iter_send",
-	OpIterSendAsync:    "iter_send_async",
-	OpIterUnpack:       "iter_unpack",
-	OpEndParams:        "end_params",
-	OpIterResume:       "iter_resume",
-	OpIterToArray:      "iter_to_array",
+	OpAsyncIterNext:      "async_iter_next",
+	OpIterResultOrJump:   "iter_result_or_jump",
+	OpSpreadIter:         "spread_iter",
+	OpIterSend:           "iter_send",
+	OpIterSendAsync:      "iter_send_async",
+	OpIterUnpack:         "iter_unpack",
+	OpEndParams:          "end_params",
+	OpIterResume:         "iter_resume",
+	OpIterUnpackDelegate: "iter_unpack_delegate",
+	OpIterToArray:        "iter_to_array",
 
 	OpThrow: "throw", OpPushCatch: "push_catch", OpPopCatch: "pop_catch",
 	OpPushFinally: "push_finally", OpRethrow: "rethrow",

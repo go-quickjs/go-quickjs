@@ -967,6 +967,10 @@ func stackEffect(op bytecode.Op, a, b uint32) int {
 		// Pops the operand and pushes the resumption value and its kind.
 		return 1
 
+	case bytecode.OpIterUnpackDelegate:
+		// Pops the result and pushes either it or its value.
+		return 0
+
 	case bytecode.OpDefineMethod, bytecode.OpDefinePrivate:
 		return -1
 	case bytecode.OpSetHomeObject, bytecode.OpSetFuncName:

@@ -157,6 +157,15 @@ func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Ob
 		// promises.
 		proto = r.proto.asyncGenerator
 	}
+	// The instance inherits from the function's own prototype object, which
+	// inherits in turn from the shared one -- so a script can put something on
+	// `g.prototype` and every generator g makes will have it.
+	if callee != nil {
+		if custom, err := r.getValueProp(Obj(callee), atomPrototype); err == nil &&
+			custom.IsObject() {
+			proto = custom.Object()
+		}
+	}
 	o := newObject(proto, ClassGenerator)
 	o.data = g
 	return o, nil

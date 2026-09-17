@@ -1511,6 +1511,53 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				return res, nil
 			}
 			push(res)
+		case bytecode.OpIterUnpackDelegate:
+			res := pop()
+			if !res.IsObject() {
+				vmErr = r.throwTypeError("an iterator result must be an object")
+				goto onError
+			}
+			done, err := r.getValueProp(res, atomDone)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			if !done.Truthy() {
+				if in.B&1 == 1 {
+					// A synchronous delegation hands the result object out as
+					// it is, so its value is never read here.
+					push(res)
+				} else {
+					val, err := r.getValueProp(res, atomValue)
+					if err != nil {
+						vmErr = err
+						goto onError
+					}
+					push(val)
+				}
+				break
+			}
+			val, err := r.getValueProp(res, atomValue)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			if st := iterStateOf(peek(0)); st != nil {
+				st.done = true
+			}
+			if resumeMode(f.locals[in.B>>1].Number()) == resumeReturn {
+				// The delegate took the return and finished, so the outer
+				// generator returns too, running whatever finally clauses it
+				// owes on the way out.
+				sp-- // the cursor
+				if r.unwindToFinally(f, &sp, val) {
+					continue
+				}
+				r.closeIteratorsIn(f.base, sp)
+				return val, nil
+			}
+			push(val)
+			f.pc = in.A
 		case bytecode.OpIterSend, bytecode.OpIterSendAsync:
 			sent := pop()
 			res, err := r.iterSend(peek(0), sent, in.Op == bytecode.OpIterSendAsync)
