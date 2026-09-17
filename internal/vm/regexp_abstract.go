@@ -397,6 +397,11 @@ func (r *Runtime) regExpSymbolReplace(rx Value, args []Value) (Value, error) {
 
 	var sb strings.Builder
 	next := 0
+	// The capture list and the callback's argument list are built once and
+	// refilled for each match rather than allocated per match. A callee may
+	// not keep what it was called with, any more than it may keep the
+	// interpreter's own stack.
+	var captures, callArgs []Value
 	for _, result := range results {
 		nCaps, err := r.resultCaptureCount(result)
 		if err != nil {
@@ -420,7 +425,7 @@ func (r *Runtime) regExpSymbolReplace(rx Value, args []Value) (Value, error) {
 		// trusted, since it indexes the string being built.
 		position := clampFloatIndex(posf, size)
 
-		captures := make([]Value, 0, nCaps)
+		captures = captures[:0]
 		for i := int64(1); i <= nCaps; i++ {
 			c, err := r.getValueProp(result, r.indexKey(i))
 			if err != nil {
@@ -442,8 +447,7 @@ func (r *Runtime) regExpSymbolReplace(rx Value, args []Value) (Value, error) {
 
 		var replacement string
 		if functional {
-			callArgs := make([]Value, 0, len(captures)+4)
-			callArgs = append(callArgs, Str(matched))
+			callArgs = append(callArgs[:0], Str(matched))
 			callArgs = append(callArgs, captures...)
 			callArgs = append(callArgs, Int(position), Str(s))
 			if !named.IsUndefined() {

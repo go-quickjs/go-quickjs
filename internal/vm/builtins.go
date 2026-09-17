@@ -950,9 +950,11 @@ func (r *Runtime) initArrayBuiltins() {
 			}
 			a := arrayLike{o: o}
 			k := int64(0)
+			var argv [2]Value
 			err = rt.iterate(src, func(v Value) error {
 				if mapping {
-					mapped, err := rt.call(mapFn, thisArg, []Value{v, Float(float64(k))})
+					argv[0], argv[1] = v, Float(float64(k))
+					mapped, err := rt.call(mapFn, thisArg, argv[:])
 					if err != nil {
 						return err
 					}
@@ -982,13 +984,16 @@ func (r *Runtime) initArrayBuiltins() {
 			return Undefined, err
 		}
 		a := arrayLike{o: o}
+		// One list for the mapper's arguments, refilled per element.
+		var argv [2]Value
 		for k := int64(0); k < from.n; k++ {
 			v, err := from.get(rt, k)
 			if err != nil {
 				return Undefined, err
 			}
 			if mapping {
-				mapped, err := rt.call(mapFn, thisArg, []Value{v, Float(float64(k))})
+				argv[0], argv[1] = v, Float(float64(k))
+				mapped, err := rt.call(mapFn, thisArg, argv[:])
 				if err != nil {
 					return Undefined, err
 				}

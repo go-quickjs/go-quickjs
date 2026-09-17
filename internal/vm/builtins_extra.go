@@ -508,8 +508,11 @@ func (r *Runtime) initObjectExtras() {
 		// collide with an inherited method.
 		out := newObject(nil, ClassObject)
 		i := 0
+		// One list for the callback's arguments, refilled per element.
+		var argv [2]Value
 		err := rt.iterate(arg(args, 0), func(v Value) error {
-			keyVal, err := rt.call(cb, Undefined, []Value{v, Int(i)})
+			argv[0], argv[1] = v, Int(i)
+			keyVal, err := rt.call(cb, Undefined, argv[:])
 			i++
 			if err != nil {
 				return err

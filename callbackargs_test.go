@@ -85,3 +85,40 @@ func TestCallbackArgumentsAreNotShared(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// The same for the callbacks that are not per element of an array: a
+// replacement function is called once per match, and a mapper once per item.
+func TestPerMatchCallbackArguments(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// String.prototype.replace with a function, which is called per match.
+		{`var kept = []
+		  "a-b-c".replaceAll("-", function () { kept.push(arguments); return "+" })
+		  kept.map(function (a) { return a[0] + "@" + a[1] }).join()`, "-@1,-@3"},
+		{`"abc".replace("b", function (m, i, s) { return m + i + s })`, "ab1abcc"},
+
+		// The regular expression form, whose argument list also carries the
+		// captures and, when there are named groups, the group object.
+		{`var kept = []
+		  "a1b2".replace(/([a-z])(\d)/g, function () { kept.push(arguments); return "" })
+		  kept.map(function (a) { return a[0] + ":" + a[1] + a[2] + "@" + a[3] }).join()`,
+			"a1:a1@0,b2:b2@2"},
+		{`"a1b2".replace(/(?<l>[a-z])(?<d>\d)/g, function () {
+		    var g = arguments[arguments.length - 1]
+		    return g.l + g.d + "|"
+		  })`, "a1|b2|"},
+		{`var kept = []
+		  "xyz".replace(/./g, function () { kept.push(Array.prototype.slice.call(arguments)) })
+		  kept.map(function (a) { return a[0] + a[1] }).join()`, "x0,y1,z2"},
+
+		// Array.from, over an array-like and over an iterator.
+		{`var kept = []
+		  Array.from({length: 2, 0: "a", 1: "b"}, function () { kept.push(arguments); return 0 })
+		  kept.map(function (a) { return a[0] + "@" + a[1] }).join()`, "a@0,b@1"},
+		{`var kept = []
+		  Array.from(new Set(["a", "b"]), function () { kept.push(arguments); return 0 })
+		  kept.map(function (a) { return a[0] + "@" + a[1] }).join()`, "a@0,b@1"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

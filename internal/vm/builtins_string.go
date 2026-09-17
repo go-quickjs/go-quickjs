@@ -709,9 +709,11 @@ func (r *Runtime) stringReplace(thisStr thisStrFunc, this Value, args []Value, a
 	// replacement function is given, and the text `$\'` and "$`" stand for,
 	// are indices into the string as a script sees it.
 	patLen := pattern.Len()
+	// One list for the replacement function's arguments, refilled per match.
+	var argv [3]Value
 	if patLen == 0 && !all {
 		// An empty pattern matches at the start.
-		repl, err := r.replacementFor(replVal, replText, pattern, 0, s)
+		repl, err := r.replacementFor(replVal, replText, pattern, 0, s, &argv)
 		if err != nil {
 			return Undefined, err
 		}
@@ -726,7 +728,7 @@ func (r *Runtime) stringReplace(thisStr thisStrFunc, this Value, args []Value, a
 			break
 		}
 		out = out.Concat(s.Substring(pos, i))
-		repl, err := r.replacementFor(replVal, replText, pattern, i, s)
+		repl, err := r.replacementFor(replVal, replText, pattern, i, s, &argv)
 		if err != nil {
 			return Undefined, err
 		}
@@ -750,11 +752,10 @@ func (r *Runtime) stringReplace(thisStr thisStrFunc, this Value, args []Value, a
 // replacementFor produces the text a single match is replaced with, calling the
 // replacement function when one was supplied.
 func (r *Runtime) replacementFor(replVal Value, replText string, matched *String,
-	offset int, whole *String) (string, error) {
+	offset int, whole *String, argv *[3]Value) (string, error) {
 	if isCallable(replVal) {
-		res, err := r.call(replVal, Undefined, []Value{
-			Str(matched), Int(offset), Str(whole),
-		})
+		argv[0], argv[1], argv[2] = Str(matched), Int(offset), Str(whole)
+		res, err := r.call(replVal, Undefined, argv[:])
 		if err != nil {
 			return "", err
 		}
