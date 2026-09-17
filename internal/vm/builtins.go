@@ -769,54 +769,112 @@ func (r *Runtime) initArrayBuiltins() {
 		return Obj(rt.newArrayFrom(out)), nil
 	})
 
+	// push, pop, shift and unshift work through the view rather than the dense
+	// elements, so that they apply to an array-like, honour a frozen array's
+	// refusal to be written, and see a length that is a number rather than a
+	// count of what is present.
 	r.defMethod(p, "push", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.toObject(this)
+		a, err := rt.viewArrayLike(this)
 		if err != nil {
 			return Undefined, err
 		}
-		o.elems = append(o.elems, args...)
-		return Int(len(o.elems)), nil
+		if a.n+int64(len(args)) > maxArrayLength {
+			return Undefined, rt.throwTypeError("the array would be too long")
+		}
+		for i, v := range args {
+			if err := a.set(rt, a.n+int64(i), v); err != nil {
+				return Undefined, err
+			}
+		}
+		n := a.n + int64(len(args))
+		if err := a.setLength(rt, n); err != nil {
+			return Undefined, err
+		}
+		return Float(float64(n)), nil
 	})
 
 	r.defMethod(p, "pop", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.toObject(this)
+		a, err := rt.viewArrayLike(this)
 		if err != nil {
 			return Undefined, err
 		}
-		if len(o.elems) == 0 {
-			return Undefined, nil
+		if a.n == 0 {
+			// The length is still assigned, which is observable when it was
+			// not already zero.
+			return Undefined, a.setLength(rt, 0)
 		}
-		v := o.elems[len(o.elems)-1]
-		o.elems = o.elems[:len(o.elems)-1]
-		if isHole(v) {
-			return Undefined, nil
+		v, err := a.get(rt, a.n-1)
+		if err != nil {
+			return Undefined, err
+		}
+		if err := a.remove(rt, a.n-1); err != nil {
+			return Undefined, err
+		}
+		if err := a.setLength(rt, a.n-1); err != nil {
+			return Undefined, err
 		}
 		return v, nil
 	})
 
 	r.defMethod(p, "shift", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.toObject(this)
+		a, err := rt.viewArrayLike(this)
 		if err != nil {
 			return Undefined, err
 		}
-		if len(o.elems) == 0 {
-			return Undefined, nil
+		if a.n == 0 {
+			return Undefined, a.setLength(rt, 0)
 		}
-		v := o.elems[0]
-		o.elems = append(o.elems[:0], o.elems[1:]...)
-		if isHole(v) {
-			return Undefined, nil
+		first, err := a.get(rt, 0)
+		if err != nil {
+			return Undefined, err
 		}
-		return v, nil
+		for i := int64(1); i < a.n; i++ {
+			v, present, err := a.at(rt, i)
+			if err != nil {
+				return Undefined, err
+			}
+			if err := a.put(rt, i-1, v, present); err != nil {
+				return Undefined, err
+			}
+		}
+		if err := a.remove(rt, a.n-1); err != nil {
+			return Undefined, err
+		}
+		if err := a.setLength(rt, a.n-1); err != nil {
+			return Undefined, err
+		}
+		return first, nil
 	})
 
 	r.defMethod(p, "unshift", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.toObject(this)
+		a, err := rt.viewArrayLike(this)
 		if err != nil {
 			return Undefined, err
 		}
-		o.elems = append(append(make([]Value, 0, len(o.elems)+len(args)), args...), o.elems...)
-		return Int(len(o.elems)), nil
+		add := int64(len(args))
+		if a.n+add > maxArrayLength {
+			return Undefined, rt.throwTypeError("the array would be too long")
+		}
+		// Backwards, so that an element is never overwritten before it is read.
+		for i := a.n - 1; i >= 0; i-- {
+			v, present, err := a.at(rt, i)
+			if err != nil {
+				return Undefined, err
+			}
+			if err := a.put(rt, i+add, v, present); err != nil {
+				return Undefined, err
+			}
+		}
+		for i, v := range args {
+			if err := a.set(rt, int64(i), v); err != nil {
+				return Undefined, err
+			}
+		}
+		n := a.n + add
+		if err := a.setLength(rt, n); err != nil {
+			return Undefined, err
+		}
+		return Float(float64(n)), nil
 	})
 
 	r.defMethod(p, "slice", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {

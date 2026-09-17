@@ -191,3 +191,139 @@ func TestPromiseCombinatorStopsOnError(t *testing.T) {
 		t.Errorf("the iterator should have been closed once, got %s", v.String())
 	}
 }
+
+// push, pop, shift and unshift work through the property protocol, so they
+// apply to an array-like and honour a frozen array's refusal to be written.
+func TestArrayMutatorsOnArrayLikes(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var o = {length: 0}; Array.prototype.push.call(o, "x");
+		  [o.length, o[0]].join(",")`, "1,x"},
+		{`var o = {length: 2}; String(Array.prototype.pop.call(o)) + "," + o.length`,
+			"undefined,1"},
+		{`var o = {0: "a", length: 1};
+		  Array.prototype.shift.call(o) + "," + o.length`, "a,0"},
+		{`var o = {0: "a", length: 1}; Array.prototype.unshift.call(o, "z");
+		  [o[0], o[1], o.length].join(",")`, "z,a,2"},
+
+		// A length is a number, so it can reach the point where nothing more
+		// can be counted.
+		{`var o = {length: 2 ** 53 - 1};
+		  try { Array.prototype.push.call(o, "x") } catch (e) { e.constructor.name }`,
+			"TypeError"},
+
+		{`var a = [1, 2]; Object.freeze(a);
+		  try { a.push(3) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`var a = [1, 2]; Object.freeze(a);
+		  try { a.pop() } catch (e) { e.constructor.name }`, "TypeError"},
+
+		// The ordinary behaviour is unchanged.
+		{`var a = [1, 2, 3]; a.push(4) + "," + a.join(",")`, "4,1,2,3,4"},
+		{`var a = [1, 2, 3]; a.pop() + "," + a.join(",")`, "3,1,2"},
+		{`var a = [1, 2, 3]; a.shift() + "," + a.join(",")`, "1,2,3"},
+		{`var a = [1, 2, 3]; a.unshift(0) + "," + a.join(",")`, "4,0,1,2,3"},
+		{`var a = [1, 2, 3]; a.length = 0; a.push(9); a.join(",")`, "9"},
+		{`String([].pop())`, "undefined"},
+		{`String([].shift())`, "undefined"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}
+
+// The change-by-copy methods leave the receiver alone and answer a plain array
+// -- deliberately plain, since a species that did something else would defeat
+// the point of them.
+func TestArrayChangeByCopy(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`[1, 2, 3].toReversed().join(",")`, "3,2,1"},
+		{`[3, 1, 2].toSorted().join(",")`, "1,2,3"},
+		{`[3, 1, 2].toSorted((a, b) => b - a).join(",")`, "3,2,1"},
+		{`[1, 2, 3].with(1, "x").join(",")`, "1,x,3"},
+		{`[1, 2, 3].toSpliced(1, 1, "x").join(",")`, "1,x,3"},
+		{`[1, 2, 3].toSpliced(1).join(",")`, "1"},
+		{`[1, 2, 3].toSpliced().join(",")`, "1,2,3"},
+		{`[1, 2, 3].toSpliced(1, 0, "x", "y").join(",")`, "1,x,y,2,3"},
+		{`[1, 2, 3].toSpliced(-1, 1).join(",")`, "1,2"},
+
+		{`var a = [1, 2]; a.toReversed(); a.join(",")`, "1,2"},
+		{`var a = [1, 2]; a.toSpliced(0, 1); a.join(",")`, "1,2"},
+		// A hole reads as undefined rather than staying a hole, since the
+		// result is built rather than copied.
+		{`String([, 1].toReversed()[1])`, "undefined"},
+		{`String([, 1].toReversed().hasOwnProperty(1))`, "true"},
+
+		{`var o = {0: "a", 1: "b", length: 2};
+		  Array.prototype.toSpliced.call(o, 0, 1).join(",")`, "b"},
+		{`var o = {0: "a", length: 1};
+		  Array.prototype.toReversed.call(o).join(",")`, "a"},
+
+		{`class A extends Array {} String(new A(1, 2).toReversed() instanceof A)`, "false"},
+		{`String([1, 2].toSpliced(0, 1) instanceof Array)`, "true"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+
+	bad := []string{
+		`[1].toSorted(1)`,
+		`[1].with(5, 1)`,
+		`[1].with(-5, 1)`,
+		`Array.prototype.toReversed.call(null)`,
+	}
+	for _, src := range bad {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil {
+			t.Errorf("%s: accepted, want an error", src)
+		}
+		rt.Close()
+	}
+}
+
+// A descriptor that says nothing about the value defines one holding undefined,
+// which is not the same as holding zero.
+func TestDefinePropertyValueDefault(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var o = {}; Object.defineProperty(o, "p", {writable: true});
+		  [o.hasOwnProperty("p"), typeof o.p].join(",")`, "true,undefined"},
+		{`var o = {}; Object.defineProperty(o, "p", {});
+		  [o.hasOwnProperty("p"), typeof o.p].join(",")`, "true,undefined"},
+		{`var o = {}; Object.defineProperty(o, "p", {enumerable: true});
+		  String(o.p)`, "undefined"},
+		// Redefining only the writability leaves the value alone.
+		{`var o = {}; Object.defineProperty(o, "p", {value: 1, configurable: true});
+		  Object.defineProperty(o, "p", {writable: true}); String(o.p)`, "1"},
+		{`var o = {}; Object.defineProperty(o, "p", {writable: false, configurable: true});
+		  Object.defineProperty(o, "p", {writable: true});
+		  var d = Object.getOwnPropertyDescriptor(o, "p");
+		  [String(d.value), d.writable, d.enumerable, d.configurable].join(",")`,
+			"undefined,true,false,true"},
+		{`var o = Object.create(null, {p: {}}); String(o.p)`, "undefined"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

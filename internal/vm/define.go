@@ -250,7 +250,10 @@ func (r *Runtime) currentDescriptor(o *Object, key Atom) *propDesc {
 // installProperty writes the descriptor, filling in from the existing property
 // whatever the new one leaves unsaid.
 func (r *Runtime) installProperty(o *Object, key Atom, d *propDesc, cur *propDesc) {
-	merged := propDesc{}
+	// A descriptor that says nothing about the value defines one holding
+	// undefined, so the starting point is undefined rather than the zero Value
+	// -- which is the number zero.
+	merged := propDesc{value: Undefined}
 	if cur != nil {
 		merged = *cur
 	}
@@ -307,8 +310,8 @@ func (r *Runtime) installProperty(o *Object, key Atom, d *propDesc, cur *propDes
 	if merged.hasGet || merged.hasSet {
 		// Vacate any dense slot, which cannot hold an accessor.
 		if key.IsIndex() && int(key.Index()) < len(o.elems) {
+			o.markSparse()
 			o.elems[key.Index()] = elemHole
-			o.flags |= objHasSparseElements
 		}
 		o.setOwnRaw(key, Value{ref: &accessor{getter: merged.getter, setter: merged.setter}},
 			flags|propAccessor)

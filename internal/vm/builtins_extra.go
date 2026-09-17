@@ -229,56 +229,139 @@ func (r *Runtime) initArrayExtras2() {
 
 	// The change-by-copy methods, which return a new array rather than
 	// mutating the receiver.
+	// The change-by-copy methods all read through the view and write a fresh
+	// plain array -- deliberately plain, since the point of them is to leave
+	// the receiver alone, and a species that did something else would defeat
+	// that.
 	r.defMethod(p, "toReversed", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.toObject(this)
+		a, err := rt.viewArrayLike(this)
 		if err != nil {
 			return Undefined, err
 		}
-		out := make([]Value, len(o.elems))
-		for i, el := range o.elems {
-			if isHole(el) {
-				el = Undefined
-			}
-			out[len(o.elems)-1-i] = el
+		out, err := rt.arrayCreate(a.n)
+		if err != nil {
+			return Undefined, err
 		}
-		return Obj(rt.newArrayFrom(out)), nil
+		for i := int64(0); i < a.n; i++ {
+			v, err := a.get(rt, a.n-1-i)
+			if err != nil {
+				return Undefined, err
+			}
+			out.elems = append(out.elems, v)
+		}
+		return Obj(out), nil
 	})
 
 	r.defMethod(p, "toSorted", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.toObject(this)
+		if cmp := arg(args, 0); !cmp.IsUndefined() && !isCallable(cmp) {
+			return Undefined, rt.throwTypeError("the comparator is not a function")
+		}
+		a, err := rt.viewArrayLike(this)
 		if err != nil {
 			return Undefined, err
 		}
-		copyArr := rt.newArrayFrom(o.elems)
-		fn, err := rt.getValueProp(Obj(copyArr), rt.atoms.intern("sort"))
+		out, err := rt.arrayCreate(a.n)
 		if err != nil {
 			return Undefined, err
 		}
-		if _, err := rt.call(fn, Obj(copyArr), args); err != nil {
+		for i := int64(0); i < a.n; i++ {
+			v, err := a.get(rt, i)
+			if err != nil {
+				return Undefined, err
+			}
+			out.elems = append(out.elems, v)
+		}
+		fn, err := rt.getValueProp(Obj(out), rt.atoms.intern("sort"))
+		if err != nil {
 			return Undefined, err
 		}
-		return Obj(copyArr), nil
+		if _, err := rt.call(fn, Obj(out), args); err != nil {
+			return Undefined, err
+		}
+		return Obj(out), nil
+	})
+
+	r.defMethod(p, "toSpliced", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		a, err := rt.viewArrayLike(this)
+		if err != nil {
+			return Undefined, err
+		}
+		start, err := rt.relativeIndex64(arg(args, 0), a.n, 0)
+		if err != nil {
+			return Undefined, err
+		}
+		var removeCount int64
+		var inserted []Value
+		switch {
+		case len(args) == 0:
+			removeCount = 0
+		case len(args) == 1:
+			removeCount = a.n - start
+		default:
+			c, err := rt.toInteger(args[1])
+			if err != nil {
+				return Undefined, err
+			}
+			removeCount = int64(clampFloatIndex(c, int(a.n-start)))
+			inserted = args[2:]
+		}
+		n := a.n + int64(len(inserted)) - removeCount
+		if n > maxArrayLength {
+			return Undefined, rt.throwTypeError("the result would be too long")
+		}
+		out, err := rt.arrayCreate(n)
+		if err != nil {
+			return Undefined, err
+		}
+		for i := int64(0); i < start; i++ {
+			v, err := a.get(rt, i)
+			if err != nil {
+				return Undefined, err
+			}
+			out.elems = append(out.elems, v)
+		}
+		out.elems = append(out.elems, inserted...)
+		for i := start + removeCount; i < a.n; i++ {
+			v, err := a.get(rt, i)
+			if err != nil {
+				return Undefined, err
+			}
+			out.elems = append(out.elems, v)
+		}
+		return Obj(out), nil
 	})
 
 	r.defMethod(p, "with", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.toObject(this)
+		a, err := rt.viewArrayLike(this)
 		if err != nil {
 			return Undefined, err
 		}
-		n := len(o.elems)
 		i, err := rt.toInteger(arg(args, 0))
 		if err != nil {
 			return Undefined, err
 		}
 		if i < 0 {
-			i += float64(n)
+			i += float64(a.n)
 		}
-		if i < 0 || int(i) >= n {
+		if !(i >= 0) || i >= float64(a.n) {
 			return Undefined, rt.throwRangeError("invalid index")
 		}
-		out := append([]Value(nil), o.elems...)
-		out[int(i)] = arg(args, 1)
-		return Obj(rt.newArrayFrom(out)), nil
+		out, err := rt.arrayCreate(a.n)
+		if err != nil {
+			return Undefined, err
+		}
+		for k := int64(0); k < a.n; k++ {
+			if k == int64(i) {
+				out.elems = append(out.elems, arg(args, 1))
+				continue
+			}
+			v, err := a.get(rt, k)
+			if err != nil {
+				return Undefined, err
+			}
+			out.elems = append(out.elems, v)
+		}
+		return Obj(out), nil
 	})
 }
 
