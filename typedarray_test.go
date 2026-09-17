@@ -885,3 +885,42 @@ func TestTypedArrayCopyWithinAndIterator(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
 	}
 }
+
+// `with` converts its value before it checks the index and before it copies
+// the elements, so a valueOf that writes to the array is seen by the copy.
+// `sort` refuses a comparator it cannot call, and an element cannot be
+// deleted.
+func TestTypedArrayWithSortAndDelete(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"value first", `var a = new Int8Array([0,1,2])
+		  var v = {valueOf: function () { a[0] = 3; return 4 }}
+		  String(a.with(1, v)) + "|" + a`, "3,4,2|3,1,2"},
+		{"index checked after", `var a = new Int8Array([1,2,3])
+		  var order = []
+		  var idx = {valueOf: function () { order.push("index"); return 5 }}
+		  var val = {valueOf: function () { order.push("value"); return 3 }}
+		  try { a.with(idx, val) } catch (e) { order.push(e.constructor.name) }
+		  order.join(",")`, "index,value,RangeError"},
+		{"same kind", `String(new Int8Array([1,2,3]).with(0, 9) instanceof Int8Array)`, "true"},
+		// A comparator that is not callable is a mistake, whatever the array.
+		{"sort refuses null", `try { new Int8Array([1,2]).sort(null); "no error" }
+		  catch (e) { e.constructor.name }`, "TypeError"},
+		{"sort refuses a number", `try { new Int8Array([1,2]).sort(1); "no error" }
+		  catch (e) { e.constructor.name }`, "TypeError"},
+		{"sort accepts undefined", `String(new Int8Array([2,1]).sort())`, "1,2"},
+		{"sort accepts a function", `String(new Int8Array([1,2]).sort(function (a, b) { return b - a }))`,
+			"2,1"},
+		// An element is always there, so deleting one is refused.
+		{"delete refused", `var a = new Int8Array(2)
+		  String(Reflect.deleteProperty(a, "0")) + "," + Reflect.deleteProperty(a, "5")`,
+			"false,true"},
+		{"strict delete throws", `var a = new Int8Array(2)
+		  try { (function () { "use strict"; delete a[0] })(); "no error" }
+		  catch (e) { e.constructor.name }`, "TypeError"},
+		{"out of range deletes", `var a = new Int8Array(2)
+		  String((function () { "use strict"; return delete a[5] })())`, "true"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}

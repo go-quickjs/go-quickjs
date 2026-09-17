@@ -598,7 +598,14 @@ func (r *Runtime) deleteProp(o *Object, key Atom, strict bool) (bool, error) {
 		// the script says. A numeric key that names no element is absent
 		// already, so deleting it succeeds trivially.
 		if ix := r.typedArrayIndex(o, key); ix.numeric {
-			return !ix.valid, nil
+			if ix.valid {
+				if strict {
+					return false, r.throwTypeError(
+						"cannot delete an element of a typed array")
+				}
+				return false, nil
+			}
+			return true, nil
 		}
 	}
 	if key.IsIndex() {

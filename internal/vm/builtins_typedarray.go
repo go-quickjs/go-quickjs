@@ -963,6 +963,45 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		return False, nil
 	})
 
+	r.defMethod(p, "with", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		t, err := rt.typedArrayOf(this, "TypedArray.prototype.with")
+		if err != nil {
+			return Undefined, err
+		}
+		n, err := rt.toInteger(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		if n < 0 {
+			n += float64(t.length)
+		}
+		// The value is converted before the index is checked, and before the
+		// elements are copied: a valueOf that writes to the array is seen by
+		// the copy.
+		v, err := rt.toElementValue(t, arg(args, 1))
+		if err != nil {
+			return Undefined, err
+		}
+		if n < 0 || n >= float64(t.length) {
+			return Undefined, rt.throwRangeError("the index is outside the typed array")
+		}
+		at := int(n)
+		// A view of the same kind rather than of the receiver's species: the
+		// copying methods do not consult it.
+		o := newObject(rt.typedArrayProtoFor(t.kind), ClassTypedArray)
+		dst := rt.allocTypedArray(o, t.kind, t.length)
+		for i := 0; i < t.length; i++ {
+			el := t.getElem(i)
+			if i == at {
+				el = v
+			}
+			if err := rt.setElem(dst, i, el); err != nil {
+				return Undefined, err
+			}
+		}
+		return Obj(o), nil
+	})
+
 	r.defMethod(p, "copyWithin", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		t, err := rt.typedArrayOf(this, "TypedArray.prototype.copyWithin")
 		if err != nil {
@@ -1227,7 +1266,6 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		{"sort", 1, true, false},
 		{"toReversed", 0, false, true},
 		{"toSorted", 1, false, true},
-		{"with", 2, false, true},
 	} {
 		d := m
 		r.defMethod(p, d.name, d.length, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -1245,6 +1283,14 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 				return Undefined, err
 			}
 			callArgs := args
+			if d.name == "sort" || d.name == "toSorted" {
+				// A comparator that is there but cannot be called is a mistake,
+				// reported before anything is compared.
+				if c := arg(args, 0); !c.IsUndefined() && !isCallable(c) {
+					return Undefined, rt.throwTypeError(
+						"the comparator is not a function")
+				}
+			}
 			if (d.name == "sort" || d.name == "toSorted") && !isCallable(arg(args, 0)) {
 				// A typed array sorts numerically by default, where an ordinary
 				// array sorts by string: [10, 9] is [9, 10] here and [10, 9]
