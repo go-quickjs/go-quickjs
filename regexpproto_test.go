@@ -345,3 +345,32 @@ func TestMatchIndices(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestRegExpLiteralEarlyErrors covers two shapes a pattern may not take.
+func TestRegExpLiteralEarlyErrors(t *testing.T) {
+	bad := []string{
+		// The flags are a token of their own, not an identifier, so an escape
+		// there is not a flag.
+		"/a/\\u0067",
+		"/a/\\u0069",
+		// A lookahead may be quantified in sloppy mode as a legacy allowance;
+		// a lookbehind came long afterwards, so there is nothing to be
+		// compatible with.
+		`/(?<=a)?/`,
+		`/(?<!a)*/`,
+		`/(?<=a){2}/`,
+	}
+	for _, src := range bad {
+		checkEval(t, `try { eval(`+jsQuote(src)+`); "no throw" }
+		              catch (e) { e.constructor.name }`, "SyntaxError")
+	}
+	good := []struct{ src, want string }{
+		{`/a/gimsuy.flags`, "gimsuy"},
+		{`String(/(?=a)?b/.test("b"))`, "true"},
+		{`String(/(?<=a)b/.test("ab"))`, "true"},
+		{`String(/(?<!a)b/.test("cb"))`, "true"},
+	}
+	for _, tc := range good {
+		checkEval(t, tc.src, tc.want)
+	}
+}

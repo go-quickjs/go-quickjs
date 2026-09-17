@@ -706,3 +706,70 @@ func TestArrayBufferSliceSpecies(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestBase64Decoding covers the Uint8Array base64 and hex conversions, whose
+// point is to give the caller control over the two things a hand-rolled
+// decoder gets wrong: which alphabet, and what to do with a trailing chunk that
+// is not a whole group.
+func TestBase64Decoding(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`Array.from(Uint8Array.fromBase64("ZXhhZg==")).join()`, "101,120,97,102"},
+		{`Array.from(Uint8Array.fromBase64("ZXhhZg")).join()`, "101,120,97,102"},
+		{`Array.from(Uint8Array.fromBase64("ZXhhZg",
+		    {lastChunkHandling: "stop-before-partial"})).join()`, "101,120,97"},
+		{`try { Uint8Array.fromBase64("ZXhhZg", {lastChunkHandling: "strict"}) }
+		  catch (e) { e.constructor.name }`, "SyntaxError"},
+		// Padding must be exactly as much as the group is short.
+		{`try { Uint8Array.fromBase64("ZXhhZg=") } catch (e) { e.constructor.name }`,
+			"SyntaxError"},
+		{`try { Uint8Array.fromBase64("ZXhhZg===") } catch (e) { e.constructor.name }`,
+			"SyntaxError"},
+		{`try { Uint8Array.fromBase64("ZXhhZg===", {lastChunkHandling: "stop-before-partial"}) }
+		  catch (e) { e.constructor.name }`, "SyntaxError"},
+		{`Array.from(Uint8Array.fromBase64("ZXhhZg=",
+		    {lastChunkHandling: "stop-before-partial"})).join()`, "101,120,97"},
+		// A lone character is a partial group, not a truncated one.
+		{`try { Uint8Array.fromBase64("A") } catch (e) { e.constructor.name }`, "SyntaxError"},
+		{`Array.from(Uint8Array.fromBase64("A",
+		    {lastChunkHandling: "stop-before-partial"})).length + ""`, "0"},
+
+		// The options are compared as given rather than coerced.
+		{`try { Uint8Array.fromBase64("Zg==", {alphabet: Object("base64")}) }
+		  catch (e) { e.constructor.name }`, "TypeError"},
+		{`try { Uint8Array.fromBase64("Zg==", {lastChunkHandling: Object("loose")}) }
+		  catch (e) { e.constructor.name }`, "TypeError"},
+		{`Array.from(Uint8Array.fromBase64("x-_y", {alphabet: "base64url"})).join()`,
+			"199,239,242"},
+
+		// Whatever was decoded before a failure is still written.
+		{`var a = new Uint8Array(5).fill(255)
+		  try { a.setFromBase64("MjYyZm.9v") } catch (e) {}
+		  Array.from(a).join()`, "50,54,50,255,255"},
+		{`var a = new Uint8Array(5).fill(255)
+		  try { a.setFromHex("aa a") } catch (e) {}
+		  Array.from(a).join()`, "170,255,255,255,255"},
+		// An odd length is settled before anything is decoded.
+		{`var a = new Uint8Array(5).fill(255)
+		  try { a.setFromHex("aaa") } catch (e) {}
+		  Array.from(a).join()`, "255,255,255,255,255"},
+		// Nothing beyond a full destination is even read.
+		{`var a = new Uint8Array(0)
+		  a.setFromBase64("aaaa#").read + "," + a.setFromBase64("#").read`, "0,0"},
+
+		// The receiver is checked again after the options have been read.
+		{`var a = new Uint8Array(2)
+		  var calls = 0
+		  var opts = {get alphabet() { calls++; a.buffer.transfer(); return "base64" }}
+		  try { a.toBase64(opts) } catch (e) { e.constructor.name + "," + calls }`,
+			"TypeError,1"},
+		{`var a = new Uint8Array(2)
+		  a.buffer.transfer()
+		  var calls = 0
+		  var opts = {get alphabet() { calls++; return "base64" }}
+		  try { a.toBase64(opts) } catch (e) { e.constructor.name + "," + calls }`,
+			"TypeError,1"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

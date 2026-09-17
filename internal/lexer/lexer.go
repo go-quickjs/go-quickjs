@@ -357,9 +357,17 @@ func (l *Lexer) ScanRegExp(start Token) (Token, error) {
 			if !inClass {
 				body := l.src[start.Pos+1 : l.pos]
 				l.pos++
+				flagStart := l.pos
 				flags, err := l.scanIdentName()
 				if err != nil && !l.atEnd() {
 					return tok, err
+				}
+				// The flags are read as written: a unicode escape there is not
+				// a flag but an error, because the flags are a token of their
+				// own rather than an identifier.
+				if strings.Contains(l.src[flagStart:l.pos], "\\") {
+					return tok, l.errf(flagStart,
+						"a regular expression's flags cannot use an escape sequence")
 				}
 				tok.Value, tok.Flags = body, flags
 				tok.Raw = l.src[start.Pos:l.pos]

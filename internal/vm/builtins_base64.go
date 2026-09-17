@@ -53,11 +53,13 @@ func (r *Runtime) readBase64Options(v Value, forEncode bool) (base64Options, err
 		return opts, err
 	}
 	if !alphabet.IsUndefined() {
-		s, err := r.toString(alphabet)
-		if err != nil {
-			return opts, err
+		// The option is compared as given rather than coerced: a String object
+		// holding "base64" is not the alphabet "base64", and an object with a
+		// toString never gets to run it.
+		if !alphabet.IsString() {
+			return opts, r.throwTypeError("the alphabet must be \"base64\" or \"base64url\"")
 		}
-		switch s.Go() {
+		switch alphabet.String().Go() {
 		case "base64":
 		case "base64url":
 			opts.url = true
@@ -80,11 +82,11 @@ func (r *Runtime) readBase64Options(v Value, forEncode bool) (base64Options, err
 		return opts, err
 	}
 	if !handling.IsUndefined() {
-		s, err := r.toString(handling)
-		if err != nil {
-			return opts, err
+		if !handling.IsString() {
+			return opts, r.throwTypeError(
+				"lastChunkHandling must be \"loose\", \"strict\" or \"stop-before-partial\"")
 		}
-		switch s.Go() {
+		switch handling.String().Go() {
 		case "loose":
 		case "strict":
 			opts.lastChunk = chunkStrict
@@ -139,11 +141,16 @@ func (r *Runtime) initBase64Builtins(uint8Ctor, uint8Proto *Object) {
 	})
 
 	r.defMethod(uint8Proto, "toBase64", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		t, err := rt.uint8ArrayOf(this, "Uint8Array.prototype.toBase64")
-		if err != nil {
+		if err := rt.uint8ArraySlot(this, "Uint8Array.prototype.toBase64"); err != nil {
 			return Undefined, err
 		}
 		opts, err := rt.readBase64Options(arg(args, 0), true)
+		if err != nil {
+			return Undefined, err
+		}
+		// The options are read through getters, which may have detached the
+		// buffer that is about to be read.
+		t, err := rt.uint8ArrayOf(this, "Uint8Array.prototype.toBase64")
 		if err != nil {
 			return Undefined, err
 		}
@@ -169,8 +176,7 @@ func (r *Runtime) initBase64Builtins(uint8Ctor, uint8Proto *Object) {
 	// the input they consumed. That is what makes streaming possible: the
 	// caller keeps the unread tail and prepends it to the next piece.
 	r.defMethod(uint8Proto, "setFromBase64", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		t, err := rt.uint8ArrayOf(this, "Uint8Array.prototype.setFromBase64")
-		if err != nil {
+		if err := rt.uint8ArraySlot(this, "Uint8Array.prototype.setFromBase64"); err != nil {
 			return Undefined, err
 		}
 		s, err := rt.base64Input(arg(args, 0), "setFromBase64")
@@ -181,28 +187,40 @@ func (r *Runtime) initBase64Builtins(uint8Ctor, uint8Proto *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		out, read, err := rt.decodeBase64Into(s, opts, len(t))
+		// The options are read through getters, which may have detached the
+		// buffer that is about to be written to.
+		t, err := rt.uint8ArrayOf(this, "Uint8Array.prototype.setFromBase64")
 		if err != nil {
 			return Undefined, err
 		}
+		out, read, err := rt.decodeBase64Into(s, opts, len(t))
+		// Whatever was decoded before the failure is still written: the caller
+		// is told how far the input was good for, and the bytes it produced
+		// are there.
 		copy(t, out)
+		if err != nil {
+			return Undefined, err
+		}
 		return Obj(rt.readWritten(read, len(out))), nil
 	})
 
 	r.defMethod(uint8Proto, "setFromHex", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		t, err := rt.uint8ArrayOf(this, "Uint8Array.prototype.setFromHex")
-		if err != nil {
+		if err := rt.uint8ArraySlot(this, "Uint8Array.prototype.setFromHex"); err != nil {
 			return Undefined, err
 		}
 		s, err := rt.base64Input(arg(args, 0), "setFromHex")
 		if err != nil {
 			return Undefined, err
 		}
-		out, read, err := rt.decodeHex(s, len(t))
+		t, err := rt.uint8ArrayOf(this, "Uint8Array.prototype.setFromHex")
 		if err != nil {
 			return Undefined, err
 		}
+		out, read, err := rt.decodeHex(s, len(t))
 		copy(t, out)
+		if err != nil {
+			return Undefined, err
+		}
 		return Obj(rt.readWritten(read, len(out))), nil
 	})
 }
@@ -237,6 +255,20 @@ func (r *Runtime) uint8ArrayOf(this Value, name string) ([]byte, error) {
 	}
 	b := t.storage().bytes
 	return b[t.byteOffset : t.byteOffset+t.length], nil
+}
+
+// uint8ArraySlot is uint8ArrayOf without the detachment check, for the methods
+// that read their options first: the options may be getters, and one of them
+// detaching the buffer is what the later check is for.
+func (r *Runtime) uint8ArraySlot(this Value, name string) error {
+	t, err := r.typedArraySlot(this, name)
+	if err != nil {
+		return err
+	}
+	if t.kind != elemUint8 {
+		return r.throwTypeError("%s requires a Uint8Array", name)
+	}
+	return nil
 }
 
 // newUint8ArrayFrom wraps bytes in a fresh Uint8Array.
@@ -276,33 +308,52 @@ func (r *Runtime) decodeBase64Into(s string, opts base64Options, max int) ([]byt
 	sawPadding := false
 
 	for i := 0; i < len(s); i++ {
+		if max >= 0 && len(out) >= max && n == 0 {
+			// The destination is full, so nothing that follows is even read:
+			// an invalid character beyond it is the next call's problem.
+			return out, read, nil
+		}
 		c := s[i]
 		if isBase64Whitespace(c) {
 			continue
 		}
 		if c == '=' {
-			sawPadding = true
 			// Padding may only appear where a group is already 2 or 3 deep;
 			// anywhere else it is not padding but a stray character.
 			if n < 2 {
-				return nil, 0, r.throwSyntaxError("unexpected padding in base64 input")
+				return out, read, r.throwSyntaxError("unexpected padding in base64 input")
 			}
-			// Everything after the first padding character must be padding or
-			// whitespace.
-			for j := i + 1; j < len(s); j++ {
+			// Everything from here on must be padding or whitespace, and there
+			// must be exactly as much of it as the group is short.
+			got := 0
+			for j := i; j < len(s); j++ {
 				if isBase64Whitespace(s[j]) {
 					continue
 				}
 				if s[j] != '=' {
-					return nil, 0, r.throwSyntaxError("unexpected character after base64 padding")
+					return out, read, r.throwSyntaxError("unexpected character after base64 padding")
 				}
+				got++
 			}
+			switch {
+			case got > 4-n:
+				// More padding than the group is short is not a group at all.
+				return out, read, r.throwSyntaxError("too much padding in base64 input")
+			case got < 4-n:
+				// A group whose padding is incomplete is a partial group: the
+				// caller either waits for the rest of it or is told.
+				if opts.lastChunk == chunkStopBeforePartial {
+					return out, read, nil
+				}
+				return out, read, r.throwSyntaxError("incomplete padding in base64 input")
+			}
+			sawPadding = true
 			break
 		}
 
 		v := strings.IndexByte(alphabet, c)
 		if v < 0 {
-			return nil, 0, r.throwSyntaxError("invalid character in base64 input")
+			return out, read, r.throwSyntaxError("invalid character in base64 input")
 		}
 		chunk[n] = byte(v)
 		n++
@@ -324,9 +375,13 @@ func (r *Runtime) decodeBase64Into(s string, opts base64Options, max int) ([]byt
 	if n == 0 {
 		return out, len(s), nil
 	}
+	if opts.lastChunk == chunkStopBeforePartial && !sawPadding {
+		// Leave the partial group unread, however short it is.
+		return out, read, nil
+	}
 	// A group of one is never valid: a single 6-bit value cannot carry a byte.
 	if n == 1 {
-		return nil, 0, r.throwSyntaxError("truncated base64 input")
+		return out, read, r.throwSyntaxError("truncated base64 input")
 	}
 	if opts.lastChunk == chunkStopBeforePartial && !sawPadding {
 		// Leave the partial group unread, so the caller can prepend it to
@@ -334,14 +389,14 @@ func (r *Runtime) decodeBase64Into(s string, opts base64Options, max int) ([]byt
 		return out, read, nil
 	}
 	if opts.lastChunk == chunkStrict && !sawPadding {
-		return nil, 0, r.throwSyntaxError("base64 input is missing its padding")
+		return out, read, r.throwSyntaxError("base64 input is missing its padding")
 	}
 
 	tail := []byte{chunk[0]<<2 | chunk[1]>>4}
 	if opts.lastChunk == chunkStrict && chunk[n-1]<<(8-2*(4-uint(n))) != 0 {
 		// The bits beyond the last whole byte must be zero, or the encoding
 		// carries information the decoder is about to discard.
-		return nil, 0, r.throwSyntaxError("base64 input has non-zero padding bits")
+		return out, read, r.throwSyntaxError("base64 input has non-zero padding bits")
 	}
 	if n == 3 {
 		tail = append(tail, chunk[1]<<4|chunk[2]>>2)
@@ -354,6 +409,8 @@ func (r *Runtime) decodeBase64Into(s string, opts base64Options, max int) ([]byt
 
 // decodeHex decodes a hex string, writing at most max bytes.
 func (r *Runtime) decodeHex(s string, max int) ([]byte, int, error) {
+	// An odd length is settled before anything is decoded, so a caller writing
+	// into an array is left with it untouched.
 	if len(s)%2 != 0 {
 		return nil, 0, r.throwSyntaxError("a hex string must have an even length")
 	}
@@ -365,7 +422,9 @@ func (r *Runtime) decodeHex(s string, max int) ([]byte, int, error) {
 		hi, ok1 := hexDigit(s[i])
 		lo, ok2 := hexDigit(s[i+1])
 		if !ok1 || !ok2 {
-			return nil, 0, r.throwSyntaxError("invalid character in hex input")
+			// Whatever was decoded before the bad pair is still handed back,
+			// so that a caller writing into an array keeps it.
+			return out, i, r.throwSyntaxError("invalid character in hex input")
 		}
 		out = append(out, hi<<4|lo)
 	}

@@ -234,7 +234,10 @@ func (p *parser) parseTerm() (node, error) {
 		if p.flags&FlagUnicode != 0 {
 			return nil, p.errorf("nothing to repeat")
 		}
-		if _, isLook := atom.(nodeLook); !isLook {
+		// The allowance covers lookahead alone. A lookbehind was introduced
+		// long afterwards, so there is nothing to be compatible with.
+		look, isLook := atom.(nodeLook)
+		if !isLook || look.behind {
 			return nil, p.errorf("nothing to repeat")
 		}
 	}
