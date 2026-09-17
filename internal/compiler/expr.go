@@ -873,6 +873,12 @@ func (c *compiler) compileAssign(n *ast.Assign) {
 		c.assignTo(n.Target, false)
 
 	case "&&=", "||=", "??=":
+		if m, ok := n.Target.(*ast.Member); ok {
+			c.compileMemberUpdate(m, n.Op, func() {
+				c.compileExprNamed(n.Value, nameOf(n.Target))
+			}, n.Start)
+			return
+		}
 		// A logical assignment only stores when the short circuit does not
 		// take, so the read comes first and the store is inside the branch.
 		c.compileReadTarget(n.Target)
@@ -890,11 +896,89 @@ func (c *compiler) compileAssign(n *ast.Assign) {
 		c.patchJump(jump)
 
 	default:
+		if m, ok := n.Target.(*ast.Member); ok {
+			c.compileMemberUpdate(m, n.Op, func() { c.compileExpr(n.Value) }, n.Start)
+			return
+		}
 		// A compound assignment reads, combines and writes back.
 		c.compileReadTarget(n.Target)
 		c.compileExpr(n.Value)
 		c.emitAt(n.Start, compoundOpcode(n.Op), 0, 0)
 		c.assignTo(n.Target, false)
+	}
+}
+
+// compileMemberUpdate compiles `obj.k op= value` and its logical relatives.
+//
+// The object and the key are evaluated once and kept on the stack, because they
+// are expressions: `base[prop] *= f()` must call prop.toString once, and
+// reading the property and writing it back have to address the same place even
+// if the read changed what is there.
+func (c *compiler) compileMemberUpdate(m *ast.Member, op string, emitValue func(), pos int) {
+	if pn, private := m.Property.(*ast.PrivateName); private {
+		// A private name is not an expression, so there is nothing to evaluate
+		// twice; only the object is kept.
+		c.checkPrivateName(pn, m.Start)
+		c.compileExpr(m.Object)
+		c.emit(bytecode.OpDup, 0, 0)
+		c.emit(bytecode.OpGetPrivate, c.nameIdx("#"+pn.Name), 0)
+		c.finishUpdate(op, emitValue, pos, 1, func() {
+			c.emit(bytecode.OpInsert2, 0, 0)
+			c.emit(bytecode.OpSetPrivate, c.nameIdx("#"+pn.Name), 0)
+		})
+		return
+	}
+
+	c.compileExpr(m.Object)
+	if m.Computed {
+		c.compileExpr(m.Property)
+		c.emit(bytecode.OpToPropertyKey, 0, 0)
+		c.emit(bytecode.OpDup2, 0, 0)
+		c.emitAt(m.Start, bytecode.OpGetIndex, 0, 0)
+		c.finishUpdate(op, emitValue, pos, 2, func() {
+			c.emit(bytecode.OpInsert3, 0, 0)
+			c.emitAt(m.Start, bytecode.OpSetIndex, 0, 0)
+		})
+		return
+	}
+	name := c.nameIdx(propKeyName(m.Property))
+	c.emit(bytecode.OpDup, 0, 0)
+	c.emitAt(m.Start, bytecode.OpGetProp, name, 0)
+	c.finishUpdate(op, emitValue, pos, 1, func() {
+		c.emit(bytecode.OpInsert2, 0, 0)
+		c.emitAt(m.Start, bytecode.OpSetProp, name, 0)
+	})
+}
+
+// finishUpdate combines the read value with the new one and stores it.
+//
+// A logical assignment stores only when the short circuit does not take, and
+// leaves the read value as the result when it does -- so the base and key
+// beneath it have to be dropped on that path.
+func (c *compiler) finishUpdate(op string, emitValue func(), pos, under int, store func()) {
+	switch op {
+	case "&&=", "||=", "??=":
+		var jump int
+		switch op {
+		case "&&=":
+			jump = c.emitJump(bytecode.OpJumpIfFalseKeep)
+		case "||=":
+			jump = c.emitJump(bytecode.OpJumpIfTrueKeep)
+		default:
+			jump = c.emitJump(bytecode.OpJumpIfNotNullish)
+		}
+		emitValue()
+		store()
+		done := c.emitJump(bytecode.OpJump)
+		c.patchJump(jump)
+		// The short circuit leaves the read value on top of the base and key,
+		// which have to go.
+		c.emit(bytecode.OpNipUnder, uint32(under), 0)
+		c.patchJump(done)
+	default:
+		emitValue()
+		c.emitAt(pos, compoundOpcode(op), 0, 0)
+		store()
 	}
 }
 

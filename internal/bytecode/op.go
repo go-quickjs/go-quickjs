@@ -39,6 +39,7 @@ const (
 	// the expression's result while the receiver and key are consumed.
 	OpInsert2
 	OpInsert3
+	OpNipUnder // remove A values from beneath the top of the stack
 	OpInsert4
 
 	// --- Local variables --------------------------------------------------

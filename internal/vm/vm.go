@@ -426,6 +426,11 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			r.stack[sp-1] = r.stack[sp-2]
 			r.stack[sp-2] = b
 			sp++
+		case bytecode.OpNipUnder:
+			// The top value stays; the A beneath it go.
+			n := int(in.A)
+			r.stack[sp-1-n] = r.stack[sp-1]
+			sp -= n
 		case bytecode.OpInsert3:
 			// a b c -> c a b c
 			c := r.stack[sp-1]
