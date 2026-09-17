@@ -771,6 +771,56 @@ func TestContextCancellationInterruptsInfiniteLoop(t *testing.T) {
 	}
 }
 
+// A script that runs away without ever finishing one frame's instruction
+// budget has to be interrupted too: the interpreter counts the instructions of
+// the frame it is running, so what catches a program that keeps leaving that
+// loop -- by recursing, or by calling something expensive every time round --
+// is the count of calls.
+func TestContextCancellationInterruptsRunawayCalls(t *testing.T) {
+	cases := []struct{ name, src string }{
+		// Each iteration of the outer loop leaves the loop for a long time, so
+		// the outer frame executes very few instructions per unit of work.
+		{"loop calling deep recursion", `
+			function deep(n) { return n <= 0 ? 0 : deep(n - 1) + 1 }
+			while (true) deep(400)
+		`},
+		// No loop anywhere: nothing but calls, each frame running a handful of
+		// instructions before handing over to the next.
+		{"recursion that restarts itself", `
+			function grow(n) {
+			  if (n > 0) return grow(n - 1)
+			  try { return grow(400) } catch (e) { return grow(400) }
+			}
+			grow(400)
+		`},
+		// The calls are into a built-in rather than into a script function.
+		{"built-in called forever", `
+			var a = [1, 2, 3]
+			while (true) a.map(function (x) { return x })
+		`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := quickjs.New()
+			defer rt.Close()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+
+			start := time.Now()
+			_, err := rt.EvalContext(ctx, tc.src)
+			elapsed := time.Since(start)
+
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("error = %v, want it to wrap context.DeadlineExceeded", err)
+			}
+			if elapsed > 5*time.Second {
+				t.Errorf("interruption took %v, which is too slow", elapsed)
+			}
+		})
+	}
+}
+
 func TestStackOverflowIsAnErrorNotACrash(t *testing.T) {
 	rt := quickjs.New(quickjs.WithMaxCallDepth(256))
 	defer rt.Close()

@@ -48,6 +48,14 @@ func (r *Runtime) call(fn Value, this Value, args []Value) (Value, error) {
 // callObject invokes a function object, dispatching to a native
 // implementation, a bound function or compiled bytecode.
 func (r *Runtime) callObject(o *Object, this Value, args []Value, newTarget Value) (Value, error) {
+	// Calls are counted as well as instructions, because a program can run for
+	// a long time without either finishing a frame's instruction budget or
+	// leaving one loop: deep recursion, or a loop whose every iteration calls
+	// something expensive. Both pass through here, and the count is nothing
+	// beside the cost of the call it is attached to.
+	if err := r.tick(); err != nil {
+		return Undefined, err
+	}
 	if p := proxyOf(o); p != nil {
 		if !newTarget.IsUndefined() {
 			return r.proxyConstruct(p, args, newTarget)
@@ -487,13 +495,22 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 	// inside a call reads, which is the instruction after the one calling --
 	// the same as it ever was.
 	pc := f.pc
+	// The cancellation check happens on every instruction, so the counter is
+	// decremented inline and only the rare expiry is a call. Reading a
+	// context's Done channel per instruction would dominate the loop, and so,
+	// measurably, did calling even a trivial helper.
+	//
+	// The counter is a local rather than the runtime's field for the same
+	// reason the program counter is: a decrement in a register is free where
+	// one in memory is not. Each frame gets its own, so what this bounds is how
+	// long one frame may run without a check; a program that leaves this loop
+	// again and again instead of running in it is bounded by the count of calls
+	// that callObject keeps.
+	budget := interruptCheckInterval
 	for {
-		// The cancellation check happens on every instruction, so the counter
-		// is decremented inline and only the rare expiry is a call. Reading a
-		// context's Done channel per instruction would dominate the loop, and
-		// so, measurably, did calling even a trivial helper.
-		r.interruptCounter--
-		if r.interruptCounter <= 0 {
+		budget--
+		if budget <= 0 {
+			budget = interruptCheckInterval
 			if err := r.checkInterruptNow(); err != nil {
 				// An interrupt is the host stopping the script rather than a
 				// JavaScript exception, so it is not catchable.
