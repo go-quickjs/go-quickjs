@@ -659,7 +659,7 @@ func (p *jsonParser) parseObject() (Value, error) {
 		if err != nil {
 			return Undefined, err
 		}
-		if err := p.rt.defineOwnProp(o, p.rt.atoms.intern(key), v, propDefault); err != nil {
+		if err := p.rt.defineOwnProp(o, p.rt.atoms.internCopy(key), v, propDefault); err != nil {
 			return Undefined, err
 		}
 		p.skipSpace()

@@ -49,6 +49,9 @@ func New(cfg Config) *Runtime {
 	r.initWellKnownSymbols()
 	r.initIntrinsics()
 	r.initGlobals()
+	// What is left of the slab would be kept alive by the objects cut from it,
+	// and a realm is built once.
+	r.funcSlab = nil
 	return r
 }
 
@@ -166,33 +169,42 @@ func (r *Runtime) initIntrinsics() {
 
 // newNativeFunc creates a callable object wrapping a Go function.
 func (r *Runtime) newNativeFunc(name string, length int, fn NativeFunc) *Object {
-	o, fd := newFuncObject(r.proto.function, ClassFunction)
+	o, fd := r.newSlabFuncObject(r.proto.function, ClassFunction)
 	*fd = funcData{native: fn, name: name, length: length, ctorKind: ctorNone}
 	return o
+}
+
+// defBuiltin installs a property of an object the engine builds.
+//
+// The table is made with room for a few: a prototype is given its methods one
+// after another, and growing from nothing costs an allocation per doubling.
+func defBuiltin(target *Object, key Atom, v Value, flags propFlags) {
+	target.reserveProps(8)
+	target.setOwnRaw(key, v, flags)
 }
 
 // defMethod defines a built-in method, which is writable and configurable but
 // not enumerable, as every specification-defined method is.
 func (r *Runtime) defMethod(target *Object, name string, length int, fn NativeFunc) *Object {
 	f := r.newNativeFunc(name, length, fn)
-	target.setOwnRaw(r.atoms.intern(name), Obj(f), propWritable|propConfigurable)
+	defBuiltin(target, r.atoms.intern(name), Obj(f), propWritable|propConfigurable)
 	return f
 }
 
 // defSymbolMethod defines a method keyed by a well-known symbol.
 func (r *Runtime) defSymbolMethod(target *Object, sym *Symbol, name string, length int, fn NativeFunc) {
 	f := r.newNativeFunc(name, length, fn)
-	target.setOwnRaw(r.atoms.internSymbol(sym), Obj(f), propWritable|propConfigurable)
+	defBuiltin(target, r.atoms.internSymbol(sym), Obj(f), propWritable|propConfigurable)
 }
 
 // defValue defines a non-enumerable data property.
 func (r *Runtime) defValue(target *Object, name string, v Value) {
-	target.setOwnRaw(r.atoms.intern(name), v, propWritable|propConfigurable)
+	defBuiltin(target, r.atoms.intern(name), v, propWritable|propConfigurable)
 }
 
 // defConst defines a read-only, non-enumerable data property.
 func (r *Runtime) defConst(target *Object, name string, v Value) {
-	target.setOwnRaw(r.atoms.intern(name), v, 0)
+	defBuiltin(target, r.atoms.intern(name), v, 0)
 }
 
 // defToStringTag sets Symbol.toStringTag, which is what
@@ -201,7 +213,7 @@ func (r *Runtime) defConst(target *Object, name string, v Value) {
 // The key must be the symbol itself; a property literally named
 // "[Symbol.toStringTag]" is an ordinary string key that nothing consults.
 func (r *Runtime) defToStringTag(target *Object, name string) {
-	target.setOwnRaw(r.atoms.internSymbol(r.wellKnown.toStringTag),
+	defBuiltin(target, r.atoms.internSymbol(r.wellKnown.toStringTag),
 		Str(NewString(name)), propConfigurable)
 }
 
@@ -214,7 +226,7 @@ func (r *Runtime) defGetter(target *Object, name string, fn NativeFunc) {
 // newCtor creates a constructor function with its prototype link established
 // in both directions.
 func (r *Runtime) newCtor(name string, length int, proto *Object, fn NativeFunc) *Object {
-	c, fd := newFuncObject(r.proto.function, ClassFunction)
+	c, fd := r.newSlabFuncObject(r.proto.function, ClassFunction)
 	*fd = funcData{native: fn, name: name, length: length, ctorKind: ctorBase}
 	c.setOwnRaw(atomPrototype, Obj(proto), 0)
 	proto.setOwnRaw(atomConstructor, Obj(c), propWritable|propConfigurable)

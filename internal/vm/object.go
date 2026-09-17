@@ -251,6 +251,27 @@ func newFuncObject(proto *Object, class Class) (*Object, *funcData) {
 	return &fo.Object, &fo.fn
 }
 
+// funcSlabSize is how many function objects are allocated at a time for the
+// built-ins.
+//
+// A realm has hundreds of them and they all live as long as it does, so they
+// are cut from a slab rather than allocated one by one. Nothing else may be
+// allocated this way: an object that outlives its neighbours would keep the
+// whole slab alive.
+const funcSlabSize = 64
+
+// newSlabFuncObject creates a callable object from the runtime's slab.
+func (r *Runtime) newSlabFuncObject(proto *Object, class Class) (*Object, *funcData) {
+	if len(r.funcSlab) == 0 {
+		r.funcSlab = make([]funcObject, funcSlabSize)
+	}
+	fo := &r.funcSlab[0]
+	r.funcSlab = r.funcSlab[1:]
+	fo.Object = Object{proto: proto, class: class, flags: objExtensible}
+	fo.Object.data = &fo.fn
+	return &fo.Object, &fo.fn
+}
+
 // scriptFuncObject is a function with a body of its own, which needs two things
 // a built-in does not: the closure that says what it captured, and somewhere to
 // put those captures. They are allocated with it rather than beside it, for the

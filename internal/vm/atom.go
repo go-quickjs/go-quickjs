@@ -129,14 +129,24 @@ func (t *atomTable) intern(name string) Atom {
 	if a, ok := t.byName[name]; ok {
 		return a
 	}
-	// The table holds a name for as long as the runtime lives, so a name that
-	// came in as a slice of something larger -- a key cut out of a JSON
-	// document, say -- is copied rather than pinning what it was cut from.
-	name = strings.Clone(name)
 	t.entries = append(t.entries, atomEntry{name: name})
 	a := Atom(len(t.entries) - 1)
 	t.byName[name] = a
 	return a
+}
+
+// internCopy interns a name that may be a slice of something much larger -- a
+// key cut out of a JSON document, say.
+//
+// The table holds a name for as long as the runtime lives, so one that arrives
+// this way is copied rather than left pinning what it was cut from. The copy is
+// made only when the name is new: a document's keys repeat, and the second
+// occurrence of one finds the first.
+func (t *atomTable) internCopy(name string) Atom {
+	if a, ok := t.byName[name]; ok {
+		return a
+	}
+	return t.intern(strings.Clone(name))
 }
 
 // internSymbol returns the atom for a symbol key.

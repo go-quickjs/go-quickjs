@@ -125,6 +125,11 @@ type Runtime struct {
 	helperProto  *Object
 	wrapProto    *Object
 
+	// funcSlab is what the built-in functions are cut from, so that a realm's
+	// hundreds of them are a few dozen allocations rather than one each. It is
+	// left empty once the realm is built.
+	funcSlab []funcObject
+
 	// symbolRegistry backs Symbol.for and Symbol.keyFor.
 	symbolRegistry map[string]*Symbol
 
