@@ -208,7 +208,7 @@ func (r *Runtime) bindGeneratorParams(g *generator) error {
 	if fn.ParamEnd == 0 {
 		return nil
 	}
-	if len(r.frames) >= r.maxFrames {
+	if r.frameDepth >= r.maxFrames {
 		return r.throwRangeError("maximum call stack size exceeded")
 	}
 	base := r.stackTop
@@ -235,7 +235,7 @@ func (r *Runtime) bindGeneratorParams(g *generator) error {
 	g.openUpvalues = f.openUpvalues
 	g.withScopes = f.withScopes
 
-	r.frames = r.frames[:len(r.frames)-1]
+	r.frameDepth--
 	clear(r.stack[base:r.stackTop])
 	r.stackTop = base
 	return err
@@ -331,7 +331,7 @@ func (r *Runtime) resumeFull(g *generator, sent Value, mode resumeMode) (resumeR
 		}
 	}
 
-	if len(r.frames) >= r.maxFrames {
+	if r.frameDepth >= r.maxFrames {
 		return resumeResult{value: Undefined, done: true}, r.throwRangeError("maximum call stack size exceeded")
 	}
 
@@ -449,15 +449,14 @@ func (r *Runtime) finishResume(g *generator, f *frame, base int,
 // releaseGeneratorFrame pops a generator's frame without closing its upvalues,
 // which must survive until the generator completes.
 func (r *Runtime) releaseGeneratorFrame(g *generator, base int) {
-	if len(r.frames) > 0 {
-		f := &r.frames[len(r.frames)-1]
+	if f := r.topFrame(); f != nil {
 		if g.state == genCompleted {
 			// Only now are the captures detached from the locals.
 			for _, u := range f.openUpvalues {
 				u.close()
 			}
 		}
-		r.frames = r.frames[:len(r.frames)-1]
+		r.frameDepth--
 	}
 	clear(r.stack[base:r.stackTop])
 	r.stackTop = base

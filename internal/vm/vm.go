@@ -30,6 +30,13 @@ const defaultStackSize = 256 * 1024
 // function with very few locals still cannot recurse without bound.
 const defaultCallDepthLimit = 8192
 
+// frameBlockSize is how many frames are allocated at a time. A frame is a
+// couple of hundred bytes and the depth limit is thousands, so allocating the
+// limit up front would cost every runtime megabytes it will almost certainly
+// never use; a block is small enough to be cheap and large enough that the
+// allocation is rare.
+const frameBlockSize = 64
+
 // call invokes a callable value.
 func (r *Runtime) call(fn Value, this Value, args []Value) (Value, error) {
 	if !fn.IsObject() {
@@ -69,7 +76,7 @@ func (r *Runtime) callObject(o *Object, this Value, args []Value, newTarget Valu
 	}
 
 	if fd.native != nil {
-		if len(r.frames) >= r.maxFrames {
+		if r.frameDepth >= r.maxFrames {
 			return Undefined, r.throwRangeError("maximum call stack size exceeded")
 		}
 		// A native frame is pushed so that stack traces include it.
@@ -83,7 +90,7 @@ func (r *Runtime) callObject(o *Object, this Value, args []Value, newTarget Valu
 		f.handlers = f.handlers[:0]
 		f.openUpvalues = f.openUpvalues[:0]
 		v, err := fd.native(r, this, args)
-		r.frames = r.frames[:len(r.frames)-1]
+		r.frameDepth--
 		return v, err
 	}
 
@@ -201,7 +208,7 @@ func (r *Runtime) run(cl *closure, this Value, args []Value, newTarget Value, ca
 		}
 	}
 
-	if len(r.frames) >= r.maxFrames {
+	if r.frameDepth >= r.maxFrames {
 		return Undefined, r.throwRangeError("maximum call stack size exceeded")
 	}
 
@@ -317,8 +324,42 @@ func (r *Runtime) run(cl *closure, this Value, args []Value, newTarget Value, ca
 // Reslicing also means the frame left behind at this depth keeps its handler
 // and upvalue slices, whose backing arrays the next call reuses.
 func (r *Runtime) pushFrame() *frame {
-	r.frames = r.frames[:len(r.frames)+1]
-	return &r.frames[len(r.frames)-1]
+	// The block the next frame goes in is kept to hand, so an ordinary push is
+	// a subtraction and an index. The unsigned comparison covers both ways the
+	// block can be the wrong one: the depth has grown past its end, or it has
+	// fallen below its start since the block was chosen.
+	off := r.frameDepth - r.frameBase
+	if uint(off) >= uint(len(r.cur)) {
+		r.seekFrameBlock()
+		off = r.frameDepth - r.frameBase
+	}
+	r.frameDepth++
+	return &r.cur[off]
+}
+
+// seekFrameBlock picks the block the current depth falls in, allocating it if
+// the call stack has never been this deep.
+func (r *Runtime) seekFrameBlock() {
+	b := uint(r.frameDepth) / frameBlockSize
+	if b == uint(len(r.frames)) {
+		r.frames = append(r.frames, make([]frame, frameBlockSize))
+	}
+	r.cur = r.frames[b]
+	r.frameBase = int(b) * frameBlockSize
+}
+
+// frameAt is the frame at a depth, counting from the bottom.
+func (r *Runtime) frameAt(i int) *frame {
+	u := uint(i)
+	return &r.frames[u/frameBlockSize][u%frameBlockSize]
+}
+
+// topFrame is the frame being executed, or nil when nothing is.
+func (r *Runtime) topFrame() *frame {
+	if r.frameDepth == 0 {
+		return nil
+	}
+	return r.frameAt(r.frameDepth - 1)
 }
 
 // popFrame releases a frame's stack window, closing any upvalues that pointed
@@ -335,12 +376,12 @@ func (r *Runtime) pushFrame() *frame {
 // cleared once per turn instead -- see endTurn, which is where a program could
 // next observe the difference.
 func (r *Runtime) popFrame(base int) {
-	f := &r.frames[len(r.frames)-1]
+	f := r.frameAt(r.frameDepth - 1)
 	for _, u := range f.openUpvalues {
 		u.close()
 	}
 	r.stackTop = base
-	r.frames = r.frames[:len(r.frames)-1]
+	r.frameDepth--
 }
 
 // bindParameters copies arguments into the parameter slots.

@@ -200,19 +200,21 @@ func (r *Runtime) LooseEquals(a, b Value) (Value, error) {
 // new Boolean(x) produces an object, and nothing else distinguishes the two
 // calls from inside the implementation.
 func (r *Runtime) Constructing() bool {
-	if len(r.frames) == 0 {
+	f := r.topFrame()
+	if f == nil {
 		return false
 	}
-	return !r.frames[len(r.frames)-1].newTarget.IsUndefined()
+	return !f.newTarget.IsUndefined()
 }
 
 // newTarget returns the new.target of the running native call, which a
 // constructor needs when its behaviour depends on whether it was subclassed.
 func (r *Runtime) newTarget() Value {
-	if len(r.frames) == 0 {
+	f := r.topFrame()
+	if f == nil {
 		return Undefined
 	}
-	return r.frames[len(r.frames)-1].newTarget
+	return f.newTarget
 }
 
 // SetEvaluator installs eval and the Function constructor.

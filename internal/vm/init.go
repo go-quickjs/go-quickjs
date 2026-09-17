@@ -33,11 +33,11 @@ func New(cfg Config) *Runtime {
 	r := &Runtime{
 		atoms: newAtomTable(),
 		stack: make([]Value, stackSize),
-		// The frame stack is allocated at its full size and never grown, for
-		// the same reason the value stack is: the interpreter holds a *frame
-		// across nested calls, and a reallocation would leave those pointers
-		// aimed at the old array. Exhausting it is the call depth limit.
-		frames:           make([]frame, 0, maxFrames),
+		// The frames are allocated in blocks as the depth grows. None of the
+		// blocks ever moves, which is what lets the interpreter hold a *frame
+		// across nested calls; what bounds recursion is the depth limit
+		// rather than the size of an array.
+		frames:           make([][]frame, 0, 8),
 		maxFrames:        maxFrames,
 		memoryLimit:      cfg.MemoryLimit,
 		interruptCounter: interruptCheckInterval,

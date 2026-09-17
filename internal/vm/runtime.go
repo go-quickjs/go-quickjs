@@ -48,9 +48,21 @@ type Runtime struct {
 	// stackHigh is the deepest the stack has been used since the last turn
 	// ended, which is how much of it endTurn has to clear.
 	stackHigh int
-	// frames is the call stack. Like the operand stack it is reused across
-	// calls, and its length bounds recursion depth.
-	frames []frame
+	// frames is the call stack, held in blocks rather than in one array: a
+	// frame is large, the depth limit is high, and a runtime that never
+	// recurses should not pay for the whole limit up front. The blocks are
+	// allocated as the depth grows and kept for later calls, and none of them
+	// ever moves -- which is what lets the interpreter hold a *frame across
+	// nested calls.
+	frames [][]frame
+	// frameDepth is how many frames are live, which is also where the next one
+	// goes: the block is the depth divided by the block size and the frame is
+	// the remainder.
+	frameDepth int
+	// cur is the block the next frame goes in and frameBase is the depth its
+	// first frame sits at, so that a push needs no division.
+	cur       []frame
+	frameBase int
 
 	// limits and their accounting.
 	maxFrames   int
@@ -466,12 +478,12 @@ func (r *Runtime) newError(kind errorKind, msg string) *Object {
 
 // captureStack snapshots the current call stack.
 func (r *Runtime) captureStack() []StackEntry {
-	if len(r.frames) == 0 {
+	if r.frameDepth == 0 {
 		return nil
 	}
-	out := make([]StackEntry, 0, len(r.frames))
-	for i := len(r.frames) - 1; i >= 0; i-- {
-		f := &r.frames[i]
+	out := make([]StackEntry, 0, r.frameDepth)
+	for i := r.frameDepth - 1; i >= 0; i-- {
+		f := r.frameAt(i)
 		if f.native != "" {
 			out = append(out, StackEntry{Function: f.native, Source: "native"})
 			continue
