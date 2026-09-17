@@ -82,6 +82,13 @@ type EvalScope struct {
 	// PrivateNames are the private names of the enclosing classes, which
 	// evaluated code may refer to.
 	PrivateNames []EvalPrivateName
+	// ArgumentNames is set when the call site is a parameter default, and
+	// holds what the parameter scope binds: the parameter names, and the
+	// arguments object. A var the evaluated code declares may not collide with
+	// one of them -- the parameter scope lies between the evaluated code and
+	// the function's variable scope, and a var cannot be created in a scope it
+	// would be shadowed by.
+	ArgumentNames []string
 }
 
 // EvalPrivateName is one private name a direct eval's code can refer to,

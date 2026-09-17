@@ -70,7 +70,9 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 	// has to exist before the body is compiled, because an arrow can only
 	// capture a binding that is already there.
 	wantArguments := c.fn.Kind != bytecode.KindArrow &&
-		(referencesArguments(fn.Body) || referencesArgumentsInParams(fn.Params))
+		(referencesArguments(fn.Body) || referencesArgumentsInParams(fn.Params)) &&
+		!bindsArguments(fn.Params) &&
+		!(simpleParams(fn.Params) && declaresArguments(fn.Body))
 	c.bindParameters(fn, func() {
 		if !wantArguments {
 			return
@@ -81,9 +83,14 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 		// than plain parameters, or strict mode, gets the snapshot instead.
 		c.fn.MappedArguments = !c.fn.Strict && c.fn.HasSimpleParams
 		slot := c.declare("arguments", bindVar, fn.Start)
+		if !c.fn.HasSimpleParams {
+			// With parameter expressions the arguments object belongs to the
+			// parameter scope, which the body may shadow.
+			c.locals[len(c.locals)-1].paramScoped = true
+		}
 		c.emit(bytecode.OpGetArguments, 0, 0)
 		c.emit(bytecode.OpSetLocal, slot, 0)
-	})
+	}, wantArguments)
 	if fn.Generator || fn.Async {
 		// A generator's parameters are bound when it is called, so the
 		// prologue has to be separable from the body.
@@ -128,7 +135,7 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 
 // bindParameters declares the parameter slots and emits the prologue for
 // defaults, destructuring and the rest parameter.
-func (c *compiler) bindParameters(fn *ast.FuncLit, materialize func()) {
+func (c *compiler) bindParameters(fn *ast.FuncLit, materialize func(), wantArgs bool) {
 	simple := true
 	for _, p := range fn.Params {
 		if _, ok := p.(*ast.Ident); !ok {
@@ -204,6 +211,17 @@ func (c *compiler) bindParameters(fn *ast.FuncLit, materialize func()) {
 	// The arguments object is created before the parameters are initialized,
 	// so a default may refer to it.
 	materialize()
+
+	// A direct eval in one of the defaults below runs in the parameter scope,
+	// which binds these names.
+	if !c.fn.Strict {
+		saved := c.paramScopeNames
+		c.paramScopeNames = append([]string(nil), names...)
+		if wantArgs {
+			c.paramScopeNames = append(c.paramScopeNames, "arguments")
+		}
+		defer func() { c.paramScopeNames = saved }()
+	}
 
 	for i, p := range fn.Params {
 		slot := slots[i]
@@ -893,3 +911,45 @@ func (c *compiler) compileMethodValue(fn *ast.FuncLit, name string) {
 // formatKeyNumber renders a numeric property key the way ToString would, so
 // that {1: x} and {"1": x} name the same property.
 func formatKeyNumber(v float64) string { return jsnum.FormatFloat(v) }
+
+// simpleParams reports whether every parameter is a plain identifier, which is
+// what decides whether the parameter list is a scope of its own.
+func simpleParams(params []ast.Expr) bool {
+	for _, p := range params {
+		if _, ok := p.(*ast.Ident); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// bindsArguments reports whether a parameter is named `arguments`, which leaves
+// no arguments object: the parameter is what the name means.
+func bindsArguments(params []ast.Expr) bool {
+	var names []string
+	for _, p := range params {
+		collectPatternNames(p, &names)
+	}
+	for _, n := range names {
+		if n == "arguments" {
+			return true
+		}
+	}
+	return false
+}
+
+// declaresArguments reports whether a function body declares `arguments` at its
+// top level. With a plain parameter list the body and the parameters share a
+// scope, so such a declaration is what the name means and no object is made.
+func declaresArguments(body []ast.Stmt) bool {
+	var lex []lexName
+	for _, st := range body {
+		lex = lexicalNamesOf(st, lex, true)
+	}
+	for _, n := range lex {
+		if n.name == "arguments" {
+			return true
+		}
+	}
+	return false
+}

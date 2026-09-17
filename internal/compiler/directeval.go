@@ -48,6 +48,7 @@ func (c *compiler) evalScopeIdx() uint32 {
 		AllowSuperCall: c.allowSuperCall(),
 		AllowNewTarget: c.fn.Kind != bytecode.KindNormal || c.parent != nil,
 		PrivateNames:   c.visiblePrivateNames(),
+		ArgumentNames:  c.paramScopeNames,
 	}
 	c.fn.EvalScopes = append(c.fn.EvalScopes, scope)
 	return uint32(len(c.fn.EvalScopes) - 1)

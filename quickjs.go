@@ -456,6 +456,7 @@ func (r *Runtime) installCodeGeneration() {
 			popts.AllowNewTarget = req.Scope.AllowNewTarget
 			copts.EvalScope = req.Scope.Bindings
 			copts.PrivateNames = req.Scope.PrivateNames
+			copts.ArgumentNames = req.Scope.ArgumentNames
 		}
 		prog, err := parser.Parse(source, popts)
 		if err != nil {

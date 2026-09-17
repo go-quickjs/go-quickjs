@@ -171,3 +171,56 @@ func TestDirectEvalInheritsTheCallSiteContext(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// A direct eval in a parameter default runs in the parameter scope, which sits
+// between it and the function's variable scope. A var it declares belongs to
+// the variable scope, so a name the parameter scope already binds would be
+// shadowed by that binding and never reachable -- which the specification makes
+// an error rather than a surprise.
+func TestEvalInAParameterDefault(t *testing.T) {
+	bad := []string{
+		`function f(p = eval("var arguments")) {} f()`,
+		`function f(p = eval("var arguments")) { let arguments; } f()`,
+		`function f(arguments, p = eval("var arguments")) {} f()`,
+		`function f(a, p = eval("var a")) {} f()`,
+		`function f(p = eval("function arguments() {}")) {} f()`,
+	}
+	for _, src := range bad {
+		rt := quickjs.New()
+		_, err := rt.Eval(src)
+		if err == nil {
+			t.Errorf("%s: accepted, want SyntaxError", src)
+		} else if !strings.Contains(err.Error(), "SyntaxError") {
+			t.Errorf("%s: got %v, want SyntaxError", src, err)
+		}
+		rt.Close()
+	}
+
+	cases := []struct{ src, want string }{
+		// A name the parameter scope does not bind is fine.
+		{`function f(p = eval("var q = 1")) { return p } String(f())`, "undefined"},
+		{`function f(p = eval("1 + 1")) { return p } String(f())`, "2"},
+
+		// The arguments object exists in the parameter scope, so a default may
+		// read it -- and the body may still bind the name for itself.
+		{`function f(p = arguments[0]) { return p } String(f(7))`, "7"},
+		{`function f(p = 1) { let arguments = 5; return arguments } String(f())`, "5"},
+
+		// With a plain parameter list there is no separate scope, so a body
+		// that binds the name is what the name means and no object is made.
+		{`function f() { let arguments = 1; return arguments } String(f())`, "1"},
+		{`function f() { function arguments() { return 2 } return arguments() } String(f())`,
+			"2"},
+		{`function f(arguments) { return arguments } String(f(3))`, "3"},
+	}
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

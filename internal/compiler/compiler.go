@@ -48,6 +48,10 @@ type Options struct {
 	// eval's call site, which its code may refer to as the surrounding code
 	// may, each with the hidden binding that holds its key.
 	PrivateNames []bytecode.EvalPrivateName
+	// ArgumentNames is what the parameter scope binds, when the eval's call
+	// site is a parameter default. A var the evaluated code declares may not
+	// collide with one of them.
+	ArgumentNames []string
 	// EvalOwnVarScope marks eval code, whose top-level vars belong to the
 	// evaluated code rather than to the global object when it is strict.
 	EvalOwnVarScope bool
@@ -88,6 +92,12 @@ type localVar struct {
 	withDepth int
 	// captured marks a local that an inner function closes over.
 	captured bool
+	// paramScoped marks a binding that belongs to the parameter scope rather
+	// than to the body. A function with parameter expressions has two, and its
+	// body may declare a name the parameter scope already binds: the arguments
+	// object is in the parameter scope, so `function f(p = 0) { let arguments }`
+	// shadows it rather than colliding with it.
+	paramScoped bool
 	// initialized is false while a let or const binding is in its temporal
 	// dead zone, which lets the compiler emit the checked accessors only where
 	// they are actually needed.
@@ -145,6 +155,11 @@ type compiler struct {
 	// one would shadow the outer one it was meant to reach.
 	hiddenCount *int
 	depth       int
+
+	// paramScopeNames is what the parameter scope binds while a parameter
+	// default is being compiled, and nil elsewhere. A direct eval there cannot
+	// declare a var named by one of them.
+	paramScopeNames []string
 
 	// inFieldInit marks the initializer of a class field, which is a function
 	// of its own even though it is compiled into the constructor.
@@ -241,6 +256,8 @@ func Compile(prog *ast.Program, opts Options) (fn *bytecode.Function, err error)
 	c.nextSlot++
 	c.emit(bytecode.OpPushUndef, 0, 0)
 	c.emit(bytecode.OpSetLocal, uint32(c.completionSlot), 0)
+
+	c.checkEvalVarNames(prog.Body)
 
 	// Top-level var and function declarations become properties of the global
 	// object rather than locals, which is what makes them visible to other
@@ -487,7 +504,7 @@ func (c *compiler) declare(name string, kind bindKind, pos int) uint32 {
 	if kind != bindParam &&
 		((kind != bindVar && kind != bindFunction && kind != bindFunctionLexical) || lexicalFn) {
 		for i := len(c.locals) - 1; i >= 0 && c.locals[i].depth == c.depth; i-- {
-			if c.locals[i].name != name {
+			if c.locals[i].name != name || c.locals[i].paramScoped {
 				continue
 			}
 			// Two plain function declarations in one sloppy-mode block name the
@@ -958,4 +975,29 @@ func stackEffect(op bytecode.Op, a, b uint32) int {
 	}
 	// Everything else leaves the depth unchanged.
 	return 0
+}
+
+// checkEvalVarNames rejects a var the evaluated code cannot create.
+//
+// A direct eval in a parameter default runs in the parameter scope, which sits
+// between it and the function's variable scope. A var it declares belongs to
+// the variable scope, so a name the parameter scope already binds would be
+// shadowed by that binding and never reachable -- which the specification makes
+// an error rather than a surprise.
+func (c *compiler) checkEvalVarNames(body []ast.Stmt) {
+	if len(c.opts.ArgumentNames) == 0 {
+		return
+	}
+	var names []string
+	collectVarNamesIn(body, &names, c.fn.Strict)
+	for _, s := range body {
+		collectLexicalNames(s, &names)
+	}
+	for _, n := range names {
+		for _, arg := range c.opts.ArgumentNames {
+			if n == arg {
+				c.errorf(0, "%q is already bound by the parameter list", n)
+			}
+		}
+	}
 }
