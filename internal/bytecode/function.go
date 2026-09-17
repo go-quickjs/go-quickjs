@@ -122,10 +122,15 @@ type Function struct {
 	ParamEnd uint32
 
 	Name string
-	// ParamCount is the number of declared parameters, which is what
-	// Function.prototype.length reports. It excludes the rest parameter and
-	// stops at the first one with a default.
+	// ParamCount is how many arguments the interpreter copies positionally into
+	// the frame's slots. It excludes a rest parameter, which is filled from the
+	// argument list instead.
 	ParamCount int
+	// Length is what Function.prototype.length reports: the number of
+	// parameters before the first one with a default or a rest element. It says
+	// how many arguments the function expects rather than how many it has room
+	// for, which is why it is not ParamCount.
+	Length int
 	// LocalCount is the size of the frame's local slice, covering parameters,
 	// declared variables and compiler temporaries.
 	LocalCount int

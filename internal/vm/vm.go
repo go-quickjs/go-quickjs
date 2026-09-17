@@ -1714,7 +1714,7 @@ func (r *Runtime) makeClosure(f *frame, c Value) *Object {
 	fd := &funcData{
 		closure:  child,
 		name:     tmpl.fn.Name,
-		length:   tmpl.fn.ParamCount,
+		length:   tmpl.fn.Length,
 		ctorKind: kind,
 		// A function created inside a `with` body keeps the objects: the names
 		// in its own body resolve against them too, and the frame that pushed

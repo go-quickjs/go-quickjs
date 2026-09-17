@@ -207,7 +207,7 @@ func (c *compiler) bindParameters(fn *ast.FuncLit) {
 	if c.fn.HasRest {
 		c.fn.ParamCount--
 	}
-	_ = length
+	c.fn.Length = length
 }
 
 // declareParamTarget declares the binding a parameter introduces and returns

@@ -437,3 +437,42 @@ func TestStringObjectIndices(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// Function.prototype.length is how many arguments a function expects, not how
+// many it has room for: it counts the parameters before the first one with a
+// default or a rest element.
+func TestFunctionLength(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`function f() {} String(f.length)`, "0"},
+		{`function f(a, b) {} String(f.length)`, "2"},
+		{`function f(a, b,) {} String(f.length)`, "2"},
+		{`function f(a, b = 1) {} String(f.length)`, "1"},
+		{`function f(a, b = 1,) {} String(f.length)`, "1"},
+		{`function f(a = 1, b) {} String(f.length)`, "0"},
+		{`function f(a, ...r) {} String(f.length)`, "1"},
+		{`function f(...r) {} String(f.length)`, "0"},
+		{`function f([a], {b}) {} String(f.length)`, "2"},
+
+		{`({m(a, b = 1) {}}).m.length + ""`, "1"},
+		{`class C { m(a, b = 1) {} } String(C.prototype.m.length)`, "1"},
+		{`((a, b = 1) => {}).length + ""`, "1"},
+		{`(function* (a, b = 1) {}).length + ""`, "1"},
+		{`(async function (a, b = 1) {}).length + ""`, "1"},
+		{`class C { constructor(a, b = 1) {} } String(C.length)`, "1"},
+
+		// length is configurable and not writable, like every built-in's.
+		{`function f(a) {} var d = Object.getOwnPropertyDescriptor(f, "length");
+		  [d.writable, d.enumerable, d.configurable].join(",")`, "false,false,true"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}
