@@ -1781,12 +1781,6 @@ func (r *Runtime) initNumberBuiltins() {
 		v := arg(args, 0)
 		return Bool(v.IsNumber() && math.IsNaN(v.Number())), nil
 	})
-	r.defMethod(ctor, "parseFloat", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		return rt.globalParseFloat(args)
-	})
-	r.defMethod(ctor, "parseInt", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		return rt.globalParseInt(args)
-	})
 
 	r.defMethod(p, "toString", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		n, err := rt.thisNumber(this)
@@ -2251,6 +2245,22 @@ func jsSign(f float64) float64 {
 // ---------------------------------------------------------------------------
 
 func (r *Runtime) initGlobalFunctions() {
+	// Number.parseInt and Number.parseFloat are the global functions
+	// themselves rather than copies, which is what makes Number.parseInt ===
+	// parseInt. They are installed once the globals exist.
+	defer func() {
+		ctor, ok := r.globalObj("Number")
+		if !ok {
+			return
+		}
+		for _, name := range []string{"parseInt", "parseFloat"} {
+			key := r.atoms.intern(name)
+			if p := r.global.getOwn(key); p != nil {
+				ctor.setOwnRaw(key, p.value, propWritable|propConfigurable)
+			}
+		}
+	}()
+
 	r.defMethod(r.global, "parseInt", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		return rt.globalParseInt(args)
 	})

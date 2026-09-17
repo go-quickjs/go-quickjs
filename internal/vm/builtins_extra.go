@@ -788,22 +788,28 @@ func (r *Runtime) initNumberExtras() {
 		if err != nil {
 			return Undefined, err
 		}
-		if math.IsNaN(n) || math.IsInf(n, 0) {
-			return Str(NewString(jsnum.FormatFloat(n))), nil
-		}
-		digits := -1
+		// The digit count is coerced before the value is looked at, so a
+		// valueOf that throws is seen even for a NaN.
+		digits, hasDigits := -1, false
 		if d := arg(args, 0); !d.IsUndefined() {
 			v, err := rt.toInteger(d)
 			if err != nil {
 				return Undefined, err
 			}
-			if v < 0 || v > 100 {
-				return Undefined, rt.throwRangeError("toExponential() argument must be between 0 and 100")
-			}
-			digits = int(v)
+			digits, hasDigits = int(v), true
 		}
-		s := strconv.FormatFloat(n, 'e', digits, 64)
-		return Str(NewString(fixExponent(s))), nil
+		if math.IsNaN(n) || math.IsInf(n, 0) {
+			return Str(NewString(jsnum.FormatFloat(n))), nil
+		}
+		if hasDigits && (digits < 0 || digits > 100) {
+			return Undefined, rt.throwRangeError("toExponential() argument must be between 0 and 100")
+		}
+		if !hasDigits {
+			// No count given: as few digits as round-trip, which is what the
+			// shortest representation is.
+			return Str(NewString(fixExponent(strconv.FormatFloat(n, 'e', -1, 64)))), nil
+		}
+		return Str(NewString(formatExponential(n, digits))), nil
 	})
 
 	r.defMethod(p, "toPrecision", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -815,18 +821,19 @@ func (r *Runtime) initNumberExtras() {
 		if d.IsUndefined() {
 			return Str(NewString(jsnum.FormatFloat(n))), nil
 		}
-		if math.IsNaN(n) || math.IsInf(n, 0) {
-			return Str(NewString(jsnum.FormatFloat(n))), nil
-		}
+		// The precision is coerced before the value is looked at, so a valueOf
+		// that throws is seen even for a NaN.
 		v, err := rt.toInteger(d)
 		if err != nil {
 			return Undefined, err
 		}
+		if math.IsNaN(n) || math.IsInf(n, 0) {
+			return Str(NewString(jsnum.FormatFloat(n))), nil
+		}
 		if v < 1 || v > 100 {
 			return Undefined, rt.throwRangeError("toPrecision() argument must be between 1 and 100")
 		}
-		s := strconv.FormatFloat(n, 'g', int(v), 64)
-		return Str(NewString(fixExponent(s))), nil
+		return Str(NewString(formatPrecision(n, int(v)))), nil
 	})
 
 	r.defMethod(p, "toLocaleString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -836,6 +843,129 @@ func (r *Runtime) initNumberExtras() {
 		}
 		return Str(NewString(jsnum.FormatFloat(n))), nil
 	})
+}
+
+// exactDecimal returns the exact decimal digits of a finite number and the
+// exponent of the first of them: x is 0.d1d2... shifted so that x = d1.d2... ×
+// 10**exp.
+//
+// It is exact because a double's decimal expansion is finite -- around 750
+// digits at worst -- and asking for more than that many leaves only zeros to
+// trim. The exact digits are what the rounding rules are written against: a
+// value a hair under a half must round down even though the shortest
+// representation of it reads as a half.
+func exactDecimal(x float64) (digits string, exp int) {
+	s := strconv.FormatFloat(x, 'e', 1100, 64)
+	i := strings.IndexByte(s, 'e')
+	mant := strings.Replace(s[:i], ".", "", 1)
+	e, err := strconv.Atoi(s[i+1:])
+	if err != nil {
+		return "0", 0
+	}
+	mant = strings.TrimRight(mant, "0")
+	if mant == "" {
+		return "0", 0
+	}
+	return mant, e
+}
+
+// roundSignificant rounds a digit string to n significant digits, taking the
+// larger value on a tie -- which is what the specification asks for, and not
+// what the round-to-even that formats a float would do.
+//
+// It reports whether the rounding carried past the leading digit, which moves
+// the exponent: 999 to three digits is 100 one decade up.
+func roundSignificant(digits string, n int) (string, bool) {
+	if len(digits) <= n {
+		return digits + strings.Repeat("0", n-len(digits)), false
+	}
+	keep := []byte(digits[:n])
+	if digits[n] < '5' {
+		return string(keep), false
+	}
+	for i := n - 1; i >= 0; i-- {
+		if keep[i] != '9' {
+			keep[i]++
+			return string(keep), false
+		}
+		keep[i] = '0'
+	}
+	return "1" + string(keep[:n-1]), true
+}
+
+// significantDigits renders a number as n significant digits and the exponent
+// of the first of them.
+func significantDigits(x float64, n int) (digits string, exp int) {
+	if x == 0 {
+		return strings.Repeat("0", n), 0
+	}
+	d, e := exactDecimal(x)
+	rounded, carried := roundSignificant(d, n)
+	if carried {
+		e++
+	}
+	return rounded, e
+}
+
+// formatExponential renders a number as one digit, f fractional digits and an
+// exponent.
+func formatExponential(n float64, f int) string {
+	sign := ""
+	if n < 0 {
+		// Negative zero has no sign here: the test is on the value, not on the
+		// bit, so (-0).toExponential(0) is "0e+0".
+		sign, n = "-", -n
+	}
+	digits, e := significantDigits(n, f+1)
+	mant := digits[:1]
+	if f > 0 {
+		mant += "." + digits[1:]
+	}
+	return sign + mant + "e" + exponentSign(e) + strconv.Itoa(abs(e))
+}
+
+// formatPrecision renders a number with exactly p significant digits.
+//
+// Go's %g drops the trailing zeros of the mantissa, where JavaScript keeps
+// them: (100).toPrecision(2) is "1.0e+2", not "1e+2". So the digits are taken
+// from the exponential form and the decimal point is placed by hand.
+func formatPrecision(n float64, p int) string {
+	sign := ""
+	if n < 0 {
+		sign, n = "-", -n
+	}
+	digits, e := significantDigits(n, p)
+
+	switch {
+	case e < -6 || e >= p:
+		// Too far from the decimal point to write out, so the exponent says
+		// where it went.
+		mant := digits[:1]
+		if p > 1 {
+			mant += "." + digits[1:]
+		}
+		return sign + mant + "e" + exponentSign(e) + strconv.Itoa(abs(e))
+	case e == p-1:
+		return sign + digits
+	case e >= 0:
+		return sign + digits[:e+1] + "." + digits[e+1:]
+	default:
+		return sign + "0." + strings.Repeat("0", -(e+1)) + digits
+	}
+}
+
+func exponentSign(e int) string {
+	if e < 0 {
+		return "-"
+	}
+	return "+"
+}
+
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
 }
 
 // fixExponent rewrites Go's exponent form into JavaScript's, which uses no

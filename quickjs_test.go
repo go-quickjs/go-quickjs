@@ -3157,3 +3157,75 @@ func TestGlobalDeclarationConflicts(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestNumberFormatting covers the three methods that place a decimal point.
+// Each rounds to the larger value on a tie, which is what the specification
+// asks for and not what formatting a float would do.
+func TestNumberFormatting(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// toPrecision keeps the trailing zeros of the mantissa.
+		{`(100).toPrecision(2)`, "1.0e+2"},
+		{`(123).toPrecision(1)`, "1e+2"},
+		{`(123.456).toPrecision(5)`, "123.46"},
+		{`(1e21).toPrecision(2)`, "1.0e+21"},
+		{`(0).toPrecision(3)`, "0.00"},
+		{`(-1.5).toPrecision(3)`, "-1.50"},
+		{`(0.000001).toPrecision(1)`, "0.000001"},
+		{`(1e-7).toPrecision(3)`, "1.00e-7"},
+		{`(25).toPrecision(1)`, "3e+1"},
+
+		// toExponential, where a tie goes up and negative zero has no sign.
+		{`(25).toExponential(0)`, "3e+1"},
+		{`(-0).toExponential(0)`, "0e+0"},
+		{`(-0).toExponential(1)`, "0.0e+0"},
+		{`(123).toExponential(2)`, "1.23e+2"},
+		{`(123).toExponential()`, "1.23e+2"},
+		{`(1.45).toExponential(1)`, "1.4e+0"},
+
+		// toFixed, which hands a magnitude of 10**21 or more to ToString.
+		{`(1e21).toFixed()`, "1e+21"},
+		{`(0.5).toFixed(0)`, "1"},
+		{`(1.5).toFixed(0)`, "2"},
+		{`(2.5).toFixed(0)`, "3"},
+		{`(-1.5).toFixed(0)`, "-2"},
+		{`(1.45).toFixed(1)`, "1.4"},
+		{`(123.456).toFixed(2)`, "123.46"},
+		{`(0).toFixed(2)`, "0.00"},
+		{`(5e-10).toFixed(9)`, "0.000000001"},
+		{`(4e-10).toFixed(9)`, "0.000000000"},
+		{`(1000000000000000128).toFixed(0)`, "1000000000000000128"},
+
+		// The argument is coerced before the value is looked at.
+		{`try { NaN.toExponential(Symbol()) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`try { NaN.toPrecision(Symbol()) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`NaN.toPrecision(1)`, "NaN"},
+
+		// Number.parseInt is the global function, not a copy of it.
+		{`String(Number.parseInt === parseInt) + "," + String(Number.parseFloat === parseFloat)`,
+			"true,true"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// TestHashbangAndCommentTerminators covers two pieces of source that are not
+// code: the hashbang a shell reads, and a line terminator inside a comment.
+func TestHashbangAndCommentTerminators(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{"String(eval('#!/usr/bin/env node\\n1'))", "1"},
+		{"String(eval('#!only'))", "undefined"},
+		// Only at the very start: nothing may precede it, not even space.
+		{"try { eval(' #!/x\\n1') } catch (e) { e.constructor.name }", "SyntaxError"},
+		{"try { eval('1\\n#!x') } catch (e) { e.constructor.name }", "SyntaxError"},
+
+		// A line terminator inside a comment still ends a statement.
+		{"String(eval(\"''/*\\r*/''\"))", ""},
+		{"String(eval(\"''/*\\u2028*/''\"))", ""},
+		{"String(eval('1/*\\n*/2'))", "2"},
+		{"String(eval('var a = 1/*\\n*/+2; a'))", "3"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

@@ -47,7 +47,21 @@ type Lexer struct {
 func New(src string) *Lexer {
 	// Skip a UTF-8 BOM; it is whitespace per the spec but confuses the scanner.
 	src = strings.TrimPrefix(src, "\uFEFF")
-	return &Lexer{src: src, line: 1}
+	l := &Lexer{src: src, line: 1}
+	// A hashbang is a comment, and only at the very start: it is there so that
+	// a script can be run directly by a shell, which is why nothing may precede
+	// it -- not even whitespace.
+	if strings.HasPrefix(src, "#!") {
+		l.pos = 2
+		for !l.atEnd() {
+			r, size := l.peekRune()
+			if r == '\n' || r == '\r' || r == 0x2028 || r == 0x2029 {
+				break
+			}
+			l.pos += size
+		}
+	}
+	return l
 }
 
 // Pos returns the current byte offset.
@@ -167,9 +181,28 @@ func (l *Lexer) skipSpace() error {
 						l.pos += 2
 						break
 					}
+					// A line terminator inside a comment still counts as one:
+					// it is what makes `a/*
+					// */b` two statements rather than one.
 					if l.src[l.pos] == '\n' {
 						l.pos++
 						l.newline()
+						continue
+					}
+					if l.src[l.pos] == '\r' {
+						l.pos++
+						if l.peekByte(0) == '\n' {
+							l.pos++
+						}
+						l.newline()
+						continue
+					}
+					if l.src[l.pos] >= utf8.RuneSelf {
+						r, size := utf8.DecodeRuneInString(l.src[l.pos:])
+						l.pos += size
+						if r == 0x2028 || r == 0x2029 {
+							l.newline()
+						}
 						continue
 					}
 					l.pos++

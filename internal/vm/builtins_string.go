@@ -2,9 +2,9 @@ package vm
 
 import (
 	"math"
-	"strconv"
 	"strings"
 
+	"github.com/go-quickjs/go-quickjs/internal/jsnum"
 	"github.com/go-quickjs/go-quickjs/internal/wtf8"
 )
 
@@ -734,8 +734,55 @@ const jsWhitespace = " \t\n\v\f\r" +
 	"\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
 
 // formatFixed implements Number.prototype.toFixed.
+//
+// A magnitude of 10**21 or more is written the way ToString writes it, since
+// beyond that a double has no digits left to place after the point. Below it
+// the rounding takes the larger value on a tie, which is what the
+// specification asks for and not what formatting a float would do.
 func formatFixed(n float64, digits int) string {
-	return strconv.FormatFloat(n, 'f', digits, 64)
+	if math.Abs(n) >= 1e21 {
+		return jsnum.FormatFloat(n)
+	}
+	sign := ""
+	if n < 0 {
+		sign, n = "-", -n
+	}
+	d, e := exactDecimal(n)
+	if n == 0 {
+		d, e = "0", 0
+	}
+	// e is the exponent of the first digit, so e+1+digits of them are kept.
+	keep := e + 1 + digits
+	if keep <= 0 {
+		// Everything rounds away unless the first dropped digit carries, which
+		// leaves one unit in the last place.
+		if keep == 0 && d[0] >= '5' {
+			return sign + withPoint(strings.Repeat("0", digits)+"1", digits)
+		}
+		return sign + withPoint(strings.Repeat("0", digits+1), digits)
+	}
+	rounded, carried := roundSignificant(d, keep)
+	if carried {
+		e++
+	}
+	// Pad out to e+1 integer digits and then the fractional ones.
+	intDigits := e + 1
+	if intDigits < 1 {
+		rounded = strings.Repeat("0", 1-intDigits) + rounded
+		intDigits = 1
+	}
+	for len(rounded) < intDigits+digits {
+		rounded += "0"
+	}
+	return sign + withPoint(rounded[:intDigits+digits], digits)
+}
+
+// withPoint puts the decimal point digits places from the right.
+func withPoint(s string, digits int) string {
+	if digits == 0 {
+		return s
+	}
+	return s[:len(s)-digits] + "." + s[len(s)-digits:]
 }
 
 // clampedPosition narrows a position argument into a string, which is what
