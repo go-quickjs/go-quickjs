@@ -123,10 +123,12 @@ func (*returnSignal) Error() string { return "generator returned" }
 // resumeMode says how a generator is being re-entered.
 type resumeMode uint8
 
+// The values are the ones the compiler writes into a delegation's kind
+// binding, so the two have to agree.
 const (
-	resumeNext resumeMode = iota
-	resumeThrow
-	resumeReturn
+	resumeNext   resumeMode = bytecode.ResumeNext
+	resumeThrow  resumeMode = bytecode.ResumeThrow
+	resumeReturn resumeMode = bytecode.ResumeReturn
 )
 
 // newGenerator builds the generator object a call to a generator function

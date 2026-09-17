@@ -293,26 +293,16 @@ func (c *compiler) compileStatement(s ast.Stmt) {
 	case *ast.ReturnStmt:
 		if n.Arg != nil {
 			c.compileExpr(n.Arg)
+			if c.fn.Async && c.fn.Generator {
+				// An async generator awaits what it returns, which takes a
+				// turn: `return undefined` and `return` differ by exactly that
+				// turn, and a program watching the queue can tell.
+				c.emitAt(n.Start, bytecode.OpAwait, 0, 0)
+			}
 		} else {
 			c.emit(bytecode.OpPushUndef, 0, 0)
 		}
-		if len(c.finallys) > 0 {
-			// The finally clause must run before the function actually
-			// returns, so the return becomes a completion record it consumes.
-			// Every handler between here and the clause is left behind by the
-			// jump, including the clause's own: a clause that was still
-			// protected by itself would run a second time.
-			ctx := &c.finallys[len(c.finallys)-1]
-			for d := c.handlerDepth; d >= ctx.handlers; d-- {
-				c.emit(bytecode.OpPopCatch, 0, 0)
-			}
-			c.emit(bytecode.OpPushInt, uint32(completionReturn), 0)
-			c.emitAt(n.Start, bytecode.OpJump, 0, 0)
-			c.finallys[len(c.finallys)-1].returns = append(
-				c.finallys[len(c.finallys)-1].returns, c.here()-1)
-			break
-		}
-		c.emitAt(n.Start, bytecode.OpReturn, 0, 0)
+		c.emitReturnValue(n.Start)
 
 	case *ast.BreakStmt:
 		c.compileBreak(n)
@@ -418,6 +408,28 @@ func (c *compiler) initBinding(target ast.Expr, kind ast.DeclKind) {
 		return
 	}
 	c.compileDestructuring(target, kind)
+}
+
+// emitReturnValue returns the value on top of the stack from the function,
+// routing it through any finally clause that owes a run first.
+func (c *compiler) emitReturnValue(pos int) {
+	if len(c.finallys) > 0 {
+		// The finally clause must run before the function actually returns, so
+		// the return becomes a completion record it consumes. Every handler
+		// between here and the clause is left behind by the jump, including
+		// the clause's own: a clause that was still protected by itself would
+		// run a second time.
+		ctx := &c.finallys[len(c.finallys)-1]
+		for d := c.handlerDepth; d >= ctx.handlers; d-- {
+			c.emit(bytecode.OpPopCatch, 0, 0)
+		}
+		c.emit(bytecode.OpPushInt, uint32(completionReturn), 0)
+		c.emitAt(pos, bytecode.OpJump, 0, 0)
+		c.finallys[len(c.finallys)-1].returns = append(
+			c.finallys[len(c.finallys)-1].returns, c.here()-1)
+		return
+	}
+	c.emitAt(pos, bytecode.OpReturn, 0, 0)
 }
 
 // storeVar assigns to a var binding or a global.

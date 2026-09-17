@@ -4330,3 +4330,75 @@ func TestDynamicImportDoesNotPreempt(t *testing.T) {
 		t.Errorf("order = %s, want a-start,a-end,entry,b,b-imported", got)
 	}
 }
+
+// An async generator awaits what it returns, which takes a turn: `return
+// undefined` and `return` differ by exactly that turn, and a program watching
+// the queue can tell.
+func TestAsyncGeneratorReturnAwaits(t *testing.T) {
+	checkAsync(t, `
+		globalThis.order = []
+		async function* noReturn() {}
+		async function* bareReturn() { return }
+		async function* explicitReturn() { return undefined }
+		Promise.resolve(0)
+		  .then(function () { order.push("tick 1") })
+		  .then(function () { order.push("tick 2") })
+		noReturn().next().then(function () { order.push("g1") })
+		bareReturn().next().then(function () { order.push("g2") })
+		explicitReturn().next().then(function () { order.push("g3") })`,
+		`globalThis.order.join(",")`, "tick 1,g1,g2,tick 2,g3")
+	// What it returns is awaited, so a promise is unwrapped.
+	checkAsync(t, `
+		globalThis.r = ""
+		async function* g() { return Promise.resolve("value") }
+		g().next().then(function (res) { r = res.value + ":" + res.done })`,
+		`globalThis.r`, "value:true")
+	// A delegate that finishes because the outer generator was asked to return
+	// hands its value out through the same await.
+	checkAsync(t, `
+		globalThis.log = []
+		var asyncIter = {
+		  [Symbol.asyncIterator]() { return this },
+		  next() { return {done: false} },
+		  get return() { log.push("get return") }
+		}
+		async function* f() { log.push("start"); yield* asyncIter; log.push("never") }
+		Promise.resolve(0)
+		  .then(function () { log.push("tick 1") })
+		  .then(function () { log.push("tick 2") })
+		  .then(function () { log.push("tick 3") })
+		var it = f()
+		it.next()
+		it.return({get then() { log.push("get then") }})`,
+		`globalThis.log.join(",")`,
+		"start,tick 1,get then,tick 2,get return,get then,tick 3")
+}
+
+// A generator's frame is rebuilt wherever there is room for it, so a handler
+// registered in one resumption is restored in another at a base that need not
+// be the same: the depth it restores is counted from the frame rather than
+// from the bottom of the stack.
+func TestGeneratorResumesIntoItsHandlers(t *testing.T) {
+	checkAsync(t, `
+		globalThis.out = []
+		var error = new Error("boop")
+		var g = async function* () {
+		  try { yield 1; out.push("not reached") }
+		  catch (err) { out.push("caught:" + (err === error)); return "done" }
+		}
+		var it = g()
+		it.next().then(function (ret) {
+		  out.push("first:" + ret.value)
+		  it.throw(error).then(function (r2) { out.push("second:" + r2.value + ":" + r2.done) },
+		    function (e) { out.push("rejected") })
+		})`,
+		`globalThis.out.join(",")`, "first:1,caught:true,second:done:true")
+	checkEval(t, `
+		function* g() {
+		  try { yield 1; yield 2 } finally { globalThis.ran = true }
+		}
+		var it = g()
+		it.next()
+		var r = it.return("early");
+		[r.value, r.done, globalThis.ran].join(",")`, "early,true,true")
+}

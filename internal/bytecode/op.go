@@ -599,3 +599,13 @@ const (
 	WithNameMask   = 1<<WithLimitShift - 1
 	WithLimitMax   = 1<<(32-WithLimitShift) - 1
 )
+
+// The ways a suspended generator can be resumed. A delegating yield keeps the
+// kind it was resumed with in a binding of its own, so that the code after the
+// delegation can tell a return from an ordinary next -- which is the difference
+// between the outer generator returning and it carrying on.
+const (
+	ResumeNext = iota
+	ResumeThrow
+	ResumeReturn
+)

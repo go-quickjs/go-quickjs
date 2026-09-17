@@ -707,7 +707,19 @@ func (r *Runtime) awaitIterResult(st *iterState, res Value) (Value, error) {
 		rt.rejectPromise(out, arg(a, 0))
 		return Undefined, nil
 	})
-	r.promiseThen(r.toPromise(value), Obj(onFulfilled), Obj(onRejected))
+	wrapped, err := r.toPromiseErr(value)
+	if err != nil {
+		// The value could not even be wrapped -- reading its constructor
+		// threw -- so the result is rejected here rather than through a
+		// promise of its own: there is nothing left to wait for.
+		if !isDone {
+			st.done = true
+			r.closeIterator(st.iter)
+		}
+		r.rejectPromise(out, thrownValue(err))
+		return Obj(out), nil
+	}
+	r.promiseThen(wrapped, Obj(onFulfilled), Obj(onRejected))
 	return Obj(out), nil
 }
 

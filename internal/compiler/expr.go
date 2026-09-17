@@ -1708,11 +1708,14 @@ func (c *compiler) compileYield(n *ast.Yield) {
 	// a return has to be told apart from an exhausted delegate.
 	c.emit(bytecode.OpDup, 0, 0)
 	c.emit(bytecode.OpSetLocal, kindSlot, 0)
+	// The instruction jumps past the delegation when the delegate is finished
+	// with, which only the end of this knows the address of.
+	var resumeDone int
 	if async {
-		c.emit(bytecode.OpIterResume, 1, 0)
+		resumeDone = c.emit(bytecode.OpIterResume, 1, 0)
 		c.emitAwait(n.Start)
 	} else {
-		c.emit(bytecode.OpIterResume, 0, 0)
+		resumeDone = c.emit(bytecode.OpIterResume, 0, 0)
 	}
 	raw := uint32(0)
 	if !async {
@@ -1725,6 +1728,27 @@ func (c *compiler) compileYield(n *ast.Yield) {
 	c.emit(bytecode.OpJump, uint32(start), 0)
 
 	c.patchJump(exit)
+	c.fn.Code[resumeDone].B = uint32(c.here())
+	// The delegate has finished. Which is the end of the delegation and which
+	// is the end of the outer generator depends on how it was resumed: a
+	// return travels through the delegate and out of the generator that
+	// delegated to it, carrying the value the delegate finished with.
+	c.emit(bytecode.OpGetLocal, kindSlot, 0)
+	c.emit(bytecode.OpPushInt, uint32(bytecode.ResumeReturn), 0)
+	c.emit(bytecode.OpStrictEq, 0, 0)
+	notReturn := c.emitJump(bytecode.OpJumpIfFalse)
+	depth := c.stackDepth
+	// The cursor beneath the value goes; it is finished with, and closing it
+	// again is not owed.
+	c.emit(bytecode.OpNipUnder, 1, 0)
+	c.stackDepth--
+	if async {
+		// An async generator awaits what it returns, here as anywhere else.
+		c.emitAwait(n.Start)
+	}
+	c.emitReturnValue(n.Start)
+	c.stackDepth = depth
+	c.patchJump(notReturn)
 	// The delegate's return value is the value of the whole expression, so the
 	// cursor beneath it is removed rather than the value.
 	c.emit(bytecode.OpSwap, 0, 0)

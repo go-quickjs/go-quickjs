@@ -1762,9 +1762,10 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			vmErr = r.throwTypeError("%s", r.atoms.name(cl.names[in.A]))
 			goto onError
 		case bytecode.OpPushCatch:
-			f.handlers = append(f.handlers, handler{pc: in.A, stackDepth: sp})
+			f.handlers = append(f.handlers, handler{pc: in.A, stackDepth: sp - f.base})
 		case bytecode.OpPushFinally:
-			f.handlers = append(f.handlers, handler{pc: in.A, stackDepth: sp, isFinally: true})
+			f.handlers = append(f.handlers,
+				handler{pc: in.A, stackDepth: sp - f.base, isFinally: true})
 		case bytecode.OpPopCatch:
 			f.handlers = f.handlers[:len(f.handlers)-1]
 		case bytecode.OpRethrow:
@@ -1950,15 +1951,13 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 			if done {
 				// A return the delegate had no method for, or took and
-				// finished, ends the delegation: the outer generator returns
-				// the value, running whatever finally clauses it owes on the
-				// way out.
-				sp -= 1 // the cursor
-				if r.unwindToFinally(f, &sp, res) {
-					continue
-				}
-				r.closeIteratorsIn(f.base, sp)
-				return res, nil
+				// finished, ends the delegation. What that means is decided by
+				// the code after it, which the value is handed to: for a
+				// return it is what the outer generator returns, awaited first
+				// when the generator is an async one.
+				push(res)
+				f.pc = in.B
+				break
 			}
 			push(res)
 		case bytecode.OpIterUnpackDelegate:
@@ -1995,26 +1994,9 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			if st := iterStateOf(peek(0)); st != nil {
 				st.done = true
 			}
-			if resumeMode(f.locals[in.B>>1].Number()) == resumeReturn {
-				// The delegate took the return and finished, so the outer
-				// generator returns too, running whatever finally clauses it
-				// owes on the way out.
-				sp-- // the cursor
-				if r.unwindToFinally(f, &sp, val) {
-					continue
-				}
-				if err := r.closeIteratorsReturning(f.base, sp); err != nil {
-					vmErr = err
-					goto onError
-				}
-				if f.thisRef != nil {
-					val, vmErr = r.derivedResult(f, cl, val)
-					if vmErr != nil {
-						goto onError
-					}
-				}
-				return val, nil
-			}
+			// The value goes to the code after the delegation, which decides
+			// what it means: the delegate's return value, or -- when the outer
+			// generator was the one asked to return -- what it returns.
 			push(val)
 			f.pc = in.A
 		case bytecode.OpIterSend, bytecode.OpIterSendAsync:
@@ -2425,8 +2407,9 @@ func (r *Runtime) unwindToHandler(f *frame, sp *int, err error) bool {
 	// The stack may hold a partly-built expression from the point of the
 	// throw, so it is cut back to the depth the handler was registered at
 	// before the thrown value is pushed for the catch clause to bind.
-	r.closeIteratorsIn(h.stackDepth, *sp)
-	*sp = h.stackDepth
+	depth := f.base + h.stackDepth
+	r.closeIteratorsIn(depth, *sp)
+	*sp = depth
 	r.stack[*sp] = thrown.Value
 	*sp++
 	if h.isFinally {
@@ -2602,10 +2585,11 @@ func (r *Runtime) unwindToFinally(f *frame, sp *int, value Value) bool {
 		// return method replaces the return the unwind was carrying: the
 		// finally still runs, but on a throw.
 		kind := completionReturn
-		if err := r.closeIteratorsReturning(h.stackDepth, *sp); err != nil {
+		depth := f.base + h.stackDepth
+		if err := r.closeIteratorsReturning(depth, *sp); err != nil {
 			value, kind = thrownValue(err), completionThrow
 		}
-		*sp = h.stackDepth
+		*sp = depth
 		r.stack[*sp] = value
 		*sp++
 		r.stack[*sp] = Float(float64(kind))

@@ -346,6 +346,11 @@ type handler struct {
 	pc uint32
 	// stackDepth is the operand stack depth to restore before jumping, since an
 	// exception can be thrown with a partly-built expression on the stack.
+	//
+	// It is counted from the frame's base rather than from the bottom of the
+	// stack, because a generator's frame is rebuilt wherever there is room for
+	// it: a handler registered in one resumption is restored in another, at a
+	// base that need not be the same.
 	stackDepth int
 	// isFinally marks a handler that must re-throw after running.
 	isFinally bool
