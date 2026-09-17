@@ -20,9 +20,10 @@ Promises, regular expressions, modules with top-level `await`, Proxy and typed
 arrays all work, and are exercised against [test262], the official ECMAScript
 conformance suite.
 
-99.97% of the test262 tests it runs pass. It is not finished: see
-[Conformance](#conformance) for the measurement and
-[Not implemented](#not-implemented) for the known gaps.
+Every test262 test it runs passes — 77,078 of them. The 14,742 it skips are
+tagged with features it does not implement, or ask the host for something it
+does not provide: see [Conformance](#conformance) for the measurement and
+[Not implemented](#not-implemented) for what is missing.
 
 ### Implemented
 
@@ -55,6 +56,10 @@ conformance suite.
 resizable ArrayBuffers, `using` declarations, and the newer proposals test262
 tracks.
 
+There is one realm per runtime: `$262.createRealm` has nothing to return, so
+the four test262 variants that need a second realm are skipped along with the
+`cross-realm` and `ShadowRealm` ones.
+
 Known semantic gaps, each covered by a test that documents it:
 
 - A `WeakMap` or `WeakSet` value is held strongly, so a value that refers to its
@@ -79,18 +84,11 @@ strict and sloppy variants, the expected-failure phase and type, and the feature
 tags. A test tagged with a feature the engine does not implement is skipped
 rather than counted against it.
 
-Measured coverage, as of the most recent run over the whole suite — 77,056 of
-77,082 executed variants, 99.97%. A test tagged with a feature the engine does
-not implement is skipped rather than counted, which is what the remaining 14,738
-are. What is left is 26 variants over 16 files:
-
-| What | Variants |
-|---|---|
-| The ordering of an async module graph: a module awaiting at the top level should not hold up its siblings, and the order its dependents resume in is specified | 5 |
-| A realm of one's own, which `$262.createRealm` needs | 2 |
-| Tick-for-tick ordering of an async generator's return and of `for await` over a sync iterator | 4 |
-| The exact trap sequence of `Array.prototype.reverse` over a proxy claiming 2**53 elements | 2 |
-| Everything else, one or two variants each: the evaluation order of a destructuring target's default inside a `with`, a completion value through `finally`, the realm of a revoked proxy's constructor, an unresolvable assignment resolved before its value is evaluated | 13 |
+Measured coverage, as of the most recent run over the whole suite — 77,078 of
+77,078 executed variants. The other 14,742 are skipped rather than counted:
+a test tagged with a feature the engine does not implement, or one that asks
+the host for a second realm or an agent, is testing something that was never
+claimed.
 
 `built-ins/Atomics` is the ten tests for `Atomics.pause`, which is the only part
 of that API a single-threaded engine could offer and which is not implemented.

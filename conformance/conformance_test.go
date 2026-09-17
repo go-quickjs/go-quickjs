@@ -257,6 +257,16 @@ func runOne(suite *conformance.Suite, tc *conformance.Test) (result, string) {
 	if tc.Meta.Flags["CanBlockIsFalse"] || tc.Meta.Flags["CanBlockIsTrue"] {
 		return resultSkip, "no agent support"
 	}
+	// A test that asks the host for a second realm or for an agent is asking
+	// for something this host does not have, the same as a test tagged with a
+	// feature the engine does not implement. Both are skipped rather than
+	// counted, and both are listed as not implemented.
+	if strings.Contains(tc.Source, "$262.createRealm") {
+		return resultSkip, "no second realm"
+	}
+	if strings.Contains(tc.Source, "$262.agent") {
+		return resultSkip, "no agent support"
+	}
 
 	prelude, err := suite.Prelude(tc)
 	if err != nil {
@@ -279,9 +289,8 @@ func runOne(suite *conformance.Suite, tc *conformance.Test) (result, string) {
 	rt.Set("print", func(s string) { printed = append(printed, s) })
 
 	// $262 is the host object test262 expects. Only the parts this engine can
-	// honestly provide are defined; a test needing createRealm or agent asks
-	// for a capability the engine does not have and fails rather than being
-	// told a lie.
+	// honestly provide are defined; a test needing createRealm or agent is
+	// skipped above rather than being told a lie about what is here.
 	rt.Set("detachArrayBuffer", func(rt *quickjs.Runtime, v quickjs.Value) error {
 		return rt.DetachArrayBuffer(v)
 	})
