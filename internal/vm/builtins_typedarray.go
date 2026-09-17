@@ -119,15 +119,25 @@ func (r *Runtime) typedArrayDataOf(this Value, name string) (*typedArrayData, er
 
 // typedArrayOf recovers a view from a receiver.
 func (r *Runtime) typedArrayOf(this Value, name string) (*typedArrayData, error) {
+	t, err := r.typedArraySlot(this, name)
+	if err != nil {
+		return nil, err
+	}
+	if t.storage().detached {
+		return nil, r.throwTypeError("the underlying ArrayBuffer has been detached")
+	}
+	return t, nil
+}
+
+// typedArraySlot is typedArrayOf without the detachment check, for the few
+// methods that convert an argument first and only then look at the buffer.
+func (r *Runtime) typedArraySlot(this Value, name string) (*typedArrayData, error) {
 	if !this.IsObject() || this.Object().class != ClassTypedArray {
 		return nil, r.throwTypeError("%s called on an incompatible receiver", name)
 	}
 	t, ok := this.Object().data.(*typedArrayData)
 	if !ok {
 		return nil, r.throwTypeError("%s called on an uninitialized typed array", name)
-	}
-	if t.storage().detached {
-		return nil, r.throwTypeError("the underlying ArrayBuffer has been detached")
 	}
 	return t, nil
 }
@@ -668,8 +678,11 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		return Obj(t.buffer), nil
 	})
 
-	r.defMethod(p, "set", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		t, err := rt.typedArrayOf(this, "TypedArray.prototype.set")
+	r.defMethod(p, "set", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		// The receiver only has to be a typed array to begin with: converting
+		// the offset runs user code, which may detach the buffer, and that is
+		// checked afterwards rather than before.
+		t, err := rt.typedArraySlot(this, "TypedArray.prototype.set")
 		if err != nil {
 			return Undefined, err
 		}
@@ -677,15 +690,50 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		items, err := rt.arrayToSlice(arg(args, 0))
+		if t.storage().detached {
+			return Undefined, rt.throwTypeError("the underlying ArrayBuffer has been detached")
+		}
+		src := arg(args, 0)
+		if src.IsObject() && src.Object().class == ClassTypedArray {
+			// The source is looked at only now, for the same reason: coercing
+			// the offset may have detached it.
+			if _, err := rt.typedArrayOf(src, "TypedArray.prototype.set"); err != nil {
+				return Undefined, err
+			}
+			// A typed array source may share the buffer, so every element is
+			// read before any is written: interleaving would let an early
+			// write change a later read.
+			items, err := rt.arrayToSlice(src)
+			if err != nil {
+				return Undefined, err
+			}
+			if int(off)+len(items) > t.length {
+				return Undefined, rt.throwRangeError("the source is too long for this typed array")
+			}
+			for i, v := range items {
+				if err := rt.setElem(t, int(off)+i, v); err != nil {
+					return Undefined, err
+				}
+			}
+			return Undefined, nil
+		}
+
+		a, err := rt.viewArrayLike(src)
 		if err != nil {
 			return Undefined, err
 		}
-		if int(off)+len(items) > t.length {
+		if off+a.n > int64(t.length) {
 			return Undefined, rt.throwRangeError("the source is too long for this typed array")
 		}
-		for i, v := range items {
-			if err := rt.setElem(t, int(off)+i, v); err != nil {
+		// Each element is read and written before the next is read, so a getter
+		// on the source sees the writes that preceded it -- and a getter that
+		// throws leaves the earlier ones in place.
+		for i := int64(0); i < a.n; i++ {
+			v, err := a.get(rt, i)
+			if err != nil {
+				return Undefined, err
+			}
+			if err := rt.setElem(t, int(off+i), v); err != nil {
 				return Undefined, err
 			}
 		}

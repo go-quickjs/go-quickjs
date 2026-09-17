@@ -104,7 +104,13 @@ func (r *Runtime) toBigIntValue(v Value) (Value, error) {
 		big.NewFloat(n).Int(&b.V)
 		return Big(b), nil
 	case prim.IsString():
-		b, ok := ParseBigInt(strings.TrimSpace(prim.String().Go()))
+		text := strings.TrimSpace(prim.String().Go())
+		if text == "" {
+			// A string of nothing but whitespace is zero, the way it is for
+			// Number: it is an empty numeric literal, not a malformed one.
+			return Big(NewBigInt(0)), nil
+		}
+		b, ok := ParseBigInt(text)
 		if !ok {
 			return Undefined, r.throwSyntaxError("cannot convert %q to a BigInt",
 				prim.String().Go())

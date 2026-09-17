@@ -15,9 +15,10 @@ import "math"
 // is what keeps the result independent of how the value got here.
 
 const (
-	// f16Bias and f32Bias are the exponent offsets of the two formats.
+	// f16Bias, f32Bias and f64Bias are the exponent offsets of the formats.
 	f16Bias = 15
 	f32Bias = 127
+	f64Bias = 1023
 )
 
 // float16frombits widens a half to a float64.
@@ -51,17 +52,19 @@ func float16frombits(h uint16) float64 {
 }
 
 // float16bits narrows a number to a half, rounding to nearest even.
+//
+// It reads the double's bits directly rather than narrowing through a float32
+// first. A float32 is exact enough for every normal half, but not for the
+// subnormal ones: a double a hair above 2**-25 becomes exactly 2**-25 as a
+// float32, and that then rounds to zero where it should round up.
 func float16bits(f float64) uint16 {
-	// Narrowing through float32 first is exact: every half is a float32, and
-	// double rounding cannot occur because a float32 has more than twice the
-	// mantissa bits of a half plus the guard bits the second rounding needs.
-	b := math.Float32bits(float32(f))
-	sign := uint16(b>>31) << 15
-	exp := int32(b>>23&0xFF) - f32Bias
-	frac := b & 0x7FFFFF
+	b := math.Float64bits(f)
+	sign := uint16(b>>63) << 15
+	exp := int32(b>>52&0x7FF) - f64Bias
+	frac := b & (1<<52 - 1)
 
 	switch {
-	case exp == 0x80:
+	case exp == f64Bias+1:
 		// Infinity keeps its sign; NaN keeps a payload bit so that it stays a
 		// NaN rather than becoming an infinity.
 		if frac != 0 {
@@ -73,35 +76,35 @@ func float16bits(f float64) uint16 {
 		// wrapping.
 		return sign | 0x7C00
 	case exp >= -14:
-		// Normal: ten mantissa bits, with the thirteen dropped ones deciding
+		// Normal: ten mantissa bits, with the forty-two dropped ones deciding
 		// whether to round up.
-		half := uint16(uint32(exp+f16Bias)<<10 | frac>>13)
-		if roundsUp(frac, 13, uint32(half)) {
+		half := uint16(uint32(exp+f16Bias)<<10 | uint32(frac>>42))
+		if roundsUp(frac, 42, uint64(half)) {
 			half++
 		}
 		return sign | half
 	case exp >= -25:
 		// Subnormal: the implicit leading one becomes explicit, and the shift
-		// grows as the exponent falls.
-		m := frac | 0x800000
-		shift := uint32(-exp - 14 + 13)
+		// grows as the exponent falls. A half subnormal is a multiple of
+		// 2**-24, so the value scaled by 2**24 is what is being rounded.
+		m := frac | 1<<52
+		shift := uint32(28 - exp)
 		half := uint16(m >> shift)
-		if roundsUp(m, shift, uint32(half)) {
+		if roundsUp(m, shift, uint64(half)) {
 			half++
 		}
 		return sign | half
 	default:
-		// Smaller than the smallest subnormal. Exactly half of it rounds to
-		// even, which is zero.
+		// Below half of the smallest subnormal, which rounds to zero.
 		return sign
 	}
 }
 
 // roundsUp reports whether dropping the low shift bits of m should round the
 // result up, under round-to-nearest-even.
-func roundsUp(m, shift, kept uint32) bool {
+func roundsUp(m uint64, shift uint32, kept uint64) bool {
 	dropped := m & (1<<shift - 1)
-	halfway := uint32(1) << (shift - 1)
+	halfway := uint64(1) << (shift - 1)
 	if dropped > halfway {
 		return true
 	}

@@ -417,8 +417,11 @@ func TestTypedArrayDetachDuringUse(t *testing.T) {
 		  a.slice(0, {valueOf() { a.buffer.transfer(); return 8 }}); "ok"`, "ok"},
 		{`var a = new Uint8Array(8);
 		  a.copyWithin(0, 1, {valueOf() { a.buffer.transfer(); return 8 }}); "ok"`, "ok"},
+		// set looks at the buffer only after the offset is coerced, so a
+		// detachment there is reported rather than written through.
 		{`var a = new Uint8Array(8);
-		  a.set(new Uint8Array(2), {valueOf() { a.buffer.transfer(); return 0 }}); "ok"`, "ok"},
+		  try { a.set(new Uint8Array(2), {valueOf() { a.buffer.transfer(); return 0 }}) }
+		  catch (e) { e.constructor.name }`, "TypeError"},
 		{`var a = new Uint8Array(8);
 		  a[0] = {valueOf() { a.buffer.transfer(); return 1 }}; String(a.length)`, "0"},
 
@@ -556,6 +559,82 @@ func TestTypedArrayIterationIsLive(t *testing.T) {
 			"TypeError"},
 		{`try { Int8Array.prototype.keys.call([]) } catch (e) { e.constructor.name }`,
 			"TypeError"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// TestTypedArraySetOrder covers %TypedArray%.prototype.set, which reads one
+// element of the source and writes it before reading the next.
+func TestTypedArraySetOrder(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var a = new Int8Array(5)
+		  var log = []
+		  var src = {length: 3}
+		  for (var i = 0; i < 3; i++) {
+		    (function (i) {
+		      Object.defineProperty(src, i, {get() { log.push(a.join()); return 42 + i }})
+		    })(i)
+		  }
+		  a.set(src)
+		  log.join("|") + " => " + a.join()`,
+			"0,0,0,0,0|42,0,0,0,0|42,43,0,0,0 => 42,43,44,0,0"},
+		// A getter that throws leaves the writes that preceded it in place.
+		{`var a = new Int8Array(3)
+		  var src = {length: 2, 0: 7}
+		  Object.defineProperty(src, 1, {get() { throw new RangeError() }})
+		  try { a.set(src) } catch (e) {}
+		  a.join()`, "7,0,0"},
+		// The range is checked before anything is read.
+		{`var a = new Int8Array(2)
+		  var read = false
+		  var src = {length: 3}
+		  Object.defineProperty(src, 0, {get() { read = true; return 1 }})
+		  try { a.set(src) } catch (e) { e.constructor.name + "," + read }`,
+			"RangeError,false"},
+
+		// A typed array source sharing the buffer is read before it is written.
+		{`var buf = new ArrayBuffer(4)
+		  var a = new Int8Array(buf)
+		  a.set([1, 2, 3, 4])
+		  a.set(new Int8Array(buf, 0, 3), 1)
+		  a.join()`, "1,1,2,3"},
+
+		// The offset is coerced before the buffer is looked at.
+		{`var a = new Uint8Array(8)
+		  try { a.set(new Uint8Array(2), {valueOf() { a.buffer.transfer(); return 0 }}) }
+		  catch (e) { e.constructor.name }`, "TypeError"},
+		{`String(Int8Array.prototype.set.length)`, "1"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// TestFloat16Rounding covers narrowing a double to a half, which rounds to
+// nearest even -- including in the subnormal range, where going through a
+// float32 first would lose the bits the rounding depends on.
+func TestFloat16Rounding(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// A hair above half the smallest subnormal rounds up to it; exactly
+		// half rounds to even, which is zero.
+		{`String(Math.f16round(2.980232238769532e-8))`, "5.960464477539063e-8"},
+		{`String(Math.f16round(2.9802322387695312e-8))`, "0"},
+		{`String(Math.f16round(5.960464477539063e-8))`, "5.960464477539063e-8"},
+		{`var a = new Float16Array(1); a[0] = 2.980232238769532e-8; String(a[0])`,
+			"5.960464477539063e-8"},
+
+		{`String(Math.f16round(1.337))`, "1.3369140625"},
+		{`String(Math.f16round(0.1))`, "0.0999755859375"},
+		{`String(Math.f16round(65504))`, "65504"},
+		{`String(Math.f16round(65520))`, "Infinity"},
+		{`String(Math.f16round(-65520))`, "-Infinity"},
+		{`String(Math.f16round(1e-10))`, "0"},
+		{`String(Math.f16round(NaN))`, "NaN"},
+		{`String(Math.f16round(Infinity))`, "Infinity"},
+		{`Object.is(Math.f16round(-0), -0)`, "true"},
+		{`new Float16Array([1.5, 2.5, -1.5]).join()`, "1.5,2.5,-1.5"},
 	}
 	for _, tc := range cases {
 		checkEval(t, tc.src, tc.want)
