@@ -386,13 +386,21 @@ func matchesNegative(err error, neg *Negative) bool {
 	var syntaxErr *quickjs.SyntaxError
 	isParseError := errors.As(err, &syntaxErr)
 
-	if neg.Phase == "parse" || neg.Phase == "resolution" {
+	if neg.Phase == "parse" {
 		// A test expecting a parse error has not passed if the engine accepted
 		// the source and failed later.
 		if !isParseError {
 			return false
 		}
 		return neg.Type == "SyntaxError"
+	}
+	if neg.Phase == "resolution" {
+		// Linking a module graph happens after every module in it has parsed,
+		// and what it reports is a thrown error rather than a parse failure --
+		// so either shape counts, as long as it is the right kind.
+		if isParseError {
+			return neg.Type == "SyntaxError"
+		}
 	}
 	if isParseError {
 		// Conversely, rejecting at parse time what should have failed at

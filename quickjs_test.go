@@ -2371,3 +2371,111 @@ func TestDestructuringOrder(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// An export name does not always name a binding of the module it is asked of:
+// `export {x} from "m"` forwards, and `export * from "m"` forwards everything.
+// Answering where a name comes from means walking the graph, and two of the
+// answers are errors -- at the point somebody asks, not where it was written.
+func TestModuleExportResolution(t *testing.T) {
+	run := func(t *testing.T, entry string, mods map[string]string) (string, error) {
+		t.Helper()
+		rt := quickjs.New()
+		defer rt.Close()
+		rt.SetModuleLoader(func(spec, ref string) (string, string, error) {
+			src, ok := mods[spec]
+			if !ok {
+				return "", "", errors.New("no such module")
+			}
+			return src, spec, nil
+		})
+		ns, err := rt.EvalModule(entry, mods[entry])
+		if err != nil {
+			return "", err
+		}
+		v, err := ns.Get("out")
+		if err != nil {
+			return "", err
+		}
+		return v.String(), nil
+	}
+
+	bad := []struct {
+		name  string
+		entry string
+		mods  map[string]string
+	}{
+		{"import of a name nothing exports", "m", map[string]string{
+			"m": `import {missing} from "d"; export var out = missing;`,
+			"d": `export var a = 1;`,
+		}},
+		{"re-export of a name nothing exports", "m", map[string]string{
+			"m": `export {missing} from "d"; export var out = 1;`,
+			"d": `export var a = 1;`,
+		}},
+		{"import of an ambiguous name", "m", map[string]string{
+			"m": `import {a} from "x"; export var out = a;`,
+			"x": `export * from "d"; export * from "e";`,
+			"d": `export var a = 1;`,
+			"e": `export var a = 2;`,
+		}},
+	}
+	for _, tc := range bad {
+		if _, err := run(t, tc.entry, tc.mods); err == nil {
+			t.Errorf("%s: accepted, want SyntaxError", tc.name)
+		} else if !strings.Contains(err.Error(), "SyntaxError") {
+			t.Errorf("%s: got %v, want SyntaxError", tc.name, err)
+		}
+	}
+
+	good := []struct {
+		name  string
+		want  string
+		entry string
+		mods  map[string]string
+	}{
+		{"a star re-export forwards", "1", "m", map[string]string{
+			"m": `import {a} from "x"; export var out = a;`,
+			"x": `export * from "d";`,
+			"d": `export var a = 1;`,
+		}},
+		{"an ambiguous name is left out of the namespace", "b", "m", map[string]string{
+			"m": `import * as ns from "x"; export var out = Object.keys(ns).join(",");`,
+			"x": `export * from "d"; export * from "e";`,
+			"d": `export var a = 1; export var b = 3;`,
+			"e": `export var a = 2;`,
+		}},
+		{"a local export wins over a star", "9", "m", map[string]string{
+			"m": `import {a} from "x"; export var out = a;`,
+			"x": `export * from "d"; export var a = 9;`,
+			"d": `export var a = 1;`,
+		}},
+		{"two modules re-exporting one binding agree", "1", "m", map[string]string{
+			"m": `import {a} from "x"; export var out = a;`,
+			"x": `export * from "p"; export * from "q";`,
+			"p": `export {a} from "d";`,
+			"q": `import {a} from "d"; export {a};`,
+			"d": `export var a = 1;`,
+		}},
+		{"a string name is exported and imported", "2", "m", map[string]string{
+			"m": `import {"☿" as merc} from "d"; export var out = merc;`,
+			"d": `var v = 2; export {v as "☿"};`,
+		}},
+		{"a namespace re-export", "1", "m", map[string]string{
+			"m": `import {inner} from "x"; export var out = inner.a;`,
+			"x": `export * as inner from "d";`,
+			"d": `export var a = 1;`,
+		}},
+		{"a cycle resolves", "1", "m", map[string]string{
+			"m": `import {a} from "d"; export var out = a;`,
+			"d": `import {out} from "m"; export var a = 1;`,
+		}},
+	}
+	for _, tc := range good {
+		got, err := run(t, tc.entry, tc.mods)
+		if err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+		} else if got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

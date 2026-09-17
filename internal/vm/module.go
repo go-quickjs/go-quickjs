@@ -1,6 +1,10 @@
 package vm
 
-import "github.com/go-quickjs/go-quickjs/internal/bytecode"
+import (
+	"strings"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+)
 
 // Modules.
 //
@@ -83,7 +87,7 @@ func (r *Runtime) SetModuleLoader(fn ModuleLoader) { r.moduleLoader = fn }
 
 // ModuleNamespace returns a module's namespace object, for a host that wants to
 // read its exports.
-func (r *Runtime) ModuleNamespace(m *Module) *Object { return r.namespaceObject(m) }
+func (r *Runtime) ModuleNamespace(m *Module) (*Object, error) { return r.namespaceObject(m) }
 
 // newModule prepares a compiled module for linking.
 func (r *Runtime) newModule(specifier string, fn *bytecode.Function) *Module {
@@ -163,7 +167,10 @@ func (r *Runtime) Link(m *Module) error {
 			m.state, m.err = ModuleFailed, err
 			return err
 		}
-		r.bindImport(m, imp, src)
+		if err := r.bindImport(m, imp, src); err != nil {
+			m.state, m.err = ModuleFailed, err
+			return err
+		}
 	}
 
 	for _, spec := range m.starExports {
@@ -176,14 +183,19 @@ func (r *Runtime) Link(m *Module) error {
 			m.state, m.err = ModuleFailed, err
 			return err
 		}
-		// A star re-export forwards every name the source exports.
-		for exported, local := range src.exports {
-			if exported == "default" {
-				// `export *` deliberately does not forward the default export.
-				continue
-			}
-			m.exports[exported] = exported
-			r.forwardBinding(m.env, exported, src, local)
+	}
+
+	// An export that names another module's binding has to name one that is
+	// there, and unambiguously. Only the whole graph knows, which is why this
+	// is a link-time error rather than one the compiler could have given.
+	for _, local := range m.exports {
+		spec, imported, indirect := indirectSource(local)
+		if !indirect {
+			continue
+		}
+		if _, err := r.requireExportFrom(m, spec, imported); err != nil {
+			m.state, m.err = ModuleFailed, err
+			return err
 		}
 	}
 
@@ -191,7 +203,7 @@ func (r *Runtime) Link(m *Module) error {
 	// an entry in the namespace. The default export always does, since it is
 	// stored under a name no identifier can spell.
 	for exported, local := range m.exports {
-		if exported == local {
+		if exported == local || strings.HasPrefix(local, nsExportPrefix) {
 			continue
 		}
 		if m.env.getOwn(r.atoms.intern(exported)) != nil {
@@ -199,7 +211,6 @@ func (r *Runtime) Link(m *Module) error {
 		}
 		r.forwardBinding(m.env, exported, m, local)
 	}
-
 	m.state = ModuleLinked
 	return nil
 }
@@ -231,24 +242,54 @@ func (r *Runtime) SetModuleCompiler(fn func(specifier, source string) (*Module, 
 }
 
 // bindImport installs one import as a live binding.
-func (r *Runtime) bindImport(m *Module, imp moduleImport, src *Module) {
+func (r *Runtime) bindImport(m *Module, imp moduleImport, src *Module) error {
+	if imp.local == "" {
+		// A side-effect import names nothing: loading the module is the whole
+		// point of it.
+		return nil
+	}
 	if imp.namespace {
-		// A namespace import is the source module's environment itself.
-		m.env.setOwnRaw(r.atoms.intern(imp.local), Obj(r.namespaceObject(src)),
-			moduleBindingFlags(imp.local))
-		return
+		ns, err := r.namespaceObject(src)
+		if err != nil {
+			return err
+		}
+		m.env.setOwnRaw(r.atoms.intern(imp.local), Obj(ns), moduleBindingFlags(imp.local))
+		return nil
 	}
 	name := imp.imported
 	if imp.isDefault {
 		name = "default"
 	}
-	local, ok := src.exports[name]
-	if !ok {
-		// Resolving to nothing is deferred rather than reported here, so that a
-		// cyclic import still linking is not rejected.
-		local = name
+	b, err := r.requireExport(src, name, src.Specifier)
+	if err != nil {
+		return err
 	}
-	r.forwardBinding(m.env, imp.local, src, local)
+	return r.bindResolved(m.env, imp.local, b)
+}
+
+// bindResolved installs the binding an export resolved to.
+func (r *Runtime) bindResolved(env *Object, as string, b *exportBinding) error {
+	if b.local == nsBindingName {
+		// The export is another module's namespace rather than one of its
+		// bindings.
+		ns, err := r.namespaceObject(b.module)
+		if err != nil {
+			return err
+		}
+		env.setOwnRaw(r.atoms.intern(as), Obj(ns), moduleBindingFlags(as))
+		return nil
+	}
+	r.forwardBinding(env, as, b.module, b.local)
+	return nil
+}
+
+// requireExportFrom resolves a name in the module a specifier names.
+func (r *Runtime) requireExportFrom(m *Module, specifier, name string) (*exportBinding, error) {
+	src, err := r.loadDependency(specifier, m.Specifier)
+	if err != nil {
+		return nil, err
+	}
+	return r.requireExport(src, name, specifier)
 }
 
 // forwardBinding installs an accessor that reads through to another module's
@@ -302,18 +343,30 @@ func (r *Runtime) EvaluateModule(m *Module) (Value, error) {
 	}
 	m.state = ModuleEvaluating
 
-	// Dependencies run first, in the order they were imported.
+	// Dependencies run first, in the order they were written. A star re-export
+	// is one too: nothing in this module names it, but what it forwards has to
+	// have run before anything reads it.
 	seen := make(map[string]bool)
-	for _, imp := range m.imports {
-		if seen[imp.specifier] {
-			continue
+	run := func(specifier string) error {
+		if seen[specifier] {
+			return nil
 		}
-		seen[imp.specifier] = true
-		dep, ok := r.modules[r.resolvedNameOf(imp.specifier, m.Specifier)]
+		seen[specifier] = true
+		dep, ok := r.modules[r.resolvedNameOf(specifier, m.Specifier)]
 		if !ok {
-			continue
+			return nil
 		}
-		if _, err := r.EvaluateModule(dep); err != nil {
+		_, err := r.EvaluateModule(dep)
+		return err
+	}
+	for _, imp := range m.imports {
+		if err := run(imp.specifier); err != nil {
+			m.state, m.err = ModuleFailed, err
+			return Undefined, err
+		}
+	}
+	for _, spec := range m.starExports {
+		if err := run(spec); err != nil {
 			m.state, m.err = ModuleFailed, err
 			return Undefined, err
 		}
@@ -424,7 +477,12 @@ func (r *Runtime) initDynamicImport() {
 			rt.rejectPromise(result, thrownValue(err))
 			return Obj(result), nil
 		}
-		rt.resolvePromise(result, Obj(rt.namespaceObject(mod)))
+		ns, err := rt.namespaceObject(mod)
+		if err != nil {
+			rt.rejectPromise(result, thrownValue(rt.wrapEvalError(err)))
+			return Obj(result), nil
+		}
+		rt.resolvePromise(result, Obj(ns))
 		return Obj(result), nil
 	})
 	r.global.setOwnRaw(r.atoms.intern("import"), Obj(fn), propWritable|propConfigurable)

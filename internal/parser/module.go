@@ -3,6 +3,7 @@ package parser
 import (
 	"github.com/go-quickjs/go-quickjs/internal/ast"
 	"github.com/go-quickjs/go-quickjs/internal/lexer"
+	"github.com/go-quickjs/go-quickjs/internal/wtf8"
 )
 
 // Import and export declarations.
@@ -63,11 +64,16 @@ func (p *parser) parseImportDecl() ast.Stmt {
 		for !p.isPunct("}") {
 			spec := ast.ImportSpecifier{Kind: ast.ImportNamed, Start: p.tok.Pos}
 			// The imported name may be any identifier name, including a
-			// reserved word, since it is a property of the source module.
-			spec.Imported = p.parseIdentName().Name
+			// reserved word, since it is a property of the source module --
+			// or a string, which is how a module exports a name no identifier
+			// can spell.
+			isString := p.tok.Kind == lexer.String
+			spec.Imported = p.parseModuleExportName()
 			spec.Local = spec.Imported
 			if p.eatContextual("as") {
 				spec.Local = p.parseBindingIdent().Name
+			} else if isString {
+				p.errorf("an imported string name needs a local name")
 			}
 			decl.Specifiers = append(decl.Specifiers, spec)
 			if !p.eatPunct(",") {
@@ -124,7 +130,7 @@ func (p *parser) parseExportDecl() ast.Stmt {
 		p.next()
 		decl.All = true
 		if p.eatContextual("as") {
-			decl.Alias = p.parseIdentName().Name
+			decl.Alias = p.parseModuleExportName()
 		}
 		if !p.eatContextual("from") {
 			p.errorf("expected \"from\" after \"export *\"")
@@ -141,10 +147,10 @@ func (p *parser) parseExportDecl() ast.Stmt {
 		p.next()
 		for !p.isPunct("}") {
 			spec := ast.ExportSpecifier{Start: p.tok.Pos}
-			spec.Local = p.parseIdentName().Name
+			spec.Local = p.parseModuleExportName()
 			spec.Exported = spec.Local
 			if p.eatContextual("as") {
-				spec.Exported = p.parseIdentName().Name
+				spec.Exported = p.parseModuleExportName()
 			}
 			decl.Specifiers = append(decl.Specifiers, spec)
 			if !p.eatPunct(",") {
@@ -167,4 +173,23 @@ func (p *parser) parseExportDecl() ast.Stmt {
 	// `export` followed by a declaration exports the names it binds.
 	decl.Decl = p.parseStatement()
 	return decl
+}
+
+// parseModuleExportName parses the name a module exports something under.
+//
+// It is an identifier name -- reserved words included, since it is a property
+// of the namespace rather than a binding -- or a string literal, which is what
+// lets a module export a name no identifier can spell. A string that is not
+// well-formed UTF-16 is not one: the name would have no unambiguous spelling
+// for another module to ask for it by.
+func (p *parser) parseModuleExportName() string {
+	if p.tok.Kind != lexer.String {
+		return p.parseIdentName().Name
+	}
+	name := p.tok.Value
+	if !wtf8.WellFormed(name) {
+		p.errorf("a module export name must be well-formed")
+	}
+	p.next()
+	return name
 }

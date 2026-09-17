@@ -81,6 +81,11 @@ func (c *compiler) collectModuleShape(body []ast.Stmt) {
 		switch n := s.(type) {
 		case *ast.ImportDecl:
 			for _, spec := range n.Specifiers {
+				if spec.Local == "arguments" || spec.Local == "eval" {
+					// Neither may be bound, and an import binding is a binding
+					// like any other.
+					c.errorf(n.Start, "cannot import as %q", spec.Local)
+				}
 				c.module.Imports = append(c.module.Imports, ImportRequest{
 					Specifier: n.Source,
 					Local:     spec.Local,
@@ -105,11 +110,16 @@ func (c *compiler) collectExport(n *ast.ExportDecl) {
 	switch {
 	case n.All:
 		if n.Alias != "" {
-			// `export * as ns from "m"` exports the namespace under a name.
+			// `export * as ns from "m"` exports the other module's namespace
+			// under a name, and binds nothing locally. The import is what makes
+			// the module a dependency; it lands under a name no identifier can
+			// spell, and the export records which module it names rather than a
+			// binding, so that two modules re-exporting the same namespace
+			// under the same name agree rather than conflict.
 			c.module.Imports = append(c.module.Imports, ImportRequest{
-				Specifier: n.Source, Local: n.Alias, Namespace: true,
+				Specifier: n.Source, Local: "*ns*" + n.Source, Namespace: true,
 			})
-			c.module.Exports[n.Alias] = n.Alias
+			c.module.Exports[n.Alias] = "*ns*" + n.Source
 			return
 		}
 		c.module.StarExports = append(c.module.StarExports, n.Source)

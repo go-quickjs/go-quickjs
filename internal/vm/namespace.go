@@ -1,7 +1,5 @@
 package vm
 
-import "sort"
-
 // A module namespace object.
 //
 // `import * as ns from "m"` gives an object whose properties are the module's
@@ -20,30 +18,51 @@ import "sort"
 // object as its prototype -- the opposite of what a namespace needs.
 
 // namespaceObject returns the module's namespace, building it on first use.
-func (r *Runtime) namespaceObject(m *Module) *Object {
+func (r *Runtime) namespaceObject(m *Module) (*Object, error) {
 	if m.ns != nil {
-		return m.ns
+		return m.ns, nil
 	}
+	// The object is recorded before it is filled in, because a module may
+	// export its own namespace -- directly or round a cycle -- and building it
+	// twice would never finish.
 	ns := newObject(nil, ClassModuleNamespace)
 	ns.data = m
+	m.ns = ns
 
-	// The exports are listed in code unit order, which is what makes
-	// Object.keys of a namespace deterministic across engines.
-	names := make([]string, 0, len(m.exports))
-	for exported := range m.exports {
-		if isInternalModuleName(exported) {
+	// The names are resolved through the whole graph, since a star re-export
+	// contributes what another module exports, and one the graph cannot decide
+	// is left out rather than reported.
+	names, err := r.namespaceNames(m)
+	if err != nil {
+		m.ns = nil
+		return nil, err
+	}
+	for _, exported := range names {
+		b, err := r.resolveExport(m, exported, nil)
+		if err != nil {
+			m.ns = nil
+			return nil, err
+		}
+		if b == nil || b.ambiguous {
 			continue
 		}
-		names = append(names, exported)
-	}
-	sort.Slice(names, func(i, j int) bool {
-		return NewString(names[i]).Compare(NewString(names[j])) < 0
-	})
-
-	for _, exported := range names {
-		local := m.exports[exported]
-		key := r.atoms.intern(local)
-		src := m
+		src := b.module
+		if b.local == nsBindingName {
+			// The export is another module's namespace rather than one of its
+			// bindings, so there is nothing to read through.
+			inner, err := r.namespaceObject(src)
+			if err != nil {
+				m.ns = nil
+				return nil, err
+			}
+			r.defineAccessor(ns, r.atoms.intern(exported),
+				r.newNativeFunc("get "+exported, 0,
+					func(rt *Runtime, this Value, args []Value) (Value, error) {
+						return Obj(inner), nil
+					}), nil, propEnumerable|propNamespaceExport)
+			continue
+		}
+		key := r.atoms.intern(b.local)
 		getter := r.newNativeFunc("get "+exported, 0,
 			func(rt *Runtime, this Value, args []Value) (Value, error) {
 				return rt.getProp(src.env, key, Obj(src.env))
@@ -63,8 +82,7 @@ func (r *Runtime) namespaceObject(m *Module) *Object {
 			}), nil, propNamespaceTag)
 
 	ns.flags &^= objExtensible
-	m.ns = ns
-	return ns
+	return ns, nil
 }
 
 // namespaceDescriptor reports an export as the data property it is, rather than
