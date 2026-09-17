@@ -171,3 +171,105 @@ func TestJSONBigInt(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestJSONStringifyShapes covers the places where the serializer writes into
+// its buffer and then has to take something back: a property whose value turns
+// out to have no JSON form is omitted along with its key and the separator
+// written in front of it.
+func TestJSONStringifyShapes(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// The dropped property is the first, the last, and the only one.
+		{`JSON.stringify({a: undefined, b: 1})`, `{"b":1}`},
+		{`JSON.stringify({a: 1, b: undefined})`, `{"a":1}`},
+		{`JSON.stringify({a: undefined})`, `{}`},
+		{`JSON.stringify({a: 1, b: undefined, c: 2})`, `{"a":1,"c":2}`},
+		{`JSON.stringify({a: undefined, b: undefined})`, `{}`},
+		{`JSON.stringify({a: function () {}, b: Symbol()})`, `{}`},
+		{`JSON.stringify({a: {b: undefined}, c: 1})`, `{"a":{},"c":1}`},
+		// The same with an indent, where the separator carries a newline.
+		{`JSON.stringify({a: undefined, b: 1}, null, 1)`, "{\n \"b\": 1\n}"},
+		{`JSON.stringify({a: undefined}, null, 1)`, `{}`},
+		{`JSON.stringify({a: [1, undefined]}, null, 1)`,
+			"{\n \"a\": [\n  1,\n  null\n ]\n}"},
+
+		// An element with no JSON form becomes null rather than disappearing,
+		// because an array's indices may not shift.
+		{`JSON.stringify([undefined, 1, function () {}])`, `[null,1,null]`},
+		{`JSON.stringify([])`, `[]`},
+		{`JSON.stringify([[], {}, [[]]])`, `[[],{},[[]]]`},
+
+		// Numbers go through the append path, which writes an integer directly
+		// and everything else the long way.
+		{`JSON.stringify([0, -0, 1, -1, 1e21, 1e-7, 0.5, NaN, Infinity])`,
+			`[0,0,1,-1,1e+21,1e-7,0.5,null,null]`},
+		// Past 2^53 what is printed is the shortest decimal that reads back as
+		// the same double, which is not the double's exact value.
+		{`JSON.stringify(9007199254740993e3)`, `9007199254740993000`},
+		{`JSON.stringify(2 ** 53)`, `9007199254740992`},
+		{`JSON.stringify(2 ** 53 + 2)`, `9007199254740994`},
+		{`JSON.stringify(1e300)`, `1e+300`},
+
+		// Escaping: a string with nothing to escape is taken whole, and one
+		// with an escape in it is rebuilt from the first escape on.
+		{`JSON.stringify("plain")`, `"plain"`},
+		{`JSON.stringify("a\"b")`, `"a\"b"`},
+		{`JSON.stringify("tab\tend")`, `"tab\tend"`},
+		{`JSON.stringify("\\")`, `"\\"`},
+		{`JSON.stringify("héllo →")`, `"h` + "é" + `llo ` + "→" + `"`},
+		{`JSON.stringify("é\né")`, `"` + "é" + `\n` + "é" + `"`},
+		// A control character with no short escape is written in full.
+		{`JSON.stringify("\u0000\u001f")`, `"\u0000\u001f"`},
+		// A key is escaped the same way a value is.
+		{`JSON.stringify({"a\"b": 1, "c\td": 2})`, `{"a\"b":1,"c\td":2}`},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// TestJSONParseStrings covers the parser's fast path, which returns a slice of
+// the source text for a string with no escape in it, and the built path it
+// falls into at the first escape.
+func TestJSONParseStrings(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`JSON.parse('"plain"')`, "plain"},
+		{`JSON.parse('""')`, ""},
+		{`JSON.parse('"a\\"b"')`, `a"b`},
+		{`JSON.parse('"pre\\tpost"')`, "pre\tpost"},
+		{`JSON.parse('"\\u0041\\u0042"')`, "AB"},
+		{`JSON.parse('"tail\\\\"')`, `tail\`},
+		{`JSON.parse('"é→"')`, "é→"},
+		{`JSON.parse('"é\\u00e9"')`, "éé"},
+		// The parsed key is an ordinary property name.
+		{`Object.keys(JSON.parse('{"a\\tb":1}')).join()`, "a\tb"},
+		{`JSON.parse('{"x":"y"}').x`, "y"},
+		{`JSON.parse('[ "a" , "b" ]').join("-")`, "a-b"},
+		{`String(JSON.parse('[1,[2,[3,[4]]]]'))`, "1,2,3,4"},
+		{`JSON.parse('[[],[[]]]').length`, "2"},
+
+		// What the fast path must still reject.
+		{`try { JSON.parse('"unterminated') } catch (e) { e.constructor.name }`, "SyntaxError"},
+		{`try { JSON.parse('"a\tb"') } catch (e) { e.constructor.name }`, "SyntaxError"},
+		{`try { JSON.parse('"a\\qb"') } catch (e) { e.constructor.name }`, "SyntaxError"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// TestJSONLoneSurrogateRoundTrip keeps the escaping of a surrogate that has no
+// partner, which has no UTF-8 form and so must survive as an escape.
+func TestJSONLoneSurrogateRoundTrip(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`JSON.stringify("\uD800")`, `"\ud800"`},
+		{`JSON.stringify("a\uDC00b")`, `"a\udc00b"`},
+		{`JSON.stringify("😀")`, `"` + "\U0001F600" + `"`},
+		{`JSON.stringify({"\uD800": 1})`, `{"\ud800":1}`},
+		{`JSON.parse(JSON.stringify("\uD800")).charCodeAt(0).toString(16)`, "d800"},
+		{`JSON.parse('"\\uD800"').length`, "1"},
+		{`JSON.parse('"\\uD83D\\uDE00"').length`, "2"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

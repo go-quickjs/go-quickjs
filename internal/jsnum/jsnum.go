@@ -17,6 +17,30 @@ import (
 
 // FormatFloat renders v using the ECMAScript Number::toString algorithm in
 // base 10.
+// AppendFloat appends what FormatFloat would return.
+//
+// An integer below 2^53 is written digit by digit, which is what a serializer
+// meets most: the great majority of the numbers in JSON text are small
+// integers, and formatting one that way costs no string at all.
+//
+// The bound is where integers stop being exactly representable. Above it a
+// double stands for a range of integers, and what must be printed is the
+// shortest decimal that reads back as the same double rather than the exact
+// value -- the two differ, so anything that large goes the long way.
+func AppendFloat(dst []byte, v float64) []byte {
+	if v == 0 {
+		// Negative zero included, which prints as "0".
+		return append(dst, '0')
+	}
+	const maxExactInt = 1 << 53
+	if v > -maxExactInt && v < maxExactInt {
+		if i := int64(v); float64(i) == v {
+			return strconv.AppendInt(dst, i, 10)
+		}
+	}
+	return append(dst, FormatFloat(v)...)
+}
+
 func FormatFloat(v float64) string {
 	switch {
 	case math.IsNaN(v):

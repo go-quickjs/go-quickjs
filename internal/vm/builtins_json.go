@@ -33,14 +33,19 @@ func (r *Runtime) initJSONBuiltins() {
 		}
 		// The value is presented to the replacer as a property of a wrapper
 		// object under the empty key, which is what gives the top-level call a
-		// holder to pass along.
-		root := newObject(rt.proto.object, ClassObject)
-		root.setOwnRaw(rt.atoms.intern(""), arg(args, 0), propDefault)
-		v, err := enc.apply(Obj(root), Str(emptyString), arg(args, 0))
+		// holder to pass along. Nothing else can observe that object, so it is
+		// built only when there is a replacer to see it.
+		holder := Undefined
+		if isCallable(enc.replacer) {
+			root := newObject(rt.proto.object, ClassObject)
+			root.setOwnRaw(rt.atoms.intern(""), arg(args, 0), propDefault)
+			holder = Obj(root)
+		}
+		v, err := enc.apply(holder, Str(emptyString), arg(args, 0))
 		if err != nil {
 			return Undefined, err
 		}
-		out, ok, err := enc.encode(v, "")
+		buf, ok, err := enc.encode(make([]byte, 0, 64), v, "")
 		if err != nil {
 			return Undefined, err
 		}
@@ -49,7 +54,7 @@ func (r *Runtime) initJSONBuiltins() {
 			// function, stringifies to undefined rather than to a string.
 			return Undefined, nil
 		}
-		return Str(NewString(out)), nil
+		return Str(NewString(string(buf))), nil
 	})
 
 	r.defMethod(j, "parse", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -188,6 +193,14 @@ func (e *jsonEncoder) setReplacer(v Value) error {
 }
 
 // apply runs toJSON and then the replacer on one value, in that order.
+// needsApply reports whether apply could do anything to v, which saves
+// building the key string for the values it would hand straight back: a
+// number, a boolean or null has no toJSON to look up, so only a replacer can
+// take an interest in it.
+func (e *jsonEncoder) needsApply(v Value) bool {
+	return v.IsObject() || v.IsString() || v.IsBigInt() || isCallable(e.replacer)
+}
+
 func (e *jsonEncoder) apply(holder Value, key Value, v Value) (Value, error) {
 	// A BigInt has a toJSON hook like an object does, which is the only way to
 	// serialize one at all: without it there is no JSON form and the attempt
@@ -296,7 +309,17 @@ func (r *Runtime) reviveWrite(o *Object, key Atom, v Value) error {
 }
 
 // encode renders one value, reporting false when it has no JSON form.
-func (e *jsonEncoder) encode(v Value, prefix string) (string, bool, error) {
+// encode appends v's JSON text to buf and reports whether v has any.
+//
+// Everything is written into the one buffer the top-level call starts, rather
+// than each value building a string its parent then joins: the output of a
+// nested structure is the same either way, but the intermediates are not
+// allocated.
+//
+// A value with no JSON form -- undefined, a function, a symbol -- appends
+// nothing and reports false, so a caller that has already written a key can
+// take it back by truncating to the length it saw.
+func (e *jsonEncoder) encode(buf []byte, v Value, prefix string) ([]byte, bool, error) {
 	// toJSON and the replacer have already run: apply does both, and does it
 	// before the value is inspected, so that what they return is what gets
 	// encoded.
@@ -308,13 +331,13 @@ func (e *jsonEncoder) encode(v Value, prefix string) (string, bool, error) {
 		case ClassNumberWrapper:
 			n, err := e.rt.toNumber(v)
 			if err != nil {
-				return "", false, err
+				return buf, false, err
 			}
 			v = Float(n)
 		case ClassStringWrapper:
 			sv, err := e.rt.toString(v)
 			if err != nil {
-				return "", false, err
+				return buf, false, err
 			}
 			v = Str(sv)
 		case ClassBooleanWrapper:
@@ -325,7 +348,7 @@ func (e *jsonEncoder) encode(v Value, prefix string) (string, bool, error) {
 			// the wrapper does not serialize as an empty object.
 			bi, err := e.rt.toBigIntValue(v)
 			if err != nil {
-				return "", false, err
+				return buf, false, err
 			}
 			v = bi
 		}
@@ -333,33 +356,33 @@ func (e *jsonEncoder) encode(v Value, prefix string) (string, bool, error) {
 
 	switch v.Kind() {
 	case KindNull:
-		return "null", true, nil
+		return append(buf, "null"...), true, nil
 	case KindBool:
 		if v.BoolValue() {
-			return "true", true, nil
+			return append(buf, "true"...), true, nil
 		}
-		return "false", true, nil
+		return append(buf, "false"...), true, nil
 	case KindNumber:
 		n := v.Number()
 		// A non-finite number has no JSON form and becomes null.
 		if n != n || n > 1e308*1.7 || n < -1e308*1.7 {
-			return "null", true, nil
+			return append(buf, "null"...), true, nil
 		}
-		return jsnum.FormatFloat(n), true, nil
+		return jsnum.AppendFloat(buf, n), true, nil
 	case KindString:
-		return encodeJSONString(v.String().Go()), true, nil
+		return appendJSONString(buf, v.String().Go()), true, nil
 	case KindUndefined, KindSymbol:
-		return "", false, nil
+		return buf, false, nil
 	case KindBigInt:
-		return "", false, e.rt.throwTypeError("a BigInt cannot be serialized to JSON")
+		return buf, false, e.rt.throwTypeError("a BigInt cannot be serialized to JSON")
 	}
 
 	o := v.Object()
 	if o.IsCallable() {
-		return "", false, nil
+		return buf, false, nil
 	}
 	if e.seen[o] {
-		return "", false, e.rt.throwTypeError("converting a circular structure to JSON")
+		return buf, false, e.rt.throwTypeError("converting a circular structure to JSON")
 	}
 	e.seen[o] = true
 	defer delete(e.seen, o)
@@ -375,35 +398,44 @@ func (e *jsonEncoder) encode(v Value, prefix string) (string, bool, error) {
 	if o.IsArray() {
 		a, err := e.rt.viewArrayLike(v)
 		if err != nil {
-			return "", false, err
+			return buf, false, err
 		}
 		if a.n == 0 {
-			return "[]", true, nil
+			return append(buf, "[]"...), true, nil
 		}
-		parts := make([]string, 0, a.n)
+		buf = append(buf, '[')
+		buf = append(buf, open...)
+		var keybuf []byte
 		for i := int64(0); i < a.n; i++ {
+			if i > 0 {
+				buf = append(buf, sep...)
+			}
 			el, err := a.get(e.rt, i)
 			if err != nil {
-				return "", false, err
+				return buf, false, err
 			}
-			// The key reaches the replacer as a string, the way a property
-			// name does: an array index is not a number here.
-			el, err = e.apply(v, Str(NewString(strconv.FormatInt(i, 10))), el)
-			if err != nil {
-				return "", false, err
+			if e.needsApply(el) {
+				// The key reaches the replacer as a string, the way a property
+				// name does: an array index is not a number here.
+				keybuf = strconv.AppendInt(keybuf[:0], i, 10)
+				el, err = e.apply(v, Str(NewString(string(keybuf))), el)
+				if err != nil {
+					return buf, false, err
+				}
 			}
-			s, ok, err := e.encode(el, inner)
+			var ok bool
+			buf, ok, err = e.encode(buf, el, inner)
 			if err != nil {
-				return "", false, err
+				return buf, false, err
 			}
 			if !ok {
 				// An element with no JSON form becomes null, unlike a
 				// property, which is omitted.
-				s = "null"
+				buf = append(buf, "null"...)
 			}
-			parts = append(parts, s)
 		}
-		return "[" + open + strings.Join(parts, sep) + close + "]", true, nil
+		buf = append(buf, close...)
+		return append(buf, ']'), true, nil
 	}
 
 	// An explicit key list fixes both which properties appear and their order;
@@ -417,7 +449,7 @@ func (e *jsonEncoder) encode(v Value, prefix string) (string, bool, error) {
 			// property table would not reflect.
 			var err error
 			if own, err = e.rt.proxyOwnKeys(p); err != nil {
-				return "", false, err
+				return buf, false, err
 			}
 		} else {
 			own = o.ownKeys(false, e.rt.atoms)
@@ -428,7 +460,7 @@ func (e *jsonEncoder) encode(v Value, prefix string) (string, bool, error) {
 			}
 			enumerable, err := e.rt.isEnumerable(o, k)
 			if err != nil {
-				return "", false, err
+				return buf, false, err
 			}
 			if !enumerable {
 				continue
@@ -437,87 +469,107 @@ func (e *jsonEncoder) encode(v Value, prefix string) (string, bool, error) {
 		}
 	}
 
-	var parts []string
+	colon := ":"
+	if e.indent != "" {
+		colon = ": "
+	}
+	start := len(buf)
+	buf = append(buf, '{')
+	buf = append(buf, open...)
+	written := 0
 	for _, k := range keys {
 		val, err := e.rt.getProp(o, k, v)
 		if err != nil {
-			return "", false, err
+			return buf, false, err
 		}
-		val, err = e.apply(v, e.rt.keyToValue(k), val)
-		if err != nil {
-			return "", false, err
+		if e.needsApply(val) {
+			if val, err = e.apply(v, e.rt.keyToValue(k), val); err != nil {
+				return buf, false, err
+			}
 		}
-		s, ok, err := e.encode(val, inner)
+		// A property whose value has no JSON form is omitted, key and all, so
+		// the separator and the key are written first and taken back when the
+		// value turns out not to be there.
+		mark := len(buf)
+		if written > 0 {
+			buf = append(buf, sep...)
+		}
+		buf = appendJSONString(buf, e.rt.atoms.name(k))
+		buf = append(buf, colon...)
+		var ok bool
+		buf, ok, err = e.encode(buf, val, inner)
 		if err != nil {
-			return "", false, err
+			return buf, false, err
 		}
 		if !ok {
+			buf = buf[:mark]
 			continue
 		}
-		colon := ":"
-		if e.indent != "" {
-			colon = ": "
-		}
-		parts = append(parts, encodeJSONString(e.rt.atoms.name(k))+colon+s)
+		written++
 	}
-	if len(parts) == 0 {
-		return "{}", true, nil
+	if written == 0 {
+		return append(buf[:start], "{}"...), true, nil
 	}
-	return "{" + open + strings.Join(parts, sep) + close + "}", true, nil
+	buf = append(buf, close...)
+	return append(buf, '}'), true, nil
 }
 
-// encodeJSONString quotes a string, escaping the characters JSON requires plus
-// any lone surrogate, which must be written as an escape because it has no
-// valid UTF-8 form.
-func encodeJSONString(s string) string {
-	var sb strings.Builder
-	sb.Grow(len(s) + 2)
-	sb.WriteByte('"')
+// appendJSONString appends a quoted string, escaping the characters JSON
+// requires plus any lone surrogate, which must be written as an escape because
+// it has no valid UTF-8 form.
+//
+// A string with nothing to escape -- which most are -- is copied in one go
+// rather than a byte at a time.
+func appendJSONString(buf []byte, s string) []byte {
+	buf = append(buf, '"')
+	plain := 0
 	for i := 0; i < len(s); {
 		c := s[i]
 		if c < utf8.RuneSelf {
+			if c >= 0x20 && c != '"' && c != '\\' {
+				i++
+				continue
+			}
+			buf = append(buf, s[plain:i]...)
 			switch c {
 			case '"':
-				sb.WriteString(`\"`)
+				buf = append(buf, `\"`...)
 			case '\\':
-				sb.WriteString(`\\`)
+				buf = append(buf, `\\`...)
 			case '\n':
-				sb.WriteString(`\n`)
+				buf = append(buf, `\n`...)
 			case '\r':
-				sb.WriteString(`\r`)
+				buf = append(buf, `\r`...)
 			case '\t':
-				sb.WriteString(`\t`)
+				buf = append(buf, `\t`...)
 			case '\b':
-				sb.WriteString(`\b`)
+				buf = append(buf, `\b`...)
 			case '\f':
-				sb.WriteString(`\f`)
+				buf = append(buf, `\f`...)
 			default:
-				if c < 0x20 {
-					sb.WriteString(`\u00`)
-					const hex = "0123456789abcdef"
-					sb.WriteByte(hex[c>>4])
-					sb.WriteByte(hex[c&0xF])
-				} else {
-					sb.WriteByte(c)
-				}
+				const hex = "0123456789abcdef"
+				buf = append(buf, `\u00`...)
+				buf = append(buf, hex[c>>4], hex[c&0xF])
 			}
 			i++
+			plain = i
 			continue
 		}
 		if r, ok := wtf8.DecodeSurrogateAt(s, i); ok {
 			// A lone surrogate is emitted as an escape, which is what the
 			// specification's well-formed stringify requires.
-			sb.WriteString(`\u`)
-			sb.WriteString(strconv.FormatUint(uint64(r), 16))
+			buf = append(buf, s[plain:i]...)
+			buf = append(buf, `\u`...)
+			buf = strconv.AppendUint(buf, uint64(r), 16)
 			i += 3
+			plain = i
 			continue
 		}
 		_, size := utf8.DecodeRuneInString(s[i:])
-		sb.WriteString(s[i : i+size])
 		i += size
 	}
-	sb.WriteByte('"')
-	return sb.String()
+	buf = append(buf, s[plain:]...)
+	return append(buf, '"')
 }
 
 // jsonParser is a recursive-descent parser for JSON text.
@@ -525,6 +577,11 @@ type jsonParser struct {
 	rt  *Runtime
 	src string
 	pos int
+	// scratch collects the elements of the arrays being parsed, one array's
+	// above its parent's. Each is copied out at exactly its own length when
+	// its closing bracket arrives, so growing this one buffer replaces growing
+	// a slice per array.
+	scratch []Value
 }
 
 func (p *jsonParser) skipSpace() {
@@ -577,6 +634,10 @@ func (p *jsonParser) parseObject() (Value, error) {
 		p.pos++
 		return Obj(o), nil
 	}
+	// How many properties there are is not known without parsing them, and
+	// growing the table from nothing costs an allocation per doubling. Room
+	// for a few pays for itself by the second key.
+	o.reserveProps(4)
 	for {
 		p.skipSpace()
 		if p.pos >= len(p.src) || p.src[p.pos] != '"' {
@@ -618,20 +679,20 @@ func (p *jsonParser) parseObject() (Value, error) {
 }
 
 func (p *jsonParser) parseArray() (Value, error) {
-	var elems []Value
 	p.pos++ // consume '['
 	p.skipSpace()
 	if p.pos < len(p.src) && p.src[p.pos] == ']' {
 		p.pos++
 		return Obj(p.rt.newArrayFrom(nil)), nil
 	}
+	mark := len(p.scratch)
 	for {
 		p.skipSpace()
 		v, err := p.parseValue()
 		if err != nil {
 			return Undefined, err
 		}
-		elems = append(elems, v)
+		p.scratch = append(p.scratch, v)
 		p.skipSpace()
 		if p.pos >= len(p.src) {
 			return Undefined, p.rt.throwSyntaxError("unexpected end of JSON input")
@@ -641,6 +702,9 @@ func (p *jsonParser) parseArray() (Value, error) {
 			p.pos++
 		case ']':
 			p.pos++
+			elems := make([]Value, len(p.scratch)-mark)
+			copy(elems, p.scratch[mark:])
+			p.scratch = p.scratch[:mark]
 			return Obj(p.rt.newArrayFrom(elems)), nil
 		default:
 			return Undefined, p.rt.throwSyntaxError(
@@ -651,7 +715,37 @@ func (p *jsonParser) parseArray() (Value, error) {
 
 func (p *jsonParser) parseString() (string, error) {
 	p.pos++ // consume '"'
+
+	// A string with no escape in it -- which nearly every string in real JSON
+	// is -- is a slice of the source text, costing neither a copy nor an
+	// allocation. Sharing the bytes is what the engine's own substrings do.
+	start := p.pos
+	i := p.pos
+	for i < len(p.src) {
+		c := p.src[i]
+		if c == '"' {
+			p.pos = i + 1
+			return p.src[start:i], nil
+		}
+		if c == '\\' {
+			break
+		}
+		if c < 0x20 {
+			p.pos = i
+			return "", p.rt.throwSyntaxError(
+				"a control character is not allowed in a JSON string at position %d", i)
+		}
+		i++
+	}
+	if i >= len(p.src) {
+		p.pos = i
+		return "", p.rt.throwSyntaxError("unterminated string in JSON")
+	}
+
+	// From the first escape on, the string has to be built.
 	var sb strings.Builder
+	sb.WriteString(p.src[start:i])
+	p.pos = i
 	for {
 		if p.pos >= len(p.src) {
 			return "", p.rt.throwSyntaxError("unterminated string in JSON")

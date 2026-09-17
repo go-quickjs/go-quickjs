@@ -2,6 +2,7 @@ package vm
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/go-quickjs/go-quickjs/internal/jsnum"
 )
@@ -128,6 +129,10 @@ func (t *atomTable) intern(name string) Atom {
 	if a, ok := t.byName[name]; ok {
 		return a
 	}
+	// The table holds a name for as long as the runtime lives, so a name that
+	// came in as a slice of something larger -- a key cut out of a JSON
+	// document, say -- is copied rather than pinning what it was cut from.
+	name = strings.Clone(name)
 	t.entries = append(t.entries, atomEntry{name: name})
 	a := Atom(len(t.entries) - 1)
 	t.byName[name] = a

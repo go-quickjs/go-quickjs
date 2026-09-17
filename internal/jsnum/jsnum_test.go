@@ -58,6 +58,36 @@ func TestFormatFloatRoundTrips(t *testing.T) {
 	}
 }
 
+// AppendFloat takes a shortcut for the integers a serializer meets most, so
+// what it writes has to be what FormatFloat would have returned -- including
+// either side of the bound where that shortcut stops being exact, and for a
+// spread of values reached by walking the bits.
+func TestAppendFloatMatchesFormatFloat(t *testing.T) {
+	values := []float64{
+		0, math.Copysign(0, -1), 1, -1, 42, -42, 0.5, -0.5, 1e21, 1e-7,
+		1 << 52, 1<<53 - 1, 1 << 53, 1<<53 + 2, -(1 << 53), 1e18, 9007199254740993e3,
+		math.MaxInt64, math.MaxInt64 * 2, 1.7976931348623157e308, 5e-324,
+		math.NaN(), math.Inf(1), math.Inf(-1),
+	}
+	for v := 1.0; v < 1e300; v *= 7.3 {
+		values = append(values, v, -v, math.Trunc(v), math.Nextafter(v, 0))
+	}
+	for _, v := range values {
+		want := FormatFloat(v)
+		if got := string(AppendFloat(nil, v)); got != want {
+			t.Errorf("AppendFloat(%v) = %q, want %q", v, got, want)
+		}
+	}
+}
+
+// What AppendFloat writes is appended to what is already there.
+func TestAppendFloatAppends(t *testing.T) {
+	got := string(AppendFloat([]byte("n="), 12))
+	if got != "n=12" {
+		t.Errorf("AppendFloat wrote %q", got)
+	}
+}
+
 func TestFormatRadix(t *testing.T) {
 	tests := []struct {
 		in    float64
