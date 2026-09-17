@@ -2945,3 +2945,29 @@ func TestSymbolToPrimitive(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestGeneratorNewTarget covers new.target in a generator or async function.
+// Nothing constructs either, so it is undefined -- which has to be said rather
+// than left to a zero value.
+func TestGeneratorNewTarget(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`function* g() { yield new.target } String(g().next().value)`, "undefined"},
+		{`function* g() { yield typeof new.target } g().next().value`, "undefined"},
+		{`var g = function* () { yield new.target }
+		  String(g().next().value)`, "undefined"},
+		// An arrow captures the enclosing function's, which is undefined too.
+		{`function* g() { yield (() => new.target)() }
+		  String(g().next().value)`, "undefined"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+	checkAsync(t,
+		`var o = {async m() { return async () => new.target }}
+		 var count = 0
+		 o.m().then(f => { count++; return f() }).then(v => { r = String(v) + "," + count })`,
+		"r", "undefined,1")
+	checkAsync(t,
+		`async function f() { return new.target }
+		 f().then(v => { r = String(v) })`, "r", "undefined")
+}

@@ -120,6 +120,10 @@ func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Ob
 		callee: callee,
 		locals: make([]Value, cl.fn.LocalCount),
 		async:  async,
+		// Nothing constructs a generator or an async function, so new.target
+		// there is undefined -- which has to be said, since a zero Value is
+		// the number zero rather than undefined.
+		newTarget: Undefined,
 	}
 	// Parameters are bound now rather than on first resumption, because the
 	// specification evaluates them when the generator is created. A default
