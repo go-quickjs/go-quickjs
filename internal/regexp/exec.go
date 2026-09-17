@@ -335,6 +335,18 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 			}
 			pc++
 
+		case opClearCaps:
+			// Every iteration starts with the groups inside it unset: one that
+			// matched on an earlier pass is not part of the match unless it
+			// matches again.
+			for g := in.arg; g <= in.arg2; g++ {
+				if m.caps[2*g] >= 0 || m.caps[2*g+1] >= 0 {
+					m.setCap(2*g, -1)
+					m.setCap(2*g+1, -1)
+				}
+			}
+			pc++
+
 		case opEmptyCheck:
 			if in.arg2 == 0 {
 				// Entering an iteration: remember where it started.
@@ -438,11 +450,15 @@ func (m *matcher) runLook(idx, pos int) (bool, error) {
 	look := m.prog.looks[idx]
 
 	// A lookaround runs in its own matcher state, but shares the capture array
-	// so that a group inside a positive lookahead is visible afterwards.
+	// so that a group inside a positive lookahead is visible afterwards -- and
+	// the undo log with it, so that backtracking past the lookaround takes
+	// those captures back again.
+	base := len(m.trail)
 	sub := &matcher{
 		prog:       m.prog,
 		in:         m.in,
 		caps:       m.caps,
+		trail:      m.trail,
 		counters:   make([]int, m.prog.counters),
 		emptyMarks: make([]int, m.prog.emptyChecks),
 		steps:      m.steps,
@@ -458,7 +474,7 @@ func (m *matcher) runLook(idx, pos int) (bool, error) {
 		// here. The bodies are short in practice, so the quadratic worst case
 		// does not bite; a reverse-matching engine would avoid it entirely.
 		for start := pos; start >= 0; start-- {
-			sub.trail = sub.trail[:0]
+			sub.undoCaps(base)
 			sub.stack = sub.stack[:0]
 			matched, e := sub.runAnchored(look.code, start, pos)
 			if e != nil {
@@ -475,12 +491,18 @@ func (m *matcher) runLook(idx, pos int) (bool, error) {
 	}
 	m.steps = sub.steps
 	if err != nil {
+		m.trail = sub.trail
 		return false, err
 	}
 
+	// A lookaround that did not match leaves no captures behind, and neither
+	// does a negative one that did: in both cases nothing of it is part of the
+	// match.
+	if !ok || look.negate {
+		sub.undoCaps(base)
+	}
+	m.trail = sub.trail
 	if look.negate {
-		// A negative lookaround must not leave captures behind, since it did
-		// not match.
 		return !ok, nil
 	}
 	return ok, nil

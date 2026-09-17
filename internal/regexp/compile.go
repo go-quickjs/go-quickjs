@@ -39,6 +39,10 @@ const (
 	// quantifier without unrolling it.
 	opCounterInit
 	opCounterInc
+	// opClearCaps unsets the capture slots of the groups inside a repeated
+	// atom, which every iteration starts by doing: a group that matched on an
+	// earlier pass is not part of the match unless it matches again.
+	opClearCaps
 	// opEmptyCheck fails a repetition whose body matched nothing, which is what
 	// stops (a*)* from looping forever.
 	opEmptyCheck
@@ -209,15 +213,30 @@ func (c *compiler) compileAlt(t nodeAlt) {
 // runtime counter rather than being unrolled, so that {0,65535} is small.
 func (c *compiler) compileRepeat(t nodeRepeat) {
 	// A body that can match the empty string needs a guard, or an unbounded
-	// repetition of it would never terminate.
+	// repetition of it would never terminate -- and an iteration that matched
+	// nothing is not one, so whatever it captured is undone.
 	needsGuard := t.max < 0 && canMatchEmpty(t.item)
 
 	switch {
 	case t.min == 0 && t.max == 1:
 		// ?
+		//
+		// The one iteration is guarded like any other: a body that matched
+		// nothing is not an iteration at all, so the captures it wrote are
+		// undone -- which is what makes `(?=(a))?` leave its group unset.
 		split := c.emit(instr{op: opSplit})
 		c.setSplit(split, t.greedy, c.here(), 0)
+		guard := -1
+		if canMatchEmpty(t.item) {
+			guard = c.prog.emptyChecks
+			c.prog.emptyChecks++
+			c.emit(instr{op: opEmptyCheck, arg: guard, arg2: 0})
+		}
+		c.clearCapsFor(t.item)
 		c.compile(t.item)
+		if guard >= 0 {
+			c.emit(instr{op: opEmptyCheck, arg: guard, arg2: 1})
+		}
 		c.patchSplitAlt(split, t.greedy, c.here())
 		return
 
@@ -232,6 +251,7 @@ func (c *compiler) compileRepeat(t nodeRepeat) {
 			c.prog.emptyChecks++
 			c.emit(instr{op: opEmptyCheck, arg: guard, arg2: 0})
 		}
+		c.clearCapsFor(t.item)
 		c.compile(t.item)
 		if needsGuard {
 			c.emit(instr{op: opEmptyCheck, arg: guard, arg2: 1})
@@ -249,6 +269,7 @@ func (c *compiler) compileRepeat(t nodeRepeat) {
 			c.prog.emptyChecks++
 			c.emit(instr{op: opEmptyCheck, arg: guard, arg2: 0})
 		}
+		c.clearCapsFor(t.item)
 		c.compile(t.item)
 		if needsGuard {
 			c.emit(instr{op: opEmptyCheck, arg: guard, arg2: 1})
@@ -271,6 +292,7 @@ func (c *compiler) compileRepeat(t nodeRepeat) {
 
 	split := c.emit(instr{op: opSplit})
 	c.setSplit(split, t.greedy, c.here(), 0)
+	c.clearCapsFor(t.item)
 	c.compile(t.item)
 	c.emit(instr{op: opJmp, arg: start})
 	c.patchSplitAlt(split, t.greedy, c.here())
@@ -312,6 +334,54 @@ func (c *compiler) compileLook(t nodeLook) {
 		code: body, behind: t.behind, negate: t.negate,
 	})
 	c.emit(instr{op: opLook, arg: idx})
+}
+
+// clearCapsFor emits the instruction that unsets the groups inside a repeated
+// atom, if it has any.
+func (c *compiler) clearCapsFor(item node) {
+	lo, hi := groupRange(item)
+	if lo > hi {
+		return
+	}
+	c.emit(instr{op: opClearCaps, arg: lo, arg2: hi})
+}
+
+// groupRange reports the lowest and highest capturing group index in a subtree,
+// or an empty range when it has none. Groups are numbered in source order, so
+// the subtree's groups are exactly the indices between them.
+func groupRange(n node) (lo, hi int) {
+	lo, hi = 1<<30, -1
+	var walk func(node)
+	walk = func(n node) {
+		switch t := n.(type) {
+		case nodeGroup:
+			if t.index > 0 {
+				if t.index < lo {
+					lo = t.index
+				}
+				if t.index > hi {
+					hi = t.index
+				}
+			}
+			walk(t.item)
+		case nodeSeq:
+			for _, item := range t.items {
+				walk(item)
+			}
+		case nodeAlt:
+			for _, alt := range t.alts {
+				walk(alt)
+			}
+		case nodeRepeat:
+			walk(t.item)
+		case nodeLook:
+			walk(t.item)
+		case nodeModifier:
+			walk(t.item)
+		}
+	}
+	walk(n)
+	return lo, hi
 }
 
 // canMatchEmpty reports whether a node can succeed without consuming input.

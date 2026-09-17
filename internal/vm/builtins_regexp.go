@@ -285,9 +285,14 @@ func (r *Runtime) regexpExec(this Value, s *String) (Value, error) {
 	}
 
 	units := wtf8.ToUTF16(s.Go())
+	// The write goes through the object rather than into its table: a
+	// lastIndex that cannot be written is an error the caller sees, which is
+	// the whole point of it being an ordinary property.
 	if start < 0 || start > len(units) {
 		if stateful {
-			o.setOwnRaw(atomLastIndex, Int(0), propWritable)
+			if _, err := r.setProp(o, atomLastIndex, Int(0), this, true); err != nil {
+				return Undefined, err
+			}
 		}
 		return Null, nil
 	}
@@ -298,12 +303,16 @@ func (r *Runtime) regexpExec(this Value, s *String) (Value, error) {
 	}
 	if caps == nil {
 		if stateful {
-			o.setOwnRaw(atomLastIndex, Int(0), propWritable)
+			if _, err := r.setProp(o, atomLastIndex, Int(0), this, true); err != nil {
+				return Undefined, err
+			}
 		}
 		return Null, nil
 	}
 	if stateful {
-		o.setOwnRaw(atomLastIndex, Int(caps[1]), propWritable)
+		if _, err := r.setProp(o, atomLastIndex, Int(caps[1]), this, true); err != nil {
+			return Undefined, err
+		}
 	}
 	return Obj(r.buildMatchResult(re, units, caps, s)), nil
 }

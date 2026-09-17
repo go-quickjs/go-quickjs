@@ -417,3 +417,32 @@ func TestRegExpExecLastIndex(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestRegExpLookaroundCaptures covers what a lookaround leaves behind. A
+// positive one that matched contributes its captures; one that did not, and a
+// negative one that did, contribute nothing.
+func TestRegExpLookaroundCaptures(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`JSON.stringify(/(?=(abc))a/.exec("abc"))`, `["a","abc"]`},
+		// The one iteration of `?` matched nothing, so it is not an iteration
+		// at all and the group it set goes back to being unset.
+		{`JSON.stringify(/(?=(abc))?a/.exec("abc"))`, `["a",null]`},
+		{`JSON.stringify(/(?!(x))a/.exec("a"))`, `["a",null]`},
+		{`JSON.stringify("abcdef".match(/(?<!(^|[ab]))\w{2}/))`, `["de",null]`},
+		{`JSON.stringify(/(a)(?=(b))c?/.exec("ab"))`, `["a","a","b"]`},
+		// Backtracking past a lookaround takes its captures back too.
+		{`JSON.stringify(/(?:(?=(a))a|b)*$/.exec("ab"))`, `["ab",null]`},
+		{`JSON.stringify(/(a)?b/.exec("b"))`, `["b",null]`},
+		{`JSON.stringify(/(a)?b/.exec("ab"))`, `["ab","a"]`},
+
+		// Every iteration of a repetition starts with the groups inside it
+		// unset: one that matched on an earlier pass is not part of the match
+		// unless it matches again.
+		{`JSON.stringify(/(z)((a+)?(b+)?(c))*/.exec("zaacbbbcac"))`,
+			`["zaacbbbcac","z","ac","a",null,"c"]`},
+		{`JSON.stringify("aabb".match(/(a)*(b)*/))`, `["aabb","a","b"]`},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
