@@ -206,3 +206,36 @@ func TestFloat16(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// The index and the value are converted before the buffer is looked at, so a
+// view over a buffer that has gone reports an out-of-range index as one rather
+// than as a detached buffer -- and a conversion that detaches it is seen.
+func TestDataViewCheckOrder(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var b = new ArrayBuffer(8), d = new DataView(b); b.transfer();
+		  try { d.getInt16(Infinity) } catch (e) { e.constructor.name }`, "RangeError"},
+		{`var b = new ArrayBuffer(8), d = new DataView(b); b.transfer();
+		  try { d.getInt16(-1) } catch (e) { e.constructor.name }`, "RangeError"},
+		{`var b = new ArrayBuffer(8), d = new DataView(b); b.transfer();
+		  try { d.getInt16(0) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`var b = new ArrayBuffer(8), d = new DataView(b);
+		  try { d.getInt16({valueOf: function () { b.transfer(); return 0 }}) }
+		  catch (e) { e.constructor.name }`, "TypeError"},
+		// The size getters still refuse a detached view outright.
+		{`var b = new ArrayBuffer(8), d = new DataView(b); b.transfer();
+		  try { d.byteLength } catch (e) { e.constructor.name }`, "TypeError"},
+		// And the ordinary case is unaffected.
+		{`var d = new DataView(new ArrayBuffer(8)); d.setUint8(0, 5); String(d.getUint8(0))`,
+			"5"},
+	}
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

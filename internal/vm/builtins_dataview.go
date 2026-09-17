@@ -30,7 +30,12 @@ func (d *dataViewData) storage() *arrayBufferData {
 	return b
 }
 
-// dataViewOf recovers a view from a receiver, rejecting a detached buffer.
+// dataViewOf recovers a view from a receiver.
+//
+// Whether the buffer is still there is a separate question, asked later: the
+// index and the value are converted first, and a conversion can detach it, so
+// checking here would answer about the wrong moment -- and would report a
+// detached buffer where an out-of-range index should have been reported.
 func (r *Runtime) dataViewOf(this Value, name string) (*dataViewData, error) {
 	if !this.IsObject() || this.Object().class != ClassDataView {
 		return nil, r.throwTypeError("%s called on an incompatible receiver", name)
@@ -38,6 +43,16 @@ func (r *Runtime) dataViewOf(this Value, name string) (*dataViewData, error) {
 	d, ok := this.Object().data.(*dataViewData)
 	if !ok {
 		return nil, r.throwTypeError("%s called on an uninitialized DataView", name)
+	}
+	return d, nil
+}
+
+// dataViewLive recovers a view and requires its buffer to still be there, which
+// the size getters need.
+func (r *Runtime) dataViewLive(this Value, name string) (*dataViewData, error) {
+	d, err := r.dataViewOf(this, name)
+	if err != nil {
+		return nil, err
 	}
 	if d.storage().detached {
 		return nil, r.throwTypeError("the underlying ArrayBuffer has been detached")
@@ -105,7 +120,7 @@ func (r *Runtime) initDataViewBuiltins() {
 	})
 
 	r.defGetter(proto, "byteLength", func(rt *Runtime, this Value, args []Value) (Value, error) {
-		d, err := rt.dataViewOf(this, "DataView.prototype.byteLength")
+		d, err := rt.dataViewLive(this, "DataView.prototype.byteLength")
 		if err != nil {
 			return Undefined, err
 		}
@@ -113,7 +128,7 @@ func (r *Runtime) initDataViewBuiltins() {
 	})
 
 	r.defGetter(proto, "byteOffset", func(rt *Runtime, this Value, args []Value) (Value, error) {
-		d, err := rt.dataViewOf(this, "DataView.prototype.byteOffset")
+		d, err := rt.dataViewLive(this, "DataView.prototype.byteOffset")
 		if err != nil {
 			return Undefined, err
 		}
