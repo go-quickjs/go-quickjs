@@ -628,17 +628,17 @@ func (p *jsonParser) parseValue() (Value, error) {
 }
 
 func (p *jsonParser) parseObject() (Value, error) {
-	o := newObject(p.rt.proto.object, ClassObject)
+	// How many properties there are is not known without parsing them, and
+	// growing the table from nothing costs an allocation per doubling. Room
+	// for a few, in the object's own allocation, pays for itself by the second
+	// key.
+	o := newLiteralObject(p.rt.proto.object, 0)
 	p.pos++ // consume '{'
 	p.skipSpace()
 	if p.pos < len(p.src) && p.src[p.pos] == '}' {
 		p.pos++
 		return Obj(o), nil
 	}
-	// How many properties there are is not known without parsing them, and
-	// growing the table from nothing costs an allocation per doubling. Room
-	// for a few pays for itself by the second key.
-	o.reserveProps(4)
 	for {
 		p.skipSpace()
 		if p.pos >= len(p.src) || p.src[p.pos] != '"' {

@@ -179,6 +179,34 @@ func newObject(proto *Object, class Class) *Object {
 	return &Object{proto: proto, class: class, flags: flags}
 }
 
+// literalObject is an ordinary object with room for its first few properties
+// in the same allocation.
+//
+// An object literal says how many properties it is about to be given, and a
+// parsed JSON object is the same shape: the table would otherwise be a second
+// allocation for every one of them. The room is wasted on an object with fewer
+// properties than this, which is the trade -- a few words against a trip to the
+// allocator.
+type literalObject struct {
+	Object
+	inline [3]Property
+}
+
+// newLiteralObject returns an ordinary object that is about to be given n
+// properties.
+func newLiteralObject(proto *Object, n int) *Object {
+	if n > len(literalObject{}.inline) {
+		o := &Object{proto: proto, class: ClassObject, flags: objExtensible}
+		o.props = make([]Property, 0, n)
+		return o
+	}
+	lo := &literalObject{
+		Object: Object{proto: proto, class: ClassObject, flags: objExtensible},
+	}
+	lo.props = lo.inline[:0]
+	return &lo.Object
+}
+
 // funcObject is an object that is also a function.
 //
 // The two parts are allocated together: a callable object always needs both,
