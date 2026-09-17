@@ -111,7 +111,10 @@ func (r *Runtime) OwnKeys(o *Object) []Atom {
 	keys := o.ownKeys(false, r.atoms)
 	out := keys[:0]
 	for _, k := range keys {
-		if r.isEnumerable(o, k) {
+		// A key whose enumerability cannot be decided without running code
+		// that fails is left out: this is the Go-facing view of an object, and
+		// it reports what it can rather than an error.
+		if yes, err := r.isEnumerable(o, k); err == nil && yes {
 			out = append(out, k)
 		}
 	}

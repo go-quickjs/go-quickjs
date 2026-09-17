@@ -297,12 +297,30 @@ func (r *Runtime) requireExportFrom(m *Module, specifier, name string) (*exportB
 func (r *Runtime) forwardBinding(env *Object, as string, src *Module, local string) {
 	key := r.atoms.intern(local)
 	getter := r.newNativeFunc("get "+as, 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		return rt.getProp(src.env, key, Obj(src.env))
+		return rt.readModuleBinding(src, key, as)
 	})
 	// An imported binding is read-only; assigning to one is a TypeError, which
 	// falls out of defining no setter in strict mode, and module code is
 	// always strict.
 	r.defineAccessor(env, r.atoms.intern(as), getter, nil, moduleBindingFlags(as))
+}
+
+// readModuleBinding reads another module's binding, which is what both an
+// import and a namespace's export resolve to.
+//
+// A cycle makes it possible to reach one before the module that owns it has run
+// the declaration, and reading it then is the same ReferenceError that module's
+// own code would get.
+func (r *Runtime) readModuleBinding(src *Module, key Atom, as string) (Value, error) {
+	v, err := r.getProp(src.env, key, Obj(src.env))
+	if err != nil {
+		return Undefined, err
+	}
+	if v.IsUninitialized() {
+		return Undefined, r.throwReferenceError(
+			"cannot access %q before it is initialized", as)
+	}
+	return v, nil
 }
 
 // moduleBindingFlags decides whether a module binding is part of the namespace.

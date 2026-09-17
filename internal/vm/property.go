@@ -238,6 +238,14 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 		if p := proxyOf(o); p != nil {
 			return r.proxySet(p, key, val, receiver, strict)
 		}
+		if o.class == ClassModuleNamespace {
+			// A namespace refuses every assignment, whatever the key names and
+			// whether or not it has it: what a module exports is the module's
+			// to change. It answers for a receiver that inherits from it too,
+			// which is why this is in the walk rather than before it.
+			return false, r.assignFailed(key, strict,
+				"cannot assign to %q of a module namespace")
+		}
 		if key.IsIndex() {
 			if int(key.Index()) < len(o.elems) && !isHole(o.elems[key.Index()]) {
 				// A dense element is always a writable data property, so the

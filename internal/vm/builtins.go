@@ -68,7 +68,8 @@ func (r *Runtime) initObjectBuiltins() {
 			v, err := rt.getValueProp(desc, atomEnumerable)
 			return Bool(v.Truthy()), err
 		}
-		return Bool(rt.isEnumerable(o, key)), nil
+		yes, err := rt.isEnumerable(o, key)
+		return Bool(yes), err
 	})
 
 	r.defMethod(p, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -141,7 +142,11 @@ func (r *Runtime) initObjectBuiltins() {
 				return Undefined, err
 			}
 			for _, k := range keys {
-				if !rt.isEnumerable(so, k) {
+				enumerable, err := rt.isEnumerable(so, k)
+				if err != nil {
+					return Undefined, err
+				}
+				if !enumerable {
 					continue
 				}
 				v, err := rt.getProp(so, k, src)
@@ -288,7 +293,7 @@ func (r *Runtime) initObjectBuiltins() {
 		if p := proxyOf(o); p != nil {
 			return rt.proxyGetOwnPropertyDescriptor(p, key)
 		}
-		return rt.describeProperty(o, key), nil
+		return rt.describeProperty(o, key)
 	})
 
 	r.defMethod(ctor, "freeze", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -405,39 +410,49 @@ func (r *Runtime) classTag(o *Object) string {
 }
 
 // isEnumerable reports whether a key is an enumerable own property.
-func (r *Runtime) isEnumerable(o *Object, key Atom) bool {
+//
+// It can fail, because an object may compute the answer: a proxy runs a trap,
+// and a module namespace reads the binding behind the export -- which is a
+// ReferenceError while that binding is in its dead zone.
+func (r *Runtime) isEnumerable(o *Object, key Atom) (bool, error) {
 	// A proxy answers through its getOwnPropertyDescriptor trap; reading the
 	// property table would see the proxy object itself, which has none.
 	if p := proxyOf(o); p != nil {
 		desc, err := r.proxyGetOwnPropertyDescriptor(p, key)
 		if err != nil || !desc.IsObject() {
-			return false
+			return false, err
 		}
 		v, err := r.getValueProp(desc, atomEnumerable)
-		return err == nil && v.Truthy()
+		return v.Truthy(), err
+	}
+	if o.class == ClassModuleNamespace {
+		d, err := r.namespaceDescriptor(o, key)
+		if err != nil || d != nil {
+			return d != nil && d.enumerable, err
+		}
 	}
 	if key.IsIndex() {
 		if _, ok := o.getElem(key.Index()); ok {
-			return true
+			return true, nil
 		}
 		// A typed array's elements live in a buffer rather than in the
 		// property table, but they are enumerable own properties. So are a
 		// String object's characters.
 		if o.class == ClassTypedArray {
 			if t, ok := o.data.(*typedArrayData); ok && int(key.Index()) < t.count() {
-				return true
+				return true, nil
 			}
 		}
 		if o.class == ClassStringWrapper {
 			if str, ok := o.data.(*String); ok && int(key.Index()) < str.Len() {
-				return true
+				return true, nil
 			}
 		}
 	}
 	if p := o.getOwnVisible(key); p != nil {
-		return p.flags&propEnumerable != 0
+		return p.flags&propEnumerable != 0, nil
 	}
-	return false
+	return false, nil
 }
 
 // keysMode selects what Object.keys, values and entries produce.
@@ -478,8 +493,14 @@ func (r *Runtime) objectKeysLike(v Value, mode keysMode) (Value, error) {
 			if !e.Truthy() {
 				continue
 			}
-		} else if !r.isEnumerable(o, k) {
-			continue
+		} else {
+			enumerable, err := r.isEnumerable(o, k)
+			if err != nil {
+				return Undefined, err
+			}
+			if !enumerable {
+				continue
+			}
 		}
 		switch mode {
 		case keysOnly:
@@ -503,11 +524,11 @@ func (r *Runtime) objectKeysLike(v Value, mode keysMode) (Value, error) {
 }
 
 // describeProperty builds a property descriptor object.
-func (r *Runtime) describeProperty(o *Object, key Atom) Value {
+func (r *Runtime) describeProperty(o *Object, key Atom) (Value, error) {
 	r.materializeFunctionProp(o, key)
-	pd := r.currentDescriptor(o, key)
-	if pd == nil {
-		return Undefined
+	pd, err := r.currentDescriptor(o, key)
+	if err != nil || pd == nil {
+		return Undefined, err
 	}
 	d := newObject(r.proto.object, ClassObject)
 	if pd.isAccessor() {
@@ -526,7 +547,7 @@ func (r *Runtime) describeProperty(o *Object, key Atom) Value {
 	}
 	r.setDescField(d, "enumerable", Bool(pd.enumerable))
 	r.setDescField(d, "configurable", Bool(pd.configurable))
-	return Obj(d)
+	return Obj(d), nil
 }
 
 func (r *Runtime) setDescField(d *Object, name string, v Value) {
@@ -544,7 +565,11 @@ func (r *Runtime) defineProperties(target *Object, props Value) error {
 		return err
 	}
 	for _, k := range keys {
-		if !r.isEnumerable(src, k) {
+		enumerable, err := r.isEnumerable(src, k)
+		if err != nil {
+			return err
+		}
+		if !enumerable {
 			continue
 		}
 		desc, err := r.getProp(src, k, props)

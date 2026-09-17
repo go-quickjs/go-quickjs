@@ -82,6 +82,15 @@ const (
 	// OpInitGlobalLex gives one its first value, which is what takes it out of
 	// the dead zone.
 	OpInitGlobalLex
+	// OpDeclareModuleLex creates a module's top-level lexical binding in its
+	// dead zone. A is the name; B is 1 for a let or class, 0 for a const.
+	//
+	// It is a property of the module environment rather than a slot, because
+	// what a module exports has to be something the linker can forward to.
+	OpDeclareModuleLex
+	// OpInitModuleLex pops a value and gives a binding its first one, taking
+	// it out of the dead zone.
+	OpInitModuleLex
 
 	// --- Properties -------------------------------------------------------
 	OpGetProp    // obj -> obj[Names[A]]
@@ -442,6 +451,8 @@ var opNames = [opCount]string{
 	OpCheckGlobalVar:   "check_global_var",
 	OpDeclareGlobalLex: "declare_global_lex",
 	OpInitGlobalLex:    "init_global_lex",
+	OpDeclareModuleLex: "declare_module_lex",
+	OpInitModuleLex:    "init_module_lex",
 
 	OpGetProp: "get_prop", OpSetProp: "set_prop", OpGetIndex: "get_index",
 	OpSetIndex: "set_index", OpDeleteProp: "delete_prop",

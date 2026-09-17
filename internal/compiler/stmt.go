@@ -367,9 +367,13 @@ func (c *compiler) initBinding(target ast.Expr, kind ast.DeclKind) {
 			return
 		}
 		// A block of its own would have declared a local, so reaching here
-		// means the binding is the script-level one.
+		// means the binding is the top-level one.
 		if c.globalLex[id.Name] {
 			c.emit(bytecode.OpInitGlobalLex, c.nameIdx(id.Name), 0)
+			return
+		}
+		if c.isModuleLex(id.Name) {
+			c.emit(bytecode.OpInitModuleLex, c.nameIdx(id.Name), 0)
 			return
 		}
 		c.emit(bytecode.OpSetGlobal, c.nameIdx(id.Name), 0)
@@ -912,6 +916,12 @@ func (c *compiler) emitPendingFinallys() {
 // frame slots.
 func (c *compiler) atModuleTopLevel() bool {
 	return c.module != nil && c.parent == nil && c.depth == 0
+}
+
+// isModuleLex reports whether a name is one of the module's own top-level
+// lexical bindings, declaring it here rather than assigning to it.
+func (c *compiler) isModuleLex(name string) bool {
+	return c.moduleLex != nil && c.moduleLex[name] && c.atModuleTopLevel()
 }
 
 // hoistableFunction returns the function declaration a statement contains and

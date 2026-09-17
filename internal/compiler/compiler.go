@@ -220,6 +220,10 @@ type compiler struct {
 	// declared, which live in the global lexical environment rather than in a
 	// frame slot.
 	globalLex map[string]bool
+	// moduleLex names a module's top-level lexical bindings, which live in the
+	// module environment. They are declared in their dead zone, so the
+	// declaration compiles to an initialization rather than an assignment.
+	moduleLex map[string]bool
 	// exits records what the statements currently being compiled left in place
 	// for the duration of their bodies, innermost last.
 	exits []pendingExit
@@ -1135,8 +1139,12 @@ func (c *compiler) checkEvalVarNames(body []ast.Stmt) {
 	}
 	var names []string
 	collectVarNamesIn(body, &names, c.fn.Strict)
+	var lexical []lexicalName
 	for _, s := range body {
-		collectLexicalNames(s, &names)
+		collectLexicalNames(s, &lexical)
+	}
+	for _, l := range lexical {
+		names = append(names, l.name)
 	}
 	for _, n := range names {
 		for _, arg := range c.opts.ArgumentNames {

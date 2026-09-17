@@ -249,7 +249,14 @@ func (r *Runtime) reviveJSON(holder *Object, key Value, reviver Value) (Value, e
 			}
 			keys := make([]Atom, 0, len(pks))
 			for _, pk := range pks {
-				if r.atoms.symbol(pk) == nil && r.isEnumerable(o, pk) {
+				if r.atoms.symbol(pk) != nil {
+					continue
+				}
+				enumerable, err := r.isEnumerable(o, pk)
+				if err != nil {
+					return Undefined, err
+				}
+				if enumerable {
 					keys = append(keys, pk)
 				}
 			}
@@ -419,7 +426,11 @@ func (e *jsonEncoder) encode(v Value, prefix string) (string, bool, error) {
 			if e.rt.atoms.symbol(k) != nil {
 				continue
 			}
-			if !e.rt.isEnumerable(o, k) {
+			enumerable, err := e.rt.isEnumerable(o, k)
+			if err != nil {
+				return "", false, err
+			}
+			if !enumerable {
 				continue
 			}
 			keys = append(keys, k)

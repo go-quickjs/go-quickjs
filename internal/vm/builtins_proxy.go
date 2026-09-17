@@ -548,7 +548,7 @@ func (r *Runtime) proxyDefineProperty(p *proxyData, key Atom, desc Value) (bool,
 func (r *Runtime) ownPropDesc(o *Object, key Atom) (*propDesc, error) {
 	pp := proxyOf(o)
 	if pp == nil {
-		return r.currentDescriptor(o, key), nil
+		return r.currentDescriptor(o, key)
 	}
 	v, err := r.proxyGetOwnPropertyDescriptor(pp, key)
 	if err != nil || !v.IsObject() {
@@ -864,7 +864,7 @@ func (r *Runtime) initReflectBuiltins() {
 		if p := proxyOf(target.Object()); p != nil {
 			return rt.proxyGetOwnPropertyDescriptor(p, key)
 		}
-		return rt.describeProperty(target.Object(), key), nil
+		return rt.describeProperty(target.Object(), key)
 	})
 
 	r.defMethod(rf, "isExtensible", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -963,7 +963,7 @@ func (r *Runtime) ownDescriptorOf(o *Object, key Atom) (Value, error) {
 	if p := proxyOf(o); p != nil {
 		return r.proxyGetOwnPropertyDescriptor(p, key)
 	}
-	return r.describeProperty(o, key), nil
+	return r.describeProperty(o, key)
 }
 
 // hasOwnPropOf reports whether an object has an own property, asking a proxy's
@@ -971,6 +971,15 @@ func (r *Runtime) ownDescriptorOf(o *Object, key Atom) (Value, error) {
 func (r *Runtime) hasOwnPropOf(o *Object, key Atom) (bool, error) {
 	p := proxyOf(o)
 	if p == nil {
+		if o.class == ClassModuleNamespace {
+			// Asking whether a namespace has an export reads it, since the
+			// answer comes from the module's environment rather than from a
+			// property table.
+			d, err := r.namespaceDescriptor(o, key)
+			if err != nil || d != nil {
+				return d != nil, err
+			}
+		}
 		return r.hasOwnProp(o, key), nil
 	}
 	desc, err := r.proxyGetOwnPropertyDescriptor(p, key)

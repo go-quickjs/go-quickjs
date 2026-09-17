@@ -65,9 +65,10 @@ const (
 	// accessor, because an export is live, but it reports as a data property:
 	// what a module exports is a value, not a way of computing one.
 	propNamespaceExport
-	// propNamespaceTag marks a namespace's Symbol.toStringTag, which is the one
-	// property of one that is not an export.
-	propNamespaceTag
+	// propUninit marks a binding still in its temporal dead zone. Only a
+	// module's top-level lexical bindings need it: everything else in a dead
+	// zone is a frame slot, where the uninitialized value alone says so.
+	propUninit
 )
 
 // propDefault is the attribute set for an ordinary assignment.

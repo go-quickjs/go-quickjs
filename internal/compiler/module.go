@@ -196,7 +196,7 @@ func (c *compiler) compileExportDecl(n *ast.ExportDecl) {
 			// `export default class {}` declares no binding of its own, so it
 			// is the expression it looks like, named after the export.
 			c.compileClass(cd.Class, "default")
-			c.emit(bytecode.OpDefineGlobalFunc, c.nameIdx(defaultBindingName), 0)
+			c.emit(bytecode.OpInitModuleLex, c.nameIdx(defaultBindingName), 0)
 			return
 		}
 		if fd, ok := n.Decl.(*ast.FuncDecl); ok {
@@ -212,7 +212,7 @@ func (c *compiler) compileExportDecl(n *ast.ExportDecl) {
 			return
 		}
 		c.compileExprNamed(n.DefaultExpr, "default")
-		c.emit(bytecode.OpDefineGlobalFunc, c.nameIdx(defaultBindingName), 0)
+		c.emit(bytecode.OpInitModuleLex, c.nameIdx(defaultBindingName), 0)
 
 	case n.Decl != nil:
 		// A function declaration was already emitted when the statement list
@@ -235,39 +235,81 @@ func (c *compiler) compileExportDecl(n *ast.ExportDecl) {
 // export live, since the exported name and the module's own binding become the
 // same property.
 //
-// The cost is that a module's top-level lexical bindings lose their temporal
-// dead zone, reading as undefined before their declaration rather than
-// throwing.
+// A lexical binding is created in its dead zone all the same, so reading one
+// before its declaration is the ReferenceError it would be anywhere else. The
+// property carries the marker a frame slot would carry as its value, since the
+// linker needs the property to exist from the start.
 func (c *compiler) hoistModuleBindings(body []ast.Stmt) {
 	var names []string
 	// Module code is strict, so Annex B's block-function alias does not apply.
 	collectVarNamesIn(body, &names, true)
-	for _, s := range body {
-		collectLexicalNames(s, &names)
-	}
 	for _, n := range names {
 		c.emit(bytecode.OpDefineGlobalVar, c.nameIdx(n), 0)
 	}
+
+	var lexical []lexicalName
+	for _, s := range body {
+		collectLexicalNames(s, &lexical)
+	}
+	c.moduleLex = make(map[string]bool, len(lexical))
+	for _, l := range lexical {
+		mutable := uint32(1)
+		if l.kind == ast.DeclConst {
+			mutable = 0
+		}
+		c.moduleLex[l.name] = true
+		c.emit(bytecode.OpDeclareModuleLex, c.nameIdx(l.name), mutable)
+	}
+}
+
+// lexicalName is a top-level lexical binding and the kind of declaration it
+// came from, which decides whether it can be assigned to.
+type lexicalName struct {
+	name string
+	kind ast.DeclKind
 }
 
 // collectLexicalNames gathers the let, const and class bindings a top-level
 // statement introduces, including through an export wrapper.
-func collectLexicalNames(s ast.Stmt, out *[]string) {
+func collectLexicalNames(s ast.Stmt, out *[]lexicalName) {
 	switch n := s.(type) {
 	case *ast.VarDecl:
 		if n.Kind == ast.DeclVar {
 			return
 		}
+		var names []string
 		for _, d := range n.Decls {
-			collectPatternNames(d.Target, out)
+			collectPatternNames(d.Target, &names)
+		}
+		for _, name := range names {
+			*out = append(*out, lexicalName{name, n.Kind})
 		}
 	case *ast.ClassDecl:
 		if n.Class.Name != nil {
-			*out = append(*out, n.Class.Name.Name)
+			// A class binding is mutable, like a let.
+			*out = append(*out, lexicalName{n.Class.Name.Name, ast.DeclLet})
 		}
 	case *ast.ExportDecl:
-		if n.Decl != nil {
-			collectLexicalNames(n.Decl, out)
+		if !n.Default {
+			if n.Decl != nil {
+				collectLexicalNames(n.Decl, out)
+			}
+			return
+		}
+		switch d := n.Decl.(type) {
+		case *ast.FuncDecl:
+			// Hoisted, so it is never in a dead zone.
+		case *ast.ClassDecl:
+			if d.Class.Name != nil {
+				collectLexicalNames(d, out)
+				return
+			}
+			*out = append(*out, lexicalName{defaultBindingName, ast.DeclLet})
+		default:
+			// An exported expression. Its binding has no name a program can
+			// write, but it has a dead zone all the same: the namespace can
+			// reach it round a cycle before the statement has run.
+			*out = append(*out, lexicalName{defaultBindingName, ast.DeclLet})
 		}
 	}
 }

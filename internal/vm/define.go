@@ -141,6 +141,11 @@ func (r *Runtime) defineProperty(o *Object, key Atom, d *propDesc) (bool, error)
 	if p := proxyOf(o); p != nil {
 		return r.proxyDefineProperty(p, key, r.descriptorObject(d))
 	}
+	// A module namespace's exports are fixed. Its symbol-keyed properties are
+	// ordinary, which is why only the string keys are diverted.
+	if o.class == ClassModuleNamespace && !r.atoms.IsSymbol(key) {
+		return r.namespaceDefine(o, key, d)
+	}
 	if key == atomLength && o.class == ClassArray {
 		return r.defineArrayLength(o, d)
 	}
@@ -155,7 +160,10 @@ func (r *Runtime) defineProperty(o *Object, key Atom, d *propDesc) (bool, error)
 	// before a redefinition can be checked against them.
 	r.materializeFunctionProp(o, key)
 
-	existing := r.currentDescriptor(o, key)
+	existing, err := r.currentDescriptor(o, key)
+	if err != nil {
+		return false, err
+	}
 	if existing == nil {
 		// A new property needs room for it.
 		if !o.IsExtensible() {
@@ -225,18 +233,21 @@ func (r *Runtime) validateRedefine(cur *propDesc, d *propDesc) bool {
 
 // currentDescriptor reads an own property into descriptor form, or nil if there
 // is none.
-func (r *Runtime) currentDescriptor(o *Object, key Atom) *propDesc {
+func (r *Runtime) currentDescriptor(o *Object, key Atom) (*propDesc, error) {
 	if o.class == ClassModuleNamespace {
 		// An export is stored as an accessor, because it is live, but it is a
 		// data property: what a module exports is a value, not a way of
-		// computing one.
-		return r.namespaceDescriptor(o, key)
+		// computing one. Anything else there is described in the ordinary way.
+		d, err := r.namespaceDescriptor(o, key)
+		if err != nil || d != nil {
+			return d, err
+		}
 	}
 	if o.class == ClassTypedArray {
 		ix := r.typedArrayIndex(o, key)
 		if ix.numeric {
 			if !ix.valid {
-				return nil
+				return nil, nil
 			}
 			t := o.data.(*typedArrayData)
 			return &propDesc{
@@ -244,7 +255,7 @@ func (r *Runtime) currentDescriptor(o *Object, key Atom) *propDesc {
 				writable: true, hasWritable: true,
 				enumerable: true, hasEnumerable: true,
 				configurable: true, hasConfigurable: true,
-			}
+			}, nil
 		}
 	}
 	if o.class == ClassStringWrapper {
@@ -259,7 +270,7 @@ func (r *Runtime) currentDescriptor(o *Object, key Atom) *propDesc {
 					writable: false, hasWritable: true,
 					enumerable: true, hasEnumerable: true,
 					configurable: false, hasConfigurable: true,
-				}
+				}, nil
 			}
 			if key == atomLength && o.getOwn(atomLength) == nil {
 				return &propDesc{
@@ -267,7 +278,7 @@ func (r *Runtime) currentDescriptor(o *Object, key Atom) *propDesc {
 					writable: false, hasWritable: true,
 					enumerable: false, hasEnumerable: true,
 					configurable: false, hasConfigurable: true,
-				}
+				}, nil
 			}
 		}
 	}
@@ -281,7 +292,7 @@ func (r *Runtime) currentDescriptor(o *Object, key Atom) *propDesc {
 			writable: o.flags&objArrayLengthWritable != 0, hasWritable: true,
 			enumerable: false, hasEnumerable: true,
 			configurable: false, hasConfigurable: true,
-		}
+		}, nil
 	}
 	if key.IsIndex() {
 		if v, ok := o.getElem(key.Index()); ok {
@@ -291,12 +302,12 @@ func (r *Runtime) currentDescriptor(o *Object, key Atom) *propDesc {
 				writable: true, hasWritable: true,
 				enumerable: true, hasEnumerable: true,
 				configurable: true, hasConfigurable: true,
-			}
+			}, nil
 		}
 	}
 	p := o.getOwnVisible(key)
 	if p == nil {
-		return nil
+		return nil, nil
 	}
 	d := &propDesc{
 		enumerable: p.flags&propEnumerable != 0, hasEnumerable: true,
@@ -308,14 +319,14 @@ func (r *Runtime) currentDescriptor(o *Object, key Atom) *propDesc {
 		if a != nil {
 			d.getter, d.setter = a.getter, a.setter
 		}
-		return d
+		return d, nil
 	}
 	d.value, d.hasValue = p.value, true
 	if u := mappedArgument(o, key); u != nil {
 		d.value = u.get()
 	}
 	d.writable, d.hasWritable = p.flags&propWritable != 0, true
-	return d
+	return d, nil
 }
 
 // installProperty writes the descriptor, filling in from the existing property

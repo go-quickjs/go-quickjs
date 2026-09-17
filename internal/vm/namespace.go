@@ -65,7 +65,7 @@ func (r *Runtime) namespaceObject(m *Module) (*Object, error) {
 		key := r.atoms.intern(b.local)
 		getter := r.newNativeFunc("get "+exported, 0,
 			func(rt *Runtime, this Value, args []Value) (Value, error) {
-				return rt.getProp(src.env, key, Obj(src.env))
+				return rt.readModuleBinding(src, key, exported)
 			})
 		// Writable and enumerable, as the specification says, but not
 		// configurable: what a module exports cannot change.
@@ -73,47 +73,65 @@ func (r *Runtime) namespaceObject(m *Module) (*Object, error) {
 			propEnumerable|propNamespaceExport)
 	}
 
-	// The tag is the one property that is not an export, and is fixed in every
-	// respect.
-	r.defineAccessor(ns, r.atoms.internSymbol(r.wellKnown.toStringTag),
-		r.newNativeFunc("get [Symbol.toStringTag]", 0,
-			func(rt *Runtime, this Value, args []Value) (Value, error) {
-				return Str(NewString("Module")), nil
-			}), nil, propNamespaceTag)
+	// The tag is the one property that is not an export. It is an ordinary
+	// data property rather than a live binding, fixed in every respect.
+	ns.setOwnRaw(r.atoms.internSymbol(r.wellKnown.toStringTag),
+		Str(NewString("Module")), 0)
 
 	ns.flags &^= objExtensible
 	return ns, nil
 }
 
+// namespaceDefine applies a define to a module namespace's export.
+//
+// The only define it accepts is one that describes the property already there:
+// a namespace's exports are fixed, so a program can check their shape but not
+// change it.
+func (r *Runtime) namespaceDefine(o *Object, key Atom, d *propDesc) (bool, error) {
+	cur, err := r.namespaceDescriptor(o, key)
+	if err != nil {
+		return false, err
+	}
+	switch {
+	case cur == nil:
+		return false, nil
+	case d.hasGet || d.hasSet:
+		return false, nil
+	case d.hasConfigurable && d.configurable:
+		return false, nil
+	case d.hasEnumerable && !d.enumerable:
+		return false, nil
+	case d.hasWritable && !d.writable:
+		return false, nil
+	case d.hasValue:
+		return d.value.SameValue(cur.value), nil
+	}
+	return true, nil
+}
+
 // namespaceDescriptor reports an export as the data property it is, rather than
-// as the accessor it is stored as.
-func (r *Runtime) namespaceDescriptor(o *Object, key Atom) *propDesc {
+// as the accessor it is stored as. It reports nil for anything that is not an
+// export, which the caller then describes in the ordinary way.
+func (r *Runtime) namespaceDescriptor(o *Object, key Atom) (*propDesc, error) {
 	p := o.getOwnVisible(key)
-	if p == nil {
-		return nil
+	if p == nil || p.flags&propNamespaceExport == 0 {
+		return nil, nil
 	}
 	v := Undefined
 	if a := p.getterSetter(); a != nil && a.getter != nil {
+		// Describing an export reads it, because the value is part of the
+		// description -- so a binding still in its dead zone makes even
+		// getOwnPropertyDescriptor throw.
 		got, err := r.call(Obj(a.getter), Obj(o), nil)
 		if err != nil {
-			// A binding still in its dead zone has no value to report. The
-			// property is there, which is what the descriptor says.
-			got = Undefined
+			return nil, err
 		}
 		v = got
-	}
-	if p.flags&propNamespaceTag != 0 {
-		return &propDesc{
-			value: v, hasValue: true,
-			writable: false, hasWritable: true,
-			enumerable: false, hasEnumerable: true,
-			configurable: false, hasConfigurable: true,
-		}
 	}
 	return &propDesc{
 		value: v, hasValue: true,
 		writable: true, hasWritable: true,
 		enumerable: true, hasEnumerable: true,
 		configurable: false, hasConfigurable: true,
-	}
+	}, nil
 }

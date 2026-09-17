@@ -79,7 +79,11 @@ func (r *Runtime) startForIn(v Value) (Value, error) {
 			// A non-enumerable property still shadows an enumerable one of the
 			// same name further up the chain, which is why it is recorded in
 			// seen before being skipped.
-			if !r.isEnumerable(cur, k) {
+			enumerable, err := r.isEnumerable(cur, k)
+			if err != nil {
+				return Undefined, err
+			}
+			if !enumerable {
 				continue
 			}
 			st.keys = append(st.keys, Str(NewString(r.atoms.name(k))))
@@ -366,7 +370,11 @@ func (r *Runtime) copyDataProps(target *Object, src Value) error {
 		return err
 	}
 	for _, k := range keys {
-		if !r.isEnumerable(o, k) {
+		enumerable, err := r.isEnumerable(o, k)
+		if err != nil {
+			return err
+		}
+		if !enumerable {
 			continue
 		}
 		v, err := r.getProp(o, k, src)
@@ -406,7 +414,14 @@ func (r *Runtime) objectRest(src Value, excluded []Value) (Value, error) {
 		return Undefined, err
 	}
 	for _, k := range keys {
-		if skip[k] || !r.isEnumerable(o, k) {
+		if skip[k] {
+			continue
+		}
+		enumerable, err := r.isEnumerable(o, k)
+		if err != nil {
+			return Undefined, err
+		}
+		if !enumerable {
 			continue
 		}
 		v, err := r.getProp(o, k, src)

@@ -54,11 +54,8 @@ conformance suite.
 resizable ArrayBuffers, `using` declarations, and the newer proposals test262
 tracks.
 
-Known semantic gaps, each covered by a test that documents it:
+One known semantic gap, covered by a test that documents it:
 
-- A module's top-level `let` and `const` have no temporal dead zone, because
-  module bindings live in the module's environment object so that exports can
-  forward to them.
 - A `WeakMap` or `WeakSet` value is held strongly, so a value that refers to its
   own key keeps that key alive. Breaking that cycle needs ephemeron marking,
   which Go's collector does not offer.
@@ -78,25 +75,25 @@ strict and sloppy variants, the expected-failure phase and type, and the feature
 tags. A test tagged with a feature the engine does not implement is skipped
 rather than counted against it.
 
-Measured coverage, as of the most recent run over the whole suite — 76,011 of
-77,092 executed variants, 98.6%. A test tagged with a feature the engine does
+Measured coverage, as of the most recent run over the whole suite — 76,366 of
+77,092 executed variants, 99.1%. A test tagged with a feature the engine does
 not implement is skipped rather than counted, which is what the remaining 14,728
 are. By area, worst first:
 
 | Area | | Area | |
 |---|---|---|---|
-| `built-ins/Atomics` | 0.0% | `language/global-code` | 80.0% |
-| `language/identifier-resolution` | 86.4% | `built-ins/AggregateError` | 87.5% |
-| `built-ins/AsyncFromSyncIteratorPrototype` | 89.5% | `built-ins/Symbol` | 90.0% |
-| `built-ins/ArrayBuffer` | 92.2% | `language/module-code` | 93.8% |
-| `language/eval-code` | 94.2% | `built-ins/BigInt` | 96.1% |
-| `built-ins/TypedArray` | 96.2% | `built-ins/TypedArrayConstructors` | 96.2% |
-| `built-ins/Function` | 96.7% | `built-ins/String` | 96.8% |
-| `built-ins/Proxy` | 97.4% | `built-ins/Reflect` | 97.4% |
-| `built-ins/Set` | 97.9% | `language/block-scope` | 97.9% |
-| `built-ins/Promise` | 98.0% | `built-ins/RegExp` | 98.1% |
-| `built-ins/Math` | 98.2% | `language/identifiers` | 98.5% |
-| `language/expressions` | 98.8% | `language/statements` | 99.1% |
+| `built-ins/Atomics` | 0.0% | `language/block-scope` | 97.9% |
+| `language/identifier-resolution` | 86.4% | `language/computed-property-names` | 97.9% |
+| `built-ins/AsyncFromSyncIteratorPrototype` | 89.5% | `language/module-code` | 97.9% |
+| `language/eval-code` | 95.6% | `built-ins/Math` | 98.2% |
+| `built-ins/BigInt` | 96.1% | `built-ins/decodeURI` | 98.2% |
+| `built-ins/String` | 96.8% | `built-ins/Error` | 98.2% |
+| `built-ins/TypedArray` | 97.0% | `built-ins/decodeURIComponent` | 98.2% |
+| `language/destructuring` | 97.1% | `built-ins/Function` | 98.3% |
+| `built-ins/Proxy` | 97.4% | `built-ins/Promise` | 98.6% |
+| `built-ins/Reflect` | 97.4% | `language/types` | 99.0% |
+| `built-ins/TypedArrayConstructors` | 97.7% | `built-ins/Array` | 99.1% |
+| `built-ins/Set` | 97.9% | `language/statements` | 99.3% |
 
 `built-ins/Atomics` is the ten tests for `Atomics.pause`, which is the only part
 of that API a single-threaded engine could offer and which is not implemented.

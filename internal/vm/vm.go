@@ -644,15 +644,32 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// comparison rather than a call.
 			if env.lastKey == name && int(env.lastIdx) < len(env.props) {
 				if p := &env.props[env.lastIdx]; p.key == name &&
-					p.flags&(propAccessor|propPrivate|propDeleted) == 0 {
+					p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
 					push(p.value)
 					break
 				}
 			}
 			if i := env.findOwn(name); i >= 0 {
-				if p := &env.props[i]; p.flags&(propAccessor|propPrivate|propDeleted) == 0 {
+				if p := &env.props[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
 					push(p.value)
 					break
+				}
+			}
+			if env != r.global {
+				// Module code: its own bindings were looked for above, and the
+				// script-level lexical ones sit between the module environment
+				// and the global object it inherits from. An import is stored
+				// as an accessor, which the general read below runs.
+				if p := r.moduleLexProp(env, name); p != nil {
+					if p.flags&propUninit != 0 {
+						vmErr = r.throwReferenceError(
+							"cannot access %q before it is initialized", r.atoms.name(name))
+						goto onError
+					}
+					if p.flags&(propAccessor|propPrivate|propDeleted) == 0 {
+						push(p.value)
+						break
+					}
 				}
 			}
 			// The read comes first and the existence check only follows an
@@ -681,6 +698,19 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				push(p.value)
 				break
 			}
+			if env != r.global {
+				if p := r.moduleLexProp(env, cl.names[in.A]); p != nil {
+					if p.flags&propUninit != 0 {
+						vmErr = r.throwReferenceError("cannot access %q before it is initialized",
+							r.atoms.name(cl.names[in.A]))
+						goto onError
+					}
+					if p.flags&(propAccessor|propPrivate|propDeleted) == 0 {
+						push(p.value)
+						break
+					}
+				}
+			}
 			v, err := r.getProp(env, cl.names[in.A], Obj(env))
 			if err != nil {
 				vmErr = err
@@ -703,6 +733,30 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				}
 				p.value = pop()
 				break
+			}
+			if env != r.global {
+				// Module code. Its own bindings and the script-level lexical
+				// ones are properties rather than slots, so what the compiler
+				// checks for a local is checked here instead.
+				if p := r.moduleLexProp(env, name); p != nil {
+					switch {
+					case p.flags&propUninit != 0:
+						vmErr = r.throwReferenceError(
+							"cannot access %q before it is initialized", r.atoms.name(name))
+						goto onError
+					case p.flags&(propWritable|propAccessor) == 0:
+						vmErr = r.throwTypeError("assignment to constant variable %q",
+							r.atoms.name(name))
+						goto onError
+					}
+					if p.flags&(propAccessor|propPrivate|propDeleted) == 0 {
+						p.value = pop()
+						break
+					}
+					// What is left is an imported binding, stored as an
+					// accessor with no setter, which the assignment below
+					// refuses for us.
+				}
 			}
 			// Strict mode refuses to create a global by assignment, which is
 			// the rule that catches a misspelled variable.
@@ -768,6 +822,21 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		case bytecode.OpInitGlobalLex:
 			r.globalLex.setOwnRaw(cl.names[in.A], pop(),
 				r.globalLex.getOwn(cl.names[in.A]).flags)
+		case bytecode.OpDeclareModuleLex:
+			name := cl.names[in.A]
+			flags := propUninit | moduleBindingFlags(r.atoms.name(name))
+			if in.B != 0 {
+				flags |= propWritable
+			}
+			cl.scope().setOwnRaw(name, uninitialized, flags)
+		case bytecode.OpInitModuleLex:
+			name := cl.names[in.A]
+			if p := cl.scope().getOwn(name); p != nil {
+				p.value = pop()
+				p.flags &^= propUninit
+			} else {
+				pop()
+			}
 		case bytecode.OpCheckGlobalVar:
 			name := cl.names[in.A]
 			if cl.scope() != r.global {
@@ -2316,6 +2385,19 @@ func memberFlags(isClassMember uint32) propFlags {
 		return propWritable | propConfigurable
 	}
 	return propDefault
+}
+
+// moduleLexProp finds the binding a name has in module code, which is either
+// one of the module's own or a script-level lexical binding: the module
+// environment inherits from the global object, and those sit in front of it.
+func (r *Runtime) moduleLexProp(env *Object, name Atom) *Property {
+	if p := env.getOwn(name); p != nil {
+		return p
+	}
+	if len(r.globalLex.props) == 0 {
+		return nil
+	}
+	return r.globalLex.getOwn(name)
 }
 
 // globalLexProp finds a script-level lexical binding, which sits in front of

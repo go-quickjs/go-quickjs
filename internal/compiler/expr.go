@@ -1317,6 +1317,12 @@ func (c *compiler) assignToIdentStatic(t *ast.Ident, initializing bool) {
 		c.emit(bytecode.OpInitGlobalLex, c.nameIdx(t.Name), 0)
 		return
 	}
+	if initializing && c.isModuleLex(t.Name) {
+		// The same, for a module's top-level binding.
+		c.emit(bytecode.OpDup, 0, 0)
+		c.emit(bytecode.OpInitModuleLex, c.nameIdx(t.Name), 0)
+		return
+	}
 	c.emit(bytecode.OpDup, 0, 0)
 	c.emit(bytecode.OpSetGlobal, c.nameIdx(t.Name), 0)
 }

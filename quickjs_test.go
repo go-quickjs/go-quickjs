@@ -1709,6 +1709,103 @@ func TestModuleBindingsAreLive(t *testing.T) {
 	}
 }
 
+// A module's top-level let, const and class live in the module environment so
+// that the linker can forward to them, and they have the dead zone they would
+// have anywhere else: the property exists from the start, holding a marker
+// until the declaration runs.
+func TestModuleLexicalDeadZone(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"let", `try { x; out = "no error" } catch (e) { out = e.name } let x = 1;`,
+			"ReferenceError"},
+		{"const", `try { x; out = "no error" } catch (e) { out = e.name } const x = 1;`,
+			"ReferenceError"},
+		{"class", `try { C; out = "no error" } catch (e) { out = e.name } class C {}`,
+			"ReferenceError"},
+		{"through a call", `function f() { return x }
+		  try { f(); out = "no error" } catch (e) { out = e.name } let x = 1;`,
+			"ReferenceError"},
+		// typeof does not excuse a dead zone, only an undeclared name.
+		{"typeof", `try { out = typeof x } catch (e) { out = e.name } let x = 1;`,
+			"ReferenceError"},
+		{"typeof undeclared", `out = typeof nowhere;`, "undefined"},
+		// After the declaration everything is ordinary again.
+		{"initialized", `let x = 1; out = x + 1;`, "2"},
+		{"reassigned", `let x = 1; x = 4; out = x;`, "4"},
+		{"no initializer", `let x; out = x;`, "undefined"},
+		{"destructured", `const {a, b} = {a: 1, b: 2}; out = a + b;`, "3"},
+		// A const is a const wherever it is written to.
+		{"const assignment", `const k = 1;
+		  try { k = 2; out = "no error" } catch (e) { out = e.name }`, "TypeError"},
+		{"const assignment nested", `const k = 1;
+		  try { (() => { k = 2 })(); out = "no error" } catch (e) { out = e.name }`,
+			"TypeError"},
+		{"exported const", `export const k = 1;
+		  try { k = 2; out = "no error" } catch (e) { out = e.name }`, "TypeError"},
+		// A module sees a script's top-level lexical bindings, which sit
+		// between its environment and the global object.
+		{"script lexical", `out = scriptLet;`, "7"},
+		{"script lexical write", `scriptLet = 8; out = scriptLet;`, "8"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := quickjs.New()
+			defer rt.Close()
+			if _, err := rt.Eval(`let scriptLet = 7;`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := rt.EvalModule("entry",
+				"var out;\n"+tc.src+"\nglobalThis.r = String(out);"); err != nil {
+				t.Fatalf("%s: %v", tc.src, err)
+			}
+			got, _ := rt.Get("r")
+			if got.String() != tc.want {
+				t.Errorf("%s = %q, want %q", tc.src, got.String(), tc.want)
+			}
+		})
+	}
+}
+
+// An export read through a namespace before the module that owns it has run
+// the declaration is the same ReferenceError, which a cycle makes reachable.
+// Describing the property reads it, so even asking about it throws.
+func TestModuleNamespaceDeadZone(t *testing.T) {
+	src := `
+		import * as ns from "entry";
+		function probe(f) { try { f(); return "no error" } catch (e) { return e.name } }
+		globalThis.r = [
+			probe(() => ns.later),
+			probe(() => ns.default),
+			probe(() => Object.prototype.hasOwnProperty.call(ns, "later")),
+			probe(() => Object.getOwnPropertyDescriptor(ns, "later")),
+			probe(() => Object.keys(ns)),
+			probe(() => { for (var k in ns) {} }),
+			probe(() => Object.prototype.propertyIsEnumerable.call(ns, "later")),
+			probe(() => ({...ns})),
+			probe(() => JSON.stringify(ns)),
+			// The names are known without reading anything, and deleting an
+			// export is refused rather than attempted.
+			probe(() => Object.getOwnPropertyNames(ns).join(",")),
+			String(Reflect.deleteProperty(ns, "later")),
+		].join("|");
+		export let later = 3;
+		export default 4;`
+
+	rt := quickjs.New()
+	defer rt.Close()
+	rt.SetModuleLoader(func(spec, referrer string) (string, string, error) {
+		return src, spec, nil
+	})
+	if _, err := rt.EvalModule("entry", src); err != nil {
+		t.Fatal(err)
+	}
+	const want = "ReferenceError|ReferenceError|ReferenceError|ReferenceError|" +
+		"ReferenceError|ReferenceError|ReferenceError|ReferenceError|" +
+		"ReferenceError|no error|false"
+	if got, _ := rt.Get("r"); got.String() != want {
+		t.Errorf("\n got: %s\nwant: %s", got.String(), want)
+	}
+}
+
 // TestDefaultExportForms covers what `export default` binds. A declaration
 // with a name is exported through that binding, which keeps the export live;
 // anything else is bound under a name no identifier can spell.
@@ -1989,8 +2086,34 @@ func TestModuleNamespaceObject(t *testing.T) {
 		{"strict write", `(function () { "use strict";
 		  try { ns.x = 9; return "no error" } catch (e) { return e.constructor.name } })()`,
 			"TypeError"},
+		// Every assignment is refused, including one naming something that is
+		// not an export at all, and one arriving through an heir.
+		{"set refused", `[Reflect.set(ns, "x", 9), Reflect.set(ns, "nope", 9),
+		  Reflect.set(ns, Symbol.toStringTag, 9), Reflect.set(ns, Symbol.iterator, 9)].join(",")`,
+			"false,false,false,false"},
+		{"set through heir", `String(Reflect.set(Object.create(ns), "x", 9))`, "false"},
 		{"define", `try { Object.defineProperty(ns, "y", {value: 1}); "no error" }
 		  catch (e) { e.constructor.name }`, "TypeError"},
+
+		// A define is accepted only when it describes what is already there,
+		// which is what makes Object.freeze's redefinition of each property
+		// succeed while any actual change is refused.
+		{"define same", `String(Reflect.defineProperty(ns, "x",
+		  {value: 1, writable: true, enumerable: true, configurable: false}))`, "true"},
+		{"define nothing", `String(Reflect.defineProperty(ns, "x", {}))`, "true"},
+		{"define other value", `String(Reflect.defineProperty(ns, "x", {value: 2}))`, "false"},
+		{"define non-writable", `String(Reflect.defineProperty(ns, "x", {writable: false}))`, "false"},
+		{"define configurable", `String(Reflect.defineProperty(ns, "x", {configurable: true}))`, "false"},
+		{"define non-enumerable", `String(Reflect.defineProperty(ns, "x", {enumerable: false}))`, "false"},
+		{"define accessor", `String(Reflect.defineProperty(ns, "x", {get() { return 1 }}))`, "false"},
+		{"define absent", `String(Reflect.defineProperty(ns, "nope", {value: 1}))`, "false"},
+		// The symbol-keyed properties are ordinary, and so is defining them.
+		{"define tag", `String(Reflect.defineProperty(ns, Symbol.toStringTag, {value: "Module"}))`,
+			"true"},
+		{"define other tag", `String(Reflect.defineProperty(ns, Symbol.toStringTag, {value: "M"}))`,
+			"false"},
+		{"define new symbol", `String(Reflect.defineProperty(ns, Symbol.iterator, {value: 1}))`,
+			"false"},
 		{"set prototype", `try { Object.setPrototypeOf(ns, {}); "no error" }
 		  catch (e) { e.constructor.name }`, "TypeError"},
 		// Setting it to null is what it already is, so that succeeds.
