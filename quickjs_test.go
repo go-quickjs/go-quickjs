@@ -3229,3 +3229,37 @@ func TestHashbangAndCommentTerminators(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestOptionalChainEdges covers two shapes an optional chain may and may not
+// take: a super reference at its head, and a tagged template anywhere in it.
+func TestOptionalChainEdges(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`class B { m() { return 1 } }
+		  class C extends B { go() { return super.m?.() } }
+		  String(new C().go())`, "1"},
+		{`class B {}
+		  class C extends B { go() { return super.m?.() } }
+		  String(new C().go())`, "undefined"},
+		{`class B { m() { return 3 } }
+		  class C extends B { go() { return super["m"]?.() } }
+		  String(new C().go())`, "3"},
+		{`class B { m() { return 2 } }
+		  class C extends B { go() { return super.m?.x } }
+		  String(new C().go())`, "undefined"},
+		{`class B { get p() { return {q: 4} } }
+		  class C extends B { go() { return super.p?.q } }
+		  String(new C().go())`, "4"},
+
+		// A tag cannot be told that its chain short-circuited, so the grammar
+		// refuses the combination outright.
+		{"try { eval('a?.b`x`') } catch (e) { e.constructor.name }", "SyntaxError"},
+		{"try { eval('a?.b.c`x`') } catch (e) { e.constructor.name }", "SyntaxError"},
+		{"try { eval('a?.b()`x`') } catch (e) { e.constructor.name }", "SyntaxError"},
+		{"try { eval('null?.`x`') } catch (e) { e.constructor.name }", "SyntaxError"},
+		// An ordinary tagged template is unaffected.
+		{"function t(s) { return s[0] } t`x`", "x"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

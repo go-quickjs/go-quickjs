@@ -970,6 +970,13 @@ func (c *compiler) compileOptionalChain(n *ast.OptionalChain) {
 func (c *compiler) compileChainLink(e ast.Expr, jumps *[]chainJump) {
 	switch n := e.(type) {
 	case *ast.Member:
+		if _, isSuper := n.Object.(*ast.Super); isSuper {
+			// A super reference has no object on the stack: the read starts at
+			// the home object's prototype. `super?.x` is not syntax, so there
+			// is never a short circuit to record here.
+			c.compileSuperMemberGet(n)
+			return
+		}
 		c.compileChainLink(n.Object, jumps)
 		if n.Optional {
 			*jumps = append(*jumps, chainJump{pc: c.emitJump(bytecode.OpJumpIfNullish), live: 1})
@@ -993,6 +1000,20 @@ func (c *compiler) compileChainLink(e ast.Expr, jumps *[]chainJump) {
 
 	case *ast.Call:
 		if m, ok := n.Callee.(*ast.Member); ok {
+			if _, isSuper := m.Object.(*ast.Super); isSuper {
+				// The method comes from the home object's prototype and the
+				// receiver is `this`, which goes underneath it.
+				c.emit(bytecode.OpPushThis, 0, 0)
+				c.compileSuperMemberGet(m)
+				if n.Optional {
+					*jumps = append(*jumps, chainJump{
+						pc: c.emitJump(bytecode.OpJumpIfNullish), live: 2,
+					})
+				}
+				argc := c.compileArguments(n.Args)
+				c.emit(bytecode.OpCallMethod, uint32(argc), 0)
+				return
+			}
 			c.compileChainLink(m.Object, jumps)
 			if m.Optional {
 				*jumps = append(*jumps, chainJump{pc: c.emitJump(bytecode.OpJumpIfNullish), live: 1})

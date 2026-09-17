@@ -397,6 +397,13 @@ func (p *parser) parseNew() ast.Expr {
 // allowCall is false it stops before an argument list, which is what the callee
 // of `new` requires.
 func (p *parser) parseMemberTail(expr ast.Expr, allowCall bool) ast.Expr {
+	return p.parseMemberTailIn(expr, allowCall, false)
+}
+
+// parseMemberTailIn is parseMemberTail with a note of whether it is continuing
+// an optional chain, where a tagged template may not appear at all: there is no
+// telling a tag it was skipped, so the grammar refuses the combination.
+func (p *parser) parseMemberTailIn(expr ast.Expr, allowCall, inChain bool) ast.Expr {
 	for {
 		switch {
 		case p.isPunct("."):
@@ -421,6 +428,9 @@ func (p *parser) parseMemberTail(expr ast.Expr, allowCall bool) ast.Expr {
 			expr = p.nodes.memberOf(expr, prop, true, false)
 
 		case p.startsTemplate():
+			if inChain {
+				p.errorf("a tagged template cannot appear in an optional chain")
+			}
 			quasi := p.parseTemplate()
 			expr = &ast.TaggedTemplate{Tag: expr, Quasi: quasi, Start: expr.Pos()}
 
@@ -469,7 +479,7 @@ func (p *parser) parseCallTail(expr ast.Expr, allowCall bool) ast.Expr {
 			}
 
 		case p.isPunct("."), p.isPunct("["), p.startsTemplate():
-			expr = p.parseMemberTail(expr, allowCall)
+			expr = p.parseMemberTailIn(expr, allowCall, optional)
 			continue
 
 		default:
