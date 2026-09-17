@@ -340,6 +340,10 @@ const (
 	OpGetSuperIndex
 	OpSetSuperProp
 	OpSetSuperIndex
+	// OpSuperBase pushes the object a super reference reads from, which is
+	// settled before the key is computed: changing the home object's prototype
+	// while the key runs does not move the reference.
+	OpSuperBase
 	OpNewTarget
 	// OpImportMeta pushes the running module's import.meta object, creating it
 	// on first use.
@@ -515,6 +519,7 @@ var opNames = [opCount]string{
 
 	OpGetSuperProp: "get_super_prop", OpGetSuperIndex: "get_super_index",
 	OpSetSuperProp: "set_super_prop", OpSetSuperIndex: "set_super_index",
+	OpSuperBase: "super_base",
 	OpNewTarget: "new_target", OpImportMeta: "import_meta",
 	OpPushCallee:          "push_callee",
 	OpToObject:            "to_object",

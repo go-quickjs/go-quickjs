@@ -618,11 +618,12 @@ func (c *compiler) compileUpdate(n *ast.Update) {
 			// carries the expression's result is a plain duplicate.
 			keep := bytecode.OpDup
 			if target.Computed {
+				c.emit(bytecode.OpSuperBase, 0, 0)
 				c.compileExpr(target.Property)
 				c.emit(bytecode.OpToPropertyKey, 0, 0)
-				c.emit(bytecode.OpDup, 0, 0)
+				c.emit(bytecode.OpDup2, 0, 0)
 				c.emit(bytecode.OpGetSuperIndex, 0, 0)
-				keep = bytecode.OpInsert2
+				keep = bytecode.OpInsert3
 			} else {
 				c.compileSuperMemberGet(target)
 			}
@@ -1147,12 +1148,13 @@ func (c *compiler) compileMemberUpdate(m *ast.Member, op string, emitValue func(
 		// A super reference has no object on the stack: the read starts at the
 		// home object's prototype and the write lands on `this`.
 		if m.Computed {
+			c.emit(bytecode.OpSuperBase, 0, 0)
 			c.compileExpr(m.Property)
 			c.emit(bytecode.OpToPropertyKey, 0, 0)
-			c.emit(bytecode.OpDup, 0, 0)
+			c.emit(bytecode.OpDup2, 0, 0)
 			c.emitAt(m.Start, bytecode.OpGetSuperIndex, 0, 0)
-			c.finishUpdate(op, emitValue, pos, 1, func() {
-				c.emit(bytecode.OpInsert2, 0, 0)
+			c.finishUpdate(op, emitValue, pos, 2, func() {
+				c.emit(bytecode.OpInsert3, 0, 0)
 				c.emitAt(m.Start, bytecode.OpSetSuperIndex, 0, 0)
 			})
 			return
@@ -1412,11 +1414,12 @@ func (c *compiler) compileMemberStore(m *ast.Member, emitValue func()) {
 		// A super reference has no object on the stack: the lookup starts at
 		// the home object's prototype, and the receiver is `this`.
 		if m.Computed {
+			c.emit(bytecode.OpSuperBase, 0, 0)
 			c.compileExpr(m.Property)
 			emitValue()
-			// key value -> value key value, so the store consumes two and the
-			// result is left behind.
-			c.emit(bytecode.OpInsert2, 0, 0)
+			// base key value -> value base key value, so the store consumes
+			// three and the result is left behind.
+			c.emit(bytecode.OpInsert3, 0, 0)
 			c.emitAt(m.Start, bytecode.OpSetSuperIndex, 0, 0)
 			return
 		}
@@ -1457,9 +1460,13 @@ func (c *compiler) compileMemberStoreFromValue(m *ast.Member) {
 	if _, isSuper := m.Object.(*ast.Super); isSuper {
 		// The value is on top and the key, if computed, has to go under it.
 		if m.Computed {
+			// The value is already on the stack, so the base and the key go
+			// above it and it is swapped back on top.
+			c.emit(bytecode.OpSuperBase, 0, 0)
+			c.emit(bytecode.OpSwap, 0, 0)
 			c.compileExpr(m.Property)
 			c.emit(bytecode.OpSwap, 0, 0)
-			c.emit(bytecode.OpInsert2, 0, 0)
+			c.emit(bytecode.OpInsert3, 0, 0)
 			c.emitAt(m.Start, bytecode.OpSetSuperIndex, 0, 0)
 			return
 		}
@@ -1498,10 +1505,11 @@ func (c *compiler) compileMemberStoreFromValue(m *ast.Member) {
 // the home object's prototype rather than on the receiver.
 func (c *compiler) compileSuperMemberGet(m *ast.Member) {
 	if m.Computed {
-		// `this` is read before the key expression is evaluated, so a derived
+		// The base is resolved before the key expression runs, so a derived
 		// constructor that has not called super() fails before anything the
-		// key might do.
-		c.emit(bytecode.OpCheckThisInit, 0, 0)
+		// key might do -- and a key that changes the home object's prototype
+		// does not move the reference.
+		c.emit(bytecode.OpSuperBase, 0, 0)
 		c.compileExpr(m.Property)
 		c.emit(bytecode.OpGetSuperIndex, 0, 0)
 		return

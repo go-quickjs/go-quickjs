@@ -1091,8 +1091,13 @@ func stackEffect(op bytecode.Op, a, b uint32) int {
 	case bytecode.OpGetPrivate:
 		return 0
 	case bytecode.OpSetSuperIndex:
-		// Pops the key and the value.
-		return -2
+		// Pops the base, the key and the value.
+		return -3
+	case bytecode.OpGetSuperIndex:
+		// Pops the base and the key, leaving the value.
+		return -1
+	case bytecode.OpSuperBase:
+		return 1
 
 	case bytecode.OpRethrow:
 		// Pops the completion record.

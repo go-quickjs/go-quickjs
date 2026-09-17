@@ -1007,3 +1007,75 @@ func TestClassFieldInitIsItsOwnFunction(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestSuperReferenceOrder covers when a super reference settles what it reads
+// from. The base is resolved before the key is computed, so a key that changes
+// the home object's prototype does not move the reference.
+func TestSuperReferenceOrder(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var proto = {p: "ok"}, proto2 = {p: "bad"}
+		  var obj = {__proto__: proto, m() { return super[key] }}
+		  var key = {toString() { Object.setPrototypeOf(obj, proto2); return "p" }}
+		  obj.m()`, "ok"},
+		{`var calls = 0
+		  var obj = {__proto__: {set p(v) { calls++ }}, m() { super[key] = 1 }}
+		  var key = {toString() { Object.setPrototypeOf(obj, {}); return "p" }}
+		  obj.m(); String(calls)`, "1"},
+
+		// The ordinary readings are unchanged.
+		{`var o = {__proto__: {p: 1}, m() { return super["p"] }}; String(o.m())`, "1"},
+		{`var o = {__proto__: {p: 1}, m() { super["p"] += 5; return this.p }}
+		  String(o.m())`, "6"},
+		{`var o = {__proto__: {p: 1}, m() { return super["p"]++ }}; String(o.m())`, "1"},
+		{`var o = {__proto__: {p: 1}, m() { return ++super["p"] }}; String(o.m())`, "2"},
+		{`var o = {__proto__: {p: 1}, m() { [super["p"]] = [9]; return this.p }}
+		  String(o.m())`, "9"},
+		{`class B { constructor() { this.v = 1 } }
+		  class C extends B { constructor() { super(); super["w"] = 2 } }
+		  String(new C().w)`, "2"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// TestSuperConstructorIsRead covers what super() calls, which is the running
+// class's prototype now rather than what the class was written to extend.
+func TestSuperConstructorIsRead(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// The value of a super call is the object it bound.
+		{`var custom = {}
+		  function P() { return custom }
+		  var value
+		  class C extends P { constructor() { value = super() } }
+		  new C(); String(value === custom)`, "true"},
+		{`class B {}
+		  var same
+		  class C extends B { constructor() { same = super() === this } }
+		  new C(); String(same)`, "true"},
+
+		// setPrototypeOf on the class changes what super() calls.
+		{`class B { constructor() { this.v = 1 } }
+		  class D { constructor() { this.v = 2 } }
+		  class C extends B { constructor() { super() } }
+		  Object.setPrototypeOf(C, D)
+		  String(new C().v)`, "2"},
+		// And a prototype that cannot be constructed is a TypeError the
+		// constructor can catch, after its arguments have been evaluated.
+		{`var evaluated = false, caught
+		  class C extends Object {
+		    constructor() { try { super(evaluated = true) } catch (e) { caught = e } }
+		  }
+		  Object.setPrototypeOf(C, parseInt)
+		  try { new C() } catch (e) {}
+		  (caught && caught.constructor.name) + "," + evaluated`, "TypeError,true"},
+
+		// An arrow inside a derived constructor calls the same super().
+		{`class B { constructor() { this.v = 3 } }
+		  class C extends B { constructor() { (() => super())() } }
+		  String(new C().v)`, "3"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

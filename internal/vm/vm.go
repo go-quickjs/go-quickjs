@@ -2016,7 +2016,9 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				vmErr = err
 				goto onError
 			}
-			push(Undefined)
+			// The value of a super call is the object it bound, which is what
+			// makes `var x = super()` mean something.
+			push(f.this)
 		case bytecode.OpGetSuperProp:
 			v, err := r.superGet(f, cl.names[in.A])
 			if err != nil {
@@ -2030,6 +2032,13 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				vmErr = err
 				goto onError
 			}
+		case bytecode.OpSuperBase:
+			base, _, err := r.superBase(f)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			push(Obj(base))
 		case bytecode.OpSetSuperIndex:
 			val := pop()
 			key, err := r.toPropertyKey(pop())
@@ -2037,23 +2046,20 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				vmErr = err
 				goto onError
 			}
-			if err := r.superSet(f, key, val, cl.fn.Strict); err != nil {
+			base := pop()
+			if err := r.superSetFrom(f, base, key, val, cl.fn.Strict); err != nil {
 				vmErr = err
 				goto onError
 			}
 		case bytecode.OpGetSuperIndex:
-			// The base is settled before the key is converted: a class with no
-			// prototype to read from fails whatever the key would have been.
-			if err := r.superBaseCheck(f); err != nil {
-				vmErr = err
-				goto onError
-			}
 			key, err := r.toPropertyKey(pop())
 			if err != nil {
 				vmErr = err
 				goto onError
 			}
-			v, err := r.superGet(f, key)
+			base := pop()
+			this, _ := f.thisValue()
+			v, err := r.getProp(base.Object(), key, this)
 			if err != nil {
 				vmErr = err
 				goto onError
@@ -2369,7 +2375,7 @@ func (r *Runtime) makeClosure(f *frame, c Value) *Object {
 			if outer := f.callee.fn(); outer != nil {
 				// super resolves against the enclosing method's home object.
 				fd.homeObject = outer.homeObject
-				fd.parentCtor = outer.parentCtor
+				fd.superCtor = outer.superCtor
 				if outer.arrow {
 					fd.lexArgs = outer.lexArgs
 				}
@@ -2864,7 +2870,7 @@ func (r *Runtime) linkClass(ctorVal, parent Value) error {
 	ctor.proto = parentObj
 
 	fd.ctorKind = ctorDerived
-	fd.parentCtor = parentObj
+	fd.superCtor = ctor
 	return nil
 }
 
@@ -2880,6 +2886,11 @@ func (r *Runtime) superCall(f *frame, args []Value) error {
 	parent := r.parentConstructorOf(f)
 	if parent == nil {
 		return r.throwTypeError("\"super\" is only valid in a derived constructor")
+	}
+	if !isConstructor(Obj(parent)) {
+		// The class's prototype may have been changed to something that cannot
+		// be constructed, which is only visible now.
+		return r.throwTypeError("the superclass is not a constructor")
 	}
 	// `this` is bound once. Calling super() twice would build a second object
 	// and abandon the first, including whatever the field initializers put in
@@ -2928,8 +2939,10 @@ func (r *Runtime) parentConstructorOf(f *frame) *Object {
 	if fd == nil {
 		return nil
 	}
-	if fd.parentCtor != nil {
-		return fd.parentCtor
+	if fd.superCtor != nil {
+		// GetSuperConstructor reads the running class's prototype now rather
+		// than remembering what it extended.
+		return fd.superCtor.proto
 	}
 	// A method reaches the parent through its home object rather than through
 	// a stored link.
@@ -2945,48 +2958,41 @@ func (r *Runtime) parentConstructorOf(f *frame) *Object {
 // superGet reads a property through super, resolving it on the home object's
 // prototype while leaving `this` as the current receiver.
 func (r *Runtime) superGet(f *frame, key Atom) (Value, error) {
-	if f.callee == nil {
-		return Undefined, r.throwTypeError("\"super\" is only valid inside a method")
-	}
-	fd := f.callee.fn()
-	if fd == nil || fd.homeObject == nil {
-		return Undefined, r.throwTypeError("\"super\" is only valid inside a method")
-	}
-	start := fd.homeObject.proto
-	if start == nil {
-		// `class C extends null` leaves the home object with no prototype, so
-		// there is nothing to read from -- which the specification reports
-		// rather than answering undefined.
-		return Undefined, r.throwTypeError("\"super\" has no prototype to read from")
-	}
-	this, bound := f.thisValue()
-	if !bound {
-		return Undefined, r.throwError(errReference,
-			"\"this\" is not bound until super() has been called")
+	start, this, err := r.superBase(f)
+	if err != nil {
+		return Undefined, err
 	}
 	// The receiver stays the instance, so an inherited getter sees the right
 	// object.
 	return r.getProp(start, key, this)
 }
 
-// superBaseCheck reports whether a super reference has anything to read from,
-// which is settled before the key is converted.
-func (r *Runtime) superBaseCheck(f *frame) error {
+// superBase resolves what a super reference reads from, and the receiver it
+// reads with.
+//
+// It is settled before the key is computed, so that changing the home object's
+// prototype while the key runs does not move the reference.
+func (r *Runtime) superBase(f *frame) (*Object, Value, error) {
 	if f.callee == nil {
-		return r.throwTypeError("\"super\" is only valid inside a method")
+		return nil, Undefined, r.throwTypeError("\"super\" is only valid inside a method")
 	}
 	fd := f.callee.fn()
 	if fd == nil || fd.homeObject == nil {
-		return r.throwTypeError("\"super\" is only valid inside a method")
+		return nil, Undefined, r.throwTypeError("\"super\" is only valid inside a method")
 	}
-	if _, bound := f.thisValue(); !bound {
-		return r.throwError(errReference,
+	this, bound := f.thisValue()
+	if !bound {
+		return nil, Undefined, r.throwError(errReference,
 			"\"this\" is not bound until super() has been called")
 	}
-	if fd.homeObject.proto == nil {
-		return r.throwTypeError("\"super\" has no prototype to read from")
+	start := fd.homeObject.proto
+	if start == nil {
+		// `class C extends null` leaves the home object with no prototype, so
+		// there is nothing to read from -- which the specification reports
+		// rather than answering undefined.
+		return nil, Undefined, r.throwTypeError("\"super\" has no prototype to read from")
 	}
-	return nil
+	return start, this, nil
 }
 
 // superSet writes through a super reference.
@@ -3018,6 +3024,26 @@ func (r *Runtime) superSet(f *frame, key Atom, val Value, strict bool) error {
 		return err
 	}
 	_, err := r.setProp(start, key, val, this, strict)
+	return err
+}
+
+// superSetFrom writes through a super reference whose base was already
+// resolved, which is what a computed key needs: the base is settled before the
+// key runs.
+func (r *Runtime) superSetFrom(f *frame, base Value, key Atom, val Value, strict bool) error {
+	this, bound := f.thisValue()
+	if !bound {
+		return r.throwError(errReference,
+			"\"this\" is not bound until super() has been called")
+	}
+	if !base.IsObject() {
+		if !this.IsObject() {
+			return r.throwTypeError("cannot assign to a super property of %s", r.describe(this))
+		}
+		_, err := r.setOnReceiver(this.Object(), key, val, strict)
+		return err
+	}
+	_, err := r.setProp(base.Object(), key, val, this, strict)
 	return err
 }
 

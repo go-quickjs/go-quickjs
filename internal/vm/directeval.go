@@ -78,7 +78,7 @@ func (r *Runtime) evalDirect(caller *frame, scope bytecode.EvalScope, src string
 	if caller.callee != nil {
 		if outer := caller.callee.fn(); outer != nil {
 			fd.homeObject = outer.homeObject
-			fd.parentCtor = outer.parentCtor
+			fd.superCtor = outer.superCtor
 			if outer.arrow {
 				fd.lexArgs = outer.lexArgs
 			}

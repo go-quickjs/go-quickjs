@@ -640,8 +640,13 @@ type funcData struct {
 	boundTarget *Object
 	boundThis   Value
 	boundArgs   []Value
-	// parentCtor is the constructor a derived class's super() invokes.
-	parentCtor *Object
+	// superCtor is the class constructor whose prototype super() reads.
+	//
+	// It is the function rather than the parent because the link is live:
+	// Object.setPrototypeOf on a class changes what super() calls. An arrow
+	// written inside a derived constructor inherits it, since its super() is
+	// the constructor's.
+	superCtor *Object
 	// fields holds a class's instance field initializers, run by the
 	// constructor before the body.
 	fields []classField
