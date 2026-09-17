@@ -344,3 +344,35 @@ func TestLastIndexOfArguments(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
 	}
 }
+
+// Reversing swaps what is there: two holes swapped are two holes, so neither
+// end is written and neither is deleted.
+func TestReverseLeavesHolesAlone(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var log = []
+		  var o = {length: 4, 0: "a", 3: "d"}
+		  var p = new Proxy(o, {
+		    has: function (t, k) { log.push("has:" + String(k)); return Reflect.has(t, k) },
+		    get: function (t, k, r) { log.push("get:" + String(k)); return Reflect.get(t, k, r) },
+		    set: function (t, k, v, r) { log.push("set:" + String(k)); return Reflect.set(t, k, v, r) },
+		    deleteProperty: function (t, k) {
+		      log.push("delete:" + String(k))
+		      return Reflect.deleteProperty(t, k)
+		    }
+		  })
+		  Array.prototype.reverse.call(p)
+		  log.filter(function (e) { return e.indexOf("delete") === 0 || e.indexOf("set") === 0 })
+		    .join(",")`, "set:0,set:3"},
+		// A hole against a value still moves: one is written and the other is
+		// deleted.
+		{`var a = [1, , 3, ,]
+		  a.reverse();
+		  [a.length, 0 in a, 1 in a, 2 in a, 3 in a, a[1], a[3]].join(",")`,
+			"4,false,true,false,true,3,1"},
+		{`[1, 2, 3].reverse().join(",")`, "3,2,1"},
+		{`var a = [, ,]; a.reverse(); [a.length, 0 in a, 1 in a].join(",")`, "2,false,false"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

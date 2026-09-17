@@ -1383,6 +1383,11 @@ func (r *Runtime) initArrayBuiltins() {
 			if err != nil {
 				return Undefined, err
 			}
+			if !loHas && !hiHas {
+				// Two holes swapped are two holes: nothing is written, and
+				// nothing is deleted either.
+				continue
+			}
 			// A hole swapped in has to be deleted rather than written, or it
 			// would become an element holding undefined.
 			if err := a.put(rt, lo, hiVal, hiHas); err != nil {
