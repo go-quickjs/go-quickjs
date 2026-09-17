@@ -300,7 +300,11 @@ func Compile(prog *ast.Program, opts Options) (fn *bytecode.Function, err error)
 	// object rather than locals, which is what makes them visible to other
 	// scripts in the same realm.
 	c.checkScopes(prog.Body)
+	// Every declaration is checked against the global environment before any
+	// of them is created, so that a script whose declarations cannot all be
+	// honoured leaves none of them behind.
 	c.checkGlobalLexicals(prog.Body)
+	c.checkGlobalVars(prog.Body)
 	c.hoistGlobals(prog.Body)
 	c.compileStatements(prog.Body)
 
@@ -689,6 +693,29 @@ func (c *compiler) checkGlobalLexicals(body []ast.Stmt) {
 					c.nameIdx(n.Class.Name.Name), 0)
 			}
 		}
+	}
+}
+
+// checkGlobalVars rejects a top-level var or function declaration the global
+// environment will not accept, before any of them is created.
+func (c *compiler) checkGlobalVars(body []ast.Stmt) {
+	if !c.functionsAreGlobal() {
+		return
+	}
+	funcs := map[string]bool{}
+	for _, s := range body {
+		if _, name, ok := hoistableFunction(s); ok {
+			funcs[name] = true
+			c.emit(bytecode.OpCheckGlobalVar, c.nameIdx(name), 1)
+		}
+	}
+	var names []string
+	collectVarNamesIn(body, &names, c.fn.Strict)
+	for _, n := range names {
+		if funcs[n] {
+			continue
+		}
+		c.emit(bytecode.OpCheckGlobalVar, c.nameIdx(n), 0)
 	}
 }
 

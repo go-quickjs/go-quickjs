@@ -496,14 +496,31 @@ func TestGlobalLexicalCollisions(t *testing.T) {
 		rt.Close()
 	}
 
+	// A script whose declarations cannot all be honoured leaves none of them
+	// behind: everything is checked before anything is created.
+	rt := quickjs.New()
+	defer rt.Close()
+	if _, err := rt.Eval(`let taken = 1`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.Eval(`var fresh = 1; var taken = 2`); err == nil {
+		t.Error("a var colliding with a lexical binding should be a SyntaxError")
+	}
+	if v, err := rt.Eval(`typeof fresh`); err != nil || v.String() != "undefined" {
+		t.Errorf("fresh = %v, %v; the failed script should have created nothing", v, err)
+	}
+
 	// A name only one of them declares is fine, and so is a duplicate inside
 	// a block or a function.
 	good := [][2]string{
 		{`let h = 1`, `var i = 2; h + i`},
 		{`let j = 1`, `{ let j = 2 }`},
 		{`let k = 1`, `(function () { let k = 2 })()`},
-		// A lexical binding eval declares belongs to the eval.
+		// A lexical binding eval declares belongs to the eval, and a var it
+		// declares is configurable, so neither collides with a script's.
 		{`let l = 1`, `eval("let l = 2"); l`},
+		{`eval("var m = 1")`, `let m = 2; m`},
+		{`eval("function n() {}")`, `const n = 2; n`},
 	}
 	for _, pair := range good {
 		rt := quickjs.New()

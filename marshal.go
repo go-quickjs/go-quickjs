@@ -1,6 +1,7 @@
 package quickjs
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"reflect"
@@ -196,6 +197,24 @@ func fieldName(f reflect.StructField) (name string, omitEmpty, skip bool) {
 	return name, omitEmpty, false
 }
 
+// throwGoError turns the error a Go function returned into a thrown value.
+//
+// An error that already carries a JavaScript value is rethrown as that value: a
+// callback that let one through is passing it on rather than reporting a
+// failure of its own, and wrapping it would lose which kind it was. Source that
+// failed to compile is a SyntaxError for the same reason.
+func throwGoError(rt *vm.Runtime, err error) error {
+	var jsErr *Error
+	if errors.As(err, &jsErr) {
+		return rt.ThrowValue(jsErr.value.v)
+	}
+	var synErr *SyntaxError
+	if errors.As(err, &synErr) {
+		return rt.ThrowSyntaxError("%s", synErr.Error())
+	}
+	return rt.ThrowError(err)
+}
+
 // wrapGoFunc makes a Go function callable from JavaScript.
 //
 // Two shapes get special treatment. A first parameter of type *Runtime receives
@@ -245,7 +264,7 @@ func wrapGoFunc(rt *vm.Runtime, fv reflect.Value) (vm.Value, error) {
 		if returnsError {
 			if e := out[len(out)-1]; !e.IsNil() {
 				// A returned error becomes a thrown exception.
-				return vm.Undefined, callRT.ThrowError(e.Interface().(error))
+				return vm.Undefined, throwGoError(callRT, e.Interface().(error))
 			}
 			out = out[:len(out)-1]
 		}

@@ -72,6 +72,10 @@ const (
 	// OpCheckGlobalLex reports a top-level let, const or class whose name is
 	// already a property of the global object that cannot be removed.
 	OpCheckGlobalLex
+	// OpCheckGlobalVar reports a top-level var or function declaration whose
+	// name a lexical binding already has. B is 1 for a function, which has the
+	// extra requirement that the property it replaces be one it could create.
+	OpCheckGlobalVar
 	// OpDeclareGlobalLex creates a script-level lexical binding, in its dead
 	// zone. A is the name; B is 1 for a let or class, 0 for a const.
 	OpDeclareGlobalLex
@@ -431,6 +435,7 @@ var opNames = [opCount]string{
 	OpSetGlobal: "set_global", OpDefineGlobalVar: "define_global_var",
 	OpDefineGlobalFunc: "define_global_func",
 	OpCheckGlobalLex:   "check_global_lex",
+	OpCheckGlobalVar:   "check_global_var",
 	OpDeclareGlobalLex: "declare_global_lex",
 	OpInitGlobalLex:    "init_global_lex",
 

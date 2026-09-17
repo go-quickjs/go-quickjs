@@ -3400,3 +3400,32 @@ func TestDateParsing(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestGoCallbackRethrowsJavaScriptErrors covers an error a Go callback returns
+// after letting one through from script: it is the same value again, not a new
+// Error wrapping its text.
+func TestGoCallbackRethrowsJavaScriptErrors(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	rt.Set("runScript", func(r *quickjs.Runtime, src string) (quickjs.Value, error) {
+		return r.Eval(src)
+	})
+	cases := []struct{ src, want string }{
+		{`try { runScript("null.x") } catch (e) { e.constructor.name }`, "TypeError"},
+		{`try { runScript("undeclared") } catch (e) { e.constructor.name }`, "ReferenceError"},
+		{`try { runScript("throw new RangeError('boom')") } catch (e) {
+		    e.constructor.name + ":" + e.message
+		  }`, "RangeError:boom"},
+		{`try { runScript("throw 42") } catch (e) { typeof e + ":" + e }`, "number:42"},
+		// Source that does not compile is a SyntaxError.
+		{`try { runScript("(") } catch (e) { e.constructor.name }`, "SyntaxError"},
+	}
+	for _, tc := range cases {
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s\n got: %s\nwant: %s", tc.src, got, tc.want)
+		}
+	}
+}

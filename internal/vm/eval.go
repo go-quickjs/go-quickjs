@@ -171,6 +171,16 @@ func (r *Runtime) ThrowError(err error) error {
 	return r.throw(Obj(r.newError(errError, err.Error())))
 }
 
+// ThrowValue raises a value that is already a JavaScript value, which is what
+// a host function passing on an error it caught from script needs.
+func (r *Runtime) ThrowValue(v Value) error { return r.throw(v) }
+
+// ThrowSyntaxError raises a SyntaxError, which is what a host function that
+// compiled source on the script's behalf reports.
+func (r *Runtime) ThrowSyntaxError(format string, args ...any) error {
+	return r.throwSyntaxError(format, args...)
+}
+
 // LooseEquals applies the == operator, which may call user code.
 func (r *Runtime) LooseEquals(a, b Value) (Value, error) {
 	eq, err := r.looseEquals(a, b)
