@@ -109,3 +109,41 @@ func TestEarlyErrorsDoNotOverreach(t *testing.T) {
 		})
 	}
 }
+
+// import() is a syntactic form rather than a function, so its shape is fixed by
+// the grammar: the arity is checked when the program is parsed, and there is
+// nothing for new to construct.
+func TestDynamicImportSyntax(t *testing.T) {
+	bad := []string{
+		`throw 0; import();`,
+		`throw 0; import("a", "b", "c");`,
+		`throw 0; new import("a");`,
+		`throw 0; new import("a", "b");`,
+		`throw 0; import(...["a"]);`,
+		`throw 0; import(,);`,
+	}
+	for _, src := range bad {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil {
+			t.Errorf("%s: accepted, want SyntaxError", src)
+		} else if !strings.Contains(err.Error(), "SyntaxError") {
+			t.Errorf("%s: got %v, want SyntaxError", src, err)
+		}
+		rt.Close()
+	}
+
+	// The legal shapes still parse, whatever they do when run.
+	for _, src := range []string{
+		`typeof (() => import("a"))`,
+		`typeof (() => import("a", {with: {}}))`,
+		`typeof (async () => await import("a"))`,
+	} {
+		rt := quickjs.New()
+		if v, err := rt.Eval(src); err != nil {
+			t.Errorf("%s: %v", src, err)
+		} else if v.String() != "function" {
+			t.Errorf("%s = %q", src, v.String())
+		}
+		rt.Close()
+	}
+}

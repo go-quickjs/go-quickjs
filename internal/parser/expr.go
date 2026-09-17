@@ -344,6 +344,11 @@ func (p *parser) parseNew() ast.Expr {
 	if p.isKeyword("new") {
 		callee = p.parseNew()
 	} else {
+		// import() is a syntactic form rather than a function, so there is
+		// nothing for new to construct.
+		if p.isKeyword("import") {
+			p.errorf("\"import\" cannot be used with \"new\"")
+		}
 		callee = p.parsePrimary()
 	}
 	callee = p.parseMemberTail(callee, false)
@@ -640,6 +645,19 @@ func (p *parser) parseImportExpr() ast.Expr {
 		p.errorf("expected \"(\" after \"import\"")
 	}
 	args := p.parseArguments()
+	// import() takes a specifier and, optionally, an options object. It is not
+	// a function, so the arity is fixed by the grammar rather than ignored.
+	switch {
+	case len(args) == 0:
+		p.errorf("\"import\" needs a specifier")
+	case len(args) > 2:
+		p.errorf("\"import\" takes at most a specifier and an options object")
+	}
+	for _, a := range args {
+		if _, spread := a.(*ast.Spread); spread {
+			p.errorf("\"import\" does not take a spread argument")
+		}
+	}
 	return &ast.Call{
 		Callee: &ast.Ident{Name: "import", Start: start},
 		Args:   args,
