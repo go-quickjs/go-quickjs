@@ -357,3 +357,50 @@ func TestWithVarStoreLeavesTheStackAlone(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
 	}
 }
+
+// Deciding that a `with` object answers for a name runs user code -- the
+// unscopables getter, or a proxy's traps -- so the read or write that follows
+// asks again whether the binding is still there.
+func TestWithRechecksTheBinding(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"the order of a read", `var log = []
+		  var env = {Object: 1}
+		  var proxy = new Proxy(env, {
+		    has: function (t, k) { log.push("has:" + String(k)); return Reflect.has(t, k) },
+		    get: function (t, k, r) { log.push("get:" + String(k)); return Reflect.get(t, k, r) },
+		  })
+		  with (proxy) { Object }
+		  log.join("|")`,
+			"has:Object|get:Symbol(Symbol.unscopables)|has:Object|get:Object"},
+		{"the order of a write", `var log = []
+		  var env = {p: 1}
+		  var proxy = new Proxy(env, {
+		    has: function (t, k) { log.push("has:" + String(k)); return Reflect.has(t, k) },
+		    get: function (t, k, r) { log.push("get:" + String(k)); return Reflect.get(t, k, r) },
+		    set: function (t, k, v, r) { log.push("set:" + String(k)); return Reflect.set(t, k, v) },
+		  })
+		  with (proxy) { p = 2 }
+		  log.join("|")`,
+			"has:p|get:Symbol(Symbol.unscopables)|has:p|set:p"},
+		// A binding that the unscopables getter removed is gone: strict code
+		// says so, sloppy code reads undefined.
+		{"deleted while looking", `var env = {binding: 0}
+		  Object.defineProperty(env, Symbol.unscopables, {
+		    get: function () { delete env.binding; return null }})
+		  var out
+		  with (env) {
+		    out = (function () { "use strict"
+		      try { return binding } catch (e) { return e.constructor.name } })()
+		  }
+		  out`, "ReferenceError"},
+		{"deleted in sloppy code", `var env = {binding: 0}
+		  Object.defineProperty(env, Symbol.unscopables, {
+		    get: function () { delete env.binding; return null }})
+		  var out
+		  with (env) { out = String(binding) }
+		  out`, "undefined"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}

@@ -1574,7 +1574,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			if !found {
 				break
 			}
-			v, err := r.getProp(o, name, Obj(o))
+			v, err := r.withRead(o, name, cl.fn.Strict)
 			if err != nil {
 				vmErr = err
 				goto onError
@@ -1609,7 +1609,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			if !found {
 				break
 			}
-			v, err := r.getProp(o, name, Obj(o))
+			v, err := r.withRead(o, name, cl.fn.Strict)
 			if err != nil {
 				vmErr = err
 				goto onError
@@ -1640,25 +1640,11 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				break
 			}
 			name := cl.names[in.A]
-			if cl.fn.Strict {
-				// A strict reference to a binding that has since gone is a
-				// ReferenceError rather than a property being created: the
-				// object environment record no longer has the binding the
-				// reference names.
-				has, err := r.hasPropErr(base.Object(), name)
-				if err != nil {
-					vmErr = err
-					goto onError
-				}
-				if !has {
-					vmErr = r.throwError(errReference, "%q is not defined",
-						r.atoms.name(name))
-					goto onError
-				}
-			}
 			v := peek(0)
-			if _, err := r.setProp(base.Object(), name, v, base,
-				cl.fn.Strict); err != nil {
+			// The write asks again whether the binding is there: a strict
+			// reference to one that has since gone is a ReferenceError rather
+			// than a property being created.
+			if err := r.withWrite(base.Object(), name, v, cl.fn.Strict); err != nil {
 				vmErr = err
 				goto onError
 			}
@@ -1676,7 +1662,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			if !found {
 				break
 			}
-			if _, err := r.setProp(o, name, peek(0), Obj(o), cl.fn.Strict); err != nil {
+			if err := r.withWrite(o, name, peek(0), cl.fn.Strict); err != nil {
 				vmErr = err
 				goto onError
 			}

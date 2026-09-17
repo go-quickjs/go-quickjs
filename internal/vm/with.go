@@ -54,6 +54,41 @@ func (r *Runtime) withFound(scopes []*Object, name Atom, limit int) (*Object, bo
 	return nil, false, nil
 }
 
+// withRead reads a binding through a `with` object.
+//
+// It asks again whether the property is there, because deciding that the object
+// answers for the name runs user code -- the unscopables getter, or a proxy's
+// traps -- and the property may be gone by the time the read happens. A binding
+// that vanished reads as undefined in sloppy code and is a ReferenceError in
+// strict code, which is what an environment record does with one.
+func (r *Runtime) withRead(o *Object, name Atom, strict bool) (Value, error) {
+	has, err := r.hasPropErr(o, name)
+	if err != nil {
+		return Undefined, err
+	}
+	if !has {
+		if strict {
+			return Undefined, r.throwReferenceError("%s is not defined", r.atoms.name(name))
+		}
+		return Undefined, nil
+	}
+	return r.getProp(o, name, Obj(o))
+}
+
+// withWrite assigns to a binding through a `with` object, asking the same
+// question first for the same reason.
+func (r *Runtime) withWrite(o *Object, name Atom, v Value, strict bool) error {
+	has, err := r.hasPropErr(o, name)
+	if err != nil {
+		return err
+	}
+	if !has && strict {
+		return r.throwReferenceError("%s is not defined", r.atoms.name(name))
+	}
+	_, err = r.setProp(o, name, v, Obj(o), strict)
+	return err
+}
+
 // unscopable reports whether an object's Symbol.unscopables hides a name.
 func (r *Runtime) unscopable(o *Object, name Atom) (bool, error) {
 	key := r.atoms.internSymbol(r.wellKnown.unscopables)
