@@ -572,19 +572,23 @@ func (p *parser) parseEscape() (node, bool, error) {
 
 	case 'k':
 		p.pos++
-		if p.eat('<') {
-			name, err := p.parseGroupName()
-			if err != nil {
-				return nil, false, err
-			}
-			ref := &nodeBackref{name: name}
-			p.namedRefs = append(p.namedRefs, ref)
-			return ref, true, nil
+		// `\k` names a group only in a pattern that has one, or under the u
+		// flag. Elsewhere it is the letter k, and what follows is whatever it
+		// looks like: `/\k<x>/` matches the text "k<x>".
+		named := len(p.groupNames) > 0 || p.flags&FlagUnicode != 0
+		if !named {
+			return nodeChar{r: 'k'}, true, nil
 		}
-		if len(p.groupNames) > 0 || p.flags&FlagUnicode != 0 {
+		if !p.eat('<') {
 			return nil, false, p.errorf("invalid \\k escape")
 		}
-		return nodeChar{r: 'k'}, true, nil
+		name, err := p.parseGroupName()
+		if err != nil {
+			return nil, false, err
+		}
+		ref := &nodeBackref{name: name}
+		p.namedRefs = append(p.namedRefs, ref)
+		return ref, true, nil
 
 	case '1', '2', '3', '4', '5', '6', '7', '8', '9':
 		n, _ := p.parseDecimal()

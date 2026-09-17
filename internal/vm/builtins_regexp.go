@@ -405,9 +405,10 @@ func (r *Runtime) groupObject(ordered []string, names map[string]int, at func(in
 // toRegExp coerces a value used as a pattern, compiling a string as a literal
 // would with the given extra flags.
 func (r *Runtime) toRegExp(v Value, extraFlags string) (Value, error) {
-	if v.IsObject() && v.Object().class == ClassRegExp {
-		return v, nil
-	}
+	// A fresh regular expression every time, even from one: this is only
+	// reached when the argument had no symbol method of its own, and what the
+	// specification builds then is a new pattern from the argument's string
+	// form.
 	source := ""
 	if !v.IsUndefined() {
 		// The string is a pattern rather than text to find: `"a1".search("\\d")`

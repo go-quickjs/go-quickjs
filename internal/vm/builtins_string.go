@@ -227,7 +227,7 @@ func (r *Runtime) initStringBuiltins() {
 	})
 
 	r.defMethod(p, "includes", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		s, needle, err := rt.strAndSearch(thisStr, this, args)
+		s, needle, err := rt.strAndPattern(thisStr, this, args, "includes")
 		if err != nil {
 			return Undefined, err
 		}
@@ -239,7 +239,7 @@ func (r *Runtime) initStringBuiltins() {
 	})
 
 	r.defMethod(p, "startsWith", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		s, needle, err := rt.strAndSearch(thisStr, this, args)
+		s, needle, err := rt.strAndPattern(thisStr, this, args, "startsWith")
 		if err != nil {
 			return Undefined, err
 		}
@@ -254,7 +254,7 @@ func (r *Runtime) initStringBuiltins() {
 	})
 
 	r.defMethod(p, "endsWith", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		s, needle, err := rt.strAndSearch(thisStr, this, args)
+		s, needle, err := rt.strAndPattern(thisStr, this, args, "endsWith")
 		if err != nil {
 			return Undefined, err
 		}
@@ -498,6 +498,33 @@ func (r *Runtime) strAndSearch(thisStr thisStrFunc, this Value, args []Value) (*
 	s, err := thisStr(r, this)
 	if err != nil {
 		return nil, nil, err
+	}
+	needle, err := r.toString(arg(args, 0))
+	if err != nil {
+		return nil, nil, err
+	}
+	return s, needle, nil
+}
+
+// strAndPattern is strAndSearch for the three methods that refuse a regular
+// expression outright.
+//
+// `"a".includes(/a/)` is a TypeError rather than a search for "/a/": these
+// three take text, and a pattern given to one is a mistake. What counts as a
+// regular expression is what Symbol.match says, which is a read that may throw.
+func (r *Runtime) strAndPattern(thisStr thisStrFunc, this Value, args []Value,
+	name string) (*String, *String, error) {
+	s, err := thisStr(r, this)
+	if err != nil {
+		return nil, nil, err
+	}
+	isRe, err := r.isRegExp(arg(args, 0))
+	if err != nil {
+		return nil, nil, err
+	}
+	if isRe {
+		return nil, nil, r.throwTypeError(
+			"String.prototype.%s takes a string, not a regular expression", name)
 	}
 	needle, err := r.toString(arg(args, 0))
 	if err != nil {

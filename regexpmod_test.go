@@ -319,3 +319,23 @@ func TestRequiredRepetitionMayMatchNothing(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// `\k` names a group only in a pattern that has one, or under the u flag.
+// Elsewhere it is the letter k, and what follows it is whatever it looks like.
+func TestNamedBackreferenceNeedsAName(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`String("x".split(/\k<x>/))`, "x"},
+		{`String(/\k<x>/.test("k<x>"))`, "true"},
+		{`String(/\k/.test("k"))`, "true"},
+		{`String(/(?<a>x)\k<a>/.test("xx"))`, "true"},
+		{`String(/(?<a>x)\k<a>/.test("xy"))`, "false"},
+		// With a named group in the pattern, or under u, it has to name one.
+		{`try { String(eval("/\\k<a>/u.test('x')")) } catch (e) { e.constructor.name }`,
+			"SyntaxError"},
+		{`try { String(eval("/(?<a>x)\\k<b>/.test('x')")) } catch (e) { e.constructor.name }`,
+			"SyntaxError"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

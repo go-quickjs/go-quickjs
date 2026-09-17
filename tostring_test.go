@@ -227,3 +227,31 @@ func TestNormalizeIsAccepted(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// includes, startsWith and endsWith search for text, so a regular expression
+// given to one is a mistake rather than a pattern -- and what counts as one is
+// what Symbol.match says.
+func TestSearchMethodsRefuseARegExp(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"includes", `try { "".includes(/a/); "ok" } catch (e) { e.constructor.name }`, "TypeError"},
+		{"startsWith", `try { "".startsWith(/a/); "ok" } catch (e) { e.constructor.name }`, "TypeError"},
+		{"endsWith", `try { "".endsWith(/a/); "ok" } catch (e) { e.constructor.name }`, "TypeError"},
+		{"anything that says it is one", `var o = {}
+		  o[Symbol.match] = true
+		  o.toString = function () { return "x" }
+		  try { "x".includes(o); "ok" } catch (e) { e.constructor.name }`, "TypeError"},
+		{"a throwing getter", `var re = /./
+		  Object.defineProperty(re, Symbol.match, {get: function () { throw new RangeError() }})
+		  try { "".includes(re); "ok" } catch (e) { e.constructor.name }`, "RangeError"},
+		{"one that disclaims it", `var re = /b/; re[Symbol.match] = false
+		  String("a/b/c".includes(re))`, "true"},
+		// indexOf and lastIndexOf take the string form of whatever they are
+		// given, regular expression or not.
+		{"indexOf takes it", `String("a/b/".indexOf(/b/))`, "1"},
+		{"the ordinary cases", `[("abc".includes("b")), "abc".startsWith("a"),
+		  "abc".endsWith("c")].join()`, "true,true,true"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}
