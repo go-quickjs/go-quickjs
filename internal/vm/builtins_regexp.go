@@ -327,14 +327,44 @@ func (r *Runtime) buildMatchResult(re *regexp.Regexp, units []uint16, caps []int
 	arr.setOwnRaw(atomIndex, Int(caps[0]), propDefault)
 	arr.setOwnRaw(atomInput, Str(input), propDefault)
 
+	names := orderedGroupNames(re)
+	arr.setOwnRaw(atomGroups, r.groupObject(names, re.GroupNames(), func(i int) Value {
+		return elems[i]
+	}), propDefault)
+
+	// The d flag asks for where each group matched as well as what it matched,
+	// which a script would otherwise have to work out by searching the input.
+	if re.Flags()&regexp.FlagHasIndices != 0 {
+		pairs := make([]Value, n)
+		for i := 0; i < n; i++ {
+			pairs[i] = r.indexPair(caps[2*i], caps[2*i+1])
+		}
+		indices := r.newArrayFrom(pairs)
+		indices.setOwnRaw(atomGroups, r.groupObject(names, re.GroupNames(), func(i int) Value {
+			return pairs[i]
+		}), propDefault)
+		arr.setOwnRaw(r.atoms.intern("indices"), Obj(indices), propDefault)
+	}
+	return arr
+}
+
+// indexPair renders where a group matched, or undefined where it did not --
+// which is distinct from having matched the empty string.
+func (r *Runtime) indexPair(lo, hi int) Value {
+	if lo < 0 || hi < 0 {
+		return Undefined
+	}
+	return Obj(r.newArrayFrom([]Value{Int(lo), Int(hi)}))
+}
+
+// orderedGroupNames lists a pattern's named groups in the order they were
+// written, which is what Object.getOwnPropertyNames of the groups object
+// reports; a map's iteration order would be a different answer each time.
+func orderedGroupNames(re *regexp.Regexp) []string {
 	names := re.GroupNames()
 	if len(names) == 0 {
-		arr.setOwnRaw(atomGroups, Undefined, propDefault)
-		return arr
+		return nil
 	}
-	// The properties are created in the order the groups were written, which
-	// is what Object.getOwnPropertyNames of the result reports; a map's
-	// iteration order would be a different answer each time.
 	ordered := make([]string, 0, len(names))
 	for name := range names {
 		ordered = append(ordered, name)
@@ -342,12 +372,20 @@ func (r *Runtime) buildMatchResult(re *regexp.Regexp, units []uint16, caps []int
 	sort.Slice(ordered, func(i, j int) bool {
 		return names[ordered[i]] < names[ordered[j]]
 	})
+	return ordered
+}
+
+// groupObject builds the object the named groups are read from, or undefined
+// when the pattern has none.
+func (r *Runtime) groupObject(ordered []string, names map[string]int, at func(int) Value) Value {
+	if len(ordered) == 0 {
+		return Undefined
+	}
 	groups := newObject(nil, ClassObject)
 	for _, name := range ordered {
-		groups.setOwnRaw(r.atoms.intern(name), elems[names[name]], propDefault)
+		groups.setOwnRaw(r.atoms.intern(name), at(names[name]), propDefault)
 	}
-	arr.setOwnRaw(atomGroups, Obj(groups), propDefault)
-	return arr
+	return Obj(groups)
 }
 
 // ---------------------------------------------------------------------------

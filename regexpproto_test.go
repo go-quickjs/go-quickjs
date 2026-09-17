@@ -318,3 +318,30 @@ func TestRegExpConstructorFromRegExpLike(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// TestMatchIndices covers the d flag, which asks a match to report where each
+// group matched as well as what it matched.
+func TestMatchIndices(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`JSON.stringify(/a(b)/d.exec("xab").indices)`, "[[1,3],[2,3]]"},
+		{`String(/a(b)/.exec("xab").indices)`, "undefined"},
+		// A group that did not participate has no bounds, which is distinct
+		// from having matched the empty string.
+		{`JSON.stringify(/(a)(b)?/d.exec("a").indices)`, "[[0,1],[0,1],null]"},
+		{`JSON.stringify(/(a)()/d.exec("a").indices)`, "[[0,1],[0,1],[1,1]]"},
+		{`JSON.stringify(/(?<n>b)/d.exec("ab").indices.groups)`, `{"n":[1,2]}`},
+		{`String(/(?<n>b)/d.exec("ab").indices.groups.n)`, "1,2"},
+		{`String(/(b)/d.exec("ab").indices.groups)`, "undefined"},
+		{`String("bab".match(/(a)/du).indices)`, "1,2,1,2"},
+		{`var d = Object.getOwnPropertyDescriptor(/a/d.exec("a"), "indices");
+		  [d.writable, d.enumerable, d.configurable].join(",")`, "true,true,true"},
+		{`String(/a/d.flags) + "," + /a/d.hasIndices + "," + /a/.hasIndices`,
+			"d,true,false"},
+		// The indices array is a plain Array, so it iterates and destructures.
+		{`var [all, g] = /a(b)/d.exec("ab").indices; all.join("-") + "|" + g.join("-")`,
+			"0-2|1-2"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

@@ -2883,3 +2883,65 @@ func TestIntegrityLevels(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// TestHoistedFunctionsSeeEachOther covers a function declaration that calls
+// one declared after it. Both bindings exist before either body runs, so the
+// call resolves to the binding rather than to a global that would shadow it.
+func TestHoistedFunctionsSeeEachOther(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`(function () {
+		    function a() { return b() }
+		    function b() { return 7 }
+		    return String(a())
+		  })()`, "7"},
+		{`(function () {
+		    function a() { return typeof b }
+		    function b() {}
+		    return a()
+		  })()`, "function"},
+		{`function a() { return b() }
+		  function b() { return 7 }
+		  String(a())`, "7"},
+		// The later declaration wins, and both names still resolve.
+		{`(function () {
+		    function f() { return 1 }
+		    function f() { return 2 }
+		    return String(f())
+		  })()`, "2"},
+		// A generator or async function is hoisted the same way.
+		{`(function () {
+		    function a() { return g().next().value }
+		    function* g() { yield 3 }
+		    return String(a())
+		  })()`, "3"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// TestSymbolToPrimitive covers Symbol.prototype[Symbol.toPrimitive], which is
+// what lets a symbol wrapper compare equal to the symbol it wraps.
+func TestSymbolToPrimitive(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var s = Symbol("a"); String(Object(s) == s)`, "true"},
+		{`var s = Symbol("a"); String(Symbol.prototype[Symbol.toPrimitive].call(s) === s)`,
+			"true"},
+		// The hint is ignored: there is nothing else a symbol could produce.
+		{`var s = Symbol("a")
+		  var f = Symbol.prototype[Symbol.toPrimitive]
+		  String(f.call(s, "string") === s && f.call(s, "number") === s)`, "true"},
+		{`var f = Symbol.prototype[Symbol.toPrimitive]
+		  f.name + "," + f.length`, "[Symbol.toPrimitive],1"},
+		{`var d = Object.getOwnPropertyDescriptor(Symbol.prototype, Symbol.toPrimitive);
+		  [d.writable, d.enumerable, d.configurable].join(",")`, "false,false,true"},
+		{`var f = Symbol.prototype[Symbol.toPrimitive]
+		  try { f.call(1) } catch (e) { e.constructor.name }`, "TypeError"},
+		// An implicit string conversion of a symbol is still a TypeError.
+		{`var s = Symbol("a"); try { Object(s) + "" } catch (e) { e.constructor.name }`,
+			"TypeError"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

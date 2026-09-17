@@ -1961,6 +1961,24 @@ func (r *Runtime) initSymbolBuiltins() {
 		}
 		return Str(NewString(s.Description)), nil
 	})
+
+	// A symbol wrapper coerces to the symbol it wraps rather than throwing the
+	// way an implicit conversion of a symbol does, which is what makes
+	// `Object(sym) == sym` true. The hint is ignored: there is nothing else it
+	// could produce.
+	r.defSymbolMethod(p, r.wellKnown.toPrimitive, "[Symbol.toPrimitive]", 1,
+		func(rt *Runtime, this Value, args []Value) (Value, error) {
+			s, err := rt.thisSymbol(this)
+			if err != nil {
+				return Undefined, err
+			}
+			return Sym(s), nil
+		})
+	// The method is not writable, which is how a script can tell it apart from
+	// one a program installed.
+	if pd := p.getOwn(r.atoms.internSymbol(r.wellKnown.toPrimitive)); pd != nil {
+		pd.flags &^= propWritable
+	}
 }
 
 func (r *Runtime) thisSymbol(this Value) (*Symbol, error) {

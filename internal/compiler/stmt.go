@@ -34,36 +34,65 @@ func (c *compiler) compileStatements(body []ast.Stmt) {
 	// Function declarations are hoisted and initialized immediately, so a call
 	// may precede the declaration textually. An exported one is hoisted too,
 	// which means looking through the export wrapper.
+	//
+	// Every binding is created before any of the bodies is compiled, because a
+	// body that refers to a function declared after it has to find the binding
+	// rather than fall through to a global that shadows it forever.
+	var hoisted []hoistedFunc
 	for _, s := range body {
-		if fd, binding, ok := hoistableFunction(s); ok {
-			c.predeclareFunction(fd, binding)
+		fd, name, ok := hoistableFunction(s)
+		if !ok {
+			continue
 		}
+		h := hoistedFunc{fd: fd, name: name}
+		if !c.functionsAreGlobal() {
+			kind := bindFunction
+			if fd.Fn.Async || fd.Fn.Generator {
+				kind = bindFunctionLexical
+			}
+			h.slot, h.local = c.declare(name, kind, fd.Start), true
+		}
+		hoisted = append(hoisted, h)
+	}
+	for _, h := range hoisted {
+		c.predeclareFunction(h)
 	}
 	for _, s := range body {
 		c.compileStatement(s)
 	}
 }
 
-// predeclareFunction creates the binding for a hoisted function declaration
-// and emits its definition up front.
-func (c *compiler) predeclareFunction(fd *ast.FuncDecl, name string) {
+// hoistedFunc is a function declaration whose binding has been created and
+// whose definition is still to be emitted.
+type hoistedFunc struct {
+	fd    *ast.FuncDecl
+	name  string
+	slot  uint32
+	local bool
+}
+
+// functionsAreGlobal reports whether a hoisted function declaration becomes a
+// property of the global object rather than a binding in a frame slot.
+func (c *compiler) functionsAreGlobal() bool {
+	return c.parent == nil && c.depth == 0 && !c.evalVarsAreLocal()
+}
+
+// predeclareFunction emits a hoisted function declaration's definition into the
+// binding that was already created for it.
+func (c *compiler) predeclareFunction(h hoistedFunc) {
 	// `export default function () {}` is hoisted like any other function
 	// declaration, but the binding it creates has a name no identifier can
 	// spell -- while the function itself is called "default".
-	fnName := name
-	if fd.Fn.Name == nil {
+	fnName := h.name
+	if h.fd.Fn.Name == nil {
 		fnName = "default"
 	}
-	c.compileFunctionLiteral(fd.Fn, fnName)
-	if c.parent == nil && c.depth == 0 && !c.evalVarsAreLocal() {
-		c.emit(bytecode.OpDefineGlobalFunc, c.nameIdx(name), boolBit(c.opts.EvalConfigurable))
+	c.compileFunctionLiteral(h.fd.Fn, fnName)
+	if !h.local {
+		c.emit(bytecode.OpDefineGlobalFunc, c.nameIdx(h.name),
+			boolBit(c.opts.EvalConfigurable))
 		return
 	}
-	kind := bindFunction
-	if fd.Fn.Async || fd.Fn.Generator {
-		kind = bindFunctionLexical
-	}
-	slot := c.declare(name, kind, fd.Start)
 
 	// Annex B: a plain function declared inside a block is also assigned to a
 	// var-scoped binding of the same name, which is what makes
@@ -72,10 +101,10 @@ func (c *compiler) predeclareFunction(fd *ast.FuncDecl, name string) {
 	//
 	// work in sloppy mode. The binding is created by hoisting like any other
 	// var; only the assignment happens here, when the declaration is reached.
-	if !c.fn.Strict && c.depth > 0 && kind == bindFunction {
-		c.emitAnnexBFunctionAlias(name)
+	if !c.fn.Strict && c.depth > 0 && !h.fd.Fn.Async && !h.fd.Fn.Generator {
+		c.emitAnnexBFunctionAlias(h.name)
 	}
-	c.emit(bytecode.OpSetLocal, slot, 0)
+	c.emit(bytecode.OpSetLocal, h.slot, 0)
 }
 
 // emitAnnexBFunctionAlias copies a block-scoped function into the var binding
