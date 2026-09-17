@@ -1673,6 +1673,15 @@ func (r *Runtime) initArrayIteratorProto() {
 		if d.done {
 			return Obj(rt.iterResult(Undefined, true)), nil
 		}
+		// A typed array whose buffer was detached mid-iteration is a TypeError
+		// rather than a silent end: its length reads as zero, which would
+		// otherwise look like exhaustion.
+		if d.a.o.class == ClassTypedArray {
+			if _, err := rt.typedArrayOf(Obj(d.a.o), "Array Iterator.prototype.next"); err != nil {
+				d.done = true
+				return Undefined, err
+			}
+		}
 		n, err := rt.lengthOf(d.a.o)
 		if err != nil {
 			d.done = true

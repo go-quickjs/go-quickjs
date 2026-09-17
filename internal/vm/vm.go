@@ -1701,7 +1701,14 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 			push(arr)
 		case bytecode.OpIterClose:
-			r.closeIter(peek(0))
+			// Leaving a loop by break or continue is not a throw, so a failure
+			// in the iterator's return method is the result rather than
+			// something to swallow -- and so is a return method that hands back
+			// something other than an object.
+			if err := r.iterCloseNormal(peek(0)); err != nil {
+				vmErr = err
+				goto onError
+			}
 		case bytecode.OpSpreadIter:
 			vals, err := r.spreadToStack(pop())
 			if err != nil {

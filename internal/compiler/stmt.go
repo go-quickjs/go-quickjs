@@ -395,7 +395,9 @@ func (c *compiler) pushLoop(label string, isLoop bool) *loopCtx {
 		label = c.pendingLabel
 		c.pendingLabel = ""
 	}
-	c.loops = append(c.loops, loopCtx{label: label, isLoop: isLoop, scopeDepth: c.depth})
+	c.loops = append(c.loops, loopCtx{
+		label: label, isLoop: isLoop, scopeDepth: c.depth, exits: len(c.exits),
+	})
 	return &c.loops[len(c.loops)-1]
 }
 
@@ -491,18 +493,24 @@ func (c *compiler) compileFor(n *ast.ForStmt) {
 func (c *compiler) compileForIn(n *ast.ForInStmt) {
 	c.compileExpr(n.Right)
 	c.emit(bytecode.OpForInStart, 0, 0)
+	c.pushExit(exitCursor)
 	c.compileForBody(n.Left, n.Body)
+	c.popExit()
 }
 
 func (c *compiler) compileForOf(n *ast.ForOfStmt) {
 	c.compileExpr(n.Right)
 	if n.Await {
 		c.emit(bytecode.OpForAwaitOfStart, 0, 0)
+		c.pushExit(exitCursor)
 		c.compileForAwaitBody(n.Left, n.Body)
+		c.popExit()
 		return
 	}
 	c.emit(bytecode.OpForOfStart, 0, 0)
+	c.pushExit(exitCursor)
 	c.compileForBody(n.Left, n.Body)
+	c.popExit()
 }
 
 // compileForAwaitBody emits the loop of a `for await`, which differs from the
@@ -578,6 +586,7 @@ func (c *compiler) compileBreak(n *ast.BreakStmt) {
 	for i := len(c.loops) - 1; i >= 0; i-- {
 		if n.Label == "" || c.loops[i].label == n.Label {
 			c.emitPendingFinallys()
+			c.emitPendingExits(c.loops[i].exits)
 			pc := c.emitJump(bytecode.OpJump)
 			c.loops[i].breaks = append(c.loops[i].breaks, pc)
 			return
@@ -593,6 +602,7 @@ func (c *compiler) compileContinue(n *ast.ContinueStmt) {
 		}
 		if n.Label == "" || c.loops[i].label == n.Label {
 			c.emitPendingFinallys()
+			c.emitPendingExits(c.loops[i].exits)
 			pc := c.emitJump(bytecode.OpJump)
 			c.loops[i].continues = append(c.loops[i].continues, pc)
 			return
@@ -734,6 +744,7 @@ func (c *compiler) bindCatchParam(param ast.Expr) {
 
 func (c *compiler) compileSwitch(n *ast.SwitchStmt) {
 	c.compileExpr(n.Disc)
+	c.pushExit(exitDrop)
 	c.beginScope()
 	c.pushLoop("", false)
 
@@ -784,6 +795,7 @@ func (c *compiler) compileSwitch(n *ast.SwitchStmt) {
 
 	c.popLoop(end)
 	c.endScope()
+	c.popExit()
 	// Remove the discriminant.
 	c.emit(bytecode.OpDrop, 0, 0)
 }
@@ -795,6 +807,30 @@ func nameOf(target ast.Expr) string {
 		return id.Name
 	}
 	return ""
+}
+
+// pushExit records something the statement being compiled leaves in place for
+// the duration of its body.
+func (c *compiler) pushExit(e pendingExit) { c.exits = append(c.exits, e) }
+
+// popExit ends the statement that pushed the innermost exit, which emits its
+// own undo on the path that falls out of the bottom.
+func (c *compiler) popExit() { c.exits = c.exits[:len(c.exits)-1] }
+
+// emitPendingExits undoes everything the statements between here and the jump's
+// target left in place, innermost first.
+func (c *compiler) emitPendingExits(down int) {
+	for i := len(c.exits) - 1; i >= down; i-- {
+		switch c.exits[i] {
+		case exitCursor:
+			c.emit(bytecode.OpIterClose, 0, 0)
+			c.emit(bytecode.OpDrop, 0, 0)
+		case exitDrop:
+			c.emit(bytecode.OpDrop, 0, 0)
+		case exitWith:
+			c.emit(bytecode.OpWithPop, 0, 0)
+		}
+	}
 }
 
 // emitPendingFinallys inlines the body of every enclosing finally clause before

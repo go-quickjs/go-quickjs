@@ -525,3 +525,39 @@ func TestTypedArrayValueConversion(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// TestTypedArrayIterationIsLive covers iterating a typed array, which reads the
+// view as it goes rather than copying it -- a view over a buffer that does not
+// see writes would be beside the point.
+func TestTypedArrayIterationIsLive(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var a = new Int8Array([3, 2, 4, 1])
+		  var out = []
+		  for (var x of a) { out.push(x); a[1] = 64 }
+		  out.join(",")`, "3,64,4,1"},
+		{`var a = new Int8Array([1, 2])
+		  var out = []
+		  for (var e of a.entries()) { out.push(e.join(":")); a[1] = 9 }
+		  out.join(",")`, "0:1,1:9"},
+		{`var a = new Int8Array([1, 2]); [...a.keys()].join(",")`, "0,1"},
+		{`var a = new Int8Array([1, 2]); [...a.values()].join(",")`, "1,2"},
+
+		// A buffer detached mid-iteration is a TypeError, not a silent end:
+		// the length reads as zero, which would otherwise look like the end.
+		{`var a = new Int8Array(5)
+		  var i = 0
+		  try {
+		    for (var k of a.keys()) { i++; a.buffer.transfer() }
+		    "no throw"
+		  } catch (e) { e.constructor.name + "," + i }`, "TypeError,1"},
+
+		// The methods still reject a receiver that is not a typed array.
+		{`try { Int8Array.prototype.values.call([]) } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		{`try { Int8Array.prototype.keys.call([]) } catch (e) { e.constructor.name }`,
+			"TypeError"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

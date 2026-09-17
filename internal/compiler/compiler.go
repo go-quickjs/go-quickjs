@@ -117,7 +117,28 @@ type loopCtx struct {
 	continues []int
 	// scopeDepth is the depth to unwind to when the jump is taken.
 	scopeDepth int
+	// exits is how much of the enclosing exit stack is still in force here, so
+	// that a jump out of an inner statement undoes what it left behind.
+	exits int
 }
+
+// pendingExit is something a statement left in place for the duration of its
+// body, which a jump out of that body has to undo.
+//
+// A `break` or `continue` leaves by jumping, so the instructions the statement
+// would have run on its way out are skipped -- and an iterator would go
+// unclosed, an operand would be stranded on the stack, or a `with` object would
+// stay on the scope chain.
+type pendingExit uint8
+
+const (
+	// exitCursor is a for-in or for-of cursor: closed, then dropped.
+	exitCursor pendingExit = iota
+	// exitDrop is an operand, which is only a switch's discriminant.
+	exitDrop
+	// exitWith is an object on the frame's `with` chain.
+	exitWith
+)
 
 // finallyCtx tracks an enclosing finally clause.
 type finallyCtx struct {
@@ -185,6 +206,9 @@ type compiler struct {
 	// finallys is the stack of enclosing finally clauses, which return, break
 	// and continue all have to account for.
 	finallys []finallyCtx
+	// exits records what the statements currently being compiled left in place
+	// for the duration of their bodies, innermost last.
+	exits []pendingExit
 	// pendingLabel carries a label from a labelled statement to the loop it
 	// labels, which is the next context pushed.
 	pendingLabel string

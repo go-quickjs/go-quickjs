@@ -461,3 +461,68 @@ func TestForAwaitOverSyncIterator(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// TestLoopExitClosesIterators covers leaving a for-of loop by break, continue
+// or a labelled jump. Every iterator between the jump and its target is closed,
+// innermost first, and what the close reports is the result.
+func TestLoopExitClosesIterators(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// A labelled jump out of a nested loop closes both iterators.
+		{`var log = []
+		  function* g(n) { try { yield n; yield n } finally { log.push("c" + n) } }
+		  outer: for (var a of g(1)) { for (var b of g(2)) { break outer } }
+		  log.join(",")`, "c2,c1"},
+		{`var log = []
+		  function* g(n) { try { yield n; yield n } finally { log.push("c" + n) } }
+		  outer: for (var a of g(1)) { for (var b of g(2)) { continue outer } }
+		  log.join(",")`, "c2,c2,c1"},
+		{`var r = 0
+		  outer: for (var a of [1, 2]) { for (var b of [3, 4]) { r++; continue outer } }
+		  String(r)`, "2"},
+		// A break out of a switch inside a loop leaves the stack as it found it.
+		{`var r = []
+		  outer: for (var a of [1, 2]) { switch (a) { case 1: r.push("a"); break outer } }
+		  r.join(",") + "|done"`, "a|done"},
+		// Leaving a `with` by a labelled break takes the object off the chain.
+		{`function f() { var o = {x: 1}; L: with (o) { break L } return typeof x }
+		  f()`, "undefined"},
+
+		// Closing on break is a normal completion: what the return method does
+		// is the result of the loop.
+		{`var it = {[Symbol.iterator]() { return {
+		    next() { return {done: false, value: 1} },
+		    return() { return 0 },
+		  }}}
+		  try { for (var x of it) break; "no throw" } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		{`var it = {[Symbol.iterator]() { return {
+		    next() { return {done: false, value: 1} },
+		    return() { throw new RangeError() },
+		  }}}
+		  try { for (var x of it) break; "no throw" } catch (e) { e.constructor.name }`,
+			"RangeError"},
+		{`var it = {[Symbol.iterator]() { return {
+		    next() { return {done: false, value: 1} },
+		    return: 1,
+		  }}}
+		  try { for (var x of it) break; "no throw" } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		// A throw out of the body keeps its own completion, so the close's
+		// failure is swallowed.
+		{`var it = {[Symbol.iterator]() { return {
+		    next() { return {done: false, value: 1} },
+		    return() { throw new RangeError() },
+		  }}}
+		  try { for (var x of it) { throw new EvalError() } } catch (e) { e.constructor.name }`,
+			"EvalError"},
+		// An iterator with no return method simply ends.
+		{`var it = {[Symbol.iterator]() { return {
+		    next() { return {done: false, value: 1} },
+		  }}}
+		  try { for (var x of it) break; "no throw" } catch (e) { e.constructor.name }`,
+			"no throw"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

@@ -1001,9 +1001,6 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		{"toReversed", 0, false, true},
 		{"toSorted", 1, false, true},
 		{"with", 2, false, true},
-		{"entries", 0, false, false},
-		{"keys", 0, false, false},
-		{"values", 0, false, false},
 	} {
 		d := m
 		r.defMethod(p, d.name, d.length, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -1081,17 +1078,36 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		})
 	r.defineAccessor(p, r.atoms.internSymbol(r.wellKnown.toStringTag), tag, nil, propConfigurable)
 
-	r.defSymbolMethod(p, r.wellKnown.iterator, "[Symbol.iterator]", 0,
-		func(rt *Runtime, this Value, args []Value) (Value, error) {
-			t, err := rt.typedArrayOf(this, "TypedArray.prototype[Symbol.iterator]")
-			if err != nil {
+	// entries, keys and values read the view as they go rather than copying
+	// it, so that a typed array written to while it is iterated is seen
+	// changing -- which is the whole point of a view over a buffer.
+	for _, m := range []struct {
+		name string
+		kind arrayIterKind
+	}{
+		{"entries", iterEntries},
+		{"keys", iterKeys},
+		{"values", iterValues},
+	} {
+		kind := m.kind
+		name := m.name
+		r.defMethod(p, name, 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+			if _, err := rt.typedArrayOf(this, "TypedArray.prototype."+name); err != nil {
 				return Undefined, err
 			}
-			vals := make([]Value, t.length)
-			for i := range vals {
-				vals[i] = t.getElem(i)
+			return rt.newArrayIteratorKind(this, kind)
+		})
+	}
+
+	r.defSymbolMethod(p, r.wellKnown.iterator, "[Symbol.iterator]", 0,
+		func(rt *Runtime, this Value, args []Value) (Value, error) {
+			// The array is validated now and then read as it goes, rather
+			// than copied: a typed array written to while it is iterated is
+			// meant to be seen changing.
+			if _, err := rt.typedArrayOf(this, "TypedArray.prototype[Symbol.iterator]"); err != nil {
+				return Undefined, err
 			}
-			return rt.newArrayIterator(Obj(rt.newArrayFrom(vals)))
+			return rt.newArrayIterator(this)
 		})
 }
 

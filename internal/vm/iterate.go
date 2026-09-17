@@ -688,8 +688,14 @@ func (r *Runtime) iterCloseNormal(cursor Value) error {
 	if err != nil {
 		return err
 	}
-	if !isCallable(ret) {
+	// An iterator without a return method simply ends; one whose return is
+	// neither absent nor callable is a TypeError, which is what looking a
+	// method up means.
+	if ret.IsUndefined() || ret.IsNull() {
 		return nil
+	}
+	if !isCallable(ret) {
+		return r.throwTypeError("the iterator's return method is not callable")
 	}
 	res, err := r.call(ret, st.iter, nil)
 	if err != nil {
