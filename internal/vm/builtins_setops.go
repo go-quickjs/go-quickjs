@@ -75,12 +75,19 @@ func (r *Runtime) probe(rec *setRecord, v Value) (bool, error) {
 	return got.Truthy(), nil
 }
 
-// keysOf drains the other collection's key iterator.
+// keysCursor walks a set-like object's keys.
 //
-// The values are collected rather than streamed because every operation here
-// needs to know when the iterator is exhausted before it can answer, and
-// because the collection being built is the receiver's, not the argument's.
-func (r *Runtime) keysOf(rec *setRecord) ([]Value, error) {
+// It is stepped rather than drained because an operation that can answer early
+// must stop asking: `isDisjointFrom` returns as soon as it finds a member in
+// common, and the iterator is told so.
+type keysCursor struct {
+	iter Value
+	next Value
+}
+
+// openKeys calls the other collection's keys method and prepares to walk what
+// it returns.
+func (r *Runtime) openKeys(rec *setRecord) (*keysCursor, error) {
 	iter, err := r.call(rec.keys, Obj(rec.obj), nil)
 	if err != nil {
 		return nil, err
@@ -95,28 +102,59 @@ func (r *Runtime) keysOf(rec *setRecord) ([]Value, error) {
 	if !isCallable(next) {
 		return nil, r.throwTypeError("the keys iterator must have a next method")
 	}
+	return &keysCursor{iter: iter, next: next}, nil
+}
 
+// step produces the next key, reporting when there are no more.
+func (c *keysCursor) step(r *Runtime) (Value, bool, error) {
+	res, err := r.call(c.next, c.iter, nil)
+	if err != nil {
+		return Undefined, false, err
+	}
+	if !res.IsObject() {
+		return Undefined, false, r.throwTypeError("an iterator result must be an object")
+	}
+	done, err := r.getValueProp(res, atomDone)
+	if err != nil {
+		return Undefined, false, err
+	}
+	if done.Truthy() {
+		return Undefined, true, nil
+	}
+	v, err := r.getValueProp(res, atomValue)
+	if err != nil {
+		return Undefined, false, err
+	}
+	return normalizeZero(v), false, nil
+}
+
+// close tells the iterator that nothing more will be asked of it.
+func (c *keysCursor) close(r *Runtime) error {
+	if !c.iter.IsObject() {
+		return nil
+	}
+	return r.closeIteratorErr(c.iter)
+}
+
+// keysOf drains the other collection's key iterator, for the operations that
+// need every key before they can answer.
+func (r *Runtime) keysOf(rec *setRecord) ([]Value, error) {
+	c, err := r.openKeys(rec)
+	if err != nil {
+		return nil, err
+	}
+	return c.drain(r)
+}
+
+// drain collects what is left of a cursor.
+func (c *keysCursor) drain(r *Runtime) ([]Value, error) {
 	var out []Value
 	for {
-		res, err := r.call(next, iter, nil)
-		if err != nil {
-			return nil, err
+		v, done, err := c.step(r)
+		if err != nil || done {
+			return out, err
 		}
-		if !res.IsObject() {
-			return nil, r.throwTypeError("an iterator result must be an object")
-		}
-		done, err := r.getValueProp(res, atomDone)
-		if err != nil {
-			return nil, err
-		}
-		if done.Truthy() {
-			return out, nil
-		}
-		v, err := r.getValueProp(res, atomValue)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, normalizeZero(v))
+		out = append(out, v)
 	}
 }
 
@@ -159,13 +197,19 @@ func (r *Runtime) initSetOps(p *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		other, err := rt.keysOf(rec)
+		cur, err := rt.openKeys(rec)
 		if err != nil {
 			return Undefined, err
 		}
-		// The receiver's members come first, so the result keeps its order and
-		// the argument's new members follow.
-		return Obj(rt.newSetFrom(append(liveEntries(m), other...))), nil
+		// The receiver's members are taken before the argument is walked --
+		// its iterator may change the receiver -- and they come first, so the
+		// result keeps its order and the argument's new members follow.
+		mine := liveEntries(m)
+		other, err := cur.drain(rt)
+		if err != nil {
+			return Undefined, err
+		}
+		return Obj(rt.newSetFrom(append(mine, other...))), nil
 	})
 
 	r.defMethod(p, "intersection", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -240,15 +284,23 @@ func (r *Runtime) initSetOps(p *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		// The argument is drained first, because the receiver may be mutated by
-		// the user code its iterator runs.
-		keys, err := rt.keysOf(rec)
+		cur, err := rt.openKeys(rec)
 		if err != nil {
 			return Undefined, err
 		}
+		// The result starts as the receiver was when the walk began; whether a
+		// key is in the receiver is asked of it as it is then, which the
+		// iterator may have changed.
 		result := rt.newSetFrom(liveEntries(m))
 		rm := result.data.(*jsMap)
-		for _, v := range keys {
+		for {
+			v, done, err := cur.step(rt)
+			if err != nil {
+				return Undefined, err
+			}
+			if done {
+				break
+			}
 			if _, ok := m.get(rt, v); ok {
 				rm.delete(rt, v)
 			} else {
@@ -268,8 +320,13 @@ func (r *Runtime) initSetOps(p *Object) {
 		if float64(m.size) > rec.size {
 			return False, nil
 		}
-		for _, v := range liveEntries(m) {
-			in, err := rt.probe(rec, v)
+		// The receiver is walked as it is at each step rather than from a copy:
+		// the argument's has method may remove a member before it is reached.
+		for i := 0; i < len(m.entries); i++ {
+			if m.entries[i].deleted {
+				continue
+			}
+			in, err := rt.probe(rec, m.entries[i].key)
 			if err != nil {
 				return Undefined, err
 			}
@@ -288,16 +345,27 @@ func (r *Runtime) initSetOps(p *Object) {
 		if float64(m.size) < rec.size {
 			return False, nil
 		}
-		keys, err := rt.keysOf(rec)
+		cur, err := rt.openKeys(rec)
 		if err != nil {
 			return Undefined, err
 		}
-		for _, v := range keys {
+		for {
+			v, done, err := cur.step(rt)
+			if err != nil {
+				return Undefined, err
+			}
+			if done {
+				return True, nil
+			}
 			if _, ok := m.get(rt, v); !ok {
+				// The answer is settled, so the iterator is told to stop
+				// rather than being walked to the end.
+				if err := cur.close(rt); err != nil {
+					return Undefined, err
+				}
 				return False, nil
 			}
 		}
-		return True, nil
 	})
 
 	r.defMethod(p, "isDisjointFrom", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -306,8 +374,11 @@ func (r *Runtime) initSetOps(p *Object) {
 			return Undefined, err
 		}
 		if float64(m.size) <= rec.size {
-			for _, v := range liveEntries(m) {
-				in, err := rt.probe(rec, v)
+			for i := 0; i < len(m.entries); i++ {
+				if m.entries[i].deleted {
+					continue
+				}
+				in, err := rt.probe(rec, m.entries[i].key)
 				if err != nil {
 					return Undefined, err
 				}
@@ -317,16 +388,25 @@ func (r *Runtime) initSetOps(p *Object) {
 			}
 			return True, nil
 		}
-		keys, err := rt.keysOf(rec)
+		cur, err := rt.openKeys(rec)
 		if err != nil {
 			return Undefined, err
 		}
-		for _, v := range keys {
+		for {
+			v, done, err := cur.step(rt)
+			if err != nil {
+				return Undefined, err
+			}
+			if done {
+				return True, nil
+			}
 			if _, ok := m.get(rt, v); ok {
+				if err := cur.close(rt); err != nil {
+					return Undefined, err
+				}
 				return False, nil
 			}
 		}
-		return True, nil
 	})
 }
 

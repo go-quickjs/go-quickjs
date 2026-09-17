@@ -409,3 +409,61 @@ func TestIteratorMethodIdentity(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// A set-like argument is walked a step at a time, and the receiver is read as
+// it is when each step happens: the argument's own methods may change either
+// collection while the operation runs, and the specification says what each one
+// sees.
+func TestSetOperationsWalkStepByStep(t *testing.T) {
+	const setLike = `
+		function observable(values, log) {
+			var index = 0
+			return {
+				size: values.length,
+				has: function (v) { log.push("has " + v); return values.indexOf(v) >= 0 },
+				keys: function () {
+					log.push("keys")
+					return {
+						next: function () {
+							log.push("next")
+							return {done: index >= values.length, value: values[index++]}
+						},
+						return: function () { log.push("return"); return {} },
+					}
+				},
+			}
+		}
+	`
+	cases := []struct{ name, src, want string }{
+		// An answer that is settled stops the walk and closes the iterator.
+		{"disjoint stops early", setLike + `var log = []
+		  var s = new Set(["a", "b", "c", "d"])
+		  String(s.isDisjointFrom(observable(["x", "a", "y"], log))) + "|" + log.join(",")`,
+			"false|keys,next,next,return"},
+		{"superset stops early", setLike + `var log = []
+		  var s = new Set(["a", "b", "c"])
+		  String(s.isSupersetOf(observable(["a", "z", "b"], log))) + "|" + log.join(",")`,
+			"false|keys,next,next,return"},
+		{"superset runs out", setLike + `var log = []
+		  var s = new Set(["a", "b", "c"])
+		  String(s.isSupersetOf(observable(["a", "b"], log))) + "|" + log.join(",")`,
+			"true|keys,next,next,next"},
+		// A smaller receiver is probed rather than the argument walked.
+		{"disjoint probes", setLike + `var log = []
+		  var s = new Set(["a"])
+		  String(s.isDisjointFrom(observable(["x", "y"], log))) + "|" + log.join(",")`,
+			"true|has a"},
+		// union takes the receiver's members before the argument is walked.
+		{"union copies first", setLike + `var s = new Set(["a", "b"])
+		  var evil = {size: 1, has: function () { return false },
+		    keys: function () {
+		      var done = false
+		      return {next: function () { s.delete("b"); var d = done; done = true
+		        return {done: d, value: "z"} }}
+		    }};
+		  [...s.union(evil)].join(",")`, "a,b,z"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}
