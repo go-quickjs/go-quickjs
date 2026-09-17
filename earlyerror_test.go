@@ -765,3 +765,37 @@ func TestPrivateInGrammar(t *testing.T) {
 			tc.want)
 	}
 }
+
+// `async` and `*` introduce a method and nothing else, and a function
+// expression's own name is the new function's rather than the enclosing class
+// body's.
+func TestMethodPrefixesAndFunctionNames(t *testing.T) {
+	bad := []string{
+		`({async async})`,
+		`({* foo})`,
+		`({async foo: 1})`,
+		`({* foo: 1})`,
+		// A class body reserves `await` in its own statements, so a
+		// declaration's name -- which binds there -- may not be one.
+		`class C { static { function await() {} } }`,
+		`class C { static { var await = 1 } }`,
+	}
+	for _, src := range bad {
+		checkEval(t, `try { eval(`+jsQuote(src)+`); "no error" } catch (e) { e.constructor.name }`,
+			"SyntaxError")
+	}
+
+	good := []string{
+		`({async foo() {}})`,
+		`({*foo() {}})`,
+		`({async: 1})`,
+		`({get: 1, set: 2})`,
+		// A function expression's name is its own, and so are its parameters.
+		`class C { static { (function await(await) {}) } }`,
+		`class C { static { (function* await(await) {}) } }`,
+		`class C { x = function await() {} }`,
+	}
+	for _, src := range good {
+		checkEval(t, `try { eval(`+jsQuote(src)+`); "ok" } catch (e) { e.constructor.name }`, "ok")
+	}
+}

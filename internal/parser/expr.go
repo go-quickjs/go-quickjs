@@ -923,6 +923,12 @@ func (p *parser) parseObjectProperty() ast.Property {
 
 	key, computed := p.parsePropertyName(false)
 
+	// What `async` or `*` introduces is a method and nothing else: `{async x}`
+	// and `{* x}` are not shorthand properties with a prefix, they are errors.
+	if (async || generator) && !p.isPunct("(") {
+		p.errorf("expected \"(\" after a method name")
+	}
+
 	switch {
 	case p.isPunct("("):
 		fn := p.parseMethodBody(ast.FuncMethod, async, generator, start)

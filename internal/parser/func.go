@@ -28,9 +28,15 @@ func (p *parser) parseFunctionRest(start int, kind ast.FuncKind, async, generato
 			fn.Name = p.parseBindingIdent()
 		} else {
 			outerYield, outerAwait := p.allowYield, p.allowAwait
+			outerAwaitIdent := p.noAwaitIdent
 			p.allowYield, p.allowAwait = generator, async
+			// The name is the new function's, so a class body's reserved
+			// `await` does not reach it: `(function await() {})` written in a
+			// static block names a function, and nothing in the block.
+			p.noAwaitIdent = false
 			fn.Name = p.parseBindingIdent()
 			p.allowYield, p.allowAwait = outerYield, outerAwait
+			p.noAwaitIdent = outerAwaitIdent
 		}
 	} else if isDecl {
 		p.errorf("a function declaration requires a name")
