@@ -4026,3 +4026,91 @@ func TestDefineAccessorChecksTheFunctionFirst(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// The two functions an executor is given share one flag rather than reading the
+// promise's state, because the two can differ: resolving with a thenable leaves
+// the promise pending while the adoption is arranged, and yet the promise is
+// spoken for. Whichever function is called first settles it and the other does
+// nothing -- including the reject a throw after the resolve would reach for.
+func TestResolvingFunctionsShareOneFlag(t *testing.T) {
+	checkAsync(t, `
+		var r = ""
+		var thenable = {then: function (res) { res("adopted") }}
+		new Promise(function (resolve) {
+		  resolve(thenable)
+		  throw new Error("ignored")
+		}).then(function (v) { r = v }, function (e) { r = "rejected:" + e.message })`,
+		`r`, "adopted")
+	// The same inside the job that adopts a thenable, which gets a pair of its
+	// own.
+	checkAsync(t, `
+		var r = ""
+		var inner = {then: function (res) { res("inner") }}
+		var outer = {then: function (res) { res(inner); throw new Error("ignored") }}
+		new Promise(function (resolve) { resolve(outer) })
+		  .then(function (v) { r = v }, function (e) { r = "rejected:" + e.message })`,
+		`r`, "inner")
+	// A resolve after a reject changes nothing, and the other way round.
+	checkAsync(t, `
+		var r = ""
+		new Promise(function (resolve, reject) { reject("first"); resolve("second") })
+		  .then(function (v) { r = "ok:" + v }, function (e) { r = "no:" + e })`,
+		`r`, "no:first")
+	checkAsync(t, `
+		var r = ""
+		new Promise(function (resolve, reject) { resolve("first"); reject("second") })
+		  .then(function (v) { r = "ok:" + v }, function (e) { r = "no:" + e })`,
+		`r`, "ok:first")
+	// A throw with nothing resolved still rejects.
+	checkAsync(t, `
+		var r = ""
+		new Promise(function () { throw new Error("thrown") })
+		  .catch(function (e) { r = e.message })`,
+		`r`, "thrown")
+}
+
+// A combinator settles through the capability of whatever constructor it was
+// called on, and that constructor's resolve is a function like any other: a
+// throw from it rejects the result rather than escaping.
+func TestCombinatorResolveThatThrows(t *testing.T) {
+	checkAsync(t, `
+		var r = ""
+		var thrown = new Error("from resolve")
+		var P = function (executor) {
+		  return new Promise(function (_, reject) {
+		    executor(function () { throw thrown }, reject)
+		  })
+		}
+		P.resolve = Promise.resolve
+		Promise.all.call(P, []).then(function () { r = "fulfilled" },
+		  function (e) { r = "rejected:" + e.message })`,
+		`r`, "rejected:from resolve")
+	checkAsync(t, `
+		var r = ""
+		var thrown = new Error("from resolve")
+		var P = function (executor) {
+		  return new Promise(function (_, reject) {
+		    executor(function () { throw thrown }, reject)
+		  })
+		}
+		P.resolve = Promise.resolve
+		Promise.allSettled.call(P, []).then(function () { r = "fulfilled" },
+		  function (e) { r = "rejected:" + e.message })`,
+		`r`, "rejected:from resolve")
+	// The reject is reached once, however many times the element's own
+	// functions are called afterwards.
+	checkEval(t, `
+		var count = 0
+		var error = new Error("x")
+		function Constructor(executor) {
+		  executor(function () { throw error }, function (v) { count++; return {} })
+		}
+		Constructor.resolve = function (v) { return v }
+		var onRejected
+		var p = {then: function (res, rej) { onRejected = rej; res() }}
+		Promise.allSettled.call(Constructor, [p])
+		var after = count
+		onRejected()
+		onRejected();
+		[after, count].join(",")`, "1,1")
+}

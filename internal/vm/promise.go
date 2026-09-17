@@ -59,6 +59,36 @@ func (r *Runtime) newPromise() *Object {
 	return o
 }
 
+// resolvingFunctions makes the pair of functions that settle one promise.
+//
+// The two share a single flag rather than reading the promise's state, because
+// the two can differ: resolving with a thenable starts an adoption that leaves
+// the promise pending, and yet the promise is spoken for. A reject that follows
+// -- from the rest of an executor, or from a throw after it -- does nothing.
+//
+// Each pair is its own: the job that adopts a thenable is given a fresh pair,
+// so a throw after it resolves is ignored on its own account.
+func (r *Runtime) resolvingFunctions(o *Object) (*Object, *Object) {
+	settled := false
+	resolve := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, args []Value) (Value, error) {
+		if settled {
+			return Undefined, nil
+		}
+		settled = true
+		rt.resolvePromise(o, arg(args, 0))
+		return Undefined, nil
+	})
+	reject := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, args []Value) (Value, error) {
+		if settled {
+			return Undefined, nil
+		}
+		settled = true
+		rt.rejectPromise(o, arg(args, 0))
+		return Undefined, nil
+	})
+	return resolve, reject
+}
+
 // resolvePromise settles a promise with a value.
 //
 // A thenable value is adopted rather than stored: resolving with a promise
@@ -86,16 +116,14 @@ func (r *Runtime) resolvePromise(o *Object, v Value) {
 			// Adopting a thenable happens in a job, not synchronously, so that
 			// the ordering guarantee holds for it too.
 			r.enqueueJob(func() {
-				resolveFn := r.newNativeFunc("", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-					rt.resolvePromise(o, arg(args, 0))
-					return Undefined, nil
-				})
-				rejectFn := r.newNativeFunc("", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-					rt.rejectPromise(o, arg(args, 0))
-					return Undefined, nil
-				})
+				resolveFn, rejectFn := r.resolvingFunctions(o)
 				if _, err := r.call(then, v, []Value{Obj(resolveFn), Obj(rejectFn)}); err != nil {
-					r.rejectPromise(o, thrownValue(err))
+					// The throw is only heard if the thenable had not already
+					// settled the promise, which is the pair's business.
+					if _, err := r.call(Obj(rejectFn), Undefined,
+						[]Value{thrownValue(err)}); err != nil {
+						return
+					}
 				}
 			})
 			return
@@ -244,16 +272,11 @@ func (r *Runtime) newPromiseCapability(ctor Value) (*promiseCapability, error) {
 		// The intrinsic constructor is known not to do anything observable, so
 		// the whole executor dance is skipped.
 		o := r.newPromise()
+		resolve, reject := r.resolvingFunctions(o)
 		return &promiseCapability{
 			promise: o,
-			resolve: Obj(r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
-				rt.resolvePromise(o, arg(a, 0))
-				return Undefined, nil
-			})),
-			reject: Obj(r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
-				rt.rejectPromise(o, arg(a, 0))
-				return Undefined, nil
-			})),
+			resolve: Obj(resolve),
+			reject:  Obj(reject),
 		}, nil
 	}
 
@@ -364,17 +387,15 @@ func (r *Runtime) initPromiseBuiltins() {
 		o.data = &promiseData{}
 		// The pair the executor is handed are anonymous, which a script can
 		// check.
-		resolveFn := rt.newNativeFunc("", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-			rt.resolvePromise(o, arg(args, 0))
-			return Undefined, nil
-		})
-		rejectFn := rt.newNativeFunc("", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-			rt.rejectPromise(o, arg(args, 0))
-			return Undefined, nil
-		})
+		resolveFn, rejectFn := rt.resolvingFunctions(o)
 		// The executor runs synchronously, unlike everything else here.
 		if _, err := rt.call(executor, Undefined, []Value{Obj(resolveFn), Obj(rejectFn)}); err != nil {
-			rt.rejectPromise(o, thrownValue(err))
+			// A throw rejects the promise through the same pair, so an
+			// executor that has already resolved is not overruled by its own
+			// failure afterwards.
+			if _, err := rt.call(Obj(rejectFn), Undefined, []Value{thrownValue(err)}); err != nil {
+				return Undefined, err
+			}
 		}
 		return Obj(o), nil
 	})
@@ -510,7 +531,14 @@ func (r *Runtime) promiseCombinator(ctor Value, iterable Value, kind combinatorK
 		return Undefined, err
 	}
 	result := cap.promise
-	settle := func(v Value) { r.call(cap.resolve, Undefined, []Value{v}) }
+	// Settling can fail: the capability belongs to whatever constructor the
+	// combinator was called on, and that constructor's resolve is a function
+	// like any other. A throw from it rejects the result instead, which is
+	// what IfAbruptRejectPromise does at every step of the specification.
+	settle := func(v Value) error {
+		_, err := r.call(cap.resolve, Undefined, []Value{v})
+		return err
+	}
 	fail := func(v Value) { r.call(cap.reject, Undefined, []Value{v}) }
 
 	// The constructor's own resolve is looked up once, before anything is
@@ -535,16 +563,16 @@ func (r *Runtime) promiseCombinator(ctor Value, iterable Value, kind combinatorK
 	// before the last element has been seen.
 	var values []Value
 	remaining := 1
-	finish := func() {
+	finish := func() error {
 		remaining--
 		if remaining != 0 {
-			return
+			return nil
 		}
 		if kind == combinatorAny {
 			fail(Obj(r.aggregateRejections(values)))
-			return
+			return nil
 		}
-		settle(Obj(r.newArrayFrom(values)))
+		return settle(Obj(r.newArrayFrom(values)))
 	}
 
 	iterErr := r.iterate(iterable, func(item Value) error {
@@ -585,8 +613,11 @@ func (r *Runtime) promiseCombinator(ctor Value, iterable Value, kind combinatorK
 			default:
 				values[idx] = v
 			}
-			finish()
-			return Undefined, nil
+			// A throw from the settling leaves through this function, as it
+			// would through any other callback: the element's own promise
+			// rejects, and a combinator still running hears it where it
+			// called then.
+			return Undefined, finish()
 		})
 
 		onRejected := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
@@ -604,8 +635,7 @@ func (r *Runtime) promiseCombinator(ctor Value, iterable Value, kind combinatorK
 			default: // any
 				values[idx] = reason
 			}
-			finish()
-			return Undefined, nil
+			return Undefined, finish()
 		})
 
 		// Where the whole thing settles on one element, the capability's own
@@ -631,7 +661,9 @@ func (r *Runtime) promiseCombinator(ctor Value, iterable Value, kind combinatorK
 	if len(values) == 0 {
 		switch kind {
 		case combinatorAll, combinatorAllSettled:
-			settle(Obj(r.newArrayFrom(nil)))
+			if err := settle(Obj(r.newArrayFrom(nil))); err != nil {
+				fail(thrownValue(err))
+			}
 		case combinatorAny:
 			fail(Obj(r.aggregateRejections(nil)))
 		}
@@ -639,7 +671,9 @@ func (r *Runtime) promiseCombinator(ctor Value, iterable Value, kind combinatorK
 		// specification says.
 		return Obj(result), nil
 	}
-	finish()
+	if err := finish(); err != nil {
+		fail(thrownValue(err))
+	}
 	return Obj(result), nil
 }
 
