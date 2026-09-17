@@ -523,10 +523,18 @@ func (p *parser) parsePrimary() ast.Expr {
 		if p.noArguments && name == "arguments" {
 			p.errorf("\"arguments\" is not available here")
 		}
-		if p.module && name == "await" {
+		if name == "await" && (p.module || p.allowAwait) {
 			// Reached only where `await` was not consumed as an operator, which
-			// is every position a module forbids it in.
-			p.errorf("\"await\" is reserved in module code")
+			// means it was written as a name -- with escapes, most likely,
+			// since the operator form is consumed before this point. There is
+			// no position inside an async function, or in a module, where that
+			// is an identifier.
+			p.errorf("\"await\" is reserved here")
+		}
+		if name == "yield" && p.allowYield {
+			// Likewise: inside a generator `yield` is an operator and never a
+			// name, whatever it was spelled with.
+			p.errorf("\"yield\" is reserved inside a generator")
 		}
 		p.next()
 		return p.nodes.ident(name, start)

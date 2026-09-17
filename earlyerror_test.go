@@ -309,3 +309,84 @@ func TestAssignToConst(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// A plain function declaration in a block gets Annex B's var-like behaviour, so
+// a var of the same name beside it is legal. An async function or a generator
+// gets no such allowance: they were introduced after the mistake was
+// recognized, so there is nothing to be compatible with.
+func TestBlockFunctionDeclarationKinds(t *testing.T) {
+	bad := []string{
+		`throw 0; { var f; async function f() {} }`,
+		`throw 0; { var f; function* f() {} }`,
+		`throw 0; { var f; async function* f() {} }`,
+		`throw 0; { async function f() {} var f; }`,
+		`throw 0; { let f; async function f() {} }`,
+		`throw 0; switch (0) { case 0: var f; async function f() {} }`,
+	}
+	for _, src := range bad {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil {
+			t.Errorf("%s: accepted, want SyntaxError", src)
+		} else if !strings.Contains(err.Error(), "SyntaxError") {
+			t.Errorf("%s: got %v, want SyntaxError", src, err)
+		}
+		rt.Close()
+	}
+
+	for _, src := range []string{
+		`{ var f; function f() {} } "ok"`,
+		`{ async function f() {} } "ok"`,
+		// At the top level of a script or a function body they are var-scoped
+		// like a plain declaration.
+		`var f; async function f() {} "ok"`,
+		`async function f() {} var f; "ok"`,
+		`function g() { var f; function* f() {} } "ok"`,
+		`{ let a; async function b() {} } "ok"`,
+	} {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err != nil {
+			t.Errorf("%s: rejected with %v", src, err)
+		}
+		rt.Close()
+	}
+}
+
+// `await` inside an async function and `yield` inside a generator are operators
+// and never names, whatever they are spelled with. Writing one with an escape
+// does not turn it back into an identifier -- the escape only stops it being a
+// keyword, and these are reserved by their position rather than by being
+// keywords.
+func TestAwaitAndYieldAreReservedWhereTheyOperate(t *testing.T) {
+	esc := func(w string) string {
+		return `\u00` + map[byte]string{'a': "61", 'y': "79"}[w[0]] + w[1:]
+	}
+	bad := []string{
+		`throw 0; async function f() { ` + esc("await") + ` }`,
+		`throw 0; async function f() { var x = ` + esc("await") + ` }`,
+		`throw 0; async () => ` + esc("await"),
+		`throw 0; function* g() { ` + esc("yield") + ` }`,
+		`throw 0; function* g() { var x = ` + esc("yield") + ` }`,
+	}
+	for _, src := range bad {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil {
+			t.Errorf("%s: accepted, want SyntaxError", src)
+		} else if !strings.Contains(err.Error(), "SyntaxError") {
+			t.Errorf("%s: got %v, want SyntaxError", src, err)
+		}
+		rt.Close()
+	}
+
+	// Outside those positions they are ordinary names.
+	for _, src := range []string{
+		`var await = 1; String(await)`,
+		`function f() { var yield = 1; return yield } String(f())`,
+		`var o = {await: 1, yield: 2}; String(o.await + o.yield)`,
+	} {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err != nil {
+			t.Errorf("%s: rejected with %v", src, err)
+		}
+		rt.Close()
+	}
+}

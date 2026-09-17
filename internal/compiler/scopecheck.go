@@ -70,7 +70,7 @@ func add(names []lexName, name string, pos int) []lexName {
 // checkScopes reports the var/lexical collisions in a program.
 func (c *compiler) checkScopes(body []ast.Stmt) {
 	sc := scopeChecker{c: c}
-	sc.block(body, nil)
+	sc.blockIn(body, nil, false)
 }
 
 // block walks a statement list as one lexical scope.
@@ -78,11 +78,21 @@ func (c *compiler) checkScopes(body []ast.Stmt) {
 // extra holds names the construct binds outside the list itself: a `for (let
 // x;;)` head, or a catch parameter.
 func (s *scopeChecker) block(body []ast.Stmt, extra []lexName) {
+	s.blockIn(body, extra, true)
+}
+
+// blockIn walks a statement list, saying whether it is a block rather than the
+// top level of a function or a script.
+//
+// The difference is what an async function or generator declaration binds: a
+// block makes one lexical, so it collides with a var of the same name, while at
+// the top level it is var-scoped like a plain function declaration.
+func (s *scopeChecker) blockIn(body []ast.Stmt, extra []lexName, inBlock bool) {
 	scope := lexScope{names: extra}
 	// Every lexical name in the list is in scope throughout it, so they are all
 	// collected before any statement is walked.
 	for _, st := range body {
-		scope.names = lexicalNamesOf(st, scope.names)
+		scope.names = lexicalNamesOf(st, scope.names, inBlock)
 	}
 	s.scopes = append(s.scopes, scope)
 	for _, st := range body {
@@ -104,7 +114,7 @@ func (s *scopeChecker) catchBlock(cc *ast.CatchClause) {
 	}
 	scope := lexScope{names: extra, catchParam: simple}
 	for _, st := range cc.Body {
-		scope.names = lexicalNamesOf(st, scope.names)
+		scope.names = lexicalNamesOf(st, scope.names, true)
 	}
 	s.scopes = append(s.scopes, scope)
 	for _, st := range cc.Body {
@@ -178,7 +188,7 @@ func (s *scopeChecker) stmt(st ast.Stmt) {
 		var scope lexScope
 		for _, cl := range n.Cases {
 			for _, x := range cl.Body {
-				scope.names = lexicalNamesOf(x, scope.names)
+				scope.names = lexicalNamesOf(x, scope.names, true)
 			}
 		}
 		s.scopes = append(s.scopes, scope)
@@ -297,7 +307,7 @@ func (s *scopeChecker) function(fn *ast.FuncLit) {
 	for _, p := range fn.Params {
 		s.expr(paramExpr(p))
 	}
-	s.block(fn.Body, nil)
+	s.blockIn(fn.Body, nil, false)
 	s.scopes = saved
 }
 
@@ -415,7 +425,7 @@ func (s *scopeChecker) expr(e ast.Expr) {
 
 // lexicalNamesOf adds the names a statement binds lexically in the scope that
 // directly contains it.
-func lexicalNamesOf(st ast.Stmt, out []lexName) []lexName {
+func lexicalNamesOf(st ast.Stmt, out []lexName, inBlock bool) []lexName {
 	switch n := st.(type) {
 	case *ast.VarDecl:
 		if n.Kind == ast.DeclVar {
@@ -430,13 +440,22 @@ func lexicalNamesOf(st ast.Stmt, out []lexName) []lexName {
 		}
 	case *ast.ExportDecl:
 		if n.Decl != nil {
-			out = lexicalNamesOf(n.Decl, out)
+			out = lexicalNamesOf(n.Decl, out, inBlock)
+		}
+	case *ast.FuncDecl:
+		// A plain function declaration inside a block is deliberately not
+		// counted. It is lexical in strict mode, but Annex B gives it var-like
+		// behaviour in sloppy mode, and treating it as lexical here would
+		// reject code the web relies on.
+		//
+		// An async function or a generator gets no such allowance: they were
+		// introduced after the mistake was recognized, so there is nothing to
+		// be compatible with and they are lexical everywhere.
+		if inBlock && n.Fn != nil && n.Fn.Name != nil && (n.Fn.Async || n.Fn.Generator) {
+			out = add(out, n.Fn.Name.Name, n.Start)
 		}
 	}
 	return out
-	// A function declaration inside a block is deliberately not counted. It is
-	// lexical in strict mode, but Annex B gives it var-like behaviour in sloppy
-	// mode, and treating it as lexical here would reject code the web relies on.
 }
 
 // patternNames appends the names a binding pattern introduces, keeping each

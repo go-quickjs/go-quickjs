@@ -611,7 +611,7 @@ func (c *varCollector) stmts(list []ast.Stmt) {
 func (c *varCollector) block(list []ast.Stmt) {
 	var names []lexName
 	for _, s := range list {
-		names = lexicalNamesOf(s, names)
+		names = lexicalNamesOf(s, names, true)
 	}
 	c.lexical = append(c.lexical, names)
 	c.stmts(list)
