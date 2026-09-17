@@ -99,7 +99,22 @@ func (a *arrayOut) push(r *Runtime, v Value) error {
 	}
 	i := a.n
 	a.n++
-	return r.defineOwnProp(a.o, r.indexKey(i), v, propDefault)
+	// A define that the result refuses -- because it is not extensible, or
+	// because the index is past what it can hold -- is a TypeError rather than
+	// something to ignore: the method promised to produce the element.
+	ok, err := r.defineProperty(a.o, r.indexKey(i), &propDesc{
+		value: v, hasValue: true,
+		writable: true, hasWritable: true,
+		enumerable: true, hasEnumerable: true,
+		configurable: true, hasConfigurable: true,
+	})
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return r.throwTypeError("cannot create index %d of the result", i)
+	}
+	return nil
 }
 
 // pushHole leaves a gap, which slice and map do where the source had one: a

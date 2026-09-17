@@ -774,47 +774,132 @@ func (r *Runtime) initArrayBuiltins() {
 	})
 
 	r.defMethod(ctor, "of", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		return Obj(rt.newArrayFrom(args)), nil
+		n := int64(len(args))
+		// Called on a constructor -- which it is on Array itself, and may be on
+		// a subclass -- the result is what that constructor makes.
+		var o *Object
+		if isConstructor(this) {
+			v, err := rt.construct(this, []Value{Float(float64(n))})
+			if err != nil {
+				return Undefined, err
+			}
+			if !v.IsObject() {
+				return Undefined, rt.throwTypeError("the constructor did not return an object")
+			}
+			o = v.Object()
+		} else {
+			o = rt.newArrayOfLength(n)
+		}
+		for i, v := range args {
+			if err := rt.createIndexed(o, int64(i), v); err != nil {
+				return Undefined, err
+			}
+		}
+		a := arrayLike{o: o}
+		if err := a.setLength(rt, n); err != nil {
+			return Undefined, err
+		}
+		return Obj(o), nil
 	})
 
 	r.initArrayFromAsync(ctor)
 	r.defSpecies(ctor)
 
 	r.defMethod(ctor, "from", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		src := arg(args, 0)
-		mapFn := arg(args, 1)
-		var out []Value
-		add := func(v Value) error {
-			if isCallable(mapFn) {
-				mapped, err := rt.call(mapFn, Undefined, []Value{v, Int(len(out))})
-				if err != nil {
-					return err
+		src, mapFn, thisArg := arg(args, 0), arg(args, 1), arg(args, 2)
+		mapping := false
+		if !mapFn.IsUndefined() {
+			if !isCallable(mapFn) {
+				return Undefined, rt.throwTypeError("the map function is not callable")
+			}
+			mapping = true
+		}
+		// Called on a constructor -- which it is, on Array itself, and may be
+		// on a subclass -- the result is what that constructor makes.
+		build := func(n int64) (*Object, error) {
+			if isConstructor(this) {
+				var ctorArgs []Value
+				if n >= 0 {
+					ctorArgs = []Value{Float(float64(n))}
 				}
-				v = mapped
+				v, err := rt.construct(this, ctorArgs)
+				if err != nil {
+					return nil, err
+				}
+				if !v.IsObject() {
+					return nil, rt.throwTypeError("the constructor did not return an object")
+				}
+				return v.Object(), nil
 			}
-			out = append(out, v)
-			return nil
-		}
-		// An iterable is consumed through its iterator; anything else is
-		// treated as array-like.
-		if ok, err := rt.isIterable(src); err != nil {
-			return Undefined, err
-		} else if ok {
-			if err := rt.iterate(src, add); err != nil {
-				return Undefined, err
+			if n < 0 {
+				n = 0
 			}
-			return Obj(rt.newArrayFrom(out)), nil
+			return rt.newArrayOfLength(n), nil
 		}
-		items, err := rt.arrayToSlice(src)
+
+		iterable, err := rt.isIterable(src)
 		if err != nil {
 			return Undefined, err
 		}
-		for _, it := range items {
-			if err := add(it); err != nil {
+		if iterable {
+			o, err := build(-1)
+			if err != nil {
+				return Undefined, err
+			}
+			a := arrayLike{o: o}
+			k := int64(0)
+			err = rt.iterate(src, func(v Value) error {
+				if mapping {
+					mapped, err := rt.call(mapFn, thisArg, []Value{v, Float(float64(k))})
+					if err != nil {
+						return err
+					}
+					v = mapped
+				}
+				if err := rt.createIndexed(o, k, v); err != nil {
+					return err
+				}
+				k++
+				return nil
+			})
+			if err != nil {
+				return Undefined, err
+			}
+			if err := a.setLength(rt, k); err != nil {
+				return Undefined, err
+			}
+			return Obj(o), nil
+		}
+
+		from, err := rt.viewArrayLike(src)
+		if err != nil {
+			return Undefined, err
+		}
+		o, err := build(from.n)
+		if err != nil {
+			return Undefined, err
+		}
+		a := arrayLike{o: o}
+		for k := int64(0); k < from.n; k++ {
+			v, err := from.get(rt, k)
+			if err != nil {
+				return Undefined, err
+			}
+			if mapping {
+				mapped, err := rt.call(mapFn, thisArg, []Value{v, Float(float64(k))})
+				if err != nil {
+					return Undefined, err
+				}
+				v = mapped
+			}
+			if err := rt.createIndexed(o, k, v); err != nil {
 				return Undefined, err
 			}
 		}
-		return Obj(rt.newArrayFrom(out)), nil
+		if err := a.setLength(rt, from.n); err != nil {
+			return Undefined, err
+		}
+		return Obj(o), nil
 	})
 
 	// push, pop, shift and unshift work through the view rather than the dense
@@ -2267,24 +2352,33 @@ func (r *Runtime) initArrayExtras() {
 	})
 
 	r.defMethod(p, "fill", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.toObject(this)
+		// The length comes from the property, not from the dense storage:
+		// freezing an array moves its elements out of that storage, and a
+		// frozen array is exactly where fill has to report that it cannot
+		// write.
+		a, err := rt.viewArrayLike(this)
 		if err != nil {
 			return Undefined, err
 		}
 		v := arg(args, 0)
-		start, err := rt.relativeIndex(arg(args, 1), len(o.elems), 0)
+		start, err := rt.relativeIndex(arg(args, 1), int(a.n), 0)
 		if err != nil {
 			return Undefined, err
 		}
-		end, err := rt.relativeIndex(arg(args, 2), len(o.elems), len(o.elems))
+		end, err := rt.relativeIndex(arg(args, 2), int(a.n), int(a.n))
 		if err != nil {
 			return Undefined, err
 		}
-		start, end = clipRange(o, start, end)
-		for i := start; i < end; i++ {
-			o.elems[i] = v
+		for i := int64(start); i < int64(end) && i < a.n; i++ {
+			// Through the property protocol, so that a read-only element is
+			// the TypeError it should be rather than a silent write.
+			if err := a.set(rt, i, v); err != nil {
+				return Undefined, err
+			}
 		}
-		return this, nil
+		// The object, not the receiver: called on a primitive, what was filled
+		// is the wrapper.
+		return Obj(a.o), nil
 	})
 
 	r.defMethod(p, "flat", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -2458,4 +2552,22 @@ func (r *Runtime) compareForSort(x, y, cmp Value) (bool, error) {
 		return false, err
 	}
 	return sx.Compare(sy) < 0, nil
+}
+
+// createIndexed defines one element of a result the caller promised to produce,
+// so a define the object refuses is an error rather than something to ignore.
+func (r *Runtime) createIndexed(o *Object, i int64, v Value) error {
+	ok, err := r.defineProperty(o, r.indexKey(i), &propDesc{
+		value: v, hasValue: true,
+		writable: true, hasWritable: true,
+		enumerable: true, hasEnumerable: true,
+		configurable: true, hasConfigurable: true,
+	})
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return r.throwTypeError("cannot create index %d of the result", i)
+	}
+	return nil
 }

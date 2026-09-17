@@ -2577,3 +2577,54 @@ func TestDateSetters(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// Array.from and Array.of build their result with the constructor they were
+// called on, and define each element through the object's own machinery -- so
+// a result that refuses an element says so rather than quietly dropping it.
+func TestArrayFromAndOf(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`Array.from([1, 2]).join(",")`, "1,2"},
+		{`Array.from({length: 2, 0: "a", 1: "b"}).join(",")`, "a,b"},
+		{`Array.from([1, 2], function (x) { return x * 2 }).join(",")`, "2,4"},
+		{`Array.from(new Set([1, 2])).join(",")`, "1,2"},
+		{`var t = {}, got; Array.from([1], function () { got = this }, t); String(got === t)`,
+			"true"},
+		{`try { Array.from([], null) } catch (e) { e.constructor.name }`, "TypeError"},
+
+		// The constructor it was called on is what makes the result.
+		{`function C() { this.x = 1 }
+		  var r = Array.from.call(C, [1]);
+		  [r instanceof C, r[0], r.length].join(",")`, "true,1,1"},
+		{`function C(n) { this.n = n }
+		  var r = Array.of.call(C, "a", "b");
+		  [r instanceof C, r.n, r[0], r.length].join(",")`, "true,2,a,2"},
+		{`Array.of(1, 2).join(",")`, "1,2"},
+
+		// A result that cannot take an element reports it.
+		{`function C() { Object.preventExtensions(this) }
+		  try { Array.of.call(C, 1) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`var A = function () { this.length = 0; Object.preventExtensions(this) };
+		  var arr = []; arr.constructor = {}; arr.constructor[Symbol.species] = A;
+		  try { arr.concat([1]) } catch (e) { e.constructor.name }`, "TypeError"},
+
+		// fill goes through the property protocol, so a frozen array refuses.
+		{`var a = [1]; Object.freeze(a);
+		  try { a.fill(2) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`[1, 2, 3].fill(9, 1).join(",")`, "1,9,9"},
+		{`var o = {length: 3}; Array.prototype.fill.call(o, 7); JSON.stringify(o)`,
+			`{"0":7,"1":7,"2":7,"length":3}`},
+		// Called on a primitive, what was filled is the wrapper.
+		{`String(Array.prototype.fill.call(true) instanceof Boolean)`, "true"},
+		{`String(Array.prototype.copyWithin.call(true) instanceof Boolean)`, "true"},
+	}
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

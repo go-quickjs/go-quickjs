@@ -152,7 +152,7 @@ func (r *Runtime) initArrayExtras2() {
 			count = n
 		}
 		if count <= 0 {
-			return this, nil
+			return Obj(a.o), nil
 		}
 		// Copying backwards when the ranges overlap the other way is what stops
 		// an element being overwritten before it has been read.
@@ -173,7 +173,9 @@ func (r *Runtime) initArrayExtras2() {
 			start += step
 			target += step
 		}
-		return this, nil
+		// The object, not the receiver: called on a primitive, what was copied
+		// within is the wrapper.
+		return Obj(a.o), nil
 	})
 
 	r.defMethod(p, "reduceRight", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
