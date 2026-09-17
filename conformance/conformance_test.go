@@ -412,7 +412,16 @@ func matchesNegative(err error, neg *Negative) bool {
 	if !errors.As(err, &jsErr) {
 		return false
 	}
-	name, nerr := jsErr.Value().Get("name")
+	if name, nerr := jsErr.Value().Get("name"); nerr == nil && !name.IsUndefined() {
+		return name.String() == neg.Type
+	}
+	// The harness's own Test262Error has no name property, so the constructor
+	// is what identifies it.
+	ctor, nerr := jsErr.Value().Get("constructor")
+	if nerr != nil {
+		return false
+	}
+	name, nerr := ctor.Get("name")
 	if nerr != nil {
 		return false
 	}
