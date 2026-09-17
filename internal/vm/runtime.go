@@ -21,6 +21,18 @@ type Runtime struct {
 	// global is the global object, and globalEnv is the scope that var and
 	// function declarations at the top level bind into.
 	global *Object
+	// globalLex holds a script's top-level let, const and class bindings.
+	//
+	// They are not properties of the global object -- `let x = 1` does not make
+	// globalThis.x -- but they outlive the script that declared them and are
+	// visible to the next one and to eval, so they need somewhere of their own
+	// to live. A binding still in its dead zone is stored uninitialized.
+	globalLex *Object
+	// globalVarNames records the names script-level var and function
+	// declarations have taken, which a later lexical declaration of the same
+	// name collides with. The global object cannot answer that: every built-in
+	// is a property of it and none of them is a var.
+	globalVarNames map[Atom]bool
 
 	// intrinsics holds the prototypes and constructors that the specification
 	// requires to exist before any script runs.

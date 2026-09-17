@@ -3112,20 +3112,12 @@ func TestAsyncGeneratorQueue(t *testing.T) {
 // create.
 func TestGlobalDeclarationConflicts(t *testing.T) {
 	cases := []struct{ src, want string }{
-		// A lexical binding shadows the property for good, so one that cannot
-		// be removed may not be shadowed.
-		{`try { eval("let undefined"); "no throw" } catch (e) { e.constructor.name }`,
-			"SyntaxError"},
-		{`try { eval("const Infinity = 1"); "no throw" } catch (e) { e.constructor.name }`,
-			"SyntaxError"},
-		{`try { eval("class NaN {}"); "no throw" } catch (e) { e.constructor.name }`,
-			"SyntaxError"},
-		{`try { eval("let [undefined] = []"); "no throw" } catch (e) { e.constructor.name }`,
-			"SyntaxError"},
-		// An ordinary name is fine, and so is one inside a function.
+		// An ordinary name is fine, and so is one inside a function. A
+		// lexical binding eval declares is its own and collides with nothing.
 		{`eval("let zzz = 1; zzz")`, "1"},
 		{`eval("const [a, b] = [1, 2]; a + b")`, "3"},
 		{`(function () { let undefined = 1; return undefined })()`, "1"},
+		{`eval("let undefined; typeof undefined")`, "undefined"},
 
 		// A function declaration may replace a configurable property, and one
 		// that is a writable enumerable data property, but nothing else.
@@ -3155,6 +3147,23 @@ func TestGlobalDeclarationConflicts(t *testing.T) {
 	}
 	for _, tc := range cases {
 		checkEval(t, tc.src, tc.want)
+	}
+
+	// A script's own top-level lexical binding does reach the global
+	// environment, so one whose name the global object holds in a property
+	// that cannot be removed is refused.
+	for _, src := range []string{
+		`let undefined`,
+		`const Infinity = 1`,
+		`class NaN {}`,
+		`let [undefined] = []`,
+	} {
+		rt := quickjs.New()
+		_, err := rt.Eval(src)
+		if err == nil || !strings.Contains(err.Error(), "SyntaxError") {
+			t.Errorf("%s: got %v, want a SyntaxError", src, err)
+		}
+		rt.Close()
 	}
 }
 

@@ -631,6 +631,15 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		case bytecode.OpGetGlobal:
 			name := cl.names[in.A]
 			env := cl.scope()
+			if p := r.globalLexProp(env, name); p != nil {
+				if p.value.IsUninitialized() {
+					vmErr = r.throwReferenceError(
+						"cannot access %q before it is initialized", r.atoms.name(name))
+					goto onError
+				}
+				push(p.value)
+				break
+			}
 			if !r.hasProp(env, name) {
 				vmErr = r.throwReferenceError("%s is not defined", r.atoms.name(name))
 				goto onError
@@ -642,8 +651,18 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 			push(v)
 		case bytecode.OpGetGlobalOpt:
-			// typeof on an undeclared name must not throw.
+			// typeof on an undeclared name must not throw. A lexical binding
+			// in its dead zone is declared, though, so that one still does.
 			env := cl.scope()
+			if p := r.globalLexProp(env, cl.names[in.A]); p != nil {
+				if p.value.IsUninitialized() {
+					vmErr = r.throwReferenceError("cannot access %q before it is initialized",
+						r.atoms.name(cl.names[in.A]))
+					goto onError
+				}
+				push(p.value)
+				break
+			}
 			v, err := r.getProp(env, cl.names[in.A], Obj(env))
 			if err != nil {
 				vmErr = err
@@ -653,6 +672,20 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		case bytecode.OpSetGlobal:
 			name := cl.names[in.A]
 			env := cl.scope()
+			if p := r.globalLexProp(env, name); p != nil {
+				switch {
+				case p.value.IsUninitialized():
+					vmErr = r.throwReferenceError(
+						"cannot access %q before it is initialized", r.atoms.name(name))
+					goto onError
+				case p.flags&propWritable == 0:
+					vmErr = r.throwTypeError("assignment to constant variable %q",
+						r.atoms.name(name))
+					goto onError
+				}
+				p.value = pop()
+				break
+			}
 			// Strict mode refuses to create a global by assignment, which is
 			// the rule that catches a misspelled variable.
 			if cl.fn.Strict && !r.hasProp(env, name) {
@@ -666,6 +699,12 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		case bytecode.OpDefineGlobalVar:
 			name := cl.names[in.A]
 			env := cl.scope()
+			if env == r.global {
+				if err := r.declareGlobalVarName(name); err != nil {
+					vmErr = err
+					goto onError
+				}
+			}
 			// A binding eval creates is configurable, where a script's is not:
 			// the evaluated code could have declared it anywhere, so nothing
 			// should be able to rely on its being there.
@@ -691,14 +730,38 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 			env := cl.scope()
 			if env == r.global {
+				if err := r.declareGlobalVarName(name); err != nil {
+					vmErr = err
+					goto onError
+				}
 				if err := r.canDeclareGlobalFunc(name); err != nil {
 					vmErr = err
 					goto onError
 				}
 			}
 			env.setOwnRaw(name, pop(), flags)
+		case bytecode.OpDeclareGlobalLex:
+			name := cl.names[in.A]
+			flags := propConfigurable
+			if in.B != 0 {
+				flags |= propWritable
+			}
+			if err := r.declareGlobalLex(name, flags); err != nil {
+				vmErr = err
+				goto onError
+			}
+		case bytecode.OpInitGlobalLex:
+			r.globalLex.setOwnRaw(cl.names[in.A], pop(),
+				r.globalLex.getOwn(cl.names[in.A]).flags)
 		case bytecode.OpCheckGlobalLex:
 			name := cl.names[in.A]
+			// A var or function a script declared is the same name seen from
+			// the other side of the collision.
+			if r.globalVarNames[name] || r.globalLex.getOwn(name) != nil {
+				vmErr = r.throwError(errSyntax, "%q has already been declared",
+					r.atoms.name(name))
+				goto onError
+			}
 			// A lexical binding shadows the global object's property of the
 			// same name for good, so one that cannot be deleted may not be
 			// shadowed: `let undefined` would make undefined unreachable.
@@ -772,6 +835,11 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// Deleting a binding only succeeds for a configurable global
 			// property, which is why a var declaration cannot be deleted.
 			name := cl.names[in.A]
+			if r.globalLexProp(cl.scope(), name) != nil {
+				// A lexical binding is not a property and cannot be removed.
+				push(False)
+				break
+			}
 			ok, err := r.deleteProp(cl.scope(), name, false)
 			if err != nil {
 				vmErr = err
@@ -2111,6 +2179,42 @@ func memberFlags(isClassMember uint32) propFlags {
 		return propWritable | propConfigurable
 	}
 	return propDefault
+}
+
+// globalLexProp finds a script-level lexical binding, which sits in front of
+// the global object: `let x = 1` at a script's top level is reached by name but
+// is not a property of globalThis.
+func (r *Runtime) globalLexProp(env *Object, name Atom) *Property {
+	if env != r.global || len(r.globalLex.props) == 0 {
+		return nil
+	}
+	return r.globalLex.getOwn(name)
+}
+
+// declareGlobalLex creates a script-level lexical binding in its dead zone.
+//
+// The name may not already be one, nor a var or function a script declared:
+// two scripts in the same realm share the global environment, so the collision
+// is only visible here.
+func (r *Runtime) declareGlobalLex(name Atom, flags propFlags) error {
+	if r.globalLex.getOwn(name) != nil || r.globalVarNames[name] {
+		return r.throwError(errSyntax, "%q has already been declared", r.atoms.name(name))
+	}
+	r.globalLex.setOwnRaw(name, uninitialized, flags)
+	return nil
+}
+
+// declareGlobalVarName records a name a script-level var or function
+// declaration has taken, which a later lexical declaration collides with.
+//
+// A lexical binding of the same name already there is the same collision seen
+// from the other side, and is an error here.
+func (r *Runtime) declareGlobalVarName(name Atom) error {
+	if r.globalLex.getOwn(name) != nil {
+		return r.throwError(errSyntax, "%q has already been declared", r.atoms.name(name))
+	}
+	r.globalVarNames[name] = true
+	return nil
 }
 
 // canDeclareGlobalFunc reports whether a top-level function declaration may

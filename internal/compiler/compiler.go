@@ -211,6 +211,10 @@ type compiler struct {
 	// finallys is the stack of enclosing finally clauses, which return, break
 	// and continue all have to account for.
 	finallys []finallyCtx
+	// globalLex names the script-level lexical bindings this compilation
+	// declared, which live in the global lexical environment rather than in a
+	// frame slot.
+	globalLex map[string]bool
 	// exits records what the statements currently being compiled left in place
 	// for the duration of their bodies, innermost last.
 	exits []pendingExit
@@ -661,9 +665,9 @@ func (c *compiler) addUpvalue(name string, index uint32, fromParent, mutable, td
 // unreachable for the rest of the realm. The check is a runtime one because
 // only then is it known what the global object holds.
 func (c *compiler) checkGlobalLexicals(body []ast.Stmt) {
-	if c.module != nil || c.evalVarsAreLocal() {
-		// A module's bindings are its own, and strict eval code's belong to the
-		// evaluated code: neither reaches the global object.
+	if !c.atScriptTopLevel() {
+		// A module's bindings are its own, and so are eval code's: neither
+		// reaches the global environment, whatever the strictness.
 		return
 	}
 	for _, s := range body {
@@ -706,6 +710,13 @@ func (c *compiler) hoistGlobals(body []ast.Stmt) {
 		// because the evaluated code could have declared it anywhere.
 		c.emit(bytecode.OpDefineGlobalVar, c.nameIdx(n), boolBit(c.opts.EvalConfigurable))
 	}
+}
+
+// atScriptTopLevel reports whether the compiler is in the outermost statement
+// list of a script -- not a module, and not code eval is compiling, both of
+// which keep their lexical bindings to themselves.
+func (c *compiler) atScriptTopLevel() bool {
+	return c.parent == nil && c.depth == 0 && c.module == nil && !c.opts.EvalOwnVarScope
 }
 
 // evalVarsAreLocal reports whether a top-level var belongs to the evaluated

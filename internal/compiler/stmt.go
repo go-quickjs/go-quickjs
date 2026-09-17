@@ -150,6 +150,26 @@ func (c *compiler) predeclareLexical(vd *ast.VarDecl) {
 
 // declareLexicalName declares a lexical binding and leaves it uninitialized.
 func (c *compiler) declareLexicalName(name string, kind bindKind, pos int) {
+	if c.atScriptTopLevel() {
+		// A script's top-level lexical bindings outlive it: the next script in
+		// the same realm sees them, and so does eval, which a frame slot could
+		// not manage.
+		if c.globalLex == nil {
+			c.globalLex = map[string]bool{}
+		}
+		if c.globalLex[name] {
+			// Two lexical declarations of one name in the same script, which
+			// is an error the script never gets to run.
+			c.errorf(pos, "%q has already been declared", name)
+		}
+		c.globalLex[name] = true
+		mutable := uint32(0)
+		if kind != bindConst {
+			mutable = 1
+		}
+		c.emitAt(pos, bytecode.OpDeclareGlobalLex, c.nameIdx(name), mutable)
+		return
+	}
 	slot := c.declare(name, kind, pos)
 	// The slot starts as the uninitialized marker, which the checked accessors
 	// test for. Frame locals are cleared on entry, and the zero Value is the
@@ -339,6 +359,12 @@ func (c *compiler) initBinding(target ast.Expr, kind ast.DeclKind) {
 		if l, ok := c.resolveLocal(id.Name); ok {
 			c.emit(bytecode.OpInitLocal, l.slot, 0)
 			c.markInitialized(id.Name)
+			return
+		}
+		// A block of its own would have declared a local, so reaching here
+		// means the binding is the script-level one.
+		if c.globalLex[id.Name] {
+			c.emit(bytecode.OpInitGlobalLex, c.nameIdx(id.Name), 0)
 			return
 		}
 		c.emit(bytecode.OpSetGlobal, c.nameIdx(id.Name), 0)

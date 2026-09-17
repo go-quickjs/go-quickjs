@@ -72,6 +72,12 @@ const (
 	// OpCheckGlobalLex reports a top-level let, const or class whose name is
 	// already a property of the global object that cannot be removed.
 	OpCheckGlobalLex
+	// OpDeclareGlobalLex creates a script-level lexical binding, in its dead
+	// zone. A is the name; B is 1 for a let or class, 0 for a const.
+	OpDeclareGlobalLex
+	// OpInitGlobalLex gives one its first value, which is what takes it out of
+	// the dead zone.
+	OpInitGlobalLex
 
 	// --- Properties -------------------------------------------------------
 	OpGetProp    // obj -> obj[Names[A]]
@@ -425,6 +431,8 @@ var opNames = [opCount]string{
 	OpSetGlobal: "set_global", OpDefineGlobalVar: "define_global_var",
 	OpDefineGlobalFunc: "define_global_func",
 	OpCheckGlobalLex:   "check_global_lex",
+	OpDeclareGlobalLex: "declare_global_lex",
+	OpInitGlobalLex:    "init_global_lex",
 
 	OpGetProp: "get_prop", OpSetProp: "set_prop", OpGetIndex: "get_index",
 	OpSetIndex: "set_index", OpDeleteProp: "delete_prop",

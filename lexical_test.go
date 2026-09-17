@@ -439,3 +439,101 @@ func TestParametersBindInOrder(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// TestGlobalLexicalEnvironment covers a script's top-level let, const and
+// class. They are not properties of the global object, but they outlive the
+// script that declared them: the next script sees them, and so does eval.
+func TestGlobalLexicalEnvironment(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	steps := []struct{ src, want string }{
+		{`let a = 1; const b = 2; class C {}`, "undefined"},
+		{`a + b`, "3"},
+		{`typeof C`, "function"},
+		// Not a property of globalThis, which is what makes it lexical.
+		{`String(globalThis.a) + "," + ("a" in globalThis)`, "undefined,false"},
+		// Reachable from an indirect eval, which runs in global scope.
+		{`(0, eval)("a")`, "1"},
+		{`var f = function () { return eval("a") }; f()`, "1"},
+		// A function declared in an earlier script closes over it too.
+		{`function g() { return a } g()`, "1"},
+		{`a = 9; a`, "9"},
+		{`try { b = 1 } catch (e) { e.constructor.name }`, "TypeError"},
+		{`String(delete a)`, "false"},
+	}
+	for _, st := range steps {
+		v, err := rt.Eval(st.src)
+		if err != nil {
+			t.Fatalf("%s: %v", st.src, err)
+		}
+		if got := v.String(); got != st.want {
+			t.Errorf("%s\n got: %s\nwant: %s", st.src, got, st.want)
+		}
+	}
+}
+
+// TestGlobalLexicalCollisions covers a name two scripts both declare. They
+// share the global environment, so the collision is only visible at the point
+// the second script runs.
+func TestGlobalLexicalCollisions(t *testing.T) {
+	bad := [][2]string{
+		{`let a = 1`, `var a = 2`},
+		{`var b = 1`, `let b = 2`},
+		{`let c = 1`, `let c = 2`},
+		{`let d = 1`, `const d = 2`},
+		{`let e = 1`, `function e() {}`},
+		{`function f() {}`, `let f = 1`},
+		{`class G {}`, `let G = 1`},
+	}
+	for _, pair := range bad {
+		rt := quickjs.New()
+		if _, err := rt.Eval(pair[0]); err != nil {
+			t.Errorf("%s: %v", pair[0], err)
+		} else if _, err := rt.Eval(pair[1]); err == nil ||
+			!strings.Contains(err.Error(), "SyntaxError") {
+			t.Errorf("%s then %s: got %v, want a SyntaxError", pair[0], pair[1], err)
+		}
+		rt.Close()
+	}
+
+	// A name only one of them declares is fine, and so is a duplicate inside
+	// a block or a function.
+	good := [][2]string{
+		{`let h = 1`, `var i = 2; h + i`},
+		{`let j = 1`, `{ let j = 2 }`},
+		{`let k = 1`, `(function () { let k = 2 })()`},
+		// A lexical binding eval declares belongs to the eval.
+		{`let l = 1`, `eval("let l = 2"); l`},
+	}
+	for _, pair := range good {
+		rt := quickjs.New()
+		if _, err := rt.Eval(pair[0]); err != nil {
+			t.Errorf("%s: %v", pair[0], err)
+		} else if _, err := rt.Eval(pair[1]); err != nil {
+			t.Errorf("%s then %s: %v", pair[0], pair[1], err)
+		}
+		rt.Close()
+	}
+}
+
+// TestGlobalLexicalDeadZone covers a script-level lexical binding read before
+// its declaration runs.
+func TestGlobalLexicalDeadZone(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`try { x } catch (e) { e.constructor.name } finally {} ; let x = 1`, "ReferenceError"},
+		{`function f() { return x } 
+		  var caught = ""
+		  try { f() } catch (e) { caught = e.constructor.name }
+		  let x = 1
+		  caught + "," + f()`, "ReferenceError,1"},
+		{`var caught = ""
+		  try { typeof y } catch (e) { caught = e.constructor.name }
+		  let y = 1
+		  caught`, "ReferenceError"},
+		// An undeclared name is still undefined to typeof.
+		{`typeof notDeclaredAnywhere`, "undefined"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
