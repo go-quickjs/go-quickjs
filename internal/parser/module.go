@@ -145,8 +145,14 @@ func (p *parser) parseExportDecl() ast.Stmt {
 
 	case p.isPunct("{"):
 		p.next()
+		// A local name spelled as a string names nothing: only a re-export,
+		// which asks another module for it, may be written that way.
+		stringLocal := -1
 		for !p.isPunct("}") {
 			spec := ast.ExportSpecifier{Start: p.tok.Pos}
+			if p.tok.Kind == lexer.String && stringLocal < 0 {
+				stringLocal = p.tok.Pos
+			}
 			spec.Local = p.parseModuleExportName()
 			spec.Exported = spec.Local
 			if p.eatContextual("as") {
@@ -159,6 +165,9 @@ func (p *parser) parseExportDecl() ast.Stmt {
 		}
 		p.expectPunct("}")
 		// A clause may re-export from another module.
+		if stringLocal >= 0 && !p.isContextual("from") {
+			p.errorAt(lexer.Token{Pos: stringLocal}, "a local export name must be an identifier")
+		}
 		if p.eatContextual("from") {
 			if p.tok.Kind != lexer.String {
 				p.errorf("the module specifier must be a string")
