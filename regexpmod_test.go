@@ -267,3 +267,55 @@ func TestRegExpClassSets(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// Under the u and v flags an escape stands for a character only where the
+// escape is needed, and \0 is the null character rather than the start of an
+// octal escape.
+func TestUnicodeEscapesAreRestricted(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// A syntax character may be escaped; anything else may not.
+		{`/\$/u.test("$")`, "true"},
+		{`/\//u.test("/")`, "true"},
+		{`/\{/u.test("{")`, "true"},
+		{`/\ /u.test(" ")`, "SyntaxError"},
+		{`/\-/u.test("-")`, "SyntaxError"},
+		{`/\_/u.test("_")`, "SyntaxError"},
+		{`/\@/u.test("@")`, "SyntaxError"},
+		// Inside a class the range character may be escaped, and the v flag
+		// reserves more punctuation there.
+		{`/[\-]/u.test("-")`, "true"},
+		{`/[\-]/v.test("-")`, "true"},
+		{`/[\&]/v.test("&")`, "true"},
+		{`/[\@]/v.test("@")`, "true"},
+		{`/[\@]/u.test("@")`, "SyntaxError"},
+		// Without the flags the old tolerance stands.
+		{`/\ /.test(" ")`, "true"},
+		{`/\@/.test("@")`, "true"},
+		// \0 is null, and under u nothing may follow it.
+		{`/\0/u.test("\0")`, "true"},
+		{`/\00/u.test("\0")`, "SyntaxError"},
+		{`/\00/.test("\0")`, "true"},
+	}
+	for _, tc := range cases {
+		checkEval(t, `try { String(eval(`+jsQuote(tc.src)+`)) } catch (e) { e.constructor.name }`,
+			tc.want)
+	}
+}
+
+// A repetition's first iteration is required when its lower bound is one, and
+// a required iteration has no empty check: `x+` where x matches nothing still
+// matches, once.
+func TestRequiredRepetitionMayMatchNothing(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`String(/(a*)b\1+/.exec("baaaac"))`, "b,"},
+		{`String(/(a*)b\1+/.exec("baaaac").index)`, "0"},
+		{`String(/(?:)+/.test(""))`, "true"},
+		{`String(/(a*)+/.exec("aaa"))`, "aaa,aaa"},
+		// The repetitions after the first still stop at an empty one.
+		{`String(/(a*)*/.exec("b"))`, ","},
+		{`String("aaa".replace(/a*/g, "-"))`, "--"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

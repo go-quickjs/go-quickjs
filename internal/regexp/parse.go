@@ -39,6 +39,9 @@ type parser struct {
 	// maxBackref is the largest numeric backreference seen, checked at the end
 	// because \1 may legally precede the group it names.
 	maxBackref int
+	// inClass marks a position inside a character class, where an escape may
+	// stand for a character the grammar reserves only there.
+	inClass bool
 }
 
 // parse builds the syntax tree for a pattern.
@@ -678,10 +681,14 @@ func (p *parser) parseCharEscape() (rune, error) {
 		return '\f', nil
 	case '0':
 		// \0 is NUL unless a digit follows, which makes it a legacy octal
-		// escape outside unicode mode.
-		if p.peek() >= '0' && p.peek() <= '9' && p.flags&FlagUnicode == 0 {
-			p.pos--
-			return p.parseOctal(), nil
+		// escape outside unicode mode -- and nothing at all inside it, where
+		// \0 may not be followed by a digit.
+		if p.peek() >= '0' && p.peek() <= '9' {
+			if p.flags&FlagUnicode == 0 {
+				p.pos--
+				return p.parseOctal(), nil
+			}
+			return 0, p.errorf("\\0 cannot be followed by a digit")
 		}
 		return 0, nil
 	case 'c':
@@ -711,12 +718,39 @@ func (p *parser) parseCharEscape() (rune, error) {
 		p.pos--
 		return p.parseOctal(), nil
 	}
-	if p.flags&FlagUnicode != 0 && isIdentifierRune(r) {
-		// Under the u flag only a fixed set of escapes is valid, so an
-		// unrecognized one is an error rather than the literal character.
+	if p.flags&FlagUnicode != 0 && !p.escapableRune(r) {
+		// Under the u flag an escaped character stands for itself only where
+		// the escape is needed: a character the grammar gives a meaning to.
+		// Anything else is an error rather than the character.
 		return 0, p.errorf("invalid escape \\%c", r)
 	}
 	return r, nil
+}
+
+// escapableRune reports whether a character may be escaped to stand for itself
+// under the u and v flags, which is a shorter list than it looks: only what the
+// grammar would otherwise read as syntax.
+func (p *parser) escapableRune(r rune) bool {
+	switch r {
+	case '^', '$', '\\', '.', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|', '/':
+		return true
+	}
+	if !p.inClass {
+		return false
+	}
+	// A class may escape the character that would otherwise be a range.
+	if r == '-' {
+		return true
+	}
+	// The v flag reserves more punctuation inside a class, for the set
+	// operators and for syntax it may give a meaning to later.
+	if p.flags&FlagUnicodeSets != 0 {
+		switch r {
+		case '&', '!', '#', '%', ',', ':', ';', '<', '=', '>', '@', '`', '~':
+			return true
+		}
+	}
+	return false
 }
 
 // parseUnicodeEscape reads \uXXXX or \u{...}, combining a surrogate pair when
@@ -803,6 +837,8 @@ func isIdentifierRune(r rune) bool {
 // parseClass parses a bracketed character class.
 func (p *parser) parseClass() (*charSet, error) {
 	p.pos++ // consume '['
+	p.inClass = true
+	defer func() { p.inClass = false }()
 	set := newCharSet()
 	set.negated = p.eat('^')
 	if p.flags&FlagIgnoreCase != 0 {

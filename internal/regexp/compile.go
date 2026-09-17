@@ -283,18 +283,20 @@ func (c *compiler) compileRepeat(t nodeRepeat) {
 
 	case t.min == 1 && t.max < 0:
 		// +
-		start := c.here()
-		guard := -1
 		if needsGuard {
-			guard = c.prog.emptyChecks
-			c.prog.emptyChecks++
-			c.emit(instr{op: opEmptyCheck, arg: guard, arg2: 0})
+			// The first iteration is required, and a required iteration has no
+			// empty check: `(a*)b\1+` matches "b", because the one repetition
+			// of an empty backreference is allowed to match nothing. Only what
+			// repeats after it needs the guard, so the body is compiled once
+			// on its own and then as a `*`.
+			c.clearCapsFor(t.item)
+			c.compile(t.item)
+			c.compileRepeat(nodeRepeat{item: t.item, min: 0, max: -1, greedy: t.greedy})
+			return
 		}
+		start := c.here()
 		c.clearCapsFor(t.item)
 		c.compile(t.item)
-		if needsGuard {
-			c.emit(instr{op: opEmptyCheck, arg: guard, arg2: 1})
-		}
 		split := c.emit(instr{op: opSplit})
 		c.setSplit(split, t.greedy, start, c.here())
 		return

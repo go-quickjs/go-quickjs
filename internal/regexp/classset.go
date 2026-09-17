@@ -218,6 +218,9 @@ func subtractRanges(a, b []charRange) []charRange {
 // would silently mean something.
 func (p *parser) parseClassSet() (node, error) {
 	p.pos++ // consume '['
+	wasInClass := p.inClass
+	p.inClass = true
+	defer func() { p.inClass = wasInClass }()
 	negated := p.eat('^')
 
 	v, err := p.parseClassSetBody()
