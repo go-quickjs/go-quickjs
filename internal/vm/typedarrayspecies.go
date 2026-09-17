@@ -15,14 +15,7 @@ package vm
 // typedArrayCtorFor returns the intrinsic constructor for an element type,
 // which is the default a species lookup falls back to.
 func (r *Runtime) typedArrayCtorFor(kind elemType) *Object {
-	p := r.typedArrayProtos[kind]
-	if p == nil {
-		return nil
-	}
-	if c := p.getOwn(atomConstructor); c != nil && c.value.IsObject() {
-		return c.value.Object()
-	}
-	return nil
+	return r.typedArrayCtors[kind]
 }
 
 // typedArraySpeciesCreate builds the result a method returns.

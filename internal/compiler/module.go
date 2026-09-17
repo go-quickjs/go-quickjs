@@ -169,6 +169,13 @@ func (c *compiler) compileImportDecl(n *ast.ImportDecl) {}
 func (c *compiler) compileExportDecl(n *ast.ExportDecl) {
 	switch {
 	case n.Default:
+		if cd, ok := n.Decl.(*ast.ClassDecl); ok && cd.Class.Name == nil {
+			// `export default class {}` declares no binding of its own, so it
+			// is the expression it looks like, named after the export.
+			c.compileClass(cd.Class, "default")
+			c.emit(bytecode.OpDefineGlobalFunc, c.nameIdx("*default*"), 0)
+			return
+		}
 		if n.Decl != nil {
 			c.compileStatement(n.Decl)
 			// A default-exported declaration is also bound under the name the

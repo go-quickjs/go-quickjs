@@ -438,3 +438,39 @@ func TestTypedArrayDetachDuringUse(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// The species protocol falls back to an intrinsic constructor when the object
+// does not name one, and an intrinsic is not something a script can replace.
+// Reading the default back from the prototype's constructor property made it
+// one: redefining that property as an accessor left no default at all, and
+// constructing nothing took the host down.
+func TestTypedArraySpeciesDefaultIsIntrinsic(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var a = new Uint8Array([1, 2, 3]);
+		  var calls = 0;
+		  Object.defineProperty(Uint8Array.prototype, "constructor",
+		      {get: function () { calls += 1 }});
+		  var r = a.map(function () { return 0 });
+		  [calls, r.length, Object.getPrototypeOf(r) === Uint8Array.prototype].join(",")`,
+			"1,3,true"},
+		{`var a = new Int16Array([1, 2, 3]);
+		  Object.defineProperty(Int16Array.prototype, "constructor", {value: undefined});
+		  a.slice(1).join(",") + "|" + a.filter(function (x) { return x > 1 }).join(",")`,
+			"2,3|2,3"},
+		// The statics find their element type the same way.
+		{`Object.defineProperty(Uint8Array.prototype, "constructor", {value: 1});
+		  Uint8Array.from([1, 2]).join(",") + "|" + Uint8Array.of(3, 4).join(",")`,
+			"1,2|3,4"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

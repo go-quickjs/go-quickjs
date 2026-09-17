@@ -445,6 +445,7 @@ func (r *Runtime) initTypedArrayBuiltins() {
 			}
 			return rt.constructTypedArray(k, proto, args)
 		})
+		r.typedArrayCtors[kind] = ctor
 		// The concrete constructors inherit the statics from %TypedArray%.
 		ctor.proto = abstract
 		r.defConst(ctor, "BYTES_PER_ELEMENT", Int(info.size))
@@ -1119,10 +1120,8 @@ func (r *Runtime) initTypedArrayStatics(abstract *Object) {
 func (r *Runtime) typedArrayKindOf(this Value, name string) (elemType, error) {
 	if this.IsObject() {
 		for kind := elemInt8; int(kind) < len(elemInfos); kind++ {
-			if p := r.typedArrayProtos[kind]; p != nil {
-				if c := p.getOwn(atomConstructor); c != nil && c.value.SameValue(this) {
-					return kind, nil
-				}
+			if c := r.typedArrayCtors[kind]; c != nil && c == this.Object() {
+				return kind, nil
 			}
 		}
 	}

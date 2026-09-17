@@ -1925,7 +1925,7 @@ func (r *Runtime) construct(callee Value, args []Value) (Value, error) {
 
 // isConstructor reports whether a value responds to new.
 func isConstructor(v Value) bool {
-	if !v.IsObject() {
+	if !v.IsObject() || v.Object() == nil {
 		return false
 	}
 	o := v.Object()
@@ -1943,7 +1943,7 @@ func isConstructor(v Value) bool {
 // from B eventually runs B's constructor, but the object is a D, so the
 // prototype comes from D. Reflect.construct exposes the same split directly.
 func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Value) (Value, error) {
-	if !callee.IsObject() {
+	if !callee.IsObject() || callee.Object() == nil {
 		return Undefined, r.throwTypeError("%s is not a constructor", r.describe(callee))
 	}
 	o := callee.Object()

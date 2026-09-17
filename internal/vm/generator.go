@@ -50,6 +50,10 @@ type generator struct {
 	// openUpvalues carries the captures across a suspension, so that two
 	// closures made in different resumptions still share a binding.
 	openUpvalues []*upvalue
+	// withScopes carries the enclosing `with` objects across a suspension: a
+	// generator may yield from inside a with body, and the body still has to
+	// resolve names against the object when it resumes.
+	withScopes []*Object
 
 	state genState
 	// started marks a generator whose body has begun, which decides whether a
@@ -126,6 +130,16 @@ func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Ob
 		}
 	}
 
+	// A generator written inside a `with` body resolves the names in its own
+	// body against the objects too. An ordinary call picks that up when the
+	// frame is set up; a generator builds its frames itself, so it records the
+	// chain once here and restores it on every resumption.
+	if callee != nil {
+		if fd := callee.fn(); fd != nil && len(fd.lexWith) > 0 {
+			g.withScopes = fd.lexWith[:len(fd.lexWith):len(fd.lexWith)]
+		}
+	}
+
 	if err := r.bindGeneratorParams(g); err != nil {
 		return nil, err
 	}
@@ -171,12 +185,14 @@ func (r *Runtime) bindGeneratorParams(g *generator) error {
 		newTarget:  g.newTarget,
 		callee:     g.callee,
 		args:       g.args,
+		withScopes: g.withScopes,
 		paramsOnly: true,
 	}
 	_, err := r.executeAt(f, base, nil)
 	// The body resumes where the prologue stopped.
 	g.pc = f.pc
 	g.openUpvalues = f.openUpvalues
+	g.withScopes = f.withScopes
 
 	r.frames = r.frames[:len(r.frames)-1]
 	clear(r.stack[base:r.stackTop])
@@ -272,6 +288,7 @@ func (r *Runtime) resumeFull(g *generator, sent Value, mode resumeMode) (resumeR
 		args:         g.args,
 		handlers:     g.handlers,
 		openUpvalues: g.openUpvalues,
+		withScopes:   g.withScopes,
 	}
 	f := gf
 
@@ -316,6 +333,7 @@ func (r *Runtime) runGeneratorFrom(g *generator, f *frame, base, sp int, sent Va
 		g.stack = append(g.stack[:0], r.stack[base:f.savedSP]...)
 		g.handlers = f.handlers
 		g.openUpvalues = f.openUpvalues
+		g.withScopes = f.withScopes
 		g.state = genSuspendedYield
 		g.started = true
 		r.releaseGeneratorFrame(g, base)

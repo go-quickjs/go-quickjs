@@ -1951,3 +1951,43 @@ func TestModuleNamespaceObject(t *testing.T) {
 		})
 	}
 }
+
+// `export default class {}` declares no binding, so the class is the
+// expression it looks like and takes its name from the export. Compiling it as
+// a declaration read a name that was not there.
+func TestExportDefaultAnonymousClass(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+
+	ns, err := rt.EvalModule("entry",
+		`export default class { valueOf() { return 45 } }`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := ns.Get("default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	name, err := c.Get("name")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := name.String(); got != "default" {
+		t.Errorf("name = %q, want %q", got, "default")
+	}
+	inst, err := c.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := inst.Get("valueOf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := m.CallWithThis(inst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Int() != 45 {
+		t.Errorf("valueOf() = %v, want 45", v)
+	}
+}

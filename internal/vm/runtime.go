@@ -63,10 +63,16 @@ type Runtime struct {
 	asyncFuncProto    *Object
 	asyncGenFuncProto *Object
 
-	// typedArrayCtor is %TypedArray%, and typedArrayProtos holds one prototype
-	// per element type.
+	// typedArrayCtor is %TypedArray%, and typedArrayProtos and typedArrayCtors
+	// hold one prototype and one constructor per element type.
+	//
+	// The constructors are recorded rather than read back from each prototype's
+	// constructor property, which a script may redefine: the species protocol
+	// falls back to the intrinsic, and an intrinsic that a script can replace
+	// is not one.
 	typedArrayCtor   *Object
 	typedArrayProtos [12]*Object
+	typedArrayCtors  [12]*Object
 
 	// promiseCtor is the intrinsic Promise, which the capability machinery
 	// compares against to take its fast path.

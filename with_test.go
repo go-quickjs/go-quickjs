@@ -135,3 +135,69 @@ func TestWithShadowing(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// A generator may suspend inside a with body, and when it resumes the body
+// still has to resolve names against the object. The scope chain lives on the
+// frame, which a suspension discards, so it has to be saved with everything
+// else -- and until it was, resuming past the end of the body underflowed the
+// chain and took the host down.
+func TestWithSurvivesSuspension(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`function* g() { var x = 1; yield x; with ({x: 2}) { yield x } yield x }
+		  var it = g();
+		  [it.next().value, it.next().value, it.next().value, it.next().done].join(",")`,
+			"1,2,1,true"},
+		// Two objects deep, and a yield in each.
+		{`function* g() {
+		    with ({x: 1}) { yield x; with ({x: 2}) { yield x } yield x }
+		  }
+		  var it = g(); [...it].join(",")`, "1,2,1"},
+		// A generator created inside a with body sees the object from its
+		// declaration, not from where it is driven.
+		{`var g; with ({x: "obj"}) { g = function* () { yield x } }
+		  g().next().value`, "obj"},
+		// yield* delegating from inside a with body.
+		{`function* g() { with ({x: [1, 2]}) { yield* x } }
+		  [...g()].join(",")`, "1,2"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}
+
+// The same for an async function, whose awaits are suspensions of the same
+// machinery.
+func TestWithSurvivesAwait(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+
+	v, err := rt.Eval(`
+	    var log = [];
+	    async function a() {
+	      with ({x: 1}) {
+	        log.push(x);
+	        await 0;
+	        log.push(x);
+	        with ({x: 2}) { await 0; log.push(x) }
+	        log.push(x);
+	      }
+	    }
+	    a();
+	    log`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The awaits resolve as the job queue drains, which Eval does before it
+	// returns.
+	if got := v.String(); got != "1,1,2,1" {
+		t.Errorf("log = %q, want %q", got, "1,1,2,1")
+	}
+}
