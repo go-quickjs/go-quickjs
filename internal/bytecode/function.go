@@ -75,6 +75,11 @@ type UpvalueDesc struct {
 // everything in scope and lets the evaluator take what it needs.
 type EvalScope struct {
 	Bindings []EvalBinding
+	// WithDepth is how many `with` bodies the call site is inside, counting
+	// the one an enclosing eval's own variables live in. The evaluated code is
+	// inside them too, so a name it mentions has to be looked for in their
+	// objects before the binding it would otherwise mean.
+	WithDepth int
 	// Strict records whether the call site is in strict code, which the
 	// evaluated code inherits.
 	Strict bool
@@ -132,6 +137,9 @@ type EvalBinding struct {
 	// evaluated code may not hoist over: one of the calling function's own
 	// refuses the declaration outright.
 	Lexical bool
+	// WithDepth is how many `with` bodies enclosed the binding's declaration,
+	// which says how many of the ones in scope at the call site can shadow it.
+	WithDepth int
 }
 
 // TemplateStrings is the text of one tagged template site.

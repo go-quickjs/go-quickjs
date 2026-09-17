@@ -37,7 +37,21 @@ func isDirectEval(n *ast.Call) bool {
 // there, and the instruction is told to take them from it.
 func (c *compiler) compileDirectEval(n *ast.Call) {
 	idx := c.evalScopeIdx()
-	c.compileExpr(n.Callee)
+	// A receiver is pushed beneath the callee, which is undefined for the
+	// ordinary resolution and the object for one a `with` answered: inside a
+	// `with` body the name may be the object's own eval, and calling that is
+	// an ordinary call with the object as its receiver. The instruction below
+	// decides between the two, since only it can see what the name resolved to.
+	probe := -1
+	if id, ok := n.Callee.(*ast.Ident); ok && c.withDepth > 0 {
+		probe = c.withProbe(bytecode.OpWithGetThis, id.Name)
+		c.emit(bytecode.OpPushUndef, 0, 0)
+		c.compileIdentReadStatic(id)
+		c.patchWithProbe(probe)
+	} else {
+		c.emit(bytecode.OpPushUndef, 0, 0)
+		c.compileExpr(n.Callee)
+	}
 	if hasSpread(n.Args) {
 		c.compileSpreadArguments(n.Args)
 		c.emitAt(n.Start, bytecode.OpDirectEval, idx, bytecode.DirectEvalSpread)
@@ -52,6 +66,7 @@ func (c *compiler) compileDirectEval(n *ast.Call) {
 func (c *compiler) evalScopeIdx() uint32 {
 	scope := bytecode.EvalScope{
 		Bindings:         c.visibleBindings(),
+		WithDepth:        c.withDepth,
 		Strict:           c.fn.Strict,
 		AllowSuperProp:   c.allowSuperProp(),
 		AllowSuperCall:   c.allowSuperCall(),
@@ -93,6 +108,7 @@ func (c *compiler) visibleBindings() []bytecode.EvalBinding {
 			TDZ:       !l.initialized,
 			VarScoped: l.varScoped(),
 			Lexical:   l.lexical(),
+			WithDepth: l.withDepth,
 		})
 	}
 
@@ -106,11 +122,12 @@ func (c *compiler) visibleBindings() []bytecode.EvalBinding {
 		}
 		seen[name] = true
 		out = append(out, bytecode.EvalBinding{
-			Name:     name,
-			Index:    idx,
-			Mutable:  c.fn.Upvalues[idx].Mutable,
-			TDZ:      c.fn.Upvalues[idx].TDZ,
-			FuncSelf: c.fn.Upvalues[idx].FuncSelf,
+			Name:      name,
+			Index:     idx,
+			Mutable:   c.fn.Upvalues[idx].Mutable,
+			TDZ:       c.fn.Upvalues[idx].TDZ,
+			FuncSelf:  c.fn.Upvalues[idx].FuncSelf,
+			WithDepth: c.fn.Upvalues[idx].WithDepth,
 		})
 	}
 

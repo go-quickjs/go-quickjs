@@ -1407,13 +1407,14 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			push(v)
 		case bytecode.OpDirectEval:
 			var args []Value
-			var callee Value
+			var callee, recv Value
 			if in.B == bytecode.DirectEvalSpread {
 				// The arguments were gathered into an array, which a spread
 				// element forces. A spread does not make the call any less
 				// direct: what decides is the name the callee was written as.
 				list := pop()
 				callee = pop()
+				recv = pop()
 				if list.IsObject() {
 					args = list.Object().elems
 				}
@@ -1421,14 +1422,16 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				argc := int(in.B)
 				args = r.stack[sp-argc : sp]
 				callee = r.stack[sp-argc-1]
-				sp -= argc + 1
+				recv = r.stack[sp-argc-2]
+				sp -= argc + 2
 			}
 			src := arg(args, 0)
 			switch {
 			case !callee.IsObject() || callee.Object() != r.evalFn:
 				// The name resolved to something other than the intrinsic, so
-				// this is an ordinary call after all.
-				v, err := r.call(callee, Undefined, args)
+				// this is an ordinary call after all -- with the receiver the
+				// resolution found, which a `with` object's own eval needs.
+				v, err := r.call(callee, recv, args)
 				if err != nil {
 					vmErr = err
 					goto onError

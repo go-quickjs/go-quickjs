@@ -441,3 +441,58 @@ func TestForInSeesDeletions(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// A direct eval written inside a `with` body is still a direct eval, and the
+// code it runs is inside that body: it sees the object's properties as the
+// surrounding code does. Unless the object supplies an eval of its own, which
+// is an ordinary call with the object as its receiver.
+func TestDirectEvalInsideWith(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var out = ""
+		  function f() { var o = {x: "own"}; var x = "outer"; with (o) { out = eval("x") } }
+		  f()
+		  out`, "own"},
+		{`var out = ""
+		  function f() { var o = {}; var x = "outer"; with (o) { out = eval("x") } }
+		  f()
+		  out`, "outer"},
+		{`var out = ""
+		  function f() { with ({}) { out = eval("typeof x") } }
+		  f()
+		  out`, "undefined"},
+		// What the evaluated code declares belongs to the calling function.
+		{`function f() { with ({}) { eval("var q = 5") } return q }
+		  String(f())`, "5"},
+		// A write goes through the object the name resolved to.
+		{`var o = {x: 1}
+		  function f() { var x = 9; with (o) { eval("x = 5") } return x }
+		  [f(), o.x].join(",")`, "9,5"},
+		// `this` and the rest still come from the caller.
+		{`var out = ""
+		  function f() { with ({}) { out = eval("typeof this") } }
+		  f()
+		  out`, "object"},
+		{`var out = ""
+		  var obj = {m: function () { with ({}) { out = eval("this.tag") } }, tag: "t"}
+		  obj.m()
+		  out`, "t"},
+		// An object with an eval of its own is called instead, as any other
+		// method would be.
+		{`var o = {eval: function (s) { return "own:" + s + ":" + (this === o) }}
+		  var out
+		  with (o) { out = eval("1+1") }
+		  out`, "own:1+1:true"},
+		// A spread does not make the call any less direct.
+		{`var out = ""
+		  function f() { var y = 3; with ({}) { out = eval(..."y") } }
+		  f()
+		  String(out)`, "3"},
+		// An indirect eval is unaffected: it runs in global scope.
+		{`var x = "global"
+		  function f() { var x = "local"; return (0, eval)("x") }
+		  f()`, "global"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

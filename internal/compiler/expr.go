@@ -815,7 +815,7 @@ func (c *compiler) compileCall(n *ast.Call) {
 	}
 	// A direct eval runs its code in this scope, so the call site records what
 	// is in scope for the evaluated code to reach.
-	if isDirectEval(n) && c.withStatements == 0 {
+	if isDirectEval(n) {
 		c.compileDirectEval(n)
 		return
 	}

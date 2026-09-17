@@ -44,6 +44,10 @@ type Options struct {
 	// one it actually uses becomes an upvalue, which the interpreter binds to
 	// the calling frame.
 	EvalScope []bytecode.EvalBinding
+	// EvalWithDepth is how many `with` bodies the call site is inside. The
+	// evaluated code is inside them too, so a name it mentions is looked for
+	// in their objects before the binding it would otherwise mean.
+	EvalWithDepth int
 	// PrivateNames are the private names of the classes enclosing a direct
 	// eval's call site, which its code may refer to as the surrounding code
 	// may, each with the hidden binding that holds its key.
@@ -341,6 +345,9 @@ func Compile(prog *ast.Program, opts Options) (fn *bytecode.Function, err error)
 	c.fn.Source = opts.Source
 	c.lineOf = lineMapper(opts.Text)
 	c.inFieldInit = opts.InFieldInit
+	// Eval code is inside whatever `with` bodies its call site is inside, so a
+	// name it mentions is probed against their objects first.
+	c.withDepth = opts.EvalWithDepth
 	if opts.InFieldInit && containsArgumentsInStmts(prog.Body) {
 		return nil, &Error{Msg: "\"arguments\" is not allowed in a class field initializer"}
 	}
@@ -719,7 +726,7 @@ func (c *compiler) resolveUpvalue(name string) (uint32, bool) {
 			if b.Name != name || c.evalOwnVars[name] {
 				continue
 			}
-			idx := c.addUpvalue(name, b.Index, b.FromLocal, b.Mutable, b.TDZ, 0)
+			idx := c.addUpvalue(name, b.Index, b.FromLocal, b.Mutable, b.TDZ, b.WithDepth)
 			c.fn.Upvalues[idx].FuncSelf = b.FuncSelf
 			return idx, true
 		}

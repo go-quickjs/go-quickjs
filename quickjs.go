@@ -459,6 +459,7 @@ func (r *Runtime) installCodeGeneration() {
 			popts.AllowSuperCall = req.Scope.AllowSuperCall
 			popts.AllowNewTarget = req.Scope.AllowNewTarget
 			copts.EvalScope = req.Scope.Bindings
+			copts.EvalWithDepth = req.Scope.WithDepth
 			copts.PrivateNames = req.Scope.PrivateNames
 			copts.ArgumentNames = req.Scope.ArgumentNames
 			copts.InFieldInit = req.Scope.InFieldInit
