@@ -88,6 +88,38 @@ func (t *typedArrayData) storage() *arrayBufferData {
 // write has to be measured against what is there now rather than against what
 // was there when the view was made. Answering zero is what turns a detached
 // buffer into an out-of-range access instead of a crash.
+// searchStart converts a forward search's starting point, reporting whether
+// there is any element left to look at.
+//
+// The length is read before the conversion, which is what makes an empty array
+// answer without running a valueOf at all.
+func (r *Runtime) searchStart(v Value, length int) (int, bool, error) {
+	if length == 0 {
+		return 0, false, nil
+	}
+	if v.IsUndefined() {
+		return 0, true, nil
+	}
+	n, err := r.toInteger(v)
+	if err != nil {
+		return 0, false, err
+	}
+	switch {
+	case math.IsInf(n, 1):
+		return 0, false, nil
+	case math.IsInf(n, -1):
+		return 0, true, nil
+	case n < 0:
+		n += float64(length)
+		if n < 0 {
+			return 0, true, nil
+		}
+	case n >= float64(length):
+		return 0, false, nil
+	}
+	return int(n), true, nil
+}
+
 func (t *typedArrayData) count() int {
 	b := t.storage()
 	if b == nil || b.detached {
@@ -851,7 +883,7 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		return res, nil
 	})
 
-	r.defMethod(p, "fill", 3, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	r.defMethod(p, "fill", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		t, err := rt.typedArrayOf(this, "TypedArray.prototype.fill")
 		if err != nil {
 			return Undefined, err
@@ -884,13 +916,28 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		return this, nil
 	})
 
+	// The searches read their elements after the starting point has been
+	// converted, which a valueOf that detaches the buffer can tell: the length
+	// was settled first, but every read past the detachment is undefined.
+	//
+	// searchStart is where a forward search begins, or reports that there is
+	// nowhere to start from.
 	r.defMethod(p, "indexOf", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		t, err := rt.typedArrayOf(this, "TypedArray.prototype.indexOf")
 		if err != nil {
 			return Undefined, err
 		}
 		target := arg(args, 0)
-		for i := 0; i < t.length; i++ {
+		from, ok, err := rt.searchStart(arg(args, 1), t.length)
+		if err != nil || !ok {
+			return Int(-1), err
+		}
+		// indexOf asks whether each index is there before reading it, and a
+		// detached buffer leaves none of them: it reports nothing found rather
+		// than finding undefined everywhere, which is where it parts company
+		// with includes.
+		avail := t.count()
+		for i := from; i < t.length && i < avail; i++ {
 			if t.getElem(i).StrictEquals(target) {
 				return Int(i), nil
 			}
@@ -904,12 +951,93 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 			return Undefined, err
 		}
 		target := arg(args, 0)
-		for i := 0; i < t.length; i++ {
+		from, ok, err := rt.searchStart(arg(args, 1), t.length)
+		if err != nil || !ok {
+			return False, err
+		}
+		for i := from; i < t.length; i++ {
 			if t.getElem(i).SameValueZero(target) {
 				return True, nil
 			}
 		}
 		return False, nil
+	})
+
+	r.defMethod(p, "copyWithin", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		t, err := rt.typedArrayOf(this, "TypedArray.prototype.copyWithin")
+		if err != nil {
+			return Undefined, err
+		}
+		to, err := rt.relativeIndex(arg(args, 0), t.length, 0)
+		if err != nil {
+			return Undefined, err
+		}
+		from, err := rt.relativeIndex(arg(args, 1), t.length, 0)
+		if err != nil {
+			return Undefined, err
+		}
+		final, err := rt.relativeIndex(arg(args, 2), t.length, t.length)
+		if err != nil {
+			return Undefined, err
+		}
+		count := final - from
+		if n := t.length - to; n < count {
+			count = n
+		}
+		if count > 0 {
+			// Any of those conversions can detach the buffer, and a view over
+			// one that has gone has nothing to copy within. There is nothing
+			// to complain about when there was nothing to copy.
+			if t.storage().detached {
+				return Undefined, rt.throwTypeError(
+					"the underlying ArrayBuffer has been detached")
+			}
+			size := t.info().size
+			b := t.storage().bytes
+			dst := t.byteOffset + to*size
+			src := t.byteOffset + from*size
+			copy(b[dst:dst+count*size], b[src:src+count*size])
+		}
+		return this, nil
+	})
+
+	r.defMethod(p, "lastIndexOf", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		t, err := rt.typedArrayOf(this, "TypedArray.prototype.lastIndexOf")
+		if err != nil {
+			return Undefined, err
+		}
+		target := arg(args, 0)
+		from := t.length - 1
+		if t.length == 0 {
+			return Int(-1), nil
+		}
+		if len(args) > 1 {
+			n, err := rt.toInteger(args[1])
+			if err != nil {
+				return Undefined, err
+			}
+			switch {
+			case math.IsInf(n, -1):
+				return Int(-1), nil
+			case n < 0:
+				n += float64(t.length)
+				if n < 0 {
+					return Int(-1), nil
+				}
+				from = int(n)
+			case n < float64(from):
+				from = int(n)
+			}
+		}
+		if avail := t.count(); from >= avail {
+			from = avail - 1
+		}
+		for i := from; i >= 0; i-- {
+			if t.getElem(i).StrictEquals(target) {
+				return Int(i), nil
+			}
+		}
+		return Int(-1), nil
 	})
 
 	r.defMethod(p, "join", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -1095,13 +1223,8 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 	}
 	for _, m := range []delegated{
 		{"at", 1, false, false},
-		{"indexOf", 1, false, false},
-		{"lastIndexOf", 1, false, false},
-		{"includes", 1, false, false},
-		{"join", 1, false, false},
 		{"reverse", 0, true, false},
 		{"sort", 1, true, false},
-		{"copyWithin", 2, true, false},
 		{"toReversed", 0, false, true},
 		{"toSorted", 1, false, true},
 		{"with", 2, false, true},
@@ -1203,16 +1326,13 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		})
 	}
 
-	r.defSymbolMethod(p, r.wellKnown.iterator, "[Symbol.iterator]", 0,
-		func(rt *Runtime, this Value, args []Value) (Value, error) {
-			// The array is validated now and then read as it goes, rather
-			// than copied: a typed array written to while it is iterated is
-			// meant to be seen changing.
-			if _, err := rt.typedArrayOf(this, "TypedArray.prototype[Symbol.iterator]"); err != nil {
-				return Undefined, err
-			}
-			return rt.newArrayIterator(this)
-		})
+	// Symbol.iterator is the values method itself rather than another function
+	// that does the same thing, which a script can tell by comparing them.
+	values, err := r.getProp(p, r.atoms.intern("values"), Obj(p))
+	if err == nil && values.IsObject() {
+		p.setOwnRaw(r.atoms.internSymbol(r.wellKnown.iterator), values,
+			propWritable|propConfigurable)
+	}
 }
 
 // newTypedArrayOf builds a view of the given kind holding the given values.

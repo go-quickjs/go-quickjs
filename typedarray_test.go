@@ -424,8 +424,14 @@ func TestTypedArrayDetachDuringUse(t *testing.T) {
 		// The buffer is reported whether or not it is still attached.
 		{`var a = new Uint8Array(4); var b = a.buffer; a.buffer.transfer()
 		  String(a.buffer === b)`, "true"},
+		// copyWithin looks at the buffer once it knows there is something to
+		// copy, so a detachment while the range is worked out is reported --
+		// and a range that turns out to be empty is not.
 		{`var a = new Uint8Array(8);
-		  a.copyWithin(0, 1, {valueOf() { a.buffer.transfer(); return 8 }}); "ok"`, "ok"},
+		  try { a.copyWithin(0, 1, {valueOf() { a.buffer.transfer(); return 8 }}) }
+		  catch (e) { e.constructor.name }`, "TypeError"},
+		{`var a = new Uint8Array(8);
+		  a.copyWithin(0, 8, {valueOf() { a.buffer.transfer(); return 8 }}); "ok"`, "ok"},
 		// set looks at the buffer only after the offset is coerced, so a
 		// detachment there is reported rather than written through.
 		{`var a = new Uint8Array(8);
@@ -823,5 +829,59 @@ func TestTypedArraySliceSpecies(t *testing.T) {
 	}
 	for _, tc := range cases {
 		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// The searching methods settle the length before converting where to start
+// from, and read their elements afterwards: a conversion that detaches the
+// buffer leaves nothing to find, which indexOf and includes report
+// differently because one asks whether an index is there and the other reads
+// it.
+func TestTypedArraySearchesAfterCoercion(t *testing.T) {
+	const setup = `var ta = new Int8Array(1)
+		var detaching = {valueOf: function () { ta.buffer.transfer(); return 0 }}
+		`
+	cases := []struct{ name, src, want string }{
+		{"includes zero", setup + `String(ta.includes(0, detaching))`, "false"},
+		{"includes undefined", setup + `String(ta.includes(undefined, detaching))`, "true"},
+		{"indexOf zero", setup + `String(ta.indexOf(0, detaching))`, "-1"},
+		{"indexOf undefined", setup + `String(ta.indexOf(undefined, detaching))`, "-1"},
+		{"lastIndexOf undefined", setup + `String(ta.lastIndexOf(undefined, detaching))`, "-1"},
+		// An empty array answers before the conversion runs at all.
+		{"empty answers first", `var t = new Int8Array(0)
+		  var counted = 0
+		  var fi = {valueOf: function () { counted++; return 0 }}
+		  String(t.includes(0, fi)) + "," + String(t.indexOf(0, fi)) + "," + counted`,
+			"false,-1,0"},
+		// And the ordinary behaviour of the starting point.
+		{"from index", `var t = new Int8Array([1,2,3,2]);
+		  [t.indexOf(2), t.indexOf(2, 2), t.lastIndexOf(2), t.lastIndexOf(2, 2),
+		   t.includes(1, 1)].join(",")`, "1,3,3,1,false"},
+		{"negative from", `var t = new Int8Array([1,2,3]);
+		  [t.indexOf(3, -1), t.indexOf(1, -1), t.lastIndexOf(1, -3)].join(",")`, "2,-1,0"},
+		{"infinite from", `var t = new Int8Array([1,2,3]);
+		  [t.indexOf(3, Infinity), t.indexOf(3, -Infinity),
+		   t.lastIndexOf(3, -Infinity)].join(",")`, "-1,2,-1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}
+
+// copyWithin works out what it would copy before looking at the buffer, and
+// the iterator a typed array offers is its own values method.
+func TestTypedArrayCopyWithinAndIterator(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"copies", `String(new Int8Array([1,2,3,4,5]).copyWithin(0, 3))`, "4,5,3,4,5"},
+		{"bounded", `String(new Int8Array([1,2,3,4,5]).copyWithin(0, 3, 4))`, "4,2,3,4,5"},
+		{"negative", `String(new Int8Array([1,2,3,4,5]).copyWithin(-2, -3, -1))`, "1,2,3,3,4"},
+		{"length", `String(Int8Array.prototype.copyWithin.length) + "," +
+		  Int8Array.prototype.fill.length`, "2,1"},
+		{"iterator is values", `String(Int8Array.prototype[Symbol.iterator] ===
+		  Int8Array.prototype.values)`, "true"},
+		{"iterates", `String([...new Int8Array([1,2,3])])`, "1,2,3"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
 	}
 }
