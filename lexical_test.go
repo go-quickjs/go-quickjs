@@ -581,3 +581,137 @@ func TestForHeadLexicalScope(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// A `let` in a for head is a fresh binding each iteration, and the first one is
+// no exception: a closure made in the init clause keeps what the init left
+// there rather than following what the loop goes on to do.
+func TestForHeadPerIterationBindings(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var probeBefore, probeTest, probeIncr, probeBody, run = true
+		  for (
+		    let x = "outside", _ = probeBefore = function () { return x };
+		    run && (x = "inside", probeTest = function () { return x });
+		    probeIncr = function () { return x }
+		  ) probeBody = function () { return x }, run = false;
+		  [probeBefore(), probeTest(), probeBody(), probeIncr()].join(",")`,
+			"outside,inside,inside,inside"},
+		// The familiar case: each iteration's closure keeps its own count.
+		{`var fs = []
+		  for (let i = 0; i < 3; i++) fs.push(function () { return i })
+		  fs.map(function (f) { return f() }).join(",")`, "0,1,2"},
+		{`var fs = []
+		  for (var i = 0; i < 3; i++) fs.push(function () { return i })
+		  fs.map(function (f) { return f() }).join(",")`, "3,3,3"},
+		// A continue is the end of an iteration too.
+		{`var fs = []
+		  for (let i = 0; i < 3; i++) { fs.push(function () { return i }); continue }
+		  fs.map(function (f) { return f() }).join(",")`, "0,1,2"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// A switch's bindings belong to the case block as a whole and are created
+// before the first case expression is evaluated, so a selector closes over the
+// block's binding rather than over whatever the name means outside.
+func TestSwitchCaseBlockScope(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`let x = "outside"
+		  var probeExpr, probeSelector, probeStmt
+		  switch (probeExpr = function () { return x }, null) {
+		    case probeSelector = function () { return x }, null:
+		      probeStmt = function () { return x }
+		      let x = "inside"
+		  }
+		  [probeExpr(), probeSelector(), probeStmt()].join(",")`, "outside,inside,inside"},
+		// A binding of one clause is in scope in the others, and a function
+		// declaration in a clause is callable from an earlier one.
+		{`switch (1) { case 1: f(); function f() { globalThis.out = "called" } } out`, "called"},
+		{`try { eval("switch (1) { case 1: let a; case 2: let a; }"); "no throw" }
+		  catch (e) { e.constructor.name }`, "SyntaxError"},
+		{`switch (1) { case 1: let y = 5; break }
+		  try { y; "leaked" } catch (e) { e.constructor.name }`, "ReferenceError"},
+		// Falling through still works, and a block in a clause is its own scope.
+		{`var out = []
+		  switch (2) { case 1: out.push("one"); case 2: out.push("two"); default: out.push("d") }
+		  out.join(",")`, "two,d"},
+		{`switch (1) { case 1: { let z = 1 } case 2: { let z = 2 } } "ok"`, "ok"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// A function created inside a `with` body keeps the object it was created
+// under, not whichever object a later `with` in the same function pushes.
+func TestWithScopesAreCapturedPerClosure(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var a = 1
+		  var f
+		  with ({a: 2}) { f = function () { return a } }
+		  var r
+		  with ({a: 3}) { r = f() }
+		  String(r)`, "2"},
+		{`var a = 1, fs = []
+		  for (var i = 0; i < 3; i++) {
+		    with ({a: i}) { fs.push(function () { return a }) }
+		  }
+		  fs.map(function (f) { return f() }).join(",")`, "0,1,2"},
+		// A nested `with` is still visible to what is created inside it.
+		{`var f
+		  with ({a: 1}) { with ({b: 2}) { f = function () { return a + b } } }
+		  String(f())`, "3"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// An array whose length cannot change cannot grow, so defining an index at or
+// past the end is refused. An index below it is a property like any other.
+func TestDefineIndexPastAFixedLength(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var a = [1, 2, 3]
+		  Object.defineProperty(a, "length", {writable: false})
+		  try { Object.defineProperty(a, 3, {value: "x"}) } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		{`var a = [1, 2, 3]
+		  Object.defineProperty(a, "length", {writable: false})
+		  try { Object.defineProperties(a, {3: {value: "x"}}) } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		{`var a = [1, 2, 3]
+		  Object.defineProperty(a, "length", {writable: false})
+		  Object.defineProperty(a, 1, {value: "x"})
+		  a.join(",") + "," + a.length`, "1,x,3,3"},
+		{`var a = [1, 2, 3]
+		  Object.defineProperty(a, "length", {writable: false})
+		  String(Reflect.defineProperty(a, 5, {value: "x"})) + "," + a.length`, "false,3"},
+		// A writable length still grows.
+		{`var a = [1]; Object.defineProperty(a, 3, {value: "x"}); a.length`, "4"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// The cause option is asked whether it is there before it is asked for it, and
+// an object that refuses to answer refuses the construction.
+func TestErrorCauseIsAskedFor(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var e = new Error("x", {cause: 1}); String(e.cause)`, "1"},
+		{`var e = new Error("x", {}); String("cause" in e)`, "false"},
+		{`var e = new Error("x"); String("cause" in e)`, "false"},
+		{`var e = new Error("x", {cause: undefined}); ["cause" in e, String(e.cause)].join(",")`,
+			"true,undefined"},
+		{`try { new Error("x", {get cause() { throw new RangeError() }}) }
+		  catch (e) { e.constructor.name }`, "RangeError"},
+		{`try { new Error("x", new Proxy({}, {has: function () { throw new RangeError() }})) }
+		  catch (e) { e.constructor.name }`, "RangeError"},
+		{`var e = new TypeError("x", {cause: "c"}); [e.name, e.message, e.cause].join(",")`,
+			"TypeError,x,c"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

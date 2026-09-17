@@ -156,6 +156,14 @@ func (r *Runtime) defineProperty(o *Object, key Atom, d *propDesc) (bool, error)
 			return r.typedArrayDefine(o, ix, d)
 		}
 	}
+	// An array whose length cannot change cannot grow, so an index at or past
+	// the end is refused before anything is defined. An index below the end is
+	// a property like any other.
+	if o.class == ClassArray && o.flags&objArrayLengthWritable == 0 {
+		if ix, ok := r.atoms.arrayIndex(key); ok && ix >= o.arrayLength() {
+			return false, nil
+		}
+	}
 	// A function's name and length are synthesized, so they have to exist
 	// before a redefinition can be checked against them.
 	r.materializeFunctionProp(o, key)

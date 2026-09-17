@@ -1560,7 +1560,12 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				vmErr = err
 				goto onError
 			}
-			f.withScopes = append(f.withScopes, o)
+			// The slice is capped so that this append copies rather than
+			// writing into an array a closure made under an earlier `with` is
+			// still holding: two `with` statements one after the other would
+			// otherwise share a slot, and the first one's closures would find
+			// the second one's object in it.
+			f.withScopes = append(f.withScopes[:len(f.withScopes):len(f.withScopes)], o)
 		case bytecode.OpWithPop:
 			f.withScopes = f.withScopes[:len(f.withScopes)-1]
 		case bytecode.OpWithGet, bytecode.OpWithGetThis, bytecode.OpWithTypeof:

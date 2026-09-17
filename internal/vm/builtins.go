@@ -2212,7 +2212,14 @@ func (r *Runtime) initErrorBuiltins() {
 			// The cause option, when present, is attached as an own property.
 			if opts := optsArg; opts.IsObject() {
 				causeKey := rt.atoms.intern("cause")
-				if rt.hasProp(opts.Object(), causeKey) {
+				// The options object is asked whether it has one before it is
+				// asked for it, and a proxy that refuses to answer is refusing
+				// the construction rather than saying no.
+				has, err := rt.hasPropErr(opts.Object(), causeKey)
+				if err != nil {
+					return Undefined, err
+				}
+				if has {
 					cause, err := rt.getProp(opts.Object(), causeKey, opts)
 					if err != nil {
 						return Undefined, err

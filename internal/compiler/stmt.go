@@ -10,6 +10,20 @@ import (
 // compileStatements compiles a statement list, hoisting the function
 // declarations it contains so that they are callable before their definition.
 func (c *compiler) compileStatements(body []ast.Stmt) {
+	c.hoistBlockDeclarations(body)
+	for _, s := range body {
+		c.compileStatement(s)
+	}
+}
+
+// hoistBlockDeclarations creates the bindings a statement list declares, before
+// any of it runs.
+//
+// It is separate from compiling the list because a switch's bindings belong to
+// the whole case block rather than to one clause: they are created once, before
+// the first case expression is evaluated, and the clauses are compiled one
+// after another afterwards.
+func (c *compiler) hoistBlockDeclarations(body []ast.Stmt) {
 	// Every binding of a scope exists before any of its code runs, so the
 	// lexical ones are created first. They must precede the function
 	// declarations: a hoisted function is compiled here, and if a let it
@@ -56,9 +70,6 @@ func (c *compiler) compileStatements(body []ast.Stmt) {
 	}
 	for _, h := range hoisted {
 		c.predeclareFunction(h)
-	}
-	for _, s := range body {
-		c.compileStatement(s)
 	}
 }
 
@@ -506,6 +517,13 @@ func (c *compiler) compileFor(n *ast.ForStmt) {
 		}
 	}
 
+	if perIteration {
+		// The first iteration gets its own copy too, before the test runs: a
+		// closure made in the init clause keeps what the init left there,
+		// rather than following what the loop goes on to do with it.
+		c.emit(bytecode.OpCloseUpvalues, firstSlot, 0)
+	}
+
 	start := c.here()
 	c.pushLoop("", true)
 
@@ -830,6 +848,16 @@ func (c *compiler) compileSwitch(n *ast.SwitchStmt) {
 	c.beginScope()
 	c.pushLoop("", false)
 
+	// The bindings of every clause belong to the case block as a whole, and
+	// they are created before the first case expression is evaluated: a
+	// selector may close over one, and finds the block's binding rather than
+	// whatever the same name means outside.
+	var all []ast.Stmt
+	for _, cs := range n.Cases {
+		all = append(all, cs.Body...)
+	}
+	c.hoistBlockDeclarations(all)
+
 	// Each case's test is compared against the discriminant, which stays on the
 	// stack for the duration.
 	bodyJumps := make([]int, len(n.Cases))
@@ -860,7 +888,9 @@ func (c *compiler) compileSwitch(n *ast.SwitchStmt) {
 	starts := make([]int, len(n.Cases))
 	for i, cs := range n.Cases {
 		starts[i] = c.here()
-		c.compileStatements(cs.Body)
+		for _, s := range cs.Body {
+			c.compileStatement(s)
+		}
 	}
 	end := c.here()
 
