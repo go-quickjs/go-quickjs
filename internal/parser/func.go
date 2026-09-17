@@ -546,7 +546,7 @@ func (p *parser) parseClass(isDecl bool) *ast.ClassLit {
 	sawConstructor := false
 	// Private names must be unique within a class body, except that a getter
 	// and a setter may share one.
-	privateNames := map[string]privateKind{}
+	privateNames := map[string]privateEntry{}
 
 	for !p.isPunct("}") {
 		// Stray semicolons between class members are permitted.
@@ -562,7 +562,7 @@ func (p *parser) parseClass(isDecl bool) *ast.ClassLit {
 
 // parseClassMember parses one method, field or static block and appends it to
 // the class.
-func (p *parser) parseClassMember(cls *ast.ClassLit, sawConstructor *bool, privateNames map[string]privateKind) {
+func (p *parser) parseClassMember(cls *ast.ClassLit, sawConstructor *bool, privateNames map[string]privateEntry) {
 	start := p.tok.Pos
 
 	// `static` is contextual: `static x` declares a static member, but
@@ -820,6 +820,13 @@ const (
 	privateSetter
 )
 
+// privateEntry is what a private name has been used for so far, which decides
+// whether using it again is a pair or a duplicate.
+type privateEntry struct {
+	kind   privateKind
+	static bool
+}
+
 func kindOfAccessor(k ast.PropKind) privateKind {
 	if k == ast.PropSet {
 		return privateSetter
@@ -830,7 +837,7 @@ func kindOfAccessor(k ast.PropKind) privateKind {
 // checkClassMemberName enforces the restrictions on what a class member may be
 // called.
 func (p *parser) checkClassMemberName(key ast.Expr, computed, isStatic bool,
-	privateNames map[string]privateKind, kind privateKind) {
+	privateNames map[string]privateEntry, kind privateKind) {
 	if computed {
 		return
 	}
@@ -852,16 +859,18 @@ func (p *parser) checkClassMemberName(key ast.Expr, computed, isStatic bool,
 	}
 	prev, seen := privateNames[pn.Name]
 	if !seen {
-		privateNames[pn.Name] = kind
+		privateNames[pn.Name] = privateEntry{kind: kind, static: isStatic}
 		return
 	}
-	// The one legal repeat is a getter paired with a setter.
-	paired := (prev == privateGetter && kind == privateSetter) ||
-		(prev == privateSetter && kind == privateGetter)
-	if !paired {
+	// The one legal repeat is a getter paired with a setter, and the two halves
+	// have to agree about being static: they are one member, and a member is
+	// either on the instances or on the class.
+	paired := (prev.kind == privateGetter && kind == privateSetter) ||
+		(prev.kind == privateSetter && kind == privateGetter)
+	if !paired || prev.static != isStatic {
 		p.errorf("duplicate private name #%s", pn.Name)
 	}
-	privateNames[pn.Name] = privateOther
+	privateNames[pn.Name] = privateEntry{kind: privateOther, static: isStatic}
 }
 
 // propKeyText returns the textual form of a non-computed member name.

@@ -1703,6 +1703,11 @@ func TestDefaultExportForms(t *testing.T) {
 		{`export default class C { static m() { return 1 } }`, "C|1|function"},
 		{`export default class { static m() { return 1 } }`, "default|1|function"},
 		{`export default {m() { return 1 }}`, "|1|object"},
+		// An async declaration binds its name too, which is what makes the
+		// name visible here at all.
+		{`export default async function fn() { return 1 }`,
+			"fn|[object Promise]|function"},
+		{`export default async function* g() {}`, "g|[object AsyncGenerator]|function"},
 	}
 	for _, tc := range cases {
 		rt := quickjs.New()

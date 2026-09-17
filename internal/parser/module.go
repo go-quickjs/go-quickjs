@@ -118,6 +118,16 @@ func (p *parser) parseExportDecl() ast.Stmt {
 		switch {
 		case p.isKeyword("function"):
 			decl.Decl = &ast.FuncDecl{Fn: p.parseFunction(ast.FuncNormal, false), Start: start}
+		case p.isContextual("async") && p.nextIsKeywordOnSameLine("function"):
+			// An async function declaration binds its name too, which parsing
+			// it as an expression would not.
+			p.next()
+			p.expectKeyword("function")
+			generator := p.eatPunct("*")
+			decl.Decl = &ast.FuncDecl{
+				Fn:    p.parseFunctionRest(start, ast.FuncNormal, true, generator, false),
+				Start: start,
+			}
 		case p.isKeyword("class"):
 			decl.Decl = &ast.ClassDecl{Class: p.parseClass(false), Start: start}
 		default:

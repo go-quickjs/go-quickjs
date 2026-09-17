@@ -587,3 +587,31 @@ func TestLegacySyntaxUnderStrict(t *testing.T) {
 	checkEval(t, `eval('"use strict"; "\\0"').charCodeAt(0)`, "0")
 	checkEval(t, `eval('"use strict"; "ok"')`, "ok")
 }
+
+// TestPrivateAccessorPairIsOneMember covers the one legal repeat of a private
+// name: a getter paired with a setter. The two halves are one member, so they
+// have to agree about being on the instances or on the class.
+func TestPrivateAccessorPairIsOneMember(t *testing.T) {
+	bad := []string{
+		`class C { get #x() {} static set #x(v) {} }`,
+		`class C { static get #x() {} set #x(v) {} }`,
+		`class C { set #x(v) {} static get #x() {} }`,
+		`class C { #x() {} get #x() {} }`,
+		`class C { get #x() {} get #x() {} }`,
+		`class C { #x = 1; #x() {} }`,
+	}
+	for _, src := range bad {
+		checkEval(t, `try { eval(`+jsQuote(src)+`); "no throw" }
+		              catch (e) { e.constructor.name }`, "SyntaxError")
+	}
+	good := []string{
+		`class C { get #x() { return 1 } set #x(v) {} }`,
+		`class C { static get #x() { return 1 } static set #x(v) {} }`,
+		`class C { set #x(v) {} get #x() { return 1 } }`,
+		`class C { #x = 1; #y() {} }`,
+	}
+	for _, src := range good {
+		checkEval(t, `try { eval(`+jsQuote(src)+`); "ok" } catch (e) { e.constructor.name }`,
+			"ok")
+	}
+}
