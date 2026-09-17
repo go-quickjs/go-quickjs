@@ -434,6 +434,12 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			r.stack[sp-1] = r.stack[sp-2]
 			r.stack[sp-2] = b
 			sp++
+		case bytecode.OpAssignConst:
+			// Assigning to a const is a runtime error, not an early one: the
+			// assignment may sit in a function that is never called.
+			vmErr = r.throwTypeError("assignment to constant variable %q",
+				r.atoms.name(cl.names[in.A]))
+			goto onError
 		case bytecode.OpNipUnder:
 			// The top value stays; the A beneath it go.
 			n := int(in.A)

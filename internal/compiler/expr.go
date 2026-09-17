@@ -1043,7 +1043,10 @@ func (c *compiler) assignTo(target ast.Expr, initializing bool) {
 		}
 		if l, ok := c.resolveLocal(t.Name); ok {
 			if !initializing && l.kind == bindConst && l.initialized {
-				c.errorf(t.Start, "assignment to constant variable %q", t.Name)
+				// A runtime error rather than an early one: the assignment may
+				// sit in a function that is never called.
+				c.emitAt(t.Start, bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
+				return
 			}
 			if l.initialized || initializing {
 				c.emit(bytecode.OpPutLocal, l.slot, 0)
@@ -1055,7 +1058,8 @@ func (c *compiler) assignTo(target ast.Expr, initializing bool) {
 		}
 		if idx, ok := c.resolveUpvalue(t.Name); ok {
 			if !c.fn.Upvalues[idx].Mutable && !initializing {
-				c.errorf(t.Start, "assignment to constant variable %q", t.Name)
+				c.emitAt(t.Start, bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
+				return
 			}
 			c.emit(bytecode.OpDup, 0, 0)
 			c.emit(bytecode.OpSetUpvalue, idx, 0)

@@ -18,7 +18,6 @@ func TestEarlyErrors(t *testing.T) {
 		src  string
 	}{
 		{"const without initializer", `const x;`},
-		{"assign to const", `"use strict"; const x = 1; x = 2;`},
 		{"duplicate let", `let x; let x;`},
 		{"let and const collide", `let x; const x = 1;`},
 		{"let as a lexical name", `let let = 1;`},
@@ -261,6 +260,44 @@ func TestEscapedKeywordsAreNames(t *testing.T) {
 		{`class C { static m() { return 1 } } String(C.m())`, "1"},
 		{`for (var x of [1]) {} String(x)`, "1"},
 	}
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}
+
+// Assigning to a const is a runtime error rather than an early one: the
+// assignment may sit in a function that is never called, and a program that
+// never calls it is perfectly good.
+func TestAssignToConst(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`const c = 1; try { c = 2 } catch (e) { e.constructor.name }`, "TypeError"},
+		{`const c = 1; try { c++ } catch (e) { e.constructor.name }`, "TypeError"},
+		{`const c = 1; try { c += 1 } catch (e) { e.constructor.name }`, "TypeError"},
+		{`const c = 1; try { [c] = [2] } catch (e) { e.constructor.name }`, "TypeError"},
+		{`const c = 1; try { ({a: c} = {a: 2}) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`const c = 1; try { for ({a: c} of [{a: 2}]) {} } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		// The loop body never runs, because the assignment comes first.
+		{`const c = 1; var n = 0;
+		  try { for ({a: c} of [{a: 2}]) { n++ } } catch (e) {} String(n)`, "0"},
+		// A function that assigns to a const parses; it throws when called.
+		{`const c = 1; function f() { c = 2 } "parsed"`, "parsed"},
+		{`const c = 1; function f() { c = 2 }
+		  try { f() } catch (e) { e.constructor.name }`, "TypeError"},
+		{`"use strict"; const c = 1; try { c = 2 } catch (e) { e.constructor.name }`,
+			"TypeError"},
+
+		{`const c = 1; String(c)`, "1"},
+		{`let l = 1; l = 2; String(l)`, "2"},
+	}
+
 	for _, tc := range cases {
 		rt := quickjs.New()
 		v, err := rt.Eval(tc.src)
