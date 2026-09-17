@@ -35,19 +35,29 @@ func (r *Runtime) initPromiseTry() {
 		return
 	}
 	r.defMethod(ctor, "try", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		// The receiver is the constructor, so a subclass's Promise.try yields
+		// an instance of the subclass -- and a promise the callback returns is
+		// adopted rather than wrapped in another.
+		cap, err := rt.newPromiseCapability(this)
+		if err != nil {
+			return Undefined, err
+		}
 		fn := arg(args, 0)
-		p := rt.newPromise()
 		var rest []Value
 		if len(args) > 1 {
 			rest = args[1:]
 		}
-		v, err := rt.call(fn, Undefined, rest)
-		if err != nil {
-			rt.rejectPromise(p, thrownValue(err))
-			return Obj(p), nil
+		v, callErr := rt.call(fn, Undefined, rest)
+		if callErr != nil {
+			if _, err := rt.call(cap.reject, Undefined, []Value{thrownValue(callErr)}); err != nil {
+				return Undefined, err
+			}
+			return Obj(cap.promise), nil
 		}
-		rt.resolvePromise(p, v)
-		return Obj(p), nil
+		if _, err := rt.call(cap.resolve, Undefined, []Value{v}); err != nil {
+			return Undefined, err
+		}
+		return Obj(cap.promise), nil
 	})
 }
 

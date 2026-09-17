@@ -352,11 +352,13 @@ func (r *Runtime) initPromiseBuiltins() {
 			return Undefined, rt.throwTypeError("the Promise executor must be a function")
 		}
 		o := rt.newPromise()
-		resolveFn := rt.newNativeFunc("resolve", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		// The pair the executor is handed are anonymous, which a script can
+		// check.
+		resolveFn := rt.newNativeFunc("", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 			rt.resolvePromise(o, arg(args, 0))
 			return Undefined, nil
 		})
-		rejectFn := rt.newNativeFunc("reject", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		rejectFn := rt.newNativeFunc("", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 			rt.rejectPromise(o, arg(args, 0))
 			return Undefined, nil
 		})
@@ -429,35 +431,50 @@ func (r *Runtime) initPromiseBuiltins() {
 		return rt.promiseThenSpecies(this.Object(), arg(args, 0), arg(args, 1))
 	})
 	r.defMethod(p, "catch", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		if _, err := rt.promiseOf(this, "Promise.prototype.catch"); err != nil {
-			return Undefined, err
-		}
-		return rt.promiseThenSpecies(this.Object(), Undefined, arg(args, 0))
+		// Generic: it is `this.then(undefined, onRejected)` and nothing else,
+		// so anything with a then will do.
+		return rt.invokeThen(this, Undefined, arg(args, 0))
 	})
 	r.defMethod(p, "finally", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		if _, err := rt.promiseOf(this, "Promise.prototype.finally"); err != nil {
-			return Undefined, err
+		if !this.IsObject() {
+			return Undefined, rt.throwTypeError(
+				"Promise.prototype.finally requires an object")
 		}
 		cb := arg(args, 0)
-		// A finally callback receives no value and does not change the
-		// outcome, so each side re-raises what it was given.
-		onFulfilled := rt.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
-			if isCallable(cb) {
-				if _, err := rt.call(cb, Undefined, nil); err != nil {
+		if !isCallable(cb) {
+			// Not callable: the same value is handed to then for both halves,
+			// which then will ignore.
+			return rt.invokeThen(this, cb, cb)
+		}
+		// The callback's result is awaited before the outcome is passed on, so
+		// `finally(() => sleep())` delays what follows it. Which constructor
+		// that promise comes from is the receiver's species.
+		ctor, err := rt.speciesConstructor(this.Object(), rt.promiseCtor)
+		if err != nil {
+			return Undefined, err
+		}
+		after := func(carry func(Value) (Value, error)) *Object {
+			return rt.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
+				arg0 := arg(a, 0)
+				res, err := rt.call(cb, Undefined, nil)
+				if err != nil {
 					return Undefined, err
 				}
-			}
-			return arg(a, 0), nil
-		})
-		onRejected := rt.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
-			if isCallable(cb) {
-				if _, err := rt.call(cb, Undefined, nil); err != nil {
+				p, err := rt.promiseResolveWith(ctor, res)
+				if err != nil {
 					return Undefined, err
 				}
-			}
-			return Undefined, rt.throw(arg(a, 0))
-		})
-		return Obj(rt.promiseThen(this.Object(), Obj(onFulfilled), Obj(onRejected))), nil
+				thunk := rt.newNativeFunc("", 0,
+					func(rt *Runtime, _ Value, _ []Value) (Value, error) {
+						return carry(arg0)
+					})
+				// One argument, which is what a then that counts them sees.
+				return rt.invokeThen(p, Obj(thunk))
+			})
+		}
+		onFulfilled := after(func(v Value) (Value, error) { return v, nil })
+		onRejected := after(func(v Value) (Value, error) { return Undefined, rt.throw(v) })
+		return rt.invokeThen(this, Obj(onFulfilled), Obj(onRejected))
 	})
 
 	r.defToStringTag(p, "Promise")
@@ -514,7 +531,7 @@ func (r *Runtime) promiseCombinator(ctor Value, iterable Value, kind combinatorK
 			return
 		}
 		if kind == combinatorAny {
-			fail(Obj(r.newError(errAggregate, "all promises were rejected")))
+			fail(Obj(r.aggregateRejections(values)))
 			return
 		}
 		settle(Obj(r.newArrayFrom(values)))
@@ -524,6 +541,10 @@ func (r *Runtime) promiseCombinator(ctor Value, iterable Value, kind combinatorK
 		idx := len(values)
 		values = append(values, Undefined)
 		remaining++
+		// Each element's own settle function may be called once. A thenable
+		// that calls it twice -- or calls both halves -- must not make the
+		// combinator count the element twice.
+		called := false
 
 		// Every element goes through the constructor's resolve, so a plain
 		// value works too and a subclass gets to see it.
@@ -540,11 +561,12 @@ func (r *Runtime) promiseCombinator(ctor Value, iterable Value, kind combinatorK
 		}
 
 		onFulfilled := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
+			if called {
+				return Undefined, nil
+			}
+			called = true
 			v := arg(a, 0)
 			switch kind {
-			case combinatorRace, combinatorAny:
-				settle(v)
-				return Undefined, nil
 			case combinatorAllSettled:
 				o := newObject(rt.proto.object, ClassObject)
 				o.setOwnRaw(rt.atoms.intern("status"), Str(NewString("fulfilled")), propDefault)
@@ -558,12 +580,12 @@ func (r *Runtime) promiseCombinator(ctor Value, iterable Value, kind combinatorK
 		})
 
 		onRejected := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
+			if called {
+				return Undefined, nil
+			}
+			called = true
 			reason := arg(a, 0)
 			switch kind {
-			case combinatorAll, combinatorRace:
-				// One rejection settles the whole thing.
-				fail(reason)
-				return Undefined, nil
 			case combinatorAllSettled:
 				o := newObject(rt.proto.object, ClassObject)
 				o.setOwnRaw(rt.atoms.intern("status"), Str(NewString("rejected")), propDefault)
@@ -576,7 +598,19 @@ func (r *Runtime) promiseCombinator(ctor Value, iterable Value, kind combinatorK
 			return Undefined, nil
 		})
 
-		_, err = r.call(thenFn, pv, []Value{Obj(onFulfilled), Obj(onRejected)})
+		// Where the whole thing settles on one element, the capability's own
+		// function is what each element is given -- the same object every
+		// time, which a script can check.
+		fulfil, reject := Obj(onFulfilled), Obj(onRejected)
+		switch kind {
+		case combinatorRace:
+			fulfil, reject = cap.resolve, cap.reject
+		case combinatorAll:
+			reject = cap.reject
+		case combinatorAny:
+			fulfil = cap.resolve
+		}
+		_, err = r.call(thenFn, pv, []Value{fulfil, reject})
 		return err
 	})
 	if iterErr != nil {
@@ -589,7 +623,7 @@ func (r *Runtime) promiseCombinator(ctor Value, iterable Value, kind combinatorK
 		case combinatorAll, combinatorAllSettled:
 			settle(Obj(r.newArrayFrom(nil)))
 		case combinatorAny:
-			fail(Obj(r.newError(errAggregate, "all promises were rejected")))
+			fail(Obj(r.aggregateRejections(nil)))
 		}
 		// Promise.race over nothing stays pending forever, which is what the
 		// specification says.
@@ -597,6 +631,57 @@ func (r *Runtime) promiseCombinator(ctor Value, iterable Value, kind combinatorK
 	}
 	finish()
 	return Obj(result), nil
+}
+
+// aggregateRejections builds the error Promise.any rejects with, which carries
+// every reason it collected in the order the promises were given.
+func (r *Runtime) aggregateRejections(reasons []Value) *Object {
+	e := r.newError(errAggregate, "all promises were rejected")
+	e.setOwnRaw(r.atoms.intern("errors"), Obj(r.newArrayFrom(reasons)),
+		propWritable|propConfigurable)
+	return e
+}
+
+// promiseResolveWith is PromiseResolve: a promise already built by the given
+// constructor is handed back unchanged, and anything else is wrapped in one the
+// constructor makes.
+func (r *Runtime) promiseResolveWith(ctor Value, v Value) (Value, error) {
+	if !ctor.IsObject() {
+		return Undefined, r.throwTypeError("a promise constructor is required")
+	}
+	if v.IsObject() && v.Object().class == ClassPromise {
+		c, err := r.getProp(v.Object(), atomConstructor, v)
+		if err != nil {
+			return Undefined, err
+		}
+		if c.SameValue(ctor) {
+			return v, nil
+		}
+	}
+	cap, err := r.newPromiseCapability(ctor)
+	if err != nil {
+		return Undefined, err
+	}
+	if _, err := r.call(cap.resolve, Undefined, []Value{v}); err != nil {
+		return Undefined, err
+	}
+	return Obj(cap.promise), nil
+}
+
+// invokeThen calls a value's own then method, which is how the generic halves of
+// the prototype are defined: catch and finally add handlers to whatever they
+// were called on rather than to a promise they know about.
+func (r *Runtime) invokeThen(this Value, args ...Value) (Value, error) {
+	// A primitive receiver is not refused here: the method is read through the
+	// value, which works on anything that is not nullish.
+	then, err := r.getValueProp(this, r.atoms.intern("then"))
+	if err != nil {
+		return Undefined, err
+	}
+	if !isCallable(then) {
+		return Undefined, r.throwTypeError("then is not a function")
+	}
+	return r.call(then, this, args)
 }
 
 // toPromise coerces a value to a promise, wrapping a plain value and adopting a

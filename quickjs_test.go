@@ -2628,3 +2628,74 @@ func TestArrayFromAndOf(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// The Promise combinators hand each element a settle function it may call
+// once, and where the whole thing settles on one element they hand it the
+// capability's own function -- the same object every time, which a script can
+// check. Promise.any collects the reasons it was given.
+func TestPromiseCombinatorProtocol(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var r = "none";
+		  Promise.any([Promise.reject(1), Promise.reject(2)]).catch(function (e) {
+		    r = [e.constructor.name, e.errors.join("|")].join(",")
+		  });`, "AggregateError,1|2"},
+		{`var r = "none";
+		  Promise.any([]).catch(function (e) {
+		    r = [e.constructor.name, e.errors.length].join(",")
+		  });`, "AggregateError,0"},
+		// One element's thenable calling its settle function twice counts once.
+		{`var r = "none", n = 0;
+		  var thenable = {then: function (f) { f(1); f(2) }};
+		  Promise.all([thenable, Promise.resolve(3)]).then(function (v) {
+		    r = v.join(",")
+		  });`, "1,3"},
+		{`var r = "none";
+		  Promise.allSettled([Promise.resolve(1), Promise.reject(2)]).then(function (v) {
+		    r = v.map(function (o) { return o.status }).join(",")
+		  });`, "fulfilled,rejected"},
+
+		// catch and finally are generic: they add handlers to whatever they
+		// were called on.
+		{`var called = 0, got;
+		  var o = {then: function (f, j) { called += 1; got = j; return "x" }};
+		  var res = Promise.prototype.catch.call(o, 1);
+		  var r = [called, res, got].join(",");`, "1,x,1"},
+		// finally awaits what the callback returned before passing the outcome
+		// on, and leaves the outcome alone.
+		{`var r = "none", order = [];
+		  Promise.resolve(7)
+		    .finally(function () { order.push("f"); return Promise.resolve(0) })
+		    .then(function (v) { order.push("t" + v); r = order.join(",") });`,
+			"f,t7"},
+		{`var r = "none";
+		  Promise.reject(new RangeError()).finally(function () {})
+		    .catch(function (e) { r = e.constructor.name });`, "RangeError"},
+
+		// Promise.try builds its result with the constructor it was called on
+		// and adopts a promise the callback returned.
+		{`var r = "none";
+		  Promise.try(function () { return 5 }).then(function (v) { r = String(v) });`, "5"},
+		{`var r = "none";
+		  Promise.try(function () { throw new TypeError() })
+		    .catch(function (e) { r = e.constructor.name });`, "TypeError"},
+
+		// The pair the executor is handed are anonymous.
+		{`var f; new Promise(function (resolve) { f = resolve });
+		  var r = [f.name, f.length].join(",");`, ",1"},
+	}
+	for _, tc := range cases {
+		rt := quickjs.New()
+		if _, err := rt.Eval(tc.src); err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+			rt.Close()
+			continue
+		}
+		v, err := rt.Eval(`r`)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}
