@@ -16,16 +16,27 @@ import (
 // single instruction; a postfix update keeps the value it had before, which is
 // a copy nothing reads.
 func (c *compiler) compileExprForEffect(e ast.Expr) {
-	if u, ok := e.(*ast.Update); ok {
-		if c.compileLocalUpdate(u) {
+	switch n := e.(type) {
+	case *ast.Update:
+		if c.compileLocalUpdate(n) {
 			return
 		}
-		if !u.Prefix {
+		if !n.Prefix {
 			// The two forms differ only in which value they leave behind, and
 			// neither is wanted here. The prefix form does not make the copy.
-			prefix := *u
+			prefix := *n
 			prefix.Prefix = true
 			e = &prefix
+		}
+
+	case *ast.Assign:
+		// A store to a property carries its value out the same way, by copying
+		// it below what the store consumes.
+		if m, ok := n.Target.(*ast.Member); ok && n.Op == "=" {
+			c.compileMemberStore(m, func() {
+				c.compileExprNamed(n.Value, "")
+			}, false)
+			return
 		}
 	}
 	c.compileExpr(e)
@@ -1251,7 +1262,7 @@ func (c *compiler) compileAssign(n *ast.Assign) {
 		if m, ok := n.Target.(*ast.Member); ok {
 			c.compileMemberStore(m, func() {
 				c.compileExprNamed(n.Value, "")
-			})
+			}, true)
 			return
 		}
 		if id, ok := n.Target.(*ast.Ident); ok && c.withLimit(id.Name) > 0 {
@@ -1631,7 +1642,11 @@ func compoundOpcode(op string) bytecode.Op {
 //
 // The order matters: each part may have side effects, and the specification
 // fixes the order in which they happen.
-func (c *compiler) compileMemberStore(m *ast.Member, emitValue func()) {
+// compileMemberStore assigns to a property, leaving the value as the
+// expression's result -- unless keep is false, which an assignment in effect
+// position asks for: the copy that carries the result out is an instruction,
+// and so is the drop that would discard it.
+func (c *compiler) compileMemberStore(m *ast.Member, emitValue func(), keep bool) {
 	if _, isSuper := m.Object.(*ast.Super); isSuper {
 		// A super reference has no object on the stack: the lookup starts at
 		// the home object's prototype, and the receiver is `this`.
@@ -1641,12 +1656,16 @@ func (c *compiler) compileMemberStore(m *ast.Member, emitValue func()) {
 			emitValue()
 			// base key value -> value base key value, so the store consumes
 			// three and the result is left behind.
-			c.emit(bytecode.OpInsert3, 0, 0)
+			if keep {
+				c.emit(bytecode.OpInsert3, 0, 0)
+			}
 			c.emitAt(m.Start, bytecode.OpSetSuperIndex, 0, 0)
 			return
 		}
 		emitValue()
-		c.emit(bytecode.OpDup, 0, 0)
+		if keep {
+			c.emit(bytecode.OpDup, 0, 0)
+		}
 		c.emitAt(m.Start, bytecode.OpSetSuperProp,
 			c.nameIdx(propKeyName(m.Property)), 0)
 		return
@@ -1655,7 +1674,9 @@ func (c *compiler) compileMemberStore(m *ast.Member, emitValue func()) {
 		name, ref := c.privateName(pn, m.Start)
 		c.compileExpr(m.Object)
 		emitValue()
-		c.emit(bytecode.OpInsert2, 0, 0)
+		if keep {
+			c.emit(bytecode.OpInsert2, 0, 0)
+		}
 		c.emitAt(m.Start, bytecode.OpSetPrivate, name, ref)
 		return
 	}
@@ -1668,13 +1689,17 @@ func (c *compiler) compileMemberStore(m *ast.Member, emitValue func()) {
 		emitValue()
 		// obj key value -> value obj key value, so the store consumes three
 		// and the result is left behind.
-		c.emit(bytecode.OpInsert3, 0, 0)
+		if keep {
+			c.emit(bytecode.OpInsert3, 0, 0)
+		}
 		c.emitAt(m.Start, bytecode.OpSetIndex, 0, 0)
 		return
 	}
 	emitValue()
 	// obj value -> value obj value
-	c.emit(bytecode.OpInsert2, 0, 0)
+	if keep {
+		c.emit(bytecode.OpInsert2, 0, 0)
+	}
 	c.emitAt(m.Start, bytecode.OpSetProp, c.nameIdx(propKeyName(m.Property)), 0)
 }
 

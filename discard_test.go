@@ -189,6 +189,68 @@ func TestDiscardedAssignments(t *testing.T) {
 	}
 }
 
+// TestDiscardedMemberStores covers a property assignment whose value is thrown
+// away, which is compiled without the copy that would have carried it out.
+func TestDiscardedMemberStores(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var o = {}; o.x = 1; o.x`, "1"},
+		{`var o = {}; o["y"] = 2; o.y`, "2"},
+		{`var o = [0]; o[0] = 3; o[0]`, "3"},
+		{`var o = {}; for (var i = 0; i < 3; i++) o.n = i; o.n`, "2"},
+		{`var o = {a: {}}; o.a.b = 1; o.a.b`, "1"},
+
+		// The operands are still evaluated in the order the specification
+		// gives, and the key is still converted after the value.
+		{`var log = []
+		  var o = {}
+		  var k = {toString() { log.push("key"); return "k" }}
+		  o[k] = (log.push("value"), 1)
+		  log.join()`, "value,key"},
+		{`var log = []
+		  var o = {set v(x) { log.push("set") }}
+		  o.v = (log.push("value"), 1)
+		  log.join()`, "value,set"},
+		{`var o = {set v(x) { this.got = x * 2 }}; o.v = 3; o.got`, "6"},
+		{`var o = new Proxy({}, {set(t, k, v) { t[k] = v + "!"; return true }})
+		  o.x = "a"
+		  o.x`, "a!"},
+
+		// A store that must fail still fails.
+		{`"use strict"
+		  var o = Object.freeze({x: 1})
+		  try { o.x = 2; "no throw" } catch (e) { e.constructor.name }`, "TypeError"},
+		{`var o = Object.freeze({x: 1}); o.x = 2; o.x`, "1"},
+		{`"use strict"
+		  try { (null).x = 1; "no throw" } catch (e) { e.constructor.name }`, "TypeError"},
+		{`try { undefined[0] = 1; "no throw" } catch (e) { e.constructor.name }`, "TypeError"},
+		{`var o = {}
+		  try { o[Symbol.toPrimitive ? {toString() { throw new RangeError() }} : 0] = 1 }
+		  catch (e) { e.constructor.name }`, "RangeError"},
+
+		// super and private targets, neither of which is an ordinary store.
+		{`class A { constructor() { this.v = 1 } }
+		  class B extends A {
+		    constructor() { super(); super.v = 5 }
+		  }
+		  new B().v`, "5"},
+		{`class C {
+		    #p = 0
+		    set(v) { this.#p = v }
+		    get() { return this.#p }
+		  }
+		  var c = new C(); c.set(4); c.get()`, "4"},
+
+		// The value is still produced where something wants it.
+		{`var o = {}; var r = (o.x = 7); [r, o.x].join()`, "7,7"},
+		{`var a = {}, b = {}; a.v = b.v = 3; [a.v, b.v].join()`, "3,3"},
+		{`var o = {}; [o.x = 1, o.x].join()`, "1,1"},
+		{`eval("var o = {}; o.x = 9")`, "9"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
 // TestCompletionValuesSurviveDiscard covers what eval returns, which is the
 // value of the last statement that produced one -- and so is exactly the value
 // the discarding rewrites must not be applied to.
