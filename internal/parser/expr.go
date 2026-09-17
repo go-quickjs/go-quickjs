@@ -509,12 +509,19 @@ func (p *parser) parsePrimary() ast.Expr {
 	case lexer.Ident:
 		// `async function` and `async x =>` start an async function; a bare
 		// `async` is an ordinary identifier.
-		if p.tok.Value == "async" && !p.tok.NewlineBefore {
+		if p.isContextual("async") && !p.tok.NewlineBefore {
 			if fn := p.tryParseAsyncFunction(); fn != nil {
 				return fn
 			}
 		}
 		name := p.tok.Value
+		if p.tok.Escaped && lexer.IsReservedWord(name) {
+			// A reserved word written with an escape lexes as an identifier,
+			// because `\u0069f` is not the keyword `if`. It is still not a
+			// name that may be referred to: the restriction is on the name,
+			// not on how it was spelled.
+			p.errorf("%q is a reserved word", name)
+		}
 		// Strict mode reserves `yield`, and module code reserves `await`, even
 		// where they are merely referenced rather than bound.
 		if p.strict && name == "yield" {

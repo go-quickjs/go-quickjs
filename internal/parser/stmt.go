@@ -68,7 +68,13 @@ func (p *parser) parseStatement() ast.Stmt {
 		}
 
 	case lexer.Ident:
-		switch p.tok.Value {
+		// A name written with escapes is not the contextual keyword: neither
+		// `\u006Cet x = 1` nor `\u0061sync function f() {}` is a declaration.
+		name := ""
+		if !p.tok.Escaped {
+			name = p.tok.Value
+		}
+		switch name {
 		case "let":
 			// `let` is only a declaration when what follows can begin a binding.
 			// Otherwise it is an ordinary identifier, so `let = 1` still works.
@@ -100,9 +106,13 @@ func (p *parser) parseStatement() ast.Stmt {
 	// A labelled statement is an identifier followed by a colon.
 	if p.tok.Kind == lexer.Ident {
 		m := p.mark()
-		name := p.tok.Value
+		tok := p.tok
+		name := tok.Value
 		p.next()
 		if p.isPunct(":") {
+			if tok.Escaped && lexer.IsReservedWord(name) {
+				p.errorAt(tok, "%q is a reserved word", name)
+			}
 			p.next()
 			return p.parseLabeled(name, start)
 		}

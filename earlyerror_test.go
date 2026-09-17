@@ -239,6 +239,19 @@ func TestEscapedKeywordsAreNames(t *testing.T) {
 		`throw 0; function* g() { \u0079ield 1; }`,
 		`throw 0; \u0066unction f() {}`,
 		`throw 0; \u0063lass C {}`,
+		// A reserved word written with an escape is an identifier as far as
+		// the lexer is concerned, but the restriction is on the name rather
+		// than on how it was spelled: it may not be referred to, bound or
+		// used as a label.
+		`throw 0; var x = fals\u0065;`,
+		`throw 0; var x = tru\u0065;`,
+		`throw 0; var x = nul\u006C;`,
+		`throw 0; function f() { n\u0065w.target }`,
+		`throw 0; fals\u0065: 1;`,
+		`throw 0; \u0069mport("m");`,
+		// Nor is it the contextual keyword it spells.
+		`throw 0; \u0061sync function f() {}`,
+		`throw 0; \u006Cet x = 1;`,
 	}
 	for _, src := range bad {
 		rt := quickjs.New()
@@ -259,6 +272,13 @@ func TestEscapedKeywordsAreNames(t *testing.T) {
 		{`({get x() { return 1 }}).x + ""`, "1"},
 		{`class C { static m() { return 1 } } String(C.m())`, "1"},
 		{`for (var x of [1]) {} String(x)`, "1"},
+		// A reserved word is still legal as a property name, spelled either
+		// way, because a property name is not an identifier reference.
+		{`var o = {}; o.\u0069f = 7; String(o.if)`, "7"},
+		{`var o = {\u0074rue: 1}; String(o.true)`, "1"},
+		// And the unescaped contextual keywords still lead declarations.
+		{`var \u0061sync = 3; async function f() { return 1 }; async + typeof f`,
+			"3function"},
 	}
 	for _, tc := range cases {
 		rt := quickjs.New()
