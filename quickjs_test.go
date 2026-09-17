@@ -3961,3 +3961,46 @@ func TestFunctionExpressionSelfName(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
 	}
 }
+
+// A computed property key keeps whichever kind it turned out to be: an object
+// whose Symbol.toPrimitive returns a symbol names a symbol-keyed property.
+func TestComputedKeyKeepsASymbol(t *testing.T) {
+	const setup = `var s = Symbol("k")
+		var o = {}
+		o[Symbol.toPrimitive] = function () { return s }
+		`
+	cases := []struct{ name, src, want string }{
+		{"object literal", setup + `var x = {[o]: 44}
+		  String(Object.prototype.hasOwnProperty.call(x, s)) + "," + x[s]`, "true,44"},
+		{"class field", setup + `class C { [o] = 44 }
+		  var c = new C()
+		  String(Object.prototype.hasOwnProperty.call(c, s)) + "," + c[s]`, "true,44"},
+		{"class method", setup + `class C { [o]() { return 44 } }
+		  String(new C()[s]())`, "44"},
+		{"member access", setup + `var x = {}; x[s] = 7; String(x[o])`, "7"},
+		// Anything else still becomes a string.
+		{"a number key", `var o = {}
+		  o[Symbol.toPrimitive] = function () { return 1 }
+		  var x = {[o]: 5}; Object.keys(x).join() + "," + x[1]`, "1,5"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}
+
+// `async` on its own cannot be the left-hand side of a for-of: the grammar
+// refuses it so that `for (async of => {};;)` is not ambiguous with it.
+func TestForOfAsyncHead(t *testing.T) {
+	checkEval(t, `try { eval("for (async of [1]) {}"); "ok" } catch (e) { e.constructor.name }`,
+		"SyntaxError")
+	for _, src := range []string{
+		`for ((async) of [1]) {}`,
+		`for (async.x of [1]) {}`,
+		`for (var async of [1]) {}`,
+		`var async; for (async in {a: 1}) {}`,
+		`for (x of [1]) {}`,
+	} {
+		checkEval(t, `var x, async = {}
+		  try { eval(`+jsQuote(src)+`); "ok" } catch (e) { e.constructor.name }`, "ok")
+	}
+}

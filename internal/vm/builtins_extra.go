@@ -760,19 +760,21 @@ func (r *Runtime) initStringExtras() {
 		return Int(s.Compare(o)), nil
 	})
 
+	// The locale-sensitive pair fall back to the language-independent mappings,
+	// which is what a host with no locale data can honestly provide.
 	r.defMethod(p, "toLocaleUpperCase", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		s, err := thisStr(rt, this)
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(strings.ToUpper(s.Go()))), nil
+		return Str(NewString(caseConvert(s.Go(), true))), nil
 	})
 	r.defMethod(p, "toLocaleLowerCase", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		s, err := thisStr(rt, this)
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(strings.ToLower(s.Go()))), nil
+		return Str(NewString(caseConvert(s.Go(), false))), nil
 	})
 }
 

@@ -1755,7 +1755,10 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				vmErr = err
 				goto onError
 			}
-			push(Str(NewString(r.atoms.name(k))))
+			// The conversion may still produce a symbol, which an object's
+			// Symbol.toPrimitive can return: the key keeps whichever kind it
+			// turned out to be.
+			push(r.keyToValue(k))
 
 		// --- Exceptions ---------------------------------------------------
 		case bytecode.OpThrow:

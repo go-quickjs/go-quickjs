@@ -361,8 +361,17 @@ func (p *parser) parseFor() ast.Stmt {
 
 	default:
 		exprStart := p.tok.Pos
+		// `for (async of ...)` is refused outright: the head of a for-of may
+		// not be the name `async` written on its own, because `for (async of
+		// => {};;)` would otherwise be ambiguous with it.
+		asyncHead := p.isContextual("async") && !isAwait
 		expr := p.parseExpr()
 		if p.isKeyword("in") || p.isContextual("of") {
+			if asyncHead && p.isContextual("of") {
+				if id, ok := expr.(*ast.Ident); ok && id.Name == "async" && !id.Paren {
+					p.errorf("\"async\" cannot be the left-hand side of a for-of")
+				}
+			}
 			// The head was an assignment target all along.
 			left = p.toPattern(expr, false)
 		} else {
