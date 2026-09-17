@@ -20,7 +20,7 @@ Promises, regular expressions, modules with top-level `await`, Proxy and typed
 arrays all work, and are exercised against [test262], the official ECMAScript
 conformance suite.
 
-98.6% of the test262 tests it runs pass. It is not finished: see
+99.97% of the test262 tests it runs pass. It is not finished: see
 [Conformance](#conformance) for the measurement and
 [Not implemented](#not-implemented) for the known gaps.
 
@@ -79,25 +79,18 @@ strict and sloppy variants, the expected-failure phase and type, and the feature
 tags. A test tagged with a feature the engine does not implement is skipped
 rather than counted against it.
 
-Measured coverage, as of the most recent run over the whole suite — 76,752 of
-77,082 executed variants, 99.6%. A test tagged with a feature the engine does
+Measured coverage, as of the most recent run over the whole suite — 77,056 of
+77,082 executed variants, 99.97%. A test tagged with a feature the engine does
 not implement is skipped rather than counted, which is what the remaining 14,738
-are. By area, worst first:
+are. What is left is 26 variants over 16 files:
 
-| Area | | Area | |
-|---|---|---|---|
-| `built-ins/AsyncFromSyncIteratorPrototype` | 94.7% | `built-ins/decodeURIComponent` | 98.2% |
-| `language/identifier-resolution` | 95.5% | `built-ins/TypedArrayConstructors` | 98.4% |
-| `built-ins/BigInt` | 96.1% | `built-ins/Function` | 98.6% |
-| `language/destructuring` | 97.1% | `built-ins/Promise` | 98.9% |
-| `built-ins/String` | 97.6% | `language/types` | 99.0% |
-| `language/computed-property-names` | 97.9% | `built-ins/TypedArray` | 99.3% |
-| `language/module-code` | 97.9% | `built-ins/Array` | 99.5% |
-| `built-ins/Reflect` | 98.0% | `language/eval-code` | 99.6% |
-| `built-ins/Proxy` | 98.1% | `language/arguments-object` | 99.6% |
-| `built-ins/Math` | 98.2% | `built-ins/Object` | 99.6% |
-| `built-ins/Error` | 98.2% | `built-ins/RegExp` | 99.7% |
-| `built-ins/decodeURI` | 98.2% | `language/statements` | 99.8% |
+| What | Variants |
+|---|---|
+| The ordering of an async module graph: a module awaiting at the top level should not hold up its siblings, and the order its dependents resume in is specified | 5 |
+| A realm of one's own, which `$262.createRealm` needs | 2 |
+| Tick-for-tick ordering of an async generator's return and of `for await` over a sync iterator | 4 |
+| The exact trap sequence of `Array.prototype.reverse` over a proxy claiming 2**53 elements | 2 |
+| Everything else, one or two variants each: the evaluation order of a destructuring target's default inside a `with`, a completion value through `finally`, the realm of a revoked proxy's constructor, an unresolvable assignment resolved before its value is evaluated | 13 |
 
 `built-ins/Atomics` is the ten tests for `Atomics.pause`, which is the only part
 of that API a single-threaded engine could offer and which is not implemented.
