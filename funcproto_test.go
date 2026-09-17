@@ -151,3 +151,63 @@ func TestFunctionPrototypeWrites(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// A constructor's object is made with room for the properties the body assigns
+// to `this`, which the compiler counts. The count is a hint: what the object
+// ends up with, and in what order, may not depend on it.
+func TestConstructedObjectShape(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`class P { constructor(x, y) { this.x = x; this.y = y } }
+		  Object.keys(new P(1, 2)).join()`, "x,y"},
+		{`class P { constructor(x, y) { this.x = x; this.y = y } }
+		  var p = new P(1, 2); [p.x, p.y].join()`, "1,2"},
+		// More than the object starts with room for.
+		{`class Q { constructor() { this.a = 1; this.b = 2; this.c = 3; this.d = 4; this.e = 5 } }
+		  var q = new Q()
+		  Object.keys(q).join() + "=" + [q.a, q.e].join()`, "a,b,c,d,e=1,5"},
+		// Fewer: the same name assigned twice is one property, in its first
+		// position.
+		{`class R { constructor() { this.a = 1; this.b = 2; this.a = 3 } }
+		  var r = new R(); Object.keys(r).join() + "=" + r.a`, "a,b=3"},
+		// A computed key is not counted, and still lands.
+		{`class S { constructor(k) { this[k] = 1; this.z = 2 } }
+		  Object.keys(new S("q")).join()`, "q,z"},
+		// An arrow in the constructor shares its `this`.
+		{`class T { constructor() { var f = () => { this.a = 1 }; f(); this.b = 2 } }
+		  Object.keys(new T()).join()`, "a,b"},
+		// A derived constructor, whose object the base makes.
+		{`class A { constructor() { this.a = 1 } }
+		  class B extends A { constructor() { super(); this.b = 2 } }
+		  Object.keys(new B()).join()`, "a,b"},
+		// Class fields, which are installed before the body runs.
+		{`class F { f = 1; g = 2; constructor() { this.h = 3 } }
+		  Object.keys(new F()).join()`, "f,g,h"},
+		// An ordinary function used as a constructor.
+		{`function P(x) { this.x = x }
+		  var p = new P(5); [Object.keys(p).join(), p.x].join(":")`, "x:5"},
+		// Reflect.construct and a subclass's prototype.
+		{`class P { constructor() { this.x = 1 } }
+		  class Q extends P {}
+		  var o = Reflect.construct(P, [], Q);
+		  [Object.keys(o).join(), Object.getPrototypeOf(o) === Q.prototype].join()`, "x,true"},
+		// A bound constructor, which has no body of its own.
+		{`class P { constructor(x) { this.x = x } }
+		  var B = P.bind(null, 7)
+		  var p = new B(); [p.x, p instanceof P].join()`, "7,true"},
+		// A constructor that returns an object instead.
+		{`function P() { this.x = 1; return {y: 2} }
+		  Object.keys(new P()).join()`, "y"},
+		// The object is extensible and its properties ordinary, whatever room
+		// was made.
+		{`class P { constructor() { this.x = 1 } }
+		  var p = new P(); p.late = 2
+		  var d = Object.getOwnPropertyDescriptor(p, "x");
+		  [Object.keys(p).join(), d.writable, d.enumerable, d.configurable].join()`,
+			"x,late,true,true,true"},
+		{`class P { constructor() { this.x = 1 } }
+		  var p = new P(); delete p.x; Object.keys(p).length`, "0"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

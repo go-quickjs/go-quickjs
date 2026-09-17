@@ -92,6 +92,15 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 		(referencesArguments(fn.Body) || referencesArgumentsInParams(fn.Params)) &&
 		!bindsArguments(fn.Params) &&
 		!(simpleParams(fn.Params) && declaresArguments(fn.Body))
+	// A constructible function's object is made with room for the properties
+	// the body assigns to `this`, so that a constructor of three fields does
+	// not grow its table three times. Nothing else builds an object, so nothing
+	// else pays for the walk.
+	switch c.fn.Kind {
+	case bytecode.KindNormal, bytecode.KindConstructor, bytecode.KindDerivedConstructor:
+		c.fn.ThisProps = uint8(thisPropertyCount(fn.Body))
+	}
+
 	// A named function expression can refer to itself by name.
 	if fn.Name != nil {
 		c.selfName = fn.Name.Name

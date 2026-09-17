@@ -255,6 +255,11 @@ type Function struct {
 	// Only a list with a default, a pattern or a rest element needs it: with
 	// plain parameters there is nothing that could run early enough to notice.
 	ParamsAreLexical bool
+	// ThisProps is how many distinct properties the body assigns to `this` by
+	// name, which says how large the object a constructor builds will be. It is
+	// a hint: the table grows as usual if the body adds more.
+	ThisProps uint8
+
 	// UsesThis records whether the body can observe its `this`, which lets a
 	// sloppy-mode call skip substituting the global object when nothing would
 	// see the difference.

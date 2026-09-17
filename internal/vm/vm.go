@@ -3094,7 +3094,14 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 		// asked about.
 		return Undefined, r.throwTypeError("cannot perform an operation on a revoked proxy")
 	}
-	this := Obj(newObject(proto, ClassObject))
+	// The object is made with room for what the constructor is about to put in
+	// it, which the compiler counted. A bound function has no body of its own
+	// to have counted, so its object starts with none.
+	props := 0
+	if fd.closure != nil {
+		props = int(fd.closure.fn.ThisProps)
+	}
+	this := Obj(newLiteralObject(proto, ClassObject, props))
 
 	// A base class gives the instance its private methods and fields before the
 	// constructor body runs, so the body finds them already there. A derived one

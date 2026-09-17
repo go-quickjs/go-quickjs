@@ -51,6 +51,46 @@ type argumentsScanner struct {
 	// stops at every function: what such a call declares belongs to the
 	// function it appears in, and a nested one has a variable scope of its own.
 	seekDirectEval bool
+	// thisProps collects the names a body assigns directly to `this`, which is
+	// what a constructor's object is about to be given. It is non-nil only in
+	// that mode, where nothing is being sought and the walk runs to the end.
+	thisProps []string
+}
+
+// noteThisProp records an assignment of the form `this.name = ...`.
+func (w *argumentsScanner) noteThisProp(n *ast.Assign) {
+	m, ok := n.Target.(*ast.Member)
+	if !ok || m.Computed {
+		return
+	}
+	if _, ok := m.Object.(*ast.This); !ok {
+		return
+	}
+	name := propKeyName(m.Property)
+	if name == "" || len(w.thisProps) >= maxThisProps {
+		return
+	}
+	for _, have := range w.thisProps {
+		if have == name {
+			return
+		}
+	}
+	w.thisProps = append(w.thisProps, name)
+}
+
+// maxThisProps bounds the count, which is only a hint at how much room to make.
+const maxThisProps = 16
+
+// thisPropertyCount is how many distinct properties a function body assigns to
+// `this` by name.
+//
+// A constructor's object is made with room for them, rather than growing its
+// table as the body fills it in. The walk descends into arrows, which share the
+// `this` they are written in, and stops at any other function.
+func thisPropertyCount(body []ast.Stmt) int {
+	w := &argumentsScanner{thisProps: []string{}}
+	w.stmts(body)
+	return len(w.thisProps)
 }
 
 // containsDirectEval reports whether a statement list calls `eval` by that
@@ -319,6 +359,9 @@ func (w *argumentsScanner) expr(e ast.Expr) {
 		w.expr(n.Left)
 		w.expr(n.Right)
 	case *ast.Assign:
+		if w.thisProps != nil {
+			w.noteThisProp(n)
+		}
 		w.expr(n.Target)
 		w.expr(n.Value)
 	case *ast.Conditional:
