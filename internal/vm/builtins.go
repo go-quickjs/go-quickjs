@@ -1408,6 +1408,10 @@ func (r *Runtime) initArrayBuiltins() {
 	// and one it removes is skipped. Re-reading the length each step would
 	// also let a callback that pushes loop forever.
 	r.defIterationMethod(p, "forEach", func(rt *Runtime, a *arrayLike, cb Value, thisArg Value) (Value, error) {
+		// The arguments are the same every time, so the list they go in is
+		// made once rather than per element: a callee may not keep it, any
+		// more than it may keep the interpreter's own stack.
+		var argv [3]Value
 		for i := int64(0); i < a.n; i++ {
 			el, present, err := a.at(rt, i)
 			if err != nil {
@@ -1416,7 +1420,8 @@ func (r *Runtime) initArrayBuiltins() {
 			if !present {
 				continue
 			}
-			if _, err := rt.call(cb, thisArg, []Value{el, Float(float64(i)), Obj(a.o)}); err != nil {
+			argv[0], argv[1], argv[2] = el, Float(float64(i)), Obj(a.o)
+			if _, err := rt.call(cb, thisArg, argv[:]); err != nil {
 				return Undefined, err
 			}
 		}
@@ -1428,6 +1433,10 @@ func (r *Runtime) initArrayBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
+		// The arguments are the same every time, so the list they go in is
+		// made once rather than per element: a callee may not keep it, any
+		// more than it may keep the interpreter's own stack.
+		var argv [3]Value
 		for i := int64(0); i < a.n; i++ {
 			el, present, err := a.at(rt, i)
 			if err != nil {
@@ -1440,7 +1449,8 @@ func (r *Runtime) initArrayBuiltins() {
 				}
 				continue
 			}
-			v, err := rt.call(cb, thisArg, []Value{el, Float(float64(i)), Obj(a.o)})
+			argv[0], argv[1], argv[2] = el, Float(float64(i)), Obj(a.o)
+			v, err := rt.call(cb, thisArg, argv[:])
 			if err != nil {
 				return Undefined, err
 			}
@@ -1456,6 +1466,10 @@ func (r *Runtime) initArrayBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
+		// The arguments are the same every time, so the list they go in is
+		// made once rather than per element: a callee may not keep it, any
+		// more than it may keep the interpreter's own stack.
+		var argv [3]Value
 		for i := int64(0); i < a.n; i++ {
 			el, present, err := a.at(rt, i)
 			if err != nil {
@@ -1464,7 +1478,8 @@ func (r *Runtime) initArrayBuiltins() {
 			if !present {
 				continue
 			}
-			keep, err := rt.call(cb, thisArg, []Value{el, Float(float64(i)), Obj(a.o)})
+			argv[0], argv[1], argv[2] = el, Float(float64(i)), Obj(a.o)
+			keep, err := rt.call(cb, thisArg, argv[:])
 			if err != nil {
 				return Undefined, err
 			}
@@ -1498,6 +1513,10 @@ func (r *Runtime) initArrayBuiltins() {
 	})
 
 	r.defIterationMethod(p, "some", func(rt *Runtime, a *arrayLike, cb Value, thisArg Value) (Value, error) {
+		// The arguments are the same every time, so the list they go in is
+		// made once rather than per element: a callee may not keep it, any
+		// more than it may keep the interpreter's own stack.
+		var argv [3]Value
 		for i := int64(0); i < a.n; i++ {
 			el, present, err := a.at(rt, i)
 			if err != nil {
@@ -1506,7 +1525,8 @@ func (r *Runtime) initArrayBuiltins() {
 			if !present {
 				continue
 			}
-			res, err := rt.call(cb, thisArg, []Value{el, Float(float64(i)), Obj(a.o)})
+			argv[0], argv[1], argv[2] = el, Float(float64(i)), Obj(a.o)
+			res, err := rt.call(cb, thisArg, argv[:])
 			if err != nil {
 				return Undefined, err
 			}
@@ -1518,6 +1538,10 @@ func (r *Runtime) initArrayBuiltins() {
 	})
 
 	r.defIterationMethod(p, "every", func(rt *Runtime, a *arrayLike, cb Value, thisArg Value) (Value, error) {
+		// The arguments are the same every time, so the list they go in is
+		// made once rather than per element: a callee may not keep it, any
+		// more than it may keep the interpreter's own stack.
+		var argv [3]Value
 		for i := int64(0); i < a.n; i++ {
 			el, present, err := a.at(rt, i)
 			if err != nil {
@@ -1526,7 +1550,8 @@ func (r *Runtime) initArrayBuiltins() {
 			if !present {
 				continue
 			}
-			res, err := rt.call(cb, thisArg, []Value{el, Float(float64(i)), Obj(a.o)})
+			argv[0], argv[1], argv[2] = el, Float(float64(i)), Obj(a.o)
+			res, err := rt.call(cb, thisArg, argv[:])
 			if err != nil {
 				return Undefined, err
 			}
@@ -1605,6 +1630,10 @@ func (r *Runtime) defIterationMethod(p *Object, name string, body iterationFn) {
 // All four visit holes, unlike filter and forEach, reporting them as undefined:
 // they are looking for a position, and a hole is a position.
 func (r *Runtime) findIn(a *arrayLike, cb, thisArg Value, backwards bool) (Value, int64, error) {
+	// The arguments are the same every time, so the list they go in is
+	// made once rather than per element: a callee may not keep it, any
+	// more than it may keep the interpreter's own stack.
+	var argv [3]Value
 	for k := int64(0); k < a.n; k++ {
 		i := k
 		if backwards {
@@ -1614,7 +1643,8 @@ func (r *Runtime) findIn(a *arrayLike, cb, thisArg Value, backwards bool) (Value
 		if err != nil {
 			return Undefined, -1, err
 		}
-		ok, err := r.call(cb, thisArg, []Value{el, Float(float64(i)), Obj(a.o)})
+		argv[0], argv[1], argv[2] = el, Float(float64(i)), Obj(a.o)
+		ok, err := r.call(cb, thisArg, argv[:])
 		if err != nil {
 			return Undefined, -1, err
 		}
@@ -1667,6 +1697,10 @@ func (r *Runtime) reduceArray(this Value, args []Value, backwards bool) (Value, 
 		return Undefined, r.throwTypeError("%s of an empty array with no initial value", name)
 	}
 
+	// The arguments are the same every time, so the list they go in is
+	// made once rather than per element: a callee may not keep it, any
+	// more than it may keep the interpreter's own stack.
+	var argv [4]Value
 	for ; k < a.n; k++ {
 		i := k
 		if backwards {
@@ -1679,7 +1713,8 @@ func (r *Runtime) reduceArray(this Value, args []Value, backwards bool) (Value, 
 		if !present {
 			continue
 		}
-		acc, err = r.call(cb, Undefined, []Value{acc, el, Float(float64(i)), Obj(a.o)})
+		argv[0], argv[1], argv[2], argv[3] = acc, el, Float(float64(i)), Obj(a.o)
+		acc, err = r.call(cb, Undefined, argv[:])
 		if err != nil {
 			return Undefined, err
 		}
@@ -2763,11 +2798,15 @@ func (r *Runtime) sortIndexed(a *arrayLike, cmp Value) ([]Value, error) {
 	}
 
 	var sortErr error
+	// The comparator is called O(n log n) times with two arguments each time,
+	// so the list they go in is made once for the whole sort. A comparator that
+	// sorts something else of its own gets its own, being another call to this.
+	var argv [2]Value
 	sort.SliceStable(items, func(i, j int) bool {
 		if sortErr != nil {
 			return false
 		}
-		less, err := r.compareForSort(items[i], items[j], cmp)
+		less, err := r.compareForSort(items[i], items[j], cmp, &argv)
 		if err != nil {
 			sortErr = err
 			return false
@@ -2781,7 +2820,7 @@ func (r *Runtime) sortIndexed(a *arrayLike, cmp Value) ([]Value, error) {
 }
 
 // compareForSort reports whether x sorts before y.
-func (r *Runtime) compareForSort(x, y, cmp Value) (bool, error) {
+func (r *Runtime) compareForSort(x, y, cmp Value, argv *[2]Value) (bool, error) {
 	// undefined sorts after everything, and the comparator is not consulted
 	// about it -- which is what lets a comparator assume its arguments are
 	// values it put there.
@@ -2792,7 +2831,8 @@ func (r *Runtime) compareForSort(x, y, cmp Value) (bool, error) {
 		return true, nil
 	}
 	if isCallable(cmp) {
-		res, err := r.call(cmp, Undefined, []Value{x, y})
+		argv[0], argv[1] = x, y
+		res, err := r.call(cmp, Undefined, argv[:])
 		if err != nil {
 			return false, err
 		}

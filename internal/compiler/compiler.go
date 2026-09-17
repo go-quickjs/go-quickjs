@@ -399,7 +399,13 @@ func Compile(prog *ast.Program, opts Options) (fn *bytecode.Function, err error)
 
 func newCompiler(parent *compiler, opts Options) *compiler {
 	c := &compiler{
-		fn:          &bytecode.Function{Source: opts.Source},
+		fn: &bytecode.Function{
+			Source: opts.Source,
+			// Room for a small function's whole body, which saves growing the
+			// code from nothing a doubling at a time. A larger one grows from
+			// here as before.
+			Code: make([]bytecode.Instr, 0, 32),
+		},
 		parent:      parent,
 		opts:        opts,
 		nameIndex:   make(map[string]uint32, 8),

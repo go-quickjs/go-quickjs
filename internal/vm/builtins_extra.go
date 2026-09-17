@@ -187,6 +187,10 @@ func (r *Runtime) initArrayExtras2() {
 		if err != nil {
 			return Undefined, err
 		}
+		// The arguments are the same three every time, so the list they go in
+		// is made once rather than per element: a callee may not keep it, any
+		// more than it may keep the interpreter's own stack.
+		var argv [3]Value
 		for i := int64(0); i < a.n; i++ {
 			el, present, err := a.at(rt, i)
 			if err != nil {
@@ -195,7 +199,8 @@ func (r *Runtime) initArrayExtras2() {
 			if !present {
 				continue
 			}
-			v, err := rt.call(cb, thisArg, []Value{el, Float(float64(i)), Obj(a.o)})
+			argv[0], argv[1], argv[2] = el, Float(float64(i)), Obj(a.o)
+			v, err := rt.call(cb, thisArg, argv[:])
 			if err != nil {
 				return Undefined, err
 			}

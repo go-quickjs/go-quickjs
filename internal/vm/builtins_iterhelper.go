@@ -53,6 +53,10 @@ type iterHelperData struct {
 	// callback it is in the middle of calling, which would corrupt counter and
 	// the inner-iterator state.
 	running bool
+	// argv is the list the callback's arguments go in, made once rather than
+	// once per element. A callee may not keep it, any more than it may keep
+	// the interpreter's own stack, and running says nothing else is using it.
+	argv [2]Value
 }
 
 // wrapData is Iterator.from's wrapper around a foreign iterator.
@@ -285,7 +289,8 @@ func (r *Runtime) advanceHelper(h *iterHelperData) (Value, bool, error) {
 		}
 		i := h.counter
 		h.counter++
-		out, err := r.call(h.fn, Undefined, []Value{v, Float(i)})
+		h.argv[0], h.argv[1] = v, Float(i)
+		out, err := r.call(h.fn, Undefined, h.argv[:])
 		if err != nil {
 			return Undefined, false, r.abandon(h, err)
 		}
@@ -299,7 +304,8 @@ func (r *Runtime) advanceHelper(h *iterHelperData) (Value, bool, error) {
 			}
 			i := h.counter
 			h.counter++
-			keep, err := r.call(h.fn, Undefined, []Value{v, Float(i)})
+			h.argv[0], h.argv[1] = v, Float(i)
+			keep, err := r.call(h.fn, Undefined, h.argv[:])
 			if err != nil {
 				return Undefined, false, r.abandon(h, err)
 			}
@@ -349,7 +355,8 @@ func (r *Runtime) advanceHelper(h *iterHelperData) (Value, bool, error) {
 			}
 			i := h.counter
 			h.counter++
-			mapped, err := r.call(h.fn, Undefined, []Value{v, Float(i)})
+			h.argv[0], h.argv[1] = v, Float(i)
+			mapped, err := r.call(h.fn, Undefined, h.argv[:])
 			if err != nil {
 				return Undefined, false, r.abandon(h, err)
 			}
@@ -496,8 +503,11 @@ func (r *Runtime) initIteratorTerminals(p *Object) {
 		if err := requireCallback(rt, this, fn, "forEach"); err != nil {
 			return Undefined, err
 		}
+		// One list for the whole walk rather than one per element.
+		var argv [2]Value
 		err := each(rt, this, func(v Value, i float64) (bool, error) {
-			_, err := rt.call(fn, Undefined, []Value{v, Float(i)})
+			argv[0], argv[1] = v, Float(i)
+			_, err := rt.call(fn, Undefined, argv[:])
 			return true, err
 		})
 		return Undefined, err
@@ -516,13 +526,15 @@ func (r *Runtime) initIteratorTerminals(p *Object) {
 		// and an empty iterator is then an error rather than undefined.
 		seeded := len(args) > 1
 		empty := true
+		var argv [3]Value
 		err := each(rt, this, func(v Value, i float64) (bool, error) {
 			empty = false
 			if !seeded {
 				seeded, acc = true, v
 				return true, nil
 			}
-			out, err := rt.call(fn, Undefined, []Value{acc, v, Float(i)})
+			argv[0], argv[1], argv[2] = acc, v, Float(i)
+			out, err := rt.call(fn, Undefined, argv[:])
 			if err != nil {
 				return false, err
 			}
@@ -551,8 +563,10 @@ func (r *Runtime) initIteratorTerminals(p *Object) {
 			}
 			var found Value = Undefined
 			stopped := false
+			var argv [2]Value
 			err := each(rt, this, func(v Value, i float64) (bool, error) {
-				out, err := rt.call(fn, Undefined, []Value{v, Float(i)})
+				argv[0], argv[1] = v, Float(i)
+				out, err := rt.call(fn, Undefined, argv[:])
 				if err != nil {
 					return false, err
 				}

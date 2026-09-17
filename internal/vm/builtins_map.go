@@ -392,14 +392,18 @@ func (r *Runtime) initMapBuiltins() {
 		if !isCallable(cb) {
 			return Undefined, rt.throwTypeError("Map.prototype.forEach requires a function")
 		}
+		// The arguments are the same three every time, so the list they go in
+		// is made once rather than per entry: a callee may not keep it, any
+		// more than it may keep the interpreter's own stack.
+		var argv [3]Value
 		// The index is re-read each step because the callback may add entries,
 		// which the specification requires the iteration to visit.
 		for i := 0; i < len(m.entries); i++ {
 			if m.entries[i].deleted {
 				continue
 			}
-			if _, err := rt.call(cb, arg(args, 1),
-				[]Value{m.entries[i].value, m.entries[i].key, this}); err != nil {
+			argv[0], argv[1], argv[2] = m.entries[i].value, m.entries[i].key, this
+			if _, err := rt.call(cb, arg(args, 1), argv[:]); err != nil {
 				return Undefined, err
 			}
 		}
@@ -482,12 +486,13 @@ func (r *Runtime) initSetBuiltins() {
 		if !isCallable(cb) {
 			return Undefined, rt.throwTypeError("Set.prototype.forEach requires a function")
 		}
+		var argv [3]Value
 		for i := 0; i < len(m.entries); i++ {
 			if m.entries[i].deleted {
 				continue
 			}
-			if _, err := rt.call(cb, arg(args, 1),
-				[]Value{m.entries[i].value, m.entries[i].key, this}); err != nil {
+			argv[0], argv[1], argv[2] = m.entries[i].value, m.entries[i].key, this
+			if _, err := rt.call(cb, arg(args, 1), argv[:]); err != nil {
 				return Undefined, err
 			}
 		}
