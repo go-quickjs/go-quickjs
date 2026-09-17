@@ -808,7 +808,7 @@ func (p *parser) parseObjectProperty() ast.Property {
 		if p.startsPropertyName() && !p.isPunct("(") && !p.isPunct(":") &&
 			!p.isPunct(",") && !p.isPunct("}") && !p.isPunct("=") {
 			key, computed := p.parsePropertyName()
-			fn := p.parseMethodBody(ast.FuncGetter, false, false)
+			fn := p.parseMethodBody(ast.FuncGetter, false, false, start)
 			if kind == ast.PropSet {
 				fn.Kind = ast.FuncSetter
 			}
@@ -822,7 +822,7 @@ func (p *parser) parseObjectProperty() ast.Property {
 
 	switch {
 	case p.isPunct("("):
-		fn := p.parseMethodBody(ast.FuncMethod, async, generator)
+		fn := p.parseMethodBody(ast.FuncMethod, async, generator, start)
 		return ast.Property{Kind: ast.PropInit, Key: key, Value: fn, Computed: computed, Method: true, Start: start}
 
 	case p.isPunct(":"):

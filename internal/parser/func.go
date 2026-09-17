@@ -165,8 +165,14 @@ func (p *parser) checkStrictParams(params []ast.Expr) {
 
 // parseMethodBody parses the parameter list and body of a method, whose name
 // has already been consumed.
-func (p *parser) parseMethodBody(kind ast.FuncKind, async, generator bool) *ast.FuncLit {
-	fn := &ast.FuncLit{Kind: kind, Async: async, Generator: generator, Start: p.tok.Pos}
+// parseMethodBody parses a method's parameters and body.
+//
+// start is where the method definition began -- at `async`, `*`, `get` or the
+// key, whichever came first -- rather than at the parenthesis, because that is
+// the source text Function.prototype.toString has to return. It excludes
+// `static`, which belongs to the class element rather than to the method.
+func (p *parser) parseMethodBody(kind ast.FuncKind, async, generator bool, start int) *ast.FuncLit {
+	fn := &ast.FuncLit{Kind: kind, Async: async, Generator: generator, Start: start}
 	p.parseFunctionParamsAndBody(fn)
 	return fn
 }
@@ -478,6 +484,10 @@ func (p *parser) parseClassMember(cls *ast.ClassLit, sawConstructor *bool, priva
 		return
 	}
 
+	// The method's own text begins here, after any `static`, which belongs to
+	// the class element rather than to the function.
+	defStart := p.tok.Pos
+
 	async, generator := false, false
 	if p.isContextual("async") {
 		m := p.mark()
@@ -512,7 +522,7 @@ func (p *parser) parseClassMember(cls *ast.ClassLit, sawConstructor *bool, priva
 			if !isStatic && !computed && isConstructorKey(key) {
 				p.errorf("a constructor cannot be an accessor")
 			}
-			fn := p.parseMethodBody(fnKind, false, false)
+			fn := p.parseMethodBody(fnKind, false, false, defStart)
 			p.checkAccessorArity(kind, fn)
 			cls.Members = append(cls.Members, ast.Property{
 				Kind: kind, Key: key, Value: fn, Computed: computed,
@@ -544,7 +554,7 @@ func (p *parser) parseClassMember(cls *ast.ClassLit, sawConstructor *bool, priva
 		if kind == ast.FuncConstructor {
 			p.allowSuperCall = cls.Extends != nil
 		}
-		fn := p.parseMethodBody(kind, async, generator)
+		fn := p.parseMethodBody(kind, async, generator, defStart)
 		p.allowSuperCall = savedSuperCall
 
 		cls.Members = append(cls.Members, ast.Property{
