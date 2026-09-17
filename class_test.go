@@ -143,6 +143,12 @@ func TestPrivateNamesAreResolvedAtCompileTime(t *testing.T) {
 		// A method may refer to a field declared below it, so the names are
 		// collected from the whole body before any of it is compiled.
 		{`class C { m() { return this.#x; } #x = 2; } String(new C().m())`, "2"},
+		// A heritage clause is outside the body that declares the names, so
+		// they are not in scope there.
+		{`class Outer { #p = 1;
+		    m() { var self = this;
+		      return (class extends Object { static f() { return self.#p } }).f() } }
+		  String(new Outer().m())`, "1"},
 		// A nested class sees the enclosing one's names.
 		{`class Outer { #x = 3;
 		    m() { var self = this; return (class { static f() { return self.#x; } }).f(); }
@@ -189,6 +195,10 @@ func TestPrivateNamesAreResolvedAtCompileTime(t *testing.T) {
 		`throw 0; class C { #x; #x; }`,
 		`throw 0; class C { #constructor; }`,
 		`throw 0; class C { static prototype() {} }`,
+		// The heritage clause is evaluated before the class's own names come
+		// into scope, so it cannot use them.
+		"throw 0; class C extends (o) => [o.#foo] { #foo; }",
+		"throw 0; class C extends [this.#x] { #x; }",
 	}
 	for _, src := range bad {
 		rt := quickjs.New()

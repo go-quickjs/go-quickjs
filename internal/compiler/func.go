@@ -401,12 +401,6 @@ func (c *compiler) applyDefault(def ast.Expr, name string) {
 // members, constructors for static ones -- which is what makes a static method
 // visible on a subclass.
 func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
-	// The private names are visible throughout the body, including to a method
-	// written above the field it reads, so they are all collected before any of
-	// it is compiled.
-	c.pushPrivateScope(cls)
-	defer c.popPrivateScope()
-
 	name := inferredName
 	if cls.Name != nil {
 		name = cls.Name.Name
@@ -430,14 +424,26 @@ func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
 	ctor := c.synthesizeConstructor(cls, keyNames)
 	if cls.Extends != nil {
 		// The parent is evaluated before the constructor is built, as the
-		// heritage clause is an expression that may have side effects.
+		// heritage clause is an expression that may have side effects -- and
+		// before the class's own private names come into scope, since the
+		// heritage clause is outside the body that declares them.
 		c.compileExpr(cls.Extends)
+
+		// The private names are visible throughout the body, including to a
+		// method written above the field it reads, so they are all collected
+		// before any of it is compiled.
+		c.pushPrivateScope(cls)
+		defer c.popPrivateScope()
+
 		c.evalComputedFieldKeys(cls, keyNames)
 		c.compileFunctionLiteral(ctor, name)
 		c.emit(bytecode.OpSwap, 0, 0)
 		// stack: ctor parent
 		c.emitAt(cls.Start, bytecode.OpNewClass, 0, 0)
 	} else {
+		c.pushPrivateScope(cls)
+		defer c.popPrivateScope()
+
 		c.evalComputedFieldKeys(cls, keyNames)
 		c.compileFunctionLiteral(ctor, name)
 	}
