@@ -1160,19 +1160,16 @@ func (r *Runtime) initPromiseExtras() {
 	ctor := ctorVal.Object()
 
 	r.defMethod(ctor, "withResolvers", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		p := rt.newPromise()
-		resolve := rt.newNativeFunc("resolve", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
-			rt.resolvePromise(p, arg(a, 0))
-			return Undefined, nil
-		})
-		reject := rt.newNativeFunc("reject", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
-			rt.rejectPromise(p, arg(a, 0))
-			return Undefined, nil
-		})
+		// The promise is built with the constructor the method was reached
+		// through, so a subclass's withResolvers hands back one of its own.
+		cap, err := rt.newPromiseCapability(this)
+		if err != nil {
+			return Undefined, err
+		}
 		out := newObject(rt.proto.object, ClassObject)
-		out.setOwnRaw(rt.atoms.intern("promise"), Obj(p), propDefault)
-		out.setOwnRaw(rt.atoms.intern("resolve"), Obj(resolve), propDefault)
-		out.setOwnRaw(rt.atoms.intern("reject"), Obj(reject), propDefault)
+		out.setOwnRaw(rt.atoms.intern("promise"), Obj(cap.promise), propDefault)
+		out.setOwnRaw(rt.atoms.intern("resolve"), cap.resolve, propDefault)
+		out.setOwnRaw(rt.atoms.intern("reject"), cap.reject, propDefault)
 		return Obj(out), nil
 	})
 }

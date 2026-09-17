@@ -3560,3 +3560,45 @@ func TestBigIntPropertyKey(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestPromiseWithResolvers covers Promise.withResolvers, which builds its
+// promise with the constructor it was reached through.
+func TestPromiseWithResolvers(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`class S extends Promise {}
+		  String(S.withResolvers().promise.constructor === S)`, "true"},
+		{`String(Promise.withResolvers().promise.constructor === Promise)`, "true"},
+		{`try { Promise.withResolvers.call({}) } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		{`var r = Promise.withResolvers();
+		  [typeof r.promise, typeof r.resolve, typeof r.reject].join()`,
+			"object,function,function"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+	checkAsync(t, `
+		var w = Promise.withResolvers()
+		w.promise.then(v => { r = String(v) })
+		w.resolve(5)`, "r", "5")
+}
+
+// TestIdentifierExclusions covers the few characters Unicode's derived
+// identifier properties take back out: they are letters by category but are
+// reserved for syntax.
+func TestIdentifierExclusions(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{"try { eval('var aⸯ = 1'); \"no throw\" } catch (e) { e.constructor.name }",
+			"SyntaxError"},
+		{"try { eval('var ⸯ = 1'); \"no throw\" } catch (e) { e.constructor.name }",
+			"SyntaxError"},
+		{`try { eval("var \\u2e2f = 1"); "no throw" } catch (e) { e.constructor.name }`,
+			"SyntaxError"},
+		// Ordinary letters outside ASCII are still identifiers.
+		{"var café = 1; String(café)", "1"},
+		{"var αβ = 2; String(αβ)", "2"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
