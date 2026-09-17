@@ -374,3 +374,46 @@ func TestRegExpLiteralEarlyErrors(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestRegExpGroupNames covers a named group whose name is spelled with an
+// escape, which is allowed whatever the flags say: the name is an identifier,
+// and an identifier written in a pattern has the escapes one in source does.
+func TestRegExpGroupNames(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`Object.keys(new RegExp("(?<\\u{1d4d1}rown>x)", "u").exec("x").groups).join()`,
+			"\U0001d4d1rown"},
+		{`Object.keys(new RegExp("(?<\\u0041b>x)").exec("x").groups).join()`, "Ab"},
+		{`new RegExp("(?<\\u0041b>x)").exec("x").groups.Ab`, "x"},
+		// The name is read the same way twice, so a reference finds the group.
+		{`new RegExp("\\k<\\u0041b>(?<Ab>x)").exec("x")[0]`, "x"},
+		{`/(?<a>x)(?<b>y)/.exec("xy").groups.b`, "y"},
+		{`try { eval("/(?<a>x)(?<a>y)/") } catch (e) { e.constructor.name }`, "SyntaxError"},
+		{`try { eval("/(?<\\x41>a)/") } catch (e) { e.constructor.name }`, "SyntaxError"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// TestRegExpExecLastIndex covers lastIndex, which exec reads whatever the flags
+// say and writes back only for a global or sticky pattern.
+func TestRegExpExecLastIndex(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var gets = 0
+		  var counter = {valueOf() { gets++; return 0 }}
+		  var r = /a/
+		  r.lastIndex = counter
+		  String(r.exec("nbc")) + "," + (r.lastIndex === counter) + "," + gets`,
+			"null,true,1"},
+		{`var r = /a/g; r.lastIndex = 3; r.exec("bbb"); String(r.lastIndex)`, "0"},
+		{`var r = /b/g; r.exec("bbb")[0] + "," + r.lastIndex`, "b,1"},
+		// A negative lastIndex is zero, not a search from the end.
+		{`var r = /(?:ab|cd)\d?/g
+		  r.lastIndex = -1
+		  r.exec("aacd22 ")[0] + "," + r.lastIndex`, "cd2,5"},
+		{`var r = /a/; r.lastIndex = 3; r.exec("bba"); String(r.lastIndex)`, "3"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

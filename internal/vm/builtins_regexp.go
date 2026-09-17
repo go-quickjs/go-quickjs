@@ -267,20 +267,21 @@ func (r *Runtime) regexpExec(this Value, s *String) (Value, error) {
 	}
 	o := this.Object()
 
-	// lastIndex is consulted only when the pattern is global or sticky; a plain
-	// pattern always searches from the start.
+	// lastIndex is read whatever the flags say -- a getter on it runs either
+	// way -- but it only decides where the search starts, and is only written
+	// back, when the pattern is global or sticky.
+	liVal, err := r.getProp(o, atomLastIndex, this)
+	if err != nil {
+		return Undefined, err
+	}
+	li, err := r.toLength(liVal)
+	if err != nil {
+		return Undefined, err
+	}
 	stateful := re.Flags()&(regexp.FlagGlobal|regexp.FlagSticky) != 0
 	start := 0
 	if stateful {
-		liVal, err := r.getProp(o, atomLastIndex, this)
-		if err != nil {
-			return Undefined, err
-		}
-		n, err := r.toInteger(liVal)
-		if err != nil {
-			return Undefined, err
-		}
-		start = int(n)
+		start = int(li)
 	}
 
 	units := wtf8.ToUTF16(s.Go())

@@ -143,19 +143,21 @@ func (p *parser) scanGroupNames() error {
 				// lookbehind, and (?: (?= (?! are not capturing.
 				if i+2 < len(p.src) && p.src[i+2] == '<' &&
 					i+3 < len(p.src) && p.src[i+3] != '=' && p.src[i+3] != '!' {
-					j := i + 3
-					var name strings.Builder
-					for j < len(p.src) && p.src[j] != '>' {
-						name.WriteRune(p.src[j])
-						j++
+					// The name is read the same way the body will read it, so
+					// that an escape in it names the same group both times.
+					sub := &parser{src: p.src, pos: i + 3, flags: p.flags}
+					name, err := sub.parseGroupName()
+					if err != nil {
+						return err
 					}
+					i = sub.pos - 1
 					idx++
 					// A duplicate name would make match.groups ambiguous, so
 					// it is rejected rather than resolved to one of them.
-					if _, dup := p.groupNames[name.String()]; dup {
-						return p.errorf("duplicate group name %q", name.String())
+					if _, dup := p.groupNames[name]; dup {
+						return p.errorf("duplicate group name %q", name)
 					}
-					p.groupNames[name.String()] = idx
+					p.groupNames[name] = idx
 				}
 				continue
 			}
@@ -470,6 +472,22 @@ func (p *parser) parseGroupName() (string, error) {
 	first := true
 	for !p.atEnd() && p.peek() != '>' {
 		r := p.next()
+		if r == '\\' {
+			// A group name may spell a character with an escape, whatever the
+			// flags say: the name is an identifier, and an identifier written
+			// in a pattern has the same escapes one written in source does.
+			if !p.eat('u') {
+				return "", p.errorf("only a Unicode escape may appear in a group name")
+			}
+			saved := p.flags
+			p.flags |= FlagUnicode
+			esc, err := p.parseUnicodeEscape()
+			p.flags = saved
+			if err != nil {
+				return "", err
+			}
+			r = esc
+		}
 		// A group name is an identifier, so that it can be read back as
 		// match.groups.name without quoting.
 		if first && !isGroupNameStart(r) {
