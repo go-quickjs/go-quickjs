@@ -47,6 +47,32 @@ type argumentsScanner struct {
 	// seekName looks for one particular identifier, and descends into every
 	// function rather than stopping at the ones with bindings of their own.
 	seekName string
+	// seekDirectEval looks for a call to `eval` written as that name, and
+	// stops at every function: what such a call declares belongs to the
+	// function it appears in, and a nested one has a variable scope of its own.
+	seekDirectEval bool
+}
+
+// containsDirectEval reports whether a statement list calls `eval` by that
+// name, outside any function written inside it.
+//
+// The answer is needed before the body is compiled: a frame of a function that
+// contains one needs somewhere to put the bindings the evaluated code may
+// declare, and the references to them have to be compiled to look there.
+func containsDirectEval(body []ast.Stmt) bool {
+	w := &argumentsScanner{seekDirectEval: true}
+	w.stmts(body)
+	return w.found
+}
+
+// containsDirectEvalInParams is the same for a parameter list, where a default
+// value may contain one.
+func containsDirectEvalInParams(params []ast.Expr) bool {
+	w := &argumentsScanner{seekDirectEval: true}
+	for _, p := range params {
+		w.expr(p)
+	}
+	return w.found
 }
 
 // referencesName reports whether a function mentions a name anywhere, nested
@@ -205,7 +231,21 @@ func (w *argumentsScanner) expr(e ast.Expr) {
 		return
 	}
 	switch n := e.(type) {
+	case *ast.Call:
+		if w.seekDirectEval {
+			if id, ok := n.Callee.(*ast.Ident); ok && id.Name == "eval" {
+				w.found = true
+				return
+			}
+		}
+		w.expr(n.Callee)
+		for _, a := range n.Args {
+			w.expr(a)
+		}
 	case *ast.Ident:
+		if w.seekDirectEval {
+			return
+		}
 		if w.seekName != "" {
 			if n.Name == w.seekName || n.Name == "eval" {
 				w.found = true
@@ -240,7 +280,11 @@ func (w *argumentsScanner) expr(e ast.Expr) {
 	case *ast.FuncLit:
 		// Only an arrow shares the enclosing this and arguments; a search for
 		// a name descends into every function, since a name is in scope
-		// however deeply it is nested.
+		// however deeply it is nested. A search for a direct eval stops at all
+		// of them, an arrow included: an arrow has a variable scope of its own.
+		if w.seekDirectEval {
+			return
+		}
 		if w.seekName != "" || n.Kind == ast.FuncArrow {
 			for _, p := range n.Params {
 				w.expr(p)
@@ -281,11 +325,6 @@ func (w *argumentsScanner) expr(e ast.Expr) {
 		w.expr(n.Test)
 		w.expr(n.Cons)
 		w.expr(n.Alt)
-	case *ast.Call:
-		w.expr(n.Callee)
-		for _, a := range n.Args {
-			w.expr(a)
-		}
 	case *ast.New:
 		w.expr(n.Callee)
 		for _, a := range n.Args {

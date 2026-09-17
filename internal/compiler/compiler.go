@@ -123,6 +123,32 @@ type localVar struct {
 	initialized bool
 }
 
+// varScoped reports whether a binding belongs to its function's variable scope
+// rather than to a block inside it, which is what a var declared by a direct
+// eval can share and what a lexical one refuses.
+func (l *localVar) varScoped() bool {
+	switch l.kind {
+	case bindVar, bindParam:
+		return true
+	case bindFunction:
+		// A function declared at a function's top level is var-scoped; one in
+		// a block is a lexical binding that Annex B also aliases to a var.
+		return l.depth == 0
+	}
+	return false
+}
+
+// lexical reports whether a binding is one a var may not be hoisted over.
+func (l *localVar) lexical() bool {
+	switch l.kind {
+	case bindLet, bindConst, bindFunctionLexical:
+		return true
+	case bindFunction:
+		return l.depth > 0
+	}
+	return false
+}
+
 // loopCtx tracks the jumps a break or continue must patch.
 type loopCtx struct {
 	// label names the statement, or is empty for an unlabelled loop.
@@ -237,6 +263,15 @@ type compiler struct {
 	// close so that a binding is still described after it has gone out of
 	// scope.
 	pendingLocals map[uint32]bytecode.LocalDesc
+	// withStatements counts the enclosing `with` statements, which is not the
+	// same as withDepth: a function containing a direct eval has a scope of
+	// its own on that chain without any `with` being written.
+	withStatements int
+	// evalOwnVars names the vars this eval's code declares in the calling
+	// function, which have no slot there. A reference to one resolves to the
+	// binding the declaration made rather than to whatever the name meant
+	// outside the function.
+	evalOwnVars map[string]bool
 	// exits records what the statements currently being compiled left in place
 	// for the duration of their bodies, innermost last.
 	exits []pendingExit
@@ -354,6 +389,7 @@ func newCompiler(parent *compiler, opts Options) *compiler {
 		// A function written inside a `with` body resolves the names in its own
 		// body against the objects too, so it is compiled the same way.
 		c.withDepth = parent.withDepth
+		c.withStatements = parent.withStatements
 	}
 	return c
 }
@@ -640,6 +676,16 @@ func (c *compiler) markInitialized(name string) {
 	}
 }
 
+// callerBinding finds what the call site of this eval binds a name to.
+func (c *compiler) callerBinding(name string) (bytecode.EvalBinding, bool) {
+	for _, b := range c.opts.EvalScope {
+		if b.Name == name {
+			return b, true
+		}
+	}
+	return bytecode.EvalBinding{}, false
+}
+
 // resolveLocal finds a binding in the current function.
 func (c *compiler) resolveLocal(name string) (*localVar, bool) {
 	for i := len(c.locals) - 1; i >= 0; i-- {
@@ -658,7 +704,7 @@ func (c *compiler) resolveUpvalue(name string) (uint32, bool) {
 		// an enclosing frame. Its bindings are declared as upvalues by name,
 		// and the interpreter matches them to the frame's slots.
 		for _, b := range c.opts.EvalScope {
-			if b.Name != name {
+			if b.Name != name || c.evalOwnVars[name] {
 				continue
 			}
 			idx := c.addUpvalue(name, b.Index, b.FromLocal, b.Mutable, b.TDZ, 0)
@@ -780,6 +826,26 @@ func (c *compiler) hoistGlobals(body []ast.Stmt) {
 			// to reach into its surroundings.
 			c.declare(n, bindVar, 0)
 			continue
+		}
+		if c.opts.EvalOwnVarScope && !c.varScopeIsGlobal() {
+			// Sloppy eval code inside a function: what it declares belongs to
+			// that function's variable scope.
+			b, known := c.callerBinding(n)
+			switch {
+			case known && b.VarScoped:
+				// The function already binds the name, so the declaration
+				// creates nothing and a reference means that binding.
+				continue
+			case known && b.Lexical && b.FromLocal:
+				// A lexical binding of the calling function stands between the
+				// evaluated code and the variable scope, and a var may not be
+				// hoisted over one.
+				c.errorf(0, "%q is already declared as a lexical binding", n)
+			}
+			if c.evalOwnVars == nil {
+				c.evalOwnVars = map[string]bool{}
+			}
+			c.evalOwnVars[n] = true
 		}
 		// A var declared by eval is configurable, unlike one a script declares,
 		// because the evaluated code could have declared it anywhere.

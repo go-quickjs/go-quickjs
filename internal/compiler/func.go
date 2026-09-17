@@ -64,6 +64,23 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 	// them.
 	c.fn.UsesThis = referencesThis(fn)
 
+	// A direct eval in the body may declare a var here, and it would belong to
+	// this function. The answer is needed before anything is compiled: a frame
+	// needs somewhere to put such a binding, and every reference to a name
+	// this function does not bind has to be compiled to look there first.
+	c.fn.HasDirectEval = !c.fn.Strict && !c.varScopeIsGlobal() &&
+		(containsDirectEval(fn.Body) || containsDirectEvalInParams(fn.Params))
+	if c.fn.HasDirectEval {
+		// Those bindings are reached the way a `with` object's properties are:
+		// they have no slot, they shadow whatever the name meant outside the
+		// function, and whether they are there at all is only known when the
+		// name is evaluated. Counting the frame's own as a scope is what makes
+		// every reference to a name this function does not bind probe it --
+		// and what leaves the names it does bind alone, since they are
+		// declared inside it.
+		c.withDepth++
+	}
+
 	// A function that mentions `arguments`, directly or through an arrow that
 	// captures it, materializes the object into a slot. It exists before the
 	// parameters are initialized, so a default may refer to it, and the slot

@@ -113,6 +113,10 @@ const (
 	// alias the parameters they were passed to, so that writing one is visible
 	// through the other.
 	objMappedArguments
+	// objEvalVars marks the object holding the bindings a direct eval declared
+	// in a frame. It sits on the scope chain like a `with` object, but it is
+	// not one a script can reach: a call through it has no receiver.
+	objEvalVars
 )
 
 // linearScanLimit is the property count below which lookup scans the slice

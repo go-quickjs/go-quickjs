@@ -36,12 +36,6 @@ func isDirectEval(n *ast.Call) bool {
 // the callee being the name `eval`. The arguments are gathered into an array
 // there, and the instruction is told to take them from it.
 func (c *compiler) compileDirectEval(n *ast.Call) {
-	if !c.fn.Strict && !c.varScopeIsGlobal() {
-		// The evaluated code may declare a var, and it would belong to this
-		// function: a frame of it needs somewhere to put one, since nothing in
-		// the source named it and there is no slot.
-		c.fn.HasDirectEval = true
-	}
 	idx := c.evalScopeIdx()
 	c.compileExpr(n.Callee)
 	if hasSpread(n.Args) {
@@ -97,6 +91,8 @@ func (c *compiler) visibleBindings() []bytecode.EvalBinding {
 			FuncSelf:  l.kind == bindFuncSelf,
 			Mutable:   l.kind != bindConst && l.kind != bindFuncSelf,
 			TDZ:       !l.initialized,
+			VarScoped: l.varScoped(),
+			Lexical:   l.lexical(),
 		})
 	}
 

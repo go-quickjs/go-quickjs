@@ -381,13 +381,13 @@ func (c *compiler) storeVar(name string, pos int) {
 	// A var's initializer is an assignment rather than a binding
 	// initialization: the declaration hoists out of a `with` body, but the
 	// store happens inside it, where the object may be what is written to.
+	// The probe peeks at the value and jumps over the static store, while the
+	// store itself consumes it. A copy for the store and a drop after both
+	// paths is what leaves the stack the same either way -- and a store that
+	// quietly left its value behind would push the loop it sits in off its own
+	// operands.
 	probe := c.withProbe(bytecode.OpWithSet, name)
 	if probe >= 0 {
-		// The probe peeks at the value and jumps over the static store, while
-		// the store itself consumes it. A copy for the store and a drop after
-		// both paths is what leaves the stack the same either way -- and a
-		// store that quietly left its value behind would push the loop it sits
-		// in off its own operands.
 		c.emit(bytecode.OpDup, 0, 0)
 		defer func() {
 			c.patchWithProbe(probe)

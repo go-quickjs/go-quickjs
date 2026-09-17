@@ -123,6 +123,15 @@ type EvalBinding struct {
 	TDZ       bool
 	// FuncSelf marks the name a function expression gave itself.
 	FuncSelf bool
+	// VarScoped marks a binding of the calling function's own variable scope:
+	// a var, a parameter, or a function declared at its top level. A var the
+	// evaluated code declares is created only where there is no such binding
+	// already.
+	VarScoped bool
+	// Lexical marks a let, const or class binding, which a var declared by the
+	// evaluated code may not hoist over: one of the calling function's own
+	// refuses the declaration outright.
+	Lexical bool
 }
 
 // TemplateStrings is the text of one tagged template site.

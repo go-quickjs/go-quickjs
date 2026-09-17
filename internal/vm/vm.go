@@ -286,8 +286,12 @@ func (r *Runtime) run(cl *closure, this Value, args []Value, newTarget Value, ca
 	}
 	if fn.HasDirectEval {
 		// The body contains a direct eval, so it needs somewhere for the vars
-		// that eval may declare. An enclosing function's stands behind it.
-		f.evalVars = newObject(f.evalVars, ClassObject)
+		// that eval may declare. It goes on the scope chain, inside whatever
+		// the enclosing functions put there: a name the evaluated code
+		// declares is found the way a `with` object's properties are.
+		f.evalVars = newObject(nil, ClassObject)
+		f.evalVars.flags |= objEvalVars
+		f.withScopes = append(f.withScopes[:len(f.withScopes):len(f.withScopes)], f.evalVars)
 	}
 	f.handlers = f.handlers[:0]
 	f.native = ""
@@ -1579,8 +1583,14 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			case bytecode.OpWithGetThis:
 				// A call through a `with` object has that object as its
 				// receiver, which is the whole difference between
-				// `with (o) f()` and `f()`.
-				push(Obj(o))
+				// `with (o) f()` and `f()`. The bindings a direct eval
+				// declared are not an object a script can see, so a call
+				// through one gets no receiver at all.
+				if o.flags&objEvalVars != 0 {
+					push(Undefined)
+				} else {
+					push(Obj(o))
+				}
 				push(v)
 			case bytecode.OpWithTypeof:
 				push(Str(NewString(v.TypeOf())))

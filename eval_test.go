@@ -331,3 +331,48 @@ func TestDirectEvalVarBelongsToTheCaller(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
 	}
 }
+
+// A var a direct eval declares shadows a binding of an enclosing function, and
+// it comes into being where the declaration runs: a reference resolved before
+// then still names what it named. That is what tells `x *= (eval("var x = 2"),
+// 4)` apart from an assignment written after the eval.
+func TestDirectEvalVarShadowsAnOuterBinding(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"compound assignment", `function t() {
+		    var x = 3
+		    var inner = (function () { x *= (eval("var x = 2;"), 4); return x })()
+		    return inner + "," + x }
+		  t()`, "2,12"},
+		{"plain assignment", `function t() {
+		    var x = 3
+		    var inner = (function () { x = (eval("var x = 2;"), 4); return x })()
+		    return inner + "," + x }
+		  t()`, "2,4"},
+		{"after the eval", `function t() {
+		    var x = 3
+		    var inner = (function () { eval("var x = 2;"); x = 9; return x })()
+		    return inner + "," + x }
+		  t()`, "9,3"},
+		{"read after", `function t() {
+		    var x = 3
+		    var inner = (function () { eval("var x = 2;"); return x })()
+		    return inner + "," + x }
+		  t()`, "2,3"},
+		// Declared without a value, it is undefined rather than the outer one.
+		{"no initializer", `function t() {
+		    var x = 3
+		    var inner = (function () { eval("var x;"); return String(x) })()
+		    return inner + "," + x }
+		  t()`, "undefined,3"},
+		// A binding of the calling function itself is used rather than
+		// shadowed, whatever scope it was written in.
+		{"own var kept", `function t() { var x = 3; eval("var x"); return x } String(t())`, "3"},
+		{"parameter kept", `function t(x) { eval("var x"); return x } String(t(5))`, "5"},
+		// A lexical binding of the calling function refuses the declaration.
+		{"lexical refuses", `function t() { let x; eval("var x;") }
+		  try { t(); "no error" } catch (e) { e.constructor.name }`, "SyntaxError"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}

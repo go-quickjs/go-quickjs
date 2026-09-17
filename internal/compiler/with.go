@@ -28,6 +28,7 @@ func (c *compiler) compileWith(n *ast.WithStmt) {
 	c.emitAt(n.Start, bytecode.OpWithPush, 0, 0)
 	c.pushExit(exitWith)
 	c.withDepth++
+	c.withStatements++
 	// The body is a block of its own, so a let inside it does not escape.
 	c.beginScope()
 	if b, ok := n.Body.(*ast.BlockStmt); ok {
@@ -37,6 +38,7 @@ func (c *compiler) compileWith(n *ast.WithStmt) {
 	}
 	c.endScope()
 	c.withDepth--
+	c.withStatements--
 	c.popExit()
 	c.emit(bytecode.OpWithPop, 0, 0)
 }
