@@ -69,6 +69,11 @@ type Runtime struct {
 	// compares against to take its fast path.
 	promiseCtor *Object
 
+	// arrayValuesFn is Array.prototype.values, which the iteration fast paths
+	// compare against: an array iterates the way they assume only if this is
+	// still what its Symbol.iterator resolves to.
+	arrayValuesFn *Object
+
 	// uint8Proto is Uint8Array.prototype, which the base64 conversions need in
 	// order to build their results.
 	uint8Proto *Object
@@ -226,7 +231,14 @@ type frame struct {
 	base int
 	pc   uint32
 
-	this      Value
+	this Value
+	// thisRef is a derived constructor's `this`, which is a binding rather than
+	// a value: it is unbound until super() runs, and reading it before then is
+	// a ReferenceError -- which is what stops a subclass from touching an
+	// object the base class has not finished building. It is shared with every
+	// arrow created inside the constructor, so that binding it is visible
+	// through them too. Nil for everything else, which is the common case.
+	thisRef   *thisBinding
 	newTarget Value
 	// callee is the function object being executed, which a named function
 	// expression refers to by its own name.
@@ -490,4 +502,18 @@ func (r *Runtime) accountMemory(n int64) error {
 		return r.throwError(errRange, "out of memory")
 	}
 	return nil
+}
+
+// thisBinding is a derived constructor's `this`.
+type thisBinding struct {
+	value Value
+	init  bool
+}
+
+// thisValue returns the frame's `this`, or reports that it is not yet bound.
+func (f *frame) thisValue() (Value, bool) {
+	if f.thisRef != nil {
+		return f.thisRef.value, f.thisRef.init
+	}
+	return f.this, true
 }

@@ -205,6 +205,25 @@ func (r *Runtime) run(cl *closure, this Value, args []Value, newTarget Value, ca
 	f.base = base + fn.LocalCount
 	f.pc = 0
 	f.this = this
+	// A derived constructor does not receive `this`; super() binds it. Until
+	// then the object the caller made is held but unreachable, so that a
+	// subclass cannot touch what the base class has not finished building.
+	// The kind alone does not say which constructors are derived: a derived
+	// class with no explicit constructor gets a synthesized one, and what makes
+	// it derived is the heritage clause the class object records.
+	f.thisRef = nil
+	if callee != nil {
+		if fd := callee.fn(); fd != nil {
+			switch {
+			case !newTarget.IsUndefined() && fd.ctorKind == ctorDerived:
+				f.thisRef = &thisBinding{value: this}
+			case fd.arrow && fd.lexThisRef != nil:
+				// An arrow written inside a derived constructor shares its
+				// binding, so calling one before super() is the same error.
+				f.thisRef = fd.lexThisRef
+			}
+		}
+	}
 	f.newTarget = newTarget
 	f.callee = callee
 	f.args = args
@@ -370,7 +389,13 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		case bytecode.OpPushEmptyString:
 			push(Str(emptyString))
 		case bytecode.OpPushThis:
-			push(f.this)
+			v, bound := f.thisValue()
+			if !bound {
+				vmErr = r.throwError(errReference,
+					"\"this\" is not bound until super() has been called")
+				goto onError
+			}
+			push(v)
 
 		// --- Stack --------------------------------------------------------
 		case bytecode.OpDup:
@@ -1606,6 +1631,7 @@ func (r *Runtime) makeClosure(f *frame, c Value) *Object {
 		// already inherited them, so reading the creating frame is enough.
 		fd.arrow = true
 		fd.lexThis = f.this
+		fd.lexThisRef = f.thisRef
 		fd.lexNewTarget = f.newTarget
 		fd.lexArgs = f.args
 		if f.callee != nil {
@@ -2068,6 +2094,12 @@ func (r *Runtime) superCall(f *frame, args []Value) error {
 	if parent == nil {
 		return r.throwTypeError("\"super\" is only valid in a derived constructor")
 	}
+	// `this` is bound once. Calling super() twice would build a second object
+	// and abandon the first, including whatever the field initializers put in
+	// it, so the second call is refused rather than allowed to lose it.
+	if f.thisRef == nil || f.thisRef.init {
+		return r.throwError(errReference, "super() has already been called")
+	}
 	// new.target is forwarded rather than replaced: inside a base constructor
 	// reached through super(), new.target is the derived class the caller
 	// actually wrote `new` against. An abstract base distinguishes the two --
@@ -2095,6 +2127,8 @@ func (r *Runtime) superCall(f *frame, args []Value) error {
 		}
 		f.this = res
 	}
+	f.thisRef.value = f.this
+	f.thisRef.init = true
 	return nil
 }
 
@@ -2175,10 +2209,11 @@ func (r *Runtime) setPrivate(o *Object, key Atom, val Value) error {
 		// instance; only a field, which lives on the instance itself, is.
 		return r.throwTypeError("private method %s is read-only", r.atoms.name(key))
 	}
-	// A private member is invisible to every reflective operation, which the
-	// flag rather than the attributes expresses.
-	o.setOwnRaw(key, val, propWritable|propPrivate)
-	return nil
+	// A private field is added when the object is constructed and never
+	// afterwards, so writing one to an object that does not have it is a
+	// mistake rather than a way to add it.
+	return r.throwTypeError("private member %s is not present on this object",
+		r.atoms.name(key))
 }
 
 func (r *Runtime) getPrivate(o *Object, key Atom) (Value, error) {

@@ -200,3 +200,141 @@ func TestPrivateNamesAreResolvedAtCompileTime(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// A derived constructor does not receive `this`; super() binds it. Until then
+// the object exists but is unreachable, which is what stops a subclass from
+// touching what the base class has not finished building.
+func TestThisIsBoundBySuper(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`class B {} class D extends B { constructor() { this.x; super(); } }
+		  try { new D() } catch (e) { e.constructor.name }`, "ReferenceError"},
+		{`class B {} class D extends B { constructor() { super(); super(); } }
+		  try { new D() } catch (e) { e.constructor.name }`, "ReferenceError"},
+		// Falling off the end without calling super() is the same mistake.
+		{`class B {} class D extends B { constructor() {} }
+		  try { new D() } catch (e) { e.constructor.name }`, "ReferenceError"},
+		// An arrow written before super() closes over the same unbound `this`.
+		{`class B {} class D extends B {
+		    constructor() { var f = () => this; var n;
+		      try { f() } catch (e) { n = e.constructor.name } super(); this.n = n; }
+		  } new D().n`, "ReferenceError"},
+
+		// And the ordinary paths are unchanged.
+		{`class B {} class D extends B {} String(new D() instanceof D)`, "true"},
+		{`class B { constructor() { this.a = 1; } }
+		  class D extends B { b = 2; constructor() { super(); this.c = 3; } }
+		  var d = new D(); [d.a, d.b, d.c].join(",")`, "1,2,3"},
+		{`class D extends Array { constructor() { super(1, 2); } } new D().join(",")`, "1,2"},
+		// A base constructor has its `this` from the start.
+		{`class B { constructor() { this.x = 1; } } String(new B().x)`, "1"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}
+
+// A class field is created on the instance rather than written through it, so a
+// setter the prototype happens to have for the same name is not called, and a
+// private field is added rather than requiring one to be there already.
+func TestClassFieldsAreDefined(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`class C { x = 1; } String(new C().x)`, "1"},
+		{`class C { x = 1 } var d = Object.getOwnPropertyDescriptor(new C(), "x");
+		  [d.writable, d.enumerable, d.configurable].join(",")`, "true,true,true"},
+		{`class C { ["a" + "b"] = 1 } String(new C().ab)`, "1"},
+		{`class C { #x = 1; #y = 2; m() { return this.#x + this.#y; } }
+		  String(new C().m())`, "3"},
+		{`class C { static x = 1 } String(C.x)`, "1"},
+
+		// A setter inherited from the parent is not called by a field.
+		{`var called = false;
+		  class B { set x(v) { called = true; } }
+		  class D extends B { x = 1; }
+		  [new D().x, called].join(",")`, "1,false"},
+		{`var called = false;
+		  class B { static set x(v) { called = true; } }
+		  class D extends B { static x = 1; }
+		  [D.x, called].join(",")`, "1,false"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+
+	bad := []string{
+		// A private field is added when the object is constructed and never
+		// afterwards, so writing one to an object that does not have it is a
+		// mistake rather than a way to add it.
+		`class C { #x; static set(o) { o.#x = 1; } } C.set({})`,
+		`class C { #x; static get(o) { return o.#x; } } C.get({})`,
+		`class C { #m() {} static call(o) { return o.#m(); } } C.call({})`,
+		`class C { static #x = 1; static get(o) { return o.#x; } } C.get({})`,
+	}
+	for _, src := range bad {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil {
+			t.Errorf("%s: accepted, want TypeError", src)
+		} else if !strings.Contains(err.Error(), "TypeError") {
+			t.Errorf("%s: got %v, want TypeError", src, err)
+		}
+		rt.Close()
+	}
+}
+
+// Array.prototype[Symbol.iterator] is the same function object as values, and
+// the fast paths that copy an array's elements directly check for exactly that
+// -- including the case where the iterator has been deleted, which makes
+// destructuring an array a TypeError that a fast path would quietly succeed at.
+func TestArrayIterationRespectsTheProtocol(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`String(Array.prototype.values === Array.prototype[Symbol.iterator])`, "true"},
+		{`Array.prototype[Symbol.iterator] = function* () { yield 9; };
+		  [...[1, 2]].join(",")`, "9"},
+		{`var a = [1, 2]; a[Symbol.iterator] = function* () { yield 7; };
+		  [...a].join(",")`, "7"},
+		{`[...[1, 2, 3]].join(",")`, "1,2,3"},
+		{`var [a, b] = [1, 2]; a + "," + b`, "1,2"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+
+	const noIter = "delete Array.prototype[Symbol.iterator];\n"
+	for _, src := range []string{
+		noIter + `var [a] = [1, 2];`,
+		noIter + `[...[1, 2]];`,
+		noIter + `function f([x]) {} f([1]);`,
+		noIter + `for (const x of [1]) {}`,
+	} {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil {
+			t.Errorf("%s: accepted, want TypeError", src)
+		} else if !strings.Contains(err.Error(), "TypeError") {
+			t.Errorf("%s: got %v, want TypeError", src, err)
+		}
+		rt.Close()
+	}
+}

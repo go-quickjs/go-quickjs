@@ -528,7 +528,10 @@ type funcData struct {
 	arrow bool
 	// lexThis, lexNewTarget and lexArgs hold what an arrow captured from the
 	// frame that created it.
-	lexThis      Value
+	lexThis Value
+	// lexThisRef is the binding an arrow captured when it was created inside a
+	// derived constructor, where `this` is not a value until super() runs.
+	lexThisRef   *thisBinding
 	lexNewTarget Value
 	lexArgs      []Value
 

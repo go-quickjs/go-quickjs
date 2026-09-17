@@ -55,6 +55,11 @@ func (w *argumentsScanner) stmt(s ast.Stmt) {
 	switch n := s.(type) {
 	case *ast.ExprStmt:
 		w.expr(n.X)
+	case *ast.FieldInit:
+		if n.Computed {
+			w.expr(n.Key)
+		}
+		w.expr(n.Value)
 	case *ast.BlockStmt:
 		w.stmts(n.Body)
 	case *ast.VarDecl:

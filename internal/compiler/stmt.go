@@ -229,6 +229,9 @@ func (c *compiler) compileStatement(s ast.Stmt) {
 	case *ast.ExportDecl:
 		c.compileExportDecl(n)
 
+	case *ast.FieldInit:
+		c.compileFieldInit(n)
+
 	case *ast.WithStmt:
 		c.errorf(n.Start, "\"with\" is not supported")
 
@@ -738,4 +741,29 @@ func hoistableFunction(s ast.Stmt) (*ast.FuncDecl, bool) {
 		}
 	}
 	return nil, false
+}
+
+// compileFieldInit creates one instance field.
+//
+// A field is created on the instance rather than written through it, so a
+// setter the prototype happens to have for the same name is not called, and a
+// private field is added rather than requiring one to be there already.
+func (c *compiler) compileFieldInit(n *ast.FieldInit) {
+	if pn, private := n.Key.(*ast.PrivateName); private {
+		c.emit(bytecode.OpPushThis, 0, 0)
+		c.compileExpr(n.Value)
+		c.emitAt(n.Start, bytecode.OpDefinePrivate, c.nameIdx("#"+pn.Name), 0)
+		c.emit(bytecode.OpDrop, 0, 0)
+		return
+	}
+	c.emit(bytecode.OpPushThis, 0, 0)
+	if n.Computed {
+		c.compileExpr(n.Key)
+		c.emit(bytecode.OpToPropertyKey, 0, 0)
+	} else {
+		c.emit(bytecode.OpPushConst, c.stringConst(propKeyName(n.Key)), 0)
+	}
+	c.compileExpr(n.Value)
+	c.emitAt(n.Start, bytecode.OpDefineIndex, 0, 0)
+	c.emit(bytecode.OpDrop, 0, 0)
 }

@@ -617,19 +617,11 @@ func (c *compiler) synthesizeConstructor(cls *ast.ClassLit, keyNames []string) *
 			// A field with no initializer is still created, holding undefined.
 			value = &ast.Ident{Name: "undefined", Start: f.Start}
 		}
-		fieldInit = append(fieldInit, &ast.ExprStmt{
-			X: &ast.Assign{
-				Op: "=",
-				Target: &ast.Member{
-					Object:   &ast.This{Start: f.Start},
-					Property: key,
-					Computed: computed,
-					Start:    f.Start,
-				},
-				Value: value,
-				Start: f.Start,
-			},
-			Start: f.Start,
+		fieldInit = append(fieldInit, &ast.FieldInit{
+			Key:      key,
+			Value:    value,
+			Computed: computed,
+			Start:    f.Start,
 		})
 	}
 

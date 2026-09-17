@@ -208,6 +208,20 @@ type ClassLit struct {
 	End int
 }
 
+// FieldInit initializes one instance field, and exists only in the constructor
+// the compiler synthesizes for a class.
+//
+// It is not an assignment: a field is created on the instance rather than
+// written through it, so a setter the prototype happens to have for the same
+// name is not called, and a private field is added rather than requiring one to
+// be there already.
+type FieldInit struct {
+	Key      Expr
+	Value    Expr
+	Computed bool
+	Start    int
+}
+
 // ClassField is a class field definition.
 type ClassField struct {
 	Key      Expr
@@ -637,6 +651,7 @@ func (n *SwitchStmt) Pos() int   { return n.Start }
 func (n *LabeledStmt) Pos() int  { return n.Start }
 func (n *DebuggerStmt) Pos() int { return n.Start }
 func (n *WithStmt) Pos() int     { return n.Start }
+func (n *FieldInit) Pos() int    { return n.Start }
 
 func (*ExprStmt) stmtNode()     {}
 func (*BlockStmt) stmtNode()    {}
@@ -659,6 +674,7 @@ func (*SwitchStmt) stmtNode()   {}
 func (*LabeledStmt) stmtNode()  {}
 func (*DebuggerStmt) stmtNode() {}
 func (*WithStmt) stmtNode()     {}
+func (*FieldInit) stmtNode()    {}
 
 // ---------------------------------------------------------------------------
 // Modules

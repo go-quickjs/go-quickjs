@@ -1316,11 +1316,8 @@ func (r *Runtime) initArrayBuiltins() {
 		return this, nil
 	})
 
-	// Arrays are iterable.
-	r.defSymbolMethod(p, r.wellKnown.iterator, "[Symbol.iterator]", 0,
-		func(rt *Runtime, this Value, args []Value) (Value, error) {
-			return rt.newArrayIterator(this)
-		})
+	// Symbol.iterator is set alongside values, which it has to be the very same
+	// function as.
 }
 
 // iterationFn is the body of an array method that takes a callback.

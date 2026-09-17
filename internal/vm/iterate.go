@@ -190,7 +190,7 @@ func (r *Runtime) iterToArray(src Value, want uint32) (Value, error) {
 	// is overwhelmingly the common case, and going through the protocol would
 	// allocate an iterator and a result object per element for no observable
 	// difference.
-	if src.IsObject() && src.Object().IsArray() && !r.hasOwnIterator(src.Object()) {
+	if src.IsObject() && src.Object().IsArray() && r.usesIntrinsicArrayIterator(src.Object()) {
 		return src, nil
 	}
 
@@ -242,7 +242,7 @@ func (r *Runtime) plainDenseElems(src Value) ([]Value, bool) {
 		return nil, false
 	}
 	o := src.Object()
-	if !o.IsArray() || o.flags&objHasSparseElements != 0 || r.hasOwnIterator(o) {
+	if !o.IsArray() || o.flags&objHasSparseElements != 0 || !r.usesIntrinsicArrayIterator(o) {
 		return nil, false
 	}
 	for _, el := range o.elems {
@@ -253,11 +253,23 @@ func (r *Runtime) plainDenseElems(src Value) ([]Value, bool) {
 	return o.elems, true
 }
 
-// hasOwnIterator reports whether an array has had its Symbol.iterator replaced,
-// in which case the fast path would observably skip user code.
-func (r *Runtime) hasOwnIterator(o *Object) bool {
+// usesIntrinsicArrayIterator reports whether an array still iterates the way
+// Array.prototype does.
+//
+// Anything else -- an own Symbol.iterator, a replaced one on the prototype, or
+// none at all, which `delete Array.prototype[Symbol.iterator]` leaves -- means
+// the fast path would answer differently from the protocol. The last case is
+// the one that matters most: without an iterator, destructuring an array is a
+// TypeError, and a fast path that skipped the lookup would quietly succeed.
+func (r *Runtime) usesIntrinsicArrayIterator(o *Object) bool {
 	key := r.atoms.internSymbol(r.wellKnown.iterator)
-	return o.getOwn(key) != nil
+	for cur := o; cur != nil; cur = cur.proto {
+		if p := cur.getOwn(key); p != nil {
+			return !p.isAccessor() && p.value.IsObject() &&
+				p.value.Object() == r.arrayValuesFn
+		}
+	}
+	return false
 }
 
 // spreadToStack collects an iterable's elements for a call's argument list.

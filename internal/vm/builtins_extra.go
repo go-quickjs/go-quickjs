@@ -217,9 +217,16 @@ func (r *Runtime) initArrayExtras2() {
 	})
 
 	// The iteration-protocol methods.
-	r.defMethod(p, "values", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	// Array.prototype[Symbol.iterator] is not merely equivalent to values, it is
+	// the same function object, which a script can check and which the
+	// iteration fast paths rely on to decide that an array still iterates the
+	// way they assume.
+	values := r.defMethod(p, "values", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		return rt.newArrayIterator(this)
 	})
+	r.arrayValuesFn = values
+	p.setOwnRaw(r.atoms.internSymbol(r.wellKnown.iterator), Obj(values),
+		propWritable|propConfigurable)
 	r.defMethod(p, "keys", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		return rt.newArrayIteratorKind(this, iterKeys)
 	})

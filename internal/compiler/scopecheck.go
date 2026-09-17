@@ -215,6 +215,12 @@ func (s *scopeChecker) stmt(st ast.Stmt) {
 	case *ast.ExprStmt:
 		s.expr(n.X)
 
+	case *ast.FieldInit:
+		if n.Computed {
+			s.expr(n.Key)
+		}
+		s.expr(n.Value)
+
 	case *ast.ReturnStmt:
 		s.expr(n.Arg)
 
