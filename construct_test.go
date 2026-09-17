@@ -64,3 +64,49 @@ func TestNativeConstructorPrototypeLookup(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
 	}
 }
+
+// A constructor that names no prototype falls back to the one of the realm it
+// came from, and a revoked proxy has no realm left to be asked about.
+func TestConstructThroughARevokedProxy(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var handle
+		  handle = Proxy.revocable(function () {}, {get: function () { handle.revoke() }})
+		  try { new handle.proxy(); "no throw" } catch (e) { e.constructor.name }`, "TypeError"},
+		{`var h = Proxy.revocable(function () {}, {}); h.revoke()
+		  try { new h.proxy(); "no throw" } catch (e) { e.constructor.name }`, "TypeError"},
+		// A live proxy constructs through its target.
+		{`var p = new Proxy(function (a) { this.a = a }, {})
+		  String(new p(5).a)`, "5"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// A typed array's length is converted before new.target is asked what
+// prototype the view should have: an argument that cannot be a length is
+// refused first.
+func TestTypedArrayLengthIsConvertedFirst(t *testing.T) {
+	const target = `var newTarget = function () {}.bind(null)
+		Object.defineProperty(newTarget, "prototype",
+		  {get: function () { throw new RangeError() }})
+		`
+	cases := []struct{ src, want string }{
+		{target + `try { Reflect.construct(Int8Array, [Symbol()], newTarget) }
+		   catch (e) { e.constructor.name }`, "TypeError"},
+		{target + `try { Reflect.construct(Int8Array, [-1], newTarget) }
+		   catch (e) { e.constructor.name }`, "RangeError"},
+		// With a length it can use, the prototype is what is read next.
+		{target + `try { Reflect.construct(Int8Array, [2], newTarget) }
+		   catch (e) { e.constructor.name }`, "RangeError"},
+		// The ordinary paths are unchanged.
+		{`class T extends Int8Array {}
+		  var a = new T(3); [a.length, a instanceof T].join(",")`, "3,true"},
+		{`[new Int8Array(2).length, new Int8Array([1, 2, 3]).length,
+		   new Int8Array(new ArrayBuffer(4)).length].join(",")`, "2,3,4"},
+		{`var a = new Int8Array(); a.length`, "0"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

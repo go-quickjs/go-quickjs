@@ -2880,6 +2880,11 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 	proto := r.proto.object
 	if protoVal.IsObject() {
 		proto = protoVal.Object()
+	} else if p := proxyOf(target); p != nil && p.revoked {
+		// A constructor that named no prototype falls back to the one of the
+		// realm it came from, and a revoked proxy no longer has a realm to be
+		// asked about.
+		return Undefined, r.throwTypeError("cannot perform an operation on a revoked proxy")
 	}
 	this := Obj(newObject(proto, ClassObject))
 

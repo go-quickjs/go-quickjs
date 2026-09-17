@@ -522,6 +522,17 @@ func (r *Runtime) initTypedArrayBuiltins() {
 			if err := rt.requireNew(info.name); err != nil {
 				return Undefined, err
 			}
+			// A length rather than a source is converted before anything
+			// else: an argument that cannot be a length is refused before
+			// new.target is asked what prototype the view should have.
+			length := int64(-1)
+			if first := arg(args, 0); len(args) > 0 && !first.IsObject() {
+				n, err := rt.toIndex(first)
+				if err != nil {
+					return Undefined, err
+				}
+				length = int64(n)
+			}
 			// A subclass's instances get its prototype, which new.target
 			// names -- unless it says something that is not an object, where
 			// the intrinsic one stands in.
@@ -534,6 +545,13 @@ func (r *Runtime) initTypedArrayBuiltins() {
 				if custom.IsObject() {
 					p = custom.Object()
 				}
+			}
+			if length >= 0 {
+				o := newObject(p, ClassTypedArray)
+				if _, err := rt.allocTypedArrayChecked(o, k, length); err != nil {
+					return Undefined, err
+				}
+				return Obj(o), nil
 			}
 			return rt.constructTypedArray(k, p, args)
 		})
