@@ -55,6 +55,8 @@ type instr struct {
 	// bounds, depending on the opcode.
 	arg, arg2 int
 	r         rune
+	// rev marks an instruction that consumes leftwards, inside a lookbehind.
+	rev bool
 }
 
 // program is a compiled pattern.
@@ -81,6 +83,11 @@ type lookProgram struct {
 type compiler struct {
 	prog  *program
 	flags Flags
+	// reverse compiles for right-to-left matching, which is how a lookbehind
+	// is evaluated: its body matches ending at the lookbehind's position and
+	// works leftwards, so its terms run last-first and each consumes the
+	// character before the cursor rather than the one at it.
+	reverse bool
 }
 
 func compileNode(n node, flags Flags, groupCount int) *program {
@@ -113,17 +120,17 @@ func (c *compiler) compile(n node) {
 
 	case nodeChar:
 		if c.flags&FlagIgnoreCase != 0 {
-			c.emit(instr{op: opCharFold, r: foldCase(t.r)})
+			c.emit(instr{op: opCharFold, r: foldCase(t.r), rev: c.reverse})
 			return
 		}
-		c.emit(instr{op: opChar, r: t.r})
+		c.emit(instr{op: opChar, r: t.r, rev: c.reverse})
 
 	case nodeAny:
 		if t.dotAll {
-			c.emit(instr{op: opAny})
+			c.emit(instr{op: opAny, rev: c.reverse})
 			return
 		}
-		c.emit(instr{op: opAnyNotNL})
+		c.emit(instr{op: opAnyNotNL, rev: c.reverse})
 
 	case nodeClass:
 		set := t.set
@@ -132,9 +139,17 @@ func (c *compiler) compile(n node) {
 			cp.foldCase = true
 			set = &cp
 		}
-		c.emit(instr{op: opClass, arg: c.addClass(set)})
+		c.emit(instr{op: opClass, arg: c.addClass(set), rev: c.reverse})
 
 	case nodeSeq:
+		// Matching leftwards means the last term is the one nearest the
+		// cursor, so it goes first.
+		if c.reverse {
+			for i := len(t.items) - 1; i >= 0; i-- {
+				c.compile(t.items[i])
+			}
+			return
+		}
 		for _, item := range t.items {
 			c.compile(item)
 		}
@@ -147,9 +162,15 @@ func (c *compiler) compile(n node) {
 			c.compile(t.item)
 			return
 		}
-		c.emit(instr{op: opSave, arg: 2 * t.index})
+		// Leftwards the end is reached first, so the slots are filled in the
+		// other order and the group still reads start-then-end.
+		first, second := 2*t.index, 2*t.index+1
+		if c.reverse {
+			first, second = second, first
+		}
+		c.emit(instr{op: opSave, arg: first})
 		c.compile(t.item)
-		c.emit(instr{op: opSave, arg: 2*t.index + 1})
+		c.emit(instr{op: opSave, arg: second})
 
 	case nodeRepeat:
 		c.compileRepeat(t)
@@ -182,7 +203,7 @@ func (c *compiler) compile(n node) {
 		if c.flags&FlagIgnoreCase != 0 {
 			op = opBackrefFold
 		}
-		c.emit(instr{op: op, arg: t.index})
+		c.emit(instr{op: op, arg: t.index, rev: c.reverse})
 	}
 }
 
@@ -319,7 +340,9 @@ func (c *compiler) patchSplitAlt(pc int, greedy bool, target int) {
 
 // compileLook compiles a lookaround into its own program.
 func (c *compiler) compileLook(t nodeLook) {
-	sub := &compiler{prog: c.prog, flags: c.flags}
+	// A lookaround sets its own direction: a lookbehind inside a lookahead
+	// still matches leftwards, and a lookahead inside a lookbehind rightwards.
+	sub := &compiler{prog: c.prog, flags: c.flags, reverse: t.behind}
 	// The body is compiled into a scratch buffer and then moved, so that its
 	// jump targets are relative to its own start.
 	saved := c.prog.code

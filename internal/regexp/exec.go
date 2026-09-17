@@ -109,12 +109,6 @@ type matcher struct {
 	emptyMarks []int
 
 	steps int
-
-	// useAnchor and anchorEnd require a match to finish at an exact position,
-	// which is how lookbehind is evaluated: the body is run forwards from each
-	// candidate start and must land on the lookbehind's position.
-	useAnchor bool
-	anchorEnd int
 }
 
 // exec runs the program from a starting position, returning the capture slots
@@ -181,43 +175,43 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 		in := code[pc]
 		switch in.op {
 		case opChar:
-			r, w := m.in.at(pos)
+			r, w := m.read(in.rev, pos)
 			if r != in.r {
 				goto backtrack
 			}
-			pos += w
+			pos = m.advance(in.rev, pos, w)
 			pc++
 
 		case opCharFold:
-			r, w := m.in.at(pos)
+			r, w := m.read(in.rev, pos)
 			if r < 0 || foldCase(r) != in.r {
 				goto backtrack
 			}
-			pos += w
+			pos = m.advance(in.rev, pos, w)
 			pc++
 
 		case opClass:
-			r, w := m.in.at(pos)
+			r, w := m.read(in.rev, pos)
 			if r < 0 || !m.prog.classes[in.arg].contains(r) {
 				goto backtrack
 			}
-			pos += w
+			pos = m.advance(in.rev, pos, w)
 			pc++
 
 		case opAny:
-			r, w := m.in.at(pos)
+			r, w := m.read(in.rev, pos)
 			if r < 0 {
 				goto backtrack
 			}
-			pos += w
+			pos = m.advance(in.rev, pos, w)
 			pc++
 
 		case opAnyNotNL:
-			r, w := m.in.at(pos)
+			r, w := m.read(in.rev, pos)
 			if r < 0 || isLineTerminator(r) {
 				goto backtrack
 			}
-			pos += w
+			pos = m.advance(in.rev, pos, w)
 			pc++
 
 		case opSplit:
@@ -233,11 +227,6 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 			pc++
 
 		case opMatch:
-			if m.useAnchor && pos != m.anchorEnd {
-				// The body matched, but not ending where a lookbehind needs it
-				// to, so this is a failure like any other.
-				goto backtrack
-			}
 			return true, nil
 
 		case opAssertStart:
@@ -288,13 +277,24 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 				break
 			}
 			n := end - start
-			if pos+n > m.in.length() {
+			// Leftwards the reference matches the text ending at the cursor,
+			// so the comparison starts n units before it.
+			at := pos
+			if in.rev {
+				at = pos - n
+				if at < 0 {
+					goto backtrack
+				}
+			} else if pos+n > m.in.length() {
 				goto backtrack
 			}
-			if !m.compareRange(start, pos, n, in.op == opBackrefFold) {
+			if !m.compareRange(start, at, n, in.op == opBackrefFold) {
 				goto backtrack
 			}
-			pos += n
+			pos = at
+			if !in.rev {
+				pos = pos + n
+			}
 			pc++
 
 		case opLook:
@@ -431,6 +431,23 @@ func (m *matcher) undoCaps(n int) {
 	}
 }
 
+// read returns the code point the cursor is about to consume, which is the one
+// after it going rightwards and the one before it going leftwards.
+func (m *matcher) read(rev bool, pos int) (rune, int) {
+	if rev {
+		return m.in.before(pos)
+	}
+	return m.in.at(pos)
+}
+
+// advance moves the cursor over a code point in the direction being matched.
+func (m *matcher) advance(rev bool, pos, w int) int {
+	if rev {
+		return pos - w
+	}
+	return pos + w
+}
+
 // compareRange tests whether n code units at two positions are equal.
 func (m *matcher) compareRange(a, b, n int, fold bool) bool {
 	for i := 0; i < n; i++ {
@@ -467,28 +484,10 @@ func (m *matcher) runLook(idx, pos int) (bool, error) {
 		sub.emptyMarks[i] = -1
 	}
 
-	var ok bool
-	var err error
-	if look.behind {
-		// Lookbehind is matched by trying every start position that could end
-		// here. The bodies are short in practice, so the quadratic worst case
-		// does not bite; a reverse-matching engine would avoid it entirely.
-		for start := pos; start >= 0; start-- {
-			sub.undoCaps(base)
-			sub.stack = sub.stack[:0]
-			matched, e := sub.runAnchored(look.code, start, pos)
-			if e != nil {
-				err = e
-				break
-			}
-			if matched {
-				ok = true
-				break
-			}
-		}
-	} else {
-		ok, err = sub.run(look.code, pos)
-	}
+	// A lookbehind's body was compiled to match leftwards, so it runs from the
+	// lookbehind's position like any other sub-program and walks back from
+	// there.
+	ok, err := sub.run(look.code, pos)
 	m.steps = sub.steps
 	if err != nil {
 		m.trail = sub.trail
@@ -506,13 +505,4 @@ func (m *matcher) runLook(idx, pos int) (bool, error) {
 		return !ok, nil
 	}
 	return ok, nil
-}
-
-// runAnchored runs a program with the additional requirement that it finish
-// exactly at end, which is what lookbehind needs.
-func (m *matcher) runAnchored(code []instr, start, end int) (bool, error) {
-	m.anchorEnd = end
-	m.useAnchor = true
-	defer func() { m.useAnchor = false }()
-	return m.run(code, start)
 }

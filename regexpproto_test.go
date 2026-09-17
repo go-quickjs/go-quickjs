@@ -446,3 +446,32 @@ func TestRegExpLookaroundCaptures(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestRegExpLookbehind covers a lookbehind, which matches leftwards from where
+// it stands: its terms run last-first, so a quantifier's last iteration is the
+// leftmost one and that is what its group keeps.
+func TestRegExpLookbehind(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`JSON.stringify("abcdef".match(/(?<=(c))def/))`, `["def","c"]`},
+		{`JSON.stringify("abcdef".match(/(?<=(\w{2}))def/))`, `["def","bc"]`},
+		{`JSON.stringify("abcdef".match(/(?<=(\w(\w)))def/))`, `["def","bc","c"]`},
+		{`JSON.stringify("abcdef".match(/(?<=(\w){3})def/))`, `["def","a"]`},
+		{`JSON.stringify("abcdef".match(/(?<=(bc)|(cd))./))`, `["d","bc",null]`},
+		{`JSON.stringify("abcdef".match(/(?<=([ab]{1,2})\D|(abc))\w/))`, `["c","a",null]`},
+		{`JSON.stringify("abcdef".match(/\D(?<=([ab]+))(\w)/))`, `["ab","a","b"]`},
+		{`JSON.stringify("abcdef".match(/(?<=b|c)\w/g))`, `["c","d"]`},
+		{`JSON.stringify("abcdef".match(/(?<=[b-e])\w{2}/g))`, `["cd","ef"]`},
+		{`JSON.stringify("abcdef".match(/(?<!(^|[ab]))\w{2}/))`, `["de",null]`},
+
+		// A greedy quantifier inside one takes as much as it can, leftwards.
+		{`JSON.stringify("abbbbbbc".match(/(?<=(b+))c/))`, `["c","bbbbbb"]`},
+		{`JSON.stringify("abbbbbbc".match(/(?<=(b+?))c/))`, `["c","b"]`},
+		// A lookahead inside a lookbehind still matches rightwards.
+		{`JSON.stringify("abcdef".match(/(?<=(?=c)cd)ef/))`, `["ef"]`},
+		// A backreference inside one matches the text ending at the cursor.
+		{`JSON.stringify("abab".match(/(?<=(ab)\1)$/))`, `["","ab"]`},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
