@@ -182,6 +182,11 @@ const (
 	OpPos
 	OpInc
 	OpDec
+	// OpIncLocal and OpDecLocal are ++ and -- on a local whose value nothing
+	// reads: the whole of `i++` as a statement, coercion included, in one
+	// instruction rather than four.
+	OpIncLocal
+	OpDecLocal
 
 	// --- Bitwise ----------------------------------------------------------
 	OpBitAnd
@@ -502,6 +507,7 @@ var opNames = [opCount]string{
 
 	OpAdd: "add", OpSub: "sub", OpMul: "mul", OpDiv: "div", OpMod: "mod",
 	OpPow: "pow", OpNeg: "neg", OpPos: "pos", OpInc: "inc", OpDec: "dec",
+	OpIncLocal: "inc_local", OpDecLocal: "dec_local",
 
 	OpBitAnd: "bit_and", OpBitOr: "bit_or", OpBitXor: "bit_xor",
 	OpBitNot: "bit_not", OpShl: "shl", OpShr: "shr", OpUShr: "ushr",

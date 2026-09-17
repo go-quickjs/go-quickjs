@@ -16,12 +16,17 @@ import (
 // single instruction; a postfix update keeps the value it had before, which is
 // a copy nothing reads.
 func (c *compiler) compileExprForEffect(e ast.Expr) {
-	if u, ok := e.(*ast.Update); ok && !u.Prefix {
-		// The two forms differ only in which value they leave behind, and
-		// neither is wanted here. The prefix form does not make the copy.
-		prefix := *u
-		prefix.Prefix = true
-		e = &prefix
+	if u, ok := e.(*ast.Update); ok {
+		if c.compileLocalUpdate(u) {
+			return
+		}
+		if !u.Prefix {
+			// The two forms differ only in which value they leave behind, and
+			// neither is wanted here. The prefix form does not make the copy.
+			prefix := *u
+			prefix.Prefix = true
+			e = &prefix
+		}
 	}
 	c.compileExpr(e)
 
@@ -615,6 +620,30 @@ func (c *compiler) compileUnary(n *ast.Unary) {
 	default:
 		c.errorf(n.Start, "unsupported unary operator %q", n.Op)
 	}
+}
+
+// compileLocalUpdate emits the whole of `i++` on a plain local as a single
+// instruction, and reports whether it could.
+//
+// It is what the counted loop is made of, and the four instructions it replaces
+// -- read, coerce, add, store -- are four dispatches around one addition.
+// Anything with more to it than that, a const, a name a `with` object may
+// answer for, a binding still in its dead zone, is left to the general path.
+func (c *compiler) compileLocalUpdate(n *ast.Update) bool {
+	id, ok := n.Operand.(*ast.Ident)
+	if !ok || c.withLimit(id.Name) > 0 {
+		return false
+	}
+	l, ok := c.resolveLocal(id.Name)
+	if !ok || !l.initialized || l.kind == bindConst || l.kind == bindFuncSelf {
+		return false
+	}
+	op := bytecode.OpIncLocal
+	if n.Op == "--" {
+		op = bytecode.OpDecLocal
+	}
+	c.emitAt(n.Start, op, l.slot, 0)
+	return true
 }
 
 func (c *compiler) compileUpdate(n *ast.Update) {

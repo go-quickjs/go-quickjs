@@ -1244,6 +1244,43 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				goto onError
 			}
 			push(Float(n))
+		case bytecode.OpIncLocal, bytecode.OpDecLocal:
+			// `i++` as a statement, which is most of the increments a program
+			// does. A number is the case worth having the instruction for; the
+			// rest is what the separate instructions would have done.
+			slot := &f.locals[in.A]
+			if slot.IsNumber() {
+				if in.Op == bytecode.OpIncLocal {
+					*slot = Float(slot.Number() + 1)
+				} else {
+					*slot = Float(slot.Number() - 1)
+				}
+				break
+			}
+			n, err := r.toNumeric(*slot)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			if n.IsBigInt() {
+				delta := int64(1)
+				if in.Op == bytecode.OpDecLocal {
+					delta = -1
+				}
+				v, err := r.arith(bytecode.OpAdd, n, Big(NewBigInt(delta)))
+				if err != nil {
+					vmErr = err
+					goto onError
+				}
+				f.locals[in.A] = v
+				break
+			}
+			if in.Op == bytecode.OpIncLocal {
+				f.locals[in.A] = Float(n.Number() + 1)
+			} else {
+				f.locals[in.A] = Float(n.Number() - 1)
+			}
+
 		case bytecode.OpInc, bytecode.OpDec:
 			a := pop()
 			if a.IsNumber() {

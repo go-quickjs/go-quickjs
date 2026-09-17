@@ -66,6 +66,68 @@ func TestDiscardedUpdates(t *testing.T) {
 	}
 }
 
+// TestDiscardedLocalUpdates covers ++ and -- on a frame slot, which is the one
+// instruction the four the general form needs collapse into. A script's
+// top-level var is a property of the global object rather than a slot, so each
+// of these is inside a function.
+func TestDiscardedLocalUpdates(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`(function () { var i = 0; i++; return i })()`, "1"},
+		{`(function () { var i = 0; i--; return i })()`, "-1"},
+		{`(function () { let i = 0; i++; return i })()`, "1"},
+		{`(function () { var i = 0; for (var n = 0; n < 5; n++) i++; return i })()`, "5"},
+		{`(function (a) { a++; return a })(1)`, "2"},
+
+		// The coercion the separate instructions did, the fused one does too.
+		{`(function () { var s = "5"; s++; return typeof s + ":" + s })()`, "number:6"},
+		{`(function () { var s = "x"; s++; return String(s) })()`, "NaN"},
+		{`(function () { var b = 1n; b++; return typeof b + ":" + b })()`, "bigint:2"},
+		{`(function () { var b = 1n; b--; return String(b) })()`, "0"},
+		{`(function () { var o = {valueOf() { return 7 }}; o++; return o })()`, "8"},
+		{`(function () { var u; u++; return String(u) })()`, "NaN"},
+		{`(function () { var n = null; n++; return n })()`, "1"},
+		{`(function () { var t = true; t++; return t })()`, "2"},
+		{`(function () { var a = []; a++; return a })()`, "1"},
+		{`(function () { var s = Symbol()
+		    try { s++; return "no throw" } catch (e) { return e.constructor.name }
+		  })()`, "TypeError"},
+		{`(function () { var o = {valueOf() { throw new RangeError() }}
+		    try { o++; return "no throw" } catch (e) { return e.constructor.name }
+		  })()`, "RangeError"},
+
+		// What may not take the fused path: a const, a binding still in its
+		// dead zone, and a name an enclosing `with` object may answer for.
+		{`(function () { const c = 1
+		    try { c++; return "no throw" } catch (e) { return e.constructor.name }
+		  })()`, "TypeError"},
+		{`(function () {
+		    try { x++; let x; return "no throw" } catch (e) { return e.constructor.name }
+		  })()`, "ReferenceError"},
+		{`(function () { var o = {v: 1}; var v = 9; with (o) { v++ }; return o.v + "," + v })()`,
+			"2,9"},
+		// A captured binding lives in an upvalue rather than a slot.
+		{`(function () { var n = 0; var bump = () => { n++ }; bump(); bump(); return n })()`,
+			"2"},
+		{`(function () { var fs = []
+		    for (let i = 0; i < 3; i++) fs.push(() => i)
+		    return fs.map(f => f()).join()
+		  })()`, "0,1,2"},
+
+		// A parameter is a slot, and stays mapped to the arguments object.
+		{`(function (a) { a++; return arguments[0] })(1)`, "2"},
+		{`(function (a) { "use strict"; a++; return arguments[0] })(1)`, "1"},
+		{`(function (a) { arguments[0]++; return a })(1)`, "2"},
+
+		// The value is still there when it is wanted.
+		{`(function () { var i = 0; var r = i++; return r + "," + i })()`, "0,1"},
+		{`(function () { var i = 0; var r = ++i; return r + "," + i })()`, "1,1"},
+		{`(function () { var i = 0; return [i++, i++, i].join() })()`, "0,1,2"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
 // TestDiscardedAssignments covers the store that pops its own value, and the
 // places where it may not: a short-circuiting assignment reaches the end of the
 // statement without having stored anything.
