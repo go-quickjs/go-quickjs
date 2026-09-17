@@ -423,14 +423,66 @@ func NewBigInt(v int64) *BigInt {
 }
 
 // ParseBigInt parses a BigInt literal, which may carry a 0x, 0o or 0b prefix.
+//
+// The grammar is narrower than Go's own: a digit separator is not allowed here
+// -- the lexer removes the ones a literal in source may have -- a sign belongs
+// to a decimal literal only, and a leading zero makes nothing octal. So the
+// text is checked before big.Int sees it, which otherwise accepts all three.
 func ParseBigInt(s string) (*BigInt, bool) {
-	b := &BigInt{}
-	// SetString with base 0 understands all three prefixes and rejects
-	// anything else.
-	if _, ok := b.V.SetString(s, 0); !ok {
+	digits, base, neg := s, 10, false
+	switch {
+	case len(digits) > 1 && digits[0] == '0' && (digits[1] == 'x' || digits[1] == 'X'):
+		digits, base = digits[2:], 16
+	case len(digits) > 1 && digits[0] == '0' && (digits[1] == 'o' || digits[1] == 'O'):
+		digits, base = digits[2:], 8
+	case len(digits) > 1 && digits[0] == '0' && (digits[1] == 'b' || digits[1] == 'B'):
+		digits, base = digits[2:], 2
+	case digits != "" && digits[0] == '+':
+		digits = digits[1:]
+	case digits != "" && digits[0] == '-':
+		digits, neg = digits[1:], true
+	}
+	if digits == "" {
 		return nil, false
 	}
+	for i := 0; i < len(digits); i++ {
+		if bigDigitValue(digits[i]) >= base {
+			return nil, false
+		}
+	}
+	b := &BigInt{}
+	if _, ok := b.V.SetString(digits, base); !ok {
+		return nil, false
+	}
+	if neg {
+		b.V.Neg(&b.V)
+	}
 	return b, true
+}
+
+// bigDigitValue is the value of one digit, or a number above every base for a
+// character that is not one.
+func bigDigitValue(c byte) int {
+	switch {
+	case c >= '0' && c <= '9':
+		return int(c - '0')
+	case c >= 'a' && c <= 'f':
+		return int(c-'a') + 10
+	case c >= 'A' && c <= 'F':
+		return int(c-'A') + 10
+	}
+	return 99
+}
+
+// StringToBigInt converts a string the way the specification's conversion does:
+// the surrounding whitespace is ignored, and a string of nothing but whitespace
+// is zero rather than a failure.
+func StringToBigInt(s string) (*BigInt, bool) {
+	text := strings.Trim(s, jsWhitespace)
+	if text == "" {
+		return NewBigInt(0), true
+	}
+	return ParseBigInt(text)
 }
 
 // IsZero reports whether the value is zero.

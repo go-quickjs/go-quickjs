@@ -1117,13 +1117,11 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		return rt.arrayToLocaleString(this)
 	})
 
-	r.defMethod(p, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		fn, err := rt.getValueProp(this, rt.atoms.intern("join"))
-		if err != nil {
-			return Undefined, err
-		}
-		return rt.call(fn, this, nil)
-	})
+	// %TypedArray%.prototype.toString is not merely equivalent to the Array
+	// one, it is the same function object, which a script can check.
+	if fn := r.proto.array.getOwn(atomToString); fn != nil {
+		p.setOwnRaw(atomToString, fn.value, propWritable|propConfigurable)
+	}
 
 	// The callback-taking methods.
 	// The methods that take a callback are written against the view directly

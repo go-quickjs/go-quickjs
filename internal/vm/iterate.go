@@ -477,12 +477,11 @@ func (r *Runtime) newArgumentsObject(f *frame) *Object {
 	case f.callee != nil:
 		o.setOwnRaw(atomCallee, Obj(f.callee), propWritable|propConfigurable)
 	}
-	// An arguments object is iterable, using the same iterator as an array.
+	// An arguments object is iterable, using the same iterator as an array --
+	// not merely an equivalent one but the very function Array.prototype.values
+	// is, which a script can check.
 	o.setOwnRaw(r.atoms.internSymbol(r.wellKnown.iterator),
-		Obj(r.newNativeFunc("[Symbol.iterator]", 0,
-			func(rt *Runtime, this Value, args []Value) (Value, error) {
-				return rt.newArrayIterator(this)
-			})), propWritable|propConfigurable)
+		Obj(r.arrayValuesFn), propWritable|propConfigurable)
 	return o
 }
 

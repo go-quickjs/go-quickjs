@@ -500,3 +500,125 @@ func TestFunctionConstructorConversionOrder(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// The first branch of a conditional is an AssignmentExpression with `in`
+// permitted whatever the surroundings say, because the colon that follows it
+// leaves no room for the head of a for-in to be mistaken for one. The second
+// branch inherits, since nothing separates its end from what encloses it.
+func TestConditionalBranchAllowsIn(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var n = 0, m = 0
+		  for (true ? "" in (n++, {}) : m++; false; ) ;
+		  [n, m].join(",")`, "1,0"},
+		{`var o = {a: 1}; String(false ? 0 : "a" in o)`, "true"},
+		{`try { eval("for (true ? 1 : '' in {}; false; ) ;"); "no throw" }
+		  catch (e) { e.constructor.name }`, "SyntaxError"},
+		{`try { eval("for ('' in {}; false; ) ;"); "no throw" }
+		  catch (e) { e.constructor.name }`, "SyntaxError"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// Only what the escapes spell is decoded. Every other character passes through
+// untouched, a lone surrogate included: that is not a malformed URI, it is a
+// character decodeURI has nothing to say about.
+func TestDecodeURIPassesCharactersThrough(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`String(decodeURI("\uD800") === "\uD800")`, "true"},
+		{`String(decodeURIComponent("\uDFFF\uD800") === "\uDFFF\uD800")`, "true"},
+		{`decodeURIComponent("%E4%B8%AD a")`, "中 a"},
+		{`decodeURIComponent("%F0%9F%98%80")`, "\U0001F600"},
+		{`decodeURI("%3B%2F%3F%3A")`, "%3B%2F%3F%3A"},
+		{`decodeURIComponent("%3B%2F%3F%3A")`, ";/?:"},
+		{`decodeURIComponent("a%42c")`, "aBc"},
+		// What an escape spells must be a character: a surrogate half, an
+		// overlong form and a truncated sequence are all malformed.
+		{`try { decodeURIComponent("%ED%A0%80") } catch (e) { e.constructor.name }`, "URIError"},
+		{`try { decodeURIComponent("%C0%80") } catch (e) { e.constructor.name }`, "URIError"},
+		{`try { decodeURIComponent("%E4%B8") } catch (e) { e.constructor.name }`, "URIError"},
+		// A continuation must be an escape too; a literal one is a character of
+		// its own.
+		{`try { decodeURIComponent("%E4%B8­") } catch (e) { e.constructor.name }`, "URIError"},
+		{`try { decodeURIComponent("%") } catch (e) { e.constructor.name }`, "URIError"},
+		{`try { decodeURIComponent("%zz") } catch (e) { e.constructor.name }`, "URIError"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// A BigInt written as a string follows a narrower grammar than Go's own: no
+// digit separators, a sign only on a decimal literal, and a leading zero makes
+// nothing octal. And the conversion the operations use refuses a number, unlike
+// the one the constructor uses.
+func TestBigIntFromStrings(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`[String(BigInt("0x10")), String(BigInt("0b101")), String(BigInt("0o17")),
+		   String(BigInt("017")), String(BigInt(" 12 ")), String(BigInt("")),
+		   String(BigInt("-12")), String(BigInt("+12"))].join(",")`,
+			"16,5,15,17,12,0,-12,12"},
+		{`try { BigInt("0x1_0") } catch (e) { e.constructor.name }`, "SyntaxError"},
+		{`try { BigInt("1_0") } catch (e) { e.constructor.name }`, "SyntaxError"},
+		{`try { BigInt("-0x10") } catch (e) { e.constructor.name }`, "SyntaxError"},
+		{`try { BigInt("1n") } catch (e) { e.constructor.name }`, "SyntaxError"},
+		{`try { BigInt("0x") } catch (e) { e.constructor.name }`, "SyntaxError"},
+		// A literal in source may carry separators; the lexer removes them.
+		{`String(1_000n)`, "1000"},
+		{`String(0x1_0n)`, "16"},
+		// Comparisons convert the same way.
+		{`[1n == " 1 ", 1n == "0x1", 1n == "1_0", 10n == "1_0", 1n < " 2 ",
+		   2n > "1", 1n < "x"].join(",")`, "true,true,false,false,true,true,false"},
+		// asIntN and asUintN use ToBigInt, which refuses a number.
+		{`try { BigInt.asIntN(0, 1) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`try { BigInt.asUintN(0, 1) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`[String(BigInt.asIntN(3, 10n)), String(BigInt.asUintN(3, 10n)),
+		   String(BigInt.asIntN(0, 10n))].join(",")`, "2,2,0"},
+		{`String(BigInt.asIntN(3, "10"))`, "2"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// Some built-in functions are not merely equivalent to another but the very
+// same function object, which a script can check.
+func TestSharedBuiltinFunctions(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`(function () { return arguments[Symbol.iterator] === Array.prototype.values })()`,
+			"true"},
+		{`(function (a) { "use strict"
+		   return arguments[Symbol.iterator] === Array.prototype.values })(1)`, "true"},
+		{`String(Int8Array.prototype.toString === Array.prototype.toString)`, "true"},
+		{`String(Array.prototype[Symbol.iterator] === Array.prototype.values)`, "true"},
+		// And some are deliberately not: a typed array's locale form is its own.
+		{`String(Int8Array.prototype.toLocaleString === Array.prototype.toLocaleString)`,
+			"false"},
+		{`(function () { return [...arguments].join(",") })(1, 2)`, "1,2"},
+		{`String(new Int8Array([1, 2]).toString())`, "1,2"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// Own keys come out in one order whatever order they were created in: the
+// indices first, ascending, then the string keys as they were added -- a
+// function's synthesized length and name among them, before anything the
+// function was given afterwards.
+func TestFunctionOwnKeyOrder(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`class C { static [1]() {} static [2]() {} static a() {} static c() {} }
+		  Object.getOwnPropertyNames(C).join(",")`, "1,2,length,name,prototype,a,c"},
+		{`function f() {}; f.b = 1; f[0] = 2
+		  Object.getOwnPropertyNames(f).join(",")`, "0,length,name,prototype,b"},
+		{`var o = {[2]: 1, b: 2, [0]: 3, a: 4}
+		  Object.getOwnPropertyNames(o).join(",")`, "0,2,b,a"},
+		{`Object.getOwnPropertyNames(function () {}).join(",")`, "length,name,prototype"},
+		{`Object.getOwnPropertyNames(() => {}).join(",")`, "length,name"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

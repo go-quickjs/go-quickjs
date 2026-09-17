@@ -199,9 +199,15 @@ func (p *parser) parseConditionalFrom(test ast.Expr) ast.Expr {
 		return test
 	}
 	p.next()
-	// The branches of a conditional are AssignmentExpressions, and `in` is
-	// always permitted inside them.
+	// The first branch is an AssignmentExpression with `in` permitted whatever
+	// the surroundings say -- the grammar spells it [+In] -- because the colon
+	// that follows it leaves no room for the head of a for-in to be mistaken
+	// for one. The second branch inherits, since nothing separates its end
+	// from what encloses the conditional.
+	saved := p.noIn
+	p.noIn = false
 	cons := p.parseAssign()
+	p.noIn = saved
 	p.expectPunct(":")
 	alt := p.parseAssign()
 	return p.nodes.conditional(test, cons, alt)

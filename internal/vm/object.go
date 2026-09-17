@@ -391,18 +391,6 @@ func (o *Object) ownKeys(includeSymbols bool, atoms *atomTable) []Atom {
 		}
 	}
 
-	// A function's length and name are synthesized on demand, but they are own
-	// properties and must be listed -- first, in that order, as they would have
-	// been had the function been built with them.
-	if o.class == ClassFunction && o.fn() != nil && !o.fn().propsMaterialized {
-		if o.getOwn(atomLength) == nil {
-			keys = append(keys, atomLength)
-		}
-		if o.getOwn(atomName) == nil {
-			keys = append(keys, atomName)
-		}
-	}
-
 	// Dense elements are already in ascending index order.
 	for i, v := range o.elems {
 		if v.ref == nil && v.IsUninitialized() {
@@ -443,6 +431,19 @@ func (o *Object) ownKeys(includeSymbols bool, atoms *atomTable) []Atom {
 	if o.class == ClassStringWrapper && o.getOwn(atomLength) == nil {
 		if _, ok := o.data.(*String); ok {
 			keys = append(keys, atomLength)
+		}
+	}
+
+	// A function's length and name are synthesized on demand, but they are own
+	// properties and must be listed -- before its other string keys, in that
+	// order, as they would have been had the function been built with them, and
+	// after the indices, which always come first however late they were added.
+	if o.class == ClassFunction && o.fn() != nil && !o.fn().propsMaterialized {
+		if o.getOwn(atomLength) == nil {
+			keys = append(keys, atomLength)
+		}
+		if o.getOwn(atomName) == nil {
+			keys = append(keys, atomName)
 		}
 	}
 

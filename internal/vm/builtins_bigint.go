@@ -3,7 +3,6 @@ package vm
 import (
 	"math"
 	"math/big"
-	"strings"
 )
 
 // BigInt.
@@ -104,13 +103,9 @@ func (r *Runtime) toBigIntValue(v Value) (Value, error) {
 		big.NewFloat(n).Int(&b.V)
 		return Big(b), nil
 	case prim.IsString():
-		text := strings.TrimSpace(prim.String().Go())
-		if text == "" {
-			// A string of nothing but whitespace is zero, the way it is for
-			// Number: it is an empty numeric literal, not a malformed one.
-			return Big(NewBigInt(0)), nil
-		}
-		b, ok := ParseBigInt(text)
+		// A string of nothing but whitespace is zero, the way it is for
+		// Number: it is an empty numeric literal, not a malformed one.
+		b, ok := StringToBigInt(prim.String().Go())
 		if !ok {
 			return Undefined, r.throwSyntaxError("cannot convert %q to a BigInt",
 				prim.String().Go())
@@ -158,7 +153,9 @@ func (r *Runtime) bigIntAsN(args []Value, signed bool) (Value, error) {
 	if err != nil {
 		return Undefined, err
 	}
-	bv, err := r.toBigIntValue(arg(args, 1))
+	// This is ToBigInt rather than the BigInt constructor's conversion: a
+	// number is refused here rather than truncated, however integral it is.
+	bv, err := r.toBigIntOperand(arg(args, 1))
 	if err != nil {
 		return Undefined, err
 	}
@@ -167,7 +164,7 @@ func (r *Runtime) bigIntAsN(args []Value, signed bool) (Value, error) {
 	}
 
 	mod := new(big.Int).Lsh(big.NewInt(1), uint(bits))
-	out := new(big.Int).Mod(&bv.BigInt().V, mod)
+	out := new(big.Int).Mod(&bv.V, mod)
 	if out.Sign() < 0 {
 		out.Add(out, mod)
 	}

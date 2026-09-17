@@ -2,7 +2,6 @@ package vm
 
 import (
 	"math"
-	"strings"
 
 	"github.com/go-quickjs/go-quickjs/internal/jsnum"
 )
@@ -331,10 +330,10 @@ func (r *Runtime) looseEquals(a, b Value) (bool, error) {
 		return jsnum.ToNumber(a.String().Go()) == b.Number(), nil
 
 	case ak == KindBigInt && bk == KindString:
-		o, ok := ParseBigInt(b.String().Go())
+		o, ok := StringToBigInt(b.String().Go())
 		return ok && a.BigInt().Cmp(o) == 0, nil
 	case ak == KindString && bk == KindBigInt:
-		o, ok := ParseBigInt(a.String().Go())
+		o, ok := StringToBigInt(a.String().Go())
 		return ok && o.Cmp(b.BigInt()) == 0, nil
 
 	case ak == KindBool:
@@ -456,16 +455,11 @@ func (r *Runtime) compareBigInt(a, b Value) (cmpResult, error) {
 		if b.IsString() {
 			s, other, reverse = b, a, true
 		}
-		text := strings.TrimSpace(s.String().Go())
-		n := NewBigInt(0)
-		if text != "" {
-			// Nothing but whitespace is an empty integer literal, which is
-			// zero; anything that is not an integer literal at all compares
-			// with nothing.
-			var ok bool
-			if n, ok = ParseBigInt(text); !ok {
-				return cmpUndefined, nil
-			}
+		// Nothing but whitespace is an empty integer literal, which is zero;
+		// anything that is not an integer literal at all compares with nothing.
+		n, ok := StringToBigInt(s.String().Go())
+		if !ok {
+			return cmpUndefined, nil
 		}
 		c := cmpFromInt(n.Cmp(other.BigInt()))
 		if !reverse {

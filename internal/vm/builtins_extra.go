@@ -1123,33 +1123,75 @@ func writePercent(sb *strings.Builder, c byte) {
 }
 
 // decodeURIWith reverses the encoding, leaving the characters in keep encoded.
+//
+// Only what the escapes spell is decoded. Every other character is copied
+// through untouched, whatever it is -- a lone surrogate in the input is not a
+// malformed URI, it is a character decodeURI has nothing to say about, and only
+// the bytes an escape sequence produces have to be well-formed UTF-8.
 func decodeURIWith(s, keep string) (string, bool) {
 	var buf []byte
+	readEscape := func(i int) (byte, bool) {
+		if i+2 >= len(s) || s[i] != '%' {
+			return 0, false
+		}
+		v, err := strconv.ParseUint(s[i+1:i+3], 16, 8)
+		if err != nil {
+			return 0, false
+		}
+		return byte(v), true
+	}
 	for i := 0; i < len(s); {
 		if s[i] != '%' {
 			buf = append(buf, s[i])
 			i++
 			continue
 		}
-		if i+2 >= len(s) {
+		b, ok := readEscape(i)
+		if !ok {
 			return "", false
-		}
-		v, err := strconv.ParseUint(s[i+1:i+3], 16, 8)
-		if err != nil {
-			return "", false
-		}
-		b := byte(v)
-		// A reserved character stays in its encoded form for decodeURI, which
-		// is what keeps a decoded URI still parseable.
-		if b < utf8.RuneSelf && strings.IndexByte(keep, b) >= 0 {
-			buf = append(buf, s[i:i+3]...)
-		} else {
-			buf = append(buf, b)
 		}
 		i += 3
-	}
-	if !utf8.Valid(buf) {
-		return "", false
+		if b < utf8.RuneSelf {
+			// A reserved character stays in its encoded form for decodeURI,
+			// which is what keeps a decoded URI still parseable.
+			if strings.IndexByte(keep, b) >= 0 {
+				buf = append(buf, '%', s[i-2], s[i-1])
+				continue
+			}
+			buf = append(buf, b)
+			continue
+		}
+		// A byte outside ASCII opens a sequence, whose length its top bits
+		// give. The continuation bytes must be escapes too: a literal one
+		// would be a character of its own rather than part of this.
+		n := 0
+		switch {
+		case b&0xE0 == 0xC0:
+			n = 2
+		case b&0xF0 == 0xE0:
+			n = 3
+		case b&0xF8 == 0xF0:
+			n = 4
+		default:
+			return "", false
+		}
+		seq := []byte{b}
+		for j := 1; j < n; j++ {
+			c, ok := readEscape(i)
+			if !ok || c&0xC0 != 0x80 {
+				return "", false
+			}
+			seq = append(seq, c)
+			i += 3
+		}
+		// The sequence has to be the shortest form of a real code point, which
+		// rules out an overlong encoding and a surrogate half: what the escapes
+		// spell is a character, not a code unit.
+		rn, size := utf8.DecodeRune(seq)
+		if rn == utf8.RuneError && size <= 1 {
+			return "", false
+		}
+		buf = utf8.AppendRune(buf, rn)
 	}
 	return string(buf), true
 }
