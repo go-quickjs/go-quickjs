@@ -91,7 +91,9 @@ func (p *parser) arrayToPattern(lit *ast.ArrayLit, binding bool) ast.Expr {
 			continue
 		}
 		if spread, ok := el.(*ast.Spread); ok {
-			if i != len(lit.Elements)-1 {
+			// The rest element must be last, and a comma after it is not
+			// merely tolerated punctuation: there is nothing it could separate.
+			if i != len(lit.Elements)-1 || lit.TrailingComma {
 				p.errorf("a rest element must be the last element of a pattern")
 			}
 			target := p.toPattern(spread.Arg, binding)
@@ -114,7 +116,9 @@ func (p *parser) objectToPattern(lit *ast.ObjectLit, binding bool) ast.Expr {
 
 	for i, prop := range lit.Props {
 		if prop.Kind == ast.PropSpread {
-			if i != len(lit.Props)-1 {
+			// The rest property must be last, and a comma after it is not
+			// merely tolerated punctuation: there is nothing it could separate.
+			if i != len(lit.Props)-1 || lit.TrailingComma {
 				p.errorf("a rest element must be the last property of a pattern")
 			}
 			// An object rest target must be a simple reference: `{...{a}}` is

@@ -731,6 +731,7 @@ func (p *parser) parseArrayLiteral() ast.Expr {
 		}
 		if !p.isPunct("]") {
 			p.expectPunct(",")
+			lit.TrailingComma = p.isPunct("]")
 		}
 	}
 	p.expectPunct("]")
@@ -763,6 +764,7 @@ func (p *parser) parseObjectLiteral() ast.Expr {
 		lit.Props = append(lit.Props, prop)
 		if !p.isPunct("}") {
 			p.expectPunct(",")
+			lit.TrailingComma = p.isPunct("}")
 		}
 	}
 	p.expectPunct("}")

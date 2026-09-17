@@ -147,3 +147,81 @@ func TestDynamicImportSyntax(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// The early errors a function's shape imposes: what a directive may say given
+// the parameter list, where a rest element may sit, and where a declaration may
+// be the body of another statement.
+func TestFunctionShapeEarlyErrors(t *testing.T) {
+	bad := []string{
+		// A "use strict" directive is what a non-simple parameter list
+		// forbids, whatever mode the surrounding code is in -- so a class
+		// method, which is strict already, may not carry one either.
+		`throw 0; function f(...a) { "use strict"; }`,
+		`throw 0; function f([a]) { "use strict"; }`,
+		`throw 0; function f({a}) { "use strict"; }`,
+		`throw 0; function f(a = 1) { "use strict"; }`,
+		`throw 0; 0, function (a, ...r) { "use strict"; };`,
+		`throw 0; var f = (...a) => { "use strict"; };`,
+		`throw 0; ({ m(...a) { "use strict"; } });`,
+		`throw 0; class C { m(...a) { "use strict"; } }`,
+		`throw 0; class C { static m(...a) { "use strict"; } }`,
+		`throw 0; function* g(...a) { "use strict"; }`,
+		`throw 0; async function f(...a) { "use strict"; }`,
+		`"use strict"; throw 0; function f(a, ...r) { "use strict"; }`,
+
+		// A comma after a rest element is not tolerated punctuation: there is
+		// nothing it could separate.
+		`throw 0; var {...a,} = {};`,
+		`throw 0; var [...a,] = [];`,
+		`throw 0; ({...a,} = {});`,
+		`throw 0; [...a,] = [];`,
+		`throw 0; var [...a, b] = [];`,
+
+		// A function declaration is the body of an if and nothing else, and a
+		// labelled one is not even that.
+		`throw 0; while (false) function f() {}`,
+		`throw 0; do function f() {} while (false)`,
+		`throw 0; for (;false;) function f() {}`,
+		`throw 0; while (false) l: function f() {}`,
+		`throw 0; do label1: label2: function f() {} while (false)`,
+		`throw 0; if (false) l: function f() {}`,
+		`throw 0; for (;false;) l: function f() {}`,
+		`"use strict"; throw 0; if (false) function f() {}`,
+	}
+	for _, src := range bad {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil {
+			t.Errorf("%s: accepted, want SyntaxError", src)
+		} else if !strings.Contains(err.Error(), "SyntaxError") {
+			t.Errorf("%s: got %v, want SyntaxError", src, err)
+		}
+		rt.Close()
+	}
+
+	ok := []struct{ src, want string }{
+		{`function f(a) { "use strict"; return 1 } String(f(0))`, "1"},
+		{`"use strict"; function f(...a) { return a.length } String(f(1))`, "1"},
+		{`class C { m(a) { "use strict"; return 2 } } String(new C().m())`, "2"},
+		{`var {a, ...r} = {a: 1, b: 2}; a + "," + JSON.stringify(r)`, `1,{"b":2}`},
+		{`var [...a] = [1, 2]; a.join(",")`, "1,2"},
+		// A trailing comma is fine where there is no rest element.
+		{`var [a,] = [1]; String(a)`, "1"},
+		{`var {a,} = {a: 1}; String(a)`, "1"},
+		{`String([1, 2,].length)`, "2"},
+		// Annex B allows a bare function declaration as an if branch.
+		{`if (false) function f() {} "ok"`, "ok"},
+		{`l: function f() {} "ok"`, "ok"},
+		{`{ l: function f() {} } "ok"`, "ok"},
+		{`l: { break l } "ok"`, "ok"},
+	}
+	for _, tc := range ok {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

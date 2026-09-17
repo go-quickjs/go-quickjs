@@ -125,7 +125,12 @@ func (p *parser) parseFunctionBody(fn *ast.FuncLit) []ast.Stmt {
 	// body and retroactively constrains the parameter list.
 	wasStrict := p.strict
 	body := p.parseDirectivePrologue(func() bool { return p.isPunct("}") })
-	if !wasStrict && p.strict {
+	// The directive is what a non-simple parameter list forbids, whatever the
+	// surrounding code's mode: a class method is strict already and still may
+	// not carry one.
+	if p.sawUseStrict {
+		p.checkStrictParams(fn.Params)
+	} else if !wasStrict && p.strict {
 		p.checkStrictParams(fn.Params)
 	}
 	body = append(body, p.parseStatements(func() bool { return p.isPunct("}") })...)

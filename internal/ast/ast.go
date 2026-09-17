@@ -125,7 +125,10 @@ type TaggedTemplate struct {
 // ArrayLit is an array literal. A nil element is an elision (a hole).
 type ArrayLit struct {
 	Elements []Expr
-	Start    int
+	// TrailingComma records a comma after the last element, which an array
+	// literal allows and a binding pattern with a rest element does not.
+	TrailingComma bool
+	Start         int
 }
 
 // PropKind distinguishes the forms an object literal or class member can take.
@@ -158,7 +161,10 @@ type Property struct {
 // ObjectLit is an object literal.
 type ObjectLit struct {
 	Props []Property
-	Start int
+	// TrailingComma records a comma after the last property, which an object
+	// literal allows and a binding pattern with a rest element does not.
+	TrailingComma bool
+	Start         int
 }
 
 // FuncKind describes the flavour of a function.

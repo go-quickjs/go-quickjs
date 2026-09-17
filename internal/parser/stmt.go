@@ -192,31 +192,41 @@ func (p *parser) parseIf() ast.Stmt {
 	p.expectPunct(")")
 
 	stmt := &ast.IfStmt{Test: test, Start: start}
-	stmt.Cons = p.parseSubStatement()
+	stmt.Cons = p.parseSubStatement(true)
 	if p.eatKeyword("else") {
-		stmt.Alt = p.parseSubStatement()
+		stmt.Alt = p.parseSubStatement(true)
 	}
 	return stmt
 }
 
 // parseSubStatement parses the body of an if or a loop, where a declaration is
 // not a valid body because it would have no scope to bind into.
-func (p *parser) parseSubStatement() ast.Stmt {
+//
+// allowFunction marks the one position where a bare function declaration is
+// tolerated: the branches of an if, which Annex B permits in sloppy mode for
+// web compatibility. A loop body does not get the same allowance.
+func (p *parser) parseSubStatement(allowFunction bool) ast.Stmt {
 	switch {
 	case p.isKeyword("class"), p.isKeyword("const"):
 		p.errorf("a declaration cannot be the body of a statement")
 	case p.isContextual("let") && p.letStartsDeclaration():
 		p.errorf("a declaration cannot be the body of a statement")
 	case p.isKeyword("function"):
-		// Sloppy mode permits a function declaration as an if branch, as a
-		// legacy web-compatibility rule; strict mode does not.
-		if p.strict {
+		if p.strict || !allowFunction {
 			p.errorf("a function declaration cannot be the body of a statement")
 		}
 		// Annex B defines it as a block containing the declaration, which is
 		// what gives it the hoisting a bare declaration here would not have.
 		start := p.tok.Pos
 		return &ast.BlockStmt{Body: []ast.Stmt{p.parseStatement()}, Start: start}
+	case p.isKeyword("async") || p.tok.Kind == lexer.Ident:
+		// A label may not be put on a function declaration here either, and
+		// that rule holds in sloppy mode too: the Annex B allowance is for a
+		// bare declaration, not a labelled one.
+		saved := p.noLabelledFunction
+		p.noLabelledFunction = true
+		defer func() { p.noLabelledFunction = saved }()
+		return p.parseStatement()
 	}
 	return p.parseStatement()
 }
@@ -231,7 +241,7 @@ func (p *parser) parseWhile() ast.Stmt {
 
 	wasLoop := p.inLoop
 	p.inLoop = true
-	body := p.parseSubStatement()
+	body := p.parseSubStatement(false)
 	p.inLoop = wasLoop
 
 	return &ast.WhileStmt{Test: test, Body: body, Start: start}
@@ -244,7 +254,7 @@ func (p *parser) parseDoWhile() ast.Stmt {
 
 	wasLoop := p.inLoop
 	p.inLoop = true
-	body := p.parseSubStatement()
+	body := p.parseSubStatement(false)
 	p.inLoop = wasLoop
 
 	p.expectKeyword("while")
@@ -332,7 +342,7 @@ func (p *parser) parseFor() ast.Stmt {
 
 		wasLoop := p.inLoop
 		p.inLoop = true
-		body := p.parseSubStatement()
+		body := p.parseSubStatement(false)
 		p.inLoop = wasLoop
 
 		if isOf {
@@ -364,7 +374,7 @@ func (p *parser) parseFor() ast.Stmt {
 
 	wasLoop := p.inLoop
 	p.inLoop = true
-	stmt.Body = p.parseSubStatement()
+	stmt.Body = p.parseSubStatement(false)
 	p.inLoop = wasLoop
 
 	return stmt
@@ -532,6 +542,14 @@ func (p *parser) parseLabeled(name string, start int) ast.Stmt {
 	p.labels[name] = isLoop
 	defer delete(p.labels, name)
 
+	// A labelled function declaration is a statement list item, never the body
+	// of another statement, and unlike a bare one it has no Annex B allowance
+	// even in sloppy mode.
+	if p.noLabelledFunction && p.isKeyword("function") {
+		p.errorf("a labelled function declaration cannot be the body of a statement")
+	}
+	// A nested label inherits the restriction: `while (x) a: b: function f(){}`
+	// is no better than one label.
 	body := p.parseStatement()
 	return &ast.LabeledStmt{Label: name, Body: body, Start: start}
 }
@@ -546,7 +564,7 @@ func (p *parser) parseWith() ast.Stmt {
 	p.expectPunct("(")
 	obj := p.parseExpr()
 	p.expectPunct(")")
-	body := p.parseSubStatement()
+	body := p.parseSubStatement(false)
 	// `with` is represented as a labelled block carrying the object, since the
 	// compiler rejects it anyway outside sloppy mode.
 	return &ast.WithStmt{Object: obj, Body: body, Start: start}

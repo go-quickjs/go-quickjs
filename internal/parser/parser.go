@@ -63,6 +63,13 @@ type parser struct {
 	allowSuperProp bool
 	allowSuperCall bool
 	allowNewTarget bool
+	// sawUseStrict records whether the directive prologue just parsed carried
+	// a "use strict" of its own.
+	sawUseStrict bool
+	// noLabelledFunction marks the positions where a label may not be put on a
+	// function declaration: the body of an if or a loop, where a declaration
+	// has no scope to bind into.
+	noLabelledFunction bool
 	// noArguments marks a context with no arguments object -- a class field
 	// initializer or a static block -- where naming one is an early error.
 	noArguments bool
@@ -391,6 +398,7 @@ func (p *parser) checkLabelName(name string, tok lexer.Token) {
 // literals are treated.
 func (p *parser) parseDirectivePrologue(atEnd func() bool) []ast.Stmt {
 	var out []ast.Stmt
+	p.sawUseStrict = false
 	for !atEnd() {
 		if p.tok.Kind != lexer.String {
 			break
@@ -412,6 +420,10 @@ func (p *parser) parseDirectivePrologue(atEnd func() bool) []ast.Stmt {
 		// Compare the raw text so that "use strict" is not a directive.
 		if raw == `"use strict"` || raw == `'use strict'` {
 			p.strict = true
+			// Recorded separately, because what a non-simple parameter list
+			// forbids is the directive itself, not the strictness: a method of
+			// a class is strict already and still may not carry one.
+			p.sawUseStrict = true
 		}
 	}
 	return out
