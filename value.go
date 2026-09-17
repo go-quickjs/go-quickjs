@@ -311,7 +311,16 @@ func (e *Error) Error() string {
 func (e *Error) Value() Value { return e.value }
 
 // Stack renders the JavaScript stack trace at the point of the throw.
+//
+// A thrown Error carries its own trace, written when it was built, so that is
+// what is reported for one; anything else thrown gets the frames recorded at
+// the throw.
 func (e *Error) Stack() string {
+	if len(e.stack) == 0 {
+		if v, err := e.value.Get("stack"); err == nil && !v.IsUndefined() {
+			return v.String()
+		}
+	}
 	var sb strings.Builder
 	sb.WriteString(e.Error())
 	for _, f := range e.stack {

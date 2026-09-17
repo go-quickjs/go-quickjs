@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
+	"strings"
 	"time"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
@@ -438,6 +439,13 @@ func (t *Thrown) Error() string {
 
 // throw builds a Thrown for an already-constructed value.
 func (r *Runtime) throw(v Value) error {
+	// An error object already carries the trace, written into its stack
+	// property where it was built, so snapshotting the frames again would be
+	// the same walk twice -- and most throws are caught by the script, which
+	// never looks at either.
+	if v.IsObject() && v.Object().class == ClassError {
+		return &Thrown{Value: v}
+	}
 	return &Thrown{Value: v, Stack: r.captureStack()}
 }
 
@@ -469,6 +477,9 @@ func (r *Runtime) throwSyntaxError(format string, args ...any) error {
 // newError builds an error object of the given kind.
 func (r *Runtime) newError(kind errorKind, msg string) *Object {
 	o := newObject(r.proto.nativeErrors[kind], ClassError)
+	// The message and the stack, and room for a cause: an error is built all
+	// at once and there is no sense growing its table twice on the way.
+	o.reserveProps(3)
 	o.setOwnRaw(atomMessage, Str(NewString(msg)), propWritable|propConfigurable)
 	// The stack is materialized eagerly, because the frames are unwound by the
 	// time anything reads it.
@@ -482,45 +493,62 @@ func (r *Runtime) captureStack() []StackEntry {
 		return nil
 	}
 	out := make([]StackEntry, 0, r.frameDepth)
+	r.walkStack(func(e StackEntry) { out = append(out, e) })
+	return out
+}
+
+// walkStack reports each frame of the call stack, innermost first.
+func (r *Runtime) walkStack(visit func(StackEntry)) {
 	for i := r.frameDepth - 1; i >= 0; i-- {
 		f := r.frameAt(i)
 		if f.native != "" {
-			out = append(out, StackEntry{Function: f.native, Source: "native"})
+			visit(StackEntry{Function: f.native, Source: "native"})
 			continue
 		}
 		if f.cl == nil {
 			continue
 		}
-		out = append(out, StackEntry{
+		visit(StackEntry{
 			Function: f.cl.fn.Name,
 			Source:   f.cl.fn.Source,
 			Line:     f.cl.fn.LineAt(f.pc),
 		})
 	}
-	return out
 }
 
 // formatStack renders a stack trace in the conventional form.
+//
+// It is built in one buffer rather than by joining strings: every thrown error
+// carries a trace, and a program that uses exceptions for control flow throws a
+// great many.
 func (r *Runtime) formatStack(msg string, kind errorKind) string {
-	s := errorKindNames[kind]
+	var b strings.Builder
+	// Enough for the message and a frame or two, which is what most traces
+	// are: the buffer would otherwise grow three or four times on the way.
+	b.Grow(len(msg) + 64)
+	b.WriteString(errorKindNames[kind])
 	if msg != "" {
-		s += ": " + msg
+		b.WriteString(": ")
+		b.WriteString(msg)
 	}
-	for _, e := range r.captureStack() {
-		name := e.Function
-		if name == "" {
-			name = "<anonymous>"
+	r.walkStack(func(e StackEntry) {
+		b.WriteString("\n    at ")
+		if e.Function == "" {
+			b.WriteString("<anonymous>")
+		} else {
+			b.WriteString(e.Function)
 		}
-		s += "\n    at " + name
 		if e.Source != "" {
-			s += " (" + e.Source
+			b.WriteString(" (")
+			b.WriteString(e.Source)
 			if e.Line > 0 {
-				s += ":" + itoa32(e.Line)
+				b.WriteByte(':')
+				b.WriteString(itoa32(e.Line))
 			}
-			s += ")"
+			b.WriteByte(')')
 		}
-	}
-	return s
+	})
+	return b.String()
 }
 
 func itoa32(v int32) string {
