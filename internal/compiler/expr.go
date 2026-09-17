@@ -769,6 +769,19 @@ func (c *compiler) compileMemberRead(n *ast.Member) {
 }
 
 func (c *compiler) compileCall(n *ast.Call) {
+	// A parenthesized optional chain keeps the reference it produced, so the
+	// object it read from is what the call binds `this` to.
+	if chain, ok := n.Callee.(*ast.OptionalChain); ok {
+		c.compileChain(chain, true)
+		if hasSpread(n.Args) {
+			c.compileSpreadArguments(n.Args)
+			c.emitAt(n.Start, bytecode.OpCallSpread, 0, 0)
+			return
+		}
+		argc := c.compileArguments(n.Args)
+		c.emitAt(n.Start, bytecode.OpCallMethod, uint32(argc), 0)
+		return
+	}
 	// super(...) invokes the parent constructor with the current `this`.
 	if _, isSuper := n.Callee.(*ast.Super); isSuper {
 		if hasSpread(n.Args) {
@@ -932,6 +945,18 @@ func (c *compiler) compileSpreadCall(n *ast.Call) {
 	c.emitAt(n.Start, bytecode.OpCallSpread, 0, 0)
 }
 
+// emitChainCallArgs finishes a call inside an optional chain, whose receiver
+// and function are already on the stack.
+func (c *compiler) emitChainCallArgs(n *ast.Call) {
+	if hasSpread(n.Args) {
+		c.compileSpreadArguments(n.Args)
+		c.emitAt(n.Start, bytecode.OpCallSpread, 0, 0)
+		return
+	}
+	argc := c.compileArguments(n.Args)
+	c.emit(bytecode.OpCallMethod, uint32(argc), 0)
+}
+
 // chainJump is a pending short-circuit from an optional link.
 //
 // live records how many stack slots the link had built up when it tested, so
@@ -945,8 +970,23 @@ type chainJump struct {
 // compileOptionalChain compiles a chain, wiring every `?.` link to jump past
 // the rest of the chain when its base is nullish.
 func (c *compiler) compileOptionalChain(n *ast.OptionalChain) {
+	c.compileChain(n, false)
+}
+
+// compileChain compiles a chain, optionally leaving the receiver beneath its
+// value.
+//
+// The receiver is what `(a?.b)()` calls the method on: parentheses do not undo
+// a reference, so the base the chain read from is still what `this` binds to.
+// A chain that short-circuited has no receiver and no method, and calling the
+// undefined it produced is the error it should be.
+func (c *compiler) compileChain(n *ast.OptionalChain, wantThis bool) {
 	var jumps []chainJump
-	c.compileChainLink(n.Base, &jumps)
+	if wantThis {
+		c.compileChainLinkThis(n.Base, &jumps)
+	} else {
+		c.compileChainLink(n.Base, &jumps)
+	}
 	if len(jumps) == 0 {
 		return
 	}
@@ -961,6 +1001,9 @@ func (c *compiler) compileOptionalChain(n *ast.OptionalChain) {
 		for range j.live {
 			c.emit(bytecode.OpDrop, 0, 0)
 		}
+		if wantThis {
+			c.emit(bytecode.OpPushUndef, 0, 0)
+		}
 		c.emit(bytecode.OpPushUndef, 0, 0)
 		// Every pad but the last has to jump over the ones that follow it.
 		if i < len(jumps)-1 {
@@ -970,6 +1013,44 @@ func (c *compiler) compileOptionalChain(n *ast.OptionalChain) {
 	c.patchJump(done)
 	for _, pc := range exits {
 		c.patchJump(pc)
+	}
+}
+
+// compileChainLinkThis compiles a chain's last link so that the object it read
+// from stays beneath the value.
+func (c *compiler) compileChainLinkThis(e ast.Expr, jumps *[]chainJump) {
+	m, ok := e.(*ast.Member)
+	if !ok {
+		// Nothing else carries a receiver, so undefined stands in for one.
+		c.emit(bytecode.OpPushUndef, 0, 0)
+		c.compileChainLink(e, jumps)
+		for i := range *jumps {
+			// The placeholder sits beneath everything the links built.
+			(*jumps)[i].live++
+		}
+		return
+	}
+	if _, isSuper := m.Object.(*ast.Super); isSuper {
+		c.emit(bytecode.OpPushThis, 0, 0)
+		c.compileSuperMemberGet(m)
+		return
+	}
+	c.compileChainLink(m.Object, jumps)
+	if m.Optional {
+		*jumps = append(*jumps, chainJump{pc: c.emitJump(bytecode.OpJumpIfNullish), live: 1})
+	}
+	switch {
+	case m.Computed:
+		c.compileExpr(m.Property)
+		c.emit(bytecode.OpGetIndexThis, 0, 0)
+	default:
+		if pn, private := m.Property.(*ast.PrivateName); private {
+			name, ref := c.privateName(pn, m.Start)
+			c.emit(bytecode.OpDup, 0, 0)
+			c.emitAt(m.Start, bytecode.OpGetPrivate, name, ref)
+			break
+		}
+		c.emit(bytecode.OpGetPropThis, c.nameIdx(propKeyName(m.Property)), 0)
 	}
 }
 
@@ -1007,6 +1088,22 @@ func (c *compiler) compileChainLink(e ast.Expr, jumps *[]chainJump) {
 		}
 
 	case *ast.Call:
+		if _, isSuper := n.Callee.(*ast.Super); isSuper {
+			// `super()?.x`: the call is the base the chain reads from, and a
+			// super call is never itself optional.
+			c.compileCall(n)
+			return
+		}
+		if chain, ok := n.Callee.(*ast.OptionalChain); ok {
+			// `(a?.b)?.()`: the parenthesized chain is complete in itself, and
+			// what it read from is the receiver of the call that follows.
+			c.compileChain(chain, true)
+			if n.Optional {
+				*jumps = append(*jumps, chainJump{pc: c.emitJump(bytecode.OpJumpIfNullish), live: 2})
+			}
+			c.emitChainCallArgs(n)
+			return
+		}
 		if m, ok := n.Callee.(*ast.Member); ok {
 			if _, isSuper := m.Object.(*ast.Super); isSuper {
 				// The method comes from the home object's prototype and the
@@ -1018,8 +1115,7 @@ func (c *compiler) compileChainLink(e ast.Expr, jumps *[]chainJump) {
 						pc: c.emitJump(bytecode.OpJumpIfNullish), live: 2,
 					})
 				}
-				argc := c.compileArguments(n.Args)
-				c.emit(bytecode.OpCallMethod, uint32(argc), 0)
+				c.emitChainCallArgs(n)
 				return
 			}
 			c.compileChainLink(m.Object, jumps)
@@ -1046,13 +1142,21 @@ func (c *compiler) compileChainLink(e ast.Expr, jumps *[]chainJump) {
 				// circuit has two slots to clear.
 				*jumps = append(*jumps, chainJump{pc: c.emitJump(bytecode.OpJumpIfNullish), live: 2})
 			}
-			argc := c.compileArguments(n.Args)
-			c.emit(bytecode.OpCallMethod, uint32(argc), 0)
+			c.emitChainCallArgs(n)
 			return
 		}
 		c.compileChainLink(n.Callee, jumps)
 		if n.Optional {
 			*jumps = append(*jumps, chainJump{pc: c.emitJump(bytecode.OpJumpIfNullish), live: 1})
+		}
+		if hasSpread(n.Args) {
+			// A spread call takes a receiver beneath the function, which a
+			// plain call has not got: undefined stands in for one.
+			c.emit(bytecode.OpPushUndef, 0, 0)
+			c.emit(bytecode.OpSwap, 0, 0)
+			c.compileSpreadArguments(n.Args)
+			c.emitAt(n.Start, bytecode.OpCallSpread, 0, 0)
+			return
 		}
 		argc := c.compileArguments(n.Args)
 		c.emit(bytecode.OpCall, uint32(argc), 0)

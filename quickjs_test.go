@@ -3812,3 +3812,43 @@ func TestJumpOutOfFinally(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
 	}
 }
+
+// An optional chain in parentheses keeps the reference it produced, so the
+// object it read from is what a call after it binds `this` to. A chain also
+// carries spread arguments and a super call like any other expression.
+func TestOptionalChainCalls(t *testing.T) {
+	const setup = `var a = {b: function () { return this._b }, _b: {c: 42}};`
+	cases := []struct{ name, src, want string }{
+		{"method in a chain", setup + `String(a?.b().c)`, "42"},
+		{"parenthesized chain", setup + `String((a?.b)().c)`, "42"},
+		{"optional call", setup + `String(a.b?.().c)`, "42"},
+		{"parenthesized member", setup + `String((a.b)?.().c)`, "42"},
+		{"both optional", setup + `String(a?.b?.().c)`, "42"},
+		{"parenthesized and optional", setup + `String((a?.b)?.().c)`, "42"},
+		// A chain that short-circuits has no receiver and no method, and
+		// calling what it produced is the error it should be.
+		{"short circuit then call", `var a = null
+		  try { (a?.b)(); "no error" } catch (e) { e.constructor.name }`, "TypeError"},
+		{"short circuit optional call", `var a = null; String((a?.b)?.())`, "undefined"},
+		// Spread arguments work in every position a chain allows.
+		{"spread in an optional call", `var o = {m: function () { return arguments.length }}
+		  String(o.m?.(...[1, 2]))`, "2"},
+		{"spread in a chained call", `var o = {m: function () { return arguments.length }}
+		  String(o?.m(...[1, 2, 3]))`, "3"},
+		{"spread with a plain callee", `function f() { return arguments.length }
+		  var g = f; String(g?.(...[1, 2]))`, "2"},
+		// A super call may be the base of a chain, and what it produces is the
+		// object it constructed.
+		{"super call in a chain", `var out
+		  class B { constructor() { this.a = 7 } }
+		  class C extends B { constructor() { out = String(super()?.a) } }
+		  new C(); out`, "7"},
+		{"super call without the property", `var out
+		  class B {}
+		  class C extends B { constructor() { out = String(super()?.a) } }
+		  new C(); out`, "undefined"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}
