@@ -574,12 +574,12 @@ func (p *parser) parsePrimary() ast.Expr {
 		if p.noArguments && name == "arguments" {
 			p.errorf("\"arguments\" is not available here")
 		}
-		if name == "await" && (p.module || p.allowAwait) {
+		if name == "await" && (p.module || p.allowAwait || p.noAwaitIdent) {
 			// Reached only where `await` was not consumed as an operator, which
 			// means it was written as a name -- with escapes, most likely,
 			// since the operator form is consumed before this point. There is
-			// no position inside an async function, or in a module, where that
-			// is an identifier.
+			// no position inside an async function, a module, or a class
+			// static block where that is an identifier.
 			p.errorf("\"await\" is reserved here")
 		}
 		if name == "yield" && p.allowYield {

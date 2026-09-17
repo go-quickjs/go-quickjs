@@ -414,9 +414,10 @@ func (p *parser) checkBindingName(name string, tok lexer.Token) {
 	if p.allowAwait && name == "await" {
 		p.errorAt(tok, "cannot bind \"await\" inside an async function")
 	}
-	if p.noArguments && name == "await" {
-		// A class field initializer and a static block are always in a context
-		// where await is reserved, whatever encloses the class.
+	if p.noAwaitIdent && name == "await" {
+		// A class field initializer and a static block reserve await, but only
+		// in their own statements: a function written inside one -- an arrow
+		// included -- may bind the name like any other.
 		p.errorAt(tok, "cannot bind \"await\" here")
 	}
 }
@@ -430,7 +431,7 @@ func (p *parser) checkLabelName(name string, tok lexer.Token) {
 	switch {
 	case name == "yield" && (p.strict || p.allowYield):
 		p.errorAt(tok, "\"yield\" cannot be used as a label here")
-	case name == "await" && (p.allowAwait || p.module || p.noArguments):
+	case name == "await" && (p.allowAwait || p.module || p.noAwaitIdent):
 		p.errorAt(tok, "\"await\" cannot be used as a label here")
 	}
 }

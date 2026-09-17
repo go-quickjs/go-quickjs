@@ -123,12 +123,13 @@ func (r *Runtime) startForOf(v Value) (Value, error) {
 	if err != nil {
 		return Undefined, err
 	}
+	// The method is read now and called later, and only the call requires it
+	// to be callable: an iterator closed before it is ever stepped -- which a
+	// destructuring pattern abandoned part-way through is -- never has to have
+	// had a next at all.
 	next, err := r.getValueProp(iter, atomNext)
 	if err != nil {
 		return Undefined, err
-	}
-	if !isCallable(next) {
-		return Undefined, r.throwTypeError("the iterator has no next method")
 	}
 	return r.newIterObject(&iterState{iter: iter, next: next}), nil
 }
@@ -553,9 +554,6 @@ func (r *Runtime) startForAwaitOf(v Value) (Value, error) {
 	next, err := r.getValueProp(iter, atomNext)
 	if err != nil {
 		return Undefined, err
-	}
-	if !isCallable(next) {
-		return Undefined, r.throwTypeError("the async iterator has no next method")
 	}
 	return r.newIterObject(&iterState{iter: iter, next: next, asyncIter: true}), nil
 }

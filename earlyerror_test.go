@@ -615,3 +615,58 @@ func TestPrivateAccessorPairIsOneMember(t *testing.T) {
 			"ok")
 	}
 }
+
+// A class field initializer and a static block reserve `await` in their own
+// statements, but the rule stops at a function written inside one -- an arrow
+// included, since an arrow's body is not an await context either.
+func TestAwaitBindingInsideAClassBody(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"arrow in a static block",
+			`class C { static { (() => { try {} catch (await) {} }) } }; "ok"`, "ok"},
+		{"function in a static block",
+			`class C { static { (function (await) {}) } }; "ok"`, "ok"},
+		{"var in an arrow in a static block",
+			`class C { static { (() => { var await = 1; return await }) } }; "ok"`, "ok"},
+		{"arrow in a field initializer",
+			`class C { x = () => { let await = 1; return await } }; String(new C().x())`, "1"},
+		// In the block's own statements it is still reserved.
+		{"var in a static block",
+			`try { eval("class C { static { var await = 1 } }"); "no error" }
+			 catch (e) { e.constructor.name }`, "SyntaxError"},
+		{"catch in a static block",
+			`try { eval("class C { static { try {} catch (await) {} } }"); "no error" }
+			 catch (e) { e.constructor.name }`, "SyntaxError"},
+		{"label in a static block",
+			`try { eval("class C { static { await: 1 } }"); "no error" }
+			 catch (e) { e.constructor.name }`, "SyntaxError"},
+		{"reference in a static block",
+			`try { eval("class C { static { await } }"); "no error" }
+			 catch (e) { e.constructor.name }`, "SyntaxError"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}
+
+// An iterator's next method is read when the iterator is opened and required to
+// be callable only when it is called: a pattern abandoned before it steps the
+// iterator closes it without ever needing one.
+func TestIteratorNextIsCheckedWhenCalled(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"closed before stepping", `
+		  var iterable = {}
+		  var iterator = {return: function () { return null }}
+		  iterable[Symbol.iterator] = function () { return iterator }
+		  function* g() { for ([...{}[yield]] of [iterable]) {} }
+		  var it = g(); it.next()
+		  try { it.return(); "no error" } catch (e) { e.constructor.name }`, "TypeError"},
+		{"reported when stepped", `
+		  var iterable = {}
+		  iterable[Symbol.iterator] = function () { return {next: 1} }
+		  try { for (var x of iterable) {} ; "no error" }
+		  catch (e) { e.constructor.name }`, "TypeError"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}
