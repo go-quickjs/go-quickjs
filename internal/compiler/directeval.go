@@ -31,9 +31,18 @@ func isDirectEval(n *ast.Call) bool {
 }
 
 // compileDirectEval compiles a call that may turn out to be a direct eval.
+//
+// A spread in the arguments does not make it any less direct: what decides is
+// the callee being the name `eval`. The arguments are gathered into an array
+// there, and the instruction is told to take them from it.
 func (c *compiler) compileDirectEval(n *ast.Call) {
 	idx := c.evalScopeIdx()
 	c.compileExpr(n.Callee)
+	if hasSpread(n.Args) {
+		c.compileSpreadArguments(n.Args)
+		c.emitAt(n.Start, bytecode.OpDirectEval, idx, bytecode.DirectEvalSpread)
+		return
+	}
 	argc := c.compileArguments(n.Args)
 	c.emitAt(n.Start, bytecode.OpDirectEval, idx, uint32(argc))
 }

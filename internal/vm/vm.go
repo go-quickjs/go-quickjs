@@ -1352,10 +1352,23 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 			push(v)
 		case bytecode.OpDirectEval:
-			argc := int(in.B)
-			args := r.stack[sp-argc : sp]
-			callee := r.stack[sp-argc-1]
-			sp -= argc + 1
+			var args []Value
+			var callee Value
+			if in.B == bytecode.DirectEvalSpread {
+				// The arguments were gathered into an array, which a spread
+				// element forces. A spread does not make the call any less
+				// direct: what decides is the name the callee was written as.
+				list := pop()
+				callee = pop()
+				if list.IsObject() {
+					args = list.Object().elems
+				}
+			} else {
+				argc := int(in.B)
+				args = r.stack[sp-argc : sp]
+				callee = r.stack[sp-argc-1]
+				sp -= argc + 1
+			}
 			src := arg(args, 0)
 			switch {
 			case !callee.IsObject() || callee.Object() != r.evalFn:

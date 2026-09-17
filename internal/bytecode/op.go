@@ -218,7 +218,8 @@ const (
 	OpCall // A = argument count; stack: callee args...
 	// OpDirectEval is a call whose callee may turn out to be the intrinsic
 	// eval, in which case the evaluated code shares the caller's scope. A is
-	// the index into EvalScopes and B the argument count.
+	// the index into EvalScopes and B the argument count, or DirectEvalSpread
+	// when the arguments are in an array on the stack instead.
 	OpDirectEval
 	OpCallMethod // A = argument count; stack: this callee args...
 	OpNew        // A = argument count
@@ -574,6 +575,10 @@ func itoa(v int) string {
 // IterAll is OpIterToArray's operand when the whole iterator must be drained,
 // which a pattern with a rest element requires.
 const IterAll = ^uint32(0)
+
+// DirectEvalSpread is the argument count OpDirectEval carries when its
+// arguments were gathered into an array, which a spread element forces.
+const DirectEvalSpread = ^uint32(0)
 
 // A `with` probe packs two things into its A operand: the name, in the low
 // bits, and how many of the innermost `with` objects to consult, in the high

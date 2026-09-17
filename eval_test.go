@@ -261,3 +261,31 @@ func TestEvalFunctionKeepsNonConfigurableAttributes(t *testing.T) {
 		[typeof f, f(), d.writable, d.enumerable, d.configurable].join(",")`,
 		"function,2222,true,true,false")
 }
+
+// A spread element in the arguments does not make a direct eval indirect: what
+// decides is that the callee was written as the name `eval`.
+func TestDirectEvalWithSpreadArguments(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"spread source", `var x = "global";
+		  (function () { var x = "local"; eval(...["x = 0;"]); return String(x) })()`, "0"},
+		{"empty leading", `var x = "global";
+		  (function () { var x = "local"; eval(...[], "x = 1;"); return String(x) })()`, "1"},
+		{"empty trailing", `var x = "global";
+		  (function () { var x = "local"; eval("x = 2;", ...[]); return String(x) })()`, "2"},
+		// The global is left alone, which is what tells a direct eval from an
+		// indirect one.
+		{"global untouched", `var x = "global";
+		  (function () { var x = "local"; eval(...["x = 0;"]) })(); x`, "global"},
+		// The spread is still a spread: the iterable is walked once.
+		{"iterable walked once", `var count = 0;
+		  var iter = {}; iter[Symbol.iterator] = function () {
+		    count++; return {next: function () { return {done: true} }} };
+		  var r = (function () { var x = "l"; eval(...iter, "x = 4;"); return String(x) })();
+		  r + "," + count`, "4,1"},
+		// And a non-string is handed back whatever it arrived as.
+		{"non-string", `String(eval(...[1]))`, "1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}
