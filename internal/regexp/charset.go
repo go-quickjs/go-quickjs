@@ -14,6 +14,10 @@ import (
 // costs no more per character than a small one.
 type charSet struct {
 	ranges []charRange
+	// wordComplement marks the set \W denotes, which is the only one whose
+	// membership depends on the flags in force where it is used rather than on
+	// the ranges alone.
+	wordComplement bool
 	// negated inverts membership. It is applied at match time rather than by
 	// complementing the ranges, because complementing interacts badly with
 	// case folding: [^a] under the i flag must exclude both "a" and "A".
@@ -81,12 +85,20 @@ func (s *charSet) normalize() {
 }
 
 // contains reports whether a code point is in the set.
-func (s *charSet) contains(r rune) bool {
+//
+// unicodeFold says which of the two case-insensitive comparisons applies: the
+// case folding of unicode mode, or the uppercase rule the older one uses.
+func (s *charSet) contains(r rune, unicodeFold bool) bool {
 	in := s.rawContains(r)
 	if !in && s.foldCase {
 		// Case folding is applied to the candidate rather than expanded into
 		// the set, so that a large class does not multiply in size.
 		for _, f := range caseFolds(r) {
+			if !unicodeFold && upperCanonical(f) != upperCanonical(r) {
+				// Outside unicode mode these two are different characters
+				// however they fold: /[\u017F]/i does not match an "s".
+				continue
+			}
 			if s.rawContains(f) {
 				in = true
 				break
@@ -157,8 +169,34 @@ func caseFolds(r rune) []rune {
 	return out
 }
 
-// foldCase returns the canonical form used when comparing single characters
+// canonical returns the form two characters must share to count as the same
 // under the i flag.
+//
+// Unicode mode compares case foldings. Without it the comparison is the older
+// one, built on the simple uppercase mapping, which deliberately keeps a
+// character outside ASCII apart from one inside it: the long s and the Kelvin
+// sign uppercase to "S" and "K" but do not match them, which is what stops a
+// pattern written in ASCII from matching text it was never meant to.
+func canonical(r rune, unicodeFold bool) rune {
+	if unicodeFold {
+		return foldCase(r)
+	}
+	return upperCanonical(r)
+}
+
+// upperCanonical is Canonicalize outside unicode mode.
+func upperCanonical(r rune) rune {
+	u := unicode.ToUpper(r)
+	// A mapping to more than one character -- the sharp s to "SS" -- is no
+	// mapping at all here, and Go's simple mapping already leaves those alone.
+	if r >= 128 && u < 128 {
+		return r
+	}
+	return u
+}
+
+// foldCase returns the canonical form used when comparing single characters
+// under the i flag in unicode mode.
 func foldCase(r rune) rune {
 	// Lowercasing is not enough on its own -- ß and ﬀ fold in ways ToLower does
 	// not capture -- but SimpleFold's smallest member is a stable
@@ -180,14 +218,20 @@ func foldCase(r rune) rune {
 // the most common classes in real patterns.
 var (
 	classDigit    = buildSet(false, charRange{'0', '9'})
-	classNotDigit = buildSet(true, charRange{'0', '9'})
+	classNotDigit = complementSet(charRange{'0', '9'})
 
-	classWord = buildSet(false,
-		charRange{'0', '9'}, charRange{'A', 'Z'}, charRange{'_', '_'},
-		charRange{'a', 'z'})
-	classNotWord = buildSet(true,
-		charRange{'0', '9'}, charRange{'A', 'Z'}, charRange{'_', '_'},
-		charRange{'a', 'z'})
+	wordRanges = []charRange{
+		{'0', '9'}, {'A', 'Z'}, {'_', '_'}, {'a', 'z'},
+	}
+	classWord    = buildSet(false, wordRanges...)
+	classNotWord = markWordComplement(complementSet(wordRanges...))
+
+	// Under the i and u flags together, the word characters take in the two
+	// that fold into ASCII, so what is left out of them is a smaller set:
+	// \W does not match the long s there, though \w does.
+	foldedWordRanges = append(append([]charRange(nil), wordRanges...),
+		charRange{0x017F, 0x017F}, charRange{0x212A, 0x212A})
+	classNotFoldWord = complementSet(foldedWordRanges...)
 
 	// The space class is the union of the Unicode space separators, the ASCII
 	// whitespace characters, the line terminators and the byte order mark.
@@ -197,13 +241,13 @@ var (
 		{0x205F, 0x205F}, {0x3000, 0x3000}, {0xFEFF, 0xFEFF},
 	}
 	classSpace    = buildSet(false, spaceRanges...)
-	classNotSpace = buildSet(true, spaceRanges...)
+	classNotSpace = complementSet(spaceRanges...)
 
 	// The characters . excludes when dotAll is off.
 	lineTerminators = []charRange{
 		{'\n', '\n'}, {'\r', '\r'}, {0x2028, 0x2029},
 	}
-	classNotLineTerminator = buildSet(true, lineTerminators...)
+	classNotLineTerminator = complementSet(lineTerminators...)
 )
 
 func buildSet(negated bool, ranges ...charRange) *charSet {
@@ -212,10 +256,36 @@ func buildSet(negated bool, ranges ...charRange) *charSet {
 	return s
 }
 
+// complementSet is the set of everything the given ranges leave out.
+//
+// The complement is worked out here rather than left to the negated flag,
+// because the two are not the same thing under the i flag. \D is the set of
+// characters that are not digits, and a character matches it when some member
+// of that set has the same canonical form -- which is how \W comes to match the
+// long s in unicode mode, where \w matches it too. [^...] is the other kind:
+// there the match is inverted rather than the set, so [^a] refuses "A".
+func complementSet(ranges ...charRange) *charSet {
+	return &charSet{ranges: complementRanges(ranges)}
+}
+
+// markWordComplement tags the set \W denotes, whose membership the flags in
+// force where it is used can widen.
+func markWordComplement(s *charSet) *charSet {
+	s.wordComplement = true
+	return s
+}
+
 // isWordChar reports whether a code point counts as a word character for \b.
-func isWordChar(r rune) bool {
-	return r == '_' || (r >= '0' && r <= '9') ||
-		(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+//
+// Under the i and u flags together the word characters include the two
+// characters outside ASCII that case-fold into it: the long s and the Kelvin
+// sign are word characters there, since \w matches them.
+func isWordChar(r rune, foldUnicode bool) bool {
+	if r == '_' || (r >= '0' && r <= '9') ||
+		(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+		return true
+	}
+	return foldUnicode && (r == 0x017F || r == 0x212A)
 }
 
 // isLineTerminator reports whether a code point ends a line, which ^ and $
@@ -236,7 +306,12 @@ func unicodeClass(name string, negate bool) (*charSet, bool) {
 	if !ok {
 		return nil, false
 	}
-	return &charSet{ranges: rs, negated: negate}, true
+	if negate {
+		// \P{...} is the set of everything the property leaves out, not the
+		// property matched in reverse.
+		return complementSet(rs...), true
+	}
+	return &charSet{ranges: rs}, true
 }
 
 // decodedProperties caches the ranges a property decodes to. A runtime is

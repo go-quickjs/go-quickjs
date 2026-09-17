@@ -339,3 +339,95 @@ func TestNamedBackreferenceNeedsAName(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// A pattern is a sequence of code units, like the string it matches. Outside
+// unicode mode a character beyond the basic plane is the two units that spell
+// it, each an atom of its own -- so a quantifier after one repeats only the
+// second half.
+func TestAstralLiteralsInPatterns(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`String(/𠮷/.test("𠮷"))`, "true"},
+		{`String(/𠮷/u.test("𠮷"))`, "true"},
+		{`"𠮷a𠮷b𠮷".replace(/𠮷/g, "-")`, "-a-b-"},
+		{`"𠮷a𠮷b𠮷".replace(/𠮷/gu, "-")`, "-a-b-"},
+		{`String("𠮷a𠮷b𠮷".search(/𠮷/))`, "0"},
+		{`String("𠮷a𠮷".match(/𠮷/g).length)`, "2"},
+		{`String([..."𠮷a𠮷".matchAll(/𠮷/g)].length)`, "2"},
+		{`String(/[𠮷]/u.test("𠮷"))`, "true"},
+		// Without the u flag the pair is two atoms, so a quantifier binds to
+		// the low surrogate alone: the pattern is one high surrogate followed
+		// by one or more low ones.
+		{`var re = /𠮷+/;
+		  [re.test("𠮷"), re.test("𠮷\uDFB7"), re.test("\uD842")].join(",")`,
+			"true,true,false"},
+		{`var re = /𠮷+/u;
+		  [re.test("𠮷"), re.test("𠮷𠮷")].join(",")`, "true,true"},
+		// The source keeps its two units either way.
+		{`var re = /𠮷/; [re.source.length, re.source.charCodeAt(0).toString(16)].join(",")`,
+			"2,d842"},
+		// A group name is written in characters, not units, whatever the flags.
+		{`String(/(?<𠮷>a)/.exec("a").groups.𠮷)`, "a"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// The i flag compares two different ways. In unicode mode it compares case
+// foldings; without it the comparison is built on the simple uppercase mapping
+// and deliberately keeps a character outside ASCII apart from one inside it.
+func TestIgnoreCaseComparisons(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// The Kelvin sign and the long s fold to k and s, but only with u.
+		{`[/\u212a/i.test("k"), /\u212a/i.test("K"), /\u212a/u.test("k"),
+		   /\u212a/iu.test("k"), /\u212a/iu.test("K")].join(",")`,
+			"false,false,false,true,true"},
+		{`[/\u017f/i.test("s"), /\u017f/iu.test("s"), /[\u017f]/i.test("s"),
+		   /[\u017f]/iu.test("S")].join(",")`, "false,true,false,true"},
+		{`[/\u212b/i.test("\u00e5"), /\u212b/iu.test("\u00e5")].join(",")`, "false,true"},
+		// A backreference compares the same way.
+		{`[/(a)\1/i.test("aA"), /(\u017f)\1/i.test("\u017fs"),
+		   /(\u017f)\1/iu.test("\u017fs")].join(",")`, "true,false,true"},
+		// The ordinary ASCII case is unaffected.
+		{`[/k/i.test("K"), /[a-z]/i.test("A"), /\u00e5/i.test("\u00c5")].join(",")`,
+			"true,true,true"},
+
+		// \w takes in the two folding characters under i and u, and so do the
+		// word boundaries. \W is what is left, which excludes them.
+		{`[/\w/iu.test("\u017f"), /\W/iu.test("\u017f"), /\W/u.test("\u017f"),
+		   /[\W]/iu.test("\u017f")].join(",")`, "true,false,true,false"},
+		{`[/(?i:\b)/u.test("\u017f"), /\b/u.test("\u017f"),
+		   /(?i:\W)/u.test("\u212a")].join(",")`, "true,false,false"},
+
+		// \P{...} is the set of what the property leaves out, not the property
+		// matched in reverse, so under i it matches an A through the a that is
+		// in it.
+		{`[/(?i:\P{Lu})/u.test("A"), /\P{Lu}/u.test("A"), /\P{Lu}/u.test("a")].join(",")`,
+			"true,false,true"},
+		// [^...] is the other kind: there the match is inverted, not the set.
+		{`[/[^a]/i.test("A"), /[^a]/i.test("b")].join(",")`, "false,true"},
+		{`[/\D/.test("5"), /\D/.test("x"), /\S/.test(" "), /\S/.test("x")].join(",")`,
+			"false,true,false,true"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// Symbol.search puts lastIndex back when it is done, and leaves it alone when
+// the match threw: the search never finished, so there was nothing to restore.
+func TestSearchRestoresLastIndex(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var re = /b/g; re.lastIndex = 86; var i = "abc".search(re)
+		  i + "," + re.lastIndex`, "1,86"},
+		{`var fake = {lastIndex: 86, exec: function () { throw new RangeError() }}
+		  try { RegExp.prototype[Symbol.search].call(fake, "") } catch (e) {}
+		  String(fake.lastIndex)`, "0"},
+		{`var fake = {lastIndex: 86, exec: function () { return null }}
+		  var i = RegExp.prototype[Symbol.search].call(fake, "")
+		  i + "," + fake.lastIndex`, "-1,86"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

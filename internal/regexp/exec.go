@@ -184,7 +184,7 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 
 		case opCharFold:
 			r, w := m.read(in.rev, pos)
-			if r < 0 || foldCase(r) != in.r {
+			if r < 0 || canonical(r, m.prog.unicodeFold) != in.r {
 				goto backtrack
 			}
 			pos = m.advance(in.rev, pos, w)
@@ -192,7 +192,7 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 
 		case opClass:
 			r, w := m.read(in.rev, pos)
-			if r < 0 || !m.prog.classes[in.arg].contains(r) {
+			if r < 0 || !m.prog.classes[in.arg].contains(r, m.prog.unicodeFold) {
 				goto backtrack
 			}
 			pos = m.advance(in.rev, pos, w)
@@ -261,7 +261,8 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 		case opWordBoundary, opNotWordBoundary:
 			prev, _ := m.in.before(pos)
 			next, _ := m.in.at(pos)
-			atBoundary := isWordChar(prev) != isWordChar(next)
+			fold := in.arg != 0
+			atBoundary := isWordChar(prev, fold) != isWordChar(next, fold)
 			if atBoundary == (in.op == opWordBoundary) {
 				pc++
 				break
@@ -455,7 +456,7 @@ func (m *matcher) compareRange(a, b, n int, fold bool) bool {
 		if x == y {
 			continue
 		}
-		if !fold || foldCase(x) != foldCase(y) {
+		if !fold || canonical(x, m.prog.unicodeFold) != canonical(y, m.prog.unicodeFold) {
 			return false
 		}
 	}

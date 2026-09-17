@@ -173,18 +173,22 @@ func (r *Runtime) regExpSymbolSearch(rx Value, args []Value) (Value, error) {
 			return Undefined, err
 		}
 	}
-	result, execErr := r.regExpExec(rx, s)
-	// The restore happens whether or not the match succeeded, but a failure to
-	// restore must not hide why the match failed.
+	result, err := r.regExpExec(rx, s)
+	if err != nil {
+		// Nothing is put back: the search never finished, and what it left
+		// behind is the zero it set on the way in.
+		return Undefined, err
+	}
+	// The restore happens whether or not the match succeeded -- finding where a
+	// pattern occurs is not meant to move a global pattern along.
 	current, err := r.getValueProp(rx, atomLastIndex)
-	if err == nil && !current.SameValue(previous) {
-		err = r.setValueProp(rx, atomLastIndex, previous, true)
-	}
-	if execErr != nil {
-		return Undefined, execErr
-	}
 	if err != nil {
 		return Undefined, err
+	}
+	if !current.SameValue(previous) {
+		if err := r.setValueProp(rx, atomLastIndex, previous, true); err != nil {
+			return Undefined, err
+		}
 	}
 	if result.IsNull() {
 		return Int(-1), nil

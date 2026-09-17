@@ -70,6 +70,10 @@ type program struct {
 	counters int
 	// emptyChecks is the number of repetitions that need an empty-body guard.
 	emptyChecks int
+	// unicodeFold says which case-insensitive comparison the program uses. It
+	// is a property of the whole program: a modifier group may turn the i flag
+	// on and off, but nothing can change the u flag partway through.
+	unicodeFold bool
 }
 
 // lookProgram is a lookaround's body plus how it is applied.
@@ -91,7 +95,9 @@ type compiler struct {
 }
 
 func compileNode(n node, flags Flags, groupCount int) *program {
-	c := &compiler{prog: &program{}, flags: flags}
+	c := &compiler{prog: &program{
+		unicodeFold: flags&(FlagUnicode|FlagUnicodeSets) != 0,
+	}, flags: flags}
 	// Slot 0 and 1 hold the whole match's bounds, so group k uses slots 2k and
 	// 2k+1.
 	c.emit(instr{op: opSave, arg: 0})
@@ -120,7 +126,11 @@ func (c *compiler) compile(n node) {
 
 	case nodeChar:
 		if c.flags&FlagIgnoreCase != 0 {
-			c.emit(instr{op: opCharFold, r: foldCase(t.r), rev: c.reverse})
+			c.emit(instr{
+				op:  opCharFold,
+				r:   canonical(t.r, c.prog.unicodeFold),
+				rev: c.reverse,
+			})
 			return
 		}
 		c.emit(instr{op: opChar, r: t.r, rev: c.reverse})
@@ -134,6 +144,12 @@ func (c *compiler) compile(n node) {
 
 	case nodeClass:
 		set := t.set
+		if set.wordComplement && c.foldsWordChars() {
+			// \W is what the word characters leave out, and under the i and u
+			// flags together they take in the two characters that fold into
+			// ASCII: \W does not match those, though \w does.
+			set = classNotFoldWord
+		}
 		if c.flags&FlagIgnoreCase != 0 && !set.foldCase {
 			cp := *set
 			cp.foldCase = true
@@ -190,9 +206,9 @@ func (c *compiler) compile(n node) {
 		case assertEnd:
 			c.emit(instr{op: opAssertEnd, arg: boolArg(t.multiline)})
 		case assertWordBoundary:
-			c.emit(instr{op: opWordBoundary})
+			c.emit(instr{op: opWordBoundary, arg: boolArg(c.foldsWordChars())})
 		default:
-			c.emit(instr{op: opNotWordBoundary})
+			c.emit(instr{op: opNotWordBoundary, arg: boolArg(c.foldsWordChars())})
 		}
 
 	case nodeLook:
@@ -444,6 +460,12 @@ func canMatchEmpty(n node) bool {
 		return t.min == 0 || canMatchEmpty(t.item)
 	}
 	return true
+}
+
+// foldsWordChars reports whether \b counts the two characters outside ASCII
+// that fold into it, which it does under the i and u flags together.
+func (c *compiler) foldsWordChars() bool {
+	return c.flags&FlagIgnoreCase != 0 && c.prog.unicodeFold
 }
 
 // boolArg packs a per-instruction flag into the generic arg field.

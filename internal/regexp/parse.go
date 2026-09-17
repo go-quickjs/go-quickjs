@@ -22,9 +22,11 @@ func (e *SyntaxError) Error() string {
 
 // parser turns pattern text into a syntax tree.
 //
-// The pattern is scanned as runes rather than UTF-16 units, since a pattern
-// comes from source text that is already well formed. Only the subject string
-// needs the code-unit treatment.
+// The pattern is scanned as UTF-16 code units, like the subject: a pattern is a
+// sequence of them, and outside unicode mode that is what it matches against.
+// /\u{20BB7}/ without the u flag is two units, each an atom of its own, so a
+// quantifier after it repeats only the second. Inside unicode mode the two are
+// read back as one character wherever a character is what the grammar wants.
 type parser struct {
 	src   []rune
 	pos   int
@@ -44,10 +46,25 @@ type parser struct {
 	inClass bool
 }
 
+// patternUnits reads a pattern as the code units it is made of, splitting a
+// character beyond the basic plane into the surrogate pair that spells it.
+func patternUnits(pattern string) []rune {
+	units := make([]rune, 0, len(pattern))
+	for _, r := range pattern {
+		if r > 0xFFFF {
+			hi, lo := utf16.EncodeRune(r)
+			units = append(units, hi, lo)
+			continue
+		}
+		units = append(units, r)
+	}
+	return units
+}
+
 // parse builds the syntax tree for a pattern.
 func parse(pattern string, flags Flags) (node, int, map[string]int, error) {
 	p := &parser{
-		src:        []rune(pattern),
+		src:        patternUnits(pattern),
 		flags:      flags,
 		groupNames: make(map[string]int),
 	}
@@ -475,6 +492,14 @@ func (p *parser) parseGroupName() (string, error) {
 	first := true
 	for !p.atEnd() && p.peek() != '>' {
 		r := p.next()
+		// A name is an identifier, and an identifier is written in characters
+		// rather than code units whatever the flags say.
+		if utf16.IsSurrogate(r) && !p.atEnd() {
+			if combined := utf16.DecodeRune(r, p.peek()); combined != utf8.RuneError {
+				p.pos++
+				r = combined
+			}
+		}
 		if r == '\\' {
 			// A group name may spell a character with an escape, whatever the
 			// flags say: the name is an identifier, and an identifier written
@@ -617,6 +642,12 @@ func (p *parser) shorthandClass(r rune) *charSet {
 		base = classWord
 	case 'W':
 		base = classNotWord
+		if p.flags&FlagIgnoreCase != 0 && p.flags&(FlagUnicode|FlagUnicodeSets) != 0 {
+			// Inside a class the set is merged into the enclosing one here,
+			// where the flags in force are the ones written on the pattern.
+			// A modifier group is handled where it is compiled.
+			base = classNotFoldWord
+		}
 	case 's':
 		base = classSpace
 	default:
