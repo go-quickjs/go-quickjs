@@ -71,3 +71,103 @@ func TestJSONReplacerAndReviver(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// TestJSONStringifySpace covers the space argument, which names an indent.
+func TestJSONStringifySpace(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// A Number or String object stands for the primitive it wraps.
+		{`JSON.stringify({a: 1}, null, new Number(3)) === JSON.stringify({a: 1}, null, 3)`,
+			"true"},
+		{`JSON.stringify({a: 1}, null, new String("--")) === JSON.stringify({a: 1}, null, "--")`,
+			"true"},
+		// The count is truncated, capped at ten, and ignored below one.
+		{`JSON.stringify({a: 1}, null, 5.9) === JSON.stringify({a: 1}, null, 5)`, "true"},
+		{`JSON.stringify({a: 1}, null, 100) === JSON.stringify({a: 1}, null, 10)`, "true"},
+		{`JSON.stringify({a: 1}, null, -1.99999) === JSON.stringify({a: 1}, null, 0)`, "true"},
+		{`JSON.stringify({a: 1}, null, 0)`, `{"a":1}`},
+		// Ten code units of the string, not ten bytes: an indent of twenty
+		// two-byte characters is cut to ten, leaving 10 + len(`"a": 1`).
+		{`JSON.stringify({a: 1}, null, "é".repeat(20)).split("\n")[1].length`, "16"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// TestJSONKeysAreStrings covers the key a replacer or a reviver is given for an
+// array element, which is the property name rather than the index.
+func TestJSONKeysAreStrings(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`JSON.stringify([1, 2], function (k, v) { return typeof k === "string" ? v : "BAD" })`,
+			"[1,2]"},
+		{`var seen = []
+		  JSON.stringify([1], function (k, v) { seen.push(typeof k); return v })
+		  seen.join(",")`, "string,string"},
+		{`JSON.parse("[1,2]", function (k, v) { return typeof k === "string" ? v : "BAD" })
+		    .join(",")`, "1,2"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// TestJSONReviverWalk covers what the reviver may do to the object it is
+// walking. The keys are settled before the walk starts, a refusal to write back
+// is ignored, and a trap that throws is not.
+func TestJSONReviverWalk(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// A property the reviver deletes is still visited, and then read
+		// through the prototype chain.
+		{`Object.prototype.b = 3
+		  var deleted
+		  var o = JSON.parse('{"a": 1, "b": 2}', function (k, v) {
+		    if (k === "a") deleted = delete this.b
+		    return v
+		  })
+		  var out = [deleted, o.a, o.hasOwnProperty("b"), o.b].join(",")
+		  delete Object.prototype.b
+		  out`, "true,1,true,3"},
+		// A property that cannot be redefined keeps its value rather than
+		// failing the parse.
+		{`var arr = JSON.parse("[1, 2]", function (k, v) {
+		    if (k === "0") Object.defineProperty(this, "1", {configurable: false})
+		    if (k === "1") return 22
+		    return v
+		  })
+		  arr.join(",")`, "1,2"},
+		// A trap that throws is the parse's result.
+		{`var bad = new Proxy({a: 1}, {deleteProperty() { throw new RangeError() }})
+		  try {
+		    JSON.parse("[0,0]", function () { this[1] = bad })
+		    "no throw"
+		  } catch (e) { e.constructor.name }`, "RangeError"},
+		{`var bad = new Proxy({0: null}, {defineProperty() { throw new RangeError() }})
+		  try {
+		    JSON.parse('["first", null]', function (_, value) {
+		      if (value === "first") this[1] = bad
+		      return value
+		    })
+		    "no throw"
+		  } catch (e) { e.constructor.name }`, "RangeError"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// TestJSONBigInt covers a BigInt, which has no JSON form of its own but may be
+// given one.
+func TestJSONBigInt(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`try { JSON.stringify(0n) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`try { JSON.stringify(Object(0n)) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`try { JSON.stringify({x: 0n}) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`BigInt.prototype.toJSON = function () { return this.toString() }
+		  var out = JSON.stringify(0n)
+		  delete BigInt.prototype.toJSON
+		  out`, `"0"`},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

@@ -81,6 +81,24 @@ func (r *Runtime) initJSONBuiltins() {
 
 // jsonIndent resolves the space argument into the indent string it denotes.
 func (r *Runtime) jsonIndent(v Value) (string, error) {
+	// A Number or String object stands for the primitive it wraps, which is
+	// what makes JSON.stringify(x, null, new Number(2)) indent by two.
+	if v.IsObject() {
+		switch v.Object().class {
+		case ClassNumberWrapper:
+			n, err := r.toNumber(v)
+			if err != nil {
+				return "", err
+			}
+			v = Float(n)
+		case ClassStringWrapper:
+			sv, err := r.toString(v)
+			if err != nil {
+				return "", err
+			}
+			v = Str(sv)
+		}
+	}
 	switch {
 	case v.IsNumber():
 		n, err := r.toInteger(v)
@@ -95,11 +113,13 @@ func (r *Runtime) jsonIndent(v Value) (string, error) {
 		}
 		return strings.Repeat(" ", int(n)), nil
 	case v.IsString():
-		s := v.String().Go()
-		if len(s) > 10 {
-			s = s[:10]
+		// Ten code units, not ten bytes: a non-ASCII indent would otherwise be
+		// cut in the middle of a character.
+		s := v.String()
+		if s.Len() > 10 {
+			s = s.Substring(0, 10)
 		}
-		return s, nil
+		return s.Go(), nil
 	}
 	return "", nil
 }
@@ -169,7 +189,10 @@ func (e *jsonEncoder) setReplacer(v Value) error {
 
 // apply runs toJSON and then the replacer on one value, in that order.
 func (e *jsonEncoder) apply(holder Value, key Value, v Value) (Value, error) {
-	if v.IsObject() || v.IsString() {
+	// A BigInt has a toJSON hook like an object does, which is the only way to
+	// serialize one at all: without it there is no JSON form and the attempt
+	// is an error.
+	if v.IsObject() || v.IsString() || v.IsBigInt() {
 		tj, err := e.rt.getValueProp(v, atomToJSON)
 		if err != nil {
 			return Undefined, err
@@ -208,44 +231,61 @@ func (r *Runtime) reviveJSON(holder *Object, key Value, reviver Value) (Value, e
 				return Undefined, err
 			}
 			for i := int64(0); i < a.n; i++ {
-				el, err := r.reviveJSON(o, Float(float64(i)), reviver)
+				el, err := r.reviveJSON(o, Str(NewString(strconv.FormatInt(i, 10))), reviver)
 				if err != nil {
 					return Undefined, err
 				}
-				if el.IsUndefined() {
-					if err := a.remove(r, i); err != nil {
-						return Undefined, err
-					}
-					continue
-				}
-				if err := a.set(r, i, el); err != nil {
+				if err := r.reviveWrite(o, internIndex(uint32(i)), el); err != nil {
 					return Undefined, err
 				}
 			}
 		} else {
+			// The keys are settled before the walk starts, so a property the
+			// reviver deletes is still visited -- and then read through the
+			// prototype chain, which is what Get does.
 			pks, err := r.ownKeysOf(o, false)
 			if err != nil {
 				return Undefined, err
 			}
+			keys := make([]Atom, 0, len(pks))
 			for _, pk := range pks {
-				if !r.isEnumerable(o, pk) {
-					continue
+				if r.atoms.symbol(pk) == nil && r.isEnumerable(o, pk) {
+					keys = append(keys, pk)
 				}
+			}
+			for _, pk := range keys {
 				el, err := r.reviveJSON(o, r.keyToValue(pk), reviver)
 				if err != nil {
 					return Undefined, err
 				}
-				if el.IsUndefined() {
-					o.deleteOwn(pk)
-					continue
-				}
-				if err := r.defineOwnProp(o, pk, el, propDefault); err != nil {
+				if err := r.reviveWrite(o, pk, el); err != nil {
 					return Undefined, err
 				}
 			}
 		}
 	}
 	return r.call(reviver, Obj(holder), []Value{key, val})
+}
+
+// reviveWrite puts back what the reviver returned, or removes the property
+// when it returned undefined -- which is how a reviver prunes what it does not
+// want.
+//
+// A refusal is ignored: a property that cannot be redefined simply keeps its
+// value. A trap that throws is not, since that is user code failing rather than
+// the object declining.
+func (r *Runtime) reviveWrite(o *Object, key Atom, v Value) error {
+	if v.IsUndefined() {
+		_, err := r.deleteProp(o, key, false)
+		return err
+	}
+	_, err := r.defineProperty(o, key, &propDesc{
+		value: v, hasValue: true,
+		writable: true, hasWritable: true,
+		enumerable: true, hasEnumerable: true,
+		configurable: true, hasConfigurable: true,
+	})
+	return err
 }
 
 // encode renders one value, reporting false when it has no JSON form.
@@ -273,6 +313,14 @@ func (e *jsonEncoder) encode(v Value, prefix string) (string, bool, error) {
 		case ClassBooleanWrapper:
 			b, _ := v.Object().data.(bool)
 			v = Bool(b)
+		case ClassBigIntWrapper:
+			// It stands for the BigInt it wraps, which has no JSON form -- so
+			// the wrapper does not serialize as an empty object.
+			bi, err := e.rt.toBigIntValue(v)
+			if err != nil {
+				return "", false, err
+			}
+			v = bi
 		}
 	}
 
@@ -331,7 +379,9 @@ func (e *jsonEncoder) encode(v Value, prefix string) (string, bool, error) {
 			if err != nil {
 				return "", false, err
 			}
-			el, err = e.apply(v, Float(float64(i)), el)
+			// The key reaches the replacer as a string, the way a property
+			// name does: an array index is not a number here.
+			el, err = e.apply(v, Str(NewString(strconv.FormatInt(i, 10))), el)
 			if err != nil {
 				return "", false, err
 			}
