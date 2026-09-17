@@ -314,6 +314,13 @@ type frame struct {
 	// must be closed when it returns.
 	openUpvalues []*upvalue
 
+	// evalVars holds the bindings a direct eval declared in this frame, which
+	// have no slot because nothing in the source named them. It is nil for
+	// almost every frame: only a sloppy function containing a direct eval gets
+	// one, and one created in an enclosing function is its prototype, so a
+	// single lookup finds whichever declared the name.
+	evalVars *Object
+
 	// withScopes are the objects of the `with` statements this frame is inside,
 	// outermost first. Nil for almost every frame: `with` is forbidden in
 	// strict mode, so nothing modern has one.

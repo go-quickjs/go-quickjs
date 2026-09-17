@@ -465,6 +465,7 @@ func (r *Runtime) installCodeGeneration() {
 			copts.AllowSuperProp = req.Scope.AllowSuperProp
 			copts.AllowSuperCall = req.Scope.AllowSuperCall
 			copts.AllowNewTarget = req.Scope.AllowNewTarget
+			copts.EvalVarScopeIsGlobal = req.Scope.VarScopeIsGlobal
 		}
 		prog, err := parser.Parse(source, popts)
 		if err != nil {

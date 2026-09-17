@@ -82,6 +82,11 @@ type EvalScope struct {
 	AllowSuperProp bool
 	AllowSuperCall bool
 	AllowNewTarget bool
+	// VarScopeIsGlobal says whether the call site's own vars are properties of
+	// the global object. What the evaluated code declares goes wherever the
+	// caller's own vars do, so this is what decides between the global object
+	// and the calling function.
+	VarScopeIsGlobal bool
 	// InFieldInit marks a call site inside a class field initializer, which is
 	// a function of its own: `arguments` there is a syntax error, and
 	// new.target is undefined.
@@ -243,6 +248,11 @@ type Function struct {
 	// IsModule marks module code, whose top-level `this` is undefined rather
 	// than the global object.
 	IsModule bool
+	// HasDirectEval marks a sloppy function whose body contains a direct eval
+	// that could declare a var in it. The frame gets somewhere to put one: a
+	// var the evaluated code declares belongs to the function that called it,
+	// and there is no slot for a name nobody wrote down.
+	HasDirectEval bool
 
 	// Source is the file or origin name used in stack traces.
 	Source string

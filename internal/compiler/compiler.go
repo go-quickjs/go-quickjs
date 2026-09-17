@@ -60,6 +60,9 @@ type Options struct {
 	// undefined -- the initializer is a function of its own, even though it is
 	// compiled into the constructor.
 	InFieldInit bool
+	// EvalVarScopeIsGlobal says whether the call site's own vars are properties
+	// of the global object, which decides where the evaluated code's go.
+	EvalVarScopeIsGlobal bool
 	// EvalConfigurable marks the bindings eval creates on the global object,
 	// which are configurable where a script's are not: the evaluated code could
 	// have declared them anywhere, so nothing should be able to rely on them.
@@ -795,6 +798,22 @@ func (c *compiler) atScriptTopLevel() bool {
 // code rather than to the global object.
 func (c *compiler) evalVarsAreLocal() bool {
 	return c.opts.EvalOwnVarScope && c.fn.Strict
+}
+
+// varScopeIsGlobal reports whether a var declared where the compiler stands
+// becomes a property of the global object.
+//
+// It is false inside any function and at a module's top level, and an eval
+// inherits the answer from its call site: what its code declares belongs
+// wherever the caller's own vars do.
+func (c *compiler) varScopeIsGlobal() bool {
+	if c.parent != nil || c.module != nil {
+		return false
+	}
+	if c.opts.EvalOwnVarScope {
+		return c.opts.EvalVarScopeIsGlobal
+	}
+	return true
 }
 
 func boolBit(b bool) uint32 {

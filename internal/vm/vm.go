@@ -273,10 +273,21 @@ func (r *Runtime) run(cl *closure, this Value, args []Value, newTarget Value, ca
 	// The chain is inherited whole, capped so that a push inside this call
 	// copies rather than writing into the creating frame's array.
 	f.withScopes = nil
+	f.evalVars = nil
 	if callee != nil {
-		if fd := callee.fn(); fd != nil && len(fd.lexWith) > 0 {
-			f.withScopes = fd.lexWith[:len(fd.lexWith):len(fd.lexWith)]
+		if fd := callee.fn(); fd != nil {
+			if len(fd.lexWith) > 0 {
+				f.withScopes = fd.lexWith[:len(fd.lexWith):len(fd.lexWith)]
+			}
+			// What an eval declared in an enclosing function is still in scope
+			// here, whether or not this one has anything of its own.
+			f.evalVars = fd.lexEvalVars
 		}
+	}
+	if fn.HasDirectEval {
+		// The body contains a direct eval, so it needs somewhere for the vars
+		// that eval may declare. An enclosing function's stands behind it.
+		f.evalVars = newObject(f.evalVars, ClassObject)
 	}
 	f.handlers = f.handlers[:0]
 	f.native = ""
@@ -614,6 +625,14 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		case bytecode.OpGetGlobal:
 			name := cl.names[in.A]
 			env := cl.scope()
+			if f.evalVars != nil {
+				// A name a direct eval declared in this function shadows
+				// anything outside it, including a global of the same name.
+				if p := evalVarProp(f.evalVars, name); p != nil {
+					push(p.value)
+					break
+				}
+			}
 			if p := r.globalLexProp(env, name); p != nil {
 				if p.value.IsUninitialized() {
 					vmErr = r.throwReferenceError(
@@ -676,6 +695,12 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// typeof on an undeclared name must not throw. A lexical binding
 			// in its dead zone is declared, though, so that one still does.
 			env := cl.scope()
+			if f.evalVars != nil {
+				if p := evalVarProp(f.evalVars, cl.names[in.A]); p != nil {
+					push(p.value)
+					break
+				}
+			}
 			if p := r.globalLexProp(env, cl.names[in.A]); p != nil {
 				if p.value.IsUninitialized() {
 					vmErr = r.throwReferenceError("cannot access %q before it is initialized",
@@ -707,6 +732,12 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		case bytecode.OpSetGlobal:
 			name := cl.names[in.A]
 			env := cl.scope()
+			if f.evalVars != nil {
+				if p := evalVarProp(f.evalVars, name); p != nil {
+					p.value = pop()
+					break
+				}
+			}
 			if p := r.globalLexProp(env, name); p != nil {
 				switch {
 				case p.value.IsUninitialized():
@@ -757,6 +788,14 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 		case bytecode.OpDefineGlobalVar:
 			name := cl.names[in.A]
+			if f.evalVars != nil {
+				// The evaluated code is inside a function, so what it declares
+				// belongs to that function rather than to the global object.
+				if evalVarProp(f.evalVars, name) == nil {
+					f.evalVars.setOwnRaw(name, Undefined, propWritable|propConfigurable)
+				}
+				break
+			}
 			env := cl.scope()
 			if env == r.global {
 				if err := r.checkGlobalVarName(name); err != nil {
@@ -783,6 +822,10 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 		case bytecode.OpDefineGlobalFunc:
 			name := cl.names[in.A]
+			if f.evalVars != nil {
+				f.evalVars.setOwnRaw(name, pop(), propWritable|propConfigurable)
+				break
+			}
 			flags := propWritable | moduleBindingFlags(r.atoms.name(name))
 			if in.B != 0 {
 				flags |= propConfigurable
@@ -934,6 +977,13 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// Deleting a binding only succeeds for a configurable global
 			// property, which is why a var declaration cannot be deleted.
 			name := cl.names[in.A]
+			// What a direct eval declared can be deleted again, unlike a var
+			// the source named: the evaluated code could have declared it
+			// anywhere, so nothing may rely on it being there.
+			if deleteEvalVar(f.evalVars, name) {
+				push(True)
+				break
+			}
 			if r.globalLexProp(cl.scope(), name) != nil {
 				// A lexical binding is not a property and cannot be removed.
 				push(False)
@@ -2427,6 +2477,31 @@ func (r *Runtime) moduleLexProp(env *Object, name Atom) *Property {
 	return r.globalLex.getOwn(name)
 }
 
+// deleteEvalVar removes a binding a direct eval declared, reporting whether
+// there was one.
+func deleteEvalVar(o *Object, name Atom) bool {
+	for ; o != nil; o = o.proto {
+		if o.getOwn(name) != nil {
+			o.deleteOwn(name)
+			return true
+		}
+	}
+	return false
+}
+
+// evalVarProp finds a binding a direct eval declared in an enclosing function.
+//
+// The objects are chained by prototype, innermost first, so one lookup covers
+// every function between here and the one that declared the name.
+func evalVarProp(o *Object, name Atom) *Property {
+	for ; o != nil; o = o.proto {
+		if p := o.getOwn(name); p != nil {
+			return p
+		}
+	}
+	return nil
+}
+
 // globalLexProp finds a script-level lexical binding, which sits in front of
 // the global object: `let x = 1` at a script's top level is reached by name but
 // is not a property of globalThis.
@@ -2570,8 +2645,10 @@ func (r *Runtime) makeClosure(f *frame, c Value) *Object {
 		ctorKind: kind,
 		// A function created inside a `with` body keeps the objects: the names
 		// in its own body resolve against them too, and the frame that pushed
-		// them is gone by the time it runs.
-		lexWith: f.withScopes,
+		// them is gone by the time it runs. What a direct eval declared in the
+		// enclosing function travels the same way.
+		lexWith:     f.withScopes,
+		lexEvalVars: f.evalVars,
 	}
 	if tmpl.fn.Kind == bytecode.KindArrow {
 		// An arrow captures its surroundings rather than receiving them from

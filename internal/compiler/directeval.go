@@ -36,6 +36,12 @@ func isDirectEval(n *ast.Call) bool {
 // the callee being the name `eval`. The arguments are gathered into an array
 // there, and the instruction is told to take them from it.
 func (c *compiler) compileDirectEval(n *ast.Call) {
+	if !c.fn.Strict && !c.varScopeIsGlobal() {
+		// The evaluated code may declare a var, and it would belong to this
+		// function: a frame of it needs somewhere to put one, since nothing in
+		// the source named it and there is no slot.
+		c.fn.HasDirectEval = true
+	}
 	idx := c.evalScopeIdx()
 	c.compileExpr(n.Callee)
 	if hasSpread(n.Args) {
@@ -51,14 +57,15 @@ func (c *compiler) compileDirectEval(n *ast.Call) {
 // index in the function's table.
 func (c *compiler) evalScopeIdx() uint32 {
 	scope := bytecode.EvalScope{
-		Bindings:       c.visibleBindings(),
-		Strict:         c.fn.Strict,
-		AllowSuperProp: c.allowSuperProp(),
-		AllowSuperCall: c.allowSuperCall(),
-		AllowNewTarget: c.allowNewTarget(),
-		InFieldInit:    c.inClassFieldInit(),
-		PrivateNames:   c.visiblePrivateNames(),
-		ArgumentNames:  c.paramScopeNames,
+		Bindings:         c.visibleBindings(),
+		Strict:           c.fn.Strict,
+		AllowSuperProp:   c.allowSuperProp(),
+		AllowSuperCall:   c.allowSuperCall(),
+		AllowNewTarget:   c.allowNewTarget(),
+		VarScopeIsGlobal: c.varScopeIsGlobal(),
+		InFieldInit:      c.inClassFieldInit(),
+		PrivateNames:     c.visiblePrivateNames(),
+		ArgumentNames:    c.paramScopeNames,
 	}
 	c.fn.EvalScopes = append(c.fn.EvalScopes, scope)
 	return uint32(len(c.fn.EvalScopes) - 1)

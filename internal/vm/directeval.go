@@ -74,6 +74,7 @@ func (r *Runtime) evalDirect(caller *frame, scope bytecode.EvalScope, src string
 		lexNewTarget: caller.newTarget,
 		lexArgs:      caller.args,
 		lexWith:      caller.withScopes,
+		lexEvalVars:  caller.evalVars,
 	}
 	if caller.callee != nil {
 		if outer := caller.callee.fn(); outer != nil {

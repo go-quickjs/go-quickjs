@@ -289,3 +289,45 @@ func TestDirectEvalWithSpreadArguments(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
 	}
 }
+
+// A var a sloppy direct eval declares belongs to the function that called it,
+// not to the global object: it is visible there and in anything created
+// inside, it goes when the call does, and it can be deleted again.
+func TestDirectEvalVarBelongsToTheCaller(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"visible in the caller", `function f() { eval("var q = 7"); return q }
+		  f() + "," + typeof globalThis.q`, "7,undefined"},
+		{"visible in a closure", `function f() { eval("var q = 7")
+		    return (function () { return q })() }
+		  String(f())`, "7"},
+		{"visible to typeof", `function f() { eval("var q = 7"); return typeof q } f()`, "number"},
+		{"gone afterwards", `function f() { eval("var q = 7") } f(); typeof q`, "undefined"},
+		// An existing binding of the same name is used rather than shadowed.
+		{"existing var kept", `function f() { var x = 1; eval("var x"); return x } String(f())`, "1"},
+		{"existing var assigned", `function f() { var x = 1; eval("var x = 2"); return x }
+		  String(f())`, "2"},
+		// A global of the same name is shadowed, and left alone.
+		{"shadows a global", `var q = "global"
+		  function f() { eval("var q = 7"); return q }
+		  f() + "," + q`, "7,global"},
+		// A function declaration goes the same way.
+		{"function declaration", `function f() { eval("function g() { return 3 }"); return g() }
+		  String(f())`, "3"},
+		// It is configurable, which a var the source names is not.
+		{"deletable", `function f() { eval("var q = 7"); var gone = delete q
+		    return gone + "," + typeof q }
+		  f()`, "true,undefined"},
+		// Strict eval keeps its vars to itself, and a script's top level still
+		// declares on the global object.
+		{"strict eval", `function f() { "use strict"; eval("var q = 7"); return typeof q }
+		  f()`, "undefined"},
+		{"global still global", `eval("var top = 1"); String(globalThis.top)`, "1"},
+		// An arrow has a variable scope of its own, so the var lands there
+		// rather than on the global.
+		{"arrow", `var f = (p = eval("var arguments = 'param'")) => typeof arguments
+		  f() + "," + typeof globalThis.arguments`, "string,undefined"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}
