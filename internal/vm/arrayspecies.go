@@ -28,7 +28,6 @@ func (r *Runtime) arrayCreate(n int64) (*Object, error) {
 		return nil, r.throwError(errRange, "invalid array length")
 	}
 	o := r.newArrayOfLength(n)
-	o.flags |= objArrayLengthWritable
 	return o, nil
 }
 

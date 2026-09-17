@@ -1955,7 +1955,6 @@ func (r *Runtime) captureLocal(f *frame, slot int) *upvalue {
 // newArrayFrom builds an array holding a copy of the given values.
 func (r *Runtime) newArrayFrom(vals []Value) *Object {
 	o := newObject(r.proto.array, ClassArray)
-	o.flags |= objArrayLengthWritable
 	if len(vals) > 0 {
 		o.elems = make([]Value, len(vals))
 		copy(o.elems, vals)

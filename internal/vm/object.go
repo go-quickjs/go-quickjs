@@ -152,7 +152,14 @@ type Object struct {
 
 // newObject returns a bare object with the given prototype and class.
 func newObject(proto *Object, class Class) *Object {
-	return &Object{proto: proto, class: class, flags: objExtensible}
+	flags := objExtensible
+	if class == ClassArray {
+		// An array's length is synthesized rather than stored, so its
+		// writability is a flag rather than a property attribute, and every
+		// array starts with it writable.
+		flags |= objArrayLengthWritable
+	}
+	return &Object{proto: proto, class: class, flags: flags}
 }
 
 // Class returns the object's class.
