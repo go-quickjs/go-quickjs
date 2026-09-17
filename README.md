@@ -36,7 +36,7 @@ It is not finished. See [Conformance](#conformance) for measured coverage and
 | Exceptions | `throw`, `try`/`catch`/`finally`, stack traces |
 | Iteration | Iterator protocol, spread, generators, `yield*` |
 | Asynchrony | `Promise` with correct microtask ordering, `async`/`await` |
-| Regular expressions | Backtracking engine: backreferences, lookahead, lookbehind, named groups, Unicode property escapes |
+| Regular expressions | Backtracking engine: backreferences, lookahead, lookbehind, named groups, modifier groups, Unicode property escapes at Unicode 17, the `v` flag's set notation and properties of strings |
 | Modules | `import`/`export`, live bindings, cycles, namespace imports, dynamic `import()`, top-level `await` |
 | Iterator helpers | `map`, `filter`, `take`, `drop`, `flatMap`, `reduce`, `toArray` and the rest, lazily |
 | Built-ins | `Object`, `Function`, `Array`, `String`, `Number`, `Boolean`, `Symbol`, `BigInt`, `Error`, `Math`, `JSON`, `Date`, `RegExp`, `Map`, `Set`, `WeakMap`, `WeakSet`, `WeakRef`, `FinalizationRegistry`, `Promise`, `Proxy`, `Reflect`, `ArrayBuffer`, `DataView`, typed arrays |
@@ -46,8 +46,8 @@ It is not finished. See [Conformance](#conformance) for measured coverage and
 ### Not implemented
 
 `Intl`, `Temporal`, `Atomics`, `SharedArrayBuffer`, `ShadowRealm`, decorators,
-resizable ArrayBuffers, `using` declarations, and the newer proposals test262
-tracks.
+resizable ArrayBuffers, `using` declarations, `with`, and the newer proposals
+test262 tracks.
 
 Known semantic gaps, each covered by a test that documents it:
 
@@ -56,6 +56,10 @@ Known semantic gaps, each covered by a test that documents it:
   forward to them.
 - A top-level `let` or `const` in a script does not persist across `Eval` calls;
   a top-level `var` does.
+- Direct `eval` is evaluated as if it were indirect: the code runs in global
+  scope and cannot see the calling function's variables, `this`, `super` or
+  `new.target`. Giving it those would mean spilling a function's slots into a
+  scope object wherever one might occur.
 - `WeakRef` holds its target strongly and `FinalizationRegistry` never calls
   back. Go's collector has no hook that would let them do otherwise, and the
   specification never requires that anything be collected — only that a
@@ -81,27 +85,30 @@ strict and sloppy variants, the expected-failure phase and type, and the feature
 tags. A test tagged with a feature the engine does not implement is skipped
 rather than counted against it.
 
-Measured coverage, as of the most recent run over `language/`, `annexB/` and the
-`built-ins/` areas listed below — 64,849 of 75,771 executed variants, 85.6%:
+Measured coverage, as of the most recent run over the whole suite — 70,412 of
+77,270 executed variants, 91.1%. A test tagged with a feature the engine does
+not implement is skipped rather than counted, which is what the remaining 14,550
+are. By area, worst first:
 
 | Area | | Area | |
 |---|---|---|---|
-| `built-ins/Iterator` | 100% | `built-ins/global` | 100% |
-| `built-ins/Boolean` | 96.0% | `built-ins/Object` | 93.5% |
-| `built-ins/Number` | 92.0% | `built-ins/Error` | 90.9% |
-| `built-ins/Map` | 90.5% | `built-ins/Set` | 90.3% |
-| `built-ins/WeakMap` | 90.1% | `built-ins/String` | 89.1% |
-| `language` | 87.1% | `built-ins/Array` | 86.3% |
-| `built-ins/Math` | 85.3% | `built-ins/JSON` | 85.2% |
-| `built-ins/Date` | 81.0% | `built-ins/ArrayBuffer` | 80.2% |
-| `built-ins/DataView` | 79.4% | `built-ins/TypedArray` | 78.0% |
-| `built-ins/Promise` | 76.4% | `built-ins/Function` | 76.7% |
-| `annexB` | 74.9% | `built-ins/Proxy` | 66.5% |
-| `built-ins/RegExp` | 64.4% | | |
+| `language/eval-code` | 50.4% | `built-ins/AsyncFromSyncIteratorPrototype` | 31.6% |
+| `built-ins/TypedArrayConstructors` | 77.9% | `built-ins/Promise` | 79.4% |
+| `built-ins/Function` | 78.3% | `language/module-code` | 78.3% |
+| `built-ins/Proxy` | 69.9% | `built-ins/TypedArray` | 88.6% |
+| `built-ins/DataView` | 83.8% | `language/block-scope` | 79.4% |
+| `language/statements` | 91.0% | `language/expressions` | 91.4% |
+| `built-ins/Date` | 88.9% | `built-ins/ArrayBuffer` | 85.3% |
+| `built-ins/JSON` | 86.6% | `built-ins/Set` | 94.2% |
+| `built-ins/Array` | 94.4% | `built-ins/String` | 94.5% |
+| `built-ins/Object` | 96.1% | `built-ins/RegExp` | 96.5% |
+| `built-ins/Math` | 96.3% | `built-ins/Number` | 95.6% |
 
-`RegExp` is the weakest, and most of what it is short of is the `v` flag's set
-notation — nested classes, differences and intersections, and `\q{}` string
-literals — which the pattern parser does not yet understand.
+The two largest absolute gaps are both about scope. Direct `eval` is evaluated
+as if it were indirect, so it cannot see the calling function's variables, and
+`with` is not implemented at all; between them they account for most of what
+`language/eval-code`, `language/block-scope` and the class tests that use either
+are short of.
 
 Useful flags:
 
@@ -109,7 +116,11 @@ Useful flags:
 -conformance.dir=language/expressions   # restrict to one area
 -conformance.report=/tmp/failures.txt   # write every failure for triage
 -conformance.timeout=2s                 # bound any one test
+-conformance.workers=4                  # how many to run at once
 ```
+
+The suite runs on every core, which takes a few minutes rather than well over an
+hour.
 
 ## Calling Go from JavaScript
 
