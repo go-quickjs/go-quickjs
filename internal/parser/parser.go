@@ -88,6 +88,10 @@ type parser struct {
 	// noArguments marks a context with no arguments object -- a class field
 	// initializer or a static block -- where naming one is an early error.
 	noArguments bool
+	// inParams marks a parameter list, where a yield or an await expression is
+	// an early error even in a generator or an async function: the parameters
+	// are evaluated as part of the call, before the body can suspend.
+	inParams bool
 
 	// noIn suppresses `in` as a relational operator while parsing the head of a
 	// for statement, where `for (x in y)` must not be read as a comparison. It
@@ -508,8 +512,12 @@ type funcContext struct {
 	// noArguments marks a context with no arguments object -- a class field
 	// initializer or a static block -- where naming one is an early error.
 	noArguments bool
-	strict      bool
-	labels      map[string]bool
+	// inParams marks a parameter list, where a yield or an await expression is
+	// an early error even in a generator or an async function: the parameters
+	// are evaluated as part of the call, before the body can suspend.
+	inParams bool
+	strict   bool
+	labels   map[string]bool
 }
 
 func (p *parser) saveContext() funcContext {
@@ -518,7 +526,7 @@ func (p *parser) saveContext() funcContext {
 		allowYield: p.allowYield, allowAwait: p.allowAwait,
 		allowSuperProp: p.allowSuperProp, allowSuperCall: p.allowSuperCall,
 		allowNewTarget: p.allowNewTarget, noArguments: p.noArguments,
-		strict: p.strict, labels: p.labels,
+		inParams: p.inParams, strict: p.strict, labels: p.labels,
 	}
 }
 
@@ -527,5 +535,5 @@ func (p *parser) restoreContext(c funcContext) {
 	p.allowYield, p.allowAwait = c.allowYield, c.allowAwait
 	p.allowSuperProp, p.allowSuperCall = c.allowSuperProp, c.allowSuperCall
 	p.allowNewTarget, p.noArguments = c.allowNewTarget, c.noArguments
-	p.strict, p.labels = c.strict, c.labels
+	p.inParams, p.strict, p.labels = c.inParams, c.strict, c.labels
 }

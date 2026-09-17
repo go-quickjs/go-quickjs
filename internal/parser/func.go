@@ -53,6 +53,7 @@ func (p *parser) parseFunctionParamsAndBody(fn *ast.FuncLit) {
 	p.allowYield = fn.Generator
 	p.allowAwait = fn.Async
 	p.allowNewTarget = true
+	p.inParams = false
 	// A function has its own arguments object even when declared inside a
 	// class field initializer.
 	p.noArguments = false
@@ -152,6 +153,13 @@ func boundNames(e ast.Expr, out []string) []string {
 
 // parseParams parses a parenthesized formal parameter list.
 func (p *parser) parseParams() []ast.Expr {
+	// A default value is an expression, but not one that may suspend: the
+	// parameters are bound as part of the call. A function nested in one has
+	// its own rules again, which parseFunctionParamsAndBody restores.
+	saved := p.inParams
+	p.inParams = true
+	defer func() { p.inParams = saved }()
+
 	p.expectPunct("(")
 	var params []ast.Expr
 	for !p.isPunct(")") {
@@ -303,6 +311,9 @@ func (p *parser) parseArrowBody(params []ast.Expr, start int, async bool) ast.Ex
 	// is inherited from the enclosing function, so those flags are left alone.
 	p.allowYield = false
 	p.allowAwait = async
+	// The body is the arrow's own, so an enclosing parameter list no longer
+	// applies: `async function f(a = async () => await 1) {}` is fine.
+	p.inParams = false
 
 	if p.isPunct("{") {
 		fn.Body = p.parseFunctionBody(fn)

@@ -1,6 +1,7 @@
 package quickjs_test
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -469,5 +470,47 @@ func TestAssignmentTargetMustBeAReference(t *testing.T) {
 			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
 		}
 		rt.Close()
+	}
+}
+
+// jsQuote renders a Go string as a JavaScript string literal.
+func jsQuote(s string) string {
+	q, err := json.Marshal(s)
+	if err != nil {
+		panic(err)
+	}
+	return string(q)
+}
+
+// TestNoSuspendInParameters covers yield and await in a parameter list. The
+// parameters are bound as part of the call, before the body can suspend, so
+// neither is allowed there even in a generator or an async function.
+func TestNoSuspendInParameters(t *testing.T) {
+	bad := []string{
+		`function* g(a = yield 1) {}`,
+		`function* g(a = yield) {}`,
+		`async function f(a = await 1) {}`,
+		`async function* g(a = yield 1) {}`,
+		`async function* g(a = await 1) {}`,
+		`class C { *m(a = yield 1) {} }`,
+		`class C { async m(a = await 1) {} }`,
+		`var o = {*m(a = yield 1) {}}`,
+	}
+	for _, src := range bad {
+		checkEval(t, `try { eval(`+jsQuote(src)+`); "no throw" }
+		              catch (e) { e.constructor.name }`, "SyntaxError")
+	}
+
+	// A function written inside a default has its own rules again.
+	good := []string{
+		`function* g(a = function* () { yield 1 }) {}`,
+		`async function f(a = async () => await 1) {}`,
+		`async function f(a = async function () { await 1 }) {}`,
+		`function* g(a = 1) { yield a }`,
+		`async function f(a = 1) { await a }`,
+	}
+	for _, src := range good {
+		checkEval(t, `try { eval(`+jsQuote(src)+`); "ok" }
+		              catch (e) { e.constructor.name + ": " + e.message }`, "ok")
 	}
 }

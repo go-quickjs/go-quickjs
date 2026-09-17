@@ -80,6 +80,9 @@ func (p *parser) parseAssign() ast.Expr {
 
 	// `yield` is an operator rather than an identifier inside a generator.
 	if p.allowYield && p.isContextual("yield") {
+		if p.inParams {
+			p.errorf("\"yield\" is not allowed in a parameter list")
+		}
 		return p.parseYield()
 	}
 	// An arrow function with a single unparenthesized parameter is the one form
@@ -312,6 +315,9 @@ func (p *parser) parseUnary() ast.Expr {
 		return p.nodes.updateOp(op, operand, true, start)
 
 	case p.allowAwait && p.isContextual("await"):
+		if p.inParams {
+			p.errorf("\"await\" is not allowed in a parameter list")
+		}
 		p.next()
 		return &ast.Await{Arg: p.parseUnary(), Start: start}
 	}
