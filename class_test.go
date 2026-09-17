@@ -1149,3 +1149,41 @@ func TestDerivedConstructorReturnValue(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
 	}
 }
+
+// A class body's accessor keywords are contextual: what follows one has to be
+// the name of the accessor, and a generator's star is not. And a heritage
+// clause is a left-hand-side expression, which an arrow function is not.
+func TestClassMemberGrammarEdges(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"get then a generator", `class A { get
+		  *a() {} }
+		  String(new A().hasOwnProperty("get")) + "," + A.prototype.hasOwnProperty("a")`,
+			"true,true"},
+		{"static get then a generator", `class B { static get
+		  *a() {} }
+		  String(B.hasOwnProperty("get")) + "," + B.prototype.hasOwnProperty("a")`,
+			"true,true"},
+		{"set then a generator", `class D { set
+		  *a() {} }
+		  String(new D().hasOwnProperty("set"))`, "true"},
+		// An accessor written as one is still an accessor.
+		{"an actual getter", `class C { get x() { return 1 } }; String(new C().x)`, "1"},
+		{"an actual setter", `class C { set x(v) { this.v = v } }
+		  var c = new C(); c.x = 2; String(c.v)`, "2"},
+		{"a field named get", `class C { get = 1 }; String(new C().get)`, "1"},
+		// The heritage takes no arrow, however it is written.
+		{"arrow heritage", `try { eval("class C extends () => {} {}"); "no error" }
+		  catch (e) { e.constructor.name }`, "SyntaxError"},
+		{"async arrow heritage", `try { eval("class C extends async () => {} {}"); "no error" }
+		  catch (e) { e.constructor.name }`, "SyntaxError"},
+		{"parenthesized arrow", `try { eval("class C extends (() => {}) {}"); "no error" }
+		  catch (e) { e.constructor.name }`, "TypeError"},
+		{"an arrow inside a heritage", `try { eval("class C extends [() => {}] {}"); "no error" }
+		  catch (e) { e.constructor.name }`, "TypeError"},
+		{"an ordinary heritage", `class C extends Object {}; String(new C() instanceof Object)`,
+			"true"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}

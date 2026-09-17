@@ -547,7 +547,12 @@ func (p *parser) parseClass(isDecl bool) *ast.ClassLit {
 	}
 
 	if p.eatKeyword("extends") {
+		// The heritage is a LeftHandSideExpression, so an arrow function is not
+		// one however it is written.
+		savedArrow := p.noArrow
+		p.noArrow = true
 		cls.Extends = p.parseLeftHandSide()
+		p.noArrow = savedArrow
 	}
 
 	p.expectPunct("{")
@@ -621,8 +626,11 @@ func (p *parser) parseClassMember(cls *ast.ClassLit, sawConstructor *bool, priva
 		}
 		m := p.mark()
 		p.next()
+		// What follows an accessor keyword is the name of the accessor, and a
+		// `*` is not one: `get` on a line of its own, followed by a generator,
+		// is a field called get.
 		if p.startsPropertyName() && !p.isPunct("(") && !p.isPunct("=") &&
-			!p.isPunct(";") && !p.isPunct("}") {
+			!p.isPunct(";") && !p.isPunct("}") && !p.isPunct("*") {
 			key, computed := p.parsePropertyName(true)
 			p.checkClassMemberName(key, computed, isStatic, privateNames, kindOfAccessor(kind))
 			// A constructor is the one member that has to be a plain method:
