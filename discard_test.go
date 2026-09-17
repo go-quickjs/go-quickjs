@@ -251,6 +251,82 @@ func TestDiscardedMemberStores(t *testing.T) {
 	}
 }
 
+// TestDiscardedMemberUpdates covers a compound assignment to a property whose
+// result is thrown away, which is the other place the value was copied out for
+// something to drop.
+func TestDiscardedMemberUpdates(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var o = {x: 1}; o.x += 2; o.x`, "3"},
+		{`var o = {x: 1}; o.x -= 2; o.x`, "-1"},
+		{`var o = {x: 2}; o.x *= 3; o.x`, "6"},
+		{`var o = {x: 7}; o.x /= 2; o.x`, "3.5"},
+		{`var o = {x: 7}; o.x %= 4; o.x`, "3"},
+		{`var o = {x: 2}; o.x **= 3; o.x`, "8"},
+		{`var o = {x: 1}; o.x <<= 3; o.x`, "8"},
+		{`var o = {x: 8}; o.x >>= 2; o.x`, "2"},
+		{`var o = {x: -8}; o.x >>>= 28; o.x`, "15"},
+		{`var o = {x: 6}; o.x &= 3; o.x`, "2"},
+		{`var o = {x: 6}; o.x |= 1; o.x`, "7"},
+		{`var o = {x: 6}; o.x ^= 3; o.x`, "5"},
+		{`var o = {x: "a"}; o.x += "b"; o.x`, "ab"},
+		{`var o = {x: 1}; for (var i = 0; i < 4; i++) o.x += i; o.x`, "7"},
+
+		// Computed keys, which are converted once and in order.
+		{`var o = {a: 1}; var k = "a"; o[k] += 1; o.a`, "2"},
+		{`var a = [1, 2]; a[0] += 10; a.join()`, "11,2"},
+		{`var log = []
+		  var o = {a: 1}
+		  var k = {toString() { log.push("key"); return "a" }}
+		  o[k] += (log.push("value"), 1)
+		  log.join() + "=" + o.a`, "key,value=2"},
+
+		// A getter and a setter each run once, in that order.
+		{`var log = []
+		  var o = {_v: 1,
+		           get v() { log.push("get"); return this._v },
+		           set v(x) { log.push("set"); this._v = x }}
+		  o.v += 1
+		  log.join() + "=" + o._v`, "get,set=2"},
+
+		// Private and super targets.
+		{`class C { #n = 1; add(v) { this.#n += v; return this.#n } }
+		  new C().add(4)`, "5"},
+		// super.w reads the home object's prototype and writes to `this`, so
+		// the instance ends up shadowing what it read.
+		{`class A {}
+		  A.prototype.w = 10
+		  class B extends A { bump() { super.w += 2; return [this.w, A.prototype.w].join() } }
+		  new B().bump()`, "12,10"},
+
+		// A logical assignment still leaves its value for the drop, on both
+		// paths.
+		{`var o = {x: 0}; o.x ||= 5; o.x`, "5"},
+		{`var o = {x: 3}; o.x ||= 5; o.x`, "3"},
+		{`var o = {x: 1}; o.x &&= 5; o.x`, "5"},
+		{`var o = {x: 0}; o.x &&= 5; o.x`, "0"},
+		{`var o = {}; o.x ??= 5; o.x`, "5"},
+		{`var o = {x: null}; o.x ??= 5; o.x`, "5"},
+		{`var o = {x: 0}; for (var i = 0; i < 3; i++) o.x ||= i; o.x`, "1"},
+
+		// A failing store still fails.
+		{`"use strict"
+		  var o = Object.freeze({x: 1})
+		  try { o.x += 1; "no throw" } catch (e) { e.constructor.name }`, "TypeError"},
+		{`var o = {get x() { return 1 }}
+		  "use strict"
+		  o.x += 1
+		  o.x`, "1"},
+
+		// The value is still there when something wants it.
+		{`var o = {x: 1}; var r = (o.x += 2); [r, o.x].join()`, "3,3"},
+		{`var o = {x: 1}; [o.x += 1, o.x].join()`, "2,2"},
+		{`eval("var o = {x: 1}; o.x += 4")`, "5"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
 // TestCompletionValuesSurviveDiscard covers what eval returns, which is the
 // value of the last statement that produced one -- and so is exactly the value
 // the discarding rewrites must not be applied to.

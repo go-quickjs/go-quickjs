@@ -32,11 +32,23 @@ func (c *compiler) compileExprForEffect(e ast.Expr) {
 	case *ast.Assign:
 		// A store to a property carries its value out the same way, by copying
 		// it below what the store consumes.
-		if m, ok := n.Target.(*ast.Member); ok && n.Op == "=" {
-			c.compileMemberStore(m, func() {
-				c.compileExprNamed(n.Value, "")
-			}, false)
-			return
+		if m, ok := n.Target.(*ast.Member); ok {
+			switch n.Op {
+			case "=":
+				c.compileMemberStore(m, func() {
+					c.compileExprNamed(n.Value, "")
+				}, false)
+				return
+			case "&&=", "||=", "??=":
+				// A logical assignment that short-circuits leaves the value it
+				// read rather than one it stored, so something still has to
+				// discard it.
+			default:
+				c.compileMemberUpdate(m, n.Op, func() {
+					c.compileExpr(n.Value)
+				}, n.Start, false)
+				return
+			}
 		}
 	}
 	c.compileExpr(e)
@@ -1338,7 +1350,7 @@ func (c *compiler) compileAssign(n *ast.Assign) {
 		if m, ok := n.Target.(*ast.Member); ok {
 			c.compileMemberUpdate(m, n.Op, func() {
 				c.compileExprNamed(n.Value, nameOf(n.Target))
-			}, n.Start)
+			}, n.Start, true)
 			return
 		}
 		if id, ok := n.Target.(*ast.Ident); ok && c.withLimit(id.Name) > 0 {
@@ -1368,7 +1380,7 @@ func (c *compiler) compileAssign(n *ast.Assign) {
 
 	default:
 		if m, ok := n.Target.(*ast.Member); ok {
-			c.compileMemberUpdate(m, n.Op, func() { c.compileExpr(n.Value) }, n.Start)
+			c.compileMemberUpdate(m, n.Op, func() { c.compileExpr(n.Value) }, n.Start, true)
 			return
 		}
 		if id, ok := n.Target.(*ast.Ident); ok && c.withLimit(id.Name) > 0 {
@@ -1392,7 +1404,12 @@ func (c *compiler) compileAssign(n *ast.Assign) {
 // are expressions: `base[prop] *= f()` must call prop.toString once, and
 // reading the property and writing it back have to address the same place even
 // if the read changed what is there.
-func (c *compiler) compileMemberUpdate(m *ast.Member, op string, emitValue func(), pos int) {
+// compileMemberUpdate compiles a compound or logical assignment to a property.
+//
+// keep says whether the value has to be left behind as the expression's
+// result; in effect position it does not, and the copy that would carry it out
+// is one instruction and the drop that follows it another.
+func (c *compiler) compileMemberUpdate(m *ast.Member, op string, emitValue func(), pos int, keep bool) {
 	if _, isSuper := m.Object.(*ast.Super); isSuper {
 		// A super reference has no object on the stack: the read starts at the
 		// home object's prototype and the write lands on `this`.
@@ -1403,7 +1420,9 @@ func (c *compiler) compileMemberUpdate(m *ast.Member, op string, emitValue func(
 			c.emit(bytecode.OpDup2, 0, 0)
 			c.emitAt(m.Start, bytecode.OpGetSuperIndex, 0, 0)
 			c.finishUpdate(op, emitValue, pos, 2, func() {
-				c.emit(bytecode.OpInsert3, 0, 0)
+				if keep {
+					c.emit(bytecode.OpInsert3, 0, 0)
+				}
 				c.emitAt(m.Start, bytecode.OpSetSuperIndex, 0, 0)
 			})
 			return
@@ -1411,7 +1430,9 @@ func (c *compiler) compileMemberUpdate(m *ast.Member, op string, emitValue func(
 		name := c.nameIdx(propKeyName(m.Property))
 		c.compileSuperMemberGet(m)
 		c.finishUpdate(op, emitValue, pos, 0, func() {
-			c.emit(bytecode.OpDup, 0, 0)
+			if keep {
+				c.emit(bytecode.OpDup, 0, 0)
+			}
 			c.emitAt(m.Start, bytecode.OpSetSuperProp, name, 0)
 		})
 		return
@@ -1424,7 +1445,9 @@ func (c *compiler) compileMemberUpdate(m *ast.Member, op string, emitValue func(
 		c.emit(bytecode.OpDup, 0, 0)
 		c.emit(bytecode.OpGetPrivate, name, ref)
 		c.finishUpdate(op, emitValue, pos, 1, func() {
-			c.emit(bytecode.OpInsert2, 0, 0)
+			if keep {
+				c.emit(bytecode.OpInsert2, 0, 0)
+			}
 			c.emit(bytecode.OpSetPrivate, name, ref)
 		})
 		return
@@ -1437,7 +1460,9 @@ func (c *compiler) compileMemberUpdate(m *ast.Member, op string, emitValue func(
 		c.emit(bytecode.OpDup2, 0, 0)
 		c.emitAt(m.Start, bytecode.OpGetIndex, 0, 0)
 		c.finishUpdate(op, emitValue, pos, 2, func() {
-			c.emit(bytecode.OpInsert3, 0, 0)
+			if keep {
+				c.emit(bytecode.OpInsert3, 0, 0)
+			}
 			c.emitAt(m.Start, bytecode.OpSetIndex, 0, 0)
 		})
 		return
@@ -1446,7 +1471,9 @@ func (c *compiler) compileMemberUpdate(m *ast.Member, op string, emitValue func(
 	c.emit(bytecode.OpDup, 0, 0)
 	c.emitAt(m.Start, bytecode.OpGetProp, name, 0)
 	c.finishUpdate(op, emitValue, pos, 1, func() {
-		c.emit(bytecode.OpInsert2, 0, 0)
+		if keep {
+			c.emit(bytecode.OpInsert2, 0, 0)
+		}
 		c.emitAt(m.Start, bytecode.OpSetProp, name, 0)
 	})
 }

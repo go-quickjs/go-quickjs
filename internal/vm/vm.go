@@ -241,15 +241,8 @@ func (r *Runtime) run(cl *closure, this Value, args []Value, newTarget Value, ca
 	// The high-water mark is what endTurn clears back to, so that a value left
 	// behind by a returning frame does not stay reachable until its slot is
 	// reused.
-	if top := base + fn.LocalCount + fn.MaxStack; top > r.stackHigh {
-		r.stackHigh = top
-	}
-
-	// The high-water mark is what endTurn clears back to, so that a value left
-	// behind by a returning frame does not stay reachable until its slot is
-	// reused.
-	if top := base + fn.LocalCount + fn.MaxStack; top > r.stackHigh {
-		r.stackHigh = top
+	if r.stackTop > r.stackHigh {
+		r.stackHigh = r.stackTop
 	}
 
 	f := r.pushFrame()
@@ -269,18 +262,6 @@ func (r *Runtime) run(cl *closure, this Value, args []Value, newTarget Value, ca
 	// class with no explicit constructor gets a synthesized one, and what makes
 	// it derived is the heritage clause the class object records.
 	f.thisRef = nil
-	if callee != nil {
-		if fd := callee.fn(); fd != nil {
-			switch {
-			case !newTarget.IsUndefined() && fd.ctorKind == ctorDerived:
-				f.thisRef = &thisBinding{value: this}
-			case fd.arrow && fd.lexThisRef != nil:
-				// An arrow written inside a derived constructor shares its
-				// binding, so calling one before super() is the same error.
-				f.thisRef = fd.lexThisRef
-			}
-		}
-	}
 	f.newTarget = newTarget
 	f.callee = callee
 	f.args = args
@@ -291,6 +272,14 @@ func (r *Runtime) run(cl *closure, this Value, args []Value, newTarget Value, ca
 	f.evalVars = nil
 	if callee != nil {
 		if fd := callee.fn(); fd != nil {
+			switch {
+			case !newTarget.IsUndefined() && fd.ctorKind == ctorDerived:
+				f.thisRef = &thisBinding{value: this}
+			case fd.arrow && fd.lexThisRef != nil:
+				// An arrow written inside a derived constructor shares its
+				// binding, so calling one before super() is the same error.
+				f.thisRef = fd.lexThisRef
+			}
 			if len(fd.lexWith) > 0 {
 				f.withScopes = fd.lexWith[:len(fd.lexWith):len(fd.lexWith)]
 			}
