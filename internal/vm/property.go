@@ -497,8 +497,13 @@ func (r *Runtime) createOwnProp(o *Object, key Atom, val Value, strict bool) (bo
 	return true, nil
 }
 
-// setValueProp assigns through a value, which is a no-op on a primitive in
-// sloppy mode and a TypeError in strict mode.
+// setValueProp assigns through a value.
+//
+// A primitive has nowhere of its own to put a property, but the chain its
+// wrapper inherits may have a setter for the name, and that setter runs -- with
+// the primitive itself as the receiver, not the wrapper the walk went through.
+// Only when nothing on the chain takes the value does the assignment fail,
+// silently in sloppy mode and with a TypeError in strict.
 func (r *Runtime) setValueProp(v Value, key Atom, val Value, strict bool) error {
 	if v.IsObject() {
 		_, err := r.setProp(v.Object(), key, val, v, strict)
@@ -508,11 +513,12 @@ func (r *Runtime) setValueProp(v Value, key Atom, val Value, strict bool) error 
 		return r.throwTypeError("cannot set property %q of %s",
 			r.atoms.name(key), v.Kind())
 	}
-	if strict {
-		return r.throwTypeError("cannot create property %q on %s",
-			r.atoms.name(key), v.Kind())
+	o, err := r.toObject(v)
+	if err != nil {
+		return err
 	}
-	return nil
+	_, err = r.setProp(o, key, val, v, strict)
+	return err
 }
 
 // hasProp implements the `in` operator, walking the prototype chain.

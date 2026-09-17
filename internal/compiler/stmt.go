@@ -358,6 +358,19 @@ func (c *compiler) compileVarDecl(n *ast.VarDecl) {
 			}
 			continue
 		}
+		if id, ok := d.Target.(*ast.Ident); ok && n.Kind == ast.DeclVar &&
+			c.withLimit(id.Name) > 0 {
+			// A var's initializer is an assignment, and inside a `with` body
+			// an assignment resolves its name before it evaluates its value:
+			// an initializer that deletes the property still writes to the
+			// object the name named. The value the store leaves is the
+			// declaration's, which nothing reads.
+			c.resolveWithRef(id)
+			c.compileExprNamed(d.Init, id.Name)
+			c.endWithRef(id)
+			c.emit(bytecode.OpDrop, 0, 0)
+			continue
+		}
 		c.compileExprNamed(d.Init, nameOf(d.Target))
 		c.initBinding(d.Target, n.Kind)
 	}

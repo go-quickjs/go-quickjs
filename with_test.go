@@ -404,3 +404,72 @@ func TestWithRechecksTheBinding(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
 	}
 }
+
+// An assignment inside a `with` body resolves its name before it evaluates its
+// value, so an initializer that removes the property still writes to the object
+// the name named. A var's initializer is an assignment like any other.
+func TestWithResolvesBeforeEvaluating(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var obj = {test262id: 1}
+		  with (obj) { var test262id = delete obj.test262id }
+		  [String(obj.test262id), String(test262id)].join(",")`, "true,undefined"},
+		{`var obj = {x: 1}
+		  var out
+		  with (obj) { x = (delete obj.x, 2) }
+		  [String(obj.x), String(globalThis.x)].join(",")`, "2,undefined"},
+		// A name the object does not have is the binding outside it, still
+		// resolved first.
+		{`var y = 1
+		  var obj = {}
+		  with (obj) { y = (obj.y = 9, 2) }
+		  [String(y), String(obj.y)].join(",")`, "2,9"},
+		// The ordinary case is unchanged.
+		{`var obj = {a: 1}
+		  with (obj) { var a = 5 }
+		  [String(obj.a), String(globalThis.a)].join(",")`, "5,undefined"},
+		{`var obj = {}
+		  with (obj) { var b = 5 }
+		  [String(obj.b), String(b)].join(",")`, "undefined,5"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// A primitive has nowhere of its own to put a property, but a setter on the
+// chain its wrapper inherits runs, with the primitive itself as the receiver.
+func TestAssigningThroughAPrimitive(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var n = 0
+		  Object.defineProperty(Number.prototype, "p", {set: function () { n++ }})
+		  ;(0).p = 1
+		  String(n)`, "1"},
+		// The receiver is the primitive itself, which a strict setter sees
+		// unboxed as a sloppy one would not.
+		{`var seen
+		  Object.defineProperty(String.prototype, "p", {
+		    set: function (v) { "use strict"; seen = typeof this + ":" + this + ":" + v }
+		  })
+		  "x".p = 1
+		  seen`, "string:x:1"},
+		{`var n = 0
+		  var spy = new Proxy({}, {set: function () { n++; return true }})
+		  Object.setPrototypeOf(Number.prototype, spy)
+		  ;(0).zz = 1
+		  String(n)`, "1"},
+		// With nothing on the chain to take it, the assignment fails: silently
+		// in sloppy mode and with a TypeError in strict.
+		{`(function () { (0).nowhere = 1; return "ok" })()`, "ok"},
+		{`(function () { "use strict"
+		   try { (0).nowhere = 1; return "no throw" } catch (e) { return e.constructor.name } })()`,
+			"TypeError"},
+		// A read-only own property of the wrapper refuses too.
+		{`(function () { "use strict"
+		   try { "ab".length = 5; return "no throw" } catch (e) { return e.constructor.name } })()`,
+			"TypeError"},
+		{`"ab".length = 5; "ab".length`, "2"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
