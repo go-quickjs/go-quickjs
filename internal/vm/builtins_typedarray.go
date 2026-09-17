@@ -702,7 +702,10 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		return Int(t.byteOffset), nil
 	})
 	r.defGetter(p, "buffer", func(rt *Runtime, this Value, args []Value) (Value, error) {
-		t, err := rt.typedArrayOf(this, "buffer")
+		// The buffer is reported whether or not it is still attached: it is
+		// the object the view was made over, and asking which one that was is
+		// how a caller finds out that it has gone.
+		t, err := rt.typedArraySlot(this, "buffer")
 		if err != nil {
 			return Undefined, err
 		}
@@ -817,6 +820,22 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		res, nt, err := rt.newTypedArrayLike(this, t, end-start)
 		if err != nil {
 			return Undefined, err
+		}
+		if end == start {
+			// Nothing to copy, so the source is never looked at again -- which
+			// is why detaching it while the species ran is not an error here.
+			return res, nil
+		}
+		// Building the result ran user code, which may have detached the
+		// source out from under the copy -- and the result has to be able to
+		// hold what the source holds, which a BigInt array and a Number one
+		// cannot do for each other.
+		if t.storage().detached {
+			return Undefined, rt.throwTypeError("the underlying ArrayBuffer has been detached")
+		}
+		if elemInfos[nt.kind].big != elemInfos[t.kind].big {
+			return Undefined, rt.throwTypeError(
+				"a BigInt typed array and a Number one cannot stand in for each other")
 		}
 		for i := 0; i < end-start && i < nt.length; i++ {
 			if err := rt.setElem(nt, i, t.getElem(start+i)); err != nil {

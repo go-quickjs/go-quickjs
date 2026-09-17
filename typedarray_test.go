@@ -413,8 +413,17 @@ func TestTypedArrayDetachDuringUse(t *testing.T) {
 		{`var a = new Uint8Array(8);
 		  try { a.fill(1, {valueOf() { a.buffer.transfer(); return 0 }}) }
 		  catch (e) { e.constructor.name }`, "TypeError"},
-		{`var a = new Uint8Array(8);
-		  a.slice(0, {valueOf() { a.buffer.transfer(); return 8 }}); "ok"`, "ok"},
+		// slice looks at the source again once the result has been built, so a
+		// detachment while its arguments were coerced is reported -- but only
+		// when there is something to copy.
+		{`var a = new Uint8Array(8)
+		  try { a.slice(0, {valueOf() { a.buffer.transfer(); return 8 }}) }
+		  catch (e) { e.constructor.name }`, "TypeError"},
+		{`var a = new Uint8Array(8)
+		  a.slice(0, {valueOf() { a.buffer.transfer(); return 0 }}).length + ""`, "0"},
+		// The buffer is reported whether or not it is still attached.
+		{`var a = new Uint8Array(4); var b = a.buffer; a.buffer.transfer()
+		  String(a.buffer === b)`, "true"},
 		{`var a = new Uint8Array(8);
 		  a.copyWithin(0, 1, {valueOf() { a.buffer.transfer(); return 8 }}); "ok"`, "ok"},
 		// set looks at the buffer only after the offset is coerced, so a
@@ -768,6 +777,49 @@ func TestBase64Decoding(t *testing.T) {
 		  var opts = {get alphabet() { calls++; return "base64" }}
 		  try { a.toBase64(opts) } catch (e) { e.constructor.name + "," + calls }`,
 			"TypeError,1"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// TestTypedArraySliceSpecies covers what slice does once the species has built
+// the result: it looks at the source again, because building it ran user code.
+func TestTypedArraySliceSpecies(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// Nothing to copy, so the source is never looked at again.
+		{`var sample, other, counter = 0
+		  var ctor = {[Symbol.species]: function (count) {
+		    sample.buffer.transfer(); counter++; other = new Int8Array(count); return other
+		  }}
+		  sample = new Int8Array(0); sample.constructor = ctor
+		  var r = sample.slice()
+		  r.length + "," + (r === other) + "," + counter`, "0,true,1"},
+		{`var sample, counter = 0
+		  var ctor = {[Symbol.species]: function (count) {
+		    sample.buffer.transfer(); counter++; return new Int8Array(count)
+		  }}
+		  sample = new Int8Array(4); sample.constructor = ctor
+		  sample.slice(1, 1).length + "," + counter`, "0,1"},
+
+		// With something to copy, a source detached by the species is an error.
+		{`var sample = new Int8Array(4)
+		  sample.constructor = {[Symbol.species]: function (count) {
+		    sample.buffer.transfer(); return new Int8Array(count)
+		  }}
+		  try { sample.slice() } catch (e) { e.constructor.name }`, "TypeError"},
+		// And a result that cannot hold what the source holds is one too.
+		{`var sample = new BigInt64Array(4)
+		  sample.constructor = {
+		    [Symbol.species]: function (count) { return new Int8Array(count) },
+		  }
+		  try { sample.slice() } catch (e) { e.constructor.name }`, "TypeError"},
+		// A zero-length slice does not care about the kind.
+		{`var sample = new BigInt64Array(4)
+		  sample.constructor = {
+		    [Symbol.species]: function (count) { return new Int8Array(count) },
+		  }
+		  sample.slice(1, 1).length + ""`, "0"},
 	}
 	for _, tc := range cases {
 		checkEval(t, tc.src, tc.want)

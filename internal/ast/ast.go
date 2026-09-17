@@ -182,7 +182,12 @@ type ObjectLit struct {
 	// Paren records that the literal was parenthesized, which stops it from
 	// being read as a destructuring pattern.
 	Paren bool
-	Start int
+	// ProtoDup is the position of a second __proto__ property, or zero when
+	// there is none. Two of them are an error in a literal, where each would
+	// set the prototype, but not in a pattern, where each is a target to
+	// assign to.
+	ProtoDup int
+	Start    int
 }
 
 // FuncKind describes the flavour of a function.

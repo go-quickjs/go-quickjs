@@ -355,6 +355,13 @@ func (c *compiler) compileArrayLit(n *ast.ArrayLit) {
 }
 
 func (c *compiler) compileObjectLit(n *ast.ObjectLit) {
+	if n.ProtoDup != 0 {
+		// Two __proto__ properties in a literal are an error: each would set
+		// the prototype and the second would silently win. Reaching here means
+		// the text is a literal after all rather than a pattern, where two are
+		// simply two places to assign to.
+		c.errorf(n.ProtoDup, "an object literal may have only one __proto__ property")
+	}
 	c.emit(bytecode.OpNewObject, 0, 0)
 	for _, p := range n.Props {
 		switch p.Kind {

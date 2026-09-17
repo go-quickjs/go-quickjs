@@ -46,10 +46,6 @@ func (r *Runtime) typedArraySpeciesCreate(this Value, t *typedArrayData,
 	if len(args) == 1 && args[0].IsNumber() && float64(nt.length) < args[0].Number() {
 		return Undefined, nil, r.throwTypeError("the typed array species is too short")
 	}
-	if elemInfos[nt.kind].big != elemInfos[t.kind].big {
-		return Undefined, nil, r.throwTypeError(
-			"a BigInt typed array and a Number one cannot stand in for each other")
-	}
 	return res, nt, nil
 }
 

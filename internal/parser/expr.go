@@ -819,8 +819,10 @@ func (p *parser) parseObjectLiteral() ast.Expr {
 		// key is allowed.
 		if prop.Kind == ast.PropInit && !prop.Computed && !prop.Shorthand &&
 			!prop.Method && propertyKeyName(prop.Key) == "__proto__" {
-			if sawProto {
-				p.errorf("an object literal may have only one __proto__ property")
+			if sawProto && lit.ProtoDup == 0 {
+				// The error waits: the same text read as a destructuring
+				// pattern is legal, and which it is not known yet.
+				lit.ProtoDup = prop.Start
 			}
 			sawProto = true
 		}

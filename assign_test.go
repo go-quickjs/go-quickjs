@@ -72,3 +72,28 @@ func TestParenthesizedTargetHasNoName(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestDuplicateProtoInPattern covers two __proto__ properties, which are an
+// error in an object literal -- each would set the prototype and the second
+// would silently win -- but not in a destructuring pattern, where each is
+// simply a place to assign to.
+func TestDuplicateProtoInPattern(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`try { eval("({__proto__: 1, __proto__: 2})") } catch (e) { e.constructor.name }`,
+			"SyntaxError"},
+		{`var value = Object.defineProperty({}, "__proto__", {value: 123})
+		  var x, y
+		  var r = ({__proto__: x, __proto__: y} = value)
+		  x + "," + y + "," + (r === value)`, "123,123,true"},
+		{`var o = {__proto__: null}; String(Object.getPrototypeOf(o))`, "null"},
+		{`var p = {}; var o = {__proto__: p}; String(Object.getPrototypeOf(o) === p)`, "true"},
+		// A computed or shorthand key is an ordinary property, so two are fine.
+		{`var k = "__proto__"
+		  var o = {[k]: 1, [k]: 2}
+		  o.__proto__ + "," + String(Object.getPrototypeOf(o) === Object.prototype)`,
+			"2,true"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
