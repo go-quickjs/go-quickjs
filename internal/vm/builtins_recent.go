@@ -35,12 +35,8 @@ func (r *Runtime) initPromiseTry() {
 		return
 	}
 	r.defMethod(ctor, "try", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		// The receiver is the constructor, so a subclass's Promise.try yields
-		// an instance of the subclass -- and a promise the callback returns is
-		// adopted rather than wrapped in another.
-		cap, err := rt.newPromiseCapability(this)
-		if err != nil {
-			return Undefined, err
+		if !this.IsObject() {
+			return Undefined, rt.throwTypeError("Promise.try requires a constructor receiver")
 		}
 		fn := arg(args, 0)
 		var rest []Value
@@ -49,15 +45,22 @@ func (r *Runtime) initPromiseTry() {
 		}
 		v, callErr := rt.call(fn, Undefined, rest)
 		if callErr != nil {
+			// A throw becomes a rejection, which is the whole point: the
+			// capability is made only now, because a callback that returns is
+			// answered with its own value.
+			cap, err := rt.newPromiseCapability(this)
+			if err != nil {
+				return Undefined, err
+			}
 			if _, err := rt.call(cap.reject, Undefined, []Value{thrownValue(callErr)}); err != nil {
 				return Undefined, err
 			}
 			return Obj(cap.promise), nil
 		}
-		if _, err := rt.call(cap.resolve, Undefined, []Value{v}); err != nil {
-			return Undefined, err
-		}
-		return Obj(cap.promise), nil
+		// The receiver is the constructor, so a subclass's Promise.try yields
+		// an instance of the subclass -- and a promise of that very
+		// constructor is handed back as it is rather than wrapped in another.
+		return rt.promiseResolveWith(this, v)
 	})
 }
 

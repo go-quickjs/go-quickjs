@@ -148,6 +148,15 @@ func TestRecentBuiltins(t *testing.T) {
 		  Promise.try(() => { throw new TypeError("x"); }).catch(e => { out = e.name; });
 		  Promise.resolve().then(() => {}).then(() => out)`, "[object Promise]"},
 		{`String(Promise.try(() => 1) instanceof Promise)`, "true"},
+		// A promise of the very constructor it was asked for is handed back as
+		// it is rather than wrapped in another.
+		{`var s = Promise.resolve(); String(Promise.try(() => s) === s)`, "true"},
+		{`class P extends Promise {}
+		  var s = P.resolve(); String(P.try(() => s) === s)`, "true"},
+		{`class P2 extends Promise {}
+		  var s = Promise.resolve(); String(P2.try(() => s) === s)`, "false"},
+		{`try { Promise.try.call(null, () => {}); "no error" }
+		  catch (e) { e.constructor.name }`, "TypeError"},
 
 		// instanceof can be forged; the internal slot cannot.
 		{`[Error.isError(new TypeError()), Error.isError({}),
