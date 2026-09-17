@@ -39,6 +39,23 @@ func (r *Runtime) getProp(obj *Object, key Atom, receiver Value) (Value, error) 
 			}
 		}
 
+		// The scan of a small table is written out here rather than called: a
+		// property read is the hottest thing the interpreter does, and the
+		// layers it otherwise goes through -- own, visible, not an accessor --
+		// cost more than the comparisons they wrap. Anything less ordinary
+		// than a plain data property falls through to them.
+		//
+		// A mapped arguments object is left out whole: its indices name
+		// parameters, and only the binding knows what they hold now.
+		if o.index == nil && o.flags&objMappedArguments == 0 {
+			for i := range o.props {
+				p := &o.props[i]
+				if p.key == key &&
+					p.flags&(propDeleted|propPrivate|propAccessor) == 0 {
+					return p.value, nil
+				}
+			}
+		}
 		if p := o.getOwnVisible(key); p != nil {
 			if p.isAccessor() {
 				a := p.getterSetter()
