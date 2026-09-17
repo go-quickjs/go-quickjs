@@ -2175,3 +2175,88 @@ func TestArrayLengthIsAnOwnProperty(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// In sloppy mode with a plain parameter list the arguments object is mapped:
+// its indices alias the parameters they were passed to, so writing one is
+// visible through the other. Strict mode, and anything more elaborate than
+// plain parameters, get the snapshot instead.
+func TestMappedArguments(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`(function (a) { arguments[0] = 9; return a })(1)`, "9"},
+		{`(function (a) { a = 9; return arguments[0] })(1)`, "9"},
+		{`(function (a, b) { b = 5; return arguments[1] })(1, 2)`, "5"},
+		// The alias survives the call: the object may outlive the frame.
+		{`var args = (function (a) { a = 7; return arguments })(1); String(args[0])`, "7"},
+
+		// Only an argument that was passed, and only one whose parameter the
+		// name still resolves to, is mapped.
+		{`(function (a) { a = 9; return String(arguments[1]) })(1, 2)`, "2"},
+		{`(function (a, b) { b = 9; return String(arguments[1]) })(1)`, "undefined"},
+		{`(function (a, a) { a = 9; return [arguments[0], arguments[1]].join(",") })(1, 2)`,
+			"1,9"},
+
+		// Deleting or making the property read-only breaks the alias; making
+		// it non-configurable does not.
+		{`(function (a) { delete arguments[0]; a = 3; return String(arguments[0]) })(1)`,
+			"undefined"},
+		{`(function (a) { Object.defineProperty(arguments, "0", {writable: false});
+		    a = 2; return [a, arguments[0]].join(",") })(1)`, "2,1"},
+		{`(function (a) { Object.defineProperty(arguments, "0", {configurable: false});
+		    a = 2; return [a, arguments[0]].join(",") })(1)`, "2,2"},
+		// Defining a value writes through even when the result is read-only.
+		{`(function (a) {
+		    Object.defineProperty(arguments, "0",
+		      {value: 20, writable: false, enumerable: false, configurable: false});
+		    return a })(1)`, "20"},
+
+		// Anything but a sloppy plain parameter list gets the snapshot.
+		{`(function (a) { "use strict"; arguments[0] = 9; return a })(1)`, "1"},
+		{`(function (a = 1) { arguments[0] = 9; return a })(1)`, "1"},
+		{`(function (...a) { arguments[0] = 9; return a[0] })(1)`, "1"},
+		{`(function ([a]) { arguments[0] = 9; return a })([1])`, "1"},
+
+		// An unmapped arguments object refuses to say what called it; a mapped
+		// one answers.
+		{`(function () { "use strict";
+		    try { arguments.callee } catch (e) { return e.constructor.name } })()`,
+			"TypeError"},
+		{`(function f() { return arguments.callee === f })()`, "true"},
+		// The same function does both halves of every restricted property.
+		{`var d = Object.getOwnPropertyDescriptor(
+		      (function () { "use strict"; return arguments })(), "callee");
+		  var fp = Object.getOwnPropertyDescriptor(Function.prototype, "caller");
+		  [d.get === d.set, d.get === fp.get, d.get === fp.set].join(",")`,
+			"true,true,true"},
+
+		// Two parameters may share a name only where the list is simple and
+		// the code is sloppy.
+		{`function f(a, a) { return a } String(f(1, 2))`, "2"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+
+	for _, src := range []string{
+		`"use strict"; throw 0; function f(a, a) {}`,
+		`throw 0; (a, a) => {}`,
+		`throw 0; function f(a, a = 1) {}`,
+		`throw 0; async function f(a, a) {}`,
+		`throw 0; ({ m(a, a) {} })`,
+	} {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil {
+			t.Errorf("%s: accepted, want SyntaxError", src)
+		} else if !strings.Contains(err.Error(), "SyntaxError") {
+			t.Errorf("%s: got %v, want SyntaxError", src, err)
+		}
+		rt.Close()
+	}
+}

@@ -108,6 +108,10 @@ const (
 	// objHasSparseElements marks an array that has fallen back to storing
 	// elements as ordinary properties.
 	objHasSparseElements
+	// objMappedArguments marks a sloppy-mode arguments object whose indices
+	// alias the parameters they were passed to, so that writing one is visible
+	// through the other.
+	objMappedArguments
 )
 
 // linearScanLimit is the property count below which lookup scans the slice
@@ -427,7 +431,36 @@ func (o *Object) getElem(i uint32) (Value, bool) {
 	if isHole(v) {
 		return Undefined, false
 	}
+	if o.flags&objMappedArguments != 0 {
+		if u := o.argumentBinding(i); u != nil {
+			// The parameter is what the index names; the stored value is only
+			// there so that the index exists as a property.
+			return u.get(), true
+		}
+	}
 	return v, true
+}
+
+// argumentBinding returns the parameter a mapped arguments object's index
+// aliases, or nil when the index does not alias one.
+func (o *Object) argumentBinding(i uint32) *upvalue {
+	d, _ := o.data.(*argumentsData)
+	if d == nil || int(i) >= len(d.mapped) {
+		return nil
+	}
+	return d.mapped[i]
+}
+
+// unmapArgument breaks the alias between an index and its parameter, which
+// deleting the property or redefining it as anything but a writable data
+// property does.
+func (o *Object) unmapArgument(i uint32) {
+	if o.flags&objMappedArguments == 0 {
+		return
+	}
+	if d, _ := o.data.(*argumentsData); d != nil && int(i) < len(d.mapped) {
+		d.mapped[i] = nil
+	}
 }
 
 // setElem stores a dense element, growing the slice when the write is at or
@@ -437,6 +470,15 @@ func (o *Object) getElem(i uint32) (Value, bool) {
 // falls back to storing the element as an ordinary property instead. The
 // threshold bounds the memory a single sparse write can commit.
 func (o *Object) setElem(i uint32, v Value) bool {
+	if o.flags&objMappedArguments != 0 && int(i) < len(o.elems) {
+		if u := o.argumentBinding(i); u != nil {
+			// The value goes to the parameter, and to the slot as well so that
+			// the index stays present.
+			u.set(v)
+			o.elems[i] = v
+			return true
+		}
+	}
 	switch {
 	case int(i) < len(o.elems):
 		o.elems[i] = v

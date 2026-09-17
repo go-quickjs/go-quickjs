@@ -358,16 +358,38 @@ func (r *Runtime) objectRest(src Value, excluded []Value) (Value, error) {
 	return Obj(out), nil
 }
 
+// argumentsData holds what a mapped arguments object aliases.
+//
+// mapped[i] is the parameter the index i was passed to, or nil where there is
+// none: an argument beyond the declared parameters, one whose parameter is
+// shadowed by a later one of the same name, or an index the program has since
+// deleted or redefined.
+type argumentsData struct {
+	mapped []*upvalue
+}
+
 // newArgumentsObject materializes the arguments object for a call.
 //
-// It is the unmapped form, which is what strict mode requires and what every
-// modern function gets: the elements are a snapshot, not aliases of the
-// parameter slots.
+// In sloppy mode with a simple parameter list the object is mapped: its indices
+// alias the parameters they were passed to, so that writing one is visible
+// through the other. Strict mode and anything more elaborate than plain
+// parameters get the unmapped form, where the elements are a snapshot.
+//
+// The aliases are the ordinary captured-binding cells, so they keep working
+// after the call returns -- which they must, since the object can outlive it.
 func (r *Runtime) newArgumentsObject(f *frame) *Object {
 	o := newObject(r.proto.object, ClassArguments)
 	o.elems = append(o.elems, f.args...)
 	o.setOwnRaw(atomLength, Int(len(f.args)), propWritable|propConfigurable)
-	if f.callee != nil {
+	if f.cl != nil && f.cl.fn.MappedArguments {
+		r.mapArguments(o, f)
+	}
+	switch {
+	case f.cl != nil && f.cl.fn.Strict:
+		// An unmapped arguments object refuses to say what called it: the
+		// property is there, and reading or writing it throws.
+		r.defineAccessor(o, atomCallee, r.throwTypeErrorFn, r.throwTypeErrorFn, 0)
+	case f.callee != nil:
 		o.setOwnRaw(atomCallee, Obj(f.callee), propWritable|propConfigurable)
 	}
 	// An arguments object is iterable, using the same iterator as an array.
@@ -377,6 +399,37 @@ func (r *Runtime) newArgumentsObject(f *frame) *Object {
 				return rt.newArrayIterator(this)
 			})), propWritable|propConfigurable)
 	return o
+}
+
+// mapArguments aliases each index to the parameter it was passed to.
+//
+// Two parameters may share a name in a sloppy simple list, and only the last of
+// them is the one the name resolves to -- so only that one is mapped, and the
+// earlier index is left alone.
+func (r *Runtime) mapArguments(o *Object, f *frame) {
+	fn := f.cl.fn
+	n := fn.ParamCount
+	if n > len(f.args) {
+		n = len(f.args)
+	}
+	if n <= 0 {
+		return
+	}
+	mapped := make([]*upvalue, n)
+	seen := make(map[string]bool, n)
+	for i := n - 1; i >= 0; i-- {
+		name := ""
+		if i < len(fn.Locals) {
+			name = fn.Locals[i].Name
+		}
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		mapped[i] = r.captureLocal(f, i)
+	}
+	o.data = &argumentsData{mapped: mapped}
+	o.flags |= objMappedArguments
 }
 
 // completionKind says how a protected block finished, which a finally clause

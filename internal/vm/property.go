@@ -41,6 +41,11 @@ func (r *Runtime) getProp(obj *Object, key Atom, receiver Value) (Value, error) 
 				}
 				return r.call(Obj(a.getter), receiver, nil)
 			}
+			if u := mappedArgument(o, key); u != nil {
+				// The index still names a parameter even though the property
+				// has left dense storage, which redefining it does.
+				return u.get(), nil
+			}
 			return p.value, nil
 		}
 	}
@@ -216,7 +221,7 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 				// A dense element is always a writable data property, so the
 				// assignment lands here.
 				if o == obj {
-					o.elems[key.Index()] = val
+					o.setElem(key.Index(), val)
 					return nil
 				}
 				break
@@ -259,6 +264,9 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 		}
 		if o == obj {
 			p.value = val
+			if u := mappedArgument(o, key); u != nil {
+				u.set(val)
+			}
 			return nil
 		}
 		// An inherited writable data property is shadowed by a new own
@@ -272,6 +280,19 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 		target = receiver.Object()
 	}
 	return r.createOwnProp(target, key, val, strict)
+}
+
+// mappedArgument returns the parameter an index of a mapped arguments object
+// aliases, or nil when there is none.
+//
+// The alias normally lives in dense storage, where getElem and setElem answer
+// for it; this is for the property table, which an index redefined with
+// attributes moves to.
+func mappedArgument(o *Object, key Atom) *upvalue {
+	if o.flags&objMappedArguments == 0 || !key.IsIndex() {
+		return nil
+	}
+	return o.argumentBinding(key.Index())
 }
 
 // createOwnProp adds a new own data property, applying the exotic rules of
@@ -466,6 +487,8 @@ func (r *Runtime) deleteProp(o *Object, key Atom, strict bool) (bool, error) {
 			// end: an array's length is a number rather than a count of what
 			// is present, so `delete a[a.length - 1]` does not shorten it.
 			o.elems[i] = elemHole
+			// A deleted index no longer names a parameter.
+			o.unmapArgument(i)
 			return true, nil
 		}
 	}
@@ -483,6 +506,18 @@ func (r *Runtime) deleteProp(o *Object, key Atom, strict bool) (bool, error) {
 
 // defineOwnProp implements Object.defineProperty for a data property.
 func (r *Runtime) defineOwnProp(o *Object, key Atom, val Value, flags propFlags) error {
+	if o.flags&objMappedArguments != 0 && key.IsIndex() {
+		i := key.Index()
+		if u := o.argumentBinding(i); u != nil {
+			// The parameter takes the value whatever the attributes say, and
+			// keeps the alias unless the property stops being writable: a
+			// read-only property is no longer the parameter.
+			u.set(val)
+			if flags&propWritable == 0 {
+				o.unmapArgument(i)
+			}
+		}
+	}
 	if o.class == ClassArray && key.IsIndex() && flags == propDefault {
 		if o.setElem(key.Index(), val) {
 			return nil
@@ -511,6 +546,8 @@ func (r *Runtime) defineAccessor(o *Object, key Atom, getter, setter *Object, fl
 	if key.IsIndex() && int(key.Index()) < len(o.elems) {
 		o.markSparse()
 		o.elems[key.Index()] = elemHole
+		// An accessor is not the parameter it replaced.
+		o.unmapArgument(key.Index())
 	}
 	if p := o.getOwnVisible(key); p != nil && p.isAccessor() {
 		if a := p.getterSetter(); a != nil {

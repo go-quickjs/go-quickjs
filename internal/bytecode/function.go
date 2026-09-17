@@ -204,6 +204,9 @@ type Function struct {
 	HasRest         bool
 	HasSimpleParams bool
 	UsesArguments   bool
+	// MappedArguments marks a function whose arguments object aliases its
+	// parameters, which sloppy mode with a plain parameter list asks for.
+	MappedArguments bool
 	// ParamsAreLexical marks a parameter list whose bindings are initialized
 	// one at a time, in order, so that a default may not read a parameter that
 	// comes after it. A missing argument leaves its slot in the dead zone for

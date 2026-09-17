@@ -76,6 +76,10 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 			return
 		}
 		c.fn.UsesArguments = true
+		// A sloppy function with plain parameters gets the mapped arguments
+		// object, whose indices alias the parameters. Anything more elaborate
+		// than plain parameters, or strict mode, gets the snapshot instead.
+		c.fn.MappedArguments = !c.fn.Strict && c.fn.HasSimpleParams
 		slot := c.declare("arguments", bindVar, fn.Start)
 		c.emit(bytecode.OpGetArguments, 0, 0)
 		c.emit(bytecode.OpSetLocal, slot, 0)

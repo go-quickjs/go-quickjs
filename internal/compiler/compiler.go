@@ -480,7 +480,12 @@ func (c *compiler) declare(name string, kind bindKind, pos int) uint32 {
 	// like one. At a function's own top level it is var-scoped instead, which
 	// is why `function f(){} function f(){}` is legal there and not in a block.
 	lexicalFn := (kind == bindFunction || kind == bindFunctionLexical) && c.depth > 0
-	if (kind != bindVar && kind != bindFunction && kind != bindFunctionLexical) || lexicalFn {
+	// Two parameters may share a name where the list is simple and the code is
+	// sloppy, which the parser decides; each still has its own slot, because
+	// the interpreter fills them positionally, and the later one is what the
+	// name resolves to.
+	if kind != bindParam &&
+		((kind != bindVar && kind != bindFunction && kind != bindFunctionLexical) || lexicalFn) {
 		for i := len(c.locals) - 1; i >= 0 && c.locals[i].depth == c.depth; i-- {
 			if c.locals[i].name != name {
 				continue

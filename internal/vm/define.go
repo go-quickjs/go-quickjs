@@ -307,6 +307,9 @@ func (r *Runtime) currentDescriptor(o *Object, key Atom) *propDesc {
 		return d
 	}
 	d.value, d.hasValue = p.value, true
+	if u := mappedArgument(o, key); u != nil {
+		d.value = u.get()
+	}
 	d.writable, d.hasWritable = p.flags&propWritable != 0, true
 	return d
 }

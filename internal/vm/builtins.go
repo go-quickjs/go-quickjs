@@ -572,6 +572,15 @@ func (r *Runtime) defineProperties(target *Object, props Value) error {
 func (r *Runtime) initFunctionBuiltins() {
 	p := r.proto.function
 
+	// The two properties that once let a function walk the call stack. They
+	// are still there, and reading or writing either throws: the same function
+	// an unmapped arguments object's callee uses, which is what makes them
+	// indistinguishable from one another.
+	r.defineAccessor(p, r.atoms.intern("caller"),
+		r.throwTypeErrorFn, r.throwTypeErrorFn, propConfigurable)
+	r.defineAccessor(p, atomArguments,
+		r.throwTypeErrorFn, r.throwTypeErrorFn, propConfigurable)
+
 	r.defMethod(p, "call", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		rest := args
 		if len(rest) > 0 {
@@ -2290,11 +2299,7 @@ func elemAt(o *Object, i int) (Value, bool) {
 	if i < 0 || i >= len(o.elems) {
 		return Undefined, false
 	}
-	v := o.elems[i]
-	if isHole(v) {
-		return Undefined, false
-	}
-	return v, true
+	return o.getElem(uint32(i))
 }
 
 // clipRange re-clamps a range against an array's current length.

@@ -110,6 +110,21 @@ func (r *Runtime) initIntrinsics() {
 		},
 	}
 
+	// %ThrowTypeError% is the one function both reading and writing a
+	// restricted property calls. There is exactly one per realm, it is frozen,
+	// and it has no own name -- all of which a script can check.
+	r.throwTypeErrorFn = r.newNativeFunc("", 0,
+		func(rt *Runtime, this Value, args []Value) (Value, error) {
+			return Undefined, rt.throwTypeError(
+				"this property may not be read or written")
+		})
+	r.throwTypeErrorFn.setOwnRaw(atomLength, Int(0), 0)
+	r.throwTypeErrorFn.setOwnRaw(atomName, Str(NewString("")), 0)
+	if fd := r.throwTypeErrorFn.fn(); fd != nil {
+		fd.propsMaterialized = true
+	}
+	r.throwTypeErrorFn.flags &^= objExtensible
+
 	r.proto.array = newObject(r.proto.object, ClassArray)
 	r.proto.str = newObject(r.proto.object, ClassStringWrapper)
 	r.proto.str.data = emptyString

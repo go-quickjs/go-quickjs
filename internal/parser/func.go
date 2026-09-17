@@ -74,6 +74,79 @@ func (p *parser) parseFunctionParamsAndBody(fn *ast.FuncLit) {
 	fn.Params = p.parseParams()
 	fn.Body = p.parseFunctionBody(fn)
 	fn.Strict = p.strict
+	p.checkParamNames(fn)
+}
+
+// checkParamNames rejects a parameter list that binds a name twice.
+//
+// Two parameters may share a name only where the list is simple and the code
+// is sloppy -- which is what makes the arguments object's mapping well defined,
+// since only the last of them is mapped. Everywhere else the names must be
+// unique: in strict mode, in a list with a default, a pattern or a rest
+// element, and in every method and arrow, whose grammar demands it outright.
+//
+// It runs after the body, because a "use strict" directive there applies to the
+// parameter list too.
+func (p *parser) checkParamNames(fn *ast.FuncLit) {
+	unique := fn.Strict || fn.Async || !simpleParams(fn.Params)
+	switch fn.Kind {
+	case ast.FuncArrow, ast.FuncMethod, ast.FuncGetter, ast.FuncSetter,
+		ast.FuncConstructor, ast.FuncDerivedConstructor:
+		unique = true
+	}
+	if !unique {
+		return
+	}
+	seen := make(map[string]bool, len(fn.Params))
+	var names []string
+	for _, prm := range fn.Params {
+		names = boundNames(prm, names[:0])
+		for _, n := range names {
+			if seen[n] {
+				p.errorf("parameter %q is bound twice", n)
+			}
+			seen[n] = true
+		}
+	}
+}
+
+// simpleParams reports whether every parameter is a plain identifier.
+func simpleParams(params []ast.Expr) bool {
+	for _, prm := range params {
+		if _, ok := prm.(*ast.Ident); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// boundNames appends the names a binding target introduces.
+func boundNames(e ast.Expr, out []string) []string {
+	switch n := e.(type) {
+	case *ast.Ident:
+		out = append(out, n.Name)
+	case *ast.AssignPattern:
+		out = boundNames(n.Target, out)
+	case *ast.RestElement:
+		out = boundNames(n.Arg, out)
+	case *ast.ArrayPattern:
+		for _, el := range n.Elements {
+			if el != nil {
+				out = boundNames(el, out)
+			}
+		}
+		if n.Rest != nil {
+			out = boundNames(n.Rest, out)
+		}
+	case *ast.ObjectPattern:
+		for _, prop := range n.Props {
+			out = boundNames(prop.Value, out)
+		}
+		if n.Rest != nil {
+			out = boundNames(n.Rest, out)
+		}
+	}
+	return out
 }
 
 // parseParams parses a parenthesized formal parameter list.
@@ -240,6 +313,7 @@ func (p *parser) parseArrowBody(params []ast.Expr, start int, async bool) ast.Ex
 		fn.End = p.prevEnd
 	}
 	fn.Strict = p.strict
+	p.checkParamNames(fn)
 	return fn
 }
 

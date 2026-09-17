@@ -1967,7 +1967,10 @@ func (r *Runtime) newArrayFrom(vals []Value) *Object {
 func (r *Runtime) getIndexed(obj, key Value) (Value, error) {
 	if obj.IsObject() && key.IsNumber() {
 		o := obj.Object()
-		if i := uint32(key.Number()); float64(i) == key.Number() && int(i) < len(o.elems) {
+		// A mapped arguments object's indices are not what its dense storage
+		// says, so it has no fast path.
+		if i := uint32(key.Number()); float64(i) == key.Number() &&
+			int(i) < len(o.elems) && o.flags&objMappedArguments == 0 {
 			if v := o.elems[i]; !isHole(v) {
 				return v, nil
 			}
