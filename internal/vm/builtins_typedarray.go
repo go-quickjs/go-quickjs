@@ -767,6 +767,11 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		if err != nil {
 			return Undefined, err
 		}
+		// Any of those coercions can run a valueOf that detaches the buffer,
+		// so the view is checked again before anything is written.
+		if t.storage().detached {
+			return Undefined, rt.throwTypeError("the underlying ArrayBuffer has been detached")
+		}
 		for i := start; i < end; i++ {
 			if err := rt.setElem(t, i, v); err != nil {
 				return Undefined, err

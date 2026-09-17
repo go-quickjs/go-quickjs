@@ -408,9 +408,11 @@ func TestTypedArrayDetachDuringUse(t *testing.T) {
 		{`var a = new Uint8Array(8); a.buffer.transfer(); String(0 in a)`, "false"},
 
 		// Detaching part-way through an operation stops it rather than
-		// crashing it.
+		// crashing it. fill checks the view again once its arguments are
+		// coerced, so the detachment is reported rather than ignored.
 		{`var a = new Uint8Array(8);
-		  a.fill(1, {valueOf() { a.buffer.transfer(); return 0 }}); "ok"`, "ok"},
+		  try { a.fill(1, {valueOf() { a.buffer.transfer(); return 0 }}) }
+		  catch (e) { e.constructor.name }`, "TypeError"},
 		{`var a = new Uint8Array(8);
 		  a.slice(0, {valueOf() { a.buffer.transfer(); return 8 }}); "ok"`, "ok"},
 		{`var a = new Uint8Array(8);
