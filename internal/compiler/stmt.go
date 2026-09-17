@@ -749,9 +749,14 @@ func (c *compiler) compileTry(n *ast.TryStmt) {
 		c.emit(bytecode.OpGetLocal, uint32(c.completionSlot), 0)
 		c.emit(bytecode.OpSetLocal, uint32(save), 0)
 	}
+	// The completion record sits beneath the clause's own operands, so a break
+	// or continue leaving the clause has to drop it: what it jumps to is not
+	// expecting two values it never pushed.
+	c.pushExit(exitCompletion)
 	c.beginScope()
 	c.compileStatements(n.Finally)
 	c.endScope()
+	c.popExit()
 	if save >= 0 {
 		c.emit(bytecode.OpGetLocal, uint32(save), 0)
 		c.emit(bytecode.OpSetLocal, uint32(c.completionSlot), 0)
@@ -894,6 +899,9 @@ func (c *compiler) emitPendingExits(down int) {
 			c.emit(bytecode.OpDrop, 0, 0)
 		case exitWith:
 			c.emit(bytecode.OpWithPop, 0, 0)
+		case exitCompletion:
+			c.emit(bytecode.OpDrop, 0, 0)
+			c.emit(bytecode.OpDrop, 0, 0)
 		}
 	}
 }

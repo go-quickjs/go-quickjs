@@ -183,6 +183,10 @@ const (
 	exitDrop
 	// exitWith is an object on the frame's `with` chain.
 	exitWith
+	// exitCompletion is the record a finally clause is running for: the value
+	// and the kind of the completion it interrupted. A break or continue out
+	// of the clause abandons that completion, and its two operands with it.
+	exitCompletion
 )
 
 // finallyCtx tracks an enclosing finally clause.

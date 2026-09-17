@@ -3772,3 +3772,43 @@ func TestCatchParameterIsMutable(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
 	}
 }
+
+// A break or continue that leaves a finally clause abandons the completion the
+// clause was running for, and the two operands that record it: what it jumps to
+// is not expecting values it never pushed.
+func TestJumpOutOfFinally(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"continue from a finally", `var cars = {a: 1, b: 2, c: 3}, c = 0, fin = 0
+		  for (var x in cars) {
+		    try { throw "ex" } catch (e) { c += 1 } finally { fin = 1; continue }
+		    fin = 0
+		  }
+		  c + "," + fin`, "3,1"},
+		{"continue with no catch", `var c = 0, fin = 0
+		  for (var i = 0; i < 3; i++) {
+		    try { c += 1; throw "ex" } finally { fin = 1; continue }
+		    fin = -1
+		  }
+		  c + "," + fin`, "3,1"},
+		{"break from a finally", `var c = 0
+		  for (var x of [1, 2, 3]) { try { c += 1 } finally { break } }
+		  String(c)`, "1"},
+		{"continue in a for-of", `var c = 0
+		  for (var x of [1, 2, 3]) { try { c += 1; throw "e" } catch (e) {} finally { continue } }
+		  String(c)`, "3"},
+		// The ordinary paths still run the clause and keep the completion.
+		{"return through a finally", `function f() { try { return 1 } finally { } }
+		  String(f())`, "1"},
+		{"throw through a finally", `var fin = 0
+		  try { (function () { try { throw "e" } finally { fin = 1 } })() } catch (e) {}
+		  String(fin)`, "1"},
+		{"nested loops", `var pairs = []
+		  outer: for (var i of [1, 2]) {
+		    for (var j of [1, 2]) { try { pairs.push(i + "" + j) } finally { continue outer } }
+		  }
+		  pairs.join()`, "11,21"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}
