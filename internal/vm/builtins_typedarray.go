@@ -786,10 +786,12 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 			}
 			// A typed array source may share the buffer, so every element is
 			// read before any is written: interleaving would let an early
-			// write change a later read.
-			items, err := rt.arrayToSlice(src)
-			if err != nil {
-				return Undefined, err
+			// write change a later read. Its length is the view's own rather
+			// than a length property, which a script may have defined over it.
+			srcData := src.Object().data.(*typedArrayData)
+			items := make([]Value, srcData.length)
+			for i := range items {
+				items[i] = srcData.getElem(i)
 			}
 			if int(off)+len(items) > t.length {
 				return Undefined, rt.throwRangeError("the source is too long for this typed array")
@@ -1135,10 +1137,13 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 	})
 
 	r.defMethod(p, "toLocaleString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		if _, err := rt.typedArrayOf(this, "TypedArray.prototype.toLocaleString"); err != nil {
+		t, err := rt.typedArrayOf(this, "TypedArray.prototype.toLocaleString")
+		if err != nil {
 			return Undefined, err
 		}
-		return rt.arrayToLocaleString(this)
+		// The length is the view's own rather than a length property, which a
+		// script may have defined over it.
+		return rt.arrayLikeToLocaleString(this, int64(t.length))
 	})
 
 	// %TypedArray%.prototype.toString is not merely equivalent to the Array

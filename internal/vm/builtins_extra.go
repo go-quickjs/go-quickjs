@@ -1232,6 +1232,18 @@ func (r *Runtime) arrayToLocaleString(this Value) (Value, error) {
 	if err != nil {
 		return Undefined, err
 	}
+	return r.arrayLikeToLocaleString(this, a.n)
+}
+
+// arrayLikeToLocaleString is arrayToLocaleString over a length settled by the
+// caller, which is what a typed array needs: its length is the view's own and
+// not a property a script could have defined over it.
+func (r *Runtime) arrayLikeToLocaleString(this Value, n int64) (Value, error) {
+	o, err := r.toObject(this)
+	if err != nil {
+		return Undefined, err
+	}
+	a := &arrayLike{o: o, n: n}
 	var sb strings.Builder
 	for i := int64(0); i < a.n; i++ {
 		if i > 0 {

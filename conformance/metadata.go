@@ -28,6 +28,10 @@ func ParseMetadata(src string) (Metadata, error) {
 	}
 	block := src[start+len("/*---") : start+end]
 
+	// A few tests are written with carriage returns as their only line
+	// terminator, which the frontmatter is subject to as much as the code.
+	block = strings.ReplaceAll(block, "\r\n", "\n")
+	block = strings.ReplaceAll(block, "\r", "\n")
 	lines := strings.Split(block, "\n")
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]

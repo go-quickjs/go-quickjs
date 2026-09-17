@@ -1119,3 +1119,43 @@ func TestTypedArrayConstructorChecks(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// A view's length is a getter on the prototype rather than one of its own
+// properties, so a property a script defines under that name shadows it for an
+// ordinary read -- while the methods that are specified to use the view's own
+// length go on using it.
+func TestTypedArrayLengthIsNotAnOwnProperty(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var a = new Int8Array(1)
+		  Object.defineProperty(a, "length", {value: 4})
+		  String(a.length)`, "4"},
+		{`var a = new Int8Array(1)
+		  String(Object.getOwnPropertyDescriptor(a, "length"))`, "undefined"},
+		{`var a = new Int8Array(2); a.length = 5; String(a.length)`, "2"},
+		{`(function () { "use strict"
+		   var a = new Int8Array(2)
+		   try { a.length = 5; return "no throw" } catch (e) { return e.constructor.name } })()`,
+			"TypeError"},
+		// concat reads the length property, as it does of any array-like.
+		{`var a = new Int8Array(1)
+		  Object.defineProperty(a, "length", {value: 10})
+		  a[Symbol.isConcatSpreadable] = true
+		  var out = [].concat(a);
+		  [out.length, String(out[0]), String(out[9])].join(",")`, "10,0,undefined"},
+		// toLocaleString and set use the view's own length instead.
+		{`var n = 0
+		  var a = new Int8Array([42, 43])
+		  Object.defineProperty(a, "length", {get: function () { n++; return 0 }})
+		  var s = a.toLocaleString();
+		  [s, n].join("|")`, "42,43|0"},
+		{`var n = 0
+		  var src = new Int8Array([1, 2])
+		  Object.defineProperty(src, "length", {get: function () { n++; return 0 }})
+		  var dst = new Int8Array(2)
+		  dst.set(src);
+		  [dst.join(","), n].join("|")`, "1,2|0"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

@@ -69,10 +69,12 @@ func (r *Runtime) getExoticNamed(o *Object, key Atom) (Value, bool, error) {
 			}
 		}
 	case ClassTypedArray:
-		if key == atomLength {
+		if key == atomLength && o.getOwn(atomLength) == nil {
 			if t, ok := o.data.(*typedArrayData); ok {
 				// A view over a buffer that has gone is empty, not eight
-				// elements of nothing.
+				// elements of nothing. The answer comes from the prototype's
+				// getter, so a property a script defines under the name is
+				// what is read instead.
 				return Int(t.count()), true, nil
 			}
 		}
@@ -392,9 +394,10 @@ func (r *Runtime) hasExoticOwn(o *Object, key Atom) bool {
 		}
 		return key == atomLength || (key.IsIndex() && int(key.Index()) < s.Len())
 	case ClassTypedArray:
-		if key == atomLength {
-			return true
-		}
+		// A view's length is a getter on the prototype rather than one of its
+		// own properties, so nothing here shadows it -- and a property a script
+		// defines under that name does.
+		//
 		// Every numeric key belongs to the view, whether or not it names an
 		// element: one that does not is dropped rather than looked for on the
 		// prototype.

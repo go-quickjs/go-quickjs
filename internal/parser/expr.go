@@ -412,8 +412,10 @@ func (p *parser) parseNew() ast.Expr {
 		callee = p.parseNew()
 	} else {
 		// import() is a syntactic form rather than a function, so there is
-		// nothing for new to construct.
-		if p.isKeyword("import") {
+		// nothing for new to construct. import.meta is an ordinary object,
+		// which new may name as its callee -- and refuse at run time, as it
+		// refuses anything else that is not a constructor.
+		if p.isKeyword("import") && !p.peekIsDotMeta() {
 			p.errorf("\"import\" cannot be used with \"new\"")
 		}
 		callee = p.parsePrimary()
@@ -731,6 +733,15 @@ func (p *parser) parseSuper() ast.Expr {
 		p.errorf("\"super\" must be followed by an argument list or a property access")
 	}
 	return &ast.Super{Start: start}
+}
+
+// peekIsDotMeta reports whether the `import` keyword at the cursor is the start
+// of import.meta rather than of an import call.
+func (p *parser) peekIsDotMeta() bool {
+	m := p.mark()
+	defer p.reset(m)
+	p.next()
+	return p.isPunct(".")
 }
 
 // parseImportExpr parses `import(...)` and `import.meta`.
