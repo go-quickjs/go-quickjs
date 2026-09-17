@@ -137,6 +137,10 @@ func (r *Runtime) definePropertyFromDescriptor(target *Object, key Atom, desc Va
 // The caller decides what a refusal means: Object.defineProperty throws,
 // Reflect.defineProperty returns false.
 func (r *Runtime) defineProperty(o *Object, key Atom, d *propDesc) (bool, error) {
+	// A proxy decides for itself what defining a property means.
+	if p := proxyOf(o); p != nil {
+		return r.proxyDefineProperty(p, key, r.descriptorObject(d))
+	}
 	if key == atomLength && o.class == ClassArray {
 		return r.defineArrayLength(o, d)
 	}
@@ -519,4 +523,38 @@ func (r *Runtime) toIndexLength(v Value) (uint32, error) {
 		return 0, r.throwRangeError("invalid array length")
 	}
 	return uint32(n), nil
+}
+
+// descriptorObject renders a descriptor as the object a trap is handed.
+func (r *Runtime) descriptorObject(d *propDesc) Value {
+	o := newObject(r.proto.object, ClassObject)
+	set := func(name string, v Value) {
+		o.setOwnRaw(r.atoms.intern(name), v, propDefault)
+	}
+	if d.hasValue {
+		set("value", d.value)
+	}
+	if d.hasWritable {
+		set("writable", Bool(d.writable))
+	}
+	if d.hasGet {
+		set("get", objOrUndefined(d.getter))
+	}
+	if d.hasSet {
+		set("set", objOrUndefined(d.setter))
+	}
+	if d.hasEnumerable {
+		set("enumerable", Bool(d.enumerable))
+	}
+	if d.hasConfigurable {
+		set("configurable", Bool(d.configurable))
+	}
+	return Obj(o)
+}
+
+func objOrUndefined(o *Object) Value {
+	if o == nil {
+		return Undefined
+	}
+	return Obj(o)
 }

@@ -632,7 +632,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				vmErr = r.throwReferenceError("%s is not defined", r.atoms.name(name))
 				goto onError
 			}
-			if err := r.setProp(env, name, pop(), Obj(env), cl.fn.Strict); err != nil {
+			if _, err := r.setProp(env, name, pop(), Obj(env), cl.fn.Strict); err != nil {
 				vmErr = err
 				goto onError
 			}
@@ -1222,7 +1222,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			if !found {
 				break
 			}
-			if err := r.setProp(o, name, peek(0), Obj(o), cl.fn.Strict); err != nil {
+			if _, err := r.setProp(o, name, peek(0), Obj(o), cl.fn.Strict); err != nil {
 				vmErr = err
 				goto onError
 			}

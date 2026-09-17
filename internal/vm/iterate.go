@@ -62,7 +62,11 @@ func (r *Runtime) startForIn(v Value) (Value, error) {
 
 	seen := make(map[Atom]bool)
 	for cur := o; cur != nil; cur = cur.proto {
-		for _, k := range cur.ownKeys(false, r.atoms) {
+		keys, err := r.ownKeysOf(cur, false)
+		if err != nil {
+			return Undefined, err
+		}
+		for _, k := range keys {
 			if seen[k] {
 				continue
 			}
@@ -307,7 +311,11 @@ func (r *Runtime) copyDataProps(target *Object, src Value) error {
 		return nil
 	}
 	o := src.Object()
-	for _, k := range o.ownKeys(true, r.atoms) {
+	keys, err := r.ownKeysOf(o, true)
+	if err != nil {
+		return err
+	}
+	for _, k := range keys {
 		if !r.isEnumerable(o, k) {
 			continue
 		}
@@ -343,7 +351,11 @@ func (r *Runtime) objectRest(src Value, excluded []Value) (Value, error) {
 		skip[k] = true
 	}
 
-	for _, k := range o.ownKeys(true, r.atoms) {
+	keys, err := r.ownKeysOf(o, true)
+	if err != nil {
+		return Undefined, err
+	}
+	for _, k := range keys {
 		if skip[k] || !r.isEnumerable(o, k) {
 			continue
 		}

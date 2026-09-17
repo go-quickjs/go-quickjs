@@ -29,7 +29,11 @@ func (r *Runtime) initObjectBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		return Bool(rt.hasOwnProp(o, key)), nil
+		has, err := rt.hasOwnPropOf(o, key)
+		if err != nil {
+			return Undefined, err
+		}
+		return Bool(has), nil
 	})
 
 	r.defMethod(p, "isPrototypeOf", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -55,15 +59,16 @@ func (r *Runtime) initObjectBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		if key.IsIndex() {
-			if _, ok := o.getElem(key.Index()); ok {
-				return True, nil
+		// A proxy answers for itself, through the descriptor its trap reports.
+		if pp := proxyOf(o); pp != nil {
+			desc, err := rt.proxyGetOwnPropertyDescriptor(pp, key)
+			if err != nil || !desc.IsObject() {
+				return False, err
 			}
+			v, err := rt.getValueProp(desc, atomEnumerable)
+			return Bool(v.Truthy()), err
 		}
-		if prop := o.getOwnVisible(key); prop != nil {
-			return Bool(prop.flags&propEnumerable != 0), nil
-		}
-		return False, nil
+		return Bool(rt.isEnumerable(o, key)), nil
 	})
 
 	r.defMethod(p, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -131,7 +136,11 @@ func (r *Runtime) initObjectBuiltins() {
 			if err != nil {
 				return Undefined, err
 			}
-			for _, k := range so.ownKeys(true, rt.atoms) {
+			keys, err := rt.ownKeysOf(so, true)
+			if err != nil {
+				return Undefined, err
+			}
+			for _, k := range keys {
 				if !rt.isEnumerable(so, k) {
 					continue
 				}
@@ -139,7 +148,7 @@ func (r *Runtime) initObjectBuiltins() {
 				if err != nil {
 					return Undefined, err
 				}
-				if err := rt.setProp(target, k, v, Obj(target), true); err != nil {
+				if _, err := rt.setProp(target, k, v, Obj(target), true); err != nil {
 					return Undefined, err
 				}
 			}
@@ -256,7 +265,10 @@ func (r *Runtime) initObjectBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		keys := o.ownKeys(false, rt.atoms)
+		keys, err := rt.ownKeysOf(o, false)
+		if err != nil {
+			return Undefined, err
+		}
 		out := make([]Value, len(keys))
 		for i, k := range keys {
 			out[i] = Str(NewString(rt.atoms.name(k)))
@@ -478,16 +490,31 @@ func (r *Runtime) objectKeysLike(v Value, mode keysMode) (Value, error) {
 	if err != nil {
 		return Undefined, err
 	}
-	keys := o.ownKeys(false, r.atoms)
-	if p := proxyOf(o); p != nil {
-		var err error
-		if keys, err = r.proxyOwnKeys(p); err != nil {
-			return Undefined, err
-		}
+	keys, err := r.ownKeysOf(o, false)
+	if err != nil {
+		return Undefined, err
 	}
+	proxied := proxyOf(o) != nil
 	var out []Value
 	for _, k := range keys {
-		if p := proxyOf(o); p == nil && !r.isEnumerable(o, k) {
+		if proxied {
+			// A proxy says whether a key is enumerable through the descriptor
+			// its trap reports, not through a property table it does not have.
+			desc, err := r.ownDescriptorOf(o, k)
+			if err != nil {
+				return Undefined, err
+			}
+			if !desc.IsObject() {
+				continue
+			}
+			e, err := r.getValueProp(desc, atomEnumerable)
+			if err != nil {
+				return Undefined, err
+			}
+			if !e.Truthy() {
+				continue
+			}
+		} else if !r.isEnumerable(o, k) {
 			continue
 		}
 		switch mode {
@@ -548,7 +575,11 @@ func (r *Runtime) defineProperties(target *Object, props Value) error {
 	if err != nil {
 		return err
 	}
-	for _, k := range src.ownKeys(true, r.atoms) {
+	keys, err := r.ownKeysOf(src, true)
+	if err != nil {
+		return err
+	}
+	for _, k := range keys {
 		if !r.isEnumerable(src, k) {
 			continue
 		}

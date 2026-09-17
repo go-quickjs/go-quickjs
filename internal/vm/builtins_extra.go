@@ -439,8 +439,12 @@ func (r *Runtime) initObjectExtras() {
 		if err != nil {
 			return Undefined, err
 		}
+		keys, err := rt.ownKeysOf(o, true)
+		if err != nil {
+			return Undefined, err
+		}
 		var out []Value
-		for _, k := range o.ownKeys(true, rt.atoms) {
+		for _, k := range keys {
 			if sym := rt.atoms.symbol(k); sym != nil {
 				out = append(out, Sym(sym))
 			}
@@ -453,9 +457,20 @@ func (r *Runtime) initObjectExtras() {
 		if err != nil {
 			return Undefined, err
 		}
+		keys, err := rt.ownKeysOf(o, true)
+		if err != nil {
+			return Undefined, err
+		}
 		out := newObject(rt.proto.object, ClassObject)
-		for _, k := range o.ownKeys(true, rt.atoms) {
-			out.setOwnRaw(k, rt.describeProperty(o, k), propDefault)
+		for _, k := range keys {
+			d, err := rt.ownDescriptorOf(o, k)
+			if err != nil {
+				return Undefined, err
+			}
+			if d.IsUndefined() {
+				continue
+			}
+			out.setOwnRaw(k, d, propDefault)
 		}
 		return Obj(out), nil
 	})

@@ -12,12 +12,14 @@ package vm
 // object being searched when a getter is inherited, which is what lets a
 // prototype accessor read the properties of the instance it was called on.
 func (r *Runtime) getProp(obj *Object, key Atom, receiver Value) (Value, error) {
-	// A proxy intercepts the operation before anything else happens, including
-	// the prototype walk, since the trap decides what the chain even is.
-	if p := proxyOf(obj); p != nil {
-		return r.proxyGet(p, key, receiver)
-	}
 	for o := obj; o != nil; o = o.proto {
+		// A proxy intercepts the operation before anything else happens,
+		// including the rest of the prototype walk, since the trap decides
+		// what the chain even is. That holds wherever in the chain it is
+		// reached, not only when it is where the lookup started.
+		if p := proxyOf(o); p != nil {
+			return r.proxyGet(p, key, receiver)
+		}
 		// Dense elements come first, since an array index is the hottest key.
 		if key.IsIndex() {
 			if v, ok := o.getElem(key.Index()); ok {
@@ -209,20 +211,29 @@ func (r *Runtime) getValueProp(v Value, key Atom) (Value, error) {
 
 // setProp assigns a property, honouring setters found on the prototype chain
 // and the non-writability of inherited data properties.
-func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, strict bool) error {
-	if p := proxyOf(obj); p != nil {
-		return r.proxySet(p, key, val, receiver, strict)
+// The bool says whether the assignment happened, which Reflect.set reports and
+// a sloppy-mode assignment ignores.
+func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, strict bool) (bool, error) {
+	// Almost every assignment writes to the object it was found on, so the
+	// question of where the value lands is settled once rather than per step.
+	var rcv *Object
+	if receiver.IsObject() {
+		rcv = receiver.Object()
 	}
 	// Walk the chain looking for an accessor or a non-writable data property,
-	// either of which changes what a plain assignment does.
+	// either of which changes what a plain assignment does. A proxy anywhere
+	// along it decides the rest for itself.
 	for o := obj; o != nil; o = o.proto {
+		if p := proxyOf(o); p != nil {
+			return r.proxySet(p, key, val, receiver, strict)
+		}
 		if key.IsIndex() {
 			if int(key.Index()) < len(o.elems) && !isHole(o.elems[key.Index()]) {
 				// A dense element is always a writable data property, so the
 				// assignment lands here.
-				if o == obj {
+				if o == obj && rcv == obj {
 					o.setElem(key.Index(), val)
-					return nil
+					return true, nil
 				}
 				break
 			}
@@ -232,11 +243,8 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 		// which is what makes `f.name = "x"` silently do nothing.
 		if o.class == ClassFunction && (key == atomName || key == atomLength) {
 			if fd := o.fn(); fd != nil && !fd.propsMaterialized {
-				if strict {
-					return r.throwTypeError("cannot assign to read-only property %q",
-						r.atoms.name(key))
-				}
-				return nil
+				return false, r.assignFailed(key, strict,
+					"cannot assign to read-only property %q")
 			}
 		}
 		p := o.getOwnVisible(key)
@@ -246,40 +254,86 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 		if p.isAccessor() {
 			a := p.getterSetter()
 			if a == nil || a.setter == nil {
-				if strict {
-					return r.throwTypeError("cannot assign to %q, which has only a getter",
-						r.atoms.name(key))
-				}
-				return nil
+				return false, r.assignFailed(key, strict,
+					"cannot assign to %q, which has only a getter")
 			}
 			_, err := r.call(Obj(a.setter), receiver, []Value{val})
-			return err
+			return err == nil, err
 		}
 		if p.flags&propWritable == 0 {
-			if strict {
-				return r.throwTypeError("cannot assign to read-only property %q",
-					r.atoms.name(key))
-			}
-			return nil
+			return false, r.assignFailed(key, strict,
+				"cannot assign to read-only property %q")
 		}
-		if o == obj {
+		if o == obj && rcv == obj {
 			p.value = val
 			if u := mappedArgument(o, key); u != nil {
 				u.set(val)
 			}
-			return nil
+			return true, nil
 		}
 		// An inherited writable data property is shadowed by a new own
-		// property rather than modified in place.
+		// property rather than modified in place, and so is one reached
+		// through a receiver that is not the object holding it.
 		break
 	}
 
-	// The assignment creates an own property on the receiver.
-	target := obj
-	if receiver.IsObject() && receiver.Object() != obj {
-		target = receiver.Object()
+	// The assignment lands on the receiver, which is the object itself unless
+	// something forwarded to it -- a prototype's setter, or a proxy with no set
+	// trap. A receiver that is not the object defines the property through its
+	// own machinery, which may be a trap.
+	if rcv == nil {
+		// A primitive receiver has nowhere to put it.
+		return false, r.assignFailed(key, strict, "cannot create property %q on a primitive")
 	}
-	return r.createOwnProp(target, key, val, strict)
+	if rcv != obj {
+		return r.setOnReceiver(rcv, key, val, strict)
+	}
+	err := r.createOwnProp(obj, key, val, strict)
+	return err == nil, err
+}
+
+// setOnReceiver completes an assignment that landed on an object other than the
+// one the property was found on.
+//
+// It goes through the receiver's own define machinery rather than writing into
+// its table, because the receiver may be a proxy, and the operation it performs
+// is a define rather than a set: an inherited property is shadowed by a new own
+// one rather than written through.
+func (r *Runtime) setOnReceiver(rcv *Object, key Atom, val Value, strict bool) (bool, error) {
+	cur, err := r.ownPropDesc(rcv, key)
+	if err != nil {
+		return false, err
+	}
+	if cur != nil {
+		if cur.isAccessor() || (cur.hasWritable && !cur.writable) {
+			return false, r.assignFailed(key, strict,
+				"cannot assign to read-only property %q")
+		}
+		ok, err := r.defineProperty(rcv, key, &propDesc{value: val, hasValue: true})
+		if err != nil || ok {
+			return ok, err
+		}
+		return false, r.assignFailed(key, strict, "cannot assign to property %q")
+	}
+	ok, err := r.defineProperty(rcv, key, &propDesc{
+		value: val, hasValue: true,
+		writable: true, hasWritable: true,
+		enumerable: true, hasEnumerable: true,
+		configurable: true, hasConfigurable: true,
+	})
+	if err != nil || ok {
+		return ok, err
+	}
+	return false, r.assignFailed(key, strict, "cannot create property %q")
+}
+
+// assignFailed reports an assignment that did not happen, which is an error in
+// strict mode and silence otherwise.
+func (r *Runtime) assignFailed(key Atom, strict bool, format string) error {
+	if strict {
+		return r.throwTypeError(format, r.atoms.name(key))
+	}
+	return nil
 }
 
 // mappedArgument returns the parameter an index of a mapped arguments object
@@ -384,7 +438,8 @@ func (r *Runtime) createOwnProp(o *Object, key Atom, val Value, strict bool) err
 // sloppy mode and a TypeError in strict mode.
 func (r *Runtime) setValueProp(v Value, key Atom, val Value, strict bool) error {
 	if v.IsObject() {
-		return r.setProp(v.Object(), key, val, v, strict)
+		_, err := r.setProp(v.Object(), key, val, v, strict)
+		return err
 	}
 	if v.IsNullish() {
 		return r.throwTypeError("cannot set property %q of %s",
@@ -423,6 +478,9 @@ func (r *Runtime) hasPropErr(o *Object, key Atom) (bool, error) {
 		}
 	}
 	for ; o != nil; o = o.proto {
+		if p := proxyOf(o); p != nil {
+			return r.proxyHas(p, key)
+		}
 		if r.hasOwnProp(o, key) {
 			return true, nil
 		}

@@ -148,7 +148,8 @@ func (a *arrayLike) get(r *Runtime, i int64) (Value, error) {
 
 // set writes the index.
 func (a *arrayLike) set(r *Runtime, i int64, v Value) error {
-	return r.setProp(a.o, r.indexKey(i), v, Obj(a.o), true)
+	_, err := r.setProp(a.o, r.indexKey(i), v, Obj(a.o), true)
+	return err
 }
 
 // remove deletes the index, which is how a method leaves a hole behind.
@@ -168,7 +169,8 @@ func (a *arrayLike) put(r *Runtime, i int64, v Value, present bool) error {
 // setLength writes the length, which a method that shortens or grows the
 // receiver must do explicitly on anything that is not a real array.
 func (a *arrayLike) setLength(r *Runtime, n int64) error {
-	return r.setProp(a.o, atomLength, Float(float64(n)), Obj(a.o), true)
+	_, err := r.setProp(a.o, atomLength, Float(float64(n)), Obj(a.o), true)
+	return err
 }
 
 // dense returns the element at i when it can be read without consulting the

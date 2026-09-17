@@ -223,7 +223,11 @@ func (r *Runtime) reviveJSON(holder *Object, key Value, reviver Value) (Value, e
 				}
 			}
 		} else {
-			for _, pk := range o.ownKeys(false, r.atoms) {
+			pks, err := r.ownKeysOf(o, false)
+			if err != nil {
+				return Undefined, err
+			}
+			for _, pk := range pks {
 				if !r.isEnumerable(o, pk) {
 					continue
 				}

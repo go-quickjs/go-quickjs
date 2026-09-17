@@ -264,3 +264,71 @@ func TestPromiseCombinatorUsesReceiver(t *testing.T) {
 		t.Error("Promise.all on a non-constructor should throw")
 	}
 }
+
+// A proxy is not an object with clever getters: it stands in for its target
+// everywhere the target could have been, including as somebody's prototype and
+// as another proxy's target.
+func TestProxyStandsInEverywhere(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// Every operation that lists keys goes through the trap.
+		{`var p = new Proxy({attr: 1}, {});
+		  [Object.getOwnPropertyNames(p).join("|"),
+		   Object.prototype.hasOwnProperty.call(p, "attr"),
+		   Object.keys(p).join("|"),
+		   Object.prototype.propertyIsEnumerable.call(p, "attr"),
+		   JSON.stringify(p)].join(" ")`,
+			`attr true attr true {"attr":1}`},
+		{`var p = new Proxy({a: 1, b: 2}, {}); var s = ""; for (var k in p) s += k; s`, "ab"},
+		{`var p = new Proxy({a: 1}, {}); JSON.stringify({...p})`, `{"a":1}`},
+
+		// A proxy reached through a prototype chain still traps.
+		{`var p = new Proxy({foo: 2}, {}); String(Object.create(p).foo)`, "2"},
+		{`var seen; var p = new Proxy({}, {has: function (t, k) { seen = k; return true }});
+		  var o = Object.create(p); ("x" in o) + "," + seen`, "true,x"},
+
+		// A target that is itself a proxy is reached through its own traps.
+		{`var t = new Proxy({foo: 2}, {}); var p = new Proxy(t, {get: undefined});
+		  String(p.foo)`, "2"},
+		{`var t = new Proxy({}, {}); var p = new Proxy(t, {});
+		  p.x = 1; [String(t.x), String(p.x)].join(",")`, "1,1"},
+		{`var t = new Proxy({foo: 1}, {}); var p = new Proxy(t, {});
+		  String(delete p.foo) + "," + String(p.foo)`, "true,undefined"},
+		{`var t = new Proxy({}, {}); var p = new Proxy(t, {});
+		  Object.preventExtensions(p); String(Object.isExtensible(t))`, "false"},
+
+		// Reflect.set reports what the trap said, rather than only throwing.
+		{`var p = new Proxy({}, {set: function () { return false }});
+		  String(Reflect.set(p, "x", 1))`, "false"},
+
+		// A trap may not contradict what the target has promised.
+		{`var t = {}; Object.defineProperty(t, "x", {value: 1, writable: false, configurable: false});
+		  var p = new Proxy(t, {get: function () { return 2 }});
+		  try { p.x } catch (e) { e.constructor.name }`, "TypeError"},
+		{`var t = {}; Object.defineProperty(t, "x", {value: 1, writable: false, configurable: false});
+		  var p = new Proxy(t, {set: function () { return true }});
+		  try { p.x = 2 } catch (e) { e.constructor.name }`, "TypeError"},
+		{`var p = new Proxy({x: 1}, {getOwnPropertyDescriptor: function () {
+		      return {value: 1, configurable: false}
+		  }});
+		  try { Object.getOwnPropertyDescriptor(p, "x") } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		{`var t = Object.preventExtensions({x: 1});
+		  var p = new Proxy(t, {deleteProperty: function () { return true }});
+		  try { delete p.x } catch (e) { e.constructor.name }`, "TypeError"},
+
+		// The constructor hands out no prototype, and revoke is anonymous.
+		{`Object.getOwnPropertyNames(Proxy).sort().join(",")`, "length,name,revocable"},
+		{`Proxy.revocable({}, {}).revoke.name`, ""},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}
