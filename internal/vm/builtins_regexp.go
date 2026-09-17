@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/go-quickjs/go-quickjs/internal/regexp"
@@ -272,9 +273,19 @@ func (r *Runtime) buildMatchResult(re *regexp.Regexp, units []uint16, caps []int
 		arr.setOwnRaw(atomGroups, Undefined, propDefault)
 		return arr
 	}
+	// The properties are created in the order the groups were written, which
+	// is what Object.getOwnPropertyNames of the result reports; a map's
+	// iteration order would be a different answer each time.
+	ordered := make([]string, 0, len(names))
+	for name := range names {
+		ordered = append(ordered, name)
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		return names[ordered[i]] < names[ordered[j]]
+	})
 	groups := newObject(nil, ClassObject)
-	for name, idx := range names {
-		groups.setOwnRaw(r.atoms.intern(name), elems[idx], propDefault)
+	for _, name := range ordered {
+		groups.setOwnRaw(r.atoms.intern(name), elems[names[name]], propDefault)
 	}
 	arr.setOwnRaw(atomGroups, Obj(groups), propDefault)
 	return arr

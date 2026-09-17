@@ -247,6 +247,17 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 					"cannot assign to read-only property %q")
 			}
 		}
+		// The other synthesized own properties -- an array's length, a string
+		// wrapper's characters, a typed array's elements -- are own properties
+		// too, so the walk stops at them rather than looking for a setter
+		// further up that they shadow.
+		if r.hasExoticOwn(o, key) {
+			if o == obj && rcv == obj {
+				err := r.createOwnProp(o, key, val, strict)
+				return err == nil, err
+			}
+			break
+		}
 		p := o.getOwnVisible(key)
 		if p == nil {
 			continue
@@ -334,6 +345,30 @@ func (r *Runtime) assignFailed(key Atom, strict bool, format string) error {
 		return r.throwTypeError(format, r.atoms.name(key))
 	}
 	return nil
+}
+
+// hasExoticOwn reports whether a key names one of the own properties a class
+// synthesizes rather than stores.
+func (r *Runtime) hasExoticOwn(o *Object, key Atom) bool {
+	switch o.class {
+	case ClassArray:
+		return key == atomLength
+	case ClassStringWrapper:
+		s, ok := o.data.(*String)
+		if !ok {
+			return false
+		}
+		return key == atomLength || (key.IsIndex() && int(key.Index()) < s.Len())
+	case ClassTypedArray:
+		if key == atomLength {
+			return true
+		}
+		// Every numeric key belongs to the view, whether or not it names an
+		// element: one that does not is dropped rather than looked for on the
+		// prototype.
+		return r.typedArrayIndex(o, key).numeric
+	}
+	return false
 }
 
 // mappedArgument returns the parameter an index of a mapped arguments object
