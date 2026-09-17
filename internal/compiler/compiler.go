@@ -477,15 +477,21 @@ func (c *compiler) emit(op bytecode.Op, a, b uint32) int {
 
 // emitAt emits an instruction and records its source line.
 func (c *compiler) emitAt(pos int, op bytecode.Op, a, b uint32) int {
-	if c.lineOf != nil {
-		if line := c.lineOf(pos); line != c.lastLine {
-			c.fn.Lines = append(c.fn.Lines, bytecode.SourceLoc{
-				PC: uint32(len(c.fn.Code)), Line: line,
-			})
-			c.lastLine = line
-		}
-	}
+	c.recordLine(pos)
 	return c.emit(op, a, b)
+}
+
+// recordLine attributes the next instruction emitted to a source position.
+func (c *compiler) recordLine(pos int) {
+	if c.lineOf == nil {
+		return
+	}
+	if line := c.lineOf(pos); line != c.lastLine {
+		c.fn.Lines = append(c.fn.Lines, bytecode.SourceLoc{
+			PC: uint32(len(c.fn.Code)), Line: line,
+		})
+		c.lastLine = line
+	}
 }
 
 // adjustStack tracks the operand stack depth so the frame can be sized.
@@ -1184,6 +1190,10 @@ func stackEffect(op bytecode.Op, a, b uint32) int {
 		bytecode.OpJumpIfFalseKeep, bytecode.OpJumpIfTrueKeep,
 		bytecode.OpJumpIfNotNullish:
 		return -1
+
+	case bytecode.OpJumpIfCmpFalse:
+		// Pops both operands of the comparison it carries.
+		return -2
 
 	case bytecode.OpJumpIfNullish:
 		// Optional chaining keeps the tested value on both paths.

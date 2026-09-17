@@ -467,8 +467,7 @@ func (c *compiler) storeVar(name string, pos int) {
 }
 
 func (c *compiler) compileIf(n *ast.IfStmt) {
-	c.compileExpr(n.Test)
-	elseJump := c.emitJump(bytecode.OpJumpIfFalse)
+	elseJump := c.emitTestJumpIfFalse(n.Test)
 	c.compileStatement(n.Cons)
 
 	if n.Alt == nil {
@@ -513,8 +512,7 @@ func (c *compiler) popLoop(continueTarget int) {
 func (c *compiler) compileWhile(n *ast.WhileStmt) {
 	start := c.here()
 	c.pushLoop("", true)
-	c.compileExpr(n.Test)
-	exit := c.emitJump(bytecode.OpJumpIfFalse)
+	exit := c.emitTestJumpIfFalse(n.Test)
 	c.compileStatement(n.Body)
 	c.emit(bytecode.OpJump, uint32(start), 0)
 	c.patchJump(exit)
@@ -568,8 +566,7 @@ func (c *compiler) compileFor(n *ast.ForStmt) {
 
 	exit := -1
 	if n.Test != nil {
-		c.compileExpr(n.Test)
-		exit = c.emitJump(bytecode.OpJumpIfFalse)
+		exit = c.emitTestJumpIfFalse(n.Test)
 	}
 	c.compileStatement(n.Body)
 

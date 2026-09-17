@@ -346,6 +346,8 @@ func (f *Function) disassembleTo(sb *strings.Builder, indent string) {
 			OpJumpIfTrueKeep, OpJumpIfNullish, OpJumpIfNotNullish,
 			OpPushCatch, OpPushFinally, OpIterNextOrJump:
 			fmt.Fprintf(sb, " -> %d", in.A)
+		case OpJumpIfCmpFalse:
+			fmt.Fprintf(sb, " %s -> %d", Op(in.B), in.A)
 		default:
 			if in.A != 0 || in.B != 0 {
 				fmt.Fprintf(sb, " %d", in.A)

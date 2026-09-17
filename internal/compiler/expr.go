@@ -54,6 +54,52 @@ func (c *compiler) compileExprForEffect(e ast.Expr) {
 	c.emit(bytecode.OpDrop, 0, 0)
 }
 
+// emitTestJumpIfFalse compiles a condition and emits the jump that skips when
+// it is false, returning the jump's position for patching.
+//
+// A comparison and the branch that reads it are one instruction rather than
+// two, which in a loop is one fewer dispatch per iteration. Only a comparison
+// fuses: every other condition has to produce a value for the branch to test.
+func (c *compiler) emitTestJumpIfFalse(test ast.Expr) int {
+	if b, ok := test.(*ast.Binary); ok {
+		if op, fusable := comparisonOpcode(b.Op); fusable {
+			c.enter(b.Pos())
+			defer c.leave()
+			c.compileExpr(b.Left)
+			c.compileExpr(b.Right)
+			c.recordLine(b.Start)
+			return c.emitJumpB(bytecode.OpJumpIfCmpFalse, uint32(op))
+		}
+	}
+	c.compileExpr(test)
+	return c.emitJump(bytecode.OpJumpIfFalse)
+}
+
+// comparisonOpcode is the opcode of a comparison operator, and whether the
+// operator is one. `in` and `instanceof` are not: they are binary operators
+// that happen to produce a boolean, and each has its own instruction.
+func comparisonOpcode(op string) (bytecode.Op, bool) {
+	switch op {
+	case "<":
+		return bytecode.OpLt, true
+	case "<=":
+		return bytecode.OpLe, true
+	case ">":
+		return bytecode.OpGt, true
+	case ">=":
+		return bytecode.OpGe, true
+	case "==":
+		return bytecode.OpEq, true
+	case "!=":
+		return bytecode.OpNe, true
+	case "===":
+		return bytecode.OpStrictEq, true
+	case "!==":
+		return bytecode.OpStrictNe, true
+	}
+	return 0, false
+}
+
 // compileExpr emits code leaving the expression's value on the stack.
 func (c *compiler) compileExpr(e ast.Expr) {
 	c.compileExprNamed(e, "")
@@ -803,8 +849,7 @@ func (c *compiler) compileLogical(n *ast.Logical) {
 }
 
 func (c *compiler) compileConditional(n *ast.Conditional) {
-	c.compileExpr(n.Test)
-	elseJump := c.emitJump(bytecode.OpJumpIfFalse)
+	elseJump := c.emitTestJumpIfFalse(n.Test)
 	c.compileExpr(n.Cons)
 	endJump := c.emitJump(bytecode.OpJump)
 	c.patchJump(elseJump)

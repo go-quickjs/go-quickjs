@@ -222,6 +222,10 @@ const (
 	OpJumpIfTrueKeep
 	OpJumpIfNullish // peeks; used by ?? and ?.
 	OpJumpIfNotNullish
+	// OpJumpIfCmpFalse is a comparison and the branch that tests it, in one
+	// instruction: A is the target and B is the comparison's own opcode. It is
+	// what a loop's test compiles to, once an iteration.
+	OpJumpIfCmpFalse
 
 	// --- Calls ------------------------------------------------------------
 	OpCall // A = argument count; stack: callee args...
@@ -520,6 +524,7 @@ var opNames = [opCount]string{
 	OpJump: "jump", OpJumpIfFalse: "jump_if_false", OpJumpIfTrue: "jump_if_true",
 	OpJumpIfFalseKeep: "jump_if_false_keep", OpJumpIfTrueKeep: "jump_if_true_keep",
 	OpJumpIfNullish: "jump_if_nullish", OpJumpIfNotNullish: "jump_if_not_nullish",
+	OpJumpIfCmpFalse: "jump_if_cmp_false",
 
 	OpCall: "call", OpDirectEval: "direct_eval", OpCallMethod: "call_method", OpNew: "new",
 	OpCallSpread: "call_spread", OpNewSpread: "new_spread",

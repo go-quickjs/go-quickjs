@@ -1517,6 +1517,41 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			} else {
 				sp--
 			}
+		case bytecode.OpJumpIfCmpFalse:
+			// A loop's test: the comparison and the branch that reads it,
+			// without the boolean in between.
+			a, b := r.stack[sp-2], r.stack[sp-1]
+			sp -= 2
+			cmp := bytecode.Op(in.B)
+			var res bool
+			switch {
+			case a.IsNumber() && b.IsNumber() &&
+				cmp != bytecode.OpStrictEq && cmp != bytecode.OpStrictNe &&
+				cmp != bytecode.OpEq && cmp != bytecode.OpNe:
+				res = compareFloats(cmp, a.Number(), b.Number())
+			case cmp == bytecode.OpStrictEq:
+				res = a.StrictEquals(b)
+			case cmp == bytecode.OpStrictNe:
+				res = !a.StrictEquals(b)
+			case cmp == bytecode.OpEq, cmp == bytecode.OpNe:
+				eq, err := r.looseEquals(a, b)
+				if err != nil {
+					vmErr = err
+					goto onError
+				}
+				res = eq == (cmp == bytecode.OpEq)
+			default:
+				c, err := r.compare(a, b)
+				if err != nil {
+					vmErr = err
+					goto onError
+				}
+				res = relationalResult(cmp, c)
+			}
+			if !res {
+				pc = in.A
+			}
+
 		case bytecode.OpJumpIfNullish:
 			// Used by optional chaining, which keeps the value on both paths:
 			// as the chain's result when short-circuiting, and as the receiver
