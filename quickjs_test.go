@@ -4004,3 +4004,25 @@ func TestForOfAsyncHead(t *testing.T) {
 		  try { eval(`+jsQuote(src)+`); "ok" } catch (e) { e.constructor.name }`, "ok")
 	}
 }
+
+// __defineGetter__ and __defineSetter__ check that they were given a function
+// before they convert the key, so a key whose toString counts its calls sees
+// none.
+func TestDefineAccessorChecksTheFunctionFirst(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var n = 0; var k = {toString: function () { n++; return "x" }}
+		  var caught = ""
+		  try { ({}).__defineGetter__(k, true) } catch (e) { caught = e.constructor.name }
+		  caught + "," + n`, "TypeError,0"},
+		{`var n = 0; var k = {toString: function () { n++; return "x" }}
+		  var caught = ""
+		  try { ({}).__defineSetter__(k, {}) } catch (e) { caught = e.constructor.name }
+		  caught + "," + n`, "TypeError,0"},
+		{`var o = {}; o.__defineGetter__("x", function () { return 7 }); String(o.x)`, "7"},
+		{`var o = {}; o.__defineSetter__("x", function (v) { this.v = v }); o.x = 3; String(o.v)`,
+			"3"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

@@ -813,15 +813,19 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 	})
 
 	r.defMethod(p, "subarray", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		t, err := rt.typedArrayOf(this, "TypedArray.prototype.subarray")
+		// A view over a buffer that has gone is empty rather than broken here:
+		// the range is still worked out, and what refuses is the construction
+		// of a new view over the detached buffer.
+		t, err := rt.typedArraySlot(this, "TypedArray.prototype.subarray")
 		if err != nil {
 			return Undefined, err
 		}
-		start, err := rt.relativeIndex(arg(args, 0), t.length, 0)
+		length := t.count()
+		start, err := rt.relativeIndex(arg(args, 0), length, 0)
 		if err != nil {
 			return Undefined, err
 		}
-		end, err := rt.relativeIndex(arg(args, 1), t.length, t.length)
+		end, err := rt.relativeIndex(arg(args, 1), length, length)
 		if err != nil {
 			return Undefined, err
 		}

@@ -950,3 +950,25 @@ func TestTypedArrayFromMapsIntoTheResult(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
 	}
 }
+
+// subarray works out its range before it looks at the buffer: a view over one
+// that has gone is empty rather than broken, and what refuses is building a new
+// view over it.
+func TestSubarrayConvertsBeforeChecking(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"conversions still run", `var begin = false, end = false
+		  var o1 = {valueOf: function () { begin = true; return 0 }}
+		  var o2 = {valueOf: function () { end = true; return 2 }}
+		  var s = new Int8Array(2); s.buffer.transfer()
+		  var caught = ""
+		  try { s.subarray(o1, o2) } catch (e) { caught = e.constructor.name }
+		  caught + "," + begin + "," + end`, "TypeError,true,true"},
+		{"a range", `String(new Int8Array([1,2,3,4]).subarray(1, 3))`, "2,3"},
+		{"from the end", `String(new Int8Array([1,2,3,4]).subarray(-2))`, "3,4"},
+		{"shares the buffer", `var s = new Int8Array([1,2,3,4])
+		  var sub = s.subarray(1); sub[0] = 9; String(s)`, "1,9,3,4"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}

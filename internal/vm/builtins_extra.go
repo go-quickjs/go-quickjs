@@ -538,13 +538,15 @@ func (r *Runtime) initObjectExtras() {
 		if err != nil {
 			return Undefined, err
 		}
-		key, err := rt.toPropertyKey(arg(args, 0))
-		if err != nil {
-			return Undefined, err
-		}
+		// The function is checked before the key is converted, so a key whose
+		// toString counts its calls sees none.
 		fn := arg(args, 1)
 		if !isCallable(fn) {
 			return Undefined, rt.throwTypeError("__defineGetter__ requires a function")
+		}
+		key, err := rt.toPropertyKey(arg(args, 0))
+		if err != nil {
+			return Undefined, err
 		}
 		// Through the object's own define, so that a proxy sees it and a
 		// refusal is reported rather than ignored.
@@ -555,13 +557,15 @@ func (r *Runtime) initObjectExtras() {
 		if err != nil {
 			return Undefined, err
 		}
-		key, err := rt.toPropertyKey(arg(args, 0))
-		if err != nil {
-			return Undefined, err
-		}
+		// The function is checked before the key is converted, so a key whose
+		// toString counts its calls sees none.
 		fn := arg(args, 1)
 		if !isCallable(fn) {
 			return Undefined, rt.throwTypeError("__defineSetter__ requires a function")
+		}
+		key, err := rt.toPropertyKey(arg(args, 0))
+		if err != nil {
+			return Undefined, err
 		}
 		return Undefined, rt.defineAccessorOrThrow(o, key, Undefined, fn)
 	})
