@@ -527,19 +527,6 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			vmErr = r.throwTypeError("assignment to constant variable %q",
 				r.atoms.name(cl.names[in.A]))
 			goto onError
-		case bytecode.OpCheckCtorReturn:
-			// A derived constructor may return an object, which becomes the
-			// result, or nothing, in which case the object super() built is.
-			// Anything else would silently discard that object.
-			//
-			// Only the value is checked here. Which object comes back is
-			// settled where the function actually returns, because a finally
-			// clause may still call super() after this point.
-			if v := peek(0); !v.IsObject() && !v.IsUndefined() {
-				vmErr = r.throwTypeError(
-					"a derived constructor may only return an object or undefined")
-				goto onError
-			}
 		case bytecode.OpNipUnder:
 			// The top value stays; the A beneath it go.
 			n := int(in.A)
@@ -2654,6 +2641,13 @@ func (r *Runtime) derivedResult(f *frame, cl *closure, v Value) (Value, error) {
 	if v.IsObject() || cl.fn.Kind != bytecode.KindDerivedConstructor {
 		return v, nil
 	}
+	if !v.IsUndefined() {
+		// Returning anything else is a TypeError, but not one the constructor
+		// can catch: it is raised by the construction, after the body has
+		// finished. The value is handed out as it is so that the caller can
+		// report it from there.
+		return v, nil
+	}
 	if !f.thisRef.init {
 		return Undefined, r.throwError(errReference,
 			"a derived constructor must call super() before returning")
@@ -2791,9 +2785,16 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 		return Undefined, err
 	}
 	// A constructor that returns an object overrides the newly created one;
-	// any other return value is ignored.
+	// any other return value is ignored -- except in a derived constructor,
+	// where returning something that is neither an object nor undefined is a
+	// TypeError. It is raised here rather than at the return so that a try
+	// inside the constructor cannot catch it: the body has already finished.
 	if res.IsObject() {
 		return res, nil
+	}
+	if fd.ctorKind == ctorDerived {
+		return Undefined, r.throwTypeError(
+			"a derived constructor may return only an object or undefined")
 	}
 	return this, nil
 }

@@ -396,7 +396,6 @@ const (
 	OpWithResolve
 	OpSetName // give an anonymous function the name in Names[A]
 	OpSetHomeObject
-	OpCheckCtorReturn
 	OpCheckThisInit // a derived constructor must call super() before `this`
 	OpInitThis
 	// OpThrowDeleteSuper reports `delete super.x`, which parses and then fails:
@@ -544,7 +543,7 @@ var opNames = [opCount]string{
 	OpWithGetUnder: "with_get_under", OpWithPutUnder: "with_put_under",
 	OpWithResolve: "with_resolve",
 	OpSetName:     "set_name", OpSetHomeObject: "set_home_object",
-	OpCheckCtorReturn: "check_ctor_return", OpCheckThisInit: "check_this_init",
+	OpCheckThisInit:    "check_this_init",
 	OpInitThis:         "init_this",
 	OpThrowDeleteSuper: "throw_delete_super",
 }

@@ -271,12 +271,6 @@ func (c *compiler) compileStatement(s ast.Stmt) {
 		} else {
 			c.emit(bytecode.OpPushUndef, 0, 0)
 		}
-		if c.fn.Kind == bytecode.KindDerivedConstructor {
-			// A derived constructor may return an object or nothing. Anything
-			// else is a mistake: the object super() built is what `new`
-			// produces, and returning a number would silently discard it.
-			c.emitAt(n.Start, bytecode.OpCheckCtorReturn, 0, 0)
-		}
 		if len(c.finallys) > 0 {
 			// The finally clause must run before the function actually
 			// returns, so the return becomes a completion record it consumes.

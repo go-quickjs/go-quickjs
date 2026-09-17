@@ -1113,3 +1113,39 @@ func TestClassInnerNameBinding(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
 	}
 }
+
+// A derived constructor may return an object or nothing. Returning anything
+// else is a TypeError raised by the construction, after the body has finished
+// -- so a try inside the constructor cannot catch it, though a finally still
+// runs on the way out.
+func TestDerivedConstructorReturnValue(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"plain", `class C extends class {} { constructor() { super(); return 0 } }
+		  try { new C(); "no error" } catch (e) { e.constructor.name }`, "TypeError"},
+		{"not catchable", `class C extends class {} {
+		    constructor() { super(); try { return 0 } catch (e) { return } } }
+		  try { new C(); "no error" } catch (e) { e.constructor.name }`, "TypeError"},
+		{"finally still runs", `var ran = 0
+		  class C extends class {} {
+		    constructor() { super(); try { return 0 } finally { ran = 1 } } }
+		  var caught = ""
+		  try { new C() } catch (e) { caught = e.constructor.name }
+		  caught + "," + ran`, "TypeError,1"},
+		{"before super", `class C extends class {} { constructor() { return 0 } }
+		  try { new C(); "no error" } catch (e) { e.constructor.name }`, "TypeError"},
+		// Undefined means the object super() built, and an object of its own
+		// replaces it.
+		{"undefined", `class C extends class {} { constructor() { super(); return } }
+		  String(new C() instanceof C)`, "true"},
+		{"implicit", `class C extends class {} { constructor() { super() } }
+		  String(new C() instanceof C)`, "true"},
+		{"an object", `class C extends class {} { constructor() { super(); return {tag: 9} } }
+		  String(new C().tag)`, "9"},
+		// A base constructor ignores whatever it returns.
+		{"base ignores it", `class B { constructor() { return 0 } }
+		  String(new B() instanceof B)`, "true"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}
