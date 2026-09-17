@@ -109,18 +109,39 @@ type matcher struct {
 	emptyMarks []int
 
 	steps int
+	// busy marks the matcher a pattern lends out, so that a pattern used again
+	// while a match is running does not have its state overwritten.
+	busy bool
 }
 
 // exec runs the program from a starting position, returning the capture slots
 // or nil if there is no match.
+//
+// The matcher is borrowed from the pattern rather than made afresh: matching
+// the same pattern over and over is what a program does with one, and its
+// backtracking stack and capture trail are what it spends its allocations on.
+// A pattern used again while a match is running -- a replacement callback that
+// uses the same one -- gets a matcher of its own.
 func (re *Regexp) exec(in *input, start int) ([]int, error) {
-	m := &matcher{
-		prog:       re.prog,
-		in:         in,
-		caps:       make([]int, 2*(re.groupCount+1)),
-		counters:   make([]int, re.prog.counters),
-		emptyMarks: make([]int, re.prog.emptyChecks),
+	m := re.scratch
+	if m == nil || m.busy {
+		m = &matcher{
+			caps:       make([]int, 2*(re.groupCount+1)),
+			counters:   make([]int, re.prog.counters),
+			emptyMarks: make([]int, re.prog.emptyChecks),
+		}
+		if re.scratch == nil {
+			re.scratch = m
+		}
 	}
+	m.prog, m.in = re.prog, in
+	m.busy = true
+	defer func() {
+		m.busy = false
+		// The input is not held on to: it would keep the subject string alive
+		// for as long as the pattern.
+		m.in = nil
+	}()
 
 	for pos := start; pos <= in.length(); {
 		m.reset()

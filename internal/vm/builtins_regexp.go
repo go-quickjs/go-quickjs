@@ -284,7 +284,7 @@ func (r *Runtime) regexpExec(this Value, s *String) (Value, error) {
 		start = int(li)
 	}
 
-	units := wtf8.ToUTF16(s.Go())
+	units := s.codeUnits()
 	// The write goes through the object rather than into its table: a
 	// lastIndex that cannot be written is an error the caller sees, which is
 	// the whole point of it being an ordinary property.
@@ -334,6 +334,13 @@ func (r *Runtime) buildMatchResult(re *regexp.Regexp, units []uint16, caps []int
 	}
 
 	arr := r.newArrayFrom(elems)
+	// index, input and groups, and where the d flag asks for them the indices
+	// as well: the table is made the right size rather than grown three times.
+	fields := 3
+	if re.Flags()&regexp.FlagHasIndices != 0 {
+		fields++
+	}
+	arr.reserveProps(fields)
 	arr.setOwnRaw(atomIndex, Int(caps[0]), propDefault)
 	arr.setOwnRaw(atomInput, Str(input), propDefault)
 

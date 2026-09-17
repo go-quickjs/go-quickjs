@@ -1596,7 +1596,12 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		case bytecode.OpClosure:
 			push(Obj(r.makeClosure(f, cl.consts[in.A])))
 		case bytecode.OpNewObject:
-			push(Obj(newObject(r.proto.object, ClassObject)))
+			o := newObject(r.proto.object, ClassObject)
+			if in.A > 0 {
+				// The literal says how many properties it will write.
+				o.props = make([]Property, 0, in.A)
+			}
+			push(Obj(o))
 		case bytecode.OpNewArray:
 			n := int(in.A)
 			arr := r.newArrayFrom(r.stack[sp-n : sp])
@@ -2732,9 +2737,9 @@ func (r *Runtime) makeClosure(f *frame, c Value) *Object {
 		}
 	}
 
-	o := newObject(r.funcProtoFor(tmpl.fn), ClassFunction)
+	o, fd := newFuncObject(r.funcProtoFor(tmpl.fn), ClassFunction)
 	kind := ctorKindOf(tmpl.fn)
-	fd := &funcData{
+	*fd = funcData{
 		closure:  child,
 		name:     tmpl.fn.Name,
 		length:   tmpl.fn.Length,
@@ -2766,7 +2771,6 @@ func (r *Runtime) makeClosure(f *frame, c Value) *Object {
 			}
 		}
 	}
-	o.data = fd
 
 	// A constructible function carries a fresh .prototype object, which is what
 	// `new` gives the instance and where a class hangs its methods. An arrow or

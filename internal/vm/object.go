@@ -179,6 +179,24 @@ func newObject(proto *Object, class Class) *Object {
 	return &Object{proto: proto, class: class, flags: flags}
 }
 
+// funcObject is an object that is also a function.
+//
+// The two parts are allocated together: a callable object always needs both,
+// and a closure created in a loop is common enough that the second allocation
+// showed up in the profile.
+type funcObject struct {
+	Object
+	fn funcData
+}
+
+// newFuncObject creates a callable object and returns its function data, which
+// the caller fills in.
+func newFuncObject(proto *Object, class Class) (*Object, *funcData) {
+	fo := &funcObject{Object: Object{proto: proto, class: class, flags: objExtensible}}
+	fo.Object.data = &fo.fn
+	return &fo.Object, &fo.fn
+}
+
 // Class returns the object's class.
 func (o *Object) Class() Class { return o.class }
 
@@ -305,6 +323,14 @@ func (o *Object) getOwnVisible(key Atom) *Property {
 
 // setOwnRaw installs a property, replacing any existing one, without consulting
 // the prototype chain or any setter.
+// reserveProps makes room for a known number of properties, so that an object
+// built all at once grows its table once rather than at every doubling.
+func (o *Object) reserveProps(n int) {
+	if o.props == nil && n > 0 {
+		o.props = make([]Property, 0, n)
+	}
+}
+
 func (o *Object) setOwnRaw(key Atom, value Value, flags propFlags) {
 	if i := o.findOwn(key); i >= 0 {
 		p := &o.props[i]

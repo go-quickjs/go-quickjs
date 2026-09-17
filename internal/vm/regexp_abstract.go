@@ -122,7 +122,7 @@ func (r *Runtime) regExpSymbolMatch(rx Value, args []Value) (Value, error) {
 	if err := r.setValueProp(rx, atomLastIndex, Int(0), true); err != nil {
 		return Undefined, err
 	}
-	units := wtf8.ToUTF16(s.Go())
+	units := s.codeUnits()
 	var out []Value
 	for {
 		if err := r.tick(); err != nil {
@@ -240,7 +240,7 @@ func (r *Runtime) regExpSymbolSplit(rx Value, args []Value) (Value, error) {
 		return Obj(r.newArrayFrom(out)), nil
 	}
 
-	units := wtf8.ToUTF16(s.Go())
+	units := s.codeUnits()
 	size := len(units)
 	if size == 0 {
 		// Splitting an empty string yields one empty piece unless the pattern
@@ -339,7 +339,7 @@ func (r *Runtime) regExpSymbolReplace(rx Value, args []Value) (Value, error) {
 	if err != nil {
 		return Undefined, err
 	}
-	units := wtf8.ToUTF16(s.Go())
+	units := s.codeUnits()
 	size := len(units)
 
 	replValue := arg(args, 1)
@@ -617,7 +617,7 @@ func (r *Runtime) regExpSymbolMatchAll(rx Value, args []Value) (Value, error) {
 func (r *Runtime) newRegExpStringIterator(matcher Value, s *String, global, fullUnicode bool) Value {
 	iter := newObject(r.proto.regexpStringIter, ClassIterator)
 	iter.data = &regExpStringIterData{
-		matcher: matcher, s: s, units: wtf8.ToUTF16(s.Go()),
+		matcher: matcher, s: s, units: s.codeUnits(),
 		global: global, fullUnicode: fullUnicode,
 	}
 	return Obj(iter)

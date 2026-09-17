@@ -219,6 +219,19 @@ func (s *String) units() []uint16 {
 	return s.u16
 }
 
+// codeUnits returns the UTF-16 code units of the string, caching them.
+//
+// It differs from units in answering for an ASCII string too: indexing one does
+// not need the units, but matching a pattern against it does, and matching the
+// same string over and over is what a program does with a pattern. The slice is
+// the string's own and must not be written to.
+func (s *String) codeUnits() []uint16 {
+	if s.u16 == nil {
+		s.u16 = wtf8.ToUTF16(s.Go())
+	}
+	return s.u16
+}
+
 // CharCodeAt returns the UTF-16 code unit at i, or -1 if i is out of range.
 func (s *String) CharCodeAt(i int) int {
 	if i < 0 || i >= s.length {

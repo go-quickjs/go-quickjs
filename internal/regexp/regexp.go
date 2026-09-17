@@ -9,6 +9,10 @@ type Regexp struct {
 	prog       *program
 	groupCount int
 	groupNames map[string]int
+	// scratch is the matcher this pattern lends to each match, so that the
+	// backtracking stack and the capture trail are allocated once rather than
+	// per match.
+	scratch *matcher
 }
 
 // Compile parses and compiles a pattern.

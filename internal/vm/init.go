@@ -166,8 +166,8 @@ func (r *Runtime) initIntrinsics() {
 
 // newNativeFunc creates a callable object wrapping a Go function.
 func (r *Runtime) newNativeFunc(name string, length int, fn NativeFunc) *Object {
-	o := newObject(r.proto.function, ClassFunction)
-	o.data = &funcData{native: fn, name: name, length: length, ctorKind: ctorNone}
+	o, fd := newFuncObject(r.proto.function, ClassFunction)
+	*fd = funcData{native: fn, name: name, length: length, ctorKind: ctorNone}
 	return o
 }
 
@@ -214,8 +214,8 @@ func (r *Runtime) defGetter(target *Object, name string, fn NativeFunc) {
 // newCtor creates a constructor function with its prototype link established
 // in both directions.
 func (r *Runtime) newCtor(name string, length int, proto *Object, fn NativeFunc) *Object {
-	c := newObject(r.proto.function, ClassFunction)
-	c.data = &funcData{native: fn, name: name, length: length, ctorKind: ctorBase}
+	c, fd := newFuncObject(r.proto.function, ClassFunction)
+	*fd = funcData{native: fn, name: name, length: length, ctorKind: ctorBase}
 	c.setOwnRaw(atomPrototype, Obj(proto), 0)
 	proto.setOwnRaw(atomConstructor, Obj(c), propWritable|propConfigurable)
 	r.defValue(r.global, name, Obj(c))

@@ -766,7 +766,7 @@ func (r *Runtime) replacementFor(replVal Value, replText string, matched *String
 	}
 	// The replacement may name the match and the text around it, the same way
 	// it may for a regular expression -- there are simply no capture groups.
-	return r.getSubstitution(matched, wtf8.ToUTF16(whole.Go()), offset,
+	return r.getSubstitution(matched, whole.codeUnits(), offset,
 		nil, Undefined, replText)
 }
 

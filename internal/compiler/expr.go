@@ -362,7 +362,16 @@ func (c *compiler) compileObjectLit(n *ast.ObjectLit) {
 		// simply two places to assign to.
 		c.errorf(n.ProtoDup, "an object literal may have only one __proto__ property")
 	}
-	c.emit(bytecode.OpNewObject, 0, 0)
+	// The number of properties the literal writes is known here, so the object
+	// is made with room for them rather than growing three times on the way.
+	// A spread contributes an unknown number, which the growth handles.
+	fields := 0
+	for _, p := range n.Props {
+		if p.Kind != ast.PropSpread {
+			fields++
+		}
+	}
+	c.emit(bytecode.OpNewObject, uint32(fields), 0)
 	for _, p := range n.Props {
 		switch p.Kind {
 		case ast.PropSpread:
