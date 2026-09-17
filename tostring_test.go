@@ -207,3 +207,23 @@ func TestFullCaseMappings(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
 	}
 }
+
+// String.prototype.normalize accepts and validates its argument but returns its
+// input unchanged: the normalization forms need Unicode's decomposition tables,
+// which the standard library does not expose. This is the documented gap.
+func TestNormalizeIsAccepted(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`typeof "".normalize`, "function"},
+		{`String.prototype.normalize.length + ""`, "0"},
+		// Text already in NFC, which is nearly all of it, is returned as it is.
+		{`"abc".normalize("NFC")`, "abc"},
+		{`"abc".normalize()`, "abc"},
+		// A form it does not know is refused rather than ignored.
+		{`try { "a".normalize("NFX") } catch (e) { e.constructor.name }`, "RangeError"},
+		{`var f = {toString: function () { return "NFC" }}; "a".normalize(f)`, "a"},
+		{`try { "a".normalize(Symbol()) } catch (e) { e.constructor.name }`, "TypeError"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
