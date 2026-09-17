@@ -721,7 +721,7 @@ func (c *compiler) compileCall(n *ast.Call) {
 	}
 	// A private method call fetches through the private slot, keeping the
 	// receiver for `this`.
-	if m, ok := n.Callee.(*ast.Member); ok {
+	if m, ok := n.Callee.(*ast.Member); ok && !hasSpread(n.Args) {
 		if pn, isPrivate := m.Property.(*ast.PrivateName); isPrivate {
 			name, ref := c.privateName(pn, m.Start)
 			c.compileExpr(m.Object)
@@ -834,6 +834,24 @@ func (c *compiler) compileNew(n *ast.New) {
 // that the instruction can supply `this` correctly for a method call.
 func (c *compiler) compileSpreadCall(n *ast.Call) {
 	if m, ok := n.Callee.(*ast.Member); ok && !m.Optional {
+		if pn, isPrivate := m.Property.(*ast.PrivateName); isPrivate {
+			name, ref := c.privateName(pn, m.Start)
+			c.compileExpr(m.Object)
+			c.emit(bytecode.OpDup, 0, 0)
+			c.emit(bytecode.OpGetPrivate, name, ref)
+			c.compileSpreadArguments(n.Args)
+			c.emitAt(n.Start, bytecode.OpCallSpread, 0, 0)
+			return
+		}
+		if _, isSuper := m.Object.(*ast.Super); isSuper {
+			// A super reference has no object on the stack: the method comes
+			// from the home object's prototype and the receiver is `this`.
+			c.emit(bytecode.OpPushThis, 0, 0)
+			c.compileSuperMemberGet(m)
+			c.compileSpreadArguments(n.Args)
+			c.emitAt(n.Start, bytecode.OpCallSpread, 0, 0)
+			return
+		}
 		c.compileExpr(m.Object)
 		c.emit(bytecode.OpDup, 0, 0)
 		if m.Computed {

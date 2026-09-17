@@ -62,3 +62,48 @@ func TestFunctionToString(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// Only an object is asked for the symbol method that would stand in for a
+// pattern: a primitive would find one on its own prototype, which is not
+// something the caller supplied.
+func TestStringPatternOnlyAsksObjects(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`Object.defineProperty(String.prototype, Symbol.match,
+		    {get: function () { throw new Error("asked") }});
+		  "a,b,c".match(",").join("|")`, ","},
+		{`Object.defineProperty(String.prototype, Symbol.split,
+		    {get: function () { throw new Error("asked") }});
+		  "a,b".split(",").join("|")`, "a|b"},
+		{`Object.defineProperty(String.prototype, Symbol.replace,
+		    {get: function () { throw new Error("asked") }});
+		  "abc".replace("b", "X")`, "aXc"},
+		// An object is still asked.
+		{`var o = {}; o[Symbol.search] = function () { return 42 };
+		  String("x".search(o))`, "42"},
+
+		// A string pattern's replacement may name the match and the text
+		// around it, exactly as a regular expression's may.
+		{`"abc".replace("b", "[$&]")`, "a[b]c"},
+		{"\"abc\".replace(\"b\", \"$$\")", "a$c"},
+		{"\"abc\".replace(\"b\", \"$`\")", "aac"},
+		{`"abc".replace("b", "$'")`, "acc"},
+		{`"a-b".replaceAll("-", "$&$&")`, "a--b"},
+
+		// A spread call through super or a private name.
+		{`class A { m() { return arguments.length } }
+		  class B extends A { m(...a) { return super.m(...a) } }
+		  String(new B().m(1, 2))`, "2"},
+		{`class C { #m(...a) { return a.join(",") } run() { return this.#m(...[1, 2]) } }
+		  new C().run()`, "1,2"},
+	}
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

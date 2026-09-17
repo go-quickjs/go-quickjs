@@ -430,7 +430,9 @@ func (r *Runtime) dispatchStringRegExp(this Value, args []Value, sym *Symbol,
 		return Undefined, r.throwTypeError("String.prototype method called on %s", this.Kind())
 	}
 	pattern := arg(args, 0)
-	if !pattern.IsNullish() {
+	// Only an object is asked for its symbol method. A primitive would find
+	// one on its own prototype, which is not a pattern the caller supplied.
+	if pattern.IsObject() {
 		method, err := r.getValueProp(pattern, r.atoms.internSymbol(sym))
 		if err != nil {
 			return Undefined, err

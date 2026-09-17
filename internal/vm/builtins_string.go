@@ -395,9 +395,10 @@ func (r *Runtime) initStringBuiltins() {
 			return Undefined, rt.throwTypeError(
 				"String.prototype.split called on %s", this.Kind())
 		}
-		// The separator is asked for its symbol method first, so anything can
-		// act as one.
-		if sep := arg(args, 0); !sep.IsNullish() {
+		// An object separator is asked for its symbol method first, so anything
+		// can act as one. A primitive is not asked: it would find one on its
+		// own prototype, which is not a separator the caller supplied.
+		if sep := arg(args, 0); sep.IsObject() {
 			m, err := rt.getValueProp(sep, rt.atoms.internSymbol(rt.wellKnown.split))
 			if err != nil {
 				return Undefined, err
@@ -592,9 +593,13 @@ func (r *Runtime) stringReplace(thisStr thisStrFunc, this Value, args []Value, a
 				}
 			}
 		}
-		m, err := r.getValueProp(pat, r.atoms.internSymbol(r.wellKnown.replace))
-		if err != nil {
-			return Undefined, err
+		var m Value
+		if pat.IsObject() {
+			var err error
+			m, err = r.getValueProp(pat, r.atoms.internSymbol(r.wellKnown.replace))
+			if err != nil {
+				return Undefined, err
+			}
 		}
 		if !m.IsNullish() {
 			if !isCallable(m) {
@@ -671,12 +676,14 @@ func (r *Runtime) replacementFor(replVal Value, matched *String, offset int, who
 		}
 		return s.Go(), nil
 	}
-	s, err := r.toString(replVal)
+	repl, err := r.toString(replVal)
 	if err != nil {
 		return "", err
 	}
-	// $& in the replacement stands for the matched text.
-	return strings.ReplaceAll(s.Go(), "$&", matched.Go()), nil
+	// The replacement may name the match and the text around it, the same way
+	// it may for a regular expression -- there are simply no capture groups.
+	return r.getSubstitution(matched, wtf8.ToUTF16(whole.Go()), offset,
+		nil, Undefined, repl.Go())
 }
 
 // newStringIterator iterates a string by code point.
