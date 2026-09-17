@@ -129,11 +129,11 @@ func (c *compiler) emitAnnexBFunctionAlias(name string) {
 		return
 	}
 	// At a script's top level the var is a property of the global object
-	// rather than a slot, and hoistGlobals has already created it.
+	// rather than a slot, and hoistGlobals has already created it. The store
+	// consumes the copy, leaving the function for the binding it belongs to.
 	if c.parent == nil {
 		c.emit(bytecode.OpDup, 0, 0)
 		c.emit(bytecode.OpSetGlobal, c.nameIdx(name), 0)
-		c.emit(bytecode.OpDrop, 0, 0)
 	}
 }
 

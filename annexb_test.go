@@ -79,3 +79,23 @@ func TestAnnexB(t *testing.T) {
 		t.Error("a function declaration as an if body should be a strict-mode error")
 	}
 }
+
+// A function declared in a block at a script's top level is also assigned to
+// the global var of the same name, and the copy the assignment consumes is not
+// the one the block's own binding needs.
+func TestBlockFunctionAliasKeepsItsBinding(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"called in the block", `{ function ref(x) { return x + 1 } var r = ref(1) } String(r)`, "2"},
+		{"called after the block", `{ function ref(x) { return x + 1 } } String(ref(1))`, "2"},
+		{"with a lexical before it", `let c = 5
+		  { function ref(x) { return x + c } var r = ref(1) }
+		  String(r) + "," + c`, "6,5"},
+		{"the global sees it", `{ function ref() { return 1 } }
+		  String(typeof globalThis.ref)`, "function"},
+		{"several in one block", `{ function a() { return 1 } function b() { return 2 }
+		  var r = a() + b() } String(r)`, "3"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}
