@@ -535,7 +535,11 @@ func (r *Runtime) stepAsyncGenerator(g *generator, result *Object, sent Value, m
 			return Undefined, nil
 		})
 		onRejected := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
-			rt.rejectPromise(result, arg(a, 0))
+			// The await happens inside the generator, at the yield, so a
+			// rejection is a throw there rather than merely a rejected result:
+			// a try round the yield can catch it, and an uncaught one finishes
+			// the generator instead of leaving it suspended.
+			rt.stepAsyncGenerator(g, result, arg(a, 0), resumeThrow)
 			return Undefined, nil
 		})
 		r.promiseThen(awaited, Obj(onFulfilled), Obj(onRejected))

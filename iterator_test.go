@@ -370,3 +370,48 @@ func TestIteratorHelperLimits(t *testing.T) {
 		t.Errorf("Iterator.from with no Symbol.iterator = %q", v.String())
 	}
 }
+
+// An async generator awaits what it yields, and that await happens inside the
+// generator, at the yield. A rejection is therefore a throw there: a try round
+// the yield can catch it, and an uncaught one finishes the generator instead of
+// leaving it suspended.
+func TestAsyncGeneratorYieldRejection(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var log = [];
+		  async function* gen() { yield Promise.reject(new Error("e")); yield "unreachable"; }
+		  var it = gen();
+		  it.next().then(() => log.push("resolved"), e => {
+		    log.push("rejected:" + e.message);
+		    it.next().then(r => log.push("done=" + r.done + " value=" + String(r.value)));
+		  });`, "rejected:e | done=true value=undefined"},
+
+		{`var log = [];
+		  async function* gen() {
+		    try { yield Promise.reject(new Error("e")); }
+		    catch (x) { log.push("caught:" + x.message); yield "after"; }
+		  }
+		  gen().next().then(r => log.push("r1=" + String(r.value)));`,
+			"caught:e | r1=after"},
+
+		// A yielded promise that resolves gives the value, not the promise.
+		{`var log = [];
+		  async function* gen() { yield Promise.resolve(7); }
+		  gen().next().then(r => log.push("v=" + r.value));`, "v=7"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		if _, err := rt.Eval(tc.src); err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+			rt.Close()
+			continue
+		}
+		v, err := rt.Eval(`log.join(" | ")`)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}
