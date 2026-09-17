@@ -274,7 +274,13 @@ func (c *compiler) compileStatement(s ast.Stmt) {
 		if len(c.finallys) > 0 {
 			// The finally clause must run before the function actually
 			// returns, so the return becomes a completion record it consumes.
-			c.emit(bytecode.OpPopCatch, 0, 0)
+			// Every handler between here and the clause is left behind by the
+			// jump, including the clause's own: a clause that was still
+			// protected by itself would run a second time.
+			ctx := &c.finallys[len(c.finallys)-1]
+			for d := c.handlerDepth; d >= ctx.handlers; d-- {
+				c.emit(bytecode.OpPopCatch, 0, 0)
+			}
 			c.emit(bytecode.OpPushInt, uint32(completionReturn), 0)
 			c.emitAt(n.Start, bytecode.OpJump, 0, 0)
 			c.finallys[len(c.finallys)-1].returns = append(
@@ -708,7 +714,8 @@ func (c *compiler) compileTry(n *ast.TryStmt) {
 	}
 
 	finallyHandler := c.emitJump(bytecode.OpPushFinally)
-	c.finallys = append(c.finallys, finallyCtx{body: n.Finally})
+	c.handlerDepth++
+	c.finallys = append(c.finallys, finallyCtx{body: n.Finally, handlers: c.handlerDepth})
 
 	// finallyStart is filled in once the clause's first instruction is known.
 	finallyStart := 0
@@ -726,6 +733,7 @@ func (c *compiler) compileTry(n *ast.TryStmt) {
 	// Normal completion: drop the finally handler and fall into the clause
 	// with a record saying nothing unusual happened.
 	c.emit(bytecode.OpPopCatch, 0, 0)
+	c.handlerDepth--
 	c.emit(bytecode.OpPushUndef, 0, 0)
 	c.emit(bytecode.OpPushInt, uint32(completionNormal), 0)
 	finallyStart = c.here()
@@ -775,10 +783,14 @@ func (c *compiler) compileTryCatch(n *ast.TryStmt) {
 		return
 	}
 	catchPC := c.emitJump(bytecode.OpPushCatch)
+	c.handlerDepth++
 	c.beginScope()
 	c.compileStatements(n.Block)
 	c.endScope()
 	c.emit(bytecode.OpPopCatch, 0, 0)
+	// The handler is gone from here on: the catch body runs after it fired,
+	// and the code after the statement after it was popped.
+	c.handlerDepth--
 	skip := c.emitJump(bytecode.OpJump)
 
 	c.patchJump(catchPC)
@@ -913,10 +925,15 @@ func (c *compiler) emitPendingExits(down int) {
 // compiled a second time at the jump site rather than being routed through.
 // Finally clauses are small and rarely nested, so the duplication is bounded.
 func (c *compiler) emitPendingFinallys() {
-	saved := c.finallys
-	defer func() { c.finallys = saved }()
+	saved, savedDepth := c.finallys, c.handlerDepth
+	defer func() { c.finallys, c.handlerDepth = saved, savedDepth }()
 	for i := len(saved) - 1; i >= 0; i-- {
-		c.emit(bytecode.OpPopCatch, 0, 0)
+		// Everything between here and the clause goes, the clause's own
+		// handler included.
+		for c.handlerDepth >= saved[i].handlers {
+			c.emit(bytecode.OpPopCatch, 0, 0)
+			c.handlerDepth--
+		}
 		// While a clause's body is being inlined it is no longer pending: a
 		// break or continue written inside it leaves through the clauses
 		// outside it, not through itself again.

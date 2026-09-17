@@ -3885,3 +3885,44 @@ func TestBigIntStringComparison(t *testing.T) {
 		checkEval(t, "String("+tc.src+")", tc.want)
 	}
 }
+
+// A jump into a finally clause leaves every handler between it and the jump,
+// the clause's own included: a clause still protected by itself would run a
+// second time when the completion it was carrying reached the end.
+func TestFinallyRunsOnce(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"return from a try with a catch", `var n = 0
+		  var f = function () {
+		    try { return "try" } catch (e) { return "catch" } finally { n += 1 }
+		    return "wat"
+		  }
+		  f() + "," + n`, "try,1"},
+		{"return from the catch", `var n = 0
+		  var f = function () {
+		    try { throw "t" } catch (e) { return "catch" } finally { n += 1 }
+		    return "wat"
+		  }
+		  f() + "," + n`, "catch,1"},
+		{"return with no catch", `var n = 0
+		  var f = function () { try { return "try" } finally { n += 1 } }
+		  f() + "," + n`, "try,1"},
+		{"the finally returns", `var n = 0
+		  var f = function () { try { return "try" } finally { n += 1; return "fin" } }
+		  f() + "," + n`, "fin,1"},
+		{"nested finallys", `var order = []
+		  var f = function () {
+		    try { try { return "x" } finally { order.push("inner") } }
+		    finally { order.push("outer") }
+		  }
+		  f() + "," + order.join()`, "x,inner,outer"},
+		{"a throw through both", `var order = []
+		  try {
+		    (function () { try { try { throw "e" } finally { order.push("inner") } }
+		      finally { order.push("outer") } })()
+		  } catch (e) { order.push("caught") }
+		  order.join()`, "inner,outer,caught"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}

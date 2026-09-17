@@ -197,6 +197,10 @@ type finallyCtx struct {
 	// returns holds the program counters of returns routed through the clause,
 	// awaiting its start address.
 	returns []int
+	// handlers is how deep the handler stack was once this clause's own was
+	// pushed. A jump into the clause has to pop everything above that, and the
+	// clause's own handler with it -- the clause is not protected by itself.
+	handlers int
 }
 
 // completionKind mirrors the runtime's encoding of how a protected block
@@ -255,6 +259,10 @@ type compiler struct {
 	// finallys is the stack of enclosing finally clauses, which return, break
 	// and continue all have to account for.
 	finallys []finallyCtx
+	// handlerDepth is how many exception handlers enclose the position being
+	// compiled. A jump out of them has to pop each one, since the instruction
+	// it lands on is not the one that would have.
+	handlerDepth int
 	// globalLex names the script-level lexical bindings this compilation
 	// declared, which live in the global lexical environment rather than in a
 	// frame slot.
