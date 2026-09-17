@@ -319,6 +319,25 @@ func (r *Runtime) bindParameters(f *frame, fn *bytecode.Function, args []Value) 
 	return nil
 }
 
+// bindLexicalParameters fills the slots of a parameter list whose bindings are
+// initialized one at a time.
+//
+// Such a parameter is not bound until the prologue reaches it, so one that has
+// not been reached has to be distinguishable from one that has:
+// `function f(a = b, b) {}` is a reference error, and so is
+// `function f(a = a) {}`. What makes a default run is the argument being
+// undefined -- passed or missing, which nothing can tell apart -- so both leave
+// the marker in place, and the prologue replaces it.
+func bindLexicalParameters(slots []Value, args []Value) {
+	for i := range slots {
+		if i < len(args) && !args[i].IsUndefined() {
+			slots[i] = args[i]
+		} else {
+			slots[i] = uninitialized
+		}
+	}
+}
+
 // execute runs the interpreter loop for one frame.
 func (r *Runtime) execute(f *frame) (Value, error) {
 	return r.executeAt(f, f.base, nil)
@@ -400,6 +419,27 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			push(cl.consts[in.A])
 		case bytecode.OpPushUndef:
 			push(Undefined)
+		case bytecode.OpInitParam:
+			// A parameter's slot is its position, so the argument that fills it
+			// is at the same index.
+			if int(in.A) < len(f.args) {
+				f.locals[in.A] = f.args[in.A]
+			} else {
+				f.locals[in.A] = Undefined
+			}
+		case bytecode.OpParamNeedsDefault:
+			push(Bool(int(in.A) >= len(f.args) || f.args[in.A].IsUndefined()))
+		case bytecode.OpParamsToDeadZone:
+			// The parameters of such a list are bound one at a time, so they
+			// all start in the dead zone: until the prologue reaches one,
+			// reading it is an error even though its argument has arrived.
+			n := int(in.A)
+			if n > len(f.locals) {
+				n = len(f.locals)
+			}
+			for i := 0; i < n; i++ {
+				f.locals[i] = uninitialized
+			}
 		case bytecode.OpPushUninitialized:
 			push(uninitialized)
 		case bytecode.OpPushNull:

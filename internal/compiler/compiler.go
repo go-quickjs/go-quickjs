@@ -844,6 +844,7 @@ func stackEffect(op bytecode.Op, a, b uint32) int {
 		bytecode.OpGetArguments, bytecode.OpRestParam, bytecode.OpDeleteVar,
 		bytecode.OpGetSuperProp,
 		bytecode.OpGetPropThis,
+		bytecode.OpParamNeedsDefault,
 		bytecode.OpIsNullish:
 		return 1
 

@@ -2036,3 +2036,87 @@ func TestImportMeta(t *testing.T) {
 		t.Error("assigning to import.meta was accepted, want SyntaxError")
 	}
 }
+
+// A module's top level is a lexical scope in a way a script's is not: a
+// function declaration there is a lexical binding rather than a var, and so is
+// every imported name. Its exports have rules of their own.
+func TestModuleDeclarationErrors(t *testing.T) {
+	bad := []struct{ name, src string }{
+		{"duplicate export", `export var x = 1; export var x = 2;`},
+		{"duplicate export name", `var x = 1, y = 2; export {x, y as x};`},
+		{"duplicate default", `export default 1; export default 2;`},
+		{"export of nothing", `export {nope};`},
+		{"duplicate let", `let z; let z;`},
+		{"two top-level functions", `function f() {} function f() {}`},
+		{"function and var", `var smoosh; function smoosh() {}`},
+		{"default function and a declaration", `export default function f() {}; function f() {}`},
+		{"import and var", `import {a} from "d"; var a = 1;`},
+		{"import and let", `import {a} from "d"; let a;`},
+	}
+	for _, tc := range bad {
+		rt := quickjs.New()
+		rt.SetModuleLoader(func(spec, ref string) (string, string, error) {
+			return `export var a = 1;`, spec, nil
+		})
+		if _, err := rt.EvalModule("m", tc.src); err == nil {
+			t.Errorf("%s: accepted, want SyntaxError", tc.name)
+		} else if !strings.Contains(err.Error(), "SyntaxError") {
+			t.Errorf("%s: got %v, want SyntaxError", tc.name, err)
+		}
+		rt.Close()
+	}
+
+	// What a script allows but a module does not is exactly the function rule,
+	// so the same source is fine as a script.
+	rt := quickjs.New()
+	defer rt.Close()
+	if _, err := rt.Eval(`var smoosh; function smoosh() {}`); err != nil {
+		t.Errorf("script: %v", err)
+	}
+
+	// And the forms that are legal in a module stay legal.
+	for _, src := range []string{
+		`var q = 1; export {q}; export var out = q;`,
+		`export * from "d"; export * from "e";`,
+		`export {a} from "d";`,
+		`var v; { var v; } export var out = v;`,
+		`export default function f() {} export var out = f;`,
+	} {
+		rt := quickjs.New()
+		rt.SetModuleLoader(func(spec, ref string) (string, string, error) {
+			return `export var a = 1;`, spec, nil
+		})
+		if _, err := rt.EvalModule("m", src); err != nil {
+			t.Errorf("%s: %v", src, err)
+		}
+		rt.Close()
+	}
+}
+
+// A module that will not load, parse or link fails the way a static import of
+// it would: as an error the script can catch and inspect.
+func TestDynamicImportRejectsWithAJavaScriptError(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	rt.SetModuleLoader(func(spec, ref string) (string, string, error) {
+		// Legal in a script, not in a module.
+		return `var smoosh; function smoosh() {}`, spec, nil
+	})
+
+	v, err := rt.Eval(`
+	    var seen = "none";
+	    import("d").then(function () { seen = "resolved" },
+	                     function (e) { seen = e.name });
+	    seen`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = v
+	got, err := rt.Eval(`seen`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.String() != "SyntaxError" {
+		t.Errorf("rejection = %q, want %q", got.String(), "SyntaxError")
+	}
+}

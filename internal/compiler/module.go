@@ -62,6 +62,7 @@ func CompileModule(prog *ast.Program, opts Options) (fn *bytecode.Function, info
 	c.emit(bytecode.OpSetLocal, uint32(c.completionSlot), 0)
 
 	c.collectModuleShape(prog.Body)
+	c.checkModuleDeclarations(prog.Body)
 	c.checkScopes(prog.Body)
 	c.hoistModuleBindings(prog.Body)
 	c.compileStatements(prog.Body)
@@ -243,6 +244,122 @@ func collectLexicalNames(s ast.Stmt, out *[]string) {
 	case *ast.ExportDecl:
 		if n.Decl != nil {
 			collectLexicalNames(n.Decl, out)
+		}
+	}
+}
+
+// checkModuleDeclarations reports the declaration errors that are particular to
+// a module.
+//
+// A module's top level is a lexical scope in a way a script's is not: a
+// function declaration there is a lexical binding rather than a var, and so is
+// every imported name. Two lexical bindings of the same name collide, and so do
+// a lexical one and a var.
+//
+// Its exports have rules of their own. A name may be exported once, and what an
+// export names has to be something the module declares -- `export {nope}` is an
+// error at compile time rather than an undefined at run time, which is the
+// whole point of static module structure.
+func (c *compiler) checkModuleDeclarations(body []ast.Stmt) {
+	declared := make(map[string]bool)
+	lexical := make(map[string]bool)
+
+	declare := func(name string, lex bool, pos int) {
+		if name == "" {
+			return
+		}
+		// Two vars may name the same binding; anything involving a lexical one
+		// may not.
+		if declared[name] && (lex || lexical[name]) {
+			c.errorf(pos, "identifier %q has already been declared", name)
+		}
+		declared[name] = true
+		if lex {
+			lexical[name] = true
+		}
+	}
+
+	// A declaration's own names, with a var's hoisting already accounted for by
+	// the caller.
+	declareDecl := func(s ast.Stmt, pos int) {
+		switch d := s.(type) {
+		case *ast.VarDecl:
+			var names []string
+			for _, dd := range d.Decls {
+				collectPatternNames(dd.Target, &names)
+			}
+			for _, n := range names {
+				declare(n, d.Kind != ast.DeclVar, pos)
+			}
+		case *ast.FuncDecl:
+			if d.Fn != nil && d.Fn.Name != nil {
+				declare(d.Fn.Name.Name, true, pos)
+			}
+		case *ast.ClassDecl:
+			if d.Class != nil && d.Class.Name != nil {
+				declare(d.Class.Name.Name, true, pos)
+			}
+		}
+	}
+
+	for _, s := range body {
+		switch n := s.(type) {
+		case *ast.ImportDecl:
+			for _, spec := range n.Specifiers {
+				declare(spec.Local, true, n.Start)
+			}
+		case *ast.ExportDecl:
+			if n.Decl != nil {
+				declareDecl(n.Decl, n.Start)
+			}
+		case *ast.VarDecl, *ast.FuncDecl, *ast.ClassDecl:
+			declareDecl(s, s.Pos())
+		default:
+			// A var nested in a block or a loop hoists to the module's top
+			// level, where it can collide with a lexical binding just the same.
+			var names []string
+			collectVarNamesIn([]ast.Stmt{s}, &names, true)
+			for _, name := range names {
+				declare(name, false, s.Pos())
+			}
+		}
+	}
+
+	exported := make(map[string]bool)
+	exportName := func(name string, pos int) {
+		if exported[name] {
+			c.errorf(pos, "duplicate export %q", name)
+		}
+		exported[name] = true
+	}
+
+	for _, s := range body {
+		n, ok := s.(*ast.ExportDecl)
+		if !ok {
+			continue
+		}
+		switch {
+		case n.All:
+			// `export * from "m"` names nothing statically; the linker decides
+			// what it covers, and a collision there is not an early error.
+			if n.Alias != "" {
+				exportName(n.Alias, n.Start)
+			}
+		case len(n.Specifiers) > 0:
+			for _, spec := range n.Specifiers {
+				exportName(spec.Exported, spec.Start)
+				// A re-export names a binding of the other module, which this
+				// one knows nothing about.
+				if n.Source == "" && !declared[spec.Local] {
+					c.errorf(spec.Start, "%q is not declared in this module", spec.Local)
+				}
+			}
+		case n.Default:
+			exportName("default", n.Start)
+		case n.Decl != nil:
+			for _, name := range declaredNames(n.Decl) {
+				exportName(name, n.Start)
+			}
 		}
 	}
 }

@@ -286,6 +286,20 @@ const (
 	OpCheckThisInit // a derived constructor must call super() before `this`
 	OpInitThis
 
+	// --- Lexical parameters ------------------------------------------------
+	// A parameter list with a default, a pattern or a rest element binds its
+	// names one at a time, so one the prologue has not reached yet may not be
+	// read: `function f(a = b, b) {}` is a reference error, and so is
+	// `function f(a = a) {}`.
+	//
+	// OpParamsToDeadZone puts the first A parameter slots into the dead zone,
+	// which is where such a list starts. OpInitParam takes slot A back out by
+	// filling it from argument A, and OpParamNeedsDefault pushes whether
+	// argument A was undefined or absent, which is when its default runs.
+	OpParamsToDeadZone
+	OpInitParam
+	OpParamNeedsDefault
+
 	// opCount is the number of opcodes, used to size the name table.
 	opCount
 )
@@ -296,7 +310,9 @@ var opNames = [opCount]string{
 	OpPushNull: "push_null", OpPushTrue: "push_true", OpPushFalse: "push_false",
 	OpPushThis: "push_this", OpPushInt: "push_int",
 	OpPushEmptyString:   "push_empty_string",
-	OpPushUninitialized: "push_uninitialized",
+	OpPushUninitialized: "push_uninitialized", OpInitParam: "init_param",
+	OpParamNeedsDefault: "param_needs_default",
+	OpParamsToDeadZone:  "params_to_dead_zone",
 
 	OpDup: "dup", OpDup2: "dup2", OpDrop: "drop", OpSwap: "swap",
 	OpRot3: "rot3", OpRot4: "rot4",

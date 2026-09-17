@@ -408,13 +408,16 @@ func (r *Runtime) initDynamicImport() {
 			return Obj(result), nil
 		}
 
+		// A module that will not load, parse or link fails the way a static
+		// import of it would, as an error the script can catch and inspect --
+		// not as a Go error the host would have to interpret.
 		mod, err := rt.loadDependency(spec.Go(), "")
 		if err != nil {
-			rt.rejectPromise(result, thrownValue(err))
+			rt.rejectPromise(result, thrownValue(rt.wrapEvalError(err)))
 			return Obj(result), nil
 		}
 		if err := rt.Link(mod); err != nil {
-			rt.rejectPromise(result, thrownValue(err))
+			rt.rejectPromise(result, thrownValue(rt.wrapEvalError(err)))
 			return Obj(result), nil
 		}
 		if _, err := rt.EvaluateModule(mod); err != nil {

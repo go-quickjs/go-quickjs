@@ -1,6 +1,10 @@
 package vm
 
-import "github.com/go-quickjs/go-quickjs/internal/bytecode"
+import (
+	"strings"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+)
 
 // Materializing a compiled template.
 //
@@ -318,11 +322,17 @@ func (r *Runtime) defDerivedFunctionCtor(name string, proto *Object, base *Objec
 }
 
 // wrapEvalError turns a compile failure into a thrown SyntaxError.
+//
+// The Go error says which engine it came from and what kind of error it is,
+// both of which the thrown object says for itself -- so the message it carries
+// is what is left after those are taken off.
 func (r *Runtime) wrapEvalError(err error) error {
 	if _, ok := err.(*Thrown); ok {
 		return err
 	}
-	return r.throwError(errSyntax, "%s", err.Error())
+	msg := strings.TrimPrefix(err.Error(), "quickjs: ")
+	msg = strings.TrimPrefix(msg, "SyntaxError: ")
+	return r.throwError(errSyntax, "%s", msg)
 }
 
 func joinComma(parts []string) string {

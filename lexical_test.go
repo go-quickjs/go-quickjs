@@ -1,6 +1,7 @@
 package quickjs_test
 
 import (
+	"strings"
 	"testing"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
@@ -358,6 +359,82 @@ func TestDeadZoneIsCatchable(t *testing.T) {
 			t.Errorf("%s: %v", tc.src, err)
 		} else if got := v.String(); got != tc.want {
 			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}
+
+// A parameter list with a default, a pattern or a rest element binds its names
+// one at a time, in order. Each takes the slot the interpreter fills
+// positionally, and a name that has not been bound yet may not be read.
+func TestParametersBindInOrder(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// A parameter after a pattern still gets its own argument. The pattern's
+		// names used to take the slots the parameters after it were filled
+		// through, so everything past the first pattern read the wrong one.
+		{`function f({a}, b) { return a + "," + b } f({a: 1}, 9)`, "1,9"},
+		{`function f({a} = {x: 1}, b) { return a + "," + b } f(undefined, 9)`,
+			"undefined,9"},
+		{`function f(x, {a}, b) { return [x, a, b].join(",") } f(1, {a: 2}, 3)`,
+			"1,2,3"},
+		{`function f([a], [b], c) { return [a, b, c].join(",") } f([1], [2], 3)`,
+			"1,2,3"},
+		{`var g = ({a}, b) => a + "," + b; g({a: 1}, 2)`, "1,2"},
+		{`function* g({a}, b) { yield a + "," + b } g({a: 1}, 2).next().value`, "1,2"},
+
+		// An earlier parameter is visible to a later default; a later one is
+		// not visible to an earlier default, whichever way round it is read.
+		{`function f(a, b = a) { return a + "," + b } f(1)`, "1,1"},
+		{`function f(a = 1, b = a + 1) { return a + "," + b } f()`, "1,2"},
+
+		// The arguments object exists before the parameters are bound, so a
+		// default may read it.
+		{`function f(x = arguments[1], y) { return x + "," + y } f(undefined, 2)`,
+			"2,2"},
+		{`class C { m(x = arguments[2], y = arguments[3], z) { return [x, y, z].join(",") } }
+		  C.prototype.m(undefined, undefined, "third", "fourth")`,
+			"third,fourth,third"},
+
+		// A rest parameter is filled from the argument list rather than
+		// positionally, and what came before it is unaffected.
+		{`function f(a, ...r) { return a + "|" + r.join(",") } f(1, 2, 3)`, "1|2,3"},
+		{`function f(a, ...[b, c]) { return [a, b, c].join(",") } f(1, 2, 3)`, "1,2,3"},
+
+		// Passing undefined is the same as passing nothing, which is what makes
+		// a default run.
+		{`function f(a = 1, b = 2) { return a + "," + b } f(undefined, 5)`, "1,5"},
+		{`function f(a) { return String(a) } f(undefined)`, "undefined"},
+		{`function f(a) { return String(a) } f()`, "undefined"},
+		{`function f({a} = {a: 3}) { return String(a) } f(undefined)`, "3"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+
+	// Reading a parameter the prologue has not reached is a ReferenceError,
+	// including the one being initialized.
+	for _, src := range []string{
+		`function f(x = y, y) { return x } f()`,
+		`function f(x = y, y) { return x } f(undefined, 1)`,
+		`function f(x = x) { return x } f()`,
+		`function f(a, b = c, c) { return b } f(1)`,
+		`var g = (x = y, y) => x; g()`,
+		`function* g(x = y, y) { yield x } g().next()`,
+	} {
+		rt := quickjs.New()
+		_, err := rt.Eval(src)
+		if err == nil {
+			t.Errorf("%s: accepted, want ReferenceError", src)
+		} else if !strings.Contains(err.Error(), "ReferenceError") {
+			t.Errorf("%s: got %v, want ReferenceError", src, err)
 		}
 		rt.Close()
 	}

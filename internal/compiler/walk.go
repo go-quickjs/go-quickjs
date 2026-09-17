@@ -18,6 +18,17 @@ func referencesArguments(body []ast.Stmt) bool {
 	return w.found
 }
 
+// referencesArgumentsInParams reports whether a parameter list mentions
+// `arguments`, which a default value may: the object exists before the
+// parameters are initialized.
+func referencesArgumentsInParams(params []ast.Expr) bool {
+	w := &argumentsScanner{}
+	for _, p := range params {
+		w.expr(p)
+	}
+	return w.found
+}
+
 type argumentsScanner struct {
 	found bool
 	// seekThis looks for `this` and `super` instead of `arguments`, which needs

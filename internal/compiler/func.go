@@ -64,7 +64,22 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 	// them.
 	c.fn.UsesThis = referencesThis(fn)
 
-	c.bindParameters(fn)
+	// A function that mentions `arguments`, directly or through an arrow that
+	// captures it, materializes the object into a slot. It exists before the
+	// parameters are initialized, so a default may refer to it, and the slot
+	// has to exist before the body is compiled, because an arrow can only
+	// capture a binding that is already there.
+	wantArguments := c.fn.Kind != bytecode.KindArrow &&
+		(referencesArguments(fn.Body) || referencesArgumentsInParams(fn.Params))
+	c.bindParameters(fn, func() {
+		if !wantArguments {
+			return
+		}
+		c.fn.UsesArguments = true
+		slot := c.declare("arguments", bindVar, fn.Start)
+		c.emit(bytecode.OpGetArguments, 0, 0)
+		c.emit(bytecode.OpSetLocal, slot, 0)
+	})
 	if fn.Generator || fn.Async {
 		// A generator's parameters are bound when it is called, so the
 		// prologue has to be separable from the body.
@@ -78,17 +93,6 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 	// emit OpPushCallee instead of a variable read.
 	if fn.Name != nil {
 		c.selfName = fn.Name.Name
-	}
-
-	// A function that mentions `arguments`, directly or through an arrow that
-	// captures it, materializes the object into a slot. The slot has to exist
-	// before the body is compiled, because an arrow can only capture a
-	// binding that is already there.
-	if c.fn.Kind != bytecode.KindArrow && referencesArguments(fn.Body) {
-		c.fn.UsesArguments = true
-		slot := c.declare("arguments", bindVar, fn.Start)
-		c.emit(bytecode.OpGetArguments, 0, 0)
-		c.emit(bytecode.OpSetLocal, slot, 0)
 	}
 
 	// Hoist var declarations and nested function declarations to the top of
@@ -120,7 +124,7 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 
 // bindParameters declares the parameter slots and emits the prologue for
 // defaults, destructuring and the rest parameter.
-func (c *compiler) bindParameters(fn *ast.FuncLit) {
+func (c *compiler) bindParameters(fn *ast.FuncLit, materialize func()) {
 	simple := true
 	for _, p := range fn.Params {
 		if _, ok := p.(*ast.Ident); !ok {
@@ -129,6 +133,10 @@ func (c *compiler) bindParameters(fn *ast.FuncLit) {
 		}
 	}
 	c.fn.HasSimpleParams = simple
+	// A default, a pattern or a rest element makes the parameters lexical: they
+	// are bound one at a time, in order, and one that has not been reached yet
+	// may not be read.
+	c.fn.ParamsAreLexical = !simple
 
 	// Function.prototype.length counts the parameters before the first one
 	// with a default or a rest element.
@@ -143,24 +151,82 @@ func (c *compiler) bindParameters(fn *ast.FuncLit) {
 			length++
 		}
 	}
-	c.fn.ParamCount = len(fn.Params)
 
+	// Every parameter takes exactly one slot, and those slots have to be
+	// 0..n-1 because the interpreter fills them positionally. So they are all
+	// reserved before any initializing code is emitted: a pattern parameter
+	// introduces names of its own, and declaring those as it went would push
+	// the parameters after it out of position.
+	slots := make([]uint32, len(fn.Params))
+	names := make([]string, len(fn.Params))
+	declareParam := func(id *ast.Ident) uint32 {
+		slot := c.declare(id.Name, bindParam, id.Start)
+		if c.fn.ParamsAreLexical {
+			c.markUninitialized(id.Name)
+		}
+		return slot
+	}
 	for i, p := range fn.Params {
 		switch param := p.(type) {
 		case *ast.Ident:
-			c.declare(param.Name, bindParam, param.Start)
+			names[i] = param.Name
+			slots[i] = declareParam(param)
+		case *ast.AssignPattern:
+			if id, ok := param.Target.(*ast.Ident); ok {
+				names[i] = id.Name
+				slots[i] = declareParam(id)
+				continue
+			}
+			slots[i] = c.anonymousParamSlot()
+		case *ast.RestElement:
+			if id, ok := param.Arg.(*ast.Ident); ok {
+				names[i] = id.Name
+				slots[i] = declareParam(id)
+				continue
+			}
+			slots[i] = c.anonymousParamSlot()
+		default:
+			slots[i] = c.anonymousParamSlot()
+		}
+	}
+
+	if c.fn.ParamsAreLexical {
+		// The parameters are bound one at a time from here on, so they all
+		// start in the dead zone. An argument that was passed is already
+		// bound; undefined, passed or missing, is what makes a default run.
+		c.emit(bytecode.OpParamsToDeadZone, uint32(len(fn.Params)), 0)
+	}
+
+	// The arguments object is created before the parameters are initialized,
+	// so a default may refer to it.
+	materialize()
+
+	for i, p := range fn.Params {
+		slot := slots[i]
+		switch param := p.(type) {
+		case *ast.Ident:
+			// Nothing is evaluated for it: the argument arrived in the slot,
+			// or the marker is still there and stands for undefined. A list
+			// with no defaults and no patterns never put it there.
+			if c.fn.ParamsAreLexical {
+				c.emit(bytecode.OpInitParam, slot, 0)
+			}
 
 		case *ast.AssignPattern:
 			// A parameter slot always exists; the default only applies when
-			// the argument was undefined.
-			slot := c.declareParamTarget(param.Target, i)
-			c.emit(bytecode.OpGetLocal, slot, 0)
-			c.emit(bytecode.OpPushUndef, 0, 0)
-			c.emit(bytecode.OpStrictEq, 0, 0)
-			skip := c.emitJump(bytecode.OpJumpIfFalse)
+			// the argument was undefined. The binding is not initialized until
+			// the default has run, which is what makes `f(x = x)` an error.
+			if !isIdent(param.Target) {
+				c.declarePatternNames(param.Target)
+			}
+			c.emit(bytecode.OpParamNeedsDefault, slot, 0)
+			passed := c.emitJump(bytecode.OpJumpIfFalse)
 			c.compileExprNamed(param.Default, nameOf(param.Target))
 			c.emit(bytecode.OpSetLocal, slot, 0)
-			c.patchJump(skip)
+			done := c.emitJump(bytecode.OpJump)
+			c.patchJump(passed)
+			c.emit(bytecode.OpInitParam, slot, 0)
+			c.patchJump(done)
 			if !isIdent(param.Target) {
 				c.emit(bytecode.OpGetLocal, slot, 0)
 				c.compileDestructuring(param.Target, ast.DeclLet)
@@ -172,35 +238,23 @@ func (c *compiler) bindParameters(fn *ast.FuncLit) {
 			// argument list rather than positionally.
 			c.fn.HasRest = true
 			c.emit(bytecode.OpRestParam, uint32(i), 0)
-			if id, ok := param.Arg.(*ast.Ident); ok {
-				slot := c.declare(id.Name, bindParam, id.Start)
-				c.emit(bytecode.OpSetLocal, slot, 0)
-			} else {
-				var names []string
-				collectPatternNames(param.Arg, &names)
-				for _, n := range names {
-					c.declare(n, bindLet, param.Pos())
-					c.markInitialized(n)
-				}
+			c.emit(bytecode.OpSetLocal, slot, 0)
+			if !isIdent(param.Arg) {
+				c.declarePatternNames(param.Arg)
+				c.emit(bytecode.OpGetLocal, slot, 0)
 				c.compileDestructuring(param.Arg, ast.DeclLet)
 			}
 
 		default:
-			// A destructuring parameter takes an anonymous slot, which the
-			// pattern then unpacks.
-			slot := c.nextSlot
-			c.nextSlot++
-			c.locals = append(c.locals, localVar{
-				name: "", kind: bindParam, slot: slot, depth: c.depth, initialized: true,
-			})
-			var names []string
-			collectPatternNames(p, &names)
-			for _, n := range names {
-				c.declare(n, bindLet, p.Pos())
-				c.markInitialized(n)
+			if c.fn.ParamsAreLexical {
+				c.emit(bytecode.OpInitParam, slot, 0)
 			}
+			c.declarePatternNames(p)
 			c.emit(bytecode.OpGetLocal, slot, 0)
 			c.compileDestructuring(p, ast.DeclLet)
+		}
+		if names[i] != "" {
+			c.markInitialized(names[i])
 		}
 	}
 	// ParamCount is how many arguments the interpreter copies positionally, so
@@ -212,26 +266,26 @@ func (c *compiler) bindParameters(fn *ast.FuncLit) {
 	c.fn.Length = length
 }
 
-// declareParamTarget declares the binding a parameter introduces and returns
-// its slot, which must be the positional slot i.
-func (c *compiler) declareParamTarget(target ast.Expr, i int) uint32 {
-	if id, ok := target.(*ast.Ident); ok {
-		return c.declare(id.Name, bindParam, id.Start)
-	}
-	// A pattern parameter still occupies its positional slot; the names it
-	// introduces are declared separately.
+// anonymousParamSlot reserves a parameter's positional slot for a pattern,
+// which has no name of its own to bind it to.
+func (c *compiler) anonymousParamSlot() uint32 {
 	slot := c.nextSlot
 	c.nextSlot++
 	c.locals = append(c.locals, localVar{
 		name: "", kind: bindParam, slot: slot, depth: c.depth, initialized: true,
 	})
+	return slot
+}
+
+// declarePatternNames declares the bindings a parameter pattern introduces,
+// which the destructuring code then initializes.
+func (c *compiler) declarePatternNames(target ast.Expr) {
 	var names []string
 	collectPatternNames(target, &names)
 	for _, n := range names {
 		c.declare(n, bindLet, target.Pos())
 		c.markInitialized(n)
 	}
-	return slot
 }
 
 func isIdent(e ast.Expr) bool {

@@ -167,6 +167,12 @@ func (r *Runtime) toString(v Value) (*String, error) {
 	if err != nil {
 		return nil, err
 	}
+	if p.Kind() == v.Kind() {
+		// toPrimitive returns anything that is not an object unchanged, so a
+		// kind the switch above does not handle would recur forever. Nothing a
+		// script can name reaches here; an engine bug might.
+		return nil, r.throwTypeError("cannot convert %s to a string", r.describe(v))
+	}
 	return r.toString(p)
 }
 

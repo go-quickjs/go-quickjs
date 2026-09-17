@@ -196,6 +196,15 @@ type Function struct {
 	HasRest         bool
 	HasSimpleParams bool
 	UsesArguments   bool
+	// ParamsAreLexical marks a parameter list whose bindings are initialized
+	// one at a time, in order, so that a default may not read a parameter that
+	// comes after it. A missing argument leaves its slot in the dead zone for
+	// such a function, rather than undefined, and the prologue clears the
+	// marker as it reaches each parameter.
+	//
+	// Only a list with a default, a pattern or a rest element needs it: with
+	// plain parameters there is nothing that could run early enough to notice.
+	ParamsAreLexical bool
 	// UsesThis records whether the body can observe its `this`, which lets a
 	// sloppy-mode call skip substituting the global object when nothing would
 	// see the difference.
