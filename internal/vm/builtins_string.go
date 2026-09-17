@@ -111,15 +111,29 @@ func (r *Runtime) initStringBuiltins() {
 		return rt.toString(this)
 	}
 
+	// Unlike the rest, these two are not generic: they hand back the string a
+	// receiver already is or holds, and there is nothing to hand back for a
+	// receiver that is neither.
+	thisStringValue := func(rt *Runtime, this Value) (*String, error) {
+		switch {
+		case this.IsString():
+			return this.String(), nil
+		case this.IsObject() && this.Object().class == ClassStringWrapper:
+			if s, ok := this.Object().data.(*String); ok {
+				return s, nil
+			}
+		}
+		return nil, rt.throwTypeError("not a string")
+	}
 	r.defMethod(p, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		s, err := thisStr(rt, this)
+		s, err := thisStringValue(rt, this)
 		if err != nil {
 			return Undefined, err
 		}
 		return Str(s), nil
 	})
 	r.defMethod(p, "valueOf", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		s, err := thisStr(rt, this)
+		s, err := thisStringValue(rt, this)
 		if err != nil {
 			return Undefined, err
 		}
@@ -433,10 +447,9 @@ func (r *Runtime) initStringBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		sepVal := arg(args, 0)
-		if sepVal.IsUndefined() {
-			return Obj(rt.newArrayFrom([]Value{Str(s)})), nil
-		}
+		// The limit is settled before the separator is looked at, so a limit of
+		// zero produces an empty array whatever the separator is -- including
+		// none at all, which otherwise yields the whole string.
 		limit := math.MaxInt32
 		if lv := arg(args, 1); !lv.IsUndefined() {
 			n, err := rt.toUint32(lv)
@@ -445,9 +458,24 @@ func (r *Runtime) initStringBuiltins() {
 			}
 			limit = int(n)
 		}
-		sep, err := rt.toString(sepVal)
-		if err != nil {
-			return Undefined, err
+		// The separator is converted before the limit is looked at, so a
+		// toString that throws is heard even for a limit of zero. Undefined is
+		// the exception in both directions: converting it has no effect, and
+		// with a limit above zero it yields the whole string rather than
+		// splitting on "undefined".
+		sepVal := arg(args, 0)
+		var sep *String
+		if !sepVal.IsUndefined() {
+			sep, err = rt.toString(sepVal)
+			if err != nil {
+				return Undefined, err
+			}
+		}
+		if limit == 0 {
+			return Obj(rt.newArrayFrom(nil)), nil
+		}
+		if sepVal.IsUndefined() {
+			return Obj(rt.newArrayFrom([]Value{Str(s)})), nil
 		}
 		var out []Value
 		if sep.Len() == 0 {
@@ -466,10 +494,12 @@ func (r *Runtime) initStringBuiltins() {
 		return Obj(rt.newArrayFrom(out)), nil
 	})
 
-	r.defMethod(p, "padStart", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	// One argument each: the padding string is optional, and a function's
+	// length counts only what it requires.
+	r.defMethod(p, "padStart", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		return rt.padString(thisStr, this, args, true)
 	})
-	r.defMethod(p, "padEnd", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	r.defMethod(p, "padEnd", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		return rt.padString(thisStr, this, args, false)
 	})
 

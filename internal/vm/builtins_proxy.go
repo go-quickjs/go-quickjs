@@ -167,7 +167,9 @@ func (r *Runtime) proxyDelete(p *proxyData, key Atom, strict bool) (bool, error)
 		return false, err
 	}
 	if !res.Truthy() {
-		return false, nil
+		// A trap that refuses is a delete that failed, which strict mode
+		// reports the same way as any other.
+		return false, r.assignFailed(key, strict, "cannot delete property %q")
 	}
 	cur, err := r.ownPropDesc(p.target, key)
 	if err != nil {
@@ -327,7 +329,9 @@ func (r *Runtime) proxySetPrototypeOf(p *proxyData, proto Value) (bool, error) {
 		if pp := proxyOf(p.target); pp != nil {
 			return r.proxySetPrototypeOf(pp, proto)
 		}
-		return setProtoOf(p.target, proto), nil
+		// The ordinary path, cycle check and all: forwarding to the target is
+		// forwarding to what the target would have done itself.
+		return r.setProtoOfChecked(p.target, proto), nil
 	}
 	res, err := r.call(fn, Obj(p.handler), []Value{Obj(p.target), proto})
 	if err != nil {
@@ -490,7 +494,14 @@ func (r *Runtime) proxyDefineProperty(p *proxyData, key Atom, desc Value) (bool,
 		if pp := proxyOf(p.target); pp != nil {
 			return r.proxyDefineProperty(pp, key, desc)
 		}
-		return true, r.definePropertyFromDescriptor(p.target, key, desc)
+		d, err := r.toDescriptor(desc)
+		if err != nil {
+			return false, err
+		}
+		// A refusal is reported rather than thrown: what the caller does about
+		// it is the caller's to decide, and Reflect.defineProperty answers
+		// false where Object.defineProperty throws.
+		return r.defineProperty(p.target, key, d)
 	}
 	res, err := r.call(fn, Obj(p.handler), []Value{Obj(p.target), r.keyToValue(key), desc})
 	if err != nil {
@@ -846,10 +857,15 @@ func (r *Runtime) initReflectBuiltins() {
 			return Bool(ok), err
 		}
 		rt.materializeFunctionProp(target.Object(), key)
-		if err := rt.definePropertyFromDescriptor(target.Object(), key, arg(args, 2)); err != nil {
-			return False, nil
+		// Reading the descriptor may throw -- an attribute can be a getter --
+		// and that error is the caller's, unlike a refusal to define, which is
+		// the false this returns.
+		d, err := rt.toDescriptor(arg(args, 2))
+		if err != nil {
+			return Undefined, err
 		}
-		return True, nil
+		ok, err := rt.defineProperty(target.Object(), key, d)
+		return Bool(ok), err
 	})
 
 	r.defMethod(rf, "getOwnPropertyDescriptor", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {

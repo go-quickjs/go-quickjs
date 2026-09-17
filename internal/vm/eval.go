@@ -256,15 +256,9 @@ func (r *Runtime) installEval() {
 				return Undefined, rt.throwTypeError("code generation from strings is disabled")
 			}
 			// The last argument is the body; the rest are parameter lists,
-			// which are joined with commas exactly as written.
-			body := ""
-			if len(args) > 0 {
-				s, err := rt.toString(args[len(args)-1])
-				if err != nil {
-					return Undefined, err
-				}
-				body = s.Go()
-			}
+			// which are joined with commas exactly as written. The parameters
+			// are converted first, in order, and the body last -- which is
+			// what a toString with a side effect sees.
 			var params []string
 			for _, a := range args[:max(0, len(args)-1)] {
 				s, err := rt.toString(a)
@@ -272,6 +266,14 @@ func (r *Runtime) installEval() {
 					return Undefined, err
 				}
 				params = append(params, s.Go())
+			}
+			body := ""
+			if len(args) > 0 {
+				s, err := rt.toString(args[len(args)-1])
+				if err != nil {
+					return Undefined, err
+				}
+				body = s.Go()
 			}
 			src := "(function anonymous(" + joinComma(params) + "\n) {\n" + body + "\n})"
 			return rt.evalIndirect(src)
@@ -311,14 +313,8 @@ func (r *Runtime) defDerivedFunctionCtor(name string, proto *Object, base *Objec
 			if rt.evaluator == nil {
 				return Undefined, rt.throwTypeError("code generation from strings is disabled")
 			}
-			body := ""
-			if len(args) > 0 {
-				s, err := rt.toString(args[len(args)-1])
-				if err != nil {
-					return Undefined, err
-				}
-				body = s.Go()
-			}
+			// The parameters are converted first and the body last, as in
+			// the Function constructor these stand in for.
 			var params []string
 			for _, a := range args[:max(0, len(args)-1)] {
 				s, err := rt.toString(a)
@@ -326,6 +322,14 @@ func (r *Runtime) defDerivedFunctionCtor(name string, proto *Object, base *Objec
 					return Undefined, err
 				}
 				params = append(params, s.Go())
+			}
+			body := ""
+			if len(args) > 0 {
+				s, err := rt.toString(args[len(args)-1])
+				if err != nil {
+					return Undefined, err
+				}
+				body = s.Go()
 			}
 			return rt.evalIndirect(source(joinComma(params), body))
 		},

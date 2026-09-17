@@ -121,7 +121,18 @@ func (r *Runtime) initObjectBuiltins() {
 		return Obj(o), nil
 	})
 
-	ctor := r.newCtor("Object", 1, p, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	var ctor *Object
+	ctor = r.newCtor("Object", 1, p, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		// Subclassed, this builds an instance of the subclass and ignores what
+		// it was given: `new O(x)` for `class O extends Object {}` is an O, not
+		// x. Only Object itself, and calling it as a function, convert.
+		if nt := rt.newTarget(); nt.IsObject() && nt.Object() != ctor {
+			proto, err := rt.protoFromNewTargetErr(rt.proto.object)
+			if err != nil {
+				return Undefined, err
+			}
+			return Obj(newObject(proto, ClassObject)), nil
+		}
 		v := arg(args, 0)
 		if v.IsNullish() {
 			return Obj(newObject(rt.proto.object, ClassObject)), nil
@@ -750,7 +761,18 @@ func (r *Runtime) initFunctionBuiltins() {
 			// The default implementation is the ordinary prototype-chain walk,
 			// expressed without recursing back through instanceOf.
 			v := arg(args, 0)
-			if !isCallable(this) || !v.IsObject() {
+			if !isCallable(this) {
+				return False, nil
+			}
+			// A bound function has no prototype property of its own, and is
+			// not what its instances were built from: the question is about
+			// the function it was bound from, asked afresh so that a
+			// Symbol.hasInstance there is honoured.
+			if fd := this.Object().fn(); fd != nil && fd.boundTarget != nil {
+				yes, err := rt.instanceOf(v, Obj(fd.boundTarget))
+				return Bool(yes), err
+			}
+			if !v.IsObject() {
 				return False, nil
 			}
 			protoVal, err := rt.getProp(this.Object(), atomPrototype, this)

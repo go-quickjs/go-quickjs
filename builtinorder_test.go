@@ -315,3 +315,188 @@ func TestArrayElementDefinedTwice(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// A sigma at the end of a word lowercases to its final form. The rule looks
+// past the characters that are neither cased nor word-breaking -- accents,
+// formatting, and the punctuation that may sit inside a word, a full stop among
+// it.
+func TestFinalSigmaLooksPastPunctuation(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`"A.\u03A3".toLowerCase()`, "a.\u03c2"},
+		{`"A'\u03A3".toLowerCase()`, "a'\u03c2"},
+		{`"A:\u03A3".toLowerCase()`, "a:\u03c2"},
+		{`"A\u00AD\u03A3".toLowerCase()`, "a\u00ad\u03c2"},
+		// Followed by a cased letter it is not final, whatever comes between.
+		{`"A\u03A3.b".toLowerCase()`, "a\u03c3.b"},
+		{`"A\u03A3\u00ADB".toLowerCase()`, "a\u03c3\u00adb"},
+		// With nothing cased before it, it is not final either.
+		{`".\u03A3".toLowerCase()`, ".\u03c3"},
+		{`"\u03A3".toLowerCase()`, "\u03c3"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// String.prototype.split settles its limit and converts its separator before it
+// decides what to return, so the side effects of both are visible even when the
+// answer is an empty array.
+func TestSplitConversionOrder(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`String("undefined is not a function".split(undefined, 0).length)`, "0"},
+		{`"a,b".split(",", 0).length + "," + "a,b".split(",", 1).join("")`, "0,a"},
+		{`var seen = ""
+		  try { "foo".split({toString: function () { seen = "sep"; throw new RangeError() }}, 0) }
+		  catch (e) { seen += "," + e.constructor.name }
+		  seen`, "sep,RangeError"},
+		{`var seen = []
+		  "foo".split({toString: function () { seen.push("sep"); return "o" }},
+		              {valueOf: function () { seen.push("lim"); return 2 }})
+		  seen.join(",")`, "lim,sep"},
+		{`"ab".split(undefined).join("|")`, "ab"},
+		{`"ab".split(undefined, 1).join("|")`, "ab"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// Object called with a new.target that is not Object itself builds an instance
+// of that constructor and ignores its argument.
+func TestObjectSubclassIgnoresItsArgument(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`class O extends Object {}
+		  var o = new O({a: 1});
+		  [String(o.a), Object.getPrototypeOf(o) === O.prototype].join(",")`, "undefined,true"},
+		{`class O extends Object {}
+		  var o = Reflect.construct(Object, [{b: 2}], O);
+		  [String(o.b), Object.getPrototypeOf(o) === O.prototype].join(",")`, "undefined,true"},
+		// Object itself still converts, called or constructed.
+		{`String(new Object(1) instanceof Number) + "," + String(Object(1) instanceof Number)`,
+			"true,true"},
+		{`var o = {}; String(new Object(o) === o)`, "true"},
+		{`typeof new Object()`, "object"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// A proxy with no trap forwards to its target, which means doing what the
+// target would have done -- including refusing, which is reported rather than
+// thrown, and including the checks the target's own operation would run.
+func TestProxyForwardsWithoutATrap(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// The target refuses; Reflect reports it, and Object.defineProperty is
+		// what turns that into a throw.
+		{`var o = Object.preventExtensions({})
+		  var p = new Proxy(new Proxy(o, {}), {})
+		  String(Reflect.defineProperty(p, "foo", {value: 5}))`, "false"},
+		{`var o = Object.preventExtensions({})
+		  var p = new Proxy(new Proxy(o, {}), {})
+		  try { Object.defineProperty(p, "foo", {value: 5}) } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		{`var o = Object.freeze({})
+		  var p = new Proxy(new Proxy(o, {}), {})
+		  String(Reflect.set(p, "y", 1))`, "false"},
+		// Forwarding a prototype change runs the cycle check the target would.
+		{`var o = {}
+		  var p = new Proxy(new Proxy(o, {}), {setPrototypeOf: null})
+		  Object.setPrototypeOf(p, null)
+		  String(Object.getPrototypeOf(o))`, "null"},
+		{`var o = {}
+		  var p = new Proxy(new Proxy(o, {}), {setPrototypeOf: null})
+		  try { Object.setPrototypeOf(p, Object.create(o)) } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		// A trap that refuses a delete is a delete that failed, which strict
+		// mode reports.
+		{`var t = new Proxy({}, {deleteProperty: function () { return false }})
+		  var p = new Proxy(t, {deleteProperty: undefined})
+		  try { (function () { "use strict"; delete p.bar })() } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		{`var t = new Proxy({}, {deleteProperty: function () { return false }})
+		  var p = new Proxy(t, {deleteProperty: undefined})
+		  String(delete p.bar)`, "false"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// Reflect.defineProperty answers false for a refusal, but a descriptor it
+// cannot even read is an error of the caller's.
+func TestReflectDefinePropertyReportsAndThrows(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`try { Reflect.defineProperty({}, "a",
+		    Object.defineProperty({}, "enumerable",
+		      {get: function () { throw new RangeError() }})) }
+		  catch (e) { e.constructor.name }`, "RangeError"},
+		{`String(Reflect.defineProperty(Object.preventExtensions({}), "a", {value: 1}))`, "false"},
+		{`String(Reflect.defineProperty({}, "a", {value: 1}))`, "true"},
+		{`try { Reflect.defineProperty(1, "a", {}) } catch (e) { e.constructor.name }`, "TypeError"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// The two String methods that are not generic: they hand back the string their
+// receiver is or holds, and refuse a receiver that is neither.
+func TestStringToStringIsNotGeneric(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`try { String.prototype.toString.call(1) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`try { String.prototype.valueOf.call(1) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`try { String.prototype.toString.call({}) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`try { String.prototype.valueOf.call(null) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`String.prototype.toString.call(new String("ab"))`, "ab"},
+		{`String.prototype.valueOf.call("ab")`, "ab"},
+		// The generic ones still accept anything.
+		{`String.prototype.charAt.call(12, 1)`, "2"},
+		// And the padding methods require only what they cannot do without.
+		{`[String.prototype.padStart.length, String.prototype.padEnd.length].join(",")`, "1,1"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// A bound function is not what its instances were built from, so instanceof
+// asks about the function it was bound from -- afresh, so that a
+// Symbol.hasInstance there is honoured.
+func TestBoundFunctionInstanceOf(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`function F() {}; var b = F.bind(); var o = new F();
+		  [o instanceof b, b[Symbol.hasInstance](o)].join(",")`, "true,true"},
+		{`function F() {}; var b = F.bind().bind(); var o = new F();
+		  String(o instanceof b)`, "true"},
+		{`function F() {}; var b = F.bind(); String({} instanceof b)`, "false"},
+		{`function F() {}
+		  Object.defineProperty(F, Symbol.hasInstance, {value: function () { return true }})
+		  var b = F.bind(); String(1 instanceof b)`, "true"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// The Function constructor converts its parameters before its body, in the
+// order they were written.
+func TestFunctionConstructorConversionOrder(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var seen = []
+		  var p = {toString: function () { seen.push("p"); return "a" }}
+		  var body = {toString: function () { seen.push("body"); return "return a" }}
+		  var f = new Function(p, body)
+		  seen.join(",") + ":" + f(1)`, "p,body:1"},
+		{`var p = {toString: function () { throw 1 }}
+		  var body = {toString: function () { throw "body" }}
+		  try { new Function(p, body) } catch (e) { String(e) }`, "1"},
+		{`var seen = []
+		  var mk = function (s) { return {toString: function () { seen.push(s); return s }} }
+		  new Function(mk("a"), mk("b"), mk("return a + b"))
+		  seen.join(",")`, "a,b,return a + b"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

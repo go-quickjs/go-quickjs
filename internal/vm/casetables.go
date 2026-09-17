@@ -203,8 +203,12 @@ func isCased(r rune) bool {
 // isCaseIgnorable reports whether a character is one the sigma rule looks past.
 func isCaseIgnorable(r rune) bool {
 	switch r {
-	case '\'', '’', '·', '·', '״', '‧', '︓', '﹕', '：':
-		// The word-breaking punctuation that may sit inside a word.
+	// The word-breaking punctuation that may sit inside a word: the MidLetter,
+	// MidNumLet and Single_Quote classes. A full stop is one of them, which is
+	// what makes the sigma in "A.\u03A3" a final one.
+	case '\'', ':', '\u00b7', '\u0387', '\u055f', '\u05f4', '\u2027',
+		'\ufe13', '\ufe55', '\uff1a',
+		'.', '\u2018', '\u2019', '\u2024', '\ufe52', '\uff07', '\uff0e':
 		return true
 	}
 	return unicode.In(r, unicode.Mn, unicode.Me, unicode.Cf, unicode.Lm, unicode.Sk)
