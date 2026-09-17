@@ -2799,23 +2799,27 @@ func pointsAtOrAbove(p *Value, locals []Value, slot int) bool {
 // upvalues its descriptor names.
 func (r *Runtime) makeClosure(f *frame, c Value) *Object {
 	tmpl, _ := c.ref.(*closure)
+
+	// The object, its function data, its closure and the bindings that closure
+	// captures are one allocation: a closure made in a loop is as common as
+	// any object literal, and each of the four was a separate one.
+	o, fd, child, upvalues := newScriptFuncObject(
+		r.funcProtoFor(tmpl.fn), ClassFunction, len(tmpl.fn.Upvalues))
+
 	// The environment is inherited, so a function declared in a module sees
 	// the module's bindings rather than only the globals.
-	child := &closure{
+	*child = closure{
 		fn: tmpl.fn, names: tmpl.names, consts: tmpl.consts,
-		realm: r, env: f.cl.env,
+		realm: r, env: f.cl.env, upvalues: upvalues,
 	}
-
-	child.upvalues = make([]*upvalue, len(tmpl.fn.Upvalues))
 	for i, desc := range tmpl.fn.Upvalues {
 		if desc.FromParent {
-			child.upvalues[i] = r.captureLocal(f, int(desc.Index))
+			upvalues[i] = r.captureLocal(f, int(desc.Index))
 		} else {
-			child.upvalues[i] = f.cl.upvalues[desc.Index]
+			upvalues[i] = f.cl.upvalues[desc.Index]
 		}
 	}
 
-	o, fd := newFuncObject(r.funcProtoFor(tmpl.fn), ClassFunction)
 	kind := ctorKindOf(tmpl.fn)
 	*fd = funcData{
 		closure:  child,
