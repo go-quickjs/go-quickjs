@@ -2971,3 +2971,74 @@ func TestGeneratorNewTarget(t *testing.T) {
 		`async function f() { return new.target }
 		 f().then(v => { r = String(v) })`, "r", "undefined")
 }
+
+// TestArrayFromAsyncProtocol covers how Array.fromAsync reads its source and
+// what it builds the result with.
+func TestArrayFromAsyncProtocol(t *testing.T) {
+	checkAsync(t, `Array.fromAsync([1, Promise.resolve(2), 3]).then(a => { r = a.join() })`,
+		"r", "1,2,3")
+	// A synchronous source's values are awaited; an asynchronous one's are
+	// not, so a promise it means to yield stays a promise.
+	checkAsync(t, `
+		var p = Promise.resolve({})
+		var src = {[Symbol.asyncIterator]() {
+		  var i = 0
+		  return {async next() { return i++ ? {done: true} : {value: p, done: false} }}
+		}}
+		Array.fromAsync(src).then(a => { r = String(a.length) + "," + (a[0] === p) })`,
+		"r", "1,true")
+
+	// Called on a constructor, the result is what that constructor makes.
+	checkAsync(t, `
+		var log = []
+		function MyArray(...args) { log.push("construct " + args.length) }
+		Array.fromAsync.call(MyArray, [1, 2]).then(a => {
+		  r = log.join("|") + " => " + (a instanceof MyArray) + "," + a.length
+		})`,
+		"r", "construct 0 => true,2")
+	// An array-like tells the constructor its length up front.
+	checkAsync(t, `
+		var log = []
+		function MyArray(...args) { log.push("construct " + args.join()) }
+		Array.fromAsync.call(MyArray, {length: 2, 0: "a", 1: "b"}).then(a => {
+		  r = log.join("|") + " => " + a[0] + a[1]
+		})`,
+		"r", "construct 2 => ab")
+	// A length no array can hold is a rejection, not a hang.
+	checkAsync(t, `
+		Array.fromAsync.call({}, {length: 4294967296})
+		  .then(() => { r = "resolved" }, e => { r = e.constructor.name })`,
+		"r", "RangeError")
+
+	// A member named by one of the iterator symbols has to be callable.
+	checkAsync(t, `
+		Array.fromAsync({[Symbol.iterator]: true})
+		  .then(() => { r = "resolved" }, e => { r = e.constructor.name })`,
+		"r", "TypeError")
+
+	// A map function that fails closes the iterator before the rejection.
+	checkAsync(t, `
+		var closed = 0
+		var src = {[Symbol.iterator]() { return {
+		  next() { return {value: 1, done: false} },
+		  return() { closed++; return {done: true} },
+		}}}
+		Array.fromAsync(src, () => { throw new RangeError() })
+		  .then(() => { r = "resolved" }, e => { r = e.constructor.name + "," + closed })`,
+		"r", "RangeError,1")
+	checkAsync(t, `
+		var closed = 0
+		var src = {[Symbol.asyncIterator]() { return {
+		  async next() { return {value: 1, done: false} },
+		  async return() { closed++; return {done: true} },
+		}}}
+		Array.fromAsync(src, async () => { throw new RangeError() })
+		  .then(() => { r = "resolved" }, e => { r = e.constructor.name + "," + closed })`,
+		"r", "RangeError,1")
+
+	// In sloppy mode a map function called with no thisArg sees the global.
+	checkAsync(t, `
+		Array.fromAsync([1], async function () { return this === globalThis })
+		  .then(a => { r = String(a[0]) })`,
+		"r", "true")
+}

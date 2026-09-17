@@ -15,7 +15,10 @@ package vm
 // fromAsyncState is one Array.fromAsync call in progress.
 type fromAsyncState struct {
 	result *Object
-	out    []Value
+	// target is the object being filled, which is what the constructor the
+	// method was called on produced -- an ordinary array when it was called on
+	// something that is not a constructor.
+	target *Object
 
 	// iter and next drive the iterator form.
 	iter Value
@@ -48,8 +51,9 @@ func (r *Runtime) initArrayFromAsync(ctor *Object) {
 			return Obj(st.result), nil
 		}
 
-		src := arg(args, 0)
-		if err := rt.openAsyncSource(st, src); err != nil {
+		// Everything from here on is reported as a rejection rather than
+		// thrown, which is what makes fromAsync always hand back a promise.
+		if err := rt.openAsyncSource(st, this, arg(args, 0)); err != nil {
 			rt.rejectPromise(st.result, thrownValue(err))
 			return Obj(st.result), nil
 		}
@@ -62,28 +66,31 @@ func (r *Runtime) initArrayFromAsync(ctor *Object) {
 //
 // Symbol.asyncIterator is preferred, then Symbol.iterator, then the array-like
 // protocol -- the same order Array.from uses, with the async step in front.
-func (r *Runtime) openAsyncSource(st *fromAsyncState, src Value) error {
+func (r *Runtime) openAsyncSource(st *fromAsyncState, ctor Value, src Value) error {
 	if src.IsNullish() {
 		return r.throwTypeError("Array.fromAsync requires an iterable or array-like")
 	}
 
-	method, err := r.getValueProp(src, r.atoms.internSymbol(r.wellKnown.asyncIterator))
+	method, err := r.iterMethod(src, r.wellKnown.asyncIterator)
 	if err != nil {
 		return err
 	}
-	if !isCallable(method) {
-		method, err = r.getValueProp(src, r.atoms.internSymbol(r.wellKnown.iterator))
-		if err != nil {
+	if method.IsUndefined() {
+		if method, err = r.iterMethod(src, r.wellKnown.iterator); err != nil {
 			return err
 		}
 		st.sync = true
 	}
 
-	if !isCallable(method) {
+	if method.IsUndefined() {
 		// Not iterable at all: read it by index, awaiting each element.
 		st.sync = false
 		a, err := r.viewArrayLike(src)
 		if err != nil {
+			return err
+		}
+		// The length is known here, so the constructor is told it.
+		if st.target, err = r.fromAsyncTarget(ctor, a.n); err != nil {
 			return err
 		}
 		st.a = a
@@ -105,7 +112,56 @@ func (r *Runtime) openAsyncSource(st *fromAsyncState, src Value) error {
 		return r.throwTypeError("the iterator has no next method")
 	}
 	st.iter, st.next = iter, next
+	if st.target, err = r.fromAsyncTarget(ctor, -1); err != nil {
+		return err
+	}
 	return nil
+}
+
+// iterMethod looks up one of the iterator symbols, which is a GetMethod: a
+// value that is neither absent nor callable is an error rather than a reason to
+// try the next protocol.
+func (r *Runtime) iterMethod(src Value, sym *Symbol) (Value, error) {
+	m, err := r.getValueProp(src, r.atoms.internSymbol(sym))
+	if err != nil {
+		return Undefined, err
+	}
+	switch {
+	case m.IsUndefined() || m.IsNull():
+		return Undefined, nil
+	case !isCallable(m):
+		return Undefined, r.throwTypeError("%s is not a function", r.describe(m))
+	}
+	return m, nil
+}
+
+// fromAsyncTarget builds the object the values will be put into.
+//
+// Called on a constructor -- which it is on Array itself, and may be on a
+// subclass -- the result is what that constructor makes, told the length when
+// the source is an array-like and there is one to tell.
+func (r *Runtime) fromAsyncTarget(ctor Value, n int64) (*Object, error) {
+	if isConstructor(ctor) {
+		var args []Value
+		if n >= 0 {
+			args = []Value{Float(float64(n))}
+		}
+		v, err := r.construct(ctor, args)
+		if err != nil {
+			return nil, err
+		}
+		if !v.IsObject() {
+			return nil, r.throwTypeError("the constructor did not return an object")
+		}
+		return v.Object(), nil
+	}
+	if n < 0 {
+		n = 0
+	}
+	if n > 1<<32-1 {
+		return nil, r.throwRangeError("invalid array length")
+	}
+	return r.newArrayOfLength(n), nil
 }
 
 // stepFromAsync advances the call by one element.
@@ -117,6 +173,8 @@ func (r *Runtime) stepFromAsync(st *fromAsyncState) {
 
 	res, err := r.call(st.next, st.iter, nil)
 	if err != nil {
+		// The iterator failed to produce a step, so there is nothing left to
+		// close: it is already done as far as the protocol is concerned.
 		r.rejectPromise(st.result, thrownValue(err))
 		return
 	}
@@ -130,21 +188,27 @@ func (r *Runtime) stepFromAsync(st *fromAsyncState) {
 		}
 		done, err := rt.getValueProp(settled, atomDone)
 		if err != nil {
-			rt.rejectPromise(st.result, thrownValue(err))
+			rt.failFromAsync(st, thrownValue(err))
 			return
 		}
 		if done.Truthy() {
-			rt.resolvePromise(st.result, Obj(rt.newArrayFrom(st.out)))
+			rt.finishFromAsync(st)
 			return
 		}
 		value, err := rt.getValueProp(settled, atomValue)
 		if err != nil {
-			rt.rejectPromise(st.result, thrownValue(err))
+			rt.failFromAsync(st, thrownValue(err))
 			return
 		}
 		// A synchronous iterator's values are awaited individually, which is
 		// what makes fromAsync over an array of promises produce the values.
-		rt.acceptFromAsync(st, value)
+		// An asynchronous one has already awaited them, and awaiting again
+		// would unwrap a promise the iterator meant to yield.
+		if st.sync {
+			rt.awaitFromAsync(st, value)
+			return
+		}
+		rt.mapFromAsync(st, value)
 	}, func(rt *Runtime, reason Value) {
 		rt.rejectPromise(st.result, reason)
 	})
@@ -153,7 +217,7 @@ func (r *Runtime) stepFromAsync(st *fromAsyncState) {
 // stepFromAsyncIndexed advances the array-like form.
 func (r *Runtime) stepFromAsyncIndexed(st *fromAsyncState) {
 	if st.index >= st.a.n {
-		r.resolvePromise(st.result, Obj(r.newArrayFrom(st.out)))
+		r.finishFromAsync(st)
 		return
 	}
 	v, err := st.a.get(r, st.index)
@@ -162,32 +226,91 @@ func (r *Runtime) stepFromAsyncIndexed(st *fromAsyncState) {
 		return
 	}
 	st.index++
-	r.acceptFromAsync(st, v)
+	r.awaitFromAsync(st, v)
 }
 
-// acceptFromAsync awaits one value, maps it, and asks for the next.
-func (r *Runtime) acceptFromAsync(st *fromAsyncState, value Value) {
+// awaitFromAsync settles one value before it is mapped, which is what a
+// synchronous source's values need and an asynchronous one's have already had.
+func (r *Runtime) awaitFromAsync(st *fromAsyncState, value Value) {
 	r.awaitThen(value, func(rt *Runtime, settled Value) {
-		i := st.count
-		st.count++
-		if isCallable(st.mapper) {
-			mapped, err := rt.call(st.mapper, st.thisArg, []Value{settled, Float(float64(i))})
-			if err != nil {
-				rt.rejectPromise(st.result, thrownValue(err))
-				return
-			}
-			// The mapper may itself be async, so its result is awaited too.
-			rt.awaitThen(mapped, func(rt *Runtime, m Value) {
-				st.out = append(st.out, m)
-				rt.stepFromAsync(st)
-			}, func(rt *Runtime, reason Value) {
-				rt.rejectPromise(st.result, reason)
-			})
-			return
-		}
-		st.out = append(st.out, settled)
-		rt.stepFromAsync(st)
+		rt.mapFromAsync(st, settled)
 	}, func(rt *Runtime, reason Value) {
+		rt.failFromAsync(st, reason)
+	})
+}
+
+// mapFromAsync applies the map function to one value, stores the result and
+// asks for the next.
+func (r *Runtime) mapFromAsync(st *fromAsyncState, value Value) {
+	i := st.count
+	st.count++
+	if !isCallable(st.mapper) {
+		r.storeFromAsync(st, i, value)
+		return
+	}
+	mapped, err := r.call(st.mapper, st.thisArg, []Value{value, Float(float64(i))})
+	if err != nil {
+		r.failFromAsync(st, thrownValue(err))
+		return
+	}
+	// The mapper may itself be async, so its result is awaited too.
+	r.awaitThen(mapped, func(rt *Runtime, m Value) {
+		rt.storeFromAsync(st, i, m)
+	}, func(rt *Runtime, reason Value) {
+		rt.failFromAsync(st, reason)
+	})
+}
+
+// storeFromAsync puts one value in place and asks for the next.
+func (r *Runtime) storeFromAsync(st *fromAsyncState, i int64, v Value) {
+	if err := r.createIndexed(st.target, i, v); err != nil {
+		r.failFromAsync(st, thrownValue(err))
+		return
+	}
+	r.stepFromAsync(st)
+}
+
+// finishFromAsync records how many values arrived and resolves.
+func (r *Runtime) finishFromAsync(st *fromAsyncState) {
+	a := arrayLike{o: st.target}
+	if err := a.setLength(r, st.count); err != nil {
+		r.rejectPromise(st.result, thrownValue(err))
+		return
+	}
+	r.resolvePromise(st.result, Obj(st.target))
+}
+
+// failFromAsync ends the call, closing the iterator first.
+//
+// Everything after the iterator is opened is inside the loop as far as the
+// specification is concerned, so an abrupt completion there -- a map function
+// that throws, a value that rejects, a property that refuses to be created --
+// tells the iterator it is done before the promise rejects.
+func (r *Runtime) failFromAsync(st *fromAsyncState, reason Value) {
+	if !st.iter.IsObject() {
+		r.rejectPromise(st.result, reason)
+		return
+	}
+	iter := st.iter
+	st.iter = Undefined
+	ret, err := r.getValueProp(iter, atomReturn)
+	if err != nil || !isCallable(ret) {
+		// The original reason is the one that matters, so a failure to even
+		// find the return method is discarded.
+		r.rejectPromise(st.result, reason)
+		return
+	}
+	res, err := r.call(ret, iter, nil)
+	if err != nil {
+		r.rejectPromise(st.result, reason)
+		return
+	}
+	// An async iterator's return hands back a promise, which has to settle
+	// before the rejection is delivered -- but whatever it settles to is
+	// discarded.
+	r.awaitThen(res, func(rt *Runtime, _ Value) {
+		rt.rejectPromise(st.result, reason)
+	}, func(rt *Runtime, _ Value) {
 		rt.rejectPromise(st.result, reason)
 	})
 }

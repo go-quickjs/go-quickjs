@@ -100,6 +100,20 @@ func (r *Runtime) callObject(o *Object, this Value, args []Value, newTarget Valu
 	// returns an object whose next method drives it; an async function starts
 	// immediately but returns a promise at its first await.
 	if fn := fd.closure.fn; isGeneratorTemplate(fn) {
+		// A generator builds its frames itself, so the receiver is coerced here
+		// rather than by run: a sloppy-mode async function called with no
+		// receiver sees the global object like any other.
+		if fn.UsesThis && !this.IsObject() && !fn.Strict {
+			if this.IsNullish() {
+				this = r.globalThis
+			} else {
+				w, err := r.toObject(this)
+				if err != nil {
+					return Undefined, err
+				}
+				this = Obj(w)
+			}
+		}
 		gen, err := r.newGenerator(fd.closure, this, args, o, fn.Async)
 		if err != nil {
 			// A generator binds its parameters at the call, so a destructuring
