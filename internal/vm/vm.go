@@ -568,14 +568,23 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		case bytecode.OpDefineGlobalVar:
 			name := cl.names[in.A]
 			env := cl.scope()
+			// A binding eval creates is configurable, where a script's is not:
+			// the evaluated code could have declared it anywhere, so nothing
+			// should be able to rely on its being there.
+			flags := propWritable | moduleBindingFlags(r.atoms.name(name))
+			if in.B != 0 {
+				flags |= propConfigurable
+			}
 			if !r.hasOwnProp(env, name) {
-				env.setOwnRaw(name, Undefined,
-					propWritable|moduleBindingFlags(r.atoms.name(name)))
+				env.setOwnRaw(name, Undefined, flags)
 			}
 		case bytecode.OpDefineGlobalFunc:
 			name := cl.names[in.A]
-			cl.scope().setOwnRaw(name, pop(),
-				propWritable|moduleBindingFlags(r.atoms.name(name)))
+			flags := propWritable | moduleBindingFlags(r.atoms.name(name))
+			if in.B != 0 {
+				flags |= propConfigurable
+			}
+			cl.scope().setOwnRaw(name, pop(), flags)
 
 		// --- Properties ---------------------------------------------------
 		case bytecode.OpGetProp:
@@ -977,6 +986,34 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				goto onError
 			}
 			push(v)
+		case bytecode.OpDirectEval:
+			argc := int(in.B)
+			args := r.stack[sp-argc : sp]
+			callee := r.stack[sp-argc-1]
+			sp -= argc + 1
+			src := arg(args, 0)
+			switch {
+			case !callee.IsObject() || callee.Object() != r.evalFn:
+				// The name resolved to something other than the intrinsic, so
+				// this is an ordinary call after all.
+				v, err := r.call(callee, Undefined, args)
+				if err != nil {
+					vmErr = err
+					goto onError
+				}
+				push(v)
+			case !src.IsString():
+				// eval returns anything that is not a string unchanged, which
+				// is what makes eval(42) safe.
+				push(src)
+			default:
+				v, err := r.evalDirect(f, cl.fn.EvalScopes[in.A], src.String().Go())
+				if err != nil {
+					vmErr = err
+					goto onError
+				}
+				push(v)
+			}
 		case bytecode.OpCallMethod:
 			argc := int(in.A)
 			args := r.stack[sp-argc : sp]

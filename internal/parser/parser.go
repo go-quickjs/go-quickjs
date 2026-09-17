@@ -36,6 +36,12 @@ type Options struct {
 	Module bool
 	// Strict forces strict mode even without a "use strict" directive.
 	Strict bool
+	// The contexts a direct eval inherits from its call site. Evaluated code is
+	// inside the function that called it, so `super.x` there is legal exactly
+	// where it would be legal at the call site.
+	AllowSuperProp bool
+	AllowSuperCall bool
+	AllowNewTarget bool
 }
 
 // parser holds the state of one parse.
@@ -148,6 +154,10 @@ func Parse(src string, opts Options) (prog *ast.Program, err error) {
 		// lets a module finish loading something before its importers run.
 		allowAwait: opts.Module,
 		labels:     make(map[string]bool),
+
+		allowSuperProp: opts.AllowSuperProp,
+		allowSuperCall: opts.AllowSuperCall,
+		allowNewTarget: opts.AllowNewTarget,
 	}
 	// The recursive-descent routines report errors by panicking with a
 	// *Error, which keeps their signatures free of error returns. Nothing else

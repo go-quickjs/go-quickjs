@@ -43,6 +43,7 @@ It is not finished. See [Conformance](#conformance) for measured coverage and
 | Built-ins | `Object`, `Function`, `Array`, `String`, `Number`, `Boolean`, `Symbol`, `BigInt`, `Error`, `Math`, `JSON`, `Date`, `RegExp`, `Map`, `Set`, `Promise`, `Proxy`, `Reflect`, `ArrayBuffer`, `DataView`, typed arrays |
 | Weak references | `WeakRef`, `FinalizationRegistry`, `WeakMap`, `WeakSet`, backed by Go's `weak.Pointer` and `runtime.AddCleanup`: a target really is released, and a registry really is called back |
 | Recent additions | Set operations, `Array.fromAsync`, `Object.groupBy`, `Promise.try`, `RegExp.escape`, `Error.isError`, `Math.sumPrecise`, `Uint8Array` base64 and hex |
+| Eval | Direct `eval` runs in the caller's scope — its variables, `this`, `new.target` and `super`; indirect `eval` runs in global scope |
 | Go interop | Function binding, marshalling, `context.Context` cancellation |
 
 ### Not implemented
@@ -58,10 +59,6 @@ Known semantic gaps, each covered by a test that documents it:
   forward to them.
 - A top-level `let` or `const` in a script does not persist across `Eval` calls;
   a top-level `var` does.
-- Direct `eval` is evaluated as if it were indirect: the code runs in global
-  scope and cannot see the calling function's variables, `this`, `super` or
-  `new.target`. Giving it those would mean spilling a function's slots into a
-  scope object wherever one might occur.
 - A `WeakMap` or `WeakSet` value is held strongly, so a value that refers to its
   own key keeps that key alive. Breaking that cycle needs ephemeron marking,
   which Go's collector does not offer.

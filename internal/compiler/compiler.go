@@ -39,6 +39,22 @@ type Options struct {
 	// Text is the original source, retained so that Function.prototype.toString
 	// can reproduce a function's text.
 	Text string
+	// EvalScope is set when compiling the code of a direct eval. It names the
+	// bindings of the calling function, which the code may read and write: each
+	// one it actually uses becomes an upvalue, which the interpreter binds to
+	// the calling frame.
+	EvalScope []bytecode.EvalBinding
+	// PrivateNames are the private names of the classes enclosing a direct
+	// eval's call site, which its code may refer to as the surrounding code
+	// may.
+	PrivateNames []string
+	// EvalOwnVarScope marks eval code, whose top-level vars belong to the
+	// evaluated code rather than to the global object when it is strict.
+	EvalOwnVarScope bool
+	// EvalConfigurable marks the bindings eval creates on the global object,
+	// which are configurable where a script's are not: the evaluated code could
+	// have declared them anywhere, so nothing should be able to rely on them.
+	EvalConfigurable bool
 }
 
 // bindKind classifies a binding, which decides its initialization and
@@ -216,6 +232,12 @@ func Compile(prog *ast.Program, opts Options) (fn *bytecode.Function, err error)
 	c.nextSlot++
 	c.emit(bytecode.OpPushUndef, 0, 0)
 	c.emit(bytecode.OpSetLocal, uint32(c.completionSlot), 0)
+
+	// A direct eval's code is inside the class bodies its call site was inside,
+	// so their private names are in scope for it.
+	if len(opts.PrivateNames) > 0 {
+		c.privateScopes = append(c.privateScopes, opts.PrivateNames)
+	}
 
 	// Top-level var and function declarations become properties of the global
 	// object rather than locals, which is what makes them visible to other
@@ -517,6 +539,15 @@ func (c *compiler) resolveLocal(name string) (*localVar, bool) {
 // descriptors needed to thread it down through every intervening function.
 func (c *compiler) resolveUpvalue(name string) (uint32, bool) {
 	if c.parent == nil {
+		// The code of a direct eval has no enclosing compiler, but it does have
+		// an enclosing frame. Its bindings are declared as upvalues by name,
+		// and the interpreter matches them to the frame's slots.
+		for _, b := range c.opts.EvalScope {
+			if b.Name != name {
+				continue
+			}
+			return c.addUpvalue(name, b.Index, b.FromLocal, b.Mutable, b.TDZ, 0), true
+		}
 		return 0, false
 	}
 	if l, ok := c.parent.resolveLocal(name); ok {
@@ -562,8 +593,31 @@ func (c *compiler) hoistGlobals(body []ast.Stmt) {
 	var names []string
 	collectVarNamesIn(body, &names, c.fn.Strict)
 	for _, n := range names {
-		c.emit(bytecode.OpDefineGlobalVar, c.nameIdx(n), 0)
+		if c.evalVarsAreLocal() {
+			// Strict eval code gets a variable environment of its own, so its
+			// vars are bindings of the evaluated code and vanish with it.
+			// Which is the point: strict mode is where `eval` stops being able
+			// to reach into its surroundings.
+			c.declare(n, bindVar, 0)
+			continue
+		}
+		// A var declared by eval is configurable, unlike one a script declares,
+		// because the evaluated code could have declared it anywhere.
+		c.emit(bytecode.OpDefineGlobalVar, c.nameIdx(n), boolBit(c.opts.EvalConfigurable))
 	}
+}
+
+// evalVarsAreLocal reports whether a top-level var belongs to the evaluated
+// code rather than to the global object.
+func (c *compiler) evalVarsAreLocal() bool {
+	return c.opts.EvalOwnVarScope && c.fn.Strict
+}
+
+func boolBit(b bool) uint32 {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // collectVarNames gathers the names bound by `var` and by function

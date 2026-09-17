@@ -122,6 +122,10 @@ type Runtime struct {
 	// same module twice yields the same instance.
 	modules      map[string]*Module
 	moduleLoader ModuleLoader
+	// evalFn is the intrinsic eval, which a call site compares its callee
+	// against: a direct eval is one that actually reaches this function, and a
+	// name that resolves to anything else is an ordinary call.
+	evalFn *Object
 	// evaluator compiles and runs source text for eval and the Function
 	// constructor. It is nil when code generation is disabled.
 	evaluator     Evaluator

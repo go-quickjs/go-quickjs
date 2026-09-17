@@ -73,6 +73,7 @@ import (
 	"runtime/debug"
 	"time"
 
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/compiler"
 	"github.com/go-quickjs/go-quickjs/internal/parser"
 	"github.com/go-quickjs/go-quickjs/internal/vm"
@@ -435,19 +436,35 @@ func WithoutCodeGeneration() Option {
 // They live here rather than in the vm package because they need the parser and
 // compiler, which that package deliberately does not import.
 func (r *Runtime) installCodeGeneration() {
-	r.rt.SetEvaluator(func(source string, directCall bool) (vm.Value, error) {
-		// Only indirect-eval semantics are implemented: the code is evaluated
-		// in global scope and cannot see the calling function's locals. Direct
-		// eval would require the compiler to spill a function's slots into a
-		// scope object whenever it might contain one.
-		prog, err := parser.Parse(source, parser.Options{})
-		if err != nil {
-			return vm.Undefined, &SyntaxError{err: err}
+	r.rt.SetEvaluator(func(source string, req vm.EvalRequest) (*bytecode.Function, error) {
+		popts := parser.Options{}
+		copts := compiler.Options{
+			Source: "<eval>", Text: source,
+			// Whatever eval declares on the global object is configurable,
+			// unlike what a script declares: the evaluated code could have
+			// declared it anywhere, so nothing should be able to rely on it.
+			EvalConfigurable: true,
+			EvalOwnVarScope:  true,
 		}
-		fn, err := compiler.Compile(prog, compiler.Options{Source: "<eval>", Text: source})
-		if err != nil {
-			return vm.Undefined, &SyntaxError{err: err}
+		if req.Direct {
+			// A direct eval is inside its caller: it inherits the strictness,
+			// may use the caller's `super` and `new.target`, and resolves the
+			// caller's bindings.
+			popts.Strict = req.Scope.Strict
+			popts.AllowSuperProp = req.Scope.AllowSuperProp
+			popts.AllowSuperCall = req.Scope.AllowSuperCall
+			popts.AllowNewTarget = req.Scope.AllowNewTarget
+			copts.EvalScope = req.Scope.Bindings
+			copts.PrivateNames = req.Scope.PrivateNames
 		}
-		return r.rt.Run(fn)
+		prog, err := parser.Parse(source, popts)
+		if err != nil {
+			return nil, &SyntaxError{err: err}
+		}
+		fn, err := compiler.Compile(prog, copts)
+		if err != nil {
+			return nil, &SyntaxError{err: err}
+		}
+		return fn, nil
 	})
 }

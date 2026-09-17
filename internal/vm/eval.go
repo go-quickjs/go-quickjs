@@ -198,13 +198,6 @@ func (r *Runtime) newTarget() Value {
 	return r.frames[len(r.frames)-1].newTarget
 }
 
-// Evaluator compiles and runs source text, which eval and the Function
-// constructor need.
-//
-// It is supplied by the host rather than implemented here, because the vm
-// package does not import the parser or the compiler.
-type Evaluator func(source string, directCall bool) (Value, error)
-
 // SetEvaluator installs eval and the Function constructor.
 func (r *Runtime) SetEvaluator(fn Evaluator) {
 	r.evaluator = fn
@@ -213,7 +206,7 @@ func (r *Runtime) SetEvaluator(fn Evaluator) {
 
 // installEval defines the global eval and the Function constructor.
 func (r *Runtime) installEval() {
-	r.defMethod(r.global, "eval", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	r.evalFn = r.defMethod(r.global, "eval", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		src := arg(args, 0)
 		// eval returns anything that is not a string unchanged, which is what
 		// makes eval(42) safe.
@@ -223,11 +216,11 @@ func (r *Runtime) installEval() {
 		if rt.evaluator == nil {
 			return Undefined, rt.throwTypeError("code generation from strings is disabled")
 		}
-		v, err := rt.evaluator(src.String().Go(), true)
-		if err != nil {
-			return Undefined, rt.wrapEvalError(err)
-		}
-		return v, nil
+		// Reaching this function through anything but a plain call is an
+		// indirect eval, which runs in global scope. A direct call never gets
+		// here: the interpreter recognizes it and evaluates in the caller's
+		// scope instead.
+		return rt.evalIndirect(src.String().Go())
 	})
 
 	fnProto := r.proto.function
@@ -264,11 +257,7 @@ func (r *Runtime) installEval() {
 				params = append(params, s.Go())
 			}
 			src := "(function anonymous(" + joinComma(params) + "\n) {\n" + body + "\n})"
-			v, err := rt.evaluator(src, false)
-			if err != nil {
-				return Undefined, rt.wrapEvalError(err)
-			}
-			return v, nil
+			return rt.evalIndirect(src)
 		},
 	}
 
@@ -321,11 +310,7 @@ func (r *Runtime) defDerivedFunctionCtor(name string, proto *Object, base *Objec
 				}
 				params = append(params, s.Go())
 			}
-			v, err := rt.evaluator(source(joinComma(params), body), false)
-			if err != nil {
-				return Undefined, rt.wrapEvalError(err)
-			}
-			return v, nil
+			return rt.evalIndirect(source(joinComma(params), body))
 		},
 	}
 	c.setOwnRaw(atomPrototype, Obj(proto), 0)

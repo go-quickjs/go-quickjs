@@ -47,8 +47,8 @@ func (c *compiler) compileStatements(body []ast.Stmt) {
 func (c *compiler) predeclareFunction(fd *ast.FuncDecl) {
 	name := fd.Fn.Name.Name
 	c.compileFunctionLiteral(fd.Fn, name)
-	if c.parent == nil && c.depth == 0 {
-		c.emit(bytecode.OpDefineGlobalFunc, c.nameIdx(name), 0)
+	if c.parent == nil && c.depth == 0 && !c.evalVarsAreLocal() {
+		c.emit(bytecode.OpDefineGlobalFunc, c.nameIdx(name), boolBit(c.opts.EvalConfigurable))
 		return
 	}
 	kind := bindFunction

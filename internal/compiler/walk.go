@@ -148,13 +148,16 @@ func (w *argumentsScanner) expr(e ast.Expr) {
 	}
 	switch n := e.(type) {
 	case *ast.Ident:
-		if w.seekThis {
-			// A direct eval can read `this`, so a body containing one is
-			// treated as using it.
-			if n.Name == "eval" {
-				w.found = true
-			}
-		} else if n.Name == "arguments" {
+		switch {
+		case w.seekSuper:
+			// Only a literal `super` counts here.
+		case n.Name == "eval":
+			// A direct eval can read both `this` and `arguments`, so a body
+			// containing one is treated as using whichever is being looked
+			// for: the binding has to exist before the evaluated code can
+			// reach it, and it cannot be added afterwards.
+			w.found = true
+		case !w.seekThis && n.Name == "arguments":
 			w.found = true
 		}
 	case *ast.This:

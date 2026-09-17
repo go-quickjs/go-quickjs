@@ -688,6 +688,12 @@ func (c *compiler) compileCall(n *ast.Call) {
 			return
 		}
 	}
+	// A direct eval runs its code in this scope, so the call site records what
+	// is in scope for the evaluated code to reach.
+	if isDirectEval(n) && !hasSpread(n.Args) && c.withDepth == 0 {
+		c.compileDirectEval(n)
+		return
+	}
 	if hasSpread(n.Args) {
 		c.compileSpreadCall(n)
 		return
