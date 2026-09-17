@@ -1891,8 +1891,9 @@ func (r *Runtime) initSymbolBuiltins() {
 
 	ctor := r.newCtor("Symbol", 0, p, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if rt.Constructing() {
-			// Symbol is deliberately not constructible, so that every symbol
-			// is a primitive.
+			// Symbol refuses to construct, so that every symbol is a
+			// primitive. It is still a constructor, which is why a class may
+			// extend it -- the refusal happens when the subclass is built.
 			return Undefined, rt.throwTypeError("Symbol is not a constructor")
 		}
 		d := arg(args, 0)
@@ -1905,9 +1906,6 @@ func (r *Runtime) initSymbolBuiltins() {
 		}
 		return Sym(NewSymbol(s.Go(), true)), nil
 	})
-	// Symbol is not a constructor: `new Symbol()` is a TypeError.
-	ctor.fn().ctorKind = ctorNone
-
 	wk := map[string]*Symbol{
 		"iterator": r.wellKnown.iterator, "asyncIterator": r.wellKnown.asyncIterator,
 		"hasInstance": r.wellKnown.hasInstance, "toPrimitive": r.wellKnown.toPrimitive,

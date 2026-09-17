@@ -680,52 +680,38 @@ func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
 		c.compileClassMember(m, fn, installName)
 	}
 
-	// Static fields are assigned after the class object exists, with the
-	// constructor as `this`.
+	// A static field is initialized after the class object exists, by an
+	// immediately invoked method of the class. That is what makes `this` the
+	// constructor -- an initializer may read one static field to compute the
+	// next -- and what gives it a home object for `super.x`.
 	for i, f := range cls.Fields {
 		if !f.Static {
 			continue
 		}
+		key, computed := f.Key, f.Computed
+		if computed {
+			// Read the key the class definition already computed rather than
+			// evaluating the expression a second time.
+			key = &ast.Ident{Name: keyNames[i], Start: f.Start}
+		}
+		value := f.Value
+		if value == nil {
+			// A field with no initializer is still created, holding undefined.
+			value = &ast.Ident{Name: "undefined", Start: f.Start}
+		}
+		// OpCallMethod takes the receiver from beneath the callee, so the
+		// constructor is duplicated into that slot.
 		c.emit(bytecode.OpDup, 0, 0)
-		if f.Computed {
-			// The key was evaluated when the class was defined; only the value
-			// is produced here.
-			c.compileIdentRead(&ast.Ident{Name: keyNames[i], Start: f.Start})
-		}
-		switch {
-		case f.Value == nil:
-			c.emit(bytecode.OpPushUndef, 0, 0)
-		case needsHomeObject(f.Value):
-			// A static initializer that mentions super is an immediately
-			// invoked method of the class, which is what gives it a home
-			// object to resolve super against. Only one that needs it pays for
-			// the call.
-			c.emit(bytecode.OpDup, 0, 0)
-			c.compileFunctionLiteral(&ast.FuncLit{
-				Kind:  ast.FuncMethod,
-				Body:  []ast.Stmt{&ast.ReturnStmt{Arg: f.Value, Start: f.Start}},
-				Start: f.Start,
-				End:   f.Start,
-			}, "")
-			c.emit(bytecode.OpSetHomeObject, 1, 0)
-			c.emit(bytecode.OpCallMethod, 0, 0)
-		default:
-			c.compileExprNamed(f.Value, classFieldName(f.Key, f.Computed))
-		}
-		switch {
-		case f.Computed:
-			c.emit(bytecode.OpDefineIndex, 0, 0)
-		default:
-			if pn, private := f.Key.(*ast.PrivateName); private {
-				// A private field is hidden from every reflective operation,
-				// static or not, which the define instruction records rather
-				// than the attributes.
-				name, ref := c.privateName(pn, f.Start)
-				c.emit(bytecode.OpDefinePrivate, name, ref)
-			} else {
-				c.emit(bytecode.OpDefineField, c.nameIdx(propKeyName(f.Key)), 0)
-			}
-		}
+		c.compileFunctionLiteral(&ast.FuncLit{
+			Kind: ast.FuncMethod,
+			Body: []ast.Stmt{&ast.FieldInit{
+				Key: key, Value: value, Computed: computed, Start: f.Start,
+			}},
+			Start: f.Start,
+			End:   f.Start,
+		}, "")
+		c.emit(bytecode.OpSetHomeObject, 1, 0)
+		c.emit(bytecode.OpCallMethod, 0, 0)
 		c.emit(bytecode.OpDrop, 0, 0)
 	}
 

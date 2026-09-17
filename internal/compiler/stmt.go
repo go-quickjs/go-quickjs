@@ -819,19 +819,28 @@ func (c *compiler) compileFieldInit(n *ast.FieldInit) {
 	if pn, private := n.Key.(*ast.PrivateName); private {
 		name, ref := c.privateName(pn, n.Start)
 		c.emit(bytecode.OpPushThis, 0, 0)
-		c.compileExpr(n.Value)
+		c.compileExprNamed(n.Value, "#"+pn.Name)
 		c.emitAt(n.Start, bytecode.OpDefinePrivate, name, ref)
 		c.emit(bytecode.OpDrop, 0, 0)
 		return
 	}
 	c.emit(bytecode.OpPushThis, 0, 0)
-	if n.Computed {
-		c.compileExpr(n.Key)
-		c.emit(bytecode.OpToPropertyKey, 0, 0)
-	} else {
-		c.emit(bytecode.OpPushConst, c.stringConst(propKeyName(n.Key)), 0)
+	if !n.Computed {
+		key := propKeyName(n.Key)
+		c.emit(bytecode.OpPushConst, c.stringConst(key), 0)
+		c.compileExprNamed(n.Value, key)
+		c.emitAt(n.Start, bytecode.OpDefineIndex, 0, 0)
+		c.emit(bytecode.OpDrop, 0, 0)
+		return
 	}
+	c.compileExpr(n.Key)
+	c.emit(bytecode.OpToPropertyKey, 0, 0)
 	c.compileExpr(n.Value)
+	// A field named by a computed key names its initializer too, but only once
+	// the key is known.
+	if isAnonymousFnDef(n.Value) {
+		c.emit(bytecode.OpSetFuncName, 0, 0)
+	}
 	c.emitAt(n.Start, bytecode.OpDefineIndex, 0, 0)
 	c.emit(bytecode.OpDrop, 0, 0)
 }

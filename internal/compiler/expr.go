@@ -390,8 +390,13 @@ func (c *compiler) compileObjectLit(n *ast.ObjectLit) {
 			c.compileExpr(p.Key)
 			c.emit(bytecode.OpToPropertyKey, 0, 0)
 			c.compileExpr(p.Value)
-			if p.Method {
+			// The name comes from the key, which is only known now. A value
+			// that is not an anonymous definition keeps whatever name it has:
+			// `{[k]: f}` must not rename f.
+			if p.Method || isAnonymousFnDef(p.Value) {
 				c.emit(bytecode.OpSetFuncName, 0, 0)
+			}
+			if p.Method {
 				// A shorthand method may use super, which resolves against the
 				// literal it is defined in.
 				c.emit(bytecode.OpSetHomeObject, 2, 0)
@@ -409,6 +414,21 @@ func (c *compiler) compileObjectLit(n *ast.ObjectLit) {
 		}
 		c.emit(bytecode.OpDefineField, c.nameIdx(key), 0)
 	}
+}
+
+// isAnonymousFnDef reports whether an expression is an AnonymousFunctionDefinition,
+// which is what decides whether the surrounding syntax gets to name it.
+//
+// A named function keeps its own name, and an expression that merely evaluates
+// to a function is not a definition at all -- `{[k]: f}` leaves f alone.
+func isAnonymousFnDef(e ast.Expr) bool {
+	switch n := e.(type) {
+	case *ast.FuncLit:
+		return n.Name == nil
+	case *ast.ClassLit:
+		return n.Name == nil
+	}
+	return false
 }
 
 // propKeyName returns the string form of a non-computed property key.
