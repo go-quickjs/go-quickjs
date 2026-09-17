@@ -286,6 +286,10 @@ func (r *Runtime) initObjectBuiltins() {
 		}
 		o := v.Object()
 		o.flags &^= objExtensible
+		// An array's length is synthesized, so clearing the property flags
+		// would not reach it.
+		o.flags &^= objArrayLengthWritable
+		rt.materializeFunctionProp(o, atomLength)
 		for i := range o.props {
 			o.props[i].flags &^= propWritable | propConfigurable
 		}

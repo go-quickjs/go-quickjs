@@ -2120,3 +2120,55 @@ func TestDynamicImportRejectsWithAJavaScriptError(t *testing.T) {
 		t.Errorf("rejection = %q, want %q", got.String(), "SyntaxError")
 	}
 }
+
+// An array's length is synthesized rather than stored, which is what makes a
+// dense array cheap. It is still an own property, and everything that looks at
+// the property table rather than reading through a getter has to see one.
+func TestArrayLengthIsAnOwnProperty(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// It is listed, after the indices and before any other string key.
+		{`Object.getOwnPropertyNames([1, 2]).join(",")`, "0,1,length"},
+		{`var a = [1]; a.x = 1; Object.getOwnPropertyNames(a).join(",")`, "0,length,x"},
+		{`Reflect.ownKeys([1]).join(",")`, "0,length"},
+		// But it is not enumerable, so it is not a key or an entry.
+		{`Object.keys([1, 2]).join(",")`, "0,1"},
+		{`var s = ""; for (var k in [1, 2]) s += k; s`, "01"},
+
+		// It describes itself, and freezing makes it read-only.
+		{`JSON.stringify(Object.getOwnPropertyDescriptor([1, 2], "length"))`,
+			`{"value":2,"writable":true,"enumerable":false,"configurable":false}`},
+		{`JSON.stringify(Object.getOwnPropertyDescriptor(Object.freeze([]), "length"))`,
+			`{"value":0,"writable":false,"enumerable":false,"configurable":false}`},
+
+		// Writing a read-only length fails, and so does every method that ends
+		// by setting it -- even when the value would not change.
+		{`"use strict"; var a = Object.freeze([]);
+		  try { a.length = 5 } catch (e) { e.constructor.name }`, "TypeError"},
+		{`var a = Object.freeze([]); try { a.push() } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		{`var a = Object.freeze([]); try { a.pop() } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		{`var a = []; Object.defineProperty(a, "length", {writable: false});
+		  try { a.push(1) } catch (e) { e.constructor.name }`, "TypeError"},
+		// A string's length is read-only too, so a generic method that sets it
+		// through a string receiver fails.
+		{`try { Array.prototype.push.call("str", 1) } catch (e) { e.constructor.name }`,
+			"TypeError"},
+
+		// Freezing a function reaches its synthesized name and length.
+		{`var f = Object.freeze(function g() {});
+		  JSON.stringify(Object.getOwnPropertyDescriptor(f, "name"))`,
+			`{"value":"g","writable":false,"enumerable":false,"configurable":false}`},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

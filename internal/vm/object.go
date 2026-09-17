@@ -353,6 +353,13 @@ func (o *Object) ownKeys(includeSymbols bool, atoms *atomTable) []Atom {
 		keys = append(keys, indexKeys...)
 	}
 
+	// An array's length is synthesized rather than stored, but it is an own
+	// property, and it was the first one the array had -- so it comes after the
+	// indices, which always come first, and before every other string key.
+	if o.class == ClassArray {
+		keys = append(keys, atomLength)
+	}
+
 	for i := range o.props {
 		p := &o.props[i]
 		if p.flags&(propDeleted|propPrivate) != 0 || p.key.IsIndex() {

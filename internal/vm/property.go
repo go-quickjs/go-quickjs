@@ -292,6 +292,15 @@ func (r *Runtime) createOwnProp(o *Object, key Atom, val Value, strict bool) err
 	}
 	if o.class == ClassArray {
 		if key == atomLength {
+			// An array's length is synthesized rather than stored, so the walk
+			// that would have found a non-writable property did not.
+			if o.flags&objArrayLengthWritable == 0 {
+				if strict {
+					return r.throwTypeError("cannot assign to read-only property %q",
+						r.atoms.name(key))
+				}
+				return nil
+			}
 			n, err := r.toArrayLength(val)
 			if err != nil {
 				return err
@@ -317,6 +326,20 @@ func (r *Runtime) createOwnProp(o *Object, key Atom, val Value, strict bool) err
 		// A non-array that already has dense storage keeps using it.
 		if o.setElem(key.Index(), val) {
 			return nil
+		}
+	}
+
+	// A string wrapper's length and its characters are synthesized too, and
+	// none of them may be written.
+	if o.class == ClassStringWrapper {
+		if s, ok := o.data.(*String); ok {
+			if key == atomLength || (key.IsIndex() && int(key.Index()) < s.Len()) {
+				if strict {
+					return r.throwTypeError("cannot assign to read-only property %q",
+						r.atoms.name(key))
+				}
+				return nil
+			}
 		}
 	}
 

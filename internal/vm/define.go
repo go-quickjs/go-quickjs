@@ -267,6 +267,18 @@ func (r *Runtime) currentDescriptor(o *Object, key Atom) *propDesc {
 			}
 		}
 	}
+	if o.class == ClassArray && key == atomLength {
+		// An array's length is synthesized rather than stored, but it is an own
+		// property like any other and has to describe itself as one. It is
+		// never enumerable and never configurable; only its writability can
+		// change, which freezing and defineProperty do.
+		return &propDesc{
+			value: Uint32(o.arrayLength()), hasValue: true,
+			writable: o.flags&objArrayLengthWritable != 0, hasWritable: true,
+			enumerable: false, hasEnumerable: true,
+			configurable: false, hasConfigurable: true,
+		}
+	}
 	if key.IsIndex() {
 		if v, ok := o.getElem(key.Index()); ok {
 			// A dense element is a plain data property with every attribute on.
