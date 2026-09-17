@@ -257,6 +257,9 @@ const (
 	OpSetSuperProp
 	OpSetSuperIndex
 	OpNewTarget
+	// OpImportMeta pushes the running module's import.meta object, creating it
+	// on first use.
+	OpImportMeta
 	// OpPushCallee pushes the function object currently executing, which is
 	// how a named function expression refers to itself.
 	OpPushCallee
@@ -377,7 +380,8 @@ var opNames = [opCount]string{
 
 	OpGetSuperProp: "get_super_prop", OpGetSuperIndex: "get_super_index",
 	OpSetSuperProp: "set_super_prop", OpSetSuperIndex: "set_super_index",
-	OpNewTarget: "new_target", OpPushCallee: "push_callee",
+	OpNewTarget: "new_target", OpImportMeta: "import_meta",
+	OpPushCallee:     "push_callee",
 	OpToObject:       "to_object",
 	OpCheckCoercible: "check_coercible",
 	OpToPropertyKey:  "to_property_key", OpToNumber: "to_number",

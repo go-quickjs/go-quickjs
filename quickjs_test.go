@@ -1991,3 +1991,48 @@ func TestExportDefaultAnonymousClass(t *testing.T) {
 		t.Errorf("valueOf() = %v, want 45", v)
 	}
 }
+
+// import.meta is an ordinary object the host may put anything on, one per
+// module and the same one every time. It is not a property access, so it
+// cannot be assigned to.
+func TestImportMeta(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+
+	sources := map[string]string{
+		"a": `import.meta.tag = "a"; export var probe = import.meta;`,
+		"b": `import {probe} from "a";
+		      export var out = [
+		        typeof import.meta,
+		        Object.getPrototypeOf(import.meta) === null,
+		        Object.isExtensible(import.meta),
+		        import.meta === import.meta,
+		        import.meta !== probe,
+		        probe.tag,
+		      ].join(",");`,
+	}
+	rt.SetModuleLoader(func(spec, ref string) (string, string, error) {
+		return sources[spec], spec, nil
+	})
+
+	ns, err := rt.EvalModule("b", sources["b"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := ns.Get("out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "object,true,true,true,true,a"
+	if got := v.String(); got != want {
+		t.Errorf("out = %q, want %q", got, want)
+	}
+
+	// It is neither exported nor visible to the module's own code.
+	if _, err := rt.EvalModule("c", `export var out = 1;`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.EvalModule("d", `import.meta; var x = [1]; [import.meta] = x;`); err == nil {
+		t.Error("assigning to import.meta was accepted, want SyntaxError")
+	}
+}

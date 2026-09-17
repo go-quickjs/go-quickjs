@@ -1617,6 +1617,8 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 
 		case bytecode.OpNewTarget:
 			push(f.newTarget)
+		case bytecode.OpImportMeta:
+			push(r.importMeta(cl.env))
 		case bytecode.OpPushCallee:
 			if f.callee == nil {
 				push(Undefined)

@@ -44,6 +44,9 @@ func (c *compiler) compileExprNamed(e ast.Expr, name string) {
 	case *ast.NewTarget:
 		c.emit(bytecode.OpNewTarget, 0, 0)
 
+	case *ast.ImportMeta:
+		c.emit(bytecode.OpImportMeta, 0, 0)
+
 	case *ast.BigIntLit:
 		c.emit(bytecode.OpPushConst, c.addConst(bytecode.Constant{
 			Kind: bytecode.ConstBigInt, Str: n.Raw,

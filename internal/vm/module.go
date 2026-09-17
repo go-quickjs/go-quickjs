@@ -426,3 +426,27 @@ func (r *Runtime) initDynamicImport() {
 	})
 	r.global.setOwnRaw(r.atoms.intern("import"), Obj(fn), propWritable|propConfigurable)
 }
+
+// importMeta returns the running module's import.meta object, creating it on
+// first use.
+//
+// It is an ordinary object with no prototype, and the host is free to put
+// whatever it likes on it -- the specification defines no properties at all.
+// Each module gets its own, and the same one every time, so a module can use it
+// as a place to keep something of its own.
+//
+// It lives in the module's environment under a name beginning with the
+// character the synthesized bindings use, which no source name may contain, so
+// it is neither exported nor visible to the module's own code.
+func (r *Runtime) importMeta(env *Object) Value {
+	if env == nil {
+		return Undefined
+	}
+	key := r.atoms.intern("*meta*")
+	if p := env.getOwn(key); p != nil {
+		return p.value
+	}
+	meta := Obj(newObject(nil, ClassObject))
+	env.setOwnRaw(key, meta, 0)
+	return meta
+}

@@ -296,8 +296,17 @@ func (p *parser) parseParenOrArrow() ast.Expr {
 		p.errorf("empty parentheses are only valid as an arrow parameter list")
 	}
 	if len(items) == 1 {
-		if l, ok := items[0].(*ast.Logical); ok {
-			l.Paren = true
+		// Parenthesizing changes what an expression may be used for, so the
+		// nodes where it makes a difference remember it.
+		switch n := items[0].(type) {
+		case *ast.Logical:
+			n.Paren = true
+		case *ast.Assign:
+			n.Paren = true
+		case *ast.ArrayLit:
+			n.Paren = true
+		case *ast.ObjectLit:
+			n.Paren = true
 		}
 		return items[0]
 	}

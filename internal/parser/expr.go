@@ -107,12 +107,38 @@ func (p *parser) parseAssignFrom(left ast.Expr) ast.Expr {
 	if op == "=" {
 		// The left side of a plain assignment may be a destructuring pattern,
 		// which until now was parsed as an object or array literal.
+		p.checkAssignTarget(left, opTok)
 		left = p.toPattern(left, false)
 	} else {
 		p.checkSimpleAssignTarget(left, opTok)
 	}
 	right := p.parseAssign()
 	return p.nodes.assignOp(op, left, right)
+}
+
+// checkAssignTarget rejects a left side that a plain assignment cannot have.
+//
+// Only a bare object or array literal is a destructuring pattern. Parenthesize
+// one and it is an expression again, and an expression that is not a reference
+// may not be assigned to -- which is also what rules out `(a = b) = c`, whose
+// left side looks like a pattern element but is not in a pattern.
+func (p *parser) checkAssignTarget(target ast.Expr, tok lexer.Token) {
+	switch t := target.(type) {
+	case *ast.ArrayLit:
+		if !t.Paren {
+			return
+		}
+	case *ast.ObjectLit:
+		if !t.Paren {
+			return
+		}
+	case *ast.ArrayPattern, *ast.ObjectPattern:
+		return
+	default:
+		p.checkSimpleAssignTarget(target, tok)
+		return
+	}
+	p.errorAt(tok, "invalid assignment target")
 }
 
 // checkSimpleAssignTarget rejects assignment to anything that is not a
@@ -650,11 +676,7 @@ func (p *parser) parseImportExpr() ast.Expr {
 		if !p.module {
 			p.errorf("\"import.meta\" is only valid inside a module")
 		}
-		return &ast.Member{
-			Object:   &ast.Ident{Name: "import", Start: start},
-			Property: &ast.Ident{Name: "meta", Start: start},
-			Start:    start,
-		}
+		return &ast.ImportMeta{Start: start}
 	}
 	if !p.isPunct("(") {
 		p.errorf("expected \"(\" after \"import\"")

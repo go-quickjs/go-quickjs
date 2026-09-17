@@ -410,3 +410,49 @@ func TestAwaitAndYieldAreReservedWhereTheyOperate(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// Only a bare object or array literal on the left of `=` is a destructuring
+// pattern. Parenthesize one and it is an expression again, and an expression
+// that is not a reference cannot be assigned to.
+func TestAssignmentTargetMustBeAReference(t *testing.T) {
+	bad := []string{
+		`throw 0; var a, b, c; (a = b) = c;`,
+		`throw 0; var a, b, c; ((a = b)) = c;`,
+		`throw 0; ({}) = 1;`,
+		`throw 0; ([]) = 1;`,
+		`throw 0; (function () {}) = 1;`,
+		`throw 0; 1 = 1;`,
+		`throw 0; (a, b) = 1;`,
+		`throw 0; () => ({}) = 1;`,
+	}
+	for _, src := range bad {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil {
+			t.Errorf("%s: accepted, want SyntaxError", src)
+		} else if !strings.Contains(err.Error(), "SyntaxError") {
+			t.Errorf("%s: got %v, want SyntaxError", src, err)
+		}
+		rt.Close()
+	}
+
+	// The forms that are patterns, and the parenthesized reference that is
+	// still a reference.
+	cases := []struct{ src, want string }{
+		{`var a; [a] = [1]; String(a)`, "1"},
+		{`var a; ({a} = {a: 5}); String(a)`, "5"},
+		{`var a; [a = 2] = []; String(a)`, "2"},
+		{`var o = {}; [o.x] = [3]; String(o.x)`, "3"},
+		{`var a; (a) = 7; String(a)`, "7"},
+		{`var o = {}; (o.x) = 8; String(o.x)`, "8"},
+	}
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

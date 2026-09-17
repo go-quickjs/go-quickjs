@@ -98,6 +98,13 @@ type Super struct{ Start int }
 // NewTarget is `new.target`.
 type NewTarget struct{ Start int }
 
+// ImportMeta is `import.meta`, valid only inside a module.
+//
+// It is not a property access, whatever it looks like: there is no binding
+// named `import` to read it from, and unlike a property access it may not be
+// assigned to.
+type ImportMeta struct{ Start int }
+
 // TemplateLit is a template literal. Quasis always has exactly one more
 // element than Exprs, so that the parts interleave quasi, expr, quasi, ...
 type TemplateLit struct {
@@ -128,7 +135,11 @@ type ArrayLit struct {
 	// TrailingComma records a comma after the last element, which an array
 	// literal allows and a binding pattern with a rest element does not.
 	TrailingComma bool
-	Start         int
+	// Paren records that the literal was parenthesized, which stops it from
+	// being read as a destructuring pattern: `[a] = b` assigns, `([a]) = b` is
+	// a syntax error.
+	Paren bool
+	Start int
 }
 
 // PropKind distinguishes the forms an object literal or class member can take.
@@ -164,7 +175,10 @@ type ObjectLit struct {
 	// TrailingComma records a comma after the last property, which an object
 	// literal allows and a binding pattern with a rest element does not.
 	TrailingComma bool
-	Start         int
+	// Paren records that the literal was parenthesized, which stops it from
+	// being read as a destructuring pattern.
+	Paren bool
+	Start int
 }
 
 // FuncKind describes the flavour of a function.
@@ -280,7 +294,11 @@ type Assign struct {
 	Op     string // "=", "+=", "&&=", ...
 	Target Expr
 	Value  Expr
-	Start  int
+	// Paren records that the expression was parenthesized in the source, which
+	// only matters for deciding what may be assigned to: `(a = b) = c` is a
+	// syntax error, while the `a = b` inside `[a = b] = c` is a default value.
+	Paren bool
+	Start int
 }
 
 // Conditional is `test ? cons : alt`.
@@ -577,6 +595,7 @@ func (n *BoolLit) Pos() int        { return n.Start }
 func (n *NullLit) Pos() int        { return n.Start }
 func (n *RegexpLit) Pos() int      { return n.Start }
 func (n *This) Pos() int           { return n.Start }
+func (n *ImportMeta) Pos() int     { return n.Start }
 func (n *Super) Pos() int          { return n.Start }
 func (n *NewTarget) Pos() int      { return n.Start }
 func (n *TemplateLit) Pos() int    { return n.Start }
@@ -613,6 +632,7 @@ func (*BoolLit) exprNode()        {}
 func (*NullLit) exprNode()        {}
 func (*RegexpLit) exprNode()      {}
 func (*This) exprNode()           {}
+func (*ImportMeta) exprNode()     {}
 func (*Super) exprNode()          {}
 func (*NewTarget) exprNode()      {}
 func (*TemplateLit) exprNode()    {}
