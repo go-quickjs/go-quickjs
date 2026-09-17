@@ -289,10 +289,10 @@ inherited them.
 On an Apple M5 Max:
 
 ```
-BenchmarkEvalArithmetic-18  1.31µs/op   2944 B/op    24 allocs/op
-BenchmarkFibonacci-18        842µs/op     24 B/op     1 allocs/op
-BenchmarkPropertyAccess-18  1.90µs/op   3792 B/op    30 allocs/op
-BenchmarkCallGoFunction-18  1.44µs/op   3576 B/op    35 allocs/op
+BenchmarkEvalArithmetic-18  1.26µs/op   2952 B/op    20 allocs/op
+BenchmarkFibonacci-18        849µs/op     24 B/op     1 allocs/op
+BenchmarkPropertyAccess-18  1.85µs/op   3800 B/op    26 allocs/op
+BenchmarkCallGoFunction-18  1.40µs/op   3584 B/op    31 allocs/op
 ```
 
 `fib(20)` costs one allocation because the interpreter loop allocates nothing
@@ -304,15 +304,21 @@ program once and then running it:
 
 ```
 BenchmarkLoopArithmetic-18         248µs/op        0 B/op     0 allocs/op
-BenchmarkLoopArrayIndex-18        30.2µs/op        0 B/op     0 allocs/op
-BenchmarkLoopFunctionCall-18       395µs/op        0 B/op     0 allocs/op
-BenchmarkLoopPropertyAccess-18     581µs/op        0 B/op     0 allocs/op
-BenchmarkLoopMethodCall-18         697µs/op        0 B/op     0 allocs/op
-BenchmarkAllocObjects-18           153µs/op   384 KB/op  4000 allocs/op
-BenchmarkStringConcat-18          64.8µs/op   161 KB/op  2029 allocs/op
-BenchmarkJSONRoundTrip-18          506µs/op   936 KB/op 11000 allocs/op
-BenchmarkNewRuntimeSmallStack-18  95.0µs/op   514 KB/op  1817 allocs/op
+BenchmarkLoopArrayIndex-18        29.8µs/op        0 B/op     0 allocs/op
+BenchmarkLoopFunctionCall-18       393µs/op        0 B/op     0 allocs/op
+BenchmarkLoopPropertyAccess-18     519µs/op        0 B/op     0 allocs/op
+BenchmarkLoopMethodCall-18         642µs/op        0 B/op     0 allocs/op
+BenchmarkAllocObjects-18           134µs/op   384 KB/op  2000 allocs/op
+BenchmarkStringConcat-18          64.3µs/op   161 KB/op  2029 allocs/op
+BenchmarkArrayCallbacks-18         108µs/op  42.3 KB/op    23 allocs/op
+BenchmarkJSONRoundTrip-18          486µs/op   904 KB/op 10000 allocs/op
+BenchmarkNewRuntimeSmallStack-18  90.0µs/op   514 KB/op  1817 allocs/op
 ```
+
+Each of those runs its program many times over: the loop benchmarks 10,000
+iterations, the allocation ones 2,000 objects, `ArrayCallbacks` a map, a filter
+and a reduce over 1,000 elements, `JSONRoundTrip` 500 parse-and-stringify
+round trips.
 
 ## License
 
