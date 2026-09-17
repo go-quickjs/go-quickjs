@@ -78,7 +78,8 @@ func (c *compiler) visibleBindings() []bytecode.EvalBinding {
 			Name:      l.name,
 			FromLocal: true,
 			Index:     l.slot,
-			Mutable:   l.kind != bindConst,
+			FuncSelf:  l.kind == bindFuncSelf,
+			Mutable:   l.kind != bindConst && l.kind != bindFuncSelf,
 			TDZ:       !l.initialized,
 		})
 	}
@@ -93,10 +94,11 @@ func (c *compiler) visibleBindings() []bytecode.EvalBinding {
 		}
 		seen[name] = true
 		out = append(out, bytecode.EvalBinding{
-			Name:    name,
-			Index:   idx,
-			Mutable: c.fn.Upvalues[idx].Mutable,
-			TDZ:     c.fn.Upvalues[idx].TDZ,
+			Name:     name,
+			Index:    idx,
+			Mutable:  c.fn.Upvalues[idx].Mutable,
+			TDZ:      c.fn.Upvalues[idx].TDZ,
+			FuncSelf: c.fn.Upvalues[idx].FuncSelf,
 		})
 	}
 

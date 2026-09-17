@@ -61,6 +61,10 @@ type UpvalueDesc struct {
 	// TDZ marks a let or const binding, which must be checked for use before
 	// initialization.
 	TDZ bool
+	// FuncSelf marks the name a function expression gave itself, which is
+	// immutable but whose assignment outside strict mode is discarded rather
+	// than refused.
+	FuncSelf bool
 }
 
 // EvalScope is what a direct `eval` call site can see.
@@ -112,6 +116,8 @@ type EvalBinding struct {
 	Index     uint32
 	Mutable   bool
 	TDZ       bool
+	// FuncSelf marks the name a function expression gave itself.
+	FuncSelf bool
 }
 
 // TemplateStrings is the text of one tagged template site.

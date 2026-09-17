@@ -44,6 +44,25 @@ type argumentsScanner struct {
 	// a direct eval: what the evaluated code says is the evaluated code's own
 	// problem, reported when it is compiled.
 	literalOnly bool
+	// seekName looks for one particular identifier, and descends into every
+	// function rather than stopping at the ones with bindings of their own.
+	seekName string
+}
+
+// referencesName reports whether a function mentions a name anywhere, nested
+// functions included.
+//
+// It decides whether a named function expression needs a real binding for its
+// own name: a reference in its own body can be answered from the running
+// closure, but one inside a nested function can only come from a slot. A direct
+// eval counts, because what it will say cannot be known from here.
+func referencesName(fn *ast.FuncLit, name string) bool {
+	w := &argumentsScanner{seekName: name}
+	for _, p := range fn.Params {
+		w.expr(p)
+	}
+	w.stmts(fn.Body)
+	return w.found
 }
 
 // containsArgumentsInStmts reports whether code mentions `arguments`.
@@ -114,7 +133,14 @@ func (w *argumentsScanner) stmt(s ast.Stmt) {
 			w.expr(d.Init)
 		}
 	case *ast.FuncDecl:
-		// A nested function declaration has its own arguments object.
+		// A nested function declaration has its own arguments object, but a
+		// name search still descends into it.
+		if w.seekName != "" {
+			for _, p := range n.Fn.Params {
+				w.expr(p)
+			}
+			w.stmts(n.Fn.Body)
+		}
 	case *ast.ClassDecl:
 		w.class(n.Class)
 	case *ast.ReturnStmt:
@@ -180,6 +206,12 @@ func (w *argumentsScanner) expr(e ast.Expr) {
 	}
 	switch n := e.(type) {
 	case *ast.Ident:
+		if w.seekName != "" {
+			if n.Name == w.seekName || n.Name == "eval" {
+				w.found = true
+			}
+			return
+		}
 		switch {
 		case w.literalOnly:
 			if n.Name == "arguments" {
@@ -206,8 +238,10 @@ func (w *argumentsScanner) expr(e ast.Expr) {
 			w.found = true
 		}
 	case *ast.FuncLit:
-		// Only an arrow shares the enclosing this and arguments.
-		if n.Kind == ast.FuncArrow {
+		// Only an arrow shares the enclosing this and arguments; a search for
+		// a name descends into every function, since a name is in scope
+		// however deeply it is nested.
+		if w.seekName != "" || n.Kind == ast.FuncArrow {
 			for _, p := range n.Params {
 				w.expr(p)
 			}
@@ -307,6 +341,9 @@ func (w *argumentsScanner) class(cls *ast.ClassLit) {
 	for _, m := range cls.Members {
 		if m.Computed {
 			w.expr(m.Key)
+		}
+		if w.seekName != "" {
+			w.expr(m.Value)
 		}
 	}
 	for _, f := range cls.Fields {

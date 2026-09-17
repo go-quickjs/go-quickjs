@@ -83,6 +83,11 @@ const (
 	// bindCatch is a catch clause's parameter, which behaves like let but may
 	// be shadowed by a var of the same name.
 	bindCatch
+	// bindFuncSelf is the name a function expression gives itself. It is
+	// immutable like a const, but an assignment to it outside strict mode is
+	// quietly discarded rather than refused -- which is the one place the two
+	// kinds of immutable binding differ.
+	bindFuncSelf
 )
 
 // localVar is a variable in the function being compiled.
@@ -620,19 +625,26 @@ func (c *compiler) resolveUpvalue(name string) (uint32, bool) {
 			if b.Name != name {
 				continue
 			}
-			return c.addUpvalue(name, b.Index, b.FromLocal, b.Mutable, b.TDZ, 0), true
+			idx := c.addUpvalue(name, b.Index, b.FromLocal, b.Mutable, b.TDZ, 0)
+			c.fn.Upvalues[idx].FuncSelf = b.FuncSelf
+			return idx, true
 		}
 		return 0, false
 	}
 	if l, ok := c.parent.resolveLocal(name); ok {
 		l.captured = true
-		return c.addUpvalue(name, l.slot, true, l.kind != bindConst,
-			l.kind == bindLet || l.kind == bindConst, l.withDepth), true
+		immutable := l.kind == bindConst || l.kind == bindFuncSelf
+		idx := c.addUpvalue(name, l.slot, true, !immutable,
+			l.kind == bindLet || l.kind == bindConst, l.withDepth)
+		c.fn.Upvalues[idx].FuncSelf = l.kind == bindFuncSelf
+		return idx, true
 	}
 	// Not a local of the parent, so look further out and forward the result.
 	if idx, ok := c.parent.resolveUpvalue(name); ok {
 		desc := c.parent.fn.Upvalues[idx]
-		return c.addUpvalue(name, idx, false, desc.Mutable, desc.TDZ, desc.WithDepth), true
+		out := c.addUpvalue(name, idx, false, desc.Mutable, desc.TDZ, desc.WithDepth)
+		c.fn.Upvalues[out].FuncSelf = desc.FuncSelf
+		return out, true
 	}
 	return 0, false
 }

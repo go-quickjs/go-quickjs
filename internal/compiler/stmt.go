@@ -87,7 +87,12 @@ func (c *compiler) predeclareFunction(h hoistedFunc) {
 	if h.fd.Fn.Name == nil {
 		fnName = "default"
 	}
-	c.compileFunctionLiteral(h.fd.Fn, fnName)
+	// A declaration's name is a binding of the enclosing scope, not of the
+	// function: clearing it here is what keeps the function from binding it
+	// again, immutably, inside itself.
+	lit := *h.fd.Fn
+	lit.Name = nil
+	c.compileFunctionLiteral(&lit, fnName)
 	if !h.local {
 		c.emit(bytecode.OpDefineGlobalFunc, c.nameIdx(h.name),
 			boolBit(c.opts.EvalConfigurable))

@@ -133,6 +133,9 @@ type Object struct {
 	// index maps a key to its slot in props, built lazily once the object grows
 	// past linearScanLimit.
 	index map[Atom]int32
+	// lastKey and lastIdx cache the most recent successful lookup in index.
+	lastKey Atom
+	lastIdx int32
 
 	// elems holds dense array elements. Arrays and other index-keyed objects
 	// keep their elements here rather than in props, so that a[i] is a slice
@@ -212,7 +215,18 @@ func (o *Object) IsArray() bool {
 // findOwn returns the index of an own property in props, or -1.
 func (o *Object) findOwn(key Atom) int32 {
 	if o.index != nil {
+		// One entry of cache in front of the map. The same key is asked for
+		// over and over -- a global function called in a loop, a property read
+		// in one -- and hashing it each time is most of what finding it costs.
+		// The entry carries its own key, so a delete or a rebuild invalidates
+		// the cache by failing the comparison rather than by being tracked.
+		if o.lastKey == key && int(o.lastIdx) < len(o.props) {
+			if p := &o.props[o.lastIdx]; p.key == key && p.flags&propDeleted == 0 {
+				return o.lastIdx
+			}
+		}
 		if i, ok := o.index[key]; ok {
+			o.lastKey, o.lastIdx = key, i
 			return i
 		}
 		return -1

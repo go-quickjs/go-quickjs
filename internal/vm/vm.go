@@ -632,13 +632,35 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				push(p.value)
 				break
 			}
-			if !r.hasProp(env, name) {
-				vmErr = r.throwReferenceError("%s is not defined", r.atoms.name(name))
-				goto onError
+			// A plain own data property of the environment -- which is what
+			// every declared global is -- needs none of the machinery a
+			// general read carries: no proxy trap, no exotic index, no
+			// prototype walk. The environment's own one-entry cache is read
+			// here rather than through findOwn, so that the common case is a
+			// comparison rather than a call.
+			if env.lastKey == name && int(env.lastIdx) < len(env.props) {
+				if p := &env.props[env.lastIdx]; p.key == name &&
+					p.flags&(propAccessor|propPrivate|propDeleted) == 0 {
+					push(p.value)
+					break
+				}
 			}
+			if i := env.findOwn(name); i >= 0 {
+				if p := &env.props[i]; p.flags&(propAccessor|propPrivate|propDeleted) == 0 {
+					push(p.value)
+					break
+				}
+			}
+			// The read comes first and the existence check only follows an
+			// undefined result: an undeclared name is the rare case, and
+			// asking twice for every global read is not worth paying for it.
 			v, err := r.getProp(env, name, Obj(env))
 			if err != nil {
 				vmErr = err
+				goto onError
+			}
+			if v.IsUndefined() && !r.hasProp(env, name) {
+				vmErr = r.throwReferenceError("%s is not defined", r.atoms.name(name))
 				goto onError
 			}
 			push(v)
@@ -2540,14 +2562,18 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 		return Undefined, r.throwTypeError("%s is not a constructor", fd.nameOr("value"))
 	}
 
-	// `new f.bind(...)()` builds an instance of what was bound rather than of
-	// the binding, which has no prototype property for the new object to take.
-	if newTarget.IsObject() && newTarget.Object() == o {
-		t := o
-		for td := t.fn(); td != nil && td.boundTarget != nil; td = t.fn() {
-			t = td.boundTarget
+	// A bound function that is its own new.target hands the target on, one
+	// link at a time -- which is what decides both the prototype of the object
+	// being built and the new.target the innermost function sees.
+	for at := o; ; {
+		fd := at.fn()
+		if fd == nil || fd.boundTarget == nil {
+			break
 		}
-		newTarget = Obj(t)
+		if newTarget.IsObject() && newTarget.Object() == at {
+			newTarget = Obj(fd.boundTarget)
+		}
+		at = fd.boundTarget
 	}
 
 	// The new object's prototype comes from new.target's .prototype property,

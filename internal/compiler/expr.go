@@ -1250,6 +1250,15 @@ func (c *compiler) compileReadTarget(target ast.Expr) {
 // consulting any enclosing `with` object.
 func (c *compiler) assignToIdentStatic(t *ast.Ident, initializing bool) {
 	if l, ok := c.resolveLocal(t.Name); ok {
+		if !initializing && l.kind == bindFuncSelf {
+			// A function expression's own name is an immutable binding, and
+			// assigning to it outside strict mode is quietly discarded rather
+			// than refused.
+			if c.fn.Strict {
+				c.emitAt(t.Start, bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
+			}
+			return
+		}
 		if !initializing && l.kind == bindConst && l.initialized {
 			// A runtime error rather than an early one: the assignment may
 			// sit in a function that is never called.
@@ -1272,12 +1281,26 @@ func (c *compiler) assignToIdentStatic(t *ast.Ident, initializing bool) {
 			c.emitAt(t.Start, bytecode.OpSetUpvalueCheck, idx, 0)
 			return
 		}
+		if c.fn.Upvalues[idx].FuncSelf && !initializing {
+			if c.fn.Strict {
+				c.emitAt(t.Start, bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
+			}
+			return
+		}
 		if !c.fn.Upvalues[idx].Mutable && !initializing {
 			c.emitAt(t.Start, bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
 			return
 		}
 		c.emit(bytecode.OpDup, 0, 0)
 		c.emit(bytecode.OpSetUpvalue, idx, 0)
+		return
+	}
+	if !initializing && t.Name == c.selfName {
+		// The name has no slot, so nothing nested refers to it: the assignment
+		// still has to be refused in strict mode and discarded otherwise.
+		if c.fn.Strict {
+			c.emitAt(t.Start, bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
+		}
 		return
 	}
 	if initializing && c.globalLex[t.Name] {

@@ -3469,3 +3469,46 @@ func TestSymbolAndErrorShape(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestFunctionExpressionName covers the name a function expression gives
+// itself: a binding of a scope around its body, immutable, and visible to
+// everything written inside it.
+func TestFunctionExpressionName(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// A nested function sees it, which only a real binding can manage.
+		{`var f = function g() { return typeof (() => g)() }; f()`, "function"},
+		{`var f = function g() { return typeof (function () { return g })() }; f()`,
+			"function"},
+		{`var f = function g() { return eval("typeof g") }; f()`, "function"},
+
+		// It is immutable: a strict assignment is refused and a sloppy one is
+		// quietly discarded, wherever it is written.
+		{`var f = function g() { "use strict"; g = 1 }
+		  try { f() } catch (e) { e.constructor.name }`, "TypeError"},
+		{`var f = function g() { "use strict"; return (() => { g = 1 })() }
+		  try { f() } catch (e) { e.constructor.name }`, "TypeError"},
+		{`var f = function g() { "use strict"; return eval("g = 1") }
+		  try { f() } catch (e) { e.constructor.name }`, "TypeError"},
+		{`var f = function g() { g = 1; return typeof g }; f()`, "function"},
+		{`var f = function g() { return (() => { g = 1; return typeof g })() }; f()`,
+			"function"},
+
+		// A parameter, a var or a top-level let of the same name shadows it.
+		{`var f = function g(g) { return g }; String(f(5))`, "5"},
+		{`var f = function g() { var g = 1; return g }; String(f())`, "1"},
+		{`var f = function n() { let n = "inside"; return n }; f()`, "inside"},
+		{`var f = function n() { let n = "inside"; return (() => n)() }; f()`, "inside"},
+		// A binding in a block does not.
+		{`var f = function g() { { let g = 1 } return typeof g }; f()`, "function"},
+
+		// A function declaration's name is an ordinary binding of the
+		// enclosing scope, which reassigning replaces for everyone.
+		{`function f(n) { return n ? f(n - 1) : "orig" }
+		  var g = f
+		  f = function () { return "new" }
+		  g(1)`, "new"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

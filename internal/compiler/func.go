@@ -98,10 +98,7 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 		c.fn.ParamEnd = uint32(c.here())
 	}
 
-	// A named function expression can refer to itself by name. That reference
-	// resolves to the running closure rather than to a local, so no slot is
-	// allocated for it: recording the name is enough for compileIdentRead to
-	// emit OpPushCallee instead of a variable read.
+	// A named function expression can refer to itself by name.
 	if fn.Name != nil {
 		c.selfName = fn.Name.Name
 	}
@@ -116,6 +113,31 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 			// A hoisted var starts as undefined.
 			c.emit(bytecode.OpPushUndef, 0, 0)
 			c.emit(bytecode.OpSetLocal, slot, 0)
+		}
+	}
+
+	// The self name gets a slot only when something nested could need it: a
+	// reference in the function's own body is answered from the running
+	// closure, but a nested function can capture nothing else. A parameter or
+	// a var of the same name shadows it, in which case there is nothing to
+	// bind.
+	if c.selfName != "" {
+		// A binding of the same name at the body's top level shadows it
+		// everywhere inside, so there is nothing left for the name to reach.
+		_, shadowed := c.resolveLocal(c.selfName)
+		if !shadowed {
+			for _, n := range topLevelLexicalNames(fn.Body) {
+				if n == c.selfName {
+					shadowed = true
+					break
+				}
+			}
+		}
+		if !shadowed && referencesName(fn, c.selfName) {
+			slot := c.declare(c.selfName, bindFuncSelf, fn.Start)
+			c.emit(bytecode.OpPushCallee, 0, 0)
+			c.emit(bytecode.OpInitLocal, slot, 0)
+			c.markInitialized(c.selfName)
 		}
 	}
 
@@ -996,6 +1018,28 @@ func startsWithSuperCall(body []ast.Stmt) bool {
 	}
 	_, isSuper := call.Callee.(*ast.Super)
 	return isSuper
+}
+
+// topLevelLexicalNames lists the let, const and class bindings a statement list
+// declares directly, which is what a name in an enclosing scope is shadowed by.
+func topLevelLexicalNames(body []ast.Stmt) []string {
+	var out []string
+	for _, s := range body {
+		switch n := s.(type) {
+		case *ast.VarDecl:
+			if n.Kind == ast.DeclVar {
+				continue
+			}
+			for _, d := range n.Decls {
+				collectPatternNames(d.Target, &out)
+			}
+		case *ast.ClassDecl:
+			if n.Class.Name != nil {
+				out = append(out, n.Class.Name.Name)
+			}
+		}
+	}
+	return out
 }
 
 // classFieldName returns the name to infer for an anonymous function assigned

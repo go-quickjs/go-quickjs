@@ -608,26 +608,48 @@ func (r *Runtime) initFunctionBuiltins() {
 		}
 		// The bound function's length is what remains of the target's after the
 		// arguments already supplied, which is what makes it still describe how
-		// many the caller has left to give.
-		length := 0
-		targetLen, err := rt.getProp(target, atomLength, this)
-		if err != nil {
-			return Undefined, err
-		}
-		if targetLen.IsNumber() {
-			if n := int(targetLen.Number()) - len(bound); n > 0 {
-				length = n
+		// many the caller has left to give. Only an own length counts, and only
+		// a number: anything else leaves it at zero.
+		length := Int(0)
+		if rt.hasOwnProp(target, atomLength) {
+			targetLen, err := rt.getProp(target, atomLength, this)
+			if err != nil {
+				return Undefined, err
+			}
+			if targetLen.IsNumber() {
+				n := targetLen.Number()
+				switch {
+				case math.IsInf(n, 1):
+					length = Float(n)
+				case math.IsInf(n, -1) || math.IsNaN(n):
+				default:
+					if left := math.Trunc(n) - float64(len(bound)); left > 0 {
+						length = Float(left)
+					}
+				}
 			}
 		}
+		name := ""
+		if n, err := rt.getProp(target, atomName, this); err != nil {
+			return Undefined, err
+		} else if n.IsString() {
+			name = n.String().Go()
+		}
+
 		o := newObject(rt.proto.function, ClassFunction)
 		o.data = &funcData{
 			boundTarget: target,
 			boundThis:   arg(args, 0),
 			boundArgs:   bound,
-			name:        "bound " + target.fn().nameOr(""),
-			length:      length,
+			name:        "bound " + name,
 			ctorKind:    target.fn().ctorKind,
+			// Both are settled here rather than synthesized on demand, because
+			// a length of infinity is not something the synthesized form can
+			// hold.
+			propsMaterialized: true,
 		}
+		o.setOwnRaw(atomLength, length, propConfigurable)
+		o.setOwnRaw(atomName, Str(NewString("bound "+name)), propConfigurable)
 		return Obj(o), nil
 	})
 
@@ -648,6 +670,13 @@ func (r *Runtime) initFunctionBuiltins() {
 		return Str(NewString("function " + fd.nameOr("") + "() { [native code] }")), nil
 	})
 
+	// The method is neither writable nor configurable, which is what lets a
+	// script rely on `instanceof` meaning what it says.
+	defer func() {
+		if pd := p.getOwn(r.atoms.internSymbol(r.wellKnown.hasInstance)); pd != nil {
+			pd.flags &^= propWritable | propConfigurable
+		}
+	}()
 	r.defSymbolMethod(p, r.wellKnown.hasInstance, "[Symbol.hasInstance]", 1,
 		func(rt *Runtime, this Value, args []Value) (Value, error) {
 			// The default implementation is the ordinary prototype-chain walk,
