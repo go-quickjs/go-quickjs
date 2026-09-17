@@ -321,14 +321,14 @@ func (r *Runtime) initStringBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(strings.ToUpper(s.Go()))), nil
+		return Str(NewString(caseConvert(s.Go(), true))), nil
 	})
 	r.defMethod(p, "toLowerCase", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		s, err := thisStr(rt, this)
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(strings.ToLower(s.Go()))), nil
+		return Str(NewString(caseConvert(s.Go(), false))), nil
 	})
 
 	r.defMethod(p, "trim", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {

@@ -178,3 +178,32 @@ func TestStringReplaceConvertsTheReplacementOnce(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
 	}
 }
+
+// Case conversion uses Unicode's full mappings: a character whose other case
+// is more than one character expands, and a sigma that ends a word lowercases
+// differently from one that does not.
+func TestFullCaseMappings(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"sharp s", `"ß".toUpperCase()`, "SS"},
+		{"ligature", `"ﬁ".toUpperCase()`, "FI"},
+		{"dotted capital i", `String("İ".toLowerCase() === "i̇")`, "true"},
+		{"apostrophe n", `String("ŉ".toUpperCase() === "ʼN")`, "true"},
+		{"armenian ligature", `String("ﬓ".toUpperCase() === "ՄՆ")`, "true"},
+		// A final sigma is the one mapping that depends on its surroundings.
+		{"final sigma", `String("AΣ".toLowerCase() === "aς")`, "true"},
+		{"sigma at the start", `String("ΣA".toLowerCase() === "σa")`, "true"},
+		{"sigma inside", `String("AΣB".toLowerCase() === "aσb")`, "true"},
+		{"sigma alone", `String("Σ".toLowerCase() === "σ")`, "true"},
+		{"ignorable before", `String("A­Σ".toLowerCase() === "a­ς")`, "true"},
+		{"ignorable after", `String("AΣ­".toLowerCase() === "aς­")`, "true"},
+		{"cased after an ignorable", `String("AΣ­B".toLowerCase() === "aσ­b")`,
+			"true"},
+		// The ordinary mappings are unchanged.
+		{"ascii", `"abc".toUpperCase() + "ABC".toLowerCase()`, "ABCabc"},
+		{"accents", `"ÄÖÜ".toLowerCase()`, "äöü"},
+		{"unchanged", `"123 !".toUpperCase()`, "123 !"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}
