@@ -252,6 +252,31 @@ const (
 	// which is how a generator binds its parameters at call time rather than on
 	// its first resumption.
 	OpEndParams
+	// The three instructions a destructuring pattern drives its iterator with.
+	// The cursor stays on the operand stack for the whole pattern, so that an
+	// abrupt exit closes it the way it closes a for-of's; A is how far below
+	// the top it sits, since a target's reference may have been pushed above
+	// it.
+	//
+	// OpIterStep pushes the next value, or undefined once the iterator is
+	// exhausted -- a pattern with more names than the source has values leaves
+	// the rest undefined. OpIterRest pushes everything left as an array.
+	// OpIterCloseNormal pops the cursor and tells an iterator the pattern
+	// stopped short of, which unlike a close during an abrupt completion has
+	// nothing else in flight and so reports what went wrong.
+	OpIterStep
+	OpIterRest
+	OpIterCloseNormal
+	// OpGetPropUnder and OpGetIndexUnder read a property of an object that is
+	// not on top of the stack, which an object pattern needs: the target of
+	// each property is evaluated before the property is read, so by then the
+	// source sits underneath whatever the target's reference left behind.
+	//
+	// For OpGetPropUnder, A is the name and B how far down the source is. For
+	// OpGetIndexUnder, A is how far down the key is, with the source just
+	// below it. Neither consumes anything.
+	OpGetPropUnder
+	OpGetIndexUnder
 	// OpIterToArray replaces an array-destructuring source with a dense array of
 	// the values its iterator produces. A is how many to pull, or IterAll when
 	// the pattern has a rest element and needs every one.

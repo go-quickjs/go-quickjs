@@ -1412,6 +1412,42 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				goto onError
 			}
 			push(cur)
+		case bytecode.OpGetPropUnder:
+			v, err := r.getValueProp(peek(int(in.B)), cl.names[in.A])
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			push(v)
+		case bytecode.OpGetIndexUnder:
+			v, err := r.getIndexed(peek(int(in.A)+1), peek(int(in.A)))
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			push(v)
+		case bytecode.OpIterStep:
+			// The cursor sits A slots below the top: a target's reference may
+			// have been pushed above it, and is evaluated before the value it
+			// receives is asked for.
+			v, err := r.iterStep(peek(int(in.A)))
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			push(v)
+		case bytecode.OpIterRest:
+			v, err := r.iterRest(peek(int(in.A)))
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			push(v)
+		case bytecode.OpIterCloseNormal:
+			if err := r.iterCloseNormal(pop()); err != nil {
+				vmErr = err
+				goto onError
+			}
 		case bytecode.OpIterNextOrJump:
 			// The cursor stays on the stack so that the loop can close it.
 			v, ok, err := r.iterNext(peek(0))

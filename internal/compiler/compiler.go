@@ -868,6 +868,8 @@ func stackEffect(op bytecode.Op, a, b uint32) int {
 		bytecode.OpNewObject, bytecode.OpNewTarget, bytecode.OpImportMeta,
 		bytecode.OpPushCallee,
 		bytecode.OpGetArguments, bytecode.OpRestParam, bytecode.OpDeleteVar,
+		bytecode.OpIterStep, bytecode.OpIterRest,
+		bytecode.OpGetPropUnder, bytecode.OpGetIndexUnder,
 		bytecode.OpGetSuperProp,
 		bytecode.OpGetPropThis,
 		bytecode.OpParamNeedsDefault,
@@ -877,7 +879,8 @@ func stackEffect(op bytecode.Op, a, b uint32) int {
 	case bytecode.OpDup2:
 		return 2
 
-	case bytecode.OpDrop, bytecode.OpSetLocal, bytecode.OpSetLocalCheck,
+	case bytecode.OpIterCloseNormal,
+		bytecode.OpDrop, bytecode.OpSetLocal, bytecode.OpSetLocalCheck,
 		bytecode.OpInitLocal, bytecode.OpSetUpvalue, bytecode.OpSetUpvalueCheck,
 		bytecode.OpInitUpvalue, bytecode.OpSetGlobal, bytecode.OpThrow,
 		bytecode.OpReturn, bytecode.OpJumpIfFalse, bytecode.OpJumpIfTrue,

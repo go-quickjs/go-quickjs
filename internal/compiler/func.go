@@ -358,53 +358,166 @@ func (c *compiler) compileDestructuringAssign(target ast.Expr) {
 
 // compileArrayPattern unpacks an array pattern. declaring selects between
 // creating bindings and assigning to existing references.
+//
+// An array pattern unpacks through the iterator protocol, not through indexed
+// access, so that `const [a] = new Set([1])` works and so that a generator
+// produces only as many values as the pattern names. The cursor stays on the
+// operand stack for the whole pattern: that is what makes an abrupt exit close
+// it, by the same rule that closes a for-of's, and what keeps each element's
+// step interleaved with the target that receives it -- which is observable,
+// since evaluating a target can run a getter or a generator's yield.
 func (c *compiler) compileArrayPattern(pat *ast.ArrayPattern, kind ast.DeclKind, declaring bool) {
-	// An array pattern unpacks through the iterator protocol, not through
-	// indexed access, so that `const [a] = new Set([1])` works and so that a
-	// generator only produces as many values as the pattern names. The source
-	// is drained into a dense array first, which keeps the unpacking below
-	// simple and makes holes and defaults fall out naturally.
-	want := uint32(len(pat.Elements))
-	if pat.Rest != nil {
-		want = bytecode.IterAll
-	}
-	c.emit(bytecode.OpIterToArray, want, 0)
+	c.emitAt(pat.Start, bytecode.OpForOfStart, 0, 0)
 
-	for i, el := range pat.Elements {
+	for _, el := range pat.Elements {
 		if el == nil {
+			// A hole asks for a value and throws it away.
+			c.emit(bytecode.OpIterStep, 0, 0)
+			c.emit(bytecode.OpDrop, 0, 0)
 			continue
 		}
-		// Index the source, which stays on the stack for the next element.
-		c.emit(bytecode.OpDup, 0, 0)
-		c.emit(bytecode.OpPushInt, uint32(i), 0)
-		c.emit(bytecode.OpGetIndex, 0, 0)
-		c.bindPatternLeaf(el, kind, declaring)
+		ref := c.prepareRef(el, declaring)
+		c.emit(bytecode.OpIterStep, uint32(ref.slots), 0)
+		if ref.def != nil {
+			c.applyDefault(ref.def, nameOf(ref.target))
+		}
+		c.storeRef(ref, kind, declaring)
 	}
+
 	if pat.Rest != nil {
-		// The rest element takes everything from the first index the named
-		// elements did not consume.
-		c.emit(bytecode.OpDup, 0, 0)
-		c.emit(bytecode.OpArrayRest, uint32(len(pat.Elements)), 0)
-		c.bindPatternLeaf(pat.Rest, kind, declaring)
+		ref := c.prepareRef(pat.Rest, declaring)
+		c.emit(bytecode.OpIterRest, uint32(ref.slots), 0)
+		c.storeRef(ref, kind, declaring)
 	}
-	c.emit(bytecode.OpDrop, 0, 0)
+
+	// The pattern has what it needs, so an iterator it stopped short of is told
+	// so -- and unlike a close during an abrupt completion, a failure there is
+	// the result.
+	c.emit(bytecode.OpIterCloseNormal, 0, 0)
+}
+
+// patternRef is one leaf of a destructuring pattern, with whatever part of its
+// target had to be evaluated before the value arrives.
+//
+// A target that is a property access is evaluated first: `[a.b] = it` reads a
+// before it asks the iterator for anything, which a getter on the object it
+// comes from can see.
+type patternRef struct {
+	target ast.Expr
+	// def is the leaf's default value, applied when the value is undefined.
+	def ast.Expr
+	// slots is how many stack slots the reference occupies, which is how far
+	// below the top the pattern's own cursor has moved.
+	slots int
+	// member is the property access the reference belongs to, when it is one.
+	member *ast.Member
+	// private marks a member whose key is a private name.
+	private bool
+}
+
+// prepareRef evaluates the part of a target that comes before the value.
+func (c *compiler) prepareRef(leaf ast.Expr, declaring bool) patternRef {
+	ref := patternRef{target: leaf}
+	if ap, ok := leaf.(*ast.AssignPattern); ok {
+		ref.target, ref.def = ap.Target, ap.Default
+	}
+	m, ok := ref.target.(*ast.Member)
+	if !ok || declaring {
+		return ref
+	}
+	if _, isSuper := m.Object.(*ast.Super); isSuper {
+		// super.x is resolved against the home object rather than a value on
+		// the stack, so there is nothing to evaluate ahead of time.
+		return ref
+	}
+	ref.member = m
+	if pn, isPrivate := m.Property.(*ast.PrivateName); isPrivate {
+		c.checkPrivateName(pn, m.Start)
+		c.compileExpr(m.Object)
+		ref.private, ref.slots = true, 1
+		return ref
+	}
+	c.compileExpr(m.Object)
+	ref.slots = 1
+	if m.Computed {
+		// The key expression is evaluated here; converting it to a property
+		// key waits until the store, which is where the specification puts it.
+		c.compileExpr(m.Property)
+		ref.slots = 2
+	}
+	return ref
+}
+
+// storeRef puts the value on top of the stack into a pattern's leaf, consuming
+// both it and whatever prepareRef pushed.
+func (c *compiler) storeRef(ref patternRef, kind ast.DeclKind, declaring bool) {
+	if ref.member != nil {
+		switch {
+		case ref.private:
+			pn := ref.member.Property.(*ast.PrivateName)
+			name, key := c.privateName(pn, ref.member.Start)
+			c.emitAt(ref.member.Start, bytecode.OpSetPrivate, name, key)
+		case ref.member.Computed:
+			c.emitAt(ref.member.Start, bytecode.OpSetIndex, 0, 0)
+		default:
+			c.emitAt(ref.member.Start, bytecode.OpSetProp,
+				c.nameIdx(propKeyName(ref.member.Property)), 0)
+		}
+		return
+	}
+	switch l := ref.target.(type) {
+	case *ast.Ident:
+		if declaring {
+			c.initBinding(l, kind)
+			return
+		}
+		c.assignTo(l, false)
+		c.emit(bytecode.OpDrop, 0, 0)
+	case *ast.Member:
+		// A super property, which resolves against the home object.
+		c.assignTo(l, false)
+		c.emit(bytecode.OpDrop, 0, 0)
+	case *ast.ArrayPattern:
+		c.compileArrayPattern(l, kind, declaring)
+	case *ast.ObjectPattern:
+		c.compileObjectPattern(l, kind, declaring)
+	default:
+		c.errorf(ref.target.Pos(), "unsupported destructuring target %T", ref.target)
+	}
 }
 
 // compileObjectPattern unpacks an object pattern.
+//
+// Each property's target is evaluated before the property is read, which a
+// getter on the source can see: `({a: obj[key()]} = src)` calls key before it
+// reads src.a.
 func (c *compiler) compileObjectPattern(pat *ast.ObjectPattern, kind ast.DeclKind, declaring bool) {
 	// The source has to be something properties can be read from, and that is
 	// checked before any of them are -- which is the only thing an empty
 	// pattern does, and why `var {} = null` is an error at all.
 	c.emit(bytecode.OpCheckCoercible, 0, 0)
 	for _, p := range pat.Props {
-		c.emit(bytecode.OpDup, 0, 0)
 		if p.Computed {
+			// The source key is evaluated and converted first, before the
+			// target it will be read into.
 			c.compileExpr(p.Key)
-			c.emit(bytecode.OpGetIndex, 0, 0)
-		} else {
-			c.emit(bytecode.OpGetProp, c.nameIdx(propKeyName(p.Key)), 0)
+			c.emit(bytecode.OpToPropertyKey, 0, 0)
+			ref := c.prepareRef(p.Value, declaring)
+			c.emit(bytecode.OpGetIndexUnder, uint32(ref.slots), 0)
+			if ref.def != nil {
+				c.applyDefault(ref.def, nameOf(ref.target))
+			}
+			c.storeRef(ref, kind, declaring)
+			// The key has done its work.
+			c.emit(bytecode.OpDrop, 0, 0)
+			continue
 		}
-		c.bindPatternLeaf(p.Value, kind, declaring)
+		ref := c.prepareRef(p.Value, declaring)
+		c.emit(bytecode.OpGetPropUnder, c.nameIdx(propKeyName(p.Key)), uint32(ref.slots))
+		if ref.def != nil {
+			c.applyDefault(ref.def, nameOf(ref.target))
+		}
+		c.storeRef(ref, kind, declaring)
 	}
 	if pat.Rest != nil {
 		// The rest object holds every own enumerable property except the ones

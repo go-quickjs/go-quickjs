@@ -2297,3 +2297,77 @@ func TestComputedKeyOrdering(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// A destructuring pattern interleaves asking the source for a value with
+// evaluating the target that receives it, because both are observable: a
+// target can run a getter, and a source can be a generator. The iterator stays
+// open across the whole pattern, so an abrupt exit closes it -- and a pattern
+// that stops short of the end tells it so, with nothing else in flight to
+// swallow what the return method says.
+func TestDestructuringOrder(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// The target's reference comes before the source is read.
+		{`var log = [];
+		  function src() { log.push("source"); return {get p() { log.push("get") }} }
+		  function tgt() { log.push("target"); return {set q(v) { log.push("set") }} }
+		  function sk() { log.push("source-key");
+		    return {toString: function () { log.push("source-key-tostring"); return "p" }} }
+		  function tk() { log.push("target-key");
+		    return {toString: function () { log.push("target-key-tostring"); return "q" }} }
+		  ({[sk()]: tgt()[tk()]} = src());
+		  log.join(",")`,
+			"source,source-key,source-key-tostring,target,target-key,get,target-key-tostring,set"},
+
+		// A pattern that does not exhaust its iterator closes it, and a return
+		// method that throws is what the destructuring throws.
+		{`var n = 0, rc = 0, r;
+		  var it = {next: function () { n += 1; return {done: n > 10, value: n} },
+		            "return": function () { rc += 1; throw new Error("ret") }};
+		  var iterable = {}; iterable[Symbol.iterator] = function () { return it };
+		  try { var [a] = iterable } catch (e) { r = e.message }
+		  [r, n, rc].join(",")`, "ret,1,1"},
+		// One that returns a non-object is a TypeError, which is the one place
+		// the protocol checks that.
+		{`var it = {next: function () { return {done: false, value: 1} },
+		            "return": function () { return null }};
+		  var iterable = {}; iterable[Symbol.iterator] = function () { return it };
+		  try { var [a] = iterable } catch (e) { e.constructor.name }`, "TypeError"},
+		// An exhausted iterator is not closed again.
+		{`var rc = 0;
+		  var it = {next: function () { return {done: true} },
+		            "return": function () { rc += 1 }};
+		  var iterable = {}; iterable[Symbol.iterator] = function () { return it };
+		  var [a] = iterable; String(rc)`, "0"},
+		// A failure while the pattern is running closes it, and that close's
+		// own failure does not replace the original.
+		{`var rc = 0;
+		  var it = {next: function () { return {done: false} },
+		            "return": function () { rc += 1; throw new Error("ret") }};
+		  var iterable = {}; iterable[Symbol.iterator] = function () { return it };
+		  var r;
+		  try { var [a = (function () { throw new RangeError("boom") })()] = iterable }
+		  catch (e) { r = e.constructor.name }
+		  r + "," + rc`, "RangeError,1"},
+
+		// The ordinary forms still work.
+		{`var [a, b] = [1, 2]; a + "," + b`, "1,2"},
+		{`var [a, ...r] = [1, 2, 3]; a + "|" + r.join(",")`, "1|2,3"},
+		{`var [, b] = [1, 2]; String(b)`, "2"},
+		{`var [a = 5] = []; String(a)`, "5"},
+		{`var [a, [b, c]] = [1, [2, 3]]; [a, b, c].join(",")`, "1,2,3"},
+		{`var s = new Set([1, 2]); var [x, y] = s; x + "," + y`, "1,2"},
+		{`var o = {}; [o.x] = [3]; String(o.x)`, "3"},
+		{`var {a, ...r} = {a: 1, b: 2}; a + "|" + JSON.stringify(r)`, `1|{"b":2}`},
+		{`var k = "a"; var {[k]: v} = {a: 9}; String(v)`, "9"},
+	}
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

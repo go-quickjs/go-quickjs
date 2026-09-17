@@ -24,6 +24,11 @@ type iterState struct {
 	iter Value
 	next Value
 
+	// arr is set for a plain dense array iterated with the intrinsic array
+	// iterator, where walking the elements directly is indistinguishable from
+	// the protocol and costs no result object per step.
+	arr *Object
+
 	done bool
 }
 
@@ -85,6 +90,18 @@ func (r *Runtime) startForIn(v Value) (Value, error) {
 
 // startForOf opens an iterator over a value.
 func (r *Runtime) startForOf(v Value) (Value, error) {
+	// A plain dense array walked with the intrinsic iterator is stepped
+	// directly: the protocol would allocate an iterator and a result object per
+	// element, and nothing could tell the difference. The length is read again
+	// at each step, so an array that grows or shrinks while it is iterated is
+	// seen to, as the real iterator would see it.
+	if v.IsObject() {
+		o := v.Object()
+		if o.class == ClassArray && o.flags&objHasSparseElements == 0 &&
+			r.usesIntrinsicArrayIterator(o) {
+			return r.newIterObject(&iterState{arr: o}), nil
+		}
+	}
 	method, err := r.getValueProp(v, r.atoms.internSymbol(r.wellKnown.iterator))
 	if err != nil {
 		return Undefined, err
@@ -111,6 +128,23 @@ func (r *Runtime) iterNext(cursor Value) (Value, bool, error) {
 	st := iterStateOf(cursor)
 	if st == nil || st.done {
 		return Undefined, false, nil
+	}
+
+	if st.arr != nil {
+		if st.idx >= len(st.arr.elems) {
+			st.done = true
+			return Undefined, false, nil
+		}
+		i := st.idx
+		st.idx++
+		v := st.arr.elems[i]
+		if isHole(v) {
+			// A hole is read through the prototype chain, which is what the
+			// real iterator's Get would do.
+			got, err := r.getProp(st.arr, internIndex(uint32(i)), Obj(st.arr))
+			return got, err == nil, err
+		}
+		return v, true, nil
 	}
 
 	if st.forIn {
@@ -153,7 +187,8 @@ func (r *Runtime) iterNext(cursor Value) (Value, bool, error) {
 // how a generator learns that nothing more will be requested of it.
 func (r *Runtime) closeIter(cursor Value) {
 	st := iterStateOf(cursor)
-	if st == nil || st.forIn || st.done {
+	if st == nil || st.forIn || st.done || st.arr != nil {
+		// A directly-walked array has no return method to call.
 		return
 	}
 	st.done = true
@@ -175,7 +210,7 @@ func (r *Runtime) closeIter(cursor Value) {
 func (r *Runtime) closeIteratorsIn(from, to int) {
 	for i := to - 1; i >= from; i-- {
 		st := iterStateOf(r.stack[i])
-		if st == nil || st.forIn || st.done {
+		if st == nil || st.forIn || st.done || st.arr != nil {
 			continue
 		}
 		st.done = true
@@ -503,6 +538,19 @@ func (r *Runtime) iterSend(cursor Value, sent Value, async bool) (Value, error) 
 	if st.forIn {
 		return Undefined, r.throwTypeError("cannot delegate to a property enumeration")
 	}
+	if st.arr != nil {
+		// A directly-walked array has no next to send to, and nothing to do
+		// with the value that would have been sent.
+		v, ok, err := r.iterNext(cursor)
+		if err != nil {
+			return Undefined, err
+		}
+		res := Obj(r.iterResult(v, !ok))
+		if !async {
+			return res, nil
+		}
+		return r.awaitIterResult(st, res)
+	}
 	res, err := r.call(st.next, st.iter, []Value{sent})
 	if err != nil {
 		return Undefined, err
@@ -530,6 +578,15 @@ func (r *Runtime) asyncIterNext(cursor Value) (Value, error) {
 	if st.forIn {
 		return Undefined, r.throwTypeError("cannot iterate properties asynchronously")
 	}
+	if st.arr != nil {
+		// A directly-walked array has no next to call, so the plain result
+		// object the rest of this needs is built here.
+		v, ok, err := r.iterNext(cursor)
+		if err != nil {
+			return Undefined, err
+		}
+		return r.awaitIterResult(st, Obj(r.iterResult(v, !ok)))
+	}
 	res, err := r.call(st.next, st.iter, nil)
 	if err != nil {
 		return Undefined, err
@@ -539,10 +596,17 @@ func (r *Runtime) asyncIterNext(cursor Value) (Value, error) {
 		return res, nil
 	}
 
-	// A synchronous iterator returns a plain result object, whose value must
-	// be awaited individually: `for await (const v of [1, promise])` yields the
-	// promise's value, not the promise. So the result is rebuilt around the
-	// settled value rather than merely wrapped.
+	return r.awaitIterResult(st, res)
+}
+
+// awaitIterResult turns a synchronous iterator's result into the promise a
+// for-await loop expects.
+//
+// A synchronous iterator returns a plain result object, whose value must be
+// awaited individually: `for await (const v of [1, promise])` yields the
+// promise's value, not the promise. So the result is rebuilt around the settled
+// value rather than merely wrapped.
+func (r *Runtime) awaitIterResult(st *iterState, res Value) (Value, error) {
 	done, err := r.getValueProp(res, atomDone)
 	if err != nil {
 		return Undefined, err
@@ -571,4 +635,68 @@ func (r *Runtime) asyncIterNext(cursor Value) (Value, error) {
 	})
 	r.promiseThen(r.toPromise(value), Obj(onFulfilled), Obj(onRejected))
 	return Obj(out), nil
+}
+
+// iterStep advances a cursor for a destructuring pattern, reporting undefined
+// once the iterator is exhausted.
+//
+// A pattern asks for as many values as it names, and a source with fewer simply
+// leaves the rest undefined -- which is why this reports a value rather than
+// whether there was one.
+func (r *Runtime) iterStep(cursor Value) (Value, error) {
+	v, ok, err := r.iterNext(cursor)
+	if err != nil {
+		return Undefined, err
+	}
+	if !ok {
+		return Undefined, nil
+	}
+	return v, nil
+}
+
+// iterRest drains what is left of a cursor into a dense array, which is what a
+// pattern's rest element binds.
+func (r *Runtime) iterRest(cursor Value) (Value, error) {
+	out := newObject(r.proto.array, ClassArray)
+	for {
+		v, ok, err := r.iterNext(cursor)
+		if err != nil {
+			return Undefined, err
+		}
+		if !ok {
+			return Obj(out), nil
+		}
+		out.elems = append(out.elems, v)
+	}
+}
+
+// iterCloseNormal closes a destructuring pattern's cursor once the pattern is
+// done with it.
+//
+// A pattern that stopped short of the end tells the iterator so, and unlike a
+// close during an abrupt completion this one has nothing else in flight: a
+// failure in the return method is the result. So is a return method that hands
+// back something other than an object, which is the one place the protocol
+// checks that.
+func (r *Runtime) iterCloseNormal(cursor Value) error {
+	st := iterStateOf(cursor)
+	if st == nil || st.forIn || st.done || st.arr != nil {
+		return nil
+	}
+	st.done = true
+	ret, err := r.getValueProp(st.iter, atomReturn)
+	if err != nil {
+		return err
+	}
+	if !isCallable(ret) {
+		return nil
+	}
+	res, err := r.call(ret, st.iter, nil)
+	if err != nil {
+		return err
+	}
+	if !res.IsObject() {
+		return r.throwTypeError("the iterator's return method must return an object")
+	}
+	return nil
 }
