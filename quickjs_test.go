@@ -3852,3 +3852,36 @@ func TestOptionalChainCalls(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
 	}
 }
+
+// Comparing a BigInt with a string reads the string as a BigInt literal rather
+// than as a number: a string that is not an integer literal compares with
+// nothing, and every relational operator on it is false.
+func TestBigIntStringComparison(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`"1" < 2n`, "true"},
+		{`"3" > 2n`, "true"},
+		{`2n <= "2"`, "true"},
+		// Exactly, rather than through a float that cannot hold it.
+		{`"9007199254740993" <= 9007199254740993n`, "true"},
+		{`"9007199254740993" < 9007199254740994n`, "true"},
+		// Whitespace is allowed around it, and nothing but whitespace is zero.
+		{`"  2  " < 3n`, "true"},
+		{`"" < 1n`, "true"},
+		// Anything that is not an integer literal is incomparable.
+		{`"0." <= 1n`, "false"},
+		{`"0." > 1n`, "false"},
+		{`".0" <= 1n`, "false"},
+		{`"0e0" <= 1n`, "false"},
+		{`"0n" <= 1n`, "false"},
+		{`"Infinity" <= 1n`, "false"},
+		{`"abc" < 1n`, "false"},
+		{`1n < "abc"`, "false"},
+		{`0n <= "1e0"`, "false"},
+		// The other literal forms are integers and do compare.
+		{`"0x10" > 15n`, "true"},
+		{`"-3" < 0n`, "true"},
+	}
+	for _, tc := range cases {
+		checkEval(t, "String("+tc.src+")", tc.want)
+	}
+}

@@ -2,6 +2,7 @@ package vm
 
 import (
 	"math"
+	"strings"
 
 	"github.com/go-quickjs/go-quickjs/internal/jsnum"
 )
@@ -444,8 +445,40 @@ func (r *Runtime) compare(a, b Value) (cmpResult, error) {
 	return cmpEqual, nil
 }
 
-// compareBigInt orders a BigInt against another BigInt or a number.
+// compareBigInt orders a BigInt against another BigInt, a number or a string.
 func (r *Runtime) compareBigInt(a, b Value) (cmpResult, error) {
+	// A string is read as a BigInt literal rather than as a number: "0." is a
+	// number and not an integer, so there is nothing to compare it with and
+	// every relational operator on it is false.
+	if a.IsString() || b.IsString() {
+		s, other := a, b
+		reverse := false
+		if b.IsString() {
+			s, other, reverse = b, a, true
+		}
+		text := strings.TrimSpace(s.String().Go())
+		n := NewBigInt(0)
+		if text != "" {
+			// Nothing but whitespace is an empty integer literal, which is
+			// zero; anything that is not an integer literal at all compares
+			// with nothing.
+			var ok bool
+			if n, ok = ParseBigInt(text); !ok {
+				return cmpUndefined, nil
+			}
+		}
+		c := cmpFromInt(n.Cmp(other.BigInt()))
+		if !reverse {
+			return c, nil
+		}
+		switch c {
+		case cmpLess:
+			return cmpGreater, nil
+		case cmpGreater:
+			return cmpLess, nil
+		}
+		return cmpEqual, nil
+	}
 	switch {
 	case a.IsBigInt() && b.IsBigInt():
 		return cmpFromInt(a.BigInt().Cmp(b.BigInt())), nil
