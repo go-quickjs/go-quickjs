@@ -160,6 +160,15 @@ func isNegZero(v float64) bool { return v == 0 && 1/v < 0 }
 
 // compileIdentRead emits a read of a variable.
 func (c *compiler) compileIdentRead(n *ast.Ident) {
+	// Inside a `with` body the object may answer instead of the binding.
+	probe := c.withProbe(bytecode.OpWithGet, n.Name)
+	c.compileIdentReadStatic(n)
+	c.patchWithProbe(probe)
+}
+
+// compileIdentReadStatic reads a name from the binding it resolves to, without
+// consulting any enclosing `with` object.
+func (c *compiler) compileIdentReadStatic(n *ast.Ident) {
 	// undefined, NaN and Infinity are properties of the global object, not
 	// keywords, so they resolve like any other name.
 	if l, ok := c.resolveLocal(n.Name); ok {
@@ -418,12 +427,23 @@ func (c *compiler) compileUnary(n *ast.Unary) {
 		// typeof on an undeclared identifier must yield "undefined" rather
 		// than throwing, which needs the non-throwing global read.
 		if id, ok := n.Operand.(*ast.Ident); ok {
-			if _, isLocal := c.resolveLocal(id.Name); !isLocal {
+			probe := c.withProbe(bytecode.OpWithTypeof, id.Name)
+			// The non-throwing global read is only right for a name that
+			// resolves nowhere; a binding, or the function's own name, is
+			// read the ordinary way.
+			if _, isLocal := c.resolveLocal(id.Name); !isLocal && id.Name != c.selfName {
 				if _, isUp := c.resolveUpvalue(id.Name); !isUp {
 					c.emit(bytecode.OpGetGlobalOpt, c.nameIdx(id.Name), 0)
 					c.emit(bytecode.OpTypeOf, 0, 0)
+					c.patchWithProbe(probe)
 					return
 				}
+			}
+			if probe >= 0 {
+				c.compileExpr(n.Operand)
+				c.emit(bytecode.OpTypeOf, 0, 0)
+				c.patchWithProbe(probe)
+				return
 			}
 		}
 		c.compileExpr(n.Operand)
@@ -443,6 +463,8 @@ func (c *compiler) compileUnary(n *ast.Unary) {
 			return
 		}
 		if id, ok := n.Operand.(*ast.Ident); ok {
+			probe := c.withProbe(bytecode.OpWithDelete, id.Name)
+			defer c.patchWithProbe(probe)
 			// A local or captured binding cannot be deleted at all; a global
 			// can, but only if it is configurable, which a var declaration is
 			// not.
@@ -680,6 +702,19 @@ func (c *compiler) compileCall(n *ast.Call) {
 		} else {
 			c.emit(bytecode.OpGetPropThis, c.nameIdx(propKeyName(m.Property)), 0)
 		}
+		argc := c.compileArguments(n.Args)
+		c.emitAt(n.Start, bytecode.OpCallMethod, uint32(argc), 0)
+		return
+	}
+
+	// A call through a `with` object has that object as its receiver, which is
+	// the whole difference between `with (o) f()` and `f()`. Both paths leave a
+	// receiver and a callee, so the call is the same instruction either way.
+	if id, ok := n.Callee.(*ast.Ident); ok && c.withDepth > 0 {
+		probe := c.withProbe(bytecode.OpWithGetThis, id.Name)
+		c.emit(bytecode.OpPushUndef, 0, 0)
+		c.compileIdentReadStatic(id)
+		c.patchWithProbe(probe)
 		argc := c.compileArguments(n.Args)
 		c.emitAt(n.Start, bytecode.OpCallMethod, uint32(argc), 0)
 		return
@@ -999,6 +1034,13 @@ func (c *compiler) compileReadTarget(target ast.Expr) {
 func (c *compiler) assignTo(target ast.Expr, initializing bool) {
 	switch t := target.(type) {
 	case *ast.Ident:
+		// Inside a `with` body the object may be what is written to. An
+		// initializing store is a declaration, which binds in its own scope
+		// whatever the object holds.
+		if !initializing {
+			probe := c.withProbe(bytecode.OpWithSet, t.Name)
+			defer c.patchWithProbe(probe)
+		}
 		if l, ok := c.resolveLocal(t.Name); ok {
 			if !initializing && l.kind == bindConst && l.initialized {
 				c.errorf(t.Start, "assignment to constant variable %q", t.Name)

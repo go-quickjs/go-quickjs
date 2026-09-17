@@ -228,6 +228,14 @@ func (r *Runtime) run(cl *closure, this Value, args []Value, newTarget Value, ca
 	f.callee = callee
 	f.args = args
 	f.openUpvalues = f.openUpvalues[:0]
+	// The chain is inherited whole, capped so that a push inside this call
+	// copies rather than writing into the creating frame's array.
+	f.withScopes = nil
+	if callee != nil {
+		if fd := callee.fn(); fd != nil && len(fd.lexWith) > 0 {
+			f.withScopes = fd.lexWith[:len(fd.lexWith):len(fd.lexWith)]
+		}
+	}
 	f.handlers = f.handlers[:0]
 	f.native = ""
 	f.savedSP = 0
@@ -1034,6 +1042,80 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 
 		// --- Conversions --------------------------------------------------
+		// --- `with` ------------------------------------------------------
+		case bytecode.OpWithPush:
+			o, err := r.withObject(pop())
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			f.withScopes = append(f.withScopes, o)
+		case bytecode.OpWithPop:
+			f.withScopes = f.withScopes[:len(f.withScopes)-1]
+		case bytecode.OpWithGet, bytecode.OpWithGetThis, bytecode.OpWithTypeof:
+			name := cl.names[in.A&bytecode.WithNameMask]
+			o, found, err := r.withFound(f.withScopes, name,
+				int(in.A>>bytecode.WithLimitShift))
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			if !found {
+				break
+			}
+			v, err := r.getProp(o, name, Obj(o))
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			switch in.Op {
+			case bytecode.OpWithGetThis:
+				// A call through a `with` object has that object as its
+				// receiver, which is the whole difference between
+				// `with (o) f()` and `f()`.
+				push(Obj(o))
+				push(v)
+			case bytecode.OpWithTypeof:
+				push(Str(NewString(v.TypeOf())))
+			default:
+				push(v)
+			}
+			f.pc = in.B
+		case bytecode.OpWithSet:
+			name := cl.names[in.A&bytecode.WithNameMask]
+			o, found, err := r.withFound(f.withScopes, name,
+				int(in.A>>bytecode.WithLimitShift))
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			if !found {
+				break
+			}
+			if err := r.setProp(o, name, peek(0), Obj(o), cl.fn.Strict); err != nil {
+				vmErr = err
+				goto onError
+			}
+			f.pc = in.B
+		case bytecode.OpWithDelete:
+			name := cl.names[in.A&bytecode.WithNameMask]
+			o, found, err := r.withFound(f.withScopes, name,
+				int(in.A>>bytecode.WithLimitShift))
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			if !found {
+				break
+			}
+			ok, err := r.deleteProp(o, name, cl.fn.Strict)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			push(Bool(ok))
+			f.pc = in.B
+
 		case bytecode.OpCheckCoercible:
 			if v := peek(0); v.IsNullish() {
 				vmErr = r.throwTypeError("cannot destructure %s", r.describe(v))
@@ -1634,6 +1716,10 @@ func (r *Runtime) makeClosure(f *frame, c Value) *Object {
 		name:     tmpl.fn.Name,
 		length:   tmpl.fn.ParamCount,
 		ctorKind: kind,
+		// A function created inside a `with` body keeps the objects: the names
+		// in its own body resolve against them too, and the frame that pushed
+		// them is gone by the time it runs.
+		lexWith: f.withScopes,
 	}
 	if tmpl.fn.Kind == bytecode.KindArrow {
 		// An arrow captures its surroundings rather than receiving them from

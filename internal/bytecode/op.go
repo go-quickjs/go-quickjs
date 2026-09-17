@@ -260,9 +260,19 @@ const (
 	OpToPropertyKey
 	OpToNumber
 	OpToString
-	OpWithPush // sloppy-mode `with`
+	// --- `with` -----------------------------------------------------------
+	// Inside a `with` body every name compiles to one of the probes below
+	// followed by the instruction that would have been emitted anyway. A probe
+	// answers from the enclosing `with` objects and jumps to B, or falls
+	// through to the static instruction. A is the name.
+	OpWithPush // push the object on top onto the frame's `with` chain
 	OpWithPop
-	OpSetName // give an anonymous function the name in Names[A]
+	OpWithGet     // push the value and jump
+	OpWithGetThis // push the value and the object, for a call
+	OpWithSet     // store the value on top, leave it, and jump
+	OpWithDelete  // push whether the delete succeeded and jump
+	OpWithTypeof  // push the type of the value and jump
+	OpSetName     // give an anonymous function the name in Names[A]
 	OpSetHomeObject
 	OpCheckCtorReturn
 	OpCheckThisInit // a derived constructor must call super() before `this`
@@ -367,6 +377,8 @@ var opNames = [opCount]string{
 	OpCheckCoercible: "check_coercible",
 	OpToPropertyKey:  "to_property_key", OpToNumber: "to_number",
 	OpToString: "to_string", OpWithPush: "with_push", OpWithPop: "with_pop",
+	OpWithGet: "with_get", OpWithGetThis: "with_get_this", OpWithSet: "with_set",
+	OpWithDelete: "with_delete", OpWithTypeof: "with_typeof",
 	OpSetName: "set_name", OpSetHomeObject: "set_home_object",
 	OpCheckCtorReturn: "check_ctor_return", OpCheckThisInit: "check_this_init",
 	OpInitThis: "init_this",
@@ -398,3 +410,13 @@ func itoa(v int) string {
 // IterAll is OpIterToArray's operand when the whole iterator must be drained,
 // which a pattern with a rest element requires.
 const IterAll = ^uint32(0)
+
+// A `with` probe packs two things into its A operand: the name, in the low
+// bits, and how many of the innermost `with` objects to consult, in the high
+// ones. The count is needed because a binding declared between two `with`
+// statements is shadowed by the inner one and not by the outer.
+const (
+	WithLimitShift = 24
+	WithNameMask   = 1<<WithLimitShift - 1
+	WithLimitMax   = 1<<(32-WithLimitShift) - 1
+)

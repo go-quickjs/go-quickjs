@@ -54,6 +54,10 @@ type UpvalueDesc struct {
 	Name  string
 	// Mutable is false for a const binding, so the VM can reject assignment.
 	Mutable bool
+	// WithDepth is how many `with` bodies enclosed the binding's declaration,
+	// which decides how many of them a reference to it has to be probed
+	// against: a binding declared inside one is not shadowed by it.
+	WithDepth int
 	// TDZ marks a let or const binding, which must be checked for use before
 	// initialization.
 	TDZ bool

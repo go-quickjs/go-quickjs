@@ -66,6 +66,10 @@ type localVar struct {
 	kind  bindKind
 	slot  uint32
 	depth int
+	// withDepth is how many `with` bodies enclosed the declaration. A binding
+	// declared inside one is inner to it, so a reference to it is not probed
+	// against that object.
+	withDepth int
 	// captured marks a local that an inner function closes over.
 	captured bool
 	// initialized is false while a let or const binding is in its temporal
@@ -120,6 +124,11 @@ type compiler struct {
 	// writes can collide with one.
 	hiddenCount int
 	depth       int
+
+	// withDepth counts the `with` bodies enclosing the code being compiled.
+	// While it is non-zero every name is probed against the objects before the
+	// binding it would otherwise resolve to.
+	withDepth int
 
 	// privateScopes is the stack of class bodies enclosing the code being
 	// compiled, innermost last, each holding the private names it declares. A
@@ -234,6 +243,9 @@ func newCompiler(parent *compiler, opts Options) *compiler {
 	}
 	if parent != nil {
 		c.lineOf = parent.lineOf
+		// A function written inside a `with` body resolves the names in its own
+		// body against the objects too, so it is compiled the same way.
+		c.withDepth = parent.withDepth
 	}
 	return c
 }
@@ -470,10 +482,11 @@ func (c *compiler) declare(name string, kind bindKind, pos int) uint32 {
 	slot := c.nextSlot
 	c.nextSlot++
 	c.locals = append(c.locals, localVar{
-		name:  name,
-		kind:  kind,
-		slot:  slot,
-		depth: c.depth,
+		name:      name,
+		kind:      kind,
+		slot:      slot,
+		depth:     c.depth,
+		withDepth: c.withDepth,
 		initialized: kind == bindVar || kind == bindParam ||
 			kind == bindFunction || kind == bindFunctionLexical,
 	})
@@ -509,19 +522,20 @@ func (c *compiler) resolveUpvalue(name string) (uint32, bool) {
 	if l, ok := c.parent.resolveLocal(name); ok {
 		l.captured = true
 		return c.addUpvalue(name, l.slot, true, l.kind != bindConst,
-			l.kind == bindLet || l.kind == bindConst), true
+			l.kind == bindLet || l.kind == bindConst, l.withDepth), true
 	}
 	// Not a local of the parent, so look further out and forward the result.
 	if idx, ok := c.parent.resolveUpvalue(name); ok {
 		desc := c.parent.fn.Upvalues[idx]
-		return c.addUpvalue(name, idx, false, desc.Mutable, desc.TDZ), true
+		return c.addUpvalue(name, idx, false, desc.Mutable, desc.TDZ, desc.WithDepth), true
 	}
 	return 0, false
 }
 
 // addUpvalue appends an upvalue descriptor, reusing an existing one for the
 // same source so that a name captured twice shares a slot.
-func (c *compiler) addUpvalue(name string, index uint32, fromParent, mutable, tdz bool) uint32 {
+func (c *compiler) addUpvalue(name string, index uint32, fromParent, mutable, tdz bool,
+	withDepth int) uint32 {
 	for i, u := range c.fn.Upvalues {
 		if u.Index == index && u.FromParent == fromParent && u.Name == name {
 			return uint32(i)
@@ -533,6 +547,7 @@ func (c *compiler) addUpvalue(name string, index uint32, fromParent, mutable, td
 		Name:       name,
 		Mutable:    mutable,
 		TDZ:        tdz,
+		WithDepth:  withDepth,
 	})
 	return uint32(len(c.fn.Upvalues) - 1)
 }

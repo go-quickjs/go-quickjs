@@ -256,6 +256,11 @@ type frame struct {
 	// must be closed when it returns.
 	openUpvalues []*upvalue
 
+	// withScopes are the objects of the `with` statements this frame is inside,
+	// outermost first. Nil for almost every frame: `with` is forbidden in
+	// strict mode, so nothing modern has one.
+	withScopes []*Object
+
 	// handlers is the exception handler stack for this frame.
 	handlers []handler
 

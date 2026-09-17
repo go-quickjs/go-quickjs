@@ -545,7 +545,11 @@ type funcData struct {
 	lexThis Value
 	// lexThisRef is the binding an arrow captured when it was created inside a
 	// derived constructor, where `this` is not a value until super() runs.
-	lexThisRef   *thisBinding
+	lexThisRef *thisBinding
+	// lexWith are the `with` objects in scope where the function was created.
+	// Names in its body resolve against them, so they outlive the frame that
+	// pushed them.
+	lexWith      []*Object
 	lexNewTarget Value
 	lexArgs      []Value
 

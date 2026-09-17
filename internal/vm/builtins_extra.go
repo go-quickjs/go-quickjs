@@ -217,6 +217,21 @@ func (r *Runtime) initArrayExtras2() {
 	})
 
 	// The iteration-protocol methods.
+	// Array.prototype[Symbol.unscopables] lists the methods added after `with`
+	// existed, so that `with (arr) { values }` still means whatever `values`
+	// meant outside. It is what lets the language keep adding array methods
+	// without breaking code that happens to use the same name.
+	unscopables := newObject(nil, ClassObject)
+	for _, name := range []string{
+		"at", "copyWithin", "entries", "fill", "find", "findIndex", "findLast",
+		"findLastIndex", "flat", "flatMap", "includes", "keys", "toReversed",
+		"toSorted", "toSpliced", "values",
+	} {
+		unscopables.setOwnRaw(r.atoms.intern(name), True, propDefault)
+	}
+	p.setOwnRaw(r.atoms.internSymbol(r.wellKnown.unscopables), Obj(unscopables),
+		propConfigurable)
+
 	// Array.prototype[Symbol.iterator] is not merely equivalent to values, it is
 	// the same function object, which a script can check and which the
 	// iteration fast paths rely on to decide that an array still iterates the

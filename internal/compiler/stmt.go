@@ -233,7 +233,7 @@ func (c *compiler) compileStatement(s ast.Stmt) {
 		c.compileFieldInit(n)
 
 	case *ast.WithStmt:
-		c.errorf(n.Start, "\"with\" is not supported")
+		c.compileWith(n)
 
 	default:
 		c.errorf(s.Pos(), "unsupported statement %T", s)
@@ -279,6 +279,12 @@ func (c *compiler) initBinding(target ast.Expr, kind ast.DeclKind) {
 
 // storeVar assigns to a var binding or a global.
 func (c *compiler) storeVar(name string, pos int) {
+	// A var's initializer is an assignment rather than a binding
+	// initialization: the declaration hoists out of a `with` body, but the
+	// store happens inside it, where the object may be what is written to.
+	probe := c.withProbe(bytecode.OpWithSet, name)
+	defer c.patchWithProbe(probe)
+
 	if l, ok := c.resolveLocal(name); ok {
 		c.emit(bytecode.OpSetLocal, l.slot, 0)
 		return
