@@ -978,7 +978,12 @@ func (p *parser) parsePropertyName(allowPrivate bool) (ast.Expr, bool) {
 	case lexer.Punct:
 		if p.tok.Value == "[" {
 			p.next()
+			// `in` is an operator inside brackets, even in a for head: the
+			// key is a complete expression of its own.
+			saved := p.noIn
+			p.noIn = false
 			key := p.parseAssign()
+			p.noIn = saved
 			p.expectPunct("]")
 			return key, true
 		}

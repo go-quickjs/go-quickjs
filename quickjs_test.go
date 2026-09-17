@@ -276,6 +276,24 @@ func TestObjects(t *testing.T) {
 	}
 }
 
+// A computed key is a complete expression, so `in` is the operator there even
+// in a for head, where `in` otherwise separates the binding from the subject.
+func TestComputedKeyAllowsIn(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`const o = {["a" in {a: 1}]: 7}; o.true`, "7"},
+		{`class C { ["x" in {x: 0}]() { return 5 } } new C().true()`, "5"},
+		{`class C { static ["x" in {}] = 3 } C.false`, "3"},
+		{`let s = ""; for (const k in {["a" in {}]: 1}) s += k; s`, "false"},
+		{`let n = 0; for ({["a" in {}]: n} of [{false: 8}]); n`, "8"},
+		// The suppression is restored afterwards, so the head still reads as a
+		// for-in rather than as a comparison.
+		{`let s = ""; for (var i in {a: 1, b: 2}) s += i; s`, "ab"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}
+
 func TestArrays(t *testing.T) {
 	tests := []struct{ src, want string }{
 		{"[1,2,3].length", "3"},
