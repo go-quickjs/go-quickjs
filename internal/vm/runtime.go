@@ -95,6 +95,9 @@ type Runtime struct {
 	// realm, which a script can observe.
 	throwTypeErrorFn *Object
 
+	// asyncModuleOrder numbers the modules that start waiting, which is the
+	// order the ones waiting on them are run in when they finish.
+	asyncModuleOrder int
 	// arrayValuesFn is Array.prototype.values, which the iteration fast paths
 	// compare against: an array iterates the way they assume only if this is
 	// still what its Symbol.iterator resolves to.

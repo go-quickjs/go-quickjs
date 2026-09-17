@@ -58,6 +58,11 @@ func (c *compiler) hoistBlockDeclarations(body []ast.Stmt) {
 		if !ok {
 			continue
 		}
+		if c.moduleBindingsDone {
+			// A module's top-level functions were defined when it was linked,
+			// which is before any of this runs.
+			continue
+		}
 		h := hoistedFunc{fd: fd, name: name}
 		if !c.functionsAreGlobal() {
 			kind := bindFunction

@@ -27,6 +27,11 @@ type ModuleInfo struct {
 	Exports map[string]string
 	// StarExports lists the modules re-exported wholesale.
 	StarExports []string
+	// Init is the module's environment: its var and lexical bindings, and its
+	// top-level function declarations. It runs when the module is linked
+	// rather than when it is evaluated, which is what lets a module of a cycle
+	// call a function of one that has not run yet.
+	Init *bytecode.Function
 	// Requests lists every module this one names, in the order it named them.
 	//
 	// It is separate from the lists above because those are about bindings,
@@ -77,7 +82,12 @@ func CompileModule(prog *ast.Program, opts Options) (fn *bytecode.Function, info
 	c.collectModuleShape(prog.Body)
 	c.checkModuleDeclarations(prog.Body)
 	c.checkScopes(prog.Body)
-	c.hoistModuleBindings(prog.Body)
+	c.collectModuleLex(prog.Body)
+	// The declarations are compiled into a function of their own, which the
+	// linker runs: a module's bindings exist, and its functions are callable,
+	// before any of the graph has been evaluated.
+	info.Init = compileModuleInit(prog, opts, &info)
+	c.moduleBindingsDone = true
 	c.compileStatements(prog.Body)
 
 	c.emit(bytecode.OpGetLocal, uint32(c.completionSlot), 0)
@@ -261,19 +271,60 @@ func (c *compiler) hoistModuleBindings(body []ast.Stmt) {
 		c.emit(bytecode.OpDefineGlobalVar, c.nameIdx(n), 0)
 	}
 
-	var lexical []lexicalName
-	for _, s := range body {
-		collectLexicalNames(s, &lexical)
-	}
-	c.moduleLex = make(map[string]bool, len(lexical))
-	for _, l := range lexical {
+	c.collectModuleLex(body)
+	for _, l := range moduleLexNames(body) {
 		mutable := uint32(1)
 		if l.kind == ast.DeclConst {
 			mutable = 0
 		}
-		c.moduleLex[l.name] = true
 		c.emit(bytecode.OpDeclareModuleLex, c.nameIdx(l.name), mutable)
 	}
+}
+
+// collectModuleLex records which top-level names are lexical bindings, which
+// both the declarations and the body need to know: a reference to one resolves
+// to the module environment rather than to a global.
+func (c *compiler) collectModuleLex(body []ast.Stmt) {
+	lexical := moduleLexNames(body)
+	c.moduleLex = make(map[string]bool, len(lexical))
+	for _, l := range lexical {
+		c.moduleLex[l.name] = true
+	}
+}
+
+// moduleLexNames lists a module's top-level lexical bindings.
+func moduleLexNames(body []ast.Stmt) []lexicalName {
+	var lexical []lexicalName
+	for _, s := range body {
+		collectLexicalNames(s, &lexical)
+	}
+	return lexical
+}
+
+// compileModuleInit compiles what the linker runs: the module's bindings and
+// its top-level function declarations.
+//
+// It is a function of its own rather than a prefix of the module's body because
+// of when it runs. A module of a cycle may be asked for a function it declares
+// before its body has run -- that is what makes a cycle work at all -- so the
+// declarations belong to linking, which happens for the whole graph before any
+// of it is evaluated.
+func compileModuleInit(prog *ast.Program, opts Options, info *ModuleInfo) *bytecode.Function {
+	c := newCompiler(nil, opts)
+	c.fn.Name = "<module bindings>"
+	c.fn.Strict = true
+	c.fn.IsModule = true
+	c.fn.Source = opts.Source
+	c.lineOf = lineMapper(opts.Text)
+	c.module = info
+	c.completionSlot = int32(c.nextSlot)
+	c.nextSlot++
+	c.hoistModuleBindings(prog.Body)
+	c.hoistBlockDeclarations(prog.Body)
+	c.emit(bytecode.OpPushUndef, 0, 0)
+	c.emit(bytecode.OpReturn, 0, 0)
+	c.finish()
+	return c.fn
 }
 
 // lexicalName is a top-level lexical binding and the kind of declaration it

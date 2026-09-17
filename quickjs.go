@@ -373,7 +373,14 @@ func (r *Runtime) compileAndRegisterModule(specifier, source string) (*vm.Module
 			IsDefault: imp.IsDefault,
 		}
 	}
-	return r.rt.LoadModule(specifier, fn, reqs, info.Exports, info.StarExports, info.Requests)
+	return r.rt.LoadModule(specifier, vm.ModuleShape{
+		Body:        fn,
+		Init:        info.Init,
+		Imports:     reqs,
+		Exports:     info.Exports,
+		StarExports: info.StarExports,
+		Requests:    info.Requests,
+	})
 }
 
 // EvalModule compiles and runs source as an ECMAScript module.
@@ -413,10 +420,18 @@ func (r *Runtime) EvalModuleContext(ctx context.Context, specifier, source strin
 	if err := r.rt.Link(mod); err != nil {
 		return Value{}, r.wrapError(err)
 	}
-	if _, err := r.rt.EvaluateModule(mod); err != nil {
+	// Evaluation hands back a promise for the graph. The jobs are drained
+	// here, which is what makes a module that awaits something already settled
+	// finish before this returns; one waiting on the host stays pending, and
+	// its failure -- if any -- surfaces as a rejection rather than being lost.
+	done, err := r.rt.EvaluateModule(mod)
+	if err != nil {
 		return Value{}, r.wrapError(err)
 	}
 	if err := r.rt.DrainJobs(); err != nil {
+		return Value{}, r.wrapError(err)
+	}
+	if err := r.rt.ModuleResult(done); err != nil {
 		return Value{}, r.wrapError(err)
 	}
 	ns, err := r.rt.ModuleNamespace(mod)

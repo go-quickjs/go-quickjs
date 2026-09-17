@@ -4241,3 +4241,92 @@ func TestUnshiftWithNoArguments(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// A module's bindings are created when it is linked, before any of the graph is
+// evaluated, so a module of a cycle can call a function another declares before
+// that one's body has run. That is what makes a cycle work at all.
+func TestModuleFunctionsAreCallableBeforeEvaluation(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	const entry = `
+		import "./dep";
+		export function hello() { return "hi" }
+		globalThis.out = (globalThis.out || "") + "|entry"`
+	rt.SetModuleLoader(func(spec, referrer string) (string, string, error) {
+		switch spec {
+		case "./dep", "dep":
+			return `import {hello} from "entry"
+				globalThis.out = (globalThis.out || "") + "dep:" + hello()`, "dep", nil
+		case "entry":
+			return entry, "entry", nil
+		}
+		return "", "", fmt.Errorf("unknown module %q", spec)
+	})
+	if _, err := rt.EvalModule("entry", entry); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := rt.Get("out")
+	if got.String() != "dep:hi|entry" {
+		t.Errorf("out = %s, want dep:hi|entry", got)
+	}
+}
+
+// A module that awaits at the top level does not hold up the walk: its body
+// suspends and the modules beside it in the graph are evaluated, which is what
+// lets two independent subgraphs make progress at once.
+func TestTopLevelAwaitDoesNotBlockSiblings(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	rt.SetModuleLoader(func(spec, referrer string) (string, string, error) {
+		switch spec {
+		case "tla":
+			return `globalThis.check = false; await 0; globalThis.check = true`, spec, nil
+		case "sync":
+			return `export const seen = globalThis.check`, spec, nil
+		}
+		return "", "", fmt.Errorf("unknown module %q", spec)
+	})
+	if _, err := rt.EvalModule("entry", `
+		import "tla";
+		import {seen} from "sync";
+		globalThis.out = [seen, globalThis.check].join(",")`); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := rt.Get("out")
+	// The sibling ran while the awaiting module was suspended, and the entry
+	// ran after it resumed.
+	if got.String() != "false,true" {
+		t.Errorf("out = %s, want false,true", got)
+	}
+}
+
+// A dynamic import is fetched and evaluated in a job of its own, so the code
+// that asked for it runs to the end of its turn first: an import written inside
+// a module's body cannot preempt the evaluation it is part of.
+func TestDynamicImportDoesNotPreempt(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	rt.SetModuleLoader(func(spec, referrer string) (string, string, error) {
+		switch spec {
+		case "a":
+			return `globalThis.order.push("a-start")
+				import("b").then(() => globalThis.order.push("b-imported"))
+				globalThis.order.push("a-end")`, spec, nil
+		case "b":
+			return `globalThis.order.push("b")`, spec, nil
+		}
+		return "", "", fmt.Errorf("unknown module %q", spec)
+	})
+	if err := rt.Set("order", []any{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.EvalModule("entry", `
+		import "a";
+		globalThis.order.push("entry")`); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := rt.Eval(`globalThis.order.join(",")`)
+	if got.String() != "a-start,a-end,entry,b,b-imported" {
+		t.Errorf("order = %s, want a-start,a-end,entry,b,b-imported", got)
+	}
+}

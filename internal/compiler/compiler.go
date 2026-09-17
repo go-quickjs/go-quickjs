@@ -243,6 +243,9 @@ type compiler struct {
 	// of its own even though it is compiled into the constructor.
 	inFieldInit bool
 
+	// moduleBindingsDone marks the compilation of a module's body, whose
+	// declarations were compiled into the separate function the linker runs.
+	moduleBindingsDone bool
 	// withDepth counts the `with` bodies enclosing the code being compiled.
 	// While it is non-zero every name is probed against the objects before the
 	// binding it would otherwise resolve to.
