@@ -181,6 +181,13 @@ func (r *Runtime) initObjectBuiltins() {
 	r.defMethod(ctor, "setPrototypeOf", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		target := arg(args, 0)
 		proto := arg(args, 1)
+		// The target has to be something a prototype could be set on, which
+		// null and undefined are not -- and that is checked before the
+		// prototype, so the more obvious mistake is the one reported.
+		if target.IsNullish() {
+			return Undefined, rt.throwTypeError(
+				"Object.setPrototypeOf called on %s", target.Kind())
+		}
 		if !proto.IsObject() && !proto.IsNull() {
 			return Undefined, rt.throwTypeError("the prototype must be an object or null")
 		}
@@ -428,9 +435,15 @@ func (r *Runtime) isEnumerable(o *Object, key Atom) bool {
 			return true
 		}
 		// A typed array's elements live in a buffer rather than in the
-		// property table, but they are enumerable own properties.
+		// property table, but they are enumerable own properties. So are a
+		// String object's characters.
 		if o.class == ClassTypedArray {
-			if t, ok := o.data.(*typedArrayData); ok && int(key.Index()) < t.length {
+			if t, ok := o.data.(*typedArrayData); ok && int(key.Index()) < t.count() {
+				return true
+			}
+		}
+		if o.class == ClassStringWrapper {
+			if str, ok := o.data.(*String); ok && int(key.Index()) < str.Len() {
 				return true
 			}
 		}
@@ -490,49 +503,28 @@ func (r *Runtime) objectKeysLike(v Value, mode keysMode) (Value, error) {
 
 // describeProperty builds a property descriptor object.
 func (r *Runtime) describeProperty(o *Object, key Atom) Value {
-	if key.IsIndex() {
-		if v, ok := o.getElem(key.Index()); ok {
-			d := newObject(r.proto.object, ClassObject)
-			r.setDescField(d, "value", v)
-			r.setDescField(d, "writable", True)
-			r.setDescField(d, "enumerable", True)
-			r.setDescField(d, "configurable", True)
-			return Obj(d)
-		}
-	}
-	if o.class == ClassTypedArray && key.IsIndex() {
-		if t, ok := o.data.(*typedArrayData); ok && int(key.Index()) < t.length {
-			d := newObject(r.proto.object, ClassObject)
-			r.setDescField(d, "value", t.getElem(int(key.Index())))
-			r.setDescField(d, "writable", True)
-			r.setDescField(d, "enumerable", True)
-			r.setDescField(d, "configurable", True)
-			return Obj(d)
-		}
-	}
 	r.materializeFunctionProp(o, key)
-	p := o.getOwnVisible(key)
-	if p == nil {
+	pd := r.currentDescriptor(o, key)
+	if pd == nil {
 		return Undefined
 	}
 	d := newObject(r.proto.object, ClassObject)
-	if p.isAccessor() {
-		a := p.getterSetter()
+	if pd.isAccessor() {
 		get, set := Undefined, Undefined
-		if a != nil && a.getter != nil {
-			get = Obj(a.getter)
+		if pd.getter != nil {
+			get = Obj(pd.getter)
 		}
-		if a != nil && a.setter != nil {
-			set = Obj(a.setter)
+		if pd.setter != nil {
+			set = Obj(pd.setter)
 		}
 		r.setDescField(d, "get", get)
 		r.setDescField(d, "set", set)
 	} else {
-		r.setDescField(d, "value", p.value)
-		r.setDescField(d, "writable", Bool(p.flags&propWritable != 0))
+		r.setDescField(d, "value", pd.value)
+		r.setDescField(d, "writable", Bool(pd.writable))
 	}
-	r.setDescField(d, "enumerable", Bool(p.flags&propEnumerable != 0))
-	r.setDescField(d, "configurable", Bool(p.flags&propConfigurable != 0))
+	r.setDescField(d, "enumerable", Bool(pd.enumerable))
+	r.setDescField(d, "configurable", Bool(pd.configurable))
 	return Obj(d)
 }
 

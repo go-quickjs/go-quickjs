@@ -285,8 +285,22 @@ func (o *Object) ownKeys(includeSymbols bool, atoms *atomTable) []Atom {
 	// property table, but they are own properties and must be listed.
 	if o.class == ClassTypedArray {
 		if t, ok := o.data.(*typedArrayData); ok {
-			for i := 0; i < t.length; i++ {
+			for i := 0; i < t.count(); i++ {
 				keys = append(keys, internIndex(uint32(i)))
+			}
+		}
+	}
+
+	// A String object's characters are own properties too, indexed and
+	// enumerable, which is what makes Object.keys(new String("ab")) list them.
+	// Its length is one as well, synthesized on demand like a function's.
+	if o.class == ClassStringWrapper {
+		if s, ok := o.data.(*String); ok {
+			for i := 0; i < s.Len(); i++ {
+				keys = append(keys, internIndex(uint32(i)))
+			}
+			if o.getOwn(atomLength) == nil {
+				keys = append(keys, atomLength)
 			}
 		}
 	}

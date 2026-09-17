@@ -388,3 +388,52 @@ func TestObjectPatternRequiresCoercible(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// A String object is a box round an immutable string, and its characters are
+// own properties: indexed, enumerable, read-only and not configurable. Its
+// length is one too, and is not enumerable.
+func TestStringObjectIndices(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`Object.keys("ab").join(",")`, "0,1"},
+		{`Object.getOwnPropertyNames("ab").join(",")`, "0,1,length"},
+		{`Object.keys(new String("ab")).join(",")`, "0,1"},
+		{`JSON.stringify(Object.entries("ab"))`, `[["0","a"],["1","b"]]`},
+		{`JSON.stringify(Object.getOwnPropertyDescriptor(new String("ab"), "0"))`,
+			`{"value":"a","writable":false,"enumerable":true,"configurable":false}`},
+		{`JSON.stringify(Object.getOwnPropertyDescriptor(new String("ab"), "length"))`,
+			`{"value":2,"writable":false,"enumerable":false,"configurable":false}`},
+		{`String(Object.getOwnPropertyDescriptor(new String("ab"), "5"))`, "undefined"},
+		// Characters come first, then anything the object was given.
+		{`var s = new String("ab"); s.x = 1; Object.keys(s).join(",")`, "0,1,x"},
+		{`var out = []; for (var k in "ab") out.push(k); out.join(",")`, "0,1"},
+
+		{`String(Object.setPrototypeOf(1, null))`, "1"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+
+	for _, src := range []string{
+		// The target is checked before the prototype, so the more obvious
+		// mistake is the one reported.
+		`Object.setPrototypeOf(null, {})`,
+		`Object.setPrototypeOf(undefined, {})`,
+		`Object.setPrototypeOf(null, 1)`,
+	} {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil {
+			t.Errorf("%s: accepted, want TypeError", src)
+		} else if !strings.Contains(err.Error(), "TypeError") {
+			t.Errorf("%s: got %v, want TypeError", src, err)
+		}
+		rt.Close()
+	}
+}

@@ -237,6 +237,30 @@ func (r *Runtime) currentDescriptor(o *Object, key Atom) *propDesc {
 			}
 		}
 	}
+	if o.class == ClassStringWrapper {
+		// A String object's characters are own properties, read-only and not
+		// configurable: the object is a box round an immutable string, and its
+		// length says the same.
+		if s, ok := o.data.(*String); ok {
+			if key.IsIndex() && int(key.Index()) < s.Len() {
+				i := int(key.Index())
+				return &propDesc{
+					value: Str(s.Substring(i, i+1)), hasValue: true,
+					writable: false, hasWritable: true,
+					enumerable: true, hasEnumerable: true,
+					configurable: false, hasConfigurable: true,
+				}
+			}
+			if key == atomLength && o.getOwn(atomLength) == nil {
+				return &propDesc{
+					value: Int(s.Len()), hasValue: true,
+					writable: false, hasWritable: true,
+					enumerable: false, hasEnumerable: true,
+					configurable: false, hasConfigurable: true,
+				}
+			}
+		}
+	}
 	if key.IsIndex() {
 		if v, ok := o.getElem(key.Index()); ok {
 			// A dense element is a plain data property with every attribute on.
