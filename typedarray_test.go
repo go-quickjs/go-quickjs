@@ -1,6 +1,7 @@
 package quickjs_test
 
 import (
+	"strings"
 	"testing"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
@@ -192,5 +193,63 @@ func TestTypedArrayConstructorSources(t *testing.T) {
 			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
 		}
 		rt.Close()
+	}
+}
+
+// An over-large view is refused before anything is allocated, whichever way its
+// length was arrived at. Allocating first and failing afterwards means there is
+// nothing left to fail with.
+func TestTypedArrayLengthLimits(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`try { new Uint8Array(4294967296) } catch (e) { e.constructor.name }`, "RangeError"},
+		{`try { new Uint8Array(-1) } catch (e) { e.constructor.name }`, "RangeError"},
+		{`try { new Float64Array(2 ** 53) } catch (e) { e.constructor.name }`, "RangeError"},
+		// From an array-like, the reported length decides before any element is
+		// read.
+		{`try { new Uint8Array({length: 4294967296}) } catch (e) { e.constructor.name }`,
+			"RangeError"},
+		{`try { new Float64Array({length: 4294967296}) } catch (e) { e.constructor.name }`,
+			"RangeError"},
+
+		// The ordinary sizes are unchanged.
+		{`String(new Uint8Array(3).length)`, "3"},
+		{`new Uint8Array({length: 2, 0: 7, 1: 8}).join(",")`, "7,8"},
+		{`new Uint8Array([1, 2]).join(",")`, "1,2"},
+		{`new Uint8Array(new Set([1, 2])).join(",")`, "1,2"},
+		{`Uint8Array.from([1, 2]).join(",")`, "1,2"},
+		// A reported length is honoured even where the elements are missing.
+		{`String(new Uint8Array({length: 3}).join(","))`, "0,0,0"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}
+
+// An iterable is never asked how long it is, so what refuses an over-long one
+// is the count of what it has produced -- which means the refusal arrives only
+// after a great many elements, and has to arrive rather than not.
+func TestTypedArrayFromEndlessIterable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("the refusal only arrives after the element limit is reached")
+	}
+	rt := quickjs.New()
+	defer rt.Close()
+
+	_, err := rt.Eval(`new Uint8Array({[Symbol.iterator]: () => ({
+	  next: () => ({value: 0, done: false}),
+	})})`)
+	if err == nil {
+		t.Fatal("an endless source should have been refused")
+	}
+	if !strings.Contains(err.Error(), "RangeError") {
+		t.Errorf("got %v, want RangeError", err)
 	}
 }

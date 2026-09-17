@@ -467,15 +467,46 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 		}
 		if isCallable(method) {
 			if err := r.iterate(first, func(v Value) error {
+				// The iterable is not asked how long it is, so the refusal has
+				// to come from the count: collecting more than could ever be
+				// allocated is how a four-billion-element source takes the
+				// process down instead of throwing.
+				if int64(len(items)) >= maxTypedArrayLength {
+					return r.throwRangeError("the typed array length is too large")
+				}
 				items = append(items, v)
 				return nil
 			}); err != nil {
 				return Undefined, err
 			}
-		} else if items, err = r.arrayToSlice(first); err != nil {
+		} else {
+			// The array-like path allocates from the reported length before it
+			// reads anything, which is what stops {length: 2**32} from being
+			// walked -- and what makes the refusal a RangeError rather than an
+			// exhausted machine.
+			src, err := r.viewArrayLike(first)
+			if err != nil {
+				return Undefined, err
+			}
+			t, err := r.allocTypedArrayChecked(o, kind, src.n)
+			if err != nil {
+				return Undefined, err
+			}
+			for i := int64(0); i < src.n; i++ {
+				v, err := src.get(r, i)
+				if err != nil {
+					return Undefined, err
+				}
+				if err := r.setElem(t, int(i), v); err != nil {
+					return Undefined, err
+				}
+			}
+			return Obj(o), nil
+		}
+		t, err := r.allocTypedArrayChecked(o, kind, int64(len(items)))
+		if err != nil {
 			return Undefined, err
 		}
-		t := r.allocTypedArray(o, kind, len(items))
 		for i, v := range items {
 			if err := r.setElem(t, i, v); err != nil {
 				return Undefined, err
@@ -488,12 +519,29 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 		if err != nil {
 			return Undefined, err
 		}
-		if n > 1<<28 {
-			return Undefined, r.throwRangeError("the typed array length is too large")
+		if _, err := r.allocTypedArrayChecked(o, kind, int64(n)); err != nil {
+			return Undefined, err
 		}
-		r.allocTypedArray(o, kind, int(n))
 		return Obj(o), nil
 	}
+}
+
+// maxTypedArrayLength bounds how many elements a view may have.
+//
+// The specification allows up to 2**53-1, which no machine can hold. The point
+// of the bound is that an over-large request is refused before anything is
+// allocated, so a script asking for one gets a RangeError rather than taking
+// the process down with it.
+const maxTypedArrayLength = 1 << 28
+
+// allocTypedArrayChecked allocates a view's buffer, refusing a length that
+// could not be held.
+func (r *Runtime) allocTypedArrayChecked(o *Object, kind elemType, n int64) (*typedArrayData, error) {
+	if n < 0 || n > maxTypedArrayLength ||
+		n*int64(elemInfos[kind].size) > maxTypedArrayLength*8 {
+		return nil, r.throwRangeError("the typed array length is too large")
+	}
+	return r.allocTypedArray(o, kind, int(n)), nil
 }
 
 // allocTypedArray gives a view its own freshly allocated buffer.

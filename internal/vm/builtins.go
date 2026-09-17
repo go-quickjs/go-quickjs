@@ -683,6 +683,11 @@ func (r *Runtime) arrayToSlice(v Value) ([]Value, error) {
 	}
 	out := make([]Value, 0, min(int(n), 1024))
 	for i := int64(0); i < n; i++ {
+		// A length is whatever the object says it is, and may be 2**53-1 with
+		// nothing behind it, so the walk has to stay interruptible.
+		if err := r.tick(); err != nil {
+			return nil, err
+		}
 		el, err := r.getProp(o, internIndex(uint32(i)), v)
 		if err != nil {
 			return nil, err
