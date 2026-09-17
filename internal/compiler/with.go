@@ -87,6 +87,29 @@ func (c *compiler) withLimit(name string) int {
 	return limit
 }
 
+// checkGlobalRef emits the check that a name is resolvable, which strict mode
+// requires before assigning to one.
+//
+// Only a name that resolves to nothing the compiler can see needs it: a local,
+// an upvalue or a binding of the module's own environment is resolvable by
+// construction, and sloppy code creates the global rather than refusing.
+func (c *compiler) checkGlobalRef(n *ast.Ident) bool {
+	if !c.fn.Strict {
+		return false
+	}
+	if _, ok := c.resolveLocal(n.Name); ok {
+		return false
+	}
+	if _, ok := c.resolveUpvalue(n.Name); ok {
+		return false
+	}
+	if c.globalLex[n.Name] || c.isModuleLex(n.Name) || c.withLimit(n.Name) > 0 {
+		return false
+	}
+	c.emitAt(n.Start, bytecode.OpCheckGlobalRef, c.nameIdx(n.Name), 0)
+	return true
+}
+
 // patchWithProbe points a probe past the static instruction it guards.
 func (c *compiler) patchWithProbe(pc int) {
 	if pc < 0 {

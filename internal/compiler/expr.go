@@ -1193,6 +1193,18 @@ func (c *compiler) compileAssign(n *ast.Assign) {
 			c.endWithRef(id)
 			return
 		}
+		if id, ok := n.Target.(*ast.Ident); ok && c.checkGlobalRef(id) {
+			// In strict mode a name that resolves to nothing cannot be
+			// assigned to, and it is the reference that is unresolvable rather
+			// than the assignment: what the name resolves to is settled before
+			// the value is evaluated and reported after it. A value that
+			// creates the global does not excuse the assignment, and a value
+			// that throws is what the assignment reports.
+			c.compileExprNamed(n.Value, nameOf(n.Target))
+			c.emitAt(id.Start, bytecode.OpAssertResolved, c.nameIdx(id.Name), 0)
+			c.assignTo(n.Target, false)
+			return
+		}
 		c.compileExprNamed(n.Value, nameOf(n.Target))
 		c.assignTo(n.Target, false)
 

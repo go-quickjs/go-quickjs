@@ -1140,6 +1140,12 @@ func stackEffect(op bytecode.Op, a, b uint32) int {
 		bytecode.OpIsNullish:
 		return 1
 
+	case bytecode.OpCheckGlobalRef:
+		// Pushes what the reference resolved to, which the store consumes.
+		return 1
+	case bytecode.OpAssertResolved:
+		return -1
+
 	case bytecode.OpDup2:
 		return 2
 

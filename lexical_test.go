@@ -740,3 +740,35 @@ func TestFinallyCompletionValues(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// In strict mode a name that resolves to nothing cannot be assigned to, and it
+// is the reference that is unresolvable rather than the assignment: what the
+// name resolves to is settled before the value is evaluated and reported after
+// it.
+func TestStrictAssignmentToAnUnresolvableName(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// A value that creates the global does not excuse the assignment.
+		{`"use strict"
+		  try { undeclared = (globalThis.undeclared = 5); "no throw" }
+		  catch (e) { e.constructor.name }`, "ReferenceError"},
+		{`"use strict"; try { missing = 1; "no throw" } catch (e) { e.constructor.name }`,
+			"ReferenceError"},
+		// A value that throws is what the assignment reports.
+		{`"use strict"
+		  try { s = (new Number("a")).toFixed(Infinity); "no throw" }
+		  catch (e) { e.constructor.name }`, "RangeError"},
+		// A name that is there is assigned to as usual.
+		{`"use strict"; globalThis.declared = 1; declared = 2; String(globalThis.declared)`, "2"},
+		{`"use strict"; var v = 1; v = 2; String(v)`, "2"},
+		{`"use strict"; let l = 1; l = 2; String(l)`, "2"},
+		{`(function () { "use strict"; var inner = 1; inner = 2; return String(inner) })()`, "2"},
+		// Sloppy mode creates the global instead.
+		{`sloppy = 5; String(sloppy)`, "5"},
+		// The name is still inferred only for a plain target.
+		{`"use strict"; globalThis.fn = null; fn = function () {}; fn.name`, "fn"},
+		{`"use strict"; globalThis.fn2 = null; (fn2) = function () {}; String(fn2.name)`, ""},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

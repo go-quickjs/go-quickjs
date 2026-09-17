@@ -322,6 +322,7 @@ func (f *Function) disassembleTo(sb *strings.Builder, indent string) {
 		case OpGetProp, OpSetProp, OpGetPropThis, OpDefineField,
 			OpGetGlobal, OpGetGlobalOpt, OpSetGlobal, OpDefineGlobalVar,
 			OpDefineGlobalFunc, OpSetName, OpGetSuperProp, OpSetSuperProp,
+			OpCheckGlobalRef, OpAssertResolved,
 			OpGetPrivate, OpSetPrivate, OpDefinePrivate, OpPrivateIn,
 			OpDefinePrivateMethod,
 			OpGetPrivateMethod, OpDefineGetter, OpDefineSetter:

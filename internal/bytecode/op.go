@@ -399,6 +399,15 @@ const (
 	// it, which is what a plain assignment needs: the reference is settled
 	// before the value is evaluated, but nothing is read from it.
 	OpWithResolve
+	// OpCheckGlobalRef reports a name that is nowhere to be found, which strict
+	// mode refuses to assign to. It runs where the reference is evaluated,
+	// before the value is, so that a value which creates the global does not
+	// make the assignment legal after the fact.
+	OpCheckGlobalRef
+	// OpAssertResolved reports the name in Names[A] as unresolvable when the
+	// answer OpCheckGlobalRef left beneath the value says it was, and removes
+	// that answer either way.
+	OpAssertResolved
 	OpSetName // give an anonymous function the name in Names[A]
 	OpSetHomeObject
 	// OpSetFieldInit hands a class its instance initializer: the function that
@@ -553,6 +562,8 @@ var opNames = [opCount]string{
 	OpWithGetUnder: "with_get_under", OpWithPutUnder: "with_put_under",
 	OpWithResolve: "with_resolve",
 	OpSetName:     "set_name", OpSetHomeObject: "set_home_object",
+	OpCheckGlobalRef:   "check_global_ref",
+	OpAssertResolved:   "assert_resolved",
 	OpSetFieldInit:     "set_field_init",
 	OpCheckThisInit:    "check_this_init",
 	OpInitThis:         "init_this",

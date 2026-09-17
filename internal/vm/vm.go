@@ -733,6 +733,34 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				goto onError
 			}
 			push(v)
+		case bytecode.OpCheckGlobalRef:
+			// Whether the name resolves to anything is settled here, where the
+			// reference is evaluated, and the answer is carried to the store:
+			// a value that creates the global in the meantime does not make an
+			// unresolvable reference resolvable, and a value that throws is
+			// what the assignment reports rather than the reference.
+			name := cl.names[in.A]
+			env := cl.scope()
+			found := true
+			switch {
+			case f.evalVars != nil && evalVarProp(f.evalVars, name) != nil:
+			case r.globalLexProp(env, name) != nil:
+			case env != r.global && r.moduleLexProp(env, name) != nil:
+			default:
+				found = r.hasProp(env, name)
+			}
+			push(Bool(found))
+		case bytecode.OpAssertResolved:
+			// The answer the reference gave sits beneath the value. A name
+			// that resolved to nothing cannot be assigned to in strict mode,
+			// and that is reported now -- after the value, which may have
+			// thrown or created the global, and neither changes this.
+			if !r.stack[sp-2].Truthy() {
+				vmErr = r.throwReferenceError("%s is not defined", r.atoms.name(cl.names[in.A]))
+				goto onError
+			}
+			r.stack[sp-2] = r.stack[sp-1]
+			sp--
 		case bytecode.OpSetGlobal:
 			name := cl.names[in.A]
 			env := cl.scope()
