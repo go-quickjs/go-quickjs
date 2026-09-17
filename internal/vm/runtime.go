@@ -476,10 +476,9 @@ func (r *Runtime) throwSyntaxError(format string, args ...any) error {
 
 // newError builds an error object of the given kind.
 func (r *Runtime) newError(kind errorKind, msg string) *Object {
-	o := newObject(r.proto.nativeErrors[kind], ClassError)
 	// The message and the stack, and room for a cause: an error is built all
-	// at once and there is no sense growing its table twice on the way.
-	o.reserveProps(3)
+	// at once, so the table is made with it rather than grown twice on the way.
+	o := newLiteralObject(r.proto.nativeErrors[kind], ClassError, 3)
 	o.setOwnRaw(atomMessage, Str(NewString(msg)), propWritable|propConfigurable)
 	// The stack is materialized eagerly, because the frames are unwound by the
 	// time anything reads it.

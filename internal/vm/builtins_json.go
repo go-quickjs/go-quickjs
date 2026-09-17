@@ -632,7 +632,7 @@ func (p *jsonParser) parseObject() (Value, error) {
 	// growing the table from nothing costs an allocation per doubling. Room
 	// for a few, in the object's own allocation, pays for itself by the second
 	// key.
-	o := newLiteralObject(p.rt.proto.object, 0)
+	o := newLiteralObject(p.rt.proto.object, ClassObject, 0)
 	p.pos++ // consume '{'
 	p.skipSpace()
 	if p.pos < len(p.src) && p.src[p.pos] == '}' {

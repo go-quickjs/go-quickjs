@@ -192,16 +192,15 @@ type literalObject struct {
 	inline [3]Property
 }
 
-// newLiteralObject returns an ordinary object that is about to be given n
-// properties.
-func newLiteralObject(proto *Object, n int) *Object {
+// newLiteralObject returns an object that is about to be given n properties.
+func newLiteralObject(proto *Object, class Class, n int) *Object {
 	if n > len(literalObject{}.inline) {
-		o := &Object{proto: proto, class: ClassObject, flags: objExtensible}
+		o := &Object{proto: proto, class: class, flags: objExtensible}
 		o.props = make([]Property, 0, n)
 		return o
 	}
 	lo := &literalObject{
-		Object: Object{proto: proto, class: ClassObject, flags: objExtensible},
+		Object: Object{proto: proto, class: class, flags: objExtensible},
 	}
 	lo.props = lo.inline[:0]
 	return &lo.Object

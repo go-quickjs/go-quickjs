@@ -1677,7 +1677,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// The literal says how many properties it will write, so the table
 			// is sized for them -- and, when there are few enough, carried in
 			// the object's own allocation.
-			push(Obj(newLiteralObject(r.proto.object, int(in.A))))
+			push(Obj(newLiteralObject(r.proto.object, ClassObject, int(in.A))))
 		case bytecode.OpNewArray:
 			n := int(in.A)
 			arr := r.newArrayFrom(r.stack[sp-n : sp])
