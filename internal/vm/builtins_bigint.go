@@ -177,3 +177,16 @@ func (r *Runtime) bigIntAsN(args []Value, signed bool) (Value, error) {
 	b.V.Set(out)
 	return Big(b), nil
 }
+
+// bigIntToFloat converts a BigInt to the nearest Number.
+//
+// The conversion is lossy above 2**53 and infinite beyond the float range,
+// which is why it never happens implicitly: only Number(), and the comparison
+// operators, ask for it.
+func bigIntToFloat(b *BigInt) float64 {
+	if b == nil {
+		return 0
+	}
+	f, _ := new(big.Float).SetInt(&b.V).Float64()
+	return f
+}

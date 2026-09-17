@@ -476,3 +476,84 @@ func TestFunctionLength(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// `super` in a static field initializer or a static block resolves against the
+// parent class rather than its prototype, because the home object there is the
+// class itself.
+func TestSuperInStaticInitializers(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`class A { static m() { return 1 } } class B extends A { static x = super.m(); }
+		  String(B.x)`, "1"},
+		{`class A { static m() { return 2 } }
+		  class B extends A { static { B.y = super.m() } } String(B.y)`, "2"},
+		{`class A { static m() { return 3 } }
+		  class B extends A { static n() { return super.m() } } String(B.n())`, "3"},
+		{`class A { static get p() { return 5 } }
+		  class B extends A { static x = super.p; } String(B.x)`, "5"},
+		// An arrow in the initializer shares its super.
+		{`class A { static m() { return 6 } }
+		  class B extends A { static x = (() => super.m())(); } String(B.x)`, "6"},
+		// A static member sees the parent class, not its prototype, so an
+		// instance method is not there.
+		{`class A { m() { return 1 } }
+		  class B extends A { static x = typeof super.m; } B.x`, "undefined"},
+
+		// An instance field initializer resolves against the prototype, as a
+		// method does.
+		{`class A { m() { return 4 } } class B extends A { x = super.m(); }
+		  String(new B().x)`, "4"},
+		{`class A { m() { return 7 } } class B extends A { x = () => super.m(); }
+		  String(new B().x())`, "7"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}
+
+// Number is the one place a BigInt converts to a Number without complaint: it
+// is what a program asking for the conversion explicitly has written, rather
+// than one mixing the two kinds by accident.
+func TestNumberOfBigInt(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`String(Number(1n))`, "1"},
+		{`String(Number(-2n))`, "-2"},
+		// The conversion is lossy above 2**53, which is why it is never
+		// implicit.
+		{`String(Number(-9007199254740993n))`, "-9007199254740992"},
+		{`String(Number(2n ** 100n))`, "1.2676506002282294e+30"},
+		{`String(Number(Object(5n)))`, "5"},
+		{`String(new Number(3n).valueOf())`, "3"},
+
+		{`String(Number("3"))`, "3"},
+		{`String(Number())`, "0"},
+		{`String(Number(null))`, "0"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+
+	// Everything else still refuses to mix the two kinds.
+	for _, src := range []string{`1n + 1`, `+1n`, `Math.max(1n)`, `1n | 1`} {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil {
+			t.Errorf("%s: accepted, want TypeError", src)
+		}
+		rt.Close()
+	}
+}

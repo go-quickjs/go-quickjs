@@ -472,10 +472,25 @@ func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
 			// is produced here.
 			c.compileIdentRead(&ast.Ident{Name: keyNames[i], Start: f.Start})
 		}
-		if f.Value != nil {
-			c.compileExprNamed(f.Value, classFieldName(f.Key, f.Computed))
-		} else {
+		switch {
+		case f.Value == nil:
 			c.emit(bytecode.OpPushUndef, 0, 0)
+		case containsSuper(f.Value):
+			// A static initializer that mentions super is an immediately
+			// invoked method of the class, which is what gives it a home
+			// object to resolve super against. Only one that needs it pays for
+			// the call.
+			c.emit(bytecode.OpDup, 0, 0)
+			c.compileFunctionLiteral(&ast.FuncLit{
+				Kind:  ast.FuncMethod,
+				Body:  []ast.Stmt{&ast.ReturnStmt{Arg: f.Value, Start: f.Start}},
+				Start: f.Start,
+				End:   f.Start,
+			}, "")
+			c.emit(bytecode.OpSetHomeObject, 1, 0)
+			c.emit(bytecode.OpCallMethod, 0, 0)
+		default:
+			c.compileExprNamed(f.Value, classFieldName(f.Key, f.Computed))
 		}
 		switch {
 		case f.Computed:
@@ -503,6 +518,9 @@ func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
 			Body:  block,
 			Start: cls.Start,
 		}, "")
+		// Its home object is the class, so `super.x` there reads from the
+		// parent class rather than from the parent's prototype.
+		c.emit(bytecode.OpSetHomeObject, 1, 0)
 		c.emit(bytecode.OpCallMethod, 0, 0)
 		c.emit(bytecode.OpDrop, 0, 0)
 	}

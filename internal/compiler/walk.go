@@ -24,6 +24,20 @@ type argumentsScanner struct {
 	// the same walk: both are bindings an arrow shares with its enclosing
 	// function and an ordinary function does not.
 	seekThis bool
+	// seekSuper narrows that to `super` alone.
+	seekSuper bool
+}
+
+// containsSuper reports whether an expression mentions super outside any
+// function that would bind its own.
+//
+// It decides whether a static field initializer has to be an immediately
+// invoked method of the class, which is what gives super a home object to
+// resolve against. Only an initializer that needs one pays for the call.
+func containsSuper(e ast.Expr) bool {
+	w := &argumentsScanner{seekThis: true, seekSuper: true}
+	w.expr(e)
+	return w.found
 }
 
 // referencesThis reports whether a function body can observe its `this`.
@@ -144,7 +158,7 @@ func (w *argumentsScanner) expr(e ast.Expr) {
 			w.found = true
 		}
 	case *ast.This:
-		if w.seekThis {
+		if w.seekThis && !w.seekSuper {
 			w.found = true
 		}
 	case *ast.Super:

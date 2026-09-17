@@ -1597,11 +1597,23 @@ func (r *Runtime) initNumberBuiltins() {
 	ctor := r.newCtor("Number", 1, p, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		n := float64(0)
 		if len(args) > 0 {
-			v, err := rt.toNumber(args[0])
+			// Number is the one place a BigInt converts to a Number without
+			// complaint: it is what a program asking for the conversion
+			// explicitly has written, as opposed to one mixing the two kinds
+			// by accident.
+			prim, err := rt.toPrimitive(args[0], hintNumber)
 			if err != nil {
 				return Undefined, err
 			}
-			n = v
+			if prim.IsBigInt() {
+				n = bigIntToFloat(prim.BigInt())
+			} else {
+				v, err := rt.toNumber(prim)
+				if err != nil {
+					return Undefined, err
+				}
+				n = v
+			}
 		}
 		if !rt.Constructing() {
 			return Float(n), nil
