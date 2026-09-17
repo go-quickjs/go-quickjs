@@ -630,6 +630,12 @@ func (r *Runtime) initFunctionBuiltins() {
 			return Undefined, rt.throwTypeError("Function.prototype.toString requires a function")
 		}
 		fd := this.Object().fn()
+		// A proxy is callable when its target is, but carries no function data
+		// of its own and no source text either. The native form is the answer
+		// the specification requires for anything without source.
+		if fd == nil {
+			return Str(NewString("function () { [native code] }")), nil
+		}
 		if fd.closure != nil && fd.closure.fn.Text != "" {
 			return Str(NewString(fd.closure.fn.Text)), nil
 		}

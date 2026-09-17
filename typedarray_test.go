@@ -395,3 +395,46 @@ func TestTypedArrayIndicesAreNotProperties(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// A buffer can go away underneath a view at any point -- a valueOf called while
+// a method is running is enough -- so every read and write is measured against
+// what is there now rather than against what was there when the view was made.
+func TestTypedArrayDetachDuringUse(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// A view over a buffer that has gone is empty, not broken.
+		{`var a = new Uint8Array(8); a.buffer.transfer();
+		  [a.length, a.byteLength, a.byteOffset].join(",")`, "0,0,0"},
+		{`var a = new Uint8Array(8); a.buffer.transfer(); String(a[0])`, "undefined"},
+		{`var a = new Uint8Array(8); a.buffer.transfer(); String(0 in a)`, "false"},
+
+		// Detaching part-way through an operation stops it rather than
+		// crashing it.
+		{`var a = new Uint8Array(8);
+		  a.fill(1, {valueOf() { a.buffer.transfer(); return 0 }}); "ok"`, "ok"},
+		{`var a = new Uint8Array(8);
+		  a.slice(0, {valueOf() { a.buffer.transfer(); return 8 }}); "ok"`, "ok"},
+		{`var a = new Uint8Array(8);
+		  a.copyWithin(0, 1, {valueOf() { a.buffer.transfer(); return 8 }}); "ok"`, "ok"},
+		{`var a = new Uint8Array(8);
+		  a.set(new Uint8Array(2), {valueOf() { a.buffer.transfer(); return 0 }}); "ok"`, "ok"},
+		{`var a = new Uint8Array(8);
+		  a[0] = {valueOf() { a.buffer.transfer(); return 1 }}; String(a.length)`, "0"},
+
+		// A proxy of a function is callable but has no source of its own.
+		{`var p = new Proxy(function () {}, {}); String(p)`,
+			"function () { [native code] }"},
+		{`var p = new Proxy(() => 1, {}); p.toString()`,
+			"function () { [native code] }"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

@@ -81,6 +81,42 @@ func (t *typedArrayData) storage() *arrayBufferData {
 	return b
 }
 
+// count is how many elements are actually there.
+//
+// It is not t.length: the buffer can go away underneath a view at any point --
+// a valueOf called while a method is running is enough -- and every read and
+// write has to be measured against what is there now rather than against what
+// was there when the view was made. Answering zero is what turns a detached
+// buffer into an out-of-range access instead of a crash.
+func (t *typedArrayData) count() int {
+	b := t.storage()
+	if b == nil || b.detached {
+		return 0
+	}
+	n := (len(b.bytes) - t.byteOffset) / t.info().size
+	if n > t.length {
+		n = t.length
+	}
+	if n < 0 {
+		return 0
+	}
+	return n
+}
+
+// typedArrayDataOf recovers a view from a receiver without insisting that its
+// buffer is still there, which the size getters need: a detached view is empty
+// rather than an error.
+func (r *Runtime) typedArrayDataOf(this Value, name string) (*typedArrayData, error) {
+	if !this.IsObject() || this.Object().class != ClassTypedArray {
+		return nil, r.throwTypeError("%s called on an incompatible receiver", name)
+	}
+	t, ok := this.Object().data.(*typedArrayData)
+	if !ok {
+		return nil, r.throwTypeError("%s called on an uninitialized typed array", name)
+	}
+	return t, nil
+}
+
 // typedArrayOf recovers a view from a receiver.
 func (r *Runtime) typedArrayOf(this Value, name string) (*typedArrayData, error) {
 	if !this.IsObject() || this.Object().class != ClassTypedArray {
@@ -98,7 +134,7 @@ func (r *Runtime) typedArrayOf(this Value, name string) (*typedArrayData, error)
 
 // getElem reads one element as a JavaScript value.
 func (t *typedArrayData) getElem(i int) Value {
-	if i < 0 || i >= t.length {
+	if i < 0 || i >= t.count() {
 		return Undefined
 	}
 	b := t.storage().bytes
@@ -135,7 +171,31 @@ func (t *typedArrayData) getElem(i int) Value {
 
 // setElem writes one element, applying the conversion its type requires.
 func (r *Runtime) setElem(t *typedArrayData, i int, v Value) error {
-	if i < 0 || i >= t.length {
+	// The conversion comes first and happens whether or not the write lands:
+	// a valueOf can detach the buffer, and the specification orders the
+	// coercion before the bounds check precisely so that it still runs.
+	var (
+		n  float64
+		bv *BigInt
+	)
+	if t.info().big {
+		// ToBigInt, not a type check: a string or a boolean converts, and only
+		// a Number is refused -- mixing the two kinds is almost always a
+		// mistake rather than a request to convert.
+		var err error
+		if bv, err = r.toBigIntOperand(v); err != nil {
+			return err
+		}
+	} else {
+		var err error
+		if n, err = r.toNumber(v); err != nil {
+			return err
+		}
+	}
+
+	// Re-measured after the conversion, because the conversion may have taken
+	// the buffer away.
+	if i < 0 || i >= t.count() {
 		// Writing out of range is silently ignored, which is what makes a
 		// typed array not grow.
 		return nil
@@ -144,21 +204,10 @@ func (r *Runtime) setElem(t *typedArrayData, i int, v Value) error {
 	off := t.byteOffset + i*t.info().size
 
 	if t.info().big {
-		// ToBigInt, not a type check: a string or a boolean converts, and only
-		// a Number is refused -- mixing the two kinds is almost always a
-		// mistake rather than a request to convert.
-		bv, err := r.toBigIntOperand(v)
-		if err != nil {
-			return err
-		}
 		binary.LittleEndian.PutUint64(b[off:], bigLowUint64(bv))
 		return nil
 	}
 
-	n, err := r.toNumber(v)
-	if err != nil {
-		return err
-	}
 	switch t.kind {
 	case elemInt8:
 		b[off] = byte(int8(toInt32Wrap(n)))
@@ -560,24 +609,30 @@ func (r *Runtime) allocTypedArray(o *Object, kind elemType, length int) *typedAr
 }
 
 func (r *Runtime) defineTypedArrayMethods(p *Object) {
+	// The three size getters answer zero for a detached view rather than
+	// throwing. A view over a buffer that has gone is empty, not broken, and a
+	// script asking how long it is deserves that answer.
 	r.defGetter(p, "length", func(rt *Runtime, this Value, args []Value) (Value, error) {
-		t, err := rt.typedArrayOf(this, "length")
+		t, err := rt.typedArrayDataOf(this, "length")
 		if err != nil {
 			return Undefined, err
 		}
-		return Int(t.length), nil
+		return Int(t.count()), nil
 	})
 	r.defGetter(p, "byteLength", func(rt *Runtime, this Value, args []Value) (Value, error) {
-		t, err := rt.typedArrayOf(this, "byteLength")
+		t, err := rt.typedArrayDataOf(this, "byteLength")
 		if err != nil {
 			return Undefined, err
 		}
-		return Int(t.length * t.info().size), nil
+		return Int(t.count() * t.info().size), nil
 	})
 	r.defGetter(p, "byteOffset", func(rt *Runtime, this Value, args []Value) (Value, error) {
-		t, err := rt.typedArrayOf(this, "byteOffset")
+		t, err := rt.typedArrayDataOf(this, "byteOffset")
 		if err != nil {
 			return Undefined, err
+		}
+		if t.count() == 0 && t.storage().detached {
+			return Int(0), nil
 		}
 		return Int(t.byteOffset), nil
 	})

@@ -64,7 +64,9 @@ func (r *Runtime) getExoticNamed(o *Object, key Atom) (Value, bool, error) {
 	case ClassTypedArray:
 		if key == atomLength {
 			if t, ok := o.data.(*typedArrayData); ok {
-				return Int(t.length), true, nil
+				// A view over a buffer that has gone is empty, not eight
+				// elements of nothing.
+				return Int(t.count()), true, nil
 			}
 		}
 		// A numeric key is answered from the buffer or not at all. It is never
