@@ -2,6 +2,7 @@ package vm
 
 import (
 	"math"
+	"math/big"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jsnum"
@@ -1061,6 +1062,17 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		// --- Bitwise ------------------------------------------------------
 		case bytecode.OpBitAnd, bytecode.OpBitOr, bytecode.OpBitXor:
 			b, a := pop(), pop()
+			if !a.IsNumber() || !b.IsNumber() {
+				v, done, err := r.bigBitwise(in.Op, a, b)
+				if err != nil {
+					vmErr = err
+					goto onError
+				}
+				if done {
+					push(v)
+					break
+				}
+			}
 			x, err := r.toInt32(a)
 			if err != nil {
 				vmErr = err
@@ -1080,7 +1092,24 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				push(Int32(x ^ y))
 			}
 		case bytecode.OpBitNot:
-			x, err := r.toInt32(pop())
+			v := pop()
+			if !v.IsNumber() {
+				n, err := r.toNumeric(v)
+				if err != nil {
+					vmErr = err
+					goto onError
+				}
+				if n.IsBigInt() {
+					// A BigInt has no width, so the complement is simply
+					// -(x+1) -- which is what Not computes.
+					out := &BigInt{}
+					out.V.Not(&n.BigInt().V)
+					push(Big(out))
+					break
+				}
+				v = n
+			}
+			x, err := r.toInt32(v)
 			if err != nil {
 				vmErr = err
 				goto onError
@@ -1088,6 +1117,17 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			push(Int32(^x))
 		case bytecode.OpShl, bytecode.OpShr:
 			b, a := pop(), pop()
+			if !a.IsNumber() || !b.IsNumber() {
+				v, done, err := r.bigBitwise(in.Op, a, b)
+				if err != nil {
+					vmErr = err
+					goto onError
+				}
+				if done {
+					push(v)
+					break
+				}
+			}
 			x, err := r.toInt32(a)
 			if err != nil {
 				vmErr = err
@@ -1106,6 +1146,25 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 		case bytecode.OpUShr:
 			b, a := pop(), pop()
+			if !a.IsNumber() || !b.IsNumber() {
+				// Unsigned shift has no BigInt form: a BigInt has no width for
+				// the sign bit to be shifted out of.
+				na, err := r.toNumeric(a)
+				if err != nil {
+					vmErr = err
+					goto onError
+				}
+				nb, err := r.toNumeric(b)
+				if err != nil {
+					vmErr = err
+					goto onError
+				}
+				if na.IsBigInt() || nb.IsBigInt() {
+					vmErr = r.throwTypeError("BigInt has no unsigned right shift")
+					goto onError
+				}
+				a, b = na, nb
+			}
 			x, err := r.toUint32(a)
 			if err != nil {
 				vmErr = err
@@ -2743,6 +2802,68 @@ func (r *Runtime) arith(op bytecode.Op, a, b Value) (Value, error) {
 		return r.bigArith(op, na.BigInt(), nb.BigInt())
 	}
 	return Float(numericOp(op, na.Number(), nb.Number())), nil
+}
+
+// bigBitwise applies a bitwise or shift operator when either side may be a
+// BigInt, reporting whether it handled the operation.
+//
+// It reports false when both sides turn out to be numbers, leaving the caller
+// to take its own faster path.
+func (r *Runtime) bigBitwise(op bytecode.Op, a, b Value) (Value, bool, error) {
+	na, err := r.toNumeric(a)
+	if err != nil {
+		return Undefined, false, err
+	}
+	nb, err := r.toNumeric(b)
+	if err != nil {
+		return Undefined, false, err
+	}
+	if !na.IsBigInt() && !nb.IsBigInt() {
+		return Undefined, false, nil
+	}
+	if na.IsBigInt() != nb.IsBigInt() {
+		return Undefined, false, r.throwTypeError("cannot mix BigInt and other types")
+	}
+
+	x, y := &na.BigInt().V, &nb.BigInt().V
+	out := &BigInt{}
+	switch op {
+	case bytecode.OpBitAnd:
+		out.V.And(x, y)
+	case bytecode.OpBitOr:
+		out.V.Or(x, y)
+	case bytecode.OpBitXor:
+		out.V.Xor(x, y)
+	case bytecode.OpShl, bytecode.OpShr:
+		// A BigInt shift has no width to wrap around, so the count is taken
+		// whole -- and a negative one shifts the other way.
+		n := y
+		left := op == bytecode.OpShl
+		if n.Sign() < 0 {
+			neg := new(big.Int).Neg(n)
+			n, left = neg, !left
+		}
+		if !n.IsInt64() || n.Int64() > 1<<24 {
+			if left {
+				return Undefined, false, r.throwRangeError("BigInt shift is too large")
+			}
+			// Shifting right past every bit leaves the sign: zero, or minus
+			// one for a negative value.
+			if x.Sign() < 0 {
+				out.V.SetInt64(-1)
+			}
+			break
+		}
+		if left {
+			out.V.Lsh(x, uint(n.Int64()))
+		} else {
+			// An arithmetic shift, which big.Int's Rsh already is.
+			out.V.Rsh(x, uint(n.Int64()))
+		}
+	default:
+		return Undefined, false, r.throwTypeError("unsupported BigInt operation")
+	}
+	return Big(out), true, nil
 }
 
 // negate implements unary minus.

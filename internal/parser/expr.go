@@ -2,6 +2,7 @@ package parser
 
 import (
 	"fmt"
+	"math/big"
 
 	"github.com/go-quickjs/go-quickjs/internal/ast"
 	"github.com/go-quickjs/go-quickjs/internal/lexer"
@@ -959,6 +960,12 @@ func (p *parser) parsePropertyName(allowPrivate bool) (ast.Expr, bool) {
 		v := p.tok.Num
 		p.next()
 		return p.nodes.number(v, start), false
+	case lexer.BigInt:
+		// A BigInt literal names a property by the digits it is written with,
+		// which is what ToString of the BigInt gives: {1n: x} is {"1": x}.
+		v := p.tok.Value
+		p.next()
+		return p.nodes.str(bigIntKeyName(v), start), false
 	case lexer.PrivateIdent:
 		v := p.tok.Value
 		if !allowPrivate {
@@ -975,6 +982,27 @@ func (p *parser) parsePropertyName(allowPrivate bool) (ast.Expr, bool) {
 		}
 	}
 	return p.parseIdentName(), false
+}
+
+// bigIntKeyName renders a BigInt literal as the property name it denotes,
+// which is its decimal value without the n.
+func bigIntKeyName(raw string) string {
+	var v big.Int
+	text, base := raw, 10
+	if len(text) > 2 && text[0] == '0' {
+		switch text[1] {
+		case 'x', 'X':
+			text, base = text[2:], 16
+		case 'o', 'O':
+			text, base = text[2:], 8
+		case 'b', 'B':
+			text, base = text[2:], 2
+		}
+	}
+	if _, ok := v.SetString(text, base); !ok {
+		return raw
+	}
+	return v.String()
 }
 
 // startsTemplate reports whether the current token begins a template literal,

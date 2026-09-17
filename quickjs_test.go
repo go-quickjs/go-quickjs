@@ -3512,3 +3512,51 @@ func TestFunctionExpressionName(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestBigIntBitwise covers the bitwise operators on BigInts, which have no
+// width: the result is whatever the arithmetic says, not a wrapped 32 bits.
+func TestBigIntBitwise(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`String(12n & 10n)`, "8"},
+		{`String(12n | 10n)`, "14"},
+		{`String(12n ^ 10n)`, "6"},
+		{`String(~5n)`, "-6"},
+		{`String(~(-1n))`, "0"},
+		{`String(1n << 64n)`, "18446744073709551616"},
+		{`String(16n >> 2n)`, "4"},
+		{`String(-16n >> 2n)`, "-4"},
+		// Shifting past every bit leaves the sign.
+		{`String(1n >> 100n)`, "0"},
+		{`String(-1n >> 100n)`, "-1"},
+		// A negative count shifts the other way.
+		{`String(1n << -1n)`, "0"},
+		{`String(4n >> -1n)`, "8"},
+		// The operands are coerced, and mixing kinds is an error.
+		{`String(1n >> {valueOf() { return 1n }})`, "0"},
+		{`try { 1n << 1 } catch (e) { e.constructor.name }`, "TypeError"},
+		{`try { 1 & 1n } catch (e) { e.constructor.name }`, "TypeError"},
+		// There is no unsigned shift: a BigInt has no sign bit to shift out.
+		{`try { 1n >>> 1n } catch (e) { e.constructor.name }`, "TypeError"},
+		// Numbers are unaffected.
+		{`String(12 & 10) + "," + String(1 << 31) + "," + String(-1 >>> 0)`,
+			"8,-2147483648,4294967295"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// TestBigIntPropertyKey covers a BigInt literal used as a property name, which
+// names the property its digits spell.
+func TestBigIntPropertyKey(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`Object.keys({999999999999999999n: 1}).join()`, "999999999999999999"},
+		{`Object.keys({1n: "a", 0x10n: "b"}).join()`, "1,16"},
+		{`JSON.stringify({1n: "a"})`, `{"1":"a"}`},
+		{`({1n: "a"})[1]`, "a"},
+		{`class C { 1n = 2 } Object.keys(new C()).join()`, "1"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
