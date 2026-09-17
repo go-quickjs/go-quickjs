@@ -295,3 +295,52 @@ func TestArrayLengthCoercionOrder(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
 	}
 }
+
+// An array index goes up to 2**32-2, which is more than fits beside the tag in
+// an atom -- so the largest ones are spelled out. They address elements all the
+// same: they extend the length, they sort with the other indices, and
+// shortening the array removes them.
+func TestLargeArrayIndices(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"extends the length", `var a = []; a[4294967294] = 2; String(a.length)`, "4294967295"},
+		{"reads back", `var a = []; a[4294967294] = 2; String(a[4294967294])`, "2"},
+		{"just past the tag", `var a = []; a[2147483648] = 7
+		  a.length + "," + a[2147483648] + "," + Object.keys(a).join()`,
+			"2147483649,7,2147483648"},
+		{"not truncated", `var a = []; a[3000000000] = 2; String(a.length)`, "3000000001"},
+		// 2**32-1 is not an index: it is the one length an array cannot have,
+		// so the key is an ordinary name.
+		{"one past the last index", `var a = []; a[4294967295] = 7
+		  a.length + "," + Object.keys(a).join()`, "0,4294967295"},
+		{"sorts with the indices", `var a = [1]; a[4294967294] = 2; a[3] = 9
+		  Object.keys(a).join("|")`, "0|3|4294967294"},
+		{"before length", `var a = []; a[4294967294] = 2
+		  Object.getOwnPropertyNames(a).join("|")`, "4294967294|length"},
+		{"shortening removes it", `var a = []; a[4294967294] = 2; a.length = 0
+		  String(a[4294967294]) + "," + a.length`, "undefined,0"},
+		{"deletable", `var a = []; a[4294967294] = 2; delete a[4294967294]
+		  String(a[4294967294]) + "," + a.length`, "undefined,4294967295"},
+		{"searchable", `var a = []; a[4294967294] = 2; String(a.lastIndexOf(2))`, "4294967294"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}
+
+// lastIndexOf reads the length before converting where to start from, and a
+// starting point at or beyond the end means the whole array.
+func TestLastIndexOfArguments(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"empty answers first", `var fi = {valueOf: function () { throw new Error("read") }}
+		  String([].lastIndexOf(2, fi))`, "-1"},
+		{"infinite start", `String([1,2,1].lastIndexOf(1, Infinity))`, "2"},
+		{"infinite string start", `String([1,2,1].lastIndexOf(1, "Infinity"))`, "2"},
+		{"negative infinity", `String([1,2,1].lastIndexOf(1, -Infinity))`, "-1"},
+		{"from the end", `String([1,2,1].lastIndexOf(1, -1))`, "2"},
+		{"before the start", `String([1,2,1].lastIndexOf(1, -4))`, "-1"},
+		{"within", `String([1,2,1].lastIndexOf(1, 1))`, "0"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}

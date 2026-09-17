@@ -152,7 +152,7 @@ func (r *Runtime) iterNext(cursor Value) (Value, bool, error) {
 		if isHole(v) {
 			// A hole is read through the prototype chain, which is what the
 			// real iterator's Get would do.
-			got, err := r.getProp(st.arr, internIndex(uint32(i)), Obj(st.arr))
+			got, err := r.getProp(st.arr, r.atoms.indexAtom(uint32(i)), Obj(st.arr))
 			return got, err == nil, err
 		}
 		return v, true, nil
@@ -359,7 +359,7 @@ func (r *Runtime) copyDataProps(target *Object, src Value) error {
 	if src.IsString() {
 		s := src.String()
 		for i := 0; i < s.Len(); i++ {
-			if err := r.defineOwnProp(target, internIndex(uint32(i)),
+			if err := r.defineOwnProp(target, r.atoms.indexAtom(uint32(i)),
 				Str(s.Substring(i, i+1)), propDefault); err != nil {
 				return err
 			}

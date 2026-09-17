@@ -78,7 +78,7 @@ func (r *Runtime) lengthOf(o *Object) (int64, error) {
 // string key, which only an array-like with a length that large can reach.
 func (r *Runtime) indexKey(i int64) Atom {
 	if i >= 0 && i < 1<<32-1 {
-		return internIndex(uint32(i))
+		return r.atoms.indexAtom(uint32(i))
 	}
 	return r.atoms.intern(formatIndex(i))
 }

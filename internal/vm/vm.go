@@ -3449,8 +3449,8 @@ func (r *Runtime) templateObject(fn *bytecode.Function, idx int) *Object {
 	}
 
 	o := r.newArrayFrom(cooked)
-	o.setOwnRaw(atomRaw, Obj(freezeArray(r.newArrayFrom(raw))), 0)
-	freezeArray(o)
+	o.setOwnRaw(atomRaw, Obj(r.freezeArray(r.newArrayFrom(raw))), 0)
+	r.freezeArray(o)
 	cache[idx] = o
 	return o
 }
@@ -3458,10 +3458,10 @@ func (r *Runtime) templateObject(fn *bytecode.Function, idx int) *Object {
 // freezeArray makes an array's elements read-only, which the strings a tag
 // receives have to be: the same object is handed out again on the next call, so
 // a tag that wrote to it would be writing to every later call's argument.
-func freezeArray(o *Object) *Object {
+func (r *Runtime) freezeArray(o *Object) *Object {
 	for i, el := range o.elems {
 		if !isHole(el) {
-			o.setOwnRaw(internIndex(uint32(i)), el, propEnumerable)
+			o.setOwnRaw(r.atoms.indexAtom(uint32(i)), el, propEnumerable)
 		}
 	}
 	o.markSparse()

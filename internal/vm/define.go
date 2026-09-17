@@ -170,8 +170,10 @@ func (r *Runtime) defineProperty(o *Object, key Atom, d *propDesc) (bool, error)
 			return false, nil
 		}
 		r.installProperty(o, key, d, nil)
-		if o.class == ClassArray && key.IsIndex() {
-			r.growArrayLength(o, key.Index())
+		if o.class == ClassArray {
+			if ix, ok := r.atoms.arrayIndex(key); ok {
+				r.growArrayLength(o, ix)
+			}
 		}
 		return true, nil
 	}
@@ -489,7 +491,7 @@ func (r *Runtime) defineArrayLength(o *Object, d *propDesc) (bool, error) {
 		// asks for. Describing what is already there is still allowed.
 		return want == o.arrayLength() && !(d.hasWritable && d.writable), nil
 	}
-	reached := shrinkArray(o, want)
+	reached := shrinkArray(o, want, r.atoms)
 	o.setArrayLength(reached)
 	// The writability change applies even when the shortening stopped short,
 	// which is what stops a second attempt from getting any further.
@@ -506,32 +508,34 @@ func (r *Runtime) defineArrayLength(o *Object, d *propDesc) (bool, error) {
 // above it: an array never claims to be shorter than what it still holds. Only
 // an index redefined as non-configurable can refuse, so the dense elements --
 // which are configurable by construction -- always go.
-func shrinkArray(o *Object, newLen uint32) uint32 {
+func shrinkArray(o *Object, newLen uint32, atoms *atomTable) uint32 {
 	if newLen >= o.arrayLength() {
 		return newLen
 	}
 	stop := newLen
-	var keys []Atom
+	var keys []indexedAtom
 	for i := range o.props {
 		p := &o.props[i]
-		if p.flags&propDeleted != 0 || !p.key.IsIndex() {
+		if p.flags&propDeleted != 0 {
 			continue
 		}
-		if p.key.Index() >= newLen {
-			keys = append(keys, p.key)
+		ix, ok := atoms.arrayIndex(p.key)
+		if !ok || ix < newLen {
+			continue
 		}
+		keys = append(keys, indexedAtom{p.key, ix})
 	}
-	sortAtomsByIndex(keys)
+	sortIndexedAtoms(keys)
 	for j := len(keys) - 1; j >= 0; j-- {
-		p := o.getOwn(keys[j])
+		p := o.getOwn(keys[j].atom)
 		if p == nil {
 			continue
 		}
 		if p.flags&propConfigurable == 0 {
-			stop = keys[j].Index() + 1
+			stop = keys[j].index + 1
 			break
 		}
-		o.deleteOwn(keys[j])
+		o.deleteOwn(keys[j].atom)
 	}
 	return stop
 }
@@ -671,7 +675,7 @@ func (r *Runtime) preventExtensionsOf(o *Object) (bool, error) {
 	if len(o.elems) > 0 {
 		for i, el := range o.elems {
 			if !isHole(el) {
-				o.setOwnRaw(internIndex(uint32(i)), el, propDefault)
+				o.setOwnRaw(r.atoms.indexAtom(uint32(i)), el, propDefault)
 			}
 		}
 		o.markSparse()

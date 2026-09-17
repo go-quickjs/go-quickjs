@@ -452,19 +452,21 @@ func (r *Runtime) createOwnProp(o *Object, key Atom, val Value, strict bool) (bo
 			return false, r.assignFailed(key, strict,
 				"cannot assign to read-only property %q")
 		}
-		if key.IsIndex() {
-			if !o.IsExtensible() && int(key.Index()) >= len(o.elems) {
+		// The largest indices are spelled out rather than carried in the atom,
+		// and they are indices of the array all the same.
+		if ix, ok := r.atoms.arrayIndex(key); ok {
+			if !o.IsExtensible() && int64(ix) >= int64(len(o.elems)) {
 				if strict {
 					return false, r.throwTypeError("cannot add a property to a non-extensible array")
 				}
 				return false, nil
 			}
-			if o.setElem(key.Index(), val) {
+			if o.setElem(ix, val) {
 				return true, nil
 			}
 			// Too sparse for dense storage; fall through to an ordinary
 			// property and remember that the array is no longer dense.
-			o.noteArrayIndex(key.Index())
+			o.noteArrayIndex(ix)
 		}
 	} else if key.IsIndex() && int(key.Index()) <= len(o.elems) && len(o.elems) > 0 {
 		// A non-array that already has dense storage keeps using it.

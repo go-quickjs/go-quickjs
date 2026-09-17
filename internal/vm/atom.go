@@ -120,8 +120,9 @@ func newAtomTable() *atomTable {
 
 // intern returns the atom for a property name.
 func (t *atomTable) intern(name string) Atom {
-	// A canonical array index is encoded rather than stored.
-	if idx, ok := arrayIndexOf(name); ok {
+	// A canonical array index is encoded rather than stored, as long as it
+	// fits beside the tag.
+	if idx, ok := arrayIndexOf(name); ok && idx < atomIndexTag {
 		return Atom(atomIndexTag | idx)
 	}
 	if a, ok := t.byName[name]; ok {
@@ -144,8 +145,28 @@ func (t *atomTable) internSymbol(s *Symbol) Atom {
 	return a
 }
 
-// internIndex returns the atom for an array index.
-func internIndex(i uint32) Atom { return Atom(atomIndexTag | i) }
+// indexAtom returns the atom for an array index.
+//
+// Only an index below 2**31 fits in an atom's low bits beside the tag. A larger
+// one -- an array may have indices up to 2**32-2 -- is an ordinary interned
+// name, which still addresses an element: arrayIndex reads back either form.
+func (t *atomTable) indexAtom(i uint32) Atom {
+	if i >= atomIndexTag {
+		return t.intern(strconv.FormatUint(uint64(i), 10))
+	}
+	return Atom(atomIndexTag | i)
+}
+
+// arrayIndex returns the array index an atom names, however it is spelled.
+func (t *atomTable) arrayIndex(a Atom) (uint32, bool) {
+	if a.IsIndex() {
+		return a.Index(), true
+	}
+	if int(a) >= len(t.entries) || t.entries[a].sym != nil {
+		return 0, false
+	}
+	return arrayIndexOf(t.entries[a].name)
+}
 
 // name returns the string form of an atom, which is what property enumeration
 // and error messages need.
@@ -215,7 +236,7 @@ func (r *Runtime) numberToAtom(f float64) Atom {
 	// -0 is included deliberately: ToPropertyKey(-0) is "0", so it addresses
 	// the same slot as +0, and uint32(-0.0) is 0.
 	if i := uint32(f); float64(i) == f && i <= maxArrayIndex {
-		return internIndex(i)
+		return r.atoms.indexAtom(i)
 	}
 	return r.atoms.intern(jsnum.FormatFloat(f))
 }

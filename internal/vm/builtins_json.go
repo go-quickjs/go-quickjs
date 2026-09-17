@@ -235,7 +235,7 @@ func (r *Runtime) reviveJSON(holder *Object, key Value, reviver Value) (Value, e
 				if err != nil {
 					return Undefined, err
 				}
-				if err := r.reviveWrite(o, internIndex(uint32(i)), el); err != nil {
+				if err := r.reviveWrite(o, r.atoms.indexAtom(uint32(i)), el); err != nil {
 					return Undefined, err
 				}
 			}

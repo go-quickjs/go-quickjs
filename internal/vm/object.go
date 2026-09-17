@@ -338,7 +338,7 @@ func (o *Object) ownKeys(includeSymbols bool, atoms *atomTable) []Atom {
 	if o.class == ClassTypedArray {
 		if t, ok := o.data.(*typedArrayData); ok {
 			for i := 0; i < t.count(); i++ {
-				keys = append(keys, internIndex(uint32(i)))
+				keys = append(keys, atoms.indexAtom(uint32(i)))
 			}
 		}
 	}
@@ -349,7 +349,7 @@ func (o *Object) ownKeys(includeSymbols bool, atoms *atomTable) []Atom {
 	if o.class == ClassStringWrapper {
 		if s, ok := o.data.(*String); ok {
 			for i := 0; i < s.Len(); i++ {
-				keys = append(keys, internIndex(uint32(i)))
+				keys = append(keys, atoms.indexAtom(uint32(i)))
 			}
 			if o.getOwn(atomLength) == nil {
 				keys = append(keys, atomLength)
@@ -375,24 +375,27 @@ func (o *Object) ownKeys(includeSymbols bool, atoms *atomTable) []Atom {
 			// A hole in a dense array is not an own property.
 			continue
 		}
-		keys = append(keys, internIndex(uint32(i)))
+		keys = append(keys, atoms.indexAtom(uint32(i)))
 	}
 
 	// Index-valued keys stored in props must be merged in ascending order
-	// ahead of the string keys.
-	var indexKeys []Atom
+	// ahead of the string keys. The largest indices are spelled out rather
+	// than carried in the atom, and they belong with the rest.
+	var indexKeys []indexedAtom
 	for i := range o.props {
 		p := &o.props[i]
 		if p.flags&propDeleted != 0 {
 			continue
 		}
-		if p.key.IsIndex() {
-			indexKeys = append(indexKeys, p.key)
+		if ix, ok := atoms.arrayIndex(p.key); ok {
+			indexKeys = append(indexKeys, indexedAtom{p.key, ix})
 		}
 	}
 	if len(indexKeys) > 0 {
-		sortAtomsByIndex(indexKeys)
-		keys = append(keys, indexKeys...)
+		sortIndexedAtoms(indexKeys)
+		for _, k := range indexKeys {
+			keys = append(keys, k.atom)
+		}
 	}
 
 	// An array's length is synthesized rather than stored, but it is an own
@@ -404,7 +407,10 @@ func (o *Object) ownKeys(includeSymbols bool, atoms *atomTable) []Atom {
 
 	for i := range o.props {
 		p := &o.props[i]
-		if p.flags&(propDeleted|propPrivate) != 0 || p.key.IsIndex() {
+		if p.flags&(propDeleted|propPrivate) != 0 {
+			continue
+		}
+		if _, isIndex := atoms.arrayIndex(p.key); isIndex {
 			continue
 		}
 		if atoms.IsSymbol(p.key) {
@@ -435,6 +441,25 @@ func sortAtomsByIndex(a []Atom) {
 		v := a[i]
 		j := i - 1
 		for j >= 0 && a[j].Index() > v.Index() {
+			a[j+1] = a[j]
+			j--
+		}
+		a[j+1] = v
+	}
+}
+
+// indexedAtom pairs a key with the index it names, so that keys spelled out as
+// names sort with the ones carried in an atom.
+type indexedAtom struct {
+	atom  Atom
+	index uint32
+}
+
+func sortIndexedAtoms(a []indexedAtom) {
+	for i := 1; i < len(a); i++ {
+		v := a[i]
+		j := i - 1
+		for j >= 0 && a[j].index > v.index {
 			a[j+1] = a[j]
 			j--
 		}

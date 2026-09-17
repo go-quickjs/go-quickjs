@@ -754,7 +754,7 @@ func (r *Runtime) arrayToSlice(v Value) ([]Value, error) {
 		if err := r.tick(); err != nil {
 			return nil, err
 		}
-		el, err := r.getProp(o, internIndex(uint32(i)), v)
+		el, err := r.getProp(o, r.atoms.indexAtom(uint32(i)), v)
 		if err != nil {
 			return nil, err
 		}
@@ -1099,6 +1099,11 @@ func (r *Runtime) initArrayBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
+		if a.n == 0 {
+			// An empty array answers before the second argument is converted,
+			// which a valueOf on it can tell.
+			return Int(-1), nil
+		}
 		target := arg(args, 0)
 		from := a.n - 1
 		if len(args) > 1 {
@@ -1108,12 +1113,14 @@ func (r *Runtime) initArrayBuiltins() {
 			}
 			if n < 0 {
 				n += float64(a.n)
+				if n < 0 {
+					return Int(-1), nil
+				}
 			}
-			if n < 0 {
-				return Int(-1), nil
-			}
-			if f := int64(n); f < from {
-				from = f
+			// Anything at or beyond the end means the whole array, which is
+			// what the starting point already is.
+			if n < float64(from) {
+				from = int64(n)
 			}
 		}
 		for i := from; i >= 0; i-- {

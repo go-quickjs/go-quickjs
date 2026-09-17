@@ -740,11 +740,11 @@ func (r *Runtime) eachEntry(v Value, visit func(k, value Value) error) error {
 		if !item.IsObject() {
 			return r.throwTypeError("a collection entry must be an object")
 		}
-		k, err := r.getValueProp(item, internIndex(0))
+		k, err := r.getValueProp(item, r.atoms.indexAtom(0))
 		if err != nil {
 			return err
 		}
-		val, err := r.getValueProp(item, internIndex(1))
+		val, err := r.getValueProp(item, r.atoms.indexAtom(1))
 		if err != nil {
 			return err
 		}
