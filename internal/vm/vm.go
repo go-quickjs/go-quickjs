@@ -674,6 +674,13 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				flags |= propConfigurable
 			}
 			if !r.hasOwnProp(env, name) {
+				// A var can only be created where the object will accept a new
+				// property, which a frozen global will not.
+				if env == r.global && !env.IsExtensible() {
+					vmErr = r.throwTypeError("cannot declare %q on a non-extensible global",
+						r.atoms.name(name))
+					goto onError
+				}
 				env.setOwnRaw(name, Undefined, flags)
 			}
 		case bytecode.OpDefineGlobalFunc:
@@ -682,7 +689,25 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			if in.B != 0 {
 				flags |= propConfigurable
 			}
-			cl.scope().setOwnRaw(name, pop(), flags)
+			env := cl.scope()
+			if env == r.global {
+				if err := r.canDeclareGlobalFunc(name); err != nil {
+					vmErr = err
+					goto onError
+				}
+			}
+			env.setOwnRaw(name, pop(), flags)
+		case bytecode.OpCheckGlobalLex:
+			name := cl.names[in.A]
+			// A lexical binding shadows the global object's property of the
+			// same name for good, so one that cannot be deleted may not be
+			// shadowed: `let undefined` would make undefined unreachable.
+			if p := r.global.getOwn(name); p != nil && p.flags&propConfigurable == 0 {
+				vmErr = r.throwError(errSyntax,
+					"%q is already a property of the global object that cannot be removed",
+					r.atoms.name(name))
+				goto onError
+			}
 
 		// --- Properties ---------------------------------------------------
 		case bytecode.OpGetProp:
@@ -2073,6 +2098,31 @@ func memberFlags(isClassMember uint32) propFlags {
 		return propWritable | propConfigurable
 	}
 	return propDefault
+}
+
+// canDeclareGlobalFunc reports whether a top-level function declaration may
+// take a name the global object already has.
+//
+// A property that can be deleted may always be replaced. One that cannot must
+// already look like what the declaration would create -- a writable, enumerable
+// data property -- or the declaration cannot honour it.
+func (r *Runtime) canDeclareGlobalFunc(name Atom) error {
+	p := r.global.getOwn(name)
+	if p == nil {
+		if !r.global.IsExtensible() {
+			return r.throwTypeError("cannot declare %q on a non-extensible global",
+				r.atoms.name(name))
+		}
+		return nil
+	}
+	if p.flags&propConfigurable != 0 {
+		return nil
+	}
+	if p.flags&propAccessor != 0 ||
+		p.flags&propWritable == 0 || p.flags&propEnumerable == 0 {
+		return r.throwTypeError("cannot redeclare %q as a function", r.atoms.name(name))
+	}
+	return nil
 }
 
 // tick advances the interrupt counter from outside the interpreter loop.

@@ -296,6 +296,7 @@ func Compile(prog *ast.Program, opts Options) (fn *bytecode.Function, err error)
 	// object rather than locals, which is what makes them visible to other
 	// scripts in the same realm.
 	c.checkScopes(prog.Body)
+	c.checkGlobalLexicals(prog.Body)
 	c.hoistGlobals(prog.Body)
 	c.compileStatements(prog.Body)
 
@@ -651,6 +652,41 @@ func (c *compiler) addUpvalue(name string, index uint32, fromParent, mutable, td
 // ---------------------------------------------------------------------------
 // Hoisting
 // ---------------------------------------------------------------------------
+
+// checkGlobalLexicals rejects a top-level let, const or class whose name the
+// global object already holds in a property that cannot be removed.
+//
+// A lexical binding shadows such a property for good, which is why the
+// specification refuses it rather than letting `let undefined` make undefined
+// unreachable for the rest of the realm. The check is a runtime one because
+// only then is it known what the global object holds.
+func (c *compiler) checkGlobalLexicals(body []ast.Stmt) {
+	if c.module != nil || c.evalVarsAreLocal() {
+		// A module's bindings are its own, and strict eval code's belong to the
+		// evaluated code: neither reaches the global object.
+		return
+	}
+	for _, s := range body {
+		switch n := s.(type) {
+		case *ast.VarDecl:
+			if n.Kind == ast.DeclVar {
+				continue
+			}
+			var names []string
+			for _, d := range n.Decls {
+				collectPatternNames(d.Target, &names)
+			}
+			for _, name := range names {
+				c.emitAt(n.Start, bytecode.OpCheckGlobalLex, c.nameIdx(name), 0)
+			}
+		case *ast.ClassDecl:
+			if n.Class.Name != nil {
+				c.emitAt(n.Start, bytecode.OpCheckGlobalLex,
+					c.nameIdx(n.Class.Name.Name), 0)
+			}
+		}
+	}
+}
 
 // hoistGlobals declares top-level var and function bindings on the global
 // object, which is where script-level declarations live.

@@ -3105,3 +3105,55 @@ func TestAsyncGeneratorQueue(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestGlobalDeclarationConflicts covers a top-level declaration whose name the
+// global object already holds. A property that can be deleted may always be
+// replaced; one that cannot must already look like what the declaration would
+// create.
+func TestGlobalDeclarationConflicts(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// A lexical binding shadows the property for good, so one that cannot
+		// be removed may not be shadowed.
+		{`try { eval("let undefined"); "no throw" } catch (e) { e.constructor.name }`,
+			"SyntaxError"},
+		{`try { eval("const Infinity = 1"); "no throw" } catch (e) { e.constructor.name }`,
+			"SyntaxError"},
+		{`try { eval("class NaN {}"); "no throw" } catch (e) { e.constructor.name }`,
+			"SyntaxError"},
+		{`try { eval("let [undefined] = []"); "no throw" } catch (e) { e.constructor.name }`,
+			"SyntaxError"},
+		// An ordinary name is fine, and so is one inside a function.
+		{`eval("let zzz = 1; zzz")`, "1"},
+		{`eval("const [a, b] = [1, 2]; a + b")`, "3"},
+		{`(function () { let undefined = 1; return undefined })()`, "1"},
+
+		// A function declaration may replace a configurable property, and one
+		// that is a writable enumerable data property, but nothing else.
+		{`Object.defineProperty(globalThis, "d1",
+		    {configurable: false, value: 0, writable: true, enumerable: false})
+		  try { eval("function d1() {}"); "no throw" } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		{`Object.defineProperty(globalThis, "d2",
+		    {configurable: false, value: 0, writable: false, enumerable: true})
+		  try { eval("function d2() {}"); "no throw" } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		{`Object.defineProperty(globalThis, "a1", {configurable: false, get() { return 1 }})
+		  try { eval("function a1() {}"); "no throw" } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		{`Object.defineProperty(globalThis, "d3",
+		    {configurable: false, value: 0, writable: true, enumerable: true})
+		  eval("function d3() {}"); typeof d3`, "function"},
+
+		// Nothing new can be declared on a global that will take no more
+		// properties.
+		{`Object.preventExtensions(globalThis)
+		  try { eval("function zz() {}"); "no throw" } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		{`Object.preventExtensions(globalThis)
+		  try { eval("var zz"); "no throw" } catch (e) { e.constructor.name }`,
+			"TypeError"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

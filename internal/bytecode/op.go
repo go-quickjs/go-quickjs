@@ -69,6 +69,9 @@ const (
 	OpSetGlobal
 	OpDefineGlobalVar  // var/function declaration on the global object
 	OpDefineGlobalFunc // like the above but always overwrites
+	// OpCheckGlobalLex reports a top-level let, const or class whose name is
+	// already a property of the global object that cannot be removed.
+	OpCheckGlobalLex
 
 	// --- Properties -------------------------------------------------------
 	OpGetProp    // obj -> obj[Names[A]]
@@ -417,6 +420,7 @@ var opNames = [opCount]string{
 	OpGetGlobal: "get_global", OpGetGlobalOpt: "get_global_opt",
 	OpSetGlobal: "set_global", OpDefineGlobalVar: "define_global_var",
 	OpDefineGlobalFunc: "define_global_func",
+	OpCheckGlobalLex:   "check_global_lex",
 
 	OpGetProp: "get_prop", OpSetProp: "set_prop", OpGetIndex: "get_index",
 	OpSetIndex: "set_index", OpDeleteProp: "delete_prop",
