@@ -124,13 +124,24 @@ func (r *Runtime) materializeFunctionProp(o *Object, key Atom) {
 	// property. They are non-writable, non-enumerable and configurable, which
 	// is what lets a script rename a function with defineProperty, or delete
 	// the name outright, but not assign to it.
+	//
+	// They go at the front of the table rather than the end, because that is
+	// where they would have been: a function is built with its length and its
+	// name before anything else -- a prototype, a static member -- is added. A
+	// class whose static member is called "length" depends on this, since
+	// redefining a property leaves it where it was.
 	fd.propsMaterialized = true
+	var head [2]Property
+	n := 0
 	if o.getOwn(atomLength) == nil {
-		o.setOwnRaw(atomLength, Int(fd.length), propConfigurable)
+		head[n] = Property{key: atomLength, value: Int(fd.length), flags: propConfigurable}
+		n++
 	}
 	if o.getOwn(atomName) == nil {
-		o.setOwnRaw(atomName, Str(NewString(fd.name)), propConfigurable)
+		head[n] = Property{key: atomName, value: Str(NewString(fd.name)), flags: propConfigurable}
+		n++
 	}
+	o.prependProps(head[:n])
 }
 
 // toNumericForElement coerces a value as writing it to a typed array would,
@@ -599,6 +610,9 @@ func (r *Runtime) deleteProp(o *Object, key Atom, strict bool) (bool, error) {
 
 // defineOwnProp implements Object.defineProperty for a data property.
 func (r *Runtime) defineOwnProp(o *Object, key Atom, val Value, flags propFlags) error {
+	// A function's name and length are synthesized, and a define that lands on
+	// one has to find it where it would have been rather than append it.
+	r.materializeFunctionProp(o, key)
 	if o.flags&objMappedArguments != 0 && key.IsIndex() {
 		i := key.Index()
 		if u := o.argumentBinding(i); u != nil {
@@ -632,6 +646,9 @@ func (r *Runtime) defineOwnProp(o *Object, key Atom, val Value, flags propFlags)
 // accessor for the same key so that `get x` and `set x` combine.
 func (r *Runtime) defineAccessor(o *Object, key Atom, getter, setter *Object, flags propFlags) {
 	flags |= propAccessor
+	// A function's name and length are synthesized, and an accessor replacing
+	// one belongs where it would have been.
+	r.materializeFunctionProp(o, key)
 	// Dense storage holds plain values and cannot express an accessor, so an
 	// index being turned into one has to leave it. Everything that reads a
 	// dense element takes it as a data property with default attributes, which

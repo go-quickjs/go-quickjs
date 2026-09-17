@@ -268,6 +268,22 @@ func (o *Object) setOwnRaw(key Atom, value Value, flags propFlags) {
 	o.appendProp(Property{key: key, flags: flags, value: value})
 }
 
+// prependProps inserts properties ahead of every existing one.
+//
+// Only a function's synthesized length and name need this, and only once per
+// function, so the shift and the index rebuild are not worth avoiding.
+func (o *Object) prependProps(ps []Property) {
+	if len(ps) == 0 {
+		return
+	}
+	o.props = append(ps[:len(ps):len(ps)], o.props...)
+	if o.index != nil {
+		o.buildIndex()
+	} else if len(o.props) > linearScanLimit {
+		o.buildIndex()
+	}
+}
+
 func (o *Object) appendProp(p Property) {
 	o.props = append(o.props, p)
 	switch {

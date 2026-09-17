@@ -656,3 +656,44 @@ func (r *Runtime) preventExtensionsOf(o *Object) (bool, error) {
 	o.flags &^= objExtensible
 	return true, nil
 }
+
+// createDataProperty defines a property the caller promised to create, so a
+// define the object refuses is an error rather than something to ignore.
+func (r *Runtime) createDataProperty(o *Object, key Atom, val Value, flags propFlags) error {
+	ok, err := r.defineProperty(o, key, &propDesc{
+		value: val, hasValue: true,
+		writable: flags&propWritable != 0, hasWritable: true,
+		enumerable: flags&propEnumerable != 0, hasEnumerable: true,
+		configurable: flags&propConfigurable != 0, hasConfigurable: true,
+	})
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return r.throwTypeError("cannot define property %q", r.atoms.name(key))
+	}
+	return nil
+}
+
+// defineHalfAccessorChecked is defineHalfAccessor through the checked define,
+// so that a key the object will not part with is reported.
+func (r *Runtime) defineHalfAccessorChecked(o *Object, key Atom, fn *Object, getter bool,
+	flags propFlags) error {
+	d := &propDesc{
+		enumerable: flags&propEnumerable != 0, hasEnumerable: true,
+		configurable: flags&propConfigurable != 0, hasConfigurable: true,
+	}
+	if getter {
+		d.getter, d.hasGet = fn, true
+	} else {
+		d.setter, d.hasSet = fn, true
+	}
+	ok, err := r.defineProperty(o, key, d)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return r.throwTypeError("cannot define property %q", r.atoms.name(key))
+	}
+	return nil
+}

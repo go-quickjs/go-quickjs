@@ -800,3 +800,87 @@ func TestSuperProperties(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// TestClassMemberAttributes covers what a class member's property descriptor
+// says, which differs from an object literal's in every case.
+func TestClassMemberAttributes(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// A class member is never enumerable, however it is written.
+		{`class C { m() {} get g() {} set s(v) {} }
+		  Object.keys(C.prototype).length + "," + Object.getOwnPropertyNames(C.prototype).join(",")`,
+			"0,constructor,m,g,s"},
+		{`class C { ["m"]() {} get ["g"]() {} set ["s"](v) {} }
+		  Object.keys(C.prototype).join(",") + "|" +
+		  Object.getOwnPropertyNames(C.prototype).join(",")`,
+			"|constructor,m,g,s"},
+		{`class C { static m() {} static get g() {} }
+		  Object.keys(C).length + "," + C.hasOwnProperty("m")`, "0,true"},
+		{`var d = Object.getOwnPropertyDescriptor(class { get x() {} }.prototype, "x");
+		  [d.enumerable, d.configurable, typeof d.get, typeof d.set].join(",")`,
+			"false,true,function,undefined"},
+
+		// An object literal's are enumerable, which is what makes the flag a
+		// property of the class rather than of the instruction.
+		{`Object.keys({m() {}, get g() {}, ["c"]: 1, get ["h"]() {}}).join(",")`, "m,g,c,h"},
+
+		// A class field is enumerable even though a method is not.
+		{`class C { f = 1; ["g"] = 2 } Object.keys(new C()).join(",")`, "f,g"},
+		{`class C { static f = 1; static ["g"] = 2 } Object.keys(C).join(",")`, "f,g"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// TestClassPrototypeIsFixed covers a class's prototype property, which unlike a
+// function's cannot be replaced -- so a static member named after it fails.
+func TestClassPrototypeIsFixed(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var d = Object.getOwnPropertyDescriptor(class {}, "prototype");
+		  [d.writable, d.enumerable, d.configurable].join(",")`, "false,false,false"},
+		{`var d = Object.getOwnPropertyDescriptor(function () {}, "prototype");
+		  [d.writable, d.enumerable, d.configurable].join(",")`, "true,false,false"},
+		{`class C {} var p = C.prototype; C.prototype = {}; C.prototype === p`, "true"},
+
+		// A computed static member reaches the key only at runtime, so this is
+		// a TypeError rather than the SyntaxError the literal spelling gets.
+		{`try { class C { static ["prototype"]() {} } } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		{`try { class C { static get ["prototype"]() {} } } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		{`try { class C { static ["prototype"] = 1 } } catch (e) { e.constructor.name }`,
+			"TypeError"},
+
+		// An object literal has no such property, so the same spelling is fine.
+		{`({["prototype"]: 1}).prototype`, "1"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// TestFunctionLengthAndNameOrder covers where a function's length and name sit
+// among its own keys. They are synthesized on demand, and a member named after
+// one must land where it would have been rather than at the end.
+func TestFunctionLengthAndNameOrder(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`Object.getOwnPropertyNames(function (a, b) {}).join(",")`, "length,name,prototype"},
+		{`function f() {} f.x = 1; Object.getOwnPropertyNames(f).join(",")`,
+			"length,name,prototype,x"},
+		{`class C { static method() {} static length() {} }
+		  Object.getOwnPropertyNames(C).join(",")`, "length,name,prototype,method"},
+		{`class C { static method() {} static name() {} }
+		  Object.getOwnPropertyNames(C).join(",")`, "length,name,prototype,method"},
+		{`var k = "length"
+		  class C { static method() {} static [k]() {} }
+		  Object.getOwnPropertyNames(C).join(",")`, "length,name,prototype,method"},
+		{`function f() {} Object.defineProperty(f, "length", {value: 3})
+		  Object.getOwnPropertyNames(f).join(",") + "|" + f.length`,
+			"length,name,prototype|3"},
+		{`function f() {} f.x = 1; delete f.name
+		  Object.getOwnPropertyNames(f).join(",")`, "length,prototype,x"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

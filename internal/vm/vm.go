@@ -777,7 +777,11 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				goto onError
 			}
 			if obj.IsObject() {
-				if err := r.defineOwnProp(obj.Object(), k, val, propDefault); err != nil {
+				// A checked define: a member named after a property the object
+				// will not part with -- a class's prototype, say -- is a
+				// TypeError rather than something to overwrite.
+				if err := r.createDataProperty(obj.Object(), k, val,
+					memberFlags(in.A)); err != nil {
 					vmErr = err
 					goto onError
 				}
@@ -787,7 +791,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			obj := peek(0)
 			if obj.IsObject() && fnVal.IsObject() {
 				r.defineHalfAccessor(obj.Object(), cl.names[in.A], fnVal.Object(),
-					in.Op == bytecode.OpDefineGetter)
+					in.Op == bytecode.OpDefineGetter, memberFlags(in.B))
 			}
 		case bytecode.OpSetFuncName:
 			if fnVal := peek(0); fnVal.IsObject() {
@@ -805,8 +809,11 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				goto onError
 			}
 			if obj.IsObject() && fnVal.IsObject() {
-				r.defineHalfAccessor(obj.Object(), k, fnVal.Object(),
-					in.Op == bytecode.OpDefineGetterIndex)
+				if err := r.defineHalfAccessorChecked(obj.Object(), k, fnVal.Object(),
+					in.Op == bytecode.OpDefineGetterIndex, memberFlags(in.A)); err != nil {
+					vmErr = err
+					goto onError
+				}
 			}
 		case bytecode.OpSetProtoOf:
 			val := pop()
@@ -1747,8 +1754,11 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			val := pop()
 			target := peek(0)
 			if target.IsObject() {
-				target.Object().setOwnRaw(cl.names[in.A], val,
-					propWritable|propConfigurable)
+				key := cl.names[in.A]
+				// A static member named after a function's synthesized length or
+				// name replaces it in place, so it has to exist first.
+				r.materializeFunctionProp(target.Object(), key)
+				target.Object().setOwnRaw(key, val, propWritable|propConfigurable)
 			}
 		case bytecode.OpSuperCall:
 			var args []Value
@@ -1945,14 +1955,25 @@ func functionNameFromKey(key Value, kind uint32) string {
 //
 // A get/set pair written separately reaches this twice, and the second must not
 // discard the first.
-func (r *Runtime) defineHalfAccessor(o *Object, key Atom, fn *Object, isGetter bool) {
+func (r *Runtime) defineHalfAccessor(o *Object, key Atom, fn *Object, isGetter bool,
+	flags propFlags) {
 	var getter, setter *Object
 	if isGetter {
 		getter = fn
 	} else {
 		setter = fn
 	}
-	r.defineAccessor(o, key, getter, setter, propEnumerable|propConfigurable)
+	r.defineAccessor(o, key, getter, setter, flags)
+}
+
+// memberFlags turns a define instruction's class-member operand into the
+// attributes the member gets. A class's members are not enumerable, so that
+// Object.keys of an instance lists its fields and not the methods it inherits.
+func memberFlags(isClassMember uint32) propFlags {
+	if isClassMember != 0 {
+		return propWritable | propConfigurable
+	}
+	return propDefault
 }
 
 // tick advances the interrupt counter from outside the interpreter loop.
@@ -2088,7 +2109,14 @@ func (r *Runtime) makeClosure(f *frame, c Value) *Object {
 	if kind != ctorNone {
 		proto := newObject(r.proto.object, ClassObject)
 		proto.setOwnRaw(atomConstructor, Obj(o), propWritable|propConfigurable)
-		o.setOwnRaw(atomPrototype, Obj(proto), propWritable)
+		flags := propWritable
+		switch tmpl.fn.Kind {
+		case bytecode.KindConstructor, bytecode.KindDerivedConstructor:
+			// A class's prototype cannot be replaced, which is what makes a
+			// static member named "prototype" an error.
+			flags = 0
+		}
+		o.setOwnRaw(atomPrototype, Obj(proto), flags)
 		// A constructor's home object is its own prototype, which is what
 		// makes `super.m()` inside a constructor find the parent's method.
 		// Nothing outside a class can name super, so setting it on every
@@ -2491,7 +2519,9 @@ func (r *Runtime) linkClass(ctorVal, parent Value) error {
 		fd.ctorKind = ctorDerived
 		return nil
 	}
-	if !parent.IsObject() || !parent.Object().IsCallable() {
+	if !isConstructor(parent) {
+		// An arrow, a method and a generator are callable but not
+		// constructable, and a class has to call what it extends.
 		return r.throwTypeError("a class may only extend a constructor or null")
 	}
 	parentObj := parent.Object()
@@ -2504,8 +2534,17 @@ func (r *Runtime) linkClass(ctorVal, parent Value) error {
 	if err != nil {
 		return err
 	}
-	if protoVal.IsObject() && parentProtoVal.IsObject() {
-		protoVal.Object().proto = parentProtoVal.Object()
+	// What the parent calls its prototype is what the instances inherit from,
+	// and it has to be something they can: an object, or nothing at all.
+	if !parentProtoVal.IsObject() && !parentProtoVal.IsNull() {
+		return r.throwTypeError("the superclass prototype is neither an object nor null")
+	}
+	if protoVal.IsObject() {
+		if parentProtoVal.IsObject() {
+			protoVal.Object().proto = parentProtoVal.Object()
+		} else {
+			protoVal.Object().proto = nil
+		}
 	}
 	// Static inheritance.
 	ctor.proto = parentObj

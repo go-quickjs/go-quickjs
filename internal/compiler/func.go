@@ -798,18 +798,25 @@ func (c *compiler) compileClassMember(m ast.Property, fn *ast.FuncLit, installNa
 	c.emit(bytecode.OpDrop, 0, 0)
 }
 
+// classMember marks a define instruction as a class's, which the interpreter
+// reads as "not enumerable". An object literal's members are enumerable and a
+// class's are not, and the two share these instructions.
+const classMember = 1
+
 // emitClassMemberDefine installs a member whose value is on the stack above
 // its target.
 func (c *compiler) emitClassMemberDefine(m ast.Property, key string) {
 	if m.Computed {
-		// The key is already on the stack, beneath the value.
+		// The key is already on the stack, beneath the value. The operand marks
+		// the member as a class's rather than an object literal's, which is what
+		// makes it non-enumerable.
 		switch m.Kind {
 		case ast.PropGet:
-			c.emit(bytecode.OpDefineGetterIndex, 0, 0)
+			c.emit(bytecode.OpDefineGetterIndex, classMember, 0)
 		case ast.PropSet:
-			c.emit(bytecode.OpDefineSetterIndex, 0, 0)
+			c.emit(bytecode.OpDefineSetterIndex, classMember, 0)
 		default:
-			c.emit(bytecode.OpDefineIndex, 0, 0)
+			c.emit(bytecode.OpDefineIndex, classMember, 0)
 		}
 		return
 	}
@@ -831,9 +838,9 @@ func (c *compiler) emitClassMemberDefine(m ast.Property, key string) {
 	}
 	switch m.Kind {
 	case ast.PropGet:
-		c.emit(bytecode.OpDefineGetter, c.nameIdx(key), 0)
+		c.emit(bytecode.OpDefineGetter, c.nameIdx(key), classMember)
 	case ast.PropSet:
-		c.emit(bytecode.OpDefineSetter, c.nameIdx(key), 0)
+		c.emit(bytecode.OpDefineSetter, c.nameIdx(key), classMember)
 	default:
 		c.emit(bytecode.OpDefineMethod, c.nameIdx(key), 0)
 	}
