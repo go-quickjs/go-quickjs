@@ -502,6 +502,11 @@ func (p *parser) parseClassMember(cls *ast.ClassLit, sawConstructor *bool, priva
 			!p.isPunct(";") && !p.isPunct("}") {
 			key, computed := p.parsePropertyName()
 			p.checkClassMemberName(key, computed, isStatic, privateNames, kindOfAccessor(kind))
+			// A constructor is the one member that has to be a plain method:
+			// there is nothing for `new` to call if it is an accessor.
+			if !isStatic && !computed && isConstructorKey(key) {
+				p.errorf("a constructor cannot be an accessor")
+			}
 			fn := p.parseMethodBody(fnKind, false, false)
 			p.checkAccessorArity(kind, fn)
 			cls.Members = append(cls.Members, ast.Property{

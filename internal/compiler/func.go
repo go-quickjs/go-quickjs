@@ -395,6 +395,12 @@ func (c *compiler) applyDefault(def ast.Expr, name string) {
 // members, constructors for static ones -- which is what makes a static method
 // visible on a subclass.
 func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
+	// The private names are visible throughout the body, including to a method
+	// written above the field it reads, so they are all collected before any of
+	// it is compiled.
+	c.pushPrivateScope(cls)
+	defer c.popPrivateScope()
+
 	name := inferredName
 	if cls.Name != nil {
 		name = cls.Name.Name

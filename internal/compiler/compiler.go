@@ -121,6 +121,12 @@ type compiler struct {
 	hiddenCount int
 	depth       int
 
+	// privateScopes is the stack of class bodies enclosing the code being
+	// compiled, innermost last, each holding the private names it declares. A
+	// reference to a name in none of them is a syntax error rather than a
+	// runtime one, which is why it is tracked here and not in the runtime.
+	privateScopes [][]string
+
 	// nameIndex and constIndex deduplicate the tables, so that a name or
 	// constant used many times costs one entry.
 	nameIndex  map[string]uint32

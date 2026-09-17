@@ -1,6 +1,7 @@
 package quickjs_test
 
 import (
+	"strings"
 	"testing"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
@@ -122,6 +123,79 @@ func TestIteratingNonDenseArrays(t *testing.T) {
 			t.Errorf("%s: %v", tc.src, err)
 		} else if got := v.String(); got != tc.want {
 			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}
+
+// A private name is resolved when the program is compiled, not when it runs:
+// `this.#x` outside any class declaring #x is a syntax error, in the same way
+// an unbalanced brace is. That is what makes a private field private -- there
+// is no way to ask an object for one you were not written alongside, and so no
+// way to discover one by probing.
+func TestPrivateNamesAreResolvedAtCompileTime(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`class C { #x = 1; m() { return this.#x; } } String(new C().m())`, "1"},
+		{`class C { #m() { return 1; } m() { return this.#m(); } } String(new C().m())`, "1"},
+		{`class C { static #x = 1; static m() { return C.#x; } } String(C.m())`, "1"},
+		{`class C { #x; static has(o) { return #x in o; } }
+		  [C.has(new C()), C.has({})].join(",")`, "true,false"},
+		// A method may refer to a field declared below it, so the names are
+		// collected from the whole body before any of it is compiled.
+		{`class C { m() { return this.#x; } #x = 2; } String(new C().m())`, "2"},
+		// A nested class sees the enclosing one's names.
+		{`class Outer { #x = 3;
+		    m() { var self = this; return (class { static f() { return self.#x; } }).f(); }
+		  } String(new Outer().m())`, "3"},
+		// A getter and a setter may share a name.
+		{`class C { get #x() { return 4; } set #x(v) {} m() { return this.#x; } }
+		  String(new C().m())`, "4"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+
+	// Each of these has to fail to parse, so a throw before it never runs.
+	bad := []string{
+		// Undeclared, inside a class and outside one.
+		`throw 0; class C { m() { this.#x; } }`,
+		`throw 0; class C { m() { return #x in this; } }`,
+		`throw 0; this.#x;`,
+		`throw 0; function f() { return this.#x; }`,
+		`throw 0; class C { #x; } class D { m() { return this.#x; } }`,
+		// A sibling class's name is not in scope either.
+		`throw 0; class C { #x; m() { return (class { n(o) { return o.#y; } }); } }`,
+		// Writing one is the same as reading one.
+		`throw 0; class C { m() { this.#x = 1; } }`,
+		`throw 0; class C { m() { this.#x += 1; } }`,
+		// A private name cannot be deleted, declared or not.
+		`throw 0; class C { #x; m() { delete this.#x; } }`,
+		`throw 0; class C { #x; m() { delete (this.#x); } }`,
+		`throw 0; class C { #m() {} m() { delete this.#m; } }`,
+		// A constructor has to be a plain method.
+		`throw 0; class C { get constructor() {} }`,
+		`throw 0; class C { set constructor(v) {} }`,
+		`throw 0; class C { *constructor() {} }`,
+		`throw 0; class C { async constructor() {} }`,
+		// And the names have to be distinct.
+		`throw 0; class C { #x; #x; }`,
+		`throw 0; class C { #constructor; }`,
+		`throw 0; class C { static prototype() {} }`,
+	}
+	for _, src := range bad {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil {
+			t.Errorf("%s: accepted, want SyntaxError", src)
+		} else if !strings.Contains(err.Error(), "SyntaxError") {
+			t.Errorf("%s: got %v, want SyntaxError", src, err)
 		}
 		rt.Close()
 	}

@@ -86,6 +86,7 @@ func (c *compiler) compileExprNamed(e ast.Expr, name string) {
 		// which is the only way to tell one of that class's instances from a
 		// lookalike without a try/catch around a private read.
 		if pn, ok := n.Left.(*ast.PrivateName); ok && n.Op == "in" {
+			c.checkPrivateName(pn, n.Start)
 			c.compileExpr(n.Right)
 			c.emitAt(n.Start, bytecode.OpPrivateIn, c.nameIdx("#"+pn.Name), 0)
 			break
@@ -430,6 +431,12 @@ func (c *compiler) compileUnary(n *ast.Unary) {
 
 	case "delete":
 		if m, ok := n.Operand.(*ast.Member); ok {
+			// A private name is not a property key a program may remove: there
+			// is no object that could carry it afterwards, and no way to ask.
+			if pn, private := m.Property.(*ast.PrivateName); private {
+				c.errorf(n.Start, "a private name cannot be deleted: #%s", pn.Name)
+				return
+			}
 			c.compileExpr(m.Object)
 			c.compileMemberKey(m)
 			c.emitAt(n.Start, bytecode.OpDeleteProp, 0, 0)
@@ -512,6 +519,7 @@ func (c *compiler) compileUpdate(n *ast.Update) {
 	case *ast.Member:
 		c.compileExpr(target.Object)
 		if pn, private := target.Property.(*ast.PrivateName); private {
+			c.checkPrivateName(pn, target.Start)
 			// A private member is reached through its own accessors, which do
 			// not consult the prototype chain the way a property does.
 			name := c.nameIdx("#" + pn.Name)
@@ -607,6 +615,7 @@ func (c *compiler) compileMemberRead(n *ast.Member) {
 		return
 	}
 	if pn, ok := n.Property.(*ast.PrivateName); ok {
+		c.checkPrivateName(pn, n.Start)
 		c.compileExpr(n.Object)
 		c.emitAt(n.Start, bytecode.OpGetPrivate, c.nameIdx("#"+pn.Name), 0)
 		return
@@ -641,6 +650,7 @@ func (c *compiler) compileCall(n *ast.Call) {
 	// receiver for `this`.
 	if m, ok := n.Callee.(*ast.Member); ok {
 		if pn, isPrivate := m.Property.(*ast.PrivateName); isPrivate {
+			c.checkPrivateName(pn, m.Start)
 			c.compileExpr(m.Object)
 			c.emit(bytecode.OpDup, 0, 0)
 			c.emit(bytecode.OpGetPrivate, c.nameIdx("#"+pn.Name), 0)
@@ -1034,6 +1044,7 @@ func compoundOpcode(op string) bytecode.Op {
 // fixes the order in which they happen.
 func (c *compiler) compileMemberStore(m *ast.Member, emitValue func()) {
 	if pn, ok := m.Property.(*ast.PrivateName); ok {
+		c.checkPrivateName(pn, m.Start)
 		c.compileExpr(m.Object)
 		emitValue()
 		c.emit(bytecode.OpInsert2, 0, 0)
@@ -1061,6 +1072,7 @@ func (c *compiler) compileMemberStore(m *ast.Member, emitValue func()) {
 // a member target, which is what a compound assignment needs after combining.
 func (c *compiler) compileMemberStoreFromValue(m *ast.Member) {
 	if pn, ok := m.Property.(*ast.PrivateName); ok {
+		c.checkPrivateName(pn, m.Start)
 		c.compileExpr(m.Object)
 		c.emit(bytecode.OpSwap, 0, 0)
 		c.emit(bytecode.OpInsert2, 0, 0)
