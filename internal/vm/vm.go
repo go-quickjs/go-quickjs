@@ -2980,12 +2980,21 @@ func (r *Runtime) instanceOf(obj, ctor Value) (bool, error) {
 		return false, r.throwTypeError("the prototype of the right operand is not an object")
 	}
 	target := protoVal.Object()
-	for p := obj.Object().proto; p != nil; p = p.proto {
-		if p == target {
+	// The chain is walked by asking each object for its prototype, so a proxy
+	// in it runs its trap rather than being read around.
+	for o := obj.Object(); ; {
+		next, err := r.protoOf(o)
+		if err != nil {
+			return false, err
+		}
+		if !next.IsObject() {
+			return false, nil
+		}
+		o = next.Object()
+		if o == target {
 			return true, nil
 		}
 	}
-	return false, nil
 }
 
 // ---------------------------------------------------------------------------

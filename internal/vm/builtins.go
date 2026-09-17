@@ -37,17 +37,32 @@ func (r *Runtime) initObjectBuiltins() {
 	})
 
 	r.defMethod(p, "isPrototypeOf", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		// Anything but an object has no prototype chain to be on, and that is
+		// answered before the receiver is coerced -- which is where a nullish
+		// one is reported.
 		v := arg(args, 0)
-		if !v.IsObject() || !this.IsObject() {
+		if !v.IsObject() {
 			return False, nil
 		}
-		target := this.Object()
-		for o := v.Object().proto; o != nil; o = o.proto {
+		target, err := rt.toObject(this)
+		if err != nil {
+			return Undefined, err
+		}
+		// The walk asks each object for its prototype rather than reading the
+		// field, so a proxy in the chain runs its trap.
+		for o := v.Object(); ; {
+			next, err := rt.protoOf(o)
+			if err != nil {
+				return Undefined, err
+			}
+			if !next.IsObject() {
+				return False, nil
+			}
+			o = next.Object()
 			if o == target {
 				return True, nil
 			}
 		}
-		return False, nil
 	})
 
 	r.defMethod(p, "propertyIsEnumerable", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -718,12 +733,21 @@ func (r *Runtime) initFunctionBuiltins() {
 				return Undefined, rt.throwTypeError("the prototype is not an object")
 			}
 			target := protoVal.Object()
-			for o := v.Object().proto; o != nil; o = o.proto {
+			// The chain is walked by asking each object for its prototype, so
+			// a proxy in it runs its trap rather than being read around.
+			for o := v.Object(); ; {
+				next, err := rt.protoOf(o)
+				if err != nil {
+					return Undefined, err
+				}
+				if !next.IsObject() {
+					return False, nil
+				}
+				o = next.Object()
 				if o == target {
 					return True, nil
 				}
 			}
-			return False, nil
 		})
 
 	r.newCtor("Function", 1, p, func(rt *Runtime, this Value, args []Value) (Value, error) {

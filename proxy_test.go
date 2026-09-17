@@ -332,3 +332,32 @@ func TestProxyStandsInEverywhere(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// A prototype chain is walked by asking each object for its prototype, so a
+// proxy in it answers through its trap rather than being read around.
+func TestPrototypeChainWalksThroughProxies(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"isPrototypeOf", `var p = {}
+		  var o = new Proxy(Object.create(p), {})
+		  String(p.isPrototypeOf(o))`, "true"},
+		{"the trap runs", `var log = []
+		  var p = {}
+		  var o = new Proxy(Object.create(p), {
+		    getPrototypeOf: function (t) { log.push("trap"); return Object.getPrototypeOf(t) }})
+		  String(p.isPrototypeOf(o)) + "," + log.join()`, "true,trap"},
+		{"instanceof", `function C() {}
+		  var o = new Proxy(new C(), {})
+		  String(o instanceof C)`, "true"},
+		{"a trap that lies", `function C() {}
+		  var o = new Proxy({}, {getPrototypeOf: function () { return C.prototype }})
+		  String(o instanceof C)`, "true"},
+		// The argument is checked before the receiver is coerced, so a nullish
+		// receiver is reported only when there was something to look for.
+		{"nullish receiver", `try { Object.prototype.isPrototypeOf.call(null, {}); "no error" }
+		  catch (e) { e.constructor.name }`, "TypeError"},
+		{"nothing to look for", `String(Object.prototype.isPrototypeOf.call(null, 1))`, "false"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}
