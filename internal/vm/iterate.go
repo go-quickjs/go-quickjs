@@ -700,3 +700,107 @@ func (r *Runtime) iterCloseNormal(cursor Value) error {
 	}
 	return nil
 }
+
+// iterResume drives one step of a `yield*`.
+//
+// How the outer generator was resumed decides which of the delegate's methods
+// is called: next for an ordinary resumption, throw for an injected exception,
+// return for a forced return. A delegate that has no throw is closed and the
+// delegation fails, since there is no way to deliver the exception; one that
+// has no return simply ends, which is what lets `yield*` work over an iterator
+// that never expected to be abandoned.
+//
+// The bool reports that the delegation ended with a return the delegate could
+// not take, which the outer generator turns into a return of its own.
+func (r *Runtime) iterResume(cursor Value, sent Value, mode resumeMode,
+	async bool) (Value, bool, error) {
+	st := iterStateOf(cursor)
+	if st == nil {
+		return Undefined, false, r.throwTypeError("not an iterator")
+	}
+	switch mode {
+	case resumeThrow:
+		if st.arr != nil {
+			// A directly-walked array has no throw, so the delegation fails
+			// with the exception it was given.
+			st.done = true
+			return Undefined, false, r.throw(sent)
+		}
+		method, err := r.getValueProp(st.iter, r.atoms.intern("throw"))
+		if err != nil {
+			return Undefined, false, err
+		}
+		if !isCallable(method) {
+			// The delegate is told the delegation is over before the failure
+			// is reported, which is what gives a generator its finally -- and
+			// a failure there is what the delegation fails with, since the
+			// TypeError has not been raised yet.
+			st.done = true
+			if err := r.closeIteratorErr(st.iter); err != nil {
+				return Undefined, false, err
+			}
+			return Undefined, false, r.throwTypeError(
+				"the delegate has no throw method")
+		}
+		res, err := r.call(method, st.iter, []Value{sent})
+		if err != nil {
+			return Undefined, false, err
+		}
+		return r.delegateResult(st, res, async)
+
+	case resumeReturn:
+		if st.arr != nil {
+			return sent, true, nil
+		}
+		method, err := r.getValueProp(st.iter, atomReturn)
+		if err != nil {
+			return Undefined, false, err
+		}
+		if !isCallable(method) {
+			return sent, true, nil
+		}
+		res, err := r.call(method, st.iter, []Value{sent})
+		if err != nil {
+			return Undefined, false, err
+		}
+		out, _, err := r.delegateResult(st, res, async)
+		if err != nil {
+			return Undefined, false, err
+		}
+		if async {
+			// The result is a promise; whether it says done is only known once
+			// it settles, so the ordinary path handles it.
+			return out, false, nil
+		}
+		if !out.IsObject() {
+			return Undefined, false, r.throwTypeError(
+				"an iterator result must be an object")
+		}
+		done, err := r.getValueProp(out, atomDone)
+		if err != nil {
+			return Undefined, false, err
+		}
+		if done.Truthy() {
+			v, err := r.getValueProp(out, atomValue)
+			return v, true, err
+		}
+		return out, false, nil
+	}
+	res, err := r.iterSend(cursor, sent, async)
+	return res, false, err
+}
+
+// delegateResult checks what a delegate's method handed back.
+func (r *Runtime) delegateResult(st *iterState, res Value, async bool) (Value, bool, error) {
+	if async {
+		if res.IsObject() && res.Object().class == ClassPromise {
+			return res, false, nil
+		}
+		out, err := r.awaitIterResult(st, res)
+		return out, false, err
+	}
+	if !res.IsObject() {
+		return Undefined, false, r.throwTypeError("an iterator result must be an object")
+	}
+	return res, false, nil
+}

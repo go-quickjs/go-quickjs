@@ -397,6 +397,11 @@ func (c *compiler) emitJump(op bytecode.Op) int {
 	return c.emit(op, 0xFFFFFFFF, 0)
 }
 
+// emitJumpB is emitJump for an instruction that carries a second operand.
+func (c *compiler) emitJumpB(op bytecode.Op, b uint32) int {
+	return c.emit(op, 0xFFFFFFFF, b)
+}
+
 // patchJump points a previously emitted jump at the current position.
 func (c *compiler) patchJump(pc int) {
 	c.fn.Code[pc].A = uint32(len(c.fn.Code))
@@ -957,6 +962,10 @@ func stackEffect(op bytecode.Op, a, b uint32) int {
 	case bytecode.OpYield, bytecode.OpAwait:
 		// Pops the operand and pushes the resumption value.
 		return 0
+
+	case bytecode.OpYieldStar:
+		// Pops the operand and pushes the resumption value and its kind.
+		return 1
 
 	case bytecode.OpDefineMethod, bytecode.OpDefinePrivate:
 		return -1

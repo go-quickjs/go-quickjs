@@ -2699,3 +2699,70 @@ func TestPromiseCombinatorProtocol(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// `yield*` forwards in both directions and in all three ways a generator can
+// be resumed: a value sent in goes to the delegate's next, an exception
+// injected at the yield goes to its throw, and a forced return to its return.
+func TestYieldStarForwardsEveryResumption(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`function* inner() { yield 1; yield 2 }
+		  function* g() { yield* inner(); yield 3 }
+		  [...g()].join(",")`, "1,2,3"},
+		{`function* inner() { yield 1; return 5 }
+		  function* g() { var v = yield* inner(); yield v }
+		  [...g()].join(",")`, "1,5"},
+
+		// A forced return reaches the delegate, which runs its finally.
+		{`var log = [];
+		  function* inner() { try { yield 1; yield 2 } finally { log.push("f") } }
+		  function* g() { yield* inner() }
+		  var it = g(); it.next();
+		  var r = it.return(9);
+		  [log.join(","), r.value, r.done].join("|")`, "f|9|true"},
+		{`function* g() { yield* [1, 2] }
+		  var it = g(); it.next(); JSON.stringify(it.return(7))`,
+			`{"value":7,"done":true}`},
+		// And the outer generator's own finally runs too.
+		{`var log = [];
+		  function* g() { try { yield* [1, 2] } finally { log.push("of") } }
+		  var it = g(); it.next(); it.return(3); log.join(",")`, "of"},
+
+		// An injected exception reaches the delegate's throw.
+		{`var log = [];
+		  function* inner() { try { yield 1 } catch (e) { log.push("caught:" + e); yield 2 } }
+		  function* g() { yield* inner() }
+		  var it = g(); it.next();
+		  var r = it.throw("x");
+		  [log.join(","), r.value].join("|")`, "caught:x|2"},
+		// A delegate with no throw is closed, and the delegation fails.
+		{`var log = [];
+		  var it = {};
+		  it[Symbol.iterator] = function () {
+		    return {next: function () { return {done: false, value: 1} },
+		            "return": function () { log.push("closed"); return {} }}
+		  };
+		  function* g() { yield* it }
+		  var i = g(); i.next();
+		  try { i.throw("x") } catch (e) { log.push(e.constructor.name) }
+		  log.join(",")`, "closed,TypeError"},
+
+		// A synchronous delegation hands the delegate's result object out as
+		// it is, so nothing reads its value on the way past.
+		{`var n = 0;
+		  var spy = Object.defineProperty({done: false}, "value", {get: function () { n += 1 }});
+		  var it = {};
+		  it[Symbol.iterator] = function () { return {next: function () { return spy }} };
+		  function* g() { yield* it }
+		  var i = g(); i.next(); String(n)`, "0"},
+	}
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

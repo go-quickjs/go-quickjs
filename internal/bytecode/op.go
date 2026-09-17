@@ -236,6 +236,15 @@ const (
 	// or jumping to A when it reports done.
 	OpIterResultOrJump
 	OpSpreadIter // spread an iterable onto the stack for a call
+	// OpIterResume drives a `yield*`: the cursor is beneath a value and the
+	// kind of resumption that produced it, and the kind decides which of the
+	// delegate's three methods is called. A is 1 for an async delegation,
+	// whose result is a promise to await.
+	//
+	// A delegate with no throw is closed and the delegation fails; one with no
+	// return simply ends, which is what lets `yield*` over a plain iterator
+	// work at all.
+	OpIterResume
 	// OpIterSend calls the cursor's next method with the value on top of the
 	// stack, which is how `yield*` forwards what its caller sent in. The cursor
 	// stays beneath, and the raw iterator result replaces the sent value.
@@ -295,6 +304,10 @@ const (
 
 	// --- Generators and async ---------------------------------------------
 	OpYield
+	// OpYieldStar suspends inside a `yield*`, where the three ways a generator
+	// can be resumed all have to be forwarded to the inner iterator rather
+	// than acted on here. It pushes the value that came back and which of the
+	// three it was: 0 for next, 1 for throw, 2 for return.
 	OpYieldStar
 	OpAwait
 	OpInitialYield // suspends a generator before its first statement
@@ -452,6 +465,7 @@ var opNames = [opCount]string{
 	OpIterSendAsync:    "iter_send_async",
 	OpIterUnpack:       "iter_unpack",
 	OpEndParams:        "end_params",
+	OpIterResume:       "iter_resume",
 	OpIterToArray:      "iter_to_array",
 
 	OpThrow: "throw", OpPushCatch: "push_catch", OpPopCatch: "pop_catch",

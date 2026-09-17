@@ -61,6 +61,10 @@ type generator struct {
 	// since a generator starts partway in -- its parameter prologue runs when
 	// it is created.
 	started bool
+	// delegating marks a suspension inside a `yield*`, where a throw or a
+	// return injected at the resumption point is forwarded to the inner
+	// iterator instead of unwinding this generator.
+	delegating bool
 	// async marks a generator that backs an async function, whose suspensions
 	// are awaits rather than yields.
 	async bool
@@ -79,6 +83,9 @@ type suspendSignal struct {
 	await bool
 	// delegate marks `yield*`, whose value is an iterable to drain.
 	delegate bool
+	// raw marks a value that is already an iterator result object, which a
+	// synchronous `yield*` yields verbatim.
+	raw bool
 }
 
 func (*suspendSignal) Error() string { return "generator suspended" }
@@ -221,9 +228,22 @@ type resumeResult struct {
 	value Value
 	// done marks the generator finishing rather than suspending.
 	done bool
+	// raw marks a value that is already the result object to hand back, which
+	// a synchronous `yield*` produces: what the delegate said is what the
+	// caller sees, down to the identity of the object.
+	raw bool
 	// await marks a suspension caused by `await`, which an async generator
 	// must service before producing anything.
 	await bool
+}
+
+// result renders a resumption as the object a generator's next, return or
+// throw hands back.
+func (r *Runtime) result(res resumeResult) Value {
+	if res.raw && res.value.IsObject() {
+		return res.value
+	}
+	return Obj(r.iterResult(res.value, res.done))
 }
 
 // resume runs a generator until its next suspension or completion.
@@ -292,6 +312,16 @@ func (r *Runtime) resumeFull(g *generator, sent Value, mode resumeMode) (resumeR
 	}
 	f := gf
 
+	if g.state == genSuspendedYield && g.delegating {
+		// Suspended inside a `yield*`: every way of resuming is forwarded to
+		// the inner iterator, so the kind is delivered as a value rather than
+		// acted on here.
+		g.delegating = false
+		g.state = genExecuting
+		r.stack[sp] = sent
+		r.stack[sp+1] = Int(int(mode))
+		return r.runDelegating(g, f, base, sp+2)
+	}
 	if g.state == genSuspendedYield {
 		// The value sent in becomes the result of the yield expression that
 		// suspended the generator.
@@ -314,6 +344,13 @@ func (r *Runtime) resumeFull(g *generator, sent Value, mode resumeMode) (resumeR
 	return r.runGeneratorFrom(g, f, base, sp, sent, nil)
 }
 
+// runDelegating resumes a generator suspended inside a `yield*`, where the
+// value and the kind of resumption are already on the operand stack.
+func (r *Runtime) runDelegating(g *generator, f *frame, base, sp int) (resumeResult, error) {
+	v, err := r.executeAt(f, sp, nil)
+	return r.finishResume(g, f, base, v, err)
+}
+
 // runGeneratorFrom drives the interpreter for one resumption.
 //
 // pending, when non-nil, is an exception injected at the suspension point,
@@ -326,7 +363,13 @@ func (r *Runtime) runGeneratorFrom(g *generator, f *frame, base, sp int, sent Va
 	}
 
 	v, err := r.executeAt(f, sp, pending)
+	return r.finishResume(g, f, base, v, err)
+}
 
+// finishResume records what a resumption produced: a suspension to be resumed
+// again, or the end of the generator.
+func (r *Runtime) finishResume(g *generator, f *frame, base int,
+	v Value, err error) (resumeResult, error) {
 	if sig, ok := err.(*suspendSignal); ok {
 		// Save everything the next resumption needs and release the window.
 		g.pc = f.pc
@@ -334,10 +377,11 @@ func (r *Runtime) runGeneratorFrom(g *generator, f *frame, base, sp int, sent Va
 		g.handlers = f.handlers
 		g.openUpvalues = f.openUpvalues
 		g.withScopes = f.withScopes
+		g.delegating = sig.delegate
 		g.state = genSuspendedYield
 		g.started = true
 		r.releaseGeneratorFrame(g, base)
-		return resumeResult{value: sig.value, await: sig.await}, nil
+		return resumeResult{value: sig.value, await: sig.await, raw: sig.raw}, nil
 	}
 
 	g.state = genCompleted
@@ -422,11 +466,11 @@ func (r *Runtime) initGeneratorBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		v, done, err := rt.resume(g, arg(args, 0), resumeNext)
+		res, err := rt.resumeFull(g, arg(args, 0), resumeNext)
 		if err != nil {
 			return Undefined, err
 		}
-		return Obj(rt.iterResult(v, done)), nil
+		return rt.result(res), nil
 	})
 
 	r.defMethod(p, "return", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -434,11 +478,11 @@ func (r *Runtime) initGeneratorBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		v, done, err := rt.resume(g, arg(args, 0), resumeReturn)
+		res, err := rt.resumeFull(g, arg(args, 0), resumeReturn)
 		if err != nil {
 			return Undefined, err
 		}
-		return Obj(rt.iterResult(v, done)), nil
+		return rt.result(res), nil
 	})
 
 	r.defMethod(p, "throw", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -446,11 +490,11 @@ func (r *Runtime) initGeneratorBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		v, done, err := rt.resume(g, arg(args, 0), resumeThrow)
+		res, err := rt.resumeFull(g, arg(args, 0), resumeThrow)
 		if err != nil {
 			return Undefined, err
 		}
-		return Obj(rt.iterResult(v, done)), nil
+		return rt.result(res), nil
 	})
 
 	// A generator is its own iterator.

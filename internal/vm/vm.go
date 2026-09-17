@@ -1488,6 +1488,29 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				// body proper begins.
 				return Undefined, nil
 			}
+		case bytecode.OpIterResume:
+			// stack: cursor sent kind
+			kind := pop()
+			sent := pop()
+			res, done, err := r.iterResume(peek(0), sent, resumeMode(kind.Number()),
+				in.A == 1)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			if done {
+				// A return the delegate had no method for, or took and
+				// finished, ends the delegation: the outer generator returns
+				// the value, running whatever finally clauses it owes on the
+				// way out.
+				sp -= 1 // the cursor
+				if r.unwindToFinally(f, &sp, res) {
+					continue
+				}
+				r.closeIteratorsIn(f.base, sp)
+				return res, nil
+			}
+			push(res)
 		case bytecode.OpIterSend, bytecode.OpIterSendAsync:
 			sent := pop()
 			res, err := r.iterSend(peek(0), sent, in.Op == bytecode.OpIterSendAsync)
@@ -1506,6 +1529,13 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			if err != nil {
 				vmErr = err
 				goto onError
+			}
+			if in.B == 1 && !done.Truthy() {
+				// A synchronous `yield*` hands the delegate's result object
+				// straight out, so its value is never read here -- which a
+				// getter on it can see.
+				push(res)
+				break
 			}
 			val, err := r.getValueProp(res, atomValue)
 			if err != nil {
@@ -1746,7 +1776,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			push(v)
 
 		// --- Suspension ---------------------------------------------------
-		case bytecode.OpYield, bytecode.OpAwait:
+		case bytecode.OpYield, bytecode.OpAwait, bytecode.OpYieldStar:
 			// The operand is popped before the depth is recorded, so that the
 			// saved stack holds only what is still live. Recording it first
 			// would save the yielded value too, and the resumption would then
@@ -1754,8 +1784,10 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			yielded := pop()
 			f.savedSP = sp
 			return Undefined, &suspendSignal{
-				value: yielded,
-				await: in.Op == bytecode.OpAwait,
+				value:    yielded,
+				await:    in.Op == bytecode.OpAwait,
+				delegate: in.Op == bytecode.OpYieldStar,
+				raw:      in.Op == bytecode.OpYieldStar && in.A == 1,
 			}
 		case bytecode.OpInitialYield:
 			f.savedSP = sp

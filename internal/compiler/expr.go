@@ -1395,36 +1395,46 @@ func (c *compiler) compileYield(n *ast.Yield) {
 
 	// yield* iterable
 	//
-	// The loop forwards in both directions: each value the delegate produces is
-	// yielded out, and each value the caller sends back in is passed to the
-	// delegate's next. Without that a generator delegating to another cannot be
-	// driven at all, since the inner one never receives anything.
+	// The loop forwards in both directions, and in all three ways a generator
+	// can be resumed. Each value the delegate produces is yielded out; each
+	// value the caller sends back in is passed to the delegate's next; a throw
+	// injected at the yield goes to the delegate's throw, and a return to its
+	// return. Without that a generator delegating to another cannot be driven
+	// at all, and closing the outer one would leave the inner one open.
 	//
 	// An async generator delegates over Symbol.asyncIterator, and awaits each
 	// result. Falling back to Symbol.iterator when there is no async one is the
 	// job of the start instruction, not of a second lookup here -- consulting
 	// Symbol.iterator after an asyncIterator getter has thrown is observable.
 	async := c.fn.Async
+	c.compileExpr(n.Arg)
 	if async {
-		c.compileExpr(n.Arg)
 		c.emit(bytecode.OpForAwaitOfStart, 0, 0)
 	} else {
-		c.compileExpr(n.Arg)
 		c.emit(bytecode.OpForOfStart, 0, 0)
 	}
 	// The first next receives undefined; after that it receives whatever the
-	// caller sent to the outer generator.
+	// caller sent to the outer generator, and the kind says which of the three
+	// methods to send it to.
 	c.emit(bytecode.OpPushUndef, 0, 0)
+	c.emit(bytecode.OpPushInt, 0, 0)
 
 	start := c.here()
+	// stack: cursor sent kind
 	if async {
-		c.emit(bytecode.OpIterSendAsync, 0, 0)
+		c.emit(bytecode.OpIterResume, 1, 0)
 		c.emitAwait(n.Start)
 	} else {
-		c.emit(bytecode.OpIterSend, 0, 0)
+		c.emit(bytecode.OpIterResume, 0, 0)
 	}
-	exit := c.emitJump(bytecode.OpIterUnpack)
-	c.emit(bytecode.OpYield, 0, 0)
+	raw := uint32(0)
+	if !async {
+		// A synchronous delegation yields the delegate's result object as it
+		// is, so nothing reads its value on the way past.
+		raw = 1
+	}
+	exit := c.emitJumpB(bytecode.OpIterUnpack, raw)
+	c.emit(bytecode.OpYieldStar, raw, 0)
 	c.emit(bytecode.OpJump, uint32(start), 0)
 
 	c.patchJump(exit)
