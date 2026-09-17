@@ -105,6 +105,15 @@ func (c *compiler) predeclareFunction(h hoistedFunc) {
 	lit.Name = nil
 	c.compileFunctionLiteral(&lit, fnName)
 	if !h.local {
+		// Sloppy eval code declaring a function the calling function already
+		// binds assigns to that binding rather than making one of its own,
+		// which is what lets the evaluated code replace a var the caller
+		// declared -- and what a reference to the name finds afterwards,
+		// whether it is written inside the eval or outside it.
+		if b, known := c.callerBinding(h.name); known && b.VarScoped {
+			c.storeVar(h.name, h.fd.Start)
+			return
+		}
 		c.emit(bytecode.OpDefineGlobalFunc, c.nameIdx(h.name),
 			boolBit(c.opts.EvalConfigurable))
 		return

@@ -16,9 +16,13 @@ type iterState struct {
 	// forIn selects between the snapshot and the protocol.
 	forIn bool
 
-	// keys is the snapshot for-in walks.
-	keys []Value
-	idx  int
+	// keys is the snapshot for-in walks, with the atoms it was built from:
+	// a key is looked up again before it is visited, since the loop body may
+	// have deleted it in the meantime.
+	keys     []Value
+	keyAtoms []Atom
+	obj      *Object
+	idx      int
 
 	// iter and next drive the for-of protocol.
 	iter Value
@@ -71,6 +75,7 @@ func (r *Runtime) startForIn(v Value) (Value, error) {
 		return Undefined, err
 	}
 
+	st.obj = o
 	seen := make(map[Atom]bool)
 	for cur := o; cur != nil; cur = cur.proto {
 		keys, err := r.ownKeysOf(cur, false)
@@ -93,6 +98,7 @@ func (r *Runtime) startForIn(v Value) (Value, error) {
 				continue
 			}
 			st.keys = append(st.keys, Str(NewString(r.atoms.name(k))))
+			st.keyAtoms = append(st.keyAtoms, k)
 		}
 	}
 	return r.newIterObject(st), nil
@@ -159,11 +165,21 @@ func (r *Runtime) iterNext(cursor Value) (Value, bool, error) {
 	}
 
 	if st.forIn {
-		// A key deleted since the snapshot was taken must be skipped, because
-		// the loop body may have removed it.
+		// A key deleted since the snapshot was taken is skipped: the loop body
+		// may have removed it, and what is gone is not visited.
 		for st.idx < len(st.keys) {
-			k := st.keys[st.idx]
+			k, key := st.keys[st.idx], st.keyAtoms[st.idx]
 			st.idx++
+			if st.obj != nil {
+				has, err := r.hasPropErr(st.obj, key)
+				if err != nil {
+					st.done = true
+					return Undefined, false, err
+				}
+				if !has {
+					continue
+				}
+			}
 			return k, true, nil
 		}
 		st.done = true

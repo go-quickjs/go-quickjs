@@ -376,3 +376,68 @@ func TestDirectEvalVarShadowsAnOuterBinding(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
 	}
 }
+
+// Sloppy eval code declaring a function the calling function already binds
+// assigns to that binding rather than making one of its own, which is what lets
+// the evaluated code replace a var the caller declared.
+func TestEvalFunctionReplacesACallerBinding(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var initial
+		  ;(function () { var f = 88; eval("initial = f; function f() { return 33 }") })();
+		  [typeof initial, initial()].join(",")`, "function,33"},
+		// The caller sees it too, since it is the caller's binding.
+		{`var out
+		  ;(function () {
+		    var f = 88
+		    eval("function f() { return 33 }")
+		    out = typeof f + ":" + f()
+		  })();
+		  out`, "function:33"},
+		// With no such binding the declaration belongs to the calling
+		// function's variable scope, and vanishes with the call.
+		{`var initial
+		  ;(function () { eval("initial = f; function f() { return 33 }") })();
+		  [typeof initial, typeof f].join(",")`, "function,undefined"},
+		// A parameter is a var-scoped binding like any other.
+		{`var out
+		  ;(function (p) { eval("function p() { return 1 }"); out = typeof p })(5);
+		  out`, "function"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// A for-in loop visits what is there when it gets to it: a property deleted
+// before it is reached is not visited, while one added after the walk began is
+// not picked up.
+func TestForInSeesDeletions(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var o = {a1: 1, b1: 2, c1: 3}
+		  var out = ""
+		  for (var k in o) { out += k; if (k === "a1") delete o.b1 }
+		  out`, "a1c1"},
+		{`var o = {a: 1, b: 2, c: 3}
+		  var out = []
+		  for (var k in o) { out.push(k + ":" + o[k]); delete o.c }
+		  out.join(",")`, "a:1,b:2"},
+		{`var o = {a: 1}
+		  var out = []
+		  for (var k in o) { out.push(k); o.b = 2 }
+		  out.join(",")`, "a"},
+		// A property deleted from the object but still on the prototype is
+		// there to be visited.
+		{`var proto = {b: "proto"}
+		  var o = Object.create(proto); o.a = 1; o.b = "own"
+		  var out = []
+		  for (var k in o) { out.push(k + ":" + o[k]); delete o.b }
+		  out.join(",")`, "a:1,b:proto"},
+		{`var o = {a: 1, b: 2}
+		  var out = []
+		  for (var k in o) { out.push(k) }
+		  out.join(",")`, "a,b"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
