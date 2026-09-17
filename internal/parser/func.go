@@ -397,6 +397,8 @@ func (p *parser) parseParenOrArrow() ast.Expr {
 			n.Paren = true
 		case *ast.ObjectLit:
 			n.Paren = true
+		case *ast.Ident:
+			n.Paren = true
 		}
 		return items[0]
 	}

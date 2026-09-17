@@ -522,6 +522,9 @@ func (c *compiler) compileFor(n *ast.ForStmt) {
 }
 
 func (c *compiler) compileForIn(n *ast.ForInStmt) {
+	if c.beginHeadScope(n.Left) {
+		defer c.endScope()
+	}
 	c.compileExpr(n.Right)
 	c.emit(bytecode.OpForInStart, 0, 0)
 	c.pushExit(exitCursor)
@@ -529,7 +532,26 @@ func (c *compiler) compileForIn(n *ast.ForInStmt) {
 	c.popExit()
 }
 
+// beginHeadScope puts a for-in or for-of head's lexical bindings in scope, in
+// their dead zone, for the expression that follows.
+//
+// `for (let x of [x])` names the binding being declared rather than one of the
+// same name outside it, which is a scope of its own -- distinct again from the
+// one each iteration gets.
+func (c *compiler) beginHeadScope(left ast.Node) bool {
+	vd, ok := left.(*ast.VarDecl)
+	if !ok || vd.Kind == ast.DeclVar {
+		return false
+	}
+	c.beginScope()
+	c.predeclareLexical(vd)
+	return true
+}
+
 func (c *compiler) compileForOf(n *ast.ForOfStmt) {
+	if c.beginHeadScope(n.Left) {
+		defer c.endScope()
+	}
 	c.compileExpr(n.Right)
 	if n.Await {
 		c.emit(bytecode.OpForAwaitOfStart, 0, 0)
@@ -834,7 +856,7 @@ func (c *compiler) compileSwitch(n *ast.SwitchStmt) {
 // nameOf returns the name a declaration target implies, used to give an
 // anonymous function the name of the variable it is assigned to.
 func nameOf(target ast.Expr) string {
-	if id, ok := target.(*ast.Ident); ok {
+	if id, ok := target.(*ast.Ident); ok && !id.Paren {
 		return id.Name
 	}
 	return ""

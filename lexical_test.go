@@ -554,3 +554,30 @@ func TestGlobalLexicalDeadZone(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestForHeadLexicalScope covers a for-in or for-of head that declares a name,
+// which is in scope -- and in its dead zone -- while the expression beside it
+// is evaluated.
+func TestForHeadLexicalScope(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`try { (function () { let x = 1; for (let x of [x]) {} })() }
+		  catch (e) { e.constructor.name }`, "ReferenceError"},
+		{`try { (function () { let x = 1; for (const x of [x]) {} })() }
+		  catch (e) { e.constructor.name }`, "ReferenceError"},
+		{`try { (function () { let x = 1; for (let x in {a: x}) {} })() }
+		  catch (e) { e.constructor.name }`, "ReferenceError"},
+		// A var head has no scope of its own, so the name is the outer one.
+		{`(function () { var x = 1; var out = []; for (var x of [x]) out.push(x)
+		    return out.join() })()`, "1"},
+
+		// The ordinary loops are unaffected, including the fresh binding each
+		// iteration gets.
+		{`var out = []; for (let x of [1, 2]) out.push(x); out.join()`, "1,2"},
+		{`var out = []; for (const k in {a: 1, b: 2}) out.push(k); out.join()`, "a,b"},
+		{`var out = []; for (let i of [1, 2]) out.push(() => i)
+		  out.map(f => f()).join()`, "1,2"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

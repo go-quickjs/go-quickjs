@@ -47,6 +47,10 @@ func (p *Program) Pos() int { return p.Start }
 type Ident struct {
 	Name  string
 	Start int
+	// Paren records that the name was written in parentheses, which stops it
+	// being an IdentifierReference for the purpose of naming an anonymous
+	// function: `(f) = function () {}` leaves the function's name empty.
+	Paren bool
 }
 
 // PrivateName is a `#field` reference.

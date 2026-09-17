@@ -55,3 +55,20 @@ func TestCompoundAssignmentEvaluatesOnce(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// TestParenthesizedTargetHasNoName covers naming an anonymous function after
+// the variable it is assigned to, which a parenthesised target does not do:
+// parentheses stop it being an identifier reference.
+func TestParenthesizedTargetHasNoName(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var fn; (fn) = function () {}; JSON.stringify(fn.name)`, `""`},
+		{`var fn; (fn) = () => {}; JSON.stringify(fn.name)`, `""`},
+		{`var fn; (fn) = class {}; JSON.stringify(fn.name)`, `""`},
+		{`var fn; fn = function () {}; JSON.stringify(fn.name)`, `"fn"`},
+		{`var fn = function () {}; JSON.stringify(fn.name)`, `"fn"`},
+		{`let fn = class {}; JSON.stringify(fn.name)`, `"fn"`},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
