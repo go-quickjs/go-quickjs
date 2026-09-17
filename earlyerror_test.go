@@ -514,3 +514,34 @@ func TestNoSuspendInParameters(t *testing.T) {
 		              catch (e) { e.constructor.name + ": " + e.message }`, "ok")
 	}
 }
+
+// TestPrivateNameNeedsAClass covers a private name written as a key outside a
+// class body, where there is no class evaluation to hold it.
+func TestPrivateNameNeedsAClass(t *testing.T) {
+	bad := []string{
+		`var o = {#m() {}}`,
+		`var o = {* #m() {}}`,
+		`var o = {async #m() {}}`,
+		`var o = {get #m() {}}`,
+		`var o = {set #m(v) {}}`,
+		`var o = {#m: 1}`,
+		`class C { m() { var o = {#x() {}} } }`,
+		`function f() { this.#x }`,
+	}
+	for _, src := range bad {
+		checkEval(t, `try { eval(`+jsQuote(src)+`); "no throw" }
+		              catch (e) { e.constructor.name }`, "SyntaxError")
+	}
+
+	good := []string{
+		`class C { #m() {} n() { return this.#m } }`,
+		`class C { * #m() {} }`,
+		`class C { get #m() { return 1 } set #m(v) {} }`,
+		`class C { #x = 1; static read(o) { return o.#x } }`,
+		`var o = {m() {}}`,
+	}
+	for _, src := range good {
+		checkEval(t, `try { eval(`+jsQuote(src)+`); "ok" }
+		              catch (e) { e.constructor.name + ": " + e.message }`, "ok")
+	}
+}

@@ -850,7 +850,7 @@ func (p *parser) parseObjectProperty() ast.Property {
 		p.next()
 		if p.startsPropertyName() && !p.isPunct("(") && !p.isPunct(":") &&
 			!p.isPunct(",") && !p.isPunct("}") && !p.isPunct("=") {
-			key, computed := p.parsePropertyName()
+			key, computed := p.parsePropertyName(false)
 			fn := p.parseMethodBody(ast.FuncGetter, false, false, start)
 			if kind == ast.PropSet {
 				fn.Kind = ast.FuncSetter
@@ -861,7 +861,7 @@ func (p *parser) parseObjectProperty() ast.Property {
 		p.reset(mark)
 	}
 
-	key, computed := p.parsePropertyName()
+	key, computed := p.parsePropertyName(false)
 
 	switch {
 	case p.isPunct("("):
@@ -924,7 +924,11 @@ func (p *parser) startsPropertyName() bool {
 }
 
 // parsePropertyName parses a property key, reporting whether it was computed.
-func (p *parser) parsePropertyName() (ast.Expr, bool) {
+//
+// allowPrivate is set inside a class body, which is the only place a private
+// name is a key: an object literal has no class evaluation to hold the key, so
+// `{#m() {}}` is an error rather than a property nobody can name.
+func (p *parser) parsePropertyName(allowPrivate bool) (ast.Expr, bool) {
 	start := p.tok.Pos
 	switch p.tok.Kind {
 	case lexer.String:
@@ -937,6 +941,9 @@ func (p *parser) parsePropertyName() (ast.Expr, bool) {
 		return p.nodes.number(v, start), false
 	case lexer.PrivateIdent:
 		v := p.tok.Value
+		if !allowPrivate {
+			p.errorf("a private name is only a member of a class")
+		}
 		p.next()
 		return &ast.PrivateName{Name: v, Start: start}, false
 	case lexer.Punct:

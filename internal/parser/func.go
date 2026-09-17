@@ -614,7 +614,7 @@ func (p *parser) parseClassMember(cls *ast.ClassLit, sawConstructor *bool, priva
 		p.next()
 		if p.startsPropertyName() && !p.isPunct("(") && !p.isPunct("=") &&
 			!p.isPunct(";") && !p.isPunct("}") {
-			key, computed := p.parsePropertyName()
+			key, computed := p.parsePropertyName(true)
 			p.checkClassMemberName(key, computed, isStatic, privateNames, kindOfAccessor(kind))
 			// A constructor is the one member that has to be a plain method:
 			// there is nothing for `new` to call if it is an accessor.
@@ -632,7 +632,7 @@ func (p *parser) parseClassMember(cls *ast.ClassLit, sawConstructor *bool, priva
 		p.reset(m)
 	}
 
-	key, computed := p.parsePropertyName()
+	key, computed := p.parsePropertyName(true)
 	p.checkClassMemberName(key, computed, isStatic, privateNames, privateOther)
 
 	if p.isPunct("(") {
