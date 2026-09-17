@@ -2571,7 +2571,8 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 		// stack and an Array needs array storage. It knows nothing of
 		// new.target, so the prototype new.target chose is put back -- which is
 		// what makes Reflect.construct(Array, [], F) produce an F.
-		if fd.native != nil && res.Object() != this.Object() && target != o {
+		if fd.native != nil && res.Object() != this.Object() && target != o &&
+			protoVal.IsObject() {
 			res.Object().proto = proto
 		}
 		return res, nil

@@ -3429,3 +3429,43 @@ func TestGoCallbackRethrowsJavaScriptErrors(t *testing.T) {
 		}
 	}
 }
+
+// TestSymbolAndErrorShape covers a few pieces of the built-in objects that a
+// script can see but nothing else depends on.
+func TestSymbolAndErrorShape(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// Symbol.prototype has valueOf and a toStringTag of its own.
+		{`var s = Symbol("a"); String(Symbol.prototype.valueOf.call(s) === s)`, "true"},
+		{`var s = Symbol("a"); String(Object(s).valueOf() === s)`, "true"},
+		{`try { Symbol.prototype.valueOf.call(1) } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		{`Symbol.prototype[Symbol.toStringTag]`, "Symbol"},
+		{`Object.prototype.toString.call(Object(Symbol("a")))`, "[object Symbol]"},
+
+		// AggregateError takes the errors before the message, so it has one
+		// more parameter -- and reads them last, after the message and the
+		// options, because draining them runs user code.
+		{`String(AggregateError.length) + "," + String(Error.length)`, "2,1"},
+		{`var order = []
+		  var errors = {[Symbol.iterator]() { order.push("errors"); return [][Symbol.iterator]() }}
+		  var message = {toString() { order.push("message"); return "" }}
+		  var options = {get cause() { order.push("cause"); return 1 }}
+		  new AggregateError(errors, message, options)
+		  order.join()`, "message,cause,errors"},
+		{`var e = new AggregateError([1, 2], "m"); e.errors.join() + "|" + e.message`, "1,2|m"},
+
+		// A native constructor keeps the prototype it chose when new.target
+		// names one that is not an object.
+		{`function F() {}
+		  F.prototype = undefined
+		  Object.prototype.toString.call(Reflect.construct(ArrayBuffer, [8], F))`,
+			"[object ArrayBuffer]"},
+
+		// Slicing a detached buffer is a TypeError rather than an empty copy.
+		{`var b = new ArrayBuffer(4); b.transfer()
+		  try { b.slice() } catch (e) { e.constructor.name }`, "TypeError"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

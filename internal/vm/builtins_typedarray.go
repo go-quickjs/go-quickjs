@@ -373,6 +373,9 @@ func (r *Runtime) initArrayBufferBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
+		if b.detached {
+			return Undefined, rt.throwTypeError("the ArrayBuffer has been detached")
+		}
 		start, err := rt.relativeIndex(arg(args, 0), len(b.bytes), 0)
 		if err != nil {
 			return Undefined, err

@@ -1954,6 +1954,15 @@ func (r *Runtime) initSymbolBuiltins() {
 		}
 		return Str(NewString(s.String())), nil
 	})
+	r.defMethod(p, "valueOf", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		s, err := rt.thisSymbol(this)
+		if err != nil {
+			return Undefined, err
+		}
+		return Sym(s), nil
+	})
+	r.defToStringTag(p, "Symbol")
+
 	r.defGetter(p, "description", func(rt *Runtime, this Value, args []Value) (Value, error) {
 		s, err := rt.thisSymbol(this)
 		if err != nil {
@@ -2009,22 +2018,19 @@ func (r *Runtime) initErrorBuiltins() {
 		proto.setOwnRaw(atomName, Str(NewString(name)), propWritable|propConfigurable)
 		proto.setOwnRaw(atomMessage, Str(emptyString), propWritable|propConfigurable)
 
-		ctor := r.newCtor(name, 1, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		// AggregateError takes the list of errors before the message, so it has
+		// one more parameter than the rest.
+		arity := 1
+		if kind == errAggregate {
+			arity = 2
+		}
+		ctor := r.newCtor(name, arity, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
 			o := newObject(rt.proto.nativeErrors[kind], ClassError)
 			// AggregateError takes the list of causes first, so its message is
 			// the second argument rather than the first.
 			msgArg, optsArg := arg(args, 0), arg(args, 1)
 			if kind == errAggregate {
 				msgArg, optsArg = arg(args, 1), arg(args, 2)
-				var errs []Value
-				if err := rt.iterate(arg(args, 0), func(v Value) error {
-					errs = append(errs, v)
-					return nil
-				}); err != nil {
-					return Undefined, err
-				}
-				o.setOwnRaw(rt.atoms.intern("errors"), Obj(rt.newArrayFrom(errs)),
-					propWritable|propConfigurable)
 			}
 			msg := ""
 			if m := msgArg; !m.IsUndefined() {
@@ -2045,6 +2051,20 @@ func (r *Runtime) initErrorBuiltins() {
 					}
 					o.setOwnRaw(causeKey, cause, propWritable|propConfigurable)
 				}
+			}
+			// The list of errors is drained last, after the message and the
+			// options have been read: the iterator may run user code, and it
+			// runs after they do.
+			if kind == errAggregate {
+				var errs []Value
+				if err := rt.iterate(arg(args, 0), func(v Value) error {
+					errs = append(errs, v)
+					return nil
+				}); err != nil {
+					return Undefined, err
+				}
+				o.setOwnRaw(rt.atoms.intern("errors"), Obj(rt.newArrayFrom(errs)),
+					propWritable|propConfigurable)
 			}
 			o.setOwnRaw(atomStack, Str(NewString(rt.formatStack(msg, kind))),
 				propWritable|propConfigurable)
