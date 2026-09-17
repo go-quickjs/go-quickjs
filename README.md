@@ -41,6 +41,7 @@ conformance suite.
 | Legacy | `with`, Annex B string methods, `escape`/`unescape`, sloppy-mode block functions |
 | Modules | `import`/`export`, live bindings, cycles, namespace imports, dynamic `import()`, top-level `await` |
 | Iterator helpers | `map`, `filter`, `take`, `drop`, `flatMap`, `reduce`, `toArray` and the rest, lazily |
+| Unicode | Full case mappings including the final sigma, all four normalization forms, lone surrogates preserved end to end |
 | Built-ins | `Object`, `Function`, `Array`, `String`, `Number`, `Boolean`, `Symbol`, `BigInt`, `Error`, `Math`, `JSON`, `Date`, `RegExp`, `Map`, `Set`, `Promise`, `Proxy`, `Reflect`, `ArrayBuffer`, `DataView`, typed arrays |
 | Weak references | `WeakRef`, `FinalizationRegistry`, `WeakMap`, `WeakSet`, backed by Go's `weak.Pointer` and `runtime.AddCleanup`: a target really is released, and a registry really is called back |
 | Reflection | `Proxy` with every trap and its invariants, `Reflect`, property descriptors, mapped `arguments` |
@@ -56,12 +57,12 @@ tracks.
 
 Known semantic gaps, each covered by a test that documents it:
 
-- `String.prototype.normalize` returns its input unchanged. The normalization
-  forms need Unicode's decomposition tables, which the standard library does not
-  expose.
 - A `WeakMap` or `WeakSet` value is held strongly, so a value that refers to its
   own key keeps that key alive. Breaking that cycle needs ephemeron marking,
   which Go's collector does not offer.
+- `String.prototype.normalize` works from Unicode 13 decomposition tables, which
+  is what the system the tables were generated from had. A character introduced
+  after that decomposes to itself.
 
 ## Conformance
 

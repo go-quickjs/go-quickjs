@@ -733,21 +733,20 @@ func (r *Runtime) initStringExtras() {
 		if err != nil {
 			return Undefined, err
 		}
+		form := "NFC"
 		if f := arg(args, 0); !f.IsUndefined() {
 			fs, err := rt.toString(f)
 			if err != nil {
 				return Undefined, err
 			}
-			switch fs.Go() {
+			form = fs.Go()
+			switch form {
 			case "NFC", "NFD", "NFKC", "NFKD":
 			default:
 				return Undefined, rt.throwRangeError("invalid normalization form")
 			}
 		}
-		// Normalization tables are not implemented, so the string is returned
-		// unchanged. That is correct for text already in NFC, which is the
-		// overwhelming majority, and wrong otherwise.
-		return Str(s), nil
+		return Str(NewString(normalizeString(s.Go(), form))), nil
 	})
 
 	r.defMethod(p, "localeCompare", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -760,8 +759,15 @@ func (r *Runtime) initStringExtras() {
 			return Undefined, err
 		}
 		// Without a collation table this is a code-unit comparison, which
-		// agrees with a locale-aware one for ASCII.
-		return Int(s.Compare(o)), nil
+		// agrees with a locale-aware one for ASCII. The two are normalized
+		// first, so that two spellings of the same text compare equal --
+		// which the specification does require, whatever the locale.
+		if s.Go() == o.Go() {
+			return Int(0), nil
+		}
+		a := NewString(normalizeString(s.Go(), "NFC"))
+		b := NewString(normalizeString(o.Go(), "NFC"))
+		return Int(a.Compare(b)), nil
 	})
 
 	// The locale-sensitive pair fall back to the language-independent mappings,

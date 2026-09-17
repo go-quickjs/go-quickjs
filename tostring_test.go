@@ -306,3 +306,62 @@ func TestDeleteSynthesizedProperties(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// Normalization settles the two ways text can be spelled differently: whether a
+// character is written whole or as a base and its marks, and what order the
+// marks are in. The K forms additionally replace a character by what it stands
+// for, which loses the distinction rather than respelling it.
+func TestNormalizeForms(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// Composed and decomposed spellings of the same text.
+		{`"Å".normalize("NFD") === "Å" ? "yes" : "no"`, "yes"},
+		{`"Å".normalize("NFC") === "Å" ? "yes" : "no"`, "yes"},
+		{`["Å".normalize("NFD").length, "Å".normalize("NFC").length].join(",")`,
+			"2,1"},
+		// The default form is NFC.
+		{`"Å".normalize() === "Å" ? "yes" : "no"`, "yes"},
+		// A singleton: the angstrom sign is the letter.
+		{`"Å".normalize("NFC") === "Å" ? "yes" : "no"`, "yes"},
+
+		// The marks are put in canonical order, which is by combining class
+		// and otherwise stable.
+		{`"q̣̇".normalize("NFC") === "q̣̇" ? "yes" : "no"`, "yes"},
+		{`"ẛ̣".normalize("NFD") === "ẛ̣" ? "yes" : "no"`, "yes"},
+		{`"ẛ̣".normalize("NFKD") === "ṩ" ? "yes" : "no"`, "yes"},
+		{`"ẛ̣".normalize("NFKC") === "ṩ" ? "yes" : "no"`, "yes"},
+
+		// Compatibility replaces a character by what it stands for.
+		{`"ﬁ".normalize("NFKC")`, "fi"},
+		{`"²".normalize("NFKC")`, "2"},
+		{`"ﬁ".normalize("NFC")`, "ﬁ"},
+
+		// Hangul comes apart and goes back together by arithmetic.
+		{`"가".normalize("NFD") === "가" ? "yes" : "no"`, "yes"},
+		{`"가".normalize("NFC") === "가" ? "yes" : "no"`, "yes"},
+		{`"퓛".normalize("NFD") === "퓛" ? "yes" : "no"`, "yes"},
+		{`"퓛".normalize("NFC") === "퓛" ? "yes" : "no"`, "yes"},
+
+		// A character the database excludes comes apart and does not go back.
+		{`"क़".normalize("NFC") === "क़" ? "yes" : "no"`, "yes"},
+
+		// What has nothing to say for itself is returned unchanged, including
+		// a lone surrogate.
+		{`"abc".normalize("NFD")`, "abc"},
+		{`"".normalize()`, ""},
+		{`"\uD800".normalize("NFC") === "\uD800" ? "yes" : "no"`, "yes"},
+		{`String("a\uD800b".normalize("NFD").length)`, "3"},
+
+		// The form has to be one of the four.
+		{`try { "a".normalize("NFX") } catch (e) { e.constructor.name }`, "RangeError"},
+		{`try { "a".normalize(null) } catch (e) { e.constructor.name }`, "RangeError"},
+		{`String(String.prototype.normalize.length)`, "0"},
+
+		// Two spellings of the same text compare equal, whatever the locale.
+		{`String("ö".localeCompare("ö"))`, "0"},
+		{`String("a".localeCompare("a"))`, "0"},
+		{`String("a".localeCompare("b") < 0)`, "true"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
