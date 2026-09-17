@@ -674,9 +674,13 @@ func (p *parser) parseClassMember(cls *ast.ClassLit, sawConstructor *bool, priva
 		p.allowSuperCall = false
 		p.allowYield = false
 		p.allowAwait = false
-		// A field initializer runs in a context with no arguments object, so
-		// naming one is an early error rather than a runtime failure, and
-		// `await` is not an identifier in it.
+		// A field initializer is a function of its own, so new.target is
+		// written there as it would be in any function -- it is simply always
+		// undefined, since nothing constructs an initializer.
+		p.allowNewTarget = true
+		// It runs in a context with no arguments object, so naming one is an
+		// early error rather than a runtime failure, and `await` is not an
+		// identifier in it.
 		p.noArguments = true
 		p.noAwaitIdent = true
 		p.labels = make(map[string]bool)

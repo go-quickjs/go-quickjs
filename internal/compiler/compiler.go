@@ -55,6 +55,11 @@ type Options struct {
 	// EvalOwnVarScope marks eval code, whose top-level vars belong to the
 	// evaluated code rather than to the global object when it is strict.
 	EvalOwnVarScope bool
+	// InFieldInit marks a direct eval whose call site is a class field
+	// initializer, where `arguments` has no meaning and new.target is
+	// undefined -- the initializer is a function of its own, even though it is
+	// compiled into the constructor.
+	InFieldInit bool
 	// EvalConfigurable marks the bindings eval creates on the global object,
 	// which are configurable where a script's are not: the evaluated code could
 	// have declared them anywhere, so nothing should be able to rely on them.
@@ -262,6 +267,10 @@ func Compile(prog *ast.Program, opts Options) (fn *bytecode.Function, err error)
 	c.fn.IsModule = prog.Module
 	c.fn.Source = opts.Source
 	c.lineOf = lineMapper(opts.Text)
+	c.inFieldInit = opts.InFieldInit
+	if opts.InFieldInit && containsArgumentsInStmts(prog.Body) {
+		return nil, &Error{Msg: "\"arguments\" is not allowed in a class field initializer"}
+	}
 
 	defer func() {
 		if r := recover(); r != nil {

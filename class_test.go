@@ -965,3 +965,45 @@ func TestPrivateAddedOnlyOnce(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestClassFieldInitIsItsOwnFunction covers what a field initializer can see.
+// It is a function of its own even though it is compiled into the constructor,
+// so `arguments` has no meaning there and new.target is undefined.
+func TestClassFieldInitIsItsOwnFunction(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`class C { x = new.target } String(new C().x)`, "undefined"},
+		{`class C { x = (() => new.target)() } String(new C().x)`, "undefined"},
+		{`class C { static x = new.target } String(C.x)`, "undefined"},
+		// A function nested in the initializer has its own, so the enclosing
+		// restriction stops there.
+		{`class C { x = function () { return typeof arguments }() } new C().x`, "object"},
+		{`class C { x = function () { return new.target }() } String(new C().x)`,
+			"undefined"},
+
+		// The eval sees the same rules, and the SyntaxError is early enough
+		// that none of the evaluated code runs.
+		{`var e = false
+		  class C { x = eval("e = true; new.target;") }
+		  String(new C().x) + "," + e`, "undefined,true"},
+		{`var e = false
+		  class C { x = eval("e = true; arguments;") }
+		  try { new C(); "no throw" } catch (err) { err.constructor.name + "," + e }`,
+			"SyntaxError,false"},
+		{`var e = false
+		  class C { x = (() => eval("e = true; arguments"))() }
+		  try { new C(); "no throw" } catch (err) { err.constructor.name + "," + e }`,
+			"SyntaxError,false"},
+		// A function inside the eval has its own arguments object again.
+		{`class C { x = eval("(function () { return typeof arguments })()") }
+		  new C().x`, "object"},
+
+		// Naming it directly is an early error.
+		{`try { eval("class C { x = arguments }"); "no throw" }
+		  catch (err) { err.constructor.name }`, "SyntaxError"},
+		{`try { eval("class C { static x = arguments }"); "no throw" }
+		  catch (err) { err.constructor.name }`, "SyntaxError"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

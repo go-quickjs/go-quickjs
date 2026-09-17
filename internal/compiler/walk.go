@@ -40,6 +40,23 @@ type argumentsScanner struct {
 	// seekEval widens it back to include a direct eval, whose code may say
 	// anything.
 	seekEval bool
+	// literalOnly narrows the search to the name itself, with no allowance for
+	// a direct eval: what the evaluated code says is the evaluated code's own
+	// problem, reported when it is compiled.
+	literalOnly bool
+}
+
+// containsArgumentsInStmts reports whether code mentions `arguments`.
+//
+// It is what a class field initializer may not do: an initializer is a function
+// of its own, so there is no arguments object for the name to mean. The parser
+// catches it in source; this catches it in what a direct eval there compiles.
+// The scan descends into arrows, which share the enclosing arguments object,
+// and stops at any other function, which has its own.
+func containsArgumentsInStmts(body []ast.Stmt) bool {
+	w := &argumentsScanner{literalOnly: true}
+	w.stmts(body)
+	return w.found
 }
 
 // needsHomeObject reports whether an expression mentions super, or a direct
@@ -164,6 +181,10 @@ func (w *argumentsScanner) expr(e ast.Expr) {
 	switch n := e.(type) {
 	case *ast.Ident:
 		switch {
+		case w.literalOnly:
+			if n.Name == "arguments" {
+				w.found = true
+			}
 		case w.seekSuper && !w.seekEval:
 			// Only a literal `super` counts here.
 		case w.seekSuper && n.Name != "eval":

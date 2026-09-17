@@ -47,6 +47,7 @@ func (c *compiler) evalScopeIdx() uint32 {
 		AllowSuperProp: c.allowSuperProp(),
 		AllowSuperCall: c.allowSuperCall(),
 		AllowNewTarget: c.fn.Kind != bytecode.KindNormal || c.parent != nil,
+		InFieldInit:    c.inClassFieldInit(),
 		PrivateNames:   c.visiblePrivateNames(),
 		ArgumentNames:  c.paramScopeNames,
 	}
@@ -157,6 +158,23 @@ func (c *compiler) allowSuperProp() bool {
 		return true
 	case bytecode.KindArrow:
 		return c.parent != nil && c.parent.allowSuperProp()
+	}
+	return false
+}
+
+// inClassFieldInit reports whether the current position is inside a class
+// field initializer.
+//
+// An initializer is a function of its own even though it is compiled into the
+// constructor, so `arguments` there is a syntax error and new.target is
+// undefined. An arrow inside one is inside it too, which is what the walk up
+// the parents is for; any other function is not.
+func (c *compiler) inClassFieldInit() bool {
+	if c.inFieldInit {
+		return true
+	}
+	if c.fn.Kind == bytecode.KindArrow && c.parent != nil {
+		return c.parent.inClassFieldInit()
 	}
 	return false
 }

@@ -44,6 +44,12 @@ func (c *compiler) compileExprNamed(e ast.Expr, name string) {
 		c.emit(bytecode.OpPushThis, 0, 0)
 
 	case *ast.NewTarget:
+		if c.inClassFieldInit() {
+			// A field initializer is a function of its own, and nothing
+			// constructs it.
+			c.emit(bytecode.OpPushUndef, 0, 0)
+			break
+		}
 		c.emit(bytecode.OpNewTarget, 0, 0)
 
 	case *ast.ImportMeta:

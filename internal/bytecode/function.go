@@ -78,7 +78,11 @@ type EvalScope struct {
 	AllowSuperProp bool
 	AllowSuperCall bool
 	AllowNewTarget bool
-	InClassBody    bool
+	// InFieldInit marks a call site inside a class field initializer, which is
+	// a function of its own: `arguments` there is a syntax error, and
+	// new.target is undefined.
+	InFieldInit bool
+	InClassBody bool
 	// PrivateNames are the private names of the enclosing classes, which
 	// evaluated code may refer to.
 	PrivateNames []EvalPrivateName

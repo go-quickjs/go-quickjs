@@ -461,6 +461,7 @@ func (r *Runtime) installCodeGeneration() {
 			copts.EvalScope = req.Scope.Bindings
 			copts.PrivateNames = req.Scope.PrivateNames
 			copts.ArgumentNames = req.Scope.ArgumentNames
+			copts.InFieldInit = req.Scope.InFieldInit
 		}
 		prog, err := parser.Parse(source, popts)
 		if err != nil {
