@@ -473,3 +473,42 @@ func TestAssigningThroughAPrimitive(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// A destructuring target is resolved before the value it receives is read,
+// which nothing can see unless a `with` object is asked about the name.
+func TestDestructuringResolvesTargetsFirst(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var log = []
+		  var sourceKey = {toString: function () { log.push("sourceKey"); return "p" }}
+		  var source = {get p() { log.push("get source"); return undefined }}
+		  var env = new Proxy({}, {
+		    has: function (t, pk) { log.push("binding::" + String(pk)); return false }
+		  })
+		  var defaultValue = 0
+		  var varTarget
+		  with (env) { var {[sourceKey]: varTarget = defaultValue} = source }
+		  log.join(",")`,
+			"binding::source,binding::sourceKey,sourceKey,binding::varTarget," +
+				"get source,binding::defaultValue"},
+		// The target is written to whatever the name resolved to.
+		{`var o = {x: 1}
+		  var x = "outer"
+		  with (o) { var {p: x} = {p: 5} }
+		  [o.x, globalThis.x].join(",")`, "5,outer"},
+		// An array pattern resolves its targets the same way.
+		{`var log = []
+		  var env = new Proxy({}, {has: function (t, k) { log.push(String(k)); return false }})
+		  with (env) { var [a1, b1] = [1, 2] }
+		  [log.join(","), a1, b1].join("|")`, "a1,b1|1|2"},
+		// And the ordinary patterns are unchanged.
+		{`var {a: x1, b: y1} = {a: 1, b: 2}; [x1, y1].join(",")`, "1,2"},
+		{`var [p, q = 7] = [1]; [p, q].join(",")`, "1,7"},
+		{`var {m: {n} = {n: 3}} = {}; String(n)`, "3"},
+		{`var o = {}
+		  ;({x: o.p = 5} = {});
+		  String(o.p)`, "5"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

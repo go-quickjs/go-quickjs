@@ -715,3 +715,28 @@ func TestErrorCauseIsAskedFor(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// A finally clause starts with no value of its own. It matters only when the
+// clause leaves abruptly: a break or a continue written inside it carries what
+// the clause itself produced, and undefined when it produced nothing, rather
+// than what the try block produced.
+func TestFinallyCompletionValues(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`eval('99; do { -99; try { 39 } catch (e) { -1 } finally { 42; break; -2 }; } while (false);')`,
+			"42"},
+		{`String(eval('99; do { -99; try { 39 } catch (e) { -1 } finally { break; -2 }; } while (false);'))`,
+			"undefined"},
+		{`String(eval('99; do { -99; try { [].x.x } catch (e) { -1 } finally { break; -3 }; -77 } while (false);'))`,
+			"undefined"},
+		{`eval('99; do { -99; try { 39 } catch (e) { -1 } finally { 42; continue; -3 }; } while (false);')`,
+			"42"},
+		// A clause that finishes normally leaves the try block's value alone.
+		{`eval('1; try { 2 } finally { 3 }')`, "2"},
+		{`eval('1; try { throw 0 } catch (e) { 2 } finally { 3 }')`, "2"},
+		{`String(eval('1; try { 2 } finally { }'))`, "2"},
+		{`eval('99; try { 39 } finally { out: { break out; } }')`, "39"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

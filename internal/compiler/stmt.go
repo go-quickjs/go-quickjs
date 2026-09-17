@@ -801,6 +801,12 @@ func (c *compiler) compileTry(n *ast.TryStmt) {
 		save = int32(c.declare(name, bindVar, n.Start))
 		c.emit(bytecode.OpGetLocal, uint32(c.completionSlot), 0)
 		c.emit(bytecode.OpSetLocal, uint32(save), 0)
+		// The clause starts with no value of its own. It matters only when it
+		// leaves abruptly -- a break or a continue written inside it carries
+		// what the clause itself produced, and undefined when it produced
+		// nothing, rather than what the try block had produced.
+		c.emit(bytecode.OpPushUndef, 0, 0)
+		c.emit(bytecode.OpSetLocal, uint32(c.completionSlot), 0)
 	}
 	// The completion record sits beneath the clause's own operands, so a break
 	// or continue leaving the clause has to drop it: what it jumps to is not

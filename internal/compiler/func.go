@@ -434,7 +434,7 @@ func (c *compiler) compileArrayPattern(pat *ast.ArrayPattern, kind ast.DeclKind,
 			c.emit(bytecode.OpDrop, 0, 0)
 			continue
 		}
-		ref := c.prepareRef(el, declaring)
+		ref := c.prepareRef(el, declaring, kind)
 		c.emit(bytecode.OpIterStep, uint32(ref.slots), 0)
 		if ref.def != nil {
 			c.applyDefault(ref.def, nameOf(ref.target))
@@ -443,7 +443,7 @@ func (c *compiler) compileArrayPattern(pat *ast.ArrayPattern, kind ast.DeclKind,
 	}
 
 	if pat.Rest != nil {
-		ref := c.prepareRef(pat.Rest, declaring)
+		ref := c.prepareRef(pat.Rest, declaring, kind)
 		c.emit(bytecode.OpIterRest, uint32(ref.slots), 0)
 		c.storeRef(ref, kind, declaring)
 	}
@@ -471,13 +471,28 @@ type patternRef struct {
 	member *ast.Member
 	// private marks a member whose key is a private name.
 	private bool
+	// withRef marks a name resolved against the `with` objects in scope
+	// before the value was read, which is observable: the objects are asked
+	// whether they have the name, and asked in that order.
+	withRef *ast.Ident
 }
 
 // prepareRef evaluates the part of a target that comes before the value.
-func (c *compiler) prepareRef(leaf ast.Expr, declaring bool) patternRef {
+func (c *compiler) prepareRef(leaf ast.Expr, declaring bool, kind ast.DeclKind) patternRef {
 	ref := patternRef{target: leaf}
 	if ap, ok := leaf.(*ast.AssignPattern); ok {
 		ref.target, ref.def = ap.Target, ap.Default
+	}
+	if id, ok := ref.target.(*ast.Ident); ok {
+		// A name is resolved before the value it receives is read, which
+		// nothing can see unless a `with` object is asked about it.
+		if !declaring || kind == ast.DeclVar {
+			if c.withLimit(id.Name) > 0 {
+				c.resolveWithRef(id)
+				ref.withRef, ref.slots = id, 1
+			}
+		}
+		return ref
 	}
 	m, ok := ref.target.(*ast.Member)
 	if !ok || declaring {
@@ -525,6 +540,13 @@ func (c *compiler) storeRef(ref patternRef, kind ast.DeclKind, declaring bool) {
 	}
 	switch l := ref.target.(type) {
 	case *ast.Ident:
+		if ref.withRef != nil {
+			// The reference was settled before the read; the write goes to
+			// whatever it found.
+			c.endWithRef(ref.withRef)
+			c.emit(bytecode.OpDrop, 0, 0)
+			return
+		}
 		if declaring {
 			c.initBinding(l, kind)
 			return
@@ -560,7 +582,7 @@ func (c *compiler) compileObjectPattern(pat *ast.ObjectPattern, kind ast.DeclKin
 			// target it will be read into.
 			c.compileExpr(p.Key)
 			c.emit(bytecode.OpToPropertyKey, 0, 0)
-			ref := c.prepareRef(p.Value, declaring)
+			ref := c.prepareRef(p.Value, declaring, kind)
 			c.emit(bytecode.OpGetIndexUnder, uint32(ref.slots), 0)
 			if ref.def != nil {
 				c.applyDefault(ref.def, nameOf(ref.target))
@@ -570,7 +592,7 @@ func (c *compiler) compileObjectPattern(pat *ast.ObjectPattern, kind ast.DeclKin
 			c.emit(bytecode.OpDrop, 0, 0)
 			continue
 		}
-		ref := c.prepareRef(p.Value, declaring)
+		ref := c.prepareRef(p.Value, declaring, kind)
 		c.emit(bytecode.OpGetPropUnder, c.nameIdx(propKeyName(p.Key)), uint32(ref.slots))
 		if ref.def != nil {
 			c.applyDefault(ref.def, nameOf(ref.target))
