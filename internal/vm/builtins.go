@@ -1266,52 +1266,33 @@ func (r *Runtime) initArrayBuiltins() {
 	})
 
 	r.defMethod(p, "sort", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.toObject(this)
+		cmp := arg(args, 0)
+		// The comparator is checked before the receiver is even coerced, so a
+		// bad one is reported whatever it was going to be applied to.
+		if !cmp.IsUndefined() && !isCallable(cmp) {
+			return Undefined, rt.throwTypeError("the comparator is not a function")
+		}
+		a, err := rt.viewArrayLike(this)
 		if err != nil {
 			return Undefined, err
 		}
-		cmp := arg(args, 0)
-		var sortErr error
-		// The default comparison is by the string form, which is why
-		// [10, 9].sort() gives [10, 9].
-		sort.SliceStable(o.elems, func(i, j int) bool {
-			if sortErr != nil {
-				return false
+		sorted, err := rt.sortIndexed(a, cmp)
+		if err != nil {
+			return Undefined, err
+		}
+		// The present elements go back at the front and the rest of the
+		// positions are emptied, which is what moves holes to the end and
+		// keeps them holes.
+		i := int64(0)
+		for ; i < int64(len(sorted)); i++ {
+			if err := a.set(rt, i, sorted[i]); err != nil {
+				return Undefined, err
 			}
-			a, b := o.elems[i], o.elems[j]
-			switch {
-			case isHole(a) || a.IsUndefined():
-				return false
-			case isHole(b) || b.IsUndefined():
-				return true
+		}
+		for ; i < a.n; i++ {
+			if err := a.remove(rt, i); err != nil {
+				return Undefined, err
 			}
-			if isCallable(cmp) {
-				res, err := rt.call(cmp, Undefined, []Value{a, b})
-				if err != nil {
-					sortErr = err
-					return false
-				}
-				n, err := rt.toNumber(res)
-				if err != nil {
-					sortErr = err
-					return false
-				}
-				return n < 0
-			}
-			sa, err := rt.toString(a)
-			if err != nil {
-				sortErr = err
-				return false
-			}
-			sb, err := rt.toString(b)
-			if err != nil {
-				sortErr = err
-				return false
-			}
-			return sa.Compare(sb) < 0
-		})
-		if sortErr != nil {
-			return Undefined, sortErr
 		}
 		return this, nil
 	})
@@ -2297,4 +2278,81 @@ func clipRange(o *Object, start, end int) (int, int) {
 		end = start
 	}
 	return start, end
+}
+
+// sortIndexed collects an array-like's present elements and sorts them.
+//
+// The elements are taken out, sorted and put back rather than moved in place,
+// because a comparator is arbitrary code: it may shorten the array, replace its
+// elements or throw, and none of that may be allowed to corrupt what is being
+// sorted or to reach outside it.
+//
+// Holes are left out entirely -- they are not values to compare, and they end
+// up at the end because the caller puts nothing there -- while undefined sorts
+// after everything, without the comparator being asked.
+func (r *Runtime) sortIndexed(a *arrayLike, cmp Value) ([]Value, error) {
+	items := make([]Value, 0, min(int(a.n), 1024))
+	for i := int64(0); i < a.n; i++ {
+		v, present, err := a.at(r, i)
+		if err != nil {
+			return nil, err
+		}
+		if present {
+			items = append(items, v)
+		}
+	}
+
+	var sortErr error
+	sort.SliceStable(items, func(i, j int) bool {
+		if sortErr != nil {
+			return false
+		}
+		less, err := r.compareForSort(items[i], items[j], cmp)
+		if err != nil {
+			sortErr = err
+			return false
+		}
+		return less
+	})
+	if sortErr != nil {
+		return nil, sortErr
+	}
+	return items, nil
+}
+
+// compareForSort reports whether x sorts before y.
+func (r *Runtime) compareForSort(x, y, cmp Value) (bool, error) {
+	// undefined sorts after everything, and the comparator is not consulted
+	// about it -- which is what lets a comparator assume its arguments are
+	// values it put there.
+	switch {
+	case x.IsUndefined():
+		return false, nil
+	case y.IsUndefined():
+		return true, nil
+	}
+	if isCallable(cmp) {
+		res, err := r.call(cmp, Undefined, []Value{x, y})
+		if err != nil {
+			return false, err
+		}
+		n, err := r.toNumber(res)
+		if err != nil {
+			return false, err
+		}
+		// A comparator returning NaN says nothing, which a stable sort turns
+		// into "leave them as they are".
+		return n < 0, nil
+	}
+	// The default comparison is by the string form, which is why [10, 9].sort()
+	// gives [10, 9].
+	sx, err := r.toString(x)
+	if err != nil {
+		return false, err
+	}
+	sy, err := r.toString(y)
+	if err != nil {
+		return false, err
+	}
+	return sx.Compare(sy) < 0, nil
 }

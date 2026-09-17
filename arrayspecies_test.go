@@ -327,3 +327,69 @@ func TestDefinePropertyValueDefault(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// sort takes the elements out, sorts them and puts them back, because a
+// comparator is arbitrary code: it may shorten the array, replace its elements
+// or throw, and none of that may corrupt what is being sorted.
+func TestArraySort(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`[3, 1, 2].sort().join(",")`, "1,2,3"},
+		{`[3, 1, 2].sort((x, y) => x - y).join(",")`, "1,2,3"},
+		// The default comparison is by the string form.
+		{`[10, 9].sort().join(",")`, "10,9"},
+		{`var a = [2, 1]; String(a.sort() === a)`, "true"},
+
+		// Holes end up at the end and stay holes; undefined sorts after
+		// everything without the comparator being asked.
+		{`var a = [, 1, undefined, 2]; a.sort();
+		  [a.length, String(a[0]), String(a[2]), a.hasOwnProperty(3)].join(",")`,
+			"4,1,undefined,false"},
+		{`var seen = 0; [undefined, 1].sort((x, y) => { seen++; return 0; });
+		  String(seen)`, "0"},
+
+		// It works on an array-like.
+		{`var o = {0: "b", 1: "a", length: 2};
+		  Array.prototype.sort.call(o); [o[0], o[1]].join(",")`, "a,b"},
+
+		// A comparator that mutates the array cannot reach what is being
+		// sorted, because it is no longer there.
+		{`var a = [1, 2, 3]; a.sort((x, y) => { a.length = 1; return x - y; });
+		  String(a.length)`, "3"},
+		{`var a = [3, 1, 2];
+		  try { a.sort(() => { throw new Error("x"); }) } catch (e) { }
+		  String(a.length)`, "3"},
+		// Stability: equal elements keep their order.
+		{`[{k: 1, i: 0}, {k: 0, i: 1}, {k: 1, i: 2}, {k: 0, i: 3}]
+		    .sort((x, y) => x.k - y.k).map(o => o.i).join(",")`, "1,3,0,2"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+
+	bad := []string{
+		// The comparator is checked before the receiver is even coerced.
+		`[1, 2].sort(1)`,
+		`[1, 2].sort(null)`,
+		`[1, 2].sort({})`,
+		`Array.prototype.sort.call(null, undefined)`,
+		// A frozen array cannot be written, which sorting it does.
+		`var a = [2, 1]; Object.freeze(a); a.sort()`,
+	}
+	for _, src := range bad {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil {
+			t.Errorf("%s: accepted, want TypeError", src)
+		} else if !strings.Contains(err.Error(), "TypeError") {
+			t.Errorf("%s: got %v, want TypeError", src, err)
+		}
+		rt.Close()
+	}
+}
