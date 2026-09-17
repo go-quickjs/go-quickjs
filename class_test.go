@@ -910,3 +910,58 @@ func TestClassConstructorRequiresNew(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestPrivateInOptionalChain covers a private member reached through `?.`,
+// which the grammar allows and which is not a property lookup.
+func TestPrivateInOptionalChain(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`class C { #f = "T"; m(o) { return o?.c.#f } }
+		  var c = new C(); c.m({c: c}) + "," + c.m(null)`, "T,undefined"},
+		{`class C { #f = "T"; m(o) { return o?.#f } }
+		  var c = new C(); c.m(c) + "," + c.m(null)`, "T,undefined"},
+		{`class C { #f = 1; m(o) { return o?.c?.#f } }
+		  var c = new C(); c.m({c: c}) + "," + c.m({})`, "1,undefined"},
+		// A private method call keeps its receiver.
+		{`class C { v = 7; #m() { return this.v }; go(o) { return o?.#m() } }
+		  var c = new C(); c.go(c) + "," + c.go(null)`, "7,undefined"},
+		{`class C { #m(a, b) { return a + b }; go(o) { return o?.#m(1, 2) } }
+		  String(new C().go(new C()))`, "3"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// TestPrivateAddedOnlyOnce covers giving an object the same private member
+// twice, which a constructor returning an object it has already built does.
+func TestPrivateAddedOnlyOnce(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`class B { constructor(o) { return o } }
+		  class C extends B { #f = 1 }
+		  var o = {}; new C(o)
+		  try { new C(o); "no throw" } catch (e) { e.constructor.name }`, "TypeError"},
+		{`class B { constructor(o) { return o } }
+		  class C extends B { #m() {} }
+		  var o = {}; new C(o)
+		  try { new C(o); "no throw" } catch (e) { e.constructor.name }`, "TypeError"},
+		{`class B { constructor(o) { return o } }
+		  class C extends B { get #x() { return 1 } set #x(v) {} }
+		  var o = {}; new C(o)
+		  try { new C(o); "no throw" } catch (e) { e.constructor.name }`, "TypeError"},
+
+		// The two halves of an accessor are one member, so installing both on
+		// a fresh instance is not a repeat.
+		{`class C { get #x() { return this.v } set #x(v) { this.v = v }
+		    m() { this.#x = 2; return this.#x } }
+		  String(new C().m())`, "2"},
+		{`class C { #f = 1; #m() { return 2 }; m() { return this.#f + this.#m() } }
+		  String(new C().m())`, "3"},
+		// A different object gets its own copy.
+		{`class B { constructor(o) { return o } }
+		  class C extends B { #f = 1; static read(o) { return o.#f } }
+		  String(C.read(new C({})) + "," + C.read(new C({})))`, "1,1"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

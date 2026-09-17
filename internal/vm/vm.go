@@ -1769,8 +1769,16 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			val := pop()
 			target := peek(0)
 			if target.IsObject() {
-				target.Object().setOwnRaw(privateKey(f, cl, in.B), val,
-					propWritable|propPrivate)
+				key := privateKey(f, cl, in.B)
+				// A private field can only be added once. A constructor that
+				// returns an object it has already built would otherwise give
+				// it the same field twice.
+				if target.Object().getOwn(key) != nil {
+					vmErr = r.throwTypeError("%s is already present on this object",
+						r.atoms.name(key))
+					goto onError
+				}
+				target.Object().setOwnRaw(key, val, propWritable|propPrivate)
 			}
 		case bytecode.OpDefinePrivateGetter, bytecode.OpDefinePrivateSetter:
 			val := pop()
@@ -1803,7 +1811,10 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 					"\"this\" is not bound until super() has been called")
 				goto onError
 			}
-			r.installPrivateMethods(this, pop())
+			if err := r.installPrivateMethods(this, pop()); err != nil {
+				vmErr = err
+				goto onError
+			}
 
 		// --- Classes ------------------------------------------------------
 		case bytecode.OpNewClass:

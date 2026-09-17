@@ -118,13 +118,21 @@ func (r *Runtime) addPrivateMethod(list Value, key Atom, fn Value, op bytecode.O
 // derived class is after super() has returned, and before any field
 // initializer. A method is not writable, so assigning to one fails the way
 // assigning to any method of a frozen shape would.
-func (r *Runtime) installPrivateMethods(this Value, list Value) {
+func (r *Runtime) installPrivateMethods(this Value, list Value) error {
 	m := privateMethodsOf(list)
 	if m == nil || !this.IsObject() {
-		return
+		return nil
 	}
 	o := this.Object()
-	for _, e := range m.entries {
+	for i, e := range m.entries {
+		// An object cannot be given the same private member twice, which a
+		// constructor that returns an object it has already built would
+		// otherwise do. The two halves of an accessor are one member, so only
+		// a key this installation has not already reached counts.
+		if o.getOwn(e.key) != nil && !hasPrivateKey(m.entries[:i], e.key) {
+			return r.throwTypeError("%s is already present on this object",
+				r.atoms.name(e.key))
+		}
 		switch e.op {
 		case bytecode.OpAddPrivateGetter:
 			r.definePrivateAccessor(o, e.key, e.fn, true)
@@ -134,4 +142,17 @@ func (r *Runtime) installPrivateMethods(this Value, list Value) {
 			o.setOwnRaw(e.key, Obj(e.fn), propPrivate)
 		}
 	}
+	return nil
+}
+
+// hasPrivateKey reports whether a key appears among the entries already
+// installed, which is what tells the second half of an accessor apart from a
+// member the object already had.
+func hasPrivateKey(entries []privateMethod, key Atom) bool {
+	for _, e := range entries {
+		if e.key == key {
+			return true
+		}
+	}
+	return false
 }

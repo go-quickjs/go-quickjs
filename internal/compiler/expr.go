@@ -250,10 +250,19 @@ func (c *compiler) compileTaggedTemplate(n *ast.TaggedTemplate) {
 			c.compileSuperMemberGet(m)
 		} else {
 			c.compileExpr(m.Object)
-			if m.Computed {
+			switch {
+			case m.Computed:
 				c.compileExpr(m.Property)
 				c.emit(bytecode.OpGetIndexThis, 0, 0)
-			} else {
+			default:
+				if pn, private := m.Property.(*ast.PrivateName); private {
+					// The receiver stays beneath the method, as
+					// OpGetPropThis leaves it.
+					name, ref := c.privateName(pn, m.Start)
+					c.emit(bytecode.OpDup, 0, 0)
+					c.emitAt(m.Start, bytecode.OpGetPrivate, name, ref)
+					break
+				}
 				c.emit(bytecode.OpGetPropThis, c.nameIdx(propKeyName(m.Property)), 0)
 			}
 		}
@@ -959,10 +968,20 @@ func (c *compiler) compileChainLink(e ast.Expr, jumps *[]chainJump) {
 		if n.Optional {
 			*jumps = append(*jumps, chainJump{pc: c.emitJump(bytecode.OpJumpIfNullish), live: 1})
 		}
-		if n.Computed {
+		switch {
+		case n.Computed:
 			c.compileExpr(n.Property)
 			c.emit(bytecode.OpGetIndex, 0, 0)
-		} else {
+		default:
+			if pn, private := n.Property.(*ast.PrivateName); private {
+				// A private name is not a property: it is reached through the
+				// class's own accessors, which do not walk the prototype
+				// chain. `a?.b.#c` is written this way and is what the
+				// grammar allows -- `a?.#c` too.
+				name, ref := c.privateName(pn, n.Start)
+				c.emitAt(n.Start, bytecode.OpGetPrivate, name, ref)
+				break
+			}
 			c.emit(bytecode.OpGetProp, c.nameIdx(propKeyName(n.Property)), 0)
 		}
 
@@ -972,10 +991,19 @@ func (c *compiler) compileChainLink(e ast.Expr, jumps *[]chainJump) {
 			if m.Optional {
 				*jumps = append(*jumps, chainJump{pc: c.emitJump(bytecode.OpJumpIfNullish), live: 1})
 			}
-			if m.Computed {
+			switch {
+			case m.Computed:
 				c.compileExpr(m.Property)
 				c.emit(bytecode.OpGetIndexThis, 0, 0)
-			} else {
+			default:
+				if pn, private := m.Property.(*ast.PrivateName); private {
+					// The receiver stays beneath the method, as
+					// OpGetPropThis leaves it.
+					name, ref := c.privateName(pn, m.Start)
+					c.emit(bytecode.OpDup, 0, 0)
+					c.emitAt(m.Start, bytecode.OpGetPrivate, name, ref)
+					break
+				}
 				c.emit(bytecode.OpGetPropThis, c.nameIdx(propKeyName(m.Property)), 0)
 			}
 			if n.Optional {
