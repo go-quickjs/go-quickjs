@@ -362,6 +362,22 @@ func (o *Object) prependProps(ps []Property) {
 	}
 }
 
+// insertProp puts a property at a given position rather than at the end, which
+// a property created later than it would have been needs: where a key sits in
+// the table is where an ownKeys walk reports it.
+func (o *Object) insertProp(at int, p Property) {
+	if at >= len(o.props) {
+		o.appendProp(p)
+		return
+	}
+	o.props = append(o.props, Property{})
+	copy(o.props[at+1:], o.props[at:])
+	o.props[at] = p
+	if o.index != nil || len(o.props) > linearScanLimit {
+		o.buildIndex()
+	}
+}
+
 func (o *Object) appendProp(p Property) {
 	o.props = append(o.props, p)
 	switch {
@@ -724,6 +740,10 @@ type funcData struct {
 	// properties, after which the synthesized reads must stop -- otherwise
 	// deleting one would have no effect.
 	propsMaterialized bool
+	// protoPending records that an ordinary function still owes the .prototype
+	// object it is defined to have. It is built by the first thing that asks,
+	// which for most functions is nothing at all.
+	protoPending bool
 
 	// arrow marks a function with no bindings of its own. An arrow does not
 	// get this, new.target, super or arguments from its call: it uses the ones

@@ -95,16 +95,24 @@ func (r *Runtime) getExoticNamed(o *Object, key Atom) (Value, bool, error) {
 	case ClassFunction:
 		// name and length are materialized on first read rather than created
 		// with every function, since most functions are never asked.
-		if fd := o.fn(); fd != nil && !fd.propsMaterialized {
-			switch key {
-			case atomLength:
-				if o.getOwn(atomLength) == nil {
-					return Int(fd.length), true, nil
+		if fd := o.fn(); fd != nil {
+			if !fd.propsMaterialized {
+				switch key {
+				case atomLength:
+					if o.getOwn(atomLength) == nil {
+						return Int(fd.length), true, nil
+					}
+				case atomName:
+					if o.getOwn(atomName) == nil {
+						return Str(NewString(fd.name)), true, nil
+					}
 				}
-			case atomName:
-				if o.getOwn(atomName) == nil {
-					return Str(NewString(fd.name)), true, nil
-				}
+			}
+			// .prototype is an object rather than a value, so it is built
+			// rather than synthesized: whoever asks first gets an object the
+			// next reader has to see too.
+			if key == atomPrototype && fd.protoPending {
+				r.materializeFunctionProto(o)
 			}
 		}
 	}
@@ -119,7 +127,14 @@ func (r *Runtime) getExoticNamed(o *Object, key Atom) (Value, bool, error) {
 // program makes far more functions than it inspects -- but a descriptor query,
 // a redefinition or an ownKeys walk has to see the same property a read does.
 func (r *Runtime) materializeFunctionProp(o *Object, key Atom) {
-	if o.class != ClassFunction || (key != atomName && key != atomLength) {
+	if o.class != ClassFunction {
+		return
+	}
+	if key == atomPrototype {
+		r.materializeFunctionProto(o)
+		return
+	}
+	if key != atomName && key != atomLength {
 		return
 	}
 	fd := o.fn()
@@ -274,6 +289,12 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 				return false, r.assignFailed(key, strict,
 					"cannot assign to read-only property %q")
 			}
+		}
+		// A .prototype not built yet is an own property all the same, so it is
+		// built before the walk looks for one: assigning to it must overwrite
+		// that property rather than create a fresh, enumerable one.
+		if o.class == ClassFunction && key == atomPrototype {
+			r.materializeFunctionProto(o)
 		}
 		// The other synthesized own properties -- an array's length, a string
 		// wrapper's characters, a typed array's elements -- are own properties
@@ -604,6 +625,11 @@ func (r *Runtime) hasOwnProp(o *Object, key Atom) bool {
 	}
 	if key == atomName && o.class == ClassFunction {
 		if fd := o.fn(); fd == nil || !fd.propsMaterialized {
+			return true
+		}
+	}
+	if key == atomPrototype && o.class == ClassFunction {
+		if fd := o.fn(); fd != nil && fd.protoPending {
 			return true
 		}
 	}

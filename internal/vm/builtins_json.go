@@ -192,7 +192,6 @@ func (e *jsonEncoder) setReplacer(v Value) error {
 	return nil
 }
 
-// apply runs toJSON and then the replacer on one value, in that order.
 // needsApply reports whether apply could do anything to v, which saves
 // building the key string for the values it would hand straight back: a
 // number, a boolean or null has no toJSON to look up, so only a replacer can
@@ -201,6 +200,7 @@ func (e *jsonEncoder) needsApply(v Value) bool {
 	return v.IsObject() || v.IsString() || v.IsBigInt() || isCallable(e.replacer)
 }
 
+// apply runs toJSON and then the replacer on one value, in that order.
 func (e *jsonEncoder) apply(holder Value, key Value, v Value) (Value, error) {
 	// A BigInt has a toJSON hook like an object does, which is the only way to
 	// serialize one at all: without it there is no JSON form and the attempt
@@ -452,6 +452,7 @@ func (e *jsonEncoder) encode(buf []byte, v Value, prefix string) ([]byte, bool, 
 				return buf, false, err
 			}
 		} else {
+			e.rt.materializeFunctionProto(o)
 			own = o.ownKeys(false, e.rt.atoms)
 		}
 		for _, k := range own {

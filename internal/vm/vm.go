@@ -2785,6 +2785,14 @@ func (r *Runtime) makeClosure(f *frame, c Value) *Object {
 		return o
 	}
 	if kind != ctorNone {
+		if tmpl.fn.Kind == bytecode.KindNormal {
+			// An ordinary function's prototype is built when something first
+			// asks for it. Most functions are called rather than constructed
+			// from, and the object and its back-reference are two allocations
+			// per closure that nothing ever looks at.
+			fd.protoPending = true
+			return o
+		}
 		proto := newObject(r.proto.object, ClassObject)
 		proto.setOwnRaw(atomConstructor, Obj(o), propWritable|propConfigurable)
 		flags := propWritable
@@ -2802,6 +2810,39 @@ func (r *Runtime) makeClosure(f *frame, c Value) *Object {
 		fd.homeObject = proto
 	}
 	return o
+}
+
+// materializeFunctionProto creates the .prototype an ordinary function was
+// promised, as a real own property that anything reading the property table
+// finds.
+//
+// It is deferred rather than skipped: the object's identity has to be stable,
+// so the first thing to ask for it is what decides what it is, and everything
+// afterwards sees the same one.
+func (r *Runtime) materializeFunctionProto(o *Object) {
+	fd := o.fn()
+	if fd == nil || !fd.protoPending {
+		return
+	}
+	fd.protoPending = false
+	proto := newObject(r.proto.object, ClassObject)
+	proto.setOwnRaw(atomConstructor, Obj(o), propWritable|propConfigurable)
+	// It goes where it would have been had the function been built with it:
+	// after length and name, which come first whenever they are created, and
+	// before anything a script has added since. An ownKeys walk reports the
+	// table's order, so building it late may not reorder it.
+	at := 0
+	for at < len(o.props) &&
+		(o.props[at].key == atomLength || o.props[at].key == atomName) {
+		at++
+	}
+	o.insertProp(at, Property{
+		key: atomPrototype, value: Obj(proto), flags: propWritable,
+	})
+	// A constructible function's home object is its own prototype. Nothing
+	// outside a class can name super, so an ordinary function's is never read,
+	// but it costs nothing to keep it the same as an eagerly built one's.
+	fd.homeObject = proto
 }
 
 func ctorKindOf(fn *bytecode.Function) ctorKind {

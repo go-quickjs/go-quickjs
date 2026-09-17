@@ -236,6 +236,7 @@ func (r *Runtime) proxyOwnKeys(p *proxyData) ([]Atom, error) {
 
 	// A key that cannot be deleted has to be listed, and a non-extensible
 	// target's list has to be exactly its own.
+	r.materializeFunctionProto(p.target)
 	for _, k := range p.target.ownKeys(true, r.atoms) {
 		if seen[k] {
 			continue
@@ -807,6 +808,7 @@ func (r *Runtime) initReflectBuiltins() {
 				return Undefined, err
 			}
 		} else {
+			rt.materializeFunctionProto(target.Object())
 			keys = target.Object().ownKeys(true, rt.atoms)
 		}
 		out := make([]Value, len(keys))
@@ -952,6 +954,7 @@ func (r *Runtime) initReflectBuiltins() {
 func (r *Runtime) ownKeysOf(o *Object, includeSymbols bool) ([]Atom, error) {
 	p := proxyOf(o)
 	if p == nil {
+		r.materializeFunctionProto(o)
 		return o.ownKeys(includeSymbols, r.atoms), nil
 	}
 	keys, err := r.proxyOwnKeys(p)

@@ -108,6 +108,7 @@ func (r *Runtime) DefineProp(o *Object, key Atom, val Value) error {
 
 // OwnKeys returns an object's own enumerable string keys.
 func (r *Runtime) OwnKeys(o *Object) []Atom {
+	r.materializeFunctionProto(o)
 	keys := o.ownKeys(false, r.atoms)
 	out := keys[:0]
 	for _, k := range keys {
