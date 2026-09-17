@@ -105,8 +105,8 @@ func collectPrivateNames(cls *ast.ClassLit) []privateBinding {
 // nameHiddenBindings gives each private name the binding that will hold its key.
 func (c *compiler) nameHiddenBindings(bindings []privateBinding) {
 	for i := range bindings {
-		bindings[i].hidden = fmt.Sprintf("%%p%d", c.hiddenCount)
-		c.hiddenCount++
+		bindings[i].hidden = fmt.Sprintf("%%p%d", *c.hiddenCount)
+		*c.hiddenCount++
 	}
 }
 

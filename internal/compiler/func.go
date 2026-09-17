@@ -471,8 +471,8 @@ func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
 		if !f.Computed {
 			continue
 		}
-		keyNames[i] = fmt.Sprintf("%%key%d", c.hiddenCount)
-		c.hiddenCount++
+		keyNames[i] = fmt.Sprintf("%%key%d", *c.hiddenCount)
+		*c.hiddenCount++
 	}
 
 	// The private names are visible throughout the body, including to a method
@@ -484,8 +484,8 @@ func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
 	installName := ""
 	for _, b := range privates {
 		if b.installed() {
-			installName = fmt.Sprintf("%%pm%d", c.hiddenCount)
-			c.hiddenCount++
+			installName = fmt.Sprintf("%%pm%d", *c.hiddenCount)
+			*c.hiddenCount++
 			break
 		}
 	}

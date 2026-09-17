@@ -138,7 +138,12 @@ type compiler struct {
 	// hiddenCount names the compiler-generated bindings, which are spelled
 	// with a character no identifier may contain so that nothing a script
 	// writes can collide with one.
-	hiddenCount int
+	//
+	// It is shared by every compiler of one compilation, because a nested
+	// function resolves such a name against its enclosing functions like any
+	// other: two of them numbered independently would collide, and the inner
+	// one would shadow the outer one it was meant to reach.
+	hiddenCount *int
 	depth       int
 
 	// inFieldInit marks the initializer of a class field, which is a function
@@ -252,16 +257,18 @@ func Compile(prog *ast.Program, opts Options) (fn *bytecode.Function, err error)
 
 func newCompiler(parent *compiler, opts Options) *compiler {
 	c := &compiler{
-		fn:         &bytecode.Function{Source: opts.Source},
-		parent:     parent,
-		opts:       opts,
-		nameIndex:  make(map[string]uint32, 8),
-		constIndex: make(map[constKey]uint32, 8),
+		fn:          &bytecode.Function{Source: opts.Source},
+		parent:      parent,
+		opts:        opts,
+		nameIndex:   make(map[string]uint32, 8),
+		constIndex:  make(map[constKey]uint32, 8),
+		hiddenCount: new(int),
 		// A function has no completion value of its own; only the top-level
 		// program tracks one, and Compile overwrites this.
 		completionSlot: -1,
 	}
 	if parent != nil {
+		c.hiddenCount = parent.hiddenCount
 		c.lineOf = parent.lineOf
 		// A function written inside a `with` body resolves the names in its own
 		// body against the objects too, so it is compiled the same way.

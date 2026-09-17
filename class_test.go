@@ -700,6 +700,16 @@ func TestPrivateNamesAreUniquePerClassEvaluation(t *testing.T) {
 		    static read() { return [C.#s, C.#m(), C.#g].join(",") } }
 		  C.read()`, "1,2,3"},
 
+		// A class inside a field initializer of another reaches the outer
+		// class's private names. The hidden bindings are numbered across the
+		// whole compilation for that reason: numbered per function, the inner
+		// class's first name would shadow the outer class's.
+		{`class C {
+		    #outer = "outer";
+		    Inner = class { #inner = 1; read(o) { return o.#outer } }
+		  }
+		  var c = new C(); new c.Inner().read(c)`, "outer"},
+
 		// super in a private method resolves against the prototype's prototype.
 		{`class A { hi() { return "a" } }
 		  class B extends A { #m() { return super.hi() } read() { return this.#m() } }
