@@ -181,7 +181,10 @@ func (r *Runtime) initArrayExtras2() {
 	})
 
 	r.defIterationMethod(p, "flatMap", func(rt *Runtime, a *arrayLike, cb Value, thisArg Value) (Value, error) {
-		var out []Value
+		out, err := rt.arraySpeciesCreate(Obj(a.o), 0)
+		if err != nil {
+			return Undefined, err
+		}
 		for i := int64(0); i < a.n; i++ {
 			el, present, err := a.at(rt, i)
 			if err != nil {
@@ -206,14 +209,18 @@ func (r *Runtime) initArrayExtras2() {
 						return Undefined, err
 					}
 					if present {
-						out = append(out, iv)
+						if err := out.push(rt, iv); err != nil {
+							return Undefined, err
+						}
 					}
 				}
 				continue
 			}
-			out = append(out, v)
+			if err := out.push(rt, v); err != nil {
+				return Undefined, err
+			}
 		}
-		return Obj(rt.newArrayFrom(out)), nil
+		return out.value(), nil
 	})
 
 	// The iteration-protocol methods.

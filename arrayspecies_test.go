@@ -393,3 +393,87 @@ func TestArraySort(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// flat and flatMap read through the view and answer through the species, like
+// every other array method that builds a new array.
+func TestFlatAndFlatMap(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`[1, [2, [3, [4]]]].flat(Infinity).join(",")`, "1,2,3,4"},
+		{`[1, [2, [3]]].flat().join(",")`, "1,2,3"},
+		{`[1, [2]].flat(0).join(",")`, "1,2"},
+		{`[[1, 2], [3]].flatMap(x => x).join(",")`, "1,2,3"},
+		{`[1, 2].flatMap(x => [x, x * 2]).join(",")`, "1,2,2,4"},
+		// A hole contributes nothing at any depth.
+		{`String([, 1].flat().length)`, "1"},
+
+		{`var o = {0: 1, 1: [2], length: 2};
+		  Array.prototype.flat.call(o).join(",")`, "1,2"},
+		{`var o = {0: 9, 1: 8, length: 2};
+		  Array.prototype.flatMap.call(o, x => x).join(",")`, "9,8"},
+
+		{`class A extends Array {} String(new A(1, 2).flat() instanceof A)`, "true"},
+		{`class A extends Array {} String(new A(1, 2).flatMap(x => x) instanceof A)`, "true"},
+
+		// A proxy of an array is an array, and is flattened as one.
+		{`[new Proxy([1, 2], {})].flat().join(",")`, "1,2"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+
+	for _, src := range []string{`[1].flatMap(1)`, `[1].flatMap()`,
+		`Array.prototype.flat.call(null)`} {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil {
+			t.Errorf("%s: accepted, want TypeError", src)
+		}
+		rt.Close()
+	}
+}
+
+// Object.prototype.toString asks what something behaves like, not what it
+// literally is: a proxy of an array is an array, and a proxy of a function is
+// callable.
+func TestObjectToStringTags(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`Object.prototype.toString.call(new Proxy([], {}))`, "[object Array]"},
+		{`Object.prototype.toString.call(new Proxy(function () {}, {}))`, "[object Function]"},
+		{`Object.prototype.toString.call(Math)`, "[object Math]"},
+		{`Object.prototype.toString.call(JSON)`, "[object JSON]"},
+		{`Object.prototype.toString.call(null)`, "[object Null]"},
+		{`Object.prototype.toString.call(undefined)`, "[object Undefined]"},
+		{`Object.prototype.toString.call(1)`, "[object Number]"},
+		{`Object.prototype.toString.call("s")`, "[object String]"},
+		{`Object.prototype.toString.call([])`, "[object Array]"},
+		{`Object.prototype.toString.call(new Error())`, "[object Error]"},
+		{`Object.prototype.toString.call(new Date())`, "[object Date]"},
+		{`Object.prototype.toString.call(/a/)`, "[object RegExp]"},
+		{`(function () { return Object.prototype.toString.call(arguments) })()`,
+			"[object Arguments]"},
+		// A toStringTag overrides the built-in one, but only when it is a
+		// string: anything else is ignored rather than coerced.
+		{`var o = {[Symbol.toStringTag]: "X"}; Object.prototype.toString.call(o)`, "[object X]"},
+		{`var o = {[Symbol.toStringTag]: 1}; Object.prototype.toString.call(o)`, "[object Object]"},
+		{`var a = []; a[Symbol.toStringTag] = "X"; Object.prototype.toString.call(a)`,
+			"[object X]"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

@@ -389,17 +389,23 @@ func (r *Runtime) initObjectBuiltins() {
 
 // classTag returns the tag Object.prototype.toString reports for an object.
 func (r *Runtime) classTag(o *Object) string {
-	// A Symbol.toStringTag property overrides the built-in tag.
+	// A Symbol.toStringTag property overrides the built-in tag, but only when
+	// it is a string: anything else is ignored rather than coerced.
 	if v, err := r.getProp(o, r.atoms.internSymbol(r.wellKnown.toStringTag), Obj(o)); err == nil {
 		if v.IsString() {
 			return v.String().Go()
 		}
 	}
-	switch o.class {
-	case ClassArray:
+	// A proxy answers for its target: whether something is an array or is
+	// callable is a question about behaviour, and a proxy of an array behaves
+	// like one.
+	if o.IsArray() {
 		return "Array"
-	case ClassFunction:
+	}
+	if o.IsCallable() {
 		return "Function"
+	}
+	switch o.class {
 	case ClassError:
 		return "Error"
 	case ClassBooleanWrapper:
@@ -1962,6 +1968,7 @@ func (r *Runtime) initErrorBuiltins() {
 
 func (r *Runtime) initMathBuiltins() {
 	m := newObject(r.proto.object, ClassMathObject)
+	r.defToStringTag(m, "Math")
 	r.defValue(r.global, "Math", Obj(m))
 
 	r.defConst(m, "PI", Float(math.Pi))
@@ -2214,36 +2221,59 @@ func (r *Runtime) initArrayExtras() {
 	})
 
 	r.defMethod(p, "flat", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.toObject(this)
+		a, err := rt.viewArrayLike(this)
 		if err != nil {
 			return Undefined, err
 		}
 		depth := 1.0
 		if d := arg(args, 0); !d.IsUndefined() {
-			depth, err = rt.toInteger(d)
-			if err != nil {
+			if depth, err = rt.toInteger(d); err != nil {
 				return Undefined, err
 			}
 		}
-		out := rt.flatten(o.elems, int(depth))
-		return Obj(rt.newArrayFrom(out)), nil
+		out, err := rt.arraySpeciesCreate(this, 0)
+		if err != nil {
+			return Undefined, err
+		}
+		if err := rt.flatten(a, int(min(depth, maxArrayLength)), out); err != nil {
+			return Undefined, err
+		}
+		return out.value(), nil
 	})
 }
 
 // flatten appends the elements of nested arrays up to the given depth.
-func (r *Runtime) flatten(elems []Value, depth int) []Value {
-	var out []Value
-	for _, el := range elems {
-		if isHole(el) {
+//
+// It reads through the view rather than the dense elements, so that it works on
+// an array-like and sees an element a getter produces; a hole contributes
+// nothing at any depth.
+func (r *Runtime) flatten(a *arrayLike, depth int, out *arrayOut) error {
+	for i := int64(0); i < a.n; i++ {
+		if err := r.tick(); err != nil {
+			return err
+		}
+		v, present, err := a.at(r, i)
+		if err != nil {
+			return err
+		}
+		if !present {
 			continue
 		}
-		if depth > 0 && el.IsObject() && el.Object().IsArray() {
-			out = append(out, r.flatten(el.Object().elems, depth-1)...)
+		if depth > 0 && v.IsObject() && v.Object().IsArray() {
+			inner, err := r.viewArrayLike(v)
+			if err != nil {
+				return err
+			}
+			if err := r.flatten(inner, depth-1, out); err != nil {
+				return err
+			}
 			continue
 		}
-		out = append(out, el)
+		if err := out.push(r, v); err != nil {
+			return err
+		}
 	}
-	return out
+	return nil
 }
 
 // elemAt reads a dense element defensively, reporting false for an index that
