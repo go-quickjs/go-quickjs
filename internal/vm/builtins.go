@@ -1997,6 +1997,9 @@ func (r *Runtime) initMathBuiltins() {
 		"round":  jsRound,
 		"sign":   jsSign,
 		"fround": func(f float64) float64 { return float64(float32(f)) },
+		// The half-precision counterpart, which is how a script sees what a
+		// Float16Array would store without allocating one.
+		"f16round": func(f float64) float64 { return float16frombits(float16bits(f)) },
 	}
 	for name, fn := range unary {
 		f := fn

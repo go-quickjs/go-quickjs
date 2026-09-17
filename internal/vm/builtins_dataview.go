@@ -121,8 +121,11 @@ func (r *Runtime) initDataViewBuiltins() {
 	})
 
 	for _, spec := range dataViewTypes {
-		r.defMethod(proto, "get"+spec.name, spec.argc, r.dataViewGetter(spec))
-		r.defMethod(proto, "set"+spec.name, spec.argc+1, r.dataViewSetter(spec))
+		// The declared length stops at the first optional parameter, so every
+		// getter reports one and every setter two however many bytes it moves
+		// and whether or not it takes an endianness flag.
+		r.defMethod(proto, "get"+spec.name, 1, r.dataViewGetter(spec))
+		r.defMethod(proto, "set"+spec.name, 2, r.dataViewSetter(spec))
 	}
 
 	r.defToStringTag(proto, "DataView")
@@ -133,8 +136,11 @@ type dataViewType struct {
 	name string
 	size int
 	kind elemType
-	// argc is the declared length of the getter: 1 for the single-byte types,
-	// which take no endianness argument, and 2 for the rest.
+	// argc is 2 for the types that take an endianness flag and 1 for the
+	// single-byte ones, where the byte order cannot be observed.
+	//
+	// It is not the declared length: that stops at the first optional
+	// parameter, so every getter reports one and every setter two.
 	argc int
 }
 
@@ -145,6 +151,7 @@ var dataViewTypes = [...]dataViewType{
 	{"Uint16", 2, elemUint16, 2},
 	{"Int32", 4, elemInt32, 2},
 	{"Uint32", 4, elemUint32, 2},
+	{"Float16", 2, elemFloat16, 2},
 	{"Float32", 4, elemFloat32, 2},
 	{"Float64", 8, elemFloat64, 2},
 	{"BigInt64", 8, elemBigInt64, 2},
@@ -261,6 +268,8 @@ func decodeView(b []byte, spec dataViewType, little bool) Value {
 		return Int(int(int32(u)))
 	case elemUint32:
 		return Float(float64(uint32(u)))
+	case elemFloat16:
+		return Float(float16frombits(uint16(u)))
 	case elemFloat32:
 		return Float(float64(math.Float32frombits(uint32(u))))
 	case elemFloat64:
@@ -285,6 +294,8 @@ func encodeView(b []byte, spec dataViewType, little bool, num float64, big *BigI
 		u = uint64(uint16(toInt32Wrap(num)))
 	case elemInt32, elemUint32:
 		u = uint64(uint32(toInt32Wrap(num)))
+	case elemFloat16:
+		u = uint64(float16bits(num))
 	case elemFloat32:
 		u = uint64(math.Float32bits(float32(num)))
 	case elemFloat64:

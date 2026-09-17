@@ -35,6 +35,7 @@ const (
 	elemUint16
 	elemInt32
 	elemUint32
+	elemFloat16
 	elemFloat32
 	elemFloat64
 	elemBigInt64
@@ -57,6 +58,7 @@ var elemInfos = [...]elemInfo{
 	elemUint16:       {"Uint16Array", 2, false},
 	elemInt32:        {"Int32Array", 4, false},
 	elemUint32:       {"Uint32Array", 4, false},
+	elemFloat16:      {"Float16Array", 2, false},
 	elemFloat32:      {"Float32Array", 4, false},
 	elemFloat64:      {"Float64Array", 8, false},
 	elemBigInt64:     {"BigInt64Array", 8, true},
@@ -114,6 +116,8 @@ func (t *typedArrayData) getElem(i int) Value {
 		return Int32(int32(binary.LittleEndian.Uint32(b[off:])))
 	case elemUint32:
 		return Uint32(binary.LittleEndian.Uint32(b[off:]))
+	case elemFloat16:
+		return Float(float16frombits(binary.LittleEndian.Uint16(b[off:])))
 	case elemFloat32:
 		return Float(float64(math.Float32frombits(binary.LittleEndian.Uint32(b[off:]))))
 	case elemFloat64:
@@ -170,6 +174,8 @@ func (r *Runtime) setElem(t *typedArrayData, i int, v Value) error {
 		binary.LittleEndian.PutUint16(b[off:], uint16(toInt32Wrap(n)))
 	case elemInt32, elemUint32:
 		binary.LittleEndian.PutUint32(b[off:], uint32(toInt32Wrap(n)))
+	case elemFloat16:
+		binary.LittleEndian.PutUint16(b[off:], float16bits(n))
 	case elemFloat32:
 		binary.LittleEndian.PutUint32(b[off:], math.Float32bits(float32(n)))
 	case elemFloat64:

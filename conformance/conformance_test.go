@@ -80,6 +80,7 @@ var unsupportedFeatures = map[string]string{
 	"immutable-arraybuffer":         "no immutable ArrayBuffers",
 	"upsert":                        "no getOrInsert on Map or WeakMap",
 	"joint-iteration":               "no Iterator.zip",
+	"await-dictionary":              "no Promise.allKeyed or allSettledKeyed",
 	"iterator-sequencing":           "no Iterator.concat",
 	"iterator-includes":             "no Iterator.prototype.includes",
 	"iterator-chunking":             "no Iterator.prototype.chunks or windows",
