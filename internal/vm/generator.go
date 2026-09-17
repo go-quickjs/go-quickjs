@@ -584,7 +584,16 @@ func isGeneratorTemplate(fn *bytecode.Function) bool {
 // holding. That is why resumeFull reports which kind stopped it.
 
 func (r *Runtime) initAsyncGeneratorBuiltins() {
-	r.proto.asyncGenerator = newObject(r.proto.object, ClassObject)
+	// %AsyncIteratorPrototype% carries the one method that makes an async
+	// iterator its own iterable, so that `for await (x of it)` works on any of
+	// them without each having to say so.
+	r.defSymbolMethod(r.proto.asyncIterator, r.wellKnown.asyncIterator,
+		"[Symbol.asyncIterator]", 0,
+		func(rt *Runtime, this Value, args []Value) (Value, error) {
+			return this, nil
+		})
+
+	r.proto.asyncGenerator = newObject(r.proto.asyncIterator, ClassObject)
 	p := r.proto.asyncGenerator
 
 	drive := func(mode resumeMode) NativeFunc {
@@ -609,10 +618,6 @@ func (r *Runtime) initAsyncGeneratorBuiltins() {
 	r.defMethod(p, "return", 1, drive(resumeReturn))
 	r.defMethod(p, "throw", 1, drive(resumeThrow))
 
-	r.defSymbolMethod(p, r.wellKnown.asyncIterator, "[Symbol.asyncIterator]", 0,
-		func(rt *Runtime, this Value, args []Value) (Value, error) {
-			return this, nil
-		})
 	r.defToStringTag(p, "AsyncGenerator")
 }
 

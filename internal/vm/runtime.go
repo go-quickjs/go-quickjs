@@ -194,8 +194,12 @@ type intrinsics struct {
 	generator      *Object
 	asyncGenerator *Object
 	iterator       *Object
-	arrayIter      *Object
-	stringIter     *Object
+	// asyncIterator is %AsyncIteratorPrototype%, which every async iterator
+	// inherits from and which exists to carry the one method that makes an
+	// async iterator its own iterable.
+	asyncIterator *Object
+	arrayIter     *Object
+	stringIter    *Object
 	// mapIter and setIter are the prototypes a Map's and a Set's iterators
 	// inherit from, which differ only in the tag they report.
 	mapIter *Object

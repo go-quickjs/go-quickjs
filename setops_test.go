@@ -334,3 +334,78 @@ func TestFinalizationRegistryIsCalled(t *testing.T) {
 	// The registration whose target is still reachable must not have fired.
 	runtime.KeepAlive(rt)
 }
+
+// TestCollectionConstructorUsesAdder covers how Map, Set, WeakMap and WeakSet
+// fill themselves from an iterable: through the method the object itself has,
+// so that a subclass overriding it sees every entry go by.
+func TestCollectionConstructorUsesAdder(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var log = []
+		  class M extends Map { set(k, v) { log.push(k); return super.set(k, v) } }
+		  var m = new M([[1, "a"], [2, "b"]])
+		  log.join() + "|" + m.get(2)`, "1,2|b"},
+		{`var log = []
+		  class S extends Set { add(v) { log.push(v); return super.add(v) } }
+		  var s = new S([1, 2])
+		  log.join() + "|" + s.has(2)`, "1,2|true"},
+		{`var log = []
+		  class W extends WeakMap { set(k, v) { log.push(v); return super.set(k, v) } }
+		  var k1 = {}, k2 = {}
+		  var w = new W([[k1, "a"], [k2, "b"]])
+		  log.join() + "|" + w.get(k2)`, "a,b|b"},
+		{`var log = []
+		  class W extends WeakSet { add(v) { log.push(1); return super.add(v) } }
+		  var w = new W([{}, {}])
+		  log.join()`, "1,1"},
+
+		// The method has to be there and be callable, and a failure reading it
+		// is the constructor's failure.
+		{`class M extends Map { get set() { return 1 } }
+		  try { new M([]) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`class S extends Set { get add() { throw new RangeError() } }
+		  try { new S([]) } catch (e) { e.constructor.name }`, "RangeError"},
+		// With no iterable the method is never looked at.
+		{`class M extends Map { get set() { throw new RangeError() } }
+		  String(new M() instanceof M)`, "true"},
+
+		// A registered symbol can be neither a weak key nor a weak value.
+		{`var w = new WeakMap()
+		  try { w.set(Symbol.for("x"), 1) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`var w = new WeakSet()
+		  try { w.add(Symbol.for("x")) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`var w = new WeakSet(); var s = Symbol("x"); w.add(s); String(w.has(s))`, "true"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// TestIteratorMethodIdentity covers the methods a collection shares between two
+// names, which a script can compare.
+func TestIteratorMethodIdentity(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`String(Map.prototype[Symbol.iterator] === Map.prototype.entries)`, "true"},
+		{`String(Set.prototype[Symbol.iterator] === Set.prototype.values)`, "true"},
+		{`String(Set.prototype.keys === Set.prototype.values)`, "true"},
+		{`String(Array.prototype[Symbol.iterator] === Array.prototype.values)`, "true"},
+		{`[...new Set([1, 2]).keys()].join()`, "1,2"},
+		{`[...new Map([[1, 2]])].map(e => e.join(":")).join()`, "1:2"},
+		{`Set.prototype[Symbol.iterator].name`, "values"},
+
+		// An error prototype is an ordinary object; an error is not.
+		{`Object.prototype.toString.call(RangeError.prototype)`, "[object Object]"},
+		{`Object.prototype.toString.call(Error.prototype)`, "[object Object]"},
+		{`Object.prototype.toString.call(new RangeError())`, "[object Error]"},
+		{`String(Error.isError(RangeError.prototype))`, "false"},
+
+		// Every async iterator is its own iterable, through one shared method.
+		{`var g = async function* () {}()
+		  var p = Object.getPrototypeOf(Object.getPrototypeOf(Object.getPrototypeOf(g)))
+		  typeof p[Symbol.asyncIterator]`, "function"},
+		{`var g = async function* () {}()
+		  String(g[Symbol.asyncIterator]() === g)`, "true"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

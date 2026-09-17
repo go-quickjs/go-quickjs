@@ -226,14 +226,12 @@ func (r *Runtime) initMapBuiltins() {
 		if err := rt.requireNew("Map"); err != nil {
 			return Undefined, err
 		}
-		o := newObject(rt.proto.mapProto, ClassMap)
-		m := newJSMap(false)
-		o.data = m
-		// An iterable argument seeds the map with its [key, value] pairs.
-		if err := rt.eachEntry(arg(args, 0), func(k, v Value) error {
-			m.set(rt, k, v)
-			return nil
-		}); err != nil {
+		o := newObject(rt.protoFromNewTarget(rt.proto.mapProto), ClassMap)
+		o.data = newJSMap(false)
+		// An iterable argument seeds the map with its [key, value] pairs,
+		// through the object's own set method: a subclass that overrides it
+		// sees every entry go by.
+		if err := rt.seedFromEntries(o, arg(args, 0), "set"); err != nil {
 			return Undefined, err
 		}
 		return Obj(o), nil
@@ -349,15 +347,9 @@ func (r *Runtime) initMapBuiltins() {
 	r.defMapIterator(p, ClassMap, "entries", mapIterEntries)
 	r.defMapIterator(p, ClassMap, "keys", mapIterKeys)
 	r.defMapIterator(p, ClassMap, "values", mapIterValues)
-	// A Map iterates as its entries.
-	r.defSymbolMethod(p, r.wellKnown.iterator, "[Symbol.iterator]", 0,
-		func(rt *Runtime, this Value, args []Value) (Value, error) {
-			m, err := rt.mapOf(this, ClassMap, "Map.prototype[Symbol.iterator]")
-			if err != nil {
-				return Undefined, err
-			}
-			return rt.newMapIterator(m, mapIterEntries, rt.proto.mapIter), nil
-		})
+	// A Map iterates as its entries: the same function object, not another one
+	// that does the same thing, which a script can tell apart.
+	r.aliasMethod(p, r.atoms.internSymbol(r.wellKnown.iterator), "entries")
 	r.defToStringTag(p, "Map")
 }
 
@@ -369,17 +361,10 @@ func (r *Runtime) initSetBuiltins() {
 		if err := rt.requireNew("Set"); err != nil {
 			return Undefined, err
 		}
-		o := newObject(rt.proto.setProto, ClassSet)
-		m := newJSMap(false)
-		o.data = m
-		if src := arg(args, 0); !src.IsNullish() {
-			err := rt.iterate(src, func(v Value) error {
-				m.set(rt, v, v)
-				return nil
-			})
-			if err != nil {
-				return Undefined, err
-			}
+		o := newObject(rt.protoFromNewTarget(rt.proto.setProto), ClassSet)
+		o.data = newJSMap(false)
+		if err := rt.seedFromValues(o, arg(args, 0), "add"); err != nil {
+			return Undefined, err
 		}
 		return Obj(o), nil
 	})
@@ -448,16 +433,11 @@ func (r *Runtime) initSetBuiltins() {
 	})
 
 	r.defMapIterator(p, ClassSet, "values", mapIterValues)
-	r.defMapIterator(p, ClassSet, "keys", mapIterValues)
 	r.defMapIterator(p, ClassSet, "entries", mapIterEntries)
-	r.defSymbolMethod(p, r.wellKnown.iterator, "[Symbol.iterator]", 0,
-		func(rt *Runtime, this Value, args []Value) (Value, error) {
-			m, err := rt.mapOf(this, ClassSet, "Set.prototype[Symbol.iterator]")
-			if err != nil {
-				return Undefined, err
-			}
-			return rt.newMapIterator(m, mapIterValues, rt.proto.setIter), nil
-		})
+	// A Set's keys are its values, and it iterates as them -- the same function
+	// object each time, which is what a script comparing them sees.
+	r.aliasMethod(p, r.atoms.intern("keys"), "values")
+	r.aliasMethod(p, r.atoms.internSymbol(r.wellKnown.iterator), "values")
 	r.initSetOps(p)
 	r.defToStringTag(p, "Set")
 }
@@ -470,17 +450,10 @@ func (r *Runtime) initWeakCollections() {
 		if err := rt.requireNew("WeakMap"); err != nil {
 			return Undefined, err
 		}
-		o := newObject(wmProto, ClassWeakMap)
-		m := newJSMap(true)
-		o.data = m
+		o := newObject(rt.protoFromNewTarget(wmProto), ClassWeakMap)
+		o.data = newJSMap(true)
 		// An iterable of [key, value] pairs populates it, exactly as for Map.
-		if err := rt.eachEntry(arg(args, 0), func(k, v Value) error {
-			if !rt.canBeWeak(k) {
-				return rt.throwTypeError("a WeakMap key must be an object or an unregistered symbol")
-			}
-			m.set(rt, k, v)
-			return nil
-		}); err != nil {
+		if err := rt.seedFromEntries(o, arg(args, 0), "set"); err != nil {
 			return Undefined, err
 		}
 		return Obj(o), nil
@@ -499,8 +472,9 @@ func (r *Runtime) initWeakCollections() {
 			return Undefined, err
 		}
 		k := arg(args, 0)
-		if !k.IsObject() && !k.IsSymbol() {
-			return Undefined, rt.throwTypeError("a WeakMap key must be an object")
+		if !rt.canBeWeak(k) {
+			return Undefined, rt.throwTypeError(
+				"a WeakMap key must be an object or an unregistered symbol")
 		}
 		m.set(rt, k, arg(args, 1))
 		return this, nil
@@ -527,16 +501,9 @@ func (r *Runtime) initWeakCollections() {
 		if err := rt.requireNew("WeakSet"); err != nil {
 			return Undefined, err
 		}
-		o := newObject(wsProto, ClassWeakSet)
-		m := newJSMap(true)
-		o.data = m
-		if err := rt.iterateOptional(arg(args, 0), func(v Value) error {
-			if !rt.canBeWeak(v) {
-				return rt.throwTypeError("a WeakSet value must be an object or an unregistered symbol")
-			}
-			m.set(rt, v, v)
-			return nil
-		}); err != nil {
+		o := newObject(rt.protoFromNewTarget(wsProto), ClassWeakSet)
+		o.data = newJSMap(true)
+		if err := rt.seedFromValues(o, arg(args, 0), "add"); err != nil {
 			return Undefined, err
 		}
 		return Obj(o), nil
@@ -547,8 +514,9 @@ func (r *Runtime) initWeakCollections() {
 			return Undefined, err
 		}
 		v := arg(args, 0)
-		if !v.IsObject() && !v.IsSymbol() {
-			return Undefined, rt.throwTypeError("a WeakSet value must be an object")
+		if !rt.canBeWeak(v) {
+			return Undefined, rt.throwTypeError(
+				"a WeakSet value must be an object or an unregistered symbol")
 		}
 		m.set(rt, v, v)
 		return this, nil
@@ -673,6 +641,82 @@ func (r *Runtime) iterateOptional(v Value, visit func(Value) error) error {
 		return nil
 	}
 	return r.iterate(v, visit)
+}
+
+// protoFromNewTarget resolves the prototype a constructed object should have.
+//
+// A subclass's instance needs it before the constructor finishes, because the
+// constructor reads the method it adds entries through from the object -- and
+// that method is the subclass's when the subclass overrode it.
+func (r *Runtime) protoFromNewTarget(fallback *Object) *Object {
+	nt := r.newTarget()
+	if !nt.IsObject() {
+		return fallback
+	}
+	p, err := r.getProp(nt.Object(), atomPrototype, nt)
+	if err != nil || !p.IsObject() {
+		return fallback
+	}
+	return p.Object()
+}
+
+// collectionAdder reads the method a collection constructor adds through.
+//
+// It comes from the object rather than from the intrinsic prototype, so a
+// subclass that overrides add or set sees every entry the constructor was
+// given.
+func (r *Runtime) collectionAdder(o *Object, name string) (Value, error) {
+	adder, err := r.getProp(o, r.atoms.intern(name), Obj(o))
+	if err != nil {
+		return Undefined, err
+	}
+	if !isCallable(adder) {
+		return Undefined, r.throwTypeError("%s is not callable", name)
+	}
+	return adder, nil
+}
+
+// seedFromValues fills a set-like collection from an iterable, one call to its
+// own adder per value.
+func (r *Runtime) seedFromValues(o *Object, src Value, name string) error {
+	if src.IsNullish() {
+		return nil
+	}
+	adder, err := r.collectionAdder(o, name)
+	if err != nil {
+		return err
+	}
+	return r.iterate(src, func(v Value) error {
+		_, err := r.call(adder, Obj(o), []Value{v})
+		return err
+	})
+}
+
+// seedFromEntries fills a map-like collection from an iterable of two-element
+// entries, one call to its own adder per entry.
+func (r *Runtime) seedFromEntries(o *Object, src Value, name string) error {
+	if src.IsNullish() {
+		return nil
+	}
+	adder, err := r.collectionAdder(o, name)
+	if err != nil {
+		return err
+	}
+	return r.eachEntry(src, func(k, v Value) error {
+		_, err := r.call(adder, Obj(o), []Value{k, v})
+		return err
+	})
+}
+
+// aliasMethod gives a prototype a second name for a method it already has,
+// sharing the one function object rather than making another that behaves the
+// same: `Set.prototype.keys === Set.prototype.values` is observable.
+func (r *Runtime) aliasMethod(p *Object, key Atom, from string) {
+	src := p.getOwn(r.atoms.intern(from))
+	if src == nil {
+		return
+	}
+	p.setOwnRaw(key, src.value, propWritable|propConfigurable)
 }
 
 // eachEntry walks an iterable of two-element entries, which is the shape Map

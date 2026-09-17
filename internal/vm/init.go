@@ -135,6 +135,7 @@ func (r *Runtime) initIntrinsics() {
 	r.proto.symbol = newObject(r.proto.object, ClassObject)
 	r.proto.bigint = newObject(r.proto.object, ClassObject)
 	r.proto.iterator = newObject(r.proto.object, ClassObject)
+	r.proto.asyncIterator = newObject(r.proto.object, ClassObject)
 	r.proto.arrayIter = newObject(r.proto.iterator, ClassObject)
 	r.proto.mapIter = newObject(r.proto.iterator, ClassObject)
 	r.proto.setIter = newObject(r.proto.iterator, ClassObject)
@@ -142,13 +143,16 @@ func (r *Runtime) initIntrinsics() {
 	r.proto.regexpStringIter = newObject(r.proto.iterator, ClassObject)
 
 	// Error.prototype and the native error prototypes chained from it.
-	r.proto.err = newObject(r.proto.object, ClassError)
+	// The prototypes are ordinary objects: an Error is what the constructor
+	// makes, and Error.prototype is not one -- Object.prototype.toString on it
+	// says so.
+	r.proto.err = newObject(r.proto.object, ClassObject)
 	for k := errorKind(0); k < errorKindCount; k++ {
 		if k == errError {
 			r.proto.nativeErrors[k] = r.proto.err
 			continue
 		}
-		r.proto.nativeErrors[k] = newObject(r.proto.err, ClassError)
+		r.proto.nativeErrors[k] = newObject(r.proto.err, ClassObject)
 	}
 }
 
