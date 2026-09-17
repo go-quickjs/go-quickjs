@@ -3272,3 +3272,74 @@ func TestOptionalChainEdges(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestFinallyOverridesCompletion covers a break or continue written inside a
+// finally clause, which replaces the completion that brought control there.
+// The clause is not pending while its own body runs, so such a jump leaves
+// through the clauses outside it rather than through itself again.
+func TestFinallyOverridesCompletion(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var c = 0, fin = 0
+		  do {
+		    try { c += 1; break } catch (e) {} finally { fin = 1; continue }
+		    fin = -1
+		    c += 2
+		  } while (c < 2)
+		  fin + "," + c`, "1,2"},
+		{`var c = 0, fin = 0
+		  do {
+		    try { c += 1; throw "x" } catch (e) { break } finally { fin = 1; continue }
+		    c += 2
+		  } while (c < 2)
+		  fin + "," + c`, "1,2"},
+		{`var r = ""
+		  for (var i = 0; i < 3; i++) { try { r += "t"; continue } finally { r += "f" } }
+		  r`, "tftftf"},
+		{`var r = ""
+		  outer: for (var i = 0; i < 2; i++) { try { break outer } finally { r += "f" } }
+		  r`, "f"},
+		// A nested clause still runs the one outside it.
+		{`var r = ""
+		  for (var i = 0; i < 1; i++) {
+		    try { try { break } finally { r += "i" } } finally { r += "o" }
+		  }
+		  r`, "io"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// TestDerivedConstructorResult covers what `new` on a derived class produces.
+// Which object comes back is settled where the constructor actually returns,
+// because a finally clause may still call super() after the return statement.
+func TestDerivedConstructorResult(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`class C extends class {} {
+		    constructor() { try { throw null } catch (e) { return } finally { super() } }
+		  }
+		  typeof new C()`, "object"},
+		{`class C extends class {} { constructor() { super() } } typeof new C()`, "object"},
+		{`class C extends class {} { constructor() { super(); return {x: 1} } }
+		  String(new C().x)`, "1"},
+		{`class C extends class {} { constructor() { return {x: 2} } }
+		  String(new C().x)`, "2"},
+
+		// Returning nothing before super() has run is a ReferenceError; a
+		// value that is neither an object nor undefined is a TypeError.
+		{`class C extends class {} { constructor() { return } }
+		  try { new C() } catch (e) { e.constructor.name }`, "ReferenceError"},
+		{`class C extends class {} { constructor() {} }
+		  try { new C() } catch (e) { e.constructor.name }`, "ReferenceError"},
+		{`class C extends class {} { constructor() { super(); return 1 } }
+		  try { new C() } catch (e) { e.constructor.name }`, "TypeError"},
+		// An arrow inside one shares the binding but is not the constructor.
+		{`class C extends class {} {
+		    constructor() { var f = () => 1; super(); this.v = f() }
+		  }
+		  String(new C().v)`, "1"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

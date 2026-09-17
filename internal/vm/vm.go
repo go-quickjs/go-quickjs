@@ -527,19 +527,11 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// A derived constructor may return an object, which becomes the
 			// result, or nothing, in which case the object super() built is.
 			// Anything else would silently discard that object.
-			v := peek(0)
-			switch {
-			case v.IsObject():
-			case v.IsUndefined():
-				sp--
-				bound, ok := f.thisValue()
-				if !ok {
-					vmErr = r.throwError(errReference,
-						"a derived constructor must call super() before returning")
-					goto onError
-				}
-				push(bound)
-			default:
+			//
+			// Only the value is checked here. Which object comes back is
+			// settled where the function actually returns, because a finally
+			// clause may still call super() after this point.
+			if v := peek(0); !v.IsObject() && !v.IsUndefined() {
 				vmErr = r.throwTypeError(
 					"a derived constructor may only return an object or undefined")
 				goto onError
@@ -1254,10 +1246,24 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			if sp > f.base {
 				r.closeIteratorsIn(f.base, sp)
 			}
+			if f.thisRef != nil {
+				v, vmErr = r.derivedResult(f, cl, v)
+				if vmErr != nil {
+					goto onError
+				}
+			}
 			return v, nil
 		case bytecode.OpReturnUndef:
 			if sp > f.base {
 				r.closeIteratorsIn(f.base, sp)
+			}
+			if f.thisRef != nil {
+				v, err := r.derivedResult(f, cl, Undefined)
+				if err != nil {
+					vmErr = err
+					goto onError
+				}
+				return v, nil
 			}
 			return Undefined, nil
 
@@ -1537,6 +1543,12 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 					continue
 				}
 				r.closeIteratorsIn(f.base, sp)
+				if f.thisRef != nil {
+					val, vmErr = r.derivedResult(f, cl, val)
+					if vmErr != nil {
+						goto onError
+					}
+				}
 				return val, nil
 			}
 
@@ -1748,6 +1760,12 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 					continue
 				}
 				r.closeIteratorsIn(f.base, sp)
+				if f.thisRef != nil {
+					val, vmErr = r.derivedResult(f, cl, val)
+					if vmErr != nil {
+						goto onError
+					}
+				}
 				return val, nil
 			}
 			push(val)
@@ -2408,6 +2426,25 @@ func ctorKindOf(fn *bytecode.Function) ctorKind {
 		return ctorDerived
 	}
 	return ctorNone
+}
+
+// derivedResult settles what a derived constructor hands back: an object it
+// returned itself, or the object super() built.
+//
+// The object has to exist by the time the constructor returns, whatever route
+// the return took -- which is why this is at the return rather than at the
+// return statement, where a finally clause may still call super() afterwards.
+// An arrow written inside one shares the binding but is not the constructor,
+// so its kind is what tells them apart.
+func (r *Runtime) derivedResult(f *frame, cl *closure, v Value) (Value, error) {
+	if v.IsObject() || cl.fn.Kind != bytecode.KindDerivedConstructor {
+		return v, nil
+	}
+	if !f.thisRef.init {
+		return Undefined, r.throwError(errReference,
+			"a derived constructor must call super() before returning")
+	}
+	return f.thisRef.value, nil
 }
 
 // captureLocal returns the upvalue for a local slot, reusing an existing one so

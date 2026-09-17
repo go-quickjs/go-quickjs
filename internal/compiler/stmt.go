@@ -866,10 +866,16 @@ func (c *compiler) emitPendingExits(down int) {
 // compiled a second time at the jump site rather than being routed through.
 // Finally clauses are small and rarely nested, so the duplication is bounded.
 func (c *compiler) emitPendingFinallys() {
-	for i := len(c.finallys) - 1; i >= 0; i-- {
+	saved := c.finallys
+	defer func() { c.finallys = saved }()
+	for i := len(saved) - 1; i >= 0; i-- {
 		c.emit(bytecode.OpPopCatch, 0, 0)
+		// While a clause's body is being inlined it is no longer pending: a
+		// break or continue written inside it leaves through the clauses
+		// outside it, not through itself again.
+		c.finallys = saved[:i]
 		c.beginScope()
-		c.compileStatements(c.finallys[i].body)
+		c.compileStatements(saved[i].body)
 		c.endScope()
 	}
 }
