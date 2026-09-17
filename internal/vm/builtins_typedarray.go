@@ -287,10 +287,16 @@ func (r *Runtime) initArrayBufferBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
+		// The object exists before its storage does, so a prototype getter
+		// that throws is reported rather than an allocation failure.
+		proto, err := rt.protoFromNewTargetErr(abProto)
+		if err != nil {
+			return Undefined, err
+		}
 		if n > 1<<31 {
 			return Undefined, rt.throwRangeError("the ArrayBuffer length is too large")
 		}
-		o := newObject(abProto, ClassArrayBuffer)
+		o := newObject(proto, ClassArrayBuffer)
 		o.data = &arrayBufferData{bytes: make([]byte, n)}
 		return Obj(o), nil
 	})

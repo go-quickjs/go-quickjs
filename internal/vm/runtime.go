@@ -33,6 +33,11 @@ type Runtime struct {
 	// requires to exist before any script runs.
 	proto intrinsics
 
+	// usedNewTargetProto records that the built-in constructor now running has
+	// read new.target's prototype for itself. It is saved and restored around
+	// each one, so a construct nested inside another answers only for itself.
+	usedNewTargetProto bool
+
 	// stack backs every frame's locals and operands. It is allocated once at
 	// its full size and never grown, which is what lets an upvalue safely hold
 	// a pointer into a live frame's locals: the backing array never moves.

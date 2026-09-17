@@ -101,7 +101,17 @@ func (r *Runtime) initDataViewBuiltins() {
 			return Undefined, rt.throwRangeError("the view extends past the end of the buffer")
 		}
 
-		o := newObject(proto, ClassDataView)
+		// Reading the prototype can run a getter, and that getter can detach
+		// the buffer the view was about to describe -- so the check is made
+		// again afterwards.
+		viewProto, err := rt.protoFromNewTargetErr(proto)
+		if err != nil {
+			return Undefined, err
+		}
+		if storage.detached {
+			return Undefined, rt.throwTypeError("the ArrayBuffer has been detached")
+		}
+		o := newObject(viewProto, ClassDataView)
 		o.data = &dataViewData{buffer: buf, byteOffset: int(off), byteLength: int(length)}
 		return Obj(o), nil
 	})

@@ -347,11 +347,21 @@ func (r *Runtime) initPromiseBuiltins() {
 	p := r.proto.promise
 
 	ctor := r.newCtor("Promise", 1, p, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		if err := rt.requireNew("Promise"); err != nil {
+			return Undefined, err
+		}
 		executor := arg(args, 0)
 		if !isCallable(executor) {
 			return Undefined, rt.throwTypeError("the Promise executor must be a function")
 		}
-		o := rt.newPromise()
+		// The prototype is read here, before the executor runs: a getter that
+		// throws stops the construction rather than the executor.
+		proto, err := rt.protoFromNewTargetErr(rt.proto.promise)
+		if err != nil {
+			return Undefined, err
+		}
+		o := newObject(proto, ClassPromise)
+		o.data = &promiseData{}
 		// The pair the executor is handed are anonymous, which a script can
 		// check.
 		resolveFn := rt.newNativeFunc("", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {

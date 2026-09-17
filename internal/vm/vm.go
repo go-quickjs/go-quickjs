@@ -2768,6 +2768,14 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 	if newTarget.IsObject() {
 		target = newTarget.Object()
 	}
+
+	// A native constructor builds its own object, so there is nothing to make
+	// here -- and reading new.target's prototype now would be out of order: a
+	// built-in checks its arguments first, and the read is observable.
+	if fd.native != nil {
+		return r.constructNative(o, fd, args, newTarget, target != o)
+	}
+
 	protoVal, err := r.getProp(target, atomPrototype, Obj(target))
 	if err != nil {
 		return Undefined, err
@@ -2785,17 +2793,46 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 	// A constructor that returns an object overrides the newly created one;
 	// any other return value is ignored.
 	if res.IsObject() {
-		// A native constructor builds its own object, because an Error needs a
-		// stack and an Array needs array storage. It knows nothing of
-		// new.target, so the prototype new.target chose is put back -- which is
-		// what makes Reflect.construct(Array, [], F) produce an F.
-		if fd.native != nil && res.Object() != this.Object() && target != o &&
-			protoVal.IsObject() {
-			res.Object().proto = proto
-		}
 		return res, nil
 	}
 	return this, nil
+}
+
+// constructNative runs a built-in constructor, which makes its own object
+// because an Error needs a stack and an Array needs array storage.
+//
+// Most of them know nothing of new.target, so the prototype it chose is put
+// back afterwards -- which is what makes Reflect.construct(Array, [], F)
+// produce an F. The ones that do know ask through protoFromNewTarget, and the
+// read that answers them is the only one: doing it again here would run a
+// prototype getter twice.
+func (r *Runtime) constructNative(o *Object, fd *funcData, args []Value,
+	newTarget Value, derived bool) (Value, error) {
+	saved := r.usedNewTargetProto
+	r.usedNewTargetProto = false
+	res, err := r.callObject(o, Undefined, args, newTarget)
+	askedItself := r.usedNewTargetProto
+	r.usedNewTargetProto = saved
+	if err != nil {
+		return Undefined, err
+	}
+	if !res.IsObject() {
+		// Nothing was built, which only a constructor that refuses to be one
+		// reaches. An ordinary object stands in for the `this` a scripted
+		// constructor would have had.
+		return Obj(newObject(r.proto.object, ClassObject)), nil
+	}
+	if !derived || askedItself {
+		return res, nil
+	}
+	protoVal, err := r.getProp(newTarget.Object(), atomPrototype, newTarget)
+	if err != nil {
+		return Undefined, err
+	}
+	if protoVal.IsObject() {
+		res.Object().proto = protoVal.Object()
+	}
+	return res, nil
 }
 
 func (fd *funcData) nameOr(fallback string) string {

@@ -649,15 +649,29 @@ func (r *Runtime) iterateOptional(v Value, visit func(Value) error) error {
 // constructor reads the method it adds entries through from the object -- and
 // that method is the subclass's when the subclass overrode it.
 func (r *Runtime) protoFromNewTarget(fallback *Object) *Object {
+	p, _ := r.protoFromNewTargetErr(fallback)
+	return p
+}
+
+// protoFromNewTargetErr is protoFromNewTarget with the error the read may
+// produce, which a constructor whose specification reads the property at a
+// definite point has to report rather than swallow.
+func (r *Runtime) protoFromNewTargetErr(fallback *Object) (*Object, error) {
 	nt := r.newTarget()
 	if !nt.IsObject() {
-		return fallback
+		return fallback, nil
 	}
+	// Recorded so that the construct that called this does not read the same
+	// property again on its way out: a prototype getter would see both.
+	r.usedNewTargetProto = true
 	p, err := r.getProp(nt.Object(), atomPrototype, nt)
-	if err != nil || !p.IsObject() {
-		return fallback
+	if err != nil {
+		return nil, err
 	}
-	return p.Object()
+	if !p.IsObject() {
+		return fallback, nil
+	}
+	return p.Object(), nil
 }
 
 // collectionAdder reads the method a collection constructor adds through.
