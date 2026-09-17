@@ -1014,3 +1014,108 @@ func TestTypedArrayDefineRefusals(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// A typed array's own methods where they differ from the Array ones: the
+// separator is what joins, the species is consulted where the specification
+// consults it, and the sort tells the two zeros apart.
+func TestTypedArrayMethodDetails(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// join reads each element as it comes, and an element that is not
+		// there contributes nothing rather than the word "undefined".
+		{`var a = new Int8Array([1, 2, 3])
+		  var sep = {toString: function () { a.buffer.transfer(); return "," }}
+		  a.join(sep)`, ",,"},
+		{`new Int8Array([1, 2, 3]).join("-")`, "1-2-3"},
+		{`new Int8Array(0).join(",")`, ""},
+
+		// map builds its result before it runs anything, so a species that
+		// refuses stops the mapping before the callback is called even once.
+		{`var calls = 0
+		  var a = new Int8Array([1, 2, 3, 4])
+		  a.constructor = {get [Symbol.species]() { throw new RangeError() }}
+		  try { a.map(function () { calls++; return 0 }) } catch (e) {}
+		  String(calls)`, "0"},
+		{`new Int8Array([1, 2, 3]).map(function (x) { return x * 2 }).join(",")`, "2,4,6"},
+		// filter cannot know how long its result is until it has run, so its
+		// species is consulted afterwards.
+		{`var calls = 0
+		  var a = new Int8Array([1, 2, 3, 4])
+		  a.constructor = {get [Symbol.species]() { throw new RangeError() }}
+		  try { a.filter(function () { calls++; return true }) } catch (e) {}
+		  String(calls)`, "4"},
+		{`new Int8Array([1, 2, 3, 4]).filter(function (x) { return x % 2 === 0 }).join(",")`,
+			"2,4"},
+
+		// The default numeric sort puts a negative zero before a positive one
+		// and NaN last.
+		{`var a = new Float64Array([1, 0, -0, 2]).sort();
+		  [1 / a[0], 1 / a[1], a[2], a[3]].join(",")`, "-Infinity,Infinity,1,2"},
+		{`new Float64Array([3, NaN, 1, 2]).sort().join(",")`, "1,2,3,NaN"},
+		{`new Int32Array([10, 9]).sort().join(",")`, "9,10"},
+
+		// subarray starts where the range started, whatever the range turned
+		// out to be: an end before the beginning makes it empty, not shorter
+		// at the front.
+		{`var ab = new ArrayBuffer(16)
+		  var ta = new Float64Array(ab, 8, 1)
+		  var log = []
+		  ta.constructor = {[Symbol.species]: function (b, off, len) {
+		    log.push(b === ab, off, len)
+		    return new Float64Array(0)
+		  }}
+		  ta.subarray(1, {valueOf: function () { ab.transfer(); return 0 }})
+		  log.join(",")`, "true,16,0"},
+		{`var a = new Int8Array([1, 2, 3, 4]); a.subarray(3, 1).length`, "0"},
+		{`var a = new Int8Array([1, 2, 3, 4]); a.subarray(1, 3).join(",")`, "2,3"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// A typed array made over a buffer needs whole elements, and one made from an
+// object needs an iterator it can call.
+func TestTypedArrayConstructorChecks(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var b = new ArrayBuffer(1)
+		  try { new Int32Array(b) } catch (e) { e.constructor.name }`, "RangeError"},
+		{`var b = new ArrayBuffer(1)
+		  try { new Int32Array(b, 0, undefined) } catch (e) { e.constructor.name }`, "RangeError"},
+		{`var b = new ArrayBuffer(8)
+		  try { new Int32Array(b, 2) } catch (e) { e.constructor.name }`, "RangeError"},
+		// A length of its own asks only for the elements it names.
+		{`var b = new ArrayBuffer(5); new Int32Array(b, 0, 1).length`, "1"},
+		{`var b = new ArrayBuffer(8); new Int32Array(b).length`, "2"},
+
+		// Something that cannot be called is a mistake rather than a reason to
+		// fall back to the array-like protocol.
+		{`var o = {length: 1, 0: 5}
+		  o[Symbol.iterator] = {}
+		  try { new Int8Array(o) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`var o = {length: 1, 0: 5}
+		  o[Symbol.iterator] = 42
+		  try { new Int8Array(o) } catch (e) { e.constructor.name }`, "TypeError"},
+		// Nothing there at all is the array-like path.
+		{`var o = {length: 1, 0: 5}
+		  o[Symbol.iterator] = null
+		  new Int8Array(o).join(",")`, "5"},
+		{`new Int8Array({length: 2, 0: 1, 1: 2}).join(",")`, "1,2"},
+		{`new Int8Array([1, 2][Symbol.iterator]()).join(",")`, "1,2"},
+
+		// An out-of-range write still converts its value when the view is the
+		// receiver, which is the view's own write rather than one passing
+		// through it.
+		{`var a = new Int32Array(2)
+		  var n = 0
+		  a[5] = {valueOf: function () { n++; return 1 }}
+		  String(n)`, "1"},
+		{`var receiver = new Int32Array(10)
+		  var obj = Object.create(receiver)
+		  var n = 0
+		  var value = {valueOf: function () { n++; return 1 }};
+		  [Reflect.set(obj, 100, value, receiver), n].join(",")`, "true,1"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

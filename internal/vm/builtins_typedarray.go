@@ -589,6 +589,12 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 		if int(off) > len(b.bytes) {
 			return Undefined, r.throwRangeError("the byte offset is out of range")
 		}
+		if explicit < 0 && len(b.bytes)%info.size != 0 {
+			// A view with no length of its own covers the rest of the buffer,
+			// which it can only do if what is left divides into elements.
+			return Undefined, r.throwRangeError(
+				"the buffer length must be a multiple of %d", info.size)
+		}
 		length := (len(b.bytes) - int(off)) / info.size
 		if explicit >= 0 {
 			if int64(off)+explicit*int64(info.size) > int64(len(b.bytes)) {
@@ -622,6 +628,12 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 		method, err := r.getValueProp(first, r.atoms.internSymbol(r.wellKnown.iterator))
 		if err != nil {
 			return Undefined, err
+		}
+		if !method.IsNullish() && !isCallable(method) {
+			// Something is there to iterate with and it cannot be called, which
+			// is a mistake rather than a reason to fall back to the array-like
+			// protocol.
+			return Undefined, r.throwTypeError("the source's Symbol.iterator is not a function")
 		}
 		if isCallable(method) {
 			if err := r.iterate(first, func(v Value) error {
@@ -829,8 +841,12 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		if start > end {
-			start = end
+		// The new view starts where the range started, whatever the range
+		// turned out to be: an end before the beginning makes it empty, not
+		// shorter at the front.
+		count := end - start
+		if count < 0 {
+			count = 0
 		}
 		// subarray shares the buffer, unlike slice, which copies. It is built
 		// through the species from that buffer rather than assembled here, so
@@ -838,7 +854,7 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		res, _, err := rt.typedArraySpeciesCreate(this, t, []Value{
 			Obj(t.buffer),
 			Int(t.byteOffset + start*t.info().size),
-			Int(end - start),
+			Int(count),
 		})
 		return res, err
 	})
@@ -1096,12 +1112,20 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 			}
 			sep = ss.Go()
 		}
+		// The length is the one the view was made with, and each element is
+		// read as it comes: a separator whose toString detached the buffer
+		// leaves the elements undefined, and an undefined element contributes
+		// nothing rather than the word.
 		out := emptyString
 		for i := 0; i < t.length; i++ {
 			if i > 0 {
 				out = out.Concat(NewString(sep))
 			}
-			s, err := rt.toString(t.getElem(i))
+			el := t.getElem(i)
+			if el.IsNullish() {
+				continue
+			}
+			s, err := rt.toString(el)
 			if err != nil {
 				return Undefined, err
 			}
@@ -1154,7 +1178,19 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 			n := t.length
 
 			var kept []Value
-			out := make([]Value, 0, n)
+			// map builds its result before it runs anything: the species is
+			// consulted first, so a constructor that refuses stops the mapping
+			// before the callback is called even once. filter is the other way
+			// round -- it cannot know how long its result is until it has run.
+			var mapped Value
+			var mappedArr *typedArrayData
+			if method == "map" {
+				var err error
+				mapped, mappedArr, err = rt.newTypedArrayLike(this, t, n)
+				if err != nil {
+					return Undefined, err
+				}
+			}
 			backwards := method == "findLast" || method == "findLastIndex"
 			for k := 0; k < n; k++ {
 				i := k
@@ -1168,7 +1204,11 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 				}
 				switch method {
 				case "map":
-					out = append(out, res)
+					if i < mappedArr.length {
+						if err := rt.setElem(mappedArr, i, res); err != nil {
+							return Undefined, err
+						}
+					}
 				case "filter":
 					if res.Truthy() {
 						kept = append(kept, el)
@@ -1193,7 +1233,7 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 			}
 			switch method {
 			case "map":
-				return rt.fillTypedArrayLike(this, t, out)
+				return mapped, nil
 			case "filter":
 				return rt.fillTypedArrayLike(this, t, kept)
 			case "some":
@@ -1535,6 +1575,15 @@ func compareNumeric(x, y Value) int {
 		return -1
 	case a > b:
 		return 1
+	case a == 0 && b == 0:
+		// The two zeros are distinct here, negative before positive, which is
+		// the one place a numeric sort can tell them apart.
+		switch {
+		case math.Signbit(a) && !math.Signbit(b):
+			return -1
+		case !math.Signbit(a) && math.Signbit(b):
+			return 1
+		}
 	}
 	return 0
 }

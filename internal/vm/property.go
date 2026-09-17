@@ -279,7 +279,13 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 					// A numeric key naming no element of the view is dropped
 					// even when the write arrived through something else: the
 					// view owns every numeric key, so there is nothing for the
-					// receiver to shadow.
+					// receiver to shadow. The value is still coerced when the
+					// view is the receiver, since that is the view's own write
+					// rather than one passing through it.
+					if rcv == o {
+						_, err := r.toNumericForElement(o, val)
+						return err == nil, err
+					}
 					return true, nil
 				}
 			}
