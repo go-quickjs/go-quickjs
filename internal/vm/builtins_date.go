@@ -3,6 +3,7 @@ package vm
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -93,8 +94,19 @@ func (r *Runtime) initDateBuiltins() {
 		case 0:
 			o.data = rt.now()
 		case 1:
-			// A single argument is a time value, a date string, or an object
-			// whose primitive form is one of those.
+			// A Date is taken at its time value rather than through its string
+			// form, so that `new Date(d)` copies d exactly -- and does not run
+			// whatever toString the object happens to carry.
+			if v := args[0]; v.IsObject() && v.Object().class == ClassDate {
+				t, ok := v.Object().data.(float64)
+				if !ok {
+					t = math.NaN()
+				}
+				o.data = clipTime(t)
+				break
+			}
+			// Otherwise it is a time value, a date string, or an object whose
+			// primitive form is one of those.
 			prim, err := rt.toPrimitive(args[0], hintDefault)
 			if err != nil {
 				return Undefined, err
@@ -213,8 +225,11 @@ func (r *Runtime) initDateBuiltins() {
 		}
 		_, offset := rt.timeAt(t, false).Zone()
 		// The offset is reported as minutes behind UTC, so the sign is the
-		// opposite of what most people expect.
-		return Int(-offset / 60), nil
+		// opposite of what most people expect. It is not rounded: a zone whose
+		// offset is not a whole number of minutes -- which every local mean
+		// time before standard zones was -- would otherwise disagree with the
+		// value the date itself was built from.
+		return Float(-float64(offset) / 60), nil
 	})
 
 	// The setters share a shape too: each replaces one or more components and
@@ -344,12 +359,15 @@ func (r *Runtime) initDateBuiltins() {
 			if !this.IsObject() {
 				return Undefined, rt.throwTypeError("Date[Symbol.toPrimitive] requires an object")
 			}
-			h, err := rt.toString(arg(args, 0))
-			if err != nil {
-				return Undefined, err
+			// The hint is compared as given rather than coerced: a String
+			// object holding "number" is not the hint "number".
+			h := arg(args, 0)
+			if !h.IsString() {
+				return Undefined, rt.throwTypeError(
+					"invalid hint for Date[Symbol.toPrimitive]")
 			}
 			var want hint
-			switch h.Go() {
+			switch h.String().Go() {
 			case "number":
 				want = hintNumber
 			case "string", "default":
@@ -357,7 +375,7 @@ func (r *Runtime) initDateBuiltins() {
 				want = hintString
 			default:
 				return Undefined, rt.throwTypeError(
-					"invalid hint %q for Date[Symbol.toPrimitive]", h.Go())
+					"invalid hint %q for Date[Symbol.toPrimitive]", h.String().Go())
 			}
 			return rt.ordinaryToPrimitive(this, want)
 		})
@@ -452,13 +470,17 @@ func (r *Runtime) setDateParts(t float64, args []Value, start, count int, utc bo
 	// Setting a component of an invalid date leaves it invalid, except for
 	// setFullYear, which the specification lets revive one from the epoch.
 	base := t
+	revived := false
 	if math.IsNaN(base) {
 		if start != 0 {
 			return math.NaN(), false, nil
 		}
-		base = 0
+		// The specification substitutes +0 for the time value and skips the
+		// conversion to local time, so the components come from the epoch
+		// itself rather than from what the epoch reads as here.
+		base, revived = 0, true
 	}
-	tm := r.timeAt(base, utc)
+	tm := r.timeAt(base, utc || revived)
 
 	parts := [7]float64{
 		float64(tm.Year()),
@@ -487,6 +509,7 @@ func (r *Runtime) setDateParts(t float64, args []Value, start, count int, utc bo
 var dateFormats = []string{
 	"2006-01-02T15:04:05.000Z07:00",
 	"2006-01-02T15:04:05Z07:00",
+	"2006-01-02T15:04Z07:00",
 	"2006-01-02T15:04:05.000",
 	"2006-01-02T15:04:05",
 	"2006-01-02T15:04",
@@ -506,11 +529,72 @@ var dateFormats = []string{
 	"01/02/2006 15:04:05",
 }
 
+// parseExtendedYear reads the ±YYYYYY form of an ISO date, which a year
+// outside four digits needs and which no Go layout can express.
+func parseExtendedYear(s string, loc *time.Location) (float64, bool) {
+	if len(s) < 7 || (s[0] != '+' && s[0] != '-') {
+		return 0, false
+	}
+	for i := 1; i < 7; i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return 0, false
+		}
+	}
+	year, err := strconv.Atoi(s[:7])
+	if err != nil {
+		return 0, false
+	}
+	if year == 0 && s[0] == '-' {
+		// There is no year minus zero: the form exists to name years before
+		// the first, and zero is already spelled +000000.
+		return math.NaN(), true
+	}
+	// The rest is an ordinary ISO date with a stand-in year, which is put back
+	// by shifting the result by the distance between the two January firsts.
+	// The stand-in has to agree with the real year about February, or every
+	// date after it would move by a day.
+	stand := 2001
+	if isLeapYear(year) {
+		stand = 2000
+	}
+	ms := parseDate(strconv.Itoa(stand)+s[7:], loc)
+	if math.IsNaN(ms) {
+		return math.NaN(), true
+	}
+	// The shift is the distance between the two January firsts, taken in
+	// milliseconds rather than as a Duration: the span of a six-digit year
+	// overflows the nanoseconds a Duration counts.
+	from := time.Date(stand, time.January, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	to := time.Date(year, time.January, 1, 0, 0, 0, 0, time.UTC).UnixMilli()
+	return clipTime(ms + float64(to-from)), true
+}
+
+// isLeapYear reports whether a proleptic Gregorian year has a February 29th.
+func isLeapYear(y int) bool {
+	return y%4 == 0 && (y%100 != 0 || y%400 == 0)
+}
+
 // parseDate implements Date.parse, returning NaN for anything it cannot read.
 func parseDate(s string, loc *time.Location) float64 {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return math.NaN()
+	}
+
+	// An extended year -- six digits with a sign -- is outside what a Go
+	// layout can express, so the year is taken off the front and put back
+	// afterwards. It is what toISOString writes for a date beyond four digits.
+	if ms, ok := parseExtendedYear(s, loc); ok {
+		return ms
+	}
+
+	// A trailing zone name in parentheses is what toString writes after the
+	// offset. Go can read an abbreviation there but not an offset, and the
+	// offset is already in the text, so the whole parenthesis goes.
+	if strings.HasSuffix(s, ")") {
+		if i := strings.LastIndex(s, " ("); i > 0 {
+			s = s[:i]
+		}
 	}
 
 	// A date-only ISO form is UTC, while a date-time form without a zone is

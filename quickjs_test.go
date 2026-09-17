@@ -3343,3 +3343,55 @@ func TestDerivedConstructorResult(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestDateParsing covers Date.parse, which has to read back what the Date
+// methods write, and the extended year form an out-of-range date needs.
+func TestDateParsing(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// Every form a Date writes round-trips, including the zone name
+		// toString puts in parentheses after the offset.
+		{`var d = new Date(0); String(Date.parse(d.toString()))`, "0"},
+		{`var d = new Date(1234567890000); String(Date.parse(d.toString()))`,
+			"1234567890000"},
+		{`var d = new Date(0); String(Date.parse(d.toUTCString()))`, "0"},
+		{`var d = new Date(1234567890123); String(Date.parse(d.toISOString()))`,
+			"1234567890123"},
+
+		// The extreme dates use a six-digit year, which is not a shape any
+		// ordinary layout describes.
+		{`String(Date.parse(new Date(-8640000000000000).toISOString()))`,
+			"-8640000000000000"},
+		{`String(Date.parse(new Date(8640000000000000).toISOString()))`,
+			"8640000000000000"},
+		{`new Date(Date.parse("+020000-02-29T00:00:00.000Z")).toISOString()`,
+			"+020000-02-29T00:00:00.000Z"},
+		{`new Date("-000001-07-01T00:00Z").toString().split(" ")[3]`, "-0001"},
+		// There is no year minus zero.
+		{`String(Date.parse("-000000-03-31T00:45Z"))`, "NaN"},
+
+		// A Date argument is taken at its time value rather than through its
+		// string form.
+		{`var d = new Date(0); String(new Date(d).valueOf())`, "0"},
+		{`var d = new Date(1234567890123); String(new Date(d).valueOf())`, "1234567890123"},
+
+		// setFullYear revives an invalid date from the epoch, which is a local
+		// time value rather than a moment to be converted.
+		{`var d = new Date(NaN); d.setFullYear(2016, 0, 1)
+		  String(d.valueOf() === new Date(2016, 0, 1).valueOf())`, "true"},
+		{`var d = new Date(NaN); d.setMonth(3); String(d.valueOf())`, "NaN"},
+
+		// The hint is compared as given rather than coerced.
+		{`try { new Date()[Symbol.toPrimitive](Object("number")) } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		{`try { new Date()[Symbol.toPrimitive]("String") } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		{`String(new Date(0)[Symbol.toPrimitive]("number"))`, "0"},
+
+		// getTimezoneOffset is not rounded to whole minutes.
+		{`var d = new Date(1899, 11); String(d.valueOf() - d.getTimezoneOffset() * 60000)`,
+			"-2211667200000"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
