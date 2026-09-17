@@ -17,12 +17,19 @@ package vm
 // collide: the number 1, the string "1" and a boolean are distinct keys even
 // though they might otherwise hash alike.
 type mapKey struct {
+	// Exactly one of these carries the key: ref for an object, a symbol or a
+	// weak reference to one, whose identity is the comparison, and val for
+	// everything else. They are indexed separately, so what is stored is one
+	// or the other rather than room for both.
+	val valueKey
+	ref any
+}
+
+// valueKey identifies a key that is compared by value rather than by identity.
+type valueKey struct {
 	kind Kind
 	num  float64
 	str  string
-	// ref holds the pointer for an object or symbol key, whose identity is the
-	// comparison.
-	ref any
 }
 
 // mapKeyOf converts a value to its comparable key form.
@@ -34,7 +41,7 @@ type mapKey struct {
 // the key alive.
 func (r *Runtime) mapKeyOf(v Value, weakKey bool) mapKey {
 	if weakKey && (v.IsObject() || v.IsSymbol()) {
-		return mapKey{kind: v.Kind(), ref: makeWeak(v)}
+		return mapKey{ref: makeWeak(v)}
 	}
 	return r.strongKeyOf(v)
 }
@@ -48,26 +55,26 @@ func (r *Runtime) strongKeyOf(v Value) mapKey {
 			// SameValueZero makes NaN equal to itself, so every NaN has to
 			// produce one key. Go's NaN is not equal to itself, so a sentinel
 			// stands in for it.
-			return mapKey{kind: KindNumber, str: "NaN"}
+			return mapKey{val: valueKey{kind: KindNumber, str: "NaN"}}
 		case n == 0:
 			// +0 and -0 are the same key.
-			return mapKey{kind: KindNumber, num: 0}
+			return mapKey{val: valueKey{kind: KindNumber}}
 		}
-		return mapKey{kind: KindNumber, num: n}
+		return mapKey{val: valueKey{kind: KindNumber, num: n}}
 	case KindString:
-		return mapKey{kind: KindString, str: v.String().Go()}
+		return mapKey{val: valueKey{kind: KindString, str: v.String().Go()}}
 	case KindBool:
-		return mapKey{kind: KindBool, num: boolToFloat(v.BoolValue())}
+		return mapKey{val: valueKey{kind: KindBool, num: boolToFloat(v.BoolValue())}}
 	case KindBigInt:
 		// Two BigInts with the same value are the same key, so the decimal
 		// form rather than the pointer identifies them.
-		return mapKey{kind: KindBigInt, str: v.BigInt().String()}
+		return mapKey{val: valueKey{kind: KindBigInt, str: v.BigInt().String()}}
 	case KindObject:
-		return mapKey{kind: KindObject, ref: v.Object()}
+		return mapKey{ref: v.Object()}
 	case KindSymbol:
-		return mapKey{kind: KindSymbol, ref: v.Symbol()}
+		return mapKey{ref: v.Symbol()}
 	}
-	return mapKey{kind: v.Kind()}
+	return mapKey{val: valueKey{kind: v.Kind()}}
 }
 
 func boolToFloat(b bool) float64 {
@@ -82,16 +89,26 @@ func boolToFloat(b bool) float64 {
 type mapEntry struct {
 	key, value Value
 	deleted    bool
-	// weakKey holds a WeakMap or WeakSet key, which the entry must not be what
-	// keeps alive. key is left empty for those, so that reading one back means
-	// asking whether it is still there.
-	weakKey weakTarget
 }
 
 // jsMap is the shared storage for all four collection types.
 type jsMap struct {
 	entries []mapEntry
-	index   map[mapKey]int
+	// weakKeys holds a weak reference to each entry's key, for a WeakMap or a
+	// WeakSet only: an entry of one must not be what keeps its own key alive,
+	// and its key field is left empty so that reading it back means asking
+	// whether the key is still there.
+	//
+	// It is a list of its own rather than a field of the entry because a Map
+	// and a Set, which is most of them, would carry three words per entry that
+	// nothing ever reads. It has one element per entry when it is there at all.
+	weakKeys []weakTarget
+	// byValue and byRef index the entries by key. They are separate because
+	// what identifies a key is either its value or its address, never both,
+	// and a map that holds one kind should not pay for room for the other.
+	// Each is created when the first key of its kind arrives.
+	byValue map[valueKey]int
+	byRef   map[any]int
 	size    int
 	// weak marks a WeakMap or WeakSet, whose keys are held weakly: an entry
 	// stops existing once nothing else refers to its key.
@@ -108,11 +125,51 @@ type jsMap struct {
 }
 
 func newJSMap(weak bool) *jsMap {
-	return &jsMap{index: make(map[mapKey]int), weak: weak}
+	return &jsMap{weak: weak}
+}
+
+// lookup finds the entry a key indexes, if any.
+func (m *jsMap) lookup(k mapKey) (int, bool) {
+	if k.ref != nil {
+		i, ok := m.byRef[k.ref]
+		return i, ok
+	}
+	i, ok := m.byValue[k.val]
+	return i, ok
+}
+
+// record points a key at an entry.
+func (m *jsMap) record(k mapKey, i int) {
+	if k.ref != nil {
+		if m.byRef == nil {
+			m.byRef = make(map[any]int)
+		}
+		m.byRef[k.ref] = i
+		return
+	}
+	if m.byValue == nil {
+		m.byValue = make(map[valueKey]int)
+	}
+	m.byValue[k.val] = i
+}
+
+// forget removes a key from the index.
+func (m *jsMap) forget(k mapKey) {
+	if k.ref != nil {
+		delete(m.byRef, k.ref)
+		return
+	}
+	delete(m.byValue, k.val)
+}
+
+// clearIndex empties the index, keeping what it has allocated.
+func (m *jsMap) clearIndex() {
+	clear(m.byValue)
+	clear(m.byRef)
 }
 
 func (m *jsMap) get(r *Runtime, k Value) (Value, bool) {
-	i, ok := m.index[r.mapKeyOf(k, m.weak)]
+	i, ok := m.lookup(r.mapKeyOf(k, m.weak))
 	if !ok || m.entries[i].deleted || !m.live(i) {
 		return Undefined, false
 	}
@@ -125,12 +182,12 @@ func (m *jsMap) live(i int) bool {
 	if !m.weak {
 		return true
 	}
-	return m.entries[i].weakKey.alive()
+	return m.weakKeys[i].alive()
 }
 
 func (m *jsMap) set(r *Runtime, k, v Value) {
 	mk := r.mapKeyOf(k, m.weak)
-	if i, ok := m.index[mk]; ok && !m.entries[i].deleted && m.live(i) {
+	if i, ok := m.lookup(mk); ok && !m.entries[i].deleted && m.live(i) {
 		// Re-setting an existing key updates the value and keeps its position.
 		m.entries[i].value = v
 		return
@@ -140,11 +197,11 @@ func (m *jsMap) set(r *Runtime, k, v Value) {
 		// The key is not stored, only a weak reference to it: an entry must
 		// not be what keeps its own key alive.
 		e.key = Undefined
-		e.weakKey = makeWeak(k)
 		m.sweep()
+		m.weakKeys = append(m.weakKeys, makeWeak(k))
 	}
 	m.entries = append(m.entries, e)
-	m.index[mk] = len(m.entries) - 1
+	m.record(mk, len(m.entries)-1)
 	m.size++
 }
 
@@ -158,24 +215,29 @@ func (m *jsMap) sweep() {
 		return
 	}
 	kept := m.entries[:0]
-	clear(m.index)
+	keptWeak := m.weakKeys[:0]
+	m.clearIndex()
 	m.size = 0
-	for _, e := range m.entries {
-		if e.deleted || !e.weakKey.alive() {
+	for i, e := range m.entries {
+		w := m.weakKeys[i]
+		if e.deleted || !w.alive() {
 			continue
 		}
 		kept = append(kept, e)
-		m.index[mapKey{kind: e.weakKey.kind(), ref: e.weakKey}] = len(kept) - 1
+		keptWeak = append(keptWeak, w)
+		m.record(mapKey{ref: w}, len(kept)-1)
 		m.size++
 	}
 	clear(m.entries[len(kept):])
+	clear(m.weakKeys[len(keptWeak):])
 	m.entries = kept
+	m.weakKeys = keptWeak
 	m.nextSweep = 2*len(m.entries) + 16
 }
 
 func (m *jsMap) delete(r *Runtime, k Value) bool {
 	mk := r.mapKeyOf(k, m.weak)
-	i, ok := m.index[mk]
+	i, ok := m.lookup(mk)
 	if !ok || m.entries[i].deleted || !m.live(i) {
 		return false
 	}
@@ -184,7 +246,7 @@ func (m *jsMap) delete(r *Runtime, k Value) bool {
 	m.entries[i].deleted = true
 	m.entries[i].key = Undefined
 	m.entries[i].value = Undefined
-	delete(m.index, mk)
+	m.forget(mk)
 	m.size--
 	return true
 }
@@ -195,7 +257,7 @@ func (m *jsMap) clear() {
 		m.entries[i].key = Undefined
 		m.entries[i].value = Undefined
 	}
-	clear(m.index)
+	m.clearIndex()
 	m.size = 0
 }
 

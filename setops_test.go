@@ -476,3 +476,51 @@ func TestSetOperationsWalkStepByStep(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
 	}
 }
+
+// A WeakMap drops the entries whose keys have been collected, scanning for them
+// as it grows. The scan walks the entries and the weak references beside them,
+// which are two lists that have to stay in step.
+func TestWeakMapSweepsCollectedKeys(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+
+	if _, err := rt.Eval(`
+		var wm = new WeakMap(), ws = new WeakSet();
+		var held = [];
+		// Half the keys are kept and half are dropped, interleaved, so that a
+		// sweep has to keep the right ones in the right order.
+		for (var i = 0; i < 200; i++) {
+			var k = {i: i};
+			wm.set(k, i);
+			ws.add(k);
+			if (i % 2 === 0) held.push(k);
+		}
+	`); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 4; i++ {
+		runtime.GC()
+	}
+	// Growing the collection is what triggers the scan.
+	if _, err := rt.Eval(`
+		for (var i = 0; i < 200; i++) { var k = {}; wm.set(k, i); ws.add(k); held.push(k) }
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	v, err := rt.Eval(`
+		var ok = true;
+		for (var i = 0; i < held.length; i++) {
+			var k = held[i];
+			if (!ws.has(k)) ok = false;
+			if ("i" in k && wm.get(k) !== k.i) ok = false;
+		}
+		ok ? "intact" : "lost"
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.String() != "intact" {
+		t.Errorf("after a sweep the surviving entries = %q, want intact", v.String())
+	}
+}
