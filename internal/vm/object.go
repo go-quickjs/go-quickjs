@@ -207,6 +207,33 @@ func newLiteralObject(proto *Object, n int) *Object {
 	return &lo.Object
 }
 
+// arrayObject is an array with room for its first few elements in the same
+// allocation, which is what an array literal and a small result array need.
+//
+// Four is what the literals a program writes mostly hold; a longer one gets
+// storage of its own, sized exactly.
+type arrayObject struct {
+	Object
+	inline [4]Value
+}
+
+// newArrayObject returns an array about to be given n elements.
+func newArrayObject(proto *Object, n int) *Object {
+	if n > len(arrayObject{}.inline) {
+		o := newObject(proto, ClassArray)
+		o.elems = make([]Value, n)
+		return o
+	}
+	ao := &arrayObject{
+		Object: Object{
+			proto: proto, class: ClassArray,
+			flags: objExtensible | objArrayLengthWritable,
+		},
+	}
+	ao.elems = ao.inline[:n]
+	return &ao.Object
+}
+
 // funcObject is an object that is also a function.
 //
 // The two parts are allocated together: a callable object always needs both,
