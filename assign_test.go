@@ -97,3 +97,79 @@ func TestDuplicateProtoInPattern(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// The parts of `a[k] = v` are evaluated left to right, and the conversions the
+// assignment needs come after all of them: the key becomes a property key and
+// the base is checked only once there is a value to store.
+func TestAssignmentToComputedMemberOrder(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		// The key expression runs before the right-hand side.
+		{"key before value", `var log = []
+		  var base = {}
+		  base[(log.push("key"), "k")] = (log.push("value"), 1)
+		  log.join(",")`, "key,value"},
+		// ToPropertyKey runs after it, which is what makes a throwing toString
+		// lose to a throwing right-hand side.
+		{"key conversion last", `var log = []
+		  var base = {}
+		  var key = {toString: function () { log.push("toString"); return "k" }}
+		  base[key] = (log.push("value"), 1)
+		  log.join(",") + "|" + base.k`, "value,toString|1"},
+		// So does the check that there is something to assign to.
+		{"base checked last", `var log = []
+		  try { null[(log.push("key"), "k")] = (log.push("value"), 1) }
+		  catch (e) { log.push(e.constructor.name) }
+		  log.join(",")`, "key,value,TypeError"},
+		{"undefined base", `var log = []
+		  var key = {toString: function () { log.push("toString"); return "k" }}
+		  try { undefined[key] = (log.push("value"), 1) }
+		  catch (e) { log.push(e.constructor.name) }
+		  log.join(",")`, "value,TypeError"},
+		// A compound assignment reads through the reference first, so there the
+		// conversions happen before the operand is evaluated -- and only once.
+		{"compound converts once", `var log = []
+		  var o = {k: 1}
+		  var key = {toString: function () { log.push("toString"); return "k" }}
+		  o[key] += (log.push("operand"), 2)
+		  log.join(",") + "|" + o.k`, "toString,operand|3"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}
+
+// A super reference whose home object has no prototype has a null base, which
+// is an error only when the assignment actually happens -- after the key and
+// the right-hand side have been evaluated.
+func TestSuperAssignmentWithoutPrototype(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"named", `var count = 0
+		  class C { static m() { super.x = count += 1 } }
+		  Object.setPrototypeOf(C, null)
+		  var caught = ""
+		  try { C.m() } catch (e) { caught = e.constructor.name }
+		  caught + "," + count`, "TypeError,1"},
+		{"computed", `var count = 0
+		  class C { static m() { super[0] = count += 1 } }
+		  Object.setPrototypeOf(C, null)
+		  var caught = ""
+		  try { C.m() } catch (e) { caught = e.constructor.name }
+		  caught + "," + count`, "TypeError,1"},
+		{"read", `class C { static m() { return super.x } }
+		  Object.setPrototypeOf(C, null)
+		  try { C.m(); "no error" } catch (e) { e.constructor.name }`, "TypeError"},
+		{"computed read", `var count = 0
+		  class C { static m() { return super[(count += 1, "x")] } }
+		  Object.setPrototypeOf(C, null)
+		  var caught = ""
+		  try { C.m() } catch (e) { caught = e.constructor.name }
+		  caught + "," + count`, "TypeError,1"},
+		// With a prototype the assignment lands on the receiver, as always.
+		{"with a prototype", `class A {}
+		  class B extends A { static m() { super.x = 5 } }
+		  B.m(); B.x + "," + String(Object.getPrototypeOf(B).x)`, "5,undefined"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}

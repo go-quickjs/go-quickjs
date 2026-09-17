@@ -2198,31 +2198,47 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				goto onError
 			}
 		case bytecode.OpSuperBase:
-			base, _, err := r.superBase(f)
+			base, _, err := r.superRef(f)
 			if err != nil {
 				vmErr = err
 				goto onError
+			}
+			if base == nil {
+				// No prototype to reach: the reference has a null base, which
+				// the read or the write below reports once it gets there.
+				push(Null)
+				break
 			}
 			push(Obj(base))
 		case bytecode.OpSetSuperIndex:
 			val := pop()
-			key, err := r.toPropertyKey(pop())
+			rawKey := pop()
+			base := pop()
+			if !base.IsObject() {
+				vmErr = r.throwTypeError("\"super\" has no prototype to assign to")
+				goto onError
+			}
+			key, err := r.toPropertyKey(rawKey)
 			if err != nil {
 				vmErr = err
 				goto onError
 			}
-			base := pop()
 			if err := r.superSetFrom(f, base, key, val, cl.fn.Strict); err != nil {
 				vmErr = err
 				goto onError
 			}
 		case bytecode.OpGetSuperIndex:
-			key, err := r.toPropertyKey(pop())
+			rawKey := pop()
+			base := pop()
+			if !base.IsObject() {
+				vmErr = r.throwTypeError("\"super\" has no prototype to read from")
+				goto onError
+			}
+			key, err := r.toPropertyKey(rawKey)
 			if err != nil {
 				vmErr = err
 				goto onError
 			}
-			base := pop()
 			this, _ := f.thisValue()
 			v, err := r.getProp(base.Object(), key, this)
 			if err != nil {
@@ -3223,6 +3239,26 @@ func (r *Runtime) superGet(f *frame, key Atom) (Value, error) {
 // It is settled before the key is computed, so that changing the home object's
 // prototype while the key runs does not move the reference.
 func (r *Runtime) superBase(f *frame) (*Object, Value, error) {
+	start, this, err := r.superRef(f)
+	if err != nil {
+		return nil, Undefined, err
+	}
+	if start == nil {
+		// `class C extends null` leaves the home object with no prototype, so
+		// there is nothing to read from -- which the specification reports
+		// rather than answering undefined.
+		return nil, Undefined, r.throwTypeError("\"super\" has no prototype to read from")
+	}
+	return start, this, nil
+}
+
+// superRef is superBase without the requirement that there be a prototype to
+// reach.
+//
+// A reference with no base is only an error once something is done with it, and
+// that happens after the rest of the expression has run: `super[k()] = v()`
+// calls both before it complains.
+func (r *Runtime) superRef(f *frame) (*Object, Value, error) {
 	if f.callee == nil {
 		return nil, Undefined, r.throwTypeError("\"super\" is only valid inside a method")
 	}
@@ -3235,14 +3271,7 @@ func (r *Runtime) superBase(f *frame) (*Object, Value, error) {
 		return nil, Undefined, r.throwError(errReference,
 			"\"this\" is not bound until super() has been called")
 	}
-	start := fd.homeObject.proto
-	if start == nil {
-		// `class C extends null` leaves the home object with no prototype, so
-		// there is nothing to read from -- which the specification reports
-		// rather than answering undefined.
-		return nil, Undefined, r.throwTypeError("\"super\" has no prototype to read from")
-	}
-	return start, this, nil
+	return fd.homeObject.proto, this, nil
 }
 
 // superSet writes through a super reference.
@@ -3252,28 +3281,17 @@ func (r *Runtime) superBase(f *frame) (*Object, Value, error) {
 // assignment that finds no setter lands on the instance rather than on the
 // prototype.
 func (r *Runtime) superSet(f *frame, key Atom, val Value, strict bool) error {
-	if f.callee == nil {
-		return r.throwTypeError("\"super\" is only valid inside a method")
-	}
-	fd := f.callee.fn()
-	if fd == nil || fd.homeObject == nil {
-		return r.throwTypeError("\"super\" is only valid inside a method")
-	}
-	this, bound := f.thisValue()
-	if !bound {
-		return r.throwError(errReference,
-			"\"this\" is not bound until super() has been called")
-	}
-	start := fd.homeObject.proto
-	if start == nil {
-		// With no prototype the assignment still lands on the instance.
-		if !this.IsObject() {
-			return r.throwTypeError("cannot assign to a super property of %s", r.describe(this))
-		}
-		_, err := r.setOnReceiver(this.Object(), key, val, strict)
+	start, this, err := r.superRef(f)
+	if err != nil {
 		return err
 	}
-	_, err := r.setProp(start, key, val, this, strict)
+	if start == nil {
+		// `class C extends null`, or a home object whose prototype was taken
+		// away: the reference has no base, and assigning through one is a
+		// TypeError rather than a write to the instance.
+		return r.throwTypeError("\"super\" has no prototype to assign to")
+	}
+	_, err = r.setProp(start, key, val, this, strict)
 	return err
 }
 

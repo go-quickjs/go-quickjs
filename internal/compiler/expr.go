@@ -1475,8 +1475,10 @@ func (c *compiler) compileMemberStore(m *ast.Member, emitValue func()) {
 	}
 	c.compileExpr(m.Object)
 	if m.Computed {
+		// The key stays as it was written: `a[k] = v` converts it to a property
+		// key only when the assignment happens, which is after the right-hand
+		// side has run. OpSetIndex does that, and checks the base first.
 		c.compileExpr(m.Property)
-		c.emit(bytecode.OpToPropertyKeyOfBase, 0, 0)
 		emitValue()
 		// obj key value -> value obj key value, so the store consumes three
 		// and the result is left behind.
