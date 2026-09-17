@@ -4190,3 +4190,54 @@ func TestIndirectExportBindsNothingLocally(t *testing.T) {
 		t.Errorf("results = %s, want %s", got, want)
 	}
 }
+
+// A time value is assembled with the arithmetic the specification writes, in
+// the groupings it writes it: a component far outside its ordinary range is not
+// an error, and where the sum lands depends on the order the terms were added
+// in and on each product being rounded before the next is added.
+func TestDateComponentArithmetic(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`String(Date.UTC(1970, 0, 1, 80063993375, 29, 1, -288230376151711740))`, "29312"},
+		{`String(Date.UTC(1970, 0, 213503982336, 0, 0, 0, -18446744073709552000))`, "34447360"},
+		// The ordinary cases, and the roll-over the components are allowed.
+		{`String(Date.UTC(1970, 0, 1))`, "0"},
+		{`String(Date.UTC(2020, 0, 1))`, "1577836800000"},
+		{`String(Date.UTC(1969, 11, 31, 23, 59, 59, 999))`, "-1"},
+		{`String(Date.UTC(2020, 13, 1))`, "1612137600000"},
+		{`String(Date.UTC(2020, 0, 0))`, "1577750400000"},
+		{`String(Date.UTC(98, 0, 1))`, "883612800000"},
+		// The range is 100 million days either side of the epoch.
+		{`String(Date.UTC(275760, 8, 13))`, "8640000000000000"},
+		{`String(Date.UTC(275760, 8, 14))`, "NaN"},
+		{`String(Date.UTC(-271821, 3, 20))`, "-8640000000000000"},
+		{`String(Date.UTC(2020, 0, 1, Infinity))`, "NaN"},
+		{`String(Date.UTC(NaN, 0))`, "NaN"},
+		// A local construction round-trips through the zone it was read in.
+		{`var d = new Date(2020, 5, 15, 12, 30);
+		  [d.getFullYear(), d.getMonth(), d.getDate(), d.getHours(), d.getMinutes()].join(",")`,
+			"2020,5,15,12,30"},
+		{`var d = new Date(2024, 1, 29); [d.getMonth(), d.getDate()].join(",")`, "1,29"},
+		{`new Date(Date.UTC(2020, 5, 15, 12, 30)).toISOString()`, "2020-06-15T12:30:00.000Z"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// Making room for no arguments moves nothing, however long the receiver claims
+// to be: the length is written back and that is all.
+func TestUnshiftWithNoArguments(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var o = {length: Math.pow(2, 53) - 1}
+		  Array.prototype.unshift.call(o)
+		  String(o.length)`, "9007199254740991"},
+		{`var o = {length: Infinity}
+		  Array.prototype.unshift.call(o)
+		  String(o.length)`, "9007199254740991"},
+		{`var a = [1, 2]; a.unshift(); a.join(",") + "," + a.length`, "1,2,2"},
+		{`var a = [1, 2]; a.unshift(0); a.join(",")`, "0,1,2"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

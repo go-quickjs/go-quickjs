@@ -1090,14 +1090,20 @@ func (r *Runtime) initArrayBuiltins() {
 		if a.n+add > maxArrayLength {
 			return Undefined, rt.throwTypeError("the array would be too long")
 		}
-		// Backwards, so that an element is never overwritten before it is read.
-		for i := a.n - 1; i >= 0; i-- {
-			v, present, err := a.at(rt, i)
-			if err != nil {
-				return Undefined, err
-			}
-			if err := a.put(rt, i+add, v, present); err != nil {
-				return Undefined, err
+		// Nothing to make room for means nothing to move: unshifting no
+		// arguments only writes the length back, however long the receiver
+		// claims to be.
+		if add > 0 {
+			// Backwards, so that an element is never overwritten before it is
+			// read.
+			for i := a.n - 1; i >= 0; i-- {
+				v, present, err := a.at(rt, i)
+				if err != nil {
+					return Undefined, err
+				}
+				if err := a.put(rt, i+add, v, present); err != nil {
+					return Undefined, err
+				}
 			}
 		}
 		for i, v := range args {

@@ -26,6 +26,14 @@ import (
 // either side of the epoch, in milliseconds.
 const maxTimeValue = 8.64e15
 
+// The lengths of the units a time value is assembled from.
+const (
+	msPerSecond = 1000.0
+	msPerMinute = 60 * msPerSecond
+	msPerHour   = 60 * msPerMinute
+	msPerDay    = 24 * msPerHour
+)
+
 // dateValueOf recovers a Date's time value from a receiver.
 func (r *Runtime) dateValueOf(this Value, name string) (float64, error) {
 	if !this.IsObject() || this.Object().class != ClassDate {
@@ -426,19 +434,111 @@ func (r *Runtime) makeDateFromParts(args []Value, utc bool) (float64, error) {
 // values roll over as the specification requires: month 12 is January of the
 // next year, and day 0 is the last day of the previous month.
 func (r *Runtime) composeTime(year, month, day, hour, min, sec, ms float64, utc bool) float64 {
-	for _, v := range []float64{year, month, day, hour, min, sec, ms} {
+	// The arithmetic is done in float64, in the groupings the specification
+	// writes, because the rounding is observable: a component far outside its
+	// ordinary range is not an error, and where the sum lands depends on the
+	// order the terms were added in.
+	tv := makeDate(makeDay(year, month, day), makeTime(hour, min, sec, ms))
+	if utc {
+		return clipTime(tv)
+	}
+	return clipTime(r.utcFromLocal(tv))
+}
+
+// utcFromLocal reads a time value as a local time and returns the instant it
+// names, which is what every constructor and setter that is not the UTC form
+// does with the components it was given.
+func (r *Runtime) utcFromLocal(tv float64) float64 {
+	if math.IsNaN(tv) || math.Abs(tv) > maxTimeValue+msPerDay {
+		// Beyond the range no offset could bring it back, and the conversion
+		// would have to leave the range Go's time can hold.
+		return math.NaN()
+	}
+	// The offset is the zone's at the instant the components name, which is
+	// not known until the offset is: the first guess reads the offset at the
+	// same number of milliseconds treated as UTC, and the second confirms it.
+	_, off := r.timeAt(tv, false).Zone()
+	guess := tv - float64(off)*1000
+	if _, again := r.timeAt(guess, false).Zone(); again != off {
+		guess = tv - float64(again)*1000
+	}
+	return guess
+}
+
+// makeDay is the day number the year, month and date name, with out-of-range
+// components rolling over: month 12 is January of the next year, and day 0 is
+// the last day of the previous month.
+func makeDay(year, month, date float64) float64 {
+	if !finiteAll(year, month, date) {
+		return math.NaN()
+	}
+	y, m, dt := math.Trunc(year), math.Trunc(month), math.Trunc(date)
+	ym := y + math.Floor(m/12)
+	if math.IsInf(ym, 0) {
+		return math.NaN()
+	}
+	mn := int(m - math.Floor(m/12)*12)
+	return dayFromYear(ym) + float64(dayOfYearForMonth(mn, isLeapYearFloat(ym))) + dt - 1
+}
+
+// dayFromYear is the day number of the first day of a year.
+func dayFromYear(y float64) float64 {
+	return 365*(y-1970) + math.Floor((y-1969)/4) -
+		math.Floor((y-1901)/100) + math.Floor((y-1601)/400)
+}
+
+// isLeapYearFloat is isLeapYear for a year too large for an int, which a time
+// value's components may name before the range check refuses them.
+func isLeapYearFloat(y float64) bool {
+	if math.Mod(y, 4) != 0 {
+		return false
+	}
+	if math.Mod(y, 100) != 0 {
+		return true
+	}
+	return math.Mod(y, 400) == 0
+}
+
+// dayOfYearForMonth is how many days precede a month within its year.
+func dayOfYearForMonth(month int, leap bool) int {
+	days := [...]int{0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334}
+	d := days[month]
+	if leap && month >= 2 {
+		d++
+	}
+	return d
+}
+
+// makeTime is the milliseconds within a day the components name, summed in the
+// order the specification sums them.
+func makeTime(hour, min, sec, ms float64) float64 {
+	if !finiteAll(hour, min, sec, ms) {
+		return math.NaN()
+	}
+	h, m, s, milli := math.Trunc(hour), math.Trunc(min), math.Trunc(sec), math.Trunc(ms)
+	// Each product is rounded before it is added, which the conversions force:
+	// a fused multiply-add would keep more precision than the specification's
+	// arithmetic has, and the difference is observable at these magnitudes.
+	return ((float64(h*msPerHour) + float64(m*msPerMinute)) +
+		float64(s*msPerSecond)) + milli
+}
+
+// makeDate combines a day number and a time within the day.
+func makeDate(day, time float64) float64 {
+	if math.IsNaN(day) || math.IsNaN(time) ||
+		math.IsInf(day, 0) || math.IsInf(time, 0) {
+		return math.NaN()
+	}
+	return float64(day*msPerDay) + time
+}
+
+func finiteAll(vs ...float64) bool {
+	for _, v := range vs {
 		if math.IsNaN(v) || math.IsInf(v, 0) {
-			return math.NaN()
+			return false
 		}
 	}
-	loc := time.UTC
-	if !utc {
-		loc = r.location()
-	}
-	// time.Date normalizes out-of-range components exactly as JavaScript does.
-	t := time.Date(int(year), time.Month(int(month)+1), int(day),
-		int(hour), int(min), int(sec), int(ms)*1e6, loc)
-	return clipTime(float64(t.UnixMilli()))
+	return true
 }
 
 // setDateParts replaces count components starting at start, leaving the rest of
