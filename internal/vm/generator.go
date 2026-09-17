@@ -70,6 +70,25 @@ type generator struct {
 	async bool
 	// promise is the async function's result promise.
 	promise *Object
+
+	// queue holds the async generator requests still to be serviced.
+	//
+	// next, return and throw may all be called again before the previous call
+	// has settled. The specification queues them rather than interleaving
+	// them: there is one body, and letting a second call re-enter it while the
+	// first is suspended at an await would scramble both.
+	queue []asyncRequest
+	// draining marks a request being serviced, so that one arriving meanwhile
+	// joins the queue instead of re-entering the body.
+	draining bool
+}
+
+// asyncRequest is one pending call to an async generator's next, return or
+// throw.
+type asyncRequest struct {
+	result *Object
+	sent   Value
+	mode   resumeMode
 }
 
 // suspendSignal is returned by the interpreter when a generator yields.
@@ -228,6 +247,20 @@ func (r *Runtime) generatorOf(this Value, name string) (*generator, error) {
 	g, ok := this.Object().data.(*generator)
 	if !ok {
 		return nil, r.throwTypeError("%s called on an uninitialized generator", name)
+	}
+	return g, nil
+}
+
+// asyncGeneratorOf is generatorOf for the asynchronous methods, which a
+// synchronous generator is not a receiver for: the two protocols differ in what
+// their methods hand back, so neither prototype's methods work on the other.
+func (r *Runtime) asyncGeneratorOf(this Value, name string) (*generator, error) {
+	g, err := r.generatorOf(this, name)
+	if err != nil {
+		return nil, err
+	}
+	if !g.async {
+		return nil, r.throwTypeError("%s called on a synchronous generator", name)
 	}
 	return g, nil
 }
@@ -435,6 +468,12 @@ func (r *Runtime) initGeneratorFunctionIntrinsics() {
 	r.genFuncProto = newObject(r.proto.function, ClassObject)
 	r.defToStringTag(r.genFuncProto, "GeneratorFunction")
 	r.genFuncProto.setOwnRaw(atomPrototype, Obj(r.proto.generator), propConfigurable)
+	// The constructor of a generator object is the intrinsic every generator
+	// function inherits from, not the function that made it: there is no way
+	// to construct a generator object, so the name points at the shape rather
+	// than at a callable. It is read-only, which is what tells it apart from
+	// an ordinary prototype's.
+	r.proto.generator.setOwnRaw(atomConstructor, Obj(r.genFuncProto), propConfigurable)
 
 	r.asyncFuncProto = newObject(r.proto.function, ClassObject)
 	r.defToStringTag(r.asyncFuncProto, "AsyncFunction")
@@ -442,6 +481,7 @@ func (r *Runtime) initGeneratorFunctionIntrinsics() {
 	r.asyncGenFuncProto = newObject(r.proto.function, ClassObject)
 	r.defToStringTag(r.asyncGenFuncProto, "AsyncGeneratorFunction")
 	r.asyncGenFuncProto.setOwnRaw(atomPrototype, Obj(r.proto.asyncGenerator), propConfigurable)
+	r.proto.asyncGenerator.setOwnRaw(atomConstructor, Obj(r.asyncGenFuncProto), propConfigurable)
 }
 
 // funcProtoFor returns the intrinsic prototype a compiled function object
@@ -549,7 +589,7 @@ func (r *Runtime) initAsyncGeneratorBuiltins() {
 
 	drive := func(mode resumeMode) NativeFunc {
 		return func(rt *Runtime, this Value, args []Value) (Value, error) {
-			g, err := rt.generatorOf(this, "AsyncGenerator.prototype.next")
+			g, err := rt.asyncGeneratorOf(this, "AsyncGenerator.prototype.next")
 			if err != nil {
 				// A method on the wrong receiver rejects rather than throws,
 				// because every async generator method returns a promise.
@@ -558,7 +598,10 @@ func (r *Runtime) initAsyncGeneratorBuiltins() {
 				return Obj(p), nil
 			}
 			result := rt.newPromise()
-			rt.stepAsyncGenerator(g, result, arg(args, 0), mode)
+			g.queue = append(g.queue, asyncRequest{
+				result: result, sent: arg(args, 0), mode: mode,
+			})
+			rt.pumpAsyncGenerator(g)
 			return Obj(result), nil
 		}
 	}
@@ -573,12 +616,56 @@ func (r *Runtime) initAsyncGeneratorBuiltins() {
 	r.defToStringTag(p, "AsyncGenerator")
 }
 
+// pumpAsyncGenerator services the queued requests, one at a time.
+func (r *Runtime) pumpAsyncGenerator(g *generator) {
+	if g.draining || len(g.queue) == 0 {
+		return
+	}
+	g.draining = true
+	req := g.queue[0]
+	if req.mode == resumeReturn {
+		// The value a return injects is awaited before the generator sees it,
+		// so returning a promise into one delivers what it settles to -- and a
+		// broken promise becomes a throw at the resumption point rather than a
+		// result nobody can use.
+		awaited := r.toPromise(req.sent)
+		onFulfilled := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
+			rt.stepAsyncGenerator(g, arg(a, 0), resumeReturn)
+			return Undefined, nil
+		})
+		onRejected := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
+			rt.stepAsyncGenerator(g, arg(a, 0), resumeThrow)
+			return Undefined, nil
+		})
+		r.promiseThen(awaited, Obj(onFulfilled), Obj(onRejected))
+		return
+	}
+	r.stepAsyncGenerator(g, req.sent, req.mode)
+}
+
+// finishAsyncRequest settles the request being serviced and moves on to the
+// next one.
+func (r *Runtime) finishAsyncRequest(g *generator, reject bool, v Value) {
+	if len(g.queue) == 0 {
+		return
+	}
+	req := g.queue[0]
+	g.queue = g.queue[1:]
+	g.draining = false
+	if reject {
+		r.rejectPromise(req.result, v)
+	} else {
+		r.resolvePromise(req.result, v)
+	}
+	r.pumpAsyncGenerator(g)
+}
+
 // stepAsyncGenerator advances an async generator until it yields or finishes,
 // settling the promise the caller holds.
-func (r *Runtime) stepAsyncGenerator(g *generator, result *Object, sent Value, mode resumeMode) {
+func (r *Runtime) stepAsyncGenerator(g *generator, sent Value, mode resumeMode) {
 	res, err := r.resumeFull(g, sent, mode)
 	if err != nil {
-		r.rejectPromise(result, thrownValue(err))
+		r.finishAsyncRequest(g, true, thrownValue(err))
 		return
 	}
 
@@ -587,11 +674,11 @@ func (r *Runtime) stepAsyncGenerator(g *generator, result *Object, sent Value, m
 		// and resume, without the caller seeing anything.
 		awaited := r.toPromise(res.value)
 		onFulfilled := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
-			rt.stepAsyncGenerator(g, result, arg(a, 0), resumeNext)
+			rt.stepAsyncGenerator(g, arg(a, 0), resumeNext)
 			return Undefined, nil
 		})
 		onRejected := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
-			rt.stepAsyncGenerator(g, result, arg(a, 0), resumeThrow)
+			rt.stepAsyncGenerator(g, arg(a, 0), resumeThrow)
 			return Undefined, nil
 		})
 		r.promiseThen(awaited, Obj(onFulfilled), Obj(onRejected))
@@ -601,24 +688,22 @@ func (r *Runtime) stepAsyncGenerator(g *generator, result *Object, sent Value, m
 	// A yield or a return settles the caller's promise with an iterator result.
 	// The yielded value is awaited first, so that `yield somePromise` produces
 	// the value rather than the promise.
-	value := res.value
-	done := res.done
-	if !done {
-		awaited := r.toPromise(value)
-		onFulfilled := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
-			rt.resolvePromise(result, Obj(rt.iterResult(arg(a, 0), false)))
-			return Undefined, nil
-		})
-		onRejected := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
-			// The await happens inside the generator, at the yield, so a
-			// rejection is a throw there rather than merely a rejected result:
-			// a try round the yield can catch it, and an uncaught one finishes
-			// the generator instead of leaving it suspended.
-			rt.stepAsyncGenerator(g, result, arg(a, 0), resumeThrow)
-			return Undefined, nil
-		})
-		r.promiseThen(awaited, Obj(onFulfilled), Obj(onRejected))
+	if res.done {
+		r.finishAsyncRequest(g, false, Obj(r.iterResult(res.value, true)))
 		return
 	}
-	r.resolvePromise(result, Obj(r.iterResult(value, true)))
+	awaited := r.toPromise(res.value)
+	onFulfilled := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
+		rt.finishAsyncRequest(g, false, Obj(rt.iterResult(arg(a, 0), false)))
+		return Undefined, nil
+	})
+	onRejected := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
+		// The await happens inside the generator, at the yield, so a
+		// rejection is a throw there rather than merely a rejected result:
+		// a try round the yield can catch it, and an uncaught one finishes
+		// the generator instead of leaving it suspended.
+		rt.stepAsyncGenerator(g, arg(a, 0), resumeThrow)
+		return Undefined, nil
+	})
+	r.promiseThen(awaited, Obj(onFulfilled), Obj(onRejected))
 }

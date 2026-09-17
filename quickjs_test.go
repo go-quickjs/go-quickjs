@@ -3042,3 +3042,66 @@ func TestArrayFromAsyncProtocol(t *testing.T) {
 		  .then(a => { r = String(a[0]) })`,
 		"r", "true")
 }
+
+// TestAsyncGeneratorQueue covers calling an async generator again before the
+// previous call has settled. The requests are queued rather than interleaved:
+// there is one body, and letting a second call re-enter it while the first is
+// suspended at an await would scramble both.
+func TestAsyncGeneratorQueue(t *testing.T) {
+	checkAsync(t, `
+		var log = []
+		var it = (async function* () { yield await "a" })()
+		it.next().then(v => log.push("1:" + v.value + "," + v.done))
+		it.next().then(v => log.push("2:" + v.value + "," + v.done))
+		it.next().then(v => log.push("3:" + v.value + "," + v.done))
+		Promise.resolve().then(() => Promise.resolve()).then(() => Promise.resolve())
+		  .then(() => { r = log.join(" | ") })`,
+		"r", "1:a,false | 2:undefined,true | 3:undefined,true")
+
+	checkAsync(t, `
+		var log = []
+		var it = (async function* () { yield 1; yield 2; yield 3 })()
+		it.next().then(v => log.push(v.value))
+		it.next().then(v => log.push(v.value))
+		it.next().then(v => log.push(v.value))
+		Promise.resolve().then(() => Promise.resolve()).then(() => Promise.resolve())
+		  .then(() => { r = log.join(",") })`,
+		"r", "1,2,3")
+
+	// The value a return injects is awaited before the generator sees it.
+	checkAsync(t, `
+		var it = (async function* () { yield 1 })()
+		it.return(Promise.resolve(9)).then(v => { r = v.value + "," + v.done })`,
+		"r", "9,true")
+	// A promise whose constructor throws is a rejection, not a result.
+	checkAsync(t, `
+		var it = (async function* () { yield 1 })()
+		var broken = Promise.resolve(42)
+		Object.defineProperty(broken, "constructor", {
+		  get() { throw new RangeError("broken") },
+		})
+		it.return(broken).then(() => { r = "resolved" }, e => { r = e.constructor.name })`,
+		"r", "RangeError")
+
+	// The prototypes are not interchangeable.
+	checkAsync(t, `
+		var sync = (function* () {})()
+		var next = Object.getPrototypeOf(Object.getPrototypeOf((async function* () {})())).next
+		next.call(sync).then(() => { r = "resolved" }, e => { r = e.constructor.name })`,
+		"r", "TypeError")
+
+	cases := []struct{ src, want string }{
+		{`var p = Object.getPrototypeOf(Object.getPrototypeOf((async function* () {})()))
+		  String(p.hasOwnProperty("constructor")) + "," +
+		  String(p.constructor === Object.getPrototypeOf(async function* () {}))`, "true,true"},
+		{`var p = Object.getPrototypeOf(Object.getPrototypeOf((function* () {})()))
+		  String(p.hasOwnProperty("constructor")) + "," +
+		  String(p.constructor === Object.getPrototypeOf(function* () {}))`, "true,true"},
+		{`var d = Object.getOwnPropertyDescriptor(
+		    Object.getPrototypeOf(Object.getPrototypeOf((function* () {})())), "constructor");
+		  [d.writable, d.enumerable, d.configurable].join(",")`, "false,false,true"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

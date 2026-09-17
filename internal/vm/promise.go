@@ -687,12 +687,35 @@ func (r *Runtime) invokeThen(this Value, args ...Value) (Value, error) {
 // toPromise coerces a value to a promise, wrapping a plain value and adopting a
 // thenable.
 func (r *Runtime) toPromise(v Value) *Object {
+	p, err := r.toPromiseErr(v)
+	if err != nil {
+		// Reaching here means a promise's own constructor property threw,
+		// which the caller had no way to report. Treating it as a rejection
+		// keeps the value on the promise track rather than losing it.
+		p = r.newPromise()
+		r.rejectPromise(p, thrownValue(err))
+	}
+	return p
+}
+
+// toPromiseErr is toPromise with the error the lookup may produce.
+//
+// A promise is handed back as itself only when its constructor is the
+// intrinsic, because a subclass's instance has to be adopted rather than
+// reused -- and reading that property runs whatever getter is there.
+func (r *Runtime) toPromiseErr(v Value) (*Object, error) {
 	if v.IsObject() && v.Object().class == ClassPromise {
-		return v.Object()
+		ctor, err := r.getProp(v.Object(), atomConstructor, v)
+		if err != nil {
+			return nil, err
+		}
+		if ctor.IsObject() && ctor.Object() == r.promiseCtor {
+			return v.Object(), nil
+		}
 	}
 	o := r.newPromise()
 	r.resolvePromise(o, v)
-	return o
+	return o, nil
 }
 
 // ---------------------------------------------------------------------------
