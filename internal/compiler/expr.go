@@ -7,6 +7,37 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
+// compileExprForEffect emits code for an expression whose value is discarded:
+// a statement, or an operand of a comma expression that is not the last.
+//
+// What it saves is the instruction that discards the value, which in a loop
+// body is one per iteration. An assignment to a local stores the value and
+// leaves a copy for that instruction to drop, and storing and popping is a
+// single instruction; a postfix update keeps the value it had before, which is
+// a copy nothing reads.
+func (c *compiler) compileExprForEffect(e ast.Expr) {
+	if u, ok := e.(*ast.Update); ok && !u.Prefix {
+		// The two forms differ only in which value they leave behind, and
+		// neither is wanted here. The prefix form does not make the copy.
+		prefix := *u
+		prefix.Prefix = true
+		e = &prefix
+	}
+	c.compileExpr(e)
+
+	// The store may only become a store-and-pop if nothing jumps to where the
+	// drop would have been: a short-circuiting assignment reaches that point
+	// without having stored anything, with its value still on the stack.
+	if n := len(c.fn.Code); n > 0 && !c.targets[n] {
+		if last := &c.fn.Code[n-1]; last.Op == bytecode.OpPutLocal {
+			last.Op = bytecode.OpSetLocal
+			c.adjustStack(bytecode.OpDrop, 0, 0)
+			return
+		}
+	}
+	c.emit(bytecode.OpDrop, 0, 0)
+}
+
 // compileExpr emits code leaving the expression's value on the stack.
 func (c *compiler) compileExpr(e ast.Expr) {
 	c.compileExprNamed(e, "")
@@ -118,10 +149,11 @@ func (c *compiler) compileExprNamed(e ast.Expr, name string) {
 	case *ast.Sequence:
 		// Every operand but the last is evaluated for its effect only.
 		for i, x := range n.Exprs {
-			c.compileExpr(x)
 			if i < len(n.Exprs)-1 {
-				c.emit(bytecode.OpDrop, 0, 0)
+				c.compileExprForEffect(x)
+				continue
 			}
+			c.compileExpr(x)
 		}
 
 	case *ast.Member:

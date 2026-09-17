@@ -115,6 +115,7 @@ func (c *compiler) patchWithProbe(pc int) {
 	if pc < 0 {
 		return
 	}
+	c.markTarget(len(c.fn.Code))
 	c.fn.Code[pc].B = uint32(len(c.fn.Code))
 }
 

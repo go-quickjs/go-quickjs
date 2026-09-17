@@ -320,6 +320,10 @@ type compiler struct {
 	stackDepth int
 	maxStack   int
 
+	// targets holds the positions something jumps to, which is what says
+	// whether the instruction last emitted is the end of one path.
+	targets map[int]bool
+
 	// recursionDepth bounds how deeply the compiler descends into the tree. The
 	// parser caps nesting too, but a function body nests independently of its
 	// caller's, so the limit is enforced on both sides.
@@ -524,16 +528,34 @@ func (c *compiler) emitJumpB(op bytecode.Op, b uint32) int {
 
 // patchJump points a previously emitted jump at the current position.
 func (c *compiler) patchJump(pc int) {
+	c.markTarget(len(c.fn.Code))
 	c.fn.Code[pc].A = uint32(len(c.fn.Code))
 }
 
 // patchJumpTo points a jump at a specific position.
 func (c *compiler) patchJumpTo(pc, target int) {
+	c.markTarget(target)
 	c.fn.Code[pc].A = uint32(target)
 }
 
 // here returns the current program counter, for backward jumps.
-func (c *compiler) here() int { return len(c.fn.Code) }
+func (c *compiler) here() int {
+	c.markTarget(len(c.fn.Code))
+	return len(c.fn.Code)
+}
+
+// markTarget records that something jumps to a position.
+//
+// What this is for is deciding whether the last instruction emitted is the end
+// of one path or the meeting point of several, which is what says whether it
+// may be rewritten -- see compileExprForEffect. Marking a position that nothing
+// actually jumps to only gives up a rewrite, so the callers mark freely.
+func (c *compiler) markTarget(pc int) {
+	if c.targets == nil {
+		c.targets = map[int]bool{}
+	}
+	c.targets[pc] = true
+}
 
 // errorf reports a compile error.
 func (c *compiler) errorf(pos int, format string, args ...any) {

@@ -239,13 +239,13 @@ func (c *compiler) compileStatement(s ast.Stmt) {
 
 	switch n := s.(type) {
 	case *ast.ExprStmt:
-		c.compileExpr(n.X)
 		if c.completionSlot >= 0 {
 			// At the top level an expression statement's value is the
 			// program's completion value, which eval returns.
+			c.compileExpr(n.X)
 			c.emit(bytecode.OpSetLocal, uint32(c.completionSlot), 0)
 		} else {
-			c.emit(bytecode.OpDrop, 0, 0)
+			c.compileExprForEffect(n.X)
 		}
 
 	case *ast.VarDecl:
@@ -581,8 +581,7 @@ func (c *compiler) compileFor(n *ast.ForStmt) {
 		c.emit(bytecode.OpCloseUpvalues, firstSlot, 0)
 	}
 	if n.Update != nil {
-		c.compileExpr(n.Update)
-		c.emit(bytecode.OpDrop, 0, 0)
+		c.compileExprForEffect(n.Update)
 	}
 	c.emit(bytecode.OpJump, uint32(start), 0)
 	if exit >= 0 {
