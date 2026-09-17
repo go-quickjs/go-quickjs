@@ -195,6 +195,20 @@ func (r *Runtime) run(cl *closure, this Value, args []Value, newTarget Value, ca
 		clear(locals[n:])
 	}
 
+	// The high-water mark is what endTurn clears back to, so that a value left
+	// behind by a returning frame does not stay reachable until its slot is
+	// reused.
+	if top := base + fn.LocalCount + fn.MaxStack; top > r.stackHigh {
+		r.stackHigh = top
+	}
+
+	// The high-water mark is what endTurn clears back to, so that a value left
+	// behind by a returning frame does not stay reachable until its slot is
+	// reused.
+	if top := base + fn.LocalCount + fn.MaxStack; top > r.stackHigh {
+		r.stackHigh = top
+	}
+
 	f := r.pushFrame()
 	// The fields are assigned rather than the struct replaced, so that the
 	// handler and upvalue slices keep their backing arrays across calls. A
@@ -274,7 +288,9 @@ func (r *Runtime) pushFrame() *frame {
 // the compiler guarantees every operand slot is written before it is read.
 //
 // The cost is that values stay reachable from the stack until their slots are
-// reused, which delays collection but is bounded by the stack size.
+// reused. That delays collection, so the region above the live frames is
+// cleared once per turn instead -- see endTurn, which is where a program could
+// next observe the difference.
 func (r *Runtime) popFrame(base int) {
 	f := &r.frames[len(r.frames)-1]
 	for _, u := range f.openUpvalues {
@@ -2388,4 +2404,20 @@ func freezeArray(o *Object) *Object {
 		o.props[i].flags &^= propWritable | propConfigurable
 	}
 	return o
+}
+
+// endTurn releases what the turn left behind.
+//
+// Two things outlive a call for reasons that stop applying once nothing is
+// running: the operand stack above the live frames, which popFrame leaves dirty
+// because clearing it per call was the interpreter's single largest cost, and
+// the values a WeakRef handed out, which have to survive the turn they were
+// read in and no longer. Doing both here costs one pass over the part of the
+// stack that was actually used, once per turn.
+func (r *Runtime) endTurn() {
+	if r.stackHigh > r.stackTop {
+		clear(r.stack[r.stackTop:r.stackHigh])
+		r.stackHigh = r.stackTop
+	}
+	r.releaseKeptValues()
 }

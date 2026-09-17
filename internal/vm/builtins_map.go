@@ -26,7 +26,20 @@ type mapKey struct {
 }
 
 // mapKeyOf converts a value to its comparable key form.
-func (r *Runtime) mapKeyOf(v Value) mapKey {
+//
+// weak selects the form a WeakMap or WeakSet uses, where an object or symbol
+// key is identified by a weak.Pointer rather than by the pointer itself. A
+// weak.Pointer is comparable and equal exactly when it names the same object,
+// which is what lets the index find an entry without the index being what keeps
+// the key alive.
+func (r *Runtime) mapKeyOf(v Value, weakKey bool) mapKey {
+	if weakKey && (v.IsObject() || v.IsSymbol()) {
+		return mapKey{kind: v.Kind(), ref: makeWeak(v)}
+	}
+	return r.strongKeyOf(v)
+}
+
+func (r *Runtime) strongKeyOf(v Value) mapKey {
 	switch v.Kind() {
 	case KindNumber:
 		n := v.Number()
@@ -69,6 +82,10 @@ func boolToFloat(b bool) float64 {
 type mapEntry struct {
 	key, value Value
 	deleted    bool
+	// weakKey holds a WeakMap or WeakSet key, which the entry must not be what
+	// keeps alive. key is left empty for those, so that reading one back means
+	// asking whether it is still there.
+	weakKey weakTarget
 }
 
 // jsMap is the shared storage for all four collection types.
@@ -76,11 +93,18 @@ type jsMap struct {
 	entries []mapEntry
 	index   map[mapKey]int
 	size    int
-	// weak marks a WeakMap or WeakSet. The references are still strong: Go's
-	// garbage collector has no way to tell the engine that a key became
-	// unreachable, so entries live until deleted. That is observable only as
-	// memory retention, never as behaviour.
+	// weak marks a WeakMap or WeakSet, whose keys are held weakly: an entry
+	// stops existing once nothing else refers to its key.
+	//
+	// The value is still held strongly, so a value that refers to its own key
+	// keeps that key alive. Breaking that cycle needs ephemeron marking, which
+	// Go's collector does not offer; it is the one thing about these that is
+	// not the real article.
 	weak bool
+	// nextSweep is the entry count at which the next scan for collected keys
+	// happens. Doubling it after each scan is what makes the scanning cost a
+	// constant per insertion however large the collection grows.
+	nextSweep int
 }
 
 func newJSMap(weak bool) *jsMap {
@@ -88,29 +112,71 @@ func newJSMap(weak bool) *jsMap {
 }
 
 func (m *jsMap) get(r *Runtime, k Value) (Value, bool) {
-	i, ok := m.index[r.mapKeyOf(k)]
-	if !ok || m.entries[i].deleted {
+	i, ok := m.index[r.mapKeyOf(k, m.weak)]
+	if !ok || m.entries[i].deleted || !m.live(i) {
 		return Undefined, false
 	}
 	return m.entries[i].value, true
 }
 
+// live reports whether an entry's key is still there, which only a weak
+// collection can answer no to.
+func (m *jsMap) live(i int) bool {
+	if !m.weak {
+		return true
+	}
+	return m.entries[i].weakKey.alive()
+}
+
 func (m *jsMap) set(r *Runtime, k, v Value) {
-	mk := r.mapKeyOf(k)
-	if i, ok := m.index[mk]; ok && !m.entries[i].deleted {
+	mk := r.mapKeyOf(k, m.weak)
+	if i, ok := m.index[mk]; ok && !m.entries[i].deleted && m.live(i) {
 		// Re-setting an existing key updates the value and keeps its position.
 		m.entries[i].value = v
 		return
 	}
-	m.entries = append(m.entries, mapEntry{key: k, value: v})
+	e := mapEntry{key: k, value: v}
+	if m.weak {
+		// The key is not stored, only a weak reference to it: an entry must
+		// not be what keeps its own key alive.
+		e.key = Undefined
+		e.weakKey = makeWeak(k)
+		m.sweep()
+	}
+	m.entries = append(m.entries, e)
 	m.index[mk] = len(m.entries) - 1
 	m.size++
 }
 
+// sweep drops the entries whose keys have been collected.
+//
+// Finding them means walking the list, so the threshold doubles after each
+// scan: the cost is then a constant per insertion however large the collection
+// grows, and a collection that is only read never pays it at all.
+func (m *jsMap) sweep() {
+	if len(m.entries) < m.nextSweep {
+		return
+	}
+	kept := m.entries[:0]
+	clear(m.index)
+	m.size = 0
+	for _, e := range m.entries {
+		if e.deleted || !e.weakKey.alive() {
+			continue
+		}
+		kept = append(kept, e)
+		m.index[mapKey{kind: e.weakKey.kind(), ref: e.weakKey}] = len(kept) - 1
+		m.size++
+	}
+	clear(m.entries[len(kept):])
+	m.entries = kept
+	m.nextSweep = 2*len(m.entries) + 16
+}
+
 func (m *jsMap) delete(r *Runtime, k Value) bool {
-	mk := r.mapKeyOf(k)
+	mk := r.mapKeyOf(k, m.weak)
 	i, ok := m.index[mk]
-	if !ok || m.entries[i].deleted {
+	if !ok || m.entries[i].deleted || !m.live(i) {
 		return false
 	}
 	// Tombstone rather than remove, so that an iteration in progress keeps its

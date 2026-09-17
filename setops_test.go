@@ -1,8 +1,10 @@
 package quickjs_test
 
 import (
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
 )
@@ -85,8 +87,7 @@ func TestSetOperationErrors(t *testing.T) {
 
 func TestWeakRefAndFinalizationRegistry(t *testing.T) {
 	cases := []struct{ src, want string }{
-		// Collection is never required, so a WeakRef that still derefs to its
-		// target is conforming; this engine's always does.
+		// A reference whose target is still reachable always derefs to it.
 		{`var o = {a: 1}; String(new WeakRef(o).deref().a)`, "1"},
 		{`var o = {}; String(new WeakRef(o).deref() === o)`, "true"},
 		{`Object.prototype.toString.call(new WeakRef({}))`, "[object WeakRef]"},
@@ -94,6 +95,9 @@ func TestWeakRefAndFinalizationRegistry(t *testing.T) {
 
 		{`var r = new FinalizationRegistry(() => {}); var t = {};
 		  r.register(t, "held", t); String(r.unregister(t))`, "true"},
+		// Two derefs in one turn answer the same way, whatever the collector
+		// does in between.
+		{`var ref = new WeakRef({}); String(ref.deref() === ref.deref())`, "true"},
 		{`var r = new FinalizationRegistry(() => {});
 		  String(r.unregister({}))`, "false"},
 		{`Object.prototype.toString.call(new FinalizationRegistry(() => {}))`,
@@ -239,4 +243,94 @@ func TestCollectionConstructorSources(t *testing.T) {
 		}
 		rt.Close()
 	}
+}
+
+// A weak reference is one the collector may ignore. Go gained the pieces needed
+// to mean that in 1.24 -- weak.Pointer and runtime.AddCleanup -- so these are
+// the real thing rather than strong references wearing the name.
+//
+// The test drives Go's collector directly, because there is no way to ask for
+// one from JavaScript and no guarantee about when one happens.
+func TestWeakReferencesAreWeak(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+
+	if _, err := rt.Eval(`
+		var ref, kept = {}, keptRef = new WeakRef(kept);
+		(function () { var o = {}; ref = new WeakRef(o); })();
+	`); err != nil {
+		t.Fatal(err)
+	}
+	// The target was kept alive for the turn it was made in, which is what
+	// stops a reference being created and found empty in the same breath.
+	if v, err := rt.Eval(`ref.deref() ? "live" : "cleared"`); err != nil {
+		t.Fatal(err)
+	} else if v.String() != "live" {
+		t.Errorf("before collection = %q, want live", v.String())
+	}
+
+	for i := 0; i < 4; i++ {
+		runtime.GC()
+	}
+
+	v, err := rt.Eval(`ref.deref() ? "live" : "cleared"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.String() != "cleared" {
+		t.Errorf("after collection = %q, want cleared", v.String())
+	}
+	// One that is still reachable must not clear.
+	if v, err := rt.Eval(`keptRef.deref() === kept ? "live" : "cleared"`); err != nil {
+		t.Fatal(err)
+	} else if v.String() != "live" {
+		t.Errorf("a reachable target = %q, want live", v.String())
+	}
+}
+
+// A FinalizationRegistry is told when a target has gone, as a job of its own --
+// the collector reports it on another goroutine, and running JavaScript there
+// would not be safe.
+func TestFinalizationRegistryIsCalled(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+
+	if _, err := rt.Eval(`
+		var seen = [];
+		var reg = new FinalizationRegistry(h => seen.push(h));
+		var live = {};
+		reg.register(live, "live-held");
+		(function () { var t = {}; reg.register(t, "held"); })();
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	// The cleanup runs on its own goroutine at a moment the collector chooses,
+	// so this waits for it rather than assuming it has happened.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		for i := 0; i < 4; i++ {
+			runtime.GC()
+		}
+		runtime.Gosched()
+		time.Sleep(5 * time.Millisecond)
+		if _, err := rt.Eval(`0`); err != nil {
+			t.Fatal(err)
+		}
+		v, err := rt.Eval(`seen.join(",")`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v.String() == "held" {
+			break
+		}
+		if v.String() != "" {
+			t.Fatalf("callback saw %q, want held", v.String())
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the finalization callback never ran")
+		}
+	}
+	// The registration whose target is still reachable must not have fired.
+	runtime.KeepAlive(rt)
 }

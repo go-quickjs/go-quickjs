@@ -2,42 +2,40 @@ package vm
 
 // WeakRef and FinalizationRegistry.
 //
-// Both are about observing garbage collection, and neither can observe Go's.
-// The runtime has no hook that fires when an object becomes unreachable, and
-// synthesizing one with runtime.SetFinalizer would resurrect the object into
-// engine data structures the collector has already decided nothing reaches.
-//
-// So a WeakRef here holds its target strongly and always derefs to it, and a
-// FinalizationRegistry records its registrations and never calls back. Both are
-// conforming: the specification never requires that anything be collected, only
-// that a collected target stop being observable. A program that would have seen
-// a cleared reference instead sees a live one, which is the same thing it sees
-// on any engine that has not yet run a collection.
-//
-// The cost is retention, not wrong answers. It is documented rather than hidden
-// because a host caching large values behind a WeakRef will not get the
-// reclamation it is expecting.
+// Both are about observing garbage collection, which Go's runtime now supports
+// well enough to do properly: weak.Pointer refers to an object without keeping
+// it alive, and runtime.AddCleanup runs a function once one becomes
+// unreachable. See weak.go for the two properties of that machinery that shape
+// what follows -- chiefly that a cleanup runs on another goroutine, so it
+// queues work rather than doing any.
 
 // weakRefData is a WeakRef's target.
 type weakRefData struct {
-	target Value
-	// cleared is set by nothing today, but deref consults it so that the
-	// meaning of the field is unambiguous if collection ever becomes possible.
-	cleared bool
+	target weakTarget
 }
 
 // finalizationCell is one registration in a FinalizationRegistry.
+//
+// The target and the token are held weakly and the held value strongly, which
+// is the whole shape of the thing: a registration must not be what keeps its
+// target alive, and the held value has to survive to be handed to the callback.
 type finalizationCell struct {
-	target Value
+	target weakTarget
 	held   Value
-	token  Value
+	token  weakTarget
 	hasTok bool
+	// unregistered and done retire a cell. A cleanup may already be queued when
+	// unregister is called, and the target may be collected twice over if the
+	// program registers it twice, so the cell rather than the queue decides
+	// whether the callback runs.
+	unregistered bool
+	done         bool
 }
 
 // finalizationData is a FinalizationRegistry's state.
 type finalizationData struct {
 	cleanup Value
-	cells   []finalizationCell
+	cells   []*finalizationCell
 }
 
 // canBeWeak reports whether a value may be a weak target.
@@ -66,7 +64,11 @@ func (r *Runtime) initWeakRefBuiltins() {
 			return Undefined, rt.throwTypeError("a WeakRef target must be an object or an unregistered symbol")
 		}
 		o := newObject(wrProto, ClassWeakRef)
-		o.data = &weakRefData{target: target}
+		o.data = &weakRefData{target: makeWeak(target)}
+		// A target is kept alive for the rest of the turn it was registered
+		// in, so that a reference cannot be created and found empty in the
+		// same breath.
+		rt.keepDuringJob(target)
 		return Obj(o), nil
 	})
 
@@ -78,10 +80,15 @@ func (r *Runtime) initWeakRefBuiltins() {
 		if !ok {
 			return Undefined, rt.throwTypeError("WeakRef.prototype.deref called on an uninitialized WeakRef")
 		}
-		if d.cleared {
+		v, alive := d.target.get()
+		if !alive {
 			return Undefined, nil
 		}
-		return d.target, nil
+		// Two calls in one turn have to answer the same way: a program that
+		// checks a reference and then uses it cannot have the value vanish in
+		// between.
+		rt.keepDuringJob(v)
+		return v, nil
 	})
 	r.defToStringTag(wrProto, "WeakRef")
 
@@ -96,6 +103,7 @@ func (r *Runtime) initWeakRefBuiltins() {
 		}
 		o := newObject(frProto, ClassFinalizationRegistry)
 		o.data = &finalizationData{cleanup: cleanup}
+		rt.registries = append(rt.registries, makeWeak(Obj(o)))
 		return Obj(o), nil
 	})
 
@@ -128,7 +136,16 @@ func (r *Runtime) initWeakRefBuiltins() {
 		if hasTok && !rt.canBeWeak(token) {
 			return Undefined, rt.throwTypeError("the unregister token must be an object or an unregistered symbol")
 		}
-		d.cells = append(d.cells, finalizationCell{target: target, held: held, token: token, hasTok: hasTok})
+		cell := &finalizationCell{
+			target: makeWeak(target),
+			held:   held,
+			hasTok: hasTok,
+		}
+		if hasTok {
+			cell.token = makeWeak(token)
+		}
+		d.cells = append(d.cells, cell)
+		rt.watchForCollection(this.Object(), cell, target)
 		return Undefined, nil
 	})
 
@@ -144,7 +161,10 @@ func (r *Runtime) initWeakRefBuiltins() {
 		kept := d.cells[:0]
 		removed := false
 		for _, c := range d.cells {
-			if c.hasTok && c.token.StrictEquals(token) {
+			if tok, alive := c.token.get(); c.hasTok && alive && tok.StrictEquals(token) {
+				// Marked as well as dropped: a cleanup for it may already be
+				// queued, and the cell is what tells the drain to skip it.
+				c.unregistered = true
 				removed = true
 				continue
 			}
@@ -166,4 +186,34 @@ func (r *Runtime) isRegisteredSymbol(sym *Symbol) bool {
 		}
 	}
 	return false
+}
+
+// pruneRegistries drops the registrations whose callbacks have run.
+//
+// A cell is retired rather than removed when its cleanup fires, because the
+// cleanup runs on the collector's goroutine and the cell list belongs to the
+// interpreter's.
+func (r *Runtime) pruneRegistries() {
+	kept := r.registries[:0]
+	for _, w := range r.registries {
+		v, alive := w.get()
+		if !alive {
+			continue
+		}
+		kept = append(kept, w)
+		d, ok := v.Object().data.(*finalizationData)
+		if !ok {
+			continue
+		}
+		live := d.cells[:0]
+		for _, c := range d.cells {
+			if c.done || c.unregistered {
+				continue
+			}
+			live = append(live, c)
+		}
+		d.cells = live
+	}
+	clear(r.registries[len(kept):])
+	r.registries = kept
 }

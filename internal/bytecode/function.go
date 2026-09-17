@@ -63,6 +63,38 @@ type UpvalueDesc struct {
 	TDZ bool
 }
 
+// EvalScope is what a direct `eval` call site can see.
+//
+// Evaluated code shares its caller's bindings, `this`, `new.target` and
+// `super`, which is the whole difference between a direct eval and an indirect
+// one. The compiler cannot know what the code will refer to, so it records
+// everything in scope and lets the evaluator take what it needs.
+type EvalScope struct {
+	Bindings []EvalBinding
+	// Strict records whether the call site is in strict code, which the
+	// evaluated code inherits.
+	Strict bool
+	// The contexts the evaluated code may use, which follow the call site's.
+	AllowSuperProp bool
+	AllowSuperCall bool
+	AllowNewTarget bool
+	InClassBody    bool
+	// PrivateNames are the private names of the enclosing classes, which
+	// evaluated code may refer to.
+	PrivateNames []string
+}
+
+// EvalBinding is one name a direct eval's code can reach.
+type EvalBinding struct {
+	Name string
+	// FromLocal is true when Index is a local slot of the calling function, and
+	// false when it is one of that function's upvalues.
+	FromLocal bool
+	Index     uint32
+	Mutable   bool
+	TDZ       bool
+}
+
 // TemplateStrings is the text of one tagged template site.
 //
 // Raw is what was written and Cooked is what the escapes mean, which differ
@@ -146,6 +178,10 @@ type Function struct {
 	Names    []string
 	Locals   []LocalDesc
 	Upvalues []UpvalueDesc
+	// EvalScopes holds one entry per direct `eval` call site in this function,
+	// describing what the evaluated code can see.
+	EvalScopes []EvalScope
+
 	// Templates holds one entry per tagged template site in this function. The
 	// object a site produces is built once and reused, because the tag is
 	// entitled to hang state off it and to compare it against a later call's.

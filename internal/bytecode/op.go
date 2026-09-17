@@ -169,7 +169,11 @@ const (
 	OpJumpIfNotNullish
 
 	// --- Calls ------------------------------------------------------------
-	OpCall       // A = argument count; stack: callee args...
+	OpCall // A = argument count; stack: callee args...
+	// OpDirectEval is a call whose callee may turn out to be the intrinsic
+	// eval, in which case the evaluated code shares the caller's scope. A is
+	// the index into EvalScopes and B the argument count.
+	OpDirectEval
 	OpCallMethod // A = argument count; stack: this callee args...
 	OpNew        // A = argument count
 	// OpCallSpread and OpNewSpread take their arguments from an array on the
@@ -342,7 +346,7 @@ var opNames = [opCount]string{
 	OpJumpIfFalseKeep: "jump_if_false_keep", OpJumpIfTrueKeep: "jump_if_true_keep",
 	OpJumpIfNullish: "jump_if_nullish", OpJumpIfNotNullish: "jump_if_not_nullish",
 
-	OpCall: "call", OpCallMethod: "call_method", OpNew: "new",
+	OpCall: "call", OpDirectEval: "direct_eval", OpCallMethod: "call_method", OpNew: "new",
 	OpCallSpread: "call_spread", OpNewSpread: "new_spread",
 	OpSuperCall: "super_call", OpReturn: "return", OpReturnUndef: "return_undef",
 

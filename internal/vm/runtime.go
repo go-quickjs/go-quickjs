@@ -33,6 +33,9 @@ type Runtime struct {
 	stack []Value
 	// stackTop is the first unused slot of stack.
 	stackTop int
+	// stackHigh is the deepest the stack has been used since the last turn
+	// ended, which is how much of it endTurn has to clear.
+	stackHigh int
 	// frames is the call stack. Like the operand stack it is reused across
 	// calls, and its length bounds recursion depth.
 	frames []frame
@@ -89,6 +92,23 @@ type Runtime struct {
 	// wellKnown holds the well-known symbols, which the interpreter consults
 	// for iteration, coercion and instanceof.
 	wellKnown wellKnownSymbols
+
+	// keptAlive holds the values a WeakRef has handed out during the current
+	// job. Two calls to deref in one turn have to answer the same way, so the
+	// target cannot be collected between them; the list is released when the
+	// job queue drains.
+	keptAlive []Value
+	// cleanups carries the finalization callbacks the collector has released.
+	// It is the boundary between the collector's goroutine and this one.
+	cleanups *cleanupQueue
+	// registries are the FinalizationRegistry objects, so that retired
+	// registrations can be pruned. Held weakly: a registry with live
+	// registrations is kept alive by the cleanups it armed, and one with none
+	// has nothing left to prune.
+	registries []weakTarget
+	// onCleanupError reports a finalization callback's failure to the host,
+	// since a callback belongs to no script and there is nothing to throw at.
+	onCleanupError func(error)
 
 	// microtasks is the promise job queue, drained between turns. Reactions are
 	// never run synchronously: that ordering guarantee is what makes a then

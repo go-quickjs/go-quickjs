@@ -61,7 +61,9 @@ func (r *Runtime) Run(fn *bytecode.Function) (Value, error) {
 	if fn.IsModule {
 		this = Undefined
 	}
-	return r.run(cl, this, nil, Undefined, nil)
+	v, err := r.run(cl, this, nil, Undefined, nil)
+	r.endTurn()
+	return v, err
 }
 
 // Call invokes a callable value from Go.

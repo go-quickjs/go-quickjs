@@ -42,6 +42,7 @@ func New(cfg Config) *Runtime {
 		memoryLimit:      cfg.MemoryLimit,
 		interruptCounter: interruptCheckInterval,
 		symbolRegistry:   make(map[string]*Symbol),
+		cleanups:         &cleanupQueue{},
 		templateCache:    make(map[*bytecode.Function][]*Object),
 	}
 

@@ -180,6 +180,9 @@ func (r *Runtime) enqueueJob(fn func()) {
 // the host.
 func (r *Runtime) DrainJobs() error {
 	const maxJobs = 1_000_000
+	// A finalization callback is a job of its own, and one queued by the
+	// collector between turns has no other moment to run.
+	r.runCleanups()
 	for n := 0; len(r.microtasks) > 0; n++ {
 		if n > maxJobs {
 			return r.throwRangeError("the microtask queue did not drain")
@@ -190,7 +193,13 @@ func (r *Runtime) DrainJobs() error {
 		if err := r.checkInterrupt(); err != nil {
 			return err
 		}
+		if len(r.microtasks) == 0 {
+			// Between jobs is where a finalization callback belongs: it is a
+			// job of its own, and it may queue more.
+			r.runCleanups()
+		}
 	}
+	r.endTurn()
 	return nil
 }
 

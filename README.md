@@ -37,17 +37,19 @@ It is not finished. See [Conformance](#conformance) for measured coverage and
 | Iteration | Iterator protocol, spread, generators, `yield*` |
 | Asynchrony | `Promise` with correct microtask ordering, `async`/`await` |
 | Regular expressions | Backtracking engine: backreferences, lookahead, lookbehind, named groups, modifier groups, Unicode property escapes at Unicode 17, the `v` flag's set notation and properties of strings |
+| Legacy | `with`, Annex B string methods, `escape`/`unescape`, sloppy-mode block functions |
 | Modules | `import`/`export`, live bindings, cycles, namespace imports, dynamic `import()`, top-level `await` |
 | Iterator helpers | `map`, `filter`, `take`, `drop`, `flatMap`, `reduce`, `toArray` and the rest, lazily |
-| Built-ins | `Object`, `Function`, `Array`, `String`, `Number`, `Boolean`, `Symbol`, `BigInt`, `Error`, `Math`, `JSON`, `Date`, `RegExp`, `Map`, `Set`, `WeakMap`, `WeakSet`, `WeakRef`, `FinalizationRegistry`, `Promise`, `Proxy`, `Reflect`, `ArrayBuffer`, `DataView`, typed arrays |
+| Built-ins | `Object`, `Function`, `Array`, `String`, `Number`, `Boolean`, `Symbol`, `BigInt`, `Error`, `Math`, `JSON`, `Date`, `RegExp`, `Map`, `Set`, `Promise`, `Proxy`, `Reflect`, `ArrayBuffer`, `DataView`, typed arrays |
+| Weak references | `WeakRef`, `FinalizationRegistry`, `WeakMap`, `WeakSet`, backed by Go's `weak.Pointer` and `runtime.AddCleanup`: a target really is released, and a registry really is called back |
 | Recent additions | Set operations, `Array.fromAsync`, `Object.groupBy`, `Promise.try`, `RegExp.escape`, `Error.isError`, `Math.sumPrecise`, `Uint8Array` base64 and hex |
 | Go interop | Function binding, marshalling, `context.Context` cancellation |
 
 ### Not implemented
 
 `Intl`, `Temporal`, `Atomics`, `SharedArrayBuffer`, `ShadowRealm`, decorators,
-resizable ArrayBuffers, `using` declarations, `with`, and the newer proposals
-test262 tracks.
+resizable ArrayBuffers, `using` declarations, and the newer proposals test262
+tracks.
 
 Known semantic gaps, each covered by a test that documents it:
 
@@ -60,15 +62,9 @@ Known semantic gaps, each covered by a test that documents it:
   scope and cannot see the calling function's variables, `this`, `super` or
   `new.target`. Giving it those would mean spilling a function's slots into a
   scope object wherever one might occur.
-- `WeakRef` holds its target strongly and `FinalizationRegistry` never calls
-  back. Go's collector has no hook that would let them do otherwise, and the
-  specification never requires that anything be collected — only that a
-  collected target stop being observable. The cost is retention, not wrong
-  answers.
-- `Script_Extensions` in a regular expression answers with the plain `Script`
-  table, which differs only for code points a second script borrows, and the
-  emoji property escapes resolve to the symbol categories their characters live
-  in. Go ships neither data set.
+- A `WeakMap` or `WeakSet` value is held strongly, so a value that refers to its
+  own key keeps that key alive. Breaking that cycle needs ephemeron marking,
+  which Go's collector does not offer.
 
 ## Conformance
 
