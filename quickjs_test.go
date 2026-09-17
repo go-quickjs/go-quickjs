@@ -2526,3 +2526,54 @@ func TestIteratorPrototypes(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// A Date setter coerces every argument it was given, in order, before it looks
+// at anything else -- a valueOf can see that it was called, and is called even
+// when the date is already invalid. A setter that finds an invalid date reports
+// NaN without writing anything, so a valueOf that revived the date is not
+// undone.
+func TestDateSetters(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var log = [], d = new Date(NaN);
+		  d.setHours({valueOf: function () { log.push("h"); return 1 }},
+		             {valueOf: function () { log.push("m"); return 2 }});
+		  log.join(",")`, "h,m"},
+		{`var d = new Date(NaN);
+		  var v = {valueOf: function () { d.setTime(0); return 1 }};
+		  var r = d.setDate(v);
+		  [String(r), String(d.getTime())].join(",")`, "NaN,0"},
+		// The first argument is not optional: with none it is undefined.
+		{`String(new Date(0).setHours())`, "NaN"},
+		{`var d = new Date(0); d.setUTCHours(5, 6);
+		  d.getUTCHours() + "," + d.getUTCMinutes()`, "5,6"},
+
+		// toJSON is generic: it asks for a number and then for a string.
+		{`Date.prototype.toJSON.call({toISOString: function () { return "x" }})`, "x"},
+		{`String(Date.prototype.toJSON.call(
+		      {valueOf: function () { return NaN }, toISOString: function () { return "x" }}))`,
+			"null"},
+		{`JSON.stringify({d: new Date(NaN)})`, `{"d":null}`},
+
+		// The epoch is the epoch however it was arrived at.
+		{`String(1 / new Date(-0).valueOf())`, "Infinity"},
+		// Called rather than constructed, Date reports the time as a string.
+		{`typeof Date()`, "string"},
+		{`typeof Date(1970, 0)`, "string"},
+		// The hint is checked.
+		{`try { new Date()[Symbol.toPrimitive]("bad") } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		{`typeof new Date()[Symbol.toPrimitive]("number")`, "number"},
+		{`Object.getOwnPropertyDescriptor(Date.prototype, Symbol.toPrimitive).writable + ""`,
+			"false"},
+	}
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

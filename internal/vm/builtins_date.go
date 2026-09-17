@@ -71,7 +71,9 @@ func clipTime(ms float64) float64 {
 	if math.IsNaN(ms) || math.Abs(ms) > maxTimeValue {
 		return math.NaN()
 	}
-	return math.Trunc(ms)
+	// Truncating toward zero leaves negative zero, which is not a time value:
+	// the epoch is the epoch however it was arrived at.
+	return math.Trunc(ms) + 0
 }
 
 func (r *Runtime) initDateBuiltins() {
@@ -79,6 +81,13 @@ func (r *Runtime) initDateBuiltins() {
 	p := r.proto.date
 
 	ctor := r.newCtor("Date", 7, p, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		if rt.newTarget().IsUndefined() {
+			// Called rather than constructed, Date ignores its arguments and
+			// reports the current time as a string. It is the only constructor
+			// that does something else entirely without `new`.
+			return Str(NewString(rt.timeAt(rt.now(), false).
+				Format("Mon Jan 02 2006 15:04:05 GMT-0700 (MST)"))), nil
+		}
 		o := newObject(rt.proto.date, ClassDate)
 		switch len(args) {
 		case 0:
@@ -235,11 +244,13 @@ func (r *Runtime) initDateBuiltins() {
 				if err != nil {
 					return Undefined, err
 				}
-				v, err := rt.setDateParts(t, args, start, count, isUTC)
+				v, store, err := rt.setDateParts(t, args, start, count, isUTC)
 				if err != nil {
 					return Undefined, err
 				}
-				this.Object().data = v
+				if store {
+					this.Object().data = v
+				}
 				return Float(v), nil
 			})
 		}
@@ -300,16 +311,30 @@ func (r *Runtime) initDateBuiltins() {
 		return Str(NewString(rt.timeAt(t, true).Format("Mon, 02 Jan 2006 15:04:05 GMT"))), nil
 	})
 	r.defMethod(p, "toJSON", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		t, err := rt.dateValueOf(this, "Date.prototype.toJSON")
+		// Unlike the rest of the prototype this one is generic: it asks the
+		// receiver for a number and then for a string, and anything that
+		// answers both will do. JSON.stringify calls it on whatever it finds.
+		o, err := rt.toObject(this)
 		if err != nil {
 			return Undefined, err
 		}
-		// An invalid date serializes as null rather than throwing, which is
-		// the one place the two formatters disagree.
-		if math.IsNaN(t) {
+		num, err := rt.toPrimitive(Obj(o), hintNumber)
+		if err != nil {
+			return Undefined, err
+		}
+		// A date that cannot be represented serializes as null rather than
+		// throwing, which is the one place the two formatters disagree.
+		if num.IsNumber() && (math.IsNaN(num.Number()) || math.IsInf(num.Number(), 0)) {
 			return Null, nil
 		}
-		return Str(NewString(isoString(rt.timeAt(t, true)))), nil
+		fn, err := rt.getProp(o, rt.atoms.intern("toISOString"), Obj(o))
+		if err != nil {
+			return Undefined, err
+		}
+		if !isCallable(fn) {
+			return Undefined, rt.throwTypeError("toISOString is not a function")
+		}
+		return rt.call(fn, Obj(o), nil)
 	})
 
 	// Date is the only built-in whose default coercion hint is string, which
@@ -323,12 +348,24 @@ func (r *Runtime) initDateBuiltins() {
 			if err != nil {
 				return Undefined, err
 			}
-			want := hintString
-			if h.Go() == "number" {
+			var want hint
+			switch h.Go() {
+			case "number":
 				want = hintNumber
+			case "string", "default":
+				// Date is the only built-in whose default is string.
+				want = hintString
+			default:
+				return Undefined, rt.throwTypeError(
+					"invalid hint %q for Date[Symbol.toPrimitive]", h.Go())
 			}
 			return rt.ordinaryToPrimitive(this, want)
 		})
+	// The method is not writable, which is how a script can tell it apart from
+	// one a program installed.
+	if pd := p.getOwn(r.atoms.internSymbol(r.wellKnown.toPrimitive)); pd != nil {
+		pd.flags &^= propWritable
+	}
 }
 
 // isoString formats a time as Date.prototype.toISOString does, which always
@@ -388,13 +425,36 @@ func (r *Runtime) composeTime(year, month, day, hour, min, sec, ms float64, utc 
 
 // setDateParts replaces count components starting at start, leaving the rest of
 // the date unchanged.
-func (r *Runtime) setDateParts(t float64, args []Value, start, count int, utc bool) (float64, error) {
+// The bool reports whether the result should be stored: a setter that finds an
+// invalid date reports NaN without writing anything, so a valueOf that revived
+// the date in the meantime is not undone.
+func (r *Runtime) setDateParts(t float64, args []Value, start, count int, utc bool) (float64, bool, error) {
+	// Every argument is coerced, in order, before anything else happens. A
+	// valueOf can see that it was called, and it is called even when the date
+	// is already invalid or an earlier argument was NaN.
+	n := count
+	if n > len(args) {
+		n = len(args)
+	}
+	if n < 1 {
+		// The first argument is not optional: setHours() means setHours(NaN).
+		n = 1
+	}
+	var given [7]float64
+	for i := 0; i < n; i++ {
+		v, err := r.toNumber(arg(args, i))
+		if err != nil {
+			return 0, false, err
+		}
+		given[i] = v
+	}
+
 	// Setting a component of an invalid date leaves it invalid, except for
 	// setFullYear, which the specification lets revive one from the epoch.
 	base := t
 	if math.IsNaN(base) {
 		if start != 0 {
-			return math.NaN(), nil
+			return math.NaN(), false, nil
 		}
 		base = 0
 	}
@@ -409,17 +469,15 @@ func (r *Runtime) setDateParts(t float64, args []Value, start, count int, utc bo
 		float64(tm.Second()),
 		float64(tm.Nanosecond() / 1e6),
 	}
-	for i := 0; i < count && i < len(args); i++ {
-		n, err := r.toNumber(args[i])
-		if err != nil {
-			return 0, err
+	for i := 0; i < n; i++ {
+		v := given[i]
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return math.NaN(), true, nil
 		}
-		if math.IsNaN(n) || math.IsInf(n, 0) {
-			return math.NaN(), nil
-		}
-		parts[start+i] = math.Trunc(n)
+		parts[start+i] = math.Trunc(v)
 	}
-	return r.composeTime(parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], parts[6], utc), nil
+	out := r.composeTime(parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], parts[6], utc)
+	return out, true, nil
 }
 
 // dateFormats are the layouts Date.parse accepts, tried in order.
