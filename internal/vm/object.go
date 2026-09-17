@@ -117,6 +117,11 @@ const (
 	// in a frame. It sits on the scope chain like a `with` object, but it is
 	// not one a script can reach: a call through it has no receiver.
 	objEvalVars
+	// objImmutableProto marks an object whose prototype can never be changed,
+	// however extensible it is. Object.prototype is one: the root of every
+	// ordinary chain cannot be given a parent without making the chain cyclic
+	// for the whole realm at once.
+	objImmutableProto
 )
 
 // linearScanLimit is the property count below which lookup scans the slice
@@ -197,6 +202,28 @@ func (o *Object) IsCallable() bool {
 }
 
 // IsArray reports whether the object is an ordinary array.
+// isArray answers the same question as IsArray but reports a revoked proxy,
+// which has no target left to ask and so cannot be classified at all.
+func (r *Runtime) isArray(v Value) (bool, error) {
+	if !v.IsObject() {
+		return false, nil
+	}
+	o := v.Object()
+	for {
+		if o.class == ClassArray {
+			return true, nil
+		}
+		p := proxyOf(o)
+		if p == nil {
+			return false, nil
+		}
+		if p.revoked {
+			return false, r.throwTypeError("cannot perform an operation on a revoked proxy")
+		}
+		o = p.target
+	}
+}
+
 func (o *Object) IsArray() bool {
 	// A proxy is an array exactly when its target is, all the way down: what
 	// Array.isArray and JSON.stringify both need to decide is whether the thing
@@ -284,6 +311,12 @@ func (o *Object) setOwnRaw(key Atom, value Value, flags propFlags) {
 		p.value, p.flags = value, flags
 		return
 	}
+	if o.class == ClassArray && key.IsIndex() {
+		// An element in the property table is what the sparse mark means. It is
+		// set here, where such an element is created, so that nothing looks for
+		// this index in dense storage afterwards and finds a second answer.
+		o.markSparse()
+	}
 	o.appendProp(Property{key: key, flags: flags, value: value})
 }
 
@@ -355,9 +388,6 @@ func (o *Object) ownKeys(includeSymbols bool, atoms *atomTable) []Atom {
 			for i := 0; i < s.Len(); i++ {
 				keys = append(keys, atoms.indexAtom(uint32(i)))
 			}
-			if o.getOwn(atomLength) == nil {
-				keys = append(keys, atomLength)
-			}
 		}
 	}
 
@@ -404,9 +434,16 @@ func (o *Object) ownKeys(includeSymbols bool, atoms *atomTable) []Atom {
 
 	// An array's length is synthesized rather than stored, but it is an own
 	// property, and it was the first one the array had -- so it comes after the
-	// indices, which always come first, and before every other string key.
+	// indices, which always come first, and before every other string key. A
+	// string object's length is in the same position, after any index a script
+	// added past the end of the string.
 	if o.class == ClassArray {
 		keys = append(keys, atomLength)
+	}
+	if o.class == ClassStringWrapper && o.getOwn(atomLength) == nil {
+		if _, ok := o.data.(*String); ok {
+			keys = append(keys, atomLength)
+		}
 	}
 
 	for i := range o.props {

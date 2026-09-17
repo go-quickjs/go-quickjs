@@ -98,7 +98,11 @@ func (r *Runtime) initObjectBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString("[object " + rt.classTag(o) + "]")), nil
+		tag, err := rt.classTag(o)
+		if err != nil {
+			return Undefined, err
+		}
+		return Str(NewString("[object " + tag + "]")), nil
 	})
 
 	r.defMethod(p, "toLocaleString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -366,6 +370,11 @@ func (r *Runtime) initObjectBuiltins() {
 	r.defMethod(ctor, "fromEntries", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		o := newObject(rt.proto.object, ClassObject)
 		err := rt.iterate(arg(args, 0), func(entry Value) error {
+			// An entry is a pair, and only an object can be one. A string has
+			// a [0] and a [1] and would otherwise pass for one silently.
+			if !entry.IsObject() {
+				return rt.throwTypeError("an entry must be an object, not %s", entry.Kind())
+			}
 			k, err := rt.getIndexed(entry, Int(0))
 			if err != nil {
 				return err
@@ -388,40 +397,59 @@ func (r *Runtime) initObjectBuiltins() {
 }
 
 // classTag returns the tag Object.prototype.toString reports for an object.
-func (r *Runtime) classTag(o *Object) string {
+//
+// It can fail twice over: deciding whether the object is an array asks a proxy
+// for its target, which a revoked one no longer has, and Symbol.toStringTag may
+// be a getter that throws.
+func (r *Runtime) classTag(o *Object) (string, error) {
+	builtin, err := r.builtinTag(o)
+	if err != nil {
+		return "", err
+	}
 	// A Symbol.toStringTag property overrides the built-in tag, but only when
 	// it is a string: anything else is ignored rather than coerced.
-	if v, err := r.getProp(o, r.atoms.internSymbol(r.wellKnown.toStringTag), Obj(o)); err == nil {
-		if v.IsString() {
-			return v.String().Go()
-		}
+	v, err := r.getProp(o, r.atoms.internSymbol(r.wellKnown.toStringTag), Obj(o))
+	if err != nil {
+		return "", err
 	}
+	if v.IsString() {
+		return v.String().Go(), nil
+	}
+	return builtin, nil
+}
+
+// builtinTag is the tag an object has before Symbol.toStringTag is consulted.
+func (r *Runtime) builtinTag(o *Object) (string, error) {
 	// A proxy answers for its target: whether something is an array or is
 	// callable is a question about behaviour, and a proxy of an array behaves
 	// like one.
-	if o.IsArray() {
-		return "Array"
+	isArr, err := r.isArray(Obj(o))
+	if err != nil {
+		return "", err
+	}
+	if isArr {
+		return "Array", nil
 	}
 	if o.IsCallable() {
-		return "Function"
+		return "Function", nil
 	}
 	switch o.class {
 	case ClassError:
-		return "Error"
+		return "Error", nil
 	case ClassBooleanWrapper:
-		return "Boolean"
+		return "Boolean", nil
 	case ClassNumberWrapper:
-		return "Number"
+		return "Number", nil
 	case ClassStringWrapper:
-		return "String"
+		return "String", nil
 	case ClassDate:
-		return "Date"
+		return "Date", nil
 	case ClassRegExp:
-		return "RegExp"
+		return "RegExp", nil
 	case ClassArguments:
-		return "Arguments"
+		return "Arguments", nil
 	}
-	return "Object"
+	return "Object", nil
 }
 
 // isEnumerable reports whether a key is an enumerable own property.
@@ -629,7 +657,7 @@ func (r *Runtime) initFunctionBuiltins() {
 		var callArgs []Value
 		if !list.IsNullish() {
 			var err error
-			callArgs, err = rt.arrayToSlice(list)
+			callArgs, err = rt.argumentList(list)
 			if err != nil {
 				return Undefined, err
 			}
@@ -758,6 +786,16 @@ func (r *Runtime) initFunctionBuiltins() {
 }
 
 // arrayToSlice reads an array-like into a Go slice.
+// argumentList reads an array-like as a list of arguments, which requires it to
+// be an object: apply and its relatives refuse a primitive rather than treating
+// it as an empty list or reading indices off a wrapper.
+func (r *Runtime) argumentList(v Value) ([]Value, error) {
+	if !v.IsObject() {
+		return nil, r.throwTypeError("an argument list must be an object, not %s", v.Kind())
+	}
+	return r.arrayToSlice(v)
+}
+
 func (r *Runtime) arrayToSlice(v Value) ([]Value, error) {
 	o, err := r.toObject(v)
 	if err != nil {
@@ -811,8 +849,8 @@ func (r *Runtime) initArrayBuiltins() {
 	r.proto.arrayCtor = ctor
 
 	r.defMethod(ctor, "isArray", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		v := arg(args, 0)
-		return Bool(v.IsObject() && v.Object().IsArray()), nil
+		yes, err := rt.isArray(arg(args, 0))
+		return Bool(yes), err
 	})
 
 	r.defMethod(ctor, "of", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -1100,6 +1138,11 @@ func (r *Runtime) initArrayBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
+		if a.n == 0 {
+			// An empty search converts nothing: the starting point cannot
+			// matter, so its valueOf is never called.
+			return Float(-1), nil
+		}
 		target := arg(args, 0)
 		from, err := rt.relativeIndex64(arg(args, 1), a.n, 0)
 		if err != nil {
@@ -1164,6 +1207,11 @@ func (r *Runtime) initArrayBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
+		if a.n == 0 {
+			// Nothing to search, and nothing to convert either: the starting
+			// point is left alone, so its valueOf is never called.
+			return False, nil
+		}
 		target := arg(args, 0)
 		from, err := rt.relativeIndex64(arg(args, 1), a.n, 0)
 		if err != nil {
@@ -1219,14 +1267,25 @@ func (r *Runtime) initArrayBuiltins() {
 	})
 
 	r.defMethod(p, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		fn, err := rt.getValueProp(this, rt.atoms.intern("join"))
+		o, err := rt.toObject(this)
+		if err != nil {
+			return Undefined, err
+		}
+		fn, err := rt.getProp(o, rt.atoms.intern("join"), this)
 		if err != nil {
 			return Undefined, err
 		}
 		if isCallable(fn) {
 			return rt.call(fn, this, nil)
 		}
-		return Str(NewString("[object Array]")), nil
+		// Whatever this is has no join to call, so it falls back to the
+		// ordinary object description -- the real one, tag and all, not a
+		// fixed string: the receiver need not be an array.
+		tag, err := rt.classTag(o)
+		if err != nil {
+			return Undefined, err
+		}
+		return Str(NewString("[object " + tag + "]")), nil
 	})
 
 	r.defMethod(p, "concat", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -1305,7 +1364,9 @@ func (r *Runtime) initArrayBuiltins() {
 				return Undefined, err
 			}
 		}
-		return this, nil
+		// The coerced receiver is what comes back, so reversing a primitive
+		// hands back the wrapper it was reversed through.
+		return Obj(a.o), nil
 	})
 
 	// The iteration methods share a shape, so they are defined from a table.
@@ -1476,7 +1537,7 @@ func (r *Runtime) initArrayBuiltins() {
 				return Undefined, err
 			}
 		}
-		return this, nil
+		return Obj(a.o), nil
 	})
 
 	// Symbol.iterator is set alongside values, which it has to be the very same
@@ -2282,15 +2343,40 @@ func (r *Runtime) initMathBuiltins() {
 	})
 
 	r.defMethod(m, "hypot", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		sum := 0.0
-		for _, a := range args {
-			n, err := rt.toNumber(a)
-			if err != nil {
-				return Undefined, err
-			}
-			sum += n * n
+		nums, err := rt.coerceAll(args)
+		if err != nil {
+			return Undefined, err
 		}
-		return Float(math.Sqrt(sum)), nil
+		// An infinity wins over a NaN here, unlike everywhere else: the length
+		// of a vector with an infinite side is infinite whatever the other
+		// sides are, including unknown.
+		sawNaN, largest := false, 0.0
+		for _, n := range nums {
+			switch {
+			case math.IsInf(n, 0):
+				return Float(inf(1)), nil
+			case math.IsNaN(n):
+				sawNaN = true
+			default:
+				if a := math.Abs(n); a > largest {
+					largest = a
+				}
+			}
+		}
+		if sawNaN {
+			return Float(nan()), nil
+		}
+		if largest == 0 {
+			return Float(0), nil
+		}
+		// The squares are scaled by the largest term, so that a vector of large
+		// or small components neither overflows nor underflows on the way.
+		sum := 0.0
+		for _, n := range nums {
+			q := n / largest
+			sum += q * q
+		}
+		return Float(largest * math.Sqrt(sum)), nil
 	})
 
 	r.defMethod(m, "random", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -2298,18 +2384,36 @@ func (r *Runtime) initMathBuiltins() {
 	})
 }
 
+// coerceAll converts every argument to a number, in the order they were
+// written.
+//
+// Math.max and its relatives convert the whole list before they look at any of
+// it, so an argument whose valueOf has a side effect has it even when an
+// earlier argument has already settled the answer.
+func (r *Runtime) coerceAll(args []Value) ([]float64, error) {
+	nums := make([]float64, len(args))
+	for i, a := range args {
+		n, err := r.toNumber(a)
+		if err != nil {
+			return nil, err
+		}
+		nums[i] = n
+	}
+	return nums, nil
+}
+
 // mathExtremum implements Math.max and Math.min, which return NaN if any
 // argument is NaN and treat -0 as less than +0.
 func (r *Runtime) mathExtremum(args []Value, wantMax bool) (Value, error) {
+	nums, err := r.coerceAll(args)
+	if err != nil {
+		return Undefined, err
+	}
 	best := inf(-1)
 	if !wantMax {
 		best = inf(1)
 	}
-	for _, a := range args {
-		n, err := r.toNumber(a)
-		if err != nil {
-			return Undefined, err
-		}
+	for _, n := range nums {
 		if math.IsNaN(n) {
 			return Float(nan()), nil
 		}
@@ -2325,8 +2429,20 @@ func (r *Runtime) mathExtremum(args []Value, wantMax bool) (Value, error) {
 
 // jsRound rounds half toward positive infinity, which differs from math.Round
 // for negative halves: Math.round(-0.5) is -0, not -1.
+//
+// The sign of a zero result is the sign of the argument, so Math.round(-0.2) is
+// -0 as well -- visible through 1/x, which is where a program notices.
 func jsRound(f float64) float64 {
-	if math.IsNaN(f) || math.IsInf(f, 0) {
+	switch {
+	case math.IsNaN(f), math.IsInf(f, 0), f == 0:
+		return f
+	case f > 0 && f < 0.5:
+		return 0
+	case f < 0 && f >= -0.5:
+		return math.Copysign(0, -1)
+	case math.Abs(f) >= 1<<52:
+		// Past this every double is already a whole number, and adding a half
+		// to one would round rather than carry.
 		return f
 	}
 	return math.Floor(f + 0.5)

@@ -100,6 +100,10 @@ func (r *Runtime) initWellKnownSymbols() {
 // be created.
 func (r *Runtime) initIntrinsics() {
 	r.proto.object = newObject(nil, ClassObject)
+	// Every ordinary chain ends here, so giving this object a prototype would
+	// put whatever it was given above everything in the realm. It is refused
+	// however extensible the object is.
+	r.proto.object.flags |= objImmutableProto
 
 	// Function.prototype is itself callable and returns undefined.
 	r.proto.function = newObject(r.proto.object, ClassFunction)

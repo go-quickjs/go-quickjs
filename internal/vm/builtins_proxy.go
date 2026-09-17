@@ -893,12 +893,12 @@ func (r *Runtime) initReflectBuiltins() {
 	})
 
 	r.defMethod(rf, "apply", 3, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		var callArgs []Value
-		if list := arg(args, 2); !list.IsNullish() {
-			var err error
-			if callArgs, err = rt.arrayToSlice(list); err != nil {
-				return Undefined, err
-			}
+		// Unlike Function.prototype.apply, there is no shorthand for "no
+		// arguments" here: the list is read as an array-like whatever it is,
+		// and a primitive is refused.
+		callArgs, err := rt.argumentList(arg(args, 2))
+		if err != nil {
+			return Undefined, err
 		}
 		return rt.call(arg(args, 0), arg(args, 1), callArgs)
 	})
@@ -918,12 +918,9 @@ func (r *Runtime) initReflectBuiltins() {
 					"the new.target given to Reflect.construct is not a constructor")
 			}
 		}
-		var callArgs []Value
-		if list := arg(args, 1); !list.IsNullish() {
-			var err error
-			if callArgs, err = rt.arrayToSlice(list); err != nil {
-				return Undefined, err
-			}
+		callArgs, err := rt.argumentList(arg(args, 1))
+		if err != nil {
+			return Undefined, err
 		}
 		return rt.constructWithTarget(target, callArgs, newTarget)
 	})

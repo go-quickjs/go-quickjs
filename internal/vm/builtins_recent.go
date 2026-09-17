@@ -211,7 +211,10 @@ func (r *Runtime) initMathSumPrecise() {
 		sum := new(big.Float).SetPrec(2048)
 		sawNaN := false
 		posInf, negInf := false, false
-		count := 0
+		// The running total starts at -0, and -0 added to -0 is -0 while +0
+		// added to -0 is +0. So the answer is a negative zero only when there
+		// was nothing to add or nothing but negative zeros.
+		allNegZero := true
 
 		for {
 			v, ok, err := rt.iterNext(cursor)
@@ -226,7 +229,6 @@ func (r *Runtime) initMathSumPrecise() {
 				return Undefined, rt.throwTypeError("Math.sumPrecise requires numbers")
 			}
 			n := v.Number()
-			count++
 			switch {
 			case math.IsNaN(n):
 				sawNaN = true
@@ -235,6 +237,9 @@ func (r *Runtime) initMathSumPrecise() {
 			case math.IsInf(n, -1):
 				negInf = true
 			default:
+				if n != 0 || !math.Signbit(n) {
+					allNegZero = false
+				}
 				sum.Add(sum, new(big.Float).SetPrec(2048).SetFloat64(n))
 			}
 		}
@@ -246,15 +251,14 @@ func (r *Runtime) initMathSumPrecise() {
 			return Float(math.Inf(1)), nil
 		case negInf:
 			return Float(math.Inf(-1)), nil
-		case count == 0:
-			// The sum of nothing is -0, so that it is the identity for a
-			// following addition of -0.
-			return Float(math.Copysign(0, -1)), nil
 		}
 		f, _ := sum.Float64()
 		if f == 0 {
-			// An exact zero from cancelling values is +0, not the -0 the empty
-			// case produces.
+			if allNegZero {
+				return Float(math.Copysign(0, -1)), nil
+			}
+			// An exact zero from values that cancelled is +0, unlike the zero
+			// nothing at all sums to.
 			return Float(0), nil
 		}
 		return Float(f), nil

@@ -657,11 +657,16 @@ func (r *Runtime) defineOwnProp(o *Object, key Atom, val Value, flags propFlags)
 			}
 		}
 	}
-	if o.class == ClassArray && key.IsIndex() && flags == propDefault {
+	// Dense storage is where an ordinary element goes -- unless this index is
+	// already in the property table, where an earlier define with attributes
+	// left it. Writing to the slot as well would leave the index described
+	// twice, and deleting it would remove only one of the two.
+	if o.class == ClassArray && key.IsIndex() && flags == propDefault &&
+		(o.flags&objHasSparseElements == 0 || o.getOwn(key) == nil) {
 		if o.setElem(key.Index(), val) {
 			return nil
 		}
-		o.flags |= objHasSparseElements
+		o.markSparse()
 	}
 	// A dense element being redefined with non-default attributes must move out
 	// of dense storage, which cannot express attributes.

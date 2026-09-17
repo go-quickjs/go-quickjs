@@ -416,7 +416,8 @@ func (r *Runtime) installProperty(o *Object, key Atom, d *propDesc, cur *propDes
 // from a makes a ring that every property lookup walks forever -- a hang the
 // interpreter's interrupt check cannot reach, since the loop is in Go.
 func (r *Runtime) setProtoOfChecked(o *Object, proto Value) bool {
-	if !o.IsExtensible() {
+	if !o.IsExtensible() || o.flags&objImmutableProto != 0 {
+		// Setting it to what it already is succeeds, since nothing changes.
 		return proto.SameValue(protoValue(o))
 	}
 	if proto.IsObject() {
