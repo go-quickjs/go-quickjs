@@ -2220,6 +2220,11 @@ func TestMappedArguments(t *testing.T) {
 		{`(function () { "use strict";
 		    try { arguments.callee } catch (e) { return e.constructor.name } })()`,
 			"TypeError"},
+		// A sloppy function whose parameters are not plain gets the unmapped
+		// object too, and with it the same refusal.
+		{`(function (a = 1) {
+		    try { arguments.callee } catch (e) { return e.constructor.name } })()`,
+			"TypeError"},
 		{`(function f() { return arguments.callee === f })()`, "true"},
 		// The same function does both halves of every restricted property.
 		{`var d = Object.getOwnPropertyDescriptor(

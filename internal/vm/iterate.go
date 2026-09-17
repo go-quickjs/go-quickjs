@@ -381,11 +381,12 @@ func (r *Runtime) newArgumentsObject(f *frame) *Object {
 	o := newObject(r.proto.object, ClassArguments)
 	o.elems = append(o.elems, f.args...)
 	o.setOwnRaw(atomLength, Int(len(f.args)), propWritable|propConfigurable)
-	if f.cl != nil && f.cl.fn.MappedArguments {
+	mapped := f.cl != nil && f.cl.fn.MappedArguments
+	if mapped {
 		r.mapArguments(o, f)
 	}
 	switch {
-	case f.cl != nil && f.cl.fn.Strict:
+	case !mapped:
 		// An unmapped arguments object refuses to say what called it: the
 		// property is there, and reading or writing it throws.
 		r.defineAccessor(o, atomCallee, r.throwTypeErrorFn, r.throwTypeErrorFn, 0)
