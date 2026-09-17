@@ -136,6 +136,8 @@ func (r *Runtime) initIntrinsics() {
 	r.proto.bigint = newObject(r.proto.object, ClassObject)
 	r.proto.iterator = newObject(r.proto.object, ClassObject)
 	r.proto.arrayIter = newObject(r.proto.iterator, ClassObject)
+	r.proto.mapIter = newObject(r.proto.iterator, ClassObject)
+	r.proto.setIter = newObject(r.proto.iterator, ClassObject)
 	r.proto.stringIter = newObject(r.proto.iterator, ClassObject)
 	r.proto.regexpStringIter = newObject(r.proto.iterator, ClassObject)
 

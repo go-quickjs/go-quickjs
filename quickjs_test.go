@@ -2479,3 +2479,50 @@ func TestModuleExportResolution(t *testing.T) {
 		}
 	}
 }
+
+// An iterator's next method belongs to the prototype its kind shares, not to
+// each iterator, which a script can check -- and which is what makes the
+// prototype worth having at all.
+func TestIteratorPrototypes(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var p = Object.getPrototypeOf([].values());
+		  [typeof p.next, p === Object.getPrototypeOf([].keys()),
+		   p[Symbol.toStringTag], Object.prototype.hasOwnProperty.call([].values(), "next")
+		  ].join(",")`, "function,true,Array Iterator,false"},
+		{`Object.getPrototypeOf(new Map().keys())[Symbol.toStringTag]`, "Map Iterator"},
+		{`Object.getPrototypeOf(new Set().values())[Symbol.toStringTag]`, "Set Iterator"},
+		{`Object.getPrototypeOf(""[Symbol.iterator]())[Symbol.toStringTag]`, "String Iterator"},
+		{`Object.getPrototypeOf("".matchAll(/a/g))[Symbol.toStringTag]`,
+			"RegExp String Iterator"},
+		// Every kind refuses a receiver that is not one of its own.
+		{`try { [].values().next.call({}) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`try { new Map().keys().next.call([]) } catch (e) { e.constructor.name }`, "TypeError"},
+		// An exhausted iterator stays exhausted, even if the collection grows.
+		{`var m = new Map(); var it = m.keys(); it.next();
+		  m.set("a", 1); String(it.next().done)`, "true"},
+
+		// A surrogate pair split across a concatenation is one code point, and
+		// WTF-8 spells a code point one way -- so the two halves joined equal
+		// the same pair written directly.
+		{`var lo = "\uD834", hi = "\uDF06", pair = lo + hi;
+		  var s = "a" + pair + "b";
+		  var it = s[Symbol.iterator]();
+		  it.next();
+		  [it.next().value === pair, pair.length, pair === "𝌆"].join(",")`,
+			"true,2,true"},
+		// A lone surrogate is still itself.
+		{`var lo = "\uD834"; [lo.length, lo.charCodeAt(0), lo === "\uD834"].join(",")`,
+			"1,55348,true"},
+		{`("\uD834" + "a").length + "," + ("a" + "\uDF06").length`, "2,2"},
+	}
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

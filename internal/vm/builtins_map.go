@@ -213,6 +213,12 @@ func (r *Runtime) mapOf(this Value, class Class, name string) (*jsMap, error) {
 }
 
 func (r *Runtime) initMapBuiltins() {
+	r.initMapIteratorProto(r.proto.mapIter, "Map Iterator")
+	r.initMapIteratorProto(r.proto.setIter, "Set Iterator")
+	r.initArrayIteratorProto()
+	r.initStringIteratorProto()
+	r.initRegExpStringIteratorProto()
+
 	r.proto.mapProto = newObject(r.proto.object, ClassObject)
 	p := r.proto.mapProto
 
@@ -350,7 +356,7 @@ func (r *Runtime) initMapBuiltins() {
 			if err != nil {
 				return Undefined, err
 			}
-			return rt.newMapIterator(m, mapIterEntries), nil
+			return rt.newMapIterator(m, mapIterEntries, rt.proto.mapIter), nil
 		})
 	r.defToStringTag(p, "Map")
 }
@@ -450,7 +456,7 @@ func (r *Runtime) initSetBuiltins() {
 			if err != nil {
 				return Undefined, err
 			}
-			return rt.newMapIterator(m, mapIterValues), nil
+			return rt.newMapIterator(m, mapIterValues, rt.proto.setIter), nil
 		})
 	r.initSetOps(p)
 	r.defToStringTag(p, "Set")
@@ -581,33 +587,59 @@ func (r *Runtime) defMapIterator(p *Object, class Class, name string, kind mapIt
 		if err != nil {
 			return Undefined, err
 		}
-		return rt.newMapIterator(m, kind), nil
+		proto := rt.proto.mapIter
+		if class == ClassSet {
+			proto = rt.proto.setIter
+		}
+		return rt.newMapIterator(m, kind, proto), nil
 	})
 }
 
-// newMapIterator returns an iterator over a collection's live entries.
+// mapIterData is where a Map or Set iterator is in its collection.
 //
 // The cursor is an index into the entry list rather than a snapshot, so an
 // entry added during iteration is visited and one deleted during it is skipped,
 // which is what the specification requires.
-func (r *Runtime) newMapIterator(m *jsMap, kind mapIterKind) Value {
-	i := 0
-	iter := newObject(r.proto.iterator, ClassIterator)
-	r.defMethod(iter, "next", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		for i < len(m.entries) && m.entries[i].deleted {
-			i++
-		}
-		res := newObject(rt.proto.object, ClassObject)
-		if i >= len(m.entries) {
-			res.setOwnRaw(atomValue, Undefined, propDefault)
-			res.setOwnRaw(atomDone, True, propDefault)
-			return Obj(res), nil
-		}
-		e := m.entries[i]
-		i++
+type mapIterData struct {
+	m    *jsMap
+	kind mapIterKind
+	i    int
+	// done marks an iterator that reached the end. It stays done even if the
+	// collection grows afterwards: an exhausted iterator is finished with,
+	// rather than waiting for more.
+	done bool
+}
 
+// newMapIterator returns an iterator over a collection's live entries.
+//
+// Its next method lives on the shared prototype rather than on the iterator, so
+// that every iterator of a kind has the same one -- which a script can check,
+// and which is what makes the prototype worth having.
+func (r *Runtime) newMapIterator(m *jsMap, kind mapIterKind, proto *Object) Value {
+	iter := newObject(proto, ClassIterator)
+	iter.data = &mapIterData{m: m, kind: kind}
+	return Obj(iter)
+}
+
+// initMapIteratorProto fills in %MapIteratorPrototype% or
+// %SetIteratorPrototype%, which differ only in the tag they report.
+func (r *Runtime) initMapIteratorProto(proto *Object, tag string) {
+	r.defMethod(proto, "next", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		d, err := rt.mapIterOf(this, tag)
+		if err != nil {
+			return Undefined, err
+		}
+		for !d.done && d.i < len(d.m.entries) && d.m.entries[d.i].deleted {
+			d.i++
+		}
+		if d.done || d.i >= len(d.m.entries) {
+			d.done = true
+			return Obj(rt.iterResult(Undefined, true)), nil
+		}
+		e := d.m.entries[d.i]
+		d.i++
 		var v Value
-		switch kind {
+		switch d.kind {
 		case mapIterKeys:
 			v = e.key
 		case mapIterValues:
@@ -615,15 +647,20 @@ func (r *Runtime) newMapIterator(m *jsMap, kind mapIterKind) Value {
 		default:
 			v = Obj(rt.newArrayFrom([]Value{e.key, e.value}))
 		}
-		res.setOwnRaw(atomValue, v, propDefault)
-		res.setOwnRaw(atomDone, False, propDefault)
-		return Obj(res), nil
+		return Obj(rt.iterResult(v, false)), nil
 	})
-	r.defSymbolMethod(iter, r.wellKnown.iterator, "[Symbol.iterator]", 0,
-		func(rt *Runtime, this Value, args []Value) (Value, error) {
-			return this, nil
-		})
-	return Obj(iter)
+	proto.setOwnRaw(r.atoms.internSymbol(r.wellKnown.toStringTag),
+		Str(NewString(tag)), propConfigurable)
+}
+
+// mapIterOf recovers an iterator's state, refusing anything else.
+func (r *Runtime) mapIterOf(this Value, tag string) (*mapIterData, error) {
+	if this.IsObject() {
+		if d, ok := this.Object().data.(*mapIterData); ok {
+			return d, nil
+		}
+	}
+	return nil, r.throwTypeError("%s.prototype.next called on an incompatible receiver", tag)
 }
 
 // iterateOptional walks an iterable, treating undefined and null as empty.

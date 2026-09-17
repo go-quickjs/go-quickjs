@@ -233,3 +233,40 @@ func ToWellFormed(s string) string {
 	}
 	return string(buf)
 }
+
+// UnpairedEnds reports whether a string ends with an unpaired high surrogate or
+// begins with an unpaired low surrogate.
+//
+// Those are the two ends a concatenation has to look at: joining the first to
+// the second makes a code point, which WTF-8 spells as one sequence rather than
+// two.
+func UnpairedEnds(s string) (endsHigh, startsLow bool) {
+	if len(s) < 3 {
+		return false, false
+	}
+	if c, ok := decodeSurrogateAt(s, len(s)-3); ok && c >= surrHighMin && c <= surrHighMax {
+		endsHigh = true
+	}
+	if c, ok := decodeSurrogateAt(s, 0); ok && c >= surrLowMin && c <= surrLowMax {
+		startsLow = true
+	}
+	return endsHigh, startsLow
+}
+
+// Join concatenates two WTF-8 strings, combining a surrogate pair split across
+// the boundary into the single code point it spells.
+func Join(a, b string) string {
+	if len(a) >= 3 && len(b) >= 3 {
+		hi, hok := decodeSurrogateAt(a, len(a)-3)
+		lo, lok := decodeSurrogateAt(b, 0)
+		if hok && lok && hi >= surrHighMin && hi <= surrHighMax &&
+			lo >= surrLowMin && lo <= surrLowMax {
+			var buf []byte
+			buf = append(buf, a[:len(a)-3]...)
+			buf = utf8.AppendRune(buf, utf16.DecodeRune(hi, lo))
+			buf = append(buf, b[3:]...)
+			return string(buf)
+		}
+	}
+	return a + b
+}

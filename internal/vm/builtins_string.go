@@ -681,31 +681,44 @@ func (r *Runtime) replacementFor(replVal Value, matched *String, offset int, who
 
 // newStringIterator iterates a string by code point.
 func (r *Runtime) newStringIterator(s *String) (Value, error) {
-	i := 0
 	iter := newObject(r.proto.stringIter, ClassIterator)
-	r.defMethod(iter, "next", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		res := newObject(rt.proto.object, ClassObject)
-		if i >= s.Len() {
-			res.setOwnRaw(atomValue, Undefined, propDefault)
-			res.setOwnRaw(atomDone, True, propDefault)
-			return Obj(res), nil
+	iter.data = &stringIterData{s: s}
+	return Obj(iter), nil
+}
+
+// stringIterData is where a string iterator is in its string.
+type stringIterData struct {
+	s *String
+	i int
+}
+
+// initStringIteratorProto fills in %StringIteratorPrototype%, whose next method
+// every string iterator shares.
+func (r *Runtime) initStringIteratorProto() {
+	p := r.proto.stringIter
+	r.defMethod(p, "next", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		var d *stringIterData
+		if this.IsObject() {
+			d, _ = this.Object().data.(*stringIterData)
+		}
+		if d == nil {
+			return Undefined, rt.throwTypeError(
+				"String Iterator.prototype.next called on an incompatible receiver")
+		}
+		if d.i >= d.s.Len() {
+			return Obj(rt.iterResult(Undefined, true)), nil
 		}
 		// A surrogate pair is one code point and advances by two units.
 		width := 1
-		if cp := s.CodePointAt(i); cp > 0xFFFF {
+		if cp := d.s.CodePointAt(d.i); cp > 0xFFFF {
 			width = 2
 		}
-		v := s.Substring(i, i+width)
-		i += width
-		res.setOwnRaw(atomValue, Str(v), propDefault)
-		res.setOwnRaw(atomDone, False, propDefault)
-		return Obj(res), nil
+		v := d.s.Substring(d.i, d.i+width)
+		d.i += width
+		return Obj(rt.iterResult(Str(v), false)), nil
 	})
-	r.defSymbolMethod(iter, r.wellKnown.iterator, "[Symbol.iterator]", 0,
-		func(rt *Runtime, this Value, args []Value) (Value, error) {
-			return this, nil
-		})
-	return Obj(iter), nil
+	p.setOwnRaw(r.atoms.internSymbol(r.wellKnown.toStringTag),
+		Str(NewString("String Iterator")), propConfigurable)
 }
 
 // jsWhitespace is the set of code points the trim methods remove.

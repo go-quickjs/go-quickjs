@@ -611,40 +611,68 @@ func (r *Runtime) regExpSymbolMatchAll(rx Value, args []Value) (Value, error) {
 // newRegExpStringIterator produces the matches lazily, which is what lets
 // matchAll be used on a long string without materializing every result.
 func (r *Runtime) newRegExpStringIterator(matcher Value, s *String, global, fullUnicode bool) Value {
-	units := wtf8.ToUTF16(s.Go())
-	done := false
 	iter := newObject(r.proto.regexpStringIter, ClassIterator)
-	r.defMethod(iter, "next", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		if done {
+	iter.data = &regExpStringIterData{
+		matcher: matcher, s: s, units: wtf8.ToUTF16(s.Go()),
+		global: global, fullUnicode: fullUnicode,
+	}
+	return Obj(iter)
+}
+
+// regExpStringIterData is where a matchAll iterator is in its subject.
+type regExpStringIterData struct {
+	matcher     Value
+	s           *String
+	units       []uint16
+	global      bool
+	fullUnicode bool
+	done        bool
+}
+
+// initRegExpStringIteratorProto fills in %RegExpStringIteratorPrototype%, whose
+// next method every matchAll iterator shares.
+func (r *Runtime) initRegExpStringIteratorProto() {
+	p := r.proto.regexpStringIter
+	r.defMethod(p, "next", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		var d *regExpStringIterData
+		if this.IsObject() {
+			d, _ = this.Object().data.(*regExpStringIterData)
+		}
+		if d == nil {
+			return Undefined, rt.throwTypeError(
+				"RegExp String Iterator.prototype.next called on an incompatible receiver")
+		}
+		if d.done {
 			return Obj(rt.iterResult(Undefined, true)), nil
 		}
-		result, err := rt.regExpExec(matcher, s)
+		result, err := rt.regExpExec(d.matcher, d.s)
 		if err != nil {
-			done = true
+			d.done = true
 			return Undefined, err
 		}
 		if result.IsNull() {
-			done = true
+			d.done = true
 			return Obj(rt.iterResult(Undefined, true)), nil
 		}
-		if !global {
-			done = true
+		if !d.global {
+			d.done = true
 			return Obj(rt.iterResult(result, false)), nil
 		}
 		matched, err := rt.resultMatchString(result)
 		if err != nil {
-			done = true
+			d.done = true
 			return Undefined, err
 		}
 		if matched.Len() == 0 {
-			if err := rt.advanceAfterEmptyMatch(matcher, units, fullUnicode); err != nil {
-				done = true
+			if err := rt.advanceAfterEmptyMatch(d.matcher, d.units, d.fullUnicode); err != nil {
+				d.done = true
 				return Undefined, err
 			}
 		}
 		return Obj(rt.iterResult(result, false)), nil
 	})
-	return Obj(iter)
+	p.setOwnRaw(r.atoms.internSymbol(r.wellKnown.toStringTag),
+		Str(NewString("RegExp String Iterator")), propConfigurable)
 }
 
 func min64(a, b int64) int64 {

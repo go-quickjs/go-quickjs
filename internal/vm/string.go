@@ -35,6 +35,14 @@ type String struct {
 	// ascii reports that every code unit is below 0x80, which makes indexing a
 	// byte index. It is always valid.
 	ascii bool
+	// endsHigh and startsLow record an unpaired surrogate at either end.
+	//
+	// Joining a high surrogate to a low one makes a code point, and WTF-8
+	// spells a code point one way -- so a concatenation across such a boundary
+	// has to combine them, or the same string would have two encodings and
+	// comparing them by bytes would say they differ. Both are always valid,
+	// rope or not, so the check costs nothing on the ordinary path.
+	endsHigh, startsLow bool
 	// u16 caches the UTF-16 code units of a non-ASCII string.
 	u16 []uint16
 }
@@ -48,7 +56,11 @@ func NewString(s string) *String {
 		return emptyString
 	}
 	ascii, length := scanString(s)
-	return &String{s: s, length: length, ascii: ascii}
+	out := &String{s: s, length: length, ascii: ascii}
+	if !ascii {
+		out.endsHigh, out.startsLow = wtf8.UnpairedEnds(s)
+	}
+	return out
 }
 
 // scanString reports whether s is pure ASCII and how many UTF-16 code units it
@@ -166,14 +178,23 @@ func (s *String) Concat(t *String) *String {
 	case t.length == 0:
 		return s
 	}
+	if s.endsHigh && t.startsLow {
+		// The join makes a code point out of two halves, which WTF-8 spells as
+		// one sequence rather than two. Rare enough to take the slow path.
+		return NewString(wtf8.Join(s.Go(), t.Go()))
+	}
 	ascii := s.ascii && t.ascii
 	length := s.length + t.length
+	out := &String{length: length, ascii: ascii,
+		endsHigh: t.endsHigh, startsLow: s.startsLow}
 
 	const ropeThreshold = 64
 	if s.byteLenShallow()+t.byteLenShallow() < ropeThreshold {
-		return &String{s: s.Go() + t.Go(), length: length, ascii: ascii}
+		out.s = s.Go() + t.Go()
+		return out
 	}
-	return &String{left: s, right: t, length: length, ascii: ascii}
+	out.left, out.right = s, t
+	return out
 }
 
 // byteLenShallow returns the byte length without walking a rope, which is all

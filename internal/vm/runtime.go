@@ -181,6 +181,10 @@ type intrinsics struct {
 	iterator       *Object
 	arrayIter      *Object
 	stringIter     *Object
+	// mapIter and setIter are the prototypes a Map's and a Set's iterators
+	// inherit from, which differ only in the tag they report.
+	mapIter *Object
+	setIter *Object
 	// regexpStringIter is the prototype matchAll's iterator inherits from.
 	regexpStringIter *Object
 	// regexpCtor is %RegExp%, the fallback when a species lookup finds none.

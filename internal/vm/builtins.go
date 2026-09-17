@@ -1595,46 +1595,69 @@ func (r *Runtime) newArrayIteratorKind(target Value, kind arrayIterKind) (Value,
 	if err != nil {
 		return Undefined, err
 	}
-	a := &arrayLike{o: o}
-	i := int64(0)
-	done := false
-
 	iter := newObject(r.proto.arrayIter, ClassIterator)
-	r.defMethod(iter, "next", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		if done {
+	iter.data = &arrayIterData{a: arrayLike{o: o}, kind: kind}
+	return Obj(iter), nil
+}
+
+// arrayIterData is where an array iterator is in its array.
+type arrayIterData struct {
+	a    arrayLike
+	kind arrayIterKind
+	i    int64
+	done bool
+}
+
+// initArrayIteratorProto fills in %ArrayIteratorPrototype%.
+//
+// The next method lives here rather than on each iterator, so that every array
+// iterator has the same one -- which a script can check, and which is what
+// makes the prototype worth having.
+func (r *Runtime) initArrayIteratorProto() {
+	p := r.proto.arrayIter
+	r.defMethod(p, "next", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		d, ok := arrayIterOf(this)
+		if !ok {
+			return Undefined, rt.throwTypeError(
+				"Array Iterator.prototype.next called on an incompatible receiver")
+		}
+		if d.done {
 			return Obj(rt.iterResult(Undefined, true)), nil
 		}
-		n, err := rt.lengthOf(o)
+		n, err := rt.lengthOf(d.a.o)
 		if err != nil {
-			done = true
+			d.done = true
 			return Undefined, err
 		}
-		if i >= n {
-			done = true
+		if d.i >= n {
+			d.done = true
 			return Obj(rt.iterResult(Undefined, true)), nil
 		}
-		idx := i
-		i++
-		if kind == iterKeys {
+		idx := d.i
+		d.i++
+		if d.kind == iterKeys {
 			return Obj(rt.iterResult(Float(float64(idx)), false)), nil
 		}
-		v, err := a.get(rt, idx)
+		v, err := d.a.get(rt, idx)
 		if err != nil {
-			done = true
+			d.done = true
 			return Undefined, err
 		}
-		if kind == iterEntries {
+		if d.kind == iterEntries {
 			v = Obj(rt.newArrayFrom([]Value{Float(float64(idx)), v}))
 		}
 		return Obj(rt.iterResult(v, false)), nil
 	})
-	// An iterator is itself iterable, which is what makes `for (x of iter)`
-	// work on one directly.
-	r.defSymbolMethod(iter, r.wellKnown.iterator, "[Symbol.iterator]", 0,
-		func(rt *Runtime, this Value, args []Value) (Value, error) {
-			return this, nil
-		})
-	return Obj(iter), nil
+	p.setOwnRaw(r.atoms.internSymbol(r.wellKnown.toStringTag),
+		Str(NewString("Array Iterator")), propConfigurable)
+}
+
+func arrayIterOf(v Value) (*arrayIterData, bool) {
+	if !v.IsObject() {
+		return nil, false
+	}
+	d, ok := v.Object().data.(*arrayIterData)
+	return d, ok
 }
 
 // ---------------------------------------------------------------------------
