@@ -90,3 +90,34 @@ func (c *compiler) patchWithProbe(pc int) {
 	}
 	c.fn.Code[pc].B = uint32(len(c.fn.Code))
 }
+
+// beginWithRef starts a reference that will be read and then written back, for
+// a name an enclosing `with` object may answer.
+//
+// The reference is resolved once. The specification reads and writes through
+// the same reference, so a getter that deletes the property while the read is
+// running still leaves the write on the object rather than on the binding the
+// name would otherwise mean.
+//
+// What it leaves on the stack is a base beneath the value read: the object the
+// name resolved to, or undefined when it resolved to a binding. endWithRef
+// reads that to decide where the write goes.
+func (c *compiler) beginWithRef(n *ast.Ident) {
+	limit := c.withLimit(n.Name)
+	c.emit(bytecode.OpPushUndef, 0, 0)
+	probe := c.emit(bytecode.OpWithGetUnder,
+		c.nameIdx(n.Name)|uint32(limit)<<bytecode.WithLimitShift, 0xFFFFFFFF)
+	c.compileIdentReadStatic(n)
+	c.patchWithProbe(probe)
+}
+
+// endWithRef writes the value on top back through the reference beginWithRef
+// resolved, leaving the value and removing the base.
+func (c *compiler) endWithRef(n *ast.Ident) {
+	probe := c.emit(bytecode.OpWithPutUnder, c.nameIdx(n.Name), 0xFFFFFFFF)
+	// The read came from a binding, so the base goes and the static store
+	// stands in for the write.
+	c.emit(bytecode.OpNipUnder, 1, 0)
+	c.assignToIdentStatic(n, false)
+	c.patchWithProbe(probe)
+}

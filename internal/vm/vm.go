@@ -1228,6 +1228,60 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				push(v)
 			}
 			f.pc = in.B
+		case bytecode.OpWithGetUnder:
+			name := cl.names[in.A&bytecode.WithNameMask]
+			o, found, err := r.withFound(f.withScopes, name,
+				int(in.A>>bytecode.WithLimitShift))
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			if !found {
+				break
+			}
+			v, err := r.getProp(o, name, Obj(o))
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			// The placeholder beneath becomes the object the name resolved to,
+			// so that the write goes back where the read came from.
+			r.stack[sp-1] = Obj(o)
+			push(v)
+			f.pc = in.B
+		case bytecode.OpWithPutUnder:
+			base := r.stack[sp-2]
+			if !base.IsObject() {
+				// The read came from a binding rather than from a `with`
+				// object, so the static store follows.
+				break
+			}
+			name := cl.names[in.A]
+			if cl.fn.Strict {
+				// A strict reference to a binding that has since gone is a
+				// ReferenceError rather than a property being created: the
+				// object environment record no longer has the binding the
+				// reference names.
+				has, err := r.hasPropErr(base.Object(), name)
+				if err != nil {
+					vmErr = err
+					goto onError
+				}
+				if !has {
+					vmErr = r.throwError(errReference, "%q is not defined",
+						r.atoms.name(name))
+					goto onError
+				}
+			}
+			v := peek(0)
+			if _, err := r.setProp(base.Object(), name, v, base,
+				cl.fn.Strict); err != nil {
+				vmErr = err
+				goto onError
+			}
+			r.stack[sp-2] = v
+			sp--
+			f.pc = in.B
 		case bytecode.OpWithSet:
 			name := cl.names[in.A&bytecode.WithNameMask]
 			o, found, err := r.withFound(f.withScopes, name,

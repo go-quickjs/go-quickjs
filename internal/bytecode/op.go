@@ -357,7 +357,14 @@ const (
 	OpWithSet     // store the value on top, leave it, and jump
 	OpWithDelete  // push whether the delete succeeded and jump
 	OpWithTypeof  // push the type of the value and jump
-	OpSetName     // give an anonymous function the name in Names[A]
+	// OpWithGetUnder and OpWithPutUnder are the two halves of a reference that
+	// is read and then written back: a compound assignment, or an update. The
+	// name is resolved once, by the read, and the write goes to whatever the
+	// read found -- which a second probe would not necessarily find again,
+	// since a getter may have deleted the property in between.
+	OpWithGetUnder // replace the placeholder base with the object, push the value, jump
+	OpWithPutUnder // store into the base beneath the value, drop it, and jump
+	OpSetName      // give an anonymous function the name in Names[A]
 	OpSetHomeObject
 	OpCheckCtorReturn
 	OpCheckThisInit // a derived constructor must call super() before `this`
@@ -497,6 +504,7 @@ var opNames = [opCount]string{
 	OpToString:  "to_string", OpWithPush: "with_push", OpWithPop: "with_pop",
 	OpWithGet: "with_get", OpWithGetThis: "with_get_this", OpWithSet: "with_set",
 	OpWithDelete: "with_delete", OpWithTypeof: "with_typeof",
+	OpWithGetUnder: "with_get_under", OpWithPutUnder: "with_put_under",
 	OpSetName: "set_name", OpSetHomeObject: "set_home_object",
 	OpCheckCtorReturn: "check_ctor_return", OpCheckThisInit: "check_this_init",
 	OpInitThis:         "init_this",

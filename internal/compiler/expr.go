@@ -562,17 +562,33 @@ func (c *compiler) compileUpdate(n *ast.Update) {
 
 	switch target := n.Operand.(type) {
 	case *ast.Ident:
-		c.compileIdentRead(target)
+		// Inside a `with` body the name is resolved once, by the read, and
+		// written back to whatever that found. The base it leaves under the
+		// value is why the postfix copy goes beneath it rather than on top.
+		withRef := c.withLimit(target.Name) > 0
+		if withRef {
+			c.beginWithRef(target)
+		} else {
+			c.compileIdentRead(target)
+		}
 		// The operand is coerced first, so that `x = "1"; x++` leaves a number
 		// behind and the postfix form yields the coerced value rather than the
 		// original string. To a numeric, not a number: a BigInt increments as
 		// a BigInt.
 		c.emit(bytecode.OpToNumeric, 0, 0)
 		if !n.Prefix {
-			c.emit(bytecode.OpDup, 0, 0)
+			if withRef {
+				c.emit(bytecode.OpInsert2, 0, 0)
+			} else {
+				c.emit(bytecode.OpDup, 0, 0)
+			}
 		}
 		c.emitAt(n.Start, op, 0, 0)
-		c.assignTo(target, false)
+		if withRef {
+			c.endWithRef(target)
+		} else {
+			c.assignTo(target, false)
+		}
 		if !n.Prefix {
 			// Discard the updated value, leaving the original as the result.
 			c.emit(bytecode.OpDrop, 0, 0)
@@ -1011,6 +1027,15 @@ func (c *compiler) compileAssign(n *ast.Assign) {
 			}, n.Start)
 			return
 		}
+		if id, ok := n.Target.(*ast.Ident); ok && c.withLimit(id.Name) > 0 {
+			// Inside a `with` body the name is resolved once, by the read, and
+			// written back to whatever that found.
+			c.beginWithRef(id)
+			c.finishUpdate(n.Op, func() {
+				c.compileExprNamed(n.Value, id.Name)
+			}, n.Start, 1, func() { c.endWithRef(id) })
+			return
+		}
 		// A logical assignment only stores when the short circuit does not
 		// take, so the read comes first and the store is inside the branch.
 		c.compileReadTarget(n.Target)
@@ -1030,6 +1055,13 @@ func (c *compiler) compileAssign(n *ast.Assign) {
 	default:
 		if m, ok := n.Target.(*ast.Member); ok {
 			c.compileMemberUpdate(m, n.Op, func() { c.compileExpr(n.Value) }, n.Start)
+			return
+		}
+		if id, ok := n.Target.(*ast.Ident); ok && c.withLimit(id.Name) > 0 {
+			c.beginWithRef(id)
+			c.compileExpr(n.Value)
+			c.emitAt(n.Start, compoundOpcode(n.Op), 0, 0)
+			c.endWithRef(id)
 			return
 		}
 		// A compound assignment reads, combines and writes back.
@@ -1148,6 +1180,44 @@ func (c *compiler) compileReadTarget(target ast.Expr) {
 	}
 }
 
+// assignToIdentStatic stores into the binding a name resolves to, without
+// consulting any enclosing `with` object.
+func (c *compiler) assignToIdentStatic(t *ast.Ident, initializing bool) {
+	if l, ok := c.resolveLocal(t.Name); ok {
+		if !initializing && l.kind == bindConst && l.initialized {
+			// A runtime error rather than an early one: the assignment may
+			// sit in a function that is never called.
+			c.emitAt(t.Start, bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
+			return
+		}
+		if l.initialized || initializing {
+			c.emit(bytecode.OpPutLocal, l.slot, 0)
+		} else {
+			c.emit(bytecode.OpDup, 0, 0)
+			c.emit(bytecode.OpSetLocalCheck, l.slot, 0)
+		}
+		return
+	}
+	if idx, ok := c.resolveUpvalue(t.Name); ok {
+		if c.fn.Upvalues[idx].TDZ && !initializing {
+			// The dead zone outranks constness: writing to a binding that
+			// does not exist yet is a ReferenceError whichever it is.
+			c.emit(bytecode.OpDup, 0, 0)
+			c.emitAt(t.Start, bytecode.OpSetUpvalueCheck, idx, 0)
+			return
+		}
+		if !c.fn.Upvalues[idx].Mutable && !initializing {
+			c.emitAt(t.Start, bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
+			return
+		}
+		c.emit(bytecode.OpDup, 0, 0)
+		c.emit(bytecode.OpSetUpvalue, idx, 0)
+		return
+	}
+	c.emit(bytecode.OpDup, 0, 0)
+	c.emit(bytecode.OpSetGlobal, c.nameIdx(t.Name), 0)
+}
+
 // assignTo stores the value on top of the stack into a target, leaving the
 // value on the stack as the expression's result.
 func (c *compiler) assignTo(target ast.Expr, initializing bool) {
@@ -1160,39 +1230,7 @@ func (c *compiler) assignTo(target ast.Expr, initializing bool) {
 			probe := c.withProbe(bytecode.OpWithSet, t.Name)
 			defer c.patchWithProbe(probe)
 		}
-		if l, ok := c.resolveLocal(t.Name); ok {
-			if !initializing && l.kind == bindConst && l.initialized {
-				// A runtime error rather than an early one: the assignment may
-				// sit in a function that is never called.
-				c.emitAt(t.Start, bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
-				return
-			}
-			if l.initialized || initializing {
-				c.emit(bytecode.OpPutLocal, l.slot, 0)
-			} else {
-				c.emit(bytecode.OpDup, 0, 0)
-				c.emit(bytecode.OpSetLocalCheck, l.slot, 0)
-			}
-			return
-		}
-		if idx, ok := c.resolveUpvalue(t.Name); ok {
-			if c.fn.Upvalues[idx].TDZ && !initializing {
-				// The dead zone outranks constness: writing to a binding that
-				// does not exist yet is a ReferenceError whichever it is.
-				c.emit(bytecode.OpDup, 0, 0)
-				c.emitAt(t.Start, bytecode.OpSetUpvalueCheck, idx, 0)
-				return
-			}
-			if !c.fn.Upvalues[idx].Mutable && !initializing {
-				c.emitAt(t.Start, bytecode.OpAssignConst, c.nameIdx(t.Name), 0)
-				return
-			}
-			c.emit(bytecode.OpDup, 0, 0)
-			c.emit(bytecode.OpSetUpvalue, idx, 0)
-			return
-		}
-		c.emit(bytecode.OpDup, 0, 0)
-		c.emit(bytecode.OpSetGlobal, c.nameIdx(t.Name), 0)
+		c.assignToIdentStatic(t, initializing)
 
 	case *ast.Member:
 		// Reached only from a compound assignment or an update, where the

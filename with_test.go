@@ -201,3 +201,86 @@ func TestWithSurvivesAwait(t *testing.T) {
 		t.Errorf("log = %q, want %q", got, "1,1,2,1")
 	}
 }
+
+// TestWithReferenceResolvedOnce covers a compound assignment or an update
+// inside a `with` body. The name is resolved once, and the write goes back to
+// whatever the read found -- even if the read removed it.
+func TestWithReferenceResolvedOnce(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// The getter deletes the property, so a second resolution would find
+		// the function's own binding instead of the object.
+		{`function t() {
+		    var x = 0
+		    var scope = {get x() { delete this.x; return 2 }}
+		    with (scope) { x ^= 3 }
+		    return scope.x + "," + x
+		  }
+		  t()`, "1,0"},
+		{`function t() {
+		    var x = 0
+		    var scope = {get x() { delete this.x; return 2 }}
+		    with (scope) { x++ }
+		    return scope.x + "," + x
+		  }
+		  t()`, "3,0"},
+		{`function t() {
+		    var x = 0
+		    var scope = {get x() { delete this.x; return 2 }}
+		    with (scope) { x &&= 9 }
+		    return scope.x + "," + x
+		  }
+		  t()`, "9,0"},
+
+		// A strict reference to a binding the object no longer has is a
+		// ReferenceError rather than a property being created.
+		{`var scope = {get x() { delete this.x; return 2 }}
+		  var caught = ""
+		  with (scope) {
+		    (function () {
+		      "use strict"
+		      try { x ^= 3 } catch (e) { caught = e.constructor.name }
+		    })()
+		  }
+		  caught + "," + ("x" in scope)`, "ReferenceError,false"},
+
+		// The ordinary cases still read and write the object.
+		{`function t() {
+		    var x = 5, s = {x: 1}
+		    with (s) { x += 2 }
+		    return s.x + "," + x
+		  }
+		  t()`, "3,5"},
+		{`function t() {
+		    var x = 5
+		    with ({}) { x += 2; x++ }
+		    return x
+		  }
+		  t()`, "8"},
+		{`function t() {
+		    var x = 0, s = {x: 1}
+		    var post, pre
+		    with (s) { post = x++; pre = ++x }
+		    return [post, pre, s.x, x].join(",")
+		  }
+		  t()`, "1,3,3,0"},
+		// The postfix result is the coerced value, not the original string.
+		{`function t() {
+		    var s = {x: "1"}
+		    var r
+		    with (s) { r = x++ }
+		    return typeof r + "," + r + "," + s.x
+		  }
+		  t()`, "number,1,2"},
+		// A const in the enclosing scope is still a const when no `with`
+		// object answers.
+		{`var caught = ""
+		  function t() {
+		    const x = 1
+		    with ({}) { try { x += 1 } catch (e) { caught = e.constructor.name } }
+		  }
+		  t(); caught`, "TypeError"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
