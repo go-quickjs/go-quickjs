@@ -90,7 +90,16 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 		(referencesArguments(fn.Body) || referencesArgumentsInParams(fn.Params)) &&
 		!bindsArguments(fn.Params) &&
 		!(simpleParams(fn.Params) && declaresArguments(fn.Body))
+	// A named function expression can refer to itself by name.
+	if fn.Name != nil {
+		c.selfName = fn.Name.Name
+	}
+
 	c.bindParameters(fn, func() {
+		// The binding for the function's own name encloses the parameter
+		// scope, so a default may refer to it -- and it is made here, after
+		// the parameter slots are reserved, because those have to come first.
+		defer c.bindSelfName(fn)
 		if !wantArguments {
 			return
 		}
@@ -115,11 +124,6 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 		c.fn.ParamEnd = uint32(c.here())
 	}
 
-	// A named function expression can refer to itself by name.
-	if fn.Name != nil {
-		c.selfName = fn.Name.Name
-	}
-
 	// Hoist var declarations and nested function declarations to the top of
 	// the function, as their scope requires.
 	var varNames []string
@@ -130,31 +134,6 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 			// A hoisted var starts as undefined.
 			c.emit(bytecode.OpPushUndef, 0, 0)
 			c.emit(bytecode.OpSetLocal, slot, 0)
-		}
-	}
-
-	// The self name gets a slot only when something nested could need it: a
-	// reference in the function's own body is answered from the running
-	// closure, but a nested function can capture nothing else. A parameter or
-	// a var of the same name shadows it, in which case there is nothing to
-	// bind.
-	if c.selfName != "" {
-		// A binding of the same name at the body's top level shadows it
-		// everywhere inside, so there is nothing left for the name to reach.
-		_, shadowed := c.resolveLocal(c.selfName)
-		if !shadowed {
-			for _, n := range topLevelLexicalNames(fn.Body) {
-				if n == c.selfName {
-					shadowed = true
-					break
-				}
-			}
-		}
-		if !shadowed && referencesName(fn, c.selfName) {
-			slot := c.declare(c.selfName, bindFuncSelf, fn.Start)
-			c.emit(bytecode.OpPushCallee, 0, 0)
-			c.emit(bytecode.OpInitLocal, slot, 0)
-			c.markInitialized(c.selfName)
 		}
 	}
 
@@ -170,6 +149,44 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 	}
 	c.emit(bytecode.OpReturnUndef, 0, 0)
 	c.finish()
+}
+
+// bindSelfName gives a named function expression a binding for its own name.
+//
+// The slot is made only when something nested could need it: a reference in the
+// function's own body is answered from the running closure, but a nested
+// function can capture nothing else. A parameter or a body-level binding of the
+// same name shadows it, in which case there is nothing left for the name to
+// reach.
+func (c *compiler) bindSelfName(fn *ast.FuncLit) {
+	if c.selfName == "" {
+		return
+	}
+	if _, shadowed := c.resolveLocal(c.selfName); shadowed {
+		return
+	}
+	for _, n := range topLevelLexicalNames(fn.Body) {
+		if n == c.selfName {
+			return
+		}
+	}
+	// A var of the same name is a binding of the function's own scope, and it
+	// shadows the name the function was written with -- `function n() { var n }`
+	// reads undefined, not itself.
+	var varNames []string
+	collectVarNamesIn(fn.Body, &varNames, c.fn.Strict)
+	for _, n := range varNames {
+		if n == c.selfName {
+			return
+		}
+	}
+	if !referencesName(fn, c.selfName) {
+		return
+	}
+	slot := c.declare(c.selfName, bindFuncSelf, fn.Start)
+	c.emit(bytecode.OpPushCallee, 0, 0)
+	c.emit(bytecode.OpInitLocal, slot, 0)
+	c.markInitialized(c.selfName)
 }
 
 // bindParameters declares the parameter slots and emits the prologue for

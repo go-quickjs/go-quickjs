@@ -3926,3 +3926,38 @@ func TestFinallyRunsOnce(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
 	}
 }
+
+// A named function expression's own name is bound in a scope that encloses the
+// parameter list, so a default may refer to it -- and it is immutable, and
+// shadowed by anything the function binds under the same name.
+func TestFunctionExpressionSelfName(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"from a parameter default", `var probe
+		  var func = function f(_ = (probe = function () { return f })) {}
+		  func(); String(probe() === func)`, "true"},
+		{"from the body", `var probe
+		  var func = function f() { probe = function () { return f } }
+		  func(); String(probe() === func)`, "true"},
+		// Assigning to it does nothing in sloppy code and throws in strict.
+		{"immutable", `var func = function f() { f = null; return f === func }
+		  String(func())`, "true"},
+		{"immutable from a default", `var set
+		  var func = function f(_ = (set = function () { f = null })) { return f }
+		  var before = func(); set(); var after = func()
+		  String(before === func && after === func)`, "true"},
+		{"strict refuses", `var func = function f() { "use strict"; try { f = null; return "no error" }
+		    catch (e) { return e.constructor.name } }
+		  func()`, "TypeError"},
+		// Anything the function binds under the name shadows it.
+		{"a var shadows it", `var probe
+		  var func = function n() { var n; probe = function () { return n } }
+		  func(); String(probe())`, "undefined"},
+		{"a let shadows it", `var probe
+		  var func = function f() { let f = 1; probe = function () { return f } }
+		  func(); String(probe())`, "1"},
+		{"a parameter shadows it", `var func = function f(f) { return f }; String(func(3))`, "3"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}
