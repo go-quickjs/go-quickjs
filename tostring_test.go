@@ -107,3 +107,48 @@ func TestStringPatternOnlyAsksObjects(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// The positions a string replacement works with are code-unit indices, not
+// byte offsets into the encoded form: `$'` and "$`" name the text around the
+// match as a script counts it.
+func TestStringReplaceCountsCodeUnits(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"following text", `"áXbXc".replaceAll("X", "[$']")`, "á[bXc]b[c]c"},
+		{"preceding text", "\"áXbXc\".replaceAll(\"X\", \"[$`]\")", "á[á]b[áXb]c"},
+		{"wide characters", "\"日X本\".replaceAll(\"X\", \"[$`]\")", "日[日]本"},
+		{"the match itself", `"áXbXc".replaceAll("X", "[$&]")`, "á[X]b[X]c"},
+		{"a function's position", `var at = []
+		  "áXbXc".replaceAll("X", function (m, i) { at.push(i); return "-" })
+		  at.join(",")`, "1,3"},
+		{"replace agrees", `"áXbXc".replace(/X/g, "[$']")`, "á[bXc]b[c]c"},
+		// A surrogate pair is two units, and splitting around it keeps both.
+		{"astral text", `"a\u{1F600}b".replaceAll("b", "[$` + "`" + `]").length`, "8"},
+		{"lone surrogate", `"a\uD800b".replaceAll("b", "[$` + "`" + `]") === "a\uD800[a\uD800]"`,
+			"true"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}
+
+// A string given to a method that wants a pattern is a pattern, not text to
+// find: only replace and split with a string argument search for a literal.
+func TestStringPatternArgumentsArePatterns(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`String("ab3c".search("\\d"))`, "2"},
+		{`String("a.c".search("."))`, "0"},
+		{`String("a1b2".match("\\d"))`, "1"},
+		{`String([..."a1b2".matchAll("\\d")].length)`, "2"},
+		// A null symbol method means there is none, so the fallback applies.
+		{`var re = {}; re[Symbol.search] = null; re.toString = function () { return "\\d" }
+		  String("ab3c".search(re))`, "2"},
+		{`var re = {}; re[Symbol.match] = null; re.toString = function () { return "\\d" }
+		  String("ab3c".match(re))`, "3"},
+		// These two take their argument literally.
+		{`"a.c".replace(".", "X")`, "aXc"},
+		{`String("a.c".split("."))`, "a,c"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

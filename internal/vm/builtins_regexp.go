@@ -410,11 +410,14 @@ func (r *Runtime) toRegExp(v Value, extraFlags string) (Value, error) {
 	}
 	source := ""
 	if !v.IsUndefined() {
+		// The string is a pattern rather than text to find: `"a1".search("\\d")`
+		// looks for a digit. The methods that search for a literal -- replace
+		// and split with a string argument -- never come through here.
 		s, err := r.toString(v)
 		if err != nil {
 			return Undefined, err
 		}
-		source = regexp.QuoteMeta(s.Go())
+		source = s.Go()
 	}
 	return r.newRegExp(source, extraFlags)
 }

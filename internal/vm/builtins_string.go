@@ -618,46 +618,46 @@ func (r *Runtime) stringReplace(thisStr thisStrFunc, this Value, args []Value, a
 	}
 	replVal := arg(args, 1)
 
-	src := s.Go()
-	pat := pattern.Go()
-	if pat == "" && !all {
+	// Everything here counts in code units rather than bytes: the position a
+	// replacement function is given, and the text `$\'` and "$`" stand for,
+	// are indices into the string as a script sees it.
+	patLen := pattern.Len()
+	if patLen == 0 && !all {
 		// An empty pattern matches at the start.
 		repl, err := r.replacementFor(replVal, pattern, 0, s)
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(repl + src)), nil
+		return Str(NewString(repl).Concat(s)), nil
 	}
 
-	var sb strings.Builder
+	out := NewString("")
 	pos := 0
 	for {
-		i := strings.Index(src[pos:], pat)
+		i := s.IndexOf(pattern, pos)
 		if i < 0 {
 			break
 		}
-		i += pos
-		sb.WriteString(src[pos:i])
+		out = out.Concat(s.Substring(pos, i))
 		repl, err := r.replacementFor(replVal, pattern, i, s)
 		if err != nil {
 			return Undefined, err
 		}
-		sb.WriteString(repl)
-		pos = i + len(pat)
+		out = out.Concat(NewString(repl))
+		pos = i + patLen
 		if !all {
 			break
 		}
-		if len(pat) == 0 {
+		if patLen == 0 {
 			// Avoid looping forever on an empty pattern.
-			if pos >= len(src) {
+			if pos >= s.Len() {
 				break
 			}
-			sb.WriteByte(src[pos])
+			out = out.Concat(s.Substring(pos, pos+1))
 			pos++
 		}
 	}
-	sb.WriteString(src[pos:])
-	return Str(NewString(sb.String())), nil
+	return Str(out.Concat(s.Substring(pos, s.Len()))), nil
 }
 
 // replacementFor produces the text a single match is replaced with, calling the
