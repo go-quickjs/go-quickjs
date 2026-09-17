@@ -399,9 +399,15 @@ func (r *Runtime) startForAwaitOf(v Value) (Value, error) {
 	if err != nil {
 		return Undefined, err
 	}
-	if !isCallable(method) {
-		// Fall back to the synchronous protocol.
+	// Only an absent Symbol.asyncIterator falls back to the synchronous
+	// protocol. One that is present but not callable is a mistake rather than
+	// an absence, and saying so here is what stops the sync iterator from
+	// being called for an object that declared itself async.
+	if method.IsNullish() {
 		return r.startForOf(v)
+	}
+	if !isCallable(method) {
+		return Undefined, r.throwTypeError("Symbol.asyncIterator is not a function")
 	}
 	iter, err := r.call(method, v, nil)
 	if err != nil {
@@ -487,6 +493,13 @@ func (r *Runtime) asyncIterNext(cursor Value) (Value, error) {
 		return Undefined, nil
 	})
 	onRejected := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
+		// A synchronous iterator that produced a rejected promise is done
+		// with: the loop will never ask it for another value, so it is closed
+		// here rather than left for the unwinding to reach. That is what makes
+		// a generator's finally run before the rejection is delivered.
+		if !isDone {
+			rt.closeIterator(st.iter)
+		}
 		rt.rejectPromise(out, arg(a, 0))
 		return Undefined, nil
 	})

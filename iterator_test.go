@@ -415,3 +415,49 @@ func TestAsyncGeneratorYieldRejection(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// A `for await` over a synchronous iterator awaits each value, and a value that
+// rejects ends the iteration -- so the iterator is closed there, before the
+// rejection is delivered, rather than when the loop finally unwinds.
+func TestForAwaitOverSyncIterator(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var log = [];
+		  function* g() { try { yield Promise.reject("r"); } finally { log.push("finally"); } }
+		  (async () => {
+		    try { for await (const x of g()); } catch (e) { log.push("caught:" + e); }
+		  })();`, "finally | caught:r"},
+
+		{`var log = [];
+		  (async () => {
+		    for await (const x of [Promise.resolve(1), 2]) log.push("x=" + x);
+		  })();`, "x=1 | x=2"},
+
+		// Symbol.asyncIterator present but not callable is a mistake rather
+		// than an absence, so the synchronous protocol is not tried.
+		{`var log = [];
+		  async function* g() {
+		    yield* {
+		      [Symbol.asyncIterator]: false,
+		      [Symbol.iterator]() { log.push("sync"); throw new Error("sync"); },
+		    };
+		  }
+		  g().next().then(() => log.push("ok"), v => log.push("rej:" + v.constructor.name));`,
+			"rej:TypeError"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		if _, err := rt.Eval(tc.src); err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+			rt.Close()
+			continue
+		}
+		v, err := rt.Eval(`log.join(" | ")`)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}
