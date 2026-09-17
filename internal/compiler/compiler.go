@@ -1141,6 +1141,7 @@ func stackEffect(op bytecode.Op, a, b uint32) int {
 		bytecode.OpDefineGlobalFunc, bytecode.OpArrayPush,
 		bytecode.OpDefineField, bytecode.OpDefineGetter,
 		bytecode.OpDefineSetter, bytecode.OpSetProtoOf,
+		bytecode.OpSetFieldInit,
 		bytecode.OpSetSuperProp,
 		bytecode.OpJumpIfFalseKeep, bytecode.OpJumpIfTrueKeep,
 		bytecode.OpJumpIfNotNullish:

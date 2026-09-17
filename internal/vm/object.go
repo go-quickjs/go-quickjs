@@ -694,9 +694,14 @@ type funcData struct {
 	// written inside a derived constructor inherits it, since its super() is
 	// the constructor's.
 	superCtor *Object
-	// fields holds a class's instance field initializers, run by the
-	// constructor before the body.
-	fields []classField
+	// fieldInit is a class's instance initializer: the function that installs
+	// the private methods and runs the field initializers on a new instance.
+	//
+	// It is a function of its own rather than a prefix of the constructor
+	// because of when it runs. A base class runs it before the body; a derived
+	// one runs it inside super(), wherever in the body that call is and however
+	// deep in an arrow it was written, and only for the call that binds `this`.
+	fieldInit *Object
 }
 
 type ctorKind uint8
@@ -716,18 +721,6 @@ const (
 // exception, preserving a *Thrown unchanged so that a thrown JavaScript value
 // survives a trip through Go code.
 type NativeFunc func(rt *Runtime, this Value, args []Value) (Value, error)
-
-// classField is one instance field initializer of a class.
-type classField struct {
-	key Atom
-	// computed keys are evaluated once when the class is defined, so the atom
-	// above is already resolved by the time the constructor runs.
-	init *closure
-	// value is used for a field with a constant initializer, avoiding a call.
-	value    Value
-	hasValue bool
-	private  bool
-}
 
 // fn returns the object's function data, or nil if it is not callable.
 func (o *Object) fn() *funcData {

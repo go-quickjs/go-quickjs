@@ -681,7 +681,8 @@ func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
 		}
 	}
 
-	ctor := c.synthesizeConstructor(cls, keyNames, installName)
+	ctor := c.synthesizeConstructor(cls)
+	instanceInit := c.instanceInitializer(cls, keyNames, installName)
 
 	// The body is a scope of its own, holding the class's inner name binding,
 	// its computed keys and its private names. Opening it per evaluation is
@@ -740,6 +741,18 @@ func (c *compiler) compileClass(cls *ast.ClassLit, inferredName string) {
 		c.emit(bytecode.OpDup, 0, 0)
 		c.emit(bytecode.OpInitLocal, selfSlot, 0)
 		c.markInitialized(cls.Name.Name)
+	}
+
+	if instanceInit != nil {
+		// The initializer's home object is the prototype, so `super.x` in a
+		// field reads from the parent's prototype, as it does in a method.
+		c.emit(bytecode.OpDup, 0, 0)
+		c.emit(bytecode.OpGetProp, c.nameIdx("prototype"), 0)
+		c.compileFunctionLiteral(instanceInit, "")
+		c.emit(bytecode.OpSetHomeObject, 1, 0)
+		c.emit(bytecode.OpSwap, 0, 0)
+		c.emit(bytecode.OpDrop, 0, 0)
+		c.emit(bytecode.OpSetFieldInit, 0, 0)
 	}
 
 	for _, m := range cls.Members {
@@ -931,11 +944,6 @@ func (c *compiler) compilePrivateMethod(m ast.Property, fn *ast.FuncLit,
 	c.emit(bytecode.OpDrop, 0, 0)
 }
 
-// synthesizeConstructor builds the function that `new` will call, prefixing the
-// instance field initializers to whatever body the class declared.
-//
-// Compiling fields as statements rather than as separate initializer functions
-// means they see the constructor's scope and `this` for free.
 // evalComputedFieldKeys evaluates each computed field key and stores it in its
 // hidden binding, leaving the operand stack as it found it.
 func (c *compiler) evalComputedFieldKeys(cls *ast.ClassLit, keyNames []string) {
@@ -951,20 +959,24 @@ func (c *compiler) evalComputedFieldKeys(cls *ast.ClassLit, keyNames []string) {
 	}
 }
 
-func (c *compiler) synthesizeConstructor(cls *ast.ClassLit, keyNames []string,
+// instanceInitializer builds the function that gives a new instance what the
+// class body gives it: its private methods, then its fields, in the order they
+// were written. It returns nil for a class that has neither.
+//
+// It is a function of its own rather than a prefix of the constructor because
+// of when it has to run. A base class runs it before the constructor body, but
+// a derived one runs it inside super(), which may be written anywhere in the
+// body -- in a branch, in a loop, inside an arrow -- and only the call that
+// binds `this` runs it, so a second super() adds no second set of fields.
+// Making it a function also keeps the constructor's `arguments` and new.target
+// out of the initializers, which are not theirs to see.
+func (c *compiler) instanceInitializer(cls *ast.ClassLit, keyNames []string,
 	installName string) *ast.FuncLit {
-	var declared *ast.FuncLit
-	for _, m := range cls.Members {
-		if fn, ok := m.Value.(*ast.FuncLit); ok && fn.Kind == ast.FuncConstructor {
-			declared = fn
-		}
-	}
-
-	var fieldInit []ast.Stmt
+	var body []ast.Stmt
 	if installName != "" {
 		// A private method belongs to the instance, and is put there where the
 		// specification puts it: once `this` exists, before any field runs.
-		fieldInit = append(fieldInit, &ast.InstallPrivateMethods{
+		body = append(body, &ast.InstallPrivateMethods{
 			Binding: installName, Start: cls.Start,
 		})
 	}
@@ -983,21 +995,38 @@ func (c *compiler) synthesizeConstructor(cls *ast.ClassLit, keyNames []string,
 			// A field with no initializer is still created, holding undefined.
 			value = &ast.Ident{Name: "undefined", Start: f.Start}
 		}
-		fieldInit = append(fieldInit, &ast.FieldInit{
+		body = append(body, &ast.FieldInit{
 			Key:      key,
 			Value:    value,
 			Computed: computed,
 			Start:    f.Start,
 		})
 	}
+	if len(body) == 0 {
+		return nil
+	}
+	return &ast.FuncLit{
+		Kind: ast.FuncMethod, Body: body, Start: cls.Start, End: cls.Start,
+	}
+}
+
+// synthesizeConstructor builds the function that `new` will call: the one the
+// class declared, or the one a class without a constructor is given.
+func (c *compiler) synthesizeConstructor(cls *ast.ClassLit) *ast.FuncLit {
+	var declared *ast.FuncLit
+	for _, m := range cls.Members {
+		if fn, ok := m.Value.(*ast.FuncLit); ok && fn.Kind == ast.FuncConstructor {
+			declared = fn
+		}
+	}
 
 	if declared == nil {
 		// A class with no explicit constructor still has one. A derived class
 		// forwards its arguments to the parent, which is what the implicit
 		// `constructor(...args) { super(...args); }` does.
-		body := fieldInit
+		var body []ast.Stmt
 		if cls.Extends != nil {
-			body = append([]ast.Stmt{implicitSuperCall(cls.Start)}, body...)
+			body = []ast.Stmt{implicitSuperCall(cls.Start)}
 		}
 		// The synthesized constructor stands in for the class as a whole, so
 		// its source span is the class's: `C.toString()` is the class text.
@@ -1011,18 +1040,6 @@ func (c *compiler) synthesizeConstructor(cls *ast.ClassLit, keyNames []string,
 	lit.Name = nil
 	lit.Kind = constructorKind(cls)
 	lit.Start, lit.End = cls.Start, cls.End
-	if len(fieldInit) > 0 {
-		// Fields are initialized before the constructor body runs. In a derived
-		// class they must follow super(), which the body itself calls, so they
-		// are placed after the first statement when that statement is a super
-		// call.
-		if cls.Extends != nil && startsWithSuperCall(lit.Body) {
-			merged := append([]ast.Stmt{lit.Body[0]}, fieldInit...)
-			lit.Body = append(merged, lit.Body[1:]...)
-		} else {
-			lit.Body = append(append([]ast.Stmt{}, fieldInit...), lit.Body...)
-		}
-	}
 	return &lit
 }
 
@@ -1049,23 +1066,6 @@ func implicitSuperCall(pos int) ast.Stmt {
 		},
 		Start: pos,
 	}
-}
-
-// startsWithSuperCall reports whether a constructor body begins with super().
-func startsWithSuperCall(body []ast.Stmt) bool {
-	if len(body) == 0 {
-		return false
-	}
-	es, ok := body[0].(*ast.ExprStmt)
-	if !ok {
-		return false
-	}
-	call, ok := es.X.(*ast.Call)
-	if !ok {
-		return false
-	}
-	_, isSuper := call.Callee.(*ast.Super)
-	return isSuper
 }
 
 // topLevelLexicalNames lists the let, const and class bindings a statement list

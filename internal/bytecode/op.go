@@ -397,6 +397,10 @@ const (
 	OpWithResolve
 	OpSetName // give an anonymous function the name in Names[A]
 	OpSetHomeObject
+	// OpSetFieldInit hands a class its instance initializer: the function that
+	// installs the private methods and runs the field initializers. It pops the
+	// function and leaves the class, which the definition goes on decorating.
+	OpSetFieldInit
 	OpCheckThisInit // a derived constructor must call super() before `this`
 	OpInitThis
 	// OpThrowDeleteSuper reports `delete super.x`, which parses and then fails:
@@ -544,6 +548,7 @@ var opNames = [opCount]string{
 	OpWithGetUnder: "with_get_under", OpWithPutUnder: "with_put_under",
 	OpWithResolve: "with_resolve",
 	OpSetName:     "set_name", OpSetHomeObject: "set_home_object",
+	OpSetFieldInit:     "set_field_init",
 	OpCheckThisInit:    "check_this_init",
 	OpInitThis:         "init_this",
 	OpThrowDeleteSuper: "throw_delete_super",

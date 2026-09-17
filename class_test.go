@@ -967,8 +967,8 @@ func TestPrivateAddedOnlyOnce(t *testing.T) {
 }
 
 // TestClassFieldInitIsItsOwnFunction covers what a field initializer can see.
-// It is a function of its own even though it is compiled into the constructor,
-// so `arguments` has no meaning there and new.target is undefined.
+// It runs in a function of its own rather than in the constructor, so
+// `arguments` has no meaning there and new.target is undefined.
 func TestClassFieldInitIsItsOwnFunction(t *testing.T) {
 	cases := []struct{ src, want string }{
 		{`class C { x = new.target } String(new C().x)`, "undefined"},
@@ -1002,6 +1002,101 @@ func TestClassFieldInitIsItsOwnFunction(t *testing.T) {
 		  catch (err) { err.constructor.name }`, "SyntaxError"},
 		{`try { eval("class C { static x = arguments }"); "no throw" }
 		  catch (err) { err.constructor.name }`, "SyntaxError"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// TestInstanceElementsRunWhenThisAppears covers when an instance is given its
+// private methods and fields. A base class does it before the constructor body;
+// a derived one does it inside super(), wherever that call is written and only
+// for the call that binds `this`.
+func TestInstanceElementsRunWhenThisAppears(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// A base class has its fields before the body runs.
+		{`class C { f = 1; constructor() { this.g = this.f + 1 } } String(new C().g)`, "2"},
+		// A derived class has them only after super(), which need not be the
+		// first statement.
+		{`var order = []
+		  class B { constructor() { order.push("base") } }
+		  class C extends B {
+		    f = order.push("field")
+		    constructor() { order.push("pre"); super(); order.push("post") }
+		  }
+		  new C(); order.join(",")`, "pre,base,field,post"},
+		// Nor need it be written in the constructor itself: an arrow shares the
+		// binding super() initializes.
+		{`class B {}
+		  class C extends B { f = 7; constructor() { (() => super())() } }
+		  String(new C().f)`, "7"},
+		{`class B {}
+		  class C extends B { f = 7; constructor() { eval("super()") } }
+		  String(new C().f)`, "7"},
+		// A constructor may reach super() by any route it likes.
+		{`class B {}
+		  class C extends B {
+		    f = 1
+		    constructor(x) { if (x) { super() } else { super() } }
+		  }
+		  String(new C(true).f) + "," + String(new C(false).f)`, "1,1"},
+
+		// The second super() runs the parent and then finds `this` bound, so
+		// the fields are not initialized twice and the instance does not move.
+		{`var base = 0, field = 0
+		  globalThis.err = ""
+		  class B { constructor() { ++base } }
+		  class C extends B {
+		    f = ++field
+		    constructor() {
+		      super()
+		      var first = this
+		      try { super() } catch (e) { err = e.constructor.name }
+		      if (this !== first) err += ",moved"
+		    }
+		  }
+		  var c = new C();
+		  [err, base, field, c.f].join(",")`, "ReferenceError,2,1,1"},
+		// The parent's arguments are evaluated before that refusal, since the
+		// refusal comes from the construction and not from before it.
+		{`var f = 0
+		  class B {}
+		  class C extends B {
+		    constructor() { super(); try { super((f++, 1)) } catch (e) {} }
+		  }
+		  new C(); String(f)`, "1"},
+		// A super() nested inside another's arguments is a super() like any
+		// other, so once `this` is bound it refuses where it stands and what
+		// follows it in the argument list is never evaluated.
+		{`var f = 0
+		  class B {}
+		  class C extends B {
+		    constructor() { super(); try { super(super(), (f++, 1)) } catch (e) {} }
+		  }
+		  new C(); String(f)`, "0"},
+
+		// A derived constructor that returns an object of its own never binds
+		// `this`, so the fields are never initialized.
+		{`class B {}
+		  class C extends B { f = 1; constructor() { super(); return {} } }
+		  String(new C().f)`, "undefined"},
+
+		// Private methods are there before the first field runs, and the field
+		// of a base class is there before a derived constructor continues.
+		{`class C { #m() { return 5 } f = this.#m() } String(new C().f)`, "5"},
+		{`class B { bf = 1 }
+		  class C extends B { cf = this.bf + 1 }
+		  String(new C().cf)`, "2"},
+		// The initializer's home object is the prototype, so super.x in a field
+		// reads from the parent's.
+		{`class B { get x() { return 3 } }
+		  class C extends B { f = super.x }
+		  String(new C().f)`, "3"},
+		// A parent that builds its own object hands it over, and the fields go
+		// on what the derived class ends up with.
+		{`class C extends Array { f = 1 }
+		  var c = new C(); [c.f, Array.isArray(c), c instanceof C].join(",")`,
+			"1,true,true"},
 	}
 	for _, tc := range cases {
 		checkEval(t, tc.src, tc.want)

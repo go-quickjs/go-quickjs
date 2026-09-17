@@ -2214,6 +2214,13 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 					fnVal.Object().fn().homeObject = home.Object()
 				}
 			}
+		case bytecode.OpSetFieldInit:
+			init := pop()
+			if ctor := peek(0); ctor.IsObject() && init.IsObject() {
+				if fd := ctor.Object().fn(); fd != nil {
+					fd.fieldInit = init.Object()
+				}
+			}
 		case bytecode.OpDefineMethod:
 			// A class method is not enumerable, unlike an object literal's.
 			val := pop()
@@ -2872,6 +2879,14 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 	}
 	this := Obj(newObject(proto, ClassObject))
 
+	// A base class gives the instance its private methods and fields before the
+	// constructor body runs, so the body finds them already there. A derived one
+	// has no instance yet: its super() does this once the parent hands one back.
+	if fd.ctorKind != ctorDerived {
+		if err := r.initInstanceElements(o, this); err != nil {
+			return Undefined, err
+		}
+	}
 	res, err := r.callObject(o, this, args, newTarget)
 	if err != nil {
 		return Undefined, err
@@ -3305,10 +3320,7 @@ func (r *Runtime) superCall(f *frame, args []Value) error {
 		// be constructed, which is only visible now.
 		return r.throwTypeError("the superclass is not a constructor")
 	}
-	// `this` is bound once. Calling super() twice would build a second object
-	// and abandon the first, including whatever the field initializers put in
-	// it, so the second call is refused rather than allowed to lose it.
-	if f.thisRef == nil || f.thisRef.init {
+	if f.thisRef == nil {
 		return r.throwError(errReference, "super() has already been called")
 	}
 	// new.target is forwarded rather than replaced: inside a base constructor
@@ -3320,9 +3332,24 @@ func (r *Runtime) superCall(f *frame, args []Value) error {
 	if newTarget.IsUndefined() {
 		newTarget = Obj(parent)
 	}
+	// A base parent is entered directly rather than through construct, which
+	// would build a second object for the one already made here, so its own
+	// instance initializer is run on the way in. A derived parent runs its own
+	// in its own super().
+	if pfd := parent.fn(); pfd != nil && pfd.ctorKind != ctorDerived {
+		if err := r.initInstanceElements(parent, f.this); err != nil {
+			return err
+		}
+	}
 	res, err := r.callObject(parent, f.this, args, newTarget)
 	if err != nil {
 		return err
+	}
+	// `this` is bound once, and the second super() finds it already bound. The
+	// parent still ran: the check comes after the construction, not before it,
+	// so a second call has the parent's side effects and none of its own.
+	if f.thisRef.init {
+		return r.throwError(errReference, "super() has already been called")
 	}
 	// A base constructor that builds its own object -- every native one does,
 	// because an Error needs a stack and an Array needs array storage -- hands
@@ -3340,7 +3367,33 @@ func (r *Runtime) superCall(f *frame, args []Value) error {
 	}
 	f.thisRef.value = f.this
 	f.thisRef.init = true
-	return nil
+	// The fields belong to the class whose constructor is running, which is not
+	// necessarily what is running: super() may be written inside an arrow, and
+	// the arrow inherits the link to the class rather than being it. They are
+	// put on the instance now: after the parent has finished with it, before
+	// this constructor's body sees it.
+	ctor := f.callee
+	if fd := f.callee.fn(); fd != nil && fd.superCtor != nil {
+		ctor = fd.superCtor
+	}
+	return r.initInstanceElements(ctor, f.this)
+}
+
+// initInstanceElements gives a new instance the private methods and fields of
+// the class that is constructing it.
+//
+// A class without either has no initializer, which is the common case and costs
+// nothing.
+func (r *Runtime) initInstanceElements(ctor *Object, this Value) error {
+	if ctor == nil {
+		return nil
+	}
+	fd := ctor.fn()
+	if fd == nil || fd.fieldInit == nil {
+		return nil
+	}
+	_, err := r.callObject(fd.fieldInit, this, nil, Undefined)
+	return err
 }
 
 // parentConstructorOf finds the constructor a frame's super() refers to.
