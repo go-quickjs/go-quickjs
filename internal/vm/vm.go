@@ -2104,14 +2104,17 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 		case bytecode.OpPrivateIn:
 			obj := pop()
+			if !obj.IsObject() {
+				// Only an object can have one, and asking anything else is a
+				// mistake rather than a false.
+				vmErr = r.throwTypeError(
+					"the right operand of \"in\" must be an object, not %s", r.describe(obj))
+				goto onError
+			}
 			// An own property and nothing else: a private member belongs to the
 			// object that has it, and an object that merely inherits from an
 			// instance's prototype is not an instance.
-			found := false
-			if obj.IsObject() {
-				found = obj.Object().getOwn(privateKey(f, cl, in.B)) != nil
-			}
-			push(Bool(found))
+			push(Bool(obj.Object().getOwn(privateKey(f, cl, in.B)) != nil))
 		case bytecode.OpNewPrivateMethods:
 			push(r.newPrivateMethods())
 		case bytecode.OpAddPrivateMethod, bytecode.OpAddPrivateGetter,

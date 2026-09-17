@@ -210,10 +210,17 @@ func (p *parser) parseFunctionBody(fn *ast.FuncLit) []ast.Stmt {
 	// The directive is what a non-simple parameter list forbids, whatever the
 	// surrounding code's mode: a class method is strict already and still may
 	// not carry one.
-	if p.sawUseStrict {
+	if p.sawUseStrict || (!wasStrict && p.strict) {
 		p.checkStrictParams(fn.Params)
-	} else if !wasStrict && p.strict {
-		p.checkStrictParams(fn.Params)
+		if fn.Name != nil {
+			// The name is constrained too: `function eval() { "use strict" }`
+			// is a strict-mode binding of a name strict mode reserves.
+			switch fn.Name.Name {
+			case "eval", "arguments", "yield", "let", "static", "implements",
+				"interface", "package", "private", "protected", "public":
+				p.errorf("%q cannot be a function name in strict mode", fn.Name.Name)
+			}
+		}
 	}
 	body = append(body, p.parseStatements(func() bool { return p.isPunct("}") })...)
 	// The closing brace has not been consumed yet, so its position plus one is
@@ -372,7 +379,7 @@ func (p *parser) parseParenOrArrow() ast.Expr {
 	p.noIn = saved
 	p.expectPunct(")")
 
-	if p.isPunct("=>") && !p.tok.NewlineBefore {
+	if p.isPunct("=>") && !p.tok.NewlineBefore && !p.noArrow {
 		return p.parseArrowBody(p.paramsFromCover(items), start, false)
 	}
 
@@ -454,7 +461,7 @@ func (p *parser) tryParseAsyncFunction() ast.Expr {
 		// `async x => ...`
 		nameTok := p.tok
 		p.next()
-		if !p.isPunct("=>") || p.tok.NewlineBefore {
+		if !p.isPunct("=>") || p.tok.NewlineBefore || p.noArrow {
 			p.reset(m)
 			return nil
 		}
@@ -510,7 +517,7 @@ func (p *parser) tryParseAsyncParenArrow(start int) ast.Expr {
 		return true
 	}()
 
-	if !ok || !p.isPunct("=>") || p.tok.NewlineBefore {
+	if !ok || !p.isPunct("=>") || p.tok.NewlineBefore || p.noArrow {
 		p.reset(m)
 		return nil
 	}

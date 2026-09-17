@@ -93,6 +93,15 @@ type parser struct {
 	// are evaluated as part of the call, before the body can suspend.
 	inParams bool
 
+	// noArrow marks a position where an arrow function may not begin. An arrow
+	// is an AssignmentExpression, so it cannot be an operand: `1 + () => {}`
+	// and `typeof () => {}` are syntax errors, however they look.
+	noArrow bool
+	// noPrivateName marks the right-hand side of `#x in y`, which is a shift
+	// expression: a private name may not begin one, so `#a in #b in c` is an
+	// error while `#a in (#b in c)` is not.
+	noPrivateName bool
+
 	// noIn suppresses `in` as a relational operator while parsing the head of a
 	// for statement, where `for (x in y)` must not be read as a comparison. It
 	// is parser state rather than a parameter because it has to survive the
@@ -467,18 +476,21 @@ func (p *parser) parseDirectivePrologue(atEnd func() bool) []ast.Stmt {
 		}
 		// A string literal is only a directive if the whole statement is just
 		// that literal: `"use strict" + x` is an ordinary expression.
+		//
+		// Which it is, is decided by parsing rather than by looking at the next
+		// token: `"a"` and `in` on separate lines are one expression, because
+		// a semicolon is inserted only where the text cannot continue.
 		tok := p.tok
 		raw := tok.Raw
 		p.next()
-		if !p.canInsertSemicolon() && !p.isPunct(";") {
-			// The string began an expression; parse the rest of it normally.
-			expr := p.parseExprFrom(p.nodes.str(tok.Value, tok.Pos))
-			p.semicolon()
-			out = append(out, p.exprStatement(expr, tok.Pos))
+		lit := p.nodes.str(tok.Value, tok.Pos)
+		expr := p.parseExprFrom(lit)
+		p.semicolon()
+		out = append(out, p.exprStatement(expr, tok.Pos))
+		if ast.Expr(lit) != expr {
+			// Something was done to the literal, so the prologue is over.
 			break
 		}
-		p.semicolon()
-		out = append(out, p.exprStatement(p.nodes.str(tok.Value, tok.Pos), tok.Pos))
 		// Compare the raw text so that "use strict" is not a directive.
 		if raw == `"use strict"` || raw == `'use strict'` {
 			p.strict = true

@@ -670,3 +670,98 @@ func TestIteratorNextIsCheckedWhenCalled(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
 	}
 }
+
+// A directive prologue ends at the first statement that is more than a string
+// literal, and which that is comes from parsing rather than from looking at the
+// next token: a semicolon is inserted only where the text cannot continue.
+func TestDirectivePrologueEndsWhereTheExpressionDoes(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		// `in` continues the expression across the line break, so the string is
+		// not a directive and the whole thing is one comparison.
+		{"in on the next line", "'MAX_VALUE'\nin\nNumber", "true"},
+		{"carriage return", "'MAX_VALUE'\rin\rNumber", "true"},
+		{"plus on the next line", "'use strict'\n+ 1", "use strict1"},
+		// A directive followed by a statement is still a directive.
+		{"directive applies", `function f() { 'use strict'; return (function () { return this })() }
+		  String(f())`, "undefined"},
+		{"expression is not a directive", `function g() { 'use strict'
+		  + 1; return (function () { return this })() }
+		  typeof g()`, "object"},
+		{"several directives", `function h() { 'a'
+		  'b'
+		  'use strict'; return (function () { return this })() }
+		  String(h())`, "undefined"},
+		{"member access continues", "'a'\n.length", "1"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}
+
+// A function whose body turns on strict mode is bound by strict mode's rules
+// about its own name, not only its parameters.
+func TestStrictBodyConstrainsTheFunctionName(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`function eval() { "use strict" }`, "SyntaxError"},
+		{`function arguments() { "use strict" }`, "SyntaxError"},
+		{`(function eval() { "use strict" })`, "SyntaxError"},
+		{`(function package() { "use strict" })`, "SyntaxError"},
+		{`function eval() {}`, "ok"},
+		{`function f(eval) { "use strict" }`, "SyntaxError"},
+	}
+	for _, tc := range cases {
+		checkEval(t, `try { eval(`+jsQuote(tc.src)+`); "ok" } catch (e) { e.constructor.name }`,
+			tc.want)
+	}
+}
+
+// An arrow function is an AssignmentExpression, so it cannot stand where only
+// an operand may: the parentheses of `(a, b)` are a cover grammar, and what
+// they cover depends on where they are.
+func TestArrowIsNotAnOperand(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`1 + () => {}`, "SyntaxError"},
+		{`typeof () => {}`, "SyntaxError"},
+		{`1 + x => x`, "SyntaxError"},
+		{`1 + async () => {}`, "SyntaxError"},
+		{`1 + async x => x`, "SyntaxError"},
+		// Where an assignment expression may stand, it may.
+		{`var f = () => 1; f()`, "ok"},
+		{`[() => 1][0]()`, "ok"},
+		{`(() => 1)()`, "ok"},
+		{`f(() => 1)`, "ok"},
+		{`1 + (() => 1)()`, "ok"},
+		{`1 + function () {}`, "ok"},
+	}
+	for _, tc := range cases {
+		checkEval(t, `var f = function () { return 1 }
+		  try { eval(`+jsQuote(tc.src)+`); "ok" } catch (e) { e.constructor.name }`, tc.want)
+	}
+}
+
+// `#x in y` is a relational expression whose right operand is a shift
+// expression, which is narrower than it looks: the private name may only stand
+// where a relational expression may, and what follows `in` may not be one.
+func TestPrivateInGrammar(t *testing.T) {
+	const cls = `class C { #f; static t(o) { return `
+	cases := []struct{ src, want string }{
+		{cls + `#f in o } }; String(C.t(new C()))`, "true"},
+		{cls + `#f in o } }; String(C.t({}))`, "false"},
+		{cls + `#f in o === true } }; String(C.t(new C()))`, "true"},
+		{cls + `#f in o ? 1 : 2 } }; String(C.t(new C()))`, "1"},
+		{cls + `(#f in o) } }; String(C.t(new C()))`, "true"},
+		// The right operand binds tighter than the `in` does.
+		{`class C { #f; static t() { try { return #f in {} << 0 }
+		    catch (e) { return e.constructor.name } } }; C.t()`, "TypeError"},
+		// Neither operand may be anything else.
+		{`class C { #f; static t(o) { return #f in #f in o } }`, "SyntaxError"},
+		{`class C { #f; static t(o) { return 1 + #f in o } }`, "SyntaxError"},
+		{`class C { #f; static t(o) { return typeof #f in o } }`, "SyntaxError"},
+		{`class C { #f; static t(o) { return 1 < #f in o } }`, "SyntaxError"},
+		{`class C { #f; static t(o) { return #f in () => {} } }`, "SyntaxError"},
+	}
+	for _, tc := range cases {
+		checkEval(t, `try { String(eval(`+jsQuote(tc.src)+`)) } catch (e) { e.constructor.name }`,
+			tc.want)
+	}
+}

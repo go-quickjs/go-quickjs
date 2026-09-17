@@ -79,6 +79,14 @@ func (p *parser) parseAssign() ast.Expr {
 	p.enter()
 	defer p.leave()
 
+	// This is where an arrow function may begin, whatever position the
+	// assignment expression itself is in.
+	if p.noArrow || p.noPrivateName {
+		savedArrow, savedPrivate := p.noArrow, p.noPrivateName
+		p.noArrow, p.noPrivateName = false, false
+		defer func() { p.noArrow, p.noPrivateName = savedArrow, savedPrivate }()
+	}
+
 	// `yield` is an operator rather than an identifier inside a generator.
 	if p.allowYield && p.isContextual("yield") {
 		if p.inParams {
@@ -219,9 +227,9 @@ func (p *parser) parseBinaryFrom(left ast.Expr, minPrec int) ast.Expr {
 		var right ast.Expr
 		if op == "**" {
 			// Right-associative: recurse at one below its own precedence.
-			right = p.parseBinaryFrom(p.parseUnary(), prec-1)
+			right = p.parseBinaryFrom(p.parseOperandAt(prec), prec-1)
 		} else {
-			right = p.parseBinaryFrom(p.parseUnary(), prec)
+			right = p.parseBinaryFrom(p.parseOperandAt(prec), prec)
 		}
 
 		switch op {
@@ -284,7 +292,7 @@ func (p *parser) parseUnary() ast.Expr {
 	case p.isPunct("!"), p.isPunct("~"), p.isPunct("+"), p.isPunct("-"):
 		op := p.tok.Value
 		p.next()
-		operand := p.parseUnary()
+		operand := p.parseOperand()
 		// `-2 ** 2` is a syntax error: the grammar refuses to guess whether the
 		// negation or the exponentiation binds tighter.
 		if p.isPunct("**") {
@@ -295,7 +303,7 @@ func (p *parser) parseUnary() ast.Expr {
 	case p.isKeyword("typeof"), p.isKeyword("void"), p.isKeyword("delete"):
 		op := p.tok.Value
 		p.next()
-		operand := p.parseUnary()
+		operand := p.parseOperand()
 		if p.isPunct("**") {
 			p.errorf("unary %q before \"**\" requires parentheses", op)
 		}
@@ -311,7 +319,7 @@ func (p *parser) parseUnary() ast.Expr {
 		op := p.tok.Value
 		opTok := p.tok
 		p.next()
-		operand := p.parseUnary()
+		operand := p.parseOperand()
 		p.checkSimpleAssignTarget(operand, opTok)
 		return p.nodes.updateOp(op, operand, true, start)
 
@@ -320,10 +328,30 @@ func (p *parser) parseUnary() ast.Expr {
 			p.errorf("\"await\" is not allowed in a parameter list")
 		}
 		p.next()
-		return &ast.Await{Arg: p.parseUnary(), Start: start}
+		return &ast.Await{Arg: p.parseOperand(), Start: start}
 	}
 
 	return p.parsePostfix()
+}
+
+// parseOperand parses a UnaryExpression in a position where neither an arrow
+// function nor a private name may begin: an arrow is an AssignmentExpression
+// and `#x in y` is a RelationalExpression, so neither can be the operand of a
+// unary operator -- `typeof () => {}` and `typeof #x in y` are both errors.
+func (p *parser) parseOperand() ast.Expr {
+	return p.parseOperandAt(binaryPrec["in"])
+}
+
+// parseOperandAt parses the right operand of a binary operator of the given
+// precedence. A private name may begin one only where a relational expression
+// may stand, which is where the operator binds more loosely than `in` does.
+func (p *parser) parseOperandAt(prec int) ast.Expr {
+	savedArrow, savedPrivate := p.noArrow, p.noPrivateName
+	p.noArrow = true
+	p.noPrivateName = p.noPrivateName || prec >= binaryPrec["in"]
+	e := p.parseUnary()
+	p.noArrow, p.noPrivateName = savedArrow, savedPrivate
+	return e
 }
 
 // parsePostfix parses a LeftHandSideExpression with an optional postfix
@@ -542,13 +570,23 @@ func (p *parser) parsePrimary() ast.Expr {
 		return p.parseTemplate()
 
 	case lexer.PrivateIdent:
-		// A private name is only a primary as the left operand of `in`.
+		// A private name is only a primary as the left operand of `in`, and
+		// what stands to the right of that `in` is a shift expression: both
+		// operands are settled here rather than by the ordinary precedence
+		// climb, so `#f in {} << 0` asks about `{} << 0` and an arrow function
+		// there is not an operand at all.
+		if p.noPrivateName {
+			p.errorf("a private name cannot be the right operand of \"in\"")
+		}
 		name := &ast.PrivateName{Name: p.tok.Value, Start: start}
 		p.next()
-		if !p.isKeyword("in") {
+		if !p.isKeyword("in") || p.noIn {
 			p.errorAt(p.tok, "a private name is only valid as the left operand of \"in\"")
 		}
-		return name
+		p.next()
+		relPrec := binaryPrec["in"]
+		right := p.parseBinaryFrom(p.parseOperandAt(relPrec), relPrec)
+		return p.nodes.binaryOp("in", name, right)
 
 	case lexer.Ident:
 		// `async function` and `async x =>` start an async function; a bare
