@@ -270,6 +270,27 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 	if receiver.IsObject() {
 		rcv = receiver.Object()
 	}
+
+	// Overwriting a property an ordinary object already has, on itself, is
+	// what most assignments are, and the walk below establishes for each step
+	// what this settles once: no proxy, no exotic own property, no receiver in
+	// between, and a plain writable data property to write to.
+	if rcv == obj && obj.class == ClassObject && obj.index == nil {
+		for i := range obj.props {
+			p := &obj.props[i]
+			if p.key != key ||
+				p.flags&(propDeleted|propPrivate|propAccessor) != 0 {
+				continue
+			}
+			if p.flags&propWritable == 0 {
+				// Read-only, which is refused rather than written: the walk
+				// says so with the message it has for it.
+				break
+			}
+			p.value = val
+			return true, nil
+		}
+	}
 	// Walk the chain looking for an accessor or a non-writable data property,
 	// either of which changes what a plain assignment does. A proxy anywhere
 	// along it decides the rest for itself.
