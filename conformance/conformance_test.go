@@ -61,6 +61,7 @@ var unsupportedFeatures = map[string]string{
 	"Intl.Locale":                   "no internationalization API",
 	"Temporal":                      "no Temporal",
 	"Atomics":                       "no shared memory",
+	"Atomics.pause":                 "no shared memory",
 	"SharedArrayBuffer":             "no shared memory",
 	"resizable-arraybuffer":         "no resizable buffers",
 	"decorators":                    "decorators are not implemented",

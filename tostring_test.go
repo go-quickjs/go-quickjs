@@ -152,3 +152,29 @@ func TestStringPatternArgumentsArePatterns(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// A replacement that is not a function is converted once, before the search:
+// a toString that counts its calls sees exactly one, however many matches there
+// turn out to be -- including none at all.
+func TestStringReplaceConvertsTheReplacementOnce(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"no match", `var n = 0
+		  var r = {toString: function () { n++; return "b" }}
+		  "".replace("a", r) + "," + n`, ",1"},
+		{"two matches", `var n = 0
+		  var r = {toString: function () { n++; return "b" }}
+		  "aa".replaceAll("a", r) + "," + n`, "bb,1"},
+		{"toPrimitive once", `var n = 0
+		  var r = {}
+		  r[Symbol.toPrimitive] = function () { n++; return "b" }
+		  "aa".replaceAll("a", r) + "," + n`, "bb,1"},
+		{"undefined", `"aa".replaceAll("a", undefined)`, "undefinedundefined"},
+		{"null", `"aa".replaceAll("a", null)`, "nullnull"},
+		// A function is still called once per match.
+		{"a function per match", `var n = 0
+		  "aa".replaceAll("a", function () { n++; return "b" }) + "," + n`, "bb,2"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}

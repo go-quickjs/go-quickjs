@@ -617,6 +617,18 @@ func (r *Runtime) stringReplace(thisStr thisStrFunc, this Value, args []Value, a
 		return Undefined, err
 	}
 	replVal := arg(args, 1)
+	// A replacement that is not a function is converted once, before the
+	// search: a toString that counts its calls sees exactly one, however many
+	// matches there turn out to be -- including none at all.
+	replText := ""
+	if !isCallable(replVal) {
+		rs, err := r.toString(replVal)
+		if err != nil {
+			return Undefined, err
+		}
+		replText = rs.Go()
+		replVal = Undefined
+	}
 
 	// Everything here counts in code units rather than bytes: the position a
 	// replacement function is given, and the text `$\'` and "$`" stand for,
@@ -624,7 +636,7 @@ func (r *Runtime) stringReplace(thisStr thisStrFunc, this Value, args []Value, a
 	patLen := pattern.Len()
 	if patLen == 0 && !all {
 		// An empty pattern matches at the start.
-		repl, err := r.replacementFor(replVal, pattern, 0, s)
+		repl, err := r.replacementFor(replVal, replText, pattern, 0, s)
 		if err != nil {
 			return Undefined, err
 		}
@@ -639,7 +651,7 @@ func (r *Runtime) stringReplace(thisStr thisStrFunc, this Value, args []Value, a
 			break
 		}
 		out = out.Concat(s.Substring(pos, i))
-		repl, err := r.replacementFor(replVal, pattern, i, s)
+		repl, err := r.replacementFor(replVal, replText, pattern, i, s)
 		if err != nil {
 			return Undefined, err
 		}
@@ -662,7 +674,8 @@ func (r *Runtime) stringReplace(thisStr thisStrFunc, this Value, args []Value, a
 
 // replacementFor produces the text a single match is replaced with, calling the
 // replacement function when one was supplied.
-func (r *Runtime) replacementFor(replVal Value, matched *String, offset int, whole *String) (string, error) {
+func (r *Runtime) replacementFor(replVal Value, replText string, matched *String,
+	offset int, whole *String) (string, error) {
 	if isCallable(replVal) {
 		res, err := r.call(replVal, Undefined, []Value{
 			Str(matched), Int(offset), Str(whole),
@@ -676,14 +689,10 @@ func (r *Runtime) replacementFor(replVal Value, matched *String, offset int, who
 		}
 		return s.Go(), nil
 	}
-	repl, err := r.toString(replVal)
-	if err != nil {
-		return "", err
-	}
 	// The replacement may name the match and the text around it, the same way
 	// it may for a regular expression -- there are simply no capture groups.
 	return r.getSubstitution(matched, wtf8.ToUTF16(whole.Go()), offset,
-		nil, Undefined, repl.Go())
+		nil, Undefined, replText)
 }
 
 // newStringIterator iterates a string by code point.
