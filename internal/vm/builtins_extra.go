@@ -482,14 +482,7 @@ func (r *Runtime) initObjectExtras() {
 		if !v.IsObject() {
 			return v, nil
 		}
-		o := v.Object()
-		o.flags &^= objExtensible
-		// Sealing makes properties non-configurable but leaves them writable,
-		// which is the difference from freezing.
-		for i := range o.props {
-			o.props[i].flags &^= propConfigurable
-		}
-		return v, nil
+		return v, rt.setIntegrity(v.Object(), false)
 	})
 
 	r.defMethod(ctor, "isSealed", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -497,19 +490,8 @@ func (r *Runtime) initObjectExtras() {
 		if !v.IsObject() {
 			return True, nil
 		}
-		o := v.Object()
-		if o.IsExtensible() {
-			return False, nil
-		}
-		for i := range o.props {
-			if o.props[i].flags&propDeleted != 0 {
-				continue
-			}
-			if o.props[i].flags&propConfigurable != 0 {
-				return False, nil
-			}
-		}
-		return Bool(len(o.elems) == 0), nil
+		ok, err := rt.testIntegrity(v.Object(), false)
+		return Bool(ok), err
 	})
 
 	r.defMethod(ctor, "groupBy", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -564,8 +546,9 @@ func (r *Runtime) initObjectExtras() {
 		if !isCallable(fn) {
 			return Undefined, rt.throwTypeError("__defineGetter__ requires a function")
 		}
-		rt.defineAccessor(o, key, fn.Object(), nil, propEnumerable|propConfigurable)
-		return Undefined, nil
+		// Through the object's own define, so that a proxy sees it and a
+		// refusal is reported rather than ignored.
+		return Undefined, rt.defineAccessorOrThrow(o, key, fn, Undefined)
 	})
 	r.defMethod(p, "__defineSetter__", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		o, err := rt.toObject(this)
@@ -580,8 +563,7 @@ func (r *Runtime) initObjectExtras() {
 		if !isCallable(fn) {
 			return Undefined, rt.throwTypeError("__defineSetter__ requires a function")
 		}
-		rt.defineAccessor(o, key, nil, fn.Object(), propEnumerable|propConfigurable)
-		return Undefined, nil
+		return Undefined, rt.defineAccessorOrThrow(o, key, Undefined, fn)
 	})
 	r.defMethod(p, "__lookupGetter__", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		return rt.lookupAccessor(this, arg(args, 0), true)
@@ -634,6 +616,32 @@ func (r *Runtime) initObjectExtras() {
 	r.defineAccessor(p, atomProto, getProto, setProto, propConfigurable)
 }
 
+// defineAccessorOrThrow defines one half of an accessor through the object's own
+// machinery, which for a proxy is its trap.
+func (r *Runtime) defineAccessorOrThrow(o *Object, key Atom, getter, setter Value) error {
+	d := &propDesc{
+		enumerable: true, hasEnumerable: true,
+		configurable: true, hasConfigurable: true,
+	}
+	if isCallable(getter) {
+		d.getter, d.hasGet = getter.Object(), true
+	}
+	if isCallable(setter) {
+		d.setter, d.hasSet = setter.Object(), true
+	}
+	ok, err := r.defineProperty(o, key, d)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return r.throwTypeError("cannot redefine property %q", r.atoms.name(key))
+	}
+	return nil
+}
+
+// lookupAccessor walks the prototype chain for one half of an accessor, asking
+// each object what it has rather than reading its table -- so a proxy along the
+// way answers through its traps.
 func (r *Runtime) lookupAccessor(this, key Value, wantGetter bool) (Value, error) {
 	o, err := r.toObject(this)
 	if err != nil {
@@ -643,25 +651,31 @@ func (r *Runtime) lookupAccessor(this, key Value, wantGetter bool) (Value, error
 	if err != nil {
 		return Undefined, err
 	}
-	for cur := o; cur != nil; cur = cur.proto {
-		p := cur.getOwnVisible(k)
-		if p == nil {
-			continue
+	for cur := o; cur != nil; {
+		d, err := r.ownPropDesc(cur, k)
+		if err != nil {
+			return Undefined, err
 		}
-		if !p.isAccessor() {
+		if d != nil {
+			if !d.isAccessor() {
+				return Undefined, nil
+			}
+			if wantGetter && d.getter != nil {
+				return Obj(d.getter), nil
+			}
+			if !wantGetter && d.setter != nil {
+				return Obj(d.setter), nil
+			}
 			return Undefined, nil
 		}
-		a := p.getterSetter()
-		if a == nil {
+		next, err := r.protoOf(cur)
+		if err != nil {
+			return Undefined, err
+		}
+		if !next.IsObject() {
 			return Undefined, nil
 		}
-		if wantGetter && a.getter != nil {
-			return Obj(a.getter), nil
-		}
-		if !wantGetter && a.setter != nil {
-			return Obj(a.setter), nil
-		}
-		return Undefined, nil
+		cur = next.Object()
 	}
 	return Undefined, nil
 }

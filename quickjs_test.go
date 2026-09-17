@@ -2797,3 +2797,51 @@ func TestGeneratorInstancePrototype(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// Sealing and freezing go through the object's own machinery rather than its
+// property table: a proxy has none, and an object that refuses to make a
+// property permanent has to say so.
+func TestIntegrityLevels(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var o = Object.seal({a: 1});
+		  [Object.isSealed(o), Object.isFrozen(o), Object.isExtensible(o)].join(",")`,
+			"true,false,false"},
+		{`var o = Object.freeze({a: 1});
+		  [Object.isSealed(o), Object.isFrozen(o)].join(",")`, "true,true"},
+		{`var a = Object.freeze([1, 2]);
+		  [Object.isFrozen(a),
+		   Object.getOwnPropertyDescriptor(a, "length").writable].join(",")`, "true,false"},
+		{`var a = Object.seal([1]); Object.isSealed(a) + "," + Object.isFrozen(a)`,
+			"true,false"},
+
+		// A proxy is asked through its traps, and one that refuses reports it.
+		{`var t = {a: 1}; var p = new Proxy(t, {});
+		  Object.freeze(p); [Object.isFrozen(t), Object.isFrozen(p)].join(",")`,
+			"true,true"},
+		{`var p = new Proxy({a: 1}, {defineProperty: function () { return false }});
+		  try { Object.freeze(p) } catch (e) { e.constructor.name }`, "TypeError"},
+
+		// The legacy accessors go through the same define, so a refusal is an
+		// error and a proxy sees it.
+		{`var o = {}; Object.preventExtensions(o);
+		  try { o.__defineGetter__("x", function () {}) } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		{`var seen; var p = new Proxy({}, {defineProperty: function (t, k) {
+		    seen = k; return true }});
+		  p.__defineSetter__("y", function () {}); seen`, "y"},
+		// And the lookups walk the chain through [[GetOwnProperty]].
+		{`var base = {}; Object.defineProperty(base, "x", {get: function () { return 1 }});
+		  var o = Object.create(base);
+		  String(typeof o.__lookupGetter__("x"))`, "function"},
+	}
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

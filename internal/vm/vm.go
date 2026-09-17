@@ -2773,7 +2773,9 @@ func freezeArray(o *Object) *Object {
 	}
 	o.markSparse()
 	o.elems = nil
-	o.flags &^= objExtensible
+	// The length is synthesized rather than stored, so its writability is a
+	// flag rather than a property attribute.
+	o.flags &^= objExtensible | objArrayLengthWritable
 	for i := range o.props {
 		o.props[i].flags &^= propWritable | propConfigurable
 	}

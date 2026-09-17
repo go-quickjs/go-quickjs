@@ -296,27 +296,7 @@ func (r *Runtime) initObjectBuiltins() {
 		if !v.IsObject() {
 			return v, nil
 		}
-		o := v.Object()
-		o.flags &^= objExtensible
-		// An array's length is synthesized, so clearing the property flags
-		// would not reach it.
-		o.flags &^= objArrayLengthWritable
-		rt.materializeFunctionProp(o, atomLength)
-		for i := range o.props {
-			o.props[i].flags &^= propWritable | propConfigurable
-		}
-		// Dense elements cannot express attributes, so freezing moves them into
-		// the property table where they can be marked read-only.
-		for i, el := range o.elems {
-			if !isHole(el) {
-				o.setOwnRaw(internIndex(uint32(i)), el, propEnumerable)
-			}
-		}
-		if len(o.elems) > 0 {
-			o.markSparse()
-			o.elems = nil
-		}
-		return v, nil
+		return v, rt.setIntegrity(v.Object(), true)
 	})
 
 	r.defMethod(ctor, "isFrozen", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -324,24 +304,8 @@ func (r *Runtime) initObjectBuiltins() {
 		if !v.IsObject() {
 			return True, nil
 		}
-		o := v.Object()
-		if o.IsExtensible() {
-			return False, nil
-		}
-		for i := range o.props {
-			if o.props[i].flags&propDeleted != 0 {
-				continue
-			}
-			if o.props[i].flags&(propWritable|propConfigurable) != 0 {
-				return False, nil
-			}
-		}
-		for _, el := range o.elems {
-			if !isHole(el) {
-				return False, nil
-			}
-		}
-		return True, nil
+		ok, err := rt.testIntegrity(v.Object(), true)
+		return Bool(ok), err
 	})
 
 	r.defMethod(ctor, "preventExtensions", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {

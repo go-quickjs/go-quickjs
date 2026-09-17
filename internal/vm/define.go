@@ -558,3 +558,101 @@ func objOrUndefined(o *Object) Value {
 	}
 	return Obj(o)
 }
+
+// setIntegrity implements Object.seal and Object.freeze.
+//
+// Both go through the object's own machinery rather than its property table: a
+// proxy has none, and an object that refuses to make a property permanent has
+// to say so rather than be quietly left alone. Sealing makes every property
+// non-configurable; freezing also makes the data ones read-only.
+func (r *Runtime) setIntegrity(o *Object, freeze bool) error {
+	// A function's name and length are synthesized on demand, and about to be
+	// constrained, so they have to exist first.
+	r.materializeFunctionProp(o, atomLength)
+	ok, err := r.preventExtensionsOf(o)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return r.throwTypeError("cannot make this object non-extensible")
+	}
+	keys, err := r.ownKeysOf(o, true)
+	if err != nil {
+		return err
+	}
+	for _, k := range keys {
+		d := &propDesc{configurable: false, hasConfigurable: true}
+		if freeze {
+			cur, err := r.ownPropDesc(o, k)
+			if err != nil {
+				return err
+			}
+			if cur == nil {
+				continue
+			}
+			if cur.isData() {
+				d.writable, d.hasWritable = false, true
+			}
+		}
+		applied, err := r.defineProperty(o, k, d)
+		if err != nil {
+			return err
+		}
+		if !applied {
+			return r.throwTypeError("cannot make property %q permanent", r.atoms.name(k))
+		}
+	}
+	return nil
+}
+
+// testIntegrity implements Object.isSealed and Object.isFrozen.
+func (r *Runtime) testIntegrity(o *Object, frozen bool) (bool, error) {
+	ext, err := r.isExtensibleOf(o)
+	if err != nil {
+		return false, err
+	}
+	if ext {
+		return false, nil
+	}
+	keys, err := r.ownKeysOf(o, true)
+	if err != nil {
+		return false, err
+	}
+	for _, k := range keys {
+		d, err := r.ownPropDesc(o, k)
+		if err != nil {
+			return false, err
+		}
+		if d == nil {
+			continue
+		}
+		if d.configurable {
+			return false, nil
+		}
+		if frozen && d.isData() && d.writable {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// preventExtensionsOf makes an object non-extensible, asking a proxy's trap
+// when the object is one.
+func (r *Runtime) preventExtensionsOf(o *Object) (bool, error) {
+	if p := proxyOf(o); p != nil {
+		return r.proxyPreventExtensions(p)
+	}
+	// Dense elements cannot express attributes, so an object about to have
+	// them constrained moves them into the property table first.
+	if len(o.elems) > 0 {
+		for i, el := range o.elems {
+			if !isHole(el) {
+				o.setOwnRaw(internIndex(uint32(i)), el, propDefault)
+			}
+		}
+		o.markSparse()
+		o.elems = nil
+	}
+	o.flags &^= objExtensible
+	return true, nil
+}
