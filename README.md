@@ -289,15 +289,30 @@ inherited them.
 On an Apple M5 Max:
 
 ```
-BenchmarkEvalArithmetic-18  1.22µs/op   2632 B/op    23 allocs/op
-BenchmarkFibonacci-18        806µs/op     24 B/op     1 allocs/op
-BenchmarkPropertyAccess-18  1.79µs/op   3416 B/op    29 allocs/op
-BenchmarkCallGoFunction-18  1.41µs/op   3200 B/op    34 allocs/op
+BenchmarkEvalArithmetic-18  1.31µs/op   2944 B/op    24 allocs/op
+BenchmarkFibonacci-18        842µs/op     24 B/op     1 allocs/op
+BenchmarkPropertyAccess-18  1.90µs/op   3792 B/op    30 allocs/op
+BenchmarkCallGoFunction-18  1.44µs/op   3576 B/op    35 allocs/op
 ```
 
 `fib(20)` costs one allocation because the interpreter loop allocates nothing
 per call; the other benchmarks include parsing and compiling their source each
 iteration.
+
+`go test -bench .` also measures the interpreter on its own, compiling each
+program once and then running it:
+
+```
+BenchmarkLoopArithmetic-18         248µs/op        0 B/op     0 allocs/op
+BenchmarkLoopArrayIndex-18        30.2µs/op        0 B/op     0 allocs/op
+BenchmarkLoopFunctionCall-18       395µs/op        0 B/op     0 allocs/op
+BenchmarkLoopPropertyAccess-18     581µs/op        0 B/op     0 allocs/op
+BenchmarkLoopMethodCall-18         697µs/op        0 B/op     0 allocs/op
+BenchmarkAllocObjects-18           153µs/op   384 KB/op  4000 allocs/op
+BenchmarkStringConcat-18          64.8µs/op   161 KB/op  2029 allocs/op
+BenchmarkJSONRoundTrip-18          506µs/op   936 KB/op 11000 allocs/op
+BenchmarkNewRuntimeSmallStack-18  95.0µs/op   514 KB/op  1817 allocs/op
+```
 
 ## License
 
