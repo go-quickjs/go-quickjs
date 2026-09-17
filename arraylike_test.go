@@ -234,3 +234,64 @@ func TestArrayFromAsync(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// Setting an array's length is defining it: the value is converted twice, in
+// that order, and nothing else is decided until both conversions have run --
+// which matters because a conversion can change the array.
+func TestArrayLengthCoercionOrder(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		// ToUint32 first, then ToNumber; a value that survives neither is not
+		// a length, and that is a RangeError rather than a TypeError.
+		{"invalid length", `try { Object.defineProperty([], "length", {value: -1}) }
+		  catch (e) { e.constructor.name }`, "RangeError"},
+		{"invalid length assigned", `try { [].length = -1 } catch (e) { e.constructor.name }`,
+			"RangeError"},
+		{"converted twice", `var log = []
+		  var length = {valueOf: function () { log.push("valueOf"); return 0 }}
+		  Object.defineProperty([1], "length", {value: length})
+		  log.join(",")`, "valueOf,valueOf"},
+		// The writability is read after the conversions, so a conversion that
+		// takes it away is the one that decides.
+		{"writability read last", `var a = [1, 2]
+		  var calls = 0
+		  var length = {valueOf: function () {
+		    if (++calls !== 1) Object.defineProperty(a, "length", {writable: false})
+		    return a.length
+		  }}
+		  var caught = ""
+		  try { Object.defineProperty(a, "length", {value: length, writable: true}) }
+		  catch (e) { caught = e.constructor.name }
+		  caught + "," + calls`, "TypeError,2"},
+		{"assignment sees it too", `var a = [1, 2, 3]
+		  var hints = []
+		  var length = {}
+		  length[Symbol.toPrimitive] = function (hint) {
+		    hints.push(hint)
+		    Object.defineProperty(a, "length", {writable: false})
+		    return 0
+		  }
+		  String(Reflect.set(a, "length", length)) + "," + hints.join(",") + "," + a.length`,
+			"false,number,number,3"},
+		// A length that cannot be redefined refuses a descriptor that would
+		// change it, and accepts one that describes it as it is.
+		{"frozen length", `var a = [1]
+		  Object.defineProperty(a, "length", {writable: false});
+		  [String(Reflect.defineProperty(a, "length", {writable: true})),
+		   String(Reflect.defineProperty(a, "length", {value: 0})),
+		   String(Reflect.defineProperty(a, "length", {value: 1})),
+		   String(Reflect.defineProperty(a, "length", {}))].join(",")`,
+			"false,false,true,true"},
+		// A refused assignment reports as one.
+		{"set refused", `var a = Object.freeze([1])
+		  String(Reflect.set(a, "length", 0)) + "," + String(Reflect.set(a, "0", 9))`,
+			"false,false"},
+		{"set refused on a string", `var s = Object(" ")
+		  String(Reflect.set(s, "length", 5)) + "," + String(Reflect.set(s, "0", "x"))`,
+			"false,false"},
+		{"set refused on a sealed object", `var o = Object.preventExtensions({})
+		  String(Reflect.set(o, "x", 1))`, "false"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
+	}
+}

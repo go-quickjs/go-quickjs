@@ -445,45 +445,58 @@ func (r *Runtime) growArrayLength(o *Object, i uint32) {
 // one that refuses to go -- leaving the length just above it, so that the array
 // never claims to be shorter than what it still holds.
 func (r *Runtime) defineArrayLength(o *Object, d *propDesc) (bool, error) {
-	writable := o.flags&objArrayLengthWritable != 0
-	if d.hasConfigurable && d.configurable {
-		return false, nil
-	}
-	if d.hasEnumerable && d.enumerable {
-		return false, nil
-	}
-	if d.isAccessor() {
-		return false, nil
-	}
 	if !d.hasValue {
-		if d.hasWritable && !d.writable {
+		// Nothing to convert, so this is an ordinary redefinition of a
+		// property that is never configurable and never enumerable.
+		switch {
+		case d.hasConfigurable && d.configurable, d.hasEnumerable && d.enumerable,
+			d.isAccessor():
+			return false, nil
+		case o.flags&objArrayLengthWritable == 0:
+			// Non-configurable and non-writable: nothing about it may change,
+			// and making it writable again is refused rather than ignored.
+			return !(d.hasWritable && d.writable), nil
+		case d.hasWritable && !d.writable:
 			o.flags &^= objArrayLengthWritable
 		}
 		return true, nil
 	}
 
+	// The value is converted twice, in this order, and both conversions are
+	// observable: a value that does not survive the round trip is not a length.
+	// Everything else about the descriptor is decided afterwards, since the
+	// conversions can change what the array's length is and whether it may be
+	// written at all.
+	want, err := r.toUint32(d.value)
+	if err != nil {
+		return false, err
+	}
 	n, err := r.toNumber(d.value)
 	if err != nil {
 		return false, err
 	}
-	want, err := r.toIndexLength(d.value)
-	if err != nil {
-		return false, err
-	}
-	if float64(want) != n || math.IsNaN(n) {
+	if float64(want) != n {
 		return false, r.throwRangeError("invalid array length")
 	}
-	if !writable && uint32(want) != o.arrayLength() {
+	switch {
+	case d.hasConfigurable && d.configurable, d.hasEnumerable && d.enumerable,
+		d.isAccessor():
 		return false, nil
 	}
-	reached := shrinkArray(o, uint32(want))
+	if o.flags&objArrayLengthWritable == 0 {
+		// A non-writable length is also non-configurable, so nothing about it
+		// may change: neither the value nor the writability the descriptor
+		// asks for. Describing what is already there is still allowed.
+		return want == o.arrayLength() && !(d.hasWritable && d.writable), nil
+	}
+	reached := shrinkArray(o, want)
 	o.setArrayLength(reached)
 	// The writability change applies even when the shortening stopped short,
 	// which is what stops a second attempt from getting any further.
 	if d.hasWritable && !d.writable {
 		o.flags &^= objArrayLengthWritable
 	}
-	return reached == uint32(want), nil
+	return reached == want, nil
 }
 
 // shrinkArray deletes an array's elements at or above a new length, highest

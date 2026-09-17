@@ -272,8 +272,7 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 		// further up that they shadow.
 		if r.hasExoticOwn(o, key) {
 			if o == obj && rcv == obj {
-				err := r.createOwnProp(o, key, val, strict)
-				return err == nil, err
+				return r.createOwnProp(o, key, val, strict)
 			}
 			if o.class == ClassTypedArray {
 				if ix := r.typedArrayIndex(o, key); ix.numeric && !ix.valid {
@@ -327,8 +326,7 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 	if rcv != obj {
 		return r.setOnReceiver(rcv, key, val, strict)
 	}
-	err := r.createOwnProp(obj, key, val, strict)
-	return err == nil, err
+	return r.createOwnProp(obj, key, val, strict)
 }
 
 // setOnReceiver completes an assignment that landed on an object other than the
@@ -414,18 +412,25 @@ func mappedArgument(o *Object, key Atom) *upvalue {
 
 // createOwnProp adds a new own data property, applying the exotic rules of
 // arrays and respecting extensibility.
-func (r *Runtime) createOwnProp(o *Object, key Atom, val Value, strict bool) error {
+//
+// The bool says whether the property was actually written, which Reflect.set
+// reports and a sloppy assignment ignores; in strict mode a refusal is an error
+// instead.
+func (r *Runtime) createOwnProp(o *Object, key Atom, val Value, strict bool) (bool, error) {
 	// A typed array's numeric writes go into its buffer. One that names no
 	// element is dropped rather than added, which is what makes a typed array
 	// fixed -- and that covers a["-0"] and a["1.5"] as much as a[5].
 	if o.class == ClassTypedArray {
 		if ix := r.typedArrayIndex(o, key); ix.numeric {
 			if !ix.valid {
-				// The value is still coerced, which a valueOf can observe.
+				// The value is still coerced, which a valueOf can observe. The
+				// write counts as having happened: a typed array owns every
+				// numeric key, in range or not.
 				_, err := r.toNumericForElement(o, val)
-				return err
+				return err == nil, err
 			}
-			return r.setElem(o.data.(*typedArrayData), ix.i, val)
+			err := r.setElem(o.data.(*typedArrayData), ix.i, val)
+			return err == nil, err
 		}
 	}
 	if o.class == ClassArray {
@@ -433,33 +438,29 @@ func (r *Runtime) createOwnProp(o *Object, key Atom, val Value, strict bool) err
 			// An array's length is synthesized rather than stored, so the walk
 			// that would have found a non-writable property did not.
 			if o.flags&objArrayLengthWritable == 0 {
-				if strict {
-					return r.throwTypeError("cannot assign to read-only property %q",
-						r.atoms.name(key))
-				}
-				return nil
+				return false, r.assignFailed(key, strict,
+					"cannot assign to read-only property %q")
 			}
-			n, err := r.toArrayLength(val)
-			if err != nil {
-				return err
+			// What follows is a define, conversions and all: the value is
+			// coerced twice before anything is decided, and a value that
+			// watches -- and makes the length non-writable while it is being
+			// watched -- can tell.
+			ok, err := r.defineArrayLength(o, &propDesc{value: val, hasValue: true})
+			if err != nil || ok {
+				return ok, err
 			}
-			reached := shrinkArray(o, n)
-			o.setArrayLength(reached)
-			if reached != n && strict {
-				return r.throwTypeError(
-					"cannot shorten the array past a non-configurable element")
-			}
-			return nil
+			return false, r.assignFailed(key, strict,
+				"cannot assign to read-only property %q")
 		}
 		if key.IsIndex() {
 			if !o.IsExtensible() && int(key.Index()) >= len(o.elems) {
 				if strict {
-					return r.throwTypeError("cannot add a property to a non-extensible array")
+					return false, r.throwTypeError("cannot add a property to a non-extensible array")
 				}
-				return nil
+				return false, nil
 			}
 			if o.setElem(key.Index(), val) {
-				return nil
+				return true, nil
 			}
 			// Too sparse for dense storage; fall through to an ordinary
 			// property and remember that the array is no longer dense.
@@ -468,7 +469,7 @@ func (r *Runtime) createOwnProp(o *Object, key Atom, val Value, strict bool) err
 	} else if key.IsIndex() && int(key.Index()) <= len(o.elems) && len(o.elems) > 0 {
 		// A non-array that already has dense storage keeps using it.
 		if o.setElem(key.Index(), val) {
-			return nil
+			return true, nil
 		}
 	}
 
@@ -477,24 +478,21 @@ func (r *Runtime) createOwnProp(o *Object, key Atom, val Value, strict bool) err
 	if o.class == ClassStringWrapper {
 		if s, ok := o.data.(*String); ok {
 			if key == atomLength || (key.IsIndex() && int(key.Index()) < s.Len()) {
-				if strict {
-					return r.throwTypeError("cannot assign to read-only property %q",
-						r.atoms.name(key))
-				}
-				return nil
+				return false, r.assignFailed(key, strict,
+					"cannot assign to read-only property %q")
 			}
 		}
 	}
 
 	if !o.IsExtensible() {
 		if strict {
-			return r.throwTypeError("cannot add property %q to a non-extensible object",
+			return false, r.throwTypeError("cannot add property %q to a non-extensible object",
 				r.atoms.name(key))
 		}
-		return nil
+		return false, nil
 	}
 	o.setOwnRaw(key, val, propDefault)
-	return nil
+	return true, nil
 }
 
 // setValueProp assigns through a value, which is a no-op on a primitive in
