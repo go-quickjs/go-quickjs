@@ -34,6 +34,14 @@ type Config struct {
 	// Fetch gives the script the network. Nil means none.
 	Fetch *Fetch
 
+	// Run lets the script start programs, which is the largest capability
+	// there is: a program can do anything the user can. Nil means none.
+	Run *Run
+
+	// Serve lets the script listen for HTTP requests, which is the other half
+	// of network access and not the same half. Nil means none.
+	Serve *Serve
+
 	// Random is where crypto draws its entropy from. Nil uses the system
 	// source, which is what a program wants and a test may not.
 	Random io.Reader
@@ -113,6 +121,22 @@ func Install(rt *quickjs.Runtime, cfg Config) error {
 			cfg.Fetch.Loop = cfg.Loop
 		}
 		if err := Network(rt, cfg.Fetch); err != nil {
+			return err
+		}
+	}
+	if cfg.Serve != nil {
+		if cfg.Serve.Loop == nil {
+			cfg.Serve.Loop = cfg.Loop
+		}
+		if err := Servers(rt, cfg.Serve); err != nil {
+			return err
+		}
+	}
+	if cfg.Run != nil {
+		if cfg.Run.Loop == nil {
+			cfg.Run.Loop = cfg.Loop
+		}
+		if err := Commands(rt, cfg.Run); err != nil {
 			return err
 		}
 	}

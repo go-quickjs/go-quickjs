@@ -358,3 +358,71 @@ func TestImportMetaInTheCommand(t *testing.T) {
 		t.Errorf("code=%d out=%q err=%q", code, out, errOut)
 	}
 }
+
+// Starting a program is refused unless the command line asked for it, and the
+// refusal names the flag that would grant it.
+func TestAllowRun(t *testing.T) {
+	code, out, _ := exec(t, "", "-e", `
+		import("child_process").then(({default: cp}) => {
+			try { cp.execFileSync("echo", ["ran"]) } catch (e) { console.log(e.message) }
+		})
+	`)
+	if code != 0 || !strings.Contains(out, "--allow-run") {
+		t.Errorf("code=%d out=%q, want the flag named", code, out)
+	}
+
+	code, out, errOut := exec(t, "", "--allow-run", "-e", `
+		import("child_process").then(({default: cp}) => {
+			console.log(cp.execFileSync("echo", ["ran"]).trim())
+		})
+	`)
+	if code != 0 || strings.TrimSpace(out) != "ran" {
+		t.Errorf("code=%d out=%q err=%q", code, out, errOut)
+	}
+}
+
+// A program is given only the environment the command line allowed, so a script
+// refused the environment cannot read it through a program it starts.
+func TestAllowRunDoesNotLeakTheEnvironment(t *testing.T) {
+	t.Setenv("QJS_TEST_SECRET", "not for the script")
+	code, out, _ := exec(t, "", "--allow-run", "-e", `
+		import("child_process").then(({default: cp}) => {
+			console.log("[" + cp.execSync("echo $QJS_TEST_SECRET").trim() + "]")
+		})
+	`)
+	if code != 0 || strings.TrimSpace(out) != "[]" {
+		t.Errorf("code=%d out=%q, want the secret withheld", code, out)
+	}
+
+	code, out, _ = exec(t, "", "--allow-run", "--allow-env", "-e", `
+		import("child_process").then(({default: cp}) => {
+			console.log(cp.execSync("echo $QJS_TEST_SECRET").trim())
+		})
+	`)
+	if code != 0 || strings.TrimSpace(out) != "not for the script" {
+		t.Errorf("with --allow-env: code=%d out=%q", code, out)
+	}
+}
+
+// Listening is network access, and the same flag that grants fetching grants it.
+func TestAllowNetServes(t *testing.T) {
+	code, out, _ := exec(t, "", "-e", `
+		try { serve({port: 0}, () => new Response("x")) }
+		catch (e) { console.log(e.message) }
+	`)
+	if code != 0 || !strings.Contains(out, "--allow-net") {
+		t.Errorf("code=%d out=%q, want the flag named", code, out)
+	}
+
+	code, out, errOut := exec(t, "", "--allow-net", "-e", `
+		;(async () => {
+			const server = serve({port: 0}, (req) =>
+				new Response("served " + new URL(req.url).pathname))
+			console.log(await (await fetch(server.url + "/here")).text())
+			server.close()
+		})()
+	`)
+	if code != 0 || strings.TrimSpace(out) != "served /here" {
+		t.Errorf("code=%d out=%q err=%q", code, out, errOut)
+	}
+}

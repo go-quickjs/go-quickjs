@@ -28,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -214,8 +215,38 @@ func install(rt *quickjs.Runtime, loop *stdlib.Loop, opts *options, stdin io.Rea
 		}
 		cfg.FS = &stdlib.FS{Root: root, ReadOnly: !opts.allowWrite, Loop: loop}
 	}
+	if opts.allowRun {
+		// A program is given the environment the script was given, which is
+		// none unless --allow-env said otherwise: a capability that was
+		// withheld must not be reachable through a program.
+		cfg.Run = &stdlib.Run{
+			Loop:  loop,
+			Dir:   cwd(),
+			Env:   cfg.Process.Env,
+			Allow: func(string, []string) error { return nil },
+		}
+	}
 	if len(opts.allowNet) > 0 {
 		allowed := opts.allowNet
+		cfg.Serve = &stdlib.Serve{
+			Loop: loop,
+			Allow: func(address string) error {
+				if len(allowed) == 1 && allowed[0] == "" {
+					return nil
+				}
+				host, _, err := net.SplitHostPort(address)
+				if err != nil {
+					host = address
+				}
+				for _, a := range allowed {
+					if a == host || a == address {
+						return nil
+					}
+				}
+				return fmt.Errorf(
+					"listening on %s is not allowed: pass --allow-net=%s", address, host)
+			},
+		}
 		cfg.Fetch = &stdlib.Fetch{
 			Loop: loop,
 			Allow: func(req *http.Request) error {
@@ -258,6 +289,36 @@ func explainMissing(rt *quickjs.Runtime, opts *options) error {
 			return p
 		}
 		if err := rt.Set("fetch", refused); err != nil {
+			return err
+		}
+	}
+	if len(opts.allowNet) == 0 {
+		refuseServe := refuse("listening for requests", "--allow-net")
+		if err := rt.Set("serve", refuseServe); err != nil {
+			return err
+		}
+		denied := map[string]any{"serve": refuseServe, "default": map[string]any{"serve": refuseServe}}
+		if err := rt.SetModule("http", denied); err != nil {
+			return err
+		}
+		if err := rt.SetModule("node:http", denied); err != nil {
+			return err
+		}
+	}
+	if !opts.allowRun {
+		denied := map[string]any{}
+		for _, name := range []string{"execFileSync", "execSync", "spawnSync", "exec", "execFile"} {
+			denied[name] = refuse("starting a program", "--allow-run")
+		}
+		def := map[string]any{}
+		for k, v := range denied {
+			def[k] = v
+		}
+		denied["default"] = def
+		if err := rt.SetModule("child_process", denied); err != nil {
+			return err
+		}
+		if err := rt.SetModule("node:child_process", denied); err != nil {
 			return err
 		}
 	}
@@ -631,6 +692,8 @@ func parseArgs(argv []string, stdout io.Writer) (*options, error) {
 			}
 		case "--allow-env":
 			opts.allowEnv = true
+		case "--allow-run":
+			opts.allowRun = true
 		case "--memory-limit":
 			v, err := next("a size in bytes")
 			if err != nil {
@@ -732,6 +795,7 @@ what the script may do (nothing, unless said here):
       --allow-write[=DIR] write them too
       --allow-net[=HOSTS] reach the network, or only these comma-separated hosts
       --allow-env         read the environment
+      --allow-run         start programs, which can do anything you can
 
 bounds:
       --memory-limit N    stop the script at N bytes (64m, 1g)
