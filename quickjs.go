@@ -95,6 +95,7 @@ type config struct {
 	memoryLimit      int64
 	stackSize        int
 	maxCallDepth     int
+	locale           string
 	noCodeGeneration bool
 }
 
@@ -119,6 +120,20 @@ func WithMaxCallDepth(frames int) Option {
 	return func(c *config) { c.maxCallDepth = frames }
 }
 
+// WithLocale sets the language a script means when it formats something
+// without saying which language to format it in: what Intl answers with when
+// it is given no locale, and what Date's toString and toLocaleString methods
+// write in.
+//
+// The tag is written the way a tag is written -- "de-DE", "zh-Hant-TW". Left
+// unset, the runtime takes the language the machine is set to, which on a Unix
+// machine is LC_ALL, LC_MESSAGES or LANG, and English where none of them says.
+// That is what every other engine does, so that a program run twice in the
+// same shell is not given two different answers.
+func WithLocale(tag string) Option {
+	return func(c *config) { c.locale = tag }
+}
+
 // New creates a Runtime with the standard globals installed.
 func New(opts ...Option) *Runtime {
 	var c config
@@ -129,6 +144,7 @@ func New(opts ...Option) *Runtime {
 		MemoryLimit:  c.memoryLimit,
 		StackSize:    c.stackSize,
 		MaxCallDepth: c.maxCallDepth,
+		Locale:       c.locale,
 	})}
 	if !c.noCodeGeneration {
 		r.installCodeGeneration()
@@ -326,6 +342,25 @@ func (r *Runtime) SetTimeZone(loc *time.Location) {
 		return
 	}
 	r.rt.SetTimeZone(loc)
+}
+
+// SetLocale installs the language a script means when it formats something
+// without saying which, as WithLocale does. Passing an empty tag restores the
+// language the machine is set to.
+func (r *Runtime) SetLocale(tag string) {
+	if r.closed {
+		return
+	}
+	r.rt.SetLocale(tag)
+}
+
+// Locale reports the language this runtime formats in when a script does not
+// say which.
+func (r *Runtime) Locale() string {
+	if r.closed {
+		return ""
+	}
+	return r.rt.Locale()
 }
 
 // ModuleLoader resolves a module specifier to its source.

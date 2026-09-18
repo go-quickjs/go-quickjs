@@ -339,38 +339,6 @@ func Tags() []string {
 	return out
 }
 
-// ZoneName is what a time zone is called at a given offset, in English: the
-// short form and the long one.
-//
-// A zone that is only ever called an offset from Greenwich -- which is most of
-// them outside the Americas -- answers with nothing, and the caller writes the
-// offset. The names are English because a name in the wrong language is worse
-// than an offset in the right one, and four hundred zones in four hundred
-// languages is several megabytes.
-func ZoneName(zone string, offsetMinutes int) (short, long string) {
-	entry, ok := zoneNames[zone]
-	if !ok {
-		// The same place under its other name.
-		if other, ok := zoneAliases[zone]; ok {
-			entry, ok = zoneNames[other]
-			if !ok {
-				return "", ""
-			}
-		} else {
-			return "", ""
-		}
-	}
-	want := strconv.Itoa(offsetMinutes) + "="
-	for _, item := range strings.Split(entry, ";") {
-		if !strings.HasPrefix(item, want) {
-			continue
-		}
-		short, long, _ = strings.Cut(item[len(want):], "|")
-		return short, long
-	}
-	return "", ""
-}
-
 // Zones lists the time zones the data knows of.
 func Zones() []string {
 	out := make([]string, len(zoneList))

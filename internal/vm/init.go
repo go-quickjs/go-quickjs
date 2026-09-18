@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/icu"
 )
 
 // Config configures a new Runtime.
@@ -17,6 +18,9 @@ type Config struct {
 	StackSize int
 	// MaxCallDepth bounds recursion. Zero selects the default.
 	MaxCallDepth int
+	// Locale is the language a program means when it does not say which.
+	// Empty takes the one the machine is set to.
+	Locale string
 }
 
 // New creates a Runtime with the standard globals installed.
@@ -40,6 +44,7 @@ func New(cfg Config) *Runtime {
 		frames:           make([][]frame, 0, 8),
 		maxFrames:        maxFrames,
 		memoryLimit:      cfg.MemoryLimit,
+		locale:           cfg.Locale,
 		interruptCounter: interruptCheckInterval,
 		symbolRegistry:   make(map[string]*Symbol),
 		cleanups:         &cleanupQueue{},
@@ -63,6 +68,34 @@ func (r *Runtime) SetClock(fn func() time.Time) { r.clock = fn }
 // SetTimeZone installs the zone local time is expressed in. A nil zone means
 // the process zone.
 func (r *Runtime) SetTimeZone(loc *time.Location) { r.timeZone = loc }
+
+// SetLocale installs the language a program means when it does not say which.
+// Passing nothing restores the one the machine is set to.
+func (r *Runtime) SetLocale(tag string) { r.locale = tag }
+
+// Locale is the language this runtime formats in when a program does not say:
+// the one the host chose, or the one the machine is set to, or English.
+func (r *Runtime) Locale() string {
+	switch {
+	case r.locale != "":
+		return r.locale
+	default:
+		if tag := icu.Environment(); tag != "" {
+			return tag
+		}
+	}
+	return "en-US"
+}
+
+// formatLocale is the language the engine formats in, spelled the way the
+// data spells it: what Locale says, resolved to the nearest language there is
+// data for. ar-EG is written as ar-BH is, de-AT as de is.
+func (r *Runtime) formatLocale() string {
+	if tag := r.Locale(); tag != r.localeAsked {
+		r.localeAsked, r.localeResolved = tag, icu.Resolve(tag).Tag
+	}
+	return r.localeResolved
+}
 
 // SetContext installs the context the interpreter checks for cancellation.
 func (r *Runtime) SetContext(ctx context.Context) { r.ctx = ctx }

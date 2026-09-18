@@ -251,16 +251,16 @@ func (r *Runtime) resolveLocale(tags []string, keys ...string) *localeChoice {
 			break
 		}
 	}
-	switch {
-	case found:
-	case len(tags) > 0:
-		// Nothing had data of its own, so the first is answered with English.
-		requested, _ = parseTag(tags[0])
+	if !found {
+		// Either nothing was asked for, or nothing that was asked for has any
+		// data: both mean the language the machine is set to, or the one the
+		// host chose. What the unanswerable tag asked for in its extensions
+		// goes with it, since it was not the tag that was matched.
+		requested, _ = parseTag(canonicalTag(mustParse(r.Locale())))
 		c.data = icu.Resolve(requested.base())
-		requested, _ = parseTag(c.data.Tag)
-	default:
-		c.data = icu.Resolve("")
-		requested, _ = parseTag(c.data.Tag)
+		if !icu.Has(requested.base()) {
+			requested, _ = parseTag(c.data.Tag)
+		}
 	}
 
 	// The tag to report is the one that was matched, without the extensions,
@@ -279,6 +279,17 @@ func (r *Runtime) resolveLocale(tags []string, keys ...string) *localeChoice {
 	}
 	c.tag.setKeywords(used)
 	return c
+}
+
+// mustParse is a tag that came from the host or the machine rather than from a
+// script: one that cannot be read is answered with English rather than with an
+// error, since there is nobody to report it to.
+func mustParse(tag string) langTag {
+	if t, ok := parseTag(tag); ok {
+		return t
+	}
+	t, _ := parseTag("en-US")
+	return t
 }
 
 // setting is what a key is set to, once the tag and the options have both had

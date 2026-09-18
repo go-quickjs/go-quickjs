@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-quickjs/go-quickjs/internal/icu"
 	"github.com/go-quickjs/go-quickjs/internal/jsnum"
 )
 
@@ -63,6 +64,23 @@ func (r *Runtime) location() *time.Location {
 		return r.timeZone
 	}
 	return time.Local
+}
+
+// zoneLabel is the name in parentheses that a date written out ends with:
+// "(Eastern Standard Time)" where the zone has a name in the language being
+// written in, and the offset from Greenwich where it has none.
+func (r *Runtime) zoneLabel(t time.Time) string {
+	locale := r.formatLocale()
+	names := icu.ZoneNamesIn(locale, r.localZoneName())
+	name := names.LongStandard
+	if t.IsDST() {
+		name = names.LongDaylight
+	}
+	if name == "" {
+		_, offset := t.Zone()
+		name = icu.OffsetName(locale, offset/60, true)
+	}
+	return "(" + name + ")"
 }
 
 // now returns the current time value, from the host's clock if one was
@@ -293,13 +311,13 @@ func (r *Runtime) initDateBuiltins() {
 		})
 	}
 	format("toString", func(rt *Runtime, t time.Time) string {
-		return t.Format("Mon Jan 02 2006 15:04:05 GMT-0700 (MST)")
+		return t.Format("Mon Jan 02 2006 15:04:05 GMT-0700 ") + rt.zoneLabel(t)
 	})
 	format("toDateString", func(rt *Runtime, t time.Time) string {
 		return t.Format("Mon Jan 02 2006")
 	})
 	format("toTimeString", func(rt *Runtime, t time.Time) string {
-		return t.Format("15:04:05 GMT-0700 (MST)")
+		return t.Format("15:04:05 GMT-0700 ") + rt.zoneLabel(t)
 	})
 	// The three toLocale methods are Intl.DateTimeFormat with the fields each
 	// of them stands for, which is what ECMA-402 defines them as.

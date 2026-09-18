@@ -337,9 +337,15 @@ func runOne(suite *conformance.Suite, tc *conformance.Test) (result, string) {
 	// allocates a fresh one per test: the default six megabytes of slots is
 	// more than the depth limit permits anyone to use, and churning it eighty
 	// thousand times over is what it takes to run the machine out of memory.
+	//
+	// The language is pinned as well. A program that does not say which
+	// language it means is answered with the one the machine is set to, and a
+	// suite whose answers depend on whose machine is running it is no test at
+	// all.
 	rt := quickjs.New(
 		quickjs.WithMaxCallDepth(400),
 		quickjs.WithStackSize(64*1024),
+		quickjs.WithLocale("en-US"),
 	)
 	defer rt.Close()
 

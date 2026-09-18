@@ -36,8 +36,8 @@ conformance suite.
 `Intl` is there too, with real CLDR data for 379 locales — the engine carries
 its own, in Go, rather than linking ICU — including the Unicode collation
 order, where a text may be broken into words and sentences, how a measurement
-is written, how long something took, eighteen calendars, and time zones out of
-the operating system's own database. It is held against a full ICU build:
+is written, how long something took, eighteen calendars, and what every time
+zone is called in every language. It is held against a full ICU build:
 [7,925 of 7,949 cases match it exactly](intl_test.go), and the twenty-four that
 do not are named.
 
@@ -80,8 +80,13 @@ provide: see [Conformance](#conformance) for the measurement and
 resizable ArrayBuffers, `using` declarations, and the newer proposals test262
 tracks.
 
-Of `Intl`, every API is there; what is missing is data. Time zone names are
-English, where a zone has a name rather than an offset. Sorting follows the
+Of `Intl`, every API is there; what is missing is data. A time zone is named
+in the language being written in -- `new Date().toString()` ends with
+`(Mitteleuropäische Normalzeit)` on a German machine -- but the names that do
+not turn with the seasons, which `timeZoneName: "longGeneric"` asks for, are
+English until `intldata` is imported. ICU reaches further back than the engine
+does: a zone that has since been renamed is called what it is called now, so a
+date from before 1970 may name its zone differently. Sorting follows the
 Unicode algorithm with each language's own tailoring, but not the orderings
 that are a whole script's worth of data — Chinese and Japanese order their
 characters by sound or by stroke, and those sort by code point here.
@@ -355,7 +360,7 @@ loop.Run(ctx)     // timers, and work that finished on other goroutines
 |---|---|
 | Always | `console`, `URL`, `TextEncoder`/`TextDecoder`, `atob`/`btoa`, `structuredClone`, `performance`, `crypto` (hashing, HMAC, PBKDF2, HKDF, `subtle`), `Blob`, `File`, `FormData`, `URLPattern`, `AbortController`, `Buffer`, the web's streams, `CompressionStream`, and the `path`, `events`, `util`, `assert`, `buffer`, `crypto`, `zlib`, `stream/web`, `url`, `querystring`, `string_decoder` modules |
 | `Loop` | `setTimeout`, `setInterval`, `queueMicrotask`, and the `timers`, `timers/promises` modules |
-| import `intldata` | the names of every language, region, script and currency, in every language — `Intl.DisplayNames` answers in English without it |
+| import `intldata` | the names of every language, region, script and currency, and what a time zone is called where the name does not turn with the seasons, in every language — `Intl.DisplayNames` answers in English without it |
 | `FS` | the `fs` module, sync and promise halves, `createReadStream`/`createWriteStream`, confined to `Root` |
 | `Process` | `process.argv`, `env`, `cwd`, `stdout`, `exit` — what the host chooses to say |
 | `OS` | the `os` module |
@@ -442,6 +447,21 @@ rt := quickjs.New(
     quickjs.WithMaxCallDepth(1000),
 )
 ```
+
+So is the language a script means when it formats something without saying
+which language to format it in -- what `Intl` answers with when it is given no
+locale, and what `Date`'s `toString` and `toLocaleString` write in:
+
+```go
+rt := quickjs.New(quickjs.WithLocale("de-DE"))
+rt.SetTimeZone(time.UTC)   // and the zone its local-time methods use
+```
+
+Left unset, the runtime takes the language the machine is set to -- `LC_ALL`,
+`LC_MESSAGES` or `LANG` on a Unix machine, and English where none of them says
+-- which is what every other engine does, so that a program run twice in the
+same shell is not given two different answers. A server that formats for
+somebody else should set it rather than inherit it.
 
 Runaway recursion raises a catchable `RangeError` rather than overflowing the
 goroutine stack. Deeply nested source is rejected at parse time for the same

@@ -393,11 +393,11 @@ func (o *dateOptions) field(push func(kind, value string), t time.Time, letter b
 			return
 		}
 		push("dayPeriod", l.DayPeriods[1])
-	case 'z', 'v':
-		push("timeZoneName", o.zoneName(t, n >= 4 || o.timeZoneName == "long"))
-	case 'Z', 'O', 'V', 'X', 'x':
+	case 'z', 'v', 'O':
+		push("timeZoneName", o.zoneName(t, zoneStyle(letter, n)))
+	case 'Z', 'V', 'X', 'x':
 		_, offset := t.Zone()
-		push("timeZoneName", offsetName(offset))
+		push("timeZoneName", o.offsetName(offset, false))
 	case 'Q', 'q':
 		quarter := (int(t.Month())-1)/3 + 1
 		push("literal", "Q"+strconv.Itoa(quarter))
@@ -411,47 +411,87 @@ func (o *dateOptions) field(push func(kind, value string), t time.Time, letter b
 	}
 }
 
-// zoneName is what the zone is called at this instant: the name it has in
-// English where it has one, and the offset from Greenwich otherwise -- which
-// is what most zones outside the Americas are called anyway.
-func (o *dateOptions) zoneName(t time.Time, long bool) string {
-	// Greenwich, which every one of its names comes back to.
-	if o.zone == time.UTC {
-		if long {
-			return "Coordinated Universal Time"
-		}
-		return "UTC"
+// zoneLetters is the pattern letter that writes a zone in the style asked
+// for, which is what is added to a pattern that carries no zone of its own.
+func zoneLetters(style string) string {
+	switch style {
+	case "long":
+		return "zzzz"
+	case "shortGeneric":
+		return "v"
+	case "longGeneric":
+		return "vvvv"
+	case "shortOffset":
+		return "O"
+	case "longOffset":
+		return "OOOO"
+	default:
+		return "z"
 	}
-	_, offset := t.Zone()
-	// A name only where the language it is in is the language being written.
-	if strings.HasPrefix(o.locale.Tag, "en") {
-		short, full := icu.ZoneName(o.timeZone, offset/60)
-		if long && full != "" {
-			return full
-		}
-		if !long && short != "" {
-			return short
-		}
-	}
-	return offsetName(offset)
 }
 
-// offsetName is what a zone with no name of its own is called.
-func offsetName(offset int) string {
-	if offset == 0 {
-		return "GMT"
+// zoneStyle is the kind of zone name a pattern letter asks for: a name for
+// the season in z, one that holds all year in v, and the offset written out
+// in O, each in a long form and a short one.
+func zoneStyle(letter byte, n int) string {
+	switch letter {
+	case 'v':
+		if n >= 4 {
+			return "longGeneric"
+		}
+		return "shortGeneric"
+	case 'O':
+		if n >= 4 {
+			return "longOffset"
+		}
+		return "shortOffset"
+	default:
+		if n >= 4 {
+			return "long"
+		}
+		return "short"
 	}
-	sign := "+"
-	if offset < 0 {
-		sign = "-"
-		offset = -offset
+}
+
+// zoneName is what the zone is called at this instant, in the style asked
+// for. What was asked for wins over what the locale's pattern carries, since
+// a pattern is chosen for the fields in it rather than for the style of them.
+//
+// A zone with no name in this language is written as an offset from
+// Greenwich, which is what most zones outside the Americas are called anyway.
+func (o *dateOptions) zoneName(t time.Time, style string) string {
+	if o.timeZoneName != "" {
+		style = o.timeZoneName
 	}
-	hours := offset / 3600
-	minutes := (offset % 3600) / 60
-	if minutes == 0 {
-		return "GMT" + sign + strconv.Itoa(hours)
+	names := icu.ZoneNamesIn(o.locale.Tag, o.timeZone)
+	var name string
+	switch style {
+	case "long":
+		name = names.LongStandard
+		if t.IsDST() {
+			name = names.LongDaylight
+		}
+	case "short":
+		name = names.ShortStandard
+		if t.IsDST() {
+			name = names.ShortDaylight
+		}
+	case "longGeneric":
+		name = names.LongGeneric
+	case "shortGeneric":
+		name = names.ShortGeneric
 	}
-	return "GMT" + sign + strconv.Itoa(hours) + ":" + pad2(minutes)
+	if name != "" {
+		return name
+	}
+	_, offset := t.Zone()
+	return o.offsetName(offset, strings.HasPrefix(style, "long"))
+}
+
+// offsetName is what a zone with no name of its own is called, in the
+// language being written: GMT-05:00 in English, UTC−05:00 in French.
+func (o *dateOptions) offsetName(offset int, long bool) string {
+	return icu.OffsetName(o.locale.Tag, offset/60, long)
 }
 
 func pad2(n int) string {
@@ -741,7 +781,7 @@ func (o *dateOptions) patternFor() string {
 		if !strings.ContainsAny(patternLettersOf(pattern), "hHkKms") {
 			joiner = glueSeparator(l)
 		}
-		pattern += joiner + "z"
+		pattern += joiner + zoneLetters(o.timeZoneName)
 	}
 	// A part of the day asked for alongside the hour takes the place of the
 	// morning-or-afternoon the pattern would have written.
@@ -1073,7 +1113,7 @@ func (o *dateOptions) buildPattern() string {
 		parts = append(parts, timePart)
 	}
 	if o.timeZoneName != "" {
-		parts = append(parts, "z")
+		parts = append(parts, zoneLetters(o.timeZoneName))
 	}
 	if len(parts) == 0 {
 		return l.DatePatterns[3]

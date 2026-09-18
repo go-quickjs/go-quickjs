@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
 )
@@ -260,9 +261,11 @@ func TestIntlFormats(t *testing.T) {
 		{`new Intl.DisplayNames("en", {type: "region"}).of("QQ")`, "QQ"},
 
 		// What it says about itself, which is how a program can tell what it
-		// got: a locale it has data for, or English.
+		// got: a locale it has data for, or the one it formats in when it is
+		// not told which.
 		{`new Intl.NumberFormat("de-DE").resolvedOptions().locale`, "de-DE"},
-		{`new Intl.NumberFormat("xx-YY").resolvedOptions().locale`, "en"},
+		{`new Intl.NumberFormat("xx-YY").resolvedOptions().locale ===
+		    new Intl.NumberFormat().resolvedOptions().locale`, "true"},
 		{`Intl.NumberFormat.supportedLocalesOf(["de", "xx"]).join()`, "de"},
 		{`Intl.getCanonicalLocales(["EN-us", "zh-hant-tw"]).join()`, "en-US,zh-Hant-TW"},
 		// An underscore is not a hyphen, and a tag written with one is not a
@@ -336,5 +339,111 @@ func TestIntlIsBuiltWhenAskedFor(t *testing.T) {
 	}
 	for _, tc := range cases {
 		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// The language a script means when it does not say which, which is the
+// machine's unless the host says otherwise.
+func TestDefaultLocale(t *testing.T) {
+	rt := quickjs.New(quickjs.WithLocale("de-DE"))
+	defer rt.Close()
+
+	for _, tc := range []struct{ src, want string }{
+		{`new Intl.DateTimeFormat().resolvedOptions().locale`, "de-DE"},
+		{`new Intl.NumberFormat().format(1234.5)`, "1.234,5"},
+		{`new Intl.DateTimeFormat(undefined, {timeZone: "UTC"})
+		    .format(Date.UTC(2024, 0, 5))`, "5.1.2024"},
+		{`new Date(Date.UTC(2024, 0, 5)).toLocaleDateString(undefined,
+		    {timeZone: "UTC", dateStyle: "full"})`, "Freitag, 5. Januar 2024"},
+		// A language nothing is known about is answered with this one, which
+		// is what a program that asked for it would be answered with anyway.
+		{`new Intl.NumberFormat("xx-YY").resolvedOptions().locale`, "de-DE"},
+	} {
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+			continue
+		}
+		if got := v.String(); got != tc.want {
+			t.Errorf("%s\n got  %q\n want %q", tc.src, got, tc.want)
+		}
+	}
+
+	// And it can be changed while the runtime runs.
+	rt.SetLocale("fr-FR")
+	if got := rt.Locale(); got != "fr-FR" {
+		t.Errorf("Locale() = %q, want fr-FR", got)
+	}
+	v, err := rt.Eval(`new Intl.NumberFormat().format(1234.5)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String(); got != "1 234,5" {
+		t.Errorf("after SetLocale: %q", got)
+	}
+}
+
+// A date written out ends with the name of the zone it is written in, in the
+// language the runtime formats in -- which is what V8 does, and the only part
+// of Date.prototype.toString that is not fixed by the specification.
+func TestDateStringsNameTheZone(t *testing.T) {
+	when := float64(1704412800000) // 2024-01-05T00:00:00Z
+	summer := float64(1720137600000)
+
+	for _, tc := range []struct{ locale, zone, want, inSummer string }{
+		{"en-US", "America/New_York",
+			"Thu Jan 04 2024 19:00:00 GMT-0500 (Eastern Standard Time)",
+			"Thu Jul 04 2024 20:00:00 GMT-0400 (Eastern Daylight Time)"},
+		{"de-DE", "Europe/Berlin",
+			"Fri Jan 05 2024 01:00:00 GMT+0100 (Mitteleuropäische Normalzeit)",
+			"Fri Jul 05 2024 02:00:00 GMT+0200 (Mitteleuropäische Sommerzeit)"},
+		{"ja-JP", "Asia/Tokyo",
+			"Fri Jan 05 2024 09:00:00 GMT+0900 (日本標準時)",
+			"Fri Jul 05 2024 09:00:00 GMT+0900 (日本標準時)"},
+		// Greenwich itself, and a zone that is nothing but an offset from it,
+		// which is written the way the language writes an offset.
+		{"en-US", "UTC",
+			"Fri Jan 05 2024 00:00:00 GMT+0000 (Coordinated Universal Time)",
+			"Fri Jul 05 2024 00:00:00 GMT+0000 (Coordinated Universal Time)"},
+		{"fr-FR", "Etc/GMT+5",
+			"Thu Jan 04 2024 19:00:00 GMT-0500 (UTC−05:00)",
+			"Thu Jul 04 2024 19:00:00 GMT-0500 (UTC−05:00)"},
+		{"fa-IR", "Etc/GMT+5",
+			"Thu Jan 04 2024 19:00:00 GMT-0500 (‎−۰۵:۰۰ گرینویچ)",
+			"Thu Jul 04 2024 19:00:00 GMT-0500 (‎−۰۵:۰۰ گرینویچ)"},
+	} {
+		zone, err := time.LoadLocation(tc.zone)
+		if err != nil {
+			t.Skipf("no zone files: %v", err)
+		}
+		rt := quickjs.New(quickjs.WithLocale(tc.locale))
+		rt.SetTimeZone(zone)
+
+		for _, when := range []struct {
+			at   float64
+			want string
+		}{{when, tc.want}, {summer, tc.inSummer}} {
+			v, err := rt.Eval(`new Date(` + strconv.FormatFloat(when.at, 'f', -1, 64) +
+				`).toString()`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := v.String(); got != when.want {
+				t.Errorf("%s in %s\n got  %q\n want %q",
+					tc.locale, tc.zone, got, when.want)
+			}
+			// toTimeString is the same line without the date, and
+			// toDateString the date without the zone.
+			v, err = rt.Eval(`new Date(` + strconv.FormatFloat(when.at, 'f', -1, 64) +
+				`).toTimeString()`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := v.String(), when.want[len("Thu Jan 04 2024 "):]; got != want {
+				t.Errorf("%s in %s toTimeString\n got  %q\n want %q",
+					tc.locale, tc.zone, got, want)
+			}
+		}
+		rt.Close()
 	}
 }
