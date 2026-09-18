@@ -3,6 +3,8 @@ package quickjs
 import (
 	"sort"
 
+	"github.com/go-quickjs/go-quickjs/internal/compiler"
+	"github.com/go-quickjs/go-quickjs/internal/parser"
 	"github.com/go-quickjs/go-quickjs/internal/vm"
 )
 
@@ -81,6 +83,32 @@ func (r *Runtime) SetModuleValues(name string, exports map[string]Value) error {
 		out = append(out, vm.NativeExport{Name: k, Value: exports[k].v})
 	}
 	r.rt.DefineNativeModule(name, out)
+	return nil
+}
+
+// CheckSyntax parses and compiles source without running it, reporting the
+// first error as one.
+//
+// It is what a tool that checks a file does, and what a prompt uses to tell an
+// unfinished line from a wrong one: the error carries the position of the
+// trouble, so a caller can say whether more input would help.
+func (r *Runtime) CheckSyntax(src string) error {
+	_, err := compile(src, "<check>")
+	return err
+}
+
+// CheckModuleSyntax is CheckSyntax for module source, where import and export
+// are allowed and the code is strict whether it says so or not.
+func (r *Runtime) CheckModuleSyntax(src string) error {
+	prog, err := parser.Parse(src, parser.Options{Module: true})
+	if err != nil {
+		return &SyntaxError{err: err}
+	}
+	if _, _, err := compiler.CompileModule(prog, compiler.Options{
+		Source: "<check>", Text: src,
+	}); err != nil {
+		return &SyntaxError{err: err}
+	}
 	return nil
 }
 
