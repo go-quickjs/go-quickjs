@@ -273,3 +273,36 @@ func TestJSONLoneSurrogateRoundTrip(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestJSONNestingIsBounded covers the depth limit. Parsing, serializing and
+// reviving all walk the structure by recursion, and the stack a deep enough
+// document would exhaust cannot be grown for ever -- nor can its exhaustion be
+// caught, which would take the host down rather than the script.
+func TestJSONNestingIsBounded(t *testing.T) {
+	cases := []struct{ src, want string }{
+		// Ordinary depth is unaffected.
+		{`JSON.parse("[".repeat(100) + "]".repeat(100)).length`, "1"},
+		{`JSON.stringify(JSON.parse("[".repeat(500) + "]".repeat(500))).length`, "1000"},
+
+		// Past the limit it is an error a script can catch, rather than the
+		// end of the process.
+		{`var deep = "[".repeat(3000000) + "]".repeat(3000000)
+		  try { JSON.parse(deep); "parsed" } catch (e) { e.constructor.name }`, "RangeError"},
+		{`var deep = "{\"a\":".repeat(200000) + "1" + "}".repeat(200000)
+		  try { JSON.parse(deep); "parsed" } catch (e) { e.constructor.name }`, "RangeError"},
+		// The same for building one and serializing it.
+		{`var o = [], t = o
+		  for (var i = 0; i < 200000; i++) { var n = []; t.push(n); t = n }
+		  try { JSON.stringify(o); "ok" } catch (e) { e.constructor.name }`, "RangeError"},
+		// And for reviving one, which walks it again.
+		{`var text = "[".repeat(20000) + "]".repeat(20000)
+		  try { JSON.parse(text, function (k, v) { return v }); "ok" }
+		  catch (e) { e.constructor.name }`, "RangeError"},
+		// A structure just inside the limit still works.
+		{`var text = "[".repeat(9000) + "]".repeat(9000)
+		  JSON.stringify(JSON.parse(text)).length`, "18000"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

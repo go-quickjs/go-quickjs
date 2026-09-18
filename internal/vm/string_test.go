@@ -392,31 +392,46 @@ func TestLoneSurrogateRoundTripsThroughGoString(t *testing.T) {
 }
 
 // TestLoneSurrogateSurvivesRopeFlattening checks that the deferred-copy path
-// preserves surrogates too, including one split across a rope boundary.
+// preserves surrogates too, on both sides of a rope boundary.
 func TestLoneSurrogateSurvivesRopeFlattening(t *testing.T) {
 	const hi, lo = 0xD83D, 0xDE00
 	pad := NewString(strings.Repeat("x", 100))
 
-	// Build a rope whose two halves each end and begin with a surrogate half.
+	// Two high halves meet at the boundary, so nothing pairs and the copy is
+	// deferred, which is what makes this a rope at all.
 	left := pad.Concat(newStringFromUnits(hi))
-	right := newStringFromUnits(lo).Concat(pad)
-	rope := left.Concat(right)
-
+	rope := left.Concat(newStringFromUnits(hi).Concat(pad))
 	if rope.left == nil {
 		t.Fatal("expected a rope")
 	}
 	if got, want := rope.Len(), 100+1+1+100; got != want {
 		t.Fatalf("Len() = %d, want %d", got, want)
 	}
-	// Flattening must leave the two halves adjacent and readable.
+	// Flattening must leave both halves where they were.
 	if got := rope.CharCodeAt(100); got != hi {
 		t.Errorf("unit 100 = %#x, want %#x", got, hi)
 	}
-	if got := rope.CharCodeAt(101); got != lo {
+	if got := rope.CharCodeAt(101); got != hi {
+		t.Errorf("unit 101 = %#x, want %#x", got, hi)
+	}
+
+	// Where the two halves do pair, they are one character: the concatenation
+	// spells it as one sequence rather than deferring a copy that would leave
+	// two, since a character has one spelling whatever built it.
+	joined := left.Concat(newStringFromUnits(lo).Concat(pad))
+	if got, want := joined.Len(), 100+1+1+100; got != want {
+		t.Fatalf("Len() = %d, want %d", got, want)
+	}
+	if got := joined.CharCodeAt(100); got != hi {
+		t.Errorf("unit 100 = %#x, want %#x", got, hi)
+	}
+	if got := joined.CharCodeAt(101); got != lo {
 		t.Errorf("unit 101 = %#x, want %#x", got, lo)
 	}
-	// Adjacent halves form a valid pair once joined.
-	if got := rope.CodePointAt(100); got != 0x1F600 {
+	if got := joined.CodePointAt(100); got != 0x1F600 {
 		t.Errorf("CodePointAt(100) = %#x, want 0x1F600", got)
+	}
+	if got, want := joined.Go(), pad.Go()+"\U0001F600"+pad.Go(); got != want {
+		t.Errorf("joined = %q, want %q", got, want)
 	}
 }

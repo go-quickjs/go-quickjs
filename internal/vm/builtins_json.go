@@ -132,6 +132,10 @@ func (r *Runtime) jsonIndent(v Value) (string, error) {
 type jsonEncoder struct {
 	rt     *Runtime
 	indent string
+	// depth is how deeply the walk has descended, which is bounded for the
+	// same reason the parser's is: the stack cannot grow for ever, and running
+	// out of it would take the host down rather than the script.
+	depth int
 	// seen detects the cycles that would otherwise recurse forever.
 	seen map[*Object]bool
 
@@ -228,6 +232,16 @@ func (e *jsonEncoder) apply(holder Value, key Value, v Value) (Value, error) {
 // A value the reviver returns undefined for is deleted, which is how a reviver
 // prunes what it does not want.
 func (r *Runtime) reviveJSON(holder *Object, key Value, reviver Value) (Value, error) {
+	return r.reviveJSONAt(holder, key, reviver, 0)
+}
+
+// reviveJSONAt is reviveJSON with the depth it has reached, which is bounded
+// for the same reason the parser's is.
+func (r *Runtime) reviveJSONAt(holder *Object, key Value, reviver Value, depth int) (Value, error) {
+	if depth >= jsonMaxDepth {
+		return Undefined, r.throwRangeError(
+			"a structure nested this deeply cannot be revived")
+	}
 	k, err := r.toPropertyKey(key)
 	if err != nil {
 		return Undefined, err
@@ -244,7 +258,7 @@ func (r *Runtime) reviveJSON(holder *Object, key Value, reviver Value) (Value, e
 				return Undefined, err
 			}
 			for i := int64(0); i < a.n; i++ {
-				el, err := r.reviveJSON(o, Str(NewString(strconv.FormatInt(i, 10))), reviver)
+				el, err := r.reviveJSONAt(o, Str(NewString(strconv.FormatInt(i, 10))), reviver, depth+1)
 				if err != nil {
 					return Undefined, err
 				}
@@ -274,7 +288,7 @@ func (r *Runtime) reviveJSON(holder *Object, key Value, reviver Value) (Value, e
 				}
 			}
 			for _, pk := range keys {
-				el, err := r.reviveJSON(o, r.keyToValue(pk), reviver)
+				el, err := r.reviveJSONAt(o, r.keyToValue(pk), reviver, depth+1)
 				if err != nil {
 					return Undefined, err
 				}
@@ -384,6 +398,12 @@ func (e *jsonEncoder) encode(buf []byte, v Value, prefix string) ([]byte, bool, 
 	if e.seen[o] {
 		return buf, false, e.rt.throwTypeError("converting a circular structure to JSON")
 	}
+	if e.depth >= jsonMaxDepth {
+		return buf, false, e.rt.throwRangeError(
+			"a structure nested this deeply cannot be serialized")
+	}
+	e.depth++
+	defer func() { e.depth-- }()
 	e.seen[o] = true
 	defer delete(e.seen, o)
 
@@ -573,11 +593,23 @@ func appendJSONString(buf []byte, s string) []byte {
 	return append(buf, '"')
 }
 
+// jsonMaxDepth bounds how deeply JSON may nest.
+//
+// Parsing, serializing and reviving all walk the structure by recursion, and
+// the goroutine stack a deep enough document would exhaust cannot be grown for
+// ever -- nor can its exhaustion be caught, which would take the host down
+// rather than the script. Real documents nest tens deep; this is the point past
+// which one is no longer data.
+const jsonMaxDepth = 10000
+
 // jsonParser is a recursive-descent parser for JSON text.
 type jsonParser struct {
 	rt  *Runtime
 	src string
 	pos int
+	// depth is how deeply the parser has descended, which is bounded: the
+	// stack it recurses on cannot grow for ever.
+	depth int
 	// scratch collects the elements of the arrays being parsed, one array's
 	// above its parent's. Each is copied out at exactly its own length when
 	// its closing bracket arrives, so growing this one buffer replaces growing
@@ -601,10 +633,21 @@ func (p *jsonParser) parseValue() (Value, error) {
 		return Undefined, p.rt.throwSyntaxError("unexpected end of JSON input")
 	}
 	switch c := p.src[p.pos]; {
-	case c == '{':
-		return p.parseObject()
-	case c == '[':
-		return p.parseArray()
+	case c == '{', c == '[':
+		if p.depth >= jsonMaxDepth {
+			return Undefined, p.rt.throwRangeError(
+				"JSON nests too deeply to be parsed")
+		}
+		p.depth++
+		var v Value
+		var err error
+		if c == '{' {
+			v, err = p.parseObject()
+		} else {
+			v, err = p.parseArray()
+		}
+		p.depth--
+		return v, err
 	case c == '"':
 		s, err := p.parseString()
 		if err != nil {
