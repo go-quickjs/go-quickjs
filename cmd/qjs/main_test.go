@@ -469,3 +469,50 @@ func TestAllowNetSockets(t *testing.T) {
 		t.Errorf("code=%d out=%q err=%q", code, out, errOut)
 	}
 }
+
+// The prompt accepts a top-level await, which is what a prompt is mostly used
+// for once anything is asynchronous.
+func TestREPLAwait(t *testing.T) {
+	input := strings.Join([]string{
+		`const answer = await Promise.resolve(41)`,
+		`answer + 1`,
+		`await new Promise(r => setTimeout(() => r("slept"), 5))`,
+		`for (const x of [1, 2]) { await null; console.log("saw", x) }`,
+		`await Promise.reject(new Error("no good"))`,
+		`"still going"`,
+		`.exit`,
+	}, "\n") + "\n"
+
+	code, out, errOut := exec(t, input)
+	if code != 0 {
+		t.Fatalf("code=%d err=%q", code, errOut)
+	}
+	for _, want := range []string{"41", "42", "'slept'", "saw 1", "saw 2", "'still going'"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output does not contain %q:\n%s", want, out)
+		}
+	}
+	// A rejection is reported once, not once as uncaught and again as the
+	// prompt's own error.
+	if n := strings.Count(errOut, "no good"); n != 1 {
+		t.Errorf("the rejection was reported %d times:\n%s", n, errOut)
+	}
+}
+
+func TestAwaitedDeclarationsPersist(t *testing.T) {
+	code, out, _ := exec(t, "const kept = await Promise.resolve(7)\nkept * 6\n.exit\n")
+	if code != 0 || !strings.Contains(out, "42") {
+		t.Errorf("code=%d out=%q", code, out)
+	}
+}
+
+// An unfinished input is still merely unfinished, even where it contains await.
+func TestREPLUnfinishedAwait(t *testing.T) {
+	code, out, errOut := exec(t, "const v = await Promise.resolve({\n  a: 1,\n})\nv.a\n.exit\n")
+	if code != 0 || !strings.Contains(out, "1") {
+		t.Errorf("code=%d out=%q err=%q", code, out, errOut)
+	}
+	if strings.Contains(errOut, "SyntaxError") {
+		t.Errorf("an unfinished line was reported as an error: %q", errOut)
+	}
+}

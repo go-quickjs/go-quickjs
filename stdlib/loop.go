@@ -1,25 +1,40 @@
 // Package stdlib gives a runtime the things a program expects to find: a
-// console, timers, fetch, a filesystem, and the rest.
+// console, timers, streams, hashing, a filesystem, the network, and the rest.
 //
-// None of it is present unless a host asks for it, and each piece is asked for
-// separately, because they are not equally dangerous. A console writes where
-// the host says; timers need somewhere to run; fs and fetch reach outside the
-// process altogether. A host that wants the lot, and has decided that is right
-// for the code it is about to run, can say so in one line:
+// None of what reaches outside the process is present unless a host asks for
+// it, and each piece is asked for separately, because they are not equally
+// dangerous. A console writes where the host says; timers need somewhere to
+// run; fs, fetch, serve, sockets and child processes reach the world. A host
+// that wants the lot, and has decided that is right for the code it is about to
+// run, can say so in one line:
 //
 //	loop := stdlib.NewLoop(rt)
-//	stdlib.Install(rt, loop, stdlib.Config{
+//	stdlib.Install(rt, stdlib.Config{
 //	    Stdout: os.Stdout,
+//	    Loop:   loop,
 //	    FS:     &stdlib.FS{Root: "."},
 //	    Fetch:  &stdlib.Fetch{},
 //	})
 //	rt.Eval(script)
 //	loop.Run(ctx)
 //
+// What is installed without being asked for is what cannot reach anything: the
+// language's own library, the web's streams and text encoders, URL, Blob and
+// FormData, hashing and compression, and the node modules that are pure
+// computation. Everything else is a field in [Config].
+//
 // A host that wants only a console and timers installs only those. What is not
 // installed cannot be reached: there is no ambient authority anywhere in the
 // engine, so a capability that was never handed over does not exist for the
 // script.
+//
+// # Where the work happens
+//
+// A runtime belongs to one goroutine. Everything here that waits -- a request,
+// a file, a program, a socket -- does its waiting on another goroutine and
+// hands the result back through [Loop.Post], which runs it on the loop's
+// goroutine with the rest of the script. Nothing in this package touches a
+// JavaScript value from anywhere else.
 package stdlib
 
 import (

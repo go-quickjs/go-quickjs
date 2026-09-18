@@ -176,7 +176,13 @@ serve({port: 8080}, async (request) => {
 The bounds are there too — `--memory-limit 64m`, `--stack-size`, `--timeout 5s`,
 `--no-code-generation` — and `--check` parses without running. The prompt keeps
 an unfinished line rather than refusing it, so a function can be typed over
-several lines, and leaves the last value in `_`.
+several lines, leaves the last value in `_`, and takes a top-level `await`:
+
+```
+> const res = await fetch("https://example.com")
+> res.status
+200
+```
 
 ## Calling Go from JavaScript
 

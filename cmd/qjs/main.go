@@ -24,6 +24,7 @@ package main
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -33,6 +34,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -544,28 +546,51 @@ func repl(rt *quickjs.Runtime, loop *stdlib.Loop, ctx context.Context,
 		src := held.String()
 
 		// An input that is merely unfinished waits for more; one that is wrong
-		// is reported at once.
+		// is reported at once. An input that only makes sense inside an async
+		// function -- anything with a top-level await -- is put in one.
+		awaited := ""
 		if err := rt.CheckSyntax(src); err != nil {
-			if strings.TrimSpace(line) == "" {
-				held.Reset()
-				fmt.Fprintln(stderr, err)
-			} else if isUnfinished(err) {
+			// Whether more input would help is asked of the form the input
+			// will actually be run in: half of an await is unfinished twice
+			// over, and reporting the first complaint would be wrong.
+			inAsync := rt.CheckSyntax("async function __repl() {\n" + src + "\n}")
+			switch {
+			case inAsync == nil:
+				awaited, _ = asAwaited(rt, src)
+			case strings.TrimSpace(line) != "" &&
+				(isUnfinished(err) || isUnfinished(inAsync)):
 				prompt()
 				continue
-			} else {
+			default:
 				held.Reset()
 				fmt.Fprintln(stderr, err)
+				prompt()
+				continue
 			}
-			prompt()
-			continue
 		}
 		held.Reset()
 
-		v, err := rt.EvalContext(ctx, src)
+		v, err := rt.EvalContext(ctx, cmp.Or(awaited, src))
 		if err != nil {
 			report(rt, stderr, err)
 			prompt()
 			continue
+		}
+		if awaited != "" {
+			// What came back is the function the input was put in; running it
+			// is what awaits, and the prompt shows what it produced.
+			settled, failed, err := await(loop, ctx, v)
+			if err != nil {
+				report(rt, stderr, err)
+				prompt()
+				continue
+			}
+			if failed {
+				report(rt, stderr, rt.Throw(settled))
+				prompt()
+				continue
+			}
+			v = settled
 		}
 		if err := loop.Run(ctx); err != nil {
 			report(rt, stderr, err)
@@ -581,6 +606,70 @@ func repl(rt *quickjs.Runtime, loop *stdlib.Loop, ctx context.Context,
 	}
 	fmt.Fprintln(stdout)
 	return 0
+}
+
+// asAwaited puts an input that only makes sense inside an async function into
+// one, and reports whether it did.
+//
+// A declaration is kept: `const x = await f()` would otherwise put x inside the
+// function and lose it, so it becomes an assignment to a global, which is what
+// a prompt means by a declaration anyway.
+func asAwaited(rt *quickjs.Runtime, src string) (string, bool) {
+	if rt.CheckSyntax("async function __repl() {\n"+src+"\n}") != nil {
+		return "", false
+	}
+	body := declarationAsAssignment(src)
+	// The two ends are handed in rather than taken from the promise
+	// afterwards: a rejection that is only caught later is an uncaught one for
+	// as long as it takes, and the prompt would report it twice.
+	//
+	// An expression is passed on so that the prompt has something to print; a
+	// statement has nothing to show.
+	if rt.CheckSyntax("async function __repl() {\nreturn (\n"+body+"\n)\n}") == nil {
+		return "(async (__ok, __fail) => { try { __ok(\n" +
+			body + "\n) } catch (e) { __fail(e) } })", true
+	}
+	return "(async (__ok, __fail) => { try {\n" +
+		body + "\n;__ok(undefined) } catch (e) { __fail(e) } })", true
+}
+
+// replDeclaration matches a single simple declaration at the start of an input.
+var replDeclaration = regexp.MustCompile(`^\s*(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=`)
+
+func declarationAsAssignment(src string) string {
+	m := replDeclaration.FindStringSubmatchIndex(src)
+	if m == nil {
+		return src
+	}
+	name := src[m[2]:m[3]]
+	return "globalThis." + name + " =" + src[m[1]:]
+}
+
+// await runs the loop until the wrapped input has finished and reports what it
+// produced, and whether that was a failure.
+func await(loop *stdlib.Loop, ctx context.Context,
+	fn quickjs.Value) (quickjs.Value, bool, error) {
+	var value quickjs.Value
+	var failed bool
+	done := make(chan struct{})
+	settle := func(v quickjs.Value) {
+		value = v
+		select {
+		case <-done:
+		default:
+			close(done)
+		}
+	}
+	if _, err := fn.Call(
+		func(v quickjs.Value) { settle(v) },
+		func(e quickjs.Value) { failed = true; settle(e) },
+	); err != nil {
+		return quickjs.Value{}, false, err
+	}
+	if err := loop.RunUntil(ctx, done); err != nil {
+		return quickjs.Value{}, false, err
+	}
+	return value, failed, nil
 }
 
 // isUnfinished reports whether a syntax error is the kind more input would fix.
