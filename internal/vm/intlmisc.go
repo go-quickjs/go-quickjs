@@ -2,7 +2,6 @@ package vm
 
 import (
 	"math"
-	"strconv"
 	"strings"
 
 	"github.com/go-quickjs/go-quickjs/internal/icu"
@@ -1006,31 +1005,4 @@ func (r *Runtime) formatNumberFor(args []Value, x float64) (string, error) {
 		return "", err
 	}
 	return o.format(x), nil
-}
-
-// formatBigIntFor writes a big integer, which cannot go through a float
-// without losing its digits: the grouping is applied to the digits it has.
-func (r *Runtime) formatBigIntFor(args []Value, digits string) (string, error) {
-	o, err := r.numberOptionsFrom(args)
-	if err != nil {
-		return "", err
-	}
-	negative := strings.HasPrefix(digits, "-")
-	digits = strings.TrimPrefix(digits, "-")
-	if n, err := strconv.ParseFloat(digits, 64); err == nil && n < 1e15 {
-		// Small enough to go through the ordinary path, fraction digits and
-		// all.
-		if negative {
-			n = -n
-		}
-		return o.format(n), nil
-	}
-	var b strings.Builder
-	if negative {
-		b.WriteString(o.locale.Minus)
-	}
-	for _, piece := range o.groupDigits(o.localDigits(digits), false) {
-		b.WriteString(piece.value)
-	}
-	return b.String(), nil
 }

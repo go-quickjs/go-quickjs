@@ -729,6 +729,16 @@ function extract(locale) {
     dates, times, both, glue, skeletons,
     // What stands between two dates of a range, which is not always what
     // stands between two numbers.
+    // Whether a range of dates written in numbers is written out twice or
+    // once with what the two have in common said once: English says
+    // "1/1/2024 - 1/5/2024" and German says "01.-05.01.2024".
+    dateRangeRepeat: (() => {
+      const f = new Intl.DateTimeFormat(locale,
+        {year: "numeric", month: "numeric", day: "numeric", timeZone: "UTC"});
+      const parts = f.formatRangeToParts(
+        new Date(Date.UTC(2024, 0, 1)), new Date(Date.UTC(2024, 0, 5)));
+      return !parts.some(p => p.source === "shared" && p.type !== "literal");
+    })(),
     dateRange: (() => {
       const parts = new Intl.DateTimeFormat(locale, {dateStyle: "medium", timeZone: "UTC"})
         .formatRangeToParts(new Date(Date.UTC(2024, 0, 1)), new Date(Date.UTC(2024, 0, 5)));

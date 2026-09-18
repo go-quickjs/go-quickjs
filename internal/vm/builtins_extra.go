@@ -267,7 +267,7 @@ func (r *Runtime) initArrayExtras2() {
 	// is the only difference from join -- and the whole point, since what a
 	// number or a date looks like is a per-element question.
 	r.defMethod(p, "toLocaleString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		return rt.arrayToLocaleString(this)
+		return rt.arrayToLocaleString(this, args)
 	})
 
 	// The change-by-copy methods, which return a new array rather than
@@ -1256,18 +1256,18 @@ func (r *Runtime) initPromiseExtras() {
 //
 // A hole or an element that is null or undefined contributes nothing, which is
 // what makes the result of [1, , 2] two separators and two numbers.
-func (r *Runtime) arrayToLocaleString(this Value) (Value, error) {
+func (r *Runtime) arrayToLocaleString(this Value, locale []Value) (Value, error) {
 	a, err := r.viewArrayLike(this)
 	if err != nil {
 		return Undefined, err
 	}
-	return r.arrayLikeToLocaleString(this, a.n)
+	return r.arrayLikeToLocaleString(this, a.n, locale)
 }
 
 // arrayLikeToLocaleString is arrayToLocaleString over a length settled by the
 // caller, which is what a typed array needs: its length is the view's own and
 // not a property a script could have defined over it.
-func (r *Runtime) arrayLikeToLocaleString(this Value, n int64) (Value, error) {
+func (r *Runtime) arrayLikeToLocaleString(this Value, n int64, locale []Value) (Value, error) {
 	o, err := r.toObject(this)
 	if err != nil {
 		return Undefined, err
@@ -1292,7 +1292,9 @@ func (r *Runtime) arrayLikeToLocaleString(this Value, n int64) (Value, error) {
 		if !isCallable(fn) {
 			return Undefined, r.throwTypeError("toLocaleString is not a function")
 		}
-		res, err := r.call(fn, v, nil)
+		// The locales and the options are handed on, since each element is
+		// asked to write itself the same way as the last.
+		res, err := r.call(fn, v, locale)
 		if err != nil {
 			return Undefined, err
 		}

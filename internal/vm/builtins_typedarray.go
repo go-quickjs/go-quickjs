@@ -1161,7 +1161,7 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		}
 		// The length is the view's own rather than a length property, which a
 		// script may have defined over it.
-		return rt.arrayLikeToLocaleString(this, int64(t.length))
+		return rt.arrayLikeToLocaleString(this, int64(t.length), args)
 	})
 
 	// %TypedArray%.prototype.toString is not merely equivalent to the Array

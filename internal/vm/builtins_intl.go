@@ -1497,13 +1497,7 @@ func (r *Runtime) numberRange(this Value, args []Value) (*rangePieces, error) {
 	// percent sign -- is written out twice, with the mark set apart from it so
 	// that the two do not run together.
 	if o.style == "currency" || o.style == "percent" {
-		if !strings.HasPrefix(separator, " ") {
-			separator = " " + separator
-		}
-		if !strings.HasSuffix(separator, " ") {
-			separator += " "
-		}
-		return joinRange(start, end, separator), nil
+		return joinRange(start, end, spacedOut(separator)), nil
 	}
 	// A measurement is written once and the two counts against it: 1–5 m.
 	if o.style == "unit" {
@@ -1536,6 +1530,11 @@ func (r *Runtime) dateRange(this Value, args []Value) (*rangePieces, error) {
 		// the mark a number takes.
 		return sameRange(start, ""), nil
 	}
+	// A date written in numbers is written out twice in some languages and
+	// once in others, with what the two have in common said once.
+	if o.locale.DateRangeRepeat && numericDate(o.pattern) {
+		return joinRange(start, end, spacedOut(o.locale.DateRange)), nil
+	}
 	return mergeRange(start, end, o.locale.DateRange), nil
 }
 
@@ -1561,6 +1560,28 @@ func (r *Runtime) rangeParts(pieces *rangePieces) *Object {
 		out[i] = Obj(o)
 	}
 	return r.newArrayFrom(out)
+}
+
+// numericDate reports whether a pattern writes a date in numbers, which is
+// the kind of range some languages write out twice.
+func numericDate(pattern string) bool {
+	letters := patternLettersOf(pattern)
+	if strings.Contains(letters, "MMM") || strings.Contains(letters, "LLL") {
+		return false
+	}
+	return strings.ContainsAny(letters, "yMdL")
+}
+
+// spacedOut is a mark with room around it, for the ranges that are written out
+// in full and would otherwise run together.
+func spacedOut(separator string) string {
+	if strings.TrimLeft(separator, " \u00a0\u202f\u2009") == separator {
+		separator = " " + separator
+	}
+	if strings.TrimRight(separator, " \u00a0\u202f\u2009") == separator {
+		separator += " "
+	}
+	return separator
 }
 
 // partObject is one entry of a formatToParts result.

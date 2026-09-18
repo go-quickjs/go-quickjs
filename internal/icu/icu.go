@@ -88,6 +88,10 @@ type Locale struct {
 	// DateRange between two dates, which is not always the same mark.
 	// Approximately says a number is not exact.
 	Range, Approximately, DateRange string
+	// DateRangeRepeat says a range of dates written in numbers is written out
+	// twice rather than once with what the two have in common said once:
+	// English says "1/1/2024 - 1/5/2024" and German says "01.-05.01.2024".
+	DateRangeRepeat bool
 	// HourCycle is the clock this language keeps, and HourCycle12 and
 	// HourCycle24 the ones it keeps when a twelve-hour or a twenty-four-hour
 	// clock is asked for: Japanese counts midnight as zero where English
@@ -512,6 +516,7 @@ func decode(tag, blob string) *Locale {
 	if strings.Contains(field(10), "g") {
 		l.MinGrouping = 2
 	}
+	l.DateRangeRepeat = strings.Contains(field(10), "r")
 	l.DecimalNegative, l.PercentNegative = field(11), field(12)
 	l.CurrencyNegative, l.Calendar = field(13), field(14)
 	l.Accounting, l.Exponential = field(15), field(16)

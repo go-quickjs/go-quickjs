@@ -36,26 +36,20 @@ func (p *rangePieces) text() string {
 func mergeRange(start, end []pieceOf, separator string) *rangePieces {
 	out := &rangePieces{}
 
-	// How far the two agree from the front, and from the back.
-	front := 0
-	for front < len(start) && front < len(end) &&
-		start[front] == end[front] {
-		front++
-	}
+	// How far the two agree from the back. What comes before the last thing
+	// they disagree about is written twice: "Jan 1 - Feb 5, 2024" says the
+	// month twice because the day after it differs, and the year once.
 	back := 0
-	for back < len(start)-front && back < len(end)-front &&
+	for back < len(start) && back < len(end) &&
 		start[len(start)-1-back] == end[len(end)-1-back] {
 		back++
 	}
 
-	for _, piece := range start[:front] {
-		out.add(piece.kind, piece.value, "shared")
-	}
-	for _, piece := range start[front : len(start)-back] {
+	for _, piece := range start[:len(start)-back] {
 		out.add(piece.kind, piece.value, "startRange")
 	}
 	out.add("literal", separator, "shared")
-	for _, piece := range end[front : len(end)-back] {
+	for _, piece := range end[:len(end)-back] {
 		out.add(piece.kind, piece.value, "endRange")
 	}
 	for _, piece := range start[len(start)-back:] {

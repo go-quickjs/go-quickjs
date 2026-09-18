@@ -55,6 +55,7 @@ type localeData struct {
 	Hour12            bool   `json:"hour12"`
 	DayPeriods        []string
 	DateRange         string `json:"dateRange"`
+	DateRangeRepeat   bool   `json:"dateRangeRepeat"`
 	HourPeriods       []string
 	HourPeriodsNarrow []string `json:"hourPeriodsNarrow"`
 	Eras              []string
@@ -854,6 +855,9 @@ func encode(l *localeData) string {
 	}
 	if l.Numbers.MinGrouping == 2 {
 		flags += "g"
+	}
+	if l.DateRangeRepeat {
+		flags += "r"
 	}
 
 	head := strings.Join([]string{
