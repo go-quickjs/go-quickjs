@@ -149,114 +149,37 @@ func (r *Runtime) collatorOf(this Value) (*collatorOptions, error) {
 
 // compare orders two strings.
 //
-// Without the Unicode collation table this is not the order a speaker of every
-// language would give, but it is the order the letters themselves give once
-// what the options say to ignore has been taken off: accents, case, or
-// punctuation. Digits compare as numbers when the options ask, which is the
-// part of collation a program most often actually wants.
+// The ordering is the Unicode one, out of the table in internal/icu: the
+// letters first, then the accents, then the case, each level only where the
+// one before it came out equal. What the options change is how much of that
+// counts, and whether a run of digits is read as a number.
 func (o *collatorOptions) compare(a, b string) int {
-	x, y := o.fold(a), o.fold(b)
+	if o.ignorePunct {
+		a, b = stripPunctuation(a), stripPunctuation(b)
+	}
+	strength, skipAccents := o.strength()
 	if o.numeric {
-		if c := compareNumerically(x, y); c != 0 {
-			return c
-		}
-	} else if x != y {
-		if x < y {
-			return -1
-		}
-		return 1
+		return o.locale.CompareNumeric(a, b, strength, skipAccents, o.caseFirst == "upper")
 	}
-	if x != y {
-		if x < y {
-			return -1
-		}
-		return 1
-	}
-	// Equal once folded means they differ only in what was ignored.
-	return 0
+	return o.locale.Compare(a, b, strength, skipAccents, o.caseFirst == "upper")
 }
 
-// fold takes off what this sensitivity ignores.
-func (o *collatorOptions) fold(s string) string {
-	out := s
-	if o.ignorePunct {
-		out = stripPunctuation(out)
-	}
+// strength is how much of a difference this collator counts, and whether the
+// accents are part of it.
+func (o *collatorOptions) strength() (icu.Strength, bool) {
 	switch o.sensitivity {
 	case "base":
-		out = stripMarks(normalizeString(strings.ToLower(out), "NFD"))
+		return icu.Primary, false
 	case "accent":
-		out = strings.ToLower(out)
+		return icu.Secondary, false
 	case "case":
-		out = stripMarks(normalizeString(out, "NFD"))
+		// The letters and the case, but not what is between them.
+		return icu.Tertiary, true
 	}
-	return out
+	return icu.Tertiary, false
 }
 
-// compareNumerically compares two strings with the runs of digits in them read
-// as numbers, so that file9 comes before file10.
-func compareNumerically(a, b string) int {
-	i, j := 0, 0
-	for i < len(a) && j < len(b) {
-		if isDigitByte(a[i]) && isDigitByte(b[j]) {
-			// The whole run on each side, without its leading zeros.
-			si, sj := i, j
-			for i < len(a) && isDigitByte(a[i]) {
-				i++
-			}
-			for j < len(b) && isDigitByte(b[j]) {
-				j++
-			}
-			x := strings.TrimLeft(a[si:i], "0")
-			y := strings.TrimLeft(b[sj:j], "0")
-			if len(x) != len(y) {
-				if len(x) < len(y) {
-					return -1
-				}
-				return 1
-			}
-			if x != y {
-				if x < y {
-					return -1
-				}
-				return 1
-			}
-			continue
-		}
-		if a[i] != b[j] {
-			if a[i] < b[j] {
-				return -1
-			}
-			return 1
-		}
-		i++
-		j++
-	}
-	switch {
-	case i == len(a) && j == len(b):
-		return 0
-	case i == len(a):
-		return -1
-	default:
-		return 1
-	}
-}
-
-func isDigitByte(c byte) bool { return c >= '0' && c <= '9' }
-
-// stripMarks drops the combining marks a decomposition left behind, which is
-// what turns é into e.
-func stripMarks(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		if r >= 0x0300 && r <= 0x036f {
-			continue
-		}
-		b.WriteRune(r)
-	}
-	return b.String()
-}
-
+// stripPunctuation drops what a collator told to ignore punctuation ignores.
 func stripPunctuation(s string) string {
 	var b strings.Builder
 	for _, r := range s {

@@ -85,6 +85,10 @@ type localeData struct {
 	} `json:"plurals"`
 	Lists    map[string]listPattern  `json:"lists"`
 	Relative map[string]relativeUnit `json:"relative"`
+	// Tailoring is how this language sorts, filled in from tailoring.json
+	// rather than by the extractor: where it puts the letters the root order
+	// puts elsewhere, and the two things it may say besides.
+	Tailoring tailoring `json:"-"`
 }
 
 // relativeUnit is how one unit of time is said in one locale.
@@ -178,6 +182,16 @@ func run() error {
 		}
 	}
 
+	// Where each language puts its letters, which is read separately because
+	// it is about the order rather than about the words.
+	tailoring, err := readTailoring(filepath.Join(filepath.Dir(script), "tailoring.json"))
+	if err != nil {
+		return err
+	}
+	for i := range data.Locales {
+		data.Locales[i].Tailoring = tailoring[data.Locales[i].Tag]
+	}
+
 	sort.Slice(data.Locales, func(i, j int) bool {
 		return data.Locales[i].Tag < data.Locales[j].Tag
 	})
@@ -213,34 +227,11 @@ func run() error {
 		joined.WriteString(encode(&l))
 		joined.WriteByte(0)
 	}
-	var packed bytes.Buffer
-	w, err := flate.NewWriter(&packed, flate.BestCompression)
-	if err != nil {
-		return err
-	}
-	if _, err := io.WriteString(w, joined.String()); err != nil {
-		return err
-	}
-	if err := w.Close(); err != nil {
-		return err
-	}
-	text := base64.StdEncoding.EncodeToString(packed.Bytes())
-
 	fmt.Fprintf(&b, "// packed is every locale's data, in the order of tags, separated by a\n")
-	fmt.Fprintf(&b, "// zero byte, compressed, and written as text. It is %d bytes of data\n",
+	fmt.Fprintf(&b, "// zero byte, compressed, and written as text. It is %d bytes of data,\n",
 		joined.Len())
-	fmt.Fprintf(&b, "// in %d bytes of binary, and nothing is unpacked until a locale is\n",
-		packed.Len())
-	fmt.Fprintf(&b, "// asked for.\n")
-	fmt.Fprintf(&b, "const packed = \"\" +\n")
-	for i := 0; i < len(text); i += 100 {
-		fmt.Fprintf(&b, "\t%q", text[i:min(i+100, len(text))])
-		if i+100 < len(text) {
-			fmt.Fprintf(&b, " +")
-		}
-		fmt.Fprintf(&b, "\n")
-	}
-	fmt.Fprintf(&b, "\n")
+	fmt.Fprintf(&b, "// and nothing is unpacked until a locale is asked for.\n")
+	writePacked(&b, "packed", joined.String())
 
 	// The variants that share another's data, which is how a hundred and fifty
 	// tags are answered without carrying a hundred and fifty more tables.
@@ -295,6 +286,17 @@ func run() error {
 	}
 	fmt.Fprintf(&b, "}\n\n")
 
+	// The order text sorts in: the three weights each character carries.
+	collation, err := readCollation(filepath.Join(filepath.Dir(script), "collation.json"))
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(&b, "// collationPacked is the order text sorts in, compressed: the runs of\n")
+	fmt.Fprintf(&b, "// characters whose letter weight advances with them, then the\n")
+	fmt.Fprintf(&b, "// characters that carry an accent or a case weight, then the ones the\n")
+	fmt.Fprintf(&b, "// collator ignores altogether.\n")
+	writePacked(&b, "collationPacked", encodeCollation(collation))
+
 	fmt.Fprintf(&b, "// currencyDigits is how many decimal places a currency is written with,\n")
 	fmt.Fprintf(&b, "// where that is not the usual two.\n")
 	fmt.Fprintf(&b, "var currencyDigits = map[string]int8{\n")
@@ -316,6 +318,136 @@ func run() error {
 	}
 	_, err = os.Stdout.Write(pretty)
 	return err
+}
+
+// writePacked writes a string as a compressed constant, since the data here is
+// text and text compresses: a megabyte in the source is an eighth of that in
+// the binary, and nothing is unpacked until something asks for it.
+func writePacked(b *strings.Builder, name, data string) {
+	var packed bytes.Buffer
+	w, err := flate.NewWriter(&packed, flate.BestCompression)
+	if err != nil {
+		panic(err)
+	}
+	if _, err := io.WriteString(w, data); err != nil {
+		panic(err)
+	}
+	if err := w.Close(); err != nil {
+		panic(err)
+	}
+	text := base64.StdEncoding.EncodeToString(packed.Bytes())
+	fmt.Fprintf(b, "const %s = \"\" +\n", name)
+	for i := 0; i < len(text); i += 100 {
+		fmt.Fprintf(b, "\t%q", text[i:min(i+100, len(text))])
+		if i+100 < len(text) {
+			fmt.Fprintf(b, " +")
+		}
+		fmt.Fprintf(b, "\n")
+	}
+	fmt.Fprintf(b, "\n")
+}
+
+// readTailoring reads where each language moves its letters.
+func readTailoring(path string) (map[string]tailoring, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("the tailorings: %w", err)
+	}
+	var list struct {
+		Tailoring map[string]tailoring `json:"tailoring"`
+	}
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return nil, fmt.Errorf("the tailorings: %w", err)
+	}
+	return list.Tailoring, nil
+}
+
+// tailoring is how one language sorts, where that is not how the root order
+// sorts.
+type tailoring struct {
+	Moved        [][3]any    `json:"moved"`
+	Contractions [][2]string `json:"contractions"`
+	UpperFirst   bool        `json:"upperFirst"`
+	Shifted      bool        `json:"shifted"`
+}
+
+// collationData is what collation.mjs writes.
+type collationData struct {
+	Ignorable  []int             `json:"ignorable"`
+	Marks      [][2]int          `json:"marks"`
+	Weights    [][4]int          `json:"weights"`
+	Expansions map[string]string `json:"expansions"`
+}
+
+func readCollation(path string) (collationData, error) {
+	var out collationData
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return out, fmt.Errorf("the collation order: %w", err)
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return out, fmt.Errorf("the collation order: %w", err)
+	}
+	return out, nil
+}
+
+// encodeCollation writes the order as three sections: the runs of characters
+// whose letter weight advances with them, the accents and cases that are not
+// the ordinary ones, and the characters that are ignored.
+func encodeCollation(c collationData) string {
+	var b strings.Builder
+
+	// A run is a stretch where the code point and the letter weight both go up
+	// by one, which is most of the table: the letters of a script are written
+	// in the order they sort in.
+	runStart, runWeight, runLength := -1, -1, 0
+	flush := func() {
+		if runStart < 0 {
+			return
+		}
+		fmt.Fprintf(&b, "%x,%x,%x;", runStart, runLength, runWeight)
+	}
+	previous := [4]int{-2, -2}
+	for _, w := range c.Weights {
+		if w[0] == previous[0]+1 && w[1] == previous[1]+1 {
+			runLength++
+		} else {
+			flush()
+			runStart, runWeight, runLength = w[0], w[1], 1
+		}
+		previous = w
+	}
+	flush()
+	b.WriteByte('\n')
+
+	for _, w := range c.Weights {
+		if w[2] == 0 && w[3] == 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "%x,%x,%x;", w[0], w[2], w[3])
+	}
+	b.WriteByte('\n')
+
+	for _, cp := range c.Ignorable {
+		fmt.Fprintf(&b, "%x;", cp)
+	}
+	b.WriteByte('\n')
+
+	// The accents, which count for nothing as letters.
+	for _, mark := range c.Marks {
+		fmt.Fprintf(&b, "%x,%x;", mark[0], mark[1])
+	}
+	b.WriteByte('\n')
+
+	// The characters that sort as several: œ as oe, ½ as 1⁄2.
+	for _, key := range sortedStringKeys(c.Expansions) {
+		cp, err := strconv.Atoi(key)
+		if err != nil {
+			continue
+		}
+		fmt.Fprintf(&b, "%x,%s;", cp, c.Expansions[key])
+	}
+	return b.String()
 }
 
 // zoneData is what zones.mjs writes.
@@ -574,7 +706,44 @@ func encode(l *localeData) string {
 		strings.Join(lists, fieldSep),
 		strings.Join(relative, fieldSep),
 		strings.Join([]string{compact("short"), compact("long")}, fieldSep),
+		encodeTailoring(l.Tailoring),
 	}, sectionSep)
+}
+
+// encodeTailoring writes where a language moves a letter to: the letter, the
+// letter it sits after, and how far along.
+func encodeTailoring(t tailoring) string {
+	flags := ""
+	if t.UpperFirst {
+		flags += "u"
+	}
+	if t.Shifted {
+		flags += "s"
+	}
+	if len(t.Moved) == 0 && flags == "" {
+		return ""
+	}
+	out := []string{flags}
+	// The letters written as two or three: cs=ch after h.
+	for _, pair := range t.Contractions {
+		if pair[0] == "" || pair[1] == "" {
+			continue
+		}
+		// The mark is not a hex digit, or a letter whose code point begins
+		// with one would be read as a spelling.
+		out = append(out, fmt.Sprintf("*%s:%x:1", pair[0], []rune(pair[1])[0]))
+	}
+	for _, move := range t.Moved {
+		letter, ok1 := move[0].(string)
+		anchor, ok2 := move[1].(string)
+		offset, ok3 := move[2].(float64)
+		if !ok1 || !ok2 || !ok3 || letter == "" || anchor == "" {
+			continue
+		}
+		out = append(out, fmt.Sprintf("%x:%x:%x",
+			[]rune(letter)[0], []rune(anchor)[0], int(offset)))
+	}
+	return strings.Join(out, itemSep)
 }
 
 // letter is the single character a plural category is written as.

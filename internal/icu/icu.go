@@ -22,6 +22,12 @@
 // not here falls back to English -- which is what Resolve reports, so that
 // resolvedOptions can say what was really used.
 //
+// Sorting is here too, in collate.go: the order the Unicode algorithm gives,
+// out of a table of what each character weighs as a letter, as an accent and
+// as a case, together with what each language changes about it -- where it
+// puts its own letters, whether a capital comes first, and the letters it
+// writes as two characters.
+//
 // The time zones are the operating system's: the names here are what a zone is
 // called in English, where it is called anything but an offset from Greenwich,
 // and the arithmetic is Go's time package reading the zone files. A name in
@@ -116,6 +122,22 @@ type Locale struct {
 	Short, Long map[int]CompactForm
 
 	Cardinal, Ordinal PluralRule
+
+	// Tailoring is where this language puts a letter that the root order puts
+	// elsewhere: Swedish sorts å after z, and Azerbaijani writes I as the
+	// capital of the dotless ı rather than of i. Every character of a letter
+	// carries the same weight here, so that a letter moves as a letter. The
+	// weights are on the scale the comparison uses, which leaves room between
+	// the root ones.
+	Tailoring map[rune]int32
+	// Contractions are the letters this language writes as two or three
+	// characters: Czech sorts ch after h, Danish aa after å. Keyed by the
+	// lower-case spelling.
+	Contractions map[string]int32
+	// UpperFirst says a capital comes before its small letter here, which
+	// Danish says and most languages do not. Shifted says punctuation is
+	// passed over until everything else has been compared, which Thai says.
+	UpperFirst, Shifted bool
 }
 
 // CompactForm is one step of a compact number: what the value is divided by,
@@ -393,17 +415,26 @@ var (
 
 func unpack() []string {
 	unpackOnce.Do(func() {
-		raw, err := base64.StdEncoding.DecodeString(packed)
+		text, err := inflate(packed)
 		if err != nil {
 			return
 		}
-		out, err := io.ReadAll(flate.NewReader(bytes.NewReader(raw)))
-		if err != nil {
-			return
-		}
-		unpacked = strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
+		unpacked = strings.Split(strings.TrimSuffix(text, "\x00"), "\x00")
 	})
 	return unpacked
+}
+
+// inflate reads one of the compressed tables.
+func inflate(text string) (string, error) {
+	raw, err := base64.StdEncoding.DecodeString(text)
+	if err != nil {
+		return "", err
+	}
+	out, err := io.ReadAll(flate.NewReader(bytes.NewReader(raw)))
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
 }
 
 // indexOf finds a tag in the sorted table.
@@ -520,6 +551,9 @@ func decode(tag, blob string) *Locale {
 	if compact := at(8); len(compact) >= 2 {
 		l.Short = decodeCompact(compact[0])
 		l.Long = decodeCompact(compact[1])
+	}
+	if moved := at(9); len(moved) > 0 {
+		l.Tailoring = decodeTailoring(moved[0], l)
 	}
 	return l
 }
@@ -670,6 +704,70 @@ func (f CompactForm) suffixFor(category byte) string {
 		return s
 	}
 	return ""
+}
+
+// decodeTailoring reads where a language moves its letters, and works out what
+// each moved letter weighs: just after the letter it was moved to sit after.
+func decodeTailoring(field string, l *Locale) map[rune]int32 {
+	if field == "" {
+		return nil
+	}
+	items := strings.Split(field, itemSep)
+	// The flags come first, before the letters that moved.
+	l.UpperFirst = strings.Contains(items[0], "u")
+	l.Shifted = strings.Contains(items[0], "s")
+	out := map[rune]int32{}
+	// The letters that moved come first, so that a spelling anchored to one of
+	// them is put after where the letter went rather than where it came from:
+	// Danish sorts aa after å, and å itself sits after z.
+	var spellings []string
+	for _, item := range items[1:] {
+		if strings.HasPrefix(item, "*") {
+			spellings = append(spellings, item)
+			continue
+		}
+		parts := strings.Split(item, ":")
+		if len(parts) != 3 {
+			continue
+		}
+		letter, err1 := strconv.ParseInt(parts[0], 16, 32)
+		anchor, err2 := strconv.ParseInt(parts[1], 16, 32)
+		offset, err3 := strconv.ParseInt(parts[2], 16, 32)
+		if err1 != nil || err2 != nil || err3 != nil || offset >= weightScale/16 {
+			continue
+		}
+		anchorWeight, _, _, ok := order().weightsOf(rune(anchor))
+		if !ok {
+			continue
+		}
+		// The offsets are spaced out, so that a spelling can be put between
+		// two letters that were moved.
+		out[rune(letter)] = anchorWeight*weightScale + int32(offset)*16
+	}
+
+	for _, item := range spellings {
+		parts := strings.Split(item[1:], ":")
+		if len(parts) != 3 {
+			continue
+		}
+		anchor, err := strconv.ParseInt(parts[1], 16, 32)
+		if err != nil {
+			continue
+		}
+		weight, moved := out[rune(anchor)]
+		if !moved {
+			anchorWeight, _, _, ok := order().weightsOf(rune(anchor))
+			if !ok {
+				continue
+			}
+			weight = anchorWeight * weightScale
+		}
+		if l.Contractions == nil {
+			l.Contractions = map[string]int32{}
+		}
+		l.Contractions[parts[0]] = weight + 1
+	}
+	return out
 }
 
 func decodeCompact(field string) map[int]CompactForm {

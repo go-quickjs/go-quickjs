@@ -154,6 +154,51 @@ for (const locale of LOCALES) {
   }
 }
 
+// --- sorting ---------------------------------------------------------------
+
+// Words chosen to exercise what a collator does: accents, case, digits,
+// punctuation, and the letters a language moves.
+const WORD_LISTS = [
+  ["zebra", "apple", "Banana", "cafe", "café", "CAFE", "naive", "naïve", "Ähre",
+   "Öl", "über", "Zoo", "ångström", "aardvark", "Ýr", "þing", "œuvre", "ñu"],
+  ["file10", "file9", "file1", "File2", "file-1", "file 1", "FILE10"],
+  ["Ćwikła", "cukier", "część", "sąd", "szum", "żyto", "zebra", "źle", "łąka", "lato"],
+  ["čaj", "cukr", "řeka", "ryba", "škola", "sůl", "žena", "zima", "chleba", "hora"],
+  ["ürün", "uzun", "ışık", "iyi", "İstanbul", "izmir", "çay", "civciv", "şeker", "sen"],
+  ["Ελλάδα", "ελιά", "Ζεύς", "ήλιος", "θάλασσα", "άλφα", "ωμέγα"],
+  ["Ярославль", "ёлка", "если", "жизнь", "щука", "шуба", "Юрий", "яблоко"],
+  ["مرحبا", "أهلا", "بيت", "تاريخ", "ثقافة"],
+  ["日本", "東京", "大阪", "京都"],
+  ["가나다", "나라", "다리", "라면"],
+];
+
+const SORT_LOCALES = ["en", "de", "de-AT", "sv", "da", "nb", "fi", "et", "is",
+                      "cs", "sk", "pl", "hu", "lt", "lv", "tr", "az", "vi", "es",
+                      "fr", "it", "pt", "nl", "el", "ru", "uk", "bg", "sr", "ar",
+                      "he", "th", "ja", "zh", "ko", "hi"];
+
+for (const locale of SORT_LOCALES) {
+  for (const options of [{}, {sensitivity: "base"}, {sensitivity: "accent"},
+                         {numeric: true}, {caseFirst: "upper"}]) {
+    for (const words of WORD_LISTS) {
+      const source = `${q(words)}.sort(new Intl.Collator(${q(locale)}, ` +
+        `${q(options)}).compare).join("|")`;
+      add(source, [...words].sort(new Intl.Collator(locale, options).compare).join("|"));
+    }
+  }
+}
+
+// And the pairwise answers, which say more than an order does when it differs.
+for (const locale of ["en", "sv", "cs", "tr", "ru"]) {
+  const collator = new Intl.Collator(locale);
+  for (const [a, b] of [["a", "b"], ["a", "A"], ["a", "á"], ["z", "ä"], ["z", "å"],
+                        ["ch", "h"], ["i", "ı"], ["e", "é"], ["ss", "ß"],
+                        ["resume", "résumé"], ["ab", "Aa"]]) {
+    const source = `new Intl.Collator(${q(locale)}).compare(${q(a)}, ${q(b)})`;
+    add(source, String(collator.compare(a, b)));
+  }
+}
+
 // --- the methods on the values themselves ----------------------------------
 
 for (const locale of LOCALES) {
