@@ -1,0 +1,196 @@
+// aliases.mjs reads the names that have been replaced since.
+//
+// Usage:
+//
+//	node internal/icu/internal/cldrgen/aliases.mjs > .../aliases.json
+//
+// A language tag may be written with a name that is no longer the name: "iw"
+// was Hebrew before it was "he", "cmn" is Mandarin and is written "zh", "BU"
+// was Burma before it was "MM", and "sh" was Serbo-Croatian before it became
+// Serbian written in Latin letters. Two tags that mean the same thing have to
+// be written the same way before they can be compared, so every one of these
+// has to be known.
+//
+// They are not published in a form a program can ask for, so they are found
+// the way everything else here is found: by asking a full ICU to canonicalize
+// every name there could be and keeping the ones it changes. The languages,
+// the regions and the scripts are enumerated outright; the variants and the
+// settings a tag may carry are asked about from a list, since there are too
+// many strings of their length to try them all.
+
+const canon = (tag) => {
+  try {
+    const out = Intl.getCanonicalLocales(tag);
+    return out.length > 0 ? out[0] : null;
+  } catch (e) {
+    return null;
+  }
+};
+
+const letters = "abcdefghijklmnopqrstuvwxyz";
+const digits = "0123456789";
+
+// Every string of a length, from an alphabet.
+function* every(alphabet, length, prefix = "") {
+  if (length === 0) {
+    yield prefix;
+    return;
+  }
+  for (const c of alphabet) yield* every(alphabet, length - 1, prefix + c);
+}
+
+const languages = {};
+for (const length of [2, 3]) {
+  for (const tag of every(letters, length)) {
+    const out = canon(tag);
+    if (out !== null && out !== tag) languages[tag] = out;
+  }
+}
+
+const regions = {};
+for (const alphabet of [letters, digits]) {
+  for (const code of every(alphabet, alphabet === letters ? 2 : 3)) {
+    const region = code.toUpperCase();
+    const out = canon("und-" + region);
+    if (out !== null && out !== "und-" + region) regions[region] = out;
+  }
+}
+
+const scripts = {};
+for (const code of every(letters, 4)) {
+  const script = code[0].toUpperCase() + code.slice(1);
+  const out = canon("und-" + script);
+  if (out !== null && out !== "und-" + script) scripts[script] = out;
+}
+
+// The tags that were registered before the rules were what they are, which are
+// a fixed list rather than a pattern.
+const GRANDFATHERED = [
+  "art-lojban", "cel-gaulish", "en-gb-oed", "i-ami", "i-bnn", "i-default",
+  "i-enochian", "i-hak", "i-klingon", "i-lux", "i-mingo", "i-navajo", "i-pwn",
+  "i-tao", "i-tay", "i-tsu", "no-bok", "no-nyn", "sgn-be-fr", "sgn-be-nl",
+  "sgn-ch-de", "zh-guoyu", "zh-hakka", "zh-min", "zh-min-nan", "zh-xiang",
+  "cmn-hans", "sgn-br", "sgn-co", "sgn-de", "sgn-dk", "sgn-es", "sgn-fr",
+  "sgn-gb", "sgn-gr", "sgn-ie", "sgn-it", "sgn-jp", "sgn-mx", "sgn-ni",
+  "sgn-nl", "sgn-no", "sgn-pt", "sgn-se", "sgn-us", "sgn-za",
+];
+const grandfathered = {};
+for (const tag of GRANDFATHERED) {
+  const out = canon(tag);
+  if (out !== null && out.toLowerCase() !== tag) grandfathered[tag] = out;
+}
+
+// The variants a language may be written in. There are too many strings of
+// five to eight characters to try them all, so this is the registered list.
+const VARIANTS = [
+  "1606nict", "1694acad", "1901", "1959acad", "1994", "1996", "aaland",
+  "abl1943", "akuapem", "alalc97", "aluku", "ao1990", "aranes", "arevela",
+  "arevmda", "arkaika", "asante", "auvern", "baku1926", "balanka", "barla",
+  "basiceng", "bauddha", "bciav", "bcizbl", "biscayan", "biske", "bohoric",
+  "boont", "bornholm", "cisaup", "colb1945", "cornu", "creiss", "dajnko",
+  "ekavsk", "emodeng", "fascia", "fonipa", "fonkirsh", "fonnapa", "fonupa",
+  "fonxsamp", "gallo", "gascon", "grclass", "grital", "grmistr", "hepburn",
+  "heploc", "hognorsk", "hsistemo", "ijekavsk", "itihasa", "ivanchov",
+  "jauer", "jyutping", "kkcor", "kociewie", "kscor", "laukika", "lemosin",
+  "lengadoc", "lipaw", "ltg1929", "ltg2007", "luna1918", "metelko", "monoton",
+  "ndyuka", "nedis", "newfound", "nicard", "njiva", "nulik", "osojs",
+  "oxendict", "pahawh2", "pahawh3", "pahawh4", "pamaka", "peano", "petr1708",
+  "pinyin", "polyton", "polytoni", "provenc", "puter", "rigik", "rozaj",
+  "rumgr", "scotland", "scouse", "simple", "solba", "sotav", "spanglis",
+  "surmiran", "sursilv", "sutsilv", "synnejyl", "tarask", "tongyong",
+  "tunumiit", "uccor", "ucrcor", "ulster", "unifon", "vaidika", "valencia",
+  "vallader", "vecdruka", "vivaraup", "wadegile", "xsistemo",
+];
+const variants = {};
+const isVariant = (s) => /^[a-z0-9]{5,8}$/.test(s) || /^[0-9][a-z0-9]{3}$/.test(s);
+const isRegion = (s) => /^[A-Z]{2}$/.test(s) || /^[0-9]{3}$/.test(s);
+for (const variant of VARIANTS) {
+  const out = canon("en-" + variant);
+  if (out === null || out === "en-" + variant) continue;
+  const replacement = out.slice(out.startsWith("en-") ? 3 : 2);
+  // A variant may become another variant, or a region, or nothing at all.
+  // Anything else is this ICU misreading a variant that ends in a year, and
+  // is left alone.
+  if (replacement === "" || isVariant(replacement) || isRegion(replacement)) {
+    variants[variant] = replacement;
+  }
+}
+// The pairs that become one: Japanese written the way the Library of Congress
+// writes it was two variants and is now one.
+for (const pair of ["hepburn-heploc"]) {
+  const out = canon("en-" + pair);
+  if (out !== null && out !== "en-" + pair) variants[pair] = out.slice(3);
+}
+
+// The settings a tag may carry, and the values that have been renamed. The
+// keys are the ones a formatter reads; the values are asked about from what
+// this ICU says it supports along with the older names for them.
+const SETTINGS = {
+  ca: [...supported("calendar"), "ethiopic-amete-alem", "islamicc",
+       "gregorian", "islamic-civil", "islamic-tbla", "islamic-umalqura",
+       "islamic-rgsa", "japanese", "roc", "buddhist"],
+  co: [...supported("collation"), "phonebook", "traditional", "gb2312han",
+       "big5han", "dictionary", "direct", "phonetic", "pinyin", "reformed",
+       "searchjl", "stroke", "unihan", "zhuyin", "standard", "search"],
+  nu: [...supported("numberingSystem"), "traditional", "native", "finance",
+       "defaul", "default"],
+  ks: ["primary", "secondary", "tertiary", "quaternary", "quartenary",
+       "identical", "level1", "level2", "level3", "level4", "identic"],
+  ms: ["imperial", "uksystem", "metric", "ussystem"],
+  kb: ["yes", "no", "true", "false"],
+  kc: ["yes", "no", "true", "false"],
+  kh: ["yes", "no", "true", "false"],
+  kk: ["yes", "no", "true", "false"],
+  kn: ["yes", "no", "true", "false"],
+  kr: ["yes", "no", "true", "false"],
+  kv: ["yes", "no", "true", "false", "space", "punct", "symbol", "currency"],
+  kf: ["yes", "no", "true", "false", "upper", "lower"],
+  hc: ["h11", "h12", "h23", "h24"],
+  tz: [...timeZoneCodes()],
+  rg: [...subdivisions()],
+  sd: [...subdivisions()],
+};
+
+function supported(key) {
+  try {
+    return Intl.supportedValuesOf(key);
+  } catch (e) {
+    return [];
+  }
+}
+
+// The codes a time zone goes by in a tag are a region and a city run together
+// -- Asia/Shanghai is "cnsha" -- and which letters of which are not something
+// that can be worked out from the name. There are too many strings of that
+// length to try them all, so a zone named in a tag is left as it was written.
+function timeZoneCodes() {
+  return [];
+}
+
+// The subdivisions a tag may name, which are a region and a number or a
+// letter: "no23" is a county of Norway.
+function subdivisions() {
+  const out = [];
+  for (const region of every(letters, 2)) {
+    for (let n = 0; n < 100; n++) {
+      out.push(region + String(n).padStart(2, "0"));
+    }
+  }
+  return out;
+}
+
+const settings = {};
+for (const [key, values] of Object.entries(SETTINGS)) {
+  for (const value of new Set(values)) {
+    const tag = "und-u-" + key + "-" + value;
+    const out = canon(tag);
+    if (out === null || out === tag) continue;
+    const written = out.slice("und-u-".length);
+    settings[key + "-" + value] = written;
+  }
+}
+
+process.stdout.write(JSON.stringify({
+  icu: process.versions.icu,
+  languages, regions, scripts, grandfathered, variants, settings,
+}) + "\n");

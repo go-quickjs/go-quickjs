@@ -995,3 +995,35 @@ var (
 	zoneIndexOnce sync.Once
 	zoneIndex     map[string]string
 )
+
+// TagAliases is what a name in a language tag has been replaced by: a language
+// renamed, a country dissolved, a variant folded into another, a setting that
+// goes by another word now. The kinds are asked for separately because the
+// same string may be a language and a region.
+func TagAliases() (languages, regions, scripts, grandfathered, variants, settings map[string]string) {
+	aliasOnce.Do(func() {
+		text, err := inflate(tagAliases)
+		if err != nil {
+			return
+		}
+		lines := strings.Split(text, "\n")
+		for i := range aliasTables {
+			aliasTables[i] = map[string]string{}
+			if i >= len(lines) {
+				continue
+			}
+			for _, item := range strings.Split(lines[i], ";") {
+				if from, to, ok := strings.Cut(item, "="); ok {
+					aliasTables[i][from] = to
+				}
+			}
+		}
+	})
+	return aliasTables[0], aliasTables[1], aliasTables[2], aliasTables[3],
+		aliasTables[4], aliasTables[5]
+}
+
+var (
+	aliasOnce   sync.Once
+	aliasTables [6]map[string]string
+)

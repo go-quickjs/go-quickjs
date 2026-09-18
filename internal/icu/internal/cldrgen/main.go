@@ -348,6 +348,16 @@ func run() error {
 	fmt.Fprintf(&b, "// that write them all alike share one entry.\n")
 	writePacked(&b, "unitsPacked", encodeUnits(units))
 
+	// The names that have been replaced since.
+	renames, err := readRenames(filepath.Join(filepath.Dir(script), "aliases.json"))
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(&b, "// tagAliases is what a name in a tag has been replaced by: a language\n")
+	fmt.Fprintf(&b, "// renamed, a country dissolved, a variant folded into another, a setting\n")
+	fmt.Fprintf(&b, "// that goes by another word now.\n")
+	writePacked(&b, "tagAliases", encodeAliases(renames))
+
 	fmt.Fprintf(&b, "// numberingSystems is the ten digits of each way of writing numbers.\n")
 	fmt.Fprintf(&b, "var numberingSystems = map[string]string{\n")
 	for _, name := range sortedNames(numbering) {
@@ -436,6 +446,48 @@ func sortedBlocks(m map[string]map[string]string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// aliasData is what aliases.mjs writes.
+type aliasData struct {
+	Languages     map[string]string `json:"languages"`
+	Regions       map[string]string `json:"regions"`
+	Scripts       map[string]string `json:"scripts"`
+	Grandfathered map[string]string `json:"grandfathered"`
+	Variants      map[string]string `json:"variants"`
+	Settings      map[string]string `json:"settings"`
+}
+
+func readRenames(path string) (aliasData, error) {
+	var out aliasData
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return out, fmt.Errorf("the aliases: %w", err)
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return out, fmt.Errorf("the aliases: %w", err)
+	}
+	return out, nil
+}
+
+// encodeAliases writes each kind of name on a line of its own.
+func encodeAliases(d aliasData) string {
+	var b strings.Builder
+	for _, table := range []map[string]string{
+		d.Languages, d.Regions, d.Scripts, d.Grandfathered, d.Variants, d.Settings,
+	} {
+		for _, from := range sortedNames(table) {
+			// The replacements come back as whole tags: "und-MM" is the region
+			// MM, and what is wanted is the part that replaces the name.
+			to := strings.TrimPrefix(table[from], "und-")
+			if to == "und" {
+				to = ""
+			}
+			fmt.Fprintf(&b, "%s=%s;", from, to)
+		}
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 // readNumbering reads the digits of every numbering system.

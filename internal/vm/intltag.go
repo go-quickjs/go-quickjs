@@ -3,6 +3,8 @@ package vm
 import (
 	"sort"
 	"strings"
+
+	"github.com/go-quickjs/go-quickjs/internal/icu"
 )
 
 // A language tag, taken apart the way Unicode defines one.
@@ -363,6 +365,92 @@ func asciiOnly(s string) bool {
 
 // applyAliases replaces the names a tag may still be written with by the ones
 // they became: a language that was renamed, a country that was dissolved, a
-// variant that was folded into another.
+// variant that was folded into another, a setting that goes by another word
+// now.
 func (t *langTag) applyAliases() {
+	languages, regions, scripts, grandfathered, variants, settings := icu.TagAliases()
+
+	// A tag registered before the rules were what they are, which is replaced
+	// whole: "art-lojban" is "jbo" and "zh-guoyu" is "zh".
+	whole := strings.ToLower(t.base())
+	for len(whole) > 0 {
+		if to, ok := grandfathered[whole]; ok {
+			if inner, ok := parseTag(to); ok {
+				kept := *t
+				*t = inner
+				t.attributes, t.keywords = kept.attributes, kept.keywords
+				t.from, t.fields = kept.from, kept.fields
+				t.others, t.private = kept.others, kept.private
+			}
+			break
+		}
+		at := strings.LastIndex(whole, "-")
+		if at < 0 {
+			break
+		}
+		whole = whole[:at]
+	}
+
+	if to, ok := languages[t.language]; ok {
+		// A language may become a language written in a script, or one spoken
+		// in a place: "sh" is Serbian written in Latin letters.
+		if inner, ok := parseTag(to); ok {
+			t.language = inner.language
+			if inner.script != "" && t.script == "" {
+				t.script = inner.script
+			}
+			if inner.region != "" && t.region == "" {
+				t.region = inner.region
+			}
+		}
+	}
+	if to, ok := scripts[t.script]; ok {
+		t.script = to
+	}
+	if to, ok := regions[t.region]; ok {
+		t.region = to
+	}
+
+	// The variants, which may become another variant, a region, or nothing.
+	// A pair that became one is looked for before either of them alone.
+	if len(t.variants) > 1 {
+		joined := strings.Join(t.variants, "-")
+		if to, ok := variants[joined]; ok {
+			t.variants = nil
+			if to != "" {
+				t.variants = []string{to}
+			}
+		}
+	}
+	kept := t.variants[:0]
+	for _, variant := range t.variants {
+		to, ok := variants[variant]
+		switch {
+		case !ok:
+			kept = append(kept, variant)
+		case to == "":
+		case isVariant(to):
+			kept = append(kept, to)
+		case t.region == "":
+			t.region = to
+		}
+	}
+	t.variants = kept
+	sort.Strings(t.variants)
+
+	// The settings, where a value may have been renamed or may be the word for
+	// yes, which is written by naming the key and nothing more.
+	for i, k := range t.keywords {
+		value := k.value
+		if value == "" {
+			value = "true"
+		}
+		if to, ok := settings[k.key+"-"+value]; ok {
+			_, replaced, found := strings.Cut(to, "-")
+			if !found {
+				replaced = ""
+			}
+			t.keywords[i].value = replaced
+		}
+	}
 }
