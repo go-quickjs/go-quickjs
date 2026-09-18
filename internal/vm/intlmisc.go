@@ -28,6 +28,10 @@ type collatorOptions struct {
 func (r *Runtime) initCollator(intl *Object) {
 	proto := newObject(r.proto.object, ClassObject)
 	ctor := r.newCtor("Collator", 0, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		proto, err := rt.protoFromNewTargetErr(rt.intlProtoOf("Collator"))
+		if err != nil {
+			return Undefined, err
+		}
 		tags, err := rt.requestedLocales(arg(args, 0))
 		if err != nil {
 			return Undefined, err
@@ -87,7 +91,7 @@ func (r *Runtime) initCollator(intl *Object) {
 			o.ignorePunct = ignore
 		}
 
-		out := newObject(rt.protoFromNewTarget(rt.intlProtoOf("Collator")), ClassObject)
+		out := newObject(proto, ClassObject)
 		out.data = o
 		return Obj(out), nil
 	})
@@ -234,6 +238,10 @@ type pluralOptions struct {
 func (r *Runtime) initPluralRules(intl *Object) {
 	proto := newObject(r.proto.object, ClassObject)
 	ctor := r.newCtor("PluralRules", 0, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		proto, err := rt.protoFromNewTargetErr(rt.intlProtoOf("PluralRules"))
+		if err != nil {
+			return Undefined, err
+		}
 		tags, err := rt.requestedLocales(arg(args, 0))
 		if err != nil {
 			return Undefined, err
@@ -255,7 +263,7 @@ func (r *Runtime) initPluralRules(intl *Object) {
 		if o.maxFrac, _, err = rt.intOption(options, "maximumFractionDigits", 0, 100, 3); err != nil {
 			return Undefined, err
 		}
-		out := newObject(rt.protoFromNewTarget(rt.intlProtoOf("PluralRules")), ClassObject)
+		out := newObject(proto, ClassObject)
 		out.data = o
 		return Obj(out), nil
 	})
@@ -338,11 +346,18 @@ type displayOptions struct {
 	kind      string // language, region, script, currency, calendar, dateTimeField
 	style     string
 	fallback  string
+	// languageDisplay says whether a language is named as a dialect of
+	// another -- Austrian German -- or on its own.
+	languageDisplay string
 }
 
 func (r *Runtime) initDisplayNames(intl *Object) {
 	proto := newObject(r.proto.object, ClassObject)
 	ctor := r.newCtor("DisplayNames", 2, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		proto, err := rt.protoFromNewTargetErr(rt.intlProtoOf("DisplayNames"))
+		if err != nil {
+			return Undefined, err
+		}
 		if err := rt.requireNew("Intl.DisplayNames"); err != nil {
 			return Undefined, err
 		}
@@ -357,8 +372,18 @@ func (r *Runtime) initDisplayNames(intl *Object) {
 		if err != nil {
 			return Undefined, err
 		}
+		// In the order the standard reads them: what kind of name is wanted is
+		// not asked for first, though it is the one that must be there.
+		if _, err := rt.stringOption(options, "localeMatcher", "best fit",
+			"lookup", "best fit"); err != nil {
+			return Undefined, err
+		}
 		choice := rt.resolveLocale(tags)
 		o := &displayOptions{locale: choice.data, requested: choice.locale()}
+		if o.style, err = rt.stringOption(options, "style", "long",
+			"narrow", "short", "long"); err != nil {
+			return Undefined, err
+		}
 		if o.kind, err = rt.stringOption(options, "type", "", "language", "region",
 			"script", "currency", "calendar", "dateTimeField"); err != nil {
 			return Undefined, err
@@ -366,15 +391,15 @@ func (r *Runtime) initDisplayNames(intl *Object) {
 		if o.kind == "" {
 			return Undefined, rt.throwTypeError("Intl.DisplayNames needs to be told what kind of name")
 		}
-		if o.style, err = rt.stringOption(options, "style", "long",
-			"narrow", "short", "long"); err != nil {
-			return Undefined, err
-		}
 		if o.fallback, err = rt.stringOption(options, "fallback", "code",
 			"code", "none"); err != nil {
 			return Undefined, err
 		}
-		out := newObject(rt.protoFromNewTarget(rt.intlProtoOf("DisplayNames")), ClassObject)
+		if o.languageDisplay, err = rt.stringOption(options, "languageDisplay", "dialect",
+			"dialect", "standard"); err != nil {
+			return Undefined, err
+		}
+		out := newObject(proto, ClassObject)
 		out.data = o
 		return Obj(out), nil
 	})
@@ -416,7 +441,7 @@ func (r *Runtime) initDisplayNames(intl *Object) {
 		rt.putString(out, "type", o.kind)
 		rt.putString(out, "fallback", o.fallback)
 		if o.kind == "language" {
-			rt.putString(out, "languageDisplay", "dialect")
+			rt.putString(out, "languageDisplay", o.languageDisplay)
 		}
 		return Obj(out), nil
 	})
@@ -462,11 +487,28 @@ func (o *displayOptions) canonical(r *Runtime, code string) (string, error) {
 		}
 		return strings.ToUpper(code), nil
 	case "language":
+		// A language is named by a tag without any of the extensions a tag may
+		// carry: "en-u-hebrew" asks for something that is not a language.
 		tag, ok := parseTag(code)
-		if !ok {
+		if !ok || tag.hasExtensions() {
 			return "", r.throwRangeError("that is not a language tag: %s", code)
 		}
 		return canonicalTag(tag), nil
+	case "calendar":
+		// A calendar is named the way a setting in a tag is named.
+		for _, part := range strings.Split(code, "-") {
+			if len(part) < 3 || len(part) > 8 || !allAlphanumeric(part) {
+				return "", r.throwRangeError("that is not a calendar: %s", code)
+			}
+		}
+		return strings.ToLower(code), nil
+	case "dateTimeField":
+		switch code {
+		case "era", "year", "quarter", "month", "weekOfYear", "weekday", "day",
+			"dayPeriod", "hour", "minute", "second", "timeZoneName":
+			return code, nil
+		}
+		return "", r.throwRangeError("that is not a part of a date: %s", code)
 	}
 	return code, nil
 }
@@ -501,6 +543,10 @@ type listOptions struct {
 func (r *Runtime) initListFormat(intl *Object) {
 	proto := newObject(r.proto.object, ClassObject)
 	ctor := r.newCtor("ListFormat", 0, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		proto, err := rt.protoFromNewTargetErr(rt.intlProtoOf("ListFormat"))
+		if err != nil {
+			return Undefined, err
+		}
 		if err := rt.requireNew("Intl.ListFormat"); err != nil {
 			return Undefined, err
 		}
@@ -522,7 +568,7 @@ func (r *Runtime) initListFormat(intl *Object) {
 			"long", "short", "narrow"); err != nil {
 			return Undefined, err
 		}
-		out := newObject(rt.protoFromNewTarget(rt.intlProtoOf("ListFormat")), ClassObject)
+		out := newObject(proto, ClassObject)
 		out.data = o
 		return Obj(out), nil
 	})
@@ -678,6 +724,10 @@ type relativeOptions struct {
 func (r *Runtime) initRelativeTimeFormat(intl *Object) {
 	proto := newObject(r.proto.object, ClassObject)
 	ctor := r.newCtor("RelativeTimeFormat", 0, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		proto, err := rt.protoFromNewTargetErr(rt.intlProtoOf("RelativeTimeFormat"))
+		if err != nil {
+			return Undefined, err
+		}
 		if err := rt.requireNew("Intl.RelativeTimeFormat"); err != nil {
 			return Undefined, err
 		}
@@ -703,7 +753,7 @@ func (r *Runtime) initRelativeTimeFormat(intl *Object) {
 			minInt: 1, maxFrac: 3, rounding: "fraction",
 			roundingMode: "halfExpand", roundingIncrement: 1,
 		}
-		out := newObject(rt.protoFromNewTarget(rt.intlProtoOf("RelativeTimeFormat")), ClassObject)
+		out := newObject(proto, ClassObject)
 		out.data = o
 		return Obj(out), nil
 	})

@@ -49,6 +49,12 @@ func (r *Runtime) initIntlBuiltins() {
 // buildIntl makes the namespace, the first time anything asks for it.
 func (r *Runtime) buildIntl() *Object {
 	r.intlProtos = map[string]*Object{}
+	// The symbol a formatter made without new is hidden under. Calling
+	// Intl.NumberFormat as a function on an object that is already one of them
+	// hangs the new formatter off the old one rather than replacing it, which
+	// is how the first version of this API worked and how some code still
+	// uses it.
+	r.intlFallback = NewSymbol("IntlLegacyConstructedSymbol", true)
 	intl := newObject(r.proto.object, ClassObject)
 	r.defToStringTag(intl, "Intl")
 
@@ -388,6 +394,36 @@ func (r *Runtime) numberArgument(v Value) (decimal, string, error) {
 	return decimalOf(x), "", nil
 }
 
+// legacyFormatter is what a formatter made without new answers with. Called as
+// a function on an object that is already a formatter, it hangs the new one
+// off the old under a symbol of its own rather than replacing it, and answers
+// with the object it was called on -- which is how the first version of this
+// API worked, and how some code still uses it.
+func (r *Runtime) legacyFormatter(this Value, made *Object) Value {
+	if r.Constructing() || !this.IsObject() {
+		return Obj(made)
+	}
+	target := this.Object()
+	if !r.inheritsFrom(this, made.proto) {
+		return Obj(made)
+	}
+	target.setOwnRaw(r.atoms.internSymbol(r.intlFallback), Obj(made), 0)
+	return this
+}
+
+// unwrapFormatter follows the symbol a formatter made without new was hidden
+// under, for the methods that have to work on either.
+func (r *Runtime) unwrapFormatter(this Value) Value {
+	o := this.Object()
+	if o == nil {
+		return this
+	}
+	if v, err := r.getProp(o, r.atoms.internSymbol(r.intlFallback), this); err == nil && v.IsObject() {
+		return v
+	}
+	return this
+}
+
 // bound hands out the function a format getter answers with. It is made once
 // and kept, since a script may compare the one it got with the one it gets
 // next, and it carries no name, which is what the standard says of a function
@@ -541,11 +577,17 @@ func (r *Runtime) intOption(o *Object, name string, min, max, fallback int) (int
 func (r *Runtime) initNumberFormat(intl *Object) {
 	proto := newObject(r.proto.object, ClassObject)
 	ctor := r.newCtor("NumberFormat", 0, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.newNumberFormat(args)
+		made, err := rt.protoFromNewTargetErr(rt.intlProtoOf("NumberFormat"))
 		if err != nil {
 			return Undefined, err
 		}
-		return Obj(o), nil
+		o, err := rt.numberOptionsFrom(args)
+		if err != nil {
+			return Undefined, err
+		}
+		out := newObject(made, ClassObject)
+		out.data = o
+		return rt.legacyFormatter(this, out), nil
 	})
 	r.defValue(intl, "NumberFormat", Obj(ctor))
 	r.intlProtos["NumberFormat"] = proto
@@ -648,7 +690,11 @@ func (r *Runtime) newNumberFormat(args []Value) (*Object, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := newObject(r.protoFromNewTarget(r.intlProtoOf("NumberFormat")), ClassObject)
+	proto, err := r.protoFromNewTargetErr(r.intlProtoOf("NumberFormat"))
+	if err != nil {
+		return nil, err
+	}
+	out := newObject(proto, ClassObject)
 	out.data = o
 	return out, nil
 }
@@ -933,7 +979,7 @@ func wellFormedUnit(unit string) bool {
 }
 
 func (r *Runtime) numberFormatOf(this Value) (*numberOptions, error) {
-	if o := this.Object(); o != nil {
+	if o := r.unwrapFormatter(this).Object(); o != nil {
 		if opts, ok := o.data.(*numberOptions); ok {
 			return opts, nil
 		}
@@ -946,13 +992,17 @@ func (r *Runtime) numberFormatOf(this Value) (*numberOptions, error) {
 func (r *Runtime) initDateTimeFormat(intl *Object) {
 	proto := newObject(r.proto.object, ClassObject)
 	ctor := r.newCtor("DateTimeFormat", 0, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		made, err := rt.protoFromNewTargetErr(rt.intlProtoOf("DateTimeFormat"))
+		if err != nil {
+			return Undefined, err
+		}
 		o, err := rt.dateOptionsFrom(args, nil)
 		if err != nil {
 			return Undefined, err
 		}
-		out := newObject(rt.protoFromNewTarget(rt.intlProtoOf("DateTimeFormat")), ClassObject)
+		out := newObject(made, ClassObject)
 		out.data = o
-		return Obj(out), nil
+		return rt.legacyFormatter(this, out), nil
 	})
 	r.defValue(intl, "DateTimeFormat", Obj(ctor))
 	r.intlProtos["DateTimeFormat"] = proto
@@ -1324,7 +1374,7 @@ func (r *Runtime) localZoneName() string {
 }
 
 func (r *Runtime) dateFormatOf(this Value) (*dateOptions, error) {
-	if o := this.Object(); o != nil {
+	if o := r.unwrapFormatter(this).Object(); o != nil {
 		if opts, ok := o.data.(*dateOptions); ok {
 			return opts, nil
 		}

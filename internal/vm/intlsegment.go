@@ -43,6 +43,10 @@ type segmentIterData struct {
 func (r *Runtime) initSegmenter(intl *Object) {
 	proto := newObject(r.proto.object, ClassObject)
 	ctor := r.newCtor("Segmenter", 0, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		proto, err := rt.protoFromNewTargetErr(rt.intlProtoOf("Segmenter"))
+		if err != nil {
+			return Undefined, err
+		}
 		if err := rt.requireNew("Intl.Segmenter"); err != nil {
 			return Undefined, err
 		}
@@ -64,7 +68,7 @@ func (r *Runtime) initSegmenter(intl *Object) {
 			"grapheme", "word", "sentence"); err != nil {
 			return Undefined, err
 		}
-		out := newObject(rt.protoFromNewTarget(rt.intlProtoOf("Segmenter")), ClassObject)
+		out := newObject(proto, ClassObject)
 		out.data = o
 		return Obj(out), nil
 	})

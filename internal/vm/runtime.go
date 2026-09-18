@@ -25,6 +25,8 @@ type Runtime struct {
 	// intlProtos holds the prototypes of the Intl constructors, which are
 	// built only if something asks for Intl at all.
 	intlProtos map[string]*Object
+	// intlFallback is the symbol a formatter made without new is hidden under.
+	intlFallback *Symbol
 	// globalLex holds a script's top-level let, const and class bindings.
 	//
 	// They are not properties of the global object -- `let x = 1` does not make

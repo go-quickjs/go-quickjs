@@ -64,7 +64,9 @@ func parseTag(s string) (langTag, bool) {
 	// The language, which is the only part that must be there.
 	switch p := parts[0]; {
 	case strings.EqualFold(p, "root"):
-		t.language = "root"
+		// The root locale is written "und" here; "root" is how CLDR writes it
+		// and is not a tag a script may use.
+		return t, false
 	case (len(p) >= 2 && len(p) <= 3 || len(p) >= 5 && len(p) <= 8) && allLetters(p):
 		t.language = strings.ToLower(p)
 	default:
