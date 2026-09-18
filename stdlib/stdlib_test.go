@@ -690,3 +690,149 @@ func TestFetchAbort(t *testing.T) {
 		t.Error("the server did not see the request cancelled")
 	}
 }
+
+func TestEvents(t *testing.T) {
+	out, _ := run(t, stdlib.Config{}, `
+		;(async () => {
+			const {EventEmitter, once} = await import("events")
+			const e = new EventEmitter()
+			e.on("greet", name => console.log("hello", name))
+			e.emit("greet", "world")
+			console.log(e.listenerCount("greet"), e.eventNames().join())
+
+			let n = 0
+			e.once("tick", () => n++)
+			e.emit("tick"); e.emit("tick")
+			console.log("once fired", n)
+
+			const fn = () => console.log("never")
+			e.on("gone", fn)
+			e.off("gone", fn)
+			console.log(e.emit("gone"))
+
+			// An error with nobody listening is thrown rather than swallowed.
+			try { e.emit("error", new Error("unheard")) } catch (err) { console.log(err.message) }
+
+			const waiter = once(e, "later")
+			e.emit("later", 1, 2)
+			console.log((await waiter).join())
+		})()
+	`)
+	want := strings.Join([]string{
+		"hello world",
+		"1 greet",
+		"once fired 1",
+		"false",
+		"unheard",
+		"1,2",
+	}, "\n")
+	if out != want {
+		t.Errorf("events output =\n%s\nwant\n%s", out, want)
+	}
+}
+
+func TestUtil(t *testing.T) {
+	out, _ := run(t, stdlib.Config{}, `
+		;(async () => {
+			const util = (await import("util")).default
+			console.log(util.format("%s has %d and %j", "x", 3.7, {a: 1}))
+			console.log(util.inspect({a: [1, "two"]}))
+			const doubled = util.promisify((n, cb) => cb(null, n * 2))
+			console.log(await doubled(21))
+			const failing = util.promisify((cb) => cb(new Error("no good")))
+			try { await failing() } catch (e) { console.log(e.message) }
+			console.log(util.types.isDate(new Date()), util.types.isRegExp(/x/),
+			            util.types.isTypedArray(new Uint8Array(1)))
+			console.log(util.isDeepStrictEqual([1, {a: 2}], [1, {a: 2}]),
+			            util.isDeepStrictEqual([1], [2]))
+		})()
+	`)
+	want := strings.Join([]string{
+		`x has 3 and {"a":1}`,
+		"{ a: [ 1, 'two' ] }",
+		"42",
+		"no good",
+		"true true true",
+		"true false",
+	}, "\n")
+	if out != want {
+		t.Errorf("util output =\n%s\nwant\n%s", out, want)
+	}
+}
+
+func TestAssert(t *testing.T) {
+	out, _ := run(t, stdlib.Config{}, `
+		;(async () => {
+			const assert = (await import("assert")).default
+			assert.ok(true)
+			assert.equal(1, "1")
+			assert.strictEqual("a", "a")
+			assert.notStrictEqual(1, 2)
+			assert.deepStrictEqual({a: [1, {b: 2}]}, {a: [1, {b: 2}]})
+			assert.deepStrictEqual(new Map([["k", 1]]), new Map([["k", 1]]))
+			assert.deepStrictEqual(new Set([1]), new Set([1]))
+			assert.match("abc", /b/)
+			assert.throws(() => { throw new TypeError("x") }, TypeError)
+			assert.doesNotThrow(() => 1)
+			await assert.rejects(Promise.reject(new Error("no")))
+			console.log("all passed")
+
+			for (const [name, fn] of [
+				["ok", () => assert.ok(false)],
+				["strictEqual", () => assert.strictEqual(1, 2)],
+				["deepStrictEqual", () => assert.deepStrictEqual({a: 1}, {a: 2})],
+				["strict types", () => assert.deepStrictEqual(1, "1")],
+				["match", () => assert.match("abc", /z/)],
+				["throws", () => assert.throws(() => 1)],
+			]) {
+				try { fn(); console.log("MISSED " + name) }
+				catch (e) { console.log(name + ": " + e.name) }
+			}
+			try { assert.strictEqual(1, 2, "a message of my own") }
+			catch (e) { console.log(e.message) }
+		})()
+	`)
+	want := strings.Join([]string{
+		"all passed",
+		"ok: AssertionError",
+		"strictEqual: AssertionError",
+		"deepStrictEqual: AssertionError",
+		"strict types: AssertionError",
+		"match: AssertionError",
+		"throws: AssertionError",
+		"a message of my own",
+	}, "\n")
+	if out != want {
+		t.Errorf("assert output =\n%s\nwant\n%s", out, want)
+	}
+}
+
+func TestBuffer(t *testing.T) {
+	out, _ := run(t, stdlib.Config{}, `
+		const b = Buffer.from("héllo")
+		console.log(b.length, b.toString(), b instanceof Uint8Array, Buffer.isBuffer(b))
+		console.log(b.toString("hex"))
+		console.log(Buffer.from("68c3a96c6c6f", "hex").toString())
+		console.log(Buffer.from("hi").toString("base64"), Buffer.from("aGk=", "base64").toString())
+		console.log(Buffer.concat([Buffer.from("a"), Buffer.from("b")]).toString())
+		console.log(Buffer.alloc(3).join(), Buffer.alloc(2, 7).join())
+		console.log(Buffer.byteLength("héllo"), Buffer.from("ab").equals(Buffer.from("ab")))
+		console.log(JSON.stringify(Buffer.from([1, 2])))
+		const target = Buffer.alloc(4)
+		console.log(target.write("hi"), target.toString("latin1", 0, 2))
+	`)
+	want := strings.Join([]string{
+		"6 héllo true true",
+		"68c3a96c6c6f",
+		"héllo",
+		"aGk= hi",
+		"ab",
+		"0,0,0 7,7",
+		"6 true",
+		`{"type":"Buffer","data":[1,2]}`,
+		"2 hi",
+	}, "\n")
+	if out != want {
+		t.Errorf("buffer output =\n%s\nwant\n%s", out, want)
+	}
+}

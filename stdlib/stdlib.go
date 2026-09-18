@@ -38,9 +38,11 @@ type Config struct {
 	// source, which is what a program wants and a test may not.
 	Random io.Reader
 
-	// NoWebAPIs leaves out the things a browser has and a language does not:
+	// NoWebAPIs leaves out the things a browser has and a language does not --
 	// URL, TextEncoder, TextDecoder, structuredClone, performance, crypto,
-	// atob and btoa. They are pure computation and installed by default.
+	// atob, btoa -- and the node modules that need no capability either:
+	// events, util, assert and buffer. All of it is pure computation, and all
+	// of it is installed by default.
 	NoWebAPIs bool
 }
 
@@ -69,6 +71,11 @@ func Install(rt *quickjs.Runtime, cfg Config) error {
 	}
 	if !cfg.NoWebAPIs {
 		if err := WebAPIs(rt, cfg.Random); err != nil {
+			return err
+		}
+		// The node modules that need no capability go with them: an
+		// EventEmitter is a list of functions and a Buffer is bytes.
+		if err := NodeModules(rt); err != nil {
 			return err
 		}
 	}
