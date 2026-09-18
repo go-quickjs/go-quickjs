@@ -284,6 +284,21 @@ from the creating frame and the arrow ignores whatever its own call supplies.
 Nesting needs no extra work: an arrow created inside another has already
 inherited them.
 
+**The compiler knows whether a value is wanted.** A statement's expression
+leaves a value the statement would then discard, and in a loop body that is an
+instruction an iteration: `t += x` stores into a local and keeps a copy to
+drop, `i++` keeps the value it had before, `o.x = v` carries the value back out
+past the store. Each is compiled without that, and a comparison a branch tests
+directly becomes one instruction rather than two. A counted loop of the kind
+every program contains lost a fifth of its instructions to this.
+
+**An object is allocated the size it is about to be.** An object literal says
+how many properties it will be given, a constructor's body is walked for the
+ones it assigns to `this`, and an array literal knows its length -- so the
+table or the element storage travels in the object's own allocation rather than
+being a second one. A closure is one allocation too: the function object, its
+function data, the closure and the bindings it captures are laid out together.
+
 ## Benchmarks
 
 On an Apple M5 Max:
@@ -303,16 +318,16 @@ iteration.
 program once and then running it:
 
 ```
-BenchmarkLoopArithmetic-18         248µs/op        0 B/op     0 allocs/op
-BenchmarkLoopArrayIndex-18        29.8µs/op        0 B/op     0 allocs/op
-BenchmarkLoopFunctionCall-18       393µs/op        0 B/op     0 allocs/op
-BenchmarkLoopPropertyAccess-18     519µs/op        0 B/op     0 allocs/op
-BenchmarkLoopMethodCall-18         642µs/op        0 B/op     0 allocs/op
-BenchmarkAllocObjects-18           134µs/op   384 KB/op  2000 allocs/op
-BenchmarkStringConcat-18          64.3µs/op   161 KB/op  2029 allocs/op
+BenchmarkLoopArithmetic-18         245µs/op        0 B/op     0 allocs/op
+BenchmarkLoopArrayIndex-18        30.3µs/op        0 B/op     0 allocs/op
+BenchmarkLoopFunctionCall-18       397µs/op        0 B/op     0 allocs/op
+BenchmarkLoopPropertyAccess-18     520µs/op        0 B/op     0 allocs/op
+BenchmarkLoopMethodCall-18         646µs/op        0 B/op     0 allocs/op
+BenchmarkAllocObjects-18           137µs/op   384 KB/op  2000 allocs/op
+BenchmarkStringConcat-18          65.5µs/op   161 KB/op  2029 allocs/op
 BenchmarkArrayCallbacks-18         108µs/op  42.3 KB/op    23 allocs/op
-BenchmarkJSONRoundTrip-18          486µs/op   904 KB/op 10000 allocs/op
-BenchmarkNewRuntimeSmallStack-18  90.0µs/op   514 KB/op  1817 allocs/op
+BenchmarkJSONRoundTrip-18          489µs/op   904 KB/op 10000 allocs/op
+BenchmarkNewRuntimeSmallStack-18  80.1µs/op   532 KB/op   927 allocs/op
 ```
 
 Each of those runs its program many times over: the loop benchmarks 10,000
