@@ -1182,14 +1182,14 @@ func (r *Runtime) dateOptionsFrom(args []Value, defaults map[string]string, requ
 		// is not consulted.
 		cycle = ""
 	}
-	hourCycleGiven := hour12Set || cycle != ""
 
 	choice := r.resolveLocale(tags, "ca", "nu", "hc")
 	choice.override("ca", calendar)
 	choice.override("nu", numbering)
 	choice.override("hc", cycle)
-	if hourCycleGiven {
-		// However the clock was chosen, it was not the tag that chose it.
+	if hour12Set {
+		// A clock asked for outright answers the question the tag asked, so
+		// the tag is no longer the reason for the answer.
 		choice.drop("hc")
 	}
 	o := &dateOptions{locale: choice.data, choice: choice, timeZone: "UTC"}

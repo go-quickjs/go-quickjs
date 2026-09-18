@@ -94,6 +94,73 @@ var unsupportedFeatures = map[string]string{
 	"arguments-object":              "",
 }
 
+// knownDifferences are the tests that do not pass, and what each of them is
+// asking for that this engine does not have. Everything else has to pass: a
+// failure that is not named here breaks the build, and so does a name here
+// that has started passing.
+//
+// All of them are in the internationalization suite, and all of them are data
+// rather than code: an ordering, a calendar, or a table of names that would
+// cost more to carry than it would earn.
+var knownDifferences = map[string]string{
+	// Every calendar but the Gregorian and the Buddhist. A lunisolar year has a
+	// name as well as a number, a leap month is the month before it said twice,
+	// and an era that is not ours counts from somewhere else and is named in
+	// every language.
+	"intl402/DateTimeFormat/canonicalize-calendar.js":                               "calendars",
+	"intl402/DateTimeFormat/prototype/format/related-year-zh.js":                    "calendars",
+	"intl402/DateTimeFormat/prototype/formatRangeToParts/chinese-calendar-dates.js": "calendars",
+	"intl402/DateTimeFormat/prototype/formatRangeToParts/dangi-calendar-dates.js":   "calendars",
+	"intl402/DateTimeFormat/prototype/formatRangeToParts/pattern-on-calendar.js":    "calendars",
+	"intl402/DateTimeFormat/prototype/formatToParts/chinese-calendar-dates.js":      "calendars",
+	"intl402/DateTimeFormat/prototype/formatToParts/era.js":                         "calendars",
+	"intl402/DateTimeFormat/prototype/formatToParts/lunisolar-leap-months.js":       "calendars",
+	"intl402/DateTimeFormat/prototype/formatToParts/pattern-on-calendar.js":         "calendars",
+	"intl402/DateTimeFormat/prototype/formatToParts/related-year-zh.js":             "calendars",
+	"intl402/DateTimeFormat/prototype/formatToParts/related-year.js":                "calendars",
+	"intl402/DateTimeFormat/prototype/resolvedOptions/calendar.js":                  "calendars",
+
+	// The orderings that are a whole script's worth of data rather than a
+	// handful of moves: the German phone book, and the one a search uses.
+	"intl402/Collator/prototype/compare/non-normative-sensitivity.js":                                 "orderings",
+	"intl402/Collator/prototype/resolvedOptions/resolved-collation-unicode-extensions-and-options.js": "orderings",
+	"intl402/Collator/usage-de.js": "orderings",
+
+	// Which parts of a date a range writes twice, which CLDR gives as a pattern
+	// per skeleton per differing field. What is done instead is to write out
+	// everything up to the last part that differs, which agrees with a full ICU
+	// for most of them.
+	"intl402/DateTimeFormat/prototype/formatRange/en-US.js":        "interval patterns",
+	"intl402/DateTimeFormat/prototype/formatRangeToParts/en-US.js": "interval patterns",
+
+	// Intl.DurationFormat, which is not implemented.
+	"intl402/DurationFormat/prototype/resolvedOptions/resolved-numbering-system-unicode-extensions-and-options.js": "duration format",
+
+	// The codes a time zone or a subdivision goes by inside a tag, which are a
+	// place run together with a country and cannot be worked out from the name
+	// of either.
+	"intl402/Intl/getCanonicalLocales/complex-region-subtag-replacement.js":    "tag codes",
+	"intl402/Intl/getCanonicalLocales/non-iana-canon.js":                       "tag codes",
+	"intl402/Intl/getCanonicalLocales/transformed-ext-canonical.js":            "tag codes",
+	"intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-region.js":      "tag codes",
+	"intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-subdivision.js": "tag codes",
+	"intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-timezone.js":    "tag codes",
+
+	// What an ICU of another version answers. The data here was read from one
+	// ICU and the tests were written against another, and these are the places
+	// where the two disagree: node answers as this does.
+	"intl402/DateTimeFormat/prototype/format/numbering-system.js":           "another ICU",
+	"intl402/DateTimeFormat/prototype/resolvedOptions/hourCycle-default.js": "another ICU",
+	"intl402/NumberFormat/prototype/format/unit-ja-JP.js":                   "another ICU",
+	"intl402/NumberFormat/prototype/format/unit-zh-TW.js":                   "another ICU",
+	"intl402/NumberFormat/prototype/formatRange/en-US.js":                   "another ICU",
+	"intl402/NumberFormat/prototype/formatRange/pt-PT.js":                   "another ICU",
+	"intl402/NumberFormat/prototype/formatToParts/unit-ja-JP.js":            "another ICU",
+	"intl402/NumberFormat/prototype/formatToParts/unit-ko-KR.js":            "another ICU",
+	"intl402/NumberFormat/prototype/formatToParts/unit-zh-TW.js":            "another ICU",
+	"intl402/PluralRules/prototype/select/notation.js":                      "another ICU",
+}
+
 func TestConformance(t *testing.T) {
 	suite, err := conformance.Open("")
 	if err != nil {
@@ -107,10 +174,10 @@ func TestConformance(t *testing.T) {
 	if *subdirFlag != "" {
 		subdirs = strings.Split(*subdirFlag, ",")
 	} else {
-		// language/ and built-ins/ are the two areas this engine targets. The
-		// rest of the suite covers host integration and annexes it does not
-		// claim.
-		subdirs = []string{"language", "built-ins"}
+		// The areas this engine targets: the language, the built-ins, and the
+		// internationalization API. The rest of the suite covers host
+		// integration and annexes it does not claim.
+		subdirs = []string{"language", "built-ins", "intl402"}
 	}
 
 	tests, err := suite.Load(subdirs)
@@ -184,9 +251,6 @@ func TestConformance(t *testing.T) {
 		}
 
 		switch res {
-		case resultPass:
-			pass++
-			st.pass++
 		case resultSkip:
 			skip++
 			st.skip++
@@ -196,6 +260,19 @@ func TestConformance(t *testing.T) {
 			failures = append(failures, tc.Name()+": "+reason)
 			if len(failures) <= *maxFailures {
 				t.Logf("FAIL %s: %s", tc.Name(), reason)
+			}
+			// A failure that is not one of the named differences is a
+			// regression, and is reported as one.
+			if _, known := knownDifferences[tc.Path]; !known {
+				t.Errorf("FAIL %s: %s", tc.Name(), reason)
+			}
+		case resultPass:
+			pass++
+			st.pass++
+			// A difference that is no longer one is worth knowing about too,
+			// since the list is meant to say where the engine stands.
+			if why, known := knownDifferences[tc.Path]; known {
+				t.Errorf("%s passes now: take it off the list (%s)", tc.Name(), why)
 			}
 		}
 	}

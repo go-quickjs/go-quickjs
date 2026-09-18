@@ -35,13 +35,16 @@ conformance suite.
 
 `Intl` is there too, with real CLDR data for 379 locales — the engine carries
 its own, in Go, rather than linking ICU — including the Unicode collation
-order, and time zones out of the operating system's own database. It is held
-against a full ICU build: [7,920 of 7,949 cases match it exactly](intl_test.go),
-and the twenty-nine that do not are named.
+order, where a text may be broken into words and sentences, how a measurement
+is written, and time zones out of the operating system's own database. It is
+held against a full ICU build: [7,925 of 7,949 cases match it
+exactly](intl_test.go), and the twenty-four that do not are named.
 
-Every test262 test it runs passes — 77,078 of them. The 14,742 it skips are
-tagged with features it does not implement, or ask the host for something it
-does not provide: see [Conformance](#conformance) for the measurement and
+Of the 78,978 test262 tests it runs, 78,910 pass and the 68 that do not are
+[named in the suite](conformance/conformance_test.go), each with what it asks
+for that this engine does not carry. The 19,556 it skips are tagged with
+features it does not implement, or ask the host for something it does not
+provide: see [Conformance](#conformance) for the measurement and
 [Not implemented](#not-implemented) for what is missing.
 
 ### Implemented
@@ -76,14 +79,14 @@ resizable ArrayBuffers, `using` declarations, and the newer proposals test262
 tracks.
 
 Of `Intl`, what is missing is: calendars other than the Gregorian and the
-Buddhist. Time zone names are English, where a zone has a name rather than an
-offset. Sorting follows the Unicode algorithm with each language's own
-tailoring, but not the orderings that are a whole script's worth of data —
-Chinese and Japanese order their characters by sound or by stroke, and those
-sort by code point here. `Intl.Segmenter` follows the Unicode breaking rules,
-but not the word lists ICU consults for the scripts written without spaces: a
-run of Chinese, Thai, Lao, Khmer or Burmese comes back as one word rather than
-as several.
+Buddhist, and `Intl.DurationFormat`. Time zone names are English, where a zone
+has a name rather than an offset. Sorting follows the Unicode algorithm with
+each language's own tailoring, but not the orderings that are a whole script's
+worth of data — Chinese and Japanese order their characters by sound or by
+stroke, and those sort by code point here. `Intl.Segmenter` follows the Unicode
+breaking rules, but not the word lists ICU consults for the scripts written
+without spaces: a run of Chinese, Thai, Lao, Khmer or Burmese comes back as one
+word rather than as several.
 
 There is one realm per runtime: `$262.createRealm` has nothing to return, so
 the four test262 variants that need a second realm are skipped along with the
@@ -118,11 +121,12 @@ strict and sloppy variants, the expected-failure phase and type, and the feature
 tags. A test tagged with a feature the engine does not implement is skipped
 rather than counted against it.
 
-Measured coverage, as of the most recent run over the whole suite — 77,078 of
-77,078 executed variants. The other 14,742 are skipped rather than counted:
-a test tagged with a feature the engine does not implement, or one that asks
-the host for a second realm or an agent, is testing something that was never
-claimed.
+Measured coverage, as of the most recent run over the whole suite — 78,910 of
+78,978 executed variants, with the 68 that fail named in the runner along with
+what each asks for that is not carried here. The other 19,556 are skipped
+rather than counted: a test tagged with a feature the engine does not
+implement, or one that asks the host for a second realm or an agent, is testing
+something that was never claimed.
 
 `built-ins/Atomics` is the ten tests for `Atomics.pause`, which is the only part
 of that API a single-threaded engine could offer and which is not implemented.
