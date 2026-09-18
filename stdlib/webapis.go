@@ -198,19 +198,36 @@ const webAPIsJS = `(function (host) {
       }
       this._fatal = !!options.fatal;
       this._bom = !options.ignoreBOM;
+      // What a chunk ended in the middle of, kept for the next one.
+      this._pending = null;
+      this._started = false;
     }
     get encoding() { return "utf-8"; }
     get fatal() { return this._fatal; }
     get ignoreBOM() { return !this._bom; }
-    decode(input) {
-      if (input === undefined) return "";
-      const bytes = input instanceof Uint8Array ? input
+    decode(input, options = {}) {
+      const streaming = !!options.stream;
+      if (input === undefined) {
+        // The end of a stream: whatever was left over was never completed.
+        const left = this._pending;
+        this._pending = null;
+        this._started = false;
+        return left && !streaming ? this._bad() : "";
+      }
+      let bytes = input instanceof Uint8Array ? input
         : ArrayBuffer.isView(input)
           ? new Uint8Array(input.buffer, input.byteOffset, input.byteLength)
           : new Uint8Array(input);
+      if (this._pending) {
+        const joined = new Uint8Array(this._pending.length + bytes.length);
+        joined.set(this._pending);
+        joined.set(bytes, this._pending.length);
+        bytes = joined;
+        this._pending = null;
+      }
       let out = "";
       let i = 0;
-      if (this._bom && bytes.length >= 3 &&
+      if (this._bom && !this._started && bytes.length >= 3 &&
           bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
         i = 3;
       }
@@ -222,7 +239,10 @@ const webAPIsJS = `(function (host) {
         else if ((b & 0xf0) === 0xe0) { c = b & 0x0f; need = 2; }
         else if ((b & 0xf8) === 0xf0) { c = b & 0x07; need = 3; }
         else { out += this._bad(); i++; continue; }
-        if (i + need >= bytes.length + 0 && i + need > bytes.length - 1) {
+        if (i + need >= bytes.length) {
+          // The chunk ended in the middle of a character. In a stream the rest
+          // of it is in the next chunk; otherwise there is no rest.
+          if (streaming && need > 0) { this._pending = bytes.slice(i); break; }
           out += this._bad(); i++; continue;
         }
         let ok = true;
@@ -242,6 +262,12 @@ const webAPIsJS = `(function (host) {
           continue;
         }
         out += String.fromCodePoint(c);
+      }
+      this._started = true;
+      if (!streaming) {
+        // A one-shot decode keeps nothing: the next call starts over.
+        this._pending = null;
+        this._started = false;
       }
       return out;
     }

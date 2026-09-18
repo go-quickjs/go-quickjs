@@ -50,8 +50,8 @@ type Config struct {
 	// NoWebAPIs leaves out the things a browser has and a language does not --
 	// URL, TextEncoder, TextDecoder, structuredClone, performance, crypto,
 	// atob, btoa -- and the node modules that need no capability either:
-	// events, util, assert, buffer and crypto. All of it is pure computation,
-	// and all of it is installed by default.
+	// events, util, assert, buffer, crypto and the web's streams. All of it is
+	// pure computation, and all of it is installed by default.
 	NoWebAPIs bool
 }
 
@@ -90,6 +90,11 @@ func Install(rt *quickjs.Runtime, cfg Config) error {
 		// Hashing is arithmetic too, and it comes after the web APIs because
 		// it hands the same randomness and the same subtle back.
 		if err := Crypto(rt, cfg.Random); err != nil {
+			return err
+		}
+		// A stream reaches nothing by itself, only what is plugged into
+		// either end of it.
+		if err := Streams(rt); err != nil {
 			return err
 		}
 	}

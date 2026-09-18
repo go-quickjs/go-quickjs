@@ -1157,3 +1157,142 @@ func TestSubtleCrypto(t *testing.T) {
 		t.Errorf("subtle output =\n%s\nwant\n%s", out, want)
 	}
 }
+
+func TestStreams(t *testing.T) {
+	out, errOut := run(t, stdlib.Config{}, `
+		;(async () => {
+			// A source that is pulled, read to the end.
+			let pulls = 0
+			const counted = new ReadableStream({
+				pull(c) {
+					pulls++
+					if (pulls > 3) { c.close(); return }
+					c.enqueue(pulls)
+				},
+			})
+			const seen = []
+			for await (const n of counted) seen.push(n)
+			console.log(seen.join(","), pulls > 3)
+
+			// A reader, by hand.
+			const reader = ReadableStream.from(["a", "b"]).getReader()
+			console.log((await reader.read()).value, (await reader.read()).value,
+			            (await reader.read()).done)
+
+			// A stream is locked while a reader holds it.
+			const locked = ReadableStream.from([1])
+			const r2 = locked.getReader()
+			console.log(locked.locked)
+			try { locked.getReader() } catch (e) { console.log(e.constructor.name) }
+			r2.releaseLock()
+			console.log(locked.locked)
+
+			// Writing, with the sink seeing one chunk at a time in order.
+			const written = []
+			const sink = new WritableStream({
+				write(chunk) {
+					return new Promise(resolve => {
+						// A slow sink still receives its chunks in order.
+						setTimeout(() => { written.push(chunk); resolve() }, 0)
+					})
+				},
+				close() { written.push("closed") },
+			})
+			const writer = sink.getWriter()
+			writer.write("one"); writer.write("two")
+			await writer.close()
+			console.log(written.join(" "))
+
+			// Through a transform and out the other side.
+			const upper = new TransformStream({
+				transform(chunk, c) { c.enqueue(chunk.toUpperCase()) },
+				flush(c) { c.enqueue("!") },
+			})
+			const pieces = []
+			await ReadableStream.from(["ab", "cd"])
+				.pipeThrough(upper)
+				.pipeTo(new WritableStream({write: (c) => { pieces.push(c) }}))
+			console.log(pieces.join(""))
+
+			// Text in, bytes out, and back again -- including a character split
+			// across two chunks.
+			const bytes = new TextEncoder().encode("héllo")
+			const halves = ReadableStream.from([bytes.slice(0, 2), bytes.slice(2)])
+			let text = ""
+			for await (const s of halves.pipeThrough(new TextDecoderStream())) text += s
+			console.log(text, text.length)
+
+			// tee gives two streams that see the same chunks.
+			const [a, b] = ReadableStream.from([1, 2, 3]).tee()
+			const drain = async (s) => { const o = []; for await (const v of s) o.push(v); return o }
+			console.log((await Promise.all([drain(a), drain(b)])).map(x => x.join("")).join(" "))
+
+			// An error travels to whoever was reading.
+			const broken = new ReadableStream({start(c) { c.error(new Error("the source failed")) }})
+			try { await broken.getReader().read() } catch (e) { console.log(e.message) }
+
+			// Cancelling tells the source.
+			let told = null
+			const cancellable = new ReadableStream({cancel(reason) { told = reason }})
+			await cancellable.cancel("no longer wanted")
+			console.log(told)
+		})()
+	`)
+	want := strings.Join([]string{
+		"1,2,3 true",
+		"a b true",
+		"true",
+		"TypeError",
+		"false",
+		"one two closed",
+		"ABCD!",
+		"héllo 5",
+		"123 123",
+		"the source failed",
+		"no longer wanted",
+	}, "\n")
+	if out != want {
+		t.Errorf("streams output =\n%s\nwant\n%s\nstderr: %s", out, want, errOut)
+	}
+}
+
+// A slow consumer holds a fast producer back, which is the point of a stream
+// rather than an array.
+func TestStreamsBackpressure(t *testing.T) {
+	out, _ := run(t, stdlib.Config{}, `
+		;(async () => {
+			let made = 0
+			const source = new ReadableStream({
+				pull(c) { c.enqueue(++made) },
+			}, {highWaterMark: 2})
+
+			// Nothing has been asked for yet beyond the mark.
+			await new Promise(r => setTimeout(r, 0))
+			console.log(made <= 3, made > 0)
+
+			const reader = source.getReader()
+			await reader.read()
+			await reader.read()
+			console.log(made <= 5)
+
+			// A writable stream reports how much room is left.
+			const w = new WritableStream({write: () => new Promise(() => {})}, {highWaterMark: 2})
+			const writer = w.getWriter()
+			console.log(writer.desiredSize)
+			writer.write("a")
+			console.log(writer.desiredSize)
+			writer.write("b")
+			console.log(writer.desiredSize)
+
+			// ready is only settled when there is room again.
+			let free = false
+			writer.ready.then(() => { free = true })
+			await new Promise(r => setTimeout(r, 0))
+			console.log("room:", free)
+		})()
+	`)
+	want := "true true\ntrue\n2\n1\n0\nroom: false"
+	if out != want {
+		t.Errorf("backpressure output =\n%s\nwant\n%s", out, want)
+	}
+}
