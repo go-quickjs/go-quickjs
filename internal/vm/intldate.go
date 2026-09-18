@@ -260,32 +260,39 @@ func (o *dateOptions) field(push func(kind, value string), t time.Time, letter b
 		return s
 	}
 
+	// The date as the calendar being written counts it, which is the common
+	// one unless another was asked for.
+	at := o.reckon(t)
+
 	switch letter {
 	case 'y', 'u':
-		year := t.Year()
-		if l.Calendar == "buddhist" {
-			// Thailand counts from the Buddhist era, which is the same year
-			// under another number.
-			year += 543
-		}
-		if year <= 0 {
-			// A year before the common era is written as its number in that
-			// era, which is what the era field then says.
-			year = 1 - year
-		}
+		year := at.Year
 		if n == 2 {
 			push("year", pad(year%100, 2))
 			return
 		}
 		push("year", strconv.Itoa(year))
 	case 'G':
-		era := l.Eras[1]
-		if t.Year() <= 0 {
-			era = l.Eras[0]
-		}
-		push("era", era)
+		push("era", o.eraName(at, n))
 	case 'M', 'L':
-		month := int(t.Month())
+		if names, ok := o.calendarNames(); ok {
+			// A calendar of its own has months of its own, and a month that
+			// only a long year has is one of them.
+			width := 0
+			switch {
+			case n >= 5:
+				width = 2
+			case n == 3:
+				width = 1
+			}
+			if name, ok := names.Months[width][at.MonthKey()]; ok && n >= 3 {
+				push("month", name)
+				return
+			}
+			push("month", pad(at.Month, n))
+			return
+		}
+		month := at.Month
 		// M is the form a month takes in a date and L the name it is called
 		// by, which are two different words in the languages that decline
 		// them: 5 stycznia, but styczeń on its own.
@@ -304,7 +311,7 @@ func (o *dateOptions) field(push func(kind, value string), t time.Time, letter b
 			push("month", pad(month, n))
 		}
 	case 'd':
-		push("day", pad(t.Day(), n))
+		push("day", pad(at.Day, n))
 	case 'E', 'e', 'c':
 		day := int(t.Weekday())
 		switch {
@@ -437,6 +444,136 @@ func isPatternLetter(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
+// reckon is a day as the calendar being written counts it.
+func (o *dateOptions) reckon(t time.Time) icu.Date {
+	switch o.calendar {
+	case "", "gregory", "iso8601":
+		year, month, day := t.Date()
+		out := icu.Date{Era: 1, Year: year, Month: int(month), Day: day, RelatedYear: year}
+		if year <= 0 {
+			out.Era, out.Year = 0, 1-year
+		}
+		return out
+	}
+	return icu.DateIn(o.calendar, t)
+}
+
+// withEra puts the era after the year, which a calendar that is not the common
+// one always says: the number alone would not say which calendar it belongs
+// to. It is named in short where the month is written as a word and in the
+// shortest form where the month is a number, which is what a full ICU does.
+// The year is written out in full as well, since two digits of a year that is
+// not this one's say even less.
+func (o *dateOptions) withEra(pattern string) string {
+	if !o.calendarNamed() {
+		return pattern
+	}
+	letters := patternLettersOf(pattern)
+	if !strings.ContainsRune(letters, 'y') {
+		return pattern
+	}
+	pattern = strings.ReplaceAll(pattern, "yy", "y")
+	if strings.ContainsRune(letters, 'G') {
+		return pattern
+	}
+	// In front of the year where the language writes the year first, which is
+	// where a reader of that language looks for it: 令和6年1月5日. Which
+	// languages those are is read from how each writes a full date, since a
+	// short one is written in numbers everywhere.
+	if yearFirst(o.locale.DatePatterns[0]) && strings.ContainsRune(letters, 'y') {
+		at := strings.IndexByte(pattern, 'y')
+		return pattern[:at] + "G" + pattern[at:]
+	}
+	// After it otherwise, in its shortest form where the month is a number,
+	// since the two stand side by side and a name would crowd them.
+	era := "G"
+	if strings.ContainsRune(letters, 'M') && !strings.Contains(letters, "MMM") {
+		era = "GGGGG"
+	}
+	return pattern + " " + era
+}
+
+// yearFirst reports whether a pattern writes the year first and marks it with
+// a word of its own, which is what says the era goes in front of it: Japanese
+// writes 令和6年1月5日, where the era leads and 年 closes the year.
+func yearFirst(pattern string) bool {
+	letters := patternLettersOf(pattern)
+	year, month := strings.IndexByte(letters, 'y'), strings.IndexByte(letters, 'M')
+	if year < 0 || (month >= 0 && month < year) {
+		return false
+	}
+	// What follows the year in the pattern itself: a mark of its own rather
+	// than a separator.
+	at := strings.IndexByte(pattern, 'y')
+	for at < len(pattern) && pattern[at] == 'y' {
+		at++
+	}
+	if at >= len(pattern) {
+		return false
+	}
+	next, _ := utf8.DecodeRuneInString(pattern[at:])
+	return next > 0x2000
+}
+
+// calendarNamed reports whether a calendar other than this language's own is
+// being written. A language whose own calendar is not the common one -- Thai
+// counts from the Buddhist era -- writes its dates without saying so, since
+// nobody reading them would think otherwise.
+func (o *dateOptions) calendarNamed() bool {
+	switch o.calendar {
+	case "", "gregory", "iso8601", o.locale.Calendar:
+		return false
+	}
+	return true
+}
+
+// calendarEras is what this language calls the eras of the calendar being
+// written, where that is not the common one.
+func (o *dateOptions) calendarEras() (*icu.CalendarNames, bool) {
+	if !o.calendarNamed() {
+		return nil, false
+	}
+	return o.locale.CalendarNamesFor(o.calendar)
+}
+
+// calendarNames is what this language calls the months and eras of the
+// calendar being written, where that calendar has months of its own. The
+// Buddhist, Japanese and Republic of China calendars keep the months of the
+// common one and count only the years differently.
+func (o *dateOptions) calendarNames() (*icu.CalendarNames, bool) {
+	switch o.calendar {
+	case "", "gregory", "iso8601", "buddhist", "roc", "japanese":
+		return nil, false
+	}
+	return o.locale.CalendarNamesFor(o.calendar)
+}
+
+// eraName is what the era of a date is called, in the width the pattern asks
+// for. A calendar that counts its years from somewhere else has eras of its
+// own even where its months are the common ones: the Japanese year is counted
+// from the start of a reign and named after it.
+func (o *dateOptions) eraName(at icu.Date, n int) string {
+	if names, ok := o.calendarEras(); ok {
+		width := 1
+		switch {
+		case n >= 5:
+			width = 2
+		case n == 4:
+			width = 0
+		}
+		if list := names.Eras[width]; at.Era < len(list) {
+			return list[at.Era]
+		}
+		if list := names.Eras[1]; at.Era < len(list) {
+			return list[at.Era]
+		}
+	}
+	if at.Era == 0 {
+		return o.locale.Eras[0]
+	}
+	return o.locale.Eras[1]
+}
+
 // localiseDigits writes ASCII digits in the locale's own.
 func localiseDigits(s, digits string) string {
 	runes := []rune(digits)
@@ -468,15 +605,16 @@ func (o *dateOptions) patternFor() string {
 	}
 
 	if o.dateStyle != "" || o.timeStyle != "" {
-		date, time := "", ""
+		date, clock := "", ""
 		if i, ok := widths[o.dateStyle]; ok {
 			date = l.DatePatterns[i]
 		}
 		if i, ok := widths[o.timeStyle]; ok {
-			time = l.TimePatterns[i]
+			clock = l.TimePatterns[i]
 		}
+		pattern := clock
 		switch {
-		case date != "" && time != "":
+		case date != "" && clock != "":
 			// Both, joined the way the locale joins them: " at ", " um ", or
 			// a space, which is part of the language rather than of either
 			// pattern.
@@ -485,12 +623,11 @@ func (o *dateOptions) patternFor() string {
 				glue = "{0}, {1}"
 			}
 			joined := strings.Replace(glue, "{0}", date, 1)
-			return strings.Replace(joined, "{1}", time, 1)
+			pattern = strings.Replace(joined, "{1}", clock, 1)
 		case date != "":
-			return date
-		default:
-			return time
+			pattern = date
 		}
+		return o.withEra(pattern)
 	}
 
 	// A set of fields: the locale's own order for that combination, when it
@@ -520,6 +657,7 @@ func (o *dateOptions) patternFor() string {
 	if o.era != "" && !strings.ContainsRune(patternLettersOf(pattern), 'G') {
 		pattern += " G"
 	}
+	pattern = o.withEra(pattern)
 	if o.timeZoneName != "" && !strings.ContainsAny(patternLettersOf(pattern), "zZvVOXx") {
 		// A zone written after a time is written against it; after a date it
 		// is joined the way a date is joined to a time, which is with a comma

@@ -107,15 +107,12 @@ var knownDifferences = map[string]string{
 	// name as well as a number, a leap month is the month before it said twice,
 	// and an era that is not ours counts from somewhere else and is named in
 	// every language.
-	"intl402/DateTimeFormat/canonicalize-calendar.js":                               "calendars",
 	"intl402/DateTimeFormat/prototype/format/related-year-zh.js":                    "calendars",
 	"intl402/DateTimeFormat/prototype/formatRangeToParts/chinese-calendar-dates.js": "calendars",
 	"intl402/DateTimeFormat/prototype/formatRangeToParts/dangi-calendar-dates.js":   "calendars",
-	"intl402/DateTimeFormat/prototype/formatRangeToParts/pattern-on-calendar.js":    "calendars",
 	"intl402/DateTimeFormat/prototype/formatToParts/chinese-calendar-dates.js":      "calendars",
 	"intl402/DateTimeFormat/prototype/formatToParts/era.js":                         "calendars",
 	"intl402/DateTimeFormat/prototype/formatToParts/lunisolar-leap-months.js":       "calendars",
-	"intl402/DateTimeFormat/prototype/formatToParts/pattern-on-calendar.js":         "calendars",
 	"intl402/DateTimeFormat/prototype/formatToParts/related-year-zh.js":             "calendars",
 	"intl402/DateTimeFormat/prototype/formatToParts/related-year.js":                "calendars",
 	"intl402/DateTimeFormat/prototype/resolvedOptions/calendar.js":                  "calendars",
@@ -149,16 +146,17 @@ var knownDifferences = map[string]string{
 	// What an ICU of another version answers. The data here was read from one
 	// ICU and the tests were written against another, and these are the places
 	// where the two disagree: node answers as this does.
-	"intl402/DateTimeFormat/prototype/format/numbering-system.js":           "another ICU",
-	"intl402/DateTimeFormat/prototype/resolvedOptions/hourCycle-default.js": "another ICU",
-	"intl402/NumberFormat/prototype/format/unit-ja-JP.js":                   "another ICU",
-	"intl402/NumberFormat/prototype/format/unit-zh-TW.js":                   "another ICU",
-	"intl402/NumberFormat/prototype/formatRange/en-US.js":                   "another ICU",
-	"intl402/NumberFormat/prototype/formatRange/pt-PT.js":                   "another ICU",
-	"intl402/NumberFormat/prototype/formatToParts/unit-ja-JP.js":            "another ICU",
-	"intl402/NumberFormat/prototype/formatToParts/unit-ko-KR.js":            "another ICU",
-	"intl402/NumberFormat/prototype/formatToParts/unit-zh-TW.js":            "another ICU",
-	"intl402/PluralRules/prototype/select/notation.js":                      "another ICU",
+	"intl402/DateTimeFormat/prototype/format/numbering-system.js":             "another ICU",
+	"intl402/DateTimeFormat/prototype/resolvedOptions/hourCycle-default.js":   "another ICU",
+	"intl402/NumberFormat/prototype/format/unit-ja-JP.js":                     "another ICU",
+	"intl402/NumberFormat/prototype/format/unit-zh-TW.js":                     "another ICU",
+	"intl402/NumberFormat/prototype/formatRange/en-US.js":                     "another ICU",
+	"intl402/NumberFormat/prototype/formatRange/pt-PT.js":                     "another ICU",
+	"intl402/NumberFormat/prototype/formatToParts/unit-ja-JP.js":              "another ICU",
+	"intl402/NumberFormat/prototype/formatToParts/unit-ko-KR.js":              "another ICU",
+	"intl402/NumberFormat/prototype/formatToParts/unit-zh-TW.js":              "another ICU",
+	"intl402/PluralRules/prototype/select/notation.js":                        "another ICU",
+	"intl402/DateTimeFormat/constructor-options-calendar-islamic-fallback.js": "calendars",
 }
 
 func TestConformance(t *testing.T) {

@@ -156,6 +156,26 @@ func TestIntlFormats(t *testing.T) {
 		{`new Intl.DateTimeFormat("th", {dateStyle: "long", timeZone: "UTC"})
 		    .format(Date.UTC(2024, 0, 5))`, "5 มกราคม 2567"},
 
+		// And a calendar may be asked for outright: the Islamic year is
+		// eleven days shorter than this one, the Hebrew year has a
+		// thirteenth month in seven years out of nineteen, and the Japanese
+		// year is counted from the start of a reign and named after it.
+		{`new Intl.DateTimeFormat("en-u-ca-islamic-civil", {dateStyle: "long",
+		    timeZone: "UTC"}).format(Date.UTC(2024, 0, 5))`, "Jumada II 23, 1445 AH"},
+		{`new Intl.DateTimeFormat("en-u-ca-hebrew", {dateStyle: "long",
+		    timeZone: "UTC"}).format(Date.UTC(2024, 0, 5))`, "Tevet 24, 5784 AM"},
+		{`new Intl.DateTimeFormat("ja-u-ca-japanese", {dateStyle: "long",
+		    timeZone: "UTC"}).format(Date.UTC(2024, 0, 5))`, "令和6年1月5日"},
+		{`new Intl.DateTimeFormat("fa-u-ca-persian", {dateStyle: "long",
+		    timeZone: "UTC"}).format(Date.UTC(2024, 0, 5))`, "۱۵ دی ۱۴۰۲"},
+		{`new Intl.DateTimeFormat("en-u-ca-coptic", {dateStyle: "long",
+		    timeZone: "UTC"}).format(Date.UTC(2024, 0, 5))`, "Kiahk 26, 1740 AM"},
+		{`new Intl.DateTimeFormat("en-u-ca-indian", {year: "numeric",
+		    month: "long", day: "numeric", timeZone: "UTC"})
+		    .format(Date.UTC(2024, 0, 5))`, "Pausa 15, 1945 Śaka"},
+		{`new Intl.DateTimeFormat("en-u-ca-hebrew", {timeZone: "UTC"})
+		    .resolvedOptions().calendar`, "hebrew"},
+
 		// Which form a count takes, which is arithmetic in every language and
 		// different arithmetic in each.
 		{`["en","ru","pl","ar","cy"].map(l =>

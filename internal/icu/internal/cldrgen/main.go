@@ -358,6 +358,27 @@ func run() error {
 	fmt.Fprintf(&b, "// that goes by another word now.\n")
 	writePacked(&b, "tagAliases", encodeAliases(renames))
 
+	// What the other calendars call their months and eras, and where the ones
+	// that cannot be computed put their months.
+	calendars, err := readCalendars(filepath.Join(filepath.Dir(script), "calendars.json"))
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(&b, "// calendarNames is what each calendar calls its months and its eras, in\n")
+	fmt.Fprintf(&b, "// each language: the Islamic months, the Hebrew ones and the thirteenth\n")
+	fmt.Fprintf(&b, "// it has in a long year, the two hundred and thirty-seven Japanese reigns.\n")
+	writePacked(&b, "calendarNames", encodeCalendars(calendars))
+
+	tables, err := readCalendarTables(filepath.Join(filepath.Dir(script), "calendartables.json"))
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(&b, "// calendarTables is where the calendars that cannot be computed put their\n")
+	fmt.Fprintf(&b, "// months: the Islamic ones, which follow the moon or a table kept in\n")
+	fmt.Fprintf(&b, "// Saudi Arabia, and the Persian one, whose year begins at the equinox.\n")
+	fmt.Fprintf(&b, "// Along with them, the day each Japanese reign began.\n")
+	writePacked(&b, "calendarTables", encodeCalendarTables(tables))
+
 	fmt.Fprintf(&b, "// numberingSystems is the ten digits of each way of writing numbers.\n")
 	fmt.Fprintf(&b, "var numberingSystems = map[string]string{\n")
 	for _, name := range sortedNames(numbering) {
@@ -489,6 +510,118 @@ func encodeAliases(d aliasData) string {
 		}
 		b.WriteByte('\n')
 	}
+	return b.String()
+}
+
+// calendarData is what calendars.mjs writes.
+type calendarData struct {
+	Entries []map[string]string       `json:"entries"`
+	Index   map[string]map[string]int `json:"index"`
+}
+
+func readCalendars(path string) (calendarData, error) {
+	var out calendarData
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return out, fmt.Errorf("the calendar names: %w", err)
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return out, fmt.Errorf("the calendar names: %w", err)
+	}
+	return out, nil
+}
+
+// encodeCalendars writes the distinct sets of names, then which locale uses
+// which for which calendar.
+func encodeCalendars(d calendarData) string {
+	var b strings.Builder
+	for _, entry := range d.Entries {
+		parts := make([]string, 0, len(entry))
+		for _, key := range sortedNames(entry) {
+			parts = append(parts, key+"\t"+entry[key])
+		}
+		fmt.Fprintf(&b, "%s\n", strings.Join(parts, "\x01"))
+	}
+	b.WriteString("\n")
+	for _, tag := range sortedIndex(d.Index) {
+		parts := make([]string, 0, len(d.Index[tag]))
+		for _, calendar := range sortedInts(d.Index[tag]) {
+			parts = append(parts, calendar+"="+strconv.Itoa(d.Index[tag][calendar]))
+		}
+		fmt.Fprintf(&b, "%s\t%s\n", tag, strings.Join(parts, "\x01"))
+	}
+	return b.String()
+}
+
+func sortedIndex(m map[string]map[string]int) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortedInts(m map[string]int) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// calendarTableData is what calendartables.mjs writes.
+type calendarTableData struct {
+	Islamic  monthTable `json:"islamic"`
+	UmAlQura monthTable `json:"islamic-umalqura"`
+	Persian  monthTable `json:"persian"`
+	Eras     []eraStart `json:"eras"`
+}
+
+type monthTable struct {
+	From    int    `json:"from"`
+	Year    int    `json:"year"`
+	Month   string `json:"month"`
+	Lengths string `json:"lengths"`
+}
+
+type eraStart struct {
+	Fixed int    `json:"fixed"`
+	Era   string `json:"era"`
+}
+
+func readCalendarTables(path string) (calendarTableData, error) {
+	var out calendarTableData
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return out, fmt.Errorf("the calendar tables: %w", err)
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return out, fmt.Errorf("the calendar tables: %w", err)
+	}
+	return out, nil
+}
+
+// encodeCalendarTables writes one calendar to a line: where its first month
+// begins, which month that is, and how long each month from there is.
+func encodeCalendarTables(d calendarTableData) string {
+	var b strings.Builder
+	for _, entry := range []struct {
+		name  string
+		table monthTable
+	}{
+		{"islamic", d.Islamic}, {"islamic-umalqura", d.UmAlQura},
+		{"persian", d.Persian},
+	} {
+		fmt.Fprintf(&b, "%s\t%d\t%d\t%s\t%s\n", entry.name, entry.table.From,
+			entry.table.Year, entry.table.Month, entry.table.Lengths)
+	}
+	days := make([]string, 0, len(d.Eras))
+	for _, era := range d.Eras {
+		days = append(days, strconv.Itoa(era.Fixed))
+	}
+	fmt.Fprintf(&b, "eras\t%s\n", strings.Join(days, ","))
 	return b.String()
 }
 

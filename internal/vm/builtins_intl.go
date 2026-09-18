@@ -89,7 +89,7 @@ func (r *Runtime) buildIntl() *Object {
 		var values []string
 		switch key.Go() {
 		case "calendar":
-			values = []string{"gregory"}
+			values = icu.Calendars()
 		case "collation":
 			values = []string{"default"}
 		case "currency":
@@ -355,7 +355,7 @@ func supportedSetting(key, value string) bool {
 		_, ok := icu.NumberingDigits(value)
 		return ok
 	case "ca":
-		return value == "gregory" || value == "buddhist" || value == "iso8601"
+		return icu.HasCalendar(value)
 	case "co":
 		// The orderings named here are the ones a locale may be tailored for;
 		// "standard" and "search" are not settings a tag may ask for.
@@ -474,7 +474,12 @@ func (r *Runtime) typeOption(o *Object, name string) (string, error) {
 			return "", r.throwRangeError("%s is not a value %s may take", got, name)
 		}
 	}
-	return strings.ToLower(got), nil
+	// A setting that has been renamed is answered by its name now, whether it
+	// was asked for in a tag or in the options.
+	key := map[string]string{
+		"calendar": "ca", "numberingSystem": "nu", "collation": "co",
+	}[name]
+	return canonicalSetting(key, strings.ToLower(got)), nil
 }
 
 // boolWord is how a flag is written in a tag.

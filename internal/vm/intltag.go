@@ -296,6 +296,22 @@ func (t *langTag) String() string {
 	return strings.Join(parts, "-")
 }
 
+// canonicalSetting is what a setting goes by now, for the settings that have
+// been renamed: "islamicc" is the civil Islamic calendar, and a key set to yes
+// is a key set to true.
+func canonicalSetting(key, value string) string {
+	_, _, _, _, _, settings, _ := icu.TagAliases()
+	to, ok := settings[key+"-"+value]
+	if !ok {
+		return value
+	}
+	_, replaced, found := strings.Cut(to, "-")
+	if !found {
+		return "true"
+	}
+	return replaced
+}
+
 // canonicalTag writes a tag the one way it is written, with the names that
 // have been replaced since replaced.
 func canonicalTag(t langTag) string {
