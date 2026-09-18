@@ -23,6 +23,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"go/format"
 	"io"
 	"os"
 	"os/exec"
@@ -92,10 +93,12 @@ type relativeUnit struct {
 }
 
 type plural struct {
-	Categories    []string          `json:"categories"`
-	Small         []string          `json:"small"`
-	Mod           []string          `json:"mod"`
-	ByThousand    map[string]string `json:"byThousand"`
+	Categories []string `json:"categories"`
+	Small      []string `json:"small"`
+	Mod        []string `json:"mod"`
+	// Classes are the residues that a rule treats differently, keyed by the
+	// modulus and the residue: "100000:21000".
+	Classes       map[string]string `json:"classes"`
 	Exact         map[string]string `json:"exact"`
 	FractionZero  string            `json:"fractionZero"`
 	FractionOther string            `json:"fractionOther"`
@@ -265,7 +268,13 @@ func run() error {
 	}
 	fmt.Fprintf(&b, "}\n")
 
-	_, err = os.Stdout.WriteString(b.String())
+	// The output is formatted here rather than left to whoever regenerates it,
+	// so that the file in the repository is the file this writes.
+	pretty, err := format.Source([]byte(b.String()))
+	if err != nil {
+		return fmt.Errorf("formatting what was generated: %w", err)
+	}
+	_, err = os.Stdout.Write(pretty)
 	return err
 }
 
@@ -406,7 +415,7 @@ func encode(l *localeData) string {
 			strings.Join(p.Categories, itemSep),
 			letters(p.Small),
 			letters(p.Mod),
-			joinNumbered(p.ByThousand),
+			joinClasses(p.Classes),
 			joinNumbered(p.Exact),
 			letter(p.FractionZero),
 			letter(p.FractionOther),
@@ -504,6 +513,19 @@ func joinPairs(m map[string]string) string {
 	out := make([]string, 0, len(m))
 	for _, k := range sortedStringKeys(m) {
 		out = append(out, k+"="+m[k])
+	}
+	return strings.Join(out, itemSep)
+}
+
+// joinClasses writes the residue classes, each as its modulus, its residue and
+// its category: 100000:21000x.
+func joinClasses(m map[string]string) string {
+	if len(m) == 0 {
+		return ""
+	}
+	out := make([]string, 0, len(m))
+	for _, key := range sortedStringKeys(m) {
+		out = append(out, key+letter(m[key]))
 	}
 	return strings.Join(out, itemSep)
 }

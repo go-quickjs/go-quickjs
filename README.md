@@ -33,7 +33,7 @@ Promises, regular expressions, modules with top-level `await`, Proxy and typed
 arrays all work, and are exercised against [test262], the official ECMAScript
 conformance suite.
 
-`Intl` is there too, with real CLDR data for 381 locales — the engine carries
+`Intl` is there too, with real CLDR data for 379 locales — the engine carries
 its own, in Go, rather than linking ICU. It is held against a full ICU
 build: [5,815 of 5,820 formatting cases match it exactly](intl_test.go), and
 the five that do not are written down.

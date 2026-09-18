@@ -22,11 +22,18 @@
 // not here falls back to English -- which is what Resolve reports, so that
 // resolvedOptions can say what was really used.
 //
-// Two things it does not carry. The finer day periods of Chinese and Japanese
+// One thing it does not carry: the finer day periods of Chinese and Japanese
 // -- the small hours, the evening -- are not distinguished, only morning and
-// afternoon. And the plural rules of Cornish are exact only below twenty-one
-// thousand, since that language asks what a count is modulo a hundred thousand
-// and this stores the answers rather than the question.
+// afternoon.
+//
+// The plural rules are stored as answers rather than as arithmetic: a hundred
+// entries for the small counts, a hundred for what the last two digits say,
+// and the residues that disagree at each of the moduli a rule may ask about.
+// That reproduces every rule in CLDR exactly, Cornish included -- which counts
+// in scores, and asks what a count is modulo a hundred thousand and modulo a
+// million. The generator checks each language against the engine the data came
+// from, for every count up to a hundred thousand, and up to three million for
+// one that reaches that far.
 package icu
 
 import (
@@ -141,10 +148,11 @@ type PluralRule struct {
 	// Small is the category of each count below a hundred, and Mod of each
 	// remainder above it.
 	Small, Mod [100]byte
-	// ByThousand and Exact are the handful of rules that need more: one keyed
-	// by the last three digits, the other by the count itself.
-	ByThousand map[int]byte
-	Exact      map[int]byte
+	// Classes are the residues a rule treats differently, by modulus: Cornish
+	// asks what a count is modulo a hundred thousand, and modulo a million.
+	// Exact is for a count that no class covers.
+	Classes map[int]map[int]byte
+	Exact   map[int]byte
 	// FractionZero is the category of a count with a fraction and nothing in
 	// front of the point, FractionOther of one with something.
 	FractionZero, FractionOther byte
@@ -170,14 +178,25 @@ func (p *PluralRule) category(n float64) byte {
 	if whole < 100 {
 		return p.Small[whole]
 	}
-	if c, ok := p.ByThousand[whole%1000]; ok {
-		return c
-	}
 	if c, ok := p.Exact[whole]; ok {
 		return c
 	}
+	// Each recorded class holds only counts that agree, so whichever matches
+	// is the answer.
+	for _, modulus := range classModuli {
+		table, ok := p.Classes[modulus]
+		if !ok {
+			continue
+		}
+		if c, ok := table[whole%modulus]; ok {
+			return c
+		}
+	}
 	return p.Mod[whole%100]
 }
+
+// classModuli are the moduli a rule may ask about, beyond the last two digits.
+var classModuli = [...]int{1000000, 100000, 1000}
 
 // The categories, as the single letters the tables are written in.
 var categoryNames = map[byte]string{
@@ -485,7 +504,7 @@ func decodePlural(fields []string) PluralRule {
 	}
 	copy(p.Small[:], fields[1])
 	copy(p.Mod[:], fields[2])
-	p.ByThousand = numberedCategories(fields[3])
+	p.Classes = decodeClasses(fields[3])
 	p.Exact = numberedCategories(fields[4])
 	p.FractionZero = byteAt(fields[5])
 	p.FractionOther = byteAt(fields[6])
@@ -497,6 +516,33 @@ func byteAt(s string) byte {
 		return 'x'
 	}
 	return s[0]
+}
+
+// decodeClasses reads the residue classes, written as 100000:21000x items.
+func decodeClasses(field string) map[int]map[int]byte {
+	if field == "" {
+		return nil
+	}
+	out := map[int]map[int]byte{}
+	for _, item := range strings.Split(field, itemSep) {
+		modulus, rest, ok := strings.Cut(item, ":")
+		if !ok || len(rest) < 2 {
+			continue
+		}
+		m, err := strconv.Atoi(modulus)
+		if err != nil {
+			continue
+		}
+		r, err := strconv.Atoi(rest[:len(rest)-1])
+		if err != nil {
+			continue
+		}
+		if out[m] == nil {
+			out[m] = map[int]byte{}
+		}
+		out[m][r] = rest[len(rest)-1]
+	}
+	return out
 }
 
 // numberedCategories reads the exceptions, written as 100o items.

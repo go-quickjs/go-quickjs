@@ -349,53 +349,113 @@ function currencySymbols(locale) {
 
 // --- plurals ----------------------------------------------------------------
 
-// The category a count falls into, in the parts every plural rule is made of.
+// The category a count falls into, as the answers rather than as the question.
 //
-// A rule asks three kinds of question: whether the number is exactly one of a
-// handful of small values -- Polish has a form for 1 that 101 does not share
-// -- what its last two digits are, and, in a few languages, what its last
-// three are. So two tables of a hundred entries reproduce nearly every rule,
-// and the handful that need more are recorded as the exceptions they are. The
-// result is checked against every count up to a hundred thousand.
+// A plural rule in CLDR is arithmetic on a count: whether it is exactly one of
+// a few small values, what its last two digits are, and -- in the languages
+// that count in scores or in hundreds of thousands -- what it is modulo a
+// larger power of ten. Rather than carry the arithmetic, this reads the
+// answers: a hundred for the small counts, a hundred for the last two digits,
+// and, where those are not enough, the residues that disagree at each of the
+// moduli a rule may ask about.
+//
+// What comes out is checked against the engine it was read from, for every
+// count up to a hundred thousand -- or up to three million for a language
+// whose rules reach that far.
 function pluralTable(locale, type) {
   const rules = new Intl.PluralRules(locale, {type});
+
   const small = Array.from({length: 100}, (_, n) => rules.select(n));
-  const mod = Array.from({length: 100}, (_, n) => rules.select(1000 + n));
+  // What the last two digits say, read at several places so that a rule about
+  // thousands is not mistaken for a rule about tens: Cornish says something
+  // particular about a thousand exactly.
+  const mod = Array.from({length: 100}, (_, r) => {
+    const votes = {};
+    // None of these is a round thousand, which is the shape a rule about
+    // thousands takes: reading the tens from 1000 would learn the wrong thing.
+    for (const base of [100, 300, 700, 1100, 12300, 54300]) {
+      const category = rules.select(base + r);
+      votes[category] = (votes[category] || 0) + 1;
+    }
+    return Object.keys(votes).reduce((a, b) => votes[a] >= votes[b] ? a : b);
+  });
 
-  // Where the two tables are not enough, the exception is either about the
-  // number itself or about its last three digits, and which it is shows in
-  // whether it repeats every thousand.
-  const byThousand = {};
-  const exact = {};
-  for (let n = 100; n <= 100000; n++) {
-    const want = rules.select(n);
-    if (want === mod[n % 100]) continue;
-    const key = n % 1000;
-    const repeats = rules.select(key < 100 ? key + 1000 : key) === want &&
-      rules.select(n + 1000) === want;
-    if (repeats) byThousand[key] = want;
-    else if (n < 1000) exact[n] = want;
-  }
+  const plain = (n) => n < 100 ? small[n] : mod[n % 100];
 
-  const select = (n) => {
-    if (n < 100) return small[n];
-    if (n % 1000 in byThousand) return byThousand[n % 1000];
-    if (n in exact) return exact[n];
-    return mod[n % 100];
+  // The moduli a rule may ask about. A count is attributed to the widest
+  // class that covers it, so that one entry stands for a thousand counts
+  // rather than a thousand entries standing for one each.
+  const MODULI = [1000, 100000, 1000000];
+
+  const derive = (limit) => {
+    const categories = new Array(limit);
+    for (let n = 0; n < limit; n++) categories[n] = rules.select(n);
+
+    const disagree = [];
+    for (let n = 100; n < limit; n++) {
+      if (categories[n] !== plain(n)) disagree.push(n);
+    }
+    if (disagree.length === 0) return {classes: {}, exact: {}, wrong: []};
+
+    // A residue is a class only if every count with that residue agrees, so
+    // that recording it cannot make some other count wrong.
+    const classes = {};
+    for (const m of MODULI) {
+      const byResidue = new Map();
+      // Counts below a hundred are answered exactly and never reach a class,
+      // so what they say has no bearing on whether one is consistent.
+      for (let n = 100; n < limit; n++) {
+        const r = n % m;
+        const already = byResidue.get(r);
+        if (already === undefined) byResidue.set(r, categories[n]);
+        else if (already !== categories[n]) byResidue.set(r, null);
+      }
+      for (const n of disagree) {
+        const key = m + ":" + (n % m);
+        if (key in classes) continue;
+        const agreed = byResidue.get(n % m);
+        if (agreed !== null && agreed !== undefined) classes[key] = agreed;
+      }
+    }
+
+    // Whatever no class covers is recorded as the count it is.
+    const exact = {};
+    const model = (n) => {
+      if (n < 100) return small[n];
+      if (n in exact) return exact[n];
+      for (const m of MODULI) {
+        const key = m + ":" + (n % m);
+        if (key in classes) return classes[key];
+      }
+      return mod[n % 100];
+    };
+    for (const n of disagree) {
+      if (model(n) !== categories[n]) exact[n] = categories[n];
+    }
+
+    const wrong = [];
+    for (let n = 0; n < limit && wrong.length < 8; n++) {
+      if (model(n) !== categories[n]) wrong.push(n);
+    }
+    return {classes, exact, wrong};
   };
-  const wrong = [];
-  for (let n = 0; n <= 100000 && wrong.length < 8; n++) {
-    if (rules.select(n) !== select(n)) wrong.push(n);
+
+  // Nearly every language is settled by a hundred thousand counts; one asks
+  // about millions, and is looked at further.
+  let found = derive(100000);
+  if (Object.keys(found.classes).length > 0 || Object.keys(found.exact).length > 0 ||
+      found.wrong.length > 0) {
+    found = derive(3000000);
   }
 
-  // A count with a fraction is its own case, and what it depends on is
-  // whether there is anything in front of the point.
   return {
     categories: rules.resolvedOptions().pluralCategories,
-    small, mod, byThousand, exact,
+    small, mod,
+    classes: found.classes,
+    exact: found.exact,
     fractionZero: rules.select(0.5),
     fractionOther: rules.select(1.5),
-    disagrees: wrong,
+    disagrees: found.wrong,
   };
 }
 
