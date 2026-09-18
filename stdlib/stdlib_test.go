@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -1956,4 +1957,60 @@ func TestWebSocketUpgradeNeedsAnAsk(t *testing.T) {
 	if want := "400 this request did not ask for a socket"; out != want {
 		t.Errorf("out = %q, want %q", out, want)
 	}
+}
+
+// Opening things and closing them again should leave nothing behind: a
+// goroutine that outlives what it was reading is a leak, and a program that
+// serves for a long time makes one of those per request.
+func TestNothingIsLeftBehind(t *testing.T) {
+	before := runtime.NumGoroutine()
+
+	for i := 0; i < 3; i++ {
+		out, errOut := run(t, stdlib.Config{
+			Fetch:   &stdlib.Fetch{},
+			Serve:   &stdlib.Serve{Allow: func(string) error { return nil }},
+			Sockets: &stdlib.WebSockets{Allow: func(*url.URL) error { return nil }},
+		}, `
+			;(async () => {
+				const server = serve({port: 0}, (request) => {
+					const {pathname} = new URL(request.url)
+					if (pathname === "/ws") {
+						const {socket, response} = upgradeWebSocket(request)
+						socket.onmessage = (e) => { socket.send(e.data); socket.close() }
+						return response
+					}
+					return new Response("x".repeat(1000))
+				})
+
+				// A few requests, read and unread.
+				for (let i = 0; i < 5; i++) await (await fetch(server.url)).text()
+				for (let i = 0; i < 5; i++) await (await fetch(server.url)).body.cancel()
+
+				// And a few sockets, opened and closed.
+				for (let i = 0; i < 3; i++) {
+					await new Promise((resolve) => {
+						const ws = new WebSocket(server.url.replace("http", "ws") + "/ws")
+						ws.onopen = () => ws.send("ping")
+						ws.onclose = resolve
+					})
+				}
+				server.close()
+				console.log("done")
+			})()
+		`)
+		if out != "done" {
+			t.Fatalf("out = %q, stderr: %s", out, errOut)
+		}
+	}
+
+	// Goroutines end when they are told to, not instantly.
+	var after int
+	for i := 0; i < 50; i++ {
+		runtime.GC()
+		time.Sleep(20 * time.Millisecond)
+		if after = runtime.NumGoroutine(); after <= before+4 {
+			return
+		}
+	}
+	t.Errorf("goroutines: %d before, %d after", before, after)
 }

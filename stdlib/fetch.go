@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
@@ -91,11 +90,10 @@ func Network(rt *quickjs.Runtime, cfg *Fetch) error {
 		// The script is given a way to cancel what is about to be sent, which
 		// it hangs on its abort signal. Cancelling stops the request wherever
 		// it has got to rather than merely ignoring the answer.
+		spec.ctx, spec.cancel = context.WithCancel(context.Background())
 		if register.IsFunction() {
-			spec.abort = make(chan struct{})
-			var once sync.Once
-			cancel := func() { once.Do(func() { close(spec.abort) }) }
-			if _, err := register.Call(cancel); err != nil {
+			if _, err := register.Call(func() { spec.cancel() }); err != nil {
+				spec.cancel()
 				p.RejectError(err)
 				return p
 			}
@@ -144,9 +142,11 @@ type requestSpec struct {
 	headers [][2]string
 	body    []byte
 	hasBody bool
-	// abort is closed when the script's AbortSignal fires, which cancels the
-	// request wherever it has got to.
-	abort chan struct{}
+	// ctx is cancelled when the script's AbortSignal fires, which stops the
+	// request wherever it has got to. Cancelling it is also how a finished
+	// request lets go of what it was holding.
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // fetchResult is a response reduced to plain Go data.
@@ -208,32 +208,24 @@ func doFetch(client *http.Client, cfg *Fetch, spec *requestSpec, limit int64, lo
 	if spec.hasBody {
 		body = strings.NewReader(string(spec.body))
 	}
-	req, err := http.NewRequest(spec.method, spec.url, body)
+	req, err := http.NewRequestWithContext(spec.ctx, spec.method, spec.url, body)
 	if err != nil {
+		spec.cancel()
 		return nil, err
 	}
 	for _, h := range spec.headers {
 		req.Header.Add(h[0], h[1])
 	}
-	if spec.abort != nil {
-		ctx, cancel := context.WithCancel(req.Context())
-		go func() {
-			select {
-			case <-spec.abort:
-				cancel()
-			case <-ctx.Done():
-			}
-		}()
-		req = req.WithContext(ctx)
-	}
 	if cfg.Allow != nil {
 		if err := cfg.Allow(req); err != nil {
+			spec.cancel()
 			return nil, err
 		}
 	}
 
 	res, err := client.Do(req)
 	if err != nil {
+		spec.cancel()
 		return nil, err
 	}
 
@@ -244,6 +236,7 @@ func doFetch(client *http.Client, cfg *Fetch, spec *requestSpec, limit int64, lo
 	}
 	if loop == nil {
 		// Nothing to deliver the rest on, so the rest is read now.
+		defer spec.cancel()
 		defer res.Body.Close()
 		reader := io.Reader(res.Body)
 		if limit >= 0 {
@@ -255,7 +248,11 @@ func doFetch(client *http.Client, cfg *Fetch, spec *requestSpec, limit int64, lo
 		}
 		out.body = data
 	} else {
-		out.stream = &bodyReader{body: res.Body, loop: loop, left: limit}
+		// The request is still going: what holds it is cancelled when the body
+		// has been read or given up on.
+		out.stream = &bodyReader{
+			body: res.Body, loop: loop, left: limit, release: spec.cancel,
+		}
 	}
 	// The status line's text is what follows the code, which Go keeps whole.
 	if i := strings.IndexByte(res.Status, ' '); i >= 0 {
@@ -283,9 +280,10 @@ func doFetch(client *http.Client, cfg *Fetch, spec *requestSpec, limit int64, lo
 // holds the loop open by itself, so a program that stops reading a body stops
 // waiting for it.
 type bodyReader struct {
-	rt   *quickjs.Runtime
-	loop *Loop
-	body io.ReadCloser
+	rt      *quickjs.Runtime
+	loop    *Loop
+	body    io.ReadCloser
+	release func()
 	// left is how much more may be read, or negative for no limit.
 	left int64
 	// ended is what the connection said when it last had nothing more, kept
@@ -372,6 +370,9 @@ func (b *bodyReader) finish() {
 	}
 	b.done = true
 	b.body.Close()
+	if b.release != nil {
+		b.release()
+	}
 }
 
 // deliver settles the promise with what came back.
