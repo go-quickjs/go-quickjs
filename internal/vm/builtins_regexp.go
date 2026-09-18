@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/go-quickjs/go-quickjs/internal/regexp"
-	"github.com/go-quickjs/go-quickjs/internal/wtf8"
 )
 
 // RegExp, and the String methods that delegate to it.
@@ -314,14 +313,19 @@ func (r *Runtime) regexpExec(this Value, s *String) (Value, error) {
 			return Undefined, err
 		}
 	}
-	return Obj(r.buildMatchResult(re, units, caps, s)), nil
+	return Obj(r.buildMatchResult(re, caps, s)), nil
 }
 
 // buildMatchResult assembles the array exec returns: the matched text, then
 // each group, with index, input and groups attached as properties.
-func (r *Runtime) buildMatchResult(re *regexp.Regexp, units []uint16, caps []int, input *String) *Object {
+func (r *Runtime) buildMatchResult(re *regexp.Regexp, caps []int, input *String) *Object {
 	n := len(caps) / 2
-	elems := make([]Value, n)
+	// The array is made first and filled in place, rather than built beside
+	// itself and copied in. Each piece is cut from the subject, which for text
+	// that is all ASCII -- most of it -- shares the bytes rather than encoding
+	// them again.
+	arr := newArrayObject(r.proto.array, n)
+	elems := arr.elems
 	for i := 0; i < n; i++ {
 		lo, hi := caps[2*i], caps[2*i+1]
 		if lo < 0 || hi < 0 {
@@ -330,10 +334,9 @@ func (r *Runtime) buildMatchResult(re *regexp.Regexp, units []uint16, caps []int
 			elems[i] = Undefined
 			continue
 		}
-		elems[i] = Str(NewString(wtf8.FromUTF16(units[lo:hi])))
+		elems[i] = Str(input.Substring(lo, hi))
 	}
 
-	arr := r.newArrayFrom(elems)
 	// index, input and groups, and where the d flag asks for them the indices
 	// as well: the table is made the right size rather than grown three times.
 	fields := 3

@@ -198,6 +198,47 @@ func (s *String) Concat(t *String) *String {
 	return out
 }
 
+// partsBuilder assembles a string out of pieces a script can see, joining the
+// halves of a surrogate pair that meet at a boundary.
+//
+// A string is its code units, so two halves that meet are the character the
+// pair spells -- and a character has one WTF-8 spelling, without which two
+// strings with the same code units would not compare equal. The last piece is
+// held back rather than written, so that the one after it can still be joined
+// to it; everything before is already settled.
+type partsBuilder struct {
+	sb   strings.Builder
+	last string
+	// endsHigh records that the piece held back ends with an unpaired high
+	// surrogate, which is the only thing the next piece could complete.
+	endsHigh bool
+}
+
+// Grow reserves room for n more bytes.
+func (b *partsBuilder) Grow(n int) { b.sb.Grow(n) }
+
+// WriteString adds a piece.
+func (b *partsBuilder) WriteString(s string) {
+	if s == "" {
+		return
+	}
+	endsHigh, startsLow := wtf8.UnpairedEnds(s)
+	if b.endsHigh && startsLow {
+		b.last = wtf8.Join(b.last, s)
+		b.endsHigh, _ = wtf8.UnpairedEnds(b.last)
+		return
+	}
+	b.sb.WriteString(b.last)
+	b.last, b.endsHigh = s, endsHigh
+}
+
+// String returns what has been written.
+func (b *partsBuilder) String() string {
+	b.sb.WriteString(b.last)
+	b.last, b.endsHigh = "", false
+	return b.sb.String()
+}
+
 // joinValues builds the string a template literal produces.
 //
 // The pieces go into one buffer rather than being concatenated in turn: a
@@ -376,7 +417,14 @@ func (s *String) Substring(start, end int) *String {
 // substituting U+FFFD.
 func fromUnits(u []uint16) *String {
 	s := wtf8.FromUTF16(u)
-	return &String{s: s, length: len(u), ascii: wtf8.IsASCII(s)}
+	out := &String{s: s, length: len(u), ascii: wtf8.IsASCII(s)}
+	if !out.ascii {
+		// Which halves are unpaired is what a concatenation looks at, so a
+		// string built here has to know as much about itself as one built by
+		// NewString does.
+		out.endsHigh, out.startsLow = wtf8.UnpairedEnds(s)
+	}
+	return out
 }
 
 // Equals reports whether two strings have the same code units.

@@ -519,3 +519,41 @@ func TestRegExpRepeatedUseKeepsWorking(t *testing.T) {
 		t.Errorf("total = %q, want 140000", got)
 	}
 }
+
+// What a match reports is cut from the subject rather than encoded again from
+// its code units, which has to give the same text back -- including where a
+// match falls on half of a surrogate pair, which is legal and not the same
+// string as the pair.
+func TestMatchPiecesComeFromTheSubject(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`/(\w+)@(\w+)/.exec("a-someone@example-b").slice(0, 3).join("|")`,
+			"someone@example|someone|example"},
+		{`/(\w+)@(\w+)/.exec("a-someone@example-b").index + ""`, "2"},
+		{`/x(y)?z/.exec("xz").map(v => String(v)).join()`, "xz,undefined"},
+		// Non-ASCII, where a code unit is not a byte.
+		{`/(é+)(→)/.exec("aééé→b").slice(0, 3).join("|")`, "ééé→|ééé|→"},
+		{`/(é+)(→)/.exec("aééé→b").index + ""`, "1"},
+		{`"aéb".match(/./g).join()`, "a,é,b"},
+		{`"😀x".match(/./gu).join()`, "😀,x"},
+		// Without the u flag a dot matches one code unit, so a pair is split.
+		{`"😀".match(/./g).length + ""`, "2"},
+		{`"😀".match(/./g)[0].charCodeAt(0).toString(16)`, "d83d"},
+		{`"😀".match(/./g).join("") === "😀"`, "true"},
+		{`/(.)(.)/.exec("😀")[1].charCodeAt(0).toString(16)`, "d83d"},
+		{`/(.)(.)/.exec("😀")[2].charCodeAt(0).toString(16)`, "de00"},
+		{`"a\uD800b".match(/./g)[1].charCodeAt(0).toString(16)`, "d800"},
+		{`"a\uD800b".match(/./g)[1].length + ""`, "1"},
+		// split, which cuts the pieces between the matches.
+		{`"a1b2c".split(/\d/).join("|")`, "a|b|c"},
+		{`"é1é2é".split(/\d/).join("|")`, "é|é|é"},
+		{`"😀1😀".split(/\d/).map(s => s.length).join()`, "2,2"},
+		{`"a\uD800b1c".split(/\d/)[0].length + ""`, "3"},
+		{`"x".split(/(y)?/).map(v => String(v)).join()`, "x"},
+		// replace, whose replacement sees the matched text.
+		{`"a1b".replace(/\d/, m => "[" + m + "]")`, "a[1]b"},
+		{`"éXé".replace(/X/, m => m.length + "")`, "é1é"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

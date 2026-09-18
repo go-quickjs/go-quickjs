@@ -981,6 +981,62 @@ func TestLoneSurrogatesThroughTheEngine(t *testing.T) {
 	}
 }
 
+// A string is its code units, so two strings built out of the same units are
+// the same string however they were built: the halves of a pair that meet at a
+// join are the character the pair spells, and one character has one spelling.
+func TestSurrogateHalvesMeetingAtAJoin(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+
+	tests := []struct{ src, want string }{
+		// Every way of putting two halves together gives the pair.
+		{`("\uD83D" + "\uDE00") === "\uD83D\uDE00"`, "true"},
+		{`["\uD83D", "\uDE00"].join("") === "😀"`, "true"},
+		{`["\uD83D", "\uDE00"].join("").length`, "2"},
+		{`[["\uD83D"], ["\uDE00"]].flat().join("") === "😀"`, "true"},
+		{`"\uD83D".concat("\uDE00") === "😀"`, "true"},
+		{`("\uD83D").padEnd(2, "\uDE00") === "😀"`, "true"},
+		{`String.fromCharCode(0xD83D, 0xDE00) === "😀"`, "true"},
+		{"`${\"\\uD83D\"}${\"\\uDE00\"}` === \"😀\"", "true"},
+		{`"\uD83D".replace(/$/, "\uDE00") === "😀"`, "true"},
+		{`"X".replace("X", "\uD83D") + "\uDE00" === "😀"`, "true"},
+		{`"\uD83D-".replace("-", "\uDE00") === "😀"`, "true"},
+		{`"a-b".replace("-", "\uD83D") + "\uDE00" === "a\uD83Db\uDE00"`, "true"},
+		{`String.raw({raw: ["\uD83D", ""]}, "\uDE00") === "😀"`, "true"},
+		{`"😀".split("").join("") === "😀"`, "true"},
+		{`"😀".match(/./g).join("") === "😀"`, "true"},
+		{`JSON.parse('"\\uD83D\\uDE00"') === "😀"`, "true"},
+		// And the pieces on their own are still the halves.
+		{`["\uD83D", "x"].join("").charCodeAt(0).toString(16)`, "d83d"},
+		{`["\uDE00", "\uD83D"].join("").length`, "2"},
+		{`["\uDE00", "\uD83D"].join("").charCodeAt(0).toString(16)`, "de00"},
+
+		// A case conversion has nothing to do to a surrogate, and must leave
+		// it alone rather than replace it.
+		{`"\uD83D".toUpperCase().charCodeAt(0).toString(16)`, "d83d"},
+		{`"\uD83D".toUpperCase().length`, "1"},
+		{`"\uD83D".toLowerCase().charCodeAt(0).toString(16)`, "d83d"},
+		{`"a\uD800b".toUpperCase().charCodeAt(1).toString(16)`, "d800"},
+		{`"a\uD800b".toUpperCase().length`, "3"},
+		{`"😀".toUpperCase() === "😀"`, "true"},
+
+		// A search is over code units too, so half of a pair is found inside
+		// one -- the two share no bytes at all in the stored form.
+		{`"😀".split("\uD83D").length`, "2"},
+		{`"😀".split("\uD83D")[1].charCodeAt(0).toString(16)`, "de00"},
+		{`"😀".search("\uDE00")`, "1"},
+		{`new RegExp("\uDE00").test("😀")`, "true"},
+		{`new RegExp("\uD83D").test("😀")`, "true"},
+		{`"😀".indexOf("\uD83D")`, "0"},
+		{`"😀".replace("\uD83D", "x").charCodeAt(1).toString(16)`, "de00"},
+	}
+	for _, tt := range tests {
+		if got := evalString(t, rt, tt.src); got != tt.want {
+			t.Errorf("%s = %s, want %s", tt.src, got, tt.want)
+		}
+	}
+}
+
 func TestLoneSurrogateSurvivesGoRoundTrip(t *testing.T) {
 	rt := quickjs.New()
 	defer rt.Close()

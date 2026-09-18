@@ -255,7 +255,9 @@ func (r *Runtime) regExpSymbolSplit(rx Value, args []Value) (Value, error) {
 		return Obj(r.newArrayFrom(out)), nil
 	}
 
-	piece := func(lo, hi int) Value { return Str(NewString(wtf8.FromUTF16(units[lo:hi]))) }
+	// A piece is cut from the subject rather than encoded again from its code
+	// units, which for text that is all ASCII shares the bytes.
+	piece := func(lo, hi int) Value { return Str(s.Substring(lo, hi)) }
 	p, q := 0, 0
 	for q < size {
 		if err := r.tick(); err != nil {
@@ -395,7 +397,10 @@ func (r *Runtime) regExpSymbolReplace(rx Value, args []Value) (Value, error) {
 		}
 	}
 
-	var sb strings.Builder
+	// The result is built from pieces of the subject and the replacements
+	// between them, either boundary of which may fall between the halves of
+	// one character.
+	var sb partsBuilder
 	next := 0
 	// The capture list and the callback's argument list are built once and
 	// refilled for each match rather than allocated per match. A callee may
@@ -505,36 +510,39 @@ func (r *Runtime) getSubstitution(matched *String, units []uint16, position int,
 		tail = len(units)
 	}
 
-	var sb strings.Builder
+	// The pieces go into a buffer rather than a builder, because a piece may
+	// begin with the half of a character the byte before it ends with -- which
+	// WTF-8 spells as one sequence, and a string is its code units.
+	buf := make([]byte, 0, len(template)+16)
 	for i := 0; i < len(template); i++ {
 		if template[i] != '$' || i+1 >= len(template) {
-			sb.WriteByte(template[i])
+			buf = append(buf, template[i])
 			continue
 		}
 		switch c := template[i+1]; {
 		case c == '$':
-			sb.WriteByte('$')
+			buf = append(buf, '$')
 			i++
 		case c == '&':
-			sb.WriteString(matched.Go())
+			buf = wtf8.AppendJoin(buf, matched.Go())
 			i++
 		case c == '`':
-			sb.WriteString(wtf8.FromUTF16(units[:position]))
+			buf = wtf8.AppendJoin(buf, wtf8.FromUTF16(units[:position]))
 			i++
 		case c == '\'':
-			sb.WriteString(wtf8.FromUTF16(units[tail:]))
+			buf = wtf8.AppendJoin(buf, wtf8.FromUTF16(units[tail:]))
 			i++
 		case c == '<':
 			// A named group reference, which is only a reference at all when
 			// the result carries groups; otherwise it is four literal
 			// characters.
 			if named.IsUndefined() {
-				sb.WriteByte('$')
+				buf = append(buf, '$')
 				continue
 			}
 			end := strings.IndexByte(template[i+2:], '>')
 			if end < 0 {
-				sb.WriteByte('$')
+				buf = append(buf, '$')
 				continue
 			}
 			name := template[i+2 : i+2+end]
@@ -547,7 +555,7 @@ func (r *Runtime) getSubstitution(matched *String, units []uint16, position int,
 				if err != nil {
 					return "", err
 				}
-				sb.WriteString(vs.Go())
+				buf = wtf8.AppendJoin(buf, vs.Go())
 			}
 			i += 2 + end
 		case c >= '0' && c <= '9':
@@ -563,18 +571,18 @@ func (r *Runtime) getSubstitution(matched *String, units []uint16, position int,
 				}
 			}
 			if idx < 1 || idx > len(captures) {
-				sb.WriteByte('$')
+				buf = append(buf, '$')
 				continue
 			}
 			if v := captures[idx-1]; !v.IsUndefined() {
-				sb.WriteString(v.String().Go())
+				buf = wtf8.AppendJoin(buf, v.String().Go())
 			}
 			i += consumed
 		default:
-			sb.WriteByte('$')
+			buf = append(buf, '$')
 		}
 	}
-	return sb.String(), nil
+	return string(buf), nil
 }
 
 // regExpSymbolMatchAll implements RegExp.prototype[Symbol.matchAll].

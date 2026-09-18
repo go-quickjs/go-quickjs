@@ -253,6 +253,38 @@ func UnpairedEnds(s string) (endsHigh, startsLow bool) {
 	return endsHigh, startsLow
 }
 
+// AppendJoin appends s to dst, combining a surrogate pair split across the
+// boundary into the single code point it spells.
+//
+// It is what a builder that assembles a string out of pieces needs: a string is
+// its code units, so the two halves that meet at a boundary are the same
+// character as the pair -- and a character has one spelling, or two strings
+// with the same code units would not compare equal.
+func AppendJoin(dst []byte, s string) []byte {
+	if len(dst) >= 3 && len(s) >= 3 {
+		hi, hok := decodeSurrogateBytes(dst[len(dst)-3:])
+		lo, lok := decodeSurrogateAt(s, 0)
+		if hok && lok && hi >= surrHighMin && hi <= surrHighMax &&
+			lo >= surrLowMin && lo <= surrLowMax {
+			dst = utf8.AppendRune(dst[:len(dst)-3], utf16.DecodeRune(hi, lo))
+			return append(dst, s[3:]...)
+		}
+	}
+	return append(dst, s...)
+}
+
+// decodeSurrogateBytes is decodeSurrogateAt over the bytes a builder holds.
+func decodeSurrogateBytes(b []byte) (rune, bool) {
+	if len(b) < 3 || b[0] != 0xED {
+		return 0, false
+	}
+	b1, b2 := b[1], b[2]
+	if b1 < 0xA0 || b1 > 0xBF || b2 < 0x80 || b2 > 0xBF {
+		return 0, false
+	}
+	return 0xD000 | rune(b1&0x3F)<<6 | rune(b2&0x3F), true
+}
+
 // Join concatenates two WTF-8 strings, combining a surrogate pair split across
 // the boundary into the single code point it spells.
 func Join(a, b string) string {

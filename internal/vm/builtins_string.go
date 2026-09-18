@@ -78,7 +78,9 @@ func (r *Runtime) initStringBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		var sb strings.Builder
+		// A raw piece and the substitution after it may end and begin with the
+		// halves of one character, which the builder joins.
+		var sb partsBuilder
 		for i, part := range parts {
 			s, err := rt.toString(part)
 			if err != nil {
@@ -485,11 +487,20 @@ func (r *Runtime) initStringBuiltins() {
 			}
 			return Obj(rt.newArrayFrom(out)), nil
 		}
-		for _, part := range strings.Split(s.Go(), sep.Go()) {
+		// The search is over code units rather than bytes: a separator that is
+		// half of a surrogate pair matches inside the pair, which shares no
+		// bytes with the half on its own.
+		for pos := 0; ; {
 			if len(out) >= limit {
 				break
 			}
-			out = append(out, Str(NewString(part)))
+			i := s.IndexOf(sep, pos)
+			if i < 0 {
+				out = append(out, Str(s.Substring(pos, s.Len())))
+				break
+			}
+			out = append(out, Str(s.Substring(pos, i)))
+			pos = i + sep.Len()
 		}
 		return Obj(rt.newArrayFrom(out)), nil
 	})

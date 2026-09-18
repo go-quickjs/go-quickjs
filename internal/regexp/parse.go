@@ -7,6 +7,8 @@ import (
 	"unicode"
 	"unicode/utf16"
 	"unicode/utf8"
+
+	"github.com/go-quickjs/go-quickjs/internal/wtf8"
 )
 
 // SyntaxError reports a malformed pattern.
@@ -50,7 +52,12 @@ type parser struct {
 // character beyond the basic plane into the surrogate pair that spells it.
 func patternUnits(pattern string) []rune {
 	units := make([]rune, 0, len(pattern))
-	for _, r := range pattern {
+	// The pattern is decoded rather than ranged over: a pattern is a string,
+	// and a string may hold a lone surrogate -- which ranging would report as
+	// three replacement characters, one per byte of its encoding.
+	for i := 0; i < len(pattern); {
+		r, size := wtf8.DecodeRune(pattern[i:])
+		i += size
 		if r > 0xFFFF {
 			hi, lo := utf16.EncodeRune(r)
 			units = append(units, hi, lo)

@@ -3,6 +3,8 @@ package vm
 import (
 	"strings"
 	"unicode"
+
+	"github.com/go-quickjs/go-quickjs/internal/wtf8"
 )
 
 // Unicode's full case mappings, for the characters whose upper- or lower-case
@@ -138,18 +140,29 @@ func caseConvert(s string, upper bool) string {
 	}
 	var b strings.Builder
 	b.Grow(len(s))
-	for i, r := range s {
-		if !upper && r == 'Σ' {
+	// The text is decoded rather than ranged over, because ranging decodes an
+	// encoded surrogate as U+FFFD and would replace it: an unpaired surrogate
+	// is not a character, has no case, and comes through as it went in.
+	for i := 0; i < len(s); {
+		r, size := wtf8.DecodeRune(s[i:])
+		if wtf8.IsSurrogate(r) {
+			b.WriteString(s[i : i+size])
+			i += size
+			continue
+		}
+		switch {
+		case !upper && r == 'Σ':
 			b.WriteRune(finalSigma(s, i))
-			continue
-		}
-		if to, ok := table[r]; ok {
-			for _, c := range to {
-				b.WriteRune(c)
+		default:
+			if to, ok := table[r]; ok {
+				for _, c := range to {
+					b.WriteRune(c)
+				}
+			} else {
+				b.WriteRune(simple(r))
 			}
-			continue
 		}
-		b.WriteRune(simple(r))
+		i += size
 	}
 	return b.String()
 }

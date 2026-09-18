@@ -4,7 +4,6 @@ import (
 	"math"
 	"math/rand/v2"
 	"sort"
-	"strings"
 
 	"github.com/go-quickjs/go-quickjs/internal/jsnum"
 	"github.com/go-quickjs/go-quickjs/internal/wtf8"
@@ -1277,7 +1276,9 @@ func (r *Runtime) initArrayBuiltins() {
 			}
 			sep = ss.Go()
 		}
-		var sb strings.Builder
+		// The pieces are joined rather than merely appended: two elements can
+		// end and begin with the halves of one character.
+		var sb partsBuilder
 		for i := int64(0); i < a.n; i++ {
 			if i > 0 {
 				sb.WriteString(sep)
