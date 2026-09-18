@@ -1364,3 +1364,69 @@ func TestStreamingBodies(t *testing.T) {
 		t.Errorf("streaming bodies =\n%s\nwant\n%s\nstderr: %s", out, want, errOut)
 	}
 }
+
+func TestCompression(t *testing.T) {
+	out, errOut := run(t, stdlib.Config{}, `
+		;(async () => {
+			const zlib = (await import("zlib")).default
+			const text = "the same sentence, over and over. ".repeat(50)
+
+			// Every framing survives the round trip, and is smaller than what
+			// went in.
+			for (const [pack, unpack] of [["gzipSync", "gunzipSync"],
+			                              ["deflateSync", "inflateSync"],
+			                              ["deflateRawSync", "inflateRawSync"]]) {
+				const packed = zlib[pack](text)
+				const back = zlib[unpack](packed).toString()
+				console.log(pack, back === text, packed.length < text.length)
+			}
+
+			// gzip's magic number, so it really is the format it says.
+			const gz = zlib.gzipSync("x")
+			console.log(gz[0] === 0x1f && gz[1] === 0x8b)
+
+			// unzip takes either framing.
+			console.log(zlib.unzipSync(zlib.gzipSync("a")).toString(),
+			            zlib.unzipSync(zlib.deflateSync("b")).toString())
+
+			// Through the streams, where the data is compressed as it goes.
+			const gather = async (stream) => {
+				const chunks = []
+				let total = 0
+				for await (const c of stream) { chunks.push(c); total += c.length }
+				const out = new Uint8Array(total)
+				let at = 0
+				for (const c of chunks) { out.set(c, at); at += c.length }
+				return out
+			}
+			const source = ReadableStream.from(
+				[..."abcdefghij"].map(c => new TextEncoder().encode(c.repeat(100))))
+			const packed = await gather(source.pipeThrough(new CompressionStream("gzip")))
+			const unpacked = new TextDecoder().decode(await gather(
+				ReadableStream.from([packed]).pipeThrough(new DecompressionStream("gzip"))))
+			console.log(packed.length < 1000, unpacked.length, unpacked.slice(0, 3))
+
+			// Something that is not compressed data says so rather than
+			// producing nonsense.
+			try { zlib.gunzipSync(new Uint8Array([1, 2, 3])) }
+			catch (e) { console.log("refused:", e.constructor.name) }
+
+			// And the callback form node code is written against.
+			zlib.gzip("cb", (err, packed) =>
+				zlib.gunzip(packed, (err2, back) => console.log("callback:", back.toString())))
+		})()
+	`)
+	want := strings.Join([]string{
+		"gzipSync true true",
+		"deflateSync true true",
+		"deflateRawSync true true",
+		"true",
+		"a b",
+		"true 1000 aaa",
+		"refused: Error",
+		"callback: cb",
+	}, "\n")
+	if out != want {
+		t.Errorf("compression output =\n%s\nwant\n%s\nstderr: %s", out, want, errOut)
+	}
+}

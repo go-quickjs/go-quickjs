@@ -50,8 +50,8 @@ type Config struct {
 	// NoWebAPIs leaves out the things a browser has and a language does not --
 	// URL, TextEncoder, TextDecoder, structuredClone, performance, crypto,
 	// atob, btoa -- and the node modules that need no capability either:
-	// events, util, assert, buffer, crypto and the web's streams. All of it is
-	// pure computation, and all of it is installed by default.
+	// events, util, assert, buffer, crypto, zlib and the web's streams. All of
+	// it is pure computation, and all of it is installed by default.
 	NoWebAPIs bool
 }
 
@@ -95,6 +95,11 @@ func Install(rt *quickjs.Runtime, cfg Config) error {
 		// A stream reaches nothing by itself, only what is plugged into
 		// either end of it.
 		if err := Streams(rt); err != nil {
+			return err
+		}
+		// Compressing reads bytes and writes bytes, and the stream form of it
+		// needs the streams above.
+		if err := Compression(rt); err != nil {
 			return err
 		}
 	}
