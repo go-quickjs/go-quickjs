@@ -36,14 +36,14 @@ conformance suite.
 `Intl` is there too, with real CLDR data for 379 locales — the engine carries
 its own, in Go, rather than linking ICU — including the Unicode collation
 order, where a text may be broken into words and sentences, how a measurement
-is written, sixteen calendars, and time zones out of the operating system's own
-database. It is
-held against a full ICU build: [7,925 of 7,949 cases match it
-exactly](intl_test.go), and the twenty-four that do not are named.
+is written, how long something took, sixteen calendars, and time zones out of
+the operating system's own database. It is held against a full ICU build:
+[7,925 of 7,949 cases match it exactly](intl_test.go), and the twenty-four that
+do not are named.
 
-Of the 78,978 test262 tests it runs, 78,910 pass and the 68 that do not are
+Of the 79,184 test262 tests it runs, 79,122 pass and the 62 that do not are
 [named in the suite](conformance/conformance_test.go), each with what it asks
-for that this engine does not carry. The 19,556 it skips are tagged with
+for that this engine does not carry. The 19,350 it skips are tagged with
 features it does not implement, or ask the host for something it does not
 provide: see [Conformance](#conformance) for the measurement and
 [Not implemented](#not-implemented) for what is missing.
@@ -67,6 +67,7 @@ provide: see [Conformance](#conformance) for the measurement and
 | Iterator helpers | `map`, `filter`, `take`, `drop`, `flatMap`, `reduce`, `toArray` and the rest, lazily |
 | Unicode | Full case mappings including the final sigma, all four normalization forms, lone surrogates preserved end to end |
 | Built-ins | `Object`, `Function`, `Array`, `String`, `Number`, `Boolean`, `Symbol`, `BigInt`, `Error`, `Math`, `JSON`, `Date`, `RegExp`, `Map`, `Set`, `Promise`, `Proxy`, `Reflect`, `ArrayBuffer`, `DataView`, typed arrays |
+| Internationalization | `Intl.NumberFormat`, `DateTimeFormat`, `Collator`, `PluralRules`, `ListFormat`, `RelativeTimeFormat`, `DisplayNames`, `Segmenter`, `DurationFormat`, with CLDR data for 379 locales carried in Go |
 | Weak references | `WeakRef`, `FinalizationRegistry`, `WeakMap`, `WeakSet`, backed by Go's `weak.Pointer` and `runtime.AddCleanup`: a target really is released, and a registry really is called back |
 | Reflection | `Proxy` with every trap and its invariants, `Reflect`, property descriptors, mapped `arguments` |
 | Recent additions | Set operations, `Array.fromAsync`, `Object.groupBy`, `Promise.try`, `RegExp.escape`, `Error.isError`, `Math.sumPrecise`, `Uint8Array` base64 and hex |
@@ -79,10 +80,10 @@ provide: see [Conformance](#conformance) for the measurement and
 resizable ArrayBuffers, `using` declarations, and the newer proposals test262
 tracks.
 
-Of `Intl`, what is missing is: the lunisolar calendars — Chinese and Dangi,
-whose months follow the moon and whose years have names as well as numbers —
-and `Intl.DurationFormat`. The other sixteen calendars are there. Time zone
-names are English, where a zone has a name rather than an offset. Sorting
+Of `Intl`, what is missing is the lunisolar calendars — Chinese and Dangi,
+whose months follow the moon and whose years have names as well as numbers. The
+other sixteen calendars are there. Time zone names are English, where a zone
+has a name rather than an offset. Sorting
 follows the Unicode algorithm with each language's own tailoring, but not the
 orderings that are a whole script's worth of data — Chinese and Japanese order
 their characters by sound or by stroke, and those sort by code point here.
@@ -123,9 +124,9 @@ strict and sloppy variants, the expected-failure phase and type, and the feature
 tags. A test tagged with a feature the engine does not implement is skipped
 rather than counted against it.
 
-Measured coverage, as of the most recent run over the whole suite — 78,910 of
-78,978 executed variants, with the 68 that fail named in the runner along with
-what each asks for that is not carried here. The other 19,556 are skipped
+Measured coverage, as of the most recent run over the whole suite — 79,122 of
+79,184 executed variants, with the 62 that fail named in the runner along with
+what each asks for that is not carried here. The other 19,350 are skipped
 rather than counted: a test tagged with a feature the engine does not
 implement, or one that asks the host for a second realm or an agent, is testing
 something that was never claimed.
