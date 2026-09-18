@@ -345,30 +345,85 @@ const fetchJS = `(function (host) {
     return n;
   }
 
-  // A body is held as bytes, and read once: a second read is an error, as it
-  // is on the web, because there is nothing left to read.
+  const isStream = (v) =>
+    typeof ReadableStream !== "undefined" && v instanceof ReadableStream;
+
+  // A body is bytes or a stream of them, and is read once: a second read is an
+  // error, as it is on the web, because there is nothing left to read.
   class Body {
-    constructor(bytes, headers) {
-      Object.defineProperty(this, "_bytes", {value: bytes, writable: true});
+    constructor(source, headers) {
+      const stream = isStream(source);
+      Object.defineProperty(this, "_bytes",
+        {value: stream ? undefined : source, writable: true});
+      Object.defineProperty(this, "_stream", {value: stream ? source : null, writable: true});
       Object.defineProperty(this, "_used", {value: false, writable: true});
       this.headers = headers;
     }
     get bodyUsed() { return this._used; }
+
+    // body is the stream form, which is the same body seen the other way
+    // round: reading it is reading the body, and a body that is not there at
+    // all is null rather than an empty stream.
+    get body() {
+      if (this._stream) return this._stream;
+      if (this._bytes === null || this._bytes === undefined) return null;
+      const self = this;
+      this._stream = new ReadableStream({
+        pull(controller) {
+          const bytes = self._take();
+          if (bytes.length > 0) controller.enqueue(bytes);
+          controller.close();
+        },
+      });
+      return this._stream;
+    }
+
     _take() {
       if (this._used) throw new TypeError("the body has already been read");
       this._used = true;
       return this._bytes === null || this._bytes === undefined
         ? new Uint8Array(0) : this._bytes;
     }
+
+    // _consume is _take for a body that has not arrived yet: the chunks are
+    // gathered as they come, and joined once the stream ends.
+    async _consume() {
+      if (!this._stream || this._bytes !== undefined) return this._take();
+      if (this._used) throw new TypeError("the body has already been read");
+      this._used = true;
+      const chunks = [];
+      let total = 0;
+      for await (const chunk of this._stream) {
+        chunks.push(chunk);
+        total += chunk.length;
+      }
+      const out = new Uint8Array(total);
+      let at = 0;
+      for (const chunk of chunks) { out.set(chunk, at); at += chunk.length; }
+      this._bytes = out;
+      return out;
+    }
+
     async arrayBuffer() {
-      const b = this._take();
+      const b = await this._consume();
       return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
     }
-    async bytes() { return this._take(); }
-    async text() { return new TextDecoder().decode(this._take()); }
-    async json() { return JSON.parse(new TextDecoder().decode(this._take())); }
+    async bytes() { return await this._consume(); }
+    async text() { return new TextDecoder().decode(await this._consume()); }
+    async json() { return JSON.parse(new TextDecoder().decode(await this._consume())); }
     async blob() { throw new TypeError("blobs are not supported"); }
     async formData() { throw new TypeError("form data is not supported"); }
+  }
+
+  // A body that is still a stream is split in two rather than read, since a
+  // clone of something that has not arrived cannot be a copy of it.
+  function cloneBody(body) {
+    if (body._bytes !== undefined) return body._bytes;
+    if (!body._stream) return null;
+    if (body._used) throw new TypeError("the body has already been read");
+    const [mine, theirs] = body._stream.tee();
+    body._stream = mine;
+    return theirs;
   }
 
   class Request extends Body {
@@ -392,7 +447,7 @@ const fetchJS = `(function (host) {
     }
     clone() {
       return new Request(this.url, {
-        method: this.method, headers: this.headers, body: this._bytes,
+        method: this.method, headers: this.headers, body: cloneBody(this),
         signal: this.signal,
       });
     }
@@ -410,7 +465,7 @@ const fetchJS = `(function (host) {
     }
     get ok() { return this.status >= 200 && this.status < 300; }
     clone() {
-      const copy = new Response(this._bytes, {
+      const copy = new Response(cloneBody(this), {
         status: this.status, statusText: this.statusText, headers: this.headers,
       });
       copy.url = this.url;
@@ -430,6 +485,9 @@ const fetchJS = `(function (host) {
   // A body given as text becomes bytes, and says what it is unless told.
   function encodeBody(body, headers) {
     if (body === null || body === undefined) return null;
+    // A stream is passed through: what it will carry is not known yet, and
+    // guessing a content type from nothing is worse than leaving it out.
+    if (isStream(body)) return body;
     if (body instanceof Uint8Array) return body;
     if (ArrayBuffer.isView(body)) {
       return new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
@@ -455,11 +513,16 @@ const fetchJS = `(function (host) {
       throw signal.reason || new Error("This operation was aborted");
     }
 
+    // A request body that is still arriving is gathered first: what goes out
+    // is one request, and its length is part of it.
+    const body = request._stream && request._bytes === undefined
+      ? await request._consume() : request._bytes;
+
     const sent = host.send({
       method: request.method,
       url: request.url,
       headers: [...request.headers._list],
-      body: request._bytes,
+      body,
     }, (cancel) => {
       if (signal) signal.addEventListener("abort", cancel, {once: true});
     });

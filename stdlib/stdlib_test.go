@@ -1296,3 +1296,71 @@ func TestStreamsBackpressure(t *testing.T) {
 		t.Errorf("backpressure output =\n%s\nwant\n%s", out, want)
 	}
 }
+
+// A body is bytes or a stream of them, and the two are the same body seen from
+// different ends.
+func TestStreamingBodies(t *testing.T) {
+	out, errOut := run(t, stdlib.Config{
+		Fetch: &stdlib.Fetch{},
+		Serve: &stdlib.Serve{Allow: func(string) error { return nil }},
+	}, `
+		;(async () => {
+			// A response built from a stream.
+			const made = new Response(ReadableStream.from([
+				new TextEncoder().encode("one "),
+				new TextEncoder().encode("two"),
+			]))
+			console.log(await made.text())
+
+			// And read the other way, a chunk at a time.
+			const chunks = []
+			for await (const c of new Response("hello").body) chunks.push(c.length)
+			console.log(chunks.join(","))
+
+			// A body with nothing in it is null, not an empty stream.
+			console.log(new Response(null).body === null)
+
+			// Reading a body twice is an error whichever way it is read.
+			const once = new Response("x")
+			await once.text()
+			try { await once.text() } catch (e) { console.log(e.constructor.name) }
+
+			// A clone of an unread stream body gives both halves.
+			const original = new Response(ReadableStream.from([new Uint8Array([104, 105])]))
+			const copy = original.clone()
+			console.log(await original.text(), await copy.text())
+
+			// Over the network: a handler that answers with a stream, read back
+			// through fetch as a stream.
+			const server = serve({port: 0}, async (request) => {
+				const sent = await request.text()
+				return new Response(ReadableStream.from(
+					[...sent].map(ch => new TextEncoder().encode(ch.toUpperCase()))))
+			})
+			const res = await fetch(server.url, {method: "POST", body: "abc"})
+			let got = ""
+			for await (const chunk of res.body) got += new TextDecoder().decode(chunk)
+			console.log(got)
+
+			// A request body given as a stream is gathered before it is sent.
+			const echo = await fetch(server.url, {
+				method: "POST",
+				body: ReadableStream.from([new TextEncoder().encode("de")]),
+			})
+			console.log(await echo.text())
+			server.close()
+		})()
+	`)
+	want := strings.Join([]string{
+		"one two",
+		"5",
+		"true",
+		"TypeError",
+		"hi hi",
+		"ABC",
+		"DE",
+	}, "\n")
+	if out != want {
+		t.Errorf("streaming bodies =\n%s\nwant\n%s\nstderr: %s", out, want, errOut)
+	}
+}
