@@ -262,6 +262,30 @@ func (r *Runtime) HasPendingJobs() bool {
 	return r.rt.HasPendingJobs()
 }
 
+// OnUnhandledRejection installs what to call for a promise that was rejected
+// and that nothing was waiting for.
+//
+// A rejection is reported at the end of the turn it happened in, because a
+// handler attached later in that turn is still in time: what makes a rejection
+// unhandled is that nobody took it, not that nobody had taken it yet. A
+// reported rejection is not reported again.
+//
+// Without a handler, an unhandled rejection is silent, which is what a host
+// that means to ignore them gets by doing nothing.
+func (r *Runtime) OnUnhandledRejection(fn func(reason Value)) {
+	if r.closed {
+		return
+	}
+	if fn == nil {
+		r.rt.OnUnhandledRejection(nil)
+		return
+	}
+	rt := r.rt
+	r.rt.OnUnhandledRejection(func(reason vm.Value, _ vm.Value) {
+		fn(Value{v: reason, rt: rt})
+	})
+}
+
 // Throw returns an error that raises v as a JavaScript exception when returned
 // from a Go function called by script.
 //

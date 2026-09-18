@@ -104,6 +104,15 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	setModuleLoader(rt)
 
+	// A rejection nothing took is a failure of the program, as it is in node:
+	// it is reported where it happened and the exit code says so, rather than
+	// disappearing.
+	rejected := false
+	rt.OnUnhandledRejection(func(reason quickjs.Value) {
+		rejected = true
+		fmt.Fprintln(stderr, "uncaught (in promise)", describe(rt, reason))
+	})
+
 	ctx := context.Background()
 	if opts.timeout > 0 {
 		var cancel context.CancelFunc
@@ -147,7 +156,22 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if opts.interactive {
 		return repl(rt, loop, ctx, stdin, stdout, stderr)
 	}
+	if rejected {
+		return 1
+	}
 	return 0
+}
+
+// describe renders what a rejection carried: an Error shows its stack, and
+// anything else is shown the way the console would show it.
+func describe(rt *quickjs.Runtime, v quickjs.Value) string {
+	if v.IsObject() {
+		if stack, err := v.Get("stack"); err == nil && stack.Kind() == quickjs.KindString &&
+			stack.String() != "" {
+			return stack.String()
+		}
+	}
+	return stdlib.Inspect(rt, v)
 }
 
 // install gives the runtime what the command line asked for.

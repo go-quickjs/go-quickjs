@@ -317,3 +317,28 @@ func TestLooksLikeModule(t *testing.T) {
 func quote(s string) string {
 	return `"` + strings.ReplaceAll(s, `\`, `\\`) + `"`
 }
+
+// A rejection nothing took is reported where it happened, and the exit code
+// says the program failed.
+func TestUnhandledRejectionIsReported(t *testing.T) {
+	code, _, errOut := exec(t, "", "-e", `Promise.reject(new Error("nobody caught me"))`)
+	if code != 1 {
+		t.Errorf("code = %d, want 1", code)
+	}
+	if !strings.Contains(errOut, "nobody caught me") {
+		t.Errorf("stderr = %q", errOut)
+	}
+
+	// One that is caught says nothing.
+	code, _, errOut = exec(t, "", "-e", `Promise.reject(new Error("caught")).catch(() => {})`)
+	if code != 0 || errOut != "" {
+		t.Errorf("code=%d err=%q", code, errOut)
+	}
+
+	// Including one from an async function, which is where they mostly come
+	// from.
+	code, _, errOut = exec(t, "", "-e", `(async () => { throw new Error("async failure") })()`)
+	if code != 1 || !strings.Contains(errOut, "async failure") {
+		t.Errorf("code=%d err=%q", code, errOut)
+	}
+}

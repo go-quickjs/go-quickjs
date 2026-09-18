@@ -163,7 +163,46 @@ func (r *Runtime) rejectPromise(o *Object, reason Value) {
 	}
 	p.state = promiseRejected
 	p.value = reason
+	if len(p.reactions) == 0 {
+		// Nothing is waiting for it yet, which may mean nothing ever will.
+		// Whether that is so is not known until the turn ends: a handler
+		// attached later in the same turn is still in time.
+		r.maybeUnhandled = append(r.maybeUnhandled, o)
+	}
 	r.scheduleReactions(p)
+}
+
+// OnUnhandledRejection installs what to call for a promise that was rejected
+// and that nothing was waiting for.
+//
+// It is called at the end of the turn in which the rejection happened, because
+// a handler attached later in that turn is still in time -- which is what makes
+// `const p = fetch(...); p.catch(...)` on the next line not a report. A handler
+// attached after that is too late, exactly as it is in a browser.
+func (r *Runtime) OnUnhandledRejection(fn func(reason Value, promise Value)) {
+	r.onUnhandledRejection = fn
+}
+
+// reportUnhandledRejections tells the host about the rejections nothing took.
+func (r *Runtime) reportUnhandledRejections() {
+	if len(r.maybeUnhandled) == 0 {
+		return
+	}
+	pending := r.maybeUnhandled
+	r.maybeUnhandled = nil
+	if r.onUnhandledRejection == nil {
+		return
+	}
+	for _, o := range pending {
+		p, ok := o.data.(*promiseData)
+		if !ok || p.state != promiseRejected || p.handled {
+			continue
+		}
+		// Reporting counts as handling: a promise is reported once, however
+		// many turns it survives.
+		p.handled = true
+		r.onUnhandledRejection(p.value, Obj(o))
+	}
 }
 
 // scheduleReactions queues the callbacks of a promise that has just settled.
@@ -245,6 +284,18 @@ func (r *Runtime) DrainJobs() error {
 			// Between jobs is where a finalization callback belongs: it is a
 			// job of its own, and it may queue more.
 			r.runCleanups()
+		}
+	}
+	// The turn is over, so a rejection nothing has taken by now is one nothing
+	// is going to take. Reporting may itself queue jobs -- a handler that
+	// prints is script -- so the queue is drained again.
+	r.reportUnhandledRejections()
+	for len(r.microtasks) > 0 {
+		job := r.microtasks[0]
+		r.microtasks = r.microtasks[1:]
+		job()
+		if err := r.checkInterrupt(); err != nil {
+			return err
 		}
 	}
 	r.endTurn()

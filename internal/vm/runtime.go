@@ -157,6 +157,12 @@ type Runtime struct {
 	// since a callback belongs to no script and there is nothing to throw at.
 	onCleanupError func(error)
 
+	// maybeUnhandled holds the promises rejected with nothing waiting for
+	// them, which the end of the turn decides about.
+	maybeUnhandled []*Object
+	// onUnhandledRejection is what the host wants done about one.
+	onUnhandledRejection func(reason Value, promise Value)
+
 	// microtasks is the promise job queue, drained between turns. Reactions are
 	// never run synchronously: that ordering guarantee is what makes a then
 	// callback observe a consistent world.

@@ -346,3 +346,66 @@ func TestSetModuleValues(t *testing.T) {
 		t.Errorf("out = %q, want %q", got, want)
 	}
 }
+
+// A promise rejected with nothing waiting for it is reported at the end of the
+// turn -- and one that something takes later in the same turn is not.
+func TestUnhandledRejection(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`Promise.reject(new Error("nobody wants me"))`, "nobody wants me"},
+		{`new Promise((_, reject) => reject(new Error("from an executor")))`, "from an executor"},
+		{`(async () => { throw new Error("from an async function") })()`, "from an async function"},
+		// Taken in the same turn, so nothing to report.
+		{`const p = Promise.reject(new Error("taken")); p.catch(() => {})`, ""},
+		{`Promise.reject(new Error("caught")).catch(() => {})`, ""},
+		// A rejection that a chain passes along is reported once, by its end.
+		{`Promise.reject(new Error("through a chain")).then(() => {})`, "through a chain"},
+		{`Promise.resolve().then(() => { throw new Error("thrown in a reaction") })`,
+			"thrown in a reaction"},
+	}
+	for _, tc := range cases {
+		rt := quickjs.New()
+		var seen []string
+		rt.OnUnhandledRejection(func(reason quickjs.Value) {
+			msg, err := reason.Get("message")
+			if err == nil {
+				seen = append(seen, msg.String())
+			} else {
+				seen = append(seen, reason.String())
+			}
+		})
+		if _, err := rt.Eval(tc.src); err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+			rt.Close()
+			continue
+		}
+		got := strings.Join(seen, ",")
+		if got != tc.want {
+			t.Errorf("%s reported %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}
+
+// A handler attached in a later turn is too late, and the rejection has
+// already been reported -- once.
+func TestUnhandledRejectionIsReportedOnce(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	n := 0
+	rt.OnUnhandledRejection(func(quickjs.Value) { n++ })
+	if _, err := rt.Eval(`globalThis.p = Promise.reject(new Error("late"))`); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("reported %d times, want 1", n)
+	}
+	if _, err := rt.Eval(`p.catch(() => {})`); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.RunJobs(); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("reported %d times after a late handler, want 1", n)
+	}
+}
