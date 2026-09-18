@@ -5,6 +5,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -98,14 +99,30 @@ func (o *dateOptions) setZone(r *Runtime, zone string, given bool) error {
 		o.zone, o.timeZone = time.UTC, name
 		return nil
 	}
-	loc, err := time.LoadLocation(target)
+	loc, err := loadNamedLocation(target)
 	if err != nil {
-		if loc, err = time.LoadLocation(name); err != nil {
+		if loc, err = loadNamedLocation(name); err != nil {
 			return r.throwRangeError("there is no such time zone here: %s", zone)
 		}
 	}
 	o.zone, o.timeZone = loc, name
 	return nil
+}
+
+var namedLocations sync.Map
+
+// loadNamedLocation retains parsed zone files so eager warm-up and later Intl
+// constructors share the same time.Location values.
+func loadNamedLocation(name string) (*time.Location, error) {
+	if cached, ok := namedLocations.Load(name); ok {
+		return cached.(*time.Location), nil
+	}
+	location, err := time.LoadLocation(name)
+	if err != nil {
+		return nil, err
+	}
+	actual, _ := namedLocations.LoadOrStore(name, location)
+	return actual.(*time.Location), nil
 }
 
 // parseZoneOffset reads a zone written as an offset from Greenwich, and writes

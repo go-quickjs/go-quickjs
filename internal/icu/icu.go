@@ -351,6 +351,26 @@ func Zones() []string {
 	return out
 }
 
+var dateTimeWarmupOnce sync.Once
+
+// WarmupDateTimeData eagerly loads all locale, calendar, and time-zone data
+// used by Date strings and Intl.DateTimeFormat.
+func WarmupDateTimeData() {
+	dateTimeWarmupOnce.Do(func() {
+		TagAliases()
+		CanonicalZone("UTC")
+		for _, tag := range tags {
+			_ = get(tag)
+		}
+		loadCalendars()
+		loadMonthTables()
+		seasonNames.warmup()
+		genericNames.warmup()
+		historicalNames.warmup()
+		legacyNames.warmup()
+	})
+}
+
 // Currencies lists the currencies that have a symbol here, which is what
 // supportedValuesOf is asking about.
 func Currencies() []string {

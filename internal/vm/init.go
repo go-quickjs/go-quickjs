@@ -2,6 +2,7 @@ package vm
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
@@ -21,6 +22,28 @@ type Config struct {
 	// Locale is the language a program means when it does not say which.
 	// Empty takes the one the machine is set to.
 	Locale string
+}
+
+// WarmupDateTimeData eagerly loads process-wide Date and Intl.DateTimeFormat
+// data before a Runtime is constructed.
+var dateTimeWarmupOnce sync.Once
+
+func WarmupDateTimeData() {
+	dateTimeWarmupOnce.Do(func() {
+		icu.WarmupDateTimeData()
+		_, _ = time.Now().In(time.Local).Zone()
+		for _, name := range icu.Zones() {
+			_, _ = loadNamedLocation(name)
+			target := name
+			if to, ok := icu.ZoneTarget(name); ok {
+				target = to
+			}
+			if isUTCName(target) {
+				continue
+			}
+			_, _ = loadNamedLocation(target)
+		}
+	})
 }
 
 // New creates a Runtime with the standard globals installed.

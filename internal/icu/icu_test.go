@@ -134,3 +134,39 @@ func TestTable(t *testing.T) {
 		}
 	}
 }
+
+func TestWarmupDateTimeData(t *testing.T) {
+	WarmupDateTimeData()
+	for _, tag := range tags {
+		if _, ok := decoded[tag]; !ok {
+			t.Errorf("locale %s was not warmed", tag)
+		}
+	}
+	for name, table := range map[string]*zoneTable{
+		"seasonal": &seasonNames,
+		"generic":  &genericNames,
+		"legacy":   &legacyNames.names,
+	} {
+		if got, want := len(table.decoded), len(table.rows); got != want {
+			t.Errorf("warmed %s rows = %d, want %d", name, got, want)
+		}
+	}
+	if got, want := len(historicalNames.decoded), len(historicalNames.rows); got != want {
+		t.Errorf("warmed historical rows = %d, want %d", got, want)
+	}
+	periodReader := zoneTableReader{data: historicalNames.encodedPeriods}
+	periodCount, ok := periodReader.uvarint()
+	if !ok || len(historicalNames.periods) != int(periodCount) {
+		t.Errorf("warmed historical timelines = %d, want %d",
+			len(historicalNames.periods), periodCount)
+	}
+	changeReader := zoneTableReader{data: legacyNames.encodedChanges}
+	changeCount, ok := changeReader.uvarint()
+	if !ok || len(legacyNames.changes) != int(changeCount) {
+		t.Errorf("warmed legacy timelines = %d, want %d",
+			len(legacyNames.changes), changeCount)
+	}
+	if len(calendarEntries) == 0 || len(calendarIndex) == 0 || len(monthTables) == 0 {
+		t.Error("calendar data was not warmed")
+	}
+}

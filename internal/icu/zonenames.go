@@ -258,18 +258,9 @@ func (l *zoneLegacyTable) changesFor(zone string) ([]int64, bool) {
 		if name != zone {
 			continue
 		}
-		changeReader := zoneTableReader{data: encoded}
-		changeCount, ok := changeReader.uvarint()
+		changes, ok := decodeLegacyChanges(encoded)
 		if !ok {
 			return nil, false
-		}
-		changes := make([]int64, 0, changeCount)
-		for range changeCount {
-			at, ok := changeReader.varint()
-			if !ok {
-				return nil, false
-			}
-			changes = append(changes, at)
 		}
 		if l.changes == nil {
 			l.changes = make(map[string][]int64)
@@ -278,6 +269,50 @@ func (l *zoneLegacyTable) changesFor(zone string) ([]int64, bool) {
 		return changes, true
 	}
 	return nil, false
+}
+
+func decodeLegacyChanges(encoded []byte) ([]int64, bool) {
+	reader := zoneTableReader{data: encoded}
+	count, ok := reader.uvarint()
+	if !ok {
+		return nil, false
+	}
+	changes := make([]int64, 0, count)
+	for range count {
+		at, ok := reader.varint()
+		if !ok {
+			return nil, false
+		}
+		changes = append(changes, at)
+	}
+	return changes, true
+}
+
+func (l *zoneLegacyTable) warmup() {
+	l.load()
+	l.changesMu.Lock()
+	reader := zoneTableReader{data: l.encodedChanges}
+	count, ok := reader.uvarint()
+	if ok {
+		if l.changes == nil {
+			l.changes = make(map[string][]int64, count)
+		}
+		for range count {
+			name, nameOK := reader.string()
+			encoded, encodedOK := reader.bytes()
+			if !nameOK || !encodedOK {
+				break
+			}
+			if _, loaded := l.changes[name]; loaded {
+				continue
+			}
+			if changes, valid := decodeLegacyChanges(encoded); valid {
+				l.changes[name] = changes
+			}
+		}
+	}
+	l.changesMu.Unlock()
+	l.names.warmup()
 }
 
 func (h *zoneHistoryTable) entry(locale, zone string, unixMillis int64) (ZoneNaming, bool) {
@@ -389,18 +424,9 @@ func (h *zoneHistoryTable) periodsFor(zone string) []zonePeriod {
 		if name != zone {
 			continue
 		}
-		periodReader := zoneTableReader{data: encoded}
-		periods := make([]zonePeriod, 0, 16)
-		for len(periodReader.data) > 0 {
-			from, ok := periodReader.varint()
-			if !ok {
-				return nil
-			}
-			record, ok := periodReader.uvarint()
-			if !ok {
-				return nil
-			}
-			periods = append(periods, zonePeriod{from: from, record: int(record) - 1})
+		periods, ok := decodeZonePeriods(encoded)
+		if !ok {
+			return nil
 		}
 		if h.periods == nil {
 			h.periods = make(map[string][]zonePeriod)
@@ -408,7 +434,57 @@ func (h *zoneHistoryTable) periodsFor(zone string) []zonePeriod {
 		h.periods[zone] = periods
 		return periods
 	}
+	if h.periods == nil {
+		h.periods = make(map[string][]zonePeriod)
+	}
+	h.periods[zone] = nil
 	return nil
+}
+
+func decodeZonePeriods(encoded []byte) ([]zonePeriod, bool) {
+	reader := zoneTableReader{data: encoded}
+	periods := make([]zonePeriod, 0, 16)
+	for len(reader.data) > 0 {
+		from, ok := reader.varint()
+		if !ok {
+			return nil, false
+		}
+		record, ok := reader.uvarint()
+		if !ok {
+			return nil, false
+		}
+		periods = append(periods, zonePeriod{from: from, record: int(record) - 1})
+	}
+	return periods, true
+}
+
+func (h *zoneHistoryTable) warmup() {
+	h.load()
+	h.periodsMu.Lock()
+	reader := zoneTableReader{data: h.encodedPeriods}
+	count, ok := reader.uvarint()
+	if ok {
+		if h.periods == nil {
+			h.periods = make(map[string][]zonePeriod, count)
+		}
+		for range count {
+			name, nameOK := reader.string()
+			encoded, encodedOK := reader.bytes()
+			if !nameOK || !encodedOK {
+				break
+			}
+			if _, loaded := h.periods[name]; loaded {
+				continue
+			}
+			if periods, valid := decodeZonePeriods(encoded); valid {
+				h.periods[name] = periods
+			}
+		}
+	}
+	h.periodsMu.Unlock()
+	for block := range h.rows {
+		_, _ = h.row(block)
+	}
 }
 
 func (h *zoneHistoryTable) block(locale string) (int, bool) {
@@ -593,6 +669,13 @@ func (t *zoneTable) row(block int) ([]string, bool) {
 	entries := strings.Split(row, "\x01")
 	t.decoded[block] = entries
 	return entries, true
+}
+
+func (t *zoneTable) warmup() {
+	t.load()
+	for block := range t.rows {
+		_, _ = t.row(block)
+	}
 }
 
 type zoneTableReader struct {

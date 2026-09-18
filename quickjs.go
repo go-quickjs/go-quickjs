@@ -134,6 +134,18 @@ func WithLocale(tag string) Option {
 	return func(c *config) { c.locale = tag }
 }
 
+// WarmupDateTimeData eagerly loads all process-wide data used by Date's legacy
+// string methods and Intl.DateTimeFormat. Servers can call it during startup,
+// before constructing a Runtime, to avoid locale- or time-zone-dependent
+// latency spikes while serving requests.
+//
+// The loaded data includes every locale, calendar, modern and historical zone
+// name, legacy transition timeline, and loadable system time zone. It remains
+// resident for the life of the process. Repeated calls do nothing.
+func WarmupDateTimeData() {
+	vm.WarmupDateTimeData()
+}
+
 // New creates a Runtime with the standard globals installed.
 func New(opts ...Option) *Runtime {
 	var c config

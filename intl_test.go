@@ -653,3 +653,30 @@ func TestDateStringsFollowNodeLegacyZoneNames(t *testing.T) {
 		rt.Close()
 	}
 }
+
+func TestWarmupDateTimeDataBeforeRuntime(t *testing.T) {
+	quickjs.WarmupDateTimeData()
+	quickjs.WarmupDateTimeData() // Idempotent.
+
+	zone, err := time.LoadLocation("Europe/Paris")
+	if err != nil {
+		t.Skipf("no zone files: %v", err)
+	}
+	rt := quickjs.New(quickjs.WithLocale("de-DE"))
+	defer rt.Close()
+	rt.SetTimeZone(zone)
+	v, err := rt.Eval(`[
+		new Date(0).toTimeString(),
+		new Intl.DateTimeFormat("de-DE", {timeZone: "Europe/Paris", timeZoneName: "long"})
+			.formatToParts(Date.UTC(2025, 0, 15)).find(p => p.type === "timeZoneName").value,
+		new Intl.DateTimeFormat("de-DE", {timeZone: "Europe/Paris", timeZoneName: "longGeneric"})
+			.formatToParts(Date.UTC(1979, 6, 15)).find(p => p.type === "timeZoneName").value
+	].join("|")`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := v.String(), "01:00:00 GMT+0100 (Mitteleuropäische Normalzeit)|"+
+		"Mitteleuropäische Normalzeit|Mitteleuropäische Zeit (Frankreich)"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}

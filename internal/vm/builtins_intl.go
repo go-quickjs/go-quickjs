@@ -101,7 +101,7 @@ func (r *Runtime) buildIntl() *Object {
 			// The ones this machine can actually load, which is all of them
 			// where the zone files are there and none where they are not.
 			for _, zone := range icu.Zones() {
-				if _, err := time.LoadLocation(zone); err == nil {
+				if _, err := loadNamedLocation(zone); err == nil {
 					values = append(values, zone)
 				}
 			}
