@@ -365,3 +365,48 @@ func TestNormalizeForms(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// A template literal joins its parts in one pass, which must produce exactly
+// what concatenating them one at a time did -- including where the join falls
+// between the halves of a surrogate pair.
+func TestTemplateJoining(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{"`a${1}b`", "a1b"},
+		{"`${1}${2}${3}`", "123"},
+		{"``", ""},
+		{"`${\"\"}${\"\"}`", ""},
+		{"`x`", "x"},
+		{"`${undefined}|${null}|${true}`", "undefined|null|true"},
+		{"`${1.5}|${-0}|${1e21}|${NaN}|${Infinity}`", "1.5|0|1e+21|NaN|Infinity"},
+		{"`${[1,2]}|${({})}`", "1,2|[object Object]"},
+		{"`${{toString(){ return \"t\" }}}`", "t"},
+		{"`${Symbol.iterator.description}`", "Symbol.iterator"},
+		// Non-ASCII parts, whose lengths are code units rather than bytes.
+		{"`é${\"→\"}`.length + \"\"", "2"},
+		{"`${\"😀\"}a`.length + \"\"", "3"},
+		// A lone high surrogate followed by a lone low one makes a pair, which
+		// is one code point and two code units.
+		{"`${\"\\uD83D\"}${\"\\uDE00\"}`.length + \"\"", "2"},
+		{"`${\"\\uD83D\"}${\"\\uDE00\"}` === \"😀\"", "true"},
+		{"`${\"\\uD800\"}x`.length + \"\"", "2"},
+		{"`${\"\\uD83D\"}${\"\\uDE00\"}`.codePointAt(0).toString(16)", "1f600"},
+		// The conversions happen in the order they are written, interleaved
+		// with the evaluations that follow them.
+		{`var log = [];
+		  ` + "`" + `${{toString(){ log.push("a"); return "" }}}${(log.push("b"), "")}` + "`" + `
+		  log.join()`, "a,b"},
+		{`var log = [];
+		  ` + "`" + `${(log.push("x"), {toString(){ log.push("y"); return "" }})}${(log.push("z"), "")}` + "`" + `
+		  log.join()`, "x,y,z"},
+		// A part that throws stops the rest.
+		{`var log = [];
+		  try {
+		    ` + "`" + `${{toString(){ throw new RangeError() }}}${(log.push("after"), "")}` + "`" + `
+		  } catch (e) { e.constructor.name + ":" + log.length }`, "RangeError:0"},
+		// A symbol has no string form, even in a template.
+		{"try { `${Symbol()}` } catch (e) { e.constructor.name }", "TypeError"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

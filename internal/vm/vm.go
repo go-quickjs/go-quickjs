@@ -1693,23 +1693,23 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		case bytecode.OpConcat:
 			n := int(in.A)
 			parts := r.stack[sp-n : sp]
-			var out *String
-			for i, p := range parts {
-				s, err := r.toString(p)
+			// Every part is converted before any of them is joined: a toString
+			// may run user code, and when it runs is fixed. A number is left
+			// as it is, having no conversion anything can observe and no need
+			// of a string of its own.
+			for i := range parts {
+				if parts[i].IsString() || parts[i].IsNumber() {
+					continue
+				}
+				s, err := r.toString(parts[i])
 				if err != nil {
 					vmErr = err
 					goto onError
 				}
-				if i == 0 {
-					out = s
-				} else {
-					out = out.Concat(s)
-				}
+				parts[i] = Str(s)
 			}
+			out := joinValues(parts)
 			sp -= n
-			if out == nil {
-				out = emptyString
-			}
 			push(Str(out))
 		case bytecode.OpTemplateObject:
 			push(Obj(r.templateObject(cl.fn, int(in.A))))

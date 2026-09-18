@@ -7,6 +7,7 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
+	"github.com/go-quickjs/go-quickjs/internal/jsnum"
 	"github.com/go-quickjs/go-quickjs/internal/wtf8"
 )
 
@@ -194,6 +195,86 @@ func (s *String) Concat(t *String) *String {
 		return out
 	}
 	out.left, out.right = s, t
+	return out
+}
+
+// joinValues builds the string a template literal produces.
+//
+// The pieces go into one buffer rather than being concatenated in turn: a
+// template with k substitutions would otherwise build k intermediate strings,
+// and a number among them would cost a string of its own before being copied
+// into the next. Every part must already be a string or a number -- the caller
+// converts anything else first, because a toString may run user code and when
+// it does is fixed.
+func joinValues(parts []Value) *String {
+	if len(parts) == 0 {
+		return emptyString
+	}
+
+	// A join that pairs a trailing high surrogate with a leading low one makes
+	// one code point out of two halves, which WTF-8 spells as a single
+	// sequence. It is rare, and Concat already knows how.
+	size, prevHigh := 0, false
+	for _, p := range parts {
+		if !p.IsString() {
+			// A number's text is short and ASCII, so it can neither pair with
+			// a surrogate nor be worth measuring exactly.
+			size += 24
+			prevHigh = false
+			continue
+		}
+		s := p.String()
+		if prevHigh && s.startsLow {
+			return concatPairwise(parts)
+		}
+		size += s.byteLenShallow()
+		prevHigh = s.endsHigh
+	}
+
+	var sb strings.Builder
+	sb.Grow(size)
+	units, ascii := 0, true
+	var tmp [32]byte
+	for _, p := range parts {
+		if !p.IsString() {
+			b := jsnum.AppendFloat(tmp[:0], p.Number())
+			sb.Write(b)
+			units += len(b)
+			continue
+		}
+		s := p.String()
+		sb.WriteString(s.Go())
+		units += s.length
+		ascii = ascii && s.ascii
+	}
+	if units == 0 {
+		return emptyString
+	}
+	out := &String{s: sb.String(), length: units, ascii: ascii}
+	if first := parts[0]; first.IsString() {
+		out.startsLow = first.String().startsLow
+	}
+	if last := parts[len(parts)-1]; last.IsString() {
+		out.endsHigh = last.String().endsHigh
+	}
+	return out
+}
+
+// concatPairwise joins the parts one at a time, which is what a join across a
+// surrogate pair needs.
+func concatPairwise(parts []Value) *String {
+	out := emptyString
+	for i, p := range parts {
+		s := p.String()
+		if !p.IsString() {
+			s = NewString(jsnum.FormatFloat(p.Number()))
+		}
+		if i == 0 {
+			out = s
+			continue
+		}
+		out = out.Concat(s)
+	}
 	return out
 }
 
