@@ -42,15 +42,16 @@ type Config struct {
 	// of network access and not the same half. Nil means none.
 	Serve *Serve
 
-	// Random is where crypto draws its entropy from. Nil uses the system
-	// source, which is what a program wants and a test may not.
+	// Random is where crypto draws its entropy from, both the web's and the
+	// crypto module's. Nil uses the system source, which is what a program
+	// wants and a test may not.
 	Random io.Reader
 
 	// NoWebAPIs leaves out the things a browser has and a language does not --
 	// URL, TextEncoder, TextDecoder, structuredClone, performance, crypto,
 	// atob, btoa -- and the node modules that need no capability either:
-	// events, util, assert and buffer. All of it is pure computation, and all
-	// of it is installed by default.
+	// events, util, assert, buffer and crypto. All of it is pure computation,
+	// and all of it is installed by default.
 	NoWebAPIs bool
 }
 
@@ -84,6 +85,11 @@ func Install(rt *quickjs.Runtime, cfg Config) error {
 		// The node modules that need no capability go with them: an
 		// EventEmitter is a list of functions and a Buffer is bytes.
 		if err := NodeModules(rt); err != nil {
+			return err
+		}
+		// Hashing is arithmetic too, and it comes after the web APIs because
+		// it hands the same randomness and the same subtle back.
+		if err := Crypto(rt, cfg.Random); err != nil {
 			return err
 		}
 	}

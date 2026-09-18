@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1013,5 +1014,146 @@ func TestProcessEvents(t *testing.T) {
 	want := "heard 1 2\ntrue\nfalse\nrejected: nobody caught me"
 	if out != want {
 		t.Errorf("process events output =\n%s\nwant\n%s", out, want)
+	}
+}
+
+func TestCrypto(t *testing.T) {
+	out, _ := run(t, stdlib.Config{}, `
+		import("crypto").then((crypto) => {
+			// The digests of "abc", which are written down in the standards.
+			console.log(crypto.createHash("sha256").update("abc").digest("hex"))
+			console.log(crypto.createHash("sha1").update("abc").digest("hex"))
+			console.log(crypto.createHash("md5").update("abc").digest("hex"))
+			console.log(crypto.createHash("sha3-256").update("abc").digest("hex"))
+			console.log(crypto.createHash("SHA-256").update("abc").digest("base64"))
+
+			// A hash fed in pieces is the hash of the whole.
+			const whole = crypto.createHash("sha256").update("hello world").digest("hex")
+			const parts = crypto.createHash("sha256").update("hello ").update("world").digest("hex")
+			console.log(whole === parts)
+
+			// RFC 2202's second HMAC-MD5 case, and the same key over bytes.
+			console.log(crypto.createHmac("md5", "Jefe").update("what do ya want for nothing?").digest("hex"))
+			console.log(crypto.createHmac("sha256", new Uint8Array([1,2,3])).update("x").digest().length)
+
+			// RFC 6070's first PBKDF2 case.
+			console.log(crypto.pbkdf2Sync("password", "salt", 1, 20, "sha1").toString("hex"))
+
+			console.log(crypto.timingSafeEqual(new Uint8Array([1,2]), new Uint8Array([1,2])),
+			            crypto.timingSafeEqual(new Uint8Array([1,2]), new Uint8Array([1,3])))
+			console.log(crypto.randomBytes(8).length, crypto.getHashes().includes("sha512"))
+		})
+	`)
+	want := strings.Join([]string{
+		"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+		"a9993e364706816aba3e25717850c26c9cd0d89d",
+		"900150983cd24fb0d6963f7d28e17f72",
+		"3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532",
+		"ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0=",
+		"true",
+		"750c783e6ab0b503eaa86e310a5db738",
+		"32",
+		"0c60c80f961f0e71f3a9b524af6012062fe037a6",
+		"true false",
+		"8 true",
+	}, "\n")
+	if out != want {
+		t.Errorf("crypto output =\n%s\nwant\n%s", out, want)
+	}
+}
+
+// The entropy is the host's, so a host that wants a program to run the same way
+// twice can arrange it.
+func TestCryptoUsesTheHostsRandomness(t *testing.T) {
+	out, _ := run(t, stdlib.Config{Random: rand.New(rand.NewSource(1))}, `
+		import("crypto").then((crypto) => {
+			console.log(crypto.randomBytes(4).toString("hex"))
+			console.log(crypto.randomInt(0, 100) < 100)
+		})
+	`)
+	first := strings.SplitN(out, "\n", 2)[0]
+	again, _ := run(t, stdlib.Config{Random: rand.New(rand.NewSource(1))}, `
+		import("crypto").then((c) => console.log(c.randomBytes(4).toString("hex")))
+	`)
+	if first != strings.TrimSpace(again) {
+		t.Errorf("the same source gave %q then %q", first, again)
+	}
+	if len(first) != 8 {
+		t.Errorf("randomBytes(4) printed %q", first)
+	}
+}
+
+// Deriving a key is slow on purpose, so the callback forms hand it back rather
+// than pretending the work was free.
+func TestCryptoAsyncForms(t *testing.T) {
+	out, _ := run(t, stdlib.Config{}, `
+		import("crypto").then((crypto) => {
+			const {promisify} = {promisify: (fn) => (...a) =>
+				new Promise((res, rej) => fn(...a, (e, v) => e ? rej(e) : res(v)))}
+			promisify(crypto.pbkdf2)("password", "salt", 2, 20, "sha1")
+				.then(key => console.log(key.toString("hex")))
+			promisify(crypto.randomBytes)(4).then(b => console.log(b.length))
+			promisify(crypto.hkdf)("sha256", "secret", "salt", "info", 16)
+				.then(b => console.log(new Uint8Array(b).length))
+		})
+	`)
+	want := "ea6c014dc72d6f8ccd1ed92ace1d41f0d8de8957\n4\n16"
+	if out != want {
+		t.Errorf("out =\n%s\nwant\n%s", out, want)
+	}
+}
+
+// The web's subtle signs and derives with the same primitives, which is what a
+// program written for a browser or a worker reaches for.
+func TestSubtleCrypto(t *testing.T) {
+	out, _ := run(t, stdlib.Config{}, `
+		;(async () => {
+			const enc = new TextEncoder()
+			const key = await crypto.subtle.importKey(
+				"raw", enc.encode("Jefe"), {name: "HMAC", hash: "SHA-256"}, true, ["sign", "verify"])
+
+			const sig = await crypto.subtle.sign("HMAC", key, enc.encode("what do ya want for nothing?"))
+			const hex = [...new Uint8Array(sig)].map(b => b.toString(16).padStart(2, "0")).join("")
+			console.log(hex)
+			console.log(await crypto.subtle.verify("HMAC", key, sig, enc.encode("what do ya want for nothing?")))
+			console.log(await crypto.subtle.verify("HMAC", key, sig, enc.encode("something else")))
+
+			// The key came back out the way it went in.
+			const back = new Uint8Array(await crypto.subtle.exportKey("raw", key))
+			console.log(new TextDecoder().decode(back))
+
+			// RFC 6070 again, through the web's spelling of it.
+			const base = await crypto.subtle.importKey(
+				"raw", enc.encode("password"), "PBKDF2", false, ["deriveBits"])
+			const bits = await crypto.subtle.deriveBits(
+				{name: "PBKDF2", salt: enc.encode("salt"), iterations: 1, hash: "SHA-1"}, base, 160)
+			console.log([...new Uint8Array(bits)].map(b => b.toString(16).padStart(2, "0")).join(""))
+
+			// A key that may not leave is not handed over.
+			try { await crypto.subtle.exportKey("raw", base) }
+			catch (e) { console.log(e.constructor.name) }
+
+			const derived = await crypto.subtle.deriveKey(
+				{name: "HKDF", salt: enc.encode("salt"), info: enc.encode("info"), hash: "SHA-256"},
+				await crypto.subtle.importKey("raw", enc.encode("secret"), "HKDF", false, ["deriveKey"]),
+				{name: "HMAC", hash: "SHA-256", length: 256}, false, ["sign"])
+			console.log((await crypto.subtle.sign("HMAC", derived, enc.encode("x"))).byteLength)
+
+			// And the digest that was there before still is.
+			console.log(new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode("abc")))[0])
+		})()
+	`)
+	want := strings.Join([]string{
+		"5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843",
+		"true",
+		"false",
+		"Jefe",
+		"0c60c80f961f0e71f3a9b524af6012062fe037a6",
+		"TypeError",
+		"32",
+		"186",
+	}, "\n")
+	if out != want {
+		t.Errorf("subtle output =\n%s\nwant\n%s", out, want)
 	}
 }
