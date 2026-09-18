@@ -62,16 +62,12 @@ func (o *dateOptions) hasFields() bool {
 
 // setZone settles which zone the fields are read in: the machine's own, the
 // one named, or an offset from Greenwich written out.
-func (o *dateOptions) setZone(r *Runtime, zone string) error {
+func (o *dateOptions) setZone(r *Runtime, zone string, given bool) error {
 	switch {
-	case zone == "":
+	case !given:
 		// The machine's own zone, which is the one a Date is written in.
 		o.zone = r.location()
 		o.timeZone = r.localZoneName()
-		return nil
-	case isUTCName(zone):
-		o.zone = time.UTC
-		o.timeZone = "UTC"
 		return nil
 	}
 	// An offset written out rather than a name: +03:00, -0800, +05:45.
@@ -80,13 +76,33 @@ func (o *dateOptions) setZone(r *Runtime, zone string) error {
 		o.timeZone = name
 		return nil
 	}
-	// Any zone the machine has the data for. Loading it reads the zone files
-	// the operating system keeps, or the copy a host embedded by importing
-	// time/tzdata; a script cannot reach either.
-	name := canonicalZone(zone)
-	loc, err := time.LoadLocation(name)
+	// A name is written in the letters the database uses and no others.
+	if !asciiOnly(zone) {
+		return r.throwRangeError("there is no such time zone: %s", zone)
+	}
+	// A zone named rather than offset, however it was spelled and whatever it
+	// used to be called. Loading it reads the zone files the operating system
+	// keeps, or the copy a host embedded by importing time/tzdata; a script
+	// cannot reach either.
+	name, ok := icu.CanonicalZone(zone)
+	if !ok {
+		return r.throwRangeError("there is no such time zone: %s", zone)
+	}
+	// The name is kept as it was asked for; what it stands for is what the
+	// fields are read in.
+	target := name
+	if to, ok := icu.ZoneTarget(name); ok {
+		target = to
+	}
+	if isUTCName(target) {
+		o.zone, o.timeZone = time.UTC, name
+		return nil
+	}
+	loc, err := time.LoadLocation(target)
 	if err != nil {
-		return r.throwRangeError("there is no such time zone here: %s", zone)
+		if loc, err = time.LoadLocation(name); err != nil {
+			return r.throwRangeError("there is no such time zone here: %s", zone)
+		}
 	}
 	o.zone, o.timeZone = loc, name
 	return nil
@@ -96,8 +112,6 @@ func (o *dateOptions) setZone(r *Runtime, zone string) error {
 // it back the one way it is written: a sign, two digits, a colon, two digits,
 // and the seconds left off when there are none.
 func parseZoneOffset(s string) (minutes int, name string, ok bool) {
-	// A minus may be written as the sign a mathematician would use.
-	s = strings.Replace(s, "\u2212", "-", 1)
 	if len(s) < 3 || (s[0] != '+' && s[0] != '-') {
 		return 0, "", false
 	}
@@ -219,11 +233,16 @@ func (o *dateOptions) parts(t time.Time) []datePiece {
 		i += n
 	}
 
-	// The digits of a locale that does not use the ASCII ones.
-	if l.Digits != "" {
+	// The digits of a locale that does not use the ASCII ones, or of whichever
+	// numbering system was asked for.
+	digits := l.Digits
+	if o.digits != "" && o.digits != l.Numbering {
+		digits, _ = icu.NumberingDigits(o.digits)
+	}
+	if digits != "" {
 		for i, piece := range out {
 			if piece.kind != "literal" {
-				out[i].value = localiseDigits(piece.value, l.Digits)
+				out[i].value = localiseDigits(piece.value, digits)
 			}
 		}
 	}

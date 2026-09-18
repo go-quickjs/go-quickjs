@@ -78,6 +78,7 @@ type localeData struct {
 		PercentNegative                    string `json:"percentNegative"`
 		CurrencyNegative                   string `json:"currencyNegative"`
 		Accounting                         string `json:"accounting"`
+		HourCycles                         string `json:"hourCycles"`
 		Range                              string `json:"range"`
 		Approximately                      string `json:"approximately"`
 		Exponential                        string `json:"exponential"`
@@ -863,6 +864,7 @@ func encode(l *localeData) string {
 		l.Numbers.CurrencyNegative, l.Calendar,
 		l.Numbers.Accounting, l.Numbers.Exponential,
 		l.Numbers.Range, l.Numbers.Approximately, l.DateRange,
+		l.Numbers.HourCycles,
 	}, fieldSep)
 
 	names := strings.Join([]string{

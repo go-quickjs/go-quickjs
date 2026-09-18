@@ -1,7 +1,9 @@
 package vm
 
 import (
+	"fmt"
 	"math"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -286,7 +288,9 @@ func (c *localeChoice) setting(key string) string { return c.settled[key] }
 // the option agrees with stays in the resolved locale; one the option changes
 // leaves it, since it is no longer the tag's doing.
 func (c *localeChoice) override(key, value string) {
-	if value == "" || value == c.settled[key] {
+	// A setting this engine cannot honour is ignored, whether it came from the
+	// tag or from the options: a request is not an instruction.
+	if value == "" || !supportedSetting(key, value) || value == c.settled[key] {
 		return
 	}
 	c.settled[key] = value
@@ -1067,7 +1071,7 @@ func (r *Runtime) initDateTimeFormat(intl *Object) {
 		rt.putString(out, "calendar", o.calendar)
 		rt.putString(out, "numberingSystem", o.digits)
 		rt.putString(out, "timeZone", o.timeZone)
-		if o.hour != "" {
+		if o.hour != "" || o.timeStyle != "" {
 			rt.putString(out, "hourCycle", o.hourCycle)
 			rt.putBool(out, "hour12", o.hour12)
 		}
@@ -1108,7 +1112,9 @@ func (r *Runtime) dateArgument(o *dateOptions, v Value) (time.Time, error) {
 	if math.IsNaN(n) || math.Abs(n) > 8.64e15 {
 		return time.Time{}, r.throwRangeError("that is not a date this can format")
 	}
-	return o.at(n), nil
+	// An instant is a whole number of milliseconds, counted towards the epoch
+	// rather than away from it: a fraction of a millisecond is dropped.
+	return o.at(math.Trunc(n)), nil
 }
 
 // dateOptionsFrom reads the arguments a DateTimeFormat is made with. defaults
@@ -1158,11 +1164,21 @@ func (r *Runtime) dateOptionsFrom(args []Value, defaults map[string]string) (*da
 	o.calendar = choice.setting("ca")
 	o.digits = choice.setting("nu")
 
-	zone, err := r.stringOption(options, "timeZone", "")
+	// An empty string is a zone that does not exist, which is not the same as
+	// no zone at all.
+	zoneValue, err := r.getProp(options, r.atoms.intern("timeZone"), Obj(options))
 	if err != nil {
 		return nil, err
 	}
-	if err := o.setZone(r, zone); err != nil {
+	zone, given := "", !zoneValue.IsUndefined()
+	if given {
+		text, err := r.toString(zoneValue)
+		if err != nil {
+			return nil, err
+		}
+		zone = text.Go()
+	}
+	if err := o.setZone(r, zone, given); err != nil {
 		return nil, err
 	}
 
@@ -1235,26 +1251,19 @@ func (r *Runtime) dateOptionsFrom(args []Value, defaults map[string]string) (*da
 		o.hour, o.minute, o.second = defaults["hour"], defaults["minute"], defaults["second"]
 	}
 
+	// Which clock to keep: the one asked for outright, the one the tag asked
+	// for, or the one the language keeps.
 	switch {
+	case hour12Set && hour12:
+		o.hourCycle, o.hourSet = o.locale.HourCycle12, true
 	case hour12Set:
-		o.hour12, o.hourSet = hour12, true
+		o.hourCycle, o.hourSet = o.locale.HourCycle24, true
 	case choice.setting("hc") != "":
-		asked := choice.setting("hc")
-		o.hour12, o.hourSet = asked == "h11" || asked == "h12", cycle != ""
+		o.hourCycle, o.hourSet = choice.setting("hc"), cycle != ""
 	default:
-		o.hour12 = o.locale.Hour12
+		o.hourCycle = o.locale.HourCycle
 	}
-	o.hourCycle = choice.setting("hc")
-	if hour12Set || o.hourCycle == "" {
-		o.hourCycle = "h23"
-		if o.hour12 {
-			o.hourCycle = "h12"
-		}
-	}
-	// A clock asked for outright takes the cycle with it.
-	if hour12Set {
-		o.hourSet = true
-	}
+	o.hour12 = o.hourCycle == "h11" || o.hourCycle == "h12"
 
 	o.pattern = o.patternFor()
 	// A twelve-hour clock asked for where the locale writes a
@@ -1362,17 +1371,48 @@ func isUTCName(zone string) bool {
 // knows it by.
 func (r *Runtime) localZoneName() string {
 	name := r.location().String()
-	if name == "" || name == "Local" {
-		// A zone with no name of its own is reported as UTC only when it is
-		// UTC; otherwise the offset is the best name there is.
-		t := time.Now().In(r.location())
-		zone, offset := t.Zone()
-		if offset == 0 {
-			return "UTC"
-		}
+	if name != "" && name != "Local" {
+		return name
+	}
+	// A zone loaded from the machine rather than by name: what the operating
+	// system says it is, which is a name in the database if it can be had.
+	if zone, ok := machineZoneName(); ok {
 		return zone
 	}
-	return name
+	// Failing that, the offset is the best name there is, written the way an
+	// offset is written.
+	t := time.Now().In(r.location())
+	_, offset := t.Zone()
+	if offset == 0 {
+		return "UTC"
+	}
+	minutes := offset / 60
+	sign := "+"
+	if minutes < 0 {
+		sign, minutes = "-", -minutes
+	}
+	return fmt.Sprintf("%s%02d:%02d", sign, minutes/60, minutes%60)
+}
+
+// machineZoneName is the name this machine's own zone goes by in the database:
+// what TZ says, or what the file the system points at is called.
+func machineZoneName() (string, bool) {
+	if tz := os.Getenv("TZ"); tz != "" {
+		if zone, ok := icu.CanonicalZone(strings.TrimPrefix(tz, ":")); ok {
+			return zone, true
+		}
+	}
+	path, err := os.Readlink("/etc/localtime")
+	if err != nil {
+		return "", false
+	}
+	// The link points into the zone files: .../zoneinfo/Asia/Shanghai.
+	if at := strings.Index(path, "zoneinfo/"); at >= 0 {
+		if zone, ok := icu.CanonicalZone(path[at+len("zoneinfo/"):]); ok {
+			return zone, true
+		}
+	}
+	return "", false
 }
 
 func (r *Runtime) dateFormatOf(this Value) (*dateOptions, error) {

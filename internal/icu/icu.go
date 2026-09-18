@@ -88,6 +88,11 @@ type Locale struct {
 	// DateRange between two dates, which is not always the same mark.
 	// Approximately says a number is not exact.
 	Range, Approximately, DateRange string
+	// HourCycle is the clock this language keeps, and HourCycle12 and
+	// HourCycle24 the ones it keeps when a twelve-hour or a twenty-four-hour
+	// clock is asked for: Japanese counts midnight as zero where English
+	// counts it twelve.
+	HourCycle, HourCycle12, HourCycle24 string
 	// Calendar is the one this locale counts years in: "gregory" nearly
 	// everywhere, "buddhist" in Thailand.
 	Calendar string
@@ -511,6 +516,12 @@ func decode(tag, blob string) *Locale {
 	l.CurrencyNegative, l.Calendar = field(13), field(14)
 	l.Accounting, l.Exponential = field(15), field(16)
 	l.Range, l.Approximately, l.DateRange = field(17), field(18), field(19)
+	l.HourCycle, l.HourCycle12, l.HourCycle24 = "h12", "h12", "h23"
+	if cycles := strings.Split(field(20), ","); len(cycles) == 3 && cycles[0] != "" {
+		l.HourCycle, l.HourCycle12, l.HourCycle24 = cycles[0], cycles[1], cycles[2]
+	} else if !l.Hour12 {
+		l.HourCycle = "h23"
+	}
 	if l.Range == "" {
 		l.Range = "\u2013"
 	}
@@ -930,3 +941,52 @@ func (p *PluralRule) CategoryOf(whole, fraction string, n float64) string {
 	}
 	return p.Category(n)
 }
+
+// CanonicalZone is a time zone written the way the database writes it, found
+// however it was spelled: "america/port-au-prince" is America/Port-au-Prince.
+// A zone that is another zone's old name keeps its old name, since that is the
+// name it was asked for by; ZoneTarget says which zone it stands for.
+func CanonicalZone(name string) (string, bool) {
+	zoneIndexOnce.Do(func() {
+		zoneIndex = make(map[string]string, len(zoneList)+len(zoneAliases))
+		for _, zone := range zoneList {
+			zoneIndex[strings.ToLower(zone)] = zone
+		}
+		for from := range zoneAliases {
+			zoneIndex[strings.ToLower(from)] = from
+		}
+		// Greenwich itself, which is not among the zones a place is named
+		// after but is the one a program asks for most.
+		for _, name := range []string{"UTC", "Etc/UTC", "Etc/GMT", "GMT"} {
+			zoneIndex[strings.ToLower(name)] = name
+		}
+		// The zones that are an offset from Greenwich and nothing more, which
+		// the database carries under names of their own.
+		for hours := -14; hours <= 12; hours++ {
+			name := "Etc/GMT"
+			switch {
+			case hours > 0:
+				name += "+" + strconv.Itoa(hours)
+			case hours < 0:
+				name += "-" + strconv.Itoa(-hours)
+			}
+			if _, taken := zoneIndex[strings.ToLower(name)]; !taken {
+				zoneIndex[strings.ToLower(name)] = name
+			}
+		}
+	})
+	zone, ok := zoneIndex[strings.ToLower(name)]
+	return zone, ok
+}
+
+// ZoneTarget is the zone another zone's name stands for, for the names that
+// are another zone's under an older spelling.
+func ZoneTarget(name string) (string, bool) {
+	to, ok := zoneAliases[name]
+	return to, ok
+}
+
+var (
+	zoneIndexOnce sync.Once
+	zoneIndex     map[string]string
+)

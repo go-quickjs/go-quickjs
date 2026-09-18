@@ -238,6 +238,14 @@ function numberData(locale) {
       {style: "currency", currency: "USD", currencySign: "accounting"}, -1234.5),
     // What stands between the two ends of a range, and the mark that says a
     // number is only approximate: both are the language's own.
+    // Which clock the language keeps: the one it uses by default, and the
+    // ones it uses when a twelve-hour or a twenty-four-hour clock is asked
+    // for -- Japanese counts midnight as zero where English counts it twelve.
+    hourCycles: (() => {
+      const at = (options) => new Intl.DateTimeFormat(locale,
+        {hour: "numeric", ...options}).resolvedOptions().hourCycle || "";
+      return [at({}), at({hour12: true}), at({hour12: false})].join(",");
+    })(),
     range: (() => {
       const parts = new Intl.NumberFormat(locale).formatRangeToParts(1, 5);
       const between = parts.filter(p => p.source === "shared" && p.type === "literal");
