@@ -380,7 +380,11 @@ func (o *dateOptions) field(push func(kind, value string), t time.Time, letter b
 // English where it has one, and the offset from Greenwich otherwise -- which
 // is what most zones outside the Americas are called anyway.
 func (o *dateOptions) zoneName(t time.Time, long bool) string {
-	if o.timeZone == "UTC" {
+	// Greenwich, which every one of its names comes back to.
+	if o.zone == time.UTC {
+		if long {
+			return "Coordinated Universal Time"
+		}
 		return "UTC"
 	}
 	_, offset := t.Zone()
@@ -517,7 +521,14 @@ func (o *dateOptions) patternFor() string {
 		pattern += " G"
 	}
 	if o.timeZoneName != "" && !strings.ContainsAny(patternLettersOf(pattern), "zZvVOXx") {
-		pattern += " z"
+		// A zone written after a time is written against it; after a date it
+		// is joined the way a date is joined to a time, which is with a comma
+		// in some languages and a space in others.
+		joiner := " "
+		if !strings.ContainsAny(patternLettersOf(pattern), "hHkKms") {
+			joiner = glueSeparator(l)
+		}
+		pattern += joiner + "z"
 	}
 	// A part of the day asked for alongside the hour takes the place of the
 	// morning-or-afternoon the pattern would have written.
@@ -542,6 +553,24 @@ func (o *dateOptions) patternFor() string {
 	// The locale's pattern says what order the fields go in; the options say
 	// how wide each one is written, and those are the caller's to choose.
 	return o.applyWidths(pattern)
+}
+
+// glueSeparator is what a language puts between the two halves of a date and
+// time written together, which is what anything added to a pattern goes after.
+func glueSeparator(l *icu.Locale) string {
+	// The date is {0} here and the time is {1}, which is the way round the
+	// patterns are carried.
+	glue := l.Glue[3]
+	first := strings.Index(glue, "{0}")
+	second := strings.Index(glue, "{1}")
+	if first < 0 || second < 0 || second < first {
+		return " "
+	}
+	between := glue[first+3 : second]
+	if between == "" {
+		return " "
+	}
+	return between
 }
 
 // withWeekday puts the weekday where this locale puts it, which is in front in

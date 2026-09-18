@@ -382,6 +382,9 @@ func (r *Runtime) initPluralRules(intl *Object) {
 		}
 		rt.putString(out, "type", kind)
 		rt.putString(out, "notation", o.numbers.notation)
+		if o.numbers.notation == "compact" {
+			rt.putString(out, "compactDisplay", o.numbers.compactDisplay)
+		}
 		rt.putInt(out, "minimumIntegerDigits", o.numbers.minInt)
 		if o.numbers.reportFrac {
 			rt.putInt(out, "minimumFractionDigits", o.numbers.minFrac)

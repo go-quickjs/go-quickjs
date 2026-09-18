@@ -1293,8 +1293,9 @@ func (r *Runtime) arrayLikeToLocaleString(this Value, n int64, locale []Value) (
 			return Undefined, r.throwTypeError("toLocaleString is not a function")
 		}
 		// The locales and the options are handed on, since each element is
-		// asked to write itself the same way as the last.
-		res, err := r.call(fn, v, locale)
+		// asked to write itself the same way as the last. Both are passed
+		// whether or not they were given, which a script can see.
+		res, err := r.call(fn, v, []Value{arg(locale, 0), arg(locale, 1)})
 		if err != nil {
 			return Undefined, err
 		}

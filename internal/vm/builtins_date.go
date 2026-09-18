@@ -303,7 +303,7 @@ func (r *Runtime) initDateBuiltins() {
 	})
 	// The three toLocale methods are Intl.DateTimeFormat with the fields each
 	// of them stands for, which is what ECMA-402 defines them as.
-	locale := func(name string, defaults map[string]string) {
+	locale := func(name, required string, defaults map[string]string) {
 		r.defMethod(p, name, 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 			t, err := rt.dateValueOf(this, "Date.prototype."+name)
 			if err != nil {
@@ -312,21 +312,21 @@ func (r *Runtime) initDateBuiltins() {
 			if math.IsNaN(t) {
 				return Str(NewString("Invalid Date")), nil
 			}
-			o, err := rt.dateOptionsFrom(args, defaults)
+			o, err := rt.dateOptionsFrom(args, defaults, required)
 			if err != nil {
 				return Undefined, err
 			}
 			return Str(NewString(o.format(o.at(t)))), nil
 		})
 	}
-	locale("toLocaleString", map[string]string{
+	locale("toLocaleString", "any", map[string]string{
 		"year": "numeric", "month": "numeric", "day": "numeric",
 		"hour": "numeric", "minute": "numeric", "second": "numeric",
 	})
-	locale("toLocaleDateString", map[string]string{
+	locale("toLocaleDateString", "date", map[string]string{
 		"year": "numeric", "month": "numeric", "day": "numeric",
 	})
-	locale("toLocaleTimeString", map[string]string{
+	locale("toLocaleTimeString", "time", map[string]string{
 		"hour": "numeric", "minute": "numeric", "second": "numeric",
 	})
 

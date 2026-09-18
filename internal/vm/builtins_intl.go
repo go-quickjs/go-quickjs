@@ -304,6 +304,21 @@ func (c *localeChoice) override(key, value string) {
 	}
 }
 
+// drop takes a setting out of the resolved locale without changing what it
+// settled on: a clock asked for outright answers the question the tag asked,
+// so the tag is no longer the reason for the answer.
+func (c *localeChoice) drop(key string) {
+	if _, ok := c.asked[key]; !ok {
+		return
+	}
+	delete(c.asked, key)
+	var used []keyword
+	for k, v := range c.asked {
+		used = append(used, keyword{key: k, value: v})
+	}
+	c.tag.setKeywords(used)
+}
+
 // locale is the tag to report, which is the one that was matched along with
 // the settings it asked for and got.
 func (c *localeChoice) locale() string { return c.tag.String() }
@@ -1014,7 +1029,7 @@ func (r *Runtime) initDateTimeFormat(intl *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		o, err := rt.dateOptionsFrom(args, nil)
+		o, err := rt.dateOptionsFrom(args, nil, "any")
 		if err != nil {
 			return Undefined, err
 		}
@@ -1131,7 +1146,7 @@ func (r *Runtime) dateArgument(o *dateOptions, v Value) (time.Time, error) {
 
 // dateOptionsFrom reads the arguments a DateTimeFormat is made with. defaults
 // fills in the fields the toLocale methods ask for when the caller named none.
-func (r *Runtime) dateOptionsFrom(args []Value, defaults map[string]string) (*dateOptions, error) {
+func (r *Runtime) dateOptionsFrom(args []Value, defaults map[string]string, required string) (*dateOptions, error) {
 	tags, err := r.requestedLocales(arg(args, 0))
 	if err != nil {
 		return nil, err
@@ -1167,11 +1182,16 @@ func (r *Runtime) dateOptionsFrom(args []Value, defaults map[string]string) (*da
 		// is not consulted.
 		cycle = ""
 	}
+	hourCycleGiven := hour12Set || cycle != ""
 
 	choice := r.resolveLocale(tags, "ca", "nu", "hc")
 	choice.override("ca", calendar)
 	choice.override("nu", numbering)
 	choice.override("hc", cycle)
+	if hourCycleGiven {
+		// However the clock was chosen, it was not the tag that chose it.
+		choice.drop("hc")
+	}
 	o := &dateOptions{locale: choice.data, choice: choice, timeZone: "UTC"}
 	o.calendar = choice.setting("ca")
 	o.digits = choice.setting("nu")
@@ -1251,16 +1271,44 @@ func (r *Runtime) dateOptionsFrom(args []Value, defaults map[string]string) (*da
 	if (o.dateStyle != "" || o.timeStyle != "") && o.hasFields() {
 		return nil, r.throwTypeError("a style and a field cannot both be asked for")
 	}
+	// A method that writes a date will not be asked for a style of time, and
+	// one that writes a time will not be asked for a style of date.
+	switch {
+	case required == "date" && o.timeStyle != "":
+		return nil, r.throwTypeError("a date cannot be written in a style of time")
+	case required == "time" && o.dateStyle != "":
+		return nil, r.throwTypeError("a time cannot be written in a style of date")
+	}
 
-	// Nothing asked for at all is a date, or whatever the caller said instead.
-	if o.dateStyle == "" && o.timeStyle == "" && !o.hasFields() && o.era == "" &&
-		o.dayPeriod == "" && o.fractional == 0 && o.timeZoneName == "" {
+	// What was not asked for is filled in, but only where the caller named
+	// nothing of the kind it is asking about: a date asked for with an hour
+	// gets the date fields as well as the hour.
+	needed := o.dateStyle == "" && o.timeStyle == ""
+	if needed && (required == "date" || required == "any") {
+		needed = o.weekday == "" && o.year == "" && o.month == "" && o.day == ""
+	}
+	if needed && (required == "time" || required == "any") {
+		needed = o.dayPeriod == "" && o.hour == "" && o.minute == "" &&
+			o.second == "" && o.fractional == 0
+	}
+	if needed {
 		if defaults == nil {
 			defaults = map[string]string{"year": "numeric", "month": "numeric", "day": "numeric"}
 		}
-		o.weekday, o.era = defaults["weekday"], defaults["era"]
-		o.year, o.month, o.day = defaults["year"], defaults["month"], defaults["day"]
-		o.hour, o.minute, o.second = defaults["hour"], defaults["minute"], defaults["second"]
+		if o.weekday == "" {
+			o.weekday = defaults["weekday"]
+		}
+		if o.era == "" {
+			o.era = defaults["era"]
+		}
+		for field, into := range map[string]*string{
+			"year": &o.year, "month": &o.month, "day": &o.day,
+			"hour": &o.hour, "minute": &o.minute, "second": &o.second,
+		} {
+			if *into == "" {
+				*into = defaults[field]
+			}
+		}
 	}
 
 	// Which clock to keep: the one asked for outright, the one the tag asked

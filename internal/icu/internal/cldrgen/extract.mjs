@@ -71,7 +71,9 @@ function pattern(parts, hour12) {
       case "minute": out += part.value.length === 2 ? "mm" : "m"; break;
       case "second": out += part.value.length === 2 ? "ss" : "s"; break;
       case "fractionalSecond": out += "S"; break;
-      case "timeZoneName": out += "z"; break;
+      // A zone named in full is four letters, and one named in short is one:
+      // "Coordinated Universal Time" against "UTC".
+      case "timeZoneName": out += part.value.length > 6 ? "zzzz" : "z"; break;
       // Anything else is carried as a literal, which is what it looks like.
       default: out += quote(part.value); break;
     }
@@ -562,7 +564,9 @@ function relativeStyle(locale, style) {
   const numbers = new Intl.NumberFormat(locale);
   for (const unit of RELATIVE_UNITS) {
     const forms = {};
-    for (const n of [1, 2, 3, 5, 11, 21, 100]) {
+    // A count with a fraction takes a form of its own in some languages:
+    // Polish says "dnia" for a day and a half and "dni" for five days.
+    for (const n of [1, 2, 3, 5, 11, 21, 100, 1.5]) {
       for (const sign of [1, -1]) {
         const value = n * sign;
         const text = always.format(value, unit);
