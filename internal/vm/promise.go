@@ -54,9 +54,19 @@ func (r *Runtime) promiseOf(this Value, name string) (*promiseData, error) {
 
 // newPromise returns a pending promise.
 func (r *Runtime) newPromise() *Object {
-	o := newObject(r.proto.promise, ClassPromise)
-	o.data = &promiseData{}
-	return o
+	// The promise and its state are one allocation: neither outlives the
+	// other, and a program that awaits makes a great many of them.
+	po := &promiseObject{
+		Object: Object{proto: r.proto.promise, class: ClassPromise, flags: objExtensible},
+	}
+	po.Object.data = &po.state
+	return &po.Object
+}
+
+// promiseObject is a promise together with the state it settles into.
+type promiseObject struct {
+	Object
+	state promiseData
 }
 
 // resolvingFunctions makes the pair of functions that settle one promise.
@@ -69,24 +79,34 @@ func (r *Runtime) newPromise() *Object {
 // Each pair is its own: the job that adopts a thenable is given a fresh pair,
 // so a throw after it resolves is ignored on its own account.
 func (r *Runtime) resolvingFunctions(o *Object) (*Object, *Object) {
-	settled := false
-	resolve := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, args []Value) (Value, error) {
-		if settled {
+	// The two are made together and live together, so they share one
+	// allocation, as do the flag and the promise they both close over.
+	pair := &resolvingPair{promise: o}
+	resolve, reject := r.newNativeFuncPair(1, 1,
+		func(rt *Runtime, _ Value, args []Value) (Value, error) {
+			if pair.settled {
+				return Undefined, nil
+			}
+			pair.settled = true
+			rt.resolvePromise(pair.promise, arg(args, 0))
 			return Undefined, nil
-		}
-		settled = true
-		rt.resolvePromise(o, arg(args, 0))
-		return Undefined, nil
-	})
-	reject := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, args []Value) (Value, error) {
-		if settled {
+		},
+		func(rt *Runtime, _ Value, args []Value) (Value, error) {
+			if pair.settled {
+				return Undefined, nil
+			}
+			pair.settled = true
+			rt.rejectPromise(pair.promise, arg(args, 0))
 			return Undefined, nil
-		}
-		settled = true
-		rt.rejectPromise(o, arg(args, 0))
-		return Undefined, nil
-	})
+		})
 	return resolve, reject
+}
+
+// resolvingPair is what a pair of resolving functions share: the promise they
+// settle and the flag that says it is spoken for.
+type resolvingPair struct {
+	promise *Object
+	settled bool
 }
 
 // resolvePromise settles a promise with a value.
