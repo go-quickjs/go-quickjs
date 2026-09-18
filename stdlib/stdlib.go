@@ -113,6 +113,10 @@ func Install(rt *quickjs.Runtime, cfg Config) error {
 		if err := Extras(rt, cfg.Loop != nil); err != nil {
 			return err
 		}
+		// Intl, as far as it can be had without the Unicode locale data.
+		if err := Locales(rt); err != nil {
+			return err
+		}
 	}
 	if err := Path(rt); err != nil {
 		return err

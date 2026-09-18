@@ -2091,3 +2091,110 @@ func TestURLPattern(t *testing.T) {
 		t.Errorf("URLPattern =\n%s\nwant\n%s\nstderr: %s", out, want, errOut)
 	}
 }
+
+// Intl formats what a program shows a person. The formats are English and the
+// number conventions are as many as are worth keeping without the Unicode
+// locale data; what it cannot do it refuses rather than guesses at.
+func TestIntl(t *testing.T) {
+	out, errOut := run(t, stdlib.Config{}, `
+		const utc = (o) => ({timeZone: "UTC", ...o})
+		const when = new Date(Date.UTC(2020, 0, 2, 15, 4, 5))
+
+		// Numbers, and what varies between languages about them.
+		console.log(new Intl.NumberFormat("en-US").format(1234567.891))
+		console.log(new Intl.NumberFormat("de-DE").format(1234567.891))
+		console.log(new Intl.NumberFormat("en-IN").format(12345678))
+		console.log(new Intl.NumberFormat("en", {style: "currency", currency: "USD"}).format(9.5),
+		            new Intl.NumberFormat("en", {style: "currency", currency: "JPY"}).format(1200),
+		            new Intl.NumberFormat("en", {style: "percent"}).format(0.256))
+		console.log(new Intl.NumberFormat("en", {notation: "compact"}).format(1234567),
+		            new Intl.NumberFormat("en", {minimumFractionDigits: 2}).format(1),
+		            new Intl.NumberFormat("en", {maximumFractionDigits: 0}).format(2.7),
+		            new Intl.NumberFormat("en", {useGrouping: false}).format(12345))
+		console.log(new Intl.NumberFormat("en", {signDisplay: "always"}).format(5),
+		            new Intl.NumberFormat("en").format(NaN),
+		            new Intl.NumberFormat("en").format(-Infinity))
+
+		// The methods on the values themselves go through the same thing.
+		console.log((1234.5).toLocaleString("de-DE"), (1234.5).toLocaleString("en"))
+
+		// Dates, in the forms English writes them.
+		console.log(new Intl.DateTimeFormat("en", utc({dateStyle: "long"})).format(when))
+		console.log(new Intl.DateTimeFormat("en", utc({dateStyle: "full", timeStyle: "medium"})).format(when))
+		console.log(new Intl.DateTimeFormat("en", utc({month: "short", day: "numeric"})).format(when))
+		console.log(new Intl.DateTimeFormat("en", utc({hour: "2-digit", minute: "2-digit", hour12: false})).format(when))
+		console.log(when.toLocaleDateString("en", utc()), when.toLocaleTimeString("en", utc()))
+
+		// A zone it cannot do is refused, since a wrong time is worse than none.
+		try { new Intl.DateTimeFormat("en", {timeZone: "America/New_York"}) }
+		catch (e) { console.log(e.constructor.name) }
+
+		// Sorting, where the useful part is numbers and accents.
+		console.log(["file10", "file9", "file1"].sort(
+			new Intl.Collator(undefined, {numeric: true}).compare).join())
+		console.log("résumé".localeCompare("resume", "en", {sensitivity: "base"}),
+		            "a".localeCompare("b"), "b".localeCompare("a"))
+
+		// The smaller ones.
+		console.log(new Intl.PluralRules("en").select(1), new Intl.PluralRules("en").select(2),
+		            new Intl.PluralRules("en", {type: "ordinal"}).select(22),
+		            new Intl.PluralRules("en", {type: "ordinal"}).select(13))
+		console.log(new Intl.ListFormat().format(["a", "b", "c"]),
+		            "|", new Intl.ListFormat("en", {type: "disjunction"}).format(["x", "y"]))
+		const ago = new Intl.RelativeTimeFormat("en", {numeric: "auto"})
+		console.log(ago.format(-1, "day"), "|", ago.format(3, "hours"), "|",
+		            new Intl.RelativeTimeFormat().format(-2, "week"))
+		console.log(Intl.getCanonicalLocales(["EN-us", "de"]).join(),
+		            Intl.supportedValuesOf("timeZone").join())
+
+		// And the parts, for a program that wants to lay them out itself.
+		console.log(JSON.stringify(new Intl.NumberFormat("en", {style: "currency", currency: "EUR"})
+			.formatToParts(1234.5)))
+	`)
+	want := strings.Join([]string{
+		"1,234,567.891",
+		"1.234.567,891",
+		"1,23,45,678",
+		"$9.50 ¥1,200 26%",
+		"1.2M 1.00 3 12345",
+		"+5 NaN -∞",
+		"1.234,5 1,234.5",
+		"January 2, 2020",
+		"Thursday, January 2, 2020, 3:04:05 PM",
+		"Jan 2",
+		"15:04",
+		"1/2/2020 3:04:05 PM",
+		"RangeError",
+		"file1,file9,file10",
+		"0 -1 1",
+		"one other two other",
+		"a, b, and c | x or y",
+		"yesterday | in 3 hours | 2 weeks ago",
+		"en-US,de UTC",
+		`[{"type":"currency","value":"€"},{"type":"integer","value":"1"},` +
+			`{"type":"group","value":","},{"type":"integer","value":"234"},` +
+			`{"type":"decimal","value":"."},{"type":"fraction","value":"50"}]`,
+	}, "\n")
+	if out != want {
+		t.Errorf("Intl =\n%s\nwant\n%s\nstderr: %s", out, want, errOut)
+	}
+}
+
+// A host that has its own Intl keeps it.
+func TestIntlLeavesAnExistingOneAlone(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	if _, err := rt.Eval(`globalThis.Intl = {mine: true}`); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := stdlib.Install(rt, stdlib.Config{Stdout: &out}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.Eval(`console.log(Intl.mine === true, Intl.NumberFormat === undefined)`); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(out.String()); got != "true true" {
+		t.Errorf("out = %q", got)
+	}
+}

@@ -940,9 +940,11 @@ what the script may do (nothing, unless said here):
   -A, --allow-all         everything below
       --allow-read[=DIR]  read files, confined to DIR when given
       --allow-write[=DIR] write them too
-      --allow-net[=HOSTS] reach the network, or only these comma-separated hosts
+      --allow-net[=HOSTS] reach the network -- fetch, sockets and listening --
+                          or only these comma-separated hosts
       --allow-env         read the environment
-      --allow-run[=list]  start programs, which can do anything you can
+      --allow-run[=LIST]  start programs, or only these comma-separated ones.
+                          A program can do anything you can
 
 bounds:
       --memory-limit N    stop the script at N bytes (64m, 1g)

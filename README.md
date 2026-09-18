@@ -65,13 +65,25 @@ does not provide: see [Conformance](#conformance) for the measurement and
 
 ### Not implemented
 
-`Intl`, `Temporal`, `Atomics`, `SharedArrayBuffer`, `ShadowRealm`, decorators,
+`Temporal`, `Atomics`, `SharedArrayBuffer`, `ShadowRealm`, decorators,
 resizable ArrayBuffers, `using` declarations, and the newer proposals test262
 tracks.
+
+`Intl` is not in the engine; the standard library has one, which is what can be
+had without the Unicode locale data: English month and day names whatever the
+locale, the number and currency conventions of the languages where they differ,
+and a time zone that is UTC or the machine's own — anything else is refused
+rather than guessed at. A host that needs the real thing installs its own before
+`stdlib.Install`, which leaves it alone.
 
 There is one realm per runtime: `$262.createRealm` has nothing to return, so
 the four test262 variants that need a second realm are skipped along with the
 `cross-realm` and `ShadowRealm` ones.
+
+In the standard library: node's own streams (the web's are here instead, and
+everything that takes a stream takes those), brotli, and BYOB readers. A
+decompression stream gathers its input rather than being pulled through, since
+nothing here can pull it without taking the runtime onto another goroutine.
 
 Known semantic gaps, each covered by a test that documents it:
 
@@ -325,7 +337,7 @@ loop.Run(ctx)     // timers, and work that finished on other goroutines
 
 | | |
 |---|---|
-| Always | `console`, `URL`, `TextEncoder`/`TextDecoder`, `atob`/`btoa`, `structuredClone`, `performance`, `crypto` (hashing, HMAC, PBKDF2, HKDF, `subtle`), `Blob`, `File`, `FormData`, `URLPattern`, `AbortController`, `Buffer`, the web's streams, `CompressionStream`, and the `path`, `events`, `util`, `assert`, `buffer`, `crypto`, `zlib`, `stream/web`, `url`, `querystring`, `string_decoder` modules |
+| Always | `console`, `Intl` (English formats, and the number conventions of some 25 languages), `URL`, `TextEncoder`/`TextDecoder`, `atob`/`btoa`, `structuredClone`, `performance`, `crypto` (hashing, HMAC, PBKDF2, HKDF, `subtle`), `Blob`, `File`, `FormData`, `URLPattern`, `AbortController`, `Buffer`, the web's streams, `CompressionStream`, and the `path`, `events`, `util`, `assert`, `buffer`, `crypto`, `zlib`, `stream/web`, `url`, `querystring`, `string_decoder` modules |
 | `Loop` | `setTimeout`, `setInterval`, `queueMicrotask`, and the `timers`, `timers/promises` modules |
 | `FS` | the `fs` module, sync and promise halves, `createReadStream`/`createWriteStream`, confined to `Root` |
 | `Process` | `process.argv`, `env`, `cwd`, `stdout`, `exit` — what the host chooses to say |
