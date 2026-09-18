@@ -16,8 +16,8 @@ import (
 // WebAPIs installs the things a browser has that the language does not, as far
 // as they are pure computation: URL and URLSearchParams, TextEncoder and
 // TextDecoder, atob and btoa, structuredClone, performance, AbortController,
-// Blob, File and FormData, and the parts of crypto that need nothing but
-// entropy.
+// Blob, File and FormData, URLPattern, and the parts of crypto that need
+// nothing but entropy.
 //
 // None of them can reach outside the process. random is where getRandomValues
 // draws from, and nil means the system source.
@@ -93,7 +93,7 @@ func WebAPIs(rt *quickjs.Runtime, random io.Reader) error {
 		"URL", "URLSearchParams", "TextEncoder", "TextDecoder",
 		"atob", "btoa", "structuredClone", "performance", "crypto",
 		"AbortController", "AbortSignal", "Event", "EventTarget",
-		"Blob", "File", "FormData",
+		"Blob", "File", "FormData", "URLPattern",
 	} {
 		v, err := api.Get(name)
 		if err != nil {
@@ -277,6 +277,267 @@ const webAPIsJS = `(function (host) {
       if (this._fatal) throw new TypeError("the input is not valid utf-8");
       return "�";
     }
+  }
+
+  // --- URLPattern -----------------------------------------------------------
+
+  // A pattern is compiled to a regular expression with named groups, which is
+  // what the syntax is a shorthand for: ":id" is a segment, "*" is anything,
+  // and what is written in parentheses is a matcher of your own.
+  //
+  // The parts of a URL a pattern does not mention match anything, so
+  // new URLPattern({pathname: "/books/:id"}) is about the path alone.
+  const patternParts = [
+    "protocol", "username", "password", "hostname", "port",
+    "pathname", "search", "hash",
+  ];
+
+  function compilePart(pattern, part) {
+    // A part nobody constrained matches whatever is there.
+    if (pattern === undefined || pattern === "*") {
+      return {source: "^.*$", names: [], wild: true};
+    }
+    const names = [];
+    const segment = part === "pathname";
+    // What one :name may match: a path stops at a separator, everything else
+    // does not.
+    const one = segment ? "[^/]+?" : "[^]+?";
+    let out = "^";
+    let i = 0;
+    let unnamed = 0;
+    while (i < pattern.length) {
+      const c = pattern[i];
+      if (c === ":") {
+        let j = i + 1;
+        while (j < pattern.length && /[\w$]/.test(pattern[j])) j++;
+        if (j === i + 1) throw new TypeError("a : must be followed by a name");
+        const name = pattern.slice(i + 1, j);
+        names.push(name);
+        i = j;
+        // A name may be followed by its own matcher, and then by how many of
+        // it there may be.
+        let body = one;
+        if (pattern[i] === "(") {
+          const end = matchingParen(pattern, i);
+          body = pattern.slice(i + 1, end);
+          i = end + 1;
+        }
+        const mod = modifierAt(pattern, i);
+        i += mod.length;
+        // An optional segment takes the separator before it with it, so that
+        // /items/:id? matches /items as well as /items/7 -- and does not ask
+        // for /items// in between.
+        if (segment && (mod === "?" || mod === "*") && out.endsWith("\\/")) {
+          out = out.slice(0, -2);
+        }
+        out += group(name, body, mod, segment);
+        continue;
+      }
+      if (c === "*") {
+        const name = String(unnamed++);
+        names.push(name);
+        out += "(?<" + safeName(name) + ">.*)";
+        i++;
+        continue;
+      }
+      if (c === "(") {
+        const end = matchingParen(pattern, i);
+        const name = String(unnamed++);
+        names.push(name);
+        out += "(?<" + safeName(name) + ">" + pattern.slice(i + 1, end) + ")";
+        i = end + 1;
+        continue;
+      }
+      if (c === "{") {
+        // A braced group is a piece that may repeat or be left out; what is
+        // inside it is a pattern of its own.
+        const end = matchingBrace(pattern, i);
+        const inner = compilePart(pattern.slice(i + 1, end), part);
+        i = end + 1;
+        const mod = modifierAt(pattern, i);
+        i += mod.length;
+        names.push(...inner.names);
+        out += "(?:" + inner.source.slice(1, -1) + ")" + (mod || "");
+        continue;
+      }
+      out += escapeRe(c);
+      i++;
+    }
+    return {source: out + "$", names, wild: false};
+  }
+
+  function group(name, body, mod, segment) {
+    const named = "(?<" + safeName(name) + ">" + body + ")";
+    switch (mod) {
+      case "?": return segment ? "(?:\\/" + named + ")?" : named + "?";
+      case "*": return segment ? "(?:\\/" + starred(name, body) + ")?" : named + "*";
+      case "+": return segment ? starred(name, body) : named + "+";
+    }
+    return named;
+  }
+
+  // A repeated segment is itself and everything after it, separators and all.
+  const starred = (name, body) =>
+    "(?<" + safeName(name) + ">" + body + "(?:\\/" + body + ")*)";
+
+  function modifierAt(pattern, i) {
+    const c = pattern[i];
+    return c === "?" || c === "*" || c === "+" ? c : "";
+  }
+
+  // A group name has to be an identifier, and a wildcard's name is a number.
+  const safeName = (name) => /^[A-Za-z_$]/.test(name) ? name : "_" + name;
+
+  function matchingParen(s, at) {
+    let depth = 0;
+    for (let i = at; i < s.length; i++) {
+      if (s[i] === "\\") { i++; continue; }
+      if (s[i] === "(") depth++;
+      else if (s[i] === ")" && --depth === 0) return i;
+    }
+    throw new TypeError("a ( in a pattern was never closed");
+  }
+
+  function matchingBrace(s, at) {
+    let depth = 0;
+    for (let i = at; i < s.length; i++) {
+      if (s[i] === "\\") { i++; continue; }
+      if (s[i] === "{") depth++;
+      else if (s[i] === "}" && --depth === 0) return i;
+    }
+    throw new TypeError("a { in a pattern was never closed");
+  }
+
+  const escapeRe = (c) => /[\\^$.*+?()[\]{}|\/]/.test(c) ? "\\" + c : c;
+
+  class URLPattern {
+    constructor(input = {}, baseURL) {
+      let init = input;
+      if (typeof input === "string") {
+        // A whole URL as a pattern: its parts are taken apart the way a URL's
+        // are, which is why a base is allowed here too.
+        init = patternFromString(input, baseURL);
+      } else if (baseURL !== undefined) {
+        init = {...patternFromString("", baseURL), ...input};
+      }
+      const parts = {};
+      for (const part of patternParts) {
+        const source = init[part];
+        const compiled = compilePart(source, part);
+        parts[part] = compiled;
+        this[part] = source === undefined ? "*" : source;
+        Object.defineProperty(this, "_" + part, {
+          value: {re: new RegExp(compiled.source, part === "protocol" ? "i" : ""),
+                  names: compiled.names, wild: compiled.wild},
+        });
+      }
+      Object.defineProperty(this, "_parts", {value: parts});
+    }
+
+    test(input, baseURL) { return this.exec(input, baseURL) !== null; }
+
+    exec(input, baseURL) {
+      let url;
+      try {
+        url = typeof input === "string" ? new URL(input, baseURL)
+          : new URL(input.href !== undefined ? input.href : String(input), baseURL);
+      } catch (e) {
+        return null;
+      }
+      const values = {
+        protocol: url.protocol.replace(/:$/, ""),
+        username: url.username,
+        password: url.password,
+        hostname: url.hostname,
+        port: url.port,
+        pathname: url.pathname,
+        search: url.search.replace(/^[?]/, ""),
+        hash: url.hash.replace(/^#/, ""),
+      };
+      const out = {inputs: baseURL === undefined ? [input] : [input, baseURL]};
+      for (const part of patternParts) {
+        const compiled = this["_" + part];
+        const found = compiled.re.exec(values[part]);
+        if (found === null) return null;
+        const groups = {};
+        for (const name of compiled.names) {
+          groups[name] = found.groups ? found.groups[safeName(name)] : undefined;
+        }
+        out[part] = {input: values[part], groups};
+      }
+      return out;
+    }
+  }
+
+  // patternFromString takes a pattern written as a whole URL apart. The parts
+  // are split on the characters that separate them rather than parsed, since
+  // what is between them is a pattern and not a URL.
+  function patternFromString(text, baseURL) {
+    const init = {};
+    let rest = String(text);
+    if (baseURL !== undefined) {
+      const base = new URL(baseURL);
+      init.protocol = base.protocol.replace(/:$/, "");
+      init.hostname = base.hostname;
+      if (base.port) init.port = base.port;
+    }
+    const scheme = /^([\w+.-]+):\/\//.exec(rest);
+    if (scheme) {
+      init.protocol = scheme[1];
+      rest = rest.slice(scheme[0].length);
+      const slash = rest.indexOf("/");
+      const authority = slash < 0 ? rest : rest.slice(0, slash);
+      rest = slash < 0 ? "" : rest.slice(slash);
+      const colon = authority.lastIndexOf(":");
+      if (colon > 0 && !authority.slice(colon).includes("}")) {
+        init.hostname = authority.slice(0, colon);
+        init.port = authority.slice(colon + 1);
+      } else {
+        init.hostname = authority;
+      }
+    }
+    // Where the query and the fragment begin cannot be found by looking for
+    // the characters that start them: the ? of "/items/:id?" is a modifier,
+    // not a query. What tells them apart is what comes before.
+    const {query, hash} = separators(rest);
+    if (hash >= 0) {
+      init.hash = rest.slice(hash + 1);
+      rest = rest.slice(0, hash);
+    }
+    if (query >= 0) {
+      init.search = rest.slice(query + 1);
+      rest = rest.slice(0, query);
+    }
+    if (rest !== "") init.pathname = rest;
+    return init;
+  }
+
+  // separators walks a pattern and reports where the query and the fragment
+  // begin, skipping what belongs to a name, a group or a matcher.
+  function separators(pattern) {
+    let query = -1, hash = -1;
+    // modifiable is true just after something a ? or a + could apply to.
+    let modifiable = false;
+    for (let i = 0; i < pattern.length; i++) {
+      const c = pattern[i];
+      if (c === "\\") { i++; modifiable = false; continue; }
+      if (c === ":") {
+        let j = i + 1;
+        while (j < pattern.length && /[\w$]/.test(pattern[j])) j++;
+        i = j - 1;
+        modifiable = true;
+        continue;
+      }
+      if (c === "(") { i = matchingParen(pattern, i); modifiable = true; continue; }
+      if (c === "{") { i = matchingBrace(pattern, i); modifiable = true; continue; }
+      if (c === "*") { modifiable = true; continue; }
+      if (c === "?" && modifiable) { modifiable = false; continue; }
+      if (c === "+" && modifiable) { modifiable = false; continue; }
+      if (c === "?" && query < 0 && hash < 0) { query = i; modifiable = false; continue; }
+      if (c === "#" && hash < 0) { hash = i; modifiable = false; continue; }
+      modifiable = false;
+    }
+    return {query, hash};
   }
 
   // --- Blob and FormData ---------------------------------------------------
@@ -915,6 +1176,6 @@ const webAPIsJS = `(function (host) {
     btoa: (s) => host.btoa(String(s)),
     structuredClone, performance, crypto,
     AbortController, AbortSignal, Event, EventTarget,
-    Blob, File, FormData,
+    Blob, File, FormData, URLPattern,
   };
 })`

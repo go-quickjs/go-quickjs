@@ -2016,3 +2016,78 @@ func TestNothingIsLeftBehind(t *testing.T) {
 	}
 	t.Errorf("goroutines: %d before, %d after", before, after)
 }
+
+// URLPattern is how a handler decides what a request is for without writing a
+// regular expression for every route.
+func TestURLPattern(t *testing.T) {
+	out, errOut := run(t, stdlib.Config{}, `
+		const show = (v) => console.log(JSON.stringify(v))
+
+		// A named segment, which stops at the separator.
+		const book = new URLPattern({pathname: "/books/:id"})
+		console.log(book.test("https://example.com/books/123"),
+		            book.test("https://example.com/books/123/pages"),
+		            book.test("https://example.com/books"))
+		show(book.exec("https://example.com/books/123").pathname.groups)
+
+		// What the pattern does not mention matches anything.
+		console.log(book.test("http://anywhere.else:8080/books/9"))
+
+		// A wildcard, and a matcher of your own.
+		show(new URLPattern({pathname: "/files/*"}).exec("https://x/files/a/b.txt").pathname.groups)
+		const versioned = new URLPattern({pathname: "/v:version(\\d+)/items/:id?"})
+		console.log(versioned.test("https://x/v2/items"), versioned.test("https://x/vtwo/items"))
+		show(versioned.exec("https://x/v2/items/7").pathname.groups)
+
+		// One or more segments, and zero or more.
+		show(new URLPattern({pathname: "/files/:rest+"}).exec("https://x/files/a/b/c").pathname.groups)
+		const maybe = new URLPattern({pathname: "/x/:a*"})
+		console.log(maybe.test("https://x/x"), JSON.stringify(maybe.exec("https://x/x/1/2").pathname.groups))
+
+		// Other parts of a URL, and a whole URL as a pattern.
+		const sub = new URLPattern({hostname: ":sub.example.com"})
+		console.log(sub.test("https://api.example.com/"), sub.test("https://example.com/"))
+		const whole = new URLPattern("https://x.com/search?q=:term")
+		console.log(whole.test("https://x.com/search?q=cats"),
+		            whole.test("https://y.com/search?q=cats"))
+		show(whole.exec("https://x.com/search?q=cats").search.groups)
+
+		// A pattern against a base, and something that is not a URL at all.
+		const based = new URLPattern("/posts/:slug", "https://blog.example")
+		console.log(based.test("https://blog.example/posts/hello"),
+		            based.test("https://other.example/posts/hello"),
+		            based.exec("nonsense") === null)
+
+		// How a handler uses it.
+		const routes = [
+			[new URLPattern({pathname: "/"}), () => "home"],
+			[new URLPattern({pathname: "/users/:id"}), (g) => "user " + g.id],
+		]
+		const route = (url) => {
+			for (const [pattern, handler] of routes) {
+				const found = pattern.exec(url)
+				if (found) return handler(found.pathname.groups)
+			}
+			return "not found"
+		}
+		console.log(route("https://x/"), "|", route("https://x/users/7"), "|", route("https://x/nope"))
+	`)
+	want := strings.Join([]string{
+		"true false false",
+		`{"id":"123"}`,
+		"true",
+		`{"0":"a/b.txt"}`,
+		"true false",
+		`{"version":"2","id":"7"}`,
+		`{"rest":"a/b/c"}`,
+		`true {"a":"1/2"}`,
+		"true false",
+		"true false",
+		`{"term":"cats"}`,
+		"true false true",
+		"home | user 7 | not found",
+	}, "\n")
+	if out != want {
+		t.Errorf("URLPattern =\n%s\nwant\n%s\nstderr: %s", out, want, errOut)
+	}
+}
