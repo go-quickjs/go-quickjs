@@ -12,6 +12,19 @@ v, err := rt.Eval(`[1, 2, 3].map(x => x * 2).join("-")`)
 fmt.Println(v) // 2-4-6
 ```
 
+Three things live here:
+
+| | |
+|---|---|
+| `quickjs` | the engine, to embed in a Go program |
+| `qjs` | a command that runs JavaScript, with the capabilities you allow |
+| `jsregexp` | ECMAScript regular expressions for Go, which RE2 cannot express |
+
+```
+go get github.com/go-quickjs/go-quickjs
+go install github.com/go-quickjs/go-quickjs/cmd/qjs@latest
+```
+
 ## Status
 
 The language is substantially complete: expressions, closures, classes with
@@ -105,6 +118,42 @@ Useful flags:
 The suite runs on every core, which takes a few minutes rather than well over an
 hour.
 
+## The qjs command
+
+```
+qjs script.js arg1 arg2      run a file
+qjs -e 'console.log(1 + 1)'  run an expression
+qjs                          read from a prompt
+cat script.js | qjs -        run what arrives on standard input
+```
+
+A file that imports is run as a module without being told to; a relative
+specifier is resolved against the file that named it.
+
+A script can do nothing outside the process until the command line says it may,
+because the engine has no ambient authority to withhold:
+
+```
+qjs --allow-read=. build.js             read files under this directory
+qjs --allow-write=/tmp --allow-read=/tmp generate.js
+qjs --allow-net=api.example.com fetch.js reach one host
+qjs --allow-env deploy.js                read the environment
+qjs -A script.js                         all of it, for code you trust
+```
+
+A script that reaches for something it was not given is told which flag would
+have given it, rather than finding a hole where a function should be:
+
+```
+$ qjs -e 'fetch("https://example.com")'
+uncaught (in promise) Error: network access is not allowed: run qjs with --allow-net
+```
+
+The bounds are there too — `--memory-limit 64m`, `--stack-size`, `--timeout 5s`,
+`--no-code-generation` — and `--check` parses without running. The prompt keeps
+an unfinished line rather than refusing it, so a function can be typed over
+several lines, and leaves the last value in `_`.
+
 ## Calling Go from JavaScript
 
 Set an ordinary Go function as a global. Arguments and results are converted
@@ -160,6 +209,48 @@ err := v.Decode(&out)
 Decoding into `any` produces the natural Go form: `nil`, `bool`, `float64`,
 `string`, `[]any` or `map[string]any`.
 
+## Extending a runtime
+
+A runtime starts with the language and nothing else. What a script can reach is
+what the host puts there — a global, or a module it has to import:
+
+```go
+rt.Set("add", func(a, b int) int { return a + b })
+
+rt.SetModule("storage", map[string]any{
+    "get":     func(key string) string { return store[key] },
+    "set":     func(key, value string) { store[key] = value },
+    "default": map[string]any{"name": "storage"},
+})
+rt.EvalModule("main.js", `import {get} from "storage"; get("k")`)
+```
+
+A module registered this way answers to its name ahead of any loader, and works
+in a runtime with no loader at all.
+
+Anything that finishes later hands back a promise the host settles:
+
+```go
+rt.Set("readLater", func(name string) *quickjs.Promise {
+    p := rt.NewPromise()
+    go func() {
+        b, err := os.ReadFile(name)
+        loop.Post(func() {           // back on the runtime's goroutine
+            if err != nil {
+                p.RejectError(err)
+                return
+            }
+            p.Resolve(string(b))
+        })
+    }()
+    return p
+})
+```
+
+`NewObject`, `NewArray`, `NewBytes`, `NewError` and `Throw` build the values a
+marshalled Go value cannot express; `Value.Bytes` reads a typed array back.
+`OnUnhandledRejection` reports a promise nobody took.
+
 ## Modules
 
 Imports are resolved through a loader the host supplies. A runtime without one
@@ -178,12 +269,67 @@ ns, err := rt.EvalModule("main.js", `import {greet} from "./greet.js"; greet();`
 read. Bindings are live: an importer sees the exporter's current value, not a
 copy taken at link time.
 
+## The standard library
+
+The `stdlib` package builds the environment a program expects out of those
+pieces. Every capability is separate, because they are not equally dangerous:
+
+```go
+rt := quickjs.New()
+loop := stdlib.NewLoop(rt)
+
+err := stdlib.Install(rt, stdlib.Config{
+    Stdout:  os.Stdout,
+    Stderr:  os.Stderr,
+    Loop:    loop,
+    FS:      &stdlib.FS{Root: "/srv/data", ReadOnly: true},
+    Process: &stdlib.Process{Args: os.Args, Env: nil},
+    Fetch:   &stdlib.Fetch{Allow: onlyMyAPI},
+})
+
+rt.Eval(src)
+loop.Run(ctx)     // timers, and work that finished on other goroutines
+```
+
+| | |
+|---|---|
+| Always | `console`, `URL`, `URLSearchParams`, `TextEncoder`, `TextDecoder`, `atob`, `btoa`, `structuredClone`, `performance`, `crypto`, `AbortController`, `Buffer`, and the `path`, `events`, `util`, `assert`, `buffer` modules |
+| `Loop` | `setTimeout`, `setInterval`, `queueMicrotask` |
+| `FS` | the `fs` module, sync and promise halves, confined to `Root` |
+| `Process` | `process.argv`, `env`, `cwd`, `stdout`, `exit` — what the host chooses to say |
+| `OS` | the `os` module |
+| `Fetch` | `fetch`, `Headers`, `Request`, `Response` |
+
+A root is a boundary: a path that climbs out of it, or a symbolic link that
+points out of it, is refused rather than followed. `Fetch.Allow` sees every
+request before it is made. What is not installed cannot be reached.
+
+## ECMAScript regular expressions for Go
+
+Go's `regexp` is RE2: it buys linear time by refusing backreferences, lookaround
+and the rest. The `jsregexp` package is this engine's regular expressions on
+their own, for Go code that needs a pattern RE2 cannot express:
+
+```go
+re := jsregexp.MustCompile(`(?<user>\w+)@(\w+)\.com`, "i")
+m, err := re.FindStringSubmatch("Write to Someone@Example.com today")
+// m = ["Someone@Example.com", "Someone", "Example"]
+```
+
+Backreferences, lookahead and lookbehind, named groups, `\p{Script=Greek}`, the
+`v` flag's set notation. The method set follows Go's `regexp`, with two
+differences it documents: every method returns an error, because a backtracking
+matcher can give up where RE2 cannot, and a replacement follows
+`String.prototype.replace`.
+
 ## Sandboxing
 
 A runtime has no I/O, no network access, no timers, no filesystem and no module
 loader unless the host adds them. There is no `require`, no `process`, no
 `fetch`. `Date` reads the clock through an injectable hook rather than the
-process clock.
+process clock. Everything in [the standard library](#the-standard-library) is
+something a host hands over deliberately, and the [qjs](#the-qjs-command)
+command hands over only what its flags name.
 
 `WithoutCodeGeneration()` removes `eval` and the `Function` constructor. Neither
 grants a script a capability it does not already have — code it could `eval`, it
