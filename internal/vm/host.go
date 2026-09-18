@@ -86,6 +86,53 @@ func (r *Runtime) DefineGetter(o *Object, name string, fn NativeFunc) {
 	r.defGetter(o, name, fn)
 }
 
+// NewUint8ArrayOf returns a Uint8Array holding a copy of the given bytes.
+//
+// It is what a host hands back for the contents of a file or the body of a
+// response: an array of numbers would be a hundred times the memory and
+// nothing a script could pass to anything expecting bytes.
+func (r *Runtime) NewUint8ArrayOf(b []byte) Value {
+	o := newObject(r.typedArrayProtoFor(elemUint8), ClassTypedArray)
+	buf := newObject(r.arrayBufferProto, ClassArrayBuffer)
+	storage := make([]byte, len(b))
+	copy(storage, b)
+	buf.data = &arrayBufferData{bytes: storage}
+	o.data = &typedArrayData{buffer: buf, kind: elemUint8, length: len(b)}
+	return Obj(o)
+}
+
+// Bytes returns the bytes behind a typed array, a DataView or an ArrayBuffer,
+// and whether the value was one of those.
+//
+// The bytes are the ones the object is looking at, not a copy: a host writing
+// through them writes what the script sees, which is what makes it possible to
+// fill a buffer a script supplied.
+func (r *Runtime) Bytes(v Value) ([]byte, bool) {
+	if !v.IsObject() {
+		return nil, false
+	}
+	o := v.Object()
+	switch data := o.data.(type) {
+	case *arrayBufferData:
+		if data.detached {
+			return nil, false
+		}
+		return data.bytes, true
+	case *typedArrayData:
+		storage := data.storage()
+		if storage == nil || storage.detached {
+			return nil, false
+		}
+		start := data.byteOffset
+		end := start + data.length*data.info().size
+		if start > len(storage.bytes) || end > len(storage.bytes) {
+			return nil, false
+		}
+		return storage.bytes[start:end], true
+	}
+	return nil, false
+}
+
 // HostPromise is a promise the host settles.
 //
 // Resolve and Reject queue the reactions rather than running them, exactly as

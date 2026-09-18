@@ -239,11 +239,6 @@ func throwGoError(rt *vm.Runtime, err error) error {
 // of type error becomes a thrown exception rather than a returned value.
 func wrapGoFunc(rt *vm.Runtime, fv reflect.Value) (vm.Value, error) {
 	t := fv.Type()
-	if t.IsVariadic() {
-		// Supporting variadics would require splitting the argument list at the
-		// right point for every call; it is not needed yet.
-		return vm.Undefined, fmt.Errorf("quickjs: variadic functions are not supported")
-	}
 
 	wantsRuntime := t.NumIn() > 0 && t.In(0) == reflect.TypeOf((*Runtime)(nil))
 	firstArg := 0
@@ -252,13 +247,23 @@ func wrapGoFunc(rt *vm.Runtime, fv reflect.Value) (vm.Value, error) {
 	}
 	returnsError := t.NumOut() > 0 && t.Out(t.NumOut()-1) == reflect.TypeOf((*error)(nil)).Elem()
 
-	arity := t.NumIn() - firstArg
+	// A variadic function takes whatever arguments are left over in its last
+	// parameter, so its declared arity counts the ones before that: a call
+	// supplying none of them is still a complete call.
+	variadic := t.IsVariadic()
+	fixed := t.NumIn()
+	var restElem reflect.Type
+	if variadic {
+		fixed--
+		restElem = t.In(fixed).Elem()
+	}
+	arity := fixed - firstArg
 	name := "" // a Go function has no name the engine can see
 
 	native := func(callRT *vm.Runtime, this vm.Value, args []vm.Value) (vm.Value, error) {
-		in := make([]reflect.Value, t.NumIn())
+		in := make([]reflect.Value, 0, max(t.NumIn(), firstArg+len(args)))
 		if wantsRuntime {
-			in[0] = reflect.ValueOf(&Runtime{rt: callRT})
+			in = append(in, reflect.ValueOf(&Runtime{rt: callRT}))
 		}
 		for i := 0; i < arity; i++ {
 			pt := t.In(firstArg + i)
@@ -273,7 +278,17 @@ func wrapGoFunc(rt *vm.Runtime, fv reflect.Value) (vm.Value, error) {
 				return vm.Undefined, callRT.ThrowTypeError(
 					"argument %d: %s", i+1, err.Error())
 			}
-			in[firstArg+i] = dst
+			in = append(in, dst)
+		}
+		if variadic {
+			for i := arity; i < len(args); i++ {
+				dst := reflect.New(restElem).Elem()
+				if err := decodeInto(callRT, args[i], dst); err != nil {
+					return vm.Undefined, callRT.ThrowTypeError(
+						"argument %d: %s", i+1, err.Error())
+				}
+				in = append(in, dst)
+			}
 		}
 
 		out := fv.Call(in)

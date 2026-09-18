@@ -109,6 +109,31 @@ func (r *Runtime) NewArray(items ...any) (Value, error) {
 	return Value{v: vmObj(r.rt.NewArrayOf(vals)), rt: r.rt}, nil
 }
 
+// NewBytes returns a Uint8Array holding a copy of b.
+//
+// It is what a host hands back for the contents of a file or the body of a
+// response. An ordinary Go byte slice converts to an array of numbers, which is
+// the right answer for a small one and the wrong one for a megabyte.
+func (r *Runtime) NewBytes(b []byte) Value {
+	if r.closed {
+		return Value{}
+	}
+	return Value{v: r.rt.NewUint8ArrayOf(b), rt: r.rt}
+}
+
+// Bytes returns the bytes behind a typed array, a DataView or an ArrayBuffer,
+// and whether the value was one of those.
+//
+// The bytes are the ones the object is looking at rather than a copy, so a host
+// that keeps them keeps what the script can still write to; copy them if they
+// are to outlive the call.
+func (v Value) Bytes() ([]byte, bool) {
+	if v.rt == nil {
+		return nil, false
+	}
+	return v.rt.Bytes(v.v)
+}
+
 // Promise is a promise a host settles, which is how a host operation that
 // finishes later is handed to script.
 //
@@ -187,6 +212,18 @@ func (r *Runtime) RunJobs() (err error) {
 		return r.wrapError(err)
 	}
 	return nil
+}
+
+// EnqueueJob queues a microtask, which runs when the queue is next drained.
+//
+// It is what a host needs to make something happen after the current job and
+// before anything else: queueMicrotask is this, and so is the callback of an
+// operation that finished while script was running.
+func (r *Runtime) EnqueueJob(fn func()) {
+	if r.closed {
+		return
+	}
+	r.rt.EnqueueJob(fn)
 }
 
 // HasPendingJobs reports whether any microtask is waiting to run.
