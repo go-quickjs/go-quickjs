@@ -160,7 +160,86 @@ func (o *numberOptions) decimalParts(d decimal) []numberPiece {
 		pieces = append(pieces, numberPiece{"fraction", fraction})
 	}
 	pieces = append(pieces, tail...)
-	return o.wrap(pieces, o.pattern(negative, o.wants(negative, zero)))
+	out := o.wrap(pieces, o.pattern(negative, o.wants(negative, zero)))
+	if o.style == "unit" {
+		out = o.measure(out, whole, fraction)
+	}
+	return out
+}
+
+// measure puts the name of the unit around the number: "km" after it in most
+// languages, and in front of it in a few. A unit written underneath another is
+// the one above with the one below joined to it.
+func (o *numberOptions) measure(pieces []numberPiece, whole, fraction string) []numberPiece {
+	above, below, divided := strings.Cut(o.unit, "-per-")
+	// Which form the name takes follows the count as it is written.
+	category := o.locale.Cardinal.CategoryOf(whole, fraction, 0)
+	pattern, ok := o.locale.UnitPattern(above, o.unitDisplay, category)
+	if !ok {
+		return pieces
+	}
+	out := o.aroundNumber(pieces, pattern, "unit")
+	if divided {
+		// A pair the language writes its own way, or the two joined.
+		if own, ok := o.locale.UnitCompound(o.unit, o.unitDisplay); ok {
+			out = o.aroundNumber(out, own, "unit")
+		} else if per, ok := o.locale.UnitPer(below, o.unitDisplay); ok {
+			out = o.aroundNumber(out, per, "unit")
+		}
+	}
+	return mergeUnitPieces(out)
+}
+
+// mergeUnitPieces joins the names that ended up side by side, since "km" and
+// "/h" written together are one name and not two.
+func mergeUnitPieces(pieces []numberPiece) []numberPiece {
+	out := pieces[:0:0]
+	for _, piece := range pieces {
+		if len(out) > 0 && out[len(out)-1].kind == piece.kind &&
+			(piece.kind == "unit" || piece.kind == "literal") {
+			out[len(out)-1].value += piece.value
+			continue
+		}
+		out = append(out, piece)
+	}
+	return out
+}
+
+// aroundNumber puts what a pattern says on either side of what has been
+// written so far.
+func (o *numberOptions) aroundNumber(pieces []numberPiece, pattern, kind string) []numberPiece {
+	at := strings.Index(pattern, "{0}")
+	if at < 0 {
+		return pieces
+	}
+	out := make([]numberPiece, 0, len(pieces)+2)
+	if before := pattern[:at]; before != "" {
+		out = append(out, o.unitPieces(before, kind)...)
+	}
+	out = append(out, pieces...)
+	if after := pattern[at+3:]; after != "" {
+		out = append(out, o.unitPieces(after, kind)...)
+	}
+	return out
+}
+
+// unitPieces splits the words around a number into the name of the unit and
+// the spaces and marks that are not part of it.
+func (o *numberOptions) unitPieces(text, kind string) []numberPiece {
+	trimmed := strings.Trim(text, " \u00a0\u202f")
+	if trimmed == "" {
+		return []numberPiece{{"literal", text}}
+	}
+	at := strings.Index(text, trimmed)
+	var out []numberPiece
+	if at > 0 {
+		out = append(out, numberPiece{"literal", text[:at]})
+	}
+	out = append(out, numberPiece{kind, trimmed})
+	if rest := text[at+len(trimmed):]; rest != "" {
+		out = append(out, numberPiece{"literal", rest})
+	}
+	return out
 }
 
 // compactly divides a number down to the step its language writes it in --

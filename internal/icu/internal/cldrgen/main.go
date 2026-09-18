@@ -334,6 +334,18 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// How each language writes a measurement, which is a table of its own
+	// because it is large and most programs never ask for one.
+	units, err := readUnits(filepath.Join(filepath.Dir(script), "units.json"))
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(&b, "// unitsPacked is how each language writes a measurement: the name of the\n")
+	fmt.Fprintf(&b, "// unit in each of the three widths, the form it takes with one and with\n")
+	fmt.Fprintf(&b, "// many, and what it looks like written underneath another unit. Locales\n")
+	fmt.Fprintf(&b, "// that write them all alike share one entry.\n")
+	writePacked(&b, "unitsPacked", encodeUnits(units))
+
 	fmt.Fprintf(&b, "// numberingSystems is the ten digits of each way of writing numbers.\n")
 	fmt.Fprintf(&b, "var numberingSystems = map[string]string{\n")
 	for _, name := range sortedNames(numbering) {
@@ -372,6 +384,50 @@ func run() error {
 // sortedNames is the keys of a map, in order, so that what is written out is
 // the same from one run to the next.
 func sortedNames(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// unitData is what units.mjs writes.
+type unitData struct {
+	Units map[string]map[string]string `json:"units"`
+	Same  map[string]string            `json:"same"`
+}
+
+func readUnits(path string) (unitData, error) {
+	var out unitData
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return out, fmt.Errorf("the units: %w", err)
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return out, fmt.Errorf("the units: %w", err)
+	}
+	return out, nil
+}
+
+// encodeUnits writes the blocks and then which locale uses which.
+func encodeUnits(d unitData) string {
+	var b strings.Builder
+	for _, name := range sortedBlocks(d.Units) {
+		fmt.Fprintf(&b, "%s\n", name)
+		block := d.Units[name]
+		for _, key := range sortedNames(block) {
+			fmt.Fprintf(&b, "%s\t%s\n", key, block[key])
+		}
+	}
+	b.WriteString("\n")
+	for _, tag := range sortedNames(d.Same) {
+		fmt.Fprintf(&b, "%s\t%s\n", tag, d.Same[tag])
+	}
+	return b.String()
+}
+
+func sortedBlocks(m map[string]map[string]string) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)
