@@ -330,6 +330,28 @@ func TestCatastrophicBacktrackingIsBounded(t *testing.T) {
 	}
 }
 
+// The step budget is what one match may spend, not what a pattern may spend in
+// its lifetime: the matcher is lent out again for every match, and a pattern
+// used enough times would otherwise be refused for the rest of the program.
+func TestBudgetIsPerMatch(t *testing.T) {
+	re, err := Compile(`(a+)+b`, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One attempt that spends the whole budget.
+	if _, err := re.MatchString(strings.Repeat("a", 100), 0); !errors.Is(err, ErrComplexity) {
+		t.Skipf("the match completed with %v; the engine found it without backtracking", err)
+	}
+	// The next one starts again with a budget of its own.
+	caps, err := re.MatchString("aab", 0)
+	if err != nil {
+		t.Fatalf("the match after an exhausted one: %v", err)
+	}
+	if caps == nil {
+		t.Fatal("the match after an exhausted one found nothing")
+	}
+}
+
 func TestSyntaxErrors(t *testing.T) {
 	for _, pattern := range []string{
 		"(", "[", "a{2,1}", `\`, "(?<", "a**",

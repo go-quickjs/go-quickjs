@@ -475,3 +475,47 @@ func TestRegExpLookbehind(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// A pattern's step budget is what one match may spend, not what the pattern
+// may spend over its life: the matcher is lent back for every match, and a
+// pattern that had once given up would otherwise refuse everything after.
+func TestRegExpBudgetIsPerMatch(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+
+	v, err := rt.Eval(`
+		var re = /(a+)+b/
+		var gaveUp = false
+		try { re.test("a".repeat(100)) } catch (e) { gaveUp = e instanceof SyntaxError }
+		// Whatever the first attempt did, an ordinary match after it works.
+		var after = re.exec("aab")
+		gaveUp + ":" + (after === null ? "null" : after[0])
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String(); got != "true:aab" {
+		t.Errorf("gave up and then matched = %q, want %q", got, "true:aab")
+	}
+}
+
+// The same for a pattern used over and over, which is what a program does with
+// one: the work of the matches already done may not count against the next.
+func TestRegExpRepeatedUseKeepsWorking(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+
+	v, err := rt.Eval(`
+		var re = /(\w+)@(\w+)\.com/
+		var s = "write to someone@example.com today"
+		var n = 0
+		for (var i = 0; i < 20000; i++) n += re.exec(s)[1].length
+		n
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.String(); got != "140000" {
+		t.Errorf("total = %q, want 140000", got)
+	}
+}

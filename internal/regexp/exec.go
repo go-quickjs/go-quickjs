@@ -135,6 +135,10 @@ func (re *Regexp) exec(in *input, start int) ([]int, error) {
 		}
 	}
 	m.prog, m.in = re.prog, in
+	// The budget is what this attempt may spend, so it starts again here: a
+	// matcher is lent out over and over, and a pattern that had spent its
+	// budget once would have been refused for the rest of the program.
+	m.steps = 0
 	m.busy = true
 	defer func() {
 		m.busy = false
