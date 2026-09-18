@@ -99,13 +99,25 @@ type exchange struct {
 	// answer carries the response back to the goroutine serving the
 	// connection, which is not the one the handler runs on.
 	answer chan *reply
+	// chunks carries a body that arrives in pieces, one at a time: the send
+	// completes when the connection has taken the chunk, which is what holds a
+	// handler back from producing faster than the client reads.
+	chunks chan []byte
+	// gone is closed when the connection has stopped listening, so that a
+	// handler still pushing into it is told rather than left waiting.
+	gone chan struct{}
+	// failed says the handler gave up part way through. It is written before
+	// chunks is closed and read after, which is what makes it safe to share.
+	failed bool
 }
 
 type reply struct {
 	status  int
 	headers [][2]string
 	body    []byte
-	err     error
+	// streaming says the body follows on chunks rather than being here.
+	streaming bool
+	err       error
 }
 
 // listen opens a listener and hands back an object the script can close.
@@ -179,7 +191,10 @@ func (s *servers) listen(opts quickjs.Value, dispatch quickjs.Value) (quickjs.Va
 				url:    requestURL(r),
 				body:   body,
 				answer: make(chan *reply, 1),
+				chunks: make(chan []byte),
+				gone:   make(chan struct{}),
 			}
+			defer close(ex.gone)
 			names := make([]string, 0, len(r.Header))
 			for name := range r.Header {
 				names = append(names, name)
@@ -209,7 +224,38 @@ func (s *servers) listen(opts quickjs.Value, dispatch quickjs.Value) (quickjs.Va
 					status = http.StatusOK
 				}
 				w.WriteHeader(status)
-				w.Write(res.body)
+				if !res.streaming {
+					w.Write(res.body)
+					return
+				}
+				// The rest of the answer is still being made. Each piece is
+				// written and flushed as it comes, so a client reading a long
+				// answer sees it as it is produced.
+				flusher, _ := w.(http.Flusher)
+				for {
+					select {
+					case chunk, ok := <-ex.chunks:
+						if !ok {
+							if ex.failed {
+								// The answer stopped part way through. The
+								// connection is broken rather than finished
+								// tidily, so that the client can tell the
+								// difference between a short answer and a
+								// whole one.
+								panic(http.ErrAbortHandler)
+							}
+							return
+						}
+						if _, err := w.Write(chunk); err != nil {
+							return
+						}
+						if flusher != nil {
+							flusher.Flush()
+						}
+					case <-r.Context().Done():
+						return
+					}
+				}
 			case <-r.Context().Done():
 			}
 		}),
@@ -282,7 +328,55 @@ func (s *servers) handle(dispatch quickjs.Value, ex *exchange) {
 		answered = true
 		ex.answer <- s.readReply(res)
 	}
-	if _, err := dispatch.Call(req, done); err != nil {
+	// sink is the rest of an answer that is still being made: push hands over
+	// one piece and says when the connection has taken it, finish says there
+	// are no more.
+	finished := false
+	sink := s.rt.NewObject()
+	if err := errors.Join(
+		sink.Set("push", func(chunk quickjs.Value) *quickjs.Promise {
+			p := s.rt.NewPromise()
+			b, ok := chunk.Bytes()
+			if !ok {
+				p.RejectError(errors.New("a response body is made of bytes"))
+				return p
+			}
+			if finished {
+				p.RejectError(errors.New("this answer has already finished"))
+				return p
+			}
+			// The bytes are copied because what the script holds is the
+			// script's, and the connection reads them on another goroutine.
+			data := append([]byte(nil), b...)
+			loop := s.cfg.Loop
+			loop.Begin()
+			go func() {
+				defer loop.Done()
+				select {
+				case ex.chunks <- data:
+					loop.Post(func() { p.Resolve(nil) })
+				case <-ex.gone:
+					loop.Post(func() {
+						p.RejectError(errors.New("the client stopped listening"))
+					})
+				}
+			}()
+			return p
+		}),
+		sink.Set("finish", func(failed quickjs.Value) {
+			if finished {
+				return
+			}
+			finished = true
+			ex.failed = failed.Bool()
+			close(ex.chunks)
+		}),
+	); err != nil {
+		ex.answer <- &reply{err: err}
+		return
+	}
+
+	if _, err := dispatch.Call(req, done, sink); err != nil {
 		if !answered {
 			answered = true
 			ex.answer <- &reply{err: err}
@@ -309,6 +403,10 @@ func (s *servers) readReply(res quickjs.Value) *reply {
 			value, _ := pair.Index(1)
 			out.headers = append(out.headers, [2]string{name.String(), value.String()})
 		}
+	}
+	if streaming, err := res.Get("streaming"); err == nil && streaming.Bool() {
+		out.streaming = true
+		return out
 	}
 	if body, err := res.Get("body"); err == nil && !body.IsNullish() {
 		if b, ok := body.Bytes(); ok {
@@ -361,7 +459,7 @@ const serveJS = `(function (host) {
       throw new TypeError("serve needs a function to handle requests");
     }
 
-    const server = host.listen(options, (raw, done) => {
+    const server = host.listen(options, (raw, done, sink) => {
       // Each request is answered on its own: a handler that throws or returns
       // nothing useful becomes a 500 rather than a connection that hangs.
       (async () => {
@@ -375,11 +473,29 @@ const serveJS = `(function (host) {
           if (!(response instanceof Response)) {
             throw new TypeError("the handler did not answer with a Response");
           }
-          const body = new Uint8Array(await response.arrayBuffer());
+          const headers = [...response.headers].map(([k, v]) => [k, v]);
+          const body = response.body;
+          if (body && typeof body.getReader === "function" && response._bytes === undefined) {
+            // An answer that is still being made goes out as it is made: the
+            // status and headers first, then each piece as the connection
+            // takes it.
+            done({status: response.status, headers, streaming: true});
+            try {
+              for await (const chunk of body) await sink.push(chunk);
+            } catch (e) {
+              // The answer stopped part way through, and the client is told
+              // so: the status went out long ago, so this is the only way
+              // left to say that what it has is not the whole of it.
+              sink.finish(true);
+              throw e;
+            }
+            sink.finish(false);
+            return;
+          }
           done({
             status: response.status,
-            headers: [...response.headers].map(([k, v]) => [k, v]),
-            body,
+            headers,
+            body: new Uint8Array(await response.arrayBuffer()),
           });
         } catch (e) {
           if (typeof options.onError === "function") {

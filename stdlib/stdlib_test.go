@@ -1628,3 +1628,72 @@ func TestFetchBodyLimit(t *testing.T) {
 		t.Errorf("out = %q, want the body cut off at the limit", out)
 	}
 }
+
+// A handler that answers with a stream is answering as it goes: the client sees
+// the first piece before the handler has produced the second. If the answer
+// were gathered first this deadlocks, which is the point of the test.
+func TestServeStreamsTheAnswer(t *testing.T) {
+	out, errOut := run(t, stdlib.Config{
+		Fetch: &stdlib.Fetch{},
+		Serve: &stdlib.Serve{Allow: func(string) error { return nil }},
+	}, `
+		;(async () => {
+			const enc = new TextEncoder(), dec = new TextDecoder()
+			let clientHasRead
+			const read = new Promise(resolve => { clientHasRead = resolve })
+
+			const server = serve({port: 0}, () => new Response(new ReadableStream({
+				async start(controller) {
+					controller.enqueue(enc.encode("first "))
+					// Nothing more is made until the client has taken that.
+					await read
+					controller.enqueue(enc.encode("second"))
+					controller.close()
+				},
+			}), {headers: {"content-type": "text/plain"}}))
+
+			const res = await fetch(server.url)
+			console.log(res.headers.get("content-type"))
+			const reader = res.body.getReader()
+			const a = await reader.read()
+			clientHasRead()
+			const b = await reader.read()
+			const c = await reader.read()
+			console.log(dec.decode(a.value) + dec.decode(b.value), c.done)
+
+			// A handler that fails part way through breaks the connection, so
+			// that the client can tell a short answer from a whole one.
+			let clientHasSome
+			const some = new Promise(resolve => { clientHasSome = resolve })
+			const broken = serve({port: 0}, () => new Response(new ReadableStream({
+				async start(controller) {
+					controller.enqueue(enc.encode("partial"))
+					await some
+					controller.error(new Error("the source gave up"))
+				},
+			})))
+			const half = await fetch(broken.url)
+			const halfReader = half.body.getReader()
+			console.log("received:", dec.decode((await halfReader.read()).value))
+			clientHasSome()
+			try {
+				const more = await halfReader.read()
+				console.log("ended tidily:", more.done)
+			} catch (e) {
+				console.log("cut off")
+			}
+
+			server.close()
+			broken.close()
+		})()
+	`)
+	want := strings.Join([]string{
+		"text/plain",
+		"first second true",
+		"received: partial",
+		"cut off",
+	}, "\n")
+	if out != want {
+		t.Errorf("streamed answer =\n%s\nwant\n%s\nstderr: %s", out, want, errOut)
+	}
+}
