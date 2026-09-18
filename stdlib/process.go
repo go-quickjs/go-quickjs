@@ -148,6 +148,31 @@ func Processes(rt *quickjs.Runtime, cfg *Process) error {
 		return err
 	}
 
+	// The event interface a node program expects, as far as it means anything
+	// here: "exit" is called when the host says the program is ending, and
+	// "unhandledRejection" when a promise nobody took is rejected. Anything
+	// else is remembered and never emitted, which is better than refusing to
+	// register it.
+	events, err := evalWithHost(rt, "<process-events>", processEventsJS, p)
+	if err != nil {
+		return err
+	}
+	if err := p.Set("on", mustGet(events, "on")); err != nil {
+		return err
+	}
+	for _, name := range []string{"once", "off", "removeListener", "emit", "listeners"} {
+		if err := p.Set(name, mustGet(events, name)); err != nil {
+			return err
+		}
+	}
+	rt.OnUnhandledRejection(func(reason quickjs.Value) {
+		emit, err := p.Get("emit")
+		if err != nil || !emit.IsFunction() {
+			return
+		}
+		emit.CallWithThis(p, "unhandledRejection", reason)
+	})
+
 	if err := rt.Set("process", p); err != nil {
 		return err
 	}
@@ -227,3 +252,47 @@ func goosToPlatform(goos string) string {
 		return strings.ToLower(goos)
 	}
 }
+
+// mustGet reads a property that the source above certainly defines.
+func mustGet(o quickjs.Value, name string) quickjs.Value {
+	v, _ := o.Get(name)
+	return v
+}
+
+// processEventsJS is the event interface of the process object.
+const processEventsJS = `(function (process) {
+  "use strict";
+  const listeners = new Map();
+  const add = (name, fn, once) => {
+    if (typeof fn !== "function") throw new TypeError("the listener must be a function");
+    const list = listeners.get(name) || [];
+    list.push({fn, once});
+    listeners.set(name, list);
+    return process;
+  };
+  return {
+    on: (name, fn) => add(String(name), fn, false),
+    once: (name, fn) => add(String(name), fn, true),
+    off: remove,
+    removeListener: remove,
+    listeners: (name) => (listeners.get(String(name)) || []).map(l => l.fn),
+    emit(name, ...args) {
+      const list = listeners.get(String(name));
+      if (!list || list.length === 0) return false;
+      for (const l of list.slice()) {
+        if (l.once) remove(name, l.fn);
+        l.fn.apply(process, args);
+      }
+      return true;
+    },
+  };
+
+  function remove(name, fn) {
+    const list = listeners.get(String(name));
+    if (list) {
+      const at = list.findIndex(l => l.fn === fn);
+      if (at >= 0) list.splice(at, 1);
+    }
+    return process;
+  }
+})`

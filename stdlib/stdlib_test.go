@@ -836,3 +836,182 @@ func TestBuffer(t *testing.T) {
 		t.Errorf("buffer output =\n%s\nwant\n%s", out, want)
 	}
 }
+
+func TestServe(t *testing.T) {
+	out, errOut := run(t, stdlib.Config{
+		Fetch: &stdlib.Fetch{},
+		Serve: &stdlib.Serve{Allow: func(string) error { return nil }},
+	}, `
+		;(async () => {
+			const server = serve({port: 0}, async (req) => {
+				const {pathname, searchParams} = new URL(req.url)
+				switch (pathname) {
+					case "/hello": return new Response("hello " + searchParams.get("who"))
+					case "/echo": return new Response(await req.text(), {status: 201})
+					case "/json": return Response.json({ok: true})
+					case "/headers": return new Response(req.headers.get("x-sent"), {
+						headers: {"x-answered": "yes"},
+					})
+					case "/boom": throw new Error("the handler exploded")
+				}
+				return new Response("nope", {status: 404})
+			})
+			const base = server.url
+
+			console.log(await (await fetch(base + "/hello?who=world")).text())
+
+			const echoed = await fetch(base + "/echo", {method: "POST", body: "sent up"})
+			console.log(echoed.status, await echoed.text())
+
+			const json = await (await fetch(base + "/json")).json()
+			console.log(json.ok)
+
+			const headed = await fetch(base + "/headers", {headers: {"x-sent": "value"}})
+			console.log(await headed.text(), headed.headers.get("x-answered"))
+
+			console.log((await fetch(base + "/missing")).status)
+			console.log((await fetch(base + "/boom")).status)
+
+			server.close()
+		})()
+	`)
+	want := strings.Join([]string{
+		"hello world",
+		"201 sent up",
+		"true",
+		"value yes",
+		"404",
+		"500",
+	}, "\n")
+	if out != want {
+		t.Errorf("serve output =\n%s\nwant\n%s", out, want)
+	}
+	// The handler's failure is reported rather than swallowed.
+	if !strings.Contains(errOut, "the handler exploded") {
+		t.Errorf("stderr = %q, want the handler's error", errOut)
+	}
+}
+
+// A server holds the loop open, so a program whose last act is to listen does
+// not exit -- and closing it lets the loop finish.
+func TestServeHoldsTheLoop(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	var out bytes.Buffer
+	loop := stdlib.NewLoop(rt)
+	if err := stdlib.Install(rt, stdlib.Config{
+		Stdout: &out, Loop: loop,
+		Serve: &stdlib.Serve{Allow: func(string) error { return nil }},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.Eval(`
+		const server = serve({port: 0}, () => new Response("x"))
+		globalThis.stop = () => server.close()
+		setTimeout(() => { console.log("still running"); stop() }, 20)
+	`); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := loop.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(out.String()); got != "still running" {
+		t.Errorf("out = %q", got)
+	}
+}
+
+// Listening is refused unless the host allows it, and the refusal says so.
+func TestServeNeedsPermission(t *testing.T) {
+	out, _ := run(t, stdlib.Config{
+		Serve: &stdlib.Serve{Allow: func(addr string) error {
+			return errors.New("not on " + addr)
+		}},
+	}, `
+		try { serve({port: 0}, () => new Response("x")) }
+		catch (e) { console.log("refused:", e.message) }
+	`)
+	if !strings.HasPrefix(out, "refused: not on ") {
+		t.Errorf("out = %q", out)
+	}
+}
+
+func TestCommands(t *testing.T) {
+	out, _ := run(t, stdlib.Config{Run: &stdlib.Run{
+		Allow: func(name string, args []string) error {
+			if name != "echo" && name != "/bin/sh" && name != "false" {
+				return errors.New(name + " is not allowed")
+			}
+			return nil
+		},
+	}}, `
+		;(async () => {
+			const cp = (await import("child_process")).default
+			console.log(cp.execFileSync("echo", ["from a program"]).trim())
+
+			const {stdout} = await cp.execFile("echo", ["awaited"])
+			console.log(stdout.trim())
+
+			const res = cp.spawnSync("/bin/sh", ["-c", "echo out; echo err 1>&2; exit 3"])
+			console.log(res.status, res.stdout.trim(), res.stderr.trim())
+
+			try { cp.execFileSync("false") } catch (e) { console.log("failed:", e.message) }
+			try { cp.execFileSync("rm", ["-rf", "/"]) } catch (e) { console.log(e.message) }
+		})()
+	`)
+	want := strings.Join([]string{
+		"from a program",
+		"awaited",
+		"3 out err",
+		"failed: false exited with 1",
+		"rm is not allowed",
+	}, "\n")
+	if out != want {
+		t.Errorf("child_process output =\n%s\nwant\n%s", out, want)
+	}
+}
+
+// Without an Allow there is nothing a script may start, which is what a zero
+// value means.
+func TestCommandsRefusedByDefault(t *testing.T) {
+	out, _ := run(t, stdlib.Config{Run: &stdlib.Run{}}, `
+		import("child_process").then(({default: cp}) => {
+			try { cp.execFileSync("echo", ["hi"]) } catch (e) { console.log(e.message) }
+		})
+	`)
+	if want := "running programs is not allowed"; out != want {
+		t.Errorf("out = %q, want %q", out, want)
+	}
+}
+
+// A program is given the environment the host chose, not the one this process
+// happens to have.
+func TestCommandsEnvironment(t *testing.T) {
+	t.Setenv("QJS_SECRET", "do not pass this on")
+	out, _ := run(t, stdlib.Config{Run: &stdlib.Run{
+		Env:   map[string]string{"GIVEN": "yes"},
+		Allow: func(string, []string) error { return nil },
+	}}, `
+		import("child_process").then(({default: cp}) => {
+			console.log(cp.execFileSync("/bin/sh", ["-c", "echo [$GIVEN][$QJS_SECRET]"]).trim())
+		})
+	`)
+	if want := "[yes][]"; out != want {
+		t.Errorf("out = %q, want %q", out, want)
+	}
+}
+
+func TestProcessEvents(t *testing.T) {
+	out, _ := run(t, stdlib.Config{Process: &stdlib.Process{}}, `
+		process.on("custom", (a, b) => console.log("heard", a, b))
+		console.log(process.emit("custom", 1, 2))
+		console.log(process.emit("nobody-listening"))
+		process.on("unhandledRejection", (reason) => console.log("rejected:", reason.message))
+		Promise.reject(new Error("nobody caught me"))
+	`)
+	want := "heard 1 2\ntrue\nfalse\nrejected: nobody caught me"
+	if out != want {
+		t.Errorf("process events output =\n%s\nwant\n%s", out, want)
+	}
+}
