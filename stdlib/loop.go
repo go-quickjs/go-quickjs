@@ -49,6 +49,11 @@ type Loop struct {
 	// tasks carries work from other goroutines. It is buffered so that a
 	// finishing request does not block on a loop that is busy.
 	tasks chan func()
+	// wake is how a loop that is waiting is told to look again. Work that
+	// finishes without posting anything -- a socket closing, a request being
+	// cancelled -- changes nothing the loop is watching, and a loop waiting on
+	// a queue that will stay empty would wait for ever.
+	wake chan struct{}
 
 	mu sync.Mutex
 	// pending counts the host operations that have started and not finished,
@@ -63,7 +68,7 @@ type Loop struct {
 
 // NewLoop returns a loop for a runtime.
 func NewLoop(rt *quickjs.Runtime) *Loop {
-	return &Loop{rt: rt, tasks: make(chan func(), 64)}
+	return &Loop{rt: rt, tasks: make(chan func(), 64), wake: make(chan struct{}, 1)}
 }
 
 // Post hands work to the loop from another goroutine.
@@ -116,7 +121,22 @@ func (l *Loop) Done() {
 	if l.pending > 0 {
 		l.pending--
 	}
+	empty := l.pending == 0
 	l.mu.Unlock()
+	if empty {
+		// The last thing the loop was waiting for has finished, and it may
+		// have nothing else to do. Whatever it is waiting on, it is told to
+		// look again rather than waiting for work that is not coming.
+		l.nudge()
+	}
+}
+
+// nudge wakes a loop that is waiting, if it is.
+func (l *Loop) nudge() {
+	select {
+	case l.wake <- struct{}{}:
+	default:
+	}
 }
 
 // Pending reports whether any host operation is outstanding.
@@ -133,6 +153,7 @@ func (l *Loop) Close() {
 	l.mu.Lock()
 	l.closed = true
 	l.mu.Unlock()
+	l.nudge()
 }
 
 // Run works until there is nothing left to do.
@@ -181,6 +202,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		case fn := <-l.tasks:
 			fn()
 			l.ran()
+		case <-l.wake:
 		case <-wait:
 		case <-ctx.Done():
 			return ctx.Err()
@@ -220,6 +242,7 @@ func (l *Loop) RunUntil(ctx context.Context, done <-chan struct{}) error {
 		case fn := <-l.tasks:
 			fn()
 			l.ran()
+		case <-l.wake:
 		case <-wait:
 		case <-done:
 			return l.rt.RunJobs()

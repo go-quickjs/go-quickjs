@@ -31,7 +31,9 @@ type Config struct {
 	// OS describes the machine. Nil installs nothing.
 	OS *OSInfo
 
-	// Fetch gives the script the network. Nil means none.
+	// Fetch gives the script the network. Nil means none -- though Headers,
+	// Request and Response are installed either way, since they are data and
+	// a server is written in terms of them.
 	Fetch *Fetch
 
 	// Run lets the script start programs, which is the largest capability
@@ -41,6 +43,10 @@ type Config struct {
 	// Serve lets the script listen for HTTP requests, which is the other half
 	// of network access and not the same half. Nil means none.
 	Serve *Serve
+
+	// Sockets gives the script WebSocket, and the means to accept one where
+	// Serve is set too. Nil means none.
+	Sockets *WebSockets
 
 	// Random is where crypto draws its entropy from, both the web's and the
 	// crypto module's. Nil uses the system source, which is what a program
@@ -144,12 +150,31 @@ func Install(rt *quickjs.Runtime, cfg Config) error {
 		if err := Network(rt, cfg.Fetch); err != nil {
 			return err
 		}
+	} else if !cfg.NoWebAPIs {
+		// Headers, Request and Response are data rather than access, and a
+		// runtime that serves needs them whether or not it may fetch.
+		if err := Network(rt, nil); err != nil {
+			return err
+		}
 	}
 	if cfg.Serve != nil {
 		if cfg.Serve.Loop == nil {
 			cfg.Serve.Loop = cfg.Loop
 		}
 		if err := Servers(rt, cfg.Serve); err != nil {
+			return err
+		}
+	}
+	if cfg.Sockets != nil {
+		if cfg.Sockets.Loop == nil {
+			cfg.Sockets.Loop = cfg.Loop
+		}
+		// A socket is accepted on the server the same configuration set up,
+		// which is the only one there is to accept it on.
+		if cfg.Sockets.Serve == nil {
+			cfg.Sockets.Serve = cfg.Serve
+		}
+		if err := Sockets(rt, cfg.Sockets); err != nil {
 			return err
 		}
 	}

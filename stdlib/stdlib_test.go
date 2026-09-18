@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1837,5 +1838,122 @@ func TestFormDataAndBlobs(t *testing.T) {
 	}, "\n")
 	if out != want {
 		t.Errorf("form data =\n%s\nwant\n%s\nstderr: %s", out, want, errOut)
+	}
+}
+
+// A socket is a conversation: the runtime opens one, answers one, and both
+// ends see what the other said in the order it was said.
+func TestWebSockets(t *testing.T) {
+	out, errOut := run(t, stdlib.Config{
+		Serve:   &stdlib.Serve{Allow: func(string) error { return nil }},
+		Sockets: &stdlib.WebSockets{Allow: func(*url.URL) error { return nil }},
+	}, `
+		;(async () => {
+			const server = serve({port: 0}, (request) => {
+				if (new URL(request.url).pathname !== "/chat") {
+					return new Response("not here", {status: 404})
+				}
+				const {socket, response} = upgradeWebSocket(request)
+				socket.onopen = () => socket.send("welcome")
+				socket.onmessage = (e) => {
+					if (typeof e.data !== "string") {
+						socket.send(new Uint8Array([...new Uint8Array(e.data)].reverse()))
+						return
+					}
+					if (e.data === "bye") { socket.close(4001, "as you asked"); return }
+					socket.send("you said: " + e.data)
+				}
+				socket.onclose = (e) => console.log("the server saw", e.code)
+				return response
+			})
+
+			const said = []
+			const ws = new WebSocket(server.url.replace("http", "ws") + "/chat")
+			ws.addEventListener("open", () => {
+				console.log("open", ws.readyState === WebSocket.OPEN)
+				ws.send("hello")
+				ws.send(new Uint8Array([1, 2, 3]))
+			})
+			ws.addEventListener("message", (e) => {
+				said.push(typeof e.data === "string"
+					? e.data : [...new Uint8Array(e.data)].join("-"))
+				if (said.length === 3) ws.send("bye")
+			})
+			await new Promise(resolve => ws.addEventListener("close", (e) => {
+				console.log("closed", e.code, JSON.stringify(e.reason), e.wasClean)
+				console.log(said.join(" | "))
+				resolve()
+			}))
+			server.close()
+		})()
+	`)
+	want := strings.Join([]string{
+		"open true",
+		"the server saw 4001",
+		"closed 4001 \"as you asked\" true",
+		"welcome | you said: hello | 3-2-1",
+	}, "\n")
+	if out != want {
+		t.Errorf("sockets =\n%s\nwant\n%s\nstderr: %s", out, want, errOut)
+	}
+}
+
+// Opening a socket is network access, and is refused like the rest of it.
+func TestWebSocketsNeedPermission(t *testing.T) {
+	out, _ := run(t, stdlib.Config{
+		Sockets: &stdlib.WebSockets{Allow: func(target *url.URL) error {
+			return errors.New("not to " + target.Host)
+		}},
+	}, `
+		try { new WebSocket("ws://example.com/feed") }
+		catch (e) { console.log(e.message) }
+		try { new WebSocket("http://example.com/feed") }
+		catch (e) { console.log(e.message) }
+	`)
+	want := "not to example.com\na socket needs a ws: or wss: URL, not http:"
+	if out != want {
+		t.Errorf("out =\n%s\nwant\n%s", out, want)
+	}
+}
+
+// A socket that cannot be opened says so through the events, since by then the
+// constructor has long returned.
+func TestWebSocketFailsToOpen(t *testing.T) {
+	out, _ := run(t, stdlib.Config{
+		Sockets: &stdlib.WebSockets{Allow: func(*url.URL) error { return nil }},
+	}, `
+		const ws = new WebSocket("ws://127.0.0.1:1/nothing")
+		ws.onerror = () => console.log("error event")
+		ws.onclose = (e) => console.log("closed", e.code, e.wasClean, ws.readyState)
+	`)
+	want := "error event\nclosed 1006 false 3"
+	if out != want {
+		t.Errorf("out = %q, want %q", out, want)
+	}
+}
+
+// A request that did not ask for a socket cannot be turned into one.
+func TestWebSocketUpgradeNeedsAnAsk(t *testing.T) {
+	out, _ := run(t, stdlib.Config{
+		Fetch:   &stdlib.Fetch{},
+		Serve:   &stdlib.Serve{Allow: func(string) error { return nil }},
+		Sockets: &stdlib.WebSockets{Allow: func(*url.URL) error { return nil }},
+	}, `
+		;(async () => {
+			const server = serve({port: 0}, (request) => {
+				try {
+					const {response} = upgradeWebSocket(request)
+					return response
+				} catch (e) {
+					return new Response(e.message, {status: 400})
+				}
+			})
+			const res = await fetch(server.url)
+			console.log(res.status, await res.text())
+			server.close()
+		})()
+	`)
+	if want := "400 this request did not ask for a socket"; out != want {
+		t.Errorf("out = %q, want %q", out, want)
 	}
 }

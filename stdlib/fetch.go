@@ -48,13 +48,19 @@ type Fetch struct {
 	MaxBodyBytes int64
 }
 
-// Network installs fetch, Headers, Request and Response.
+// Network installs Headers, Request and Response, and fetch.
+//
+// The three types are data -- a Request is a method, a URL and some bytes --
+// so they need no capability and a nil cfg installs those alone, which is what
+// a runtime that serves but may not fetch wants. fetch itself reaches the
+// network, and is installed only when a host has said what it may reach.
 //
 // The shape is the web's: fetch returns a promise for a Response, whose text,
 // json, arrayBuffer and bytes methods return promises of their own, and whose
 // body is a stream read as the answer arrives. What is missing is the redirect
 // and cache options, which the host's client decides.
 func Network(rt *quickjs.Runtime, cfg *Fetch) error {
+	typesOnly := cfg == nil
 	if cfg == nil {
 		cfg = &Fetch{}
 	}
@@ -70,6 +76,10 @@ func Network(rt *quickjs.Runtime, cfg *Fetch) error {
 	host := rt.NewObject()
 	if err := host.Set("send", func(r *quickjs.Runtime, req quickjs.Value, register quickjs.Value) *quickjs.Promise {
 		p := r.NewPromise()
+		if typesOnly {
+			p.RejectError(errors.New("network access is not allowed"))
+			return p
+		}
 		// Everything the request needs is read out of the runtime here, on the
 		// goroutine that owns it, so that the sending has nothing to do with
 		// JavaScript values at all.
@@ -111,7 +121,11 @@ func Network(rt *quickjs.Runtime, cfg *Fetch) error {
 	if err != nil {
 		return err
 	}
-	for _, name := range []string{"fetch", "Headers", "Request", "Response"} {
+	names := []string{"Headers", "Request", "Response"}
+	if !typesOnly {
+		names = append(names, "fetch")
+	}
+	for _, name := range names {
 		v, err := api.Get(name)
 		if err != nil {
 			return err

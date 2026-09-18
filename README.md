@@ -150,6 +150,17 @@ $ qjs -e 'fetch("https://example.com")'
 uncaught (in promise) Error: network access is not allowed: run qjs with --allow-net
 ```
 
+Sockets work both ways, and the protocol — its frames, its fragments, its pings
+— is handled underneath, so what a script sees is what the other end said:
+
+```js
+serve({port: 8080}, (request) => {
+  const {socket, response} = upgradeWebSocket(request)
+  socket.onmessage = (e) => socket.send("you said " + e.data)
+  return response
+})
+```
+
 A program that serves is a program, so `qjs` can be the whole of a small
 service:
 
@@ -299,6 +310,7 @@ err := stdlib.Install(rt, stdlib.Config{
     Process: &stdlib.Process{Args: os.Args, Env: nil},
     Fetch:   &stdlib.Fetch{Allow: onlyMyAPI},
     Serve:   &stdlib.Serve{Allow: onlyLocalhost},
+    Sockets: &stdlib.WebSockets{Allow: onlyMyFeed},
 })
 
 rt.Eval(src)
@@ -314,6 +326,7 @@ loop.Run(ctx)     // timers, and work that finished on other goroutines
 | `OS` | the `os` module |
 | `Fetch` | `fetch`, `Headers`, `Request`, `Response` — bodies read as they arrive |
 | `Serve` | `serve`, the `http` module — an HTTP server whose handler is `(Request) => Response` |
+| `Sockets` | `WebSocket`, and `upgradeWebSocket` where there is a server to accept one on |
 | `Run` | the `child_process` module: `execFileSync`, `execFile`, `spawnSync`, `exec` |
 
 A root is a boundary: a path that climbs out of it, or a symbolic link that

@@ -1,6 +1,7 @@
 package stdlib
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -34,6 +35,11 @@ type Serve struct {
 	// a server that can be held open for ever.
 	ReadTimeout time.Duration
 	IdleTimeout time.Duration
+
+	// upgrade is set by Sockets when both are installed, and is how a
+	// connection stops being a request and becomes a socket. It is called on
+	// the loop, since what it hands the connection to is script.
+	upgrade func(token string, conn net.Conn, br *bufio.Reader, protocol string)
 }
 
 // Servers installs serve, which starts an HTTP server whose handler is a
@@ -117,7 +123,12 @@ type reply struct {
 	body    []byte
 	// streaming says the body follows on chunks rather than being here.
 	streaming bool
-	err       error
+	// upgrade is the token of a socket the handler means to take the
+	// connection over with, which is an answer of a different kind: there is
+	// no body, and the connection stops being the server's afterwards.
+	upgrade  string
+	protocol string
+	err      error
 }
 
 // listen opens a listener and hands back an object the script can close.
@@ -213,6 +224,11 @@ func (s *servers) listen(opts quickjs.Value, dispatch quickjs.Value) (quickjs.Va
 			case res := <-ex.answer:
 				if res.err != nil {
 					http.Error(w, "the handler failed", http.StatusInternalServerError)
+					return
+				}
+				if res.upgrade != "" {
+					// The handler wants the connection itself, not a reply.
+					s.takeOver(w, r, res)
 					return
 				}
 				header := w.Header()
@@ -384,6 +400,51 @@ func (s *servers) handle(dispatch quickjs.Value, ex *exchange) {
 	}
 }
 
+// takeOver turns a connection into a socket: the handshake is answered by hand,
+// and what is left of the connection is handed to whatever reserved the token.
+//
+// This runs on the connection's own goroutine, so nothing here may touch the
+// runtime; the handing over is posted to the loop like everything else.
+func (s *servers) takeOver(w http.ResponseWriter, r *http.Request, res *reply) {
+	if s.cfg.upgrade == nil {
+		http.Error(w, "this server does not accept sockets", http.StatusNotImplemented)
+		return
+	}
+	key := r.Header.Get("Sec-WebSocket-Key")
+	if key == "" || !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		http.Error(w, "that is not a websocket handshake", http.StatusBadRequest)
+		return
+	}
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "this connection cannot be taken over", http.StatusInternalServerError)
+		return
+	}
+	conn, buffered, err := hijacker.Hijack()
+	if err != nil {
+		http.Error(w, "this connection cannot be taken over", http.StatusInternalServerError)
+		return
+	}
+
+	answer := "HTTP/1.1 101 Switching Protocols\r\n" +
+		"Upgrade: websocket\r\nConnection: Upgrade\r\n" +
+		"Sec-WebSocket-Accept: " + wsAccept(key) + "\r\n"
+	if res.protocol != "" {
+		answer += "Sec-WebSocket-Protocol: " + res.protocol + "\r\n"
+	}
+	answer += "\r\n"
+	if _, err := conn.Write([]byte(answer)); err != nil {
+		conn.Close()
+		return
+	}
+	// The connection has no deadlines from here on: a socket is meant to stay
+	// open, which is the opposite of what a request timeout is for.
+	conn.SetDeadline(time.Time{})
+
+	token, protocol, reader := res.upgrade, res.protocol, buffered.Reader
+	s.cfg.Loop.Post(func() { s.cfg.upgrade(token, conn, reader, protocol) })
+}
+
 // readReply copies what the script answered out of the runtime.
 func (s *servers) readReply(res quickjs.Value) *reply {
 	out := &reply{status: http.StatusOK}
@@ -403,6 +464,13 @@ func (s *servers) readReply(res quickjs.Value) *reply {
 			value, _ := pair.Index(1)
 			out.headers = append(out.headers, [2]string{name.String(), value.String()})
 		}
+	}
+	if token, err := res.Get("upgrade"); err == nil && token.Kind() == quickjs.KindString {
+		out.upgrade = token.String()
+		if protocol, err := res.Get("protocol"); err == nil && protocol.Kind() == quickjs.KindString {
+			out.protocol = protocol.String()
+		}
+		return out
 	}
 	if streaming, err := res.Get("streaming"); err == nil && streaming.Bool() {
 		out.streaming = true
@@ -472,6 +540,13 @@ const serveJS = `(function (host) {
           const response = await handler(request);
           if (!(response instanceof Response)) {
             throw new TypeError("the handler did not answer with a Response");
+          }
+          if (response.upgrade) {
+            // The handler is taking the connection over rather than answering
+            // on it; what goes back is the token the socket is waiting for.
+            done({status: 101, upgrade: response.upgrade,
+                  protocol: response.protocol || ""});
+            return;
           }
           const headers = [...response.headers].map(([k, v]) => [k, v]);
           const body = response.body;

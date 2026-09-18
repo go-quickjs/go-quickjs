@@ -30,6 +30,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime/debug"
@@ -262,6 +263,22 @@ func install(rt *quickjs.Runtime, loop *stdlib.Loop, opts *options, stdin io.Rea
 					"listening on %s is not allowed: pass --allow-net=%s", address, host)
 			},
 		}
+		cfg.Sockets = &stdlib.WebSockets{
+			Loop: loop,
+			Allow: func(target *url.URL) error {
+				if len(allowed) == 1 && allowed[0] == "" {
+					return nil
+				}
+				for _, a := range allowed {
+					if a == target.Host || a == target.Hostname() {
+						return nil
+					}
+				}
+				return fmt.Errorf(
+					"a socket to %s is not allowed: pass --allow-net=%s",
+					target.Host, target.Hostname())
+			},
+		}
 		cfg.Fetch = &stdlib.Fetch{
 			Loop: loop,
 			Allow: func(req *http.Request) error {
@@ -308,6 +325,25 @@ func explainMissing(rt *quickjs.Runtime, opts *options) error {
 		}
 	}
 	if len(opts.allowNet) == 0 {
+		// WebSocket is reached with new, so the stand-in has to be something
+		// that can be constructed: a plain function would complain about the
+		// wrong thing entirely.
+		refusedSocket, err := rt.Eval(`(class WebSocket {
+			constructor() {
+				throw new Error(
+					"opening a socket is not allowed: run qjs with --allow-net")
+			}
+		})`)
+		if err != nil {
+			return err
+		}
+		if err := rt.Set("WebSocket", refusedSocket); err != nil {
+			return err
+		}
+		if err := rt.Set("upgradeWebSocket",
+			refuse("answering a socket", "--allow-net")); err != nil {
+			return err
+		}
 		refuseServe := refuse("listening for requests", "--allow-net")
 		if err := rt.Set("serve", refuseServe); err != nil {
 			return err

@@ -444,3 +444,28 @@ func TestAllowRunList(t *testing.T) {
 		t.Errorf("out = %q", out)
 	}
 }
+
+// A socket needs the same permission the rest of the network does.
+func TestAllowNetSockets(t *testing.T) {
+	code, out, _ := exec(t, "", "-e", `
+		try { new WebSocket("ws://example.com") } catch (e) { console.log(e.message) }
+	`)
+	if code != 0 || !strings.Contains(out, "--allow-net") {
+		t.Errorf("code=%d out=%q, want the flag named", code, out)
+	}
+
+	code, out, errOut := exec(t, "", "--allow-net", "-e", `
+		const server = serve({port: 0}, (request) => {
+			const {socket, response} = upgradeWebSocket(request)
+			socket.onmessage = (e) => { socket.send(e.data.toUpperCase()); socket.close() }
+			return response
+		})
+		const ws = new WebSocket(server.url.replace("http", "ws"))
+		ws.onopen = () => ws.send("quiet")
+		ws.onmessage = (e) => console.log("heard", e.data)
+		ws.onclose = () => server.close()
+	`)
+	if code != 0 || strings.TrimSpace(out) != "heard QUIET" {
+		t.Errorf("code=%d out=%q err=%q", code, out, errOut)
+	}
+}
