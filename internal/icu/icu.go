@@ -84,6 +84,10 @@ type Locale struct {
 	// brackets rather than with a minus. Exponential is the mark that stands
 	// between a number and its exponent.
 	Accounting, Exponential string
+	// Range is what stands between the two ends of a range of numbers, and
+	// DateRange between two dates, which is not always the same mark.
+	// Approximately says a number is not exact.
+	Range, Approximately, DateRange string
 	// Calendar is the one this locale counts years in: "gregory" nearly
 	// everywhere, "buddhist" in Thailand.
 	Calendar string
@@ -101,6 +105,9 @@ type Locale struct {
 	// say than morning and afternoon: Chinese distinguishes the small hours,
 	// the early morning, noon and the evening. Empty where it does not.
 	HourPeriods []string
+	// HourPeriodsNarrow is the same in the shortest form the language writes,
+	// which is usually the same words and now and then a letter.
+	HourPeriodsNarrow []string
 	// Hour12 says whether a time is written on a twelve-hour clock here.
 	Hour12 bool
 
@@ -503,6 +510,16 @@ func decode(tag, blob string) *Locale {
 	l.DecimalNegative, l.PercentNegative = field(11), field(12)
 	l.CurrencyNegative, l.Calendar = field(13), field(14)
 	l.Accounting, l.Exponential = field(15), field(16)
+	l.Range, l.Approximately, l.DateRange = field(17), field(18), field(19)
+	if l.Range == "" {
+		l.Range = "\u2013"
+	}
+	if l.Approximately == "" {
+		l.Approximately = "~"
+	}
+	if l.DateRange == "" {
+		l.DateRange = l.Range
+	}
 	if l.Accounting == "" {
 		l.Accounting = l.CurrencyNegative
 	}
@@ -534,6 +551,11 @@ func decode(tag, blob string) *Locale {
 	l.MonthsAlone, l.MonthsAloneShort = list(8), list(9)
 	if periods := list(10); len(periods) == 24 {
 		l.HourPeriods = periods
+	}
+	if periods := list(11); len(periods) == 24 {
+		l.HourPeriodsNarrow = periods
+	} else {
+		l.HourPeriodsNarrow = l.HourPeriods
 	}
 	if l.MonthsAlone == nil {
 		l.MonthsAlone, l.MonthsAloneShort = l.Months, l.MonthsShort

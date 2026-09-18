@@ -55,6 +55,10 @@ type numberOptions struct {
 	roundingPriority      string
 	roundingIncrement     int
 	trailingZero          string
+
+	// formatFn is the bound function the format getter hands out, kept so that
+	// every ask answers with the same one.
+	formatFn *Object
 }
 
 // numberPiece is one part of a formatted number, in the shape formatToParts
@@ -82,11 +86,29 @@ func piecesText(pieces []numberPiece) string {
 func (o *numberOptions) parts(x float64) []numberPiece {
 	switch {
 	case math.IsNaN(x):
-		return o.wordParts("nan", o.locale.NaN, false, true)
+		return o.valueParts(decimal{}, "nan")
 	case math.IsInf(x, 0):
-		return o.wordParts("infinity", o.locale.Infinity, math.Signbit(x), false)
+		special := "inf"
+		if math.Signbit(x) {
+			special = "-inf"
+		}
+		return o.valueParts(decimal{}, special)
 	}
 	return o.decimalParts(decimalOf(x))
+}
+
+// valueParts writes whatever was handed over, which may not be a number that
+// can be written as digits.
+func (o *numberOptions) valueParts(d decimal, special string) []numberPiece {
+	switch special {
+	case "nan":
+		return o.wordParts("nan", o.locale.NaN, false, true)
+	case "inf":
+		return o.wordParts("infinity", o.locale.Infinity, false, false)
+	case "-inf":
+		return o.wordParts("infinity", o.locale.Infinity, true, false)
+	}
+	return o.decimalParts(d)
 }
 
 // wordParts writes the numbers that are not written as digits. They take no

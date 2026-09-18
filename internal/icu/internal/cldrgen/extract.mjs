@@ -236,6 +236,18 @@ function numberData(locale) {
     // a pattern of its own and not a rule that can be applied to the other.
     accounting: pattern(
       {style: "currency", currency: "USD", currencySign: "accounting"}, -1234.5),
+    // What stands between the two ends of a range, and the mark that says a
+    // number is only approximate: both are the language's own.
+    range: (() => {
+      const parts = new Intl.NumberFormat(locale).formatRangeToParts(1, 5);
+      const between = parts.filter(p => p.source === "shared" && p.type === "literal");
+      return between.length > 0 ? between[0].value : "\u2013";
+    })(),
+    approximately: (() => {
+      const parts = new Intl.NumberFormat(locale).formatRangeToParts(3, 3);
+      const sign = parts.find(p => p.type === "approximatelySign");
+      return sign ? sign.value : "~";
+    })(),
     // The mark that stands between a number and its exponent: E nearly
     // everywhere, and a word of its own in a few languages.
     exponential: (() => {
@@ -646,7 +658,23 @@ function extract(locale) {
     return found ? plain(found.value) : "";
   });
   const distinct = new Set(byHour.filter(name => name !== ""));
-  const hourPeriods = distinct.size > 2 ? byHour : [];
+  // Asked for outright, rather than read off a time: the languages that name
+  // the parts of the day name them whether or not their clock shows one.
+  const periodsAt = (width) => {
+    const f = new Intl.DateTimeFormat(locale, {dayPeriod: width, timeZone: "UTC"});
+    return Array.from({length: 24}, (_, hour) =>
+      plain(f.format(new Date(Date.UTC(2024, 0, 5, hour, 4)))));
+  };
+  let hourPeriods = periodsAt("long");
+  if (new Set(hourPeriods).size <= 2) {
+    // A language that says no more than morning and afternoon is left to the
+    // two names it already has.
+    hourPeriods = distinct.size > 2 ? byHour : [];
+  }
+  let hourPeriodsNarrow = periodsAt("narrow");
+  if (hourPeriodsNarrow.join("\u0000") === hourPeriods.join("\u0000")) {
+    hourPeriodsNarrow = [];
+  }
   const era = (date) => new Intl.DateTimeFormat(locale, {era: "short", year: "numeric", timeZone: "UTC"})
     .formatToParts(date).filter(p => p.type === "era").map(p => p.value)[0] || "";
 
@@ -656,9 +684,20 @@ function extract(locale) {
     calendar: resolved.calendar,
     hour12,
     names,
-    dayPeriods, hourPeriods,
+    dayPeriods, hourPeriods, hourPeriodsNarrow,
     eras: [era(new Date(Date.UTC(-500, 0, 1))), era(SAMPLE)],
     dates, times, both, glue, skeletons,
+    // What stands between two dates of a range, which is not always what
+    // stands between two numbers.
+    dateRange: (() => {
+      const parts = new Intl.DateTimeFormat(locale, {dateStyle: "medium", timeZone: "UTC"})
+        .formatRangeToParts(new Date(Date.UTC(2024, 0, 1)), new Date(Date.UTC(2024, 0, 5)));
+      const at = parts.findIndex(p => p.source === "endRange");
+      for (let i = at - 1; i >= 0; i--) {
+        if (parts[i].type === "literal") return plain(parts[i].value);
+      }
+      return "\u2009\u2013\u2009";
+    })(),
     numbers: numberData(locale),
     compact: compactForms(locale),
     currencies: currencySymbols(locale),

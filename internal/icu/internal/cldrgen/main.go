@@ -49,14 +49,16 @@ type extracted struct {
 
 // localeData is one locale as it was read.
 type localeData struct {
-	Tag         string `json:"tag"`
-	Numbering   string `json:"numbering"`
-	Calendar    string `json:"calendar"`
-	Hour12      bool   `json:"hour12"`
-	DayPeriods  []string
-	HourPeriods []string
-	Eras        []string
-	Names       struct {
+	Tag               string `json:"tag"`
+	Numbering         string `json:"numbering"`
+	Calendar          string `json:"calendar"`
+	Hour12            bool   `json:"hour12"`
+	DayPeriods        []string
+	DateRange         string `json:"dateRange"`
+	HourPeriods       []string
+	HourPeriodsNarrow []string `json:"hourPeriodsNarrow"`
+	Eras              []string
+	Names             struct {
 		Months, MonthsShort, MonthsNarrow []string
 		MonthsAlone, MonthsAloneShort     []string
 		Days, DaysShort, DaysNarrow       []string
@@ -76,6 +78,8 @@ type localeData struct {
 		PercentNegative                    string `json:"percentNegative"`
 		CurrencyNegative                   string `json:"currencyNegative"`
 		Accounting                         string `json:"accounting"`
+		Range                              string `json:"range"`
+		Approximately                      string `json:"approximately"`
 		Exponential                        string `json:"exponential"`
 		MinGrouping                        int    `json:"minGrouping"`
 	} `json:"numbers"`
@@ -802,6 +806,7 @@ func encode(l *localeData) string {
 		l.Numbers.DecimalNegative, l.Numbers.PercentNegative,
 		l.Numbers.CurrencyNegative, l.Calendar,
 		l.Numbers.Accounting, l.Numbers.Exponential,
+		l.Numbers.Range, l.Numbers.Approximately, l.DateRange,
 	}, fieldSep)
 
 	names := strings.Join([]string{
@@ -816,6 +821,7 @@ func encode(l *localeData) string {
 		strings.Join(l.Names.MonthsAlone, itemSep),
 		strings.Join(l.Names.MonthsAloneShort, itemSep),
 		strings.Join(l.HourPeriods, itemSep),
+		strings.Join(l.HourPeriodsNarrow, itemSep),
 	}, fieldSep)
 
 	widths := []string{"full", "long", "medium", "short"}

@@ -345,6 +345,60 @@ func supportedSetting(key, value string) bool {
 	return false
 }
 
+// numberArgument reads the value to format, which is not always a number: a
+// string is taken as the exact decimal it is written as rather than as the
+// nearest number a machine can hold, so that a value too long for a double
+// still comes out right.
+func (r *Runtime) numberArgument(v Value) (decimal, string, error) {
+	if v.IsBigInt() {
+		if d, ok := parseDecimal(v.BigInt().V.String()); ok {
+			return d, "", nil
+		}
+	}
+	prim, err := r.toPrimitive(v, hintNumber)
+	if err != nil {
+		return decimal{}, "", err
+	}
+	if prim.IsString() {
+		text := strings.TrimSpace(prim.String().Go())
+		switch text {
+		case "":
+			return decimal{}, "", nil
+		case "Infinity", "+Infinity":
+			return decimal{}, "inf", nil
+		case "-Infinity":
+			return decimal{}, "-inf", nil
+		}
+		if d, ok := parseDecimal(text); ok {
+			return d, "", nil
+		}
+	}
+	x, err := r.toNumber(prim)
+	if err != nil {
+		return decimal{}, "", err
+	}
+	switch {
+	case math.IsNaN(x):
+		return decimal{}, "nan", nil
+	case math.IsInf(x, 1):
+		return decimal{}, "inf", nil
+	case math.IsInf(x, -1):
+		return decimal{}, "-inf", nil
+	}
+	return decimalOf(x), "", nil
+}
+
+// bound hands out the function a format getter answers with. It is made once
+// and kept, since a script may compare the one it got with the one it gets
+// next, and it carries no name, which is what the standard says of a function
+// that was never written down anywhere.
+func (r *Runtime) bound(cache **Object, length int, fn NativeFunc) Value {
+	if *cache == nil {
+		*cache = r.newNativeFunc("", length, fn)
+	}
+	return Obj(*cache)
+}
+
 // typeOption reads an option whose value is a setting a tag could have asked
 // for, which has a shape of its own: words of three to eight characters.
 func (r *Runtime) typeOption(o *Object, name string) (string, error) {
@@ -374,6 +428,19 @@ func boolWord(b bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+// optionsFromArgument is the options argument where nothing may stand in for
+// an object: undefined means no options, and anything else must be one.
+func (r *Runtime) optionsFromArgument(v Value) (*Object, error) {
+	if v.IsUndefined() {
+		return newObject(nil, ClassObject), nil
+	}
+	o := v.Object()
+	if o == nil {
+		return nil, r.throwTypeError("the options are an object or nothing")
+	}
+	return o, nil
 }
 
 // optionsObject turns the options argument into something to read from.
@@ -485,16 +552,34 @@ func (r *Runtime) initNumberFormat(intl *Object) {
 	r.defToStringTag(proto, "Intl.NumberFormat")
 	r.defSupportedLocalesOf(ctor)
 
-	r.defMethod(proto, "format", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	// format is a getter for a function bound to this formatter, because it is
+	// nearly always handed straight to a map.
+	r.defGetter(proto, "format", func(rt *Runtime, this Value, args []Value) (Value, error) {
 		o, err := rt.numberFormatOf(this)
 		if err != nil {
 			return Undefined, err
 		}
-		x, err := rt.toNumber(arg(args, 0))
+		return rt.bound(&o.formatFn, 1, func(rt *Runtime, _ Value, args []Value) (Value, error) {
+			d, special, err := rt.numberArgument(arg(args, 0))
+			if err != nil {
+				return Undefined, err
+			}
+			return Str(NewString(piecesText(o.valueParts(d, special)))), nil
+		}), nil
+	})
+	r.defMethod(proto, "formatRange", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		pieces, err := rt.numberRange(this, args)
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(o.format(x))), nil
+		return Str(NewString(pieces.text())), nil
+	})
+	r.defMethod(proto, "formatRangeToParts", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		pieces, err := rt.numberRange(this, args)
+		if err != nil {
+			return Undefined, err
+		}
+		return Obj(rt.rangeParts(pieces)), nil
 	})
 	r.defMethod(proto, "formatToParts", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		o, err := rt.numberFormatOf(this)
@@ -874,16 +959,34 @@ func (r *Runtime) initDateTimeFormat(intl *Object) {
 	r.defToStringTag(proto, "Intl.DateTimeFormat")
 	r.defSupportedLocalesOf(ctor)
 
-	r.defMethod(proto, "format", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	// format is a getter for a function bound to this formatter, for the same
+	// reason the number one is.
+	r.defGetter(proto, "format", func(rt *Runtime, this Value, args []Value) (Value, error) {
 		o, err := rt.dateFormatOf(this)
 		if err != nil {
 			return Undefined, err
 		}
-		t, err := rt.dateArgument(o, arg(args, 0))
+		return rt.bound(&o.formatFn, 1, func(rt *Runtime, _ Value, args []Value) (Value, error) {
+			t, err := rt.dateArgument(o, arg(args, 0))
+			if err != nil {
+				return Undefined, err
+			}
+			return Str(NewString(o.format(t))), nil
+		}), nil
+	})
+	r.defMethod(proto, "formatRange", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		pieces, err := rt.dateRange(this, args)
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(o.format(t))), nil
+		return Str(NewString(pieces.text())), nil
+	})
+	r.defMethod(proto, "formatRangeToParts", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		pieces, err := rt.dateRange(this, args)
+		if err != nil {
+			return Undefined, err
+		}
+		return Obj(rt.rangeParts(pieces)), nil
 	})
 	r.defMethod(proto, "formatToParts", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		o, err := rt.dateFormatOf(this)
@@ -906,23 +1009,34 @@ func (r *Runtime) initDateTimeFormat(intl *Object) {
 		if err != nil {
 			return Undefined, err
 		}
+		// In the order the standard lists them, which a script can see.
 		out := newObject(rt.proto.object, ClassObject)
 		rt.putString(out, "locale", o.choice.locale())
-		rt.putString(out, "calendar", "gregory")
-		rt.putString(out, "numberingSystem", o.locale.Numbering)
+		rt.putString(out, "calendar", o.calendar)
+		rt.putString(out, "numberingSystem", o.digits)
 		rt.putString(out, "timeZone", o.timeZone)
 		if o.hour != "" {
-			rt.putBool(out, "hour12", o.hour12)
 			rt.putString(out, "hourCycle", o.hourCycle)
+			rt.putBool(out, "hour12", o.hour12)
 		}
-		for name, value := range map[string]string{
-			"weekday": o.weekday, "era": o.era, "year": o.year, "month": o.month,
-			"day": o.day, "hour": o.hour, "minute": o.minute, "second": o.second,
-			"timeZoneName": o.timeZoneName, "dateStyle": o.dateStyle,
-			"timeStyle": o.timeStyle,
+		for _, field := range []struct{ name, value string }{
+			{"weekday", o.weekday}, {"era", o.era}, {"year", o.year},
+			{"month", o.month}, {"day", o.day}, {"dayPeriod", o.dayPeriod},
+			{"hour", o.hour}, {"minute", o.minute}, {"second", o.second},
 		} {
-			if value != "" {
-				rt.putString(out, name, value)
+			if field.value != "" {
+				rt.putString(out, field.name, field.value)
+			}
+		}
+		if o.fractional > 0 {
+			rt.putInt(out, "fractionalSecondDigits", o.fractional)
+		}
+		for _, field := range []struct{ name, value string }{
+			{"timeZoneName", o.timeZoneName}, {"dateStyle", o.dateStyle},
+			{"timeStyle", o.timeStyle},
+		} {
+			if field.value != "" {
+				rt.putString(out, field.name, field.value)
 			}
 		}
 		return Obj(out), nil
@@ -956,39 +1070,47 @@ func (r *Runtime) dateOptionsFrom(args []Value, defaults map[string]string) (*da
 	if err != nil {
 		return nil, err
 	}
+	// The options are read in the order the standard reads them, since a
+	// getter among them can see which came first.
+	if _, err := r.stringOption(options, "localeMatcher", "best fit",
+		"lookup", "best fit"); err != nil {
+		return nil, err
+	}
+	calendar, err := r.typeOption(options, "calendar")
+	if err != nil {
+		return nil, err
+	}
+	numbering, err := r.typeOption(options, "numberingSystem")
+	if err != nil {
+		return nil, err
+	}
+	hour12, hour12Set, err := r.boolOption(options, "hour12")
+	if err != nil {
+		return nil, err
+	}
+	cycle, err := r.stringOption(options, "hourCycle", "", "h11", "h12", "h23", "h24")
+	if err != nil {
+		return nil, err
+	}
+	if hour12Set {
+		// A clock asked for outright says all there is to say, and the cycle
+		// is not consulted.
+		cycle = ""
+	}
+
 	choice := r.resolveLocale(tags, "ca", "nu", "hc")
+	choice.override("ca", calendar)
+	choice.override("nu", numbering)
+	choice.override("hc", cycle)
 	o := &dateOptions{locale: choice.data, choice: choice, timeZone: "UTC"}
+	o.calendar = choice.setting("ca")
+	o.digits = choice.setting("nu")
 
 	zone, err := r.stringOption(options, "timeZone", "")
 	if err != nil {
 		return nil, err
 	}
-	switch {
-	case zone == "":
-		// The machine's own zone, which is the one a Date is written in.
-		o.zone = r.location()
-		o.timeZone = r.localZoneName()
-	case isUTCName(zone):
-		o.zone = time.UTC
-		o.timeZone = "UTC"
-	default:
-		// Any zone the machine has the data for. Loading it reads the zone
-		// files the operating system keeps, or the copy a host embedded by
-		// importing time/tzdata; a script cannot reach either.
-		name := canonicalZone(zone)
-		loc, err := time.LoadLocation(name)
-		if err != nil {
-			return nil, r.throwRangeError("there is no such time zone here: %s", zone)
-		}
-		o.zone, o.timeZone = loc, name
-	}
-
-	if o.dateStyle, err = r.stringOption(options, "dateStyle", "",
-		"full", "long", "medium", "short"); err != nil {
-		return nil, err
-	}
-	if o.timeStyle, err = r.stringOption(options, "timeStyle", "",
-		"full", "long", "medium", "short"); err != nil {
+	if err := o.setZone(r, zone); err != nil {
 		return nil, err
 	}
 
@@ -1010,6 +1132,9 @@ func (r *Runtime) dateOptionsFrom(args []Value, defaults map[string]string) (*da
 	if o.day, err = read("day", "numeric", "2-digit"); err != nil {
 		return nil, err
 	}
+	if o.dayPeriod, err = read("dayPeriod", "narrow", "short", "long"); err != nil {
+		return nil, err
+	}
 	if o.hour, err = read("hour", "numeric", "2-digit"); err != nil {
 		return nil, err
 	}
@@ -1019,20 +1144,37 @@ func (r *Runtime) dateOptionsFrom(args []Value, defaults map[string]string) (*da
 	if o.second, err = read("second", "numeric", "2-digit"); err != nil {
 		return nil, err
 	}
+	fractional, fractionalSet, err := r.intOption(options, "fractionalSecondDigits", 1, 3, 0)
+	if err != nil {
+		return nil, err
+	}
+	if fractionalSet {
+		o.fractional = fractional
+	}
 	if o.timeZoneName, err = read("timeZoneName", "short", "long", "shortOffset",
 		"longOffset", "shortGeneric", "longGeneric"); err != nil {
 		return nil, err
 	}
+	if _, err := r.stringOption(options, "formatMatcher", "best fit",
+		"basic", "best fit"); err != nil {
+		return nil, err
+	}
+	if o.dateStyle, err = r.stringOption(options, "dateStyle", "",
+		"full", "long", "medium", "short"); err != nil {
+		return nil, err
+	}
+	if o.timeStyle, err = r.stringOption(options, "timeStyle", "",
+		"full", "long", "medium", "short"); err != nil {
+		return nil, err
+	}
 
-	if (o.dateStyle != "" || o.timeStyle != "") &&
-		(o.weekday != "" || o.year != "" || o.month != "" || o.day != "" ||
-			o.hour != "" || o.minute != "" || o.second != "") {
+	if (o.dateStyle != "" || o.timeStyle != "") && o.hasFields() {
 		return nil, r.throwTypeError("a style and a field cannot both be asked for")
 	}
 
 	// Nothing asked for at all is a date, or whatever the caller said instead.
-	if o.dateStyle == "" && o.timeStyle == "" && o.weekday == "" && o.year == "" &&
-		o.month == "" && o.day == "" && o.hour == "" && o.minute == "" && o.second == "" {
+	if o.dateStyle == "" && o.timeStyle == "" && !o.hasFields() && o.era == "" &&
+		o.dayPeriod == "" && o.fractional == 0 && o.timeZoneName == "" {
 		if defaults == nil {
 			defaults = map[string]string{"year": "numeric", "month": "numeric", "day": "numeric"}
 		}
@@ -1041,26 +1183,25 @@ func (r *Runtime) dateOptionsFrom(args []Value, defaults map[string]string) (*da
 		o.hour, o.minute, o.second = defaults["hour"], defaults["minute"], defaults["second"]
 	}
 
-	hour12, set, err := r.boolOption(options, "hour12")
-	if err != nil {
-		return nil, err
-	}
-	cycle, err := r.stringOption(options, "hourCycle", "", "h11", "h12", "h23", "h24")
-	if err != nil {
-		return nil, err
-	}
 	switch {
-	case set:
+	case hour12Set:
 		o.hour12, o.hourSet = hour12, true
-	case cycle != "":
-		o.hour12, o.hourSet = cycle == "h11" || cycle == "h12", true
+	case choice.setting("hc") != "":
+		asked := choice.setting("hc")
+		o.hour12, o.hourSet = asked == "h11" || asked == "h12", cycle != ""
 	default:
 		o.hour12 = o.locale.Hour12
 	}
-	if o.hour12 {
-		o.hourCycle = "h12"
-	} else {
+	o.hourCycle = choice.setting("hc")
+	if hour12Set || o.hourCycle == "" {
 		o.hourCycle = "h23"
+		if o.hour12 {
+			o.hourCycle = "h12"
+		}
+	}
+	// A clock asked for outright takes the cycle with it.
+	if hour12Set {
+		o.hourSet = true
 	}
 
 	o.pattern = o.patternFor()
@@ -1073,6 +1214,11 @@ func (r *Runtime) dateOptionsFrom(args []Value, defaults map[string]string) (*da
 // adjustClock writes the hour on the clock that was asked for, and puts the
 // day period there or takes it away to match.
 func adjustClock(pattern string, hour12 bool) string {
+	// A pattern with no hour in it has no clock to adjust, and its day period
+	// -- if it was asked for on its own -- is not the hour's to take away.
+	if !strings.ContainsAny(patternLettersOf(pattern), "hHkK") {
+		return pattern
+	}
 	var b strings.Builder
 	inQuote := false
 	for i := 0; i < len(pattern); i++ {
@@ -1196,14 +1342,104 @@ func (r *Runtime) defSupportedLocalesOf(ctor *Object) {
 		if err != nil {
 			return Undefined, err
 		}
+		// The options are read even though the only one that could matter is
+		// which matcher to use, since a bad value has to be refused.
+		options, err := rt.optionsFromArgument(arg(args, 1))
+		if err != nil {
+			return Undefined, err
+		}
+		if _, err := rt.stringOption(options, "localeMatcher", "best fit",
+			"lookup", "best fit"); err != nil {
+			return Undefined, err
+		}
 		var out []Value
 		for _, tag := range tags {
-			if icu.Has(tag) {
+			t, ok := parseTag(tag)
+			if ok && icu.Has(t.base()) {
 				out = append(out, Str(NewString(tag)))
 			}
 		}
 		return Obj(rt.newArrayFrom(out)), nil
 	})
+}
+
+// numberRange writes one number against another.
+func (r *Runtime) numberRange(this Value, args []Value) (*rangePieces, error) {
+	o, err := r.numberFormatOf(this)
+	if err != nil {
+		return nil, err
+	}
+	if arg(args, 0).IsUndefined() || arg(args, 1).IsUndefined() {
+		return nil, r.throwTypeError("a range has two ends")
+	}
+	from, fromSpecial, err := r.numberArgument(arg(args, 0))
+	if err != nil {
+		return nil, err
+	}
+	to, toSpecial, err := r.numberArgument(arg(args, 1))
+	if err != nil {
+		return nil, err
+	}
+	if fromSpecial == "nan" || toSpecial == "nan" {
+		return nil, r.throwRangeError("a range does not have a NaN at either end")
+	}
+	start := numberPiecesOf(o.valueParts(from, fromSpecial))
+	end := numberPiecesOf(o.valueParts(to, toSpecial))
+	if piecesEqual(start, end) {
+		return sameRange(start, o.locale.Approximately), nil
+	}
+	return mergeRange(start, end, o.locale.Range), nil
+}
+
+// dateRange writes one date against another.
+func (r *Runtime) dateRange(this Value, args []Value) (*rangePieces, error) {
+	o, err := r.dateFormatOf(this)
+	if err != nil {
+		return nil, err
+	}
+	if arg(args, 0).IsUndefined() || arg(args, 1).IsUndefined() {
+		return nil, r.throwTypeError("a range has two ends")
+	}
+	from, err := r.dateArgument(o, arg(args, 0))
+	if err != nil {
+		return nil, err
+	}
+	to, err := r.dateArgument(o, arg(args, 1))
+	if err != nil {
+		return nil, err
+	}
+	start := datePiecesOf(o.parts(from))
+	end := datePiecesOf(o.parts(to))
+	if piecesEqual(start, end) {
+		// Two dates that come to the same thing are written once, and without
+		// the mark a number takes.
+		return sameRange(start, ""), nil
+	}
+	return mergeRange(start, end, o.locale.DateRange), nil
+}
+
+func piecesEqual(a, b []pieceOf) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// rangeParts is a range in the shape formatRangeToParts hands back, where each
+// piece says which end it came from.
+func (r *Runtime) rangeParts(pieces *rangePieces) *Object {
+	out := make([]Value, len(pieces.kinds))
+	for i := range pieces.kinds {
+		o := r.partObject(pieces.kinds[i], pieces.values[i])
+		r.putString(o, "source", pieces.sources[i])
+		out[i] = Obj(o)
+	}
+	return r.newArrayFrom(out)
 }
 
 // partObject is one entry of a formatToParts result.

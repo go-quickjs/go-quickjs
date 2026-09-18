@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -22,6 +23,9 @@ import (
 type dateOptions struct {
 	locale *icu.Locale
 	choice *localeChoice
+	// formatFn is the bound function the format getter hands out, kept so that
+	// every ask answers with the same one.
+	formatFn *Object
 
 	// zone is where the fields are read: UTC, the machine's own, or whichever
 	// one was asked for by name.
@@ -38,10 +42,102 @@ type dateOptions struct {
 	// The fields, in the widths they were asked for. An empty string means the
 	// field was not asked for at all.
 	weekday, era, year, month, day     string
+	dayPeriod                          string
 	hour, minute, second, timeZoneName string
-	fractionalSecondDigits             int
+	// fractional is how many digits of a second to write, none by default.
+	fractional int
+	// calendar and digits are what the tag or the options settled on.
+	calendar, digits string
 	// pattern is what all of that came to, in CLDR pattern letters.
 	pattern string
+}
+
+// hasFields reports whether any of the parts of a date were asked for by name,
+// which is what a style may not be combined with.
+func (o *dateOptions) hasFields() bool {
+	return o.weekday != "" || o.year != "" || o.month != "" || o.day != "" ||
+		o.hour != "" || o.minute != "" || o.second != "" || o.era != "" ||
+		o.dayPeriod != "" || o.fractional != 0 || o.timeZoneName != ""
+}
+
+// setZone settles which zone the fields are read in: the machine's own, the
+// one named, or an offset from Greenwich written out.
+func (o *dateOptions) setZone(r *Runtime, zone string) error {
+	switch {
+	case zone == "":
+		// The machine's own zone, which is the one a Date is written in.
+		o.zone = r.location()
+		o.timeZone = r.localZoneName()
+		return nil
+	case isUTCName(zone):
+		o.zone = time.UTC
+		o.timeZone = "UTC"
+		return nil
+	}
+	// An offset written out rather than a name: +03:00, -0800, +05:45.
+	if minutes, name, ok := parseZoneOffset(zone); ok {
+		o.zone = time.FixedZone(name, minutes*60)
+		o.timeZone = name
+		return nil
+	}
+	// Any zone the machine has the data for. Loading it reads the zone files
+	// the operating system keeps, or the copy a host embedded by importing
+	// time/tzdata; a script cannot reach either.
+	name := canonicalZone(zone)
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		return r.throwRangeError("there is no such time zone here: %s", zone)
+	}
+	o.zone, o.timeZone = loc, name
+	return nil
+}
+
+// parseZoneOffset reads a zone written as an offset from Greenwich, and writes
+// it back the one way it is written: a sign, two digits, a colon, two digits,
+// and the seconds left off when there are none.
+func parseZoneOffset(s string) (minutes int, name string, ok bool) {
+	// A minus may be written as the sign a mathematician would use.
+	s = strings.Replace(s, "\u2212", "-", 1)
+	if len(s) < 3 || (s[0] != '+' && s[0] != '-') {
+		return 0, "", false
+	}
+	sign := 1
+	if s[0] == '-' {
+		sign = -1
+	}
+	rest := s[1:]
+	var hours, mins string
+	switch {
+	case len(rest) == 2:
+		hours = rest
+	case len(rest) == 4:
+		hours, mins = rest[:2], rest[2:]
+	case len(rest) == 5 && rest[2] == ':':
+		hours, mins = rest[:2], rest[3:]
+	default:
+		return 0, "", false
+	}
+	if !allDigits(hours) || (mins != "" && !allDigits(mins)) {
+		return 0, "", false
+	}
+	h, _ := strconv.Atoi(hours)
+	m := 0
+	if mins != "" {
+		m, _ = strconv.Atoi(mins)
+	}
+	if h > 23 || m > 59 {
+		return 0, "", false
+	}
+	out := sign * (h*60 + m)
+	written := "+"
+	if out < 0 {
+		written = "-"
+	}
+	away := out
+	if away < 0 {
+		away = -away
+	}
+	return out, fmt.Sprintf("%s%02d:%02d", written, away/60, away%60), true
 }
 
 // datePiece is one part of a formatted date.
@@ -228,8 +324,12 @@ func (o *dateOptions) field(push func(kind, value string), t time.Time, letter b
 	case 'b', 'B':
 		// The part of the day this hour falls in, where the language names
 		// them: the small hours are not the morning.
-		if len(l.HourPeriods) == 24 {
-			if name := l.HourPeriods[t.Hour()]; name != "" {
+		periods := l.HourPeriods
+		if o.dayPeriod == "narrow" && len(l.HourPeriodsNarrow) == 24 {
+			periods = l.HourPeriodsNarrow
+		}
+		if len(periods) == 24 {
+			if name := periods[t.Hour()]; name != "" {
 				push("dayPeriod", name)
 				return
 			}
@@ -337,6 +437,13 @@ func (o *dateOptions) patternFor() string {
 	l := o.locale
 	widths := map[string]int{"full": 0, "long": 1, "medium": 2, "short": 3}
 
+	// The part of the day on its own, which is a field no skeleton names.
+	if o.dayPeriod != "" && o.dateStyle == "" && o.timeStyle == "" &&
+		o.weekday == "" && o.era == "" && o.year == "" && o.month == "" &&
+		o.day == "" && o.hour == "" && o.minute == "" && o.second == "" {
+		return "B"
+	}
+
 	if o.dateStyle != "" || o.timeStyle != "" {
 		date, time := "", ""
 		if i, ok := widths[o.dateStyle]; ok {
@@ -392,6 +499,26 @@ func (o *dateOptions) patternFor() string {
 	}
 	if o.timeZoneName != "" && !strings.ContainsAny(patternLettersOf(pattern), "zZvVOXx") {
 		pattern += " z"
+	}
+	// A part of the day asked for alongside the hour takes the place of the
+	// morning-or-afternoon the pattern would have written.
+	if o.dayPeriod != "" {
+		if strings.ContainsRune(patternLettersOf(pattern), 'a') {
+			pattern = strings.Replace(pattern, "a", "B", 1)
+		} else if !strings.ContainsAny(patternLettersOf(pattern), "bB") {
+			pattern += " B"
+		}
+	}
+	// The fractions of a second, which go after the seconds themselves.
+	if o.fractional > 0 {
+		digits := strings.Repeat("S", o.fractional)
+		if at := strings.Index(pattern, "ss"); at >= 0 {
+			pattern = pattern[:at+2] + "." + digits + pattern[at+2:]
+		} else if at := strings.IndexByte(pattern, 's'); at >= 0 {
+			pattern = pattern[:at+1] + "." + digits + pattern[at+1:]
+		} else {
+			pattern += digits
+		}
 	}
 	// The locale's pattern says what order the fields go in; the options say
 	// how wide each one is written, and those are the caller's to choose.
