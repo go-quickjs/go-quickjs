@@ -239,6 +239,34 @@ func TestIntlFormats(t *testing.T) {
 		{`Intl.NumberFormat.supportedLocalesOf(["de", "xx"]).join()`, "de"},
 		{`Intl.getCanonicalLocales(["EN-us", "de_de"]).join()`, "en-US,de-DE"},
 
+		// Where a text may be broken, which is what a program counting
+		// characters or selecting a word has to know: an accent written apart
+		// belongs to its letter, a family emoji is one character, an
+		// apostrophe stands inside a word, and a full stop is not always the
+		// end of a sentence.
+		{`[...new Intl.Segmenter("en").segment("e\u0301clair")].map(s => s.segment).join("|")`,
+			"e\u0301|c|l|a|i|r"},
+		{`[...new Intl.Segmenter("en").segment("\u{1f468}\u200d\u{1f469}\u200d\u{1f467}")]
+		    .length`, "1"},
+		{`"\u{1f468}\u200d\u{1f469}\u200d\u{1f467}".length`, "8"},
+		{`[...new Intl.Segmenter("en", {granularity: "word"}).segment("can't stop, won't stop")]
+		    .filter(s => s.isWordLike).map(s => s.segment).join("|")`, "can't|stop|won't|stop"},
+		{`[...new Intl.Segmenter("en", {granularity: "word"}).segment("3.14 and 1,000")]
+		    .map(s => s.segment).join("|")`, "3.14| |and| |1,000"},
+		{`[...new Intl.Segmenter("ja", {granularity: "word"})
+		    .segment("日本語のテキストです")].map(s => s.segment).join("|")`,
+			"日本語|の|テキスト|です"},
+		{`[...new Intl.Segmenter("en", {granularity: "sentence"})
+		    .segment("It is 3.14 exactly. Yes!")].map(s => s.segment).join("|")`,
+			"It is 3.14 exactly. |Yes!"},
+		{`JSON.stringify(new Intl.Segmenter("en", {granularity: "word"})
+		    .segment("hello world").containing(7))`,
+			`{"segment":"world","index":6,"input":"hello world","isWordLike":true}`},
+		{`new Intl.Segmenter("en", {granularity: "word"}).segment("hi").containing(9)`,
+			"undefined"},
+		{`new Intl.Segmenter("en", {granularity: "sentence"}).resolvedOptions().granularity`,
+			"sentence"},
+
 		// And the parts, for a program that lays them out itself.
 		{`JSON.stringify(new Intl.NumberFormat("en", {style: "currency", currency: "EUR"})
 		    .formatToParts(1234.5))`,

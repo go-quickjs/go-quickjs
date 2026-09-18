@@ -316,6 +316,17 @@ func run() error {
 		"en": display["en"],
 	}))
 
+	// Where text may be broken: the classes and the pairs, for each of the
+	// three sizes of piece.
+	segments, err := readSegments(filepath.Join(filepath.Dir(script), "segment.json"))
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(&b, "// segmentPacked is where text may be broken: for graphemes, words and\n")
+	fmt.Fprintf(&b, "// sentences, which class each character belongs to and which pairs of\n")
+	fmt.Fprintf(&b, "// classes a break may fall between, and then the emoji.\n")
+	writePacked(&b, "segmentPacked", encodeSegments(segments))
+
 	fmt.Fprintf(&b, "// currencyDigits is how many decimal places a currency is written with,\n")
 	fmt.Fprintf(&b, "// where that is not the usual two.\n")
 	fmt.Fprintf(&b, "var currencyDigits = map[string]int8{\n")
@@ -337,6 +348,68 @@ func run() error {
 	}
 	_, err = os.Stdout.Write(pretty)
 	return err
+}
+
+// segmentData is what segment.mjs writes.
+type segmentData struct {
+	Grapheme     granularity `json:"grapheme"`
+	Word         granularity `json:"word"`
+	Sentence     granularity `json:"sentence"`
+	Pictographic [][2]int    `json:"pictographic"`
+}
+
+type granularity struct {
+	Table    [][]int  `json:"table"`
+	Runs     [][3]int `json:"runs"`
+	WordLike []int    `json:"wordLike"`
+}
+
+func readSegments(path string) (segmentData, error) {
+	var out segmentData
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return out, fmt.Errorf("the break classes: %w", err)
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return out, fmt.Errorf("the break classes: %w", err)
+	}
+	return out, nil
+}
+
+// encodeSegments writes the classes and the pairs, a granularity at a time.
+func encodeSegments(d segmentData) string {
+	var b strings.Builder
+	for _, g := range []granularity{d.Grapheme, d.Word, d.Sentence} {
+		for _, run := range g.Runs {
+			fmt.Fprintf(&b, "%x,%x,%x;", run[0], run[1], run[2])
+		}
+		b.WriteByte('\n')
+		for _, row := range g.Table {
+			for _, cell := range row {
+				if cell != 0 {
+					b.WriteByte('1')
+				} else {
+					b.WriteByte('0')
+				}
+			}
+			b.WriteByte(';')
+		}
+		b.WriteByte('\n')
+	}
+	for _, run := range d.Pictographic {
+		fmt.Fprintf(&b, "%x,%x;", run[0], run[1])
+	}
+	// And which of the word classes are made of letters rather than of spaces
+	// and punctuation, for a caller counting words.
+	b.WriteByte('\n')
+	for _, ok := range d.Word.WordLike {
+		if ok != 0 {
+			b.WriteByte('1')
+		} else {
+			b.WriteByte('0')
+		}
+	}
+	return b.String()
 }
 
 // readDisplay reads what things are called.

@@ -59,6 +59,7 @@ func (r *Runtime) buildIntl() *Object {
 	r.initListFormat(intl)
 	r.initDisplayNames(intl)
 	r.initRelativeTimeFormat(intl)
+	r.initSegmenter(intl)
 
 	r.defMethod(intl, "getCanonicalLocales", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		tags, err := rt.requestedLocales(arg(args, 0))

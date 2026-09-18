@@ -217,6 +217,51 @@ for (const [type, codes] of [
   }
 }
 
+// --- where text may be broken -----------------------------------------------
+
+// A text for each thing the rules have to get right: the marks that belong to
+// the letter before them, the punctuation that joins a word or a number, the
+// emoji that are one character though they are many code points, the flags
+// that go in pairs, and the full stop that is an abbreviation rather than the
+// end of a sentence.
+const TEXTS = [
+  "Hello, world!",
+  "can't stop won't stop",
+  "3.14 and 1,000,000 and a_b",
+  "\u00e9clair na\u00efve caf\u00e9",
+  "e\u0301clair with the accent written apart",
+  "\u{1f468}\u200d\u{1f469}\u200d\u{1f467}\u200d\u{1f466} family",
+  "\u{1f1fa}\u{1f1f8}\u{1f1ec}\u{1f1e7}\u{1f1eb}\u{1f1f7} flags",
+  "\u{1f9d1}\u{1f3fd}\u200d\u{1f680} astronaut",
+  "Mr. Smith went to Washington. He arrived at 9 a.m.",
+  "i.e. this is it. And that is that!",
+  "U.S.A. and 3.14 stay whole. Really?",
+  "Dr. Jones (M.D.) said hi.  Then left.",
+  "one\r\ntwo\nthree",
+  "\u65e5\u672c\u8a9e\u306e\u30c6\u30ad\u30b9\u30c8\u3067\u3059",
+  "\ud55c\uad6d\uc5b4 \ud14d\uc2a4\ud2b8\uc785\ub2c8\ub2e4",
+  "\u0440\u0443\u0441\u0441\u043a\u0438\u0439 \u0442\u0435\u043a\u0441\u0442",
+  "\u05e9\u05dc\u05d5\u05dd. \u05e2\u05d1\u05e8\u05d9\u05ea",
+  "\u0627\u0644\u0639\u0631\u0628\u064a\u0629 \u0661\u0662\u0663",
+  "AT&T 100% off -- half price!",
+  "https://example.com/path?a=1",
+];
+
+for (const granularity of ["grapheme", "word", "sentence"]) {
+  const seg = new Intl.Segmenter("en", {granularity});
+  for (const text of TEXTS) {
+    const call = `new Intl.Segmenter("en", {"granularity":${q(granularity)}}).segment(${q(text)})`;
+    add(`[...${call}].map(s => s.segment).join("|")`,
+        [...seg.segment(text)].map(s => s.segment).join("|"));
+    add(`[...${call}].map(s => s.index).join(",")`,
+        [...seg.segment(text)].map(s => s.index).join(","));
+    if (granularity === "word") {
+      add(`[...${call}].map(s => s.isWordLike ? "w" : ".").join("")`,
+          [...seg.segment(text)].map(s => s.isWordLike ? "w" : ".").join(""));
+    }
+  }
+}
+
 // --- the methods on the values themselves ----------------------------------
 
 for (const locale of LOCALES) {

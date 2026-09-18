@@ -36,7 +36,7 @@ conformance suite.
 `Intl` is there too, with real CLDR data for 379 locales — the engine carries
 its own, in Go, rather than linking ICU — including the Unicode collation
 order, and time zones out of the operating system's own database. It is held
-against a full ICU build: [7,746 of 7,775 cases match it exactly](intl_test.go),
+against a full ICU build: [7,920 of 7,949 cases match it exactly](intl_test.go),
 and the twenty-nine that do not are named.
 
 Every test262 test it runs passes — 77,078 of them. The 14,742 it skips are
@@ -76,11 +76,14 @@ resizable ArrayBuffers, `using` declarations, and the newer proposals test262
 tracks.
 
 Of `Intl`, what is missing is: calendars other than the Gregorian and the
-Buddhist, and `Segmenter`. Time zone names are English, where a
-zone has a name rather than an offset. Sorting follows the Unicode algorithm
-with each language's own tailoring, but not the orderings that are a whole
-script's worth of data — Chinese and Japanese order their characters by sound
-or by stroke, and those sort by code point here.
+Buddhist. Time zone names are English, where a zone has a name rather than an
+offset. Sorting follows the Unicode algorithm with each language's own
+tailoring, but not the orderings that are a whole script's worth of data —
+Chinese and Japanese order their characters by sound or by stroke, and those
+sort by code point here. `Intl.Segmenter` follows the Unicode breaking rules,
+but not the word lists ICU consults for the scripts written without spaces: a
+run of Chinese, Thai, Lao, Khmer or Burmese comes back as one word rather than
+as several.
 
 There is one realm per runtime: `$262.createRealm` has nothing to return, so
 the four test262 variants that need a second realm are skipped along with the
