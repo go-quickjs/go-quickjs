@@ -33,6 +33,11 @@ Promises, regular expressions, modules with top-level `await`, Proxy and typed
 arrays all work, and are exercised against [test262], the official ECMAScript
 conformance suite.
 
+`Intl` is there too, with real CLDR data for 381 locales — the engine carries
+its own, in Go, rather than linking ICU. It is held against a full ICU
+build: [5,815 of 5,820 formatting cases match it exactly](intl_test.go), and
+the five that do not are written down.
+
 Every test262 test it runs passes — 77,078 of them. The 14,742 it skips are
 tagged with features it does not implement, or ask the host for something it
 does not provide: see [Conformance](#conformance) for the measurement and
@@ -69,12 +74,11 @@ does not provide: see [Conformance](#conformance) for the measurement and
 resizable ArrayBuffers, `using` declarations, and the newer proposals test262
 tracks.
 
-`Intl` is not in the engine; the standard library has one, which is what can be
-had without the Unicode locale data: English month and day names whatever the
-locale, the number and currency conventions of the languages where they differ,
-and a time zone that is UTC or the machine's own — anything else is refused
-rather than guessed at. A host that needs the real thing installs its own before
-`stdlib.Install`, which leaves it alone.
+Of `Intl`, what is missing is: calendars other than the Gregorian and the
+Buddhist, time zones other than UTC and the machine's own, `DisplayNames`,
+`Segmenter`, the finer day periods that Chinese and Japanese distinguish, and a
+collation that follows the Unicode algorithm rather than comparing what the
+letters decompose to.
 
 There is one realm per runtime: `$262.createRealm` has nothing to return, so
 the four test262 variants that need a second realm are skipped along with the
@@ -337,7 +341,7 @@ loop.Run(ctx)     // timers, and work that finished on other goroutines
 
 | | |
 |---|---|
-| Always | `console`, `Intl` (English formats, and the number conventions of some 25 languages), `URL`, `TextEncoder`/`TextDecoder`, `atob`/`btoa`, `structuredClone`, `performance`, `crypto` (hashing, HMAC, PBKDF2, HKDF, `subtle`), `Blob`, `File`, `FormData`, `URLPattern`, `AbortController`, `Buffer`, the web's streams, `CompressionStream`, and the `path`, `events`, `util`, `assert`, `buffer`, `crypto`, `zlib`, `stream/web`, `url`, `querystring`, `string_decoder` modules |
+| Always | `console`, `URL`, `TextEncoder`/`TextDecoder`, `atob`/`btoa`, `structuredClone`, `performance`, `crypto` (hashing, HMAC, PBKDF2, HKDF, `subtle`), `Blob`, `File`, `FormData`, `URLPattern`, `AbortController`, `Buffer`, the web's streams, `CompressionStream`, and the `path`, `events`, `util`, `assert`, `buffer`, `crypto`, `zlib`, `stream/web`, `url`, `querystring`, `string_decoder` modules |
 | `Loop` | `setTimeout`, `setInterval`, `queueMicrotask`, and the `timers`, `timers/promises` modules |
 | `FS` | the `fs` module, sync and promise halves, `createReadStream`/`createWriteStream`, confined to `Root` |
 | `Process` | `process.argv`, `env`, `cwd`, `stdout`, `exit` — what the host chooses to say |

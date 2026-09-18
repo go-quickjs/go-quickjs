@@ -1,0 +1,591 @@
+// Command cldrgen writes the locale tables the icu package carries.
+//
+// The data is read out of an ICU that already has it, through the Intl objects
+// of a JavaScript engine built with the full data -- node, as it happens --
+// because Intl answers the question the tables are for: what does this locale
+// actually produce. Reading CLDR's own files would mean reproducing the
+// inheritance, the aliases and the pattern composition that ICU has already
+// done, and getting any of it wrong would show up as a wrong month name rather
+// than as an error.
+//
+// Usage:
+//
+//	go run ./internal/icu/internal/cldrgen > internal/icu/tables.go
+//
+// It needs node on the path, built with the full locale data, which is what an
+// official build has. The version it read is recorded in the output, so that a
+// table can be told from the data it came from.
+package main
+
+import (
+	"bytes"
+	"compress/flate"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+)
+
+// The separators the blobs are written with. They must match the constants in
+// the icu package.
+const (
+	sectionSep = "\x1e"
+	fieldSep   = "\x1f"
+	itemSep    = "\x1d"
+)
+
+// extracted mirrors what extract.mjs writes.
+type extracted struct {
+	ICU     string       `json:"icu"`
+	Locales []localeData `json:"locales"`
+}
+
+// localeData is one locale as it was read.
+type localeData struct {
+	Tag        string `json:"tag"`
+	Numbering  string `json:"numbering"`
+	Calendar   string `json:"calendar"`
+	Hour12     bool   `json:"hour12"`
+	DayPeriods []string
+	Eras       []string
+	Names      struct {
+		Months, MonthsShort, MonthsNarrow []string
+		MonthsAlone, MonthsAloneShort     []string
+		Days, DaysShort, DaysNarrow       []string
+	} `json:"names"`
+	Dates     map[string]string `json:"dates"`
+	Times     map[string]string `json:"times"`
+	Both      map[string]string `json:"both"`
+	Glue      map[string]string `json:"glue"`
+	Skeletons map[string]string `json:"skeletons"`
+	Numbers   struct {
+		Decimal, Group, Minus, PercentSign string
+		NaN                                string `json:"nan"`
+		Infinity, Digits                   string
+		Indian                             bool
+		PercentPattern, CurrencyPattern    string
+		DecimalNegative                    string `json:"decimalNegative"`
+		PercentNegative                    string `json:"percentNegative"`
+		CurrencyNegative                   string `json:"currencyNegative"`
+		MinGrouping                        int    `json:"minGrouping"`
+	} `json:"numbers"`
+	Compact    map[string]map[string]compactForm `json:"compact"`
+	Currencies map[string]string                 `json:"currencies"`
+	Plurals    struct {
+		Cardinal plural `json:"cardinal"`
+		Ordinal  plural `json:"ordinal"`
+	} `json:"plurals"`
+	Lists    map[string]listPattern  `json:"lists"`
+	Relative map[string]relativeUnit `json:"relative"`
+}
+
+// relativeUnit is how one unit of time is said in one locale.
+type relativeUnit struct {
+	Forms map[string]string `json:"forms"`
+	Named map[string]string `json:"named"`
+}
+
+type plural struct {
+	Categories    []string          `json:"categories"`
+	Small         []string          `json:"small"`
+	Mod           []string          `json:"mod"`
+	ByThousand    map[string]string `json:"byThousand"`
+	Exact         map[string]string `json:"exact"`
+	FractionZero  string            `json:"fractionZero"`
+	FractionOther string            `json:"fractionOther"`
+	Disagrees     []int             `json:"disagrees"`
+}
+
+type listPattern struct {
+	Pair, Start, Middle, End string
+}
+
+// compactForm is how one power of ten is shortened: what it is divided by, and
+// what is written after it.
+type compactForm struct {
+	Divisor  int               `json:"divisor"`
+	Suffixes map[string]string `json:"suffixes"`
+}
+
+// The currencies that are not written with two decimal places. CLDR keeps this
+// in supplemental data rather than per locale, and it is short enough to carry
+// as itself.
+var currencyDigits = map[string]int{
+	"BHD": 3, "BIF": 0, "CLF": 4, "CLP": 0, "DJF": 0, "GNF": 0, "IQD": 3,
+	"ISK": 0, "JOD": 3, "JPY": 0, "KMF": 0, "KRW": 0, "KWD": 3, "LYD": 3,
+	"OMR": 3, "PYG": 0, "RWF": 0, "TND": 3, "UGX": 0, "UYI": 0, "VND": 0,
+	"VUV": 0, "XAF": 0, "XOF": 0, "XPF": 0,
+}
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "cldrgen:", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	here, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	script := filepath.Join(here, "internal", "icu", "internal", "cldrgen", "extract.mjs")
+	if _, err := os.Stat(script); err != nil {
+		return fmt.Errorf("run this from the root of the repository: %w", err)
+	}
+
+	tags, err := listLocales(script)
+	if err != nil {
+		return err
+	}
+	data, skipped, err := extractAll(script, tags)
+	if err != nil {
+		return err
+	}
+	if len(skipped) > 0 {
+		// A locale that brings the engine down is left out rather than left
+		// half-read; it falls back to its language, as an unknown tag does.
+		fmt.Fprintf(os.Stderr,
+			"cldrgen: skipped %d locale(s) that crashed node: %s\n",
+			len(skipped), strings.Join(skipped, " "))
+	}
+
+	// The plural model reproduces every rule in CLDR but one: Cornish asks
+	// what a count is modulo a hundred thousand, which two tables of a hundred
+	// cannot answer. Where that happens it is said out loud rather than
+	// written out quietly, and the rule holds for every count below the one
+	// named.
+	for _, l := range data.Locales {
+		for _, p := range []struct {
+			name string
+			rule plural
+		}{{"cardinal", l.Plurals.Cardinal}, {"ordinal", l.Plurals.Ordinal}} {
+			if len(p.rule.Disagrees) > 0 {
+				fmt.Fprintf(os.Stderr,
+					"cldrgen: %s %s plural rules are exact below %d\n",
+					l.Tag, p.name, p.rule.Disagrees[0])
+			}
+		}
+	}
+
+	sort.Slice(data.Locales, func(i, j int) bool {
+		return data.Locales[i].Tag < data.Locales[j].Tag
+	})
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "// Code generated by cldrgen; DO NOT EDIT.\n")
+	fmt.Fprintf(&b, "//\n")
+	fmt.Fprintf(&b, "// Locale data from CLDR, read through ICU %s.\n", data.ICU)
+	fmt.Fprintf(&b, "// Regenerate with:\n")
+	fmt.Fprintf(&b, "//\n")
+	fmt.Fprintf(&b, "//\tgo run ./internal/icu/internal/cldrgen > internal/icu/tables.go\n\n")
+	fmt.Fprintf(&b, "package icu\n\n")
+	fmt.Fprintf(&b, "// cldrVersion is the ICU whose data this is.\n")
+	fmt.Fprintf(&b, "const cldrVersion = %q\n\n", data.ICU)
+
+	fmt.Fprintf(&b, "// tags are the locales carried here, sorted so that one can be found\n")
+	fmt.Fprintf(&b, "// without a map to build at startup.\n")
+	fmt.Fprintf(&b, "var tags = [...]string{\n")
+	for _, l := range data.Locales {
+		fmt.Fprintf(&b, "\t%q,\n", l.Tag)
+	}
+	fmt.Fprintf(&b, "}\n\n")
+
+	// The locales' data, in one piece, compressed.
+	//
+	// Written out as itself it is more than a megabyte of Go source, which is
+	// a megabyte in every binary that links this package whether or not
+	// anything formats a date. Compressed it is an eighth of that, and
+	// unpacking it costs a few milliseconds the first time a locale is asked
+	// for -- and nothing at all to a program that never asks.
+	var joined strings.Builder
+	for _, l := range data.Locales {
+		joined.WriteString(encode(&l))
+		joined.WriteByte(0)
+	}
+	var packed bytes.Buffer
+	w, err := flate.NewWriter(&packed, flate.BestCompression)
+	if err != nil {
+		return err
+	}
+	if _, err := io.WriteString(w, joined.String()); err != nil {
+		return err
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+	text := base64.StdEncoding.EncodeToString(packed.Bytes())
+
+	fmt.Fprintf(&b, "// packed is every locale's data, in the order of tags, separated by a\n")
+	fmt.Fprintf(&b, "// zero byte, compressed, and written as text. It is %d bytes of data\n",
+		joined.Len())
+	fmt.Fprintf(&b, "// in %d bytes of binary, and nothing is unpacked until a locale is\n",
+		packed.Len())
+	fmt.Fprintf(&b, "// asked for.\n")
+	fmt.Fprintf(&b, "const packed = \"\" +\n")
+	for i := 0; i < len(text); i += 100 {
+		fmt.Fprintf(&b, "\t%q", text[i:min(i+100, len(text))])
+		if i+100 < len(text) {
+			fmt.Fprintf(&b, " +")
+		}
+		fmt.Fprintf(&b, "\n")
+	}
+	fmt.Fprintf(&b, "\n")
+
+	// The variants that share another's data, which is how a hundred and fifty
+	// tags are answered without carrying a hundred and fifty more tables.
+	aliases, err := readAliases(filepath.Join(filepath.Dir(script), "locales.json"))
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(&b, "// aliases are the tags that say exactly what another tag says:\n")
+	fmt.Fprintf(&b, "// ar-EG is written as ar-BH is, zh-TW as zh-Hant.\n")
+	fmt.Fprintf(&b, "var aliases = map[string]string{\n")
+	for _, tag := range sortedStringKeys(aliases) {
+		fmt.Fprintf(&b, "\t%q: %q,\n", tag, aliases[tag])
+	}
+	fmt.Fprintf(&b, "}\n\n")
+
+	fmt.Fprintf(&b, "// currencyDigits is how many decimal places a currency is written with,\n")
+	fmt.Fprintf(&b, "// where that is not the usual two.\n")
+	fmt.Fprintf(&b, "var currencyDigits = map[string]int8{\n")
+	codes := make([]string, 0, len(currencyDigits))
+	for code := range currencyDigits {
+		codes = append(codes, code)
+	}
+	sort.Strings(codes)
+	for _, code := range codes {
+		fmt.Fprintf(&b, "\t%q: %d,\n", code, currencyDigits[code])
+	}
+	fmt.Fprintf(&b, "}\n")
+
+	_, err = os.Stdout.WriteString(b.String())
+	return err
+}
+
+// readAliases reads the tags that share another tag's data.
+func readAliases(path string) (map[string]string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("the locale list: %w", err)
+	}
+	var list struct {
+		Aliases map[string]string `json:"aliases"`
+	}
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return nil, fmt.Errorf("the locale list: %w", err)
+	}
+	return list.Aliases, nil
+}
+
+// listLocales asks the extractor which locales it knows about.
+func listLocales(script string) ([]string, error) {
+	out, err := exec.Command("node", script, "--list").Output()
+	if err != nil {
+		return nil, fmt.Errorf("asking node for the locale list: %w", err)
+	}
+	var tags []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			tags = append(tags, line)
+		}
+	}
+	return tags, nil
+}
+
+// extractAll reads the locales in batches, and reports the ones it could not
+// read at all.
+//
+// The engine the data is read from has a bug or two of its own -- a couple of
+// locales make it abort -- so a batch that fails is retried one locale at a
+// time and whatever survives is kept.
+func extractAll(script string, tags []string) (extracted, []string, error) {
+	const batch = 16
+	var all extracted
+	var skipped []string
+	for i := 0; i < len(tags); i += batch {
+		end := min(i+batch, len(tags))
+		part, err := extractSome(script, tags[i:end])
+		if err == nil {
+			all.ICU = part.ICU
+			all.Locales = append(all.Locales, part.Locales...)
+			continue
+		}
+		for _, tag := range tags[i:end] {
+			one, err := extractSome(script, []string{tag})
+			if err != nil {
+				skipped = append(skipped, tag)
+				continue
+			}
+			all.ICU = one.ICU
+			all.Locales = append(all.Locales, one.Locales...)
+		}
+	}
+	if len(all.Locales) == 0 {
+		return all, skipped, fmt.Errorf("no locale could be read")
+	}
+	return all, skipped, nil
+}
+
+func extractSome(script string, tags []string) (extracted, error) {
+	var data extracted
+	cmd := exec.Command("node", append([]string{script}, tags...)...)
+	out, err := cmd.Output()
+	if err != nil {
+		return data, err
+	}
+	if err := json.Unmarshal(out, &data); err != nil {
+		return data, fmt.Errorf("the extracted data: %w", err)
+	}
+	return data, nil
+}
+
+// encode writes one locale as the text the icu package reads.
+func encode(l *localeData) string {
+	flags := ""
+	if l.Numbers.Indian {
+		flags += "i"
+	}
+	if l.Hour12 {
+		flags += "h"
+	}
+	if l.Numbers.MinGrouping == 2 {
+		flags += "g"
+	}
+
+	head := strings.Join([]string{
+		l.Numbering, l.Numbers.Decimal, l.Numbers.Group, l.Numbers.Minus,
+		l.Numbers.PercentSign, l.Numbers.NaN, l.Numbers.Infinity, l.Numbers.Digits,
+		l.Numbers.PercentPattern, l.Numbers.CurrencyPattern, flags,
+		l.Numbers.DecimalNegative, l.Numbers.PercentNegative,
+		l.Numbers.CurrencyNegative, l.Calendar,
+	}, fieldSep)
+
+	names := strings.Join([]string{
+		strings.Join(l.Names.Months, itemSep),
+		strings.Join(l.Names.MonthsShort, itemSep),
+		strings.Join(l.Names.MonthsNarrow, itemSep),
+		strings.Join(l.Names.Days, itemSep),
+		strings.Join(l.Names.DaysShort, itemSep),
+		strings.Join(l.Names.DaysNarrow, itemSep),
+		strings.Join(l.DayPeriods, itemSep),
+		strings.Join(l.Eras, itemSep),
+		strings.Join(l.Names.MonthsAlone, itemSep),
+		strings.Join(l.Names.MonthsAloneShort, itemSep),
+	}, fieldSep)
+
+	widths := []string{"full", "long", "medium", "short"}
+	byWidth := func(m map[string]string) string {
+		out := make([]string, 0, 4)
+		for _, w := range widths {
+			out = append(out, m[w])
+		}
+		return strings.Join(out, itemSep)
+	}
+	patterns := strings.Join([]string{
+		byWidth(l.Dates), byWidth(l.Times), byWidth(l.Glue),
+		joinPairs(l.Skeletons),
+	}, fieldSep)
+
+	// Each table is a hundred categories, one letter each.
+	letters := func(categories []string) string {
+		var b strings.Builder
+		for _, c := range categories {
+			b.WriteString(letter(c))
+		}
+		return b.String()
+	}
+	plurals := func(p plural) string {
+		return strings.Join([]string{
+			strings.Join(p.Categories, itemSep),
+			letters(p.Small),
+			letters(p.Mod),
+			joinNumbered(p.ByThousand),
+			joinNumbered(p.Exact),
+			letter(p.FractionZero),
+			letter(p.FractionOther),
+		}, fieldSep)
+	}
+
+	lists := make([]string, 0, len(l.Lists))
+	for _, name := range sortedKeys(l.Lists) {
+		p := l.Lists[name]
+		lists = append(lists, strings.Join(
+			[]string{name, p.Pair, p.Start, p.Middle, p.End}, itemSep))
+	}
+
+	relative := make([]string, 0, len(l.Relative))
+	for _, unit := range sortedKeysOf(l.Relative) {
+		entry := l.Relative[unit]
+		fields := []string{unit}
+		for _, key := range sortedStringKeys(entry.Forms) {
+			// past:one becomes p:one, future:one becomes f:one.
+			short := strings.Replace(strings.Replace(key, "past:", "p:", 1),
+				"future:", "f:", 1)
+			fields = append(fields, short+"="+entry.Forms[key])
+		}
+		for _, key := range sortedStringKeys(entry.Named) {
+			fields = append(fields, "n:"+key+"="+entry.Named[key])
+		}
+		relative = append(relative, strings.Join(fields, itemSep))
+	}
+
+	// The compact forms, as power:divisor:suffix items for each style.
+	compact := func(style string) string {
+		entries := l.Compact[style]
+		powers := make([]int, 0, len(entries))
+		for p := range entries {
+			n, err := strconv.Atoi(p)
+			if err != nil {
+				continue
+			}
+			powers = append(powers, n)
+		}
+		sort.Ints(powers)
+		out := make([]string, 0, len(powers))
+		for _, power := range powers {
+			form := entries[strconv.Itoa(power)]
+			if len(form.Suffixes) == 0 && form.Divisor == 0 {
+				continue
+			}
+			// Each plural form's suffix, with the letter that form is written
+			// as: 6:6:x= Millionen,o= Million.
+			forms := make([]string, 0, len(form.Suffixes))
+			for _, category := range sortedStringKeys(form.Suffixes) {
+				forms = append(forms, letter(category)+"="+form.Suffixes[category])
+			}
+			out = append(out, fmt.Sprintf("%d:%d:%s", power, form.Divisor,
+				strings.Join(forms, ",")))
+		}
+		return strings.Join(out, itemSep)
+	}
+
+	return strings.Join([]string{
+		head, names, patterns,
+		joinPairs(l.Currencies),
+		plurals(l.Plurals.Cardinal),
+		plurals(l.Plurals.Ordinal),
+		strings.Join(lists, fieldSep),
+		strings.Join(relative, fieldSep),
+		strings.Join([]string{compact("short"), compact("long")}, fieldSep),
+	}, sectionSep)
+}
+
+// letter is the single character a plural category is written as.
+func letter(category string) string {
+	if category == "" {
+		return "x"
+	}
+	switch category {
+	case "zero":
+		return "z"
+	case "one":
+		return "o"
+	case "two":
+		return "t"
+	case "few":
+		return "f"
+	case "many":
+		return "m"
+	}
+	return "x"
+}
+
+func joinPairs(m map[string]string) string {
+	if len(m) == 0 {
+		return ""
+	}
+	out := make([]string, 0, len(m))
+	for _, k := range sortedStringKeys(m) {
+		out = append(out, k+"="+m[k])
+	}
+	return strings.Join(out, itemSep)
+}
+
+// joinNumbered writes the plural exceptions, each as its number and its
+// category: 100o.
+func joinNumbered(m map[string]string) string {
+	if len(m) == 0 {
+		return ""
+	}
+	keys := make([]int, 0, len(m))
+	for k := range m {
+		n, err := strconv.Atoi(k)
+		if err != nil {
+			continue
+		}
+		keys = append(keys, n)
+	}
+	sort.Ints(keys)
+	out := make([]string, 0, len(keys))
+	for _, n := range keys {
+		out = append(out, strconv.Itoa(n)+letter(m[strconv.Itoa(n)]))
+	}
+	return strings.Join(out, itemSep)
+}
+
+func sortedStringKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortedKeys(m map[string]listPattern) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortedKeysOf(m map[string]relativeUnit) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// quote writes a Go string literal, with the separators shown as escapes so
+// that the table can be read.
+func quote(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '\x1e':
+			b.WriteString(`\x1e`)
+		case '\x1f':
+			b.WriteString(`\x1f`)
+		case '\x1d':
+			b.WriteString(`\x1d`)
+		case '"':
+			b.WriteString(`\"`)
+		case '\\':
+			b.WriteString(`\\`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			if r < 0x20 || r == 0x7f {
+				fmt.Fprintf(&b, `\u%04x`, r)
+				continue
+			}
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}

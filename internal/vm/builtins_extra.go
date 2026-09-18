@@ -766,6 +766,15 @@ func (r *Runtime) initStringExtras() {
 		if err != nil {
 			return Undefined, err
 		}
+		// With a locale or options this is Intl.Collator, which knows how to
+		// ignore an accent or read a run of digits as a number.
+		if len(args) > 1 && !arg(args, 1).IsUndefined() || len(args) > 2 && !arg(args, 2).IsUndefined() {
+			c, err := rt.collatorFor(args[1:])
+			if err != nil {
+				return Undefined, err
+			}
+			return Int(c.compare(s.Go(), o.Go())), nil
+		}
 		// Without a collation table this is a code-unit comparison, which
 		// agrees with a locale-aware one for ASCII. The two are normalized
 		// first, so that two spellings of the same text compare equal --
@@ -856,12 +865,18 @@ func (r *Runtime) initNumberExtras() {
 		return Str(NewString(formatPrecision(n, int(v)))), nil
 	})
 
+	// toLocaleString is Intl.NumberFormat under another name, which is what
+	// ECMA-402 says it is.
 	r.defMethod(p, "toLocaleString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		n, err := rt.thisNumber(this)
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(jsnum.FormatFloat(n))), nil
+		text, err := rt.formatNumberFor(args, n)
+		if err != nil {
+			return Undefined, err
+		}
+		return Str(NewString(text)), nil
 	})
 }
 

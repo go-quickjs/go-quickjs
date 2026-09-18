@@ -312,6 +312,7 @@ func (r *Runtime) initGlobals() {
 	r.initSetBuiltins()
 	r.initWeakCollections()
 	r.initJSONBuiltins()
+	r.initIntlBuiltins()
 	r.initGlobalFunctions()
 	// Runs last, because each of its additions hangs off a constructor an
 	// earlier step installed.

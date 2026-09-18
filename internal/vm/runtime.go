@@ -22,6 +22,9 @@ type Runtime struct {
 	// global is the global object, and globalEnv is the scope that var and
 	// function declarations at the top level bind into.
 	global *Object
+	// intlProtos holds the prototypes of the Intl constructors, which are
+	// built only if something asks for Intl at all.
+	intlProtos map[string]*Object
 	// globalLex holds a script's top-level let, const and class bindings.
 	//
 	// They are not properties of the global object -- `let x = 1` does not make

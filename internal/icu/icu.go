@@ -1,0 +1,671 @@
+// Package icu carries the locale data that ECMA-402 needs: what a language
+// does to a number, what it calls the months, how it orders a date, and which
+// plural form a count takes.
+//
+// It is the data alone. What to do with it -- Intl.NumberFormat and its
+// companions -- is the engine's business, and lives there.
+//
+// The data comes from CLDR, through the generator in internal/cldrgen, and is
+// carried as text that is read the first time a locale is asked for. A program
+// that never formats anything pays nothing for it: the tables are constants in
+// the binary, and no locale is decoded until something wants it.
+//
+// What is here is every locale that ICU has data of its own for -- each of the
+// 250 languages it knows, and each region or script variant of one that says
+// something its language does not -- together with the currencies that have
+// symbols, the date patterns a program asks for, and the plural rules. A
+// variant that says exactly what another says shares its data through an alias
+// rather than repeating it, which is what keeps the table to a size worth
+// carrying: a megabyte and a quarter of text, compressed to an eighth of that.
+//
+// A tag that is not here falls back to its language, and a language that is
+// not here falls back to English -- which is what Resolve reports, so that
+// resolvedOptions can say what was really used.
+//
+// Two things it does not carry. The finer day periods of Chinese and Japanese
+// -- the small hours, the evening -- are not distinguished, only morning and
+// afternoon. And the plural rules of Cornish are exact only below twenty-one
+// thousand, since that language asks what a count is modulo a hundred thousand
+// and this stores the answers rather than the question.
+package icu
+
+import (
+	"bytes"
+	"compress/flate"
+	"encoding/base64"
+	"io"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+)
+
+// Locale is everything known about one locale.
+type Locale struct {
+	// Tag is the locale this data is for, which may be less specific than the
+	// tag that was asked for.
+	Tag string
+	// Numbering is the name of the digits, "latn" for the ASCII ones.
+	Numbering string
+
+	// Decimal and Group are the separators; Digits is the ten digits when they
+	// are not the ASCII ones, and empty when they are.
+	Decimal, Group, Minus, PercentSign, NaN, Infinity, Digits string
+	// Indian says the separators fall after the first three digits and then
+	// every two, as in 12,34,567.
+	Indian bool
+	// MinGrouping is how many digits the first group must have for there to be
+	// a separator at all: two in Spanish and Italian, where 1234 is written
+	// without one and 12.345 with one.
+	MinGrouping int
+	// PercentPattern and CurrencyPattern say where the sign goes, with {0}
+	// standing for the number: "{0}%", "%{0}", "{0} €".
+	PercentPattern, CurrencyPattern string
+	// The same three for a negative number, since where the minus goes is the
+	// language's business too: -€1.00, €-1.00, or a mark in front of both.
+	DecimalNegative, PercentNegative, CurrencyNegative string
+	// Calendar is the one this locale counts years in: "gregory" nearly
+	// everywhere, "buddhist" in Thailand.
+	Calendar string
+
+	// Months are the names a date uses; MonthsAlone are the names the months
+	// are called, which differ in the languages that decline them.
+	Months, MonthsShort, MonthsNarrow []string
+	MonthsAlone, MonthsAloneShort     []string
+	Days, DaysShort, DaysNarrow       []string
+	// DayPeriods is what the locale calls the two halves of the day, and Eras
+	// what it calls the two eras.
+	DayPeriods [2]string
+	Eras       [2]string
+	// Hour12 says whether a time is written on a twelve-hour clock here.
+	Hour12 bool
+
+	// DatePatterns and TimePatterns are the four widths -- full, long, medium,
+	// short -- in CLDR pattern letters, and Glue is what goes between them
+	// when a format asks for both.
+	DatePatterns [4]string
+	TimePatterns [4]string
+	Glue         [4]string
+	// Skeletons are the patterns for the field combinations a program asks for
+	// rather than a whole style: "yMd", "MMMd", "hm".
+	Skeletons map[string]string
+
+	// Currencies is the symbol for each currency that has one here.
+	Currencies map[string]string
+	// Lists is keyed by type and width: "conjunction-long".
+	Lists map[string]ListPattern
+	// Relative is keyed by unit: "day", "week".
+	Relative map[string]RelativeUnit
+
+	// Short and Long are how a large number is shortened, by the power of ten
+	// it reaches: English counts in thousands, Japanese in ten-thousands.
+	Short, Long map[int]CompactForm
+
+	Cardinal, Ordinal PluralRule
+}
+
+// CompactForm is one step of a compact number: what the value is divided by,
+// and what is written after it.
+type CompactForm struct {
+	Divisor int
+	// Suffixes is what is written after the number, by plural form: a million
+	// is "Million" in German and two are "Millionen".
+	Suffixes map[byte]string
+}
+
+// ListPattern is how a language joins a list together.
+type ListPattern struct {
+	// Pair is the whole of a list of two, with {0} and {1} in it.
+	Pair string
+	// Start, Middle and End are what goes between the items of a longer list.
+	Start, Middle, End string
+}
+
+// RelativeUnit is how a language says "in three days" and "three days ago".
+type RelativeUnit struct {
+	// Past and Future are keyed by plural category, with {0} for the count.
+	Past, Future map[string]string
+	// Named is what the language says instead of counting: "yesterday" for -1.
+	Named map[int]string
+}
+
+// PluralRule says which form a count takes.
+//
+// A rule asks three kinds of question -- whether the count is exactly one of a
+// few small values, what its last two digits are, and, in a few languages,
+// what its last three are -- so it is stored as the answers rather than as an
+// expression to evaluate.
+type PluralRule struct {
+	// Categories are the forms this locale has, in the order CLDR lists them.
+	Categories []string
+	// Small is the category of each count below a hundred, and Mod of each
+	// remainder above it.
+	Small, Mod [100]byte
+	// ByThousand and Exact are the handful of rules that need more: one keyed
+	// by the last three digits, the other by the count itself.
+	ByThousand map[int]byte
+	Exact      map[int]byte
+	// FractionZero is the category of a count with a fraction and nothing in
+	// front of the point, FractionOther of one with something.
+	FractionZero, FractionOther byte
+}
+
+// Category reports which plural form a count takes.
+func (p *PluralRule) Category(n float64) string {
+	return categoryNames[p.category(n)]
+}
+
+func (p *PluralRule) category(n float64) byte {
+	if n < 0 {
+		n = -n
+	}
+	whole := int(n)
+	if n != float64(whole) {
+		// A count with a fraction, which most languages treat as one case.
+		if whole == 0 {
+			return p.FractionZero
+		}
+		return p.FractionOther
+	}
+	if whole < 100 {
+		return p.Small[whole]
+	}
+	if c, ok := p.ByThousand[whole%1000]; ok {
+		return c
+	}
+	if c, ok := p.Exact[whole]; ok {
+		return c
+	}
+	return p.Mod[whole%100]
+}
+
+// The categories, as the single letters the tables are written in.
+var categoryNames = map[byte]string{
+	'z': "zero", 'o': "one", 't': "two", 'f': "few", 'm': "many", 'x': "other",
+}
+
+// Resolve returns the data for a tag, and the tag it settled on.
+//
+// A tag with a region falls back to the plain language, and a language that is
+// not carried falls back to English: a program is better served by English
+// than by nothing, so long as it is told which it got.
+func Resolve(tag string) *Locale {
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return get("en")
+	}
+	// The forms a tag is written in: en_GB, EN-gb, en-GB-u-ca-gregory.
+	tag = strings.ReplaceAll(tag, "_", "-")
+	// A tag that says exactly what another says is answered with that one's
+	// data rather than with a copy of it.
+	if to, ok := aliases[canonicalCase(tag)]; ok {
+		tag = to
+	}
+	parts := strings.Split(tag, "-")
+	language := strings.ToLower(parts[0])
+
+	// The most specific form first: language-Script-Region, then
+	// language-Region or language-Script, then the language alone.
+	var region, script string
+	for _, part := range parts[1:] {
+		switch {
+		case len(part) == 4 && script == "":
+			script = strings.Title(strings.ToLower(part)) //nolint:staticcheck // ASCII tags
+		case (len(part) == 2 || len(part) == 3) && region == "":
+			region = strings.ToUpper(part)
+		case part == "u" || part == "x":
+			// An extension, which says nothing about which data to use.
+		}
+		if part == "u" || part == "x" {
+			break
+		}
+	}
+	for _, candidate := range []string{
+		language + "-" + script + "-" + region,
+		language + "-" + script,
+		language + "-" + region,
+		language,
+	} {
+		if strings.Contains(candidate, "--") || strings.HasSuffix(candidate, "-") {
+			continue
+		}
+		if l := get(candidate); l != nil {
+			return l
+		}
+	}
+	return get("en")
+}
+
+// canonicalCase writes a tag the way the tables spell one: the language in
+// lower case, a script capitalised, a region in upper case.
+func canonicalCase(tag string) string {
+	parts := strings.Split(tag, "-")
+	for i, part := range parts {
+		switch {
+		case i == 0:
+			parts[i] = strings.ToLower(part)
+		case len(part) == 4:
+			parts[i] = strings.ToUpper(part[:1]) + strings.ToLower(part[1:])
+		case len(part) == 2 || len(part) == 3:
+			parts[i] = strings.ToUpper(part)
+		}
+	}
+	return strings.Join(parts, "-")
+}
+
+// Has reports whether a tag resolves to data of its own rather than to
+// English, which is what supportedLocalesOf is asking.
+func Has(tag string) bool {
+	l := Resolve(tag)
+	if l == nil {
+		return false
+	}
+	want := strings.ToLower(strings.SplitN(strings.ReplaceAll(tag, "_", "-"), "-", 2)[0])
+	return strings.EqualFold(l.Tag, tag) || strings.HasPrefix(strings.ToLower(l.Tag), want)
+}
+
+// Tags lists every locale carried here.
+func Tags() []string {
+	out := make([]string, len(tags))
+	copy(out, tags[:])
+	return out
+}
+
+// Currencies lists the currencies that have a symbol here, which is what
+// supportedValuesOf is asking about.
+func Currencies() []string {
+	l := Resolve("en")
+	out := make([]string, 0, len(l.Currencies))
+	for code := range l.Currencies {
+		out = append(out, code)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// CurrencyDigits reports how many decimal places a currency is written with.
+func CurrencyDigits(code string) int {
+	if n, ok := currencyDigits[code]; ok {
+		return int(n)
+	}
+	return 2
+}
+
+// get decodes one locale, once.
+var (
+	decodedMu sync.Mutex
+	decoded   = map[string]*Locale{}
+)
+
+func get(tag string) *Locale {
+	i := indexOf(tag)
+	if i < 0 {
+		return nil
+	}
+	decodedMu.Lock()
+	defer decodedMu.Unlock()
+	if l, ok := decoded[tags[i]]; ok {
+		return l
+	}
+	blobs := unpack()
+	if i >= len(blobs) {
+		return nil
+	}
+	l := decode(tags[i], blobs[i])
+	decoded[tags[i]] = l
+	return l
+}
+
+// unpack reads the compressed table, once, the first time a locale is wanted.
+//
+// A program that formats nothing never gets here, which is the point: the data
+// is a megabyte and a quarter, and it costs a program that does not use it
+// nothing but the eighth of a megabyte it takes up compressed.
+var (
+	unpackOnce sync.Once
+	unpacked   []string
+)
+
+func unpack() []string {
+	unpackOnce.Do(func() {
+		raw, err := base64.StdEncoding.DecodeString(packed)
+		if err != nil {
+			return
+		}
+		out, err := io.ReadAll(flate.NewReader(bytes.NewReader(raw)))
+		if err != nil {
+			return
+		}
+		unpacked = strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
+	})
+	return unpacked
+}
+
+// indexOf finds a tag in the sorted table.
+func indexOf(tag string) int {
+	lo, hi := 0, len(tags)
+	for lo < hi {
+		mid := (lo + hi) / 2
+		switch {
+		case tags[mid] == tag:
+			return mid
+		case tags[mid] < tag:
+			lo = mid + 1
+		default:
+			hi = mid
+		}
+	}
+	// A tag is looked up in the case it was written in as well, since the
+	// table holds them the way CLDR spells them.
+	for i, t := range tags {
+		if strings.EqualFold(t, tag) {
+			return i
+		}
+	}
+	return -1
+}
+
+// The separators the blobs are written with: one between the sections, one
+// between the fields of a section, and one between the items of a field.
+const (
+	sectionSep = "\x1e"
+	fieldSep   = "\x1f"
+	itemSep    = "\x1d"
+)
+
+func decode(tag, blob string) *Locale {
+	sections := strings.Split(blob, sectionSep)
+	at := func(i int) []string {
+		if i >= len(sections) {
+			return nil
+		}
+		return strings.Split(sections[i], fieldSep)
+	}
+
+	l := &Locale{Tag: tag}
+	head := at(0)
+	field := func(i int) string {
+		if i < len(head) {
+			return head[i]
+		}
+		return ""
+	}
+	l.Numbering = field(0)
+	l.Decimal, l.Group, l.Minus = field(1), field(2), field(3)
+	l.PercentSign, l.NaN, l.Infinity, l.Digits = field(4), field(5), field(6), field(7)
+	l.PercentPattern, l.CurrencyPattern = field(8), field(9)
+	l.Indian = strings.Contains(field(10), "i")
+	l.Hour12 = strings.Contains(field(10), "h")
+	l.MinGrouping = 1
+	if strings.Contains(field(10), "g") {
+		l.MinGrouping = 2
+	}
+	l.DecimalNegative, l.PercentNegative = field(11), field(12)
+	l.CurrencyNegative, l.Calendar = field(13), field(14)
+	if l.DecimalNegative == "" {
+		l.DecimalNegative = "-{0}"
+	}
+	if l.Calendar == "" {
+		l.Calendar = "gregory"
+	}
+
+	names := at(1)
+	list := func(i int) []string {
+		if i >= len(names) || names[i] == "" {
+			return nil
+		}
+		return strings.Split(names[i], itemSep)
+	}
+	l.Months, l.MonthsShort, l.MonthsNarrow = list(0), list(1), list(2)
+	l.Days, l.DaysShort, l.DaysNarrow = list(3), list(4), list(5)
+	if periods := list(6); len(periods) == 2 {
+		l.DayPeriods = [2]string{periods[0], periods[1]}
+	}
+	if eras := list(7); len(eras) == 2 {
+		l.Eras = [2]string{eras[0], eras[1]}
+	}
+	l.MonthsAlone, l.MonthsAloneShort = list(8), list(9)
+	if l.MonthsAlone == nil {
+		l.MonthsAlone, l.MonthsAloneShort = l.Months, l.MonthsShort
+	}
+
+	patterns := at(2)
+	four := func(i int) [4]string {
+		var out [4]string
+		if i >= len(patterns) {
+			return out
+		}
+		parts := strings.Split(patterns[i], itemSep)
+		for k := 0; k < 4 && k < len(parts); k++ {
+			out[k] = parts[k]
+		}
+		return out
+	}
+	l.DatePatterns, l.TimePatterns, l.Glue = four(0), four(1), four(2)
+	l.Skeletons = pairs(patterns, 3)
+	l.Currencies = pairs(at(3), 0)
+
+	l.Cardinal = decodePlural(at(4))
+	l.Ordinal = decodePlural(at(5))
+	l.Lists = decodeLists(at(6))
+	l.Relative = decodeRelative(at(7))
+	if compact := at(8); len(compact) >= 2 {
+		l.Short = decodeCompact(compact[0])
+		l.Long = decodeCompact(compact[1])
+	}
+	return l
+}
+
+// pairs reads a field written as name=value items.
+func pairs(fields []string, i int) map[string]string {
+	if i >= len(fields) || fields[i] == "" {
+		return nil
+	}
+	out := map[string]string{}
+	for _, item := range strings.Split(fields[i], itemSep) {
+		if name, value, ok := strings.Cut(item, "="); ok {
+			out[name] = value
+		}
+	}
+	return out
+}
+
+func decodePlural(fields []string) PluralRule {
+	var p PluralRule
+	if len(fields) < 7 {
+		p.Categories = []string{"other"}
+		for i := range p.Small {
+			p.Small[i], p.Mod[i] = 'x', 'x'
+		}
+		p.FractionZero, p.FractionOther = 'x', 'x'
+		return p
+	}
+	if fields[0] != "" {
+		p.Categories = strings.Split(fields[0], itemSep)
+	}
+	copy(p.Small[:], fields[1])
+	copy(p.Mod[:], fields[2])
+	p.ByThousand = numberedCategories(fields[3])
+	p.Exact = numberedCategories(fields[4])
+	p.FractionZero = byteAt(fields[5])
+	p.FractionOther = byteAt(fields[6])
+	return p
+}
+
+func byteAt(s string) byte {
+	if s == "" {
+		return 'x'
+	}
+	return s[0]
+}
+
+// numberedCategories reads the exceptions, written as 100o items.
+func numberedCategories(field string) map[int]byte {
+	if field == "" {
+		return nil
+	}
+	out := map[int]byte{}
+	for _, item := range strings.Split(field, itemSep) {
+		if len(item) < 2 {
+			continue
+		}
+		n := 0
+		for i := 0; i < len(item)-1; i++ {
+			n = n*10 + int(item[i]-'0')
+		}
+		out[n] = item[len(item)-1]
+	}
+	return out
+}
+
+// Compact shortens a number the way this locale shortens one, and reports the
+// scaled value, what it was divided by, and what is written after it. A locale
+// that does not shorten at this size answers with the number itself, a divisor
+// of one, and nothing to write.
+func (l *Locale) Compact(x float64, long bool) (float64, float64, CompactForm) {
+	table := l.Short
+	if long {
+		table = l.Long
+	}
+	if table == nil || x < 1000 {
+		return x, 1, CompactForm{}
+	}
+	// The power of ten the number reaches, which is what the table is keyed by.
+	power := 0
+	for v := x; v >= 10; v /= 10 {
+		power++
+	}
+	for power >= 3 {
+		if form, ok := table[power]; ok {
+			divisor := 1.0
+			for i := 0; i < form.Divisor; i++ {
+				divisor *= 10
+			}
+			return x / divisor, divisor, form
+		}
+		power--
+	}
+	return x, 1, CompactForm{}
+}
+
+// SuffixFor is what is written after a number of this size, in the form the
+// count takes: one Million, two Millionen.
+func (f CompactForm) SuffixFor(category string) string {
+	return f.suffixFor(letterOf(category))
+}
+
+// letterOf is how a category is written in the tables.
+func letterOf(category string) byte {
+	for letter, name := range categoryNames {
+		if name == category {
+			return letter
+		}
+	}
+	return 'x'
+}
+
+func (f CompactForm) suffixFor(category byte) string {
+	if s, ok := f.Suffixes[category]; ok {
+		return s
+	}
+	if s, ok := f.Suffixes['x']; ok {
+		return s
+	}
+	for _, s := range f.Suffixes {
+		return s
+	}
+	return ""
+}
+
+func decodeCompact(field string) map[int]CompactForm {
+	if field == "" {
+		return nil
+	}
+	out := map[int]CompactForm{}
+	for _, item := range strings.Split(field, itemSep) {
+		power, rest, ok := strings.Cut(item, ":")
+		if !ok {
+			continue
+		}
+		divisor, suffix, ok := strings.Cut(rest, ":")
+		if !ok {
+			continue
+		}
+		p, err1 := strconv.Atoi(power)
+		d, err2 := strconv.Atoi(divisor)
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		forms := map[byte]string{}
+		for _, one := range strings.Split(suffix, ",") {
+			if len(one) >= 2 && one[1] == '=' {
+				forms[one[0]] = one[2:]
+			}
+		}
+		out[p] = CompactForm{Divisor: d, Suffixes: forms}
+	}
+	return out
+}
+
+func decodeLists(fields []string) map[string]ListPattern {
+	if len(fields) == 0 || fields[0] == "" {
+		return nil
+	}
+	out := map[string]ListPattern{}
+	for _, item := range fields {
+		parts := strings.Split(item, itemSep)
+		if len(parts) != 5 {
+			continue
+		}
+		out[parts[0]] = ListPattern{
+			Pair: parts[1], Start: parts[2], Middle: parts[3], End: parts[4],
+		}
+	}
+	return out
+}
+
+func decodeRelative(fields []string) map[string]RelativeUnit {
+	if len(fields) == 0 || fields[0] == "" {
+		return nil
+	}
+	out := map[string]RelativeUnit{}
+	for _, item := range fields {
+		parts := strings.Split(item, itemSep)
+		if len(parts) < 1 {
+			continue
+		}
+		unit := RelativeUnit{
+			Past: map[string]string{}, Future: map[string]string{},
+			Named: map[int]string{},
+		}
+		for _, entry := range parts[1:] {
+			key, value, ok := strings.Cut(entry, "=")
+			if !ok {
+				continue
+			}
+			switch {
+			case strings.HasPrefix(key, "p:"):
+				unit.Past[key[2:]] = value
+			case strings.HasPrefix(key, "f:"):
+				unit.Future[key[2:]] = value
+			case strings.HasPrefix(key, "n:"):
+				n := 0
+				negative := false
+				for i := 0; i < len(key[2:]); i++ {
+					c := key[2:][i]
+					if c == '-' {
+						negative = true
+						continue
+					}
+					n = n*10 + int(c-'0')
+				}
+				if negative {
+					n = -n
+				}
+				unit.Named[n] = value
+			}
+		}
+		out[parts[0]] = unit
+	}
+	return out
+}

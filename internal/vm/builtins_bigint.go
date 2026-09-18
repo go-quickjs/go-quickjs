@@ -54,7 +54,13 @@ func (r *Runtime) initBigIntBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(b.String())), nil
+		// The digits are grouped without going through a float, which would
+		// lose them: a big integer is big.
+		text, err := rt.formatBigIntFor(args, b.String())
+		if err != nil {
+			return Undefined, err
+		}
+		return Str(NewString(text)), nil
 	})
 
 	r.defMethod(p, "valueOf", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {

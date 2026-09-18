@@ -301,14 +301,33 @@ func (r *Runtime) initDateBuiltins() {
 	format("toTimeString", func(rt *Runtime, t time.Time) string {
 		return t.Format("15:04:05 GMT-0700 (MST)")
 	})
-	format("toLocaleString", func(rt *Runtime, t time.Time) string {
-		return t.Format("1/2/2006, 3:04:05 PM")
+	// The three toLocale methods are Intl.DateTimeFormat with the fields each
+	// of them stands for, which is what ECMA-402 defines them as.
+	locale := func(name string, defaults map[string]string) {
+		r.defMethod(p, name, 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+			t, err := rt.dateValueOf(this, "Date.prototype."+name)
+			if err != nil {
+				return Undefined, err
+			}
+			if math.IsNaN(t) {
+				return Str(NewString("Invalid Date")), nil
+			}
+			o, err := rt.dateOptionsFrom(args, defaults)
+			if err != nil {
+				return Undefined, err
+			}
+			return Str(NewString(o.format(rt.timeAt(t, o.utc)))), nil
+		})
+	}
+	locale("toLocaleString", map[string]string{
+		"year": "numeric", "month": "numeric", "day": "numeric",
+		"hour": "numeric", "minute": "numeric", "second": "numeric",
 	})
-	format("toLocaleDateString", func(rt *Runtime, t time.Time) string {
-		return t.Format("1/2/2006")
+	locale("toLocaleDateString", map[string]string{
+		"year": "numeric", "month": "numeric", "day": "numeric",
 	})
-	format("toLocaleTimeString", func(rt *Runtime, t time.Time) string {
-		return t.Format("3:04:05 PM")
+	locale("toLocaleTimeString", map[string]string{
+		"hour": "numeric", "minute": "numeric", "second": "numeric",
 	})
 
 	r.defMethod(p, "toISOString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
