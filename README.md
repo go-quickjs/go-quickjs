@@ -136,8 +136,9 @@ because the engine has no ambient authority to withhold:
 ```
 qjs --allow-read=. build.js             read files under this directory
 qjs --allow-write=/tmp --allow-read=/tmp generate.js
-qjs --allow-net=api.example.com fetch.js reach one host
+qjs --allow-net=api.example.com fetch.js reach one host, and serve on it
 qjs --allow-env deploy.js                read the environment
+qjs --allow-run release.js               start programs
 qjs -A script.js                         all of it, for code you trust
 ```
 
@@ -147,6 +148,18 @@ have given it, rather than finding a hole where a function should be:
 ```
 $ qjs -e 'fetch("https://example.com")'
 uncaught (in promise) Error: network access is not allowed: run qjs with --allow-net
+```
+
+A program that serves is a program, so `qjs` can be the whole of a small
+service:
+
+```js
+// server.js -- qjs --allow-net server.js
+serve({port: 8080}, async (request) => {
+  const {pathname} = new URL(request.url)
+  if (pathname === "/health") return new Response("ok")
+  return Response.json({path: pathname})
+})
 ```
 
 The bounds are there too — `--memory-limit 64m`, `--stack-size`, `--timeout 5s`,
@@ -285,6 +298,7 @@ err := stdlib.Install(rt, stdlib.Config{
     FS:      &stdlib.FS{Root: "/srv/data", ReadOnly: true},
     Process: &stdlib.Process{Args: os.Args, Env: nil},
     Fetch:   &stdlib.Fetch{Allow: onlyMyAPI},
+    Serve:   &stdlib.Serve{Allow: onlyLocalhost},
 })
 
 rt.Eval(src)
@@ -299,10 +313,20 @@ loop.Run(ctx)     // timers, and work that finished on other goroutines
 | `Process` | `process.argv`, `env`, `cwd`, `stdout`, `exit` — what the host chooses to say |
 | `OS` | the `os` module |
 | `Fetch` | `fetch`, `Headers`, `Request`, `Response` |
+| `Serve` | `serve`, the `http` module — an HTTP server whose handler is `(Request) => Response` |
+| `Run` | the `child_process` module: `execFileSync`, `execFile`, `spawnSync`, `exec` |
 
 A root is a boundary: a path that climbs out of it, or a symbolic link that
 points out of it, is refused rather than followed. `Fetch.Allow` sees every
-request before it is made. What is not installed cannot be reached.
+request before it is made, `Serve.Allow` every address before it is listened on,
+and `Run.Allow` every program before it is started. What is not installed cannot
+be reached.
+
+A server's handler is script, so it runs on the loop; the connections are served
+on their own goroutines and wait for it. A program that is given the environment
+is the one that passes it on: `Run.Env` is what a started program sees, and nil
+means none at all, so a script refused the environment cannot read it through a
+program it starts.
 
 ## ECMAScript regular expressions for Go
 
