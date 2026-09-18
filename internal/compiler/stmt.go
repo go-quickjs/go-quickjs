@@ -492,6 +492,7 @@ func (c *compiler) pushLoop(label string, isLoop bool) *loopCtx {
 	}
 	c.loops = append(c.loops, loopCtx{
 		label: label, isLoop: isLoop, scopeDepth: c.depth, exits: len(c.exits),
+		finallys: len(c.finallys), handlers: c.handlerDepth,
 	})
 	return &c.loops[len(c.loops)-1]
 }
@@ -706,8 +707,7 @@ func (c *compiler) compileForBody(left ast.Node, body ast.Stmt) {
 func (c *compiler) compileBreak(n *ast.BreakStmt) {
 	for i := len(c.loops) - 1; i >= 0; i-- {
 		if n.Label == "" || c.loops[i].label == n.Label {
-			c.emitPendingFinallys()
-			c.emitPendingExits(c.loops[i].exits)
+			c.unwindTo(&c.loops[i])
 			pc := c.emitJump(bytecode.OpJump)
 			c.loops[i].breaks = append(c.loops[i].breaks, pc)
 			return
@@ -722,8 +722,7 @@ func (c *compiler) compileContinue(n *ast.ContinueStmt) {
 			continue
 		}
 		if n.Label == "" || c.loops[i].label == n.Label {
-			c.emitPendingFinallys()
-			c.emitPendingExits(c.loops[i].exits)
+			c.unwindTo(&c.loops[i])
 			pc := c.emitJump(bytecode.OpJump)
 			c.loops[i].continues = append(c.loops[i].continues, pc)
 			return
@@ -989,16 +988,22 @@ func (c *compiler) emitPendingExits(down int) {
 	}
 }
 
-// emitPendingFinallys inlines the body of every enclosing finally clause before
-// a break or continue leaves it.
+// unwindTo emits what a break or continue owes on its way to target: the
+// finally clauses it leaves, the exception handlers it jumps out from, and the
+// operands and iterators the statements in between put there.
 //
-// A completion record cannot express "jump to that label", so the clause is
-// compiled a second time at the jump site rather than being routed through.
-// Finally clauses are small and rarely nested, so the duplication is bounded.
-func (c *compiler) emitPendingFinallys() {
+// Only what lies between the jump and the target is unwound. A finally clause
+// whose try block contains the target is not being left at all -- in
+//
+//	try { for (;;) break } finally { ... }
+//
+// the break goes to the end of the loop, which is still inside the try, so the
+// clause keeps its handler and does not run. Getting that wrong runs the clause
+// early and pops a handler that is still in use.
+func (c *compiler) unwindTo(target *loopCtx) {
 	saved, savedDepth := c.finallys, c.handlerDepth
 	defer func() { c.finallys, c.handlerDepth = saved, savedDepth }()
-	for i := len(saved) - 1; i >= 0; i-- {
+	for i := len(saved) - 1; i >= target.finallys; i-- {
 		// Everything between here and the clause goes, the clause's own
 		// handler included.
 		for c.handlerDepth >= saved[i].handlers {
@@ -1008,11 +1013,25 @@ func (c *compiler) emitPendingFinallys() {
 		// While a clause's body is being inlined it is no longer pending: a
 		// break or continue written inside it leaves through the clauses
 		// outside it, not through itself again.
+		//
+		// A completion record cannot express "jump to that label", so the
+		// clause is compiled a second time at the jump site rather than being
+		// routed through. Clauses are small and rarely nested, so the
+		// duplication is bounded.
 		c.finallys = saved[:i]
 		c.beginScope()
 		c.compileStatements(saved[i].body)
 		c.endScope()
 	}
+	// What is left is the handler of a catch clause the jump leaves without
+	// passing through a finally: a try whose block breaks out of a loop around
+	// it. Nothing runs, but the handler still has to go, or a later throw
+	// lands in a catch clause that was finished with.
+	for c.handlerDepth > target.handlers {
+		c.emit(bytecode.OpPopCatch, 0, 0)
+		c.handlerDepth--
+	}
+	c.emitPendingExits(target.exits)
 }
 
 // atModuleTopLevel reports whether the compiler is in a module's outermost

@@ -169,6 +169,13 @@ type loopCtx struct {
 	// exits is how much of the enclosing exit stack is still in force here, so
 	// that a jump out of an inner statement undoes what it left behind.
 	exits int
+	// finallys and handlers are how much of the enclosing finally stack and
+	// handler stack were in force when the statement began. A jump to this
+	// target unwinds down to these and no further: a finally clause whose try
+	// block contains the target is not owed a run, and an exception handler
+	// that encloses the target is not one the jump is leaving.
+	finallys int
+	handlers int
 }
 
 // pendingExit is something a statement left in place for the duration of its
