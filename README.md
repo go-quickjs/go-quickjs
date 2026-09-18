@@ -203,9 +203,10 @@ rt := quickjs.New(
 Runaway recursion raises a catchable `RangeError` rather than overflowing the
 goroutine stack. Deeply nested source is rejected at parse time for the same
 reason — a goroutine stack overflow cannot be caught, so it would take the host
-down. A panic anywhere inside the engine is caught at the `Eval` boundary and
-returned as `ErrInternal`: a host running untrusted code must not be taken down
-by the code it is sandboxing.
+down — and so is deeply nested JSON, which `JSON.parse`, `JSON.stringify` and a
+reviver all walk by recursion. A panic anywhere inside the engine is caught at
+the `Eval` boundary and returned as `ErrInternal`: a host running untrusted code
+must not be taken down by the code it is sandboxing.
 
 Wall-clock bounds come from a `context.Context`, which the interpreter polls as
 it executes, so an infinite loop is interrupted rather than hanging the process:
