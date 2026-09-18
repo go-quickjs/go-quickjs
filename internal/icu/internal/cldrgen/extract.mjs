@@ -517,8 +517,26 @@ function listData(locale) {
 
 function relativeData(locale) {
   const out = {};
-  const always = new Intl.RelativeTimeFormat(locale, {numeric: "always"});
-  const auto = new Intl.RelativeTimeFormat(locale, {numeric: "auto"});
+  for (const style of ["long", "short", "narrow"]) {
+    const forms = relativeStyle(locale, style);
+    for (const [unit, entry] of Object.entries(forms)) {
+      if (style === "long") {
+        out[unit] = entry;
+        continue;
+      }
+      // A style that says the same as the long one is left to it.
+      if (JSON.stringify(entry) !== JSON.stringify(out[unit])) {
+        out[style + "/" + unit] = entry;
+      }
+    }
+  }
+  return out;
+}
+
+function relativeStyle(locale, style) {
+  const out = {};
+  const always = new Intl.RelativeTimeFormat(locale, {numeric: "always", style});
+  const auto = new Intl.RelativeTimeFormat(locale, {numeric: "auto", style});
   const numbers = new Intl.NumberFormat(locale);
   for (const unit of RELATIVE_UNITS) {
     const forms = {};

@@ -231,8 +231,23 @@ type pluralOptions struct {
 	locale    *icu.Locale
 	requested string
 	ordinal   bool
-	// The digit options, which round the count before its form is chosen.
-	minFrac, maxFrac int
+	// numbers is how the count would be written, since which form a language
+	// puts a number in depends on how many digits are written rather than on
+	// the number itself: one apple, but 1.0 apples.
+	numbers *numberOptions
+}
+
+// categoryOf is the form a language puts a count in, asked of the number as it
+// would be written rather than as it was given.
+func (o *pluralOptions) categoryOf(n float64) string {
+	rule := o.rule()
+	if o.numbers == nil {
+		return rule.Category(n)
+	}
+	// The digits the count would be written with, which is what the rules ask
+	// about: whether there is a fraction, and how long it is.
+	whole, fraction := o.numbers.rawDigits(o.numbers.round(decimalOf(n)))
+	return rule.CategoryOf(whole, fraction, n)
 }
 
 func (r *Runtime) initPluralRules(intl *Object) {
@@ -242,25 +257,41 @@ func (r *Runtime) initPluralRules(intl *Object) {
 		if err != nil {
 			return Undefined, err
 		}
+		if !rt.Constructing() {
+			return Undefined, rt.throwTypeError("Intl.PluralRules requires new")
+		}
 		tags, err := rt.requestedLocales(arg(args, 0))
 		if err != nil {
 			return Undefined, err
 		}
-		options, err := rt.optionsObject(arg(args, 1))
+		options, err := rt.strictOptions(arg(args, 1))
 		if err != nil {
 			return Undefined, err
 		}
+		if _, err := rt.stringOption(options, "localeMatcher", "best fit",
+			"lookup", "best fit"); err != nil {
+			return Undefined, err
+		}
 		choice := rt.resolveLocale(tags)
-		locale, requested := choice.data, choice.locale()
 		kind, err := rt.stringOption(options, "type", "cardinal", "cardinal", "ordinal")
 		if err != nil {
 			return Undefined, err
 		}
-		o := &pluralOptions{locale: locale, requested: requested, ordinal: kind == "ordinal"}
-		if o.minFrac, _, err = rt.intOption(options, "minimumFractionDigits", 0, 100, 0); err != nil {
+		o := &pluralOptions{locale: choice.data, requested: choice.locale(),
+			ordinal: kind == "ordinal"}
+		// How a number is written decides which form a language puts it in, so
+		// a plural rule reads the same digit options a number format does.
+		o.numbers = &numberOptions{locale: choice.data, choice: choice, style: "decimal",
+			signDisplay: "auto", useGrouping: "auto"}
+		if o.numbers.notation, err = rt.stringOption(options, "notation", "standard",
+			"standard", "scientific", "engineering", "compact"); err != nil {
 			return Undefined, err
 		}
-		if o.maxFrac, _, err = rt.intOption(options, "maximumFractionDigits", 0, 100, 3); err != nil {
+		if o.numbers.compactDisplay, err = rt.stringOption(options, "compactDisplay", "short",
+			"short", "long"); err != nil {
+			return Undefined, err
+		}
+		if err := rt.readDigitOptions(o.numbers, options, 0, 3); err != nil {
 			return Undefined, err
 		}
 		out := newObject(proto, ClassObject)
@@ -281,20 +312,30 @@ func (r *Runtime) initPluralRules(intl *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(o.rule().Category(n))), nil
+		return Str(NewString(o.categoryOf(n))), nil
 	})
 	r.defMethod(proto, "selectRange", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		o, err := rt.pluralOf(this)
 		if err != nil {
 			return Undefined, err
 		}
-		// A range takes the form its end takes, which is what the languages
-		// carried here do.
+		if arg(args, 0).IsUndefined() || arg(args, 1).IsUndefined() {
+			return Undefined, rt.throwTypeError("a range has two ends")
+		}
+		start, err := rt.toNumber(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
 		end, err := rt.toNumber(arg(args, 1))
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(o.rule().Category(end))), nil
+		if math.IsNaN(start) || math.IsNaN(end) {
+			return Undefined, rt.throwRangeError("a range does not have a NaN at either end")
+		}
+		// A range takes the form its end takes, which is what the languages
+		// carried here do.
+		return Str(NewString(o.categoryOf(end))), nil
 	})
 	r.defMethod(proto, "resolvedOptions", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		o, err := rt.pluralOf(this)
@@ -308,16 +349,26 @@ func (r *Runtime) initPluralRules(intl *Object) {
 			kind = "ordinal"
 		}
 		rt.putString(out, "type", kind)
-		rt.putInt(out, "minimumIntegerDigits", 1)
-		rt.putInt(out, "minimumFractionDigits", o.minFrac)
-		rt.putInt(out, "maximumFractionDigits", o.maxFrac)
+		rt.putString(out, "notation", o.numbers.notation)
+		rt.putInt(out, "minimumIntegerDigits", o.numbers.minInt)
+		if o.numbers.reportFrac {
+			rt.putInt(out, "minimumFractionDigits", o.numbers.minFrac)
+			rt.putInt(out, "maximumFractionDigits", o.numbers.maxFrac)
+		}
+		if o.numbers.reportSig {
+			rt.putInt(out, "minimumSignificantDigits", o.numbers.minSig)
+			rt.putInt(out, "maximumSignificantDigits", o.numbers.maxSig)
+		}
 		categories := o.rule().Categories
 		values := make([]Value, len(categories))
 		for i, c := range categories {
 			values[i] = Str(NewString(c))
 		}
 		out.setOwnRaw(rt.atoms.intern("pluralCategories"), Obj(rt.newArrayFrom(values)), propDefault)
-		rt.putString(out, "roundingMode", "halfExpand")
+		rt.putInt(out, "roundingIncrement", o.numbers.roundingIncrement)
+		rt.putString(out, "roundingMode", o.numbers.roundingMode)
+		rt.putString(out, "roundingPriority", o.numbers.roundingPriority)
+		rt.putString(out, "trailingZeroDisplay", o.numbers.trailingZero)
 		return Obj(out), nil
 	})
 }
@@ -368,7 +419,7 @@ func (r *Runtime) initDisplayNames(intl *Object) {
 		if arg(args, 1).IsUndefined() {
 			return Undefined, rt.throwTypeError("Intl.DisplayNames needs to be told what kind of name")
 		}
-		options, err := rt.optionsObject(arg(args, 1))
+		options, err := rt.strictOptions(arg(args, 1))
 		if err != nil {
 			return Undefined, err
 		}
@@ -554,8 +605,12 @@ func (r *Runtime) initListFormat(intl *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		options, err := rt.optionsObject(arg(args, 1))
+		options, err := rt.strictOptions(arg(args, 1))
 		if err != nil {
+			return Undefined, err
+		}
+		if _, err := rt.stringOption(options, "localeMatcher", "best fit",
+			"lookup", "best fit"); err != nil {
 			return Undefined, err
 		}
 		choice := rt.resolveLocale(tags)
@@ -739,12 +794,21 @@ func (r *Runtime) initRelativeTimeFormat(intl *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		choice := rt.resolveLocale(tags, "nu")
-		o := &relativeOptions{locale: choice.data, choice: choice}
-		if o.numeric, err = rt.stringOption(options, "numeric", "always", "always", "auto"); err != nil {
+		if _, err := rt.stringOption(options, "localeMatcher", "best fit",
+			"lookup", "best fit"); err != nil {
 			return Undefined, err
 		}
+		numbering, err := rt.typeOption(options, "numberingSystem")
+		if err != nil {
+			return Undefined, err
+		}
+		choice := rt.resolveLocale(tags, "nu")
+		choice.override("nu", numbering)
+		o := &relativeOptions{locale: choice.data, choice: choice}
 		if o.style, err = rt.stringOption(options, "style", "long", "long", "short", "narrow"); err != nil {
+			return Undefined, err
+		}
+		if o.numeric, err = rt.stringOption(options, "numeric", "always", "always", "auto"); err != nil {
 			return Undefined, err
 		}
 		o.numbers = &numberOptions{
@@ -775,6 +839,9 @@ func (r *Runtime) initRelativeTimeFormat(intl *Object) {
 		if err != nil {
 			return Undefined, err
 		}
+		if math.IsNaN(n) || math.IsInf(n, 0) {
+			return Undefined, rt.throwRangeError("a count of time is a finite number")
+		}
 		text, err := o.format(rt, n, unit.Go())
 		if err != nil {
 			return Undefined, err
@@ -794,24 +861,33 @@ func (r *Runtime) initRelativeTimeFormat(intl *Object) {
 		if err != nil {
 			return Undefined, err
 		}
+		if math.IsNaN(n) || math.IsInf(n, 0) {
+			return Undefined, rt.throwRangeError("a count of time is a finite number")
+		}
 		text, err := o.format(rt, n, unit.Go())
 		if err != nil {
 			return Undefined, err
 		}
-		// The parts are the text with the count marked, which is what a
-		// program uses this for.
-		shown := o.numbers.format(math.Abs(n))
+		// The words around the count are literals, and the count itself is
+		// broken into the pieces a number is made of, each saying which unit
+		// it counts.
 		var out []Value
-		if at := strings.Index(text, shown); at >= 0 && o.numeric == "always" {
-			if at > 0 {
-				out = append(out, Obj(rt.partObject("literal", text[:at])))
-			}
-			out = append(out, Obj(rt.partObject("integer", shown)))
-			if rest := text[at+len(shown):]; rest != "" {
-				out = append(out, Obj(rt.partObject("literal", rest)))
-			}
-		} else {
-			out = append(out, Obj(rt.partObject("literal", text)))
+		pieces := o.numbers.parts(math.Abs(n))
+		shown := piecesText(pieces)
+		at := strings.Index(text, shown)
+		if shown == "" || at < 0 {
+			return Obj(rt.newArrayFrom([]Value{Obj(rt.partObject("literal", text))})), nil
+		}
+		if at > 0 {
+			out = append(out, Obj(rt.partObject("literal", text[:at])))
+		}
+		for _, piece := range pieces {
+			part := rt.partObject(piece.kind, piece.value)
+			rt.putString(part, "unit", relativeUnits[unit.Go()])
+			out = append(out, Obj(part))
+		}
+		if rest := text[at+len(shown):]; rest != "" {
+			out = append(out, Obj(rt.partObject("literal", rest)))
 		}
 		return Obj(rt.newArrayFrom(out)), nil
 	})
@@ -843,9 +919,13 @@ func (o *relativeOptions) format(r *Runtime, n float64, unitName string) (string
 	if !ok {
 		return "", r.throwRangeError("that is not a unit of time: %s", unitName)
 	}
-	data, ok := o.locale.Relative[unit]
+	// The shorter styles where the language writes them differently, and the
+	// long words where it does not.
+	data, ok := o.locale.Relative[o.style+"/"+unit]
 	if !ok {
-		return "", r.throwRangeError("this runtime has no words for %s", unit)
+		if data, ok = o.locale.Relative[unit]; !ok {
+			return "", r.throwRangeError("this runtime has no words for %s", unit)
+		}
 	}
 
 	// The words a language has instead of a count: yesterday, next week.

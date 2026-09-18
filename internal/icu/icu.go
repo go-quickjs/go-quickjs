@@ -914,3 +914,19 @@ func NumberingSystems() []string {
 	sort.Strings(out)
 	return out
 }
+
+// CategoryOf is the form a count takes when it is written with these digits.
+// A language counts what is written rather than what it means: one apple, but
+// 1.0 apples, because the one has a fraction written after it.
+func (p *PluralRule) CategoryOf(whole, fraction string, n float64) string {
+	if fraction != "" {
+		if strings.Trim(whole, "0") == "" {
+			return categoryNames[p.FractionZero]
+		}
+		return categoryNames[p.FractionOther]
+	}
+	if written, err := strconv.ParseFloat(whole, 64); err == nil {
+		return p.Category(written)
+	}
+	return p.Category(n)
+}

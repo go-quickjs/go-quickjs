@@ -466,9 +466,11 @@ func boolWord(b bool) string {
 	return "false"
 }
 
-// optionsFromArgument is the options argument where nothing may stand in for
-// an object: undefined means no options, and anything else must be one.
-func (r *Runtime) optionsFromArgument(v Value) (*Object, error) {
+// strictOptions is the options argument where nothing may stand in for an
+// object: undefined means no options, and anything else must be one. The older
+// formatters take whatever they are given and make an object of it; the newer
+// ones refuse.
+func (r *Runtime) strictOptions(v Value) (*Object, error) {
 	if v.IsUndefined() {
 		return newObject(nil, ClassObject), nil
 	}
@@ -1394,7 +1396,7 @@ func (r *Runtime) defSupportedLocalesOf(ctor *Object) {
 		}
 		// The options are read even though the only one that could matter is
 		// which matcher to use, since a bad value has to be refused.
-		options, err := rt.optionsFromArgument(arg(args, 1))
+		options, err := rt.optionsObject(arg(args, 1))
 		if err != nil {
 			return Undefined, err
 		}

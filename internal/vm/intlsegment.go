@@ -54,7 +54,7 @@ func (r *Runtime) initSegmenter(intl *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		options, err := rt.optionsObject(arg(args, 1))
+		options, err := rt.strictOptions(arg(args, 1))
 		if err != nil {
 			return Undefined, err
 		}

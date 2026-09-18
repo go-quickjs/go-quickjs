@@ -384,6 +384,13 @@ func (o *numberOptions) currencyText() string {
 // digitsOf writes the rounded number out as the whole part and the fraction,
 // in whatever digits this locale writes numbers with.
 func (o *numberOptions) digitsOf(d decimal, kept string) (string, string) {
+	whole, fraction := o.rawDigits(d, kept)
+	return o.localDigits(whole), o.localDigits(fraction)
+}
+
+// rawDigits is the same in the digits everyone writes arithmetic in, which is
+// what the plural rules ask about.
+func (o *numberOptions) rawDigits(d decimal, kept string) (string, string) {
 	minFrac, maxFrac := o.minFrac, o.maxFrac
 	significant := kept == "significant"
 	if significant {
@@ -408,7 +415,7 @@ func (o *numberOptions) digitsOf(d decimal, kept string) (string, string) {
 	for len(whole) < o.minInt {
 		whole = "0" + whole
 	}
-	return o.localDigits(whole), o.localDigits(fraction)
+	return whole, fraction
 }
 
 // localDigits writes ASCII digits in whatever digits are being written in,
