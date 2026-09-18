@@ -138,7 +138,7 @@ qjs --allow-read=. build.js             read files under this directory
 qjs --allow-write=/tmp --allow-read=/tmp generate.js
 qjs --allow-net=api.example.com fetch.js reach one host, and serve on it
 qjs --allow-env deploy.js                read the environment
-qjs --allow-run release.js               start programs
+qjs --allow-run=git release.js           start programs, or only some
 qjs -A script.js                         all of it, for code you trust
 ```
 
@@ -307,7 +307,7 @@ loop.Run(ctx)     // timers, and work that finished on other goroutines
 
 | | |
 |---|---|
-| Always | `console`, `URL`, `TextEncoder`/`TextDecoder`, `atob`/`btoa`, `structuredClone`, `performance`, `crypto` (hashing, HMAC, PBKDF2, HKDF, `subtle`), `AbortController`, `Buffer`, the web's streams, `CompressionStream`, and the `path`, `events`, `util`, `assert`, `buffer`, `crypto`, `zlib`, `stream/web`, `url`, `querystring`, `string_decoder` modules |
+| Always | `console`, `URL`, `TextEncoder`/`TextDecoder`, `atob`/`btoa`, `structuredClone`, `performance`, `crypto` (hashing, HMAC, PBKDF2, HKDF, `subtle`), `Blob`, `File`, `FormData`, `AbortController`, `Buffer`, the web's streams, `CompressionStream`, and the `path`, `events`, `util`, `assert`, `buffer`, `crypto`, `zlib`, `stream/web`, `url`, `querystring`, `string_decoder` modules |
 | `Loop` | `setTimeout`, `setInterval`, `queueMicrotask`, and the `timers`, `timers/promises` modules |
 | `FS` | the `fs` module, sync and promise halves, `createReadStream`/`createWriteStream`, confined to `Root` |
 | `Process` | `process.argv`, `env`, `cwd`, `stdout`, `exit` — what the host chooses to say |

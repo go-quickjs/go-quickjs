@@ -541,8 +541,25 @@ const fetchJS = `(function (host) {
     async bytes() { return await this._consume(); }
     async text() { return new TextDecoder().decode(await this._consume()); }
     async json() { return JSON.parse(new TextDecoder().decode(await this._consume())); }
-    async blob() { throw new TypeError("blobs are not supported"); }
-    async formData() { throw new TypeError("form data is not supported"); }
+    async blob() {
+      return new Blob([await this._consume()], {type: this.headers.get("content-type") || ""});
+    }
+    async formData() {
+      const type = this.headers.get("content-type") || "";
+      const bytes = await this._consume();
+      if (/^application\/x-www-form-urlencoded/i.test(type)) {
+        const form = new FormData();
+        for (const [k, v] of new URLSearchParams(new TextDecoder().decode(bytes))) {
+          form.append(k, v);
+        }
+        return form;
+      }
+      const boundary = /boundary=("?)([^";]+)\1/i.exec(type);
+      if (!boundary) {
+        throw new TypeError("this body does not say what form it is in: " + type);
+      }
+      return parseMultipart(bytes, boundary[2]);
+    }
   }
 
   // A body that is still a stream is split in two rather than read, since a
@@ -612,9 +629,122 @@ const fetchJS = `(function (host) {
     }
   }
 
+  // --- multipart ------------------------------------------------------------
+
+  const CRLF = "\r\n";
+
+  // encodeMultipart writes a form the way a browser does, since what reads it
+  // at the other end was written to read that.
+  function encodeMultipart(form, boundary) {
+    const enc = new TextEncoder();
+    const pieces = [];
+    for (const [name, value] of form) {
+      let head = "--" + boundary + CRLF +
+        'content-disposition: form-data; name="' + escapeField(name) + '"';
+      if (value instanceof Blob) {
+        const filename = value.name === undefined ? "blob" : value.name;
+        head += '; filename="' + escapeField(filename) + '"' + CRLF;
+        head += "content-type: " + (value.type || "application/octet-stream") + CRLF + CRLF;
+        pieces.push(enc.encode(head), value._bytes, enc.encode(CRLF));
+      } else {
+        head += CRLF + CRLF;
+        pieces.push(enc.encode(head), enc.encode(String(value)), enc.encode(CRLF));
+      }
+    }
+    pieces.push(enc.encode("--" + boundary + "--" + CRLF));
+    let total = 0;
+    for (const p of pieces) total += p.length;
+    const out = new Uint8Array(total);
+    let at = 0;
+    for (const p of pieces) { out.set(p, at); at += p.length; }
+    return out;
+  }
+
+  // A quote or a newline in a field name would end the header early, so they
+  // are written the way the browsers settled on.
+  const escapeField = (s) => String(s)
+    .replace(/\r?\n|\r/g, "%0A").replace(/"/g, "%22");
+
+  function parseMultipart(bytes, boundary) {
+    const enc = new TextEncoder();
+    const form = new FormData();
+    const marker = enc.encode("--" + boundary);
+    let at = indexOfBytes(bytes, marker, 0);
+    while (at >= 0) {
+      let start = at + marker.length;
+      // The last boundary is followed by two dashes and nothing else.
+      if (bytes[start] === 0x2d && bytes[start + 1] === 0x2d) break;
+      if (bytes[start] === 0x0d) start += 2; else if (bytes[start] === 0x0a) start += 1;
+
+      const next = indexOfBytes(bytes, marker, start);
+      if (next < 0) break;
+      // What lies between is the part, less the line break before the next
+      // boundary.
+      let stop = next;
+      if (bytes[stop - 1] === 0x0a) stop--;
+      if (bytes[stop - 1] === 0x0d) stop--;
+
+      const blank = indexOfBytes(bytes, enc.encode(CRLF + CRLF), start);
+      if (blank < 0 || blank > stop) { at = next; continue; }
+      const head = new TextDecoder().decode(bytes.slice(start, blank));
+      const body = bytes.slice(blank + 4, stop);
+
+      let name = null, filename, type = "";
+      for (const line of head.split(/\r?\n/)) {
+        const at2 = line.indexOf(":");
+        if (at2 < 0) continue;
+        const field = line.slice(0, at2).trim().toLowerCase();
+        const rest = line.slice(at2 + 1);
+        if (field === "content-disposition") {
+          const n = /name=("?)([^";]*)\1/i.exec(rest);
+          const f = /filename=("?)([^";]*)\1/i.exec(rest);
+          if (n) name = decodeField(n[2]);
+          if (f) filename = decodeField(f[2]);
+        } else if (field === "content-type") {
+          type = rest.trim();
+        }
+      }
+      if (name !== null) {
+        if (filename !== undefined) {
+          form.append(name, new File([body], filename, {type}));
+        } else {
+          form.append(name, new TextDecoder().decode(body));
+        }
+      }
+      at = next;
+    }
+    return form;
+  }
+
+  const decodeField = (s) => s.replace(/%0A/gi, "\n").replace(/%22/gi, '"');
+
+  // indexOfBytes is indexOf over bytes, which a Uint8Array does not have.
+  function indexOfBytes(haystack, needle, from) {
+    outer: for (let i = from; i + needle.length <= haystack.length; i++) {
+      for (let k = 0; k < needle.length; k++) {
+        if (haystack[i + k] !== needle[k]) continue outer;
+      }
+      return i;
+    }
+    return -1;
+  }
+
   // A body given as text becomes bytes, and says what it is unless told.
   function encodeBody(body, headers) {
     if (body === null || body === undefined) return null;
+    if (typeof FormData !== "undefined" && body instanceof FormData) {
+      // The boundary has to be something the body does not contain, which is
+      // what makes a random one the right kind of guess.
+      const boundary = "----quickjs" + randomTag();
+      if (!headers.has("content-type")) {
+        headers.set("content-type", "multipart/form-data; boundary=" + boundary);
+      }
+      return encodeMultipart(body, boundary);
+    }
+    if (typeof Blob !== "undefined" && body instanceof Blob) {
+      if (!headers.has("content-type") && body.type) headers.set("content-type", body.type);
+      return body._bytes;
+    }
     // A stream is passed through: what it will carry is not known yet, and
     // guessing a content type from nothing is worse than leaving it out.
     if (isStream(body)) return body;
@@ -633,6 +763,13 @@ const fetchJS = `(function (host) {
       headers.set("content-type", "text/plain;charset=UTF-8");
     }
     return new TextEncoder().encode(String(body));
+  }
+
+  function randomTag() {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID().replace(/-/g, "");
+    }
+    return String(Math.random()).slice(2) + String(Date.now());
   }
 
   async function fetch(input, init = {}) {

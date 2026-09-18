@@ -65,6 +65,8 @@ type options struct {
 	allowNet   []string
 	allowEnv   bool
 	allowRun   bool
+	// runnable names the programs --allow-run was given, empty for all of them.
+	runnable []string
 
 	memoryLimit int64
 	stackSize   int
@@ -219,11 +221,24 @@ func install(rt *quickjs.Runtime, loop *stdlib.Loop, opts *options, stdin io.Rea
 		// A program is given the environment the script was given, which is
 		// none unless --allow-env said otherwise: a capability that was
 		// withheld must not be reachable through a program.
+		runnable := opts.runnable
 		cfg.Run = &stdlib.Run{
-			Loop:  loop,
-			Dir:   cwd(),
-			Env:   cfg.Process.Env,
-			Allow: func(string, []string) error { return nil },
+			Loop: loop,
+			Dir:  cwd(),
+			Env:  cfg.Process.Env,
+			Allow: func(name string, args []string) error {
+				if len(runnable) == 0 {
+					return nil
+				}
+				base := filepath.Base(name)
+				for _, allowed := range runnable {
+					if allowed == name || allowed == base {
+						return nil
+					}
+				}
+				return fmt.Errorf(
+					"running %s is not allowed: pass --allow-run=%s", name, base)
+			},
 		}
 	}
 	if len(opts.allowNet) > 0 {
@@ -694,6 +709,13 @@ func parseArgs(argv []string, stdout io.Writer) (*options, error) {
 			opts.allowEnv = true
 		case "--allow-run":
 			opts.allowRun = true
+			// With a list only those programs may be started; without one,
+			// any of them, which is as much as the user can do.
+			if hasValue && value != "" {
+				opts.runnable = append(opts.runnable, strings.Split(value, ",")...)
+			} else {
+				opts.runnable = nil
+			}
 		case "--memory-limit":
 			v, err := next("a size in bytes")
 			if err != nil {
@@ -795,7 +817,7 @@ what the script may do (nothing, unless said here):
       --allow-write[=DIR] write them too
       --allow-net[=HOSTS] reach the network, or only these comma-separated hosts
       --allow-env         read the environment
-      --allow-run         start programs, which can do anything you can
+      --allow-run[=list]  start programs, which can do anything you can
 
 bounds:
       --memory-limit N    stop the script at N bytes (64m, 1g)

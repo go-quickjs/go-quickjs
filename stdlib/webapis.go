@@ -16,7 +16,8 @@ import (
 // WebAPIs installs the things a browser has that the language does not, as far
 // as they are pure computation: URL and URLSearchParams, TextEncoder and
 // TextDecoder, atob and btoa, structuredClone, performance, AbortController,
-// and the parts of crypto that need nothing but entropy.
+// Blob, File and FormData, and the parts of crypto that need nothing but
+// entropy.
 //
 // None of them can reach outside the process. random is where getRandomValues
 // draws from, and nil means the system source.
@@ -92,6 +93,7 @@ func WebAPIs(rt *quickjs.Runtime, random io.Reader) error {
 		"URL", "URLSearchParams", "TextEncoder", "TextDecoder",
 		"atob", "btoa", "structuredClone", "performance", "crypto",
 		"AbortController", "AbortSignal", "Event", "EventTarget",
+		"Blob", "File", "FormData",
 	} {
 		v, err := api.Get(name)
 		if err != nil {
@@ -275,6 +277,118 @@ const webAPIsJS = `(function (host) {
       if (this._fatal) throw new TypeError("the input is not valid utf-8");
       return "�";
     }
+  }
+
+  // --- Blob and FormData ---------------------------------------------------
+
+  // A Blob is bytes with a type. It is not a file on a disk and never becomes
+  // one: what is here is the part of it a program uses to move bytes around --
+  // building them out of pieces, cutting them up, and handing them to a
+  // request or a response.
+  const bytesOfPart = (part) => {
+    if (part instanceof Blob) return part._bytes;
+    if (part instanceof Uint8Array) return part;
+    if (ArrayBuffer.isView(part)) {
+      return new Uint8Array(part.buffer, part.byteOffset, part.byteLength);
+    }
+    if (part instanceof ArrayBuffer) return new Uint8Array(part);
+    return new TextEncoder().encode(String(part));
+  };
+
+  function joinBytes(pieces) {
+    let total = 0;
+    for (const p of pieces) total += p.length;
+    const out = new Uint8Array(total);
+    let at = 0;
+    for (const p of pieces) { out.set(p, at); at += p.length; }
+    return out;
+  }
+
+  class Blob {
+    constructor(parts = [], options = {}) {
+      const pieces = [];
+      for (const part of parts) pieces.push(bytesOfPart(part));
+      Object.defineProperty(this, "_bytes", {value: joinBytes(pieces)});
+      this.type = String((options && options.type) || "").toLowerCase();
+    }
+    get size() { return this._bytes.length; }
+    async text() { return new TextDecoder().decode(this._bytes); }
+    async bytes() { return this._bytes.slice(); }
+    async arrayBuffer() {
+      const b = this._bytes;
+      return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
+    }
+    slice(start = 0, end = this.size, type = "") {
+      return new Blob([this._bytes.slice(start, end)], {type});
+    }
+    stream() {
+      if (typeof ReadableStream === "undefined") {
+        throw new TypeError("this runtime has no streams");
+      }
+      return ReadableStream.from([this._bytes.slice()]);
+    }
+  }
+
+  // A File is a Blob with a name, which is what a form sends and what a
+  // program reading one asks for.
+  class File extends Blob {
+    constructor(parts, name, options = {}) {
+      super(parts, options);
+      this.name = String(name);
+      this.lastModified = options && options.lastModified !== undefined
+        ? Number(options.lastModified) : Date.now();
+    }
+  }
+
+  // FormData keeps its entries in order and allows a name more than once,
+  // which is the whole reason it is not an object.
+  class FormData {
+    constructor() {
+      Object.defineProperty(this, "_entries", {value: [], writable: true});
+    }
+    append(name, value, filename) {
+      this._entries.push([String(name), wrapEntry(value, filename)]);
+    }
+    set(name, value, filename) {
+      const key = String(name);
+      const at = this._entries.findIndex(e => e[0] === key);
+      const entry = [key, wrapEntry(value, filename)];
+      if (at < 0) this._entries.push(entry);
+      else {
+        this._entries[at] = entry;
+        this._entries = this._entries.filter((e, i) => i <= at || e[0] !== key);
+      }
+    }
+    get(name) {
+      const found = this._entries.find(e => e[0] === String(name));
+      return found ? found[1] : null;
+    }
+    getAll(name) {
+      return this._entries.filter(e => e[0] === String(name)).map(e => e[1]);
+    }
+    has(name) { return this._entries.some(e => e[0] === String(name)); }
+    delete(name) {
+      this._entries = this._entries.filter(e => e[0] !== String(name));
+    }
+    *entries() { for (const e of this._entries) yield [e[0], e[1]]; }
+    *keys() { for (const e of this._entries) yield e[0]; }
+    *values() { for (const e of this._entries) yield e[1]; }
+    [Symbol.iterator]() { return this.entries(); }
+    forEach(fn, thisArg) {
+      for (const [k, v] of this._entries) fn.call(thisArg, v, k, this);
+    }
+  }
+
+  // A value that is not a Blob is text; one that is, and is given a name,
+  // becomes a File, since that is what the other end will see.
+  function wrapEntry(value, filename) {
+    if (value instanceof Blob) {
+      if (filename === undefined) {
+        return value instanceof File ? value : new File([value], "blob", {type: value.type});
+      }
+      return new File([value], String(filename), {type: value.type});
+    }
+    return String(value);
   }
 
   // --- URL ----------------------------------------------------------------
@@ -801,5 +915,6 @@ const webAPIsJS = `(function (host) {
     btoa: (s) => host.btoa(String(s)),
     structuredClone, performance, crypto,
     AbortController, AbortSignal, Event, EventTarget,
+    Blob, File, FormData,
   };
 })`

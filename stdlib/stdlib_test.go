@@ -1766,3 +1766,76 @@ func TestFileStreams(t *testing.T) {
 		t.Errorf("file streams =\n%s\nwant\n%s\nstderr: %s", out, want, errOut)
 	}
 }
+
+// A form is how the web posts data, so a runtime that serves has to be able to
+// send one and read one.
+func TestFormDataAndBlobs(t *testing.T) {
+	out, errOut := run(t, stdlib.Config{
+		Fetch: &stdlib.Fetch{},
+		Serve: &stdlib.Serve{Allow: func(string) error { return nil }},
+	}, `
+		;(async () => {
+			// A blob is bytes with a type, built out of pieces.
+			const blob = new Blob(["abc", new Uint8Array([100, 101])], {type: "Text/Plain"})
+			console.log(blob.size, blob.type, await blob.text(), await blob.slice(1, 3).text())
+
+			// A file is a blob with a name.
+			const file = new File(["contents"], "note.txt", {type: "text/plain"})
+			console.log(file.name, file.size, file instanceof Blob)
+
+			// A form keeps its order and allows a name twice.
+			const form = new FormData()
+			form.append("tag", "one")
+			form.append("tag", "two")
+			form.append("note", file)
+			console.log([...form.keys()].join(), form.getAll("tag").join())
+			form.set("tag", "only")
+			console.log(form.getAll("tag").join(), form.has("missing"))
+
+			// A server that reads what a form posted, file and all. Both the
+			// ways a form is sent arrive as the same thing.
+			const server = serve({port: 0}, async (request) => {
+				const type = request.headers.get("content-type") || ""
+				// A body that is not a form is answered with what it said it
+				// was, which is how the blob below is checked.
+				if (!/form/.test(type)) return new Response(type)
+				const posted = await request.formData()
+				const sent = posted.get("note")
+				return Response.json({
+					tag: posted.get("tag"),
+					name: sent instanceof File ? sent.name : "(text)",
+					type: sent instanceof File ? sent.type : typeof sent,
+					body: sent instanceof File ? await sent.text() : sent,
+				})
+			})
+			const answer = await (await fetch(server.url, {method: "POST", body: form})).json()
+			console.log(answer.tag, answer.name, answer.type, answer.body)
+
+			const encoded = await (await fetch(server.url, {
+				method: "POST",
+				body: new URLSearchParams({tag: "encoded", note: "plain text"}),
+			})).json()
+			console.log(encoded.tag, encoded.name, encoded.type, encoded.body)
+
+			// A blob body says what it is without being told.
+			const typed = await fetch(server.url, {
+				method: "POST",
+				body: new Blob(["x"], {type: "text/csv"}),
+			})
+			console.log(await typed.text())
+			server.close()
+		})()
+	`)
+	want := strings.Join([]string{
+		"5 text/plain abcde bc",
+		"note.txt 8 true",
+		"tag,tag,note one,two",
+		"only false",
+		"only note.txt text/plain contents",
+		"encoded (text) string plain text",
+		"text/csv",
+	}, "\n")
+	if out != want {
+		t.Errorf("form data =\n%s\nwant\n%s\nstderr: %s", out, want, errOut)
+	}
+}

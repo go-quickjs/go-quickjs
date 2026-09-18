@@ -426,3 +426,21 @@ func TestAllowNetServes(t *testing.T) {
 		t.Errorf("code=%d out=%q err=%q", code, out, errOut)
 	}
 }
+
+// --allow-run can name the programs it allows, in which case nothing else may
+// be started.
+func TestAllowRunList(t *testing.T) {
+	code, out, errOut := exec(t, "", "--allow-run=echo", "-e", `
+		import("child_process").then(({default: cp}) => {
+			console.log(cp.execFileSync("echo", ["allowed"]).trim())
+			try { cp.execFileSync("ls") } catch (e) { console.log(e.message) }
+		})
+	`)
+	if code != 0 {
+		t.Fatalf("code=%d err=%q", code, errOut)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 2 || lines[0] != "allowed" || !strings.Contains(lines[1], "--allow-run=ls") {
+		t.Errorf("out = %q", out)
+	}
+}
