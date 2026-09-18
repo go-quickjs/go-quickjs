@@ -58,8 +58,8 @@ func (r *Runtime) initSegmenter(intl *Object) {
 			"lookup", "best fit"); err != nil {
 			return Undefined, err
 		}
-		locale, requested := rt.resolveLocale(tags)
-		o := &segmenterOptions{locale: locale, requested: requested}
+		choice := rt.resolveLocale(tags)
+		o := &segmenterOptions{locale: choice.data, requested: choice.locale()}
 		if o.granularity, err = rt.stringOption(options, "granularity", "grapheme",
 			"grapheme", "word", "sentence"); err != nil {
 			return Undefined, err

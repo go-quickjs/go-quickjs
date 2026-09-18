@@ -15,8 +15,8 @@ import (
 
 // collatorOptions is a resolved Intl.Collator.
 type collatorOptions struct {
-	locale    *icu.Locale
-	requested string
+	locale *icu.Locale
+	choice *localeChoice
 
 	usage       string // sort, search
 	sensitivity string // base, accent, case, variant
@@ -36,29 +36,56 @@ func (r *Runtime) initCollator(intl *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		locale, requested := rt.resolveLocale(tags)
-		o := &collatorOptions{locale: locale, requested: requested}
+		// The options are read in the order the standard reads them, since a
+		// getter among them can tell.
+		o := &collatorOptions{}
 		if o.usage, err = rt.stringOption(options, "usage", "sort", "sort", "search"); err != nil {
 			return Undefined, err
 		}
+		if _, err := rt.stringOption(options, "localeMatcher", "best fit",
+			"lookup", "best fit"); err != nil {
+			return Undefined, err
+		}
+		collation, err := rt.typeOption(options, "collation")
+		if err != nil {
+			return Undefined, err
+		}
+		numeric, numericSet, err := rt.boolOption(options, "numeric")
+		if err != nil {
+			return Undefined, err
+		}
+		caseFirst, err := rt.stringOption(options, "caseFirst", "",
+			"upper", "lower", "false")
+		if err != nil {
+			return Undefined, err
+		}
+
+		choice := rt.resolveLocale(tags, "co", "kn", "kf")
+		if collation != "" {
+			choice.override("co", collation)
+		}
+		if numericSet {
+			choice.override("kn", boolWord(numeric))
+		}
+		choice.override("kf", caseFirst)
+		o.locale, o.choice = choice.data, choice
+		o.numeric = choice.setting("kn") == "true"
+		o.caseFirst = choice.setting("kf")
+
 		if o.sensitivity, err = rt.stringOption(options, "sensitivity", "variant",
 			"base", "accent", "case", "variant"); err != nil {
 			return Undefined, err
 		}
-		if o.caseFirst, err = rt.stringOption(options, "caseFirst", "false",
-			"upper", "lower", "false"); err != nil {
-			return Undefined, err
-		}
-		numeric, _, err := rt.boolOption(options, "numeric")
+		ignore, ignoreSet, err := rt.boolOption(options, "ignorePunctuation")
 		if err != nil {
 			return Undefined, err
 		}
-		o.numeric = numeric
-		ignore, _, err := rt.boolOption(options, "ignorePunctuation")
-		if err != nil {
-			return Undefined, err
+		// Whether punctuation counts is the language's own default: Thai
+		// ignores it, most languages do not.
+		o.ignorePunct = o.locale.Shifted
+		if ignoreSet {
+			o.ignorePunct = ignore
 		}
-		o.ignorePunct = ignore
 
 		out := newObject(rt.protoFromNewTarget(rt.intlProtoOf("Collator")), ClassObject)
 		out.data = o
@@ -96,11 +123,11 @@ func (r *Runtime) initCollator(intl *Object) {
 			return Undefined, err
 		}
 		out := newObject(rt.proto.object, ClassObject)
-		rt.putString(out, "locale", o.requested)
+		rt.putString(out, "locale", o.choice.locale())
 		rt.putString(out, "usage", o.usage)
 		rt.putString(out, "sensitivity", o.sensitivity)
 		rt.putBool(out, "ignorePunctuation", o.ignorePunct)
-		rt.putString(out, "collation", "default")
+		rt.putString(out, "collation", o.choice.setting("co"))
 		rt.putBool(out, "numeric", o.numeric)
 		rt.putString(out, "caseFirst", o.caseFirst)
 		return Obj(out), nil
@@ -118,8 +145,8 @@ func (r *Runtime) collatorFor(args []Value) (*collatorOptions, error) {
 	if err != nil {
 		return nil, err
 	}
-	locale, requested := r.resolveLocale(tags)
-	o := &collatorOptions{locale: locale, requested: requested, usage: "sort",
+	choice := r.resolveLocale(tags, "co", "kn", "kf")
+	o := &collatorOptions{locale: choice.data, choice: choice, usage: "sort",
 		sensitivity: "variant", caseFirst: "false"}
 	if o.sensitivity, err = r.stringOption(options, "sensitivity", "variant",
 		"base", "accent", "case", "variant"); err != nil {
@@ -215,7 +242,8 @@ func (r *Runtime) initPluralRules(intl *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		locale, requested := rt.resolveLocale(tags)
+		choice := rt.resolveLocale(tags)
+		locale, requested := choice.data, choice.locale()
 		kind, err := rt.stringOption(options, "type", "cardinal", "cardinal", "ordinal")
 		if err != nil {
 			return Undefined, err
@@ -329,8 +357,8 @@ func (r *Runtime) initDisplayNames(intl *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		locale, requested := rt.resolveLocale(tags)
-		o := &displayOptions{locale: locale, requested: requested}
+		choice := rt.resolveLocale(tags)
+		o := &displayOptions{locale: choice.data, requested: choice.locale()}
 		if o.kind, err = rt.stringOption(options, "type", "", "language", "region",
 			"script", "currency", "calendar", "dateTimeField"); err != nil {
 			return Undefined, err
@@ -434,10 +462,11 @@ func (o *displayOptions) canonical(r *Runtime, code string) (string, error) {
 		}
 		return strings.ToUpper(code), nil
 	case "language":
-		if !validLanguageTag(code) {
+		tag, ok := parseTag(code)
+		if !ok {
 			return "", r.throwRangeError("that is not a language tag: %s", code)
 		}
-		return canonicalTag(code), nil
+		return canonicalTag(tag), nil
 	}
 	return code, nil
 }
@@ -483,8 +512,8 @@ func (r *Runtime) initListFormat(intl *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		locale, requested := rt.resolveLocale(tags)
-		o := &listOptions{locale: locale, requested: requested}
+		choice := rt.resolveLocale(tags)
+		o := &listOptions{locale: choice.data, requested: choice.locale()}
 		if o.kind, err = rt.stringOption(options, "type", "conjunction",
 			"conjunction", "disjunction", "unit"); err != nil {
 			return Undefined, err
@@ -639,11 +668,11 @@ func (r *Runtime) listFormatOf(this Value) (*listOptions, error) {
 // --- RelativeTimeFormat -----------------------------------------------------
 
 type relativeOptions struct {
-	locale    *icu.Locale
-	requested string
-	numeric   string // always, auto
-	style     string // long, short, narrow
-	numbers   *numberOptions
+	locale  *icu.Locale
+	choice  *localeChoice
+	numeric string // always, auto
+	style   string // long, short, narrow
+	numbers *numberOptions
 }
 
 func (r *Runtime) initRelativeTimeFormat(intl *Object) {
@@ -660,8 +689,8 @@ func (r *Runtime) initRelativeTimeFormat(intl *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		locale, requested := rt.resolveLocale(tags)
-		o := &relativeOptions{locale: locale, requested: requested}
+		choice := rt.resolveLocale(tags, "nu")
+		o := &relativeOptions{locale: choice.data, choice: choice}
 		if o.numeric, err = rt.stringOption(options, "numeric", "always", "always", "auto"); err != nil {
 			return Undefined, err
 		}
@@ -669,9 +698,10 @@ func (r *Runtime) initRelativeTimeFormat(intl *Object) {
 			return Undefined, err
 		}
 		o.numbers = &numberOptions{
-			locale: locale, requested: requested, style: "decimal",
-			notation: "standard", signDisplay: "auto", useGrouping: true,
-			minInt: 1, maxFrac: 3,
+			locale: choice.data, choice: choice, style: "decimal",
+			notation: "standard", signDisplay: "auto", useGrouping: "auto",
+			minInt: 1, maxFrac: 3, rounding: "fraction",
+			roundingMode: "halfExpand", roundingIncrement: 1,
 		}
 		out := newObject(rt.protoFromNewTarget(rt.intlProtoOf("RelativeTimeFormat")), ClassObject)
 		out.data = o
@@ -741,7 +771,7 @@ func (r *Runtime) initRelativeTimeFormat(intl *Object) {
 			return Undefined, err
 		}
 		out := newObject(rt.proto.object, ClassObject)
-		rt.putString(out, "locale", o.requested)
+		rt.putString(out, "locale", o.choice.locale())
 		rt.putString(out, "style", o.style)
 		rt.putString(out, "numeric", o.numeric)
 		rt.putString(out, "numberingSystem", o.locale.Numbering)

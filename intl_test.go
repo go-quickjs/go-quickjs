@@ -237,7 +237,11 @@ func TestIntlFormats(t *testing.T) {
 		{`new Intl.NumberFormat("de-DE").resolvedOptions().locale`, "de-DE"},
 		{`new Intl.NumberFormat("xx-YY").resolvedOptions().locale`, "en"},
 		{`Intl.NumberFormat.supportedLocalesOf(["de", "xx"]).join()`, "de"},
-		{`Intl.getCanonicalLocales(["EN-us", "de_de"]).join()`, "en-US,de-DE"},
+		{`Intl.getCanonicalLocales(["EN-us", "zh-hant-tw"]).join()`, "en-US,zh-Hant-TW"},
+		// An underscore is not a hyphen, and a tag written with one is not a
+		// tag.
+		{`try { Intl.getCanonicalLocales("de_de") } catch (e) { e.constructor.name }`,
+			"RangeError"},
 
 		// Where a text may be broken, which is what a program counting
 		// characters or selecting a word has to know: an accent written apart

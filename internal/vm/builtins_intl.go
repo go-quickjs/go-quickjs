@@ -87,7 +87,7 @@ func (r *Runtime) buildIntl() *Object {
 		case "currency":
 			values = icu.Currencies()
 		case "numberingSystem":
-			values = []string{"latn"}
+			values = icu.NumberingSystems()
 		case "timeZone":
 			// The ones this machine can actually load, which is all of them
 			// where the zone files are there and none where they are not.
@@ -113,25 +113,29 @@ func (r *Runtime) buildIntl() *Object {
 // --- the options every constructor reads ------------------------------------
 
 // requestedLocales reads the locales argument, which is a tag, a list of them,
-// or nothing.
+// or nothing, and writes each one the one way it is written. A tag that is not
+// a tag is refused here rather than further in, where the mistake would be
+// harder to see.
 func (r *Runtime) requestedLocales(v Value) ([]string, error) {
 	if v.IsUndefined() {
 		return nil, nil
 	}
+	var o *Object
 	if v.IsString() {
-		tag := v.String().Go()
-		if !validLanguageTag(tag) {
-			return nil, r.throwRangeError("that is not a language tag: %s", tag)
+		o = r.newArrayFrom([]Value{v})
+	} else {
+		var err error
+		if o, err = r.toObject(v); err != nil {
+			return nil, err
 		}
-		return []string{canonicalTag(tag)}, nil
-	}
-	o, err := r.toObject(v)
-	if err != nil {
-		return nil, err
-	}
-	// A Locale object, or anything else with a baseName, says which tag it is.
-	if base, err := r.getProp(o, r.atoms.intern("baseName"), v); err == nil && base.IsString() {
-		return []string{canonicalTag(base.String().Go())}, nil
+		// Anything with a baseName says outright which tag it is.
+		if base, err := r.getProp(o, r.atoms.intern("baseName"), v); err == nil && base.IsString() {
+			tag, ok := parseTag(base.String().Go())
+			if !ok {
+				return nil, r.throwRangeError("that is not a language tag: %s", base.String().Go())
+			}
+			return []string{canonicalTag(tag)}, nil
+		}
 	}
 	length, err := r.lengthOf(o)
 	if err != nil {
@@ -139,46 +143,50 @@ func (r *Runtime) requestedLocales(v Value) ([]string, error) {
 	}
 	var out []string
 	for i := int64(0); i < length; i++ {
-		item, err := r.getProp(o, r.atoms.intern(strconv.FormatInt(i, 10)), v)
+		key := r.atoms.intern(strconv.FormatInt(i, 10))
+		has, err := r.hasPropErr(o, key)
 		if err != nil {
 			return nil, err
 		}
-		if item.IsUndefined() {
+		if !has {
 			continue
+		}
+		item, err := r.getProp(o, key, Obj(o))
+		if err != nil {
+			return nil, err
+		}
+		if !item.IsString() && !item.IsObject() {
+			return nil, r.throwTypeError("a locale is a tag or a Locale")
 		}
 		s, err := r.toString(item)
 		if err != nil {
 			return nil, err
 		}
-		if !validLanguageTag(s.Go()) {
+		tag, ok := parseTag(s.Go())
+		if !ok {
 			return nil, r.throwRangeError("that is not a language tag: %s", s.Go())
 		}
-		out = append(out, canonicalTag(s.Go()))
+		canonical := canonicalTag(tag)
+		if !contains(out, canonical) {
+			out = append(out, canonical)
+		}
 	}
 	return out, nil
 }
 
-// validLanguageTag reports whether a tag is written the way a tag is written,
-// which is as much of BCP 47 as matters here.
+func contains(list []string, s string) bool {
+	for _, item := range list {
+		if item == s {
+			return true
+		}
+	}
+	return false
+}
+
+// validLanguageTag reports whether a tag is written the way a tag is written.
 func validLanguageTag(tag string) bool {
-	if tag == "" {
-		return false
-	}
-	for i, part := range strings.Split(strings.ReplaceAll(tag, "_", "-"), "-") {
-		if part == "" {
-			return false
-		}
-		if i == 0 {
-			if len(part) < 2 || len(part) > 8 || !allLetters(part) {
-				return false
-			}
-			continue
-		}
-		if len(part) > 8 || !allAlphanumeric(part) {
-			return false
-		}
-	}
-	return true
+	_, ok := parseTag(tag)
+	return ok
 }
 
 func allLetters(s string) bool {
@@ -188,7 +196,7 @@ func allLetters(s string) bool {
 			return false
 		}
 	}
-	return true
+	return len(s) > 0
 }
 
 func allAlphanumeric(s string) bool {
@@ -198,42 +206,174 @@ func allAlphanumeric(s string) bool {
 			return false
 		}
 	}
-	return true
+	return len(s) > 0
 }
 
-// canonicalTag writes a tag the way BCP 47 does: the language in lower case,
-// a script with its first letter capital, a region in upper case.
-func canonicalTag(tag string) string {
-	parts := strings.Split(strings.ReplaceAll(tag, "_", "-"), "-")
-	for i, part := range parts {
-		switch {
-		case i == 0:
-			parts[i] = strings.ToLower(part)
-		case len(part) == 4 && allLetters(part):
-			parts[i] = strings.ToUpper(part[:1]) + strings.ToLower(part[1:])
-		case len(part) == 2 && allLetters(part):
-			parts[i] = strings.ToUpper(part)
-		default:
-			parts[i] = strings.ToLower(part)
-		}
-	}
-	return strings.Join(parts, "-")
+// localeChoice is what a constructor settled on: the data to work from, the
+// tag to report, and what the "u" extension asked for.
+//
+// A tag may carry settings of its own -- "de-u-nu-arab" is German written with
+// Arabic digits, "en-u-kn" is English sorted with numbers in numeric order --
+// and an option given to the constructor overrides one. What the tag asked for
+// and got is reported back in the resolved locale; what an option overrode is
+// not, since the answer no longer came from the tag.
+type localeChoice struct {
+	data *icu.Locale
+	tag  langTag
+	// asked is what the extension said for each key the constructor cares
+	// about, and settled is what is in force after the options have spoken.
+	asked   map[string]string
+	settled map[string]string
 }
 
-// resolveLocale picks the data for the first tag that has any, and reports
-// what it settled on.
-func (r *Runtime) resolveLocale(tags []string) (*icu.Locale, string) {
+// resolveLocale picks the data for the first tag that has any, and reads the
+// settings the caller asks about out of that tag's "u" extension.
+func (r *Runtime) resolveLocale(tags []string, keys ...string) *localeChoice {
+	c := &localeChoice{asked: map[string]string{}, settled: map[string]string{}}
+	var requested langTag
+	found := false
 	for _, tag := range tags {
-		if icu.Has(tag) {
-			return icu.Resolve(tag), tag
+		t, ok := parseTag(tag)
+		if !ok {
+			continue
+		}
+		if icu.Has(t.base()) {
+			c.data, requested, found = icu.Resolve(t.base()), t, true
+			break
 		}
 	}
-	if len(tags) > 0 {
+	switch {
+	case found:
+	case len(tags) > 0:
 		// Nothing had data of its own, so the first is answered with English.
-		return icu.Resolve(tags[0]), icu.Resolve(tags[0]).Tag
+		requested, _ = parseTag(tags[0])
+		c.data = icu.Resolve(requested.base())
+		requested, _ = parseTag(c.data.Tag)
+	default:
+		c.data = icu.Resolve("")
+		requested, _ = parseTag(c.data.Tag)
 	}
-	l := icu.Resolve("")
-	return l, l.Tag
+
+	// The tag to report is the one that was matched, without the extensions,
+	// plus the settings that were asked for and can be honoured.
+	c.tag = langTag{language: requested.language, script: requested.script,
+		region: requested.region, variants: requested.variants}
+	var used []keyword
+	for _, key := range keys {
+		value := defaultSetting(c.data, key)
+		if asked, ok := requested.keywordValue(key); ok && supportedSetting(key, asked) {
+			value = asked
+			c.asked[key] = asked
+			used = append(used, keyword{key: key, value: asked})
+		}
+		c.settled[key] = value
+	}
+	c.tag.setKeywords(used)
+	return c
+}
+
+// setting is what a key is set to, once the tag and the options have both had
+// their say.
+func (c *localeChoice) setting(key string) string { return c.settled[key] }
+
+// override is an option speaking over the tag. A setting the tag asked for and
+// the option agrees with stays in the resolved locale; one the option changes
+// leaves it, since it is no longer the tag's doing.
+func (c *localeChoice) override(key, value string) {
+	if value == "" || value == c.settled[key] {
+		return
+	}
+	c.settled[key] = value
+	if _, ok := c.asked[key]; ok {
+		delete(c.asked, key)
+		var used []keyword
+		for k, v := range c.asked {
+			used = append(used, keyword{key: k, value: v})
+		}
+		c.tag.setKeywords(used)
+	}
+}
+
+// locale is the tag to report, which is the one that was matched along with
+// the settings it asked for and got.
+func (c *localeChoice) locale() string { return c.tag.String() }
+
+// defaultSetting is what a key means when nothing asked for anything.
+func defaultSetting(l *icu.Locale, key string) string {
+	switch key {
+	case "nu":
+		return l.Numbering
+	case "ca":
+		if l.Calendar != "" {
+			return l.Calendar
+		}
+		return "gregory"
+	case "co":
+		return "default"
+	case "kn", "kf":
+		return "false"
+	case "hc":
+		if l.Hour12 {
+			return "h12"
+		}
+		return "h23"
+	}
+	return ""
+}
+
+// supportedSetting reports whether a setting a tag asked for is one this
+// engine can honour. What it cannot is ignored rather than refused: a tag is
+// a request, not an instruction.
+func supportedSetting(key, value string) bool {
+	switch key {
+	case "nu":
+		_, ok := icu.NumberingDigits(value)
+		return ok
+	case "ca":
+		return value == "gregory" || value == "buddhist" || value == "iso8601"
+	case "co":
+		// The orderings named here are the ones a locale may be tailored for;
+		// "standard" and "search" are not settings a tag may ask for.
+		return false
+	case "kn":
+		return value == "true" || value == "false"
+	case "kf":
+		return value == "upper" || value == "lower" || value == "false"
+	case "hc":
+		return value == "h11" || value == "h12" || value == "h23" || value == "h24"
+	}
+	return false
+}
+
+// typeOption reads an option whose value is a setting a tag could have asked
+// for, which has a shape of its own: words of three to eight characters.
+func (r *Runtime) typeOption(o *Object, name string) (string, error) {
+	v, err := r.getProp(o, r.atoms.intern(name), Obj(o))
+	if err != nil {
+		return "", err
+	}
+	if v.IsUndefined() {
+		return "", nil
+	}
+	s, err := r.toString(v)
+	if err != nil {
+		return "", err
+	}
+	got := s.Go()
+	for _, part := range strings.Split(got, "-") {
+		if len(part) < 3 || len(part) > 8 || !allAlphanumeric(part) {
+			return "", r.throwRangeError("%s is not a value %s may take", got, name)
+		}
+	}
+	return strings.ToLower(got), nil
+}
+
+// boolWord is how a flag is written in a tag.
+func boolWord(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
 }
 
 // optionsObject turns the options argument into something to read from.
@@ -282,6 +422,35 @@ func (r *Runtime) boolOption(o *Object, name string) (bool, bool, error) {
 }
 
 // intOption reads a number option and checks its bounds.
+// rawNumberOption reads a number option without judging it, for the digit
+// counts, which cannot be judged until it is known which of them are in force.
+func (r *Runtime) rawNumberOption(o *Object, name string) (float64, bool, error) {
+	v, err := r.getProp(o, r.atoms.intern(name), Obj(o))
+	if err != nil {
+		return 0, false, err
+	}
+	if v.IsUndefined() {
+		return 0, false, nil
+	}
+	n, err := r.toNumber(v)
+	if err != nil {
+		return 0, false, err
+	}
+	return n, true, nil
+}
+
+// boundedOption checks a number option that was read earlier against the
+// bounds it has to fall within.
+func (r *Runtime) boundedOption(n float64, set bool, name string, min, max, fallback int) (int, error) {
+	if !set {
+		return fallback, nil
+	}
+	if math.IsNaN(n) || n < float64(min) || n > float64(max) {
+		return 0, r.throwRangeError("%s is out of range", name)
+	}
+	return int(math.Floor(n)), nil
+}
+
 func (r *Runtime) intOption(o *Object, name string, min, max, fallback int) (int, bool, error) {
 	v, err := r.getProp(o, r.atoms.intern(name), Obj(o))
 	if err != nil {
@@ -349,33 +518,41 @@ func (r *Runtime) initNumberFormat(intl *Object) {
 			return Undefined, err
 		}
 		out := newObject(rt.proto.object, ClassObject)
-		rt.putString(out, "locale", o.requested)
-		rt.putString(out, "numberingSystem", o.locale.Numbering)
+		rt.putString(out, "locale", o.choice.locale())
+		rt.putString(out, "numberingSystem", o.choice.setting("nu"))
 		rt.putString(out, "style", o.style)
-		if o.currency != "" {
+		if o.style == "currency" {
 			rt.putString(out, "currency", o.currency)
 			rt.putString(out, "currencyDisplay", o.currencyDisplay)
-			rt.putString(out, "currencySign", "standard")
+			rt.putString(out, "currencySign", o.currencySign)
 		}
-		if o.unit != "" {
+		if o.style == "unit" {
 			rt.putString(out, "unit", o.unit)
 			rt.putString(out, "unitDisplay", o.unitDisplay)
 		}
 		rt.putInt(out, "minimumIntegerDigits", o.minInt)
-		if o.maxSig > 0 {
-			rt.putInt(out, "minimumSignificantDigits", o.minSig)
-			rt.putInt(out, "maximumSignificantDigits", o.maxSig)
-		} else {
+		if o.reportFrac {
 			rt.putInt(out, "minimumFractionDigits", o.minFrac)
 			rt.putInt(out, "maximumFractionDigits", o.maxFrac)
 		}
-		rt.putBool(out, "useGrouping", o.useGrouping)
+		if o.reportSig {
+			rt.putInt(out, "minimumSignificantDigits", o.minSig)
+			rt.putInt(out, "maximumSignificantDigits", o.maxSig)
+		}
+		if o.useGrouping == "" {
+			rt.putBool(out, "useGrouping", false)
+		} else {
+			rt.putString(out, "useGrouping", o.useGrouping)
+		}
 		rt.putString(out, "notation", o.notation)
 		if o.notation == "compact" {
 			rt.putString(out, "compactDisplay", o.compactDisplay)
 		}
 		rt.putString(out, "signDisplay", o.signDisplay)
-		rt.putString(out, "roundingMode", "halfExpand")
+		rt.putInt(out, "roundingIncrement", o.roundingIncrement)
+		rt.putString(out, "roundingMode", o.roundingMode)
+		rt.putString(out, "roundingPriority", o.roundingPriority)
+		rt.putString(out, "trailingZeroDisplay", o.trailingZero)
 		return Obj(out), nil
 	})
 }
@@ -400,8 +577,20 @@ func (r *Runtime) numberOptionsFrom(args []Value) (*numberOptions, error) {
 	if err != nil {
 		return nil, err
 	}
-	locale, requested := r.resolveLocale(tags)
-	o := &numberOptions{locale: locale, requested: requested}
+	// The options are read in the order the standard reads them: a getter
+	// among them can see which came first.
+	if _, err := r.stringOption(options, "localeMatcher", "best fit",
+		"lookup", "best fit"); err != nil {
+		return nil, err
+	}
+	numbering, err := r.typeOption(options, "numberingSystem")
+	if err != nil {
+		return nil, err
+	}
+	choice := r.resolveLocale(tags, "nu")
+	choice.override("nu", numbering)
+	o := &numberOptions{locale: choice.data, choice: choice}
+	o.digits = choice.setting("nu")
 
 	if o.style, err = r.stringOption(options, "style", "decimal",
 		"decimal", "percent", "currency", "unit"); err != nil {
@@ -411,24 +600,37 @@ func (r *Runtime) numberOptionsFrom(args []Value) (*numberOptions, error) {
 	if err != nil {
 		return nil, err
 	}
-	if currency != "" {
-		if len(currency) != 3 || !allLetters(currency) {
-			return nil, r.throwRangeError("that is not a currency code: %s", currency)
+	switch {
+	case currency == "":
+		if o.style == "currency" {
+			return nil, r.throwTypeError("a currency style needs a currency")
 		}
+	case len(currency) != 3 || !allLetters(currency):
+		return nil, r.throwRangeError("that is not a currency code: %s", currency)
+	default:
 		o.currency = strings.ToUpper(currency)
-	}
-	if o.style == "currency" && o.currency == "" {
-		return nil, r.throwTypeError("a currency style needs a currency")
 	}
 	if o.currencyDisplay, err = r.stringOption(options, "currencyDisplay", "symbol",
 		"code", "symbol", "narrowSymbol", "name"); err != nil {
 		return nil, err
 	}
-	if o.unit, err = r.stringOption(options, "unit", ""); err != nil {
+	if o.currencySign, err = r.stringOption(options, "currencySign", "standard",
+		"standard", "accounting"); err != nil {
 		return nil, err
 	}
-	if o.style == "unit" && o.unit == "" {
-		return nil, r.throwTypeError("a unit style needs a unit")
+	unit, err := r.stringOption(options, "unit", "")
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case unit == "":
+		if o.style == "unit" {
+			return nil, r.throwTypeError("a unit style needs a unit")
+		}
+	case !wellFormedUnit(unit):
+		return nil, r.throwRangeError("that is not a unit: %s", unit)
+	default:
+		o.unit = unit
 	}
 	if o.unitDisplay, err = r.stringOption(options, "unitDisplay", "short",
 		"short", "narrow", "long"); err != nil {
@@ -438,67 +640,211 @@ func (r *Runtime) numberOptionsFrom(args []Value) (*numberOptions, error) {
 		"standard", "scientific", "engineering", "compact"); err != nil {
 		return nil, err
 	}
+
+	// How many digits, which is a knot of its own: the fraction digits and the
+	// significant digits are two ways of asking the same question, and which
+	// of them is in force depends on which were given.
+	minFracDefault, maxFracDefault := 0, 3
+	switch o.style {
+	case "currency":
+		places := icu.CurrencyDigits(o.currency)
+		minFracDefault, maxFracDefault = places, places
+	case "percent":
+		maxFracDefault = 0
+	}
+	if err := r.readDigitOptions(o, options, minFracDefault, maxFracDefault); err != nil {
+		return nil, err
+	}
+
 	if o.compactDisplay, err = r.stringOption(options, "compactDisplay", "short",
 		"short", "long"); err != nil {
+		return nil, err
+	}
+	if o.useGrouping, err = r.groupingOption(options, o.notation); err != nil {
 		return nil, err
 	}
 	if o.signDisplay, err = r.stringOption(options, "signDisplay", "auto",
 		"auto", "never", "always", "exceptZero", "negative"); err != nil {
 		return nil, err
 	}
+	return o, nil
+}
 
-	grouping, set, err := r.boolOption(options, "useGrouping")
-	if err != nil {
-		return nil, err
-	}
-	o.useGrouping = !set || grouping
-	if set && !grouping {
-		o.useGrouping = false
-	}
+// roundingIncrements are the steps a number may be rounded to: a price to the
+// nearest five cents, a measurement to the nearest quarter.
+var roundingIncrements = []int{1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500,
+	1000, 2000, 2500, 5000}
 
-	// How many digits: a currency is written with as many as it has, and
-	// everything else with up to three.
-	fractionDigits := 0
-	if o.style == "currency" {
-		fractionDigits = icu.CurrencyDigits(o.currency)
-	}
+// readDigitOptions reads how many digits to write, which is the one part of
+// the options that cannot be read one at a time: what a minimum means depends
+// on whether a maximum was given, and whether either is in force at all
+// depends on whether significant digits were asked for.
+func (r *Runtime) readDigitOptions(o *numberOptions, options *Object, minFracDefault, maxFracDefault int) error {
+	var err error
 	if o.minInt, _, err = r.intOption(options, "minimumIntegerDigits", 1, 21, 1); err != nil {
-		return nil, err
+		return err
 	}
-	minFracDefault, maxFracDefault := 0, 3
-	if o.style == "currency" {
-		minFracDefault, maxFracDefault = fractionDigits, fractionDigits
-	} else if o.style == "percent" {
-		maxFracDefault = 0
+	// These four are read now and made sense of afterwards, since the standard
+	// reads them in this order whatever it does with them.
+	minFrac, minFracSet, err := r.rawNumberOption(options, "minimumFractionDigits")
+	if err != nil {
+		return err
 	}
-	minSet, maxSet := false, false
-	if o.minFrac, minSet, err = r.intOption(options, "minimumFractionDigits", 0, 100, minFracDefault); err != nil {
-		return nil, err
+	maxFrac, maxFracSet, err := r.rawNumberOption(options, "maximumFractionDigits")
+	if err != nil {
+		return err
 	}
-	if o.maxFrac, maxSet, err = r.intOption(options, "maximumFractionDigits", 0, 100, maxFracDefault); err != nil {
-		return nil, err
+	minSig, minSigSet, err := r.rawNumberOption(options, "minimumSignificantDigits")
+	if err != nil {
+		return err
 	}
-	if minSet && !maxSet && o.maxFrac < o.minFrac {
-		o.maxFrac = o.minFrac
+	maxSig, maxSigSet, err := r.rawNumberOption(options, "maximumSignificantDigits")
+	if err != nil {
+		return err
 	}
-	if o.maxFrac < o.minFrac {
-		return nil, r.throwRangeError("the fraction digits are the wrong way round")
+	if o.roundingIncrement, _, err = r.intOption(options, "roundingIncrement", 1, 5000, 1); err != nil {
+		return err
 	}
-	if o.minSig, _, err = r.intOption(options, "minimumSignificantDigits", 1, 21, 1); err != nil {
-		return nil, err
+	if !containsInt(roundingIncrements, o.roundingIncrement) {
+		return r.throwRangeError("%d is not a step a number may be rounded to", o.roundingIncrement)
 	}
-	if o.maxSig, maxSet, err = r.intOption(options, "maximumSignificantDigits", 1, 21, 0); err != nil {
-		return nil, err
+	if o.roundingMode, err = r.stringOption(options, "roundingMode", "halfExpand",
+		"ceil", "floor", "expand", "trunc", "halfCeil", "halfFloor",
+		"halfExpand", "halfTrunc", "halfEven"); err != nil {
+		return err
 	}
-	if !maxSet {
-		// Significant digits are only in force when they were asked for.
-		if _, set, err := r.intOption(options, "minimumSignificantDigits", 1, 21, 0); err == nil && set {
-			o.maxSig = 21
-		} else {
-			o.maxSig = 0
+	if o.roundingPriority, err = r.stringOption(options, "roundingPriority", "auto",
+		"auto", "morePrecision", "lessPrecision"); err != nil {
+		return err
+	}
+	if o.trailingZero, err = r.stringOption(options, "trailingZeroDisplay", "auto",
+		"auto", "stripIfInteger"); err != nil {
+		return err
+	}
+
+	hasSig, hasFrac := minSigSet || maxSigSet, minFracSet || maxFracSet
+	needSig, needFrac := true, true
+	if o.roundingPriority == "auto" {
+		needSig = hasSig
+		if hasSig || (!hasFrac && o.notation == "compact") {
+			needFrac = false
 		}
 	}
-	return o, nil
+	if needSig {
+		o.minSig, o.maxSig = 1, 21
+		if hasSig {
+			if o.minSig, err = r.boundedOption(minSig, minSigSet, "minimumSignificantDigits", 1, 21, 1); err != nil {
+				return err
+			}
+			if o.maxSig, err = r.boundedOption(maxSig, maxSigSet, "maximumSignificantDigits", o.minSig, 21, 21); err != nil {
+				return err
+			}
+		}
+	}
+	if needFrac {
+		o.minFrac, o.maxFrac = minFracDefault, maxFracDefault
+		if hasFrac {
+			if minFracSet {
+				if o.minFrac, err = r.boundedOption(minFrac, true, "minimumFractionDigits", 0, 100, 0); err != nil {
+					return err
+				}
+			}
+			if maxFracSet {
+				if o.maxFrac, err = r.boundedOption(maxFrac, true, "maximumFractionDigits", 0, 100, 0); err != nil {
+					return err
+				}
+			}
+			switch {
+			case !minFracSet:
+				o.minFrac = min(minFracDefault, o.maxFrac)
+			case !maxFracSet:
+				o.maxFrac = max(maxFracDefault, o.minFrac)
+			case o.minFrac > o.maxFrac:
+				return r.throwRangeError("the fraction digits are the wrong way round")
+			}
+		}
+	}
+
+	switch {
+	case !needSig && !needFrac:
+		// A compact number with nothing asked of it is written to two
+		// significant digits, whichever of the two ways of counting is asked
+		// for afterwards.
+		o.rounding = "morePrecision"
+		o.minFrac, o.maxFrac, o.minSig, o.maxSig = 0, 0, 1, 2
+	case o.roundingPriority != "auto":
+		o.rounding = o.roundingPriority
+	case hasSig:
+		o.rounding = "significant"
+	default:
+		o.rounding = "fraction"
+	}
+	if o.roundingIncrement != 1 {
+		if o.rounding != "fraction" {
+			return r.throwTypeError("a rounding step goes with fraction digits, not with significant ones")
+		}
+		if o.maxFrac != o.minFrac {
+			return r.throwRangeError("a rounding step needs the fraction digits fixed")
+		}
+	}
+	o.reportSig = needSig || !needFrac
+	o.reportFrac = needFrac || !needSig
+	return nil
+}
+
+// groupingOption reads useGrouping, which takes a word as well as a flag: an
+// empty string and false mean no grouping, true means always, and a number may
+// ask for grouping only once there are two digits in front of the first group.
+func (r *Runtime) groupingOption(o *Object, notation string) (string, error) {
+	fallback := "auto"
+	if notation == "compact" {
+		fallback = "min2"
+	}
+	v, err := r.getProp(o, r.atoms.intern("useGrouping"), Obj(o))
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case v.IsUndefined():
+		return fallback, nil
+	case v.IsBool() && !v.Truthy():
+		return "", nil
+	case v.IsBool():
+		return "always", nil
+	}
+	s, err := r.toString(v)
+	if err != nil {
+		return "", err
+	}
+	switch got := s.Go(); got {
+	case "":
+		return "", nil
+	case "min2", "auto", "always":
+		return got, nil
+	case "true", "false":
+		// A string, even one that reads as a flag, is a word and not a flag.
+		return "", r.throwRangeError("%s is not a value useGrouping may take", got)
+	}
+	return "", r.throwRangeError("%s is not a value useGrouping may take", s.Go())
+}
+
+func containsInt(list []int, n int) bool {
+	for _, item := range list {
+		if item == n {
+			return true
+		}
+	}
+	return false
+}
+
+// wellFormedUnit reports whether a unit is one this may be asked for: one of
+// the sanctioned ones, or one of them divided by another.
+func wellFormedUnit(unit string) bool {
+	numerator, denominator, divided := strings.Cut(unit, "-per-")
+	if !icu.HasUnit(numerator) {
+		return false
+	}
+	return !divided || icu.HasUnit(denominator)
 }
 
 func (r *Runtime) numberFormatOf(this Value) (*numberOptions, error) {
@@ -561,7 +907,7 @@ func (r *Runtime) initDateTimeFormat(intl *Object) {
 			return Undefined, err
 		}
 		out := newObject(rt.proto.object, ClassObject)
-		rt.putString(out, "locale", o.requested)
+		rt.putString(out, "locale", o.choice.locale())
 		rt.putString(out, "calendar", "gregory")
 		rt.putString(out, "numberingSystem", o.locale.Numbering)
 		rt.putString(out, "timeZone", o.timeZone)
@@ -610,8 +956,8 @@ func (r *Runtime) dateOptionsFrom(args []Value, defaults map[string]string) (*da
 	if err != nil {
 		return nil, err
 	}
-	locale, requested := r.resolveLocale(tags)
-	o := &dateOptions{locale: locale, requested: requested, timeZone: "UTC"}
+	choice := r.resolveLocale(tags, "ca", "nu", "hc")
+	o := &dateOptions{locale: choice.data, choice: choice, timeZone: "UTC"}
 
 	zone, err := r.stringOption(options, "timeZone", "")
 	if err != nil {
@@ -709,7 +1055,7 @@ func (r *Runtime) dateOptionsFrom(args []Value, defaults map[string]string) (*da
 	case cycle != "":
 		o.hour12, o.hourSet = cycle == "h11" || cycle == "h12", true
 	default:
-		o.hour12 = locale.Hour12
+		o.hour12 = o.locale.Hour12
 	}
 	if o.hour12 {
 		o.hourCycle = "h12"

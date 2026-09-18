@@ -232,6 +232,17 @@ function numberData(locale) {
     decimalNegative: pattern({}, -1234.5),
     percentNegative: pattern({style: "percent"}, -0.25),
     currencyNegative: pattern({style: "currency", currency: "USD"}, -1234.5),
+    // Accounting writes a loss in brackets rather than with a minus, which is
+    // a pattern of its own and not a rule that can be applied to the other.
+    accounting: pattern(
+      {style: "currency", currency: "USD", currencySign: "accounting"}, -1234.5),
+    // The mark that stands between a number and its exponent: E nearly
+    // everywhere, and a word of its own in a few languages.
+    exponential: (() => {
+      const part = new Intl.NumberFormat(locale, {notation: "scientific"})
+        .formatToParts(12345).find(p => p.type === "exponentSeparator");
+      return part ? part.value : "E";
+    })(),
     // How many digits the first group must have for there to be one at all:
     // Spanish and Italian write 1234 without a separator and 12.345 with one.
     minGrouping: new Intl.NumberFormat(locale).format(1234)

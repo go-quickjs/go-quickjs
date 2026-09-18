@@ -20,8 +20,8 @@ import (
 
 // dateOptions is a resolved Intl.DateTimeFormat.
 type dateOptions struct {
-	locale    *icu.Locale
-	requested string
+	locale *icu.Locale
+	choice *localeChoice
 
 	// zone is where the fields are read: UTC, the machine's own, or whichever
 	// one was asked for by name.

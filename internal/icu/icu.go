@@ -80,6 +80,10 @@ type Locale struct {
 	// The same three for a negative number, since where the minus goes is the
 	// language's business too: -€1.00, €-1.00, or a mark in front of both.
 	DecimalNegative, PercentNegative, CurrencyNegative string
+	// Accounting is how a loss is written where that is done differently: in
+	// brackets rather than with a minus. Exponential is the mark that stands
+	// between a number and its exponent.
+	Accounting, Exponential string
 	// Calendar is the one this locale counts years in: "gregory" nearly
 	// everywhere, "buddhist" in Thailand.
 	Calendar string
@@ -498,6 +502,13 @@ func decode(tag, blob string) *Locale {
 	}
 	l.DecimalNegative, l.PercentNegative = field(11), field(12)
 	l.CurrencyNegative, l.Calendar = field(13), field(14)
+	l.Accounting, l.Exponential = field(15), field(16)
+	if l.Accounting == "" {
+		l.Accounting = l.CurrencyNegative
+	}
+	if l.Exponential == "" {
+		l.Exponential = "E"
+	}
 	if l.DecimalNegative == "" {
 		l.DecimalNegative = "-{0}"
 	}
@@ -860,5 +871,24 @@ func decodeRelative(fields []string) map[string]RelativeUnit {
 		}
 		out[parts[0]] = unit
 	}
+	return out
+}
+
+// NumberingDigits is the ten digits a numbering system writes numbers with,
+// and whether there is such a system at all. A system that writes numbers some
+// other way -- roman numerals, or the Chinese ones written out in words -- has
+// no ten digits and is not here.
+func NumberingDigits(name string) (string, bool) {
+	digits, ok := numberingSystems[name]
+	return digits, ok
+}
+
+// NumberingSystems lists every way of writing numbers that is ten digits.
+func NumberingSystems() []string {
+	out := make([]string, 0, len(numberingSystems))
+	for name := range numberingSystems {
+		out = append(out, name)
+	}
+	sort.Strings(out)
 	return out
 }

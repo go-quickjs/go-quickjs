@@ -75,6 +75,8 @@ type localeData struct {
 		DecimalNegative                    string `json:"decimalNegative"`
 		PercentNegative                    string `json:"percentNegative"`
 		CurrencyNegative                   string `json:"currencyNegative"`
+		Accounting                         string `json:"accounting"`
+		Exponential                        string `json:"exponential"`
 		MinGrouping                        int    `json:"minGrouping"`
 	} `json:"numbers"`
 	Compact    map[string]map[string]compactForm `json:"compact"`
@@ -322,6 +324,19 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// The digits of every numbering system, so that a tag may ask for digits
+	// its language does not use.
+	numbering, err := readNumbering(filepath.Join(filepath.Dir(script), "numbering.json"))
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(&b, "// numberingSystems is the ten digits of each way of writing numbers.\n")
+	fmt.Fprintf(&b, "var numberingSystems = map[string]string{\n")
+	for _, name := range sortedNames(numbering) {
+		fmt.Fprintf(&b, "\t%q: %q,\n", name, numbering[name])
+	}
+	fmt.Fprintf(&b, "}\n\n")
+
 	fmt.Fprintf(&b, "// segmentPacked is where text may be broken: for graphemes, words and\n")
 	fmt.Fprintf(&b, "// sentences, which class each character belongs to and which pairs of\n")
 	fmt.Fprintf(&b, "// classes a break may fall between, and then the emoji.\n")
@@ -348,6 +363,32 @@ func run() error {
 	}
 	_, err = os.Stdout.Write(pretty)
 	return err
+}
+
+// sortedNames is the keys of a map, in order, so that what is written out is
+// the same from one run to the next.
+func sortedNames(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// readNumbering reads the digits of every numbering system.
+func readNumbering(path string) (map[string]string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("the numbering systems: %w", err)
+	}
+	var out struct {
+		Systems map[string]string `json:"systems"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("the numbering systems: %w", err)
+	}
+	return out.Systems, nil
 }
 
 // segmentData is what segment.mjs writes.
@@ -760,6 +801,7 @@ func encode(l *localeData) string {
 		l.Numbers.PercentPattern, l.Numbers.CurrencyPattern, flags,
 		l.Numbers.DecimalNegative, l.Numbers.PercentNegative,
 		l.Numbers.CurrencyNegative, l.Calendar,
+		l.Numbers.Accounting, l.Numbers.Exponential,
 	}, fieldSep)
 
 	names := strings.Join([]string{

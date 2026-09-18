@@ -138,10 +138,9 @@ func (s *Suite) Load(subdirs []string) ([]*Test, error) {
 			}
 			if d.IsDir() {
 				// The staging directory holds proposals that are not part of
-				// the standard, and intl402 covers an internationalization API
-				// this engine does not implement.
+				// the standard.
 				switch d.Name() {
-				case "staging", "intl402":
+				case "staging":
 					return filepath.SkipDir
 				}
 				return nil
