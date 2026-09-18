@@ -46,12 +46,13 @@ func New(cfg Config) *Runtime {
 		templateCache:    make(map[*bytecode.Function][]*Object),
 	}
 
+	r.building = true
 	r.initWellKnownSymbols()
 	r.initIntrinsics()
 	r.initGlobals()
 	// What is left of the slab would be kept alive by the objects cut from it,
 	// and a realm is built once.
-	r.funcSlab = nil
+	r.funcSlab, r.building = nil, false
 	return r
 }
 

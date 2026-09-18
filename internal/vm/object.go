@@ -260,9 +260,15 @@ func newFuncObject(proto *Object, class Class) (*Object, *funcData) {
 // whole slab alive.
 const funcSlabSize = 64
 
-// newSlabFuncObject creates a callable object from the runtime's slab.
+// newSlabFuncObject creates a callable object from the runtime's slab, while
+// there is one: a function made after the realm is built -- a module's export
+// getter, the continuation of an await -- is allocated on its own, since it may
+// not outlive its neighbours holding them all alive.
 func (r *Runtime) newSlabFuncObject(proto *Object, class Class) (*Object, *funcData) {
 	if len(r.funcSlab) == 0 {
+		if !r.building {
+			return newFuncObject(proto, class)
+		}
 		r.funcSlab = make([]funcObject, funcSlabSize)
 	}
 	fo := &r.funcSlab[0]
