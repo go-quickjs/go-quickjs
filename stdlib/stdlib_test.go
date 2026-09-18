@@ -3,9 +3,14 @@ package stdlib_test
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -496,5 +501,192 @@ func TestNothingIsAmbient(t *testing.T) {
 	}
 	if _, err := rt.EvalModule("main.js", `import "fs"`); err == nil {
 		t.Error("importing fs should have failed")
+	}
+}
+
+func TestFetch(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/text", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Kind", "text")
+		io.WriteString(w, "hello from the server")
+	})
+	mux.HandleFunc("/json", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"n":1,"list":[1,2]}`)
+	})
+	mux.HandleFunc("/echo", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("X-Method", r.Method)
+		w.Header().Set("X-Custom", r.Header.Get("X-Custom"))
+		w.Write(body)
+	})
+	mux.HandleFunc("/missing", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusNotFound)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	out, _ := run(t, stdlib.Config{Fetch: &stdlib.Fetch{}}, `
+		;(async () => {
+			const base = "`+srv.URL+`"
+			const res = await fetch(base + "/text")
+			console.log(res.status, res.ok, res.headers.get("x-kind"))
+			console.log(await res.text())
+			console.log(res.bodyUsed)
+			try { await res.text() } catch (e) { console.log("read once") }
+
+			const data = await (await fetch(base + "/json")).json()
+			console.log(data.n, data.list.join())
+
+			const echoed = await fetch(base + "/echo", {
+				method: "POST",
+				headers: {"X-Custom": "sent"},
+				body: "the body",
+			})
+			console.log(echoed.headers.get("x-method"), echoed.headers.get("x-custom"))
+			console.log(await echoed.text())
+
+			const missing = await fetch(base + "/missing")
+			console.log(missing.status, missing.ok)
+
+			try { await fetch("http://127.0.0.1:1/nothing") }
+			catch (e) { console.log("failed to connect") }
+		})()
+	`)
+	want := strings.Join([]string{
+		"200 true text",
+		"hello from the server",
+		"true",
+		"read once",
+		"1 1,2",
+		"POST sent",
+		"the body",
+		"404 false",
+		"failed to connect",
+	}, "\n")
+	if out != want {
+		t.Errorf("fetch output =\n%s\nwant\n%s", out, want)
+	}
+}
+
+// A host that says where a script may go is obeyed before the request is made.
+func TestFetchAllow(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "reached")
+	}))
+	defer srv.Close()
+
+	out, _ := run(t, stdlib.Config{Fetch: &stdlib.Fetch{
+		Allow: func(req *http.Request) error {
+			if req.URL.Path != "/allowed" {
+				return errors.New("that host is not allowed")
+			}
+			return nil
+		},
+	}}, `
+		;(async () => {
+			console.log(await (await fetch("`+srv.URL+`/allowed")).text())
+			try { await fetch("`+srv.URL+`/other") }
+			catch (e) { console.log("refused: " + /not allowed/.test(e.message)) }
+		})()
+	`)
+	if want := "reached\nrefused: true"; out != want {
+		t.Errorf("allow output =\n%s\nwant\n%s", out, want)
+	}
+}
+
+// The request and response objects work on their own, which is what code that
+// builds a request before sending it needs.
+func TestFetchTypes(t *testing.T) {
+	out, _ := run(t, stdlib.Config{Fetch: &stdlib.Fetch{}}, `
+		;(async () => {
+			const h = new Headers({"Content-Type": "text/plain"})
+			h.append("x-a", "1")
+			h.append("x-a", "2")
+			console.log(h.get("x-a"), h.get("content-type"), h.has("x-b"))
+			h.set("x-a", "3")
+			console.log(h.get("x-a"), [...h.keys()].join())
+
+			const req = new Request("https://example.com/p", {method: "post", body: "hi"})
+			console.log(req.method, req.url, req.headers.get("content-type"))
+			console.log(await req.text())
+
+			const res = Response.json({ok: true}, {status: 201})
+			console.log(res.status, res.headers.get("content-type"))
+			console.log(JSON.stringify(await res.json()))
+
+			try { new Request("https://x.test", {method: "GET", body: "no"}) }
+			catch (e) { console.log("no body on GET") }
+		})()
+	`)
+	want := strings.Join([]string{
+		"1, 2 text/plain false",
+		"3 content-type,x-a",
+		"POST https://example.com/p text/plain;charset=UTF-8",
+		"hi",
+		"201 application/json",
+		`{"ok":true}`,
+		"no body on GET",
+	}, "\n")
+	if out != want {
+		t.Errorf("types output =\n%s\nwant\n%s", out, want)
+	}
+}
+
+// An abort stops the request rather than merely ignoring the answer.
+func TestFetchAbort(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var cancelled atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		select {
+		case <-r.Context().Done():
+			cancelled.Store(true)
+		case <-release:
+			io.WriteString(w, "too late")
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	rt := quickjs.New()
+	defer rt.Close()
+	var out bytes.Buffer
+	loop := stdlib.NewLoop(rt)
+	if err := stdlib.Install(rt, stdlib.Config{
+		Stdout: &out, Loop: loop, Fetch: &stdlib.Fetch{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.Eval(`
+		const c = new AbortController()
+		globalThis.abortIt = () => c.abort()
+		fetch("` + srv.URL + `/slow", {signal: c.signal})
+			.then(() => console.log("completed"))
+			.catch(e => console.log("aborted"))
+	`); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	if _, err := rt.Eval(`abortIt()`); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := loop.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(out.String()); got != "aborted" {
+		t.Errorf("out = %q, want %q", got, "aborted")
+	}
+	// The server saw the request go away, which is the difference between
+	// abandoning an answer and cancelling a request.
+	deadline := time.Now().Add(2 * time.Second)
+	for !cancelled.Load() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !cancelled.Load() {
+		t.Error("the server did not see the request cancelled")
 	}
 }
