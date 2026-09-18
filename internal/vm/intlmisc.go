@@ -149,23 +149,50 @@ func (r *Runtime) collatorFor(args []Value) (*collatorOptions, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The same options a collator reads, in the same order.
+	o := &collatorOptions{usage: "sort", sensitivity: "variant", caseFirst: "false"}
+	if o.usage, err = r.stringOption(options, "usage", "sort", "sort", "search"); err != nil {
+		return nil, err
+	}
+	if _, err := r.stringOption(options, "localeMatcher", "best fit",
+		"lookup", "best fit"); err != nil {
+		return nil, err
+	}
+	collation, err := r.typeOption(options, "collation")
+	if err != nil {
+		return nil, err
+	}
+	numeric, numericSet, err := r.boolOption(options, "numeric")
+	if err != nil {
+		return nil, err
+	}
+	caseFirst, err := r.stringOption(options, "caseFirst", "", "upper", "lower", "false")
+	if err != nil {
+		return nil, err
+	}
 	choice := r.resolveLocale(tags, "co", "kn", "kf")
-	o := &collatorOptions{locale: choice.data, choice: choice, usage: "sort",
-		sensitivity: "variant", caseFirst: "false"}
+	if collation != "" {
+		choice.override("co", collation)
+	}
+	if numericSet {
+		choice.override("kn", boolWord(numeric))
+	}
+	choice.override("kf", caseFirst)
+	o.locale, o.choice = choice.data, choice
+	o.numeric = choice.setting("kn") == "true"
+	o.caseFirst = choice.setting("kf")
 	if o.sensitivity, err = r.stringOption(options, "sensitivity", "variant",
 		"base", "accent", "case", "variant"); err != nil {
 		return nil, err
 	}
-	numeric, _, err := r.boolOption(options, "numeric")
+	o.ignorePunct = o.locale.Shifted
+	ignore, ignoreSet, err := r.boolOption(options, "ignorePunctuation")
 	if err != nil {
 		return nil, err
 	}
-	o.numeric = numeric
-	ignore, _, err := r.boolOption(options, "ignorePunctuation")
-	if err != nil {
-		return nil, err
+	if ignoreSet {
+		o.ignorePunct = ignore
 	}
-	o.ignorePunct = ignore
 	return o, nil
 }
 
@@ -185,6 +212,12 @@ func (r *Runtime) collatorOf(this Value) (*collatorOptions, error) {
 // one before it came out equal. What the options change is how much of that
 // counts, and whether a run of digits is read as a number.
 func (o *collatorOptions) compare(a, b string) int {
+	// Two spellings of the same text are the same text: "ö" written as one
+	// character and as an o with a mark after it sort as equal, whatever the
+	// language.
+	if a != b {
+		a, b = normalizeString(a, "NFC"), normalizeString(b, "NFC")
+	}
 	if o.ignorePunct {
 		a, b = stripPunctuation(a), stripPunctuation(b)
 	}

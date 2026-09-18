@@ -766,42 +766,42 @@ func (r *Runtime) initStringExtras() {
 		if err != nil {
 			return Undefined, err
 		}
-		// With a locale or options this is Intl.Collator, which knows how to
-		// ignore an accent or read a run of digits as a number.
-		if len(args) > 1 && !arg(args, 1).IsUndefined() || len(args) > 2 && !arg(args, 2).IsUndefined() {
-			c, err := rt.collatorFor(args[1:])
-			if err != nil {
-				return Undefined, err
-			}
-			return Int(c.compare(s.Go(), o.Go())), nil
+		// This is Intl.Collator by another name: it sorts the way the
+		// language sorts, and takes the same locale and options.
+		var rest []Value
+		if len(args) > 1 {
+			rest = args[1:]
 		}
-		// Without a collation table this is a code-unit comparison, which
-		// agrees with a locale-aware one for ASCII. The two are normalized
-		// first, so that two spellings of the same text compare equal --
-		// which the specification does require, whatever the locale.
-		if s.Go() == o.Go() {
-			return Int(0), nil
+		c, err := rt.collatorFor(rest)
+		if err != nil {
+			return Undefined, err
 		}
-		a := NewString(normalizeString(s.Go(), "NFC"))
-		b := NewString(normalizeString(o.Go(), "NFC"))
-		return Int(a.Compare(b)), nil
+		return Int(c.compare(s.Go(), o.Go())), nil
 	})
 
-	// The locale-sensitive pair fall back to the language-independent mappings,
-	// which is what a host with no locale data can honestly provide.
+	// The locale-sensitive pair, which differ from the others in the handful
+	// of languages that have rules of their own about it.
 	r.defMethod(p, "toLocaleUpperCase", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		s, err := thisStr(rt, this)
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(caseConvert(s.Go(), true))), nil
+		language, err := rt.caseLanguage(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		return Str(NewString(localeUpper(s.Go(), language))), nil
 	})
 	r.defMethod(p, "toLocaleLowerCase", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		s, err := thisStr(rt, this)
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(caseConvert(s.Go(), false))), nil
+		language, err := rt.caseLanguage(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		return Str(NewString(localeLower(s.Go(), language))), nil
 	})
 }
 
