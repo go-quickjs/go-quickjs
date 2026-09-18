@@ -36,14 +36,12 @@ conformance suite.
 `Intl` is there too, with real CLDR data for 379 locales — the engine carries
 its own, in Go, rather than linking ICU — including the Unicode collation
 order, where a text may be broken into words and sentences, how a measurement
-is written, how long something took, eighteen calendars, and what every time
+is written, how long something took, sixteen calendars, and what every time
 zone is called in every language. It is held against a full ICU build:
-[7,925 of 7,949 cases match it exactly](intl_test.go), and the twenty-four that
+[7,924 of 7,949 cases match it exactly](intl_test.go), and the twenty-five that
 do not are named.
 
-Of the 79,184 test262 tests it runs, 79,146 pass and the 38 that do not are
-[named in the suite](conformance/conformance_test.go), each with what it asks
-for that this engine does not carry. The 19,350 it skips are tagged with
+All 79,184 test262 tests it runs pass. The 19,350 it skips are tagged with
 features it does not implement, or ask the host for something it does not
 provide: see [Conformance](#conformance) for the measurement and
 [Not implemented](#not-implemented) for what is missing.
@@ -129,12 +127,11 @@ strict and sloppy variants, the expected-failure phase and type, and the feature
 tags. A test tagged with a feature the engine does not implement is skipped
 rather than counted against it.
 
-Measured coverage, as of the most recent run over the whole suite — 79,146 of
-79,184 executed variants, with the 38 that fail named in the runner along with
-what each asks for that is not carried here. The other 19,350 are skipped
-rather than counted: a test tagged with a feature the engine does not
-implement, or one that asks the host for a second realm or an agent, is testing
-something that was never claimed.
+Measured coverage, as of the most recent run over the whole suite: all 79,184
+executed variants pass. The other 19,350 are skipped rather than counted: a
+test tagged with a feature the engine does not implement, or one that asks the
+host for a second realm or an agent, is testing something that was never
+claimed.
 
 `built-ins/Atomics` is the ten tests for `Atomics.pause`, which is the only part
 of that API a single-threaded engine could offer and which is not implemented.

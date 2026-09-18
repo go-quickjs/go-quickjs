@@ -270,7 +270,7 @@ func (r *Runtime) resolveLocale(tags []string, keys ...string) *localeChoice {
 	var used []keyword
 	for _, key := range keys {
 		value := defaultSetting(c.data, key)
-		if asked, ok := requested.keywordValue(key); ok && supportedSetting(key, asked) {
+		if asked, ok := requested.keywordValue(key); ok && supportedSetting(c.data, key, asked) {
 			value = asked
 			c.asked[key] = asked
 			used = append(used, keyword{key: key, value: asked})
@@ -302,7 +302,7 @@ func (c *localeChoice) setting(key string) string { return c.settled[key] }
 func (c *localeChoice) override(key, value string) {
 	// A setting this engine cannot honour is ignored, whether it came from the
 	// tag or from the options: a request is not an instruction.
-	if value == "" || !supportedSetting(key, value) || value == c.settled[key] {
+	if value == "" || !supportedSetting(c.data, key, value) || value == c.settled[key] {
 		return
 	}
 	c.settled[key] = value
@@ -350,10 +350,7 @@ func defaultSetting(l *icu.Locale, key string) string {
 	case "kn", "kf":
 		return "false"
 	case "hc":
-		if l.Hour12 {
-			return "h12"
-		}
-		return "h23"
+		return l.HourCycle
 	}
 	return ""
 }
@@ -361,7 +358,7 @@ func defaultSetting(l *icu.Locale, key string) string {
 // supportedSetting reports whether a setting a tag asked for is one this
 // engine can honour. What it cannot is ignored rather than refused: a tag is
 // a request, not an instruction.
-func supportedSetting(key, value string) bool {
+func supportedSetting(locale *icu.Locale, key, value string) bool {
 	switch key {
 	case "nu":
 		_, ok := icu.NumberingDigits(value)
@@ -371,7 +368,7 @@ func supportedSetting(key, value string) bool {
 	case "co":
 		// The orderings named here are the ones a locale may be tailored for;
 		// "standard" and "search" are not settings a tag may ask for.
-		return false
+		return icu.HasCollation(locale.Tag, value)
 	case "kn":
 		return value == "true" || value == "false"
 	case "kf":
@@ -1211,6 +1208,11 @@ func (r *Runtime) dateOptionsFrom(args []Value, defaults map[string]string, requ
 	}
 	o := &dateOptions{locale: choice.data, choice: choice, timeZone: "UTC"}
 	o.calendar = choice.setting("ca")
+	// These are abstract/deprecated calendar requests. ECMA-402 requires the
+	// formatter to settle on a concrete member of AvailableCalendars.
+	if o.calendar == "islamic" || o.calendar == "islamic-rgsa" {
+		o.calendar = "islamic-civil"
+	}
 	o.digits = choice.setting("nu")
 
 	// An empty string is a zone that does not exist, which is not the same as
@@ -1345,17 +1347,27 @@ func (r *Runtime) dateOptionsFrom(args []Value, defaults map[string]string, requ
 	o.pattern = o.patternFor()
 	// A twelve-hour clock asked for where the locale writes a
 	// twenty-four-hour one, or the other way round, changes the pattern.
-	o.pattern = adjustClock(o.pattern, o.hour12)
+	o.pattern = adjustClock(o.pattern, o.hourCycle)
 	return o, nil
 }
 
 // adjustClock writes the hour on the clock that was asked for, and puts the
 // day period there or takes it away to match.
-func adjustClock(pattern string, hour12 bool) string {
+func adjustClock(pattern, cycle string) string {
 	// A pattern with no hour in it has no clock to adjust, and its day period
 	// -- if it was asked for on its own -- is not the hour's to take away.
 	if !strings.ContainsAny(patternLettersOf(pattern), "hHkK") {
 		return pattern
+	}
+	hour12 := cycle == "h11" || cycle == "h12"
+	hourLetter := byte('H')
+	switch cycle {
+	case "h11":
+		hourLetter = 'K'
+	case "h12":
+		hourLetter = 'h'
+	case "h24":
+		hourLetter = 'k'
 	}
 	var b strings.Builder
 	inQuote := false
@@ -1371,10 +1383,8 @@ func adjustClock(pattern string, hour12 bool) string {
 			continue
 		}
 		switch {
-		case c == 'h' && !hour12:
-			b.WriteByte('H')
-		case c == 'H' && hour12:
-			b.WriteByte('h')
+		case strings.ContainsRune("hHkK", rune(c)):
+			b.WriteByte(hourLetter)
 		case (c == 'a' || c == 'B' || c == 'b') && !hour12:
 			// The day period goes, and whatever space was in front of it.
 			s := b.String()
@@ -1386,7 +1396,7 @@ func adjustClock(pattern string, hour12 bool) string {
 	}
 	out := b.String()
 	letters := patternLettersOf(out)
-	if hour12 && strings.ContainsRune(letters, 'h') &&
+	if hour12 && strings.ContainsRune(letters, rune(hourLetter)) &&
 		!strings.ContainsAny(letters, "aBb") {
 		out += " a"
 	}
@@ -1558,10 +1568,13 @@ func (r *Runtime) numberRange(this Value, args []Value) (*rangePieces, error) {
 		return sameRange(start, o.locale.Approximately), nil
 	}
 	separator := o.locale.Range
-	// A number with something written around it -- a currency symbol, a
-	// percent sign -- is written out twice, with the mark set apart from it so
-	// that the two do not run together.
+	// A number with something written around it shares matching affixes where
+	// the locale's automatic range collapse calls for it. Otherwise it is
+	// written out twice, with the mark set apart from both ends.
 	if o.style == "currency" || o.style == "percent" {
+		if merged, ok := mergeRangeAffixes(start, end, separator); ok {
+			return merged, nil
+		}
 		return joinRange(start, end, spacedOut(separator)), nil
 	}
 	// A measurement is written once and the two counts against it: 1–5 m.

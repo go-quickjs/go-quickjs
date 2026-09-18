@@ -112,11 +112,12 @@ type plural struct {
 	Mod        []string `json:"mod"`
 	// Classes are the residues that a rule treats differently, keyed by the
 	// modulus and the residue: "100000:21000".
-	Classes       map[string]string `json:"classes"`
-	Exact         map[string]string `json:"exact"`
-	FractionZero  string            `json:"fractionZero"`
-	FractionOther string            `json:"fractionOther"`
-	Disagrees     []int             `json:"disagrees"`
+	Classes          map[string]string `json:"classes"`
+	Exact            map[string]string `json:"exact"`
+	CompactExponents map[string]string `json:"compactExponents"`
+	FractionZero     string            `json:"fractionZero"`
+	FractionOther    string            `json:"fractionOther"`
+	Disagrees        []int             `json:"disagrees"`
 }
 
 type listPattern struct {
@@ -1136,6 +1137,7 @@ func encode(l *localeData) string {
 			letters(p.Mod),
 			joinClasses(p.Classes),
 			joinNumbered(p.Exact),
+			joinNumbered(p.CompactExponents),
 			letter(p.FractionZero),
 			letter(p.FractionOther),
 		}, fieldSep)

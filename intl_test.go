@@ -45,6 +45,9 @@ func TestIntlMatchesICU(t *testing.T) {
 		// moving a letter: it splits one letter into two and moves the
 		// capitals across.
 		`Collator("tr"`,
+		// ECMA-402 requires Japanese's forced twelve-hour clock to count
+		// midnight from zero; the ICU that produced the golden file says 12.
+		`DateTimeFormat("ja", {"timeZone":"UTC","hour":"numeric","minute":"2-digit","hour12":true}`,
 	}
 
 	var differences []string
@@ -129,6 +132,14 @@ func TestIntlFormats(t *testing.T) {
 		{`new Intl.NumberFormat("de", {style: "currency", currency: "EUR"}).format(9.5)`, "9,50\u00a0€"},
 		{`new Intl.NumberFormat("ja", {style: "currency", currency: "JPY"}).format(1200)`, "￥1,200"},
 		{`new Intl.NumberFormat("en", {style: "currency", currency: "USD"}).format(-1)`, "-$1.00"},
+		{`new Intl.NumberFormat("ko-KR", {style: "unit", unit: "kilometer-per-hour",
+		    unitDisplay: "long"}).formatToParts(-987)
+		    .map(p => p.type + "=" + p.value).join("|")`,
+			"unit=시속|literal= |minusSign=-|integer=987|unit=킬로미터"},
+		{`new Intl.NumberFormat("en-US", {style: "currency", currency: "USD",
+		    signDisplay: "always"}).formatRange(2.9, 3.1)`, "+$2.90–3.10"},
+		{`new Intl.NumberFormat("pt-PT", {style: "currency", currency: "EUR",
+		    maximumFractionDigits: 0}).formatRange(3, 5)`, "3 - 5\u00a0€"},
 
 		// Shortening a number is part of the language too: thousands in
 		// English, ten-thousands in Japanese, lakh in India.
@@ -153,6 +164,9 @@ func TestIntlFormats(t *testing.T) {
 		    .format(Date.UTC(2024, 0, 5))`, "5 stycznia"},
 		{`new Intl.DateTimeFormat("pl", {month: "long", timeZone: "UTC"})
 		    .format(Date.UTC(2024, 0, 5))`, "styczeń"},
+		{`new Intl.DateTimeFormat("en-US", {year: "numeric", month: "short", day: "numeric",
+		    timeZone: "UTC"}).formatRange(Date.UTC(2019, 0, 3), Date.UTC(2019, 0, 5))`,
+			"Jan 3\u2009–\u20095, 2019"},
 		// Thailand counts its years from another era.
 		{`new Intl.DateTimeFormat("th", {dateStyle: "long", timeZone: "UTC"})
 		    .format(Date.UTC(2024, 0, 5))`, "5 มกราคม 2567"},
@@ -176,6 +190,35 @@ func TestIntlFormats(t *testing.T) {
 		    .format(Date.UTC(2024, 0, 5))`, "Pausa 15, 1945 Śaka"},
 		{`new Intl.DateTimeFormat("en-u-ca-hebrew", {timeZone: "UTC"})
 		    .resolvedOptions().calendar`, "hebrew"},
+		{`new Intl.DateTimeFormat("en", {calendar: "islamic"})
+		    .resolvedOptions().calendar`, "islamic-civil"},
+		{`Intl.supportedValuesOf("calendar").includes("islamic")`, "false"},
+		{`new Intl.DateTimeFormat("ja", {hour: "numeric", hour12: true})
+		    .resolvedOptions().hourCycle`, "h11"},
+		{`new Intl.DateTimeFormat("ja", {hour: "numeric", hour12: true, timeZone: "UTC"})
+		    .format(Date.UTC(2024, 0, 1))`, "午前0時"},
+		{`(() => {
+		    const era = (calendar, year) => {
+		      const date = new Date(0); date.setUTCFullYear(year, 5, 15);
+		      return new Intl.DateTimeFormat("en", {calendar, era: "long",
+		        year: "numeric", timeZone: "UTC"}).formatToParts(date)
+		        .find(p => p.type === "era").value;
+		    };
+		    return ["islamic-civil", "islamic-tbla", "islamic-umalqura"]
+		      .map(c => [era(c, 600), era(c, 2025)].join(",")).join("|");
+		  })()`, "BH,AH|BH,AH|BH,AH"},
+		{`(() => {
+		    const f = new Intl.DateTimeFormat("en", {calendar: "ethiopic",
+		      era: "long", year: "numeric", timeZone: "UTC"});
+		    return [-6000, 0, 2025].map(year => {
+		      const date = new Date(0); date.setUTCFullYear(year, 5, 15);
+		      return f.formatToParts(date).find(p => p.type === "era").value;
+		    }).join(",");
+		  })()`, "AA,AA,AM"},
+		{`["chinese", "dangi"].map(calendar =>
+		    new Intl.DateTimeFormat("en", {calendar, era: "long", year: "numeric"})
+		      .formatToParts(Date.UTC(2025, 5, 15)).some(p => p.type === "era"))
+		    .join()`, "false,false"},
 		// A lunisolar year is named rather than numbered, and has a month
 		// said twice in the years that need one.
 		{`new Intl.DateTimeFormat("zh-u-ca-chinese", {year: "numeric"})
@@ -191,6 +234,10 @@ func TestIntlFormats(t *testing.T) {
 			"other,one,other,other,other | many,one,few,many,one | " +
 				"many,one,few,many,many | zero,one,two,few,many | zero,one,two,other,other"},
 		{`new Intl.PluralRules("en", {type: "ordinal"}).select(22)`, "two"},
+		{`["standard", "compact"].map(notation =>
+		    [1e6, 1.5e6, 1e-6, 999949].map(value =>
+		      new Intl.PluralRules("fr", {notation}).select(value)).join(",")).join(" | ")`,
+			"many,other,one,other | many,many,one,many"},
 
 		// Lists and times gone by.
 		{`new Intl.ListFormat("en").format(["a", "b", "c"])`, "a, b, and c"},
@@ -248,6 +295,14 @@ func TestIntlFormats(t *testing.T) {
 		{`["file10", "file9", "file1"].sort(new Intl.Collator("en", {numeric: true}).compare).join()`,
 			"file1,file9,file10"},
 		{`"résumé".localeCompare("resume", "en", {sensitivity: "base"})`, "0"},
+		{`new Intl.Collator("de", {usage: "search", sensitivity: "case"})
+		    .compare("Aã", "Aa")`, "0"},
+		{`["AE", "Ä"].sort(new Intl.Collator("de", {usage: "search"}).compare).join()`,
+			"AE,Ä"},
+		{`new Intl.Collator("de-u-co-phonebk", {collation: "eor"})
+		    .resolvedOptions().collation`, "eor"},
+		{`["z", "ä"].sort(new Intl.Collator("sv", {collation: "eor"}).compare).join()`,
+			"ä,z"},
 		{`"a".localeCompare("b")`, "-1"},
 
 		// What things are called, which the engine knows in English and the
@@ -268,6 +323,14 @@ func TestIntlFormats(t *testing.T) {
 		    new Intl.NumberFormat().resolvedOptions().locale`, "true"},
 		{`Intl.NumberFormat.supportedLocalesOf(["de", "xx"]).join()`, "de"},
 		{`Intl.getCanonicalLocales(["EN-us", "zh-hant-tw"]).join()`, "en-US,zh-Hant-TW"},
+		// Replacements may cover a whole language-and-variant tag, a transform
+		// field, or a Unicode setting such as a retired time-zone code.
+		{`Intl.getCanonicalLocales("hy-arevmda")[0]`, "hyw"},
+		{`Intl.getCanonicalLocales("und-Latn-t-und-hani-m0-names")[0]`,
+			"und-Latn-t-und-hani-m0-prprname"},
+		{`["cnckg", "eire", "est", "gmt0", "uct", "zulu"].map(tz =>
+		    Intl.getCanonicalLocales("und-u-tz-" + tz)[0]).join()`,
+			"und-u-tz-cnsha,und-u-tz-iedub,und-u-tz-papty,und-u-tz-gmt,und-u-tz-utc,und-u-tz-utc"},
 		// An underscore is not a hyphen, and a tag written with one is not a
 		// tag.
 		{`try { Intl.getCanonicalLocales("de_de") } catch (e) { e.constructor.name }`,

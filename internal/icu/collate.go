@@ -205,16 +205,31 @@ func (t *collationTable) weightsOf(r rune) (primary, secondary, tertiary int32, 
 // upperFirst puts capitals before their small letters, where a language asks
 // for that -- and Danish asks for it whether or not the caller does.
 func (l *Locale) Compare(a, b string, strength Strength, skipAccents, upperFirst bool) int {
-	return l.compare(a, b, strength, skipAccents, upperFirst, false)
+	return l.compare(a, b, strength, skipAccents, upperFirst, false, nil)
 }
 
 // CompareNumeric is the same, with the runs of digits in the two strings read
 // as numbers, so that file9 comes before file10.
 func (l *Locale) CompareNumeric(a, b string, strength Strength, skipAccents, upperFirst bool) int {
-	return l.compare(a, b, strength, skipAccents, upperFirst, true)
+	return l.compare(a, b, strength, skipAccents, upperFirst, true, nil)
 }
 
-func (l *Locale) compare(a, b string, strength Strength, skipAccents, upperFirst, numeric bool) int {
+// ComparePhonebook compares with the German search/phone-book expansions:
+// umlauts are written as ae, oe, and ue, and sharp s as ss.
+func (l *Locale) ComparePhonebook(a, b string, strength Strength, skipAccents,
+	upperFirst, numeric bool) int {
+	return l.compare(a, b, strength, skipAccents, upperFirst, numeric, phonebookExpansions)
+}
+
+// CompareEOR uses the European ordering rules, which are the untailored root
+// order rather than the language's ordinary moved letters and contractions.
+func (l *Locale) CompareEOR(a, b string, strength Strength, skipAccents,
+	upperFirst, numeric bool) int {
+	return (*Locale)(nil).compare(a, b, strength, skipAccents, upperFirst, numeric, nil)
+}
+
+func (l *Locale) compare(a, b string, strength Strength, skipAccents, upperFirst, numeric bool,
+	expansions map[rune]string) int {
 	t := order()
 	var moved map[rune]int32
 	var joined map[string]int32
@@ -225,8 +240,8 @@ func (l *Locale) compare(a, b string, strength Strength, skipAccents, upperFirst
 			upperFirst = true
 		}
 	}
-	ka := t.key(a, moved, joined, shifted, numeric)
-	kb := t.key(b, moved, joined, shifted, numeric)
+	ka := t.key(a, moved, joined, shifted, numeric, skipAccents, expansions)
+	kb := t.key(b, moved, joined, shifted, numeric, skipAccents, expansions)
 
 	if c := compareWeights(ka.primary, kb.primary, false); c != 0 {
 		return c
@@ -259,7 +274,7 @@ type sortKey struct {
 // œ weighs what oe weighs -- and, where the caller asked for it, a run of
 // digits counts as the number it is rather than as its digits.
 func (t *collationTable) key(s string, moved map[rune]int32, joined map[string]int32,
-	shifted, numeric bool) sortKey {
+	shifted, numeric, skipAccents bool, customExpansions map[rune]string) sortKey {
 	var out sortKey
 	for i := 0; i < len(s); {
 		r, size := utf8.DecodeRuneInString(s[i:])
@@ -303,14 +318,32 @@ func (t *collationTable) key(s string, moved map[rune]int32, joined map[string]i
 			t.appendWeights(&out, r, moved, shifted, true)
 			continue
 		}
-		if expansion, ok := t.expands[r]; ok {
+		expansion, custom := customExpansions[r]
+		expands := custom
+		if !custom {
+			expansion, expands = t.expands[r]
+		}
+		if expands {
 			// A character that sorts as several is those several, and then a
 			// mark saying it was written as one: ss comes before ß, and 1
 			// before ①, though each pair is the same letters.
 			for _, e := range expansion {
 				t.appendWeights(&out, e, moved, shifted, true)
 			}
-			if _, _, third, ok := t.weightsOf(r); ok {
+			// A canonical expansion such as a + tilde is merely another
+			// spelling of the accented character. When accents are skipped it
+			// must not leave the compatibility tie-breaker behind. A phone-book
+			// expansion such as ae remains distinct at the tertiary level.
+			canonicalAccent := false
+			if !custom && skipAccents {
+				for _, e := range expansion {
+					if _, ok := t.marks[e]; ok {
+						canonicalAccent = true
+						break
+					}
+				}
+			}
+			if _, _, third, ok := t.weightsOf(r); ok && !canonicalAccent {
 				out.tertiary = append(out.tertiary, writtenAsOne+third)
 			}
 			continue
@@ -318,6 +351,26 @@ func (t *collationTable) key(s string, moved map[rune]int32, joined map[string]i
 		t.appendWeights(&out, r, moved, shifted, true)
 	}
 	return out
+}
+
+var phonebookExpansions = map[rune]string{
+	'Ä': "AE", 'ä': "ae",
+	'Ö': "OE", 'ö': "oe",
+	'Ü': "UE", 'ü': "ue",
+	'ẞ': "SS", 'ß': "ss",
+}
+
+// HasCollation reports the named orders this compact collation data can
+// reproduce for a locale. EOR uses the root order carried here; phone-book
+// ordering adds the German expansions above.
+func HasCollation(tag, name string) bool {
+	switch name {
+	case "eor":
+		return true
+	case "phonebk":
+		return tag == "de" || strings.HasPrefix(tag, "de-")
+	}
+	return false
 }
 
 // contraction looks for a letter written as two or three characters at the

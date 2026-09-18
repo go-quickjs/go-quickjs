@@ -107,6 +107,14 @@ for (const tag of GRANDFATHERED) {
   const out = canon(tag);
   if (out !== null && out.toLowerCase() !== tag) grandfathered[tag] = out;
 }
+// A few replacements are whole language-plus-variant tags rather than a
+// replacement for the variant wherever it appears. Western Armenian is the
+// remaining registered case: arevmda disappears in other languages, but
+// hy-arevmda became the language hyw.
+for (const tag of ["hy-arevmda"]) {
+  const out = canon(tag);
+  if (out !== null && out.toLowerCase() !== tag) grandfathered[tag] = out;
+}
 
 // The variants a language may be written in. There are too many strings of
 // five to eight characters to try them all, so this is the registered list.
@@ -174,6 +182,10 @@ const SETTINGS = {
   kv: ["space", "punct", "symbol", "currency"],
   kf: ["upper", "lower", "false"],
   hc: ["h11", "h12", "h23", "h24"],
+  // Transform fields use the same key-value shape as Unicode settings. Keep
+  // their deprecated values in the same alias table so both extensions can
+  // share the canonicalisation code.
+  m0: ["names"],
   tz: timeZoneCodes(),
   rg: subdivisions(),
   sd: subdivisions(),
@@ -188,11 +200,20 @@ function supported(key) {
 }
 
 // The codes a time zone goes by in a tag are a region and a city run together
-// -- Asia/Shanghai is "cnsha" -- and which letters of which are not something
-// that can be worked out from the name. There are too many strings of that
-// length to try them all, so a zone named in a tag is left as it was written.
+// -- Asia/Shanghai is "cnsha" -- and cannot be derived from the IANA name.
+// Canonical codes already stay as written, so only the finite set of retired
+// codes and aliases that themselves fit the Unicode value grammar need to be
+// probed. This list comes from CLDR's common/bcp47/timezone.xml.
 function timeZoneCodes() {
-  return [];
+  return [
+    "aqams", "aukns", "caffs", "camtr", "canpg", "capnt", "cathu", "cayzf",
+    "cet", "cnckg", "cnhrb", "cnkhg", "cst6cdt", "cuba", "eet", "egypt",
+    "eire", "est", "est5edt", "factory", "gaza", "gmt", "gmt0", "hongkong",
+    "hst", "iceland", "iran", "israel", "jamaica", "japan", "libya", "met",
+    "mncoq", "mst", "mst7mdt", "mxstis", "navajo", "poland", "portugal",
+    "prc", "pst8pdt", "roc", "rok", "turkey", "uaozh", "uauzh", "uct",
+    "umjon", "usnavajo", "utc", "wet", "zulu",
+  ];
 }
 
 // The subdivisions a tag may name, which are a region and one to three

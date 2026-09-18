@@ -44,18 +44,100 @@ func mergeRange(start, end []pieceOf, separator string) *rangePieces {
 		start[len(start)-1-back] == end[len(end)-1-back] {
 		back++
 	}
+	// Once a later field is shared, an identical leading field can be shared
+	// as well: "Jan 3 - 5, 2019". Do not do this when the last differing
+	// field is at the end, since "Mar 4, 2019 - Mar 4, 2020" repeats the date.
+	front := 0
+	if back > 0 {
+		for front < len(start)-back && front < len(end)-back && start[front] == end[front] {
+			front++
+		}
+	}
 
-	for _, piece := range start[:len(start)-back] {
+	for _, piece := range start[:front] {
+		out.add(piece.kind, piece.value, "shared")
+	}
+	for _, piece := range start[front : len(start)-back] {
 		out.add(piece.kind, piece.value, "startRange")
 	}
 	out.add("literal", separator, "shared")
-	for _, piece := range end[:len(end)-back] {
+	for _, piece := range end[front : len(end)-back] {
 		out.add(piece.kind, piece.value, "endRange")
 	}
 	for _, piece := range start[len(start)-back:] {
 		out.add(piece.kind, piece.value, "shared")
 	}
 	return out
+}
+
+// mergeRangeAffixes writes a number range with the affixes the two ends share
+// said once. A currency written after its number is shared by the range; a
+// currency written before it is shared only when an explicit sign is shared
+// too. ICU's automatic range collapse uses that distinction, so English says
+// "$3 - $5" but "-$3-5", while Portuguese says "3 - 5 EUR".
+func mergeRangeAffixes(start, end []pieceOf, separator string) (*rangePieces, bool) {
+	front := commonAffixPrefix(start, end)
+	back := commonAffixSuffix(start[front:], end[front:])
+
+	// A prefix on its own is repeated unless it includes the common sign.
+	if front > 0 && !hasSign(start[:front]) {
+		front = 0
+		back = commonAffixSuffix(start, end)
+	}
+	if front == 0 && back == 0 {
+		return nil, false
+	}
+
+	out := &rangePieces{}
+	for _, piece := range start[:front] {
+		out.add(piece.kind, piece.value, "shared")
+	}
+	for _, piece := range start[front : len(start)-back] {
+		out.add(piece.kind, piece.value, "startRange")
+	}
+	out.add("literal", separator, "shared")
+	for _, piece := range end[front : len(end)-back] {
+		out.add(piece.kind, piece.value, "endRange")
+	}
+	for _, piece := range start[len(start)-back:] {
+		out.add(piece.kind, piece.value, "shared")
+	}
+	return out, true
+}
+
+func commonAffixPrefix(a, b []pieceOf) int {
+	n := 0
+	for n < len(a) && n < len(b) && a[n] == b[n] && !numberRangeCore(a[n].kind) {
+		n++
+	}
+	return n
+}
+
+func commonAffixSuffix(a, b []pieceOf) int {
+	n := 0
+	for n < len(a) && n < len(b) &&
+		a[len(a)-1-n] == b[len(b)-1-n] && !numberRangeCore(a[len(a)-1-n].kind) {
+		n++
+	}
+	return n
+}
+
+func numberRangeCore(kind string) bool {
+	switch kind {
+	case "integer", "group", "decimal", "fraction", "compact", "exponentSeparator",
+		"exponentMinusSign", "exponentInteger", "nan", "infinity":
+		return true
+	}
+	return false
+}
+
+func hasSign(pieces []pieceOf) bool {
+	for _, piece := range pieces {
+		if piece.kind == "plusSign" || piece.kind == "minusSign" {
+			return true
+		}
+	}
+	return false
 }
 
 // joinRange writes the two ends out in full with the mark between them, which

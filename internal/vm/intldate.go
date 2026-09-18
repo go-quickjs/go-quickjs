@@ -667,6 +667,16 @@ func (o *dateOptions) calendarCycle() ([]string, bool) {
 // own even where its months are the common ones: the Japanese year is counted
 // from the start of a reign and named after it.
 func (o *dateOptions) eraName(at icu.Date, n int) string {
+	// The Islamic calendars' data has a name for AH but no localized name for
+	// the proleptic era before it. BH is the standard era code and remains an
+	// unambiguous fallback where CLDR supplies no display name.
+	switch o.calendar {
+	case "islamic", "islamic-civil", "islamic-rgsa", "islamic-tbla", "islamic-umalqura":
+		if at.Era == 0 {
+			return "BH"
+		}
+		at.Era = 0 // The one name in CLDR is the current AH era.
+	}
 	if names, ok := o.calendarEras(); ok {
 		width := 1
 		switch {
@@ -768,7 +778,8 @@ func (o *dateOptions) patternFor() string {
 	if o.weekday != "" && !strings.ContainsRune(patternLettersOf(pattern), 'E') {
 		pattern = o.withWeekday(pattern)
 	}
-	if o.era != "" && !strings.ContainsRune(patternLettersOf(pattern), 'G') {
+	noEra := o.calendar == "chinese" || o.calendar == "dangi"
+	if o.era != "" && !noEra && !strings.ContainsRune(patternLettersOf(pattern), 'G') {
 		pattern += " G"
 	}
 	pattern = o.withEra(pattern)

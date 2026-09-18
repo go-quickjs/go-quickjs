@@ -211,16 +211,33 @@ func (r *Runtime) collatorOf(this Value) (*collatorOptions, error) {
 // one before it came out equal. What the options change is how much of that
 // counts, and whether a run of digits is read as a number.
 func (o *collatorOptions) compare(a, b string) int {
+	collation := o.choice.setting("co")
+	german := o.locale.Tag == "de" || strings.HasPrefix(o.locale.Tag, "de-")
+	phonebook := german && (o.usage == "search" || collation == "phonebk")
 	// Two spellings of the same text are the same text: "ö" written as one
 	// character and as an o with a mark after it sort as equal, whatever the
 	// language.
 	if a != b {
-		a, b = normalizeString(a, "NFC"), normalizeString(b, "NFC")
+		form := "NFC"
+		if o.sensitivity == "case" && !phonebook {
+			// Decomposing makes an accent disappear at the secondary level while
+			// retaining the base letter's case at the tertiary level.
+			form = "NFD"
+		}
+		a, b = normalizeString(a, form), normalizeString(b, form)
 	}
 	if o.ignorePunct {
 		a, b = stripPunctuation(a), stripPunctuation(b)
 	}
 	strength, skipAccents := o.strength()
+	if collation == "eor" {
+		return o.locale.CompareEOR(a, b, strength, skipAccents,
+			o.caseFirst == "upper", o.numeric)
+	}
+	if phonebook {
+		return o.locale.ComparePhonebook(a, b, strength, skipAccents,
+			o.caseFirst == "upper", o.numeric)
+	}
 	if o.numeric {
 		return o.locale.CompareNumeric(a, b, strength, skipAccents, o.caseFirst == "upper")
 	}
@@ -277,9 +294,19 @@ func (o *pluralOptions) categoryOf(n float64) string {
 		return rule.Category(n)
 	}
 	// The digits the count would be written with, which is what the rules ask
-	// about: whether there is a fraction, and how long it is.
-	whole, fraction := o.numbers.rawDigits(o.numbers.round(decimalOf(n)))
-	return rule.CategoryOf(whole, fraction, n)
+	// about: whether there is a fraction, and how long it is. Compact notation
+	// also supplies the power of ten factored out of the displayed number.
+	d := decimalOf(n)
+	kept, exponent := "", 0
+	if o.numbers.notation == "compact" {
+		var scaled decimal
+		scaled, kept, _, exponent = o.numbers.compactly(d)
+		d = scaled.times10(exponent)
+	} else {
+		d, kept = o.numbers.round(d)
+	}
+	whole, fraction := o.numbers.rawDigits(d, kept)
+	return rule.CategoryOf(whole, fraction, n, exponent)
 }
 
 func (r *Runtime) initPluralRules(intl *Object) {

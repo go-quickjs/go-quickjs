@@ -297,9 +297,9 @@ func (t *langTag) String() string {
 	return strings.Join(parts, "-")
 }
 
-// canonicalSetting is what a setting goes by now, for the settings that have
-// been renamed: "islamicc" is the civil Islamic calendar, and a key set to yes
-// is a key set to true.
+// canonicalSetting is what a setting or transform field goes by now, for the
+// values that have been renamed: "islamicc" is the civil Islamic calendar,
+// and a key set to yes is a key set to true.
 func canonicalSetting(key, value string) string {
 	_, _, _, _, _, settings, _ := icu.TagAliases()
 	to, ok := settings[key+"-"+value]
@@ -473,6 +473,15 @@ func (t *langTag) applyAliases() {
 				replaced = ""
 			}
 			t.keywords[i].value = replaced
+		}
+	}
+	// Transform fields draw their aliases from the same Unicode BCP 47 data.
+	// Unlike a Unicode keyword, a transform field always has a value.
+	for i, f := range t.fields {
+		if to, ok := settings[f.key+"-"+f.value]; ok {
+			if _, replaced, found := strings.Cut(to, "-"); found {
+				t.fields[i].value = replaced
+			}
 		}
 	}
 }

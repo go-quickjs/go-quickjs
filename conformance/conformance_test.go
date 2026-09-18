@@ -93,55 +93,10 @@ var unsupportedFeatures = map[string]string{
 	"arguments-object":              "",
 }
 
-// knownDifferences are the tests that do not pass, and what each of them is
-// asking for that this engine does not have. Everything else has to pass: a
-// failure that is not named here breaks the build, and so does a name here
-// that has started passing.
-//
-// All of them are in the internationalization suite, and all of them are data
-// rather than code: an ordering, a calendar, or a table of names that would
-// cost more to carry than it would earn.
-var knownDifferences = map[string]string{
-	// Every calendar but the Gregorian and the Buddhist. A lunisolar year has a
-	// name as well as a number, a leap month is the month before it said twice,
-	// and an era that is not ours counts from somewhere else and is named in
-	// every language.
-	"intl402/DateTimeFormat/prototype/formatToParts/era.js": "calendars",
-
-	// The orderings that are a whole script's worth of data rather than a
-	// handful of moves: the German phone book, and the one a search uses.
-	"intl402/Collator/prototype/compare/non-normative-sensitivity.js":                                 "orderings",
-	"intl402/Collator/prototype/resolvedOptions/resolved-collation-unicode-extensions-and-options.js": "orderings",
-	"intl402/Collator/usage-de.js": "orderings",
-
-	// Which parts of a date a range writes twice, which CLDR gives as a pattern
-	// per skeleton per differing field. What is done instead is to write out
-	// everything up to the last part that differs, which agrees with a full ICU
-	// for most of them.
-	"intl402/DateTimeFormat/prototype/formatRange/en-US.js":        "interval patterns",
-	"intl402/DateTimeFormat/prototype/formatRangeToParts/en-US.js": "interval patterns",
-
-	// The codes a time zone goes by inside a tag, and the names a way of
-	// transliterating goes by, which are words rather than a pattern and
-	// cannot be enumerated the way the rest of the tag can.
-	"intl402/Intl/getCanonicalLocales/transformed-ext-canonical.js":         "tag codes",
-	"intl402/Intl/getCanonicalLocales/non-iana-canon.js":                    "tag codes",
-	"intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-timezone.js": "tag codes",
-
-	// What an ICU of another version answers. The data here was read from one
-	// ICU and the tests were written against another, and these are the places
-	// where the two disagree: node answers as this does.
-	"intl402/DateTimeFormat/prototype/resolvedOptions/hourCycle-default.js":   "another ICU",
-	"intl402/NumberFormat/prototype/format/unit-ja-JP.js":                     "another ICU",
-	"intl402/NumberFormat/prototype/format/unit-zh-TW.js":                     "another ICU",
-	"intl402/NumberFormat/prototype/formatRange/en-US.js":                     "another ICU",
-	"intl402/NumberFormat/prototype/formatRange/pt-PT.js":                     "another ICU",
-	"intl402/NumberFormat/prototype/formatToParts/unit-ja-JP.js":              "another ICU",
-	"intl402/NumberFormat/prototype/formatToParts/unit-ko-KR.js":              "another ICU",
-	"intl402/NumberFormat/prototype/formatToParts/unit-zh-TW.js":              "another ICU",
-	"intl402/PluralRules/prototype/select/notation.js":                        "another ICU",
-	"intl402/DateTimeFormat/constructor-options-calendar-islamic-fallback.js": "calendars",
-}
+// knownDifferences is deliberately empty. A newly named difference permits a
+// failure while documenting why; an unlisted failure and a stale entry both
+// break the build.
+var knownDifferences = map[string]string{}
 
 func TestConformance(t *testing.T) {
 	suite, err := conformance.Open("")

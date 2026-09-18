@@ -202,6 +202,9 @@ type PluralRule struct {
 	// Exact is for a count that no class covers.
 	Classes map[int]map[int]byte
 	Exact   map[int]byte
+	// CompactExponents are the categories selected by CLDR's compact-decimal
+	// exponent operand when that exponent alone decides the answer.
+	CompactExponents map[int]byte
 	// FractionZero is the category of a count with a fraction and nothing in
 	// front of the point, FractionOther of one with something.
 	FractionZero, FractionOther byte
@@ -591,7 +594,7 @@ func pairs(fields []string, i int) map[string]string {
 
 func decodePlural(fields []string) PluralRule {
 	var p PluralRule
-	if len(fields) < 7 {
+	if len(fields) < 8 {
 		p.Categories = []string{"other"}
 		for i := range p.Small {
 			p.Small[i], p.Mod[i] = 'x', 'x'
@@ -606,8 +609,9 @@ func decodePlural(fields []string) PluralRule {
 	copy(p.Mod[:], fields[2])
 	p.Classes = decodeClasses(fields[3])
 	p.Exact = numberedCategories(fields[4])
-	p.FractionZero = byteAt(fields[5])
-	p.FractionOther = byteAt(fields[6])
+	p.CompactExponents = numberedCategories(fields[5])
+	p.FractionZero = byteAt(fields[6])
+	p.FractionOther = byteAt(fields[7])
 	return p
 }
 
@@ -655,9 +659,9 @@ func numberedCategories(field string) map[int]byte {
 		if len(item) < 2 {
 			continue
 		}
-		n := 0
-		for i := 0; i < len(item)-1; i++ {
-			n = n*10 + int(item[i]-'0')
+		n, err := strconv.Atoi(item[:len(item)-1])
+		if err != nil {
+			continue
 		}
 		out[n] = item[len(item)-1]
 	}
@@ -922,7 +926,10 @@ func NumberingSystems() []string {
 // CategoryOf is the form a count takes when it is written with these digits.
 // A language counts what is written rather than what it means: one apple, but
 // 1.0 apples, because the one has a fraction written after it.
-func (p *PluralRule) CategoryOf(whole, fraction string, n float64) string {
+func (p *PluralRule) CategoryOf(whole, fraction string, n float64, compactExponent int) string {
+	if category, ok := p.CompactExponents[compactExponent]; compactExponent != 0 && ok {
+		return categoryNames[category]
+	}
 	if fraction != "" {
 		if strings.Trim(whole, "0") == "" {
 			return categoryNames[p.FractionZero]

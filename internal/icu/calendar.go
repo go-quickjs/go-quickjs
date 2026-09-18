@@ -43,13 +43,18 @@ type Date struct {
 // Calendars lists the ones this engine reckons.
 func Calendars() []string {
 	return []string{"buddhist", "chinese", "coptic", "dangi", "ethiopic",
-		"ethioaa", "gregory", "hebrew", "indian", "islamic", "islamic-civil",
-		"islamic-rgsa", "islamic-tbla", "islamic-umalqura", "iso8601",
+		"ethioaa", "gregory", "hebrew", "indian", "islamic-civil",
+		"islamic-tbla", "islamic-umalqura", "iso8601",
 		"japanese", "persian", "roc"}
 }
 
-// HasCalendar reports whether a calendar is one this engine reckons.
+// HasCalendar reports whether a calendar is one this engine reckons. The two
+// abstract Islamic calendars remain valid requests, but a formatter resolves
+// them to a concrete calendar before reporting its choice.
 func HasCalendar(name string) bool {
+	if name == "islamic" || name == "islamic-rgsa" {
+		return true
+	}
 	for _, known := range Calendars() {
 		if known == name {
 			return true
@@ -91,7 +96,7 @@ func DateIn(calendar string, t time.Time) Date {
 		loadMonthTables()
 		if table, ok := monthTables[calendar]; ok {
 			if year, month, day, ok := table.dateFrom(fixed, 12); ok {
-				return Date{Era: 0, Year: year, Month: month, Day: day,
+				return Date{Era: 1, Year: year, Month: month, Day: day,
 					RelatedYear: gregorianYearOf(fixed)}
 			}
 		}
@@ -106,7 +111,13 @@ func DateIn(calendar string, t time.Time) Date {
 	case "coptic":
 		return copticDate(fixed, copticEpoch, 0)
 	case "ethiopic":
-		return copticDate(fixed, ethiopicEpoch, 1)
+		out := copticDate(fixed, ethiopicEpoch, 1)
+		if out.Year <= 0 {
+			// Before Anno Mundi year 1, Ethiopic dates use the overlapping
+			// Amete Alem count, whose year is 5500 years ahead.
+			out.Era, out.Year = 0, out.Year+5500
+		}
+		return out
 	case "ethioaa":
 		// The same calendar counted from the creation of the world, which is
 		// one era and not two.
@@ -181,7 +192,10 @@ func islamicDate(fixed, epoch int) Date {
 		month++
 	}
 	day := fixed - fixedFromIslamic(year, month, 1, epoch) + 1
-	out := Date{Era: 0, Year: year, Month: month, Day: day}
+	out := Date{Era: 1, Year: year, Month: month, Day: day}
+	if year <= 0 {
+		out.Era, out.Year = 0, 1-year
+	}
 	out.RelatedYear = gregorianYearOf(fixed)
 	return out
 }

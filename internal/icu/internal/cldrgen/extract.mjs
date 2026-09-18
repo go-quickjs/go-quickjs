@@ -246,7 +246,11 @@ function numberData(locale) {
     hourCycles: (() => {
       const at = (options) => new Intl.DateTimeFormat(locale,
         {hour: "numeric", ...options}).resolvedOptions().hourCycle || "";
-      return [at({}), at({hour12: true}), at({hour12: false})].join(",");
+      const cycles = [at({}), at({hour12: true}), at({hour12: false})];
+      // ECMA-402 requires Japanese to count midnight as zero when a
+      // twelve-hour clock is requested. Some ICU versions report h12 here.
+      if (locale === "ja") cycles[1] = "h11";
+      return cycles.join(",");
     })(),
     range: (() => {
       const parts = new Intl.NumberFormat(locale).formatRangeToParts(1, 5);
@@ -398,7 +402,7 @@ function currencySymbols(locale) {
 // What comes out is checked against the engine it was read from, for every
 // count up to a hundred thousand -- or up to three million for a language
 // whose rules reach that far.
-function pluralTable(locale, type) {
+function pluralTable(locale, type, compact) {
   const rules = new Intl.PluralRules(locale, {type});
 
   const small = Array.from({length: 100}, (_, n) => rules.select(n));
@@ -498,11 +502,44 @@ function pluralTable(locale, type) {
     found = derive(3000000);
   }
 
+  // Compact notation supplies CLDR's `e` operand: the power of ten factored
+  // out of the displayed number. Derive the cases where that operand alone
+  // decides the category. The exponents come from this locale's compact
+  // patterns rather than from an assumed thousands/millions sequence; Japanese,
+  // for example, counts in powers of four.
+  const compactExponents = {};
+  const compactRules = new Intl.PluralRules(locale, {
+    type, notation: "compact", maximumFractionDigits: 20,
+  });
+  const plainRules = new Intl.PluralRules(locale, {
+    type, notation: "standard", maximumFractionDigits: 20,
+  });
+  const byExponent = new Map();
+  for (const forms of Object.values(compact)) {
+    for (const [powerText, form] of Object.entries(forms)) {
+      if (form.divisor <= 0) continue;
+      const power = Number(powerText);
+      let samples = byExponent.get(form.divisor);
+      if (!samples) byExponent.set(form.divisor, samples = []);
+      for (const factor of [1, 1.1, 1.5, 2, 3, 5, 7, 9.9]) {
+        samples.push(factor * Math.pow(10, power));
+      }
+    }
+  }
+  for (const [exponent, samples] of byExponent) {
+    const categories = new Set(samples.map(n => compactRules.select(n)));
+    const differs = samples.some(n => compactRules.select(n) !== plainRules.select(n));
+    if (categories.size === 1 && differs) {
+      compactExponents[exponent] = categories.values().next().value;
+    }
+  }
+
   return {
     categories: rules.resolvedOptions().pluralCategories,
     small, mod,
     classes: found.classes,
     exact: found.exact,
+    compactExponents,
     fractionZero: rules.select(0.5),
     fractionOther: rules.select(1.5),
     disagrees: found.wrong,
@@ -721,6 +758,7 @@ function extract(locale) {
   }
   const era = (date) => new Intl.DateTimeFormat(locale, {era: "short", year: "numeric", timeZone: "UTC"})
     .formatToParts(date).filter(p => p.type === "era").map(p => p.value)[0] || "";
+  const compact = compactForms(locale);
 
   return {
     tag: locale,
@@ -753,10 +791,10 @@ function extract(locale) {
       return "\u2009\u2013\u2009";
     })(),
     numbers: numberData(locale),
-    compact: compactForms(locale),
+    compact,
     currencies: currencySymbols(locale),
-    plurals: {cardinal: pluralTable(locale, "cardinal"),
-              ordinal: pluralTable(locale, "ordinal")},
+    plurals: {cardinal: pluralTable(locale, "cardinal", compact),
+              ordinal: pluralTable(locale, "ordinal", compact)},
     lists: listData(locale),
     relative: relativeData(locale),
   };
