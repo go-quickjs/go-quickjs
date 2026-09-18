@@ -35,6 +35,16 @@ type ZoneNaming struct {
 // A zone nobody has named is all empty, and so is one in a language the data
 // says nothing about, which leaves the caller to write the offset instead.
 func ZoneNamesIn(locale, zone string) ZoneNaming {
+	seasonal := ZoneSeasonNamesIn(locale, zone)
+	generic := ZoneGenericNamesIn(locale, zone)
+	seasonal.LongGeneric = generic.LongGeneric
+	seasonal.ShortGeneric = generic.ShortGeneric
+	return seasonal
+}
+
+// ZoneSeasonNamesIn returns only standard/daylight names, without loading the
+// independently packed generic-name table.
+func ZoneSeasonNamesIn(locale, zone string) ZoneNaming {
 	zone = namedZone(zone)
 	english := zoneNames[zone]
 	out := ZoneNaming{
@@ -42,14 +52,30 @@ func ZoneNamesIn(locale, zone string) ZoneNaming {
 		LongDaylight:  field(english, 1),
 		ShortStandard: field(english, 2),
 		ShortDaylight: field(english, 3),
-		LongGeneric:   field(english, 4),
-		ShortGeneric:  field(english, 5),
+	}
+	if locale == "en" {
+		return out
 	}
 	if entry, ok := seasonNames.entry(locale, zone); ok {
 		out.LongStandard = field(entry, 0)
 		out.LongDaylight = field(entry, 1)
 		out.ShortStandard = field(entry, 2)
 		out.ShortDaylight = field(entry, 3)
+	}
+	return out
+}
+
+// ZoneGenericNamesIn returns only year-round names, without loading the
+// independently packed seasonal-name table.
+func ZoneGenericNamesIn(locale, zone string) ZoneNaming {
+	zone = namedZone(zone)
+	english := zoneNames[zone]
+	out := ZoneNaming{
+		LongGeneric:  field(english, 4),
+		ShortGeneric: field(english, 5),
+	}
+	if locale == "en" {
+		return out
 	}
 	if entry, ok := genericNames.entry(locale, zone); ok {
 		out.LongGeneric = field(entry, 0)
@@ -131,7 +157,7 @@ func piece(text string, sep byte, i int) string {
 var (
 	seasonNames     = zoneTable{packed: zoneSeasonPacked}
 	genericNames    = zoneTable{packed: zoneGenericPacked}
-	historicalNames = zoneHistoryTable{packed: zoneHistoryPacked, size: zoneHistorySize}
+	historicalNames = zoneHistoryTable{packed: zoneHistoryPacked}
 	legacyNames     = zoneLegacyTable{packed: zoneLegacyPacked}
 )
 
@@ -141,22 +167,30 @@ type zonePeriod struct {
 }
 
 type zoneHistoryTable struct {
-	packed     []byte
-	size       int
-	once       sync.Once
-	periods    map[string][]zonePeriod
-	blocks     map[string]int
-	rows       int
-	columns    int
+	packed         []byte
+	once           sync.Once
+	encodedPeriods []byte
+	encodedBlocks  []byte
+	periodsMu      sync.Mutex
+	periods        map[string][]zonePeriod
+	columns        int
+	rows           [][]byte
+	decodedMu      sync.Mutex
+	decoded        map[int]zoneHistoryRow
+}
+
+type zoneHistoryRow struct {
 	dictionary []string
 	matrices   string
 }
 
 type zoneLegacyTable struct {
-	packed  []byte
-	once    sync.Once
-	changes map[string][]int64
-	names   zoneTable
+	packed         []byte
+	once           sync.Once
+	encodedChanges []byte
+	changesMu      sync.Mutex
+	changes        map[string][]int64
+	names          zoneTable
 }
 
 func (l *zoneLegacyTable) entry(locale, zone string, unixMillis int64) (string, bool) {
@@ -168,48 +202,87 @@ func (l *zoneLegacyTable) entry(locale, zone string, unixMillis int64) (string, 
 	if !ok {
 		return "", false
 	}
-	second := unixMillis / 1000
-	changes := l.changes[zone]
-	slot := sort.Search(len(changes), func(i int) bool { return changes[i] > second }) & 1
+	slot := l.slot(zone, unixMillis/1000)
 	return field(entry, slot), true
 }
 
 func (l *zoneLegacyTable) load() {
 	l.once.Do(func() {
-		text, err := inflate(l.packed)
-		if err != nil {
+		if len(l.packed) < 5 || string(l.packed[:5]) != "QJZL\x02" {
 			return
 		}
-		sections := strings.SplitN(text, "\n\n", 4)
-		if len(sections) < 4 {
+		reader := zoneTableReader{data: l.packed[5:]}
+		changes, ok := reader.bytes()
+		if !ok {
 			return
 		}
-		l.changes = make(map[string][]int64)
-		for _, line := range strings.Split(sections[0], "\n") {
-			zone, encoded, ok := strings.Cut(line, "=")
-			if !ok {
-				continue
-			}
-			if encoded == "" {
-				l.changes[zone] = nil
-				continue
-			}
-			for _, item := range strings.Split(encoded, ",") {
-				at, err := strconv.ParseInt(item, 10, 64)
-				if err == nil {
-					l.changes[zone] = append(l.changes[zone], at)
-				}
-			}
+		zoneTable, ok := reader.bytes()
+		if !ok {
+			return
 		}
-		l.names.group = numbered(sections[1])
-		l.names.block = numbered(sections[2])
-		l.names.rows = strings.Split(sections[3], "\n")
+		l.encodedChanges = changes
+		l.names.packed = zoneTable
 	})
+}
+
+// slot reports whether the requested instant uses the first or second legacy
+// name. The transition lists stay encoded, so first use reads only one zone.
+func (l *zoneLegacyTable) slot(zone string, second int64) int {
+	changes, ok := l.changesFor(zone)
+	if !ok {
+		return 0
+	}
+	return sort.Search(len(changes), func(i int) bool { return changes[i] > second }) & 1
+}
+
+func (l *zoneLegacyTable) changesFor(zone string) ([]int64, bool) {
+	l.changesMu.Lock()
+	defer l.changesMu.Unlock()
+	if changes, ok := l.changes[zone]; ok {
+		return changes, true
+	}
+	reader := zoneTableReader{data: l.encodedChanges}
+	count, ok := reader.uvarint()
+	if !ok {
+		return nil, false
+	}
+	for range count {
+		name, ok := reader.string()
+		if !ok {
+			return nil, false
+		}
+		encoded, ok := reader.bytes()
+		if !ok {
+			return nil, false
+		}
+		if name != zone {
+			continue
+		}
+		changeReader := zoneTableReader{data: encoded}
+		changeCount, ok := changeReader.uvarint()
+		if !ok {
+			return nil, false
+		}
+		changes := make([]int64, 0, changeCount)
+		for range changeCount {
+			at, ok := changeReader.varint()
+			if !ok {
+				return nil, false
+			}
+			changes = append(changes, at)
+		}
+		if l.changes == nil {
+			l.changes = make(map[string][]int64)
+		}
+		l.changes[zone] = changes
+		return changes, true
+	}
+	return nil, false
 }
 
 func (h *zoneHistoryTable) entry(locale, zone string, unixMillis int64) (ZoneNaming, bool) {
 	h.load()
-	periods := h.periods[zone]
+	periods := h.periodsFor(zone)
 	if len(periods) == 0 {
 		return ZoneNaming{}, false
 	}
@@ -217,32 +290,33 @@ func (h *zoneHistoryTable) entry(locale, zone string, unixMillis int64) (ZoneNam
 	if at < 0 || periods[at].record < 0 {
 		return ZoneNaming{}, false
 	}
-	block, ok := h.blocks[locale]
+	block, ok := h.block(locale)
 	if !ok {
 		base, _, cut := strings.Cut(locale, "-")
 		if cut {
-			block, ok = h.blocks[base]
+			block, ok = h.block(base)
 		}
 	}
 	if !ok && locale != "en" {
-		block, ok = h.blocks["en"]
+		block, ok = h.block("en")
 	}
-	if !ok || block >= h.rows || periods[at].record >= h.columns {
+	if !ok || block >= len(h.rows) || periods[at].record >= h.columns {
 		return ZoneNaming{}, false
 	}
-	cell := block*h.columns + periods[at].record
+	row, ok := h.row(block)
+	if !ok {
+		return ZoneNaming{}, false
+	}
 	name := func(matrix int) string {
-		index := (matrix*h.rows*h.columns + cell) * 3
-		if index+3 > len(h.matrices) {
+		index := (matrix*h.columns + periods[at].record) * 2
+		if index+2 > len(row.matrices) {
 			return ""
 		}
-		id := int(h.matrices[index]) |
-			int(h.matrices[index+1])<<8 |
-			int(h.matrices[index+2])<<16
-		if id >= len(h.dictionary) {
+		id := int(row.matrices[index]) | int(row.matrices[index+1])<<8
+		if id >= len(row.dictionary) {
 			return ""
 		}
-		return h.dictionary[id]
+		return row.dictionary[id]
 	}
 	long, short := name(0), name(1)
 	return ZoneNaming{
@@ -257,56 +331,21 @@ func (h *zoneHistoryTable) entry(locale, zone string, unixMillis int64) (ZoneNam
 
 func (h *zoneHistoryTable) load() {
 	h.once.Do(func() {
-		text, err := inflateSize(h.packed, h.size)
-		if err != nil || !strings.HasPrefix(text, "QJZH\x01") {
+		if len(h.packed) < 5 || string(h.packed[:5]) != "QJZH\x03" {
 			return
 		}
-		reader := zoneHistoryReader{text: text[5:]}
-		zoneCount, ok := reader.uvarint()
+		reader := zoneTableReader{data: h.packed[5:]}
+		periods, ok := reader.bytes()
 		if !ok {
 			return
 		}
-		h.periods = make(map[string][]zonePeriod)
-		for range zoneCount {
-			zone, ok := reader.string()
-			if !ok {
-				return
-			}
-			periodCount, ok := reader.uvarint()
-			if !ok {
-				return
-			}
-			periods := make([]zonePeriod, 0, periodCount)
-			for range periodCount {
-				from, ok := reader.varint()
-				if !ok {
-					return
-				}
-				record, ok := reader.uvarint()
-				if !ok {
-					return
-				}
-				periods = append(periods, zonePeriod{from: from, record: int(record) - 1})
-			}
-			h.periods[zone] = periods
-		}
-		blockCount, ok := reader.uvarint()
+		blocks, ok := reader.bytes()
 		if !ok {
 			return
 		}
-		h.blocks = make(map[string]int, blockCount)
-		for range blockCount {
-			locale, ok := reader.string()
-			if !ok {
-				return
-			}
-			block, ok := reader.uvarint()
-			if !ok {
-				return
-			}
-			h.blocks[locale] = int(block)
-		}
-		rows, ok := reader.uvarint()
+		h.encodedPeriods = periods
+		h.encodedBlocks = blocks
+		rowCount, ok := reader.uvarint()
 		if !ok {
 			return
 		}
@@ -314,22 +353,117 @@ func (h *zoneHistoryTable) load() {
 		if !ok {
 			return
 		}
-		h.rows, h.columns = int(rows), int(columns)
-		dictionaryCount, ok := reader.uvarint()
-		if !ok {
-			return
+		h.columns = int(columns)
+		h.rows = make([][]byte, 0, rowCount)
+		for range rowCount {
+			row, ok := reader.bytes()
+			if !ok {
+				return
+			}
+			h.rows = append(h.rows, row)
 		}
-		dictionary, ok := reader.string()
-		if !ok {
-			return
-		}
-		h.dictionary = strings.Split(dictionary, "\x00")
-		if uint64(len(h.dictionary)) != dictionaryCount {
-			h.dictionary = nil
-			return
-		}
-		h.matrices = reader.text
+		h.decoded = make(map[int]zoneHistoryRow)
 	})
+}
+
+func (h *zoneHistoryTable) periodsFor(zone string) []zonePeriod {
+	h.periodsMu.Lock()
+	defer h.periodsMu.Unlock()
+	if periods, ok := h.periods[zone]; ok {
+		return periods
+	}
+	reader := zoneTableReader{data: h.encodedPeriods}
+	count, ok := reader.uvarint()
+	if !ok {
+		return nil
+	}
+	for range count {
+		name, ok := reader.string()
+		if !ok {
+			return nil
+		}
+		encoded, ok := reader.bytes()
+		if !ok {
+			return nil
+		}
+		if name != zone {
+			continue
+		}
+		periodReader := zoneTableReader{data: encoded}
+		periods := make([]zonePeriod, 0, 16)
+		for len(periodReader.data) > 0 {
+			from, ok := periodReader.varint()
+			if !ok {
+				return nil
+			}
+			record, ok := periodReader.uvarint()
+			if !ok {
+				return nil
+			}
+			periods = append(periods, zonePeriod{from: from, record: int(record) - 1})
+		}
+		if h.periods == nil {
+			h.periods = make(map[string][]zonePeriod)
+		}
+		h.periods[zone] = periods
+		return periods
+	}
+	return nil
+}
+
+func (h *zoneHistoryTable) block(locale string) (int, bool) {
+	reader := zoneTableReader{data: h.encodedBlocks}
+	count, ok := reader.uvarint()
+	if !ok {
+		return 0, false
+	}
+	for range count {
+		name, ok := reader.string()
+		if !ok {
+			return 0, false
+		}
+		block, ok := reader.uvarint()
+		if !ok {
+			return 0, false
+		}
+		if name == locale {
+			return int(block), true
+		}
+	}
+	return 0, false
+}
+
+func (h *zoneHistoryTable) row(block int) (zoneHistoryRow, bool) {
+	if block < 0 || block >= len(h.rows) {
+		return zoneHistoryRow{}, false
+	}
+	h.decodedMu.Lock()
+	defer h.decodedMu.Unlock()
+	if row, ok := h.decoded[block]; ok {
+		return row, true
+	}
+	text, err := inflate(h.rows[block])
+	if err != nil {
+		return zoneHistoryRow{}, false
+	}
+	reader := zoneHistoryReader{text: text}
+	dictionaryCount, ok := reader.uvarint()
+	if !ok {
+		return zoneHistoryRow{}, false
+	}
+	dictionary, ok := reader.string()
+	if !ok {
+		return zoneHistoryRow{}, false
+	}
+	row := zoneHistoryRow{
+		dictionary: strings.Split(dictionary, "\x00"),
+		matrices:   reader.text,
+	}
+	if uint64(len(row.dictionary)) != dictionaryCount || len(row.matrices) != 4*h.columns*2 {
+		return zoneHistoryRow{}, false
+	}
+	h.decoded[block] = row
+	return row, true
 }
 
 type zoneHistoryReader struct {
@@ -352,18 +486,6 @@ func (r *zoneHistoryReader) uvarint() (uint64, bool) {
 	return 0, false
 }
 
-func (r *zoneHistoryReader) varint() (int64, bool) {
-	encoded, ok := r.uvarint()
-	if !ok {
-		return 0, false
-	}
-	value := int64(encoded >> 1)
-	if encoded&1 != 0 {
-		value = ^value
-	}
-	return value, true
-}
-
 func (r *zoneHistoryReader) string() (string, bool) {
 	length, ok := r.uvarint()
 	if !ok || length > uint64(len(r.text)) {
@@ -382,11 +504,13 @@ func (r *zoneHistoryReader) string() (string, bool) {
 // megabytes of names into one. English is in neither table: it is a map in
 // the source, so a program that formats in English unpacks nothing.
 type zoneTable struct {
-	packed []byte
-	once   sync.Once
-	group  map[string]int
-	block  map[string]int
-	rows   []string
+	packed    []byte
+	once      sync.Once
+	group     map[string]int
+	block     map[string]int
+	rows      [][]byte
+	decodedMu sync.Mutex
+	decoded   map[int][]string
 }
 
 // entry is what a language calls a zone, and whether that language is in this
@@ -414,26 +538,108 @@ func (t *zoneTable) entry(locale, zone string) (string, bool) {
 			return "", false
 		}
 	}
-	if block >= len(t.rows) {
+	row, ok := t.row(block)
+	if !ok || at >= len(row) {
 		return "", false
 	}
-	return piece(t.rows[block], '\x01', at), true
+	return row[at], true
 }
 
 func (t *zoneTable) load() {
 	t.once.Do(func() {
-		text, err := inflate(t.packed)
-		if err != nil {
+		if len(t.packed) < 5 || string(t.packed[:5]) != "QJZT\x01" {
 			return
 		}
-		sections := strings.SplitN(text, "\n\n", 3)
-		if len(sections) < 3 {
+		reader := zoneTableReader{data: t.packed[5:]}
+		groups, ok := reader.string()
+		if !ok {
 			return
 		}
-		t.group = numbered(sections[0])
-		t.block = numbered(sections[1])
-		t.rows = strings.Split(sections[2], "\n")
+		blocks, ok := reader.string()
+		if !ok {
+			return
+		}
+		rowCount, ok := reader.uvarint()
+		if !ok {
+			return
+		}
+		t.group = numbered(groups)
+		t.block = numbered(blocks)
+		t.rows = make([][]byte, 0, rowCount)
+		for range rowCount {
+			row, ok := reader.bytes()
+			if !ok {
+				return
+			}
+			t.rows = append(t.rows, row)
+		}
+		t.decoded = make(map[int][]string)
 	})
+}
+
+func (t *zoneTable) row(block int) ([]string, bool) {
+	if block < 0 || block >= len(t.rows) {
+		return nil, false
+	}
+	t.decodedMu.Lock()
+	defer t.decodedMu.Unlock()
+	if row, ok := t.decoded[block]; ok {
+		return row, true
+	}
+	row, err := inflate(t.rows[block])
+	if err != nil {
+		return nil, false
+	}
+	entries := strings.Split(row, "\x01")
+	t.decoded[block] = entries
+	return entries, true
+}
+
+type zoneTableReader struct {
+	data []byte
+}
+
+func (r *zoneTableReader) uvarint() (uint64, bool) {
+	var value uint64
+	for i := 0; i < 10 && i < len(r.data); i++ {
+		b := r.data[i]
+		if b < 0x80 {
+			if i == 9 && b > 1 {
+				return 0, false
+			}
+			r.data = r.data[i+1:]
+			return value | uint64(b)<<uint(7*i), true
+		}
+		value |= uint64(b&0x7f) << uint(7*i)
+	}
+	return 0, false
+}
+
+func (r *zoneTableReader) varint() (int64, bool) {
+	encoded, ok := r.uvarint()
+	if !ok {
+		return 0, false
+	}
+	value := int64(encoded >> 1)
+	if encoded&1 != 0 {
+		value = ^value
+	}
+	return value, true
+}
+
+func (r *zoneTableReader) bytes() ([]byte, bool) {
+	length, ok := r.uvarint()
+	if !ok || length > uint64(len(r.data)) {
+		return nil, false
+	}
+	value := r.data[:length]
+	r.data = r.data[length:]
+	return value, true
+}
+
+func (r *zoneTableReader) string() (string, bool) {
+	value, ok := r.bytes()
+	return string(value), ok
 }
 
 // numbered reads a list of name=number pairs.

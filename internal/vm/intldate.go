@@ -463,9 +463,17 @@ func (o *dateOptions) zoneName(t time.Time, style string) string {
 	if o.timeZoneName != "" {
 		style = o.timeZoneName
 	}
-	names := icu.ZoneNamesIn(o.locale.Tag, o.timeZone)
-	if historical, ok := icu.ZoneNamesAt(o.locale.Tag, o.timeZone, t.UnixMilli()); ok {
-		names = historical
+	if style == "longOffset" || style == "shortOffset" {
+		_, offset := t.Zone()
+		return o.offsetName(offset, style == "longOffset")
+	}
+	names, ok := icu.ZoneNamesAt(o.locale.Tag, o.timeZone, t.UnixMilli())
+	if !ok {
+		if style == "longGeneric" || style == "shortGeneric" {
+			names = icu.ZoneGenericNamesIn(o.locale.Tag, o.timeZone)
+		} else {
+			names = icu.ZoneSeasonNamesIn(o.locale.Tag, o.timeZone)
+		}
 	}
 	var name string
 	switch style {

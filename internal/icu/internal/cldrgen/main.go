@@ -246,16 +246,15 @@ func run() error {
 	// anything formats a date. Compressed it is an eighth of that, and
 	// unpacking it costs a few milliseconds the first time a locale is asked
 	// for -- and nothing at all to a program that never asks.
-	var joined strings.Builder
-	for _, l := range data.Locales {
-		joined.WriteString(encode(&l))
-		joined.WriteByte(0)
+	localeData := make([]string, len(data.Locales))
+	totalLocaleBytes := 0
+	for i := range data.Locales {
+		localeData[i] = encode(&data.Locales[i])
+		totalLocaleBytes += len(localeData[i])
 	}
-	fmt.Fprintf(&b, "// packed is every locale's data, in the order of tags, separated by a\n")
-	fmt.Fprintf(&b, "// zero byte and compressed in the embedded binary table. It is %d bytes of data,\n",
-		joined.Len())
-	fmt.Fprintf(&b, "// and nothing is unpacked until a locale is asked for.\n")
-	packedData.write(&b, "packed", joined.String())
+	fmt.Fprintf(&b, "// packedLocales is each locale's data in tag order. The %d bytes are\n", totalLocaleBytes)
+	fmt.Fprintf(&b, "// compressed independently so first use decodes only the requested locale.\n")
+	packedData.writeShards(&b, "packedLocales", localeData)
 
 	// The variants that share another's data, which is how a hundred and fifty
 	// tags are answered without carrying a hundred and fifty more tables.
@@ -303,26 +302,26 @@ func run() error {
 
 	fmt.Fprintf(&b, "// zoneSeasonPacked is what a zone is called in every language but\n")
 	fmt.Fprintf(&b, "// English, for standard time and for summer time.\n")
-	packedData.write(&b, "zoneSeasonPacked",
+	packedData.writeZoneTable(&b, "zoneSeasonPacked",
 		encodeZoneNames(named, namedZones, zoneTags, seasonalSlots, false))
 
 	fmt.Fprintf(&b, "// zoneGenericPacked is what a zone is called without regard to the\n")
 	fmt.Fprintf(&b, "// season. Intl.DateTimeFormat is part of the core API, so these names\n")
 	fmt.Fprintf(&b, "// live here rather than in the optional DisplayNames package.\n")
-	packedData.write(&b, "zoneGenericPacked",
+	packedData.writeZoneTable(&b, "zoneGenericPacked",
 		encodeZoneNames(named, namedZones, zoneTags, genericSlots, false))
 
 	fmt.Fprintf(&b, "// zoneHistoryPacked maps exact historical transition intervals to\n")
 	fmt.Fprintf(&b, "// the names ICU observed there. Seasonal slots are already classified\n")
 	fmt.Fprintf(&b, "// and must not be inferred from Go's time.Time.IsDST flag.\n")
-	zoneHistory := encodeZoneHistory(zoneNames.History, zoneTags)
-	fmt.Fprintf(&b, "const zoneHistorySize = %d\n\n", len(zoneHistory))
-	packedData.write(&b, "zoneHistoryPacked", zoneHistory)
+	packedData.writeRaw(&b, "zoneHistoryPacked",
+		encodeZoneHistory(zoneNames.History, &packedData))
 
 	fmt.Fprintf(&b, "// zoneLegacyPacked is the localized long name that Node's legacy Date\n")
 	fmt.Fprintf(&b, "// strings use, plus the exact ICU daylight-classification timeline.\n")
 	fmt.Fprintf(&b, "// Instants outside signed-32-bit Unix time map into this timeline.\n")
-	packedData.write(&b, "zoneLegacyPacked", encodeLegacyZoneNames(zoneNames.Legacy, zoneTags))
+	packedData.writeLegacyTable(&b, "zoneLegacyPacked",
+		encodeLegacyZoneNames(zoneNames.Legacy, zoneTags))
 
 	fmt.Fprintf(&b, "// zoneOffsetForms is how a language writes an offset from Greenwich\n")
 	fmt.Fprintf(&b, "// where a zone has no name of its own: the digits it counts in, then\n")
@@ -471,6 +470,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("formatting what was generated: %w", err)
 	}
+	packedData.close()
 	if err := writeBinaryTable(filepath.Join(here, "internal", "icu", "tables.bin"), packedData.data.Bytes()); err != nil {
 		return err
 	}
@@ -844,6 +844,7 @@ func writeDisplayPackage(dir, binaryPath string) error {
 	if err != nil {
 		return fmt.Errorf("formatting what was generated: %w", err)
 	}
+	packedData.close()
 	if err := writeBinaryTable(binaryPath, packedData.data.Bytes()); err != nil {
 		return err
 	}
@@ -854,23 +855,91 @@ func writeDisplayPackage(dir, binaryPath string) error {
 // tablePacker writes compressed tables into one binary asset and emits slices
 // into it. Embedding raw bytes avoids base64's size and startup overhead.
 type tablePacker struct {
-	data bytes.Buffer
+	data    bytes.Buffer
+	encoder *zstd.Encoder
+}
+
+func (p *tablePacker) encode(data string) []byte {
+	if p.encoder == nil {
+		encoder, err := zstd.NewWriter(nil,
+			zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(19)),
+			zstd.WithEncoderConcurrency(1),
+			zstd.WithEncoderCRC(false))
+		if err != nil {
+			panic(err)
+		}
+		p.encoder = encoder
+	}
+	return p.encoder.EncodeAll([]byte(data), nil)
+}
+
+func (p *tablePacker) compress(data string) (int, int) {
+	start := p.data.Len()
+	if _, err := p.data.Write(p.encode(data)); err != nil {
+		panic(err)
+	}
+	return start, p.data.Len()
 }
 
 func (p *tablePacker) write(b *strings.Builder, name, data string) {
+	start, end := p.compress(data)
+	fmt.Fprintf(b, "var %s = packedTables[%d:%d]\n\n", name, start, end)
+}
+
+func (p *tablePacker) writeRaw(b *strings.Builder, name, data string) {
 	start := p.data.Len()
-	encoder, err := zstd.NewWriter(nil,
-		zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(19)),
-		zstd.WithEncoderConcurrency(1),
-		zstd.WithEncoderCRC(false))
-	if err != nil {
-		panic(err)
-	}
-	if _, err := p.data.Write(encoder.EncodeAll([]byte(data), nil)); err != nil {
-		panic(err)
-	}
-	encoder.Close()
+	p.data.WriteString(data)
 	fmt.Fprintf(b, "var %s = packedTables[%d:%d]\n\n", name, start, p.data.Len())
+}
+
+func (p *tablePacker) writeShards(b *strings.Builder, name string, shards []string) {
+	fmt.Fprintf(b, "var %s = [...][2]uint32{\n", name)
+	for _, shard := range shards {
+		start, end := p.compress(shard)
+		fmt.Fprintf(b, "\t{%d, %d},\n", start, end)
+	}
+	fmt.Fprintf(b, "}\n\n")
+}
+
+func (p *tablePacker) writeZoneTable(b *strings.Builder, name, data string) {
+	table := p.encodeZoneTable(data)
+	start := p.data.Len()
+	p.data.Write(table)
+	fmt.Fprintf(b, "var %s = packedTables[%d:%d]\n\n", name, start, p.data.Len())
+}
+
+func (p *tablePacker) encodeZoneTable(data string) []byte {
+	sections := strings.SplitN(data, "\n\n", 3)
+	if len(sections) != 3 {
+		panic("zone table has invalid sections")
+	}
+	var table bytes.Buffer
+	table.WriteString("QJZT\x01")
+	writeBinaryString(&table, sections[0])
+	writeBinaryString(&table, sections[1])
+	rows := strings.Split(sections[2], "\n")
+	writeUvarint(&table, uint64(len(rows)))
+	for _, row := range rows {
+		writeBinaryString(&table, string(p.encode(row)))
+	}
+	return table.Bytes()
+}
+
+func (p *tablePacker) writeLegacyTable(b *strings.Builder, name string, data legacyZoneTableData) {
+	var table bytes.Buffer
+	table.WriteString("QJZL\x02")
+	writeBinaryString(&table, data.changes)
+	writeBinaryString(&table, string(p.encodeZoneTable(data.names)))
+	start := p.data.Len()
+	p.data.Write(table.Bytes())
+	fmt.Fprintf(b, "var %s = packedTables[%d:%d]\n\n", name, start, p.data.Len())
+}
+
+func (p *tablePacker) close() {
+	if p.encoder != nil {
+		p.encoder.Close()
+		p.encoder = nil
+	}
 }
 
 func writeBinaryTable(path string, data []byte) error {
@@ -1655,47 +1724,82 @@ func encodeZoneNames(named map[string]map[string]string, zones, locales []string
 	}, "\n\n")
 }
 
-func encodeZoneHistory(data zoneHistoryData, locales []string) string {
+func encodeZoneHistory(data zoneHistoryData, packer *tablePacker) string {
 	var out bytes.Buffer
-	out.WriteString("QJZH\x01")
-	writeUvarint(&out, uint64(len(data.Periods)))
+	out.WriteString("QJZH\x03")
+	var encodedPeriods bytes.Buffer
+	writeUvarint(&encodedPeriods, uint64(len(data.Periods)))
 	zones := make([]string, 0, len(data.Periods))
 	for zone := range data.Periods {
 		zones = append(zones, zone)
 	}
 	sort.Strings(zones)
 	for _, zone := range zones {
-		writeBinaryString(&out, zone)
+		writeBinaryString(&encodedPeriods, zone)
 		periods := data.Periods[zone]
-		writeUvarint(&out, uint64(len(periods)))
+		var encoded bytes.Buffer
 		for _, period := range periods {
 			from := int64(-1 << 63)
 			if period[0] != nil {
 				from = *period[0]
 			}
-			writeVarint(&out, from)
+			writeVarint(&encoded, from)
 			group := uint64(0)
 			if period[1] != nil && *period[1] >= 0 {
 				group = uint64(*period[1] + 1)
 			}
-			writeUvarint(&out, group)
+			writeUvarint(&encoded, group)
 		}
+		writeBinaryString(&encodedPeriods, encoded.String())
 	}
+	writeBinaryString(&out, encodedPeriods.String())
 
 	blocks := sortedIntValues(data.Blocks)
-	writeUvarint(&out, uint64(len(blocks)))
+	var encodedBlocks bytes.Buffer
+	writeUvarint(&encodedBlocks, uint64(len(blocks)))
 	for _, locale := range blocks {
-		writeBinaryString(&out, locale)
-		writeUvarint(&out, uint64(data.Blocks[locale]))
+		writeBinaryString(&encodedBlocks, locale)
+		writeUvarint(&encodedBlocks, uint64(data.Blocks[locale]))
 	}
+	writeBinaryString(&out, encodedBlocks.String())
 
-	matrices := decodeHistoricalNameMatrices(data)
 	writeUvarint(&out, uint64(data.Rows))
 	writeUvarint(&out, uint64(data.Columns))
-	writeUvarint(&out, uint64(len(data.Dictionary)))
-	writeBinaryString(&out, strings.Join(data.Dictionary, "\x00"))
-	for _, matrix := range matrices {
-		out.Write(matrix)
+	matrices := decodeHistoricalNameMatrices(data)
+	for row := 0; row < data.Rows; row++ {
+		dictionary := []string{""}
+		dictionaryIndex := map[string]uint16{"": 0}
+		localMatrices := make([][]byte, 4)
+		for matrix := range matrices {
+			localMatrices[matrix] = make([]byte, 0, data.Columns*2)
+			for column := 0; column < data.Columns; column++ {
+				cell := (row*data.Columns + column) * 3
+				global := int(matrices[matrix][cell]) |
+					int(matrices[matrix][cell+1])<<8 |
+					int(matrices[matrix][cell+2])<<16
+				if global >= len(data.Dictionary) {
+					panic("historical zone name index is out of range")
+				}
+				name := data.Dictionary[global]
+				local, ok := dictionaryIndex[name]
+				if !ok {
+					if len(dictionary) >= 1<<16 {
+						panic("historical locale dictionary exceeds uint16")
+					}
+					local = uint16(len(dictionary))
+					dictionaryIndex[name] = local
+					dictionary = append(dictionary, name)
+				}
+				localMatrices[matrix] = append(localMatrices[matrix], byte(local), byte(local>>8))
+			}
+		}
+		var rowData bytes.Buffer
+		writeUvarint(&rowData, uint64(len(dictionary)))
+		writeBinaryString(&rowData, strings.Join(dictionary, "\x00"))
+		for _, matrix := range localMatrices {
+			rowData.Write(matrix)
+		}
+		writeBinaryString(&out, string(packer.encode(rowData.String())))
 	}
 	return out.String()
 }
@@ -1737,21 +1841,29 @@ func writeBinaryString(out *bytes.Buffer, value string) {
 	out.WriteString(value)
 }
 
-func encodeLegacyZoneNames(data zoneLegacyData, locales []string) string {
+type legacyZoneTableData struct {
+	changes string
+	names   string
+}
+
+func encodeLegacyZoneNames(data zoneLegacyData, locales []string) legacyZoneTableData {
 	named := legacyZoneNamesByLocale(data, locales)
 	zones := sortedIntValues(data.Groups)
 	table := encodeZoneNames(named, zones, locales, zoneSlots{0, 1}, true)
 
-	lines := make([]string, 0, len(zones))
+	var changes bytes.Buffer
+	writeUvarint(&changes, uint64(len(zones)))
 	for _, zone := range zones {
-		changes := data.Periods[zone]
-		items := make([]string, len(changes))
-		for i, at := range changes {
-			items[i] = strconv.FormatInt(at, 10)
+		writeBinaryString(&changes, zone)
+		var encoded bytes.Buffer
+		periods := data.Periods[zone]
+		writeUvarint(&encoded, uint64(len(periods)))
+		for _, at := range periods {
+			writeVarint(&encoded, at)
 		}
-		lines = append(lines, zone+"="+strings.Join(items, ","))
+		writeBinaryString(&changes, encoded.String())
 	}
-	return strings.Join(lines, "\n") + "\n\n" + table
+	return legacyZoneTableData{changes: changes.String(), names: table}
 }
 
 // zoneOffsetForms is the distinct ways the languages write an offset from

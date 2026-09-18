@@ -92,7 +92,7 @@ func (r *Runtime) Locale() string {
 // data for. ar-EG is written as ar-BH is, de-AT as de is.
 func (r *Runtime) formatLocale() string {
 	if tag := r.Locale(); tag != r.localeAsked {
-		r.localeAsked, r.localeResolved = tag, icu.Resolve(tag).Tag
+		r.localeAsked, r.localeResolved = tag, icu.ResolveTag(tag)
 	}
 	return r.localeResolved
 }

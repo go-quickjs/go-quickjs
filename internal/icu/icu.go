@@ -257,9 +257,15 @@ var categoryNames = map[byte]string{
 // not carried falls back to English: a program is better served by English
 // than by nothing, so long as it is told which it got.
 func Resolve(tag string) *Locale {
+	return get(ResolveTag(tag))
+}
+
+// ResolveTag returns only the tag Resolve would settle on. Callers that need
+// a name for table lookup can avoid decoding the locale's formatting data.
+func ResolveTag(tag string) string {
 	tag = strings.TrimSpace(tag)
 	if tag == "" {
-		return get("en")
+		return "en"
 	}
 	// The forms a tag is written in: en_GB, EN-gb, en-GB-u-ca-gregory.
 	tag = strings.ReplaceAll(tag, "_", "-")
@@ -296,11 +302,11 @@ func Resolve(tag string) *Locale {
 		if strings.Contains(candidate, "--") || strings.HasSuffix(candidate, "-") {
 			continue
 		}
-		if l := get(candidate); l != nil {
-			return l
+		if i := indexOf(candidate); i >= 0 {
+			return tags[i]
 		}
 	}
-	return get("en")
+	return "en"
 }
 
 // canonicalCase writes a tag the way the tables spell one: the language in
@@ -381,20 +387,17 @@ func get(tag string) *Locale {
 	if l, ok := decoded[tags[i]]; ok {
 		return l
 	}
-	blobs := unpack()
-	if i >= len(blobs) {
+	blob, err := unpackLocale(i)
+	if err != nil {
 		return nil
 	}
-	l := decode(tags[i], blobs[i])
+	l := decode(tags[i], blob)
 	decoded[tags[i]] = l
 	return l
 }
 
-// unpack reads the compressed table, once, the first time a locale is wanted.
-//
-// A program that formats nothing never gets here, which is the point: the data
-// is a megabyte and a quarter, and it costs a program that does not use it
-// nothing but the eighth of a megabyte it takes up compressed.
+// unpack is retained for table-wide validation. Normal locale lookup calls
+// unpackLocale and decompresses only the one independently packed locale.
 var (
 	unpackOnce sync.Once
 	unpacked   []string
@@ -402,13 +405,25 @@ var (
 
 func unpack() []string {
 	unpackOnce.Do(func() {
-		text, err := inflate(packed)
-		if err != nil {
-			return
+		unpacked = make([]string, len(packedLocales))
+		for i := range packedLocales {
+			text, err := unpackLocale(i)
+			if err != nil {
+				unpacked = nil
+				return
+			}
+			unpacked[i] = text
 		}
-		unpacked = strings.Split(strings.TrimSuffix(text, "\x00"), "\x00")
 	})
 	return unpacked
+}
+
+func unpackLocale(index int) (string, error) {
+	if index < 0 || index >= len(packedLocales) {
+		return "", nil
+	}
+	bounds := packedLocales[index]
+	return inflate(packedTables[bounds[0]:bounds[1]])
 }
 
 // inflate reads one of the compressed tables.

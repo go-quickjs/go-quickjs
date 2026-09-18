@@ -74,6 +74,9 @@ func TestResolve(t *testing.T) {
 		{"", "en"},
 		{"en-GB-u-ca-gregory", "en-GB"},
 	} {
+		if got := ResolveTag(tc.tag); got != tc.want {
+			t.Errorf("ResolveTag(%q) = %q, want %q", tc.tag, got, tc.want)
+		}
 		if got := Resolve(tc.tag).Tag; got != tc.want {
 			t.Errorf("Resolve(%q).Tag = %q, want %q", tc.tag, got, tc.want)
 		}
@@ -93,19 +96,23 @@ func TestResolve(t *testing.T) {
 	}
 }
 
-// The data is one compressed table, and a locale is decoded the first time it
-// is asked for.
+// Each locale is independently compressed and decoded the first time it is
+// asked for.
 func TestTable(t *testing.T) {
 	blobs := unpack()
 	if len(blobs) != len(tags) {
 		t.Fatalf("%d locales in the table, %d tags", len(blobs), len(tags))
 	}
 	total := 0
+	packedTotal := 0
 	for _, b := range blobs {
 		total += len(b)
 	}
+	for _, bounds := range packedLocales {
+		packedTotal += int(bounds[1] - bounds[0])
+	}
 	t.Logf("%d locales, %d KB of data in %d KB of source, from CLDR via ICU %s",
-		len(tags), total/1024, len(packed)/1024, cldrVersion)
+		len(tags), total/1024, packedTotal/1024, cldrVersion)
 
 	// Every locale decodes into something usable.
 	for _, tag := range tags {
