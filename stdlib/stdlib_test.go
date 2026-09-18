@@ -1540,3 +1540,91 @@ func TestTimerModulesNeedALoop(t *testing.T) {
 		t.Errorf("querystring without a loop: %v", err)
 	}
 }
+
+// Work that has been posted is run even if the goroutine that posted it
+// finished first: a loop that decided the program was over in that moment
+// would drop the answer a promise was waiting for.
+func TestLoopKeepsPostedWork(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	loop := stdlib.NewLoop(rt)
+
+	ran := make(chan struct{})
+	loop.Begin()
+	go func() {
+		loop.Post(func() { close(ran) })
+		loop.Done()
+	}()
+	// The goroutine is given time to post and finish, so the loop starts with
+	// nothing outstanding but a full queue.
+	time.Sleep(20 * time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := loop.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ran:
+	default:
+		t.Error("the posted work was dropped")
+	}
+}
+
+// A response is read as it arrives rather than gathered first, so a body larger
+// than anything the runtime would hold still goes through a chunk at a time.
+func TestFetchStreamsTheResponse(t *testing.T) {
+	const chunks, size = 40, 8 << 10
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/octet-stream")
+		flusher, _ := w.(http.Flusher)
+		piece := bytes.Repeat([]byte("x"), size)
+		for i := 0; i < chunks; i++ {
+			w.Write(piece)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}))
+	defer srv.Close()
+
+	out, errOut := run(t, stdlib.Config{Fetch: &stdlib.Fetch{}}, `
+		;(async () => {
+			const res = await fetch("`+srv.URL+`")
+			let total = 0, pieces = 0
+			for await (const chunk of res.body) { total += chunk.length; pieces++ }
+			console.log(total, pieces > 1, res.bodyUsed)
+
+			// A body nobody wants is cancelled rather than read.
+			const dropped = await fetch("`+srv.URL+`")
+			await dropped.body.cancel()
+			console.log("cancelled")
+
+			// And the whole of one still comes back whole.
+			console.log((await (await fetch("`+srv.URL+`")).arrayBuffer()).byteLength)
+		})()
+	`)
+	want := strings.Join([]string{
+		"327680 true true",
+		"cancelled",
+		"327680",
+	}, "\n")
+	if out != want {
+		t.Errorf("streamed response =\n%s\nwant\n%s\nstderr: %s", out, want, errOut)
+	}
+}
+
+// What a script may read is bounded whether it arrives whole or in pieces.
+func TestFetchBodyLimit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(bytes.Repeat([]byte("y"), 100<<10))
+	}))
+	defer srv.Close()
+
+	out, _ := run(t, stdlib.Config{Fetch: &stdlib.Fetch{MaxBodyBytes: 1024}}, `
+		fetch("`+srv.URL+`").then(r => r.text()).then(t => console.log(t.length))
+	`)
+	if out != "1024" {
+		t.Errorf("out = %q, want the body cut off at the limit", out)
+	}
+}

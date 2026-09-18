@@ -307,8 +307,8 @@ loop.Run(ctx)     // timers, and work that finished on other goroutines
 
 | | |
 |---|---|
-| Always | `console`, `URL`, `URLSearchParams`, `TextEncoder`, `TextDecoder`, `atob`, `btoa`, `structuredClone`, `performance`, `crypto`, `AbortController`, `Buffer`, and the `path`, `events`, `util`, `assert`, `buffer` modules |
-| `Loop` | `setTimeout`, `setInterval`, `queueMicrotask` |
+| Always | `console`, `URL`, `TextEncoder`/`TextDecoder`, `atob`/`btoa`, `structuredClone`, `performance`, `crypto` (hashing, HMAC, PBKDF2, HKDF, `subtle`), `AbortController`, `Buffer`, the web's streams, `CompressionStream`, and the `path`, `events`, `util`, `assert`, `buffer`, `crypto`, `zlib`, `stream/web`, `url`, `querystring`, `string_decoder` modules |
+| `Loop` | `setTimeout`, `setInterval`, `queueMicrotask`, and the `timers`, `timers/promises` modules |
 | `FS` | the `fs` module, sync and promise halves, confined to `Root` |
 | `Process` | `process.argv`, `env`, `cwd`, `stdout`, `exit` — what the host chooses to say |
 | `OS` | the `os` module |
@@ -327,6 +327,27 @@ on their own goroutines and wait for it. A program that is given the environment
 is the one that passes it on: `Run.Env` is what a started program sees, and nil
 means none at all, so a script refused the environment cannot read it through a
 program it starts.
+
+Everything in the first row is arithmetic — it reads values and returns values,
+and reaches nothing — so it is installed without being asked for. That includes
+the streams, which carry whatever is plugged into either end of them:
+
+```js
+const packed = source
+  .pipeThrough(new TextEncoderStream())
+  .pipeThrough(new CompressionStream("gzip"))
+await packed.pipeTo(sink)
+
+for await (const chunk of response.body) { ... }
+```
+
+and the hashing, which is Go's rather than a cipher written in script:
+
+```js
+import {createHmac, timingSafeEqual} from "crypto"
+const mine = createHmac("sha256", secret).update(body).digest()
+if (!timingSafeEqual(mine, theirs)) throw new Error("not from who it says")
+```
 
 ## ECMAScript regular expressions for Go
 

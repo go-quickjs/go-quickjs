@@ -51,9 +51,11 @@ type Loop struct {
 	tasks chan func()
 
 	mu sync.Mutex
-	// pending counts the host operations that have started and not finished.
-	// The loop waits while any remain, which is what keeps it running for a
-	// request that has been sent but not answered.
+	// pending counts the host operations that have started and not finished,
+	// and the work that has been posted and not yet run. The loop waits while
+	// any remain, which is what keeps it running for a request that has been
+	// sent but not answered -- and, once the answer is in the queue, until the
+	// queue has been emptied.
 	pending int
 	// closed marks a loop that will run no more work.
 	closed bool
@@ -72,6 +74,13 @@ func NewLoop(rt *quickjs.Runtime) *Loop {
 func (l *Loop) Post(fn func()) {
 	l.mu.Lock()
 	closed := l.closed
+	if !closed {
+		// Work that has been posted counts as outstanding until it has run.
+		// Without that the loop can decide the program is over in the moment
+		// between a goroutine posting its answer and finishing, and the answer
+		// is never delivered.
+		l.pending++
+	}
 	l.mu.Unlock()
 	if closed {
 		return
@@ -86,6 +95,11 @@ func (l *Loop) Post(fn func()) {
 			l.tasks <- fn
 		}()
 	}
+}
+
+// ran records that posted work has been taken off the queue and run.
+func (l *Loop) ran() {
+	l.Done()
 }
 
 // Begin records that a host operation has started, so that Run waits for it.
@@ -166,6 +180,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		select {
 		case fn := <-l.tasks:
 			fn()
+			l.ran()
 		case <-wait:
 		case <-ctx.Done():
 			return ctx.Err()
@@ -204,6 +219,7 @@ func (l *Loop) RunUntil(ctx context.Context, done <-chan struct{}) error {
 		select {
 		case fn := <-l.tasks:
 			fn()
+			l.ran()
 		case <-wait:
 		case <-done:
 			return l.rt.RunJobs()

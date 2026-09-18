@@ -30,10 +30,12 @@ import (
 //	    },
 //	})
 type Fetch struct {
-	// Loop is where a response is delivered. Without one the request is made
-	// and waited for before fetch returns, which blocks everything else; that
-	// is fine for a script that is the only thing running and wrong for
-	// anything else.
+	// Loop is where a response is delivered, and where the rest of it arrives:
+	// with a loop, fetch answers once the headers are in and the body is read
+	// a chunk at a time as the script asks for it. Without one the request is
+	// made and waited for in full before fetch returns, which blocks
+	// everything else; that is fine for a script that is the only thing
+	// running and wrong for anything else.
 	Loop *Loop
 	// Client makes the requests. Nil uses a client with a sensible timeout
 	// rather than http.DefaultClient, which has none.
@@ -49,10 +51,9 @@ type Fetch struct {
 // Network installs fetch, Headers, Request and Response.
 //
 // The shape is the web's: fetch returns a promise for a Response, whose text,
-// json, arrayBuffer and bytes methods return promises of their own. What is
-// missing is what a runtime without streams cannot do -- a body arrives whole
-// rather than in pieces -- and the redirect and cache options, which the host's
-// client decides.
+// json, arrayBuffer and bytes methods return promises of their own, and whose
+// body is a stream read as the answer arrives. What is missing is the redirect
+// and cache options, which the host's client decides.
 func Network(rt *quickjs.Runtime, cfg *Fetch) error {
 	if cfg == nil {
 		cfg = &Fetch{}
@@ -89,17 +90,17 @@ func Network(rt *quickjs.Runtime, cfg *Fetch) error {
 				return p
 			}
 		}
-		send := func() (*fetchResult, error) { return doFetch(client, cfg, spec, limit) }
 		if cfg.Loop == nil {
-			res, err := send()
+			res, err := doFetch(client, cfg, spec, limit, nil)
 			deliver(r, p, res, err)
 			return p
 		}
-		cfg.Loop.Begin()
+		loop := cfg.Loop
+		loop.Begin()
 		go func() {
-			defer cfg.Loop.Done()
-			res, err := send()
-			cfg.Loop.Post(func() { deliver(r, p, res, err) })
+			defer loop.Done()
+			res, err := doFetch(client, cfg, spec, limit, loop)
+			loop.Post(func() { deliver(r, p, res, err) })
 		}()
 		return p
 	}); err != nil {
@@ -135,12 +136,16 @@ type requestSpec struct {
 }
 
 // fetchResult is a response reduced to plain Go data.
+//
+// The body is either the whole of it or a reader still attached to the
+// connection, depending on whether there is a loop to deliver the rest on.
 type fetchResult struct {
 	status     int
 	statusText string
 	url        string
 	headers    [][2]string
 	body       []byte
+	stream     *bodyReader
 }
 
 // readRequest copies what a request says out of the runtime.
@@ -180,7 +185,11 @@ func readRequest(req quickjs.Value) (*requestSpec, error) {
 
 // doFetch makes the request. It touches no JavaScript value at all, which is
 // what lets it run on another goroutine.
-func doFetch(client *http.Client, cfg *Fetch, spec *requestSpec, limit int64) (*fetchResult, error) {
+//
+// With a loop to deliver on, it returns as soon as the headers have arrived and
+// leaves the body attached to the connection, so that a script reading a
+// response a chunk at a time is reading the network rather than a copy of it.
+func doFetch(client *http.Client, cfg *Fetch, spec *requestSpec, limit int64, loop *Loop) (*fetchResult, error) {
 	var body io.Reader
 	if spec.hasBody {
 		body = strings.NewReader(string(spec.body))
@@ -213,21 +222,26 @@ func doFetch(client *http.Client, cfg *Fetch, spec *requestSpec, limit int64) (*
 	if err != nil {
 		return nil, err
 	}
-	defer res.Body.Close()
 
-	reader := io.Reader(res.Body)
-	if limit >= 0 {
-		reader = io.LimitReader(res.Body, limit)
-	}
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		return nil, err
-	}
 	out := &fetchResult{
 		status:     res.StatusCode,
 		statusText: strings.TrimSpace(strings.TrimPrefix(res.Status, res.Proto)),
 		url:        res.Request.URL.String(),
-		body:       data,
+	}
+	if loop == nil {
+		// Nothing to deliver the rest on, so the rest is read now.
+		defer res.Body.Close()
+		reader := io.Reader(res.Body)
+		if limit >= 0 {
+			reader = io.LimitReader(res.Body, limit)
+		}
+		data, err := io.ReadAll(reader)
+		if err != nil {
+			return nil, err
+		}
+		out.body = data
+	} else {
+		out.stream = &bodyReader{body: res.Body, loop: loop, left: limit}
 	}
 	// The status line's text is what follows the code, which Go keeps whole.
 	if i := strings.IndexByte(res.Status, ' '); i >= 0 {
@@ -244,6 +258,106 @@ func doFetch(client *http.Client, cfg *Fetch, spec *requestSpec, limit int64) (*
 		}
 	}
 	return out, nil
+}
+
+// bodyReader is a response body still on the connection, read one chunk at a
+// time as the script asks for them.
+//
+// Each read is a goroutine that settles a promise on the loop, so the reading
+// is driven by the stream that wants it: nothing arrives faster than it is
+// taken, and nothing is held in memory but the chunk in hand. Nothing here
+// holds the loop open by itself, so a program that stops reading a body stops
+// waiting for it.
+type bodyReader struct {
+	rt   *quickjs.Runtime
+	loop *Loop
+	body io.ReadCloser
+	// left is how much more may be read, or negative for no limit.
+	left int64
+	// ended is what the connection said when it last had nothing more, kept
+	// for the next read: a read can return a chunk and the end together.
+	ended error
+	busy  bool
+	done  bool
+}
+
+// chunkSize is how much one read asks for. Large enough that a big body is not
+// thousands of promises, small enough that a small one is not a large
+// allocation.
+const chunkSize = 32 << 10
+
+// read answers with the next chunk, or null when the body has ended.
+func (b *bodyReader) read() *quickjs.Promise {
+	p := b.rt.NewPromise()
+	if b.done {
+		p.Resolve(nil)
+		return p
+	}
+	if b.ended != nil {
+		err := b.ended
+		b.finish()
+		if errors.Is(err, io.EOF) {
+			p.Resolve(nil)
+		} else {
+			p.RejectError(err)
+		}
+		return p
+	}
+	if b.busy {
+		p.RejectError(errors.New("this body is already being read"))
+		return p
+	}
+	size := int64(chunkSize)
+	if b.left >= 0 && b.left < size {
+		size = b.left
+	}
+	if size == 0 {
+		// The limit has been reached, which is the end as far as the script is
+		// concerned; what is left of the connection is dropped.
+		b.finish()
+		p.Resolve(nil)
+		return p
+	}
+
+	b.busy = true
+	buf := make([]byte, size)
+	loop, body := b.loop, b.body
+	loop.Begin()
+	go func() {
+		defer loop.Done()
+		n, err := body.Read(buf)
+		loop.Post(func() {
+			b.busy = false
+			if n > 0 {
+				if b.left > 0 {
+					b.left -= int64(n)
+				}
+				// A read can return a chunk and the end at once; whatever
+				// ended it is the next read's answer.
+				b.ended = err
+				p.Resolve(b.rt.NewBytes(buf[:n]))
+				return
+			}
+			b.finish()
+			if err != nil && !errors.Is(err, io.EOF) {
+				p.RejectError(err)
+				return
+			}
+			p.Resolve(nil)
+		})
+	}()
+	return p
+}
+
+// cancel drops the rest of the body, which closes the connection.
+func (b *bodyReader) cancel() { b.finish() }
+
+func (b *bodyReader) finish() {
+	if b.done {
+		return
+	}
+	b.done = true
+	b.body.Close()
 }
 
 // deliver settles the promise with what came back.
@@ -267,13 +381,21 @@ func deliver(rt *quickjs.Runtime, p *quickjs.Promise, res *fetchResult, err erro
 		p.RejectError(err)
 		return
 	}
-	if err := errors.Join(
+	fields := []error{
 		o.Set("status", res.status),
 		o.Set("statusText", res.statusText),
 		o.Set("url", res.url),
 		o.Set("headers", headers),
-		o.Set("body", rt.NewBytes(res.body)),
-	); err != nil {
+	}
+	if res.stream != nil {
+		res.stream.rt = rt
+		fields = append(fields,
+			o.Set("read", res.stream.read),
+			o.Set("cancel", res.stream.cancel))
+	} else {
+		fields = append(fields, o.Set("body", rt.NewBytes(res.body)))
+	}
+	if err := errors.Join(fields...); err != nil {
 		p.RejectError(err)
 		return
 	}
@@ -359,7 +481,12 @@ const fetchJS = `(function (host) {
       Object.defineProperty(this, "_used", {value: false, writable: true});
       this.headers = headers;
     }
-    get bodyUsed() { return this._used; }
+    // A body is used once something has started reading it, which for a
+    // stream means a reader has been taken: the bytes may still be arriving,
+    // but they are somebody else's now.
+    get bodyUsed() {
+      return this._used || !!(this._stream && this._stream.locked);
+    }
 
     // body is the stream form, which is the same body seen the other way
     // round: reading it is reading the body, and a body that is not there at
@@ -378,6 +505,9 @@ const fetchJS = `(function (host) {
       return this._stream;
     }
 
+    // _take is the inside of a read, and asks only whether the bytes have gone:
+    // the stream form calls it from its own pull, by which time the stream is
+    // locked to the reader doing the reading.
     _take() {
       if (this._used) throw new TypeError("the body has already been read");
       this._used = true;
@@ -389,7 +519,7 @@ const fetchJS = `(function (host) {
     // gathered as they come, and joined once the stream ends.
     async _consume() {
       if (!this._stream || this._bytes !== undefined) return this._take();
-      if (this._used) throw new TypeError("the body has already been read");
+      if (this.bodyUsed) throw new TypeError("the body has already been read");
       this._used = true;
       const chunks = [];
       let total = 0;
@@ -420,7 +550,7 @@ const fetchJS = `(function (host) {
   function cloneBody(body) {
     if (body._bytes !== undefined) return body._bytes;
     if (!body._stream) return null;
-    if (body._used) throw new TypeError("the body has already been read");
+    if (body.bodyUsed) throw new TypeError("the body has already been read");
     const [mine, theirs] = body._stream.tee();
     body._stream = mine;
     return theirs;
@@ -536,7 +666,20 @@ const fetchJS = `(function (host) {
         })])
       : await sent;
 
-    const response = new Response(raw.body, {
+    // A body still on the connection is read through a stream, a chunk at a
+    // time; one that arrived whole is already bytes.
+    const incoming = typeof raw.read === "function"
+      ? new ReadableStream({
+          async pull(controller) {
+            const chunk = await raw.read();
+            if (chunk === null || chunk === undefined) controller.close();
+            else controller.enqueue(chunk);
+          },
+          cancel() { raw.cancel(); },
+        })
+      : raw.body;
+
+    const response = new Response(incoming, {
       status: raw.status,
       statusText: raw.statusText,
       headers: raw.headers,
