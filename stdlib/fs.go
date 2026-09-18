@@ -48,6 +48,14 @@ type FS struct {
 //	const text = fs.readFileSync("in.txt", "utf8")
 //	await fs.promises.writeFile("out.txt", text)
 //
+// A file can also be read and written a piece at a time, which is what serving
+// something larger than memory needs:
+//
+//	new Response(fs.createReadStream("big.bin"))
+//
+// Those two are the web's streams rather than node's -- there are no node
+// streams here -- so they are read with for-await and joined with pipeTo.
+//
 // A path is a string; contents are a string when an encoding is given and a
 // Uint8Array when it is not, which is what node does with Buffer.
 func Files(rt *quickjs.Runtime, cfg *FS) error {
@@ -138,9 +146,30 @@ func Files(rt *quickjs.Runtime, cfg *FS) error {
 		},
 	}
 
-	exports := make(map[string]any, len(sync)+2)
+	// The stream halves are script over what the host opened, and are only
+	// installed where there are streams to build them out of.
+	streamHost := rt.NewObject()
+	if err := errors.Join(
+		streamHost.Set("openRead", f.openRead),
+		streamHost.Set("openWrite", f.openWrite),
+	); err != nil {
+		return err
+	}
+	streams, err := evalWithHost(rt, "<fs-streams>", fsStreamsJS, streamHost)
+	if err != nil {
+		return err
+	}
+
+	exports := make(map[string]any, len(sync)+4)
 	for k, v := range sync {
 		exports[k] = v
+	}
+	for _, name := range []string{"createReadStream", "createWriteStream"} {
+		v, err := streams.Get(name)
+		if err != nil {
+			return err
+		}
+		exports[name] = v
 	}
 	exports["promises"] = promises
 	def := copyExports(exports)

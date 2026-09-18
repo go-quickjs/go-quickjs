@@ -1697,3 +1697,72 @@ func TestServeStreamsTheAnswer(t *testing.T) {
 		t.Errorf("streamed answer =\n%s\nwant\n%s\nstderr: %s", out, want, errOut)
 	}
 }
+
+// A file is read and written a piece at a time, so serving something larger
+// than memory is a pipe rather than a copy.
+func TestFileStreams(t *testing.T) {
+	dir := t.TempDir()
+	big := strings.Repeat("a line of text that is repeated\n", 5000)
+	if err := os.WriteFile(filepath.Join(dir, "big.txt"), []byte(big), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, errOut := run(t, stdlib.Config{
+		FS:    &stdlib.FS{Root: dir},
+		Fetch: &stdlib.Fetch{},
+		Serve: &stdlib.Serve{Allow: func(string) error { return nil }},
+	}, `
+		;(async () => {
+			const fs = (await import("fs")).default
+
+			// Read in pieces: more than one, and the whole of it.
+			let pieces = 0, total = 0
+			for await (const chunk of fs.createReadStream("/big.txt")) {
+				pieces++
+				total += chunk.length
+			}
+			console.log(pieces > 1, total)
+
+			// A range of it, which is what a partial request needs.
+			// end is the last byte wanted, not the one after it.
+			const head = fs.createReadStream("/big.txt", {start: 2, end: 5})
+			const reader = head.getReader()
+			console.log(new TextDecoder().decode((await reader.read()).value))
+
+			// Written the same way, through a pipe.
+			await fs.createReadStream("/big.txt")
+				.pipeThrough(new CompressionStream("gzip"))
+				.pipeTo(fs.createWriteStream("/big.txt.gz"))
+			const packed = fs.readFileSync("/big.txt.gz")
+			console.log(packed.length < total, packed[0] === 0x1f)
+
+			// And back, which shows the file was closed and complete.
+			const zlib = (await import("zlib")).default
+			console.log(zlib.gunzipSync(packed).length === total)
+
+			// Serving a file is the stream handed straight to a Response.
+			const server = serve({port: 0}, () =>
+				new Response(fs.createReadStream("/big.txt"),
+					{headers: {"content-type": "text/plain"}}))
+			const res = await fetch(server.url)
+			console.log((await res.text()).length)
+			server.close()
+
+			// A file that is not there fails rather than producing nothing.
+			try {
+				for await (const _ of fs.createReadStream("/missing.txt")) { /* nothing */ }
+			} catch (e) { console.log("missing:", e.constructor.name) }
+		})()
+	`)
+	want := strings.Join([]string{
+		"true 160000",
+		"line",
+		"true true",
+		"true",
+		"160000",
+		"missing: Error",
+	}, "\n")
+	if out != want {
+		t.Errorf("file streams =\n%s\nwant\n%s\nstderr: %s", out, want, errOut)
+	}
+}

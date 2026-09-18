@@ -309,10 +309,10 @@ loop.Run(ctx)     // timers, and work that finished on other goroutines
 |---|---|
 | Always | `console`, `URL`, `TextEncoder`/`TextDecoder`, `atob`/`btoa`, `structuredClone`, `performance`, `crypto` (hashing, HMAC, PBKDF2, HKDF, `subtle`), `AbortController`, `Buffer`, the web's streams, `CompressionStream`, and the `path`, `events`, `util`, `assert`, `buffer`, `crypto`, `zlib`, `stream/web`, `url`, `querystring`, `string_decoder` modules |
 | `Loop` | `setTimeout`, `setInterval`, `queueMicrotask`, and the `timers`, `timers/promises` modules |
-| `FS` | the `fs` module, sync and promise halves, confined to `Root` |
+| `FS` | the `fs` module, sync and promise halves, `createReadStream`/`createWriteStream`, confined to `Root` |
 | `Process` | `process.argv`, `env`, `cwd`, `stdout`, `exit` — what the host chooses to say |
 | `OS` | the `os` module |
-| `Fetch` | `fetch`, `Headers`, `Request`, `Response` |
+| `Fetch` | `fetch`, `Headers`, `Request`, `Response` — bodies read as they arrive |
 | `Serve` | `serve`, the `http` module — an HTTP server whose handler is `(Request) => Response` |
 | `Run` | the `child_process` module: `execFileSync`, `execFile`, `spawnSync`, `exec` |
 
@@ -333,13 +333,17 @@ and reaches nothing — so it is installed without being asked for. That include
 the streams, which carry whatever is plugged into either end of them:
 
 ```js
-const packed = source
-  .pipeThrough(new TextEncoderStream())
+await fs.createReadStream("big.log")
   .pipeThrough(new CompressionStream("gzip"))
-await packed.pipeTo(sink)
+  .pipeTo(fs.createWriteStream("big.log.gz"))
 
 for await (const chunk of response.body) { ... }
 ```
+
+Streams are the transport, not only the shape: `fetch` answers when the headers
+arrive and reads the body as the script asks for it, a handler that answers with
+a stream has each piece written and flushed as it is produced, and a file is
+read a chunk at a time. Nothing here has to fit in memory to go past.
 
 and the hashing, which is Go's rather than a cipher written in script:
 
