@@ -121,15 +121,12 @@ var knownDifferences = map[string]string{
 	"intl402/DateTimeFormat/prototype/formatRange/en-US.js":        "interval patterns",
 	"intl402/DateTimeFormat/prototype/formatRangeToParts/en-US.js": "interval patterns",
 
-	// The codes a time zone or a subdivision goes by inside a tag, which are a
-	// place run together with a country and cannot be worked out from the name
-	// of either.
-	"intl402/Intl/getCanonicalLocales/complex-region-subtag-replacement.js":    "tag codes",
-	"intl402/Intl/getCanonicalLocales/non-iana-canon.js":                       "tag codes",
-	"intl402/Intl/getCanonicalLocales/transformed-ext-canonical.js":            "tag codes",
-	"intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-region.js":      "tag codes",
-	"intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-subdivision.js": "tag codes",
-	"intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-timezone.js":    "tag codes",
+	// The codes a time zone goes by inside a tag, and the names a way of
+	// transliterating goes by, which are words rather than a pattern and
+	// cannot be enumerated the way the rest of the tag can.
+	"intl402/Intl/getCanonicalLocales/transformed-ext-canonical.js":         "tag codes",
+	"intl402/Intl/getCanonicalLocales/non-iana-canon.js":                    "tag codes",
+	"intl402/Intl/getCanonicalLocales/unicode-ext-canonicalize-timezone.js": "tag codes",
 
 	// What an ICU of another version answers. The data here was read from one
 	// ICU and the tests were written against another, and these are the places

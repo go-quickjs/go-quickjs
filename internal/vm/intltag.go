@@ -204,7 +204,8 @@ func (t *langTag) parseTransform(body []string) bool {
 			return false
 		}
 		// The tag a text came from is written in small letters throughout,
-		// with its variants in order.
+		// with its variants in order and its names the ones they are now.
+		inner.applyAliases()
 		sort.Strings(inner.variants)
 		t.from = strings.ToLower(inner.base())
 	}
@@ -418,12 +419,18 @@ func (t *langTag) applyAliases() {
 	if to, ok := scripts[t.script]; ok {
 		t.script = to
 	}
-	if to, ok := byLanguage[t.language+"-"+t.region]; ok {
-		// A country that was dissolved became several, and which of them a
-		// tag means depends on what language it is in.
+	// A country that was dissolved became several, and which of them a tag
+	// means depends on what language it is in, or on the letters it is written
+	// with.
+	switch to, ok := byLanguage[t.language+"-"+t.region]; {
+	case ok:
 		t.region = to
-	} else if to, ok := regions[t.region]; ok {
-		t.region = to
+	default:
+		if to, ok := byLanguage["und-"+t.script+"-"+t.region]; ok && t.script != "" {
+			t.region = to
+		} else if to, ok := regions[t.region]; ok {
+			t.region = to
+		}
 	}
 
 	// The variants, which may become another variant, a region, or nothing.

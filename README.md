@@ -41,7 +41,7 @@ the operating system's own database. It is held against a full ICU build:
 [7,925 of 7,949 cases match it exactly](intl_test.go), and the twenty-four that
 do not are named.
 
-Of the 79,184 test262 tests it runs, 79,138 pass and the 46 that do not are
+Of the 79,184 test262 tests it runs, 79,144 pass and the 40 that do not are
 [named in the suite](conformance/conformance_test.go), each with what it asks
 for that this engine does not carry. The 19,350 it skips are tagged with
 features it does not implement, or ask the host for something it does not
@@ -124,8 +124,8 @@ strict and sloppy variants, the expected-failure phase and type, and the feature
 tags. A test tagged with a feature the engine does not implement is skipped
 rather than counted against it.
 
-Measured coverage, as of the most recent run over the whole suite — 79,138 of
-79,184 executed variants, with the 46 that fail named in the runner along with
+Measured coverage, as of the most recent run over the whole suite — 79,144 of
+79,184 executed variants, with the 40 that fail named in the runner along with
 what each asks for that is not carried here. The other 19,350 are skipped
 rather than counted: a test tagged with a feature the engine does not
 implement, or one that asks the host for a second realm or an agent, is testing

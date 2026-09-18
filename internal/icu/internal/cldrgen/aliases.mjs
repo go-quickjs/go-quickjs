@@ -60,21 +60,27 @@ for (const alphabet of [letters, digits]) {
 }
 
 // A country that was dissolved becomes several, and which of them a tag means
-// depends on the language: Soviet Armenian is Armenian, and Soviet Estonian is
-// Estonian. Those are recorded against the pair.
+// depends on the language it is written in, or on the letters it is written
+// with: Soviet Armenian is Armenian, and so is anything Soviet written in the
+// Armenian script. Those are recorded against the pair.
 const regionsByLanguage = {};
 for (const region of Object.keys(regions)) {
   const fallback = regions[region].slice("und-".length);
-  for (const length of [2, 3]) {
-    for (const language of every(letters, length)) {
-      const out = canon(language + "-" + region);
-      if (out === null) continue;
-      const parts = out.split("-");
-      const got = parts.length > 1 ? parts[parts.length - 1] : "";
-      if (got !== "" && got !== fallback && isRegion(got)) {
-        regionsByLanguage[language + "-" + region] = got;
-      }
+  const at = (prefix, suffix) => {
+    const out = canon(prefix + "-" + region + suffix);
+    if (out === null) return;
+    const parts = out.split("-");
+    const got = parts.length > 1 ? parts[parts.length - 1] : "";
+    if (got !== "" && got !== fallback && isRegion(got)) {
+      regionsByLanguage[prefix + "-" + region] = got;
     }
+  };
+  for (const length of [2, 3]) {
+    for (const language of every(letters, length)) at(language, "");
+  }
+  for (const code of every(letters, 4)) {
+    const script = code[0].toUpperCase() + code.slice(1);
+    at("und-" + script, "");
   }
 }
 
@@ -189,15 +195,18 @@ function timeZoneCodes() {
   return [];
 }
 
-// The subdivisions a tag may name, which are a region and two digits, and now
-// and then a letter after them: "no23" is a county of Norway and "cz10a" a
-// district of Prague.
+// The subdivisions a tag may name, which are a region and one to three
+// characters after it: "no23" is a county of Norway, "cz10a" a district of
+// Prague, and "fra" a region of France.
 function* subdivisions() {
   const alphanumeric = letters + digits;
   for (const region of every(letters, 2)) {
-    for (const rest of every(digits, 2)) {
-      yield region + rest;
-      for (const last of alphanumeric) yield region + rest + last;
+    for (const one of alphanumeric) {
+      yield region + one;
+      for (const two of alphanumeric) {
+        yield region + one + two;
+        for (const three of alphanumeric) yield region + one + two + three;
+      }
     }
   }
 }
