@@ -199,6 +199,24 @@ for (const locale of ["en", "sv", "cs", "tr", "ru"]) {
   }
 }
 
+// --- what things are called -------------------------------------------------
+
+// In English only: the engine carries those, and the rest are in a package a
+// host imports, which this corpus does not.
+for (const [type, codes] of [
+  ["region", ["FR", "JP", "US", "DE", "BR", "IN", "ZA", "419", "001"]],
+  ["language", ["de", "fr", "zh", "ar", "de-AT", "zh-Hant", "pt-BR", "sr-Latn"]],
+  ["script", ["Latn", "Cyrl", "Arab", "Hans", "Deva"]],
+  ["currency", ["USD", "EUR", "JPY", "INR", "BRL"]],
+  ["calendar", ["gregory", "buddhist", "japanese"]],
+  ["dateTimeField", ["year", "month", "weekday", "hour"]],
+]) {
+  for (const code of codes) {
+    const source = `new Intl.DisplayNames("en", {"type":${q(type)}}).of(${q(code)})`;
+    add(source, new Intl.DisplayNames("en", {type}).of(code));
+  }
+}
+
 // --- the methods on the values themselves ----------------------------------
 
 for (const locale of LOCALES) {

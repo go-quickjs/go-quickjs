@@ -57,6 +57,7 @@ func (r *Runtime) buildIntl() *Object {
 	r.initCollator(intl)
 	r.initPluralRules(intl)
 	r.initListFormat(intl)
+	r.initDisplayNames(intl)
 	r.initRelativeTimeFormat(intl)
 
 	r.defMethod(intl, "getCanonicalLocales", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {

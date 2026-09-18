@@ -222,6 +222,16 @@ func TestIntlFormats(t *testing.T) {
 		{`"résumé".localeCompare("resume", "en", {sensitivity: "base"})`, "0"},
 		{`"a".localeCompare("b")`, "-1"},
 
+		// What things are called, which the engine knows in English and the
+		// intldata package knows in every language.
+		{`new Intl.DisplayNames("en", {type: "region"}).of("FR")`, "France"},
+		{`new Intl.DisplayNames("en", {type: "language"}).of("de-AT")`, "Austrian German"},
+		{`new Intl.DisplayNames("en", {type: "currency"}).of("EUR")`, "Euro"},
+		{`new Intl.DisplayNames("fr", {type: "region"}).of("DE")`, "Germany"},
+		{`new Intl.DisplayNames("en", {type: "region", fallback: "none"}).of("QQ")`,
+			"undefined"},
+		{`new Intl.DisplayNames("en", {type: "region"}).of("QQ")`, "QQ"},
+
 		// What it says about itself, which is how a program can tell what it
 		// got: a locale it has data for, or English.
 		{`new Intl.NumberFormat("de-DE").resolvedOptions().locale`, "de-DE"},

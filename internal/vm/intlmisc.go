@@ -302,6 +302,164 @@ func (r *Runtime) pluralOf(this Value) (*pluralOptions, error) {
 	return nil, r.throwTypeError("this is not an Intl.PluralRules")
 }
 
+// --- DisplayNames -----------------------------------------------------------
+
+type displayOptions struct {
+	locale    *icu.Locale
+	requested string
+	kind      string // language, region, script, currency, calendar, dateTimeField
+	style     string
+	fallback  string
+}
+
+func (r *Runtime) initDisplayNames(intl *Object) {
+	proto := newObject(r.proto.object, ClassObject)
+	ctor := r.newCtor("DisplayNames", 2, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		if err := rt.requireNew("Intl.DisplayNames"); err != nil {
+			return Undefined, err
+		}
+		tags, err := rt.requestedLocales(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		if arg(args, 1).IsUndefined() {
+			return Undefined, rt.throwTypeError("Intl.DisplayNames needs to be told what kind of name")
+		}
+		options, err := rt.optionsObject(arg(args, 1))
+		if err != nil {
+			return Undefined, err
+		}
+		locale, requested := rt.resolveLocale(tags)
+		o := &displayOptions{locale: locale, requested: requested}
+		if o.kind, err = rt.stringOption(options, "type", "", "language", "region",
+			"script", "currency", "calendar", "dateTimeField"); err != nil {
+			return Undefined, err
+		}
+		if o.kind == "" {
+			return Undefined, rt.throwTypeError("Intl.DisplayNames needs to be told what kind of name")
+		}
+		if o.style, err = rt.stringOption(options, "style", "long",
+			"narrow", "short", "long"); err != nil {
+			return Undefined, err
+		}
+		if o.fallback, err = rt.stringOption(options, "fallback", "code",
+			"code", "none"); err != nil {
+			return Undefined, err
+		}
+		out := newObject(rt.protoFromNewTarget(rt.intlProtoOf("DisplayNames")), ClassObject)
+		out.data = o
+		return Obj(out), nil
+	})
+	r.defValue(intl, "DisplayNames", Obj(ctor))
+	r.intlProtos["DisplayNames"] = proto
+	r.defToStringTag(proto, "Intl.DisplayNames")
+	r.defSupportedLocalesOf(ctor)
+
+	r.defMethod(proto, "of", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		o, err := rt.displayNamesOf(this)
+		if err != nil {
+			return Undefined, err
+		}
+		code, err := rt.toString(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		canonical, err := o.canonical(rt, code.Go())
+		if err != nil {
+			return Undefined, err
+		}
+		if name, ok := icu.DisplayName(o.locale.Tag, o.kindLetter(), canonical); ok {
+			return Str(NewString(name)), nil
+		}
+		// Nothing known: the code itself, or nothing at all.
+		if o.fallback == "none" {
+			return Undefined, nil
+		}
+		return Str(NewString(canonical)), nil
+	})
+	r.defMethod(proto, "resolvedOptions", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		o, err := rt.displayNamesOf(this)
+		if err != nil {
+			return Undefined, err
+		}
+		out := newObject(rt.proto.object, ClassObject)
+		rt.putString(out, "locale", o.requested)
+		rt.putString(out, "style", o.style)
+		rt.putString(out, "type", o.kind)
+		rt.putString(out, "fallback", o.fallback)
+		if o.kind == "language" {
+			rt.putString(out, "languageDisplay", "dialect")
+		}
+		return Obj(out), nil
+	})
+}
+
+// kindLetter is how this kind of name is filed in the tables.
+func (o *displayOptions) kindLetter() string {
+	switch o.kind {
+	case "language":
+		return icu.DisplayLanguage
+	case "region":
+		return icu.DisplayRegion
+	case "script":
+		return icu.DisplayScript
+	case "currency":
+		return icu.DisplayCurrency
+	case "calendar":
+		return icu.DisplayCalendar
+	}
+	return icu.DisplayField
+}
+
+// canonical checks that a code is written the way a code of its kind is
+// written, and writes it that way.
+func (o *displayOptions) canonical(r *Runtime, code string) (string, error) {
+	switch o.kind {
+	case "region":
+		if len(code) == 2 && allLetters(code) {
+			return strings.ToUpper(code), nil
+		}
+		if len(code) == 3 && allDigits(code) {
+			return code, nil
+		}
+		return "", r.throwRangeError("that is not a region code: %s", code)
+	case "script":
+		if len(code) != 4 || !allLetters(code) {
+			return "", r.throwRangeError("that is not a script code: %s", code)
+		}
+		return strings.ToUpper(code[:1]) + strings.ToLower(code[1:]), nil
+	case "currency":
+		if len(code) != 3 || !allLetters(code) {
+			return "", r.throwRangeError("that is not a currency code: %s", code)
+		}
+		return strings.ToUpper(code), nil
+	case "language":
+		if !validLanguageTag(code) {
+			return "", r.throwRangeError("that is not a language tag: %s", code)
+		}
+		return canonicalTag(code), nil
+	}
+	return code, nil
+}
+
+func allDigits(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return len(s) > 0
+}
+
+func (r *Runtime) displayNamesOf(this Value) (*displayOptions, error) {
+	if o := this.Object(); o != nil {
+		if opts, ok := o.data.(*displayOptions); ok {
+			return opts, nil
+		}
+	}
+	return nil, r.throwTypeError("this is not an Intl.DisplayNames")
+}
+
 // --- ListFormat -------------------------------------------------------------
 
 type listOptions struct {

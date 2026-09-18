@@ -76,7 +76,7 @@ resizable ArrayBuffers, `using` declarations, and the newer proposals test262
 tracks.
 
 Of `Intl`, what is missing is: calendars other than the Gregorian and the
-Buddhist, `DisplayNames` and `Segmenter`. Time zone names are English, where a
+Buddhist, and `Segmenter`. Time zone names are English, where a
 zone has a name rather than an offset. Sorting follows the Unicode algorithm
 with each language's own tailoring, but not the orderings that are a whole
 script's worth of data — Chinese and Japanese order their characters by sound
@@ -345,6 +345,7 @@ loop.Run(ctx)     // timers, and work that finished on other goroutines
 |---|---|
 | Always | `console`, `URL`, `TextEncoder`/`TextDecoder`, `atob`/`btoa`, `structuredClone`, `performance`, `crypto` (hashing, HMAC, PBKDF2, HKDF, `subtle`), `Blob`, `File`, `FormData`, `URLPattern`, `AbortController`, `Buffer`, the web's streams, `CompressionStream`, and the `path`, `events`, `util`, `assert`, `buffer`, `crypto`, `zlib`, `stream/web`, `url`, `querystring`, `string_decoder` modules |
 | `Loop` | `setTimeout`, `setInterval`, `queueMicrotask`, and the `timers`, `timers/promises` modules |
+| import `intldata` | the names of every language, region, script and currency, in every language — `Intl.DisplayNames` answers in English without it |
 | `FS` | the `fs` module, sync and promise halves, `createReadStream`/`createWriteStream`, confined to `Root` |
 | `Process` | `process.argv`, `env`, `cwd`, `stdout`, `exit` — what the host chooses to say |
 | `OS` | the `os` module |
