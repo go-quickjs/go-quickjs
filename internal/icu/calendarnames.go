@@ -22,6 +22,9 @@ type CalendarNames struct {
 	// Months and Eras are indexed by width: long, short, narrow.
 	Months [3]map[string]string
 	Eras   [3][]string
+	// Cycle is what a lunisolar year is called where its years run in a cycle
+	// of sixty rather than counting upwards.
+	Cycle []string
 }
 
 // CalendarNamesFor is what this locale calls a calendar's months and eras, and
@@ -69,7 +72,7 @@ func loadCalendars() {
 					continue
 				}
 				width := widthOf(key[1:])
-				if width < 0 {
+				if width < 0 && key != "cycle" {
 					continue
 				}
 				switch key[0] {
@@ -82,6 +85,10 @@ func loadCalendars() {
 				case 'e':
 					if value != "" {
 						names.Eras[width] = strings.Split(value, "|")
+					}
+				case 'c':
+					if value != "" {
+						names.Cycle = strings.Split(value, "|")
 					}
 				}
 			}

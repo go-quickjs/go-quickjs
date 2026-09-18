@@ -106,15 +106,7 @@ var knownDifferences = map[string]string{
 	// name as well as a number, a leap month is the month before it said twice,
 	// and an era that is not ours counts from somewhere else and is named in
 	// every language.
-	"intl402/DateTimeFormat/prototype/format/related-year-zh.js":                    "calendars",
-	"intl402/DateTimeFormat/prototype/formatRangeToParts/chinese-calendar-dates.js": "calendars",
-	"intl402/DateTimeFormat/prototype/formatRangeToParts/dangi-calendar-dates.js":   "calendars",
-	"intl402/DateTimeFormat/prototype/formatToParts/chinese-calendar-dates.js":      "calendars",
-	"intl402/DateTimeFormat/prototype/formatToParts/era.js":                         "calendars",
-	"intl402/DateTimeFormat/prototype/formatToParts/lunisolar-leap-months.js":       "calendars",
-	"intl402/DateTimeFormat/prototype/formatToParts/related-year-zh.js":             "calendars",
-	"intl402/DateTimeFormat/prototype/formatToParts/related-year.js":                "calendars",
-	"intl402/DateTimeFormat/prototype/resolvedOptions/calendar.js":                  "calendars",
+	"intl402/DateTimeFormat/prototype/formatToParts/era.js": "calendars",
 
 	// The orderings that are a whole script's worth of data rather than a
 	// handful of moves: the German phone book, and the one a search uses.

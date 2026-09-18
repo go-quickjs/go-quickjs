@@ -187,6 +187,21 @@ func (o *dateOptions) parts(t time.Time) []datePiece {
 	var out []datePiece
 
 	push := func(kind, value string) {
+		// A calendar with months of its own may name a month with the word
+		// the pattern would have put after it -- the eleventh month of the
+		// Chinese year is 十一月, and the pattern says 月 -- and it is not
+		// written twice.
+		if kind == "literal" && len(out) > 0 && out[len(out)-1].kind == "month" {
+			name := out[len(out)-1].value
+			if r, _ := utf8.DecodeLastRuneInString(name); r != utf8.RuneError {
+				if next, width := utf8.DecodeRuneInString(value); next == r {
+					value = value[width:]
+				}
+			}
+		}
+		if value == "" {
+			return
+		}
 		if kind == "literal" && len(out) > 0 && out[len(out)-1].kind == "literal" {
 			out[len(out)-1].value += value
 			return
@@ -272,6 +287,19 @@ func (o *dateOptions) field(push func(kind, value string), t time.Time, letter b
 			return
 		}
 		push("year", strconv.Itoa(year))
+	case 'r':
+		// The year of the common calendar that this one's year began in,
+		// which is how a calendar whose years are named says which year it
+		// means.
+		push("relatedYear", strconv.Itoa(at.RelatedYear))
+	case 'U':
+		// What this year is called, where a calendar names its years rather
+		// than counting them.
+		if names, ok := o.calendarNames(); ok && at.Era < len(names.Cycle) {
+			push("yearName", names.Cycle[at.Era])
+			return
+		}
+		push("relatedYear", strconv.Itoa(at.RelatedYear))
 	case 'G':
 		push("era", o.eraName(at, n))
 	case 'M', 'L':
@@ -515,6 +543,38 @@ func yearFirst(pattern string) bool {
 	return next > 0x2000
 }
 
+// withYearName writes the year of a lunisolar calendar the way such a calendar
+// writes it: the year of the common calendar that it began in, and the name it
+// goes by where the language has names for them.
+func (o *dateOptions) withYearName(pattern string) string {
+	switch o.calendar {
+	case "chinese", "dangi":
+	default:
+		return pattern
+	}
+	at := strings.IndexByte(pattern, 'y')
+	if at < 0 {
+		return pattern
+	}
+	end := at
+	for end < len(pattern) && pattern[end] == 'y' {
+		end++
+	}
+	// The name is written where the language writes it in its own letters; a
+	// language that only spells it out writes it beside the year where the
+	// year is all that was asked for, and leaves it out otherwise.
+	year := "r"
+	if names, ok := o.calendarCycle(); ok {
+		switch {
+		case !asciiOnly(names[0]):
+			year = "rU"
+		case !strings.ContainsAny(patternLettersOf(pattern), "MdEhHms"):
+			year = "r'('U')'"
+		}
+	}
+	return pattern[:at] + year + pattern[end:]
+}
+
 // calendarNamed reports whether a calendar other than this language's own is
 // being written. A language whose own calendar is not the common one -- Thai
 // counts from the Buddhist era -- writes its dates without saying so, since
@@ -522,6 +582,10 @@ func yearFirst(pattern string) bool {
 func (o *dateOptions) calendarNamed() bool {
 	switch o.calendar {
 	case "", "gregory", "iso8601", o.locale.Calendar:
+		return false
+	case "chinese", "dangi":
+		// A lunisolar calendar counts from no era: its years are named rather
+		// than counted from anywhere.
 		return false
 	}
 	return true
@@ -546,6 +610,16 @@ func (o *dateOptions) calendarNames() (*icu.CalendarNames, bool) {
 		return nil, false
 	}
 	return o.locale.CalendarNamesFor(o.calendar)
+}
+
+// calendarCycle is what this language calls the years of a calendar that names
+// them, which is a cycle of sixty.
+func (o *dateOptions) calendarCycle() ([]string, bool) {
+	names, ok := o.locale.CalendarNamesFor(o.calendar)
+	if !ok || len(names.Cycle) == 0 {
+		return nil, false
+	}
+	return names.Cycle, true
 }
 
 // eraName is what the era of a date is called, in the width the pattern asks
@@ -627,7 +701,7 @@ func (o *dateOptions) patternFor() string {
 		case date != "":
 			pattern = date
 		}
-		return o.withEra(pattern)
+		return o.withYearName(o.withEra(pattern))
 	}
 
 	// A set of fields: the locale's own order for that combination, when it
@@ -658,6 +732,7 @@ func (o *dateOptions) patternFor() string {
 		pattern += " G"
 	}
 	pattern = o.withEra(pattern)
+	pattern = o.withYearName(pattern)
 	if o.timeZoneName != "" && !strings.ContainsAny(patternLettersOf(pattern), "zZvVOXx") {
 		// A zone written after a time is written against it; after a date it
 		// is joined the way a date is joined to a time, which is with a comma

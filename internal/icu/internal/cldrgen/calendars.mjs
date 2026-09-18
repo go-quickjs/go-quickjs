@@ -80,8 +80,13 @@ const keysFor = (calendar) => {
   for (const [year, months] of byYear) {
     if (months.size > 12) long.add(year);
   }
+  // Only a calendar that names the months of a long year differently needs
+  // them written down twice: the lunisolar ones mark the month said twice in
+  // the number itself.
+  const marksLongYears = calendar === "hebrew";
   return DAYS.map(day =>
-    numbers.format(day) + (long.has(years.format(day)) ? "L" : ""));
+    numbers.format(day) +
+    (marksLongYears && long.has(years.format(day)) ? "L" : ""));
 };
 
 const KEYS = {};
@@ -103,6 +108,19 @@ function namesFor(locale, calendar) {
     });
     out["m" + width] = [...table].map(([n, name]) => n + "=" + name).join("|");
   }
+  // The names a lunisolar year goes by, which run in a cycle of sixty rather
+  // than counting upwards.
+  if (calendar === "chinese" || calendar === "dangi") {
+    const f = new Intl.DateTimeFormat(tag, {year: "numeric", timeZone: "UTC"});
+    const names = [];
+    for (let year = 0; year < 60; year++) {
+      const parts = f.formatToParts(Date.UTC(1984 + year, 5, 1));
+      const name = parts.filter(p => p.type === "yearName").map(p => p.value).join("");
+      names.push(name);
+    }
+    if (names.some(name => name !== "")) out.cycle = names.join("|");
+  }
+
   const eraDays = calendar === "japanese" ? REIGNS : ERAS;
   for (const width of ["long", "short", "narrow"]) {
     const f = new Intl.DateTimeFormat(tag, {era: width, year: "numeric", timeZone: "UTC"});

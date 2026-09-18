@@ -175,6 +175,13 @@ func TestIntlFormats(t *testing.T) {
 		    .format(Date.UTC(2024, 0, 5))`, "Pausa 15, 1945 Śaka"},
 		{`new Intl.DateTimeFormat("en-u-ca-hebrew", {timeZone: "UTC"})
 		    .resolvedOptions().calendar`, "hebrew"},
+		// A lunisolar year is named rather than numbered, and has a month
+		// said twice in the years that need one.
+		{`new Intl.DateTimeFormat("zh-u-ca-chinese", {year: "numeric"})
+		    .formatToParts(Date.UTC(2024, 5, 1)).map(p => p.type + "=" + p.value).join()`,
+			"relatedYear=2024,yearName=甲辰,literal=年"},
+		{`new Intl.DateTimeFormat("zh-u-ca-chinese", {month: "long", day: "numeric",
+		    timeZone: "UTC"}).format(Date.UTC(2020, 4, 23))`, "闰四月1日"},
 
 		// Which form a count takes, which is arithmetic in every language and
 		// different arithmetic in each.

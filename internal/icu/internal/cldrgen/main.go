@@ -576,6 +576,8 @@ type calendarTableData struct {
 	Islamic  monthTable `json:"islamic"`
 	UmAlQura monthTable `json:"islamic-umalqura"`
 	Persian  monthTable `json:"persian"`
+	Chinese  monthTable `json:"chinese"`
+	Dangi    monthTable `json:"dangi"`
 	Eras     []eraStart `json:"eras"`
 }
 
@@ -612,7 +614,7 @@ func encodeCalendarTables(d calendarTableData) string {
 		table monthTable
 	}{
 		{"islamic", d.Islamic}, {"islamic-umalqura", d.UmAlQura},
-		{"persian", d.Persian},
+		{"persian", d.Persian}, {"chinese", d.Chinese}, {"dangi", d.Dangi},
 	} {
 		fmt.Fprintf(&b, "%s\t%d\t%d\t%s\t%s\n", entry.name, entry.table.From,
 			entry.table.Year, entry.table.Month, entry.table.Lengths)

@@ -42,10 +42,10 @@ type Date struct {
 
 // Calendars lists the ones this engine reckons.
 func Calendars() []string {
-	return []string{"buddhist", "coptic", "ethiopic", "ethioaa", "gregory",
-		"hebrew", "indian", "islamic", "islamic-civil", "islamic-rgsa",
-		"islamic-tbla", "islamic-umalqura", "iso8601", "japanese", "persian",
-		"roc"}
+	return []string{"buddhist", "chinese", "coptic", "dangi", "ethiopic",
+		"ethioaa", "gregory", "hebrew", "indian", "islamic", "islamic-civil",
+		"islamic-rgsa", "islamic-tbla", "islamic-umalqura", "iso8601",
+		"japanese", "persian", "roc"}
 }
 
 // HasCalendar reports whether a calendar is one this engine reckons.
@@ -113,6 +113,8 @@ func DateIn(calendar string, t time.Time) Date {
 		out := copticDate(fixed, ethiopicEpoch, 0)
 		out.Year += 5500
 		return out
+	case "chinese", "dangi":
+		return lunisolarDate(calendar, fixed)
 	case "indian":
 		return indianDate(fixed)
 	case "persian":
@@ -442,6 +444,58 @@ func fixedFromPersian(year, month, day int) int {
 		fixed += 6*31 + 30*(month-7)
 	}
 	return fixed + day - 1
+}
+
+// --- the calendars that follow the moon and the sun both --------------------
+
+// lunisolarDate reckons the Chinese and Korean calendars, whose months follow
+// the moon and whose years are kept in step with the sun by a month said
+// twice. Where the months fall is astronomy, so it is read from what was
+// recorded of it rather than computed.
+func lunisolarDate(calendar string, fixed int) Date {
+	loadMonthTables()
+	table, ok := monthTables[calendar]
+	if !ok {
+		return gregorianDate(gregorianFromFixed(fixed))
+	}
+	year, month, day, leap, ok := table.lunisolar(fixed)
+	if !ok {
+		return gregorianDate(gregorianFromFixed(fixed))
+	}
+	out := Date{Year: year, Month: month, Day: day, Leap: leap, RelatedYear: year}
+	// The years run in a cycle of sixty, and the one that began in 1984 is the
+	// first of a cycle.
+	out.Era = mod(year-1984, 60)
+	return out
+}
+
+// lunisolar walks the table of months, which says how long each one is and
+// which of them is a month said twice.
+func (t *monthTable) lunisolar(fixed int) (year, month, day int, leap, ok bool) {
+	if fixed < t.from {
+		return 0, 0, 0, false, false
+	}
+	at, year, month := t.from, t.year, t.month
+	for i := 0; i < len(t.lengths); i++ {
+		code := int(t.lengths[i] - '0')
+		leap := code > 4
+		if leap {
+			code -= 4
+		}
+		// A month said twice keeps the number of the one before it; any other
+		// month follows on, and the year turns after the twelfth.
+		if i > 0 && !leap {
+			month++
+			if month > 12 {
+				month, year = 1, year+1
+			}
+		}
+		if fixed < at+code+28 {
+			return year, month, fixed - at + 1, leap, true
+		}
+		at += code + 28
+	}
+	return 0, 0, 0, false, false
 }
 
 // --- the Japanese eras ------------------------------------------------------

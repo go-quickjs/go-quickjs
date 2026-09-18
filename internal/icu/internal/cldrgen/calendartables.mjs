@@ -34,6 +34,9 @@ function monthStarts(calendar, fromYear, toYear) {
     for (const part of f.formatToParts(ms)) {
       if (part.type !== "literal") out[part.type] = part.value;
     }
+    // A calendar whose years are named rather than numbered answers with the
+    // year of the common calendar that its own year began in.
+    if (out.year === undefined) out.year = out.relatedYear;
     return out;
   };
 
@@ -53,11 +56,15 @@ function monthStarts(calendar, fromYear, toYear) {
 }
 
 // The lengths of the months, as one digit each, along with where the first of
-// them begins. A month is twenty-nine, thirty or thirty-one days.
+// them begins. A month is twenty-nine, thirty or thirty-one days; a month that
+// a long year has over an ordinary one -- which repeats the number of the
+// month before it -- is written four higher.
 function lengthsOf(starts) {
   const lengths = [];
   for (let i = 1; i < starts.length; i++) {
-    lengths.push(String(starts[i].fixed - starts[i - 1].fixed - 28));
+    const days = starts[i].fixed - starts[i - 1].fixed - 28;
+    const leap = String(starts[i - 1].month).includes("bis");
+    lengths.push(String(leap ? days + 4 : days));
   }
   return {
     from: starts[0].fixed,
@@ -94,5 +101,9 @@ process.stdout.write(JSON.stringify({
   "islamic-umalqura": lengthsOf(monthStarts("islamic-umalqura", 1500, 2500)),
   // The Persian year, which begins at the equinox.
   persian: lengthsOf(monthStarts("persian", 1500, 2500)),
+  // The lunisolar calendars, whose months follow the moon and whose years are
+  // kept in step with the sun by a month said twice.
+  chinese: lengthsOf(monthStarts("chinese", 1500, 2500)),
+  dangi: lengthsOf(monthStarts("dangi", 1500, 2500)),
   eras: japaneseEras(),
 }) + "\n");
