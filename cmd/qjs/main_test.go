@@ -342,3 +342,19 @@ func TestUnhandledRejectionIsReported(t *testing.T) {
 		t.Errorf("code=%d err=%q", code, errOut)
 	}
 }
+
+// A module is told where it came from, in the forms node offers.
+func TestImportMetaInTheCommand(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "m.mjs")
+	if err := os.WriteFile(script, []byte(
+		`console.log(import.meta.url.startsWith("file://"), `+
+			`import.meta.filename === import.meta.url.slice(7), `+
+			`import.meta.dirname.length > 0)`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := exec(t, "", script)
+	if code != 0 || strings.TrimSpace(out) != "true true true" {
+		t.Errorf("code=%d out=%q err=%q", code, out, errOut)
+	}
+}

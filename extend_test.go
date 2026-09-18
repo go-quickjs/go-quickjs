@@ -409,3 +409,52 @@ func TestUnhandledRejectionIsReportedOnce(t *testing.T) {
 		t.Errorf("reported %d times after a late handler, want 1", n)
 	}
 }
+
+// What a module is told about itself is the host's to decide, and it is told
+// once, the first time it asks.
+func TestImportMetaFromTheHost(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+
+	asked := 0
+	rt.OnImportMeta(func(specifier string, meta quickjs.Value) {
+		asked++
+		meta.Set("url", "https://example.com/"+specifier)
+		meta.Set("count", asked)
+	})
+	ns, err := rt.EvalModule("main.js", `
+		export const url = import.meta.url
+		export const same = import.meta === import.meta
+		export const count = import.meta.count
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	url, _ := ns.Get("url")
+	same, _ := ns.Get("same")
+	count, _ := ns.Get("count")
+	if got, want := url.String(), "https://example.com/main.js"; got != want {
+		t.Errorf("url = %q, want %q", got, want)
+	}
+	if !same.Bool() {
+		t.Error("import.meta gave two different objects")
+	}
+	if count.Int() != 1 || asked != 1 {
+		t.Errorf("filled in %d times, want 1", asked)
+	}
+}
+
+// Without a host to fill it in, import.meta is an empty object rather than an
+// error: the specification puts nothing there.
+func TestImportMetaIsEmptyWithoutAHost(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	ns, err := rt.EvalModule("main.js", `export const keys = Object.keys(import.meta).length`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, _ := ns.Get("keys")
+	if keys.Int() != 0 {
+		t.Errorf("import.meta had %d keys, want none", keys.Int())
+	}
+}

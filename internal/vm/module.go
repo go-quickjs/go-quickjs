@@ -794,7 +794,33 @@ func (r *Runtime) importMeta(env *Object) Value {
 	if p := env.getOwn(key); p != nil {
 		return p.value
 	}
-	meta := Obj(newObject(nil, ClassObject))
+	o := newObject(nil, ClassObject)
+	meta := Obj(o)
 	env.setOwnRaw(key, meta, 0)
+	// What a module is told about itself is the host's to decide: the
+	// specification leaves the object empty and names nothing to put in it.
+	if r.onImportMeta != nil {
+		r.onImportMeta(r.moduleOfEnv(env), o)
+	}
 	return meta
+}
+
+// moduleOfEnv is the specifier of the module whose environment this is.
+func (r *Runtime) moduleOfEnv(env *Object) string {
+	for _, m := range r.modules {
+		if m.env == env {
+			return m.Specifier
+		}
+	}
+	return ""
+}
+
+// OnImportMeta installs what fills in a module's import.meta.
+//
+// It is called once per module, the first time the module mentions import.meta,
+// with the module's resolved specifier and the object to fill in. The
+// specification says nothing about what belongs there -- a host that serves
+// modules over HTTP and one that reads them from disk have different answers.
+func (r *Runtime) OnImportMeta(fn func(specifier string, meta *Object)) {
+	r.onImportMeta = fn
 }

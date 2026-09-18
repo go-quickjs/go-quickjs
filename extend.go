@@ -286,6 +286,31 @@ func (r *Runtime) OnUnhandledRejection(fn func(reason Value)) {
 	})
 }
 
+// OnImportMeta installs what fills in a module's import.meta.
+//
+// It is called once per module, the first time that module mentions
+// import.meta, with the specifier the module was loaded under and the object to
+// fill in. What belongs there is the host's to decide -- the specification says
+// nothing about it -- and a host that serves modules over HTTP has a different
+// answer from one that reads them off a disk:
+//
+//	rt.OnImportMeta(func(specifier string, meta quickjs.Value) {
+//	    meta.Set("url", "file://"+specifier)
+//	})
+func (r *Runtime) OnImportMeta(fn func(specifier string, meta Value)) {
+	if r.closed {
+		return
+	}
+	if fn == nil {
+		r.rt.OnImportMeta(nil)
+		return
+	}
+	rt := r.rt
+	r.rt.OnImportMeta(func(specifier string, meta *vm.Object) {
+		fn(specifier, Value{v: vmObj(meta), rt: rt})
+	})
+}
+
 // Throw returns an error that raises v as a JavaScript exception when returned
 // from a Go function called by script.
 //

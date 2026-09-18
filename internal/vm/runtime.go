@@ -175,6 +175,10 @@ type Runtime struct {
 	// same module twice yields the same instance.
 	modules      map[string]*Module
 	moduleLoader ModuleLoader
+	// onImportMeta fills in a module's import.meta, which is the host's to
+	// decide the contents of.
+	onImportMeta func(specifier string, meta *Object)
+
 	// evalFn is the intrinsic eval, which a call site compares its callee
 	// against: a direct eval is one that actually reaches this function, and a
 	// name that resolves to anything else is an ordinary call.

@@ -104,6 +104,19 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	setModuleLoader(rt)
 
+	// What a module is told about itself: where it came from, in the forms
+	// node offers, so that the usual ways of finding a file beside a module
+	// work.
+	rt.OnImportMeta(func(specifier string, meta quickjs.Value) {
+		if !filepath.IsAbs(specifier) {
+			meta.Set("url", specifier)
+			return
+		}
+		meta.Set("url", "file://"+filepath.ToSlash(specifier))
+		meta.Set("filename", specifier)
+		meta.Set("dirname", filepath.Dir(specifier))
+	})
+
 	// A rejection nothing took is a failure of the program, as it is in node:
 	// it is reported where it happened and the exit code says so, rather than
 	// disappearing.
