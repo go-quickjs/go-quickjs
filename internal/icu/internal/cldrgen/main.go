@@ -450,12 +450,13 @@ func sortedBlocks(m map[string]map[string]string) []string {
 
 // aliasData is what aliases.mjs writes.
 type aliasData struct {
-	Languages     map[string]string `json:"languages"`
-	Regions       map[string]string `json:"regions"`
-	Scripts       map[string]string `json:"scripts"`
-	Grandfathered map[string]string `json:"grandfathered"`
-	Variants      map[string]string `json:"variants"`
-	Settings      map[string]string `json:"settings"`
+	Languages         map[string]string `json:"languages"`
+	Regions           map[string]string `json:"regions"`
+	RegionsByLanguage map[string]string `json:"regionsByLanguage"`
+	Scripts           map[string]string `json:"scripts"`
+	Grandfathered     map[string]string `json:"grandfathered"`
+	Variants          map[string]string `json:"variants"`
+	Settings          map[string]string `json:"settings"`
 }
 
 func readRenames(path string) (aliasData, error) {
@@ -474,7 +475,8 @@ func readRenames(path string) (aliasData, error) {
 func encodeAliases(d aliasData) string {
 	var b strings.Builder
 	for _, table := range []map[string]string{
-		d.Languages, d.Regions, d.Scripts, d.Grandfathered, d.Variants, d.Settings,
+		d.Languages, d.Regions, d.Scripts, d.Grandfathered, d.Variants,
+		d.Settings, d.RegionsByLanguage,
 	} {
 		for _, from := range sortedNames(table) {
 			// The replacements come back as whole tags: "und-MM" is the region

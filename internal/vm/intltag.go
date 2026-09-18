@@ -203,7 +203,10 @@ func (t *langTag) parseTransform(body []string) bool {
 		if !ok || inner.hasExtensions() {
 			return false
 		}
-		t.from = inner.base()
+		// The tag a text came from is written in small letters throughout,
+		// with its variants in order.
+		sort.Strings(inner.variants)
+		t.from = strings.ToLower(inner.base())
 	}
 	for i < len(body) {
 		if !isTransformKey(body[i]) {
@@ -368,27 +371,19 @@ func asciiOnly(s string) bool {
 // variant that was folded into another, a setting that goes by another word
 // now.
 func (t *langTag) applyAliases() {
-	languages, regions, scripts, grandfathered, variants, settings := icu.TagAliases()
+	languages, regions, scripts, grandfathered, variants, settings, byLanguage :=
+		icu.TagAliases()
 
 	// A tag registered before the rules were what they are, which is replaced
 	// whole: "art-lojban" is "jbo" and "zh-guoyu" is "zh".
-	whole := strings.ToLower(t.base())
-	for len(whole) > 0 {
-		if to, ok := grandfathered[whole]; ok {
-			if inner, ok := parseTag(to); ok {
-				kept := *t
-				*t = inner
-				t.attributes, t.keywords = kept.attributes, kept.keywords
-				t.from, t.fields = kept.from, kept.fields
-				t.others, t.private = kept.others, kept.private
-			}
-			break
+	if to, ok := grandfathered[strings.ToLower(t.base())]; ok {
+		if inner, ok := parseTag(to); ok {
+			kept := *t
+			*t = inner
+			t.attributes, t.keywords = kept.attributes, kept.keywords
+			t.from, t.fields = kept.from, kept.fields
+			t.others, t.private = kept.others, kept.private
 		}
-		at := strings.LastIndex(whole, "-")
-		if at < 0 {
-			break
-		}
-		whole = whole[:at]
 	}
 
 	if to, ok := languages[t.language]; ok {
@@ -407,7 +402,11 @@ func (t *langTag) applyAliases() {
 	if to, ok := scripts[t.script]; ok {
 		t.script = to
 	}
-	if to, ok := regions[t.region]; ok {
+	if to, ok := byLanguage[t.language+"-"+t.region]; ok {
+		// A country that was dissolved became several, and which of them a
+		// tag means depends on what language it is in.
+		t.region = to
+	} else if to, ok := regions[t.region]; ok {
 		t.region = to
 	}
 

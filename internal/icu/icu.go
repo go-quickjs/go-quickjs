@@ -1000,7 +1000,7 @@ var (
 // renamed, a country dissolved, a variant folded into another, a setting that
 // goes by another word now. The kinds are asked for separately because the
 // same string may be a language and a region.
-func TagAliases() (languages, regions, scripts, grandfathered, variants, settings map[string]string) {
+func TagAliases() (languages, regions, scripts, grandfathered, variants, settings, byLanguage map[string]string) {
 	aliasOnce.Do(func() {
 		text, err := inflate(tagAliases)
 		if err != nil {
@@ -1020,10 +1020,10 @@ func TagAliases() (languages, regions, scripts, grandfathered, variants, setting
 		}
 	})
 	return aliasTables[0], aliasTables[1], aliasTables[2], aliasTables[3],
-		aliasTables[4], aliasTables[5]
+		aliasTables[4], aliasTables[5], aliasTables[6]
 }
 
 var (
 	aliasOnce   sync.Once
-	aliasTables [6]map[string]string
+	aliasTables [7]map[string]string
 )

@@ -39,6 +39,9 @@ function* every(alphabet, length, prefix = "") {
   for (const c of alphabet) yield* every(alphabet, length - 1, prefix + c);
 }
 
+const isVariant = (s) => /^[a-z0-9]{5,8}$/.test(s) || /^[0-9][a-z0-9]{3}$/.test(s);
+const isRegion = (s) => /^[A-Z]{2}$/.test(s) || /^[0-9]{3}$/.test(s);
+
 const languages = {};
 for (const length of [2, 3]) {
   for (const tag of every(letters, length)) {
@@ -53,6 +56,25 @@ for (const alphabet of [letters, digits]) {
     const region = code.toUpperCase();
     const out = canon("und-" + region);
     if (out !== null && out !== "und-" + region) regions[region] = out;
+  }
+}
+
+// A country that was dissolved becomes several, and which of them a tag means
+// depends on the language: Soviet Armenian is Armenian, and Soviet Estonian is
+// Estonian. Those are recorded against the pair.
+const regionsByLanguage = {};
+for (const region of Object.keys(regions)) {
+  const fallback = regions[region].slice("und-".length);
+  for (const length of [2, 3]) {
+    for (const language of every(letters, length)) {
+      const out = canon(language + "-" + region);
+      if (out === null) continue;
+      const parts = out.split("-");
+      const got = parts.length > 1 ? parts[parts.length - 1] : "";
+      if (got !== "" && got !== fallback && isRegion(got)) {
+        regionsByLanguage[language + "-" + region] = got;
+      }
+    }
   }
 }
 
@@ -102,8 +124,6 @@ const VARIANTS = [
   "vallader", "vecdruka", "vivaraup", "wadegile", "xsistemo",
 ];
 const variants = {};
-const isVariant = (s) => /^[a-z0-9]{5,8}$/.test(s) || /^[0-9][a-z0-9]{3}$/.test(s);
-const isRegion = (s) => /^[A-Z]{2}$/.test(s) || /^[0-9]{3}$/.test(s);
 for (const variant of VARIANTS) {
   const out = canon("en-" + variant);
   if (out === null || out === "en-" + variant) continue;
@@ -137,18 +157,20 @@ const SETTINGS = {
   ks: ["primary", "secondary", "tertiary", "quaternary", "quartenary",
        "identical", "level1", "level2", "level3", "level4", "identic"],
   ms: ["imperial", "uksystem", "metric", "ussystem"],
-  kb: ["yes", "no", "true", "false"],
-  kc: ["yes", "no", "true", "false"],
-  kh: ["yes", "no", "true", "false"],
-  kk: ["yes", "no", "true", "false"],
-  kn: ["yes", "no", "true", "false"],
-  kr: ["yes", "no", "true", "false"],
-  kv: ["yes", "no", "true", "false", "space", "punct", "symbol", "currency"],
-  kf: ["yes", "no", "true", "false", "upper", "lower"],
+  // The keys whose value is yes or no, where yes is the word for true and
+  // true is written by naming the key and nothing more. Every other key keeps
+  // "yes" as the ordinary word it is.
+  kb: ["yes", "true"],
+  kc: ["yes", "true"],
+  kh: ["yes", "true"],
+  kk: ["yes", "true"],
+  kn: ["yes", "true"],
+  kv: ["space", "punct", "symbol", "currency"],
+  kf: ["upper", "lower", "false"],
   hc: ["h11", "h12", "h23", "h24"],
-  tz: [...timeZoneCodes()],
-  rg: [...subdivisions()],
-  sd: [...subdivisions()],
+  tz: timeZoneCodes(),
+  rg: subdivisions(),
+  sd: subdivisions(),
 };
 
 function supported(key) {
@@ -167,21 +189,27 @@ function timeZoneCodes() {
   return [];
 }
 
-// The subdivisions a tag may name, which are a region and a number or a
-// letter: "no23" is a county of Norway.
-function subdivisions() {
-  const out = [];
+// The subdivisions a tag may name, which are a region and two digits, and now
+// and then a letter after them: "no23" is a county of Norway and "cz10a" a
+// district of Prague.
+function* subdivisions() {
+  const alphanumeric = letters + digits;
   for (const region of every(letters, 2)) {
-    for (let n = 0; n < 100; n++) {
-      out.push(region + String(n).padStart(2, "0"));
+    for (const rest of every(digits, 2)) {
+      yield region + rest;
+      for (const last of alphanumeric) yield region + rest + last;
     }
   }
-  return out;
 }
 
 const settings = {};
 for (const [key, values] of Object.entries(SETTINGS)) {
-  for (const value of new Set(values)) {
+  const seen = new Set();
+  for (const value of values) {
+    if (seen.size < 1000) {
+      if (seen.has(value)) continue;
+      seen.add(value);
+    }
     const tag = "und-u-" + key + "-" + value;
     const out = canon(tag);
     if (out === null || out === tag) continue;
@@ -192,5 +220,5 @@ for (const [key, values] of Object.entries(SETTINGS)) {
 
 process.stdout.write(JSON.stringify({
   icu: process.versions.icu,
-  languages, regions, scripts, grandfathered, variants, settings,
+  languages, regions, regionsByLanguage, scripts, grandfathered, variants, settings,
 }) + "\n");
