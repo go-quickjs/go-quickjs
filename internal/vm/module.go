@@ -87,6 +87,10 @@ type Module struct {
 	// err holds the failure of a module that threw while evaluating, which is
 	// re-raised for every later importer rather than re-running the body.
 	err error
+	// native marks a module the host supplied: it has no body to run, and it
+	// answers to its own name rather than to whatever a loader would resolve
+	// that name to.
+	native bool
 }
 
 // moduleImport is one resolved import binding.
@@ -264,6 +268,12 @@ func (r *Runtime) Link(m *Module) error {
 
 // loadDependency resolves and compiles a module a specifier names.
 func (r *Runtime) loadDependency(specifier, referrer string) (*Module, error) {
+	// A module the host registered answers to its own name, whatever a loader
+	// would make of it: `import "fs"` reaches the host's fs rather than a file
+	// of that name, and needs no loader at all.
+	if m := r.nativeModule(specifier); m != nil {
+		return m, nil
+	}
 	if r.moduleLoader == nil {
 		return nil, r.throwError(errType,
 			"cannot import %q: this runtime has no module loader", specifier)
@@ -677,6 +687,9 @@ func (r *Runtime) ModuleResult(promise Value) error {
 // resolvedNameOf asks the loader what a specifier resolves to, so that the
 // dependency can be found in the module table.
 func (r *Runtime) resolvedNameOf(specifier, referrer string) string {
+	if m := r.nativeModule(specifier); m != nil {
+		return specifier
+	}
 	if r.moduleLoader == nil {
 		return specifier
 	}

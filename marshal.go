@@ -84,9 +84,26 @@ func encodeValue(rt *vm.Runtime, v any) (vm.Value, error) {
 	return encodeReflect(rt, rv)
 }
 
+var (
+	valueType   = reflect.TypeOf(Value{})
+	promiseType = reflect.TypeOf((*Promise)(nil))
+)
+
 func encodeReflect(rt *vm.Runtime, rv reflect.Value) (vm.Value, error) {
 	if !rv.IsValid() {
 		return vm.Null, nil
+	}
+	// A value the host already built is passed through rather than reflected
+	// over: a Value is a JavaScript value, not a struct with fields, and a
+	// Promise is the promise it stands for.
+	switch rv.Type() {
+	case valueType:
+		return rv.Interface().(Value).v, nil
+	case promiseType:
+		if rv.IsNil() {
+			return vm.Null, nil
+		}
+		return rv.Interface().(*Promise).Value().v, nil
 	}
 	switch rv.Kind() {
 	case reflect.Pointer, reflect.Interface:
