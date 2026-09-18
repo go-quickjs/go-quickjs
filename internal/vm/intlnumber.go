@@ -139,7 +139,8 @@ func (o *numberOptions) decimalParts(d decimal) []numberPiece {
 		var suffix string
 		d, kept, suffix = o.compactly(d)
 		if suffix != "" {
-			tail = []numberPiece{{"compact", suffix}}
+			// The space before the word is not part of the word.
+			tail = o.unitPieces(suffix, "compact")
 		}
 	case "scientific", "engineering":
 		var exponent int
@@ -180,11 +181,13 @@ func (o *numberOptions) measure(pieces []numberPiece, whole, fraction string) []
 	}
 	out := o.aroundNumber(pieces, pattern, "unit")
 	if divided {
-		// A pair the language writes its own way, or the two joined.
+		// A pair the language writes its own way, or the two joined. What
+		// joins them belongs to the name: "meters per second" is one name and
+		// not two with a space between.
 		if own, ok := o.locale.UnitCompound(o.unit, o.unitDisplay); ok {
-			out = o.aroundNumber(out, own, "unit")
+			out = o.wholeAround(out, own)
 		} else if per, ok := o.locale.UnitPer(below, o.unitDisplay); ok {
-			out = o.aroundNumber(out, per, "unit")
+			out = o.wholeAround(out, per)
 		}
 	}
 	return mergeUnitPieces(out)
@@ -219,6 +222,24 @@ func (o *numberOptions) aroundNumber(pieces []numberPiece, pattern, kind string)
 	out = append(out, pieces...)
 	if after := pattern[at+3:]; after != "" {
 		out = append(out, o.unitPieces(after, kind)...)
+	}
+	return out
+}
+
+// wholeAround puts a pattern around what has been written, with everything it
+// adds counting as part of the name of the unit.
+func (o *numberOptions) wholeAround(pieces []numberPiece, pattern string) []numberPiece {
+	at := strings.Index(pattern, "{0}")
+	if at < 0 {
+		return pieces
+	}
+	out := make([]numberPiece, 0, len(pieces)+2)
+	if before := pattern[:at]; before != "" {
+		out = append(out, numberPiece{"unit", before})
+	}
+	out = append(out, pieces...)
+	if after := pattern[at+3:]; after != "" {
+		out = append(out, numberPiece{"unit", after})
 	}
 	return out
 }

@@ -733,18 +733,26 @@ func (r *Runtime) numberOptionsFrom(args []Value) (*numberOptions, error) {
 		"decimal", "percent", "currency", "unit"); err != nil {
 		return nil, err
 	}
-	currency, err := r.stringOption(options, "currency", "")
+	// A currency that was not given at all is not the same as one given as an
+	// empty string: the first is missing, the second is wrong.
+	currencyValue, err := r.getProp(options, r.atoms.intern("currency"), Obj(options))
 	if err != nil {
 		return nil, err
 	}
 	switch {
-	case currency == "":
+	case currencyValue.IsUndefined():
 		if o.style == "currency" {
 			return nil, r.throwTypeError("a currency style needs a currency")
 		}
-	case len(currency) != 3 || !allLetters(currency):
-		return nil, r.throwRangeError("that is not a currency code: %s", currency)
 	default:
+		text, err := r.toString(currencyValue)
+		if err != nil {
+			return nil, err
+		}
+		currency := text.Go()
+		if len(currency) != 3 || !allLetters(currency) {
+			return nil, r.throwRangeError("that is not a currency code: %s", currency)
+		}
 		o.currency = strings.ToUpper(currency)
 	}
 	if o.currencyDisplay, err = r.stringOption(options, "currencyDisplay", "symbol",
@@ -782,11 +790,13 @@ func (r *Runtime) numberOptionsFrom(args []Value) (*numberOptions, error) {
 	// significant digits are two ways of asking the same question, and which
 	// of them is in force depends on which were given.
 	minFracDefault, maxFracDefault := 0, 3
-	switch o.style {
-	case "currency":
+	switch {
+	case o.style == "currency" && o.notation == "standard":
+		// A currency is written with as many decimal places as it has, unless
+		// the number is being shortened, where those places are not the point.
 		places := icu.CurrencyDigits(o.currency)
 		minFracDefault, maxFracDefault = places, places
-	case "percent":
+	case o.style == "percent":
 		maxFracDefault = 0
 	}
 	if err := r.readDigitOptions(o, options, minFracDefault, maxFracDefault); err != nil {
@@ -944,25 +954,27 @@ func (r *Runtime) groupingOption(o *Object, notation string) (string, error) {
 	switch {
 	case v.IsUndefined():
 		return fallback, nil
-	case v.IsBool() && !v.Truthy():
-		return "", nil
-	case v.IsBool():
+	case v.IsBool() && v.Truthy():
 		return "always", nil
+	case !v.Truthy():
+		// Anything that reads as false -- the flag, an empty string, nothing
+		// at all -- asks for no grouping.
+		return "", nil
 	}
 	s, err := r.toString(v)
 	if err != nil {
 		return "", err
 	}
 	switch got := s.Go(); got {
-	case "":
-		return "", nil
 	case "min2", "auto", "always":
 		return got, nil
 	case "true", "false":
-		// A string, even one that reads as a flag, is a word and not a flag.
+		// The words, as against the flags, say nothing either way, and the
+		// number is grouped the way it would have been anyway.
+		return fallback, nil
+	default:
 		return "", r.throwRangeError("%s is not a value useGrouping may take", got)
 	}
-	return "", r.throwRangeError("%s is not a value useGrouping may take", s.Go())
 }
 
 func containsInt(list []int, n int) bool {
@@ -1480,7 +1492,24 @@ func (r *Runtime) numberRange(this Value, args []Value) (*rangePieces, error) {
 	if piecesEqual(start, end) {
 		return sameRange(start, o.locale.Approximately), nil
 	}
-	return mergeRange(start, end, o.locale.Range), nil
+	separator := o.locale.Range
+	// A number with something written around it -- a currency symbol, a
+	// percent sign -- is written out twice, with the mark set apart from it so
+	// that the two do not run together.
+	if o.style == "currency" || o.style == "percent" {
+		if !strings.HasPrefix(separator, " ") {
+			separator = " " + separator
+		}
+		if !strings.HasSuffix(separator, " ") {
+			separator += " "
+		}
+		return joinRange(start, end, separator), nil
+	}
+	// A measurement is written once and the two counts against it: 1–5 m.
+	if o.style == "unit" {
+		return mergeRange(start, end, separator), nil
+	}
+	return joinRange(start, end, separator), nil
 }
 
 // dateRange writes one date against another.

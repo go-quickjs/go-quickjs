@@ -845,7 +845,8 @@ func (r *Runtime) initRelativeTimeFormat(intl *Object) {
 			return Undefined, err
 		}
 		o.numbers = &numberOptions{
-			locale: choice.data, choice: choice, style: "decimal",
+			locale: choice.data, choice: choice, digits: choice.setting("nu"),
+			style:    "decimal",
 			notation: "standard", signDisplay: "auto", useGrouping: "auto",
 			minInt: 1, maxFrac: 3, rounding: "fraction",
 			roundingMode: "halfExpand", roundingIncrement: 1,
@@ -933,7 +934,7 @@ func (r *Runtime) initRelativeTimeFormat(intl *Object) {
 		rt.putString(out, "locale", o.choice.locale())
 		rt.putString(out, "style", o.style)
 		rt.putString(out, "numeric", o.numeric)
-		rt.putString(out, "numberingSystem", o.locale.Numbering)
+		rt.putString(out, "numberingSystem", o.choice.setting("nu"))
 		return Obj(out), nil
 	})
 }

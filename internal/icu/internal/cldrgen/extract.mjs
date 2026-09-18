@@ -474,11 +474,25 @@ function pluralTable(locale, type) {
     return {classes, exact, wrong};
   };
 
-  // Nearly every language is settled by a hundred thousand counts; one asks
-  // about millions, and is looked at further.
+  // Nearly every language is settled by a hundred thousand counts; a few ask
+  // about millions, and are looked at further. Whether a language is one of
+  // them is found by asking it about a handful of large round numbers, since
+  // a rule about millions shows itself at a million and not before.
+  const LARGE = [1000000, 1000001, 1500000, 2000000, 3000000, 10000000,
+                 100000000, 1000000000];
   let found = derive(100000);
-  if (Object.keys(found.classes).length > 0 || Object.keys(found.exact).length > 0 ||
-      found.wrong.length > 0) {
+  const answers = (f) => (n) => {
+    if (n < 100) return small[n];
+    if (n in f.exact) return f.exact[n];
+    for (const m of MODULI) {
+      const key = m + ":" + (n % m);
+      if (key in f.classes) return f.classes[key];
+    }
+    return mod[n % 100];
+  };
+  const missed = LARGE.some(n => answers(found)(n) !== rules.select(n));
+  if (missed || Object.keys(found.classes).length > 0 ||
+      Object.keys(found.exact).length > 0 || found.wrong.length > 0) {
     found = derive(3000000);
   }
 

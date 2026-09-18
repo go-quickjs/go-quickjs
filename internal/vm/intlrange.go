@@ -64,6 +64,20 @@ func mergeRange(start, end []pieceOf, separator string) *rangePieces {
 	return out
 }
 
+// joinRange writes the two ends out in full with the mark between them, which
+// is what a number does: what they have in common is said twice.
+func joinRange(start, end []pieceOf, separator string) *rangePieces {
+	out := &rangePieces{}
+	for _, piece := range start {
+		out.add(piece.kind, piece.value, "startRange")
+	}
+	out.add("literal", separator, "shared")
+	for _, piece := range end {
+		out.add(piece.kind, piece.value, "endRange")
+	}
+	return out
+}
+
 // pieceOf is a formatted piece, of a number or of a date, in the one shape a
 // range can work with.
 type pieceOf struct {
