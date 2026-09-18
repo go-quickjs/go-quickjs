@@ -1430,3 +1430,113 @@ func TestCompression(t *testing.T) {
 		t.Errorf("compression output =\n%s\nwant\n%s\nstderr: %s", out, want, errOut)
 	}
 }
+
+func TestExtraModules(t *testing.T) {
+	out, errOut := run(t, stdlib.Config{}, `
+		;(async () => {
+			const qs = (await import("querystring")).default
+			// A key that appears twice becomes an array, which is where this
+			// differs from URLSearchParams.
+			const parsed = qs.parse("a=1&b=two&a=3&empty")
+			console.log(parsed.a.join("+"), parsed.b, JSON.stringify(parsed.empty))
+			console.log(qs.stringify({name: "a b", tags: ["x", "y"]}))
+			console.log(qs.parse(qs.stringify({q: "a+b&c=d"})).q)
+
+			const {StringDecoder} = await import("string_decoder")
+			const d = new StringDecoder("utf8")
+			const bytes = new TextEncoder().encode("héllo")
+			// A character split across two writes is not two replacements.
+			console.log(d.write(bytes.slice(0, 2)) + d.write(bytes.slice(2)))
+
+			const url = (await import("url")).default
+			console.log(url.fileURLToPath("file:///tmp/a%20b.txt"))
+			console.log(url.pathToFileURL("/tmp/a b.txt").href)
+			console.log(url.resolve("https://example.com/a/b", "../c"))
+		})()
+	`)
+	want := strings.Join([]string{
+		"1+3 two \"\"",
+		"name=a+b&tags=x&tags=y",
+		"a+b&c=d",
+		"héllo",
+		"/tmp/a b.txt",
+		"file:///tmp/a%20b.txt",
+		"https://example.com/c",
+	}, "\n")
+	if out != want {
+		t.Errorf("extras output =\n%s\nwant\n%s\nstderr: %s", out, want, errOut)
+	}
+}
+
+// The timer modules are only there when there is a loop to run them on.
+func TestTimerModules(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	var outBuf bytes.Buffer
+	loop := stdlib.NewLoop(rt)
+	if err := stdlib.Install(rt, stdlib.Config{Stdout: &outBuf, Loop: loop}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.Eval(`
+		;(async () => {
+			const {setTimeout: delay, setInterval: every, scheduler} =
+				await import("timers/promises")
+			const started = Date.now()
+			console.log(await delay(5, "waited"))
+			console.log(Date.now() - started >= 4)
+
+			let ticks = 0
+			for await (const _ of every(1)) { if (++ticks === 3) break }
+			console.log("ticks:", ticks)
+
+			await scheduler.yield()
+			console.log("yielded")
+
+			// An abort stops the wait rather than leaving it pending.
+			const ac = new AbortController()
+			const waiting = delay(10_000, null, {signal: ac.signal})
+			ac.abort()
+			try { await waiting } catch (e) { console.log("aborted") }
+
+			const timers = (await import("timers")).default
+			timers.setImmediate(() => console.log("immediate"))
+		})()
+	`); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := loop.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := "waited\ntrue\nticks: 3\nyielded\naborted\nimmediate"
+	if got := strings.TrimSpace(outBuf.String()); got != want {
+		t.Errorf("timers output =\n%s\nwant\n%s", got, want)
+	}
+}
+
+// Without a loop there is nothing to run a timer on, so the modules that are
+// only timers are not there to import.
+func TestTimerModulesNeedALoop(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	var out bytes.Buffer
+	if err := stdlib.Install(rt, stdlib.Config{Stdout: &out}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.Eval(`
+		import("timers/promises").then(
+			() => console.log("IMPORTED"),
+			(e) => console.log("not installed"))
+	`); err != nil {
+		t.Fatal(err)
+	}
+	rt.RunJobs()
+	if got := strings.TrimSpace(out.String()); got != "not installed" {
+		t.Errorf("out = %q", got)
+	}
+	// What is not a timer is still there.
+	if _, err := rt.Eval(`import("querystring")`); err != nil {
+		t.Errorf("querystring without a loop: %v", err)
+	}
+}

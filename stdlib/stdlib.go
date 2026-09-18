@@ -102,6 +102,11 @@ func Install(rt *quickjs.Runtime, cfg Config) error {
 		if err := Compression(rt); err != nil {
 			return err
 		}
+		// And the smaller modules, which are mostly what is already here
+		// under the names node gives it.
+		if err := Extras(rt, cfg.Loop != nil); err != nil {
+			return err
+		}
 	}
 	if err := Path(rt); err != nil {
 		return err
