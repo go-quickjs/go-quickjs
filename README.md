@@ -34,9 +34,9 @@ arrays all work, and are exercised against [test262], the official ECMAScript
 conformance suite.
 
 `Intl` is there too, with real CLDR data for 379 locales — the engine carries
-its own, in Go, rather than linking ICU. It is held against a full ICU
-build: [5,815 of 5,820 formatting cases match it exactly](intl_test.go), and
-the five that do not are written down.
+its own, in Go, rather than linking ICU — and time zones out of the operating
+system's own database. It is held against a full ICU build:
+[all 5,970 formatting cases match it exactly](intl_test.go).
 
 Every test262 test it runs passes — 77,078 of them. The 14,742 it skips are
 tagged with features it does not implement, or ask the host for something it
@@ -75,10 +75,9 @@ resizable ArrayBuffers, `using` declarations, and the newer proposals test262
 tracks.
 
 Of `Intl`, what is missing is: calendars other than the Gregorian and the
-Buddhist, time zones other than UTC and the machine's own, `DisplayNames`,
-`Segmenter`, the finer day periods that Chinese and Japanese distinguish, and a
-collation that follows the Unicode algorithm rather than comparing what the
-letters decompose to.
+Buddhist, `DisplayNames`, `Segmenter`, and a collation that follows the Unicode
+algorithm rather than comparing what the letters decompose to. Time zone names
+are English, where a zone has a name rather than an offset.
 
 There is one realm per runtime: `$262.createRealm` has nothing to return, so
 the four test262 variants that need a second realm are skipped along with the

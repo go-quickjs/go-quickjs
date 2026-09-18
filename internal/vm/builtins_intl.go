@@ -87,7 +87,13 @@ func (r *Runtime) buildIntl() *Object {
 		case "numberingSystem":
 			values = []string{"latn"}
 		case "timeZone":
-			values = []string{"UTC"}
+			// The ones this machine can actually load, which is all of them
+			// where the zone files are there and none where they are not.
+			for _, zone := range icu.Zones() {
+				if _, err := time.LoadLocation(zone); err == nil {
+					values = append(values, zone)
+				}
+			}
 		case "unit":
 			values = nil
 		default:
@@ -579,7 +585,7 @@ func (r *Runtime) initDateTimeFormat(intl *Object) {
 // when there was none.
 func (r *Runtime) dateArgument(o *dateOptions, v Value) (time.Time, error) {
 	if v.IsUndefined() {
-		return r.timeAt(r.now(), o.utc), nil
+		return o.at(r.now()), nil
 	}
 	n, err := r.toNumber(v)
 	if err != nil {
@@ -588,7 +594,7 @@ func (r *Runtime) dateArgument(o *dateOptions, v Value) (time.Time, error) {
 	if math.IsNaN(n) || math.Abs(n) > 8.64e15 {
 		return time.Time{}, r.throwRangeError("that is not a date this can format")
 	}
-	return r.timeAt(n, o.utc), nil
+	return o.at(n), nil
 }
 
 // dateOptionsFrom reads the arguments a DateTimeFormat is made with. defaults
@@ -612,14 +618,21 @@ func (r *Runtime) dateOptionsFrom(args []Value, defaults map[string]string) (*da
 	switch {
 	case zone == "":
 		// The machine's own zone, which is the one a Date is written in.
-		o.utc = false
+		o.zone = r.location()
 		o.timeZone = r.localZoneName()
 	case isUTCName(zone):
-		o.utc = true
+		o.zone = time.UTC
 		o.timeZone = "UTC"
 	default:
-		return nil, r.throwRangeError(
-			"this runtime knows only UTC and the machine's own zone, not %s", zone)
+		// Any zone the machine has the data for. Loading it reads the zone
+		// files the operating system keeps, or the copy a host embedded by
+		// importing time/tzdata; a script cannot reach either.
+		name := canonicalZone(zone)
+		loc, err := time.LoadLocation(name)
+		if err != nil {
+			return nil, r.throwRangeError("there is no such time zone here: %s", zone)
+		}
+		o.zone, o.timeZone = loc, name
 	}
 
 	if o.dateStyle, err = r.stringOption(options, "dateStyle", "",
@@ -730,7 +743,7 @@ func adjustClock(pattern string, hour12 bool) string {
 			b.WriteByte('H')
 		case c == 'H' && hour12:
 			b.WriteByte('h')
-		case c == 'a' && !hour12:
+		case (c == 'a' || c == 'B' || c == 'b') && !hour12:
 			// The day period goes, and whatever space was in front of it.
 			s := b.String()
 			b.Reset()
@@ -741,7 +754,8 @@ func adjustClock(pattern string, hour12 bool) string {
 	}
 	out := b.String()
 	letters := patternLettersOf(out)
-	if hour12 && strings.ContainsRune(letters, 'h') && !strings.ContainsRune(letters, 'a') {
+	if hour12 && strings.ContainsRune(letters, 'h') &&
+		!strings.ContainsAny(letters, "aBb") {
 		out += " a"
 	}
 	return out
@@ -763,6 +777,31 @@ func patternLettersOf(pattern string) string {
 		}
 	}
 	return b.String()
+}
+
+// canonicalZone writes a zone name the way the zone files spell it, so that a
+// tag written in any case finds its zone: america/new_york is New York.
+func canonicalZone(zone string) string {
+	parts := strings.Split(zone, "/")
+	for i, part := range parts {
+		var b strings.Builder
+		upper := true
+		for j := 0; j < len(part); j++ {
+			c := part[j]
+			switch {
+			case upper && c >= 'a' && c <= 'z':
+				b.WriteByte(c - ('a' - 'A'))
+			case !upper && c >= 'A' && c <= 'Z':
+				b.WriteByte(c + ('a' - 'A'))
+			default:
+				b.WriteByte(c)
+			}
+			// A new word starts after a separator, and GMT+5 is left alone.
+			upper = c == '_' || c == '-' || c == '/'
+		}
+		parts[i] = b.String()
+	}
+	return strings.Join(parts, "/")
 }
 
 func isUTCName(zone string) bool {

@@ -49,13 +49,14 @@ type extracted struct {
 
 // localeData is one locale as it was read.
 type localeData struct {
-	Tag        string `json:"tag"`
-	Numbering  string `json:"numbering"`
-	Calendar   string `json:"calendar"`
-	Hour12     bool   `json:"hour12"`
-	DayPeriods []string
-	Eras       []string
-	Names      struct {
+	Tag         string `json:"tag"`
+	Numbering   string `json:"numbering"`
+	Calendar    string `json:"calendar"`
+	Hour12      bool   `json:"hour12"`
+	DayPeriods  []string
+	HourPeriods []string
+	Eras        []string
+	Names       struct {
 		Months, MonthsShort, MonthsNarrow []string
 		MonthsAlone, MonthsAloneShort     []string
 		Days, DaysShort, DaysNarrow       []string
@@ -255,6 +256,45 @@ func run() error {
 	}
 	fmt.Fprintf(&b, "}\n\n")
 
+	// The time zones: which ones there are, and what they are called where
+	// they are called anything but an offset.
+	zones, err := readZones(filepath.Join(filepath.Dir(script), "zones.json"))
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(&b, "// zoneNames is what a zone is called at a given offset, in English:\n")
+	fmt.Fprintf(&b, "// the short form and the long one, keyed by the zone and the offset\n")
+	fmt.Fprintf(&b, "// in minutes. A zone that is only ever called an offset is not here.\n")
+	fmt.Fprintf(&b, "var zoneNames = map[string]string{\n")
+	for _, zone := range sortedZoneKeys(zones.Names) {
+		// Each zone as offset=short|long items, which is small enough to read
+		// and cheap enough to split when it is wanted.
+		var items []string
+		for _, offset := range sortedIntKeys(zones.Names[zone]) {
+			name := zones.Names[zone][strconv.Itoa(offset)]
+			items = append(items, fmt.Sprintf("%d=%s|%s", offset, name.Short, name.Long))
+		}
+		fmt.Fprintf(&b, "\t%q: %q,\n", zone, strings.Join(items, ";"))
+	}
+	fmt.Fprintf(&b, "}\n\n")
+
+	fmt.Fprintf(&b, "// zoneAliases are the other names a zone goes by: Asia/Kolkata and\n")
+	fmt.Fprintf(&b, "// Asia/Calcutta are one place, and the names are filed under one of them.\n")
+	fmt.Fprintf(&b, "var zoneAliases = map[string]string{\n")
+	for _, name := range sortedStringKeys(zones.Aliases) {
+		fmt.Fprintf(&b, "\t%q: %q,\n", name, zones.Aliases[name])
+	}
+	fmt.Fprintf(&b, "}\n\n")
+
+	fmt.Fprintf(&b, "// zoneList is every time zone this data knows of, which is what\n")
+	fmt.Fprintf(&b, "// supportedValuesOf answers with -- filtered by the ones this machine\n")
+	fmt.Fprintf(&b, "// can actually load.\n")
+	fmt.Fprintf(&b, "var zoneList = [...]string{\n")
+	for _, zone := range zones.Zones {
+		fmt.Fprintf(&b, "\t%q,\n", zone)
+	}
+	fmt.Fprintf(&b, "}\n\n")
+
 	fmt.Fprintf(&b, "// currencyDigits is how many decimal places a currency is written with,\n")
 	fmt.Fprintf(&b, "// where that is not the usual two.\n")
 	fmt.Fprintf(&b, "var currencyDigits = map[string]int8{\n")
@@ -276,6 +316,56 @@ func run() error {
 	}
 	_, err = os.Stdout.Write(pretty)
 	return err
+}
+
+// zoneData is what zones.mjs writes.
+type zoneData struct {
+	Zones   []string          `json:"zones"`
+	Aliases map[string]string `json:"aliases"`
+	Names   map[string]map[string]struct {
+		Short string `json:"short"`
+		Long  string `json:"long"`
+	} `json:"names"`
+}
+
+func readZones(path string) (zoneData, error) {
+	var out zoneData
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return out, fmt.Errorf("the zone names: %w", err)
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return out, fmt.Errorf("the zone names: %w", err)
+	}
+	return out, nil
+}
+
+func sortedZoneKeys(m map[string]map[string]struct {
+	Short string `json:"short"`
+	Long  string `json:"long"`
+}) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortedIntKeys(m map[string]struct {
+	Short string `json:"short"`
+	Long  string `json:"long"`
+}) []int {
+	out := make([]int, 0, len(m))
+	for k := range m {
+		n, err := strconv.Atoi(k)
+		if err != nil {
+			continue
+		}
+		out = append(out, n)
+	}
+	sort.Ints(out)
+	return out
 }
 
 // readAliases reads the tags that share another tag's data.
@@ -387,6 +477,7 @@ func encode(l *localeData) string {
 		strings.Join(l.Eras, itemSep),
 		strings.Join(l.Names.MonthsAlone, itemSep),
 		strings.Join(l.Names.MonthsAloneShort, itemSep),
+		strings.Join(l.HourPeriods, itemSep),
 	}, fieldSep)
 
 	widths := []string{"full", "long", "medium", "short"}

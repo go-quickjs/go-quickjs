@@ -316,7 +316,7 @@ func (r *Runtime) initDateBuiltins() {
 			if err != nil {
 				return Undefined, err
 			}
-			return Str(NewString(o.format(rt.timeAt(t, o.utc)))), nil
+			return Str(NewString(o.format(o.at(t)))), nil
 		})
 	}
 	locale("toLocaleString", map[string]string{

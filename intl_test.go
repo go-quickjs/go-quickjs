@@ -28,11 +28,7 @@ func TestIntlMatchesICU(t *testing.T) {
 	rt := quickjs.New()
 	defer rt.Close()
 
-	// The differences that are expected. Chinese tells the times of day apart
-	// more finely than a morning and an afternoon -- 凌晨 is the small hours,
-	// 晚上 the evening -- and choosing between them needs day-period rules,
-	// which are not carried here.
-	known := []string{"凌晨", "晚上", "中午"}
+	// Nothing is expected to differ.
 
 	var differences []string
 	cases, checked := 0, 0
@@ -72,24 +68,10 @@ func TestIntlMatchesICU(t *testing.T) {
 		t.Fatal("the golden file is empty")
 	}
 
-	// Everything else has to match exactly.
-	var unexpected []string
-	for _, d := range differences {
-		explained := false
-		for _, mark := range known {
-			if strings.Contains(d, mark) {
-				explained = true
-				break
-			}
-		}
-		if !explained {
-			unexpected = append(unexpected, d)
-		}
-	}
-	sort.Strings(unexpected)
-	if len(unexpected) > 0 {
-		t.Errorf("%d of %d cases differ from ICU:\n%s", len(unexpected), cases,
-			strings.Join(unexpected[:min(len(unexpected), 20)], "\n"))
+	sort.Strings(differences)
+	if len(differences) > 0 {
+		t.Errorf("%d of %d cases differ from ICU:\n%s", len(differences), cases,
+			strings.Join(differences[:min(len(differences), 20)], "\n"))
 	}
 	t.Logf("%d of %d cases match ICU exactly (%.2f%%)", checked, cases,
 		100*float64(checked)/float64(cases))
@@ -162,6 +144,26 @@ func TestIntlFormats(t *testing.T) {
 		{`new Date(Date.UTC(2024, 0, 5, 15, 4, 5)).toLocaleDateString("en", {timeZone: "UTC"})`,
 			"1/5/2024"},
 
+		// Time zones, which are the operating system's to know and this to
+		// write: a zone with names of its own, one on the three-quarter hour,
+		// and one whose summer is in January.
+		{`new Intl.DateTimeFormat("en", {timeZone: "America/New_York", dateStyle: "medium",
+		    timeStyle: "short"}).format(Date.UTC(2024, 6, 20, 15, 4))`,
+			"Jul 20, 2024, 11:04 AM"},
+		{`new Intl.DateTimeFormat("en", {timeZone: "America/New_York", hour: "numeric",
+		    timeZoneName: "short"}).format(Date.UTC(2024, 6, 20, 15, 4))`, "11 AM EDT"},
+		{`new Intl.DateTimeFormat("en", {timeZone: "America/New_York", hour: "numeric",
+		    timeZoneName: "long"}).format(Date.UTC(2024, 0, 20, 15, 4))`,
+			"10 AM Eastern Standard Time"},
+		{`new Intl.DateTimeFormat("en", {timeZone: "Pacific/Chatham", timeStyle: "short",
+		    hour12: false}).format(Date.UTC(2024, 6, 20, 0, 0))`, "12:45"},
+		{`new Intl.DateTimeFormat("en", {timeZone: "Australia/Sydney", dateStyle: "short",
+		    timeStyle: "short"}).format(Date.UTC(2024, 0, 20, 15, 4))`, "1/21/24, 2:04 AM"},
+		{`new Intl.DateTimeFormat("en", {timeZone: "america/new_york"}).resolvedOptions().timeZone`,
+			"America/New_York"},
+		{`try { new Intl.DateTimeFormat("en", {timeZone: "Mars/Olympus"}) }
+		  catch (e) { e.constructor.name }`, "RangeError"},
+
 		// Sorting: a run of digits as a number, and a letter without its
 		// accent when that is what was asked for.
 		{`["file10", "file9", "file1"].sort(new Intl.Collator("en", {numeric: true}).compare).join()`,
@@ -176,9 +178,6 @@ func TestIntlFormats(t *testing.T) {
 		{`Intl.NumberFormat.supportedLocalesOf(["de", "xx"]).join()`, "de"},
 		{`Intl.getCanonicalLocales(["EN-us", "de_de"]).join()`, "en-US,de-DE"},
 
-		// A time zone it cannot do is refused rather than guessed at.
-		{`try { new Intl.DateTimeFormat("en", {timeZone: "America/New_York"}) }
-		  catch (e) { e.constructor.name }`, "RangeError"},
 		// And the parts, for a program that lays them out itself.
 		{`JSON.stringify(new Intl.NumberFormat("en", {style: "currency", currency: "EUR"})
 		    .formatToParts(1234.5))`,

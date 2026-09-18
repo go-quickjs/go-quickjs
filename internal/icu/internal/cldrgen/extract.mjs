@@ -63,7 +63,10 @@ function pattern(parts, hour12) {
       case "month": out += monthLetters(part.value); break;
       case "day": out += part.value.length === 2 ? "dd" : "d"; break;
       case "weekday": out += weekdayLetters(part.value); break;
-      case "dayPeriod": out += "a"; break;
+      // B is the flexible day period -- the small hours, the evening -- and a
+      // is the plain one, morning or afternoon. Which a locale writes is a
+      // fact about the locale, not about the hour being written.
+      case "dayPeriod": out += currentNames.flexible ? "B" : "a"; break;
       case "hour": out += (hour12 ? "h" : "H").repeat(part.value.length === 2 ? 2 : 1); break;
       case "minute": out += part.value.length === 2 ? "mm" : "m"; break;
       case "second": out += part.value.length === 2 ? "ss" : "s"; break;
@@ -527,13 +530,29 @@ function relativeData(locale) {
 function extract(locale) {
   const names = dateNames(locale);
   currentNames = names;
+
   const resolved = new Intl.DateTimeFormat(locale).resolvedOptions();
   const hour12 = new Intl.DateTimeFormat(locale, {timeStyle: "short"})
     .formatToParts(SAMPLE).some(p => p.type === "dayPeriod");
 
-  const styled = (options) => pattern(
-    new Intl.DateTimeFormat(locale, {timeZone: "UTC", ...options}).formatToParts(SAMPLE),
-    hour12);
+  // Reading one pattern: what it produces for the sample, with the day period
+  // written as the letter this pattern actually uses. A locale that names the
+  // parts of the day uses the plain morning-or-afternoon form in some of its
+  // patterns and the finer one in others, and what tells them apart is whether
+  // the name changes between an hour in the small hours and one in the
+  // morning.
+  const styled = (options) => {
+    const at = (hour) => new Intl.DateTimeFormat(locale, {timeZone: "UTC", ...options})
+      .formatToParts(new Date(Date.UTC(2024, 0, 5, hour, 4, 5)));
+    const period = (parts) => {
+      const found = parts.find(p => p.type === "dayPeriod");
+      return found ? found.value : undefined;
+    };
+    const early = period(at(1));
+    const morning = period(at(9));
+    currentNames.flexible = early !== undefined && early !== morning;
+    return pattern(at(9), hour12);
+  };
 
   const dates = {}, times = {}, both = {}, glue = {};
   for (const style of ["full", "long", "medium", "short"]) {  // eslint-disable-line
@@ -605,6 +624,18 @@ function extract(locale) {
   const plain = (text) => (text || "").replace(/\u202f/g, " ");
   const dayPeriods = [plain(dayPeriod(SAMPLE)) || "AM",
                       plain(dayPeriod(SAMPLE_PM)) || "PM"];
+
+  // What this locale calls each hour of the day, where it calls them anything
+  // beyond morning and afternoon: Chinese has six names for the parts of a
+  // day, and writes the one the hour falls in.
+  const byHour = Array.from({length: 24}, (_, hour) => {
+    const parts = new Intl.DateTimeFormat(locale, {timeStyle: "short", timeZone: "UTC"})
+      .formatToParts(new Date(Date.UTC(2024, 0, 5, hour, 4)));
+    const found = parts.find(p => p.type === "dayPeriod");
+    return found ? plain(found.value) : "";
+  });
+  const distinct = new Set(byHour.filter(name => name !== ""));
+  const hourPeriods = distinct.size > 2 ? byHour : [];
   const era = (date) => new Intl.DateTimeFormat(locale, {era: "short", year: "numeric", timeZone: "UTC"})
     .formatToParts(date).filter(p => p.type === "era").map(p => p.value)[0] || "";
 
@@ -614,7 +645,7 @@ function extract(locale) {
     calendar: resolved.calendar,
     hour12,
     names,
-    dayPeriods,
+    dayPeriods, hourPeriods,
     eras: [era(new Date(Date.UTC(-500, 0, 1))), era(SAMPLE)],
     dates, times, both, glue, skeletons,
     numbers: numberData(locale),

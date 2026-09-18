@@ -22,9 +22,12 @@
 // not here falls back to English -- which is what Resolve reports, so that
 // resolvedOptions can say what was really used.
 //
-// One thing it does not carry: the finer day periods of Chinese and Japanese
-// -- the small hours, the evening -- are not distinguished, only morning and
-// afternoon.
+// The time zones are the operating system's: the names here are what a zone is
+// called in English, where it is called anything but an offset from Greenwich,
+// and the arithmetic is Go's time package reading the zone files. A name in
+// another language would take four hundred zones in four hundred languages,
+// which is several megabytes; an offset in the right language is better than a
+// name in the wrong one.
 //
 // The plural rules are stored as answers rather than as arithmetic: a hundred
 // entries for the small counts, a hundred for what the last two digits say,
@@ -84,6 +87,10 @@ type Locale struct {
 	// what it calls the two eras.
 	DayPeriods [2]string
 	Eras       [2]string
+	// HourPeriods is what it calls each hour of the day, where it has more to
+	// say than morning and afternoon: Chinese distinguishes the small hours,
+	// the early morning, noon and the evening. Empty where it does not.
+	HourPeriods []string
 	// Hour12 says whether a time is written on a twelve-hour clock here.
 	Hour12 bool
 
@@ -290,6 +297,45 @@ func Tags() []string {
 	return out
 }
 
+// ZoneName is what a time zone is called at a given offset, in English: the
+// short form and the long one.
+//
+// A zone that is only ever called an offset from Greenwich -- which is most of
+// them outside the Americas -- answers with nothing, and the caller writes the
+// offset. The names are English because a name in the wrong language is worse
+// than an offset in the right one, and four hundred zones in four hundred
+// languages is several megabytes.
+func ZoneName(zone string, offsetMinutes int) (short, long string) {
+	entry, ok := zoneNames[zone]
+	if !ok {
+		// The same place under its other name.
+		if other, ok := zoneAliases[zone]; ok {
+			entry, ok = zoneNames[other]
+			if !ok {
+				return "", ""
+			}
+		} else {
+			return "", ""
+		}
+	}
+	want := strconv.Itoa(offsetMinutes) + "="
+	for _, item := range strings.Split(entry, ";") {
+		if !strings.HasPrefix(item, want) {
+			continue
+		}
+		short, long, _ = strings.Cut(item[len(want):], "|")
+		return short, long
+	}
+	return "", ""
+}
+
+// Zones lists the time zones the data knows of.
+func Zones() []string {
+	out := make([]string, len(zoneList))
+	copy(out, zoneList[:])
+	return out
+}
+
 // Currencies lists the currencies that have a symbol here, which is what
 // supportedValuesOf is asking about.
 func Currencies() []string {
@@ -444,6 +490,9 @@ func decode(tag, blob string) *Locale {
 		l.Eras = [2]string{eras[0], eras[1]}
 	}
 	l.MonthsAlone, l.MonthsAloneShort = list(8), list(9)
+	if periods := list(10); len(periods) == 24 {
+		l.HourPeriods = periods
+	}
 	if l.MonthsAlone == nil {
 		l.MonthsAlone, l.MonthsAloneShort = l.Months, l.MonthsShort
 	}

@@ -98,6 +98,32 @@ for (const locale of LOCALES) {
   }
 }
 
+// --- time zones ------------------------------------------------------------
+
+// A zone from each shape of the problem: one with names of its own, ones on
+// the half hour and the three-quarter hour, one that changes in the southern
+// summer, and one that does not change at all.
+const ZONES = ["America/New_York", "Europe/Paris", "Asia/Tokyo", "Asia/Kolkata",
+               "Australia/Sydney", "Australia/Eucla", "Pacific/Chatham",
+               "America/Sao_Paulo", "Africa/Nairobi", "Europe/London"];
+
+for (const zone of ZONES) {
+  for (const when of MOMENTS) {
+    for (const options of [
+      {dateStyle: "medium", timeStyle: "medium"},
+      {dateStyle: "full", timeStyle: "long"},
+      {hour: "numeric", minute: "2-digit", timeZoneName: "short"},
+      {hour: "numeric", timeZoneName: "long"},
+      {year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit"},
+    ]) {
+      const withZone = {timeZone: zone, ...options};
+      const source =
+        `new Intl.DateTimeFormat("en", ${q(withZone)}).format(${when})`;
+      add(source, new Intl.DateTimeFormat("en", withZone).format(when));
+    }
+  }
+}
+
 // --- plurals, lists and relative times -------------------------------------
 
 for (const locale of LOCALES) {

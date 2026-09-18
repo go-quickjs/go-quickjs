@@ -39,6 +39,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	// The time zone database, so that a script can format a date in any zone
+	// on any machine, including one that keeps no zone files of its own.
+	_ "time/tzdata"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
 	"github.com/go-quickjs/go-quickjs/stdlib"

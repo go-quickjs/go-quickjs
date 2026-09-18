@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -22,9 +23,9 @@ type dateOptions struct {
 	locale    *icu.Locale
 	requested string
 
-	// utc says the fields are read in UTC rather than in the machine's zone,
-	// which are the only two zones there are here.
-	utc      bool
+	// zone is where the fields are read: UTC, the machine's own, or whichever
+	// one was asked for by name.
+	zone     *time.Location
 	timeZone string
 	hour12   bool
 	// hourSet says the clock was chosen by the caller rather than by the
@@ -47,6 +48,18 @@ type dateOptions struct {
 type datePiece struct {
 	kind  string
 	value string
+}
+
+// at is an instant read in this format's zone.
+func (o *dateOptions) at(ms float64) time.Time {
+	zone := o.zone
+	if zone == nil {
+		zone = time.UTC
+	}
+	// The same arithmetic Date uses, so that a date formats as the instant it
+	// compares as: milliseconds since the epoch, put in a zone.
+	whole := math.Floor(ms / 1000)
+	return time.Unix(int64(whole), int64((ms-whole*1000))*1e6).In(zone)
 }
 
 func (o *dateOptions) format(t time.Time) string {
@@ -206,14 +219,31 @@ func (o *dateOptions) field(push func(kind, value string), t time.Time, letter b
 	case 'S':
 		ms := t.Nanosecond() / 1e6
 		push("fractionalSecond", pad(ms, n)[:min(n, 3)])
-	case 'a', 'b', 'B':
+	case 'a':
 		if t.Hour() < 12 {
 			push("dayPeriod", l.DayPeriods[0])
 			return
 		}
 		push("dayPeriod", l.DayPeriods[1])
-	case 'z', 'Z', 'O', 'v', 'V', 'X', 'x':
-		push("timeZoneName", o.zoneName(t))
+	case 'b', 'B':
+		// The part of the day this hour falls in, where the language names
+		// them: the small hours are not the morning.
+		if len(l.HourPeriods) == 24 {
+			if name := l.HourPeriods[t.Hour()]; name != "" {
+				push("dayPeriod", name)
+				return
+			}
+		}
+		if t.Hour() < 12 {
+			push("dayPeriod", l.DayPeriods[0])
+			return
+		}
+		push("dayPeriod", l.DayPeriods[1])
+	case 'z', 'v':
+		push("timeZoneName", o.zoneName(t, n >= 4 || o.timeZoneName == "long"))
+	case 'Z', 'O', 'V', 'X', 'x':
+		_, offset := t.Zone()
+		push("timeZoneName", offsetName(offset))
 	case 'Q', 'q':
 		quarter := (int(t.Month())-1)/3 + 1
 		push("literal", "Q"+strconv.Itoa(quarter))
@@ -227,13 +257,29 @@ func (o *dateOptions) field(push func(kind, value string), t time.Time, letter b
 	}
 }
 
-// zoneName is what the zone is called: UTC when that is what was asked for,
-// and the offset otherwise, since a zone here has no name of its own.
-func (o *dateOptions) zoneName(t time.Time) string {
-	if o.utc {
+// zoneName is what the zone is called at this instant: the name it has in
+// English where it has one, and the offset from Greenwich otherwise -- which
+// is what most zones outside the Americas are called anyway.
+func (o *dateOptions) zoneName(t time.Time, long bool) string {
+	if o.timeZone == "UTC" {
 		return "UTC"
 	}
 	_, offset := t.Zone()
+	// A name only where the language it is in is the language being written.
+	if strings.HasPrefix(o.locale.Tag, "en") {
+		short, full := icu.ZoneName(o.timeZone, offset/60)
+		if long && full != "" {
+			return full
+		}
+		if !long && short != "" {
+			return short
+		}
+	}
+	return offsetName(offset)
+}
+
+// offsetName is what a zone with no name of its own is called.
+func offsetName(offset int) string {
 	if offset == 0 {
 		return "GMT"
 	}
@@ -343,6 +389,9 @@ func (o *dateOptions) patternFor() string {
 	}
 	if o.era != "" && !strings.ContainsRune(patternLettersOf(pattern), 'G') {
 		pattern += " G"
+	}
+	if o.timeZoneName != "" && !strings.ContainsAny(patternLettersOf(pattern), "zZvVOXx") {
+		pattern += " z"
 	}
 	// The locale's pattern says what order the fields go in; the options say
 	// how wide each one is written, and those are the caller's to choose.
