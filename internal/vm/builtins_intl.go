@@ -68,6 +68,7 @@ func (r *Runtime) buildIntl() *Object {
 	r.initDisplayNames(intl)
 	r.initRelativeTimeFormat(intl)
 	r.initSegmenter(intl)
+	r.initDurationFormat(intl)
 
 	r.defMethod(intl, "getCanonicalLocales", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		tags, err := rt.requestedLocales(arg(args, 0))
@@ -654,11 +655,11 @@ func (r *Runtime) initNumberFormat(intl *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		x, err := rt.toNumber(arg(args, 0))
+		d, special, err := rt.numberArgument(arg(args, 0))
 		if err != nil {
 			return Undefined, err
 		}
-		pieces := o.parts(x)
+		pieces := o.valueParts(d, special)
 		out := make([]Value, len(pieces))
 		for i, piece := range pieces {
 			out[i] = Obj(rt.partObject(piece.kind, piece.value))

@@ -75,7 +75,6 @@ var unsupportedFeatures = map[string]string{
 	"ShadowRealm":                   "no shadow realms",
 	"regexp-duplicate-named-groups": "no duplicate named groups",
 	"json-parse-with-source":        "no JSON source access",
-	"Intl.DurationFormat":           "no internationalization API",
 	"legacy-regexp":                 "no legacy RegExp statics",
 	"error-stack-accessor":          "Error stack is an own data property",
 	"immutable-arraybuffer":         "no immutable ArrayBuffers",
@@ -129,9 +128,6 @@ var knownDifferences = map[string]string{
 	// for most of them.
 	"intl402/DateTimeFormat/prototype/formatRange/en-US.js":        "interval patterns",
 	"intl402/DateTimeFormat/prototype/formatRangeToParts/en-US.js": "interval patterns",
-
-	// Intl.DurationFormat, which is not implemented.
-	"intl402/DurationFormat/prototype/resolvedOptions/resolved-numbering-system-unicode-extensions-and-options.js": "duration format",
 
 	// The codes a time zone or a subdivision goes by inside a tag, which are a
 	// place run together with a country and cannot be worked out from the name

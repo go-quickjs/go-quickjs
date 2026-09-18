@@ -291,6 +291,19 @@ func TestIntlFormats(t *testing.T) {
 		{`new Intl.Segmenter("en", {granularity: "sentence"}).resolvedOptions().granularity`,
 			"sentence"},
 
+		// How long something took, which is a list of measurements or a
+		// reading of a clock.
+		{`new Intl.DurationFormat("en").format({hours: 1, minutes: 46, seconds: 40})`,
+			"1 hr, 46 min, 40 sec"},
+		{`new Intl.DurationFormat("en", {style: "long"})
+		    .format({years: 1, months: 2, days: 3})`, "1 year, 2 months, 3 days"},
+		{`new Intl.DurationFormat("en", {style: "digital"})
+		    .format({hours: 1, minutes: 46, seconds: 40})`, "1:46:40"},
+		{`new Intl.DurationFormat("en", {style: "digital"})
+		    .format({seconds: 1, milliseconds: 500})`, "0:00:01.5"},
+		{`new Intl.DurationFormat("fr", {style: "long"})
+		    .format({hours: 1, minutes: 46})`, "1\u00a0heure et 46 minutes"},
+
 		// And the parts, for a program that lays them out itself.
 		{`JSON.stringify(new Intl.NumberFormat("en", {style: "currency", currency: "EUR"})
 		    .formatToParts(1234.5))`,
