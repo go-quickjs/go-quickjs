@@ -28,12 +28,10 @@
 // puts its own letters, whether a capital comes first, and the letters it
 // writes as two characters.
 //
-// The time zones are the operating system's: the names here are what a zone is
-// called in English, where it is called anything but an offset from Greenwich,
-// and the arithmetic is Go's time package reading the zone files. A name in
-// another language would take four hundred zones in four hundred languages,
-// which is several megabytes; an offset in the right language is better than a
-// name in the wrong one.
+// Time-zone arithmetic comes from Go's copy of the operating system zone
+// files. Localized CLDR names live in compact dictionaries here, including a
+// historical metazone timeline that is decoded only when an older date needs
+// it. Missing names fall back to a localized offset from Greenwich.
 //
 // The plural rules are stored as answers rather than as arithmetic: a hundred
 // entries for the small counts, a hundred for what the last two digits say,
@@ -46,14 +44,12 @@
 package icu
 
 import (
-	"bytes"
-	"compress/flate"
-	"encoding/base64"
-	"io"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 // Locale is everything known about one locale.
@@ -416,12 +412,32 @@ func unpack() []string {
 }
 
 // inflate reads one of the compressed tables.
-func inflate(text string) (string, error) {
-	raw, err := base64.StdEncoding.DecodeString(text)
-	if err != nil {
-		return "", err
+func inflate(packed []byte) (string, error) {
+	return inflateSize(packed, 0)
+}
+
+var (
+	packedDecoderOnce sync.Once
+	packedDecoder     *zstd.Decoder
+	packedDecoderErr  error
+)
+
+// inflateSize reserves the known output size for large generated tables.
+// The decoder itself is initialized lazily so a program that never uses Intl
+// pays no startup cost for locale data.
+func inflateSize(packed []byte, size int) (string, error) {
+	packedDecoderOnce.Do(func() {
+		packedDecoder, packedDecoderErr = zstd.NewReader(nil,
+			zstd.WithDecoderConcurrency(1))
+	})
+	if packedDecoderErr != nil {
+		return "", packedDecoderErr
 	}
-	out, err := io.ReadAll(flate.NewReader(bytes.NewReader(raw)))
+	var destination []byte
+	if size > 0 {
+		destination = make([]byte, 0, size)
+	}
+	out, err := packedDecoder.DecodeAll(packed, destination)
 	if err != nil {
 		return "", err
 	}

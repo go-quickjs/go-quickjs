@@ -1,6 +1,7 @@
 package icu
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,11 +15,9 @@ import (
 // them and are called an offset from Greenwich instead, which is itself
 // written differently from language to language.
 //
-// The engine carries the seasonal names in every language, because a date
-// written out ends with one and a German program should not be told its clock
-// is on Central European Standard Time. The names that do not depend on the
-// time of year are three times the size and are only ever reached by asking
-// for them by name, so they come with the intldata package.
+// The engine carries all six names because Intl.DateTimeFormat is part of the
+// core API. Historical names have their own transition timeline: ICU's old
+// standard/daylight classification does not always agree with Go's tzdb.
 
 // ZoneNaming is what a zone is called in one language. Any of these may be
 // empty, which means that language calls the zone an offset from Greenwich.
@@ -35,8 +34,6 @@ type ZoneNaming struct {
 //
 // A zone nobody has named is all empty, and so is one in a language the data
 // says nothing about, which leaves the caller to write the offset instead.
-// The names that only intldata carries are answered in English until it is
-// imported, since a name in the wrong language still says which zone it is.
 func ZoneNamesIn(locale, zone string) ZoneNaming {
 	zone = namedZone(zone)
 	english := zoneNames[zone]
@@ -61,6 +58,28 @@ func ZoneNamesIn(locale, zone string) ZoneNaming {
 	return out
 }
 
+// ZoneNamesAt is what Intl calls a zone at an exact instant. Historical
+// metazones and ICU's historical standard/daylight classification can differ
+// from the modern family returned by ZoneNamesIn. The boolean is false when
+// the modern family should be used.
+func ZoneNamesAt(locale, zone string, unixMillis int64) (ZoneNaming, bool) {
+	// The generated history ends where the modern 2025 name table begins.
+	// Avoid inflating the historical payload for the overwhelmingly common
+	// case of formatting current and future dates.
+	if unixMillis >= 1735689600000 { // 2025-01-01T00:00:00Z
+		return ZoneNaming{}, false
+	}
+	return historicalNames.entry(locale, namedZone(zone), unixMillis)
+}
+
+// LegacyZoneNameAt is the localized long name used in Date.prototype's
+// non-Intl strings. unixMillis must be in V8's directly representable window
+// from the Unix epoch through signed-32-bit Unix time; callers map other
+// instants to an equivalent year before asking.
+func LegacyZoneNameAt(locale, zone string, unixMillis int64) (string, bool) {
+	return legacyNames.entry(locale, namedZone(zone), unixMillis)
+}
+
 // ZoneName is what a zone is called in English, for standard time or for
 // summer time.
 func ZoneName(zone string, daylight bool) (short, long string) {
@@ -74,6 +93,10 @@ func ZoneName(zone string, daylight bool) (short, long string) {
 // namedZone is the zone the names are filed under: Asia/Kolkata and
 // Asia/Calcutta are one place, and Greenwich goes by half a dozen names.
 func namedZone(zone string) string {
+	switch zone {
+	case "Greenwich", "Etc/Greenwich", "Etc/GMT0", "Etc/GMT+0", "Etc/GMT-0":
+		return "Greenwich"
+	}
 	if _, ok := zoneNames[zone]; ok {
 		return zone
 	}
@@ -105,17 +128,251 @@ func piece(text string, sep byte, i int) string {
 	return text
 }
 
-// RegisterZoneNames installs what the zones are called where the name does
-// not depend on the time of year. The intldata package calls it; nothing else
-// should.
-func RegisterZoneNames(packed string) { genericNames.packed = packed }
-
 var (
-	seasonNames = zoneTable{packed: zoneSeasonPacked}
-	// The names that do not turn with the seasons arrive with intldata, or
-	// not at all.
-	genericNames zoneTable
+	seasonNames     = zoneTable{packed: zoneSeasonPacked}
+	genericNames    = zoneTable{packed: zoneGenericPacked}
+	historicalNames = zoneHistoryTable{packed: zoneHistoryPacked, size: zoneHistorySize}
+	legacyNames     = zoneLegacyTable{packed: zoneLegacyPacked}
 )
+
+type zonePeriod struct {
+	from   int64
+	record int
+}
+
+type zoneHistoryTable struct {
+	packed     []byte
+	size       int
+	once       sync.Once
+	periods    map[string][]zonePeriod
+	blocks     map[string]int
+	rows       int
+	columns    int
+	dictionary []string
+	matrices   string
+}
+
+type zoneLegacyTable struct {
+	packed  []byte
+	once    sync.Once
+	changes map[string][]int64
+	names   zoneTable
+}
+
+func (l *zoneLegacyTable) entry(locale, zone string, unixMillis int64) (string, bool) {
+	l.load()
+	entry, ok := l.names.entry(locale, zone)
+	if !ok && locale != "en" {
+		entry, ok = l.names.entry("en", zone)
+	}
+	if !ok {
+		return "", false
+	}
+	second := unixMillis / 1000
+	changes := l.changes[zone]
+	slot := sort.Search(len(changes), func(i int) bool { return changes[i] > second }) & 1
+	return field(entry, slot), true
+}
+
+func (l *zoneLegacyTable) load() {
+	l.once.Do(func() {
+		text, err := inflate(l.packed)
+		if err != nil {
+			return
+		}
+		sections := strings.SplitN(text, "\n\n", 4)
+		if len(sections) < 4 {
+			return
+		}
+		l.changes = make(map[string][]int64)
+		for _, line := range strings.Split(sections[0], "\n") {
+			zone, encoded, ok := strings.Cut(line, "=")
+			if !ok {
+				continue
+			}
+			if encoded == "" {
+				l.changes[zone] = nil
+				continue
+			}
+			for _, item := range strings.Split(encoded, ",") {
+				at, err := strconv.ParseInt(item, 10, 64)
+				if err == nil {
+					l.changes[zone] = append(l.changes[zone], at)
+				}
+			}
+		}
+		l.names.group = numbered(sections[1])
+		l.names.block = numbered(sections[2])
+		l.names.rows = strings.Split(sections[3], "\n")
+	})
+}
+
+func (h *zoneHistoryTable) entry(locale, zone string, unixMillis int64) (ZoneNaming, bool) {
+	h.load()
+	periods := h.periods[zone]
+	if len(periods) == 0 {
+		return ZoneNaming{}, false
+	}
+	at := sort.Search(len(periods), func(i int) bool { return periods[i].from > unixMillis }) - 1
+	if at < 0 || periods[at].record < 0 {
+		return ZoneNaming{}, false
+	}
+	block, ok := h.blocks[locale]
+	if !ok {
+		base, _, cut := strings.Cut(locale, "-")
+		if cut {
+			block, ok = h.blocks[base]
+		}
+	}
+	if !ok && locale != "en" {
+		block, ok = h.blocks["en"]
+	}
+	if !ok || block >= h.rows || periods[at].record >= h.columns {
+		return ZoneNaming{}, false
+	}
+	cell := block*h.columns + periods[at].record
+	name := func(matrix int) string {
+		index := (matrix*h.rows*h.columns + cell) * 3
+		if index+3 > len(h.matrices) {
+			return ""
+		}
+		id := int(h.matrices[index]) |
+			int(h.matrices[index+1])<<8 |
+			int(h.matrices[index+2])<<16
+		if id >= len(h.dictionary) {
+			return ""
+		}
+		return h.dictionary[id]
+	}
+	long, short := name(0), name(1)
+	return ZoneNaming{
+		LongStandard:  long,
+		LongDaylight:  long,
+		ShortStandard: short,
+		ShortDaylight: short,
+		LongGeneric:   name(2),
+		ShortGeneric:  name(3),
+	}, true
+}
+
+func (h *zoneHistoryTable) load() {
+	h.once.Do(func() {
+		text, err := inflateSize(h.packed, h.size)
+		if err != nil || !strings.HasPrefix(text, "QJZH\x01") {
+			return
+		}
+		reader := zoneHistoryReader{text: text[5:]}
+		zoneCount, ok := reader.uvarint()
+		if !ok {
+			return
+		}
+		h.periods = make(map[string][]zonePeriod)
+		for range zoneCount {
+			zone, ok := reader.string()
+			if !ok {
+				return
+			}
+			periodCount, ok := reader.uvarint()
+			if !ok {
+				return
+			}
+			periods := make([]zonePeriod, 0, periodCount)
+			for range periodCount {
+				from, ok := reader.varint()
+				if !ok {
+					return
+				}
+				record, ok := reader.uvarint()
+				if !ok {
+					return
+				}
+				periods = append(periods, zonePeriod{from: from, record: int(record) - 1})
+			}
+			h.periods[zone] = periods
+		}
+		blockCount, ok := reader.uvarint()
+		if !ok {
+			return
+		}
+		h.blocks = make(map[string]int, blockCount)
+		for range blockCount {
+			locale, ok := reader.string()
+			if !ok {
+				return
+			}
+			block, ok := reader.uvarint()
+			if !ok {
+				return
+			}
+			h.blocks[locale] = int(block)
+		}
+		rows, ok := reader.uvarint()
+		if !ok {
+			return
+		}
+		columns, ok := reader.uvarint()
+		if !ok {
+			return
+		}
+		h.rows, h.columns = int(rows), int(columns)
+		dictionaryCount, ok := reader.uvarint()
+		if !ok {
+			return
+		}
+		dictionary, ok := reader.string()
+		if !ok {
+			return
+		}
+		h.dictionary = strings.Split(dictionary, "\x00")
+		if uint64(len(h.dictionary)) != dictionaryCount {
+			h.dictionary = nil
+			return
+		}
+		h.matrices = reader.text
+	})
+}
+
+type zoneHistoryReader struct {
+	text string
+}
+
+func (r *zoneHistoryReader) uvarint() (uint64, bool) {
+	var value uint64
+	for i := 0; i < 10 && i < len(r.text); i++ {
+		b := r.text[i]
+		if b < 0x80 {
+			if i == 9 && b > 1 {
+				return 0, false
+			}
+			r.text = r.text[i+1:]
+			return value | uint64(b)<<uint(7*i), true
+		}
+		value |= uint64(b&0x7f) << uint(7*i)
+	}
+	return 0, false
+}
+
+func (r *zoneHistoryReader) varint() (int64, bool) {
+	encoded, ok := r.uvarint()
+	if !ok {
+		return 0, false
+	}
+	value := int64(encoded >> 1)
+	if encoded&1 != 0 {
+		value = ^value
+	}
+	return value, true
+}
+
+func (r *zoneHistoryReader) string() (string, bool) {
+	length, ok := r.uvarint()
+	if !ok || length > uint64(len(r.text)) {
+		return "", false
+	}
+	value := r.text[:length]
+	r.text = r.text[length:]
+	return value, true
+}
 
 // zoneTable is one of the two tables of names, unpacked when something first
 // asks for a language that is in it.
@@ -125,7 +382,7 @@ var (
 // megabytes of names into one. English is in neither table: it is a map in
 // the source, so a program that formats in English unpacks nothing.
 type zoneTable struct {
-	packed string
+	packed []byte
 	once   sync.Once
 	group  map[string]int
 	block  map[string]int
@@ -135,10 +392,12 @@ type zoneTable struct {
 // entry is what a language calls a zone, and whether that language is in this
 // table at all.
 func (t *zoneTable) entry(locale, zone string) (string, bool) {
-	if t.packed == "" {
+	if len(t.packed) == 0 && t.group == nil {
 		return "", false
 	}
-	t.load()
+	if t.group == nil {
+		t.load()
+	}
 	at, ok := t.group[zone]
 	if !ok {
 		return "", false
@@ -198,11 +457,19 @@ func numbered(text string) map[string]int {
 	return out
 }
 
-// OffsetName writes an offset from Greenwich the way a language writes one:
+// OffsetName writes an offset from Greenwich the way a language writes one.
+// It takes minutes for the Date built-ins, whose legacy strings always write
+// offsets at minute precision.
+func OffsetName(locale string, offsetMinutes int, long bool) string {
+	return OffsetNameSeconds(locale, offsetMinutes*60, long)
+}
+
+// OffsetNameSeconds writes an offset from Greenwich the way a language writes one:
 // GMT-05:00 in English, UTC−05:00 in French, ‎−۰۵:۰۰ گرینویچ in Persian. The
 // long form pads the hour to two digits and the short one does not, and the
-// short one leaves off a whole hour's zero minutes.
-func OffsetName(locale string, offsetMinutes int, long bool) string {
+// short one leaves off a whole hour's zero minutes. Historical offsets may
+// also have seconds, which use the locale's minute separator once more.
+func OffsetNameSeconds(locale string, offsetSeconds int, long bool) string {
 	form := zoneOffsetForms[0]
 	if at, ok := zoneOffsetForm[locale]; ok {
 		form = zoneOffsetForms[at]
@@ -217,10 +484,12 @@ func OffsetName(locale string, offsetMinutes int, long bool) string {
 		digits = "0123456789"
 	}
 
-	minutes, negative := offsetMinutes, false
-	if minutes < 0 {
-		minutes, negative = -minutes, true
+	seconds, negative := offsetSeconds, false
+	if seconds < 0 {
+		seconds, negative = -seconds, true
 	}
+	minutes := seconds / 60
+	second := seconds % 60
 	// The four templates are the long form and the short one, each on either
 	// side of Greenwich; the short form has a fifth and sixth for a whole
 	// number of hours, which it writes without the minutes.
@@ -230,9 +499,9 @@ func OffsetName(locale string, offsetMinutes int, long bool) string {
 		at = 1
 	case long:
 		at = 0
-	case minutes%60 != 0 && negative:
+	case (minutes%60 != 0 || second != 0) && negative:
 		at = 3
-	case minutes%60 != 0:
+	case minutes%60 != 0 || second != 0:
 		at = 2
 	case negative:
 		at = 5
@@ -240,6 +509,9 @@ func OffsetName(locale string, offsetMinutes int, long bool) string {
 		at = 4
 	}
 	template := piece(forms, ';', at)
+	if second != 0 {
+		template = offsetSecondsTemplate(template)
+	}
 
 	var b strings.Builder
 	b.Grow(len(template) + 4)
@@ -258,10 +530,25 @@ func OffsetName(locale string, offsetMinutes int, long bool) string {
 			writeDigits(&b, minutes/60, long, digits)
 		case "1":
 			writeDigits(&b, minutes%60, true, digits)
+		case "2":
+			writeDigits(&b, second, true, digits)
 		}
 		template = after
 	}
 	return b.String()
+}
+
+// offsetSecondsTemplate extends an hour-and-minute GMT template with seconds.
+// CLDR uses the same separator between every adjacent time field; keeping the
+// insertion before any suffix also handles forms such as "{0}:{1} GMT".
+func offsetSecondsTemplate(template string) string {
+	hour := strings.Index(template, "{0}")
+	minute := strings.Index(template, "{1}")
+	if hour < 0 || minute < hour+3 {
+		return template
+	}
+	separator := template[hour+3 : minute]
+	return template[:minute+3] + separator + "{2}" + template[minute+3:]
 }
 
 // writeDigits writes a number in the digits a language counts in, padded to

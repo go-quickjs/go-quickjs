@@ -78,16 +78,14 @@ provide: see [Conformance](#conformance) for the measurement and
 resizable ArrayBuffers, `using` declarations, and the newer proposals test262
 tracks.
 
-Of `Intl`, every API is there; what is missing is data. A time zone is named
-in the language being written in -- `new Date().toString()` ends with
-`(Mitteleuropäische Normalzeit)` on a German machine -- but the names that do
-not turn with the seasons, which `timeZoneName: "longGeneric"` asks for, are
-English until `intldata` is imported. ICU reaches further back than the engine
-does: a zone that has since been renamed is called what it is called now, so a
-date from before 1970 may name its zone differently. Sorting follows the
-Unicode algorithm with each language's own tailoring, but not the orderings
-that are a whole script's worth of data — Chinese and Japanese order their
-characters by sound or by stroke, and those sort by code point here.
+Of `Intl`, every API is there; what is missing is some optional display data.
+Time-zone names, including generic and historical names, are built in and are
+written in the requested language. `new Date().toString()` likewise ends with
+the local name -- `(Mitteleuropäische Normalzeit)` on a German machine.
+Sorting follows the Unicode algorithm with each language's own tailoring, but
+not the orderings that are a whole script's worth of data — Chinese and
+Japanese order their characters by sound or by stroke, and those sort by code
+point here.
 `Intl.Segmenter` follows the Unicode breaking rules, but not the word lists ICU
 consults for the scripts written without spaces: a run of Chinese, Thai, Lao,
 Khmer or Burmese comes back as one word rather than as several. A date written
@@ -357,7 +355,7 @@ loop.Run(ctx)     // timers, and work that finished on other goroutines
 |---|---|
 | Always | `console`, `URL`, `TextEncoder`/`TextDecoder`, `atob`/`btoa`, `structuredClone`, `performance`, `crypto` (hashing, HMAC, PBKDF2, HKDF, `subtle`), `Blob`, `File`, `FormData`, `URLPattern`, `AbortController`, `Buffer`, the web's streams, `CompressionStream`, and the `path`, `events`, `util`, `assert`, `buffer`, `crypto`, `zlib`, `stream/web`, `url`, `querystring`, `string_decoder` modules |
 | `Loop` | `setTimeout`, `setInterval`, `queueMicrotask`, and the `timers`, `timers/promises` modules |
-| import `intldata` | the names of every language, region, script and currency, and what a time zone is called where the name does not turn with the seasons, in every language — `Intl.DisplayNames` answers in English without it |
+| import `intldata` | the names of every language, region, script and currency — `Intl.DisplayNames` answers in English without it |
 | `FS` | the `fs` module, sync and promise halves, `createReadStream`/`createWriteStream`, confined to `Root` |
 | `Process` | `process.argv`, `env`, `cwd`, `stdout`, `exit` — what the host chooses to say |
 | `OS` | the `os` module |

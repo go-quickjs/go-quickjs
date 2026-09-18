@@ -71,16 +71,45 @@ func (r *Runtime) location() *time.Location {
 // written in, and the offset from Greenwich where it has none.
 func (r *Runtime) zoneLabel(t time.Time) string {
 	locale := r.formatLocale()
-	names := icu.ZoneNamesIn(locale, r.localZoneName())
-	name := names.LongStandard
-	if t.IsDST() {
-		name = names.LongDaylight
+	zone := r.localZoneName()
+	// The legacy Date string preserves Greenwich's identity, while Intl treats
+	// GMT spellings as aliases of UTC. Keep that legacy distinction here rather
+	// than changing the shared Intl zone-name lookup.
+	switch zone {
+	case "GMT", "Etc/GMT", "GMT0", "GMT+0", "GMT-0",
+		"Greenwich", "Etc/Greenwich", "Etc/GMT0", "Etc/GMT+0", "Etc/GMT-0":
+		zone = "Greenwich"
 	}
-	if name == "" {
+	name, ok := icu.LegacyZoneNameAt(locale, zone, dateZoneNameTime(t))
+	if !ok || name == "" {
 		_, offset := t.Zone()
 		name = icu.OffsetName(locale, offset/60, true)
 	}
 	return "(" + name + ")"
+}
+
+// dateZoneNameTime follows V8's legacy Date-name rule. Its platform date APIs
+// only accept signed 32-bit Unix times, so instants outside that range are
+// mapped to a year with the same leap-year shape and starting weekday before
+// the label is chosen. The offset itself still comes from the original instant.
+func dateZoneNameTime(t time.Time) int64 {
+	const maxEpochMilliseconds = int64(math.MaxInt32) * 1000
+	ms := t.UnixMilli()
+	if ms >= 0 && ms <= maxEpochMilliseconds {
+		return ms
+	}
+
+	u := t.UTC()
+	year := u.Year()
+	jan1 := time.Date(year, time.January, 1, 0, 0, 0, 0, time.UTC)
+	recentYear := 1967 + int(jan1.Weekday())*12
+	if isLeapYear(year) {
+		recentYear = 1956 + int(jan1.Weekday())*12
+	}
+	equivalentYear := 2008 + (recentYear+3*28-2008)%28
+	equivalent := time.Date(equivalentYear, u.Month(), u.Day(),
+		u.Hour(), u.Minute(), u.Second(), u.Nanosecond(), time.UTC)
+	return equivalent.UnixMilli()
 }
 
 // now returns the current time value, from the host's clock if one was

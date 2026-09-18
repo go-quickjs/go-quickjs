@@ -17,12 +17,12 @@ import (
 // registered is the full set, if a host asked for it.
 var (
 	registeredMu sync.RWMutex
-	registered   string
+	registered   []byte
 )
 
 // RegisterDisplayNames gives the engine the names of things in every language.
 // It is called by the intldata package, and by nothing else.
-func RegisterDisplayNames(packed string) {
+func RegisterDisplayNames(packed []byte) {
 	registeredMu.Lock()
 	registered = packed
 	registeredMu.Unlock()
@@ -115,7 +115,7 @@ func displayNamesFor(tag string) map[string]string {
 func fullDisplay() string {
 	registeredMu.RLock()
 	defer registeredMu.RUnlock()
-	if registered == "" {
+	if len(registered) == 0 {
 		return ""
 	}
 	text, err := inflate(registered)

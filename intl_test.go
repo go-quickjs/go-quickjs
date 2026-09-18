@@ -264,6 +264,63 @@ func TestIntlFormats(t *testing.T) {
 		{`new Intl.DateTimeFormat("en", {timeZone: "America/New_York", hour: "numeric",
 		    timeZoneName: "long"}).format(Date.UTC(2024, 0, 20, 15, 4))`,
 			"10 AM Eastern Standard Time"},
+		{`["GMT", "Etc/GMT", "Greenwich", "Etc/Greenwich", "Etc/GMT0",
+		    "Etc/GMT+0", "Etc/GMT-0"].map(timeZone =>
+		    new Intl.DateTimeFormat("en", {timeZone, timeZoneName: "long", hour: "numeric"})
+		      .formatToParts(0).find(p => p.type === "timeZoneName").value).join("|")`,
+			"Coordinated Universal Time|Coordinated Universal Time|" +
+				"Greenwich Mean Time|Greenwich Mean Time|Greenwich Mean Time|" +
+				"Greenwich Mean Time|Greenwich Mean Time"},
+		// Before standard time, some zones were an offset down to the second.
+		// Paris used local mean time, nine minutes and twenty-one seconds east
+		// of Greenwich, at the start of 1900.
+		{`new Intl.DateTimeFormat("en", {timeZone: "Europe/Paris", timeZoneName: "shortOffset"})
+		    .formatToParts(Date.UTC(1900, 0, 1)).find(p => p.type === "timeZoneName").value`,
+			"GMT+0:09:21"},
+		{`new Intl.DateTimeFormat("en", {timeZone: "Europe/Paris", timeZoneName: "longOffset"})
+		    .formatToParts(Date.UTC(1900, 0, 1)).find(p => p.type === "timeZoneName").value`,
+			"GMT+00:09:21"},
+		{`new Intl.DateTimeFormat("fr", {timeZone: "Europe/Paris", timeZoneName: "longOffset"})
+		    .formatToParts(Date.UTC(1900, 0, 1)).find(p => p.type === "timeZoneName").value`,
+			"UTC+00:09:21"},
+		{`[Date.UTC(1971, 9, 31, 1, 59, 59, 999), Date.UTC(1971, 9, 31, 2)]
+		    .map(when => new Intl.DateTimeFormat("en", {timeZone: "Europe/London",
+		      timeZoneName: "long"}).formatToParts(when)
+		      .find(p => p.type === "timeZoneName").value).join("|")`,
+			"GMT+01:00|Greenwich Mean Time"},
+		{`[Date.UTC(1976, 8, 25, 23, 59, 59, 999), Date.UTC(1976, 8, 26)]
+		    .map(when => new Intl.DateTimeFormat("en", {timeZone: "Europe/Lisbon",
+		      timeZoneName: "long"}).formatToParts(when)
+		      .find(p => p.type === "timeZoneName").value).join("|")`,
+			"Central European Standard Time|Western European Standard Time"},
+		{`new Intl.DateTimeFormat("de", {timeZone: "America/New_York",
+		    timeZoneName: "longGeneric"}).formatToParts(Date.UTC(2025, 0, 15))
+		    .find(p => p.type === "timeZoneName").value`,
+			"Nordamerikanische Ostküstenzeit"},
+		{`new Intl.DateTimeFormat("en", {timeZone: "Asia/Almaty",
+		    timeZoneName: "longGeneric"}).formatToParts(Date.UTC(2025, 0, 15))
+		    .find(p => p.type === "timeZoneName").value`,
+			"Kazakhstan Time"},
+		{`[1980, 1985, 1991].map(year => new Intl.DateTimeFormat("en", {
+		    timeZone: "Asia/Tehran", timeZoneName: "longGeneric"})
+		    .formatToParts(Date.UTC(year, 0, 15))
+		    .find(p => p.type === "timeZoneName").value).join("|")`,
+			"Iran Time|Iran Standard Time|Iran Time"},
+		{`[1979, 1980].map(year => new Intl.DateTimeFormat("de", {
+		    timeZone: "Europe/Paris", timeZoneName: "longGeneric"})
+		    .formatToParts(Date.UTC(year, 6, 15))
+		    .find(p => p.type === "timeZoneName").value).join("|")`,
+			"Mitteleuropäische Zeit (Frankreich)|Mitteleuropäische Zeit"},
+		{`[2010, 2015].map(year => new Intl.DateTimeFormat("ar", {
+		    timeZone: "Europe/Kyiv", timeZoneName: "longGeneric"})
+		    .formatToParts(Date.UTC(year, 6, 15))
+		    .find(p => p.type === "timeZoneName").value).join("|")`,
+			"توقيت شرق أوروبا|توقيت شرق أوروبا (كييف)"},
+		// Manaus also checks that a short form with zero minutes still keeps
+		// its seconds rather than choosing the whole-hour template.
+		{`new Intl.DateTimeFormat("en", {timeZone: "America/Manaus", timeZoneName: "shortOffset"})
+		    .formatToParts(Date.UTC(1900, 0, 1)).find(p => p.type === "timeZoneName").value`,
+			"GMT-4:00:04"},
 		{`new Intl.DateTimeFormat("en", {timeZone: "Pacific/Chatham", timeStyle: "short",
 		    hour12: false}).format(Date.UTC(2024, 6, 20, 0, 0))`, "12:45"},
 		{`new Intl.DateTimeFormat("en", {timeZone: "Australia/Sydney", dateStyle: "short",
@@ -468,6 +525,27 @@ func TestDateStringsNameTheZone(t *testing.T) {
 		{"en-US", "UTC",
 			"Fri Jan 05 2024 00:00:00 GMT+0000 (Coordinated Universal Time)",
 			"Fri Jul 05 2024 00:00:00 GMT+0000 (Coordinated Universal Time)"},
+		{"en-US", "GMT",
+			"Fri Jan 05 2024 00:00:00 GMT+0000 (Greenwich Mean Time)",
+			"Fri Jul 05 2024 00:00:00 GMT+0000 (Greenwich Mean Time)"},
+		{"de-DE", "Etc/GMT",
+			"Fri Jan 05 2024 00:00:00 GMT+0000 (Mittlere Greenwich-Zeit)",
+			"Fri Jul 05 2024 00:00:00 GMT+0000 (Mittlere Greenwich-Zeit)"},
+		{"fr-FR", "Greenwich",
+			"Fri Jan 05 2024 00:00:00 GMT+0000 (heure moyenne de Greenwich)",
+			"Fri Jul 05 2024 00:00:00 GMT+0000 (heure moyenne de Greenwich)"},
+		{"ja-JP", "Etc/Greenwich",
+			"Fri Jan 05 2024 00:00:00 GMT+0000 (グリニッジ標準時)",
+			"Fri Jul 05 2024 00:00:00 GMT+0000 (グリニッジ標準時)"},
+		{"en-US", "GMT0",
+			"Fri Jan 05 2024 00:00:00 GMT+0000 (Greenwich Mean Time)",
+			"Fri Jul 05 2024 00:00:00 GMT+0000 (Greenwich Mean Time)"},
+		{"en-US", "Etc/GMT+0",
+			"Fri Jan 05 2024 00:00:00 GMT+0000 (Greenwich Mean Time)",
+			"Fri Jul 05 2024 00:00:00 GMT+0000 (Greenwich Mean Time)"},
+		{"en-US", "Etc/UTC",
+			"Fri Jan 05 2024 00:00:00 GMT+0000 (Coordinated Universal Time)",
+			"Fri Jul 05 2024 00:00:00 GMT+0000 (Coordinated Universal Time)"},
 		{"fr-FR", "Etc/GMT+5",
 			"Thu Jan 04 2024 19:00:00 GMT-0500 (UTC−05:00)",
 			"Thu Jul 04 2024 19:00:00 GMT-0500 (UTC−05:00)"},
@@ -506,6 +584,71 @@ func TestDateStringsNameTheZone(t *testing.T) {
 				t.Errorf("%s in %s toTimeString\n got  %q\n want %q",
 					tc.locale, tc.zone, got, want)
 			}
+		}
+		rt.Close()
+	}
+}
+
+func TestDateStringsFollowNodeLegacyZoneNames(t *testing.T) {
+	for _, tc := range []struct {
+		locale string
+		zone   string
+		at     int64
+		want   string
+	}{
+		{"en-US", "Europe/Paris", -5363409600000,
+			"Wed Jan 15 1800 12:09:21 GMT+0009 (Central European Standard Time)"},
+		{"en-US", "Europe/Paris", -5347771200000,
+			"Tue Jul 15 1800 12:09:21 GMT+0009 (Central European Summer Time)"},
+		{"fr-FR", "Europe/Paris", -5347771200000,
+			"Tue Jul 15 1800 12:09:21 GMT+0009 (heure d’été d’Europe centrale)"},
+		{"en-US", "America/New_York", -787665600000,
+			"Mon Jan 15 1945 08:00:00 GMT-0400 (Eastern Standard Time)"},
+		{"en-US", "Europe/Kyiv", -772027200000,
+			"Sun Jul 15 1945 15:00:00 GMT+0300 (Eastern European Summer Time)"},
+		{"en-US", "Asia/Shanghai", 648043200000,
+			"Sun Jul 15 1990 21:00:00 GMT+0900 (China Daylight Time)"},
+		// ICU keeps the permanent post-2026 western-Canada offsets classified
+		// as daylight time, while Go's zone files classify them as standard.
+		{"en-US", "America/Vancouver", 1894708800000,
+			"Tue Jan 15 2030 05:00:00 GMT-0700 (Pacific Daylight Time)"},
+		// Outside signed-32-bit Unix time V8 chooses the name in an equivalent
+		// 2008-2035 year, while retaining the original instant's offset.
+		{"en-US", "America/Vancouver", 7259371200000,
+			"Wed Jan 15 2200 05:00:00 GMT-0700 (Pacific Daylight Time)"},
+		{"en-US", "America/Coyhaique", 1721044800000,
+			"Mon Jul 15 2024 08:00:00 GMT-0400 (GMT-03:00)"},
+		{"en-US", "Africa/Casablanca", -5363409600000,
+			"Wed Jan 15 1800 11:29:40 GMT-0030 (GMT+00:00)"},
+		// Some localized ICU names contain their own opening parenthesis; Node
+		// still appends only one final closing parenthesis.
+		{"wo", "America/Chicago", 1719792000000,
+			"Sun Jun 30 2024 19:00:00 GMT-0500 (CDT (waxtu bëccëgu sàntaraal)"},
+	} {
+		zone, err := time.LoadLocation(tc.zone)
+		if err != nil {
+			t.Skipf("no zone files: %v", err)
+		}
+		rt := quickjs.New(quickjs.WithLocale(tc.locale))
+		rt.SetTimeZone(zone)
+		v, err := rt.Eval(`new Date(` + strconv.FormatInt(tc.at, 10) + `).toString()`)
+		if err != nil {
+			rt.Close()
+			t.Fatal(err)
+		}
+		if got := v.String(); got != tc.want {
+			t.Errorf("%s in %s at %d\n got  %q\n want %q",
+				tc.locale, tc.zone, tc.at, got, tc.want)
+		}
+		v, err = rt.Eval(`new Date(` + strconv.FormatInt(tc.at, 10) + `).toTimeString()`)
+		if err != nil {
+			rt.Close()
+			t.Fatal(err)
+		}
+		wantTime := tc.want[len("Wed Jan 15 1800 "):]
+		if got := v.String(); got != wantTime {
+			t.Errorf("%s in %s at %d toTimeString\n got  %q\n want %q",
+				tc.locale, tc.zone, tc.at, got, wantTime)
 		}
 		rt.Close()
 	}

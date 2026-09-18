@@ -464,6 +464,9 @@ func (o *dateOptions) zoneName(t time.Time, style string) string {
 		style = o.timeZoneName
 	}
 	names := icu.ZoneNamesIn(o.locale.Tag, o.timeZone)
+	if historical, ok := icu.ZoneNamesAt(o.locale.Tag, o.timeZone, t.UnixMilli()); ok {
+		names = historical
+	}
 	var name string
 	switch style {
 	case "long":
@@ -491,7 +494,7 @@ func (o *dateOptions) zoneName(t time.Time, style string) string {
 // offsetName is what a zone with no name of its own is called, in the
 // language being written: GMT-05:00 in English, UTC−05:00 in French.
 func (o *dateOptions) offsetName(offset int, long bool) string {
-	return icu.OffsetName(o.locale.Tag, offset/60, long)
+	return icu.OffsetNameSeconds(o.locale.Tag, offset, long)
 }
 
 func pad2(n int) string {
