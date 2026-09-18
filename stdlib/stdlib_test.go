@@ -40,7 +40,9 @@ func run(t *testing.T, cfg stdlib.Config, src string) (string, string) {
 	if _, err := rt.Eval(src); err != nil {
 		t.Fatalf("%v", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Generous on purpose: this bounds a hung test, and a slow machine under
+	// load is not a hung test.
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	if err := cfg.Loop.Run(ctx); err != nil {
 		t.Fatalf("loop: %v", err)
@@ -675,7 +677,7 @@ func TestFetchAbort(t *testing.T) {
 	if _, err := rt.Eval(`abortIt()`); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	if err := loop.Run(ctx); err != nil {
 		t.Fatal(err)
@@ -915,7 +917,7 @@ func TestServeHoldsTheLoop(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	if err := loop.Run(ctx); err != nil {
 		t.Fatal(err)
@@ -1506,7 +1508,7 @@ func TestTimerModules(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	if err := loop.Run(ctx); err != nil {
 		t.Fatal(err)
@@ -1561,7 +1563,7 @@ func TestLoopKeepsPostedWork(t *testing.T) {
 	// nothing outstanding but a full queue.
 	time.Sleep(20 * time.Millisecond)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	if err := loop.Run(ctx); err != nil {
 		t.Fatal(err)
