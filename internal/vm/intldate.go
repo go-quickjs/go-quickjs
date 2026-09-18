@@ -755,10 +755,19 @@ func (o *dateOptions) patternFor() string {
 	// The fractions of a second, which go after the seconds themselves.
 	if o.fractional > 0 {
 		digits := strings.Repeat("S", o.fractional)
+		// The mark before them is the one this language writes a decimal
+		// point with, or the one the numbering system asked for brings.
+		point := l.Decimal
+		if o.digits != "" && o.digits != l.Numbering {
+			if own, _, ok := icu.NumberingMarks(o.digits); ok {
+				point = own
+			}
+		}
+		point = "'" + point + "'"
 		if at := strings.Index(pattern, "ss"); at >= 0 {
-			pattern = pattern[:at+2] + "." + digits + pattern[at+2:]
+			pattern = pattern[:at+2] + point + digits + pattern[at+2:]
 		} else if at := strings.IndexByte(pattern, 's'); at >= 0 {
-			pattern = pattern[:at+1] + "." + digits + pattern[at+1:]
+			pattern = pattern[:at+1] + point + digits + pattern[at+1:]
 		} else {
 			pattern += digits
 		}
@@ -875,6 +884,12 @@ func (o *dateOptions) applyWidths(pattern string) string {
 	if o.weekday != "" {
 		want['E'] = weekdayLetters(o.weekday)
 	}
+	if o.minute == "2-digit" {
+		want['m'] = "mm"
+	}
+	if o.second == "2-digit" {
+		want['s'] = "ss"
+	}
 	letter := "H"
 	if o.hour12 {
 		letter = "h"
@@ -883,18 +898,15 @@ func (o *dateOptions) applyWidths(pattern string) string {
 	case o.hour == "2-digit":
 		want['h'] = letter + letter
 		want['H'] = want['h']
-	case o.hour == "numeric" && !(o.hourSet && o.hour12 != o.locale.Hour12):
-		// A numeric hour is written as one digit, unless the clock itself was
-		// changed: switching a twelve-hour locale to the other clock takes
-		// that locale's own pattern for it, padding and all.
+	case o.hour == "numeric" && len(want) > 0 &&
+		!(o.hourSet && o.hour12 != o.locale.Hour12):
+		// A numeric hour is written as one digit where something else about
+		// the request differs from what the locale wrote its pattern for; a
+		// request the locale has a pattern for is written the way that
+		// pattern writes it, padding and all. So is a clock the locale does
+		// not keep, since the pattern for it was written for this.
 		want['h'] = letter
 		want['H'] = letter
-	}
-	if o.minute == "2-digit" {
-		want['m'] = "mm"
-	}
-	if o.second == "2-digit" {
-		want['s'] = "ss"
 	}
 	if len(want) == 0 {
 		return pattern

@@ -131,7 +131,6 @@ var knownDifferences = map[string]string{
 	// What an ICU of another version answers. The data here was read from one
 	// ICU and the tests were written against another, and these are the places
 	// where the two disagree: node answers as this does.
-	"intl402/DateTimeFormat/prototype/format/numbering-system.js":             "another ICU",
 	"intl402/DateTimeFormat/prototype/resolvedOptions/hourCycle-default.js":   "another ICU",
 	"intl402/NumberFormat/prototype/format/unit-ja-JP.js":                     "another ICU",
 	"intl402/NumberFormat/prototype/format/unit-zh-TW.js":                     "another ICU",

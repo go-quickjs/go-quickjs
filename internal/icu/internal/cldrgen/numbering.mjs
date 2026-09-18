@@ -21,8 +21,16 @@ for (const name of names) {
   // is left out.
   if (shown.some(d => [...d].length !== 1)) continue;
   const digits = shown.join("");
-  if (digits === "0123456789" && name !== "latn") continue;
-  systems[name] = digits;
+  // The marks that go with those digits: Arabic writes its decimal point and
+  // its thousands mark differently from the way it writes them in Latin
+  // letters.
+  const marks = new Intl.NumberFormat("en-u-nu-" + name)
+    .formatToParts(12345.6);
+  const decimal = marks.find(p => p.type === "decimal");
+  const group = marks.find(p => p.type === "group");
+  const symbols = (decimal ? decimal.value : ".") + (group ? group.value : ",");
+  if (digits === "0123456789" && symbols === ".," && name !== "latn") continue;
+  systems[name] = digits + "\u0001" + symbols;
 }
 
 process.stdout.write(JSON.stringify({icu: process.versions.icu, systems}) + "\n");

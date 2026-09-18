@@ -61,6 +61,18 @@ type numberOptions struct {
 	formatFn *Object
 }
 
+// marks are the decimal point and the thousands mark to write with: the
+// locale's own, unless another numbering system was asked for, which brings
+// its own.
+func (o *numberOptions) marks() (decimal, group string) {
+	if o.digits != "" && o.digits != o.locale.Numbering {
+		if point, thousands, ok := icu.NumberingMarks(o.digits); ok {
+			return point, thousands
+		}
+	}
+	return o.locale.Decimal, o.locale.Group
+}
+
 // numberPiece is one part of a formatted number, in the shape formatToParts
 // hands back.
 type numberPiece struct {
@@ -120,7 +132,6 @@ func (o *numberOptions) wordParts(kind, text string, negative, zero bool) []numb
 
 // decimalParts writes a number that is written as digits.
 func (o *numberOptions) decimalParts(d decimal) []numberPiece {
-	l := o.locale
 	// The sign stays on the number while it is rounded, since half the modes
 	// round by which way is up rather than by which way is away.
 	negative := d.negative
@@ -157,7 +168,8 @@ func (o *numberOptions) decimalParts(d decimal) []numberPiece {
 	zero := d.isZero()
 	pieces := o.groupDigits(whole, compact)
 	if fraction != "" {
-		pieces = append(pieces, numberPiece{"decimal", l.Decimal})
+		point, _ := o.marks()
+		pieces = append(pieces, numberPiece{"decimal", point})
 		pieces = append(pieces, numberPiece{"fraction", fraction})
 	}
 	pieces = append(pieces, tail...)
@@ -586,7 +598,8 @@ func (o *numberOptions) groupDigits(whole string, compact bool) []numberPiece {
 	last := 0
 	for _, cut := range cuts {
 		out = append(out, numberPiece{"integer", string(runes[last:cut])})
-		out = append(out, numberPiece{"group", o.locale.Group})
+		_, thousands := o.marks()
+		out = append(out, numberPiece{"group", thousands})
 		last = cut
 	}
 	out = append(out, numberPiece{"integer", string(runes[last:])})

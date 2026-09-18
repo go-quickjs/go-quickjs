@@ -917,8 +917,28 @@ func decodeRelative(fields []string) map[string]RelativeUnit {
 // other way -- roman numerals, or the Chinese ones written out in words -- has
 // no ten digits and is not here.
 func NumberingDigits(name string) (string, bool) {
-	digits, ok := numberingSystems[name]
-	return digits, ok
+	entry, ok := numberingSystems[name]
+	if !ok {
+		return "", false
+	}
+	digits, _, _ := strings.Cut(entry, "\x01")
+	return digits, true
+}
+
+// NumberingMarks are the decimal point and the thousands mark that go with a
+// numbering system: Arabic writes them differently from the way it writes them
+// in Latin letters.
+func NumberingMarks(name string) (decimal, group string, ok bool) {
+	entry, found := numberingSystems[name]
+	if !found {
+		return "", "", false
+	}
+	_, marks, _ := strings.Cut(entry, "\x01")
+	runes := []rune(marks)
+	if len(runes) != 2 {
+		return "", "", false
+	}
+	return string(runes[0]), string(runes[1]), true
 }
 
 // NumberingSystems lists every way of writing numbers that is ten digits.
