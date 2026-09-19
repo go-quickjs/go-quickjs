@@ -163,7 +163,10 @@ func parseTag(s string) (langTag, bool) {
 func (t *langTag) parseUnicode(body []string) bool {
 	i := 0
 	for i < len(body) && isAttribute(body[i]) {
-		t.attributes = append(t.attributes, strings.ToLower(body[i]))
+		attribute := strings.ToLower(body[i])
+		if !contains(t.attributes, attribute) {
+			t.attributes = append(t.attributes, attribute)
+		}
 		i++
 	}
 	for i < len(body) {
@@ -178,12 +181,13 @@ func (t *langTag) parseUnicode(body []string) bool {
 			i++
 		}
 		k.value = strings.Join(value, "-")
+		duplicate := false
 		for _, seenK := range t.keywords {
-			if seenK.key == k.key {
-				return false
-			}
+			duplicate = duplicate || seenK.key == k.key
 		}
-		t.keywords = append(t.keywords, k)
+		if !duplicate {
+			t.keywords = append(t.keywords, k)
+		}
 	}
 	return len(t.attributes) > 0 || len(t.keywords) > 0
 }
@@ -334,6 +338,42 @@ func (t *langTag) keywordValue(key string) (string, bool) {
 	return "", false
 }
 
+// rawKeywordValue is the spelling Intl.Locale exposes. A key set to true is
+// written without a value and its string-valued getters return the empty
+// string, while boolean consumers use keywordValue above.
+func (t *langTag) rawKeywordValue(key string) (string, bool) {
+	for _, k := range t.keywords {
+		if k.key == key {
+			if k.value == "true" {
+				return "", true
+			}
+			return k.value, true
+		}
+	}
+	return "", false
+}
+
+// setKeyword changes one Unicode extension setting without disturbing the
+// attributes or unrelated settings carried by a Locale.
+func (t *langTag) setKeyword(key, value string) {
+	for i := range t.keywords {
+		if t.keywords[i].key == key {
+			t.keywords[i].value = value
+			return
+		}
+	}
+	t.keywords = append(t.keywords, keyword{key: key, value: value})
+}
+
+func (t langTag) clone() langTag {
+	t.variants = append([]string(nil), t.variants...)
+	t.attributes = append([]string(nil), t.attributes...)
+	t.keywords = append([]keyword(nil), t.keywords...)
+	t.fields = append([]keyword(nil), t.fields...)
+	t.others = append([]string(nil), t.others...)
+	return t
+}
+
 // setKeywords replaces the "u" extension with the settings given, dropping it
 // altogether when there are none. This is what a resolved locale carries: the
 // keys that were asked for and answered, and nothing else.
@@ -401,6 +441,28 @@ func (t *langTag) applyAliases() {
 			t.from, t.fields = kept.from, kept.fields
 			t.others, t.private = kept.others, kept.private
 		}
+	}
+	// A regular grandfathered tag may have acquired another variant. Its old
+	// final word is then parsed as a variant too: art-lojban-fonipa becomes
+	// jbo-fonipa, retaining the additional variant.
+	for i, variant := range t.variants {
+		to, ok := grandfathered[t.language+"-"+variant]
+		if !ok {
+			continue
+		}
+		inner, ok := parseTag(to)
+		if !ok {
+			continue
+		}
+		t.language = inner.language
+		if inner.script != "" {
+			t.script = inner.script
+		}
+		if inner.region != "" {
+			t.region = inner.region
+		}
+		t.variants = append(t.variants[:i], t.variants[i+1:]...)
+		break
 	}
 
 	if to, ok := languages[t.language]; ok {

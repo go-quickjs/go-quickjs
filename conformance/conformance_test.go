@@ -58,7 +58,6 @@ const (
 // does not implement. A test tagged with one is skipped rather than counted as
 // a failure, because it is testing something that was never claimed.
 var unsupportedFeatures = map[string]string{
-	"Intl.Locale":                   "no internationalization API",
 	"Temporal":                      "no Temporal",
 	"Atomics":                       "no shared memory",
 	"Atomics.pause":                 "no shared memory",
@@ -71,7 +70,6 @@ var unsupportedFeatures = map[string]string{
 	"source-phase-imports":          "no source phase imports",
 	"import-defer":                  "no deferred imports",
 	"tail-call-optimization":        "no tail calls",
-	"Intl-enumeration":              "no internationalization API",
 	"ShadowRealm":                   "no shadow realms",
 	"regexp-duplicate-named-groups": "no duplicate named groups",
 	"json-parse-with-source":        "no JSON source access",
@@ -93,10 +91,11 @@ var unsupportedFeatures = map[string]string{
 	"arguments-object":              "",
 }
 
-// knownDifferences is deliberately empty. A newly named difference permits a
-// failure while documenting why; an unlisted failure and a stale entry both
-// break the build.
-var knownDifferences = map[string]string{}
+// A newly named difference permits a failure while documenting why; an
+// unlisted failure and a stale entry both break the build.
+var knownDifferences = map[string]string{
+	"intl402/DateTimeFormat/prototype/resolvedOptions/hourCycle-default.js": "the fixture requires Japanese hour12 to resolve to h11, but current Chrome and Node resolve it to h12",
+}
 
 func TestConformance(t *testing.T) {
 	suite, err := conformance.Open("")

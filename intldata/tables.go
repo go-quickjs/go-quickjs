@@ -4,14 +4,14 @@
 // this engine knows: the languages, the regions, the scripts, the
 // currencies and the parts of a date.
 //
-// Import it for its effect alone, and Intl.DisplayNames answers in the
-// language it was asked in rather than in English:
+// The main quickjs package imports this package so Intl.DisplayNames answers
+// in the language it was asked in. It remains public for compatibility with
+// programs that imported it explicitly:
 //
 //	import _ "github.com/go-quickjs/go-quickjs/intldata"
 //
-// The names are kept in this optional compressed asset so a program
-// that never opens a language picker does not carry the name of every
-// country in every language.
+// The names remain in a separately compressed asset and are decoded one
+// locale at a time on first use.
 package intldata
 
 import (

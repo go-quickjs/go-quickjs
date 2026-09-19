@@ -47,9 +47,15 @@ const SCRIPTS = ["Latn", "Cyrl", "Arab", "Hans", "Hant", "Deva", "Guru", "Beng",
                  "Kore", "Cans", "Mong", "Orya", "Taml", "Telu", "Knda", "Mlym"];
 
 const locales = [];
+const localeSet = new Set();
+const addLocale = (locale) => {
+  if (localeSet.has(locale)) return;
+  localeSet.add(locale);
+  locales.push(locale);
+};
 const aliases = {};
 for (const language of languages) {
-  locales.push(language);
+  addLocale(language);
   const base = fingerprint(language);
   // Which tag each distinct answer was first seen under, so that a second tag
   // with the same answer can point at it instead of repeating it.
@@ -73,7 +79,7 @@ for (const language of languages) {
       continue;
     }
     seen.set(print, tag);
-    locales.push(tag);
+    addLocale(tag);
   }
 }
 

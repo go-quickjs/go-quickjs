@@ -7,8 +7,8 @@ import (
 	_ "github.com/go-quickjs/go-quickjs/intldata"
 )
 
-// With this package imported, Intl.DisplayNames answers in the language it was
-// asked in. Without it, the engine has the English names only.
+// Intl.DisplayNames answers in the requested language. Importing intldata
+// explicitly remains supported even though quickjs now carries it by default.
 func TestDisplayNamesInEveryLanguage(t *testing.T) {
 	rt := quickjs.New()
 	defer rt.Close()

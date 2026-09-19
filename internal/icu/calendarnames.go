@@ -20,8 +20,10 @@ import (
 // falls in.
 type CalendarNames struct {
 	// Months and Eras are indexed by width: long, short, narrow.
-	Months [3]map[string]string
-	Eras   [3][]string
+	Months       [3]map[string]string
+	FormatMonths [3]map[string]string
+	DateMonths   [3]map[string]string
+	Eras         [3][]string
 	// Cycle is what a lunisolar year is called where its years run in a cycle
 	// of sixty rather than counting upwards.
 	Cycle []string
@@ -51,6 +53,37 @@ var (
 	calendarIndex   map[string]map[string]int
 )
 
+// CalendarFormat is the ordering and punctuation a locale uses for one
+// calendar. Time patterns remain locale-wide, but date patterns do not.
+type CalendarFormat struct {
+	DatePatterns [4]string
+	Glue         [4]string
+	Skeletons    map[string]string
+}
+
+// CalendarFormatFor returns the patterns this locale uses for a calendar.
+func (l *Locale) CalendarFormatFor(name string) (*CalendarFormat, bool) {
+	loadCalendarFormats()
+	at, ok := calendarFormatIndex[l.Tag]
+	if !ok {
+		at, ok = calendarFormatIndex["en"]
+		if !ok {
+			return nil, false
+		}
+	}
+	which, ok := at[name]
+	if !ok || which >= len(calendarFormatEntries) {
+		return nil, false
+	}
+	return calendarFormatEntries[which], true
+}
+
+var (
+	calendarFormatOnce    sync.Once
+	calendarFormatEntries []*CalendarFormat
+	calendarFormatIndex   map[string]map[string]int
+)
+
 func loadCalendars() {
 	calendarOnce.Do(func() {
 		text, err := inflate(calendarNames)
@@ -65,6 +98,8 @@ func loadCalendars() {
 			names := &CalendarNames{}
 			for i := range names.Months {
 				names.Months[i] = map[string]string{}
+				names.FormatMonths[i] = map[string]string{}
+				names.DateMonths[i] = map[string]string{}
 			}
 			for _, field := range strings.Split(line, "\x01") {
 				key, value, ok := strings.Cut(field, "\t")
@@ -80,6 +115,18 @@ func loadCalendars() {
 					for _, item := range strings.Split(value, "|") {
 						if number, name, ok := strings.Cut(item, "="); ok {
 							names.Months[width][number] = name
+						}
+					}
+				case 'f':
+					for _, item := range strings.Split(value, "|") {
+						if number, name, ok := strings.Cut(item, "="); ok {
+							names.FormatMonths[width][number] = name
+						}
+					}
+				case 'd':
+					for _, item := range strings.Split(value, "|") {
+						if number, name, ok := strings.Cut(item, "="); ok {
+							names.DateMonths[width][number] = name
 						}
 					}
 				case 'e':
@@ -110,6 +157,54 @@ func loadCalendars() {
 				}
 			}
 			calendarIndex[tag] = at
+		}
+	})
+}
+
+func loadCalendarFormats() {
+	calendarFormatOnce.Do(func() {
+		text, err := inflate(calendarFormats)
+		if err != nil {
+			return
+		}
+		entries, index, _ := strings.Cut(text, "\n\n")
+		for _, line := range strings.Split(entries, "\n") {
+			if line == "" {
+				continue
+			}
+			fields := strings.Split(line, fieldSep)
+			format := &CalendarFormat{}
+			for field, into := range map[int]*[4]string{0: &format.DatePatterns, 1: &format.Glue} {
+				if field >= len(fields) {
+					continue
+				}
+				for i, value := range strings.Split(fields[field], itemSep) {
+					if i < len(into) {
+						into[i] = strings.ReplaceAll(value, "\u202f", " ")
+					}
+				}
+			}
+			format.Skeletons = pairs(fields, 2)
+			for skeleton, pattern := range format.Skeletons {
+				format.Skeletons[skeleton] = strings.ReplaceAll(pattern, "\u202f", " ")
+			}
+			calendarFormatEntries = append(calendarFormatEntries, format)
+		}
+		calendarFormatIndex = map[string]map[string]int{}
+		for _, line := range strings.Split(index, "\n") {
+			tag, rest, ok := strings.Cut(line, "\t")
+			if !ok {
+				continue
+			}
+			at := map[string]int{}
+			for _, field := range strings.Split(rest, "\x01") {
+				if name, which, ok := strings.Cut(field, "="); ok {
+					if n, err := strconv.Atoi(which); err == nil {
+						at[name] = n
+					}
+				}
+			}
+			calendarFormatIndex[tag] = at
 		}
 	})
 }

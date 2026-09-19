@@ -65,32 +65,35 @@ provide: see [Conformance](#conformance) for the measurement and
 | Iterator helpers | `map`, `filter`, `take`, `drop`, `flatMap`, `reduce`, `toArray` and the rest, lazily |
 | Unicode | Full case mappings including the final sigma, all four normalization forms, lone surrogates preserved end to end |
 | Built-ins | `Object`, `Function`, `Array`, `String`, `Number`, `Boolean`, `Symbol`, `BigInt`, `Error`, `Math`, `JSON`, `Date`, `RegExp`, `Map`, `Set`, `Promise`, `Proxy`, `Reflect`, `ArrayBuffer`, `DataView`, typed arrays |
-| Internationalization | `Intl.NumberFormat`, `DateTimeFormat`, `Collator`, `PluralRules`, `ListFormat`, `RelativeTimeFormat`, `DisplayNames`, `Segmenter`, `DurationFormat`, with CLDR data for 379 locales carried in Go |
+| Internationalization | `Intl.Locale`, `NumberFormat`, `DateTimeFormat`, `Collator`, `PluralRules`, `ListFormat`, `RelativeTimeFormat`, `DisplayNames`, `Segmenter`, `DurationFormat`, with CLDR data for 379 locales carried in Go |
 | Weak references | `WeakRef`, `FinalizationRegistry`, `WeakMap`, `WeakSet`, backed by Go's `weak.Pointer` and `runtime.AddCleanup`: a target really is released, and a registry really is called back |
 | Reflection | `Proxy` with every trap and its invariants, `Reflect`, property descriptors, mapped `arguments` |
 | Recent additions | Set operations, `Array.fromAsync`, `Object.groupBy`, `Promise.try`, `RegExp.escape`, `Error.isError`, `Math.sumPrecise`, `Uint8Array` base64 and hex |
 | Eval | Direct `eval` runs in the caller's scope — its variables, `this`, `new.target` and `super`; indirect `eval` runs in global scope |
 | Go interop | Function binding, marshalling, `context.Context` cancellation |
 
+### Internationalization
+
+Every `Intl` API and its locale data are built in. Time-zone names, including
+generic and historical names, are written in the requested language.
+`new Date().toString()` likewise ends with the localized zone name -- for
+example, `(Mitteleuropäische Normalzeit)` in winter and
+`(Mitteleuropäische Sommerzeit)` in summer when using a German locale and a
+Central European time zone.
+
+Sorting follows the Unicode algorithm with each language's tailoring,
+including Chinese pinyin, stroke and zhuyin order, Japanese kana and Han
+order, Korean order, and the named Unihan and search-jamo collations.
+`Intl.Segmenter` carries ICU's word dictionaries for Chinese, Japanese, Thai,
+Lao, Khmer and Burmese. Non-Gregorian calendars carry their own localized
+date layouts, month contexts and era placement rather than borrowing the
+Gregorian layout.
+
 ### Not implemented
 
 `Temporal`, `Atomics`, `SharedArrayBuffer`, `ShadowRealm`, decorators,
 resizable ArrayBuffers, `using` declarations, and the newer proposals test262
 tracks.
-
-Of `Intl`, every API is there; what is missing is some optional display data.
-Time-zone names, including generic and historical names, are built in and are
-written in the requested language. `new Date().toString()` likewise ends with
-the local name -- `(Mitteleuropäische Normalzeit)` on a German machine.
-Sorting follows the Unicode algorithm with each language's own tailoring, but
-not the orderings that are a whole script's worth of data — Chinese and
-Japanese order their characters by sound or by stroke, and those sort by code
-point here.
-`Intl.Segmenter` follows the Unicode breaking rules, but not the word lists ICU
-consults for the scripts written without spaces: a run of Chinese, Thai, Lao,
-Khmer or Burmese comes back as one word rather than as several. A date written
-in a calendar of its own follows the pattern of the common one, so the parts
-may fall in a different order from ICU's in a few languages.
 
 There is one realm per runtime: `$262.createRealm` has nothing to return, so
 the four test262 variants that need a second realm are skipped along with the
@@ -355,7 +358,7 @@ loop.Run(ctx)     // timers, and work that finished on other goroutines
 |---|---|
 | Always | `console`, `URL`, `TextEncoder`/`TextDecoder`, `atob`/`btoa`, `structuredClone`, `performance`, `crypto` (hashing, HMAC, PBKDF2, HKDF, `subtle`), `Blob`, `File`, `FormData`, `URLPattern`, `AbortController`, `Buffer`, the web's streams, `CompressionStream`, and the `path`, `events`, `util`, `assert`, `buffer`, `crypto`, `zlib`, `stream/web`, `url`, `querystring`, `string_decoder` modules |
 | `Loop` | `setTimeout`, `setInterval`, `queueMicrotask`, and the `timers`, `timers/promises` modules |
-| import `intldata` | the names of every language, region, script and currency — `Intl.DisplayNames` answers in English without it |
+| Intl data | names of every language, region, script and currency are built in and decoded one locale at a time |
 | `FS` | the `fs` module, sync and promise halves, `createReadStream`/`createWriteStream`, confined to `Root` |
 | `Process` | `process.argv`, `env`, `cwd`, `stdout`, `exit` — what the host chooses to say |
 | `OS` | the `os` module |
@@ -452,11 +455,12 @@ rt := quickjs.New(quickjs.WithLocale("de-DE"))
 rt.SetTimeZone(time.UTC)   // and the zone its local-time methods use
 ```
 
-Left unset, the runtime takes the language the machine is set to -- `LC_ALL`,
-`LC_MESSAGES` or `LANG` on a Unix machine, and English where none of them says
--- which is what every other engine does, so that a program run twice in the
-same shell is not given two different answers. A server that formats for
-somebody else should set it rather than inherit it.
+Left unset, the runtime takes the language the machine is set to -- the user's
+locale on Windows, `LC_ALL`, `LC_MESSAGES` or `LANG` on a Unix machine, and
+English where none of them says -- which is what every other engine does, so
+that a program run twice in the same environment is not given two different
+answers. A server that formats for somebody else should set it rather than
+inherit it.
 
 Runaway recursion raises a catchable `RangeError` rather than overflowing the
 goroutine stack. Deeply nested source is rejected at parse time for the same

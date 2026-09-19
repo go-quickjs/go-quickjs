@@ -102,11 +102,32 @@ function namesFor(locale, calendar) {
   const out = {};
   for (const width of ["long", "short", "narrow"]) {
     const names = new Intl.DateTimeFormat(tag, {month: width, timeZone: "UTC"});
+    const inDate = new Intl.DateTimeFormat(tag,
+      {month: width, day: "numeric", timeZone: "UTC"});
+    const withYear = new Intl.DateTimeFormat(tag,
+      {year: "numeric", month: width, day: "numeric", timeZone: "UTC"});
     const table = new Map();
+    const formatTable = new Map();
+    const dateTable = new Map();
     DAYS.forEach((day, i) => {
-      if (!table.has(keys[i])) table.set(keys[i], names.format(day));
+      if (!table.has(keys[i])) {
+        const part = names.formatToParts(day).find(p => p.type === "month");
+        if (part) table.set(keys[i], part.value);
+      }
+      if (!formatTable.has(keys[i])) {
+        const part = inDate.formatToParts(day).find(p => p.type === "month");
+        if (part) formatTable.set(keys[i], part.value);
+      }
+      if (!dateTable.has(keys[i])) {
+        const part = withYear.formatToParts(day).find(p => p.type === "month");
+        if (part) dateTable.set(keys[i], part.value);
+      }
     });
     out["m" + width] = [...table].map(([n, name]) => n + "=" + name).join("|");
+    const format = [...formatTable].map(([n, name]) => n + "=" + name).join("|");
+    if (format !== out["m" + width]) out["f" + width] = format;
+    const date = [...dateTable].map(([n, name]) => n + "=" + name).join("|");
+    if (date !== format) out["d" + width] = date;
   }
   // The names a lunisolar year goes by, which run in a cycle of sixty rather
   // than counting upwards.

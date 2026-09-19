@@ -8,11 +8,10 @@ import (
 // What things are called: the languages, the regions, the scripts, the
 // currencies, and the parts of a date.
 //
-// The engine carries the English names, which is a few kilobytes. Every other
-// language is three megabytes, and lives in the intldata package: a host that
-// wants a language picker imports it, and a program that does not never pays
-// for it. Without it, a name asked for in another language is answered in
-// English -- which is what ICU itself does when it has no data for a locale.
+// The engine carries English names in its core table. Every other language is
+// registered from the separately compressed intldata asset and decoded one
+// locale at a time. A name absent from that data falls back to English, as ICU
+// does when it has no data for a locale.
 
 // registered is the full set, if a host asked for it.
 var (
@@ -63,7 +62,23 @@ func DisplayName(locale, kind, code string) (string, bool) {
 			return name, true
 		}
 	}
+	if kind == DisplayCalendar {
+		name, ok := englishCalendarDisplayNames[code]
+		return name, ok
+	}
+	if kind == DisplayCurrency && code == "XCD" {
+		return "Eastern Caribbean Dollar", true
+	}
 	return "", false
+}
+
+// These canonical calendar identifiers have their own DateTimeFormat
+// behavior but CLDR files their display names under a parent calendar.
+var englishCalendarDisplayNames = map[string]string{
+	"ethioaa":          "Ethiopic Amete Alem Calendar",
+	"islamic-civil":    "Hijri Calendar (tabular, civil epoch)",
+	"islamic-tbla":     "Hijri Calendar (tabular, astronomical epoch)",
+	"islamic-umalqura": "Hijri Calendar (Umm al-Qura)",
 }
 
 func language(tag string) string {

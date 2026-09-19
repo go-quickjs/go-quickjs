@@ -592,12 +592,12 @@ type zoneTable struct {
 // entry is what a language calls a zone, and whether that language is in this
 // table at all.
 func (t *zoneTable) entry(locale, zone string) (string, bool) {
-	if len(t.packed) == 0 && t.group == nil {
+	if len(t.packed) == 0 {
 		return "", false
 	}
-	if t.group == nil {
-		t.load()
-	}
+	// Always pass through sync.Once. Checking group first lets another caller
+	// observe it midway through load, before block, rows, and decoded exist.
+	t.load()
 	at, ok := t.group[zone]
 	if !ok {
 		return "", false

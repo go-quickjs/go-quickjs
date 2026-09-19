@@ -42,8 +42,8 @@ type Date struct {
 
 // Calendars lists the ones this engine reckons.
 func Calendars() []string {
-	return []string{"buddhist", "chinese", "coptic", "dangi", "ethiopic",
-		"ethioaa", "gregory", "hebrew", "indian", "islamic-civil",
+	return []string{"buddhist", "chinese", "coptic", "dangi", "ethioaa",
+		"ethiopic", "gregory", "hebrew", "indian", "islamic-civil",
 		"islamic-tbla", "islamic-umalqura", "iso8601",
 		"japanese", "persian", "roc"}
 }

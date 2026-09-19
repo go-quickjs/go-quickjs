@@ -102,6 +102,9 @@ type Locale struct {
 	Months, MonthsShort, MonthsNarrow []string
 	MonthsAlone, MonthsAloneShort     []string
 	Days, DaysShort, DaysNarrow       []string
+	// DaysFormat are the forms used as part of a date. Empty entries fall back
+	// to the corresponding stand-alone weekday names above.
+	DaysFormat, DaysFormatShort, DaysFormatNarrow []string
 	// DayPeriods is what the locale calls the two halves of the day, and Eras
 	// what it calls the two eras.
 	DayPeriods [2]string
@@ -346,8 +349,22 @@ func Tags() []string {
 
 // Zones lists the time zones the data knows of.
 func Zones() []string {
-	out := make([]string, len(zoneList))
-	copy(out, zoneList[:])
+	available := make(map[string]bool, len(zoneList)+27)
+	for _, zone := range zoneList {
+		available[zone] = true
+	}
+	for hours := 1; hours <= 12; hours++ {
+		available["Etc/GMT+"+strconv.Itoa(hours)] = true
+	}
+	for hours := 1; hours <= 14; hours++ {
+		available["Etc/GMT-"+strconv.Itoa(hours)] = true
+	}
+	available["UTC"] = true
+	out := make([]string, 0, len(available))
+	for zone := range available {
+		out = append(out, zone)
+	}
+	sort.Strings(out)
 	return out
 }
 
@@ -363,6 +380,7 @@ func WarmupDateTimeData() {
 			_ = get(tag)
 		}
 		loadCalendars()
+		loadCalendarFormats()
 		loadMonthTables()
 		seasonNames.warmup()
 		genericNames.warmup()
@@ -371,12 +389,26 @@ func WarmupDateTimeData() {
 	})
 }
 
-// Currencies lists the currencies that have a symbol here, which is what
-// supportedValuesOf is asking about.
+// Currencies lists the currencies that have both NumberFormat data and an
+// English DisplayNames entry, which is what supportedValuesOf is asking for.
 func Currencies() []string {
 	l := Resolve("en")
-	out := make([]string, 0, len(l.Currencies))
+	available := make(map[string]bool, len(l.Currencies))
 	for code := range l.Currencies {
+		if _, ok := DisplayName("en", DisplayCurrency, code); ok {
+			available[code] = true
+		}
+	}
+	for key := range displayNamesFor("en") {
+		if len(key) == 4 && strings.HasPrefix(key, DisplayCurrency) {
+			available[key[1:]] = true
+		}
+	}
+	// XCD uses the currency code itself as its compact symbol, so it has no
+	// separate record in either compact table.
+	available["XCD"] = true
+	out := make([]string, 0, len(available))
+	for code := range available {
 		out = append(out, code)
 	}
 	sort.Strings(out)
@@ -594,6 +626,16 @@ func decode(tag, blob string) *Locale {
 		l.HourPeriodsNarrow = periods
 	} else {
 		l.HourPeriodsNarrow = l.HourPeriods
+	}
+	l.DaysFormat, l.DaysFormatShort, l.DaysFormatNarrow = list(12), list(13), list(14)
+	if l.DaysFormat == nil {
+		l.DaysFormat = l.Days
+	}
+	if l.DaysFormatShort == nil {
+		l.DaysFormatShort = l.DaysShort
+	}
+	if l.DaysFormatNarrow == nil {
+		l.DaysFormatNarrow = l.DaysNarrow
 	}
 	if l.MonthsAlone == nil {
 		l.MonthsAlone, l.MonthsAloneShort = l.Months, l.MonthsShort

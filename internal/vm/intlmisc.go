@@ -219,7 +219,8 @@ func (o *collatorOptions) compare(a, b string) int {
 	// language.
 	if a != b {
 		form := "NFC"
-		if o.sensitivity == "case" && !phonebook {
+		turkish := o.locale.Tag == "tr" || strings.HasPrefix(o.locale.Tag, "tr-")
+		if o.sensitivity == "case" && !phonebook && !turkish {
 			// Decomposing makes an accent disappear at the secondary level while
 			// retaining the base letter's case at the tertiary level.
 			form = "NFD"
@@ -238,10 +239,8 @@ func (o *collatorOptions) compare(a, b string) int {
 		return o.locale.ComparePhonebook(a, b, strength, skipAccents,
 			o.caseFirst == "upper", o.numeric)
 	}
-	if o.numeric {
-		return o.locale.CompareNumeric(a, b, strength, skipAccents, o.caseFirst == "upper")
-	}
-	return o.locale.Compare(a, b, strength, skipAccents, o.caseFirst == "upper")
+	return o.locale.CompareCollation(a, b, strength, skipAccents,
+		o.caseFirst == "upper", o.numeric, collation)
 }
 
 // strength is how much of a difference this collator counts, and whether the

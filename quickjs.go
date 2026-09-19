@@ -126,10 +126,10 @@ func WithMaxCallDepth(frames int) Option {
 // write in.
 //
 // The tag is written the way a tag is written -- "de-DE", "zh-Hant-TW". Left
-// unset, the runtime takes the language the machine is set to, which on a Unix
-// machine is LC_ALL, LC_MESSAGES or LANG, and English where none of them says.
-// That is what every other engine does, so that a program run twice in the
-// same shell is not given two different answers.
+// unset, the runtime takes the language the machine is set to: the user's
+// locale on Windows, LC_ALL, LC_MESSAGES or LANG on Unix, and English where
+// none of them says. That is what every other engine does, so that a program
+// run twice in the same environment is not given two different answers.
 func WithLocale(tag string) Option {
 	return func(c *config) { c.locale = tag }
 }

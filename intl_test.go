@@ -29,26 +29,9 @@ func TestIntlMatchesICU(t *testing.T) {
 	rt := quickjs.New()
 	defer rt.Close()
 
-	// What is expected to differ, and why. Each is something the data carried
-	// here does not say; everything else has to match exactly.
-	known := []string{
-		// Chinese and Japanese order their characters by sound or by stroke,
-		// which is a whole ordering of twenty thousand characters rather than
-		// the handful of moves a European alphabet needs.
-		`Collator("ja"`, `Collator("ko"`,
-		// Chinese also orders accents the other way round, which is a
-		// tailoring of the second level rather than the first.
-		`Collator("zh"`,
-		// Thai passes over punctuation and then orders it its own way.
-		`Collator("th"`,
-		// Turkish keeps the dotted and dotless i apart, which takes more than
-		// moving a letter: it splits one letter into two and moves the
-		// capitals across.
-		`Collator("tr"`,
-		// ECMA-402 requires Japanese's forced twelve-hour clock to count
-		// midnight from zero; the ICU that produced the golden file says 12.
-		`DateTimeFormat("ja", {"timeZone":"UTC","hour":"numeric","minute":"2-digit","hour12":true}`,
-	}
+	// What is expected to differ, and why. Everything else has to match
+	// exactly; this is deliberately empty when the corpus agrees in full.
+	known := []string{}
 
 	var differences []string
 	cases, checked := 0, 0
@@ -89,11 +72,13 @@ func TestIntlMatchesICU(t *testing.T) {
 	}
 
 	var unexpected []string
+	seenKnown := make([]bool, len(known))
 	for _, d := range differences {
 		explained := false
-		for _, mark := range known {
+		for i, mark := range known {
 			if strings.Contains(d, mark) {
 				explained = true
+				seenKnown[i] = true
 				break
 			}
 		}
@@ -106,10 +91,15 @@ func TestIntlMatchesICU(t *testing.T) {
 		t.Errorf("%d of %d cases differ from ICU for reasons that are not known:\n%s",
 			len(unexpected), cases, strings.Join(unexpected[:min(len(unexpected), 20)], "\n"))
 	}
-	// The known ones are few, and are meant to stay few.
-	if len(differences) > 40 {
-		t.Errorf("%d cases differ from ICU, which is more than the %d expected",
-			len(differences), 40)
+	for i, seen := range seenKnown {
+		if !seen {
+			t.Errorf("known ICU difference no longer occurs; remove its allowance: %s", known[i])
+		}
+	}
+	// Every allowance above names one exact golden case.
+	if len(differences) > len(known) {
+		t.Errorf("%d cases differ from ICU, which is more than the %d named differences",
+			len(differences), len(known))
 	}
 	t.Logf("%d of %d cases match ICU exactly (%.2f%%)", checked, cases,
 		100*float64(checked)/float64(cases))
@@ -170,6 +160,31 @@ func TestIntlFormats(t *testing.T) {
 		// Thailand counts its years from another era.
 		{`new Intl.DateTimeFormat("th", {dateStyle: "long", timeZone: "UTC"})
 		    .format(Date.UTC(2024, 0, 5))`, "5 มกราคม 2567"},
+		{`new Intl.DateTimeFormat("sc", {calendar: "hebrew", dateStyle: "full",
+		    timeZone: "UTC"}).format(Date.UTC(2024, 0, 5))`,
+			"chenàbura 24 de tevet de su 5784 a.m."},
+		{`new Intl.DateTimeFormat("ksh", {calendar: "buddhist", dateStyle: "full",
+		    timeZone: "UTC"}).format(Date.UTC(2024, 0, 5))`,
+			"Friidaach, 5. Jannewa 2567 BE"},
+		// ICU 78 selects its week-year field for a few locale/calendar
+		// combinations whose formatToParts implementation aborts in Node.
+		{`new Intl.DateTimeFormat("gl", {calendar: "buddhist", dateStyle: "full",
+		    timeZone: "UTC"}).format(Date.UTC(2024, 0, 5))`,
+			"venres, 5 de xaneiro de 2024 BE"},
+		{`new Intl.DateTimeFormat("my", {calendar: "coptic", year: "numeric",
+		    month: "numeric", day: "numeric", timeZone: "UTC"})
+		    .format(Date.UTC(2024, 0, 5))`, "AM ၂၆/၀၄/၁၇၄၀"},
+		{`new Intl.DateTimeFormat("ksh", {calendar: "buddhist", year: "numeric",
+		    month: "numeric", timeZone: "UTC"}).format(Date.UTC(2024, 0, 5))`,
+			"2024-01"},
+		{`new Intl.DateTimeFormat("gl", {calendar: "buddhist", dateStyle: "full",
+		    timeZone: "UTC"}).format(Date.UTC(2016, 0, 1))`,
+			"venres, 1 de xaneiro de 2015 BE"},
+		{`new Intl.DateTimeFormat("my", {calendar: "buddhist", year: "numeric",
+		    month: "numeric", day: "numeric", timeZone: "UTC"})
+		    .format(Date.UTC(2015, 11, 27))`, "BE ၂၇/၁၂/၂၀၁၆"},
+		{`["sc", "ksh"].map(locale => new Intl.DateTimeFormat(locale)
+		    .resolvedOptions().locale).join(",")`, "sc,ksh"},
 
 		// And a calendar may be asked for outright: the Islamic year is
 		// eleven days shorter than this one, the Hebrew year has a
@@ -178,7 +193,23 @@ func TestIntlFormats(t *testing.T) {
 		{`new Intl.DateTimeFormat("en-u-ca-islamic-civil", {dateStyle: "long",
 		    timeZone: "UTC"}).format(Date.UTC(2024, 0, 5))`, "Jumada II 23, 1445 AH"},
 		{`new Intl.DateTimeFormat("en-u-ca-hebrew", {dateStyle: "long",
-		    timeZone: "UTC"}).format(Date.UTC(2024, 0, 5))`, "Tevet 24, 5784 AM"},
+		    timeZone: "UTC"}).format(Date.UTC(2024, 0, 5))`, "24 Tevet 5784"},
+		{`new Intl.DateTimeFormat("en-u-ca-hebrew", {dateStyle: "short",
+		    timeZone: "UTC"}).format(Date.UTC(2024, 0, 5))`, "24 Tevet 5784"},
+		{`new Intl.DateTimeFormat("be-u-ca-buddhist", {month: "long", day: "numeric",
+		    timeZone: "UTC"}).format(Date.UTC(2024, 0, 5))`, "5 студзеня"},
+		{`new Intl.DateTimeFormat("bg-u-ca-buddhist", {dateStyle: "full",
+		    timeZone: "UTC"}).format(Date.UTC(2024, 0, 5))`, "петък, 5 януари 2567 г. BE"},
+		{`new Intl.DateTimeFormat("ccp-u-ca-buddhist", {dateStyle: "short",
+		    timeZone: "UTC"}).format(Date.UTC(2024, 0, 5))`, "𑄻/𑄷/𑄸𑄻𑄼𑄽 BE"},
+		{`new Intl.DateTimeFormat("ff-Adlm-u-ca-buddhist", {dateStyle: "short",
+		    timeZone: "UTC"}).format(Date.UTC(2024, 0, 5))`, "𞥕-𞥑-𞥒𞥕𞥖𞥗 𞤘𞤄"},
+		{`new Intl.DateTimeFormat("dz-u-ca-hebrew", {month: "long", timeZone: "UTC"})
+		    .formatToParts(Date.UTC(2024, 0, 5)).map(p => p.type + "=" + p.value).join("|")`,
+			"literal=སྤྱི་|month=Tevet"},
+		{`new Intl.DateTimeFormat("en-u-ca-chinese", {dateStyle: "full", timeZone: "UTC"})
+		    .format(Date.UTC(2024, 0, 5))`,
+			"Friday, Eleventh Month 24, 2023(gui-mao)"},
 		{`new Intl.DateTimeFormat("ja-u-ca-japanese", {dateStyle: "long",
 		    timeZone: "UTC"}).format(Date.UTC(2024, 0, 5))`, "令和6年1月5日"},
 		{`new Intl.DateTimeFormat("fa-u-ca-persian", {dateStyle: "long",
@@ -188,15 +219,28 @@ func TestIntlFormats(t *testing.T) {
 		{`new Intl.DateTimeFormat("en-u-ca-indian", {year: "numeric",
 		    month: "long", day: "numeric", timeZone: "UTC"})
 		    .format(Date.UTC(2024, 0, 5))`, "Pausa 15, 1945 Śaka"},
+		{`new Intl.DateTimeFormat("he-u-ca-hebrew", {dateStyle: "full", timeZone: "UTC"})
+		    .format(Date.UTC(2024, 0, 5))`, "יום שישי, כ״ד בטבת תשפ״ד"},
+		{`new Intl.DateTimeFormat("fi-u-ca-buddhist", {dateStyle: "full", timeZone: "UTC"})
+		    .format(Date.UTC(2024, 0, 5))`, "perjantai 5. tammikuuta 2567 BE"},
+		{`new Intl.DateTimeFormat("mn-u-ca-buddhist", {dateStyle: "full", timeZone: "UTC"})
+		    .format(Date.UTC(2024, 0, 5))`, "BE 2567 оны нэгдүгээр сарын 5. Баасан гараг"},
+		{`new Intl.DateTimeFormat("eu-u-ca-coptic", {year: "numeric", month: "short",
+		    day: "numeric", timeZone: "UTC"}).format(Date.UTC(2024, 0, 5))`,
+			"1740(e)ko Kiahkk 26"},
+		{`new Intl.DateTimeFormat("ku-u-ca-indian", {dateStyle: "long", timeZone: "UTC"})
+		    .format(Date.UTC(2024, 0, 5))`, "Śaka 15ê Pausaa 1945an"},
+		{`new Intl.DateTimeFormat("haw-u-ca-buddhist", {dateStyle: "short", timeZone: "UTC"})
+		    .format(Date.UTC(2024, 0, 5))`, "5/i/67 BE"},
 		{`new Intl.DateTimeFormat("en-u-ca-hebrew", {timeZone: "UTC"})
 		    .resolvedOptions().calendar`, "hebrew"},
 		{`new Intl.DateTimeFormat("en", {calendar: "islamic"})
 		    .resolvedOptions().calendar`, "islamic-civil"},
 		{`Intl.supportedValuesOf("calendar").includes("islamic")`, "false"},
 		{`new Intl.DateTimeFormat("ja", {hour: "numeric", hour12: true})
-		    .resolvedOptions().hourCycle`, "h11"},
-		{`new Intl.DateTimeFormat("ja", {hour: "numeric", hour12: true, timeZone: "UTC"})
-		    .format(Date.UTC(2024, 0, 1))`, "午前0時"},
+		    .resolvedOptions().hourCycle`, "h12"},
+		{`new Intl.DateTimeFormat("ja", {hour: "numeric", minute: "2-digit",
+		    hour12: true, timeZone: "UTC"}).format(Date.UTC(2000, 1, 29))`, "午前12:00"},
 		{`(() => {
 		    const era = (calendar, year) => {
 		      const date = new Date(0); date.setUTCFullYear(year, 5, 15);
@@ -360,14 +404,41 @@ func TestIntlFormats(t *testing.T) {
 		    .resolvedOptions().collation`, "eor"},
 		{`["z", "ä"].sort(new Intl.Collator("sv", {collation: "eor"}).compare).join()`,
 			"ä,z"},
+		{`["一", "丁", "阿", "八", "中", "𠀀", "A", "α", "가", "あ"]
+		    .sort(new Intl.Collator("zh").compare).join(" ")`,
+			"阿 八 丁 一 中 𠀀 A α 가 あ"},
+		{`["一", "丁", "阿", "八", "中", "𠀀", "A", "α", "가", "あ"]
+		    .sort(new Intl.Collator("zh-Hant").compare).join(" ")`,
+			"一 丁 八 中 阿 𠀀 A α 가 あ"},
+		{`["一", "丁", "阿", "八", "中", "𠀀", "A", "α", "가", "あ"]
+		    .sort(new Intl.Collator("ja").compare).join(" ")`,
+			"A あ 阿 一 中 丁 八 𠀀 α 가"},
+		{`["一", "丁", "阿", "八", "中", "𠀀", "A", "α", "가", "あ"]
+		    .sort(new Intl.Collator("ko").compare).join(" ")`,
+			"가 阿 一 丁 中 八 𠀀 A α あ"},
+		{`[new Intl.Collator("zh").resolvedOptions().collation,
+		    new Intl.Collator("zh-Hant").resolvedOptions().collation].join(",")`,
+			"pinyin,stroke"},
+		{`["a", "ä", "â", "à", "ǎ", "á", "ā"]
+		    .sort(new Intl.Collator("zh", {sensitivity: "accent"}).compare).join("")`,
+			"āáǎàaâä"},
+		{`["ürün", "uzun", "ışık", "iyi", "İstanbul", "izmir", "çay", "civciv", "şeker", "sen"]
+		    .sort(new Intl.Collator("tr").compare).join("|")`,
+			"civciv|çay|ışık|İstanbul|iyi|izmir|sen|şeker|uzun|ürün"},
+		{`["base", "accent", "case", "variant"].map(sensitivity => {
+		    const c = new Intl.Collator("tr", {sensitivity});
+		    return [c.compare("I", "ı"), c.compare("I", "i"),
+		      c.compare("İ", "i"), c.compare("ı", "i"), c.compare("İ", "I")].join("");
+		  }).join("|")`, "0-10-11|0-10-11|1-11-11|1-11-11"},
+		{`["file1", "file-1", "file 1"].sort(new Intl.Collator("th").compare).join("|")`,
+			"file1|file-1|file 1"},
 		{`"a".localeCompare("b")`, "-1"},
 
-		// What things are called, which the engine knows in English and the
-		// intldata package knows in every language.
+		// What things are called in the language requested.
 		{`new Intl.DisplayNames("en", {type: "region"}).of("FR")`, "France"},
 		{`new Intl.DisplayNames("en", {type: "language"}).of("de-AT")`, "Austrian German"},
 		{`new Intl.DisplayNames("en", {type: "currency"}).of("EUR")`, "Euro"},
-		{`new Intl.DisplayNames("fr", {type: "region"}).of("DE")`, "Germany"},
+		{`new Intl.DisplayNames("fr", {type: "region"}).of("DE")`, "Allemagne"},
 		{`new Intl.DisplayNames("en", {type: "region", fallback: "none"}).of("QQ")`,
 			"undefined"},
 		{`new Intl.DisplayNames("en", {type: "region"}).of("QQ")`, "QQ"},
@@ -456,6 +527,37 @@ func TestIntlIsBuiltWhenAskedFor(t *testing.T) {
 		{`globalThis.Intl = {mine: true}; Intl.mine`, "true"},
 		{`globalThis.Intl = 5; typeof Intl`, "number"},
 		{`delete globalThis.Intl; typeof Intl`, "undefined"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+func TestIntlLocale(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`new Intl.Locale("EN-us").toString()`, "en-US"},
+		{`new Intl.Locale("de-latn-de-fonipa-1996-u-ca-gregory-co-phonebk-hc-h23-kf-true-kn-false-nu-latn").baseName`,
+			"de-Latn-DE-1996-fonipa"},
+		{`let l = new Intl.Locale("en", {script: "cyrl", region: "gb", variants: "fonipa-1996", calendar: "BUDDHIST", numeric: true});
+		  [l.language, l.script, l.region, l.variants, l.calendar, l.numeric, l.toString()].join("|")`,
+			"en|Cyrl|GB|1996-fonipa|buddhist|true|en-Cyrl-GB-1996-fonipa-u-ca-buddhist-kn"},
+		{`new Intl.Locale("en").maximize().toString()`, "en-Latn-US"},
+		{`new Intl.Locale("en-Latn-GB").minimize().toString()`, "en-GB"},
+		{`new Intl.Locale("und-Thai").maximize().toString()`, "th-Thai-TH"},
+		{`JSON.stringify(new Intl.Locale("en-US").getWeekInfo())`, `{"firstDay":7,"weekend":[6,7]}`},
+		{`new Intl.Locale("ar").getTextInfo().direction`, "rtl"},
+		{`new Intl.Locale("zh-Hans").getCollations().join(",")`, "emoji,eor,pinyin,stroke,unihan,zhuyin"},
+		{`new Intl.Locale("zh-Latn").getCollations().join(",")`, "emoji,eor"},
+		{`new Intl.Locale("ar-EG").getNumberingSystems()[0]`, "arab"},
+		{`new Intl.Locale("ar-Latn-EG").getNumberingSystems()[0]`, "latn"},
+		{`String(new Intl.Locale("en").getTimeZones())`, "undefined"},
+		{`JSON.stringify(new Intl.Locale("en-QQ").getTimeZones())`, `[]`},
+		{`new Intl.NumberFormat(new Intl.Locale("en-u-nu-arab")).resolvedOptions().locale`, "en-u-nu-arab"},
+		{`class L extends Intl.Locale { toString() { throw new Error("unused") } }
+		  Intl.getCanonicalLocales(new L("fr-u-ca-gregory"))[0]`, "fr-u-ca-gregory"},
+		{`try { Intl.Locale("en") } catch (e) { e.name }`, "TypeError"},
+		{`try { new Intl.Locale("bad_tag", null) } catch (e) { e.name }`, "TypeError"},
+		{`try { Intl.Locale.prototype.maximize.call({}) } catch (e) { e.name }`, "TypeError"},
 	}
 	for _, tc := range cases {
 		checkEval(t, tc.src, tc.want)

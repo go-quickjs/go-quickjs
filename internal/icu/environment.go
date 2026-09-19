@@ -9,10 +9,10 @@ import (
 // Which language the machine is set to.
 //
 // A program that formats a date without saying which language to format it in
-// means the language of whoever is reading, and on a Unix machine that is what
-// the environment says: LC_ALL if it is set, then LC_MESSAGES, then LANG. They
-// are written in the older style -- de_DE.UTF-8@euro -- which has to be turned
-// into a tag before anything here can use it.
+// means the language of whoever is reading. Windows exposes the user's locale
+// directly; on a Unix machine the environment says it through LC_ALL,
+// LC_MESSAGES, then LANG. The Unix values use the older style --
+// de_DE.UTF-8@euro -- which has to be turned into a tag first.
 //
 // This is what ICU does, and so what every other engine does, which is the
 // point: a program run twice in the same shell should not be given two
@@ -22,6 +22,10 @@ import (
 // when nothing says, which leaves the caller to choose.
 func Environment() string {
 	environmentOnce.Do(func() {
+		if tag := systemLocale(); tag != "" {
+			environmentTag = tag
+			return
+		}
 		for _, name := range []string{"LC_ALL", "LC_MESSAGES", "LANG"} {
 			if tag := TagFromPosix(os.Getenv(name)); tag != "" {
 				environmentTag = tag
@@ -67,6 +71,16 @@ func TagFromPosix(value string) string {
 		}
 	}
 	return strings.Join(out, "-")
+}
+
+// tagFromWindows removes the optional Windows sort name (for example the
+// "_technl" in "hu-HU_technl") before normalizing the locale's language,
+// script, and region. GetUserDefaultLocaleName otherwise uses BCP-47 casing.
+func tagFromWindows(value string) string {
+	if at := strings.IndexByte(value, '_'); at >= 0 {
+		value = value[:at]
+	}
+	return TagFromPosix(value)
 }
 
 func onlyLetters(s string) bool {

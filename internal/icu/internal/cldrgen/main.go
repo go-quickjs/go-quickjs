@@ -18,6 +18,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"encoding/base64"
@@ -67,6 +68,8 @@ type localeData struct {
 		Months, MonthsShort, MonthsNarrow []string
 		MonthsAlone, MonthsAloneShort     []string
 		Days, DaysShort, DaysNarrow       []string
+		DaysFormat, DaysFormatShort       []string
+		DaysFormatNarrow                  []string
 	} `json:"names"`
 	Dates     map[string]string `json:"dates"`
 	Times     map[string]string `json:"times"`
@@ -418,6 +421,20 @@ func run() error {
 	fmt.Fprintf(&b, "// that goes by another word now.\n")
 	packedData.write(&b, "tagAliases", encodeAliases(renames))
 
+	// Likely subtags and the territory preferences exposed by Intl.Locale.
+	localeInfo, localeInfoICU, err := readLocaleInfo(
+		filepath.Join(filepath.Dir(script), "localeinfo.mjs"))
+	if err != nil {
+		return err
+	}
+	if localeInfoICU != data.ICU {
+		return fmt.Errorf("locale info came from ICU %s, locales from ICU %s",
+			localeInfoICU, data.ICU)
+	}
+	fmt.Fprintf(&b, "// localeInfoPacked is the likely-subtag, territory, clock, week, zone,\n")
+	fmt.Fprintf(&b, "// collation, numbering, and script-direction data exposed by Intl.Locale.\n")
+	packedData.write(&b, "localeInfoPacked", localeInfo)
+
 	// What the other calendars call their months and eras, and where the ones
 	// that cannot be computed put their months.
 	calendars, err := readCalendars(filepath.Join(filepath.Dir(script), "calendars.json"))
@@ -428,6 +445,15 @@ func run() error {
 	fmt.Fprintf(&b, "// each language: the Islamic months, the Hebrew ones and the thirteenth\n")
 	fmt.Fprintf(&b, "// it has in a long year, the two hundred and thirty-seven Japanese reigns.\n")
 	packedData.write(&b, "calendarNames", encodeCalendars(calendars))
+
+	calendarFormats, err := readCalendarFormats(
+		filepath.Join(filepath.Dir(script), "calendarformats.json"))
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(&b, "// calendarFormats is the date order, punctuation, and date-time glue used\n")
+	fmt.Fprintf(&b, "// by each non-Gregorian calendar in each locale.\n")
+	packedData.write(&b, "calendarFormats", encodeCalendarFormats(calendarFormats))
 
 	tables, err := readCalendarTables(filepath.Join(filepath.Dir(script), "calendartables.json"))
 	if err != nil {
@@ -450,6 +476,27 @@ func run() error {
 	fmt.Fprintf(&b, "// sentences, which class each character belongs to and which pairs of\n")
 	fmt.Fprintf(&b, "// classes a break may fall between, and then the emoji.\n")
 	packedData.write(&b, "segmentPacked", encodeSegments(segments))
+
+	// ICU uses dictionaries for scripts conventionally written without spaces.
+	// Keep them separate so the runtime only inflates the one it encounters.
+	dictionaryDir := filepath.Join(filepath.Dir(script), "dictionaries")
+	for _, dictionary := range []struct {
+		name, file string
+		costs      bool
+	}{
+		{"cjkDictionaryPacked", "cjdict.txt", true},
+		{"thaiDictionaryPacked", "thaidict.txt", false},
+		{"laoDictionaryPacked", "laodict.txt", false},
+		{"khmerDictionaryPacked", "khmerdict.txt", false},
+		{"burmeseDictionaryPacked", "burmesedict.txt", false},
+	} {
+		data, err := readBreakDictionary(filepath.Join(dictionaryDir, dictionary.file), dictionary.costs)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(&b, "// %s is ICU's word-break dictionary, decoded only when this script is segmented.\n", dictionary.name)
+		packedData.write(&b, dictionary.name, data)
+	}
 
 	fmt.Fprintf(&b, "// currencyDigits is how many decimal places a currency is written with,\n")
 	fmt.Fprintf(&b, "// where that is not the usual two.\n")
@@ -505,6 +552,20 @@ func readUnits(path string) (unitData, error) {
 		return out, fmt.Errorf("the units: %w", err)
 	}
 	return out, nil
+}
+
+func readLocaleInfo(script string) (string, string, error) {
+	raw, err := exec.Command("node", script).Output()
+	if err != nil {
+		return "", "", fmt.Errorf("extracting Intl.Locale data: %w", err)
+	}
+	var header struct {
+		ICU string `json:"icu"`
+	}
+	if err := json.Unmarshal(raw, &header); err != nil {
+		return "", "", fmt.Errorf("reading Intl.Locale data: %w", err)
+	}
+	return string(raw), header.ICU, nil
 }
 
 // encodeUnits writes the blocks and then which locale uses which.
@@ -583,6 +644,17 @@ type calendarData struct {
 	Index   map[string]map[string]int `json:"index"`
 }
 
+type calendarFormatData struct {
+	Entries []calendarFormatEntry     `json:"entries"`
+	Index   map[string]map[string]int `json:"index"`
+}
+
+type calendarFormatEntry struct {
+	Dates     []string          `json:"dates"`
+	Glue      []string          `json:"glue"`
+	Skeletons map[string]string `json:"skeletons"`
+}
+
 func readCalendars(path string) (calendarData, error) {
 	var out calendarData
 	raw, err := os.ReadFile(path)
@@ -591,6 +663,18 @@ func readCalendars(path string) (calendarData, error) {
 	}
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return out, fmt.Errorf("the calendar names: %w", err)
+	}
+	return out, nil
+}
+
+func readCalendarFormats(path string) (calendarFormatData, error) {
+	var out calendarFormatData
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return out, fmt.Errorf("the calendar formats: %w", err)
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return out, fmt.Errorf("the calendar formats: %w", err)
 	}
 	return out, nil
 }
@@ -605,6 +689,27 @@ func encodeCalendars(d calendarData) string {
 			parts = append(parts, key+"\t"+entry[key])
 		}
 		fmt.Fprintf(&b, "%s\n", strings.Join(parts, "\x01"))
+	}
+	b.WriteString("\n")
+	for _, tag := range sortedIndex(d.Index) {
+		parts := make([]string, 0, len(d.Index[tag]))
+		for _, calendar := range sortedInts(d.Index[tag]) {
+			parts = append(parts, calendar+"="+strconv.Itoa(d.Index[tag][calendar]))
+		}
+		fmt.Fprintf(&b, "%s\t%s\n", tag, strings.Join(parts, "\x01"))
+	}
+	return b.String()
+}
+
+func encodeCalendarFormats(d calendarFormatData) string {
+	var b strings.Builder
+	for _, entry := range d.Entries {
+		b.WriteString(strings.Join(entry.Dates, itemSep))
+		b.WriteString(fieldSep)
+		b.WriteString(strings.Join(entry.Glue, itemSep))
+		b.WriteString(fieldSep)
+		b.WriteString(joinPairs(entry.Skeletons))
+		b.WriteByte('\n')
 	}
 	b.WriteString("\n")
 	for _, tag := range sortedIndex(d.Index) {
@@ -768,6 +873,61 @@ func encodeSegments(d segmentData) string {
 	return b.String()
 }
 
+// readBreakDictionary removes comments and makes the source order explicit.
+// CJK entries retain their statistical cost after a tab; the Southeast Asian
+// dictionaries are unweighted word lists.
+func readBreakDictionary(path string, costs bool) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("the word-break dictionary %s: %w", filepath.Base(path), err)
+	}
+	defer file.Close()
+
+	type entry struct {
+		word, value string
+	}
+	var entries []entry
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(strings.TrimPrefix(scanner.Text(), "\ufeff"))
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		word, value := line, ""
+		if costs {
+			var ok bool
+			word, value, ok = strings.Cut(line, "\t")
+			if !ok {
+				return "", fmt.Errorf("the word-break dictionary %s has an unweighted entry %q", filepath.Base(path), line)
+			}
+			if _, err := strconv.ParseUint(value, 10, 8); err != nil {
+				return "", fmt.Errorf("the word-break dictionary %s has an invalid cost %q", filepath.Base(path), value)
+			}
+		}
+		entries = append(entries, entry{word: word, value: value})
+	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("the word-break dictionary %s: %w", filepath.Base(path), err)
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].word < entries[j].word })
+
+	var out strings.Builder
+	for i, entry := range entries {
+		if i > 0 {
+			if entries[i-1].word == entry.word {
+				return "", fmt.Errorf("the word-break dictionary %s repeats %q", filepath.Base(path), entry.word)
+			}
+			out.WriteByte('\n')
+		}
+		out.WriteString(entry.word)
+		if costs {
+			out.WriteByte('\t')
+			out.WriteString(entry.value)
+		}
+	}
+	return out.String(), nil
+}
+
 // readDisplay reads what things are called.
 func readDisplay(path string) (map[string][]string, error) {
 	raw, err := os.ReadFile(path)
@@ -820,14 +980,14 @@ func writeDisplayPackage(dir, binaryPath string) error {
 	fmt.Fprintf(&b, "// this engine knows: the languages, the regions, the scripts, the\n")
 	fmt.Fprintf(&b, "// currencies and the parts of a date.\n")
 	fmt.Fprintf(&b, "//\n")
-	fmt.Fprintf(&b, "// Import it for its effect alone, and Intl.DisplayNames answers in the\n")
-	fmt.Fprintf(&b, "// language it was asked in rather than in English:\n")
+	fmt.Fprintf(&b, "// The main quickjs package imports this package so Intl.DisplayNames answers\n")
+	fmt.Fprintf(&b, "// in the language it was asked in. It remains public for compatibility with\n")
+	fmt.Fprintf(&b, "// programs that imported it explicitly:\n")
 	fmt.Fprintf(&b, "//\n")
 	fmt.Fprintf(&b, "//\timport _ \"github.com/go-quickjs/go-quickjs/intldata\"\n")
 	fmt.Fprintf(&b, "//\n")
-	fmt.Fprintf(&b, "// The names are kept in this optional compressed asset so a program\n")
-	fmt.Fprintf(&b, "// that never opens a language picker does not carry the name of every\n")
-	fmt.Fprintf(&b, "// country in every language.\n")
+	fmt.Fprintf(&b, "// The names remain in a separately compressed asset and are decoded one\n")
+	fmt.Fprintf(&b, "// locale at a time on first use.\n")
 	fmt.Fprintf(&b, "package intldata\n\n")
 	fmt.Fprintf(&b, "import (\n")
 	fmt.Fprintf(&b, "\t_ %q\n", "embed")
@@ -1112,8 +1272,10 @@ func listLocales(script string) ([]string, error) {
 		return nil, fmt.Errorf("asking node for the locale list: %w", err)
 	}
 	var tags []string
+	seen := make(map[string]bool)
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if line = strings.TrimSpace(line); line != "" {
+		if line = strings.TrimSpace(line); line != "" && !seen[line] {
+			seen[line] = true
 			tags = append(tags, line)
 		}
 	}
@@ -1207,6 +1369,9 @@ func encode(l *localeData) string {
 		strings.Join(l.Names.MonthsAloneShort, itemSep),
 		strings.Join(l.HourPeriods, itemSep),
 		strings.Join(l.HourPeriodsNarrow, itemSep),
+		strings.Join(l.Names.DaysFormat, itemSep),
+		strings.Join(l.Names.DaysFormatShort, itemSep),
+		strings.Join(l.Names.DaysFormatNarrow, itemSep),
 	}, fieldSep)
 
 	widths := []string{"full", "long", "medium", "short"}

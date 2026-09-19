@@ -7,6 +7,8 @@ import (
 	"sync"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/go-quickjs/go-quickjs/internal/normalize"
 )
 
 // Sorting text.
@@ -205,43 +207,76 @@ func (t *collationTable) weightsOf(r rune) (primary, secondary, tertiary int32, 
 // upperFirst puts capitals before their small letters, where a language asks
 // for that -- and Danish asks for it whether or not the caller does.
 func (l *Locale) Compare(a, b string, strength Strength, skipAccents, upperFirst bool) int {
-	return l.compare(a, b, strength, skipAccents, upperFirst, false, nil)
+	return l.compare(a, b, strength, skipAccents, upperFirst, false, nil, "")
 }
 
 // CompareNumeric is the same, with the runs of digits in the two strings read
 // as numbers, so that file9 comes before file10.
 func (l *Locale) CompareNumeric(a, b string, strength Strength, skipAccents, upperFirst bool) int {
-	return l.compare(a, b, strength, skipAccents, upperFirst, true, nil)
+	return l.compare(a, b, strength, skipAccents, upperFirst, true, nil, "")
 }
 
 // ComparePhonebook compares with the German search/phone-book expansions:
 // umlauts are written as ae, oe, and ue, and sharp s as ss.
 func (l *Locale) ComparePhonebook(a, b string, strength Strength, skipAccents,
 	upperFirst, numeric bool) int {
-	return l.compare(a, b, strength, skipAccents, upperFirst, numeric, phonebookExpansions)
+	return l.compare(a, b, strength, skipAccents, upperFirst, numeric, phonebookExpansions, "")
 }
 
 // CompareEOR uses the European ordering rules, which are the untailored root
 // order rather than the language's ordinary moved letters and contractions.
 func (l *Locale) CompareEOR(a, b string, strength Strength, skipAccents,
 	upperFirst, numeric bool) int {
-	return (*Locale)(nil).compare(a, b, strength, skipAccents, upperFirst, numeric, nil)
+	return (*Locale)(nil).compare(a, b, strength, skipAccents, upperFirst, numeric, nil, "")
+}
+
+// CompareCollation uses a named CJK ordering, or the locale's ordinary CJK
+// ordering when name is "default". The overlay is loaded only when one of
+// those collators is first used.
+func (l *Locale) CompareCollation(a, b string, strength Strength, skipAccents,
+	upperFirst, numeric bool, name string) int {
+	return l.compare(a, b, strength, skipAccents, upperFirst, numeric, nil, name)
 }
 
 func (l *Locale) compare(a, b string, strength Strength, skipAccents, upperFirst, numeric bool,
-	expansions map[rune]string) int {
+	expansions map[rune]string, collation string) int {
 	t := order()
 	var moved map[rune]int32
 	var joined map[string]int32
 	shifted := false
+	language := ""
 	if l != nil {
+		language = strings.ToLower(strings.SplitN(l.Tag, "-", 2)[0])
 		moved, joined, shifted = l.Tailoring, l.Contractions, l.Shifted
 		if l.UpperFirst {
 			upperFirst = true
 		}
 	}
-	ka := t.key(a, moved, joined, shifted, numeric, skipAccents, expansions)
-	kb := t.key(b, moved, joined, shifted, numeric, skipAccents, expansions)
+	turkish := language == "tr"
+	chinese := language == "zh"
+	if turkish {
+		// Turkish has two I letters. Its generated alphabet tailoring moves
+		// dotless I correctly; dotted capital İ must share lowercase i's
+		// primary weight rather than sit after it as an accented root I.
+		adjusted := make(map[rune]int32, len(moved)+1)
+		for r, weight := range moved {
+			adjusted[r] = weight
+		}
+		if primary, _, _, ok := t.weightsOf('i'); ok {
+			adjusted['İ'] = primary * weightScale
+		}
+		moved = adjusted
+	}
+	custom := cjkTailoringFor(func() string {
+		if l == nil {
+			return ""
+		}
+		return l.Tag
+	}(), collation, t)
+	ka := t.key(a, moved, joined, shifted, numeric, skipAccents, expansions, custom,
+		turkish, chinese)
+	kb := t.key(b, moved, joined, shifted, numeric, skipAccents, expansions, custom,
+		turkish, chinese)
 
 	if c := compareWeights(ka.primary, kb.primary, false); c != 0 {
 		return c
@@ -274,7 +309,8 @@ type sortKey struct {
 // œ weighs what oe weighs -- and, where the caller asked for it, a run of
 // digits counts as the number it is rather than as its digits.
 func (t *collationTable) key(s string, moved map[rune]int32, joined map[string]int32,
-	shifted, numeric, skipAccents bool, customExpansions map[rune]string) sortKey {
+	shifted, numeric, skipAccents bool, customExpansions map[rune]string,
+	custom *cjkTailoring, turkish, chinese bool) sortKey {
 	var out sortKey
 	for i := 0; i < len(s); {
 		r, size := utf8.DecodeRuneInString(s[i:])
@@ -315,12 +351,19 @@ func (t *collationTable) key(s string, moved map[rune]int32, joined map[string]i
 		// A letter the language moved is a letter of its own there, whatever
 		// it is made of: Swedish sorts ä after z rather than as an accented a.
 		if _, tailored := moved[r]; tailored {
-			t.appendWeights(&out, r, moved, shifted, true)
+			t.appendWeights(&out, r, moved, shifted, true, custom, turkish, chinese)
 			continue
 		}
-		expansion, custom := customExpansions[r]
-		expands := custom
-		if !custom {
+		// A CJK overlay is already the locale's weight for this character.
+		// In particular, Hangul syllables must not be expanded into their
+		// root-order jamo before the Korean search order sees them.
+		if custom != nil && custom.keepsWhole(r) {
+			t.appendWeights(&out, r, moved, shifted, true, custom, turkish, chinese)
+			continue
+		}
+		expansion, customExpansion := customExpansions[r]
+		expands := customExpansion
+		if !customExpansion {
 			expansion, expands = t.expands[r]
 		}
 		if expands {
@@ -328,14 +371,14 @@ func (t *collationTable) key(s string, moved map[rune]int32, joined map[string]i
 			// mark saying it was written as one: ss comes before ß, and 1
 			// before ①, though each pair is the same letters.
 			for _, e := range expansion {
-				t.appendWeights(&out, e, moved, shifted, true)
+				t.appendWeights(&out, e, moved, shifted, true, custom, turkish, chinese)
 			}
 			// A canonical expansion such as a + tilde is merely another
 			// spelling of the accented character. When accents are skipped it
 			// must not leave the compatibility tie-breaker behind. A phone-book
 			// expansion such as ae remains distinct at the tertiary level.
 			canonicalAccent := false
-			if !custom && skipAccents {
+			if !customExpansion && skipAccents {
 				for _, e := range expansion {
 					if _, ok := t.marks[e]; ok {
 						canonicalAccent = true
@@ -348,7 +391,7 @@ func (t *collationTable) key(s string, moved map[rune]int32, joined map[string]i
 			}
 			continue
 		}
-		t.appendWeights(&out, r, moved, shifted, true)
+		t.appendWeights(&out, r, moved, shifted, true, custom, turkish, chinese)
 	}
 	return out
 }
@@ -364,13 +407,53 @@ var phonebookExpansions = map[rune]string{
 // reproduce for a locale. EOR uses the root order carried here; phone-book
 // ordering adds the German expansions above.
 func HasCollation(tag, name string) bool {
+	language := strings.ToLower(strings.SplitN(tag, "-", 2)[0])
 	switch name {
 	case "eor":
 		return true
 	case "phonebk":
-		return tag == "de" || strings.HasPrefix(tag, "de-")
+		return language == "de"
+	case "pinyin", "stroke", "zhuyin":
+		return language == "zh"
+	case "unihan":
+		return language == "zh" || language == "ja" || language == "ko"
+	case "searchjl":
+		return language == "ko"
 	}
 	return false
+}
+
+// DefaultCollation reports the locale's ordinary named ordering. ICU exposes
+// Chinese defaults by name; the other locale defaults are called "default".
+func DefaultCollation(tag string) string {
+	parts := strings.Split(strings.ToLower(strings.ReplaceAll(tag, "_", "-")), "-")
+	if len(parts) == 0 || parts[0] != "zh" {
+		return "default"
+	}
+	// An explicit script wins over the territory. ICU matches zh-Hans-TW as
+	// zh-Hans (pinyin), and an uncommon explicit script such as Latn falls
+	// back to zh rather than inheriting Taiwan's stroke order.
+	for _, part := range parts[1:] {
+		if len(part) == 4 {
+			if part == "hant" {
+				return "stroke"
+			}
+			return "pinyin"
+		}
+	}
+	for _, part := range parts[1:] {
+		switch part {
+		case "tw", "hk", "mo":
+			return "stroke"
+		}
+	}
+	return "pinyin"
+}
+
+// Collations lists the named sort orders this compact collation data can
+// reproduce, in the order required by Intl.supportedValuesOf.
+func Collations() []string {
+	return []string{"eor", "phonebk", "pinyin", "searchjl", "stroke", "unihan", "zhuyin"}
 }
 
 // contraction looks for a letter written as two or three characters at the
@@ -401,11 +484,34 @@ func (t *collationTable) contraction(s string, joined map[string]int32) (int, in
 
 // appendWeights adds what one character weighs to a key.
 func (t *collationTable) appendWeights(out *sortKey, r rune, moved map[rune]int32,
-	shifted, withCase bool) {
+	shifted, withCase bool, custom *cjkTailoring, turkish, chinese bool) {
 	// An accent is not a letter: it counts for nothing at the first level and
 	// for itself at the second, which is what makes a decomposed é sort as an
 	// accented e rather than as an e and something else.
 	if w, ok := t.marks[r]; ok {
+		if chinese && len(out.secondary) > 0 {
+			// Pinyin's four tone marks precede an unmarked syllable; other
+			// accents follow it. Keep the accent in its base character's slot
+			// so an accent can sort before the absence of one.
+			weight := int32(6) + w
+			switch r {
+			case '\u0304': // macron, first tone
+				weight = 1
+			case '\u0301': // acute, second tone
+				weight = 2
+			case '\u030c': // caron, third tone
+				weight = 3
+			case '\u0300': // grave, fourth tone
+				weight = 4
+			}
+			last := len(out.secondary) - 1
+			if out.secondary[last] == 5 {
+				out.secondary[last] = weight
+			} else {
+				out.secondary = append(out.secondary, weight)
+			}
+			return
+		}
 		out.secondary = append(out.secondary, w)
 		return
 	}
@@ -413,7 +519,43 @@ func (t *collationTable) appendWeights(out *sortKey, r rune, moved map[rune]int3
 	if !ok {
 		return
 	}
+	if turkish && r == 'İ' {
+		second = 0
+		_, _, third, _ = t.weightsOf('I')
+	}
+	if chinese {
+		if second == 0 {
+			second = 5
+		} else {
+			second += 6
+		}
+	}
 	weight := scaled(p, r, moved)
+	if custom != nil {
+		if customWeight, tailored, foldKana := custom.weight(r); tailored {
+			weight = customWeight
+			if foldKana {
+				folded := r
+				if expansion, ok := t.expands[r]; ok {
+					if expanded, size := utf8.DecodeRuneInString(expansion); size == len(expansion) {
+						folded = expanded
+					}
+				}
+				if folded >= 0xff61 && folded <= 0xff9f {
+					compat := normalize.String(string(folded), "NFKC")
+					if expanded, size := utf8.DecodeRuneInString(compat); size == len(compat) {
+						folded = expanded
+					}
+				}
+				if folded >= 0x30a1 && folded <= 0x30f6 {
+					folded -= 0x60
+				}
+				_, _, third, _ = t.weightsOf(folded)
+			}
+		} else if weight >= custom.anchor {
+			weight += custom.span
+		}
+	}
 	if shifted && weight < variableLimit {
 		// Punctuation, passed over here and compared at the end, so that it
 		// separates two words only when nothing else does.
@@ -459,10 +601,14 @@ func compareWeights(a, b []int32, invert bool) int {
 		}
 		return 1
 	}
-	switch {
-	case len(a) < len(b):
-		return -1
-	case len(a) > len(b):
+	if len(a) != len(b) {
+		less := len(a) < len(b)
+		if invert {
+			less = !less
+		}
+		if less {
+			return -1
+		}
 		return 1
 	}
 	return 0

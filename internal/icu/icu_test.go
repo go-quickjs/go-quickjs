@@ -1,7 +1,10 @@
 package icu
 
 import (
+	"fmt"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -70,6 +73,8 @@ func TestResolve(t *testing.T) {
 		{"zh-TW", "zh-Hant"}, // and in Taiwan it is the other script
 		{"ar-EG", "ar-BH"},   // Egyptian Arabic is written as Bahraini is
 		{"en-US", "en"},
+		{"sc", "sc"}, // supported languages must not disappear during extraction
+		{"ksh", "ksh"},
 		{"xx-YY", "en"}, // nothing at all falls back to English
 		{"", "en"},
 		{"en-GB-u-ca-gregory", "en-GB"},
@@ -84,7 +89,7 @@ func TestResolve(t *testing.T) {
 
 	// Has is what supportedLocalesOf asks: is this a locale we know, rather
 	// than one we would answer in English.
-	for _, tag := range []string{"de", "de-CH", "zh-CN", "ar-EG", "kw", "haw"} {
+	for _, tag := range []string{"de", "de-CH", "zh-CN", "ar-EG", "kw", "haw", "sc", "ksh"} {
 		if !Has(tag) {
 			t.Errorf("Has(%q) = false", tag)
 		}
@@ -93,6 +98,62 @@ func TestResolve(t *testing.T) {
 		if Has(tag) {
 			t.Errorf("Has(%q) = true", tag)
 		}
+	}
+}
+
+func TestLocaleInfo(t *testing.T) {
+	for _, tc := range []struct {
+		language, script, region string
+		want                     string
+	}{
+		{"en", "", "", "en-Latn-US"},
+		{"en", "Shaw", "", "en-Shaw-GB"},
+		{"und", "Thai", "", "th-Thai-TH"},
+		{"und", "Cyrl", "RO", "bg-Cyrl-RO"},
+		{"zz", "", "", "zz--"},
+	} {
+		language, script, region := AddLikelySubtags(tc.language, tc.script, tc.region)
+		got := language + "-" + script + "-" + region
+		if got != tc.want {
+			t.Errorf("AddLikelySubtags(%q, %q, %q) = %q, want %q",
+				tc.language, tc.script, tc.region, got, tc.want)
+		}
+	}
+	us := TerritoryInfoFor("US")
+	if us.FirstDay != 7 || len(us.Weekend) != 2 || len(us.TimeZones) == 0 {
+		t.Fatalf("US territory info is incomplete: %+v", us)
+	}
+	if got := LocaleHourCycles("fr", "CA"); len(got) != 1 || got[0] != "h23" {
+		t.Fatalf("French Canadian hour cycles = %v, want [h23]", got)
+	}
+	if got := ScriptDirection("Arab"); got != "rtl" {
+		t.Fatalf("Arabic direction = %q, want rtl", got)
+	}
+	if got := strings.Join(LocaleCollations("zh", "Hans"), ","); got != "emoji,eor,pinyin,stroke,unihan,zhuyin" {
+		t.Fatalf("Simplified Chinese collations = %q", got)
+	}
+	if got := strings.Join(LocaleCollations("zh", "Latn"), ","); got != "emoji,eor" {
+		t.Fatalf("Latin Chinese collations = %q", got)
+	}
+	for _, tc := range []struct{ language, script, region, want string }{
+		{"ar", "", "EG", "arab"},
+		{"ar", "Latn", "EG", "latn"},
+		{"pa", "Arab", "IN", "arabext"},
+		{"sd", "", "IN", "latn"},
+		{"sd", "Arab", "IN", "arab"},
+	} {
+		if got := LocaleNumberingSystem(tc.language, tc.script, tc.region); got != tc.want {
+			t.Errorf("numbering for %s-%s-%s = %q, want %q", tc.language, tc.script, tc.region, got, tc.want)
+		}
+	}
+	if _, ok := TerritoryInfoExact("QQ"); ok {
+		t.Fatal("unknown territory QQ unexpectedly has locale information")
+	}
+	if got := tagFromWindows("hu-HU_technl"); got != "hu-HU" {
+		t.Fatalf("Windows alternate-sort locale = %q, want hu-HU", got)
+	}
+	if got := tagFromWindows("zh-Hans-CN"); got != "zh-Hans-CN" {
+		t.Fatalf("Windows script locale = %q, want zh-Hans-CN", got)
 	}
 }
 
@@ -166,7 +227,115 @@ func TestWarmupDateTimeData(t *testing.T) {
 		t.Errorf("warmed legacy timelines = %d, want %d",
 			len(legacyNames.changes), changeCount)
 	}
-	if len(calendarEntries) == 0 || len(calendarIndex) == 0 || len(monthTables) == 0 {
+	if len(calendarEntries) == 0 || len(calendarIndex) == 0 ||
+		len(calendarFormatEntries) == 0 || len(calendarFormatIndex) == 0 ||
+		len(monthTables) == 0 {
 		t.Error("calendar data was not warmed")
+	}
+}
+
+func TestZoneTableConcurrentFirstLoad(t *testing.T) {
+	table := zoneTable{packed: zoneSeasonPacked}
+	var wg sync.WaitGroup
+	errors := make(chan string, 32)
+	for range 32 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if name, ok := table.entry("de", "Europe/Berlin"); !ok || name == "" {
+				errors <- name
+			}
+		}()
+	}
+	wg.Wait()
+	close(errors)
+	for name := range errors {
+		t.Errorf("concurrent lookup returned %q", name)
+	}
+}
+
+func TestCJKCollationOrders(t *testing.T) {
+	for tag, want := range map[string]string{
+		"zh": "pinyin", "zh-Hans-CN": "pinyin", "zh-Hant": "stroke",
+		"zh-Hans-TW": "pinyin", "zh-Hant-CN": "stroke", "zh-Latn-TW": "pinyin",
+		"zh_TW": "stroke", "zh-HK": "stroke", "zh-MO": "stroke", "ja": "default",
+	} {
+		if got := DefaultCollation(tag); got != want {
+			t.Errorf("DefaultCollation(%q) = %q, want %q", tag, got, want)
+		}
+	}
+	cases := []struct {
+		tag, collation, want string
+	}{
+		{"zh", "default", "阿 八 丁 一 中 𠀀 A α 가 あ ア"},
+		{"zh-Hant", "default", "一 丁 八 中 阿 𠀀 A α 가 あ ア"},
+		{"zh", "unihan", "一 丁 𠀀 中 八 阿 A α 가 あ ア"},
+		{"zh", "zhuyin", "八 丁 中 阿 一 𠀀 A α 가 あ ア"},
+		{"ja", "default", "A あ ア 阿 一 中 丁 八 𠀀 α 가"},
+		{"ja", "unihan", "A あ ア 一 丁 𠀀 中 八 阿 α 가"},
+		{"ko", "default", "가 阿 一 丁 中 八 𠀀 A α あ ア"},
+		{"ko", "unihan", "가 一 丁 𠀀 中 八 阿 A α あ ア"},
+		{"ko", "searchjl", "A α 가 あ ア 一 丁 𠀀 中 八 阿"},
+	}
+	const source = "一 丁 阿 八 中 𠀀 A α 가 あ ア"
+	for _, tc := range cases {
+		locale := Resolve(tc.tag)
+		if locale == nil {
+			t.Fatalf("Resolve(%q) returned nil", tc.tag)
+		}
+		words := strings.Fields(source)
+		sort.SliceStable(words, func(i, j int) bool {
+			return locale.CompareCollation(words[i], words[j], Primary, false, false,
+				false, tc.collation) < 0
+		})
+		if got := strings.Join(words, " "); got != tc.want {
+			t.Errorf("%s/%s order = %q, want %q", tc.tag, tc.collation, got, tc.want)
+		}
+	}
+	plane3 := []rune{'一', '丁', '龘', 0x20000, 0x2ee5d, 0x30000, 0x31350, 0x323af, 0x33479}
+	for _, tc := range []struct {
+		tag, collation, want string
+	}{
+		{"zh", "default", "9f98,4e01,4e00,20000,30000,31350,33479,2ee5d,323af"},
+		{"zh", "unihan", "4e00,4e01,20000,30000,31350,33479,2ee5d,9f98,323af"},
+		{"ja", "default", "4e00,4e01,20000,30000,31350,33479,2ee5d,9f98,323af"},
+	} {
+		locale := Resolve(tc.tag)
+		points := append([]rune(nil), plane3...)
+		sort.SliceStable(points, func(i, j int) bool {
+			return locale.CompareCollation(string(points[i]), string(points[j]), Primary,
+				false, false, false, tc.collation) < 0
+		})
+		got := make([]string, len(points))
+		for i, point := range points {
+			got[i] = fmt.Sprintf("%x", point)
+		}
+		if joined := strings.Join(got, ","); joined != tc.want {
+			t.Errorf("%s/%s plane-3 order = %s, want %s", tc.tag, tc.collation,
+				joined, tc.want)
+		}
+	}
+
+	ko := Resolve("ko")
+	for _, other := range []string{"까", "각", "간", "개", "갸"} {
+		if got := ko.CompareCollation("가", other, Primary, false, false, false,
+			"searchjl"); got != 0 {
+			t.Errorf("ko/searchjl compare(가, %s) = %d, want 0", other, got)
+		}
+	}
+	ja := Resolve("ja")
+	for _, pair := range [][2]string{{"あ", "ア"}, {"ア", "ｱ"}} {
+		if got := ja.CompareCollation(pair[0], pair[1], Tertiary, false, false, false,
+			"default"); got != 0 {
+			t.Errorf("ja compare(%s, %s) = %d, want 0", pair[0], pair[1], got)
+		}
+	}
+	if got := ja.CompareCollation("や", "ゃ", Tertiary, false, false, false,
+		"default"); got <= 0 {
+		t.Errorf("ja compare(や, ゃ) = %d, want positive", got)
+	}
+	if got := ja.CompareCollation("は", "ば", Secondary, false, false, false,
+		"default"); got >= 0 {
+		t.Errorf("ja compare(は, ば) = %d, want negative", got)
 	}
 }

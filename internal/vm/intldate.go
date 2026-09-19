@@ -211,7 +211,7 @@ func (o *dateOptions) parts(t time.Time) []datePiece {
 		if kind == "literal" && len(out) > 0 && out[len(out)-1].kind == "month" {
 			name := out[len(out)-1].value
 			if r, _ := utf8.DecodeLastRuneInString(name); r != utf8.RuneError {
-				if next, width := utf8.DecodeRuneInString(value); next == r {
+				if next, width := utf8.DecodeRuneInString(value); next == r && (r == '月' || r == '월') {
 					value = value[width:]
 				}
 			}
@@ -268,6 +268,12 @@ func (o *dateOptions) parts(t time.Time) []datePiece {
 	// The digits of a locale that does not use the ASCII ones, or of whichever
 	// numbering system was asked for.
 	digits := l.Digits
+	// Some decimal systems use supplementary-plane characters. Older locale
+	// snapshots could not carry those as a ten-byte digit string, but the
+	// numbering-system table always has the complete runes.
+	if utf8.RuneCountInString(digits) != 10 && o.digits != "" && o.digits != "latn" {
+		digits, _ = icu.NumberingDigits(o.digits)
+	}
 	if o.digits != "" && o.digits != l.Numbering {
 		digits, _ = icu.NumberingDigits(o.digits)
 	}
@@ -304,6 +310,15 @@ func (o *dateOptions) field(push func(kind, value string), t time.Time, letter b
 			return
 		}
 		push("year", strconv.Itoa(year))
+	case 'A':
+		push("year", hebrewNumber(at.Year, true))
+	case 'Y':
+		year := o.weekYear(t)
+		if n == 2 {
+			push("year", pad(year%100, 2))
+			return
+		}
+		push("year", strconv.Itoa(year))
 	case 'r':
 		// The year of the common calendar that this one's year began in,
 		// which is how a calendar whose years are named says which year it
@@ -319,7 +334,7 @@ func (o *dateOptions) field(push func(kind, value string), t time.Time, letter b
 		push("relatedYear", strconv.Itoa(at.RelatedYear))
 	case 'G':
 		push("era", o.eraName(at, n))
-	case 'M', 'L':
+	case 'M', 'L', 'N', 'P':
 		if names, ok := o.calendarNames(); ok {
 			// A calendar of its own has months of its own, and a month that
 			// only a long year has is one of them.
@@ -330,7 +345,20 @@ func (o *dateOptions) field(push func(kind, value string), t time.Time, letter b
 			case n == 3:
 				width = 1
 			}
-			if name, ok := names.Months[width][at.MonthKey()]; ok && n >= 3 {
+			months := names.Months[width]
+			if letter == 'N' {
+				if len(names.DateMonths[width]) > 0 {
+					months = names.DateMonths[width]
+				} else if len(names.FormatMonths[width]) > 0 {
+					months = names.FormatMonths[width]
+				}
+			} else if letter == 'M' && len(names.FormatMonths[width]) > 0 {
+				months = names.FormatMonths[width]
+			}
+			if name, ok := months[at.MonthKey()]; ok && n >= 3 {
+				if letter == 'P' {
+					name = strings.ToLower(name)
+				}
 				push("month", name)
 				return
 			}
@@ -355,17 +383,29 @@ func (o *dateOptions) field(push func(kind, value string), t time.Time, letter b
 		default:
 			push("month", pad(month, n))
 		}
+	case 'J', 'j':
+		value := romanMonth(at.Month)
+		if letter == 'j' {
+			value = strings.ToLower(value)
+		}
+		push("month", value)
 	case 'd':
 		push("day", pad(at.Day, n))
+	case 'I':
+		push("day", hebrewNumber(at.Day, false))
 	case 'E', 'e', 'c':
 		day := int(t.Weekday())
+		long, short, narrow := l.DaysFormat, l.DaysFormatShort, l.DaysFormatNarrow
+		if letter == 'c' {
+			long, short, narrow = l.Days, l.DaysShort, l.DaysNarrow
+		}
 		switch {
 		case n >= 5:
-			push("weekday", nameAt(l.DaysNarrow, day, ""))
+			push("weekday", nameAt(narrow, day, ""))
 		case n == 4:
-			push("weekday", nameAt(l.Days, day, ""))
+			push("weekday", nameAt(long, day, ""))
 		default:
-			push("weekday", nameAt(l.DaysShort, day, ""))
+			push("weekday", nameAt(short, day, ""))
 		}
 	case 'h', 'K':
 		hour := t.Hour() % 12
@@ -426,6 +466,39 @@ func (o *dateOptions) field(push func(kind, value string), t time.Time, letter b
 		// An unknown letter is written as itself rather than swallowed.
 		push("literal", strings.Repeat(string(letter), n))
 	}
+}
+
+// weekYear is the year containing this locale's week. A week which crosses a
+// calendar-year boundary belongs to the side containing the locale's minimum
+// number of days. Offset-era Gregorian calendars use the underlying common
+// year here, matching ICU's YEAR_WOY field.
+func (o *dateOptions) weekYear(t time.Time) int {
+	firstDay, minimumDays := icu.WeekInfoForLocale(o.locale.Tag)
+	weekday := int(t.Weekday())
+	start := t.AddDate(0, 0, -((weekday - firstDay%7 + 7) % 7))
+	end := start.AddDate(0, 0, 6)
+	startDate, endDate := o.reckon(start), o.reckon(end)
+	value := func(date icu.Date) int {
+		switch o.calendar {
+		case "buddhist", "japanese", "roc":
+			return date.RelatedYear
+		}
+		return date.Year
+	}
+	startYear, endYear := value(startDate), value(endDate)
+	if startYear == endYear {
+		return startYear
+	}
+	daysInEndYear := 0
+	for day := 0; day < 7; day++ {
+		if value(o.reckon(start.AddDate(0, 0, day))) == endYear {
+			daysInEndYear++
+		}
+	}
+	if daysInEndYear >= minimumDays {
+		return endYear
+	}
+	return startYear
 }
 
 // zoneLetters is the pattern letter that writes a zone in the style asked
@@ -564,6 +637,12 @@ func (o *dateOptions) withEra(pattern string) string {
 	if !o.calendarNamed() {
 		return pattern
 	}
+	// Calendar-specific CLDR patterns already say whether the era belongs in
+	// this combination. Hebrew, for example, normally omits it while Coptic
+	// includes it.
+	if _, ok := o.locale.CalendarFormatFor(o.calendar); ok {
+		return pattern
+	}
 	letters := patternLettersOf(pattern)
 	if !strings.ContainsRune(letters, 'y') {
 		return pattern
@@ -670,11 +749,12 @@ func (o *dateOptions) calendarEras() (*icu.CalendarNames, bool) {
 
 // calendarNames is what this language calls the months and eras of the
 // calendar being written, where that calendar has months of its own. The
-// Buddhist, Japanese and Republic of China calendars keep the months of the
-// common one and count only the years differently.
+// Buddhist, Japanese and Republic of China calendars keep the same sequence
+// of months as the common calendar, but their locale data can still give
+// those months a different standalone form or surrounding literals.
 func (o *dateOptions) calendarNames() (*icu.CalendarNames, bool) {
 	switch o.calendar {
-	case "", "gregory", "iso8601", "buddhist", "roc", "japanese":
+	case "", "gregory", "iso8601":
 		return nil, false
 	}
 	return o.locale.CalendarNamesFor(o.calendar)
@@ -747,6 +827,7 @@ func localiseDigits(s, digits string) string {
 // locale carries, and a set of fields is the skeleton that names them.
 func (o *dateOptions) patternFor() string {
 	l := o.locale
+	datePatterns, gluePatterns, calendarSkeletons := o.calendarPatterns()
 	widths := map[string]int{"full": 0, "long": 1, "medium": 2, "short": 3}
 
 	// The part of the day on its own, which is a field no skeleton names.
@@ -759,7 +840,7 @@ func (o *dateOptions) patternFor() string {
 	if o.dateStyle != "" || o.timeStyle != "" {
 		date, clock := "", ""
 		if i, ok := widths[o.dateStyle]; ok {
-			date = l.DatePatterns[i]
+			date = datePatterns[i]
 		}
 		if i, ok := widths[o.timeStyle]; ok {
 			clock = l.TimePatterns[i]
@@ -770,7 +851,7 @@ func (o *dateOptions) patternFor() string {
 			// Both, joined the way the locale joins them: " at ", " um ", or
 			// a space, which is part of the language rather than of either
 			// pattern.
-			glue := l.Glue[widths[o.dateStyle]]
+			glue := gluePatterns[widths[o.dateStyle]]
 			if !strings.Contains(glue, "{0}") {
 				glue = "{0}, {1}"
 			}
@@ -784,14 +865,18 @@ func (o *dateOptions) patternFor() string {
 
 	// A set of fields: the locale's own order for that combination, when it
 	// has one, and otherwise the fields in the order its short date puts them.
-	pattern, ok := l.Skeletons[o.skeleton()]
+	pattern, ok := calendarSkeletons[o.skeleton()]
+	calendarPattern := ok
+	if !ok {
+		pattern, ok = l.Skeletons[o.skeleton()]
+	}
 	if !ok {
 		// A date and a time asked for together are the locale's pattern for
 		// each, joined the way it joins them.
 		if date, time := o.splitSkeletons(); date != "" && time != "" {
 			// The shortest glue, which is what a request by field gets: a
 			// comma in English, a space in French.
-			glue := l.Glue[3]
+			glue := gluePatterns[3]
 			if !strings.Contains(glue, "{0}") {
 				glue = "{0}, {1}"
 			}
@@ -803,7 +888,7 @@ func (o *dateOptions) patternFor() string {
 	}
 	// A weekday or an era is not part of what the locale keys its patterns by,
 	// so they are put where this locale puts them.
-	if o.weekday != "" && !strings.ContainsRune(patternLettersOf(pattern), 'E') {
+	if o.weekday != "" && !strings.ContainsAny(patternLettersOf(pattern), "Eec") {
 		pattern = o.withWeekday(pattern)
 	}
 	noEra := o.calendar == "chinese" || o.calendar == "dangi"
@@ -818,7 +903,7 @@ func (o *dateOptions) patternFor() string {
 		// in some languages and a space in others.
 		joiner := " "
 		if !strings.ContainsAny(patternLettersOf(pattern), "hHkKms") {
-			joiner = glueSeparator(l)
+			joiner = glueSeparator(gluePatterns)
 		}
 		pattern += joiner + zoneLetters(o.timeZoneName)
 	}
@@ -853,15 +938,25 @@ func (o *dateOptions) patternFor() string {
 	}
 	// The locale's pattern says what order the fields go in; the options say
 	// how wide each one is written, and those are the caller's to choose.
-	return o.applyWidths(pattern)
+	return o.applyWidths(pattern, calendarPattern)
+}
+
+func (o *dateOptions) calendarPatterns() ([4]string, [4]string, map[string]string) {
+	if o.calendar == "" || o.calendar == "gregory" || o.calendar == "iso8601" {
+		return o.locale.DatePatterns, o.locale.Glue, nil
+	}
+	if format, ok := o.locale.CalendarFormatFor(o.calendar); ok {
+		return format.DatePatterns, o.locale.Glue, format.Skeletons
+	}
+	return o.locale.DatePatterns, o.locale.Glue, nil
 }
 
 // glueSeparator is what a language puts between the two halves of a date and
 // time written together, which is what anything added to a pattern goes after.
-func glueSeparator(l *icu.Locale) string {
+func glueSeparator(gluePatterns [4]string) string {
 	// The date is {0} here and the time is {1}, which is the way round the
 	// patterns are carried.
-	glue := l.Glue[3]
+	glue := gluePatterns[3]
 	first := strings.Index(glue, "{0}")
 	second := strings.Index(glue, "{1}")
 	if first < 0 || second < 0 || second < first {
@@ -877,7 +972,8 @@ func glueSeparator(l *icu.Locale) string {
 // withWeekday puts the weekday where this locale puts it, which is in front in
 // most languages and behind in some.
 func (o *dateOptions) withWeekday(pattern string) string {
-	full := o.locale.DatePatterns[0]
+	patterns, _, _ := o.calendarPatterns()
+	full := patterns[0]
 	at := strings.IndexByte(full, 'E')
 	if at < 0 {
 		return "EEEE, " + pattern
@@ -943,7 +1039,7 @@ func separatorSuffix(before string) string {
 
 // applyWidths rewrites each field of a pattern to the width that was asked
 // for, leaving the order and the literals as the locale had them.
-func (o *dateOptions) applyWidths(pattern string) string {
+func (o *dateOptions) applyWidths(pattern string, calendarPattern bool) string {
 	// Only a width that asks for something the pattern does not already say is
 	// applied. "numeric" is not such a width: it means "as this locale writes
 	// it", and the locale has already said -- 5.1.2024 in German, 05/01/2024
@@ -954,14 +1050,19 @@ func (o *dateOptions) applyWidths(pattern string) string {
 	}
 	if o.month == "2-digit" {
 		want['M'] = "MM"
-	} else if o.month == "long" || o.month == "short" || o.month == "narrow" {
+		want['L'] = "LL"
+		want['N'] = "NN"
+	} else if !calendarPattern && (o.month == "long" || o.month == "short" || o.month == "narrow") {
 		want['M'] = monthLetters(o.month)
+		want['L'] = strings.ReplaceAll(want['M'], "M", "L")
 	}
 	if o.day == "2-digit" {
 		want['d'] = "dd"
 	}
 	if o.weekday != "" {
-		want['E'] = weekdayLetters(o.weekday)
+		for _, letter := range []byte{'E', 'e', 'c'} {
+			want[letter] = strings.ReplaceAll(weekdayLetters(o.weekday), "E", string(letter))
+		}
 	}
 	if o.minute == "2-digit" {
 		want['m'] = "mm"
@@ -1021,6 +1122,57 @@ func (o *dateOptions) applyWidths(pattern string) string {
 	return b.String()
 }
 
+func romanMonth(month int) string {
+	if month < 1 || month > 13 {
+		return strconv.Itoa(month)
+	}
+	values := [...]string{"", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII", "XIII"}
+	return values[month]
+}
+
+func hebrewNumber(value int, year bool) string {
+	if year && value >= 1000 {
+		value %= 1000
+	}
+	if value <= 0 {
+		return strconv.Itoa(value)
+	}
+	values := [...]struct {
+		value  int
+		letter string
+	}{
+		{400, "ת"}, {300, "ש"}, {200, "ר"}, {100, "ק"},
+		{90, "צ"}, {80, "פ"}, {70, "ע"}, {60, "ס"}, {50, "נ"},
+		{40, "מ"}, {30, "ל"}, {20, "כ"}, {10, "י"}, {9, "ט"},
+		{8, "ח"}, {7, "ז"}, {6, "ו"}, {5, "ה"}, {4, "ד"},
+		{3, "ג"}, {2, "ב"}, {1, "א"},
+	}
+	var b strings.Builder
+	for value > 0 {
+		// Fifteen and sixteen avoid spelling a divine name.
+		if value == 15 {
+			b.WriteString("טו")
+			break
+		}
+		if value == 16 {
+			b.WriteString("טז")
+			break
+		}
+		for _, item := range values {
+			if value >= item.value {
+				b.WriteString(item.letter)
+				value -= item.value
+				break
+			}
+		}
+	}
+	runes := []rune(b.String())
+	if len(runes) == 1 {
+		return string(runes) + "׳"
+	}
+	return string(runes[:len(runes)-1]) + "״" + string(runes[len(runes)-1])
+}
+
 // skeleton names the combination of fields that was asked for, in the form the
 // locale data is keyed by.
 func (o *dateOptions) skeleton() string {
@@ -1076,7 +1228,11 @@ func (o *dateOptions) splitSkeletons() (string, string) {
 	timeOnly.weekday, timeOnly.era = "", ""
 	timeOnly.year, timeOnly.month, timeOnly.day = "", "", ""
 
-	date, dateOK := o.locale.Skeletons[dateOnly.skeleton()]
+	_, _, calendarSkeletons := o.calendarPatterns()
+	date, dateOK := calendarSkeletons[dateOnly.skeleton()]
+	if !dateOK {
+		date, dateOK = o.locale.Skeletons[dateOnly.skeleton()]
+	}
 	time, timeOK := o.locale.Skeletons[timeOnly.skeleton()]
 	if !dateOK || !timeOK {
 		return "", ""
@@ -1091,8 +1247,9 @@ func (o *dateOptions) splitSkeletons() (string, string) {
 // pattern for, in the order that locale writes a date.
 func (o *dateOptions) buildPattern() string {
 	l := o.locale
-	order := dateFieldOrder(l.DatePatterns[3])
-	sep := dateSeparator(l.DatePatterns[3])
+	datePatterns, _, _ := o.calendarPatterns()
+	order := dateFieldOrder(datePatterns[3])
+	sep := dateSeparator(datePatterns[3])
 
 	var date []string
 	for _, field := range order {
@@ -1114,7 +1271,11 @@ func (o *dateOptions) buildPattern() string {
 
 	var parts []string
 	if o.weekday != "" {
-		parts = append(parts, weekdayLetters(o.weekday))
+		weekday := weekdayLetters(o.weekday)
+		if o.year == "" && o.month == "" && o.day == "" {
+			weekday = strings.ReplaceAll(weekday, "E", "c")
+		}
+		parts = append(parts, weekday)
 	}
 	if len(date) > 0 {
 		joiner := sep

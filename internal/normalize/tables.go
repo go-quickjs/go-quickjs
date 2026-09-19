@@ -1,4 +1,4 @@
-package vm
+package normalize
 
 // Unicode's decomposition data, for String.prototype.normalize.
 //

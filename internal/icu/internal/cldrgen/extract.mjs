@@ -81,6 +81,42 @@ function pattern(parts, hour12) {
   return out;
 }
 
+// Some ICU builds expose a broken field iterator for a numeric year and month:
+// format() succeeds, but formatToParts() aborts the process. Read that simple
+// two-field pattern from the digit runs so one bad iterator cannot make the
+// generator drop an otherwise supported locale.
+function numericYearMonthPattern(locale) {
+  const formatter = new Intl.DateTimeFormat(locale, {
+    year: "numeric", month: "numeric", timeZone: "UTC",
+  });
+  const resolved = formatter.resolvedOptions();
+  if (resolved.year !== undefined && resolved.month !== undefined) return null;
+  const text = formatter.format(SAMPLE);
+  const fields = [...text.matchAll(/\p{Nd}+/gu)];
+  if (fields.length !== 2) return null;
+
+  let out = "";
+  let at = 0;
+  let sawYear = false;
+  let sawMonth = false;
+  for (const field of fields) {
+    out += quote(text.slice(at, field.index));
+    const width = [...field[0]].length;
+    if (width > 2 && !sawYear) {
+      out += "y";
+      sawYear = true;
+    } else if (!sawMonth) {
+      out += width === 2 ? "MM" : "M";
+      sawMonth = true;
+    } else {
+      return null;
+    }
+    at = field.index + field[0].length;
+  }
+  out += quote(text.slice(at));
+  return sawYear && sawMonth ? out : null;
+}
+
 // A month or a weekday is a number or a name, and which it is shows in what
 // was produced: names are matched against the lists read for this locale.
 //
@@ -117,8 +153,21 @@ function monthLetters(value) {
 }
 
 function weekdayLetters(value) {
-  return widthOf(value, currentNames.days, currentNames.daysShort,
-                 currentNames.daysNarrow, ["EEEE", "EEE", "EEEEE"]);
+  // E is the form used inside a date, while c is the stand-alone form. They
+  // are different words in a handful of locales (and differ only in case in
+  // several more), so retain the context in the recovered pattern.
+  const format = [currentNames.daysFormat, currentNames.daysFormatShort,
+                  currentNames.daysFormatNarrow];
+  const alone = [currentNames.days, currentNames.daysShort, currentNames.daysNarrow];
+  const inLists = (lists) => lists.some(list => list.includes(value));
+  const standalone = currentNames.daysFormat.length > 0 &&
+    inLists(alone) && !inLists(format);
+  const lists = standalone ? alone : format;
+  return widthOf(value,
+    lists[0].length > 0 ? lists[0] : alone[0],
+    lists[1].length > 0 ? lists[1] : alone[1],
+    lists[2].length > 0 ? lists[2] : alone[2],
+    standalone ? ["cccc", "ccc", "ccccc"] : ["EEEE", "EEE", "EEEEE"]);
 }
 
 // quote escapes a literal so that the letters in it are not read as fields.
@@ -152,14 +201,28 @@ function dateNames(locale) {
   const dayAt = (day, width) => new Intl.DateTimeFormat(locale, {
     weekday: width, timeZone: "UTC",
   }).format(new Date(Date.UTC(2024, 0, 7 + day)));  // 7 January 2024 was a Sunday
+  const dayInDate = (day, width) => {
+    const parts = new Intl.DateTimeFormat(locale, {
+      weekday: width, year: "numeric", month: "long", day: "numeric", timeZone: "UTC",
+    }).formatToParts(new Date(Date.UTC(2024, 0, 7 + day)));
+    return parts.find(part => part.type === "weekday")?.value || dayAt(day, width);
+  };
 
   const twelve = (width) => Array.from({length: 12}, (_, i) => monthInDate(i, width));
   const alone = (width) => Array.from({length: 12}, (_, i) => monthAt(i, width));
   const seven = (width) => Array.from({length: 7}, (_, i) => dayAt(i, width));
+  const sevenInDate = (width) => Array.from({length: 7}, (_, i) => dayInDate(i, width));
 
   const months = twelve("long");
   const monthsAlone = alone("long");
   const same = months.every((m, i) => m === monthsAlone[i]);
+  const days = seven("long");
+  const daysShort = seven("short");
+  const daysNarrow = seven("narrow");
+  const daysFormat = sevenInDate("long");
+  const daysFormatShort = sevenInDate("short");
+  const daysFormatNarrow = sevenInDate("narrow");
+  const different = (a, b) => a.some((value, i) => value !== b[i]);
   return {
     months,
     monthsShort: twelve("short"),
@@ -168,9 +231,12 @@ function dateNames(locale) {
     // languages.
     monthsAlone: same ? [] : monthsAlone,
     monthsAloneShort: same ? [] : alone("short"),
-    days: seven("long"),
-    daysShort: seven("short"),
-    daysNarrow: seven("narrow"),
+    days,
+    daysShort,
+    daysNarrow,
+    daysFormat: different(days, daysFormat) ? daysFormat : [],
+    daysFormatShort: different(daysShort, daysFormatShort) ? daysFormatShort : [],
+    daysFormatNarrow: different(daysNarrow, daysFormatNarrow) ? daysFormatNarrow : [],
   };
 }
 
@@ -188,8 +254,8 @@ function numberData(locale) {
     const part = parts.find(p => p.type === type);
     return part ? part.value : undefined;
   };
-  const digits = new Intl.NumberFormat(locale, {useGrouping: false})
-    .format(1234567890).split("");
+  const digits = Array.from(new Intl.NumberFormat(locale, {useGrouping: false})
+    .format(1234567890));
   // The digits come out in the order 1234567890, so zero is last.
   const table = digits[9] + digits.slice(0, 9).join("");
 
@@ -242,15 +308,11 @@ function numberData(locale) {
     // number is only approximate: both are the language's own.
     // Which clock the language keeps: the one it uses by default, and the
     // ones it uses when a twelve-hour or a twenty-four-hour clock is asked
-    // for -- Japanese counts midnight as zero where English counts it twelve.
+    // for.
     hourCycles: (() => {
       const at = (options) => new Intl.DateTimeFormat(locale,
         {hour: "numeric", ...options}).resolvedOptions().hourCycle || "";
-      const cycles = [at({}), at({hour12: true}), at({hour12: false})];
-      // ECMA-402 requires Japanese to count midnight as zero when a
-      // twelve-hour clock is requested. Some ICU versions report h12 here.
-      if (locale === "ja") cycles[1] = "h11";
-      return cycles.join(",");
+      return [at({}), at({hour12: true}), at({hour12: false})].join(",");
     })(),
     range: (() => {
       const parts = new Intl.NumberFormat(locale).formatRangeToParts(1, 5);
@@ -362,8 +424,9 @@ function compactForms(locale) {
 // latinDigits rewrites a number written in another script's digits as one this
 // can parse.
 function latinDigits(text, locale) {
-  const digits = new Intl.NumberFormat(locale, {useGrouping: false}).format(1234567890);
-  const table = digits[9] + digits.slice(0, 9);
+  const digits = Array.from(new Intl.NumberFormat(locale, {useGrouping: false})
+    .format(1234567890));
+  const table = digits[9] + digits.slice(0, 9).join("");
   if (table === "0123456789") return text;
   let out = "";
   for (const ch of text) {
@@ -719,7 +782,10 @@ function extract(locale) {
     "h12": {hour: "numeric", hour12: true},
     "h": {hour: "numeric"},
   })) {
-    skeletons[name] = styled(options);
+    // Node 26/ICU 78 can abort inside formatToParts() when resolvedOptions()
+    // reports an incomplete numeric year-month skeleton. format() remains valid.
+    const fallback = name === "yM" ? numericYearMonthPattern(locale) : null;
+    skeletons[name] = fallback || styled(options);
   }
 
   const dayPeriod = (when) =>

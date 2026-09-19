@@ -60,6 +60,7 @@ func (r *Runtime) buildIntl() *Object {
 	intl := newObject(r.proto.object, ClassObject)
 	r.defToStringTag(intl, "Intl")
 
+	r.initLocale(intl)
 	r.initNumberFormat(intl)
 	r.initDateTimeFormat(intl)
 	r.initCollator(intl)
@@ -92,7 +93,7 @@ func (r *Runtime) buildIntl() *Object {
 		case "calendar":
 			values = icu.Calendars()
 		case "collation":
-			values = []string{"default"}
+			values = icu.Collations()
 		case "currency":
 			values = icu.Currencies()
 		case "numberingSystem":
@@ -106,7 +107,7 @@ func (r *Runtime) buildIntl() *Object {
 				}
 			}
 		case "unit":
-			values = nil
+			values = icu.Units()
 		default:
 			return Undefined, rt.throwRangeError("there is no such key: %s", key.Go())
 		}
@@ -137,13 +138,10 @@ func (r *Runtime) requestedLocales(v Value) ([]string, error) {
 		if o, err = r.toObject(v); err != nil {
 			return nil, err
 		}
-		// Anything with a baseName says outright which tag it is.
-		if base, err := r.getProp(o, r.atoms.intern("baseName"), v); err == nil && base.IsString() {
-			tag, ok := parseTag(base.String().Go())
-			if !ok {
-				return nil, r.throwRangeError("that is not a language tag: %s", base.String().Go())
-			}
-			return []string{canonicalTag(tag)}, nil
+		// A Locale is consumed through its internal slot, without invoking an
+		// overridden toString and without dropping its Unicode extensions.
+		if locale, ok := r.localeData(v); ok {
+			return []string{locale.tag.String()}, nil
 		}
 	}
 	length, err := r.lengthOf(o)
@@ -166,6 +164,13 @@ func (r *Runtime) requestedLocales(v Value) ([]string, error) {
 		}
 		if !item.IsString() && !item.IsObject() {
 			return nil, r.throwTypeError("a locale is a tag or a Locale")
+		}
+		if locale, ok := r.localeData(item); ok {
+			canonical := locale.tag.String()
+			if !contains(out, canonical) {
+				out = append(out, canonical)
+			}
+			continue
 		}
 		s, err := r.toString(item)
 		if err != nil {
@@ -346,7 +351,7 @@ func defaultSetting(l *icu.Locale, key string) string {
 		}
 		return "gregory"
 	case "co":
-		return "default"
+		return icu.DefaultCollation(l.Tag)
 	case "kn", "kf":
 		return "false"
 	case "hc":

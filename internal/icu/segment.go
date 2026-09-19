@@ -275,6 +275,11 @@ func wordBreaks(s string) []int {
 		}
 		left := classes[p]
 		split := t.breaksBetween(left, right)
+		if cjkRune(runes[p]) && cjkRune(runes[i]) {
+			// ICU sends a whole mixed Han/Hiragana/Katakana run through one
+			// dictionary engine before deciding its internal boundaries.
+			split = false
+		}
 		if classes[i-1] == t.zwj && isPictographic(runes[i]) {
 			// An emoji joined to an emoji is one word, as it is one character.
 			split = false
@@ -310,7 +315,7 @@ func wordBreaks(s string) []int {
 			out = append(out, offsets[i])
 		}
 	}
-	return append(out, len(s))
+	return dictionaryWordBreaks(s, append(out, len(s)))
 }
 
 // --- sentences --------------------------------------------------------------
