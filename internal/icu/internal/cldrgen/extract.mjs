@@ -577,6 +577,7 @@ function pluralTable(locale, type, compact) {
   const plainRules = new Intl.PluralRules(locale, {
     type, notation: "standard", maximumFractionDigits: 20,
   });
+  const supportsNotation = compactRules.resolvedOptions().notation === "compact";
   const byExponent = new Map();
   for (const forms of Object.values(compact)) {
     for (const [powerText, form] of Object.entries(forms)) {
@@ -594,6 +595,14 @@ function pluralTable(locale, type, compact) {
     const differs = samples.some(n => compactRules.select(n) !== plainRules.select(n));
     if (categories.size === 1 && differs) {
       compactExponents[exponent] = categories.values().next().value;
+    } else if (!supportsNotation) {
+      // Node releases that predate PluralRules notation silently ignore the
+      // option. CLDR's only exponent-dependent rule is the Romance "many"
+      // rule: a compact million/billion is many regardless of its mantissa.
+      const atPower = plainRules.select(Math.pow(10, exponent));
+      if (atPower === "many" && samples.some(n => plainRules.select(n) !== atPower)) {
+        compactExponents[exponent] = atPower;
+      }
     }
   }
 

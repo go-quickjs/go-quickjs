@@ -146,6 +146,16 @@ func WarmupDateTimeData() {
 	vm.WarmupDateTimeData()
 }
 
+// WarmupIntlData eagerly loads every process-wide dataset used by Intl,
+// including collations, display names, segmentation rules and dictionaries,
+// number and unit formats, calendars, and time-zone names. Servers can call it
+// before constructing a Runtime to move all data-dependent latency to startup.
+// The loaded data remains resident for the life of the process. Repeated calls
+// do nothing.
+func WarmupIntlData() {
+	vm.WarmupIntlData()
+}
+
 // New creates a Runtime with the standard globals installed.
 func New(opts ...Option) *Runtime {
 	var c config

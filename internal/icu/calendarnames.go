@@ -41,16 +41,19 @@ func (l *Locale) CalendarNamesFor(name string) (*CalendarNames, bool) {
 		}
 	}
 	which, ok := at[name]
-	if !ok || which >= len(calendarEntries) {
+	if !ok {
 		return nil, false
 	}
-	return calendarEntries[which], true
+	entry := calendarNamesAt(which)
+	return entry, entry != nil
 }
 
 var (
-	calendarOnce    sync.Once
-	calendarEntries []*CalendarNames
-	calendarIndex   map[string]map[string]int
+	calendarOnce      sync.Once
+	calendarEntries   []*CalendarNames
+	calendarEntryOnce []sync.Once
+	calendarIndex     map[string]map[string]int
+	calendarBlocks    *packedBlockTable
 )
 
 // CalendarFormat is the ordering and punctuation a locale uses for one
@@ -72,141 +75,171 @@ func (l *Locale) CalendarFormatFor(name string) (*CalendarFormat, bool) {
 		}
 	}
 	which, ok := at[name]
-	if !ok || which >= len(calendarFormatEntries) {
+	if !ok {
 		return nil, false
 	}
-	return calendarFormatEntries[which], true
+	entry := calendarFormatAt(which)
+	return entry, entry != nil
 }
 
 var (
-	calendarFormatOnce    sync.Once
-	calendarFormatEntries []*CalendarFormat
-	calendarFormatIndex   map[string]map[string]int
+	calendarFormatOnce      sync.Once
+	calendarFormatEntries   []*CalendarFormat
+	calendarFormatEntryOnce []sync.Once
+	calendarFormatIndex     map[string]map[string]int
+	calendarFormatBlocks    *packedBlockTable
 )
 
 func loadCalendars() {
 	calendarOnce.Do(func() {
-		text, err := inflate(calendarNames)
+		calendarEntries = make([]*CalendarNames, len(calendarNameEntriesPacked))
+		calendarEntryOnce = make([]sync.Once, len(calendarNameEntriesPacked))
+		calendarBlocks = newPackedBlockTable(packedTables, calendarNameBlocksPacked[:])
+		text, err := inflate(calendarNameIndexPacked)
 		if err != nil {
 			return
 		}
-		entries, index, _ := strings.Cut(text, "\n\n")
-		for _, line := range strings.Split(entries, "\n") {
-			if line == "" {
-				continue
-			}
-			names := &CalendarNames{}
-			for i := range names.Months {
-				names.Months[i] = map[string]string{}
-				names.FormatMonths[i] = map[string]string{}
-				names.DateMonths[i] = map[string]string{}
-			}
-			for _, field := range strings.Split(line, "\x01") {
-				key, value, ok := strings.Cut(field, "\t")
-				if !ok || len(key) < 2 {
-					continue
-				}
-				width := widthOf(key[1:])
-				if width < 0 && key != "cycle" {
-					continue
-				}
-				switch key[0] {
-				case 'm':
-					for _, item := range strings.Split(value, "|") {
-						if number, name, ok := strings.Cut(item, "="); ok {
-							names.Months[width][number] = name
-						}
-					}
-				case 'f':
-					for _, item := range strings.Split(value, "|") {
-						if number, name, ok := strings.Cut(item, "="); ok {
-							names.FormatMonths[width][number] = name
-						}
-					}
-				case 'd':
-					for _, item := range strings.Split(value, "|") {
-						if number, name, ok := strings.Cut(item, "="); ok {
-							names.DateMonths[width][number] = name
-						}
-					}
-				case 'e':
-					if value != "" {
-						names.Eras[width] = strings.Split(value, "|")
-					}
-				case 'c':
-					if value != "" {
-						names.Cycle = strings.Split(value, "|")
-					}
-				}
-			}
-			calendarEntries = append(calendarEntries, names)
-		}
-		calendarIndex = map[string]map[string]int{}
-		for _, line := range strings.Split(index, "\n") {
-			tag, rest, ok := strings.Cut(line, "\t")
-			if !ok {
-				continue
-			}
-			at := map[string]int{}
-			for _, field := range strings.Split(rest, "\x01") {
-				if name, which, ok := strings.Cut(field, "="); ok {
-					n, err := strconv.Atoi(which)
-					if err == nil {
-						at[name] = n
-					}
-				}
-			}
-			calendarIndex[tag] = at
-		}
+		calendarIndex = decodeCalendarIndex(text)
 	})
 }
 
 func loadCalendarFormats() {
 	calendarFormatOnce.Do(func() {
-		text, err := inflate(calendarFormats)
+		calendarFormatEntries = make([]*CalendarFormat, len(calendarFormatEntriesPacked))
+		calendarFormatEntryOnce = make([]sync.Once, len(calendarFormatEntriesPacked))
+		calendarFormatBlocks = newPackedBlockTable(packedTables, calendarFormatBlocksPacked[:])
+		text, err := inflate(calendarFormatIndexPacked)
 		if err != nil {
 			return
 		}
-		entries, index, _ := strings.Cut(text, "\n\n")
-		for _, line := range strings.Split(entries, "\n") {
-			if line == "" {
-				continue
-			}
-			fields := strings.Split(line, fieldSep)
-			format := &CalendarFormat{}
-			for field, into := range map[int]*[4]string{0: &format.DatePatterns, 1: &format.Glue} {
-				if field >= len(fields) {
-					continue
-				}
-				for i, value := range strings.Split(fields[field], itemSep) {
-					if i < len(into) {
-						into[i] = strings.ReplaceAll(value, "\u202f", " ")
-					}
-				}
-			}
-			format.Skeletons = pairs(fields, 2)
-			for skeleton, pattern := range format.Skeletons {
-				format.Skeletons[skeleton] = strings.ReplaceAll(pattern, "\u202f", " ")
-			}
-			calendarFormatEntries = append(calendarFormatEntries, format)
+		calendarFormatIndex = decodeCalendarIndex(text)
+	})
+}
+
+func decodeCalendarIndex(text string) map[string]map[string]int {
+	index := map[string]map[string]int{}
+	for _, line := range strings.Split(text, "\n") {
+		tag, rest, ok := strings.Cut(line, "\t")
+		if !ok {
+			continue
 		}
-		calendarFormatIndex = map[string]map[string]int{}
-		for _, line := range strings.Split(index, "\n") {
-			tag, rest, ok := strings.Cut(line, "\t")
+		at := map[string]int{}
+		for _, field := range strings.Split(rest, "\x01") {
+			name, which, ok := strings.Cut(field, "=")
 			if !ok {
 				continue
 			}
-			at := map[string]int{}
-			for _, field := range strings.Split(rest, "\x01") {
-				if name, which, ok := strings.Cut(field, "="); ok {
-					if n, err := strconv.Atoi(which); err == nil {
-						at[name] = n
-					}
-				}
+			if n, err := strconv.Atoi(which); err == nil {
+				at[name] = n
 			}
-			calendarFormatIndex[tag] = at
+		}
+		index[tag] = at
+	}
+	return index
+}
+
+func calendarNamesAt(which int) *CalendarNames {
+	loadCalendars()
+	if which < 0 || which >= len(calendarNameEntriesPacked) {
+		return nil
+	}
+	calendarEntryOnce[which].Do(func() {
+		text, ok := calendarBlocks.record(calendarNameEntriesPacked[which])
+		if ok {
+			calendarEntries[which] = decodeCalendarNames(text)
 		}
 	})
+	return calendarEntries[which]
+}
+
+func decodeCalendarNames(text string) *CalendarNames {
+	names := &CalendarNames{}
+	for i := range names.Months {
+		names.Months[i] = map[string]string{}
+		names.FormatMonths[i] = map[string]string{}
+		names.DateMonths[i] = map[string]string{}
+	}
+	for _, field := range strings.Split(text, "\x01") {
+		key, value, ok := strings.Cut(field, "\t")
+		if !ok || len(key) < 2 {
+			continue
+		}
+		width := widthOf(key[1:])
+		if width < 0 && key != "cycle" {
+			continue
+		}
+		switch key[0] {
+		case 'm':
+			decodeCalendarPairs(value, names.Months[width])
+		case 'f':
+			decodeCalendarPairs(value, names.FormatMonths[width])
+		case 'd':
+			decodeCalendarPairs(value, names.DateMonths[width])
+		case 'e':
+			if value != "" {
+				names.Eras[width] = strings.Split(value, "|")
+			}
+		case 'c':
+			if value != "" {
+				names.Cycle = strings.Split(value, "|")
+			}
+		}
+	}
+	return names
+}
+
+func decodeCalendarPairs(text string, into map[string]string) {
+	for _, item := range strings.Split(text, "|") {
+		if number, name, ok := strings.Cut(item, "="); ok {
+			into[number] = name
+		}
+	}
+}
+
+func calendarFormatAt(which int) *CalendarFormat {
+	loadCalendarFormats()
+	if which < 0 || which >= len(calendarFormatEntriesPacked) {
+		return nil
+	}
+	calendarFormatEntryOnce[which].Do(func() {
+		text, ok := calendarFormatBlocks.record(calendarFormatEntriesPacked[which])
+		if ok {
+			calendarFormatEntries[which] = decodeCalendarFormat(text)
+		}
+	})
+	return calendarFormatEntries[which]
+}
+
+func decodeCalendarFormat(text string) *CalendarFormat {
+	fields := strings.Split(text, fieldSep)
+	format := &CalendarFormat{}
+	for field, into := range map[int]*[4]string{0: &format.DatePatterns, 1: &format.Glue} {
+		if field >= len(fields) {
+			continue
+		}
+		for i, value := range strings.Split(fields[field], itemSep) {
+			if i < len(into) {
+				into[i] = strings.ReplaceAll(value, "\u202f", " ")
+			}
+		}
+	}
+	format.Skeletons = pairs(fields, 2)
+	for skeleton, pattern := range format.Skeletons {
+		format.Skeletons[skeleton] = strings.ReplaceAll(pattern, "\u202f", " ")
+	}
+	return format
+}
+
+func warmupCalendarData() {
+	loadCalendars()
+	for i := range calendarNameEntriesPacked {
+		_ = calendarNamesAt(i)
+	}
+	loadCalendarFormats()
+	for i := range calendarFormatEntriesPacked {
+		_ = calendarFormatAt(i)
+	}
+	loadMonthTables()
 }
 
 func widthOf(name string) int {

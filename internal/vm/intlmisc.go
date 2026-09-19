@@ -436,9 +436,9 @@ func (r *Runtime) initPluralRules(intl *Object) {
 
 func (o *pluralOptions) rule() *icu.PluralRule {
 	if o.ordinal {
-		return &o.locale.Ordinal
+		return o.locale.OrdinalRule()
 	}
-	return &o.locale.Cardinal
+	return o.locale.CardinalRule()
 }
 
 func (r *Runtime) pluralOf(this Value) (*pluralOptions, error) {
@@ -736,10 +736,10 @@ func (r *Runtime) initListFormat(intl *Object) {
 // pattern is the locale's way of joining this kind of list, with English as
 // the fallback for a locale that does not have this width.
 func (o *listOptions) pattern() icu.ListPattern {
-	if p, ok := o.locale.Lists[o.kind+"-"+o.style]; ok {
+	if p, ok := o.locale.ListPatternFor(o.kind + "-" + o.style); ok {
 		return p
 	}
-	if p, ok := o.locale.Lists[o.kind+"-long"]; ok {
+	if p, ok := o.locale.ListPatternFor(o.kind + "-long"); ok {
 		return p
 	}
 	return icu.ListPattern{Pair: "{0} and {1}", Start: ", ", Middle: ", ", End: ", and "}
@@ -983,9 +983,9 @@ func (o *relativeOptions) format(r *Runtime, n float64, unitName string) (string
 	}
 	// The shorter styles where the language writes them differently, and the
 	// long words where it does not.
-	data, ok := o.locale.Relative[o.style+"/"+unit]
+	data, ok := o.locale.RelativeUnitFor(o.style + "/" + unit)
 	if !ok {
-		if data, ok = o.locale.Relative[unit]; !ok {
+		if data, ok = o.locale.RelativeUnitFor(unit); !ok {
 			return "", r.throwRangeError("this runtime has no words for %s", unit)
 		}
 	}
@@ -1001,7 +1001,7 @@ func (o *relativeOptions) format(r *Runtime, n float64, unitName string) (string
 	if math.Signbit(n) {
 		forms = data.Past
 	}
-	category := o.locale.Cardinal.Category(math.Abs(n))
+	category := o.locale.CardinalRule().Category(math.Abs(n))
 	pattern, ok := forms[category]
 	if !ok {
 		if pattern, ok = forms["other"]; !ok {

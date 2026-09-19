@@ -246,6 +246,7 @@ func (l *Locale) compare(a, b string, strength Strength, skipAccents, upperFirst
 	shifted := false
 	language := ""
 	if l != nil {
+		l.loadTailoring()
 		language = strings.ToLower(strings.SplitN(l.Tag, "-", 2)[0])
 		moved, joined, shifted = l.Tailoring, l.Contractions, l.Shifted
 		if l.UpperFirst {
@@ -322,7 +323,7 @@ func (t *collationTable) key(s string, moved map[rune]int32, joined map[string]i
 			// The run without the zeros in front of it: how long it is says
 			// which number is the larger, and then the digits do.
 			digits := strings.TrimLeft(s[i:j], "0")
-			out.primary = append(out.primary, numberMark, int32(len(digits)))
+			out.primary = append(out.primary, numberMark(), int32(len(digits)))
 			for k := 0; k < len(digits); k++ {
 				out.primary = append(out.primary, int32(digits[k]-'0'))
 			}
@@ -556,7 +557,7 @@ func (t *collationTable) appendWeights(out *sortKey, r rune, moved map[rune]int3
 			weight += custom.span
 		}
 	}
-	if shifted && weight < variableLimit {
+	if shifted && weight < variableLimit() {
 		// Punctuation, passed over here and compared at the end, so that it
 		// separates two words only when nothing else does.
 		out.shifted = append(out.shifted, weight)
@@ -573,19 +574,26 @@ func (t *collationTable) appendWeights(out *sortKey, r rune, moved map[rune]int3
 // several, so that it comes after the several themselves.
 const writtenAsOne = 1 << 20
 
-// variableLimit is where the punctuation ends and the digits begin. A language
-// that passes over punctuation passes over everything below this.
-var variableLimit = numberMark
+var (
+	numberMarkOnce  sync.Once
+	numberMarkValue int32
+)
 
 // numberMark is where a number sorts among the letters: where the digits
-// themselves do, which is what it stands in for.
-var numberMark = func() int32 {
-	p, _, _, ok := order().weightsOf('0')
-	if !ok {
-		return 0
-	}
-	return p * weightScale
-}()
+// themselves do, which is what it stands in for. It stays lazy so importing
+// the package does not inflate the root collation table.
+func numberMark() int32 {
+	numberMarkOnce.Do(func() {
+		if p, _, _, ok := order().weightsOf('0'); ok {
+			numberMarkValue = p * weightScale
+		}
+	})
+	return numberMarkValue
+}
+
+// variableLimit is where the punctuation ends and the digits begin. A language
+// that passes over punctuation passes over everything below this.
+func variableLimit() int32 { return numberMark() }
 
 func compareWeights(a, b []int32, invert bool) int {
 	for i := 0; i < len(a) && i < len(b); i++ {

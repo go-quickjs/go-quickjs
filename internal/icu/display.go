@@ -1,6 +1,7 @@
 package icu
 
 import (
+	"sort"
 	"strings"
 	"sync"
 )
@@ -15,16 +16,27 @@ import (
 
 // registered is the full set, if a host asked for it.
 var (
-	registeredMu sync.RWMutex
-	registered   []byte
+	registeredMu      sync.RWMutex
+	registeredTags    []string
+	registeredRecords [][3]uint32
+	registeredTable   *packedBlockTable
 )
 
 // RegisterDisplayNames gives the engine the names of things in every language.
 // It is called by the intldata package, and by nothing else.
-func RegisterDisplayNames(packed []byte) {
+func RegisterDisplayNames(packed []byte, tags []string, blocks [][2]uint32, records [][3]uint32) {
+	displayMu.Lock()
 	registeredMu.Lock()
-	registered = packed
+	registeredTags = tags
+	registeredRecords = records
+	registeredTable = newPackedBlockTable(packed, blocks)
 	registeredMu.Unlock()
+	for tag := range displayCache {
+		if tag != "en" {
+			delete(displayCache, tag)
+		}
+	}
+	displayMu.Unlock()
 }
 
 // The kinds of thing that have a name, as the tables spell them.
@@ -37,12 +49,10 @@ const (
 	DisplayField    = "f"
 )
 
+// byLocale is each locale's names, read once and kept.
 var (
-	displayOnce sync.Once
-	// byLocale is each locale's names, read once and kept.
-	displayMu     sync.Mutex
-	displayCache  = map[string]map[string]string{}
-	displayBlocks = map[string]string{}
+	displayMu    sync.Mutex
+	displayCache = map[string]map[string]string{}
 )
 
 // DisplayName reports what a locale calls something, and whether it knows.
@@ -90,34 +100,24 @@ func language(tag string) string {
 
 // displayNamesFor reads one locale's names, the first time it is asked for.
 func displayNamesFor(tag string) map[string]string {
-	displayOnce.Do(func() {
-		// The records are found once; each is read when a locale is wanted.
-		for _, text := range []string{englishDisplay(), fullDisplay()} {
-			for _, record := range strings.Split(text, sectionSep) {
-				if record == "" {
-					continue
-				}
-				name, _, _ := strings.Cut(record, fieldSep)
-				if _, taken := displayBlocks[name]; taken {
-					continue
-				}
-				displayBlocks[name] = record
-			}
-		}
-	})
-
 	displayMu.Lock()
 	defer displayMu.Unlock()
 	if names, ok := displayCache[tag]; ok {
 		return names
 	}
-	record, ok := displayBlocks[tag]
-	if !ok {
+	record := ""
+	if tag == "en" {
+		record = strings.TrimSuffix(englishDisplay(), sectionSep)
+	} else {
+		record = registeredDisplay(tag)
+	}
+	name, rest, ok := strings.Cut(record, fieldSep)
+	if !ok || name != tag {
 		displayCache[tag] = nil
 		return nil
 	}
 	names := map[string]string{}
-	for _, item := range strings.Split(record, fieldSep)[1:] {
+	for _, item := range strings.Split(rest, fieldSep) {
 		if key, value, ok := strings.Cut(item, "="); ok {
 			names[key] = value
 		}
@@ -126,15 +126,18 @@ func displayNamesFor(tag string) map[string]string {
 	return names
 }
 
-// fullDisplay is what the intldata package registered, if anything.
-func fullDisplay() string {
+// registeredDisplay inflates only the requested locale's bounded block.
+func registeredDisplay(tag string) string {
 	registeredMu.RLock()
-	defer registeredMu.RUnlock()
-	if len(registered) == 0 {
+	i := sort.SearchStrings(registeredTags, tag)
+	if i >= len(registeredTags) || registeredTags[i] != tag || i >= len(registeredRecords) {
+		registeredMu.RUnlock()
 		return ""
 	}
-	text, err := inflate(registered)
-	if err != nil {
+	table, ref := registeredTable, registeredRecords[i]
+	registeredMu.RUnlock()
+	text, ok := table.record(ref)
+	if !ok {
 		return ""
 	}
 	return text
@@ -146,4 +149,14 @@ func englishDisplay() string {
 		return ""
 	}
 	return text
+}
+
+func warmupDisplayNames() {
+	_ = displayNamesFor("en")
+	registeredMu.RLock()
+	tags := append([]string(nil), registeredTags...)
+	registeredMu.RUnlock()
+	for _, tag := range tags {
+		_ = displayNamesFor(tag)
+	}
 }

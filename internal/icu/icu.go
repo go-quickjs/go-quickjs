@@ -6,9 +6,10 @@
 // companions -- is the engine's business, and lives there.
 //
 // The data comes from CLDR, through the generator in internal/cldrgen, and is
-// carried as text that is read the first time a locale is asked for. A program
-// that never formats anything pays nothing for it: the tables are constants in
-// the binary, and no locale is decoded until something wants it.
+// carried as directly indexed records that are read the first time a locale is
+// asked for. A program that never formats anything pays nothing for it: the
+// tables are constants in the binary, and each feature parses only its section
+// of a locale record when something wants it.
 //
 // What is here is every locale that ICU has data of its own for -- each of the
 // 250 languages it knows, and each region or script variant of one that says
@@ -48,6 +49,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unsafe"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -157,6 +159,11 @@ type Locale struct {
 	// Danish says and most languages do not. Shifted says punctuation is
 	// passed over until everything else has been compared, which Thai says.
 	UpperFirst, Shifted bool
+
+	record                                              string
+	dateOnce, currenciesOnce, cardinalOnce, ordinalOnce sync.Once
+	listsOnce, relativeOnce, compactOnce, tailoringOnce sync.Once
+	tailoringEncoded                                    string
 }
 
 // CompactForm is one step of a compact number: what the value is divided by,
@@ -377,11 +384,11 @@ func WarmupDateTimeData() {
 		TagAliases()
 		CanonicalZone("UTC")
 		for _, tag := range tags {
-			_ = get(tag)
+			if l := get(tag); l != nil {
+				l.PrepareDate()
+			}
 		}
-		loadCalendars()
-		loadCalendarFormats()
-		loadMonthTables()
+		warmupCalendarData()
 		seasonNames.warmup()
 		genericNames.warmup()
 		historicalNames.warmup()
@@ -389,10 +396,48 @@ func WarmupDateTimeData() {
 	})
 }
 
+var intlWarmupOnce sync.Once
+
+// WarmupIntlData eagerly materializes every process-wide Intl dataset. It is
+// intended for servers that prefer a predictable startup cost to first-use
+// latency. Applications that use only date formatting should call the smaller
+// WarmupDateTimeData instead.
+func WarmupIntlData() {
+	intlWarmupOnce.Do(func() {
+		WarmupDateTimeData()
+		loadLocaleInfo()
+		loadUnits()
+		loadSegments()
+		for _, dictionary := range []*breakDictionary{
+			&cjkBreakDictionary, &thaiBreakDictionary, &laoBreakDictionary,
+			&khmerBreakDictionary, &burmeseBreakDictionary,
+		} {
+			dictionary.load()
+		}
+		_ = order()
+		warmupCJKOrders()
+		warmupDisplayNames()
+		for _, tag := range tags {
+			l := get(tag)
+			if l == nil {
+				continue
+			}
+			l.prepareCurrencies()
+			_ = l.CardinalRule()
+			_ = l.OrdinalRule()
+			_, _ = l.ListPatternFor("")
+			_, _ = l.RelativeUnitFor("")
+			_, _, _ = l.Compact(0, false)
+			l.loadTailoring()
+		}
+	})
+}
+
 // Currencies lists the currencies that have both NumberFormat data and an
 // English DisplayNames entry, which is what supportedValuesOf is asking for.
 func Currencies() []string {
 	l := Resolve("en")
+	l.prepareCurrencies()
 	available := make(map[string]bool, len(l.Currencies))
 	for code := range l.Currencies {
 		if _, ok := DisplayName("en", DisplayCurrency, code); ok {
@@ -423,7 +468,7 @@ func CurrencyDigits(code string) int {
 	return 2
 }
 
-// get decodes one locale, once.
+// get parses one directly indexed locale record, once.
 var (
 	decodedMu sync.Mutex
 	decoded   = map[string]*Locale{}
@@ -439,8 +484,8 @@ func get(tag string) *Locale {
 	if l, ok := decoded[tags[i]]; ok {
 		return l
 	}
-	blob, err := unpackLocale(i)
-	if err != nil {
+	blob, ok := localeRecord(i)
+	if !ok {
 		return nil
 	}
 	l := decode(tags[i], blob)
@@ -448,8 +493,8 @@ func get(tag string) *Locale {
 	return l
 }
 
-// unpack is retained for table-wide validation. Normal locale lookup calls
-// unpackLocale and decompresses only the one independently packed locale.
+// unpack is retained for table-wide validation. Normal locale lookup takes a
+// zero-copy string view of its directly indexed record.
 var (
 	unpackOnce sync.Once
 	unpacked   []string
@@ -459,8 +504,8 @@ func unpack() []string {
 	unpackOnce.Do(func() {
 		unpacked = make([]string, len(packedLocales))
 		for i := range packedLocales {
-			text, err := unpackLocale(i)
-			if err != nil {
+			text, ok := localeRecord(i)
+			if !ok {
 				unpacked = nil
 				return
 			}
@@ -470,12 +515,24 @@ func unpack() []string {
 	return unpacked
 }
 
-func unpackLocale(index int) (string, error) {
+func localeRecord(index int) (string, bool) {
 	if index < 0 || index >= len(packedLocales) {
-		return "", nil
+		return "", false
 	}
 	bounds := packedLocales[index]
-	return inflate(packedTables[bounds[0]:bounds[1]])
+	if bounds[0] > bounds[1] || uint64(bounds[1]) > uint64(len(packedTables)) {
+		return "", false
+	}
+	data := packedTables[bounds[0]:bounds[1]]
+	return rawString(data), true
+}
+
+// rawString returns a zero-copy view of immutable generated binary data.
+func rawString(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+	return unsafe.String(unsafe.SliceData(data), len(data))
 }
 
 // inflate reads one of the compressed tables.
@@ -511,6 +568,51 @@ func inflateSize(packed []byte, size int) (string, error) {
 	return string(out), nil
 }
 
+// packedBlockTable keeps cold records in moderately sized compressed blocks.
+// A lookup inflates one block and retains it, preserving compression across
+// neighboring records without making first use pay for the complete dataset.
+type packedBlockTable struct {
+	packed  []byte
+	blocks  [][2]uint32
+	once    []sync.Once
+	decoded []string
+	valid   []bool
+}
+
+func newPackedBlockTable(packed []byte, blocks [][2]uint32) *packedBlockTable {
+	return &packedBlockTable{
+		packed: packed, blocks: blocks,
+		once: make([]sync.Once, len(blocks)), decoded: make([]string, len(blocks)),
+		valid: make([]bool, len(blocks)),
+	}
+}
+
+func (t *packedBlockTable) record(ref [3]uint32) (string, bool) {
+	if t == nil || uint64(ref[0]) >= uint64(len(t.blocks)) || ref[1] > ref[2] {
+		return "", false
+	}
+	block := int(ref[0])
+	t.once[block].Do(func() {
+		bounds := t.blocks[block]
+		if bounds[0] > bounds[1] || uint64(bounds[1]) > uint64(len(t.packed)) {
+			return
+		}
+		text, err := inflate(t.packed[bounds[0]:bounds[1]])
+		if err == nil {
+			t.decoded[block] = text
+			t.valid[block] = true
+		}
+	})
+	if !t.valid[block] {
+		return "", false
+	}
+	text := t.decoded[block]
+	if uint64(ref[2]) > uint64(len(text)) {
+		return "", false
+	}
+	return text[ref[1]:ref[2]], true
+}
+
 // indexOf finds a tag in the sorted table.
 func indexOf(tag string) int {
 	lo, hi := 0, len(tags)
@@ -544,16 +646,8 @@ const (
 )
 
 func decode(tag, blob string) *Locale {
-	sections := strings.Split(blob, sectionSep)
-	at := func(i int) []string {
-		if i >= len(sections) {
-			return nil
-		}
-		return strings.Split(sections[i], fieldSep)
-	}
-
-	l := &Locale{Tag: tag}
-	head := at(0)
+	l := &Locale{Tag: tag, record: blob}
+	head := l.sectionFields(0)
 	field := func(i int) string {
 		if i < len(head) {
 			return head[i]
@@ -603,72 +697,131 @@ func decode(tag, blob string) *Locale {
 		l.Calendar = "gregory"
 	}
 
-	names := at(1)
-	list := func(i int) []string {
-		if i >= len(names) || names[i] == "" {
-			return nil
-		}
-		return strings.Split(names[i], itemSep)
-	}
-	l.Months, l.MonthsShort, l.MonthsNarrow = list(0), list(1), list(2)
-	l.Days, l.DaysShort, l.DaysNarrow = list(3), list(4), list(5)
-	if periods := list(6); len(periods) == 2 {
-		l.DayPeriods = [2]string{periods[0], periods[1]}
-	}
-	if eras := list(7); len(eras) == 2 {
-		l.Eras = [2]string{eras[0], eras[1]}
-	}
-	l.MonthsAlone, l.MonthsAloneShort = list(8), list(9)
-	if periods := list(10); len(periods) == 24 {
-		l.HourPeriods = periods
-	}
-	if periods := list(11); len(periods) == 24 {
-		l.HourPeriodsNarrow = periods
-	} else {
-		l.HourPeriodsNarrow = l.HourPeriods
-	}
-	l.DaysFormat, l.DaysFormatShort, l.DaysFormatNarrow = list(12), list(13), list(14)
-	if l.DaysFormat == nil {
-		l.DaysFormat = l.Days
-	}
-	if l.DaysFormatShort == nil {
-		l.DaysFormatShort = l.DaysShort
-	}
-	if l.DaysFormatNarrow == nil {
-		l.DaysFormatNarrow = l.DaysNarrow
-	}
-	if l.MonthsAlone == nil {
-		l.MonthsAlone, l.MonthsAloneShort = l.Months, l.MonthsShort
-	}
-
-	patterns := at(2)
-	four := func(i int) [4]string {
-		var out [4]string
-		if i >= len(patterns) {
-			return out
-		}
-		parts := strings.Split(patterns[i], itemSep)
-		for k := 0; k < 4 && k < len(parts); k++ {
-			out[k] = parts[k]
-		}
-		return out
-	}
-	l.DatePatterns, l.TimePatterns, l.Glue = four(0), four(1), four(2)
-	l.Skeletons = pairs(patterns, 3)
-	l.Currencies = pairs(at(3), 0)
-
-	l.Cardinal = decodePlural(at(4))
-	l.Ordinal = decodePlural(at(5))
-	l.Lists = decodeLists(at(6))
-	l.Relative = decodeRelative(at(7))
-	if compact := at(8); len(compact) >= 2 {
-		l.Short = decodeCompact(compact[0])
-		l.Long = decodeCompact(compact[1])
-	}
-	if moved := at(9); len(moved) > 0 {
-		l.Tailoring = decodeTailoring(moved[0], l)
+	if moved := l.sectionFields(9); len(moved) > 0 {
+		l.tailoringEncoded = moved[0]
+		decodeTailoringFlags(moved[0], l)
 	}
 	return l
+}
+
+func (l *Locale) section(index int) string {
+	section := l.record
+	for range index {
+		_, rest, ok := strings.Cut(section, sectionSep)
+		if !ok {
+			return ""
+		}
+		section = rest
+	}
+	section, _, _ = strings.Cut(section, sectionSep)
+	return section
+}
+
+func (l *Locale) sectionFields(index int) []string {
+	section := l.section(index)
+	if section == "" {
+		return nil
+	}
+	return strings.Split(section, fieldSep)
+}
+
+// PrepareDate parses the names and patterns needed by DateTimeFormat. Other
+// locale features remain as direct record slices until their API is used.
+func (l *Locale) PrepareDate() {
+	if l == nil {
+		return
+	}
+	l.dateOnce.Do(func() {
+		names := l.sectionFields(1)
+		list := func(i int) []string {
+			if i >= len(names) || names[i] == "" {
+				return nil
+			}
+			return strings.Split(names[i], itemSep)
+		}
+		l.Months, l.MonthsShort, l.MonthsNarrow = list(0), list(1), list(2)
+		l.Days, l.DaysShort, l.DaysNarrow = list(3), list(4), list(5)
+		if periods := list(6); len(periods) == 2 {
+			l.DayPeriods = [2]string{periods[0], periods[1]}
+		}
+		if eras := list(7); len(eras) == 2 {
+			l.Eras = [2]string{eras[0], eras[1]}
+		}
+		l.MonthsAlone, l.MonthsAloneShort = list(8), list(9)
+		if periods := list(10); len(periods) == 24 {
+			l.HourPeriods = periods
+		}
+		if periods := list(11); len(periods) == 24 {
+			l.HourPeriodsNarrow = periods
+		} else {
+			l.HourPeriodsNarrow = l.HourPeriods
+		}
+		l.DaysFormat, l.DaysFormatShort, l.DaysFormatNarrow = list(12), list(13), list(14)
+		if l.DaysFormat == nil {
+			l.DaysFormat = l.Days
+		}
+		if l.DaysFormatShort == nil {
+			l.DaysFormatShort = l.DaysShort
+		}
+		if l.DaysFormatNarrow == nil {
+			l.DaysFormatNarrow = l.DaysNarrow
+		}
+		if l.MonthsAlone == nil {
+			l.MonthsAlone, l.MonthsAloneShort = l.Months, l.MonthsShort
+		}
+
+		patterns := l.sectionFields(2)
+		four := func(i int) [4]string {
+			var out [4]string
+			if i >= len(patterns) {
+				return out
+			}
+			parts := strings.Split(patterns[i], itemSep)
+			for k := 0; k < 4 && k < len(parts); k++ {
+				out[k] = parts[k]
+			}
+			return out
+		}
+		l.DatePatterns, l.TimePatterns, l.Glue = four(0), four(1), four(2)
+		l.Skeletons = pairs(patterns, 3)
+	})
+}
+
+func (l *Locale) prepareCurrencies() {
+	l.currenciesOnce.Do(func() { l.Currencies = pairs(l.sectionFields(3), 0) })
+}
+
+// CurrencySymbol reports the locale's compact symbol for a currency.
+func (l *Locale) CurrencySymbol(code string) (string, bool) {
+	l.prepareCurrencies()
+	symbol, ok := l.Currencies[code]
+	return symbol, ok
+}
+
+// CardinalRule returns the locale's cardinal plural rule.
+func (l *Locale) CardinalRule() *PluralRule {
+	l.cardinalOnce.Do(func() { l.Cardinal = decodePlural(l.sectionFields(4)) })
+	return &l.Cardinal
+}
+
+// OrdinalRule returns the locale's ordinal plural rule.
+func (l *Locale) OrdinalRule() *PluralRule {
+	l.ordinalOnce.Do(func() { l.Ordinal = decodePlural(l.sectionFields(5)) })
+	return &l.Ordinal
+}
+
+// ListPatternFor returns the requested list pattern.
+func (l *Locale) ListPatternFor(name string) (ListPattern, bool) {
+	l.listsOnce.Do(func() { l.Lists = decodeLists(l.sectionFields(6)) })
+	pattern, ok := l.Lists[name]
+	return pattern, ok
+}
+
+// RelativeUnitFor returns the requested relative-time pattern.
+func (l *Locale) RelativeUnitFor(name string) (RelativeUnit, bool) {
+	l.relativeOnce.Do(func() { l.Relative = decodeRelative(l.sectionFields(7)) })
+	unit, ok := l.Relative[name]
+	return unit, ok
 }
 
 // pairs reads a field written as name=value items.
@@ -766,6 +919,12 @@ func numberedCategories(field string) map[int]byte {
 // that does not shorten at this size answers with the number itself, a divisor
 // of one, and nothing to write.
 func (l *Locale) Compact(x float64, long bool) (float64, float64, CompactForm) {
+	l.compactOnce.Do(func() {
+		if compact := l.sectionFields(8); len(compact) >= 2 {
+			l.Short = decodeCompact(compact[0])
+			l.Long = decodeCompact(compact[1])
+		}
+	})
 	table := l.Short
 	if long {
 		table = l.Long
@@ -827,9 +986,6 @@ func decodeTailoring(field string, l *Locale) map[rune]int32 {
 		return nil
 	}
 	items := strings.Split(field, itemSep)
-	// The flags come first, before the letters that moved.
-	l.UpperFirst = strings.Contains(items[0], "u")
-	l.Shifted = strings.Contains(items[0], "s")
 	out := map[rune]int32{}
 	// The letters that moved come first, so that a spelling anchored to one of
 	// them is put after where the letter went rather than where it came from:
@@ -882,6 +1038,25 @@ func decodeTailoring(field string, l *Locale) map[rune]int32 {
 		l.Contractions[parts[0]] = weight + 1
 	}
 	return out
+}
+
+func decodeTailoringFlags(field string, l *Locale) {
+	flags, _, _ := strings.Cut(field, itemSep)
+	l.UpperFirst = strings.Contains(flags, "u")
+	l.Shifted = strings.Contains(flags, "s")
+}
+
+// loadTailoring resolves locale-specific collation weights only when text is
+// actually compared. Number and date formatters still need the locale's two
+// collation flags, but must not pay to inflate the root collation table.
+func (l *Locale) loadTailoring() {
+	if l == nil {
+		return
+	}
+	l.tailoringOnce.Do(func() {
+		l.Tailoring = decodeTailoring(l.tailoringEncoded, l)
+		l.tailoringEncoded = ""
+	})
 }
 
 func decodeCompact(field string) map[int]CompactForm {
@@ -1090,10 +1265,7 @@ var (
 // same string may be a language and a region.
 func TagAliases() (languages, regions, scripts, grandfathered, variants, settings, byLanguage map[string]string) {
 	aliasOnce.Do(func() {
-		text, err := inflate(tagAliases)
-		if err != nil {
-			return
-		}
+		text := rawString(tagAliases)
 		lines := strings.Split(text, "\n")
 		for i := range aliasTables {
 			aliasTables[i] = map[string]string{}

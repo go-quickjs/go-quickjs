@@ -1212,6 +1212,7 @@ func (r *Runtime) dateOptionsFrom(args []Value, defaults map[string]string, requ
 		choice.drop("hc")
 	}
 	o := &dateOptions{locale: choice.data, choice: choice, timeZone: "UTC"}
+	o.locale.PrepareDate()
 	o.calendar = choice.setting("ca")
 	// These are abstract/deprecated calendar requests. ECMA-402 requires the
 	// formatter to settle on a concrete member of AvailableCalendars.

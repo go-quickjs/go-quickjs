@@ -46,6 +46,12 @@ func WarmupDateTimeData() {
 	})
 }
 
+// WarmupIntlData eagerly loads all process-wide internationalization data.
+func WarmupIntlData() {
+	WarmupDateTimeData()
+	icu.WarmupIntlData()
+}
+
 // New creates a Runtime with the standard globals installed.
 func New(cfg Config) *Runtime {
 	stackSize := cfg.StackSize

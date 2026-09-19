@@ -462,6 +462,12 @@ that a program run twice in the same environment is not given two different
 answers. A server that formats for somebody else should set it rather than
 inherit it.
 
+Servers that prefer a predictable startup cost can call
+`quickjs.WarmupDateTimeData()` for Date and `Intl.DateTimeFormat`, or
+`quickjs.WarmupIntlData()` for every Intl locale, collation, display-name,
+calendar, segmentation, dictionary, unit, and time-zone dataset. Both may be
+called before constructing a runtime and are idempotent.
+
 Runaway recursion raises a catchable `RangeError` rather than overflowing the
 goroutine stack. Deeply nested source is rejected at parse time for the same
 reason — a goroutine stack overflow cannot be caught, so it would take the host

@@ -186,7 +186,7 @@ func (o *numberOptions) decimalParts(d decimal) []numberPiece {
 func (o *numberOptions) measure(pieces []numberPiece, whole, fraction string) []numberPiece {
 	above, below, divided := strings.Cut(o.unit, "-per-")
 	// Which form the name takes follows the count as it is written.
-	category := o.locale.Cardinal.CategoryOf(whole, fraction, 0, 0)
+	category := o.locale.CardinalRule().CategoryOf(whole, fraction, 0, 0)
 	pattern, ok := o.locale.UnitPattern(above, o.unitDisplay, category)
 	if !ok {
 		return pieces
@@ -300,7 +300,7 @@ func (o *numberOptions) compactly(d decimal) (decimal, string, string, int) {
 	}
 	_ = scaled
 	value, _ := strconv.ParseFloat(writeDecimalText(out), 64)
-	return out, kept, form.SuffixFor(o.locale.Cardinal.Category(value)), steps
+	return out, kept, form.SuffixFor(o.locale.CardinalRule().Category(value)), steps
 }
 
 // scaleForExponent divides a number down to one digit before the point, or to
@@ -488,7 +488,7 @@ func (o *numberOptions) currencyText() string {
 	case "code", "name":
 		return o.currency
 	}
-	if s, ok := o.locale.Currencies[o.currency]; ok {
+	if s, ok := o.locale.CurrencySymbol(o.currency); ok {
 		return s
 	}
 	return o.currency

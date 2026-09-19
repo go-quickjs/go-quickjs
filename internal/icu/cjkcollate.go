@@ -86,6 +86,18 @@ func cjkOrder(name string) *packedCJKOrder {
 	return entry
 }
 
+func warmupCJKOrders() {
+	// An absent name initializes the directory without decoding an entry.
+	_ = cjkOrder("")
+	names := make([]string, 0, len(cjkOrders))
+	for name := range cjkOrders {
+		names = append(names, name)
+	}
+	for _, name := range names {
+		_ = cjkOrder(name)
+	}
+}
+
 func (o *packedCJKOrder) rank(r rune) (int32, bool) {
 	if o.sparse != nil {
 		rank, ok := o.sparse[r]

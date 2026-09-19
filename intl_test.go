@@ -782,3 +782,20 @@ func TestWarmupDateTimeDataBeforeRuntime(t *testing.T) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
+
+func TestWarmupIntlDataBeforeRuntime(t *testing.T) {
+	quickjs.WarmupIntlData()
+	quickjs.WarmupIntlData() // Idempotent.
+
+	rt := quickjs.New(quickjs.WithLocale("de-DE"))
+	defer rt.Close()
+	for _, src := range []string{
+		`new Intl.DisplayNames("de", {type: "region"}).of("JP")`,
+		`new Intl.Collator("zh").compare("重庆", "长沙")`,
+		`Array.from(new Intl.Segmenter("th", {granularity: "word"}).segment("ภาษาไทย")).length`,
+	} {
+		if _, err := rt.Eval(src); err != nil {
+			t.Fatalf("after Intl warmup, %s: %v", src, err)
+		}
+	}
+}

@@ -2,11 +2,37 @@ package icu
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
 )
+
+func TestHotLocaleDataStartsWithoutDecompression(t *testing.T) {
+	if os.Getenv("QUICKJS_ICU_LAZY_HELPER") == "" {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestHotLocaleDataStartsWithoutDecompression$")
+		cmd.Env = append(os.Environ(), "QUICKJS_ICU_LAZY_HELPER=1")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("lazy-data helper: %v\n%s", err, out)
+		}
+		return
+	}
+	if packedDecoder != nil || collationOrder.runs != nil {
+		t.Fatal("compressed Intl data was initialized during package startup")
+	}
+	TagAliases()
+	l := Resolve("de")
+	_ = l.CardinalRule()
+	l.PrepareDate()
+	if packedDecoder != nil {
+		t.Fatal("hot locale data initialized the decompressor")
+	}
+	if collationOrder.runs != nil {
+		t.Fatal("hot locale data initialized root collation")
+	}
+}
 
 // The plural rules are stored as answers rather than as arithmetic, so what
 // matters is that the answers are the ones CLDR gives -- including for the
@@ -36,7 +62,7 @@ func TestPluralRules(t *testing.T) {
 		l := Resolve(tc.tag)
 		got := make([]string, len(tc.counts))
 		for i, n := range tc.counts {
-			got[i] = l.Cardinal.Category(n)
+			got[i] = l.CardinalRule().Category(n)
 		}
 		if strings.Join(got, " ") != tc.want {
 			t.Errorf("%s %v:\n got  %s\n want %s", tc.tag, tc.counts,
@@ -52,7 +78,7 @@ func TestPluralRules(t *testing.T) {
 		l := Resolve(tc.tag)
 		var got []string
 		for _, n := range []float64{1, 2, 3, 4, 11} {
-			got = append(got, l.Ordinal.Category(n))
+			got = append(got, l.OrdinalRule().Category(n))
 		}
 		if strings.Join(got, " ") != tc.want {
 			t.Errorf("%s ordinals:\n got  %s\n want %s", tc.tag,
@@ -157,8 +183,7 @@ func TestLocaleInfo(t *testing.T) {
 	}
 }
 
-// Each locale is independently compressed and decoded the first time it is
-// asked for.
+// Each locale is directly indexed and parsed the first time it is asked for.
 func TestTable(t *testing.T) {
 	blobs := unpack()
 	if len(blobs) != len(tags) {
@@ -181,6 +206,7 @@ func TestTable(t *testing.T) {
 		if l == nil {
 			t.Fatalf("%s did not decode", tag)
 		}
+		l.PrepareDate()
 		if len(l.Months) != 12 || len(l.Days) != 7 {
 			t.Errorf("%s: %d months, %d days", tag, len(l.Months), len(l.Days))
 		}
@@ -190,9 +216,112 @@ func TestTable(t *testing.T) {
 		if l.DatePatterns[0] == "" || l.TimePatterns[0] == "" {
 			t.Errorf("%s: no patterns", tag)
 		}
-		if len(l.Cardinal.Categories) == 0 {
+		if len(l.CardinalRule().Categories) == 0 {
 			t.Errorf("%s: no plural categories", tag)
 		}
+	}
+}
+
+func TestLocaleSectionsLoadOnDemand(t *testing.T) {
+	record, ok := localeRecord(indexOf("en"))
+	if !ok {
+		t.Fatal("English locale record is missing")
+	}
+	l := decode("en", record)
+	if l.Decimal == "" || l.Numbering == "" {
+		t.Fatal("the directly indexed locale header was not parsed")
+	}
+	if l.DatePatterns[0] != "" || l.Currencies != nil || l.Cardinal.Categories != nil ||
+		l.Ordinal.Categories != nil || l.Lists != nil || l.Relative != nil || l.Short != nil {
+		t.Fatal("a cold locale section was parsed eagerly")
+	}
+
+	l.PrepareDate()
+	if len(l.Months) != 12 || l.DatePatterns[0] == "" {
+		t.Fatal("date section did not load")
+	}
+	if symbol, ok := l.CurrencySymbol("USD"); !ok || symbol == "" {
+		t.Fatal("currency section did not load")
+	}
+	if len(l.CardinalRule().Categories) == 0 || len(l.OrdinalRule().Categories) == 0 {
+		t.Fatal("plural sections did not load")
+	}
+	if _, ok := l.ListPatternFor("conjunction-long"); !ok {
+		t.Fatal("list section did not load")
+	}
+	if _, ok := l.RelativeUnitFor("day"); !ok {
+		t.Fatal("relative-time section did not load")
+	}
+	if _, divisor, _ := l.Compact(1000, false); divisor == 1 {
+		t.Fatal("compact-number section did not load")
+	}
+	fr := Resolve("fr")
+	if _, divisor, _ := fr.Compact(1.5e6, false); divisor != 1e6 {
+		t.Fatalf("French compact divisor = %v, want 1000000", divisor)
+	}
+	if got := fr.CardinalRule().CategoryOf("1500000", "", 1.5e6, 6); got != "many" {
+		t.Fatalf("French compact plural category = %q, want many", got)
+	}
+	if _, ok := localeRecord(-1); ok {
+		t.Fatal("an invalid locale index unexpectedly resolved")
+	}
+}
+
+func TestPackedBlockTableBoundsAndConcurrentLoad(t *testing.T) {
+	if _, ok := (*packedBlockTable)(nil).record([3]uint32{}); ok {
+		t.Fatal("a nil block table returned a record")
+	}
+	bad := newPackedBlockTable(nil, [][2]uint32{{0, 1}})
+	if _, ok := bad.record([3]uint32{1, 0, 0}); ok {
+		t.Error("an invalid block number returned a record")
+	}
+	if _, ok := bad.record([3]uint32{0, 1, 0}); ok {
+		t.Error("inverted record bounds returned a record")
+	}
+	if _, ok := bad.record([3]uint32{0, 0, 0}); ok {
+		t.Error("out-of-range packed bounds returned a record")
+	}
+	inverted := newPackedBlockTable(nil, [][2]uint32{{1, 0}})
+	if _, ok := inverted.record([3]uint32{0, 0, 0}); ok {
+		t.Error("inverted packed bounds returned a record")
+	}
+
+	var first, second [3]uint32
+	found := false
+	for i := 1; i < len(calendarNameEntriesPacked); i++ {
+		if calendarNameEntriesPacked[i-1][0] == calendarNameEntriesPacked[i][0] {
+			first, second = calendarNameEntriesPacked[i-1], calendarNameEntriesPacked[i]
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("generated calendar records do not share a block")
+	}
+	table := newPackedBlockTable(packedTables, calendarNameBlocksPacked[:])
+	var wg sync.WaitGroup
+	errors := make(chan string, 32)
+	for i := range 32 {
+		ref := first
+		if i%2 != 0 {
+			ref = second
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			text, ok := table.record(ref)
+			if !ok || len(text) != int(ref[2]-ref[1]) {
+				errors <- text
+			}
+		}()
+	}
+	wg.Wait()
+	close(errors)
+	for text := range errors {
+		t.Errorf("concurrent block lookup returned %d bytes", len(text))
+	}
+	if _, ok := table.record([3]uint32{first[0], 0, ^uint32(0)}); ok {
+		t.Fatal("an out-of-range record end was accepted")
 	}
 }
 
@@ -231,6 +360,16 @@ func TestWarmupDateTimeData(t *testing.T) {
 		len(calendarFormatEntries) == 0 || len(calendarFormatIndex) == 0 ||
 		len(monthTables) == 0 {
 		t.Error("calendar data was not warmed")
+	}
+	for i, entry := range calendarEntries {
+		if entry == nil {
+			t.Errorf("calendar name entry %d was not warmed", i)
+		}
+	}
+	for i, entry := range calendarFormatEntries {
+		if entry == nil {
+			t.Errorf("calendar format entry %d was not warmed", i)
+		}
 	}
 }
 

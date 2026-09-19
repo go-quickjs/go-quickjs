@@ -242,22 +242,19 @@ func run() error {
 	}
 	fmt.Fprintf(&b, "}\n\n")
 
-	// The locales' data, in one piece, compressed.
-	//
-	// Written out as itself it is more than a megabyte of Go source, which is
-	// a megabyte in every binary that links this package whether or not
-	// anything formats a date. Compressed it is an eighth of that, and
-	// unpacking it costs a few milliseconds the first time a locale is asked
-	// for -- and nothing at all to a program that never asks.
+	// Locale records are the hot path for every formatter. Keep them as one
+	// directly indexed binary region so the executable mapping is the cache:
+	// first use takes a slice and parses it without initializing a decoder or
+	// allocating an inflated copy. Large cold tables below remain compressed.
 	localeData := make([]string, len(data.Locales))
 	totalLocaleBytes := 0
 	for i := range data.Locales {
 		localeData[i] = encode(&data.Locales[i])
 		totalLocaleBytes += len(localeData[i])
 	}
-	fmt.Fprintf(&b, "// packedLocales is each locale's data in tag order. The %d bytes are\n", totalLocaleBytes)
-	fmt.Fprintf(&b, "// compressed independently so first use decodes only the requested locale.\n")
-	packedData.writeShards(&b, "packedLocales", localeData)
+	fmt.Fprintf(&b, "// packedLocales is each directly indexed locale record in tag order.\n")
+	fmt.Fprintf(&b, "// The %d bytes stay in the executable mapping and need no decompression.\n", totalLocaleBytes)
+	packedData.writeRawShards(&b, "packedLocales", localeData)
 
 	// The variants that share another's data, which is how a hundred and fifty
 	// tags are answered without carrying a hundred and fifty more tables.
@@ -419,7 +416,7 @@ func run() error {
 	fmt.Fprintf(&b, "// tagAliases is what a name in a tag has been replaced by: a language\n")
 	fmt.Fprintf(&b, "// renamed, a country dissolved, a variant folded into another, a setting\n")
 	fmt.Fprintf(&b, "// that goes by another word now.\n")
-	packedData.write(&b, "tagAliases", encodeAliases(renames))
+	packedData.writeRaw(&b, "tagAliases", encodeAliases(renames))
 
 	// Likely subtags and the territory preferences exposed by Intl.Locale.
 	localeInfo, localeInfoICU, err := readLocaleInfo(
@@ -441,19 +438,27 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(&b, "// calendarNames is what each calendar calls its months and its eras, in\n")
-	fmt.Fprintf(&b, "// each language: the Islamic months, the Hebrew ones and the thirteenth\n")
-	fmt.Fprintf(&b, "// it has in a long year, the two hundred and thirty-seven Japanese reigns.\n")
-	packedData.write(&b, "calendarNames", encodeCalendars(calendars))
+	fmt.Fprintf(&b, "// calendarNameEntries are indexed month and era records in compressed blocks.\n")
+	fmt.Fprintf(&b, "// A non-Gregorian formatter inflates only its locale/calendar block.\n")
+	calendarNameEntries := make([]string, len(calendars.Entries))
+	for i, entry := range calendars.Entries {
+		calendarNameEntries[i] = encodeCalendarEntry(entry)
+	}
+	packedData.writeBlockedShards(&b, "calendarName", calendarNameEntries, 64<<10)
+	packedData.write(&b, "calendarNameIndexPacked", encodeCalendarIndex(calendars.Index))
 
 	calendarFormats, err := readCalendarFormats(
 		filepath.Join(filepath.Dir(script), "calendarformats.json"))
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(&b, "// calendarFormats is the date order, punctuation, and date-time glue used\n")
-	fmt.Fprintf(&b, "// by each non-Gregorian calendar in each locale.\n")
-	packedData.write(&b, "calendarFormats", encodeCalendarFormats(calendarFormats))
+	fmt.Fprintf(&b, "// calendarFormatEntries are indexed date layouts in compressed blocks.\n")
+	calendarFormatEntries := make([]string, len(calendarFormats.Entries))
+	for i, entry := range calendarFormats.Entries {
+		calendarFormatEntries[i] = encodeCalendarFormatEntry(entry)
+	}
+	packedData.writeBlockedShards(&b, "calendarFormat", calendarFormatEntries, 64<<10)
+	packedData.write(&b, "calendarFormatIndexPacked", encodeCalendarIndex(calendarFormats.Index))
 
 	tables, err := readCalendarTables(filepath.Join(filepath.Dir(script), "calendartables.json"))
 	if err != nil {
@@ -681,45 +686,29 @@ func readCalendarFormats(path string) (calendarFormatData, error) {
 
 // encodeCalendars writes the distinct sets of names, then which locale uses
 // which for which calendar.
-func encodeCalendars(d calendarData) string {
-	var b strings.Builder
-	for _, entry := range d.Entries {
-		parts := make([]string, 0, len(entry))
-		for _, key := range sortedNames(entry) {
-			parts = append(parts, key+"\t"+entry[key])
-		}
-		fmt.Fprintf(&b, "%s\n", strings.Join(parts, "\x01"))
+func encodeCalendarEntry(entry map[string]string) string {
+	parts := make([]string, 0, len(entry))
+	for _, key := range sortedNames(entry) {
+		parts = append(parts, key+"\t"+entry[key])
 	}
-	b.WriteString("\n")
-	for _, tag := range sortedIndex(d.Index) {
-		parts := make([]string, 0, len(d.Index[tag]))
-		for _, calendar := range sortedInts(d.Index[tag]) {
-			parts = append(parts, calendar+"="+strconv.Itoa(d.Index[tag][calendar]))
+	return strings.Join(parts, "\x01")
+}
+
+func encodeCalendarIndex(index map[string]map[string]int) string {
+	var b strings.Builder
+	for _, tag := range sortedIndex(index) {
+		parts := make([]string, 0, len(index[tag]))
+		for _, calendar := range sortedInts(index[tag]) {
+			parts = append(parts, calendar+"="+strconv.Itoa(index[tag][calendar]))
 		}
 		fmt.Fprintf(&b, "%s\t%s\n", tag, strings.Join(parts, "\x01"))
 	}
 	return b.String()
 }
 
-func encodeCalendarFormats(d calendarFormatData) string {
-	var b strings.Builder
-	for _, entry := range d.Entries {
-		b.WriteString(strings.Join(entry.Dates, itemSep))
-		b.WriteString(fieldSep)
-		b.WriteString(strings.Join(entry.Glue, itemSep))
-		b.WriteString(fieldSep)
-		b.WriteString(joinPairs(entry.Skeletons))
-		b.WriteByte('\n')
-	}
-	b.WriteString("\n")
-	for _, tag := range sortedIndex(d.Index) {
-		parts := make([]string, 0, len(d.Index[tag]))
-		for _, calendar := range sortedInts(d.Index[tag]) {
-			parts = append(parts, calendar+"="+strconv.Itoa(d.Index[tag][calendar]))
-		}
-		fmt.Fprintf(&b, "%s\t%s\n", tag, strings.Join(parts, "\x01"))
-	}
-	return b.String()
+func encodeCalendarFormatEntry(entry calendarFormatEntry) string {
+	return strings.Join(entry.Dates, itemSep) + fieldSep +
+		strings.Join(entry.Glue, itemSep) + fieldSep + joinPairs(entry.Skeletons)
 }
 
 func sortedIndex(m map[string]map[string]int) []string {
@@ -957,6 +946,10 @@ func encodeDisplay(names map[string][]string) string {
 	return b.String()
 }
 
+func encodeDisplayRecord(tag string, names []string) string {
+	return tag + fieldSep + strings.Join(names, fieldSep)
+}
+
 func sortedNameKeys(m map[string][]string) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
@@ -986,8 +979,8 @@ func writeDisplayPackage(dir, binaryPath string) error {
 	fmt.Fprintf(&b, "//\n")
 	fmt.Fprintf(&b, "//\timport _ \"github.com/go-quickjs/go-quickjs/intldata\"\n")
 	fmt.Fprintf(&b, "//\n")
-	fmt.Fprintf(&b, "// The names remain in a separately compressed asset and are decoded one\n")
-	fmt.Fprintf(&b, "// locale at a time on first use.\n")
+	fmt.Fprintf(&b, "// Locales are directly indexed within compressed blocks, so first use\n")
+	fmt.Fprintf(&b, "// inflates one bounded block rather than the complete dataset.\n")
 	fmt.Fprintf(&b, "package intldata\n\n")
 	fmt.Fprintf(&b, "import (\n")
 	fmt.Fprintf(&b, "\t_ %q\n", "embed")
@@ -995,10 +988,23 @@ func writeDisplayPackage(dir, binaryPath string) error {
 	fmt.Fprintf(&b, ")\n\n")
 	fmt.Fprintf(&b, "//go:embed tables.bin\n")
 	fmt.Fprintf(&b, "var packedTables []byte\n\n")
-	fmt.Fprintf(&b, "func init() {\n")
-	fmt.Fprintf(&b, "\ticu.RegisterDisplayNames(packed)\n")
+	tags := sortedNameKeys(names)
+	if i := sort.SearchStrings(tags, "en"); i < len(tags) && tags[i] == "en" {
+		tags = append(tags[:i], tags[i+1:]...)
+	}
+	fmt.Fprintf(&b, "var displayTags = [...]string{\n")
+	for _, tag := range tags {
+		fmt.Fprintf(&b, "\t%q,\n", tag)
+	}
 	fmt.Fprintf(&b, "}\n\n")
-	packedData.write(&b, "packed", encodeDisplay(names))
+	records := make([]string, len(tags))
+	for i, tag := range tags {
+		records[i] = encodeDisplayRecord(tag, names[tag])
+	}
+	packedData.writeBlockedShards(&b, "packedDisplayLocale", records, 256<<10)
+	fmt.Fprintf(&b, "func init() {\n")
+	fmt.Fprintf(&b, "\ticu.RegisterDisplayNames(packedTables, displayTags[:], packedDisplayLocaleBlocksPacked[:], packedDisplayLocaleEntriesPacked[:])\n")
+	fmt.Fprintf(&b, "}\n\n")
 
 	pretty, err := format.Source([]byte(b.String()))
 	if err != nil {
@@ -1057,6 +1063,58 @@ func (p *tablePacker) writeShards(b *strings.Builder, name string, shards []stri
 	for _, shard := range shards {
 		start, end := p.compress(shard)
 		fmt.Fprintf(b, "\t{%d, %d},\n", start, end)
+	}
+	fmt.Fprintf(b, "}\n\n")
+}
+
+func (p *tablePacker) writeRawShards(b *strings.Builder, name string, shards []string) {
+	fmt.Fprintf(b, "var %s = [...][2]uint32{\n", name)
+	for _, shard := range shards {
+		start := p.data.Len()
+		p.data.WriteString(shard)
+		fmt.Fprintf(b, "\t{%d, %d},\n", start, p.data.Len())
+	}
+	fmt.Fprintf(b, "}\n\n")
+}
+
+// writeBlockedShards compresses neighboring records together, but keeps a
+// direct record-to-block index. Blocks recover almost all whole-table
+// compression while bounding a cold lookup to target bytes of decoded data.
+func (p *tablePacker) writeBlockedShards(b *strings.Builder, name string, shards []string, target int) {
+	type recordRef struct {
+		block, start, end uint32
+	}
+	var blocks [][2]uint32
+	records := make([]recordRef, len(shards))
+	var block strings.Builder
+	blockIndex := uint32(0)
+	flush := func() {
+		if block.Len() == 0 {
+			return
+		}
+		start, end := p.compress(block.String())
+		blocks = append(blocks, [2]uint32{uint32(start), uint32(end)})
+		block.Reset()
+		blockIndex++
+	}
+	for i, shard := range shards {
+		if block.Len() > 0 && block.Len()+len(shard) > target {
+			flush()
+		}
+		start := block.Len()
+		block.WriteString(shard)
+		records[i] = recordRef{blockIndex, uint32(start), uint32(block.Len())}
+	}
+	flush()
+
+	fmt.Fprintf(b, "var %sBlocksPacked = [...][2]uint32{\n", name)
+	for _, bounds := range blocks {
+		fmt.Fprintf(b, "\t{%d, %d},\n", bounds[0], bounds[1])
+	}
+	fmt.Fprintf(b, "}\n\n")
+	fmt.Fprintf(b, "var %sEntriesPacked = [...][3]uint32{\n", name)
+	for _, ref := range records {
+		fmt.Fprintf(b, "\t{%d, %d, %d},\n", ref.block, ref.start, ref.end)
 	}
 	fmt.Fprintf(b, "}\n\n")
 }
