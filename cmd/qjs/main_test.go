@@ -421,7 +421,13 @@ func TestAllowRunDoesNotLeakTheEnvironment(t *testing.T) {
 		})
 	`, command)
 	code, out, _ := exec(t, "", "--allow-run", "-e", source)
-	if code != 0 || strings.TrimSpace(out) != "[]" {
+	want := "[]"
+	if runtime.GOOS == "windows" {
+		// cmd.exe leaves references to absent variables intact; importantly,
+		// the value from the parent environment is not present.
+		want = "[%QJS_TEST_SECRET%]"
+	}
+	if code != 0 || strings.TrimSpace(out) != want {
 		t.Errorf("code=%d out=%q, want the secret withheld", code, out)
 	}
 

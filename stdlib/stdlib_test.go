@@ -1019,7 +1019,13 @@ func TestCommandsEnvironment(t *testing.T) {
 			console.log(cp.execFileSync(%q, %s).trim())
 		})
 	`, shell, args))
-	if want := "[yes][]"; out != want {
+	want := "[yes][]"
+	if runtime.GOOS == "windows" {
+		// cmd.exe preserves an expansion for an undefined variable literally;
+		// the secret value is still absent from the child environment.
+		want = "[yes][%QJS_SECRET%]"
+	}
+	if out != want {
 		t.Errorf("out = %q, want %q", out, want)
 	}
 }

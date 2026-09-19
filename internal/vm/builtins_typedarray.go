@@ -659,7 +659,7 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 				// to come from the count: collecting more than could ever be
 				// allocated is how a four-billion-element source takes the
 				// process down instead of throwing.
-				if int64(len(items)) >= maxTypedArrayLength {
+				if len(items) >= maxTypedArrayCollectedLength {
 					return r.throwRangeError("the typed array length is too large")
 				}
 				items = append(items, v)
@@ -721,6 +721,12 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 // allocated, so a script asking for one gets a RangeError rather than taking
 // the process down with it.
 const maxTypedArrayLength = 1 << 28
+
+// An iterable is materialized as Values before its typed storage can be
+// allocated, as required by IterableToList. Values are much wider than the
+// smallest typed elements, so using maxTypedArrayLength here would consume
+// several gigabytes merely to discover that an endless iterable is too long.
+const maxTypedArrayCollectedLength = 1 << 22
 
 // allocTypedArrayChecked allocates a view's buffer, refusing a length that
 // could not be held.

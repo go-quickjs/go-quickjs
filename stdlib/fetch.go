@@ -369,10 +369,15 @@ func (b *bodyReader) finish() {
 		return
 	}
 	b.done = true
-	b.body.Close()
+	// Cancel the request before closing its body. A speculative stream read may
+	// already be blocked in the transport; on Windows, Response.Body.Close can
+	// wait for that read, so closing first deadlocks the event-loop goroutine
+	// that is trying to cancel it.
 	if b.release != nil {
 		b.release()
+		b.release = nil
 	}
+	b.body.Close()
 }
 
 // deliver settles the promise with what came back.
