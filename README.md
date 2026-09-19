@@ -604,9 +604,47 @@ iterations, the allocation ones 2,000 objects, `ArrayCallbacks` a map, a filter
 and a reduce over 1,000 elements, `JSONRoundTrip` 500 parse-and-stringify
 round trips.
 
+### V8 version 7 benchmark suite
+
+For a comparison with another pure-Go JavaScript engine, the Mozilla
+[AreWeFastYet V8 version 7 suite][v8-v7] was run against go-quickjs and
+[goja]. The figures below are the median of three alternating-order,
+fresh-process runs on an Apple M5 Max with Go 1.27.0. Higher suite scores are
+better.
+
+| Workload | go-quickjs | goja | Relative result |
+|---|---:|---:|---:|
+| Richards | 757 | 505 | go-quickjs 1.50x |
+| DeltaBlue | 961 | 610 | go-quickjs 1.58x |
+| Crypto | 655 | 321 | go-quickjs 2.04x |
+| RayTrace | 2,036 | 726 | go-quickjs 2.80x |
+| EarleyBoyer | 2,621 | 1,359 | go-quickjs 1.93x |
+| RegExp | 417 | 563 | goja 1.35x |
+| Splay | 4,958 | 2,392 | go-quickjs 2.07x |
+| NavierStokes | 1,404 | 541 | go-quickjs 2.60x |
+| **Composite score** | **1,286** | **720** | **go-quickjs 1.79x** |
+
+The complete fresh-process run includes runtime construction, parsing,
+compilation, the suite's warmups and its measured iterations:
+
+| Metric | go-quickjs | goja | Relative result |
+|---|---:|---:|---:|
+| Wall time | 40.07 s | 53.51 s | go-quickjs 1.34x faster |
+| Total allocation | 20.16 GiB | 32.17 GiB | go-quickjs 37.4% less |
+
+The suite warms every workload for at least one second, then measures for at
+least another second and continues until it has 32 measured iterations. Both
+engines evaluated the same concatenated benchmark sources and validation code.
+The measured revisions were go-quickjs `8046d79`, goja `793a2a6`, and
+AreWeFastYet `0e21608`. These results characterize this older interpreter
+workload suite rather than every application; notably, goja is faster on its
+regular-expression workload even though go-quickjs leads the other seven.
+
 ## License
 
 MIT, matching the upstream project.
 
 [QuickJS-NG]: https://github.com/quickjs-ng/quickjs
 [test262]: https://github.com/tc39/test262
+[goja]: https://github.com/dop251/goja
+[v8-v7]: https://github.com/mozilla/arewefastyet/tree/master/benchmarks/v8-v7
