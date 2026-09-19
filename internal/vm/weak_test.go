@@ -49,6 +49,41 @@ func TestWeakMapReleasesCollectedKeys(t *testing.T) {
 	runtime.KeepAlive(kept)
 }
 
+// WeakSet membership is only a weak key. In particular, its shared map
+// storage must not retain the member in the otherwise-unused value slot.
+func TestWeakSetReleasesCollectedValues(t *testing.T) {
+	r := New(Config{})
+	s := newJSMap(true)
+
+	func() {
+		for i := 0; i < 200; i++ {
+			s.addWeak(r, Obj(newObject(nil, ClassObject)))
+		}
+	}()
+	kept := Obj(newObject(nil, ClassObject))
+	s.addWeak(r, kept)
+
+	for i := 0; i < 4; i++ {
+		runtime.GC()
+	}
+	// Insertion triggers a sweep. Hold the new members so that only the first
+	// 200 are eligible to disappear.
+	var held []Value
+	for i := 0; i < 400; i++ {
+		value := Obj(newObject(nil, ClassObject))
+		held = append(held, value)
+		s.addWeak(r, value)
+	}
+	if s.size > 401 {
+		t.Errorf("size after = %d, want at most 401: collected values were retained", s.size)
+	}
+	if _, ok := s.get(r, kept); !ok {
+		t.Error("reachable WeakSet value was dropped")
+	}
+	runtime.KeepAlive(held)
+	runtime.KeepAlive(kept)
+}
+
 // A weak.Pointer is the identity the index is keyed by, so two references to
 // the same object have to find the same entry.
 func TestWeakMapKeyIdentity(t *testing.T) {

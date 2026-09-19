@@ -113,10 +113,10 @@ type jsMap struct {
 	// weak marks a WeakMap or WeakSet, whose keys are held weakly: an entry
 	// stops existing once nothing else refers to its key.
 	//
-	// The value is still held strongly, so a value that refers to its own key
-	// keeps that key alive. Breaking that cycle needs ephemeron marking, which
-	// Go's collector does not offer; it is the one thing about these that is
-	// not the real article.
+	// A WeakMap value is still held strongly, so a value that refers to its own
+	// key keeps that key alive. Breaking that cycle needs ephemeron marking,
+	// which Go's collector does not offer; it is the one thing about these that
+	// is not the real article. WeakSet stores no value beside its weak key.
 	weak bool
 	// nextSweep is the entry count at which the next scan for collected keys
 	// happens. Doubling it after each scan is what makes the scanning cost a
@@ -203,6 +203,12 @@ func (m *jsMap) set(r *Runtime, k, v Value) {
 	m.entries = append(m.entries, e)
 	m.record(mk, len(m.entries)-1)
 	m.size++
+}
+
+// addWeak records WeakSet membership without retaining the member as an entry
+// value. WeakMap uses set because its separately supplied value is strong.
+func (m *jsMap) addWeak(r *Runtime, value Value) {
+	m.set(r, value, Undefined)
 }
 
 // sweep drops the entries whose keys have been collected.
@@ -585,7 +591,10 @@ func (r *Runtime) initWeakCollections() {
 			return Undefined, rt.throwTypeError(
 				"a WeakSet value must be an object or an unregistered symbol")
 		}
-		m.set(rt, v, v)
+		// Membership needs only the weak key. Storing v as the entry value would
+		// create a second, strong reference and prevent it from ever being
+		// collected.
+		m.addWeak(rt, v)
 		return this, nil
 	})
 	r.defMethod(wsProto, "has", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
