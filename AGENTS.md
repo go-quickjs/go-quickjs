@@ -51,6 +51,7 @@ Do not manually edit generated files or their binary companions:
 - `internal/icu/tables.go` and `internal/icu/tables.bin`
 - `intldata/tables.go` and `intldata/tables.bin`
 - `internal/icu/cjkcollation.bin`
+- `internal/icu/zoneinfo.zip`
 - `internal/regexp/unicodetables.go`
 
 Run generators from the repository root. Use a temporary output file for
@@ -105,6 +106,12 @@ wc -c internal/icu/tables.bin internal/icu/cjkcollation.bin intldata/tables.bin
 The `.bin` files are intentional embedded assets and are marked binary in
 `.gitattributes`. Do not replace them with base64 Go strings or commit raw
 generator source datasets.
+
+`internal/icu/zoneinfo.zip` is the uncompressed Go zone archive for the IANA
+tzdata release reported by `node -p process.versions.tz`; it must stay aligned
+with the Node/ICU release used for the CLDR tables. Copy it from a Go toolchain
+carrying that exact tzdata release and record the version in
+`internal/icu/timezones.go`.
 
 ## Intl and data-loading invariants
 

@@ -756,6 +756,22 @@ func TestDateStringsFollowNodeLegacyZoneNames(t *testing.T) {
 	}
 }
 
+func TestDateStringsUseBundledRulesForNamedTimeZone(t *testing.T) {
+	rt := quickjs.New(quickjs.WithLocale("en-US"))
+	defer rt.Close()
+
+	// Simulate an older host tzdata release. A named location is resolved from
+	// the tzdata bundled with ICU so its offset and localized name stay paired.
+	rt.SetTimeZone(time.FixedZone("America/Vancouver", -8*60*60))
+	v, err := rt.Eval(`new Date(1894708800000).toString()`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := v.String(), "Tue Jan 15 2030 05:00:00 GMT-0700 (Pacific Daylight Time)"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 func TestWarmupDateTimeDataBeforeRuntime(t *testing.T) {
 	quickjs.WarmupDateTimeData()
 	quickjs.WarmupDateTimeData() // Idempotent.

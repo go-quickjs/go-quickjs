@@ -29,10 +29,11 @@
 // puts its own letters, whether a capital comes first, and the letters it
 // writes as two characters.
 //
-// Time-zone arithmetic comes from Go's copy of the operating system zone
-// files. Localized CLDR names live in compact dictionaries here, including a
-// historical metazone timeline that is decoded only when an older date needs
-// it. Missing names fall back to a localized offset from Greenwich.
+// Time-zone arithmetic comes from the IANA zone archive paired with the ICU
+// release used to generate these tables. Localized CLDR names live in compact
+// dictionaries here, including a historical metazone timeline that is decoded
+// only when an older date needs it. Missing names fall back to a localized
+// offset from Greenwich.
 //
 // The plural rules are stored as answers rather than as arithmetic: a hundred
 // entries for the small counts, a hundred for what the last two digits say,

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestHotLocaleDataStartsWithoutDecompression(t *testing.T) {
@@ -370,6 +371,28 @@ func TestWarmupDateTimeData(t *testing.T) {
 		if entry == nil {
 			t.Errorf("calendar format entry %d was not warmed", i)
 		}
+	}
+}
+
+func TestBundledTimeZoneMatchesICURelease(t *testing.T) {
+	for _, name := range Zones() {
+		target := name
+		if alias, ok := ZoneTarget(name); ok {
+			target = alias
+		}
+		if _, err := LoadLocation(target); err != nil {
+			t.Errorf("load %s: %v", name, err)
+		}
+	}
+
+	zone, err := LoadLocation("America/Vancouver")
+	if err != nil {
+		t.Fatal(err)
+	}
+	instant := time.Date(2030, time.January, 15, 12, 0, 0, 0, time.UTC).In(zone)
+	name, offset := instant.Zone()
+	if got, want := instant.Format("2006-01-02 15:04:05 -0700"), "2030-01-15 05:00:00 -0700"; got != want {
+		t.Fatalf("tzdata 2026c Vancouver rule: got %q, want %q (%s, %d)", got, want, name, offset)
 	}
 }
 

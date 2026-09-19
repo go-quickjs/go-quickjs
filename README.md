@@ -79,7 +79,9 @@ generic and historical names, are written in the requested language.
 `new Date().toString()` likewise ends with the localized zone name -- for
 example, `(Mitteleuropäische Normalzeit)` in winter and
 `(Mitteleuropäische Sommerzeit)` in summer when using a German locale and a
-Central European time zone.
+Central European time zone. Named-zone arithmetic uses the same bundled IANA
+tzdata release as those ICU tables, so results do not depend on whether the
+host operating system has installed newer or older zone rules.
 
 Sorting follows the Unicode algorithm with each language's tailoring,
 including Chinese pinyin, stroke and zhuyin order, Japanese kana and Han

@@ -95,8 +95,37 @@ func New(cfg Config) *Runtime {
 func (r *Runtime) SetClock(fn func() time.Time) { r.clock = fn }
 
 // SetTimeZone installs the zone local time is expressed in. A nil zone means
-// the process zone.
-func (r *Runtime) SetTimeZone(loc *time.Location) { r.timeZone = loc }
+// the process zone. Named IANA locations use the database bundled alongside
+// ICU so that their arithmetic cannot drift from the localized zone names.
+func (r *Runtime) SetTimeZone(loc *time.Location) {
+	if loc == nil {
+		r.timeZone = nil
+		return
+	}
+	name, ok := icu.CanonicalZone(loc.String())
+	if !ok {
+		r.timeZone = loc
+		return
+	}
+	target := name
+	if to, alias := icu.ZoneTarget(name); alias {
+		target = to
+	}
+	// Keep the name the host supplied when the archive carries it. Legacy Date
+	// strings distinguish Greenwich aliases from UTC even though their clocks
+	// have identical rules.
+	if bundled, err := loadNamedLocation(name); err == nil {
+		r.timeZone = bundled
+		return
+	}
+	if target != name {
+		if bundled, err := loadNamedLocation(target); err == nil {
+			r.timeZone = bundled
+			return
+		}
+	}
+	r.timeZone = loc
+}
 
 // SetLocale installs the language a program means when it does not say which.
 // Passing nothing restores the one the machine is set to.

@@ -140,7 +140,7 @@ func WithLocale(tag string) Option {
 // latency spikes while serving requests.
 //
 // The loaded data includes every locale, calendar, modern and historical zone
-// name, legacy transition timeline, and loadable system time zone. It remains
+// name, legacy transition timeline, and bundled IANA time zone. It remains
 // resident for the life of the process. Repeated calls do nothing.
 func WarmupDateTimeData() {
 	vm.WarmupDateTimeData()
@@ -357,8 +357,9 @@ func (r *Runtime) SetClock(fn func() time.Time) {
 	r.rt.SetClock(fn)
 }
 
-// SetTimeZone installs the zone that local-time Date methods use. Passing nil
-// restores the process zone.
+// SetTimeZone installs the zone that local-time Date methods use. Named IANA
+// locations use the tzdata bundled with Intl rather than the host's possibly
+// different copy. Passing nil restores the process zone.
 func (r *Runtime) SetTimeZone(loc *time.Location) {
 	if r.closed {
 		return

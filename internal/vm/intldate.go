@@ -82,9 +82,8 @@ func (o *dateOptions) setZone(r *Runtime, zone string, given bool) error {
 		return r.throwRangeError("there is no such time zone: %s", zone)
 	}
 	// A zone named rather than offset, however it was spelled and whatever it
-	// used to be called. Loading it reads the zone files the operating system
-	// keeps, or the copy a host embedded by importing time/tzdata; a script
-	// cannot reach either.
+	// used to be called. Loading it reads the IANA database paired with ICU; a
+	// script cannot reach the host's possibly older zone files.
 	name, ok := icu.CanonicalZone(zone)
 	if !ok {
 		return r.throwRangeError("there is no such time zone: %s", zone)
@@ -117,7 +116,7 @@ func loadNamedLocation(name string) (*time.Location, error) {
 	if cached, ok := namedLocations.Load(name); ok {
 		return cached.(*time.Location), nil
 	}
-	location, err := time.LoadLocation(name)
+	location, err := icu.LoadLocation(name)
 	if err != nil {
 		return nil, err
 	}
