@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -347,15 +350,33 @@ func TestUnhandledRejectionIsReported(t *testing.T) {
 func TestImportMetaInTheCommand(t *testing.T) {
 	dir := t.TempDir()
 	script := filepath.Join(dir, "m.mjs")
-	if err := os.WriteFile(script, []byte(
-		`console.log(import.meta.url.startsWith("file://"), `+
-			`import.meta.filename === import.meta.url.slice(7), `+
-			`import.meta.dirname.length > 0)`), 0o644); err != nil {
+	urlPath := filepath.ToSlash(script)
+	if runtime.GOOS == "windows" {
+		urlPath = "/" + urlPath
+	}
+	wantURL := (&url.URL{Scheme: "file", Path: urlPath}).String()
+	source := fmt.Sprintf(`console.log(import.meta.url === %s, import.meta.filename === %s, import.meta.dirname === %s)`,
+		quote(wantURL), quote(script), quote(dir))
+	if err := os.WriteFile(script, []byte(source), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	code, out, errOut := exec(t, "", script)
 	if code != 0 || strings.TrimSpace(out) != "true true true" {
 		t.Errorf("code=%d out=%q err=%q", code, out, errOut)
+	}
+}
+
+func TestFileURLOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows path syntax")
+	}
+	for path, want := range map[string]string{
+		`C:\Program Files\qjs\main.mjs`: `file:///C:/Program%20Files/qjs/main.mjs`,
+		`\\server\share\main.mjs`:       `file://server/share/main.mjs`,
+	} {
+		if got := fileURL(path); got != want {
+			t.Errorf("fileURL(%q) = %q, want %q", path, got, want)
+		}
 	}
 }
 
@@ -371,11 +392,16 @@ func TestAllowRun(t *testing.T) {
 		t.Errorf("code=%d out=%q, want the flag named", code, out)
 	}
 
-	code, out, errOut := exec(t, "", "--allow-run", "-e", `
+	program, args := "echo", `["ran"]`
+	if runtime.GOOS == "windows" {
+		program, args = "cmd.exe", `["/d", "/s", "/c", "echo ran"]`
+	}
+	source := fmt.Sprintf(`
 		import("child_process").then(({default: cp}) => {
-			console.log(cp.execFileSync("echo", ["ran"]).trim())
+			console.log(cp.execFileSync(%q, %s).trim())
 		})
-	`)
+	`, program, args)
+	code, out, errOut := exec(t, "", "--allow-run", "-e", source)
 	if code != 0 || strings.TrimSpace(out) != "ran" {
 		t.Errorf("code=%d out=%q err=%q", code, out, errOut)
 	}
@@ -385,21 +411,22 @@ func TestAllowRun(t *testing.T) {
 // refused the environment cannot read it through a program it starts.
 func TestAllowRunDoesNotLeakTheEnvironment(t *testing.T) {
 	t.Setenv("QJS_TEST_SECRET", "not for the script")
-	code, out, _ := exec(t, "", "--allow-run", "-e", `
+	command := `printf '[%s]\n' "$QJS_TEST_SECRET"`
+	if runtime.GOOS == "windows" {
+		command = `echo [%QJS_TEST_SECRET%]`
+	}
+	source := fmt.Sprintf(`
 		import("child_process").then(({default: cp}) => {
-			console.log("[" + cp.execSync("echo $QJS_TEST_SECRET").trim() + "]")
+			console.log(cp.execSync(%q).trim())
 		})
-	`)
+	`, command)
+	code, out, _ := exec(t, "", "--allow-run", "-e", source)
 	if code != 0 || strings.TrimSpace(out) != "[]" {
 		t.Errorf("code=%d out=%q, want the secret withheld", code, out)
 	}
 
-	code, out, _ = exec(t, "", "--allow-run", "--allow-env", "-e", `
-		import("child_process").then(({default: cp}) => {
-			console.log(cp.execSync("echo $QJS_TEST_SECRET").trim())
-		})
-	`)
-	if code != 0 || strings.TrimSpace(out) != "not for the script" {
+	code, out, _ = exec(t, "", "--allow-run", "--allow-env", "-e", source)
+	if code != 0 || strings.TrimSpace(out) != "[not for the script]" {
 		t.Errorf("with --allow-env: code=%d out=%q", code, out)
 	}
 }
@@ -430,12 +457,17 @@ func TestAllowNetServes(t *testing.T) {
 // --allow-run can name the programs it allows, in which case nothing else may
 // be started.
 func TestAllowRunList(t *testing.T) {
-	code, out, errOut := exec(t, "", "--allow-run=echo", "-e", `
+	program, args := "echo", `["allowed"]`
+	if runtime.GOOS == "windows" {
+		program, args = "cmd.exe", `["/d", "/s", "/c", "echo allowed"]`
+	}
+	source := fmt.Sprintf(`
 		import("child_process").then(({default: cp}) => {
-			console.log(cp.execFileSync("echo", ["allowed"]).trim())
+			console.log(cp.execFileSync(%q, %s).trim())
 			try { cp.execFileSync("ls") } catch (e) { console.log(e.message) }
 		})
-	`)
+	`, program, args)
+	code, out, errOut := exec(t, "", "--allow-run="+program, "-e", source)
 	if code != 0 {
 		t.Fatalf("code=%d err=%q", code, errOut)
 	}

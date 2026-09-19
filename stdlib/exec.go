@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"runtime"
 	"time"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
@@ -81,6 +83,13 @@ func Commands(rt *quickjs.Runtime, cfg *Run) error {
 // shellFor is how a command line is run: through the shell, which is what
 // makes pipes and redirection in the string work.
 func shellFor(command string) (string, []string) {
+	if runtime.GOOS == "windows" {
+		shell := os.Getenv("ComSpec")
+		if shell == "" {
+			shell = "cmd.exe"
+		}
+		return shell, []string{"/d", "/s", "/c", command}
+	}
 	return "/bin/sh", []string{"-c", command}
 }
 

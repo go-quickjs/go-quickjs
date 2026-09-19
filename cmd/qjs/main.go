@@ -121,7 +121,7 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			meta.Set("url", specifier)
 			return
 		}
-		meta.Set("url", "file://"+filepath.ToSlash(specifier))
+		meta.Set("url", fileURL(specifier))
 		meta.Set("filename", specifier)
 		meta.Set("dirname", filepath.Dir(specifier))
 	})
@@ -182,6 +182,21 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// fileURL writes an absolute native path as a file URL. Drive-letter paths
+// need an extra leading slash, while a UNC server becomes the URL host.
+func fileURL(path string) string {
+	text := filepath.ToSlash(path)
+	if volume := filepath.VolumeName(path); strings.HasPrefix(volume, `\\`) {
+		serverAndPath := strings.TrimPrefix(text, "//")
+		server, rest, _ := strings.Cut(serverAndPath, "/")
+		return (&url.URL{Scheme: "file", Host: server, Path: "/" + rest}).String()
+	}
+	if volume := filepath.VolumeName(path); strings.HasSuffix(volume, ":") {
+		text = "/" + text
+	}
+	return (&url.URL{Scheme: "file", Path: text}).String()
 }
 
 // describe renders what a rejection carried: an Error shows its stack, and

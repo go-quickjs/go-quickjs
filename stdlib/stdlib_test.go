@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand"
 	"net/http"
@@ -943,33 +944,44 @@ func TestServeNeedsPermission(t *testing.T) {
 }
 
 func TestCommands(t *testing.T) {
+	shell, shellArgs := "/bin/sh", `["-c", "echo out; echo err 1>&2; exit 3"]`
+	fail, failArgs := "false", `[]`
+	syncCommand := `cp.execFileSync("echo", ["from a program"])`
+	asyncCommand := `cp.execFile("echo", ["awaited"])`
+	if runtime.GOOS == "windows" {
+		shell = "cmd.exe"
+		shellArgs = `["/d", "/s", "/c", "echo out & echo err 1>&2 & exit /b 3"]`
+		fail, failArgs = shell, `["/d", "/s", "/c", "exit /b 1"]`
+		syncCommand = `cp.execFileSync("cmd.exe", ["/d", "/s", "/c", "echo from a program"])`
+		asyncCommand = `cp.execFile("cmd.exe", ["/d", "/s", "/c", "echo awaited"])`
+	}
 	out, _ := run(t, stdlib.Config{Run: &stdlib.Run{
 		Allow: func(name string, args []string) error {
-			if name != "echo" && name != "/bin/sh" && name != "false" {
+			if name != "echo" && name != shell && name != fail && name != "cmd.exe" {
 				return errors.New(name + " is not allowed")
 			}
 			return nil
 		},
-	}}, `
+	}}, fmt.Sprintf(`
 		;(async () => {
 			const cp = (await import("child_process")).default
-			console.log(cp.execFileSync("echo", ["from a program"]).trim())
+			console.log((%s).trim())
 
-			const {stdout} = await cp.execFile("echo", ["awaited"])
+			const {stdout} = await %s
 			console.log(stdout.trim())
 
-			const res = cp.spawnSync("/bin/sh", ["-c", "echo out; echo err 1>&2; exit 3"])
+			const res = cp.spawnSync(%q, %s)
 			console.log(res.status, res.stdout.trim(), res.stderr.trim())
 
-			try { cp.execFileSync("false") } catch (e) { console.log("failed:", e.message) }
+			try { cp.execFileSync(%q, %s) } catch (e) { console.log("failed:", e.message) }
 			try { cp.execFileSync("rm", ["-rf", "/"]) } catch (e) { console.log(e.message) }
 		})()
-	`)
+	`, syncCommand, asyncCommand, shell, shellArgs, fail, failArgs))
 	want := strings.Join([]string{
 		"from a program",
 		"awaited",
 		"3 out err",
-		"failed: false exited with 1",
+		"failed: " + fail + " exited with 1",
 		"rm is not allowed",
 	}, "\n")
 	if out != want {
@@ -994,14 +1006,19 @@ func TestCommandsRefusedByDefault(t *testing.T) {
 // happens to have.
 func TestCommandsEnvironment(t *testing.T) {
 	t.Setenv("QJS_SECRET", "do not pass this on")
+	shell, args := "/bin/sh", `["-c", "echo [$GIVEN][$QJS_SECRET]"]`
+	if runtime.GOOS == "windows" {
+		shell = "cmd.exe"
+		args = `["/d", "/s", "/c", "echo [%GIVEN%][%QJS_SECRET%]"]`
+	}
 	out, _ := run(t, stdlib.Config{Run: &stdlib.Run{
 		Env:   map[string]string{"GIVEN": "yes"},
 		Allow: func(string, []string) error { return nil },
-	}}, `
+	}}, fmt.Sprintf(`
 		import("child_process").then(({default: cp}) => {
-			console.log(cp.execFileSync("/bin/sh", ["-c", "echo [$GIVEN][$QJS_SECRET]"]).trim())
+			console.log(cp.execFileSync(%q, %s).trim())
 		})
-	`)
+	`, shell, args))
 	if want := "[yes][]"; out != want {
 		t.Errorf("out = %q, want %q", out, want)
 	}
