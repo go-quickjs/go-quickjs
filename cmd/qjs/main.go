@@ -77,6 +77,7 @@ type options struct {
 	memoryLimit int64
 	stackSize   int
 	timeout     time.Duration
+	nodeQuirks  bool
 	noCodegen   bool
 }
 
@@ -98,6 +99,9 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	if opts.stackSize > 0 {
 		rtOpts = append(rtOpts, quickjs.WithStackSize(opts.stackSize))
+	}
+	if opts.nodeQuirks {
+		rtOpts = append(rtOpts, quickjs.WithNodeQuirks())
 	}
 	if opts.noCodegen {
 		rtOpts = append(rtOpts, quickjs.WithoutCodeGeneration())
@@ -891,6 +895,8 @@ func parseArgs(argv []string, stdout io.Writer) (*options, error) {
 			opts.timeout = d
 		case "--no-code-generation":
 			opts.noCodegen = true
+		case "--node-quirks":
+			opts.nodeQuirks = true
 		default:
 			return nil, fmt.Errorf("unknown option %q", a)
 		}
@@ -968,4 +974,7 @@ bounds:
       --memory-limit N    stop the script at N bytes (64m, 1g)
       --stack-size N      value slots for all call frames
       --timeout D         stop after a duration such as 5s
-      --no-code-generation   remove eval and the Function constructor`
+      --no-code-generation   remove eval and the Function constructor
+
+compatibility:
+      --node-quirks       reproduce known Node.js deviations from standards`

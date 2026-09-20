@@ -56,17 +56,20 @@ type dateOptions struct {
 	temporalArgument bool
 	temporalKind     string
 	timeZoneNameSet  bool
+	nodeQuirks       bool
 }
 
 func (o *dateOptions) useTemporalArgument() {
 	o.temporalArgument = true
-	o.resetImplicitTemporalClock()
-	if o.implicitDefaults && o.era != "" && o.temporalKind != "plain-time" &&
-		o.temporalKind != "plain-month-day" {
-		o.year, o.month, o.day = "", "", ""
-		o.hour, o.minute, o.second = "", "", ""
-		if o.temporalKind == "zoned-date-time" && !o.timeZoneNameSet {
-			o.timeZoneName = ""
+	if o.nodeQuirks {
+		o.resetImplicitTemporalClock()
+		if o.implicitDefaults && o.era != "" && o.temporalKind != "plain-time" &&
+			o.temporalKind != "plain-month-day" {
+			o.year, o.month, o.day = "", "", ""
+			o.hour, o.minute, o.second = "", "", ""
+			if o.temporalKind == "zoned-date-time" && !o.timeZoneNameSet {
+				o.timeZoneName = ""
+			}
 		}
 	}
 	o.pattern = o.patternFor()
@@ -75,6 +78,7 @@ func (o *dateOptions) useTemporalArgument() {
 	// the caller explicitly selected a clock.
 	if o.hourSet {
 		o.pattern = adjustClock(o.pattern, o.hourCycle)
+		o.pattern = o.applyImplicitTemporalClockWidth(o.pattern)
 	}
 }
 
@@ -113,7 +117,9 @@ func (r *Runtime) dateOptionsForArgument(o *dateOptions, value Value) (*dateOpti
 
 	copy := *o
 	copy.temporalArgument = true
-	copy.resetImplicitTemporalClock()
+	if copy.nodeQuirks {
+		copy.resetImplicitTemporalClock()
+	}
 	hadDateStyle, hadTimeStyle := copy.dateStyle != "", copy.timeStyle != ""
 	if copy.implicitDefaults {
 		// DateTimeFormat supplies year/month/day when no date or time
@@ -122,11 +128,10 @@ func (r *Runtime) dateOptionsForArgument(o *dateOptions, value Value) (*dateOpti
 		// as era and timeZoneName; filtering below removes any that do not
 		// apply to the particular plain type.
 		copy.year, copy.month, copy.day = "", "", ""
-		// Era alone causes DateTimeFormat to install Date defaults, but those
-		// defaults do not apply to a Temporal type that can display the era.
-		// PlainTime and PlainMonthDay discard era, so they still need their
-		// type-specific defaults.
-		if copy.era == "" || kind == "time" || kind == "month-day" {
+		// Options such as era and hourCycle do not suppress the defaults for
+		// fields relevant to the Temporal type. Node 26 is the exception for an
+		// era that the type can display.
+		if !copy.nodeQuirks || copy.era == "" || kind == "time" || kind == "month-day" {
 			switch kind {
 			case "instant", "date-time":
 				copy.year, copy.month, copy.day = "numeric", "numeric", "numeric"
@@ -193,6 +198,7 @@ func (r *Runtime) dateOptionsForArgument(o *dateOptions, value Value) (*dateOpti
 		copy.pattern = copy.patternFor()
 		if copy.hourSet {
 			copy.pattern = adjustClock(copy.pattern, copy.hourCycle)
+			copy.pattern = copy.applyImplicitTemporalClockWidth(copy.pattern)
 		}
 	}
 	return &copy, nil
@@ -1034,9 +1040,17 @@ func (o *dateOptions) patternFor() string {
 	// A set of fields: the locale's own order for that combination, when it
 	// has one, and otherwise the fields in the order its short date puts them.
 	skeleton := o.skeleton()
-	pattern, ok := calendarSkeletons[skeleton]
+	// Era is part of the date half, but it is deliberately absent from CLDR
+	// skeleton keys. Splitting an implicitly defaulted date-time keeps it next
+	// to the date instead of appending it after the clock.
+	forceSplit := o.implicitDefaults && o.era != "" &&
+		o.year != "" && o.hour != ""
+	pattern, ok := "", false
+	if !forceSplit {
+		pattern, ok = calendarSkeletons[skeleton]
+	}
 	calendarPattern := ok
-	if !ok {
+	if !ok && !forceSplit {
 		pattern, ok = o.localeSkeleton(skeleton)
 	}
 	if !ok {
@@ -1128,6 +1142,64 @@ func (o *dateOptions) localeSkeleton(skeleton string) (string, bool) {
 	}
 	pattern, ok := o.locale.Skeletons[skeleton]
 	return pattern, ok
+}
+
+// applyImplicitTemporalClockWidth copies the locale's resolved hour width for
+// an explicitly selected clock onto a Temporal default pattern. The clock
+// option participates in choosing defaults even though it is not itself a
+// displayed field.
+func (o *dateOptions) applyImplicitTemporalClockWidth(pattern string) string {
+	if o.nodeQuirks || !o.implicitDefaults || !o.hourSet || o.hour == "" {
+		return pattern
+	}
+	timeOnly := *o
+	timeOnly.weekday, timeOnly.era = "", ""
+	timeOnly.year, timeOnly.month, timeOnly.day = "", "", ""
+	timeOnly.timeZoneName = ""
+	timeOnly.temporalKind = ""
+	skeleton := timeOnly.skeleton()
+	clock, ok := o.locale.TemporalSkeletons[skeleton]
+	if !ok {
+		clock, ok = o.locale.Skeletons[skeleton]
+	}
+	if !ok {
+		return pattern
+	}
+	_, width := clockFieldRun(clock)
+	if width == 0 {
+		return pattern
+	}
+	return rewriteClockFieldWidth(pattern, width)
+}
+
+func clockFieldRun(pattern string) (int, int) {
+	inQuote := false
+	for i := 0; i < len(pattern); {
+		if pattern[i] == '\'' {
+			inQuote = !inQuote
+			i++
+			continue
+		}
+		if !inQuote && strings.ContainsRune("hHkK", rune(pattern[i])) {
+			letter := pattern[i]
+			width := 1
+			for i+width < len(pattern) && pattern[i+width] == letter {
+				width++
+			}
+			return i, width
+		}
+		_, width := utf8.DecodeRuneInString(pattern[i:])
+		i += width
+	}
+	return -1, 0
+}
+
+func rewriteClockFieldWidth(pattern string, width int) string {
+	at, oldWidth := clockFieldRun(pattern)
+	if oldWidth == 0 || oldWidth == width {
+		return pattern
+	}
+	return pattern[:at] + strings.Repeat(string(pattern[at]), width) + pattern[at+oldWidth:]
 }
 
 func (o *dateOptions) calendarPatterns() ([4]string, [4]string, map[string]string) {

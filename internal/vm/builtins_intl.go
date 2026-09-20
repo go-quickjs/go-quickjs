@@ -1307,7 +1307,10 @@ func (r *Runtime) dateOptionsFrom(args []Value, defaults map[string]string, requ
 		// the tag is no longer the reason for the answer.
 		choice.drop("hc")
 	}
-	o := &dateOptions{locale: choice.data, choice: choice, timeZone: "UTC"}
+	o := &dateOptions{
+		locale: choice.data, choice: choice, timeZone: "UTC",
+		nodeQuirks: r.nodeQuirks,
+	}
 	o.locale.PrepareDate()
 	o.calendar = choice.setting("ca")
 	// These are abstract/deprecated calendar requests. ECMA-402 requires the

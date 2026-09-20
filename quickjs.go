@@ -96,6 +96,7 @@ type config struct {
 	stackSize        int
 	maxCallDepth     int
 	locale           string
+	nodeQuirks       bool
 	noCodeGeneration bool
 }
 
@@ -134,6 +135,15 @@ func WithLocale(tag string) Option {
 	return func(c *config) { c.locale = tag }
 }
 
+// WithNodeQuirks enables observable Node.js behavior where it intentionally or
+// temporarily differs from the JavaScript and internationalization standards.
+// It currently reproduces Node 26's Temporal locale-formatting behavior for
+// standalone era and hour-cycle options. It is useful for hosts that prioritize
+// Node compatibility over conformance.
+func WithNodeQuirks() Option {
+	return func(c *config) { c.nodeQuirks = true }
+}
+
 // WarmupDateTimeData eagerly loads all process-wide data used by Date's legacy
 // string methods and Intl.DateTimeFormat. Servers can call it during startup,
 // before constructing a Runtime, to avoid locale- or time-zone-dependent
@@ -167,6 +177,7 @@ func New(opts ...Option) *Runtime {
 		StackSize:    c.stackSize,
 		MaxCallDepth: c.maxCallDepth,
 		Locale:       c.locale,
+		NodeQuirks:   c.nodeQuirks,
 	})}
 	if !c.noCodeGeneration {
 		r.installCodeGeneration()

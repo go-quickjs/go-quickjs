@@ -87,15 +87,29 @@ func TestTemporalIntlDateTimeFormat(t *testing.T) {
 	rt := quickjs.New()
 	defer rt.Close()
 	tests := []struct{ source, want string }{
-		{`new Intl.DateTimeFormat("en-US", { era: "narrow", timeZone: "UTC" }).format(new Temporal.Instant(0n))`, "A"},
-		{`new Intl.DateTimeFormat("en-US", { era: "narrow", timeZone: "UTC" }).format(new Temporal.PlainDate(2025, 11, 4))`, "A"},
+		{`new Intl.DateTimeFormat("en-US", { era: "narrow", timeZone: "UTC" }).format(new Temporal.Instant(0n))`, "1/1/1970 A, 12:00:00 AM"},
+		{`new Intl.DateTimeFormat("en-US", { era: "narrow", timeZone: "UTC" }).format(new Temporal.PlainDate(2025, 11, 4))`, "11/4/2025 A"},
 		{`[
 			new Temporal.Instant(0n).toLocaleString("en", {timeZone: "UTC", hour12: false}),
 			new Temporal.PlainDateTime(1970, 1, 1).toLocaleString("en", {hour12: false}),
 			new Temporal.PlainTime(0).toLocaleString("en", {hour12: false}),
 			new Temporal.ZonedDateTime(0n, "UTC").toLocaleString("en", {hour12: false})
-		].join("|")`, "1/1/1970, 12:00:00 AM|1/1/1970, 12:00:00 AM|" +
-			"12:00:00 AM|1/1/1970, 12:00:00 AM UTC"},
+		].join("|")`, "1/1/1970, 00:00:00|1/1/1970, 00:00:00|" +
+			"00:00:00|1/1/1970, 00:00:00, UTC"},
+		{`[
+			new Temporal.PlainTime(0).toLocaleString("en", {hourCycle: "h23"}),
+			new Temporal.PlainTime(0).toLocaleString("en", {hourCycle: "h24"}),
+			new Temporal.PlainTime(0).toLocaleString("en", {hourCycle: "h11"}),
+			new Temporal.PlainTime(0).toLocaleString("en", {hourCycle: "h12"})
+		].join("|")`, "00:00:00|24:00:00|0:00:00 AM|12:00:00 AM"},
+		{`[
+			new Temporal.Instant(0n).toLocaleString("en", {era: "narrow", timeZone: "UTC"}),
+			new Temporal.PlainDate(2000, 5, 2, "gregory").toLocaleString("en", {era: "narrow"}),
+			new Temporal.PlainDateTime(2000, 5, 2, 14, 46, 0, 0, 0, 0, "gregory").toLocaleString("en", {era: "narrow"}),
+			new Temporal.PlainYearMonth(2000, 5, "gregory").toLocaleString("en", {era: "narrow"}),
+			new Temporal.ZonedDateTime(0n, "UTC").toLocaleString("en", {era: "narrow"})
+		].join("|")`, "1/1/1970 A, 12:00:00 AM|5/2/2000 A|" +
+			"5/2/2000 A, 2:46:00 PM|5/2000 A|1/1/1970 A, 12:00:00 AM UTC"},
 		{`new Intl.DateTimeFormat("en-US", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" }).format(new Temporal.PlainDate(2000, 2, 29))`, "02/29/2000"},
 		{`new Intl.DateTimeFormat("en-US", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" }).format(new Temporal.PlainTime(12, 34))`, "12:34 PM"},
 		{`new Intl.DateTimeFormat("en-US", { timeZoneName: "long", timeZone: "America/New_York" }).formatToParts(new Temporal.PlainTime(12, 34)).some(part => part.type === "timeZoneName")`, "false"},
@@ -130,6 +144,32 @@ func TestTemporalIntlDateTimeFormat(t *testing.T) {
 		new Intl.DateTimeFormat("en-US").format(new Temporal.ZonedDateTime(0n, "UTC"));
 	} catch (e) { e.name }`); got != "TypeError" {
 		t.Fatalf("formatting a ZonedDateTime threw %s", got)
+	}
+}
+
+func TestTemporalIntlNodeQuirks(t *testing.T) {
+	rt := quickjs.New(quickjs.WithNodeQuirks())
+	defer rt.Close()
+	tests := []struct{ source, want string }{
+		{`[
+			new Temporal.Instant(0n).toLocaleString("en", {era: "narrow", timeZone: "UTC"}),
+			new Temporal.PlainDate(2000, 5, 2, "gregory").toLocaleString("en", {era: "narrow"}),
+			new Temporal.PlainDateTime(2000, 5, 2, 14, 46, 0, 0, 0, 0, "gregory").toLocaleString("en", {era: "narrow"}),
+			new Temporal.PlainYearMonth(2000, 5, "gregory").toLocaleString("en", {era: "narrow"}),
+			new Temporal.ZonedDateTime(0n, "UTC").toLocaleString("en", {era: "narrow"})
+		].join("|")`, "A|A|A|A|A"},
+		{`[
+			new Temporal.Instant(0n).toLocaleString("en", {timeZone: "UTC", hour12: false}),
+			new Temporal.PlainDateTime(1970, 1, 1).toLocaleString("en", {hourCycle: "h23"}),
+			new Temporal.PlainTime(0).toLocaleString("en", {hourCycle: "h24"}),
+			new Temporal.ZonedDateTime(0n, "UTC").toLocaleString("en", {hourCycle: "h11"})
+		].join("|")`, "1/1/1970, 12:00:00 AM|1/1/1970, 12:00:00 AM|" +
+			"12:00:00 AM|1/1/1970, 12:00:00 AM UTC"},
+	}
+	for _, test := range tests {
+		if got := evalString(t, rt, test.source); got != test.want {
+			t.Errorf("%s\n got: %s\nwant: %s", test.source, got, test.want)
+		}
 	}
 }
 

@@ -87,6 +87,7 @@ type Runtime struct {
 	maxFrames   int
 	memoryLimit int64
 	memoryUsed  int64
+	nodeQuirks  bool
 
 	// ctx carries cancellation from the embedding host. The interpreter checks
 	// it periodically, which is how a timeout or a cancelled request stops a

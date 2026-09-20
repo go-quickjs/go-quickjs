@@ -22,6 +22,9 @@ type Config struct {
 	// Locale is the language a program means when it does not say which.
 	// Empty takes the one the machine is set to.
 	Locale string
+	// NodeQuirks reproduces known observable Node.js divergences from the
+	// standards where compatibility is more important than conformance.
+	NodeQuirks bool
 }
 
 // WarmupDateTimeData eagerly loads process-wide Date and Intl.DateTimeFormat
@@ -74,6 +77,7 @@ func New(cfg Config) *Runtime {
 		maxFrames:        maxFrames,
 		memoryLimit:      cfg.MemoryLimit,
 		locale:           cfg.Locale,
+		nodeQuirks:       cfg.NodeQuirks,
 		interruptCounter: interruptCheckInterval,
 		symbolRegistry:   make(map[string]*Symbol),
 		cleanups:         &cleanupQueue{},

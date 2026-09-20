@@ -218,6 +218,17 @@ func TestNoCodeGeneration(t *testing.T) {
 	}
 }
 
+func TestNodeQuirks(t *testing.T) {
+	code, out, errOut := exec(t, "", "--node-quirks", "-e", `
+		console.log(new Temporal.PlainTime(0).toLocaleString("en", {
+			hour12: false,
+		}))
+	`)
+	if code != 0 || strings.TrimSpace(out) != "12:00:00 AM" {
+		t.Errorf("code=%d out=%q err=%q", code, out, errOut)
+	}
+}
+
 func TestHelpAndVersion(t *testing.T) {
 	if code, _, _ := exec(t, "", "--help"); code != 0 {
 		t.Errorf("--help exited %d", code)

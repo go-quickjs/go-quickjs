@@ -46,7 +46,7 @@ func TestTemporalMatchesNodeAcrossLocalesAndTimeZones(t *testing.T) {
 		t.Fatalf("run %s: %v\n%s", node, err, want)
 	}
 
-	rt := quickjs.New()
+	rt := quickjs.New(quickjs.WithNodeQuirks())
 	defer rt.Close()
 	value, err := rt.Eval(expression)
 	if err != nil {
@@ -148,7 +148,15 @@ func temporalNodeMatrixExpression(t *testing.T, locales, zones []string) string 
   for (let localeIndex = 0; localeIndex < locales.length; localeIndex++) {
     const locale = locales[localeIndex];
     out.push("L," + localeIndex + "," + digest([
-      () => duration.toLocaleString(locale, { style: "long" })
+      () => duration.toLocaleString(locale, { style: "long" }),
+      () => plainDate.toLocaleString(locale, { era: "narrow" }),
+      () => plainDateTime.toLocaleString(locale, { era: "narrow" }),
+      () => plainYearMonth.toLocaleString(locale, { era: "narrow" }),
+      () => plainTime.toLocaleString(locale, { hour12: false }),
+      () => plainTime.toLocaleString(locale, { hourCycle: "h23" }),
+      () => plainTime.toLocaleString(locale, { hourCycle: "h24" }),
+      () => plainTime.toLocaleString(locale, { hourCycle: "h11" }),
+      () => plainTime.toLocaleString(locale, { hourCycle: "h12" })
     ]) + "\n");
     for (let zoneIndex = 0; zoneIndex < zoneData.length; zoneIndex++) {
       const data = zoneData[zoneIndex];
@@ -169,7 +177,13 @@ func temporalNodeMatrixExpression(t *testing.T, locales, zones []string) string 
         () => plainDate.toLocaleString(locale, { timeZone: zone }),
         () => plainTime.toLocaleString(locale, { timeZone: zone }),
         () => plainYearMonth.toLocaleString(locale, { timeZone: zone }),
-        () => plainMonthDay.toLocaleString(locale, { timeZone: zone })
+        () => plainMonthDay.toLocaleString(locale, { timeZone: zone }),
+        () => instants[1].toLocaleString(locale,
+          { timeZone: zone, era: "narrow" }),
+        () => instants[1].toLocaleString(locale,
+          { timeZone: zone, hour12: false }),
+        () => data.zoned[1].toLocaleString(locale, { era: "narrow" }),
+        () => data.zoned[1].toLocaleString(locale, { hourCycle: "h23" })
       ];
       for (const formatter of nameFormatters) {
         for (const instant of instants) {
