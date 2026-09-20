@@ -28,6 +28,7 @@ func (r *Runtime) initTemporalBuiltins() {
 func (r *Runtime) buildTemporal() *Object {
 	temporal := newObject(r.proto.object, ClassObject)
 	r.defToStringTag(temporal, "Temporal")
+	r.initTemporalDuration(temporal)
 	r.initTemporalInstant(temporal)
 	r.initTemporalZonedDateTime(temporal)
 	return temporal
@@ -128,6 +129,34 @@ func (r *Runtime) initTemporalInstant(temporal *Object) {
 		}
 		return Bool(compareTemporalInstants(instant, other) == 0), nil
 	})
+	for _, operation := range []struct {
+		name string
+		sign int64
+	}{{"add", 1}, {"subtract", -1}} {
+		op := operation
+		r.defMethod(proto, op.name, 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+			instant, err := rt.temporalInstantValue(this, "Temporal.Instant.prototype."+op.name)
+			if err != nil {
+				return Undefined, err
+			}
+			duration, err := rt.toTemporalDuration(arg(args, 0))
+			if err != nil {
+				return Undefined, err
+			}
+			delta, ok := duration.timeNanoseconds()
+			if !ok {
+				return Undefined, rt.throwRangeError("calendar units cannot be added to an instant")
+			}
+			if op.sign < 0 {
+				delta.Neg(delta)
+			}
+			result, ok := instant.addNanoseconds(delta)
+			if !ok {
+				return Undefined, rt.throwRangeError("instant is outside the Temporal range")
+			}
+			return Obj(newTemporalInstant(proto, result)), nil
+		})
+	}
 	r.defMethod(proto, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		instant, err := rt.temporalInstantValue(this, "Temporal.Instant.prototype.toString")
 		if err != nil {

@@ -85,6 +85,38 @@ func TestTemporalZonedDateTimeFoundation(t *testing.T) {
 	}
 }
 
+func TestTemporalDurationFoundation(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	tests := []struct{ source, want string }{
+		{`new Temporal.Duration().toString()`, "PT0S"},
+		{`new Temporal.Duration(1, 2, 3, 4, 5, 6, 7, 8, 9, 10).toString()`, "P1Y2M3W4DT5H6M7.00800901S"},
+		{`Temporal.Duration.from({ hours: 1, minutes: 30 }).toJSON()`, "PT1H30M"},
+		{`Temporal.Duration.from("-PT1H30M").abs().toString()`, "PT1H30M"},
+		{`Temporal.Duration.from("PT1H30M").negated().toString()`, "-PT1H30M"},
+		{`new Temporal.Duration().blank`, "true"},
+		{`new Temporal.Duration(0, 0, 0, 0, -1).sign`, "-1"},
+		{`new Temporal.Instant(1n).add({ seconds: 1, nanoseconds: 2 }).epochNanoseconds.toString()`, "1000000003"},
+		{`new Temporal.Instant(1n).subtract(Temporal.Duration.from("PT1S")).epochNanoseconds.toString()`, "-999999999"},
+	}
+	for _, test := range tests {
+		if got := evalString(t, rt, test.source); got != test.want {
+			t.Errorf("%s\n got: %s\nwant: %s", test.source, got, test.want)
+		}
+	}
+	for _, source := range []string{
+		`new Temporal.Duration(0, 0, 0, 0, -1, 1)`,
+		`Temporal.Duration.from({})`,
+		`new Temporal.Instant(0n).add({ days: 1 })`,
+	} {
+		if got := evalString(t, rt, `try { `+source+` } catch (e) { e.name }`); got != "RangeError" && source != `Temporal.Duration.from({})` {
+			t.Errorf("%s threw %s", source, got)
+		} else if source == `Temporal.Duration.from({})` && got != "TypeError" {
+			t.Errorf("%s threw %s", source, got)
+		}
+	}
+}
+
 func TestTemporalIsLazy(t *testing.T) {
 	rt := quickjs.New()
 	defer rt.Close()

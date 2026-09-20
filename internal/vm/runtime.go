@@ -27,6 +27,9 @@ type Runtime struct {
 	intlProtos map[string]*Object
 	// intlFallback is the symbol a formatter made without new is hidden under.
 	intlFallback *Symbol
+	// temporalDurationProto is retained because Instant difference operations
+	// create Duration results after the lazy Temporal namespace has been built.
+	temporalDurationProto *Object
 	// globalLex holds a script's top-level let, const and class bindings.
 	//
 	// They are not properties of the global object -- `let x = 1` does not make
