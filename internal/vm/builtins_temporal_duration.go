@@ -775,9 +775,20 @@ func (r *Runtime) totalTemporalDurationNanoseconds(duration temporalDuration, re
 }
 
 func (r *Runtime) addTemporalDurationToZonedInstant(relativeTo *temporalZonedDateTime, duration temporalDuration) (temporalInstant, error) {
+	return r.addTemporalDurationToZonedInstantWithOverflow(relativeTo, duration, "constrain")
+}
+
+func (r *Runtime) addTemporalDurationToZonedInstantWithOverflow(relativeTo *temporalZonedDateTime, duration temporalDuration, overflow string) (temporalInstant, error) {
+	if duration.years == 0 && duration.months == 0 && duration.weeks == 0 && duration.days == 0 {
+		end, ok := relativeTo.instant.addNanoseconds(duration.timePartNanoseconds())
+		if !ok {
+			return temporalInstant{}, r.throwRangeError("duration endpoint is outside the Temporal range")
+		}
+		return end, nil
+	}
 	startLocal := temporalPlainDateTime{temporalISODateTime: relativeTo.localISODateTime(), calendar: relativeTo.calendar}
 	dateDuration := temporalDuration{years: duration.years, months: duration.months, weeks: duration.weeks, days: duration.days}
-	afterDate, err := r.addTemporalPlainDateTime(startLocal, dateDuration, 1, "constrain")
+	afterDate, err := r.addTemporalPlainDateTime(startLocal, dateDuration, 1, overflow)
 	if err != nil {
 		return temporalInstant{}, err
 	}

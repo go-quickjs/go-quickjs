@@ -631,6 +631,42 @@ func (r *Runtime) initTemporalZonedDateTime(temporal *Object) {
 		result.instant = instant
 		return Obj(newTemporalZonedDateTimeObject(rt.temporalZonedDateTimeProto, &result)), nil
 	})
+	for _, operation := range []struct {
+		name string
+		sign int
+	}{{"add", 1}, {"subtract", -1}} {
+		op := operation
+		r.defMethod(proto, op.name, 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+			zoned, err := rt.temporalZonedDateTimeValue(this, "Temporal.ZonedDateTime.prototype."+op.name)
+			if err != nil {
+				return Undefined, err
+			}
+			duration, err := rt.toTemporalDuration(arg(args, 0))
+			if err != nil {
+				return Undefined, err
+			}
+			overflow, err := rt.temporalOverflowOption(arg(args, 1))
+			if err != nil {
+				return Undefined, err
+			}
+			if op.sign < 0 {
+				fields := duration.fields()
+				for index := range fields {
+					if fields[index] != 0 {
+						fields[index] = -fields[index]
+					}
+				}
+				duration = durationFromFields(fields)
+			}
+			instant, err := rt.addTemporalDurationToZonedInstantWithOverflow(zoned, duration, overflow)
+			if err != nil {
+				return Undefined, err
+			}
+			result := *zoned
+			result.instant = instant
+			return Obj(newTemporalZonedDateTimeObject(rt.temporalZonedDateTimeProto, &result)), nil
+		})
+	}
 	r.defMethod(proto, "withTimeZone", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		zoned, err := rt.temporalZonedDateTimeValue(this, "Temporal.ZonedDateTime.prototype.withTimeZone")
 		if err != nil {
