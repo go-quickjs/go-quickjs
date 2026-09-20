@@ -675,66 +675,25 @@ func (r *Runtime) temporalDurationRelativeToFromBag(o *Object) (temporalDuration
 }
 
 func (r *Runtime) temporalDurationRelativeToFromZonedString(text string) (*temporalZonedDateTime, error) {
-	main, _, splitOK := splitTemporalAnnotations(text)
-	timeStart := strings.IndexAny(main, "Tt ")
-	hasExplicitOffset := timeStart >= 0 && strings.ContainsAny(main[timeStart:], "Zz+-")
-	if splitOK && hasExplicitOffset {
-		if _, instantErr := parseTemporalInstant(text); instantErr != nil {
-			return nil, r.throwRangeError("relativeTo is outside the Temporal range")
-		}
-	}
-	instant, zone, calendar, err := parseTemporalZonedDateTimeString(text)
+	parsed, err := parseTemporalZonedDateTimeInput(text)
 	if err != nil {
-		// Date-only strings with a zone annotation represent the zone's start
-		// of day and are not accepted by the ZonedDateTime string parser.
-		if timeStart >= 0 {
-			return nil, r.throwRangeError("relativeTo is outside the Temporal range")
-		}
-		date, dateErr := parseTemporalPlainDate(text)
-		if dateErr != nil {
-			return nil, r.throwRangeError("invalid relativeTo string")
-		}
-		_, annotations, _ := splitTemporalAnnotations(text)
-		zone = ""
-		for _, annotation := range annotations {
-			annotation = strings.TrimPrefix(annotation, "!")
-			if !strings.Contains(annotation, "=") {
-				zone = annotation
-			}
-		}
-		zoned, zoneErr := r.newTemporalZonedDateTime(temporalInstant{}, zone, Str(NewString(date.calendar)))
-		if zoneErr != nil {
-			return nil, zoneErr
-		}
-		instant, ok := zoned.startOfDayInstant(date)
-		if !ok {
-			return nil, r.throwRangeError("relativeTo is outside the Temporal range")
-		}
-		zoned.instant = instant
-		if !validTemporalDurationRelativeZonedLocal(zoned) {
-			return nil, r.throwRangeError("relativeTo is outside the Temporal range")
-		}
-		return zoned, nil
+		return nil, r.throwRangeError("relativeTo is outside the Temporal range")
 	}
-	zoned, err := r.newTemporalZonedDateTime(instant, zone, Str(NewString(calendar)))
+	zoned, err := r.newTemporalZonedDateTime(temporalInstant{}, parsed.zone, Str(NewString(parsed.calendar)))
 	if err != nil {
 		return nil, err
 	}
+	instant, err := r.interpretTemporalZonedDateTime(parsed.dateTime, zoned,
+		parsed.offsetPresent, parsed.offsetNanoseconds, parsed.offsetMatchMinutes,
+		parsed.exact, parsed.startOfDay, temporalZonedDateTimeOptions{
+			disambiguation: "compatible", offset: "reject", overflow: "constrain",
+		})
+	if err != nil {
+		return nil, err
+	}
+	zoned.instant = instant
 	if !validTemporalDurationRelativeZonedLocal(zoned) {
 		return nil, r.throwRangeError("relativeTo is outside the Temporal range")
-	}
-	if timeStart >= 0 && !strings.ContainsAny(main[timeStart:], "Zz") {
-		for index := timeStart + 1; index < len(main); index++ {
-			if main[index] != '+' && main[index] != '-' {
-				continue
-			}
-			offsetIndex := index
-			offsetNanoseconds, valid := parseTemporalOffset(main, &offsetIndex)
-			if !valid || offsetIndex != len(main) || offsetNanoseconds != int64(zoned.offsetSeconds())*temporalNanosecondsPerSecond {
-				return nil, r.throwRangeError("offset does not match time zone")
-			}
-			break
-		}
 	}
 	return zoned, nil
 }
@@ -857,6 +816,16 @@ func roundTemporalDurationWithoutRelativeTo(duration temporalDuration, largest, 
 func (r *Runtime) roundTemporalDurationRelativeToZoned(duration temporalDuration, largest, smallest string, increment int64, mode string, relativeTo *temporalZonedDateTime) (temporalDuration, error) {
 	if duration.sign() == 0 && largest != "day" {
 		return temporalDuration{}, nil
+	}
+	if temporalDateTimeUnitRank[largest] >= temporalDateTimeUnitRank["hour"] {
+		total, err := r.totalTemporalDurationNanoseconds(duration,
+			temporalDurationRelativeTo{zoned: relativeTo}, true)
+		if err != nil {
+			return temporalDuration{}, err
+		}
+		step := new(big.Int).Mul(big.NewInt(temporalUnitNanoseconds[smallest]),
+			big.NewInt(increment))
+		return temporalDurationFromNanoseconds(roundTemporalBigInt(total, step, mode), largest), nil
 	}
 	if largest == "day" && temporalDateTimeUnitRank[smallest] >= temporalDateTimeUnitRank["hour"] {
 		local := relativeTo.localISODateTime()

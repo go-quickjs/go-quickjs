@@ -34,6 +34,7 @@ func TestTemporalInstantConstruction(t *testing.T) {
 		{`new Temporal.Instant(0n).toZonedDateTimeISO("2021-08-19T17:30-07:00[UTC]").timeZoneId`, "UTC"},
 		{`Temporal.Instant.from("2000-02-29T12:34:56.123456789Z").toLocaleString("en-US", {timeZone: "UTC"})`, "2/29/2000, 12:34:56 PM"},
 		{`Temporal.Instant.from("2000-02-29T12:34:56.123456789Z").toLocaleString("en-US", {timeZone: "America/New_York", timeZoneName: "long"})`, "2/29/2000, 7:34:56 AM Eastern Standard Time"},
+		{`new Temporal.Instant(0n).toString({timeZone: "Africa/Monrovia"})`, "1969-12-31T23:15:30-00:45"},
 		{`new Intl.DateTimeFormat("en-US", {timeZone: "UTC"}).format(Temporal.Instant.from("2000-02-29T12:34:56Z"))`, "2/29/2000, 12:34:56 PM"},
 		{`class I extends Temporal.Instant {}; Object.getPrototypeOf(new I(0n)) === I.prototype`, "true"},
 	}
@@ -313,6 +314,8 @@ func TestTemporalDurationRound(t *testing.T) {
 		{`new Temporal.Duration(0, 0, 0, 3, 12).round({ smallestUnit: "hours", roundingIncrement: 8, roundingMode: "halfEven", relativeTo: new Temporal.PlainDate(1970, 1, 1) }).toString()`, "P3DT8H"},
 		{`new Temporal.Duration(0, 1, 0, 1).round({ largestUnit: "weeks", smallestUnit: "weeks", roundingIncrement: 6, roundingMode: "ceil", relativeTo: new Temporal.PlainDate(2024, 1, 1) }).toString()`, "P6W"},
 		{`new Temporal.Duration(1, 0, 0, 0, 24).round({ largestUnit: "years", relativeTo: { year: 2021, month: 10, day: 28, timeZone: "UTC" } }).toString()`, "P1Y1D"},
+		{`new Temporal.Duration(0, 0, 0, 1).round({ largestUnit: "seconds",
+			relativeTo: "1952-10-15T23:59:59-11:20[Pacific/Niue]" }).seconds`, "86420"},
 	}
 	for _, test := range tests {
 		if got := evalString(t, rt, test.source); got != test.want {
@@ -358,6 +361,8 @@ func TestTemporalDurationTotal(t *testing.T) {
 		{`new Temporal.Duration(1, 0, 0, 0, 1).total({ unit: "years", relativeTo: new Temporal.PlainDate(2020, 2, 29) })`, "1.0001141552511414"},
 		{`new Temporal.Duration(0, 1, 0, 0, 10).total({ unit: "months", relativeTo: new Temporal.PlainDate(2020, 1, 31) })`, "1.0134408602150538"},
 		{`new Temporal.Duration(0, 0, 1, 0, 1).total({ unit: "days", relativeTo: new Temporal.ZonedDateTime(0n, "UTC") })`, "7.041666666666667"},
+		{`new Temporal.Duration(0, 0, 0, 1).total({ unit: "seconds",
+			relativeTo: "1952-10-15T23:59:59-11:20[Pacific/Niue]" })`, "86420"},
 	}
 	for _, test := range tests {
 		if got := evalString(t, rt, test.source); got != test.want {

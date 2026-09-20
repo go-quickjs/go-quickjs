@@ -192,7 +192,7 @@ func (r *Runtime) initTemporalInstant(temporal *Object) {
 			return Undefined, err
 		}
 		dateTime := temporalPlainDateTime{temporalISODateTime: zoned.localISODateTime(), calendar: "iso8601"}
-		text := dateTime.stringWithPrecision("never", precision, minuteOnly) + formatTemporalOffset(zoned.offsetSeconds())
+		text := dateTime.stringWithPrecision("never", precision, minuteOnly) + formatTemporalOffsetRounded(zoned.offsetSeconds())
 		return Str(NewString(text)), nil
 	})
 	r.defMethod(proto, "toZonedDateTimeISO", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -1171,66 +1171,6 @@ func formatTemporalOffsetRounded(offset int) string {
 		minutes++
 	}
 	return formatTemporalOffset(sign * minutes * 60)
-}
-
-func parseTemporalZonedDateTimeString(input string) (temporalInstant, string, string, error) {
-	_, annotations, ok := splitTemporalAnnotations(input)
-	if !ok || !validInstantAnnotations(annotations) {
-		return temporalInstant{}, "", "", errInvalidTemporalInstant
-	}
-	zone, calendar := "", "iso8601"
-	for _, annotation := range annotations {
-		annotation = strings.TrimPrefix(annotation, "!")
-		if key, value, keyed := strings.Cut(annotation, "="); keyed {
-			if key == "u-ca" && calendar == "iso8601" {
-				calendar = canonicalSetting("ca", asciiLower(value))
-				if !icu.HasCalendar(calendar) {
-					return temporalInstant{}, "", "", errInvalidTemporalInstant
-				}
-			}
-			continue
-		}
-		zone = annotation
-	}
-	if zone == "" {
-		return temporalInstant{}, "", "", errInvalidTemporalInstant
-	}
-	instant, err := parseTemporalInstant(input)
-	if err == nil {
-		return instant, zone, calendar, nil
-	}
-	dateTime, err := parseTemporalPlainDateTime(input)
-	if err != nil {
-		return temporalInstant{}, "", "", err
-	}
-	epochSeconds := int64(0)
-	if minutes, _, ok := parseZoneOffset(zone); ok {
-		epochSeconds = dateTime.localEpochSeconds() - int64(minutes*60)
-	} else {
-		canonical, ok := icu.CanonicalZone(zone)
-		if !ok {
-			return temporalInstant{}, "", "", errInvalidTemporalInstant
-		}
-		target := canonical
-		if alias, ok := icu.ZoneTarget(canonical); ok {
-			target = alias
-		}
-		timeZone, err := icu.LoadTimeZone(target)
-		if err != nil {
-			return temporalInstant{}, "", "", errInvalidTemporalInstant
-		}
-		epochSeconds, ok = timeZone.CompatibleInstant(dateTime.localEpochSeconds())
-		if !ok {
-			return temporalInstant{}, "", "", errInvalidTemporalInstant
-		}
-	}
-	total := new(big.Int).Mul(big.NewInt(epochSeconds), big.NewInt(temporalNanosecondsPerSecond))
-	total.Add(total, big.NewInt(dateTime.subsecondNanoseconds()))
-	instant, ok = temporalInstantFromEpochNanoseconds(total)
-	if !ok {
-		return temporalInstant{}, "", "", errInvalidTemporalInstant
-	}
-	return instant, zone, calendar, nil
 }
 
 func (r *Runtime) toTemporalTimeZoneIdentifier(value Value) (string, error) {

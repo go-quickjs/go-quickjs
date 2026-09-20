@@ -442,6 +442,28 @@ func parseTemporalOffset(s string, index *int) (int64, bool) {
 	return sign * total, true
 }
 
+func temporalStringOffsetUsesMinutes(s string, timeStart int) bool {
+	for index := timeStart + 1; index < len(s); index++ {
+		if s[index] != '+' && s[index] != '-' {
+			continue
+		}
+		start, end := index, index
+		if _, ok := parseTemporalOffset(s, &end); !ok || end != len(s) {
+			return false
+		}
+		offset := s[start:end]
+		if strings.Count(offset, ":") >= 2 {
+			return false
+		}
+		if strings.ContainsRune(offset, ':') {
+			return true
+		}
+		digits := len(offset) - 1
+		return digits <= 4
+	}
+	return false
+}
+
 func parseFixedDigits(s string, index *int, count int) (int, bool) {
 	if count < 0 || *index < 0 || *index+count > len(s) {
 		return 0, false

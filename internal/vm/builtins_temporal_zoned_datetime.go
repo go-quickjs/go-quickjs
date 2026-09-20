@@ -184,7 +184,8 @@ func (r *Runtime) toTemporalZonedDateTimeWithOptions(value, optionsValue Value) 
 	if err != nil {
 		return nil, err
 	}
-	instant, err := r.interpretTemporalZonedDateTime(parsed.dateTime, zoned, parsed.offsetPresent, parsed.offsetNanoseconds, parsed.exact, parsed.startOfDay, options)
+	instant, err := r.interpretTemporalZonedDateTime(parsed.dateTime, zoned, parsed.offsetPresent,
+		parsed.offsetNanoseconds, parsed.offsetMatchMinutes, parsed.exact, parsed.startOfDay, options)
 	if err != nil {
 		return nil, err
 	}
@@ -193,13 +194,14 @@ func (r *Runtime) toTemporalZonedDateTimeWithOptions(value, optionsValue Value) 
 }
 
 type temporalZonedDateTimeFields struct {
-	dateTime          temporalISODateTime
-	calendar          string
-	zone              string
-	offsetNanoseconds int64
-	offsetPresent     bool
-	exact             bool
-	startOfDay        bool
+	dateTime           temporalISODateTime
+	calendar           string
+	zone               string
+	offsetNanoseconds  int64
+	offsetPresent      bool
+	offsetMatchMinutes bool
+	exact              bool
+	startOfDay         bool
 }
 
 func parseTemporalZonedDateTimeInput(input string) (temporalZonedDateTimeFields, error) {
@@ -242,6 +244,7 @@ func parseTemporalZonedDateTimeInput(input string) (temporalZonedDateTimeFields,
 		parsed.dateTime = dateTime
 		parsed.offsetNanoseconds = offset
 		parsed.offsetPresent = true
+		parsed.offsetMatchMinutes = temporalStringOffsetUsesMinutes(main, timeStart)
 		parsed.exact = main[len(main)-1] == 'Z' || main[len(main)-1] == 'z'
 		return parsed, nil
 	}
@@ -376,7 +379,8 @@ func (r *Runtime) temporalZonedDateTimeFromBag(o *Object, optionsValue Value) (*
 	if err != nil {
 		return nil, err
 	}
-	instant, err := r.interpretTemporalZonedDateTime(dateTime, zoned, offsetPresent, offsetNanoseconds, false, false, options)
+	instant, err := r.interpretTemporalZonedDateTime(dateTime, zoned, offsetPresent,
+		offsetNanoseconds, false, false, false, options)
 	if err != nil {
 		return nil, err
 	}
@@ -519,7 +523,8 @@ func (r *Runtime) temporalZonedDateTimeWith(zoned *temporalZonedDateTime, fields
 			return nil, r.throwRangeError("invalid offset")
 		}
 	}
-	instant, err := r.interpretTemporalZonedDateTime(local, zoned, true, offsetNanoseconds, false, false, options)
+	instant, err := r.interpretTemporalZonedDateTime(local, zoned, true,
+		offsetNanoseconds, false, false, false, options)
 	if err != nil {
 		return nil, err
 	}
@@ -528,7 +533,10 @@ func (r *Runtime) temporalZonedDateTimeWith(zoned *temporalZonedDateTime, fields
 	return &result, nil
 }
 
-func (r *Runtime) interpretTemporalZonedDateTime(dateTime temporalISODateTime, zoned *temporalZonedDateTime, offsetPresent bool, offsetNanoseconds int64, exact, startOfDay bool, options temporalZonedDateTimeOptions) (temporalInstant, error) {
+func (r *Runtime) interpretTemporalZonedDateTime(dateTime temporalISODateTime,
+	zoned *temporalZonedDateTime, offsetPresent bool, offsetNanoseconds int64,
+	offsetMatchMinutes, exact, startOfDay bool,
+	options temporalZonedDateTimeOptions) (temporalInstant, error) {
 	if startOfDay {
 		date := temporalPlainDate{year: dateTime.year, month: dateTime.month, day: dateTime.day, calendar: zoned.calendar}
 		instant, ok := zoned.startOfDayInstant(date)
@@ -552,7 +560,11 @@ func (r *Runtime) interpretTemporalZonedDateTime(dateTime temporalISODateTime, z
 	}
 	if offsetPresent && options.offset != "ignore" {
 		candidate, ok := temporalInstantFromLocalAndOffset(dateTime, offsetNanoseconds)
-		if ok {
+		if offsetMatchMinutes {
+			if matched, found := temporalMinuteOffsetCandidate(dateTime, zoned, offsetNanoseconds); found {
+				return matched, nil
+			}
+		} else if ok {
 			probe := *zoned
 			probe.instant = candidate
 			if int64(probe.offsetSeconds())*temporalNanosecondsPerSecond == offsetNanoseconds {
@@ -574,6 +586,42 @@ func (r *Runtime) interpretTemporalZonedDateTime(dateTime temporalISODateTime, z
 		return temporalInstant{}, r.throwRangeError("zoned date-time is outside the Temporal range")
 	}
 	return instant, nil
+}
+
+func temporalMinuteOffsetCandidate(dateTime temporalISODateTime,
+	zoned *temporalZonedDateTime, offsetNanoseconds int64) (temporalInstant, bool) {
+	if zoned.fixed {
+		if !temporalOffsetMatchesMinutes(offsetNanoseconds, zoned.fixedOffsetSeconds) {
+			return temporalInstant{}, false
+		}
+		return zoned.disambiguatedInstant(dateTime, "compatible")
+	}
+	for _, epochSeconds := range zoned.zone.PossibleInstants(dateTime.localEpochSeconds()) {
+		actual := zoned.zone.OffsetAt(epochSeconds).OffsetSeconds
+		if !temporalOffsetMatchesMinutes(offsetNanoseconds, actual) {
+			continue
+		}
+		total := new(big.Int).Mul(big.NewInt(epochSeconds), big.NewInt(temporalNanosecondsPerSecond))
+		total.Add(total, big.NewInt(dateTime.subsecondNanoseconds()))
+		instant, ok := temporalInstantFromEpochNanoseconds(total)
+		if ok {
+			return instant, true
+		}
+	}
+	return temporalInstant{}, false
+}
+
+func temporalOffsetMatchesMinutes(offsetNanoseconds int64, actualSeconds int) bool {
+	actual := int64(actualSeconds)
+	sign := int64(1)
+	if actual < 0 {
+		sign, actual = -1, -actual
+	}
+	minutes := actual / 60
+	if actual%60 >= 30 {
+		minutes++
+	}
+	return offsetNanoseconds == sign*minutes*60*temporalNanosecondsPerSecond
 }
 
 func temporalInstantFromLocalAndOffset(dateTime temporalISODateTime, offsetNanoseconds int64) (temporalInstant, bool) {
@@ -627,6 +675,7 @@ func (r *Runtime) roundTemporalZonedDateTime(zoned *temporalZonedDateTime, small
 		zoned,
 		true,
 		int64(zoned.offsetSeconds())*temporalNanosecondsPerSecond,
+		false,
 		false,
 		false,
 		temporalZonedDateTimeOptions{
