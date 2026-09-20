@@ -29,6 +29,8 @@ import (
 //
 // Add -v to see the first failures in each area, and -conformance.report to
 // write the full list of failing paths for triage.
+// Unsupported feature tags can be exercised during implementation with, for
+// example, -conformance.force-feature=Temporal.
 
 var (
 	reportPath = flag.String("conformance.report", "",
@@ -41,6 +43,8 @@ var (
 		"how many tests to run at once; zero means one per core")
 	allocReport = flag.Int64("conformance.alloc-report", 0,
 		"log any test allocating more than this many bytes; implies one worker")
+	forceFeatures = flag.String("conformance.force-feature", "",
+		"run unsupported feature tags listed as comma-separated names")
 	testTimeout = flag.Duration("conformance.timeout", 5*time.Second,
 		"how long any one test may run before being counted as a timeout")
 )
@@ -121,6 +125,12 @@ func TestConformance(t *testing.T) {
 		t.Fatalf("loading tests: %v", err)
 	}
 	t.Logf("loaded %d test variants from %s", len(tests), suite.Root)
+	forcedFeatures := make(map[string]bool)
+	for _, feature := range strings.Split(*forceFeatures, ",") {
+		if feature = strings.TrimSpace(feature); feature != "" {
+			forcedFeatures[feature] = true
+		}
+	}
 
 	// The tests are independent -- each gets its own Runtime, and a Runtime
 	// shares nothing with another -- so they are run on as many goroutines as
@@ -154,7 +164,7 @@ func TestConformance(t *testing.T) {
 				if *allocReport > 0 {
 					var before, after runtime.MemStats
 					runtime.ReadMemStats(&before)
-					res, reason := runOne(suite, tests[i])
+					res, reason := runOne(suite, tests[i], forcedFeatures)
 					runtime.ReadMemStats(&after)
 					if d := after.TotalAlloc - before.TotalAlloc; d > uint64(*allocReport) {
 						t.Logf("ALLOC %s: %d MB", tests[i].Name(), d/(1<<20))
@@ -162,7 +172,7 @@ func TestConformance(t *testing.T) {
 					outcomes[i] = outcome{res, reason}
 					continue
 				}
-				res, reason := runOne(suite, tests[i])
+				res, reason := runOne(suite, tests[i], forcedFeatures)
 				outcomes[i] = outcome{res, reason}
 			}
 		}()
@@ -260,9 +270,11 @@ func areaOf(path string) string {
 }
 
 // runOne executes a single test and classifies the outcome.
-func runOne(suite *conformance.Suite, tc *conformance.Test) (result, string) {
+func runOne(suite *conformance.Suite, tc *conformance.Test,
+	forcedFeatures map[string]bool) (result, string) {
 	for _, f := range tc.Meta.Features {
-		if reason, unsupported := unsupportedFeatures[f]; unsupported && reason != "" {
+		if reason, unsupported := unsupportedFeatures[f]; unsupported &&
+			reason != "" && !forcedFeatures[f] {
 			return resultSkip, reason
 		}
 	}
