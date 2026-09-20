@@ -139,6 +139,44 @@ func TestTemporalInstantDifferenceAndRounding(t *testing.T) {
 	}
 }
 
+func TestTemporalPlainDateFoundation(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	tests := []struct{ source, want string }{
+		{`new Temporal.PlainDate(2020.9, 2.8, 29.4).toString()`, "2020-02-29"},
+		{`Temporal.PlainDate.from("2019-03-15").toJSON()`, "2019-03-15"},
+		{`Temporal.PlainDate.from("1976-11-18T15:23:30.1+00:00").toString()`, "1976-11-18"},
+		{`Temporal.PlainDate.from("2000-05-02T15:23[UTC][u-ca=iso8601]").toString()`, "2000-05-02"},
+		{`Temporal.PlainDate.from("2000-05-02T15:23[u-ca=iso8601][u-ca=discord]").calendarId`, "iso8601"},
+		{`Temporal.PlainDate.from({year: 2021, month: 2, day: 31}).toString()`, "2021-02-28"},
+		{`Temporal.PlainDate.from({year: 1976, monthCode: "M11", day: 18, calendar: "2020-01-01"}).calendarId`, "iso8601"},
+		{`Temporal.PlainDate.compare("2020-01-01", "2019-12-31")`, "1"},
+		{`new Temporal.PlainDate(2020, 12, 31).weekOfYear`, "53"},
+		{`new Temporal.PlainDate(2021, 1, 1).yearOfWeek`, "2020"},
+		{`new Temporal.PlainDate(2024, 2, 29).dayOfYear`, "60"},
+		{`new Temporal.PlainDate(2000, 5, 2).toString({calendarName: "critical"})`, "2000-05-02[!u-ca=iso8601]"},
+		{`new Temporal.PlainDate(1970, 1, 1).dayOfWeek`, "4"},
+		{`new Temporal.PlainDate(2000, 5, 2, "GREGORY").calendarId`, "gregory"},
+		{`new Temporal.PlainDate(-271821, 4, 19).toString()`, "-271821-04-19"},
+		{`class D extends Temporal.PlainDate {}; Object.getPrototypeOf(new D(2000, 1, 1)) === D.prototype`, "true"},
+	}
+	for _, test := range tests {
+		if got := evalString(t, rt, test.source); got != test.want {
+			t.Errorf("%s\n got: %s\nwant: %s", test.source, got, test.want)
+		}
+	}
+	for _, source := range []string{
+		`new Temporal.PlainDate(2021, 2, 29)`,
+		`new Temporal.PlainDate(-271821, 4, 18)`,
+		`Temporal.PlainDate.from({year: 2021, month: 2, day: 31}, {overflow: "reject"})`,
+		`new Temporal.PlainDate(2000, 1, 1, "not-a-calendar")`,
+	} {
+		if got := evalString(t, rt, `try { `+source+` } catch (e) { e.name }`); got != "RangeError" {
+			t.Errorf("%s threw %s", source, got)
+		}
+	}
+}
+
 func TestTemporalIsLazy(t *testing.T) {
 	rt := quickjs.New()
 	defer rt.Close()

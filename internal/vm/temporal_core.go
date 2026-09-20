@@ -202,15 +202,19 @@ func parseTemporalInstantFields(input string) (temporalISODateTime, int64, error
 			return temporalISODateTime{}, 0, errInvalidTemporalInstant
 		}
 	}
-	second := 0
+	second, secondPresent := 0, false
 	if consumeByte(main, &index, ':') || !colonTime && index < len(main) && main[index] >= '0' && main[index] <= '9' {
 		second, ok = parseFixedDigits(main, &index, 2)
 		if !ok {
 			return temporalISODateTime{}, 0, errInvalidTemporalInstant
 		}
+		secondPresent = true
 	}
 	fraction := 0
 	if index < len(main) && (main[index] == '.' || main[index] == ',') {
+		if !secondPresent {
+			return temporalISODateTime{}, 0, errInvalidTemporalInstant
+		}
 		index++
 		start := index
 		for index < len(main) && main[index] >= '0' && main[index] <= '9' && index-start < 9 {

@@ -30,6 +30,7 @@ func (r *Runtime) buildTemporal() *Object {
 	r.defToStringTag(temporal, "Temporal")
 	r.initTemporalDuration(temporal)
 	r.initTemporalInstant(temporal)
+	r.initTemporalPlainDate(temporal)
 	r.initTemporalZonedDateTime(temporal)
 	return temporal
 }
