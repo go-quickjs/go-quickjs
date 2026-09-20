@@ -126,6 +126,8 @@ func TestTemporalZonedDateTimeFoundation(t *testing.T) {
 		{`Temporal.ZonedDateTime.from("2024-03-09T12:00-05:00[America/New_York]").add({ hours: 24 }).toString()`, "2024-03-10T13:00:00-04:00[America/New_York]"},
 		{`Temporal.ZonedDateTime.from("2021-11-07T01:30-05:00[America/New_York]").add({ nanoseconds: 1 }).toString()`, "2021-11-07T01:30:00.000000001-05:00[America/New_York]"},
 		{`Temporal.ZonedDateTime.from("2024-03-10T12:00-04:00[America/New_York]").subtract({ days: 1 }).toString()`, "2024-03-09T12:00:00-05:00[America/New_York]"},
+		{`Temporal.ZonedDateTime.from("2021-11-07T12:00-05:00[America/New_York]").withPlainTime("01:30").toString()`, "2021-11-07T01:30:00-04:00[America/New_York]"},
+		{`Temporal.ZonedDateTime.from("2024-03-10T12:00-04:00[America/New_York]").withPlainTime().toString()`, "2024-03-10T00:00:00-05:00[America/New_York]"},
 	}
 	for _, test := range tests {
 		if got := evalString(t, rt, test.source); got != test.want {
