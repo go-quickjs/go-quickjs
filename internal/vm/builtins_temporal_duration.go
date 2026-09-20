@@ -219,6 +219,49 @@ func (r *Runtime) initTemporalDuration(temporal *Object) {
 			return Obj(newTemporalDuration(proto, temporalDurationFromNanoseconds(leftNS, largest))), nil
 		})
 	}
+	r.defMethod(proto, "with", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		duration, err := rt.temporalDurationValue(this, "Temporal.Duration.prototype.with")
+		if err != nil {
+			return Undefined, err
+		}
+		value := arg(args, 0)
+		if !value.IsObject() {
+			return Undefined, rt.throwTypeError("duration fields must be an object")
+		}
+		fields := duration.fields()
+		found := false
+		for _, field := range []struct {
+			name  string
+			index int
+		}{
+			{"days", 3}, {"hours", 4}, {"microseconds", 8}, {"milliseconds", 7}, {"minutes", 5},
+			{"months", 1}, {"nanoseconds", 9}, {"seconds", 6}, {"weeks", 2}, {"years", 0},
+		} {
+			raw, err := rt.getProp(value.Object(), rt.atoms.intern(field.name), value)
+			if err != nil {
+				return Undefined, err
+			}
+			if raw.IsUndefined() {
+				continue
+			}
+			found = true
+			fields[field.index], err = rt.temporalInteger(raw)
+			if err != nil {
+				return Undefined, err
+			}
+		}
+		if !found {
+			return Undefined, rt.throwTypeError("duration property bag has no duration fields")
+		}
+		result := durationFromFields(fields)
+		if !result.valid() {
+			return Undefined, rt.throwRangeError("duration fields must have the same sign")
+		}
+		if !result.withinRange() {
+			return Undefined, rt.throwRangeError("duration is out of range")
+		}
+		return Obj(newTemporalDuration(proto, result)), nil
+	})
 	r.defMethod(proto, "total", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		d, err := rt.temporalDurationValue(this, "Temporal.Duration.prototype.total")
 		if err != nil {
@@ -264,24 +307,50 @@ func (r *Runtime) initTemporalDuration(temporal *Object) {
 			value, _ := ratio.Float64()
 			return Float(value), nil
 		}
-		total, ok := d.timeNanoseconds()
-		if !ok {
+		if d.years != 0 || d.months != 0 {
 			return Undefined, rt.throwRangeError("calendar durations require relativeTo")
 		}
+		total := new(big.Int).Mul(floatIntegerBig(d.weeks), big.NewInt(7*86_400_000_000_000))
+		total.Add(total, new(big.Int).Mul(floatIntegerBig(d.days), big.NewInt(86_400_000_000_000)))
+		total.Add(total, d.timePartNanoseconds())
 		ratio := new(big.Rat).SetFrac(total, big.NewInt(temporalUnitNanoseconds[unit]))
 		value, _ := ratio.Float64()
 		return Float(value), nil
 	})
-	for _, name := range []string{"toString", "toJSON"} {
-		method := name
-		r.defMethod(proto, method, 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-			d, err := rt.temporalDurationValue(this, "Temporal.Duration.prototype."+method)
-			if err != nil {
-				return Undefined, err
+	r.defMethod(proto, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		duration, err := rt.temporalDurationValue(this, "Temporal.Duration.prototype.toString")
+		if err != nil {
+			return Undefined, err
+		}
+		precision, _, step, mode, err := rt.temporalPlainTimeStringOptions(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		if step >= temporalUnitNanoseconds["minute"] {
+			return Undefined, rt.throwRangeError("invalid smallestUnit")
+		}
+		if step != 1 {
+			duration, err = roundTemporalDurationForString(duration, step, mode)
+			if err != nil || !duration.withinRange() {
+				return Undefined, rt.throwRangeError("rounded duration is out of range")
 			}
-			return Str(NewString(d.string())), nil
-		})
-	}
+		}
+		return Str(NewString(duration.stringWithPrecision(precision))), nil
+	})
+	r.defMethod(proto, "toJSON", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		duration, err := rt.temporalDurationValue(this, "Temporal.Duration.prototype.toJSON")
+		if err != nil {
+			return Undefined, err
+		}
+		return Str(NewString(duration.string())), nil
+	})
+	r.defMethod(proto, "toLocaleString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		duration, err := rt.temporalDurationValue(this, "Temporal.Duration.prototype.toLocaleString")
+		if err != nil {
+			return Undefined, err
+		}
+		return Str(NewString(duration.string())), nil
+	})
 	r.defMethod(proto, "valueOf", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if _, err := rt.temporalDurationValue(this, "Temporal.Duration.prototype.valueOf"); err != nil {
 			return Undefined, err
@@ -317,6 +386,9 @@ func (r *Runtime) temporalInteger(v Value) (float64, error) {
 	}
 	if math.IsNaN(n) || math.IsInf(n, 0) || n != math.Trunc(n) {
 		return 0, r.throwRangeError("duration fields must be finite integers")
+	}
+	if n == 0 {
+		return 0, nil
 	}
 	return n, nil
 }
@@ -493,14 +565,14 @@ func parseTemporalDuration(s string) (temporalDuration, error) {
 		}
 		i++
 	}
-	if i >= len(s) || s[i] != 'P' {
+	if i >= len(s) || s[i] != 'P' && s[i] != 'p' {
 		return d, errInvalidTemporalInstant
 	}
 	i++
 	seen := false
 	inTime := false
 	for i < len(s) {
-		if s[i] == 'T' && !inTime {
+		if (s[i] == 'T' || s[i] == 't') && !inTime {
 			inTime = true
 			i++
 			continue
@@ -527,11 +599,17 @@ func parseTemporalDuration(s string) (temporalDuration, error) {
 				return d, errInvalidTemporalInstant
 			}
 			fraction = s[fractionStart:i]
+			if len(fraction) > 9 {
+				return d, errInvalidTemporalInstant
+			}
 		}
 		if i >= len(s) {
 			return d, errInvalidTemporalInstant
 		}
 		unit := s[i]
+		if unit >= 'a' && unit <= 'z' {
+			unit -= 'a' - 'A'
+		}
 		i++
 		target := (*float64)(nil)
 		switch unit {
@@ -628,9 +706,42 @@ func (d *temporalDuration) addFractionalTime(nanoseconds float64) {
 	d.nanoseconds += math.Mod(nanoseconds, 1_000)
 }
 
+func roundTemporalDurationForString(d temporalDuration, step int64, mode string) (temporalDuration, error) {
+	rounded := roundTemporalBigInt(d.timePartNanoseconds(), big.NewInt(step), mode)
+	hasDateUnits := d.years != 0 || d.months != 0 || d.weeks != 0 || d.days != 0
+	if hasDateUnits {
+		dayCarry, remainder := new(big.Int), new(big.Int)
+		dayCarry.QuoRem(rounded, big.NewInt(86_400_000_000_000), remainder)
+		carry, _ := new(big.Float).SetInt(dayCarry).Float64()
+		d.days += carry
+		rounded = remainder
+	}
+	largest := d.largestTimeUnit()
+	if hasDateUnits {
+		largest = "hour"
+	}
+	time := temporalDurationFromNanoseconds(rounded, largest)
+	d.hours, d.minutes, d.seconds = time.hours, time.minutes, time.seconds
+	d.milliseconds, d.microseconds, d.nanoseconds = time.milliseconds, time.microseconds, time.nanoseconds
+	if !d.valid() {
+		return temporalDuration{}, errInvalidTemporalInstant
+	}
+	return d, nil
+}
+
 func (d temporalDuration) string() string {
+	return d.stringWithPrecision(-1)
+}
+
+func (d temporalDuration) stringWithPrecision(precision int) string {
 	sign := d.sign()
 	if sign == 0 {
+		if precision >= 0 {
+			if precision == 0 {
+				return "PT0S"
+			}
+			return "PT0." + strings.Repeat("0", precision) + "S"
+		}
 		return "PT0S"
 	}
 	values := d.fields()
@@ -651,7 +762,7 @@ func (d temporalDuration) string() string {
 			b.WriteByte(labels[i])
 		}
 	}
-	if values[4] != 0 || values[5] != 0 || values[6] != 0 || values[7] != 0 || values[8] != 0 || values[9] != 0 {
+	if values[4] != 0 || values[5] != 0 || values[6] != 0 || values[7] != 0 || values[8] != 0 || values[9] != 0 || precision >= 0 {
 		b.WriteByte('T')
 		if values[4] != 0 {
 			b.WriteString(formatTemporalInteger(values[4]))
@@ -669,11 +780,15 @@ func (d temporalDuration) string() string {
 			integer, _ := new(big.Float).SetFloat64(part.value).Int(nil)
 			subseconds.Add(subseconds, new(big.Int).Mul(integer, big.NewInt(part.scale)))
 		}
-		if subseconds.Sign() != 0 {
+		if subseconds.Sign() != 0 || precision >= 0 {
 			whole, fractionValue := new(big.Int), new(big.Int)
 			whole.QuoRem(subseconds, big.NewInt(1_000_000_000), fractionValue)
 			b.WriteString(whole.String())
-			if fractionValue.Sign() != 0 {
+			if precision > 0 {
+				fraction := strconv.FormatInt(fractionValue.Int64()+1_000_000_000, 10)[1:]
+				b.WriteByte('.')
+				b.WriteString(fraction[:precision])
+			} else if precision < 0 && fractionValue.Sign() != 0 {
 				fraction := strconv.FormatInt(fractionValue.Int64()+1_000_000_000, 10)[1:]
 				b.WriteByte('.')
 				b.WriteString(strings.TrimRight(fraction, "0"))

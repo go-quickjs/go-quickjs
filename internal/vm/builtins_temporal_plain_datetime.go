@@ -678,40 +678,164 @@ func (r *Runtime) differenceTemporalPlainDateTimes(start, end temporalPlainDateT
 		carry.QuoRem(timeDifference, big.NewInt(86_400_000_000_000), remainder)
 		endDays += carry.Int64()
 		timeDifference = remainder
-	} else if smallest == "day" || (smallest == "week" && largest == "week") {
-		unitDays := int64(1)
-		if smallest == "week" {
-			unitDays = 7
-		}
-		step := new(big.Int).Mul(big.NewInt(unitDays*86_400_000_000_000), big.NewInt(increment))
-		rounded := roundTemporalBigInt(difference, step, mode)
-		roundedDays := new(big.Int).Quo(rounded, big.NewInt(86_400_000_000_000)).Int64()
-		if largest == "week" {
-			return temporalDuration{weeks: float64(roundedDays / 7)}, nil
-		}
-		endDays = isoDaysFromCivil(int64(start.year), start.month, start.day) + roundedDays
-		timeDifference.SetInt64(0)
 	}
 
 	endYear, endMonth, endDay := isoCivilFromDays(endDays)
 	endDate := temporalPlainDate{year: endYear, month: endMonth, day: endDay, calendar: end.calendar}
-	dateSmallest := "day"
-	dateIncrement := int64(1)
-	dateMode := "trunc"
-	if temporalDateTimeUnitRank[smallest] < temporalDateTimeUnitRank["day"] {
-		dateSmallest, dateIncrement, dateMode = smallest, increment, mode
-	}
-	dateDuration, err := r.differenceTemporalPlainDates(startDate, endDate, largest, dateSmallest, dateIncrement, dateMode)
+	dateDuration, err := r.differenceTemporalPlainDates(startDate, endDate, largest, "day", 1, "trunc")
 	if err != nil {
 		return temporalDuration{}, err
 	}
 	timeDuration := temporalDurationFromNanoseconds(timeDifference, "hour")
-	if temporalDateTimeUnitRank[smallest] <= temporalDateTimeUnitRank["day"] {
-		timeDuration = temporalDuration{}
-	}
 	dateDuration.hours, dateDuration.minutes, dateDuration.seconds = timeDuration.hours, timeDuration.minutes, timeDuration.seconds
 	dateDuration.milliseconds, dateDuration.microseconds, dateDuration.nanoseconds = timeDuration.milliseconds, timeDuration.microseconds, timeDuration.nanoseconds
+	if smallest == "day" {
+		return r.roundTemporalPlainDateTimeToDay(startDate, dateDuration, largest, increment, mode)
+	}
+	if temporalDateTimeUnitRank[smallest] < temporalDateTimeUnitRank["day"] {
+		return r.roundTemporalPlainDateTimeToCalendarUnit(start, end, dateDuration, largest, smallest, increment, mode)
+	}
 	return dateDuration, nil
+}
+
+func (r *Runtime) roundTemporalPlainDateTimeToDay(start temporalPlainDate, duration temporalDuration, largest string, increment int64, mode string) (temporalDuration, error) {
+	const dayNanoseconds = int64(86_400_000_000_000)
+	timeDuration := new(big.Int).Mul(floatIntegerBig(duration.days), big.NewInt(dayNanoseconds))
+	timeDuration.Add(timeDuration, duration.timePartNanoseconds())
+	step := new(big.Int).Mul(big.NewInt(dayNanoseconds), big.NewInt(increment))
+	rounded := roundTemporalBigInt(timeDuration, step, mode)
+	roundedDays := new(big.Int).Quo(rounded, big.NewInt(dayNanoseconds)).Int64()
+	wholeDays := new(big.Int).Quo(timeDuration, big.NewInt(dayNanoseconds)).Int64()
+
+	result := temporalDuration{
+		years: duration.years, months: duration.months, weeks: duration.weeks,
+		days: float64(roundedDays),
+	}
+	dayDelta := roundedDays - wholeDays
+	if dayDelta == 0 || (dayDelta > 0) != (timeDuration.Sign() > 0) {
+		return result, nil
+	}
+	if largest == "day" {
+		return result, nil
+	}
+	if largest == "week" {
+		result.weeks += float64(roundedDays / 7)
+		result.days = float64(roundedDays % 7)
+		return result, nil
+	}
+
+	end, err := r.addTemporalPlainDate(start, result, 1, "constrain")
+	if err != nil {
+		return temporalDuration{}, err
+	}
+	return r.differenceTemporalPlainDates(start, end, largest, "day", 1, "trunc")
+}
+
+func (r *Runtime) roundTemporalPlainDateTimeToCalendarUnit(start, end temporalPlainDateTime, duration temporalDuration, largest, unit string, increment int64, mode string) (temporalDuration, error) {
+	sign := int64(duration.sign())
+	if sign == 0 {
+		return temporalDuration{}, nil
+	}
+	var amount int64
+	switch unit {
+	case "year":
+		amount = int64(duration.years)
+	case "month":
+		amount = int64(duration.months)
+	case "week":
+		amount = int64(duration.weeks) + int64(duration.days)/7
+	}
+	r1 := amount / increment * increment
+	r2 := r1 + increment*sign
+
+	startDate := temporalPlainDate{year: start.year, month: start.month, day: start.day, calendar: start.calendar}
+	candidate := func(amount int64) (temporalDuration, temporalPlainDateTime, *big.Int, error) {
+		var value temporalDuration
+		switch unit {
+		case "year":
+			value.years = float64(amount)
+		case "month":
+			value.years, value.months = duration.years, float64(amount)
+		case "week":
+			value.years, value.months, value.weeks = duration.years, duration.months, float64(amount)
+		}
+		date, err := r.addTemporalPlainDate(startDate, value, 1, "constrain")
+		if err != nil {
+			return temporalDuration{}, temporalPlainDateTime{}, nil, err
+		}
+		dateTime := start
+		dateTime.year, dateTime.month, dateTime.day = date.year, date.month, date.day
+		return value, dateTime, temporalPlainDateTimeEpochNanoseconds(dateTime), nil
+	}
+
+	lowerDuration, lowerDateTime, lowerEpoch, err := candidate(r1)
+	if err != nil {
+		return temporalDuration{}, err
+	}
+	upperDuration, upperDateTime, upperEpoch, err := candidate(r2)
+	if err != nil {
+		return temporalDuration{}, err
+	}
+	targetEpoch := temporalPlainDateTimeEpochNanoseconds(end)
+	between := func() bool {
+		if sign > 0 {
+			return lowerEpoch.Cmp(targetEpoch) <= 0 && targetEpoch.Cmp(upperEpoch) <= 0
+		}
+		return upperEpoch.Cmp(targetEpoch) <= 0 && targetEpoch.Cmp(lowerEpoch) <= 0
+	}
+	didExpand := false
+	if !between() {
+		r1, r2 = r2, r2+increment*sign
+		lowerDuration, lowerDateTime, lowerEpoch, err = candidate(r1)
+		if err != nil {
+			return temporalDuration{}, err
+		}
+		upperDuration, upperDateTime, upperEpoch, err = candidate(r2)
+		if err != nil {
+			return temporalDuration{}, err
+		}
+		didExpand = true
+	}
+
+	chooseUpper := targetEpoch.Cmp(upperEpoch) == 0
+	if targetEpoch.Cmp(lowerEpoch) != 0 && !chooseUpper {
+		switch mode {
+		case "expand":
+			chooseUpper = true
+		case "ceil":
+			chooseUpper = sign > 0
+		case "floor":
+			chooseUpper = sign < 0
+		case "halfCeil", "halfFloor", "halfExpand", "halfTrunc", "halfEven":
+			fromLower := new(big.Int).Abs(new(big.Int).Sub(targetEpoch, lowerEpoch))
+			toUpper := new(big.Int).Abs(new(big.Int).Sub(upperEpoch, targetEpoch))
+			switch comparison := fromLower.Cmp(toUpper); {
+			case comparison > 0:
+				chooseUpper = true
+			case comparison == 0:
+				switch mode {
+				case "halfCeil":
+					chooseUpper = sign > 0
+				case "halfFloor":
+					chooseUpper = sign < 0
+				case "halfExpand":
+					chooseUpper = true
+				case "halfEven":
+					chooseUpper = (r1/increment)%2 != 0
+				}
+			}
+		}
+	}
+	result, resultDateTime := lowerDuration, lowerDateTime
+	if chooseUpper {
+		result, resultDateTime = upperDuration, upperDateTime
+		didExpand = true
+	}
+	if !didExpand || unit == "week" {
+		return result, nil
+	}
+	resultDate := temporalPlainDate{year: resultDateTime.year, month: resultDateTime.month, day: resultDateTime.day, calendar: resultDateTime.calendar}
+	return r.differenceTemporalPlainDates(startDate, resultDate, largest, "day", 1, "trunc")
 }
 
 func (r *Runtime) temporalPlainDateTimeValue(value Value, method string) (temporalPlainDateTime, error) {

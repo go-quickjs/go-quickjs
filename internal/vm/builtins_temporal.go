@@ -170,7 +170,47 @@ func (r *Runtime) initTemporalInstant(temporal *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(instant.string())), nil
+		precision, minuteOnly, step, mode, timeZoneValue, err := rt.temporalInstantStringOptions(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		rounded := roundTemporalBigIntAsIfPositive(instant.epochNanoseconds(), big.NewInt(step), mode)
+		instant, ok := temporalInstantFromEpochNanoseconds(rounded)
+		if !ok {
+			return Undefined, rt.throwRangeError("rounded instant is outside the Temporal range")
+		}
+		if timeZoneValue.IsUndefined() {
+			dateTime := temporalPlainDateTime{temporalISODateTime: instant.isoDateTimeUTC(), calendar: "iso8601"}
+			return Str(NewString(dateTime.stringWithPrecision("never", precision, minuteOnly) + "Z")), nil
+		}
+		timeZone, err := rt.toTemporalTimeZoneIdentifier(timeZoneValue)
+		if err != nil {
+			return Undefined, err
+		}
+		zoned, err := rt.newTemporalZonedDateTime(instant, timeZone, Str(NewString("iso8601")))
+		if err != nil {
+			return Undefined, err
+		}
+		dateTime := temporalPlainDateTime{temporalISODateTime: zoned.localISODateTime(), calendar: "iso8601"}
+		text := dateTime.stringWithPrecision("never", precision, minuteOnly) + formatTemporalOffset(zoned.offsetSeconds())
+		return Str(NewString(text)), nil
+	})
+	r.defMethod(proto, "toZonedDateTimeISO", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		instant, err := rt.temporalInstantValue(this, "Temporal.Instant.prototype.toZonedDateTimeISO")
+		if err != nil {
+			return Undefined, err
+		}
+		timeZone, err := rt.toTemporalTimeZoneIdentifier(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		zoned, err := rt.newTemporalZonedDateTime(instant, timeZone, Str(NewString("iso8601")))
+		if err != nil {
+			return Undefined, err
+		}
+		o := newObject(rt.temporalZonedDateTimeProto, ClassObject)
+		o.data = zoned
+		return Obj(o), nil
 	})
 	r.defMethod(proto, "toJSON", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		instant, err := rt.temporalInstantValue(this, "Temporal.Instant.prototype.toJSON")
@@ -202,6 +242,82 @@ func (r *Runtime) initTemporalInstant(temporal *Object) {
 	})
 	r.defToStringTag(proto, "Temporal.Instant")
 	r.initTemporalInstantOperations(proto)
+}
+
+func (r *Runtime) temporalInstantStringOptions(value Value) (precision int, minuteOnly bool, step int64, mode string, timeZone Value, err error) {
+	options, err := r.strictOptions(value)
+	if err != nil {
+		return 0, false, 0, "", Undefined, err
+	}
+	precision = -1
+	fractional, err := r.getProp(options, r.atoms.intern("fractionalSecondDigits"), Obj(options))
+	if err != nil {
+		return 0, false, 0, "", Undefined, err
+	}
+	if !fractional.IsUndefined() {
+		if fractional.IsNumber() {
+			n := math.Floor(fractional.Number())
+			if math.IsNaN(n) || math.IsInf(n, 0) || n < 0 || n > 9 {
+				return 0, false, 0, "", Undefined, r.throwRangeError("fractionalSecondDigits is out of range")
+			}
+			precision = int(n)
+		} else {
+			text, err := r.toString(fractional)
+			if err != nil {
+				return 0, false, 0, "", Undefined, err
+			}
+			if text.Go() != "auto" {
+				return 0, false, 0, "", Undefined, r.throwRangeError("invalid fractionalSecondDigits")
+			}
+		}
+	}
+	mode, err = r.stringOption(options, "roundingMode", "trunc",
+		"ceil", "floor", "expand", "trunc", "halfCeil", "halfFloor", "halfExpand", "halfTrunc", "halfEven")
+	if err != nil {
+		return 0, false, 0, "", Undefined, err
+	}
+	smallestValue, err := r.getProp(options, r.atoms.intern("smallestUnit"), Obj(options))
+	if err != nil {
+		return 0, false, 0, "", Undefined, err
+	}
+	smallestRaw := ""
+	if !smallestValue.IsUndefined() {
+		text, err := r.toString(smallestValue)
+		if err != nil {
+			return 0, false, 0, "", Undefined, err
+		}
+		smallestRaw = text.Go()
+	}
+	timeZone, err = r.getProp(options, r.atoms.intern("timeZone"), Obj(options))
+	if err != nil {
+		return 0, false, 0, "", Undefined, err
+	}
+
+	if smallestRaw != "" {
+		smallest, ok := normalizeTemporalUnit(smallestRaw)
+		if !ok || smallest == "hour" {
+			return 0, false, 0, "", Undefined, r.throwRangeError("invalid smallestUnit")
+		}
+		step = temporalUnitNanoseconds[smallest]
+		switch smallest {
+		case "minute":
+			minuteOnly = true
+		case "second":
+			precision = 0
+		case "millisecond":
+			precision = 3
+		case "microsecond":
+			precision = 6
+		case "nanosecond":
+			precision = 9
+		}
+		return precision, minuteOnly, step, mode, timeZone, nil
+	}
+	if precision < 0 {
+		return precision, false, 1, mode, timeZone, nil
+	}
+	steps := [...]int64{1_000_000_000, 100_000_000, 10_000_000, 1_000_000, 100_000, 10_000, 1_000, 100, 10, 1}
+	return precision, false, steps[precision], mode, timeZone, nil
 }
 
 func (r *Runtime) newTemporalCtor(namespace *Object, name string, length int, proto *Object, fn NativeFunc) *Object {
@@ -652,18 +768,22 @@ func (z *temporalZonedDateTime) string() string {
 	local := z.instant
 	local.epochSeconds += int64(offset)
 	text := strings.TrimSuffix(local.string(), "Z")
+	text += formatTemporalOffset(offset) + "[" + z.timeZone + "]"
+	if z.calendar != "iso8601" {
+		text += "[u-ca=" + z.calendar + "]"
+	}
+	return text
+}
+
+func formatTemporalOffset(offset int) string {
 	sign := '+'
 	away := offset
 	if away < 0 {
 		sign, away = '-', -away
 	}
-	offsetText := fmt.Sprintf("%c%02d:%02d", sign, away/3600, away/60%60)
+	text := fmt.Sprintf("%c%02d:%02d", sign, away/3600, away/60%60)
 	if away%60 != 0 {
-		offsetText += fmt.Sprintf(":%02d", away%60)
-	}
-	text += offsetText + "[" + z.timeZone + "]"
-	if z.calendar != "iso8601" {
-		text += "[u-ca=" + z.calendar + "]"
+		text += fmt.Sprintf(":%02d", away%60)
 	}
 	return text
 }
