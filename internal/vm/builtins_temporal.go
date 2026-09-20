@@ -667,6 +667,17 @@ func (r *Runtime) initTemporalZonedDateTime(temporal *Object) {
 			return Obj(newTemporalZonedDateTimeObject(rt.temporalZonedDateTimeProto, &result)), nil
 		})
 	}
+	r.defMethod(proto, "with", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		zoned, err := rt.temporalZonedDateTimeValue(this, "Temporal.ZonedDateTime.prototype.with")
+		if err != nil {
+			return Undefined, err
+		}
+		result, err := rt.temporalZonedDateTimeWith(zoned, arg(args, 0), arg(args, 1))
+		if err != nil {
+			return Undefined, err
+		}
+		return Obj(newTemporalZonedDateTimeObject(rt.temporalZonedDateTimeProto, result)), nil
+	})
 	r.defMethod(proto, "withPlainTime", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		zoned, err := rt.temporalZonedDateTimeValue(this, "Temporal.ZonedDateTime.prototype.withPlainTime")
 		if err != nil {

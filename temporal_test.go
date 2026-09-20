@@ -128,6 +128,8 @@ func TestTemporalZonedDateTimeFoundation(t *testing.T) {
 		{`Temporal.ZonedDateTime.from("2024-03-10T12:00-04:00[America/New_York]").subtract({ days: 1 }).toString()`, "2024-03-09T12:00:00-05:00[America/New_York]"},
 		{`Temporal.ZonedDateTime.from("2021-11-07T12:00-05:00[America/New_York]").withPlainTime("01:30").toString()`, "2021-11-07T01:30:00-04:00[America/New_York]"},
 		{`Temporal.ZonedDateTime.from("2024-03-10T12:00-04:00[America/New_York]").withPlainTime().toString()`, "2024-03-10T00:00:00-05:00[America/New_York]"},
+		{`Temporal.ZonedDateTime.from("2021-01-31T12:34:56Z[UTC]").with({ month: 2 }).toString()`, "2021-02-28T12:34:56+00:00[UTC]"},
+		{`(() => { const z = Temporal.ZonedDateTime.from("2021-01-31T12:34:56Z[UTC]"); z.with({ month: 2 }); return z.toString(); })()`, "2021-01-31T12:34:56+00:00[UTC]"},
 	}
 	for _, test := range tests {
 		if got := evalString(t, rt, test.source); got != test.want {
@@ -143,6 +145,11 @@ func TestTemporalZonedDateTimeFoundation(t *testing.T) {
 		if got := evalString(t, rt, `try { `+source+` } catch (e) { e.name }`); got != "RangeError" {
 			t.Errorf("%s threw %s", source, got)
 		}
+	}
+	if got := evalString(t, rt, `try {
+		new Temporal.ZonedDateTime(0n, "UTC").with({calendar: "iso8601"});
+	} catch (e) { e.name }`); got != "TypeError" {
+		t.Errorf("ZonedDateTime.with accepted a calendar field: %s", got)
 	}
 }
 
