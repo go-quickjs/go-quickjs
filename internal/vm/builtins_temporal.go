@@ -905,15 +905,9 @@ func (r *Runtime) temporalNowZonedDateTime(timeZoneValue Value) (*temporalZonedD
 }
 
 func (r *Runtime) newTemporalZonedDateTime(instant temporalInstant, zoneName string, calendarValue Value) (*temporalZonedDateTime, error) {
-	calendar := "iso8601"
-	if !calendarValue.IsUndefined() {
-		if !calendarValue.IsString() {
-			return nil, r.throwTypeError("calendar must be a string")
-		}
-		calendar = strings.ToLower(calendarValue.String().Go())
-		if calendar == "" {
-			return nil, r.throwRangeError("invalid calendar")
-		}
+	calendar, err := r.toTemporalCalendarIdentifier(calendarValue)
+	if err != nil {
+		return nil, err
 	}
 	if minutes, name, ok := parseZoneOffset(zoneName); ok {
 		return &temporalZonedDateTime{

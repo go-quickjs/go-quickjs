@@ -145,6 +145,8 @@ func TestTemporalZonedDateTimeFoundation(t *testing.T) {
 		`Temporal.ZonedDateTime.from({year: 2021, month: 3, day: 8, hour: 1, offset: "-04:00", timeZone: "UTC"})`,
 		`Temporal.ZonedDateTime.from({year: 2021, month: 2, day: 29, timeZone: "UTC"}, {overflow: "reject"})`,
 		`Temporal.ZonedDateTime.from("2021-01-31T12:00Z[UTC]").add({months: 1}, {overflow: "reject"})`,
+		`new Temporal.ZonedDateTime(0n, "UTC", "İSO8601")`,
+		`new Temporal.ZonedDateTime(0n, "UTC", "1997-12-04[u-ca=iso8601]")`,
 	} {
 		if got := evalString(t, rt, `try { `+source+` } catch (e) { e.name }`); got != "RangeError" {
 			t.Errorf("%s threw %s", source, got)
