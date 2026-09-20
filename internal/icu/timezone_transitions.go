@@ -82,20 +82,7 @@ func (z *TimeZone) OffsetAt(epochSeconds int64) ZoneOffset {
 // they were UTC. Results are ordered from earlier to later. A skipped local
 // time has no results and a repeated local time has two.
 func (z *TimeZone) PossibleInstants(localEpochSeconds int64) []int64 {
-	offsets := make([]int, 0, len(z.offsets)+3)
-	offsets = append(offsets, z.offsets...)
-
-	// POSIX rules after the final explicit TZif transition can theoretically
-	// introduce a type not present in the transition table. Probe both seasons
-	// so those offsets are candidates as well.
-	const seasonalProbe = int64(183 * 24 * 60 * 60)
-	for _, probe := range []int64{
-		localEpochSeconds,
-		saturatingAdd(localEpochSeconds, -seasonalProbe),
-		saturatingAdd(localEpochSeconds, seasonalProbe),
-	} {
-		offsets = appendUniqueInt(offsets, z.OffsetAt(probe).OffsetSeconds)
-	}
+	offsets := z.candidateOffsets(localEpochSeconds)
 
 	instants := make([]int64, 0, 2)
 	for _, offset := range offsets {
@@ -110,6 +97,77 @@ func (z *TimeZone) PossibleInstants(localEpochSeconds int64) []int64 {
 	}
 	sort.Slice(instants, func(i, j int) bool { return instants[i] < instants[j] })
 	return instants
+}
+
+// CompatibleInstant resolves a local wall-clock second with Temporal's
+// "compatible" disambiguation. Repeated times choose the earlier instant;
+// skipped times are shifted forward by the size of the gap.
+func (z *TimeZone) CompatibleInstant(localEpochSeconds int64) (int64, bool) {
+	possible := z.PossibleInstants(localEpochSeconds)
+	if len(possible) != 0 {
+		return possible[0], true
+	}
+
+	// The Temporal algorithm samples one day on either side of a skipped
+	// local time. Applying the earlier offset shifts the nonexistent clock
+	// reading forward by exactly the transition gap.
+	const day = int64(24 * 60 * 60)
+	before := z.OffsetAt(saturatingAdd(localEpochSeconds, -day)).OffsetSeconds
+	after := z.OffsetAt(saturatingAdd(localEpochSeconds, day)).OffsetSeconds
+	if after <= before {
+		return 0, false
+	}
+	shifted, ok := addOffset(localEpochSeconds, after-before)
+	if !ok {
+		return 0, false
+	}
+	possible = z.PossibleInstants(shifted)
+	if len(possible) == 0 {
+		return 0, false
+	}
+	return possible[len(possible)-1], true
+}
+
+// StartOfDay returns the earliest instant whose local date begins at
+// localEpochSeconds. When a transition skips across midnight, this is the
+// transition instant rather than midnight shifted by the full gap.
+func (z *TimeZone) StartOfDay(localEpochSeconds int64) (int64, bool) {
+	possible := z.PossibleInstants(localEpochSeconds)
+	if len(possible) != 0 {
+		return possible[0], true
+	}
+	compatible, ok := z.CompatibleInstant(localEpochSeconds)
+	if !ok {
+		return 0, false
+	}
+	transition, ok := z.PreviousTransition(saturatingAdd(compatible, 1))
+	if !ok {
+		return 0, false
+	}
+	beforeLocal, beforeOK := addOffset(transition-1, z.OffsetAt(transition-1).OffsetSeconds)
+	afterLocal, afterOK := addOffset(transition, z.OffsetAt(transition).OffsetSeconds)
+	if !beforeOK || !afterOK || beforeLocal >= localEpochSeconds || afterLocal < localEpochSeconds {
+		return 0, false
+	}
+	return transition, true
+}
+
+func (z *TimeZone) candidateOffsets(localEpochSeconds int64) []int {
+	offsets := make([]int, 0, len(z.offsets)+3)
+	offsets = append(offsets, z.offsets...)
+
+	// POSIX rules after the final explicit TZif transition can theoretically
+	// introduce a type not present in the transition table. Probe both seasons
+	// so those offsets are candidates as well.
+	const seasonalProbe = int64(183 * 24 * 60 * 60)
+	for _, probe := range []int64{
+		localEpochSeconds,
+		saturatingAdd(localEpochSeconds, -seasonalProbe),
+		saturatingAdd(localEpochSeconds, seasonalProbe),
+	} {
+		offsets = appendUniqueInt(offsets, z.OffsetAt(probe).OffsetSeconds)
+	}
+	return offsets
 }
 
 // NextTransition returns the first UTC transition strictly after epochSeconds.

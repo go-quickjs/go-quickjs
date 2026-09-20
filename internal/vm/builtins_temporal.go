@@ -352,6 +352,58 @@ func (r *Runtime) initTemporalZonedDateTime(temporal *Object) {
 		}
 		return Str(NewString(zoned.calendar)), nil
 	})
+	for _, property := range []string{"year", "month", "monthCode", "day", "hour", "minute", "second", "millisecond", "microsecond", "nanosecond"} {
+		name := property
+		r.defGetter(proto, name, func(rt *Runtime, this Value, args []Value) (Value, error) {
+			zoned, err := rt.temporalZonedDateTimeValue(this, "get Temporal.ZonedDateTime.prototype."+name)
+			if err != nil {
+				return Undefined, err
+			}
+			dateTime := zoned.localISODateTime()
+			calendarDate := temporalPlainDate{
+				year: dateTime.year, month: dateTime.month, day: dateTime.day, calendar: zoned.calendar,
+			}.calendarDate()
+			switch name {
+			case "year":
+				return Int(calendarDate.Year), nil
+			case "month":
+				return Int(calendarDate.Month), nil
+			case "monthCode":
+				code := fmt.Sprintf("M%02d", calendarDate.Month)
+				if calendarDate.Leap {
+					code += "L"
+				}
+				return Str(NewString(code)), nil
+			case "day":
+				return Int(calendarDate.Day), nil
+			case "hour":
+				return Int(dateTime.hour), nil
+			case "minute":
+				return Int(dateTime.minute), nil
+			case "second":
+				return Int(dateTime.second), nil
+			case "millisecond":
+				return Int(dateTime.millisecond), nil
+			case "microsecond":
+				return Int(dateTime.microsecond), nil
+			case "nanosecond":
+				return Int(dateTime.nanosecond), nil
+			}
+			return Undefined, nil
+		})
+	}
+	r.defMethod(proto, "equals", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		zoned, err := rt.temporalZonedDateTimeValue(this, "Temporal.ZonedDateTime.prototype.equals")
+		if err != nil {
+			return Undefined, err
+		}
+		other, err := rt.toTemporalZonedDateTime(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		return Bool(compareTemporalInstants(zoned.instant, other.instant) == 0 &&
+			zoned.timeZone == other.timeZone && zoned.calendar == other.calendar), nil
+	})
 	r.defMethod(proto, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		zoned, err := rt.temporalZonedDateTimeValue(this, "Temporal.ZonedDateTime.prototype.toString")
 		if err != nil {
@@ -418,11 +470,76 @@ func (r *Runtime) temporalZonedDateTimeValue(value Value, method string) (*tempo
 	return nil, r.throwTypeError("%s called on an incompatible receiver", method)
 }
 
+func (r *Runtime) toTemporalZonedDateTime(value Value) (*temporalZonedDateTime, error) {
+	if value.IsObject() {
+		if zoned, ok := value.Object().data.(*temporalZonedDateTime); ok && zoned != nil {
+			return zoned, nil
+		}
+		return nil, r.throwTypeError("a zoned date-time must be a Temporal.ZonedDateTime or string")
+	}
+	if !value.IsString() {
+		return nil, r.throwTypeError("a zoned date-time must be a Temporal.ZonedDateTime or string")
+	}
+	instant, zone, calendar, err := parseTemporalZonedDateTimeString(value.String().Go())
+	if err != nil {
+		return nil, r.throwRangeError("invalid Temporal.ZonedDateTime string")
+	}
+	return r.newTemporalZonedDateTime(instant, zone, Str(NewString(calendar)))
+}
+
 func (z *temporalZonedDateTime) offsetSeconds() int {
 	if z.fixed {
 		return z.fixedOffsetSeconds
 	}
 	return z.zone.OffsetAt(z.instant.epochSeconds).OffsetSeconds
+}
+
+func (z *temporalZonedDateTime) localISODateTime() temporalISODateTime {
+	localSeconds := z.instant.epochSeconds + int64(z.offsetSeconds())
+	days := floorDivInt64(localSeconds, temporalSecondsPerDay)
+	seconds := localSeconds - days*temporalSecondsPerDay
+	year, month, day := isoCivilFromDays(days)
+	subsecond := int(z.instant.nanosecond)
+	return temporalISODateTime{
+		year: year, month: month, day: day,
+		hour: int(seconds / 3600), minute: int(seconds / 60 % 60), second: int(seconds % 60),
+		millisecond: subsecond / 1_000_000,
+		microsecond: subsecond / 1_000 % 1_000,
+		nanosecond:  subsecond % 1_000,
+	}
+}
+
+func (z *temporalZonedDateTime) compatibleInstant(dateTime temporalISODateTime) (temporalInstant, bool) {
+	localSeconds := dateTime.localEpochSeconds()
+	epochSeconds := int64(0)
+	if z.fixed {
+		epochSeconds = localSeconds - int64(z.fixedOffsetSeconds)
+	} else {
+		var ok bool
+		epochSeconds, ok = z.zone.CompatibleInstant(localSeconds)
+		if !ok {
+			return temporalInstant{}, false
+		}
+	}
+	total := new(big.Int).Mul(big.NewInt(epochSeconds), big.NewInt(temporalNanosecondsPerSecond))
+	total.Add(total, big.NewInt(dateTime.subsecondNanoseconds()))
+	return temporalInstantFromEpochNanoseconds(total)
+}
+
+func (z *temporalZonedDateTime) startOfDayInstant(date temporalPlainDate) (temporalInstant, bool) {
+	localSeconds := isoDaysFromCivil(int64(date.year), date.month, date.day) * temporalSecondsPerDay
+	epochSeconds := int64(0)
+	if z.fixed {
+		epochSeconds = localSeconds - int64(z.fixedOffsetSeconds)
+	} else {
+		var ok bool
+		epochSeconds, ok = z.zone.StartOfDay(localSeconds)
+		if !ok {
+			return temporalInstant{}, false
+		}
+	}
+	total := new(big.Int).Mul(big.NewInt(epochSeconds), big.NewInt(temporalNanosecondsPerSecond))
+	return temporalInstantFromEpochNanoseconds(total)
 }
 
 func (z *temporalZonedDateTime) string() string {
@@ -473,4 +590,70 @@ func parseTemporalZonedDateTimeString(input string) (temporalInstant, string, st
 		return temporalInstant{}, "", "", err
 	}
 	return instant, zone, calendar, nil
+}
+
+func (r *Runtime) toTemporalTimeZoneIdentifier(value Value) (string, error) {
+	if !value.IsString() {
+		return "", r.throwTypeError("time zone must be a string")
+	}
+	name, ok := parseTemporalTimeZoneIdentifier(value.String().Go())
+	if !ok {
+		return "", r.throwRangeError("invalid time zone identifier")
+	}
+	return name, nil
+}
+
+func parseTemporalTimeZoneIdentifier(input string) (string, bool) {
+	if input == "" {
+		return "", false
+	}
+	if _, name, ok := parseZoneOffset(input); ok {
+		return name, true
+	}
+	if canonical, ok := icu.CanonicalZone(input); ok {
+		return canonical, true
+	}
+
+	main, annotations, ok := splitTemporalAnnotations(input)
+	if !ok || !validInstantAnnotations(annotations) {
+		return "", false
+	}
+	zoneAnnotation := ""
+	for _, annotation := range annotations {
+		annotation = strings.TrimPrefix(annotation, "!")
+		if _, _, keyed := strings.Cut(annotation, "="); !keyed {
+			zoneAnnotation = annotation
+		}
+	}
+	if zoneAnnotation != "" {
+		if _, _, err := parseTemporalInstantFields(input); err != nil {
+			if _, err := parseTemporalPlainDateTime(input); err != nil {
+				return "", false
+			}
+		}
+		if _, name, ok := parseZoneOffset(zoneAnnotation); ok {
+			return name, true
+		}
+		canonical, ok := icu.CanonicalZone(zoneAnnotation)
+		return canonical, ok
+	}
+
+	if _, _, err := parseTemporalInstantFields(input); err != nil {
+		return "", false
+	}
+	if len(main) != 0 && (main[len(main)-1] == 'Z' || main[len(main)-1] == 'z') {
+		return "UTC", true
+	}
+	timeStart := strings.IndexAny(main, "Tt ")
+	if timeStart < 0 {
+		return "", false
+	}
+	for index := timeStart + 1; index < len(main); index++ {
+		if main[index] != '+' && main[index] != '-' {
+			continue
+		}
+		_, name, ok := parseZoneOffset(main[index:])
+		return name, ok
+	}
+	return "", false
 }

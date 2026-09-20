@@ -165,6 +165,11 @@ func TestTemporalPlainDateFoundation(t *testing.T) {
 		{`new Temporal.PlainDate(2021, 9, 7).since(new Temporal.PlainDate(2019, 1, 8), {smallestUnit: "years", roundingMode: "halfExpand"}).toString()`, "P3Y"},
 		{`new Temporal.PlainDate(2019, 1, 1).until(new Temporal.PlainDate(2020, 7, 2), {smallestUnit: "years", roundingMode: "halfEven"}).toString()`, "P2Y"},
 		{`new Temporal.PlainDate(2020, 1, 1).withCalendar("15:23").calendarId`, "iso8601"},
+		{`new Temporal.PlainDate(2020, 1, 1).toZonedDateTime({timeZone: "UTC", plainTime: "12:34:56.123456789"}).toString()`, "2020-01-01T12:34:56.123456789+00:00[UTC]"},
+		{`new Temporal.PlainDate(2021, 3, 14).toZonedDateTime({timeZone: "America/New_York", plainTime: "02:30"}).toString()`, "2021-03-14T03:30:00-04:00[America/New_York]"},
+		{`new Temporal.PlainDate(2021, 11, 7).toZonedDateTime({timeZone: "America/New_York", plainTime: "01:30"}).toString()`, "2021-11-07T01:30:00-04:00[America/New_York]"},
+		{`new Temporal.PlainDate(2015, 10, 18).toZonedDateTime("America/Sao_Paulo").toString()`, "2015-10-18T01:00:00-02:00[America/Sao_Paulo]"},
+		{`new Temporal.PlainDate(2020, 1, 1).toZonedDateTime("2021-08-19T17:30-12:12[+01:46]").timeZoneId`, "+01:46"},
 		{`new Temporal.PlainDate(-271821, 4, 19).toString()`, "-271821-04-19"},
 		{`class D extends Temporal.PlainDate {}; Object.getPrototypeOf(new D(2000, 1, 1)) === D.prototype`, "true"},
 	}
@@ -178,6 +183,7 @@ func TestTemporalPlainDateFoundation(t *testing.T) {
 		`new Temporal.PlainDate(-271821, 4, 18)`,
 		`Temporal.PlainDate.from({year: 2021, month: 2, day: 31}, {overflow: "reject"})`,
 		`new Temporal.PlainDate(2000, 1, 1, "not-a-calendar")`,
+		`new Temporal.PlainDate(2020, 1, 1).toZonedDateTime("2021-08-19T17:30-07:00:00")`,
 	} {
 		if got := evalString(t, rt, `try { `+source+` } catch (e) { e.name }`); got != "RangeError" {
 			t.Errorf("%s threw %s", source, got)

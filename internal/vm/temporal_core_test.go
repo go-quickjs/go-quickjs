@@ -184,3 +184,50 @@ func TestTemporalInstantArithmetic(t *testing.T) {
 		t.Fatal("addition exceeded the Temporal range")
 	}
 }
+
+func TestParseTemporalTimeZoneIdentifier(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  string
+	}{
+		{"uTc", "UTC"},
+		{"+0130", "+01:30"},
+		{"2021-08-19T17:30Z", "UTC"},
+		{"2021-08-19T17:30-07:00", "-07:00"},
+		{"2021-08-19T17:30-12:12[+01:46]", "+01:46"},
+		{"2021-08-19T17:30Z[America/New_York]", "America/New_York"},
+	} {
+		t.Run(test.input, func(t *testing.T) {
+			got, ok := parseTemporalTimeZoneIdentifier(test.input)
+			if !ok || got != test.want {
+				t.Fatalf("parseTemporalTimeZoneIdentifier(%q) = %q, %v; want %q, true", test.input, got, ok, test.want)
+			}
+		})
+	}
+	for _, input := range []string{
+		"",
+		"2021-08-19T17:30",
+		"2021-08-19T17:30-07:00:00",
+		"-12:12:59.9",
+		"-000000-10-31T17:45Z",
+		"2021-08-19T17:30Z[UTC][Europe/Paris]",
+	} {
+		t.Run("reject "+input, func(t *testing.T) {
+			if got, ok := parseTemporalTimeZoneIdentifier(input); ok {
+				t.Fatalf("accepted invalid identifier as %q", got)
+			}
+		})
+	}
+}
+
+func TestParseTemporalPlainTimeCalendarAnnotation(t *testing.T) {
+	got, err := parseTemporalPlainTime("T12:34:56.987654321[u-ca=unknown]")
+	if err != nil || got.string() != "12:34:56.987654321" {
+		t.Fatalf("calendar annotation parse = %q, %v", got.string(), err)
+	}
+	for _, input := range []string{"2021-12", "12-14", "1214"} {
+		if _, err := parseTemporalPlainTime(input); err == nil {
+			t.Fatalf("accepted ambiguous plain time %q", input)
+		}
+	}
+}

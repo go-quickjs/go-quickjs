@@ -209,6 +209,39 @@ func (r *Runtime) temporalPlainTimeFromBag(o *Object, optionsValue Value) (tempo
 }
 
 func parseTemporalPlainTime(input string) (temporalPlainTime, error) {
+	main, annotations, ok := splitTemporalAnnotations(input)
+	if !ok {
+		return temporalPlainTime{}, errInvalidTemporalInstant
+	}
+	if !strings.HasPrefix(main, "T") && !strings.HasPrefix(main, "t") && !looksLikeTemporalDateTime(input) {
+		if _, err := parseTemporalPlainYearMonth(main); err == nil {
+			return temporalPlainTime{}, errInvalidTemporalInstant
+		}
+		if _, err := parseTemporalPlainMonthDay(main); err == nil {
+			return temporalPlainTime{}, errInvalidTemporalInstant
+		}
+	}
+	calendarSeen, criticalCalendar := false, false
+	var retained strings.Builder
+	retained.WriteString(main)
+	for _, annotation := range annotations {
+		original := annotation
+		critical := strings.HasPrefix(annotation, "!")
+		annotation = strings.TrimPrefix(annotation, "!")
+		key, _, keyed := strings.Cut(annotation, "=")
+		if keyed && key == "u-ca" {
+			if calendarSeen && (criticalCalendar || critical) {
+				return temporalPlainTime{}, errInvalidTemporalInstant
+			}
+			calendarSeen = true
+			criticalCalendar = criticalCalendar || critical
+			continue
+		}
+		retained.WriteByte('[')
+		retained.WriteString(original)
+		retained.WriteByte(']')
+	}
+	input = retained.String()
 	dateTimeInput := input
 	switch {
 	case strings.HasPrefix(input, "T"), strings.HasPrefix(input, "t"):

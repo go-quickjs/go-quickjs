@@ -195,6 +195,67 @@ func (r *Runtime) initTemporalPlainDate(temporal *Object) {
 		}
 		return Obj(newTemporalPlainDateTime(rt.temporalPlainDateTimeProto, result)), nil
 	})
+	r.defMethod(proto, "toZonedDateTime", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		date, err := rt.temporalPlainDateValue(this, "Temporal.PlainDate.prototype.toZonedDateTime")
+		if err != nil {
+			return Undefined, err
+		}
+		item := arg(args, 0)
+		timeZoneValue, plainTimeValue := item, Undefined
+		if item.IsObject() {
+			timeZoneValue, err = rt.getProp(item.Object(), rt.atoms.intern("timeZone"), item)
+			if err != nil {
+				return Undefined, err
+			}
+			if timeZoneValue.IsUndefined() {
+				return Undefined, rt.throwTypeError("timeZone is required")
+			}
+		}
+		timeZone, err := rt.toTemporalTimeZoneIdentifier(timeZoneValue)
+		if err != nil {
+			return Undefined, err
+		}
+		if item.IsObject() {
+			plainTimeValue, err = rt.getProp(item.Object(), rt.atoms.intern("plainTime"), item)
+			if err != nil {
+				return Undefined, err
+			}
+		}
+
+		timeOmitted := plainTimeValue.IsUndefined()
+		time := temporalPlainTime{}
+		if !timeOmitted {
+			time, err = rt.toTemporalPlainTime(plainTimeValue, Undefined)
+			if err != nil {
+				return Undefined, err
+			}
+		}
+		dateTime := temporalPlainDateTime{temporalISODateTime: temporalISODateTime{
+			year: date.year, month: date.month, day: date.day,
+			hour: time.hour, minute: time.minute, second: time.second,
+			millisecond: time.millisecond, microsecond: time.microsecond, nanosecond: time.nanosecond,
+		}, calendar: date.calendar}
+		if !dateTime.valid() {
+			return Undefined, rt.throwRangeError("combined date and time are outside the Temporal range")
+		}
+		zoned, err := rt.newTemporalZonedDateTime(temporalInstant{}, timeZone, Str(NewString(date.calendar)))
+		if err != nil {
+			return Undefined, err
+		}
+		instant, ok := temporalInstant{}, false
+		if timeOmitted {
+			instant, ok = zoned.startOfDayInstant(date)
+		} else {
+			instant, ok = zoned.compatibleInstant(dateTime.temporalISODateTime)
+		}
+		if !ok {
+			return Undefined, rt.throwRangeError("zoned date-time is outside the Temporal range")
+		}
+		zoned.instant = instant
+		o := newObject(rt.temporalZonedDateTimeProto, ClassObject)
+		o.data = zoned
+		return Obj(o), nil
+	})
 	r.defMethod(proto, "toPlainYearMonth", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		date, err := rt.temporalPlainDateValue(this, "Temporal.PlainDate.prototype.toPlainYearMonth")
 		if err != nil {

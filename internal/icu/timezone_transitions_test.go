@@ -70,6 +70,68 @@ func TestTimeZonePossibleInstantsNonHourTransitions(t *testing.T) {
 	}
 }
 
+func TestTimeZoneCompatibleInstant(t *testing.T) {
+	zone, err := LoadTimeZone("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name  string
+		local time.Time
+		want  time.Time
+	}{
+		{
+			name:  "spring gap shifts forward",
+			local: time.Date(2021, time.March, 14, 2, 30, 0, 0, time.UTC),
+			want:  time.Date(2021, time.March, 14, 7, 30, 0, 0, time.UTC),
+		},
+		{
+			name:  "fall overlap chooses earlier",
+			local: time.Date(2021, time.November, 7, 1, 30, 0, 0, time.UTC),
+			want:  time.Date(2021, time.November, 7, 5, 30, 0, 0, time.UTC),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := zone.CompatibleInstant(test.local.Unix())
+			if !ok || got != test.want.Unix() {
+				t.Fatalf("CompatibleInstant(%s) = %s, %v; want %s, true", test.local, time.Unix(got, 0), ok, test.want)
+			}
+		})
+	}
+	lordHowe, err := LoadTimeZone("Australia/Lord_Howe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lordHoweGap := time.Date(2021, time.October, 3, 2, 15, 0, 0, time.UTC)
+	lordHoweWant := time.Date(2021, time.October, 2, 15, 45, 0, 0, time.UTC)
+	if got, ok := lordHowe.CompatibleInstant(lordHoweGap.Unix()); !ok || got != lordHoweWant.Unix() {
+		t.Fatalf("Lord Howe gap = %s, %v; want %s, true", time.Unix(got, 0).UTC(), ok, lordHoweWant)
+	}
+
+	apia, err := LoadTimeZone("Pacific/Apia")
+	if err != nil {
+		t.Fatal(err)
+	}
+	skippedDay := time.Date(2011, time.December, 30, 12, 0, 0, 0, time.UTC)
+	want := time.Date(2011, time.December, 30, 22, 0, 0, 0, time.UTC)
+	if got, ok := apia.CompatibleInstant(skippedDay.Unix()); !ok || got != want.Unix() {
+		t.Fatalf("Apia skipped day = %s, %v; want %s, true", time.Unix(got, 0).UTC(), ok, want)
+	}
+}
+
+func TestTimeZoneStartOfDayAfterMidnightGap(t *testing.T) {
+	zone, err := LoadTimeZone("America/Sao_Paulo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	localMidnight := time.Date(2015, time.October, 18, 0, 0, 0, 0, time.UTC)
+	want := time.Date(2015, time.October, 18, 3, 0, 0, 0, time.UTC)
+	if got, ok := zone.StartOfDay(localMidnight.Unix()); !ok || got != want.Unix() {
+		t.Fatalf("start of skipped-midnight day = %s, %v; want %s, true", time.Unix(got, 0).UTC(), ok, want)
+	}
+}
+
 func TestTimeZoneTransitions(t *testing.T) {
 	zone, err := LoadTimeZone("America/New_York")
 	if err != nil {
