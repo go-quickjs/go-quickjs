@@ -475,11 +475,7 @@ func (r *Runtime) initTemporalZonedDateTime(temporal *Object) {
 			case "month":
 				return Int(calendarDate.Month), nil
 			case "monthCode":
-				code := fmt.Sprintf("M%02d", calendarDate.Month)
-				if calendarDate.Leap {
-					code += "L"
-				}
-				return Str(NewString(code)), nil
+				return Str(NewString(temporalCalendarMonthCode(calendarDate))), nil
 			case "day":
 				return Int(calendarDate.Day), nil
 			case "era":

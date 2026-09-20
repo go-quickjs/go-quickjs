@@ -1,7 +1,6 @@
 package vm
 
 import (
-	"fmt"
 	"math"
 	"math/big"
 	"strings"
@@ -102,11 +101,7 @@ func (r *Runtime) initTemporalPlainYearMonth(temporal *Object) {
 			case "month":
 				return Int(date.Month), nil
 			case "monthCode":
-				code := fmt.Sprintf("M%02d", date.Month)
-				if date.Leap {
-					code += "L"
-				}
-				return Str(NewString(code)), nil
+				return Str(NewString(temporalCalendarMonthCode(date))), nil
 			case "calendarId":
 				return Str(NewString(yearMonth.calendar)), nil
 			case "era":
@@ -419,11 +414,7 @@ func (r *Runtime) initTemporalPlainMonthDay(temporal *Object) {
 			date := temporalPlainDate{year: monthDay.year, month: monthDay.month, day: monthDay.day, calendar: monthDay.calendar}.calendarDate()
 			switch name {
 			case "monthCode":
-				code := fmt.Sprintf("M%02d", date.Month)
-				if date.Leap {
-					code += "L"
-				}
-				return Str(NewString(code)), nil
+				return Str(NewString(temporalCalendarMonthCode(date))), nil
 			case "day":
 				return Int(date.Day), nil
 			case "calendarId":

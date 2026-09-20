@@ -98,11 +98,7 @@ func (r *Runtime) initTemporalPlainDate(temporal *Object) {
 			case "month":
 				return Int(calendarDate.Month), nil
 			case "monthCode":
-				code := fmt.Sprintf("M%02d", calendarDate.Month)
-				if calendarDate.Leap {
-					code += "L"
-				}
-				return Str(NewString(code)), nil
+				return Str(NewString(temporalCalendarMonthCode(calendarDate))), nil
 			case "day":
 				return Int(calendarDate.Day), nil
 			case "calendarId":
@@ -320,6 +316,15 @@ func (r *Runtime) initTemporalPlainDate(temporal *Object) {
 	})
 	r.defToStringTag(proto, "Temporal.PlainDate")
 	r.initTemporalPlainDateOperations(proto)
+}
+
+func temporalCalendarMonthCode(date icu.Date) string {
+	month, leap := date.MonthCode()
+	code := fmt.Sprintf("M%02d", month)
+	if leap {
+		code += "L"
+	}
+	return code
 }
 
 func newTemporalPlainDate(proto *Object, date temporalPlainDate) *Object {

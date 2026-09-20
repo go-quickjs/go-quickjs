@@ -245,7 +245,7 @@ func hebrewDate(fixed int) Date {
 		}
 	}
 	return Date{Era: 0, Year: year, Month: written, Day: day, LongYear: long,
-		Leap: long && month == 13, RelatedYear: gregorianYearOf(fixed)}
+		Leap: long && month == 12, RelatedYear: gregorianYearOf(fixed)}
 }
 
 func hebrewLeapYear(year int) bool {
@@ -595,11 +595,22 @@ func mod(a, b int) int {
 // a mark for the years that have a thirteenth month.
 func (d Date) MonthKey() string {
 	key := strconv.Itoa(d.Month)
-	if d.Leap {
+	if d.Leap && !d.LongYear {
 		key += "bis"
 	}
 	if d.LongYear {
 		key += "L"
 	}
 	return key
+}
+
+// MonthCode returns the stable Temporal month number and whether this is the
+// repeated month. Hebrew month positions after Adar I are one greater than
+// their month codes in a leap year.
+func (d Date) MonthCode() (int, bool) {
+	month := d.Month
+	if d.LongYear && month >= 6 {
+		month--
+	}
+	return month, d.Leap
 }

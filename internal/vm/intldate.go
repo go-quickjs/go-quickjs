@@ -437,6 +437,12 @@ func (o *dateOptions) field(push func(kind, value string), t time.Time, letter b
 		push("era", o.eraName(at, n))
 	case 'M', 'L', 'N', 'P':
 		if names, ok := o.calendarNames(); ok {
+			// Numeric Chinese and Dangi leap months retain the repeated-month
+			// marker. Without it, month 5 and leap month 5 are indistinguishable.
+			if at.Leap && n < 3 && (o.calendar == "chinese" || o.calendar == "dangi") {
+				push("month", pad(at.Month, n)+"bis")
+				return
+			}
 			// A calendar of its own has months of its own, and a month that
 			// only a long year has is one of them.
 			width := 0

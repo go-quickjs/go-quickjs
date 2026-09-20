@@ -79,6 +79,10 @@ func TestTemporalIntlDateTimeFormat(t *testing.T) {
 		{`new Intl.DateTimeFormat("en-US", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" }).format(new Temporal.PlainDate(2000, 2, 29))`, "02/29/2000"},
 		{`new Intl.DateTimeFormat("en-US", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" }).format(new Temporal.PlainTime(12, 34))`, "12:34 PM"},
 		{`new Intl.DateTimeFormat("en-US", { timeZoneName: "long", timeZone: "America/New_York" }).formatToParts(new Temporal.PlainTime(12, 34)).some(part => part.type === "timeZoneName")`, "false"},
+		{`new Intl.DateTimeFormat("en", { calendar: "chinese", timeZone: "UTC",
+			year: "numeric", month: "numeric", day: "numeric" }).formatToParts(
+			Date.UTC(2047, 5, 30)).find(part => part.type === "month").value`, "5bis"},
+		{`new Temporal.PlainDate(5808, 2, 29, "hebrew").monthCode`, "M05L"},
 		{`new Intl.DateTimeFormat("en-US", { timeZone: "Pacific/Apia" }).formatRange(
 			new Temporal.PlainDateTime(2021, 8, 4, 0, 30, 45),
 			new Temporal.PlainDateTime(2021, 8, 4, 23, 30, 45))`,
