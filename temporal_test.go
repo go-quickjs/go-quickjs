@@ -134,6 +134,9 @@ func TestTemporalZonedDateTimeFoundation(t *testing.T) {
 		{`new Temporal.ZonedDateTime(0n, "America/New_York").getTimeZoneTransition({ direction: "previous" }).toString()`, "1969-10-26T01:00:00-05:00[America/New_York]"},
 		{`new Temporal.ZonedDateTime(9961200000000001n, "America/New_York").getTimeZoneTransition("previous").toString()`, "1970-04-26T03:00:00-04:00[America/New_York]"},
 		{`new Temporal.ZonedDateTime(0n, "+01:30").getTimeZoneTransition("next")`, "null"},
+		{`Temporal.ZonedDateTime.from("2024-03-10T12:00-04:00[America/New_York]").round({smallestUnit: "day"}).toString()`, "2024-03-10T00:00:00-05:00[America/New_York]"},
+		{`Temporal.ZonedDateTime.from("2024-11-03T12:00-05:00[America/New_York]").round({smallestUnit: "day"}).toString()`, "2024-11-04T00:00:00-05:00[America/New_York]"},
+		{`Temporal.ZonedDateTime.from("2021-11-07T01:29:45-05:00[America/New_York]").round({smallestUnit: "hour"}).toString()`, "2021-11-07T01:00:00-05:00[America/New_York]"},
 	}
 	for _, test := range tests {
 		if got := evalString(t, rt, test.source); got != test.want {

@@ -631,6 +631,23 @@ func (r *Runtime) initTemporalZonedDateTime(temporal *Object) {
 		result.instant = instant
 		return Obj(newTemporalZonedDateTimeObject(rt.temporalZonedDateTimeProto, &result)), nil
 	})
+	r.defMethod(proto, "round", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		zoned, err := rt.temporalZonedDateTimeValue(this, "Temporal.ZonedDateTime.prototype.round")
+		if err != nil {
+			return Undefined, err
+		}
+		smallest, increment, mode, err := rt.temporalRoundOptions(arg(args, 0), false, true)
+		if err != nil {
+			return Undefined, err
+		}
+		instant, err := rt.roundTemporalZonedDateTime(zoned, smallest, increment, mode)
+		if err != nil {
+			return Undefined, err
+		}
+		result := *zoned
+		result.instant = instant
+		return Obj(newTemporalZonedDateTimeObject(rt.temporalZonedDateTimeProto, &result)), nil
+	})
 	r.defMethod(proto, "getTimeZoneTransition", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		zoned, err := rt.temporalZonedDateTimeValue(this, "Temporal.ZonedDateTime.prototype.getTimeZoneTransition")
 		if err != nil {

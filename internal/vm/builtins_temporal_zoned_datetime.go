@@ -460,3 +460,57 @@ func temporalInstantFromLocalAndOffset(dateTime temporalISODateTime, offsetNanos
 	total.Sub(total, big.NewInt(offsetNanoseconds))
 	return temporalInstantFromEpochNanoseconds(total)
 }
+
+func (r *Runtime) roundTemporalZonedDateTime(zoned *temporalZonedDateTime, smallest string, increment int64, mode string) (temporalInstant, error) {
+	local := zoned.localISODateTime()
+	if smallest == "day" {
+		date := temporalPlainDate{
+			year: local.year, month: local.month, day: local.day,
+			calendar: zoned.calendar,
+		}
+		start, ok := zoned.startOfDayInstant(date)
+		if !ok {
+			return temporalInstant{}, r.throwRangeError("start of day is outside the Temporal range")
+		}
+		nextDays := isoDaysFromCivil(int64(date.year), date.month, date.day) + 1
+		nextYear, nextMonth, nextDay := isoCivilFromDays(nextDays)
+		nextDate := temporalPlainDate{
+			year: nextYear, month: nextMonth, day: nextDay,
+			calendar: zoned.calendar,
+		}
+		end, ok := zoned.startOfDayInstant(nextDate)
+		if !ok {
+			return temporalInstant{}, r.throwRangeError("end of day is outside the Temporal range")
+		}
+		startNanoseconds := start.epochNanoseconds()
+		dayLength := new(big.Int).Sub(end.epochNanoseconds(), startNanoseconds)
+		progress := new(big.Int).Sub(zoned.instant.epochNanoseconds(), startNanoseconds)
+		rounded := roundTemporalBigIntAsIfPositive(progress, dayLength, mode)
+		rounded.Add(rounded, startNanoseconds)
+		instant, ok := temporalInstantFromEpochNanoseconds(rounded)
+		if !ok {
+			return temporalInstant{}, r.throwRangeError("rounded zoned date-time is outside the Temporal range")
+		}
+		return instant, nil
+	}
+
+	dateTime := temporalPlainDateTime{temporalISODateTime: local, calendar: zoned.calendar}
+	step := temporalUnitNanoseconds[smallest] * increment
+	rounded, err := r.roundTemporalPlainDateTime(dateTime, step, mode)
+	if err != nil {
+		return temporalInstant{}, err
+	}
+	return r.interpretTemporalZonedDateTime(
+		rounded.temporalISODateTime,
+		zoned,
+		true,
+		int64(zoned.offsetSeconds())*temporalNanosecondsPerSecond,
+		false,
+		false,
+		temporalZonedDateTimeOptions{
+			disambiguation: "compatible",
+			offset:         "prefer",
+			overflow:       "constrain",
+		},
+	)
+}
