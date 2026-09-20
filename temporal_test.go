@@ -177,6 +177,42 @@ func TestTemporalPlainDateFoundation(t *testing.T) {
 	}
 }
 
+func TestTemporalPlainYearMonthAndMonthDayFoundation(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	tests := []struct{ source, want string }{
+		{`new Temporal.PlainYearMonth(2019, 10).toString()`, "2019-10"},
+		{`new Temporal.PlainYearMonth(2019, 10, "iso8601", 31).toString({calendarName: "always"})`, "2019-10-31[u-ca=iso8601]"},
+		{`Temporal.PlainYearMonth.from("2019-10-31").toString({calendarName: "always"})`, "2019-10-01[u-ca=iso8601]"},
+		{`Temporal.PlainYearMonth.compare(new Temporal.PlainYearMonth(2019, 10, "iso8601", 1), new Temporal.PlainYearMonth(2019, 10, "iso8601", 2))`, "-1"},
+		{`new Temporal.PlainYearMonth(2024, 2).daysInMonth`, "29"},
+		{`new Temporal.PlainYearMonth(2024, 2).toPlainDate({day: 29}).toString()`, "2024-02-29"},
+		{`new Temporal.PlainMonthDay(2, 29).toString()`, "02-29"},
+		{`new Temporal.PlainMonthDay(10, 31, "iso8601", 2019).toString({calendarName: "always"})`, "2019-10-31[u-ca=iso8601]"},
+		{`Temporal.PlainMonthDay.from("2019-10-31").toString({calendarName: "always"})`, "1972-10-31[u-ca=iso8601]"},
+		{`new Temporal.PlainMonthDay(2, 29).toPlainDate({year: 2024}).toString()`, "2024-02-29"},
+		{`new Temporal.PlainDate(2024, 2, 29).toPlainYearMonth().toString()`, "2024-02"},
+		{`new Temporal.PlainDate(2024, 2, 29).toPlainMonthDay().toString()`, "02-29"},
+		{`Temporal.PlainDate.from({year: 2024, month: 2, day: 29, calendar: new Temporal.PlainYearMonth(2000, 1)}).calendarId`, "iso8601"},
+		{`Temporal.PlainDate.from({year: 2024, month: 2, day: 29, calendar: new Temporal.PlainMonthDay(1, 1)}).calendarId`, "iso8601"},
+	}
+	for _, test := range tests {
+		if got := evalString(t, rt, test.source); got != test.want {
+			t.Errorf("%s\n got: %s\nwant: %s", test.source, got, test.want)
+		}
+	}
+	for _, source := range []string{
+		`new Temporal.PlainYearMonth(-271821, 3)`,
+		`new Temporal.PlainYearMonth(2019, 2, "iso8601", 29)`,
+		`new Temporal.PlainMonthDay(9, 14, "iso8601", 275760)`,
+		`Temporal.PlainMonthDay.from({month: 2, day: 29, year: 2023}, {overflow: "reject"})`,
+	} {
+		if got := evalString(t, rt, `try { `+source+` } catch (e) { e.name }`); got != "RangeError" {
+			t.Errorf("%s threw %s", source, got)
+		}
+	}
+}
+
 func TestTemporalPlainDateTimeFoundation(t *testing.T) {
 	rt := quickjs.New()
 	defer rt.Close()

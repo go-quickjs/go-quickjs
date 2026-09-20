@@ -195,6 +195,22 @@ func (r *Runtime) initTemporalPlainDate(temporal *Object) {
 		}
 		return Obj(newTemporalPlainDateTime(rt.temporalPlainDateTimeProto, result)), nil
 	})
+	r.defMethod(proto, "toPlainYearMonth", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		date, err := rt.temporalPlainDateValue(this, "Temporal.PlainDate.prototype.toPlainYearMonth")
+		if err != nil {
+			return Undefined, err
+		}
+		result := temporalPlainYearMonth{year: date.year, month: date.month, day: 1, calendar: date.calendar}
+		return Obj(newTemporalPlainYearMonth(rt.temporalPlainYearMonthProto, result)), nil
+	})
+	r.defMethod(proto, "toPlainMonthDay", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		date, err := rt.temporalPlainDateValue(this, "Temporal.PlainDate.prototype.toPlainMonthDay")
+		if err != nil {
+			return Undefined, err
+		}
+		result := temporalPlainMonthDay{year: 1972, month: date.month, day: date.day, calendar: date.calendar}
+		return Obj(newTemporalPlainMonthDay(rt.temporalPlainMonthDayProto, result)), nil
+	})
 	r.defMethod(proto, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		date, err := rt.temporalPlainDateValue(this, "Temporal.PlainDate.prototype.toString")
 		if err != nil {
@@ -296,6 +312,12 @@ func (r *Runtime) toTemporalCalendarIdentifierFromBag(value Value) (string, erro
 		}
 		if dateTime, ok := value.Object().data.(*temporalPlainDateTime); ok && dateTime != nil {
 			return dateTime.calendar, nil
+		}
+		if monthDay, ok := value.Object().data.(*temporalPlainMonthDay); ok && monthDay != nil {
+			return monthDay.calendar, nil
+		}
+		if yearMonth, ok := value.Object().data.(*temporalPlainYearMonth); ok && yearMonth != nil {
+			return yearMonth.calendar, nil
 		}
 		if zoned, ok := value.Object().data.(*temporalZonedDateTime); ok && zoned != nil {
 			return zoned.calendar, nil

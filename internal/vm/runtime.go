@@ -32,9 +32,11 @@ type Runtime struct {
 	temporalDurationProto *Object
 	// PlainDateTime conversions create PlainDate results through the retained
 	// intrinsic prototype rather than an observable constructor lookup.
-	temporalPlainDateProto     *Object
-	temporalPlainDateTimeProto *Object
-	temporalPlainTimeProto     *Object
+	temporalPlainDateProto      *Object
+	temporalPlainDateTimeProto  *Object
+	temporalPlainMonthDayProto  *Object
+	temporalPlainTimeProto      *Object
+	temporalPlainYearMonthProto *Object
 	// globalLex holds a script's top-level let, const and class bindings.
 	//
 	// They are not properties of the global object -- `let x = 1` does not make
