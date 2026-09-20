@@ -50,7 +50,21 @@ type dateOptions struct {
 	// calendar and digits are what the tag or the options settled on.
 	calendar, digits string
 	// pattern is what all of that came to, in CLDR pattern letters.
-	pattern string
+	pattern          string
+	implicitDefaults bool
+}
+
+func (o *dateOptions) forDateArgument(value Value) *dateOptions {
+	if !o.implicitDefaults || !value.IsObject() {
+		return o
+	}
+	if _, ok := value.Object().data.(*temporalInstant); !ok {
+		return o
+	}
+	copy := *o
+	copy.hour, copy.minute, copy.second = "numeric", "numeric", "numeric"
+	copy.pattern = adjustClock(copy.patternFor(), copy.hourCycle)
+	return &copy
 }
 
 // hasFields reports whether any of the parts of a date were asked for by name,

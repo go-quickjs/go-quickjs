@@ -471,7 +471,7 @@ func (r *Runtime) initTemporalZonedDateTime(temporal *Object) {
 		}
 		return Str(NewString(zoned.calendar)), nil
 	})
-	for _, property := range []string{"year", "month", "monthCode", "day", "hour", "minute", "second", "millisecond", "microsecond", "nanosecond"} {
+	for _, property := range []string{"year", "month", "monthCode", "day", "era", "eraYear", "hour", "minute", "second", "millisecond", "microsecond", "nanosecond"} {
 		name := property
 		r.defGetter(proto, name, func(rt *Runtime, this Value, args []Value) (Value, error) {
 			zoned, err := rt.temporalZonedDateTimeValue(this, "get Temporal.ZonedDateTime.prototype."+name)
@@ -495,6 +495,17 @@ func (r *Runtime) initTemporalZonedDateTime(temporal *Object) {
 				return Str(NewString(code)), nil
 			case "day":
 				return Int(calendarDate.Day), nil
+			case "era":
+				era, ok := temporalCalendarEra(zoned.calendar, calendarDate)
+				if !ok {
+					return Undefined, nil
+				}
+				return Str(NewString(era)), nil
+			case "eraYear":
+				if _, ok := temporalCalendarEra(zoned.calendar, calendarDate); !ok {
+					return Undefined, nil
+				}
+				return Int(calendarDate.Year), nil
 			case "hour":
 				return Int(dateTime.hour), nil
 			case "minute":
@@ -511,6 +522,160 @@ func (r *Runtime) initTemporalZonedDateTime(temporal *Object) {
 			return Undefined, nil
 		})
 	}
+	for _, property := range []string{"dayOfWeek", "dayOfYear", "weekOfYear", "yearOfWeek", "daysInWeek", "daysInMonth", "daysInYear", "monthsInYear", "inLeapYear"} {
+		name := property
+		r.defGetter(proto, name, func(rt *Runtime, this Value, args []Value) (Value, error) {
+			zoned, err := rt.temporalZonedDateTimeValue(this, "get Temporal.ZonedDateTime.prototype."+name)
+			if err != nil {
+				return Undefined, err
+			}
+			dateTime := zoned.localISODateTime()
+			days := isoDaysFromCivil(int64(dateTime.year), dateTime.month, dateTime.day)
+			switch name {
+			case "dayOfWeek":
+				return Int(isoDayOfWeek(days)), nil
+			case "dayOfYear":
+				return Int(int(days - isoDaysFromCivil(int64(dateTime.year), 1, 1) + 1)), nil
+			case "weekOfYear":
+				week, _ := isoWeekOfYear(days)
+				return Int(week), nil
+			case "yearOfWeek":
+				_, year := isoWeekOfYear(days)
+				return Int(year), nil
+			case "daysInWeek":
+				return Int(7), nil
+			case "daysInMonth":
+				return Int(isoDaysInMonth(dateTime.year, dateTime.month)), nil
+			case "daysInYear":
+				if isLeapYear(dateTime.year) {
+					return Int(366), nil
+				}
+				return Int(365), nil
+			case "monthsInYear":
+				return Int(12), nil
+			case "inLeapYear":
+				return Bool(isLeapYear(dateTime.year)), nil
+			}
+			return Undefined, nil
+		})
+	}
+	r.defGetter(proto, "offsetNanoseconds", func(rt *Runtime, this Value, args []Value) (Value, error) {
+		zoned, err := rt.temporalZonedDateTimeValue(this, "get Temporal.ZonedDateTime.prototype.offsetNanoseconds")
+		if err != nil {
+			return Undefined, err
+		}
+		return Float(float64(int64(zoned.offsetSeconds()) * temporalNanosecondsPerSecond)), nil
+	})
+	r.defGetter(proto, "offset", func(rt *Runtime, this Value, args []Value) (Value, error) {
+		zoned, err := rt.temporalZonedDateTimeValue(this, "get Temporal.ZonedDateTime.prototype.offset")
+		if err != nil {
+			return Undefined, err
+		}
+		return Str(NewString(formatTemporalOffset(zoned.offsetSeconds()))), nil
+	})
+	r.defGetter(proto, "hoursInDay", func(rt *Runtime, this Value, args []Value) (Value, error) {
+		zoned, err := rt.temporalZonedDateTimeValue(this, "get Temporal.ZonedDateTime.prototype.hoursInDay")
+		if err != nil {
+			return Undefined, err
+		}
+		dateTime := zoned.localISODateTime()
+		date := temporalPlainDate{year: dateTime.year, month: dateTime.month, day: dateTime.day, calendar: zoned.calendar}
+		start, ok := zoned.startOfDayInstant(date)
+		if !ok {
+			return Undefined, rt.throwRangeError("start of day is outside the Temporal range")
+		}
+		nextDays := isoDaysFromCivil(int64(date.year), date.month, date.day) + 1
+		nextYear, nextMonth, nextDay := isoCivilFromDays(nextDays)
+		next := temporalPlainDate{year: nextYear, month: nextMonth, day: nextDay, calendar: zoned.calendar}
+		nextStart, ok := zoned.startOfDayInstant(next)
+		if !ok {
+			return Undefined, rt.throwRangeError("next day is outside the Temporal range")
+		}
+		difference := new(big.Int).Sub(nextStart.epochNanoseconds(), start.epochNanoseconds())
+		hours, _ := new(big.Rat).SetFrac(difference, big.NewInt(3600*temporalNanosecondsPerSecond)).Float64()
+		return Float(hours), nil
+	})
+
+	r.defMethod(proto, "toInstant", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		zoned, err := rt.temporalZonedDateTimeValue(this, "Temporal.ZonedDateTime.prototype.toInstant")
+		if err != nil {
+			return Undefined, err
+		}
+		return Obj(newTemporalInstant(rt.temporalInstantProto, zoned.instant)), nil
+	})
+	r.defMethod(proto, "toPlainDateTime", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		zoned, err := rt.temporalZonedDateTimeValue(this, "Temporal.ZonedDateTime.prototype.toPlainDateTime")
+		if err != nil {
+			return Undefined, err
+		}
+		dateTime := temporalPlainDateTime{temporalISODateTime: zoned.localISODateTime(), calendar: zoned.calendar}
+		return Obj(newTemporalPlainDateTime(rt.temporalPlainDateTimeProto, dateTime)), nil
+	})
+	r.defMethod(proto, "toPlainDate", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		zoned, err := rt.temporalZonedDateTimeValue(this, "Temporal.ZonedDateTime.prototype.toPlainDate")
+		if err != nil {
+			return Undefined, err
+		}
+		dateTime := zoned.localISODateTime()
+		date := temporalPlainDate{year: dateTime.year, month: dateTime.month, day: dateTime.day, calendar: zoned.calendar}
+		return Obj(newTemporalPlainDate(rt.temporalPlainDateProto, date)), nil
+	})
+	r.defMethod(proto, "toPlainTime", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		zoned, err := rt.temporalZonedDateTimeValue(this, "Temporal.ZonedDateTime.prototype.toPlainTime")
+		if err != nil {
+			return Undefined, err
+		}
+		dateTime := zoned.localISODateTime()
+		time := temporalPlainTime{dateTime.hour, dateTime.minute, dateTime.second, dateTime.millisecond, dateTime.microsecond, dateTime.nanosecond}
+		return Obj(newTemporalPlainTime(rt.temporalPlainTimeProto, time)), nil
+	})
+	r.defMethod(proto, "startOfDay", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		zoned, err := rt.temporalZonedDateTimeValue(this, "Temporal.ZonedDateTime.prototype.startOfDay")
+		if err != nil {
+			return Undefined, err
+		}
+		dateTime := zoned.localISODateTime()
+		date := temporalPlainDate{year: dateTime.year, month: dateTime.month, day: dateTime.day, calendar: zoned.calendar}
+		instant, ok := zoned.startOfDayInstant(date)
+		if !ok {
+			return Undefined, rt.throwRangeError("start of day is outside the Temporal range")
+		}
+		result := *zoned
+		result.instant = instant
+		return Obj(newTemporalZonedDateTimeObject(rt.temporalZonedDateTimeProto, &result)), nil
+	})
+	r.defMethod(proto, "withTimeZone", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		zoned, err := rt.temporalZonedDateTimeValue(this, "Temporal.ZonedDateTime.prototype.withTimeZone")
+		if err != nil {
+			return Undefined, err
+		}
+		timeZone, err := rt.toTemporalTimeZoneIdentifier(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		result, err := rt.newTemporalZonedDateTime(zoned.instant, timeZone, Str(NewString(zoned.calendar)))
+		if err != nil {
+			return Undefined, err
+		}
+		return Obj(newTemporalZonedDateTimeObject(rt.temporalZonedDateTimeProto, result)), nil
+	})
+	r.defMethod(proto, "withCalendar", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		zoned, err := rt.temporalZonedDateTimeValue(this, "Temporal.ZonedDateTime.prototype.withCalendar")
+		if err != nil {
+			return Undefined, err
+		}
+		calendarValue := arg(args, 0)
+		if calendarValue.IsUndefined() {
+			return Undefined, rt.throwTypeError("calendar is required")
+		}
+		calendar, err := rt.toTemporalCalendarIdentifierFromBag(calendarValue)
+		if err != nil {
+			return Undefined, err
+		}
+		result := *zoned
+		result.calendar = calendar
+		return Obj(newTemporalZonedDateTimeObject(rt.temporalZonedDateTimeProto, &result)), nil
+	})
 	r.defMethod(proto, "equals", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		zoned, err := rt.temporalZonedDateTimeValue(this, "Temporal.ZonedDateTime.prototype.equals")
 		if err != nil {
@@ -652,6 +817,12 @@ func (r *Runtime) temporalZonedDateTimeValue(value Value, method string) (*tempo
 		}
 	}
 	return nil, r.throwTypeError("%s called on an incompatible receiver", method)
+}
+
+func newTemporalZonedDateTimeObject(proto *Object, zoned *temporalZonedDateTime) *Object {
+	o := newObject(proto, ClassObject)
+	o.data = zoned
+	return o
 }
 
 func (r *Runtime) toTemporalZonedDateTime(value Value) (*temporalZonedDateTime, error) {

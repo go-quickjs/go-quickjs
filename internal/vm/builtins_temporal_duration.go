@@ -262,6 +262,24 @@ func (r *Runtime) initTemporalDuration(temporal *Object) {
 		}
 		return Obj(newTemporalDuration(proto, result)), nil
 	})
+	r.defMethod(proto, "round", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		duration, err := rt.temporalDurationValue(this, "Temporal.Duration.prototype.round")
+		if err != nil {
+			return Undefined, err
+		}
+		largest, smallest, increment, mode, relativeTo, err := rt.temporalDurationRoundOptions(arg(args, 0), duration)
+		if err != nil {
+			return Undefined, err
+		}
+		result, err := rt.roundTemporalDuration(duration, largest, smallest, increment, mode, relativeTo)
+		if err != nil {
+			return Undefined, err
+		}
+		if !result.valid() || !result.withinRange() {
+			return Undefined, rt.throwRangeError("rounded duration is out of range")
+		}
+		return Obj(newTemporalDuration(proto, result)), nil
+	})
 	r.defMethod(proto, "total", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		d, err := rt.temporalDurationValue(this, "Temporal.Duration.prototype.total")
 		if err != nil {
@@ -358,6 +376,460 @@ func (r *Runtime) initTemporalDuration(temporal *Object) {
 		return Undefined, rt.throwTypeError("durations cannot be converted to primitive values")
 	})
 	r.defToStringTag(proto, "Temporal.Duration")
+}
+
+type temporalDurationRelativeTo struct {
+	plain *temporalPlainDateTime
+	zoned *temporalZonedDateTime
+}
+
+func (d temporalDuration) largestUnit() string {
+	for i, value := range d.fields() {
+		if value != 0 {
+			return []string{"year", "month", "week", "day", "hour", "minute", "second", "millisecond", "microsecond", "nanosecond"}[i]
+		}
+	}
+	return "nanosecond"
+}
+
+func (r *Runtime) temporalDurationRoundOptions(value Value, duration temporalDuration) (largest, smallest string, increment int64, mode string, relativeTo temporalDurationRelativeTo, err error) {
+	var options *Object
+	if value.IsString() {
+		options = newObject(nil, ClassObject)
+		options.setOwnRaw(r.atoms.intern("smallestUnit"), value, propDefault)
+	} else {
+		if value.IsUndefined() {
+			err = r.throwTypeError("options or a smallestUnit string is required")
+			return
+		}
+		options, err = r.strictOptions(value)
+		if err != nil {
+			return
+		}
+	}
+
+	largestValue, err := r.getProp(options, r.atoms.intern("largestUnit"), Obj(options))
+	if err != nil {
+		return "", "", 0, "", relativeTo, err
+	}
+	largestSet := !largestValue.IsUndefined()
+	largestRaw := "auto"
+	if largestSet {
+		text, conversionErr := r.toString(largestValue)
+		if conversionErr != nil {
+			return "", "", 0, "", relativeTo, conversionErr
+		}
+		largestRaw = text.Go()
+	}
+	relativeValue, err := r.getProp(options, r.atoms.intern("relativeTo"), Obj(options))
+	if err != nil {
+		return "", "", 0, "", relativeTo, err
+	}
+	if !relativeValue.IsUndefined() {
+		relativeTo, err = r.toTemporalDurationRelativeTo(relativeValue)
+		if err != nil {
+			return "", "", 0, "", relativeTo, err
+		}
+	}
+	rawIncrement, incrementSet, err := r.rawNumberOption(options, "roundingIncrement")
+	if err != nil {
+		return "", "", 0, "", relativeTo, err
+	}
+	mode, err = r.stringOption(options, "roundingMode", "halfExpand",
+		"ceil", "floor", "expand", "trunc", "halfCeil", "halfFloor", "halfExpand", "halfTrunc", "halfEven")
+	if err != nil {
+		return "", "", 0, "", relativeTo, err
+	}
+	smallestRaw, err := r.stringOption(options, "smallestUnit", "")
+	if err != nil {
+		return "", "", 0, "", relativeTo, err
+	}
+	if !largestSet && smallestRaw == "" {
+		return "", "", 0, "", relativeTo, r.throwRangeError("largestUnit or smallestUnit is required")
+	}
+	var ok bool
+	if smallestRaw == "" {
+		smallest = "nanosecond"
+	} else {
+		smallest, ok = normalizeTemporalDateTimeUnit(smallestRaw)
+		if !ok {
+			return "", "", 0, "", relativeTo, r.throwRangeError("invalid smallestUnit")
+		}
+	}
+	if largestRaw == "auto" {
+		largest = duration.largestUnit()
+		if temporalDateTimeUnitRank[smallest] < temporalDateTimeUnitRank[largest] {
+			largest = smallest
+		}
+	} else {
+		largest, ok = normalizeTemporalDateTimeUnit(largestRaw)
+		if !ok {
+			return "", "", 0, "", relativeTo, r.throwRangeError("invalid largestUnit")
+		}
+	}
+	if temporalDateTimeUnitRank[largest] > temporalDateTimeUnitRank[smallest] {
+		return "", "", 0, "", relativeTo, r.throwRangeError("largestUnit must not be smaller than smallestUnit")
+	}
+	if temporalDateTimeUnitRank[smallest] >= temporalDateTimeUnitRank["hour"] {
+		increment, err = r.validateTemporalRoundingIncrement(rawIncrement, incrementSet, smallest, false)
+	} else if !incrementSet {
+		increment = 1
+	} else {
+		if math.IsNaN(rawIncrement) || math.IsInf(rawIncrement, 0) {
+			return "", "", 0, "", relativeTo, r.throwRangeError("roundingIncrement must be finite")
+		}
+		rawIncrement = math.Trunc(rawIncrement)
+		if rawIncrement < 1 || rawIncrement > 1_000_000_000 {
+			return "", "", 0, "", relativeTo, r.throwRangeError("roundingIncrement is out of range")
+		}
+		increment = int64(rawIncrement)
+	}
+	if increment != 1 && temporalDateTimeUnitRank[smallest] <= temporalDateTimeUnitRank["day"] && largest != smallest {
+		return "", "", 0, "", relativeTo, r.throwRangeError("cannot round a calendar unit increment while balancing to a larger unit")
+	}
+	return
+}
+
+func (r *Runtime) toTemporalDurationRelativeTo(value Value) (temporalDurationRelativeTo, error) {
+	if value.IsObject() {
+		switch relative := value.Object().data.(type) {
+		case *temporalZonedDateTime:
+			if relative != nil {
+				copy := *relative
+				return temporalDurationRelativeTo{zoned: &copy}, nil
+			}
+		case *temporalPlainDate:
+			if relative != nil {
+				plain := temporalPlainDateTime{temporalISODateTime: temporalISODateTime{year: relative.year, month: relative.month, day: relative.day}, calendar: relative.calendar}
+				return temporalDurationRelativeTo{plain: &plain}, nil
+			}
+		case *temporalPlainDateTime:
+			if relative != nil {
+				plain := *relative
+				return temporalDurationRelativeTo{plain: &plain}, nil
+			}
+		}
+		return r.temporalDurationRelativeToFromBag(value.Object())
+	}
+	if !value.IsString() {
+		return temporalDurationRelativeTo{}, r.throwTypeError("relativeTo must be a string or object")
+	}
+	text := value.String().Go()
+	_, annotations, ok := splitTemporalAnnotations(text)
+	if !ok {
+		return temporalDurationRelativeTo{}, r.throwRangeError("invalid relativeTo string")
+	}
+	for _, annotation := range annotations {
+		if !strings.Contains(strings.TrimPrefix(annotation, "!"), "=") {
+			zoned, err := r.temporalDurationRelativeToFromZonedString(text)
+			if err != nil {
+				return temporalDurationRelativeTo{}, err
+			}
+			return temporalDurationRelativeTo{zoned: zoned}, nil
+		}
+	}
+	date, err := r.toTemporalPlainDate(value, Undefined)
+	if err != nil {
+		return temporalDurationRelativeTo{}, err
+	}
+	plain := temporalPlainDateTime{temporalISODateTime: temporalISODateTime{year: date.year, month: date.month, day: date.day}, calendar: date.calendar}
+	return temporalDurationRelativeTo{plain: &plain}, nil
+}
+
+func (r *Runtime) temporalDurationRelativeToFromBag(o *Object) (temporalDurationRelativeTo, error) {
+	calendarValue, err := r.getProp(o, r.atoms.intern("calendar"), Obj(o))
+	if err != nil {
+		return temporalDurationRelativeTo{}, err
+	}
+	calendar, err := r.toTemporalCalendarIdentifierFromBag(calendarValue)
+	if err != nil {
+		return temporalDurationRelativeTo{}, err
+	}
+	values := map[string]int{}
+	present := map[string]bool{}
+	var monthCode string
+	monthCodePresent := false
+	var timeZoneValue Value
+	offsetText, offsetPresent := "", false
+	for _, name := range []string{"day", "hour", "microsecond", "millisecond", "minute", "month", "monthCode", "nanosecond", "offset", "second", "timeZone", "year"} {
+		raw, getErr := r.getProp(o, r.atoms.intern(name), Obj(o))
+		if getErr != nil {
+			return temporalDurationRelativeTo{}, getErr
+		}
+		switch name {
+		case "offset":
+			if raw.IsUndefined() {
+				continue
+			}
+			if !raw.IsString() && !raw.IsObject() {
+				return temporalDurationRelativeTo{}, r.throwTypeError("offset must be a string")
+			}
+			offsetString, conversionErr := r.toString(raw)
+			if conversionErr != nil {
+				return temporalDurationRelativeTo{}, conversionErr
+			}
+			offsetText, offsetPresent = offsetString.Go(), true
+			continue
+		case "timeZone":
+			timeZoneValue = raw
+			continue
+		case "monthCode":
+			if raw.IsUndefined() {
+				continue
+			}
+			monthCodePresent = true
+			text, conversionErr := r.toString(raw)
+			if conversionErr != nil {
+				return temporalDurationRelativeTo{}, conversionErr
+			}
+			monthCode = text.Go()
+			if !wellFormedTemporalMonthCode(monthCode) {
+				return temporalDurationRelativeTo{}, r.throwRangeError("invalid monthCode")
+			}
+			continue
+		}
+		if raw.IsUndefined() {
+			continue
+		}
+		present[name] = true
+		values[name], err = r.temporalTruncatedInteger(raw, name)
+		if err != nil {
+			return temporalDurationRelativeTo{}, err
+		}
+	}
+	if !present["year"] || !present["day"] || !present["month"] && !monthCodePresent {
+		return temporalDurationRelativeTo{}, r.throwTypeError("relativeTo property bag is missing required fields")
+	}
+	month := values["month"]
+	if monthCodePresent {
+		parsed, ok := parseISOMonthCode(monthCode)
+		if !ok || present["month"] && month != parsed {
+			return temporalDurationRelativeTo{}, r.throwRangeError("invalid monthCode")
+		}
+		month = parsed
+	}
+	if month < 1 || values["day"] < 1 {
+		return temporalDurationRelativeTo{}, r.throwRangeError("invalid relativeTo date")
+	}
+	month = min(month, 12)
+	day := min(values["day"], isoDaysInMonth(values["year"], month))
+	second := values["second"]
+	if second == 60 {
+		second = 59
+	}
+	dateTime := temporalISODateTime{
+		year: values["year"], month: month, day: day,
+		hour: values["hour"], minute: values["minute"], second: second,
+		millisecond: values["millisecond"], microsecond: values["microsecond"], nanosecond: values["nanosecond"],
+	}
+	if !dateTime.valid() {
+		return temporalDurationRelativeTo{}, r.throwRangeError("invalid relativeTo date-time")
+	}
+	if timeZoneValue.IsUndefined() {
+		date := temporalPlainDate{year: dateTime.year, month: dateTime.month, day: dateTime.day, calendar: calendar}
+		if !date.valid() {
+			return temporalDurationRelativeTo{}, r.throwRangeError("relativeTo is outside the Temporal range")
+		}
+		plain := temporalPlainDateTime{temporalISODateTime: temporalISODateTime{year: date.year, month: date.month, day: date.day}, calendar: date.calendar}
+		return temporalDurationRelativeTo{plain: &plain}, nil
+	}
+	zoneName, err := r.toTemporalTimeZoneIdentifier(timeZoneValue)
+	if err != nil {
+		return temporalDurationRelativeTo{}, err
+	}
+	zoned, err := r.newTemporalZonedDateTime(temporalInstant{}, zoneName, Str(NewString(calendar)))
+	if err != nil {
+		return temporalDurationRelativeTo{}, err
+	}
+	instant, ok := zoned.compatibleInstant(dateTime)
+	if !ok {
+		return temporalDurationRelativeTo{}, r.throwRangeError("relativeTo is outside the Temporal range")
+	}
+	if offsetPresent {
+		index := 0
+		offsetNanoseconds, valid := parseTemporalOffset(offsetText, &index)
+		if !valid || index != len(offsetText) {
+			return temporalDurationRelativeTo{}, r.throwRangeError("invalid offset")
+		}
+		actual := int64(zoned.offsetSeconds()) * temporalNanosecondsPerSecond
+		zoned.instant = instant
+		actual = int64(zoned.offsetSeconds()) * temporalNanosecondsPerSecond
+		if offsetNanoseconds != actual {
+			return temporalDurationRelativeTo{}, r.throwRangeError("offset does not match time zone")
+		}
+	}
+	zoned.instant = instant
+	if !validTemporalDurationRelativeZonedLocal(zoned) {
+		return temporalDurationRelativeTo{}, r.throwRangeError("relativeTo is outside the Temporal range")
+	}
+	return temporalDurationRelativeTo{zoned: zoned}, nil
+}
+
+func (r *Runtime) temporalDurationRelativeToFromZonedString(text string) (*temporalZonedDateTime, error) {
+	main, _, splitOK := splitTemporalAnnotations(text)
+	timeStart := strings.IndexAny(main, "Tt ")
+	hasExplicitOffset := timeStart >= 0 && strings.ContainsAny(main[timeStart:], "Zz+-")
+	if splitOK && hasExplicitOffset {
+		if _, _, fieldsErr := parseTemporalInstantFields(text); fieldsErr != nil {
+			return nil, r.throwRangeError("relativeTo is outside the Temporal range")
+		}
+	}
+	instant, zone, calendar, err := parseTemporalZonedDateTimeString(text)
+	if err != nil {
+		// Date-only strings with a zone annotation represent the zone's start
+		// of day and are not accepted by the ZonedDateTime string parser.
+		if timeStart >= 0 {
+			return nil, r.throwRangeError("relativeTo is outside the Temporal range")
+		}
+		date, dateErr := parseTemporalPlainDate(text)
+		if dateErr != nil {
+			return nil, r.throwRangeError("invalid relativeTo string")
+		}
+		_, annotations, _ := splitTemporalAnnotations(text)
+		zone = ""
+		for _, annotation := range annotations {
+			annotation = strings.TrimPrefix(annotation, "!")
+			if !strings.Contains(annotation, "=") {
+				zone = annotation
+			}
+		}
+		zoned, zoneErr := r.newTemporalZonedDateTime(temporalInstant{}, zone, Str(NewString(date.calendar)))
+		if zoneErr != nil {
+			return nil, zoneErr
+		}
+		instant, ok := zoned.startOfDayInstant(date)
+		if !ok {
+			return nil, r.throwRangeError("relativeTo is outside the Temporal range")
+		}
+		zoned.instant = instant
+		if !validTemporalDurationRelativeZonedLocal(zoned) {
+			return nil, r.throwRangeError("relativeTo is outside the Temporal range")
+		}
+		return zoned, nil
+	}
+	zoned, err := r.newTemporalZonedDateTime(instant, zone, Str(NewString(calendar)))
+	if err != nil {
+		return nil, err
+	}
+	if !validTemporalDurationRelativeZonedLocal(zoned) {
+		return nil, r.throwRangeError("relativeTo is outside the Temporal range")
+	}
+	if timeStart >= 0 && !strings.ContainsAny(main[timeStart:], "Zz") {
+		for index := timeStart + 1; index < len(main); index++ {
+			if main[index] != '+' && main[index] != '-' {
+				continue
+			}
+			offsetIndex := index
+			offsetNanoseconds, valid := parseTemporalOffset(main, &offsetIndex)
+			if !valid || offsetIndex != len(main) || offsetNanoseconds != int64(zoned.offsetSeconds())*temporalNanosecondsPerSecond {
+				return nil, r.throwRangeError("offset does not match time zone")
+			}
+			break
+		}
+	}
+	return zoned, nil
+}
+
+func validTemporalDurationRelativeZonedLocal(zoned *temporalZonedDateTime) bool {
+	local := zoned.localISODateTime()
+	days := isoDaysFromCivil(int64(local.year), local.month, local.day)
+	return days >= -100_000_000 && days <= 100_000_000
+}
+
+func (r *Runtime) roundTemporalDuration(duration temporalDuration, largest, smallest string, increment int64, mode string, relativeTo temporalDurationRelativeTo) (temporalDuration, error) {
+	if relativeTo.plain == nil && relativeTo.zoned == nil {
+		if duration.years != 0 || duration.months != 0 || duration.weeks != 0 || temporalDateTimeUnitRank[largest] < temporalDateTimeUnitRank["day"] || temporalDateTimeUnitRank[smallest] < temporalDateTimeUnitRank["day"] {
+			return temporalDuration{}, r.throwRangeError("calendar units require relativeTo")
+		}
+		return roundTemporalDurationWithoutRelativeTo(duration, largest, smallest, increment, mode), nil
+	}
+	if relativeTo.zoned != nil {
+		return r.roundTemporalDurationRelativeToZoned(duration, largest, smallest, increment, mode, relativeTo.zoned)
+	}
+	if duration.sign() == 0 {
+		return temporalDuration{}, nil
+	}
+	if !relativeTo.plain.valid() {
+		return temporalDuration{}, r.throwRangeError("relativeTo is outside the Temporal date-time range")
+	}
+	if duration.years == 0 && duration.months == 0 && duration.weeks == 0 && temporalDateTimeUnitRank[largest] >= temporalDateTimeUnitRank["day"] && temporalDateTimeUnitRank[smallest] >= temporalDateTimeUnitRank["day"] {
+		return roundTemporalDurationWithoutRelativeTo(duration, largest, smallest, increment, mode), nil
+	}
+	start := *relativeTo.plain
+	end, err := r.addTemporalPlainDateTime(start, duration, 1, "constrain")
+	if err != nil {
+		return temporalDuration{}, err
+	}
+	return r.differenceTemporalPlainDateTimes(start, end, largest, smallest, increment, mode)
+}
+
+func roundTemporalDurationWithoutRelativeTo(duration temporalDuration, largest, smallest string, increment int64, mode string) temporalDuration {
+	const dayNanoseconds = int64(86_400_000_000_000)
+	total := new(big.Int).Mul(floatIntegerBig(duration.days), big.NewInt(dayNanoseconds))
+	total.Add(total, duration.timePartNanoseconds())
+	unitNanoseconds := int64(dayNanoseconds)
+	if smallest != "day" {
+		unitNanoseconds = temporalUnitNanoseconds[smallest]
+	}
+	step := new(big.Int).Mul(big.NewInt(unitNanoseconds), big.NewInt(increment))
+	total = roundTemporalBigInt(total, step, mode)
+	if largest == "day" {
+		dayCount, remainder := new(big.Int), new(big.Int)
+		dayCount.QuoRem(total, big.NewInt(dayNanoseconds), remainder)
+		result := temporalDurationFromNanoseconds(remainder, "hour")
+		result.days, _ = new(big.Float).SetInt(dayCount).Float64()
+		return result
+	}
+	return temporalDurationFromNanoseconds(total, largest)
+}
+
+func (r *Runtime) roundTemporalDurationRelativeToZoned(duration temporalDuration, largest, smallest string, increment int64, mode string, relativeTo *temporalZonedDateTime) (temporalDuration, error) {
+	if duration.sign() == 0 && largest != "day" {
+		return temporalDuration{}, nil
+	}
+	if largest == "day" && temporalDateTimeUnitRank[smallest] >= temporalDateTimeUnitRank["hour"] {
+		local := relativeTo.localISODateTime()
+		nextDate, err := r.addTemporalPlainDate(temporalPlainDate{year: local.year, month: local.month, day: local.day, calendar: relativeTo.calendar}, temporalDuration{days: 1}, 1, "constrain")
+		if err != nil {
+			return temporalDuration{}, err
+		}
+		next := local
+		next.year, next.month, next.day = nextDate.year, nextDate.month, nextDate.day
+		if _, ok := relativeTo.compatibleInstant(next); !ok {
+			return temporalDuration{}, r.throwRangeError("next day boundary is outside the Temporal range")
+		}
+	}
+	if duration.sign() == 0 {
+		return temporalDuration{}, nil
+	}
+	startLocal := temporalPlainDateTime{temporalISODateTime: relativeTo.localISODateTime(), calendar: relativeTo.calendar}
+	dateDuration := temporalDuration{years: duration.years, months: duration.months, weeks: duration.weeks, days: duration.days}
+	afterDate, err := r.addTemporalPlainDateTime(startLocal, dateDuration, 1, "constrain")
+	if err != nil {
+		return temporalDuration{}, err
+	}
+	afterDateInstant, ok := relativeTo.compatibleInstant(afterDate.temporalISODateTime)
+	if !ok {
+		return temporalDuration{}, r.throwRangeError("duration endpoint is outside the Temporal range")
+	}
+	if _, ok := afterDateInstant.addNanoseconds(duration.timePartNanoseconds()); !ok {
+		return temporalDuration{}, r.throwRangeError("duration endpoint is outside the Temporal range")
+	}
+	// UTC and fixed-offset zones have constant-length days, so the plain
+	// date-time algorithm is exact for them. Named-zone transitions are handled
+	// below as additional ZonedDateTime operations are implemented.
+	if relativeTo.fixed || relativeTo.timeZone == "UTC" {
+		end, err := r.addTemporalPlainDateTime(startLocal, duration, 1, "constrain")
+		if err != nil {
+			return temporalDuration{}, err
+		}
+		return r.differenceTemporalPlainDateTimes(startLocal, end, largest, smallest, increment, mode)
+	}
+	end, err := r.addTemporalPlainDateTime(startLocal, duration, 1, "constrain")
+	if err != nil {
+		return temporalDuration{}, err
+	}
+	return r.differenceTemporalPlainDateTimes(startLocal, end, largest, smallest, increment, mode)
 }
 
 func durationFromFields(v [10]float64) temporalDuration {

@@ -1069,11 +1069,13 @@ func (r *Runtime) initDateTimeFormat(intl *Object) {
 			return Undefined, err
 		}
 		return rt.bound(&o.formatFn, 1, func(rt *Runtime, _ Value, args []Value) (Value, error) {
-			t, err := rt.dateArgument(o, arg(args, 0))
+			value := arg(args, 0)
+			format := o.forDateArgument(value)
+			t, err := rt.dateArgument(format, value)
 			if err != nil {
 				return Undefined, err
 			}
-			return Str(NewString(o.format(t))), nil
+			return Str(NewString(format.format(t))), nil
 		}), nil
 	})
 	r.defMethod(proto, "formatRange", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -1095,11 +1097,13 @@ func (r *Runtime) initDateTimeFormat(intl *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		t, err := rt.dateArgument(o, arg(args, 0))
+		value := arg(args, 0)
+		format := o.forDateArgument(value)
+		t, err := rt.dateArgument(format, value)
 		if err != nil {
 			return Undefined, err
 		}
-		pieces := o.parts(t)
+		pieces := format.parts(t)
 		out := make([]Value, len(pieces))
 		for i, piece := range pieces {
 			out[i] = Obj(rt.partObject(piece.kind, piece.value))
@@ -1150,6 +1154,18 @@ func (r *Runtime) initDateTimeFormat(intl *Object) {
 func (r *Runtime) dateArgument(o *dateOptions, v Value) (time.Time, error) {
 	if v.IsUndefined() {
 		return o.at(r.now()), nil
+	}
+	if v.IsObject() {
+		switch value := v.Object().data.(type) {
+		case *temporalInstant:
+			zone := o.zone
+			if zone == nil {
+				zone = time.UTC
+			}
+			return time.Unix(value.epochSeconds, int64(value.nanosecond)).In(zone), nil
+		case *temporalZonedDateTime:
+			return time.Time{}, r.throwTypeError("Intl.DateTimeFormat cannot format a Temporal.ZonedDateTime")
+		}
 	}
 	n, err := r.toNumber(v)
 	if err != nil {
@@ -1318,6 +1334,7 @@ func (r *Runtime) dateOptionsFrom(args []Value, defaults map[string]string, requ
 	}
 	if needed {
 		if defaults == nil {
+			o.implicitDefaults = true
 			defaults = map[string]string{"year": "numeric", "month": "numeric", "day": "numeric"}
 		}
 		if o.weekday == "" {
@@ -1599,16 +1616,17 @@ func (r *Runtime) dateRange(this Value, args []Value) (*rangePieces, error) {
 	if arg(args, 0).IsUndefined() || arg(args, 1).IsUndefined() {
 		return nil, r.throwTypeError("a range has two ends")
 	}
-	from, err := r.dateArgument(o, arg(args, 0))
+	format := o.forDateArgument(arg(args, 0))
+	from, err := r.dateArgument(format, arg(args, 0))
 	if err != nil {
 		return nil, err
 	}
-	to, err := r.dateArgument(o, arg(args, 1))
+	to, err := r.dateArgument(format, arg(args, 1))
 	if err != nil {
 		return nil, err
 	}
-	start := datePiecesOf(o.parts(from))
-	end := datePiecesOf(o.parts(to))
+	start := datePiecesOf(format.parts(from))
+	end := datePiecesOf(format.parts(to))
 	if piecesEqual(start, end) {
 		// Two dates that come to the same thing are written once, and without
 		// the mark a number takes.

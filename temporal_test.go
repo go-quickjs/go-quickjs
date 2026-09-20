@@ -34,6 +34,7 @@ func TestTemporalInstantConstruction(t *testing.T) {
 		{`new Temporal.Instant(0n).toZonedDateTimeISO("2021-08-19T17:30-07:00[UTC]").timeZoneId`, "UTC"},
 		{`Temporal.Instant.from("2000-02-29T12:34:56.123456789Z").toLocaleString("en-US", {timeZone: "UTC"})`, "2/29/2000, 12:34:56 PM"},
 		{`Temporal.Instant.from("2000-02-29T12:34:56.123456789Z").toLocaleString("en-US", {timeZone: "America/New_York", timeZoneName: "long"})`, "2/29/2000, 7:34:56 AM Eastern Standard Time"},
+		{`new Intl.DateTimeFormat("en-US", {timeZone: "UTC"}).format(Temporal.Instant.from("2000-02-29T12:34:56Z"))`, "2/29/2000, 12:34:56 PM"},
 		{`class I extends Temporal.Instant {}; Object.getPrototypeOf(new I(0n)) === I.prototype`, "true"},
 	}
 	for _, test := range tests {
@@ -85,6 +86,14 @@ func TestTemporalZonedDateTimeFoundation(t *testing.T) {
 		{`Temporal.Instant.from(new Temporal.ZonedDateTime(123n, "UTC")).epochNanoseconds.toString()`, "123"},
 		{`Temporal.Instant.compare(new Temporal.ZonedDateTime(123n, "UTC"), new Temporal.Instant(124n))`, "-1"},
 		{`new Temporal.Instant(123n).equals(new Temporal.ZonedDateTime(123n, "UTC"))`, "true"},
+		{`(() => { let z = Temporal.ZonedDateTime.from("2000-02-29T12:34:56.123456789Z[UTC]"); return [z.year, z.month, z.monthCode, z.day, z.hour, z.minute, z.second, z.millisecond, z.microsecond, z.nanosecond].join(",") })()`, "2000,2,M02,29,12,34,56,123,456,789"},
+		{`(() => { let z = Temporal.ZonedDateTime.from("2000-02-29T12:34:56Z[UTC]"); return [z.dayOfWeek, z.dayOfYear, z.weekOfYear, z.yearOfWeek, z.daysInWeek, z.daysInMonth, z.daysInYear, z.monthsInYear, z.inLeapYear].join(",") })()`, "2,60,9,2000,7,29,366,12,true"},
+		{`(() => { let z = Temporal.ZonedDateTime.from("2000-02-29T12:34:56.123456789Z[UTC]"); return [z.offset, z.offsetNanoseconds, z.toInstant(), z.toPlainDate(), z.toPlainTime(), z.toPlainDateTime()].join("|") })()`, "+00:00|0|2000-02-29T12:34:56.123456789Z|2000-02-29|12:34:56.123456789|2000-02-29T12:34:56.123456789"},
+		{`Temporal.ZonedDateTime.from("2024-03-10T12:00-04:00[America/New_York]").hoursInDay`, "23"},
+		{`Temporal.ZonedDateTime.from("2024-11-03T12:00-05:00[America/New_York]").hoursInDay`, "25"},
+		{`Temporal.ZonedDateTime.from("2024-03-10T12:00-04:00[America/New_York]").startOfDay().toString()`, "2024-03-10T00:00:00-05:00[America/New_York]"},
+		{`Temporal.ZonedDateTime.from("2000-02-29T12:00Z[UTC]").withTimeZone("-08:00").toString()`, "2000-02-29T04:00:00-08:00[-08:00]"},
+		{`(() => { let z = Temporal.ZonedDateTime.from("2000-02-29T12:00Z[UTC]").withCalendar("gregory"); return [z.calendarId, z.year, z.era, z.eraYear].join(",") })()`, "gregory,2000,ce,2000"},
 	}
 	for _, test := range tests {
 		if got := evalString(t, rt, test.source); got != test.want {
@@ -148,6 +157,30 @@ func TestTemporalInstantDifferenceAndRounding(t *testing.T) {
 		if got := evalString(t, rt, test.source); got != test.want {
 			t.Errorf("%s\n got: %s\nwant: %s", test.source, got, test.want)
 		}
+	}
+}
+
+func TestTemporalDurationRound(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	tests := []struct{ source, want string }{
+		{`new Temporal.Duration(0, 0, 0, 5, 5, 5, 5, 5, 5, 5).round({ largestUnit: "hours", smallestUnit: "minutes" }).toString()`, "PT125H5M"},
+		{`new Temporal.Duration(0, 0, 0, 3, 12).round({ smallestUnit: "hours", roundingIncrement: 8, roundingMode: "halfEven", relativeTo: new Temporal.PlainDate(1970, 1, 1) }).toString()`, "P3DT8H"},
+		{`new Temporal.Duration(0, 1, 0, 1).round({ largestUnit: "weeks", smallestUnit: "weeks", roundingIncrement: 6, roundingMode: "ceil", relativeTo: new Temporal.PlainDate(2024, 1, 1) }).toString()`, "P6W"},
+		{`new Temporal.Duration(1, 0, 0, 0, 24).round({ largestUnit: "years", relativeTo: { year: 2021, month: 10, day: 28, timeZone: "UTC" } }).toString()`, "P1Y1D"},
+	}
+	for _, test := range tests {
+		if got := evalString(t, rt, test.source); got != test.want {
+			t.Errorf("%s\n got: %s\nwant: %s", test.source, got, test.want)
+		}
+	}
+	if got := evalString(t, rt, `try {
+		new Temporal.Duration(0, 0, 0, 0, 0, 5).round({
+			smallestUnit: "minutes",
+			relativeTo: new Temporal.ZonedDateTime(8640000000000000000000n, "UTC")
+		});
+	} catch (e) { e.name }`); got != "RangeError" {
+		t.Fatalf("rounding past the Temporal instant limit threw %s", got)
 	}
 }
 
