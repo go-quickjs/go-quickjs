@@ -62,7 +62,6 @@ const (
 // does not implement. A test tagged with one is skipped rather than counted as
 // a failure, because it is testing something that was never claimed.
 var unsupportedFeatures = map[string]string{
-	"Temporal":                      "no Temporal",
 	"Atomics":                       "no shared memory",
 	"Atomics.pause":                 "no shared memory",
 	"SharedArrayBuffer":             "no shared memory",

@@ -41,10 +41,10 @@ zone is called in every language. It is held against a full ICU build:
 [7,924 of 7,949 cases match it exactly](intl_test.go), and the twenty-five that
 do not are named.
 
-All 79,184 test262 tests it runs pass. The 19,350 it skips are tagged with
-features it does not implement, or ask the host for something it does not
-provide: see [Conformance](#conformance) for the measurement and
-[Not implemented](#not-implemented) for what is missing.
+Of the 98,534 test262 variants in the current checkout, 92,994 pass, two are
+documented engine disagreements, and 5,538 are skipped because they require an
+unsupported feature or host facility. See [Conformance](#conformance) for the
+measurement and [Not implemented](#not-implemented) for what is missing.
 
 ### Implemented
 
@@ -65,6 +65,7 @@ provide: see [Conformance](#conformance) for the measurement and
 | Iterator helpers | `map`, `filter`, `take`, `drop`, `flatMap`, `reduce`, `toArray` and the rest, lazily |
 | Unicode | Full case mappings including the final sigma, all four normalization forms, lone surrogates preserved end to end |
 | Built-ins | `Object`, `Function`, `Array`, `String`, `Number`, `Boolean`, `Symbol`, `BigInt`, `Error`, `Math`, `JSON`, `Date`, `RegExp`, `Map`, `Set`, `Promise`, `Proxy`, `Reflect`, `ArrayBuffer`, `DataView`, typed arrays |
+| Temporal | `Instant`, `Duration`, `PlainDate`, `PlainTime`, `PlainDateTime`, `PlainYearMonth`, `PlainMonthDay`, `ZonedDateTime`, `Now`, non-ISO calendars, and IANA time-zone transitions |
 | Internationalization | `Intl.Locale`, `NumberFormat`, `DateTimeFormat`, `Collator`, `PluralRules`, `ListFormat`, `RelativeTimeFormat`, `DisplayNames`, `Segmenter`, `DurationFormat`, with CLDR data for 379 locales carried in Go |
 | Weak references | `WeakRef`, `FinalizationRegistry`, `WeakMap`, `WeakSet`, backed by Go's `weak.Pointer` and `runtime.AddCleanup`: a target really is released, and a registry really is called back |
 | Reflection | `Proxy` with every trap and its invariants, `Reflect`, property descriptors, mapped `arguments` |
@@ -93,9 +94,8 @@ Gregorian layout.
 
 ### Not implemented
 
-`Temporal`, `Atomics`, `SharedArrayBuffer`, `ShadowRealm`, decorators,
-resizable ArrayBuffers, `using` declarations, and the newer proposals test262
-tracks.
+`Atomics`, `SharedArrayBuffer`, `ShadowRealm`, decorators, resizable
+ArrayBuffers, `using` declarations, and the newer proposals test262 tracks.
 
 There is one realm per runtime: `$262.createRealm` has nothing to return, so
 the four test262 variants that need a second realm are skipped along with the
@@ -130,11 +130,11 @@ strict and sloppy variants, the expected-failure phase and type, and the feature
 tags. A test tagged with a feature the engine does not implement is skipped
 rather than counted against it.
 
-Measured coverage, as of the most recent run over the whole suite: all 79,184
-executed variants pass. The other 19,350 are skipped rather than counted: a
-test tagged with a feature the engine does not implement, or one that asks the
-host for a second realm or an agent, is testing something that was never
-claimed.
+Measured coverage, as of the most recent run over the whole suite: 92,994
+variants pass and two have documented differences. The other 5,538 are skipped
+rather than counted: a test tagged with a feature the engine does not
+implement, or one that asks the host for a second realm or an agent, is testing
+something that was never claimed.
 
 `built-ins/Atomics` is the ten tests for `Atomics.pause`, which is the only part
 of that API a single-threaded engine could offer and which is not implemented.
@@ -146,6 +146,7 @@ Useful flags:
 -conformance.report=/tmp/failures.txt   # write every failure for triage
 -conformance.timeout=2s                 # bound any one test
 -conformance.workers=4                  # how many to run at once
+-conformance.force-feature=proposal     # run a normally skipped feature
 ```
 
 The suite runs on every core, which takes a few minutes rather than well over an
