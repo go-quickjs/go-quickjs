@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"math"
 	"strconv"
 	"strings"
 )
@@ -97,6 +98,75 @@ func (r *Runtime) initTemporalPlainTime(temporal *Object) {
 			return Undefined, err
 		}
 		return Bool(compareTemporalPlainTimes(time, other) == 0), nil
+	})
+	r.defMethod(proto, "with", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		time, err := rt.temporalPlainTimeValue(this, "Temporal.PlainTime.prototype.with")
+		if err != nil {
+			return Undefined, err
+		}
+		fields, err := rt.temporalPartialObject(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		names := []string{"hour", "microsecond", "millisecond", "minute", "nanosecond", "second"}
+		values := make(map[string]float64, len(names))
+		found := false
+		for _, name := range names {
+			raw, err := rt.getProp(fields, rt.atoms.intern(name), Obj(fields))
+			if err != nil {
+				return Undefined, err
+			}
+			if raw.IsUndefined() {
+				continue
+			}
+			found = true
+			value, err := rt.toNumber(raw)
+			if err != nil {
+				return Undefined, err
+			}
+			if math.IsNaN(value) || math.IsInf(value, 0) {
+				return Undefined, rt.throwRangeError("%s must be a finite number", name)
+			}
+			values[name] = math.Trunc(value)
+		}
+		if !found {
+			return Undefined, rt.throwTypeError("time fields must not be empty")
+		}
+		overflow, err := rt.temporalOverflowOption(arg(args, 1))
+		if err != nil {
+			return Undefined, err
+		}
+		result := time
+		limits := map[string]float64{
+			"hour": 23, "minute": 59, "second": 59,
+			"millisecond": 999, "microsecond": 999, "nanosecond": 999,
+		}
+		for _, name := range names {
+			value, present := values[name]
+			if !present {
+				continue
+			}
+			if overflow == "constrain" {
+				value = max(0, min(limits[name], value))
+			} else if value < 0 || value > limits[name] {
+				return Undefined, rt.throwRangeError("invalid Temporal.PlainTime")
+			}
+			switch name {
+			case "hour":
+				result.hour = int(value)
+			case "minute":
+				result.minute = int(value)
+			case "second":
+				result.second = int(value)
+			case "millisecond":
+				result.millisecond = int(value)
+			case "microsecond":
+				result.microsecond = int(value)
+			case "nanosecond":
+				result.nanosecond = int(value)
+			}
+		}
+		return Obj(newTemporalPlainTime(rt.temporalPlainTimeProto, result)), nil
 	})
 	for _, method := range []string{"toString", "toJSON"} {
 		name := method

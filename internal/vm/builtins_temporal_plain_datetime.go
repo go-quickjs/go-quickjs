@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"math"
 	"strconv"
 	"strings"
 )
@@ -128,6 +129,42 @@ func (r *Runtime) initTemporalPlainDateTime(temporal *Object) {
 			return Undefined, nil
 		})
 	}
+	for _, property := range []string{"dayOfWeek", "dayOfYear", "weekOfYear", "yearOfWeek", "daysInWeek", "daysInMonth", "daysInYear", "monthsInYear", "inLeapYear"} {
+		name := property
+		r.defGetter(proto, name, func(rt *Runtime, this Value, args []Value) (Value, error) {
+			dateTime, err := rt.temporalPlainDateTimeValue(this, "get Temporal.PlainDateTime.prototype."+name)
+			if err != nil {
+				return Undefined, err
+			}
+			days := isoDaysFromCivil(int64(dateTime.year), dateTime.month, dateTime.day)
+			switch name {
+			case "dayOfWeek":
+				return Int(isoDayOfWeek(days)), nil
+			case "dayOfYear":
+				return Int(int(days - isoDaysFromCivil(int64(dateTime.year), 1, 1) + 1)), nil
+			case "weekOfYear":
+				week, _ := isoWeekOfYear(days)
+				return Int(week), nil
+			case "yearOfWeek":
+				_, year := isoWeekOfYear(days)
+				return Int(year), nil
+			case "daysInWeek":
+				return Int(7), nil
+			case "daysInMonth":
+				return Int(isoDaysInMonth(dateTime.year, dateTime.month)), nil
+			case "daysInYear":
+				if isLeapYear(dateTime.year) {
+					return Int(366), nil
+				}
+				return Int(365), nil
+			case "monthsInYear":
+				return Int(12), nil
+			case "inLeapYear":
+				return Bool(isLeapYear(dateTime.year)), nil
+			}
+			return Undefined, nil
+		})
+	}
 
 	r.defMethod(proto, "equals", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		dateTime, err := rt.temporalPlainDateTimeValue(this, "Temporal.PlainDateTime.prototype.equals")
@@ -174,6 +211,165 @@ func (r *Runtime) initTemporalPlainDateTime(temporal *Object) {
 			return Undefined, rt.throwRangeError("combined date and time are outside the Temporal range")
 		}
 		return Obj(newTemporalPlainDateTime(rt.temporalPlainDateTimeProto, dateTime)), nil
+	})
+	r.defMethod(proto, "withCalendar", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		dateTime, err := rt.temporalPlainDateTimeValue(this, "Temporal.PlainDateTime.prototype.withCalendar")
+		if err != nil {
+			return Undefined, err
+		}
+		calendarValue := arg(args, 0)
+		if calendarValue.IsUndefined() {
+			return Undefined, rt.throwTypeError("calendar is required")
+		}
+		calendar, err := rt.toTemporalCalendarIdentifierFromBag(calendarValue)
+		if err != nil {
+			return Undefined, err
+		}
+		dateTime.calendar = calendar
+		return Obj(newTemporalPlainDateTime(rt.temporalPlainDateTimeProto, dateTime)), nil
+	})
+	r.defMethod(proto, "with", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		dateTime, err := rt.temporalPlainDateTimeValue(this, "Temporal.PlainDateTime.prototype.with")
+		if err != nil {
+			return Undefined, err
+		}
+		fields, err := rt.temporalPartialObject(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		names := []string{"day", "hour", "microsecond", "millisecond", "minute", "month", "monthCode", "nanosecond", "second", "year"}
+		values := make(map[string]float64, len(names))
+		present := make(map[string]bool, len(names))
+		monthCode := ""
+		for _, name := range names {
+			raw, err := rt.getProp(fields, rt.atoms.intern(name), Obj(fields))
+			if err != nil {
+				return Undefined, err
+			}
+			if raw.IsUndefined() {
+				continue
+			}
+			present[name] = true
+			if name == "monthCode" {
+				monthCode, err = rt.temporalMonthCodeString(raw)
+				if err != nil {
+					return Undefined, err
+				}
+				continue
+			}
+			value, err := rt.toNumber(raw)
+			if err != nil {
+				return Undefined, err
+			}
+			if math.IsNaN(value) || math.IsInf(value, 0) {
+				return Undefined, rt.throwRangeError("%s must be a finite number", name)
+			}
+			values[name] = math.Trunc(value)
+		}
+		if len(present) == 0 {
+			return Undefined, rt.throwTypeError("date-time fields must not be empty")
+		}
+		if present["day"] && values["day"] < 1 || present["month"] && values["month"] < 1 {
+			return Undefined, rt.throwRangeError("invalid Temporal.PlainDateTime")
+		}
+		overflow, err := rt.temporalOverflowOption(arg(args, 1))
+		if err != nil {
+			return Undefined, err
+		}
+
+		year := float64(dateTime.year)
+		if present["year"] {
+			year = values["year"]
+		}
+		month := float64(dateTime.month)
+		if present["month"] {
+			month = values["month"]
+		}
+		if present["monthCode"] {
+			parsed, ok := parseISOMonthCode(monthCode)
+			if !ok || present["month"] && month != float64(parsed) {
+				return Undefined, rt.throwRangeError("invalid monthCode")
+			}
+			month = float64(parsed)
+		}
+		day := float64(dateTime.day)
+		if present["day"] {
+			day = values["day"]
+		}
+		if year < -271821 || year > 275760 || month < 1 || day < 1 {
+			return Undefined, rt.throwRangeError("invalid Temporal.PlainDateTime")
+		}
+		if overflow == "constrain" {
+			month = min(month, 12)
+			day = min(day, float64(isoDaysInMonth(int(year), int(month))))
+		} else if month > 12 || day > float64(isoDaysInMonth(int(year), int(month))) {
+			return Undefined, rt.throwRangeError("invalid Temporal.PlainDateTime")
+		}
+		result := dateTime
+		result.year, result.month, result.day = int(year), int(month), int(day)
+		timeLimits := map[string]float64{
+			"hour": 23, "minute": 59, "second": 59,
+			"millisecond": 999, "microsecond": 999, "nanosecond": 999,
+		}
+		for _, name := range []string{"hour", "microsecond", "millisecond", "minute", "nanosecond", "second"} {
+			if !present[name] {
+				continue
+			}
+			value := values[name]
+			if overflow == "constrain" {
+				value = max(0, min(timeLimits[name], value))
+			} else if value < 0 || value > timeLimits[name] {
+				return Undefined, rt.throwRangeError("invalid Temporal.PlainDateTime")
+			}
+			switch name {
+			case "hour":
+				result.hour = int(value)
+			case "minute":
+				result.minute = int(value)
+			case "second":
+				result.second = int(value)
+			case "millisecond":
+				result.millisecond = int(value)
+			case "microsecond":
+				result.microsecond = int(value)
+			case "nanosecond":
+				result.nanosecond = int(value)
+			}
+		}
+		if !result.valid() {
+			return Undefined, rt.throwRangeError("invalid Temporal.PlainDateTime")
+		}
+		return Obj(newTemporalPlainDateTime(rt.temporalPlainDateTimeProto, result)), nil
+	})
+	r.defMethod(proto, "toZonedDateTime", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		dateTime, err := rt.temporalPlainDateTimeValue(this, "Temporal.PlainDateTime.prototype.toZonedDateTime")
+		if err != nil {
+			return Undefined, err
+		}
+		timeZone, err := rt.toTemporalTimeZoneIdentifier(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		options, err := rt.strictOptions(arg(args, 1))
+		if err != nil {
+			return Undefined, err
+		}
+		disambiguation, err := rt.stringOption(options, "disambiguation", "compatible", "compatible", "earlier", "later", "reject")
+		if err != nil {
+			return Undefined, err
+		}
+		zoned, err := rt.newTemporalZonedDateTime(temporalInstant{}, timeZone, Str(NewString(dateTime.calendar)))
+		if err != nil {
+			return Undefined, err
+		}
+		instant, ok := zoned.disambiguatedInstant(dateTime.temporalISODateTime, disambiguation)
+		if !ok {
+			return Undefined, rt.throwRangeError("zoned date-time is ambiguous or outside the Temporal range")
+		}
+		zoned.instant = instant
+		o := newObject(rt.temporalZonedDateTimeProto, ClassObject)
+		o.data = zoned
+		return Obj(o), nil
 	})
 	r.defMethod(proto, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		dateTime, err := rt.temporalPlainDateTimeValue(this, "Temporal.PlainDateTime.prototype.toString")

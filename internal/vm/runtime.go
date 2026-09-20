@@ -32,6 +32,7 @@ type Runtime struct {
 	temporalDurationProto *Object
 	// PlainDateTime conversions create PlainDate results through the retained
 	// intrinsic prototype rather than an observable constructor lookup.
+	temporalInstantProto        *Object
 	temporalPlainDateProto      *Object
 	temporalPlainDateTimeProto  *Object
 	temporalPlainMonthDayProto  *Object

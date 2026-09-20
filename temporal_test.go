@@ -247,6 +247,13 @@ func TestTemporalPlainDateTimeFoundation(t *testing.T) {
 		{`new Temporal.PlainDateTime(2000, 5, 2, 15, 23).withPlainTime().toString()`, "2000-05-02T00:00:00"},
 		{`Temporal.PlainDate.from(new Temporal.PlainDateTime(2000, 5, 2, 23)).toString()`, "2000-05-02"},
 		{`new Temporal.PlainDateTime(2000, 5, 2, 15, 23, 30).hour`, "15"},
+		{`new Temporal.PlainDateTime(1976, 11, 18, 15).dayOfWeek`, "4"},
+		{`new Temporal.PlainDateTime(1976, 11, 18, 15).weekOfYear`, "47"},
+		{`new Temporal.PlainDateTime(2000, 5, 2, 15, 23).with({month: 6, hour: 4}).toString()`, "2000-06-02T04:23:00"},
+		{`new Temporal.PlainDateTime(2000, 5, 2, 15).withCalendar("GREGORY").calendarId`, "gregory"},
+		{`new Temporal.PlainDateTime(2021, 11, 7, 1, 30).toZonedDateTime("America/New_York", {disambiguation: "earlier"}).epochNanoseconds.toString()`, "1636263000000000000"},
+		{`new Temporal.PlainDateTime(2021, 11, 7, 1, 30).toZonedDateTime("America/New_York", {disambiguation: "later"}).epochNanoseconds.toString()`, "1636266600000000000"},
+		{`Temporal.ZonedDateTime.from("2022-04-12T15:19:45[UTC]").toString()`, "2022-04-12T15:19:45+00:00[UTC]"},
 		{`Temporal.PlainDateTime.from("-271821-04-19T00:00:00.000000001").nanosecond`, "1"},
 		{`Temporal.PlainDateTime.from(new Temporal.ZonedDateTime(-13849764999999999n, "UTC")).toString()`, "1969-07-24T16:50:35.000000001"},
 		{`Temporal.PlainDateTime.from({year: 2016, month: 12, day: 31, second: 60}).second`, "59"},
@@ -269,6 +276,7 @@ func TestTemporalPlainTimeFoundation(t *testing.T) {
 		{`Temporal.PlainTime.from({hour: 27, minute: 70}).toString()`, "23:59:00"},
 		{`Temporal.PlainTime.compare("15:23", "15:24")`, "-1"},
 		{`Temporal.PlainTime.from(new Temporal.PlainDateTime(2000, 1, 1, 12, 34)).minute`, "34"},
+		{`new Temporal.PlainTime(12, 34, 56).with({hour: 1e100, minute: undefined}).toString()`, "23:34:56"},
 		{`class T extends Temporal.PlainTime {}; Object.getPrototypeOf(new T(12)) === T.prototype`, "true"},
 	}
 	for _, test := range tests {
@@ -291,4 +299,16 @@ func TestTemporalIsLazy(t *testing.T) {
 	if got != "function,false,true,undefined,true" {
 		t.Fatalf("lazy Temporal descriptor = %q", got)
 	}
+}
+
+func TestTemporalNowFoundation(t *testing.T) {
+	checkEval(t, `[
+        Object.prototype.toString.call(Temporal.Now),
+        Temporal.Now.instant() instanceof Temporal.Instant,
+        Temporal.Now.plainDateISO() instanceof Temporal.PlainDate,
+        Temporal.Now.plainDateTimeISO() instanceof Temporal.PlainDateTime,
+        Temporal.Now.plainTimeISO() instanceof Temporal.PlainTime,
+        Temporal.Now.zonedDateTimeISO("UTC") instanceof Temporal.ZonedDateTime,
+        typeof Temporal.Now.timeZoneId()
+    ].join(",")`, "[object Temporal.Now],true,true,true,true,true,string")
 }

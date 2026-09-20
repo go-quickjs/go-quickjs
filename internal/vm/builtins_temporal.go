@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/big"
 	"strings"
+	"time"
 
 	"github.com/go-quickjs/go-quickjs/internal/icu"
 )
@@ -36,11 +37,13 @@ func (r *Runtime) buildTemporal() *Object {
 	r.initTemporalPlainTime(temporal)
 	r.initTemporalPlainYearMonth(temporal)
 	r.initTemporalZonedDateTime(temporal)
+	r.initTemporalNow(temporal)
 	return temporal
 }
 
 func (r *Runtime) initTemporalInstant(temporal *Object) {
 	proto := newObject(r.proto.object, ClassObject)
+	r.temporalInstantProto = proto
 	ctor := r.newTemporalCtor(temporal, "Instant", 1, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if err := rt.requireNew("Temporal.Instant"); err != nil {
 			return Undefined, err
@@ -427,6 +430,71 @@ func (r *Runtime) initTemporalZonedDateTime(temporal *Object) {
 	r.defToStringTag(proto, "Temporal.ZonedDateTime")
 }
 
+func (r *Runtime) initTemporalNow(temporal *Object) {
+	now := newObject(r.proto.object, ClassObject)
+	r.defMethod(now, "instant", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		instant := temporalCurrentInstant()
+		return Obj(newTemporalInstant(rt.temporalInstantProto, instant)), nil
+	})
+	r.defMethod(now, "timeZoneId", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		return Str(NewString(rt.localZoneName())), nil
+	})
+	r.defMethod(now, "zonedDateTimeISO", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		zoned, err := rt.temporalNowZonedDateTime(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		o := newObject(rt.temporalZonedDateTimeProto, ClassObject)
+		o.data = zoned
+		return Obj(o), nil
+	})
+	r.defMethod(now, "plainDateTimeISO", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		zoned, err := rt.temporalNowZonedDateTime(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		dateTime := temporalPlainDateTime{temporalISODateTime: zoned.localISODateTime(), calendar: "iso8601"}
+		return Obj(newTemporalPlainDateTime(rt.temporalPlainDateTimeProto, dateTime)), nil
+	})
+	r.defMethod(now, "plainDateISO", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		zoned, err := rt.temporalNowZonedDateTime(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		dateTime := zoned.localISODateTime()
+		date := temporalPlainDate{year: dateTime.year, month: dateTime.month, day: dateTime.day, calendar: "iso8601"}
+		return Obj(newTemporalPlainDate(rt.temporalPlainDateProto, date)), nil
+	})
+	r.defMethod(now, "plainTimeISO", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		zoned, err := rt.temporalNowZonedDateTime(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		dateTime := zoned.localISODateTime()
+		plainTime := temporalPlainTime{dateTime.hour, dateTime.minute, dateTime.second, dateTime.millisecond, dateTime.microsecond, dateTime.nanosecond}
+		return Obj(newTemporalPlainTime(rt.temporalPlainTimeProto, plainTime)), nil
+	})
+	r.defToStringTag(now, "Temporal.Now")
+	r.defValue(temporal, "Now", Obj(now))
+}
+
+func temporalCurrentInstant() temporalInstant {
+	now := time.Now()
+	return temporalInstant{epochSeconds: now.Unix(), nanosecond: uint32(now.Nanosecond())}
+}
+
+func (r *Runtime) temporalNowZonedDateTime(timeZoneValue Value) (*temporalZonedDateTime, error) {
+	timeZone := r.localZoneName()
+	var err error
+	if !timeZoneValue.IsUndefined() {
+		timeZone, err = r.toTemporalTimeZoneIdentifier(timeZoneValue)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return r.newTemporalZonedDateTime(temporalCurrentInstant(), timeZone, Str(NewString("iso8601")))
+}
+
 func (r *Runtime) newTemporalZonedDateTime(instant temporalInstant, zoneName string, calendarValue Value) (*temporalZonedDateTime, error) {
 	calendar := "iso8601"
 	if !calendarValue.IsUndefined() {
@@ -510,15 +578,52 @@ func (z *temporalZonedDateTime) localISODateTime() temporalISODateTime {
 }
 
 func (z *temporalZonedDateTime) compatibleInstant(dateTime temporalISODateTime) (temporalInstant, bool) {
+	return z.disambiguatedInstant(dateTime, "compatible")
+}
+
+func (z *temporalZonedDateTime) disambiguatedInstant(dateTime temporalISODateTime, disambiguation string) (temporalInstant, bool) {
 	localSeconds := dateTime.localEpochSeconds()
 	epochSeconds := int64(0)
 	if z.fixed {
 		epochSeconds = localSeconds - int64(z.fixedOffsetSeconds)
 	} else {
-		var ok bool
-		epochSeconds, ok = z.zone.CompatibleInstant(localSeconds)
-		if !ok {
-			return temporalInstant{}, false
+		possible := z.zone.PossibleInstants(localSeconds)
+		switch len(possible) {
+		case 1:
+			epochSeconds = possible[0]
+		case 2:
+			switch disambiguation {
+			case "compatible", "earlier":
+				epochSeconds = possible[0]
+			case "later":
+				epochSeconds = possible[1]
+			default:
+				return temporalInstant{}, false
+			}
+		default:
+			if disambiguation == "reject" {
+				return temporalInstant{}, false
+			}
+			const day = int64(24 * 60 * 60)
+			before := z.zone.OffsetAt(localSeconds - day).OffsetSeconds
+			after := z.zone.OffsetAt(localSeconds + day).OffsetSeconds
+			gap := int64(after - before)
+			if gap <= 0 {
+				return temporalInstant{}, false
+			}
+			shifted := localSeconds + gap
+			if disambiguation == "earlier" {
+				shifted = localSeconds - gap
+			}
+			possible = z.zone.PossibleInstants(shifted)
+			if len(possible) == 0 {
+				return temporalInstant{}, false
+			}
+			if disambiguation == "earlier" {
+				epochSeconds = possible[0]
+			} else {
+				epochSeconds = possible[len(possible)-1]
+			}
 		}
 	}
 	total := new(big.Int).Mul(big.NewInt(epochSeconds), big.NewInt(temporalNanosecondsPerSecond))
@@ -586,8 +691,39 @@ func parseTemporalZonedDateTimeString(input string) (temporalInstant, string, st
 		return temporalInstant{}, "", "", errInvalidTemporalInstant
 	}
 	instant, err := parseTemporalInstant(input)
+	if err == nil {
+		return instant, zone, calendar, nil
+	}
+	dateTime, err := parseTemporalPlainDateTime(input)
 	if err != nil {
 		return temporalInstant{}, "", "", err
+	}
+	epochSeconds := int64(0)
+	if minutes, _, ok := parseZoneOffset(zone); ok {
+		epochSeconds = dateTime.localEpochSeconds() - int64(minutes*60)
+	} else {
+		canonical, ok := icu.CanonicalZone(zone)
+		if !ok {
+			return temporalInstant{}, "", "", errInvalidTemporalInstant
+		}
+		target := canonical
+		if alias, ok := icu.ZoneTarget(canonical); ok {
+			target = alias
+		}
+		timeZone, err := icu.LoadTimeZone(target)
+		if err != nil {
+			return temporalInstant{}, "", "", errInvalidTemporalInstant
+		}
+		epochSeconds, ok = timeZone.CompatibleInstant(dateTime.localEpochSeconds())
+		if !ok {
+			return temporalInstant{}, "", "", errInvalidTemporalInstant
+		}
+	}
+	total := new(big.Int).Mul(big.NewInt(epochSeconds), big.NewInt(temporalNanosecondsPerSecond))
+	total.Add(total, big.NewInt(dateTime.subsecondNanoseconds()))
+	instant, ok = temporalInstantFromEpochNanoseconds(total)
+	if !ok {
+		return temporalInstant{}, "", "", errInvalidTemporalInstant
 	}
 	return instant, zone, calendar, nil
 }
