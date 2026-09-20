@@ -259,12 +259,17 @@ func (r *Runtime) initTemporalPlainTime(temporal *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		zone := options.zone
-		if zone == nil {
-			zone = time.UTC
+		options, err = rt.dateOptionsForArgument(options, this)
+		if err != nil {
+			return Undefined, err
 		}
-		value := time.Date(1970, time.January, 1, plainTime.hour, plainTime.minute, plainTime.second,
-			plainTime.millisecond*1_000_000+plainTime.microsecond*1_000+plainTime.nanosecond, zone)
+		// A PlainTime supplies wall-clock fields, not an instant. Its requested
+		// formatting time zone therefore cannot shift or skip the time.
+		value := time.Date(1970, time.January, 1, plainTime.hour,
+			plainTime.minute, plainTime.second,
+			plainTime.millisecond*1_000_000+
+				plainTime.microsecond*1_000+plainTime.nanosecond,
+			time.UTC)
 		return Str(NewString(options.format(value))), nil
 	})
 	r.defMethod(proto, "valueOf", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {

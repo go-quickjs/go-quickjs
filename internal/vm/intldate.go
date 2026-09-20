@@ -943,6 +943,12 @@ func (o *dateOptions) patternFor() string {
 		o.day == "" && o.hour == "" && o.minute == "" && o.second == "" {
 		return "B"
 	}
+	if o.fractional > 0 && o.dateStyle == "" && o.timeStyle == "" &&
+		o.weekday == "" && o.era == "" && o.year == "" && o.month == "" &&
+		o.day == "" && o.hour == "" && o.minute == "" && o.second == "" &&
+		o.dayPeriod == "" && o.timeZoneName == "" {
+		return strings.Repeat("S", o.fractional)
+	}
 
 	if o.dateStyle != "" || o.timeStyle != "" {
 		date, clock := "", ""

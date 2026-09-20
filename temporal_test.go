@@ -673,6 +673,12 @@ func TestTemporalPlainTimeFoundation(t *testing.T) {
 		{`new Temporal.PlainTime(15, 23, 30).since(new Temporal.PlainTime(17, 0, 30)).toString()`, "-PT1H37M"},
 		{`new Temporal.PlainTime().until("01:59:59", {smallestUnit: "minute", roundingMode: "expand"}).toString()`, "PT2H"},
 		{`typeof new Temporal.PlainTime(12, 34, 56).toLocaleString("en", {timeStyle: "short"})`, "string"},
+		{`new Temporal.PlainTime(11, 46, 40, 321).toLocaleString("en",
+			{fractionalSecondDigits: 3})`, "321"},
+		{`new Temporal.PlainTime(11, 46, 40).toLocaleString("en",
+			{era: "narrow"})`, "11:46:40 AM"},
+		{`new Temporal.PlainTime(11, 46, 40).toLocaleString("en-US",
+			{timeZone: "America/Los_Angeles"})`, "11:46:40 AM"},
 		{`class T extends Temporal.PlainTime {}; Object.getPrototypeOf(new T(12)) === T.prototype`, "true"},
 	}
 	for _, test := range tests {
