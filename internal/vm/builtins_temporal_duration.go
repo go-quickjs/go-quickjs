@@ -158,11 +158,11 @@ func (r *Runtime) initTemporalDuration(temporal *Object) {
 		if left.fields() == right.fields() {
 			return Int(0), nil
 		}
-		leftValue, err := rt.totalTemporalDurationNanoseconds(left, relativeTo)
+		leftValue, err := rt.totalTemporalDurationNanoseconds(left, relativeTo, false)
 		if err != nil {
 			return Undefined, err
 		}
-		rightValue, err := rt.totalTemporalDurationNanoseconds(right, relativeTo)
+		rightValue, err := rt.totalTemporalDurationNanoseconds(right, relativeTo, false)
 		if err != nil {
 			return Undefined, err
 		}
@@ -329,50 +329,10 @@ func (r *Runtime) initTemporalDuration(temporal *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		if unit == "year" || unit == "month" {
-			if !relativeTo.IsUndefined() {
-				relativeDate, err := rt.toTemporalPlainDate(relativeTo, Undefined)
-				if err != nil {
-					return Undefined, err
-				}
-				value, err := rt.totalTemporalDurationInCalendarUnit(d, relativeDate, unit)
-				if err != nil {
-					return Undefined, err
-				}
-				return Float(value), nil
-			}
-			if d.weeks != 0 || d.days != 0 || d.hours != 0 || d.minutes != 0 || d.seconds != 0 || d.milliseconds != 0 || d.microseconds != 0 || d.nanoseconds != 0 {
-				return Undefined, rt.throwRangeError("calendar units require relativeTo")
-			}
-			months := d.years*12 + d.months
-			if unit == "year" {
-				return Float(months / 12), nil
-			}
-			return Float(months), nil
+		value, err := rt.totalTemporalDuration(d, relativeTo, unit)
+		if err != nil {
+			return Undefined, err
 		}
-		if unit == "week" || unit == "day" {
-			if d.years != 0 || d.months != 0 {
-				return Undefined, rt.throwRangeError("calendar durations require relativeTo")
-			}
-			total := new(big.Int).Mul(floatIntegerBig(d.weeks), big.NewInt(7*86_400_000_000_000))
-			total.Add(total, new(big.Int).Mul(floatIntegerBig(d.days), big.NewInt(86_400_000_000_000)))
-			total.Add(total, d.timePartNanoseconds())
-			divisor := int64(86_400_000_000_000)
-			if unit == "week" {
-				divisor *= 7
-			}
-			ratio := new(big.Rat).SetFrac(total, big.NewInt(divisor))
-			value, _ := ratio.Float64()
-			return Float(value), nil
-		}
-		if d.years != 0 || d.months != 0 {
-			return Undefined, rt.throwRangeError("calendar durations require relativeTo")
-		}
-		total := new(big.Int).Mul(floatIntegerBig(d.weeks), big.NewInt(7*86_400_000_000_000))
-		total.Add(total, new(big.Int).Mul(floatIntegerBig(d.days), big.NewInt(86_400_000_000_000)))
-		total.Add(total, d.timePartNanoseconds())
-		ratio := new(big.Rat).SetFrac(total, big.NewInt(temporalUnitNanoseconds[unit]))
-		value, _ := ratio.Float64()
 		return Float(value), nil
 	})
 	r.defMethod(proto, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -545,7 +505,12 @@ func (r *Runtime) toTemporalDurationRelativeTo(value Value) (temporalDurationRel
 			}
 		case *temporalPlainDateTime:
 			if relative != nil {
-				plain := *relative
+				plain := temporalPlainDateTime{
+					temporalISODateTime: temporalISODateTime{
+						year: relative.year, month: relative.month, day: relative.day,
+					},
+					calendar: relative.calendar,
+				}
 				return temporalDurationRelativeTo{plain: &plain}, nil
 			}
 		}
@@ -776,8 +741,9 @@ func validTemporalDurationRelativeZonedLocal(zoned *temporalZonedDateTime) bool 
 	return days >= -100_000_000 && days <= 100_000_000
 }
 
-func (r *Runtime) totalTemporalDurationNanoseconds(duration temporalDuration, relativeTo temporalDurationRelativeTo) (*big.Int, error) {
-	if duration.years == 0 && duration.months == 0 && duration.weeks == 0 && duration.days == 0 {
+func (r *Runtime) totalTemporalDurationNanoseconds(duration temporalDuration, relativeTo temporalDurationRelativeTo, validateEndpoint bool) (*big.Int, error) {
+	if duration.years == 0 && duration.months == 0 && duration.weeks == 0 && duration.days == 0 &&
+		(!validateEndpoint || relativeTo.plain == nil && relativeTo.zoned == nil) {
 		return duration.timePartNanoseconds(), nil
 	}
 	if relativeTo.plain == nil && relativeTo.zoned == nil {
@@ -1020,92 +986,217 @@ func (d temporalDuration) largestTimeUnit() string {
 	return "nanosecond"
 }
 
-func (r *Runtime) temporalTotalOptions(value Value) (string, Value, error) {
+func (r *Runtime) temporalTotalOptions(value Value) (string, temporalDurationRelativeTo, error) {
 	var raw Value
-	relativeTo := Undefined
+	var relativeTo temporalDurationRelativeTo
 	if value.IsString() {
 		raw = value
 	} else {
 		if !value.IsObject() {
-			return "", Undefined, r.throwTypeError("total options must be a unit string or object")
+			return "", relativeTo, r.throwTypeError("total options must be a unit string or object")
 		}
-		var err error
-		relativeTo, err = r.getProp(value.Object(), r.atoms.intern("relativeTo"), value)
+		relativeValue, err := r.getProp(value.Object(), r.atoms.intern("relativeTo"), value)
 		if err != nil {
-			return "", Undefined, err
+			return "", relativeTo, err
+		}
+		if !relativeValue.IsUndefined() {
+			relativeTo, err = r.toTemporalDurationRelativeTo(relativeValue)
+			if err != nil {
+				return "", relativeTo, err
+			}
 		}
 		raw, err = r.getProp(value.Object(), r.atoms.intern("unit"), value)
 		if err != nil {
-			return "", Undefined, err
+			return "", relativeTo, err
 		}
 	}
 	if raw.IsUndefined() {
-		return "", Undefined, r.throwRangeError("unit is required")
+		return "", relativeTo, r.throwRangeError("unit is required")
 	}
 	text, err := r.toString(raw)
 	if err != nil {
-		return "", Undefined, err
+		return "", relativeTo, err
 	}
 	unit, ok := normalizeTemporalUnit(text.Go())
 	if !ok {
 		unit, ok = normalizeTemporalDateTimeUnit(text.Go())
 	}
 	if !ok {
-		return "", Undefined, r.throwRangeError("invalid total unit")
+		return "", relativeTo, r.throwRangeError("invalid total unit")
 	}
 	return unit, relativeTo, nil
 }
 
-func (r *Runtime) totalTemporalDurationInCalendarUnit(duration temporalDuration, start temporalPlainDate, unit string) (float64, error) {
-	target, err := r.addTemporalPlainDate(start, duration, 1, "constrain")
-	if err != nil {
-		return 0, err
+func (r *Runtime) totalTemporalDuration(duration temporalDuration, relativeTo temporalDurationRelativeTo, unit string) (float64, error) {
+	hasRelativeTo := relativeTo.plain != nil || relativeTo.zoned != nil
+	if !hasRelativeTo {
+		if temporalDateTimeUnitRank[unit] < temporalDateTimeUnitRank["day"] ||
+			duration.years != 0 || duration.months != 0 || duration.weeks != 0 {
+			return 0, r.throwRangeError("calendar units require relativeTo")
+		}
+		return temporalBigRatio(duration.dayAndTimeNanoseconds(), temporalDurationUnitNanoseconds(unit)), nil
 	}
-	startDays := isoDaysFromCivil(int64(start.year), start.month, start.day)
-	targetDays := isoDaysFromCivil(int64(target.year), target.month, target.day)
-	if startDays == targetDays {
+	if duration.sign() == 0 {
+		if relativeTo.zoned != nil && temporalDateTimeUnitRank[unit] <= temporalDateTimeUnitRank["day"] {
+			start := temporalPlainDateTime{
+				temporalISODateTime: relativeTo.zoned.localISODateTime(),
+				calendar:            relativeTo.zoned.calendar,
+			}
+			next, err := r.addTemporalPlainDateTime(start, temporalCalendarUnitDuration(unit, 1), 1, "constrain")
+			if err != nil {
+				return 0, err
+			}
+			if _, ok := relativeTo.zoned.compatibleInstant(next.temporalISODateTime); !ok {
+				return 0, r.throwRangeError("next calendar boundary is outside the Temporal range")
+			}
+		}
 		return 0, nil
 	}
-	amount := int64(target.year - start.year)
-	if unit == "month" {
-		amount = amount*12 + int64(target.month-start.month)
-	}
-	makeAnchor := func(value int64) (temporalPlainDate, error) {
-		d := temporalDuration{}
-		if unit == "year" {
-			d.years = float64(value)
-		} else {
-			d.months = float64(value)
+	if temporalDateTimeUnitRank[unit] >= temporalDateTimeUnitRank["hour"] {
+		total, err := r.totalTemporalDurationNanoseconds(duration, relativeTo, true)
+		if err != nil {
+			return 0, err
 		}
-		return r.addTemporalPlainDate(start, d, 1, "constrain")
+		return temporalBigRatio(total, temporalDurationUnitNanoseconds(unit)), nil
 	}
-	anchor, err := makeAnchor(amount)
+	if relativeTo.zoned != nil {
+		return r.totalTemporalDurationRelativeToZoned(duration, relativeTo.zoned, unit)
+	}
+	return r.totalTemporalDurationRelativeToPlain(duration, *relativeTo.plain, unit)
+}
+
+func temporalDurationUnitNanoseconds(unit string) *big.Int {
+	if unit == "day" {
+		return big.NewInt(temporalSecondsPerDay * temporalNanosecondsPerSecond)
+	}
+	return big.NewInt(temporalUnitNanoseconds[unit])
+}
+
+func temporalBigRatio(numerator, denominator *big.Int) float64 {
+	ratio := new(big.Rat).SetFrac(numerator, denominator)
+	value, _ := ratio.Float64()
+	return value
+}
+
+func temporalCalendarUnitDuration(unit string, amount int64) temporalDuration {
+	var duration temporalDuration
+	switch unit {
+	case "year":
+		duration.years = float64(amount)
+	case "month":
+		duration.months = float64(amount)
+	case "week":
+		duration.weeks = float64(amount)
+	case "day":
+		duration.days = float64(amount)
+	}
+	return duration
+}
+
+func approximateTemporalCalendarUnits(start, end temporalISODateTime, unit string) int64 {
+	switch unit {
+	case "year":
+		return int64(end.year - start.year)
+	case "month":
+		return int64(end.year-start.year)*12 + int64(end.month-start.month)
+	case "week":
+		return (isoDaysFromCivil(int64(end.year), end.month, end.day) -
+			isoDaysFromCivil(int64(start.year), start.month, start.day)) / 7
+	default:
+		return isoDaysFromCivil(int64(end.year), end.month, end.day) -
+			isoDaysFromCivil(int64(start.year), start.month, start.day)
+	}
+}
+
+func temporalCalendarTotal(amount int64, target, anchor, next *big.Int) float64 {
+	span := new(big.Int).Sub(next, anchor)
+	span.Abs(span)
+	progress := new(big.Int).Sub(target, anchor)
+	numerator := new(big.Int).Mul(big.NewInt(amount), span)
+	numerator.Add(numerator, progress)
+	return temporalBigRatio(numerator, span)
+}
+
+func (r *Runtime) totalTemporalDurationRelativeToPlain(duration temporalDuration, start temporalPlainDateTime, unit string) (float64, error) {
+	target, err := r.addTemporalPlainDateTime(start, duration, 1, "constrain")
 	if err != nil {
 		return 0, err
 	}
-	anchorDays := isoDaysFromCivil(int64(anchor.year), anchor.month, anchor.day)
-	if targetDays > startDays && anchorDays > targetDays {
-		amount--
-		anchor, err = makeAnchor(amount)
-	} else if targetDays < startDays && anchorDays < targetDays {
-		amount++
-		anchor, err = makeAnchor(amount)
+	startValue := temporalPlainDateTimeEpochNanoseconds(start)
+	targetValue := temporalPlainDateTimeEpochNanoseconds(target)
+	direction := int64(targetValue.Cmp(startValue))
+	amount := approximateTemporalCalendarUnits(start.temporalISODateTime, target.temporalISODateTime, unit)
+	makeAnchor := func(value int64) (temporalPlainDateTime, *big.Int, error) {
+		anchor, err := r.addTemporalPlainDateTime(start, temporalCalendarUnitDuration(unit, value), 1, "constrain")
+		if err != nil {
+			return temporalPlainDateTime{}, nil, err
+		}
+		return anchor, temporalPlainDateTimeEpochNanoseconds(anchor), nil
 	}
+	_, anchorValue, err := makeAnchor(amount)
 	if err != nil {
 		return 0, err
 	}
-	anchorDays = isoDaysFromCivil(int64(anchor.year), anchor.month, anchor.day)
-	direction := int64(1)
-	if targetDays < anchorDays {
-		direction = -1
+	if direction > 0 && anchorValue.Cmp(targetValue) > 0 || direction < 0 && anchorValue.Cmp(targetValue) < 0 {
+		amount -= direction
+		_, anchorValue, err = makeAnchor(amount)
+		if err != nil {
+			return 0, err
+		}
 	}
-	next, err := makeAnchor(amount + direction)
+	if anchorValue.Cmp(targetValue) == 0 {
+		return float64(amount), nil
+	}
+	_, nextValue, err := makeAnchor(amount + direction)
 	if err != nil {
 		return 0, err
 	}
-	nextDays := isoDaysFromCivil(int64(next.year), next.month, next.day)
-	span := math.Abs(float64(nextDays - anchorDays))
-	return float64(amount) + float64(targetDays-anchorDays)/span, nil
+	return temporalCalendarTotal(amount, targetValue, anchorValue, nextValue), nil
+}
+
+func (r *Runtime) totalTemporalDurationRelativeToZoned(duration temporalDuration, start *temporalZonedDateTime, unit string) (float64, error) {
+	targetInstant, err := r.addTemporalDurationToZonedInstant(start, duration)
+	if err != nil {
+		return 0, err
+	}
+	startLocal := temporalPlainDateTime{temporalISODateTime: start.localISODateTime(), calendar: start.calendar}
+	targetZoned := *start
+	targetZoned.instant = targetInstant
+	targetLocal := targetZoned.localISODateTime()
+	startValue := start.instant.epochNanoseconds()
+	targetValue := targetInstant.epochNanoseconds()
+	direction := int64(targetValue.Cmp(startValue))
+	amount := approximateTemporalCalendarUnits(startLocal.temporalISODateTime, targetLocal, unit)
+	makeAnchor := func(value int64) (*big.Int, error) {
+		local, err := r.addTemporalPlainDateTime(startLocal, temporalCalendarUnitDuration(unit, value), 1, "constrain")
+		if err != nil {
+			return nil, err
+		}
+		instant, ok := start.compatibleInstant(local.temporalISODateTime)
+		if !ok {
+			return nil, r.throwRangeError("duration endpoint is outside the Temporal range")
+		}
+		return instant.epochNanoseconds(), nil
+	}
+	anchorValue, err := makeAnchor(amount)
+	if err != nil {
+		return 0, err
+	}
+	if direction > 0 && anchorValue.Cmp(targetValue) > 0 || direction < 0 && anchorValue.Cmp(targetValue) < 0 {
+		amount -= direction
+		anchorValue, err = makeAnchor(amount)
+		if err != nil {
+			return 0, err
+		}
+	}
+	if anchorValue.Cmp(targetValue) == 0 {
+		return float64(amount), nil
+	}
+	nextValue, err := makeAnchor(amount + direction)
+	if err != nil {
+		return 0, err
+	}
+	return temporalCalendarTotal(amount, targetValue, anchorValue, nextValue), nil
 }
 
 func parseTemporalDuration(s string) (temporalDuration, error) {

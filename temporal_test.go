@@ -266,6 +266,30 @@ func TestTemporalDurationCompare(t *testing.T) {
 	}
 }
 
+func TestTemporalDurationTotal(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	tests := []struct{ source, want string }{
+		{`new Temporal.Duration(1).total({ unit: "days", relativeTo: new Temporal.PlainDate(2021, 12, 15) })`, "365"},
+		{`new Temporal.Duration(1, 0, 0, 0, 1).total({ unit: "years", relativeTo: new Temporal.PlainDate(2020, 2, 29) })`, "1.0001141552511414"},
+		{`new Temporal.Duration(0, 1, 0, 0, 10).total({ unit: "months", relativeTo: new Temporal.PlainDate(2020, 1, 31) })`, "1.0134408602150538"},
+		{`new Temporal.Duration(0, 0, 1, 0, 1).total({ unit: "days", relativeTo: new Temporal.ZonedDateTime(0n, "UTC") })`, "7.041666666666667"},
+	}
+	for _, test := range tests {
+		if got := evalString(t, rt, test.source); got != test.want {
+			t.Errorf("%s\n got: %s\nwant: %s", test.source, got, test.want)
+		}
+	}
+	if got := evalString(t, rt, `try {
+		new Temporal.Duration(0, 0, 0, 0, 0, 0, 0, 0, 0, 1).total({
+			unit: "nanoseconds",
+			relativeTo: new Temporal.ZonedDateTime(8640000000000000000000n, "UTC")
+		});
+	} catch (e) { e.name }`); got != "RangeError" {
+		t.Fatalf("totaling past the Temporal instant limit threw %s", got)
+	}
+}
+
 func TestTemporalPlainDateFoundation(t *testing.T) {
 	rt := quickjs.New()
 	defer rt.Close()
