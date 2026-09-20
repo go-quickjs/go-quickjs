@@ -157,6 +157,11 @@ func TestTemporalPlainDateFoundation(t *testing.T) {
 		{`new Temporal.PlainDate(2000, 5, 2).toString({calendarName: "critical"})`, "2000-05-02[!u-ca=iso8601]"},
 		{`new Temporal.PlainDate(1970, 1, 1).dayOfWeek`, "4"},
 		{`new Temporal.PlainDate(2000, 5, 2, "GREGORY").calendarId`, "gregory"},
+		{`new Temporal.PlainDate(2020, 2, 29).with({year: 2021}).toString()`, "2021-02-28"},
+		{`new Temporal.PlainDate(2020, 1, 31).add({months: 1}).toString()`, "2020-02-29"},
+		{`new Temporal.PlainDate(2020, 3, 1).subtract({days: 1}).toString()`, "2020-02-29"},
+		{`new Temporal.PlainDate(2020, 1, 1).add({hours: 36}).toString()`, "2020-01-02"},
+		{`new Temporal.PlainDate(2020, 1, 1).withCalendar("15:23").calendarId`, "iso8601"},
 		{`new Temporal.PlainDate(-271821, 4, 19).toString()`, "-271821-04-19"},
 		{`class D extends Temporal.PlainDate {}; Object.getPrototypeOf(new D(2000, 1, 1)) === D.prototype`, "true"},
 	}

@@ -258,6 +258,7 @@ func (r *Runtime) initTemporalPlainDate(temporal *Object) {
 		return Undefined, rt.throwTypeError("use Temporal.PlainDate.compare() or equals() to compare dates")
 	})
 	r.defToStringTag(proto, "Temporal.PlainDate")
+	r.initTemporalPlainDateOperations(proto)
 }
 
 func newTemporalPlainDate(proto *Object, date temporalPlainDate) *Object {
@@ -576,6 +577,10 @@ func parseTemporalPlainDate(input string) (temporalPlainDate, error) {
 func temporalCalendarFromISOString(input string) (string, bool) {
 	if date, err := parseTemporalPlainDate(input); err == nil {
 		return date.calendar, true
+	}
+	if _, err := parseTemporalPlainTime(input); err == nil {
+		_, calendar, ok := parseTemporalPartialAnnotations(input)
+		return calendar, ok
 	}
 	main, annotations, ok := splitTemporalAnnotations(input)
 	if !ok {
