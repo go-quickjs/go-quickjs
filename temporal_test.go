@@ -485,6 +485,30 @@ func TestTemporalPlainYearMonthAndMonthDayFoundation(t *testing.T) {
 		{`new Temporal.PlainYearMonth(2019, 1).until(new Temporal.PlainYearMonth(2021, 9), {smallestUnit: "years", roundingMode: "halfExpand"}).toString()`, "P3Y"},
 		{`new Temporal.PlainYearMonth(2021, 9).since(new Temporal.PlainYearMonth(2019, 1), {largestUnit: "months"}).toString()`, "P32M"},
 		{`new Temporal.PlainYearMonth(2024, 2).toPlainDate({day: 29}).toString()`, "2024-02-29"},
+		{`(() => {
+			const value = Temporal.PlainYearMonth.from({ calendar: "hebrew",
+				year: 5784, monthCode: "M05L" });
+			return [value.toString(), value.year, value.month, value.monthCode,
+				value.daysInMonth, value.daysInYear, value.monthsInYear,
+				value.inLeapYear].join("|");
+		})()`, "2024-02-10[u-ca=hebrew]|5784|6|M05L|30|383|13|true"},
+		{`Temporal.PlainYearMonth.from({ calendar: "hebrew", year: 5784,
+			monthCode: "M05L" }).add({ years: 1 }).toString()`,
+			"2025-03-01[u-ca=hebrew]"},
+		{`Temporal.PlainYearMonth.from({ calendar: "coptic", year: 1739,
+			monthCode: "M13" }).add({ months: 1 }).toString()`,
+			"2023-09-12[u-ca=coptic]"},
+		{`(() => {
+			const start = Temporal.PlainYearMonth.from({ calendar: "hebrew",
+				year: 5783, monthCode: "M07" });
+			const end = Temporal.PlainYearMonth.from({ calendar: "hebrew",
+				year: 5793, monthCode: "M07" });
+			return [start.until(end, { largestUnit: "months" }),
+				end.since(start, { largestUnit: "years" })].join("|");
+		})()`, "P124M|P10Y"},
+		{`Temporal.PlainYearMonth.from({ calendar: "hebrew", year: 5784,
+			monthCode: "M05L" }).toPlainDate({ day: 40 }).toString()`,
+			"2024-03-10[u-ca=hebrew]"},
 		{`new Temporal.PlainMonthDay(2, 29).toString()`, "02-29"},
 		{`new Temporal.PlainMonthDay(10, 31, "iso8601", 2019).toString({calendarName: "always"})`, "2019-10-31[u-ca=iso8601]"},
 		{`Temporal.PlainMonthDay.from("2019-10-31").toString({calendarName: "always"})`, "1972-10-31[u-ca=iso8601]"},

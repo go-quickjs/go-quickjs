@@ -483,6 +483,9 @@ func (r *Runtime) differenceTemporalPlainDates(start, end temporalPlainDate, lar
 	if smallest == "day" && increment == 1 {
 		return result, nil
 	}
+	if smallest == "month" && increment == 1 && result.days == 0 && result.weeks == 0 {
+		return result, nil
+	}
 	return r.roundTemporalPlainDateDifference(start, end, result, largest, smallest, increment, mode)
 }
 
@@ -700,9 +703,15 @@ func (r *Runtime) roundTemporalPlainDateDifference(start, end temporalPlainDate,
 	case "week":
 		approximate = (endDays - anchorDays) / 7
 	case "month":
-		approximate = int64(end.year-anchor.year)*12 + int64(end.month-anchor.month)
+		var ok bool
+		approximate, ok = temporalCalendarMonthDistance(start.calendar,
+			anchor.calendarDate(), end.calendarDate())
+		if !ok {
+			return temporalDuration{}, r.throwRangeError("unsupported calendar")
+		}
 	case "year":
-		approximate = int64(end.year - anchor.year)
+		approximate = int64(end.calendarDate().ArithmeticYear -
+			anchor.calendarDate().ArithmeticYear)
 	}
 	if smallest == "month" || smallest == "year" {
 		probe := larger

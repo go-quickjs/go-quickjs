@@ -262,7 +262,10 @@ func (r *Runtime) initTemporalPlainDate(temporal *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		result := temporalPlainYearMonth{year: date.year, month: date.month, day: 1, calendar: date.calendar}
+		result, err := rt.temporalYearMonthFromDate(date)
+		if err != nil {
+			return Undefined, err
+		}
 		return Obj(newTemporalPlainYearMonth(rt.temporalPlainYearMonthProto, result)), nil
 	})
 	r.defMethod(proto, "toPlainMonthDay", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
