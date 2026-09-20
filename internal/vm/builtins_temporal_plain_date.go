@@ -173,6 +173,28 @@ func (r *Runtime) initTemporalPlainDate(temporal *Object) {
 		}
 		return Bool(date.year == other.year && date.month == other.month && date.day == other.day && date.calendar == other.calendar), nil
 	})
+	r.defMethod(proto, "toPlainDateTime", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		date, err := rt.temporalPlainDateValue(this, "Temporal.PlainDate.prototype.toPlainDateTime")
+		if err != nil {
+			return Undefined, err
+		}
+		time := temporalPlainTime{}
+		if !arg(args, 0).IsUndefined() {
+			time, err = rt.toTemporalPlainTime(arg(args, 0), Undefined)
+			if err != nil {
+				return Undefined, err
+			}
+		}
+		result := temporalPlainDateTime{temporalISODateTime: temporalISODateTime{
+			year: date.year, month: date.month, day: date.day,
+			hour: time.hour, minute: time.minute, second: time.second,
+			millisecond: time.millisecond, microsecond: time.microsecond, nanosecond: time.nanosecond,
+		}, calendar: date.calendar}
+		if !result.valid() {
+			return Undefined, rt.throwRangeError("combined date and time are outside the Temporal range")
+		}
+		return Obj(newTemporalPlainDateTime(rt.temporalPlainDateTimeProto, result)), nil
+	})
 	r.defMethod(proto, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		date, err := rt.temporalPlainDateValue(this, "Temporal.PlainDate.prototype.toString")
 		if err != nil {

@@ -23,6 +23,7 @@ func (d temporalPlainDateTime) valid() bool {
 
 func (r *Runtime) initTemporalPlainDateTime(temporal *Object) {
 	proto := newObject(r.proto.object, ClassObject)
+	r.temporalPlainDateTimeProto = proto
 	ctor := r.newTemporalCtor(temporal, "PlainDateTime", 3, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if err := rt.requireNew("Temporal.PlainDateTime"); err != nil {
 			return Undefined, err
@@ -146,6 +147,33 @@ func (r *Runtime) initTemporalPlainDateTime(temporal *Object) {
 		}
 		date := temporalPlainDate{year: dateTime.year, month: dateTime.month, day: dateTime.day, calendar: dateTime.calendar}
 		return Obj(newTemporalPlainDate(rt.temporalPlainDateProto, date)), nil
+	})
+	r.defMethod(proto, "toPlainTime", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		dateTime, err := rt.temporalPlainDateTimeValue(this, "Temporal.PlainDateTime.prototype.toPlainTime")
+		if err != nil {
+			return Undefined, err
+		}
+		time := temporalPlainTime{dateTime.hour, dateTime.minute, dateTime.second, dateTime.millisecond, dateTime.microsecond, dateTime.nanosecond}
+		return Obj(newTemporalPlainTime(rt.temporalPlainTimeProto, time)), nil
+	})
+	r.defMethod(proto, "withPlainTime", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		dateTime, err := rt.temporalPlainDateTimeValue(this, "Temporal.PlainDateTime.prototype.withPlainTime")
+		if err != nil {
+			return Undefined, err
+		}
+		time := temporalPlainTime{}
+		if !arg(args, 0).IsUndefined() {
+			time, err = rt.toTemporalPlainTime(arg(args, 0), Undefined)
+			if err != nil {
+				return Undefined, err
+			}
+		}
+		dateTime.hour, dateTime.minute, dateTime.second = time.hour, time.minute, time.second
+		dateTime.millisecond, dateTime.microsecond, dateTime.nanosecond = time.millisecond, time.microsecond, time.nanosecond
+		if !dateTime.valid() {
+			return Undefined, rt.throwRangeError("combined date and time are outside the Temporal range")
+		}
+		return Obj(newTemporalPlainDateTime(rt.temporalPlainDateTimeProto, dateTime)), nil
 	})
 	r.defMethod(proto, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		dateTime, err := rt.temporalPlainDateTimeValue(this, "Temporal.PlainDateTime.prototype.toString")

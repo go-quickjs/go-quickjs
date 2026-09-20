@@ -20,6 +20,7 @@ func (t temporalPlainTime) valid() bool {
 
 func (r *Runtime) initTemporalPlainTime(temporal *Object) {
 	proto := newObject(r.proto.object, ClassObject)
+	r.temporalPlainTimeProto = proto
 	ctor := r.newTemporalCtor(temporal, "PlainTime", 0, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if err := rt.requireNew("Temporal.PlainTime"); err != nil {
 			return Undefined, err
@@ -145,6 +146,13 @@ func (r *Runtime) toTemporalPlainTime(value, optionsValue Value) (temporalPlainT
 			}
 			return temporalPlainTime{dateTime.hour, dateTime.minute, dateTime.second, dateTime.millisecond, dateTime.microsecond, dateTime.nanosecond}, nil
 		}
+		if zoned, ok := value.Object().data.(*temporalZonedDateTime); ok && zoned != nil {
+			dateTime, err := r.toTemporalPlainDateTime(value, optionsValue)
+			if err != nil {
+				return temporalPlainTime{}, err
+			}
+			return temporalPlainTime{dateTime.hour, dateTime.minute, dateTime.second, dateTime.millisecond, dateTime.microsecond, dateTime.nanosecond}, nil
+		}
 		return r.temporalPlainTimeFromBag(value.Object(), optionsValue)
 	}
 	if !value.IsString() {
@@ -202,7 +210,10 @@ func (r *Runtime) temporalPlainTimeFromBag(o *Object, optionsValue Value) (tempo
 
 func parseTemporalPlainTime(input string) (temporalPlainTime, error) {
 	dateTimeInput := input
-	if !strings.ContainsAny(input, "Tt ") {
+	switch {
+	case strings.HasPrefix(input, "T"), strings.HasPrefix(input, "t"):
+		dateTimeInput = "1970-01-01" + input
+	case !looksLikeTemporalDateTime(input):
 		dateTimeInput = "1970-01-01T" + input
 	}
 	dateTime, err := parseTemporalPlainDateTime(dateTimeInput)
@@ -210,6 +221,25 @@ func parseTemporalPlainTime(input string) (temporalPlainTime, error) {
 		return temporalPlainTime{}, err
 	}
 	return temporalPlainTime{dateTime.hour, dateTime.minute, dateTime.second, dateTime.millisecond, dateTime.microsecond, dateTime.nanosecond}, nil
+}
+
+func looksLikeTemporalDateTime(input string) bool {
+	main, _, ok := splitTemporalAnnotations(input)
+	if !ok {
+		return false
+	}
+	index := 0
+	if _, ok := parseTemporalYear(main, &index); !ok {
+		return false
+	}
+	dashed := consumeByte(main, &index, '-')
+	if _, ok := parseFixedDigits(main, &index, 2); !ok || dashed && !consumeByte(main, &index, '-') {
+		return false
+	}
+	if _, ok := parseFixedDigits(main, &index, 2); !ok {
+		return false
+	}
+	return index < len(main) && (main[index] == 'T' || main[index] == 't' || main[index] == ' ')
 }
 
 func compareTemporalPlainTimes(left, right temporalPlainTime) int {
