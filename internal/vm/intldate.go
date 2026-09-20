@@ -54,17 +54,104 @@ type dateOptions struct {
 	implicitDefaults bool
 }
 
-func (o *dateOptions) forDateArgument(value Value) *dateOptions {
-	if !o.implicitDefaults || !value.IsObject() {
-		return o
+func (r *Runtime) dateOptionsForArgument(o *dateOptions, value Value) (*dateOptions, error) {
+	if !value.IsObject() {
+		return o, nil
 	}
-	if _, ok := value.Object().data.(*temporalInstant); !ok {
-		return o
+	kind := ""
+	switch value.Object().data.(type) {
+	case *temporalInstant:
+		kind = "instant"
+	case *temporalPlainDateTime:
+		kind = "date-time"
+	case *temporalPlainDate:
+		kind = "date"
+	case *temporalPlainTime:
+		kind = "time"
+	case *temporalPlainYearMonth:
+		kind = "year-month"
+	case *temporalPlainMonthDay:
+		kind = "month-day"
+	case *temporalZonedDateTime:
+		return nil, r.throwTypeError("Intl.DateTimeFormat cannot format a Temporal.ZonedDateTime")
+	default:
+		return o, nil
 	}
+
 	copy := *o
-	copy.hour, copy.minute, copy.second = "numeric", "numeric", "numeric"
-	copy.pattern = adjustClock(copy.patternFor(), copy.hourCycle)
-	return &copy
+	hadDateStyle, hadTimeStyle := copy.dateStyle != "", copy.timeStyle != ""
+	if copy.implicitDefaults {
+		// DateTimeFormat supplies year/month/day when no date or time
+		// components were requested. Temporal values instead receive defaults
+		// appropriate to their data model. Keep explicit fields such
+		// as era and timeZoneName; filtering below removes any that do not
+		// apply to the particular plain type.
+		copy.year, copy.month, copy.day = "", "", ""
+		switch kind {
+		case "instant", "date-time":
+			copy.year, copy.month, copy.day = "numeric", "numeric", "numeric"
+			copy.hour, copy.minute, copy.second = "numeric", "numeric", "numeric"
+		case "date":
+			copy.year, copy.month, copy.day = "numeric", "numeric", "numeric"
+		case "time":
+			copy.hour, copy.minute, copy.second = "numeric", "numeric", "numeric"
+		case "year-month":
+			copy.year, copy.month = "numeric", "numeric"
+		case "month-day":
+			copy.month, copy.day = "numeric", "numeric"
+		}
+	}
+	if kind != "instant" && (hadDateStyle || hadTimeStyle) {
+		if hadDateStyle {
+			switch copy.dateStyle {
+			case "full":
+				copy.weekday, copy.year, copy.month, copy.day = "long", "numeric", "long", "numeric"
+			case "long":
+				copy.year, copy.month, copy.day = "numeric", "long", "numeric"
+			case "medium":
+				copy.year, copy.month, copy.day = "numeric", "short", "numeric"
+			case "short":
+				copy.year, copy.month, copy.day = "2-digit", "numeric", "numeric"
+			}
+		}
+		if hadTimeStyle {
+			copy.hour, copy.minute = "numeric", "numeric"
+			if copy.timeStyle != "short" {
+				copy.second = "numeric"
+			}
+		}
+		copy.dateStyle, copy.timeStyle = "", ""
+	}
+
+	if kind != "instant" {
+		copy.timeZoneName = ""
+	}
+	switch kind {
+	case "date":
+		copy.dayPeriod, copy.hour, copy.minute, copy.second, copy.fractional = "", "", "", "", 0
+	case "time":
+		copy.weekday, copy.era, copy.year, copy.month, copy.day = "", "", "", "", ""
+	case "year-month":
+		copy.weekday, copy.day = "", ""
+		copy.dayPeriod, copy.hour, copy.minute, copy.second, copy.fractional = "", "", "", "", 0
+	case "month-day":
+		copy.weekday, copy.era, copy.year = "", "", ""
+		copy.dayPeriod, copy.hour, copy.minute, copy.second, copy.fractional = "", "", "", "", 0
+	}
+	if kind == "time" && hadDateStyle && !hadTimeStyle {
+		return nil, r.throwTypeError("the formatter has no fields for this Temporal value")
+	}
+	if (kind == "date" || kind == "year-month" || kind == "month-day") && hadTimeStyle && !hadDateStyle {
+		return nil, r.throwTypeError("the formatter has no fields for this Temporal value")
+	}
+
+	if copy.dateStyle == "" && copy.timeStyle == "" {
+		if !copy.hasFields() {
+			return nil, r.throwTypeError("the formatter has no fields for this Temporal value")
+		}
+		copy.pattern = adjustClock(copy.patternFor(), copy.hourCycle)
+	}
+	return &copy, nil
 }
 
 // hasFields reports whether any of the parts of a date were asked for by name,

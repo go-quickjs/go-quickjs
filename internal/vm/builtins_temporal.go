@@ -409,36 +409,23 @@ func (r *Runtime) initTemporalZonedDateTime(temporal *Object) {
 		return Obj(o), nil
 	})
 	r.defMethod(ctor, "from", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		value := arg(args, 0)
-		if value.IsObject() {
-			if zoned, ok := value.Object().data.(*temporalZonedDateTime); ok && zoned != nil {
-				if _, err := rt.strictOptions(arg(args, 1)); err != nil {
-					return Undefined, err
-				}
-				copy := *zoned
-				o := newObject(proto, ClassObject)
-				o.data = &copy
-				return Obj(o), nil
-			}
-			return Undefined, rt.throwTypeError("ZonedDateTime property bags are not implemented")
-		}
-		if !value.IsString() {
-			return Undefined, rt.throwTypeError("a zoned date-time must be a string or object")
-		}
-		instant, zone, calendar, err := parseTemporalZonedDateTimeString(value.String().Go())
-		if err != nil {
-			return Undefined, rt.throwRangeError("invalid Temporal.ZonedDateTime string")
-		}
-		if _, err := rt.strictOptions(arg(args, 1)); err != nil {
-			return Undefined, err
-		}
-		zoned, err := rt.newTemporalZonedDateTime(instant, zone, Str(NewString(calendar)))
+		zoned, err := rt.toTemporalZonedDateTimeWithOptions(arg(args, 0), arg(args, 1))
 		if err != nil {
 			return Undefined, err
 		}
-		o := newObject(proto, ClassObject)
-		o.data = zoned
-		return Obj(o), nil
+		copy := *zoned
+		return Obj(newTemporalZonedDateTimeObject(proto, &copy)), nil
+	})
+	r.defMethod(ctor, "compare", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		left, err := rt.toTemporalZonedDateTimeWithOptions(arg(args, 0), Undefined)
+		if err != nil {
+			return Undefined, err
+		}
+		right, err := rt.toTemporalZonedDateTimeWithOptions(arg(args, 1), Undefined)
+		if err != nil {
+			return Undefined, err
+		}
+		return Int(compareTemporalInstants(left.instant, right.instant)), nil
 	})
 
 	r.defGetter(proto, "epochMilliseconds", func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -826,20 +813,7 @@ func newTemporalZonedDateTimeObject(proto *Object, zoned *temporalZonedDateTime)
 }
 
 func (r *Runtime) toTemporalZonedDateTime(value Value) (*temporalZonedDateTime, error) {
-	if value.IsObject() {
-		if zoned, ok := value.Object().data.(*temporalZonedDateTime); ok && zoned != nil {
-			return zoned, nil
-		}
-		return nil, r.throwTypeError("a zoned date-time must be a Temporal.ZonedDateTime or string")
-	}
-	if !value.IsString() {
-		return nil, r.throwTypeError("a zoned date-time must be a Temporal.ZonedDateTime or string")
-	}
-	instant, zone, calendar, err := parseTemporalZonedDateTimeString(value.String().Go())
-	if err != nil {
-		return nil, r.throwRangeError("invalid Temporal.ZonedDateTime string")
-	}
-	return r.newTemporalZonedDateTime(instant, zone, Str(NewString(calendar)))
+	return r.toTemporalZonedDateTimeWithOptions(value, Undefined)
 }
 
 func (z *temporalZonedDateTime) offsetSeconds() int {
@@ -1020,6 +994,11 @@ func parseTemporalZonedDateTimeString(input string) (temporalInstant, string, st
 }
 
 func (r *Runtime) toTemporalTimeZoneIdentifier(value Value) (string, error) {
+	if value.IsObject() {
+		if zoned, ok := value.Object().data.(*temporalZonedDateTime); ok && zoned != nil {
+			return zoned.timeZone, nil
+		}
+	}
 	if !value.IsString() {
 		return "", r.throwTypeError("time zone must be a string")
 	}

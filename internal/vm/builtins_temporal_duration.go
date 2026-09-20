@@ -132,10 +132,31 @@ func (r *Runtime) initTemporalDuration(temporal *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		leftValue, leftOK := left.timeNanoseconds()
-		rightValue, rightOK := right.timeNanoseconds()
-		if !leftOK || !rightOK {
-			return Undefined, rt.throwRangeError("calendar durations require relativeTo")
+		options, err := rt.strictOptions(arg(args, 2))
+		if err != nil {
+			return Undefined, err
+		}
+		relativeValue, err := rt.getProp(options, rt.atoms.intern("relativeTo"), Obj(options))
+		if err != nil {
+			return Undefined, err
+		}
+		var relativeTo temporalDurationRelativeTo
+		if !relativeValue.IsUndefined() {
+			relativeTo, err = rt.toTemporalDurationRelativeTo(relativeValue)
+			if err != nil {
+				return Undefined, err
+			}
+		}
+		if left.fields() == right.fields() {
+			return Int(0), nil
+		}
+		leftValue, err := rt.totalTemporalDurationNanoseconds(left, relativeTo)
+		if err != nil {
+			return Undefined, err
+		}
+		rightValue, err := rt.totalTemporalDurationNanoseconds(right, relativeTo)
+		if err != nil {
+			return Undefined, err
 		}
 		return Int(leftValue.Cmp(rightValue)), nil
 	})
@@ -670,7 +691,7 @@ func (r *Runtime) temporalDurationRelativeToFromZonedString(text string) (*tempo
 	timeStart := strings.IndexAny(main, "Tt ")
 	hasExplicitOffset := timeStart >= 0 && strings.ContainsAny(main[timeStart:], "Zz+-")
 	if splitOK && hasExplicitOffset {
-		if _, _, fieldsErr := parseTemporalInstantFields(text); fieldsErr != nil {
+		if _, instantErr := parseTemporalInstant(text); instantErr != nil {
 			return nil, r.throwRangeError("relativeTo is outside the Temporal range")
 		}
 	}
@@ -734,6 +755,56 @@ func validTemporalDurationRelativeZonedLocal(zoned *temporalZonedDateTime) bool 
 	local := zoned.localISODateTime()
 	days := isoDaysFromCivil(int64(local.year), local.month, local.day)
 	return days >= -100_000_000 && days <= 100_000_000
+}
+
+func (r *Runtime) totalTemporalDurationNanoseconds(duration temporalDuration, relativeTo temporalDurationRelativeTo) (*big.Int, error) {
+	if duration.years == 0 && duration.months == 0 && duration.weeks == 0 && duration.days == 0 {
+		return duration.timePartNanoseconds(), nil
+	}
+	if relativeTo.plain == nil && relativeTo.zoned == nil {
+		if duration.years != 0 || duration.months != 0 || duration.weeks != 0 {
+			return nil, r.throwRangeError("calendar durations require relativeTo")
+		}
+		total := new(big.Int).Mul(floatIntegerBig(duration.days), big.NewInt(86_400_000_000_000))
+		return total.Add(total, duration.timePartNanoseconds()), nil
+	}
+	if relativeTo.zoned != nil {
+		end, err := r.addTemporalDurationToZonedInstant(relativeTo.zoned, duration)
+		if err != nil {
+			return nil, err
+		}
+		return new(big.Int).Sub(end.epochNanoseconds(), relativeTo.zoned.instant.epochNanoseconds()), nil
+	}
+	start := *relativeTo.plain
+	if duration.sign() == 0 {
+		return new(big.Int), nil
+	}
+	if !start.valid() {
+		return nil, r.throwRangeError("relativeTo is outside the Temporal date-time range")
+	}
+	end, err := r.addTemporalPlainDateTime(start, duration, 1, "constrain")
+	if err != nil {
+		return nil, err
+	}
+	return new(big.Int).Sub(temporalPlainDateTimeEpochNanoseconds(end), temporalPlainDateTimeEpochNanoseconds(start)), nil
+}
+
+func (r *Runtime) addTemporalDurationToZonedInstant(relativeTo *temporalZonedDateTime, duration temporalDuration) (temporalInstant, error) {
+	startLocal := temporalPlainDateTime{temporalISODateTime: relativeTo.localISODateTime(), calendar: relativeTo.calendar}
+	dateDuration := temporalDuration{years: duration.years, months: duration.months, weeks: duration.weeks, days: duration.days}
+	afterDate, err := r.addTemporalPlainDateTime(startLocal, dateDuration, 1, "constrain")
+	if err != nil {
+		return temporalInstant{}, err
+	}
+	afterDateInstant, ok := relativeTo.compatibleInstant(afterDate.temporalISODateTime)
+	if !ok {
+		return temporalInstant{}, r.throwRangeError("duration endpoint is outside the Temporal range")
+	}
+	end, ok := afterDateInstant.addNanoseconds(duration.timePartNanoseconds())
+	if !ok {
+		return temporalInstant{}, r.throwRangeError("duration endpoint is outside the Temporal range")
+	}
+	return end, nil
 }
 
 func (r *Runtime) roundTemporalDuration(duration temporalDuration, largest, smallest string, increment int64, mode string, relativeTo temporalDurationRelativeTo) (temporalDuration, error) {
@@ -802,19 +873,10 @@ func (r *Runtime) roundTemporalDurationRelativeToZoned(duration temporalDuration
 	if duration.sign() == 0 {
 		return temporalDuration{}, nil
 	}
-	startLocal := temporalPlainDateTime{temporalISODateTime: relativeTo.localISODateTime(), calendar: relativeTo.calendar}
-	dateDuration := temporalDuration{years: duration.years, months: duration.months, weeks: duration.weeks, days: duration.days}
-	afterDate, err := r.addTemporalPlainDateTime(startLocal, dateDuration, 1, "constrain")
-	if err != nil {
+	if _, err := r.addTemporalDurationToZonedInstant(relativeTo, duration); err != nil {
 		return temporalDuration{}, err
 	}
-	afterDateInstant, ok := relativeTo.compatibleInstant(afterDate.temporalISODateTime)
-	if !ok {
-		return temporalDuration{}, r.throwRangeError("duration endpoint is outside the Temporal range")
-	}
-	if _, ok := afterDateInstant.addNanoseconds(duration.timePartNanoseconds()); !ok {
-		return temporalDuration{}, r.throwRangeError("duration endpoint is outside the Temporal range")
-	}
+	startLocal := temporalPlainDateTime{temporalISODateTime: relativeTo.localISODateTime(), calendar: relativeTo.calendar}
 	// UTC and fixed-offset zones have constant-length days, so the plain
 	// date-time algorithm is exact for them. Named-zone transitions are handled
 	// below as additional ZonedDateTime operations are implemented.

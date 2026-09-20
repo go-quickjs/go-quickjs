@@ -70,6 +70,28 @@ func TestTemporalInstantErrors(t *testing.T) {
 	}
 }
 
+func TestTemporalIntlDateTimeFormat(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	tests := []struct{ source, want string }{
+		{`new Intl.DateTimeFormat("en-US", { era: "narrow", timeZone: "UTC" }).format(new Temporal.Instant(0n))`, "1/1/1970, 12:00:00 AM AD"},
+		{`new Intl.DateTimeFormat("en-US", { era: "narrow", timeZone: "UTC" }).format(new Temporal.PlainDate(2025, 11, 4))`, "11/4/2025 AD"},
+		{`new Intl.DateTimeFormat("en-US", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" }).format(new Temporal.PlainDate(2000, 2, 29))`, "02/29/2000"},
+		{`new Intl.DateTimeFormat("en-US", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" }).format(new Temporal.PlainTime(12, 34))`, "12:34 PM"},
+		{`new Intl.DateTimeFormat("en-US", { timeZoneName: "long", timeZone: "America/New_York" }).formatToParts(new Temporal.PlainTime(12, 34)).some(part => part.type === "timeZoneName")`, "false"},
+	}
+	for _, test := range tests {
+		if got := evalString(t, rt, test.source); got != test.want {
+			t.Errorf("%s\n got: %s\nwant: %s", test.source, got, test.want)
+		}
+	}
+	if got := evalString(t, rt, `try {
+		new Intl.DateTimeFormat("en-US").format(new Temporal.ZonedDateTime(0n, "UTC"));
+	} catch (e) { e.name }`); got != "TypeError" {
+		t.Fatalf("formatting a ZonedDateTime threw %s", got)
+	}
+}
+
 func TestTemporalZonedDateTimeFoundation(t *testing.T) {
 	rt := quickjs.New()
 	defer rt.Close()
@@ -94,10 +116,25 @@ func TestTemporalZonedDateTimeFoundation(t *testing.T) {
 		{`Temporal.ZonedDateTime.from("2024-03-10T12:00-04:00[America/New_York]").startOfDay().toString()`, "2024-03-10T00:00:00-05:00[America/New_York]"},
 		{`Temporal.ZonedDateTime.from("2000-02-29T12:00Z[UTC]").withTimeZone("-08:00").toString()`, "2000-02-29T04:00:00-08:00[-08:00]"},
 		{`(() => { let z = Temporal.ZonedDateTime.from("2000-02-29T12:00Z[UTC]").withCalendar("gregory"); return [z.calendarId, z.year, z.era, z.eraYear].join(",") })()`, "gregory,2000,ce,2000"},
+		{`Temporal.ZonedDateTime.from({year: 2021, month: 2, day: 31, hour: 25, minute: 70, timeZone: "UTC"}).toString()`, "2021-02-28T23:59:00+00:00[UTC]"},
+		{`Temporal.ZonedDateTime.from({year: 2021, monthCode: "M11", day: 7, hour: 1, minute: 30, offset: "-05:00", timeZone: "America/New_York"}).toString()`, "2021-11-07T01:30:00-05:00[America/New_York]"},
+		{`Temporal.ZonedDateTime.from({year: 2021, month: 3, day: 14, hour: 2, minute: 30, timeZone: "America/New_York"}, {disambiguation: "earlier"}).toString()`, "2021-03-14T01:30:00-05:00[America/New_York]"},
+		{`Temporal.ZonedDateTime.from("2020-03-08T01:00-04:00[UTC]", {offset: "use"}).toInstant().toString()`, "2020-03-08T05:00:00Z"},
+		{`Temporal.ZonedDateTime.from({year: 2000, month: 5, day: 2, timeZone: new Temporal.ZonedDateTime(0n, "UTC")}).timeZoneId`, "UTC"},
+		{`Temporal.ZonedDateTime.compare("1970-01-01T00:00Z[UTC]", "1969-12-31T19:00-05:00[America/New_York]")`, "0"},
 	}
 	for _, test := range tests {
 		if got := evalString(t, rt, test.source); got != test.want {
 			t.Errorf("%s\n got: %s\nwant: %s", test.source, got, test.want)
+		}
+	}
+	for _, source := range []string{
+		`Temporal.ZonedDateTime.from({year: 2021, monthCode: "M12", month: 11, day: 7, timeZone: "UTC"})`,
+		`Temporal.ZonedDateTime.from({year: 2021, month: 3, day: 8, hour: 1, offset: "-04:00", timeZone: "UTC"})`,
+		`Temporal.ZonedDateTime.from({year: 2021, month: 2, day: 29, timeZone: "UTC"}, {overflow: "reject"})`,
+	} {
+		if got := evalString(t, rt, `try { `+source+` } catch (e) { e.name }`); got != "RangeError" {
+			t.Errorf("%s threw %s", source, got)
 		}
 	}
 }
@@ -181,6 +218,27 @@ func TestTemporalDurationRound(t *testing.T) {
 		});
 	} catch (e) { e.name }`); got != "RangeError" {
 		t.Fatalf("rounding past the Temporal instant limit threw %s", got)
+	}
+}
+
+func TestTemporalDurationCompare(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	tests := []struct{ source, want string }{
+		{`Temporal.Duration.compare({ months: 1 }, { days: 30 }, { relativeTo: new Temporal.PlainDate(2018, 4, 1) })`, "0"},
+		{`Temporal.Duration.compare({ months: 1 }, { days: 30 }, { relativeTo: new Temporal.PlainDate(2018, 3, 1) })`, "1"},
+		{`Temporal.Duration.compare({ days: 1 }, { hours: 24 }, { relativeTo: new Temporal.ZonedDateTime(1541302200000000000n, "America/Los_Angeles") })`, "1"},
+		{`Temporal.Duration.compare(new Temporal.Duration(5, 5, 5), new Temporal.Duration(5, 5, 5))`, "0"},
+	}
+	for _, test := range tests {
+		if got := evalString(t, rt, test.source); got != test.want {
+			t.Errorf("%s\n got: %s\nwant: %s", test.source, got, test.want)
+		}
+	}
+	if got := evalString(t, rt, `try {
+		Temporal.Duration.compare({ months: 1 }, { days: 30 });
+	} catch (e) { e.name }`); got != "RangeError" {
+		t.Fatalf("comparing a calendar duration without relativeTo threw %s", got)
 	}
 }
 

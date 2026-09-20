@@ -1070,7 +1070,10 @@ func (r *Runtime) initDateTimeFormat(intl *Object) {
 		}
 		return rt.bound(&o.formatFn, 1, func(rt *Runtime, _ Value, args []Value) (Value, error) {
 			value := arg(args, 0)
-			format := o.forDateArgument(value)
+			format, err := rt.dateOptionsForArgument(o, value)
+			if err != nil {
+				return Undefined, err
+			}
 			t, err := rt.dateArgument(format, value)
 			if err != nil {
 				return Undefined, err
@@ -1098,7 +1101,10 @@ func (r *Runtime) initDateTimeFormat(intl *Object) {
 			return Undefined, err
 		}
 		value := arg(args, 0)
-		format := o.forDateArgument(value)
+		format, err := rt.dateOptionsForArgument(o, value)
+		if err != nil {
+			return Undefined, err
+		}
 		t, err := rt.dateArgument(format, value)
 		if err != nil {
 			return Undefined, err
@@ -1158,11 +1164,48 @@ func (r *Runtime) dateArgument(o *dateOptions, v Value) (time.Time, error) {
 	if v.IsObject() {
 		switch value := v.Object().data.(type) {
 		case *temporalInstant:
+			if value == nil {
+				break
+			}
 			zone := o.zone
 			if zone == nil {
 				zone = time.UTC
 			}
 			return time.Unix(value.epochSeconds, int64(value.nanosecond)).In(zone), nil
+		case *temporalPlainDateTime:
+			if value != nil {
+				if value.calendar != "iso8601" && value.calendar != o.calendar {
+					return time.Time{}, r.throwRangeError("Temporal calendar does not match the formatter calendar")
+				}
+				return time.Date(value.year, time.Month(value.month), value.day, value.hour, value.minute, value.second,
+					value.millisecond*1_000_000+value.microsecond*1_000+value.nanosecond, time.UTC), nil
+			}
+		case *temporalPlainDate:
+			if value != nil {
+				if value.calendar != "iso8601" && value.calendar != o.calendar {
+					return time.Time{}, r.throwRangeError("Temporal calendar does not match the formatter calendar")
+				}
+				return time.Date(value.year, time.Month(value.month), value.day, 0, 0, 0, 0, time.UTC), nil
+			}
+		case *temporalPlainTime:
+			if value != nil {
+				return time.Date(1970, time.January, 1, value.hour, value.minute, value.second,
+					value.millisecond*1_000_000+value.microsecond*1_000+value.nanosecond, time.UTC), nil
+			}
+		case *temporalPlainYearMonth:
+			if value != nil {
+				if value.calendar != o.calendar {
+					return time.Time{}, r.throwRangeError("Temporal calendar does not match the formatter calendar")
+				}
+				return time.Date(value.year, time.Month(value.month), value.day, 0, 0, 0, 0, time.UTC), nil
+			}
+		case *temporalPlainMonthDay:
+			if value != nil {
+				if value.calendar != o.calendar {
+					return time.Time{}, r.throwRangeError("Temporal calendar does not match the formatter calendar")
+				}
+				return time.Date(value.year, time.Month(value.month), value.day, 0, 0, 0, 0, time.UTC), nil
+			}
 		case *temporalZonedDateTime:
 			return time.Time{}, r.throwTypeError("Intl.DateTimeFormat cannot format a Temporal.ZonedDateTime")
 		}
@@ -1616,7 +1659,10 @@ func (r *Runtime) dateRange(this Value, args []Value) (*rangePieces, error) {
 	if arg(args, 0).IsUndefined() || arg(args, 1).IsUndefined() {
 		return nil, r.throwTypeError("a range has two ends")
 	}
-	format := o.forDateArgument(arg(args, 0))
+	format, err := r.dateOptionsForArgument(o, arg(args, 0))
+	if err != nil {
+		return nil, err
+	}
 	from, err := r.dateArgument(format, arg(args, 0))
 	if err != nil {
 		return nil, err
