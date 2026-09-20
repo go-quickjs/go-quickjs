@@ -206,6 +206,17 @@ func (r *Runtime) initTemporalDuration(temporal *Object) {
 		if err != nil {
 			return Undefined, err
 		}
+		if unit == "year" || unit == "month" {
+			if d.weeks != 0 || d.days != 0 || d.hours != 0 || d.minutes != 0 || d.seconds != 0 ||
+				d.milliseconds != 0 || d.microseconds != 0 || d.nanoseconds != 0 {
+				return Undefined, rt.throwRangeError("lower units require calendar-relative totaling")
+			}
+			months := d.years*12 + d.months
+			if unit == "year" {
+				return Float(months / 12), nil
+			}
+			return Float(months), nil
+		}
 		total, ok := d.timeNanoseconds()
 		if !ok {
 			return Undefined, rt.throwRangeError("calendar durations require relativeTo")
@@ -353,6 +364,9 @@ func (r *Runtime) temporalTotalUnit(value Value) (string, error) {
 		return "", err
 	}
 	unit, ok := normalizeTemporalUnit(text.Go())
+	if !ok {
+		unit, ok = normalizeTemporalYearMonthUnit(text.Go())
+	}
 	if !ok {
 		return "", r.throwRangeError("invalid total unit")
 	}

@@ -37,6 +37,7 @@ type Runtime struct {
 	temporalPlainMonthDayProto  *Object
 	temporalPlainTimeProto      *Object
 	temporalPlainYearMonthProto *Object
+	temporalZonedDateTimeProto  *Object
 	// globalLex holds a script's top-level let, const and class bindings.
 	//
 	// They are not properties of the global object -- `let x = 1` does not make

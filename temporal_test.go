@@ -186,15 +186,22 @@ func TestTemporalPlainYearMonthAndMonthDayFoundation(t *testing.T) {
 		{`Temporal.PlainYearMonth.from("2019-10-31").toString({calendarName: "always"})`, "2019-10-01[u-ca=iso8601]"},
 		{`Temporal.PlainYearMonth.compare(new Temporal.PlainYearMonth(2019, 10, "iso8601", 1), new Temporal.PlainYearMonth(2019, 10, "iso8601", 2))`, "-1"},
 		{`new Temporal.PlainYearMonth(2024, 2).daysInMonth`, "29"},
+		{`new Temporal.PlainYearMonth(2019, 10).with({month: 9}).toString()`, "2019-09"},
+		{`new Temporal.PlainYearMonth(2019, 10).add({years: 1, months: 4}).toString()`, "2021-02"},
+		{`new Temporal.PlainYearMonth(2019, 10).subtract("P1Y4M").toString()`, "2018-06"},
+		{`new Temporal.PlainYearMonth(2019, 1).until(new Temporal.PlainYearMonth(2021, 9), {smallestUnit: "years", roundingMode: "halfExpand"}).toString()`, "P3Y"},
+		{`new Temporal.PlainYearMonth(2021, 9).since(new Temporal.PlainYearMonth(2019, 1), {largestUnit: "months"}).toString()`, "P32M"},
 		{`new Temporal.PlainYearMonth(2024, 2).toPlainDate({day: 29}).toString()`, "2024-02-29"},
 		{`new Temporal.PlainMonthDay(2, 29).toString()`, "02-29"},
 		{`new Temporal.PlainMonthDay(10, 31, "iso8601", 2019).toString({calendarName: "always"})`, "2019-10-31[u-ca=iso8601]"},
 		{`Temporal.PlainMonthDay.from("2019-10-31").toString({calendarName: "always"})`, "1972-10-31[u-ca=iso8601]"},
+		{`new Temporal.PlainMonthDay(1, 31).with({month: 2}).toString()`, "02-29"},
 		{`new Temporal.PlainMonthDay(2, 29).toPlainDate({year: 2024}).toString()`, "2024-02-29"},
 		{`new Temporal.PlainDate(2024, 2, 29).toPlainYearMonth().toString()`, "2024-02"},
 		{`new Temporal.PlainDate(2024, 2, 29).toPlainMonthDay().toString()`, "02-29"},
 		{`Temporal.PlainDate.from({year: 2024, month: 2, day: 29, calendar: new Temporal.PlainYearMonth(2000, 1)}).calendarId`, "iso8601"},
 		{`Temporal.PlainDate.from({year: 2024, month: 2, day: 29, calendar: new Temporal.PlainMonthDay(1, 1)}).calendarId`, "iso8601"},
+		{`Temporal.ZonedDateTime.from("2019-05-17T12:34Z[UTC]").toString()`, "2019-05-17T12:34:00+00:00[UTC]"},
 	}
 	for _, test := range tests {
 		if got := evalString(t, rt, test.source); got != test.want {

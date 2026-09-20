@@ -2,6 +2,8 @@ package vm
 
 import (
 	"fmt"
+	"math"
+	"math/big"
 	"strings"
 	"time"
 
@@ -156,6 +158,154 @@ func (r *Runtime) initTemporalPlainYearMonth(temporal *Object) {
 		}
 		return Bool(yearMonth == other), nil
 	})
+	r.defMethod(proto, "with", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		yearMonth, err := rt.temporalPlainYearMonthValue(this, "Temporal.PlainYearMonth.prototype.with")
+		if err != nil {
+			return Undefined, err
+		}
+		fields, err := rt.temporalPartialObject(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		month, monthPresent, monthCode, monthCodePresent, year, yearPresent, err := rt.temporalMonthAndYearFields(fields)
+		if err != nil {
+			return Undefined, err
+		}
+		if !monthPresent && !monthCodePresent && !yearPresent {
+			return Undefined, rt.throwTypeError("year-month fields must not be empty")
+		}
+		if monthPresent && month < 1 {
+			return Undefined, rt.throwRangeError("invalid Temporal.PlainYearMonth")
+		}
+		overflow, err := rt.temporalOverflowOption(arg(args, 1))
+		if err != nil {
+			return Undefined, err
+		}
+		if !yearPresent {
+			year = yearMonth.year
+		}
+		if monthPresent || monthCodePresent {
+			month, err = rt.resolveTemporalISOMonth(month, monthPresent, monthCode, monthCodePresent)
+			if err != nil {
+				return Undefined, err
+			}
+		} else {
+			month = yearMonth.month
+		}
+		if overflow == "constrain" {
+			month = min(month, 12)
+		}
+		result := temporalPlainYearMonth{year: year, month: month, day: 1, calendar: yearMonth.calendar}
+		if !result.valid() {
+			return Undefined, rt.throwRangeError("invalid Temporal.PlainYearMonth")
+		}
+		return Obj(newTemporalPlainYearMonth(rt.temporalPlainYearMonthProto, result)), nil
+	})
+	for _, operation := range []struct {
+		name string
+		sign int64
+	}{{"add", 1}, {"subtract", -1}} {
+		op := operation
+		r.defMethod(proto, op.name, 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+			yearMonth, err := rt.temporalPlainYearMonthValue(this, "Temporal.PlainYearMonth.prototype."+op.name)
+			if err != nil {
+				return Undefined, err
+			}
+			duration, err := rt.toTemporalDuration(arg(args, 0))
+			if err != nil {
+				return Undefined, err
+			}
+			if _, err := rt.temporalOverflowOption(arg(args, 1)); err != nil {
+				return Undefined, err
+			}
+			if duration.weeks != 0 || duration.days != 0 || duration.hours != 0 || duration.minutes != 0 ||
+				duration.seconds != 0 || duration.milliseconds != 0 || duration.microseconds != 0 || duration.nanoseconds != 0 {
+				return Undefined, rt.throwRangeError("units below months cannot be added to a year-month")
+			}
+			if !(temporalPlainDate{year: yearMonth.year, month: yearMonth.month, day: yearMonth.day}).valid() {
+				return Undefined, rt.throwRangeError("year-month reference date is outside the Temporal date range")
+			}
+			delta := int64(duration.years)*12 + int64(duration.months)
+			months := int64(yearMonth.year)*12 + int64(yearMonth.month-1) + op.sign*delta
+			year := floorDivInt64(months, 12)
+			month := months - year*12 + 1
+			if year < -271821 || year > 275760 {
+				return Undefined, rt.throwRangeError("year-month is outside the Temporal range")
+			}
+			result := temporalPlainYearMonth{year: int(year), month: int(month), day: 1, calendar: yearMonth.calendar}
+			if !result.valid() {
+				return Undefined, rt.throwRangeError("year-month is outside the Temporal range")
+			}
+			return Obj(newTemporalPlainYearMonth(rt.temporalPlainYearMonthProto, result)), nil
+		})
+	}
+	for _, operation := range []struct {
+		name  string
+		since bool
+	}{{"until", false}, {"since", true}} {
+		op := operation
+		r.defMethod(proto, op.name, 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+			yearMonth, err := rt.temporalPlainYearMonthValue(this, "Temporal.PlainYearMonth.prototype."+op.name)
+			if err != nil {
+				return Undefined, err
+			}
+			other, err := rt.toTemporalPlainYearMonth(arg(args, 0), Undefined)
+			if err != nil {
+				return Undefined, err
+			}
+			largest, smallest, increment, mode, err := rt.temporalYearMonthDifferenceOptions(arg(args, 1))
+			if err != nil {
+				return Undefined, err
+			}
+			if yearMonth.calendar != other.calendar {
+				return Undefined, rt.throwRangeError("year-month calendars must match")
+			}
+			months := int64(other.year-yearMonth.year)*12 + int64(other.month-yearMonth.month)
+			if op.since {
+				months = -months
+			}
+			if months == 0 {
+				return Obj(newTemporalDuration(rt.temporalDurationProto, temporalDuration{})), nil
+			}
+			if !(temporalPlainDate{year: yearMonth.year, month: yearMonth.month, day: 1}).valid() {
+				return Undefined, rt.throwRangeError("year-month reference date is outside the Temporal date range")
+			}
+			if !(temporalPlainDate{year: other.year, month: other.month, day: 1}).valid() {
+				return Undefined, rt.throwRangeError("other year-month reference date is outside the Temporal date range")
+			}
+			step := increment
+			rounded := months
+			if smallest == "year" || largest == "month" {
+				if smallest == "year" {
+					step *= 12
+				}
+				rounded = roundTemporalBigInt(big.NewInt(months), big.NewInt(step), mode).Int64()
+			} else {
+				years, remainder := months/12, months%12
+				remainder = roundTemporalBigInt(big.NewInt(remainder), big.NewInt(step), mode).Int64()
+				rounded = years*12 + remainder
+			}
+			if increment != 1 {
+				start := int64(yearMonth.year)*12 + int64(yearMonth.month-1)
+				lower := floorDivInt64(months, step) * step
+				for _, candidate := range []int64{start + lower, start + lower + step} {
+					year := floorDivInt64(candidate, 12)
+					month := candidate - year*12 + 1
+					if !((temporalPlainYearMonth{year: int(year), month: int(month), day: 1}).valid()) {
+						return Undefined, rt.throwRangeError("rounded year-month is outside the Temporal range")
+					}
+				}
+			}
+			var duration temporalDuration
+			if largest == "month" {
+				duration.months = float64(rounded)
+			} else {
+				duration.years = float64(rounded / 12)
+				duration.months = float64(rounded % 12)
+			}
+			return Obj(newTemporalDuration(rt.temporalDurationProto, duration)), nil
+		})
+	}
 	r.defMethod(proto, "toPlainDate", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		yearMonth, err := rt.temporalPlainYearMonthValue(this, "Temporal.PlainYearMonth.prototype.toPlainDate")
 		if err != nil {
@@ -293,6 +443,64 @@ func (r *Runtime) initTemporalPlainMonthDay(temporal *Object) {
 		}
 		return Bool(monthDay == other), nil
 	})
+	r.defMethod(proto, "with", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		monthDay, err := rt.temporalPlainMonthDayValue(this, "Temporal.PlainMonthDay.prototype.with")
+		if err != nil {
+			return Undefined, err
+		}
+		fields, err := rt.temporalPartialObject(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		dayValue, err := rt.getProp(fields, rt.atoms.intern("day"), Obj(fields))
+		if err != nil {
+			return Undefined, err
+		}
+		day, dayPresent := 0, !dayValue.IsUndefined()
+		if dayPresent {
+			day, err = rt.temporalTruncatedInteger(dayValue, "day")
+			if err != nil {
+				return Undefined, err
+			}
+		}
+		month, monthPresent, monthCode, monthCodePresent, year, yearPresent, err := rt.temporalMonthAndYearFields(fields)
+		if err != nil {
+			return Undefined, err
+		}
+		if !dayPresent && !monthPresent && !monthCodePresent && !yearPresent {
+			return Undefined, rt.throwTypeError("month-day fields must not be empty")
+		}
+		if dayPresent && day < 1 || monthPresent && month < 1 {
+			return Undefined, rt.throwRangeError("invalid Temporal.PlainMonthDay")
+		}
+		overflow, err := rt.temporalOverflowOption(arg(args, 1))
+		if err != nil {
+			return Undefined, err
+		}
+		if !dayPresent {
+			day = monthDay.day
+		}
+		if monthPresent || monthCodePresent {
+			month, err = rt.resolveTemporalISOMonth(month, monthPresent, monthCode, monthCodePresent)
+			if err != nil {
+				return Undefined, err
+			}
+		} else {
+			month = monthDay.month
+		}
+		validationYear := 1972
+		if yearPresent {
+			validationYear = year
+		}
+		if overflow == "constrain" {
+			month = min(month, 12)
+			day = min(day, isoDaysInMonth(validationYear, month))
+		} else if month > 12 || day > isoDaysInMonth(validationYear, month) {
+			return Undefined, rt.throwRangeError("invalid Temporal.PlainMonthDay")
+		}
+		result := temporalPlainMonthDay{year: 1972, month: month, day: day, calendar: monthDay.calendar}
+		return Obj(newTemporalPlainMonthDay(rt.temporalPlainMonthDayProto, result)), nil
+	})
 	r.defMethod(proto, "toPlainDate", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		monthDay, err := rt.temporalPlainMonthDayValue(this, "Temporal.PlainMonthDay.prototype.toPlainDate")
 		if err != nil {
@@ -379,6 +587,35 @@ func (r *Runtime) temporalPlainMonthDayValue(value Value, method string) (tempor
 	return temporalPlainMonthDay{}, r.throwTypeError("%s called on an incompatible receiver", method)
 }
 
+func (r *Runtime) temporalPartialObject(value Value) (*Object, error) {
+	if !value.IsObject() || isTemporalObject(value.Object()) {
+		return nil, r.throwTypeError("partial Temporal fields must be an ordinary object")
+	}
+	o := value.Object()
+	calendar, err := r.getProp(o, r.atoms.intern("calendar"), value)
+	if err != nil {
+		return nil, err
+	}
+	timeZone, err := r.getProp(o, r.atoms.intern("timeZone"), value)
+	if err != nil {
+		return nil, err
+	}
+	if !calendar.IsUndefined() || !timeZone.IsUndefined() {
+		return nil, r.throwTypeError("partial Temporal fields must not contain calendar or timeZone")
+	}
+	return o, nil
+}
+
+func isTemporalObject(o *Object) bool {
+	switch o.data.(type) {
+	case *temporalDuration, *temporalInstant, *temporalPlainDate, *temporalPlainDateTime,
+		*temporalPlainMonthDay, *temporalPlainTime, *temporalPlainYearMonth, *temporalZonedDateTime:
+		return true
+	default:
+		return false
+	}
+}
+
 func compareISODate(leftYear, leftMonth, leftDay, rightYear, rightMonth, rightDay int) int {
 	if leftYear != rightYear {
 		if leftYear < rightYear {
@@ -399,6 +636,64 @@ func compareISODate(leftYear, leftMonth, leftDay, rightYear, rightMonth, rightDa
 		return 1
 	}
 	return 0
+}
+
+func normalizeTemporalYearMonthUnit(unit string) (string, bool) {
+	unit = strings.TrimSuffix(unit, "s")
+	return unit, unit == "year" || unit == "month"
+}
+
+func (r *Runtime) temporalYearMonthDifferenceOptions(value Value) (largest, smallest string, increment int64, mode string, err error) {
+	options, err := r.strictOptions(value)
+	if err != nil {
+		return "", "", 0, "", err
+	}
+	largestRaw, err := r.stringOption(options, "largestUnit", "auto")
+	if err != nil {
+		return "", "", 0, "", err
+	}
+	rawIncrement, incrementSet, err := r.rawNumberOption(options, "roundingIncrement")
+	if err != nil {
+		return "", "", 0, "", err
+	}
+	mode, err = r.stringOption(options, "roundingMode", "trunc",
+		"ceil", "floor", "expand", "trunc", "halfCeil", "halfFloor", "halfExpand", "halfTrunc", "halfEven")
+	if err != nil {
+		return "", "", 0, "", err
+	}
+	smallestRaw, err := r.stringOption(options, "smallestUnit", "month")
+	if err != nil {
+		return "", "", 0, "", err
+	}
+	var ok bool
+	smallest, ok = normalizeTemporalYearMonthUnit(smallestRaw)
+	if !ok {
+		return "", "", 0, "", r.throwRangeError("invalid smallestUnit")
+	}
+	if largestRaw == "auto" {
+		largest = "year"
+	} else {
+		largest, ok = normalizeTemporalYearMonthUnit(largestRaw)
+		if !ok {
+			return "", "", 0, "", r.throwRangeError("invalid largestUnit")
+		}
+	}
+	if largest == "month" && smallest == "year" {
+		return "", "", 0, "", r.throwRangeError("largestUnit must not be smaller than smallestUnit")
+	}
+	if !incrementSet {
+		increment = 1
+	} else {
+		if math.IsNaN(rawIncrement) || math.IsInf(rawIncrement, 0) {
+			return "", "", 0, "", r.throwRangeError("roundingIncrement must be finite")
+		}
+		rawIncrement = math.Trunc(rawIncrement)
+		if rawIncrement < 1 || rawIncrement > 1_000_000_000 {
+			return "", "", 0, "", r.throwRangeError("roundingIncrement is out of range")
+		}
+		increment = int64(rawIncrement)
+	}
+	return
 }
 
 func temporalPlainYearMonthToString(rt *Runtime, this Value, args []Value) (Value, error) {

@@ -260,7 +260,8 @@ type temporalZonedDateTime struct {
 
 func (r *Runtime) initTemporalZonedDateTime(temporal *Object) {
 	proto := newObject(r.proto.object, ClassObject)
-	r.newTemporalCtor(temporal, "ZonedDateTime", 2, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	r.temporalZonedDateTimeProto = proto
+	ctor := r.newTemporalCtor(temporal, "ZonedDateTime", 2, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if err := rt.requireNew("Temporal.ZonedDateTime"); err != nil {
 			return Undefined, err
 		}
@@ -285,6 +286,38 @@ func (r *Runtime) initTemporalZonedDateTime(temporal *Object) {
 			return Undefined, err
 		}
 		o := newObject(instanceProto, ClassObject)
+		o.data = zoned
+		return Obj(o), nil
+	})
+	r.defMethod(ctor, "from", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		value := arg(args, 0)
+		if value.IsObject() {
+			if zoned, ok := value.Object().data.(*temporalZonedDateTime); ok && zoned != nil {
+				if _, err := rt.strictOptions(arg(args, 1)); err != nil {
+					return Undefined, err
+				}
+				copy := *zoned
+				o := newObject(proto, ClassObject)
+				o.data = &copy
+				return Obj(o), nil
+			}
+			return Undefined, rt.throwTypeError("ZonedDateTime property bags are not implemented")
+		}
+		if !value.IsString() {
+			return Undefined, rt.throwTypeError("a zoned date-time must be a string or object")
+		}
+		instant, zone, calendar, err := parseTemporalZonedDateTimeString(value.String().Go())
+		if err != nil {
+			return Undefined, rt.throwRangeError("invalid Temporal.ZonedDateTime string")
+		}
+		if _, err := rt.strictOptions(arg(args, 1)); err != nil {
+			return Undefined, err
+		}
+		zoned, err := rt.newTemporalZonedDateTime(instant, zone, Str(NewString(calendar)))
+		if err != nil {
+			return Undefined, err
+		}
+		o := newObject(proto, ClassObject)
 		o.data = zoned
 		return Obj(o), nil
 	})
@@ -411,4 +444,33 @@ func (z *temporalZonedDateTime) string() string {
 		text += "[u-ca=" + z.calendar + "]"
 	}
 	return text
+}
+
+func parseTemporalZonedDateTimeString(input string) (temporalInstant, string, string, error) {
+	_, annotations, ok := splitTemporalAnnotations(input)
+	if !ok || !validInstantAnnotations(annotations) {
+		return temporalInstant{}, "", "", errInvalidTemporalInstant
+	}
+	zone, calendar := "", "iso8601"
+	for _, annotation := range annotations {
+		annotation = strings.TrimPrefix(annotation, "!")
+		if key, value, keyed := strings.Cut(annotation, "="); keyed {
+			if key == "u-ca" && calendar == "iso8601" {
+				calendar = canonicalSetting("ca", asciiLower(value))
+				if !icu.HasCalendar(calendar) {
+					return temporalInstant{}, "", "", errInvalidTemporalInstant
+				}
+			}
+			continue
+		}
+		zone = annotation
+	}
+	if zone == "" {
+		return temporalInstant{}, "", "", errInvalidTemporalInstant
+	}
+	instant, err := parseTemporalInstant(input)
+	if err != nil {
+		return temporalInstant{}, "", "", err
+	}
+	return instant, zone, calendar, nil
 }
