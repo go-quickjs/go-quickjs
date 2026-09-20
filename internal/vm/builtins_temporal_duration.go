@@ -8,16 +8,16 @@ import (
 )
 
 type temporalDuration struct {
-	years, months, weeks, days              int64
-	hours, minutes, seconds                 int64
-	milliseconds, microseconds, nanoseconds int64
+	years, months, weeks, days              float64
+	hours, minutes, seconds                 float64
+	milliseconds, microseconds, nanoseconds float64
 }
 
-func (d temporalDuration) fields() [10]int64 {
-	return [10]int64{d.years, d.months, d.weeks, d.days, d.hours, d.minutes, d.seconds, d.milliseconds, d.microseconds, d.nanoseconds}
+func (d temporalDuration) fields() [10]float64 {
+	return [10]float64{d.years, d.months, d.weeks, d.days, d.hours, d.minutes, d.seconds, d.milliseconds, d.microseconds, d.nanoseconds}
 }
 
-func (d temporalDuration) sign() int64 {
+func (d temporalDuration) sign() int {
 	for _, value := range d.fields() {
 		if value < 0 {
 			return -1
@@ -30,12 +30,12 @@ func (d temporalDuration) sign() int64 {
 }
 
 func (d temporalDuration) valid() bool {
-	sign := int64(0)
+	sign := 0
 	for _, value := range d.fields() {
 		if value == 0 {
 			continue
 		}
-		current := int64(1)
+		current := 1
 		if value < 0 {
 			current = -1
 		}
@@ -52,11 +52,15 @@ func (d temporalDuration) timeNanoseconds() (*big.Int, bool) {
 		return nil, false
 	}
 	total := new(big.Int)
-	for _, unit := range []struct{ value, scale int64 }{
+	for _, unit := range []struct {
+		value float64
+		scale int64
+	}{
 		{d.hours, 3_600_000_000_000}, {d.minutes, 60_000_000_000}, {d.seconds, 1_000_000_000},
 		{d.milliseconds, 1_000_000}, {d.microseconds, 1_000}, {d.nanoseconds, 1},
 	} {
-		total.Add(total, new(big.Int).Mul(big.NewInt(unit.value), big.NewInt(unit.scale)))
+		integer, _ := new(big.Float).SetFloat64(unit.value).Int(nil)
+		total.Add(total, new(big.Int).Mul(integer, big.NewInt(unit.scale)))
 	}
 	return total, true
 }
@@ -69,7 +73,7 @@ func (r *Runtime) initTemporalDuration(temporal *Object) {
 			return Undefined, err
 		}
 		var d temporalDuration
-		fields := []*int64{&d.years, &d.months, &d.weeks, &d.days, &d.hours, &d.minutes, &d.seconds, &d.milliseconds, &d.microseconds, &d.nanoseconds}
+		fields := []*float64{&d.years, &d.months, &d.weeks, &d.days, &d.hours, &d.minutes, &d.seconds, &d.milliseconds, &d.microseconds, &d.nanoseconds}
 		for i, target := range fields {
 			value, err := rt.temporalInteger(arg(args, i))
 			if err != nil {
@@ -104,7 +108,7 @@ func (r *Runtime) initTemporalDuration(temporal *Object) {
 			if err != nil {
 				return Undefined, err
 			}
-			return Float(float64(d.fields()[index])), nil
+			return Float(d.fields()[index]), nil
 		})
 	}
 	r.defGetter(proto, "sign", func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -112,7 +116,7 @@ func (r *Runtime) initTemporalDuration(temporal *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		return Int(int(d.sign())), nil
+		return Int(d.sign()), nil
 	})
 	r.defGetter(proto, "blank", func(rt *Runtime, this Value, args []Value) (Value, error) {
 		d, err := rt.temporalDurationValue(this, "get Temporal.Duration.prototype.blank")
@@ -164,7 +168,7 @@ func (r *Runtime) initTemporalDuration(temporal *Object) {
 	r.defToStringTag(proto, "Temporal.Duration")
 }
 
-func durationFromFields(v [10]int64) temporalDuration {
+func durationFromFields(v [10]float64) temporalDuration {
 	return temporalDuration{v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9]}
 }
 func newTemporalDuration(proto *Object, d temporalDuration) *Object {
@@ -180,7 +184,7 @@ func (r *Runtime) temporalDurationValue(v Value, method string) (temporalDuratio
 	}
 	return temporalDuration{}, r.throwTypeError("%s called on an incompatible receiver", method)
 }
-func (r *Runtime) temporalInteger(v Value) (int64, error) {
+func (r *Runtime) temporalInteger(v Value) (float64, error) {
 	if v.IsUndefined() {
 		return 0, nil
 	}
@@ -188,10 +192,10 @@ func (r *Runtime) temporalInteger(v Value) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if math.IsNaN(n) || math.IsInf(n, 0) || n != math.Trunc(n) || n >= float64(math.MaxInt64) || n <= float64(math.MinInt64) {
-		return 0, r.throwRangeError("duration field is outside the supported integer range")
+	if math.IsNaN(n) || math.IsInf(n, 0) || n != math.Trunc(n) {
+		return 0, r.throwRangeError("duration fields must be finite integers")
 	}
-	return int64(n), nil
+	return n, nil
 }
 
 func (r *Runtime) toTemporalDuration(v Value) (temporalDuration, error) {
@@ -216,7 +220,7 @@ func (r *Runtime) temporalDurationFromBag(o *Object) (temporalDuration, error) {
 	found := false
 	for _, field := range []struct {
 		name   string
-		target *int64
+		target *float64
 	}{
 		{"days", &d.days}, {"hours", &d.hours}, {"microseconds", &d.microseconds}, {"milliseconds", &d.milliseconds}, {"minutes", &d.minutes}, {"months", &d.months}, {"nanoseconds", &d.nanoseconds}, {"seconds", &d.seconds}, {"weeks", &d.weeks}, {"years", &d.years},
 	} {
@@ -245,7 +249,7 @@ func (r *Runtime) temporalDurationFromBag(o *Object) (temporalDuration, error) {
 
 func parseTemporalDuration(s string) (temporalDuration, error) {
 	var d temporalDuration
-	sign := int64(1)
+	sign := float64(1)
 	i := 0
 	if i < len(s) && (s[i] == '+' || s[i] == '-') {
 		if s[i] == '-' {
@@ -272,8 +276,8 @@ func parseTemporalDuration(s string) (temporalDuration, error) {
 		if start == i {
 			return d, errInvalidTemporalInstant
 		}
-		n, err := strconv.ParseInt(s[start:i], 10, 64)
-		if err != nil || n < 0 {
+		n, err := strconv.ParseFloat(s[start:i], 64)
+		if err != nil || math.IsInf(n, 0) || n < 0 || n != math.Trunc(n) {
 			return d, errInvalidTemporalInstant
 		}
 		fraction := ""
@@ -293,7 +297,7 @@ func parseTemporalDuration(s string) (temporalDuration, error) {
 		}
 		unit := s[i]
 		i++
-		target := (*int64)(nil)
+		target := (*float64)(nil)
 		switch unit {
 		case 'Y':
 			if inTime {
@@ -349,7 +353,7 @@ func parseTemporalDuration(s string) (temporalDuration, error) {
 			if !ok {
 				return d, errInvalidTemporalInstant
 			}
-			d.addFractionalTime(sign * extra)
+			d.addFractionalTime(sign * float64(extra))
 		}
 		seen = true
 	}
@@ -377,15 +381,15 @@ func roundedFractionNanoseconds(digits string, scale int64) (int64, bool) {
 	return quotient.Int64(), true
 }
 
-func (d *temporalDuration) addFractionalTime(nanoseconds int64) {
-	d.minutes += nanoseconds / 60_000_000_000
-	nanoseconds %= 60_000_000_000
-	d.seconds += nanoseconds / 1_000_000_000
-	nanoseconds %= 1_000_000_000
-	d.milliseconds += nanoseconds / 1_000_000
-	nanoseconds %= 1_000_000
-	d.microseconds += nanoseconds / 1_000
-	d.nanoseconds += nanoseconds % 1_000
+func (d *temporalDuration) addFractionalTime(nanoseconds float64) {
+	d.minutes += math.Trunc(nanoseconds / 60_000_000_000)
+	nanoseconds = math.Mod(nanoseconds, 60_000_000_000)
+	d.seconds += math.Trunc(nanoseconds / 1_000_000_000)
+	nanoseconds = math.Mod(nanoseconds, 1_000_000_000)
+	d.milliseconds += math.Trunc(nanoseconds / 1_000_000)
+	nanoseconds = math.Mod(nanoseconds, 1_000_000)
+	d.microseconds += math.Trunc(nanoseconds / 1_000)
+	d.nanoseconds += math.Mod(nanoseconds, 1_000)
 }
 
 func (d temporalDuration) string() string {
@@ -407,25 +411,25 @@ func (d temporalDuration) string() string {
 	labels := []byte{'Y', 'M', 'W', 'D'}
 	for i := 0; i < 4; i++ {
 		if values[i] != 0 {
-			b.WriteString(strconv.FormatInt(values[i], 10))
+			b.WriteString(formatTemporalInteger(values[i]))
 			b.WriteByte(labels[i])
 		}
 	}
 	if values[4] != 0 || values[5] != 0 || values[6] != 0 || values[7] != 0 || values[8] != 0 || values[9] != 0 {
 		b.WriteByte('T')
 		if values[4] != 0 {
-			b.WriteString(strconv.FormatInt(values[4], 10))
+			b.WriteString(formatTemporalInteger(values[4]))
 			b.WriteByte('H')
 		}
 		if values[5] != 0 {
-			b.WriteString(strconv.FormatInt(values[5], 10))
+			b.WriteString(formatTemporalInteger(values[5]))
 			b.WriteByte('M')
 		}
 		sub := values[7]*1_000_000 + values[8]*1_000 + values[9]
 		if values[6] != 0 || sub != 0 {
-			b.WriteString(strconv.FormatInt(values[6], 10))
+			b.WriteString(formatTemporalInteger(values[6]))
 			if sub != 0 {
-				fraction := strconv.FormatInt(sub+1_000_000_000, 10)[1:]
+				fraction := strconv.FormatInt(int64(sub)+1_000_000_000, 10)[1:]
 				b.WriteByte('.')
 				b.WriteString(strings.TrimRight(fraction, "0"))
 			}
@@ -433,4 +437,8 @@ func (d temporalDuration) string() string {
 		}
 	}
 	return b.String()
+}
+
+func formatTemporalInteger(value float64) string {
+	return strconv.FormatFloat(value, 'f', 0, 64)
 }
