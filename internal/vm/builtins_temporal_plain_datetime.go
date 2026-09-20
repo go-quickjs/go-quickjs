@@ -245,10 +245,15 @@ func (r *Runtime) initTemporalPlainDateTime(temporal *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		names := []string{"day", "hour", "microsecond", "millisecond", "minute", "month", "monthCode", "nanosecond", "second", "year"}
-		values := make(map[string]float64, len(names))
+		names := []string{"day"}
+		if temporalCalendarUsesEra(dateTime.calendar) {
+			names = append(names, "era", "eraYear")
+		}
+		names = append(names, "hour", "microsecond", "millisecond", "minute",
+			"month", "monthCode", "nanosecond", "second", "year")
+		values := make(map[string]int, len(names))
 		present := make(map[string]bool, len(names))
-		monthCode := ""
+		partial := temporalPartialDateFields{}
 		for _, name := range names {
 			raw, err := rt.getProp(fields, rt.atoms.intern(name), Obj(fields))
 			if err != nil {
@@ -258,26 +263,48 @@ func (r *Runtime) initTemporalPlainDateTime(temporal *Object) {
 				continue
 			}
 			present[name] = true
-			if name == "monthCode" {
-				monthCode, err = rt.temporalMonthCodeString(raw)
+			switch name {
+			case "era":
+				text, conversionErr := rt.toString(raw)
+				if conversionErr != nil {
+					return Undefined, conversionErr
+				}
+				partial.era, partial.eraPresent = asciiLower(text.Go()), true
+				if _, valid := temporalYearFromEra(dateTime.calendar, partial.era, 1); !valid {
+					return Undefined, rt.throwRangeError("invalid calendar era")
+				}
+				continue
+			case "monthCode":
+				partial.monthCode, err = rt.temporalMonthCodeString(raw)
 				if err != nil {
 					return Undefined, err
 				}
+				partial.monthCodePresent = true
 				continue
 			}
-			value, err := rt.toNumber(raw)
+			value, err := rt.temporalTruncatedInteger(raw, name)
 			if err != nil {
 				return Undefined, err
 			}
-			if math.IsNaN(value) || math.IsInf(value, 0) {
-				return Undefined, rt.throwRangeError("%s must be a finite number", name)
+			values[name] = value
+			switch name {
+			case "day":
+				partial.day, partial.dayPresent = value, true
+			case "eraYear":
+				partial.eraYear, partial.eraYearPresent = value, true
+			case "month":
+				partial.month, partial.monthPresent = value, true
+			case "year":
+				partial.year, partial.yearPresent = value, true
 			}
-			values[name] = math.Trunc(value)
 		}
 		if len(present) == 0 {
 			return Undefined, rt.throwTypeError("date-time fields must not be empty")
 		}
-		if present["day"] && values["day"] < 1 || present["month"] && values["month"] < 1 {
+		if partial.eraPresent != partial.eraYearPresent {
+			return Undefined, rt.throwTypeError("era and eraYear must be provided together")
+		}
+		if partial.dayPresent && partial.day < 1 || partial.monthPresent && partial.month < 1 {
 			return Undefined, rt.throwRangeError("invalid Temporal.PlainDateTime")
 		}
 		overflow, err := rt.temporalOverflowOption(arg(args, 1))
@@ -285,37 +312,16 @@ func (r *Runtime) initTemporalPlainDateTime(temporal *Object) {
 			return Undefined, err
 		}
 
-		year := float64(dateTime.year)
-		if present["year"] {
-			year = values["year"]
-		}
-		month := float64(dateTime.month)
-		if present["month"] {
-			month = values["month"]
-		}
-		if present["monthCode"] {
-			parsed, ok := parseISOMonthCode(monthCode)
-			if !ok || present["month"] && month != float64(parsed) {
-				return Undefined, rt.throwRangeError("invalid monthCode")
-			}
-			month = float64(parsed)
-		}
-		day := float64(dateTime.day)
-		if present["day"] {
-			day = values["day"]
-		}
-		if year < -271821 || year > 275760 || month < 1 || day < 1 {
-			return Undefined, rt.throwRangeError("invalid Temporal.PlainDateTime")
-		}
-		if overflow == "constrain" {
-			month = min(month, 12)
-			day = min(day, float64(isoDaysInMonth(int(year), int(month))))
-		} else if month > 12 || day > float64(isoDaysInMonth(int(year), int(month))) {
-			return Undefined, rt.throwRangeError("invalid Temporal.PlainDateTime")
+		date, err := rt.replaceTemporalPlainDateFields(temporalPlainDate{
+			year: dateTime.year, month: dateTime.month, day: dateTime.day,
+			calendar: dateTime.calendar,
+		}, partial, overflow)
+		if err != nil {
+			return Undefined, err
 		}
 		result := dateTime
-		result.year, result.month, result.day = int(year), int(month), int(day)
-		timeLimits := map[string]float64{
+		result.year, result.month, result.day = date.year, date.month, date.day
+		timeLimits := map[string]int{
 			"hour": 23, "minute": 59, "second": 59,
 			"millisecond": 999, "microsecond": 999, "nanosecond": 999,
 		}
@@ -331,17 +337,17 @@ func (r *Runtime) initTemporalPlainDateTime(temporal *Object) {
 			}
 			switch name {
 			case "hour":
-				result.hour = int(value)
+				result.hour = value
 			case "minute":
-				result.minute = int(value)
+				result.minute = value
 			case "second":
-				result.second = int(value)
+				result.second = value
 			case "millisecond":
-				result.millisecond = int(value)
+				result.millisecond = value
 			case "microsecond":
-				result.microsecond = int(value)
+				result.microsecond = value
 			case "nanosecond":
-				result.nanosecond = int(value)
+				result.nanosecond = value
 			}
 		}
 		if !result.valid() {
@@ -505,13 +511,14 @@ func (r *Runtime) initTemporalPlainDateTime(temporal *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		zone := options.zone
-		if zone == nil {
-			zone = time.UTC
+		if dateTime.calendar != "iso8601" && dateTime.calendar != options.calendar {
+			return Undefined, rt.throwRangeError("Temporal calendar does not match the formatter calendar")
 		}
+		options.zone, options.timeZone = time.UTC, "UTC"
 		value := time.Date(dateTime.year, time.Month(dateTime.month), dateTime.day,
 			dateTime.hour, dateTime.minute, dateTime.second,
-			dateTime.millisecond*1_000_000+dateTime.microsecond*1_000+dateTime.nanosecond, zone)
+			dateTime.millisecond*1_000_000+dateTime.microsecond*1_000+dateTime.nanosecond,
+			time.UTC)
 		return Str(NewString(options.format(value))), nil
 	})
 	r.defMethod(proto, "valueOf", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -949,10 +956,17 @@ func (r *Runtime) temporalPlainDateTimeFromBag(o *Object, optionsValue Value) (t
 	if err != nil {
 		return temporalPlainDateTime{}, err
 	}
-	values := make(map[string]int, 9)
-	present := make(map[string]bool, 9)
+	values := make(map[string]int, 11)
+	present := make(map[string]bool, 11)
+	era := ""
 	monthCode, monthCodePresent := "", false
-	for _, name := range []string{"day", "hour", "microsecond", "millisecond", "minute", "month", "monthCode", "nanosecond", "second", "year"} {
+	names := []string{"day"}
+	if temporalCalendarUsesEra(calendar) {
+		names = append(names, "era", "eraYear")
+	}
+	names = append(names, "hour", "microsecond", "millisecond", "minute",
+		"month", "monthCode", "nanosecond", "second", "year")
+	for _, name := range names {
 		raw, err := r.getProp(o, r.atoms.intern(name), Obj(o))
 		if err != nil {
 			return temporalPlainDateTime{}, err
@@ -960,7 +974,18 @@ func (r *Runtime) temporalPlainDateTimeFromBag(o *Object, optionsValue Value) (t
 		if raw.IsUndefined() {
 			continue
 		}
-		if name == "monthCode" {
+		switch name {
+		case "era":
+			text, conversionErr := r.toString(raw)
+			if conversionErr != nil {
+				return temporalPlainDateTime{}, conversionErr
+			}
+			era, present[name] = asciiLower(text.Go()), true
+			if _, valid := temporalYearFromEra(calendar, era, 1); !valid {
+				return temporalPlainDateTime{}, r.throwRangeError("invalid calendar era")
+			}
+			continue
+		case "monthCode":
 			monthCodePresent = true
 			if raw.IsString() {
 				monthCode = raw.String().Go()
@@ -991,24 +1016,47 @@ func (r *Runtime) temporalPlainDateTimeFromBag(o *Object, optionsValue Value) (t
 	if err != nil {
 		return temporalPlainDateTime{}, err
 	}
-	if !present["year"] || !present["day"] || !present["month"] && !monthCodePresent {
+	if present["era"] != present["eraYear"] {
+		return temporalPlainDateTime{}, r.throwTypeError("era and eraYear must be provided together")
+	}
+	year, yearPresent := values["year"], present["year"]
+	if !yearPresent && present["era"] {
+		year, _ = temporalYearFromEra(calendar, era, values["eraYear"])
+		yearPresent = true
+	}
+	if !yearPresent || !present["day"] || !present["month"] && !monthCodePresent {
 		return temporalPlainDateTime{}, r.throwTypeError("plain date-time property bag is missing required fields")
 	}
-	month := values["month"]
+	month, day := values["month"], values["day"]
+	constrain := overflow == "constrain"
+	var isoYear, isoMonth, isoDay int
 	if monthCodePresent {
-		parsed, ok := parseISOMonthCode(monthCode)
-		if !ok || present["month"] && month != parsed {
+		codeMonth, leap, ok := parseTemporalMonthCode(monthCode)
+		if !ok {
 			return temporalPlainDateTime{}, r.throwRangeError("invalid monthCode")
 		}
-		month = parsed
-	}
-	day, year := values["day"], values["year"]
-	if overflow == "constrain" {
-		if month < 1 || day < 1 {
+		isoYear, isoMonth, isoDay, ok = icu.ResolveDate(calendar, year,
+			codeMonth, day, leap, true, constrain)
+		if !ok {
 			return temporalPlainDateTime{}, r.throwRangeError("invalid Temporal.PlainDateTime")
 		}
-		month = min(12, month)
-		day = min(isoDaysInMonth(year, month), day)
+		if present["month"] {
+			resolved := temporalPlainDate{
+				year: isoYear, month: isoMonth, day: isoDay, calendar: calendar,
+			}.calendarDate()
+			if month != resolved.OrdinalMonth {
+				return temporalPlainDateTime{}, r.throwRangeError("month and monthCode do not agree")
+			}
+		}
+	} else {
+		var ok bool
+		isoYear, isoMonth, isoDay, ok = icu.ResolveDate(calendar, year,
+			month, day, false, false, constrain)
+		if !ok {
+			return temporalPlainDateTime{}, r.throwRangeError("invalid Temporal.PlainDateTime")
+		}
+	}
+	if constrain {
 		values["hour"] = max(0, min(23, values["hour"]))
 		values["minute"] = max(0, min(59, values["minute"]))
 		values["second"] = max(0, min(59, values["second"]))
@@ -1017,7 +1065,7 @@ func (r *Runtime) temporalPlainDateTimeFromBag(o *Object, optionsValue Value) (t
 		values["nanosecond"] = max(0, min(999, values["nanosecond"]))
 	}
 	result := temporalPlainDateTime{temporalISODateTime: temporalISODateTime{
-		year: year, month: month, day: day,
+		year: isoYear, month: isoMonth, day: isoDay,
 		hour: values["hour"], minute: values["minute"], second: values["second"],
 		millisecond: values["millisecond"], microsecond: values["microsecond"], nanosecond: values["nanosecond"],
 	}, calendar: calendar}

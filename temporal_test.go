@@ -536,6 +536,24 @@ func TestTemporalPlainDateTimeFoundation(t *testing.T) {
 		{`Temporal.PlainDateTime.from("-271821-04-19T00:00:00.000000001").nanosecond`, "1"},
 		{`Temporal.PlainDateTime.from(new Temporal.ZonedDateTime(-13849764999999999n, "UTC")).toString()`, "1969-07-24T16:50:35.000000001"},
 		{`Temporal.PlainDateTime.from({year: 2016, month: 12, day: 31, second: 60}).second`, "59"},
+		{`(() => {
+			const value = Temporal.PlainDateTime.from({ calendar: "hebrew",
+				year: 5782, monthCode: "M05L", day: 15, hour: 12 });
+			return [value.toString(), value.year, value.month, value.monthCode].join("|");
+		})()`, "2022-02-16T12:00:00[u-ca=hebrew]|5782|6|M05L"},
+		{`(() => {
+			const value = Temporal.PlainDateTime.from({ calendar: "hebrew",
+				year: 5782, monthCode: "M05L", day: 15, hour: 12 });
+			const changed = value.with({ year: 5783, month: 6 });
+			return [changed.toString(), changed.year, changed.month,
+				changed.monthCode].join("|");
+		})()`, "2023-03-08T12:00:00[u-ca=hebrew]|5783|6|M06"},
+		{`try {
+			new Temporal.PlainDateTime(2000, 5, 2, 12, 34, 56, 0, 0, 0,
+				"hebrew").toLocaleString("en-US-u-ca-gregory");
+		} catch (error) { error.name }`, "RangeError"},
+		{`new Temporal.PlainDateTime(2021, 8, 4, 23, 30, 45).toLocaleString(
+			"en-US", { timeZone: "Pacific/Apia" })`, "8/4/2021, 11:30:45 PM"},
 		{`new Temporal.PlainDateTime(1999, 12, 31, 23, 59, 59, 999, 999, 999).toString({fractionalSecondDigits: 8, roundingMode: "ceil"})`, "2000-01-01T00:00:00.00000000"},
 		{`new Temporal.PlainDateTime(2000, 5, 2, 12, 34, 56, 123, 456, 789).toString({smallestUnit: "minute"})`, "2000-05-02T12:34"},
 		{`new Temporal.PlainDateTime(1999, 12, 31, 23, 59, 59, 999, 999, 999).round("microsecond").toString()`, "2000-01-01T00:00:00"},

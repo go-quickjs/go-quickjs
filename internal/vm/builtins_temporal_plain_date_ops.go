@@ -53,48 +53,9 @@ func (r *Runtime) initTemporalPlainDateOperations(proto *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		calendarDate := date.calendarDate()
-		year := calendarDate.ArithmeticYear
-		if partial.eraPresent {
-			year, _ = temporalYearFromEra(date.calendar, partial.era, partial.eraYear)
-		} else if partial.yearPresent {
-			year = partial.year
-		}
-		day := calendarDate.Day
-		if partial.dayPresent {
-			day = partial.day
-		}
-		month, leap := calendarDate.MonthCode()
-		byCode := true
-		if partial.monthPresent {
-			month, leap, byCode = partial.month, false, false
-		}
-		if partial.monthCodePresent {
-			month, leap, _ = parseTemporalMonthCode(partial.monthCode)
-			byCode = true
-		}
-		isoYear, isoMonth, isoDay, ok := icu.ResolveDate(date.calendar, year,
-			month, day, leap, byCode, overflow == "constrain")
-		if !ok && byCode && leap && overflow == "constrain" &&
-			!partial.monthCodePresent {
-			if date.calendar == "hebrew" {
-				month = 6
-			}
-			isoYear, isoMonth, isoDay, ok = icu.ResolveDate(date.calendar, year,
-				month, day, false, true, true)
-		}
-		if !ok {
-			return Undefined, rt.throwRangeError("invalid Temporal.PlainDate")
-		}
-		result := temporalPlainDate{
-			year: isoYear, month: isoMonth, day: isoDay, calendar: date.calendar,
-		}
-		if partial.monthPresent && partial.monthCodePresent &&
-			result.calendarDate().OrdinalMonth != partial.month {
-			return Undefined, rt.throwRangeError("month and monthCode do not agree")
-		}
-		if !result.valid() {
-			return Undefined, rt.throwRangeError("invalid Temporal.PlainDate")
+		result, err := rt.replaceTemporalPlainDateFields(date, partial, overflow)
+		if err != nil {
+			return Undefined, err
 		}
 		return Obj(newTemporalPlainDate(rt.temporalPlainDateProto, result)), nil
 	})
@@ -165,6 +126,54 @@ func (r *Runtime) initTemporalPlainDateOperations(proto *Object) {
 			return Obj(newTemporalDuration(rt.temporalDurationProto, duration)), nil
 		})
 	}
+}
+
+func (r *Runtime) replaceTemporalPlainDateFields(date temporalPlainDate,
+	partial temporalPartialDateFields, overflow string) (temporalPlainDate, error) {
+	calendarDate := date.calendarDate()
+	year := calendarDate.ArithmeticYear
+	if partial.eraPresent {
+		year, _ = temporalYearFromEra(date.calendar, partial.era, partial.eraYear)
+	} else if partial.yearPresent {
+		year = partial.year
+	}
+	day := calendarDate.Day
+	if partial.dayPresent {
+		day = partial.day
+	}
+	month, leap := calendarDate.MonthCode()
+	byCode := true
+	if partial.monthPresent {
+		month, leap, byCode = partial.month, false, false
+	}
+	if partial.monthCodePresent {
+		month, leap, _ = parseTemporalMonthCode(partial.monthCode)
+		byCode = true
+	}
+	isoYear, isoMonth, isoDay, ok := icu.ResolveDate(date.calendar, year,
+		month, day, leap, byCode, overflow == "constrain")
+	if !ok && byCode && leap && overflow == "constrain" &&
+		!partial.monthCodePresent {
+		if date.calendar == "hebrew" {
+			month = 6
+		}
+		isoYear, isoMonth, isoDay, ok = icu.ResolveDate(date.calendar, year,
+			month, day, false, true, true)
+	}
+	if !ok {
+		return temporalPlainDate{}, r.throwRangeError("invalid Temporal.PlainDate")
+	}
+	result := temporalPlainDate{
+		year: isoYear, month: isoMonth, day: isoDay, calendar: date.calendar,
+	}
+	if partial.monthPresent && partial.monthCodePresent &&
+		result.calendarDate().OrdinalMonth != partial.month {
+		return temporalPlainDate{}, r.throwRangeError("month and monthCode do not agree")
+	}
+	if !result.valid() {
+		return temporalPlainDate{}, r.throwRangeError("invalid Temporal.PlainDate")
+	}
+	return result, nil
 }
 
 type temporalPartialDateFields struct {
