@@ -399,6 +399,7 @@ func (r *Runtime) initGlobals() {
 	r.initRegExpBuiltins()
 	r.initStringRegExpMethods()
 	r.initDateBuiltins()
+	r.initTemporalBuiltins()
 	r.initMapBuiltins()
 	r.initSetBuiltins()
 	r.initWeakCollections()
