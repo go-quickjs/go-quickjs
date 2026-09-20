@@ -1377,6 +1377,7 @@ func (r *Runtime) dateOptionsFrom(args []Value, defaults map[string]string, requ
 		"longOffset", "shortGeneric", "longGeneric"); err != nil {
 		return nil, err
 	}
+	o.timeZoneNameSet = o.timeZoneName != ""
 	if _, err := r.stringOption(options, "formatMatcher", "best fit",
 		"basic", "best fit"); err != nil {
 		return nil, err
@@ -1414,8 +1415,8 @@ func (r *Runtime) dateOptionsFrom(args []Value, defaults map[string]string, requ
 			o.second == "" && o.fractional == 0
 	}
 	if needed {
+		o.implicitDefaults = true
 		if defaults == nil {
-			o.implicitDefaults = true
 			defaults = map[string]string{"year": "numeric", "month": "numeric", "day": "numeric"}
 		}
 		if o.weekday == "" {
@@ -1621,6 +1622,10 @@ func (r *Runtime) dateFormatOf(this Value) (*dateOptions, error) {
 // defSupportedLocalesOf gives a constructor the method that says which of a
 // list of tags this engine has data for.
 func (r *Runtime) defSupportedLocalesOf(ctor *Object) {
+	r.defSupportedLocalesOfWhere(ctor, icu.Has)
+}
+
+func (r *Runtime) defSupportedLocalesOfWhere(ctor *Object, supported func(string) bool) {
 	r.defMethod(ctor, "supportedLocalesOf", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		tags, err := rt.requestedLocales(arg(args, 0))
 		if err != nil {
@@ -1639,7 +1644,7 @@ func (r *Runtime) defSupportedLocalesOf(ctor *Object) {
 		var out []Value
 		for _, tag := range tags {
 			t, ok := parseTag(tag)
-			if ok && icu.Has(t.base()) {
+			if ok && supported(t.base()) {
 				out = append(out, Str(NewString(tag)))
 			}
 		}

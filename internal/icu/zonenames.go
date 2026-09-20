@@ -89,10 +89,9 @@ func ZoneGenericNamesIn(locale, zone string) ZoneNaming {
 // from the modern family returned by ZoneNamesIn. The boolean is false when
 // the modern family should be used.
 func ZoneNamesAt(locale, zone string, unixMillis int64) (ZoneNaming, bool) {
-	// The generated history ends where the modern 2025 name table begins.
-	// Avoid inflating the historical payload for the overwhelmingly common
-	// case of formatting current and future dates.
-	if unixMillis >= 1735689600000 { // 2025-01-01T00:00:00Z
+	// The generated timeline includes long-range ICU fallback changes that a
+	// modern standard/daylight pair alone cannot describe.
+	if unixMillis >= 10445328000000 { // 2301-01-01T00:00:00Z
 		return ZoneNaming{}, false
 	}
 	return historicalNames.entry(locale, namedZone(zone), unixMillis)
@@ -759,20 +758,27 @@ func OffsetName(locale string, offsetMinutes int, long bool) string {
 // short one leaves off a whole hour's zero minutes. Historical offsets may
 // also have seconds, which use the locale's minute separator once more.
 func OffsetNameSeconds(locale string, offsetSeconds int, long bool) string {
+	return offsetNameSeconds(locale, offsetSeconds, long, true)
+}
+
+// OffsetNameSecondsNumeric writes the explicit numeric offset forms used by
+// shortOffset, longOffset, and generic-name fallbacks. ICU retains the signed
+// zero in those forms (GMT+0 or GMT+00:00), unlike a seasonal-name fallback.
+func OffsetNameSecondsNumeric(locale string, offsetSeconds int, long bool) string {
+	return offsetNameSeconds(locale, offsetSeconds, long, false)
+}
+
+func offsetNameSeconds(locale string, offsetSeconds int, long, signlessZero bool) string {
 	form := zoneOffsetForms[0]
 	if at, ok := zoneOffsetForm[locale]; ok {
 		form = zoneOffsetForms[at]
-	} else if base, _, cut := strings.Cut(locale, "-"); cut {
-		if at, ok := zoneOffsetForm[base]; ok {
-			form = zoneOffsetForms[at]
-		}
 	}
 	system, forms, _ := strings.Cut(form, ";")
 	digits, ok := NumberingDigits(system)
 	if !ok {
 		digits = "0123456789"
 	}
-	if offsetSeconds == 0 {
+	if offsetSeconds == 0 && signlessZero {
 		// CLDR uses a signless GMT form at zero. It is the positive short
 		// whole-hour template with its signed hour removed.
 		return strings.TrimSpace(strings.Replace(

@@ -110,8 +110,9 @@ generator source datasets.
 `internal/icu/zoneinfo.zip` is the uncompressed Go zone archive for the IANA
 tzdata release reported by `node -p process.versions.tz`; it must stay aligned
 with the Node/ICU release used for the CLDR tables. Copy it from a Go toolchain
-carrying that exact tzdata release and record the version in
-`internal/icu/timezones.go`.
+carrying that exact tzdata release, rewrite its backzone records to ICU's slim
+links with `go run ./internal/icu/internal/tzgen internal/icu/zoneinfo.zip`,
+and record the version in `internal/icu/timezones.go`.
 
 ## Intl and data-loading invariants
 

@@ -312,6 +312,8 @@ func (r *Runtime) initTemporalPlainDate(temporal *Object) {
 		if err != nil {
 			return Undefined, err
 		}
+		options.temporalKind = "plain-date"
+		options.useTemporalArgument()
 		if date.calendar != "iso8601" && date.calendar != options.calendar {
 			return Undefined, rt.throwRangeError("Temporal calendar does not match the formatter calendar")
 		}

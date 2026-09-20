@@ -161,7 +161,8 @@ func (o *numberOptions) decimalParts(d decimal) []numberPiece {
 		d, kept = o.round(d)
 	}
 
-	whole, fraction := o.digitsOf(d, kept)
+	rawWhole, rawFraction := o.rawDigits(d, kept)
+	whole, fraction := o.localDigits(rawWhole), o.localDigits(rawFraction)
 	// The sign follows what was written rather than what was given: a value
 	// that rounds to zero is written as zero, and zero takes no sign of its
 	// own.
@@ -175,7 +176,9 @@ func (o *numberOptions) decimalParts(d decimal) []numberPiece {
 	pieces = append(pieces, tail...)
 	out := o.wrap(pieces, o.pattern(negative, o.wants(negative, zero)))
 	if o.style == "unit" {
-		out = o.measure(out, whole, fraction)
+		// Plural rules operate on arithmetic digits, not the glyphs selected by
+		// the numbering system.
+		out = o.measure(out, rawWhole, rawFraction)
 	}
 	return out
 }
@@ -225,7 +228,10 @@ func mergeUnitPieces(pieces []numberPiece) []numberPiece {
 func (o *numberOptions) aroundNumber(pieces []numberPiece, pattern, kind string) []numberPiece {
 	at := strings.Index(pattern, "{0}")
 	if at < 0 {
-		return pieces
+		// Some plural forms incorporate the count into the word itself. Arabic
+		// uses this for one and two years, for example, so there is no number
+		// placeholder to preserve.
+		return o.unitPieces(pattern, kind)
 	}
 	out := make([]numberPiece, 0, len(pieces)+2)
 	if before := pattern[:at]; before != "" {

@@ -64,6 +64,8 @@ type localeData struct {
 	HourPeriods       []string
 	HourPeriodsNarrow []string `json:"hourPeriodsNarrow"`
 	Eras              []string
+	ErasLong          []string `json:"erasLong"`
+	ErasNarrow        []string `json:"erasNarrow"`
 	Names             struct {
 		Months, MonthsShort, MonthsNarrow []string
 		MonthsAlone, MonthsAloneShort     []string
@@ -71,12 +73,14 @@ type localeData struct {
 		DaysFormat, DaysFormatShort       []string
 		DaysFormatNarrow                  []string
 	} `json:"names"`
-	Dates     map[string]string `json:"dates"`
-	Times     map[string]string `json:"times"`
-	Both      map[string]string `json:"both"`
-	Glue      map[string]string `json:"glue"`
-	Skeletons map[string]string `json:"skeletons"`
-	Numbers   struct {
+	Dates             map[string]string `json:"dates"`
+	Times             map[string]string `json:"times"`
+	Both              map[string]string `json:"both"`
+	Glue              map[string]string `json:"glue"`
+	TemporalGlue      map[string]string `json:"temporalGlue"`
+	Skeletons         map[string]string `json:"skeletons"`
+	TemporalSkeletons map[string]string `json:"temporalSkeletons"`
+	Numbers           struct {
 		Decimal, Group, Minus, PercentSign string
 		NaN                                string `json:"nan"`
 		Infinity, Digits                   string
@@ -256,8 +260,14 @@ func run() error {
 	fmt.Fprintf(&b, "// The %d bytes stay in the executable mapping and need no decompression.\n", totalLocaleBytes)
 	packedData.writeRawShards(&b, "packedLocales", localeData)
 
+	zoneNames, err := readZoneNames(filepath.Join(filepath.Dir(script), "zonenames.json.gz"))
+	if err != nil {
+		return err
+	}
+
 	// The variants that share another's data, which is how a hundred and fifty
-	// tags are answered without carrying a hundred and fifty more tables.
+	// tags are answered without carrying a hundred and fifty more tables. A
+	// core-data alias is not safe when the two locales name zones differently.
 	aliases, err := readAliases(filepath.Join(filepath.Dir(script), "locales.json"))
 	if err != nil {
 		return err
@@ -266,6 +276,9 @@ func run() error {
 	fmt.Fprintf(&b, "// ar-EG is written as ar-BH is, zh-TW as zh-Hant.\n")
 	fmt.Fprintf(&b, "var aliases = map[string]string{\n")
 	for _, tag := range sortedStringKeys(aliases) {
+		if !sameZoneLocale(zoneNames, tag, aliases[tag]) {
+			continue
+		}
 		fmt.Fprintf(&b, "\t%q: %q,\n", tag, aliases[tag])
 	}
 	fmt.Fprintf(&b, "}\n\n")
@@ -273,10 +286,6 @@ func run() error {
 	// The time zones: which ones there are, and what they are called where
 	// they are called anything but an offset.
 	zones, err := readZones(filepath.Join(filepath.Dir(script), "zones.json"))
-	if err != nil {
-		return err
-	}
-	zoneNames, err := readZoneNames(filepath.Join(filepath.Dir(script), "zonenames.json.gz"))
 	if err != nil {
 		return err
 	}
@@ -543,8 +552,9 @@ func sortedNames(m map[string]string) []string {
 
 // unitData is what units.mjs writes.
 type unitData struct {
-	Units map[string]map[string]string `json:"units"`
-	Same  map[string]string            `json:"same"`
+	Units               map[string]map[string]string `json:"units"`
+	Same                map[string]string            `json:"same"`
+	DurationUnsupported []string                     `json:"durationUnsupported"`
 }
 
 func readUnits(path string) (unitData, error) {
@@ -586,6 +596,10 @@ func encodeUnits(d unitData) string {
 	b.WriteString("\n")
 	for _, tag := range sortedNames(d.Same) {
 		fmt.Fprintf(&b, "%s\t%s\n", tag, d.Same[tag])
+	}
+	b.WriteString("\n")
+	for _, tag := range d.DurationUnsupported {
+		fmt.Fprintln(&b, tag)
 	}
 	return b.String()
 }
@@ -1430,6 +1444,8 @@ func encode(l *localeData) string {
 		strings.Join(l.Names.DaysFormat, itemSep),
 		strings.Join(l.Names.DaysFormatShort, itemSep),
 		strings.Join(l.Names.DaysFormatNarrow, itemSep),
+		strings.Join(l.ErasLong, itemSep),
+		strings.Join(l.ErasNarrow, itemSep),
 	}, fieldSep)
 
 	widths := []string{"full", "long", "medium", "short"}
@@ -1442,7 +1458,8 @@ func encode(l *localeData) string {
 	}
 	patterns := strings.Join([]string{
 		byWidth(l.Dates), byWidth(l.Times), byWidth(l.Glue),
-		joinPairs(l.Skeletons),
+		joinPairs(l.Skeletons), joinPairs(l.TemporalSkeletons),
+		byWidth(l.TemporalGlue),
 	}, fieldSep)
 
 	// Each table is a hundred categories, one letter each.
@@ -1748,6 +1765,21 @@ func readZoneNames(path string) (zoneNameData, error) {
 		return out, fmt.Errorf("what the zones are called: %w", err)
 	}
 	return out, nil
+}
+
+func sameZoneLocale(data zoneNameData, left, right string) bool {
+	same := func(table map[string]int) bool {
+		leftValue, leftOK := table[left]
+		if !leftOK {
+			// A canonical spelling that was not extracted has no independent
+			// zone data to conflict with its target.
+			return true
+		}
+		rightValue, rightOK := table[right]
+		return rightOK && leftValue == rightValue
+	}
+	return same(data.Blocks) && same(data.History.Blocks) &&
+		same(data.Legacy.Blocks) && same(data.GMT)
 }
 
 // zoneProbes are the two instants the names were read at: mid-January and

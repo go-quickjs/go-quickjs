@@ -650,6 +650,7 @@ type listOptions struct {
 	requested string
 	kind      string // conjunction, disjunction, unit
 	style     string // long, short, narrow
+	custom    *icu.ListPattern
 }
 
 func (r *Runtime) initListFormat(intl *Object) {
@@ -736,6 +737,9 @@ func (r *Runtime) initListFormat(intl *Object) {
 // pattern is the locale's way of joining this kind of list, with English as
 // the fallback for a locale that does not have this width.
 func (o *listOptions) pattern() icu.ListPattern {
+	if o.custom != nil {
+		return *o.custom
+	}
 	if p, ok := o.locale.ListPatternFor(o.kind + "-" + o.style); ok {
 		return p
 	}

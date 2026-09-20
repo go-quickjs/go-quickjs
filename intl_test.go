@@ -250,7 +250,8 @@ func TestIntlFormats(t *testing.T) {
 		    };
 		    return ["islamic-civil", "islamic-tbla", "islamic-umalqura"]
 		      .map(c => [era(c, 600), era(c, 2025)].join(",")).join("|");
-		  })()`, "BH,AH|BH,AH|BH,AH"},
+		  })()`, "Anno Hegirae,Anno Hegirae|Anno Hegirae,Anno Hegirae|" +
+			"Anno Hegirae,Anno Hegirae"},
 		{`(() => {
 		    const f = new Intl.DateTimeFormat("en", {calendar: "ethiopic",
 		      era: "long", year: "numeric", timeZone: "UTC"});
@@ -294,6 +295,15 @@ func TestIntlFormats(t *testing.T) {
 		{`(1234.5).toLocaleString("de-DE")`, "1.234,5"},
 		{`(1234567890123456789012345678901234567890n).toLocaleString("en")`,
 			"1,234,567,890,123,456,789,012,345,678,901,234,567,890"},
+		{`new Temporal.Duration(1, 2).toLocaleString("ar", {style: "long"})`,
+			"سنة وشهران"},
+		{`new Temporal.Duration(1, 2, 0, 4).toLocaleString("ar-BH", {style: "long"})`,
+			"سنة، وشهران، و٤ أيام"},
+		{`new Temporal.Duration(1, 2).toLocaleString("lkt", {style: "long"})`,
+			"1 year, 2 months"},
+		{`JSON.stringify([Intl.DurationFormat.supportedLocalesOf("lkt"),
+			new Intl.DurationFormat("lkt").resolvedOptions().locale])`,
+			`[[],"en-US"]`},
 		{`new Date(Date.UTC(2024, 0, 5, 15, 4, 5)).toLocaleDateString("en", {timeZone: "UTC"})`,
 			"1/5/2024"},
 
@@ -330,6 +340,26 @@ func TestIntlFormats(t *testing.T) {
 		{`new Intl.DateTimeFormat("en", {timeZone: "+00:00", timeZoneName: "short",
 		    hour: "numeric"}).formatToParts(0).find(p => p.type === "timeZoneName").value`,
 			"GMT"},
+		{`new Intl.DateTimeFormat("af", {timeZone: "Africa/Abidjan",
+		    timeZoneName: "short"}).formatToParts(Date.UTC(2024, 0, 15))
+		    .find(p => p.type === "timeZoneName").value`, "GMT+0"},
+		{`["shortOffset", "longOffset", "shortGeneric", "longGeneric"].map(style =>
+		    new Intl.DateTimeFormat("en", {timeZone: "UTC", timeZoneName: style})
+		      .formatToParts(0).find(p => p.type === "timeZoneName").value).join("|")`,
+			"GMT+0|GMT+00:00|GMT+0|GMT+00:00"},
+		{`new Intl.DateTimeFormat("bs-Cyrl", {timeZone: "UTC",
+		    timeZoneName: "longOffset"}).formatToParts(0)
+		    .find(p => p.type === "timeZoneName").value`, "GMT+00:00"},
+		{`new Intl.DateTimeFormat("en", {timeZone: "UTC", year: "numeric",
+		    month: "long", day: "numeric", hour: "numeric", minute: "numeric"})
+		    .format(Date.UTC(2024, 0, 15, 12, 34))`,
+			"January 15, 2024 at 12:34 PM"},
+		{`new Intl.DateTimeFormat("en", {timeZone: "America/New_York",
+		    hour: "2-digit", minute: "2-digit"})
+		    .format(Temporal.Instant.from("2024-01-15T12:34:56Z"))`, "7:34 AM"},
+		{`Temporal.Instant.from("2024-01-15T12:34:56Z").toLocaleString("en", {
+		    timeZone: "America/New_York", hour: "2-digit", minute: "2-digit"})`,
+			"7:34 AM"},
 		{`[Date.UTC(1971, 9, 31, 1, 59, 59, 999), Date.UTC(1971, 9, 31, 2)]
 		    .map(when => new Intl.DateTimeFormat("en", {timeZone: "Europe/London",
 		      timeZoneName: "long"}).formatToParts(when)
@@ -724,7 +754,7 @@ func TestDateStringsFollowNodeLegacyZoneNames(t *testing.T) {
 		{"en-US", "America/Coyhaique", 1721044800000,
 			"Mon Jul 15 2024 08:00:00 GMT-0400 (GMT-03:00)"},
 		{"en-US", "Africa/Casablanca", -5363409600000,
-			"Wed Jan 15 1800 11:29:40 GMT-0030 (GMT+00:00)"},
+			"Wed Jan 15 1800 11:29:40 GMT-0030 (Western European Standard Time)"},
 		// Some localized ICU names contain their own opening parenthesis; Node
 		// still appends only one final closing parenthesis.
 		{"wo", "America/Chicago", 1719792000000,

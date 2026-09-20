@@ -32,23 +32,47 @@ const UNITS = ["acre", "bit", "byte", "celsius", "centimeter", "day", "degree",
 // What stands between one form and the next, which cannot be a character a
 // unit is written with.
 const SEP = "\u0001";
+const LIST_SEP = "\u0002";
 
-// Enough counts to meet every plural form a language has.
-const SAMPLES = [0, 1, 2, 3, 5, 11, 21, 100];
+// Find one count for every plural form rather than relying on a short list of
+// common cases. Cebuano, for example, uses "one" for 0-3 but "other" for 4,
+// while several Romance languages only expose "many" at a million.
+function pluralSamples(plural) {
+  const wanted = new Set(plural.resolvedOptions().pluralCategories);
+  const found = new Map();
+  const consider = n => {
+    const category = plural.select(n);
+    if (!found.has(category)) found.set(category, n);
+  };
+
+  for (let n = 0; n < 200 && found.size < wanted.size; n++) consider(n);
+  for (let whole = 0; whole < 20 && found.size < wanted.size; whole++) {
+    for (const fraction of [0.1, 0.2, 0.5, 0.01, 0.02, 0.05]) {
+      consider(whole + fraction);
+    }
+  }
+  for (let power = 2; power <= 9 && found.size < wanted.size; power++) {
+    const base = 10 ** power;
+    for (const delta of [-2, -1, 0, 1, 2]) consider(base + delta);
+  }
+
+  const missing = [...wanted].filter(category => !found.has(category));
+  if (missing.length !== 0) {
+    throw new Error("no unit sample for plural categories: " + missing.join(", "));
+  }
+  return [...found].map(([category, n]) => ({category, n}));
+}
 
 function unitsFor(locale) {
   const out = {};
   const plural = new Intl.PluralRules(locale);
+  const samples = pluralSamples(plural);
   const plain = new Intl.NumberFormat(locale);
   for (const width of ["short", "narrow", "long"]) {
     for (const unit of UNITS) {
       const f = new Intl.NumberFormat(locale, {style: "unit", unit, unitDisplay: width});
       const forms = [];
-      const seen = new Set();
-      for (const n of SAMPLES) {
-        const key = plural.select(n);
-        if (seen.has(key)) continue;
-        seen.add(key);
+      for (const {category: key, n} of samples) {
         const text = f.format(n);
         const shown = plain.format(n);
         const at = text.indexOf(shown);
@@ -93,6 +117,18 @@ function unitsFor(locale) {
       }
     }
   }
+
+  for (const style of ["long", "short", "narrow"]) {
+    const formatter = new Intl.DurationFormat(locale, {style});
+    const separators = value => formatter.formatToParts(value)
+      .filter(part => part.type === "literal" && part.unit === undefined)
+      .map(part => part.value);
+    const pair = separators({years: 3, months: 4});
+    const many = separators({years: 3, months: 4, weeks: 5, days: 6});
+    if (pair.length === 1 && many.length === 3) {
+      out["duration-list/" + style] = [pair[0], ...many].join(LIST_SEP);
+    }
+  }
   return out;
 }
 
@@ -109,4 +145,12 @@ for (const locale of locales) {
 const units = {};
 for (const {at, block} of blocks.values()) units[at] = block;
 
-process.stdout.write(JSON.stringify({icu: process.versions.icu, units, same}) + "\n");
+// DurationFormat is newer than NumberFormat's unit support, and ICU does not
+// necessarily carry it for every locale supported elsewhere. Keep that
+// distinction so an unsupported request falls through to the next locale.
+const durationUnsupported = locales.filter(locale =>
+  Intl.DurationFormat.supportedLocalesOf(locale).length === 0);
+
+process.stdout.write(JSON.stringify({
+  icu: process.versions.icu, units, same, durationUnsupported,
+}) + "\n");

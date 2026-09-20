@@ -51,25 +51,31 @@ const RELATIVE_UNITS = ["second", "minute", "hour", "day", "week", "month",
 
 // pattern turns what a format produced into the CLDR-ish pattern that produced
 // it: the fields as letters, and everything else as a literal.
-function pattern(parts, hour12) {
+function pattern(parts, hour12, resolved = {}) {
   let out = "";
   for (const part of parts) {
     switch (part.type) {
       case "literal": out += quote(part.value); break;
       case "era": out += "G"; break;
-      case "year": out += part.value.length <= 2 ? "yy" : "y"; break;
+      case "year": out += resolved.year === "2-digit" ||
+        (resolved.year === undefined && [...part.value].length <= 2) ? "yy" : "y"; break;
       case "relatedYear": out += "y"; break;
       case "yearName": out += "y"; break;
-      case "month": out += monthLetters(part.value); break;
-      case "day": out += part.value.length === 2 ? "dd" : "d"; break;
+      case "month": out += monthLetters(part.value, resolved.month); break;
+      case "day": out += resolved.day === "2-digit" ||
+        (resolved.day === undefined && [...part.value].length === 2) ? "dd" : "d"; break;
       case "weekday": out += weekdayLetters(part.value); break;
       // B is the flexible day period -- the small hours, the evening -- and a
       // is the plain one, morning or afternoon. Which a locale writes is a
       // fact about the locale, not about the hour being written.
       case "dayPeriod": out += currentNames.flexible ? "B" : "a"; break;
-      case "hour": out += (hour12 ? "h" : "H").repeat(part.value.length === 2 ? 2 : 1); break;
-      case "minute": out += part.value.length === 2 ? "mm" : "m"; break;
-      case "second": out += part.value.length === 2 ? "ss" : "s"; break;
+      case "hour": out += (hour12 ? "h" : "H").repeat(
+        resolved.hour === "2-digit" ||
+        (resolved.hour === undefined && [...part.value].length === 2) ? 2 : 1); break;
+      case "minute": out += resolved.minute === "2-digit" ||
+        (resolved.minute === undefined && [...part.value].length === 2) ? "mm" : "m"; break;
+      case "second": out += resolved.second === "2-digit" ||
+        (resolved.second === undefined && [...part.value].length === 2) ? "ss" : "s"; break;
       case "fractionalSecond": out += "S"; break;
       // A zone named in full is four letters, and one named in short is one:
       // "Coordinated Universal Time" against "UTC".
@@ -137,8 +143,12 @@ function widthOf(value, long, short, narrow, letters) {
   return [...want].length <= 1 ? letters[2] : letters[1];
 }
 
-function monthLetters(value) {
-  if (isNumber(value)) return value.length === 2 ? "MM" : "M";
+function monthLetters(value, requested) {
+  if (isNumber(value)) {
+    if (requested === "numeric") return "M";
+    if (requested === "2-digit") return "MM";
+    return [...value].length === 2 ? "MM" : "M";
+  }
   // A name that is the stand-alone form and not the one used in a date is
   // written with L, which is what that letter is for.
   const standalone = currentNames.monthsAlone.length > 0 &&
@@ -718,7 +728,8 @@ function extract(locale) {
   // the name changes between an hour in the small hours and one in the
   // morning.
   const styled = (options) => {
-    const at = (hour) => new Intl.DateTimeFormat(locale, {timeZone: "UTC", ...options})
+    const formatter = new Intl.DateTimeFormat(locale, {timeZone: "UTC", ...options});
+    const at = (hour) => formatter
       .formatToParts(new Date(Date.UTC(2024, 0, 5, hour, 4, 5)));
     const period = (parts) => {
       const found = parts.find(p => p.type === "dayPeriod");
@@ -727,7 +738,21 @@ function extract(locale) {
     const early = period(at(1));
     const morning = period(at(9));
     currentNames.flexible = early !== undefined && early !== morning;
-    return pattern(at(9), hour12);
+    return pattern(at(9), hour12, formatter.resolvedOptions());
+  };
+
+  const styledTemporal = (options) => {
+    const formatter = new Intl.DateTimeFormat(locale, {timeZone: "UTC", ...options});
+    const at = (hour) => formatter.formatToParts(Temporal.Instant.from(
+        `2024-01-05T${String(hour).padStart(2, "0")}:04:05Z`));
+    const period = (parts) => {
+      const found = parts.find(p => p.type === "dayPeriod");
+      return found ? found.value : undefined;
+    };
+    const early = period(at(1));
+    const morning = period(at(9));
+    currentNames.flexible = early !== undefined && early !== morning;
+    return pattern(at(9), hour12, formatter.resolvedOptions());
   };
 
   const dates = {}, times = {}, both = {}, glue = {};
@@ -758,6 +783,29 @@ function extract(locale) {
     } else {
       glue[style] = "{0}, {1}";
     }
+  }
+
+  const temporalGlue = {};
+  const temporalText = options => new Intl.DateTimeFormat(locale,
+    {timeZone: "UTC", ...options}).format(
+      Temporal.Instant.from("2024-01-05T09:04:05Z"));
+  for (const style of ["full", "long", "medium", "short"]) {
+    const date = temporalText({dateStyle: style});
+    const time = temporalText({timeStyle: style});
+    const joined = temporalText({dateStyle: style, timeStyle: style});
+    const dateAt = joined.indexOf(date);
+    let timeAt = joined.indexOf(time);
+    if (dateAt >= 0 && timeAt >= 0 && timeAt < dateAt) {
+      temporalGlue[style] = quote(joined.slice(0, timeAt)) + "{1}" +
+        quote(joined.slice(timeAt + time.length, dateAt)) + "{0}" +
+        quote(joined.slice(dateAt + date.length));
+      continue;
+    }
+    timeAt = dateAt < 0 ? -1 : joined.indexOf(time, dateAt + date.length);
+    temporalGlue[style] = dateAt >= 0 && timeAt > 0 ?
+      quote(joined.slice(0, dateAt)) + "{0}" +
+        quote(joined.slice(dateAt + date.length, timeAt)) + "{1}" +
+        quote(joined.slice(timeAt + time.length)) : "{0}, {1}";
   }
 
   // What a program asks for by field rather than by style: the order the
@@ -797,6 +845,76 @@ function extract(locale) {
     skeletons[name] = fallback || styled(options);
   }
 
+  // Time-zone fields affect more than the suffix in some languages. Thai,
+  // for example, writes a short named zone with a worded clock rather than
+  // the punctuation used by its plain hms pattern. Temporal also has its own
+  // hour-width selection, so keep these patterns separate from Date patterns.
+  const temporalSkeletons = {};
+  for (const [name, options] of Object.entries({
+    yMd: {year: "numeric", month: "numeric", day: "numeric"},
+    yMMMd: {year: "numeric", month: "short", day: "numeric"},
+    yMMMMd: {year: "numeric", month: "long", day: "numeric"},
+    MMMd: {month: "short", day: "numeric"},
+    MMMMd: {month: "long", day: "numeric"},
+    Md: {month: "numeric", day: "numeric"},
+    yM: {year: "numeric", month: "numeric"},
+    yMMMM: {year: "numeric", month: "long"},
+    d: {day: "numeric"},
+    M: {month: "numeric"},
+    MMM: {month: "short"},
+    MMMM: {month: "long"},
+    y: {year: "numeric"},
+    E: {weekday: "long"},
+    hms: {hour: "numeric", minute: "numeric", second: "numeric"},
+    hm: {hour: "numeric", minute: "numeric"},
+    ms: {minute: "numeric", second: "numeric"},
+    h: {hour: "numeric"},
+    Hm: {hour: "numeric", minute: "numeric", hour12: false},
+    Hms: {hour: "numeric", minute: "numeric", second: "numeric", hour12: false},
+    H: {hour: "numeric", hour12: false},
+    hm12: {hour: "numeric", minute: "numeric", hour12: true},
+    hms12: {hour: "numeric", minute: "numeric", second: "numeric", hour12: true},
+    h12: {hour: "numeric", hour12: true},
+  })) {
+    temporalSkeletons[name] = styledTemporal(options);
+  }
+  // Temporal supplies date-and-time defaults as one pattern. Some locales
+  // place a day period differently here than when the time fields were
+  // explicitly requested, so this cannot always be rebuilt from two halves.
+  temporalSkeletons.yMdhms = styledTemporal({});
+  const plainPattern = (value) => {
+    const formatter = new Intl.DateTimeFormat(locale);
+    return pattern(formatter.formatToParts(value), hour12,
+      formatter.resolvedOptions());
+  };
+  temporalSkeletons["plain-time/hms"] = plainPattern(
+    new Temporal.PlainTime(9, 4, 5));
+  temporalSkeletons["plain-date/yMd"] = plainPattern(
+    new Temporal.PlainDate(2024, 1, 5));
+  temporalSkeletons["plain-date-time/yMdhms"] = plainPattern(
+    new Temporal.PlainDateTime(2024, 1, 5, 9, 4, 5));
+  for (const [name, fields] of Object.entries({
+    h: {hour: "numeric"},
+    hm: {hour: "numeric", minute: "numeric"},
+    hms: {hour: "numeric", minute: "numeric", second: "numeric"},
+  })) {
+    for (const [style, letters] of Object.entries({
+      short: "z",
+      long: "zzzz",
+      shortOffset: "O",
+      longOffset: "OOOO",
+      shortGeneric: "v",
+      longGeneric: "vvvv",
+    })) {
+      temporalSkeletons[name + letters] =
+        styledTemporal({...fields, timeZoneName: style});
+      if (name === "hms") {
+        temporalSkeletons["yMdhms" + letters] =
+          styledTemporal({timeZoneName: style});
+      }
+    }
+  }
+
   const dayPeriod = (when) =>
     new Intl.DateTimeFormat(locale, {hour: "numeric", hour12: true, timeZone: "UTC"})
       .formatToParts(when).filter(p => p.type === "dayPeriod").map(p => p.value)[0];
@@ -831,7 +949,9 @@ function extract(locale) {
   if (hourPeriodsNarrow.join("\u0000") === hourPeriods.join("\u0000")) {
     hourPeriodsNarrow = [];
   }
-  const era = (date) => new Intl.DateTimeFormat(locale, {era: "short", year: "numeric", timeZone: "UTC"})
+  const era = (date, width) => new Intl.DateTimeFormat(locale, {
+    era: width, year: "numeric", timeZone: "UTC",
+  })
     .formatToParts(date).filter(p => p.type === "era").map(p => p.value)[0] || "";
   const compact = compactForms(locale);
 
@@ -842,8 +962,10 @@ function extract(locale) {
     hour12,
     names,
     dayPeriods, hourPeriods, hourPeriodsNarrow,
-    eras: [era(new Date(Date.UTC(-500, 0, 1))), era(SAMPLE)],
-    dates, times, both, glue, skeletons,
+    eras: [era(new Date(Date.UTC(-500, 0, 1)), "short"), era(SAMPLE, "short")],
+    erasLong: [era(new Date(Date.UTC(-500, 0, 1)), "long"), era(SAMPLE, "long")],
+    erasNarrow: [era(new Date(Date.UTC(-500, 0, 1)), "narrow"), era(SAMPLE, "narrow")],
+    dates, times, both, glue, temporalGlue, skeletons, temporalSkeletons,
     // What stands between two dates of a range, which is not always what
     // stands between two numbers.
     // Whether a range of dates written in numbers is written out twice or

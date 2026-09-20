@@ -53,6 +53,38 @@ type dateOptions struct {
 	// pattern is what all of that came to, in CLDR pattern letters.
 	pattern          string
 	implicitDefaults bool
+	temporalArgument bool
+	temporalKind     string
+	timeZoneNameSet  bool
+}
+
+func (o *dateOptions) useTemporalArgument() {
+	o.temporalArgument = true
+	o.resetImplicitTemporalClock()
+	if o.implicitDefaults && o.era != "" && o.temporalKind != "plain-time" &&
+		o.temporalKind != "plain-month-day" {
+		o.year, o.month, o.day = "", "", ""
+		o.hour, o.minute, o.second = "", "", ""
+		if o.temporalKind == "zoned-date-time" && !o.timeZoneNameSet {
+			o.timeZoneName = ""
+		}
+	}
+	o.pattern = o.patternFor()
+	// Temporal's locale pattern may deliberately use a twelve-hour field
+	// without a day period. Preserve that locale default; only rewrite it when
+	// the caller explicitly selected a clock.
+	if o.hourSet {
+		o.pattern = adjustClock(o.pattern, o.hourCycle)
+	}
+}
+
+func (o *dateOptions) resetImplicitTemporalClock() {
+	if !o.implicitDefaults {
+		return
+	}
+	o.hourCycle = o.locale.HourCycle
+	o.hour12 = o.locale.Hour12
+	o.hourSet = false
 }
 
 func (r *Runtime) dateOptionsForArgument(o *dateOptions, value Value) (*dateOptions, error) {
@@ -80,6 +112,8 @@ func (r *Runtime) dateOptionsForArgument(o *dateOptions, value Value) (*dateOpti
 	}
 
 	copy := *o
+	copy.temporalArgument = true
+	copy.resetImplicitTemporalClock()
 	hadDateStyle, hadTimeStyle := copy.dateStyle != "", copy.timeStyle != ""
 	if copy.implicitDefaults {
 		// DateTimeFormat supplies year/month/day when no date or time
@@ -88,18 +122,24 @@ func (r *Runtime) dateOptionsForArgument(o *dateOptions, value Value) (*dateOpti
 		// as era and timeZoneName; filtering below removes any that do not
 		// apply to the particular plain type.
 		copy.year, copy.month, copy.day = "", "", ""
-		switch kind {
-		case "instant", "date-time":
-			copy.year, copy.month, copy.day = "numeric", "numeric", "numeric"
-			copy.hour, copy.minute, copy.second = "numeric", "numeric", "numeric"
-		case "date":
-			copy.year, copy.month, copy.day = "numeric", "numeric", "numeric"
-		case "time":
-			copy.hour, copy.minute, copy.second = "numeric", "numeric", "numeric"
-		case "year-month":
-			copy.year, copy.month = "numeric", "numeric"
-		case "month-day":
-			copy.month, copy.day = "numeric", "numeric"
+		// Era alone causes DateTimeFormat to install Date defaults, but those
+		// defaults do not apply to a Temporal type that can display the era.
+		// PlainTime and PlainMonthDay discard era, so they still need their
+		// type-specific defaults.
+		if copy.era == "" || kind == "time" || kind == "month-day" {
+			switch kind {
+			case "instant", "date-time":
+				copy.year, copy.month, copy.day = "numeric", "numeric", "numeric"
+				copy.hour, copy.minute, copy.second = "numeric", "numeric", "numeric"
+			case "date":
+				copy.year, copy.month, copy.day = "numeric", "numeric", "numeric"
+			case "time":
+				copy.hour, copy.minute, copy.second = "numeric", "numeric", "numeric"
+			case "year-month":
+				copy.year, copy.month = "numeric", "numeric"
+			case "month-day":
+				copy.month, copy.day = "numeric", "numeric"
+			}
 		}
 	}
 	if kind != "instant" && (hadDateStyle || hadTimeStyle) {
@@ -150,7 +190,10 @@ func (r *Runtime) dateOptionsForArgument(o *dateOptions, value Value) (*dateOpti
 		if !copy.hasFields() {
 			return nil, r.throwTypeError("the formatter has no fields for this Temporal value")
 		}
-		copy.pattern = adjustClock(copy.patternFor(), copy.hourCycle)
+		copy.pattern = copy.patternFor()
+		if copy.hourSet {
+			copy.pattern = adjustClock(copy.pattern, copy.hourCycle)
+		}
 	}
 	return &copy, nil
 }
@@ -662,7 +705,7 @@ func (o *dateOptions) zoneName(t time.Time, style string) string {
 	}
 	if style == "longOffset" || style == "shortOffset" {
 		_, offset := t.Zone()
-		return o.offsetName(offset, style == "longOffset")
+		return o.numericOffsetName(offset, style == "longOffset")
 	}
 	names, ok := icu.ZoneNamesAt(o.locale.Tag, o.timeZone, t.UnixMilli())
 	if !ok {
@@ -693,13 +736,23 @@ func (o *dateOptions) zoneName(t time.Time, style string) string {
 		return name
 	}
 	_, offset := t.Zone()
-	return o.offsetName(offset, strings.HasPrefix(style, "long"))
+	if style == "longGeneric" || style == "shortGeneric" {
+		return o.numericOffsetName(offset, style == "longGeneric")
+	}
+	if _, _, fixed := parseZoneOffset(o.timeZone); fixed {
+		return o.offsetName(offset, strings.HasPrefix(style, "long"))
+	}
+	return o.numericOffsetName(offset, strings.HasPrefix(style, "long"))
 }
 
 // offsetName is what a zone with no name of its own is called, in the
 // language being written: GMT-05:00 in English, UTC−05:00 in French.
 func (o *dateOptions) offsetName(offset int, long bool) string {
 	return icu.OffsetNameSeconds(o.locale.Tag, offset, long)
+}
+
+func (o *dateOptions) numericOffsetName(offset int, long bool) string {
+	return icu.OffsetNameSecondsNumeric(o.locale.Tag, offset, long)
 }
 
 func pad2(n int) string {
@@ -882,15 +935,11 @@ func (o *dateOptions) calendarCycle() ([]string, bool) {
 // own even where its months are the common ones: the Japanese year is counted
 // from the start of a reign and named after it.
 func (o *dateOptions) eraName(at icu.Date, n int) string {
-	// The Islamic calendars' data has a name for AH but no localized name for
-	// the proleptic era before it. BH is the standard era code and remains an
-	// unambiguous fallback where CLDR supplies no display name.
+	// The Islamic calendars have one proleptic era name. ICU uses it for
+	// negative years as well as positive ones.
 	switch o.calendar {
 	case "islamic", "islamic-civil", "islamic-rgsa", "islamic-tbla", "islamic-umalqura":
-		if at.Era == 0 {
-			return "BH"
-		}
-		at.Era = 0 // The one name in CLDR is the current AH era.
+		at.Era = 0
 	}
 	if names, ok := o.calendarEras(); ok {
 		width := 1
@@ -907,10 +956,16 @@ func (o *dateOptions) eraName(at icu.Date, n int) string {
 			return list[at.Era]
 		}
 	}
-	if at.Era == 0 {
-		return o.locale.Eras[0]
+	eras := o.locale.Eras
+	if n >= 5 {
+		eras = o.locale.ErasNarrow
+	} else if n == 4 {
+		eras = o.locale.ErasLong
 	}
-	return o.locale.Eras[1]
+	if at.Era == 0 {
+		return eras[0]
+	}
+	return eras[1]
 }
 
 // localiseDigits writes ASCII digits in the locale's own.
@@ -978,18 +1033,24 @@ func (o *dateOptions) patternFor() string {
 
 	// A set of fields: the locale's own order for that combination, when it
 	// has one, and otherwise the fields in the order its short date puts them.
-	pattern, ok := calendarSkeletons[o.skeleton()]
+	skeleton := o.skeleton()
+	pattern, ok := calendarSkeletons[skeleton]
 	calendarPattern := ok
 	if !ok {
-		pattern, ok = l.Skeletons[o.skeleton()]
+		pattern, ok = o.localeSkeleton(skeleton)
 	}
 	if !ok {
 		// A date and a time asked for together are the locale's pattern for
 		// each, joined the way it joins them.
 		if date, time := o.splitSkeletons(); date != "" && time != "" {
-			// The shortest glue, which is what a request by field gets: a
-			// comma in English, a space in French.
-			glue := gluePatterns[3]
+			// A named month uses the locale's long date-time joiner. ICU's
+			// pattern generator otherwise uses the short joiner for requests
+			// assembled from individual fields.
+			glueWidth := 3
+			if o.month == "long" {
+				glueWidth = 1
+			}
+			glue := gluePatterns[glueWidth]
 			if !strings.Contains(glue, "{0}") {
 				glue = "{0}, {1}"
 			}
@@ -1054,14 +1115,33 @@ func (o *dateOptions) patternFor() string {
 	return o.applyWidths(pattern, calendarPattern)
 }
 
+func (o *dateOptions) localeSkeleton(skeleton string) (string, bool) {
+	if o.temporalArgument {
+		if o.temporalKind != "" {
+			if pattern, ok := o.locale.TemporalSkeletons[o.temporalKind+"/"+skeleton]; ok {
+				return pattern, true
+			}
+		}
+		if pattern, ok := o.locale.TemporalSkeletons[skeleton]; ok {
+			return pattern, true
+		}
+	}
+	pattern, ok := o.locale.Skeletons[skeleton]
+	return pattern, ok
+}
+
 func (o *dateOptions) calendarPatterns() ([4]string, [4]string, map[string]string) {
+	glue := o.locale.Glue
+	if o.temporalArgument && o.locale.TemporalGlue[0] != "" {
+		glue = o.locale.TemporalGlue
+	}
 	if o.calendar == "" || o.calendar == "gregory" || o.calendar == "iso8601" {
-		return o.locale.DatePatterns, o.locale.Glue, nil
+		return o.locale.DatePatterns, glue, nil
 	}
 	if format, ok := o.locale.CalendarFormatFor(o.calendar); ok {
-		return format.DatePatterns, o.locale.Glue, format.Skeletons
+		return format.DatePatterns, glue, format.Skeletons
 	}
-	return o.locale.DatePatterns, o.locale.Glue, nil
+	return o.locale.DatePatterns, glue, nil
 }
 
 // glueSeparator is what a language puts between the two halves of a date and
@@ -1158,6 +1238,16 @@ func (o *dateOptions) applyWidths(pattern string, calendarPattern bool) string {
 	// it", and the locale has already said -- 5.1.2024 in German, 05/01/2024
 	// in French, from patterns that were read for exactly this combination.
 	want := map[byte]string{}
+	if o.era != "" {
+		switch o.era {
+		case "long":
+			want['G'] = "GGGG"
+		case "narrow":
+			want['G'] = "GGGGG"
+		default:
+			want['G'] = "G"
+		}
+	}
 	if o.year == "2-digit" {
 		want['y'] = "yy"
 	}
@@ -1183,23 +1273,25 @@ func (o *dateOptions) applyWidths(pattern string, calendarPattern bool) string {
 	if o.second == "2-digit" {
 		want['s'] = "ss"
 	}
-	letter := "H"
-	if o.hour12 {
-		letter = "h"
-	}
-	switch {
-	case o.hour == "2-digit":
-		want['h'] = letter + letter
-		want['H'] = want['h']
-	case o.hour == "numeric" && len(want) > 0 &&
-		!(o.hourSet && o.hour12 != o.locale.Hour12):
-		// A numeric hour is written as one digit where something else about
-		// the request differs from what the locale wrote its pattern for; a
-		// request the locale has a pattern for is written the way that
-		// pattern writes it, padding and all. So is a clock the locale does
-		// not keep, since the pattern for it was written for this.
-		want['h'] = letter
-		want['H'] = letter
+	if !o.temporalArgument {
+		letter := "H"
+		if o.hour12 {
+			letter = "h"
+		}
+		switch {
+		case o.hour == "2-digit":
+			want['h'] = letter + letter
+			want['H'] = want['h']
+		case o.hour == "numeric" && len(want) > 0 &&
+			!(o.hourSet && o.hour12 != o.locale.Hour12):
+			// A numeric hour is written as one digit where something else about
+			// the request differs from what the locale wrote its pattern for; a
+			// request the locale has a pattern for is written the way that
+			// pattern writes it, padding and all. So is a clock the locale does
+			// not keep, since the pattern for it was written for this.
+			want['h'] = letter
+			want['H'] = letter
+		}
 	}
 	if len(want) == 0 {
 		return pattern
@@ -1325,7 +1417,10 @@ func (o *dateOptions) skeleton() string {
 	}
 	if o.hour != "" && o.hourSet && o.hour12 {
 		// The twelve-hour keys are written apart from the natural ones.
-		return b.String() + "12"
+		b.WriteString("12")
+	}
+	if o.timeZoneName != "" && o.temporalArgument {
+		b.WriteString(zoneLetters(o.timeZoneName))
 	}
 	// A weekday or an era is not part of the key; those are added around what
 	// the key produced.
@@ -1337,6 +1432,7 @@ func (o *dateOptions) skeleton() string {
 func (o *dateOptions) splitSkeletons() (string, string) {
 	dateOnly := *o
 	dateOnly.hour, dateOnly.minute, dateOnly.second = "", "", ""
+	dateOnly.timeZoneName = ""
 	timeOnly := *o
 	timeOnly.weekday, timeOnly.era = "", ""
 	timeOnly.year, timeOnly.month, timeOnly.day = "", "", ""
@@ -1344,9 +1440,9 @@ func (o *dateOptions) splitSkeletons() (string, string) {
 	_, _, calendarSkeletons := o.calendarPatterns()
 	date, dateOK := calendarSkeletons[dateOnly.skeleton()]
 	if !dateOK {
-		date, dateOK = o.locale.Skeletons[dateOnly.skeleton()]
+		date, dateOK = dateOnly.localeSkeleton(dateOnly.skeleton())
 	}
-	time, timeOK := o.locale.Skeletons[timeOnly.skeleton()]
+	time, timeOK := timeOnly.localeSkeleton(timeOnly.skeleton())
 	if !dateOK || !timeOK {
 		return "", ""
 	}

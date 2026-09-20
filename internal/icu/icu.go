@@ -110,8 +110,8 @@ type Locale struct {
 	DaysFormat, DaysFormatShort, DaysFormatNarrow []string
 	// DayPeriods is what the locale calls the two halves of the day, and Eras
 	// what it calls the two eras.
-	DayPeriods [2]string
-	Eras       [2]string
+	DayPeriods                 [2]string
+	Eras, ErasLong, ErasNarrow [2]string
 	// HourPeriods is what it calls each hour of the day, where it has more to
 	// say than morning and afternoon: Chinese distinguishes the small hours,
 	// the early morning, noon and the evening. Empty where it does not.
@@ -128,9 +128,13 @@ type Locale struct {
 	DatePatterns [4]string
 	TimePatterns [4]string
 	Glue         [4]string
+	TemporalGlue [4]string
 	// Skeletons are the patterns for the field combinations a program asks for
 	// rather than a whole style: "yMd", "MMMd", "hm".
 	Skeletons map[string]string
+	// TemporalSkeletons are clock patterns whose zone field changes their
+	// punctuation or hour width when the formatted value is Temporal.
+	TemporalSkeletons map[string]string
 
 	// Currencies is the symbol for each currency that has one here.
 	Currencies map[string]string
@@ -748,6 +752,16 @@ func (l *Locale) PrepareDate() {
 		if eras := list(7); len(eras) == 2 {
 			l.Eras = [2]string{eras[0], eras[1]}
 		}
+		if eras := list(15); len(eras) == 2 {
+			l.ErasLong = [2]string{eras[0], eras[1]}
+		} else {
+			l.ErasLong = l.Eras
+		}
+		if eras := list(16); len(eras) == 2 {
+			l.ErasNarrow = [2]string{eras[0], eras[1]}
+		} else {
+			l.ErasNarrow = l.Eras
+		}
 		l.MonthsAlone, l.MonthsAloneShort = list(8), list(9)
 		if periods := list(10); len(periods) == 24 {
 			l.HourPeriods = periods
@@ -785,6 +799,8 @@ func (l *Locale) PrepareDate() {
 		}
 		l.DatePatterns, l.TimePatterns, l.Glue = four(0), four(1), four(2)
 		l.Skeletons = pairs(patterns, 3)
+		l.TemporalSkeletons = pairs(patterns, 4)
+		l.TemporalGlue = four(5)
 	})
 }
 

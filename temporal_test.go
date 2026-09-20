@@ -38,6 +38,11 @@ func TestTemporalInstantConstruction(t *testing.T) {
 			return Object.getPrototypeOf(instant) === Temporal.Instant.prototype;
 		})()`, "true"},
 		{`Temporal.Instant.from("2000-02-29T12:34:56.123456789Z").toLocaleString("en-US", {timeZone: "UTC"})`, "2/29/2000, 12:34:56 PM"},
+		{`Temporal.Instant.from("2024-01-15T12:34:56Z").toLocaleString("es-AR", {timeZone: "UTC"})`, "15/1/2024, 12:34:56"},
+		{`new Intl.DateTimeFormat("sr-ME", {timeZone: "Africa/Brazzaville",
+			timeZoneName: "shortGeneric"}).formatToParts(
+			Temporal.Instant.from("1900-01-01T00:00Z"))
+			.find(part => part.type === "timeZoneName").value`, "Kongo"},
 		{`Temporal.Instant.from("2000-02-29T12:34:56.123456789Z").toLocaleString("en-US", {timeZone: "America/New_York", timeZoneName: "long"})`, "2/29/2000, 7:34:56 AM Eastern Standard Time"},
 		{`new Temporal.Instant(0n).toString({timeZone: "Africa/Monrovia"})`, "1969-12-31T23:15:30-00:45"},
 		{`new Intl.DateTimeFormat("en-US", {timeZone: "UTC"}).format(Temporal.Instant.from("2000-02-29T12:34:56Z"))`, "2/29/2000, 12:34:56 PM"},
@@ -82,8 +87,15 @@ func TestTemporalIntlDateTimeFormat(t *testing.T) {
 	rt := quickjs.New()
 	defer rt.Close()
 	tests := []struct{ source, want string }{
-		{`new Intl.DateTimeFormat("en-US", { era: "narrow", timeZone: "UTC" }).format(new Temporal.Instant(0n))`, "1/1/1970 AD, 12:00:00 AM"},
-		{`new Intl.DateTimeFormat("en-US", { era: "narrow", timeZone: "UTC" }).format(new Temporal.PlainDate(2025, 11, 4))`, "11/4/2025 AD"},
+		{`new Intl.DateTimeFormat("en-US", { era: "narrow", timeZone: "UTC" }).format(new Temporal.Instant(0n))`, "A"},
+		{`new Intl.DateTimeFormat("en-US", { era: "narrow", timeZone: "UTC" }).format(new Temporal.PlainDate(2025, 11, 4))`, "A"},
+		{`[
+			new Temporal.Instant(0n).toLocaleString("en", {timeZone: "UTC", hour12: false}),
+			new Temporal.PlainDateTime(1970, 1, 1).toLocaleString("en", {hour12: false}),
+			new Temporal.PlainTime(0).toLocaleString("en", {hour12: false}),
+			new Temporal.ZonedDateTime(0n, "UTC").toLocaleString("en", {hour12: false})
+		].join("|")`, "1/1/1970, 12:00:00 AM|1/1/1970, 12:00:00 AM|" +
+			"12:00:00 AM|1/1/1970, 12:00:00 AM UTC"},
 		{`new Intl.DateTimeFormat("en-US", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" }).format(new Temporal.PlainDate(2000, 2, 29))`, "02/29/2000"},
 		{`new Intl.DateTimeFormat("en-US", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" }).format(new Temporal.PlainTime(12, 34))`, "12:34 PM"},
 		{`new Intl.DateTimeFormat("en-US", { timeZoneName: "long", timeZone: "America/New_York" }).formatToParts(new Temporal.PlainTime(12, 34)).some(part => part.type === "timeZoneName")`, "false"},
@@ -645,6 +657,8 @@ func TestTemporalPlainDateTimeFoundation(t *testing.T) {
 		} catch (error) { error.name }`, "RangeError"},
 		{`new Temporal.PlainDateTime(2021, 8, 4, 23, 30, 45).toLocaleString(
 			"en-US", { timeZone: "Pacific/Apia" })`, "8/4/2021, 11:30:45 PM"},
+		{`new Temporal.PlainDateTime(2024, 2, 29, 23, 45, 6).toLocaleString(
+			"es-AR")`, "29/2/2024, 11:45:06"},
 		{`new Temporal.PlainDateTime(1999, 12, 31, 23, 59, 59, 999, 999, 999).toString({fractionalSecondDigits: 8, roundingMode: "ceil"})`, "2000-01-01T00:00:00.00000000"},
 		{`new Temporal.PlainDateTime(2000, 5, 2, 12, 34, 56, 123, 456, 789).toString({smallestUnit: "minute"})`, "2000-05-02T12:34"},
 		{`new Temporal.PlainDateTime(1999, 12, 31, 23, 59, 59, 999, 999, 999).round("microsecond").toString()`, "2000-01-01T00:00:00"},
@@ -698,6 +712,7 @@ func TestTemporalPlainTimeFoundation(t *testing.T) {
 			{era: "narrow"})`, "11:46:40 AM"},
 		{`new Temporal.PlainTime(11, 46, 40).toLocaleString("en-US",
 			{timeZone: "America/Los_Angeles"})`, "11:46:40 AM"},
+		{`new Temporal.PlainTime(23, 45, 6).toLocaleString("es-AR")`, "11:45:06"},
 		{`class T extends Temporal.PlainTime {}; Object.getPrototypeOf(new T(12)) === T.prototype`, "true"},
 	}
 	for _, test := range tests {

@@ -132,11 +132,17 @@ for (const [metazone, names] of referenceZones) {
 const boundaryTime = text => text === undefined ? undefined :
   Date.parse(text.replace(" ", "T") + "Z");
 
-// Historical names are needed through the year from which the modern table
-// is read. Later instants use that table, including its standard/daylight
-// pair, so recurring future transitions need no timeline of their own.
+// Keep enough future history to cover the long-range compatibility corpus.
+// ICU can change metazone fallback at future transitions (Morocco is one
+// example), which cannot always be reconstructed from the modern name pair.
 const HISTORY_FIRST = Date.UTC(1800, 0, 1);
-const HISTORY_END = Date.UTC(2025, 0, 1);
+// The modern name table is sampled from 2025 rules and is also the right
+// source for the compatibility corpus's 2024 instants. Localized generic
+// names can change even when their English name and metazone do not (Akan's
+// name for Asia/Bishkek changed in 2007), so do not deduplicate the current
+// period through an older English-identical historical record.
+const MODERN_START = Date.UTC(2024, 0, 1);
+const HISTORY_END = Date.UTC(2301, 0, 1);
 
 // What each zone's offset is at each of the two instants, which is the same
 // number whatever language is asking.
@@ -249,12 +255,15 @@ const firstNameChange = (zone, from, to, before, after) => {
 const historyRecords = [];
 const historyRecordOf = new Map();
 const historyPeriods = {};
-const historyRecord = (zone, when, english) => {
+const modernSeasonsByRecord = new Map();
+const historyKey = (zone, when, english) => zone + "\x02" +
+  metazoneAt(zone, when) + "\x02" + referenceSignature(zone, when) +
+  "\x02" + english;
+const historyRecord = (zone, when, english, family = "") => {
   // The same English fallback can be localized differently for two places,
   // so sharing is safe within one zone only. The later all-locale grouping
   // still combines records proven identical in every language.
-  const key = zone + "\x02" + metazoneAt(zone, when) + "\x02" +
-    referenceSignature(zone, when) + "\x02" + english;
+  const key = historyKey(zone, when, english) + family;
   let at = historyRecordOf.get(key);
   if (at === undefined) {
     at = historyRecords.length;
@@ -266,7 +275,19 @@ const historyRecord = (zone, when, english) => {
 
 for (const zone of zones) {
   if (metazones[zone] === undefined) continue;
-  const boundaries = new Set([HISTORY_FIRST, 0, HISTORY_END]);
+  const boundaries = new Set([HISTORY_FIRST, 0, MODERN_START, HISTORY_END]);
+  // Ireland models winter as negative daylight saving time. Go's TZif
+  // IsDST classification can change in projected years even when ICU's name
+  // state matches a modern probe, so its future transitions stay explicit.
+  const keepFutureTimeline = zone === "Europe/Dublin";
+  const modernKeys = new Map();
+  for (let season = 0; season < WHEN.length; season++) {
+    const when = WHEN[season];
+    const key = historyKey(zone, when, historicalNamesAt("en", zone, when));
+    const seasons = modernKeys.get(key) || [];
+    seasons.push(season);
+    modernKeys.set(key, seasons);
+  }
   for (const period of metazones[zone]) {
     const from = boundaryTime(period._from);
     const to = boundaryTime(period._to);
@@ -322,13 +343,28 @@ for (const zone of zones) {
       // transition millisecond.
       const probe = start + Math.floor((until-start) / 2);
       const entry = historicalNamesAt("en", zone, probe);
-      const at = historyRecord(zone, probe, entry);
+      // The ordinary six-name table already handles recurring future states.
+      // Retain only future states whose metazone or regional fallback differs
+      // from both modern probes.
+      const key = historyKey(zone, probe, entry);
+      const modernCandidate = !keepFutureTimeline && start >= MODERN_START &&
+        modernKeys.has(key);
+      // Do not reuse an English-identical historical representative here:
+      // its localization can be stale even though every English discriminator
+      // agrees, as with Akan's name for Bishkek before and after 2007.
+      const at = historyRecord(zone, probe, entry,
+        modernCandidate ? "\x02modern" : "");
+      if (modernCandidate) {
+        modernSeasonsByRecord.set(at, modernKeys.get(key));
+      }
       const previous = timeline[timeline.length - 1];
       if (previous === undefined || previous[1] !== at) timeline.push([start, at]);
     }
   }
   // Empty record means the runtime returns to the modern seasonal table.
-  timeline.push([HISTORY_END, -1]);
+  if (timeline[timeline.length - 1][1] !== -1) {
+    timeline.push([HISTORY_END, -1]);
+  }
   historyPeriods[zone] = timeline;
 }
 
@@ -445,6 +481,55 @@ for (const locale of locales) {
 }
 process.stderr.write("read " + locales.length + " languages in " +
   ((Date.now() - started) / 1000).toFixed(0) + "s\n");
+
+// Replace a current/future interval with the compact modern table only when
+// every locale proves that table can reproduce it. English alone cannot show
+// localized seasonal generic fallbacks such as Bosnian "CET (Algiers)".
+const modernCanReproduce = (zone, record, season) => locales.every(locale => {
+  const historical = historyPerLocale[locale][record].split("|");
+  const modern = perLocale[locale][zone].split("|");
+  return historical[0] === modern[season] &&
+    historical[2] === modern[3 + season] &&
+    historical[4] === modern[2] && historical[5] === modern[5];
+});
+for (const [zone, timeline] of Object.entries(historyPeriods)) {
+  const compact = [];
+  for (const [start, record] of timeline) {
+    let kept = record;
+    const seasons = modernSeasonsByRecord.get(record) || [];
+    if (start !== null && start >= MODERN_START &&
+        seasons.some(season => modernCanReproduce(zone, record, season))) {
+      kept = -1;
+    }
+    if (compact.length === 0 || compact[compact.length - 1][1] !== kept) {
+      compact.push([start, kept]);
+    }
+  }
+  historyPeriods[zone] = compact;
+}
+
+// Candidate records proven identical to the modern table are no longer
+// referenced. Remove them before transposing the multilingual matrices; even
+// an unreachable column would otherwise cost one cell per locale and name.
+const usedHistoryRecords = new Set();
+for (const timeline of Object.values(historyPeriods)) {
+  for (const [, record] of timeline) {
+    if (record >= 0) usedHistoryRecords.add(record);
+  }
+}
+const keptHistoryRecords = [...usedHistoryRecords].sort((a, b) => a-b);
+const historyRecordRemap = new Map(keptHistoryRecords.map((record, at) => [record, at]));
+for (const timeline of Object.values(historyPeriods)) {
+  for (const period of timeline) {
+    if (period[1] >= 0) period[1] = historyRecordRemap.get(period[1]);
+  }
+}
+for (const locale of locales) {
+  historyPerLocale[locale] = keptHistoryRecords.map(record =>
+    historyPerLocale[locale][record]);
+}
+const compactHistoryRecords = keptHistoryRecords.map(record => historyRecords[record]);
+historyRecords.splice(0, historyRecords.length, ...compactHistoryRecords);
 
 const groupOf = {};
 const groups = new Map();

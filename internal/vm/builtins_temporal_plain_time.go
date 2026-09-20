@@ -259,6 +259,7 @@ func (r *Runtime) initTemporalPlainTime(temporal *Object) {
 		if err != nil {
 			return Undefined, err
 		}
+		options.temporalKind = "plain-time"
 		options, err = rt.dateOptionsForArgument(options, this)
 		if err != nil {
 			return Undefined, err

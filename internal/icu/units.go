@@ -51,10 +51,11 @@ func Units() []string {
 }
 
 var (
-	unitsOnce   sync.Once
-	unitBlocks  map[string]map[string]string
-	unitsByTag  map[string]string
-	unitFormSep = ""
+	unitsOnce           sync.Once
+	unitBlocks          map[string]map[string]string
+	unitsByTag          map[string]string
+	durationUnsupported map[string]bool
+	unitFormSep         = ""
 )
 
 func loadUnits() {
@@ -65,7 +66,8 @@ func loadUnits() {
 		}
 		unitBlocks = map[string]map[string]string{}
 		unitsByTag = map[string]string{}
-		blocks, tags, _ := strings.Cut(text, "\n\n")
+		blocks, rest, _ := strings.Cut(text, "\n\n")
+		tags, unsupported, _ := strings.Cut(rest, "\n\n")
 		var current map[string]string
 		for _, line := range strings.Split(blocks, "\n") {
 			if line == "" {
@@ -88,7 +90,22 @@ func loadUnits() {
 				unitsByTag[tag] = at
 			}
 		}
+		durationUnsupported = map[string]bool{}
+		for _, tag := range strings.Split(unsupported, "\n") {
+			if tag != "" {
+				durationUnsupported[tag] = true
+			}
+		}
 	})
+}
+
+// HasDurationLocale reports whether DurationFormat carries data for a locale.
+// Other Intl constructors support a few languages that DurationFormat does
+// not, so their requests must be allowed to fall through to another locale.
+func HasDurationLocale(tag string) bool {
+	loadUnits()
+	resolved := ResolveTag(tag)
+	return Has(resolved) && !durationUnsupported[resolved]
 }
 
 // UnitPattern is how this language writes a count of a unit, with {0} where
@@ -133,6 +150,24 @@ func (l *Locale) UnitPer(unit, width string) (string, bool) {
 // the two: Japanese says "km/h" where joining would give "km/時間".
 func (l *Locale) UnitCompound(unit, width string) (string, bool) {
 	return l.unitForms(width + "?" + unit)
+}
+
+// DurationListPattern returns the separators used to join duration units.
+// DurationFormat supports locales that ListFormat does not, so these patterns
+// are carried with the unit data rather than inferred from ListFormat.
+func (l *Locale) DurationListPattern(style string) (ListPattern, bool) {
+	value, ok := l.unitForms("duration-list/" + style)
+	if !ok {
+		return ListPattern{}, false
+	}
+	parts := strings.Split(value, "\x02")
+	if len(parts) != 4 {
+		return ListPattern{}, false
+	}
+	return ListPattern{
+		Pair:  "{0}" + parts[0] + "{1}",
+		Start: parts[1], Middle: parts[2], End: parts[3],
+	}, true
 }
 
 func (l *Locale) unitForms(key string) (string, bool) {

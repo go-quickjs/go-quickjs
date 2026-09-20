@@ -63,7 +63,7 @@ func (r *Runtime) initDurationFormat(intl *Object) {
 	r.defValue(intl, "DurationFormat", Obj(ctor))
 	r.intlProtos["DurationFormat"] = proto
 	r.defToStringTag(proto, "Intl.DurationFormat")
-	r.defSupportedLocalesOf(ctor)
+	r.defSupportedLocalesOfWhere(ctor, icu.HasDurationLocale)
 
 	r.defMethod(proto, "format", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		o, err := rt.durationFormatOf(this)
@@ -135,7 +135,22 @@ func (r *Runtime) durationOptionsFrom(args []Value) (*durationOptions, error) {
 	if err != nil {
 		return nil, err
 	}
-	choice := r.resolveLocale(tags, "nu")
+	durationTags := make([]string, 0, len(tags)+1)
+	for _, tag := range tags {
+		parsed, ok := parseTag(tag)
+		if ok && icu.HasDurationLocale(parsed.base()) {
+			durationTags = append(durationTags, tag)
+		}
+	}
+	if len(durationTags) == 0 {
+		fallback := canonicalTag(mustParse(r.Locale()))
+		parsed, _ := parseTag(fallback)
+		if !icu.HasDurationLocale(parsed.base()) {
+			fallback = "en-US"
+		}
+		durationTags = append(durationTags, fallback)
+	}
+	choice := r.resolveLocale(durationTags, "nu")
 	choice.override("nu", numbering)
 	o := &durationOptions{locale: choice.data, choice: choice}
 	if o.style, err = r.stringOption(options, "style", "short",
@@ -472,7 +487,11 @@ func (o *durationOptions) parts(r *Runtime, duration [len(durationUnits)]float64
 	}
 
 	// Joined the way a list of measurements is joined.
-	list := &listOptions{locale: o.locale, kind: "unit", style: o.listStyle()}
+	listStyle := o.listStyle()
+	list := &listOptions{locale: o.locale, kind: "unit", style: listStyle}
+	if pattern, ok := o.locale.DurationListPattern(listStyle); ok {
+		list.custom = &pattern
+	}
 	items := make([]string, len(groups))
 	for i, group := range groups {
 		items[i] = durationText(group)

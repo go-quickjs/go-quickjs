@@ -235,6 +235,8 @@ func (r *Runtime) initTemporalInstant(temporal *Object) {
 		if err != nil {
 			return Undefined, err
 		}
+		options.temporalKind = "instant"
+		options.useTemporalArgument()
 		milliseconds := float64(instant.epochSeconds*1000 + int64(instant.nanosecond)/1_000_000)
 		return Str(NewString(options.format(options.at(milliseconds)))), nil
 	})
@@ -927,6 +929,8 @@ func (r *Runtime) initTemporalZonedDateTime(temporal *Object) {
 		if err != nil {
 			return Undefined, err
 		}
+		options.temporalKind = "zoned-date-time"
+		options.useTemporalArgument()
 		if zoned.calendar != "iso8601" && zoned.calendar != options.calendar {
 			return Undefined, rt.throwRangeError(
 				"Temporal calendar does not match the formatter calendar")
