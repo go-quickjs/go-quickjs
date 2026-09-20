@@ -770,7 +770,8 @@ func (r *Runtime) initTemporalZonedDateTime(temporal *Object) {
 			if err != nil {
 				return Undefined, err
 			}
-			if temporalDateTimeUnitRank[largest] < temporalDateTimeUnitRank["hour"] && zoned.timeZone != other.timeZone {
+			if temporalDateTimeUnitRank[largest] < temporalDateTimeUnitRank["hour"] &&
+				!temporalTimeZoneIdentifiersEqual(zoned.timeZone, other.timeZone) {
 				return Undefined, rt.throwRangeError("zoned date-time time zones must match for calendar-unit differences")
 			}
 			if op.since {
@@ -879,7 +880,8 @@ func (r *Runtime) initTemporalZonedDateTime(temporal *Object) {
 			return Undefined, err
 		}
 		return Bool(compareTemporalInstants(zoned.instant, other.instant) == 0 &&
-			zoned.timeZone == other.timeZone && zoned.calendar == other.calendar), nil
+			temporalTimeZoneIdentifiersEqual(zoned.timeZone, other.timeZone) &&
+			zoned.calendar == other.calendar), nil
 	})
 	r.defMethod(proto, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		zoned, err := rt.temporalZonedDateTimeValue(this, "Temporal.ZonedDateTime.prototype.toString")
@@ -916,9 +918,14 @@ func (r *Runtime) initTemporalZonedDateTime(temporal *Object) {
 		options, err := rt.dateOptionsFrom(args, map[string]string{
 			"year": "numeric", "month": "numeric", "day": "numeric",
 			"hour": "numeric", "minute": "numeric", "second": "numeric",
+			"timeZoneName": "short",
 		}, "any")
 		if err != nil {
 			return Undefined, err
+		}
+		if zoned.calendar != "iso8601" && zoned.calendar != options.calendar {
+			return Undefined, rt.throwRangeError(
+				"Temporal calendar does not match the formatter calendar")
 		}
 		if options.timeZoneSet {
 			return Undefined, rt.throwTypeError("a ZonedDateTime supplies its own time zone")
@@ -1032,6 +1039,28 @@ func (r *Runtime) newTemporalZonedDateTime(instant temporalInstant, zoneName str
 	return &temporalZonedDateTime{
 		instant: instant, timeZone: canonical, calendar: calendar, zone: zone,
 	}, nil
+}
+
+func temporalTimeZoneIdentifiersEqual(left, right string) bool {
+	if left == right {
+		return true
+	}
+	return temporalTimeZonePrimaryIdentifier(left) ==
+		temporalTimeZonePrimaryIdentifier(right)
+}
+
+func temporalTimeZonePrimaryIdentifier(name string) string {
+	canonical, ok := icu.CanonicalZone(name)
+	if !ok {
+		return name
+	}
+	for {
+		target, linked := icu.ZoneTarget(canonical)
+		if !linked || target == canonical {
+			return canonical
+		}
+		canonical = target
+	}
 }
 
 func (r *Runtime) temporalZonedDateTimeValue(value Value, method string) (*temporalZonedDateTime, error) {

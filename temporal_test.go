@@ -163,6 +163,18 @@ func TestTemporalZonedDateTimeFoundation(t *testing.T) {
 		{`Temporal.ZonedDateTime.from("2024-03-09T12:00-05:00[America/New_York]").until("2024-03-10T12:00-04:00[America/New_York]").toString()`, "PT23H"},
 		{`Temporal.ZonedDateTime.from("2024-03-09T12:00-05:00[America/New_York]").until("2024-03-10T12:00-04:00[America/New_York]", {largestUnit: "day"}).toString()`, "P1D"},
 		{`Temporal.ZonedDateTime.from("2024-03-10T12:00-04:00[America/New_York]").since("2024-03-09T12:00-05:00[America/New_York]", {largestUnit: "day"}).toString()`, "P1D"},
+		{`Temporal.ZonedDateTime.from("2020-01-01T00:00+05:30[Asia/Calcutta]").equals("2020-01-01T00:00+05:30[Asia/Kolkata]")`, "true"},
+		{`Temporal.ZonedDateTime.from("2020-01-01T00:00Z[Etc/GMT]").equals("2020-01-01T00:00Z[UTC]")`, "true"},
+		{`Temporal.ZonedDateTime.from("2020-01-01T00:00+05:30[Asia/Calcutta]").until("2021-09-01T00:00+05:30[Asia/Kolkata]", {largestUnit: "day"}).toString()`, "P609D"},
+		{`new Temporal.ZonedDateTime(0n, "+01:00").toLocaleString("en").includes("GMT+1")`, "true"},
+		{`new Temporal.ZonedDateTime(0n, "UTC").toLocaleString("en").includes("UTC")`, "true"},
+		{`Temporal.ZonedDateTime.from("2025-11-02T01:00-08:00[America/Vancouver]").until("2025-11-02T01:01-07:00[America/Vancouver]", {largestUnit: "year"}).toString()`, "-PT59M"},
+		{`Temporal.ZonedDateTime.from("2000-04-04T02:30-07:00[America/Vancouver]").until("2000-04-01T14:15-08:00[America/Vancouver]", {smallestUnit: "day", roundingMode: "ceil"}).toString()`, "-P2D"},
+		{`Temporal.ZonedDateTime.from("2010-03-04T23:10+08:00[Antarctica/Casey]").round({smallestUnit: "day", roundingMode: "floor"}).toString()`, "2010-03-04T00:00:00+11:00[Antarctica/Casey]"},
+		{`Temporal.ZonedDateTime.from("2010-03-04T23:10+08:00[Antarctica/Casey]").round({smallestUnit: "day", roundingMode: "ceil"}).toString()`, "2010-03-05T00:00:00+11:00[Antarctica/Casey]"},
+		{`try {
+			new Temporal.ZonedDateTime(0n, "UTC", "hebrew").toLocaleString("en-u-ca-gregory");
+		} catch (error) { error.name }`, "RangeError"},
 	}
 	for _, test := range tests {
 		if got := evalString(t, rt, test.source); got != test.want {

@@ -1427,6 +1427,7 @@ func (r *Runtime) dateOptionsFrom(args []Value, defaults map[string]string, requ
 		for field, into := range map[string]*string{
 			"year": &o.year, "month": &o.month, "day": &o.day,
 			"hour": &o.hour, "minute": &o.minute, "second": &o.second,
+			"timeZoneName": &o.timeZoneName,
 		} {
 			if *into == "" {
 				*into = defaults[field]

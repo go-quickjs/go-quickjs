@@ -265,39 +265,46 @@ func (r *Runtime) temporalZonedDateTimeFromBag(o *Object, optionsValue Value) (*
 	if err != nil {
 		return nil, err
 	}
-	values := make(map[string]int, 9)
-	present := make(map[string]bool, 9)
-	monthCode, monthCodePresent := "", false
+	dateFields := temporalPartialDateFields{}
+	timeValues := make(map[string]int, 6)
 	offsetNanoseconds, offsetPresent := int64(0), false
 	var timeZoneValue Value
-	for _, name := range []string{"day", "hour", "microsecond", "millisecond", "minute", "month", "monthCode", "nanosecond", "offset", "second", "timeZone", "year"} {
+	names := []string{"day"}
+	if temporalCalendarUsesEra(calendar) {
+		names = append(names, "era", "eraYear")
+	}
+	names = append(names, "hour", "microsecond", "millisecond", "minute",
+		"month", "monthCode", "nanosecond", "offset", "second",
+		"timeZone", "year")
+	for _, name := range names {
 		raw, err := r.getProp(o, r.atoms.intern(name), Obj(o))
 		if err != nil {
 			return nil, err
 		}
 		switch name {
+		case "era":
+			if raw.IsUndefined() {
+				continue
+			}
+			text, err := r.toString(raw)
+			if err != nil {
+				return nil, err
+			}
+			dateFields.era = asciiLower(text.Go())
+			dateFields.eraPresent = true
+			if _, valid := temporalYearFromEra(calendar, dateFields.era, 1); !valid {
+				return nil, r.throwRangeError("invalid calendar era")
+			}
+			continue
 		case "monthCode":
 			if raw.IsUndefined() {
 				continue
 			}
-			monthCodePresent = true
-			if raw.IsString() {
-				monthCode = raw.String().Go()
-			} else if raw.IsObject() {
-				primitive, err := r.toPrimitive(raw, hintString)
-				if err != nil {
-					return nil, err
-				}
-				if !primitive.IsString() {
-					return nil, r.throwTypeError("monthCode must resolve to a string")
-				}
-				monthCode = primitive.String().Go()
-			} else {
-				return nil, r.throwTypeError("monthCode must be a string")
+			dateFields.monthCode, err = r.temporalMonthCodeString(raw)
+			if err != nil {
+				return nil, err
 			}
-			if !wellFormedTemporalMonthCode(monthCode) {
-				return nil, r.throwRangeError("invalid monthCode")
-			}
+			dateFields.monthCodePresent = true
 			continue
 		case "offset":
 			if raw.IsUndefined() {
@@ -331,42 +338,60 @@ func (r *Runtime) temporalZonedDateTimeFromBag(o *Object, optionsValue Value) (*
 		if err != nil {
 			return nil, err
 		}
-		values[name], present[name] = value, true
+		switch name {
+		case "day":
+			dateFields.day, dateFields.dayPresent = value, true
+		case "eraYear":
+			dateFields.eraYear, dateFields.eraYearPresent = value, true
+		case "month":
+			dateFields.month, dateFields.monthPresent = value, true
+		case "year":
+			dateFields.year, dateFields.yearPresent = value, true
+		default:
+			timeValues[name] = value
+		}
 	}
 
 	options, err := r.temporalZonedDateTimeOptions(optionsValue)
 	if err != nil {
 		return nil, err
 	}
-	if !present["year"] || !present["day"] || !present["month"] && !monthCodePresent || timeZoneValue.IsUndefined() {
+	if dateFields.eraPresent != dateFields.eraYearPresent {
+		return nil, r.throwTypeError("era and eraYear must be provided together")
+	}
+	year, yearPresent := dateFields.year, dateFields.yearPresent
+	if dateFields.eraPresent {
+		eraYear, _ := temporalYearFromEra(
+			calendar, dateFields.era, dateFields.eraYear)
+		if yearPresent && year != eraYear {
+			return nil, r.throwRangeError("year and eraYear do not agree")
+		}
+		year, yearPresent = eraYear, true
+	}
+	if !yearPresent || !dateFields.dayPresent ||
+		!dateFields.monthPresent && !dateFields.monthCodePresent ||
+		timeZoneValue.IsUndefined() {
 		return nil, r.throwTypeError("zoned date-time property bag is missing required fields")
 	}
-	month := values["month"]
-	if monthCodePresent {
-		parsed, ok := parseISOMonthCode(monthCode)
-		if !ok || present["month"] && month != parsed {
-			return nil, r.throwRangeError("invalid monthCode")
-		}
-		month = parsed
-	}
-	day, year := values["day"], values["year"]
-	if month < 1 || day < 1 {
-		return nil, r.throwRangeError("invalid Temporal.ZonedDateTime")
+	date, err := r.resolveTemporalMonthDayFieldsDate(calendar, year,
+		dateFields, options.overflow == "constrain")
+	if err != nil {
+		return nil, err
 	}
 	if options.overflow == "constrain" {
-		month = min(month, 12)
-		day = min(day, isoDaysInMonth(year, month))
-		values["hour"] = max(0, min(23, values["hour"]))
-		values["minute"] = max(0, min(59, values["minute"]))
-		values["second"] = max(0, min(59, values["second"]))
-		values["millisecond"] = max(0, min(999, values["millisecond"]))
-		values["microsecond"] = max(0, min(999, values["microsecond"]))
-		values["nanosecond"] = max(0, min(999, values["nanosecond"]))
+		timeValues["hour"] = max(0, min(23, timeValues["hour"]))
+		timeValues["minute"] = max(0, min(59, timeValues["minute"]))
+		timeValues["second"] = max(0, min(59, timeValues["second"]))
+		timeValues["millisecond"] = max(0, min(999, timeValues["millisecond"]))
+		timeValues["microsecond"] = max(0, min(999, timeValues["microsecond"]))
+		timeValues["nanosecond"] = max(0, min(999, timeValues["nanosecond"]))
 	}
 	dateTime := temporalISODateTime{
-		year: year, month: month, day: day,
-		hour: values["hour"], minute: values["minute"], second: values["second"],
-		millisecond: values["millisecond"], microsecond: values["microsecond"], nanosecond: values["nanosecond"],
+		year: date.year, month: date.month, day: date.day,
+		hour: timeValues["hour"], minute: timeValues["minute"],
+		second: timeValues["second"], millisecond: timeValues["millisecond"],
+		microsecond: timeValues["microsecond"],
+		nanosecond:  timeValues["nanosecond"],
 	}
 	if !dateTime.valid() {
 		return nil, r.throwRangeError("invalid Temporal.ZonedDateTime")
@@ -410,11 +435,17 @@ func (r *Runtime) temporalZonedDateTimeWith(zoned *temporalZonedDateTime, fields
 		return nil, r.throwTypeError("with fields cannot be a Temporal object with a calendar or time zone")
 	}
 
-	values := make(map[string]int, 9)
-	present := make(map[string]bool, 9)
-	monthCode, offsetText := "", ""
-	monthCodePresent, offsetPresent := false, false
-	for _, name := range []string{"day", "hour", "microsecond", "millisecond", "minute", "month", "monthCode", "nanosecond", "offset", "second", "year"} {
+	dateFields := temporalPartialDateFields{}
+	timeValues := make(map[string]int, 6)
+	timePresent := make(map[string]bool, 6)
+	offsetText, offsetPresent := "", false
+	names := []string{"day"}
+	if temporalCalendarUsesEra(zoned.calendar) {
+		names = append(names, "era", "eraYear")
+	}
+	names = append(names, "hour", "microsecond", "millisecond", "minute",
+		"month", "monthCode", "nanosecond", "offset", "second", "year")
+	for _, name := range names {
 		raw, err := r.getProp(o, r.atoms.intern(name), fieldsValue)
 		if err != nil {
 			return nil, err
@@ -423,22 +454,23 @@ func (r *Runtime) temporalZonedDateTimeWith(zoned *temporalZonedDateTime, fields
 			continue
 		}
 		switch name {
-		case "monthCode":
-			monthCodePresent = true
-			if raw.IsString() {
-				monthCode = raw.String().Go()
-			} else if raw.IsObject() {
-				primitive, err := r.toPrimitive(raw, hintString)
-				if err != nil {
-					return nil, err
-				}
-				if !primitive.IsString() {
-					return nil, r.throwTypeError("monthCode must resolve to a string")
-				}
-				monthCode = primitive.String().Go()
-			} else {
-				return nil, r.throwTypeError("monthCode must be a string")
+		case "era":
+			text, err := r.toString(raw)
+			if err != nil {
+				return nil, err
 			}
+			dateFields.era = asciiLower(text.Go())
+			dateFields.eraPresent = true
+			if _, valid := temporalYearFromEra(
+				zoned.calendar, dateFields.era, 1); !valid {
+				return nil, r.throwRangeError("invalid calendar era")
+			}
+		case "monthCode":
+			dateFields.monthCode, err = r.temporalMonthCodeString(raw)
+			if err != nil {
+				return nil, err
+			}
+			dateFields.monthCodePresent = true
 		case "offset":
 			offsetPresent = true
 			if !raw.IsString() && !raw.IsObject() {
@@ -454,37 +486,54 @@ func (r *Runtime) temporalZonedDateTimeWith(zoned *temporalZonedDateTime, fields
 			if err != nil {
 				return nil, err
 			}
-			values[name], present[name] = value, true
+			switch name {
+			case "day":
+				dateFields.day, dateFields.dayPresent = value, true
+			case "eraYear":
+				dateFields.eraYear, dateFields.eraYearPresent = value, true
+			case "month":
+				dateFields.month, dateFields.monthPresent = value, true
+			case "year":
+				dateFields.year, dateFields.yearPresent = value, true
+			default:
+				timeValues[name], timePresent[name] = value, true
+			}
 		}
 	}
-	if present["month"] && values["month"] < 1 || present["day"] && values["day"] < 1 {
+	if dateFields.monthPresent && dateFields.month < 1 ||
+		dateFields.dayPresent && dateFields.day < 1 {
 		return nil, r.throwRangeError("invalid Temporal.ZonedDateTime fields")
 	}
 	options, err := r.temporalZonedDateTimeOptionsWithOffsetDefault(optionsValue, "prefer")
 	if err != nil {
 		return nil, err
 	}
-	if len(present) == 0 && !monthCodePresent && !offsetPresent {
+	if !dateFields.dayPresent && !dateFields.eraPresent &&
+		!dateFields.eraYearPresent && !dateFields.monthPresent &&
+		!dateFields.monthCodePresent && !dateFields.yearPresent &&
+		len(timePresent) == 0 && !offsetPresent {
 		return nil, r.throwTypeError("zoned date-time fields contain no recognized properties")
+	}
+	if dateFields.eraPresent != dateFields.eraYearPresent {
+		return nil, r.throwTypeError("era and eraYear must be provided together")
+	}
+	if dateFields.eraPresent && dateFields.yearPresent {
+		year, _ := temporalYearFromEra(
+			zoned.calendar, dateFields.era, dateFields.eraYear)
+		if year != dateFields.year {
+			return nil, r.throwRangeError("year and eraYear do not agree")
+		}
 	}
 
 	local := zoned.localISODateTime()
-	if present["year"] {
-		local.year = values["year"]
+	date, err := r.replaceTemporalPlainDateFields(temporalPlainDate{
+		year: local.year, month: local.month, day: local.day,
+		calendar: zoned.calendar,
+	}, dateFields, options.overflow)
+	if err != nil {
+		return nil, err
 	}
-	if present["month"] {
-		local.month = values["month"]
-	}
-	if monthCodePresent {
-		month, ok := parseISOMonthCode(monthCode)
-		if !ok || present["month"] && values["month"] != month {
-			return nil, r.throwRangeError("invalid monthCode")
-		}
-		local.month = month
-	}
-	if present["day"] {
-		local.day = values["day"]
-	}
+	local.year, local.month, local.day = date.year, date.month, date.day
 	for _, field := range []struct {
 		name   string
 		target *int
@@ -494,21 +543,14 @@ func (r *Runtime) temporalZonedDateTimeWith(zoned *temporalZonedDateTime, fields
 		{"second", &local.second, 59}, {"millisecond", &local.millisecond, 999},
 		{"microsecond", &local.microsecond, 999}, {"nanosecond", &local.nanosecond, 999},
 	} {
-		if !present[field.name] {
+		if !timePresent[field.name] {
 			continue
 		}
-		value := values[field.name]
+		value := timeValues[field.name]
 		if options.overflow == "constrain" {
 			value = max(0, min(field.limit, value))
 		}
 		*field.target = value
-	}
-	if local.month < 1 || local.day < 1 {
-		return nil, r.throwRangeError("invalid Temporal.ZonedDateTime fields")
-	}
-	if options.overflow == "constrain" {
-		local.month = min(local.month, 12)
-		local.day = min(local.day, isoDaysInMonth(local.year, local.month))
 	}
 	if !local.valid() {
 		return nil, r.throwRangeError("invalid Temporal.ZonedDateTime fields")
@@ -560,6 +602,13 @@ func (r *Runtime) interpretTemporalZonedDateTime(dateTime temporalISODateTime,
 	}
 	if offsetPresent && options.offset != "ignore" {
 		candidate, ok := temporalInstantFromLocalAndOffset(dateTime, offsetNanoseconds)
+		if options.offset == "use" {
+			if !ok {
+				return temporalInstant{}, r.throwRangeError(
+					"zoned date-time is outside the Temporal range")
+			}
+			return candidate, nil
+		}
 		if offsetMatchMinutes {
 			if matched, found := temporalMinuteOffsetCandidate(dateTime, zoned, offsetNanoseconds); found {
 				return matched, nil
@@ -570,12 +619,6 @@ func (r *Runtime) interpretTemporalZonedDateTime(dateTime temporalISODateTime,
 			if int64(probe.offsetSeconds())*temporalNanosecondsPerSecond == offsetNanoseconds {
 				return candidate, nil
 			}
-		}
-		if options.offset == "use" {
-			if !ok {
-				return temporalInstant{}, r.throwRangeError("zoned date-time is outside the Temporal range")
-			}
-			return candidate, nil
 		}
 		if options.offset == "reject" {
 			return temporalInstant{}, r.throwRangeError("offset does not match time zone")
@@ -655,6 +698,18 @@ func (r *Runtime) roundTemporalZonedDateTime(zoned *temporalZonedDateTime, small
 		startNanoseconds := start.epochNanoseconds()
 		dayLength := new(big.Int).Sub(end.epochNanoseconds(), startNanoseconds)
 		progress := new(big.Int).Sub(zoned.instant.epochNanoseconds(), startNanoseconds)
+		if progress.Sign() < 0 || progress.Cmp(dayLength) > 0 {
+			// A backward transition can cross midnight and re-enter the
+			// preceding date after the following date has already begun. In
+			// that case the instant is outside this date's start-to-start
+			// interval, but rounding still follows its local wall-clock time.
+			progress = temporalPlainTimeNanoseconds(temporalPlainTime{
+				local.hour, local.minute, local.second,
+				local.millisecond, local.microsecond, local.nanosecond,
+			})
+			dayLength = big.NewInt(
+				temporalSecondsPerDay * temporalNanosecondsPerSecond)
+		}
 		rounded := roundTemporalBigIntAsIfPositive(progress, dayLength, mode)
 		rounded.Add(rounded, startNanoseconds)
 		instant, ok := temporalInstantFromEpochNanoseconds(rounded)
@@ -784,19 +839,24 @@ func (r *Runtime) differenceTemporalZonedDateTimesUnrounded(start, end *temporal
 	startLocal := start.localISODateTime()
 	endLocal := end.localISODateTime()
 	startDate := temporalPlainDate{year: startLocal.year, month: startLocal.month, day: startLocal.day, calendar: start.calendar}
+	startDays := isoDaysFromCivil(int64(startLocal.year), startLocal.month, startLocal.day)
 	endDays := isoDaysFromCivil(int64(endLocal.year), endLocal.month, endLocal.day)
 	startTime := temporalPlainTime{startLocal.hour, startLocal.minute, startLocal.second, startLocal.millisecond, startLocal.microsecond, startLocal.nanosecond}
 	endTime := temporalPlainTime{endLocal.hour, endLocal.minute, endLocal.second, endLocal.millisecond, endLocal.microsecond, endLocal.nanosecond}
-	if direction > 0 && compareTemporalPlainTimes(endTime, startTime) < 0 {
+	if endDays != startDays && direction > 0 && compareTemporalPlainTimes(endTime, startTime) < 0 {
 		endDays--
-	} else if direction < 0 && compareTemporalPlainTimes(endTime, startTime) > 0 {
+	} else if endDays != startDays && direction < 0 && compareTemporalPlainTimes(endTime, startTime) > 0 {
 		endDays++
 	}
 
 	makeAnchor := func(days int64) (temporalDuration, temporalInstant, error) {
 		year, month, day := isoCivilFromDays(days)
 		endDate := temporalPlainDate{year: year, month: month, day: day, calendar: end.calendar}
-		dateDuration := differenceTemporalZonedDatePortion(startDate, endDate, largest)
+		dateDuration, err := r.differenceTemporalPlainDates(
+			startDate, endDate, largest, "day", 1, "trunc")
+		if err != nil {
+			return temporalDuration{}, temporalInstant{}, err
+		}
 		anchor, err := r.addTemporalDurationToZonedInstant(start, dateDuration)
 		return dateDuration, anchor, err
 	}
@@ -821,46 +881,6 @@ func (r *Runtime) differenceTemporalZonedDateTimesUnrounded(start, end *temporal
 	dateDuration.hours, dateDuration.minutes, dateDuration.seconds = timeDuration.hours, timeDuration.minutes, timeDuration.seconds
 	dateDuration.milliseconds, dateDuration.microseconds, dateDuration.nanoseconds = timeDuration.milliseconds, timeDuration.microseconds, timeDuration.nanoseconds
 	return dateDuration, anchor, nil
-}
-
-func differenceTemporalZonedDatePortion(start, end temporalPlainDate, largest string) temporalDuration {
-	startDays := isoDaysFromCivil(int64(start.year), start.month, start.day)
-	endDays := isoDaysFromCivil(int64(end.year), end.month, end.day)
-	var result temporalDuration
-	switch largest {
-	case "day":
-		result.days = float64(endDays - startDays)
-	case "week":
-		days := endDays - startDays
-		result.weeks = float64(days / 7)
-		result.days = float64(days % 7)
-	case "month", "year":
-		months := int64(end.year-start.year)*12 + int64(end.month-start.month)
-		anchorDays := temporalMonthAnchorDays(start, months)
-		if months > 0 && anchorDays > endDays {
-			months--
-			anchorDays = temporalMonthAnchorDays(start, months)
-		} else if months < 0 && anchorDays < endDays {
-			months++
-			anchorDays = temporalMonthAnchorDays(start, months)
-		}
-		if largest == "year" {
-			result.years = float64(months / 12)
-			result.months = float64(months % 12)
-		} else {
-			result.months = float64(months)
-		}
-		result.days = float64(endDays - anchorDays)
-	}
-	return result
-}
-
-func temporalMonthAnchorDays(start temporalPlainDate, months int64) int64 {
-	totalMonths := int64(start.year)*12 + int64(start.month-1) + months
-	year := floorDivInt64(totalMonths, 12)
-	month := int(totalMonths-year*12) + 1
-	day := min(start.day, isoDaysInMonth(int(year), month))
-	return isoDaysFromCivil(year, month, day)
 }
 
 func (r *Runtime) roundTemporalZonedDifferenceToCalendarUnit(start *temporalZonedDateTime, target temporalInstant, duration temporalDuration, largest, unit string, increment int64, mode string) (temporalDuration, error) {
@@ -954,7 +974,7 @@ func (r *Runtime) roundTemporalZonedDifferenceToCalendarUnit(start *temporalZone
 	if chooseUpper {
 		result, resultInstant = upperDuration, upperInstant
 	}
-	if unit == "week" {
+	if unit == "week" || unit == "day" {
 		return result, nil
 	}
 	return r.differenceTemporalZonedDateTimesUnroundedResult(start, resultInstant, largest)

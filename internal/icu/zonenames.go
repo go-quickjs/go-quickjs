@@ -772,6 +772,12 @@ func OffsetNameSeconds(locale string, offsetSeconds int, long bool) string {
 	if !ok {
 		digits = "0123456789"
 	}
+	if offsetSeconds == 0 {
+		// CLDR uses a signless GMT form at zero. It is the positive short
+		// whole-hour template with its signed hour removed.
+		return strings.TrimSpace(strings.Replace(
+			piece(forms, ';', 4), "+{0}", "", 1))
+	}
 
 	seconds, negative := offsetSeconds, false
 	if seconds < 0 {

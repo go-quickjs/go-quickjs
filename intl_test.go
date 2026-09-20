@@ -327,6 +327,9 @@ func TestIntlFormats(t *testing.T) {
 		{`new Intl.DateTimeFormat("fr", {timeZone: "Europe/Paris", timeZoneName: "longOffset"})
 		    .formatToParts(Date.UTC(1900, 0, 1)).find(p => p.type === "timeZoneName").value`,
 			"UTC+00:09:21"},
+		{`new Intl.DateTimeFormat("en", {timeZone: "+00:00", timeZoneName: "short",
+		    hour: "numeric"}).formatToParts(0).find(p => p.type === "timeZoneName").value`,
+			"GMT"},
 		{`[Date.UTC(1971, 9, 31, 1, 59, 59, 999), Date.UTC(1971, 9, 31, 2)]
 		    .map(when => new Intl.DateTimeFormat("en", {timeZone: "Europe/London",
 		      timeZoneName: "long"}).formatToParts(when)
