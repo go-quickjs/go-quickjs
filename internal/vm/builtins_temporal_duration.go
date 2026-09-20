@@ -202,14 +202,24 @@ func (r *Runtime) initTemporalDuration(temporal *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		unit, err := rt.temporalTotalUnit(arg(args, 0))
+		unit, relativeTo, err := rt.temporalTotalOptions(arg(args, 0))
 		if err != nil {
 			return Undefined, err
 		}
 		if unit == "year" || unit == "month" {
-			if d.weeks != 0 || d.days != 0 || d.hours != 0 || d.minutes != 0 || d.seconds != 0 ||
-				d.milliseconds != 0 || d.microseconds != 0 || d.nanoseconds != 0 {
-				return Undefined, rt.throwRangeError("lower units require calendar-relative totaling")
+			if !relativeTo.IsUndefined() {
+				relativeDate, err := rt.toTemporalPlainDate(relativeTo, Undefined)
+				if err != nil {
+					return Undefined, err
+				}
+				value, err := rt.totalTemporalDurationInCalendarUnit(d, relativeDate, unit)
+				if err != nil {
+					return Undefined, err
+				}
+				return Float(value), nil
+			}
+			if d.weeks != 0 || d.days != 0 || d.hours != 0 || d.minutes != 0 || d.seconds != 0 || d.milliseconds != 0 || d.microseconds != 0 || d.nanoseconds != 0 {
+				return Undefined, rt.throwRangeError("calendar units require relativeTo")
 			}
 			months := d.years*12 + d.months
 			if unit == "year" {
@@ -342,35 +352,92 @@ func (d temporalDuration) largestTimeUnit() string {
 	return "nanosecond"
 }
 
-func (r *Runtime) temporalTotalUnit(value Value) (string, error) {
+func (r *Runtime) temporalTotalOptions(value Value) (string, Value, error) {
 	var raw Value
+	relativeTo := Undefined
 	if value.IsString() {
 		raw = value
 	} else {
 		if !value.IsObject() {
-			return "", r.throwTypeError("total options must be a unit string or object")
+			return "", Undefined, r.throwTypeError("total options must be a unit string or object")
 		}
 		var err error
+		relativeTo, err = r.getProp(value.Object(), r.atoms.intern("relativeTo"), value)
+		if err != nil {
+			return "", Undefined, err
+		}
 		raw, err = r.getProp(value.Object(), r.atoms.intern("unit"), value)
 		if err != nil {
-			return "", err
+			return "", Undefined, err
 		}
 	}
 	if raw.IsUndefined() {
-		return "", r.throwRangeError("unit is required")
+		return "", Undefined, r.throwRangeError("unit is required")
 	}
 	text, err := r.toString(raw)
 	if err != nil {
-		return "", err
+		return "", Undefined, err
 	}
 	unit, ok := normalizeTemporalUnit(text.Go())
 	if !ok {
 		unit, ok = normalizeTemporalYearMonthUnit(text.Go())
 	}
 	if !ok {
-		return "", r.throwRangeError("invalid total unit")
+		return "", Undefined, r.throwRangeError("invalid total unit")
 	}
-	return unit, nil
+	return unit, relativeTo, nil
+}
+
+func (r *Runtime) totalTemporalDurationInCalendarUnit(duration temporalDuration, start temporalPlainDate, unit string) (float64, error) {
+	target, err := r.addTemporalPlainDate(start, duration, 1, "constrain")
+	if err != nil {
+		return 0, err
+	}
+	startDays := isoDaysFromCivil(int64(start.year), start.month, start.day)
+	targetDays := isoDaysFromCivil(int64(target.year), target.month, target.day)
+	if startDays == targetDays {
+		return 0, nil
+	}
+	amount := int64(target.year - start.year)
+	if unit == "month" {
+		amount = amount*12 + int64(target.month-start.month)
+	}
+	makeAnchor := func(value int64) (temporalPlainDate, error) {
+		d := temporalDuration{}
+		if unit == "year" {
+			d.years = float64(value)
+		} else {
+			d.months = float64(value)
+		}
+		return r.addTemporalPlainDate(start, d, 1, "constrain")
+	}
+	anchor, err := makeAnchor(amount)
+	if err != nil {
+		return 0, err
+	}
+	anchorDays := isoDaysFromCivil(int64(anchor.year), anchor.month, anchor.day)
+	if targetDays > startDays && anchorDays > targetDays {
+		amount--
+		anchor, err = makeAnchor(amount)
+	} else if targetDays < startDays && anchorDays < targetDays {
+		amount++
+		anchor, err = makeAnchor(amount)
+	}
+	if err != nil {
+		return 0, err
+	}
+	anchorDays = isoDaysFromCivil(int64(anchor.year), anchor.month, anchor.day)
+	direction := int64(1)
+	if targetDays < anchorDays {
+		direction = -1
+	}
+	next, err := makeAnchor(amount + direction)
+	if err != nil {
+		return 0, err
+	}
+	nextDays := isoDaysFromCivil(int64(next.year), next.month, next.day)
+	span := math.Abs(float64(nextDays - anchorDays))
+	return float64(amount) + float64(targetDays-anchorDays)/span, nil
 }
 
 func parseTemporalDuration(s string) (temporalDuration, error) {
