@@ -197,6 +197,30 @@ func TestTemporalInstantDifferenceAndRounding(t *testing.T) {
 	}
 }
 
+func TestTemporalDurationAddSubtract(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	tests := []struct{ source, want string }{
+		{`Temporal.Duration.from({ days: 1, minutes: 5 }).add("P2DT5M").toString()`, "P3DT10M"},
+		{`new Temporal.Duration(0, 0, 0, 0, -60).add({ days: -1 }).toString()`, "-P3DT12H"},
+		{`Temporal.Duration.from("P3DT1H10M").subtract({ minutes: 15 }).toString()`, "P3DT55M"},
+		{`Temporal.Duration.from({ nanoseconds: Number.MAX_SAFE_INTEGER }).add({ nanoseconds: 2, days: 1 }).nanoseconds`, "993"},
+	}
+	for _, test := range tests {
+		if got := evalString(t, rt, test.source); got != test.want {
+			t.Errorf("%s\n got: %s\nwant: %s", test.source, got, test.want)
+		}
+	}
+	for _, source := range []string{
+		`new Temporal.Duration(1).add(new Temporal.Duration())`,
+		`Temporal.Duration.from({ seconds: Number.MAX_SAFE_INTEGER }).add(Temporal.Duration.from({ seconds: Number.MAX_SAFE_INTEGER }))`,
+	} {
+		if got := evalString(t, rt, `try { `+source+` } catch (e) { e.name }`); got != "RangeError" {
+			t.Errorf("%s threw %s", source, got)
+		}
+	}
+}
+
 func TestTemporalDurationRound(t *testing.T) {
 	rt := quickjs.New()
 	defer rt.Close()

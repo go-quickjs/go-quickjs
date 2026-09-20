@@ -69,6 +69,14 @@ func (d temporalDuration) timePartNanoseconds() *big.Int {
 	return total
 }
 
+func (d temporalDuration) dayAndTimeNanoseconds() *big.Int {
+	total := new(big.Int).Mul(
+		floatIntegerBig(d.days),
+		big.NewInt(temporalSecondsPerDay*temporalNanosecondsPerSecond),
+	)
+	return total.Add(total, d.timePartNanoseconds())
+}
+
 func (d temporalDuration) withinRange() bool {
 	const maxCalendarUnit = 4_294_967_295
 	for _, value := range []float64{d.years, d.months, d.weeks} {
@@ -224,20 +232,31 @@ func (r *Runtime) initTemporalDuration(temporal *Object) {
 			if err != nil {
 				return Undefined, err
 			}
-			leftNS, leftOK := left.timeNanoseconds()
-			rightNS, rightOK := right.timeNanoseconds()
-			if !leftOK || !rightOK {
-				return Undefined, rt.throwRangeError("calendar durations require relativeTo")
+			if left.years != 0 || left.months != 0 || left.weeks != 0 ||
+				right.years != 0 || right.months != 0 || right.weeks != 0 {
+				return Undefined, rt.throwRangeError("cannot add calendar duration units")
 			}
+			leftNS := left.dayAndTimeNanoseconds()
+			rightNS := right.dayAndTimeNanoseconds()
 			if op.sign < 0 {
 				rightNS.Neg(rightNS)
 			}
 			leftNS.Add(leftNS, rightNS)
-			largest := left.largestTimeUnit()
-			if other := right.largestTimeUnit(); temporalUnitRank[other] < temporalUnitRank[largest] {
-				largest = other
+			largest := ""
+			switch {
+			case left.days != 0 || right.days != 0:
+				largest = "day"
+			default:
+				largest = left.largestTimeUnit()
+				if other := right.largestTimeUnit(); temporalUnitRank[other] < temporalUnitRank[largest] {
+					largest = other
+				}
 			}
-			return Obj(newTemporalDuration(proto, temporalDurationFromNanoseconds(leftNS, largest))), nil
+			result := temporalDurationFromNanoseconds(leftNS, largest)
+			if !result.withinRange() {
+				return Undefined, rt.throwRangeError("duration result is out of range")
+			}
+			return Obj(newTemporalDuration(proto, result)), nil
 		})
 	}
 	r.defMethod(proto, "with", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {

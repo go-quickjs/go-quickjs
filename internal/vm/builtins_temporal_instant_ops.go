@@ -267,6 +267,15 @@ func roundTemporalBigIntAsIfPositive(value, increment *big.Int, mode string) *bi
 func temporalDurationFromNanoseconds(value *big.Int, largest string) temporalDuration {
 	var duration temporalDuration
 	remainder := new(big.Int).Set(value)
+	if largest == "day" {
+		dayNanoseconds := big.NewInt(temporalSecondsPerDay * temporalNanosecondsPerSecond)
+		days := new(big.Int)
+		days.QuoRem(remainder, dayNanoseconds, remainder)
+		if days.Sign() != 0 {
+			duration.days, _ = new(big.Float).SetInt(days).Float64()
+		}
+		largest = "hour"
+	}
 	fields := []struct {
 		unit   string
 		target *float64
