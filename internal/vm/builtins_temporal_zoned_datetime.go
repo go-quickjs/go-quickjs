@@ -636,3 +636,277 @@ func (r *Runtime) roundTemporalZonedDateTime(zoned *temporalZonedDateTime, small
 		},
 	)
 }
+
+func (r *Runtime) temporalZonedDateTimeDifferenceOptions(value Value) (largest, smallest string, increment int64, mode string, err error) {
+	options, err := r.strictOptions(value)
+	if err != nil {
+		return "", "", 0, "", err
+	}
+	largestRaw, err := r.stringOption(options, "largestUnit", "auto")
+	if err != nil {
+		return "", "", 0, "", err
+	}
+	rawIncrement, incrementSet, err := r.rawNumberOption(options, "roundingIncrement")
+	if err != nil {
+		return "", "", 0, "", err
+	}
+	mode, err = r.stringOption(options, "roundingMode", "trunc",
+		"ceil", "floor", "expand", "trunc", "halfCeil", "halfFloor", "halfExpand", "halfTrunc", "halfEven")
+	if err != nil {
+		return "", "", 0, "", err
+	}
+	smallestRaw, err := r.stringOption(options, "smallestUnit", "nanosecond")
+	if err != nil {
+		return "", "", 0, "", err
+	}
+	smallest, ok := normalizeTemporalDateTimeUnit(smallestRaw)
+	if !ok {
+		return "", "", 0, "", r.throwRangeError("invalid smallestUnit")
+	}
+	if largestRaw == "auto" {
+		largest = "hour"
+		if temporalDateTimeUnitRank[smallest] < temporalDateTimeUnitRank[largest] {
+			largest = smallest
+		}
+	} else {
+		largest, ok = normalizeTemporalDateTimeUnit(largestRaw)
+		if !ok {
+			return "", "", 0, "", r.throwRangeError("invalid largestUnit")
+		}
+	}
+	if temporalDateTimeUnitRank[largest] > temporalDateTimeUnitRank[smallest] {
+		return "", "", 0, "", r.throwRangeError("largestUnit must not be smaller than smallestUnit")
+	}
+	if temporalDateTimeUnitRank[smallest] >= temporalDateTimeUnitRank["hour"] {
+		increment, err = r.validateTemporalRoundingIncrement(rawIncrement, incrementSet, smallest, false)
+	} else if !incrementSet {
+		increment = 1
+	} else {
+		if math.IsNaN(rawIncrement) || math.IsInf(rawIncrement, 0) {
+			return "", "", 0, "", r.throwRangeError("roundingIncrement must be finite")
+		}
+		rawIncrement = math.Trunc(rawIncrement)
+		if rawIncrement < 1 || rawIncrement > 1_000_000_000 {
+			return "", "", 0, "", r.throwRangeError("roundingIncrement is out of range")
+		}
+		increment = int64(rawIncrement)
+	}
+	return
+}
+
+func (r *Runtime) differenceTemporalZonedDateTimes(start, end *temporalZonedDateTime, largest, smallest string, increment int64, mode string) (temporalDuration, error) {
+	if temporalDateTimeUnitRank[largest] >= temporalDateTimeUnitRank["hour"] {
+		difference := new(big.Int).Sub(end.instant.epochNanoseconds(), start.instant.epochNanoseconds())
+		step := new(big.Int).Mul(big.NewInt(temporalUnitNanoseconds[smallest]), big.NewInt(increment))
+		difference = roundTemporalBigInt(difference, step, mode)
+		return temporalDurationFromNanoseconds(difference, largest), nil
+	}
+
+	duration, anchor, err := r.differenceTemporalZonedDateTimesUnrounded(start, end, largest)
+	if err != nil {
+		return temporalDuration{}, err
+	}
+	if temporalDateTimeUnitRank[smallest] >= temporalDateTimeUnitRank["hour"] {
+		remainder := new(big.Int).Sub(end.instant.epochNanoseconds(), anchor.epochNanoseconds())
+		step := new(big.Int).Mul(big.NewInt(temporalUnitNanoseconds[smallest]), big.NewInt(increment))
+		remainder = roundTemporalBigInt(remainder, step, mode)
+		target, ok := anchor.addNanoseconds(remainder)
+		if !ok {
+			return temporalDuration{}, r.throwRangeError("rounded zoned date-time is outside the Temporal range")
+		}
+		return r.differenceTemporalZonedDateTimesUnroundedResult(start, target, largest)
+	}
+	return r.roundTemporalZonedDifferenceToCalendarUnit(start, end.instant, duration, largest, smallest, increment, mode)
+}
+
+func (r *Runtime) differenceTemporalZonedDateTimesUnroundedResult(start *temporalZonedDateTime, end temporalInstant, largest string) (temporalDuration, error) {
+	target := *start
+	target.instant = end
+	duration, _, err := r.differenceTemporalZonedDateTimesUnrounded(start, &target, largest)
+	return duration, err
+}
+
+func (r *Runtime) differenceTemporalZonedDateTimesUnrounded(start, end *temporalZonedDateTime, largest string) (temporalDuration, temporalInstant, error) {
+	comparison := compareTemporalInstants(start.instant, end.instant)
+	if comparison == 0 {
+		return temporalDuration{}, start.instant, nil
+	}
+	direction := int64(-comparison)
+	startLocal := start.localISODateTime()
+	endLocal := end.localISODateTime()
+	startDate := temporalPlainDate{year: startLocal.year, month: startLocal.month, day: startLocal.day, calendar: start.calendar}
+	endDays := isoDaysFromCivil(int64(endLocal.year), endLocal.month, endLocal.day)
+	startTime := temporalPlainTime{startLocal.hour, startLocal.minute, startLocal.second, startLocal.millisecond, startLocal.microsecond, startLocal.nanosecond}
+	endTime := temporalPlainTime{endLocal.hour, endLocal.minute, endLocal.second, endLocal.millisecond, endLocal.microsecond, endLocal.nanosecond}
+	if direction > 0 && compareTemporalPlainTimes(endTime, startTime) < 0 {
+		endDays--
+	} else if direction < 0 && compareTemporalPlainTimes(endTime, startTime) > 0 {
+		endDays++
+	}
+
+	makeAnchor := func(days int64) (temporalDuration, temporalInstant, error) {
+		year, month, day := isoCivilFromDays(days)
+		endDate := temporalPlainDate{year: year, month: month, day: day, calendar: end.calendar}
+		dateDuration := differenceTemporalZonedDatePortion(startDate, endDate, largest)
+		anchor, err := r.addTemporalDurationToZonedInstant(start, dateDuration)
+		return dateDuration, anchor, err
+	}
+	dateDuration, anchor, err := makeAnchor(endDays)
+	if err != nil {
+		endDays -= direction
+		dateDuration, anchor, err = makeAnchor(endDays)
+		if err != nil {
+			return temporalDuration{}, temporalInstant{}, err
+		}
+	}
+	anchorComparison := compareTemporalInstants(anchor, end.instant)
+	if direction > 0 && anchorComparison > 0 || direction < 0 && anchorComparison < 0 {
+		endDays -= direction
+		dateDuration, anchor, err = makeAnchor(endDays)
+		if err != nil {
+			return temporalDuration{}, temporalInstant{}, err
+		}
+	}
+	remainder := new(big.Int).Sub(end.instant.epochNanoseconds(), anchor.epochNanoseconds())
+	timeDuration := temporalDurationFromNanoseconds(remainder, "hour")
+	dateDuration.hours, dateDuration.minutes, dateDuration.seconds = timeDuration.hours, timeDuration.minutes, timeDuration.seconds
+	dateDuration.milliseconds, dateDuration.microseconds, dateDuration.nanoseconds = timeDuration.milliseconds, timeDuration.microseconds, timeDuration.nanoseconds
+	return dateDuration, anchor, nil
+}
+
+func differenceTemporalZonedDatePortion(start, end temporalPlainDate, largest string) temporalDuration {
+	startDays := isoDaysFromCivil(int64(start.year), start.month, start.day)
+	endDays := isoDaysFromCivil(int64(end.year), end.month, end.day)
+	var result temporalDuration
+	switch largest {
+	case "day":
+		result.days = float64(endDays - startDays)
+	case "week":
+		days := endDays - startDays
+		result.weeks = float64(days / 7)
+		result.days = float64(days % 7)
+	case "month", "year":
+		months := int64(end.year-start.year)*12 + int64(end.month-start.month)
+		anchorDays := temporalMonthAnchorDays(start, months)
+		if months > 0 && anchorDays > endDays {
+			months--
+			anchorDays = temporalMonthAnchorDays(start, months)
+		} else if months < 0 && anchorDays < endDays {
+			months++
+			anchorDays = temporalMonthAnchorDays(start, months)
+		}
+		if largest == "year" {
+			result.years = float64(months / 12)
+			result.months = float64(months % 12)
+		} else {
+			result.months = float64(months)
+		}
+		result.days = float64(endDays - anchorDays)
+	}
+	return result
+}
+
+func temporalMonthAnchorDays(start temporalPlainDate, months int64) int64 {
+	totalMonths := int64(start.year)*12 + int64(start.month-1) + months
+	year := floorDivInt64(totalMonths, 12)
+	month := int(totalMonths-year*12) + 1
+	day := min(start.day, isoDaysInMonth(int(year), month))
+	return isoDaysFromCivil(year, month, day)
+}
+
+func (r *Runtime) roundTemporalZonedDifferenceToCalendarUnit(start *temporalZonedDateTime, target temporalInstant, duration temporalDuration, largest, unit string, increment int64, mode string) (temporalDuration, error) {
+	sign := int64(duration.sign())
+	if sign == 0 {
+		return temporalDuration{}, nil
+	}
+	var amount int64
+	switch unit {
+	case "year":
+		amount = int64(duration.years)
+	case "month":
+		amount = int64(duration.months)
+	case "week":
+		amount = int64(duration.weeks) + int64(duration.days)/7
+	case "day":
+		amount = int64(duration.days)
+	}
+	r1 := amount / increment * increment
+	r2 := r1 + increment*sign
+	candidate := func(amount int64) (temporalDuration, temporalInstant, error) {
+		var value temporalDuration
+		switch unit {
+		case "year":
+			value.years = float64(amount)
+		case "month":
+			value.years, value.months = duration.years, float64(amount)
+		case "week":
+			value.years, value.months, value.weeks = duration.years, duration.months, float64(amount)
+		case "day":
+			value.years, value.months, value.weeks, value.days = duration.years, duration.months, duration.weeks, float64(amount)
+		}
+		instant, err := r.addTemporalDurationToZonedInstant(start, value)
+		return value, instant, err
+	}
+	lowerDuration, lowerInstant, err := candidate(r1)
+	if err != nil {
+		return temporalDuration{}, err
+	}
+	upperDuration, upperInstant, err := candidate(r2)
+	if err != nil {
+		return temporalDuration{}, err
+	}
+	between := func() bool {
+		if sign > 0 {
+			return compareTemporalInstants(lowerInstant, target) <= 0 && compareTemporalInstants(target, upperInstant) <= 0
+		}
+		return compareTemporalInstants(upperInstant, target) <= 0 && compareTemporalInstants(target, lowerInstant) <= 0
+	}
+	if !between() {
+		r1, r2 = r2, r2+increment*sign
+		lowerDuration, lowerInstant, err = candidate(r1)
+		if err != nil {
+			return temporalDuration{}, err
+		}
+		upperDuration, upperInstant, err = candidate(r2)
+		if err != nil {
+			return temporalDuration{}, err
+		}
+	}
+	chooseUpper := compareTemporalInstants(target, upperInstant) == 0
+	if compareTemporalInstants(target, lowerInstant) != 0 && !chooseUpper {
+		switch mode {
+		case "expand":
+			chooseUpper = true
+		case "ceil":
+			chooseUpper = sign > 0
+		case "floor":
+			chooseUpper = sign < 0
+		case "halfCeil", "halfFloor", "halfExpand", "halfTrunc", "halfEven":
+			fromLower := new(big.Int).Abs(new(big.Int).Sub(target.epochNanoseconds(), lowerInstant.epochNanoseconds()))
+			toUpper := new(big.Int).Abs(new(big.Int).Sub(upperInstant.epochNanoseconds(), target.epochNanoseconds()))
+			switch comparison := fromLower.Cmp(toUpper); {
+			case comparison > 0:
+				chooseUpper = true
+			case comparison == 0:
+				switch mode {
+				case "halfCeil":
+					chooseUpper = sign > 0
+				case "halfFloor":
+					chooseUpper = sign < 0
+				case "halfExpand":
+					chooseUpper = true
+				case "halfEven":
+					chooseUpper = (r1/increment)%2 != 0
+				}
+			}
+		}
+	}
+	result, resultInstant := lowerDuration, lowerInstant
+	if chooseUpper {
+		result, resultInstant = upperDuration, upperInstant
+	}
+	if unit == "week" {
+		return result, nil
+	}
+	return r.differenceTemporalZonedDateTimesUnroundedResult(start, resultInstant, largest)
+}

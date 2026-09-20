@@ -1287,6 +1287,7 @@ func (r *Runtime) dateOptionsFrom(args []Value, defaults map[string]string, requ
 		return nil, err
 	}
 	zone, given := "", !zoneValue.IsUndefined()
+	o.timeZoneSet = given
 	if given {
 		text, err := r.toString(zoneValue)
 		if err != nil {

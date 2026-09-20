@@ -744,6 +744,49 @@ func (r *Runtime) initTemporalZonedDateTime(temporal *Object) {
 			return Obj(newTemporalZonedDateTimeObject(rt.temporalZonedDateTimeProto, &result)), nil
 		})
 	}
+	for _, operation := range []struct {
+		name  string
+		since bool
+	}{{"until", false}, {"since", true}} {
+		op := operation
+		r.defMethod(proto, op.name, 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+			zoned, err := rt.temporalZonedDateTimeValue(this, "Temporal.ZonedDateTime.prototype."+op.name)
+			if err != nil {
+				return Undefined, err
+			}
+			other, err := rt.toTemporalZonedDateTime(arg(args, 0))
+			if err != nil {
+				return Undefined, err
+			}
+			if zoned.calendar != other.calendar {
+				return Undefined, rt.throwRangeError("zoned date-time calendars must match")
+			}
+			largest, smallest, increment, mode, err := rt.temporalZonedDateTimeDifferenceOptions(arg(args, 1))
+			if err != nil {
+				return Undefined, err
+			}
+			if temporalDateTimeUnitRank[largest] < temporalDateTimeUnitRank["hour"] && zoned.timeZone != other.timeZone {
+				return Undefined, rt.throwRangeError("zoned date-time time zones must match for calendar-unit differences")
+			}
+			if op.since {
+				mode = negateTemporalRoundingMode(mode)
+			}
+			duration, err := rt.differenceTemporalZonedDateTimes(zoned, other, largest, smallest, increment, mode)
+			if err != nil {
+				return Undefined, err
+			}
+			if op.since {
+				fields := duration.fields()
+				for index := range fields {
+					if fields[index] != 0 {
+						fields[index] = -fields[index]
+					}
+				}
+				duration = durationFromFields(fields)
+			}
+			return Obj(newTemporalDuration(rt.temporalDurationProto, duration)), nil
+		})
+	}
 	r.defMethod(proto, "with", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		zoned, err := rt.temporalZonedDateTimeValue(this, "Temporal.ZonedDateTime.prototype.with")
 		if err != nil {
@@ -859,6 +902,30 @@ func (r *Runtime) initTemporalZonedDateTime(temporal *Object) {
 			return Undefined, err
 		}
 		return Str(NewString(zoned.string())), nil
+	})
+	r.defMethod(proto, "toLocaleString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		zoned, err := rt.temporalZonedDateTimeValue(this, "Temporal.ZonedDateTime.prototype.toLocaleString")
+		if err != nil {
+			return Undefined, err
+		}
+		options, err := rt.dateOptionsFrom(args, map[string]string{
+			"year": "numeric", "month": "numeric", "day": "numeric",
+			"hour": "numeric", "minute": "numeric", "second": "numeric",
+		}, "any")
+		if err != nil {
+			return Undefined, err
+		}
+		if options.timeZoneSet {
+			return Undefined, rt.throwTypeError("a ZonedDateTime supplies its own time zone")
+		}
+		if zoned.fixed {
+			options.zone = time.FixedZone(zoned.timeZone, zoned.fixedOffsetSeconds)
+		} else {
+			options.zone = zoned.zone.Location()
+		}
+		options.timeZone = zoned.timeZone
+		milliseconds := float64(zoned.instant.epochSeconds*1000 + int64(zoned.instant.nanosecond)/1_000_000)
+		return Str(NewString(options.format(options.at(milliseconds)))), nil
 	})
 	r.defMethod(proto, "valueOf", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if _, err := rt.temporalZonedDateTimeValue(this, "Temporal.ZonedDateTime.prototype.valueOf"); err != nil {

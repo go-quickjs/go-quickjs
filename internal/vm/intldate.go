@@ -30,9 +30,10 @@ type dateOptions struct {
 
 	// zone is where the fields are read: UTC, the machine's own, or whichever
 	// one was asked for by name.
-	zone     *time.Location
-	timeZone string
-	hour12   bool
+	zone        *time.Location
+	timeZone    string
+	timeZoneSet bool
+	hour12      bool
 	// hourSet says the clock was chosen by the caller rather than by the
 	// locale, which changes which pattern is written.
 	hourSet bool
