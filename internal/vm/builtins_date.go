@@ -3,6 +3,7 @@ package vm
 import (
 	"fmt"
 	"math"
+	"math/big"
 	"strconv"
 	"strings"
 	"time"
@@ -219,6 +220,24 @@ func (r *Runtime) initDateBuiltins() {
 			return Undefined, err
 		}
 		return Float(t), nil
+	})
+	r.defMethod(p, "toTemporalInstant", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		t, err := rt.dateValueOf(this, "Date.prototype.toTemporalInstant")
+		if err != nil {
+			return Undefined, err
+		}
+		if math.IsNaN(t) {
+			return Undefined, rt.throwRangeError("invalid time value")
+		}
+		nanoseconds := new(big.Int).Mul(
+			big.NewInt(int64(t)), big.NewInt(1_000_000))
+		instant, ok := temporalInstantFromEpochNanoseconds(nanoseconds)
+		if !ok {
+			return Undefined, rt.throwRangeError(
+				"date is outside the Temporal range")
+		}
+		rt.buildTemporal()
+		return Obj(newTemporalInstant(rt.temporalInstantProto, instant)), nil
 	})
 	r.defMethod(p, "setTime", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if _, err := rt.dateValueOf(this, "Date.prototype.setTime"); err != nil {

@@ -27,7 +27,11 @@ func (r *Runtime) initTemporalBuiltins() {
 }
 
 func (r *Runtime) buildTemporal() *Object {
+	if r.temporalNamespace != nil {
+		return r.temporalNamespace
+	}
 	temporal := newObject(r.proto.object, ClassObject)
+	r.temporalNamespace = temporal
 	r.defToStringTag(temporal, "Temporal")
 	r.initTemporalDuration(temporal)
 	r.initTemporalInstant(temporal)

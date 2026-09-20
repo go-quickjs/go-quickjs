@@ -29,6 +29,7 @@ type Runtime struct {
 	intlFallback *Symbol
 	// temporalDurationProto is retained because Instant difference operations
 	// create Duration results after the lazy Temporal namespace has been built.
+	temporalNamespace     *Object
 	temporalDurationProto *Object
 	// PlainDateTime conversions create PlainDate results through the retained
 	// intrinsic prototype rather than an observable constructor lookup.

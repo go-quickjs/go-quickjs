@@ -32,6 +32,11 @@ func TestTemporalInstantConstruction(t *testing.T) {
 		{`new Temporal.Instant(0n).toString({timeZone: "America/New_York"})`, "1969-12-31T19:00:00-05:00"},
 		{`new Temporal.Instant(0n).toZonedDateTimeISO("uTc").toString()`, "1970-01-01T00:00:00+00:00[UTC]"},
 		{`new Temporal.Instant(0n).toZonedDateTimeISO("2021-08-19T17:30-07:00[UTC]").timeZoneId`, "UTC"},
+		{`new Date(-123456789).toTemporalInstant().epochNanoseconds.toString()`, "-123456789000000"},
+		{`(() => {
+			const instant = new Date(0).toTemporalInstant();
+			return Object.getPrototypeOf(instant) === Temporal.Instant.prototype;
+		})()`, "true"},
 		{`Temporal.Instant.from("2000-02-29T12:34:56.123456789Z").toLocaleString("en-US", {timeZone: "UTC"})`, "2/29/2000, 12:34:56 PM"},
 		{`Temporal.Instant.from("2000-02-29T12:34:56.123456789Z").toLocaleString("en-US", {timeZone: "America/New_York", timeZoneName: "long"})`, "2/29/2000, 7:34:56 AM Eastern Standard Time"},
 		{`new Temporal.Instant(0n).toString({timeZone: "Africa/Monrovia"})`, "1969-12-31T23:15:30-00:45"},
@@ -62,6 +67,8 @@ func TestTemporalInstantErrors(t *testing.T) {
 		{`try { new Temporal.Instant(0n).toString({smallestUnit: "day"}) } catch (e) { e.name }`, "RangeError"},
 		{`try { new Temporal.Instant(0n).toString({timeZone: "Mars/Olympus_Mons"}) } catch (e) { e.name }`, "RangeError"},
 		{`try { new Temporal.Instant(0n).toZonedDateTimeISO() } catch (e) { e.name }`, "TypeError"},
+		{`try { new Date(NaN).toTemporalInstant() } catch (e) { e.name }`, "RangeError"},
+		{`try { Date.prototype.toTemporalInstant.call({}) } catch (e) { e.name }`, "TypeError"},
 		{`try { new Temporal.Instant(0n).valueOf() } catch (e) { e.name }`, "TypeError"},
 	}
 	for _, test := range tests {
