@@ -30,6 +30,9 @@ type Runtime struct {
 	// temporalDurationProto is retained because Instant difference operations
 	// create Duration results after the lazy Temporal namespace has been built.
 	temporalDurationProto *Object
+	// PlainDateTime conversions create PlainDate results through the retained
+	// intrinsic prototype rather than an observable constructor lookup.
+	temporalPlainDateProto *Object
 	// globalLex holds a script's top-level let, const and class bindings.
 	//
 	// They are not properties of the global object -- `let x = 1` does not make

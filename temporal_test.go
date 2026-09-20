@@ -177,6 +177,25 @@ func TestTemporalPlainDateFoundation(t *testing.T) {
 	}
 }
 
+func TestTemporalPlainDateTimeFoundation(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	tests := []struct{ source, want string }{
+		{`new Temporal.PlainDateTime(2000, 5, 2, 15, 23, 30, 987, 654, 321).toString()`, "2000-05-02T15:23:30.987654321"},
+		{`Temporal.PlainDateTime.from("2000-05-02T15:23:30.1234").toJSON()`, "2000-05-02T15:23:30.1234"},
+		{`Temporal.PlainDateTime.compare("2000-05-02T15:23", "2000-05-02T15:24")`, "-1"},
+		{`new Temporal.PlainDateTime(2000, 5, 2, 15).toPlainDate().toString()`, "2000-05-02"},
+		{`Temporal.PlainDate.from(new Temporal.PlainDateTime(2000, 5, 2, 23)).toString()`, "2000-05-02"},
+		{`new Temporal.PlainDateTime(2000, 5, 2, 15, 23, 30).hour`, "15"},
+		{`class D extends Temporal.PlainDateTime {}; Object.getPrototypeOf(new D(2000, 1, 1)) === D.prototype`, "true"},
+	}
+	for _, test := range tests {
+		if got := evalString(t, rt, test.source); got != test.want {
+			t.Errorf("%s\n got: %s\nwant: %s", test.source, got, test.want)
+		}
+	}
+}
+
 func TestTemporalIsLazy(t *testing.T) {
 	rt := quickjs.New()
 	defer rt.Close()

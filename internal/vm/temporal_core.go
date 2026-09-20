@@ -203,7 +203,13 @@ func parseTemporalInstantFields(input string) (temporalISODateTime, int64, error
 		}
 	}
 	second, secondPresent := 0, false
-	if consumeByte(main, &index, ':') || !colonTime && index < len(main) && main[index] >= '0' && main[index] <= '9' {
+	secondFollows := false
+	if colonTime {
+		secondFollows = consumeByte(main, &index, ':')
+	} else {
+		secondFollows = index < len(main) && main[index] >= '0' && main[index] <= '9'
+	}
+	if secondFollows {
 		second, ok = parseFixedDigits(main, &index, 2)
 		if !ok {
 			return temporalISODateTime{}, 0, errInvalidTemporalInstant
@@ -403,7 +409,13 @@ func parseTemporalOffset(s string, index *int) (int64, bool) {
 		}
 	}
 	second, fraction := 0, int64(0)
-	if consumeByte(s, index, ':') || !colonOffset && *index < len(s) && s[*index] >= '0' && s[*index] <= '9' {
+	secondFollows := false
+	if colonOffset {
+		secondFollows = consumeByte(s, index, ':')
+	} else {
+		secondFollows = *index < len(s) && s[*index] >= '0' && s[*index] <= '9'
+	}
+	if secondFollows {
 		second, ok = parseFixedDigits(s, index, 2)
 		if !ok {
 			return 0, false

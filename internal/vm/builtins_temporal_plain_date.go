@@ -24,6 +24,7 @@ func (d temporalPlainDate) valid() bool {
 
 func (r *Runtime) initTemporalPlainDate(temporal *Object) {
 	proto := newObject(r.proto.object, ClassObject)
+	r.temporalPlainDateProto = proto
 	ctor := r.newTemporalCtor(temporal, "PlainDate", 3, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if err := rt.requireNew("Temporal.PlainDate"); err != nil {
 			return Undefined, err
@@ -271,6 +272,9 @@ func (r *Runtime) toTemporalCalendarIdentifierFromBag(value Value) (string, erro
 		if date, ok := value.Object().data.(*temporalPlainDate); ok && date != nil {
 			return date.calendar, nil
 		}
+		if dateTime, ok := value.Object().data.(*temporalPlainDateTime); ok && dateTime != nil {
+			return dateTime.calendar, nil
+		}
 		if zoned, ok := value.Object().data.(*temporalZonedDateTime); ok && zoned != nil {
 			return zoned.calendar, nil
 		}
@@ -306,6 +310,12 @@ func (r *Runtime) toTemporalPlainDate(value, optionsValue Value) (temporalPlainD
 				return temporalPlainDate{}, err
 			}
 			return *date, nil
+		}
+		if dateTime, ok := value.Object().data.(*temporalPlainDateTime); ok && dateTime != nil {
+			if _, err := r.temporalOverflowOption(optionsValue); err != nil {
+				return temporalPlainDate{}, err
+			}
+			return temporalPlainDate{year: dateTime.year, month: dateTime.month, day: dateTime.day, calendar: dateTime.calendar}, nil
 		}
 		if zoned, ok := value.Object().data.(*temporalZonedDateTime); ok && zoned != nil {
 			if _, err := r.temporalOverflowOption(optionsValue); err != nil {

@@ -31,6 +31,7 @@ func (r *Runtime) buildTemporal() *Object {
 	r.initTemporalDuration(temporal)
 	r.initTemporalInstant(temporal)
 	r.initTemporalPlainDate(temporal)
+	r.initTemporalPlainDateTime(temporal)
 	r.initTemporalZonedDateTime(temporal)
 	return temporal
 }
