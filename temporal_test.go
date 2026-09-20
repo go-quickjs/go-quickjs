@@ -94,10 +94,14 @@ func TestTemporalDurationFoundation(t *testing.T) {
 		{`Temporal.Duration.from({ hours: 1, minutes: 30 }).toJSON()`, "PT1H30M"},
 		{`Temporal.Duration.from("-PT1H30M").abs().toString()`, "PT1H30M"},
 		{`Temporal.Duration.from("PT1H30M").negated().toString()`, "-PT1H30M"},
+		{`Temporal.Duration.from("PT1.03125H").toString()`, "PT1H1M52.5S"},
+		{`Temporal.Duration.from("-PT1.5M").toString()`, "-PT1M30S"},
 		{`new Temporal.Duration().blank`, "true"},
 		{`new Temporal.Duration(0, 0, 0, 0, -1).sign`, "-1"},
 		{`new Temporal.Instant(1n).add({ seconds: 1, nanoseconds: 2 }).epochNanoseconds.toString()`, "1000000003"},
 		{`new Temporal.Instant(1n).subtract(Temporal.Duration.from("PT1S")).epochNanoseconds.toString()`, "-999999999"},
+		{`new Temporal.Instant(0n).add("PT1.03125H").epochNanoseconds.toString()`, "3712500000000"},
+		{`new Temporal.Instant(0n).add({nanoseconds: 9007199254740990976}).epochNanoseconds.toString()`, "9007199254740990976"},
 	}
 	for _, test := range tests {
 		if got := evalString(t, rt, test.source); got != test.want {

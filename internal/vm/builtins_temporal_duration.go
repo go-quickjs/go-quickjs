@@ -75,6 +75,9 @@ func (r *Runtime) initTemporalDuration(temporal *Object) {
 			if err != nil {
 				return Undefined, err
 			}
+			if value > 9_007_199_254_740_991 || value < -9_007_199_254_740_991 {
+				return Undefined, rt.throwRangeError("Duration constructor fields must be safe integers")
+			}
 			*target = value
 		}
 		if !d.valid() {
@@ -185,8 +188,8 @@ func (r *Runtime) temporalInteger(v Value) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if math.IsNaN(n) || math.IsInf(n, 0) || n != math.Trunc(n) || math.Abs(n) > 9_007_199_254_740_991 {
-		return 0, r.throwRangeError("duration fields must be finite safe integers")
+	if math.IsNaN(n) || math.IsInf(n, 0) || n != math.Trunc(n) || n >= float64(math.MaxInt64) || n <= float64(math.MinInt64) {
+		return 0, r.throwRangeError("duration field is outside the supported integer range")
 	}
 	return int64(n), nil
 }
@@ -266,11 +269,26 @@ func parseTemporalDuration(s string) (temporalDuration, error) {
 		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
 			i++
 		}
-		if start == i || i >= len(s) {
+		if start == i {
 			return d, errInvalidTemporalInstant
 		}
 		n, err := strconv.ParseInt(s[start:i], 10, 64)
-		if err != nil {
+		if err != nil || n < 0 {
+			return d, errInvalidTemporalInstant
+		}
+		fraction := ""
+		if i < len(s) && (s[i] == '.' || s[i] == ',') {
+			i++
+			fractionStart := i
+			for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+				i++
+			}
+			if fractionStart == i {
+				return d, errInvalidTemporalInstant
+			}
+			fraction = s[fractionStart:i]
+		}
+		if i >= len(s) {
 			return d, errInvalidTemporalInstant
 		}
 		unit := s[i]
@@ -312,12 +330,62 @@ func parseTemporalDuration(s string) (temporalDuration, error) {
 			return d, errInvalidTemporalInstant
 		}
 		*target = sign * n
+		if fraction != "" {
+			if !inTime || i != len(s) {
+				return d, errInvalidTemporalInstant
+			}
+			var scale int64
+			switch unit {
+			case 'H':
+				scale = 3_600_000_000_000
+			case 'M':
+				scale = 60_000_000_000
+			case 'S':
+				scale = 1_000_000_000
+			default:
+				return d, errInvalidTemporalInstant
+			}
+			extra, ok := roundedFractionNanoseconds(fraction, scale)
+			if !ok {
+				return d, errInvalidTemporalInstant
+			}
+			d.addFractionalTime(sign * extra)
+		}
 		seen = true
 	}
 	if !seen {
 		return d, errInvalidTemporalInstant
 	}
 	return d, nil
+}
+
+func roundedFractionNanoseconds(digits string, scale int64) (int64, bool) {
+	numerator, ok := new(big.Int).SetString(digits, 10)
+	if !ok {
+		return 0, false
+	}
+	numerator.Mul(numerator, big.NewInt(scale))
+	denominator := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(len(digits))), nil)
+	quotient, remainder := new(big.Int), new(big.Int)
+	quotient.QuoRem(numerator, denominator, remainder)
+	if new(big.Int).Lsh(remainder, 1).Cmp(denominator) >= 0 {
+		quotient.Add(quotient, big.NewInt(1))
+	}
+	if !quotient.IsInt64() {
+		return 0, false
+	}
+	return quotient.Int64(), true
+}
+
+func (d *temporalDuration) addFractionalTime(nanoseconds int64) {
+	d.minutes += nanoseconds / 60_000_000_000
+	nanoseconds %= 60_000_000_000
+	d.seconds += nanoseconds / 1_000_000_000
+	nanoseconds %= 1_000_000_000
+	d.milliseconds += nanoseconds / 1_000_000
+	nanoseconds %= 1_000_000
+	d.microseconds += nanoseconds / 1_000
+	d.nanoseconds += nanoseconds % 1_000
 }
 
 func (d temporalDuration) string() string {
