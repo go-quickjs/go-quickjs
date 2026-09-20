@@ -941,11 +941,10 @@ func (o *dateOptions) calendarCycle() ([]string, bool) {
 // own even where its months are the common ones: the Japanese year is counted
 // from the start of a reign and named after it.
 func (o *dateOptions) eraName(at icu.Date, n int) string {
-	// The Islamic calendars have one proleptic era name. ICU uses it for
-	// negative years as well as positive ones.
+	islamic := false
 	switch o.calendar {
 	case "islamic", "islamic-civil", "islamic-rgsa", "islamic-tbla", "islamic-umalqura":
-		at.Era = 0
+		islamic = true
 	}
 	if names, ok := o.calendarEras(); ok {
 		width := 1
@@ -955,10 +954,24 @@ func (o *dateOptions) eraName(at icu.Date, n int) string {
 		case n == 4:
 			width = 0
 		}
-		if list := names.Eras[width]; at.Era < len(list) {
-			return list[at.Era]
+		list := names.Eras[width]
+		if len(list) == 0 {
+			list = names.Eras[1]
 		}
-		if list := names.Eras[1]; at.Era < len(list) {
+		if islamic && len(list) > 0 {
+			// CLDR supplies only the post-Hijra name. ECMA-402 requires
+			// calendars with two eras to distinguish them, while Node 26
+			// applies that one name proleptically.
+			if at.Era == 0 && !o.nodeQuirks {
+				minus := o.locale.Minus
+				if minus == "" {
+					minus = "-"
+				}
+				return minus + list[0]
+			}
+			return list[0]
+		}
+		if at.Era >= 0 && at.Era < len(list) {
 			return list[at.Era]
 		}
 	}

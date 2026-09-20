@@ -250,8 +250,8 @@ func TestIntlFormats(t *testing.T) {
 		    };
 		    return ["islamic-civil", "islamic-tbla", "islamic-umalqura"]
 		      .map(c => [era(c, 600), era(c, 2025)].join(",")).join("|");
-		  })()`, "Anno Hegirae,Anno Hegirae|Anno Hegirae,Anno Hegirae|" +
-			"Anno Hegirae,Anno Hegirae"},
+		  })()`, "-Anno Hegirae,Anno Hegirae|-Anno Hegirae,Anno Hegirae|" +
+			"-Anno Hegirae,Anno Hegirae"},
 		{`(() => {
 		    const f = new Intl.DateTimeFormat("en", {calendar: "ethiopic",
 		      era: "long", year: "numeric", timeZone: "UTC"});
@@ -304,6 +304,8 @@ func TestIntlFormats(t *testing.T) {
 		{`JSON.stringify([Intl.DurationFormat.supportedLocalesOf("lkt"),
 			new Intl.DurationFormat("lkt").resolvedOptions().locale])`,
 			`[[],"en-US"]`},
+		{`JSON.stringify(Intl.DurationFormat.supportedLocalesOf(["en-US", "zxx"]))`,
+			`["en-US"]`},
 		{`new Date(Date.UTC(2024, 0, 5, 15, 4, 5)).toLocaleDateString("en", {timeZone: "UTC"})`,
 			"1/5/2024"},
 
@@ -547,6 +549,27 @@ func TestIntlFormats(t *testing.T) {
 	}
 	for _, tc := range cases {
 		checkEval(t, tc.src, tc.want)
+	}
+}
+
+func TestIntlNodeQuirks(t *testing.T) {
+	rt := quickjs.New(quickjs.WithNodeQuirks())
+	defer rt.Close()
+
+	const source = `(() => {
+		const era = (calendar, year) => {
+			const date = new Date(0); date.setUTCFullYear(year, 5, 15);
+			return new Intl.DateTimeFormat("en", {calendar, era: "long",
+				year: "numeric", timeZone: "UTC"}).formatToParts(date)
+				.find(p => p.type === "era").value;
+		};
+		return ["islamic-civil", "islamic-tbla", "islamic-umalqura"]
+			.map(c => [era(c, 600), era(c, 2025)].join(",")).join("|");
+	})()`
+	want := "Anno Hegirae,Anno Hegirae|Anno Hegirae,Anno Hegirae|" +
+		"Anno Hegirae,Anno Hegirae"
+	if got := evalString(t, rt, source); got != want {
+		t.Fatalf("got %q, want %q", got, want)
 	}
 }
 

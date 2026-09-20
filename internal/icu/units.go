@@ -104,8 +104,11 @@ func loadUnits() {
 // not, so their requests must be allowed to fall through to another locale.
 func HasDurationLocale(tag string) bool {
 	loadUnits()
+	if !Has(tag) {
+		return false
+	}
 	resolved := ResolveTag(tag)
-	return Has(resolved) && !durationUnsupported[resolved]
+	return !durationUnsupported[resolved]
 }
 
 // UnitPattern is how this language writes a count of a unit, with {0} where
