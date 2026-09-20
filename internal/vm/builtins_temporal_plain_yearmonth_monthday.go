@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"fmt"
 	"math"
 	"strings"
 	"time"
@@ -70,6 +71,12 @@ type temporalPlainMonthDay struct {
 
 func (d temporalPlainMonthDay) valid() bool {
 	return (temporalPlainDate{year: d.year, month: d.month, day: d.day}).valid()
+}
+
+func (d temporalPlainMonthDay) date() temporalPlainDate {
+	return temporalPlainDate{
+		year: d.year, month: d.month, day: d.day, calendar: d.calendar,
+	}
 }
 
 func (r *Runtime) initTemporalPlainYearMonth(temporal *Object) {
@@ -483,53 +490,37 @@ func (r *Runtime) initTemporalPlainMonthDay(temporal *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		dayValue, err := rt.getProp(fields, rt.atoms.intern("day"), Obj(fields))
+		partial, err := rt.temporalPartialDateFields(fields, monthDay.calendar)
 		if err != nil {
 			return Undefined, err
 		}
-		day, dayPresent := 0, !dayValue.IsUndefined()
-		if dayPresent {
-			day, err = rt.temporalTruncatedInteger(dayValue, "day")
-			if err != nil {
-				return Undefined, err
-			}
-		}
-		month, monthPresent, monthCode, monthCodePresent, year, yearPresent, err := rt.temporalMonthAndYearFields(fields)
-		if err != nil {
-			return Undefined, err
-		}
-		if !dayPresent && !monthPresent && !monthCodePresent && !yearPresent {
+		if !partial.dayPresent && !partial.eraPresent &&
+			!partial.eraYearPresent && !partial.monthPresent &&
+			!partial.monthCodePresent && !partial.yearPresent {
 			return Undefined, rt.throwTypeError("month-day fields must not be empty")
 		}
-		if dayPresent && day < 1 || monthPresent && month < 1 {
-			return Undefined, rt.throwRangeError("invalid Temporal.PlainMonthDay")
+		if partial.dayPresent && partial.day < 1 ||
+			partial.monthPresent && partial.month < 1 {
+			return Undefined, rt.throwRangeError(
+				"invalid Temporal.PlainMonthDay")
 		}
 		overflow, err := rt.temporalOverflowOption(arg(args, 1))
 		if err != nil {
 			return Undefined, err
 		}
-		if !dayPresent {
-			day = monthDay.day
+		calendarDate := monthDay.date().calendarDate()
+		if !partial.dayPresent {
+			partial.day, partial.dayPresent = calendarDate.Day, true
 		}
-		if monthPresent || monthCodePresent {
-			month, err = rt.resolveTemporalISOMonth(month, monthPresent, monthCode, monthCodePresent)
-			if err != nil {
-				return Undefined, err
-			}
-		} else {
-			month = monthDay.month
+		if !partial.monthPresent && !partial.monthCodePresent {
+			partial.monthCode = temporalCalendarMonthCode(calendarDate)
+			partial.monthCodePresent = true
 		}
-		validationYear := 1972
-		if yearPresent {
-			validationYear = year
+		result, err := rt.temporalPlainMonthDayFromFields(
+			monthDay.calendar, partial, overflow)
+		if err != nil {
+			return Undefined, err
 		}
-		if overflow == "constrain" {
-			month = min(month, 12)
-			day = min(day, isoDaysInMonth(validationYear, month))
-		} else if month > 12 || day > isoDaysInMonth(validationYear, month) {
-			return Undefined, rt.throwRangeError("invalid Temporal.PlainMonthDay")
-		}
-		result := temporalPlainMonthDay{year: 1972, month: month, day: day, calendar: monthDay.calendar}
 		return Obj(newTemporalPlainMonthDay(rt.temporalPlainMonthDayProto, result)), nil
 	})
 	r.defMethod(proto, "toPlainDate", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -541,21 +532,16 @@ func (r *Runtime) initTemporalPlainMonthDay(temporal *Object) {
 		if !fields.IsObject() {
 			return Undefined, rt.throwTypeError("year fields must be an object")
 		}
-		yearValue, err := rt.getProp(fields.Object(), rt.atoms.intern("year"), fields)
+		year, err := rt.temporalMonthDayYearFromFields(fields.Object(), monthDay.calendar)
 		if err != nil {
 			return Undefined, err
 		}
-		if yearValue.IsUndefined() {
-			return Undefined, rt.throwTypeError("year is required")
-		}
-		year, err := rt.temporalTruncatedInteger(yearValue, "year")
+		calendarDate := monthDay.date().calendarDate()
+		month, leap := calendarDate.MonthCode()
+		date, err := rt.resolveTemporalMonthDayDate(monthDay.calendar, year,
+			month, leap, calendarDate.Day, true)
 		if err != nil {
 			return Undefined, err
-		}
-		day := min(monthDay.day, isoDaysInMonth(year, monthDay.month))
-		date := temporalPlainDate{year: year, month: monthDay.month, day: day, calendar: monthDay.calendar}
-		if !date.valid() {
-			return Undefined, rt.throwRangeError("invalid Temporal.PlainDate")
 		}
 		return Obj(newTemporalPlainDate(rt.temporalPlainDateProto, date)), nil
 	})
@@ -575,6 +561,13 @@ func (r *Runtime) initTemporalPlainMonthDay(temporal *Object) {
 		options, err := rt.dateOptionsFrom(args, map[string]string{"month": "numeric", "day": "numeric"}, "date")
 		if err != nil {
 			return Undefined, err
+		}
+		options, err = rt.dateOptionsForArgument(options, this)
+		if err != nil {
+			return Undefined, err
+		}
+		if monthDay.calendar != options.calendar {
+			return Undefined, rt.throwRangeError("Temporal calendar does not match the formatter calendar")
 		}
 		date := time.Date(monthDay.year, time.Month(monthDay.month), monthDay.day, 12, 0, 0, 0, time.UTC)
 		return Str(NewString(options.format(date))), nil
@@ -779,7 +772,7 @@ func (d temporalPlainYearMonth) string(showCalendar string) string {
 func (d temporalPlainMonthDay) string(showCalendar string) string {
 	showAnnotation := showCalendar == "always" || showCalendar == "critical" || showCalendar == "auto" && d.calendar != "iso8601"
 	var b strings.Builder
-	if showAnnotation {
+	if d.calendar != "iso8601" || showAnnotation {
 		writeTemporalISOYear(&b, d.year)
 		b.WriteByte('-')
 	}
@@ -877,10 +870,11 @@ func (r *Runtime) toTemporalPlainMonthDay(value, optionsValue Value) (temporalPl
 			return *result, nil
 		}
 		if date, ok := value.Object().data.(*temporalPlainDate); ok && date != nil {
-			if _, err := r.temporalOverflowOption(optionsValue); err != nil {
+			overflow, err := r.temporalOverflowOption(optionsValue)
+			if err != nil {
 				return temporalPlainMonthDay{}, err
 			}
-			return temporalPlainMonthDay{year: 1972, month: date.month, day: date.day, calendar: date.calendar}, nil
+			return r.temporalMonthDayFromDate(*date, overflow)
 		}
 		return r.temporalPlainMonthDayFromBag(value.Object(), optionsValue)
 	}
@@ -894,8 +888,11 @@ func (r *Runtime) toTemporalPlainMonthDay(value, optionsValue Value) (temporalPl
 	if _, err := r.temporalOverflowOption(optionsValue); err != nil {
 		return temporalPlainMonthDay{}, err
 	}
-	result.year = 1972
-	return result, nil
+	if result.calendar == "iso8601" {
+		result.year = 1972
+		return result, nil
+	}
+	return r.temporalMonthDayFromDate(result.date(), "constrain")
 }
 
 func (r *Runtime) temporalPlainMonthDayFromBag(o *Object, optionsValue Value) (temporalPlainMonthDay, error) {
@@ -907,18 +904,7 @@ func (r *Runtime) temporalPlainMonthDayFromBag(o *Object, optionsValue Value) (t
 	if err != nil {
 		return temporalPlainMonthDay{}, err
 	}
-	dayValue, err := r.getProp(o, r.atoms.intern("day"), Obj(o))
-	if err != nil {
-		return temporalPlainMonthDay{}, err
-	}
-	day, dayPresent := 0, !dayValue.IsUndefined()
-	if dayPresent {
-		day, err = r.temporalTruncatedInteger(dayValue, "day")
-		if err != nil {
-			return temporalPlainMonthDay{}, err
-		}
-	}
-	month, monthPresent, monthCode, monthCodePresent, year, yearPresent, err := r.temporalMonthAndYearFields(o)
+	fields, err := r.temporalPartialDateFields(o, calendar)
 	if err != nil {
 		return temporalPlainMonthDay{}, err
 	}
@@ -926,31 +912,297 @@ func (r *Runtime) temporalPlainMonthDayFromBag(o *Object, optionsValue Value) (t
 	if err != nil {
 		return temporalPlainMonthDay{}, err
 	}
-	if !dayPresent || !monthPresent && !monthCodePresent {
-		return temporalPlainMonthDay{}, r.throwTypeError("plain month-day property bag is missing required fields")
+	return r.temporalPlainMonthDayFromFields(calendar, fields, overflow)
+}
+
+func (r *Runtime) temporalPlainMonthDayFromFields(calendar string,
+	fields temporalPartialDateFields, overflow string) (temporalPlainMonthDay, error) {
+	if fields.eraPresent != fields.eraYearPresent {
+		return temporalPlainMonthDay{}, r.throwTypeError(
+			"era and eraYear must be provided together")
 	}
-	month, err = r.resolveTemporalISOMonth(month, monthPresent, monthCode, monthCodePresent)
-	if err != nil {
-		return temporalPlainMonthDay{}, err
-	}
-	validationYear := 1972
-	if yearPresent {
-		validationYear = year
-	}
-	if overflow == "constrain" {
-		if month < 1 || day < 1 {
-			return temporalPlainMonthDay{}, r.throwRangeError("invalid Temporal.PlainMonthDay")
+	year, yearPresent := fields.year, fields.yearPresent
+	if fields.eraPresent {
+		eraYear, _ := temporalYearFromEra(calendar, fields.era, fields.eraYear)
+		if yearPresent && year != eraYear {
+			return temporalPlainMonthDay{}, r.throwRangeError(
+				"year and eraYear do not agree")
 		}
-		month = min(month, 12)
-		day = min(day, isoDaysInMonth(validationYear, month))
-	} else if month < 1 || month > 12 || day < 1 || day > isoDaysInMonth(validationYear, month) {
-		return temporalPlainMonthDay{}, r.throwRangeError("invalid Temporal.PlainMonthDay")
+		year, yearPresent = eraYear, true
 	}
-	result := temporalPlainMonthDay{year: 1972, month: month, day: day, calendar: calendar}
+	if !fields.dayPresent || !fields.monthPresent && !fields.monthCodePresent ||
+		calendar != "iso8601" && fields.monthPresent && !yearPresent {
+		return temporalPlainMonthDay{}, r.throwTypeError(
+			"plain month-day property bag is missing required fields")
+	}
+	if fields.day < 1 || fields.monthPresent && fields.month < 1 {
+		return temporalPlainMonthDay{}, r.throwRangeError(
+			"invalid Temporal.PlainMonthDay")
+	}
+
+	codeMonth, leap, codePresent := fields.month, false, false
+	if fields.monthCodePresent {
+		var ok bool
+		codeMonth, leap, ok = parseTemporalMonthCode(fields.monthCode)
+		if !ok || !temporalCalendarMonthCodeValid(calendar, codeMonth, leap) {
+			return temporalPlainMonthDay{}, r.throwRangeError("invalid monthCode")
+		}
+		codePresent = true
+	}
+	if calendar == "iso8601" {
+		month := fields.month
+		if codePresent {
+			if fields.monthPresent && fields.month != codeMonth {
+				return temporalPlainMonthDay{}, r.throwRangeError(
+					"month and monthCode do not agree")
+			}
+			month = codeMonth
+		}
+		validationYear := 1972
+		if yearPresent {
+			validationYear = year
+		}
+		day := fields.day
+		if overflow == "constrain" {
+			month = min(month, 12)
+			day = min(day, isoDaysInMonth(validationYear, month))
+		} else if month > 12 || day > isoDaysInMonth(validationYear, month) {
+			return temporalPlainMonthDay{}, r.throwRangeError(
+				"invalid Temporal.PlainMonthDay")
+		}
+		return r.temporalMonthDayReferenceDate(calendar, month, false,
+			day, "reject")
+	}
+
+	if yearPresent || !codePresent {
+		if !yearPresent {
+			year = 1972
+		}
+		date, err := r.resolveTemporalMonthDayFieldsDate(calendar, year,
+			fields, overflow == "constrain")
+		if err != nil {
+			return temporalPlainMonthDay{}, err
+		}
+		calendarDate := date.calendarDate()
+		codeMonth, leap = calendarDate.MonthCode()
+		fields.day = calendarDate.Day
+	}
+	return r.temporalMonthDayReferenceDate(calendar, codeMonth, leap,
+		fields.day, overflow)
+}
+
+func (r *Runtime) resolveTemporalMonthDayFieldsDate(calendar string, year int,
+	fields temporalPartialDateFields, constrain bool) (temporalPlainDate, error) {
+	month, leap, byCode := fields.month, false, false
+	if fields.monthCodePresent {
+		var ok bool
+		month, leap, ok = parseTemporalMonthCode(fields.monthCode)
+		if !ok || !temporalCalendarMonthCodeValid(calendar, month, leap) {
+			return temporalPlainDate{}, r.throwRangeError("invalid monthCode")
+		}
+		byCode = true
+	}
+	isoYear, isoMonth, isoDay, ok := icu.ResolveDate(calendar, year,
+		month, fields.day, leap, byCode, constrain)
+	if !ok && byCode && leap && constrain {
+		month = temporalMonthDayLeapFallbackMonth(calendar, month)
+		isoYear, isoMonth, isoDay, ok = icu.ResolveDate(calendar, year,
+			month, fields.day, false, true, true)
+	}
+	if !ok {
+		return temporalPlainDate{}, r.throwRangeError(
+			"invalid Temporal.PlainMonthDay")
+	}
+	result := temporalPlainDate{
+		year: isoYear, month: isoMonth, day: isoDay, calendar: calendar,
+	}
 	if !result.valid() {
-		return temporalPlainMonthDay{}, r.throwRangeError("invalid Temporal.PlainMonthDay")
+		return temporalPlainDate{}, r.throwRangeError(
+			"invalid Temporal.PlainMonthDay")
+	}
+	if fields.monthPresent && fields.monthCodePresent &&
+		result.calendarDate().OrdinalMonth != fields.month {
+		return temporalPlainDate{}, r.throwRangeError(
+			"month and monthCode do not agree")
 	}
 	return result, nil
+}
+
+func temporalMonthDayLeapFallbackMonth(calendar string, month int) int {
+	if calendar == "hebrew" {
+		return 6
+	}
+	return month
+}
+
+func (r *Runtime) temporalMonthDayReferenceDate(calendar string, month int,
+	leap bool, day int, overflow string) (temporalPlainMonthDay, error) {
+	if !temporalCalendarMonthCodeValid(calendar, month, leap) || day < 1 {
+		return temporalPlainMonthDay{}, r.throwRangeError(
+			"invalid Temporal.PlainMonthDay")
+	}
+	if result, ok := temporalMonthDayReferenceExact(calendar, month, leap, day); ok {
+		return result, nil
+	}
+	if overflow == "reject" {
+		return temporalPlainMonthDay{}, r.throwRangeError(
+			"invalid Temporal.PlainMonthDay")
+	}
+
+	regularMonth := month
+	if leap {
+		regularMonth = temporalMonthDayLeapFallbackMonth(calendar, month)
+	}
+	regularMaximum := temporalMonthDayMaximum(calendar, regularMonth, false)
+	requestedMaximum := temporalMonthDayMaximum(calendar, month, leap)
+	maximum := max(regularMaximum, requestedMaximum)
+	if maximum == 0 {
+		return temporalPlainMonthDay{}, r.throwRangeError(
+			"invalid Temporal.PlainMonthDay")
+	}
+	day = min(day, maximum)
+	if requestedMaximum >= day {
+		if result, ok := temporalMonthDayReferenceExact(
+			calendar, month, leap, day); ok {
+			return result, nil
+		}
+	}
+	if result, ok := temporalMonthDayReferenceExact(
+		calendar, regularMonth, false, day); ok {
+		return result, nil
+	}
+	return temporalPlainMonthDay{}, r.throwRangeError(
+		"invalid Temporal.PlainMonthDay")
+}
+
+func temporalMonthDayMaximum(calendar string, month int, leap bool) int {
+	for day := 31; day >= 1; day-- {
+		if _, ok := temporalMonthDayReferenceExact(calendar, month, leap, day); ok {
+			return day
+		}
+	}
+	return 0
+}
+
+func temporalMonthDayReferenceExact(calendar string, month int, leap bool,
+	day int) (temporalPlainMonthDay, bool) {
+	cutoff := time.Date(1972, 12, 31, 12, 0, 0, 0, time.UTC)
+	cutoffDays := isoDaysFromCivil(1972, 12, 31)
+	referenceYear := icu.DateIn(calendar, cutoff).ArithmeticYear
+	var before, after temporalPlainMonthDay
+	const minInt64 = int64(-1 << 63)
+	const maxInt64 = int64(1<<63 - 1)
+	beforeDays, afterDays := minInt64, maxInt64
+	for year := referenceYear - 400; year <= referenceYear+400; year++ {
+		isoYear, isoMonth, isoDay, ok := icu.ResolveDate(calendar, year,
+			month, day, leap, true, false)
+		if !ok {
+			continue
+		}
+		candidate := temporalPlainMonthDay{
+			year: isoYear, month: isoMonth, day: isoDay, calendar: calendar,
+		}
+		if (calendar == "chinese" || calendar == "dangi") &&
+			(isoYear < 1900 || isoYear > 2034) {
+			continue
+		}
+		if !candidate.valid() {
+			continue
+		}
+		candidateDays := isoDaysFromCivil(int64(isoYear), isoMonth, isoDay)
+		if candidateDays <= cutoffDays && candidateDays > beforeDays {
+			before, beforeDays = candidate, candidateDays
+		}
+		if candidateDays > cutoffDays && candidateDays < afterDays {
+			after, afterDays = candidate, candidateDays
+		}
+	}
+	if beforeDays != minInt64 {
+		return before, true
+	}
+	if afterDays != maxInt64 {
+		return after, true
+	}
+	return temporalPlainMonthDay{}, false
+}
+
+func (r *Runtime) temporalMonthDayFromDate(date temporalPlainDate,
+	overflow string) (temporalPlainMonthDay, error) {
+	calendarDate := date.calendarDate()
+	month, leap := calendarDate.MonthCode()
+	return r.temporalMonthDayReferenceDate(date.calendar, month, leap,
+		calendarDate.Day, overflow)
+}
+
+func (r *Runtime) temporalMonthDayYearFromFields(o *Object,
+	calendar string) (int, error) {
+	era, eraYear, year := "", 0, 0
+	eraPresent, eraYearPresent, yearPresent := false, false, false
+	if temporalCalendarUsesEra(calendar) {
+		eraValue, err := r.getProp(o, r.atoms.intern("era"), Obj(o))
+		if err != nil {
+			return 0, err
+		}
+		eraPresent = !eraValue.IsUndefined()
+		if eraPresent {
+			value, err := r.toString(eraValue)
+			if err != nil {
+				return 0, err
+			}
+			era = asciiLower(value.Go())
+			if _, valid := temporalYearFromEra(calendar, era, 1); !valid {
+				return 0, r.throwRangeError("invalid calendar era")
+			}
+		}
+		eraYearValue, err := r.getProp(o, r.atoms.intern("eraYear"), Obj(o))
+		if err != nil {
+			return 0, err
+		}
+		eraYearPresent = !eraYearValue.IsUndefined()
+		if eraYearPresent {
+			eraYear, err = r.temporalTruncatedInteger(eraYearValue, "eraYear")
+			if err != nil {
+				return 0, err
+			}
+		}
+	}
+	yearValue, err := r.getProp(o, r.atoms.intern("year"), Obj(o))
+	if err != nil {
+		return 0, err
+	}
+	yearPresent = !yearValue.IsUndefined()
+	if yearPresent {
+		year, err = r.temporalTruncatedInteger(yearValue, "year")
+		if err != nil {
+			return 0, err
+		}
+	}
+	if eraPresent != eraYearPresent {
+		return 0, r.throwTypeError("era and eraYear must be provided together")
+	}
+	if eraPresent {
+		eraArithmeticYear, _ := temporalYearFromEra(calendar, era, eraYear)
+		if yearPresent && year != eraArithmeticYear {
+			return 0, r.throwRangeError("year and eraYear do not agree")
+		}
+		return eraArithmeticYear, nil
+	}
+	if !yearPresent {
+		return 0, r.throwTypeError("year or era and eraYear are required")
+	}
+	return year, nil
+}
+
+func (r *Runtime) resolveTemporalMonthDayDate(calendar string, year, month int,
+	leap bool, day int, constrain bool) (temporalPlainDate, error) {
+	fields := temporalPartialDateFields{
+		day: day, dayPresent: true,
+		monthCode: fmt.Sprintf("M%02d", month), monthCodePresent: true,
+	}
+	if leap {
+		fields.monthCode += "L"
+	}
+	return r.resolveTemporalMonthDayFieldsDate(calendar, year, fields, constrain)
 }
 
 func (r *Runtime) temporalYearMonthFields(o *Object, calendar string) (temporalPartialDateFields, error) {

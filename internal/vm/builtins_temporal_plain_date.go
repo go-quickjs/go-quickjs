@@ -273,7 +273,10 @@ func (r *Runtime) initTemporalPlainDate(temporal *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		result := temporalPlainMonthDay{year: 1972, month: date.month, day: date.day, calendar: date.calendar}
+		result, err := rt.temporalMonthDayFromDate(date, "constrain")
+		if err != nil {
+			return Undefined, err
+		}
 		return Obj(newTemporalPlainMonthDay(rt.temporalPlainMonthDayProto, result)), nil
 	})
 	r.defMethod(proto, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -376,7 +379,7 @@ func (r *Runtime) toTemporalCalendarIdentifier(value Value) (string, error) {
 	}
 	calendar := asciiLower(value.String().Go())
 	calendar = canonicalSetting("ca", calendar)
-	if !icu.HasCalendar(calendar) {
+	if !icu.HasCalendar(calendar) || calendar == "islamic" || calendar == "islamic-rgsa" {
 		return "", r.throwRangeError("invalid calendar identifier")
 	}
 	return calendar, nil
@@ -576,11 +579,17 @@ func (r *Runtime) temporalPlainDateFromBag(o *Object, optionsValue Value) (tempo
 	var isoYear, isoMonth, isoDay int
 	if monthCodePresent {
 		codeMonth, leap, ok := parseTemporalMonthCode(monthCode)
-		if !ok {
+		if !ok || !temporalCalendarMonthCodeValid(calendar, codeMonth, leap) {
 			return temporalPlainDate{}, r.throwRangeError("invalid monthCode")
 		}
 		isoYear, isoMonth, isoDay, ok = icu.ResolveDate(calendar, year,
 			codeMonth, day, leap, true, constrain)
+		if !ok && leap && constrain &&
+			(calendar == "hebrew" || calendar == "chinese" || calendar == "dangi") {
+			codeMonth = temporalMonthDayLeapFallbackMonth(calendar, codeMonth)
+			isoYear, isoMonth, isoDay, ok = icu.ResolveDate(calendar, year,
+				codeMonth, day, false, true, true)
+		}
 		if !ok {
 			return temporalPlainDate{}, r.throwRangeError("invalid Temporal.PlainDate")
 		}

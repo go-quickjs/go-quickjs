@@ -537,6 +537,54 @@ func TestTemporalPlainYearMonthAndMonthDayFoundation(t *testing.T) {
 	}
 }
 
+func TestTemporalPlainMonthDayNonISOCalendars(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	tests := []struct{ source, want string }{
+		{`Temporal.PlainMonthDay.from({ calendar: "hebrew",
+			monthCode: "M05L", day: 1 }).toString()`,
+			"1970-02-07[u-ca=hebrew]"},
+		{`Temporal.PlainMonthDay.from("2023-01-01[u-ca=hebrew]").toString()`,
+			"1972-12-13[u-ca=hebrew]"},
+		{`Temporal.PlainMonthDay.from({ calendar: "chinese",
+			monthCode: "M02L", day: 30 }).toString()`,
+			"1972-04-13[u-ca=chinese]"},
+		{`Temporal.PlainMonthDay.from({ calendar: "hebrew",
+			monthCode: "M11", day: 4 }).with({ monthCode: "M10" }).monthCode`,
+			"M10"},
+		{`Temporal.PlainMonthDay.from({ calendar: "hebrew",
+			monthCode: "M11", day: 4 }).toPlainDate({
+				era: "am", eraYear: 5784 }).toString()`,
+			"2024-08-08[u-ca=hebrew]"},
+		{`Temporal.PlainDate.from({ calendar: "hebrew", year: 5784,
+			monthCode: "M05L", day: 1 }).toPlainMonthDay().monthCode`,
+			"M05L"},
+	}
+	for _, test := range tests {
+		if got := evalString(t, rt, test.source); got != test.want {
+			t.Errorf("%s\n got: %s\nwant: %s", test.source, got, test.want)
+		}
+	}
+
+	errors := []struct{ source, want string }{
+		{`Temporal.PlainMonthDay.from({ calendar: "hebrew",
+			month: 8, day: 1 })`, "TypeError"},
+		{`Temporal.PlainMonthDay.from({ calendar: "gregory", era: "ce",
+			eraYear: 2024, year: 2023, monthCode: "M01", day: 1 })`,
+			"RangeError"},
+		{`Temporal.PlainMonthDay.from({ calendar: "chinese",
+			monthCode: "M01L", day: 29 }, { overflow: "reject" })`,
+			"RangeError"},
+	}
+	for _, test := range errors {
+		got := evalString(t, rt,
+			`try { `+test.source+` } catch (e) { e.name }`)
+		if got != test.want {
+			t.Errorf("%s threw %s, want %s", test.source, got, test.want)
+		}
+	}
+}
+
 func TestTemporalPlainDateTimeFoundation(t *testing.T) {
 	rt := quickjs.New()
 	defer rt.Close()
