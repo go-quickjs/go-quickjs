@@ -471,9 +471,9 @@ func (r *Runtime) initTemporalZonedDateTime(temporal *Object) {
 			}.calendarDate()
 			switch name {
 			case "year":
-				return Int(calendarDate.Year), nil
+				return Int(calendarDate.ArithmeticYear), nil
 			case "month":
-				return Int(calendarDate.Month), nil
+				return Int(calendarDate.OrdinalMonth), nil
 			case "monthCode":
 				return Str(NewString(temporalCalendarMonthCode(calendarDate))), nil
 			case "day":
@@ -485,10 +485,11 @@ func (r *Runtime) initTemporalZonedDateTime(temporal *Object) {
 				}
 				return Str(NewString(era)), nil
 			case "eraYear":
-				if _, ok := temporalCalendarEra(zoned.calendar, calendarDate); !ok {
+				eraYear, ok := temporalCalendarEraYear(zoned.calendar, calendarDate)
+				if !ok {
 					return Undefined, nil
 				}
-				return Int(calendarDate.Year), nil
+				return Int(eraYear), nil
 			case "hour":
 				return Int(dateTime.hour), nil
 			case "minute":
@@ -514,30 +515,38 @@ func (r *Runtime) initTemporalZonedDateTime(temporal *Object) {
 			}
 			dateTime := zoned.localISODateTime()
 			days := isoDaysFromCivil(int64(dateTime.year), dateTime.month, dateTime.day)
+			date := temporalPlainDate{year: dateTime.year, month: dateTime.month,
+				day: dateTime.day, calendar: zoned.calendar}
+			calendarDate := date.calendarDate()
+			dayOfYear, daysInMonth, daysInYear, monthsInYear, inLeapYear, _ :=
+				icu.DateInfo(zoned.calendar, calendarDate)
 			switch name {
 			case "dayOfWeek":
 				return Int(isoDayOfWeek(days)), nil
 			case "dayOfYear":
-				return Int(int(days - isoDaysFromCivil(int64(dateTime.year), 1, 1) + 1)), nil
+				return Int(dayOfYear), nil
 			case "weekOfYear":
+				if zoned.calendar != "iso8601" {
+					return Undefined, nil
+				}
 				week, _ := isoWeekOfYear(days)
 				return Int(week), nil
 			case "yearOfWeek":
+				if zoned.calendar != "iso8601" {
+					return Undefined, nil
+				}
 				_, year := isoWeekOfYear(days)
 				return Int(year), nil
 			case "daysInWeek":
 				return Int(7), nil
 			case "daysInMonth":
-				return Int(isoDaysInMonth(dateTime.year, dateTime.month)), nil
+				return Int(daysInMonth), nil
 			case "daysInYear":
-				if isLeapYear(dateTime.year) {
-					return Int(366), nil
-				}
-				return Int(365), nil
+				return Int(daysInYear), nil
 			case "monthsInYear":
-				return Int(12), nil
+				return Int(monthsInYear), nil
 			case "inLeapYear":
-				return Bool(isLeapYear(dateTime.year)), nil
+				return Bool(inLeapYear), nil
 			}
 			return Undefined, nil
 		})

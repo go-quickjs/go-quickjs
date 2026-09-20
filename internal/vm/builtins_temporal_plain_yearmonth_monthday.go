@@ -97,9 +97,9 @@ func (r *Runtime) initTemporalPlainYearMonth(temporal *Object) {
 			date := temporalPlainDate{year: yearMonth.year, month: yearMonth.month, day: yearMonth.day, calendar: yearMonth.calendar}.calendarDate()
 			switch name {
 			case "year":
-				return Int(date.Year), nil
+				return Int(date.ArithmeticYear), nil
 			case "month":
-				return Int(date.Month), nil
+				return Int(date.OrdinalMonth), nil
 			case "monthCode":
 				return Str(NewString(temporalCalendarMonthCode(date))), nil
 			case "calendarId":
@@ -111,10 +111,11 @@ func (r *Runtime) initTemporalPlainYearMonth(temporal *Object) {
 				}
 				return Str(NewString(era)), nil
 			case "eraYear":
-				if _, ok := temporalCalendarEra(yearMonth.calendar, date); !ok {
+				eraYear, ok := temporalCalendarEraYear(yearMonth.calendar, date)
+				if !ok {
 					return Undefined, nil
 				}
-				return Int(date.Year), nil
+				return Int(eraYear), nil
 			}
 			return Undefined, nil
 		})

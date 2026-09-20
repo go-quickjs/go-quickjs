@@ -84,6 +84,10 @@ func TestTemporalIntlDateTimeFormat(t *testing.T) {
 			year: "numeric", month: "numeric", day: "numeric" }).formatToParts(
 			Date.UTC(2047, 5, 30)).find(part => part.type === "month").value`, "5bis"},
 		{`new Temporal.PlainDate(5808, 2, 29, "hebrew").monthCode`, "M05L"},
+		{`new Temporal.PlainDate(2011, 12, 30).toLocaleString("en-US", {timeZone: "Pacific/Apia"})`, "12/30/2011"},
+		{`try {
+			new Temporal.PlainDate(2000, 5, 2, "hebrew").toLocaleString("en-US-u-ca-gregory");
+		} catch (error) { error.name }`, "RangeError"},
 		{`new Intl.DateTimeFormat("en-US", { timeZone: "Pacific/Apia" }).formatRange(
 			new Temporal.PlainDateTime(2021, 8, 4, 0, 30, 45),
 			new Temporal.PlainDateTime(2021, 8, 4, 23, 30, 45))`,
@@ -322,6 +326,8 @@ func TestTemporalDurationRound(t *testing.T) {
 		{`new Temporal.Duration(0, 0, 0, 0, -12, -30).round({ largestUnit: "days",
 			smallestUnit: "days", roundingMode: "halfExpand",
 			relativeTo: "2025-11-02T01:00:00-08:00[America/Vancouver]" }).toString()`, "-P1D"},
+		{`new Temporal.Duration(1).round({smallestUnit: "months",
+			relativeTo: new Temporal.PlainDate(2020, 2, 29)}).toString()`, "P1Y"},
 	}
 	for _, test := range tests {
 		if got := evalString(t, rt, test.source); got != test.want {
@@ -426,6 +432,15 @@ func TestTemporalPlainDateFoundation(t *testing.T) {
 		{`new Temporal.PlainDate(2020, 3, 1).subtract({days: 1}).toString()`, "2020-02-29"},
 		{`new Temporal.PlainDate(2020, 1, 1).add({hours: 36}).toString()`, "2020-01-02"},
 		{`new Temporal.PlainDate(2019, 1, 31).until(new Temporal.PlainDate(2019, 3, 30), {largestUnit: "months"}).toString()`, "P1M30D"},
+		{`new Temporal.PlainDate(2019, 1, 29).until(new Temporal.PlainDate(2019, 2, 28), {largestUnit: "months"}).toString()`, "P30D"},
+		{`Temporal.PlainDate.from({year: 1987, month: 7, day: 1,
+			calendar: "chinese"}).monthCode`, "M06L"},
+		{`Temporal.PlainDate.from({year: 2026, month: 1, day: 1,
+			calendar: "chinese"}).daysInYear`, "354"},
+		{`Temporal.PlainDate.from({year: 1770, monthCode: "M13", day: 5,
+			calendar: "coptic"}).until(Temporal.PlainDate.from({year: 1771,
+			monthCode: "M01", day: 5, calendar: "coptic"}),
+			{largestUnit: "years"}).toString()`, "P1M"},
 		{`new Temporal.PlainDate(2021, 9, 7).since(new Temporal.PlainDate(2019, 1, 8), {smallestUnit: "years", roundingMode: "halfExpand"}).toString()`, "P3Y"},
 		{`new Temporal.PlainDate(2019, 1, 1).until(new Temporal.PlainDate(2020, 7, 2), {smallestUnit: "years", roundingMode: "halfEven"}).toString()`, "P2Y"},
 		{`new Temporal.PlainDate(2020, 1, 1).withCalendar("15:23").calendarId`, "iso8601"},

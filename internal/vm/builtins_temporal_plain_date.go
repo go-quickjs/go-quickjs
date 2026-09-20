@@ -94,9 +94,9 @@ func (r *Runtime) initTemporalPlainDate(temporal *Object) {
 			calendarDate := date.calendarDate()
 			switch name {
 			case "year":
-				return Int(calendarDate.Year), nil
+				return Int(calendarDate.ArithmeticYear), nil
 			case "month":
-				return Int(calendarDate.Month), nil
+				return Int(calendarDate.OrdinalMonth), nil
 			case "monthCode":
 				return Str(NewString(temporalCalendarMonthCode(calendarDate))), nil
 			case "day":
@@ -110,10 +110,11 @@ func (r *Runtime) initTemporalPlainDate(temporal *Object) {
 				}
 				return Str(NewString(era)), nil
 			case "eraYear":
-				if _, ok := temporalCalendarEra(date.calendar, calendarDate); !ok {
+				eraYear, ok := temporalCalendarEraYear(date.calendar, calendarDate)
+				if !ok {
 					return Undefined, nil
 				}
-				return Int(calendarDate.Year), nil
+				return Int(eraYear), nil
 			}
 			return Undefined, nil
 		})
@@ -126,33 +127,37 @@ func (r *Runtime) initTemporalPlainDate(temporal *Object) {
 			if err != nil {
 				return Undefined, err
 			}
-			// Calendar arithmetic beyond ISO is added with the calendar-aware
-			// date operations. These invariants are calendar-independent.
 			days := isoDaysFromCivil(int64(date.year), date.month, date.day)
+			calendarDate := date.calendarDate()
+			dayOfYear, daysInMonth, daysInYear, monthsInYear, inLeapYear, _ :=
+				icu.DateInfo(date.calendar, calendarDate)
 			switch name {
 			case "dayOfWeek":
 				return Int(isoDayOfWeek(days)), nil
 			case "dayOfYear":
-				return Int(int(days - isoDaysFromCivil(int64(date.year), 1, 1) + 1)), nil
+				return Int(dayOfYear), nil
 			case "weekOfYear":
+				if date.calendar != "iso8601" {
+					return Undefined, nil
+				}
 				week, _ := isoWeekOfYear(days)
 				return Int(week), nil
 			case "yearOfWeek":
+				if date.calendar != "iso8601" {
+					return Undefined, nil
+				}
 				_, year := isoWeekOfYear(days)
 				return Int(year), nil
 			case "daysInWeek":
 				return Int(7), nil
 			case "daysInMonth":
-				return Int(isoDaysInMonth(date.year, date.month)), nil
+				return Int(daysInMonth), nil
 			case "daysInYear":
-				if isLeapYear(date.year) {
-					return Int(366), nil
-				}
-				return Int(365), nil
+				return Int(daysInYear), nil
 			case "monthsInYear":
-				return Int(12), nil
+				return Int(monthsInYear), nil
 			case "inLeapYear":
-				return Bool(isLeapYear(date.year)), nil
+				return Bool(inLeapYear), nil
 			}
 			return Undefined, nil
 		})
@@ -301,11 +306,13 @@ func (r *Runtime) initTemporalPlainDate(temporal *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		zone := options.zone
-		if zone == nil {
-			zone = time.UTC
+		if date.calendar != "iso8601" && date.calendar != options.calendar {
+			return Undefined, rt.throwRangeError("Temporal calendar does not match the formatter calendar")
 		}
-		localDate := time.Date(date.year, time.Month(date.month), date.day, 12, 0, 0, 0, zone)
+		// A PlainDate supplies wall-clock fields, not an instant. Its requested
+		// formatting time zone therefore cannot shift or skip the date.
+		localDate := time.Date(date.year, time.Month(date.month), date.day,
+			12, 0, 0, 0, time.UTC)
 		return Str(NewString(options.format(localDate))), nil
 	})
 	r.defMethod(proto, "valueOf", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -472,6 +479,34 @@ func (r *Runtime) temporalPlainDateFromBag(o *Object, optionsValue Value) (tempo
 			return temporalPlainDate{}, err
 		}
 	}
+	era, eraPresent, eraYear, eraYearPresent := "", false, 0, false
+	if temporalCalendarUsesEra(calendar) {
+		eraValue, getErr := r.getProp(o, r.atoms.intern("era"), Obj(o))
+		if getErr != nil {
+			return temporalPlainDate{}, getErr
+		}
+		if !eraValue.IsUndefined() {
+			eraString, conversionErr := r.toString(eraValue)
+			if conversionErr != nil {
+				return temporalPlainDate{}, conversionErr
+			}
+			era, eraPresent = asciiLower(eraString.Go()), true
+			if _, valid := temporalYearFromEra(calendar, era, 1); !valid {
+				return temporalPlainDate{}, r.throwRangeError("invalid calendar era")
+			}
+		}
+		eraYearValue, getErr := r.getProp(o, r.atoms.intern("eraYear"), Obj(o))
+		if getErr != nil {
+			return temporalPlainDate{}, getErr
+		}
+		if !eraYearValue.IsUndefined() {
+			eraYearPresent = true
+			eraYear, err = r.temporalTruncatedInteger(eraYearValue, "eraYear")
+			if err != nil {
+				return temporalPlainDate{}, err
+			}
+		}
+	}
 	monthValue, err := r.getProp(o, r.atoms.intern("month"), Obj(o))
 	if err != nil {
 		return temporalPlainDate{}, err
@@ -522,28 +557,63 @@ func (r *Runtime) temporalPlainDateFromBag(o *Object, optionsValue Value) (tempo
 	if err != nil {
 		return temporalPlainDate{}, err
 	}
-	if !dayPresent || !yearPresent || !monthPresent && !monthCodePresent {
-		return temporalPlainDate{}, r.throwTypeError("plain date property bag is missing required fields")
+	if eraPresent != eraYearPresent {
+		return temporalPlainDate{}, r.throwTypeError("era and eraYear must be provided together")
 	}
+	if !dayPresent || !yearPresent || !monthPresent && !monthCodePresent {
+		if !yearPresent && eraPresent && eraYearPresent {
+			year, _ = temporalYearFromEra(calendar, era, eraYear)
+			yearPresent = true
+		}
+		if !dayPresent || !yearPresent || !monthPresent && !monthCodePresent {
+			return temporalPlainDate{}, r.throwTypeError("plain date property bag is missing required fields")
+		}
+	}
+	constrain := overflow == "constrain"
+	var isoYear, isoMonth, isoDay int
 	if monthCodePresent {
-		parsed, ok := parseISOMonthCode(monthCode)
-		if !ok || monthPresent && month != parsed {
+		codeMonth, leap, ok := parseTemporalMonthCode(monthCode)
+		if !ok {
 			return temporalPlainDate{}, r.throwRangeError("invalid monthCode")
 		}
-		month = parsed
-	}
-	if overflow == "constrain" {
-		if month < 1 || day < 1 {
+		isoYear, isoMonth, isoDay, ok = icu.ResolveDate(calendar, year,
+			codeMonth, day, leap, true, constrain)
+		if !ok {
 			return temporalPlainDate{}, r.throwRangeError("invalid Temporal.PlainDate")
 		}
-		month = min(12, month)
-		day = min(isoDaysInMonth(year, month), day)
+		if monthPresent {
+			resolved := temporalPlainDate{
+				year: isoYear, month: isoMonth, day: isoDay, calendar: calendar,
+			}.calendarDate()
+			if month != resolved.OrdinalMonth {
+				return temporalPlainDate{}, r.throwRangeError("month and monthCode do not agree")
+			}
+		}
+	} else {
+		var ok bool
+		isoYear, isoMonth, isoDay, ok = icu.ResolveDate(calendar, year,
+			month, day, false, false, constrain)
+		if !ok {
+			return temporalPlainDate{}, r.throwRangeError("invalid Temporal.PlainDate")
+		}
 	}
-	date := temporalPlainDate{year: year, month: month, day: day, calendar: calendar}
+	date := temporalPlainDate{
+		year: isoYear, month: isoMonth, day: isoDay, calendar: calendar,
+	}
 	if !date.valid() {
 		return temporalPlainDate{}, r.throwRangeError("invalid Temporal.PlainDate")
 	}
 	return date, nil
+}
+
+func temporalCalendarUsesEra(calendar string) bool {
+	switch calendar {
+	case "buddhist", "coptic", "ethioaa", "ethiopic", "gregory", "hebrew",
+		"indian", "islamic-civil", "islamic-tbla", "islamic-umalqura",
+		"japanese", "persian", "roc":
+		return true
+	}
+	return false
 }
 
 func (r *Runtime) temporalOverflowOption(value Value) (string, error) {
@@ -560,6 +630,14 @@ func parseISOMonthCode(value string) (int, bool) {
 	}
 	month := int(value[1]-'0')*10 + int(value[2]-'0')
 	return month, month >= 1 && month <= 12
+}
+
+func parseTemporalMonthCode(value string) (month int, leap, ok bool) {
+	if !wellFormedTemporalMonthCode(value) {
+		return 0, false, false
+	}
+	month = int(value[1]-'0')*10 + int(value[2]-'0')
+	return month, len(value) == 4, month >= 1
 }
 
 func wellFormedTemporalMonthCode(value string) bool {
@@ -688,7 +766,8 @@ func parseTwoDigits(value string) (int, bool) {
 
 func (d temporalPlainDate) calendarDate() icu.Date {
 	if d.calendar == "iso8601" {
-		return icu.Date{Year: d.year, Month: d.month, Day: d.day, RelatedYear: d.year}
+		return icu.Date{Year: d.year, Month: d.month, Day: d.day,
+			ArithmeticYear: d.year, OrdinalMonth: d.month, RelatedYear: d.year}
 	}
 	// DateIn only uses the civil fields of time.Time. Keeping the time at noon
 	// avoids any boundary behavior in callers that later attach a zone.
@@ -696,41 +775,134 @@ func (d temporalPlainDate) calendarDate() icu.Date {
 }
 
 func temporalCalendarEra(calendar string, date icu.Date) (string, bool) {
+	era, _, ok := temporalCalendarEraFields(calendar, date)
+	return era, ok
+}
+
+func temporalCalendarEraYear(calendar string, date icu.Date) (int, bool) {
+	_, year, ok := temporalCalendarEraFields(calendar, date)
+	return year, ok
+}
+
+func temporalCalendarEraFields(calendar string, date icu.Date) (string, int, bool) {
 	switch calendar {
 	case "iso8601":
-		return "", false
+		return "", 0, false
+	case "buddhist":
+		return "be", date.Year, true
 	case "gregory":
 		if date.Era == 0 {
-			return "bce", true
+			return "bce", date.Year, true
 		}
-		return "ce", true
-	case "buddhist":
-		return "be", true
+		return "ce", date.Year, true
 	case "roc":
 		if date.Era == 0 {
-			return "before-roc", true
+			return "broc", date.Year, true
 		}
-		return "roc", true
+		return "roc", date.Year, true
 	case "coptic":
-		return "am", true
+		return "am", date.Year, true
 	case "ethiopic":
 		if date.Era == 0 {
-			return "aa", true
+			return "aa", date.Year, true
 		}
-		return "am", true
+		return "am", date.Year, true
 	case "ethioaa":
-		return "aa", true
+		return "aa", date.Year, true
+	case "hebrew":
+		return "am", date.Year, true
+	case "indian":
+		return "shaka", date.Year, true
+	case "islamic-civil", "islamic-tbla", "islamic-umalqura":
+		if date.Era == 0 {
+			return "bh", date.Year, true
+		}
+		return "ah", date.Year, true
+	case "japanese":
+		isoYear, month, day := date.RelatedYear, date.Month, date.Day
+		after := func(year, startMonth, startDay int) bool {
+			return isoYear > year || isoYear == year &&
+				(month > startMonth || month == startMonth && day >= startDay)
+		}
+		switch {
+		case after(2019, 5, 1):
+			return "reiwa", isoYear - 2018, true
+		case after(1989, 1, 8):
+			return "heisei", isoYear - 1988, true
+		case after(1926, 12, 25):
+			return "showa", isoYear - 1925, true
+		case after(1912, 7, 30):
+			return "taisho", isoYear - 1911, true
+		case after(1873, 1, 1):
+			return "meiji", isoYear - 1867, true
+		case isoYear <= 0:
+			return "bce", 1 - isoYear, true
+		default:
+			return "ce", isoYear, true
+		}
+	case "persian":
+		return "ap", date.Year, true
 	}
-	return "", false
+	return "", 0, false
 }
 
 func temporalYearFromEra(calendar, era string, eraYear int) (int, bool) {
 	switch calendar {
+	case "buddhist":
+		return eraYear, era == "be"
+	case "coptic":
+		return eraYear, era == "am"
+	case "ethioaa":
+		return eraYear, era == "aa"
+	case "ethiopic":
+		switch era {
+		case "aa":
+			return eraYear - 5500, true
+		case "am":
+			return eraYear, true
+		}
 	case "gregory":
 		switch era {
 		case "ce", "ad":
 			return eraYear, true
 		case "bce", "bc":
+			return 1 - eraYear, true
+		}
+	case "hebrew":
+		return eraYear, era == "am"
+	case "indian":
+		return eraYear, era == "shaka"
+	case "islamic-civil", "islamic-tbla", "islamic-umalqura":
+		switch era {
+		case "ah":
+			return eraYear, true
+		case "bh":
+			return 1 - eraYear, true
+		}
+	case "japanese":
+		switch era {
+		case "ce", "ad":
+			return eraYear, true
+		case "bce", "bc":
+			return 1 - eraYear, true
+		case "meiji":
+			return 1867 + eraYear, true
+		case "taisho":
+			return 1911 + eraYear, true
+		case "showa":
+			return 1925 + eraYear, true
+		case "heisei":
+			return 1988 + eraYear, true
+		case "reiwa":
+			return 2018 + eraYear, true
+		}
+	case "persian":
+		return eraYear, era == "ap"
+	case "roc":
+		switch era {
+		case "roc":
+			return eraYear, true
+		case "broc", "before-roc":
 			return 1 - eraYear, true
 		}
 	}

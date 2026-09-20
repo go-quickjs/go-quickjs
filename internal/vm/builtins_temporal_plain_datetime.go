@@ -3,9 +3,10 @@ package vm
 import (
 	"math"
 	"math/big"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/go-quickjs/go-quickjs/internal/icu"
 )
 
 type temporalPlainDateTime struct {
@@ -91,15 +92,11 @@ func (r *Runtime) initTemporalPlainDateTime(temporal *Object) {
 			calendarDate := date.calendarDate()
 			switch name {
 			case "year":
-				return Int(calendarDate.Year), nil
+				return Int(calendarDate.ArithmeticYear), nil
 			case "month":
-				return Int(calendarDate.Month), nil
+				return Int(calendarDate.OrdinalMonth), nil
 			case "monthCode":
-				code := "M" + strconv.Itoa(calendarDate.Month + 100)[1:]
-				if calendarDate.Leap {
-					code += "L"
-				}
-				return Str(NewString(code)), nil
+				return Str(NewString(temporalCalendarMonthCode(calendarDate))), nil
 			case "day":
 				return Int(calendarDate.Day), nil
 			case "calendarId":
@@ -111,10 +108,11 @@ func (r *Runtime) initTemporalPlainDateTime(temporal *Object) {
 				}
 				return Str(NewString(era)), nil
 			case "eraYear":
-				if _, ok := temporalCalendarEra(dateTime.calendar, calendarDate); !ok {
+				eraYear, ok := temporalCalendarEraYear(dateTime.calendar, calendarDate)
+				if !ok {
 					return Undefined, nil
 				}
-				return Int(calendarDate.Year), nil
+				return Int(eraYear), nil
 			case "hour":
 				return Int(dateTime.hour), nil
 			case "minute":
@@ -139,30 +137,38 @@ func (r *Runtime) initTemporalPlainDateTime(temporal *Object) {
 				return Undefined, err
 			}
 			days := isoDaysFromCivil(int64(dateTime.year), dateTime.month, dateTime.day)
+			date := temporalPlainDate{year: dateTime.year, month: dateTime.month,
+				day: dateTime.day, calendar: dateTime.calendar}
+			calendarDate := date.calendarDate()
+			dayOfYear, daysInMonth, daysInYear, monthsInYear, inLeapYear, _ :=
+				icu.DateInfo(dateTime.calendar, calendarDate)
 			switch name {
 			case "dayOfWeek":
 				return Int(isoDayOfWeek(days)), nil
 			case "dayOfYear":
-				return Int(int(days - isoDaysFromCivil(int64(dateTime.year), 1, 1) + 1)), nil
+				return Int(dayOfYear), nil
 			case "weekOfYear":
+				if dateTime.calendar != "iso8601" {
+					return Undefined, nil
+				}
 				week, _ := isoWeekOfYear(days)
 				return Int(week), nil
 			case "yearOfWeek":
+				if dateTime.calendar != "iso8601" {
+					return Undefined, nil
+				}
 				_, year := isoWeekOfYear(days)
 				return Int(year), nil
 			case "daysInWeek":
 				return Int(7), nil
 			case "daysInMonth":
-				return Int(isoDaysInMonth(dateTime.year, dateTime.month)), nil
+				return Int(daysInMonth), nil
 			case "daysInYear":
-				if isLeapYear(dateTime.year) {
-					return Int(366), nil
-				}
-				return Int(365), nil
+				return Int(daysInYear), nil
 			case "monthsInYear":
-				return Int(12), nil
+				return Int(monthsInYear), nil
 			case "inLeapYear":
-				return Bool(isLeapYear(dateTime.year)), nil
+				return Bool(inLeapYear), nil
 			}
 			return Undefined, nil
 		})
@@ -831,7 +837,49 @@ func (r *Runtime) roundTemporalPlainDateTimeToCalendarUnit(start, end temporalPl
 		result, resultDateTime = upperDuration, upperDateTime
 		didExpand = true
 	}
-	if !didExpand || unit == "week" {
+	if !didExpand || unit == "week" || largest == unit {
+		return result, nil
+	}
+	if unit == "month" && largest == "year" {
+		// Balance selected months into years without re-differencing the
+		// constrained endpoint. Date-until intentionally treats an invalid
+		// original day as an overshoot, while a rounded duration such as 12
+		// months from February 29 must still be expressible as one year.
+		for result.months != 0 {
+			direction := int64(1)
+			if result.months < 0 {
+				direction = -1
+			}
+			anchor, addErr := r.addTemporalPlainDate(startDate,
+				temporalDuration{years: result.years}, 1, "constrain")
+			if addErr != nil {
+				return temporalDuration{}, addErr
+			}
+			next, addErr := r.addTemporalPlainDate(startDate,
+				temporalDuration{years: result.years + float64(direction)}, 1, "constrain")
+			if addErr != nil {
+				return temporalDuration{}, addErr
+			}
+			span, ok := temporalCalendarMonthDistance(start.calendar,
+				anchor.calendarDate(), next.calendarDate())
+			if !ok || span == 0 || direction > 0 && int64(result.months) < span ||
+				direction < 0 && int64(result.months) > span {
+				break
+			}
+			candidate := result
+			candidate.years += float64(direction)
+			candidate.months -= float64(span)
+			candidateDate, addErr := r.addTemporalPlainDate(startDate, candidate, 1, "constrain")
+			if addErr != nil {
+				return temporalDuration{}, addErr
+			}
+			if candidateDate.year != resultDateTime.year ||
+				candidateDate.month != resultDateTime.month ||
+				candidateDate.day != resultDateTime.day {
+				break
+			}
+			result = candidate
+		}
 		return result, nil
 	}
 	resultDate := temporalPlainDate{year: resultDateTime.year, month: resultDateTime.month, day: resultDateTime.day, calendar: resultDateTime.calendar}

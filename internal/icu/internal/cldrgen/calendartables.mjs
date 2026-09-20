@@ -55,6 +55,36 @@ function monthStarts(calendar, fromYear, toYear) {
   return starts.filter(s => s.day === 1);
 }
 
+// Intl.DateTimeFormat's legacy numeric month names do not always agree with
+// Temporal month codes for Chinese and Dangi leap months. Read those calendars
+// through Temporal so the generated table uses the same calendar model that
+// the Temporal implementation is expected to expose.
+function temporalMonthStarts(calendar, fromYear, toYear) {
+  if (typeof Temporal === "undefined") {
+    throw new Error("generating lunisolar tables requires Node with Temporal");
+  }
+  const starts = [];
+  let iso = new Temporal.PlainDate(fromYear, 1, 1);
+  const end = new Temporal.PlainDate(toYear, 1, 1);
+  let last = null;
+  while (Temporal.PlainDate.compare(iso, end) < 0) {
+    const at = iso.withCalendar(calendar);
+    const key = at.year + "/" + at.monthCode;
+    if (key !== last && at.day === 1) {
+      const stableMonth = Number(at.monthCode.slice(1, 3));
+      starts.push({
+        fixed: fixedOf(Date.UTC(iso.year, iso.month - 1, iso.day)),
+        year: at.year,
+        month: at.monthCode.endsWith("L") ? stableMonth + "bis" : String(stableMonth),
+        day: at.day,
+      });
+      last = key;
+    }
+    iso = iso.add({days: 1});
+  }
+  return starts;
+}
+
 // The lengths of the months, as one digit each, along with where the first of
 // them begins. A month is twenty-nine, thirty or thirty-one days; a month that
 // a long year has over an ordinary one -- which repeats the number of the
@@ -103,7 +133,7 @@ process.stdout.write(JSON.stringify({
   persian: lengthsOf(monthStarts("persian", 1500, 2500)),
   // The lunisolar calendars, whose months follow the moon and whose years are
   // kept in step with the sun by a month said twice.
-  chinese: lengthsOf(monthStarts("chinese", 1500, 2500)),
-  dangi: lengthsOf(monthStarts("dangi", 1500, 2500)),
+  chinese: lengthsOf(temporalMonthStarts("chinese", 1500, 2500)),
+  dangi: lengthsOf(temporalMonthStarts("dangi", 1500, 2500)),
   eras: japaneseEras(),
 }) + "\n");

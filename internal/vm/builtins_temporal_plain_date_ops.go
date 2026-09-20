@@ -4,6 +4,8 @@ import (
 	"math"
 	"math/big"
 	"strings"
+
+	"github.com/go-quickjs/go-quickjs/internal/icu"
 )
 
 func (r *Runtime) initTemporalPlainDateOperations(proto *Object) {
@@ -33,11 +35,15 @@ func (r *Runtime) initTemporalPlainDateOperations(proto *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		partial, err := rt.temporalPartialDateFields(fields)
+		partial, err := rt.temporalPartialDateFields(fields, date.calendar)
 		if err != nil {
 			return Undefined, err
 		}
-		if !partial.dayPresent && !partial.monthPresent && !partial.monthCodePresent && !partial.yearPresent {
+		if partial.eraPresent != partial.eraYearPresent {
+			return Undefined, rt.throwTypeError("era and eraYear must be provided together")
+		}
+		if !partial.dayPresent && !partial.eraPresent && !partial.eraYearPresent &&
+			!partial.monthPresent && !partial.monthCodePresent && !partial.yearPresent {
 			return Undefined, rt.throwTypeError("date fields must not be empty")
 		}
 		if partial.dayPresent && partial.day < 1 || partial.monthPresent && partial.month < 1 {
@@ -47,26 +53,46 @@ func (r *Runtime) initTemporalPlainDateOperations(proto *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		year := date.year
-		if partial.yearPresent {
+		calendarDate := date.calendarDate()
+		year := calendarDate.ArithmeticYear
+		if partial.eraPresent {
+			year, _ = temporalYearFromEra(date.calendar, partial.era, partial.eraYear)
+		} else if partial.yearPresent {
 			year = partial.year
 		}
-		month := date.month
-		if partial.monthPresent || partial.monthCodePresent {
-			month, err = rt.resolveTemporalISOMonth(partial.month, partial.monthPresent, partial.monthCode, partial.monthCodePresent)
-			if err != nil {
-				return Undefined, err
-			}
-		}
-		day := date.day
+		day := calendarDate.Day
 		if partial.dayPresent {
 			day = partial.day
 		}
-		if overflow == "constrain" {
-			month = min(month, 12)
-			day = min(day, isoDaysInMonth(year, month))
+		month, leap := calendarDate.MonthCode()
+		byCode := true
+		if partial.monthPresent {
+			month, leap, byCode = partial.month, false, false
 		}
-		result := temporalPlainDate{year: year, month: month, day: day, calendar: date.calendar}
+		if partial.monthCodePresent {
+			month, leap, _ = parseTemporalMonthCode(partial.monthCode)
+			byCode = true
+		}
+		isoYear, isoMonth, isoDay, ok := icu.ResolveDate(date.calendar, year,
+			month, day, leap, byCode, overflow == "constrain")
+		if !ok && byCode && leap && overflow == "constrain" &&
+			!partial.monthCodePresent {
+			if date.calendar == "hebrew" {
+				month = 6
+			}
+			isoYear, isoMonth, isoDay, ok = icu.ResolveDate(date.calendar, year,
+				month, day, false, true, true)
+		}
+		if !ok {
+			return Undefined, rt.throwRangeError("invalid Temporal.PlainDate")
+		}
+		result := temporalPlainDate{
+			year: isoYear, month: isoMonth, day: isoDay, calendar: date.calendar,
+		}
+		if partial.monthPresent && partial.monthCodePresent &&
+			result.calendarDate().OrdinalMonth != partial.month {
+			return Undefined, rt.throwRangeError("month and monthCode do not agree")
+		}
 		if !result.valid() {
 			return Undefined, rt.throwRangeError("invalid Temporal.PlainDate")
 		}
@@ -144,11 +170,14 @@ func (r *Runtime) initTemporalPlainDateOperations(proto *Object) {
 type temporalPartialDateFields struct {
 	day, month, year                      int
 	dayPresent, monthPresent, yearPresent bool
-	monthCode                             string
+	era, monthCode                        string
+	eraPresent                            bool
+	eraYear                               int
+	eraYearPresent                        bool
 	monthCodePresent                      bool
 }
 
-func (r *Runtime) temporalPartialDateFields(o *Object) (temporalPartialDateFields, error) {
+func (r *Runtime) temporalPartialDateFields(o *Object, calendar string) (temporalPartialDateFields, error) {
 	var fields temporalPartialDateFields
 	dayValue, err := r.getProp(o, r.atoms.intern("day"), Obj(o))
 	if err != nil {
@@ -159,6 +188,34 @@ func (r *Runtime) temporalPartialDateFields(o *Object) (temporalPartialDateField
 		fields.day, err = r.temporalTruncatedInteger(dayValue, "day")
 		if err != nil {
 			return fields, err
+		}
+	}
+	if temporalCalendarUsesEra(calendar) {
+		eraValue, getErr := r.getProp(o, r.atoms.intern("era"), Obj(o))
+		if getErr != nil {
+			return fields, getErr
+		}
+		fields.eraPresent = !eraValue.IsUndefined()
+		if fields.eraPresent {
+			era, conversionErr := r.toString(eraValue)
+			if conversionErr != nil {
+				return fields, conversionErr
+			}
+			fields.era = asciiLower(era.Go())
+			if _, valid := temporalYearFromEra(calendar, fields.era, 1); !valid {
+				return fields, r.throwRangeError("invalid calendar era")
+			}
+		}
+		eraYearValue, getErr := r.getProp(o, r.atoms.intern("eraYear"), Obj(o))
+		if getErr != nil {
+			return fields, getErr
+		}
+		fields.eraYearPresent = !eraYearValue.IsUndefined()
+		if fields.eraYearPresent {
+			fields.eraYear, err = r.temporalTruncatedInteger(eraYearValue, "eraYear")
+			if err != nil {
+				return fields, err
+			}
 		}
 	}
 	monthValue, err := r.getProp(o, r.atoms.intern("month"), Obj(o))
@@ -201,22 +258,74 @@ func (r *Runtime) addTemporalPlainDate(date temporalPlainDate, duration temporal
 			return temporalPlainDate{}, r.throwRangeError("duration calendar unit is out of range")
 		}
 	}
+	calendarDate := date.calendarDate()
 	years, months := int64(duration.years)*sign, int64(duration.months)*sign
-	totalMonths := int64(date.year)*12 + int64(date.month-1) + years*12 + months
-	resultYear := floorDivInt64(totalMonths, 12)
-	resultMonth := totalMonths - resultYear*12 + 1
+	resultYear := int64(calendarDate.ArithmeticYear) + years
 	if resultYear < math.MinInt32 || resultYear > math.MaxInt32 {
 		return temporalPlainDate{}, r.throwRangeError("date is outside the Temporal range")
 	}
-	resultDay := date.day
-	daysInMonth := isoDaysInMonth(int(resultYear), int(resultMonth))
-	if resultDay > daysInMonth {
-		if overflow == "reject" {
-			return temporalPlainDate{}, r.throwRangeError("date overflows the target month")
+	resultMonth := calendarDate.OrdinalMonth
+	if years != 0 {
+		monthCode, leap := calendarDate.MonthCode()
+		year, month, day, ok := icu.ResolveDate(date.calendar, int(resultYear),
+			monthCode, 1, leap, true, false)
+		if !ok && leap && overflow == "constrain" {
+			if date.calendar == "hebrew" {
+				monthCode = 6
+			}
+			year, month, day, ok = icu.ResolveDate(date.calendar, int(resultYear),
+				monthCode, 1, false, true, false)
 		}
-		resultDay = daysInMonth
+		if !ok {
+			return temporalPlainDate{}, r.throwRangeError("date overflows the target year")
+		}
+		resolved := temporalPlainDate{
+			year: year, month: month, day: day, calendar: date.calendar,
+		}.calendarDate()
+		resultMonth = resolved.OrdinalMonth
 	}
-	baseDays := isoDaysFromCivil(resultYear, int(resultMonth), resultDay)
+	for months > 0 {
+		monthsInYear, ok := icu.MonthsInYear(date.calendar, int(resultYear))
+		if !ok {
+			return temporalPlainDate{}, r.throwRangeError("date is outside the calendar range")
+		}
+		remaining := int64(monthsInYear - resultMonth)
+		if months <= remaining {
+			resultMonth += int(months)
+			months = 0
+			break
+		}
+		months -= remaining + 1
+		resultYear++
+		resultMonth = 1
+		if resultYear > math.MaxInt32 {
+			return temporalPlainDate{}, r.throwRangeError("date is outside the Temporal range")
+		}
+	}
+	for months < 0 {
+		before := int64(resultMonth - 1)
+		if -months <= before {
+			resultMonth -= int(-months)
+			months = 0
+			break
+		}
+		months += before + 1
+		resultYear--
+		if resultYear < math.MinInt32 {
+			return temporalPlainDate{}, r.throwRangeError("date is outside the Temporal range")
+		}
+		monthsInYear, ok := icu.MonthsInYear(date.calendar, int(resultYear))
+		if !ok {
+			return temporalPlainDate{}, r.throwRangeError("date is outside the calendar range")
+		}
+		resultMonth = monthsInYear
+	}
+	year, month, day, ok := icu.ResolveDate(date.calendar, int(resultYear),
+		resultMonth, calendarDate.Day, false, false, overflow == "constrain")
+	if !ok {
+		return temporalPlainDate{}, r.throwRangeError("date overflows the target month")
+	}
+	baseDays := isoDaysFromCivil(int64(year), month, day)
 	deltaDays, ok := temporalDurationWholeDays(duration)
 	if !ok {
 		return temporalPlainDate{}, r.throwRangeError("duration time portion is out of range")
@@ -231,7 +340,7 @@ func (r *Runtime) addTemporalPlainDate(date temporalPlainDate, duration temporal
 	if finalDays < -100_000_001 || finalDays > 100_000_000 {
 		return temporalPlainDate{}, r.throwRangeError("date is outside the Temporal range")
 	}
-	year, month, day := isoCivilFromDays(finalDays)
+	year, month, day = isoCivilFromDays(finalDays)
 	return temporalPlainDate{year: year, month: month, day: day, calendar: date.calendar}, nil
 }
 
@@ -356,35 +465,192 @@ func (r *Runtime) differenceTemporalPlainDates(start, end temporalPlainDate, lar
 		result.weeks = float64(days / 7)
 		result.days = float64(days % 7)
 	case "month", "year":
-		months := int64(end.year-start.year)*12 + int64(end.month-start.month)
-		anchor, err := r.addTemporalPlainDate(start, temporalDuration{months: float64(months)}, 1, "constrain")
+		var err error
+		result, err = r.differenceTemporalCalendarDates(start, end, largest)
 		if err != nil {
 			return temporalDuration{}, err
 		}
-		anchorDays := isoDaysFromCivil(int64(anchor.year), anchor.month, anchor.day)
-		if months > 0 && anchorDays > endDays {
-			months--
-			anchor, err = r.addTemporalPlainDate(start, temporalDuration{months: float64(months)}, 1, "constrain")
-		} else if months < 0 && anchorDays < endDays {
-			months++
-			anchor, err = r.addTemporalPlainDate(start, temporalDuration{months: float64(months)}, 1, "constrain")
-		}
-		if err != nil {
-			return temporalDuration{}, err
-		}
-		anchorDays = isoDaysFromCivil(int64(anchor.year), anchor.month, anchor.day)
-		if largest == "year" {
-			result.years = float64(months / 12)
-			result.months = float64(months % 12)
-		} else {
-			result.months = float64(months)
-		}
-		result.days = float64(endDays - anchorDays)
 	}
 	if smallest == "day" && increment == 1 {
 		return result, nil
 	}
 	return r.roundTemporalPlainDateDifference(start, end, result, largest, smallest, increment, mode)
+}
+
+func compareTemporalCalendarDates(one, two icu.Date) int64 {
+	if one.ArithmeticYear != two.ArithmeticYear {
+		if one.ArithmeticYear < two.ArithmeticYear {
+			return -1
+		}
+		return 1
+	}
+	if one.OrdinalMonth != two.OrdinalMonth {
+		if one.OrdinalMonth < two.OrdinalMonth {
+			return -1
+		}
+		return 1
+	}
+	if one.Day < two.Day {
+		return -1
+	}
+	if one.Day > two.Day {
+		return 1
+	}
+	return 0
+}
+
+func compareTemporalMonthCodes(one, two icu.Date) int64 {
+	oneMonth, oneLeap := one.MonthCode()
+	twoMonth, twoLeap := two.MonthCode()
+	oneKey, twoKey := oneMonth*2, twoMonth*2
+	if oneLeap {
+		oneKey++
+	}
+	if twoLeap {
+		twoKey++
+	}
+	if oneKey < twoKey {
+		return -1
+	}
+	if oneKey > twoKey {
+		return 1
+	}
+	return 0
+}
+
+func (r *Runtime) resolveTemporalCalendarDate(calendar string, date icu.Date) (temporalPlainDate, error) {
+	year, month, day, ok := icu.ResolveDate(calendar, date.ArithmeticYear,
+		date.OrdinalMonth, date.Day, false, false, true)
+	if !ok {
+		return temporalPlainDate{}, r.throwRangeError("date is outside the calendar range")
+	}
+	return temporalPlainDate{year: year, month: month, day: day, calendar: calendar}, nil
+}
+
+func (r *Runtime) addTemporalCalendarMonth(calendar string, date icu.Date, sign int64) (icu.Date, error) {
+	year, month := date.ArithmeticYear, date.OrdinalMonth
+	if sign > 0 {
+		monthsInYear, ok := icu.MonthsInYear(calendar, year)
+		if !ok {
+			return icu.Date{}, r.throwRangeError("date is outside the calendar range")
+		}
+		month++
+		if month > monthsInYear {
+			year, month = year+1, 1
+		}
+	} else {
+		month--
+		if month < 1 {
+			year--
+			monthsInYear, ok := icu.MonthsInYear(calendar, year)
+			if !ok {
+				return icu.Date{}, r.throwRangeError("date is outside the calendar range")
+			}
+			month = monthsInYear
+		}
+	}
+	resolved, err := r.resolveTemporalCalendarDate(calendar, icu.Date{
+		ArithmeticYear: year, OrdinalMonth: month, Day: date.Day,
+	})
+	if err != nil {
+		return icu.Date{}, err
+	}
+	return resolved.calendarDate(), nil
+}
+
+func temporalCalendarMonthDistance(calendar string, one, two icu.Date) (int64, bool) {
+	months, ok := icu.MonthsBetweenYears(calendar, one.ArithmeticYear, two.ArithmeticYear)
+	if !ok {
+		return 0, false
+	}
+	return months + int64(two.OrdinalMonth-one.OrdinalMonth), true
+}
+
+func (r *Runtime) differenceTemporalCalendarDates(start, end temporalPlainDate, largest string) (temporalDuration, error) {
+	one, two := start.calendarDate(), end.calendarDate()
+	sign := compareTemporalCalendarDates(two, one)
+	if sign == 0 {
+		return temporalDuration{}, nil
+	}
+
+	diffYears := int64(two.ArithmeticYear - one.ArithmeticYear)
+	years := int64(0)
+	if diffYears != 0 {
+		inYearSign := compareTemporalMonthCodes(two, one)
+		if inYearSign == 0 {
+			if two.Day < one.Day {
+				inYearSign = -1
+			} else if two.Day > one.Day {
+				inYearSign = 1
+			}
+		}
+		years = diffYears
+		if inYearSign*sign < 0 {
+			years -= sign
+		}
+	}
+
+	intermediate := start
+	if years != 0 {
+		var err error
+		intermediate, err = r.addTemporalPlainDate(start,
+			temporalDuration{years: float64(years)}, 1, "constrain")
+		if err != nil {
+			return temporalDuration{}, err
+		}
+		// Compare the candidate with the original day restored. A constrained
+		// shorter month must not turn an overshooting year into a full year.
+		conceptual := intermediate.calendarDate()
+		conceptual.Day = one.Day
+		if compareTemporalCalendarDates(two, conceptual)*sign < 0 {
+			years -= sign
+			intermediate, err = r.addTemporalPlainDate(start,
+				temporalDuration{years: float64(years)}, 1, "constrain")
+			if err != nil {
+				return temporalDuration{}, err
+			}
+		}
+	}
+	months := int64(0)
+	if largest == "month" {
+		var ok bool
+		months, ok = temporalCalendarMonthDistance(start.calendar, one,
+			intermediate.calendarDate())
+		if !ok {
+			return temporalDuration{}, r.throwRangeError("unsupported calendar")
+		}
+		years = 0
+	}
+
+	current := intermediate.calendarDate()
+	next := current
+	for {
+		months += sign
+		current = next
+		var err error
+		next, err = r.addTemporalCalendarMonth(start.calendar, current, sign)
+		if err != nil {
+			return temporalDuration{}, err
+		}
+		if next.Day != one.Day {
+			next.Day = one.Day
+		}
+		if compareTemporalCalendarDates(two, next)*sign < 0 {
+			break
+		}
+	}
+	months -= sign
+	anchor, err := r.resolveTemporalCalendarDate(start.calendar, current)
+	if err != nil {
+		return temporalDuration{}, err
+	}
+	anchorDays := isoDaysFromCivil(int64(anchor.year), anchor.month, anchor.day)
+	endDays := isoDaysFromCivil(int64(end.year), end.month, end.day)
+	return temporalDuration{
+		years:  float64(years),
+		months: float64(months),
+		days:   float64(endDays - anchorDays),
+	}, nil
 }
 
 func (r *Runtime) roundTemporalPlainDateDifference(start, end temporalPlainDate, duration temporalDuration, largest, smallest string, increment int64, mode string) (temporalDuration, error) {
