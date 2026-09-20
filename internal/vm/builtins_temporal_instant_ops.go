@@ -51,7 +51,7 @@ func (r *Runtime) initTemporalInstantOperations(proto *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		smallest, increment, mode, err := rt.temporalRoundOptions(arg(args, 0), true)
+		smallest, increment, mode, err := rt.temporalRoundOptions(arg(args, 0), true, false)
 		if err != nil {
 			return Undefined, err
 		}
@@ -119,7 +119,7 @@ func (r *Runtime) temporalDifferenceOptions(value Value, defaultLargest string) 
 	return
 }
 
-func (r *Runtime) temporalRoundOptions(value Value, dayDividend bool) (smallest string, increment int64, mode string, err error) {
+func (r *Runtime) temporalRoundOptions(value Value, dayDividend, allowDay bool) (smallest string, increment int64, mode string, err error) {
 	var options *Object
 	if value.IsString() {
 		options = newObject(nil, ClassObject)
@@ -148,6 +148,9 @@ func (r *Runtime) temporalRoundOptions(value Value, dayDividend bool) (smallest 
 	}
 	var ok bool
 	smallest, ok = normalizeTemporalUnit(raw)
+	if !ok && allowDay && strings.TrimSuffix(raw, "s") == "day" {
+		smallest, ok = "day", true
+	}
 	if !ok {
 		return "", 0, "", r.throwRangeError("smallestUnit is required")
 	}
@@ -167,6 +170,12 @@ func (r *Runtime) validateTemporalRoundingIncrement(n float64, set bool, unit st
 		return 0, r.throwRangeError("roundingIncrement must be a positive integer")
 	}
 	increment := int64(n)
+	if unit == "day" {
+		if increment != 1 {
+			return 0, r.throwRangeError("roundingIncrement does not divide the next largest unit")
+		}
+		return increment, nil
+	}
 	maximum := int64(1000)
 	if dayDividend {
 		maximum = temporalSecondsPerDay * temporalNanosecondsPerSecond / temporalUnitNanoseconds[unit]

@@ -193,7 +193,7 @@ func (r *Runtime) initTemporalPlainTime(temporal *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		smallest, increment, mode, err := rt.temporalRoundOptions(arg(args, 0), false)
+		smallest, increment, mode, err := rt.temporalRoundOptions(arg(args, 0), false, false)
 		if err != nil {
 			return Undefined, err
 		}
@@ -330,6 +330,10 @@ func (r *Runtime) temporalPlainTimeStringOptions(value Value) (precision int, mi
 	if err != nil {
 		return 0, false, 0, "", err
 	}
+	return r.temporalPlainTimeStringOptionsFrom(options)
+}
+
+func (r *Runtime) temporalPlainTimeStringOptionsFrom(options *Object) (precision int, minuteOnly bool, step int64, mode string, err error) {
 	precision = -1
 	fractional, err := r.getProp(options, r.atoms.intern("fractionalSecondDigits"), Obj(options))
 	if err != nil {

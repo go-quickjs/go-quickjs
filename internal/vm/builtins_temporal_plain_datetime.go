@@ -2,8 +2,10 @@ package vm
 
 import (
 	"math"
+	"math/big"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type temporalPlainDateTime struct {
@@ -371,6 +373,25 @@ func (r *Runtime) initTemporalPlainDateTime(temporal *Object) {
 		o.data = zoned
 		return Obj(o), nil
 	})
+	r.defMethod(proto, "round", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		dateTime, err := rt.temporalPlainDateTimeValue(this, "Temporal.PlainDateTime.prototype.round")
+		if err != nil {
+			return Undefined, err
+		}
+		smallest, increment, mode, err := rt.temporalRoundOptions(arg(args, 0), false, true)
+		if err != nil {
+			return Undefined, err
+		}
+		step := int64(86_400_000_000_000)
+		if smallest != "day" {
+			step = temporalUnitNanoseconds[smallest] * increment
+		}
+		dateTime, err = rt.roundTemporalPlainDateTime(dateTime, step, mode)
+		if err != nil {
+			return Undefined, err
+		}
+		return Obj(newTemporalPlainDateTime(rt.temporalPlainDateTimeProto, dateTime)), nil
+	})
 	r.defMethod(proto, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		dateTime, err := rt.temporalPlainDateTimeValue(this, "Temporal.PlainDateTime.prototype.toString")
 		if err != nil {
@@ -384,7 +405,15 @@ func (r *Runtime) initTemporalPlainDateTime(temporal *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(dateTime.string(show))), nil
+		precision, minuteOnly, step, mode, err := rt.temporalPlainTimeStringOptionsFrom(options)
+		if err != nil {
+			return Undefined, err
+		}
+		dateTime, err = rt.roundTemporalPlainDateTime(dateTime, step, mode)
+		if err != nil {
+			return Undefined, err
+		}
+		return Str(NewString(dateTime.stringWithPrecision(show, precision, minuteOnly))), nil
 	})
 	r.defMethod(proto, "toJSON", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		dateTime, err := rt.temporalPlainDateTimeValue(this, "Temporal.PlainDateTime.prototype.toJSON")
@@ -392,6 +421,27 @@ func (r *Runtime) initTemporalPlainDateTime(temporal *Object) {
 			return Undefined, err
 		}
 		return Str(NewString(dateTime.string("auto"))), nil
+	})
+	r.defMethod(proto, "toLocaleString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		dateTime, err := rt.temporalPlainDateTimeValue(this, "Temporal.PlainDateTime.prototype.toLocaleString")
+		if err != nil {
+			return Undefined, err
+		}
+		options, err := rt.dateOptionsFrom(args, map[string]string{
+			"year": "numeric", "month": "numeric", "day": "numeric",
+			"hour": "numeric", "minute": "numeric", "second": "numeric",
+		}, "any")
+		if err != nil {
+			return Undefined, err
+		}
+		zone := options.zone
+		if zone == nil {
+			zone = time.UTC
+		}
+		value := time.Date(dateTime.year, time.Month(dateTime.month), dateTime.day,
+			dateTime.hour, dateTime.minute, dateTime.second,
+			dateTime.millisecond*1_000_000+dateTime.microsecond*1_000+dateTime.nanosecond, zone)
+		return Str(NewString(options.format(value))), nil
 	})
 	r.defMethod(proto, "valueOf", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if _, err := rt.temporalPlainDateTimeValue(this, "Temporal.PlainDateTime.prototype.valueOf"); err != nil {
@@ -406,6 +456,23 @@ func newTemporalPlainDateTime(proto *Object, dateTime temporalPlainDateTime) *Ob
 	o := newObject(proto, ClassObject)
 	o.data = &dateTime
 	return o
+}
+
+func (r *Runtime) roundTemporalPlainDateTime(dateTime temporalPlainDateTime, step int64, mode string) (temporalPlainDateTime, error) {
+	time := temporalPlainTime{dateTime.hour, dateTime.minute, dateTime.second, dateTime.millisecond, dateTime.microsecond, dateTime.nanosecond}
+	rounded := roundTemporalBigIntAsIfPositive(temporalPlainTimeNanoseconds(time), big.NewInt(step), mode)
+	dayCarry, remainder := new(big.Int), new(big.Int)
+	dayCarry.DivMod(rounded, big.NewInt(86_400_000_000_000), remainder)
+	days := isoDaysFromCivil(int64(dateTime.year), dateTime.month, dateTime.day) + dayCarry.Int64()
+	year, month, day := isoCivilFromDays(days)
+	dateTime.year, dateTime.month, dateTime.day = year, month, day
+	time = temporalPlainTimeFromNanoseconds(remainder)
+	dateTime.hour, dateTime.minute, dateTime.second = time.hour, time.minute, time.second
+	dateTime.millisecond, dateTime.microsecond, dateTime.nanosecond = time.millisecond, time.microsecond, time.nanosecond
+	if !dateTime.valid() {
+		return temporalPlainDateTime{}, r.throwRangeError("rounded date-time is outside the Temporal range")
+	}
+	return dateTime, nil
 }
 
 func (r *Runtime) temporalPlainDateTimeValue(value Value, method string) (temporalPlainDateTime, error) {
@@ -606,22 +673,17 @@ func compareTemporalPlainDateTimes(left, right temporalPlainDateTime) int {
 }
 
 func (d temporalPlainDateTime) string(showCalendar string) string {
+	return d.stringWithPrecision(showCalendar, -1, false)
+}
+
+func (d temporalPlainDateTime) stringWithPrecision(showCalendar string, precision int, minuteOnly bool) string {
 	date := temporalPlainDate{year: d.year, month: d.month, day: d.day, calendar: d.calendar}
 	base := date.string("never")
 	var b strings.Builder
 	b.WriteString(base)
 	b.WriteByte('T')
-	writePaddedTemporalInt(&b, d.hour, 2)
-	b.WriteByte(':')
-	writePaddedTemporalInt(&b, d.minute, 2)
-	b.WriteByte(':')
-	writePaddedTemporalInt(&b, d.second, 2)
-	subsecond := d.subsecondNanoseconds()
-	if subsecond != 0 {
-		fraction := strconv.FormatInt(subsecond+temporalNanosecondsPerSecond, 10)[1:]
-		b.WriteByte('.')
-		b.WriteString(strings.TrimRight(fraction, "0"))
-	}
+	time := temporalPlainTime{d.hour, d.minute, d.second, d.millisecond, d.microsecond, d.nanosecond}
+	b.WriteString(time.stringWithPrecision(precision, minuteOnly))
 	if showCalendar == "always" || showCalendar == "critical" || showCalendar == "auto" && d.calendar != "iso8601" {
 		b.WriteByte('[')
 		if showCalendar == "critical" {
