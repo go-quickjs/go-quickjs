@@ -187,7 +187,29 @@ func TestTemporalPlainDateTimeFoundation(t *testing.T) {
 		{`new Temporal.PlainDateTime(2000, 5, 2, 15).toPlainDate().toString()`, "2000-05-02"},
 		{`Temporal.PlainDate.from(new Temporal.PlainDateTime(2000, 5, 2, 23)).toString()`, "2000-05-02"},
 		{`new Temporal.PlainDateTime(2000, 5, 2, 15, 23, 30).hour`, "15"},
+		{`Temporal.PlainDateTime.from("-271821-04-19T00:00:00.000000001").nanosecond`, "1"},
+		{`Temporal.PlainDateTime.from(new Temporal.ZonedDateTime(-13849764999999999n, "UTC")).toString()`, "1969-07-24T16:50:35.000000001"},
+		{`Temporal.PlainDateTime.from({year: 2016, month: 12, day: 31, second: 60}).second`, "59"},
+		{`try { Temporal.PlainDateTime.from("2000-01-01T0000:00") } catch (e) { e.name }`, "RangeError"},
 		{`class D extends Temporal.PlainDateTime {}; Object.getPrototypeOf(new D(2000, 1, 1)) === D.prototype`, "true"},
+	}
+	for _, test := range tests {
+		if got := evalString(t, rt, test.source); got != test.want {
+			t.Errorf("%s\n got: %s\nwant: %s", test.source, got, test.want)
+		}
+	}
+}
+
+func TestTemporalPlainTimeFoundation(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	tests := []struct{ source, want string }{
+		{`new Temporal.PlainTime(15, 23, 30, 123, 456, 789).toString()`, "15:23:30.123456789"},
+		{`Temporal.PlainTime.from("15:23:30.1234").toJSON()`, "15:23:30.1234"},
+		{`Temporal.PlainTime.from({hour: 27, minute: 70}).toString()`, "23:59:00"},
+		{`Temporal.PlainTime.compare("15:23", "15:24")`, "-1"},
+		{`Temporal.PlainTime.from(new Temporal.PlainDateTime(2000, 1, 1, 12, 34)).minute`, "34"},
+		{`class T extends Temporal.PlainTime {}; Object.getPrototypeOf(new T(12)) === T.prototype`, "true"},
 	}
 	for _, test := range tests {
 		if got := evalString(t, rt, test.source); got != test.want {
