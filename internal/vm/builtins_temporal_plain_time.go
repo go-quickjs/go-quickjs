@@ -201,16 +201,25 @@ func (r *Runtime) initTemporalPlainTime(temporal *Object) {
 		total = roundTemporalBigIntAsIfPositive(total, step, mode)
 		return Obj(newTemporalPlainTime(rt.temporalPlainTimeProto, temporalPlainTimeFromNanoseconds(total))), nil
 	})
-	for _, method := range []string{"toString", "toJSON"} {
-		name := method
-		r.defMethod(proto, name, 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-			time, err := rt.temporalPlainTimeValue(this, "Temporal.PlainTime.prototype."+name)
-			if err != nil {
-				return Undefined, err
-			}
-			return Str(NewString(time.string())), nil
-		})
-	}
+	r.defMethod(proto, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		time, err := rt.temporalPlainTimeValue(this, "Temporal.PlainTime.prototype.toString")
+		if err != nil {
+			return Undefined, err
+		}
+		precision, minuteOnly, step, mode, err := rt.temporalPlainTimeStringOptions(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		total := roundTemporalBigIntAsIfPositive(temporalPlainTimeNanoseconds(time), big.NewInt(step), mode)
+		return Str(NewString(temporalPlainTimeFromNanoseconds(total).stringWithPrecision(precision, minuteOnly))), nil
+	})
+	r.defMethod(proto, "toJSON", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		time, err := rt.temporalPlainTimeValue(this, "Temporal.PlainTime.prototype.toJSON")
+		if err != nil {
+			return Undefined, err
+		}
+		return Str(NewString(time.string())), nil
+	})
 	r.defMethod(proto, "valueOf", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if _, err := rt.temporalPlainTimeValue(this, "Temporal.PlainTime.prototype.valueOf"); err != nil {
 			return Undefined, err
@@ -267,6 +276,70 @@ func (r *Runtime) temporalPlainTimeValue(value Value, method string) (temporalPl
 		}
 	}
 	return temporalPlainTime{}, r.throwTypeError("%s called on an incompatible receiver", method)
+}
+
+func (r *Runtime) temporalPlainTimeStringOptions(value Value) (precision int, minuteOnly bool, step int64, mode string, err error) {
+	options, err := r.strictOptions(value)
+	if err != nil {
+		return 0, false, 0, "", err
+	}
+	precision = -1
+	fractional, err := r.getProp(options, r.atoms.intern("fractionalSecondDigits"), Obj(options))
+	if err != nil {
+		return 0, false, 0, "", err
+	}
+	if !fractional.IsUndefined() {
+		if fractional.IsNumber() {
+			n := math.Floor(fractional.Number())
+			if math.IsNaN(n) || math.IsInf(n, 0) || n < 0 || n > 9 {
+				return 0, false, 0, "", r.throwRangeError("fractionalSecondDigits is out of range")
+			}
+			precision = int(n)
+		} else {
+			text, err := r.toString(fractional)
+			if err != nil {
+				return 0, false, 0, "", err
+			}
+			if text.Go() != "auto" {
+				return 0, false, 0, "", r.throwRangeError("invalid fractionalSecondDigits")
+			}
+		}
+	}
+	mode, err = r.stringOption(options, "roundingMode", "trunc",
+		"ceil", "floor", "expand", "trunc", "halfCeil", "halfFloor", "halfExpand", "halfTrunc", "halfEven")
+	if err != nil {
+		return 0, false, 0, "", err
+	}
+	smallestRaw, err := r.stringOption(options, "smallestUnit", "")
+	if err != nil {
+		return 0, false, 0, "", err
+	}
+
+	if smallestRaw != "" {
+		smallest, ok := normalizeTemporalUnit(smallestRaw)
+		if !ok || smallest == "hour" {
+			return 0, false, 0, "", r.throwRangeError("invalid smallestUnit")
+		}
+		step = temporalUnitNanoseconds[smallest]
+		switch smallest {
+		case "minute":
+			minuteOnly = true
+		case "second":
+			precision = 0
+		case "millisecond":
+			precision = 3
+		case "microsecond":
+			precision = 6
+		case "nanosecond":
+			precision = 9
+		}
+		return precision, minuteOnly, step, mode, nil
+	}
+	if precision < 0 {
+		return precision, false, 1, mode, nil
+	}
+	steps := [...]int64{1_000_000_000, 100_000_000, 10_000_000, 1_000_000, 100_000, 10_000, 1_000, 100, 10, 1}
+	return precision, false, steps[precision], mode, nil
 }
 
 func (r *Runtime) toTemporalPlainTime(value, optionsValue Value) (temporalPlainTime, error) {
@@ -425,17 +498,28 @@ func compareTemporalPlainTimes(left, right temporalPlainTime) int {
 }
 
 func (t temporalPlainTime) string() string {
+	return t.stringWithPrecision(-1, false)
+}
+
+func (t temporalPlainTime) stringWithPrecision(precision int, minuteOnly bool) string {
 	var b strings.Builder
 	writePaddedTemporalInt(&b, t.hour, 2)
 	b.WriteByte(':')
 	writePaddedTemporalInt(&b, t.minute, 2)
+	if minuteOnly {
+		return b.String()
+	}
 	b.WriteByte(':')
 	writePaddedTemporalInt(&b, t.second, 2)
 	subsecond := int64(t.millisecond)*1_000_000 + int64(t.microsecond)*1_000 + int64(t.nanosecond)
-	if subsecond != 0 {
+	if precision != 0 && (precision > 0 || subsecond != 0) {
 		fraction := strconv.FormatInt(subsecond+temporalNanosecondsPerSecond, 10)[1:]
 		b.WriteByte('.')
-		b.WriteString(strings.TrimRight(fraction, "0"))
+		if precision < 0 {
+			b.WriteString(strings.TrimRight(fraction, "0"))
+		} else {
+			b.WriteString(fraction[:precision])
+		}
 	}
 	return b.String()
 }
