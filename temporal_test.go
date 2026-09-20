@@ -262,6 +262,8 @@ func TestTemporalPlainDateTimeFoundation(t *testing.T) {
 		{`new Temporal.PlainDateTime(1999, 12, 31, 23, 59, 59, 999, 999, 999).round("microsecond").toString()`, "2000-01-01T00:00:00"},
 		{`new Temporal.PlainDateTime(2020, 5, 31, 23, 12, 38).add({hours: 2}).toString()`, "2020-06-01T01:12:38"},
 		{`new Temporal.PlainDateTime(2020, 1, 31, 15).subtract({months: -1}).toString()`, "2020-02-29T15:00:00"},
+		{`new Temporal.PlainDateTime(1997, 12, 1, 12, 34).until(new Temporal.PlainDateTime(2001, 6, 18, 12, 34), {largestUnit: "year"}).toString()`, "P3Y6M17D"},
+		{`new Temporal.PlainDateTime(2000, 5, 2).until(new Temporal.PlainDateTime(2000, 5, 2, 1, 59, 59), {largestUnit: "hour", smallestUnit: "minute", roundingMode: "expand"}).toString()`, "PT2H"},
 		{`try { Temporal.PlainDateTime.from("2000-01-01T0000:00") } catch (e) { e.name }`, "RangeError"},
 		{`class D extends Temporal.PlainDateTime {}; Object.getPrototypeOf(new D(2000, 1, 1)) === D.prototype`, "true"},
 	}

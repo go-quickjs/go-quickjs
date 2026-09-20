@@ -249,6 +249,21 @@ func (r *Runtime) initTemporalDuration(temporal *Object) {
 			}
 			return Float(months), nil
 		}
+		if unit == "week" || unit == "day" {
+			if d.years != 0 || d.months != 0 {
+				return Undefined, rt.throwRangeError("calendar durations require relativeTo")
+			}
+			total := new(big.Int).Mul(floatIntegerBig(d.weeks), big.NewInt(7*86_400_000_000_000))
+			total.Add(total, new(big.Int).Mul(floatIntegerBig(d.days), big.NewInt(86_400_000_000_000)))
+			total.Add(total, d.timePartNanoseconds())
+			divisor := int64(86_400_000_000_000)
+			if unit == "week" {
+				divisor *= 7
+			}
+			ratio := new(big.Rat).SetFrac(total, big.NewInt(divisor))
+			value, _ := ratio.Float64()
+			return Float(value), nil
+		}
 		total, ok := d.timeNanoseconds()
 		if !ok {
 			return Undefined, rt.throwRangeError("calendar durations require relativeTo")
@@ -408,7 +423,7 @@ func (r *Runtime) temporalTotalOptions(value Value) (string, Value, error) {
 	}
 	unit, ok := normalizeTemporalUnit(text.Go())
 	if !ok {
-		unit, ok = normalizeTemporalYearMonthUnit(text.Go())
+		unit, ok = normalizeTemporalDateTimeUnit(text.Go())
 	}
 	if !ok {
 		return "", Undefined, r.throwRangeError("invalid total unit")

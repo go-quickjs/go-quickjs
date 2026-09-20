@@ -417,6 +417,46 @@ func (r *Runtime) initTemporalPlainDateTime(temporal *Object) {
 			return Obj(newTemporalPlainDateTime(rt.temporalPlainDateTimeProto, dateTime)), nil
 		})
 	}
+	for _, operation := range []struct {
+		name  string
+		since bool
+	}{{"until", false}, {"since", true}} {
+		op := operation
+		r.defMethod(proto, op.name, 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+			dateTime, err := rt.temporalPlainDateTimeValue(this, "Temporal.PlainDateTime.prototype."+op.name)
+			if err != nil {
+				return Undefined, err
+			}
+			other, err := rt.toTemporalPlainDateTime(arg(args, 0), Undefined)
+			if err != nil {
+				return Undefined, err
+			}
+			if dateTime.calendar != other.calendar {
+				return Undefined, rt.throwRangeError("date-time calendars must match")
+			}
+			largest, smallest, increment, mode, err := rt.temporalPlainDateTimeDifferenceOptions(arg(args, 1))
+			if err != nil {
+				return Undefined, err
+			}
+			if op.since {
+				mode = negateTemporalRoundingMode(mode)
+			}
+			duration, err := rt.differenceTemporalPlainDateTimes(dateTime, other, largest, smallest, increment, mode)
+			if err != nil {
+				return Undefined, err
+			}
+			if op.since {
+				values := duration.fields()
+				for i := range values {
+					if values[i] != 0 {
+						values[i] = -values[i]
+					}
+				}
+				duration = durationFromFields(values)
+			}
+			return Obj(newTemporalDuration(rt.temporalDurationProto, duration)), nil
+		})
+	}
 	r.defMethod(proto, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		dateTime, err := rt.temporalPlainDateTimeValue(this, "Temporal.PlainDateTime.prototype.toString")
 		if err != nil {
@@ -533,6 +573,145 @@ func (r *Runtime) addTemporalPlainDateTime(dateTime temporalPlainDateTime, durat
 		return temporalPlainDateTime{}, r.throwRangeError("date-time is outside the Temporal range")
 	}
 	return result, nil
+}
+
+var temporalDateTimeUnitRank = map[string]int{
+	"year": 0, "month": 1, "week": 2, "day": 3,
+	"hour": 4, "minute": 5, "second": 6, "millisecond": 7, "microsecond": 8, "nanosecond": 9,
+}
+
+func normalizeTemporalDateTimeUnit(unit string) (string, bool) {
+	unit = strings.TrimSuffix(unit, "s")
+	_, ok := temporalDateTimeUnitRank[unit]
+	return unit, ok
+}
+
+func (r *Runtime) temporalPlainDateTimeDifferenceOptions(value Value) (largest, smallest string, increment int64, mode string, err error) {
+	options, err := r.strictOptions(value)
+	if err != nil {
+		return "", "", 0, "", err
+	}
+	largestRaw, err := r.stringOption(options, "largestUnit", "auto")
+	if err != nil {
+		return "", "", 0, "", err
+	}
+	rawIncrement, incrementSet, err := r.rawNumberOption(options, "roundingIncrement")
+	if err != nil {
+		return "", "", 0, "", err
+	}
+	mode, err = r.stringOption(options, "roundingMode", "trunc",
+		"ceil", "floor", "expand", "trunc", "halfCeil", "halfFloor", "halfExpand", "halfTrunc", "halfEven")
+	if err != nil {
+		return "", "", 0, "", err
+	}
+	smallestRaw, err := r.stringOption(options, "smallestUnit", "nanosecond")
+	if err != nil {
+		return "", "", 0, "", err
+	}
+	smallest, ok := normalizeTemporalDateTimeUnit(smallestRaw)
+	if !ok {
+		return "", "", 0, "", r.throwRangeError("invalid smallestUnit")
+	}
+	if largestRaw == "auto" {
+		largest = "day"
+		if temporalDateTimeUnitRank[smallest] < temporalDateTimeUnitRank[largest] {
+			largest = smallest
+		}
+	} else {
+		largest, ok = normalizeTemporalDateTimeUnit(largestRaw)
+		if !ok {
+			return "", "", 0, "", r.throwRangeError("invalid largestUnit")
+		}
+	}
+	if temporalDateTimeUnitRank[largest] > temporalDateTimeUnitRank[smallest] {
+		return "", "", 0, "", r.throwRangeError("largestUnit must not be smaller than smallestUnit")
+	}
+	if temporalDateTimeUnitRank[smallest] >= temporalDateTimeUnitRank["hour"] {
+		increment, err = r.validateTemporalRoundingIncrement(rawIncrement, incrementSet, smallest, false)
+	} else if !incrementSet {
+		increment = 1
+	} else {
+		if math.IsNaN(rawIncrement) || math.IsInf(rawIncrement, 0) {
+			return "", "", 0, "", r.throwRangeError("roundingIncrement must be finite")
+		}
+		rawIncrement = math.Trunc(rawIncrement)
+		if rawIncrement < 1 || rawIncrement > 1_000_000_000 {
+			return "", "", 0, "", r.throwRangeError("roundingIncrement is out of range")
+		}
+		increment = int64(rawIncrement)
+	}
+	return
+}
+
+func temporalPlainDateTimeEpochNanoseconds(dateTime temporalPlainDateTime) *big.Int {
+	days := big.NewInt(isoDaysFromCivil(int64(dateTime.year), dateTime.month, dateTime.day))
+	days.Mul(days, big.NewInt(86_400_000_000_000))
+	time := temporalPlainTime{dateTime.hour, dateTime.minute, dateTime.second, dateTime.millisecond, dateTime.microsecond, dateTime.nanosecond}
+	return days.Add(days, temporalPlainTimeNanoseconds(time))
+}
+
+func (r *Runtime) differenceTemporalPlainDateTimes(start, end temporalPlainDateTime, largest, smallest string, increment int64, mode string) (temporalDuration, error) {
+	difference := new(big.Int).Sub(temporalPlainDateTimeEpochNanoseconds(end), temporalPlainDateTimeEpochNanoseconds(start))
+	if temporalDateTimeUnitRank[largest] >= temporalDateTimeUnitRank["hour"] {
+		step := new(big.Int).Mul(big.NewInt(temporalUnitNanoseconds[smallest]), big.NewInt(increment))
+		difference = roundTemporalBigInt(difference, step, mode)
+		return temporalDurationFromNanoseconds(difference, largest), nil
+	}
+
+	startDate := temporalPlainDate{year: start.year, month: start.month, day: start.day, calendar: start.calendar}
+	endDays := isoDaysFromCivil(int64(end.year), end.month, end.day)
+	startTime := temporalPlainTime{start.hour, start.minute, start.second, start.millisecond, start.microsecond, start.nanosecond}
+	endTime := temporalPlainTime{end.hour, end.minute, end.second, end.millisecond, end.microsecond, end.nanosecond}
+	timeDifference := new(big.Int).Sub(temporalPlainTimeNanoseconds(endTime), temporalPlainTimeNanoseconds(startTime))
+	if difference.Sign() > 0 && timeDifference.Sign() < 0 {
+		endDays--
+		timeDifference.Add(timeDifference, big.NewInt(86_400_000_000_000))
+	} else if difference.Sign() < 0 && timeDifference.Sign() > 0 {
+		endDays++
+		timeDifference.Sub(timeDifference, big.NewInt(86_400_000_000_000))
+	}
+
+	if temporalDateTimeUnitRank[smallest] >= temporalDateTimeUnitRank["hour"] {
+		step := new(big.Int).Mul(big.NewInt(temporalUnitNanoseconds[smallest]), big.NewInt(increment))
+		timeDifference = roundTemporalBigInt(timeDifference, step, mode)
+		carry, remainder := new(big.Int), new(big.Int)
+		carry.QuoRem(timeDifference, big.NewInt(86_400_000_000_000), remainder)
+		endDays += carry.Int64()
+		timeDifference = remainder
+	} else if smallest == "day" || (smallest == "week" && largest == "week") {
+		unitDays := int64(1)
+		if smallest == "week" {
+			unitDays = 7
+		}
+		step := new(big.Int).Mul(big.NewInt(unitDays*86_400_000_000_000), big.NewInt(increment))
+		rounded := roundTemporalBigInt(difference, step, mode)
+		roundedDays := new(big.Int).Quo(rounded, big.NewInt(86_400_000_000_000)).Int64()
+		if largest == "week" {
+			return temporalDuration{weeks: float64(roundedDays / 7)}, nil
+		}
+		endDays = isoDaysFromCivil(int64(start.year), start.month, start.day) + roundedDays
+		timeDifference.SetInt64(0)
+	}
+
+	endYear, endMonth, endDay := isoCivilFromDays(endDays)
+	endDate := temporalPlainDate{year: endYear, month: endMonth, day: endDay, calendar: end.calendar}
+	dateSmallest := "day"
+	dateIncrement := int64(1)
+	dateMode := "trunc"
+	if temporalDateTimeUnitRank[smallest] < temporalDateTimeUnitRank["day"] {
+		dateSmallest, dateIncrement, dateMode = smallest, increment, mode
+	}
+	dateDuration, err := r.differenceTemporalPlainDates(startDate, endDate, largest, dateSmallest, dateIncrement, dateMode)
+	if err != nil {
+		return temporalDuration{}, err
+	}
+	timeDuration := temporalDurationFromNanoseconds(timeDifference, "hour")
+	if temporalDateTimeUnitRank[smallest] <= temporalDateTimeUnitRank["day"] {
+		timeDuration = temporalDuration{}
+	}
+	dateDuration.hours, dateDuration.minutes, dateDuration.seconds = timeDuration.hours, timeDuration.minutes, timeDuration.seconds
+	dateDuration.milliseconds, dateDuration.microseconds, dateDuration.nanoseconds = timeDuration.milliseconds, timeDuration.microseconds, timeDuration.nanoseconds
+	return dateDuration, nil
 }
 
 func (r *Runtime) temporalPlainDateTimeValue(value Value, method string) (temporalPlainDateTime, error) {
