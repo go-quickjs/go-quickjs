@@ -31,7 +31,7 @@ func (r *Runtime) initTemporalInstantOperations(proto *Object) {
 			if err != nil {
 				return Undefined, err
 			}
-			largest, smallest, increment, mode, err := rt.temporalDifferenceOptions(arg(args, 1))
+			largest, smallest, increment, mode, err := rt.temporalDifferenceOptions(arg(args, 1), "second")
 			if err != nil {
 				return Undefined, err
 			}
@@ -73,7 +73,7 @@ func normalizeTemporalUnit(unit string) (string, bool) {
 	return unit, ok
 }
 
-func (r *Runtime) temporalDifferenceOptions(value Value) (largest, smallest string, increment int64, mode string, err error) {
+func (r *Runtime) temporalDifferenceOptions(value Value, defaultLargest string) (largest, smallest string, increment int64, mode string, err error) {
 	options, err := r.strictOptions(value)
 	if err != nil {
 		return "", "", 0, "", err
@@ -100,7 +100,7 @@ func (r *Runtime) temporalDifferenceOptions(value Value) (largest, smallest stri
 		return "", "", 0, "", r.throwRangeError("invalid smallestUnit")
 	}
 	if largestRaw == "auto" {
-		largestRaw = "second"
+		largestRaw = defaultLargest
 		if temporalUnitRank[smallest] < temporalUnitRank[largestRaw] {
 			largestRaw = smallest
 		}

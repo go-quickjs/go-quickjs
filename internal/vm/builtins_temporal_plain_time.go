@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type temporalPlainTime struct {
@@ -201,6 +202,33 @@ func (r *Runtime) initTemporalPlainTime(temporal *Object) {
 		total = roundTemporalBigIntAsIfPositive(total, step, mode)
 		return Obj(newTemporalPlainTime(rt.temporalPlainTimeProto, temporalPlainTimeFromNanoseconds(total))), nil
 	})
+	for _, operation := range []struct {
+		name  string
+		since bool
+	}{{"until", false}, {"since", true}} {
+		op := operation
+		r.defMethod(proto, op.name, 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+			time, err := rt.temporalPlainTimeValue(this, "Temporal.PlainTime.prototype."+op.name)
+			if err != nil {
+				return Undefined, err
+			}
+			other, err := rt.toTemporalPlainTime(arg(args, 0), Undefined)
+			if err != nil {
+				return Undefined, err
+			}
+			largest, smallest, increment, mode, err := rt.temporalDifferenceOptions(arg(args, 1), "hour")
+			if err != nil {
+				return Undefined, err
+			}
+			difference := new(big.Int).Sub(temporalPlainTimeNanoseconds(other), temporalPlainTimeNanoseconds(time))
+			if op.since {
+				difference.Neg(difference)
+			}
+			step := new(big.Int).Mul(big.NewInt(temporalUnitNanoseconds[smallest]), big.NewInt(increment))
+			difference = roundTemporalBigInt(difference, step, mode)
+			return Obj(newTemporalDuration(rt.temporalDurationProto, temporalDurationFromNanoseconds(difference, largest))), nil
+		})
+	}
 	r.defMethod(proto, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		time, err := rt.temporalPlainTimeValue(this, "Temporal.PlainTime.prototype.toString")
 		if err != nil {
@@ -219,6 +247,25 @@ func (r *Runtime) initTemporalPlainTime(temporal *Object) {
 			return Undefined, err
 		}
 		return Str(NewString(time.string())), nil
+	})
+	r.defMethod(proto, "toLocaleString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		plainTime, err := rt.temporalPlainTimeValue(this, "Temporal.PlainTime.prototype.toLocaleString")
+		if err != nil {
+			return Undefined, err
+		}
+		options, err := rt.dateOptionsFrom(args, map[string]string{
+			"hour": "numeric", "minute": "numeric", "second": "numeric",
+		}, "time")
+		if err != nil {
+			return Undefined, err
+		}
+		zone := options.zone
+		if zone == nil {
+			zone = time.UTC
+		}
+		value := time.Date(1970, time.January, 1, plainTime.hour, plainTime.minute, plainTime.second,
+			plainTime.millisecond*1_000_000+plainTime.microsecond*1_000+plainTime.nanosecond, zone)
+		return Str(NewString(options.format(value))), nil
 	})
 	r.defMethod(proto, "valueOf", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if _, err := rt.temporalPlainTimeValue(this, "Temporal.PlainTime.prototype.valueOf"); err != nil {
