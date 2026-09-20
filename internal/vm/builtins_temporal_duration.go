@@ -367,7 +367,11 @@ func (r *Runtime) initTemporalDuration(temporal *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(duration.string())), nil
+		options, err := rt.durationOptionsFrom(args)
+		if err != nil {
+			return Undefined, err
+		}
+		return Str(NewString(durationText(options.parts(rt, duration.fields())))), nil
 	})
 	r.defMethod(proto, "valueOf", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if _, err := rt.temporalDurationValue(this, "Temporal.Duration.prototype.valueOf"); err != nil {

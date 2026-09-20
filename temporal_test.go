@@ -206,6 +206,46 @@ func TestTemporalDurationFoundation(t *testing.T) {
 	}
 }
 
+func TestTemporalDurationIntlFormatting(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	tests := []struct {
+		source string
+		want   string
+	}{
+		{`(() => {
+			const formatter = new Intl.DurationFormat("en");
+			return formatter.format("P1Y2M3W4DT5H6M7.00800901S") ===
+				formatter.format({ years: 1, months: 2, weeks: 3, days: 4,
+					hours: 5, minutes: 6, seconds: 7, milliseconds: 8,
+					microseconds: 9, nanoseconds: 10 });
+		})()`, "true"},
+		{`(() => {
+			const value = new Temporal.Duration(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+			const options = { style: "long" };
+			return value.toLocaleString("de", options) ===
+				new Intl.DurationFormat("de", options).format(value);
+		})()`, "true"},
+		{`(() => {
+			const value = new Temporal.Duration(1, 2, 3, 4, 5, 6, 7, 8, 9, 10);
+			const formatter = new Intl.DurationFormat("en");
+			const expected = formatter.format(value);
+			for (const field of ["years", "months", "weeks", "days", "hours",
+				"minutes", "seconds", "milliseconds", "microseconds", "nanoseconds"]) {
+				Object.defineProperty(Temporal.Duration.prototype, field, {
+					get() { throw new Error("getter observed"); }, configurable: true
+				});
+			}
+			return formatter.format(value) === expected;
+		})()`, "true"},
+	}
+	for _, test := range tests {
+		if got := evalString(t, rt, test.source); got != test.want {
+			t.Errorf("%s\n got: %s\nwant: %s", test.source, got, test.want)
+		}
+	}
+}
+
 func TestTemporalInstantDifferenceAndRounding(t *testing.T) {
 	rt := quickjs.New()
 	defer rt.Close()

@@ -52,30 +52,8 @@ func (r *Runtime) initDurationFormat(intl *Object) {
 		if !rt.Constructing() {
 			return Undefined, rt.throwTypeError("Intl.DurationFormat requires new")
 		}
-		tags, err := rt.requestedLocales(arg(args, 0))
+		o, err := rt.durationOptionsFrom(args)
 		if err != nil {
-			return Undefined, err
-		}
-		options, err := rt.strictOptions(arg(args, 1))
-		if err != nil {
-			return Undefined, err
-		}
-		if _, err := rt.stringOption(options, "localeMatcher", "best fit",
-			"lookup", "best fit"); err != nil {
-			return Undefined, err
-		}
-		numbering, err := rt.typeOption(options, "numberingSystem")
-		if err != nil {
-			return Undefined, err
-		}
-		choice := rt.resolveLocale(tags, "nu")
-		choice.override("nu", numbering)
-		o := &durationOptions{locale: choice.data, choice: choice}
-		if o.style, err = rt.stringOption(options, "style", "short",
-			"long", "short", "narrow", "digital"); err != nil {
-			return Undefined, err
-		}
-		if err := rt.readDurationUnits(o, options); err != nil {
 			return Undefined, err
 		}
 		out := newObject(made, ClassObject)
@@ -136,6 +114,38 @@ func (r *Runtime) initDurationFormat(intl *Object) {
 		}
 		return Obj(out), nil
 	})
+}
+
+// durationOptionsFrom reads the arguments shared by the DurationFormat
+// constructor and Temporal.Duration.prototype.toLocaleString.
+func (r *Runtime) durationOptionsFrom(args []Value) (*durationOptions, error) {
+	tags, err := r.requestedLocales(arg(args, 0))
+	if err != nil {
+		return nil, err
+	}
+	options, err := r.strictOptions(arg(args, 1))
+	if err != nil {
+		return nil, err
+	}
+	if _, err := r.stringOption(options, "localeMatcher", "best fit",
+		"lookup", "best fit"); err != nil {
+		return nil, err
+	}
+	numbering, err := r.typeOption(options, "numberingSystem")
+	if err != nil {
+		return nil, err
+	}
+	choice := r.resolveLocale(tags, "nu")
+	choice.override("nu", numbering)
+	o := &durationOptions{locale: choice.data, choice: choice}
+	if o.style, err = r.stringOption(options, "style", "short",
+		"long", "short", "narrow", "digital"); err != nil {
+		return nil, err
+	}
+	if err := r.readDurationUnits(o, options); err != nil {
+		return nil, err
+	}
+	return o, nil
 }
 
 // readDurationUnits reads how each part of a duration is to be written. A part
@@ -223,6 +233,10 @@ func (r *Runtime) readDurationUnits(o *durationOptions, options *Object) error {
 func (r *Runtime) durationFrom(v Value) ([len(durationUnits)]float64, error) {
 	var out [len(durationUnits)]float64
 	if v.IsString() {
+		if duration, err := parseTemporalDuration(v.String().Go()); err == nil &&
+			duration.valid() && duration.withinRange() {
+			return duration.fields(), nil
+		}
 		if parsed, ok := parseDuration(v.String().Go()); ok {
 			return parsed, nil
 		}
@@ -231,6 +245,9 @@ func (r *Runtime) durationFrom(v Value) ([len(durationUnits)]float64, error) {
 	o := v.Object()
 	if o == nil {
 		return out, r.throwTypeError("a duration is an object")
+	}
+	if duration, ok := o.data.(*temporalDuration); ok {
+		return duration.fields(), nil
 	}
 	any := false
 	for i, unit := range durationUnits {
