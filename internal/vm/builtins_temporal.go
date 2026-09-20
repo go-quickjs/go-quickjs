@@ -631,6 +631,66 @@ func (r *Runtime) initTemporalZonedDateTime(temporal *Object) {
 		result.instant = instant
 		return Obj(newTemporalZonedDateTimeObject(rt.temporalZonedDateTimeProto, &result)), nil
 	})
+	r.defMethod(proto, "getTimeZoneTransition", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		zoned, err := rt.temporalZonedDateTimeValue(this, "Temporal.ZonedDateTime.prototype.getTimeZoneTransition")
+		if err != nil {
+			return Undefined, err
+		}
+		directionValue := arg(args, 0)
+		if directionValue.IsUndefined() {
+			return Undefined, rt.throwTypeError("transition direction is required")
+		}
+		var direction string
+		if directionValue.IsString() {
+			direction = directionValue.String().Go()
+		} else {
+			options := directionValue.Object()
+			if options == nil {
+				return Undefined, rt.throwTypeError("transition direction must be a string or object")
+			}
+			raw, err := rt.getProp(options, rt.atoms.intern("direction"), directionValue)
+			if err != nil {
+				return Undefined, err
+			}
+			if raw.IsUndefined() {
+				return Undefined, rt.throwRangeError("transition direction is required")
+			}
+			text, err := rt.toString(raw)
+			if err != nil {
+				return Undefined, err
+			}
+			direction = text.Go()
+		}
+		if direction != "next" && direction != "previous" {
+			return Undefined, rt.throwRangeError("invalid transition direction")
+		}
+		if zoned.fixed {
+			return Null, nil
+		}
+		var epochSeconds int64
+		var ok bool
+		if direction == "next" {
+			epochSeconds, ok = zoned.zone.NextTransition(zoned.instant.epochSeconds)
+		} else {
+			probe := zoned.instant.epochSeconds
+			if zoned.instant.nanosecond != 0 {
+				probe++
+			}
+			epochSeconds, ok = zoned.zone.PreviousTransition(probe)
+		}
+		if !ok {
+			return Null, nil
+		}
+		instant, ok := temporalInstantFromEpochNanoseconds(new(big.Int).Mul(
+			big.NewInt(epochSeconds), big.NewInt(temporalNanosecondsPerSecond),
+		))
+		if !ok {
+			return Null, nil
+		}
+		result := *zoned
+		result.instant = instant
+		return Obj(newTemporalZonedDateTimeObject(rt.temporalZonedDateTimeProto, &result)), nil
+	})
 	for _, operation := range []struct {
 		name string
 		sign int

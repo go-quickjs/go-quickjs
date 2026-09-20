@@ -130,6 +130,10 @@ func TestTemporalZonedDateTimeFoundation(t *testing.T) {
 		{`Temporal.ZonedDateTime.from("2024-03-10T12:00-04:00[America/New_York]").withPlainTime().toString()`, "2024-03-10T00:00:00-05:00[America/New_York]"},
 		{`Temporal.ZonedDateTime.from("2021-01-31T12:34:56Z[UTC]").with({ month: 2 }).toString()`, "2021-02-28T12:34:56+00:00[UTC]"},
 		{`(() => { const z = Temporal.ZonedDateTime.from("2021-01-31T12:34:56Z[UTC]"); z.with({ month: 2 }); return z.toString(); })()`, "2021-01-31T12:34:56+00:00[UTC]"},
+		{`new Temporal.ZonedDateTime(0n, "America/New_York").getTimeZoneTransition("next").toString()`, "1970-04-26T03:00:00-04:00[America/New_York]"},
+		{`new Temporal.ZonedDateTime(0n, "America/New_York").getTimeZoneTransition({ direction: "previous" }).toString()`, "1969-10-26T01:00:00-05:00[America/New_York]"},
+		{`new Temporal.ZonedDateTime(9961200000000001n, "America/New_York").getTimeZoneTransition("previous").toString()`, "1970-04-26T03:00:00-04:00[America/New_York]"},
+		{`new Temporal.ZonedDateTime(0n, "+01:30").getTimeZoneTransition("next")`, "null"},
 	}
 	for _, test := range tests {
 		if got := evalString(t, rt, test.source); got != test.want {
