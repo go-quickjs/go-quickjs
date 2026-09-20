@@ -154,6 +154,38 @@ func joinRange(start, end []pieceOf, separator string) *rangePieces {
 	return out
 }
 
+// joinDateTimeRange shares a leading date while writing both times in full.
+// Interval patterns treat the date as the context for the two clock readings,
+// even in locales whose numeric date ranges normally repeat both endpoints.
+func joinDateTimeRange(start, end []pieceOf, separator string) (*rangePieces, bool) {
+	firstTime := func(pieces []pieceOf) int {
+		for i, piece := range pieces {
+			switch piece.kind {
+			case "hour", "minute", "second", "fractionalSecond", "dayPeriod", "timeZoneName":
+				return i
+			}
+		}
+		return -1
+	}
+	startTime, endTime := firstTime(start), firstTime(end)
+	if startTime <= 0 || startTime != endTime ||
+		!piecesEqual(start[:startTime], end[:endTime]) {
+		return nil, false
+	}
+	out := &rangePieces{}
+	for _, piece := range start[:startTime] {
+		out.add(piece.kind, piece.value, "shared")
+	}
+	for _, piece := range start[startTime:] {
+		out.add(piece.kind, piece.value, "startRange")
+	}
+	out.add("literal", separator, "shared")
+	for _, piece := range end[endTime:] {
+		out.add(piece.kind, piece.value, "endRange")
+	}
+	return out, true
+}
+
 // pieceOf is a formatted piece, of a number or of a date, in the one shape a
 // range can work with.
 type pieceOf struct {

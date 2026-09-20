@@ -74,11 +74,24 @@ func TestTemporalIntlDateTimeFormat(t *testing.T) {
 	rt := quickjs.New()
 	defer rt.Close()
 	tests := []struct{ source, want string }{
-		{`new Intl.DateTimeFormat("en-US", { era: "narrow", timeZone: "UTC" }).format(new Temporal.Instant(0n))`, "1/1/1970, 12:00:00 AM AD"},
+		{`new Intl.DateTimeFormat("en-US", { era: "narrow", timeZone: "UTC" }).format(new Temporal.Instant(0n))`, "1/1/1970 AD, 12:00:00 AM"},
 		{`new Intl.DateTimeFormat("en-US", { era: "narrow", timeZone: "UTC" }).format(new Temporal.PlainDate(2025, 11, 4))`, "11/4/2025 AD"},
 		{`new Intl.DateTimeFormat("en-US", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" }).format(new Temporal.PlainDate(2000, 2, 29))`, "02/29/2000"},
 		{`new Intl.DateTimeFormat("en-US", { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" }).format(new Temporal.PlainTime(12, 34))`, "12:34 PM"},
 		{`new Intl.DateTimeFormat("en-US", { timeZoneName: "long", timeZone: "America/New_York" }).formatToParts(new Temporal.PlainTime(12, 34)).some(part => part.type === "timeZoneName")`, "false"},
+		{`new Intl.DateTimeFormat("en-US", { timeZone: "Pacific/Apia" }).formatRange(
+			new Temporal.PlainDateTime(2021, 8, 4, 0, 30, 45),
+			new Temporal.PlainDateTime(2021, 8, 4, 23, 30, 45))`,
+			"8/4/2021, 12:30:45 AM\u2009–\u200911:30:45 PM"},
+		{`(() => {
+			let calls = 0;
+			const invalid = { valueOf() { calls++; return NaN; } };
+			try {
+				new Intl.DateTimeFormat().formatRange(invalid, new Temporal.PlainDate(1970, 1, 1));
+			} catch (error) {
+				return error.name + "," + calls;
+			}
+		})()`, "TypeError,1"},
 	}
 	for _, test := range tests {
 		if got := evalString(t, rt, test.source); got != test.want {

@@ -1222,6 +1222,43 @@ func (r *Runtime) dateArgument(o *dateOptions, v Value) (time.Time, error) {
 	return o.at(math.Trunc(n)), nil
 }
 
+// toDateTimeFormattable performs the observable conversion done before range
+// formatting compares argument kinds. Temporal values keep their internal
+// slots; every other value is converted to a number first.
+func (r *Runtime) toDateTimeFormattable(v Value) (Value, error) {
+	if temporalDateTimeKind(v) != "" {
+		return v, nil
+	}
+	n, err := r.toNumber(v)
+	if err != nil {
+		return Undefined, err
+	}
+	return Float(n), nil
+}
+
+func temporalDateTimeKind(v Value) string {
+	if !v.IsObject() {
+		return ""
+	}
+	switch v.Object().data.(type) {
+	case *temporalInstant:
+		return "instant"
+	case *temporalPlainDateTime:
+		return "date-time"
+	case *temporalPlainDate:
+		return "date"
+	case *temporalPlainTime:
+		return "time"
+	case *temporalPlainYearMonth:
+		return "year-month"
+	case *temporalPlainMonthDay:
+		return "month-day"
+	case *temporalZonedDateTime:
+		return "zoned-date-time"
+	}
+	return ""
+}
+
 // dateOptionsFrom reads the arguments a DateTimeFormat is made with. defaults
 // fills in the fields the toLocale methods ask for when the caller named none.
 func (r *Runtime) dateOptionsFrom(args []Value, defaults map[string]string, required string) (*dateOptions, error) {
@@ -1660,15 +1697,27 @@ func (r *Runtime) dateRange(this Value, args []Value) (*rangePieces, error) {
 	if arg(args, 0).IsUndefined() || arg(args, 1).IsUndefined() {
 		return nil, r.throwTypeError("a range has two ends")
 	}
-	format, err := r.dateOptionsForArgument(o, arg(args, 0))
+	fromValue, err := r.toDateTimeFormattable(arg(args, 0))
 	if err != nil {
 		return nil, err
 	}
-	from, err := r.dateArgument(format, arg(args, 0))
+	toValue, err := r.toDateTimeFormattable(arg(args, 1))
 	if err != nil {
 		return nil, err
 	}
-	to, err := r.dateArgument(format, arg(args, 1))
+	fromKind, toKind := temporalDateTimeKind(fromValue), temporalDateTimeKind(toValue)
+	if (fromKind != "" || toKind != "") && fromKind != toKind {
+		return nil, r.throwTypeError("a date-time range must have matching argument types")
+	}
+	format, err := r.dateOptionsForArgument(o, fromValue)
+	if err != nil {
+		return nil, err
+	}
+	from, err := r.dateArgument(format, fromValue)
+	if err != nil {
+		return nil, err
+	}
+	to, err := r.dateArgument(format, toValue)
 	if err != nil {
 		return nil, err
 	}
@@ -1679,12 +1728,17 @@ func (r *Runtime) dateRange(this Value, args []Value) (*rangePieces, error) {
 		// the mark a number takes.
 		return sameRange(start, ""), nil
 	}
+	if fromKind == "date-time" || fromKind == "instant" {
+		if joined, ok := joinDateTimeRange(start, end, format.locale.DateRange); ok {
+			return joined, nil
+		}
+	}
 	// A date written in numbers is written out twice in some languages and
 	// once in others, with what the two have in common said once.
-	if o.locale.DateRangeRepeat && numericDate(o.pattern) {
-		return joinRange(start, end, spacedOut(o.locale.DateRange)), nil
+	if format.locale.DateRangeRepeat && numericDate(format.pattern) {
+		return joinRange(start, end, spacedOut(format.locale.DateRange)), nil
 	}
-	return mergeRange(start, end, o.locale.DateRange), nil
+	return mergeRange(start, end, format.locale.DateRange), nil
 }
 
 func piecesEqual(a, b []pieceOf) bool {

@@ -1341,6 +1341,12 @@ func (o *dateOptions) splitSkeletons() (string, string) {
 	if o.weekday != "" {
 		date = dateOnly.withWeekday(date)
 	}
+	// An era belongs to the date half of a combined pattern. Adding it after
+	// the date and time have been joined would put it after the clock instead.
+	if o.era != "" && o.calendar != "chinese" && o.calendar != "dangi" &&
+		!strings.ContainsRune(patternLettersOf(date), 'G') {
+		date += " G"
+	}
 	return date, time
 }
 
