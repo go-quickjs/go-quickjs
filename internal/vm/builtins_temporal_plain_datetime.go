@@ -392,6 +392,31 @@ func (r *Runtime) initTemporalPlainDateTime(temporal *Object) {
 		}
 		return Obj(newTemporalPlainDateTime(rt.temporalPlainDateTimeProto, dateTime)), nil
 	})
+	for _, operation := range []struct {
+		name string
+		sign int64
+	}{{"add", 1}, {"subtract", -1}} {
+		op := operation
+		r.defMethod(proto, op.name, 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+			dateTime, err := rt.temporalPlainDateTimeValue(this, "Temporal.PlainDateTime.prototype."+op.name)
+			if err != nil {
+				return Undefined, err
+			}
+			duration, err := rt.toTemporalDuration(arg(args, 0))
+			if err != nil {
+				return Undefined, err
+			}
+			overflow, err := rt.temporalOverflowOption(arg(args, 1))
+			if err != nil {
+				return Undefined, err
+			}
+			dateTime, err = rt.addTemporalPlainDateTime(dateTime, duration, op.sign, overflow)
+			if err != nil {
+				return Undefined, err
+			}
+			return Obj(newTemporalPlainDateTime(rt.temporalPlainDateTimeProto, dateTime)), nil
+		})
+	}
 	r.defMethod(proto, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		dateTime, err := rt.temporalPlainDateTimeValue(this, "Temporal.PlainDateTime.prototype.toString")
 		if err != nil {
@@ -473,6 +498,41 @@ func (r *Runtime) roundTemporalPlainDateTime(dateTime temporalPlainDateTime, ste
 		return temporalPlainDateTime{}, r.throwRangeError("rounded date-time is outside the Temporal range")
 	}
 	return dateTime, nil
+}
+
+func (r *Runtime) addTemporalPlainDateTime(dateTime temporalPlainDateTime, duration temporalDuration, sign int64, overflow string) (temporalPlainDateTime, error) {
+	time := temporalPlainTime{dateTime.hour, dateTime.minute, dateTime.second, dateTime.millisecond, dateTime.microsecond, dateTime.nanosecond}
+	total := temporalPlainTimeNanoseconds(time)
+	delta := duration.timePartNanoseconds()
+	if sign < 0 {
+		delta.Neg(delta)
+	}
+	total.Add(total, delta)
+	dayCarry, remainder := new(big.Int), new(big.Int)
+	dayCarry.DivMod(total, big.NewInt(86_400_000_000_000), remainder)
+	if !dayCarry.IsInt64() {
+		return temporalPlainDateTime{}, r.throwRangeError("date-time is outside the Temporal range")
+	}
+
+	dateDuration := temporalDuration{
+		years: duration.years, months: duration.months, weeks: duration.weeks,
+		days: duration.days + float64(dayCarry.Int64()*sign),
+	}
+	date := temporalPlainDate{year: dateTime.year, month: dateTime.month, day: dateTime.day, calendar: dateTime.calendar}
+	date, err := r.addTemporalPlainDate(date, dateDuration, sign, overflow)
+	if err != nil {
+		return temporalPlainDateTime{}, err
+	}
+	time = temporalPlainTimeFromNanoseconds(remainder)
+	result := temporalPlainDateTime{temporalISODateTime: temporalISODateTime{
+		year: date.year, month: date.month, day: date.day,
+		hour: time.hour, minute: time.minute, second: time.second,
+		millisecond: time.millisecond, microsecond: time.microsecond, nanosecond: time.nanosecond,
+	}, calendar: dateTime.calendar}
+	if !result.valid() {
+		return temporalPlainDateTime{}, r.throwRangeError("date-time is outside the Temporal range")
+	}
+	return result, nil
 }
 
 func (r *Runtime) temporalPlainDateTimeValue(value Value, method string) (temporalPlainDateTime, error) {
