@@ -101,6 +101,22 @@ func (r *Runtime) initTemporalDuration(temporal *Object) {
 		}
 		return Obj(newTemporalDuration(proto, d)), nil
 	})
+	r.defMethod(ctor.Object(), "compare", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		left, err := rt.toTemporalDuration(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		right, err := rt.toTemporalDuration(arg(args, 1))
+		if err != nil {
+			return Undefined, err
+		}
+		leftValue, leftOK := left.timeNanoseconds()
+		rightValue, rightOK := right.timeNanoseconds()
+		if !leftOK || !rightOK {
+			return Undefined, rt.throwRangeError("calendar durations require relativeTo")
+		}
+		return Int(leftValue.Cmp(rightValue)), nil
+	})
 	for i, name := range []string{"years", "months", "weeks", "days", "hours", "minutes", "seconds", "milliseconds", "microseconds", "nanoseconds"} {
 		index, property := i, name
 		r.defGetter(proto, property, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -132,7 +148,9 @@ func (r *Runtime) initTemporalDuration(temporal *Object) {
 		}
 		values := d.fields()
 		for i := range values {
-			values[i] = -values[i]
+			if values[i] != 0 {
+				values[i] = -values[i]
+			}
 		}
 		return Obj(newTemporalDuration(proto, durationFromFields(values))), nil
 	})
@@ -148,6 +166,53 @@ func (r *Runtime) initTemporalDuration(temporal *Object) {
 			}
 		}
 		return Obj(newTemporalDuration(proto, durationFromFields(values))), nil
+	})
+	for _, operation := range []struct {
+		name string
+		sign int
+	}{{"add", 1}, {"subtract", -1}} {
+		op := operation
+		r.defMethod(proto, op.name, 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+			left, err := rt.temporalDurationValue(this, "Temporal.Duration.prototype."+op.name)
+			if err != nil {
+				return Undefined, err
+			}
+			right, err := rt.toTemporalDuration(arg(args, 0))
+			if err != nil {
+				return Undefined, err
+			}
+			leftNS, leftOK := left.timeNanoseconds()
+			rightNS, rightOK := right.timeNanoseconds()
+			if !leftOK || !rightOK {
+				return Undefined, rt.throwRangeError("calendar durations require relativeTo")
+			}
+			if op.sign < 0 {
+				rightNS.Neg(rightNS)
+			}
+			leftNS.Add(leftNS, rightNS)
+			largest := left.largestTimeUnit()
+			if other := right.largestTimeUnit(); temporalUnitRank[other] < temporalUnitRank[largest] {
+				largest = other
+			}
+			return Obj(newTemporalDuration(proto, temporalDurationFromNanoseconds(leftNS, largest))), nil
+		})
+	}
+	r.defMethod(proto, "total", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		d, err := rt.temporalDurationValue(this, "Temporal.Duration.prototype.total")
+		if err != nil {
+			return Undefined, err
+		}
+		unit, err := rt.temporalTotalUnit(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		total, ok := d.timeNanoseconds()
+		if !ok {
+			return Undefined, rt.throwRangeError("calendar durations require relativeTo")
+		}
+		ratio := new(big.Rat).SetFrac(total, big.NewInt(temporalUnitNanoseconds[unit]))
+		value, _ := ratio.Float64()
+		return Float(value), nil
 	})
 	for _, name := range []string{"toString", "toJSON"} {
 		method := name
@@ -245,6 +310,53 @@ func (r *Runtime) temporalDurationFromBag(o *Object) (temporalDuration, error) {
 		return d, r.throwRangeError("duration fields must have the same sign")
 	}
 	return d, nil
+}
+
+func (d temporalDuration) largestTimeUnit() string {
+	if d.hours != 0 {
+		return "hour"
+	}
+	if d.minutes != 0 {
+		return "minute"
+	}
+	if d.seconds != 0 {
+		return "second"
+	}
+	if d.milliseconds != 0 {
+		return "millisecond"
+	}
+	if d.microseconds != 0 {
+		return "microsecond"
+	}
+	return "nanosecond"
+}
+
+func (r *Runtime) temporalTotalUnit(value Value) (string, error) {
+	var raw Value
+	if value.IsString() {
+		raw = value
+	} else {
+		if !value.IsObject() {
+			return "", r.throwTypeError("total options must be a unit string or object")
+		}
+		var err error
+		raw, err = r.getProp(value.Object(), r.atoms.intern("unit"), value)
+		if err != nil {
+			return "", err
+		}
+	}
+	if raw.IsUndefined() {
+		return "", r.throwRangeError("unit is required")
+	}
+	text, err := r.toString(raw)
+	if err != nil {
+		return "", err
+	}
+	unit, ok := normalizeTemporalUnit(text.Go())
+	if !ok {
+		return "", r.throwRangeError("invalid total unit")
+	}
+	return unit, nil
 }
 
 func parseTemporalDuration(s string) (temporalDuration, error) {
@@ -425,11 +537,20 @@ func (d temporalDuration) string() string {
 			b.WriteString(formatTemporalInteger(values[5]))
 			b.WriteByte('M')
 		}
-		sub := values[7]*1_000_000 + values[8]*1_000 + values[9]
-		if values[6] != 0 || sub != 0 {
-			b.WriteString(formatTemporalInteger(values[6]))
-			if sub != 0 {
-				fraction := strconv.FormatInt(int64(sub)+1_000_000_000, 10)[1:]
+		subseconds := new(big.Int)
+		for _, part := range []struct {
+			value float64
+			scale int64
+		}{{values[6], 1_000_000_000}, {values[7], 1_000_000}, {values[8], 1_000}, {values[9], 1}} {
+			integer, _ := new(big.Float).SetFloat64(part.value).Int(nil)
+			subseconds.Add(subseconds, new(big.Int).Mul(integer, big.NewInt(part.scale)))
+		}
+		if subseconds.Sign() != 0 {
+			whole, fractionValue := new(big.Int), new(big.Int)
+			whole.QuoRem(subseconds, big.NewInt(1_000_000_000), fractionValue)
+			b.WriteString(whole.String())
+			if fractionValue.Sign() != 0 {
+				fraction := strconv.FormatInt(fractionValue.Int64()+1_000_000_000, 10)[1:]
 				b.WriteByte('.')
 				b.WriteString(strings.TrimRight(fraction, "0"))
 			}

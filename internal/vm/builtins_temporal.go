@@ -193,6 +193,7 @@ func (r *Runtime) initTemporalInstant(temporal *Object) {
 		return Undefined, rt.throwTypeError("use Temporal.Instant.compare() or equals() to compare instants")
 	})
 	r.defToStringTag(proto, "Temporal.Instant")
+	r.initTemporalInstantOperations(proto)
 }
 
 func (r *Runtime) newTemporalCtor(namespace *Object, name string, length int, proto *Object, fn NativeFunc) *Object {

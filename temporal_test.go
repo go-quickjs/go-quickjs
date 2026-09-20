@@ -121,6 +121,24 @@ func TestTemporalDurationFoundation(t *testing.T) {
 	}
 }
 
+func TestTemporalInstantDifferenceAndRounding(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	tests := []struct{ source, want string }{
+		{`new Temporal.Instant(0n).until(new Temporal.Instant(3723500600700n)).toString()`, "PT3723.5006007S"},
+		{`new Temporal.Instant(0n).until(new Temporal.Instant(3723500600700n), {largestUnit: "hour"}).toString()`, "PT1H2M3.5006007S"},
+		{`new Temporal.Instant(0n).until(new Temporal.Instant(3723500600700n), {smallestUnit: "second", roundingMode: "halfExpand"}).toString()`, "PT3724S"},
+		{`new Temporal.Instant(0n).since(new Temporal.Instant(3723500600700n), {smallestUnit: "second", roundingMode: "ceil"}).toString()`, "-PT3723S"},
+		{`new Temporal.Instant(3723500600700n).round("second").toString()`, "1970-01-01T01:02:04Z"},
+		{`new Temporal.Instant(3723500600700n).round({smallestUnit: "minute", roundingIncrement: 15, roundingMode: "floor"}).toString()`, "1970-01-01T01:00:00Z"},
+	}
+	for _, test := range tests {
+		if got := evalString(t, rt, test.source); got != test.want {
+			t.Errorf("%s\n got: %s\nwant: %s", test.source, got, test.want)
+		}
+	}
+}
+
 func TestTemporalIsLazy(t *testing.T) {
 	rt := quickjs.New()
 	defer rt.Close()
