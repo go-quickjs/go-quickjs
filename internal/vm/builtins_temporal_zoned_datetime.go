@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"math"
 	"math/big"
 	"strings"
 
@@ -11,6 +12,127 @@ type temporalZonedDateTimeOptions struct {
 	disambiguation string
 	offset         string
 	overflow       string
+}
+
+type temporalZonedDateTimeStringFormat struct {
+	precision  int
+	minuteOnly bool
+	step       int64
+	mode       string
+	calendar   string
+	timeZone   string
+	offset     string
+}
+
+func (r *Runtime) temporalZonedDateTimeStringOptions(value Value) (temporalZonedDateTimeStringFormat, error) {
+	options, err := r.strictOptions(value)
+	if err != nil {
+		return temporalZonedDateTimeStringFormat{}, err
+	}
+	format := temporalZonedDateTimeStringFormat{precision: -1, step: 1}
+	format.calendar, err = r.stringOption(options, "calendarName", "auto", "auto", "always", "never", "critical")
+	if err != nil {
+		return temporalZonedDateTimeStringFormat{}, err
+	}
+	fractional, err := r.getProp(options, r.atoms.intern("fractionalSecondDigits"), Obj(options))
+	if err != nil {
+		return temporalZonedDateTimeStringFormat{}, err
+	}
+	if !fractional.IsUndefined() {
+		if fractional.IsNumber() {
+			digits := math.Floor(fractional.Number())
+			if math.IsNaN(digits) || math.IsInf(digits, 0) || digits < 0 || digits > 9 {
+				return temporalZonedDateTimeStringFormat{}, r.throwRangeError("fractionalSecondDigits is out of range")
+			}
+			format.precision = int(digits)
+		} else {
+			text, err := r.toString(fractional)
+			if err != nil {
+				return temporalZonedDateTimeStringFormat{}, err
+			}
+			if text.Go() != "auto" {
+				return temporalZonedDateTimeStringFormat{}, r.throwRangeError("invalid fractionalSecondDigits")
+			}
+		}
+	}
+	format.offset, err = r.stringOption(options, "offset", "auto", "auto", "never")
+	if err != nil {
+		return temporalZonedDateTimeStringFormat{}, err
+	}
+	format.mode, err = r.stringOption(options, "roundingMode", "trunc",
+		"ceil", "floor", "expand", "trunc", "halfCeil", "halfFloor", "halfExpand", "halfTrunc", "halfEven")
+	if err != nil {
+		return temporalZonedDateTimeStringFormat{}, err
+	}
+	smallestValue, err := r.getProp(options, r.atoms.intern("smallestUnit"), Obj(options))
+	if err != nil {
+		return temporalZonedDateTimeStringFormat{}, err
+	}
+	smallestRaw := ""
+	if !smallestValue.IsUndefined() {
+		text, err := r.toString(smallestValue)
+		if err != nil {
+			return temporalZonedDateTimeStringFormat{}, err
+		}
+		smallestRaw = text.Go()
+	}
+	format.timeZone, err = r.stringOption(options, "timeZoneName", "auto", "auto", "never", "critical")
+	if err != nil {
+		return temporalZonedDateTimeStringFormat{}, err
+	}
+
+	if smallestRaw != "" {
+		smallest, ok := normalizeTemporalUnit(smallestRaw)
+		if !ok || smallest == "hour" {
+			return temporalZonedDateTimeStringFormat{}, r.throwRangeError("invalid smallestUnit")
+		}
+		format.step = temporalUnitNanoseconds[smallest]
+		switch smallest {
+		case "minute":
+			format.minuteOnly = true
+		case "second":
+			format.precision = 0
+		case "millisecond":
+			format.precision = 3
+		case "microsecond":
+			format.precision = 6
+		case "nanosecond":
+			format.precision = 9
+		}
+		return format, nil
+	}
+	if format.precision >= 0 {
+		steps := [...]int64{1_000_000_000, 100_000_000, 10_000_000, 1_000_000, 100_000, 10_000, 1_000, 100, 10, 1}
+		format.step = steps[format.precision]
+	}
+	return format, nil
+}
+
+func (z *temporalZonedDateTime) stringWithOptions(format temporalZonedDateTimeStringFormat) string {
+	dateTime := temporalPlainDateTime{temporalISODateTime: z.localISODateTime(), calendar: z.calendar}
+	var b strings.Builder
+	b.WriteString(dateTime.stringWithPrecision("never", format.precision, format.minuteOnly))
+	if format.offset == "auto" {
+		b.WriteString(formatTemporalOffsetRounded(z.offsetSeconds()))
+	}
+	if format.timeZone != "never" {
+		b.WriteByte('[')
+		if format.timeZone == "critical" {
+			b.WriteByte('!')
+		}
+		b.WriteString(z.timeZone)
+		b.WriteByte(']')
+	}
+	if format.calendar == "always" || format.calendar == "critical" || format.calendar == "auto" && z.calendar != "iso8601" {
+		b.WriteByte('[')
+		if format.calendar == "critical" {
+			b.WriteByte('!')
+		}
+		b.WriteString("u-ca=")
+		b.WriteString(z.calendar)
+		b.WriteByte(']')
+	}
+	return b.String()
 }
 
 func (r *Runtime) temporalZonedDateTimeOptions(value Value) (temporalZonedDateTimeOptions, error) {

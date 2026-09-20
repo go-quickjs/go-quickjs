@@ -838,7 +838,20 @@ func (r *Runtime) initTemporalZonedDateTime(temporal *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(zoned.string())), nil
+		options, err := rt.temporalZonedDateTimeStringOptions(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		rounded := roundTemporalBigIntAsIfPositive(
+			zoned.instant.epochNanoseconds(), big.NewInt(options.step), options.mode,
+		)
+		instant, ok := temporalInstantFromEpochNanoseconds(rounded)
+		if !ok {
+			return Undefined, rt.throwRangeError("rounded zoned date-time is outside the Temporal range")
+		}
+		result := *zoned
+		result.instant = instant
+		return Str(NewString(result.stringWithOptions(options))), nil
 	})
 	r.defMethod(proto, "toJSON", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		zoned, err := rt.temporalZonedDateTimeValue(this, "Temporal.ZonedDateTime.prototype.toJSON")
@@ -1061,15 +1074,14 @@ func (z *temporalZonedDateTime) startOfDayInstant(date temporalPlainDate) (tempo
 }
 
 func (z *temporalZonedDateTime) string() string {
-	offset := z.offsetSeconds()
-	local := z.instant
-	local.epochSeconds += int64(offset)
-	text := strings.TrimSuffix(local.string(), "Z")
-	text += formatTemporalOffset(offset) + "[" + z.timeZone + "]"
-	if z.calendar != "iso8601" {
-		text += "[u-ca=" + z.calendar + "]"
-	}
-	return text
+	return z.stringWithOptions(temporalZonedDateTimeStringFormat{
+		precision: -1,
+		step:      1,
+		mode:      "trunc",
+		calendar:  "auto",
+		timeZone:  "auto",
+		offset:    "auto",
+	})
 }
 
 func formatTemporalOffset(offset int) string {
@@ -1083,6 +1095,19 @@ func formatTemporalOffset(offset int) string {
 		text += fmt.Sprintf(":%02d", away%60)
 	}
 	return text
+}
+
+func formatTemporalOffsetRounded(offset int) string {
+	sign := 1
+	away := offset
+	if away < 0 {
+		sign, away = -1, -away
+	}
+	minutes := away / 60
+	if away%60 >= 30 {
+		minutes++
+	}
+	return formatTemporalOffset(sign * minutes * 60)
 }
 
 func parseTemporalZonedDateTimeString(input string) (temporalInstant, string, string, error) {

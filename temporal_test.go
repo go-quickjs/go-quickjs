@@ -137,6 +137,7 @@ func TestTemporalZonedDateTimeFoundation(t *testing.T) {
 		{`Temporal.ZonedDateTime.from("2024-03-10T12:00-04:00[America/New_York]").round({smallestUnit: "day"}).toString()`, "2024-03-10T00:00:00-05:00[America/New_York]"},
 		{`Temporal.ZonedDateTime.from("2024-11-03T12:00-05:00[America/New_York]").round({smallestUnit: "day"}).toString()`, "2024-11-04T00:00:00-05:00[America/New_York]"},
 		{`Temporal.ZonedDateTime.from("2021-11-07T01:29:45-05:00[America/New_York]").round({smallestUnit: "hour"}).toString()`, "2021-11-07T01:00:00-05:00[America/New_York]"},
+		{`new Temporal.ZonedDateTime(3661987654321n, "UTC").toString({calendarName: "critical", offset: "never", timeZoneName: "critical", smallestUnit: "millisecond"})`, "1970-01-01T01:01:01.987[!UTC][!u-ca=iso8601]"},
 	}
 	for _, test := range tests {
 		if got := evalString(t, rt, test.source); got != test.want {
