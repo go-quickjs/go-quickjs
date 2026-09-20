@@ -51,6 +51,10 @@ func (d temporalDuration) timeNanoseconds() (*big.Int, bool) {
 	if d.years != 0 || d.months != 0 || d.weeks != 0 || d.days != 0 {
 		return nil, false
 	}
+	return d.timePartNanoseconds(), true
+}
+
+func (d temporalDuration) timePartNanoseconds() *big.Int {
 	total := new(big.Int)
 	for _, unit := range []struct {
 		value float64
@@ -62,7 +66,22 @@ func (d temporalDuration) timeNanoseconds() (*big.Int, bool) {
 		integer, _ := new(big.Float).SetFloat64(unit.value).Int(nil)
 		total.Add(total, new(big.Int).Mul(integer, big.NewInt(unit.scale)))
 	}
-	return total, true
+	return total
+}
+
+func (d temporalDuration) withinRange() bool {
+	const maxCalendarUnit = 4_294_967_295
+	for _, value := range []float64{d.years, d.months, d.weeks} {
+		if math.Abs(value) > maxCalendarUnit {
+			return false
+		}
+	}
+
+	total := new(big.Int).Mul(floatIntegerBig(d.days), big.NewInt(86_400_000_000_000))
+	total.Add(total, d.timePartNanoseconds())
+	max := new(big.Int).Mul(big.NewInt(9_007_199_254_740_991), big.NewInt(1_000_000_000))
+	max.Add(max, big.NewInt(999_999_999))
+	return new(big.Int).Abs(total).Cmp(max) <= 0
 }
 
 func (r *Runtime) initTemporalDuration(temporal *Object) {
@@ -86,6 +105,9 @@ func (r *Runtime) initTemporalDuration(temporal *Object) {
 		}
 		if !d.valid() {
 			return Undefined, rt.throwRangeError("duration fields must have the same sign")
+		}
+		if !d.withinRange() {
+			return Undefined, rt.throwRangeError("duration is out of range")
 		}
 		instanceProto, err := rt.protoFromNewTargetErr(proto)
 		if err != nil {
@@ -296,6 +318,9 @@ func (r *Runtime) toTemporalDuration(v Value) (temporalDuration, error) {
 		if err != nil {
 			return temporalDuration{}, r.throwRangeError("invalid Temporal.Duration string")
 		}
+		if !d.withinRange() {
+			return temporalDuration{}, r.throwRangeError("duration is out of range")
+		}
 		return d, nil
 	}
 	return temporalDuration{}, r.throwTypeError("a duration must be a string or object")
@@ -329,6 +354,9 @@ func (r *Runtime) temporalDurationFromBag(o *Object) (temporalDuration, error) {
 	}
 	if !d.valid() {
 		return d, r.throwRangeError("duration fields must have the same sign")
+	}
+	if !d.withinRange() {
+		return d, r.throwRangeError("duration is out of range")
 	}
 	return d, nil
 }

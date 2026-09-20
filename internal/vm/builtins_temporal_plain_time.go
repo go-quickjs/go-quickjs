@@ -2,6 +2,7 @@ package vm
 
 import (
 	"math"
+	"math/big"
 	"strconv"
 	"strings"
 )
@@ -168,6 +169,24 @@ func (r *Runtime) initTemporalPlainTime(temporal *Object) {
 		}
 		return Obj(newTemporalPlainTime(rt.temporalPlainTimeProto, result)), nil
 	})
+	for _, operation := range []struct {
+		name string
+		sign int64
+	}{{"add", 1}, {"subtract", -1}} {
+		op := operation
+		r.defMethod(proto, op.name, 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+			time, err := rt.temporalPlainTimeValue(this, "Temporal.PlainTime.prototype."+op.name)
+			if err != nil {
+				return Undefined, err
+			}
+			duration, err := rt.toTemporalDuration(arg(args, 0))
+			if err != nil {
+				return Undefined, err
+			}
+			result := addTemporalPlainTime(time, duration, op.sign)
+			return Obj(newTemporalPlainTime(rt.temporalPlainTimeProto, result)), nil
+		})
+	}
 	for _, method := range []string{"toString", "toJSON"} {
 		name := method
 		r.defMethod(proto, name, 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -185,6 +204,32 @@ func (r *Runtime) initTemporalPlainTime(temporal *Object) {
 		return Undefined, rt.throwTypeError("use Temporal.PlainTime.compare() or equals() to compare times")
 	})
 	r.defToStringTag(proto, "Temporal.PlainTime")
+}
+
+func addTemporalPlainTime(time temporalPlainTime, duration temporalDuration, sign int64) temporalPlainTime {
+	const nanosecondsPerDay = 86_400_000_000_000
+	total := big.NewInt(int64(time.hour)*3_600_000_000_000 +
+		int64(time.minute)*60_000_000_000 + int64(time.second)*1_000_000_000 +
+		int64(time.millisecond)*1_000_000 + int64(time.microsecond)*1_000 + int64(time.nanosecond))
+	delta := duration.timePartNanoseconds()
+	if sign < 0 {
+		delta.Neg(delta)
+	}
+	total.Add(total, delta)
+	total.Mod(total, big.NewInt(nanosecondsPerDay))
+	remaining := total.Int64()
+
+	result := temporalPlainTime{hour: int(remaining / 3_600_000_000_000)}
+	remaining %= 3_600_000_000_000
+	result.minute = int(remaining / 60_000_000_000)
+	remaining %= 60_000_000_000
+	result.second = int(remaining / 1_000_000_000)
+	remaining %= 1_000_000_000
+	result.millisecond = int(remaining / 1_000_000)
+	remaining %= 1_000_000
+	result.microsecond = int(remaining / 1_000)
+	result.nanosecond = int(remaining % 1_000)
+	return result
 }
 
 func newTemporalPlainTime(proto *Object, time temporalPlainTime) *Object {

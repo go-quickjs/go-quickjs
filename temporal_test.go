@@ -277,6 +277,13 @@ func TestTemporalPlainTimeFoundation(t *testing.T) {
 		{`Temporal.PlainTime.compare("15:23", "15:24")`, "-1"},
 		{`Temporal.PlainTime.from(new Temporal.PlainDateTime(2000, 1, 1, 12, 34)).minute`, "34"},
 		{`new Temporal.PlainTime(12, 34, 56).with({hour: 1e100, minute: undefined}).toString()`, "23:34:56"},
+		{`new Temporal.PlainTime(15, 23, 30, 123, 456, 789).add({hours: 16}).toString()`, "07:23:30.123456789"},
+		{`new Temporal.PlainTime(1, 1, 1, 1, 1, 1).subtract({nanoseconds: 2}).toString()`, "01:01:01.001000999"},
+		{`new Temporal.PlainTime(12, 34, 56).add({years: 1, months: 1, weeks: 1, days: 1}).toString()`, "12:34:56"},
+		{`Temporal.PlainTime.from({microsecond: 1}).add(Temporal.Duration.from({microseconds: Number.MAX_SAFE_INTEGER, nanoseconds: 1000})).toString()`, "23:47:34.740993"},
+		{`new Temporal.PlainTime().add("PT9007199254740991.999999999S").toString()`, "07:36:31.999999999"},
+		{`try { new Temporal.PlainTime().add({seconds: 9007199254740992}) } catch (e) { e.name }`, "RangeError"},
+		{`let read = false; new Temporal.PlainTime().add({hours: 1}, {get overflow() { read = true }}); read`, "false"},
 		{`class T extends Temporal.PlainTime {}; Object.getPrototypeOf(new T(12)) === T.prototype`, "true"},
 	}
 	for _, test := range tests {
