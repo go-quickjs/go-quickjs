@@ -724,6 +724,19 @@ func temporalCalendarEra(calendar string, date icu.Date) (string, bool) {
 	return "", false
 }
 
+func temporalYearFromEra(calendar, era string, eraYear int) (int, bool) {
+	switch calendar {
+	case "gregory":
+		switch era {
+		case "ce", "ad":
+			return eraYear, true
+		case "bce", "bc":
+			return 1 - eraYear, true
+		}
+	}
+	return 0, false
+}
+
 func isoDayOfWeek(days int64) int {
 	weekday := int((days + 3) % 7)
 	if weekday < 0 {

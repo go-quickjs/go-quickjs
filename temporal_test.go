@@ -316,6 +316,12 @@ func TestTemporalDurationRound(t *testing.T) {
 		{`new Temporal.Duration(1, 0, 0, 0, 24).round({ largestUnit: "years", relativeTo: { year: 2021, month: 10, day: 28, timeZone: "UTC" } }).toString()`, "P1Y1D"},
 		{`new Temporal.Duration(0, 0, 0, 1).round({ largestUnit: "seconds",
 			relativeTo: "1952-10-15T23:59:59-11:20[Pacific/Niue]" }).seconds`, "86420"},
+		{`new Temporal.Duration(0, 0, 0, 0, 13).round({ largestUnit: "years",
+			smallestUnit: "hours", roundingIncrement: 12, roundingMode: "ceil",
+			relativeTo: "2024-03-10T00:00:00[America/New_York]" }).toString()`, "P1DT12H"},
+		{`new Temporal.Duration(0, 0, 0, 0, -12, -30).round({ largestUnit: "days",
+			smallestUnit: "days", roundingMode: "halfExpand",
+			relativeTo: "2025-11-02T01:00:00-08:00[America/Vancouver]" }).toString()`, "-P1D"},
 	}
 	for _, test := range tests {
 		if got := evalString(t, rt, test.source); got != test.want {
@@ -329,6 +335,24 @@ func TestTemporalDurationRound(t *testing.T) {
 		});
 	} catch (e) { e.name }`); got != "RangeError" {
 		t.Fatalf("rounding past the Temporal instant limit threw %s", got)
+	}
+	if got := evalString(t, rt, `try {
+		new Temporal.Duration().round({
+			largestUnit: "days",
+			smallestUnit: "minutes",
+			relativeTo: new Temporal.ZonedDateTime(8640000000000000000000n, "UTC")
+		});
+	} catch (e) { e.name }`); got != "RangeError" {
+		t.Fatalf("rounding at the final zoned day threw %s", got)
+	}
+	if got := evalString(t, rt, `try {
+		new Temporal.Duration(1).round({
+			smallestUnit: "years",
+			relativeTo: { era: "ad", eraYear: Infinity, month: 5, day: 2,
+				calendar: "gregory" }
+		});
+	} catch (e) { e.name }`); got != "RangeError" {
+		t.Fatalf("rounding with an infinite Gregorian era year threw %s", got)
 	}
 }
 
