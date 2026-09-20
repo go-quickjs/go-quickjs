@@ -51,7 +51,7 @@ func (r *Runtime) initTemporalInstantOperations(proto *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		smallest, increment, mode, err := rt.temporalRoundOptions(arg(args, 0))
+		smallest, increment, mode, err := rt.temporalRoundOptions(arg(args, 0), true)
 		if err != nil {
 			return Undefined, err
 		}
@@ -119,7 +119,7 @@ func (r *Runtime) temporalDifferenceOptions(value Value) (largest, smallest stri
 	return
 }
 
-func (r *Runtime) temporalRoundOptions(value Value) (smallest string, increment int64, mode string, err error) {
+func (r *Runtime) temporalRoundOptions(value Value, dayDividend bool) (smallest string, increment int64, mode string, err error) {
 	var options *Object
 	if value.IsString() {
 		options = newObject(nil, ClassObject)
@@ -151,7 +151,7 @@ func (r *Runtime) temporalRoundOptions(value Value) (smallest string, increment 
 	if !ok {
 		return "", 0, "", r.throwRangeError("smallestUnit is required")
 	}
-	increment, err = r.validateTemporalRoundingIncrement(rawIncrement, incrementSet, smallest, true)
+	increment, err = r.validateTemporalRoundingIncrement(rawIncrement, incrementSet, smallest, dayDividend)
 	if err != nil {
 		return "", 0, "", err
 	}

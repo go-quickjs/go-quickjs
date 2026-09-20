@@ -284,6 +284,8 @@ func TestTemporalPlainTimeFoundation(t *testing.T) {
 		{`new Temporal.PlainTime().add("PT9007199254740991.999999999S").toString()`, "07:36:31.999999999"},
 		{`try { new Temporal.PlainTime().add({seconds: 9007199254740992}) } catch (e) { e.name }`, "RangeError"},
 		{`let read = false; new Temporal.PlainTime().add({hours: 1}, {get overflow() { read = true }}); read`, "false"},
+		{`new Temporal.PlainTime(3, 34, 56, 987, 654, 321).round({smallestUnit: "hour", roundingIncrement: 6}).toString()`, "06:00:00"},
+		{`new Temporal.PlainTime(23, 59, 59, 999, 999, 999).round("microsecond").toString()`, "00:00:00"},
 		{`class T extends Temporal.PlainTime {}; Object.getPrototypeOf(new T(12)) === T.prototype`, "true"},
 	}
 	for _, test := range tests {

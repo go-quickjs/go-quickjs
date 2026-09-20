@@ -187,6 +187,20 @@ func (r *Runtime) initTemporalPlainTime(temporal *Object) {
 			return Obj(newTemporalPlainTime(rt.temporalPlainTimeProto, result)), nil
 		})
 	}
+	r.defMethod(proto, "round", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		time, err := rt.temporalPlainTimeValue(this, "Temporal.PlainTime.prototype.round")
+		if err != nil {
+			return Undefined, err
+		}
+		smallest, increment, mode, err := rt.temporalRoundOptions(arg(args, 0), false)
+		if err != nil {
+			return Undefined, err
+		}
+		total := temporalPlainTimeNanoseconds(time)
+		step := new(big.Int).Mul(big.NewInt(temporalUnitNanoseconds[smallest]), big.NewInt(increment))
+		total = roundTemporalBigIntAsIfPositive(total, step, mode)
+		return Obj(newTemporalPlainTime(rt.temporalPlainTimeProto, temporalPlainTimeFromNanoseconds(total))), nil
+	})
 	for _, method := range []string{"toString", "toJSON"} {
 		name := method
 		r.defMethod(proto, name, 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -207,15 +221,23 @@ func (r *Runtime) initTemporalPlainTime(temporal *Object) {
 }
 
 func addTemporalPlainTime(time temporalPlainTime, duration temporalDuration, sign int64) temporalPlainTime {
-	const nanosecondsPerDay = 86_400_000_000_000
-	total := big.NewInt(int64(time.hour)*3_600_000_000_000 +
-		int64(time.minute)*60_000_000_000 + int64(time.second)*1_000_000_000 +
-		int64(time.millisecond)*1_000_000 + int64(time.microsecond)*1_000 + int64(time.nanosecond))
+	total := temporalPlainTimeNanoseconds(time)
 	delta := duration.timePartNanoseconds()
 	if sign < 0 {
 		delta.Neg(delta)
 	}
 	total.Add(total, delta)
+	return temporalPlainTimeFromNanoseconds(total)
+}
+
+func temporalPlainTimeNanoseconds(time temporalPlainTime) *big.Int {
+	return big.NewInt(int64(time.hour)*3_600_000_000_000 +
+		int64(time.minute)*60_000_000_000 + int64(time.second)*1_000_000_000 +
+		int64(time.millisecond)*1_000_000 + int64(time.microsecond)*1_000 + int64(time.nanosecond))
+}
+
+func temporalPlainTimeFromNanoseconds(total *big.Int) temporalPlainTime {
+	const nanosecondsPerDay = 86_400_000_000_000
 	total.Mod(total, big.NewInt(nanosecondsPerDay))
 	remaining := total.Int64()
 
