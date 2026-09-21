@@ -99,13 +99,9 @@ func (r *Runtime) buildIntl() *Object {
 		case "numberingSystem":
 			values = icu.NumberingSystems()
 		case "timeZone":
-			// The ones this machine can actually load, which is all of them
-			// where the zone files are there and none where they are not.
-			for _, zone := range icu.Zones() {
-				if _, err := loadNamedLocation(zone); err == nil {
-					values = append(values, zone)
-				}
-			}
+			// The bundled archive is versioned with and tested against this list.
+			// Parsing zone files belongs to use or explicit warm-up, not enumeration.
+			values = icu.Zones()
 		case "unit":
 			values = icu.Units()
 		default:

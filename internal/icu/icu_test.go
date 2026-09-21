@@ -396,6 +396,21 @@ func TestBundledTimeZoneMatchesICURelease(t *testing.T) {
 	}
 }
 
+func TestZonesAreSortedAndIndependent(t *testing.T) {
+	first, second := Zones(), Zones()
+	if len(first) == 0 || !sort.StringsAreSorted(first) {
+		t.Fatal("Zones did not return a nonempty sorted list")
+	}
+	if len(first) != len(second) {
+		t.Fatalf("Zones lengths differ: %d and %d", len(first), len(second))
+	}
+	want := second[0]
+	first[0] = "caller mutation"
+	if got := Zones()[0]; got != want {
+		t.Fatalf("caller mutation changed cached zones: got %q, want %q", got, want)
+	}
+}
+
 func TestZoneTableConcurrentFirstLoad(t *testing.T) {
 	table := zoneTable{packed: zoneSeasonPacked}
 	var wg sync.WaitGroup

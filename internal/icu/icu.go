@@ -359,24 +359,34 @@ func Tags() []string {
 	return out
 }
 
-// Zones lists the time zones the data knows of.
+var (
+	zonesOnce sync.Once
+	zones     []string
+)
+
+// Zones lists the time zones the data knows of. The returned slice belongs to
+// the caller and may be modified.
 func Zones() []string {
-	available := make(map[string]bool, len(zoneList)+27)
-	for _, zone := range zoneList {
-		available[zone] = true
-	}
-	for hours := 1; hours <= 12; hours++ {
-		available["Etc/GMT+"+strconv.Itoa(hours)] = true
-	}
-	for hours := 1; hours <= 14; hours++ {
-		available["Etc/GMT-"+strconv.Itoa(hours)] = true
-	}
-	available["UTC"] = true
-	out := make([]string, 0, len(available))
-	for zone := range available {
-		out = append(out, zone)
-	}
-	sort.Strings(out)
+	zonesOnce.Do(func() {
+		available := make(map[string]bool, len(zoneList)+27)
+		for _, zone := range zoneList {
+			available[zone] = true
+		}
+		for hours := 1; hours <= 12; hours++ {
+			available["Etc/GMT+"+strconv.Itoa(hours)] = true
+		}
+		for hours := 1; hours <= 14; hours++ {
+			available["Etc/GMT-"+strconv.Itoa(hours)] = true
+		}
+		available["UTC"] = true
+		zones = make([]string, 0, len(available))
+		for zone := range available {
+			zones = append(zones, zone)
+		}
+		sort.Strings(zones)
+	})
+	out := make([]string, len(zones))
+	copy(out, zones)
 	return out
 }
 

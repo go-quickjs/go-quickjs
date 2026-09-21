@@ -241,6 +241,11 @@ func TestIntlFormats(t *testing.T) {
 		{`new Intl.DateTimeFormat("en", {calendar: "islamic"})
 		    .resolvedOptions().calendar`, "islamic-civil"},
 		{`Intl.supportedValuesOf("calendar").includes("islamic")`, "false"},
+		{`(() => {
+		    const zones = Intl.supportedValuesOf("timeZone");
+		    return zones.includes("UTC") && zones.includes("America/New_York") &&
+		      zones.every((zone, i) => i === 0 || zones[i - 1] < zone);
+		  })()`, "true"},
 		{`new Intl.DateTimeFormat("ja", {hour: "numeric", hour12: true})
 		    .resolvedOptions().hourCycle`, "h11"},
 		{`new Intl.DateTimeFormat("ja", {hour: "numeric", minute: "2-digit",
