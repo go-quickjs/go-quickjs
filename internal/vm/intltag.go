@@ -258,7 +258,7 @@ func (t *langTag) base() string {
 }
 
 // String writes the tag the one way it is written: the variants and the
-// keywords in order, a setting of yes left unsaid, the private use last.
+// keywords in order, a setting of true left unsaid, the private use last.
 func (t *langTag) String() string {
 	parts := []string{t.base()}
 	var singletons []string
@@ -529,6 +529,12 @@ func (t *langTag) applyAliases() {
 		if value == "" {
 			value = "true"
 		}
+		// "yes" aliases "true" only for Unicode's boolean keys. Older
+		// alias data also lists it for rg and sd, whose string value must be
+		// preserved by CanonicalizeUnicodeLocaleId.
+		if value == "yes" && !isBooleanUnicodeKey(k.key) {
+			continue
+		}
 		if to, ok := settings[k.key+"-"+value]; ok {
 			_, replaced, found := strings.Cut(to, "-")
 			if !found {
@@ -546,4 +552,12 @@ func (t *langTag) applyAliases() {
 			}
 		}
 	}
+}
+
+func isBooleanUnicodeKey(key string) bool {
+	switch key {
+	case "kb", "kc", "kh", "kk", "kn":
+		return true
+	}
+	return false
 }

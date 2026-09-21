@@ -1444,6 +1444,12 @@ func (r *Runtime) dateOptionsFrom(args []Value, defaults map[string]string, requ
 	switch {
 	case hour12Set && hour12:
 		o.hourCycle, o.hourSet = o.locale.HourCycle12, true
+		// Node 26 and Chrome currently report h12 for Japanese here, but
+		// ECMA-402's CLDR preference is the zero-based h11 cycle.
+		language, _, _ := strings.Cut(o.locale.Tag, "-")
+		if !o.nodeQuirks && strings.EqualFold(language, "ja") {
+			o.hourCycle = "h11"
+		}
 	case hour12Set:
 		o.hourCycle, o.hourSet = o.locale.HourCycle24, true
 	case choice.setting("hc") != "":

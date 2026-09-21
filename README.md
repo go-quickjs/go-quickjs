@@ -461,9 +461,9 @@ rt.SetTimeZone(time.UTC)   // and the zone its local-time methods use
 Standards-conforming behavior is the default. A host that needs exact Node.js
 compatibility for known Node divergences can opt in with
 `quickjs.WithNodeQuirks()`; the command-line equivalent is `--node-quirks`.
-The mode currently reproduces Node 26's proleptic Islamic era names and its
-Temporal locale formatting when `era`, `hour12`, or `hourCycle` is supplied
-without a displayed date or time field.
+The mode currently reproduces Node 26's proleptic Islamic era names, Japanese
+`h12` preference, and its Temporal locale formatting when `era`, `hour12`, or
+`hourCycle` is supplied without a displayed date or time field.
 
 Left unset, the runtime takes the language the machine is set to -- the user's
 locale on Windows, `LC_ALL`, `LC_MESSAGES` or `LANG` on a Unix machine, and

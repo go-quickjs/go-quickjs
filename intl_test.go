@@ -16,9 +16,10 @@ import (
 // do: testdata/intl_golden.txt is what node's ICU answered for a corpus of
 // formatting calls, and this runs the same calls here.
 //
-// A handful of cases differ, and they are listed below rather than hidden: each
-// is something the data carried here cannot say. The count is checked too, so
-// that a change which fixes one of them or breaks something else is noticed.
+// A handful of cases differ, and they are listed below rather than hidden:
+// either the data carried here cannot express them or conformance deliberately
+// corrects an upstream engine divergence. The count is checked too, so that a
+// change which fixes one of them or breaks something else is noticed.
 func TestIntlMatchesICU(t *testing.T) {
 	file, err := os.Open("testdata/intl_golden.txt")
 	if err != nil {
@@ -29,9 +30,12 @@ func TestIntlMatchesICU(t *testing.T) {
 	rt := quickjs.New()
 	defer rt.Close()
 
-	// What is expected to differ, and why. Everything else has to match
-	// exactly; this is deliberately empty when the corpus agrees in full.
-	known := []string{}
+	// Node 26 and Chrome use h12 here despite ECMA-402's Japanese h11
+	// preference. Standards mode corrects it; WithNodeQuirks preserves it.
+	known := []string{
+		`new Intl.DateTimeFormat("ja", {"timeZone":"UTC","hour":"numeric",` +
+			`"minute":"2-digit","hour12":true})`,
+	}
 
 	var differences []string
 	cases, checked := 0, 0
@@ -238,9 +242,9 @@ func TestIntlFormats(t *testing.T) {
 		    .resolvedOptions().calendar`, "islamic-civil"},
 		{`Intl.supportedValuesOf("calendar").includes("islamic")`, "false"},
 		{`new Intl.DateTimeFormat("ja", {hour: "numeric", hour12: true})
-		    .resolvedOptions().hourCycle`, "h12"},
+		    .resolvedOptions().hourCycle`, "h11"},
 		{`new Intl.DateTimeFormat("ja", {hour: "numeric", minute: "2-digit",
-		    hour12: true, timeZone: "UTC"}).format(Date.UTC(2000, 1, 29))`, "午前12:00"},
+		    hour12: true, timeZone: "UTC"}).format(Date.UTC(2000, 1, 29))`, "午前0:00"},
 		{`(() => {
 		    const era = (calendar, year) => {
 		      const date = new Date(0); date.setUTCFullYear(year, 5, 15);
@@ -571,6 +575,16 @@ func TestIntlNodeQuirks(t *testing.T) {
 	if got := evalString(t, rt, source); got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
+
+	const japaneseClock = `[
+		new Intl.DateTimeFormat("ja", {hour: "numeric", hour12: true})
+			.resolvedOptions().hourCycle,
+		new Intl.DateTimeFormat("ja", {hour: "numeric", minute: "2-digit",
+			hour12: true, timeZone: "UTC"}).format(Date.UTC(2000, 1, 29))
+	].join("|")`
+	if got, want := evalString(t, rt, japaneseClock), "h12|午前12:00"; got != want {
+		t.Fatalf("Japanese clock: got %q, want %q", got, want)
+	}
 }
 
 // Intl is built the first time it is looked at, which nothing but the property
@@ -592,6 +606,10 @@ func TestIntlIsBuiltWhenAskedFor(t *testing.T) {
 func TestIntlLocale(t *testing.T) {
 	cases := []struct{ src, want string }{
 		{`new Intl.Locale("EN-us").toString()`, "en-US"},
+		{`["kb", "kc", "kh", "kk", "kn", "rg", "sd", "aa"].map(key =>
+		    new Intl.Locale("en-u-" + key + "-yes").toString()).join("|")`,
+			"en-u-kb|en-u-kc|en-u-kh|en-u-kk|en-u-kn|" +
+				"en-u-rg-yes|en-u-sd-yes|en-u-aa-yes"},
 		{`new Intl.Locale("de-latn-de-fonipa-1996-u-ca-gregory-co-phonebk-hc-h23-kf-true-kn-false-nu-latn").baseName`,
 			"de-Latn-DE-1996-fonipa"},
 		{`let l = new Intl.Locale("en", {script: "cyrl", region: "gb", variants: "fonipa-1996", calendar: "BUDDHIST", numeric: true});

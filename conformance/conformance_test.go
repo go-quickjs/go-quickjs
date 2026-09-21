@@ -96,9 +96,7 @@ var unsupportedFeatures = map[string]string{
 
 // A newly named difference permits a failure while documenting why; an
 // unlisted failure and a stale entry both break the build.
-var knownDifferences = map[string]string{
-	"intl402/DateTimeFormat/prototype/resolvedOptions/hourCycle-default.js": "the fixture requires Japanese hour12 to resolve to h11, but current Chrome and Node resolve it to h12",
-}
+var knownDifferences = map[string]string{}
 
 func TestConformance(t *testing.T) {
 	suite, err := conformance.Open("")

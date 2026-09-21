@@ -137,9 +137,10 @@ func WithLocale(tag string) Option {
 
 // WithNodeQuirks enables observable Node.js behavior where it intentionally or
 // temporarily differs from the JavaScript and internationalization standards.
-// It currently reproduces Node 26's proleptic Islamic era names and Temporal
-// locale-formatting behavior for standalone era and hour-cycle options. It is
-// useful for hosts that prioritize Node compatibility over conformance.
+// It currently reproduces Node 26's proleptic Islamic era names, Japanese h12
+// preference, and Temporal locale-formatting behavior for standalone era and
+// hour-cycle options. It is useful for hosts that prioritize Node compatibility
+// over conformance.
 func WithNodeQuirks() Option {
 	return func(c *config) { c.nodeQuirks = true }
 }
