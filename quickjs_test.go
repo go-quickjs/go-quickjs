@@ -4508,3 +4508,39 @@ func TestGeneratorResumesIntoItsHandlers(t *testing.T) {
 		var r = it.return("early");
 		[r.value, r.done, globalThis.ran].join(",")`, "early,true,true")
 }
+
+// A position past the end of the string, and an infinite one above all, has to
+// be narrowed while it is still a number. Converting it to an int first wraps
+// rather than saturates, which used to send a search past the end back to the
+// start: "aaaa".indexOf("aa", Infinity) answered 0 rather than -1.
+func TestStringIndexOfClampsPosition(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`"aaaa".indexOf("aa", Infinity)`, "-1"},
+		{`"aaaa".indexOf("aa", "Infinity")`, "-1"},
+		{`"aaaa".indexOf("aa", 1e21)`, "-1"},
+		{`"aaaa".indexOf("aa", 4)`, "-1"},
+		{`"aaaa".indexOf("aa", 5)`, "-1"},
+		// An empty needle is found at the position itself, clamped to the end.
+		{`"aaaa".indexOf("", Infinity)`, "4"},
+		{`"aaaa".indexOf("", 2)`, "2"},
+		// Below the end nothing changes, including the values that round.
+		{`"aaaa".indexOf("aa", -Infinity)`, "0"},
+		{`"aaaa".indexOf("aa", NaN)`, "0"},
+		{`"aaaa".indexOf("aa", -0.9)`, "0"},
+		{`"aaaa".indexOf("aa", 1.9)`, "1"},
+		{`"aaaa".indexOf("aa", "2.9")`, "2"},
+		{`"aaaa".indexOf("aa", undefined)`, "0"},
+		{`"aaaa".indexOf("aa")`, "0"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}

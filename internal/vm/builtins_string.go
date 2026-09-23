@@ -214,13 +214,12 @@ func (r *Runtime) initStringBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		from := 0
-		if len(args) > 1 {
-			n, err := rt.toInteger(args[1])
-			if err != nil {
-				return Undefined, err
-			}
-			from = int(n)
+		// The position is narrowed while it is still a number: an infinity
+		// has no int to convert to, and converting one wraps rather than
+		// saturates, which put a search past the end back at the start.
+		from, err := rt.clampedPosition(arg(args, 1), s.Len())
+		if err != nil {
+			return Undefined, err
 		}
 		return Int(s.IndexOf(needle, from)), nil
 	})
