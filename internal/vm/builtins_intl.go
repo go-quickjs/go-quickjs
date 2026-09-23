@@ -1593,12 +1593,18 @@ func (r *Runtime) localZoneName() string {
 }
 
 // machineZoneName is the name this machine's own zone goes by in the database:
-// what TZ says, or what the file the system points at is called.
+// what TZ says, what the system itself reports, or what the file the system
+// points at is called.
 func machineZoneName() (string, bool) {
 	if tz := os.Getenv("TZ"); tz != "" {
 		if zone, ok := icu.CanonicalZone(strings.TrimPrefix(tz, ":")); ok {
 			return zone, true
 		}
+	}
+	// Windows keeps the zone under its own name rather than the database's,
+	// and has no /etc/localtime; the icu package does that translation.
+	if zone := icu.SystemZone(); zone != "" {
+		return zone, true
 	}
 	path, err := os.Readlink("/etc/localtime")
 	if err != nil {

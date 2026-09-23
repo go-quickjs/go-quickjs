@@ -52,6 +52,7 @@ Do not manually edit generated files or their binary companions:
 - `intldata/tables.go` and `intldata/tables.bin`
 - `internal/icu/cjkcollation.bin`
 - `internal/icu/zoneinfo.zip`
+- `internal/icu/windowszones.go`
 - `internal/regexp/unicodetables.go`
 
 Run generators from the repository root. Use a temporary output file for
@@ -68,6 +69,19 @@ gofmt -w internal/icu/tables.go
 ```
 
 The core generator also replaces `internal/icu/tables.bin`.
+
+Windows time-zone names:
+
+```sh
+generated=$(mktemp /tmp/quickjs-winzones.XXXXXX.go)
+go run ./internal/icu/internal/winzonegen > "$generated" && \
+  mv "$generated" internal/icu/windowszones.go
+gofmt -w internal/icu/windowszones.go
+```
+
+This one needs no node: it reads the vendored CLDR
+`internal/icu/internal/winzonegen/windowsZones.json`, which is replaced from
+the cldr-json release matching the rest of the data.
 
 Multilingual DisplayNames data:
 
