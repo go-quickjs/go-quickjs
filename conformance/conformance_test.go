@@ -45,7 +45,12 @@ var (
 		"log any test allocating more than this many bytes; implies one worker")
 	forceFeatures = flag.String("conformance.force-feature", "",
 		"run unsupported feature tags listed as comma-separated names")
-	testTimeout = flag.Duration("conformance.timeout", 5*time.Second,
+	// The timeout is there to catch a test that hangs, not to hold one to a
+	// speed. A few are genuine brute forces -- decodeURI walks every four-byte
+	// UTF-8 sequence, better than a million of them -- and take seconds on
+	// their own, so a limit close to that turns a busy machine into failures
+	// that move from run to run.
+	testTimeout = flag.Duration("conformance.timeout", 30*time.Second,
 		"how long any one test may run before being counted as a timeout")
 )
 
