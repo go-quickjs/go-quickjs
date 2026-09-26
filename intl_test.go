@@ -1004,3 +1004,31 @@ func TestIntlConcurrentRuntimes(t *testing.T) {
 		}
 	}
 }
+
+// resolvedOptions is go-intl's: a compact number that asks for no digits
+// reports roundingPriority "morePrecision", ECMA-402's
+// [[ComputedRoundingPriority]], in both modes; and where both kinds of
+// digits were settled on, PluralRules reports both in standards mode and
+// the significant digits alone under Node's quirks (go-intl's
+// PluralRulesDigits), as Node does.
+func TestIntlResolvedDigits(t *testing.T) {
+	const source = `[
+		new Intl.NumberFormat("en", {notation: "compact"}).resolvedOptions().roundingPriority,
+		(r => [r.minimumFractionDigits, r.maximumFractionDigits, r.minimumSignificantDigits,
+			r.maximumSignificantDigits].join("/"))(
+			new Intl.PluralRules("en", {roundingPriority: "morePrecision"}).resolvedOptions()),
+	].join(" ")`
+	for _, c := range []struct {
+		opts []quickjs.Option
+		want string
+	}{
+		{nil, "morePrecision 0/3/1/21"},
+		{[]quickjs.Option{quickjs.WithNodeQuirks()}, "morePrecision //1/21"},
+	} {
+		rt := quickjs.New(c.opts...)
+		if got := evalString(t, rt, source); got != c.want {
+			t.Errorf("%d options: %q, want %q", len(c.opts), got, c.want)
+		}
+		rt.Close()
+	}
+}

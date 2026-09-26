@@ -110,9 +110,10 @@ func (r *Runtime) initSegmenter(intlObj *Object) {
 		if err != nil {
 			return Undefined, err
 		}
+		resolved := o.segmenter.ResolvedOptions()
 		out := newObject(rt.proto.object, ClassObject)
-		rt.putString(out, "locale", o.locale)
-		rt.putString(out, "granularity", o.granularity)
+		rt.putString(out, "locale", resolved.Locale)
+		rt.putString(out, "granularity", resolved.Granularity.String())
 		return Obj(out), nil
 	})
 }

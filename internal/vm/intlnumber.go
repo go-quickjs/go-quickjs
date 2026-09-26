@@ -29,14 +29,11 @@ type numberOptions struct {
 	minSig, maxSig int
 	// rounding is which of the two counts is in force: fraction, significant,
 	// or one of the two that asks for both and keeps whichever says more.
-	rounding string
-	// reportSig and reportFrac say which of the two counts resolvedOptions
-	// tells of, which is not always the one the rounding went by.
-	reportSig, reportFrac bool
-	roundingMode          string
-	roundingPriority      string
-	roundingIncrement     int
-	trailingZero          string
+	rounding          string
+	roundingMode      string
+	roundingPriority  string
+	roundingIncrement int
+	trailingZero      string
 
 	// formatFn is the bound function the format getter hands out, kept so that
 	// every ask answers with the same one.

@@ -527,43 +527,33 @@ func (r *Runtime) initNumberFormat(intlObj *Object) {
 		if err != nil {
 			return Undefined, err
 		}
+		// What go-intl settled on, in the order ECMA-402's table gives.
 		resolved := o.nf.ResolvedOptions()
 		out := newObject(rt.proto.object, ClassObject)
 		rt.putString(out, "locale", resolved.Locale)
 		rt.putString(out, "numberingSystem", resolved.NumberingSystem)
-		rt.putString(out, "style", o.style)
-		if o.style == "currency" {
-			rt.putString(out, "currency", o.currency)
-			rt.putString(out, "currencyDisplay", o.currencyDisplay)
-			rt.putString(out, "currencySign", o.currencySign)
+		rt.putString(out, "style", resolved.Style.String())
+		switch resolved.Style {
+		case intl.StyleCurrency:
+			rt.putString(out, "currency", resolved.Currency)
+			rt.putString(out, "currencyDisplay", resolved.CurrencyDisplay.String())
+			rt.putString(out, "currencySign", resolved.CurrencySign.String())
+		case intl.StyleUnit:
+			rt.putString(out, "unit", resolved.Unit)
+			rt.putString(out, "unitDisplay", resolved.UnitDisplay.String())
 		}
-		if o.style == "unit" {
-			rt.putString(out, "unit", o.unit)
-			rt.putString(out, "unitDisplay", o.unitDisplay)
-		}
-		rt.putInt(out, "minimumIntegerDigits", o.minInt)
-		if o.reportFrac {
-			rt.putInt(out, "minimumFractionDigits", o.minFrac)
-			rt.putInt(out, "maximumFractionDigits", o.maxFrac)
-		}
-		if o.reportSig {
-			rt.putInt(out, "minimumSignificantDigits", o.minSig)
-			rt.putInt(out, "maximumSignificantDigits", o.maxSig)
-		}
-		if o.useGrouping == "" {
+		rt.putDigits(out, resolved.ResolvedDigits)
+		if resolved.UseGrouping == intl.GroupingNever {
 			rt.putBool(out, "useGrouping", false)
 		} else {
-			rt.putString(out, "useGrouping", o.useGrouping)
+			rt.putString(out, "useGrouping", resolved.UseGrouping.String())
 		}
-		rt.putString(out, "notation", o.notation)
-		if o.notation == "compact" {
-			rt.putString(out, "compactDisplay", o.compactDisplay)
+		rt.putString(out, "notation", resolved.Notation.String())
+		if resolved.Notation == intl.NotationCompact {
+			rt.putString(out, "compactDisplay", resolved.CompactDisplay.String())
 		}
-		rt.putString(out, "signDisplay", o.signDisplay)
-		rt.putInt(out, "roundingIncrement", o.roundingIncrement)
-		rt.putString(out, "roundingMode", o.roundingMode)
-		rt.putString(out, "roundingPriority", o.roundingPriority)
-		rt.putString(out, "trailingZeroDisplay", o.trailingZero)
+		rt.putString(out, "signDisplay", resolved.SignDisplay.String())
+		rt.putRounding(out, resolved.ResolvedDigits)
 		return Obj(out), nil
 	})
 }
@@ -805,8 +795,6 @@ func (r *Runtime) readDigitOptions(o *numberOptions, options *Object, minFracDef
 			return r.intlPropertyOutOfRange("maximumFractionDigits")
 		}
 	}
-	o.reportSig = needSig || !needFrac
-	o.reportFrac = needFrac || !needSig
 	return nil
 }
 
@@ -1090,6 +1078,29 @@ func (r *Runtime) partObject(kind, value string) *Object {
 
 func (r *Runtime) putString(o *Object, name, value string) {
 	o.setOwnRaw(r.atoms.intern(name), Str(NewString(value)), propDefault)
+}
+
+// putDigits writes the digit counts a NumberFormat or PluralRules settled
+// on, those resolvedOptions reports, in its order.
+func (r *Runtime) putDigits(o *Object, d intl.ResolvedDigits) {
+	r.putInt(o, "minimumIntegerDigits", d.MinimumIntegerDigits)
+	if d.MinimumFractionDigits != nil {
+		r.putInt(o, "minimumFractionDigits", *d.MinimumFractionDigits)
+		r.putInt(o, "maximumFractionDigits", *d.MaximumFractionDigits)
+	}
+	if d.MinimumSignificantDigits != nil {
+		r.putInt(o, "minimumSignificantDigits", *d.MinimumSignificantDigits)
+		r.putInt(o, "maximumSignificantDigits", *d.MaximumSignificantDigits)
+	}
+}
+
+// putRounding writes the rounding options a NumberFormat or PluralRules
+// settled on, in resolvedOptions' order.
+func (r *Runtime) putRounding(o *Object, d intl.ResolvedDigits) {
+	r.putInt(o, "roundingIncrement", d.RoundingIncrement)
+	r.putString(o, "roundingMode", d.RoundingMode.String())
+	r.putString(o, "roundingPriority", d.RoundingPriority.String())
+	r.putString(o, "trailingZeroDisplay", d.TrailingZeroDisplay.String())
 }
 
 func (r *Runtime) putInt(o *Object, name string, value int) {

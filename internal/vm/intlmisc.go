@@ -229,7 +229,7 @@ func (r *Runtime) initPluralRules(intlObj *Object) {
 			MaximumFractionDigits: d.maxFrac, MinimumSignificantDigits: d.minSig,
 			MaximumSignificantDigits: d.maxSig, RoundingPriority: d.priority, RoundingMode: d.mode,
 			RoundingIncrement: d.increment, TrailingZeroDisplay: d.trailing,
-			Notation: d.notation, CompactDisplay: d.compact,
+			Notation: d.notation, CompactDisplay: d.compact, Compat: rt.intlCompat(),
 		}
 		if o.ordinal {
 			opts.Type = intl.Ordinal
@@ -293,36 +293,22 @@ func (r *Runtime) initPluralRules(intlObj *Object) {
 		if err != nil {
 			return Undefined, err
 		}
+		// What go-intl settled on, in the order ECMA-402's table gives.
 		resolved := o.rules.ResolvedOptions()
 		out := newObject(rt.proto.object, ClassObject)
 		rt.putString(out, "locale", resolved.Locale)
-		kind := "cardinal"
-		if o.ordinal {
-			kind = "ordinal"
+		rt.putString(out, "type", resolved.Type.String())
+		rt.putString(out, "notation", resolved.Notation.String())
+		if resolved.Notation == intl.NotationCompact {
+			rt.putString(out, "compactDisplay", resolved.CompactDisplay.String())
 		}
-		rt.putString(out, "type", kind)
-		rt.putString(out, "notation", o.numbers.notation)
-		if o.numbers.notation == "compact" {
-			rt.putString(out, "compactDisplay", o.numbers.compactDisplay)
-		}
-		rt.putInt(out, "minimumIntegerDigits", o.numbers.minInt)
-		if o.numbers.reportFrac {
-			rt.putInt(out, "minimumFractionDigits", o.numbers.minFrac)
-			rt.putInt(out, "maximumFractionDigits", o.numbers.maxFrac)
-		}
-		if o.numbers.reportSig {
-			rt.putInt(out, "minimumSignificantDigits", o.numbers.minSig)
-			rt.putInt(out, "maximumSignificantDigits", o.numbers.maxSig)
-		}
+		rt.putDigits(out, resolved.ResolvedDigits)
 		values := make([]Value, len(resolved.PluralCategories))
 		for i, c := range resolved.PluralCategories {
 			values[i] = Str(NewString(string(c)))
 		}
 		out.setOwnRaw(rt.atoms.intern("pluralCategories"), Obj(rt.newArrayFrom(values)), propDefault)
-		rt.putInt(out, "roundingIncrement", o.numbers.roundingIncrement)
-		rt.putString(out, "roundingMode", o.numbers.roundingMode)
-		rt.putString(out, "roundingPriority", o.numbers.roundingPriority)
-		rt.putString(out, "trailingZeroDisplay", o.numbers.trailingZero)
+		rt.putRounding(out, resolved.ResolvedDigits)
 		return Obj(out), nil
 	})
 }
