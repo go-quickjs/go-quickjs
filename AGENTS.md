@@ -115,6 +115,16 @@ For Intl changes, also run the exact golden tests:
 go test . -run '^(TestIntlFormats|TestIntlMatchesICU)$' -count=1 -v
 ```
 
+For changes to dates, zones or Temporal, or a new go-intl, compare with Node
+across every locale DateTimeFormat has and every zone Node lists. It needs a
+Node with Temporal, runs shards in parallel, one per CPU unless
+`QUICKJS_NODE_TEMPORAL_PARALLEL` says otherwise, and takes about ten minutes:
+
+```sh
+QUICKJS_COMPARE_NODE_TEMPORAL=1 go test . \
+  -run '^TestTemporalMatchesNodeAcrossLocalesAndTimeZones$' -count=1 -timeout=60m -v
+```
+
 If `/tmp/test262` is available, run the relevant conformance area. For Intl:
 
 ```sh
