@@ -31,6 +31,9 @@ type arrayBufferData struct {
 	// is at the moment, and a view reads it afresh each time.
 	resizable     bool
 	maxByteLength int64
+	// shared marks a SharedArrayBuffer. It is never detached, and a
+	// resizable one -- growable, in its terms -- only grows.
+	shared bool
 }
 
 // maxBufferLength bounds how large a buffer may actually be. A resizable
@@ -693,6 +696,9 @@ func (r *Runtime) initArrayBufferBuiltins() {
 		if out.immutable {
 			return Undefined, rt.throwTypeError("the species returned an immutable ArrayBuffer")
 		}
+		if out.shared {
+			return Undefined, rt.throwTypeError("the species returned a SharedArrayBuffer")
+		}
 		if res.Object() == this.Object() {
 			return Undefined, rt.throwTypeError("the species returned the buffer being sliced")
 		}
@@ -727,7 +733,11 @@ func (r *Runtime) DetachArrayBuffer(v Value) error {
 		return r.throwTypeError("the ArrayBuffer is uninitialized")
 	}
 	// What an immutable buffer holds is promised never to change, and
-	// taking it away would be a change.
+	// taking it away would be a change; and another agent may still be using
+	// a shared one.
+	if b.shared {
+		return r.throwTypeError("a SharedArrayBuffer cannot be detached")
+	}
 	if b.immutable {
 		return r.throwTypeError("an immutable ArrayBuffer cannot be detached")
 	}
@@ -743,6 +753,10 @@ func (r *Runtime) bufferOf(this Value, name string) (*arrayBufferData, error) {
 	b, ok := this.Object().data.(*arrayBufferData)
 	if !ok {
 		return nil, r.throwTypeError("%s called on an uninitialized ArrayBuffer", name)
+	}
+	// A SharedArrayBuffer has methods of its own, and these are not them.
+	if b.shared {
+		return nil, r.throwTypeError("%s called on a SharedArrayBuffer", name)
 	}
 	return b, nil
 }

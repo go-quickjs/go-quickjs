@@ -354,6 +354,8 @@ func (r *Runtime) initGlobals() {
 	r.initErrorBuiltins()
 	r.initMathBuiltins()
 	r.initArrayBufferBuiltins()
+	r.initSharedArrayBufferBuiltins()
+	r.initAtomicsBuiltins()
 	r.initTypedArrayBuiltins()
 	r.initDataViewBuiltins()
 	r.initWeakRefBuiltins()

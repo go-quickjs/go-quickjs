@@ -223,6 +223,9 @@ type Runtime struct {
 	// intrinsics because the typed array constructors are generated in a loop
 	// and need to reach them by name.
 	arrayBufferProto *Object
+	// sharedArrayBufferCtor is the intrinsic SharedArrayBuffer, which its
+	// slice falls back to when a species gives none.
+	sharedArrayBufferCtor *Object
 	// arrayBufferCtor is the intrinsic ArrayBuffer, which slice falls back to
 	// when the object names no species of its own.
 	arrayBufferCtor *Object

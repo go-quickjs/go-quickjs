@@ -69,13 +69,15 @@ func (r *Runtime) typedArrayIndex(o *Object, key Atom) numericIndex {
 // canPreventExtensions reports whether an ordinary object, not a proxy, can be
 // made non-extensible. Only a typed array whose length can change cannot -- one
 // tracking its buffer's length, or any view over a resizable buffer -- since it
-// could gain elements later, and so refuses to promise it will not.
+// could gain elements later, and so refuses to promise it will not. A growable
+// shared buffer only grows, so a view of a fixed length over one keeps it.
 func canPreventExtensions(o *Object) bool {
 	t, ok := o.data.(*typedArrayData)
 	if !ok || o.class != ClassTypedArray {
 		return true
 	}
-	return !t.tracking && !t.storage().resizable
+	b := t.storage()
+	return !t.tracking && !(b.resizable && !b.shared)
 }
 
 // typedArrayImmutable reports whether a typed array views an immutable buffer.
