@@ -18,30 +18,31 @@ import (
 // in those languages.
 
 // localeUpper and localeLower change case the way a language does. A language
-// with nothing of its own to say is answered by the ordinary mapping.
-func localeUpper(s, language string) string {
+// with nothing of its own to say is answered by the ordinary mapping. The
+// normalizer gives the combining classes Turkish and Lithuanian read.
+func localeUpper(s, language string, n *intl.Normalizer) string {
 	switch language {
 	case "tr", "az":
-		return turkishCase(s, true)
+		return turkishCase(s, true, n)
 	case "lt":
-		return lithuanianUpper(s)
+		return lithuanianUpper(s, n)
 	}
 	return caseConvert(s, true)
 }
 
-func localeLower(s, language string) string {
+func localeLower(s, language string, n *intl.Normalizer) string {
 	switch language {
 	case "tr", "az":
-		return turkishCase(s, false)
+		return turkishCase(s, false, n)
 	case "lt":
-		return lithuanianLower(s)
+		return lithuanianLower(s, n)
 	}
 	return caseConvert(s, false)
 }
 
 // turkishCase keeps the dotted and the dotless i apart, which is what Turkish
 // and Azerbaijani do and no other language does.
-func turkishCase(s string, upper bool) string {
+func turkishCase(s string, upper bool, n *intl.Normalizer) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	for i := 0; i < len(s); {
@@ -57,7 +58,7 @@ func turkishCase(s string, upper bool) string {
 		case !upper && r == 'I':
 			// A dot written after the I belongs to it, and the lowercase i
 			// brings its own. Whatever else stood between the two is kept.
-			if at, end := dotAfter(rest); end > 0 {
+			if at, end := dotAfter(rest, n); end > 0 {
 				b.WriteRune('i')
 				b.WriteString(rest[:at])
 				i += size + end
@@ -75,13 +76,13 @@ func turkishCase(s string, upper bool) string {
 // dotAfter finds a combining dot above that belongs to the letter before it:
 // where it begins, and where it ends. Marks that sit elsewhere may stand in
 // between, and are not part of it.
-func dotAfter(s string) (at, end int) {
+func dotAfter(s string, n *intl.Normalizer) (at, end int) {
 	for at < len(s) {
 		r, size := wtf8.DecodeRune(s[at:])
 		if r == 0x0307 {
 			return at, at + size
 		}
-		if class := combiningClass(r); class == 0 || class == 230 {
+		if class := n.CombiningClass(r); class == 0 || class == 230 {
 			// A letter, or a mark that sits where the dot would have.
 			return 0, 0
 		}
@@ -92,7 +93,7 @@ func dotAfter(s string) (at, end int) {
 
 // lithuanianLower keeps the dot on an i that has an accent above it, which
 // Lithuanian writes and other languages leave out.
-func lithuanianLower(s string) string {
+func lithuanianLower(s string, n *intl.Normalizer) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	for i := 0; i < len(s); {
@@ -102,7 +103,7 @@ func lithuanianLower(s string) string {
 		switch r {
 		case 'I', 'J', 0x012E: // I, J, I with ogonek
 			b.WriteString(caseConvert(s[i:i+size], false))
-			if moreAbove(s[i+size:]) {
+			if moreAbove(s[i+size:], n) {
 				b.WriteRune(0x0307)
 			}
 		case 0x00CC: // I with grave
@@ -121,7 +122,7 @@ func lithuanianLower(s string) string {
 
 // lithuanianUpper drops the dot that a lowercase i carried, since the capital
 // has one of its own.
-func lithuanianUpper(s string) string {
+func lithuanianUpper(s string, n *intl.Normalizer) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	dotted := false
@@ -132,7 +133,7 @@ func lithuanianUpper(s string) string {
 			continue
 		}
 		b.WriteString(caseConvert(s[i:i+size], true))
-		if class := combiningClass(r); class == 0 || class == 230 {
+		if class := n.CombiningClass(r); class == 0 || class == 230 {
 			dotted = softDotted[r]
 		}
 		i += size
@@ -142,10 +143,10 @@ func lithuanianUpper(s string) string {
 
 // moreAbove reports whether an accent that sits above the letter follows,
 // possibly with marks that sit elsewhere in between.
-func moreAbove(s string) bool {
+func moreAbove(s string, n *intl.Normalizer) bool {
 	for at := 0; at < len(s); {
 		r, size := wtf8.DecodeRune(s[at:])
-		switch combiningClass(r) {
+		switch n.CombiningClass(r) {
 		case 230:
 			return true
 		case 0:

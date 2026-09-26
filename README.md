@@ -116,14 +116,11 @@ everything that takes a stream takes those), brotli, and BYOB readers. A
 decompression stream gathers its input rather than being pulled through, since
 nothing here can pull it without taking the runtime onto another goroutine.
 
-Known semantic gaps, each covered by a test that documents it:
+Known semantic gap, covered by a test that documents it:
 
 - A `WeakMap` value is held strongly, so a value that refers to its own key
   keeps that key alive. Breaking that cycle needs ephemeron marking, which Go's
   collector does not offer.
-- `String.prototype.normalize` works from Unicode 13 decomposition tables, which
-  is what the system the tables were generated from had. A character introduced
-  after that decomposes to itself.
 
 ## Conformance
 

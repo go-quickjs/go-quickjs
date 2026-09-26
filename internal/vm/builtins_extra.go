@@ -7,6 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	intl "github.com/go-quickjs/go-intl"
 	"github.com/go-quickjs/go-quickjs/internal/jsnum"
 	"github.com/go-quickjs/go-quickjs/internal/wtf8"
 )
@@ -741,20 +742,22 @@ func (r *Runtime) initStringExtras() {
 		if err != nil {
 			return Undefined, err
 		}
-		form := "NFC"
+		form := intl.NFC
 		if f := arg(args, 0); !f.IsUndefined() {
 			fs, err := rt.toString(f)
 			if err != nil {
 				return Undefined, err
 			}
-			form = fs.Go()
-			switch form {
-			case "NFC", "NFD", "NFKC", "NFKD":
-			default:
+			var ok bool
+			if form, ok = normalizationForms[fs.Go()]; !ok {
 				return Undefined, rt.throwRangeError("invalid normalization form")
 			}
 		}
-		return Str(NewString(normalizeString(s.Go(), form))), nil
+		n, err := rt.normalizer()
+		if err != nil {
+			return Undefined, err
+		}
+		return Str(NewString(normalizeString(n, s.Go(), form))), nil
 	})
 
 	r.defMethod(p, "localeCompare", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -790,7 +793,11 @@ func (r *Runtime) initStringExtras() {
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(localeUpper(s.Go(), language))), nil
+		n, err := rt.normalizer()
+		if err != nil {
+			return Undefined, err
+		}
+		return Str(NewString(localeUpper(s.Go(), language, n))), nil
 	})
 	r.defMethod(p, "toLocaleLowerCase", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		s, err := thisStr(rt, this)
@@ -801,7 +808,11 @@ func (r *Runtime) initStringExtras() {
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(localeLower(s.Go(), language))), nil
+		n, err := rt.normalizer()
+		if err != nil {
+			return Undefined, err
+		}
+		return Str(NewString(localeLower(s.Go(), language, n))), nil
 	})
 }
 

@@ -208,9 +208,8 @@ func TestFullCaseMappings(t *testing.T) {
 	}
 }
 
-// String.prototype.normalize accepts and validates its argument but returns its
-// input unchanged: the normalization forms need Unicode's decomposition tables,
-// which the standard library does not expose. This is the documented gap.
+// String.prototype.normalize reads its argument as a form name and refuses one
+// it does not know.
 func TestNormalizeIsAccepted(t *testing.T) {
 	cases := []struct{ src, want string }{
 		{`typeof "".normalize`, "function"},
@@ -350,6 +349,15 @@ func TestNormalizeForms(t *testing.T) {
 		{`"".normalize()`, ""},
 		{`"\uD800".normalize("NFC") === "\uD800" ? "yes" : "no"`, "yes"},
 		{`String("a\uD800b".normalize("NFD").length)`, "3"},
+		// A lone surrogate stands between what would otherwise combine, and
+		// the text either side of it is normalized as usual.
+		{`"e\uD800\u0301".normalize("NFC") === "e\uD800\u0301" ? "yes" : "no"`, "yes"},
+		{`"e\u0301\uDC00e\u0301".normalize("NFC") === "\u00E9\uDC00\u00E9" ? "yes" : "no"`, "yes"},
+
+		// Unicode 17's tables, which Node 26 has: Tulu-Tigalari, added in
+		// Unicode 16, writes its vowel sign AU as two signs AI.
+		{`"\u{113C5}".normalize("NFD") === "\u{113C2}\u{113C2}" ? "yes" : "no"`, "yes"},
+		{`"\u{113C2}\u{113C2}".normalize("NFC") === "\u{113C5}" ? "yes" : "no"`, "yes"},
 
 		// The form has to be one of the four.
 		{`try { "a".normalize("NFX") } catch (e) { e.constructor.name }`, "RangeError"},

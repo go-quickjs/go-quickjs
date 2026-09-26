@@ -38,7 +38,10 @@ type Runtime struct {
 	temporalNamespace *Object
 	// temporalLoaded is Temporal's calendars and zones, read when a
 	// Temporal value first needs them.
-	temporalLoaded        *temporal.Data
+	temporalLoaded *temporal.Data
+	// normalizerLoaded is Unicode normalization, read when a string is
+	// first normalized or a language's case rules first need it.
+	normalizerLoaded      *intl.Normalizer
 	temporalDurationProto *Object
 	// PlainDateTime conversions create PlainDate results through the retained
 	// intrinsic prototype rather than an observable constructor lookup.
