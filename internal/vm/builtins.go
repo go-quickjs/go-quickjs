@@ -2251,7 +2251,7 @@ func (r *Runtime) initErrorBuiltins() {
 			// An error is given its message and its stack, and perhaps a
 			// cause, before anything else sees it: the table is made with room
 			// for them rather than grown twice on the way.
-			o := newLiteralObject(rt.proto.nativeErrors[kind], ClassError, 3)
+			o := newErrorObject(rt.proto.nativeErrors[kind])
 			// AggregateError takes the list of causes first, so its message is
 			// the second argument rather than the first.
 			msgArg, optsArg := arg(args, 0), arg(args, 1)

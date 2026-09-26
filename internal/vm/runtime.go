@@ -501,6 +501,11 @@ func (r *Runtime) throw(v Value) error {
 	// the same walk twice -- and most throws are caught by the script, which
 	// never looks at either.
 	if v.IsObject() && v.Object().class == ClassError {
+		if t, ok := v.Object().data.(*Thrown); ok {
+			t.Value = v
+			t.Stack = t.Stack[:0]
+			return t
+		}
 		return &Thrown{Value: v}
 	}
 	return &Thrown{Value: v, Stack: r.captureStack()}
@@ -535,7 +540,7 @@ func (r *Runtime) throwSyntaxError(format string, args ...any) error {
 func (r *Runtime) newError(kind errorKind, msg string) *Object {
 	// The message and the stack, and room for a cause: an error is built all
 	// at once, so the table is made with it rather than grown twice on the way.
-	o := newLiteralObject(r.proto.nativeErrors[kind], ClassError, 3)
+	o := newErrorObject(r.proto.nativeErrors[kind])
 	o.setOwnRaw(atomMessage, Str(NewString(msg)), propWritable|propConfigurable)
 	// The stack is materialized eagerly, because the frames are unwound by the
 	// time anything reads it.

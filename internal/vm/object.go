@@ -206,6 +206,25 @@ func newLiteralObject(proto *Object, class Class, n int) *Object {
 	return &lo.Object
 }
 
+// errorObject carries the Go wrapper used to propagate this error through the
+// interpreter. An Error and its wrapper have the same lifetime, so keeping
+// them together avoids a second allocation each time the Error is thrown.
+type errorObject struct {
+	literalObject
+	thrown Thrown
+}
+
+func newErrorObject(proto *Object) *Object {
+	eo := &errorObject{
+		literalObject: literalObject{
+			Object: Object{proto: proto, class: ClassError, flags: objExtensible},
+		},
+	}
+	eo.props = eo.inline[:0]
+	eo.data = &eo.thrown
+	return &eo.Object
+}
+
 // arrayObject is an array with room for its first few elements in the same
 // allocation, which is what an array literal and a small result array need.
 //
