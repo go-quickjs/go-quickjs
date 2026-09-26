@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"errors"
 	"math"
 	"math/big"
 
@@ -192,8 +193,15 @@ func (r *Runtime) describe(v Value) string {
 	return v.Kind().String()
 }
 
-// run executes a compiled function.
+// run executes a compiled function, and the chain of tail calls it ends in.
+//
+// A frame that ends in a tail call is given up before the callee's frame is
+// made, in this same call of run, so that a chain of them uses one frame and
+// one level of the Go stack however long it is. A callee this cannot be done
+// for -- a native function, a proxy, a generator -- is called the ordinary
+// way, which ends the chain.
 func (r *Runtime) run(cl *closure, this Value, args []Value, newTarget Value, callee *Object) (Value, error) {
+start:
 	fn := cl.fn
 
 	// A sloppy-mode function's `this` is coerced: undefined and null become the
@@ -308,7 +316,96 @@ func (r *Runtime) run(cl *closure, this Value, args []Value, newTarget Value, ca
 
 	v, err := r.execute(f)
 	r.popFrame(base)
-	return v, err
+	if err != errTailCall {
+		return v, err
+	}
+	// The frame ended in a tail call, and is gone: the callee's is made in
+	// its place, in this same call of run.
+	var ok bool
+	if cl, this, args, callee, ok, err = r.takeTailCall(); !ok {
+		return this, err
+	}
+	newTarget = Undefined
+	goto start
+}
+
+// takeTailCall resolves the call a frame ended in. It reports true with the
+// frame to make in its place, or false with the call's result, having made it
+// the ordinary way -- which a callee that is not a compiled function needs.
+func (r *Runtime) takeTailCall() (*closure, Value, []Value, *Object, bool, error) {
+	tc := r.pendingTail
+	r.pendingTail = tailCall{}
+	cl, this, args, callee, ok, err := r.tailTarget(tc)
+	if err != nil {
+		return nil, Undefined, nil, nil, false, err
+	}
+	if !ok {
+		v, err := r.callObject(tc.callee.Object(), tc.this, tc.args, Undefined)
+		return nil, v, nil, nil, false, err
+	}
+	return cl, this, args, callee, true, nil
+}
+
+// tailCall is a call a frame ended in, waiting for run to make it.
+type tailCall struct {
+	callee Value
+	this   Value
+	args   []Value
+}
+
+// tailCallDepth is how deep the call stack is before a tail call gives up its
+// frame. Giving one up is observable only in the space it saves, so a shallow
+// stack keeps its frames and makes the call the ordinary way, which is
+// cheaper: a chain of tail calls still runs in constant space, just not in
+// the least there is.
+const tailCallDepth = 32
+
+// errTailCall is how a frame tells run that it ended in a tail call, which
+// pendingTail holds.
+var errTailCall = errors.New("tail call")
+
+// tailTarget resolves the callee of a tail call to a compiled function run can
+// make a frame for, looking through bound functions. It reports false for one
+// it cannot -- which is then called the ordinary way.
+func (r *Runtime) tailTarget(tc tailCall) (*closure, Value, []Value, *Object, bool, error) {
+	if !tc.callee.IsObject() {
+		return nil, Undefined, nil, nil, false, r.throwTypeError("%s is not a function", r.describe(tc.callee))
+	}
+	o, this, args := tc.callee.Object(), tc.this, tc.args
+	for {
+		if err := r.tick(); err != nil {
+			return nil, Undefined, nil, nil, false, err
+		}
+		if proxyOf(o) != nil {
+			return nil, Undefined, nil, nil, false, nil
+		}
+		fd := o.fn()
+		if fd == nil || fd.native != nil {
+			return nil, Undefined, nil, nil, false, nil
+		}
+		if fd.boundTarget != nil {
+			if len(fd.boundArgs) > 0 {
+				merged := make([]Value, 0, len(fd.boundArgs)+len(args))
+				merged = append(merged, fd.boundArgs...)
+				args = append(merged, args...)
+			}
+			o, this = fd.boundTarget, fd.boundThis
+			continue
+		}
+		if fd.closure == nil || isGeneratorTemplate(fd.closure.fn) ||
+			isClassConstructorKind(fd.closure.fn.Kind) {
+			return nil, Undefined, nil, nil, false, nil
+		}
+		if fd.arrow {
+			this = fd.lexThis
+			if !fd.lexNewTarget.IsUndefined() {
+				// An arrow inside a constructor sees its new.target, which run
+				// would have to be given: the ordinary call path does that.
+				return nil, Undefined, nil, nil, false, nil
+			}
+		}
+		return fd.closure, this, args, o, true, nil
+	}
 }
 
 // pushFrame extends the call stack by one and returns the new frame.
@@ -1605,7 +1702,34 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				goto onError
 			}
 			push(v)
-		case bytecode.OpDirectEval:
+		case bytecode.OpTailCall, bytecode.OpTailCallMethod:
+			argc := int(in.A)
+			args := r.stack[sp-argc : sp]
+			callee := r.stack[sp-argc-1]
+			this := Undefined
+			sp -= argc + 1
+			if in.Op == bytecode.OpTailCallMethod {
+				this = r.stack[sp-1]
+				sp--
+			}
+			// The frame can be given up only when it is an ordinary call's:
+			// a constructor's result is checked after the body returns, and
+			// an arrow in a derived constructor shares its this. Anything
+			// else makes an ordinary call, and the return after it the rest.
+			if r.frameDepth >= tailCallDepth && f.newTarget.IsUndefined() &&
+				f.thisRef == nil && len(f.handlers) == 0 && f.savedSP == 0 {
+				// The arguments are copied: they live in this frame's window,
+				// which the callee's frame is about to reuse.
+				r.pendingTail = tailCall{callee: callee, this: this, args: append([]Value(nil), args...)}
+				return Undefined, errTailCall
+			}
+			v, err := r.call(callee, this, args)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			push(v)
+		case bytecode.OpDirectEval, bytecode.OpTailDirectEval:
 			var args []Value
 			var callee, recv Value
 			if in.B == bytecode.DirectEvalSpread {
@@ -1630,7 +1754,14 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			case !callee.IsObject() || callee.Object() != r.evalFn:
 				// The name resolved to something other than the intrinsic, so
 				// this is an ordinary call after all -- with the receiver the
-				// resolution found, which a `with` object's own eval needs.
+				// resolution found, which a `with` object's own eval needs --
+				// and in tail position a tail call.
+				if in.Op == bytecode.OpTailDirectEval && r.frameDepth >= tailCallDepth &&
+					f.newTarget.IsUndefined() && f.thisRef == nil && len(f.handlers) == 0 &&
+					f.savedSP == 0 {
+					r.pendingTail = tailCall{callee: callee, this: recv, args: append([]Value(nil), args...)}
+					return Undefined, errTailCall
+				}
 				v, err := r.call(callee, recv, args)
 				if err != nil {
 					vmErr = err

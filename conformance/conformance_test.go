@@ -70,7 +70,6 @@ var unsupportedFeatures = map[string]string{
 	"source-phase-imports-module-source": "JavaScript modules have no source",
 	"Atomics.waitAsync":                  "no asynchronous waiting",
 	"decorators":                         "decorators are not implemented",
-	"tail-call-optimization":             "no tail calls",
 	"ShadowRealm":                        "no shadow realms",
 	"legacy-regexp":                      "no legacy RegExp statics",
 	"error-stack-accessor":               "Error stack is an own data property",

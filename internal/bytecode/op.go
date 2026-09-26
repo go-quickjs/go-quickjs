@@ -347,6 +347,19 @@ const (
 	OpRethrow
 	OpThrowTypeError // used for TDZ and const-assignment failures
 
+	// --- Tail calls ------------------------------------------------------------
+	// OpTailCall and OpTailCallMethod are OpCall and OpCallMethod in tail
+	// position, where the compiler knows a return follows: the frame may be
+	// given up for the callee's, so that a chain of tail calls runs in constant
+	// space. Where the frame cannot be given up they are ordinary calls, and
+	// the return that follows does the rest.
+	OpTailCall
+	OpTailCallMethod
+	// OpTailDirectEval is OpDirectEval in tail position: when the name eval
+	// turns out not to be the intrinsic, the call it makes instead is a tail
+	// call.
+	OpTailDirectEval
+
 	// --- Resource management ------------------------------------------------
 	// OpNewDisposeCapability pushes an empty stack of resources, for a scope's
 	// using declarations to add to.
@@ -569,6 +582,8 @@ var opNames = [opCount]string{
 	OpThrow: "throw", OpPushCatch: "push_catch", OpPopCatch: "pop_catch",
 	OpPushFinally: "push_finally", OpRethrow: "rethrow",
 	OpThrowTypeError: "throw_type_error",
+
+	OpTailCall: "tail_call", OpTailCallMethod: "tail_call_method", OpTailDirectEval: "tail_direct_eval",
 
 	OpNewDisposeCapability: "new_dispose_capability", OpAddDisposable: "add_disposable",
 	OpDispose: "dispose",

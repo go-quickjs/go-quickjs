@@ -280,6 +280,10 @@ type compiler struct {
 	// disposeScopes are the enclosing scopes with using declarations,
 	// innermost last.
 	disposeScopes []disposeScope
+	// tailCall is the call being compiled in tail position, which is emitted
+	// as a tail call. Only that node is: a call nested in its arguments is an
+	// ordinary one.
+	tailCall ast.Expr
 	// handlerDepth is how many exception handlers enclose the position being
 	// compiled. A jump out of them has to pop each one, since the instruction
 	// it lands on is not the one that would have.

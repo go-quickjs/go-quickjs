@@ -54,11 +54,11 @@ func (c *compiler) compileDirectEval(n *ast.Call) {
 	}
 	if hasSpread(n.Args) {
 		c.compileSpreadArguments(n.Args)
-		c.emitAt(n.Start, bytecode.OpDirectEval, idx, bytecode.DirectEvalSpread)
+		c.emitAt(n.Start, c.callOp(n, bytecode.OpDirectEval), idx, bytecode.DirectEvalSpread)
 		return
 	}
 	argc := c.compileArguments(n.Args)
-	c.emitAt(n.Start, bytecode.OpDirectEval, idx, uint32(argc))
+	c.emitAt(n.Start, c.callOp(n, bytecode.OpDirectEval), idx, uint32(argc))
 }
 
 // evalScopeIdx records what is in scope at the current position and returns its

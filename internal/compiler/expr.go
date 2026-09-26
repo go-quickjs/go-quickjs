@@ -379,13 +379,30 @@ func (c *compiler) compileTaggedTemplate(n *ast.TaggedTemplate) {
 			}
 		}
 		argc := c.compileTemplateArguments(idx, n.Quasi)
-		c.emitAt(n.Start, bytecode.OpCallMethod, uint32(argc), 0)
+		c.emitAt(n.Start, c.callOp(n, bytecode.OpCallMethod), uint32(argc), 0)
 		return
 	}
 
 	c.compileExpr(n.Tag)
 	argc := c.compileTemplateArguments(idx, n.Quasi)
-	c.emitAt(n.Start, bytecode.OpCall, uint32(argc), 0)
+	c.emitAt(n.Start, c.callOp(n, bytecode.OpCall), uint32(argc), 0)
+}
+
+// callOp is the instruction a call emits: op itself, or its tail form when
+// the call is the one in tail position.
+func (c *compiler) callOp(n ast.Expr, op bytecode.Op) bytecode.Op {
+	if c.tailCall != n {
+		return op
+	}
+	switch op {
+	case bytecode.OpCall:
+		return bytecode.OpTailCall
+	case bytecode.OpCallMethod:
+		return bytecode.OpTailCallMethod
+	case bytecode.OpDirectEval:
+		return bytecode.OpTailDirectEval
+	}
+	return op
 }
 
 // compileTemplateArguments pushes the strings object and the substitutions.
@@ -972,7 +989,7 @@ func (c *compiler) compileCall(n *ast.Call) {
 			c.emit(bytecode.OpGetPropThis, c.nameIdx(propKeyName(m.Property)), 0)
 		}
 		argc := c.compileArguments(n.Args)
-		c.emitAt(n.Start, bytecode.OpCallMethod, uint32(argc), 0)
+		c.emitAt(n.Start, c.callOp(n, bytecode.OpCallMethod), uint32(argc), 0)
 		return
 	}
 
@@ -991,7 +1008,7 @@ func (c *compiler) compileCall(n *ast.Call) {
 
 	c.compileExpr(n.Callee)
 	argc := c.compileArguments(n.Args)
-	c.emitAt(n.Start, bytecode.OpCall, uint32(argc), 0)
+	c.emitAt(n.Start, c.callOp(n, bytecode.OpCall), uint32(argc), 0)
 }
 
 // compileArguments pushes a call's arguments and returns how many there are.

@@ -300,7 +300,11 @@ func (c *compiler) compileStatement(s ast.Stmt) {
 
 	case *ast.ReturnStmt:
 		if n.Arg != nil {
-			c.compileExpr(n.Arg)
+			if c.tailCallsAllowed() {
+				c.compileTailExpr(n.Arg)
+			} else {
+				c.compileExpr(n.Arg)
+			}
 			if c.fn.Async && c.fn.Generator {
 				// An async generator awaits what it returns, which takes a
 				// turn: `return undefined` and `return` differ by exactly that

@@ -228,6 +228,8 @@ type Runtime struct {
 	sharedArrayBufferCtor *Object
 	// abstractModuleSource is %AbstractModuleSource%, which no global names.
 	abstractModuleSource *Object
+	// pendingTail is the call a frame ended in, for run to make in its place.
+	pendingTail tailCall
 	// arrayBufferCtor is the intrinsic ArrayBuffer, which slice falls back to
 	// when the object names no species of its own.
 	arrayBufferCtor *Object
