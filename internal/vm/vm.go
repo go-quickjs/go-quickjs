@@ -1200,8 +1200,46 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				goto onError
 			}
 			r.stack[sp-1] = v
-		case bytecode.OpSub, bytecode.OpMul, bytecode.OpDiv, bytecode.OpMod,
-			bytecode.OpPow:
+		case bytecode.OpSub:
+			a, b := r.stack[sp-2], r.stack[sp-1]
+			sp--
+			if a.IsNumber() && b.IsNumber() {
+				r.stack[sp-1] = Float(a.Number() - b.Number())
+				break
+			}
+			v, err := r.arith(bytecode.OpSub, a, b)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			r.stack[sp-1] = v
+		case bytecode.OpMul:
+			a, b := r.stack[sp-2], r.stack[sp-1]
+			sp--
+			if a.IsNumber() && b.IsNumber() {
+				r.stack[sp-1] = Float(a.Number() * b.Number())
+				break
+			}
+			v, err := r.arith(bytecode.OpMul, a, b)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			r.stack[sp-1] = v
+		case bytecode.OpDiv:
+			a, b := r.stack[sp-2], r.stack[sp-1]
+			sp--
+			if a.IsNumber() && b.IsNumber() {
+				r.stack[sp-1] = Float(a.Number() / b.Number())
+				break
+			}
+			v, err := r.arith(bytecode.OpDiv, a, b)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			r.stack[sp-1] = v
+		case bytecode.OpMod, bytecode.OpPow:
 			a, b := r.stack[sp-2], r.stack[sp-1]
 			sp--
 			if a.IsNumber() && b.IsNumber() {
