@@ -79,6 +79,3 @@ jobs:
 
       - name: Test shared ICU data
         run: go test -race -count=1 ./internal/icu
-
-      - name: Test public warmup paths
-        run: go test -race -count=1 . -run 'TestWarmup(Intl|DateTime)DataBeforeRuntime'

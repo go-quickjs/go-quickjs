@@ -1,10 +1,10 @@
 package vm
 
 import (
+	intl "github.com/go-quickjs/go-intl"
 	"math"
 	"math/big"
 	"strings"
-	"time"
 
 	"github.com/go-quickjs/go-quickjs/internal/icu"
 )
@@ -500,28 +500,10 @@ func (r *Runtime) initTemporalPlainDateTime(temporal *Object) {
 		return Str(NewString(dateTime.string("auto"))), nil
 	})
 	r.defMethod(proto, "toLocaleString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		dateTime, err := rt.temporalPlainDateTimeValue(this, "Temporal.PlainDateTime.prototype.toLocaleString")
-		if err != nil {
+		if _, err := rt.temporalPlainDateTimeValue(this, "Temporal.PlainDateTime.prototype.toLocaleString"); err != nil {
 			return Undefined, err
 		}
-		options, err := rt.dateOptionsFrom(args, map[string]string{
-			"year": "numeric", "month": "numeric", "day": "numeric",
-			"hour": "numeric", "minute": "numeric", "second": "numeric",
-		}, "any")
-		if err != nil {
-			return Undefined, err
-		}
-		options.temporalKind = "plain-date-time"
-		options.useTemporalArgument()
-		if dateTime.calendar != "iso8601" && dateTime.calendar != options.calendar {
-			return Undefined, rt.throwRangeError("Temporal calendar does not match the formatter calendar")
-		}
-		options.zone, options.timeZone = time.UTC, "UTC"
-		value := time.Date(dateTime.year, time.Month(dateTime.month), dateTime.day,
-			dateTime.hour, dateTime.minute, dateTime.second,
-			dateTime.millisecond*1_000_000+dateTime.microsecond*1_000+dateTime.nanosecond,
-			time.UTC)
-		return Str(NewString(options.format(value))), nil
+		return rt.temporalToLocaleString(this, args, intl.ComponentsAny, intl.ComponentsAll)
 	})
 	r.defMethod(proto, "valueOf", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if _, err := rt.temporalPlainDateTimeValue(this, "Temporal.PlainDateTime.prototype.valueOf"); err != nil {

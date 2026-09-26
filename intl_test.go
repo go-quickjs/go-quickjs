@@ -241,6 +241,14 @@ func TestIntlFormats(t *testing.T) {
 		{`new Intl.DateTimeFormat("en", {calendar: "islamic"})
 		    .resolvedOptions().calendar`, "islamic-civil"},
 		{`Intl.supportedValuesOf("calendar").includes("islamic")`, "false"},
+		// resolvedOptions reports the fields of the pattern chosen, not the
+		// letters of its literals: "MMMM 'de' y" has no day.
+		{`String(new Intl.DateTimeFormat("pt", {year: "numeric", month: "long"})
+		    .resolvedOptions().day)`, "undefined"},
+		{`new Intl.DateTimeFormat("ja", {month: "short"}).resolvedOptions().month`, "numeric"},
+		// An hourCycle that is the tag's own leaves it in the locale.
+		{`new Intl.DateTimeFormat("en-u-hc-h23", {hourCycle: "h23"})
+		    .resolvedOptions().locale`, "en-u-hc-h23"},
 		{`(() => {
 		    const zones = Intl.supportedValuesOf("timeZone");
 		    return zones.includes("UTC") && zones.includes("America/New_York") &&
@@ -259,8 +267,11 @@ func TestIntlFormats(t *testing.T) {
 		    };
 		    return ["islamic-civil", "islamic-tbla", "islamic-umalqura"]
 		      .map(c => [era(c, 600), era(c, 2025)].join(",")).join("|");
-		  })()`, "-Anno Hegirae,Anno Hegirae|-Anno Hegirae,Anno Hegirae|" +
-			"-Anno Hegirae,Anno Hegirae"},
+		  })()`, "Before Hijrah,Anno Hegirae|Before Hijrah,Anno Hegirae|" +
+			// CLDR 48.2 gives the Islamic calendars an era before the
+			// Hijrah; Node writes a year before it as a negative year of
+			// Anno Hegirae (go-intl's IslamicEras, WithNodeQuirks).
+			"Before Hijrah,Anno Hegirae"},
 		{`(() => {
 		    const f = new Intl.DateTimeFormat("en", {calendar: "ethiopic",
 		      era: "long", year: "numeric", timeZone: "UTC"});
@@ -365,12 +376,15 @@ func TestIntlFormats(t *testing.T) {
 		    month: "long", day: "numeric", hour: "numeric", minute: "numeric"})
 		    .format(Date.UTC(2024, 0, 15, 12, 34))`,
 			"January 15, 2024 at 12:34 PM"},
+		// A Temporal value is written with the pattern a Date is for the same
+		// options, "hh:mm a"; Node regenerates it without the hour's width,
+		// "7:34 AM" (go-intl's TemporalFormats, WithNodeQuirks).
 		{`new Intl.DateTimeFormat("en", {timeZone: "America/New_York",
 		    hour: "2-digit", minute: "2-digit"})
-		    .format(Temporal.Instant.from("2024-01-15T12:34:56Z"))`, "7:34 AM"},
+		    .format(Temporal.Instant.from("2024-01-15T12:34:56Z"))`, "07:34 AM"},
 		{`Temporal.Instant.from("2024-01-15T12:34:56Z").toLocaleString("en", {
 		    timeZone: "America/New_York", hour: "2-digit", minute: "2-digit"})`,
-			"7:34 AM"},
+			"07:34 AM"},
 		{`[Date.UTC(1971, 9, 31, 1, 59, 59, 999), Date.UTC(1971, 9, 31, 2)]
 		    .map(when => new Intl.DateTimeFormat("en", {timeZone: "Europe/London",
 		      timeZoneName: "long"}).formatToParts(when)
@@ -589,6 +603,24 @@ func TestIntlNodeQuirks(t *testing.T) {
 	].join("|")`
 	if got, want := evalString(t, rt, japaneseClock), "h12|午前12:00"; got != want {
 		t.Fatalf("Japanese clock: got %q, want %q", got, want)
+	}
+
+	// Node's formats for Temporal values keep neither the hour's width nor
+	// the hour cycle asked for, and it reads a plain value in the zone.
+	for _, c := range []struct{ source, want string }{
+		{`Temporal.Instant.from("2024-01-15T12:34:56Z").toLocaleString("en", {
+			timeZone: "America/New_York", hour: "2-digit", minute: "2-digit"})`, "7:34 AM"},
+		{`new Temporal.ZonedDateTime(0n, "UTC").toLocaleString("en", {hour12: false})`,
+			"1/1/1970, 12:00:00 AM UTC"},
+		{`new Temporal.PlainDate(2011, 12, 30).toLocaleString("en-US", {timeZone: "Pacific/Apia"})`,
+			"12/31/2011"},
+		{`new Intl.DateTimeFormat("en", {calendar: "islamic"}).resolvedOptions().calendar`, "islamic"},
+		{`new Intl.DateTimeFormat("pt", {year: "numeric", month: "long"}).resolvedOptions().day`, "numeric"},
+		{`new Intl.DateTimeFormat("en-u-hc-h23", {hourCycle: "h23"}).resolvedOptions().locale`, "en"},
+	} {
+		if got := evalString(t, rt, c.source); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.source, got, c.want)
+		}
 	}
 }
 
@@ -851,46 +883,79 @@ func TestDateStringsUseBundledRulesForNamedTimeZone(t *testing.T) {
 	}
 }
 
-func TestWarmupDateTimeDataBeforeRuntime(t *testing.T) {
-	quickjs.WarmupDateTimeData()
-	quickjs.WarmupDateTimeData() // Idempotent.
-
-	zone, err := time.LoadLocation("Europe/Paris")
-	if err != nil {
-		t.Skipf("no zone files: %v", err)
-	}
-	rt := quickjs.New(quickjs.WithLocale("de-DE"))
+// Intl's errors say what Node's say: testdata/intl_errors_node.txt is what
+// Node threw for each misuse testdata/intl_errors_node.js makes, as V8 words
+// it, and this runs the same script here. No go-intl error, "intl: ...",
+// reaches a script.
+func TestIntlErrorsMatchNode(t *testing.T) {
+	rt := quickjs.New()
 	defer rt.Close()
-	rt.SetTimeZone(zone)
-	v, err := rt.Eval(`[
-		new Date(0).toTimeString(),
-		new Intl.DateTimeFormat("de-DE", {timeZone: "Europe/Paris", timeZoneName: "long"})
-			.formatToParts(Date.UTC(2025, 0, 15)).find(p => p.type === "timeZoneName").value,
-		new Intl.DateTimeFormat("de-DE", {timeZone: "Europe/Paris", timeZoneName: "longGeneric"})
-			.formatToParts(Date.UTC(1979, 6, 15)).find(p => p.type === "timeZoneName").value
-	].join("|")`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := v.String(), "01:00:00 GMT+0100 (Mitteleuropäische Normalzeit)|"+
-		"Mitteleuropäische Normalzeit|Mitteleuropäische Zeit (Frankreich)"; got != want {
-		t.Fatalf("got %q, want %q", got, want)
+	matchNodeScript(t, rt, "testdata/intl_errors_node")
+}
+
+// Intl.Locale answers as Node does: testdata/intl_locale_node.txt is what
+// Node answered for each tag and options testdata/intl_locale_node.js tries,
+// every getter and method, and WithNodeQuirks answers the same. The
+// standards mode differs only where a divergence says, which
+// TestIntlLocaleStandard holds.
+func TestIntlLocaleMatchesNode(t *testing.T) {
+	rt := quickjs.New(quickjs.WithNodeQuirks())
+	defer rt.Close()
+	matchNodeScript(t, rt, "testdata/intl_locale_node")
+}
+
+// Where the standards mode answers Intl.Locale otherwise than Node: a key
+// with no value is "true" to getCalendars as to the calendar getter, where
+// Node's is ICU's "yes" (go-intl's YesValues); a subdivision is the region
+// of the hour cycles (SubdivisionHourCycles); and the variants getter and
+// option, which Node 26 has not implemented.
+func TestIntlLocaleStandard(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	for _, c := range []struct{ source, want string }{
+		{`new Intl.Locale("en-u-ca").getCalendars().join()`, "true"},
+		{`new Intl.Locale("en-u-co").getCollations().join()`, "true"},
+		{`new Intl.Locale("en-u-sd-gbeng").getHourCycles().join()`, "h23"},
+		{`new Intl.Locale("en-GB-oxendict").variants`, "oxendict"},
+		{`new Intl.Locale("en-US", {variants: "fonipa-1996"}).toString()`, "en-US-1996-fonipa"},
+	} {
+		if got := evalString(t, rt, c.source); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.source, got, c.want)
+		}
 	}
 }
 
-func TestWarmupIntlDataBeforeRuntime(t *testing.T) {
-	quickjs.WarmupIntlData()
-	quickjs.WarmupIntlData() // Idempotent.
+// matchNodeScript runs name.js, which writes a line per case with
+// console.log, and holds each line to name.txt, what Node wrote.
+func matchNodeScript(t *testing.T, rt *quickjs.Runtime, name string) {
+	t.Helper()
+	script, err := os.ReadFile(name + ".js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile(name + ".txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.Eval("var lines = []; globalThis.console = {log(s) { lines.push(s); }};"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.Eval(string(script)); err != nil {
+		t.Fatal(err)
+	}
+	v, err := rt.Eval(`lines.join("\n")`)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	rt := quickjs.New(quickjs.WithLocale("de-DE"))
-	defer rt.Close()
-	for _, src := range []string{
-		`new Intl.DisplayNames("de", {type: "region"}).of("JP")`,
-		`new Intl.Collator("zh").compare("重庆", "长沙")`,
-		`Array.from(new Intl.Segmenter("th", {granularity: "word"}).segment("ภาษาไทย")).length`,
-	} {
-		if _, err := rt.Eval(src); err != nil {
-			t.Fatalf("after Intl warmup, %s: %v", src, err)
+	got := strings.Split(v.String(), "\n")
+	expected := strings.Split(strings.TrimRight(strings.ReplaceAll(string(want), "\r\n", "\n"), "\n"), "\n")
+	if len(got) != len(expected) {
+		t.Fatalf("got %d lines, want %d", len(got), len(expected))
+	}
+	for i := range expected {
+		if got[i] != expected[i] {
+			t.Errorf("got  %s\nwant %s", got[i], expected[i])
 		}
 	}
 }

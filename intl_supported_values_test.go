@@ -7,8 +7,10 @@ func TestIntlSupportedValuesOf(t *testing.T) {
 		{`Intl.supportedValuesOf("calendar").join(",")`,
 			"buddhist,chinese,coptic,dangi,ethioaa,ethiopic,gregory,hebrew,indian," +
 				"islamic-civil,islamic-tbla,islamic-umalqura,iso8601,japanese,persian,roc"},
+		// Node's list, which is every collation ICU 78.3's collation tree
+		// names but "standard" and "search", and which the Collator honours.
 		{`Intl.supportedValuesOf("collation").join(",")`,
-			"eor,phonebk,pinyin,searchjl,stroke,unihan,zhuyin"},
+			"compat,dict,emoji,eor,phonebk,phonetic,pinyin,searchjl,stroke,trad,unihan,zhuyin"},
 		{`Intl.supportedValuesOf("unit").length`, "45"},
 		{`Intl.supportedValuesOf("numberingSystem").includes("latn")`, "true"},
 		{`["Etc/GMT+12", "Etc/GMT-14", "UTC"].every(zone =>

@@ -2,6 +2,7 @@ package vm
 
 import (
 	"fmt"
+	intl "github.com/go-quickjs/go-intl"
 	"math"
 	"strings"
 	"time"
@@ -380,23 +381,10 @@ func (r *Runtime) initTemporalPlainYearMonth(temporal *Object) {
 		return Str(NewString(yearMonth.string("auto"))), nil
 	})
 	r.defMethod(proto, "toLocaleString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		yearMonth, err := rt.temporalPlainYearMonthValue(this, "Temporal.PlainYearMonth.prototype.toLocaleString")
-		if err != nil {
+		if _, err := rt.temporalPlainYearMonthValue(this, "Temporal.PlainYearMonth.prototype.toLocaleString"); err != nil {
 			return Undefined, err
 		}
-		options, err := rt.dateOptionsFrom(args, map[string]string{"year": "numeric", "month": "numeric"}, "date")
-		if err != nil {
-			return Undefined, err
-		}
-		options, err = rt.dateOptionsForArgument(options, this)
-		if err != nil {
-			return Undefined, err
-		}
-		if yearMonth.calendar != options.calendar {
-			return Undefined, rt.throwRangeError("Temporal calendar does not match the formatter calendar")
-		}
-		date := time.Date(yearMonth.year, time.Month(yearMonth.month), yearMonth.day, 12, 0, 0, 0, time.UTC)
-		return Str(NewString(options.format(date))), nil
+		return rt.temporalToLocaleString(this, args, intl.ComponentsDate, intl.ComponentsDate)
 	})
 	r.defMethod(proto, "valueOf", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if _, err := rt.temporalPlainYearMonthValue(this, "Temporal.PlainYearMonth.prototype.valueOf"); err != nil {
@@ -554,23 +542,10 @@ func (r *Runtime) initTemporalPlainMonthDay(temporal *Object) {
 		return Str(NewString(monthDay.string("auto"))), nil
 	})
 	r.defMethod(proto, "toLocaleString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		monthDay, err := rt.temporalPlainMonthDayValue(this, "Temporal.PlainMonthDay.prototype.toLocaleString")
-		if err != nil {
+		if _, err := rt.temporalPlainMonthDayValue(this, "Temporal.PlainMonthDay.prototype.toLocaleString"); err != nil {
 			return Undefined, err
 		}
-		options, err := rt.dateOptionsFrom(args, map[string]string{"month": "numeric", "day": "numeric"}, "date")
-		if err != nil {
-			return Undefined, err
-		}
-		options, err = rt.dateOptionsForArgument(options, this)
-		if err != nil {
-			return Undefined, err
-		}
-		if monthDay.calendar != options.calendar {
-			return Undefined, rt.throwRangeError("Temporal calendar does not match the formatter calendar")
-		}
-		date := time.Date(monthDay.year, time.Month(monthDay.month), monthDay.day, 12, 0, 0, 0, time.UTC)
-		return Str(NewString(options.format(date))), nil
+		return rt.temporalToLocaleString(this, args, intl.ComponentsDate, intl.ComponentsDate)
 	})
 	r.defMethod(proto, "valueOf", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if _, err := rt.temporalPlainMonthDayValue(this, "Temporal.PlainMonthDay.prototype.valueOf"); err != nil {

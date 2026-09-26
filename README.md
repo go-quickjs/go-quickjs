@@ -33,17 +33,18 @@ Promises, regular expressions, modules with top-level `await`, Proxy and typed
 arrays all work, and are exercised against [test262], the official ECMAScript
 conformance suite.
 
-`Intl` is there too, with real CLDR data for 379 locales — the engine carries
-its own, in Go, rather than linking ICU — including the Unicode collation
-order, where a text may be broken into words and sentences, how a measurement
-is written, how long something took, sixteen calendars, and what every time
-zone is called in every language. It is held against a full ICU build:
-[7,924 of 7,949 cases match it exactly](intl_test.go), and the twenty-five that
-do not are named.
+`Intl` is there too, from [go-intl], a pure-Go implementation of ECMA-402 built
+to answer as ICU 78.3 does in Node 26, with CLDR 48.2 data for every locale ICU
+has -- rather than linking ICU -- including the Unicode collation order, where
+a text may be broken into words and sentences, how a measurement is written,
+how long something took, eighteen calendars, and what every time zone is
+called in every language. It is held against a full ICU build:
+[7,948 of 7,949 cases match it exactly](intl_test.go), and the one that does
+not is named.
 
-Of the 98,534 test262 variants in the current checkout, 92,994 pass, two are
-documented engine disagreements, and 5,538 are skipped because they require an
-unsupported feature or host facility. See [Conformance](#conformance) for the
+Of the 98,560 test262 variants in the current checkout, 93,010 pass, none
+fail, and 5,550 are skipped because they require an unsupported feature or host
+facility. See [Conformance](#conformance) for the
 measurement and [Not implemented](#not-implemented) for what is missing.
 
 ### Implemented
@@ -66,7 +67,7 @@ measurement and [Not implemented](#not-implemented) for what is missing.
 | Unicode | Full case mappings including the final sigma, all four normalization forms, lone surrogates preserved end to end |
 | Built-ins | `Object`, `Function`, `Array`, `String`, `Number`, `Boolean`, `Symbol`, `BigInt`, `Error`, `Math`, `JSON`, `Date`, `RegExp`, `Map`, `Set`, `Promise`, `Proxy`, `Reflect`, `ArrayBuffer`, `DataView`, typed arrays |
 | Temporal | `Instant`, `Duration`, `PlainDate`, `PlainTime`, `PlainDateTime`, `PlainYearMonth`, `PlainMonthDay`, `ZonedDateTime`, `Now`, non-ISO calendars, and IANA time-zone transitions |
-| Internationalization | `Intl.Locale`, `NumberFormat`, `DateTimeFormat`, `Collator`, `PluralRules`, `ListFormat`, `RelativeTimeFormat`, `DisplayNames`, `Segmenter`, `DurationFormat`, with CLDR data for 379 locales carried in Go |
+| Internationalization | `Intl.Locale`, `NumberFormat`, `DateTimeFormat`, `Collator`, `PluralRules`, `ListFormat`, `RelativeTimeFormat`, `DisplayNames`, `Segmenter`, `DurationFormat`, from [go-intl], with CLDR data for every locale ICU has |
 | Weak references | `WeakRef`, `FinalizationRegistry`, `WeakMap`, `WeakSet`, backed by Go's `weak.Pointer` and `runtime.AddCleanup`: a target really is released, and a registry really is called back |
 | Reflection | `Proxy` with every trap and its invariants, `Reflect`, property descriptors, mapped `arguments` |
 | Recent additions | Set operations, `Array.fromAsync`, `Object.groupBy`, `Promise.try`, `RegExp.escape`, `Error.isError`, `Math.sumPrecise`, `Uint8Array` base64 and hex |
@@ -75,14 +76,17 @@ measurement and [Not implemented](#not-implemented) for what is missing.
 
 ### Internationalization
 
-Every `Intl` API and its locale data are built in. Time-zone names, including
+Every `Intl` API and its locale data are built in, from [go-intl], and so is
+`Date`'s local time, from its `date` package, which is V8's `Date`: the offset
+cache, the strings `Date` writes and `Date.parse`. Time-zone names, including
 generic and historical names, are written in the requested language.
 `new Date().toString()` likewise ends with the localized zone name -- for
 example, `(Mitteleuropäische Normalzeit)` in winter and
 `(Mitteleuropäische Sommerzeit)` in summer when using a German locale and a
-Central European time zone. Named-zone arithmetic uses the same bundled IANA
-tzdata release as those ICU tables, so results do not depend on whether the
-host operating system has installed newer or older zone rules.
+Central European time zone. Zone arithmetic uses the same bundled tz release
+as those names, so results do not depend on whether the host operating system
+has installed newer or older zone rules. The host's zone is found as ICU finds
+it, and `TZ` names it where Node reads it, on Windows too.
 
 Sorting follows the Unicode algorithm with each language's tailoring,
 including Chinese pinyin, stroke and zhuyin order, Japanese kana and Han
@@ -130,8 +134,8 @@ strict and sloppy variants, the expected-failure phase and type, and the feature
 tags. A test tagged with a feature the engine does not implement is skipped
 rather than counted against it.
 
-Measured coverage, as of the most recent run over the whole suite: 92,994
-variants pass and two have documented differences. The other 5,538 are skipped
+Measured coverage, as of the most recent run over the whole suite: 93,010
+variants pass and none fail. The other 5,550 are skipped
 rather than counted: a test tagged with a feature the engine does not
 implement, or one that asks the host for a second realm or an agent, is testing
 something that was never claimed.
@@ -461,9 +465,11 @@ rt.SetTimeZone(time.UTC)   // and the zone its local-time methods use
 Standards-conforming behavior is the default. A host that needs exact Node.js
 compatibility for known Node divergences can opt in with
 `quickjs.WithNodeQuirks()`; the command-line equivalent is `--node-quirks`.
-The mode currently reproduces Node 26's proleptic Islamic era names, Japanese
-`h12` preference, and its Temporal locale formatting when `era`, `hour12`, or
-`hourCycle` is supplied without a displayed date or time field.
+Each divergence is one of go-intl's named ones, from the Japanese `h12`
+preference and the Islamic eras to the time zones `Intl.supportedValuesOf`
+lists; go-intl's [compatibility profile][go-intl-compat] lists them, with
+what the standard and Node each answer. Where the two agree, both modes
+answer as Node does.
 
 Left unset, the runtime takes the language the machine is set to -- the user's
 locale on Windows, `LC_ALL`, `LC_MESSAGES` or `LANG` on a Unix machine, and
@@ -471,12 +477,6 @@ English where none of them says -- which is what every other engine does, so
 that a program run twice in the same environment is not given two different
 answers. A server that formats for somebody else should set it rather than
 inherit it.
-
-Servers that prefer a predictable startup cost can call
-`quickjs.WarmupDateTimeData()` for Date and `Intl.DateTimeFormat`, or
-`quickjs.WarmupIntlData()` for every Intl locale, collation, display-name,
-calendar, segmentation, dictionary, unit, and time-zone dataset. Both may be
-called before constructing a runtime and are idempotent.
 
 Runaway recursion raises a catchable `RangeError` rather than overflowing the
 goroutine stack. Deeply nested source is rejected at parse time for the same
@@ -658,3 +658,5 @@ MIT, matching the upstream project.
 [test262]: https://github.com/tc39/test262
 [goja]: https://github.com/dop251/goja
 [v8-v7]: https://github.com/mozilla/arewefastyet/tree/master/benchmarks/v8-v7
+[go-intl]: https://github.com/go-quickjs/go-intl
+[go-intl-compat]: https://github.com/go-quickjs/go-intl/blob/main/compat.go

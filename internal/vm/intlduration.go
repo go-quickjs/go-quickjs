@@ -6,7 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/go-quickjs/go-quickjs/internal/icu"
+	intl "github.com/go-quickjs/go-intl"
+	"github.com/go-quickjs/go-intl/temporal"
 )
 
 // Intl.DurationFormat: how long something took, written the way a language
@@ -27,22 +28,26 @@ var durationUnits = [...]struct{ field, unit string }{
 	{"nanoseconds", "nanosecond"},
 }
 
-// durationOptions is a resolved Intl.DurationFormat.
+// durationOptions is a resolved Intl.DurationFormat: go-intl's formatter,
+// and the options as the runtime settled them.
 type durationOptions struct {
-	locale *icu.Locale
-	choice *localeChoice
+	format *intl.DurationFormat
 	style  string // long, short, narrow, digital
 
 	// widths and shown are how each part is written and whether it is written
-	// when it is zero.
-	widths [len(durationUnits)]string
-	shown  [len(durationUnits)]string
+	// when it is zero, and askedWidths and askedShown what the options said
+	// of them, empty where they said nothing, which is what go-intl is given:
+	// a display asked for is judged where a default is not.
+	widths      [len(durationUnits)]string
+	shown       [len(durationUnits)]string
+	askedWidths [len(durationUnits)]string
+	askedShown  [len(durationUnits)]string
 
 	fractionalDigits int
 	hasFractional    bool
 }
 
-func (r *Runtime) initDurationFormat(intl *Object) {
+func (r *Runtime) initDurationFormat(intlObj *Object) {
 	proto := newObject(r.proto.object, ClassObject)
 	ctor := r.newCtor("DurationFormat", 0, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		made, err := rt.protoFromNewTargetErr(rt.intlProtoOf("DurationFormat"))
@@ -50,7 +55,7 @@ func (r *Runtime) initDurationFormat(intl *Object) {
 			return Undefined, err
 		}
 		if !rt.Constructing() {
-			return Undefined, rt.throwTypeError("Intl.DurationFormat requires new")
+			return Undefined, rt.intlRequiresNew("Intl.DurationFormat")
 		}
 		o, err := rt.durationOptionsFrom(args)
 		if err != nil {
@@ -60,13 +65,13 @@ func (r *Runtime) initDurationFormat(intl *Object) {
 		out.data = o
 		return Obj(out), nil
 	})
-	r.defValue(intl, "DurationFormat", Obj(ctor))
+	r.defValue(intlObj, "DurationFormat", Obj(ctor))
 	r.intlProtos["DurationFormat"] = proto
 	r.defToStringTag(proto, "Intl.DurationFormat")
-	r.defSupportedLocalesOfWhere(ctor, icu.HasDurationLocale)
+	r.defSupportedLocalesOfService(ctor, intl.ServiceDurationFormat)
 
 	r.defMethod(proto, "format", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.durationFormatOf(this)
+		o, err := rt.durationFormatOf(this, "Intl.DurationFormat.prototype.format")
 		if err != nil {
 			return Undefined, err
 		}
@@ -74,10 +79,14 @@ func (r *Runtime) initDurationFormat(intl *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(durationText(o.parts(rt, duration)))), nil
+		text, err := o.format.Format(intl.Duration(duration))
+		if err != nil {
+			return Undefined, rt.intlTemporalRange("Duration was not valid.")
+		}
+		return Str(NewString(text)), nil
 	})
 	r.defMethod(proto, "formatToParts", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.durationFormatOf(this)
+		o, err := rt.durationFormatOf(this, "Intl.DurationFormat.prototype.formatToParts")
 		if err != nil {
 			return Undefined, err
 		}
@@ -85,25 +94,29 @@ func (r *Runtime) initDurationFormat(intl *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		pieces := o.parts(rt, duration)
+		pieces, err := o.format.FormatToParts(intl.Duration(duration))
+		if err != nil {
+			return Undefined, rt.intlTemporalRange("Duration was not valid.")
+		}
 		out := make([]Value, len(pieces))
 		for i, piece := range pieces {
-			part := rt.partObject(piece.kind, piece.value)
-			if piece.unit != "" {
-				rt.putString(part, "unit", piece.unit)
+			part := rt.partObject(string(piece.Kind), piece.Value)
+			if piece.Unit != "" {
+				rt.putString(part, "unit", piece.Unit)
 			}
 			out[i] = Obj(part)
 		}
 		return Obj(rt.newArrayFrom(out)), nil
 	})
 	r.defMethod(proto, "resolvedOptions", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.durationFormatOf(this)
+		o, err := rt.durationFormatOf(this, "Intl.DurationFormat.prototype.resolvedOptions")
 		if err != nil {
 			return Undefined, err
 		}
+		resolved := o.format.ResolvedOptions()
 		out := newObject(rt.proto.object, ClassObject)
-		rt.putString(out, "locale", o.choice.locale())
-		rt.putString(out, "numberingSystem", o.choice.setting("nu"))
+		rt.putString(out, "locale", resolved.Locale)
+		rt.putString(out, "numberingSystem", resolved.NumberingSystem)
 		rt.putString(out, "style", o.style)
 		for i, unit := range durationUnits {
 			rt.putString(out, unit.field, o.widths[i])
@@ -119,6 +132,7 @@ func (r *Runtime) initDurationFormat(intl *Object) {
 // durationOptionsFrom reads the arguments shared by the DurationFormat
 // constructor and Temporal.Duration.prototype.toLocaleString.
 func (r *Runtime) durationOptionsFrom(args []Value) (*durationOptions, error) {
+	defer r.enterIntl("Intl.DurationFormat")()
 	tags, err := r.requestedLocales(arg(args, 0))
 	if err != nil {
 		return nil, err
@@ -127,38 +141,43 @@ func (r *Runtime) durationOptionsFrom(args []Value) (*durationOptions, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := r.stringOption(options, "localeMatcher", "best fit",
-		"lookup", "best fit"); err != nil {
+	matcher, err := r.stringOption(options, "localeMatcher", "best fit", "lookup", "best fit")
+	if err != nil {
 		return nil, err
 	}
 	numbering, err := r.typeOption(options, "numberingSystem")
 	if err != nil {
 		return nil, err
 	}
-	durationTags := make([]string, 0, len(tags)+1)
-	for _, tag := range tags {
-		parsed, ok := parseTag(tag)
-		if ok && icu.HasDurationLocale(parsed.base()) {
-			durationTags = append(durationTags, tag)
-		}
+	loc, err := r.intlLocale(intl.ServiceDurationFormat, tags, matcher)
+	if err != nil {
+		return nil, err
 	}
-	if len(durationTags) == 0 {
-		fallback := canonicalTag(mustParse(r.Locale()))
-		parsed, _ := parseTag(fallback)
-		if !icu.HasDurationLocale(parsed.base()) {
-			fallback = "en-US"
-		}
-		durationTags = append(durationTags, fallback)
-	}
-	choice := r.resolveLocale(durationTags, "nu")
-	choice.override("nu", numbering)
-	o := &durationOptions{locale: choice.data, choice: choice}
+	o := &durationOptions{}
 	if o.style, err = r.stringOption(options, "style", "short",
 		"long", "short", "narrow", "digital"); err != nil {
 		return nil, err
 	}
 	if err := r.readDurationUnits(o, options); err != nil {
 		return nil, err
+	}
+	opts := intl.DurationFormatOptions{NumberingSystem: numbering, Compat: r.intlCompat(),
+		Style: map[string]intl.DurationStyle{"short": intl.DurationShort, "long": intl.DurationLong,
+			"narrow": intl.DurationNarrow, "digital": intl.DurationDigital}[o.style]}
+	for i := range durationUnits {
+		opts.Units[i] = map[string]intl.DurationUnitStyle{"long": intl.DurationUnitLong,
+			"short": intl.DurationUnitShort, "narrow": intl.DurationUnitNarrow,
+			"numeric": intl.DurationUnitNumeric, "2-digit": intl.DurationUnitTwoDigit}[o.askedWidths[i]]
+		opts.Display[i] = map[string]intl.DurationDisplay{"auto": intl.DurationDisplayAuto,
+			"always": intl.DurationDisplayAlways}[o.askedShown[i]]
+	}
+	if o.hasFractional {
+		opts.FractionalDigits = intl.Digits(o.fractionalDigits)
+	}
+	if o.format, err = intl.NewDurationFormat(loc, opts); err != nil {
+		// What go-intl refuses of the options that reading them did not,
+		// which V8 reports with the options object.
+		return nil, r.intlInvalidRange("object", r.v8Describe(Obj(options)))
 	}
 	return o, nil
 }
@@ -180,6 +199,7 @@ func (r *Runtime) readDurationUnits(o *durationOptions, options *Object) error {
 		if err != nil {
 			return err
 		}
+		o.askedWidths[i] = width
 		display := "always"
 		if width == "" {
 			switch {
@@ -220,17 +240,19 @@ func (r *Runtime) readDurationUnits(o *durationOptions, options *Object) error {
 		if previous == "numeric" || previous == "2-digit" {
 			switch width {
 			case "long", "short", "narrow":
-				return r.throwRangeError(
-					"%s cannot be written as words after a part written as a number",
-					unit.field)
+				return r.intlInvalidRange("object", r.v8Describe(Obj(options)))
 			}
 			if unit.field == "minutes" || unit.field == "seconds" {
 				width = "2-digit"
 			}
 		}
-		if o.shown[i], err = r.stringOption(options, unit.field+"Display", display,
+		if o.askedShown[i], err = r.stringOption(options, unit.field+"Display", "",
 			"auto", "always"); err != nil {
 			return err
+		}
+		o.shown[i] = o.askedShown[i]
+		if o.shown[i] == "" {
+			o.shown[i] = display
 		}
 		o.widths[i] = width
 		previous = width
@@ -255,11 +277,16 @@ func (r *Runtime) durationFrom(v Value) ([len(durationUnits)]float64, error) {
 		if parsed, ok := parseDuration(v.String().Go()); ok {
 			return parsed, nil
 		}
-		return out, r.throwRangeError("that is not a duration: %s", v.String().Go())
+		_, err := temporal.ParseDuration([]byte(v.String().Go()))
+		message := "Parsing ended abruptly."
+		if err != nil {
+			message = strings.TrimPrefix(err.Error(), "RangeError: ")
+		}
+		return out, r.intlTemporalRange(message)
 	}
 	o := v.Object()
 	if o == nil {
-		return out, r.throwTypeError("a duration is an object")
+		return out, r.intlTemporalType("Duration argument must be Duration or string.")
 	}
 	if duration, ok := o.data.(*temporalDuration); ok {
 		return duration.fields(), nil
@@ -278,16 +305,16 @@ func (r *Runtime) durationFrom(v Value) ([len(durationUnits)]float64, error) {
 			return out, err
 		}
 		if math.IsNaN(n) || math.IsInf(n, 0) || n != math.Trunc(n) {
-			return out, r.throwRangeError("a duration is counted in whole units")
+			return out, r.intlTemporalRange("Expected finite integer.")
 		}
 		out[i] = n
 		any = true
 	}
 	if !any {
-		return out, r.throwTypeError("a duration has to say how long it was")
+		return out, r.intlTemporalType("Did not provide any valid Duration fields.")
 	}
 	if !validDuration(out) {
-		return out, r.throwRangeError("that is longer than a duration may be")
+		return out, r.intlTemporalRange("Duration was not valid.")
 	}
 	return out, nil
 }
@@ -391,221 +418,11 @@ func parseDuration(text string) ([len(durationUnits)]float64, bool) {
 	return out, true
 }
 
-// durationPiece is one part of a written duration, which says which unit it
-// belongs to where it belongs to one.
-type durationPiece struct {
-	kind  string
-	value string
-	unit  string
-}
-
-// durationText is the pieces run together, which is what format answers with.
-func durationText(pieces []durationPiece) string {
-	var b strings.Builder
-	for _, piece := range pieces {
-		b.WriteString(piece.value)
-	}
-	return b.String()
-}
-
-// parts writes a duration out: each part as a measurement or as a number, the
-// numbers run together with a colon, and the whole joined the way this
-// language joins a list.
-//
-// A part smaller than a second, where the part before it was written as a
-// number, is written after the point of that part rather than on its own:
-// 1.5 seconds and not 1 second and 500 milliseconds.
-func (o *durationOptions) parts(r *Runtime, duration [len(durationUnits)]float64) []durationPiece {
-	negative := false
-	for _, value := range duration {
-		if value < 0 {
-			negative = true
-			break
-		}
-	}
-
-	var groups [][]durationPiece
-	running := false
-	signWritten := false
-	for i, unit := range durationUnits {
-		value, places := decimalOf(duration[i]), -1
-		if duration[i] == 0 && math.Signbit(duration[i]) {
-			value.negative = true
-		}
-		numeric := o.widths[i] == "numeric" || o.widths[i] == "2-digit"
-
-		// The parts smaller than a second run into the one before them.
-		last := false
-		if i+1 < len(durationUnits) && o.widths[i+1] == "numeric" {
-			switch unit.field {
-			case "seconds", "milliseconds", "microseconds":
-				value, _ = parseDecimal(fractionOf(duration, i))
-				last = true
-				places = 9
-				if o.hasFractional {
-					places = o.fractionalDigits
-				}
-			}
-		}
-
-		// A zero is left out unless it was asked for, or unless it is the
-		// minutes of a clock that goes on to show seconds.
-		needed := false
-		if unit.field == "minutes" && running {
-			needed = o.shown[i+1] == "always" || duration[i+1] != 0 ||
-				duration[i+2] != 0 || duration[i+3] != 0 || duration[i+4] != 0
-		}
-		if value.isZero() && o.shown[i] == "auto" && !needed {
-			if last {
-				break
-			}
-			continue
-		}
-
-		// The sign is written once, on the first part that is written.
-		sign := false
-		if !signWritten {
-			signWritten, sign = true, negative
-		}
-		pieces := o.written(unit.unit, value, o.widths[i], sign, places)
-		switch {
-		case running:
-			at := len(groups) - 1
-			groups[at] = append(groups[at],
-				durationPiece{"literal", o.timeSeparator(), ""})
-			groups[at] = append(groups[at], pieces...)
-		default:
-			groups = append(groups, pieces)
-			running = numeric
-		}
-		if last {
-			break
-		}
-	}
-	if len(groups) == 0 {
-		return []durationPiece{{"literal", "", ""}}
-	}
-
-	// Joined the way a list of measurements is joined.
-	listStyle := o.listStyle()
-	list := &listOptions{locale: o.locale, kind: "unit", style: listStyle}
-	if pattern, ok := o.locale.DurationListPattern(listStyle); ok {
-		list.custom = &pattern
-	}
-	items := make([]string, len(groups))
-	for i, group := range groups {
-		items[i] = durationText(group)
-	}
-	var out []durationPiece
-	at := 0
-	for _, piece := range list.pieces(items) {
-		if piece.kind == "element" && at < len(groups) {
-			out = append(out, groups[at]...)
-			at++
-			continue
-		}
-		out = append(out, durationPiece{"literal", piece.value, ""})
-	}
-	return out
-}
-
-// fractionOf is a part of a duration with everything smaller than it counted
-// after the point: the seconds with the milliseconds, microseconds and
-// nanoseconds written as a fraction of a second.
-//
-// The sum is taken in whole nanoseconds, which every part below a second
-// divides into exactly, so that a duration counted precisely is written
-// precisely: 1.500250000 and not 1.500249999. It is taken in whole numbers of
-// any size, since a duration may be longer than floating point counts exactly.
-func fractionOf(duration [len(durationUnits)]float64, from int) string {
-	first := len(durationUnits) - 4
-	scale := [...]int64{1e9, 1e6, 1e3, 1}
-	total := new(big.Int)
-	for i := from; i < len(durationUnits); i++ {
-		part, _ := new(big.Float).SetFloat64(duration[i]).Int(nil)
-		total.Add(total, part.Mul(part, big.NewInt(scale[i-first])))
-	}
-	unit := big.NewInt(scale[from-first])
-	whole, rest := new(big.Int).QuoRem(total, unit, new(big.Int))
-
-	out := whole.String()
-	if whole.Sign() == 0 && total.Sign() < 0 {
-		out = "-0"
-	}
-	if digits := 9 - 3*(from-first); digits > 0 {
-		fraction := rest.Abs(rest).String()
-		for len(fraction) < digits {
-			fraction = "0" + fraction
-		}
-		out += "." + fraction
-	}
-	return out
-}
-
-// written is one part of a duration: a measurement where it stands on its own,
-// and a plain number where it is part of a clock.
-func (o *durationOptions) written(unit string, value decimal, width string, sign bool, places int) []durationPiece {
-	numbers := o.numberFormat()
-	switch width {
-	case "numeric", "2-digit":
-		numbers.useGrouping = ""
-		if width == "2-digit" {
-			numbers.minInt = 2
-		}
-	default:
-		numbers.style, numbers.unit, numbers.unitDisplay = "unit", unit, width
-	}
-	if places >= 0 {
-		// What will not fit after the point is dropped rather than rounded,
-		// since a duration counted exactly should not come out longer than it
-		// was.
-		numbers.maxFrac, numbers.roundingMode = places, "trunc"
-		if o.hasFractional {
-			numbers.minFrac = places
-		}
-	}
-	if !sign {
-		numbers.signDisplay = "never"
-	} else if value.isZero() {
-		// The first part written carries the sign even where it is nothing.
-		value.negative = true
-	}
-	out := make([]durationPiece, 0, 4)
-	for _, piece := range numbers.decimalParts(value) {
-		out = append(out, durationPiece{piece.kind, piece.value, unit})
-	}
-	return out
-}
-
-// numberFormat is how the counts in a duration are written: plainly, in
-// whatever digits this locale writes numbers with.
-func (o *durationOptions) numberFormat() *numberOptions {
-	return &numberOptions{
-		locale: o.locale, choice: o.choice, digits: o.choice.setting("nu"),
-		style: "decimal", notation: "standard", signDisplay: "auto",
-		useGrouping: "auto", minInt: 1, rounding: "fraction",
-		roundingMode: "halfExpand", roundingIncrement: 1,
-	}
-}
-
-// timeSeparator is what stands between the hours and the minutes, which is a
-// colon nearly everywhere.
-func (o *durationOptions) timeSeparator() string { return ":" }
-
-// listStyle is how the parts are joined: a clock joins them the way short
-// measurements are joined.
-func (o *durationOptions) listStyle() string {
-	if o.style == "digital" {
-		return "short"
-	}
-	return o.style
-}
-
-func (r *Runtime) durationFormatOf(this Value) (*durationOptions, error) {
+func (r *Runtime) durationFormatOf(this Value, method string) (*durationOptions, error) {
 	if o := this.Object(); o != nil {
 		if opts, ok := o.data.(*durationOptions); ok {
 			return opts, nil
 		}
 	}
-	return nil, r.throwTypeError("this is not an Intl.DurationFormat")
+	return nil, r.intlIncompatibleReceiver(method, this)
 }

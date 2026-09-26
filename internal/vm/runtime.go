@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	intl "github.com/go-quickjs/go-intl"
+	"github.com/go-quickjs/go-intl/date"
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
@@ -25,6 +27,9 @@ type Runtime struct {
 	// intlProtos holds the prototypes of the Intl constructors, which are
 	// built only if something asks for Intl at all.
 	intlProtos map[string]*Object
+	// intlService is the Intl constructor reading its options, which V8's
+	// messages about an option name; see enterIntl.
+	intlService string
 	// intlFallback is the symbol a formatter made without new is hidden under.
 	intlFallback *Symbol
 	// temporalDurationProto is retained because Instant difference operations
@@ -217,17 +222,18 @@ type Runtime struct {
 	typedArrayProto *Object
 
 	// locale is the language a program means when it does not say which: the
-	// one the machine is set to, unless the host chose another. The pair
-	// after it remembers what that resolves to in the data, since a date
-	// written out asks on every call.
-	locale         string
-	localeAsked    string
-	localeResolved string
+	// one the machine is set to, unless the host chose another.
+	locale string
 	// clock and timeZone supply Date with the current time and the local zone.
 	// They are fields rather than direct calls to the time package so that a
-	// host can give a sandboxed script a fixed clock, or none at all.
+	// host can give a sandboxed script a fixed clock, or none at all. A nil
+	// timeZone is the host's.
 	clock    func() time.Time
-	timeZone *time.Location
+	timeZone *intl.TimeZone
+	// dates is local time as Date reckons it, go-intl's Environment, made
+	// from the three above when a Date first needs it and made again when
+	// one of them changes.
+	dates *date.Environment
 
 	// templateCache keeps the object identity that tagged templates require:
 	// the same template site must hand the same strings array to its tag on

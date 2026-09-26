@@ -1,11 +1,11 @@
 package vm
 
 import (
+	intl "github.com/go-quickjs/go-intl"
 	"math"
 	"math/big"
 	"strconv"
 	"strings"
-	"time"
 )
 
 type temporalPlainTime struct {
@@ -249,29 +249,10 @@ func (r *Runtime) initTemporalPlainTime(temporal *Object) {
 		return Str(NewString(time.string())), nil
 	})
 	r.defMethod(proto, "toLocaleString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		plainTime, err := rt.temporalPlainTimeValue(this, "Temporal.PlainTime.prototype.toLocaleString")
-		if err != nil {
+		if _, err := rt.temporalPlainTimeValue(this, "Temporal.PlainTime.prototype.toLocaleString"); err != nil {
 			return Undefined, err
 		}
-		options, err := rt.dateOptionsFrom(args, map[string]string{
-			"hour": "numeric", "minute": "numeric", "second": "numeric",
-		}, "time")
-		if err != nil {
-			return Undefined, err
-		}
-		options.temporalKind = "plain-time"
-		options, err = rt.dateOptionsForArgument(options, this)
-		if err != nil {
-			return Undefined, err
-		}
-		// A PlainTime supplies wall-clock fields, not an instant. Its requested
-		// formatting time zone therefore cannot shift or skip the time.
-		value := time.Date(1970, time.January, 1, plainTime.hour,
-			plainTime.minute, plainTime.second,
-			plainTime.millisecond*1_000_000+
-				plainTime.microsecond*1_000+plainTime.nanosecond,
-			time.UTC)
-		return Str(NewString(options.format(value))), nil
+		return rt.temporalToLocaleString(this, args, intl.ComponentsTime, intl.ComponentsTime)
 	})
 	r.defMethod(proto, "valueOf", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if _, err := rt.temporalPlainTimeValue(this, "Temporal.PlainTime.prototype.valueOf"); err != nil {

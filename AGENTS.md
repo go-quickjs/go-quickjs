@@ -138,9 +138,6 @@ and record the version in `internal/icu/timezones.go`.
   entire multilingual dataset because it creates first-use latency spikes.
 - Parsing should remain feature-lazy: NumberFormat must not materialize date,
   collation, list, or relative-time tables, for example.
-- `quickjs.WarmupDateTimeData()` and `quickjs.WarmupIntlData()` are the explicit
-  eager paths. If a dataset is added, update the applicable warmup and verify
-  that every entry was actually materialized.
 - Lazy initialization must use `sync.Once` or an appropriate lock and must pass
   race testing. Do not hold a global lock while doing work that can safely be
   published per block or per locale.
@@ -165,7 +162,6 @@ For concurrency or shared-cache changes:
 
 ```sh
 go test -race -count=1 ./internal/icu
-go test -race -count=1 . -run 'TestWarmup(Intl|DateTime)DataBeforeRuntime'
 ```
 
 For portability-sensitive changes:

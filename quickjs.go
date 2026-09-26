@@ -145,28 +145,6 @@ func WithNodeQuirks() Option {
 	return func(c *config) { c.nodeQuirks = true }
 }
 
-// WarmupDateTimeData eagerly loads all process-wide data used by Date's legacy
-// string methods and Intl.DateTimeFormat. Servers can call it during startup,
-// before constructing a Runtime, to avoid locale- or time-zone-dependent
-// latency spikes while serving requests.
-//
-// The loaded data includes every locale, calendar, modern and historical zone
-// name, legacy transition timeline, and bundled IANA time zone. It remains
-// resident for the life of the process. Repeated calls do nothing.
-func WarmupDateTimeData() {
-	vm.WarmupDateTimeData()
-}
-
-// WarmupIntlData eagerly loads every process-wide dataset used by Intl,
-// including collations, display names, segmentation rules and dictionaries,
-// number and unit formats, calendars, and time-zone names. Servers can call it
-// before constructing a Runtime to move all data-dependent latency to startup.
-// The loaded data remains resident for the life of the process. Repeated calls
-// do nothing.
-func WarmupIntlData() {
-	vm.WarmupIntlData()
-}
-
 // New creates a Runtime with the standard globals installed.
 func New(opts ...Option) *Runtime {
 	var c config
@@ -369,9 +347,10 @@ func (r *Runtime) SetClock(fn func() time.Time) {
 	r.rt.SetClock(fn)
 }
 
-// SetTimeZone installs the zone that local-time Date methods use. Named IANA
-// locations use the tzdata bundled with Intl rather than the host's possibly
-// different copy. Passing nil restores the process zone.
+// SetTimeZone installs the zone that local-time Date methods use. A location
+// is taken by its name from the time zone data bundled with Intl, rather
+// than from the host's possibly different copy, and one whose name that data
+// does not know by its offset. Passing nil restores the host's zone.
 func (r *Runtime) SetTimeZone(loc *time.Location) {
 	if r.closed {
 		return

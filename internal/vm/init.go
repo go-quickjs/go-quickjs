@@ -2,11 +2,11 @@ package vm
 
 import (
 	"context"
-	"sync"
+	"fmt"
 	"time"
 
+	intl "github.com/go-quickjs/go-intl"
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-	"github.com/go-quickjs/go-quickjs/internal/icu"
 )
 
 // Config configures a new Runtime.
@@ -25,34 +25,6 @@ type Config struct {
 	// NodeQuirks reproduces known observable Node.js divergences from the
 	// standards where compatibility is more important than conformance.
 	NodeQuirks bool
-}
-
-// WarmupDateTimeData eagerly loads process-wide Date and Intl.DateTimeFormat
-// data before a Runtime is constructed.
-var dateTimeWarmupOnce sync.Once
-
-func WarmupDateTimeData() {
-	dateTimeWarmupOnce.Do(func() {
-		icu.WarmupDateTimeData()
-		_, _ = time.Now().In(time.Local).Zone()
-		for _, name := range icu.Zones() {
-			_, _ = loadNamedLocation(name)
-			target := name
-			if to, ok := icu.ZoneTarget(name); ok {
-				target = to
-			}
-			if isUTCName(target) {
-				continue
-			}
-			_, _ = loadNamedLocation(target)
-		}
-	})
-}
-
-// WarmupIntlData eagerly loads all process-wide internationalization data.
-func WarmupIntlData() {
-	WarmupDateTimeData()
-	icu.WarmupIntlData()
 }
 
 // New creates a Runtime with the standard globals installed.
@@ -96,67 +68,48 @@ func New(cfg Config) *Runtime {
 
 // SetClock installs the source of the current time, which Date and Date.now
 // read. A nil clock means the process clock.
-func (r *Runtime) SetClock(fn func() time.Time) { r.clock = fn }
+func (r *Runtime) SetClock(fn func() time.Time) { r.clock, r.dates = fn, nil }
 
-// SetTimeZone installs the zone local time is expressed in. A nil zone means
-// the process zone. Named IANA locations use the database bundled alongside
-// ICU so that their arithmetic cannot drift from the localized zone names.
+// SetTimeZone installs the zone local time is expressed in. A nil zone, or
+// time.Local, means the host's, as ICU finds it. A zone is go-intl's by the
+// location's name, so that its offsets and its names come from the same data
+// as Intl's rather than from the host's possibly different zone files; a
+// location with a name go-intl does not know is a zone of its offset now.
 func (r *Runtime) SetTimeZone(loc *time.Location) {
-	if loc == nil {
-		r.timeZone = nil
-		return
+	r.timeZone, r.dates = timeZoneOf(loc), nil
+}
+
+func timeZoneOf(loc *time.Location) *intl.TimeZone {
+	if loc == nil || loc == time.Local {
+		return nil
 	}
-	name, ok := icu.CanonicalZone(loc.String())
-	if !ok {
-		r.timeZone = loc
-		return
+	if tz, err := intl.LoadTimeZone(intl.Embedded, loc.String()); err == nil {
+		return tz
 	}
-	target := name
-	if to, alias := icu.ZoneTarget(name); alias {
-		target = to
+	_, offset := time.Now().In(loc).Zone()
+	sign := '+'
+	if offset < 0 {
+		sign, offset = '-', -offset
 	}
-	// Keep the name the host supplied when the archive carries it. Legacy Date
-	// strings distinguish Greenwich aliases from UTC even though their clocks
-	// have identical rules.
-	if bundled, err := loadNamedLocation(name); err == nil {
-		r.timeZone = bundled
-		return
+	tz, err := intl.LoadTimeZone(intl.Embedded, fmt.Sprintf("%c%02d:%02d", sign, offset/3600, offset/60%60))
+	if err != nil {
+		return nil
 	}
-	if target != name {
-		if bundled, err := loadNamedLocation(target); err == nil {
-			r.timeZone = bundled
-			return
-		}
-	}
-	r.timeZone = loc
+	return tz
 }
 
 // SetLocale installs the language a program means when it does not say which.
 // Passing nothing restores the one the machine is set to.
-func (r *Runtime) SetLocale(tag string) { r.locale = tag }
+func (r *Runtime) SetLocale(tag string) { r.locale, r.dates = tag, nil }
 
 // Locale is the language this runtime formats in when a program does not say:
-// the one the host chose, or the one the machine is set to, or English.
+// the one the host chose, or the one the machine is set to, as ICU finds it,
+// which is English where it says none.
 func (r *Runtime) Locale() string {
-	switch {
-	case r.locale != "":
+	if r.locale != "" {
 		return r.locale
-	default:
-		if tag := icu.Environment(); tag != "" {
-			return tag
-		}
 	}
-	return "en-US"
-}
-
-// formatLocale is the language the engine formats in, spelled the way the
-// data spells it: what Locale says, resolved to the nearest language there is
-// data for. ar-EG is written as ar-BH is, de-AT as de is.
-func (r *Runtime) formatLocale() string {
-	if tag := r.Locale(); tag != r.localeAsked {
-		r.localeAsked, r.localeResolved = tag, icu.ResolveTag(tag)
-	}
-	return r.localeResolved
+	return intl.HostLocale().String()
 }
 
 // SetContext installs the context the interpreter checks for cancellation.

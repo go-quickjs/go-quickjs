@@ -1,6 +1,8 @@
 package vm
 
 import (
+	intl "github.com/go-quickjs/go-intl"
+
 	"math"
 	"math/big"
 	"strconv"
@@ -371,7 +373,11 @@ func (r *Runtime) initTemporalDuration(temporal *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(durationText(options.parts(rt, duration.fields())))), nil
+		text, err := options.format.Format(intl.Duration(duration.fields()))
+		if err != nil {
+			return Undefined, rt.intlTemporalRange("Duration was not valid.")
+		}
+		return Str(NewString(text)), nil
 	})
 	r.defMethod(proto, "valueOf", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if _, err := rt.temporalDurationValue(this, "Temporal.Duration.prototype.valueOf"); err != nil {

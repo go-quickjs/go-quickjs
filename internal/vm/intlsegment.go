@@ -1,37 +1,29 @@
 package vm
 
 import (
-	"sort"
-
-	"github.com/go-quickjs/go-quickjs/internal/icu"
-	"github.com/go-quickjs/go-quickjs/internal/wtf8"
+	intl "github.com/go-quickjs/go-intl"
 )
 
 // Intl.Segmenter: where a text may be broken into characters, words or
-// sentences. The rules live in internal/icu; what is here is the object a
-// script sees, which hands out the pieces one at a time along with where each
-// one started.
+// sentences. go-intl's Segmenter breaks it, with ICU's rules and
+// dictionaries; what is here is the object a script sees, which hands out
+// the pieces one at a time along with where each one started.
 
 type segmenterOptions struct {
-	locale      *icu.Locale
-	requested   string
+	segmenter   *intl.Segmenter
+	locale      string
 	granularity string // grapheme, word, sentence
 }
 
-// segmentsData is one text, already broken, with every piece addressable both
-// by the byte it starts at and by the code unit a script would call its index.
+// segmentsData is one text, already broken, its pieces counted in code
+// units, as a script indexes it.
 type segmentsData struct {
 	options *segmenterOptions
 	// input is the text as it was handed over, which the pieces are cut from so
 	// that an unpaired surrogate survives the round trip.
-	input *String
-	// text is the same, with anything unpaired made well formed, which is what
-	// the rules read. Both spellings are three bytes, so the offsets agree.
-	text string
-	// at is where each piece begins and where the last one ends, in bytes, and
-	// units is the same in code units.
-	at    []int
-	units []int
+	input    *String
+	segments *intl.Segments
+	all      []intl.Segment
 }
 
 // segmentIterData is how far through the pieces an iterator has got.
@@ -40,16 +32,17 @@ type segmentIterData struct {
 	i        int
 }
 
-func (r *Runtime) initSegmenter(intl *Object) {
+func (r *Runtime) initSegmenter(intlObj *Object) {
 	proto := newObject(r.proto.object, ClassObject)
 	ctor := r.newCtor("Segmenter", 0, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		proto, err := rt.protoFromNewTargetErr(rt.intlProtoOf("Segmenter"))
 		if err != nil {
 			return Undefined, err
 		}
-		if err := rt.requireNew("Intl.Segmenter"); err != nil {
-			return Undefined, err
+		if !rt.Constructing() {
+			return Undefined, rt.intlRequiresNew("Intl.Segmenter")
 		}
+		defer rt.enterIntl("Intl.Segmenter")()
 		tags, err := rt.requestedLocales(arg(args, 0))
 		if err != nil {
 			return Undefined, err
@@ -58,24 +51,41 @@ func (r *Runtime) initSegmenter(intl *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		if _, err := rt.stringOption(options, "localeMatcher", "best fit",
-			"lookup", "best fit"); err != nil {
+		matcher, err := rt.stringOption(options, "localeMatcher", "best fit", "lookup", "best fit")
+		if err != nil {
 			return Undefined, err
 		}
-		choice := rt.resolveLocale(tags)
-		o := &segmenterOptions{locale: choice.data, requested: choice.locale()}
+		loc, err := rt.intlLocale(intl.ServiceSegmenter, tags, matcher)
+		if err != nil {
+			return Undefined, err
+		}
+		o := &segmenterOptions{}
 		if o.granularity, err = rt.stringOption(options, "granularity", "grapheme",
 			"grapheme", "word", "sentence"); err != nil {
 			return Undefined, err
 		}
+		opts := intl.SegmenterOptions{Granularity: map[string]intl.Granularity{
+			"grapheme": intl.GranularityGrapheme, "word": intl.GranularityWord,
+			"sentence": intl.GranularitySentence}[o.granularity]}
+		if o.segmenter, err = intl.NewSegmenter(loc, opts); err != nil {
+			return Undefined, rt.intlInternal()
+		}
+		// The Segmenter uses none of the Unicode extension; ICU's variant
+		// POSIX, which V8 keeps as -u-va-posix in every service, stays.
+		kept := loc
+		kept.Attributes, kept.Keywords = nil, nil
+		if va, ok := loc.Keyword("va"); ok {
+			kept.Keywords = []intl.Keyword{{Key: "va", Value: va}}
+		}
+		o.locale = kept.String()
 		out := newObject(proto, ClassObject)
 		out.data = o
 		return Obj(out), nil
 	})
-	r.defValue(intl, "Segmenter", Obj(ctor))
+	r.defValue(intlObj, "Segmenter", Obj(ctor))
 	r.intlProtos["Segmenter"] = proto
 	r.defToStringTag(proto, "Intl.Segmenter")
-	r.defSupportedLocalesOf(ctor)
+	r.defSupportedLocalesOfService(ctor, intl.ServiceSegmenter)
 
 	segments := r.newSegmentsProto()
 	iter := r.newSegmentIteratorProto()
@@ -83,7 +93,7 @@ func (r *Runtime) initSegmenter(intl *Object) {
 	r.intlProtos["SegmentIterator"] = iter
 
 	r.defMethod(proto, "segment", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.segmenterOf(this)
+		o, err := rt.segmenterOf(this, "Intl.Segmenter.prototype.segment")
 		if err != nil {
 			return Undefined, err
 		}
@@ -96,81 +106,39 @@ func (r *Runtime) initSegmenter(intl *Object) {
 		return Obj(out), nil
 	})
 	r.defMethod(proto, "resolvedOptions", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.segmenterOf(this)
+		o, err := rt.segmenterOf(this, "Intl.Segmenter.prototype.resolvedOptions")
 		if err != nil {
 			return Undefined, err
 		}
 		out := newObject(rt.proto.object, ClassObject)
-		rt.putString(out, "locale", o.requested)
+		rt.putString(out, "locale", o.locale)
 		rt.putString(out, "granularity", o.granularity)
 		return Obj(out), nil
 	})
 }
 
-// breakUp finds every place the text may be broken, and where each piece falls
-// in the text as a script counts it.
+// breakUp finds every place the text may be broken, in its code units,
+// which go-intl reads as JavaScript holds them.
 func (o *segmenterOptions) breakUp(s *String) *segmentsData {
-	text := s.Go()
-	if !wtf8.WellFormed(text) {
-		text = wtf8.ToWellFormed(text)
+	units := make([]uint16, s.Len())
+	for i := range units {
+		units[i] = uint16(s.CharCodeAt(i))
 	}
-	var kind icu.Granularity
-	switch o.granularity {
-	case "word":
-		kind = icu.Words
-	case "sentence":
-		kind = icu.Sentences
-	}
-	at := icu.Breaks(text, kind)
-	d := &segmentsData{options: o, input: s, text: text, at: at}
-
-	// The same places counted in code units, which is what a script indexes by.
-	d.units = make([]int, len(at))
-	unit, k := 0, 0
-	for i := 0; i <= len(text); {
-		for k < len(at) && at[k] == i {
-			d.units[k] = unit
-			k++
-		}
-		if i == len(text) {
-			break
-		}
-		switch {
-		case text[i] < 0x80:
-			i, unit = i+1, unit+1
-		default:
-			r, size := wtf8.DecodeRune(text[i:])
-			if r > 0xFFFF {
-				unit += 2
-			} else {
-				unit++
-			}
-			i += size
-		}
-	}
-	return d
-}
-
-// pieces is how many there are.
-func (d *segmentsData) pieces() int {
-	if len(d.at) == 0 {
-		return 0
-	}
-	return len(d.at) - 1
+	segments := o.segmenter.Segment(units)
+	return &segmentsData{options: o, input: s, segments: segments, all: segments.All()}
 }
 
 // dataObject is what a script is handed for one piece: the piece itself, where
 // it started, the text it came from, and -- for words -- whether it is a word
 // rather than a space or a mark.
-func (r *Runtime) dataObject(d *segmentsData, i int) Value {
+func (r *Runtime) dataObject(d *segmentsData, seg intl.Segment) Value {
 	out := newObject(r.proto.object, ClassObject)
-	piece := d.input.Substring(d.units[i], d.units[i+1])
+	piece := d.input.Substring(seg.Index, seg.End)
 	out.setOwnRaw(r.atoms.intern("segment"), Str(piece), propDefault)
-	out.setOwnRaw(r.atoms.intern("index"), Int(d.units[i]), propDefault)
+	out.setOwnRaw(r.atoms.intern("index"), Int(seg.Index), propDefault)
 	out.setOwnRaw(r.atoms.intern("input"), Str(d.input), propDefault)
 	if d.options.granularity == "word" {
-		out.setOwnRaw(r.atoms.intern("isWordLike"),
-			Bool(icu.WordLike(d.text[d.at[i]:d.at[i+1]])), propDefault)
+		out.setOwnRaw(r.atoms.intern("isWordLike"), Bool(seg.IsWordLike), propDefault)
 	}
 	return Obj(out)
 }
@@ -178,7 +146,7 @@ func (r *Runtime) dataObject(d *segmentsData, i int) Value {
 func (r *Runtime) newSegmentsProto() *Object {
 	p := newObject(r.proto.object, ClassObject)
 	r.defMethod(p, "containing", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		d, err := rt.segmentsOf(this)
+		d, err := rt.segmentsOf(this, "%Segments.prototype%.containing")
 		if err != nil {
 			return Undefined, err
 		}
@@ -189,17 +157,15 @@ func (r *Runtime) newSegmentsProto() *Object {
 		if n < 0 || n >= float64(d.input.Len()) {
 			return Undefined, nil
 		}
-		// The piece this code unit fell in: the last one that began at or
-		// before it.
-		i := sort.SearchInts(d.units, int(n)+1) - 1
-		if i < 0 || i >= d.pieces() {
+		seg, ok := d.segments.Containing(int(n))
+		if !ok {
 			return Undefined, nil
 		}
-		return rt.dataObject(d, i), nil
+		return rt.dataObject(d, seg), nil
 	})
 	r.defSymbolMethod(p, r.wellKnown.iterator, "[Symbol.iterator]", 0,
 		func(rt *Runtime, this Value, args []Value) (Value, error) {
-			d, err := rt.segmentsOf(this)
+			d, err := rt.segmentsOf(this, "%SegmentIsPrototype%[@@iterator]")
 			if err != nil {
 				return Undefined, err
 			}
@@ -218,13 +184,12 @@ func (r *Runtime) newSegmentIteratorProto() *Object {
 			it, _ = this.Object().data.(*segmentIterData)
 		}
 		if it == nil {
-			return Undefined, rt.throwTypeError(
-				"Segment Iterator.prototype.next called on an incompatible receiver")
+			return Undefined, rt.intlIncompatibleReceiver("%SegmentIterator.prototype%.next", this)
 		}
-		if it.i >= it.segments.pieces() {
+		if it.i >= len(it.segments.all) {
 			return Obj(rt.iterResult(Undefined, true)), nil
 		}
-		v := rt.dataObject(it.segments, it.i)
+		v := rt.dataObject(it.segments, it.segments.all[it.i])
 		it.i++
 		return Obj(rt.iterResult(v, false)), nil
 	})
@@ -232,20 +197,20 @@ func (r *Runtime) newSegmentIteratorProto() *Object {
 	return p
 }
 
-func (r *Runtime) segmenterOf(this Value) (*segmenterOptions, error) {
+func (r *Runtime) segmenterOf(this Value, method string) (*segmenterOptions, error) {
 	if o := this.Object(); o != nil {
 		if opts, ok := o.data.(*segmenterOptions); ok {
 			return opts, nil
 		}
 	}
-	return nil, r.throwTypeError("this is not an Intl.Segmenter")
+	return nil, r.intlIncompatibleReceiver(method, this)
 }
 
-func (r *Runtime) segmentsOf(this Value) (*segmentsData, error) {
+func (r *Runtime) segmentsOf(this Value, method string) (*segmentsData, error) {
 	if o := this.Object(); o != nil {
 		if d, ok := o.data.(*segmentsData); ok {
 			return d, nil
 		}
 	}
-	return nil, r.throwTypeError("this is not a Segments object")
+	return nil, r.intlIncompatibleReceiver(method, this)
 }

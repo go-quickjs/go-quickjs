@@ -95,7 +95,7 @@ func TestTemporalIntlDateTimeFormat(t *testing.T) {
 			new Temporal.PlainTime(0).toLocaleString("en", {hour12: false}),
 			new Temporal.ZonedDateTime(0n, "UTC").toLocaleString("en", {hour12: false})
 		].join("|")`, "1/1/1970, 00:00:00|1/1/1970, 00:00:00|" +
-			"00:00:00|1/1/1970, 00:00:00, UTC"},
+			"00:00:00|1/1/1970, 00:00:00 UTC"},
 		{`[
 			new Temporal.PlainTime(0).toLocaleString("en", {hourCycle: "h23"}),
 			new Temporal.PlainTime(0).toLocaleString("en", {hourCycle: "h24"}),

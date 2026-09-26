@@ -1,6 +1,8 @@
 package vm
 
 import (
+	intl "github.com/go-quickjs/go-intl"
+
 	"math"
 	"math/big"
 )
@@ -60,8 +62,7 @@ func (r *Runtime) initBigIntBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		d, _ := parseDecimal(b.V.String())
-		return Str(NewString(piecesText(o.decimalParts(d)))), nil
+		return Str(NewString(o.nf.FormatDecimal(intl.ParseDecimal(b.V.String())))), nil
 	})
 
 	r.defMethod(p, "valueOf", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {

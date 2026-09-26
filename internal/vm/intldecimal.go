@@ -93,25 +93,6 @@ func (d *decimal) normalize() {
 
 func (d decimal) isZero() bool { return d.digits == "" }
 
-// magnitude is the place value of the first digit: 1 for 1.5, 2 for 15, -1 for
-// 0.15. Zero has no magnitude and answers 0.
-func (d decimal) magnitude() int {
-	if d.isZero() {
-		return 0
-	}
-	return d.exp - 1
-}
-
-// times10 moves the point, which is how a percentage is made and how a number
-// is written in another notation.
-func (d decimal) times10(n int) decimal {
-	if d.isZero() {
-		return d
-	}
-	d.exp += n
-	return d
-}
-
 // roundAt rounds to a whole multiple of ten to the place, the way the mode
 // asks: 1.25 at place -1 is 1.3 rounding half up and 1.2 rounding half even.
 func (d decimal) roundAt(place int, mode string) decimal {
@@ -277,10 +258,6 @@ func increment(s string) (string, bool) {
 	return "1" + string(out), true
 }
 
-// digitCount is how many significant digits a number is written with, which is
-// what a rounding by precision counts.
-func (d decimal) digitCount() int { return len(d.digits) }
-
 // text writes the number out with at least one digit before the point and
 // between min and max after it, which is the form the pieces are cut from.
 func (d decimal) text(minFrac, maxFrac int) (whole, fraction string) {
@@ -305,44 +282,4 @@ func (d decimal) text(minFrac, maxFrac int) (whole, fraction string) {
 		fraction = fraction[:maxFrac]
 	}
 	return whole, fraction
-}
-
-// isInteger reports whether there is nothing after the point, which is what
-// says whether the zeros may be stripped.
-func (d decimal) isInteger() bool { return d.exp >= len(d.digits) }
-
-// compareDecimal orders two numbers, which is what a range needs to know
-// before it decides whether it is a range at all.
-func compareDecimal(a, b decimal) int {
-	switch {
-	case a.isZero() && b.isZero():
-		return 0
-	case a.negative != b.negative:
-		if a.negative {
-			return -1
-		}
-		return 1
-	}
-	sign := 1
-	if a.negative {
-		sign = -1
-	}
-	switch {
-	case a.isZero():
-		return -sign
-	case b.isZero():
-		return sign
-	case a.exp != b.exp:
-		if a.exp < b.exp {
-			return -sign
-		}
-		return sign
-	}
-	switch {
-	case a.digits < b.digits:
-		return -sign
-	case a.digits > b.digits:
-		return sign
-	}
-	return 0
 }

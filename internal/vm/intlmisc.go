@@ -4,7 +4,7 @@ import (
 	"math"
 	"strings"
 
-	"github.com/go-quickjs/go-quickjs/internal/icu"
+	intl "github.com/go-quickjs/go-intl"
 )
 
 // The rest of Intl: comparing text, choosing a plural form, joining a list,
@@ -12,97 +12,38 @@ import (
 
 // --- Collator ---------------------------------------------------------------
 
-// collatorOptions is a resolved Intl.Collator.
+// collatorOptions is a resolved Intl.Collator: go-intl's collator, and the
+// usage and sensitivity as they were named.
 type collatorOptions struct {
-	locale *icu.Locale
-	choice *localeChoice
-
+	collator    *intl.Collator
 	usage       string // sort, search
 	sensitivity string // base, accent, case, variant
-	numeric     bool
-	caseFirst   string
-	ignorePunct bool
 }
 
-func (r *Runtime) initCollator(intl *Object) {
+func (r *Runtime) initCollator(intlObj *Object) {
 	proto := newObject(r.proto.object, ClassObject)
 	ctor := r.newCtor("Collator", 0, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		proto, err := rt.protoFromNewTargetErr(rt.intlProtoOf("Collator"))
 		if err != nil {
 			return Undefined, err
 		}
-		tags, err := rt.requestedLocales(arg(args, 0))
+		o, err := rt.collatorFor(args)
 		if err != nil {
 			return Undefined, err
 		}
-		options, err := rt.optionsObject(arg(args, 1))
-		if err != nil {
-			return Undefined, err
-		}
-		// The options are read in the order the standard reads them, since a
-		// getter among them can tell.
-		o := &collatorOptions{}
-		if o.usage, err = rt.stringOption(options, "usage", "sort", "sort", "search"); err != nil {
-			return Undefined, err
-		}
-		if _, err := rt.stringOption(options, "localeMatcher", "best fit",
-			"lookup", "best fit"); err != nil {
-			return Undefined, err
-		}
-		collation, err := rt.typeOption(options, "collation")
-		if err != nil {
-			return Undefined, err
-		}
-		numeric, numericSet, err := rt.boolOption(options, "numeric")
-		if err != nil {
-			return Undefined, err
-		}
-		caseFirst, err := rt.stringOption(options, "caseFirst", "",
-			"upper", "lower", "false")
-		if err != nil {
-			return Undefined, err
-		}
-
-		choice := rt.resolveLocale(tags, "co", "kn", "kf")
-		if collation != "" {
-			choice.override("co", collation)
-		}
-		if numericSet {
-			choice.override("kn", boolWord(numeric))
-		}
-		choice.override("kf", caseFirst)
-		o.locale, o.choice = choice.data, choice
-		o.numeric = choice.setting("kn") == "true"
-		o.caseFirst = choice.setting("kf")
-
-		if o.sensitivity, err = rt.stringOption(options, "sensitivity", "variant",
-			"base", "accent", "case", "variant"); err != nil {
-			return Undefined, err
-		}
-		ignore, ignoreSet, err := rt.boolOption(options, "ignorePunctuation")
-		if err != nil {
-			return Undefined, err
-		}
-		// Whether punctuation counts is the language's own default: Thai
-		// ignores it, most languages do not.
-		o.ignorePunct = o.locale.Shifted
-		if ignoreSet {
-			o.ignorePunct = ignore
-		}
-
 		out := newObject(proto, ClassObject)
 		out.data = o
 		return Obj(out), nil
 	})
-	r.defValue(intl, "Collator", Obj(ctor))
+	r.defValue(intlObj, "Collator", Obj(ctor))
 	r.intlProtos["Collator"] = proto
 	r.defToStringTag(proto, "Intl.Collator")
-	r.defSupportedLocalesOf(ctor)
+	r.defSupportedLocalesOfService(ctor, intl.ServiceCollator)
 
 	// compare is a getter for a bound function, because it is nearly always
 	// handed straight to sort.
 	r.defGetter(proto, "compare", func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.collatorOf(this)
+		o, err := rt.collatorOf(this, "get Intl.Collator.prototype.compare")
 		if err != nil {
 			return Undefined, err
 		}
@@ -121,25 +62,36 @@ func (r *Runtime) initCollator(intl *Object) {
 	})
 
 	r.defMethod(proto, "resolvedOptions", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.collatorOf(this)
+		o, err := rt.collatorOf(this, "Intl.Collator.prototype.resolvedOptions")
 		if err != nil {
 			return Undefined, err
 		}
+		resolved := o.collator.ResolvedOptions()
 		out := newObject(rt.proto.object, ClassObject)
-		rt.putString(out, "locale", o.choice.locale())
+		rt.putString(out, "locale", resolved.Locale)
 		rt.putString(out, "usage", o.usage)
 		rt.putString(out, "sensitivity", o.sensitivity)
-		rt.putBool(out, "ignorePunctuation", o.ignorePunct)
-		rt.putString(out, "collation", o.choice.setting("co"))
-		rt.putBool(out, "numeric", o.numeric)
-		rt.putString(out, "caseFirst", o.caseFirst)
+		rt.putBool(out, "ignorePunctuation", resolved.IgnorePunctuation)
+		rt.putString(out, "collation", resolved.Collation)
+		rt.putBool(out, "numeric", resolved.Numeric)
+		caseFirst := "false"
+		switch resolved.CaseFirst {
+		case intl.CaseFirstUpper:
+			caseFirst = "upper"
+		case intl.CaseFirstLower:
+			caseFirst = "lower"
+		}
+		rt.putString(out, "caseFirst", caseFirst)
 		return Obj(out), nil
 	})
 }
 
-// collatorFor builds a collator from a locale and options, for the
-// localeCompare method that takes the same two.
+// collatorFor builds a collator from a locale and options, as the
+// constructor and localeCompare, which takes the same two, both do: the
+// options read in the order ECMA-402 reads them, since a getter among them
+// can tell.
 func (r *Runtime) collatorFor(args []Value) (*collatorOptions, error) {
+	defer r.enterIntl("Intl.Collator")()
 	tags, err := r.requestedLocales(arg(args, 0))
 	if err != nil {
 		return nil, err
@@ -148,13 +100,12 @@ func (r *Runtime) collatorFor(args []Value) (*collatorOptions, error) {
 	if err != nil {
 		return nil, err
 	}
-	// The same options a collator reads, in the same order.
-	o := &collatorOptions{usage: "sort", sensitivity: "variant", caseFirst: "false"}
+	o := &collatorOptions{}
 	if o.usage, err = r.stringOption(options, "usage", "sort", "sort", "search"); err != nil {
 		return nil, err
 	}
-	if _, err := r.stringOption(options, "localeMatcher", "best fit",
-		"lookup", "best fit"); err != nil {
+	matcher, err := r.stringOption(options, "localeMatcher", "best fit", "lookup", "best fit")
+	if err != nil {
 		return nil, err
 	}
 	collation, err := r.typeOption(options, "collation")
@@ -169,146 +120,64 @@ func (r *Runtime) collatorFor(args []Value) (*collatorOptions, error) {
 	if err != nil {
 		return nil, err
 	}
-	choice := r.resolveLocale(tags, "co", "kn", "kf")
-	if collation != "" {
-		choice.override("co", collation)
+	loc, err := r.intlLocale(intl.ServiceCollator, tags, matcher)
+	if err != nil {
+		return nil, err
 	}
-	if numericSet {
-		choice.override("kn", boolWord(numeric))
-	}
-	choice.override("kf", caseFirst)
-	o.locale, o.choice = choice.data, choice
-	o.numeric = choice.setting("kn") == "true"
-	o.caseFirst = choice.setting("kf")
 	if o.sensitivity, err = r.stringOption(options, "sensitivity", "variant",
 		"base", "accent", "case", "variant"); err != nil {
 		return nil, err
 	}
-	o.ignorePunct = o.locale.Shifted
 	ignore, ignoreSet, err := r.boolOption(options, "ignorePunctuation")
 	if err != nil {
 		return nil, err
 	}
+
+	opts := intl.CollatorOptions{Collation: collation, Compat: r.intlCompat(),
+		Sensitivity: map[string]intl.Sensitivity{"base": intl.SensitivityBase,
+			"accent": intl.SensitivityAccent, "case": intl.SensitivityCase,
+			"variant": intl.SensitivityVariant}[o.sensitivity],
+		CaseFirst: map[string]intl.CaseFirst{"": intl.CaseFirstDefault, "upper": intl.CaseFirstUpper,
+			"lower": intl.CaseFirstLower, "false": intl.CaseFirstFalse}[caseFirst],
+	}
+	if o.usage == "search" {
+		opts.Usage = intl.UsageSearch
+	}
+	if numericSet {
+		opts.Numeric = intl.Bool(numeric)
+	}
 	if ignoreSet {
-		o.ignorePunct = ignore
+		opts.IgnorePunctuation = intl.Bool(ignore)
+	}
+	if o.collator, err = intl.NewCollator(loc, opts); err != nil {
+		return nil, r.intlInternal()
 	}
 	return o, nil
 }
 
-func (r *Runtime) collatorOf(this Value) (*collatorOptions, error) {
+func (r *Runtime) collatorOf(this Value, method string) (*collatorOptions, error) {
 	if o := this.Object(); o != nil {
 		if opts, ok := o.data.(*collatorOptions); ok {
 			return opts, nil
 		}
 	}
-	return nil, r.throwTypeError("this is not an Intl.Collator")
+	return nil, r.intlIncompatibleReceiver(method, this)
 }
 
-// compare orders two strings.
-//
-// The ordering is the Unicode one, out of the table in internal/icu: the
-// letters first, then the accents, then the case, each level only where the
-// one before it came out equal. What the options change is how much of that
-// counts, and whether a run of digits is read as a number.
-func (o *collatorOptions) compare(a, b string) int {
-	collation := o.choice.setting("co")
-	german := o.locale.Tag == "de" || strings.HasPrefix(o.locale.Tag, "de-")
-	phonebook := german && (o.usage == "search" || collation == "phonebk")
-	// Two spellings of the same text are the same text: "ö" written as one
-	// character and as an o with a mark after it sort as equal, whatever the
-	// language.
-	if a != b {
-		form := "NFC"
-		turkish := o.locale.Tag == "tr" || strings.HasPrefix(o.locale.Tag, "tr-")
-		if o.sensitivity == "case" && !phonebook && !turkish {
-			// Decomposing makes an accent disappear at the secondary level while
-			// retaining the base letter's case at the tertiary level.
-			form = "NFD"
-		}
-		a, b = normalizeString(a, form), normalizeString(b, form)
-	}
-	if o.ignorePunct {
-		a, b = stripPunctuation(a), stripPunctuation(b)
-	}
-	strength, skipAccents := o.strength()
-	if collation == "eor" {
-		return o.locale.CompareEOR(a, b, strength, skipAccents,
-			o.caseFirst == "upper", o.numeric)
-	}
-	if phonebook {
-		return o.locale.ComparePhonebook(a, b, strength, skipAccents,
-			o.caseFirst == "upper", o.numeric)
-	}
-	return o.locale.CompareCollation(a, b, strength, skipAccents,
-		o.caseFirst == "upper", o.numeric, collation)
-}
-
-// strength is how much of a difference this collator counts, and whether the
-// accents are part of it.
-func (o *collatorOptions) strength() (icu.Strength, bool) {
-	switch o.sensitivity {
-	case "base":
-		return icu.Primary, false
-	case "accent":
-		return icu.Secondary, false
-	case "case":
-		// The letters and the case, but not what is between them.
-		return icu.Tertiary, true
-	}
-	return icu.Tertiary, false
-}
-
-// stripPunctuation drops what a collator told to ignore punctuation ignores.
-func stripPunctuation(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case r == ' ' || r == '\t' || r == '\n':
-		case r < 0x80 && !(r >= '0' && r <= '9') && !(r >= 'a' && r <= 'z') &&
-			!(r >= 'A' && r <= 'Z'):
-		default:
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
-}
+// compare orders two strings, as ICU's collator does.
+func (o *collatorOptions) compare(a, b string) int { return o.collator.Compare(a, b) }
 
 // --- PluralRules ------------------------------------------------------------
 
+// pluralOptions is a resolved Intl.PluralRules: go-intl's rules, and the
+// digit options it was given, which resolvedOptions reports.
 type pluralOptions struct {
-	locale    *icu.Locale
-	requested string
-	ordinal   bool
-	// numbers is how the count would be written, since which form a language
-	// puts a number in depends on how many digits are written rather than on
-	// the number itself: one apple, but 1.0 apples.
+	rules   *intl.PluralRules
+	ordinal bool
 	numbers *numberOptions
 }
 
-// categoryOf is the form a language puts a count in, asked of the number as it
-// would be written rather than as it was given.
-func (o *pluralOptions) categoryOf(n float64) string {
-	rule := o.rule()
-	if o.numbers == nil {
-		return rule.Category(n)
-	}
-	// The digits the count would be written with, which is what the rules ask
-	// about: whether there is a fraction, and how long it is. Compact notation
-	// also supplies the power of ten factored out of the displayed number.
-	d := decimalOf(n)
-	kept, exponent := "", 0
-	if o.numbers.notation == "compact" {
-		var scaled decimal
-		scaled, kept, _, exponent = o.numbers.compactly(d)
-		d = scaled.times10(exponent)
-	} else {
-		d, kept = o.numbers.round(d)
-	}
-	whole, fraction := o.numbers.rawDigits(d, kept)
-	return rule.CategoryOf(whole, fraction, n, exponent)
-}
-
-func (r *Runtime) initPluralRules(intl *Object) {
+func (r *Runtime) initPluralRules(intlObj *Object) {
 	proto := newObject(r.proto.object, ClassObject)
 	ctor := r.newCtor("PluralRules", 0, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		proto, err := rt.protoFromNewTargetErr(rt.intlProtoOf("PluralRules"))
@@ -316,8 +185,9 @@ func (r *Runtime) initPluralRules(intl *Object) {
 			return Undefined, err
 		}
 		if !rt.Constructing() {
-			return Undefined, rt.throwTypeError("Intl.PluralRules requires new")
+			return Undefined, rt.intlRequiresNew("Intl.PluralRules")
 		}
+		defer rt.enterIntl("Intl.PluralRules")()
 		tags, err := rt.requestedLocales(arg(args, 0))
 		if err != nil {
 			return Undefined, err
@@ -326,21 +196,22 @@ func (r *Runtime) initPluralRules(intl *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		if _, err := rt.stringOption(options, "localeMatcher", "best fit",
-			"lookup", "best fit"); err != nil {
+		matcher, err := rt.stringOption(options, "localeMatcher", "best fit", "lookup", "best fit")
+		if err != nil {
 			return Undefined, err
 		}
-		choice := rt.resolveLocale(tags)
+		loc, err := rt.intlLocale(intl.ServicePluralRules, tags, matcher)
+		if err != nil {
+			return Undefined, err
+		}
 		kind, err := rt.stringOption(options, "type", "cardinal", "cardinal", "ordinal")
 		if err != nil {
 			return Undefined, err
 		}
-		o := &pluralOptions{locale: choice.data, requested: choice.locale(),
-			ordinal: kind == "ordinal"}
+		o := &pluralOptions{ordinal: kind == "ordinal"}
 		// How a number is written decides which form a language puts it in, so
 		// a plural rule reads the same digit options a number format does.
-		o.numbers = &numberOptions{locale: choice.data, choice: choice, style: "decimal",
-			signDisplay: "auto", useGrouping: "auto"}
+		o.numbers = &numberOptions{style: "decimal", signDisplay: "auto", useGrouping: "auto"}
 		if o.numbers.notation, err = rt.stringOption(options, "notation", "standard",
 			"standard", "scientific", "engineering", "compact"); err != nil {
 			return Undefined, err
@@ -352,17 +223,31 @@ func (r *Runtime) initPluralRules(intl *Object) {
 		if err := rt.readDigitOptions(o.numbers, options, 0, 3); err != nil {
 			return Undefined, err
 		}
+		d := o.numbers.intlDigits()
+		opts := intl.PluralRulesOptions{
+			MinimumIntegerDigits: d.minInt, MinimumFractionDigits: d.minFrac,
+			MaximumFractionDigits: d.maxFrac, MinimumSignificantDigits: d.minSig,
+			MaximumSignificantDigits: d.maxSig, RoundingPriority: d.priority, RoundingMode: d.mode,
+			RoundingIncrement: d.increment, TrailingZeroDisplay: d.trailing,
+			Notation: d.notation, CompactDisplay: d.compact,
+		}
+		if o.ordinal {
+			opts.Type = intl.Ordinal
+		}
+		if o.rules, err = intl.NewPluralRules(loc, opts); err != nil {
+			return Undefined, rt.intlInternal()
+		}
 		out := newObject(proto, ClassObject)
 		out.data = o
 		return Obj(out), nil
 	})
-	r.defValue(intl, "PluralRules", Obj(ctor))
+	r.defValue(intlObj, "PluralRules", Obj(ctor))
 	r.intlProtos["PluralRules"] = proto
 	r.defToStringTag(proto, "Intl.PluralRules")
-	r.defSupportedLocalesOf(ctor)
+	r.defSupportedLocalesOfService(ctor, intl.ServicePluralRules)
 
 	r.defMethod(proto, "select", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.pluralOf(this)
+		o, err := rt.pluralOf(this, "Intl.PluralRules.prototype.select")
 		if err != nil {
 			return Undefined, err
 		}
@@ -370,15 +255,18 @@ func (r *Runtime) initPluralRules(intl *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(o.categoryOf(n))), nil
+		return Str(NewString(string(o.rules.Select(n)))), nil
 	})
 	r.defMethod(proto, "selectRange", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.pluralOf(this)
+		o, err := rt.pluralOf(this, "Intl.PluralRules.prototype.selectRange")
 		if err != nil {
 			return Undefined, err
 		}
-		if arg(args, 0).IsUndefined() || arg(args, 1).IsUndefined() {
-			return Undefined, rt.throwTypeError("a range has two ends")
+		if arg(args, 0).IsUndefined() {
+			return Undefined, rt.intlInvalidType("startRange", "undefined")
+		}
+		if arg(args, 1).IsUndefined() {
+			return Undefined, rt.intlInvalidType("endRange", "undefined")
 		}
 		start, err := rt.toNumber(arg(args, 0))
 		if err != nil {
@@ -388,20 +276,26 @@ func (r *Runtime) initPluralRules(intl *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		if math.IsNaN(start) || math.IsNaN(end) {
-			return Undefined, rt.throwRangeError("a range does not have a NaN at either end")
+		if math.IsNaN(start) {
+			return Undefined, rt.intlInvalidRange("startRange", "NaN")
 		}
-		// A range takes the form its end takes, which is what the languages
-		// carried here do.
-		return Str(NewString(o.categoryOf(end))), nil
+		if math.IsNaN(end) {
+			return Undefined, rt.intlInvalidRange("endRange", "NaN")
+		}
+		category, err := o.rules.SelectRange(start, end)
+		if err != nil {
+			return Undefined, rt.intlInternal()
+		}
+		return Str(NewString(string(category))), nil
 	})
 	r.defMethod(proto, "resolvedOptions", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.pluralOf(this)
+		o, err := rt.pluralOf(this, "Intl.PluralRules.prototype.resolvedOptions")
 		if err != nil {
 			return Undefined, err
 		}
+		resolved := o.rules.ResolvedOptions()
 		out := newObject(rt.proto.object, ClassObject)
-		rt.putString(out, "locale", o.requested)
+		rt.putString(out, "locale", resolved.Locale)
 		kind := "cardinal"
 		if o.ordinal {
 			kind = "ordinal"
@@ -420,10 +314,9 @@ func (r *Runtime) initPluralRules(intl *Object) {
 			rt.putInt(out, "minimumSignificantDigits", o.numbers.minSig)
 			rt.putInt(out, "maximumSignificantDigits", o.numbers.maxSig)
 		}
-		categories := o.rule().Categories
-		values := make([]Value, len(categories))
-		for i, c := range categories {
-			values[i] = Str(NewString(c))
+		values := make([]Value, len(resolved.PluralCategories))
+		for i, c := range resolved.PluralCategories {
+			values[i] = Str(NewString(string(c)))
 		}
 		out.setOwnRaw(rt.atoms.intern("pluralCategories"), Obj(rt.newArrayFrom(values)), propDefault)
 		rt.putInt(out, "roundingIncrement", o.numbers.roundingIncrement)
@@ -434,51 +327,45 @@ func (r *Runtime) initPluralRules(intl *Object) {
 	})
 }
 
-func (o *pluralOptions) rule() *icu.PluralRule {
-	if o.ordinal {
-		return o.locale.OrdinalRule()
-	}
-	return o.locale.CardinalRule()
-}
-
-func (r *Runtime) pluralOf(this Value) (*pluralOptions, error) {
+func (r *Runtime) pluralOf(this Value, method string) (*pluralOptions, error) {
 	if o := this.Object(); o != nil {
 		if opts, ok := o.data.(*pluralOptions); ok {
 			return opts, nil
 		}
 	}
-	return nil, r.throwTypeError("this is not an Intl.PluralRules")
+	return nil, r.intlIncompatibleReceiver(method, this)
 }
 
 // --- DisplayNames -----------------------------------------------------------
 
 type displayOptions struct {
-	locale    *icu.Locale
-	requested string
-	kind      string // language, region, script, currency, calendar, dateTimeField
-	style     string
-	fallback  string
+	names *intl.DisplayNames
+	kind  string // language, region, script, currency, calendar, dateTimeField
+	style string
+	// fallback says whether a code with no name is answered with itself.
+	fallback string
 	// languageDisplay says whether a language is named as a dialect of
 	// another -- Austrian German -- or on its own.
 	languageDisplay string
 }
 
-func (r *Runtime) initDisplayNames(intl *Object) {
+func (r *Runtime) initDisplayNames(intlObj *Object) {
 	proto := newObject(r.proto.object, ClassObject)
 	ctor := r.newCtor("DisplayNames", 2, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		proto, err := rt.protoFromNewTargetErr(rt.intlProtoOf("DisplayNames"))
 		if err != nil {
 			return Undefined, err
 		}
-		if err := rt.requireNew("Intl.DisplayNames"); err != nil {
-			return Undefined, err
+		if !rt.Constructing() {
+			return Undefined, rt.intlRequiresNew("Intl.DisplayNames")
 		}
+		defer rt.enterIntl("Intl.DisplayNames")()
 		tags, err := rt.requestedLocales(arg(args, 0))
 		if err != nil {
 			return Undefined, err
 		}
 		if arg(args, 1).IsUndefined() {
-			return Undefined, rt.throwTypeError("Intl.DisplayNames needs to be told what kind of name")
+			return Undefined, rt.intlInvalidArgumentType()
 		}
 		options, err := rt.strictOptions(arg(args, 1))
 		if err != nil {
@@ -486,12 +373,15 @@ func (r *Runtime) initDisplayNames(intl *Object) {
 		}
 		// In the order the standard reads them: what kind of name is wanted is
 		// not asked for first, though it is the one that must be there.
-		if _, err := rt.stringOption(options, "localeMatcher", "best fit",
-			"lookup", "best fit"); err != nil {
+		matcher, err := rt.stringOption(options, "localeMatcher", "best fit", "lookup", "best fit")
+		if err != nil {
 			return Undefined, err
 		}
-		choice := rt.resolveLocale(tags)
-		o := &displayOptions{locale: choice.data, requested: choice.locale()}
+		loc, err := rt.intlLocale(intl.ServiceDisplayNames, tags, matcher)
+		if err != nil {
+			return Undefined, err
+		}
+		o := &displayOptions{}
 		if o.style, err = rt.stringOption(options, "style", "long",
 			"narrow", "short", "long"); err != nil {
 			return Undefined, err
@@ -501,7 +391,7 @@ func (r *Runtime) initDisplayNames(intl *Object) {
 			return Undefined, err
 		}
 		if o.kind == "" {
-			return Undefined, rt.throwTypeError("Intl.DisplayNames needs to be told what kind of name")
+			return Undefined, rt.intlInvalidArgumentType()
 		}
 		if o.fallback, err = rt.stringOption(options, "fallback", "code",
 			"code", "none"); err != nil {
@@ -511,17 +401,30 @@ func (r *Runtime) initDisplayNames(intl *Object) {
 			"dialect", "standard"); err != nil {
 			return Undefined, err
 		}
+		kind, _ := intl.ParseDisplayKind(o.kind)
+		opts := intl.DisplayNamesOptions{Kind: kind, Compat: rt.intlCompat(),
+			Style: map[string]intl.DisplayStyle{"long": intl.DisplayLong, "short": intl.DisplayShort,
+				"narrow": intl.DisplayNarrow}[o.style]}
+		if o.fallback == "none" {
+			opts.Fallback = intl.FallbackNone
+		}
+		if o.languageDisplay == "standard" {
+			opts.LanguageDisplay = intl.LanguageStandard
+		}
+		if o.names, err = intl.NewDisplayNames(loc, opts); err != nil {
+			return Undefined, rt.intlInternal()
+		}
 		out := newObject(proto, ClassObject)
 		out.data = o
 		return Obj(out), nil
 	})
-	r.defValue(intl, "DisplayNames", Obj(ctor))
+	r.defValue(intlObj, "DisplayNames", Obj(ctor))
 	r.intlProtos["DisplayNames"] = proto
 	r.defToStringTag(proto, "Intl.DisplayNames")
-	r.defSupportedLocalesOf(ctor)
+	r.defSupportedLocalesOfService(ctor, intl.ServiceDisplayNames)
 
 	r.defMethod(proto, "of", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.displayNamesOf(this)
+		o, err := rt.displayNamesOf(this, "Intl.DisplayNames.prototype.of")
 		if err != nil {
 			return Undefined, err
 		}
@@ -533,7 +436,7 @@ func (r *Runtime) initDisplayNames(intl *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		if name, ok := icu.DisplayName(o.locale.Tag, o.kindLetter(), canonical); ok {
+		if name, ok := o.names.Of(canonical); ok {
 			return Str(NewString(name)), nil
 		}
 		// Nothing known: the code itself, or nothing at all.
@@ -543,12 +446,12 @@ func (r *Runtime) initDisplayNames(intl *Object) {
 		return Str(NewString(canonical)), nil
 	})
 	r.defMethod(proto, "resolvedOptions", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.displayNamesOf(this)
+		o, err := rt.displayNamesOf(this, "Intl.DisplayNames.prototype.resolvedOptions")
 		if err != nil {
 			return Undefined, err
 		}
 		out := newObject(rt.proto.object, ClassObject)
-		rt.putString(out, "locale", o.requested)
+		rt.putString(out, "locale", o.names.ResolvedOptions().Locale)
 		rt.putString(out, "style", o.style)
 		rt.putString(out, "type", o.kind)
 		rt.putString(out, "fallback", o.fallback)
@@ -557,23 +460,6 @@ func (r *Runtime) initDisplayNames(intl *Object) {
 		}
 		return Obj(out), nil
 	})
-}
-
-// kindLetter is how this kind of name is filed in the tables.
-func (o *displayOptions) kindLetter() string {
-	switch o.kind {
-	case "language":
-		return icu.DisplayLanguage
-	case "region":
-		return icu.DisplayRegion
-	case "script":
-		return icu.DisplayScript
-	case "currency":
-		return icu.DisplayCurrency
-	case "calendar":
-		return icu.DisplayCalendar
-	}
-	return icu.DisplayField
 }
 
 // canonical checks that a code is written the way a code of its kind is
@@ -587,30 +473,34 @@ func (o *displayOptions) canonical(r *Runtime, code string) (string, error) {
 		if len(code) == 3 && allDigits(code) {
 			return code, nil
 		}
-		return "", r.throwRangeError("that is not a region code: %s", code)
+		return "", r.intlInvalidArgumentRange()
 	case "script":
 		if len(code) != 4 || !allLetters(code) {
-			return "", r.throwRangeError("that is not a script code: %s", code)
+			return "", r.intlInvalidArgumentRange()
 		}
 		return strings.ToUpper(code[:1]) + strings.ToLower(code[1:]), nil
 	case "currency":
 		if len(code) != 3 || !allLetters(code) {
-			return "", r.throwRangeError("that is not a currency code: %s", code)
+			return "", r.intlInvalidArgumentRange()
 		}
 		return strings.ToUpper(code), nil
 	case "language":
 		// A language is named by a tag without any of the extensions a tag may
 		// carry: "en-u-hebrew" asks for something that is not a language.
-		tag, ok := parseTag(code)
-		if !ok || tag.hasExtensions() {
-			return "", r.throwRangeError("that is not a language tag: %s", code)
+		canon, err := r.canonicalizer()
+		if err != nil {
+			return "", r.intlInternal()
 		}
-		return canonicalTag(tag), nil
+		l, err := canon.Canonicalize(code)
+		if err != nil || len(l.Attributes)+len(l.Keywords)+len(l.Extensions) > 0 || l.Private != "" {
+			return "", r.intlInvalidArgumentRange()
+		}
+		return l.String(), nil
 	case "calendar":
 		// A calendar is named the way a setting in a tag is named.
 		for _, part := range strings.Split(code, "-") {
 			if len(part) < 3 || len(part) > 8 || !allAlphanumeric(part) {
-				return "", r.throwRangeError("that is not a calendar: %s", code)
+				return "", r.intlInvalidArgumentRange()
 			}
 		}
 		return strings.ToLower(code), nil
@@ -620,7 +510,7 @@ func (o *displayOptions) canonical(r *Runtime, code string) (string, error) {
 			"dayPeriod", "hour", "minute", "second", "timeZoneName":
 			return code, nil
 		}
-		return "", r.throwRangeError("that is not a part of a date: %s", code)
+		return "", r.intlInvalidArgumentRange()
 	}
 	return code, nil
 }
@@ -634,35 +524,35 @@ func allDigits(s string) bool {
 	return len(s) > 0
 }
 
-func (r *Runtime) displayNamesOf(this Value) (*displayOptions, error) {
+func (r *Runtime) displayNamesOf(this Value, method string) (*displayOptions, error) {
 	if o := this.Object(); o != nil {
 		if opts, ok := o.data.(*displayOptions); ok {
 			return opts, nil
 		}
 	}
-	return nil, r.throwTypeError("this is not an Intl.DisplayNames")
+	return nil, r.intlIncompatibleReceiver(method, this)
 }
 
 // --- ListFormat -------------------------------------------------------------
 
+// listOptions is a resolved Intl.ListFormat: go-intl's formatter, and the
+// type and style as the options named them.
 type listOptions struct {
-	locale    *icu.Locale
-	requested string
-	kind      string // conjunction, disjunction, unit
-	style     string // long, short, narrow
-	custom    *icu.ListPattern
+	format      *intl.ListFormat
+	kind, style string
 }
 
-func (r *Runtime) initListFormat(intl *Object) {
+func (r *Runtime) initListFormat(intlObj *Object) {
 	proto := newObject(r.proto.object, ClassObject)
 	ctor := r.newCtor("ListFormat", 0, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		proto, err := rt.protoFromNewTargetErr(rt.intlProtoOf("ListFormat"))
 		if err != nil {
 			return Undefined, err
 		}
-		if err := rt.requireNew("Intl.ListFormat"); err != nil {
-			return Undefined, err
+		if !rt.Constructing() {
+			return Undefined, rt.intlRequiresNew("Intl.ListFormat")
 		}
+		defer rt.enterIntl("Intl.ListFormat")()
 		tags, err := rt.requestedLocales(arg(args, 0))
 		if err != nil {
 			return Undefined, err
@@ -671,12 +561,15 @@ func (r *Runtime) initListFormat(intl *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		if _, err := rt.stringOption(options, "localeMatcher", "best fit",
-			"lookup", "best fit"); err != nil {
+		matcher, err := rt.stringOption(options, "localeMatcher", "best fit", "lookup", "best fit")
+		if err != nil {
 			return Undefined, err
 		}
-		choice := rt.resolveLocale(tags)
-		o := &listOptions{locale: choice.data, requested: choice.locale()}
+		loc, err := rt.intlLocale(intl.ServiceListFormat, tags, matcher)
+		if err != nil {
+			return Undefined, err
+		}
+		o := &listOptions{}
 		if o.kind, err = rt.stringOption(options, "type", "conjunction",
 			"conjunction", "disjunction", "unit"); err != nil {
 			return Undefined, err
@@ -685,17 +578,24 @@ func (r *Runtime) initListFormat(intl *Object) {
 			"long", "short", "narrow"); err != nil {
 			return Undefined, err
 		}
+		opts := intl.ListFormatOptions{
+			Type:  map[string]intl.ListType{"conjunction": intl.Conjunction, "disjunction": intl.Disjunction, "unit": intl.UnitList}[o.kind],
+			Style: map[string]intl.ListStyle{"long": intl.ListLong, "short": intl.ListShort, "narrow": intl.ListNarrow}[o.style],
+		}
+		if o.format, err = intl.NewListFormat(loc, opts); err != nil {
+			return Undefined, rt.intlInternal()
+		}
 		out := newObject(proto, ClassObject)
 		out.data = o
 		return Obj(out), nil
 	})
-	r.defValue(intl, "ListFormat", Obj(ctor))
+	r.defValue(intlObj, "ListFormat", Obj(ctor))
 	r.intlProtos["ListFormat"] = proto
 	r.defToStringTag(proto, "Intl.ListFormat")
-	r.defSupportedLocalesOf(ctor)
+	r.defSupportedLocalesOfService(ctor, intl.ServiceListFormat)
 
 	r.defMethod(proto, "format", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.listFormatOf(this)
+		o, err := rt.listFormatOf(this, "Intl.ListFormat.prototype.format")
 		if err != nil {
 			return Undefined, err
 		}
@@ -703,10 +603,10 @@ func (r *Runtime) initListFormat(intl *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(o.join(items))), nil
+		return Str(NewString(o.format.Format(items))), nil
 	})
 	r.defMethod(proto, "formatToParts", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.listFormatOf(this)
+		o, err := rt.listFormatOf(this, "Intl.ListFormat.prototype.formatToParts")
 		if err != nil {
 			return Undefined, err
 		}
@@ -715,91 +615,22 @@ func (r *Runtime) initListFormat(intl *Object) {
 			return Undefined, err
 		}
 		var out []Value
-		for i, piece := range o.pieces(items) {
-			_ = i
-			out = append(out, Obj(rt.partObject(piece.kind, piece.value)))
+		for _, p := range o.format.FormatToParts(items) {
+			out = append(out, Obj(rt.partObject(string(p.Kind), p.Value)))
 		}
 		return Obj(rt.newArrayFrom(out)), nil
 	})
 	r.defMethod(proto, "resolvedOptions", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.listFormatOf(this)
+		o, err := rt.listFormatOf(this, "Intl.ListFormat.prototype.resolvedOptions")
 		if err != nil {
 			return Undefined, err
 		}
 		out := newObject(rt.proto.object, ClassObject)
-		rt.putString(out, "locale", o.requested)
+		rt.putString(out, "locale", o.format.ResolvedOptions().Locale)
 		rt.putString(out, "type", o.kind)
 		rt.putString(out, "style", o.style)
 		return Obj(out), nil
 	})
-}
-
-// pattern is the locale's way of joining this kind of list, with English as
-// the fallback for a locale that does not have this width.
-func (o *listOptions) pattern() icu.ListPattern {
-	if o.custom != nil {
-		return *o.custom
-	}
-	if p, ok := o.locale.ListPatternFor(o.kind + "-" + o.style); ok {
-		return p
-	}
-	if p, ok := o.locale.ListPatternFor(o.kind + "-long"); ok {
-		return p
-	}
-	return icu.ListPattern{Pair: "{0} and {1}", Start: ", ", Middle: ", ", End: ", and "}
-}
-
-type listPiece struct{ kind, value string }
-
-// pieces is the list as its elements and the text between them.
-func (o *listOptions) pieces(items []string) []listPiece {
-	p := o.pattern()
-	switch len(items) {
-	case 0:
-		return nil
-	case 1:
-		return []listPiece{{"element", items[0]}}
-	case 2:
-		// The pair pattern is the whole of a list of two.
-		at := strings.Index(p.Pair, "{0}")
-		end := strings.Index(p.Pair, "{1}")
-		if at < 0 || end < 0 {
-			return []listPiece{{"element", items[0]}, {"literal", ", "}, {"element", items[1]}}
-		}
-		var out []listPiece
-		if before := p.Pair[:at]; before != "" {
-			out = append(out, listPiece{"literal", before})
-		}
-		out = append(out, listPiece{"element", items[0]})
-		out = append(out, listPiece{"literal", p.Pair[at+3 : end]})
-		out = append(out, listPiece{"element", items[1]})
-		if after := p.Pair[end+3:]; after != "" {
-			out = append(out, listPiece{"literal", after})
-		}
-		return out
-	}
-
-	out := []listPiece{{"element", items[0]}}
-	for i := 1; i < len(items); i++ {
-		switch i {
-		case 1:
-			out = append(out, listPiece{"literal", p.Start})
-		case len(items) - 1:
-			out = append(out, listPiece{"literal", p.End})
-		default:
-			out = append(out, listPiece{"literal", p.Middle})
-		}
-		out = append(out, listPiece{"element", items[i]})
-	}
-	return out
-}
-
-func (o *listOptions) join(items []string) string {
-	var b strings.Builder
-	for _, piece := range o.pieces(items) {
-		b.WriteString(piece.value)
-	}
-	return b.String()
 }
 
 // stringList reads the iterable a list format is given. Every item must be a
@@ -811,7 +642,7 @@ func (r *Runtime) stringList(v Value) ([]string, error) {
 	var out []string
 	err := r.iterate(v, func(item Value) error {
 		if !item.IsString() {
-			return r.throwTypeError("a list may only contain strings")
+			return r.throwTypeError("Iterable yielded %s which is not a string", r.v8Describe(item))
 		}
 		out = append(out, item.String().Go())
 		return nil
@@ -822,35 +653,36 @@ func (r *Runtime) stringList(v Value) ([]string, error) {
 	return out, nil
 }
 
-func (r *Runtime) listFormatOf(this Value) (*listOptions, error) {
+func (r *Runtime) listFormatOf(this Value, method string) (*listOptions, error) {
 	if o := this.Object(); o != nil {
 		if opts, ok := o.data.(*listOptions); ok {
 			return opts, nil
 		}
 	}
-	return nil, r.throwTypeError("this is not an Intl.ListFormat")
+	return nil, r.intlIncompatibleReceiver(method, this)
 }
 
 // --- RelativeTimeFormat -----------------------------------------------------
 
+// relativeOptions is a resolved Intl.RelativeTimeFormat: go-intl's
+// formatter, and the options as they were named.
 type relativeOptions struct {
-	locale  *icu.Locale
-	choice  *localeChoice
+	format  *intl.RelativeTimeFormat
 	numeric string // always, auto
 	style   string // long, short, narrow
-	numbers *numberOptions
 }
 
-func (r *Runtime) initRelativeTimeFormat(intl *Object) {
+func (r *Runtime) initRelativeTimeFormat(intlObj *Object) {
 	proto := newObject(r.proto.object, ClassObject)
 	ctor := r.newCtor("RelativeTimeFormat", 0, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		proto, err := rt.protoFromNewTargetErr(rt.intlProtoOf("RelativeTimeFormat"))
 		if err != nil {
 			return Undefined, err
 		}
-		if err := rt.requireNew("Intl.RelativeTimeFormat"); err != nil {
-			return Undefined, err
+		if !rt.Constructing() {
+			return Undefined, rt.intlRequiresNew("Intl.RelativeTimeFormat")
 		}
+		defer rt.enterIntl("Intl.RelativeTimeFormat")()
 		tags, err := rt.requestedLocales(arg(args, 0))
 		if err != nil {
 			return Undefined, err
@@ -859,175 +691,120 @@ func (r *Runtime) initRelativeTimeFormat(intl *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		if _, err := rt.stringOption(options, "localeMatcher", "best fit",
-			"lookup", "best fit"); err != nil {
+		matcher, err := rt.stringOption(options, "localeMatcher", "best fit", "lookup", "best fit")
+		if err != nil {
 			return Undefined, err
 		}
 		numbering, err := rt.typeOption(options, "numberingSystem")
 		if err != nil {
 			return Undefined, err
 		}
-		choice := rt.resolveLocale(tags, "nu")
-		choice.override("nu", numbering)
-		o := &relativeOptions{locale: choice.data, choice: choice}
+		loc, err := rt.intlLocale(intl.ServiceRelativeTimeFormat, tags, matcher)
+		if err != nil {
+			return Undefined, err
+		}
+		o := &relativeOptions{}
 		if o.style, err = rt.stringOption(options, "style", "long", "long", "short", "narrow"); err != nil {
 			return Undefined, err
 		}
 		if o.numeric, err = rt.stringOption(options, "numeric", "always", "always", "auto"); err != nil {
 			return Undefined, err
 		}
-		o.numbers = &numberOptions{
-			locale: choice.data, choice: choice, digits: choice.setting("nu"),
-			style:    "decimal",
-			notation: "standard", signDisplay: "auto", useGrouping: "auto",
-			minInt: 1, maxFrac: 3, rounding: "fraction",
-			roundingMode: "halfExpand", roundingIncrement: 1,
+		opts := intl.RelativeTimeFormatOptions{NumberingSystem: numbering,
+			Style: map[string]intl.RelativeTimeStyle{"long": intl.RelativeLong,
+				"short": intl.RelativeShort, "narrow": intl.RelativeNarrow}[o.style]}
+		if o.numeric == "auto" {
+			opts.Numeric = intl.RelativeAuto
+		}
+		if o.format, err = intl.NewRelativeTimeFormat(loc, opts); err != nil {
+			return Undefined, rt.intlInternal()
 		}
 		out := newObject(proto, ClassObject)
 		out.data = o
 		return Obj(out), nil
 	})
-	r.defValue(intl, "RelativeTimeFormat", Obj(ctor))
+	r.defValue(intlObj, "RelativeTimeFormat", Obj(ctor))
 	r.intlProtos["RelativeTimeFormat"] = proto
 	r.defToStringTag(proto, "Intl.RelativeTimeFormat")
-	r.defSupportedLocalesOf(ctor)
+	r.defSupportedLocalesOfService(ctor, intl.ServiceRelativeTimeFormat)
 
-	r.defMethod(proto, "format", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.relativeOf(this)
+	// arguments reads what format and formatToParts are given: a count and a
+	// unit, in that order.
+	arguments := func(rt *Runtime, this Value, args []Value, method string) (*relativeOptions, float64, intl.RelativeTimeUnit, error) {
+		o, err := rt.relativeOf(this, method)
 		if err != nil {
-			return Undefined, err
+			return nil, 0, 0, err
 		}
 		n, err := rt.toNumber(arg(args, 0))
 		if err != nil {
-			return Undefined, err
+			return nil, 0, 0, err
 		}
-		unit, err := rt.toString(arg(args, 1))
+		name, err := rt.toString(arg(args, 1))
 		if err != nil {
-			return Undefined, err
+			return nil, 0, 0, err
 		}
 		if math.IsNaN(n) || math.IsInf(n, 0) {
-			return Undefined, rt.throwRangeError("a count of time is a finite number")
+			return nil, 0, 0, rt.throwRangeError("Value need to be finite number for %s()", method)
 		}
-		text, err := o.format(rt, n, unit.Go())
+		unit, ok := intl.ParseRelativeTimeUnit(name.Go())
+		if !ok || !relativeUnitNames[name.Go()] {
+			return nil, 0, 0, rt.throwRangeError("Invalid unit argument for %s() '%s'", method, name.Go())
+		}
+		return o, n, unit, nil
+	}
+	r.defMethod(proto, "format", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		o, n, unit, err := arguments(rt, this, args, "Intl.RelativeTimeFormat.prototype.format")
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(text)), nil
+		return Str(NewString(o.format.Format(n, unit))), nil
 	})
 	r.defMethod(proto, "formatToParts", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.relativeOf(this)
+		o, n, unit, err := arguments(rt, this, args, "Intl.RelativeTimeFormat.prototype.formatToParts")
 		if err != nil {
 			return Undefined, err
 		}
-		n, err := rt.toNumber(arg(args, 0))
-		if err != nil {
-			return Undefined, err
-		}
-		unit, err := rt.toString(arg(args, 1))
-		if err != nil {
-			return Undefined, err
-		}
-		if math.IsNaN(n) || math.IsInf(n, 0) {
-			return Undefined, rt.throwRangeError("a count of time is a finite number")
-		}
-		text, err := o.format(rt, n, unit.Go())
-		if err != nil {
-			return Undefined, err
-		}
-		// The words around the count are literals, and the count itself is
-		// broken into the pieces a number is made of, each saying which unit
-		// it counts.
 		var out []Value
-		pieces := o.numbers.parts(math.Abs(n))
-		shown := piecesText(pieces)
-		at := strings.Index(text, shown)
-		if shown == "" || at < 0 {
-			return Obj(rt.newArrayFrom([]Value{Obj(rt.partObject("literal", text))})), nil
-		}
-		if at > 0 {
-			out = append(out, Obj(rt.partObject("literal", text[:at])))
-		}
-		for _, piece := range pieces {
-			part := rt.partObject(piece.kind, piece.value)
-			rt.putString(part, "unit", relativeUnits[unit.Go()])
+		for _, p := range o.format.FormatToParts(n, unit) {
+			part := rt.partObject(string(p.Kind), p.Value)
+			if p.Unit != "" {
+				rt.putString(part, "unit", p.Unit)
+			}
 			out = append(out, Obj(part))
-		}
-		if rest := text[at+len(shown):]; rest != "" {
-			out = append(out, Obj(rt.partObject("literal", rest)))
 		}
 		return Obj(rt.newArrayFrom(out)), nil
 	})
 	r.defMethod(proto, "resolvedOptions", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.relativeOf(this)
+		o, err := rt.relativeOf(this, "Intl.RelativeTimeFormat.prototype.resolvedOptions")
 		if err != nil {
 			return Undefined, err
 		}
+		resolved := o.format.ResolvedOptions()
 		out := newObject(rt.proto.object, ClassObject)
-		rt.putString(out, "locale", o.choice.locale())
+		rt.putString(out, "locale", resolved.Locale)
 		rt.putString(out, "style", o.style)
 		rt.putString(out, "numeric", o.numeric)
-		rt.putString(out, "numberingSystem", o.choice.setting("nu"))
+		rt.putString(out, "numberingSystem", resolved.NumberingSystem)
 		return Obj(out), nil
 	})
 }
 
-// relativeUnits are the units a relative time may be given in, with their
-// plural spellings, which is how they are written.
-var relativeUnits = map[string]string{
-	"second": "second", "seconds": "second", "minute": "minute", "minutes": "minute",
-	"hour": "hour", "hours": "hour", "day": "day", "days": "day",
-	"week": "week", "weeks": "week", "month": "month", "months": "month",
-	"quarter": "quarter", "quarters": "quarter", "year": "year", "years": "year",
+// relativeUnitNames are the units a relative time may be given in, with
+// their plural spellings.
+var relativeUnitNames = map[string]bool{
+	"second": true, "seconds": true, "minute": true, "minutes": true,
+	"hour": true, "hours": true, "day": true, "days": true,
+	"week": true, "weeks": true, "month": true, "months": true,
+	"quarter": true, "quarters": true, "year": true, "years": true,
 }
 
-func (o *relativeOptions) format(r *Runtime, n float64, unitName string) (string, error) {
-	unit, ok := relativeUnits[unitName]
-	if !ok {
-		return "", r.throwRangeError("that is not a unit of time: %s", unitName)
-	}
-	// The shorter styles where the language writes them differently, and the
-	// long words where it does not.
-	data, ok := o.locale.RelativeUnitFor(o.style + "/" + unit)
-	if !ok {
-		if data, ok = o.locale.RelativeUnitFor(unit); !ok {
-			return "", r.throwRangeError("this runtime has no words for %s", unit)
-		}
-	}
-
-	// The words a language has instead of a count: yesterday, next week.
-	if o.numeric == "auto" && n == math.Trunc(n) && math.Abs(n) <= 2 {
-		if named, ok := data.Named[int(n)]; ok {
-			return named, nil
-		}
-	}
-
-	forms := data.Future
-	if math.Signbit(n) {
-		forms = data.Past
-	}
-	category := o.locale.CardinalRule().Category(math.Abs(n))
-	pattern, ok := forms[category]
-	if !ok {
-		if pattern, ok = forms["other"]; !ok {
-			for _, any := range forms {
-				pattern = any
-				break
-			}
-		}
-	}
-	if pattern == "" {
-		return "", r.throwRangeError("this runtime has no words for %s", unit)
-	}
-	return strings.ReplaceAll(pattern, "{0}", o.numbers.format(math.Abs(n))), nil
-}
-
-func (r *Runtime) relativeOf(this Value) (*relativeOptions, error) {
+func (r *Runtime) relativeOf(this Value, method string) (*relativeOptions, error) {
 	if o := this.Object(); o != nil {
 		if opts, ok := o.data.(*relativeOptions); ok {
 			return opts, nil
 		}
 	}
-	return nil, r.throwTypeError("this is not an Intl.RelativeTimeFormat")
+	return nil, r.intlIncompatibleReceiver(method, this)
 }
 
 // formatNumberFor is how the toLocaleString methods reach the number
@@ -1037,5 +814,5 @@ func (r *Runtime) formatNumberFor(args []Value, x float64) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return o.format(x), nil
+	return o.nf.Format(x), nil
 }

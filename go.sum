@@ -1,2 +1,4 @@
+github.com/go-quickjs/go-intl v0.0.0-20260926032512-de01d6094666 h1:jjJ+p79Cj10XkbaTEs+WXtONlbRPEf31itkKaj9aPUg=
+github.com/go-quickjs/go-intl v0.0.0-20260926032512-de01d6094666/go.mod h1:/Kn3soBxkmtIHevMspxdnTc5Br6+wHbzxM312CdeupM=
 github.com/klauspost/compress v1.18.2 h1:iiPHWW0YrcFgpBYhsA6D1+fqHssJscY/Tm/y2Uqnapk=
 github.com/klauspost/compress v1.18.2/go.mod h1:R0h/fSBs8DE4ENlcrlib3PsXS61voFxhIs2DeRhCvJ4=

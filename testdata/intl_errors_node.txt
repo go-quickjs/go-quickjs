@@ -1,0 +1,120 @@
+locale-not-tag	RangeError: Invalid language tag: en_US
+locale-bad-type	TypeError: Language ID should be string or object.
+supportedValuesOf-key	RangeError: Invalid key : units
+option-string-value	RangeError: Value bogus out of range for Intl.NumberFormat options property style
+option-matcher-value	RangeError: Value bogus out of range for Intl.NumberFormat options property localeMatcher
+option-type-value	RangeError: Invalid numberingSystem : a
+option-calendar-value	RangeError: Invalid calendar : x!
+options-not-object-strict	TypeError: invalid_argument
+options-null	TypeError: Intl.NumberFormat called on null or undefined
+coll-options-null	TypeError: Intl.Collator called on null or undefined
+dtf-options-null	TypeError: Intl.DateTimeFormat called on null or undefined
+rtf-options-null	TypeError: Intl.RelativeTimeFormat called on null or undefined
+df-options-5	TypeError: invalid_argument
+digits-range-minint	RangeError: minimumIntegerDigits value is out of range.
+digits-range-maxfrac	RangeError: maximumFractionDigits value is out of range.
+digits-range-minsig	RangeError: minimumSignificantDigits value is out of range.
+digits-range-maxsig	RangeError: maximumSignificantDigits value is out of range.
+digits-frac-order	RangeError: maximumFractionDigits value is out of range.
+rounding-increment-value	RangeError: roundingIncrement value is out of range.
+rounding-increment-sig	TypeError: RoundingType is not fractionDigits
+rounding-increment-frac	RangeError: maximumFractionDigits value is out of range.
+use-grouping-value	RangeError: Value sometimes out of range for Intl.NumberFormat options property useGrouping
+currency-missing	TypeError: Currency code is required with currency style.
+currency-bad	RangeError: Invalid currency code : US
+unit-missing	TypeError: Invalid unit argument for Intl.NumberFormat() ''
+unit-bad	RangeError: Invalid unit argument for Intl.NumberFormat() 'furlong'
+nf-receiver	TypeError: Method Intl.NumberFormat.prototype.formatToParts called on incompatible receiver #<Object>
+nf-format-receiver	TypeError: Method UnwrapNumberFormat called on incompatible receiver undefined
+nf-format-5	TypeError: Method get Intl.NumberFormat.prototype.format called on incompatible receiver 5
+nf-resolved-receiver	TypeError: Method UnwrapNumberFormat called on incompatible receiver undefined
+nf-resolved-arr	TypeError: Method UnwrapNumberFormat called on incompatible receiver undefined
+nf-range	TypeError: Method Intl.NumberFormat.prototype.formatRange called on incompatible receiver #<Object>
+nf-range-undefined	TypeError: Invalid end : undefined
+nf-range-undef-start	TypeError: Invalid start : undefined
+nf-range-nan	RangeError: Invalid start : NaN
+nf-range-nan-end	RangeError: Invalid end : NaN
+pr-no-new	TypeError: Constructor Intl.PluralRules requires 'new'
+pr-receiver	TypeError: Method Intl.PluralRules.prototype.select called on incompatible receiver #<Object>
+pr-resolved	TypeError: Method Intl.PluralRules.prototype.resolvedOptions called on incompatible receiver 5
+pr-range-undefined	TypeError: Invalid endRange : undefined
+pr-range-nan	RangeError: Invalid startRange : NaN
+pr-range-nan-end	RangeError: Invalid endRange : NaN
+coll-receiver	TypeError: Method Intl.Collator.prototype.resolvedOptions called on incompatible receiver #<Object>
+coll-compare-receiver	TypeError: Method get Intl.Collator.prototype.compare called on incompatible receiver #<Object>
+coll-co	RangeError: Invalid collation : a
+lf-no-new	TypeError: Constructor Intl.ListFormat requires 'new'
+lf-receiver	TypeError: Method Intl.ListFormat.prototype.format called on incompatible receiver #<Object>
+lf-not-string	TypeError: Iterable yielded 1 which is not a string
+lf-yield-obj	TypeError: Iterable yielded #<Object> which is not a string
+lf-yield-sym	TypeError: Iterable yielded Symbol(x) which is not a string
+dn-no-new	TypeError: Constructor Intl.DisplayNames requires 'new'
+dn-no-options	TypeError: invalid_argument
+dn-no-type	TypeError: invalid_argument
+dn-receiver	TypeError: Method Intl.DisplayNames.prototype.of called on incompatible receiver #<Object>
+dn-region	RangeError: invalid_argument
+dn-script	RangeError: invalid_argument
+dn-currency	RangeError: invalid_argument
+dn-language	RangeError: invalid_argument
+dn-language-bad	RangeError: invalid_argument
+dn-calendar	RangeError: invalid_argument
+dn-field	RangeError: invalid_argument
+rtf-no-new	TypeError: Constructor Intl.RelativeTimeFormat requires 'new'
+rtf-receiver	TypeError: Method Intl.RelativeTimeFormat.prototype.format called on incompatible receiver #<Object>
+rtf-infinite	RangeError: Value need to be finite number for Intl.RelativeTimeFormat.prototype.format()
+rtf-unit	RangeError: Invalid unit argument for Intl.RelativeTimeFormat.prototype.format() 'fortnight'
+rtf-parts-unit	RangeError: Invalid unit argument for Intl.RelativeTimeFormat.prototype.formatToParts() 'x'
+rtf-parts-inf	RangeError: Value need to be finite number for Intl.RelativeTimeFormat.prototype.formatToParts()
+seg-no-new	TypeError: Constructor Intl.Segmenter requires 'new'
+seg-receiver	TypeError: Method Intl.Segmenter.prototype.segment called on incompatible receiver #<Object>
+seg-gran	RangeError: Value line out of range for Intl.Segmenter options property granularity
+segments-receiver	TypeError: Method %Segments.prototype%.containing called on incompatible receiver #<Object>
+segs-iter	TypeError: Method %SegmentIsPrototype%[@@iterator] called on incompatible receiver #<Object>
+seg-iter-receiver	TypeError: Method %SegmentIterator.prototype%.next called on incompatible receiver #<Object>
+df-no-new	TypeError: Constructor Intl.DurationFormat requires 'new'
+df-receiver	TypeError: Method Intl.DurationFormat.prototype.format called on incompatible receiver #<Object>
+df-words-after-numeric	RangeError: Invalid object : #<Object>
+df-display-always-fraction	RangeError: Invalid object : #<Object>
+df-string	RangeError: Temporal error: Parsing ended abruptly.
+df-string-designator	RangeError: Temporal error: Invalid time duration designator.
+df-not-object	TypeError: Temporal error: Duration argument must be Duration or string.
+df-fraction	RangeError: Temporal error: Expected finite integer.
+df-empty	TypeError: Temporal error: Did not provide any valid Duration fields.
+df-too-long	RangeError: Temporal error: Duration was not valid.
+df-mixed-sign	RangeError: Temporal error: Duration was not valid.
+df-fractional-digits	RangeError: fractionalDigits value is out of range.
+dtf-receiver	TypeError: Method Intl.DateTimeFormat.prototype.formatToParts called on incompatible receiver #<Object>
+dtf-format-receiver	TypeError: Method UnwrapDateTimeFormat called on incompatible receiver #<Object>
+dtf-resolved	TypeError: Method UnwrapDateTimeFormat called on incompatible receiver #<Object>
+dtf-range	TypeError: Method Intl.DateTimeFormat.prototype.formatRange called on incompatible receiver #<Object>
+dtf-style-and-field	TypeError: Invalid option : option
+dtf-hc	RangeError: Value h13 out of range for Intl.DateTimeFormat options property hourCycle
+dtf-fsd	RangeError: fractionalSecondDigits value is out of range.
+dtf-invalid-date	RangeError: Invalid time value
+dtf-zone	RangeError: Invalid time zone specified: Mars/Base
+dtf-timezone-empty	RangeError: Invalid time zone specified: 
+dtf-range-undefined	TypeError: Invalid time value
+dtf-range-undef-start	TypeError: Invalid time value
+dtf-range-nan	RangeError: Invalid time value
+dtf-range-types	TypeError: Invalid argument for Temporal 0
+dtf-zoned	TypeError: Invalid argument for Temporal [object Temporal.ZonedDateTime]
+dtf-calendar	RangeError: Mismatched calendars.
+dtf-temporal-style	TypeError: Invalid argument for Temporal [object Temporal.PlainDate]
+date-tolocaledatestring-style	TypeError: Invalid option : timeStyle
+date-tolocaletimestring-style	TypeError: Invalid option : dateStyle
+date-tolocaledatestring-bad	RangeError: Invalid language tag: en_US
+loc-no-new	TypeError: Constructor Intl.Locale requires 'new'
+loc-bad-type	TypeError: First argument to Intl.Locale constructor can't be empty or missing
+loc-empty	RangeError: First argument to Intl.Locale constructor can't be empty or missing
+loc-undefined	TypeError: First argument to Intl.Locale constructor can't be empty or missing
+loc-bad-tag	RangeError: Incorrect locale information provided
+loc-language	RangeError: Incorrect locale information provided
+loc-script	RangeError: Incorrect locale information provided
+loc-region	RangeError: Incorrect locale information provided
+loc-calendar	RangeError: Incorrect locale information provided
+loc-receiver	TypeError: Method Intl.Locale.prototype.maximize called on incompatible receiver #<Object>
+loc-basename	TypeError: Method Intl.Locale.prototype.baseName called on incompatible receiver #<Object>
+loc-tostring	TypeError: Method Intl.Locale.prototype.toString called on incompatible receiver #<Object>
+loc-calendars	TypeError: Method Intl.Locale.prototype.getCalendars called on incompatible receiver #<Object>
+tolocalestring-bad-locale	RangeError: Invalid language tag: en_US
+localecompare-bad-locale	RangeError: Invalid language tag: en_US

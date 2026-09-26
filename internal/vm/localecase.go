@@ -3,6 +3,7 @@ package vm
 import (
 	"strings"
 
+	intl "github.com/go-quickjs/go-intl"
 	"github.com/go-quickjs/go-quickjs/internal/wtf8"
 )
 
@@ -181,13 +182,13 @@ func (r *Runtime) caseLanguage(v Value) (string, error) {
 	if len(tags) == 0 {
 		return "", nil
 	}
-	tag, ok := parseTag(tags[0])
-	if !ok {
+	tag, err := intl.ParseLocale(tags[0])
+	if err != nil {
 		return "", nil
 	}
-	switch tag.language {
+	switch language := tag.Language.String(); language {
 	case "tr", "az", "lt", "el":
-		return tag.language, nil
+		return language, nil
 	}
 	return "", nil
 }

@@ -2,6 +2,7 @@ package vm
 
 import (
 	"fmt"
+	intl "github.com/go-quickjs/go-intl"
 	"math"
 	"math/big"
 	"strings"
@@ -224,21 +225,10 @@ func (r *Runtime) initTemporalInstant(temporal *Object) {
 		return Str(NewString(instant.string())), nil
 	})
 	r.defMethod(proto, "toLocaleString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		instant, err := rt.temporalInstantValue(this, "Temporal.Instant.prototype.toLocaleString")
-		if err != nil {
+		if _, err := rt.temporalInstantValue(this, "Temporal.Instant.prototype.toLocaleString"); err != nil {
 			return Undefined, err
 		}
-		options, err := rt.dateOptionsFrom(args, map[string]string{
-			"year": "numeric", "month": "numeric", "day": "numeric",
-			"hour": "numeric", "minute": "numeric", "second": "numeric",
-		}, "any")
-		if err != nil {
-			return Undefined, err
-		}
-		options.temporalKind = "instant"
-		options.useTemporalArgument()
-		milliseconds := float64(instant.epochSeconds*1000 + int64(instant.nanosecond)/1_000_000)
-		return Str(NewString(options.format(options.at(milliseconds)))), nil
+		return rt.temporalToLocaleString(this, args, intl.ComponentsAny, intl.ComponentsAll)
 	})
 	r.defMethod(proto, "valueOf", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if _, err := rt.temporalInstantValue(this, "Temporal.Instant.prototype.valueOf"); err != nil {
@@ -921,31 +911,7 @@ func (r *Runtime) initTemporalZonedDateTime(temporal *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		options, err := rt.dateOptionsFrom(args, map[string]string{
-			"year": "numeric", "month": "numeric", "day": "numeric",
-			"hour": "numeric", "minute": "numeric", "second": "numeric",
-			"timeZoneName": "short",
-		}, "any")
-		if err != nil {
-			return Undefined, err
-		}
-		options.temporalKind = "zoned-date-time"
-		options.useTemporalArgument()
-		if zoned.calendar != "iso8601" && zoned.calendar != options.calendar {
-			return Undefined, rt.throwRangeError(
-				"Temporal calendar does not match the formatter calendar")
-		}
-		if options.timeZoneSet {
-			return Undefined, rt.throwTypeError("a ZonedDateTime supplies its own time zone")
-		}
-		if zoned.fixed {
-			options.zone = time.FixedZone(zoned.timeZone, zoned.fixedOffsetSeconds)
-		} else {
-			options.zone = zoned.zone.Location()
-		}
-		options.timeZone = zoned.timeZone
-		milliseconds := float64(zoned.instant.epochSeconds*1000 + int64(zoned.instant.nanosecond)/1_000_000)
-		return Str(NewString(options.format(options.at(milliseconds)))), nil
+		return rt.zonedToLocaleString(zoned, args)
 	})
 	r.defMethod(proto, "valueOf", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if _, err := rt.temporalZonedDateTimeValue(this, "Temporal.ZonedDateTime.prototype.valueOf"); err != nil {

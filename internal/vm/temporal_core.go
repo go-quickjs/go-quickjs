@@ -92,6 +92,11 @@ func (date temporalISODateTime) subsecondNanoseconds() int64 {
 	return int64(date.millisecond)*1_000_000 + int64(date.microsecond)*1_000 + int64(date.nanosecond)
 }
 
+// isLeapYear reports whether a proleptic Gregorian year has a February 29th.
+func isLeapYear(y int) bool {
+	return y%4 == 0 && (y%100 != 0 || y%400 == 0)
+}
+
 func isoDaysInMonth(year, month int) int {
 	switch month {
 	case 2:
