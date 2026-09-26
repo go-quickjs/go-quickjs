@@ -62,7 +62,11 @@ func (r *Runtime) initJSONBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		p := &jsonParser{rt: rt, src: s.Go()}
+		reviver := arg(args, 1)
+		// A reviver is told the source text of each primitive it is handed,
+		// so the parse keeps a record of it; without one there is nothing to
+		// keep.
+		p := &jsonParser{rt: rt, src: s.Go(), records: isCallable(reviver)}
 		p.skipSpace()
 		v, err := p.parseValue()
 		if err != nil {
@@ -72,7 +76,6 @@ func (r *Runtime) initJSONBuiltins() {
 		if p.pos != len(p.src) {
 			return Undefined, rt.throwSyntaxError("unexpected trailing content in JSON at position %d", p.pos)
 		}
-		reviver := arg(args, 1)
 		if !isCallable(reviver) {
 			return v, nil
 		}
@@ -80,8 +83,59 @@ func (r *Runtime) initJSONBuiltins() {
 		// revived by the time its parent sees it.
 		root := newObject(rt.proto.object, ClassObject)
 		root.setOwnRaw(rt.atoms.intern(""), v, propDefault)
-		return rt.reviveJSON(root, Str(emptyString), reviver)
+		return rt.reviveJSON(root, Str(emptyString), reviver, p.last)
 	})
+
+	// JSON.rawJSON makes a value stringify emits as the text it was given,
+	// which is what lets a number too precise for a double, or a BigInt, be
+	// written into JSON. The text must be one JSON primitive with no space
+	// around it.
+	r.defMethod(j, "rawJSON", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		s, err := rt.toString(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		text := s.Go()
+		if text == "" || isJSONSpace(text[0]) || isJSONSpace(text[len(text)-1]) {
+			return Undefined, rt.throwSyntaxError("JSON.rawJSON requires text with no space around it")
+		}
+		if text[0] == '{' || text[0] == '[' {
+			return Undefined, rt.throwSyntaxError("JSON.rawJSON requires a primitive, not an object or an array")
+		}
+		p := &jsonParser{rt: rt, src: text}
+		if _, err := p.parseValue(); err != nil {
+			return Undefined, err
+		}
+		if p.pos != len(text) {
+			return Undefined, rt.throwSyntaxError("unexpected trailing content in JSON at position %d", p.pos)
+		}
+		o := newObject(nil, ClassObject)
+		o.data = rawJSON{}
+		o.setOwnRaw(rt.atoms.intern("rawJSON"), Str(s), propEnumerable)
+		o.flags &^= objExtensible
+		return Obj(o), nil
+	})
+
+	r.defMethod(j, "isRawJSON", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		return Bool(isRawJSON(arg(args, 0))), nil
+	})
+}
+
+// rawJSON marks an object JSON.rawJSON made, which is the only thing that
+// makes stringify emit its text rather than serialize it. An object that
+// merely looks the same is serialized as the object it is.
+type rawJSON struct{}
+
+func isRawJSON(v Value) bool {
+	if !v.IsObject() {
+		return false
+	}
+	_, ok := v.Object().data.(rawJSON)
+	return ok
+}
+
+func isJSONSpace(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r'
 }
 
 // jsonIndent resolves the space argument into the indent string it denotes.
@@ -231,13 +285,18 @@ func (e *jsonEncoder) apply(holder Value, key Value, v Value) (Value, error) {
 //
 // A value the reviver returns undefined for is deleted, which is how a reviver
 // prunes what it does not want.
-func (r *Runtime) reviveJSON(holder *Object, key Value, reviver Value) (Value, error) {
-	return r.reviveJSONAt(holder, key, reviver, 0)
+//
+// Each call is given a context object as well, which holds the source text of
+// a primitive the parse produced. A value the reviver has replaced by then --
+// by changing a property it has yet to reach -- has no source, since the text
+// is not the text of that value.
+func (r *Runtime) reviveJSON(holder *Object, key Value, reviver Value, rec *jsonRecord) (Value, error) {
+	return r.reviveJSONAt(holder, key, reviver, rec, 0)
 }
 
 // reviveJSONAt is reviveJSON with the depth it has reached, which is bounded
 // for the same reason the parser's is.
-func (r *Runtime) reviveJSONAt(holder *Object, key Value, reviver Value, depth int) (Value, error) {
+func (r *Runtime) reviveJSONAt(holder *Object, key Value, reviver Value, rec *jsonRecord, depth int) (Value, error) {
 	if depth >= jsonMaxDepth {
 		return Undefined, r.throwRangeError(
 			"a structure nested this deeply cannot be revived")
@@ -250,6 +309,12 @@ func (r *Runtime) reviveJSONAt(holder *Object, key Value, reviver Value, depth i
 	if err != nil {
 		return Undefined, err
 	}
+	context := newObject(r.proto.object, ClassObject)
+	if rec == nil || !rec.value.SameValue(val) {
+		rec = nil
+	} else if !val.IsObject() {
+		context.setOwnRaw(r.atoms.intern("source"), Str(NewString(rec.source)), propDefault)
+	}
 	if val.IsObject() {
 		o := val.Object()
 		if o.IsArray() {
@@ -258,7 +323,11 @@ func (r *Runtime) reviveJSONAt(holder *Object, key Value, reviver Value, depth i
 				return Undefined, err
 			}
 			for i := int64(0); i < a.n; i++ {
-				el, err := r.reviveJSONAt(o, Str(NewString(strconv.FormatInt(i, 10))), reviver, depth+1)
+				var child *jsonRecord
+				if rec != nil && i < int64(len(rec.elements)) {
+					child = rec.elements[i]
+				}
+				el, err := r.reviveJSONAt(o, Str(NewString(strconv.FormatInt(i, 10))), reviver, child, depth+1)
 				if err != nil {
 					return Undefined, err
 				}
@@ -288,7 +357,11 @@ func (r *Runtime) reviveJSONAt(holder *Object, key Value, reviver Value, depth i
 				}
 			}
 			for _, pk := range keys {
-				el, err := r.reviveJSONAt(o, r.keyToValue(pk), reviver, depth+1)
+				var child *jsonRecord
+				if rec != nil {
+					child = rec.entries[pk]
+				}
+				el, err := r.reviveJSONAt(o, r.keyToValue(pk), reviver, child, depth+1)
 				if err != nil {
 					return Undefined, err
 				}
@@ -298,7 +371,7 @@ func (r *Runtime) reviveJSONAt(holder *Object, key Value, reviver Value, depth i
 			}
 		}
 	}
-	return r.call(reviver, Obj(holder), []Value{key, val})
+	return r.call(reviver, Obj(holder), []Value{key, val, Obj(context)})
 }
 
 // reviveWrite puts back what the reviver returned, or removes the property
@@ -338,6 +411,15 @@ func (e *jsonEncoder) encode(buf []byte, v Value, prefix string) ([]byte, bool, 
 	// before the value is inspected, so that what they return is what gets
 	// encoded.
 	//
+	// What JSON.rawJSON made is its text, and is written as it is.
+	if isRawJSON(v) {
+		text, err := e.rt.getValueProp(v, e.rt.atoms.intern("rawJSON"))
+		if err != nil {
+			return buf, false, err
+		}
+		return append(buf, text.String().Go()...), true, nil
+	}
+
 	// A wrapper object stands for its primitive, which is what makes
 	// JSON.stringify(new Number(1)) produce 1 rather than {}.
 	if v.IsObject() {
@@ -615,6 +697,24 @@ type jsonParser struct {
 	// its closing bracket arrives, so growing this one buffer replaces growing
 	// a slice per array.
 	scratch []Value
+
+	// records asks for a jsonRecord of each value, which a reviver needs;
+	// last is the record of the value parsed most recently, and recScratch
+	// is scratch for the records of arrays' elements.
+	records    bool
+	last       *jsonRecord
+	recScratch []*jsonRecord
+}
+
+// jsonRecord is what JSON.parse remembers of a value for a reviver: the value
+// itself, and for a primitive the text it was parsed from, or for an array or
+// object the records of what it holds. A key given twice keeps the record of
+// the value it ended up with, the last.
+type jsonRecord struct {
+	value    Value
+	source   string
+	elements []*jsonRecord
+	entries  map[Atom]*jsonRecord
 }
 
 func (p *jsonParser) skipSpace() {
@@ -629,6 +729,17 @@ func (p *jsonParser) skipSpace() {
 }
 
 func (p *jsonParser) parseValue() (Value, error) {
+	start := p.pos
+	v, err := p.parseValueAt()
+	if err == nil && p.records && !v.IsObject() {
+		p.last = &jsonRecord{value: v, source: p.src[start:p.pos]}
+	}
+	return v, err
+}
+
+// parseValueAt is parseValue without the record, which an array or an object
+// makes for itself.
+func (p *jsonParser) parseValueAt() (Value, error) {
 	if p.pos >= len(p.src) {
 		return Undefined, p.rt.throwSyntaxError("unexpected end of JSON input")
 	}
@@ -676,10 +787,15 @@ func (p *jsonParser) parseObject() (Value, error) {
 	// for a few, in the object's own allocation, pays for itself by the second
 	// key.
 	o := newLiteralObject(p.rt.proto.object, ClassObject, 0)
+	var rec *jsonRecord
+	if p.records {
+		rec = &jsonRecord{value: Obj(o), entries: make(map[Atom]*jsonRecord)}
+	}
 	p.pos++ // consume '{'
 	p.skipSpace()
 	if p.pos < len(p.src) && p.src[p.pos] == '}' {
 		p.pos++
+		p.last = rec
 		return Obj(o), nil
 	}
 	for {
@@ -702,8 +818,12 @@ func (p *jsonParser) parseObject() (Value, error) {
 		if err != nil {
 			return Undefined, err
 		}
-		if err := p.rt.defineOwnProp(o, p.rt.atoms.internCopy(key), v, propDefault); err != nil {
+		atom := p.rt.atoms.internCopy(key)
+		if err := p.rt.defineOwnProp(o, atom, v, propDefault); err != nil {
 			return Undefined, err
+		}
+		if rec != nil {
+			rec.entries[atom] = p.last
 		}
 		p.skipSpace()
 		if p.pos >= len(p.src) {
@@ -714,6 +834,7 @@ func (p *jsonParser) parseObject() (Value, error) {
 			p.pos++
 		case '}':
 			p.pos++
+			p.last = rec
 			return Obj(o), nil
 		default:
 			return Undefined, p.rt.throwSyntaxError(
@@ -727,9 +848,14 @@ func (p *jsonParser) parseArray() (Value, error) {
 	p.skipSpace()
 	if p.pos < len(p.src) && p.src[p.pos] == ']' {
 		p.pos++
-		return Obj(p.rt.newArrayFrom(nil)), nil
+		a := Obj(p.rt.newArrayFrom(nil))
+		if p.records {
+			p.last = &jsonRecord{value: a}
+		}
+		return a, nil
 	}
 	mark := len(p.scratch)
+	recMark := len(p.recScratch)
 	for {
 		p.skipSpace()
 		v, err := p.parseValue()
@@ -737,6 +863,9 @@ func (p *jsonParser) parseArray() (Value, error) {
 			return Undefined, err
 		}
 		p.scratch = append(p.scratch, v)
+		if p.records {
+			p.recScratch = append(p.recScratch, p.last)
+		}
 		p.skipSpace()
 		if p.pos >= len(p.src) {
 			return Undefined, p.rt.throwSyntaxError("unexpected end of JSON input")
@@ -749,7 +878,15 @@ func (p *jsonParser) parseArray() (Value, error) {
 			elems := make([]Value, len(p.scratch)-mark)
 			copy(elems, p.scratch[mark:])
 			p.scratch = p.scratch[:mark]
-			return Obj(p.rt.newArrayFrom(elems)), nil
+			a := Obj(p.rt.newArrayFrom(elems))
+			if p.records {
+				recs := make([]*jsonRecord, len(p.recScratch)-recMark)
+				copy(recs, p.recScratch[recMark:])
+				clear(p.recScratch[recMark:])
+				p.recScratch = p.recScratch[:recMark]
+				p.last = &jsonRecord{value: a, elements: recs}
+			}
+			return a, nil
 		default:
 			return Undefined, p.rt.throwSyntaxError(
 				"expected ',' or ']' in JSON at position %d", p.pos)

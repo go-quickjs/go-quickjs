@@ -306,3 +306,31 @@ func TestJSONNestingIsBounded(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+func TestJSONRawAndSource(t *testing.T) {
+	evalCases(t, []struct{ src, want string }{
+		{`JSON.stringify({n: JSON.rawJSON("12345678901234567890"), s: JSON.rawJSON('"x"')})`,
+			`{"n":12345678901234567890,"s":"x"}`},
+		{`JSON.stringify([JSON.rawJSON(10n ** 20n)])`, "[100000000000000000000]"},
+		{`var r = JSON.rawJSON("1"); [JSON.isRawJSON(r), JSON.isRawJSON({rawJSON: "1"}), Object.isFrozen(r),
+		   Object.getPrototypeOf(r) === null, r.rawJSON].join()`, "true,false,true,true,1"},
+		// Only a primitive, and nothing around it.
+		{`var errs = [];
+		  for (var t of ["", " 1", "1 ", "{}", "[]", "1,2", "x"]) {
+		    try { JSON.rawJSON(t) } catch (e) { errs.push(e.constructor.name) }
+		  }
+		  errs.join()`, "SyntaxError,SyntaxError,SyntaxError,SyntaxError,SyntaxError,SyntaxError,SyntaxError"},
+		// A reviver is told the text each primitive came from.
+		{`var e = String.fromCharCode(92) + "u0041"; var seen = [];
+		  JSON.parse('{"a": 1.0, "b": [-0, "s' + e + '"], "c": {}}', (k, v, ctx) => {
+		    seen.push(k + "=" + ctx.source); return v });
+		  seen.join()`, `a=1.0,0=-0,1="s\u0041",b=undefined,c=undefined,=undefined`},
+		// A key given twice has the source of the value it kept.
+		{`var s; JSON.parse('{"a": 1, "a": 2}', (k, v, ctx) => { if (k === "a") s = ctx.source; return v }); s`, "2"},
+		// A value the reviver replaced before reaching it has no source.
+		{`var s = []; JSON.parse('[1, 2]', function (k, v, ctx) { if (k === "0") this[1] = 3;
+		    if (k === "1") s.push(v, "source" in ctx); return v });
+		  s.join()`, "3,false"},
+		{`[JSON.rawJSON.length, JSON.isRawJSON.length].join()`, "1,1"},
+	})
+}

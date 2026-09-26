@@ -79,7 +79,6 @@ var unsupportedFeatures = map[string]string{
 	"import-defer":                 "no deferred imports",
 	"tail-call-optimization":       "no tail calls",
 	"ShadowRealm":                  "no shadow realms",
-	"json-parse-with-source":       "no JSON source access",
 	"legacy-regexp":                "no legacy RegExp statics",
 	"error-stack-accessor":         "Error stack is an own data property",
 	"immutable-arraybuffer":        "no immutable ArrayBuffers",
