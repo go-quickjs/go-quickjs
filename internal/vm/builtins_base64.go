@@ -254,7 +254,7 @@ func (r *Runtime) uint8ArrayOf(this Value, name string) ([]byte, error) {
 		return nil, r.throwTypeError("%s requires a Uint8Array", name)
 	}
 	b := t.storage().bytes
-	return b[t.byteOffset : t.byteOffset+t.length], nil
+	return b[t.byteOffset : t.byteOffset+t.count()], nil
 }
 
 // uint8ArraySlot is uint8ArrayOf without the detachment check, for the methods
@@ -285,7 +285,7 @@ func (r *Runtime) newUint8ArrayFrom(b []byte) *Object {
 	buf := newObject(r.arrayBufferProto, ClassArrayBuffer)
 	buf.data = &arrayBufferData{bytes: b}
 	o := newObject(r.uint8Proto, ClassTypedArray)
-	o.data = &typedArrayData{buffer: buf, kind: elemUint8, length: len(b)}
+	o.data = &typedArrayData{buffer: buf, kind: elemUint8, fixedLength: len(b)}
 	return o
 }
 

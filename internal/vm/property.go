@@ -505,13 +505,17 @@ func (r *Runtime) createOwnProp(o *Object, key Atom, val Value, strict bool) (bo
 	// fixed -- and that covers a["-0"] and a["1.5"] as much as a[5].
 	if o.class == ClassTypedArray {
 		if ix := r.typedArrayIndex(o, key); ix.numeric {
-			if !ix.valid {
+			if !ix.valid && !ix.integral {
 				// The value is still coerced, which a valueOf can observe. The
 				// write counts as having happened: a typed array owns every
 				// numeric key, in range or not.
 				_, err := r.toNumericForElement(o, val)
 				return err == nil, err
 			}
+			// An integer index is written through the element's own
+			// conversion, which checks the index only once it is done: a
+			// valueOf that grows the buffer can bring an index into bounds,
+			// and one that shrinks it can take it out.
 			err := r.setElem(o.data.(*typedArrayData), ix.i, val)
 			return err == nil, err
 		}

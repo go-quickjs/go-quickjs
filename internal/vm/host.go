@@ -97,7 +97,7 @@ func (r *Runtime) NewUint8ArrayOf(b []byte) Value {
 	storage := make([]byte, len(b))
 	copy(storage, b)
 	buf.data = &arrayBufferData{bytes: storage}
-	o.data = &typedArrayData{buffer: buf, kind: elemUint8, length: len(b)}
+	o.data = &typedArrayData{buffer: buf, kind: elemUint8, fixedLength: len(b)}
 	return Obj(o)
 }
 
@@ -107,7 +107,8 @@ func (r *Runtime) NewUint8ArrayOf(b []byte) Value {
 // The bytes are the ones the object is looking at, not a copy: a host writing
 // through them writes what the script sees, which is what makes it possible to
 // fill a buffer a script supplied. The bytes of an immutable buffer, which a
-// script is promised never change, must not be written.
+// script is promised never change, must not be written, and those of a
+// resizable one are only its bytes until the script next resizes it.
 func (r *Runtime) Bytes(v Value) ([]byte, bool) {
 	if !v.IsObject() {
 		return nil, false
@@ -121,11 +122,11 @@ func (r *Runtime) Bytes(v Value) ([]byte, bool) {
 		return data.bytes, true
 	case *typedArrayData:
 		storage := data.storage()
-		if storage == nil || storage.detached {
+		if storage == nil || data.outOfBounds() {
 			return nil, false
 		}
 		start := data.byteOffset
-		end := start + data.length*data.info().size
+		end := start + data.count()*data.info().size
 		if start > len(storage.bytes) || end > len(storage.bytes) {
 			return nil, false
 		}

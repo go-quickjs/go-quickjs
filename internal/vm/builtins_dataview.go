@@ -22,7 +22,45 @@ import (
 type dataViewData struct {
 	buffer     *Object
 	byteOffset int
+	// byteLength is the view's length, unless tracking is set: a view made
+	// over a resizable buffer with no length of its own covers whatever the
+	// buffer holds past its offset, however that changes.
 	byteLength int
+	tracking   bool
+}
+
+// outOfBounds reports whether the view no longer fits its buffer, which a
+// detached buffer, or a resizable one shrunk past it, makes true.
+func (d *dataViewData) outOfBounds() bool {
+	b := d.storage()
+	if b == nil || b.detached {
+		return true
+	}
+	n := len(b.bytes)
+	if d.byteOffset > n {
+		return true
+	}
+	return !d.tracking && d.byteOffset+d.byteLength > n
+}
+
+// viewByteLength is the view's length as the buffer stands now.
+func (d *dataViewData) viewByteLength() int {
+	if d.tracking {
+		return len(d.storage().bytes) - d.byteOffset
+	}
+	return d.byteLength
+}
+
+// requireViewInBounds refuses a view with no buffer, or not enough of one,
+// under it.
+func (r *Runtime) requireViewInBounds(d *dataViewData) error {
+	if d.storage().detached {
+		return r.throwTypeError("the underlying ArrayBuffer has been detached")
+	}
+	if d.outOfBounds() {
+		return r.throwTypeError("the DataView is out of bounds of its ArrayBuffer")
+	}
+	return nil
 }
 
 func (d *dataViewData) storage() *arrayBufferData {
@@ -54,8 +92,8 @@ func (r *Runtime) dataViewLive(this Value, name string) (*dataViewData, error) {
 	if err != nil {
 		return nil, err
 	}
-	if d.storage().detached {
-		return nil, r.throwTypeError("the underlying ArrayBuffer has been detached")
+	if err := r.requireViewInBounds(d); err != nil {
+		return nil, err
 	}
 	return d, nil
 }
@@ -95,7 +133,11 @@ func (r *Runtime) initDataViewBuiltins() {
 		if off > total {
 			return Undefined, rt.throwRangeError("the offset is outside the buffer")
 		}
-		if length < 0 {
+		// With no length of its own, a view over a resizable buffer tracks
+		// the buffer's length; over a fixed one it covers the rest of it.
+		explicit := length >= 0
+		tracking := !explicit && storage.resizable
+		if !explicit {
 			length = total - off
 		} else if off+length > total {
 			return Undefined, rt.throwRangeError("the view extends past the end of the buffer")
@@ -111,8 +153,17 @@ func (r *Runtime) initDataViewBuiltins() {
 		if storage.detached {
 			return Undefined, rt.throwTypeError("the ArrayBuffer has been detached")
 		}
+		// It can also have resized the buffer out from under the offset or
+		// the length asked for.
+		total = int64(len(storage.bytes))
+		if off > total {
+			return Undefined, rt.throwRangeError("the offset is outside the buffer")
+		}
+		if explicit && off+length > total {
+			return Undefined, rt.throwRangeError("the view extends past the end of the buffer")
+		}
 		o := newObject(viewProto, ClassDataView)
-		o.data = &dataViewData{buffer: buf, byteOffset: int(off), byteLength: int(length)}
+		o.data = &dataViewData{buffer: buf, byteOffset: int(off), byteLength: int(length), tracking: tracking}
 		return Obj(o), nil
 	})
 
@@ -134,7 +185,7 @@ func (r *Runtime) initDataViewBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		return Int(d.byteLength), nil
+		return Int(d.viewByteLength()), nil
 	})
 
 	r.defGetter(proto, "byteOffset", func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -194,10 +245,10 @@ func (r *Runtime) resolveViewIndex(d *dataViewData, idxArg Value, size int, name
 	if err != nil {
 		return 0, err
 	}
-	if d.storage().detached {
-		return 0, r.throwTypeError("the underlying ArrayBuffer has been detached")
+	if err := r.requireViewInBounds(d); err != nil {
+		return 0, err
 	}
-	if i+int64(size) > int64(d.byteLength) {
+	if i+int64(size) > int64(d.viewByteLength()) {
 		return 0, r.throwRangeError("%s reads past the end of the view", name)
 	}
 	return d.byteOffset + int(i), nil
@@ -260,10 +311,10 @@ func (r *Runtime) dataViewSetter(spec dataViewType) NativeFunc {
 			little = arg(args, 2).Truthy()
 		}
 
-		if d.storage().detached {
-			return Undefined, rt.throwTypeError("the underlying ArrayBuffer has been detached")
+		if err := rt.requireViewInBounds(d); err != nil {
+			return Undefined, err
 		}
-		if i+int64(spec.size) > int64(d.byteLength) {
+		if i+int64(spec.size) > int64(d.viewByteLength()) {
 			return Undefined, rt.throwRangeError("%s writes past the end of the view", name)
 		}
 		off := d.byteOffset + int(i)

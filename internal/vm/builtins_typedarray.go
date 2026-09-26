@@ -26,6 +26,32 @@ type arrayBufferData struct {
 	// sliceToImmutable, whose contents never change: every write through a
 	// view is refused, and it can be neither detached nor transferred.
 	immutable bool
+	// resizable marks a buffer made with a maxByteLength, which resize may
+	// grow or shrink up to that bound. Its length is len(bytes) whatever it
+	// is at the moment, and a view reads it afresh each time.
+	resizable     bool
+	maxByteLength int64
+}
+
+// maxBufferLength bounds how large a buffer may actually be. A resizable
+// buffer may declare a larger maximum, since nothing is reserved for it, but
+// is refused when it tries to grow past this.
+const maxBufferLength = 1 << 31
+
+// resize changes a resizable buffer's length. What it gains reads as zero,
+// including bytes it had before a shrink took them away.
+func (b *arrayBufferData) resize(n int) {
+	old := len(b.bytes)
+	if n <= cap(b.bytes) {
+		b.bytes = b.bytes[:n]
+		if n > old {
+			clear(b.bytes[old:n])
+		}
+		return
+	}
+	grown := make([]byte, n)
+	copy(grown, b.bytes)
+	b.bytes = grown
 }
 
 // elemType identifies a typed array's element type.
@@ -71,11 +97,14 @@ var elemInfos = [...]elemInfo{
 
 // typedArrayData is a view over a buffer.
 type typedArrayData struct {
-	buffer *Object
-	kind   elemType
-	// offset and length are in elements, not bytes.
+	buffer     *Object
+	kind       elemType
 	byteOffset int
-	length     int
+	// fixedLength is the view's length in elements, unless tracking is set:
+	// a view made over a resizable buffer with no length of its own covers
+	// whatever the buffer holds past its offset, however that changes.
+	fixedLength int
+	tracking    bool
 }
 
 func (t *typedArrayData) info() elemInfo { return elemInfos[t.kind] }
@@ -85,13 +114,6 @@ func (t *typedArrayData) storage() *arrayBufferData {
 	return b
 }
 
-// count is how many elements are actually there.
-//
-// It is not t.length: the buffer can go away underneath a view at any point --
-// a valueOf called while a method is running is enough -- and every read and
-// write has to be measured against what is there now rather than against what
-// was there when the view was made. Answering zero is what turns a detached
-// buffer into an out-of-range access instead of a crash.
 // searchStart converts a forward search's starting point, reporting whether
 // there is any element left to look at.
 //
@@ -124,19 +146,52 @@ func (r *Runtime) searchStart(v Value, length int) (int, bool, error) {
 	return int(n), true, nil
 }
 
+// count is how many elements are actually there.
+//
+// It is measured afresh each time: the buffer can go away or change length
+// underneath a view at any point -- a valueOf called while a method is running
+// is enough -- and every read and write has to be measured against what is
+// there now rather than against what was there when the view was made.
+// Answering zero is what turns a detached or shrunk buffer into an
+// out-of-range access instead of a crash.
 func (t *typedArrayData) count() int {
-	b := t.storage()
+	b, _ := t.buffer.data.(*arrayBufferData)
+	return t.countIn(b)
+}
+
+// countIn is count over the storage the caller has already looked up, which
+// is outOfBounds and the length in one pass: every element access asks.
+func (t *typedArrayData) countIn(b *arrayBufferData) int {
 	if b == nil || b.detached {
 		return 0
 	}
-	n := (len(b.bytes) - t.byteOffset) / t.info().size
-	if n > t.length {
-		n = t.length
-	}
-	if n < 0 {
+	n := len(b.bytes) - t.byteOffset
+	switch {
+	case n < 0:
+		return 0
+	case t.tracking:
+		return n / elemInfos[t.kind].size
+	case t.fixedLength*elemInfos[t.kind].size > n:
 		return 0
 	}
-	return n
+	return t.fixedLength
+}
+
+// outOfBounds reports whether the view no longer fits its buffer: the buffer
+// has been detached, or shrunk past the view's start -- or, for a view of a
+// fixed length, past its end. A view that is out of bounds has no elements,
+// and a method that needs it to have them throws, as for a detached buffer;
+// growing the buffer back brings it into bounds again.
+func (t *typedArrayData) outOfBounds() bool {
+	b := t.storage()
+	if b == nil || b.detached {
+		return true
+	}
+	n := len(b.bytes)
+	if t.byteOffset > n {
+		return true
+	}
+	return !t.tracking && t.byteOffset+t.fixedLength*t.info().size > n
 }
 
 // typedArrayDataOf recovers a view from a receiver without insisting that its
@@ -159,10 +214,22 @@ func (r *Runtime) typedArrayOf(this Value, name string) (*typedArrayData, error)
 	if err != nil {
 		return nil, err
 	}
-	if t.storage().detached {
-		return nil, r.throwTypeError("the underlying ArrayBuffer has been detached")
+	if err := r.requireInBounds(t); err != nil {
+		return nil, err
 	}
 	return t, nil
+}
+
+// requireInBounds refuses a view with no buffer left under it, which is what
+// ValidateTypedArray checks once it knows it has a typed array.
+func (r *Runtime) requireInBounds(t *typedArrayData) error {
+	if t.storage().detached {
+		return r.throwTypeError("the underlying ArrayBuffer has been detached")
+	}
+	if t.outOfBounds() {
+		return r.throwTypeError("the typed array is out of bounds of its ArrayBuffer")
+	}
+	return nil
 }
 
 // typedArrayWritable recovers a view a method is about to write into, which
@@ -176,8 +243,8 @@ func (r *Runtime) typedArrayWritable(this Value, name string) (*typedArrayData, 
 	if err := r.requireMutable(t); err != nil {
 		return nil, err
 	}
-	if t.storage().detached {
-		return nil, r.throwTypeError("the underlying ArrayBuffer has been detached")
+	if err := r.requireInBounds(t); err != nil {
+		return nil, err
 	}
 	return t, nil
 }
@@ -205,11 +272,12 @@ func (r *Runtime) typedArraySlot(this Value, name string) (*typedArrayData, erro
 
 // getElem reads one element as a JavaScript value.
 func (t *typedArrayData) getElem(i int) Value {
-	if i < 0 || i >= t.count() {
+	st, _ := t.buffer.data.(*arrayBufferData)
+	if i < 0 || i >= t.countIn(st) {
 		return Undefined
 	}
-	b := t.storage().bytes
-	off := t.byteOffset + i*t.info().size
+	b := st.bytes
+	off := t.byteOffset + i*elemInfos[t.kind].size
 	switch t.kind {
 	case elemInt8:
 		return Int(int(int8(b[off])))
@@ -266,13 +334,14 @@ func (r *Runtime) setElem(t *typedArrayData, i int, v Value) error {
 
 	// Re-measured after the conversion, because the conversion may have taken
 	// the buffer away.
-	if i < 0 || i >= t.count() {
+	st, _ := t.buffer.data.(*arrayBufferData)
+	if i < 0 || i >= t.countIn(st) {
 		// Writing out of range is silently ignored, which is what makes a
 		// typed array not grow.
 		return nil
 	}
-	b := t.storage().bytes
-	off := t.byteOffset + i*t.info().size
+	b := st.bytes
+	off := t.byteOffset + i*elemInfos[t.kind].size
 
 	if t.info().big {
 		binary.LittleEndian.PutUint64(b[off:], bigLowUint64(bv))
@@ -348,17 +417,42 @@ func (r *Runtime) initArrayBufferBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
+		// A maxByteLength in the options makes the buffer resizable up to
+		// it; an options argument that is not an object, or has none, is
+		// no options at all.
+		max := int64(-1)
+		if opts := arg(args, 1); opts.IsObject() {
+			mv, err := rt.getProp(opts.Object(), rt.atoms.intern("maxByteLength"), opts)
+			if err != nil {
+				return Undefined, err
+			}
+			if !mv.IsUndefined() {
+				if max, err = rt.toIndex(mv); err != nil {
+					return Undefined, err
+				}
+				if n > max {
+					return Undefined, rt.throwRangeError("the ArrayBuffer length exceeds its maxByteLength")
+				}
+			}
+		}
 		// The object exists before its storage does, so a prototype getter
 		// that throws is reported rather than an allocation failure.
 		proto, err := rt.protoFromNewTargetErr(abProto)
 		if err != nil {
 			return Undefined, err
 		}
-		if n > 1<<31 {
+		if n > maxBufferLength {
 			return Undefined, rt.throwRangeError("the ArrayBuffer length is too large")
 		}
+		if max > maxBufferLength {
+			return Undefined, rt.throwRangeError("the ArrayBuffer maxByteLength is too large")
+		}
 		o := newObject(proto, ClassArrayBuffer)
-		o.data = &arrayBufferData{bytes: make([]byte, n)}
+		b := &arrayBufferData{bytes: make([]byte, n)}
+		if max >= 0 {
+			b.resizable, b.maxByteLength = true, max
+		}
+		o.data = b
 		return Obj(o), nil
 	})
 	r.defSpecies(ctor)
@@ -393,24 +487,58 @@ func (r *Runtime) initArrayBufferBuiltins() {
 		return Bool(b.detached), nil
 	})
 
-	// resizable and maxByteLength describe how far a buffer may grow. Every
-	// buffer here is fixed at the length it was made with, so the one is
-	// false and the other its length.
+	// resizable and maxByteLength describe how far a buffer may grow. A
+	// buffer made without a maxByteLength is fixed at its length, which is
+	// then its maximum too.
 	r.defGetter(abProto, "resizable", func(rt *Runtime, this Value, args []Value) (Value, error) {
-		if _, err := rt.bufferOf(this, "ArrayBuffer.prototype.resizable"); err != nil {
+		b, err := rt.bufferOf(this, "ArrayBuffer.prototype.resizable")
+		if err != nil {
 			return Undefined, err
 		}
-		return False, nil
+		return Bool(b.resizable), nil
 	})
 	r.defGetter(abProto, "maxByteLength", func(rt *Runtime, this Value, args []Value) (Value, error) {
 		b, err := rt.bufferOf(this, "ArrayBuffer.prototype.maxByteLength")
 		if err != nil {
 			return Undefined, err
 		}
-		if b.detached {
+		switch {
+		case b.detached:
 			return Int(0), nil
+		case b.resizable:
+			return Float(float64(b.maxByteLength)), nil
 		}
 		return Int(len(b.bytes)), nil
+	})
+
+	// resize grows or shrinks a resizable buffer in place. Every view over it
+	// sees the new length at once: one that tracks the buffer's length grows
+	// and shrinks with it, and one of a fixed length that no longer fits is
+	// out of bounds until it fits again.
+	r.defMethod(abProto, "resize", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		const name = "ArrayBuffer.prototype.resize"
+		b, err := rt.bufferOf(this, name)
+		if err != nil {
+			return Undefined, err
+		}
+		if !b.resizable {
+			return Undefined, rt.throwTypeError("%s requires a resizable ArrayBuffer", name)
+		}
+		n, err := rt.toIndex(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		if b.detached {
+			return Undefined, rt.throwTypeError("the ArrayBuffer has been detached")
+		}
+		if n > b.maxByteLength {
+			return Undefined, rt.throwRangeError("the new length exceeds the ArrayBuffer's maxByteLength")
+		}
+		if n > maxBufferLength {
+			return Undefined, rt.throwRangeError("the ArrayBuffer length is too large")
+		}
+		b.resize(int(n))
+		return Undefined, nil
 	})
 
 	// immutable is how a script tells a buffer whose contents can never
@@ -431,7 +559,7 @@ func (r *Runtime) initArrayBufferBuiltins() {
 	// The new length is converted before anything about the buffer is
 	// checked, as ArrayBufferCopyAndDetach orders it. An immutable buffer
 	// cannot be detached, so it cannot be transferred either.
-	transfer := func(rt *Runtime, this Value, args []Value, name string, immutable bool) (Value, error) {
+	transfer := func(rt *Runtime, this Value, args []Value, name string, keepResizable, immutable bool) (Value, error) {
 		b, err := rt.bufferOf(this, name)
 		if err != nil {
 			return Undefined, err
@@ -451,30 +579,39 @@ func (r *Runtime) initArrayBufferBuiltins() {
 		if n < 0 {
 			n = int64(len(b.bytes))
 		}
-		if n > 1<<31 {
+		resizable := keepResizable && b.resizable
+		if resizable && n > b.maxByteLength {
+			return Undefined, rt.throwRangeError("the new length exceeds the ArrayBuffer's maxByteLength")
+		}
+		if n > maxBufferLength {
 			return Undefined, rt.throwRangeError("the ArrayBuffer length is too large")
 		}
 		// A longer target is zero-filled; a shorter one drops the tail.
 		out := make([]byte, n)
 		copy(out, b.bytes)
+		max := b.maxByteLength
 		b.detached, b.bytes = true, nil
 
 		o := newObject(abProto, ClassArrayBuffer)
-		o.data = &arrayBufferData{bytes: out, immutable: immutable}
+		nb := &arrayBufferData{bytes: out, immutable: immutable}
+		if resizable {
+			nb.resizable, nb.maxByteLength = true, max
+		}
+		o.data = nb
 		return Obj(o), nil
 	}
 	r.defMethod(abProto, "transfer", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		return transfer(rt, this, args, "ArrayBuffer.prototype.transfer", false)
+		return transfer(rt, this, args, "ArrayBuffer.prototype.transfer", true, false)
 	})
 	r.defMethod(abProto, "transferToFixedLength", 0,
 		func(rt *Runtime, this Value, args []Value) (Value, error) {
-			// The two differ only for a resizable buffer, which this engine
-			// does not have, so they are the same operation here.
-			return transfer(rt, this, args, "ArrayBuffer.prototype.transferToFixedLength", false)
+			// Unlike transfer, the result is of fixed length even when the
+			// buffer was resizable.
+			return transfer(rt, this, args, "ArrayBuffer.prototype.transferToFixedLength", false, false)
 		})
 	r.defMethod(abProto, "transferToImmutable", 0,
 		func(rt *Runtime, this Value, args []Value) (Value, error) {
-			return transfer(rt, this, args, "ArrayBuffer.prototype.transferToImmutable", true)
+			return transfer(rt, this, args, "ArrayBuffer.prototype.transferToImmutable", false, true)
 		})
 
 	// sliceToImmutable copies part of a buffer into a new immutable one,
@@ -562,10 +699,13 @@ func (r *Runtime) initArrayBufferBuiltins() {
 		if len(out.bytes) < end-start {
 			return Undefined, rt.throwTypeError("the species returned too small a buffer")
 		}
-		// Running the constructor may have detached the source, in which case
-		// there is nothing left to copy.
-		if !b.detached {
-			copy(out.bytes, b.bytes[start:end])
+		// Running the constructor may have detached the source, or shrunk
+		// it, in which case what is copied is what is left.
+		if b.detached {
+			return Undefined, rt.throwTypeError("the ArrayBuffer has been detached")
+		}
+		if start < len(b.bytes) {
+			copy(out.bytes, b.bytes[start:min(end, len(b.bytes))])
 		}
 		return res, nil
 	})
@@ -725,6 +865,12 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 		if int(off) > len(b.bytes) {
 			return Undefined, r.throwRangeError("the byte offset is out of range")
 		}
+		if explicit < 0 && b.resizable {
+			// No length of its own over a buffer that can change length: the
+			// view covers whatever the buffer holds past its offset.
+			o.data = &typedArrayData{buffer: buf, kind: kind, byteOffset: int(off), tracking: true}
+			return Obj(o), nil
+		}
 		if explicit < 0 && len(b.bytes)%info.size != 0 {
 			// A view with no length of its own covers the rest of the buffer,
 			// which it can only do if what is left divides into elements.
@@ -738,7 +884,7 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 			}
 			length = int(explicit)
 		}
-		o.data = &typedArrayData{buffer: buf, kind: kind, byteOffset: int(off), length: length}
+		o.data = &typedArrayData{buffer: buf, kind: kind, byteOffset: int(off), fixedLength: length}
 		return Obj(o), nil
 
 	case first.IsObject() && first.Object().class == ClassTypedArray:
@@ -749,8 +895,9 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 		if err != nil {
 			return Undefined, err
 		}
-		t := r.allocTypedArray(o, kind, src.length)
-		for i := 0; i < src.length; i++ {
+		n := src.count()
+		t := r.allocTypedArray(o, kind, n)
+		for i := 0; i < n; i++ {
 			if err := r.setElem(t, i, src.getElem(i)); err != nil {
 				return Undefined, err
 			}
@@ -860,7 +1007,7 @@ func (r *Runtime) allocTypedArrayChecked(o *Object, kind elemType, n int64) (*ty
 func (r *Runtime) allocTypedArray(o *Object, kind elemType, length int) *typedArrayData {
 	buf := newObject(r.arrayBufferProto, ClassArrayBuffer)
 	buf.data = &arrayBufferData{bytes: make([]byte, length*elemInfos[kind].size)}
-	t := &typedArrayData{buffer: buf, kind: kind, length: length}
+	t := &typedArrayData{buffer: buf, kind: kind, fixedLength: length}
 	o.data = t
 	return t
 }
@@ -888,7 +1035,7 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		if t.count() == 0 && t.storage().detached {
+		if t.outOfBounds() {
 			return Int(0), nil
 		}
 		return Int(t.byteOffset), nil
@@ -919,9 +1066,10 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		if t.storage().detached {
-			return Undefined, rt.throwTypeError("the underlying ArrayBuffer has been detached")
+		if err := rt.requireInBounds(t); err != nil {
+			return Undefined, err
 		}
+		tlen := t.count()
 		src := arg(args, 0)
 		if src.IsObject() && src.Object().class == ClassTypedArray {
 			// The source is looked at only now, for the same reason: coercing
@@ -934,11 +1082,11 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 			// write change a later read. Its length is the view's own rather
 			// than a length property, which a script may have defined over it.
 			srcData := src.Object().data.(*typedArrayData)
-			items := make([]Value, srcData.length)
+			items := make([]Value, srcData.count())
 			for i := range items {
 				items[i] = srcData.getElem(i)
 			}
-			if int(off)+len(items) > t.length {
+			if int(off)+len(items) > tlen {
 				return Undefined, rt.throwRangeError("the source is too long for this typed array")
 			}
 			for i, v := range items {
@@ -953,7 +1101,7 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		if off+a.n > int64(t.length) {
+		if off+a.n > int64(tlen) {
 			return Undefined, rt.throwRangeError("the source is too long for this typed array")
 		}
 		// Each element is read and written before the next is read, so a getter
@@ -984,6 +1132,16 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		if err != nil {
 			return Undefined, err
 		}
+		// subarray shares the buffer, unlike slice, which copies. It is built
+		// through the species from that buffer rather than assembled here, so
+		// that a subclass gets an instance of itself over the same bytes.
+		begin := Int(t.byteOffset + start*t.info().size)
+		if t.tracking && arg(args, 1).IsUndefined() {
+			// A view that tracks its buffer's length, asked for everything
+			// from start on, gives one that tracks it too.
+			res, _, err := rt.typedArraySpeciesCreate(this, t, []Value{Obj(t.buffer), begin})
+			return res, err
+		}
 		end, err := rt.relativeIndex(arg(args, 1), length, length)
 		if err != nil {
 			return Undefined, err
@@ -995,14 +1153,7 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		if count < 0 {
 			count = 0
 		}
-		// subarray shares the buffer, unlike slice, which copies. It is built
-		// through the species from that buffer rather than assembled here, so
-		// that a subclass gets an instance of itself over the same bytes.
-		res, _, err := rt.typedArraySpeciesCreate(this, t, []Value{
-			Obj(t.buffer),
-			Int(t.byteOffset + start*t.info().size),
-			Int(count),
-		})
+		res, _, err := rt.typedArraySpeciesCreate(this, t, []Value{Obj(t.buffer), begin, Int(count)})
 		return res, err
 	})
 
@@ -1011,11 +1162,12 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		start, err := rt.relativeIndex(arg(args, 0), t.length, 0)
+		length := t.count()
+		start, err := rt.relativeIndex(arg(args, 0), length, 0)
 		if err != nil {
 			return Undefined, err
 		}
-		end, err := rt.relativeIndex(arg(args, 1), t.length, t.length)
+		end, err := rt.relativeIndex(arg(args, 1), length, length)
 		if err != nil {
 			return Undefined, err
 		}
@@ -1032,17 +1184,18 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 			return res, nil
 		}
 		// Building the result ran user code, which may have detached the
-		// source out from under the copy -- and the result has to be able to
-		// hold what the source holds, which a BigInt array and a Number one
-		// cannot do for each other.
-		if t.storage().detached {
-			return Undefined, rt.throwTypeError("the underlying ArrayBuffer has been detached")
+		// source out from under the copy, or shrunk it -- and the result has
+		// to be able to hold what the source holds, which a BigInt array and a
+		// Number one cannot do for each other.
+		if err := rt.requireInBounds(t); err != nil {
+			return Undefined, err
 		}
+		end = min(end, t.count())
 		if elemInfos[nt.kind].big != elemInfos[t.kind].big {
 			return Undefined, rt.throwTypeError(
 				"a BigInt typed array and a Number one cannot stand in for each other")
 		}
-		for i := 0; i < end-start && i < nt.length; i++ {
+		for i := 0; i < end-start && i < nt.count(); i++ {
 			if err := rt.setElem(nt, i, t.getElem(start+i)); err != nil {
 				return Undefined, err
 			}
@@ -1055,26 +1208,30 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		// The value is converted once, before the range is worked out: a
-		// valueOf that counts its calls must see exactly one, however many
-		// elements are filled.
+		// The length is settled first, and the value converted once, before
+		// the range is worked out: a valueOf that counts its calls must see
+		// exactly one, however many elements are filled, and one that resizes
+		// the buffer does not change which are.
+		length := t.count()
 		v, err := rt.toElementValue(t, arg(args, 0))
 		if err != nil {
 			return Undefined, err
 		}
-		start, err := rt.relativeIndex(arg(args, 1), t.length, 0)
+		start, err := rt.relativeIndex(arg(args, 1), length, 0)
 		if err != nil {
 			return Undefined, err
 		}
-		end, err := rt.relativeIndex(arg(args, 2), t.length, t.length)
+		end, err := rt.relativeIndex(arg(args, 2), length, length)
 		if err != nil {
 			return Undefined, err
 		}
-		// Any of those coercions can run a valueOf that detaches the buffer,
-		// so the view is checked again before anything is written.
-		if t.storage().detached {
-			return Undefined, rt.throwTypeError("the underlying ArrayBuffer has been detached")
+		// Any of those coercions can run a valueOf that detaches the buffer
+		// or shrinks it, so the view is checked again before anything is
+		// written, and only what is still there is filled.
+		if err := rt.requireInBounds(t); err != nil {
+			return Undefined, err
 		}
+		end = min(end, t.count())
 		for i := start; i < end; i++ {
 			if err := rt.setElem(t, i, v); err != nil {
 				return Undefined, err
@@ -1095,16 +1252,17 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 			return Undefined, err
 		}
 		target := arg(args, 0)
-		from, ok, err := rt.searchStart(arg(args, 1), t.length)
+		length := t.count()
+		from, ok, err := rt.searchStart(arg(args, 1), length)
 		if err != nil || !ok {
 			return Int(-1), err
 		}
 		// indexOf asks whether each index is there before reading it, and a
-		// detached buffer leaves none of them: it reports nothing found rather
-		// than finding undefined everywhere, which is where it parts company
-		// with includes.
+		// detached or shrunk buffer leaves fewer of them: it reports nothing
+		// found rather than finding undefined everywhere, which is where it
+		// parts company with includes.
 		avail := t.count()
-		for i := from; i < t.length && i < avail; i++ {
+		for i := from; i < length && i < avail; i++ {
 			if t.getElem(i).StrictEquals(target) {
 				return Int(i), nil
 			}
@@ -1118,11 +1276,12 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 			return Undefined, err
 		}
 		target := arg(args, 0)
-		from, ok, err := rt.searchStart(arg(args, 1), t.length)
+		length := t.count()
+		from, ok, err := rt.searchStart(arg(args, 1), length)
 		if err != nil || !ok {
 			return False, err
 		}
-		for i := from; i < t.length; i++ {
+		for i := from; i < length; i++ {
 			if t.getElem(i).SameValueZero(target) {
 				return True, nil
 			}
@@ -1135,12 +1294,13 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		if err != nil {
 			return Undefined, err
 		}
+		length := t.count()
 		n, err := rt.toInteger(arg(args, 0))
 		if err != nil {
 			return Undefined, err
 		}
 		if n < 0 {
-			n += float64(t.length)
+			n += float64(length)
 		}
 		// The value is converted before the index is checked, and before the
 		// elements are copied: a valueOf that writes to the array is seen by
@@ -1149,15 +1309,17 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		if n < 0 || n >= float64(t.length) {
+		// The index is checked against the view as the conversion left it,
+		// and the copy is as long as the view was to begin with.
+		if n < 0 || n >= float64(t.count()) {
 			return Undefined, rt.throwRangeError("the index is outside the typed array")
 		}
 		at := int(n)
 		// A view of the same kind rather than of the receiver's species: the
 		// copying methods do not consult it.
 		o := newObject(rt.typedArrayProtoFor(t.kind), ClassTypedArray)
-		dst := rt.allocTypedArray(o, t.kind, t.length)
-		for i := 0; i < t.length; i++ {
+		dst := rt.allocTypedArray(o, t.kind, length)
+		for i := 0; i < length; i++ {
 			el := t.getElem(i)
 			if i == at {
 				el = v
@@ -1169,40 +1331,69 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		return Obj(o), nil
 	})
 
+	r.defMethod(p, "at", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		t, err := rt.typedArrayOf(this, "TypedArray.prototype.at")
+		if err != nil {
+			return Undefined, err
+		}
+		// The length is the view's before the index is converted, and the
+		// element is read after: a valueOf that shrinks the buffer leaves
+		// the element undefined rather than someone else's.
+		length := t.count()
+		n, err := rt.toInteger(arg(args, 0))
+		if err != nil {
+			return Undefined, err
+		}
+		if n < 0 {
+			n += float64(length)
+		}
+		if n < 0 || n >= float64(length) {
+			return Undefined, nil
+		}
+		return t.getElem(int(n)), nil
+	})
+
 	r.defMethod(p, "copyWithin", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		t, err := rt.typedArrayWritable(this, "TypedArray.prototype.copyWithin")
 		if err != nil {
 			return Undefined, err
 		}
-		to, err := rt.relativeIndex(arg(args, 0), t.length, 0)
+		length := t.count()
+		to, err := rt.relativeIndex(arg(args, 0), length, 0)
 		if err != nil {
 			return Undefined, err
 		}
-		from, err := rt.relativeIndex(arg(args, 1), t.length, 0)
+		from, err := rt.relativeIndex(arg(args, 1), length, 0)
 		if err != nil {
 			return Undefined, err
 		}
-		final, err := rt.relativeIndex(arg(args, 2), t.length, t.length)
+		final, err := rt.relativeIndex(arg(args, 2), length, length)
 		if err != nil {
 			return Undefined, err
 		}
 		count := final - from
-		if n := t.length - to; n < count {
+		if n := length - to; n < count {
 			count = n
 		}
 		if count > 0 {
 			// Any of those conversions can detach the buffer, and a view over
 			// one that has gone has nothing to copy within. There is nothing
 			// to complain about when there was nothing to copy.
-			if t.storage().detached {
-				return Undefined, rt.throwTypeError(
-					"the underlying ArrayBuffer has been detached")
+			if err := rt.requireInBounds(t); err != nil {
+				return Undefined, err
 			}
-			size := t.info().size
-			b := t.storage().bytes
-			dst := t.byteOffset + to*size
-			src := t.byteOffset + from*size
-			copy(b[dst:dst+count*size], b[src:src+count*size])
+			// They can also have shrunk it, and nothing is read or written
+			// past the view's end as it is now: the copy is as long as both
+			// the source and the destination still are.
+			now := t.count()
+			count = min(count, now-from, now-to)
+			if count > 0 {
+				size := t.info().size
+				b := t.storage().bytes
+				dst := t.byteOffset + to*size
+				src := t.byteOffset + from*size
+				copy(b[dst:dst+count*size], b[src:src+count*size])
+			}
 		}
 		return this, nil
 	})
@@ -1213,8 +1404,9 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 			return Undefined, err
 		}
 		target := arg(args, 0)
-		from := t.length - 1
-		if t.length == 0 {
+		length := t.count()
+		from := length - 1
+		if length == 0 {
 			return Int(-1), nil
 		}
 		if len(args) > 1 {
@@ -1226,7 +1418,7 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 			case math.IsInf(n, -1):
 				return Int(-1), nil
 			case n < 0:
-				n += float64(t.length)
+				n += float64(length)
 				if n < 0 {
 					return Int(-1), nil
 				}
@@ -1251,6 +1443,7 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		if err != nil {
 			return Undefined, err
 		}
+		length := t.count()
 		sep := ","
 		if s := arg(args, 0); !s.IsUndefined() {
 			ss, err := rt.toString(s)
@@ -1259,12 +1452,13 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 			}
 			sep = ss.Go()
 		}
-		// The length is the one the view was made with, and each element is
-		// read as it comes: a separator whose toString detached the buffer
-		// leaves the elements undefined, and an undefined element contributes
-		// nothing rather than the word.
+		// The length is the one the view had before the separator was
+		// converted, and each element is read as it comes: a separator whose
+		// toString detached or shrank the buffer leaves the elements past its
+		// end undefined, and an undefined element contributes nothing rather
+		// than the word.
 		out := emptyString
-		for i := 0; i < t.length; i++ {
+		for i := 0; i < length; i++ {
 			if i > 0 {
 				out = out.Concat(NewString(sep))
 			}
@@ -1288,7 +1482,7 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		}
 		// The length is the view's own rather than a length property, which a
 		// script may have defined over it.
-		return rt.arrayLikeToLocaleString(this, int64(t.length), args)
+		return rt.arrayLikeToLocaleString(this, int64(t.count()), args)
 	})
 
 	// %TypedArray%.prototype.toString is not merely equivalent to the Array
@@ -1325,7 +1519,7 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 				return Undefined, rt.throwTypeError("%s requires a function", method)
 			}
 			thisArg := arg(args, 1)
-			n := t.length
+			n := t.count()
 
 			var kept []Value
 			// map builds its result before it runs anything: the species is
@@ -1354,10 +1548,10 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 				}
 				switch method {
 				case "map":
-					if i < mappedArr.length {
-						if err := rt.setElem(mappedArr, i, res); err != nil {
-							return Undefined, err
-						}
+					// A write past the end of a result that has since shrunk
+					// is dropped, as any such write is.
+					if err := rt.setElem(mappedArr, i, res); err != nil {
+						return Undefined, err
 					}
 				case "filter":
 					if res.Truthy() {
@@ -1412,7 +1606,7 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 			if !isCallable(cb) {
 				return Undefined, rt.throwTypeError("%s requires a function", name)
 			}
-			n := t.length
+			n := t.count()
 			k := 0
 			var acc Value
 			seeded := len(args) > 1
@@ -1453,7 +1647,6 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		rebuild bool
 	}
 	for _, m := range []delegated{
-		{"at", 1, false, false},
 		{"reverse", 0, true, false},
 		{"sort", 1, true, false},
 		{"toReversed", 0, false, true},
@@ -1472,7 +1665,7 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 			if err != nil {
 				return Undefined, err
 			}
-			vals := make([]Value, t.length)
+			vals := make([]Value, t.count())
 			for i := range vals {
 				vals[i] = t.getElem(i)
 			}
@@ -1508,7 +1701,7 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 				// The plain array was reordered in place; the view has to be
 				// written back element by element, through the element type's
 				// own conversion.
-				for i := 0; i < t.length && i < len(arr.elems); i++ {
+				for i := 0; i < len(vals) && i < len(arr.elems); i++ {
 					if err := rt.setElem(t, i, arr.elems[i]); err != nil {
 						return Undefined, err
 					}
@@ -1742,7 +1935,7 @@ func (r *Runtime) typedArrayResultFor(ctor Value, n int64) (Value, *typedArrayDa
 	if err := r.requireMutable(t); err != nil {
 		return Undefined, nil, err
 	}
-	if int64(t.length) < n {
+	if int64(t.count()) < n {
 		return Undefined, nil, r.throwTypeError("the result is too short")
 	}
 	return res, t, nil

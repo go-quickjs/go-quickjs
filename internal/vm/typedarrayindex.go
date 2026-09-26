@@ -31,7 +31,10 @@ type numericIndex struct {
 	numeric bool
 	// valid is set when it also names an element that is there.
 	valid bool
-	i     int
+	// integral is set when the key is a non-negative integer, which an
+	// element could have even though none is there at the moment.
+	integral bool
+	i        int
 }
 
 // typedArrayIndex classifies a key against a typed array.
@@ -42,7 +45,7 @@ func (r *Runtime) typedArrayIndex(o *Object, key Atom) numericIndex {
 	}
 	if key.IsIndex() {
 		i := int(key.Index())
-		return numericIndex{numeric: true, valid: !t.storage().detached && i < t.length, i: i}
+		return numericIndex{numeric: true, valid: i < t.count(), integral: true, i: i}
 	}
 	if r.atoms.IsSymbol(key) {
 		return numericIndex{}
@@ -55,10 +58,24 @@ func (r *Runtime) typedArrayIndex(o *Object, key Atom) numericIndex {
 	// A numeric key that is not a non-negative integer in range names no
 	// element, but it is still the buffer's business: the write is dropped
 	// rather than becoming a property.
+	integral := f == math.Trunc(f) && !math.Signbit(f) && f >= 0 && f <= maxTypedArrayLength
+	if !integral {
+		return numericIndex{numeric: true}
+	}
 	i := int(f)
-	inRange := f == math.Trunc(f) && !math.Signbit(f) && f >= 0 &&
-		f < float64(t.length) && !t.storage().detached
-	return numericIndex{numeric: true, valid: inRange, i: i}
+	return numericIndex{numeric: true, valid: i < t.count(), integral: true, i: i}
+}
+
+// canPreventExtensions reports whether an ordinary object, not a proxy, can be
+// made non-extensible. Only a typed array whose length can change cannot -- one
+// tracking its buffer's length, or any view over a resizable buffer -- since it
+// could gain elements later, and so refuses to promise it will not.
+func canPreventExtensions(o *Object) bool {
+	t, ok := o.data.(*typedArrayData)
+	if !ok || o.class != ClassTypedArray {
+		return true
+	}
+	return !t.tracking && !t.storage().resizable
 }
 
 // typedArrayImmutable reports whether a typed array views an immutable buffer.

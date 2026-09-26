@@ -70,7 +70,6 @@ var unsupportedFeatures = map[string]string{
 	"Atomics":                      "no shared memory",
 	"Atomics.pause":                "no shared memory",
 	"SharedArrayBuffer":            "no shared memory",
-	"resizable-arraybuffer":        "no resizable buffers",
 	"decorators":                   "decorators are not implemented",
 	"import-attributes":            "no module attributes",
 	"explicit-resource-management": "no using declarations",

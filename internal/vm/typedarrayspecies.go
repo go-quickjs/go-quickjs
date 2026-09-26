@@ -43,7 +43,7 @@ func (r *Runtime) typedArraySpeciesCreate(this Value, t *typedArrayData,
 	}
 	// A length was asked for, so a shorter result is one the method could not
 	// fill.
-	if len(args) == 1 && args[0].IsNumber() && float64(nt.length) < args[0].Number() {
+	if len(args) == 1 && args[0].IsNumber() && float64(nt.count()) < args[0].Number() {
 		return Undefined, nil, r.throwTypeError("the typed array species is too short")
 	}
 	return res, nt, nil
@@ -71,7 +71,7 @@ func (r *Runtime) fillTypedArrayLike(this Value, t *typedArrayData, vals []Value
 		return Undefined, err
 	}
 	for i, v := range vals {
-		if i >= nt.length {
+		if i >= nt.count() {
 			break
 		}
 		if err := r.setElem(nt, i, v); err != nil {

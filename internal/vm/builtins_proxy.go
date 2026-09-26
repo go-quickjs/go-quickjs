@@ -394,6 +394,9 @@ func (r *Runtime) proxyPreventExtensions(p *proxyData) (bool, error) {
 		if pp := proxyOf(p.target); pp != nil {
 			return r.proxyPreventExtensions(pp)
 		}
+		if !canPreventExtensions(p.target) {
+			return false, nil
+		}
 		p.target.flags &^= objExtensible
 		return true, nil
 	}
@@ -905,6 +908,9 @@ func (r *Runtime) initReflectBuiltins() {
 		if p := proxyOf(target.Object()); p != nil {
 			ok, err := rt.proxyPreventExtensions(p)
 			return Bool(ok), err
+		}
+		if !canPreventExtensions(target.Object()) {
+			return False, nil
 		}
 		target.Object().flags &^= objExtensible
 		return True, nil

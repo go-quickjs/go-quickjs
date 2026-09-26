@@ -357,6 +357,9 @@ func (r *Runtime) initObjectBuiltins() {
 			}
 			return v, nil
 		}
+		if !canPreventExtensions(v.Object()) {
+			return Undefined, rt.throwTypeError("cannot prevent extensions on this object")
+		}
 		v.Object().flags &^= objExtensible
 		return v, nil
 	})
@@ -2633,8 +2636,12 @@ func (r *Runtime) random() float64 {
 func (r *Runtime) initArrayExtras() {
 	p := r.proto.array
 
+	// at is generic like the rest: the length is the length property and the
+	// element whatever reading it gives, so it works on an array-like, a
+	// frozen array whose elements have left the dense storage, and a typed
+	// array alike.
 	r.defMethod(p, "at", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.toObject(this)
+		a, err := rt.viewArrayLike(this)
 		if err != nil {
 			return Undefined, err
 		}
@@ -2644,16 +2651,12 @@ func (r *Runtime) initArrayExtras() {
 		}
 		// A negative index counts back from the end.
 		if i < 0 {
-			i += float64(len(o.elems))
+			i += float64(a.n)
 		}
-		if i < 0 || i >= float64(len(o.elems)) {
+		if i < 0 || i >= float64(a.n) {
 			return Undefined, nil
 		}
-		v := o.elems[int(i)]
-		if isHole(v) {
-			return Undefined, nil
-		}
-		return v, nil
+		return a.get(rt, int64(i))
 	})
 
 	r.defMethod(p, "fill", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {

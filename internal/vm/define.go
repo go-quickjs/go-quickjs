@@ -682,6 +682,9 @@ func (r *Runtime) preventExtensionsOf(o *Object) (bool, error) {
 	if p := proxyOf(o); p != nil {
 		return r.proxyPreventExtensions(p)
 	}
+	if !canPreventExtensions(o) {
+		return false, nil
+	}
 	// Dense elements cannot express attributes, so an object about to have
 	// them constrained moves them into the property table first.
 	if len(o.elems) > 0 {
