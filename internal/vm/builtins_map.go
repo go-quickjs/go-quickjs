@@ -267,6 +267,23 @@ func (m *jsMap) clear() {
 	m.size = 0
 }
 
+// getOrInsertComputed is the shared body of Map's and WeakMap's method once
+// the receiver, the key and the callback have been checked.
+//
+// The callback may itself have added the key, and its result still wins: set
+// overwrites the value in the position the callback gave the entry.
+func (r *Runtime) getOrInsertComputed(m *jsMap, key, cb Value) (Value, error) {
+	if v, ok := m.get(r, key); ok {
+		return v, nil
+	}
+	v, err := r.call(cb, Undefined, []Value{key})
+	if err != nil {
+		return Undefined, err
+	}
+	m.set(r, key, v)
+	return v, nil
+}
+
 // mapOf recovers the storage from a receiver, checking the class so that a
 // method called on the wrong kind of object reports it.
 func (r *Runtime) mapOf(this Value, class Class, name string) (*jsMap, error) {
@@ -358,6 +375,31 @@ func (r *Runtime) initMapBuiltins() {
 		m.set(rt, arg(args, 0), arg(args, 1))
 		// set returns the map, which is what makes chaining work.
 		return this, nil
+	})
+	r.defMethod(p, "getOrInsert", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		m, err := rt.mapOf(this, ClassMap, "Map.prototype.getOrInsert")
+		if err != nil {
+			return Undefined, err
+		}
+		key := normalizeZero(arg(args, 0))
+		if v, ok := m.get(rt, key); ok {
+			return v, nil
+		}
+		v := arg(args, 1)
+		m.set(rt, key, v)
+		return v, nil
+	})
+	r.defMethod(p, "getOrInsertComputed", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		m, err := rt.mapOf(this, ClassMap, "Map.prototype.getOrInsertComputed")
+		if err != nil {
+			return Undefined, err
+		}
+		cb := arg(args, 1)
+		if !isCallable(cb) {
+			return Undefined, rt.throwTypeError("Map.prototype.getOrInsertComputed requires a function")
+		}
+		key := normalizeZero(arg(args, 0))
+		return rt.getOrInsertComputed(m, key, cb)
 	})
 	r.defMethod(p, "has", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		m, err := rt.mapOf(this, ClassMap, "Map.prototype.has")
@@ -551,6 +593,41 @@ func (r *Runtime) initWeakCollections() {
 		}
 		m.set(rt, k, arg(args, 1))
 		return this, nil
+	})
+	r.defMethod(wmProto, "getOrInsert", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		m, err := rt.mapOf(this, ClassWeakMap, "WeakMap.prototype.getOrInsert")
+		if err != nil {
+			return Undefined, err
+		}
+		k := arg(args, 0)
+		if !rt.canBeWeak(k) {
+			return Undefined, rt.throwTypeError(
+				"a WeakMap key must be an object or an unregistered symbol")
+		}
+		if v, ok := m.get(rt, k); ok {
+			return v, nil
+		}
+		v := arg(args, 1)
+		m.set(rt, k, v)
+		return v, nil
+	})
+	r.defMethod(wmProto, "getOrInsertComputed", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		m, err := rt.mapOf(this, ClassWeakMap, "WeakMap.prototype.getOrInsertComputed")
+		if err != nil {
+			return Undefined, err
+		}
+		// The key is checked before the callback, the reverse of Map, whose
+		// every key is acceptable.
+		k := arg(args, 0)
+		if !rt.canBeWeak(k) {
+			return Undefined, rt.throwTypeError(
+				"a WeakMap key must be an object or an unregistered symbol")
+		}
+		cb := arg(args, 1)
+		if !isCallable(cb) {
+			return Undefined, rt.throwTypeError("WeakMap.prototype.getOrInsertComputed requires a function")
+		}
+		return rt.getOrInsertComputed(m, k, cb)
 	})
 	r.defMethod(wmProto, "has", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		m, err := rt.mapOf(this, ClassWeakMap, "WeakMap.prototype.has")
