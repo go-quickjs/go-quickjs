@@ -2140,6 +2140,7 @@ func (r *Runtime) initSymbolBuiltins() {
 		"unscopables":        r.wellKnown.unscopables, "match": r.wellKnown.match,
 		"matchAll": r.wellKnown.matchAll, "replace": r.wellKnown.replace,
 		"search": r.wellKnown.search, "split": r.wellKnown.split,
+		"dispose": r.wellKnown.dispose, "asyncDispose": r.wellKnown.asyncDispose,
 	}
 	for name, sym := range wk {
 		r.defConst(ctor, name, Sym(sym))
@@ -2242,10 +2243,14 @@ func (r *Runtime) initErrorBuiltins() {
 		proto.setOwnRaw(atomMessage, Str(emptyString), propWritable|propConfigurable)
 
 		// AggregateError takes the list of errors before the message, so it has
-		// one more parameter than the rest.
+		// one more parameter than the rest, and SuppressedError the error and
+		// what it suppressed, and no options.
 		arity := 1
-		if kind == errAggregate {
+		switch kind {
+		case errAggregate:
 			arity = 2
+		case errSuppressed:
+			arity = 3
 		}
 		ctor := r.newCtor(name, arity, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
 			// An error is given its message and its stack, and perhaps a
@@ -2255,8 +2260,11 @@ func (r *Runtime) initErrorBuiltins() {
 			// AggregateError takes the list of causes first, so its message is
 			// the second argument rather than the first.
 			msgArg, optsArg := arg(args, 0), arg(args, 1)
-			if kind == errAggregate {
+			switch kind {
+			case errAggregate:
 				msgArg, optsArg = arg(args, 1), arg(args, 2)
+			case errSuppressed:
+				msgArg, optsArg = arg(args, 2), Undefined
 			}
 			msg := ""
 			if m := msgArg; !m.IsUndefined() {
@@ -2284,6 +2292,12 @@ func (r *Runtime) initErrorBuiltins() {
 					}
 					o.setOwnRaw(causeKey, cause, propWritable|propConfigurable)
 				}
+			}
+			// A SuppressedError holds the error and what it suppressed, set
+			// after the message.
+			if kind == errSuppressed {
+				o.setOwnRaw(rt.atoms.intern("error"), arg(args, 0), propWritable|propConfigurable)
+				o.setOwnRaw(rt.atoms.intern("suppressed"), arg(args, 1), propWritable|propConfigurable)
 			}
 			// The list of errors is drained last, after the message and the
 			// options have been read: the iterator may run user code, and it

@@ -310,6 +310,8 @@ type wellKnownSymbols struct {
 	replace            *Symbol
 	search             *Symbol
 	split              *Symbol
+	dispose            *Symbol
+	asyncDispose       *Symbol
 }
 
 // closure is a function template paired with the upvalues it captured.
@@ -441,12 +443,13 @@ const (
 	errType
 	errURI
 	errAggregate
+	errSuppressed
 	errorKindCount
 )
 
 var errorKindNames = [errorKindCount]string{
 	"Error", "EvalError", "RangeError", "ReferenceError",
-	"SyntaxError", "TypeError", "URIError", "AggregateError",
+	"SyntaxError", "TypeError", "URIError", "AggregateError", "SuppressedError",
 }
 
 // Thrown carries a JavaScript exception through Go's error mechanism.

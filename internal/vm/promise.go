@@ -307,19 +307,25 @@ func (r *Runtime) HasPendingJobs() bool { return len(r.microtasks) > 0 }
 
 // promiseThen registers a reaction and returns the promise it resolves.
 func (r *Runtime) promiseThen(o *Object, onFulfilled, onRejected Value) *Object {
+	result := r.newPromise()
+	r.promiseThenInto(o, onFulfilled, onRejected, result)
+	return result
+}
+
+// promiseThenInto registers a reaction that settles a promise the caller
+// already has, which is PerformPromiseThen with a result capability.
+func (r *Runtime) promiseThenInto(o *Object, onFulfilled, onRejected Value, result *Object) {
 	p, ok := o.data.(*promiseData)
 	if !ok {
-		return r.newPromise()
+		return
 	}
-	result := r.newPromise()
 	rc := reaction{onFulfilled: onFulfilled, onRejected: onRejected, result: result}
 
 	if p.state == promisePending {
 		p.reactions = append(p.reactions, rc)
-		return result
+		return
 	}
 	r.enqueueReaction(p, rc)
-	return result
 }
 
 // promiseCapability is a promise together with the two functions that settle

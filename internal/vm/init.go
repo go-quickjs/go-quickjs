@@ -152,6 +152,8 @@ func (r *Runtime) initWellKnownSymbols() {
 		replace:            mk("replace"),
 		search:             mk("search"),
 		split:              mk("split"),
+		dispose:            mk("dispose"),
+		asyncDispose:       mk("asyncDispose"),
 	}
 }
 
@@ -378,6 +380,7 @@ func (r *Runtime) initGlobals() {
 	// Runs last, because each of its additions hangs off a constructor an
 	// earlier step installed.
 	r.initIteratorHelpers()
+	r.initDisposeBuiltins()
 	r.initRecentBuiltins()
 	r.initExtraBuiltins()
 	r.initAnnexB()
