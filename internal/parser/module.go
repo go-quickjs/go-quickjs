@@ -29,6 +29,7 @@ func (p *parser) parseImportDecl() ast.Stmt {
 	if p.tok.Kind == lexer.String {
 		decl.Source = p.tok.Value
 		p.next()
+		decl.Type = p.parseWithClause()
 		p.semicolon()
 		return decl
 	}
@@ -91,8 +92,53 @@ func (p *parser) parseImportDecl() ast.Stmt {
 	}
 	decl.Source = p.tok.Value
 	p.next()
+	decl.Type = p.parseWithClause()
 	p.semicolon()
 	return decl
+}
+
+// parseWithClause parses the import attributes after a module specifier --
+// `with { type: "json" }` -- and returns the type they ask for, if any.
+//
+// type is the only attribute there is; any other is refused here, as is one
+// given twice, since a module could not be loaded by what it asks for.
+func (p *parser) parseWithClause() string {
+	if !p.isKeyword("with") {
+		return ""
+	}
+	p.next()
+	p.expectPunct("{")
+	seen := map[string]bool{}
+	typ := ""
+	for !p.isPunct("}") {
+		keyTok := p.tok
+		switch p.tok.Kind {
+		case lexer.Ident, lexer.Keyword, lexer.String:
+		default:
+			p.errorf("expected an import attribute name")
+		}
+		key := p.tok.Value
+		p.next()
+		p.expectPunct(":")
+		if p.tok.Kind != lexer.String {
+			p.errorf("an import attribute's value must be a string")
+		}
+		value := p.tok.Value
+		p.next()
+		if seen[key] {
+			p.errorAt(keyTok, "the import attribute %q is given twice", key)
+		}
+		seen[key] = true
+		if key != "type" {
+			p.errorAt(keyTok, "unsupported import attribute %q", key)
+		}
+		typ = value
+		if !p.eatPunct(",") {
+			break
+		}
+	}
+	p.expectPunct("}")
+	return typ
 }
 
 // parseExportDecl parses an export declaration, with `export` current.
@@ -150,6 +196,7 @@ func (p *parser) parseExportDecl() ast.Stmt {
 		}
 		decl.Source = p.tok.Value
 		p.next()
+		decl.Type = p.parseWithClause()
 		p.semicolon()
 		return decl
 
@@ -184,6 +231,7 @@ func (p *parser) parseExportDecl() ast.Stmt {
 			}
 			decl.Source = p.tok.Value
 			p.next()
+			decl.Type = p.parseWithClause()
 		}
 		p.semicolon()
 		return decl

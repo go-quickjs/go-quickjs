@@ -656,3 +656,24 @@ const (
 	DisposeRecord = 1 << iota
 	DisposeAsync
 )
+
+// ModuleRequest names a module a module asks for: its specifier and, when its
+// import attributes ask for one, the type of module it must be. A JSON module
+// and a JavaScript one loaded from the same place are two modules, so the type
+// is part of the name.
+func ModuleRequest(specifier, typ string) string {
+	if typ == "" {
+		return specifier
+	}
+	return specifier + "\x00" + typ
+}
+
+// SplitModuleRequest takes a ModuleRequest apart.
+func SplitModuleRequest(request string) (specifier, typ string) {
+	for i := len(request) - 1; i >= 0; i-- {
+		if request[i] == 0 {
+			return request[:i], request[i+1:]
+		}
+	}
+	return request, ""
+}

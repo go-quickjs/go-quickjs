@@ -804,7 +804,9 @@ const (
 type ImportDecl struct {
 	Specifiers []ImportSpecifier
 	Source     string
-	Start      int
+	// Type is what `with { type: ... }` asks the module to be, if anything.
+	Type  string
+	Start int
 }
 
 // ExportSpecifier is one name an export declaration exposes.
@@ -827,8 +829,10 @@ type ExportDecl struct {
 	Decl Stmt
 	// Specifiers lists the names exported by an `export {}` clause.
 	Specifiers []ExportSpecifier
-	// Source names the module a re-export draws from.
+	// Source names the module a re-export draws from, and Type what its
+	// import attributes ask it to be.
 	Source string
+	Type   string
 	// Default marks `export default`.
 	Default bool
 	// DefaultExpr holds the expression of `export default expr`.

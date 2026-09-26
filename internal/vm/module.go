@@ -266,8 +266,13 @@ func (r *Runtime) Link(m *Module) error {
 	return nil
 }
 
-// loadDependency resolves and compiles a module a specifier names.
-func (r *Runtime) loadDependency(specifier, referrer string) (*Module, error) {
+// loadDependency resolves and compiles a module a request names: a specifier,
+// and the type its import attributes ask for, if any.
+func (r *Runtime) loadDependency(request, referrer string) (*Module, error) {
+	specifier, typ := bytecode.SplitModuleRequest(request)
+	if typ != "" {
+		return r.loadTypedModule(specifier, typ, referrer)
+	}
 	// A module the host registered answers to its own name, whatever a loader
 	// would make of it: `import "fs"` reaches the host's fs rather than a file
 	// of that name, and needs no loader at all.
@@ -684,9 +689,13 @@ func (r *Runtime) ModuleResult(promise Value) error {
 	return r.throw(p.value)
 }
 
-// resolvedNameOf asks the loader what a specifier resolves to, so that the
+// resolvedNameOf asks the loader what a request resolves to, so that the
 // dependency can be found in the module table.
-func (r *Runtime) resolvedNameOf(specifier, referrer string) string {
+func (r *Runtime) resolvedNameOf(request, referrer string) string {
+	specifier, typ := bytecode.SplitModuleRequest(request)
+	if typ != "" {
+		return bytecode.ModuleRequest(r.resolvedNameOf(specifier, referrer), typ)
+	}
 	if m := r.nativeModule(specifier); m != nil {
 		return specifier
 	}
@@ -728,6 +737,12 @@ func (r *Runtime) initDynamicImport() {
 			rt.rejectPromise(result, thrownValue(err))
 			return Obj(result), nil
 		}
+		typ, err := rt.importAttributes(arg(args, 1))
+		if err != nil {
+			rt.rejectPromise(result, thrownValue(err))
+			return Obj(result), nil
+		}
+		request := bytecode.ModuleRequest(spec.Go(), typ)
 
 		// The module is fetched and evaluated in a job rather than here. A
 		// host's loading is asynchronous even when this one's is not, and the
@@ -738,7 +753,7 @@ func (r *Runtime) initDynamicImport() {
 			// A module that will not load, parse or link fails the way a
 			// static import of it would, as an error the script can catch and
 			// inspect -- not as a Go error the host would have to interpret.
-			mod, err := rt.loadDependency(spec.Go(), "")
+			mod, err := rt.loadDependency(request, "")
 			if err != nil {
 				rt.rejectPromise(result, thrownValue(rt.wrapEvalError(err)))
 				return
@@ -823,4 +838,119 @@ func (r *Runtime) moduleOfEnv(env *Object) string {
 // modules over HTTP and one that reads them from disk have different answers.
 func (r *Runtime) OnImportMeta(fn func(specifier string, meta *Object)) {
 	r.onImportMeta = fn
+}
+
+// importAttributes reads the options of a dynamic import: an object, if there
+// are any, whose with property is an object whose own enumerable properties
+// are string-valued attributes. type is the only one there is, and what it
+// asks for is returned.
+func (r *Runtime) importAttributes(options Value) (string, error) {
+	if options.IsUndefined() {
+		return "", nil
+	}
+	if !options.IsObject() {
+		return "", r.throwTypeError("the options of import() must be an object")
+	}
+	with, err := r.getProp(options.Object(), r.atoms.intern("with"), options)
+	if err != nil {
+		return "", err
+	}
+	if with.IsUndefined() {
+		return "", nil
+	}
+	if !with.IsObject() {
+		return "", r.throwTypeError("the with option of import() must be an object")
+	}
+	o := with.Object()
+	keys, err := r.ownKeysOf(o, false)
+	if err != nil {
+		return "", err
+	}
+	typ := ""
+	var unsupported string
+	for _, key := range keys {
+		enumerable, err := r.isEnumerable(o, key)
+		if err != nil {
+			return "", err
+		}
+		if !enumerable {
+			continue
+		}
+		v, err := r.getProp(o, key, with)
+		if err != nil {
+			return "", err
+		}
+		if !v.IsString() {
+			return "", r.throwTypeError("the import attribute %q must be a string", r.atoms.name(key))
+		}
+		switch name := r.atoms.name(key); name {
+		case "type":
+			typ = v.String().Go()
+		default:
+			if unsupported == "" {
+				unsupported = name
+			}
+		}
+	}
+	// Every attribute is read, and each checked to be a string, before one
+	// is refused for not being supported.
+	if unsupported != "" {
+		return "", r.throwError(errSyntax, "unsupported import attribute %q", unsupported)
+	}
+	return typ, nil
+}
+
+// loadTypedModule loads a module its import attributes give a type: JSON,
+// whose default export is the value the source parses to; text, whose
+// default export is the source itself; or bytes, whose default export is a
+// Uint8Array of the source over an immutable buffer. A module of a type is a
+// different module from one of the same source without it.
+func (r *Runtime) loadTypedModule(specifier, typ, referrer string) (*Module, error) {
+	switch typ {
+	case "json", "text", "bytes":
+	default:
+		return nil, r.throwTypeError("cannot import %q: unsupported module type %q", specifier, typ)
+	}
+	if r.moduleLoader == nil {
+		return nil, r.throwError(errType,
+			"cannot import %q: this runtime has no module loader", specifier)
+	}
+	source, resolved, err := r.moduleLoader(specifier, referrer)
+	if err != nil {
+		return nil, r.throwError(errType, "cannot resolve %q: %s", specifier, err.Error())
+	}
+	key := bytecode.ModuleRequest(resolved, typ)
+	if m, ok := r.modules[key]; ok {
+		return m, nil
+	}
+	var v Value
+	switch typ {
+	case "json":
+		p := &jsonParser{rt: r, src: source}
+		p.skipSpace()
+		if v, err = p.parseValue(); err != nil {
+			return nil, err
+		}
+		p.skipSpace()
+		if p.pos != len(source) {
+			return nil, r.throwSyntaxError("unexpected trailing content in JSON at position %d", p.pos)
+		}
+	case "text":
+		v = Str(NewString(source))
+	case "bytes":
+		buf := newObject(r.arrayBufferProto, ClassArrayBuffer)
+		buf.data = &arrayBufferData{bytes: []byte(source), immutable: true}
+		o := newObject(r.typedArrayProtoFor(elemUint8), ClassTypedArray)
+		o.data = &typedArrayData{buffer: buf, kind: elemUint8, fixedLength: len(source)}
+		v = Obj(o)
+	}
+	m := r.newModule(key, nil)
+	m.state = ModuleEvaluated
+	m.env.setOwnRaw(r.atoms.intern("default"), v, propEnumerable)
+	m.exports["default"] = "default"
+	if r.modules == nil {
+		r.modules = make(map[string]*Module)
+	}
+	r.modules[key] = m
+	return m, nil
 }

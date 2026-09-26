@@ -69,7 +69,6 @@ const (
 var unsupportedFeatures = map[string]string{
 	"Atomics.waitAsync":      "no asynchronous waiting",
 	"decorators":             "decorators are not implemented",
-	"import-attributes":      "no module attributes",
 	"source-phase-imports":   "no source phase imports",
 	"import-defer":           "no deferred imports",
 	"tail-call-optimization": "no tail calls",

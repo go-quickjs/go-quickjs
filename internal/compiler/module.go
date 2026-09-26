@@ -103,7 +103,7 @@ func (c *compiler) collectModuleShape(body []ast.Stmt) {
 	for _, s := range body {
 		switch n := s.(type) {
 		case *ast.ImportDecl:
-			c.module.Requests = append(c.module.Requests, n.Source)
+			c.module.Requests = append(c.module.Requests, bytecode.ModuleRequest(n.Source, n.Type))
 			for _, spec := range n.Specifiers {
 				if spec.Local == "arguments" || spec.Local == "eval" {
 					// Neither may be bound, and an import binding is a binding
@@ -111,7 +111,7 @@ func (c *compiler) collectModuleShape(body []ast.Stmt) {
 					c.errorf(n.Start, "cannot import as %q", spec.Local)
 				}
 				c.module.Imports = append(c.module.Imports, ImportRequest{
-					Specifier: n.Source,
+					Specifier: bytecode.ModuleRequest(n.Source, n.Type),
 					Local:     spec.Local,
 					Imported:  spec.Imported,
 					Namespace: spec.Kind == ast.ImportNamespace,
@@ -120,14 +120,14 @@ func (c *compiler) collectModuleShape(body []ast.Stmt) {
 			}
 			if len(n.Specifiers) == 0 {
 				// A side-effect import still has to be loaded and evaluated.
-				c.module.Imports = append(c.module.Imports, ImportRequest{Specifier: n.Source})
+				c.module.Imports = append(c.module.Imports, ImportRequest{Specifier: bytecode.ModuleRequest(n.Source, n.Type)})
 			}
 
 		case *ast.ExportDecl:
 			if n.Source != "" {
 				// Every `from "m"` is a dependency, whether or not it brings a
 				// binding with it.
-				c.module.Requests = append(c.module.Requests, n.Source)
+				c.module.Requests = append(c.module.Requests, bytecode.ModuleRequest(n.Source, n.Type))
 			}
 			c.collectExport(n)
 		}
@@ -146,12 +146,12 @@ func (c *compiler) collectExport(n *ast.ExportDecl) {
 			// binding, so that two modules re-exporting the same namespace
 			// under the same name agree rather than conflict.
 			c.module.Imports = append(c.module.Imports, ImportRequest{
-				Specifier: n.Source, Local: "*ns*" + n.Source, Namespace: true,
+				Specifier: bytecode.ModuleRequest(n.Source, n.Type), Local: "*ns*" + bytecode.ModuleRequest(n.Source, n.Type), Namespace: true,
 			})
-			c.module.Exports[n.Alias] = "*ns*" + n.Source
+			c.module.Exports[n.Alias] = "*ns*" + bytecode.ModuleRequest(n.Source, n.Type)
 			return
 		}
-		c.module.StarExports = append(c.module.StarExports, n.Source)
+		c.module.StarExports = append(c.module.StarExports, bytecode.ModuleRequest(n.Source, n.Type))
 
 	case len(n.Specifiers) > 0:
 		for _, spec := range n.Specifiers {
@@ -161,9 +161,9 @@ func (c *compiler) collectExport(n *ast.ExportDecl) {
 				// binding the module declares itself -- which happens whenever
 				// a module re-exports a name it also defines, including the
 				// degenerate case of re-exporting from its own specifier.
-				local := "*re*" + n.Source + ":" + spec.Local
+				local := "*re*" + bytecode.ModuleRequest(n.Source, n.Type) + ":" + spec.Local
 				c.module.Imports = append(c.module.Imports, ImportRequest{
-					Specifier: n.Source, Local: local, Imported: spec.Local,
+					Specifier: bytecode.ModuleRequest(n.Source, n.Type), Local: local, Imported: spec.Local,
 				})
 				c.module.Exports[spec.Exported] = local
 				continue
@@ -436,7 +436,7 @@ func (c *compiler) checkModuleDeclarations(body []ast.Stmt) {
 	for _, s := range body {
 		switch n := s.(type) {
 		case *ast.ImportDecl:
-			c.module.Requests = append(c.module.Requests, n.Source)
+			c.module.Requests = append(c.module.Requests, bytecode.ModuleRequest(n.Source, n.Type))
 			for _, spec := range n.Specifiers {
 				declare(spec.Local, true, n.Start)
 			}
