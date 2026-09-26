@@ -84,7 +84,6 @@ var unsupportedFeatures = map[string]string{
 	"legacy-regexp":                 "no legacy RegExp statics",
 	"error-stack-accessor":          "Error stack is an own data property",
 	"immutable-arraybuffer":         "no immutable ArrayBuffers",
-	"await-dictionary":              "no Promise.allKeyed or allSettledKeyed",
 	"String.prototype.replaceAll":   "",
 	"IsHTMLDDA":                     "no document.all emulation",
 	"cross-realm":                   "no realms API",

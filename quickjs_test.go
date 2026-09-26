@@ -1643,6 +1643,29 @@ func TestPromiseCombinators(t *testing.T) {
 		`r`, "2")
 }
 
+func TestPromiseKeyedCombinators(t *testing.T) {
+	// The result has the argument's own enumerable keys in their order, on a
+	// null-prototype object, and an undefined value is an element like any
+	// other.
+	checkAsync(t,
+		`var r = ""; var s = Symbol("s");
+		 var o = {b: Promise.resolve(2), a: 1, u: undefined, [s]: 3};
+		 Object.defineProperty(o, "hidden", {value: 4, enumerable: false});
+		 Promise.allKeyed(o).then(v => r = Object.getPrototypeOf(v) + ":" +
+		   Reflect.ownKeys(v).map(k => String(k) + "=" + v[k]).join(","))`,
+		`r`, "null:b=2,a=1,u=undefined,Symbol(s)=3")
+	checkAsync(t, `var r = ""; Promise.allKeyed({a: Promise.reject("e"), b: 1}).catch(e => r = "c" + e)`,
+		`r`, "ce")
+	checkAsync(t, `var r = ""; Promise.allKeyed({}).then(v => r = Object.keys(v).length)`, `r`, "0")
+	checkAsync(t,
+		`var r = ""; Promise.allSettledKeyed({x: Promise.resolve(1), y: Promise.reject(2)})
+		   .then(v => r = v.x.status + v.x.value + "," + v.y.status + v.y.reason)`,
+		`r`, "fulfilled1,rejected2")
+	// A primitive argument rejects rather than throws.
+	checkAsync(t, `var r = ""; Promise.allKeyed("ab").catch(e => r = e.constructor.name)`, `r`, "TypeError")
+	checkEval(t, `[Promise.allKeyed.length, Promise.allSettledKeyed.length].join()`, "1,1")
+}
+
 func TestAsyncFunctions(t *testing.T) {
 	checkEval(t, `async function f() { return 1; } typeof f().then`, "function")
 	checkAsync(t, `var r = ""; async function f() { r = await Promise.resolve("v"); } f()`, `r`, "v")

@@ -519,6 +519,14 @@ func (r *Runtime) initPromiseBuiltins() {
 	r.defMethod(ctor, "allSettled", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		return rt.promiseCombinator(this, arg(args, 0), combinatorAllSettled)
 	})
+	// The keyed forms take an object rather than an iterable, and settle on
+	// an object with the same keys.
+	r.defMethod(ctor, "allKeyed", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		return rt.combinePromises(this, arg(args, 0), combinatorAll, true)
+	})
+	r.defMethod(ctor, "allSettledKeyed", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		return rt.combinePromises(this, arg(args, 0), combinatorAllSettled, true)
+	})
 	r.defMethod(ctor, "race", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		return rt.promiseCombinator(this, arg(args, 0), combinatorRace)
 	})
@@ -594,6 +602,13 @@ const (
 
 // promiseCombinator implements Promise.all and its relatives.
 func (r *Runtime) promiseCombinator(ctor Value, iterable Value, kind combinatorKind) (Value, error) {
+	return r.combinePromises(ctor, iterable, kind, false)
+}
+
+// combinePromises is promiseCombinator, and with keyed Promise.allKeyed and
+// Promise.allSettledKeyed: the elements are then the values of the argument's
+// own enumerable properties, and the result an object with the same keys.
+func (r *Runtime) combinePromises(ctor Value, iterable Value, kind combinatorKind, keyed bool) (Value, error) {
 	// The receiver is the constructor, so a subclass's Promise.all yields an
 	// instance of the subclass. Anything that is not a constructor is refused
 	// before the iterable is touched.
@@ -625,6 +640,54 @@ func (r *Runtime) promiseCombinator(ctor Value, iterable Value, kind combinatorK
 		fail(thrownValue(r.throwTypeError("the promise constructor has no resolve method")))
 		return Obj(result), nil
 	}
+	if keyed && !iterable.IsObject() {
+		fail(thrownValue(r.throwTypeError("%s is not an object", r.describe(iterable))))
+		return Obj(result), nil
+	}
+
+	// walk hands each element to visit: the values an iterable produces, or
+	// the values of an object's own enumerable properties, whose keys are
+	// kept for the result. An undefined value is an element like any other.
+	var keys []Atom
+	walk := func(visit func(Value) error) error { return r.iterate(iterable, visit) }
+	if keyed {
+		walk = func(visit func(Value) error) error {
+			o := iterable.Object()
+			all, err := r.ownKeysOf(o, true)
+			if err != nil {
+				return err
+			}
+			for _, key := range all {
+				enumerable, err := r.isEnumerable(o, key)
+				if err != nil {
+					return err
+				}
+				if !enumerable {
+					continue
+				}
+				v, err := r.getProp(o, key, iterable)
+				if err != nil {
+					return err
+				}
+				keys = append(keys, key)
+				if err := visit(v); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}
+	// collect makes the settled values into what the combinator settles on.
+	collect := func(values []Value) Value {
+		if !keyed {
+			return Obj(r.newArrayFrom(values))
+		}
+		o := newObject(nil, ClassObject)
+		for i, key := range keys {
+			o.setOwnRaw(key, values[i], propDefault)
+		}
+		return Obj(o)
+	}
 
 	// The elements are resolved as they arrive rather than collected first,
 	// because the resolve is allowed to throw and that has to stop the
@@ -643,10 +706,10 @@ func (r *Runtime) promiseCombinator(ctor Value, iterable Value, kind combinatorK
 			fail(Obj(r.aggregateRejections(values)))
 			return nil
 		}
-		return settle(Obj(r.newArrayFrom(values)))
+		return settle(collect(values))
 	}
 
-	iterErr := r.iterate(iterable, func(item Value) error {
+	iterErr := walk(func(item Value) error {
 		idx := len(values)
 		values = append(values, Undefined)
 		remaining++
@@ -729,7 +792,7 @@ func (r *Runtime) promiseCombinator(ctor Value, iterable Value, kind combinatorK
 		return Obj(result), nil
 	}
 
-	if len(values) == 0 {
+	if len(values) == 0 && !keyed {
 		switch kind {
 		case combinatorAll, combinatorAllSettled:
 			if err := settle(Obj(r.newArrayFrom(nil))); err != nil {
