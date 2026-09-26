@@ -67,16 +67,16 @@ const (
 // does not implement. A test tagged with one is skipped rather than counted as
 // a failure, because it is testing something that was never claimed.
 var unsupportedFeatures = map[string]string{
-	"Atomics.waitAsync":      "no asynchronous waiting",
-	"decorators":             "decorators are not implemented",
-	"source-phase-imports":   "no source phase imports",
-	"tail-call-optimization": "no tail calls",
-	"ShadowRealm":            "no shadow realms",
-	"legacy-regexp":          "no legacy RegExp statics",
-	"error-stack-accessor":   "Error stack is an own data property",
-	"IsHTMLDDA":              "no document.all emulation",
-	"cross-realm":            "no realms API",
-	"caller":                 "no legacy caller access",
+	"source-phase-imports-module-source": "JavaScript modules have no source",
+	"Atomics.waitAsync":                  "no asynchronous waiting",
+	"decorators":                         "decorators are not implemented",
+	"tail-call-optimization":             "no tail calls",
+	"ShadowRealm":                        "no shadow realms",
+	"legacy-regexp":                      "no legacy RegExp statics",
+	"error-stack-accessor":               "Error stack is an own data property",
+	"IsHTMLDDA":                          "no document.all emulation",
+	"cross-realm":                        "no realms API",
+	"caller":                             "no legacy caller access",
 }
 
 // A newly named difference permits a failure while documenting why; an
@@ -310,11 +310,13 @@ func runOne(suite *conformance.Suite, tc *conformance.Test,
 	rt.Set("evalScript", func(rt *quickjs.Runtime, src string) (quickjs.Value, error) {
 		return rt.Eval(src)
 	})
+	rt.Set("abstractModuleSource", rt.AbstractModuleSource())
 	if _, err := rt.Eval(`
 		var $262 = {
 			global: globalThis,
 			detachArrayBuffer: detachArrayBuffer,
 			evalScript: evalScript,
+			AbstractModuleSource: abstractModuleSource,
 			gc: function () { throw new Error("gc is not supported"); },
 		};
 	`); err != nil {

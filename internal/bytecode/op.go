@@ -690,3 +690,17 @@ func SplitDeferRequest(request string) (string, bool) {
 	}
 	return request, false
 }
+
+// SourceRequest marks a module request as `import source`'s, which asks for
+// the module's source object rather than its instance: the module is loaded,
+// but neither linked nor evaluated.
+func SourceRequest(request string) string { return "\x02" + request }
+
+// SplitSourceRequest takes the mark off a request, reporting whether it had
+// it.
+func SplitSourceRequest(request string) (string, bool) {
+	if len(request) > 0 && request[0] == 2 {
+		return request[1:], true
+	}
+	return request, false
+}

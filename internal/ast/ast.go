@@ -807,9 +807,11 @@ type ImportDecl struct {
 	// Type is what `with { type: ... }` asks the module to be, if anything.
 	Type string
 	// Defer marks `import defer * as ns`, whose module is not evaluated until
-	// the namespace is used.
-	Defer bool
-	Start int
+	// the namespace is used, and SourcePhase `import source x`, which binds
+	// the module's source object rather than anything it exports.
+	Defer       bool
+	SourcePhase bool
+	Start       int
 }
 
 // ExportSpecifier is one name an export declaration exposes.

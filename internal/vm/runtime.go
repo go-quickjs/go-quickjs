@@ -226,6 +226,8 @@ type Runtime struct {
 	// sharedArrayBufferCtor is the intrinsic SharedArrayBuffer, which its
 	// slice falls back to when a species gives none.
 	sharedArrayBufferCtor *Object
+	// abstractModuleSource is %AbstractModuleSource%, which no global names.
+	abstractModuleSource *Object
 	// arrayBufferCtor is the intrinsic ArrayBuffer, which slice falls back to
 	// when the object names no species of its own.
 	arrayBufferCtor *Object

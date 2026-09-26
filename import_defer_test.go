@@ -1,6 +1,7 @@
 package quickjs_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -107,5 +108,69 @@ func TestImportDeferCall(t *testing.T) {
 			t.Errorf("%s: got %v, want a SyntaxError", src, err)
 		}
 		rt.Close()
+	}
+}
+
+func TestImportSource(t *testing.T) {
+	files := map[string]string{
+		"dep.js":  `export default "the default";`,
+		"link.js": `import { missing } from "./link.js";`,
+	}
+	// `import source from` is a default import named source, and
+	// `import source source from` a source import of a binding named source.
+	rt := deferRuntime(files)
+	ns, err := rt.EvalModule("main.js", `
+		import source from "./dep.js";
+		export const out = source;
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := ns.Get("out"); out.String() != "the default" {
+		t.Errorf("out = %q", out.String())
+	}
+	rt.Close()
+
+	// No module here has a source, so a source import fails to link.
+	rt = deferRuntime(files)
+	_, err = rt.EvalModule("main.js", `import source source from "./dep.js";`)
+	if err == nil || !strings.Contains(err.Error(), "SyntaxError") {
+		t.Errorf("a source import linked: %v", err)
+	}
+	rt.Close()
+
+	// The whole graph is loaded before any of it is linked, so a module that
+	// cannot be found is reported rather than a link error elsewhere.
+	rt = deferRuntime(files)
+	rt.SetModuleLoader(func(specifier, referrer string) (string, string, error) {
+		name := strings.TrimPrefix(specifier, "./")
+		if src, ok := files[name]; ok {
+			return src, name, nil
+		}
+		return "", "", fmt.Errorf("no module %q", name)
+	})
+	_, err = rt.EvalModule("main.js", `import "./link.js"; import source x from "./nowhere.js";`)
+	if err == nil || strings.Contains(err.Error(), "SyntaxError") {
+		t.Errorf("got %v, want the failure to find nowhere.js", err)
+	}
+	rt.Close()
+
+	rt = deferRuntime(files)
+	defer rt.Close()
+	rt.Set("abstractModuleSource", rt.AbstractModuleSource())
+	ns, err = rt.EvalModule("main2.js", `
+		let error;
+		await import.source("./dep.js").catch(e => { error = e.constructor.name });
+		const AMS = abstractModuleSource;
+		let constructed;
+		try { new AMS() } catch (e) { constructed = e.constructor.name }
+		const tag = Object.getOwnPropertyDescriptor(AMS.prototype, Symbol.toStringTag).get.call({});
+		export const out = [error, constructed, tag, typeof globalThis.AbstractModuleSource].join();
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := ns.Get("out"); out.String() != "SyntaxError,TypeError,,undefined" {
+		t.Errorf("out = %q", out.String())
 	}
 }

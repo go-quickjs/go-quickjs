@@ -214,16 +214,27 @@ func (r *Runtime) Link(m *Module) error {
 		}
 		return m.err
 	}
+	// Everything the graph names is loaded before any of it is linked, so
+	// that a module that cannot be found is what is reported rather than a
+	// link error elsewhere in the graph that happened to be reached first.
+	if err := r.loadGraph(m, map[*Module]bool{}); err != nil {
+		m.state, m.err = ModuleFailed, err
+		return err
+	}
 	m.state = ModuleLinking
 
-	// The dependencies are loaded and linked in the order they were named,
-	// before any binding is resolved: what a name resolves to may live in a
-	// module named on a later line.
+	// The dependencies are linked in the order they were named, before any
+	// binding is resolved: what a name resolves to may live in a module named
+	// on a later line. A module whose source alone is asked for is not
+	// linked at all.
 	for _, spec := range m.requests {
 		src, err := r.loadDependency(spec, m.Specifier)
 		if err != nil {
 			m.state, m.err = ModuleFailed, err
 			return err
+		}
+		if _, source := bytecode.SplitSourceRequest(spec); source {
+			continue
 		}
 		if err := r.Link(src); err != nil {
 			m.state, m.err = ModuleFailed, err
@@ -276,11 +287,35 @@ func (r *Runtime) Link(m *Module) error {
 	return nil
 }
 
+// loadGraph loads every module m's graph names, depth first, without linking
+// any of them.
+func (r *Runtime) loadGraph(m *Module, seen map[*Module]bool) error {
+	if seen[m] || m.state != ModuleUnlinked {
+		return nil
+	}
+	seen[m] = true
+	for _, spec := range m.requests {
+		dep, err := r.loadDependency(spec, m.Specifier)
+		if err != nil {
+			return err
+		}
+		if _, source := bytecode.SplitSourceRequest(spec); source {
+			continue
+		}
+		if err := r.loadGraph(dep, seen); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // loadDependency resolves and compiles a module a request names: a specifier,
 // and the type its import attributes ask for, if any.
 func (r *Runtime) loadDependency(request, referrer string) (*Module, error) {
-	// A deferred module is the same module, loaded the same way.
+	// A deferred module is the same module, loaded the same way, and so is
+	// one whose source is asked for.
 	request, _ = bytecode.SplitDeferRequest(request)
+	request, _ = bytecode.SplitSourceRequest(request)
 	specifier, typ := bytecode.SplitModuleRequest(request)
 	if typ != "" {
 		return r.loadTypedModule(specifier, typ, referrer)
@@ -321,6 +356,9 @@ func (r *Runtime) bindImport(m *Module, imp moduleImport, src *Module) error {
 		// A side-effect import names nothing: loading the module is the whole
 		// point of it.
 		return nil
+	}
+	if _, source := bytecode.SplitSourceRequest(imp.specifier); source {
+		return r.moduleSourceError(src)
 	}
 	if imp.namespace {
 		namespace := r.namespaceObject
@@ -711,6 +749,7 @@ func (r *Runtime) ModuleResult(promise Value) error {
 // dependency can be found in the module table.
 func (r *Runtime) resolvedNameOf(request, referrer string) string {
 	request, _ = bytecode.SplitDeferRequest(request)
+	request, _ = bytecode.SplitSourceRequest(request)
 	specifier, typ := bytecode.SplitModuleRequest(request)
 	if typ != "" {
 		return bytecode.ModuleRequest(r.resolvedNameOf(specifier, referrer), typ)
@@ -972,4 +1011,12 @@ func (r *Runtime) loadTypedModule(specifier, typ, referrer string) (*Module, err
 	}
 	r.modules[key] = m
 	return m, nil
+}
+
+// moduleSourceError is what asking for a module's source gives. A module
+// source is what a module of a kind that has one -- WebAssembly, say -- is
+// before it is instantiated; a JavaScript module, and a JSON, text or bytes
+// one, has none, and so every source import here fails to link.
+func (r *Runtime) moduleSourceError(m *Module) error {
+	return r.throwError(errSyntax, "the module %q has no source to import", m.Specifier)
 }

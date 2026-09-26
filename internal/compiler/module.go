@@ -501,8 +501,11 @@ func (c *compiler) checkModuleDeclarations(body []ast.Stmt) {
 // its attributes ask for and, for `import defer`, the mark that defers it.
 func importRequest(n *ast.ImportDecl) string {
 	request := bytecode.ModuleRequest(n.Source, n.Type)
-	if n.Defer {
+	switch {
+	case n.Defer:
 		request = bytecode.DeferRequest(request)
+	case n.SourcePhase:
+		request = bytecode.SourceRequest(request)
 	}
 	return request
 }

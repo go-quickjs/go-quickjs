@@ -111,6 +111,9 @@ func (r *Runtime) readyForSyncExecution(m *Module, seen map[*Module]bool) bool {
 		return false
 	}
 	for _, request := range m.requests {
+		if _, source := bytecode.SplitSourceRequest(request); source {
+			continue
+		}
 		dep, ok := r.modules[r.resolvedNameOf(request, m.Specifier)]
 		if ok && !r.readyForSyncExecution(dep, seen) {
 			return false
@@ -134,6 +137,9 @@ func (r *Runtime) gatherAsyncDependencies(m *Module, seen map[*Module]bool, out 
 		return appendModule(out, m)
 	}
 	for _, request := range m.requests {
+		if _, source := bytecode.SplitSourceRequest(request); source {
+			continue
+		}
 		if dep, ok := r.modules[r.resolvedNameOf(request, m.Specifier)]; ok {
 			out = r.gatherAsyncDependencies(dep, seen, out)
 		}
@@ -154,6 +160,9 @@ func appendModule(list []*Module, m *Module) []*Module {
 func (r *Runtime) evaluationList(m *Module) []*Module {
 	var list []*Module
 	for _, request := range m.requests {
+		if _, source := bytecode.SplitSourceRequest(request); source {
+			continue
+		}
 		dep, ok := r.modules[r.resolvedNameOf(request, m.Specifier)]
 		if !ok {
 			continue
@@ -233,4 +242,51 @@ func (r *Runtime) initDeferredImport() {
 		return Obj(result), nil
 	})
 	r.global.setOwnRaw(r.atoms.intern("import.defer"), Obj(fn), propWritable|propConfigurable)
+
+	// import.source loads a module for its source, which a module here never
+	// has: once the module is found it rejects, as linking a static source
+	// import of it fails.
+	src := r.newNativeFunc("import.source", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		result := rt.newPromise()
+		spec, err := rt.toString(arg(args, 0))
+		if err != nil {
+			rt.rejectPromise(result, thrownValue(err))
+			return Obj(result), nil
+		}
+		typ, err := rt.importAttributes(arg(args, 1))
+		if err != nil {
+			rt.rejectPromise(result, thrownValue(err))
+			return Obj(result), nil
+		}
+		request := bytecode.ModuleRequest(spec.Go(), typ)
+		rt.enqueueJob(func() {
+			mod, err := rt.loadDependency(request, "")
+			if err == nil {
+				err = rt.moduleSourceError(mod)
+			}
+			rt.rejectPromise(result, thrownValue(rt.wrapEvalError(err)))
+		})
+		return Obj(result), nil
+	})
+	r.global.setOwnRaw(r.atoms.intern("import.source"), Obj(src), propWritable|propConfigurable)
+
+	// %AbstractModuleSource% is what the module source classes of a host
+	// extend. It is abstract, and not a global: a host reaches it through
+	// the Runtime.
+	proto := newObject(r.proto.object, ClassObject)
+	r.abstractModuleSource = r.newCtor("AbstractModuleSource", 0, proto,
+		func(rt *Runtime, this Value, args []Value) (Value, error) {
+			return Undefined, rt.throwTypeError("AbstractModuleSource is abstract and cannot be constructed")
+		})
+	r.global.deleteOwn(r.atoms.intern("AbstractModuleSource"))
+	// Its tag names the class of a module source, and nothing that is not
+	// one has a class: with no such classes here, it is always undefined.
+	get := r.newNativeFunc("get [Symbol.toStringTag]", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		return Undefined, nil
+	})
+	r.defineAccessor(proto, r.atoms.internSymbol(r.wellKnown.toStringTag), get, nil, propConfigurable)
 }
+
+// AbstractModuleSource returns %AbstractModuleSource%, the constructor a host's
+// module source classes extend. It is not a property of the global object.
+func (r *Runtime) AbstractModuleSource() *Object { return r.abstractModuleSource }

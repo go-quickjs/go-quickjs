@@ -316,6 +316,18 @@ func (r *Runtime) DetachArrayBuffer(v Value) error {
 	return r.wrapError(r.rt.DetachArrayBuffer(v.v))
 }
 
+// AbstractModuleSource returns %AbstractModuleSource%, the abstract
+// constructor that module source objects inherit from. It is not a property
+// of the global object, so a host that defines a kind of module with a source
+// -- WebAssembly, say -- reaches it here to extend it. JavaScript modules have
+// no source: importing one's is a SyntaxError.
+func (r *Runtime) AbstractModuleSource() Value {
+	if r.closed {
+		return Value{}
+	}
+	return Value{v: vmObj(r.rt.AbstractModuleSource()), rt: r.rt}
+}
+
 // wrapError converts an engine error into the public form.
 func (r *Runtime) wrapError(err error) error {
 	if err == nil {

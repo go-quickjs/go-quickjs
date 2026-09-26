@@ -42,6 +42,30 @@ func (p *parser) parseImportDecl() ast.Stmt {
 		decl.Defer = true
 	}
 
+	// `import source x from "m"` binds the module's source. `import source
+	// from "m"` is a default import of a binding named source, so the word
+	// is a phase only when a binding and then `from` follow it.
+	if p.isContextual("source") && p.sourcePhaseFollows() {
+		p.next()
+		decl.SourcePhase = true
+		decl.Specifiers = append(decl.Specifiers, ast.ImportSpecifier{
+			Kind:  ast.ImportDefault,
+			Local: p.parseBindingIdent().Name,
+			Start: p.tok.Pos,
+		})
+		if !p.eatContextual("from") {
+			p.errorf("expected \"from\" in an import declaration")
+		}
+		if p.tok.Kind != lexer.String {
+			p.errorf("the module specifier must be a string")
+		}
+		decl.Source = p.tok.Value
+		p.next()
+		decl.Type = p.parseWithClause()
+		p.semicolon()
+		return decl
+	}
+
 	// A default import comes first when present.
 	if !decl.Defer && p.tok.Kind == lexer.Ident {
 		decl.Specifiers = append(decl.Specifiers, ast.ImportSpecifier{
@@ -103,6 +127,19 @@ func (p *parser) parseImportDecl() ast.Stmt {
 	decl.Type = p.parseWithClause()
 	p.semicolon()
 	return decl
+}
+
+// sourcePhaseFollows reports whether the `source` at the cursor is the phase
+// of a source import: a binding name follows it, and then `from`.
+func (p *parser) sourcePhaseFollows() bool {
+	m := p.mark()
+	defer p.reset(m)
+	p.next()
+	if p.tok.Kind != lexer.Ident {
+		return false
+	}
+	p.next()
+	return p.isContextual("from")
 }
 
 // parseWithClause parses the import attributes after a module specifier --

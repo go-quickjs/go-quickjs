@@ -755,12 +755,13 @@ func (p *parser) parseImportExpr() ast.Expr {
 	callee := "import"
 	if p.isPunct(".") {
 		p.next()
-		if p.isContextual("defer") {
+		if p.isContextual("defer") || p.isContextual("source") {
 			// import.defer loads the module and hands back a namespace that
-			// evaluates it when first used. It is a call like import(), and
-			// named so that nothing a script writes can reach it.
+			// evaluates it when first used, and import.source asks for its
+			// source. Each is a call like import(), and named so that nothing
+			// a script writes can reach it.
+			callee = "import." + p.tok.Value
 			p.next()
-			callee = "import.defer"
 		} else {
 			if !p.isContextual("meta") {
 				p.errorf("expected \"import.meta\"")
