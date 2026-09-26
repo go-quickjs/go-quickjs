@@ -389,21 +389,29 @@ func orderedGroupNames(re *regexp.Regexp) []string {
 	for name := range names {
 		ordered = append(ordered, name)
 	}
+	// A name several groups share is ordered by the first of them.
 	sort.Slice(ordered, func(i, j int) bool {
-		return names[ordered[i]] < names[ordered[j]]
+		return names[ordered[i]][0] < names[ordered[j]][0]
 	})
 	return ordered
 }
 
 // groupObject builds the object the named groups are read from, or undefined
-// when the pattern has none.
-func (r *Runtime) groupObject(ordered []string, names map[string]int, at func(int) Value) Value {
+// when the pattern has none. A name several groups share reads as whichever of
+// them took part, and as undefined when none did.
+func (r *Runtime) groupObject(ordered []string, names map[string][]int, at func(int) Value) Value {
 	if len(ordered) == 0 {
 		return Undefined
 	}
 	groups := newObject(nil, ClassObject)
 	for _, name := range ordered {
-		groups.setOwnRaw(r.atoms.intern(name), at(names[name]), propDefault)
+		v := Undefined
+		for _, i := range names[name] {
+			if v = at(i); !v.IsUndefined() {
+				break
+			}
+		}
+		groups.setOwnRaw(r.atoms.intern(name), v, propDefault)
 	}
 	return Obj(groups)
 }

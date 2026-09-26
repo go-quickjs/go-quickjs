@@ -36,7 +36,10 @@ type parser struct {
 
 	// groupCount counts capturing groups, which the tree refers to by index.
 	groupCount int
-	groupNames map[string]int
+	// groupNames maps each name to the groups that carry it, in the order
+	// they were written. A name has several only where no match can take
+	// part in more than one of them.
+	groupNames map[string][]int
 	// namedRefs records forward references to named groups, resolved once the
 	// whole pattern is parsed and every name is known.
 	namedRefs []*nodeBackref
@@ -69,11 +72,11 @@ func patternUnits(pattern string) []rune {
 }
 
 // parse builds the syntax tree for a pattern.
-func parse(pattern string, flags Flags) (node, int, map[string]int, error) {
+func parse(pattern string, flags Flags) (node, int, map[string][]int, error) {
 	p := &parser{
 		src:        patternUnits(pattern),
 		flags:      flags,
-		groupNames: make(map[string]int),
+		groupNames: make(map[string][]int),
 	}
 	// Named groups have to be discovered before the body is parsed, because a
 	// reference may precede its definition and because the presence of any
@@ -99,11 +102,14 @@ func parse(pattern string, flags Flags) (node, int, map[string]int, error) {
 		}
 	}
 	for _, ref := range p.namedRefs {
-		idx, ok := p.groupNames[ref.name]
+		idxs, ok := p.groupNames[ref.name]
 		if !ok {
 			return nil, 0, nil, p.errorf("invalid named backreference \\k<%s>", ref.name)
 		}
-		ref.index = idx
+		ref.index = idxs[0]
+		if len(idxs) > 1 {
+			ref.indices = idxs
+		}
 	}
 	return n, p.groupCount, p.groupNames, nil
 }
@@ -148,10 +154,18 @@ func (p *parser) eat(r rune) bool {
 
 // scanGroupNames makes a pass over the pattern recording every (?<name> group,
 // so that a backreference can be resolved wherever it appears.
+//
+// Two groups may share a name only where no match can take part in both:
+// where they sit in different alternatives of one disjunction. So the pass
+// tracks the alternatives as well: stack holds, for each disjunction around
+// the current position, outermost first, which it is and which of its
+// alternatives the position is in.
 func (p *parser) scanGroupNames() error {
-	depth := 0
 	idx := 0
 	inClass := false
+	stack := []groupPlace{{}}
+	disjunctions := 1
+	places := make(map[string][][]groupPlace)
 	for i := 0; i < len(p.src); i++ {
 		switch p.src[i] {
 		case '\\':
@@ -160,11 +174,19 @@ func (p *parser) scanGroupNames() error {
 			inClass = true
 		case ']':
 			inClass = false
+		case '|':
+			if !inClass {
+				stack[len(stack)-1].alt++
+			}
 		case '(':
 			if inClass {
 				continue
 			}
-			depth++
+			// The group sits where its parenthesis is, and what it holds is a
+			// disjunction of its own.
+			place := append([]groupPlace(nil), stack...)
+			stack = append(stack, groupPlace{disjunction: disjunctions})
+			disjunctions++
 			if i+1 < len(p.src) && p.src[i+1] == '?' {
 				// Only (?<name> is a capturing group; (?<= and (?<! are
 				// lookbehind, and (?: (?= (?! are not capturing.
@@ -179,23 +201,47 @@ func (p *parser) scanGroupNames() error {
 					}
 					i = sub.pos - 1
 					idx++
-					// A duplicate name would make match.groups ambiguous, so
-					// it is rejected rather than resolved to one of them.
-					if _, dup := p.groupNames[name]; dup {
-						return p.errorf("duplicate group name %q", name)
+					// A name shared by two groups that could both take part
+					// in a match would make match.groups ambiguous.
+					for _, other := range places[name] {
+						if mightBothParticipate(place, other) {
+							return p.errorf("duplicate group name %q", name)
+						}
 					}
-					p.groupNames[name] = idx
+					places[name] = append(places[name], place)
+					p.groupNames[name] = append(p.groupNames[name], idx)
 				}
 				continue
 			}
 			idx++
 		case ')':
-			if !inClass {
-				depth--
+			if !inClass && len(stack) > 1 {
+				stack = stack[:len(stack)-1]
 			}
 		}
 	}
 	return nil
+}
+
+// groupPlace is one step of where a group sits: a disjunction around it, and
+// which of that disjunction's alternatives it is in.
+type groupPlace struct {
+	disjunction, alt int
+}
+
+// mightBothParticipate reports whether a match could take part in groups at
+// two places. It cannot when some disjunction around both has them in
+// different alternatives.
+func mightBothParticipate(a, b []groupPlace) bool {
+	for k := 0; k < len(a) && k < len(b); k++ {
+		if a[k].disjunction != b[k].disjunction {
+			return true
+		}
+		if a[k].alt != b[k].alt {
+			return false
+		}
+	}
+	return true
 }
 
 // parseAlternation parses a sequence of alternatives separated by '|'.

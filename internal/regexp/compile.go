@@ -25,7 +25,8 @@ const (
 	// opSave stores the current position in capture slot arg.
 	opSave
 	opMatch
-	// opBackref matches the text captured by group arg.
+	// opBackref matches the text captured by group arg, or with a non-zero
+	// arg2 by whichever group of refSets[arg2-1] took part.
 	opBackref
 	opBackrefFold
 	// The zero-width assertions.
@@ -65,6 +66,8 @@ type program struct {
 	classes []*charSet
 	// looks holds the sub-programs of lookarounds, referenced by index.
 	looks []lookProgram
+	// refSets holds the groups each reference to a shared name may mean.
+	refSets [][]int
 	// counters is the number of counted quantifiers, which sizes the matcher's
 	// counter array.
 	counters int
@@ -219,7 +222,12 @@ func (c *compiler) compile(n node) {
 		if c.flags&FlagIgnoreCase != 0 {
 			op = opBackrefFold
 		}
-		c.emit(instr{op: op, arg: t.index, rev: c.reverse})
+		in := instr{op: op, arg: t.index, rev: c.reverse}
+		if len(t.indices) > 1 {
+			c.prog.refSets = append(c.prog.refSets, t.indices)
+			in.arg2 = len(c.prog.refSets)
+		}
+		c.emit(in)
 	}
 }
 

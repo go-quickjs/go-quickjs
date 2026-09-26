@@ -198,7 +198,10 @@ type nodeLook struct {
 // is known, so the tree has to hold the node itself rather than a copy.
 type nodeBackref struct {
 	index int
-	name  string
+	// indices is every group a name several groups share refers to; the
+	// reference matches whichever of them took part, since only one can.
+	indices []int
+	name    string
 }
 
 func (nodeEmpty) isNode()    {}

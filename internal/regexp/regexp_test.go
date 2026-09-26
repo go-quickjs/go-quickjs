@@ -189,8 +189,9 @@ func TestNamedGroups(t *testing.T) {
 		t.Fatal(err)
 	}
 	names := re.GroupNames()
-	if names["year"] != 1 || names["month"] != 2 {
-		t.Errorf("group names = %v, want year:1 month:2", names)
+	if len(names) != 2 || len(names["year"]) != 1 || names["year"][0] != 1 ||
+		len(names["month"]) != 1 || names["month"][0] != 2 {
+		t.Errorf("group names = %v, want year:[1] month:[2]", names)
 	}
 	caps, err := re.MatchString("2024-03", 0)
 	if err != nil || caps == nil {

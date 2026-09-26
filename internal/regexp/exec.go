@@ -295,7 +295,16 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 			goto backtrack
 
 		case opBackref, opBackrefFold:
-			start, end := m.caps[2*in.arg], m.caps[2*in.arg+1]
+			g := in.arg
+			if in.arg2 != 0 {
+				for _, k := range m.prog.refSets[in.arg2-1] {
+					if m.caps[2*k] >= 0 {
+						g = k
+						break
+					}
+				}
+			}
+			start, end := m.caps[2*g], m.caps[2*g+1]
 			if start < 0 || end < 0 {
 				// A group that never participated matches the empty string
 				// rather than failing.

@@ -8,7 +8,7 @@ type Regexp struct {
 	flags      Flags
 	prog       *program
 	groupCount int
-	groupNames map[string]int
+	groupNames map[string][]int
 	// scratch is the matcher this pattern lends to each match, so that the
 	// backtracking stack and the capture trail are allocated once rather than
 	// per match.
@@ -64,8 +64,10 @@ func (re *Regexp) Flags() Flags { return re.flags }
 // GroupCount returns the number of capturing groups.
 func (re *Regexp) GroupCount() int { return re.groupCount }
 
-// GroupNames maps each named group to its index.
-func (re *Regexp) GroupNames() map[string]int { return re.groupNames }
+// GroupNames maps each group name to the groups that carry it, in the order
+// they were written. A name has more than one only where the groups are in
+// different alternatives, so that at most one of them takes part in a match.
+func (re *Regexp) GroupNames() map[string][]int { return re.groupNames }
 
 // Match runs the pattern against a subject given as UTF-16 code units,
 // beginning at start.

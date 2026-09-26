@@ -100,10 +100,13 @@ func MustCompile(pattern, flags string) *Regexp {
 func newRegexp(compiled *re.Regexp, pattern, flags string) *Regexp {
 	// The names are held the way Go's regexp holds them: one entry per group,
 	// empty where the group has no name, with the whole match at index zero.
+	// A name several groups share, in different alternatives, is each one's.
 	names := make([]string, compiled.GroupCount()+1)
-	for name, i := range compiled.GroupNames() {
-		if i >= 0 && i < len(names) {
-			names[i] = name
+	for name, idxs := range compiled.GroupNames() {
+		for _, i := range idxs {
+			if i >= 0 && i < len(names) {
+				names[i] = name
+			}
 		}
 	}
 	return &Regexp{re: compiled, src: pattern, flags: flags, names: names}
@@ -124,12 +127,14 @@ func (r *Regexp) NumSubexp() int { return r.re.GroupCount() }
 func (r *Regexp) SubexpNames() []string { return r.names }
 
 // SubexpIndex returns the index of the group with the given name, or -1.
+// Where several groups share the name, as they may in different alternatives,
+// it is the index of the leftmost.
 func (r *Regexp) SubexpIndex(name string) int {
 	if name == "" {
 		return -1
 	}
-	if i, ok := r.re.GroupNames()[name]; ok {
-		return i
+	if idxs, ok := r.re.GroupNames()[name]; ok {
+		return idxs[0]
 	}
 	return -1
 }
@@ -310,9 +315,13 @@ func (r *Regexp) FindStringSubmatchMap(s string) (map[string]string, error) {
 		return nil, err
 	}
 	out := make(map[string]string)
-	for name, i := range r.re.GroupNames() {
-		if 2*i+1 < len(caps) && caps[2*i] >= 0 {
-			out[name] = sub.text(caps[2*i], caps[2*i+1])
+	for name, idxs := range r.re.GroupNames() {
+		// Of groups sharing a name, at most one takes part.
+		for _, i := range idxs {
+			if 2*i+1 < len(caps) && caps[2*i] >= 0 {
+				out[name] = sub.text(caps[2*i], caps[2*i+1])
+				break
+			}
 		}
 	}
 	return out, nil

@@ -132,6 +132,30 @@ func TestGroupThatDidNotParticipate(t *testing.T) {
 	}
 }
 
+// Groups in different alternatives may share a name, and the name then stands
+// for whichever of them took part.
+func TestDuplicateGroupNames(t *testing.T) {
+	re := jsregexp.MustCompile(`(?<n>\d+)-x|y-(?<n>\d+)`, "")
+	if got, want := fmt.Sprintf("%q", re.SubexpNames()), `["" "n" "n"]`; got != want {
+		t.Errorf("SubexpNames = %s, want %s", got, want)
+	}
+	if got, want := re.SubexpIndex("n"), 1; got != want {
+		t.Errorf("SubexpIndex = %d, want %d (the leftmost)", got, want)
+	}
+	for subject, want := range map[string]string{"12-x": "12", "y-34": "34"} {
+		m, err := re.FindStringSubmatchMap(subject)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m["n"] != want {
+			t.Errorf("%s: n = %q, want %q", subject, m["n"], want)
+		}
+	}
+	if _, err := jsregexp.Compile(`(?<n>a)(?<n>b)`, ""); err == nil {
+		t.Error("two groups that can both take part may not share a name")
+	}
+}
+
 // Positions are byte offsets into the string that was passed in, whatever the
 // text is made of.
 func TestIndicesAreByteOffsets(t *testing.T) {

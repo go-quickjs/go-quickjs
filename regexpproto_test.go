@@ -557,3 +557,26 @@ func TestMatchPiecesComeFromTheSubject(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestRegExpDuplicateNamedGroups pins that groups in different alternatives
+// may share a name, and that everything reading a group by name reads the one
+// that took part.
+func TestRegExpDuplicateNamedGroups(t *testing.T) {
+	evalCases(t, []struct{ src, want string }{
+		{`JSON.stringify(/(?<x>a)|(?<x>b)/.exec("b").groups)`, `{"x":"b"}`},
+		{`/(?<x>a)|(?<x>b)/.exec("a").length`, "3"},
+		// The groups object lists a shared name once, where it first appears.
+		{`Object.keys(/(?<y>a)(?<x>a)|(?<x>b)(?<y>b)/.exec("bb").groups).join()`, "y,x"},
+		{`"b".replace(/(?<x>a)|(?<x>b)/, "[$<x>]")`, "[b]"},
+		// A backreference means whichever group took part.
+		{`String(/(?:(?<x>a)|(?<x>b))\k<x>/.test("bb"))`, "true"},
+		{`String(/(?:(?<x>a)|(?<x>b))\k<x>/.test("ba"))`, "false"},
+		{`JSON.stringify(/(?<x>a)|(?<x>b)/d.exec("b").indices.groups.x)`, "[0,1]"},
+		{`JSON.stringify(/(?:(?<x>a)|(?<y>a)(?<x>b))(?:(?<z>c)|(?<z>d))/.exec("abd").groups)`,
+			`{"x":"b","y":"a","z":"d"}`},
+		// Two groups that can both take part still may not share a name.
+		{`try { new RegExp("(?<x>a)(?<x>b)") } catch (e) { e.constructor.name }`, "SyntaxError"},
+		{`try { new RegExp("(?<x>a)|((?<x>b)(?<x>c))") } catch (e) { e.constructor.name }`, "SyntaxError"},
+		{`try { new RegExp("(?:(?<x>a)|b)(?<x>c)") } catch (e) { e.constructor.name }`, "SyntaxError"},
+	})
+}
