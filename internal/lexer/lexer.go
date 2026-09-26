@@ -750,7 +750,8 @@ func (l *Lexer) scanNumber(tok Token) (Token, error) {
 				}
 				var v float64
 				for i := 0; i < len(digits); i++ {
-					v = v*base + float64(digits[i]-'0')
+					// Rounded before the sum, which arm64 would fuse.
+					v = float64(v*base) + float64(digits[i]-'0')
 				}
 				tok.Num = v
 				tok.Value = tok.Raw
@@ -829,7 +830,7 @@ func (l *Lexer) scanRadix(tok Token, start, radix int, valid func(byte) bool) (T
 		if !valid(c) {
 			break
 		}
-		v = v*float64(radix) + float64(hexVal(c))
+		v = float64(v*float64(radix)) + float64(hexVal(c))
 		l.pos++
 	}
 	if l.pos == digitStart {

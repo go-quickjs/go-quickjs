@@ -2458,7 +2458,8 @@ func (r *Runtime) initMathBuiltins() {
 		sum := 0.0
 		for _, n := range nums {
 			q := n / largest
-			sum += q * q
+			// Rounded before the sum, which arm64 would fuse.
+			sum += float64(q * q)
 		}
 		return Float(largest * math.Sqrt(sum)), nil
 	})

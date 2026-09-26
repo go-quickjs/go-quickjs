@@ -162,7 +162,9 @@ func FormatRadix(v float64, radix int) string {
 		// 1100 bits is enough to exhaust any float64 fraction in any radix;
 		// in practice the loop exits far earlier when frac reaches zero.
 		for i := 0; i < 1100 && frac > 0; i++ {
-			frac *= float64(radix)
+			// The conversion rounds the product before the difference,
+			// which an arm64 build would otherwise fuse.
+			frac = float64(frac * float64(radix))
 			d := int(math.Floor(frac))
 			sb.WriteByte(digitChar(d))
 			frac -= float64(d)
@@ -287,7 +289,8 @@ func ParseIntPrefix(s string, radix int) float64 {
 	// permits for values beyond 2^53.
 	var v float64
 	for i := 0; i < len(s); i++ {
-		v = v*float64(radix) + float64(digitVal(s[i]))
+		// Rounded before the sum, as on every platform that does not fuse.
+		v = float64(v*float64(radix)) + float64(digitVal(s[i]))
 	}
 	if neg {
 		return -v
@@ -347,7 +350,7 @@ func parseRadixExact(s string, radix int) float64 {
 		if d >= radix {
 			return math.NaN()
 		}
-		v = v*float64(radix) + float64(d)
+		v = float64(v*float64(radix)) + float64(d)
 	}
 	return v
 }

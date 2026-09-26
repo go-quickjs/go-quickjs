@@ -103,13 +103,23 @@ func timeZoneOf(loc *time.Location) *intl.TimeZone {
 func (r *Runtime) SetLocale(tag string) { r.locale, r.dates = tag, nil }
 
 // Locale is the language this runtime formats in when a program does not say:
-// the one the host chose, or the one the machine is set to, as ICU finds it,
-// which is English where it says none.
+// the one the host chose, or the one the machine is set to, as V8 takes it
+// from ICU (defaultLocale).
 func (r *Runtime) Locale() string {
 	if r.locale != "" {
 		return r.locale
 	}
-	return intl.HostLocale().String()
+	return defaultLocale(intl.HostLocale())
+}
+
+// defaultLocale is Isolate::DefaultLocale: ICU's default locale, but for
+// its fallback en_US_POSIX -- what a "C" or "POSIX" environment, or none,
+// gives on Linux and macOS -- which V8 makes "en-US".
+func defaultLocale(host intl.Locale) string {
+	if s := host.String(); s != "en-US-u-va-posix" {
+		return s
+	}
+	return "en-US"
 }
 
 // SetContext installs the context the interpreter checks for cancellation.
