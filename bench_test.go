@@ -44,6 +44,18 @@ func BenchmarkLoopArithmetic(b *testing.B) {
 	}`)
 }
 
+// Date.UTC exercises component coercion and ECMA-262's date arithmetic
+// without constructing Date objects or consulting local time.
+func BenchmarkDateUTC(b *testing.B) {
+	benchRun(b, `function f() {
+		var t = 0
+		for (var i = 0; i < 10000; i++) {
+			t += Date.UTC(2024, 5, 15, 12, 30, 45, 123)
+		}
+		return t
+	}`)
+}
+
 // Reading and writing properties of an ordinary object, which is the shape
 // lookup and the property table.
 func BenchmarkLoopPropertyAccess(b *testing.B) {

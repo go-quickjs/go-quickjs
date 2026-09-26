@@ -403,7 +403,12 @@ func (r *Runtime) initDateBuiltins() {
 func (r *Runtime) dateFromParts(args []Value) (float64, error) {
 	parts := [7]float64{0, 0, 1, 0, 0, 0, 0}
 	for i := 0; i < len(parts) && i < len(args); i++ {
-		n, err := r.toNumber(args[i])
+		v := args[i]
+		if v.Kind() == KindNumber {
+			parts[i] = v.Number()
+			continue
+		}
+		n, err := r.toNumber(v)
 		if err != nil {
 			return 0, err
 		}
