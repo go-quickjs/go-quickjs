@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	intl "github.com/go-quickjs/go-intl"
@@ -16,14 +18,20 @@ import (
 )
 
 // TestTemporalMatchesNodeAcrossLocalesAndTimeZones compares every locale
-// DateTimeFormat is available in with every zone Node lists. It is opt-in because the complete
-// matrix is deliberately large and requires a recent Node with Temporal.
+// DateTimeFormat is available in with every zone Node lists. It is opt-in
+// because the complete matrix is deliberately large and requires a recent
+// Node with Temporal.
+//
+// The locales are cut into shards, and each shard is run in its own Node
+// process and its own runtime, as many at once as there are CPUs, or as
+// QUICKJS_NODE_TEMPORAL_PARALLEL says. The records keep their places in the
+// whole matrix, so the outputs joined in order are the matrix's.
 //
 // Run it with:
 //
 //	QUICKJS_COMPARE_NODE_TEMPORAL=1 go test . \
 //	  -run '^TestTemporalMatchesNodeAcrossLocalesAndTimeZones$' \
-//	  -count=1 -timeout=120m -v
+//	  -count=1 -timeout=60m -v
 func TestTemporalMatchesNodeAcrossLocalesAndTimeZones(t *testing.T) {
 	if os.Getenv("QUICKJS_COMPARE_NODE_TEMPORAL") == "" {
 		t.Skip("set QUICKJS_COMPARE_NODE_TEMPORAL=1 to compare the complete matrix")
@@ -41,26 +49,60 @@ func TestTemporalMatchesNodeAcrossLocalesAndTimeZones(t *testing.T) {
 		"QUICKJS_NODE_TEMPORAL_LOCALES")
 	zones := filterTemporalNodeValues(t, allZones,
 		"QUICKJS_NODE_TEMPORAL_ZONES")
-	expression := temporalNodeMatrixExpression(t, locales, zones)
-
+	workers := runtime.NumCPU()
+	if raw := os.Getenv("QUICKJS_NODE_TEMPORAL_PARALLEL"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 {
+			t.Fatalf("QUICKJS_NODE_TEMPORAL_PARALLEL=%q is not a positive number", raw)
+		}
+		workers = n
+	}
 	node := os.Getenv("NODE_BINARY")
 	if node == "" {
 		node = "node"
 	}
-	command := exec.Command(node, "-")
-	command.Stdin = strings.NewReader("process.stdout.write(" + expression + ");\n")
-	want, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("run %s: %v\n%s", node, err, want)
-	}
 
-	rt := quickjs.New(quickjs.WithNodeQuirks())
-	defer rt.Close()
-	value, err := rt.Eval(expression)
-	if err != nil {
-		t.Fatalf("evaluate Temporal matrix: %v", err)
+	// Shards of a few locales each, small enough to spread over the
+	// workers evenly, and a last one for the records of the zones alone.
+	const perShard = 16
+	var shards []string
+	for start := 0; start < len(locales); start += perShard {
+		end := min(start+perShard, len(locales))
+		shards = append(shards, temporalNodeMatrixExpression(t, locales[start:end], start, zones, false))
 	}
-	got := []byte(value.String())
+	shards = append(shards, temporalNodeMatrixExpression(t, []string{}, len(locales), zones, true))
+
+	// Job 2i runs shard i in Node and job 2i+1 in a runtime of its own.
+	wants := make([][]byte, len(shards))
+	gots := make([][]byte, len(shards))
+	errs := make([]error, 2*len(shards))
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobs {
+				i := j / 2
+				if j%2 == 0 {
+					wants[i], errs[j] = runTemporalNodeShard(node, shards[i])
+				} else {
+					gots[i], errs[j] = evalTemporalNodeShard(shards[i])
+				}
+			}
+		}()
+	}
+	for j := range errs {
+		jobs <- j
+	}
+	close(jobs)
+	wg.Wait()
+	for _, err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, got := bytes.Join(wants, nil), bytes.Join(gots, nil)
 	if bytes.Equal(got, want) {
 		t.Logf("matched Node for %d locales x %d time zones (%d pairs)",
 			len(locales), len(zones), len(locales)*len(zones))
@@ -70,6 +112,30 @@ func TestTemporalMatchesNodeAcrossLocalesAndTimeZones(t *testing.T) {
 	wantRecord, gotRecord := firstDifferentTemporalNodeRecord(want, got)
 	t.Fatalf("Temporal differs from Node in the first matrix record:\nnode    %s\nquickjs %s",
 		wantRecord, gotRecord)
+}
+
+// runTemporalNodeShard is what Node writes for one shard of the matrix.
+func runTemporalNodeShard(node, expression string) ([]byte, error) {
+	command := exec.Command(node, "-")
+	command.Stdin = strings.NewReader("process.stdout.write(" + expression + ");\n")
+	out, err := command.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("run %s: %v\n%s", node, err, out)
+	}
+	return out, nil
+}
+
+// evalTemporalNodeShard is what a runtime with Node's quirks answers for one
+// shard of the matrix. Each shard has a runtime of its own, since a runtime
+// is not safe to share.
+func evalTemporalNodeShard(expression string) ([]byte, error) {
+	rt := quickjs.New(quickjs.WithNodeQuirks())
+	defer rt.Close()
+	value, err := rt.Eval(expression)
+	if err != nil {
+		return nil, fmt.Errorf("evaluate Temporal matrix: %v", err)
+	}
+	return []byte(value.String()), nil
 }
 
 func filterTemporalNodeValues(t *testing.T, all []string, environment string) []string {
@@ -96,7 +162,10 @@ func filterTemporalNodeValues(t *testing.T, all []string, environment string) []
 	return selected
 }
 
-func temporalNodeMatrixExpression(t *testing.T, locales, zones []string) string {
+// temporalNodeMatrixExpression is one shard of the matrix: its locales, the
+// first of which is locale number offset of the whole, by every zone, and
+// the records of the zones alone where withZones says.
+func temporalNodeMatrixExpression(t *testing.T, locales []string, offset int, zones []string, withZones bool) string {
 	t.Helper()
 	localeJSON, err := json.Marshal(locales)
 	if err != nil {
@@ -110,6 +179,8 @@ func temporalNodeMatrixExpression(t *testing.T, locales, zones []string) string 
 	return fmt.Sprintf(`(() => {
   const locales = %s;
   const zones = %s;
+  const offset = %d;
+  const withZones = %t;
   const instants = [
     Temporal.Instant.from("1900-01-01T00:00:00Z"),
     Temporal.Instant.from("2024-01-15T12:34:56.123456789Z"),
@@ -155,7 +226,7 @@ func temporalNodeMatrixExpression(t *testing.T, locales, zones []string) string 
 
   for (let localeIndex = 0; localeIndex < locales.length; localeIndex++) {
     const locale = locales[localeIndex];
-    out.push("L," + localeIndex + "," + digest([
+    out.push("L," + (offset + localeIndex) + "," + digest([
       () => duration.toLocaleString(locale, { style: "long" }),
       () => plainDate.toLocaleString(locale, { era: "narrow" }),
       () => plainDateTime.toLocaleString(locale, { era: "narrow" }),
@@ -198,12 +269,12 @@ func temporalNodeMatrixExpression(t *testing.T, locales, zones []string) string 
           values.push(() => nameAt(formatter, instant));
         }
       }
-      out.push("P," + localeIndex + "," + zoneIndex + "," +
+      out.push("P," + (offset + localeIndex) + "," + zoneIndex + "," +
         digest(values) + "\n");
     }
   }
 
-  for (let zoneIndex = 0; zoneIndex < zoneData.length; zoneIndex++) {
+  for (let zoneIndex = 0; withZones && zoneIndex < zoneData.length; zoneIndex++) {
     const data = zoneData[zoneIndex];
     const values = [];
     for (let instantIndex = 0; instantIndex < instants.length; instantIndex++) {
@@ -220,7 +291,7 @@ func temporalNodeMatrixExpression(t *testing.T, locales, zones []string) string 
     out.push("Z," + zoneIndex + "," + digest(values) + "\n");
   }
   return out.join("");
-})()`, localeJSON, zoneJSON)
+})()`, localeJSON, zoneJSON, offset, withZones)
 }
 
 func firstDifferentTemporalNodeRecord(want, got []byte) (string, string) {
