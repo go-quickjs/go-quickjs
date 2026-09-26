@@ -582,6 +582,79 @@ func (r *Runtime) initIteratorTerminals(p *Object) {
 			return answer(found, stopped), nil
 		})
 	}
+	r.defMethod(p, "includes", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		if err := requireIterator(rt, this, "includes"); err != nil {
+			return Undefined, err
+		}
+		// The count of elements to skip is not converted: anything but an
+		// integral number or an infinity is refused, and the iterator is
+		// closed for it before its next method is so much as read.
+		toSkip := 0.0
+		if s := arg(args, 1); !s.IsUndefined() {
+			n := s.Number()
+			if !s.IsNumber() || (!math.IsInf(n, 0) && n != math.Trunc(n)) {
+				rt.closeIterator(this)
+				return Undefined, rt.throwTypeError("Iterator.prototype.includes requires an integral skip count")
+			}
+			if n < 0 || (!math.IsInf(n, 0) && n > maxSafeInteger) {
+				rt.closeIterator(this)
+				return Undefined, rt.throwRangeError("Iterator.prototype.includes requires a skip count in range")
+			}
+			toSkip = n
+		}
+		target := arg(args, 0)
+		found := false
+		err := each(rt, this, func(v Value, i float64) (bool, error) {
+			if i < toSkip {
+				return true, nil
+			}
+			found = v.SameValueZero(target)
+			return !found, nil
+		})
+		if err != nil {
+			return Undefined, err
+		}
+		return Bool(found), nil
+	})
+
+	r.defMethod(p, "join", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		if err := requireIterator(rt, this, "join"); err != nil {
+			return Undefined, err
+		}
+		// The separator is converted before the next method is read, and a
+		// conversion that throws closes the iterator.
+		sep := ","
+		if s := arg(args, 0); !s.IsUndefined() {
+			ss, err := rt.toString(s)
+			if err != nil {
+				rt.closeIterator(this)
+				return Undefined, err
+			}
+			sep = ss.Go()
+		}
+		// As with Array.prototype.join, the pieces are joined rather than
+		// appended, and null and undefined contribute nothing.
+		var sb partsBuilder
+		err := each(rt, this, func(v Value, i float64) (bool, error) {
+			if i > 0 {
+				sb.WriteString(sep)
+			}
+			if v.IsNullish() {
+				return true, nil
+			}
+			s, err := rt.toString(v)
+			if err != nil {
+				return false, err
+			}
+			sb.WriteString(s.Go())
+			return true, nil
+		})
+		if err != nil {
+			return Undefined, err
+		}
+		return Str(NewString(sb.String())), nil
+	})
+
 	short("some", true, func(_ Value, stopped bool) Value { return Bool(stopped) })
 	short("every", false, func(_ Value, stopped bool) Value { return Bool(!stopped) })
 	short("find", true, func(v Value, stopped bool) Value {
