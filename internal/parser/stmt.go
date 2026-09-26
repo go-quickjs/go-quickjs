@@ -14,6 +14,10 @@ func (p *parser) parseStatement() ast.Stmt {
 	// declaration nested anywhere inside it is fine.
 	noLet := p.noLetDeclaration
 	p.noLetDeclaration = false
+	// Only an item of a statement list may be a using declaration: the body
+	// of a label, an if or a loop may not.
+	listItem := p.listItem && p.usingAllowed
+	p.listItem = false
 
 	start := p.tok.Pos
 
@@ -85,6 +89,20 @@ func (p *parser) parseStatement() ast.Stmt {
 			// Otherwise it is an ordinary identifier, so `let = 1` still works.
 			if !noLet && p.letStartsDeclaration() {
 				decl := p.parseVarDecl(ast.DeclLet)
+				p.semicolon()
+				return decl
+			}
+		case "using":
+			if listItem && p.usingStartsDeclaration(false) {
+				decl := p.parseVarDecl(ast.DeclUsing)
+				p.semicolon()
+				return decl
+			}
+		case "await":
+			if listItem && p.allowAwait && p.awaitUsingStartsDeclaration() {
+				p.next() // consume await
+				decl := p.parseVarDecl(ast.DeclAwaitUsing)
+				decl.Start = start
 				p.semicolon()
 				return decl
 			}
@@ -165,6 +183,40 @@ func (p *parser) letStartsDeclaration() bool {
 	return false
 }
 
+// usingStartsDeclaration reports whether a `using` token begins a
+// declaration: it does when a binding identifier follows it on the same line.
+//
+// In a for-in/of head `using of` is the identifier `using` followed by `of`,
+// unless an initializer follows, which makes it a three-clause for declaring
+// a binding named "of".
+func (p *parser) usingStartsDeclaration(forHead bool) bool {
+	m := p.mark()
+	defer p.reset(m)
+	p.next()
+	if p.tok.Kind != lexer.Ident || p.tok.NewlineBefore {
+		return false
+	}
+	if forHead && p.isContextual("of") {
+		p.next()
+		return p.isPunct("=")
+	}
+	return true
+}
+
+// awaitUsingStartsDeclaration reports whether an `await` token begins an
+// `await using` declaration: `using` and a binding identifier follow it, each
+// on the same line.
+func (p *parser) awaitUsingStartsDeclaration() bool {
+	m := p.mark()
+	defer p.reset(m)
+	p.next()
+	if !p.isContextual("using") || p.tok.NewlineBefore {
+		return false
+	}
+	p.next()
+	return p.tok.Kind == lexer.Ident && !p.tok.NewlineBefore
+}
+
 // parseBlock parses a brace-enclosed statement list.
 func (p *parser) parseBlock() ast.Stmt {
 	start := p.tok.Pos
@@ -191,6 +243,13 @@ func (p *parser) parseVarDecl(kind ast.DeclKind) *ast.VarDecl {
 				p.checkLexicalBindingName(n, nameTok)
 			}
 		}
+		if kind.IsUsing() {
+			// A using declaration binds names, not patterns: `using [x] = y`
+			// is not one, and neither is `using {x} = y`.
+			if _, ok := target.(*ast.Ident); !ok {
+				p.errorAt(nameTok, "a using declaration cannot destructure")
+			}
+		}
 		var init ast.Expr
 		if p.eatPunct("=") {
 			init = p.parseAssign()
@@ -206,6 +265,9 @@ func (p *parser) parseVarDecl(kind ast.DeclKind) *ast.VarDecl {
 			default:
 				if kind == ast.DeclConst && !p.noIn {
 					p.errorf("a const declaration requires an initializer")
+				}
+				if kind.IsUsing() && !p.noIn {
+					p.errorf("a using declaration requires an initializer")
 				}
 			}
 		}
@@ -338,13 +400,20 @@ func (p *parser) parseFor() ast.Stmt {
 		// No initializer; this is definitely a three-clause for.
 
 	case p.isKeyword("var"), p.isKeyword("const"),
-		p.isContextual("let") && p.letStartsDeclaration():
+		p.isContextual("let") && p.letStartsDeclaration(),
+		p.isContextual("using") && p.usingStartsDeclaration(true),
+		p.allowAwait && p.isContextual("await") && p.awaitUsingStartsDeclaration():
 		kind := ast.DeclVar
 		switch {
 		case p.isKeyword("const"):
 			kind = ast.DeclConst
 		case p.isContextual("let"):
 			kind = ast.DeclLet
+		case p.isContextual("using"):
+			kind = ast.DeclUsing
+		case p.isContextual("await"):
+			p.next() // consume await
+			kind = ast.DeclAwaitUsing
 		}
 		decl := p.parseVarDecl(kind)
 		if p.isKeyword("in") || p.isContextual("of") {
@@ -354,8 +423,14 @@ func (p *parser) parseFor() ast.Stmt {
 			if decl.Decls[0].Init != nil {
 				p.errorf("a for-in/of binding cannot have an initializer")
 			}
+			if kind.IsUsing() && p.isKeyword("in") {
+				p.errorf("a using declaration cannot be the head of a for-in")
+			}
 			left = decl
 		} else {
+			if kind.IsUsing() && len(decl.Decls) > 0 && decl.Decls[0].Init == nil {
+				p.errorf("a using declaration requires an initializer")
+			}
 			init = decl
 		}
 
@@ -572,10 +647,12 @@ func (p *parser) parseSwitch() ast.Stmt {
 		}
 		p.expectPunct(":")
 
-		// A clause body runs until the next clause or the closing brace.
-		body := p.parseStatements(func() bool {
+		// A clause body runs until the next clause or the closing brace. It
+		// may not hold a using declaration: control can enter the case block
+		// part-way through, past one.
+		body := p.parseStatementList(func() bool {
 			return p.isPunct("}") || p.isKeyword("case") || p.isKeyword("default")
-		})
+		}, false)
 		stmt.Cases = append(stmt.Cases, ast.SwitchCase{Test: test, Body: body, Start: caseStart})
 	}
 	p.expectPunct("}")

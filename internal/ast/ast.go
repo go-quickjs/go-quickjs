@@ -452,6 +452,10 @@ const (
 	DeclVar DeclKind = iota
 	DeclLet
 	DeclConst
+	// DeclUsing and DeclAwaitUsing are `using` and `await using`: const
+	// bindings whose values are disposed of when their scope is left.
+	DeclUsing
+	DeclAwaitUsing
 )
 
 func (k DeclKind) String() string {
@@ -460,9 +464,22 @@ func (k DeclKind) String() string {
 		return "let"
 	case DeclConst:
 		return "const"
+	case DeclUsing:
+		return "using"
+	case DeclAwaitUsing:
+		return "await using"
 	}
 	return "var"
 }
+
+// IsConst reports whether the bindings cannot be assigned to, which a using
+// declaration's cannot either.
+func (k DeclKind) IsConst() bool {
+	return k == DeclConst || k == DeclUsing || k == DeclAwaitUsing
+}
+
+// IsUsing reports whether the bindings' values are disposed of.
+func (k DeclKind) IsUsing() bool { return k == DeclUsing || k == DeclAwaitUsing }
 
 // Declarator is one binding in a variable declaration.
 type Declarator struct {
@@ -576,6 +593,20 @@ type TryStmt struct {
 	Catch   *CatchClause
 	Finally []Stmt // nil if there is no finally block
 	Start   int
+	// Inline marks a try the compiler makes for a scope with using
+	// declarations: its block is the scope's own statements, already hoisted,
+	// and compiled in the scope rather than a new one.
+	Inline bool
+}
+
+// DisposeStmt disposes of the resources a scope's using declarations
+// collected. The compiler makes one as the finally clause of the try it wraps
+// such a scope in; Capability names the hidden binding that holds them.
+type DisposeStmt struct {
+	Capability string
+	// Async marks a scope with an `await using`, whose disposal awaits.
+	Async bool
+	Start int
 }
 
 // SwitchCase is one `case` or `default` of a switch.
@@ -706,6 +737,7 @@ func (n *BreakStmt) Pos() int             { return n.Start }
 func (n *ContinueStmt) Pos() int          { return n.Start }
 func (n *ThrowStmt) Pos() int             { return n.Start }
 func (n *TryStmt) Pos() int               { return n.Start }
+func (n *DisposeStmt) Pos() int           { return n.Start }
 func (n *SwitchStmt) Pos() int            { return n.Start }
 func (n *LabeledStmt) Pos() int           { return n.Start }
 func (n *DebuggerStmt) Pos() int          { return n.Start }
@@ -730,6 +762,7 @@ func (*BreakStmt) stmtNode()             {}
 func (*ContinueStmt) stmtNode()          {}
 func (*ThrowStmt) stmtNode()             {}
 func (*TryStmt) stmtNode()               {}
+func (*DisposeStmt) stmtNode()           {}
 func (*SwitchStmt) stmtNode()            {}
 func (*LabeledStmt) stmtNode()           {}
 func (*DebuggerStmt) stmtNode()          {}

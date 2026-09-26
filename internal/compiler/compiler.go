@@ -273,6 +273,13 @@ type compiler struct {
 	// finallys is the stack of enclosing finally clauses, which return, break
 	// and continue all have to account for.
 	finallys []finallyCtx
+	// finallyRecord is set while a finally clause is compiled as the clause
+	// proper, with its completion record beneath it, rather than inlined at a
+	// break or continue.
+	finallyRecord bool
+	// disposeScopes are the enclosing scopes with using declarations,
+	// innermost last.
+	disposeScopes []disposeScope
 	// handlerDepth is how many exception handlers enclose the position being
 	// compiled. A jump out of them has to pop each one, since the instruction
 	// it lands on is not the one that would have.

@@ -11,6 +11,14 @@ import (
 // declarations it contains so that they are callable before their definition.
 func (c *compiler) compileStatements(body []ast.Stmt) {
 	c.hoistBlockDeclarations(body)
+	if has, async := usingKind(body); has {
+		c.compileDisposeScope(body[0].Pos(), async, func() {
+			for _, s := range body {
+				c.compileStatement(s)
+			}
+		})
+		return
+	}
 	for _, s := range body {
 		c.compileStatement(s)
 	}
@@ -166,7 +174,7 @@ func (c *compiler) emitAnnexBFunctionAlias(name string) {
 // their uninitialized state.
 func (c *compiler) predeclareLexical(vd *ast.VarDecl) {
 	kind := bindLet
-	if vd.Kind == ast.DeclConst {
+	if vd.Kind.IsConst() {
 		kind = bindConst
 	}
 	var names []string
@@ -334,6 +342,9 @@ func (c *compiler) compileStatement(s ast.Stmt) {
 	case *ast.ExportDecl:
 		c.compileExportDecl(n)
 
+	case *ast.DisposeStmt:
+		c.compileDispose(n)
+
 	case *ast.InstallPrivateMethods:
 		c.compileIdentRead(&ast.Ident{Name: n.Binding, Start: n.Start})
 		c.emitAt(n.Start, bytecode.OpInstallPrivateMethods, 0, 0)
@@ -376,6 +387,11 @@ func (c *compiler) compileVarDecl(n *ast.VarDecl) {
 			continue
 		}
 		c.compileExprNamed(d.Init, nameOf(d.Target))
+		if n.Kind.IsUsing() {
+			// The value is added to the scope's resources first, and a value
+			// that cannot be disposed of leaves the binding in its dead zone.
+			c.addDisposable(n.Kind, d.Target.Pos())
+		}
 		c.initBinding(d.Target, n.Kind)
 	}
 }
@@ -541,6 +557,19 @@ func (c *compiler) compileFor(n *ast.ForStmt) {
 	firstSlot := c.nextSlot
 	perIteration := false
 
+	if vd, ok := n.Init.(*ast.VarDecl); ok && vd.Kind.IsUsing() {
+		// What the head declares is disposed of when the loop is done with,
+		// not each iteration: the bindings are not copied from one to the
+		// next, since nothing can assign to them.
+		c.predeclareLexical(vd)
+		c.compileDisposeScope(n.Start, vd.Kind == ast.DeclAwaitUsing, func() {
+			c.compileVarDecl(vd)
+			c.compileForLoop(n, firstSlot, false)
+		})
+		c.endScope()
+		return
+	}
+
 	if n.Init != nil {
 		switch init := n.Init.(type) {
 		case *ast.VarDecl:
@@ -554,6 +583,12 @@ func (c *compiler) compileFor(n *ast.ForStmt) {
 			c.emit(bytecode.OpDrop, 0, 0)
 		}
 	}
+	c.compileForLoop(n, firstSlot, perIteration)
+	c.endScope()
+}
+
+// compileForLoop compiles a three-clause for once its init clause has run.
+func (c *compiler) compileForLoop(n *ast.ForStmt, firstSlot uint32, perIteration bool) {
 
 	if perIteration {
 		// The first iteration gets its own copy too, before the test runs: a
@@ -587,7 +622,6 @@ func (c *compiler) compileFor(n *ast.ForStmt) {
 	}
 	// `continue` jumps to the update clause, not the test.
 	c.popLoop(updateAt)
-	c.endScope()
 }
 
 func (c *compiler) compileForIn(n *ast.ForInStmt) {
@@ -647,17 +681,7 @@ func (c *compiler) compileForAwaitBody(left ast.Node, body ast.Stmt) {
 	exit := c.emitJump(bytecode.OpIterResultOrJump)
 
 	c.beginScope()
-	switch l := left.(type) {
-	case *ast.VarDecl:
-		if l.Kind != ast.DeclVar {
-			c.predeclareLexical(l)
-		}
-		c.initBinding(l.Decls[0].Target, l.Kind)
-	case ast.Expr:
-		c.assignTo(l, false)
-		c.emit(bytecode.OpDrop, 0, 0)
-	}
-	c.compileStatement(body)
+	c.compileIterationBody(left, body)
 	c.endScope()
 
 	c.emit(bytecode.OpJump, uint32(start), 0)
@@ -681,17 +705,7 @@ func (c *compiler) compileForBody(left ast.Node, body ast.Stmt) {
 	exit := c.emitJump(bytecode.OpIterNextOrJump)
 
 	c.beginScope()
-	switch l := left.(type) {
-	case *ast.VarDecl:
-		if l.Kind != ast.DeclVar {
-			c.predeclareLexical(l)
-		}
-		c.initBinding(l.Decls[0].Target, l.Kind)
-	case ast.Expr:
-		c.assignTo(l, false)
-		c.emit(bytecode.OpDrop, 0, 0)
-	}
-	c.compileStatement(body)
+	c.compileIterationBody(left, body)
 	c.endScope()
 
 	c.emit(bytecode.OpJump, uint32(start), 0)
@@ -764,23 +778,30 @@ func (c *compiler) compileTry(n *ast.TryStmt) {
 		c.compileTryCatch(n)
 		return
 	}
+	c.compileTryFinally(n.Start, func() {
+		// The catch clause, when present, sits inside the finally's
+		// protection so that a throw from the catch body still runs the
+		// finally.
+		if n.Catch != nil {
+			c.compileTryCatch(&ast.TryStmt{Block: n.Block, Catch: n.Catch, Start: n.Start})
+		} else {
+			c.beginScope()
+			c.compileStatements(n.Block)
+			c.endScope()
+		}
+	}, n.Finally)
+}
 
+// compileTryFinally compiles body protected by a finally clause.
+func (c *compiler) compileTryFinally(pos int, body func(), finally []ast.Stmt) {
 	finallyHandler := c.emitJump(bytecode.OpPushFinally)
 	c.handlerDepth++
-	c.finallys = append(c.finallys, finallyCtx{body: n.Finally, handlers: c.handlerDepth})
+	c.finallys = append(c.finallys, finallyCtx{body: finally, handlers: c.handlerDepth})
 
 	// finallyStart is filled in once the clause's first instruction is known.
 	finallyStart := 0
 
-	// The catch clause, when present, sits inside the finally's protection so
-	// that a throw from the catch body still runs the finally.
-	if n.Catch != nil {
-		c.compileTryCatch(&ast.TryStmt{Block: n.Block, Catch: n.Catch, Start: n.Start})
-	} else {
-		c.beginScope()
-		c.compileStatements(n.Block)
-		c.endScope()
-	}
+	body()
 
 	// Normal completion: drop the finally handler and fall into the clause
 	// with a record saying nothing unusual happened.
@@ -805,7 +826,7 @@ func (c *compiler) compileTry(n *ast.TryStmt) {
 	if c.completionSlot >= 0 {
 		name := fmt.Sprintf("%%cv%d", *c.hiddenCount)
 		*c.hiddenCount++
-		save = int32(c.declare(name, bindVar, n.Start))
+		save = int32(c.declare(name, bindVar, pos))
 		c.emit(bytecode.OpGetLocal, uint32(c.completionSlot), 0)
 		c.emit(bytecode.OpSetLocal, uint32(save), 0)
 		// The clause starts with no value of its own. It matters only when it
@@ -820,7 +841,10 @@ func (c *compiler) compileTry(n *ast.TryStmt) {
 	// expecting two values it never pushed.
 	c.pushExit(exitCompletion)
 	c.beginScope()
-	c.compileStatements(n.Finally)
+	savedRecord := c.finallyRecord
+	c.finallyRecord = true
+	c.compileStatements(finally)
+	c.finallyRecord = savedRecord
 	c.endScope()
 	c.popExit()
 	if save >= 0 {
@@ -1020,7 +1044,10 @@ func (c *compiler) unwindTo(target *loopCtx) {
 		// duplication is bounded.
 		c.finallys = saved[:i]
 		c.beginScope()
+		savedRecord := c.finallyRecord
+		c.finallyRecord = false
 		c.compileStatements(saved[i].body)
+		c.finallyRecord = savedRecord
 		c.endScope()
 	}
 	// What is left is the handler of a catch clause the jump leaves without
@@ -1112,4 +1139,31 @@ func (c *compiler) compileFieldInit(n *ast.FieldInit) {
 	}
 	c.emitAt(n.Start, bytecode.OpDefineIndex, 0, 0)
 	c.emit(bytecode.OpDrop, 0, 0)
+}
+
+// compileIterationBody binds a for-in/of head to the value on the stack and
+// runs the body, in the scope the iteration has begun.
+//
+// A using head's value is disposed of at the end of each iteration, before
+// the loop goes on or, if it is leaving, closes its iterator.
+func (c *compiler) compileIterationBody(left ast.Node, body ast.Stmt) {
+	switch l := left.(type) {
+	case *ast.VarDecl:
+		if l.Kind != ast.DeclVar {
+			c.predeclareLexical(l)
+		}
+		if l.Kind.IsUsing() {
+			c.compileDisposeScope(l.Start, l.Kind == ast.DeclAwaitUsing, func() {
+				c.addDisposable(l.Kind, l.Start)
+				c.initBinding(l.Decls[0].Target, l.Kind)
+				c.compileStatement(body)
+			})
+			return
+		}
+		c.initBinding(l.Decls[0].Target, l.Kind)
+	case ast.Expr:
+		c.assignTo(l, false)
+		c.emit(bytecode.OpDrop, 0, 0)
+	}
+	c.compileStatement(body)
 }

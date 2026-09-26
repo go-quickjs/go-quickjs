@@ -26,6 +26,17 @@ type disposeCapability struct {
 	stack []disposableResource
 }
 
+// hasAsync reports whether any resource is an async one, without which a
+// disposal awaits nothing.
+func (c *disposeCapability) hasAsync() bool {
+	for _, res := range c.stack {
+		if res.async {
+			return true
+		}
+	}
+	return false
+}
+
 // disposableStackData is a DisposableStack's or an AsyncDisposableStack's
 // state.
 type disposableStackData struct {

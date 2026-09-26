@@ -1,6 +1,11 @@
 package quickjs_test
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	quickjs "github.com/go-quickjs/go-quickjs"
+)
 
 func TestDisposableStack(t *testing.T) {
 	evalCases(t, []struct{ src, want string }{
@@ -49,4 +54,58 @@ func TestAsyncDisposableStack(t *testing.T) {
 	  var it = { __proto__: Object.getPrototypeOf(Object.getPrototypeOf((async function* () {}).prototype)),
 	    async return() { called = arguments.length + 1; return 5 } };
 	  it[Symbol.asyncDispose]().then(v => { r = called + "," + v })`, `r`, "1,undefined")
+}
+
+func TestUsingDeclarations(t *testing.T) {
+	evalCases(t, []struct{ src, want string }{
+		// Disposed of last-first when the block is left, however it is left.
+		{`var log = []; var res = n => ({[Symbol.dispose]() { log.push(n) }});
+		  { using a = res("a"), b = res("b"); log.push("body") }
+		  (function () { using c = res("c"); return log.push("return") })();
+		  for (var i = 0; i < 2; i++) { using d = res("d" + i); if (i == 0) continue; break }
+		  log.join()`, "body,b,a,return,c,d0,d1"},
+		// A for-of head is disposed of each iteration, a for head when the loop ends.
+		{`var log = []; var res = n => ({[Symbol.dispose]() { log.push(n) }});
+		  for (using x of [res(1), res(2)]) log.push("it");
+		  for (using y = res("y"); log.length < 6; ) log.push(log.length);
+		  log.join()`, "it,1,it,2,4,5,y"},
+		// An error from disposing suppresses the one leaving the block, and
+		// replaces a return.
+		{`try { { using a = {[Symbol.dispose]() { throw 1 }}; throw 2 } } catch (e) { [e.error, e.suppressed].join() }`, "1,2"},
+		{`function f() { using a = {[Symbol.dispose]() { throw "disposed" }}; return "returned" }
+		  try { f() } catch (e) { e }`, "disposed"},
+		// null and undefined are nothing to dispose of; anything else must be.
+		{`{ using a = null, b = undefined } try { { using c = {} } } catch (e) { e.constructor.name }`, "TypeError"},
+		// using is still an identifier where a declaration cannot stand.
+		{`var using = [1, 2], x = 1; using[x]`, "2"},
+		{`var using = 5; if (true) using
+		  ; using`, "5"},
+		{`var log = []; var of = [[9], [8], [7]]; for (using of of [0, 1, 2]) log.push(using); log.join()`, "7"},
+	})
+	for _, src := range []string{
+		// using [x] is an element access, not a pattern, so it is no error.
+		`{ using x; }`, `{ using {x} = null; }`,
+		`switch (0) { case 0: using x = null; }`, `if (true) using x = null;`,
+		`for (using x in {}) {}`, `for (using x = null of []) {}`, `using x = null;`,
+		`{ using let = null; }`,
+	} {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil || !strings.Contains(err.Error(), "SyntaxError") {
+			t.Errorf("%s: got %v, want a SyntaxError", src, err)
+		}
+		rt.Close()
+	}
+}
+
+func TestAwaitUsingDeclarations(t *testing.T) {
+	// An async disposer is awaited, and a scope that never reached its
+	// `await using` does not await at all.
+	checkAsync(t, `var r = ""; var log = [];
+	  (async () => {
+	    { await using a = {async [Symbol.asyncDispose]() { await null; log.push("a") }}, b = null; log.push("body") }
+	    log.push("after");
+	  })().then(() => { r = log.join() })`, `r`, "body,a,after")
+	checkAsync(t, `var r = ""; var same = true;
+	  async function f() { x: { if (true) break x; await using _ = null } r = same }
+	  f(); same = false`, `r`, "true")
 }

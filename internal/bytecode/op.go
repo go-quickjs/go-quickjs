@@ -347,6 +347,22 @@ const (
 	OpRethrow
 	OpThrowTypeError // used for TDZ and const-assignment failures
 
+	// --- Resource management ------------------------------------------------
+	// OpNewDisposeCapability pushes an empty stack of resources, for a scope's
+	// using declarations to add to.
+	OpNewDisposeCapability
+	// OpAddDisposable pops a capability and adds the value beneath it, which
+	// stays where it is, as a resource: A is 1 for `await using`.
+	OpAddDisposable
+	// OpDispose pops a capability and disposes of what it holds. With
+	// DisposeRecord in A it runs as a finally clause's first act, and reads
+	// the completion record beneath it to know whether an exception is in
+	// flight; an error from disposing is thrown, which replaces the record.
+	// With DisposeAsync it pushes a promise of the disposal instead, for the
+	// code that follows to await -- or undefined, when no `await using` was
+	// reached and the disposal has been done without awaiting.
+	OpDispose
+
 	// --- Generators and async ---------------------------------------------
 	OpYield
 	// OpYieldStar suspends inside a `yield*`, where the three ways a generator
@@ -554,6 +570,9 @@ var opNames = [opCount]string{
 	OpPushFinally: "push_finally", OpRethrow: "rethrow",
 	OpThrowTypeError: "throw_type_error",
 
+	OpNewDisposeCapability: "new_dispose_capability", OpAddDisposable: "add_disposable",
+	OpDispose: "dispose",
+
 	OpYield: "yield", OpYieldStar: "yield_star", OpAwait: "await",
 	OpInitialYield: "initial_yield", OpAsyncReturn: "async_return",
 
@@ -630,4 +649,10 @@ const (
 	ResumeNext = iota
 	ResumeThrow
 	ResumeReturn
+)
+
+// The flags of OpDispose.
+const (
+	DisposeRecord = 1 << iota
+	DisposeAsync
 )

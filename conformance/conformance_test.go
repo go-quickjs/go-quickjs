@@ -67,19 +67,18 @@ const (
 // does not implement. A test tagged with one is skipped rather than counted as
 // a failure, because it is testing something that was never claimed.
 var unsupportedFeatures = map[string]string{
-	"Atomics.waitAsync":            "no asynchronous waiting",
-	"decorators":                   "decorators are not implemented",
-	"import-attributes":            "no module attributes",
-	"explicit-resource-management": "no using declarations",
-	"source-phase-imports":         "no source phase imports",
-	"import-defer":                 "no deferred imports",
-	"tail-call-optimization":       "no tail calls",
-	"ShadowRealm":                  "no shadow realms",
-	"legacy-regexp":                "no legacy RegExp statics",
-	"error-stack-accessor":         "Error stack is an own data property",
-	"IsHTMLDDA":                    "no document.all emulation",
-	"cross-realm":                  "no realms API",
-	"caller":                       "no legacy caller access",
+	"Atomics.waitAsync":      "no asynchronous waiting",
+	"decorators":             "decorators are not implemented",
+	"import-attributes":      "no module attributes",
+	"source-phase-imports":   "no source phase imports",
+	"import-defer":           "no deferred imports",
+	"tail-call-optimization": "no tail calls",
+	"ShadowRealm":            "no shadow realms",
+	"legacy-regexp":          "no legacy RegExp statics",
+	"error-stack-accessor":   "Error stack is an own data property",
+	"IsHTMLDDA":              "no document.all emulation",
+	"cross-realm":            "no realms API",
+	"caller":                 "no legacy caller access",
 }
 
 // A newly named difference permits a failure while documenting why; an

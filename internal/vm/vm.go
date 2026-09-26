@@ -1964,6 +1964,50 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		case bytecode.OpThrowTypeError:
 			vmErr = r.throwTypeError("%s", r.atoms.name(cl.names[in.A]))
 			goto onError
+
+		case bytecode.OpNewDisposeCapability:
+			o := newObject(nil, ClassObject)
+			o.data = &disposeCapability{}
+			push(Obj(o))
+		case bytecode.OpAddDisposable:
+			c := pop().Object().data.(*disposeCapability)
+			if err := r.addDisposableResource(c, peek(0), in.A == 1); err != nil {
+				vmErr = err
+				goto onError
+			}
+		case bytecode.OpDispose:
+			c := pop().Object().data.(*disposeCapability)
+			// A finally clause knows from its record whether an exception is
+			// what is leaving the scope, which the disposal has to fold into
+			// whatever it throws itself.
+			var completion error
+			if in.A&bytecode.DisposeRecord != 0 &&
+				completionKind(peek(0).Number()) == completionThrow {
+				completion = r.throw(peek(1))
+			}
+			// A scope whose `await using` was never reached disposes of what
+			// it has without awaiting anything, and says so with undefined.
+			if in.A&bytecode.DisposeAsync != 0 && c.hasAsync() {
+				p := r.newPromise()
+				r.disposeResourcesAsync(c, completion, func(err error) {
+					// The exception in flight is still what the record says;
+					// only a new one rejects.
+					if err == nil || err == completion {
+						r.resolvePromise(p, Undefined)
+						return
+					}
+					r.rejectPromise(p, thrownValue(err))
+				})
+				push(Obj(p))
+				break
+			}
+			if err := r.disposeResources(c, completion); err != nil && err != completion {
+				vmErr = err
+				goto onError
+			}
+			if in.A&bytecode.DisposeAsync != 0 {
+				push(Undefined)
+			}
 		case bytecode.OpPushCatch:
 			f.handlers = append(f.handlers, handler{pc: in.A, stackDepth: sp - f.base})
 		case bytecode.OpPushFinally:

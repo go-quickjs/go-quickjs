@@ -76,6 +76,13 @@ type parser struct {
 	// legal statement, so that `let` there is an ordinary identifier rather
 	// than the start of one.
 	noLetDeclaration bool
+	// usingAllowed marks a statement list whose items may be using
+	// declarations: every one but a script's top level and a case clause.
+	usingAllowed bool
+	// listItem marks the statement about to be parsed as an item of a
+	// statement list, where a declaration may stand, rather than the body of
+	// another statement.
+	listItem bool
 	// noLabelledFunction marks the positions where a label may not be put on a
 	// function declaration: the body of an if or a loop, where a declaration
 	// has no scope to bind into.
@@ -196,7 +203,9 @@ func Parse(src string, opts Options) (prog *ast.Program, err error) {
 
 	p.next()
 	body := p.parseDirectivePrologue(func() bool { return p.tok.Kind == lexer.EOF })
-	body = append(body, p.parseStatements(func() bool { return p.tok.Kind == lexer.EOF })...)
+	// A module's top level may hold using declarations, and a script's may
+	// not: nothing would dispose of them before the next script ran.
+	body = append(body, p.parseStatementList(func() bool { return p.tok.Kind == lexer.EOF }, p.module)...)
 
 	return &ast.Program{
 		Body:   body,
@@ -505,11 +514,24 @@ func (p *parser) parseDirectivePrologue(atEnd func() bool) []ast.Stmt {
 
 // parseStatements parses statements until atEnd reports true.
 func (p *parser) parseStatements(atEnd func() bool) []ast.Stmt {
+	return p.parseStatementList(atEnd, true)
+}
+
+// parseStatementList parses the items of a statement list, which may be using
+// declarations when allowUsing is set.
+//
+// Where one may not be, `using x = y` is not a declaration at all, and fails
+// to parse as the expression it then has to be.
+func (p *parser) parseStatementList(atEnd func() bool, allowUsing bool) []ast.Stmt {
+	saved := p.usingAllowed
+	p.usingAllowed = allowUsing
+	defer func() { p.usingAllowed = saved }()
 	var out []ast.Stmt
 	for !atEnd() {
 		if p.tok.Kind == lexer.EOF {
 			break
 		}
+		p.listItem = true
 		out = append(out, p.parseStatement())
 	}
 	return out

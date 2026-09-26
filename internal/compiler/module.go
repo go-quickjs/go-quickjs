@@ -274,7 +274,7 @@ func (c *compiler) hoistModuleBindings(body []ast.Stmt) {
 	c.collectModuleLex(body)
 	for _, l := range moduleLexNames(body) {
 		mutable := uint32(1)
-		if l.kind == ast.DeclConst {
+		if l.kind.IsConst() {
 			mutable = 0
 		}
 		c.emit(bytecode.OpDeclareModuleLex, c.nameIdx(l.name), mutable)
