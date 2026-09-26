@@ -230,6 +230,8 @@ type Runtime struct {
 	abstractModuleSource *Object
 	// pendingTail is the call a frame ended in, for run to make in its place.
 	pendingTail tailCall
+	// legacyRegExp is what RegExp.$1 and the rest describe.
+	legacyRegExp legacyRegExpStatics
 	// arrayBufferCtor is the intrinsic ArrayBuffer, which slice falls back to
 	// when the object names no species of its own.
 	arrayBufferCtor *Object

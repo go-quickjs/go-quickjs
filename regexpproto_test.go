@@ -580,3 +580,30 @@ func TestRegExpDuplicateNamedGroups(t *testing.T) {
 		{`try { new RegExp("(?:(?<x>a)|b)(?<x>c)") } catch (e) { e.constructor.name }`, "SyntaxError"},
 	})
 }
+
+// TestRegExpLegacyStatics pins RegExp.$1 and the rest: what the last match of
+// a RegExp of the intrinsic constructor left, read through RegExp itself.
+func TestRegExpLegacyStatics(t *testing.T) {
+	evalCases(t, []struct{ src, want string }{
+		{`[RegExp.$1, RegExp.lastMatch, RegExp.input].join("|")`, "||"},
+		{`/(a)(b)?(c)/.exec("xacz"); [RegExp.$1, RegExp.$2, RegExp.$3, RegExp.$4, RegExp.lastMatch, RegExp["$&"],
+		   RegExp.lastParen, RegExp.leftContext, RegExp["$'"], RegExp.input, RegExp.$_].join("|")`,
+			"a||c||ac|ac|c|x|z|xacz|xacz"},
+		{`"hello world".replace(/o (w)/, "_"); [RegExp.$1, RegExp.leftContext].join()`, "w,hell"},
+		{`RegExp.input = 5; [RegExp.input, typeof RegExp.$_].join()`, "5,string"},
+		// Only RegExp itself answers, and a subclass's match leaves nothing
+		// to answer with.
+		{`var errs = []; class R extends RegExp {}
+		  for (var f of [() => R.$1, () => Object.getOwnPropertyDescriptor(RegExp, "$1").get.call({})]) {
+		    try { f() } catch (e) { errs.push(e.constructor.name) }
+		  }
+		  new R("x").exec("x"); try { RegExp.lastMatch } catch (e) { errs.push(e.constructor.name) }
+		  /y/.exec("y"); errs.push(RegExp.lastMatch); errs.join()`, "TypeError,TypeError,TypeError,y"},
+		// compile reinitializes in place, and refuses a subclass's instance.
+		{`var re = /a/g; re.lastIndex = 3; var same = re.compile("b", "i") === re;
+		   [same, re.source, re.flags, re.lastIndex, re.test("B")].join()`, "true,b,i,0,true"},
+		{`class R extends RegExp {} try { new R("a").compile("b") } catch (e) { e.constructor.name }`, "TypeError"},
+		{`Object.getOwnPropertyDescriptor(RegExp, "$1").set === undefined &&
+		  typeof Object.getOwnPropertyDescriptor(RegExp, "input").set`, "function"},
+	})
+}

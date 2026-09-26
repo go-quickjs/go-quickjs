@@ -4,6 +4,9 @@ import (
 	"math"
 	"math/rand/v2"
 	"sort"
+	"strconv"
+	"strings"
+	"unicode"
 
 	"github.com/go-quickjs/go-quickjs/internal/jsnum"
 	"github.com/go-quickjs/go-quickjs/internal/wtf8"
@@ -751,7 +754,7 @@ func (r *Runtime) initFunctionBuiltins() {
 		if fd.closure != nil && fd.closure.fn.Text != "" {
 			return Str(NewString(fd.closure.fn.Text)), nil
 		}
-		return Str(NewString("function " + fd.nameOr("") + "() { [native code] }")), nil
+		return Str(NewString("function " + nativeFunctionName(fd.nameOr("")) + "() { [native code] }")), nil
 	})
 
 	// The method is neither writable nor configurable, which is what lets a
@@ -2900,4 +2903,40 @@ func (r *Runtime) createIndexed(o *Object, i int64, v Value) error {
 		return r.throwTypeError("cannot create index %d of the result", i)
 	}
 	return nil
+}
+
+// nativeFunctionName renders a built-in's name where Function.prototype.toString
+// puts it, which has to be a property name the grammar accepts: an identifier,
+// a computed [Symbol.x], or failing both -- RegExp's "$&" getter, say -- a
+// computed string, after the get or set an accessor's name begins with. A
+// bound function's name is left as it is.
+func nativeFunctionName(name string) string {
+	if strings.HasPrefix(name, "bound ") {
+		return name
+	}
+	prefix := ""
+	for _, p := range []string{"get ", "set "} {
+		if strings.HasPrefix(name, p) {
+			prefix, name = p, name[len(p):]
+			break
+		}
+	}
+	if name == "" || strings.HasPrefix(name, "[") || isIdentifierName(name) {
+		return prefix + name
+	}
+	return prefix + "[" + strconv.Quote(name) + "]"
+}
+
+// isIdentifierName reports whether a name could be written as an identifier.
+func isIdentifierName(name string) bool {
+	for i, c := range name {
+		switch {
+		case c == '$' || c == '_' || unicode.IsLetter(c):
+		case i > 0 && (unicode.IsDigit(c) || c == 0x200C || c == 0x200D ||
+			unicode.Is(unicode.Mn, c) || unicode.Is(unicode.Mc, c) || unicode.Is(unicode.Pc, c)):
+		default:
+			return false
+		}
+	}
+	return true
 }

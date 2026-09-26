@@ -71,7 +71,6 @@ var unsupportedFeatures = map[string]string{
 	"Atomics.waitAsync":                  "no asynchronous waiting",
 	"decorators":                         "decorators are not implemented",
 	"ShadowRealm":                        "no shadow realms",
-	"legacy-regexp":                      "no legacy RegExp statics",
 	"error-stack-accessor":               "Error stack is an own data property",
 	"IsHTMLDDA":                          "no document.all emulation",
 	"cross-realm":                        "no realms API",

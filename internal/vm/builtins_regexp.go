@@ -17,6 +17,10 @@ import (
 // regexpData is a RegExp's internal state.
 type regexpData struct {
 	re *regexp.Regexp
+	// legacy marks a RegExp made by the intrinsic constructor, whose matches
+	// update RegExp.$1 and the rest, and which compile may be used on. A
+	// subclass's instance is not one.
+	legacy bool
 }
 
 // regexpOf recovers the compiled pattern from a receiver.
@@ -38,7 +42,7 @@ func (r *Runtime) newRegExp(source, flags string) (Value, error) {
 		return Undefined, r.throwSyntaxError("%s", err.Error())
 	}
 	o := newObject(r.proto.regexp, ClassRegExp)
-	o.data = &regexpData{re: re}
+	o.data = &regexpData{re: re, legacy: true}
 	// lastIndex is writable but neither enumerable nor configurable.
 	o.setOwnRaw(atomLastIndex, Int(0), propWritable)
 	return Obj(o), nil
@@ -142,10 +146,18 @@ func (r *Runtime) initRegExpBuiltins() {
 				flags = f.Go()
 			}
 		}
-		return rt.newRegExp(source, flags)
+		v, err := rt.newRegExp(source, flags)
+		if err != nil {
+			return Undefined, err
+		}
+		if nt := rt.newTarget(); !nt.IsUndefined() && (!nt.IsObject() || nt.Object() != rt.proto.regexpCtor) {
+			v.Object().data.(*regexpData).legacy = false
+		}
+		return v, nil
 	})
 	r.defSpecies(reCtor)
 	r.proto.regexpCtor = reCtor
+	r.initRegExpLegacyStatics(reCtor)
 	r.initRegExpSymbolMethods(p)
 
 	r.defGetter(p, "source", func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -313,6 +325,7 @@ func (r *Runtime) regexpExec(this Value, s *String) (Value, error) {
 			return Undefined, err
 		}
 	}
+	r.recordLegacyMatch(o.data.(*regexpData), s, caps)
 	return Obj(r.buildMatchResult(re, caps, s)), nil
 }
 
