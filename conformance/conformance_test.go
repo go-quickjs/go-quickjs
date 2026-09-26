@@ -72,7 +72,6 @@ var unsupportedFeatures = map[string]string{
 	"SharedArrayBuffer":            "no shared memory",
 	"resizable-arraybuffer":        "no resizable buffers",
 	"decorators":                   "decorators are not implemented",
-	"import-assertions":            "no module attributes",
 	"import-attributes":            "no module attributes",
 	"explicit-resource-management": "no using declarations",
 	"source-phase-imports":         "no source phase imports",
@@ -82,12 +81,9 @@ var unsupportedFeatures = map[string]string{
 	"legacy-regexp":                "no legacy RegExp statics",
 	"error-stack-accessor":         "Error stack is an own data property",
 	"immutable-arraybuffer":        "no immutable ArrayBuffers",
-	"String.prototype.replaceAll":  "",
 	"IsHTMLDDA":                    "no document.all emulation",
 	"cross-realm":                  "no realms API",
-	"Reflect.construct":            "",
 	"caller":                       "no legacy caller access",
-	"arguments-object":             "",
 }
 
 // A newly named difference permits a failure while documenting why; an
