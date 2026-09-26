@@ -30,6 +30,7 @@ const (
 	helperChunks
 	helperWindows
 	helperConcat
+	helperZip
 )
 
 // iterHelperData is a lazy helper's state.
@@ -61,6 +62,8 @@ type iterHelperData struct {
 	// concat is Iterator.concat's list of iterables not yet opened. The one
 	// being drawn from is inner.
 	concat []concatItem
+	// zip is Iterator.zip's and Iterator.zipKeyed's state.
+	zip *zipState
 
 	// started records that next has run, which decides whether return finds
 	// the helper suspended before its first step or in the middle of one.
@@ -145,6 +148,8 @@ func (r *Runtime) initIteratorHelpers() {
 	r.defMethod(ctor, "from", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		return rt.iteratorFrom(arg(args, 0))
 	})
+
+	r.initIteratorZip(ctor)
 
 	// Iterator.concat checks every argument and reads its iterator method
 	// up front, and opens each only when the one before it is exhausted.
@@ -332,6 +337,9 @@ func (r *Runtime) initHelperPrototype() {
 // doing so reaches the caller, because nothing else is in flight to take
 // precedence over it.
 func (r *Runtime) closeHelper(h *iterHelperData) error {
+	if h.kind == helperZip {
+		return r.closeZip(h.zip, nil)
+	}
 	if h.kind == helperConcat {
 		// concat holds one iterable open at a time, and none before it starts
 		// or between two of them.
@@ -461,6 +469,9 @@ func (r *Runtime) advanceHelper(h *iterHelperData) (Value, bool, error) {
 			}
 			h.inner, h.innerNext, h.hasInner = inner, innerNext, true
 		}
+
+	case helperZip:
+		return r.advanceZip(h)
 
 	case helperConcat:
 		for {

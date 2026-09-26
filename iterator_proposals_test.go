@@ -139,3 +139,29 @@ func TestIteratorConcat(t *testing.T) {
 		  c = Iterator.concat(src); c.next(); c.return(); log.join("")`, "|return"},
 	})
 }
+
+func TestIteratorZip(t *testing.T) {
+	evalCases(t, []struct{ src, want string }{
+		{`JSON.stringify(Iterator.zip([[1, 2, 3], ["a", "b"]]).toArray())`, `[[1,"a"],[2,"b"]]`},
+		// The default padding is undefined, not whatever a zero value is.
+		{`var r = Iterator.zip([[], ["e"]], {mode: "longest"}).toArray(); [r.length, r[0][0] === undefined].join()`,
+			"1,true"},
+		{`JSON.stringify(Iterator.zip([[1], [2, 3], []], {mode: "longest", padding: ["x", "y"]}).toArray())`,
+			`[[1,2,null],["x",3,null]]`},
+		{`JSON.stringify(Iterator.zip([[1, 2], [3, 4]], {mode: "strict"}).toArray())`, "[[1,3],[2,4]]"},
+		{`try { Iterator.zip([[1], [2, 3]], {mode: "strict"}).toArray() } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		// A string is not zipped as its characters.
+		{`try { Iterator.zip(["ab"]) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`try { Iterator.zip([], {mode: "short"}) } catch (e) { e.constructor.name }`, "TypeError"},
+		{`try { Iterator.zip([], null) } catch (e) { e.constructor.name }`, "TypeError"},
+		// In shortest mode the first to run out closes the others, most
+		// recent first.
+		{`var log = []; function src(name, n) { var i = 0; return { next() { return i++ < n ? {value: i} : {done: true} },
+		    return() { log.push(name); return {} } } }
+		  Iterator.zip([src("a", 5), src("b", 1), src("c", 5)]).toArray(); log.join()`, "c,a"},
+		{`var r = Iterator.zipKeyed({a: [1, 2], b: [3], [Symbol.iterator]: undefined}, {mode: "longest", padding: {b: 0}}).toArray();
+		  JSON.stringify(r) + Object.getPrototypeOf(r[0])`, `[{"a":1,"b":3},{"a":2,"b":0}]null`},
+		{`[Iterator.zip.length, Iterator.zipKeyed.length].join()`, "1,1"},
+	})
+}
