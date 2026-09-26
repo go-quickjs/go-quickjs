@@ -3,7 +3,7 @@
 //
 // Usage:
 //
-//	node internal/icu/internal/cldrgen/golden.mjs > testdata/intl_golden.json
+//	node testdata/intl_golden.js > testdata/intl_golden.txt
 //
 // Each case is the source of an expression and what ICU answered. A case whose
 // answer this engine cannot reach -- a locale it carries no data for, a time

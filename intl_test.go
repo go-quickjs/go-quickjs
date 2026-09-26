@@ -23,7 +23,7 @@ import (
 func TestIntlMatchesICU(t *testing.T) {
 	file, err := os.Open("testdata/intl_golden.txt")
 	if err != nil {
-		t.Skip("no golden file: run node internal/icu/internal/cldrgen/golden.mjs")
+		t.Skip("no golden file: run node testdata/intl_golden.js > testdata/intl_golden.txt")
 	}
 	defer file.Close()
 
@@ -956,6 +956,51 @@ func matchNodeScript(t *testing.T, rt *quickjs.Runtime, name string) {
 	for i := range expected {
 		if got[i] != expected[i] {
 			t.Errorf("got  %s\nwant %s", got[i], expected[i])
+		}
+	}
+}
+
+// Runtimes on separate goroutines share go-intl's data, which each reads
+// on first use; they must agree with one runtime alone. Run under -race,
+// as CI does, this is the check that the sharing is safe.
+func TestIntlConcurrentRuntimes(t *testing.T) {
+	const source = `[
+		new Intl.NumberFormat("de", {style: "currency", currency: "EUR"}).format(1234.5),
+		new Intl.DateTimeFormat("ja", {dateStyle: "full", timeStyle: "long", timeZone: "Asia/Tokyo"}).format(0),
+		["ä", "z", "a"].sort(new Intl.Collator("sv").compare).join(),
+		[...new Intl.Segmenter("th", {granularity: "word"}).segment("สวัสดีครับ")].length,
+		new Intl.DisplayNames("fr", {type: "region"}).of("DE"),
+		new Date(0).toString(),
+		Temporal.PlainDate.from("2024-02-29").withCalendar("hebrew").monthCode,
+		Temporal.ZonedDateTime.from("2024-03-10T01:30[America/New_York]").add({hours: 1}).toString(),
+		"İ".toLocaleLowerCase("tr"),
+	].join("|")`
+	one := quickjs.New()
+	want := evalString(t, one, source)
+	one.Close()
+
+	const n = 8
+	got := make([]string, n)
+	errs := make([]error, n)
+	done := make(chan int)
+	for i := range n {
+		go func() {
+			rt := quickjs.New()
+			defer rt.Close()
+			v, err := rt.Eval(source)
+			if err == nil {
+				got[i] = v.String()
+			}
+			errs[i] = err
+			done <- i
+		}()
+	}
+	for range n {
+		<-done
+	}
+	for i := range n {
+		if errs[i] != nil || got[i] != want {
+			t.Errorf("runtime %d: %q, %v; want %q", i, got[i], errs[i], want)
 		}
 	}
 }

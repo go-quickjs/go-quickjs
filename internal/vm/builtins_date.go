@@ -2,11 +2,11 @@ package vm
 
 import (
 	"math"
-	"math/big"
 	"time"
 
 	intl "github.com/go-quickjs/go-intl"
 	"github.com/go-quickjs/go-intl/date"
+	"github.com/go-quickjs/go-intl/temporal"
 )
 
 // Date, on go-intl's date package, which is V8's Date apart from any
@@ -174,15 +174,12 @@ func (r *Runtime) initDateBuiltins() {
 		if math.IsNaN(t) {
 			return Undefined, rt.throwRangeError("invalid time value")
 		}
-		nanoseconds := new(big.Int).Mul(
-			big.NewInt(int64(t)), big.NewInt(1_000_000))
-		instant, ok := temporalInstantFromEpochNanoseconds(nanoseconds)
-		if !ok {
-			return Undefined, rt.throwRangeError(
-				"date is outside the Temporal range")
+		instant, err := temporal.InstantFromEpochMilliseconds(int64(t))
+		if err != nil {
+			return Undefined, rt.temporalErr(err)
 		}
 		rt.buildTemporal()
-		return Obj(newTemporalInstant(rt.temporalInstantProto, instant)), nil
+		return temporalObject(rt.temporalInstantProto, instant), nil
 	})
 	r.defMethod(p, "setTime", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		d, err := rt.dateOf(this, "Date.prototype.setTime")

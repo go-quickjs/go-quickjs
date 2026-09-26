@@ -11,12 +11,12 @@ import (
 	"strings"
 	"testing"
 
+	intl "github.com/go-quickjs/go-intl"
 	quickjs "github.com/go-quickjs/go-quickjs"
-	"github.com/go-quickjs/go-quickjs/internal/icu"
 )
 
-// TestTemporalMatchesNodeAcrossLocalesAndTimeZones compares every locale and
-// time-zone pairing carried by this module. It is opt-in because the complete
+// TestTemporalMatchesNodeAcrossLocalesAndTimeZones compares every locale
+// DateTimeFormat is available in with every zone Node lists. It is opt-in because the complete
 // matrix is deliberately large and requires a recent Node with Temporal.
 //
 // Run it with:
@@ -29,9 +29,17 @@ func TestTemporalMatchesNodeAcrossLocalesAndTimeZones(t *testing.T) {
 		t.Skip("set QUICKJS_COMPARE_NODE_TEMPORAL=1 to compare the complete matrix")
 	}
 
-	locales := filterTemporalNodeValues(t, icu.Tags(),
+	matcher, err := intl.NewLocaleMatcher(intl.Embedded, intl.ServiceDateTimeFormat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allZones, err := intl.TimeZones(intl.NodeICU)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locales := filterTemporalNodeValues(t, matcher.Locales(),
 		"QUICKJS_NODE_TEMPORAL_LOCALES")
-	zones := filterTemporalNodeValues(t, icu.Zones(),
+	zones := filterTemporalNodeValues(t, allZones,
 		"QUICKJS_NODE_TEMPORAL_ZONES")
 	expression := temporalNodeMatrixExpression(t, locales, zones)
 

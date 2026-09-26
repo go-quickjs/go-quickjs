@@ -3,8 +3,6 @@ package vm
 import (
 	"math"
 	"math/big"
-	"strconv"
-	"strings"
 
 	intl "github.com/go-quickjs/go-intl"
 	"github.com/go-quickjs/go-intl/temporal"
@@ -270,26 +268,19 @@ func (r *Runtime) readDurationUnits(o *durationOptions, options *Object) error {
 func (r *Runtime) durationFrom(v Value) ([len(durationUnits)]float64, error) {
 	var out [len(durationUnits)]float64
 	if v.IsString() {
-		if duration, err := parseTemporalDuration(v.String().Go()); err == nil &&
-			duration.valid() && duration.withinRange() {
-			return duration.fields(), nil
-		}
-		if parsed, ok := parseDuration(v.String().Go()); ok {
-			return parsed, nil
-		}
-		_, err := temporal.ParseDuration([]byte(v.String().Go()))
-		message := "Parsing ended abruptly."
+		// A string is a Temporal duration, which ToTemporalDuration parses.
+		d, err := r.toTemporalDuration(v)
 		if err != nil {
-			message = strings.TrimPrefix(err.Error(), "RangeError: ")
+			return out, err
 		}
-		return out, r.intlTemporalRange(message)
+		return [10]float64(temporalDurationFields(d)), nil
 	}
 	o := v.Object()
 	if o == nil {
 		return out, r.intlTemporalType("Duration argument must be Duration or string.")
 	}
-	if duration, ok := o.data.(*temporalDuration); ok {
-		return duration.fields(), nil
+	if duration, ok := o.data.(temporal.Duration); ok {
+		return [10]float64(temporalDurationFields(duration)), nil
 	}
 	any := false
 	for i, unit := range durationUnits {
@@ -358,64 +349,6 @@ func validDuration(duration [len(durationUnits)]float64) bool {
 	}
 	seconds.Abs(seconds)
 	return seconds.Cmp(new(big.Rat).SetInt64(1<<53)) < 0
-}
-
-// parseDuration reads a duration written the way ISO 8601 writes one:
-// P1Y2M3DT4H5M6S, and the same with any part left out.
-func parseDuration(text string) ([len(durationUnits)]float64, bool) {
-	var out [len(durationUnits)]float64
-	sign := 1.0
-	switch {
-	case strings.HasPrefix(text, "-"), strings.HasPrefix(text, "\u2212"):
-		sign, text = -1, text[strings.IndexAny(text, "-\u2212")+1:]
-	case strings.HasPrefix(text, "+"):
-		text = text[1:]
-	}
-	if len(text) == 0 || (text[0] != 'P' && text[0] != 'p') {
-		return out, false
-	}
-	text = text[1:]
-
-	// The date parts, then the time parts after the T.
-	date, clock, _ := strings.Cut(text, "T")
-	if clock == "" {
-		date, clock, _ = strings.Cut(text, "t")
-	}
-	fields := map[byte]int{'Y': 0, 'M': 1, 'W': 2, 'D': 3}
-	any := false
-	for _, part := range []struct {
-		text   string
-		fields map[byte]int
-	}{
-		{date, fields},
-		{clock, map[byte]int{'H': 4, 'M': 5, 'S': 6}},
-	} {
-		rest := part.text
-		last := -1
-		for rest != "" {
-			at := 0
-			for at < len(rest) && (rest[at] >= '0' && rest[at] <= '9') {
-				at++
-			}
-			if at == 0 || at == len(rest) {
-				return out, false
-			}
-			n, err := strconv.ParseFloat(rest[:at], 64)
-			if err != nil {
-				return out, false
-			}
-			which, ok := part.fields[rest[at]&^0x20]
-			if !ok || which <= last {
-				return out, false
-			}
-			out[which], last, any = sign*n, which, true
-			rest = rest[at+1:]
-		}
-	}
-	if !any || !validDuration(out) {
-		return out, false
-	}
-	return out, true
 }
 
 func (r *Runtime) durationFormatOf(this Value, method string) (*durationOptions, error) {

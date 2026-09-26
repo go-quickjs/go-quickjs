@@ -7,10 +7,10 @@ import (
 	intl "github.com/go-quickjs/go-intl"
 )
 
-// go-intl, which Intl is moving onto a service at a time, from
-// internal/icu. Each service builds its go-intl formatter from the options
-// it has read, in the order and with the errors ECMA-402 gives, and answers
-// with what the formatter writes.
+// go-intl, which Intl, Date's local time and Temporal are built on. Each
+// service builds its go-intl formatter from the options it has read, in the
+// order and with the errors ECMA-402 gives, and answers with what the
+// formatter writes.
 
 // intlCompat is where the runtime answers as Node does rather than as the
 // standard: everywhere under WithNodeQuirks, and otherwise everywhere but
@@ -24,7 +24,9 @@ import (
 // hour cycle, the zone a plain Temporal value is read in, the time zone
 // names a DateTimeFormat takes and reports, a coptic year before the era,
 // the days of the Chinese and Korean calendars, which are Temporal's, the
-// region of a locale's hour cycles, and the time zones in no region.
+// region of a locale's hour cycles, the time zones in no region, the two
+// roundings of Temporal the standard fixed after Node's temporal_rs, and the
+// calendar uz-AF's date patterns are read from.
 func (r *Runtime) intlCompat() intl.Compat {
 	if r.nodeQuirks {
 		return intl.NodeICU
@@ -32,7 +34,8 @@ func (r *Runtime) intlCompat() intl.Compat {
 	return intl.NodeICU &^ (intl.TwelveHourCycle | intl.IslamicEras | intl.TemporalFormats | intl.YesValues |
 		intl.CurrencyNames | intl.DurationOverflow | intl.DurationSeparator | intl.LiteralFields |
 		intl.IslamicFallback | intl.HourCycleKeyword | intl.PlainValueZone | intl.ZoneIdentifiers |
-		intl.CopticEra | intl.ChineseAstronomy | intl.SubdivisionHourCycles | intl.RegionZones)
+		intl.CopticEra | intl.ChineseAstronomy | intl.SubdivisionHourCycles | intl.RegionZones |
+		intl.RoundingWindow | intl.RepeatedMidnight | intl.PatternCalendar)
 }
 
 // canonicalizer puts locale identifiers in canonical form, as

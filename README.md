@@ -88,6 +88,12 @@ as those names, so results do not depend on whether the host operating system
 has installed newer or older zone rules. The host's zone is found as ICU finds
 it, and `TZ` names it where Node reads it, on Windows too.
 
+`Temporal` is go-intl's as well: its `temporal` package is a port of the
+temporal_rs 0.2.3 that Node 26 builds Temporal from, with ICU4X's calendars,
+and the engine reads property bags and options as V8 does before it calls
+temporal_rs, with V8's messages. go-intl holds it to Node's recorded answers
+for every type's methods and all sixteen calendars.
+
 Sorting follows the Unicode algorithm with each language's tailoring,
 including Chinese pinyin, stroke and zhuyin order, Japanese kana and Han
 order, Korean order, and the named Unihan and search-jamo collations.
@@ -467,7 +473,8 @@ compatibility for known Node divergences can opt in with
 `quickjs.WithNodeQuirks()`; the command-line equivalent is `--node-quirks`.
 Each divergence is one of go-intl's named ones, from the Japanese `h12`
 preference and the Islamic eras to the time zones `Intl.supportedValuesOf`
-lists; go-intl's [compatibility profile][go-intl-compat] lists them, with
+lists and two roundings of Temporal the standard fixed after temporal_rs
+0.2.3; go-intl's [compatibility profile][go-intl-compat] lists them, with
 what the standard and Node each answer. Where the two agree, both modes
 answer as Node does.
 

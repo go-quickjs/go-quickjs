@@ -14,18 +14,18 @@ The main areas are:
   behavior tests.
 - `internal/lexer`, `internal/parser`, `internal/ast`: source processing.
 - `internal/compiler`, `internal/bytecode`: compilation and VM instructions.
-- `internal/vm`: JavaScript runtime semantics and built-ins.
-- `internal/icu`: locale, calendar, collation, segmentation, and time-zone
-  behavior.
-- `intldata`: the separately embedded multilingual DisplayNames data.
+- `internal/vm`: JavaScript runtime semantics and built-ins. `Intl`, `Date`'s
+  local time and `Temporal` are bindings over
+  [go-intl](https://github.com/go-quickjs/go-intl), which holds the locale
+  data, the calendars and the time zones.
 - `stdlib`: opt-in host functionality.
 - `cmd/qjs`: the command-line host.
 - `conformance`: the test262 runner. The test262 checkout is external.
 
 The module targets Go 1.24. A `Runtime` is not safe for concurrent use; callers
 give each goroutine its own runtime. Process-wide immutable data and caches,
-especially under `internal/icu`, must still be safe when separate runtimes use
-them concurrently.
+go-intl's included, must still be safe when separate runtimes use them
+concurrently.
 
 ## Working rules
 
@@ -48,55 +48,14 @@ them concurrently.
 
 Do not manually edit generated files or their binary companions:
 
-- `internal/icu/tables.go` and `internal/icu/tables.bin`
-- `intldata/tables.go` and `intldata/tables.bin`
-- `internal/icu/cjkcollation.bin`
-- `internal/icu/zoneinfo.zip`
-- `internal/icu/windowszones.go`
 - `internal/regexp/unicodetables.go`
+
+go-intl's data is generated in go-intl, and changes there; a new go-intl is
+taken with `go get` and `go mod tidy`, never by copying its files here.
 
 Run generators from the repository root. Use a temporary output file for
 generators that write Go source to stdout so a failed run cannot truncate the
 tracked file.
-
-Core CLDR/ICU data:
-
-```sh
-generated=$(mktemp /tmp/quickjs-tables.XXXXXX.go)
-go run ./internal/icu/internal/cldrgen > "$generated" && \
-  mv "$generated" internal/icu/tables.go
-gofmt -w internal/icu/tables.go
-```
-
-The core generator also replaces `internal/icu/tables.bin`.
-
-Windows time-zone names:
-
-```sh
-generated=$(mktemp /tmp/quickjs-winzones.XXXXXX.go)
-go run ./internal/icu/internal/winzonegen > "$generated" && \
-  mv "$generated" internal/icu/windowszones.go
-gofmt -w internal/icu/windowszones.go
-```
-
-This one needs no node: it reads the vendored CLDR
-`internal/icu/internal/winzonegen/windowsZones.json`, which is replaced from
-the cldr-json release matching the rest of the data.
-
-Multilingual DisplayNames data:
-
-```sh
-generated=$(mktemp /tmp/quickjs-intldata.XXXXXX.go)
-go run ./internal/icu/internal/cldrgen -display > "$generated" && \
-  mv "$generated" intldata/tables.go
-gofmt -w intldata/tables.go
-```
-
-CJK collation overlays:
-
-```sh
-go run ./internal/icu/internal/cjkgen
-```
 
 Unicode regular-expression tables require a test262 checkout:
 
@@ -107,40 +66,19 @@ go run ./internal/regexp/internal/unicodegen /path/to/test262 > "$generated" && 
 gofmt -w internal/regexp/unicodetables.go
 ```
 
-The ICU generators invoke `node`. Before regenerating, record both
-`node --version` and `node -p process.versions.icu`. Do not regenerate locale
-assets as part of an unrelated change: different Node/ICU releases can produce
-valid but extensive semantic diffs. Regenerate both the Go index and binary
-asset when the format changes, and inspect their sizes with:
-
-```sh
-wc -c internal/icu/tables.bin internal/icu/cjkcollation.bin intldata/tables.bin
-```
-
-The `.bin` files are intentional embedded assets and are marked binary in
-`.gitattributes`. Do not replace them with base64 Go strings or commit raw
-generator source datasets.
-
-`internal/icu/zoneinfo.zip` is the uncompressed Go zone archive for the IANA
-tzdata release reported by `node -p process.versions.tz`; it must stay aligned
-with the Node/ICU release used for the CLDR tables. Copy it from a Go toolchain
-carrying that exact tzdata release, rewrite its backzone records to ICU's slim
-links with `go run ./internal/icu/internal/tzgen internal/icu/zoneinfo.zip`,
-and record the version in `internal/icu/timezones.go`.
-
 ## Intl and data-loading invariants
 
-- Ordinary runtime construction must not eagerly decompress Intl data.
-- Hot locale records and aliases are directly indexed. Keep bounds checks on
-  every generated offset before slicing embedded data.
-- Cold, large datasets use indexed compressed blocks. Avoid one frame per tiny
-  record because it loses cross-record compression; avoid one frame for an
-  entire multilingual dataset because it creates first-use latency spikes.
-- Parsing should remain feature-lazy: NumberFormat must not materialize date,
-  collation, list, or relative-time tables, for example.
-- Lazy initialization must use `sync.Once` or an appropriate lock and must pass
-  race testing. Do not hold a global lock while doing work that can safely be
-  published per block or per locale.
+- Ordinary runtime construction must not read Intl data. A service reads
+  go-intl's data when it is first used: `Intl` is built the first time the
+  global is read, and Temporal's calendars and zones are loaded when a
+  Temporal value first needs them.
+- go-intl's formatters are immutable and safe to share. What the engine keeps
+  per runtime -- its locale, its zone, the `Date` environment, Temporal's
+  data -- lives on the `Runtime`, never in package variables.
+- A difference from Node is one of go-intl's named divergences, chosen in
+  `intlCompat`: standards mode takes the standard's side, `WithNodeQuirks`
+  Node's. The engine adds none of its own.
+- Error messages Intl and Temporal throw are V8's, word for word.
 - Keep `new Date().toString()`, `new Date().toTimeString()`, and Intl time-zone
   names aligned with the selected Node/ICU data across locales, zones, seasons,
   and historical transitions.
@@ -161,7 +99,7 @@ git diff --check
 For concurrency or shared-cache changes:
 
 ```sh
-go test -race -count=1 ./internal/icu
+go test -race -count=1 -run TestIntlConcurrentRuntimes .
 ```
 
 For portability-sensitive changes:
@@ -193,5 +131,4 @@ introduced conformance failures.
 Performance-sensitive work should compare fresh processes, not just repeated
 operations in one warmed process. Report bundle size, first-use latency,
 allocations, and peak RSS. Distinguish work moved from package startup to first
-feature use, and verify that the explicit warmup API can absorb that cost for
-servers that require predictable request latency.
+feature use.

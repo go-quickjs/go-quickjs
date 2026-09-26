@@ -8,21 +8,13 @@ import (
 	"time"
 
 	intl "github.com/go-quickjs/go-intl"
+	"github.com/go-quickjs/go-intl/temporal"
 )
 
-// Intl, as far as it goes with the locale data the engine carries.
-//
-// ECMA-402 is written against the whole of CLDR, which is tens of megabytes; a
-// hundred locales' worth of it is in internal/icu, which is what these objects
-// read. A tag that is not there falls back to its language and then to English,
-// and resolvedOptions says which locale it settled on, so a program can tell.
-//
-// What is here: NumberFormat, DateTimeFormat, Collator, PluralRules,
-// ListFormat and RelativeTimeFormat, each with format, formatToParts where the
-// standard has one, resolvedOptions and supportedLocalesOf. What is not: the
-// calendars other than the Gregorian, the time zones other than UTC and the
-// machine's own, DisplayNames, Segmenter, and a collation that follows the
-// Unicode algorithm rather than comparing what the letters decompose to.
+// Intl: ECMA-402's objects over go-intl's services, which carry CLDR's data
+// for every locale ICU has. The objects read their arguments and options in
+// the order ECMA-402 gives, with V8's errors, and hand the formatting to
+// go-intl.
 
 // initIntlBuiltins puts Intl on the global object, but does not build it.
 //
@@ -984,19 +976,19 @@ func temporalDateTimeKind(v Value) string {
 		return ""
 	}
 	switch v.Object().data.(type) {
-	case *temporalInstant:
+	case temporal.Instant:
 		return "instant"
-	case *temporalPlainDateTime:
+	case temporal.PlainDateTime:
 		return "date-time"
-	case *temporalPlainDate:
+	case temporal.PlainDate:
 		return "date"
-	case *temporalPlainTime:
+	case temporal.PlainTime:
 		return "time"
-	case *temporalPlainYearMonth:
+	case temporal.PlainYearMonth:
 		return "year-month"
-	case *temporalPlainMonthDay:
+	case temporal.PlainMonthDay:
 		return "month-day"
-	case *temporalZonedDateTime:
+	case temporal.ZonedDateTime:
 		return "zoned-date-time"
 	}
 	return ""

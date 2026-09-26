@@ -9,6 +9,7 @@ import (
 
 	intl "github.com/go-quickjs/go-intl"
 	"github.com/go-quickjs/go-intl/date"
+	"github.com/go-quickjs/go-intl/temporal"
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
@@ -34,7 +35,10 @@ type Runtime struct {
 	intlFallback *Symbol
 	// temporalDurationProto is retained because Instant difference operations
 	// create Duration results after the lazy Temporal namespace has been built.
-	temporalNamespace     *Object
+	temporalNamespace *Object
+	// temporalLoaded is Temporal's calendars and zones, read when a
+	// Temporal value first needs them.
+	temporalLoaded        *temporal.Data
 	temporalDurationProto *Object
 	// PlainDateTime conversions create PlainDate results through the retained
 	// intrinsic prototype rather than an observable constructor lookup.

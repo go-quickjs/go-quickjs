@@ -173,6 +173,26 @@ func TestTemporalIntlNodeQuirks(t *testing.T) {
 	}
 }
 
+// Node's temporal_rs predates two fixes ECMA-262 made to Temporal's
+// rounding, which WithNodeQuirks keeps (go-intl's RoundingWindow and
+// RepeatedMidnight); standards mode answers P1M and rounds the Casey
+// instant (TestTemporalZonedDateTimeFoundation, TestTemporalDurationRound).
+func TestTemporalNodeQuirks(t *testing.T) {
+	rt := quickjs.New(quickjs.WithNodeQuirks())
+	defer rt.Close()
+	tests := []struct{ source, want string }{
+		{`new Temporal.PlainDateTime(2012, 1, 1, 12).until(new Temporal.PlainDateTime(2012, 2, 5), {largestUnit: "month", smallestUnit: "week", roundingMode: "halfTrunc"}).toString()`, "P1M1W"},
+		{`new Temporal.PlainDate(2012, 1, 1).until(new Temporal.PlainDate(2012, 2, 1), {largestUnit: "months", smallestUnit: "weeks", roundingMode: "ceil"}).toString()`, "P1M1W"},
+		{`(() => { try { Temporal.ZonedDateTime.from("2010-03-04T23:10+08:00[Antarctica/Casey]").round({smallestUnit: "day", roundingMode: "floor"}); return "no error" } catch (e) { return e.name + ": " + e.message } })()`,
+			"RangeError: Temporal error: ZonedDateTime is outside the expected day bounds"},
+	}
+	for _, test := range tests {
+		if got := evalString(t, rt, test.source); got != test.want {
+			t.Errorf("%s\n got: %s\nwant: %s", test.source, got, test.want)
+		}
+	}
+}
+
 func TestTemporalZonedDateTimeFoundation(t *testing.T) {
 	rt := quickjs.New()
 	defer rt.Close()
@@ -787,4 +807,98 @@ func TestTemporalNowFoundation(t *testing.T) {
         Temporal.Now.zonedDateTimeISO("UTC") instanceof Temporal.ZonedDateTime,
         typeof Temporal.Now.timeZoneId()
     ].join(",")`, "[object Temporal.Now],true,true,true,true,true,string")
+}
+
+// The strings, epochs and days the engine's own Temporal core was tested
+// with before Temporal moved onto go-intl, now through the API.
+func TestTemporalStringsAndRange(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	check := func(src, want string) {
+		t.Helper()
+		if got := evalString(t, rt, src); got != want {
+			t.Errorf("%s\n got: %s\nwant: %s", src, got, want)
+		}
+	}
+	const thrown = `(f => { try { return "accepted " + f() } catch (e) { return e.name } })`
+
+	for _, ns := range []string{"0", "1", "999999999", "1000000000", "-1", "-1000000000", "-1000000001",
+		"8640000000000000000000", "-8640000000000000000000"} {
+		check(`new Temporal.Instant(`+ns+`n).epochNanoseconds.toString()`, ns)
+	}
+	check(`new Temporal.Instant(-1000000001n).toString()`, "1969-12-31T23:59:58.999999999Z")
+	for _, ns := range []string{"8640000000000000000001", "-8640000000000000000001"} {
+		check(thrown+`(() => new Temporal.Instant(`+ns+`n))`, "RangeError")
+	}
+
+	for _, c := range []struct{ date, days string }{
+		{"1970-01-01", "0"}, {"1969-12-31", "-1"}, {"2000-02-29", "11016"},
+		{"0000-01-01", "-719528"}, {"-000001-12-31", "-719529"},
+		{"-271821-04-20", "-100000000"}, {"+275760-09-13", "100000000"},
+	} {
+		check(`Temporal.PlainDate.from("`+c.date+`").toZonedDateTime("UTC").epochMilliseconds / 864e5`, c.days)
+		check(`Temporal.Instant.fromEpochMilliseconds(`+c.days+` * 864e5).toZonedDateTimeISO("UTC").toPlainDate().toString()`, c.date)
+	}
+
+	for _, c := range []struct{ in, want string }{
+		{"1970-01-01T00:00Z", "1970-01-01T00:00:00Z"},
+		{"19700101T00Z", "1970-01-01T00:00:00Z"},
+		{"1970-01-01T000000Z", "1970-01-01T00:00:00Z"},
+		{"+0019700101T000000Z", "1970-01-01T00:00:00Z"},
+		{"1970-01-01t00:00:00.000000001z", "1970-01-01T00:00:00.000000001Z"},
+		{"1969-12-31 23:59:59.999999999Z", "1969-12-31T23:59:59.999999999Z"},
+		{"2000-02-29T12:34:56.123400000+01:30", "2000-02-29T11:04:56.1234Z"},
+		{"2000-01-01T00:00:00-00:00:30.5", "2000-01-01T00:00:30.5Z"},
+		{"1970-01-01T00+010030", "1969-12-31T22:59:30Z"},
+		{"2016-12-31T23:59:60Z", "2016-12-31T23:59:59Z"},
+		{"+010000-01-01T00:00:00Z", "+010000-01-01T00:00:00Z"},
+		{"0000-01-01T00:00:00Z", "0000-01-01T00:00:00Z"},
+		{"2020-01-01T00:00:00+00:00[America/New_York][u-ca=iso8601]", "2020-01-01T00:00:00Z"},
+		{"1970-01-01T00:00Z[u-ca=iso8601][u-ca=discord]", "1970-01-01T00:00:00Z"},
+		{"1970-01-01T00:00Z[!-02:30]", "1970-01-01T00:00:00Z"},
+		{"1970-01-01T00:00Z[+12]", "1970-01-01T00:00:00Z"},
+		{"2020-01-01T00:00:00Z[x-extra=value]", "2020-01-01T00:00:00Z"},
+		{"-271821-04-20T00:00:00Z", "-271821-04-20T00:00:00Z"},
+		{"+275760-09-13T00:00:00Z", "+275760-09-13T00:00:00Z"},
+	} {
+		check(`Temporal.Instant.from("`+c.in+`").toString()`, c.want)
+	}
+	for _, in := range []string{
+		"-271821-04-19T23:59:59.999999999Z", "+275760-09-13T00:00:00.000000001Z",
+		"", " 1970-01-01T00:00:00Z", "1970-01-01T00:00:00Z ", "2020-01-01", "2020-01-01T00:00:00",
+		"2020-02-30T00:00:00Z", "2021-02-29T00:00:00Z", "2020-01-01T24:00:00Z", "2020-01-01T00:60:00Z",
+		"2020-01-01T00:00:00.1234567890Z", "2020-01-01T00:00:00+24:00", "-000000-01-01T00:00:00Z",
+		"2020-01-01T00:00:00Z[UTC][Europe/Paris]", "2020-01-01T00:00:00Z[U-CA=iso8601]",
+		"2020-01-01T00:00:00Z[u-ca=iso8601][!u-ca=gregory]", "2020-01-01T00:00:00Z[-07:00:01]",
+		"2020-01-01T00:00:00Z[!x-unknown=value]", "2020-01-01T00:00:00Z[", "2020-01-01T00:00:00Zjunk",
+	} {
+		check(thrown+`(() => Temporal.Instant.from("`+in+`"))`, "RangeError")
+	}
+
+	check(`Temporal.Instant.from("1969-12-31T23:59:59.999999999Z").add({nanoseconds: 2}).toString()`,
+		"1970-01-01T00:00:00.000000001Z")
+	check(`(() => { const a = Temporal.Instant.from("1969-12-31T23:59:59.999999999Z"), b = a.add({nanoseconds: 2});
+		return [Temporal.Instant.compare(a, b), Temporal.Instant.compare(b, a), Temporal.Instant.compare(a, a)].join() })()`,
+		"-1,1,0")
+	check(thrown+`(() => Temporal.Instant.from("+275760-09-13T00:00:00Z").add({nanoseconds: 1}))`, "RangeError")
+
+	for _, c := range []struct{ in, want string }{
+		{"uTc", "UTC"},
+		{"+0130", "+01:30"},
+		{"2021-08-19T17:30Z", "UTC"},
+		{"2021-08-19T17:30-07:00", "-07:00"},
+		{"2021-08-19T17:30-12:12[+01:46]", "+01:46"},
+		{"2021-08-19T17:30Z[America/New_York]", "America/New_York"},
+	} {
+		check(`new Temporal.Instant(0n).toZonedDateTimeISO("`+c.in+`").timeZoneId`, c.want)
+	}
+	for _, in := range []string{"", "2021-08-19T17:30", "2021-08-19T17:30-07:00:00", "-12:12:59.9",
+		"-000000-10-31T17:45Z", "2021-08-19T17:30Z[UTC][Europe/Paris]"} {
+		check(thrown+`(() => new Temporal.Instant(0n).toZonedDateTimeISO("`+in+`"))`, "RangeError")
+	}
+
+	check(`Temporal.PlainTime.from("T12:34:56.987654321[u-ca=unknown]").toString()`, "12:34:56.987654321")
+	for _, in := range []string{"2021-12", "12-14", "1214"} {
+		check(thrown+`(() => Temporal.PlainTime.from("`+in+`"))`, "RangeError")
+	}
 }

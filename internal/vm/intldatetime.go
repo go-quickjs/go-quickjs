@@ -6,6 +6,7 @@ import (
 	"time"
 
 	intl "github.com/go-quickjs/go-intl"
+	"github.com/go-quickjs/go-intl/temporal"
 )
 
 // Intl.DateTimeFormat, on go-intl, and the toLocaleString methods of Date and
@@ -190,18 +191,18 @@ func temporalKindOf(v Value) (intl.TemporalKind, string, bool) {
 		return 0, "", false
 	}
 	switch value := v.Object().data.(type) {
-	case *temporalPlainDate:
-		return intl.TemporalPlainDate, value.calendar, value != nil
-	case *temporalPlainDateTime:
-		return intl.TemporalPlainDateTime, value.calendar, value != nil
-	case *temporalPlainTime:
-		return intl.TemporalPlainTime, "", value != nil
-	case *temporalPlainYearMonth:
-		return intl.TemporalPlainYearMonth, value.calendar, value != nil
-	case *temporalPlainMonthDay:
-		return intl.TemporalPlainMonthDay, value.calendar, value != nil
-	case *temporalInstant:
-		return intl.TemporalInstant, "", value != nil
+	case temporal.PlainDate:
+		return intl.TemporalPlainDate, value.Calendar().ID(), true
+	case temporal.PlainDateTime:
+		return intl.TemporalPlainDateTime, value.Calendar().ID(), true
+	case temporal.PlainTime:
+		return intl.TemporalPlainTime, "", true
+	case temporal.PlainYearMonth:
+		return intl.TemporalPlainYearMonth, value.Calendar().ID(), true
+	case temporal.PlainMonthDay:
+		return intl.TemporalPlainMonthDay, value.Calendar().ID(), true
+	case temporal.Instant:
+		return intl.TemporalInstant, "", true
 	}
 	return 0, "", false
 }
@@ -211,7 +212,7 @@ func temporalKindOf(v Value) (intl.TemporalKind, string, bool) {
 // Temporal value, whose calendar must be the formatter's.
 func (r *Runtime) forValue(d *dateTimeFormat, v Value) (*intl.DateTimeFormat, time.Time, error) {
 	if v.IsObject() {
-		if _, ok := v.Object().data.(*temporalZonedDateTime); ok {
+		if _, ok := v.Object().data.(temporal.ZonedDateTime); ok {
 			return nil, time.Time{}, r.throwTypeError("Invalid argument for Temporal %s", r.v8Describe(v))
 		}
 	}
@@ -251,25 +252,38 @@ func (d *dateTimeFormat) forKind(kind intl.TemporalKind) (*intl.DateTimeFormat, 
 // temporalInstant is the instant a Temporal value is written as: an
 // instant's own, and the one go-intl makes of a plain value's fields.
 func (d *dateTimeFormat) temporalInstant(v Value) time.Time {
-	var at temporalISODateTime
+	var at temporal.ISODateTime
 	switch value := v.Object().data.(type) {
-	case *temporalInstant:
-		return time.Unix(value.epochSeconds, int64(value.nanosecond))
-	case *temporalPlainDate:
-		at = temporalISODateTime{year: value.year, month: value.month, day: value.day}
-	case *temporalPlainDateTime:
-		at = value.temporalISODateTime
-	case *temporalPlainTime:
-		at = temporalISODateTime{year: 1970, month: 1, day: 1, hour: value.hour, minute: value.minute,
-			second: value.second, millisecond: value.millisecond, microsecond: value.microsecond,
-			nanosecond: value.nanosecond}
-	case *temporalPlainYearMonth:
-		at = temporalISODateTime{year: value.year, month: value.month, day: value.day}
-	case *temporalPlainMonthDay:
-		at = temporalISODateTime{year: value.year, month: value.month, day: value.day}
+	case temporal.Instant:
+		return temporalTime(value)
+	case temporal.PlainDate:
+		at.Date = value.ISO()
+	case temporal.PlainDateTime:
+		at = value.ISO()
+	case temporal.PlainTime:
+		at = temporal.ISODateTime{Date: temporal.ISODate{Year: 1970, Month: 1, Day: 1}, Time: value.ISO()}
+	case temporal.PlainYearMonth:
+		at.Date = value.ISO()
+	case temporal.PlainMonthDay:
+		at.Date = value.ISO()
 	}
-	return d.f.PlainInstant(at.year, time.Month(at.month), at.day, at.hour, at.minute, at.second,
-		(at.millisecond*1000+at.microsecond)*1000+at.nanosecond)
+	t := at.Time
+	return d.f.PlainInstant(at.Date.Year, time.Month(at.Date.Month), at.Date.Day, t.Hour, t.Minute, t.Second,
+		(t.Millisecond*1000+t.Microsecond)*1000+t.Nanosecond)
+}
+
+// temporalTime is an Instant as a Go time, to the nanosecond.
+func temporalTime(i temporal.Instant) time.Time {
+	ms := i.EpochMilliseconds()
+	hi, lo := i.EpochNanoseconds()
+	// The nanoseconds within the millisecond, from the low word, which
+	// holds them whatever the high one.
+	_ = hi
+	sub := int64(lo % 1_000_000)
+	if sub < 0 {
+		sub += 1_000_000
+	}
+	return time.UnixMilli(ms).Add(time.Duration(sub))
 }
 
 // dateTimeValue is a Date's time value, or now where there is none, as the
@@ -315,20 +329,19 @@ func (r *Runtime) temporalToLocaleString(v Value, args []Value, required, defaul
 
 // zonedToLocaleString is a ZonedDateTime's toLocaleString: its instant,
 // written in its own zone, in a calendar that is its own or ISO's.
-func (r *Runtime) zonedToLocaleString(zoned *temporalZonedDateTime, args []Value) (Value, error) {
-	d, err := r.newDateTimeFormat(args, intl.ComponentsAny, intl.ComponentsAll, zoned.timeZone)
+func (r *Runtime) zonedToLocaleString(zoned temporal.ZonedDateTime, args []Value) (Value, error) {
+	d, err := r.newDateTimeFormat(args, intl.ComponentsAny, intl.ComponentsAll, zoned.TimeZone().Identifier())
 	if err != nil {
 		return Undefined, err
 	}
-	if !d.f.CalendarMatches(intl.TemporalPlainDateTime, zoned.calendar) {
+	if !d.f.CalendarMatches(intl.TemporalPlainDateTime, zoned.Calendar().ID()) {
 		return Undefined, r.throwRangeError("Mismatched calendars.")
 	}
 	f, err := d.forKind(intl.TemporalInstant)
 	if err != nil {
 		return Undefined, r.intlInternal()
 	}
-	t := time.Unix(zoned.instant.epochSeconds, int64(zoned.instant.nanosecond))
-	return Str(NewString(f.Format(t))), nil
+	return Str(NewString(f.Format(temporalTime(zoned.Instant())))), nil
 }
 
 // dateTimeRange writes one value against another, as FormatDateTimeRange

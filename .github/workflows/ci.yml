@@ -77,5 +77,5 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Test shared ICU data
-        run: go test -race -count=1 ./internal/icu
+      - name: Test runtimes sharing go-intl's data
+        run: go test -race -count=1 -run TestIntlConcurrentRuntimes .
