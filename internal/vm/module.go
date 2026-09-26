@@ -52,8 +52,10 @@ type Module struct {
 	// global otherwise -- which is the opposite of what a namespace needs, and
 	// why the two are different objects.
 	env *Object
-	// ns is the module namespace object, built on first use.
-	ns *Object
+	// ns is the module namespace object, built on first use, and deferredNS
+	// the one `import defer` binds.
+	ns         *Object
+	deferredNS *Object
 
 	// imports records what the module needs, resolved during linking.
 	imports []moduleImport
@@ -87,6 +89,11 @@ type Module struct {
 	// err holds the failure of a module that threw while evaluating, which is
 	// re-raised for every later importer rather than re-running the body.
 	err error
+	// evalFailed marks a failure of evaluation rather than of linking: the
+	// module linked, and a later importer links against it again without
+	// error -- only evaluating it, or using a deferred namespace of it,
+	// raises err.
+	evalFailed bool
 	// native marks a module the host supplied: it has no body to run, and it
 	// answers to its own name rather than to whatever a loader would resolve
 	// that name to.
@@ -202,6 +209,9 @@ func (r *Runtime) Link(m *Module) error {
 		// Part of a cycle; the module that started the cycle finishes the job.
 		return nil
 	case ModuleFailed:
+		if m.evalFailed {
+			return nil
+		}
 		return m.err
 	}
 	m.state = ModuleLinking
@@ -269,6 +279,8 @@ func (r *Runtime) Link(m *Module) error {
 // loadDependency resolves and compiles a module a request names: a specifier,
 // and the type its import attributes ask for, if any.
 func (r *Runtime) loadDependency(request, referrer string) (*Module, error) {
+	// A deferred module is the same module, loaded the same way.
+	request, _ = bytecode.SplitDeferRequest(request)
 	specifier, typ := bytecode.SplitModuleRequest(request)
 	if typ != "" {
 		return r.loadTypedModule(specifier, typ, referrer)
@@ -311,7 +323,11 @@ func (r *Runtime) bindImport(m *Module, imp moduleImport, src *Module) error {
 		return nil
 	}
 	if imp.namespace {
-		ns, err := r.namespaceObject(src)
+		namespace := r.namespaceObject
+		if _, deferred := bytecode.SplitDeferRequest(imp.specifier); deferred {
+			namespace = r.deferredNamespaceObject
+		}
+		ns, err := namespace(src)
 		if err != nil {
 			return err
 		}
@@ -331,10 +347,14 @@ func (r *Runtime) bindImport(m *Module, imp moduleImport, src *Module) error {
 
 // bindResolved installs the binding an export resolved to.
 func (r *Runtime) bindResolved(env *Object, as string, b *exportBinding) error {
-	if b.local == nsBindingName {
+	if b.local == nsBindingName || b.local == deferredNSBindingName {
 		// The export is another module's namespace rather than one of its
 		// bindings.
-		ns, err := r.namespaceObject(b.module)
+		namespace := r.namespaceObject
+		if b.local == deferredNSBindingName {
+			namespace = r.deferredNamespaceObject
+		}
+		ns, err := namespace(b.module)
 		if err != nil {
 			return err
 		}
@@ -442,7 +462,7 @@ func (r *Runtime) EvaluateModule(m *Module) (Value, error) {
 		// Everything still on the stack failed with it: a module that cannot
 		// finish leaves nothing behind that could be used.
 		for _, mod := range stack {
-			mod.state, mod.err = ModuleFailed, evalErr
+			mod.state, mod.err, mod.evalFailed = ModuleFailed, evalErr, true
 			mod.asyncEval = false
 		}
 		if _, err := r.call(cap.reject, Undefined, []Value{thrownValue(evalErr)}); err != nil {
@@ -483,11 +503,9 @@ func (r *Runtime) innerModuleEvaluation(m *Module, stack *[]*Module, index int) 
 	index++
 	*stack = append(*stack, m)
 
-	for _, spec := range m.requests {
-		dep, ok := r.modules[r.resolvedNameOf(spec, m.Specifier)]
-		if !ok {
-			continue
-		}
+	// A deferred dependency is not run here, only the parts of its graph
+	// that await at the top level.
+	for _, dep := range r.evaluationList(m) {
 		var err error
 		index, err = r.innerModuleEvaluation(dep, stack, index)
 		if err != nil {
@@ -629,7 +647,7 @@ func (r *Runtime) asyncModuleRejected(m *Module, reason Value) {
 		return
 	}
 	m.asyncEval = false
-	m.state, m.err = ModuleFailed, r.throw(reason)
+	m.state, m.err, m.evalFailed = ModuleFailed, r.throw(reason), true
 	// The failure reaches this module's own waiter before the modules waiting
 	// on it, so a graph settles from the leaf that failed outwards.
 	if m.topLevel != nil {
@@ -692,6 +710,7 @@ func (r *Runtime) ModuleResult(promise Value) error {
 // resolvedNameOf asks the loader what a request resolves to, so that the
 // dependency can be found in the module table.
 func (r *Runtime) resolvedNameOf(request, referrer string) string {
+	request, _ = bytecode.SplitDeferRequest(request)
 	specifier, typ := bytecode.SplitModuleRequest(request)
 	if typ != "" {
 		return bytecode.ModuleRequest(r.resolvedNameOf(specifier, referrer), typ)

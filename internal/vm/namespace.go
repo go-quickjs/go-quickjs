@@ -22,38 +22,67 @@ func (r *Runtime) namespaceObject(m *Module) (*Object, error) {
 	if m.ns != nil {
 		return m.ns, nil
 	}
+	return r.buildNamespace(m, false)
+}
+
+// buildNamespace builds a module's namespace, or with deferred its deferred
+// namespace: the same exports, which using runs the module first.
+func (r *Runtime) buildNamespace(m *Module, deferred bool) (*Object, error) {
 	// The object is recorded before it is filled in, because a module may
 	// export its own namespace -- directly or round a cycle -- and building it
 	// twice would never finish.
 	ns := newObject(nil, ClassModuleNamespace)
 	ns.data = m
-	m.ns = ns
+	tag := "Module"
+	if deferred {
+		ns.data = &deferredModule{m}
+		tag = "Deferred Module"
+		m.deferredNS = ns
+	} else {
+		m.ns = ns
+	}
+	fail := func(err error) (*Object, error) {
+		if deferred {
+			m.deferredNS = nil
+		} else {
+			m.ns = nil
+		}
+		return nil, err
+	}
 
 	// The names are resolved through the whole graph, since a star re-export
 	// contributes what another module exports, and one the graph cannot decide
 	// is left out rather than reported.
 	names, err := r.namespaceNames(m)
 	if err != nil {
-		m.ns = nil
-		return nil, err
+		return fail(err)
 	}
 	for _, exported := range names {
 		b, err := r.resolveExport(m, exported, nil)
 		if err != nil {
-			m.ns = nil
-			return nil, err
+			return fail(err)
 		}
 		if b == nil || b.ambiguous {
 			continue
 		}
+		// A deferred namespace answers "then" the way it answers a symbol:
+		// as an ordinary object with nothing there, so that promise
+		// machinery looking for a then method neither runs the module nor
+		// finds one.
+		if deferred && exported == "then" {
+			continue
+		}
 		src := b.module
-		if b.local == nsBindingName {
+		if b.local == nsBindingName || b.local == deferredNSBindingName {
 			// The export is another module's namespace rather than one of its
 			// bindings, so there is nothing to read through.
-			inner, err := r.namespaceObject(src)
+			namespace := r.namespaceObject
+			if b.local == deferredNSBindingName {
+				namespace = r.deferredNamespaceObject
+			}
+			inner, err := namespace(src)
 			if err != nil {
-				m.ns = nil
-				return nil, err
+				return fail(err)
 			}
 			r.defineAccessor(ns, r.atoms.intern(exported),
 				r.newNativeFunc("get "+exported, 0,
@@ -76,7 +105,7 @@ func (r *Runtime) namespaceObject(m *Module) (*Object, error) {
 	// The tag is the one property that is not an export. It is an ordinary
 	// data property rather than a live binding, fixed in every respect.
 	ns.setOwnRaw(r.atoms.internSymbol(r.wellKnown.toStringTag),
-		Str(NewString("Module")), 0)
+		Str(NewString(tag)), 0)
 
 	ns.flags &^= objExtensible
 	return ns, nil

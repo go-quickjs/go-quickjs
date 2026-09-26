@@ -70,7 +70,6 @@ var unsupportedFeatures = map[string]string{
 	"Atomics.waitAsync":      "no asynchronous waiting",
 	"decorators":             "decorators are not implemented",
 	"source-phase-imports":   "no source phase imports",
-	"import-defer":           "no deferred imports",
 	"tail-call-optimization": "no tail calls",
 	"ShadowRealm":            "no shadow realms",
 	"legacy-regexp":          "no legacy RegExp statics",

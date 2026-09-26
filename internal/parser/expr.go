@@ -736,48 +736,61 @@ func (p *parser) parseSuper() ast.Expr {
 }
 
 // peekIsDotMeta reports whether the `import` keyword at the cursor is the start
-// of import.meta rather than of an import call.
+// of import.meta rather than of an import call -- which import.defer is too.
 func (p *parser) peekIsDotMeta() bool {
 	m := p.mark()
 	defer p.reset(m)
 	p.next()
-	return p.isPunct(".")
+	if !p.isPunct(".") {
+		return false
+	}
+	p.next()
+	return p.isContextual("meta")
 }
 
-// parseImportExpr parses `import(...)` and `import.meta`.
+// parseImportExpr parses `import(...)`, `import.defer(...)` and `import.meta`.
 func (p *parser) parseImportExpr() ast.Expr {
 	start := p.tok.Pos
 	p.next()
+	callee := "import"
 	if p.isPunct(".") {
 		p.next()
-		if !p.isContextual("meta") {
-			p.errorf("expected \"import.meta\"")
+		if p.isContextual("defer") {
+			// import.defer loads the module and hands back a namespace that
+			// evaluates it when first used. It is a call like import(), and
+			// named so that nothing a script writes can reach it.
+			p.next()
+			callee = "import.defer"
+		} else {
+			if !p.isContextual("meta") {
+				p.errorf("expected \"import.meta\"")
+			}
+			p.next()
+			if !p.module {
+				p.errorf("\"import.meta\" is only valid inside a module")
+			}
+			return &ast.ImportMeta{Start: start}
 		}
-		p.next()
-		if !p.module {
-			p.errorf("\"import.meta\" is only valid inside a module")
-		}
-		return &ast.ImportMeta{Start: start}
 	}
 	if !p.isPunct("(") {
-		p.errorf("expected \"(\" after \"import\"")
+		p.errorf("expected \"(\" after %q", callee)
 	}
 	args := p.parseArguments()
 	// import() takes a specifier and, optionally, an options object. It is not
 	// a function, so the arity is fixed by the grammar rather than ignored.
 	switch {
 	case len(args) == 0:
-		p.errorf("\"import\" needs a specifier")
+		p.errorf("%q needs a specifier", callee)
 	case len(args) > 2:
-		p.errorf("\"import\" takes at most a specifier and an options object")
+		p.errorf("%q takes at most a specifier and an options object", callee)
 	}
 	for _, a := range args {
 		if _, spread := a.(*ast.Spread); spread {
-			p.errorf("\"import\" does not take a spread argument")
+			p.errorf("%q does not take a spread argument", callee)
 		}
 	}
 	return &ast.Call{
-		Callee: &ast.Ident{Name: "import", Start: start},
+		Callee: &ast.Ident{Name: callee, Start: start},
 		Args:   args,
 		Start:  start,
 	}

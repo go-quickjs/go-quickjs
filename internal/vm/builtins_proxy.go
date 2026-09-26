@@ -563,6 +563,11 @@ func (r *Runtime) proxyDefineProperty(p *proxyData, key Atom, desc Value) (bool,
 func (r *Runtime) ownPropDesc(o *Object, key Atom) (*propDesc, error) {
 	pp := proxyOf(o)
 	if pp == nil {
+		if o.class == ClassModuleNamespace {
+			if err := r.touchDeferred(o, key); err != nil {
+				return nil, err
+			}
+		}
 		return r.currentDescriptor(o, key)
 	}
 	v, err := r.proxyGetOwnPropertyDescriptor(pp, key)
@@ -811,8 +816,10 @@ func (r *Runtime) initReflectBuiltins() {
 				return Undefined, err
 			}
 		} else {
-			rt.materializeFunctionProto(target.Object())
-			keys = target.Object().ownKeys(true, rt.atoms)
+			var err error
+			if keys, err = rt.ownKeysOf(target.Object(), true); err != nil {
+				return Undefined, err
+			}
 		}
 		out := make([]Value, len(keys))
 		for i, k := range keys {
@@ -960,6 +967,11 @@ func (r *Runtime) initReflectBuiltins() {
 func (r *Runtime) ownKeysOf(o *Object, includeSymbols bool) ([]Atom, error) {
 	p := proxyOf(o)
 	if p == nil {
+		if o.class == ClassModuleNamespace {
+			if err := r.touchDeferredKeys(o); err != nil {
+				return nil, err
+			}
+		}
 		r.materializeFunctionProto(o)
 		return o.ownKeys(includeSymbols, r.atoms), nil
 	}
@@ -994,6 +1006,9 @@ func (r *Runtime) hasOwnPropOf(o *Object, key Atom) (bool, error) {
 	p := proxyOf(o)
 	if p == nil {
 		if o.class == ClassModuleNamespace {
+			if err := r.touchDeferred(o, key); err != nil {
+				return false, err
+			}
 			// Asking whether a namespace has an export reads it, since the
 			// answer comes from the module's environment rather than from a
 			// property table.

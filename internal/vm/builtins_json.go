@@ -554,8 +554,10 @@ func (e *jsonEncoder) encode(buf []byte, v Value, prefix string) ([]byte, bool, 
 				return buf, false, err
 			}
 		} else {
-			e.rt.materializeFunctionProto(o)
-			own = o.ownKeys(false, e.rt.atoms)
+			var err error
+			if own, err = e.rt.ownKeysOf(o, false); err != nil {
+				return buf, false, err
+			}
 		}
 		for _, k := range own {
 			if e.rt.atoms.symbol(k) != nil {

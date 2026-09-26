@@ -103,7 +103,8 @@ func (c *compiler) collectModuleShape(body []ast.Stmt) {
 	for _, s := range body {
 		switch n := s.(type) {
 		case *ast.ImportDecl:
-			c.module.Requests = append(c.module.Requests, bytecode.ModuleRequest(n.Source, n.Type))
+			request := importRequest(n)
+			c.module.Requests = append(c.module.Requests, request)
 			for _, spec := range n.Specifiers {
 				if spec.Local == "arguments" || spec.Local == "eval" {
 					// Neither may be bound, and an import binding is a binding
@@ -111,7 +112,7 @@ func (c *compiler) collectModuleShape(body []ast.Stmt) {
 					c.errorf(n.Start, "cannot import as %q", spec.Local)
 				}
 				c.module.Imports = append(c.module.Imports, ImportRequest{
-					Specifier: bytecode.ModuleRequest(n.Source, n.Type),
+					Specifier: request,
 					Local:     spec.Local,
 					Imported:  spec.Imported,
 					Namespace: spec.Kind == ast.ImportNamespace,
@@ -120,7 +121,7 @@ func (c *compiler) collectModuleShape(body []ast.Stmt) {
 			}
 			if len(n.Specifiers) == 0 {
 				// A side-effect import still has to be loaded and evaluated.
-				c.module.Imports = append(c.module.Imports, ImportRequest{Specifier: bytecode.ModuleRequest(n.Source, n.Type)})
+				c.module.Imports = append(c.module.Imports, ImportRequest{Specifier: request})
 			}
 
 		case *ast.ExportDecl:
@@ -436,7 +437,7 @@ func (c *compiler) checkModuleDeclarations(body []ast.Stmt) {
 	for _, s := range body {
 		switch n := s.(type) {
 		case *ast.ImportDecl:
-			c.module.Requests = append(c.module.Requests, bytecode.ModuleRequest(n.Source, n.Type))
+			c.module.Requests = append(c.module.Requests, importRequest(n))
 			for _, spec := range n.Specifiers {
 				declare(spec.Local, true, n.Start)
 			}
@@ -494,4 +495,14 @@ func (c *compiler) checkModuleDeclarations(body []ast.Stmt) {
 			}
 		}
 	}
+}
+
+// importRequest names the module an import declaration asks for, with the type
+// its attributes ask for and, for `import defer`, the mark that defers it.
+func importRequest(n *ast.ImportDecl) string {
+	request := bytecode.ModuleRequest(n.Source, n.Type)
+	if n.Defer {
+		request = bytecode.DeferRequest(request)
+	}
+	return request
 }

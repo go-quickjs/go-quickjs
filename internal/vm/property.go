@@ -20,6 +20,11 @@ func (r *Runtime) getProp(obj *Object, key Atom, receiver Value) (Value, error) 
 		if p := proxyOf(o); p != nil {
 			return r.proxyGet(p, key, receiver)
 		}
+		if o.class == ClassModuleNamespace {
+			if err := r.touchDeferred(o, key); err != nil {
+				return Undefined, err
+			}
+		}
 		// Dense elements come first, since an array index is the hottest key.
 		if key.IsIndex() {
 			if v, ok := o.getElem(key.Index()); ok {
@@ -637,6 +642,11 @@ func (r *Runtime) hasPropErr(o *Object, key Atom) (bool, error) {
 		if p := proxyOf(o); p != nil {
 			return r.proxyHas(p, key)
 		}
+		if o.class == ClassModuleNamespace {
+			if err := r.touchDeferred(o, key); err != nil {
+				return false, err
+			}
+		}
 		if r.hasOwnProp(o, key) {
 			return true, nil
 		}
@@ -690,6 +700,11 @@ func (r *Runtime) hasOwnProp(o *Object, key Atom) bool {
 func (r *Runtime) deleteProp(o *Object, key Atom, strict bool) (bool, error) {
 	if p := proxyOf(o); p != nil {
 		return r.proxyDelete(p, key, strict)
+	}
+	if o.class == ClassModuleNamespace {
+		if err := r.touchDeferred(o, key); err != nil {
+			return false, err
+		}
 	}
 	if o.class == ClassTypedArray {
 		// An element cannot be removed: the buffer has a slot for it whatever

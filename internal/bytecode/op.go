@@ -677,3 +677,16 @@ func SplitModuleRequest(request string) (specifier, typ string) {
 	}
 	return request, ""
 }
+
+// DeferRequest marks a module request as `import defer`'s: the module is
+// loaded and linked with the rest, but not evaluated until its namespace is
+// first used. It is the same module as one requested without the mark.
+func DeferRequest(request string) string { return "\x01" + request }
+
+// SplitDeferRequest takes the mark off a request, reporting whether it had it.
+func SplitDeferRequest(request string) (string, bool) {
+	if len(request) > 0 && request[0] == 1 {
+		return request[1:], true
+	}
+	return request, false
+}

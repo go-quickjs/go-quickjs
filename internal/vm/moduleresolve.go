@@ -3,6 +3,8 @@ package vm
 import (
 	"sort"
 	"strings"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
 // Resolving what a module exports.
@@ -35,8 +37,12 @@ const reExportPrefix = "*re*"
 // binding, so two modules re-exporting the same one under the same name agree.
 const nsExportPrefix = "*ns*"
 
-// nsBindingName stands for a namespace in place of a binding name.
-const nsBindingName = "*namespace*"
+// nsBindingName stands for a namespace in place of a binding name, and
+// deferredNSBindingName for the deferred namespace `import defer` binds.
+const (
+	nsBindingName         = "*namespace*"
+	deferredNSBindingName = "*deferred-namespace*"
+)
 
 // indirectSource picks apart the hidden name a re-export is stored under,
 // reporting the module it names and the export it asks that module for.
@@ -105,7 +111,11 @@ func (r *Runtime) resolveExport(m *Module, name string,
 					return nil, err
 				}
 				if imp.namespace {
-					return &exportBinding{module: src, local: nsBindingName}, nil
+					local := nsBindingName
+					if _, deferred := bytecode.SplitDeferRequest(imp.specifier); deferred {
+						local = deferredNSBindingName
+					}
+					return &exportBinding{module: src, local: local}, nil
 				}
 				want := imp.imported
 				if imp.isDefault {

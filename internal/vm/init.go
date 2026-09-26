@@ -385,4 +385,5 @@ func (r *Runtime) initGlobals() {
 	r.initExtraBuiltins()
 	r.initAnnexB()
 	r.initDynamicImport()
+	r.initDeferredImport()
 }

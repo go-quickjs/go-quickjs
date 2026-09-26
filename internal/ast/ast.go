@@ -805,7 +805,10 @@ type ImportDecl struct {
 	Specifiers []ImportSpecifier
 	Source     string
 	// Type is what `with { type: ... }` asks the module to be, if anything.
-	Type  string
+	Type string
+	// Defer marks `import defer * as ns`, whose module is not evaluated until
+	// the namespace is used.
+	Defer bool
 	Start int
 }
 

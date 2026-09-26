@@ -34,8 +34,16 @@ func (p *parser) parseImportDecl() ast.Stmt {
 		return decl
 	}
 
+	// `import defer * as ns` defers the module's evaluation. Only a
+	// namespace can be deferred: `import defer from "m"` is a default import
+	// of a binding named defer.
+	if p.isContextual("defer") && p.nextIsPunct("*") {
+		p.next()
+		decl.Defer = true
+	}
+
 	// A default import comes first when present.
-	if p.tok.Kind == lexer.Ident {
+	if !decl.Defer && p.tok.Kind == lexer.Ident {
 		decl.Specifiers = append(decl.Specifiers, ast.ImportSpecifier{
 			Kind:  ast.ImportDefault,
 			Local: p.tok.Value,

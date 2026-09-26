@@ -482,6 +482,9 @@ func (r *Runtime) isEnumerable(o *Object, key Atom) (bool, error) {
 		return v.Truthy(), err
 	}
 	if o.class == ClassModuleNamespace {
+		if err := r.touchDeferred(o, key); err != nil {
+			return false, err
+		}
 		d, err := r.namespaceDescriptor(o, key)
 		if err != nil || d != nil {
 			return d != nil && d.enumerable, err

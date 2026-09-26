@@ -143,6 +143,11 @@ func (r *Runtime) defineProperty(o *Object, key Atom, d *propDesc) (bool, error)
 	}
 	// A module namespace's exports are fixed. Its symbol-keyed properties are
 	// ordinary, which is why only the string keys are diverted.
+	if o.class == ClassModuleNamespace {
+		if err := r.touchDeferred(o, key); err != nil {
+			return false, err
+		}
+	}
 	if o.class == ClassModuleNamespace && !r.atoms.IsSymbol(key) {
 		return r.namespaceDefine(o, key, d)
 	}
@@ -245,6 +250,9 @@ func (r *Runtime) validateRedefine(cur *propDesc, d *propDesc) bool {
 // is none.
 func (r *Runtime) currentDescriptor(o *Object, key Atom) (*propDesc, error) {
 	if o.class == ClassModuleNamespace {
+		if err := r.touchDeferred(o, key); err != nil {
+			return nil, err
+		}
 		// An export is stored as an accessor, because it is live, but it is a
 		// data property: what a module exports is a value, not a way of
 		// computing one. Anything else there is described in the ordinary way.
