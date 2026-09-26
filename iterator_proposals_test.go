@@ -115,3 +115,27 @@ func TestIteratorHelperReturnWhileSuspended(t *testing.T) {
 		  h = it.map(x => x); h.next(); h.return(); seen`, "TypeError"},
 	})
 }
+
+func TestIteratorConcat(t *testing.T) {
+	evalCases(t, []struct{ src, want string }{
+		{`Iterator.concat([1, 2], new Set([3]), "".split("")).toArray().join()`, "1,2,3"},
+		{`Iterator.concat().next().done`, "true"},
+		{`Iterator.concat.length`, "0"},
+		{`Object.prototype.toString.call(Iterator.concat())`, "[object Iterator Helper]"},
+		// Every argument is checked and its method read up front, but each is
+		// opened only when its turn comes.
+		{`var log = [];
+		  function it(name) { return { get [Symbol.iterator]() { log.push("get " + name);
+		    return () => { log.push("open " + name); return [name][Symbol.iterator]() } } } }
+		  var c = Iterator.concat(it("a"), it("b")); log.push("made"); c.next(); c.next(); log.join()`,
+			"get a,get b,made,open a,open b"},
+		{`try { Iterator.concat([1], "ab") } catch (e) { e.constructor.name }`, "TypeError"},
+		{`try { Iterator.concat({}) } catch (e) { e.constructor.name }`, "TypeError"},
+		// A return is forwarded to the iterable being read, and to nothing
+		// before concat starts.
+		{`var log = []; var src = { [Symbol.iterator]() { return { next() { return {value: 1, done: false} },
+		    return() { log.push("return"); return {} } } } };
+		  var c = Iterator.concat(src); c.return(); log.push("|");
+		  c = Iterator.concat(src); c.next(); c.return(); log.join("")`, "|return"},
+	})
+}

@@ -29,6 +29,7 @@ const (
 	helperFlatMap
 	helperChunks
 	helperWindows
+	helperConcat
 )
 
 // iterHelperData is a lazy helper's state.
@@ -57,6 +58,10 @@ type iterHelperData struct {
 	buf     []Value
 	partial bool
 
+	// concat is Iterator.concat's list of iterables not yet opened. The one
+	// being drawn from is inner.
+	concat []concatItem
+
 	// started records that next has run, which decides whether return finds
 	// the helper suspended before its first step or in the middle of one.
 	started bool
@@ -69,6 +74,12 @@ type iterHelperData struct {
 	// once per element. A callee may not keep it, any more than it may keep
 	// the interpreter's own stack, and running says nothing else is using it.
 	argv [2]Value
+}
+
+// concatItem is one of Iterator.concat's arguments with the iterator method it
+// had when concat was called, which is the one called when its turn comes.
+type concatItem struct {
+	method, iterable Value
 }
 
 // wrapData is Iterator.from's wrapper around a foreign iterator.
@@ -133,6 +144,28 @@ func (r *Runtime) initIteratorHelpers() {
 
 	r.defMethod(ctor, "from", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		return rt.iteratorFrom(arg(args, 0))
+	})
+
+	// Iterator.concat checks every argument and reads its iterator method
+	// up front, and opens each only when the one before it is exhausted.
+	r.defMethod(ctor, "concat", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		items := make([]concatItem, 0, len(args))
+		for _, item := range args {
+			if !item.IsObject() {
+				return Undefined, rt.throwTypeError("Iterator.concat requires iterable objects")
+			}
+			method, err := rt.getValueProp(item, rt.atoms.internSymbol(rt.wellKnown.iterator))
+			if err != nil {
+				return Undefined, err
+			}
+			if !isCallable(method) {
+				return Undefined, rt.throwTypeError("%s is not iterable", rt.describe(item))
+			}
+			items = append(items, concatItem{method: method, iterable: item})
+		}
+		o := newObject(rt.helperProto, ClassIteratorHelper)
+		o.data = &iterHelperData{kind: helperConcat, concat: items}
+		return Obj(o), nil
 	})
 
 	lazy := func(name string, length int, kind helperKind) {
@@ -283,16 +316,7 @@ func (r *Runtime) initHelperPrototype() {
 				h.running = true
 				defer func() { h.running = false }()
 			}
-			// Abandoning a helper abandons everything beneath it, so a
-			// generator upstream gets to run its finally blocks. An error from
-			// doing so reaches the caller, because nothing else is in flight
-			// to take precedence over it.
-			if h.hasInner {
-				if err := rt.closeIteratorErr(h.inner); err != nil {
-					return Undefined, err
-				}
-			}
-			if err := rt.closeIteratorErr(h.iter); err != nil {
+			if err := rt.closeHelper(h); err != nil {
 				return Undefined, err
 			}
 		}
@@ -301,6 +325,29 @@ func (r *Runtime) initHelperPrototype() {
 
 	r.defProtoAccessor(p, r.atoms.internSymbol(r.wellKnown.toStringTag),
 		Str(NewString("Iterator Helper")))
+}
+
+// closeHelper closes everything beneath a helper that is being returned from,
+// so that a generator upstream gets to run its finally blocks. An error from
+// doing so reaches the caller, because nothing else is in flight to take
+// precedence over it.
+func (r *Runtime) closeHelper(h *iterHelperData) error {
+	if h.kind == helperConcat {
+		// concat holds one iterable open at a time, and none before it starts
+		// or between two of them.
+		h.concat = nil
+		if !h.hasInner {
+			return nil
+		}
+		h.hasInner = false
+		return r.closeIteratorErr(h.inner)
+	}
+	if h.hasInner {
+		if err := r.closeIteratorErr(h.inner); err != nil {
+			return err
+		}
+	}
+	return r.closeIteratorErr(h.iter)
 }
 
 func (r *Runtime) helperOf(this Value, name string) (*iterHelperData, error) {
@@ -413,6 +460,42 @@ func (r *Runtime) advanceHelper(h *iterHelperData) (Value, bool, error) {
 				return Undefined, false, r.abandon(h, err)
 			}
 			h.inner, h.innerNext, h.hasInner = inner, innerNext, true
+		}
+
+	case helperConcat:
+		for {
+			if !h.hasInner {
+				if len(h.concat) == 0 {
+					h.done = true
+					return Undefined, false, nil
+				}
+				item := h.concat[0]
+				h.concat = h.concat[1:]
+				iter, err := r.call(item.method, item.iterable, nil)
+				if err == nil && !iter.IsObject() {
+					err = r.throwTypeError("Symbol.iterator must return an object")
+				}
+				var next Value
+				if err == nil {
+					iter, next, err = r.getIteratorDirect(iter)
+				}
+				if err != nil {
+					h.done, h.concat = true, nil
+					return Undefined, false, err
+				}
+				h.inner, h.innerNext, h.hasInner = iter, next, true
+			}
+			// The value is taken out of the result rather than the result
+			// passed along, so what next returns is always a fresh object.
+			v, ok, err := r.stepIterator(h.inner, h.innerNext)
+			if err != nil {
+				h.done, h.concat, h.hasInner = true, nil, false
+				return Undefined, false, err
+			}
+			if ok {
+				return v, true, nil
+			}
+			h.hasInner = false
 		}
 
 	case helperChunks:
