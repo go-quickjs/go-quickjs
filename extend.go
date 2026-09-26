@@ -154,7 +154,8 @@ func (r *Runtime) NewBytes(b []byte) Value {
 //
 // The bytes are the ones the object is looking at rather than a copy, so a host
 // that keeps them keeps what the script can still write to; copy them if they
-// are to outlive the call.
+// are to outlive the call. The bytes of an immutable ArrayBuffer, which a
+// script is promised never change, must not be written.
 func (v Value) Bytes() ([]byte, bool) {
 	if v.rt == nil {
 		return nil, false

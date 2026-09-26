@@ -106,7 +106,8 @@ func (r *Runtime) NewUint8ArrayOf(b []byte) Value {
 //
 // The bytes are the ones the object is looking at, not a copy: a host writing
 // through them writes what the script sees, which is what makes it possible to
-// fill a buffer a script supplied.
+// fill a buffer a script supplied. The bytes of an immutable buffer, which a
+// script is promised never change, must not be written.
 func (r *Runtime) Bytes(v Value) ([]byte, bool) {
 	if !v.IsObject() {
 		return nil, false

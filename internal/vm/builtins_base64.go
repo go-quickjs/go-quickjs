@@ -176,7 +176,7 @@ func (r *Runtime) initBase64Builtins(uint8Ctor, uint8Proto *Object) {
 	// the input they consumed. That is what makes streaming possible: the
 	// caller keeps the unread tail and prepends it to the next piece.
 	r.defMethod(uint8Proto, "setFromBase64", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		if err := rt.uint8ArraySlot(this, "Uint8Array.prototype.setFromBase64"); err != nil {
+		if err := rt.uint8ArrayWritable(this, "Uint8Array.prototype.setFromBase64"); err != nil {
 			return Undefined, err
 		}
 		s, err := rt.base64Input(arg(args, 0), "setFromBase64")
@@ -205,7 +205,7 @@ func (r *Runtime) initBase64Builtins(uint8Ctor, uint8Proto *Object) {
 	})
 
 	r.defMethod(uint8Proto, "setFromHex", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		if err := rt.uint8ArraySlot(this, "Uint8Array.prototype.setFromHex"); err != nil {
+		if err := rt.uint8ArrayWritable(this, "Uint8Array.prototype.setFromHex"); err != nil {
 			return Undefined, err
 		}
 		s, err := rt.base64Input(arg(args, 0), "setFromHex")
@@ -269,6 +269,15 @@ func (r *Runtime) uint8ArraySlot(this Value, name string) error {
 		return r.throwTypeError("%s requires a Uint8Array", name)
 	}
 	return nil
+}
+
+// uint8ArrayWritable is uint8ArraySlot for the methods that write into the
+// array, which one over an immutable buffer cannot take.
+func (r *Runtime) uint8ArrayWritable(this Value, name string) error {
+	if err := r.uint8ArraySlot(this, name); err != nil {
+		return err
+	}
+	return r.requireMutable(this.Object().data.(*typedArrayData))
 }
 
 // newUint8ArrayFrom wraps bytes in a fresh Uint8Array.

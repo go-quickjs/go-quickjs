@@ -61,6 +61,12 @@ func (r *Runtime) typedArrayIndex(o *Object, key Atom) numericIndex {
 	return numericIndex{numeric: true, valid: inRange, i: i}
 }
 
+// typedArrayImmutable reports whether a typed array views an immutable buffer.
+func typedArrayImmutable(o *Object) bool {
+	t, ok := o.data.(*typedArrayData)
+	return ok && t.storage().immutable
+}
+
 // canonicalNumericIndex reports whether a name is a canonical numeric index
 // string, meaning it is what printing its own numeric value produces.
 func canonicalNumericIndex(name string) (float64, bool) {
@@ -103,6 +109,22 @@ func (r *Runtime) typedArrayDefine(o *Object, ix numericIndex, d *propDesc) (boo
 		// property cannot be added.
 		return false, nil
 	}
+	t := o.data.(*typedArrayData)
+	if t.storage().immutable {
+		// An element of an immutable buffer is a non-writable,
+		// non-configurable property, so a define succeeds only by asking for
+		// nothing it does not already have -- the value included, compared as
+		// it is rather than converted.
+		switch {
+		case d.isAccessor(),
+			d.hasConfigurable && d.configurable,
+			d.hasEnumerable && !d.enumerable,
+			d.hasWritable && d.writable,
+			d.hasValue && !d.value.SameValue(t.getElem(ix.i)):
+			return false, nil
+		}
+		return true, nil
+	}
 	switch {
 	case d.isAccessor(),
 		d.hasConfigurable && !d.configurable,
@@ -115,7 +137,6 @@ func (r *Runtime) typedArrayDefine(o *Object, ix numericIndex, d *propDesc) (boo
 	if !d.hasValue {
 		return true, nil
 	}
-	t := o.data.(*typedArrayData)
 	if err := r.setElem(t, ix.i, d.value); err != nil {
 		return false, err
 	}

@@ -80,7 +80,6 @@ var unsupportedFeatures = map[string]string{
 	"ShadowRealm":                  "no shadow realms",
 	"legacy-regexp":                "no legacy RegExp statics",
 	"error-stack-accessor":         "Error stack is an own data property",
-	"immutable-arraybuffer":        "no immutable ArrayBuffers",
 	"IsHTMLDDA":                    "no document.all emulation",
 	"cross-realm":                  "no realms API",
 	"caller":                       "no legacy caller access",

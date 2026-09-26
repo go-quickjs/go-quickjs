@@ -50,9 +50,17 @@ func (r *Runtime) typedArraySpeciesCreate(this Value, t *typedArrayData,
 }
 
 // newTypedArrayLike builds a view of the same kind as an existing one, through
-// whatever species it names.
+// whatever species it names, for slice, map and filter to write their results
+// into -- which a view over an immutable buffer cannot take.
 func (r *Runtime) newTypedArrayLike(this Value, t *typedArrayData, n int) (Value, *typedArrayData, error) {
-	return r.typedArraySpeciesCreate(this, t, []Value{Int(n)})
+	res, nt, err := r.typedArraySpeciesCreate(this, t, []Value{Int(n)})
+	if err != nil {
+		return Undefined, nil, err
+	}
+	if err := r.requireMutable(nt); err != nil {
+		return Undefined, nil, err
+	}
+	return res, nt, nil
 }
 
 // fillTypedArrayLike builds the result of map or filter: a view of the

@@ -226,6 +226,10 @@ func (r *Runtime) dataViewSetter(spec dataViewType) NativeFunc {
 		if err != nil {
 			return Undefined, err
 		}
+		// An immutable buffer is refused before anything is converted.
+		if d.storage().immutable {
+			return Undefined, rt.throwTypeError("the DataView's ArrayBuffer is immutable")
+		}
 		// The order here is the specification's: index, then value, then
 		// endianness, each of which may run user code.
 		i, err := rt.toIndex(arg(args, 0))

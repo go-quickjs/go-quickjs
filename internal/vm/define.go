@@ -259,12 +259,15 @@ func (r *Runtime) currentDescriptor(o *Object, key Atom) (*propDesc, error) {
 			if !ix.valid {
 				return nil, nil
 			}
+			// An element of an immutable buffer is as fixed as a frozen
+			// property: it cannot be written or reconfigured.
 			t := o.data.(*typedArrayData)
+			mutable := !t.storage().immutable
 			return &propDesc{
 				value: t.getElem(ix.i), hasValue: true,
-				writable: true, hasWritable: true,
+				writable: mutable, hasWritable: true,
 				enumerable: true, hasEnumerable: true,
-				configurable: true, hasConfigurable: true,
+				configurable: mutable, hasConfigurable: true,
 			}, nil
 		}
 	}

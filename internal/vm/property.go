@@ -339,6 +339,14 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 		// too, so the walk stops at them rather than looking for a setter
 		// further up that they shadow.
 		if o.class != ClassObject && r.hasExoticOwn(o, key) {
+			// A typed array over an immutable buffer refuses every numeric
+			// key, in range or not and whoever the receiver is, and without
+			// converting the value: nothing could be written anyway.
+			if o.class == ClassTypedArray && typedArrayImmutable(o) &&
+				r.typedArrayIndex(o, key).numeric {
+				return false, r.assignFailed(key, strict,
+					"cannot assign to %q of a typed array over an immutable ArrayBuffer")
+			}
 			if o == obj && rcv == obj {
 				return r.createOwnProp(o, key, val, strict)
 			}
