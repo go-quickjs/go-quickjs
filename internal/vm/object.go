@@ -278,33 +278,61 @@ func (r *Runtime) newSlabFuncObject(proto *Object, class Class) (*Object, *funcD
 	return &fo.Object, &fo.fn
 }
 
-// scriptFuncObject is a function with a body of its own, which needs two things
-// a built-in does not: the closure that says what it captured, and somewhere to
-// put those captures. They are allocated with it rather than beside it, for the
-// same reason the function data is -- a closure made in a loop is as common as
-// an object literal, and each allocation was showing up in the profile.
+// scriptFuncObject is a function with a body of its own, which needs a closure
+// that says what it captured. Small variants below carry the capture slots in
+// the same allocation without making every function pay for the largest one.
 type scriptFuncObject struct {
 	funcObject
 	cl closure
-	// captured backs the closure's upvalue list while it fits, which is nearly
-	// always: a function that reads more than this many outer bindings is rare
-	// enough to be worth an allocation of its own.
+}
+
+type scriptFuncObject1 struct {
+	scriptFuncObject
+	captured [1]*upvalue
+}
+
+type scriptFuncObject2 struct {
+	scriptFuncObject
+	captured [2]*upvalue
+}
+
+type scriptFuncObject3 struct {
+	scriptFuncObject
+	captured [3]*upvalue
+}
+
+type scriptFuncObject4 struct {
+	scriptFuncObject
 	captured [4]*upvalue
 }
 
 // newScriptFuncObject creates a callable object together with the closure and
 // the upvalue slots that go with it.
 func newScriptFuncObject(proto *Object, class Class, upvalues int) (*Object, *funcData, *closure, []*upvalue) {
-	fo := &scriptFuncObject{
-		funcObject: funcObject{
-			Object: Object{proto: proto, class: class, flags: objExtensible},
-		},
+	var fo *scriptFuncObject
+	var captured []*upvalue
+	switch upvalues {
+	case 0:
+		fo = &scriptFuncObject{}
+	case 1:
+		x := &scriptFuncObject1{}
+		fo, captured = &x.scriptFuncObject, x.captured[:]
+	case 2:
+		x := &scriptFuncObject2{}
+		fo, captured = &x.scriptFuncObject, x.captured[:]
+	case 3:
+		x := &scriptFuncObject3{}
+		fo, captured = &x.scriptFuncObject, x.captured[:]
+	case 4:
+		x := &scriptFuncObject4{}
+		fo, captured = &x.scriptFuncObject, x.captured[:]
+	default:
+		fo = &scriptFuncObject{}
+		captured = make([]*upvalue, upvalues)
 	}
+	fo.Object = Object{proto: proto, class: class, flags: objExtensible}
 	fo.Object.data = &fo.fn
-	if upvalues > len(fo.captured) {
-		return &fo.Object, &fo.fn, &fo.cl, make([]*upvalue, upvalues)
-	}
-	return &fo.Object, &fo.fn, &fo.cl, fo.captured[:upvalues:len(fo.captured)]
+	return &fo.Object, &fo.fn, &fo.cl, captured
 }
 
 // Class returns the object's class.
