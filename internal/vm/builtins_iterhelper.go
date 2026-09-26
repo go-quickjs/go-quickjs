@@ -4,14 +4,15 @@ import "math"
 
 // Iterator helpers.
 //
-// map, filter, take, drop and flatMap are lazy: each returns a new iterator
-// that pulls one value from the one beneath it when asked, so a pipeline over
-// an infinite sequence terminates as long as something downstream stops asking.
-// That is the whole point of them -- the array equivalents would have to
-// materialize every intermediate stage.
+// map, filter, take, drop, flatMap, chunks and windows are lazy: each returns
+// a new iterator that pulls from the one beneath it only when asked, so a
+// pipeline over an infinite sequence terminates as long as something
+// downstream stops asking. That is the whole point of them -- the array
+// equivalents would have to materialize every intermediate stage.
 //
-// reduce, toArray, forEach, some, every and find are the opposite: they drain
-// the iterator and return a value, which is where a pipeline ends.
+// reduce, toArray, forEach, some, every, find, includes and join are the
+// opposite: they drain the iterator and return a value, which is where a
+// pipeline ends.
 //
 // A helper owns the iterator beneath it. If user code throws anywhere in the
 // chain, the underlying iterator is closed before the error propagates, so a
@@ -26,6 +27,8 @@ const (
 	helperTake
 	helperDrop
 	helperFlatMap
+	helperChunks
+	helperWindows
 )
 
 // iterHelperData is a lazy helper's state.
@@ -48,7 +51,16 @@ type iterHelperData struct {
 	innerNext Value
 	hasInner  bool
 
-	done bool
+	// size is chunks' and windows' length, buf the values gathered towards
+	// the next array, and partial windows' allow-partial.
+	size    int64
+	buf     []Value
+	partial bool
+
+	// started records that next has run, which decides whether return finds
+	// the helper suspended before its first step or in the middle of one.
+	started bool
+	done    bool
 	// running guards against a helper's next being re-entered from the
 	// callback it is in the middle of calling, which would corrupt counter and
 	// the inner-iterator state.
@@ -180,6 +192,28 @@ func (r *Runtime) initIteratorHelpers() {
 	lazy("drop", 1, helperDrop)
 	lazy("flatMap", 1, helperFlatMap)
 
+	r.defMethod(p, "chunks", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		return rt.sizedHelper(this, arg(args, 0), "chunks", helperChunks,
+			func() (bool, error) { return false, nil })
+	})
+	r.defMethod(p, "windows", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		// undersized is checked after the size, and is one of the two strings
+		// exactly: nothing is converted to one.
+		return rt.sizedHelper(this, arg(args, 0), "windows", helperWindows, func() (bool, error) {
+			u := arg(args, 1)
+			switch {
+			case u.IsUndefined():
+				return false, nil
+			case u.IsString() && u.String().Go() == "only-full":
+				return false, nil
+			case u.IsString() && u.String().Go() == "allow-partial":
+				return true, nil
+			}
+			rt.closeIterator(this)
+			return false, rt.throwTypeError(`Iterator.prototype.windows requires "only-full" or "allow-partial"`)
+		})
+	})
+
 	r.initIteratorTerminals(p)
 
 	// toStringTag and constructor are accessors rather than data properties, so
@@ -239,6 +273,16 @@ func (r *Runtime) initHelperPrototype() {
 		}
 		if !h.done {
 			h.done = true
+			h.buf = nil
+			// A helper that has started is a generator suspended in a yield,
+			// and closing what is beneath it resumes that generator: while it
+			// does, the helper is running, and a next or return from inside a
+			// return method is refused. One that has not started is simply
+			// finished, and answers such a call as done.
+			if h.started {
+				h.running = true
+				defer func() { h.running = false }()
+			}
 			// Abandoning a helper abandons everything beneath it, so a
 			// generator upstream gets to run its finally blocks. An error from
 			// doing so reaches the caller, because nothing else is in flight
@@ -279,6 +323,7 @@ func (r *Runtime) advanceHelper(h *iterHelperData) (Value, bool, error) {
 		return Undefined, false, nil
 	}
 	h.running = true
+	h.started = true
 	defer func() { h.running = false }()
 
 	switch h.kind {
@@ -369,8 +414,91 @@ func (r *Runtime) advanceHelper(h *iterHelperData) (Value, bool, error) {
 			}
 			h.inner, h.innerNext, h.hasInner = inner, innerNext, true
 		}
+
+	case helperChunks:
+		for {
+			v, ok, err := r.pull(h)
+			if err != nil {
+				return Undefined, false, err
+			}
+			if !ok {
+				// The last chunk may be short, and is still a chunk. The
+				// source is exhausted by then, so the helper is done whatever
+				// happens to it.
+				if len(h.buf) == 0 {
+					return Undefined, false, nil
+				}
+				out := h.buf
+				h.buf = nil
+				return Obj(r.newArrayFrom(out)), true, nil
+			}
+			h.buf = append(h.buf, v)
+			if int64(len(h.buf)) == h.size {
+				out := h.buf
+				h.buf = nil
+				return Obj(r.newArrayFrom(out)), true, nil
+			}
+		}
+
+	case helperWindows:
+		for {
+			v, ok, err := r.pull(h)
+			if err != nil {
+				return Undefined, false, err
+			}
+			if !ok {
+				// A source shorter than one window yields nothing unless
+				// partial windows were asked for, and then yields itself.
+				out := h.buf
+				h.buf = nil
+				if !h.partial || len(out) == 0 || int64(len(out)) == h.size {
+					return Undefined, false, nil
+				}
+				return Obj(r.newArrayFrom(out)), true, nil
+			}
+			if int64(len(h.buf)) == h.size {
+				h.buf = h.buf[1:]
+			}
+			h.buf = append(h.buf, v)
+			if int64(len(h.buf)) == h.size {
+				// The windows overlap, so each is a copy: the arrays handed
+				// out are the caller's to keep and change.
+				return Obj(r.newArrayFrom(append([]Value(nil), h.buf...))), true, nil
+			}
+		}
 	}
 	return Undefined, false, nil
+}
+
+// sizedHelper implements chunks and windows up to the point where they differ:
+// the size is an integral number from 1 to 2^32-1, taken as it is rather than
+// converted, and the iterator is closed for a bad one before its next method is
+// read.
+func (r *Runtime) sizedHelper(this, size Value, name string, kind helperKind,
+	check func() (bool, error)) (Value, error) {
+	if !this.IsObject() {
+		return Undefined, r.throwTypeError("Iterator.prototype.%s requires an object", name)
+	}
+	n := size.Number()
+	if !size.IsNumber() || math.IsInf(n, 0) || n != math.Trunc(n) {
+		r.closeIterator(this)
+		return Undefined, r.throwTypeError("Iterator.prototype.%s requires an integral size", name)
+	}
+	if n < 1 || n > math.MaxUint32 {
+		r.closeIterator(this)
+		return Undefined, r.throwRangeError("Iterator.prototype.%s requires a size from 1 to 2^32-1", name)
+	}
+	partial, err := check()
+	if err != nil {
+		return Undefined, err
+	}
+	iter, next, err := r.getIteratorDirect(this)
+	if err != nil {
+		return Undefined, err
+	}
+	o := newObject(r.helperProto, ClassIteratorHelper)
+	o.data = &iterHelperData{kind: kind, iter: iter, next: next, size: int64(n), partial: partial}
+	return Obj(o), nil
 }
 
 // pull takes one value from the underlying iterator, marking the helper done

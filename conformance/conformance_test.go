@@ -87,7 +87,6 @@ var unsupportedFeatures = map[string]string{
 	"joint-iteration":               "no Iterator.zip",
 	"await-dictionary":              "no Promise.allKeyed or allSettledKeyed",
 	"iterator-sequencing":           "no Iterator.concat",
-	"iterator-chunking":             "no Iterator.prototype.chunks or windows",
 	"String.prototype.replaceAll":   "",
 	"IsHTMLDDA":                     "no document.all emulation",
 	"cross-realm":                   "no realms API",

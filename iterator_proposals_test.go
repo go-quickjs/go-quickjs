@@ -66,3 +66,52 @@ func TestIteratorJoin(t *testing.T) {
 		{`Iterator.prototype.join.length`, "1"},
 	})
 }
+
+func TestIteratorChunksAndWindows(t *testing.T) {
+	evalCases(t, []struct{ src, want string }{
+		{`JSON.stringify([1, 2, 3, 4, 5].values().chunks(2).toArray())`, "[[1,2],[3,4],[5]]"},
+		{`JSON.stringify([1, 2, 3, 4].values().chunks(2).toArray())`, "[[1,2],[3,4]]"},
+		{`JSON.stringify([1, 2].values().chunks(2 ** 32 - 1).toArray())`, "[[1,2]]"},
+		{`JSON.stringify([1, 2, 3, 4].values().windows(2).toArray())`, "[[1,2],[2,3],[3,4]]"},
+		{`JSON.stringify([1, 2].values().windows(3).toArray())`, "[]"},
+		{`JSON.stringify([1, 2].values().windows(3, "allow-partial").toArray())`, "[[1,2]]"},
+		{`JSON.stringify([1, 2, 3].values().windows(3, "allow-partial").toArray())`, "[[1,2,3]]"},
+		// Each window is an array of its own.
+		{`var w = [1, 2, 3].values().windows(2); var a = w.next().value; a.push(9);
+		  JSON.stringify(w.next().value)`, "[2,3]"},
+		// The size is not converted, and a bad one closes the iterator before
+		// next is read; windows checks undersized after the size.
+		{`var log = []; var it = { get next() { log.push("next") }, return() { log.push("return"); return {} } };
+		  var errs = [];
+		  for (var s of ["2", 1.5, Infinity, NaN, 0, -1, 2 ** 32]) {
+		    try { Iterator.prototype.chunks.call(it, s) } catch (e) { errs.push(e.constructor.name) }
+		  }
+		  for (var u of [null, "", "full", 0]) {
+		    try { Iterator.prototype.windows.call(it, 1, u) } catch (e) { errs.push(e.constructor.name) }
+		  }
+		  try { Iterator.prototype.windows.call(it, 0, "bad") } catch (e) { errs.push(e.constructor.name) }
+		  errs.join() + "|" + log.length + (log.includes("next") ? " next" : "")`,
+			"TypeError,TypeError,TypeError,TypeError,RangeError,RangeError,RangeError," +
+				"TypeError,TypeError,TypeError,TypeError,RangeError|12"},
+		// Once the source runs out a return is not forwarded to it.
+		{`var n = 0; var it = { i: 0, next() { return this.i++ < 3 ? {value: 1, done: false} : {done: true} },
+		    return() { n++; return {} }, __proto__: Iterator.prototype };
+		  var c = it.chunks(2); c.next(); c.next(); c.return(); n`, "0"},
+		{`[Iterator.prototype.chunks.length, Iterator.prototype.windows.length].join()`, "1,1"},
+	})
+}
+
+// TestIteratorHelperReturnWhileSuspended pins what a return method sees when it
+// calls back into the helper being closed: before the helper's first step the
+// helper is simply finished, and after it the helper is still running.
+func TestIteratorHelperReturnWhileSuspended(t *testing.T) {
+	evalCases(t, []struct{ src, want string }{
+		{`var h, seen; var it = { next() { return {value: 1, done: false} },
+		    return() { seen = JSON.stringify(h.next()); return {} }, __proto__: Iterator.prototype };
+		  h = it.map(x => x); h.return(); seen`, `{"done":true}`},
+		{`var h, seen; var it = { next() { return {value: 1, done: false} },
+		    return() { try { h.next() } catch (e) { seen = e.constructor.name } return {} },
+		    __proto__: Iterator.prototype };
+		  h = it.map(x => x); h.next(); h.return(); seen`, "TypeError"},
+	})
+}
