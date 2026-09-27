@@ -218,12 +218,23 @@ func (r *Runtime) Eval(src string) (Value, error) {
 // when the context is cancelled or its deadline passes. The returned error
 // wraps ctx.Err() in that case, so errors.Is(err, context.DeadlineExceeded)
 // identifies a timeout.
-func (r *Runtime) EvalContext(ctx context.Context, src string) (result Value, err error) {
+func (r *Runtime) EvalContext(ctx context.Context, src string) (Value, error) {
+	return r.EvalFileContext(ctx, "<eval>", src)
+}
+
+// EvalFile compiles and runs src, using name in stack traces.
+func (r *Runtime) EvalFile(name, src string) (Value, error) {
+	return r.EvalFileContext(context.Background(), name, src)
+}
+
+// EvalFileContext is EvalFile with cancellation, as EvalContext is Eval with
+// it: the script is called name in stack traces, and stops when ctx is done.
+func (r *Runtime) EvalFileContext(ctx context.Context, name, src string) (result Value, err error) {
 	if r.closed {
 		return Value{}, ErrClosed
 	}
 	defer r.guard(&err)
-	fn, err := r.compile(src, "<eval>")
+	fn, err := r.compile(src, name)
 	if err != nil {
 		return Value{}, err
 	}
@@ -237,26 +248,6 @@ func (r *Runtime) EvalContext(ctx context.Context, src string) (result Value, er
 	// Promise reactions are queued rather than run synchronously, so the queue
 	// is drained before returning; otherwise a then callback registered by the
 	// script would never run.
-	if err := r.rt.DrainJobs(); err != nil {
-		return Value{}, r.wrapError(err)
-	}
-	return Value{v: v, rt: r.rt}, nil
-}
-
-// EvalFile compiles and runs src, using name in stack traces.
-func (r *Runtime) EvalFile(name, src string) (result Value, err error) {
-	if r.closed {
-		return Value{}, ErrClosed
-	}
-	defer r.guard(&err)
-	fn, err := r.compile(src, name)
-	if err != nil {
-		return Value{}, err
-	}
-	v, err := r.rt.Run(fn)
-	if err != nil {
-		return Value{}, r.wrapError(err)
-	}
 	if err := r.rt.DrainJobs(); err != nil {
 		return Value{}, r.wrapError(err)
 	}

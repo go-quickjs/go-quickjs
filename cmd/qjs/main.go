@@ -429,7 +429,8 @@ func evaluate(rt *quickjs.Runtime, loop *stdlib.Loop, ctx context.Context,
 	if opts.isModule(name, src) {
 		_, err = rt.EvalModuleContext(ctx, name, src)
 	} else {
-		_, err = rt.EvalContext(ctx, src)
+		// Named, so that a stack trace says which file a frame is in.
+		_, err = rt.EvalFileContext(ctx, name, src)
 	}
 	if err != nil {
 		report(rt, stderr, err)

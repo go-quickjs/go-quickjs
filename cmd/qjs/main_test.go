@@ -38,6 +38,29 @@ func TestRunsAFile(t *testing.T) {
 	}
 }
 
+// TestStackNamesTheFile pins that a script's stack trace says which file each
+// frame is in, and what -e and standard input are called.
+func TestStackNamesTheFile(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "s.js")
+	src := "function f() { throw new Error(\"e\") }\nf()\n"
+	if err := os.WriteFile(script, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, _, errOut := exec(t, "", script)
+	if want := "at f (" + script + ":1:22)"; !strings.Contains(errOut, want) {
+		t.Errorf("stderr = %q, want it to contain %q", errOut, want)
+	}
+	_, _, errOut = exec(t, "", "-e", src)
+	if want := "at f (<cmdline>:1:22)"; !strings.Contains(errOut, want) {
+		t.Errorf("-e stderr = %q, want it to contain %q", errOut, want)
+	}
+	_, _, errOut = exec(t, src, "-")
+	if want := "at <stdin>:2:1"; !strings.Contains(errOut, want) {
+		t.Errorf("stdin stderr = %q, want it to contain %q", errOut, want)
+	}
+}
+
 func TestRunsStdin(t *testing.T) {
 	code, out, _ := exec(t, `console.log("piped")`, "-")
 	if code != 0 || out != "piped\n" {

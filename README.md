@@ -531,6 +531,9 @@ _, err := rt.EvalContext(ctx, `while (true) {}`)
 // errors.Is(err, context.DeadlineExceeded)
 ```
 
+`EvalFileContext` does the same for a script with a name, which is what its
+stack traces call it: `at main (app.js:12:5)` rather than `<eval>`.
+
 An interruption is deliberately **not** catchable from script, so a sandboxed
 program cannot defeat its own timeout with `try`/`catch`. A catastrophically
 backtracking regular expression fails with an error rather than stalling.

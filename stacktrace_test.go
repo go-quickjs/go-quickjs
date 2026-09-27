@@ -1,6 +1,7 @@
 package quickjs_test
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -192,5 +193,24 @@ func TestThrownValueStackHasColumns(t *testing.T) {
 	}
 	if got, want := jsErr.Stack(), "at f (main.js:2:3)"; !strings.Contains(got, want) {
 		t.Errorf("Stack() = %q, want it to contain %q", got, want)
+	}
+}
+
+// TestEvalFileContext pins that a script run with a name is called that in
+// its stack, and still stops when its context is done.
+func TestEvalFileContext(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	v, err := rt.EvalFileContext(context.Background(), "app.js", "function f() { return new Error() }\nf().stack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := v.String(), "Error\n    at f (app.js:1:23)\n    at app.js:2:1"; got != want {
+		t.Errorf("stack = %q, want %q", got, want)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := rt.EvalFileContext(ctx, "loop.js", "for (;;) {}"); !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled run: err = %v, want context.Canceled", err)
 	}
 }
