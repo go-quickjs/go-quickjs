@@ -125,14 +125,13 @@ type Runtime struct {
 	// microtasks is the promise job queue, drained between turns. Reactions are
 	// never run synchronously: that ordering guarantee is what makes a then
 	// callback observe a consistent world.
-	microtasks []func()
+	microtasks []job
 
 	// rng backs Math.random, created on first use.
 	rng *rand.Rand
 
-	// modules maps a resolved specifier to its module, so that importing the
-	// same module twice yields the same instance.
-	modules      map[string]*Module
+	// moduleLoader fetches a module's source; the modules it makes are each
+	// realm's own.
 	moduleLoader ModuleLoader
 	// onImportMeta fills in a module's import.meta, which is the host's to
 	// decide the contents of.
@@ -173,6 +172,11 @@ type Realm struct {
 	// can be found for another's: a constructor whose new.target names no
 	// prototype falls back to the one of new.target's realm.
 	names []namedIntrinsic
+
+	// modules maps a resolved specifier to its module, so that importing the
+	// same module twice in a realm yields the same instance. Each realm has its
+	// own: a ShadowRealm that imports a module gets an instance of its own.
+	modules map[string]*Module
 
 	// global is the global object, and globalEnv is the scope that var and
 	// function declarations at the top level bind into.

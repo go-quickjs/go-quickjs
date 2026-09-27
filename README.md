@@ -44,7 +44,7 @@ called in every language. It is held against a full ICU build:
 not is named.
 
 Of the 99,937 test262 variants in the areas the engine claims -- the language,
-the built-ins, `Intl` and Annex B -- 99,137 pass, none fail, and 800 are
+the built-ins, `Intl` and Annex B -- 99,261 pass, none fail, and 676 are
 skipped because they require an unsupported feature or host facility. See [Conformance](#conformance) for the
 measurement and [Not implemented](#not-implemented) for what is missing.
 
@@ -72,7 +72,7 @@ measurement and [Not implemented](#not-implemented) for what is missing.
 | Internationalization | `Intl.Locale`, `NumberFormat`, `DateTimeFormat`, `Collator`, `PluralRules`, `ListFormat`, `RelativeTimeFormat`, `DisplayNames`, `Segmenter`, `DurationFormat`, from [go-intl], with CLDR data for every locale ICU has |
 | Weak references | `WeakRef`, `FinalizationRegistry`, `WeakMap`, `WeakSet`, backed by Go's `weak.Pointer` and `runtime.AddCleanup`: a target really is released, and a registry really is called back |
 | Reflection | `Proxy` with every trap and its invariants, `Reflect`, property descriptors, mapped `arguments` |
-| Recent additions | Set operations, `Array.fromAsync`, `Object.groupBy`, `Promise.try`, `Promise.allKeyed`, `RegExp.escape`, `Error.isError`, `Math.sumPrecise`, `Uint8Array` base64 and hex, `Map` and `WeakMap`'s `getOrInsert`, `JSON.rawJSON` and a reviver's source text, `Atomics.pause` |
+| Recent additions | Set operations, `Array.fromAsync`, `Object.groupBy`, `Promise.try`, `Promise.allKeyed`, `RegExp.escape`, `Error.isError`, `Math.sumPrecise`, `Uint8Array` base64 and hex, `Map` and `WeakMap`'s `getOrInsert`, `JSON.rawJSON` and a reviver's source text, `Atomics.pause`, `ShadowRealm` |
 | Eval | Direct `eval` runs in the caller's scope — its variables, `this`, `new.target` and `super`; indirect `eval` runs in global scope |
 | Go interop | Function binding, marshalling, `context.Context` cancellation |
 
@@ -106,13 +106,13 @@ Gregorian layout.
 
 ### Not implemented
 
-Decorators, `ShadowRealm`, and `Atomics.waitAsync`, which needs the host to
-provide a way of timing out a wait.
+Decorators, and `Atomics.waitAsync`, which needs the host to provide a way of
+timing out a wait.
 
 A runtime can hold more than one realm, each with its own global object and
 intrinsics, and a function runs in the realm it was made in whoever calls it;
-test262's cross-realm tests run against it. A host cannot make a second realm
-yet, and `ShadowRealm` is not there. There is one agent: a
+test262's cross-realm tests run against it, and `ShadowRealm` is built on it. A
+host cannot make a second realm of its own yet. There is one agent: a
 `SharedArrayBuffer` is not shared with another runtime, so nothing can notify
 an `Atomics.wait`, which ends when its timeout does.
 
@@ -155,8 +155,8 @@ rather than counted against it.
 By default it runs `language`, `built-ins`, `intl402` and `annexB`; `staging`
 holds proposals too early to claim, and `harness` tests the suite's own helpers.
 
-Measured coverage, as of the most recent run: 99,137 variants pass and none
-fail. The other 800 are skipped rather than counted: a test tagged with a
+Measured coverage, as of the most recent run: 99,261 variants pass and none
+fail. The other 676 are skipped rather than counted: a test tagged with a
 feature the engine does not implement, or one that asks the host for a second
 realm or an agent, is testing something that was never claimed.
 

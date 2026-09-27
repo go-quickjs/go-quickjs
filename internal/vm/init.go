@@ -382,4 +382,5 @@ func (r *Runtime) initGlobals() {
 	r.initAnnexB()
 	r.initDynamicImport()
 	r.initDeferredImport()
+	r.initShadowRealm()
 }

@@ -257,7 +257,27 @@ func thrownValue(err error) Value {
 
 // enqueueJob adds a microtask.
 func (r *Runtime) enqueueJob(fn func()) {
-	r.microtasks = append(r.microtasks, fn)
+	r.microtasks = append(r.microtasks, job{run: fn, realm: r.Realm})
+}
+
+// job is a queued microtask and the realm that queued it, which it runs in:
+// what it makes without calling a function -- a module it loads, a promise it
+// settles -- is that realm's.
+type job struct {
+	run   func()
+	realm *Realm
+}
+
+// runJob runs a job in its realm.
+func (r *Runtime) runJob(j job) {
+	if j.realm == nil || j.realm == r.Realm {
+		j.run()
+		return
+	}
+	prev := r.Realm
+	r.Realm = j.realm
+	defer func() { r.Realm = prev }()
+	j.run()
 }
 
 // DrainJobs runs queued microtasks until none remain.
@@ -274,9 +294,9 @@ func (r *Runtime) DrainJobs() error {
 		if n > maxJobs {
 			return r.throwRangeError("the microtask queue did not drain")
 		}
-		job := r.microtasks[0]
+		j := r.microtasks[0]
 		r.microtasks = r.microtasks[1:]
-		job()
+		r.runJob(j)
 		if err := r.checkInterrupt(); err != nil {
 			return err
 		}
@@ -291,9 +311,9 @@ func (r *Runtime) DrainJobs() error {
 	// prints is script -- so the queue is drained again.
 	r.reportUnhandledRejections()
 	for len(r.microtasks) > 0 {
-		job := r.microtasks[0]
+		j := r.microtasks[0]
 		r.microtasks = r.microtasks[1:]
-		job()
+		r.runJob(j)
 		if err := r.checkInterrupt(); err != nil {
 			return err
 		}
