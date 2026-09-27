@@ -21,3 +21,14 @@ func TestRegExpAnnexBEscapes(t *testing.T) {
 			"SyntaxError,SyntaxError"},
 	})
 }
+
+// TestRegExpUnboundedCountOfEmpty pins that {n,} over a body that can match
+// nothing stops repeating once an iteration past the minimum matches nothing,
+// as * does, rather than going round until the step budget runs out.
+func TestRegExpUnboundedCountOfEmpty(t *testing.T) {
+	evalCases(t, []struct{ src, want string }{
+		{`[/.(?=Z){2,}/.exec("a bZ cZZ")[0], /.(?=Z){2,}?/.exec("a bZ")[0], /.(?!Z){3,}/.exec("aZ b")[0]].join()`, "b,b,Z"},
+		{`JSON.stringify([/(a|){2,}b/.exec("aab"), /(a|){3,}b/.exec("ab"), /(){2,}x/.exec("x")])`,
+			`[["aab","a"],["ab",""],["x",""]]`},
+	})
+}

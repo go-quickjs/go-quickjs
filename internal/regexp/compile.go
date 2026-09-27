@@ -326,6 +326,17 @@ func (c *compiler) compileRepeat(t nodeRepeat) {
 		return
 	}
 
+	if needsGuard {
+		// {n,} over a body that can match nothing: the n required
+		// iterations need no check, and what may repeat after them is a
+		// guarded *. Counted as one loop, an empty iteration past the
+		// minimum would go round for ever, or until the step budget ran
+		// out.
+		c.compileRepeat(nodeRepeat{item: t.item, min: t.min, max: t.min, greedy: t.greedy})
+		c.compileRepeat(nodeRepeat{item: t.item, min: 0, max: -1, greedy: t.greedy})
+		return
+	}
+
 	// The general counted form.
 	counter := c.prog.counters
 	c.prog.counters++
