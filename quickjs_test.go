@@ -4567,3 +4567,20 @@ func TestStringIndexOfClampsPosition(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// TestApplyRefusesAnImpossibleArgumentList pins that apply and its relatives
+// refuse an argument list too long to pass as soon as its length is known,
+// rather than reading element after element into memory first.
+func TestApplyRefusesAnImpossibleArgumentList(t *testing.T) {
+	evalCases(t, []struct{ src, want string }{
+		{`var r = [];
+for (var n of [2 ** 24, 2 ** 32 - 1, 2 ** 53 - 1]) {
+	try { (function () {}).apply(null, { length: n }); r.push("ok") } catch (e) { r.push(e.constructor.name + ": " + e.message) }
+}
+try { Reflect.apply(function () {}, null, { length: 2 ** 32 }) } catch (e) { r.push(e.message) }
+try { Reflect.construct(function () {}, { length: 2 ** 40 }) } catch (e) { r.push(e.message) }
+r.join(" | ")`, "RangeError: maximum call stack size exceeded | RangeError: Invalid array length | " +
+			"RangeError: Invalid array length | Invalid array length | Invalid array length"},
+		{`(function () { return arguments.length }).apply(null, { length: 3 })`, "3"},
+	})
+}

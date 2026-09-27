@@ -815,18 +815,28 @@ func (r *Runtime) initFunctionBuiltins() {
 	})
 }
 
-// arrayToSlice reads an array-like into a Go slice.
 // argumentList reads an array-like as a list of arguments, which requires it to
 // be an object: apply and its relatives refuse a primitive rather than treating
 // it as an empty list or reading indices off a wrapper.
+//
+// A list longer than the stack has room for could never be passed, so it is
+// refused as soon as its length is known, as V8 refuses it, rather than read
+// element by element into memory first.
 func (r *Runtime) argumentList(v Value) ([]Value, error) {
 	if !v.IsObject() {
 		return nil, r.throwTypeError("an argument list must be an object, not %s", v.Kind())
 	}
-	return r.arrayToSlice(v)
+	return r.arrayLikeToSlice(v, int64(len(r.stack)-r.stackTop))
 }
 
+// arrayToSlice reads an array-like into a Go slice.
 func (r *Runtime) arrayToSlice(v Value) ([]Value, error) {
+	return r.arrayLikeToSlice(v, -1)
+}
+
+// arrayLikeToSlice reads an array-like into a Go slice, refusing one longer
+// than limit when limit is not negative.
+func (r *Runtime) arrayLikeToSlice(v Value, limit int64) ([]Value, error) {
 	o, err := r.toObject(v)
 	if err != nil {
 		return nil, err
@@ -838,6 +848,14 @@ func (r *Runtime) arrayToSlice(v Value) ([]Value, error) {
 	n, err := r.toLength(lenVal)
 	if err != nil {
 		return nil, err
+	}
+	if limit >= 0 && n > limit {
+		// Past the longest array there is, V8 says so rather than blaming the
+		// stack.
+		if n >= 1<<32-1 {
+			return nil, r.throwRangeError("Invalid array length")
+		}
+		return nil, r.throwRangeError("maximum call stack size exceeded")
 	}
 	out := make([]Value, 0, min(int(n), 1024))
 	for i := int64(0); i < n; i++ {
