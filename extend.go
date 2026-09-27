@@ -1,6 +1,8 @@
 package quickjs
 
 import (
+	"fmt"
+	"reflect"
 	"sort"
 
 	"github.com/go-quickjs/go-quickjs/internal/compiler"
@@ -118,6 +120,38 @@ func (r *Runtime) NewObject() Value {
 		return Value{}
 	}
 	return Value{v: vmObj(r.rt.NewPlainObject()), rt: r.rt}
+}
+
+// NewHTMLDDA returns an object with Annex B's [[IsHTMLDDA]] slot, as the web's
+// document.all has: typeof gives "undefined", it is falsy, and it is == to
+// null and undefined, while it remains an object everywhere else -- to ===,
+// ??, optional chaining, destructuring defaults and every built-in. It exists
+// for hosts that emulate a browser's document.
+//
+// If call is nil the object is not callable. Otherwise call must be a Go
+// function, which is converted as Set converts one and called when the object
+// is. Members are added afterwards as on any other object.
+func (r *Runtime) NewHTMLDDA(call any) (Value, error) {
+	if r.closed {
+		return Value{}, ErrClosed
+	}
+	if call == nil {
+		o := r.rt.NewPlainObject()
+		o.MarkHTMLDDA()
+		return Value{v: vmObj(o), rt: r.rt}, nil
+	}
+	// Only a Go function makes a new object; a Value would be one a script
+	// may already have seen, whose typeof must not change under it.
+	fv := reflect.ValueOf(call)
+	if fv.Kind() != reflect.Func || fv.IsNil() {
+		return Value{}, fmt.Errorf("quickjs: NewHTMLDDA needs a Go function, not %T", call)
+	}
+	v, err := wrapGoFunc(r.rt, fv)
+	if err != nil {
+		return Value{}, err
+	}
+	v.Object().MarkHTMLDDA()
+	return Value{v: v, rt: r.rt}, nil
 }
 
 // NewArray returns a new array holding the given values, each converted as Set

@@ -72,7 +72,6 @@ var unsupportedFeatures = map[string]string{
 	"decorators":                         "decorators are not implemented",
 	"ShadowRealm":                        "no shadow realms",
 	"error-stack-accessor":               "Error stack is an own data property",
-	"IsHTMLDDA":                          "no document.all emulation",
 	"cross-realm":                        "no realms API",
 	"caller":                             "no legacy caller access",
 }
@@ -309,12 +308,28 @@ func runOne(suite *conformance.Suite, tc *conformance.Test,
 		return rt.Eval(src)
 	})
 	rt.Set("abstractModuleSource", rt.AbstractModuleSource())
+	// IsHTMLDDA stands for document.all. The suite's interpreting guide asks
+	// that a call with nothing or with "" answer null; any other call answers
+	// undefined.
+	null, _ := rt.Eval("null")
+	undefined, _ := rt.Eval("undefined")
+	htmldda, err := rt.NewHTMLDDA(func(args ...quickjs.Value) quickjs.Value {
+		if len(args) == 0 || (args[0].IsString() && args[0].String() == "") {
+			return null
+		}
+		return undefined
+	})
+	if err != nil {
+		return resultSkip, "could not make IsHTMLDDA: " + err.Error()
+	}
+	rt.Set("isHTMLDDA", htmldda)
 	if _, err := rt.Eval(`
 		var $262 = {
 			global: globalThis,
 			detachArrayBuffer: detachArrayBuffer,
 			evalScript: evalScript,
 			AbstractModuleSource: abstractModuleSource,
+			IsHTMLDDA: isHTMLDDA,
 			gc: function () { throw new Error("gc is not supported"); },
 		};
 	`); err != nil {

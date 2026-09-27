@@ -326,8 +326,11 @@ func (v Value) Truthy() bool {
 		return v.String().Len() != 0
 	case KindBigInt:
 		return !v.BigInt().IsZero()
+	case KindObject:
+		// Every object is truthy but document.all.
+		return v.Object().flags&objHTMLDDA == 0
 	}
-	// Objects and symbols are always truthy.
+	// Symbols are always truthy.
 	return true
 }
 
@@ -350,7 +353,11 @@ func (v Value) TypeOf() string {
 	case KindBigInt:
 		return "bigint"
 	case KindObject:
-		if v.Object().IsCallable() {
+		o := v.Object()
+		if o.flags&objHTMLDDA != 0 {
+			return "undefined"
+		}
+		if o.IsCallable() {
 			return "function"
 		}
 		return "object"

@@ -122,6 +122,10 @@ const (
 	// ordinary chain cannot be given a parent without making the chain cyclic
 	// for the whole realm at once.
 	objImmutableProto
+	// objHTMLDDA is Annex B's [[IsHTMLDDA]] slot, which the web's document.all
+	// has: typeof says "undefined", ToBoolean says false, and == says it
+	// equals null and undefined. Everything else sees an ordinary object.
+	objHTMLDDA
 )
 
 // linearScanLimit is the property count below which lookup scans the slice
@@ -362,6 +366,11 @@ func (o *Object) Proto() *Object { return o.proto }
 
 // IsExtensible reports whether new properties may be added.
 func (o *Object) IsExtensible() bool { return o.flags&objExtensible != 0 }
+
+// MarkHTMLDDA gives the object Annex B's [[IsHTMLDDA]] slot. It is for an
+// object being made, before any script has seen it: typeof an object does not
+// change over its life.
+func (o *Object) MarkHTMLDDA() { o.flags |= objHTMLDDA }
 
 // IsCallable reports whether the object can be called.
 func (o *Object) IsCallable() bool {

@@ -323,6 +323,12 @@ func (r *Runtime) looseEquals(a, b Value) (bool, error) {
 	case (ak == KindNull && bk == KindUndefined) ||
 		(ak == KindUndefined && bk == KindNull):
 		return true, nil
+	// Annex B: document.all is == to null and undefined, and to nothing
+	// else it would not otherwise be.
+	case ak == KindObject && (bk == KindNull || bk == KindUndefined):
+		return a.Object().flags&objHTMLDDA != 0, nil
+	case bk == KindObject && (ak == KindNull || ak == KindUndefined):
+		return b.Object().flags&objHTMLDDA != 0, nil
 
 	case ak == KindNumber && bk == KindString:
 		return a.Number() == jsnum.ToNumber(b.String().Go()), nil

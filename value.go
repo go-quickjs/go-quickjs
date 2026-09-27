@@ -103,6 +103,9 @@ func (v Value) IsNull() bool { return v.v.IsNull() }
 // IsNullish reports whether the value is null or undefined.
 func (v Value) IsNullish() bool { return v.v.IsNullish() }
 
+// IsString reports whether the value is a string.
+func (v Value) IsString() bool { return v.v.Kind() == vm.KindString }
+
 // IsObject reports whether the value is an object, including arrays and
 // functions.
 func (v Value) IsObject() bool { return v.v.IsObject() }

@@ -44,7 +44,7 @@ called in every language. It is held against a full ICU build:
 not is named.
 
 Of the 99,937 test262 variants in the areas the engine claims -- the language,
-the built-ins, `Intl` and Annex B -- 98,674 pass, none fail, and 1,263 are
+the built-ins, `Intl` and Annex B -- 98,744 pass, none fail, and 1,193 are
 skipped because they require an unsupported feature or host facility. See [Conformance](#conformance) for the
 measurement and [Not implemented](#not-implemented) for what is missing.
 
@@ -115,13 +115,12 @@ the test262 variants that need a second realm are skipped along with the
 `SharedArrayBuffer` is not shared with another runtime, so nothing can notify
 an `Atomics.wait`, which ends when its timeout does.
 
-Three things are left out on purpose, as QuickJS-NG leaves them out or as Node
+Two things are left out on purpose, as QuickJS-NG leaves them out or as Node
 behaves:
 
 - A sloppy-mode function has no `caller`, and its `arguments` are not
   reachable from outside it: reading either throws, as the standard's
   `Function.prototype` accessors do.
-- There is no `document.all`, so nothing is falsy while being an object.
 - An error's `stack` is an own data property, as in V8, rather than the
   accessor on `Error.prototype` that a proposal describes.
 
@@ -154,8 +153,8 @@ rather than counted against it.
 By default it runs `language`, `built-ins`, `intl402` and `annexB`; `staging`
 holds proposals too early to claim, and `harness` tests the suite's own helpers.
 
-Measured coverage, as of the most recent run: 98,674 variants pass and none
-fail. The other 1,263 are skipped rather than counted: a test tagged with a
+Measured coverage, as of the most recent run: 98,744 variants pass and none
+fail. The other 1,193 are skipped rather than counted: a test tagged with a
 feature the engine does not implement, or one that asks the host for a second
 realm or an agent, is testing something that was never claimed.
 
@@ -341,6 +340,12 @@ rt.Set("readLater", func(name string) *quickjs.Promise {
 `NewObject`, `NewArray`, `NewBytes`, `NewError` and `Throw` build the values a
 marshalled Go value cannot express; `Value.Bytes` reads a typed array back.
 `OnUnhandledRejection` reports a promise nobody took.
+
+A host that emulates a browser's document can make its `document.all`:
+`NewHTMLDDA` returns an object with Annex B's [[IsHTMLDDA]] slot, which
+`typeof` calls `"undefined"`, which is falsy, and which is `==` to `null` and
+`undefined`, while everything else sees an ordinary object. Given a Go
+function, it is callable too.
 
 ## Modules
 
