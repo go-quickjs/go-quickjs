@@ -159,12 +159,13 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 	}
 
 	c.compileStatements(fn.Body)
-	if fn.Kind == ast.FuncConstructor || fn.Kind == ast.FuncDerivedConstructor {
-		// A constructor returns its `this` rather than undefined. That matters
-		// for a derived class, where super() may replace `this` with the
-		// object the base constructor built -- which is how `class E extends
-		// Error` ends up with a real Error, and `class A extends Array` with a
-		// real array.
+	// A constructor returns its `this` rather than undefined. That matters
+	// for a derived class, where super() may replace `this` with the object
+	// the base constructor built -- which is how `class E extends Error` ends
+	// up with a real Error, and `class A extends Array` with a real array. A
+	// derived one's return reads its binding itself, so that one never bound
+	// fails the construction rather than the body, in the caller's realm.
+	if fn.Kind == ast.FuncConstructor {
 		c.emit(bytecode.OpPushThis, 0, 0)
 		c.emit(bytecode.OpReturn, 0, 0)
 	}

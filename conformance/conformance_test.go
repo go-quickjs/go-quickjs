@@ -18,6 +18,7 @@ import (
 
 	"github.com/go-quickjs/go-quickjs"
 	"github.com/go-quickjs/go-quickjs/conformance"
+	"github.com/go-quickjs/go-quickjs/internal/realmhook"
 )
 
 // The test262 conformance run.
@@ -72,7 +73,6 @@ var unsupportedFeatures = map[string]string{
 	"decorators":                         "decorators are not implemented",
 	"ShadowRealm":                        "no shadow realms",
 	"error-stack-accessor":               "Error stack is an own accessor, as in V8",
-	"cross-realm":                        "no realms API",
 	"caller":                             "no legacy caller access",
 }
 
@@ -261,13 +261,10 @@ func runOne(suite *conformance.Suite, tc *conformance.Test,
 	if tc.Meta.Flags["CanBlockIsFalse"] || tc.Meta.Flags["CanBlockIsTrue"] {
 		return resultSkip, "no agent support"
 	}
-	// A test that asks the host for a second realm or for an agent is asking
-	// for something this host does not have, the same as a test tagged with a
-	// feature the engine does not implement. Both are skipped rather than
-	// counted, and both are listed as not implemented.
-	if strings.Contains(tc.Source, "$262.createRealm") {
-		return resultSkip, "no second realm"
-	}
+	// A test that asks the host for an agent is asking for something this
+	// host does not have, the same as a test tagged with a feature the engine
+	// does not implement. It is skipped rather than counted, and listed as not
+	// implemented.
 	if strings.Contains(tc.Source, "$262.agent") {
 		return resultSkip, "no agent support"
 	}
@@ -299,8 +296,8 @@ func runOne(suite *conformance.Suite, tc *conformance.Test,
 	rt.Set("print", func(s string) { printed = append(printed, s) })
 
 	// $262 is the host object test262 expects. Only the parts this engine can
-	// honestly provide are defined; a test needing createRealm or agent is
-	// skipped above rather than being told a lie about what is here.
+	// honestly provide are defined; a test needing an agent is skipped above
+	// rather than being told a lie about what is here.
 	rt.Set("detachArrayBuffer", func(rt *quickjs.Runtime, v quickjs.Value) error {
 		return rt.DetachArrayBuffer(v)
 	})
@@ -323,6 +320,40 @@ func runOne(suite *conformance.Suite, tc *conformance.Test,
 		return resultSkip, "could not make IsHTMLDDA: " + err.Error()
 	}
 	rt.Set("isHTMLDDA", htmldda)
+	// createRealm makes a realm with a $262 of its own. Its functions are
+	// made in it, so what they throw is its errors.
+	var createRealm func() (quickjs.Value, error)
+	createRealm = func() (quickjs.Value, error) {
+		re, err := realmhook.NewRealm(rt)
+		if err != nil {
+			return quickjs.Value{}, err
+		}
+		eval := func(src string) (quickjs.Value, error) {
+			v, err := re.Eval(src)
+			val, _ := v.(quickjs.Value)
+			return val, err
+		}
+		for _, g := range []struct {
+			name string
+			v    any
+		}{
+			{"evalScript", eval},
+			{"createRealm", createRealm},
+			{"detachArrayBuffer", func(rt *quickjs.Runtime, v quickjs.Value) error { return rt.DetachArrayBuffer(v) }},
+		} {
+			if err := re.Set(g.name, g.v); err != nil {
+				return quickjs.Value{}, err
+			}
+		}
+		return eval(`var $262 = {
+			global: globalThis,
+			evalScript: evalScript,
+			createRealm: createRealm,
+			detachArrayBuffer: detachArrayBuffer,
+			gc: function () { throw new Error("gc is not supported"); },
+		}; $262`)
+	}
+	rt.Set("createRealm", createRealm)
 	if _, err := rt.Eval(`
 		var $262 = {
 			global: globalThis,
@@ -330,6 +361,7 @@ func runOne(suite *conformance.Suite, tc *conformance.Test,
 			evalScript: evalScript,
 			AbstractModuleSource: abstractModuleSource,
 			IsHTMLDDA: isHTMLDDA,
+			createRealm: createRealm,
 			gc: function () { throw new Error("gc is not supported"); },
 		};
 	`); err != nil {

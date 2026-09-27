@@ -16,7 +16,7 @@ import (
 
 // prepare converts a compiled template into a closure ready to run.
 func (r *Runtime) prepare(fn *bytecode.Function) *closure {
-	cl := &closure{fn: fn, realm: r}
+	cl := &closure{fn: fn, realm: r.Realm}
 
 	cl.names = make([]Atom, len(fn.Names))
 	for i, n := range fn.Names {
@@ -251,6 +251,7 @@ func (r *Runtime) installEval() {
 	_ = fnProto
 	ctor := ctorVal.Object()
 	ctor.data = &funcData{
+		realm:    r.Realm,
 		name:     "Function",
 		length:   1,
 		ctorKind: ctorBase,
@@ -311,7 +312,7 @@ func (r *Runtime) defDerivedFunctionCtor(name string, proto *Object, base *Objec
 	}
 	c := newObject(base, ClassFunction)
 	c.data = &funcData{
-		name: name, length: 1, ctorKind: ctorBase,
+		name: name, length: 1, ctorKind: ctorBase, realm: r.Realm,
 		native: func(rt *Runtime, this Value, args []Value) (Value, error) {
 			if rt.evaluator == nil {
 				return Undefined, rt.throwTypeError("code generation from strings is disabled")

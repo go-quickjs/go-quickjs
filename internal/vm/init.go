@@ -6,7 +6,6 @@ import (
 	"time"
 
 	intl "github.com/go-quickjs/go-intl"
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
 // Config configures a new Runtime.
@@ -53,16 +52,10 @@ func New(cfg Config) *Runtime {
 		interruptCounter: interruptCheckInterval,
 		symbolRegistry:   make(map[string]*Symbol),
 		cleanups:         &cleanupQueue{},
-		templateCache:    make(map[*bytecode.Function][]*Object),
 	}
-
-	r.building = true
+	r.Realm = newRealm(r)
 	r.initWellKnownSymbols()
-	r.initIntrinsics()
-	r.initGlobals()
-	// What is left of the slab would be kept alive by the objects cut from it,
-	// and a realm is built once.
-	r.funcSlab, r.building = nil, false
+	r.initRealm()
 	return r
 }
 
@@ -172,7 +165,8 @@ func (r *Runtime) initIntrinsics() {
 	// Function.prototype is itself callable and returns undefined.
 	r.proto.function = newObject(r.proto.object, ClassFunction)
 	r.proto.function.data = &funcData{
-		name: "",
+		name:  "",
+		realm: r.Realm,
 		native: func(*Runtime, Value, []Value) (Value, error) {
 			return Undefined, nil
 		},
@@ -231,7 +225,7 @@ func (r *Runtime) initIntrinsics() {
 // newNativeFunc creates a callable object wrapping a Go function.
 func (r *Runtime) newNativeFunc(name string, length int, fn NativeFunc) *Object {
 	o, fd := r.newSlabFuncObject(r.proto.function, ClassFunction)
-	*fd = funcData{native: fn, name: name, length: length, ctorKind: ctorNone}
+	*fd = funcData{native: fn, name: name, length: length, ctorKind: ctorNone, realm: r.Realm}
 	return o
 }
 
@@ -243,10 +237,10 @@ func (r *Runtime) newNativeFuncPair(len1, len2 int, fn1, fn2 NativeFunc) (*Objec
 	proto := r.proto.function
 	pair.a.Object = Object{proto: proto, class: ClassFunction, flags: objExtensible}
 	pair.a.Object.data = &pair.a.fn
-	pair.a.fn = funcData{native: fn1, length: len1, ctorKind: ctorNone}
+	pair.a.fn = funcData{native: fn1, length: len1, ctorKind: ctorNone, realm: r.Realm}
 	pair.b.Object = Object{proto: proto, class: ClassFunction, flags: objExtensible}
 	pair.b.Object.data = &pair.b.fn
-	pair.b.fn = funcData{native: fn2, length: len2, ctorKind: ctorNone}
+	pair.b.fn = funcData{native: fn2, length: len2, ctorKind: ctorNone, realm: r.Realm}
 	return &pair.a.Object, &pair.b.Object
 }
 
@@ -303,8 +297,9 @@ func (r *Runtime) defGetter(target *Object, name string, fn NativeFunc) {
 // in both directions.
 func (r *Runtime) newCtor(name string, length int, proto *Object, fn NativeFunc) *Object {
 	c, fd := r.newSlabFuncObject(r.proto.function, ClassFunction)
-	*fd = funcData{native: fn, name: name, length: length, ctorKind: ctorBase}
+	*fd = funcData{native: fn, name: name, length: length, ctorKind: ctorBase, realm: r.Realm}
 	c.setOwnRaw(atomPrototype, Obj(proto), 0)
+	r.registerIntrinsic(name, proto)
 	proto.setOwnRaw(atomConstructor, Obj(c), propWritable|propConfigurable)
 	r.defValue(r.global, name, Obj(c))
 	return c

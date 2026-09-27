@@ -19,49 +19,22 @@ import (
 // parallelism create one Runtime per goroutine, which is also what isolates
 // untrusted scripts from each other.
 type Runtime struct {
+	// Realm is the realm running now: the one the function executing
+	// belongs to, or the one the host is evaluating in. Its fields are
+	// promoted, so r.proto and r.global are the current realm's.
+	*Realm
+
 	atoms *atomTable
 
-	// global is the global object, and globalEnv is the scope that var and
-	// function declarations at the top level bind into.
-	global *Object
-	// intlProtos holds the prototypes of the Intl constructors, which are
-	// built only if something asks for Intl at all.
-	intlProtos map[string]*Object
 	// intlService is the Intl constructor reading its options, which V8's
 	// messages about an option name; see enterIntl.
 	intlService string
-	// intlFallback is the symbol a formatter made without new is hidden under.
-	intlFallback *Symbol
-	// temporalDurationProto is retained because Instant difference operations
-	// create Duration results after the lazy Temporal namespace has been built.
-	temporalNamespace *Object
 	// temporalLoaded is Temporal's calendars and zones, read when a
 	// Temporal value first needs them.
 	temporalLoaded *temporal.Data
 	// normalizerLoaded is Unicode normalization, read when a string is
 	// first normalized or a language's case rules first need it.
-	normalizerLoaded      *intl.Normalizer
-	temporalDurationProto *Object
-	// PlainDateTime conversions create PlainDate results through the retained
-	// intrinsic prototype rather than an observable constructor lookup.
-	temporalInstantProto        *Object
-	temporalPlainDateProto      *Object
-	temporalPlainDateTimeProto  *Object
-	temporalPlainMonthDayProto  *Object
-	temporalPlainTimeProto      *Object
-	temporalPlainYearMonthProto *Object
-	temporalZonedDateTimeProto  *Object
-	// globalLex holds a script's top-level let, const and class bindings.
-	//
-	// They are not properties of the global object -- `let x = 1` does not make
-	// globalThis.x -- but they outlive the script that declared them and are
-	// visible to the next one and to eval, so they need somewhere of their own
-	// to live. A binding still in its dead zone is stored uninitialized.
-	globalLex *Object
-
-	// intrinsics holds the prototypes and constructors that the specification
-	// requires to exist before any script runs.
-	proto intrinsics
+	normalizerLoaded *intl.Normalizer
 
 	// usedNewTargetProto records that the built-in constructor now running has
 	// read new.target's prototype for itself. It is saved and restored around
@@ -104,15 +77,8 @@ type Runtime struct {
 	// setter are stackGetter and stackSetter, and stackSlot is the key an
 	// object that is not an error keeps its frames under, which no script can
 	// name. preparingStack is set while Error.prepareStackTrace runs.
-	stackAccessor  Value
-	stackGetter    *Object
-	stackSetter    *Object
 	stackSlot      Atom
 	preparingStack bool
-	// frameless are the built-ins a trace passes over, as V8 runs them
-	// without a frame: Function.prototype.call and apply, Reflect.apply and
-	// Reflect.construct.
-	frameless [4]*Object
 
 	// ctx carries cancellation from the embedding host. The interpreter checks
 	// it periodically, which is how a timeout or a cancelled request stops a
@@ -122,60 +88,9 @@ type Runtime struct {
 	// check costs one decrement per instruction rather than a context read.
 	interruptCounter int
 
-	// globalThis is the global object as a Value, held once because a sloppy
-	// call with no receiver substitutes it on every call.
-	globalThis Value
-
-	// genFuncProto, asyncFuncProto and asyncGenFuncProto are the intrinsic
-	// prototypes of the three kinds of function that are not ordinary.
-	genFuncProto      *Object
-	asyncFuncProto    *Object
-	asyncGenFuncProto *Object
-
-	// typedArrayCtor is %TypedArray%, and typedArrayProtos and typedArrayCtors
-	// hold one prototype and one constructor per element type.
-	//
-	// The constructors are recorded rather than read back from each prototype's
-	// constructor property, which a script may redefine: the species protocol
-	// falls back to the intrinsic, and an intrinsic that a script can replace
-	// is not one.
-	typedArrayCtor   *Object
-	typedArrayProtos [12]*Object
-	typedArrayCtors  [12]*Object
-
-	// promiseCtor is the intrinsic Promise, which the capability machinery
-	// compares against to take its fast path.
-	promiseCtor *Object
-
-	// throwTypeErrorFn is %ThrowTypeError%, the one function that both reading
-	// and writing a restricted property calls. There is exactly one of it per
-	// realm, which a script can observe.
-	throwTypeErrorFn *Object
-
 	// asyncModuleOrder numbers the modules that start waiting, which is the
 	// order the ones waiting on them are run in when they finish.
 	asyncModuleOrder int
-	// arrayValuesFn is Array.prototype.values, which the iteration fast paths
-	// compare against: an array iterates the way they assume only if this is
-	// still what its Symbol.iterator resolves to.
-	arrayValuesFn *Object
-
-	// uint8Proto is Uint8Array.prototype, which the base64 conversions need in
-	// order to build their results.
-	uint8Proto *Object
-
-	// iteratorCtor, helperProto and wrapProto back the iterator helpers.
-	iteratorCtor *Object
-	helperProto  *Object
-	wrapProto    *Object
-
-	// funcSlab is what the built-in functions are cut from, so that a realm's
-	// hundreds of them are a few dozen allocations rather than one each, and
-	// building says whether it is still open. Both are done with once the
-	// realm is built: a function made later lives as long as whatever holds
-	// it, which is not as long as the realm.
-	funcSlab []funcObject
-	building bool
 
 	// symbolRegistry backs Symbol.for and Symbol.keyFor.
 	symbolRegistry map[string]*Symbol
@@ -223,32 +138,13 @@ type Runtime struct {
 	// decide the contents of.
 	onImportMeta func(specifier string, meta *Object)
 
-	// evalFn is the intrinsic eval, which a call site compares its callee
-	// against: a direct eval is one that actually reaches this function, and a
-	// name that resolves to anything else is an ordinary call.
-	evalFn *Object
 	// evaluator compiles and runs source text for eval and the Function
 	// constructor. It is nil when code generation is disabled.
 	evaluator     Evaluator
 	compileModule func(specifier, source string) (*Module, error)
 
-	// arrayBufferProto and typedArrayProto are held here rather than in
-	// intrinsics because the typed array constructors are generated in a loop
-	// and need to reach them by name.
-	arrayBufferProto *Object
-	// sharedArrayBufferCtor is the intrinsic SharedArrayBuffer, which its
-	// slice falls back to when a species gives none.
-	sharedArrayBufferCtor *Object
-	// abstractModuleSource is %AbstractModuleSource%, which no global names.
-	abstractModuleSource *Object
 	// pendingTail is the call a frame ended in, for run to make in its place.
 	pendingTail tailCall
-	// legacyRegExp is what RegExp.$1 and the rest describe.
-	legacyRegExp legacyRegExpStatics
-	// arrayBufferCtor is the intrinsic ArrayBuffer, which slice falls back to
-	// when the object names no species of its own.
-	arrayBufferCtor *Object
-	typedArrayProto *Object
 
 	// locale is the language a program means when it does not say which: the
 	// one the machine is set to, unless the host chose another.
@@ -263,7 +159,121 @@ type Runtime struct {
 	// from the three above when a Date first needs it and made again when
 	// one of them changes.
 	dates *date.Environment
+}
 
+// Realm is a set of intrinsics and the global object that goes with them.
+//
+// A runtime has one it is made with, and may make more; they share
+// everything else -- the stack, the job queue, the symbols. A function
+// belongs to the realm it was made in, and runs in it whoever calls it.
+type Realm struct {
+	// agent is the runtime the realm belongs to.
+	agent *Runtime
+	// names records the intrinsic prototypes by name, so that one realm's
+	// can be found for another's: a constructor whose new.target names no
+	// prototype falls back to the one of new.target's realm.
+	names []namedIntrinsic
+
+	// global is the global object, and globalEnv is the scope that var and
+	// function declarations at the top level bind into.
+	global *Object
+	// intlProtos holds the prototypes of the Intl constructors, which are
+	// built only if something asks for Intl at all.
+	intlProtos map[string]*Object
+	// intlFallback is the symbol a formatter made without new is hidden under.
+	intlFallback *Symbol
+	// temporalDurationProto is retained because Instant difference operations
+	// create Duration results after the lazy Temporal namespace has been built.
+	temporalNamespace     *Object
+	temporalDurationProto *Object
+	// PlainDateTime conversions create PlainDate results through the retained
+	// intrinsic prototype rather than an observable constructor lookup.
+	temporalInstantProto        *Object
+	temporalPlainDateProto      *Object
+	temporalPlainDateTimeProto  *Object
+	temporalPlainMonthDayProto  *Object
+	temporalPlainTimeProto      *Object
+	temporalPlainYearMonthProto *Object
+	temporalZonedDateTimeProto  *Object
+	// globalLex holds a script's top-level let, const and class bindings.
+	//
+	// They are not properties of the global object -- `let x = 1` does not make
+	// globalThis.x -- but they outlive the script that declared them and are
+	// visible to the next one and to eval, so they need somewhere of their own
+	// to live. A binding still in its dead zone is stored uninitialized.
+	globalLex *Object
+	// intrinsics holds the prototypes and constructors that the specification
+	// requires to exist before any script runs.
+	proto         intrinsics
+	stackAccessor Value
+	stackGetter   *Object
+	stackSetter   *Object
+	// frameless are the built-ins a trace passes over, as V8 runs them
+	// without a frame: Function.prototype.call and apply, Reflect.apply and
+	// Reflect.construct.
+	frameless [4]*Object
+	// globalThis is the global object as a Value, held once because a sloppy
+	// call with no receiver substitutes it on every call.
+	globalThis Value
+	// genFuncProto, asyncFuncProto and asyncGenFuncProto are the intrinsic
+	// prototypes of the three kinds of function that are not ordinary.
+	genFuncProto      *Object
+	asyncFuncProto    *Object
+	asyncGenFuncProto *Object
+	// typedArrayCtor is %TypedArray%, and typedArrayProtos and typedArrayCtors
+	// hold one prototype and one constructor per element type.
+	//
+	// The constructors are recorded rather than read back from each prototype's
+	// constructor property, which a script may redefine: the species protocol
+	// falls back to the intrinsic, and an intrinsic that a script can replace
+	// is not one.
+	typedArrayCtor   *Object
+	typedArrayProtos [12]*Object
+	typedArrayCtors  [12]*Object
+	// promiseCtor is the intrinsic Promise, which the capability machinery
+	// compares against to take its fast path.
+	promiseCtor *Object
+	// throwTypeErrorFn is %ThrowTypeError%, the one function that both reading
+	// and writing a restricted property calls. There is exactly one of it per
+	// realm, which a script can observe.
+	throwTypeErrorFn *Object
+	// arrayValuesFn is Array.prototype.values, which the iteration fast paths
+	// compare against: an array iterates the way they assume only if this is
+	// still what its Symbol.iterator resolves to.
+	arrayValuesFn *Object
+	// uint8Proto is Uint8Array.prototype, which the base64 conversions need in
+	// order to build their results.
+	uint8Proto *Object
+	// iteratorCtor, helperProto and wrapProto back the iterator helpers.
+	iteratorCtor *Object
+	helperProto  *Object
+	wrapProto    *Object
+	// funcSlab is what the built-in functions are cut from, so that a realm's
+	// hundreds of them are a few dozen allocations rather than one each, and
+	// building says whether it is still open. Both are done with once the
+	// realm is built: a function made later lives as long as whatever holds
+	// it, which is not as long as the realm.
+	funcSlab []funcObject
+	building bool
+	// evalFn is the intrinsic eval, which a call site compares its callee
+	// against: a direct eval is one that actually reaches this function, and a
+	// name that resolves to anything else is an ordinary call.
+	evalFn *Object
+	// arrayBufferProto and typedArrayProto are held here rather than in
+	// intrinsics because the typed array constructors are generated in a loop
+	// and need to reach them by name.
+	arrayBufferProto *Object
+	// sharedArrayBufferCtor is the intrinsic SharedArrayBuffer, which its
+	// slice falls back to when a species gives none.
+	sharedArrayBufferCtor *Object
+	// abstractModuleSource is %AbstractModuleSource%, which no global names.
+	abstractModuleSource *Object
+	// legacyRegExp is what RegExp.$1 and the rest describe.
+	legacyRegExp legacyRegExpStatics
+	// arrayBufferCtor is the intrinsic ArrayBuffer, which slice falls back to
+	// when the object names no species of its own.
+	arrayBufferCtor *Object
+	typedArrayProto *Object
 	// templateCache keeps the object identity that tagged templates require:
 	// the same template site must hand the same strings array to its tag on
 	// every evaluation.
@@ -347,8 +357,8 @@ type closure struct {
 	names []Atom
 	// consts caches the materialized constant pool for the same reason.
 	consts []Value
-	// realm is the runtime the closure belongs to.
-	realm *Runtime
+	// realm is the realm the closure belongs to.
+	realm *Realm
 	// env is the environment an unqualified name resolves against. It is nil
 	// for a script, whose names resolve on the global object, and the module
 	// environment for module code -- which inherits from the global object, so

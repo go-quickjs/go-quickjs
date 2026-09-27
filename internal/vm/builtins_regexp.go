@@ -21,6 +21,9 @@ type regexpData struct {
 	// update RegExp.$1 and the rest, and which compile may be used on. A
 	// subclass's instance is not one.
 	legacy bool
+	// realm is the realm the RegExp was made in, which compile has to be
+	// called from.
+	realm *Realm
 }
 
 // regexpOf recovers the compiled pattern from a receiver.
@@ -42,7 +45,7 @@ func (r *Runtime) newRegExp(source, flags string) (Value, error) {
 		return Undefined, r.throwSyntaxError("%s", err.Error())
 	}
 	o := newObject(r.proto.regexp, ClassRegExp)
-	o.data = &regexpData{re: re, legacy: true}
+	o.data = &regexpData{re: re, legacy: true, realm: r.Realm}
 	// lastIndex is writable but neither enumerable nor configurable.
 	o.setOwnRaw(atomLastIndex, Int(0), propWritable)
 	return Obj(o), nil

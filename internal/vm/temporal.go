@@ -76,7 +76,7 @@ func temporalObject(proto *Object, v any) Value {
 func (k temporalKind[T]) ctor(ns *Object, length int, make func(rt *Runtime, args []Value) (T, error)) *Object {
 	proto := k.proto
 	c, data := k.r.newSlabFuncObject(k.r.proto.function, ClassFunction)
-	*data = funcData{name: k.name, length: length, ctorKind: ctorBase,
+	*data = funcData{name: k.name, length: length, ctorKind: ctorBase, realm: k.r.Realm,
 		native: func(rt *Runtime, this Value, args []Value) (Value, error) {
 			if !rt.Constructing() {
 				return Undefined, rt.throwTypeError("Method invoked on an object that is not Temporal.%s.", k.name)

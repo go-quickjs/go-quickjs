@@ -311,7 +311,11 @@ func (r *Runtime) initMapBuiltins() {
 		if err := rt.requireNew("Map"); err != nil {
 			return Undefined, err
 		}
-		o := newObject(rt.protoFromNewTarget(rt.proto.mapProto), ClassMap)
+		proto, err := rt.protoFromNewTargetErr(rt.proto.mapProto)
+		if err != nil {
+			return Undefined, err
+		}
+		o := newObject(proto, ClassMap)
 		o.data = newJSMap(false)
 		// An iterable argument seeds the map with its [key, value] pairs,
 		// through the object's own set method: a subclass that overrides it
@@ -475,7 +479,11 @@ func (r *Runtime) initSetBuiltins() {
 		if err := rt.requireNew("Set"); err != nil {
 			return Undefined, err
 		}
-		o := newObject(rt.protoFromNewTarget(rt.proto.setProto), ClassSet)
+		proto, err := rt.protoFromNewTargetErr(rt.proto.setProto)
+		if err != nil {
+			return Undefined, err
+		}
+		o := newObject(proto, ClassSet)
 		o.data = newJSMap(false)
 		if err := rt.seedFromValues(o, arg(args, 0), "add"); err != nil {
 			return Undefined, err
@@ -565,7 +573,11 @@ func (r *Runtime) initWeakCollections() {
 		if err := rt.requireNew("WeakMap"); err != nil {
 			return Undefined, err
 		}
-		o := newObject(rt.protoFromNewTarget(wmProto), ClassWeakMap)
+		proto, err := rt.protoFromNewTargetErr(wmProto)
+		if err != nil {
+			return Undefined, err
+		}
+		o := newObject(proto, ClassWeakMap)
 		o.data = newJSMap(true)
 		// An iterable of [key, value] pairs populates it, exactly as for Map.
 		if err := rt.seedFromEntries(o, arg(args, 0), "set"); err != nil {
@@ -651,7 +663,11 @@ func (r *Runtime) initWeakCollections() {
 		if err := rt.requireNew("WeakSet"); err != nil {
 			return Undefined, err
 		}
-		o := newObject(rt.protoFromNewTarget(wsProto), ClassWeakSet)
+		proto, err := rt.protoFromNewTargetErr(wsProto)
+		if err != nil {
+			return Undefined, err
+		}
+		o := newObject(proto, ClassWeakSet)
 		o.data = newJSMap(true)
 		if err := rt.seedFromValues(o, arg(args, 0), "add"); err != nil {
 			return Undefined, err
@@ -796,19 +812,13 @@ func (r *Runtime) iterateOptional(v Value, visit func(Value) error) error {
 	return r.iterate(v, visit)
 }
 
-// protoFromNewTarget resolves the prototype a constructed object should have.
+// protoFromNewTargetErr resolves the prototype a constructed object should
+// have, which is GetPrototypeFromConstructor: new.target's prototype, or the
+// fallback's counterpart in new.target's realm.
 //
 // A subclass's instance needs it before the constructor finishes, because the
 // constructor reads the method it adds entries through from the object -- and
 // that method is the subclass's when the subclass overrode it.
-func (r *Runtime) protoFromNewTarget(fallback *Object) *Object {
-	p, _ := r.protoFromNewTargetErr(fallback)
-	return p
-}
-
-// protoFromNewTargetErr is protoFromNewTarget with the error the read may
-// produce, which a constructor whose specification reads the property at a
-// definite point has to report rather than swallow.
 func (r *Runtime) protoFromNewTargetErr(fallback *Object) (*Object, error) {
 	nt := r.newTarget()
 	if !nt.IsObject() {
@@ -822,7 +832,9 @@ func (r *Runtime) protoFromNewTargetErr(fallback *Object) (*Object, error) {
 		return nil, err
 	}
 	if !p.IsObject() {
-		return fallback, nil
+		// The fallback is new.target's realm's, which is not always the
+		// constructor's.
+		return r.protoForNewTarget(nt.Object(), fallback)
 	}
 	return p.Object(), nil
 }

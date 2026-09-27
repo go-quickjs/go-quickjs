@@ -773,7 +773,7 @@ func (r *Runtime) initTypedArrayBuiltins() {
 	// called.
 	abstract := newObject(r.proto.function, ClassFunction)
 	abstract.data = &funcData{
-		name: "TypedArray", length: 0, ctorKind: ctorBase,
+		name: "TypedArray", length: 0, ctorKind: ctorBase, realm: r.Realm,
 		native: func(rt *Runtime, this Value, args []Value) (Value, error) {
 			return Undefined, rt.throwTypeError("TypedArray is abstract and cannot be constructed")
 		},

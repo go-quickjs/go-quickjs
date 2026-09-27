@@ -136,7 +136,11 @@ func (r *Runtime) initIteratorHelpers() {
 		if nt := rt.newTarget(); nt.IsObject() && nt.Object() == rt.iteratorCtor {
 			return Undefined, rt.throwTypeError("Iterator is abstract and cannot be constructed directly")
 		}
-		return Undefined, nil
+		proto, err := rt.protoFromNewTargetErr(rt.proto.iterator)
+		if err != nil {
+			return Undefined, err
+		}
+		return Obj(newObject(proto, ClassObject)), nil
 	})
 	r.iteratorCtor = ctor
 

@@ -56,6 +56,17 @@ func (r *Runtime) arraySpeciesCreate(orig Value, n int64) (*arrayOut, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Another realm's Array makes this realm's arrays, so that an array
+	// passed between realms does not carry its realm into what is made of it.
+	if isConstructor(c) {
+		re, err := r.functionRealm(c.Object())
+		if err != nil {
+			return nil, err
+		}
+		if re != r.Realm && c.Object() == re.proto.arrayCtor {
+			c = Undefined
+		}
+	}
 	if c.IsObject() {
 		sp, err := r.getValueProp(c, r.atoms.internSymbol(r.wellKnown.species))
 		if err != nil {

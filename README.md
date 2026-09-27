@@ -44,7 +44,7 @@ called in every language. It is held against a full ICU build:
 not is named.
 
 Of the 99,937 test262 variants in the areas the engine claims -- the language,
-the built-ins, `Intl` and Annex B -- 98,744 pass, none fail, and 1,193 are
+the built-ins, `Intl` and Annex B -- 99,137 pass, none fail, and 800 are
 skipped because they require an unsupported feature or host facility. See [Conformance](#conformance) for the
 measurement and [Not implemented](#not-implemented) for what is missing.
 
@@ -109,9 +109,10 @@ Gregorian layout.
 Decorators, `ShadowRealm`, and `Atomics.waitAsync`, which needs the host to
 provide a way of timing out a wait.
 
-There is one realm per runtime: `$262.createRealm` has nothing to return, so
-the test262 variants that need a second realm are skipped along with the
-`cross-realm` and `ShadowRealm` ones. There is one agent too: a
+A runtime can hold more than one realm, each with its own global object and
+intrinsics, and a function runs in the realm it was made in whoever calls it;
+test262's cross-realm tests run against it. A host cannot make a second realm
+yet, and `ShadowRealm` is not there. There is one agent: a
 `SharedArrayBuffer` is not shared with another runtime, so nothing can notify
 an `Atomics.wait`, which ends when its timeout does.
 
@@ -154,8 +155,8 @@ rather than counted against it.
 By default it runs `language`, `built-ins`, `intl402` and `annexB`; `staging`
 holds proposals too early to claim, and `harness` tests the suite's own helpers.
 
-Measured coverage, as of the most recent run: 98,744 variants pass and none
-fail. The other 1,193 are skipped rather than counted: a test tagged with a
+Measured coverage, as of the most recent run: 99,137 variants pass and none
+fail. The other 800 are skipped rather than counted: a test tagged with a
 feature the engine does not implement, or one that asks the host for a second
 realm or an agent, is testing something that was never claimed.
 

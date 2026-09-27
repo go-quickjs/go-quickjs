@@ -133,6 +133,9 @@ func (r *Runtime) initRegExpLegacyStatics(ctor *Object) {
 		if !d.legacy {
 			return Undefined, rt.throwTypeError("RegExp.prototype.compile cannot be used on a subclass's instance")
 		}
+		if d.realm != rt.Realm {
+			return Undefined, rt.throwTypeError("RegExp.prototype.compile cannot be used on another realm's RegExp")
+		}
 		pattern, flagsArg := arg(args, 0), arg(args, 1)
 		var source, flags string
 		if pattern.IsObject() && pattern.Object().class == ClassRegExp {

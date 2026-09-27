@@ -897,11 +897,16 @@ type funcData struct {
 	name   string
 	length int
 
-	// ctorKind says how the function responds to `new`.
-	ctorKind ctorKind
+	// realm is the realm a built-in belongs to, which it runs in whoever
+	// calls it. A compiled function's is its closure's; a bound function has
+	// its target's.
+	realm *Realm
 	// homeObject is the object a method was defined on, which `super` resolves
 	// against.
 	homeObject *Object
+	// ctorKind says how the function responds to `new`. It sits with the
+	// flags below, which share its word.
+	ctorKind ctorKind
 	// propsMaterialized records that name and length have been turned into real
 	// properties, after which the synthesized reads must stop -- otherwise
 	// deleting one would have no effect.

@@ -48,7 +48,7 @@ func privateKey(f *frame, cl *closure, ref uint32) Atom {
 		// reaching for the wrong member.
 		return atomEmpty
 	}
-	return cl.realm.atoms.internSymbol(v.Symbol())
+	return cl.realm.agent.atoms.internSymbol(v.Symbol())
 }
 
 // definePrivateAccessor adds a private getter or setter, joining it to the

@@ -98,6 +98,15 @@ func (r *Runtime) callObject(o *Object, this Value, args []Value, newTarget Valu
 		f.args = args
 		f.handlers = f.handlers[:0]
 		f.openUpvalues = f.openUpvalues[:0]
+		// A built-in runs in its own realm, whoever calls it.
+		if re := fd.realm; re != nil && re != r.Realm {
+			prev := r.Realm
+			r.Realm = re
+			v, err := fd.native(r, this, args)
+			r.Realm = prev
+			r.frameDepth--
+			return v, err
+		}
 		v, err := fd.native(r, this, args)
 		r.frameDepth--
 		return v, err
@@ -106,7 +115,25 @@ func (r *Runtime) callObject(o *Object, this Value, args []Value, newTarget Valu
 	if fd.closure == nil {
 		return Undefined, r.throwTypeError("function has no implementation")
 	}
+	// So does a compiled function.
+	var v Value
+	var err error
+	if re := fd.closure.realm; re != r.Realm {
+		prev := r.Realm
+		r.Realm = re
+		v, err = r.callClosure(o, fd, this, args, newTarget)
+		r.Realm = prev
+	} else {
+		v, err = r.callClosure(o, fd, this, args, newTarget)
+	}
+	if err == errNoSuper {
+		err = r.throwError(errReference, "%s", errNoSuper.Error())
+	}
+	return v, err
+}
 
+// callClosure calls a compiled function, in the realm it belongs to.
+func (r *Runtime) callClosure(o *Object, fd *funcData, this Value, args []Value, newTarget Value) (Value, error) {
 	// An arrow ignores the this and new.target it was called with.
 	if fd.arrow {
 		this = fd.lexThis
@@ -392,8 +419,10 @@ func (r *Runtime) tailTarget(tc tailCall) (*closure, Value, []Value, *Object, bo
 			o, this = fd.boundTarget, fd.boundThis
 			continue
 		}
+		// A function of another realm is called the ordinary way, which is
+		// what switches to its realm.
 		if fd.closure == nil || isGeneratorTemplate(fd.closure.fn) ||
-			isClassConstructorKind(fd.closure.fn.Kind) {
+			isClassConstructorKind(fd.closure.fn.Kind) || fd.closure.realm != r.Realm {
 			return nil, Undefined, nil, nil, false, nil
 		}
 		if fd.arrow {
@@ -3024,7 +3053,7 @@ func (r *Runtime) makeClosure(f *frame, c Value) *Object {
 	// the module's bindings rather than only the globals.
 	*child = closure{
 		fn: tmpl.fn, names: tmpl.names, consts: tmpl.consts,
-		realm: r, env: f.cl.env, upvalues: upvalues,
+		realm: r.Realm, env: f.cl.env, upvalues: upvalues,
 	}
 	for i, desc := range tmpl.fn.Upvalues {
 		if desc.FromParent {
@@ -3121,7 +3150,12 @@ func (r *Runtime) materializeFunctionProto(o *Object) {
 		return
 	}
 	fd.protoPending = false
-	proto := newObject(r.proto.object, ClassObject)
+	// It is the function's realm's object, whichever realm reads it first.
+	objProto := r.proto.object
+	if fd.closure != nil && fd.closure.realm != nil {
+		objProto = fd.closure.realm.proto.object
+	}
+	proto := newObject(objProto, ClassObject)
 	proto.setOwnRaw(atomConstructor, Obj(o), propWritable|propConfigurable)
 	// It goes where it would have been had the function been built with it:
 	// after length and name, which come first whenever they are created, and
@@ -3179,11 +3213,15 @@ func (r *Runtime) derivedResult(f *frame, cl *closure, v Value) (Value, error) {
 		return v, nil
 	}
 	if !f.thisRef.init {
-		return Undefined, r.throwError(errReference,
-			"a derived constructor must call super() before returning")
+		return Undefined, errNoSuper
 	}
 	return f.thisRef.value, nil
 }
+
+// errNoSuper is a derived constructor finishing without having called super().
+// It is not an exception the body can catch: the construction fails once the
+// body is done, and the ReferenceError it becomes is the caller's realm's.
+var errNoSuper = errors.New("a derived constructor must call super() before returning")
 
 // captureLocal returns the upvalue for a local slot, reusing an existing one so
 // that two closures over the same variable share it.
@@ -3301,14 +3339,16 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 	if err != nil {
 		return Undefined, err
 	}
-	proto := r.proto.object
+	var proto *Object
 	if protoVal.IsObject() {
 		proto = protoVal.Object()
-	} else if p := proxyOf(target); p != nil && p.revoked {
+	} else {
 		// A constructor that named no prototype falls back to the one of the
-		// realm it came from, and a revoked proxy no longer has a realm to be
-		// asked about.
-		return Undefined, r.throwTypeError("cannot perform an operation on a revoked proxy")
+		// realm it came from -- and a revoked proxy no longer has a realm to
+		// be asked about.
+		if proto, err = r.protoForNewTarget(target, r.proto.object); err != nil {
+			return Undefined, err
+		}
 	}
 	// The object is made with room for what the constructor is about to put in
 	// it, which the compiler counted. A bound function has no body of its own
@@ -3379,7 +3419,19 @@ func (r *Runtime) constructNative(o *Object, fd *funcData, args []Value,
 	}
 	if protoVal.IsObject() {
 		res.Object().proto = protoVal.Object()
+		return res, nil
 	}
+	// The constructor chose its own realm's prototype; new.target's realm
+	// may have another.
+	from, err := r.functionRealm(o)
+	if err != nil {
+		return Undefined, err
+	}
+	to, err := r.functionRealm(newTarget.Object())
+	if err != nil {
+		return Undefined, err
+	}
+	res.Object().proto = r.counterpart(from, to, res.Object().proto)
 	return res, nil
 }
 
