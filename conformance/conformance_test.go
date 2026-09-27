@@ -18,7 +18,6 @@ import (
 
 	"github.com/go-quickjs/go-quickjs"
 	"github.com/go-quickjs/go-quickjs/conformance"
-	"github.com/go-quickjs/go-quickjs/internal/realmhook"
 )
 
 // The test262 conformance run.
@@ -323,15 +322,11 @@ func runOne(suite *conformance.Suite, tc *conformance.Test,
 	// made in it, so what they throw is its errors.
 	var createRealm func() (quickjs.Value, error)
 	createRealm = func() (quickjs.Value, error) {
-		re, err := realmhook.NewRealm(rt)
+		re, err := rt.NewRealm()
 		if err != nil {
 			return quickjs.Value{}, err
 		}
-		eval := func(src string) (quickjs.Value, error) {
-			v, err := re.Eval(src)
-			val, _ := v.(quickjs.Value)
-			return val, err
-		}
+		eval := re.Eval
 		for _, g := range []struct {
 			name string
 			v    any

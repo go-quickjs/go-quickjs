@@ -229,7 +229,13 @@ func (r *Runtime) EvalFile(name, src string) (Value, error) {
 
 // EvalFileContext is EvalFile with cancellation, as EvalContext is Eval with
 // it: the script is called name in stack traces, and stops when ctx is done.
-func (r *Runtime) EvalFileContext(ctx context.Context, name, src string) (result Value, err error) {
+func (r *Runtime) EvalFileContext(ctx context.Context, name, src string) (Value, error) {
+	return r.evalIn(ctx, nil, name, src)
+}
+
+// evalIn runs a script in a realm, or in the runtime's own when re is nil, and
+// then the jobs it queued.
+func (r *Runtime) evalIn(ctx context.Context, re *vm.Realm, name, src string) (result Value, err error) {
 	if r.closed {
 		return Value{}, ErrClosed
 	}
@@ -241,7 +247,12 @@ func (r *Runtime) EvalFileContext(ctx context.Context, name, src string) (result
 	r.rt.SetContext(ctx)
 	defer r.rt.SetContext(nil)
 
-	v, err := r.rt.Run(fn)
+	var v vm.Value
+	if re == nil {
+		v, err = r.rt.Run(fn)
+	} else {
+		v, err = r.rt.RunIn(re, fn)
+	}
 	if err != nil {
 		return Value{}, r.wrapError(err)
 	}

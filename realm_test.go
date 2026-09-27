@@ -1,10 +1,11 @@
 package quickjs_test
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
-	"github.com/go-quickjs/go-quickjs/internal/realmhook"
 )
 
 // realmCases runs each source in a fresh runtime whose global other is a
@@ -13,7 +14,7 @@ func realmCases(t *testing.T, cases []struct{ src, want string }) {
 	t.Helper()
 	for _, tc := range cases {
 		rt := quickjs.New()
-		re, err := realmhook.NewRealm(rt)
+		re, err := rt.NewRealm()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -114,4 +115,44 @@ func TestRealmRegExpCompile(t *testing.T) {
 try { other.RegExp.prototype.compile.call(/x/) } catch (e) { r.push(e instanceof other.TypeError) }
 var o = new other.RegExp("a"); r.push(o.compile("b") === o); r.join()`, "true,true,true"},
 	})
+}
+
+// TestRealmAPI pins the public realm API: a realm's globals are its own, a Go
+// function set on it throws its errors, and a script run in it has the name
+// it was given and stops when its context is done.
+func TestRealmAPI(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	re, err := rt.NewRealm()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := re.Set("fail", func() error { return errors.New("from Go") }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := re.Eval("var inRealm = 1"); err != nil {
+		t.Fatal(err)
+	}
+	v, err := re.Eval(`try { fail() } catch (e) { [e instanceof Error, e.message, typeof inRealm].join() }`)
+	if err != nil || v.String() != "true,from Go,number" {
+		t.Errorf("realm eval = %v, %v", v, err)
+	}
+	if v, err := rt.Eval("typeof inRealm + ',' + typeof fail"); err != nil || v.String() != "undefined,undefined" {
+		t.Errorf("runtime's own realm sees %v, %v", v, err)
+	}
+	if err := rt.Set("other", re.Global()); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := rt.Eval("other.inRealm + ',' + (other.Array === Array)"); err != nil || v.String() != "1,false" {
+		t.Errorf("other realm's global = %v, %v", v, err)
+	}
+	v, err = re.EvalFileContext(context.Background(), "realm.js", "function f() { return new Error() }\nf().stack")
+	if err != nil || v.String() != "Error\n    at f (realm.js:1:23)\n    at realm.js:2:1" {
+		t.Errorf("named script's stack = %q, %v", v.String(), err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := re.EvalFileContext(ctx, "loop.js", "for (;;) {}"); !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled run: %v", err)
+	}
 }
