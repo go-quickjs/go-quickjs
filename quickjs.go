@@ -86,6 +86,8 @@ import (
 type Runtime struct {
 	rt     *vm.Runtime
 	closed bool
+	// nodeQuirks is WithNodeQuirks, which the parser and compiler are told.
+	nodeQuirks bool
 }
 
 // Option configures a Runtime.
@@ -137,10 +139,16 @@ func WithLocale(tag string) Option {
 
 // WithNodeQuirks enables observable Node.js behavior where it intentionally or
 // temporarily differs from the JavaScript and internationalization standards.
-// It currently reproduces Node 26's proleptic Islamic era names, Japanese h12
-// preference, and Temporal locale-formatting behavior for standalone era and
-// hour-cycle options. It is useful for hosts that prioritize Node compatibility
-// over conformance.
+//
+// In Intl and Temporal it reproduces Node 26's proleptic Islamic era names,
+// Japanese h12 preference, and Temporal locale-formatting behavior for
+// standalone era and hour-cycle options, among go-intl's named divergences.
+// In the language it follows V8: strict code may assign to a call, which
+// throws a ReferenceError when it runs; and Annex B hoists a function declared
+// in a block over the arguments object, and over a function an enclosing
+// block declares with the same name.
+//
+// It is useful for hosts that prioritize Node compatibility over conformance.
 func WithNodeQuirks() Option {
 	return func(c *config) { c.nodeQuirks = true }
 }
@@ -157,7 +165,7 @@ func New(opts ...Option) *Runtime {
 		MaxCallDepth: c.maxCallDepth,
 		Locale:       c.locale,
 		NodeQuirks:   c.nodeQuirks,
-	})}
+	}), nodeQuirks: c.nodeQuirks}
 	if !c.noCodeGeneration {
 		r.installCodeGeneration()
 	}
@@ -215,7 +223,7 @@ func (r *Runtime) EvalContext(ctx context.Context, src string) (result Value, er
 		return Value{}, ErrClosed
 	}
 	defer r.guard(&err)
-	fn, err := compile(src, "<eval>")
+	fn, err := r.compile(src, "<eval>")
 	if err != nil {
 		return Value{}, err
 	}
@@ -241,7 +249,7 @@ func (r *Runtime) EvalFile(name, src string) (result Value, err error) {
 		return Value{}, ErrClosed
 	}
 	defer r.guard(&err)
-	fn, err := compile(src, name)
+	fn, err := r.compile(src, name)
 	if err != nil {
 		return Value{}, err
 	}
@@ -256,12 +264,12 @@ func (r *Runtime) EvalFile(name, src string) (result Value, err error) {
 }
 
 // compile parses and compiles source text.
-func compile(src, name string) (*bytecodeFunc, error) {
-	prog, err := parser.Parse(src, parser.Options{})
+func (r *Runtime) compile(src, name string) (*bytecodeFunc, error) {
+	prog, err := parser.Parse(src, parser.Options{NodeQuirks: r.nodeQuirks})
 	if err != nil {
 		return nil, &SyntaxError{err: err}
 	}
-	fn, err := compiler.Compile(prog, compiler.Options{Source: name, Text: src})
+	fn, err := compiler.Compile(prog, compiler.Options{Source: name, Text: src, NodeQuirks: r.nodeQuirks})
 	if err != nil {
 		return nil, &SyntaxError{err: err}
 	}
@@ -416,11 +424,13 @@ func (r *Runtime) SetModuleLoader(fn ModuleLoader) {
 
 // compileAndRegisterModule parses, compiles and registers module source.
 func (r *Runtime) compileAndRegisterModule(specifier, source string) (*vm.Module, error) {
-	prog, err := parser.Parse(source, parser.Options{Module: true})
+	prog, err := parser.Parse(source, parser.Options{Module: true, NodeQuirks: r.nodeQuirks})
 	if err != nil {
 		return nil, &SyntaxError{err: err}
 	}
-	fn, info, err := compiler.CompileModule(prog, compiler.Options{Source: specifier, Text: source})
+	fn, info, err := compiler.CompileModule(prog, compiler.Options{
+		Source: specifier, Text: source, NodeQuirks: r.nodeQuirks,
+	})
 	if err != nil {
 		return nil, &SyntaxError{err: err}
 	}
@@ -517,9 +527,9 @@ func WithoutCodeGeneration() Option {
 // compiler, which that package deliberately does not import.
 func (r *Runtime) installCodeGeneration() {
 	r.rt.SetEvaluator(func(source string, req vm.EvalRequest) (*bytecode.Function, error) {
-		popts := parser.Options{}
+		popts := parser.Options{NodeQuirks: r.nodeQuirks}
 		copts := compiler.Options{
-			Source: "<eval>", Text: source,
+			Source: "<eval>", Text: source, NodeQuirks: r.nodeQuirks,
 			// Whatever eval declares on the global object is configurable,
 			// unlike what a script declares: the evaluated code could have
 			// declared it anywhere, so nothing should be able to rely on it.

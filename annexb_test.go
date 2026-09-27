@@ -125,15 +125,87 @@ func TestAnnexBBlockFunctionHoisting(t *testing.T) {
 		{`(function () { eval("try { throw 0; } catch (f) { { function f() {} } }"); return typeof f; })()`, "function"},
 		{`(function () { let f = 1; try { eval("var f"); } catch (e) { return e.name; } })()`, "SyntaxError"},
 		// Test262 against V8: the arguments object counts as a parameter, so
-		// a block function named arguments leaves it alone. V8 replaces it.
+		// a block function named arguments leaves it alone. V8 replaces it,
+		// as WithNodeQuirks does; see TestNodeQuirksLanguage.
 		{`(function () { { function arguments() {} } return typeof arguments; })()`, "object"},
 		{`(function (...a) { { function arguments() {} } return typeof arguments; })()`, "object"},
 		// Test262 against V8: an enclosing block's function of the same name
 		// is in the way of the inner one, which stays in its block. V8 hoists
-		// the inner one.
+		// the inner one, as WithNodeQuirks does.
 		{`(function () { { function f() { return 1; } { function f() { return 2; } } } return f(); })()`, "1"},
 		{`(function () { { function f() { return 1; } if (true) function f() { return 2; } } return f(); })()`, "1"},
 	})
+}
+
+// TestNodeQuirksLanguage pins where WithNodeQuirks follows V8 rather than the
+// standard in the language itself, each case with the answer standards mode
+// gives beside Node's.
+func TestNodeQuirksLanguage(t *testing.T) {
+	cases := []struct{ src, standard, node string }{
+		// Strict code may assign to a call: the call is made, and then the
+		// assignment is a ReferenceError.
+		{`var r = []; function f() { r.push("f"); return {}; }
+		try { eval("'use strict'; f() = (r.push('rhs'), 1)"); } catch (e) { r.push(e.name); }
+		r.join()`, "SyntaxError", "f,ReferenceError"},
+		{`var r = []; function f() { r.push("f"); return {}; }
+		try { eval("'use strict'; for (f() of [1]) ;"); } catch (e) { r.push(e.name); }
+		r.join()`, "SyntaxError", "f,ReferenceError"},
+		{`try { new Function("'use strict'; if (false) f()++;"); "parsed" } catch (e) { e.name }`, "SyntaxError", "parsed"},
+		// Neither mode lets a logical assignment or a pattern hold a call.
+		{`try { new Function("'use strict'; f() &&= 1"); "parsed" } catch (e) { e.name }`, "SyntaxError", "SyntaxError"},
+		{`try { new Function("[f()] = []"); "parsed" } catch (e) { e.name }`, "SyntaxError", "SyntaxError"},
+		// A block-level function named arguments replaces the arguments object.
+		{`(function (x) { var a = typeof arguments; { function arguments() {} } return a + "," + typeof arguments; })(1)`,
+			"object,object", "object,function"},
+		{`(function (...x) { { function arguments() {} } return typeof arguments; })()`, "object", "function"},
+		// A parameter of the name still stops the hoist.
+		{`(function (arguments) { { function arguments() {} } return typeof arguments; })(1)`, "number", "number"},
+		// A function nested in a block that already declares one of its name
+		// is hoisted too, as deep as it is.
+		{`(function () { { function h() { return 1; } { function h() { return 2; } } var x = h(); } return x + "," + h(); })()`,
+			"1,1", "1,2"},
+		{`(function () { { function h() { return 1; } { { function h() { return 3; } } } } return h(); })()`, "1", "3"},
+		{`{ function g1() { return 1; } { function g1() { return 2; } } } g1()`, "1", "2"},
+		// Anything else in the enclosing block still stops it.
+		{`(function () { { let h = 1; { function h() {} } } return typeof h; })()`, "undefined", "undefined"},
+		{`(function () { { async function h() {} { function h() {} } } return typeof h; })()`, "undefined", "undefined"},
+	}
+	for _, mode := range []struct {
+		name string
+		opts []quickjs.Option
+		want func(standard, node string) string
+	}{
+		{"standard", nil, func(s, _ string) string { return s }},
+		{"node", []quickjs.Option{quickjs.WithNodeQuirks()}, func(_, n string) string { return n }},
+	} {
+		t.Run(mode.name, func(t *testing.T) {
+			for _, tc := range cases {
+				rt := quickjs.New(mode.opts...)
+				v, err := rt.Eval(tc.src)
+				want := mode.want(tc.standard, tc.node)
+				if err != nil {
+					t.Errorf("%s: %v", tc.src, err)
+				} else if got := v.String(); got != want {
+					t.Errorf("%s = %q, want %q", tc.src, got, want)
+				}
+				rt.Close()
+			}
+		})
+	}
+
+	// A module is strict code, and takes the quirk too.
+	for _, quirks := range []bool{false, true} {
+		var opts []quickjs.Option
+		if quirks {
+			opts = append(opts, quickjs.WithNodeQuirks())
+		}
+		rt := quickjs.New(opts...)
+		_, err := rt.EvalModule("m.js", `function f() {} if (false) f() = 1;`)
+		if (err == nil) != quirks {
+			t.Errorf("module assigning to a call with quirks=%v: %v", quirks, err)
+		}
+		rt.Close()
+	}
 }
 
 // TestAnnexBBuiltins pins the web-compat built-ins Annex B describes.

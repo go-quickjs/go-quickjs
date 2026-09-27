@@ -42,6 +42,10 @@ type Options struct {
 	AllowSuperProp bool
 	AllowSuperCall bool
 	AllowNewTarget bool
+	// NodeQuirks parses as V8 does where it departs from the standard: strict
+	// code may assign to a call, which is then a ReferenceError when it runs
+	// rather than a SyntaxError before anything does.
+	NodeQuirks bool
 }
 
 // parser holds the state of one parse.
@@ -56,6 +60,8 @@ type parser struct {
 
 	strict bool
 	module bool
+	// nodeQuirks is Options.NodeQuirks.
+	nodeQuirks bool
 
 	// Context flags controlling which productions are legal at this point.
 	// They are saved and restored around function bodies rather than kept on a
@@ -187,6 +193,7 @@ func Parse(src string, opts Options) (prog *ast.Program, err error) {
 		allowSuperProp: opts.AllowSuperProp,
 		allowSuperCall: opts.AllowSuperCall,
 		allowNewTarget: opts.AllowNewTarget,
+		nodeQuirks:     opts.NodeQuirks,
 	}
 	// The recursive-descent routines report errors by panicking with a
 	// *Error, which keeps their signatures free of error returns. Nothing else

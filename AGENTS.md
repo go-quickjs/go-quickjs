@@ -77,7 +77,13 @@ gofmt -w internal/regexp/unicodetables.go
   data -- lives on the `Runtime`, never in package variables.
 - A difference from Node is one of go-intl's named divergences, chosen in
   `intlCompat`: standards mode takes the standard's side, `WithNodeQuirks`
-  Node's. The engine adds none of its own.
+  Node's.
+- `WithNodeQuirks` covers the language too. Where V8 departs from the
+  standard, standards mode follows the standard and test262, and
+  `WithNodeQuirks` follows V8, which the parser and compiler are told through
+  their `NodeQuirks` options. Each such difference gets a test pinning both
+  answers, as `TestNodeQuirksLanguage` does, and a line in the option's
+  documentation.
 - Error messages Intl and Temporal throw are V8's, word for word.
 - Keep `new Date().toString()`, `new Date().toTimeString()`, and Intl time-zone
   names aligned with the selected Node/ICU data across locales, zones, seasons,

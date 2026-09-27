@@ -36,6 +36,11 @@ func (e *Error) Error() string {
 type Options struct {
 	// Source names the origin of the code in stack traces.
 	Source string
+	// NodeQuirks compiles as V8 does where it departs from the standard.
+	// Annex B then hoists a block-level function named arguments over the
+	// arguments object, and one whose name a function in an enclosing block
+	// already binds.
+	NodeQuirks bool
 	// Text is the original source, retained so that Function.prototype.toString
 	// can reproduce a function's text.
 	Text string
@@ -881,9 +886,7 @@ func (c *compiler) checkGlobalVars(body []ast.Stmt) {
 			c.emit(bytecode.OpCheckGlobalVar, c.nameIdx(name), 1)
 		}
 	}
-	var names []string
-	collectVarNamesIn(body, &names, c.fn.Strict)
-	for _, n := range names {
+	for _, n := range c.varNames(body) {
 		if funcs[n] {
 			continue
 		}
@@ -894,14 +897,14 @@ func (c *compiler) checkGlobalVars(body []ast.Stmt) {
 // hoistGlobals declares top-level var and function bindings on the global
 // object, which is where script-level declarations live.
 func (c *compiler) hoistGlobals(body []ast.Stmt) {
-	names, annexB := collectVarDecls(body, nil, c.fn.Strict)
+	names, annexB := collectVarDecls(body, nil, c.fn.Strict, c.opts.NodeQuirks)
 	c.annexB = annexB
 	// Only Annex B asks for some of the names, and a lexical binding of the
 	// calling function between the eval and its variable scope stops the
 	// hoist rather than failing the eval.
 	if len(annexB) > 0 && c.opts.EvalOwnVarScope && !c.varScopeIsGlobal() {
 		// Collected as strict code, the names are the ones without Annex B.
-		plain, _ := collectVarDecls(body, nil, true)
+		plain, _ := collectVarDecls(body, nil, true, false)
 		real := map[string]bool{}
 		for _, n := range plain {
 			real[n] = true
@@ -1006,13 +1009,21 @@ func collectVarNames(body []ast.Stmt, out *[]string) {
 // be legal: a `let` of the same name anywhere between the block and the
 // function top level suppresses it, and strict mode suppresses it outright.
 func collectVarNamesIn(body []ast.Stmt, out *[]string, strict bool) {
-	*out, _ = collectVarDecls(body, *out, strict)
+	*out, _ = collectVarDecls(body, *out, strict, false)
+}
+
+// varNames collects the names a body's var-scoped bindings cover, as the code
+// being compiled hoists them.
+func (c *compiler) varNames(body []ast.Stmt) []string {
+	names, _ := collectVarDecls(body, nil, c.fn.Strict, c.opts.NodeQuirks)
+	return names
 }
 
 // collectVarDecls is collectVarNamesIn that also reports the block-level
-// function declarations whose names it added for Annex B.
-func collectVarDecls(body []ast.Stmt, out []string, strict bool) ([]string, map[*ast.FuncDecl]bool) {
-	c := &varCollector{out: out, strict: strict}
+// function declarations whose names it added for Annex B. With nodeQuirks it
+// hoists as V8 does.
+func collectVarDecls(body []ast.Stmt, out []string, strict, nodeQuirks bool) ([]string, map[*ast.FuncDecl]bool) {
+	c := &varCollector{out: out, strict: strict, nodeQuirks: nodeQuirks}
 	// A declaration Annex B would hoist over a lexical binding of the top
 	// level is not hoisted: `let f; { function f() {} }` keeps its let.
 	// Strict code hoists nothing, so needs no list.
@@ -1031,6 +1042,9 @@ func collectVarDecls(body []ast.Stmt, out []string, strict bool) ([]string, map[
 type varCollector struct {
 	out    []string
 	strict bool
+	// nodeQuirks hoists over an enclosing block's function of the same name,
+	// as V8 does.
+	nodeQuirks bool
 	// lexical is the stack of enclosing block scopes, innermost last. It is
 	// empty at the function's own top level, where a function declaration is
 	// var-scoped outright rather than by Annex B.
@@ -1092,8 +1106,9 @@ func (c *varCollector) shadowed(name string) bool {
 			// A block function declaration binds the name lexically too. In
 			// the declaration's own block it is the declaration being hoisted
 			// rather than something in its way; in an enclosing block it is
-			// in the way like anything else.
-			if scope[i].name == name && (!scope[i].fromFunc || depth < len(c.lexical)-1) {
+			// in the way like anything else -- except to V8.
+			enclosing := depth < len(c.lexical)-1 && !c.nodeQuirks
+			if scope[i].name == name && (!scope[i].fromFunc || enclosing) {
 				return true
 			}
 		}
@@ -1409,8 +1424,7 @@ func (c *compiler) checkEvalVarNames(body []ast.Stmt) {
 	if len(c.opts.ArgumentNames) == 0 {
 		return
 	}
-	var names []string
-	collectVarNamesIn(body, &names, c.fn.Strict)
+	names := c.varNames(body)
 	var lexical []lexicalName
 	for _, s := range body {
 		collectLexicalNames(s, &lexical)

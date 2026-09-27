@@ -1627,7 +1627,8 @@ func (c *compiler) assignToIdentStatic(t *ast.Ident, initializing bool) {
 // value on the stack as the expression's result.
 // compileCallTarget compiles a call that sloppy code assigned to: the call is
 // made, and then the assignment is a ReferenceError. The call's value stands
-// for the expression's, on the path nothing reaches.
+// for the expression's, on the path nothing reaches. Strict code gets here
+// only as V8 parses it, and V8 makes the call there too.
 func (c *compiler) compileCallTarget(call *ast.Call, pos int) {
 	c.compileExpr(call)
 	c.emitAt(pos, bytecode.OpThrowReferenceError, c.nameIdx("invalid assignment target"), 0)

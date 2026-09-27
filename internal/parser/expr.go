@@ -184,9 +184,10 @@ func (p *parser) checkSimpleAssignTarget(target ast.Expr, tok lexer.Token) {
 // isCallTarget reports whether a target is a call that sloppy code may assign
 // to -- for the web's sake, a ReferenceError when it runs rather than a
 // SyntaxError before anything does. super() and import() are not such calls.
+// V8 lets strict code assign to one too.
 func (p *parser) isCallTarget(target ast.Expr) bool {
 	call, ok := target.(*ast.Call)
-	if !ok || p.strict {
+	if !ok || (p.strict && !p.nodeQuirks) {
 		return false
 	}
 	switch c := call.Callee.(type) {

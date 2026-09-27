@@ -163,7 +163,8 @@ Where test262 and current engines disagree, the engine follows the standard
 and a test records the difference. Two of Annex B's block-function rules are
 examples: a block-level function named `arguments` does not replace the
 arguments object, and one nested in a block that already declares a function
-of that name stays in its block. V8 does both.
+of that name stays in its block. V8 does both, and so does the engine under
+`WithNodeQuirks`.
 
 Useful flags:
 
@@ -487,12 +488,16 @@ rt.SetTimeZone(time.UTC)   // and the zone its local-time methods use
 Standards-conforming behavior is the default. A host that needs exact Node.js
 compatibility for known Node divergences can opt in with
 `quickjs.WithNodeQuirks()`; the command-line equivalent is `--node-quirks`.
-Each divergence is one of go-intl's named ones, from the Japanese `h12`
-preference and the Islamic eras to the time zones `Intl.supportedValuesOf`
-lists and two roundings of Temporal the standard fixed after temporal_rs
-0.2.3; go-intl's [compatibility profile][go-intl-compat] lists them, with
-what the standard and Node each answer. Where the two agree, both modes
-answer as Node does.
+In `Intl` and Temporal each divergence is one of go-intl's named ones, from
+the Japanese `h12` preference and the Islamic eras to the time zones
+`Intl.supportedValuesOf` lists and two roundings of Temporal the standard
+fixed after temporal_rs 0.2.3; go-intl's [compatibility
+profile][go-intl-compat] lists them, with what the standard and Node each
+answer. In the language it follows V8: strict code may assign to a call,
+which is a `ReferenceError` when it runs rather than a `SyntaxError`, and a
+function declared in a block is hoisted over the arguments object and over a
+function an enclosing block declares with the same name. Where the two agree,
+both modes answer as Node does.
 
 Left unset, the runtime takes the language the machine is set to -- the user's
 locale on Windows, `LC_ALL`, `LC_MESSAGES` or `LANG` on a Unix machine, and

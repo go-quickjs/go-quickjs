@@ -137,12 +137,13 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 
 	// Hoist var declarations and nested function declarations to the top of
 	// the function, as their scope requires.
-	varNames, annexB := collectVarDecls(fn.Body, nil, c.fn.Strict)
+	varNames, annexB := collectVarDecls(fn.Body, nil, c.fn.Strict, c.opts.NodeQuirks)
 	// Annex B hoists no function over a parameter, and the arguments object
-	// counts as one.
+	// counts as one -- except to V8, which replaces it.
 	for fd := range annexB {
 		name := fd.Fn.Name.Name
-		if l, ok := c.resolveLocal(name); ok && (l.kind == bindParam || name == "arguments") {
+		l, ok := c.resolveLocal(name)
+		if ok && (l.kind == bindParam || name == "arguments" && !c.opts.NodeQuirks) {
 			delete(annexB, fd)
 		}
 	}
@@ -192,9 +193,7 @@ func (c *compiler) bindSelfName(fn *ast.FuncLit) {
 	// A var of the same name is a binding of the function's own scope, and it
 	// shadows the name the function was written with -- `function n() { var n }`
 	// reads undefined, not itself.
-	var varNames []string
-	collectVarNamesIn(fn.Body, &varNames, c.fn.Strict)
-	for _, n := range varNames {
+	for _, n := range c.varNames(fn.Body) {
 		if n == c.selfName {
 			return
 		}
