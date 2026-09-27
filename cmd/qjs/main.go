@@ -23,7 +23,6 @@
 package main
 
 import (
-	"bufio"
 	"cmp"
 	"context"
 	"errors"
@@ -33,6 +32,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"runtime/debug"
@@ -531,34 +531,56 @@ func report(rt *quickjs.Runtime, w io.Writer, err error) {
 //
 // A line that does not parse yet is held on to rather than refused, so that a
 // function or an object literal can be typed over several lines; an empty line
-// abandons what is held.
+// abandons what is held. On a terminal the line is edited as it is typed --
+// the cursor moves, history comes back with the arrows, Tab completes -- and
+// Ctrl-C interrupts what is running rather than ending the prompt.
 func repl(rt *quickjs.Runtime, loop *stdlib.Loop, ctx context.Context,
 	stdin io.Reader, stdout, stderr io.Writer) int {
-	in := bufio.NewScanner(stdin)
-	in.Buffer(make([]byte, 0, 64*1024), 16<<20)
+	var lines lineSource = newScannedLines(stdin, stdout)
+	comp := &completer{rt: rt, declared: map[string]bool{}}
+	if t := openTerminal(stdin, stdout); t != nil {
+		lines = newEditedLines(t, comp.complete)
+	}
+	defer lines.close()
 	fmt.Fprintf(stdout, "qjs %s — type .help for the commands, Ctrl-D to leave\n", version)
 
 	var held strings.Builder
-	prompt := func() {
+	interrupted := false
+	for {
+		prompt := "> "
 		if held.Len() > 0 {
-			fmt.Fprint(stdout, "... ")
-		} else {
-			fmt.Fprint(stdout, "> ")
+			prompt = "... "
 		}
-	}
-	prompt()
-	for in.Scan() {
-		line := in.Text()
+		line, err := lines.readLine(prompt)
+		if err == errInterrupt {
+			// Ctrl-C abandons the line, and on an empty prompt twice running
+			// it leaves.
+			if held.Len() == 0 && line == "" {
+				if interrupted {
+					return 0
+				}
+				fmt.Fprintln(stdout, "(To exit, press Ctrl+C again or Ctrl+D or type .exit)")
+			}
+			interrupted = held.Len() == 0 && line == ""
+			held.Reset()
+			continue
+		}
+		interrupted = false
+		if err != nil {
+			if err != io.EOF {
+				fmt.Fprintln(stderr, "qjs:", err)
+			}
+			break
+		}
+		lines.remember(line)
 		if held.Len() == 0 {
 			switch strings.TrimSpace(line) {
 			case ".exit":
 				return 0
 			case ".help":
 				fmt.Fprintln(stdout, replHelp)
-				prompt()
 				continue
 			case "":
-				prompt()
 				continue
 			}
 		}
@@ -582,53 +604,62 @@ func repl(rt *quickjs.Runtime, loop *stdlib.Loop, ctx context.Context,
 				awaited, _ = asAwaited(rt, src)
 			case strings.TrimSpace(line) != "" &&
 				(isUnfinished(err) || isUnfinished(inAsync)):
-				prompt()
 				continue
 			default:
 				held.Reset()
 				fmt.Fprintln(stderr, err)
-				prompt()
 				continue
 			}
 		}
 		held.Reset()
-
-		v, err := rt.EvalContext(ctx, cmp.Or(awaited, src))
-		if err != nil {
-			report(rt, stderr, err)
-			prompt()
-			continue
-		}
-		if awaited != "" {
-			// What came back is the function the input was put in; running it
-			// is what awaits, and the prompt shows what it produced.
-			settled, failed, err := await(loop, ctx, v)
-			if err != nil {
-				report(rt, stderr, err)
-				prompt()
-				continue
-			}
-			if failed {
-				report(rt, stderr, rt.Throw(settled))
-				prompt()
-				continue
-			}
-			v = settled
-		}
-		if err := loop.Run(ctx); err != nil {
-			report(rt, stderr, err)
-			prompt()
-			continue
-		}
-		// The last value is left in _, which is what a prompt is for.
-		rt.Set("_", v)
-		if !v.IsUndefined() {
-			fmt.Fprintln(stdout, stdlib.Inspect(rt, v))
-		}
-		prompt()
+		comp.noteDeclarations(src)
+		evalInput(rt, loop, ctx, cmp.Or(awaited, src), awaited != "", stdout, stderr)
 	}
 	fmt.Fprintln(stdout)
 	return 0
+}
+
+// evalInput runs one input of the prompt and prints what it produced. Ctrl-C
+// while it runs interrupts it, and the prompt carries on.
+func evalInput(rt *quickjs.Runtime, loop *stdlib.Loop, ctx context.Context,
+	src string, awaited bool, stdout, stderr io.Writer) {
+	evalCtx, stop := signal.NotifyContext(ctx, os.Interrupt)
+	defer stop()
+	fail := func(err error) {
+		if evalCtx.Err() != nil && ctx.Err() == nil {
+			fmt.Fprintln(stderr, "Interrupted")
+			return
+		}
+		report(rt, stderr, err)
+	}
+	v, err := rt.EvalContext(evalCtx, src)
+	if err != nil {
+		fail(err)
+		return
+	}
+	if awaited {
+		// What came back is the function the input was put in; running it
+		// is what awaits, and the prompt shows what it produced.
+		settled, failed, err := await(loop, evalCtx, v)
+		if err != nil {
+			fail(err)
+			return
+		}
+		if failed {
+			report(rt, stderr, rt.Throw(settled))
+			return
+		}
+		v = settled
+	}
+	if err := loop.Run(evalCtx); err != nil {
+		fail(err)
+		return
+	}
+	// The last value is left in _, which is what a prompt is for.
+	rt.Set("_", v)
+	if !v.IsUndefined() {
+		fmt.Fprintln(stdout, stdlib.Inspect(rt, v))
+	}
 }
 
 // asAwaited puts an input that only makes sense inside an async function into
@@ -716,7 +747,20 @@ func isUnfinished(err error) bool {
 const replHelp = `  .exit    leave
   .help    this
   _        the value of the last expression
-An unfinished line is continued: type the rest of it on the next line.`
+An unfinished line is continued: type the rest of it on the next line.
+
+Editing, on a terminal:
+  Left Right, Ctrl-B Ctrl-F          move by a character
+  Ctrl-Left Ctrl-Right, Alt-B Alt-F  move by a word
+  Home End, Ctrl-A Ctrl-E            go to the start or the end
+  Backspace Delete, Ctrl-D           delete a character
+  Ctrl-W, Alt-Backspace, Alt-D       delete a word
+  Ctrl-U Ctrl-K                      delete to the start or the end
+  Up Down, Ctrl-P Ctrl-N             go through history, kept in ~/.qjs_history
+                                     (QJS_HISTORY names another file, or none)
+  Tab                                complete a name; twice lists them
+  Ctrl-L                             clear the screen
+  Ctrl-C                             abandon the line, or stop what is running`
 
 // ---------------------------------------------------------------------------
 // Modules

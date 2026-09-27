@@ -238,7 +238,11 @@ serve({port: 8080}, async (request) => {
 The bounds are there too — `--memory-limit 64m`, `--stack-size`, `--timeout 5s`,
 `--no-code-generation` — and `--check` parses without running. The prompt keeps
 an unfinished line rather than refusing it, so a function can be typed over
-several lines, leaves the last value in `_`, and takes a top-level `await`:
+several lines, leaves the last value in `_`, and takes a top-level `await`. On
+a terminal the line is edited as it is typed -- the cursor moves by character
+and by word, the arrows go through a history kept in `~/.qjs_history`, and Tab
+completes globals and properties -- and Ctrl-C stops what is running without
+leaving the prompt:
 
 ```
 > const res = await fetch("https://example.com")
