@@ -90,7 +90,8 @@ Paths are relative to this repository; `go-intl:` paths are in
   recurses forever: a fatal stack overflow.
 - **Also:** a replaced `Array.prototype.reverse` turns a typed array's
   `reverse` into a no-op.
-- **Status:** open.
+- **Status:** fixed. The four methods work on the view's own values, and
+  `toNumber` refuses a kind it cannot convert rather than recurring.
 
 ### KI-06 Huge array-likes are materialised
 - **Effect:**

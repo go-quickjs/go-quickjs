@@ -1159,3 +1159,26 @@ func TestTypedArrayLengthIsNotAnOwnProperty(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestTypedArraySortOwnsItsValues pins that a typed array's sort, reverse,
+// toSorted and toReversed work on its own values: they used to borrow
+// Array.prototype's methods as the script had left them, which handed a
+// replacement the engine's working array, and a hole it put there recursed
+// until the process died (KI-05).
+func TestTypedArraySortOwnsItsValues(t *testing.T) {
+	checkEval(t, `
+		Array.prototype.sort = function () { delete this[0]; return this };
+		Array.prototype.reverse = () => "x";
+		Array.prototype.toSorted = () => [5, , 7];
+		Array.prototype.toReversed = () => [];
+		[new Uint8Array([3, 1, 2]).sort().join(), new Uint8Array([1, 2]).reverse().join(),
+		 new Uint8Array([3, 1, 2]).toSorted().join(), new Uint8Array([1, 2]).toReversed().join()].join(" | ")`,
+		"1,2,3 | 2,1 | 1,2,3 | 2,1")
+	checkEval(t, `
+		const b = new ArrayBuffer(4, {maxByteLength: 4}); const a = new Uint8Array(b); a.set([4, 3, 2, 1]);
+		a.sort((x, y) => { b.resize(2); return x - y });
+		[a.join(), new Float64Array([10, 9, NaN, -0, 0, -1]).sort().join(),
+		 new BigInt64Array([3n, -1n, 2n]).toSorted().join()].join(" | ")`,
+		"1,2 | -1,0,0,9,10,NaN | -1,2,3")
+	checkEval(t, `try { Int8Array.prototype.sort.call({}, 5) } catch (e) { e.constructor.name }`, "TypeError")
+}

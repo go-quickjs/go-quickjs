@@ -3,6 +3,8 @@ package vm
 import (
 	"encoding/binary"
 	"math"
+	"slices"
+	"sort"
 )
 
 // ArrayBuffer, typed arrays and DataView.
@@ -1679,95 +1681,124 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		})
 	}
 
-	// The methods that take no callback, delegated the same way. Those that
-	// mutate copy the result back; those that build a new collection convert
-	// it to a view of the same kind.
-	type delegated struct {
-		name    string
-		length  int
-		mutates bool
-		rebuild bool
-	}
-	for _, m := range []delegated{
-		{"reverse", 0, true, false},
-		{"sort", 1, true, false},
-		{"toReversed", 0, false, true},
-		{"toSorted", 1, false, true},
-	} {
-		d := m
-		r.defMethod(p, d.name, d.length, func(rt *Runtime, this Value, args []Value) (Value, error) {
-			name := "TypedArray.prototype." + d.name
-			var t *typedArrayData
-			var err error
-			if d.mutates {
-				t, err = rt.typedArrayWritable(this, name)
-			} else {
-				t, err = rt.typedArrayOf(this, name)
+	// reverse, sort, toReversed and toSorted work on the view's own values.
+	// They once borrowed Array.prototype's methods, looked up as the script
+	// had left them, which handed a replacement the engine's working array --
+	// and a hole put in it reached places no hole may.
+	sortValues := func(rt *Runtime, vals []Value, cmp Value) error {
+		var sortErr error
+		var argv [2]Value
+		sort.SliceStable(vals, func(i, j int) bool {
+			if sortErr != nil {
+				return false
 			}
-			if err != nil {
-				return Undefined, err
+			if cmp.IsUndefined() {
+				// A typed array sorts numerically by default, where an
+				// ordinary array sorts by string: [10, 9] is [9, 10] here.
+				return compareNumeric(vals[i], vals[j]) < 0
 			}
-			vals := make([]Value, t.count())
-			for i := range vals {
-				vals[i] = t.getElem(i)
-			}
-			arr := rt.newArrayFrom(vals)
-			fn, err := rt.getValueProp(Obj(arr), rt.atoms.intern(d.name))
-			if err != nil {
-				return Undefined, err
-			}
-			callArgs := args
-			if d.name == "sort" || d.name == "toSorted" {
-				// A comparator that is there but cannot be called is a mistake,
-				// reported before anything is compared.
-				if c := arg(args, 0); !c.IsUndefined() && !isCallable(c) {
-					return Undefined, rt.throwTypeError(
-						"the comparator is not a function")
+			argv[0], argv[1] = vals[i], vals[j]
+			res, err := rt.call(cmp, Undefined, argv[:])
+			if err == nil {
+				var n float64
+				if n, err = rt.toNumber(res); err == nil {
+					return n < 0
 				}
 			}
-			if (d.name == "sort" || d.name == "toSorted") && !isCallable(arg(args, 0)) {
-				// A typed array sorts numerically by default, where an ordinary
-				// array sorts by string: [10, 9] is [9, 10] here and [10, 9]
-				// there.
-				callArgs = []Value{Obj(rt.newNativeFunc("", 2,
-					func(rt *Runtime, _ Value, a []Value) (Value, error) {
-						return Int(compareNumeric(arg(a, 0), arg(a, 1))), nil
-					}))}
-			}
-			out, err := rt.call(fn, Obj(arr), callArgs)
-			if err != nil {
-				return Undefined, err
-			}
-			switch {
-			case d.mutates:
-				// The plain array was reordered in place; the view has to be
-				// written back element by element, through the element type's
-				// own conversion.
-				for i := 0; i < len(vals) && i < len(arr.elems); i++ {
-					if err := rt.setElem(t, i, arr.elems[i]); err != nil {
-						return Undefined, err
-					}
-				}
-				return this, nil
-			case d.rebuild:
-				// A fresh view of the same kind holding the reordered values,
-				// which is what toSorted and toReversed produce.
-				var vals []Value
-				if out.IsObject() {
-					vals = out.Object().elems
-				}
-				o := newObject(rt.typedArrayProtoFor(t.kind), ClassTypedArray)
-				nt := rt.allocTypedArray(o, t.kind, len(vals))
-				for i, el := range vals {
-					if err := rt.setElem(nt, i, el); err != nil {
-						return Undefined, err
-					}
-				}
-				return Obj(o), nil
-			}
-			return out, nil
+			sortErr = err
+			return false
 		})
+		return sortErr
 	}
+	// comparator is sort's argument, which must be undefined or callable:
+	// a mistake reported before the receiver is even looked at.
+	comparator := func(rt *Runtime, args []Value) (Value, error) {
+		c := arg(args, 0)
+		if !c.IsUndefined() && !isCallable(c) {
+			return Undefined, rt.throwTypeError("the comparator is not a function")
+		}
+		return c, nil
+	}
+	snapshot := func(t *typedArrayData) []Value {
+		vals := make([]Value, t.count())
+		for i := range vals {
+			vals[i] = t.getElem(i)
+		}
+		return vals
+	}
+	// rebuilt is a new view of the same kind holding vals.
+	rebuilt := func(rt *Runtime, t *typedArrayData, vals []Value) (Value, error) {
+		o := newObject(rt.typedArrayProtoFor(t.kind), ClassTypedArray)
+		nt := rt.allocTypedArray(o, t.kind, len(vals))
+		for i, el := range vals {
+			if err := rt.setElem(nt, i, el); err != nil {
+				return Undefined, err
+			}
+		}
+		return Obj(o), nil
+	}
+	r.defMethod(p, "reverse", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		t, err := rt.typedArrayWritable(this, "TypedArray.prototype.reverse")
+		if err != nil {
+			return Undefined, err
+		}
+		for lo, hi := 0, t.count()-1; lo < hi; lo, hi = lo+1, hi-1 {
+			a, b := t.getElem(lo), t.getElem(hi)
+			if err := rt.setElem(t, lo, b); err != nil {
+				return Undefined, err
+			}
+			if err := rt.setElem(t, hi, a); err != nil {
+				return Undefined, err
+			}
+		}
+		return this, nil
+	})
+	r.defMethod(p, "sort", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		cmp, err := comparator(rt, args)
+		if err != nil {
+			return Undefined, err
+		}
+		t, err := rt.typedArrayWritable(this, "TypedArray.prototype.sort")
+		if err != nil {
+			return Undefined, err
+		}
+		vals := snapshot(t)
+		if err := sortValues(rt, vals, cmp); err != nil {
+			return Undefined, err
+		}
+		// The comparator may have shrunk the buffer; what no longer fits is
+		// dropped, as a write past the end of a view is.
+		for i := 0; i < len(vals) && i < t.count(); i++ {
+			if err := rt.setElem(t, i, vals[i]); err != nil {
+				return Undefined, err
+			}
+		}
+		return this, nil
+	})
+	r.defMethod(p, "toReversed", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		t, err := rt.typedArrayOf(this, "TypedArray.prototype.toReversed")
+		if err != nil {
+			return Undefined, err
+		}
+		vals := snapshot(t)
+		slices.Reverse(vals)
+		return rebuilt(rt, t, vals)
+	})
+	r.defMethod(p, "toSorted", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		cmp, err := comparator(rt, args)
+		if err != nil {
+			return Undefined, err
+		}
+		t, err := rt.typedArrayOf(this, "TypedArray.prototype.toSorted")
+		if err != nil {
+			return Undefined, err
+		}
+		vals := snapshot(t)
+		if err := sortValues(rt, vals, cmp); err != nil {
+			return Undefined, err
+		}
+		return rebuilt(rt, t, vals)
+	})
 
 	// The tag names the concrete type, so Object.prototype.toString reports
 	// [object Uint8Array] rather than [object Object]. It is a getter on the

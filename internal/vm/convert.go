@@ -117,6 +117,12 @@ func (r *Runtime) toNumber(v Value) (float64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if p.Kind() == v.Kind() {
+		// As in toString: a kind the switch does not handle -- the engine's
+		// own hole, say -- would otherwise recur for ever. Nothing a script
+		// can name reaches here; an engine bug might.
+		return 0, r.throwTypeError("cannot convert %s to a number", r.describe(v))
+	}
 	return r.toNumber(p)
 }
 
