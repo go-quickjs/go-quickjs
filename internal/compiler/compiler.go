@@ -309,6 +309,10 @@ type compiler struct {
 	// binding the declaration made rather than to whatever the name meant
 	// outside the function.
 	evalOwnVars map[string]bool
+	// annexB holds the block-level function declarations Annex B also assigns
+	// to a var of the same name, decided once when the vars are hoisted so
+	// that the assignment is made exactly where the binding was.
+	annexB map[*ast.FuncDecl]bool
 	// exits records what the statements currently being compiled left in place
 	// for the duration of their bodies, innermost last.
 	exits []pendingExit
@@ -890,8 +894,32 @@ func (c *compiler) checkGlobalVars(body []ast.Stmt) {
 // hoistGlobals declares top-level var and function bindings on the global
 // object, which is where script-level declarations live.
 func (c *compiler) hoistGlobals(body []ast.Stmt) {
-	var names []string
-	collectVarNamesIn(body, &names, c.fn.Strict)
+	names, annexB := collectVarDecls(body, nil, c.fn.Strict)
+	c.annexB = annexB
+	// Only Annex B asks for some of the names, and a lexical binding of the
+	// calling function between the eval and its variable scope stops the
+	// hoist rather than failing the eval.
+	if len(annexB) > 0 && c.opts.EvalOwnVarScope && !c.varScopeIsGlobal() {
+		// Collected as strict code, the names are the ones without Annex B.
+		plain, _ := collectVarDecls(body, nil, true)
+		real := map[string]bool{}
+		for _, n := range plain {
+			real[n] = true
+		}
+		kept := names[:0]
+		for _, n := range names {
+			if b, known := c.callerBinding(n); !real[n] && known && b.Lexical && b.FromLocal {
+				for fd := range annexB {
+					if fd.Fn.Name.Name == n {
+						delete(annexB, fd)
+					}
+				}
+				continue
+			}
+			kept = append(kept, n)
+		}
+		names = kept
+	}
 	for _, n := range names {
 		if c.evalVarsAreLocal() {
 			// Strict eval code gets a variable environment of its own, so its
@@ -978,9 +1006,23 @@ func collectVarNames(body []ast.Stmt, out *[]string) {
 // be legal: a `let` of the same name anywhere between the block and the
 // function top level suppresses it, and strict mode suppresses it outright.
 func collectVarNamesIn(body []ast.Stmt, out *[]string, strict bool) {
-	c := &varCollector{out: *out, strict: strict}
+	*out, _ = collectVarDecls(body, *out, strict)
+}
+
+// collectVarDecls is collectVarNamesIn that also reports the block-level
+// function declarations whose names it added for Annex B.
+func collectVarDecls(body []ast.Stmt, out []string, strict bool) ([]string, map[*ast.FuncDecl]bool) {
+	c := &varCollector{out: out, strict: strict}
+	// A declaration Annex B would hoist over a lexical binding of the top
+	// level is not hoisted: `let f; { function f() {} }` keeps its let.
+	// Strict code hoists nothing, so needs no list.
+	if !strict {
+		for _, s := range body {
+			c.top = lexicalNamesOf(s, c.top, false)
+		}
+	}
 	c.stmts(body)
-	*out = c.out
+	return c.out, c.granted
 }
 
 // varCollector walks a function body tracking the lexical scopes in effect, so
@@ -993,6 +1035,10 @@ type varCollector struct {
 	// empty at the function's own top level, where a function declaration is
 	// var-scoped outright rather than by Annex B.
 	lexical [][]lexName
+	// top is what the top level binds lexically.
+	top []lexName
+	// granted holds the block-level declarations Annex B hoists.
+	granted map[*ast.FuncDecl]bool
 }
 
 func (c *varCollector) add(name string) { c.out = append(c.out, name) }
@@ -1024,17 +1070,30 @@ func (c *varCollector) nested(s ast.Stmt) {
 		c.block(b.Body)
 		return
 	}
+	if _, ok := s.(*ast.FuncDecl); ok {
+		// `if (x) function f() {}` is read as though the declaration were in
+		// a block of its own.
+		c.block([]ast.Stmt{s})
+		return
+	}
 	c.stmt(s)
 }
 
-// shadowed reports whether an enclosing block binds the name lexically.
+// shadowed reports whether an enclosing block, or the top level, binds the
+// name lexically.
 func (c *varCollector) shadowed(name string) bool {
-	for _, scope := range c.lexical {
+	for i := range c.top {
+		if c.top[i].name == name {
+			return true
+		}
+	}
+	for depth, scope := range c.lexical {
 		for i := range scope {
-			// A block function declaration binds the name lexically too, but
-			// it is the declaration being hoisted rather than something in its
-			// way.
-			if scope[i].name == name && !scope[i].fromFunc {
+			// A block function declaration binds the name lexically too. In
+			// the declaration's own block it is the declaration being hoisted
+			// rather than something in its way; in an enclosing block it is
+			// in the way like anything else.
+			if scope[i].name == name && (!scope[i].fromFunc || depth < len(c.lexical)-1) {
 				return true
 			}
 		}
@@ -1071,6 +1130,10 @@ func (c *varCollector) stmt(s ast.Stmt) {
 			return
 		}
 		c.add(name)
+		if c.granted == nil {
+			c.granted = map[*ast.FuncDecl]bool{}
+		}
+		c.granted[n] = true
 
 	case *ast.BlockStmt:
 		c.block(n.Body)
@@ -1090,7 +1153,16 @@ func (c *varCollector) stmt(s ast.Stmt) {
 	case *ast.TryStmt:
 		c.block(n.Block)
 		if n.Catch != nil {
+			// A destructured catch parameter is in the way of a hoist, as a
+			// let would be. A simple one is not: B.3.4 lets a var in the catch
+			// block share its name, and so a hoisted function too.
+			var names []lexName
+			if _, simple := n.Catch.Param.(*ast.Ident); !simple && n.Catch.Param != nil {
+				names = patternNames(n.Catch.Param, nil)
+			}
+			c.lexical = append(c.lexical, names)
 			c.block(n.Catch.Body)
+			c.lexical = c.lexical[:len(c.lexical)-1]
 		}
 		if n.Finally != nil {
 			c.block(n.Finally)

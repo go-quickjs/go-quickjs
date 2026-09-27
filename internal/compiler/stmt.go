@@ -139,7 +139,7 @@ func (c *compiler) predeclareFunction(h hoistedFunc) {
 	//
 	// work in sloppy mode. The binding is created by hoisting like any other
 	// var; only the assignment happens here, when the declaration is reached.
-	if !c.fn.Strict && c.depth > 0 && !h.fd.Fn.Async && !h.fd.Fn.Generator {
+	if c.annexB[h.fd] {
 		c.emitAnnexBFunctionAlias(h.name)
 	}
 	c.emit(bytecode.OpSetLocal, h.slot, 0)
@@ -148,26 +148,35 @@ func (c *compiler) predeclareFunction(h hoistedFunc) {
 // emitAnnexBFunctionAlias copies a block-scoped function into the var binding
 // that shares its name.
 func (c *compiler) emitAnnexBFunctionAlias(name string) {
-	// The innermost enclosing binding decides: a var of the same name is what
-	// the alias writes to, and anything lexical suppresses it. The function's
-	// own block-scoped binding is skipped, since it is the thing being aliased.
+	// Hoisting made sure nothing lexical stands in the way, other than a simple
+	// catch parameter, which the alias passes over to reach the var -- or the
+	// function declared at the top level, whose binding the var is. The
+	// function's own block-scoped binding is skipped too, since it is the
+	// thing being aliased.
 	for i := len(c.locals) - 1; i >= 0; i-- {
-		if c.locals[i].name != name || c.locals[i].depth >= c.depth {
+		l := &c.locals[i]
+		if l.name != name || l.depth >= c.depth || !l.varScoped() {
 			continue
 		}
-		if c.locals[i].kind == bindVar {
-			c.emit(bytecode.OpDup, 0, 0)
-			c.emit(bytecode.OpSetLocal, c.locals[i].slot, 0)
-		}
+		c.emit(bytecode.OpDup, 0, 0)
+		c.emit(bytecode.OpSetLocal, l.slot, 0)
+		return
+	}
+	if c.parent != nil {
 		return
 	}
 	// At a script's top level the var is a property of the global object
 	// rather than a slot, and hoistGlobals has already created it. The store
 	// consumes the copy, leaving the function for the binding it belongs to.
-	if c.parent == nil {
-		c.emit(bytecode.OpDup, 0, 0)
-		c.emit(bytecode.OpSetGlobal, c.nameIdx(name), 0)
+	// Eval code's var is the calling function's: a binding it already had, or
+	// the one the eval made in its variable scope.
+	c.emit(bytecode.OpDup, 0, 0)
+	if b, known := c.callerBinding(name); known && b.VarScoped && !c.evalOwnVars[name] {
+		idx, _ := c.resolveUpvalue(name)
+		c.emit(bytecode.OpSetUpvalue, idx, 0)
+		return
 	}
+	c.emit(bytecode.OpSetGlobal, c.nameIdx(name), 0)
 }
 
 // predeclareLexical creates the bindings of a let or const declaration in

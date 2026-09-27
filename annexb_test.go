@@ -100,6 +100,42 @@ func TestBlockFunctionAliasKeepsItsBinding(t *testing.T) {
 	}
 }
 
+// TestAnnexBBlockFunctionHoisting pins where B.3.3 hoists a function declared
+// in a block to a var of the same name: exactly where replacing the
+// declaration with `var f` would be legal and f is not a parameter.
+func TestAnnexBBlockFunctionHoisting(t *testing.T) {
+	evalCases(t, []struct{ src, want string }{
+		// A let at the function's top level is in the way.
+		{`(function () { let f = 1; { function f() {} } return f; })()`, "1"},
+		{`let g1 = 1; { function g1() {} } g1`, "1"},
+		// A top-level function of the same name is the var, and is updated.
+		{`(function () { { function f() { return "inner"; } } var r = f(); function f() { return "outer"; } return r; })()`, "inner"},
+		// A simple catch parameter is passed over; a destructured one is in
+		// the way, and then no binding is made at all.
+		{`(function () { try { throw 0; } catch (f) { { function f() {} } } return typeof f; })()`, "function"},
+		{`(function () { try { f; } catch (e) { var r = e.name; } try { throw {}; } catch ({ f }) { { function f() {} } } return r; })()`, "ReferenceError"},
+		{`try { throw 0; } catch (g2) { { function g2() {} } } typeof g2`, "function"},
+		// Nothing is hoisted over a parameter.
+		{`(function (f) { { function f() {} } return typeof f; })(1)`, "number"},
+		// Eval code hoists into the caller's variable scope, parameters and
+		// all, unless a lexical binding of the caller is in the way -- which
+		// skips the hoist rather than failing the eval.
+		{`(function (f) { eval("{ function f() {} }"); return typeof f; })(1)`, "function"},
+		{`(function () { let f = 1; eval("{ function f() {} }"); return f; })()`, "1"},
+		{`(function () { eval("try { throw 0; } catch (f) { { function f() {} } }"); return typeof f; })()`, "function"},
+		{`(function () { let f = 1; try { eval("var f"); } catch (e) { return e.name; } })()`, "SyntaxError"},
+		// Test262 against V8: the arguments object counts as a parameter, so
+		// a block function named arguments leaves it alone. V8 replaces it.
+		{`(function () { { function arguments() {} } return typeof arguments; })()`, "object"},
+		{`(function (...a) { { function arguments() {} } return typeof arguments; })()`, "object"},
+		// Test262 against V8: an enclosing block's function of the same name
+		// is in the way of the inner one, which stays in its block. V8 hoists
+		// the inner one.
+		{`(function () { { function f() { return 1; } { function f() { return 2; } } } return f(); })()`, "1"},
+		{`(function () { { function f() { return 1; } if (true) function f() { return 2; } } return f(); })()`, "1"},
+	})
+}
+
 // TestAnnexBBuiltins pins the web-compat built-ins Annex B describes.
 func TestAnnexBBuiltins(t *testing.T) {
 	evalCases(t, []struct{ src, want string }{

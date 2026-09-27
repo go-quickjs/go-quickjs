@@ -137,8 +137,16 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 
 	// Hoist var declarations and nested function declarations to the top of
 	// the function, as their scope requires.
-	var varNames []string
-	collectVarNamesIn(fn.Body, &varNames, c.fn.Strict)
+	varNames, annexB := collectVarDecls(fn.Body, nil, c.fn.Strict)
+	// Annex B hoists no function over a parameter, and the arguments object
+	// counts as one.
+	for fd := range annexB {
+		name := fd.Fn.Name.Name
+		if l, ok := c.resolveLocal(name); ok && (l.kind == bindParam || name == "arguments") {
+			delete(annexB, fd)
+		}
+	}
+	c.annexB = annexB
 	for _, n := range varNames {
 		if _, exists := c.resolveLocal(n); !exists {
 			slot := c.declare(n, bindVar, fn.Start)
