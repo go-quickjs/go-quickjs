@@ -425,6 +425,13 @@ func explainMissing(rt *quickjs.Runtime, opts *options) error {
 // evaluate runs source as a script or a module and then lets the loop finish.
 func evaluate(rt *quickjs.Runtime, loop *stdlib.Loop, ctx context.Context,
 	opts *options, name, src string, stdout, stderr io.Writer) int {
+	// Ctrl-C stops the program, as it stops node's, with the status a
+	// program an interrupt ended has: a loop kept running by a listening port
+	// runs until it is stopped.
+	parent := ctx
+	ctx, stop := signal.NotifyContext(parent, os.Interrupt)
+	defer stop()
+	interrupted := func() bool { return ctx.Err() != nil && parent.Err() == nil }
 	var err error
 	if opts.isModule(name, src) {
 		_, err = rt.EvalModuleContext(ctx, name, src)
@@ -432,11 +439,13 @@ func evaluate(rt *quickjs.Runtime, loop *stdlib.Loop, ctx context.Context,
 		// Named, so that a stack trace says which file a frame is in.
 		_, err = rt.EvalFileContext(ctx, name, src)
 	}
-	if err != nil {
-		report(rt, stderr, err)
-		return 1
+	if err == nil {
+		err = loop.Run(ctx)
 	}
-	if err := loop.Run(ctx); err != nil {
+	if err != nil {
+		if interrupted() {
+			return 130
+		}
 		report(rt, stderr, err)
 		return 1
 	}

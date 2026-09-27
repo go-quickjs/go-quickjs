@@ -16,12 +16,20 @@ import (
 // WebAPIs installs the things a browser has that the language does not, as far
 // as they are pure computation: URL and URLSearchParams, TextEncoder and
 // TextDecoder, atob and btoa, structuredClone, performance, AbortController,
-// Blob, File and FormData, URLPattern, and the parts of crypto that need
-// nothing but entropy.
+// Blob, File and FormData, URLPattern, DOMException, MessageChannel, and the
+// parts of crypto that need nothing but entropy.
 //
 // None of them can reach outside the process. random is where getRandomValues
-// draws from, and nil means the system source.
+// draws from, and nil means the system source. A MessagePort's messages are
+// dispatched by the runtime's Loop if it has one, and otherwise when it next
+// runs its jobs; installed by Install, a port that is listening keeps the
+// Loop running, as node's does, until it is closed or unref'd.
 func WebAPIs(rt *quickjs.Runtime, random io.Reader) error {
+	return webAPIs(rt, random, nil)
+}
+
+// webAPIs is WebAPIs, with the loop a listening MessagePort keeps running.
+func webAPIs(rt *quickjs.Runtime, random io.Reader, loop *Loop) error {
 	if random == nil {
 		random = rand.Reader
 	}
@@ -82,6 +90,10 @@ func WebAPIs(rt *quickjs.Runtime, random io.Reader) error {
 	}); err != nil {
 		return err
 	}
+	m := &messaging{rt: rt, loop: loop, ports: map[int]*portEnd{}}
+	if err := setAll(host, m.host()); err != nil {
+		return err
+	}
 
 	api, err := evalWithHost(rt, "<webapis>", webAPIsJS, host)
 	if err != nil {
@@ -94,6 +106,7 @@ func WebAPIs(rt *quickjs.Runtime, random io.Reader) error {
 		"atob", "btoa", "structuredClone", "performance", "crypto",
 		"AbortController", "AbortSignal", "Event", "EventTarget",
 		"Blob", "File", "FormData", "URLPattern",
+		"DOMException", "MessageChannel", "MessagePort", "MessageEvent",
 	} {
 		v, err := api.Get(name)
 		if err != nil {
@@ -1075,58 +1088,217 @@ const webAPIsJS = `(function (host) {
     }
   }
 
+  // --- DOMException --------------------------------------------------------
+
+  // The names a DOMException has a legacy code for, and the constants the
+  // interface has for the codes.
+  const domExceptionCodes = {
+    IndexSizeError: 1, HierarchyRequestError: 3, WrongDocumentError: 4,
+    InvalidCharacterError: 5, NoModificationAllowedError: 7, NotFoundError: 8,
+    NotSupportedError: 9, InUseAttributeError: 10, InvalidStateError: 11,
+    SyntaxError: 12, InvalidModificationError: 13, NamespaceError: 14,
+    InvalidAccessError: 15, TypeMismatchError: 17, SecurityError: 18,
+    NetworkError: 19, AbortError: 20, URLMismatchError: 21,
+    QuotaExceededError: 22, TimeoutError: 23, InvalidNodeTypeError: 24,
+    DataCloneError: 25,
+  };
+  const domExceptionConstants = [
+    "INDEX_SIZE_ERR", "DOMSTRING_SIZE_ERR", "HIERARCHY_REQUEST_ERR",
+    "WRONG_DOCUMENT_ERR", "INVALID_CHARACTER_ERR", "NO_DATA_ALLOWED_ERR",
+    "NO_MODIFICATION_ALLOWED_ERR", "NOT_FOUND_ERR", "NOT_SUPPORTED_ERR",
+    "INUSE_ATTRIBUTE_ERR", "INVALID_STATE_ERR", "SYNTAX_ERR",
+    "INVALID_MODIFICATION_ERR", "NAMESPACE_ERR", "INVALID_ACCESS_ERR",
+    "VALIDATION_ERR", "TYPE_MISMATCH_ERR", "SECURITY_ERR", "NETWORK_ERR",
+    "ABORT_ERR", "URL_MISMATCH_ERR", "QUOTA_EXCEEDED_ERR", "TIMEOUT_ERR",
+    "INVALID_NODE_TYPE_ERR", "DATA_CLONE_ERR",
+  ];
+
+  const domState = new WeakMap();
+  function domOf(e) {
+    const d = domState.get(e);
+    if (d === undefined) throw new TypeError('Value of "this" must be of DOMException');
+    return d;
+  }
+
+  class DOMException extends Error {
+    constructor(message = "", options = "Error") {
+      super();
+      let name = "Error";
+      if (options !== null && typeof options === "object") {
+        if (options.name !== undefined) name = String(options.name);
+        if ("cause" in options) {
+          Object.defineProperty(this, "cause", {value: options.cause, writable: true, configurable: true});
+        }
+      } else {
+        name = String(options);
+      }
+      domState.set(this, {name, message: String(message)});
+    }
+    get name() { return domOf(this).name; }
+    get message() { return domOf(this).message; }
+    get code() { return domExceptionCodes[domOf(this).name] || 0; }
+  }
+  for (const key of ["name", "message", "code"]) {
+    Object.defineProperty(DOMException.prototype, key, {enumerable: true});
+  }
+  Object.defineProperty(DOMException.prototype, Symbol.toStringTag, {value: "DOMException", configurable: true});
+  domExceptionConstants.forEach((name, i) => {
+    const d = {value: i + 1, enumerable: true};
+    Object.defineProperty(DOMException, name, d);
+    Object.defineProperty(DOMException.prototype, name, d);
+  });
+
+  // newDOMException is a DOMException Go makes: a clone's, whose stack is the
+  // original's, or the DataCloneError a clone throws.
+  function newDOMException(message, name, stack) {
+    const e = new DOMException(message, name);
+    if (stack !== undefined) {
+      Object.defineProperty(e, "stack", {value: stack, writable: true, configurable: true});
+    }
+    return e;
+  }
+
+  // --- Messaging -----------------------------------------------------------
+
+  const messageEventState = new WeakMap();
+  function messageEventOf(e) {
+    const d = messageEventState.get(e);
+    if (d === undefined) throw new TypeError('Value of "this" must be of type MessageEvent');
+    return d;
+  }
+
+  class MessageEvent extends Event {
+    constructor(type, init = {}) {
+      super(type, init);
+      const {data = null, origin = "", lastEventId = "", source = null, ports = []} = init || {};
+      messageEventState.set(this, {
+        data, origin: String(origin), lastEventId: String(lastEventId), source,
+        ports: Object.freeze([...ports]),
+      });
+    }
+    get data() { return messageEventOf(this).data; }
+    get origin() { return messageEventOf(this).origin; }
+    get lastEventId() { return messageEventOf(this).lastEventId; }
+    get source() { return messageEventOf(this).source; }
+    get ports() { return messageEventOf(this).ports; }
+  }
+
+  // A port's id is what Go knows it by.
+  const portIds = new WeakMap();
+  const portHandlers = new WeakMap();
+  const makingPort = Symbol("makingPort");
+  function portIdOf(port) {
+    const id = portIds.get(port);
+    if (id === undefined) throw new TypeError('Value of "this" must be of type MessagePort');
+    return id;
+  }
+
+  // transferList reads postMessage's second argument: a list, or an object
+  // with one as its transfer.
+  function transferList(options) {
+    if (options === undefined || options === null) return [];
+    if (typeof options === "object" && typeof options[Symbol.iterator] !== "function") {
+      options = options.transfer;
+      if (options === undefined) return [];
+    }
+    if (options === null || typeof options !== "object" || typeof options[Symbol.iterator] !== "function") {
+      const e = new TypeError("Optional transferList argument must be an iterable");
+      e.code = "ERR_INVALID_ARG_TYPE";
+      throw e;
+    }
+    return [...options];
+  }
+
+  class MessagePort extends EventTarget {
+    constructor(token, id) {
+      if (token !== makingPort) {
+        const e = new TypeError("Constructor cannot be called");
+        e.code = "ERR_CONSTRUCT_CALL_INVALID";
+        throw e;
+      }
+      super();
+      portIds.set(this, id);
+      portHandlers.set(this, {message: null, messageerror: null});
+    }
+    postMessage(message, transfer = undefined) {
+      host.portPost(portIdOf(this), message, transferList(transfer));
+    }
+    start() { host.portStart(portIdOf(this)); }
+    close() { host.portClose(portIdOf(this)); }
+    ref() { host.portRef(portIdOf(this), true); return this; }
+    unref() { host.portRef(portIdOf(this), false); return this; }
+    hasRef() { return host.portHasRef(portIdOf(this)); }
+    get onmessage() { portIdOf(this); return portHandlers.get(this).message; }
+    set onmessage(fn) {
+      portIdOf(this);
+      // Setting the handler starts the port, as start() would.
+      portHandlers.get(this).message = typeof fn === "function" ? fn : null;
+      if (typeof fn === "function") this.start();
+    }
+    get onmessageerror() { portIdOf(this); return portHandlers.get(this).messageerror; }
+    set onmessageerror(fn) {
+      portIdOf(this);
+      portHandlers.get(this).messageerror = typeof fn === "function" ? fn : null;
+    }
+  }
+  Object.defineProperty(MessagePort.prototype, Symbol.toStringTag, {value: "MessagePort", configurable: true});
+
+  class MessageChannel {
+    constructor() {
+      const [port1, port2] = host.channel();
+      Object.defineProperty(this, "port1", {value: port1, enumerable: true});
+      Object.defineProperty(this, "port2", {value: port2, enumerable: true});
+    }
+  }
+
+  // hostKind says what Go needs to know of an object it clones: whether it is
+  // a port, which has to be transferred, or a DOMException, which clones as
+  // one.
+  function hostKind(v) {
+    const id = portIds.get(v);
+    if (id !== undefined) return ["port", id];
+    const d = domState.get(v);
+    if (d !== undefined) {
+      const stack = v.stack;
+      return ["dom", d.name, d.message, typeof stack === "string" ? stack : ""];
+    }
+    return undefined;
+  }
+
+  // deliver dispatches what arrived for a port. An exception a listener
+  // throws is uncaught, as one from a timer is.
+  function deliver(port, type, data, ports) {
+    port.dispatchEvent(type === "close" ? new Event("close") : new MessageEvent(type, {data, ports}));
+  }
+
+  host.bindMessaging((id) => new MessagePort(makingPort, id), newDOMException, hostKind, deliver);
+
   // --- Cloning -------------------------------------------------------------
 
   function structuredClone(value, options) {
-    return cloneValue(value, new Map());
-  }
-
-  function cloneValue(v, seen) {
-    if (v === null || typeof v !== "object") {
-      if (typeof v === "function") {
-        throw new TypeError("a function could not be cloned");
-      }
-      if (typeof v === "symbol") {
-        throw new TypeError("a symbol could not be cloned");
-      }
-      return v;
+    if (arguments.length === 0) {
+      const e = new TypeError('The "value" argument must be specified');
+      e.code = "ERR_MISSING_ARGS";
+      throw e;
     }
-    if (seen.has(v)) return seen.get(v);
-
-    let out;
-    const tag = Object.prototype.toString.call(v);
-    switch (tag) {
-      case "[object Date]": out = new Date(v.getTime()); break;
-      case "[object RegExp]": out = new RegExp(v.source, v.flags); break;
-      case "[object Array]": out = []; break;
-      case "[object Map]": out = new Map(); break;
-      case "[object Set]": out = new Set(); break;
-      case "[object ArrayBuffer]": return v.slice(0);
-      case "[object Error]": {
-        out = new v.constructor(v.message);
-        if (v.stack !== undefined) out.stack = v.stack;
-        break;
+    let transfer = [];
+    if (options !== undefined && options !== null) {
+      if (typeof options !== "object") {
+        const e = new TypeError("Failed to execute 'structuredClone': Options cannot be converted to a dictionary");
+        e.code = "ERR_INVALID_ARG_TYPE";
+        throw e;
       }
-      default:
-        if (ArrayBuffer.isView(v)) {
-          return new v.constructor(cloneValue(v.buffer, seen),
-            v.byteOffset, v.length !== undefined ? v.length : undefined);
+      const list = options.transfer;
+      if (list !== undefined) {
+        if (list === null || typeof list !== "object" || typeof list[Symbol.iterator] !== "function") {
+          const e = new TypeError("Failed to execute 'structuredClone': transfer in Options cannot be converted to sequence.");
+          e.code = "ERR_INVALID_ARG_TYPE";
+          throw e;
         }
-        out = {};
+        transfer = [...list];
+      }
     }
-    seen.set(v, out);
-    if (tag === "[object Map]") {
-      for (const [k, val] of v) out.set(cloneValue(k, seen), cloneValue(val, seen));
-    } else if (tag === "[object Set]") {
-      for (const val of v) out.add(cloneValue(val, seen));
-    } else if (tag === "[object Array]") {
-      for (let i = 0; i < v.length; i++) out[i] = cloneValue(v[i], seen);
-    }
-    for (const k of Object.keys(v)) {
-      if (tag === "[object Array]" && String(Number(k)) === k) continue;
-      out[k] = cloneValue(v[k], seen);
-    }
-    return out;
+    return host.clone(value, transfer);
   }
 
   // --- The rest ------------------------------------------------------------
@@ -1177,5 +1349,6 @@ const webAPIsJS = `(function (host) {
     structuredClone, performance, crypto,
     AbortController, AbortSignal, Event, EventTarget,
     Blob, File, FormData, URLPattern,
+    DOMException, MessageChannel, MessagePort, MessageEvent,
   };
 })`

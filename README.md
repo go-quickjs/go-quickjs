@@ -417,7 +417,7 @@ loop.Run(ctx)     // timers, and work that finished on other goroutines
 
 | | |
 |---|---|
-| Always | `console`, `URL`, `TextEncoder`/`TextDecoder`, `atob`/`btoa`, `structuredClone`, `performance`, `crypto` (hashing, HMAC, PBKDF2, HKDF, `subtle`), `Blob`, `File`, `FormData`, `URLPattern`, `AbortController`, `Buffer`, the web's streams, `CompressionStream`, and the `path`, `events`, `util`, `assert`, `buffer`, `crypto`, `zlib`, `stream/web`, `url`, `querystring`, `string_decoder`, `vm` modules |
+| Always | `console`, `URL`, `TextEncoder`/`TextDecoder`, `atob`/`btoa`, `structuredClone`, `MessageChannel`, `DOMException`, `performance`, `crypto` (hashing, HMAC, PBKDF2, HKDF, `subtle`), `Blob`, `File`, `FormData`, `URLPattern`, `AbortController`, `Buffer`, the web's streams, `CompressionStream`, and the `path`, `events`, `util`, `assert`, `buffer`, `crypto`, `zlib`, `stream/web`, `url`, `querystring`, `string_decoder`, `vm` modules |
 | `Loop` | `setTimeout`, `setInterval`, `queueMicrotask`, and the `timers`, `timers/promises` modules |
 | Intl data | names of every language, region, script and currency are built in and decoded one locale at a time |
 | `FS` | the `fs` module, sync and promise halves, `createReadStream`/`createWriteStream`, confined to `Root` |
@@ -427,6 +427,14 @@ loop.Run(ctx)     // timers, and work that finished on other goroutines
 | `Serve` | `serve`, the `http` module — an HTTP server whose handler is `(Request) => Response` |
 | `Sockets` | `WebSocket`, and `upgradeWebSocket` where there is a server to accept one on |
 | `Run` | the `child_process` module: `execFileSync`, `execFile`, `spawnSync`, `exec` |
+
+`structuredClone` and a `MessagePort`'s `postMessage` clone as V8 does, word
+for word where they refuse: an object is read by what it is rather than what it
+says it is, cycles and shared references survive, a transferred `ArrayBuffer`
+moves, and a `SharedArrayBuffer` is shared. A port posted through another
+arrives with what was sent to it on the way. As in a browser, a port dispatches
+once it is started -- by `start()` or by setting `onmessage` -- and, as in node,
+a started port keeps the `Loop` running until it is closed or `unref()`'d.
 
 A root is a boundary: a path that climbs out of it, or a symbolic link that
 points out of it, is refused rather than followed. `Fetch.Allow` sees every

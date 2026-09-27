@@ -80,6 +80,9 @@ type Loop struct {
 	pending int
 	// closed marks a loop that will run no more work.
 	closed bool
+	// failed is an exception that work posted from elsewhere raised and
+	// nothing caught, which Run returns as it returns one a timer raises.
+	failed error
 }
 
 // NewLoop returns a loop for a runtime.
@@ -222,6 +225,9 @@ func (l *Loop) Run(ctx context.Context) error {
 		case fn := <-l.tasks:
 			fn()
 			l.ran()
+			if err := l.takeFailure(); err != nil {
+				return err
+			}
 		case <-l.wake:
 		case <-wait:
 		case <-ctx.Done():
@@ -262,6 +268,9 @@ func (l *Loop) RunUntil(ctx context.Context, done <-chan struct{}) error {
 		case fn := <-l.tasks:
 			fn()
 			l.ran()
+			if err := l.takeFailure(); err != nil {
+				return err
+			}
 		case <-l.wake:
 		case <-wait:
 		case <-done:
@@ -270,6 +279,25 @@ func (l *Loop) RunUntil(ctx context.Context, done <-chan struct{}) error {
 			return ctx.Err()
 		}
 	}
+}
+
+// fail records an exception that work posted to the loop raised and nothing
+// caught -- a MessagePort's listener's -- for Run to return.
+func (l *Loop) fail(err error) {
+	l.mu.Lock()
+	if l.failed == nil {
+		l.failed = err
+	}
+	l.mu.Unlock()
+}
+
+// takeFailure returns the exception fail recorded, if there is one.
+func (l *Loop) takeFailure() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	err := l.failed
+	l.failed = nil
+	return err
 }
 
 // fire runs a timer's callback and re-arms it if it repeats.

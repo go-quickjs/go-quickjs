@@ -89,7 +89,7 @@ func (r *Runtime) initObjectBuiltins() {
 		return Bool(yes), err
 	})
 
-	r.defMethod(p, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	r.objectToStringFn = r.defMethod(p, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		switch {
 		case this.IsUndefined():
 			return Str(NewString("[object Undefined]")), nil

@@ -608,9 +608,10 @@ const webSocketJS = `(function (host) {
     }
   }
 
-  // The browsers throw an InvalidStateError here; this runtime has no DOM
-  // exceptions, so it throws the nearest thing it has.
+  // The browsers throw an InvalidStateError here, a DOMException -- or,
+  // where the web APIs were left out, the nearest thing there is.
   function DOMException_(message) {
+    if (typeof DOMException === "function") return new DOMException(message, "InvalidStateError");
     const e = new Error(message);
     e.name = "InvalidStateError";
     return e;

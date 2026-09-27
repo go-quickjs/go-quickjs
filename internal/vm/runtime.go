@@ -253,6 +253,9 @@ type Realm struct {
 	// and writing a restricted property calls. There is exactly one of it per
 	// realm, which a script can observe.
 	throwTypeErrorFn *Object
+	// objectToStringFn is Object.prototype.toString, which tells a structured
+	// clone how V8 would name an object it refuses.
+	objectToStringFn *Object
 	// arrayValuesFn is Array.prototype.values, which the iteration fast paths
 	// compare against: an array iterates the way they assume only if this is
 	// still what its Symbol.iterator resolves to.

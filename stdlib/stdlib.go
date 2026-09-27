@@ -85,7 +85,7 @@ func Install(rt *quickjs.Runtime, cfg Config) error {
 		}
 	}
 	if !cfg.NoWebAPIs {
-		if err := WebAPIs(rt, cfg.Random); err != nil {
+		if err := webAPIs(rt, cfg.Random, cfg.Loop); err != nil {
 			return err
 		}
 		// The node modules that need no capability go with them: an
