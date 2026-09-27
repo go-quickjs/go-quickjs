@@ -346,6 +346,8 @@ const (
 	OpPushFinally
 	OpRethrow
 	OpThrowTypeError // used for TDZ and const-assignment failures
+	// OpThrowReferenceError throws a ReferenceError with the message Names[A].
+	OpThrowReferenceError
 
 	// --- Tail calls ------------------------------------------------------------
 	// OpTailCall and OpTailCallMethod are OpCall and OpCallMethod in tail
@@ -581,7 +583,7 @@ var opNames = [opCount]string{
 
 	OpThrow: "throw", OpPushCatch: "push_catch", OpPopCatch: "pop_catch",
 	OpPushFinally: "push_finally", OpRethrow: "rethrow",
-	OpThrowTypeError: "throw_type_error",
+	OpThrowTypeError: "throw_type_error", OpThrowReferenceError: "throw_reference_error",
 
 	OpTailCall: "tail_call", OpTailCallMethod: "tail_call_method", OpTailDirectEval: "tail_direct_eval",
 

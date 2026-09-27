@@ -133,3 +133,43 @@ func TestAnnexBHTMLComments(t *testing.T) {
 		t.Fatal("<!-- in a module: no error")
 	}
 }
+
+// TestAnnexBForInInitializer pins that sloppy code may give a for-in's var an
+// initializer, assigned once before the object is evaluated, and that nothing
+// else may.
+func TestAnnexBForInInitializer(t *testing.T) {
+	evalCases(t, []struct{ src, want string }{
+		{`var log = []; for (var a = (log.push("init"), 0) in (log.push("obj"), {k: 1})) log.push(a); log.join() + " " + a`, "init,obj,k k"},
+		{`for (var b = 7 in {}) ; b`, "7"},
+		{`var errs = [];
+		for (var src of ["for (a = 0 in {}) ;", "'use strict'; for (var a = 0 in {}) ;", "for (let a = 0 in {}) ;",
+			"for (var [a] = 0 in {}) ;", "for (var a = 0 of []) ;"]) {
+			try { new Function(src); errs.push("ok") } catch (e) { errs.push(e.constructor.name) }
+		}
+		errs.join()`, "SyntaxError,SyntaxError,SyntaxError,SyntaxError,SyntaxError"},
+	})
+}
+
+// TestAnnexBCallAssignmentTarget pins that sloppy code may assign to a call:
+// the call is made, and then the assignment throws a ReferenceError without
+// evaluating the value. Strict code, logical assignment and super() and
+// import() calls keep the SyntaxError.
+func TestAnnexBCallAssignmentTarget(t *testing.T) {
+	evalCases(t, []struct{ src, want string }{
+		{`var r, out = [];
+		function f() { r.push("f"); return {}; }
+		for (var src of ["f() = (r.push('rhs'), 1)", "f() += 1", "f()++", "--f()",
+			"for (f() in {x: 1}) ;", "for (f() of [1]) ;", "for (f() in {}) ;", "[f() = 1]"]) {
+			r = [];
+			try { eval(src); r.push("ok") } catch (e) { r.push(e.constructor.name) }
+			out.push(r.join());
+		}
+		out.join(" ")`, "f,ReferenceError f,ReferenceError f,ReferenceError f,ReferenceError f,ReferenceError f,ReferenceError ok f,ReferenceError"},
+		{`var errs = [];
+		for (var src of ["f() &&= 1", "f() ??= 1", "'use strict'; f() = 1", "'use strict'; f()++",
+			"'use strict'; for (f() in {}) ;", "[f()] = []", "({a: f()} = {})", "import('x') = 1"]) {
+			try { new Function(src); errs.push("ok") } catch (e) { errs.push(e.constructor.name) }
+		}
+		errs.join()`, "SyntaxError,SyntaxError,SyntaxError,SyntaxError,SyntaxError,SyntaxError,SyntaxError,SyntaxError"},
+	})
+}

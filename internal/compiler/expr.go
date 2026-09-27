@@ -733,6 +733,10 @@ func (c *compiler) compileLocalUpdate(n *ast.Update) bool {
 }
 
 func (c *compiler) compileUpdate(n *ast.Update) {
+	if call, ok := n.Operand.(*ast.Call); ok {
+		c.compileCallTarget(call, n.Start)
+		return
+	}
 	op := bytecode.OpInc
 	if n.Op == "--" {
 		op = bytecode.OpDec
@@ -1326,6 +1330,12 @@ func (c *compiler) compileChainLink(e ast.Expr, jumps *[]chainJump) {
 // ---------------------------------------------------------------------------
 
 func (c *compiler) compileAssign(n *ast.Assign) {
+	if call, ok := n.Target.(*ast.Call); ok {
+		// Sloppy code may assign to a call: the call is made, and the
+		// assignment is a ReferenceError before the value is evaluated.
+		c.compileCallTarget(call, n.Start)
+		return
+	}
 	switch n.Op {
 	case "=":
 		if isPattern(n.Target) {
@@ -1615,8 +1625,21 @@ func (c *compiler) assignToIdentStatic(t *ast.Ident, initializing bool) {
 
 // assignTo stores the value on top of the stack into a target, leaving the
 // value on the stack as the expression's result.
+// compileCallTarget compiles a call that sloppy code assigned to: the call is
+// made, and then the assignment is a ReferenceError. The call's value stands
+// for the expression's, on the path nothing reaches.
+func (c *compiler) compileCallTarget(call *ast.Call, pos int) {
+	c.compileExpr(call)
+	c.emitAt(pos, bytecode.OpThrowReferenceError, c.nameIdx("invalid assignment target"), 0)
+}
+
 func (c *compiler) assignTo(target ast.Expr, initializing bool) {
 	switch t := target.(type) {
+	case *ast.Call:
+		// A for-in or for-of head that is a call.
+		c.compileCallTarget(t, t.Start)
+		c.emit(bytecode.OpDrop, 0, 0)
+		return
 	case *ast.Ident:
 		// Inside a `with` body the object may be what is written to. An
 		// initializing store is a declaration, which binds in its own scope

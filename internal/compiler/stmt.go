@@ -632,6 +632,11 @@ func (c *compiler) compileForIn(n *ast.ForInStmt) {
 	if c.beginHeadScope(n.Left) {
 		defer c.endScope()
 	}
+	// Annex B's `for (var a = 0 in o)` assigns its initializer once, before
+	// the object is evaluated.
+	if vd, ok := n.Left.(*ast.VarDecl); ok && vd.Kind == ast.DeclVar && vd.Decls[0].Init != nil {
+		c.compileVarDecl(vd)
+	}
 	c.compileExpr(n.Right)
 	c.emit(bytecode.OpForInStart, 0, 0)
 	c.pushExit(exitCursor)

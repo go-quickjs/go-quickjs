@@ -2095,6 +2095,9 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		case bytecode.OpThrowTypeError:
 			vmErr = r.throwTypeError("%s", r.atoms.name(cl.names[in.A]))
 			goto onError
+		case bytecode.OpThrowReferenceError:
+			vmErr = r.throwError(errReference, "%s", r.atoms.name(cl.names[in.A]))
+			goto onError
 
 		case bytecode.OpNewDisposeCapability:
 			o := newObject(nil, ClassObject)

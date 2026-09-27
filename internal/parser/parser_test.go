@@ -439,7 +439,10 @@ func TestForInOfHeadDoesNotTreatInAsOperator(t *testing.T) {
 }
 
 func TestForInOfErrors(t *testing.T) {
-	checkError(t, "for (var a = 1 in b) c;", "cannot have an initializer")
+	// Annex B allows a var's initializer in sloppy code; strict code does not.
+	checkError(t, "'use strict'; for (var a = 1 in b) c;", "cannot have an initializer")
+	checkError(t, "for (var [a] = 1 in b) c;", "cannot have an initializer")
+	checkError(t, "for (let a = 1 in b) c;", "cannot have an initializer")
 	checkError(t, "for (var a, b in c) d;", "only one binding")
 	checkError(t, "for await (a of b) c;", "expected")
 }

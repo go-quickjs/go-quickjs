@@ -116,12 +116,22 @@ func (p *parser) parseAssignFrom(left ast.Expr) ast.Expr {
 	opTok := p.tok
 	p.next()
 
-	if op == "=" {
+	switch {
+	case op == "=":
 		// The left side of a plain assignment may be a destructuring pattern,
 		// which until now was parsed as an object or array literal.
 		p.checkAssignTarget(left, opTok)
-		left = p.toPattern(left, false)
-	} else {
+		if !p.isCallTarget(left) {
+			left = p.toPattern(left, false)
+		}
+	case op == "&&=" || op == "||=" || op == "??=":
+		// A logical assignment may skip the store, so its target has to be
+		// one that can be stored to: a call is not, even in sloppy code.
+		if _, call := left.(*ast.Call); call {
+			p.errorAt(opTok, "invalid assignment target")
+		}
+		p.checkSimpleAssignTarget(left, opTok)
+	default:
 		p.checkSimpleAssignTarget(left, opTok)
 	}
 	right := p.parseAssign()
@@ -164,8 +174,31 @@ func (p *parser) checkSimpleAssignTarget(target ast.Expr, tok lexer.Token) {
 	case *ast.Member:
 		// Always a valid target.
 	default:
+		if p.isCallTarget(target) {
+			return
+		}
 		p.errorAt(tok, "invalid assignment target")
 	}
+}
+
+// isCallTarget reports whether a target is a call that sloppy code may assign
+// to -- for the web's sake, a ReferenceError when it runs rather than a
+// SyntaxError before anything does. super() and import() are not such calls.
+func (p *parser) isCallTarget(target ast.Expr) bool {
+	call, ok := target.(*ast.Call)
+	if !ok || p.strict {
+		return false
+	}
+	switch c := call.Callee.(type) {
+	case *ast.Super:
+		return false
+	case *ast.Ident:
+		switch c.Name {
+		case "import", "import.defer", "import.source":
+			return false
+		}
+	}
+	return true
 }
 
 // parseYield parses a yield expression. The operand is optional, and a newline

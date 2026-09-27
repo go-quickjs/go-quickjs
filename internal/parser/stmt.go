@@ -420,7 +420,7 @@ func (p *parser) parseFor() ast.Stmt {
 			if len(decl.Decls) != 1 {
 				p.errorf("a for-in/of head may declare only one binding")
 			}
-			if decl.Decls[0].Init != nil {
+			if decl.Decls[0].Init != nil && !p.forInInitializerAllowed(decl) {
 				p.errorf("a for-in/of binding cannot have an initializer")
 			}
 			if kind.IsUsing() && p.isKeyword("in") {
@@ -447,8 +447,18 @@ func (p *parser) parseFor() ast.Stmt {
 					p.errorf("\"async\" cannot be the left-hand side of a for-of")
 				}
 			}
-			// The head was an assignment target all along.
-			left = p.toPattern(expr, false)
+			// The head was an assignment target all along -- which in sloppy
+			// code may be a call, an error only when the loop assigns to it.
+			// An assignment is not one, though toPattern would take it for
+			// a target with a default: `for (a = 0 in o)` is an error.
+			if _, assign := expr.(*ast.Assign); assign {
+				p.errorAt(p.tok, "invalid assignment target in for-in/of head")
+			}
+			if p.isCallTarget(expr) {
+				left = expr
+			} else {
+				left = p.toPattern(expr, false)
+			}
 		} else {
 			init = p.exprStatement(expr, exprStart)
 		}
@@ -507,6 +517,17 @@ func (p *parser) parseFor() ast.Stmt {
 	p.inLoop = wasLoop
 
 	return stmt
+}
+
+// forInInitializerAllowed reports whether a for-in head's declaration may
+// have an initializer, which Annex B allows sloppy code for a var that binds a
+// name: `for (var a = 0 in o)` assigns 0 before o is evaluated.
+func (p *parser) forInInitializerAllowed(decl *ast.VarDecl) bool {
+	if p.strict || decl.Kind != ast.DeclVar || !p.isKeyword("in") {
+		return false
+	}
+	_, name := decl.Decls[0].Target.(*ast.Ident)
+	return name
 }
 
 // parseReturn parses a return statement, which is restricted: a newline after
