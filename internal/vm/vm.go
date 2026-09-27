@@ -446,6 +446,17 @@ func (r *Runtime) tailTarget(tc tailCall) (*closure, Value, []Value, *Object, bo
 //
 // Reslicing also means the frame left behind at this depth keeps its handler
 // and upvalue slices, whose backing arrays the next call reuses.
+// detachSuspended lets go of the handler and upvalue slices a generator's
+// frame ran with, which the generator keeps for its next resumption. The
+// frame goes back to the pool, and the next call made at its depth reuses
+// the slices it holds, truncating them and appending: were they still the
+// generator's, that call would write over the catch handlers and captured
+// variables of the generator it was suspended with.
+func (f *frame) detachSuspended() {
+	f.handlers = nil
+	f.openUpvalues = nil
+}
+
 func (r *Runtime) pushFrame() *frame {
 	// The block the next frame goes in is kept to hand, so an ordinary push is
 	// a subtraction and an index. The unsigned comparison covers both ways the

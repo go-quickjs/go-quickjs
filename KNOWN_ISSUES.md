@@ -3,7 +3,7 @@
 Found by a review of the engine, the standard library and go-intl in
 September 2026, after v0.5.0. Each issue was reproduced unless it is marked
 *plausible*. They are ordered by how much harm they allow, and are fixed in
-that order; an issue's status names the commit that fixed it.
+that order. The commit that fixes an issue names it: `git log --grep KI-01`.
 
 - **P0**: a script can corrupt the engine, crash the host process, or reach
   past a boundary it should not.
@@ -28,7 +28,8 @@ Paths are relative to this repository; `go-intl:` paths are in
 - **Repro:** an async function that awaits inside `try/catch`, while another
   function with a `try` runs at the same depth; or closures over `let i`
   across `yield`, which give `[3,1,2]` for `[0,1,2]`.
-- **Status:** open.
+- **Status:** fixed. The frame lets go of the slices when the generator
+  suspends or ends.
 
 ### KI-02 `WithMemoryLimit` is not enforced
 - **Where:** `internal/vm/runtime.go`. `accountMemory` has no callers.

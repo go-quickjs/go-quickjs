@@ -234,6 +234,7 @@ func (r *Runtime) bindGeneratorParams(g *generator) error {
 	g.pc = f.pc
 	g.openUpvalues = f.openUpvalues
 	g.withScopes = f.withScopes
+	f.detachSuspended()
 
 	r.frameDepth--
 	clear(r.stack[base:r.stackTop])
@@ -456,6 +457,7 @@ func (r *Runtime) releaseGeneratorFrame(g *generator, base int) {
 				u.close()
 			}
 		}
+		f.detachSuspended()
 		r.frameDepth--
 	}
 	clear(r.stack[base:r.stackTop])
