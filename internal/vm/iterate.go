@@ -39,6 +39,14 @@ type iterState struct {
 	// inside it is awaited.
 	asyncIter bool
 
+	// delegation marks the cursor of a `yield*`, which an exception or a
+	// return unwinding past it never closes: whatever goes wrong inside a
+	// delegation is the delegate's own doing -- its next, throw or return
+	// failing, or a result that is not an object -- and the delegate is not
+	// asked to return because of it. The one case that closes it, a throw
+	// the delegate has no method for, closes it in iterResume.
+	delegation bool
+
 	done bool
 }
 
@@ -242,7 +250,7 @@ func (r *Runtime) closeIter(cursor Value) {
 func (r *Runtime) closeIteratorsIn(from, to int) {
 	for i := to - 1; i >= from; i-- {
 		st := iterStateOf(r.stack[i])
-		if st == nil || st.forIn || st.done || st.arr != nil {
+		if st == nil || st.forIn || st.done || st.arr != nil || st.delegation {
 			continue
 		}
 		st.done = true
@@ -258,6 +266,9 @@ func (r *Runtime) closeIteratorsIn(from, to int) {
 func (r *Runtime) closeIteratorsReturning(from, to int) error {
 	var first error
 	for i := to - 1; i >= from; i-- {
+		if st := iterStateOf(r.stack[i]); st != nil && st.delegation {
+			continue
+		}
 		if err := r.iterCloseNormal(r.stack[i]); err != nil && first == nil {
 			first = err
 		}
@@ -810,6 +821,7 @@ func (r *Runtime) iterResume(cursor Value, sent Value, mode resumeMode,
 	if st == nil {
 		return Undefined, false, r.throwTypeError("not an iterator")
 	}
+	st.delegation = true
 	switch mode {
 	case resumeThrow:
 		if st.arr != nil {

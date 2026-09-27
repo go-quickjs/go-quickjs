@@ -754,3 +754,28 @@ func TestAsyncDelegationRequiresResultObjects(t *testing.T) {
 		    function (e) { r = "rejected:" + e.constructor.name })
 		})`, `r`, "9:true")
 }
+
+// TestDelegationFailureDoesNotClose pins that yield* never asks its delegate to
+// return because the delegate itself failed: a throw or next that throws, a
+// result that is not an object, or a result whose done throws. Only a throw
+// the delegate has no method for closes it.
+func TestDelegationFailureDoesNotClose(t *testing.T) {
+	evalCases(t, []struct{ src, want string }{
+		{`var out = [];
+		function probe(inner, act) {
+			var calls = 0;
+			inner[Symbol.iterator] = function () { return this; };
+			inner.return = function () { calls++; return {done: true}; };
+			var outer = (function* () { try { yield* inner; } finally {} })();
+			outer.next();
+			try { act(outer); out.push("ok"); } catch (e) { out.push(e.name); }
+			out.push(calls);
+		}
+		probe({next() { return {done: false}; }, throw() { return null; }}, o => o.throw(1));
+		probe({next() { return {done: false}; }, throw() { throw new RangeError; }}, o => o.throw(1));
+		probe({next() { return this.n++ ? null : {done: false}; }, n: 0}, o => o.next());
+		probe({next() { return this.n++ ? {get done() { throw new RangeError; }} : {done: false}; }, n: 0}, o => o.next());
+		probe({next() { return {done: false}; }}, o => o.throw(1));
+		out.join()`, "TypeError,0,RangeError,0,TypeError,0,RangeError,0,TypeError,1"},
+	})
+}
