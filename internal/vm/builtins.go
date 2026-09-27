@@ -2734,6 +2734,10 @@ func (r *Runtime) initArrayExtras() {
 // an array-like and sees an element a getter produces; a hole contributes
 // nothing at any depth.
 func (r *Runtime) flatten(a *arrayLike, depth int, out *arrayOut) error {
+	if err := r.nest(); err != nil {
+		return err
+	}
+	defer r.unnest()
 	for i := int64(0); i < a.n; i++ {
 		if err := r.tick(); err != nil {
 			return err

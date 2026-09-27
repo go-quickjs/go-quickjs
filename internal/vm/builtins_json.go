@@ -301,6 +301,12 @@ func (r *Runtime) reviveJSONAt(holder *Object, key Value, reviver Value, rec *js
 		return Undefined, r.throwRangeError(
 			"a structure nested this deeply cannot be revived")
 	}
+	// A reviver may parse again, and revive that, which the depth above
+	// does not see.
+	if err := r.nest(); err != nil {
+		return Undefined, err
+	}
+	defer r.unnest()
 	k, err := r.toPropertyKey(key)
 	if err != nil {
 		return Undefined, err
@@ -484,6 +490,10 @@ func (e *jsonEncoder) encode(buf []byte, v Value, prefix string) ([]byte, bool, 
 		return buf, false, e.rt.throwRangeError(
 			"a structure nested this deeply cannot be serialized")
 	}
+	if err := e.rt.nest(); err != nil {
+		return buf, false, err
+	}
+	defer e.rt.unnest()
 	e.depth++
 	defer func() { e.depth-- }()
 	e.seen[o] = true

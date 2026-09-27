@@ -22,6 +22,10 @@ type proxyData struct {
 	// sandbox is set for a context's global scope, which forwards to it
 	// rather than to a handler; see contextify.go.
 	sandbox *Object
+	// callable and constructor are whether the target was, when the proxy
+	// was made, which is what decides whether the proxy is: asked of a chain
+	// of proxies it is one question, not one per link.
+	callable, constructor bool
 }
 
 // proxyOf returns an object's proxy state, or nil if it is not a proxy.
@@ -58,6 +62,10 @@ func (r *Runtime) trap(p *proxyData, name string) (Value, bool, error) {
 
 // proxyGet implements the get trap.
 func (r *Runtime) proxyGet(p *proxyData, key Atom, receiver Value) (Value, error) {
+	if err := r.nest(); err != nil {
+		return Undefined, err
+	}
+	defer r.unnest()
 	if p.sandbox != nil {
 		return r.sandboxGet(p, key, receiver)
 	}
@@ -96,6 +104,10 @@ func (r *Runtime) proxyGet(p *proxyData, key Atom, receiver Value) (Value, error
 
 // proxySet implements the set trap.
 func (r *Runtime) proxySet(p *proxyData, key Atom, val, receiver Value, strict bool) (bool, error) {
+	if err := r.nest(); err != nil {
+		return false, err
+	}
+	defer r.unnest()
 	if p.sandbox != nil {
 		return r.sandboxSet(p, key, val, strict)
 	}
@@ -143,6 +155,10 @@ func (r *Runtime) proxySet(p *proxyData, key Atom, val, receiver Value, strict b
 
 // proxyHas implements the has trap.
 func (r *Runtime) proxyHas(p *proxyData, key Atom) (bool, error) {
+	if err := r.nest(); err != nil {
+		return false, err
+	}
+	defer r.unnest()
 	if p.sandbox != nil {
 		return r.sandboxHas(p, key)
 	}
@@ -151,7 +167,9 @@ func (r *Runtime) proxyHas(p *proxyData, key Atom) (bool, error) {
 		return false, err
 	}
 	if !ok {
-		return r.hasProp(p.target, key), nil
+		// Forwarded to the target, whose own trap -- or the recursion a
+		// cycle makes -- may fail, which is the answer's to report.
+		return r.hasPropErr(p.target, key)
 	}
 	res, err := r.call(fn, Obj(p.handler), []Value{Obj(p.target), r.keyToValue(key)})
 	if err != nil {
@@ -172,6 +190,10 @@ func (r *Runtime) proxyHas(p *proxyData, key Atom) (bool, error) {
 
 // proxyDelete implements the deleteProperty trap.
 func (r *Runtime) proxyDelete(p *proxyData, key Atom, strict bool) (bool, error) {
+	if err := r.nest(); err != nil {
+		return false, err
+	}
+	defer r.unnest()
 	if p.sandbox != nil {
 		return r.sandboxDelete(p, key)
 	}
@@ -218,6 +240,10 @@ func (r *Runtime) proxyDelete(p *proxyData, key Atom, strict bool) (bool, error)
 
 // proxyOwnKeys implements the ownKeys trap.
 func (r *Runtime) proxyOwnKeys(p *proxyData) ([]Atom, error) {
+	if err := r.nest(); err != nil {
+		return nil, err
+	}
+	defer r.unnest()
 	if p.sandbox != nil {
 		return r.sandboxOwnKeys(p)
 	}
@@ -309,6 +335,10 @@ func (r *Runtime) proxyOwnKeys(p *proxyData) ([]Atom, error) {
 
 // proxyGetPrototypeOf implements the getPrototypeOf trap.
 func (r *Runtime) proxyGetPrototypeOf(p *proxyData) (Value, error) {
+	if err := r.nest(); err != nil {
+		return Undefined, err
+	}
+	defer r.unnest()
 	fn, ok, err := r.trap(p, "getPrototypeOf")
 	if err != nil {
 		return Undefined, err
@@ -345,6 +375,10 @@ func (r *Runtime) proxyGetPrototypeOf(p *proxyData) (Value, error) {
 
 // proxySetPrototypeOf implements the setPrototypeOf trap.
 func (r *Runtime) proxySetPrototypeOf(p *proxyData, proto Value) (bool, error) {
+	if err := r.nest(); err != nil {
+		return false, err
+	}
+	defer r.unnest()
 	fn, ok, err := r.trap(p, "setPrototypeOf")
 	if err != nil {
 		return false, err
@@ -383,6 +417,10 @@ func (r *Runtime) proxySetPrototypeOf(p *proxyData, proto Value) (bool, error) {
 
 // proxyIsExtensible implements the isExtensible trap.
 func (r *Runtime) proxyIsExtensible(p *proxyData) (bool, error) {
+	if err := r.nest(); err != nil {
+		return false, err
+	}
+	defer r.unnest()
 	fn, ok, err := r.trap(p, "isExtensible")
 	if err != nil {
 		return false, err
@@ -409,6 +447,10 @@ func (r *Runtime) proxyIsExtensible(p *proxyData) (bool, error) {
 
 // proxyPreventExtensions implements the preventExtensions trap.
 func (r *Runtime) proxyPreventExtensions(p *proxyData) (bool, error) {
+	if err := r.nest(); err != nil {
+		return false, err
+	}
+	defer r.unnest()
 	fn, ok, err := r.trap(p, "preventExtensions")
 	if err != nil {
 		return false, err
@@ -440,6 +482,10 @@ func (r *Runtime) proxyPreventExtensions(p *proxyData) (bool, error) {
 
 // proxyGetOwnPropertyDescriptor implements the getOwnPropertyDescriptor trap.
 func (r *Runtime) proxyGetOwnPropertyDescriptor(p *proxyData, key Atom) (Value, error) {
+	if err := r.nest(); err != nil {
+		return Undefined, err
+	}
+	defer r.unnest()
 	if p.sandbox != nil {
 		return r.sandboxOwnDescriptor(p, key)
 	}
@@ -516,6 +562,10 @@ func (r *Runtime) proxyGetOwnPropertyDescriptor(p *proxyData, key Atom) (Value, 
 
 // proxyDefineProperty implements the defineProperty trap.
 func (r *Runtime) proxyDefineProperty(p *proxyData, key Atom, desc Value) (bool, error) {
+	if err := r.nest(); err != nil {
+		return false, err
+	}
+	defer r.unnest()
 	if p.sandbox != nil {
 		return r.sandboxDefine(p, key, desc)
 	}
@@ -674,6 +724,10 @@ func (r *Runtime) keyToValue(key Atom) Value {
 
 // proxyCall implements the apply trap.
 func (r *Runtime) proxyCall(p *proxyData, this Value, args []Value) (Value, error) {
+	if err := r.nest(); err != nil {
+		return Undefined, err
+	}
+	defer r.unnest()
 	fn, ok, err := r.trap(p, "apply")
 	if err != nil {
 		return Undefined, err
@@ -688,6 +742,10 @@ func (r *Runtime) proxyCall(p *proxyData, this Value, args []Value) (Value, erro
 
 // proxyConstruct implements the construct trap.
 func (r *Runtime) proxyConstruct(p *proxyData, args []Value, newTarget Value) (Value, error) {
+	if err := r.nest(); err != nil {
+		return Undefined, err
+	}
+	defer r.unnest()
 	fn, ok, err := r.trap(p, "construct")
 	if err != nil {
 		return Undefined, err
@@ -716,7 +774,8 @@ func (r *Runtime) initProxyBuiltins() {
 			return nil, rt.throwTypeError("Proxy requires an object target and handler")
 		}
 		o := newObject(proxyProto, ClassProxy)
-		o.data = &proxyData{target: target.Object(), handler: handler.Object()}
+		o.data = &proxyData{target: target.Object(), handler: handler.Object(),
+			callable: target.Object().IsCallable(), constructor: isConstructor(target)}
 		// A proxy whose target is callable is itself callable, which is what
 		// makes the apply and construct traps reachable.
 		if target.Object().IsCallable() {

@@ -71,7 +71,10 @@ type Runtime struct {
 	maxFrames int
 	// meter measures the heap against the memory limit, and is nil when
 	// there is none.
-	meter      *memoryMeter
+	meter *memoryMeter
+	// nesting is how deep the engine is in recursion the frames do not
+	// count; see nest.
+	nesting    int
 	nodeQuirks bool
 
 	// stackAccessor is the stack property every error has, whose getter and

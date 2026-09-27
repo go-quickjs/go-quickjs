@@ -383,7 +383,7 @@ func (o *Object) IsCallable() bool {
 	// A proxy is callable exactly when its target is, which is what makes the
 	// apply and construct traps reachable.
 	if p, ok := o.data.(*proxyData); ok {
-		return p.target.IsCallable()
+		return p.callable
 	}
 	return false
 }

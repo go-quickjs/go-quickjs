@@ -36,6 +36,7 @@ func New(cfg Config) *Runtime {
 	if maxFrames <= 0 {
 		maxFrames = defaultCallDepthLimit
 	}
+	maxFrames = min(maxFrames, maxGoRecursion)
 
 	r := &Runtime{
 		atoms: newAtomTable(),

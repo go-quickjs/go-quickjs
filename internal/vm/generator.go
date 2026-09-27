@@ -78,6 +78,9 @@ type generator struct {
 	// them: there is one body, and letting a second call re-enter it while the
 	// first is suspended at an await would scramble both.
 	queue []asyncRequest
+	// pumping marks a pumpAsyncGenerator running, which a request finishing
+	// meanwhile leaves the next one to.
+	pumping bool
 	// draining marks a request being serviced, so that one arriving meanwhile
 	// joins the queue instead of re-entering the body.
 	draining bool
@@ -629,11 +632,23 @@ func (r *Runtime) initAsyncGeneratorBuiltins() {
 	r.defToStringTag(p, "AsyncGenerator")
 }
 
-// pumpAsyncGenerator services the queued requests, one at a time.
+// pumpAsyncGenerator services the queued requests, one at a time. A request
+// that finishes at once hands the next back to the loop here rather than
+// starting it itself, so that a long queue on a generator that has ended is
+// a loop and not a recursion as deep as the queue is long.
 func (r *Runtime) pumpAsyncGenerator(g *generator) {
-	if g.draining || len(g.queue) == 0 {
+	if g.pumping {
 		return
 	}
+	g.pumping = true
+	defer func() { g.pumping = false }()
+	for !g.draining && len(g.queue) > 0 {
+		r.pumpOne(g)
+	}
+}
+
+// pumpOne starts the request at the head of the queue.
+func (r *Runtime) pumpOne(g *generator) {
 	g.draining = true
 	req := g.queue[0]
 	if req.mode == resumeReturn {

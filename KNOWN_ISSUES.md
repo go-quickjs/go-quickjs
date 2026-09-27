@@ -76,7 +76,11 @@ Paths are relative to this repository; `go-intl:` paths are in
   depth limit is reached.
 - **Effect:** `fatal error: stack overflow`, which `recover` cannot catch.
 - **Expected:** Node throws `RangeError: Maximum call stack size exceeded`.
-- **Status:** open.
+- **Status:** fixed. Recursion that no frame counts -- proxy forwarding, bound
+  functions, JSON's nesting and its reviver, `flat` -- is counted against a
+  limit sized to the Go stack, as the call depth now is too, whatever a host
+  asks for. A proxy records whether it is callable and a constructor when it
+  is made, and an async generator's queue is served in a loop.
 
 ### KI-05 A typed array's `sort`/`reverse` go through replaceable `Array.prototype` methods
 - **Where:** `internal/vm/builtins_typedarray.go` (`toSorted`, `toReversed`,
@@ -258,7 +262,8 @@ Paths are relative to this repository; `go-intl:` paths are in
 ### KI-27 Operations whose cost grows quadratically
 - **Strings:** concatenating a surrogate pair's halves flattens the whole
   string each time.
-- **Proxies:** creating a proxy walks the whole proxy chain.
+- **Proxies:** creating a proxy walks the whole proxy chain. *Fixed with
+  KI-04.*
 - **`bind`:** the "bound bound ..." name is copied in full each time.
 - **Intl** (go-intl):
   - `ListFormat` of many items
@@ -328,7 +333,8 @@ Paths are relative to this repository; `go-intl:` paths are in
   `vm.go`.
 - **Repro:** `"x" in new Proxy(new Proxy({}, {has() { throw 1 }}), {})`
   answers `false`.
-- **Status:** open.
+- **Status:** the proxy half is fixed with KI-04; the `with`-scope lookups are
+  open.
 
 ### KI-35 Own keys list array indices out of order
 - **Where:** `internal/vm/object.go`. An index that became an accessor is

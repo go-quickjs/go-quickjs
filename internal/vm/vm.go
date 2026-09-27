@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 	"math/big"
+	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jsnum"
@@ -30,6 +31,14 @@ const defaultStackSize = 256 * 1024
 // callDepthLimit bounds recursion independently of the slot count, so that a
 // function with very few locals still cannot recurse without bound.
 const defaultCallDepthLimit = 8192
+
+// maxGoRecursion bounds how deep the engine recurses in Go, whatever a host
+// asks for: a call takes a few kilobytes of the goroutine's stack, and one
+// that grows past Go's limit -- a gigabyte on a 64-bit platform and a quarter
+// of one on a 32-bit one -- ends the process, which nothing can recover
+// from. It bounds the depth of calls, and separately the recursion no frame
+// counts: a proxy forwarding to its target, JSON's nesting, flat's.
+const maxGoRecursion = 25000 << (unsafe.Sizeof(uintptr(0)) / 4)
 
 // frameBlockSize is how many frames are allocated at a time. A frame is a
 // couple of hundred bytes and the depth limit is thousands, so allocating the
@@ -81,7 +90,15 @@ func (r *Runtime) callObject(o *Object, this Value, args []Value, newTarget Valu
 		if !newTarget.IsUndefined() {
 			boundThis = this
 		}
-		return r.callObject(fd.boundTarget, boundThis, merged, newTarget)
+		// Each bound function in a chain is a level of Go recursion with no
+		// frame of its own, so it is counted, or a long enough chain would
+		// take the call past the Go stack.
+		if err := r.nest(); err != nil {
+			return Undefined, err
+		}
+		v, err := r.callObject(fd.boundTarget, boundThis, merged, newTarget)
+		r.unnest()
+		return v, err
 	}
 
 	if fd.native != nil {
@@ -3003,6 +3020,20 @@ func (r *Runtime) canDeclareGlobalFunc(name Atom) error {
 // Array method over an array-like with an enormous length, say -- would
 // otherwise be unstoppable, which is exactly the hang the context bound exists
 // to prevent.
+// nest enters one level of the recursion the call stack's frames do not
+// count, refusing one past maxGoRecursion as a call past the depth limit is
+// refused. Each nest is matched by an unnest.
+func (r *Runtime) nest() error {
+	if r.nesting >= maxGoRecursion {
+		return r.throwRangeError("maximum call stack size exceeded")
+	}
+	r.nesting++
+	return nil
+}
+
+// unnest leaves a level nest entered.
+func (r *Runtime) unnest() { r.nesting-- }
+
 func (r *Runtime) tick() error {
 	r.interruptCounter--
 	if r.interruptCounter <= 0 {
@@ -3345,7 +3376,7 @@ func isConstructor(v Value) bool {
 	}
 	o := v.Object()
 	if p := proxyOf(o); p != nil {
-		return p.target != nil && isConstructor(Obj(p.target))
+		return p.constructor
 	}
 	fd := o.fn()
 	return fd != nil && fd.ctorKind != ctorNone
