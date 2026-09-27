@@ -29,9 +29,10 @@ go install github.com/go-quickjs/go-quickjs/cmd/qjs@latest
 
 The language is substantially complete: expressions, closures, classes with
 inheritance and private members, destructuring, generators, `async`/`await`,
-Promises, regular expressions, modules with top-level `await`, Proxy and typed
-arrays all work, and are exercised against [test262], the official ECMAScript
-conformance suite.
+Promises, regular expressions, modules with top-level `await`, Proxy, typed
+arrays, explicit resource management and proper tail calls all work, as does
+the web-compatibility annex, and all of it is exercised against [test262], the
+official ECMAScript conformance suite.
 
 `Intl` is there too, from [go-intl], a pure-Go implementation of ECMA-402 built
 to answer as ICU 78.3 does in Node 26, with CLDR 48.2 data for every locale ICU
@@ -42,9 +43,9 @@ called in every language. It is held against a full ICU build:
 [7,948 of 7,949 cases match it exactly](intl_test.go), and the one that does
 not is named.
 
-Of the 98,560 test262 variants in the current checkout, 93,010 pass, none
-fail, and 5,550 are skipped because they require an unsupported feature or host
-facility. See [Conformance](#conformance) for the
+Of the 99,937 test262 variants in the areas the engine claims -- the language,
+the built-ins, `Intl` and Annex B -- 98,674 pass, none fail, and 1,263 are
+skipped because they require an unsupported feature or host facility. See [Conformance](#conformance) for the
 measurement and [Not implemented](#not-implemented) for what is missing.
 
 ### Implemented
@@ -54,23 +55,24 @@ measurement and [Not implemented](#not-implemented) for what is missing.
 | Expressions and operators | Full precedence, `??`, `?.`, `**`, BigInt |
 | Variables | `var`, `let`, `const`, temporal dead zone, closures |
 | Control flow | `if`, `for`, `for-in`, `for-of`, `while`, `do`, `switch`, labelled `break`/`continue` |
-| Functions | Declarations, expressions, arrows, defaults, rest parameters, `arguments` |
+| Functions | Declarations, expressions, arrows, defaults, rest parameters, `arguments`, proper tail calls in strict code |
 | Classes | Constructors, methods, accessors, statics, `extends`, `super`, fields, private members, static blocks |
 | Destructuring | Array and object patterns, defaults, nesting, rest elements |
 | Exceptions | `throw`, `try`/`catch`/`finally`, stack traces |
+| Resource management | `using` and `await using`, `DisposableStack`, `AsyncDisposableStack`, `SuppressedError` |
 | Iteration | Iterator protocol, spread, generators, `yield*` |
 | Asynchrony | `Promise` with correct microtask ordering, `async`/`await` |
 | Regular expressions | Backtracking engine: backreferences, lookahead, lookbehind, named groups, modifier groups, Unicode property escapes at Unicode 17, the `v` flag's set notation and properties of strings |
-| Legacy | `with`, Annex B string methods, `escape`/`unescape`, sloppy-mode block functions |
-| Modules | `import`/`export`, live bindings, cycles, namespace imports, dynamic `import()`, top-level `await` |
-| Iterator helpers | `map`, `filter`, `take`, `drop`, `flatMap`, `reduce`, `toArray` and the rest, lazily |
+| Legacy | `with` and all of Annex B: string methods, `escape`/`unescape`, `Date`'s `getYear` family, HTML-like comments, sloppy-mode block functions, `RegExp`'s legacy statics and `compile` |
+| Modules | `import`/`export`, live bindings, cycles, namespace imports, dynamic `import()`, top-level `await`, import attributes with JSON, text and bytes modules, `import defer`, source phase imports |
+| Iterator helpers | `map`, `filter`, `take`, `drop`, `flatMap`, `reduce`, `toArray` and the rest, lazily, with `includes`, `join`, `chunks`, `windows`, `Iterator.concat`, `Iterator.zip` and `Iterator.zipKeyed` |
 | Unicode | Full case mappings including the final sigma, all four normalization forms, lone surrogates preserved end to end |
-| Built-ins | `Object`, `Function`, `Array`, `String`, `Number`, `Boolean`, `Symbol`, `BigInt`, `Error`, `Math`, `JSON`, `Date`, `RegExp`, `Map`, `Set`, `Promise`, `Proxy`, `Reflect`, `ArrayBuffer`, `DataView`, typed arrays |
+| Built-ins | `Object`, `Function`, `Array`, `String`, `Number`, `Boolean`, `Symbol`, `BigInt`, `Error`, `Math`, `JSON`, `Date`, `RegExp`, `Map`, `Set`, `Promise`, `Proxy`, `Reflect`, `ArrayBuffer` (resizable and immutable too), `SharedArrayBuffer`, `Atomics`, `DataView`, typed arrays |
 | Temporal | `Instant`, `Duration`, `PlainDate`, `PlainTime`, `PlainDateTime`, `PlainYearMonth`, `PlainMonthDay`, `ZonedDateTime`, `Now`, non-ISO calendars, and IANA time-zone transitions |
 | Internationalization | `Intl.Locale`, `NumberFormat`, `DateTimeFormat`, `Collator`, `PluralRules`, `ListFormat`, `RelativeTimeFormat`, `DisplayNames`, `Segmenter`, `DurationFormat`, from [go-intl], with CLDR data for every locale ICU has |
 | Weak references | `WeakRef`, `FinalizationRegistry`, `WeakMap`, `WeakSet`, backed by Go's `weak.Pointer` and `runtime.AddCleanup`: a target really is released, and a registry really is called back |
 | Reflection | `Proxy` with every trap and its invariants, `Reflect`, property descriptors, mapped `arguments` |
-| Recent additions | Set operations, `Array.fromAsync`, `Object.groupBy`, `Promise.try`, `RegExp.escape`, `Error.isError`, `Math.sumPrecise`, `Uint8Array` base64 and hex |
+| Recent additions | Set operations, `Array.fromAsync`, `Object.groupBy`, `Promise.try`, `Promise.allKeyed`, `RegExp.escape`, `Error.isError`, `Math.sumPrecise`, `Uint8Array` base64 and hex, `Map` and `WeakMap`'s `getOrInsert`, `JSON.rawJSON` and a reviver's source text, `Atomics.pause` |
 | Eval | Direct `eval` runs in the caller's scope — its variables, `this`, `new.target` and `super`; indirect `eval` runs in global scope |
 | Go interop | Function binding, marshalling, `context.Context` cancellation |
 
@@ -104,12 +106,24 @@ Gregorian layout.
 
 ### Not implemented
 
-`Atomics`, `SharedArrayBuffer`, `ShadowRealm`, decorators, resizable
-ArrayBuffers, `using` declarations, and the newer proposals test262 tracks.
+Decorators, `ShadowRealm`, and `Atomics.waitAsync`, which needs the host to
+provide a way of timing out a wait.
 
 There is one realm per runtime: `$262.createRealm` has nothing to return, so
-the four test262 variants that need a second realm are skipped along with the
-`cross-realm` and `ShadowRealm` ones.
+the test262 variants that need a second realm are skipped along with the
+`cross-realm` and `ShadowRealm` ones. There is one agent too: a
+`SharedArrayBuffer` is not shared with another runtime, so nothing can notify
+an `Atomics.wait`, which ends when its timeout does.
+
+Three things are left out on purpose, as QuickJS-NG leaves them out or as Node
+behaves:
+
+- A sloppy-mode function has no `caller`, and its `arguments` are not
+  reachable from outside it: reading either throws, as the standard's
+  `Function.prototype` accessors do.
+- There is no `document.all`, so nothing is falsy while being an object.
+- An error's `stack` is an own data property, as in V8, rather than the
+  accessor on `Error.prototype` that a proposal describes.
 
 In the standard library: node's own streams (the web's are here instead, and
 everything that takes a stream takes those), brotli, and BYOB readers. A
@@ -137,14 +151,19 @@ strict and sloppy variants, the expected-failure phase and type, and the feature
 tags. A test tagged with a feature the engine does not implement is skipped
 rather than counted against it.
 
-Measured coverage, as of the most recent run over the whole suite: 93,010
-variants pass and none fail. The other 5,550 are skipped
-rather than counted: a test tagged with a feature the engine does not
-implement, or one that asks the host for a second realm or an agent, is testing
-something that was never claimed.
+By default it runs `language`, `built-ins`, `intl402` and `annexB`; `staging`
+holds proposals too early to claim, and `harness` tests the suite's own helpers.
 
-`built-ins/Atomics` is the ten tests for `Atomics.pause`, which is the only part
-of that API a single-threaded engine could offer and which is not implemented.
+Measured coverage, as of the most recent run: 98,674 variants pass and none
+fail. The other 1,263 are skipped rather than counted: a test tagged with a
+feature the engine does not implement, or one that asks the host for a second
+realm or an agent, is testing something that was never claimed.
+
+Where test262 and current engines disagree, the engine follows the standard
+and a test records the difference. Two of Annex B's block-function rules are
+examples: a block-level function named `arguments` does not replace the
+arguments object, and one nested in a block that already declares a function
+of that name stays in its block. V8 does both.
 
 Useful flags:
 
