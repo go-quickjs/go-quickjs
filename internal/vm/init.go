@@ -46,7 +46,6 @@ func New(cfg Config) *Runtime {
 		// rather than the size of an array.
 		frames:           make([][]frame, 0, 8),
 		maxFrames:        maxFrames,
-		memoryLimit:      cfg.MemoryLimit,
 		locale:           cfg.Locale,
 		nodeQuirks:       cfg.NodeQuirks,
 		interruptCounter: interruptCheckInterval,
@@ -57,6 +56,7 @@ func New(cfg Config) *Runtime {
 	r.Realm = newRealm(r)
 	r.initWellKnownSymbols()
 	r.initRealm()
+	r.setMemoryLimit(cfg.MemoryLimit)
 	return r
 }
 

@@ -111,8 +111,17 @@ type config struct {
 	noCodeGeneration bool
 }
 
-// WithMemoryLimit caps the memory the runtime will account for. Exceeding it
-// raises a RangeError in the script rather than exhausting the process.
+// WithMemoryLimit caps the memory a script may hold, beyond what the
+// runtime's built-ins take. A script that exceeds it is stopped, and the
+// Eval, call or job running it returns ErrMemoryLimit: like a cancelled
+// context, it is not an exception the script can catch.
+//
+// The measure is the runtime's own heap -- its objects, strings and buffers
+// -- which it walks from its roots when the process has allocated a quarter
+// of the limit since it last did, and before any single allocation large
+// enough to cross the limit at once. It is an estimate: what a host holds
+// for the script, and what Go closures inside the engine capture, is not
+// counted. A runtime with a limit is a little slower to allocate.
 func WithMemoryLimit(bytes int64) Option {
 	return func(c *config) { c.memoryLimit = bytes }
 }
@@ -209,6 +218,10 @@ func (r *Runtime) Context() context.Context {
 	}
 	return r.ctx
 }
+
+// ErrMemoryLimit is returned when a script has exceeded the memory limit
+// WithMemoryLimit set.
+var ErrMemoryLimit = vm.ErrMemoryLimit
 
 // ErrClosed is returned by a Runtime that has been closed.
 var ErrClosed = errors.New("quickjs: runtime is closed")

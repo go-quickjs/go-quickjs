@@ -455,6 +455,9 @@ func (r *Runtime) initArrayBufferBuiltins() {
 		if max > maxBufferLength {
 			return Undefined, rt.throwRangeError("the ArrayBuffer maxByteLength is too large")
 		}
+		if err := rt.reserveMemory(int(n)); err != nil {
+			return Undefined, err
+		}
 		o := newObject(proto, ClassArrayBuffer)
 		b := &arrayBufferData{bytes: make([]byte, n)}
 		if max >= 0 {
@@ -545,6 +548,9 @@ func (r *Runtime) initArrayBufferBuiltins() {
 		if n > maxBufferLength {
 			return Undefined, rt.throwRangeError("the ArrayBuffer length is too large")
 		}
+		if err := rt.reserveMemory(int(n) - len(b.bytes)); err != nil {
+			return Undefined, err
+		}
 		b.resize(int(n))
 		return Undefined, nil
 	})
@@ -595,6 +601,9 @@ func (r *Runtime) initArrayBufferBuiltins() {
 			return Undefined, rt.throwRangeError("the ArrayBuffer length is too large")
 		}
 		// A longer target is zero-filled; a shorter one drops the tail.
+		if err := rt.reserveMemory(int(n)); err != nil {
+			return Undefined, err
+		}
 		out := make([]byte, n)
 		copy(out, b.bytes)
 		max := b.maxByteLength
@@ -651,6 +660,9 @@ func (r *Runtime) initArrayBufferBuiltins() {
 		}
 		if len(b.bytes) < end {
 			return Undefined, rt.throwRangeError("the ArrayBuffer is shorter than the slice")
+		}
+		if err := rt.reserveMemory(end - start); err != nil {
+			return Undefined, err
 		}
 		out := make([]byte, max(end-start, 0))
 		copy(out, b.bytes[start:max(start, end)])
@@ -1018,6 +1030,9 @@ func (r *Runtime) allocTypedArrayChecked(o *Object, kind elemType, n int64) (*ty
 	if n < 0 || n > maxTypedArrayLength ||
 		n*int64(elemInfos[kind].size) > maxTypedArrayLength*8 {
 		return nil, r.throwRangeError("the typed array length is too large")
+	}
+	if err := r.reserveMemory(int(n) * elemInfos[kind].size); err != nil {
+		return nil, err
 	}
 	return r.allocTypedArray(o, kind, int(n)), nil
 }

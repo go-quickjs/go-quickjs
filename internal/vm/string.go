@@ -44,6 +44,8 @@ type String struct {
 	// comparing them by bytes would say they differ. Both are always valid,
 	// rope or not, so the check costs nothing on the ordinary path.
 	endsHigh, startsLow bool
+	// mark is the memory meter's, which it sets on a string it has counted.
+	mark uint16
 	// u16 caches the UTF-16 code units of a non-ASCII string.
 	u16 []uint16
 }

@@ -3577,7 +3577,11 @@ func (r *Runtime) add(a, b Value) (Value, error) {
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(sa.Concat(sb)), nil
+		s, err := r.concat(sa, sb)
+		if err != nil {
+			return Undefined, err
+		}
+		return Str(s), nil
 	}
 	na, err := r.toNumeric(pa)
 	if err != nil {

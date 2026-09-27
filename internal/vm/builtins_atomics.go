@@ -65,6 +65,9 @@ func (r *Runtime) initSharedArrayBufferBuiltins() {
 		if max > maxBufferLength {
 			return Undefined, rt.throwRangeError("the SharedArrayBuffer maxByteLength is too large")
 		}
+		if err := rt.reserveMemory(int(n)); err != nil {
+			return Undefined, err
+		}
 		o := newObject(p, ClassArrayBuffer)
 		m := newSharedMemory(int(n), max)
 		b := &arrayBufferData{bytes: m.bytes(), shared: true, block: m}
@@ -122,6 +125,9 @@ func (r *Runtime) initSharedArrayBufferBuiltins() {
 		}
 		if n < int64(len(b.bytes)) {
 			return Undefined, rt.throwRangeError("a SharedArrayBuffer cannot shrink")
+		}
+		if err := rt.reserveMemory(int(n) - len(b.bytes)); err != nil {
+			return Undefined, err
 		}
 		b.block.grow(int(n))
 		b.sharedMemory()

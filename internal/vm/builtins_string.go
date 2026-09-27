@@ -396,7 +396,9 @@ func (r *Runtime) initStringBuiltins() {
 			if err != nil {
 				return Undefined, err
 			}
-			s = s.Concat(o)
+			if s, err = rt.concat(s, o); err != nil {
+				return Undefined, err
+			}
 		}
 		return Str(s), nil
 	})
@@ -419,6 +421,9 @@ func (r *Runtime) initStringBuiltins() {
 		// Guard against a count that would exhaust memory before building it.
 		if float64(s.Len())*n > 1<<30 {
 			return Undefined, rt.throwRangeError("repeat count is too large")
+		}
+		if err := rt.reserveMemory(stringBytes(s) * int(n)); err != nil {
+			return Undefined, err
 		}
 		return Str(NewString(strings.Repeat(s.Go(), int(n)))), nil
 	})
@@ -634,6 +639,9 @@ func (r *Runtime) padString(thisStr thisStrFunc, this Value, args []Value, atSta
 		return Str(s), nil
 	}
 	need := int(target) - s.Len()
+	if err := r.reserveMemory(need * 3); err != nil {
+		return Undefined, err
+	}
 	filler := NewString(strings.Repeat(pad, need/len([]rune(pad))+1))
 	filler = filler.Substring(0, need)
 	if atStart {

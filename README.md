@@ -540,6 +540,12 @@ rt := quickjs.New(
 )
 ```
 
+A script that holds more than its memory limit is stopped, and the call
+running it returns `quickjs.ErrMemoryLimit`, which the script cannot catch.
+The runtime measures its own heap by walking it, as QuickJS does, once the
+process has allocated a quarter of the limit since it last did, and before
+any allocation big enough to cross the limit at once.
+
 So is the language a script means when it formats something without saying
 which language to format it in -- what `Intl` answers with when it is given no
 locale, and what `Date`'s `toString` and `toLocaleString` write in:

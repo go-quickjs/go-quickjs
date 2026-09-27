@@ -35,7 +35,12 @@ Paths are relative to this repository; `go-intl:` paths are in
 - **Where:** `internal/vm/runtime.go`. `accountMemory` has no callers.
 - **Effect:** with a 1 MiB limit, a script can allocate gigabytes of arrays,
   strings and buffers. qjs's `--memory-limit` does nothing either.
-- **Status:** open.
+- **Status:** fixed. The runtime measures its own heap by walking it from its
+  roots, once the process has allocated a quarter of the limit since it last
+  did, and before a buffer, a repeated or padded string, or a join that
+  doubles a rope. A script over the limit stops with `ErrMemoryLimit`.
+  Native loops that allocate without ever reaching an interrupt check are
+  KI-16's.
 
 ### KI-03 Strings have no maximum length
 - **Where:** `internal/vm/string.go` (`Concat`), and `padStart`, `padEnd` and

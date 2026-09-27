@@ -164,6 +164,9 @@ type Object struct {
 
 	class Class
 	flags objFlags
+	// mark is the memory meter's, which it sets on an object it has counted;
+	// it fills what would be padding.
+	mark uint16
 
 	// data carries the internal slots of an exotic object: *funcData for a
 	// function, *dateData for a Date, and so on. It is nil for an ordinary

@@ -68,10 +68,11 @@ type Runtime struct {
 	frameBase int
 
 	// limits and their accounting.
-	maxFrames   int
-	memoryLimit int64
-	memoryUsed  int64
-	nodeQuirks  bool
+	maxFrames int
+	// meter measures the heap against the memory limit, and is nil when
+	// there is none.
+	meter      *memoryMeter
+	nodeQuirks bool
 
 	// stackAccessor is the stack property every error has, whose getter and
 	// setter are stackGetter and stackSetter, and stackSlot is the key an
@@ -707,25 +708,15 @@ func (r *Runtime) checkInterruptNow() error {
 		default:
 		}
 	}
-	if r.ctx == nil {
-		return nil
+	if r.ctx != nil {
+		select {
+		case <-r.ctx.Done():
+			return r.ctx.Err()
+		default:
+		}
 	}
-	select {
-	case <-r.ctx.Done():
-		return r.ctx.Err()
-	default:
-		return nil
-	}
-}
-
-// accountMemory charges n bytes against the runtime's budget.
-func (r *Runtime) accountMemory(n int64) error {
-	if r.memoryLimit <= 0 {
-		return nil
-	}
-	r.memoryUsed += n
-	if r.memoryUsed > r.memoryLimit {
-		return r.throwError(errRange, "out of memory")
+	if r.meter != nil {
+		return r.checkMemory()
 	}
 	return nil
 }
