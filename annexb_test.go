@@ -99,3 +99,37 @@ func TestBlockFunctionAliasKeepsItsBinding(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) { checkEval(t, tc.src, tc.want) })
 	}
 }
+
+// TestAnnexBBuiltins pins the web-compat built-ins Annex B describes.
+func TestAnnexBBuiltins(t *testing.T) {
+	evalCases(t, []struct{ src, want string }{
+		// A class escape as a range's upper end makes the range three
+		// alternatives: the lower end, the hyphen, and the class.
+		{`var re = /[a-\s]/; [re.test("a"), re.test("-"), re.test(" "), re.test("b")].join()`, "true,true,true,false"},
+		// substr clamps an infinite length rather than overflowing it.
+		{`JSON.stringify(["abc".substr(1, Infinity), "abc".substr(-Infinity, 2), "abc".substr(1, -Infinity)])`, `["bc","ab",""]`},
+		// setYear truncates before asking whether the year is two digits.
+		{`var d = new Date(2000, 0, 1), e = new Date(2000, 0, 1); d.setYear(99.7); e.setYear(-0.5); [d.getFullYear(), e.getFullYear()].join()`, "1999,1900"},
+		{`Date.prototype.toGMTString === Date.prototype.toUTCString`, "true"},
+	})
+}
+
+// TestAnnexBHTMLComments pins the comments scripts keep from pages that hid
+// them from old browsers: <!-- anywhere, and --> where only whitespace and
+// comments precede it on its line.
+func TestAnnexBHTMLComments(t *testing.T) {
+	evalCases(t, []struct{ src, want string }{
+		{"var x = 1; <!-- x = 2\n x", "1"},
+		{"var y = 1;\n--> y = 2\ny", "1"},
+		{"/* c */ --> z\n 3", "3"},
+		{"var a = 1; /* one\n two */ --> a = 2\na", "1"},
+		// Elsewhere --> is a decrement and a comparison.
+		{"var w = 5; w-->0; w", "4"},
+	})
+	// A module has neither.
+	rt := quickjs.New()
+	defer rt.Close()
+	if _, err := rt.EvalModule("m.js", "<!-- x\n"); err == nil {
+		t.Fatal("<!-- in a module: no error")
+	}
+}

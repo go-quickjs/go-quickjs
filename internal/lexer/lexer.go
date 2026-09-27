@@ -41,7 +41,17 @@ type Lexer struct {
 	// legacyEscape records that the string being scanned used an escape that
 	// predates strict mode, which the parser rejects where strict mode applies.
 	legacyEscape bool
+	// html enables the comments Annex B keeps for pages that hid their
+	// scripts from browsers that predated them: <!-- anywhere, and --> at the
+	// start of a line. A module has neither.
+	html bool
+	// inputStart is where the first token may begin, past a hashbang.
+	inputStart int
 }
+
+// AllowHTMLComments makes <!-- start a single-line comment anywhere, and -->
+// at the start of a line, as Annex B does for scripts.
+func (l *Lexer) AllowHTMLComments() { l.html = true }
 
 // New returns a Lexer over src.
 func New(src string) *Lexer {
@@ -61,6 +71,7 @@ func New(src string) *Lexer {
 			l.pos += size
 		}
 	}
+	l.inputStart = l.pos
 	return l
 }
 
@@ -139,9 +150,24 @@ func (l *Lexer) newline() {
 // skipSpace consumes whitespace, line terminators and comments, recording
 // whether any line terminator was crossed.
 func (l *Lexer) skipSpace() error {
+	// Nothing but whitespace and comments lies between the start of the input
+	// and here, which is a line's start as far as --> is concerned.
+	atStart := l.pos == l.inputStart
 	for !l.atEnd() {
 		c := l.src[l.pos]
 		switch c {
+		case '<':
+			if !l.html || !strings.HasPrefix(l.src[l.pos:], "<!--") {
+				return nil
+			}
+			l.skipLineComment()
+		case '-':
+			// --> is a comment only where nothing but whitespace and comments
+			// precede it on its line.
+			if !l.html || !(atStart || l.nlBefore) || !strings.HasPrefix(l.src[l.pos:], "-->") {
+				return nil
+			}
+			l.skipLineComment()
 		case ' ', '\t', '\v', '\f':
 			l.pos++
 		case '\n':
@@ -157,19 +183,7 @@ func (l *Lexer) skipSpace() error {
 		case '/':
 			switch l.peekByte(1) {
 			case '/':
-				l.pos += 2
-				for !l.atEnd() && !isLineTerminatorByte(l.src[l.pos]) {
-					// Line comments end at U+2028/U+2029 too, which are multibyte.
-					if l.src[l.pos] >= utf8.RuneSelf {
-						r, size := utf8.DecodeRuneInString(l.src[l.pos:])
-						if r == 0x2028 || r == 0x2029 {
-							break
-						}
-						l.pos += size
-						continue
-					}
-					l.pos++
-				}
+				l.skipLineComment()
 			case '*':
 				start := l.pos
 				l.pos += 2
@@ -227,6 +241,23 @@ func (l *Lexer) skipSpace() error {
 		}
 	}
 	return nil
+}
+
+// skipLineComment consumes a single-line comment, up to but not including
+// the line terminator that ends it.
+func (l *Lexer) skipLineComment() {
+	for !l.atEnd() && !isLineTerminatorByte(l.src[l.pos]) {
+		// Line comments end at U+2028/U+2029 too, which are multibyte.
+		if l.src[l.pos] >= utf8.RuneSelf {
+			r, size := utf8.DecodeRuneInString(l.src[l.pos:])
+			if r == 0x2028 || r == 0x2029 {
+				return
+			}
+			l.pos += size
+			continue
+		}
+		l.pos++
+	}
 }
 
 func isLineTerminatorByte(c byte) bool { return c == '\n' || c == '\r' }

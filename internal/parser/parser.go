@@ -201,6 +201,11 @@ func Parse(src string, opts Options) (prog *ast.Program, err error) {
 		}
 	}()
 
+	// A script may use the comments Annex B keeps for old pages; a module,
+	// which old pages never had, may not.
+	if !p.module {
+		p.lex.AllowHTMLComments()
+	}
 	p.next()
 	body := p.parseDirectivePrologue(func() bool { return p.tok.Kind == lexer.EOF })
 	// A module's top level may hold using declarations, and a script's may

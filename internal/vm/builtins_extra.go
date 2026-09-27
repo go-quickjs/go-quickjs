@@ -724,7 +724,9 @@ func (r *Runtime) initStringExtras() {
 			if err != nil {
 				return Undefined, err
 			}
-			length = clampInt(int(n), 0, s.Len()-start)
+			// Clamped as a number first: an infinite length converts to no
+			// int at all.
+			length = int(math.Max(0, math.Min(n, float64(s.Len()-start))))
 		}
 		return Str(s.Substring(start, start+length)), nil
 	})

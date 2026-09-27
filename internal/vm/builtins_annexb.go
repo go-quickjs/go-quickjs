@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"math"
 	"strconv"
 	"strings"
 
@@ -168,15 +169,19 @@ func (r *Runtime) initLegacyDateMethods() {
 			return Undefined, err
 		}
 		// A two-digit year means 19xx, which is the whole point of the method.
-		if n >= 0 && n <= 99 {
-			n += 1900
+		// The year is truncated before it is asked whether it has two digits,
+		// so -0.5 is the year 1900 too.
+		if yi := math.Trunc(n); yi >= 0 && yi <= 99 {
+			n = 1900 + yi
 		}
 		return rt.callDateMethod(this, "setFullYear", []Value{Float(n)})
 	})
 
-	r.defMethod(p, "toGMTString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		return rt.callDateMethod(this, "toUTCString", nil)
-	})
+	// toGMTString is not a method of its own but toUTCString under another
+	// name: the same function object.
+	if utc := p.getOwn(r.atoms.intern("toUTCString")); utc != nil {
+		p.setOwnRaw(r.atoms.intern("toGMTString"), utc.value, propWritable|propConfigurable)
+	}
 }
 
 // callDateMethod forwards to another Date method, which is how the legacy ones

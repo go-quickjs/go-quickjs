@@ -983,7 +983,7 @@ func (p *parser) parseClass() (*charSet, error) {
 		// A '-' makes a range unless it is the last character before ']'.
 		if p.peek() == '-' && p.peekAt(1) != ']' && p.peekAt(1) != -1 {
 			p.pos++
-			hi, hiIsClass, _, err := p.parseClassAtom()
+			hi, hiIsClass, hiSet, err := p.parseClassAtom()
 			if err != nil {
 				return nil, err
 			}
@@ -992,9 +992,10 @@ func (p *parser) parseClass() (*charSet, error) {
 					return nil, p.errorf("invalid character class range")
 				}
 				// In sloppy mode the dash is literal and the shorthand stands
-				// on its own.
+				// on its own: [%-\d] is %, - and the digits.
 				set.addChar(lo)
 				set.addChar('-')
+				set.addSet(hiSet)
 				continue
 			}
 			if lo > hi {
