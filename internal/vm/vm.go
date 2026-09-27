@@ -38,7 +38,8 @@ const defaultCallDepthLimit = 8192
 // of one on a 32-bit one -- ends the process, which nothing can recover
 // from. It bounds the depth of calls, and separately the recursion no frame
 // counts: a proxy forwarding to its target, JSON's nesting, flat's.
-const maxGoRecursion = 25000 << (unsafe.Sizeof(uintptr(0)) / 4)
+// It is 50,000 on a 64-bit platform and 25,000 on a 32-bit one.
+const maxGoRecursion = 12500 << (unsafe.Sizeof(uintptr(0)) / 4)
 
 // frameBlockSize is how many frames are allocated at a time. A frame is a
 // couple of hundred bytes and the depth limit is thousands, so allocating the
