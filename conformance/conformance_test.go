@@ -94,10 +94,10 @@ func TestConformance(t *testing.T) {
 	if *subdirFlag != "" {
 		subdirs = strings.Split(*subdirFlag, ",")
 	} else {
-		// The areas this engine targets: the language, the built-ins, and the
-		// internationalization API. The rest of the suite covers host
-		// integration and annexes it does not claim.
-		subdirs = []string{"language", "built-ins", "intl402"}
+		// The areas this engine targets: the language, the built-ins, the
+		// internationalization API, and Annex B's web compatibility. The rest
+		// of the suite covers host integration and staged proposals.
+		subdirs = []string{"language", "built-ins", "intl402", "annexB"}
 	}
 
 	tests, err := suite.Load(subdirs)
