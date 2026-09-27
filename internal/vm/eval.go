@@ -279,7 +279,7 @@ func (r *Runtime) installEval() {
 				body = s.Go()
 			}
 			src := "(function anonymous(" + joinComma(params) + "\n) {\n" + body + "\n})"
-			return rt.evalIndirect(src)
+			return rt.evalDynamicFunction(src)
 		},
 	}
 
@@ -334,7 +334,7 @@ func (r *Runtime) defDerivedFunctionCtor(name string, proto *Object, base *Objec
 				}
 				body = s.Go()
 			}
-			return rt.evalIndirect(source(joinComma(params), body))
+			return rt.evalDynamicFunction(source(joinComma(params), body))
 		},
 	}
 	c.setOwnRaw(atomPrototype, Obj(proto), 0)

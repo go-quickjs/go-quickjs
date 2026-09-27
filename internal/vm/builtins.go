@@ -2272,13 +2272,11 @@ func (r *Runtime) initErrorBuiltins() {
 			case errSuppressed:
 				msgArg, optsArg = arg(args, 2), Undefined
 			}
-			msg := ""
 			if m := msgArg; !m.IsUndefined() {
 				s, err := rt.toString(m)
 				if err != nil {
 					return Undefined, err
 				}
-				msg = s.Go()
 				o.setOwnRaw(atomMessage, Str(s), propWritable|propConfigurable)
 			}
 			// The cause option, when present, is attached as an own property.
@@ -2319,8 +2317,13 @@ func (r *Runtime) initErrorBuiltins() {
 				o.setOwnRaw(rt.atoms.intern("errors"), Obj(rt.newArrayFrom(errs)),
 					propWritable|propConfigurable)
 			}
-			o.setOwnRaw(atomStack, Str(NewString(rt.formatStack(msg, kind))),
-				propWritable|propConfigurable)
+			// The trace leaves out the constructor itself, and a subclass's
+			// constructors too: everything up to and including new.target's.
+			var until *Object
+			if f := rt.topFrame(); f != nil && f.newTarget.IsObject() && f.newTarget.Object() != f.callee {
+				until = f.newTarget.Object()
+			}
+			rt.attachStack(o, rt.captureTrace(until, true))
 			return Obj(o), nil
 		})
 		r.proto.errorCtors[k] = ctor
@@ -2335,38 +2338,11 @@ func (r *Runtime) initErrorBuiltins() {
 		if !this.IsObject() {
 			return Undefined, rt.throwTypeError("Error.prototype.toString requires an object")
 		}
-		o := this.Object()
-		nameVal, err := rt.getProp(o, atomName, this)
+		s, err := rt.errorToString(this.Object())
 		if err != nil {
 			return Undefined, err
 		}
-		msgVal, err := rt.getProp(o, atomMessage, this)
-		if err != nil {
-			return Undefined, err
-		}
-		name := "Error"
-		if !nameVal.IsUndefined() {
-			s, err := rt.toString(nameVal)
-			if err != nil {
-				return Undefined, err
-			}
-			name = s.Go()
-		}
-		msg := ""
-		if !msgVal.IsUndefined() {
-			s, err := rt.toString(msgVal)
-			if err != nil {
-				return Undefined, err
-			}
-			msg = s.Go()
-		}
-		switch {
-		case msg == "":
-			return Str(NewString(name)), nil
-		case name == "":
-			return Str(NewString(msg)), nil
-		}
-		return Str(NewString(name + ": " + msg)), nil
+		return Str(NewString(s)), nil
 	})
 }
 

@@ -71,7 +71,7 @@ var unsupportedFeatures = map[string]string{
 	"Atomics.waitAsync":                  "no asynchronous waiting",
 	"decorators":                         "decorators are not implemented",
 	"ShadowRealm":                        "no shadow realms",
-	"error-stack-accessor":               "Error stack is an own data property",
+	"error-stack-accessor":               "Error stack is an own accessor, as in V8",
 	"cross-realm":                        "no realms API",
 	"caller":                             "no legacy caller access",
 }

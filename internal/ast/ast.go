@@ -342,6 +342,8 @@ type Call struct {
 	Args     []Expr
 	Optional bool
 	Start    int
+	// Open is where the argument list's parenthesis is.
+	Open int
 }
 
 // New is `new Callee(Args)`.

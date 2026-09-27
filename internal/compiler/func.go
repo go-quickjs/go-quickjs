@@ -60,6 +60,7 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 	if fn.End > fn.Start && fn.End <= len(c.opts.Text) {
 		c.fn.Text = c.opts.Text[fn.Start:fn.End]
 	}
+	c.fn.Start = int32(fn.Start)
 
 	// Parameters must occupy slots 0..n-1, because the interpreter copies
 	// arguments into those slots positionally. Nothing may be declared before

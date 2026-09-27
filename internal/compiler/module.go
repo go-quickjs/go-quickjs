@@ -61,7 +61,6 @@ func CompileModule(prog *ast.Program, opts Options) (fn *bytecode.Function, info
 	c.fn.Strict = true
 	c.fn.IsModule = true
 	c.fn.Source = opts.Source
-	c.lineOf = lineMapper(opts.Text)
 	c.module = &info
 
 	defer func() {
@@ -316,7 +315,6 @@ func compileModuleInit(prog *ast.Program, opts Options, info *ModuleInfo) *bytec
 	c.fn.Strict = true
 	c.fn.IsModule = true
 	c.fn.Source = opts.Source
-	c.lineOf = lineMapper(opts.Text)
 	c.module = info
 	c.completionSlot = int32(c.nextSlot)
 	c.nextSlot++

@@ -914,17 +914,41 @@ func (c *compiler) compileMemberRead(n *ast.Member) {
 		return
 	}
 	c.compileExpr(n.Object)
+	// A failed read is reported where the property is named, as V8 reports
+	// it: `a.b.c` on a line of its own says which link broke.
 	if n.Computed {
 		c.compileExpr(n.Property)
-		c.emitAt(n.Start, bytecode.OpGetIndex, 0, 0)
+		c.emitAt(n.Property.Pos(), bytecode.OpGetIndex, 0, 0)
 		return
 	}
 	name := propKeyName(n.Property)
 	if name == "length" {
-		c.emitAt(n.Start, bytecode.OpGetLength, 0, 0)
+		c.emitAt(n.Property.Pos(), bytecode.OpGetLength, 0, 0)
 		return
 	}
-	c.emitAt(n.Start, bytecode.OpGetProp, c.nameIdx(name), 0)
+	c.emitAt(n.Property.Pos(), bytecode.OpGetProp, c.nameIdx(name), 0)
+}
+
+// callPos is where a call is in a stack trace, as V8 places it: at the name
+// called, when the callee ends in one -- `f()`, `a.b()` -- and otherwise at
+// the argument list's parenthesis.
+func callPos(n *ast.Call) int {
+	switch c := n.Callee.(type) {
+	case *ast.Ident:
+		if !c.Paren {
+			return n.Start
+		}
+	case *ast.Member:
+		if !c.Computed && c.Property != nil {
+			return c.Property.Pos()
+		}
+	case *ast.Super:
+		return n.Start
+	}
+	if n.Open > 0 {
+		return n.Open
+	}
+	return n.Start
 }
 
 func (c *compiler) compileCall(n *ast.Call) {
@@ -934,22 +958,22 @@ func (c *compiler) compileCall(n *ast.Call) {
 		c.compileChain(chain, true)
 		if hasSpread(n.Args) {
 			c.compileSpreadArguments(n.Args)
-			c.emitAt(n.Start, bytecode.OpCallSpread, 0, 0)
+			c.emitAt(callPos(n), bytecode.OpCallSpread, 0, 0)
 			return
 		}
 		argc := c.compileArguments(n.Args)
-		c.emitAt(n.Start, bytecode.OpCallMethod, uint32(argc), 0)
+		c.emitAt(callPos(n), bytecode.OpCallMethod, uint32(argc), 0)
 		return
 	}
 	// super(...) invokes the parent constructor with the current `this`.
 	if _, isSuper := n.Callee.(*ast.Super); isSuper {
 		if hasSpread(n.Args) {
 			c.compileSpreadArguments(n.Args)
-			c.emitAt(n.Start, bytecode.OpSuperCall, 0, 1)
+			c.emitAt(callPos(n), bytecode.OpSuperCall, 0, 1)
 			return
 		}
 		argc := c.compileArguments(n.Args)
-		c.emitAt(n.Start, bytecode.OpSuperCall, uint32(argc), 0)
+		c.emitAt(callPos(n), bytecode.OpSuperCall, uint32(argc), 0)
 		return
 	}
 	// A private method call fetches through the private slot, keeping the
@@ -961,14 +985,14 @@ func (c *compiler) compileCall(n *ast.Call) {
 			c.emit(bytecode.OpDup, 0, 0)
 			c.emit(bytecode.OpGetPrivate, name, ref)
 			argc := c.compileArguments(n.Args)
-			c.emitAt(n.Start, bytecode.OpCallMethod, uint32(argc), 0)
+			c.emitAt(callPos(n), bytecode.OpCallMethod, uint32(argc), 0)
 			return
 		}
 		if _, isSuper := m.Object.(*ast.Super); isSuper {
 			c.emit(bytecode.OpPushThis, 0, 0)
 			c.compileSuperMemberGet(m)
 			argc := c.compileArguments(n.Args)
-			c.emitAt(n.Start, bytecode.OpCallMethod, uint32(argc), 0)
+			c.emitAt(callPos(n), bytecode.OpCallMethod, uint32(argc), 0)
 			return
 		}
 	}
@@ -988,12 +1012,12 @@ func (c *compiler) compileCall(n *ast.Call) {
 		c.compileExpr(m.Object)
 		if m.Computed {
 			c.compileExpr(m.Property)
-			c.emit(bytecode.OpGetIndexThis, 0, 0)
+			c.emitAt(m.Property.Pos(), bytecode.OpGetIndexThis, 0, 0)
 		} else {
-			c.emit(bytecode.OpGetPropThis, c.nameIdx(propKeyName(m.Property)), 0)
+			c.emitAt(m.Property.Pos(), bytecode.OpGetPropThis, c.nameIdx(propKeyName(m.Property)), 0)
 		}
 		argc := c.compileArguments(n.Args)
-		c.emitAt(n.Start, c.callOp(n, bytecode.OpCallMethod), uint32(argc), 0)
+		c.emitAt(callPos(n), c.callOp(n, bytecode.OpCallMethod), uint32(argc), 0)
 		return
 	}
 
@@ -1006,13 +1030,13 @@ func (c *compiler) compileCall(n *ast.Call) {
 		c.compileIdentReadStatic(id)
 		c.patchWithProbe(probe)
 		argc := c.compileArguments(n.Args)
-		c.emitAt(n.Start, bytecode.OpCallMethod, uint32(argc), 0)
+		c.emitAt(callPos(n), bytecode.OpCallMethod, uint32(argc), 0)
 		return
 	}
 
 	c.compileExpr(n.Callee)
 	argc := c.compileArguments(n.Args)
-	c.emitAt(n.Start, c.callOp(n, bytecode.OpCall), uint32(argc), 0)
+	c.emitAt(callPos(n), c.callOp(n, bytecode.OpCall), uint32(argc), 0)
 }
 
 // compileArguments pushes a call's arguments and returns how many there are.
@@ -1073,7 +1097,7 @@ func (c *compiler) compileSpreadCall(n *ast.Call) {
 			c.emit(bytecode.OpDup, 0, 0)
 			c.emit(bytecode.OpGetPrivate, name, ref)
 			c.compileSpreadArguments(n.Args)
-			c.emitAt(n.Start, bytecode.OpCallSpread, 0, 0)
+			c.emitAt(callPos(n), bytecode.OpCallSpread, 0, 0)
 			return
 		}
 		if _, isSuper := m.Object.(*ast.Super); isSuper {
@@ -1082,7 +1106,7 @@ func (c *compiler) compileSpreadCall(n *ast.Call) {
 			c.emit(bytecode.OpPushThis, 0, 0)
 			c.compileSuperMemberGet(m)
 			c.compileSpreadArguments(n.Args)
-			c.emitAt(n.Start, bytecode.OpCallSpread, 0, 0)
+			c.emitAt(callPos(n), bytecode.OpCallSpread, 0, 0)
 			return
 		}
 		c.compileExpr(m.Object)
@@ -1094,14 +1118,14 @@ func (c *compiler) compileSpreadCall(n *ast.Call) {
 			c.emit(bytecode.OpGetProp, c.nameIdx(propKeyName(m.Property)), 0)
 		}
 		c.compileSpreadArguments(n.Args)
-		c.emitAt(n.Start, bytecode.OpCallSpread, 0, 0)
+		c.emitAt(callPos(n), bytecode.OpCallSpread, 0, 0)
 		return
 	}
 	// A plain call has no receiver, so undefined stands in for one.
 	c.emit(bytecode.OpPushUndef, 0, 0)
 	c.compileExpr(n.Callee)
 	c.compileSpreadArguments(n.Args)
-	c.emitAt(n.Start, bytecode.OpCallSpread, 0, 0)
+	c.emitAt(callPos(n), bytecode.OpCallSpread, 0, 0)
 }
 
 // emitChainCallArgs finishes a call inside an optional chain, whose receiver
@@ -1109,7 +1133,7 @@ func (c *compiler) compileSpreadCall(n *ast.Call) {
 func (c *compiler) emitChainCallArgs(n *ast.Call) {
 	if hasSpread(n.Args) {
 		c.compileSpreadArguments(n.Args)
-		c.emitAt(n.Start, bytecode.OpCallSpread, 0, 0)
+		c.emitAt(callPos(n), bytecode.OpCallSpread, 0, 0)
 		return
 	}
 	argc := c.compileArguments(n.Args)

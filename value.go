@@ -332,7 +332,10 @@ func (e *Error) Stack() string {
 			name = "<anonymous>"
 		}
 		fmt.Fprintf(&sb, "\n    at %s", name)
-		if f.Source != "" {
+		switch {
+		case f.Source != "" && f.Column > 0:
+			fmt.Fprintf(&sb, " (%s:%d:%d)", f.Source, f.Line, f.Column)
+		case f.Source != "":
 			fmt.Fprintf(&sb, " (%s:%d)", f.Source, f.Line)
 		}
 	}

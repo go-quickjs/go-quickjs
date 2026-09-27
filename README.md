@@ -58,7 +58,7 @@ measurement and [Not implemented](#not-implemented) for what is missing.
 | Functions | Declarations, expressions, arrows, defaults, rest parameters, `arguments`, proper tail calls in strict code |
 | Classes | Constructors, methods, accessors, statics, `extends`, `super`, fields, private members, static blocks |
 | Destructuring | Array and object patterns, defaults, nesting, rest elements |
-| Exceptions | `throw`, `try`/`catch`/`finally`, stack traces |
+| Exceptions | `throw`, `try`/`catch`/`finally`, and stack traces as V8 writes them, to the column, with `Error.captureStackTrace`, `Error.prepareStackTrace` and its `CallSite`s, and `Error.stackTraceLimit` |
 | Resource management | `using` and `await using`, `DisposableStack`, `AsyncDisposableStack`, `SuppressedError` |
 | Iteration | Iterator protocol, spread, generators, `yield*` |
 | Asynchrony | `Promise` with correct microtask ordering, `async`/`await` |
@@ -121,8 +121,9 @@ behaves:
 - A sloppy-mode function has no `caller`, and its `arguments` are not
   reachable from outside it: reading either throws, as the standard's
   `Function.prototype` accessors do.
-- An error's `stack` is an own data property, as in V8, rather than the
-  accessor on `Error.prototype` that a proposal describes.
+- An error's `stack` is an own accessor, as in V8, whose text is made when it
+  is first read, rather than the accessor on `Error.prototype` that a proposal
+  describes.
 
 In the standard library: node's own streams (the web's are here instead, and
 everything that takes a stream takes those), brotli, and BYOB readers. A

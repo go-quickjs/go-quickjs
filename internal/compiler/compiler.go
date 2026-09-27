@@ -356,10 +356,11 @@ type compiler struct {
 	// caller's, so the limit is enforced on both sides.
 	recursionDepth int
 
-	// lastLine avoids emitting a duplicate line entry for every instruction.
-	lastLine int32
-	// lineOf maps a byte offset to a line, supplied by the caller.
-	lineOf func(pos int) int32
+	// script is the source being compiled, shared by every function in it.
+	script *bytecode.Script
+	// lastPos avoids emitting a duplicate position entry for every
+	// instruction.
+	lastPos int32
 }
 
 // constKey identifies a constant for deduplication. Functions are never
@@ -377,7 +378,6 @@ func Compile(prog *ast.Program, opts Options) (fn *bytecode.Function, err error)
 	c.fn.Strict = prog.Strict
 	c.fn.IsModule = prog.Module
 	c.fn.Source = opts.Source
-	c.lineOf = lineMapper(opts.Text)
 	c.inFieldInit = opts.InFieldInit
 	// Eval code is inside whatever `with` bodies its call site is inside, so a
 	// name it mentions is probed against their objects first.
@@ -435,6 +435,7 @@ func newCompiler(parent *compiler, opts Options) *compiler {
 		},
 		parent:      parent,
 		opts:        opts,
+		lastPos:     -1,
 		nameIndex:   make(map[string]uint32, 8),
 		constIndex:  make(map[constKey]uint32, 8),
 		hiddenCount: new(int),
@@ -444,12 +445,15 @@ func newCompiler(parent *compiler, opts Options) *compiler {
 	}
 	if parent != nil {
 		c.hiddenCount = parent.hiddenCount
-		c.lineOf = parent.lineOf
+		c.script = parent.script
 		// A function written inside a `with` body resolves the names in its own
 		// body against the objects too, so it is compiled the same way.
 		c.withDepth = parent.withDepth
 		c.withStatements = parent.withStatements
+	} else {
+		c.script = bytecode.NewScript(opts.Source, opts.Text)
 	}
+	c.fn.Script = c.script
 	return c
 }
 
@@ -465,35 +469,6 @@ func (c *compiler) finish() {
 		if int(slot) < len(c.fn.Locals) {
 			c.fn.Locals[slot] = d
 		}
-	}
-}
-
-// lineMapper returns a function mapping a byte offset to a 1-based line.
-//
-// The line starts are precomputed once so that mapping a position is a binary
-// search rather than a scan, which matters because the compiler maps a position
-// for nearly every statement.
-func lineMapper(text string) func(int) int32 {
-	if text == "" {
-		return func(int) int32 { return 0 }
-	}
-	starts := make([]int, 1, 64)
-	for i := 0; i < len(text); i++ {
-		if text[i] == '\n' {
-			starts = append(starts, i+1)
-		}
-	}
-	return func(pos int) int32 {
-		lo, hi := 0, len(starts)-1
-		for lo < hi {
-			mid := (lo + hi + 1) / 2
-			if starts[mid] <= pos {
-				lo = mid
-			} else {
-				hi = mid - 1
-			}
-		}
-		return int32(lo + 1)
 	}
 }
 
@@ -516,14 +491,14 @@ func (c *compiler) emitAt(pos int, op bytecode.Op, a, b uint32) int {
 
 // recordLine attributes the next instruction emitted to a source position.
 func (c *compiler) recordLine(pos int) {
-	if c.lineOf == nil {
+	if !c.script.HasText() {
 		return
 	}
-	if line := c.lineOf(pos); line != c.lastLine {
+	if p := int32(pos); p != c.lastPos {
 		c.fn.Lines = append(c.fn.Lines, bytecode.SourceLoc{
-			PC: uint32(len(c.fn.Code)), Line: line,
+			PC: uint32(len(c.fn.Code)), Pos: p,
 		})
-		c.lastLine = line
+		c.lastPos = p
 	}
 }
 
@@ -598,10 +573,8 @@ func (c *compiler) markTarget(pc int) {
 
 // errorf reports a compile error.
 func (c *compiler) errorf(pos int, format string, args ...any) {
-	line := 0
-	if c.lineOf != nil {
-		line = int(c.lineOf(pos))
-	}
+	l, _ := c.script.Position(int32(pos))
+	line := int(l)
 	panic(&Error{Msg: fmt.Sprintf(format, args...), Line: line})
 }
 

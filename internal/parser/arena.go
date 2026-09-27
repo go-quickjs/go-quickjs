@@ -112,9 +112,9 @@ func (a *arena) memberOf(obj, prop ast.Expr, computed, optional bool) *ast.Membe
 	return n
 }
 
-func (a *arena) callOf(callee ast.Expr, args []ast.Expr, optional bool) *ast.Call {
+func (a *arena) callOf(callee ast.Expr, args []ast.Expr, optional bool, open int) *ast.Call {
 	n := a.call.alloc()
-	n.Callee, n.Args, n.Optional, n.Start = callee, args, optional, callee.Pos()
+	n.Callee, n.Args, n.Optional, n.Start, n.Open = callee, args, optional, callee.Pos(), open
 	return n
 }
 

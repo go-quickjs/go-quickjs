@@ -40,6 +40,9 @@ func (r *Runtime) evalDirect(caller *frame, scope bytecode.EvalScope, src string
 	if err != nil {
 		return Undefined, r.wrapEvalError(err)
 	}
+	if fn.Script != nil {
+		fn.Script.EvalOrigin = r.evalOrigin()
+	}
 
 	cl := r.prepare(fn)
 	// Each upvalue the code asked for names one of the caller's bindings. A
@@ -89,6 +92,19 @@ func (r *Runtime) evalDirect(caller *frame, scope bytecode.EvalScope, src string
 	return r.run(cl, caller.this, caller.args, caller.newTarget, callee)
 }
 
+// evalDynamicFunction makes the function the Function constructor, or one of
+// its kin, was asked for. A stack trace calls it eval rather than by the name
+// its name property has, as V8's does.
+func (r *Runtime) evalDynamicFunction(src string) (Value, error) {
+	v, err := r.evalIndirect(src)
+	if err == nil && v.IsObject() {
+		if fd := v.Object().fn(); fd != nil && fd.closure != nil {
+			fd.closure.fn.Anonymous = true
+		}
+	}
+	return v, err
+}
+
 // evalIndirect runs code in global scope, which is what eval reached through
 // anything but a plain call does, and what the Function constructor does.
 func (r *Runtime) evalIndirect(src string) (Value, error) {
@@ -98,6 +114,9 @@ func (r *Runtime) evalIndirect(src string) (Value, error) {
 	fn, err := r.evaluator(src, EvalRequest{})
 	if err != nil {
 		return Undefined, r.wrapEvalError(err)
+	}
+	if fn.Script != nil {
+		fn.Script.EvalOrigin = r.evalOrigin()
 	}
 	return r.Run(fn)
 }

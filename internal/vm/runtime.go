@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
-	"strings"
 	"time"
 
 	intl "github.com/go-quickjs/go-intl"
@@ -100,6 +99,20 @@ type Runtime struct {
 	memoryLimit int64
 	memoryUsed  int64
 	nodeQuirks  bool
+
+	// stackAccessor is the stack property every error has, whose getter and
+	// setter are stackGetter and stackSetter, and stackSlot is the key an
+	// object that is not an error keeps its frames under, which no script can
+	// name. preparingStack is set while Error.prepareStackTrace runs.
+	stackAccessor  Value
+	stackGetter    *Object
+	stackSetter    *Object
+	stackSlot      Atom
+	preparingStack bool
+	// frameless are the built-ins a trace passes over, as V8 runs them
+	// without a frame: Function.prototype.call and apply, Reflect.apply and
+	// Reflect.construct.
+	frameless [4]*Object
 
 	// ctx carries cancellation from the embedding host. The interpreter checks
 	// it periodically, which is how a timeout or a cancelled request stops a
@@ -299,6 +312,9 @@ type intrinsics struct {
 	nativeErrors [errorKindCount]*Object
 	// errorCtors are the corresponding constructors.
 	errorCtors [errorKindCount]*Object
+	// callSite is the prototype of the objects Error.prepareStackTrace is
+	// given the frames of a stack trace as.
+	callSite *Object
 }
 
 // wellKnownSymbols are the symbols the language itself uses.
@@ -469,6 +485,9 @@ type Thrown struct {
 	// stack is captured at throw time, because the frames are gone by the time
 	// a handler runs.
 	Stack []StackEntry
+	// trace is an error's own stack: the frames it was made in, until its
+	// stack property is first read.
+	trace stackTrace
 }
 
 // StackEntry is one line of a JavaScript stack trace.
@@ -476,6 +495,7 @@ type StackEntry struct {
 	Function string
 	Source   string
 	Line     int32
+	Column   int32
 }
 
 func (t *Thrown) Error() string {
@@ -554,9 +574,9 @@ func (r *Runtime) newError(kind errorKind, msg string) *Object {
 	// at once, so the table is made with it rather than grown twice on the way.
 	o := newErrorObject(r.proto.nativeErrors[kind])
 	o.setOwnRaw(atomMessage, Str(NewString(msg)), propWritable|propConfigurable)
-	// The stack is materialized eagerly, because the frames are unwound by the
-	// time anything reads it.
-	o.setOwnRaw(atomStack, Str(NewString(r.formatStack(msg, kind))), propWritable|propConfigurable)
+	// The frames are captured now, because they are unwound by the time
+	// anything reads the stack.
+	r.attachStack(o, r.captureTrace(nil, false))
 	return o
 }
 
@@ -581,47 +601,19 @@ func (r *Runtime) walkStack(visit func(StackEntry)) {
 		if f.cl == nil {
 			continue
 		}
+		pc := f.pc
+		if pc > 0 {
+			// The saved pc is past the instruction the frame is at.
+			pc--
+		}
+		line, col := f.cl.fn.PositionAt(pc)
 		visit(StackEntry{
 			Function: f.cl.fn.Name,
 			Source:   f.cl.fn.Source,
-			Line:     f.cl.fn.LineAt(f.pc),
+			Line:     line,
+			Column:   col,
 		})
 	}
-}
-
-// formatStack renders a stack trace in the conventional form.
-//
-// It is built in one buffer rather than by joining strings: every thrown error
-// carries a trace, and a program that uses exceptions for control flow throws a
-// great many.
-func (r *Runtime) formatStack(msg string, kind errorKind) string {
-	var b strings.Builder
-	// Enough for the message and a frame or two, which is what most traces
-	// are: the buffer would otherwise grow three or four times on the way.
-	b.Grow(len(msg) + 64)
-	b.WriteString(errorKindNames[kind])
-	if msg != "" {
-		b.WriteString(": ")
-		b.WriteString(msg)
-	}
-	r.walkStack(func(e StackEntry) {
-		b.WriteString("\n    at ")
-		if e.Function == "" {
-			b.WriteString("<anonymous>")
-		} else {
-			b.WriteString(e.Function)
-		}
-		if e.Source != "" {
-			b.WriteString(" (")
-			b.WriteString(e.Source)
-			if e.Line > 0 {
-				b.WriteByte(':')
-				b.WriteString(itoa32(e.Line))
-			}
-			b.WriteByte(')')
-		}
-	})
-	return b.String()
 }
 
 func itoa32(v int32) string {

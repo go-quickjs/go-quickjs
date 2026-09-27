@@ -181,12 +181,12 @@ const (
 	KindStaticBlock
 )
 
-// SourceLoc maps a byte offset in the instruction stream to a source position,
-// for stack traces.
+// SourceLoc attributes instructions to a source position, for stack traces.
 type SourceLoc struct {
 	// PC is the index of the first instruction covered by this entry.
-	PC   uint32
-	Line int32
+	PC uint32
+	// Pos is the byte offset in the script's text the instructions are at.
+	Pos int32
 }
 
 // Function is a compiled function template.
@@ -278,22 +278,45 @@ type Function struct {
 
 	// Source is the file or origin name used in stack traces.
 	Source string
+	// Anonymous marks a function the Function constructor made, which a
+	// stack trace does not call by the name its name property has.
+	Anonymous bool
+	// Script is the source text the function was compiled from, which its
+	// Lines are positions in, and Start is where in it the function begins.
+	Script *Script
+	Start  int32
 	Lines  []SourceLoc
 	// Text is the original source text of the function, which
 	// Function.prototype.toString returns.
 	Text string
 }
 
-// LineAt returns the source line for a program counter, or 0 if unknown.
+// LineAt returns the source line of the instruction at pc, or 0 if unknown.
 func (f *Function) LineAt(pc uint32) int32 {
+	line, _ := f.PositionAt(pc)
+	return line
+}
+
+// PositionAt returns the source line and column of the instruction at pc, or
+// zeros if unknown.
+func (f *Function) PositionAt(pc uint32) (line, col int32) {
+	if pos, ok := f.PosAt(pc); ok {
+		return f.Script.Position(pos)
+	}
+	return 0, 0
+}
+
+// PosAt returns the byte offset in the script of the instruction at pc, and
+// whether it is known.
+func (f *Function) PosAt(pc uint32) (int32, bool) {
 	// Entries are sorted by PC, and functions are small, so a linear scan from
 	// the end beats a binary search in practice.
 	for i := len(f.Lines) - 1; i >= 0; i-- {
 		if f.Lines[i].PC <= pc {
-			return f.Lines[i].Line
+			return f.Lines[i].Pos, true
 		}
 	}
-	return 0
+	return 0, false
 }
 
 // String renders a function's name for diagnostics.

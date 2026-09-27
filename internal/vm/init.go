@@ -363,6 +363,7 @@ func (r *Runtime) initGlobals() {
 	r.initWeakRefBuiltins()
 	r.initProxyBuiltins()
 	r.initReflectBuiltins()
+	r.initStackTraces()
 	r.initGeneratorBuiltins()
 	r.initAsyncGeneratorBuiltins()
 	r.initGeneratorFunctionIntrinsics()

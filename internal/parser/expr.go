@@ -521,16 +521,18 @@ func (p *parser) parseCallTail(expr ast.Expr, allowCall bool) ast.Expr {
 	for {
 		switch {
 		case allowCall && p.isPunct("("):
+			open := p.tok.Pos
 			args := p.parseArguments()
-			expr = p.nodes.callOf(expr, args, false)
+			expr = p.nodes.callOf(expr, args, false, open)
 
 		case p.isPunct("?."):
 			optional = true
 			p.next()
 			switch {
 			case p.isPunct("("):
+				open := p.tok.Pos
 				args := p.parseArguments()
-				expr = p.nodes.callOf(expr, args, true)
+				expr = p.nodes.callOf(expr, args, true, open)
 			case p.isPunct("["):
 				p.next()
 				prop := p.parseExpr()
