@@ -135,6 +135,16 @@ func (t *atomTable) intern(name string) Atom {
 	return a
 }
 
+// lookup returns the atom a name already has, without making one: a name
+// never interned is the key of no property.
+func (t *atomTable) lookup(name string) (Atom, bool) {
+	if idx, ok := arrayIndexOf(name); ok && idx < atomIndexTag {
+		return Atom(atomIndexTag | idx), true
+	}
+	a, ok := t.byName[name]
+	return a, ok
+}
+
 // internCopy interns a name that may be a slice of something much larger -- a
 // key cut out of a JSON document, say.
 //

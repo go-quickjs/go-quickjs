@@ -98,7 +98,10 @@ Paths are relative to this repository; `go-intl:` paths are in
   - `Array.prototype.slice.call({length: 2**32-1})` writes every hole out.
   - `unshift` on an array of length 2^32 - 1 interns an atom per index.
   - Both end the process out of memory.
-- **Status:** open.
+- **Status:** fixed. A result counts the holes it is given and becomes sparse
+  past a short run of them, and reading or deleting an index past 2^31 on an
+  ordinary object makes no key for a name that was never one. Walking such an
+  array-like still takes as long as it does in V8, which a deadline stops.
 
 ### KI-07 The atom table only grows
 - **Where:** `internal/vm/atom.go`.

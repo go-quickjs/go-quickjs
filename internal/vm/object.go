@@ -174,6 +174,10 @@ type Object struct {
 	data any
 }
 
+// maxHoleRun is the longest run of holes an array writes into its dense
+// elements; a longer one makes it sparse.
+const maxHoleRun = 1024
+
 // newObject returns a bare object with the given prototype and class.
 func newObject(proto *Object, class Class) *Object {
 	flags := objExtensible
@@ -856,7 +860,6 @@ func (o *Object) setArrayLength(n uint32) {
 		// Extending an array only makes it longer; the new slots are holes.
 		// Beyond a short run they are not materialized at all, since a length
 		// of four billion is a number rather than four billion holes.
-		const maxHoleRun = 1024
 		if o.flags&objHasSparseElements == 0 && int(n)-len(o.elems) <= maxHoleRun {
 			for len(o.elems) < int(n) {
 				o.elems = append(o.elems, elemHole)

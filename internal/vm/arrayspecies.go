@@ -40,6 +40,9 @@ type arrayOut struct {
 	// n is how many elements have been placed, which the general path needs
 	// because it addresses by index rather than appending.
 	n int64
+	// holes is the run of holes a plain result has been given since its last
+	// element, which are not written until something follows them.
+	holes int64
 }
 
 // arraySpeciesCreate makes the array a method's result goes into.
@@ -103,6 +106,19 @@ func (r *Runtime) arraySpeciesCreate(orig Value, n int64) (*arrayOut, error) {
 
 // push appends one element.
 func (a *arrayOut) push(r *Runtime, v Value) error {
+	if a.plain && a.holes > 0 {
+		// The holes before it are written out if they are a short run; a long
+		// one would be holes in the thousands of millions, so the result
+		// becomes sparse and the element is defined as a property.
+		if a.holes <= maxHoleRun {
+			for ; a.holes > 0; a.holes-- {
+				a.o.elems = append(a.o.elems, elemHole)
+			}
+		} else {
+			a.plain = false
+		}
+		a.holes = 0
+	}
 	if a.plain {
 		a.o.elems = append(a.o.elems, v)
 		a.n++
@@ -133,9 +149,9 @@ func (a *arrayOut) push(r *Runtime, v Value) error {
 // visible to `in` and to every method that skips holes.
 func (a *arrayOut) pushHole(r *Runtime) error {
 	if a.plain {
-		a.o.elems = append(a.o.elems, elemHole)
-		a.n++
-		return nil
+		// Counted, not written: setLength or the next element decides what
+		// they become.
+		a.holes++
 	}
 	a.n++
 	return nil
@@ -145,6 +161,7 @@ func (a *arrayOut) pushHole(r *Runtime) error {
 // no property was ever created for the last index.
 func (a *arrayOut) setLength(r *Runtime, n int64) error {
 	if a.plain {
+		a.holes = 0
 		if int64(len(a.o.elems)) != n {
 			a.o.setArrayLength(uint32(n))
 		}
@@ -153,8 +170,14 @@ func (a *arrayOut) setLength(r *Runtime, n int64) error {
 	return r.setValueProp(Obj(a.o), atomLength, Float(float64(n)), true)
 }
 
-// value is the finished array.
-func (a *arrayOut) value() Value { return Obj(a.o) }
+// value is the finished array, with any holes it ended with.
+func (a *arrayOut) value() Value {
+	if a.plain && a.holes > 0 {
+		a.o.setArrayLength(uint32(int64(len(a.o.elems)) + a.holes))
+		a.holes = 0
+	}
+	return Obj(a.o)
+}
 
 // isConcatSpreadable decides whether concat flattens an argument or appends it
 // whole.

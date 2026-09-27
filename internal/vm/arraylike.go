@@ -83,6 +83,30 @@ func (r *Runtime) indexKey(i int64) Atom {
 	return r.atoms.intern(formatIndex(i))
 }
 
+// knownIndexKey is indexKey for reading an index or deleting it, which need
+// not make a key: an index above what an atom encodes, whose name was never
+// interned, is a property of no object. Walking an array-like of length
+// 2^32 must not intern four billion names to learn that it holds none.
+//
+// That is only so of objects that hold their properties. A proxy's trap is
+// asked about any key, and an exotic object answers for keys it computes, so
+// a chain with anything else on it is given the key.
+func (r *Runtime) knownIndexKey(o *Object, i int64) (Atom, bool) {
+	if i >= 0 && i < atomIndexTag {
+		return Atom(atomIndexTag | uint32(i)), true
+	}
+	name := formatIndex(i)
+	if a, ok := r.atoms.lookup(name); ok {
+		return a, true
+	}
+	for p := o; p != nil; p = p.proto {
+		if p.class != ClassObject && p.class != ClassArray || p.data != nil {
+			return r.atoms.intern(name), true
+		}
+	}
+	return 0, false
+}
+
 func formatIndex(i int64) string {
 	if i == 0 {
 		return "0"
@@ -111,7 +135,11 @@ func (a *arrayLike) has(r *Runtime, i int64) (bool, error) {
 	if _, fast := a.dense(i); fast {
 		return true, nil
 	}
-	return r.hasPropErr(a.o, r.indexKey(i))
+	key, ok := r.knownIndexKey(a.o, i)
+	if !ok {
+		return false, nil
+	}
+	return r.hasPropErr(a.o, key)
 }
 
 // at reads the index, reporting whether it was present at all.
@@ -143,7 +171,11 @@ func (a *arrayLike) get(r *Runtime, i int64) (Value, error) {
 	if err := r.tick(); err != nil {
 		return Undefined, err
 	}
-	return r.getProp(a.o, r.indexKey(i), Obj(a.o))
+	key, ok := r.knownIndexKey(a.o, i)
+	if !ok {
+		return Undefined, nil
+	}
+	return r.getProp(a.o, key, Obj(a.o))
 }
 
 // set writes the index.
@@ -154,7 +186,12 @@ func (a *arrayLike) set(r *Runtime, i int64, v Value) error {
 
 // remove deletes the index, which is how a method leaves a hole behind.
 func (a *arrayLike) remove(r *Runtime, i int64) error {
-	_, err := r.deleteProp(a.o, r.indexKey(i), true)
+	key, ok := r.knownIndexKey(a.o, i)
+	if !ok {
+		// Nothing to delete; and nothing refuses deleting what is not there.
+		return nil
+	}
+	_, err := r.deleteProp(a.o, key, true)
 	return err
 }
 
