@@ -845,7 +845,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 					break
 				}
 			}
-			if env != r.global {
+			if !r.isGlobalScope(env) {
 				// Module code: its own bindings were looked for above, and the
 				// script-level lexical ones sit between the module environment
 				// and the global object it inherits from. An import is stored
@@ -894,7 +894,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				push(p.value)
 				break
 			}
-			if env != r.global {
+			if !r.isGlobalScope(env) {
 				if p := r.moduleLexProp(env, cl.names[in.A]); p != nil {
 					if p.flags&propUninit != 0 {
 						vmErr = r.throwReferenceError("cannot access %q before it is initialized",
@@ -925,7 +925,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			switch {
 			case f.evalVars != nil && evalVarProp(f.evalVars, name) != nil:
 			case r.globalLexProp(env, name) != nil:
-			case env != r.global && r.moduleLexProp(env, name) != nil:
+			case !r.isGlobalScope(env) && r.moduleLexProp(env, name) != nil:
 			default:
 				found = r.hasProp(env, name)
 			}
@@ -964,7 +964,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				p.value = pop()
 				break
 			}
-			if env != r.global {
+			if !r.isGlobalScope(env) {
 				// Module code. Its own bindings and the script-level lexical
 				// ones are properties rather than slots, so what the compiler
 				// checks for a local is checked here instead.
@@ -1022,6 +1022,14 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			if in.B != 0 {
 				flags |= propConfigurable
 			}
+			if proxyOf(env) != nil {
+				// A context's global: the var is its sandbox's.
+				if err := r.declareOnScope(env, name, Undefined, flags, false); err != nil {
+					vmErr = err
+					goto onError
+				}
+				break
+			}
 			if !r.hasOwnProp(env, name) {
 				// A var can only be created where the object will accept a new
 				// property, which a frozen global will not.
@@ -1043,6 +1051,13 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				flags |= propConfigurable
 			}
 			env := cl.scope()
+			if proxyOf(env) != nil {
+				if err := r.declareOnScope(env, name, pop(), flags, true); err != nil {
+					vmErr = err
+					goto onError
+				}
+				break
+			}
 			if env == r.global {
 				if err := r.checkGlobalVarName(name); err != nil {
 					vmErr = err
@@ -2927,7 +2942,7 @@ func evalVarProp(o *Object, name Atom) *Property {
 // the global object: `let x = 1` at a script's top level is reached by name but
 // is not a property of globalThis.
 func (r *Runtime) globalLexProp(env *Object, name Atom) *Property {
-	if env != r.global || len(r.globalLex.props) == 0 {
+	if !r.isGlobalScope(env) || len(r.globalLex.props) == 0 {
 		return nil
 	}
 	return r.globalLex.getOwn(name)
@@ -3216,6 +3231,39 @@ func (r *Runtime) derivedResult(f *frame, cl *closure, v Value) (Value, error) {
 		return Undefined, errNoSuper
 	}
 	return f.thisRef.value, nil
+}
+
+// declareOnScope declares a global var or function in a context, as node's
+// contexts do. Both are the realm's global object's, as any script's are; a
+// function is the sandbox's too, where the context's code reads it from and a
+// deletion can take it away, while a var reaches the sandbox only when it is
+// assigned. A var the context already has is left as it is; a function
+// replaces what is there, and is assigned where it cannot be redefined.
+func (r *Runtime) declareOnScope(env *Object, name Atom, v Value, flags propFlags, replace bool) error {
+	p := proxyOf(env)
+	if !replace {
+		d, err := r.ownDescriptorOf(env, name)
+		if err != nil || !d.IsUndefined() {
+			return err
+		}
+	}
+	if own := p.target.getOwn(name); own == nil || own.flags&propConfigurable != 0 {
+		p.target.setOwnRaw(name, v, flags|propEnumerable)
+	}
+	if !replace {
+		return nil
+	}
+	ok, err := r.defineProperty(p.sandbox, name, &propDesc{
+		value: v, hasValue: true,
+		writable: true, hasWritable: true,
+		enumerable: true, hasEnumerable: true,
+		configurable: true, hasConfigurable: true,
+	})
+	if err != nil || ok {
+		return err
+	}
+	_, err = r.setProp(p.sandbox, name, v, Obj(p.sandbox), false)
+	return err
 }
 
 // errNoSuper is a derived constructor finishing without having called super().

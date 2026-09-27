@@ -88,6 +88,8 @@ type Runtime struct {
 	closed bool
 	// nodeQuirks is WithNodeQuirks, which the parser and compiler are told.
 	nodeQuirks bool
+	// noCodeGeneration is WithoutCodeGeneration, which node:vm respects too.
+	noCodeGeneration bool
 }
 
 // Option configures a Runtime.
@@ -146,7 +148,9 @@ func WithLocale(tag string) Option {
 // In the language it follows V8: strict code may assign to a call, which
 // throws a ReferenceError when it runs; and Annex B hoists a function declared
 // in a block over the arguments object, and over a function an enclosing
-// block declares with the same name.
+// block declares with the same name; and a script's global functions and vars
+// are created in the order they are written, where the standard creates the
+// functions first.
 //
 // It is useful for hosts that prioritize Node compatibility over conformance.
 func WithNodeQuirks() Option {
@@ -165,7 +169,8 @@ func New(opts ...Option) *Runtime {
 		MaxCallDepth: c.maxCallDepth,
 		Locale:       c.locale,
 		NodeQuirks:   c.nodeQuirks,
-	}), nodeQuirks: c.nodeQuirks}
+	}), nodeQuirks: c.nodeQuirks, noCodeGeneration: c.noCodeGeneration}
+	r.rt.Host = r
 	if !c.noCodeGeneration {
 		r.installCodeGeneration()
 	}
@@ -267,11 +272,20 @@ func (r *Runtime) evalIn(ctx context.Context, re *vm.Realm, name, src string) (r
 
 // compile parses and compiles source text.
 func (r *Runtime) compile(src, name string) (*bytecodeFunc, error) {
+	return r.compileAt(src, name, 0, 0)
+}
+
+// compileAt is compile for source placed within a larger file, whose first
+// line is lineOffset lines down and columnOffset columns in.
+func (r *Runtime) compileAt(src, name string, lineOffset, columnOffset int) (*bytecodeFunc, error) {
 	prog, err := parser.Parse(src, parser.Options{NodeQuirks: r.nodeQuirks})
 	if err != nil {
 		return nil, &SyntaxError{err: err}
 	}
-	fn, err := compiler.Compile(prog, compiler.Options{Source: name, Text: src, NodeQuirks: r.nodeQuirks})
+	fn, err := compiler.Compile(prog, compiler.Options{
+		Source: name, Text: src, NodeQuirks: r.nodeQuirks,
+		LineOffset: lineOffset, ColumnOffset: columnOffset,
+	})
 	if err != nil {
 		return nil, &SyntaxError{err: err}
 	}

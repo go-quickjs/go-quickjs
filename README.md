@@ -111,8 +111,8 @@ timing out a wait.
 
 A runtime can hold more than one realm, each with its own global object and
 intrinsics, and a function runs in the realm it was made in whoever calls it;
-test262's cross-realm tests run against it, and `ShadowRealm` is built on it. A
-host cannot make a second realm of its own yet. There is one agent: a
+test262's cross-realm tests run against it, and `ShadowRealm` and node's `vm`
+are built on it. There is one agent: a
 `SharedArrayBuffer` is not shared with another runtime, so nothing can notify
 an `Atomics.wait`, which ends when its timeout does.
 
@@ -349,6 +349,23 @@ A host that emulates a browser's document can make its `document.all`:
 `undefined`, while everything else sees an ordinary object. Given a Go
 function, it is callable too.
 
+## Realms
+
+A runtime evaluates in the realm it was made with, and can make more: each has
+a global object and built-ins of its own, and shares the runtime's stack, job
+queue and module loader. A value made in one is an ordinary `Value` that code
+in another can be handed; a function runs in the realm it was made in,
+whoever calls it.
+
+```go
+re, _ := rt.NewRealm()
+re.Set("log", func(s string) { fmt.Println(s) }) // a function of that realm
+re.Eval(`log(String(Array.isArray([])))`)
+```
+
+`node:vm`, in the standard library, is realms with a sandbox object in front
+of their globals.
+
 ## Modules
 
 Imports are resolved through a loader the host supplies. A runtime without one
@@ -393,7 +410,7 @@ loop.Run(ctx)     // timers, and work that finished on other goroutines
 
 | | |
 |---|---|
-| Always | `console`, `URL`, `TextEncoder`/`TextDecoder`, `atob`/`btoa`, `structuredClone`, `performance`, `crypto` (hashing, HMAC, PBKDF2, HKDF, `subtle`), `Blob`, `File`, `FormData`, `URLPattern`, `AbortController`, `Buffer`, the web's streams, `CompressionStream`, and the `path`, `events`, `util`, `assert`, `buffer`, `crypto`, `zlib`, `stream/web`, `url`, `querystring`, `string_decoder` modules |
+| Always | `console`, `URL`, `TextEncoder`/`TextDecoder`, `atob`/`btoa`, `structuredClone`, `performance`, `crypto` (hashing, HMAC, PBKDF2, HKDF, `subtle`), `Blob`, `File`, `FormData`, `URLPattern`, `AbortController`, `Buffer`, the web's streams, `CompressionStream`, and the `path`, `events`, `util`, `assert`, `buffer`, `crypto`, `zlib`, `stream/web`, `url`, `querystring`, `string_decoder`, `vm` modules |
 | `Loop` | `setTimeout`, `setInterval`, `queueMicrotask`, and the `timers`, `timers/promises` modules |
 | Intl data | names of every language, region, script and currency are built in and decoded one locale at a time |
 | `FS` | the `fs` module, sync and promise halves, `createReadStream`/`createWriteStream`, confined to `Root` |
@@ -503,8 +520,9 @@ profile][go-intl-compat] lists them, with what the standard and Node each
 answer. In the language it follows V8: strict code may assign to a call,
 which is a `ReferenceError` when it runs rather than a `SyntaxError`, and a
 function declared in a block is hoisted over the arguments object and over a
-function an enclosing block declares with the same name. Where the two agree,
-both modes answer as Node does.
+function an enclosing block declares with the same name, and a script's
+functions and vars are created in the order they are written rather than the
+functions first. Where the two agree, both modes answer as Node does.
 
 Left unset, the runtime takes the language the machine is set to -- the user's
 locale on Windows, `LC_ALL`, `LC_MESSAGES` or `LANG` on a Unix machine, and

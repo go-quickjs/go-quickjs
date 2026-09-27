@@ -775,7 +775,7 @@ func (c *closure) scope() *Object {
 	if c.env != nil {
 		return c.env
 	}
-	return c.realm.global
+	return c.realm.globalScope()
 }
 
 // initDynamicImport defines the global that `import(...)` compiles into a call

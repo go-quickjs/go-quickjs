@@ -166,6 +166,10 @@ func TestNodeQuirksLanguage(t *testing.T) {
 			"1,1", "1,2"},
 		{`(function () { { function h() { return 1; } { { function h() { return 3; } } } } return h(); })()`, "1", "3"},
 		{`{ function g1() { return 1; } { function g1() { return 2; } } } g1()`, "1", "2"},
+		// A script's functions are created before its vars, and V8 creates
+		// them in the order they are written.
+		{`var v1; function fn1() {} var v2; function fn2() {}
+Object.keys(globalThis).filter(k => /^(v|fn)[0-9]$/.test(k)).join()`, "fn1,fn2,v1,v2", "v1,fn1,v2,fn2"},
 		// Anything else in the enclosing block still stops it.
 		{`(function () { { let h = 1; { function h() {} } } return typeof h; })()`, "undefined", "undefined"},
 		{`(function () { { async function h() {} { function h() {} } } return typeof h; })()`, "undefined", "undefined"},

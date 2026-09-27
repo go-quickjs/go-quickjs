@@ -4584,3 +4584,31 @@ r.join(" | ")`, "RangeError: maximum call stack size exceeded | RangeError: Inva
 		{`(function () { return arguments.length }).apply(null, { length: 3 })`, "3"},
 	})
 }
+
+// TestGoFunctionGetsTheHostRuntime pins that a Go function called from script
+// is handed the Runtime the host made, so what it compiles is compiled as that
+// runtime compiles, and that a SyntaxError it returns reads as the parser's
+// message, as eval's does.
+func TestGoFunctionGetsTheHostRuntime(t *testing.T) {
+	rt := quickjs.New(quickjs.WithNodeQuirks())
+	defer rt.Close()
+	var got *quickjs.Runtime
+	if err := rt.Set("compile", func(r *quickjs.Runtime, src string) error {
+		got = r
+		_, err := r.Eval(src)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Only WithNodeQuirks accepts assigning to a call in strict code.
+	v, err := rt.Eval(`compile("'use strict'; if (false) f() = 1"); try { compile("(") } catch (e) { e.name + ": " + e.message }`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != rt {
+		t.Error("the Go function was given a Runtime other than the host's")
+	}
+	if s := v.String(); !strings.HasPrefix(s, "SyntaxError: unexpected end of input") {
+		t.Errorf("SyntaxError from Go = %q", s)
+	}
+}

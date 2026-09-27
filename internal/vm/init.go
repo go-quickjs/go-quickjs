@@ -118,6 +118,9 @@ func defaultLocale(host intl.Locale) string {
 // SetContext installs the context the interpreter checks for cancellation.
 func (r *Runtime) SetContext(ctx context.Context) { r.ctx = ctx }
 
+// Context returns the context the running code stops for, or nil for none.
+func (r *Runtime) Context() context.Context { return r.ctx }
+
 // Global returns the global object.
 func (r *Runtime) Global() *Object { return r.global }
 

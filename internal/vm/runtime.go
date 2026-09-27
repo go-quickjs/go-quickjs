@@ -130,6 +130,10 @@ type Runtime struct {
 	// rng backs Math.random, created on first use.
 	rng *rand.Rand
 
+	// Host is the embedding API's handle on this runtime, which a Go function
+	// called from script is given back.
+	Host any
+
 	// moduleLoader fetches a module's source; the modules it makes are each
 	// realm's own.
 	moduleLoader ModuleLoader
@@ -177,6 +181,12 @@ type Realm struct {
 	// same module twice in a realm yields the same instance. Each realm has its
 	// own: a ShadowRealm that imports a module gets an instance of its own.
 	modules map[string]*Module
+
+	// scope and sandbox are set for a context, as node:vm makes them: scope
+	// is what its global code resolves names against, a proxy of the global
+	// object that forwards to sandbox first. See contextify.go.
+	scope   *Object
+	sandbox *Object
 
 	// global is the global object, and globalEnv is the scope that var and
 	// function declarations at the top level bind into.

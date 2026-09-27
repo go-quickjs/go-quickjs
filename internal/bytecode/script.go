@@ -20,6 +20,16 @@ type Script struct {
 	text string
 	// lineStarts holds the byte offset at which each line begins.
 	lineStarts []int32
+	// lineOffset and columnOffset place the text within a larger file, as
+	// node:vm's options of those names do: every line is lineOffset further
+	// down, and the first is columnOffset further right.
+	lineOffset, columnOffset int32
+}
+
+// SetOffset places the script's text within a larger file: its first line is
+// line lineOffset+1 and starts at column columnOffset+1.
+func (s *Script) SetOffset(lineOffset, columnOffset int32) {
+	s.lineOffset, s.columnOffset = lineOffset, columnOffset
 }
 
 // NewScript returns the script for a source text.
@@ -74,5 +84,8 @@ func (s *Script) Position(pos int32) (line, col int32) {
 		}
 		p += size
 	}
-	return int32(i + 1), col
+	if i == 0 {
+		col += s.columnOffset
+	}
+	return int32(i+1) + s.lineOffset, col
 }

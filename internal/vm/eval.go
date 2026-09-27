@@ -61,7 +61,7 @@ func (r *Runtime) Run(fn *bytecode.Function) (Value, error) {
 	// `this` at the top level of a script is the global object regardless of
 	// strictness. Only a strict function invoked without a receiver, and module
 	// code, see undefined.
-	this := Obj(r.global)
+	this := r.globalThis
 	if fn.IsModule {
 		this = Undefined
 	}

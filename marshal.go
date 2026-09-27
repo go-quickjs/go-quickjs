@@ -227,7 +227,10 @@ func throwGoError(rt *vm.Runtime, err error) error {
 	}
 	var synErr *SyntaxError
 	if errors.As(err, &synErr) {
-		return rt.ThrowSyntaxError("%s", synErr.Error())
+		// The message is what the parser said, as eval reports it, without
+		// the prefixes a Go caller reads it with.
+		msg := strings.TrimPrefix(synErr.Error(), "quickjs: ")
+		return rt.ThrowSyntaxError("%s", strings.TrimPrefix(msg, "SyntaxError: "))
 	}
 	return rt.ThrowError(err)
 }
@@ -263,7 +266,13 @@ func wrapGoFunc(rt *vm.Runtime, fv reflect.Value) (vm.Value, error) {
 	native := func(callRT *vm.Runtime, this vm.Value, args []vm.Value) (vm.Value, error) {
 		in := make([]reflect.Value, 0, max(t.NumIn(), firstArg+len(args)))
 		if wantsRuntime {
-			in = append(in, reflect.ValueOf(&Runtime{rt: callRT}))
+			// The function is given the Runtime the host made, so that what
+			// it compiles is compiled as that runtime compiles.
+			host, _ := callRT.Host.(*Runtime)
+			if host == nil {
+				host = &Runtime{rt: callRT}
+			}
+			in = append(in, reflect.ValueOf(host))
 		}
 		for i := 0; i < arity; i++ {
 			pt := t.In(firstArg + i)

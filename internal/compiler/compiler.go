@@ -36,6 +36,9 @@ func (e *Error) Error() string {
 type Options struct {
 	// Source names the origin of the code in stack traces.
 	Source string
+	// LineOffset and ColumnOffset place the source within a larger file, for
+	// the positions a stack trace reports.
+	LineOffset, ColumnOffset int
 	// NodeQuirks compiles as V8 does where it departs from the standard.
 	// Annex B then hoists a block-level function named arguments over the
 	// arguments object, and one whose name a function in an enclosing block
@@ -452,6 +455,7 @@ func newCompiler(parent *compiler, opts Options) *compiler {
 		c.withStatements = parent.withStatements
 	} else {
 		c.script = bytecode.NewScript(opts.Source, opts.Text)
+		c.script.SetOffset(int32(opts.LineOffset), int32(opts.ColumnOffset))
 	}
 	c.fn.Script = c.script
 	return c
@@ -896,6 +900,10 @@ func (c *compiler) hoistGlobals(body []ast.Stmt) {
 		}
 		names = kept
 	}
+	// V8 creates them in the order they are written instead.
+	if !c.opts.NodeQuirks {
+		names = functionsFirst(body, names)
+	}
 	for _, n := range names {
 		if c.evalVarsAreLocal() {
 			// Strict eval code gets a variable environment of its own, so its
@@ -929,6 +937,33 @@ func (c *compiler) hoistGlobals(body []ast.Stmt) {
 		// because the evaluated code could have declared it anywhere.
 		c.emit(bytecode.OpDefineGlobalVar, c.nameIdx(n), boolBit(c.opts.EvalConfigurable))
 	}
+}
+
+// functionsFirst orders the names a script or eval code declares as its
+// declaration instantiation creates them: the functions first -- each where
+// its last declaration puts it -- and then the vars, in the order written.
+func functionsFirst(body []ast.Stmt, names []string) []string {
+	var fns []string
+	isFn := map[string]bool{}
+	for i := len(body) - 1; i >= 0; i-- {
+		if _, name, ok := hoistableFunction(body[i]); ok && !isFn[name] {
+			isFn[name] = true
+			fns = append(fns, name)
+		}
+	}
+	if len(fns) == 0 {
+		return names
+	}
+	out := make([]string, 0, len(names))
+	for i := len(fns) - 1; i >= 0; i-- {
+		out = append(out, fns[i])
+	}
+	for _, n := range names {
+		if !isFn[n] {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // atScriptTopLevel reports whether the compiler is in the outermost statement

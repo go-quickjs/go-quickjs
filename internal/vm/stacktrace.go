@@ -46,6 +46,10 @@ const (
 	// frameHidden marks a frame that is strict, or is called from one that
 	// is, whose receiver and function a CallSite does not give out.
 	frameHidden
+	// frameToplevel marks a frame whose receiver is its realm's global
+	// object, which is decided when the frame is captured: by the time the
+	// stack is read, another realm may be the running one.
+	frameToplevel
 )
 
 func (fr *stackFrame) arrow() bool     { return fr.flags&frameArrow != 0 }
@@ -132,6 +136,10 @@ func (r *Runtime) captureTrace(until *Object, skipTop bool) stackTrace {
 		}
 		if hidden {
 			fr.flags |= frameHidden
+		}
+		if re := frameRealm(f); re != nil && f.this.IsObject() &&
+			(f.this.Object() == re.global || f.this.Object() == re.scope) {
+			fr.flags |= frameToplevel
 		}
 		if st.frames == nil {
 			st.frames = make([]stackFrame, 0, min(limit, i+1))
@@ -373,10 +381,20 @@ func (fr *stackFrame) isEval() bool {
 // isToplevel reports whether the frame has no receiver worth naming: none at
 // all, or the global object.
 func (r *Runtime) isToplevel(fr *stackFrame) bool {
-	if fr.arrow() || fr.this.IsNullish() {
-		return true
+	return fr.arrow() || fr.this.IsNullish() || fr.flags&frameToplevel != 0
+}
+
+// frameRealm is the realm a frame's function belongs to.
+func frameRealm(f *frame) *Realm {
+	if f.cl != nil {
+		return f.cl.realm
 	}
-	return fr.this.IsObject() && r.globalThis.IsObject() && fr.this.Object() == r.globalThis.Object()
+	if f.callee != nil {
+		if fd := f.callee.fn(); fd != nil {
+			return fd.realm
+		}
+	}
+	return nil
 }
 
 // position is the frame's line and column, or zeros for a native frame.

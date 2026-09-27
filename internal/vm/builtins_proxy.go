@@ -19,6 +19,9 @@ type proxyData struct {
 	// revoked proxies throw on every operation, which is what the revoke
 	// function produced by Proxy.revocable turns on.
 	revoked bool
+	// sandbox is set for a context's global scope, which forwards to it
+	// rather than to a handler; see contextify.go.
+	sandbox *Object
 }
 
 // proxyOf returns an object's proxy state, or nil if it is not a proxy.
@@ -35,6 +38,11 @@ func (r *Runtime) trap(p *proxyData, name string) (Value, bool, error) {
 	if p.revoked {
 		return Undefined, false, r.throwTypeError("cannot perform an operation on a revoked proxy")
 	}
+	// A context's global has no handler: what it does not forward to its
+	// sandbox is the realm's global object's to answer.
+	if p.sandbox != nil {
+		return Undefined, false, nil
+	}
 	v, err := r.getProp(p.handler, r.atoms.intern(name), Obj(p.handler))
 	if err != nil {
 		return Undefined, false, err
@@ -50,6 +58,9 @@ func (r *Runtime) trap(p *proxyData, name string) (Value, bool, error) {
 
 // proxyGet implements the get trap.
 func (r *Runtime) proxyGet(p *proxyData, key Atom, receiver Value) (Value, error) {
+	if p.sandbox != nil {
+		return r.sandboxGet(p, key, receiver)
+	}
 	fn, ok, err := r.trap(p, "get")
 	if err != nil {
 		return Undefined, err
@@ -85,6 +96,9 @@ func (r *Runtime) proxyGet(p *proxyData, key Atom, receiver Value) (Value, error
 
 // proxySet implements the set trap.
 func (r *Runtime) proxySet(p *proxyData, key Atom, val, receiver Value, strict bool) (bool, error) {
+	if p.sandbox != nil {
+		return r.sandboxSet(p, key, val, strict)
+	}
 	fn, ok, err := r.trap(p, "set")
 	if err != nil {
 		return false, err
@@ -129,6 +143,9 @@ func (r *Runtime) proxySet(p *proxyData, key Atom, val, receiver Value, strict b
 
 // proxyHas implements the has trap.
 func (r *Runtime) proxyHas(p *proxyData, key Atom) (bool, error) {
+	if p.sandbox != nil {
+		return r.sandboxHas(p, key)
+	}
 	fn, ok, err := r.trap(p, "has")
 	if err != nil {
 		return false, err
@@ -155,6 +172,9 @@ func (r *Runtime) proxyHas(p *proxyData, key Atom) (bool, error) {
 
 // proxyDelete implements the deleteProperty trap.
 func (r *Runtime) proxyDelete(p *proxyData, key Atom, strict bool) (bool, error) {
+	if p.sandbox != nil {
+		return r.sandboxDelete(p, key)
+	}
 	fn, ok, err := r.trap(p, "deleteProperty")
 	if err != nil {
 		return false, err
@@ -198,6 +218,9 @@ func (r *Runtime) proxyDelete(p *proxyData, key Atom, strict bool) (bool, error)
 
 // proxyOwnKeys implements the ownKeys trap.
 func (r *Runtime) proxyOwnKeys(p *proxyData) ([]Atom, error) {
+	if p.sandbox != nil {
+		return r.sandboxOwnKeys(p)
+	}
 	fn, ok, err := r.trap(p, "ownKeys")
 	if err != nil {
 		return nil, err
@@ -417,6 +440,9 @@ func (r *Runtime) proxyPreventExtensions(p *proxyData) (bool, error) {
 
 // proxyGetOwnPropertyDescriptor implements the getOwnPropertyDescriptor trap.
 func (r *Runtime) proxyGetOwnPropertyDescriptor(p *proxyData, key Atom) (Value, error) {
+	if p.sandbox != nil {
+		return r.sandboxOwnDescriptor(p, key)
+	}
 	fn, ok, err := r.trap(p, "getOwnPropertyDescriptor")
 	if err != nil {
 		return Undefined, err
@@ -490,6 +516,9 @@ func (r *Runtime) proxyGetOwnPropertyDescriptor(p *proxyData, key Atom) (Value, 
 
 // proxyDefineProperty implements the defineProperty trap.
 func (r *Runtime) proxyDefineProperty(p *proxyData, key Atom, desc Value) (bool, error) {
+	if p.sandbox != nil {
+		return r.sandboxDefine(p, key, desc)
+	}
 	fn, ok, err := r.trap(p, "defineProperty")
 	if err != nil {
 		return false, err

@@ -113,6 +113,11 @@ func Install(rt *quickjs.Runtime, cfg Config) error {
 		if err := Extras(rt, cfg.Loop != nil); err != nil {
 			return err
 		}
+		// A context is a realm of the runtime, and reaches nothing the code
+		// running in it is not handed.
+		if err := VM(rt); err != nil {
+			return err
+		}
 	}
 	if err := Path(rt); err != nil {
 		return err
