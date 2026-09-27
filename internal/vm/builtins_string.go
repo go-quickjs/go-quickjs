@@ -94,8 +94,11 @@ func (r *Runtime) initStringBuiltins() {
 				}
 				sb.WriteString(sub.Go())
 			}
+			if sb.overlong() {
+				return Undefined, rt.throwStringLength()
+			}
 		}
-		return Str(NewString(sb.String())), nil
+		return rt.builtString(sb.String())
 	})
 
 	// The receiver of a String method may be a primitive or a wrapper.
@@ -419,8 +422,8 @@ func (r *Runtime) initStringBuiltins() {
 			return Str(emptyString), nil
 		}
 		// Guard against a count that would exhaust memory before building it.
-		if float64(s.Len())*n > 1<<30 {
-			return Undefined, rt.throwRangeError("repeat count is too large")
+		if float64(s.Len())*n > maxStringLength {
+			return Undefined, rt.throwStringLength()
 		}
 		if err := rt.reserveMemory(stringBytes(s) * int(n)); err != nil {
 			return Undefined, err
@@ -627,6 +630,9 @@ func (r *Runtime) padString(thisStr thisStrFunc, this Value, args []Value, atSta
 	if target <= float64(s.Len()) {
 		return Str(s), nil
 	}
+	if target > maxStringLength {
+		return Undefined, r.throwStringLength()
+	}
 	pad := " "
 	if pv := arg(args, 1); !pv.IsUndefined() {
 		ps, err := r.toString(pv)
@@ -735,22 +741,31 @@ func (r *Runtime) stringReplace(thisStr thisStrFunc, this Value, args []Value, a
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(repl).Concat(s)), nil
+		out, err := r.concat(NewString(repl), s)
+		if err != nil {
+			return Undefined, err
+		}
+		return Str(out), nil
 	}
 
-	out := NewString("")
+	// The result goes into one buffer: joined one piece at a time, a string
+	// with a million matches would be a million rope nodes.
+	var sb partsBuilder
 	pos := 0
 	for {
 		i := s.IndexOf(pattern, pos)
 		if i < 0 {
 			break
 		}
-		out = out.Concat(s.Substring(pos, i))
+		sb.WriteString(s.Substring(pos, i).Go())
 		repl, err := r.replacementFor(replVal, replText, pattern, i, s, &argv)
 		if err != nil {
 			return Undefined, err
 		}
-		out = out.Concat(NewString(repl))
+		sb.WriteString(repl)
+		if sb.overlong() {
+			return Undefined, r.throwStringLength()
+		}
 		pos = i + patLen
 		if !all {
 			break
@@ -760,11 +775,15 @@ func (r *Runtime) stringReplace(thisStr thisStrFunc, this Value, args []Value, a
 			if pos >= s.Len() {
 				break
 			}
-			out = out.Concat(s.Substring(pos, pos+1))
+			sb.WriteString(s.Substring(pos, pos+1).Go())
 			pos++
 		}
+		if err := r.tick(); err != nil {
+			return Undefined, err
+		}
 	}
-	return Str(out.Concat(s.Substring(pos, s.Len()))), nil
+	sb.WriteString(s.Substring(pos, s.Len()).Go())
+	return r.builtString(sb.String())
 }
 
 // replacementFor produces the text a single match is replaced with, calling the

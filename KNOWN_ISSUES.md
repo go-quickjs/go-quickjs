@@ -55,7 +55,11 @@ Paths are relative to this repository; `go-intl:` paths are in
   - On 386, a length past 2^31 turns negative.
 - **Expected:** V8 throws `RangeError: Invalid string length` above 2^29 - 24
   code units.
-- **Status:** open.
+- **Status:** fixed. Strings are limited to V8's length, with V8's message, at
+  every place one can grow past it: `+`, `concat`, templates, `repeat`,
+  padding, the joins, `String.raw` and `replace`. Typed-array `join` and a
+  string pattern's `replace` also stopped building a rope node per piece,
+  which cost many times the text they held.
 
 ### KI-04 Unbounded Go recursion ends the process with a fatal stack overflow
 - **Paths that recurse in Go with no depth limit:**

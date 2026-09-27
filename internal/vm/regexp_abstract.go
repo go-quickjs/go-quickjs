@@ -408,6 +408,9 @@ func (r *Runtime) regExpSymbolReplace(rx Value, args []Value) (Value, error) {
 	// interpreter's own stack.
 	var captures, callArgs []Value
 	for _, result := range results {
+		if sb.overlong() {
+			return Undefined, r.throwStringLength()
+		}
 		nCaps, err := r.resultCaptureCount(result)
 		if err != nil {
 			return Undefined, err
@@ -496,7 +499,7 @@ func (r *Runtime) regExpSymbolReplace(rx Value, args []Value) (Value, error) {
 	if next < size {
 		sb.WriteString(wtf8.FromUTF16(units[next:]))
 	}
-	return Str(NewString(sb.String())), nil
+	return r.builtString(sb.String())
 }
 
 // getSubstitution expands the $ forms in a replacement template.

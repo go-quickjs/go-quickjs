@@ -1323,8 +1323,11 @@ func (r *Runtime) initArrayBuiltins() {
 				return Undefined, err
 			}
 			sb.WriteString(s.Go())
+			if sb.overlong() {
+				return Undefined, rt.throwStringLength()
+			}
 		}
-		return Str(NewString(sb.String())), nil
+		return rt.builtString(sb.String())
 	})
 
 	r.defMethod(p, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {

@@ -53,6 +53,26 @@ type String struct {
 // emptyString is shared, since scripts produce it constantly.
 var emptyString = &String{ascii: true}
 
+// maxStringLength is the longest a string may be, in code units: V8's,
+// 2^29 - 24, beyond which making one throws "Invalid string length". It
+// keeps every length within an int on every platform, and a string doubled
+// again and again from growing until writing it out exhausts the process.
+const maxStringLength = 1<<29 - 24
+
+// throwStringLength refuses a string longer than maxStringLength.
+func (r *Runtime) throwStringLength() error {
+	return r.throwRangeError("Invalid string length")
+}
+
+// builtString is the string a builder made, refused if it is too long.
+func (r *Runtime) builtString(s string) (Value, error) {
+	out := NewString(s)
+	if out.length > maxStringLength {
+		return Undefined, r.throwStringLength()
+	}
+	return Str(out), nil
+}
+
 // NewString returns a String for a Go string.
 func NewString(s string) *String {
 	if s == "" {
@@ -214,10 +234,40 @@ type partsBuilder struct {
 	// endsHigh records that the piece held back ends with an unpaired high
 	// surrogate, which is the only thing the next piece could complete.
 	endsHigh bool
+	// counting records that what has been written is long enough for its
+	// code units to be counted, and units is how many sb holds.
+	counting bool
+	units    int
 }
 
 // Grow reserves room for n more bytes.
 func (b *partsBuilder) Grow(n int) { b.sb.Grow(n) }
+
+// overlong reports whether what has been written is already too long to be
+// a string, which a builder asks as it goes so that it gives up before it has
+// built what could never be returned. A code unit takes at least a byte, so
+// nothing is counted until there are more bytes than a string may have code
+// units; from then on the code units are counted as they are written.
+func (b *partsBuilder) overlong() bool {
+	if b.sb.Len()+len(b.last) <= maxStringLength {
+		return false
+	}
+	if !b.counting {
+		b.counting = true
+		_, b.units = scanString(b.sb.String())
+	}
+	_, last := scanString(b.last)
+	return b.units+last > maxStringLength
+}
+
+// flush writes the piece held back.
+func (b *partsBuilder) flush() {
+	b.sb.WriteString(b.last)
+	if b.counting {
+		_, n := scanString(b.last)
+		b.units += n
+	}
+}
 
 // WriteString adds a piece.
 func (b *partsBuilder) WriteString(s string) {
@@ -230,13 +280,13 @@ func (b *partsBuilder) WriteString(s string) {
 		b.endsHigh, _ = wtf8.UnpairedEnds(b.last)
 		return
 	}
-	b.sb.WriteString(b.last)
+	b.flush()
 	b.last, b.endsHigh = s, endsHigh
 }
 
 // String returns what has been written.
 func (b *partsBuilder) String() string {
-	b.sb.WriteString(b.last)
+	b.flush()
 	b.last, b.endsHigh = "", false
 	return b.sb.String()
 }

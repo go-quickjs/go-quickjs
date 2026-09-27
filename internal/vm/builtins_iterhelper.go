@@ -873,12 +873,15 @@ func (r *Runtime) initIteratorTerminals(p *Object) {
 				return false, err
 			}
 			sb.WriteString(s.Go())
+			if sb.overlong() {
+				return false, rt.throwStringLength()
+			}
 			return true, nil
 		})
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(sb.String())), nil
+		return rt.builtString(sb.String())
 	})
 
 	short("some", true, func(_ Value, stopped bool) Value { return Bool(stopped) })

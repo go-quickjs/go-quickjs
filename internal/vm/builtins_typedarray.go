@@ -1491,10 +1491,12 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		// toString detached or shrank the buffer leaves the elements past its
 		// end undefined, and an undefined element contributes nothing rather
 		// than the word.
-		out := emptyString
+		// The pieces go into one buffer: joined one at a time, each element
+		// would be a rope node many times its own size.
+		var sb partsBuilder
 		for i := 0; i < length; i++ {
 			if i > 0 {
-				out = out.Concat(NewString(sep))
+				sb.WriteString(sep)
 			}
 			el := t.getElem(i)
 			if el.IsNullish() {
@@ -1504,9 +1506,15 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 			if err != nil {
 				return Undefined, err
 			}
-			out = out.Concat(s)
+			sb.WriteString(s.Go())
+			if sb.overlong() {
+				return Undefined, rt.throwStringLength()
+			}
+			if err := rt.tick(); err != nil {
+				return Undefined, err
+			}
 		}
-		return Str(out), nil
+		return rt.builtString(sb.String())
 	})
 
 	r.defMethod(p, "toLocaleString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {

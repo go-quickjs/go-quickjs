@@ -125,6 +125,9 @@ func (r *Runtime) reserveMemory(n int) error {
 // holds. So the shorter side is reserved: over a string doubled n times,
 // what is reserved adds up to what writing it out will take.
 func (r *Runtime) concat(a, b *String) (*String, error) {
+	if a.length+b.length > maxStringLength {
+		return nil, r.throwStringLength()
+	}
 	if r.meter != nil {
 		short := a
 		if b.length < a.length {

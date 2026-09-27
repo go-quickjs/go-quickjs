@@ -1933,6 +1933,10 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				parts[i] = Str(s)
 			}
 			out := joinValues(parts)
+			if out.length > maxStringLength {
+				vmErr = r.throwStringLength()
+				goto onError
+			}
 			sp -= n
 			push(Str(out))
 		case bytecode.OpTemplateObject:
