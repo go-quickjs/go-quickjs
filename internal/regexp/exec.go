@@ -304,6 +304,12 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 					}
 				}
 			}
+			if 2*g+1 >= len(m.caps) {
+				// No such group: it matched nothing, as one that did not
+				// take part would have.
+				pc++
+				break
+			}
 			start, end := m.caps[2*g], m.caps[2*g+1]
 			if start < 0 || end < 0 {
 				// A group that never participated matches the empty string

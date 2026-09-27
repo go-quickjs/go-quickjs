@@ -34,8 +34,11 @@ type parser struct {
 	pos   int
 	flags Flags
 
-	// groupCount counts capturing groups, which the tree refers to by index.
-	groupCount int
+	// groupCount counts capturing groups, which the tree refers to by index,
+	// and totalGroups is how many the whole pattern has, which the first
+	// pass counts before the body is parsed.
+	groupCount  int
+	totalGroups int
 	// groupNames maps each name to the groups that carry it, in the order
 	// they were written. A name has several only where no match can take
 	// part in more than one of them.
@@ -220,6 +223,7 @@ func (p *parser) scanGroupNames() error {
 			}
 		}
 	}
+	p.totalGroups = idx
 	return nil
 }
 
@@ -669,7 +673,20 @@ func (p *parser) parseEscape() (node, bool, error) {
 		return ref, true, nil
 
 	case '1', '2', '3', '4', '5', '6', '7', '8', '9':
+		save := p.pos
 		n, _ := p.parseDecimal()
+		if n > p.totalGroups && p.flags&(FlagUnicode|FlagUnicodeSets) == 0 {
+			// A reference to a group the pattern does not have is, outside
+			// unicode mode, what it would have been before there were
+			// references: a legacy octal escape, or \8 and \9 the digits
+			// themselves. /(a)\2/ matches "a\x02".
+			p.pos = save
+			if r <= '7' {
+				return nodeChar{r: p.parseOctal()}, true, nil
+			}
+			p.pos++
+			return nodeChar{r: r}, true, nil
+		}
 		if n > p.maxBackref {
 			p.maxBackref = n
 		}
@@ -788,7 +805,15 @@ func (p *parser) parseCharEscape() (rune, error) {
 		if p.flags&FlagUnicode != 0 {
 			return 0, p.errorf("invalid \\c escape")
 		}
-		// In sloppy mode a stray \c is a literal backslash followed by c.
+		// Inside a class, outside unicode mode, a digit or an underscore
+		// makes a control character too.
+		if c := p.peek(); p.inClass && ((c >= '0' && c <= '9') || c == '_') {
+			p.pos++
+			return c % 32, nil
+		}
+		// Otherwise a stray \c is a literal backslash, and the c is read
+		// again as what follows it.
+		p.pos--
 		return '\\', nil
 	case 'x':
 		if v, ok := p.parseHexDigits(2); ok {
