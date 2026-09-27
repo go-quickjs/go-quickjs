@@ -336,6 +336,9 @@ type intrinsics struct {
 	nativeErrors [errorKindCount]*Object
 	// errorCtors are the corresponding constructors.
 	errorCtors [errorKindCount]*Object
+	// sharedArrayBuffer is SharedArrayBuffer.prototype, which a buffer over
+	// memory another runtime shared is made with.
+	sharedArrayBuffer *Object
 	// callSite is the prototype of the objects Error.prepareStackTrace is
 	// given the frames of a stack trace as.
 	callSite *Object

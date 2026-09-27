@@ -2,7 +2,6 @@ package vm
 
 import (
 	"math"
-	"time"
 )
 
 // SharedArrayBuffer and Atomics.
@@ -21,6 +20,7 @@ import (
 func (r *Runtime) sharedBufferOf(this Value, name string) (*arrayBufferData, error) {
 	if this.IsObject() && this.Object().class == ClassArrayBuffer {
 		if b, ok := this.Object().data.(*arrayBufferData); ok && b.shared {
+			b.sharedMemory()
 			return b, nil
 		}
 	}
@@ -29,6 +29,7 @@ func (r *Runtime) sharedBufferOf(this Value, name string) (*arrayBufferData, err
 
 func (r *Runtime) initSharedArrayBufferBuiltins() {
 	proto := newObject(r.proto.object, ClassObject)
+	r.proto.sharedArrayBuffer = proto
 
 	ctor := r.newCtor("SharedArrayBuffer", 1, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if err := rt.requireNew("SharedArrayBuffer"); err != nil {
@@ -65,7 +66,8 @@ func (r *Runtime) initSharedArrayBufferBuiltins() {
 			return Undefined, rt.throwRangeError("the SharedArrayBuffer maxByteLength is too large")
 		}
 		o := newObject(p, ClassArrayBuffer)
-		b := &arrayBufferData{bytes: make([]byte, n), shared: true}
+		m := newSharedMemory(int(n), max)
+		b := &arrayBufferData{bytes: m.bytes(), shared: true, block: m}
 		if max >= 0 {
 			b.resizable, b.maxByteLength = true, max
 		}
@@ -121,7 +123,8 @@ func (r *Runtime) initSharedArrayBufferBuiltins() {
 		if n < int64(len(b.bytes)) {
 			return Undefined, rt.throwRangeError("a SharedArrayBuffer cannot shrink")
 		}
-		b.resize(int(n))
+		b.block.grow(int(n))
+		b.sharedMemory()
 		return Undefined, nil
 	})
 
@@ -191,8 +194,12 @@ func (r *Runtime) initAtomicsBuiltins() {
 			if err := rt.revalidateAtomic(t, at); err != nil {
 				return Undefined, err
 			}
-			old := t.getElem(t.atomicIndex(at))
 			size := t.info().size
+			if st := t.storage(); st.block != nil {
+				old := sharedUpdate(st.bytes, at, size, func(old uint64) uint64 { return op(old, v) })
+				return intElemFromBits(t.kind, old), nil
+			}
+			old := t.getElem(t.atomicIndex(at))
 			b := t.storage().bytes[at : at+size]
 			writeUint(b, op(readUint(b, true), v), true)
 			return old, nil
@@ -221,11 +228,20 @@ func (r *Runtime) initAtomicsBuiltins() {
 		if err := rt.revalidateAtomic(t, at); err != nil {
 			return Undefined, err
 		}
-		old := t.getElem(t.atomicIndex(at))
 		size := t.info().size
-		b := t.storage().bytes[at : at+size]
 		// The comparison is of the element's bytes, so the expected value is
 		// first made what the element would hold: 256 matches a Uint8 zero.
+		if st := t.storage(); st.block != nil {
+			old := sharedUpdate(st.bytes, at, size, func(old uint64) uint64 {
+				if old == expected&sizeMask(size) {
+					return replacement
+				}
+				return old
+			})
+			return intElemFromBits(t.kind, old), nil
+		}
+		old := t.getElem(t.atomicIndex(at))
+		b := t.storage().bytes[at : at+size]
 		if readUint(b, true) == expected&sizeMask(size) {
 			writeUint(b, replacement, true)
 		}
@@ -239,6 +255,9 @@ func (r *Runtime) initAtomicsBuiltins() {
 		}
 		if err := rt.revalidateAtomic(t, at); err != nil {
 			return Undefined, err
+		}
+		if st := t.storage(); st.block != nil {
+			return intElemFromBits(t.kind, sharedLoad(st.bytes, at, t.info().size)), nil
 		}
 		return t.getElem(t.atomicIndex(at)), nil
 	})
@@ -256,7 +275,11 @@ func (r *Runtime) initAtomicsBuiltins() {
 			return Undefined, err
 		}
 		size := t.info().size
-		writeUint(t.storage().bytes[at:at+size], bits, true)
+		if st := t.storage(); st.block != nil {
+			sharedUpdate(st.bytes, at, size, func(uint64) uint64 { return bits })
+		} else {
+			writeUint(t.storage().bytes[at:at+size], bits, true)
+		}
 		// store answers with the value as converted, not as stored: 300 into
 		// a Uint8Array returns 300.
 		return v, nil
@@ -287,33 +310,43 @@ func (r *Runtime) initAtomicsBuiltins() {
 		if !math.IsNaN(q) {
 			timeout = math.Max(q, 0)
 		}
-		size := t.info().size
-		if readUint(t.storage().bytes[at:at+size], true) != v&sizeMask(size) {
-			return Str(NewString("not-equal")), nil
+		var done <-chan struct{}
+		if rt.ctx != nil {
+			done = rt.ctx.Done()
 		}
-		// Nothing else runs on this agent's memory, so nothing can notify
-		// it: the wait ends when its time is up, or when the host cancels.
-		if err := rt.atomicSleep(timeout); err != nil {
-			return Undefined, err
+		waited, notified := t.storage().block.wait(at, t.info().size, v, timeout, done)
+		switch {
+		case !waited:
+			return Str(NewString("not-equal")), nil
+		case notified:
+			return Str(NewString("ok")), nil
+		}
+		// The host stopping the agent is not a timeout.
+		if rt.ctx != nil && rt.ctx.Err() != nil {
+			return Undefined, rt.ctx.Err()
 		}
 		return Str(NewString("timed-out")), nil
 	})
 
 	r.defMethod(a, "notify", 3, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		t, _, err := rt.atomicAccess(arg(args, 0), arg(args, 1), true, false, false)
+		t, at, err := rt.atomicAccess(arg(args, 0), arg(args, 1), true, false, false)
 		if err != nil {
 			return Undefined, err
 		}
+		count := math.Inf(1)
 		if c := arg(args, 2); !c.IsUndefined() {
-			if _, err := rt.toInteger(c); err != nil {
+			n, err := rt.toInteger(c)
+			if err != nil {
 				return Undefined, err
 			}
+			count = math.Max(n, 0)
 		}
-		// With one agent, whoever waited has stopped waiting by the time
-		// anything can notify it; and a buffer that is not shared cannot be
-		// waited on at all.
-		_ = t
-		return Int(0), nil
+		// A buffer that is not shared cannot be waited on at all.
+		st := t.storage()
+		if st.block == nil {
+			return Int(0), nil
+		}
+		return Int(st.block.notify(at, count)), nil
 	})
 
 	r.defMethod(a, "pause", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -420,33 +453,34 @@ func (r *Runtime) atomicWaitOperand(t *typedArrayData, v Value) (Value, uint64, 
 	return Int(int(i)), uint64(uint32(i)), nil
 }
 
+// intElemFromBits is the value an integer element's bits hold.
+func intElemFromBits(kind elemType, bits uint64) Value {
+	switch kind {
+	case elemInt8:
+		return Int(int(int8(bits)))
+	case elemUint8, elemUint8Clamped:
+		return Int(int(uint8(bits)))
+	case elemInt16:
+		return Int(int(int16(bits)))
+	case elemUint16:
+		return Int(int(uint16(bits)))
+	case elemInt32:
+		return Int32(int32(bits))
+	case elemUint32:
+		return Uint32(uint32(bits))
+	case elemBigInt64:
+		return Big(NewBigInt(int64(bits)))
+	case elemBigUint64:
+		bi := &BigInt{}
+		bi.V.SetUint64(bits)
+		return Big(bi)
+	}
+	return Undefined
+}
+
 func sizeMask(size int) uint64 {
 	if size >= 8 {
 		return math.MaxUint64
 	}
 	return 1<<(8*size) - 1
-}
-
-// atomicSleep blocks for a number of milliseconds, or for ever, returning
-// early only when the host's context is done.
-func (r *Runtime) atomicSleep(ms float64) error {
-	var timer <-chan time.Time
-	if !math.IsInf(ms, 1) {
-		if ms <= 0 {
-			return nil
-		}
-		t := time.NewTimer(time.Duration(ms * float64(time.Millisecond)))
-		defer t.Stop()
-		timer = t.C
-	}
-	var done <-chan struct{}
-	if r.ctx != nil {
-		done = r.ctx.Done()
-	}
-	select {
-	case <-timer:
-		return nil
-	case <-done:
-		return r.ctx.Err()
-	}
 }

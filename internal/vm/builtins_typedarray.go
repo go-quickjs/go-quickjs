@@ -32,8 +32,10 @@ type arrayBufferData struct {
 	resizable     bool
 	maxByteLength int64
 	// shared marks a SharedArrayBuffer. It is never detached, and a
-	// resizable one -- growable, in its terms -- only grows.
+	// resizable one -- growable, in its terms -- only grows. Its bytes are
+	// block's, which other runtimes may be looking at too.
 	shared bool
+	block  *SharedMemory
 }
 
 // maxBufferLength bounds how large a buffer may actually be. A resizable
@@ -114,6 +116,9 @@ func (t *typedArrayData) info() elemInfo { return elemInfos[t.kind] }
 
 func (t *typedArrayData) storage() *arrayBufferData {
 	b, _ := t.buffer.data.(*arrayBufferData)
+	if b != nil && b.block != nil {
+		b.sharedMemory()
+	}
 	return b
 }
 

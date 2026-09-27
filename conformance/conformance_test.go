@@ -255,16 +255,10 @@ func runOne(suite *conformance.Suite, tc *conformance.Test,
 			return resultSkip, reason
 		}
 	}
-	// CanBlockIsFalse and similar host hooks are not provided.
-	if tc.Meta.Flags["CanBlockIsFalse"] || tc.Meta.Flags["CanBlockIsTrue"] {
-		return resultSkip, "no agent support"
-	}
-	// A test that asks the host for an agent is asking for something this
-	// host does not have, the same as a test tagged with a feature the engine
-	// does not implement. It is skipped rather than counted, and listed as not
-	// implemented.
-	if strings.Contains(tc.Source, "$262.agent") {
-		return resultSkip, "no agent support"
+	// The main agent can block, as a host that is not a browser's main
+	// thread can; a test for one that cannot is for another kind of host.
+	if tc.Meta.Flags["CanBlockIsFalse"] {
+		return resultSkip, "the main agent can block"
 	}
 
 	prelude, err := suite.Prelude(tc)
@@ -282,20 +276,28 @@ func runOne(suite *conformance.Suite, tc *conformance.Test,
 	// language it means is answered with the one the machine is set to, and a
 	// suite whose answers depend on whose machine is running it is no test at
 	// all.
-	rt := quickjs.New(
-		quickjs.WithMaxCallDepth(400),
-		quickjs.WithStackSize(64*1024),
-		quickjs.WithLocale("en-US"),
-	)
+	newRuntime := func() *quickjs.Runtime {
+		return quickjs.New(
+			quickjs.WithMaxCallDepth(400),
+			quickjs.WithStackSize(64*1024),
+			quickjs.WithLocale("en-US"),
+		)
+	}
+	rt := newRuntime()
 	defer rt.Close()
+	// Agents are runtimes of their own, stopped when the test is over.
+	agents := newAgentPool(newRuntime)
+	defer agents.stop()
+	if err := agents.install(rt); err != nil {
+		return resultSkip, "could not install $262.agent: " + err.Error()
+	}
 
 	// The suite's async tests report completion through print.
 	var printed []string
 	rt.Set("print", func(s string) { printed = append(printed, s) })
 
 	// $262 is the host object test262 expects. Only the parts this engine can
-	// honestly provide are defined; a test needing an agent is skipped above
-	// rather than being told a lie about what is here.
+	// honestly provide are defined.
 	rt.Set("detachArrayBuffer", func(rt *quickjs.Runtime, v quickjs.Value) error {
 		return rt.DetachArrayBuffer(v)
 	})
@@ -356,6 +358,7 @@ func runOne(suite *conformance.Suite, tc *conformance.Test,
 			AbstractModuleSource: abstractModuleSource,
 			IsHTMLDDA: isHTMLDDA,
 			createRealm: createRealm,
+			agent: ` + agentMain + `,
 			gc: function () { throw new Error("gc is not supported"); },
 		};
 	`); err != nil {

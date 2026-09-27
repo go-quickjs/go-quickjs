@@ -44,7 +44,7 @@ called in every language. It is held against a full ICU build:
 not is named.
 
 Of the 99,937 test262 variants in the areas the engine claims -- the language,
-the built-ins, `Intl` and Annex B -- 99,261 pass, none fail, and 676 are
+the built-ins, `Intl` and Annex B -- 99,393 pass, none fail, and 544 are
 skipped because they require an unsupported feature or host facility. See [Conformance](#conformance) for the
 measurement and [Not implemented](#not-implemented) for what is missing.
 
@@ -112,9 +112,11 @@ timing out a wait.
 A runtime can hold more than one realm, each with its own global object and
 intrinsics, and a function runs in the realm it was made in whoever calls it;
 test262's cross-realm tests run against it, and `ShadowRealm` and node's `vm`
-are built on it. There is one agent: a
-`SharedArrayBuffer` is not shared with another runtime, so nothing can notify
-an `Atomics.wait`, which ends when its timeout does.
+are built on it. A `SharedArrayBuffer`'s memory can be shared between
+runtimes running on different goroutines, each an agent of its own: `Atomics`
+operations on it are atomic in fact, and `Atomics.wait` in one agent is woken
+by `Atomics.notify` in another. test262's multi-agent tests run that way; a
+host has no API to share memory yet.
 
 Two things are left out on purpose, as QuickJS-NG leaves them out or as Node
 behaves:
@@ -155,8 +157,8 @@ rather than counted against it.
 By default it runs `language`, `built-ins`, `intl402` and `annexB`; `staging`
 holds proposals too early to claim, and `harness` tests the suite's own helpers.
 
-Measured coverage, as of the most recent run: 99,261 variants pass and none
-fail. The other 676 are skipped rather than counted: a test tagged with a
+Measured coverage, as of the most recent run: 99,393 variants pass and none
+fail. The other 544 are skipped rather than counted: a test tagged with a
 feature the engine does not implement, or one that asks the host for a second
 realm or an agent, is testing something that was never claimed.
 
