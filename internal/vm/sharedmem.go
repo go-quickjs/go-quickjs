@@ -43,10 +43,15 @@ type SharedMemory struct {
 	waiters map[int][]*waiter
 }
 
-// waiter is an agent waiting in Atomics.wait; notify closes wake.
+// waiter is an agent waiting: in Atomics.wait, which notify wakes by closing
+// wake, or in Atomics.waitAsync, which it tells by calling deliver.
 type waiter struct {
 	wake     chan struct{}
 	notified bool
+	// deliver and timer are an asynchronous waiter's: what settles its
+	// promise, and what does so when its time runs out.
+	deliver func(result string)
+	timer   *time.Timer
 }
 
 // alignedBytes allocates n bytes, and room for reserve, in 64-bit words.
@@ -275,14 +280,57 @@ func (m *SharedMemory) wait(at, size int, v uint64, timeout float64, done <-chan
 	if w.notified {
 		return true, true
 	}
+	m.remove(at, w)
+	return true, false
+}
+
+// remove takes a waiter off the list of a byte offset. The lock is held.
+func (m *SharedMemory) remove(at int, w *waiter) {
 	list := m.waiters[at]
 	for i, x := range list {
 		if x == w {
-			m.waiters[at] = append(list[:i:i], list[i+1:]...)
-			break
+			if len(list) == 1 {
+				delete(m.waiters, at)
+			} else {
+				m.waiters[at] = append(list[:i:i], list[i+1:]...)
+			}
+			return
 		}
 	}
-	return true, false
+}
+
+// waitAsync begins an asynchronous wait on the element at a byte offset. It
+// answers at once, with "not-equal" or -- for a timeout of zero -- with
+// "timed-out", or else returns "" and calls deliver later, from whichever
+// goroutine notifies it or finds its time is up, with "ok" or "timed-out".
+func (m *SharedMemory) waitAsync(at, size int, v uint64, timeout float64, deliver func(string)) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if sharedLoad(m.mem, at, size) != v&sizeMask(size) {
+		return "not-equal"
+	}
+	if timeout == 0 {
+		return "timed-out"
+	}
+	w := &waiter{deliver: deliver}
+	if m.waiters == nil {
+		m.waiters = make(map[int][]*waiter)
+	}
+	m.waiters[at] = append(m.waiters[at], w)
+	if !math.IsInf(timeout, 1) {
+		w.timer = time.AfterFunc(time.Duration(timeout*float64(time.Millisecond)), func() {
+			m.mu.Lock()
+			if w.notified {
+				m.mu.Unlock()
+				return
+			}
+			w.notified = true
+			m.remove(at, w)
+			m.mu.Unlock()
+			deliver("timed-out")
+		})
+	}
+	return ""
 }
 
 // notify wakes up to count of the agents waiting on a byte offset, the
@@ -297,7 +345,14 @@ func (m *SharedMemory) notify(at int, count float64) int {
 	}
 	for _, w := range list[:n] {
 		w.notified = true
-		close(w.wake)
+		if w.deliver == nil {
+			close(w.wake)
+			continue
+		}
+		if w.timer != nil {
+			w.timer.Stop()
+		}
+		w.deliver("ok")
 	}
 	if n == len(list) {
 		delete(m.waiters, at)

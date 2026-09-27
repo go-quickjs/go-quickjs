@@ -52,6 +52,7 @@ func New(cfg Config) *Runtime {
 		interruptCounter: interruptCheckInterval,
 		symbolRegistry:   make(map[string]*Symbol),
 		cleanups:         &cleanupQueue{},
+		hostJobs:         hostQueue{ready: make(chan struct{}, 1)},
 	}
 	r.Realm = newRealm(r)
 	r.initWellKnownSymbols()

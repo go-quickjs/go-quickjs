@@ -328,6 +328,42 @@ func (r *Runtime) initAtomicsBuiltins() {
 		return Str(NewString("timed-out")), nil
 	})
 
+	// waitAsync is wait without blocking: it answers at once when the value
+	// differs or the timeout is zero, and otherwise with a promise that the
+	// notify, or the time running out, settles -- on whatever goroutine that
+	// happens, and run on this runtime's.
+	r.defMethod(a, "waitAsync", 4, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		t, at, err := rt.atomicAccess(arg(args, 0), arg(args, 1), true, false, true)
+		if err != nil {
+			return Undefined, err
+		}
+		_, v, err := rt.atomicWaitOperand(t, arg(args, 2))
+		if err != nil {
+			return Undefined, err
+		}
+		q, err := rt.toNumber(arg(args, 3))
+		if err != nil {
+			return Undefined, err
+		}
+		timeout := math.Inf(1)
+		if !math.IsNaN(q) {
+			timeout = math.Max(q, 0)
+		}
+		result := newObject(rt.proto.object, ClassObject)
+		p := rt.newPromise()
+		deliver := func(outcome string) {
+			rt.postFromElsewhere(func() { rt.resolvePromise(p, Str(NewString(outcome))) })
+		}
+		if now := t.storage().block.waitAsync(at, t.info().size, v, timeout, deliver); now != "" {
+			result.setOwnRaw(rt.atoms.intern("async"), False, propWritable|propEnumerable|propConfigurable)
+			result.setOwnRaw(atomValue, Str(NewString(now)), propWritable|propEnumerable|propConfigurable)
+			return Obj(result), nil
+		}
+		result.setOwnRaw(rt.atoms.intern("async"), True, propWritable|propEnumerable|propConfigurable)
+		result.setOwnRaw(atomValue, Obj(p), propWritable|propEnumerable|propConfigurable)
+		return Obj(result), nil
+	})
+
 	r.defMethod(a, "notify", 3, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		t, at, err := rt.atomicAccess(arg(args, 0), arg(args, 1), true, false, false)
 		if err != nil {

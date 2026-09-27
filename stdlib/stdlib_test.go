@@ -2132,3 +2132,18 @@ func TestIntlLeavesAnExistingOneAlone(t *testing.T) {
 		t.Errorf("out = %q", got)
 	}
 }
+
+// TestLoopRunsWaitAsync pins that the settling of an Atomics.waitAsync is
+// run by the loop -- and that, as in node, a wait nothing else is keeping the
+// program alive for does not keep it alive.
+func TestLoopRunsWaitAsync(t *testing.T) {
+	out, _ := run(t, stdlib.Config{}, `
+		const i = new Int32Array(new SharedArrayBuffer(4));
+		Atomics.waitAsync(i, 0, 0, 10).value.then(v => console.log("first", v));
+		setTimeout(() => console.log("timer"), 200);
+		Atomics.waitAsync(i, 0, 0, 60000).value.then(v => console.log("never", v));
+	`)
+	if out != "first timed-out\ntimer" {
+		t.Errorf("output = %q", out)
+	}
+}

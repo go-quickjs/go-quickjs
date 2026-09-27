@@ -44,7 +44,7 @@ called in every language. It is held against a full ICU build:
 not is named.
 
 Of the 99,937 test262 variants in the areas the engine claims -- the language,
-the built-ins, `Intl` and Annex B -- 99,393 pass, none fail, and 544 are
+the built-ins, `Intl` and Annex B -- 99,595 pass, none fail, and 342 are
 skipped because they require an unsupported feature or host facility. See [Conformance](#conformance) for the
 measurement and [Not implemented](#not-implemented) for what is missing.
 
@@ -72,7 +72,7 @@ measurement and [Not implemented](#not-implemented) for what is missing.
 | Internationalization | `Intl.Locale`, `NumberFormat`, `DateTimeFormat`, `Collator`, `PluralRules`, `ListFormat`, `RelativeTimeFormat`, `DisplayNames`, `Segmenter`, `DurationFormat`, from [go-intl], with CLDR data for every locale ICU has |
 | Weak references | `WeakRef`, `FinalizationRegistry`, `WeakMap`, `WeakSet`, backed by Go's `weak.Pointer` and `runtime.AddCleanup`: a target really is released, and a registry really is called back |
 | Reflection | `Proxy` with every trap and its invariants, `Reflect`, property descriptors, mapped `arguments` |
-| Recent additions | Set operations, `Array.fromAsync`, `Object.groupBy`, `Promise.try`, `Promise.allKeyed`, `RegExp.escape`, `Error.isError`, `Math.sumPrecise`, `Uint8Array` base64 and hex, `Map` and `WeakMap`'s `getOrInsert`, `JSON.rawJSON` and a reviver's source text, `Atomics.pause`, `ShadowRealm` |
+| Recent additions | Set operations, `Array.fromAsync`, `Object.groupBy`, `Promise.try`, `Promise.allKeyed`, `RegExp.escape`, `Error.isError`, `Math.sumPrecise`, `Uint8Array` base64 and hex, `Map` and `WeakMap`'s `getOrInsert`, `JSON.rawJSON` and a reviver's source text, `Atomics.pause` and `Atomics.waitAsync`, `ShadowRealm` |
 | Eval | Direct `eval` runs in the caller's scope — its variables, `this`, `new.target` and `super`; indirect `eval` runs in global scope |
 | Go interop | Function binding, marshalling, `context.Context` cancellation |
 
@@ -106,8 +106,7 @@ Gregorian layout.
 
 ### Not implemented
 
-Decorators, and `Atomics.waitAsync`, which needs the host to provide a way of
-timing out a wait.
+Decorators.
 
 A runtime can hold more than one realm, each with its own global object and
 intrinsics, and a function runs in the realm it was made in whoever calls it;
@@ -115,8 +114,10 @@ test262's cross-realm tests run against it, and `ShadowRealm` and node's `vm`
 are built on it. A `SharedArrayBuffer`'s memory can be shared between
 runtimes running on different goroutines, each an agent of its own: `Atomics`
 operations on it are atomic in fact, and `Atomics.wait` in one agent is woken
-by `Atomics.notify` in another. test262's multi-agent tests run that way; a
-host has no API to share memory yet.
+by `Atomics.notify` in another -- or, for `Atomics.waitAsync`, has its promise
+settled on its own goroutine, by the host's event loop when it has one.
+test262's multi-agent tests run that way; a host has no API to share memory
+yet.
 
 Two things are left out on purpose, as QuickJS-NG leaves them out or as Node
 behaves:
@@ -157,8 +158,8 @@ rather than counted against it.
 By default it runs `language`, `built-ins`, `intl402` and `annexB`; `staging`
 holds proposals too early to claim, and `harness` tests the suite's own helpers.
 
-Measured coverage, as of the most recent run: 99,393 variants pass and none
-fail. The other 544 are skipped rather than counted: a test tagged with a
+Measured coverage, as of the most recent run: 99,595 variants pass and none
+fail. The other 342 are skipped rather than counted: a test tagged with a
 feature the engine does not implement, or one that asks the host for a second
 realm or an agent, is testing something that was never claimed.
 

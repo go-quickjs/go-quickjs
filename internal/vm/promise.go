@@ -288,8 +288,10 @@ func (r *Runtime) runJob(j job) {
 func (r *Runtime) DrainJobs() error {
 	const maxJobs = 1_000_000
 	// A finalization callback is a job of its own, and one queued by the
-	// collector between turns has no other moment to run.
+	// collector between turns has no other moment to run; so is what another
+	// goroutine has finished for the runtime.
 	r.runCleanups()
+	r.runHostJobs()
 	for n := 0; len(r.microtasks) > 0; n++ {
 		if n > maxJobs {
 			return r.throwRangeError("the microtask queue did not drain")
@@ -304,6 +306,7 @@ func (r *Runtime) DrainJobs() error {
 			// Between jobs is where a finalization callback belongs: it is a
 			// job of its own, and it may queue more.
 			r.runCleanups()
+			r.runHostJobs()
 		}
 	}
 	// The turn is over, so a rejection nothing has taken by now is one nothing

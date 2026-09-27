@@ -45,6 +45,7 @@ import (
 	"time"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
+	"github.com/go-quickjs/go-quickjs/internal/hostjobs"
 )
 
 // Loop runs the work a runtime has waiting: the microtasks a promise queues,
@@ -83,7 +84,11 @@ type Loop struct {
 
 // NewLoop returns a loop for a runtime.
 func NewLoop(rt *quickjs.Runtime) *Loop {
-	return &Loop{rt: rt, tasks: make(chan func(), 64), wake: make(chan struct{}, 1)}
+	l := &Loop{rt: rt, tasks: make(chan func(), 64), wake: make(chan struct{}, 1)}
+	// What another goroutine finishes for the runtime -- the settling of an
+	// Atomics.waitAsync -- is posted to the loop like any other work.
+	hostjobs.Attach(rt, l.Post)
+	return l
 }
 
 // Post hands work to the loop from another goroutine.

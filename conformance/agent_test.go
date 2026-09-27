@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/go-quickjs/go-quickjs"
+	"github.com/go-quickjs/go-quickjs/internal/hostjobs"
 	"github.com/go-quickjs/go-quickjs/internal/sharedmem"
 )
 
@@ -169,6 +170,9 @@ func (p *agentPool) run(a *agent, src string, started chan<- error) {
 	started <- nil
 	for {
 		select {
+		case <-hostjobs.Ready(rt):
+			// A waitAsync another agent settled, run with the test's time.
+			rt.EvalContext(p.ctx, "undefined")
 		case msg := <-a.inbox:
 			sab, err := sharedmem.Attach(rt, msg.mem)
 			a.taken <- struct{}{}

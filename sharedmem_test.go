@@ -6,6 +6,7 @@ import (
 	"time"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
+	"github.com/go-quickjs/go-quickjs/internal/hostjobs"
 	"github.com/go-quickjs/go-quickjs/internal/sharedmem"
 )
 
@@ -130,5 +131,54 @@ func TestSharedMemoryGrowth(t *testing.T) {
 	}
 	if _, _, err := sharedmem.Share(big); err == nil {
 		t.Error("a buffer with a 2 GiB maximum was shared")
+	}
+}
+
+// runHostJobs waits for work another goroutine finished for rt, and runs it.
+func runHostJobs(t *testing.T, rt *quickjs.Runtime) {
+	t.Helper()
+	select {
+	case <-hostjobs.Ready(rt):
+	case <-time.After(10 * time.Second):
+		t.Fatal("nothing arrived")
+	}
+	if err := rt.RunJobs(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestWaitAsync pins Atomics.waitAsync: an answer at once where there is
+// nothing to wait for, and otherwise a promise that the time running out, or
+// another agent's notify, settles on the waiting runtime's goroutine.
+func TestWaitAsync(t *testing.T) {
+	a, b := sharedPair(t, "new SharedArrayBuffer(8)")
+	v, err := a.Eval(`const i = new Int32Array(sab);
+		const r = [Atomics.waitAsync(i, 0, 1), Atomics.waitAsync(i, 0, 0, 0)];
+		JSON.stringify(r) + "," + Object.keys(r[0]).join()`)
+	if err != nil || v.String() != `[{"async":false,"value":"not-equal"},{"async":false,"value":"timed-out"}],async,value` {
+		t.Fatalf("= %v, %v", v, err)
+	}
+
+	// Out of time.
+	if _, err := a.Eval(`var outcome; const w = Atomics.waitAsync(i, 0, 0, 20);
+		w.value.then(v => { outcome = v }); if (!w.async) throw 0;`); err != nil {
+		t.Fatal(err)
+	}
+	runHostJobs(t, a)
+	if v, _ := a.Eval("outcome"); v.String() != "timed-out" {
+		t.Errorf("outcome = %v", v)
+	}
+
+	// Woken by another agent, which counts the waiter as it counts one that
+	// blocks.
+	if _, err := a.Eval(`outcome = undefined; Atomics.waitAsync(i, 0, 0).value.then(v => { outcome = v })`); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := b.Eval("Atomics.notify(new Int32Array(sab), 0)"); err != nil || v.Int() != 1 {
+		t.Fatalf("notify = %v, %v", v, err)
+	}
+	runHostJobs(t, a)
+	if v, _ := a.Eval("outcome"); v.String() != "ok" {
+		t.Errorf("outcome = %v", v)
 	}
 }

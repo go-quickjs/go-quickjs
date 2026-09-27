@@ -126,6 +126,8 @@ type Runtime struct {
 	// never run synchronously: that ordering guarantee is what makes a then
 	// callback observe a consistent world.
 	microtasks []job
+	// hostJobs is what other goroutines have finished for the runtime.
+	hostJobs hostQueue
 
 	// rng backs Math.random, created on first use.
 	rng *rand.Rand

@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/go-quickjs/go-quickjs"
 	"github.com/go-quickjs/go-quickjs/conformance"
+	"github.com/go-quickjs/go-quickjs/internal/hostjobs"
 )
 
 // The test262 conformance run.
@@ -68,7 +70,6 @@ const (
 // a failure, because it is testing something that was never claimed.
 var unsupportedFeatures = map[string]string{
 	"source-phase-imports-module-source": "JavaScript modules have no source",
-	"Atomics.waitAsync":                  "no asynchronous waiting",
 	"decorators":                         "decorators are not implemented",
 	"error-stack-accessor":               "Error stack is an own accessor, as in V8",
 	"caller":                             "no legacy caller access",
@@ -350,6 +351,19 @@ func runOne(suite *conformance.Suite, tc *conformance.Test,
 		}; $262`)
 	}
 	rt.Set("createRealm", createRealm)
+	// The tests of shared memory wait for agents with timers, which a host
+	// with an event loop would have and this one keeps for them: a timer
+	// calls back on the runtime's goroutine, when the runner next runs its
+	// jobs. Without one, atomicsHelper.js makes its own of promise reactions,
+	// which spin through the job queue for as long as the wait lasts.
+	waitsOnHost := slices.Contains(tc.Meta.Includes, "atomicsHelper.js")
+	if waitsOnHost {
+		rt.Set("setTimeout", func(cb quickjs.Value, delay float64) {
+			time.AfterFunc(time.Duration(delay*float64(time.Millisecond)), func() {
+				hostjobs.Post(rt, func() { cb.Call() })
+			})
+		})
+	}
 	if _, err := rt.Eval(`
 		var $262 = {
 			global: globalThis,
@@ -415,6 +429,23 @@ func runOne(suite *conformance.Suite, tc *conformance.Test,
 	} else {
 		_, runErr = rt.EvalContext(ctx, source)
 	}
+	// An async test that waits on the host goes on running what the host
+	// finishes for it -- a timer, a waitAsync another agent settled -- until
+	// it says it is done, or its time is up.
+	if runErr == nil && waitsOnHost && tc.Meta.Flags["async"] {
+	wait:
+		for !asyncFinished(printed) {
+			select {
+			case <-hostjobs.Ready(rt):
+				if _, runErr = rt.EvalContext(ctx, "undefined"); runErr != nil {
+					break wait
+				}
+			case <-ctx.Done():
+				runErr = ctx.Err()
+				break wait
+			}
+		}
+	}
 	if runErr != nil && errors.Is(runErr, context.DeadlineExceeded) {
 		return resultFail, "timed out"
 	}
@@ -446,6 +477,16 @@ func runOne(suite *conformance.Suite, tc *conformance.Test,
 		return resultFail, "the async test did not complete"
 	}
 	return resultPass, ""
+}
+
+// asyncFinished reports whether an async test has printed that it is done.
+func asyncFinished(printed []string) bool {
+	for _, line := range printed {
+		if line == "Test262:AsyncTestComplete" || strings.HasPrefix(line, "Test262:AsyncTestFailure") {
+			return true
+		}
+	}
+	return false
 }
 
 // matchesNegative reports whether an error is the failure the test expected.
