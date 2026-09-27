@@ -104,7 +104,7 @@ func installWorkers(rt *quickjs.Runtime, cfg Config, m *messaging, events quickj
 	h := &workerHost{rt: rt, cfg: cfg, m: m, loop: cfg.Loop, self: cfg.worker, workers: map[*workerHandle]bool{}}
 	if cfg.Workers != nil && cfg.Loop != nil {
 		// A runtime whose loop is closed has no use for its workers.
-		cfg.Loop.onClose(h.terminateAll)
+		context.AfterFunc(cfg.Loop.Context(), h.terminateAll)
 	}
 	host := rt.NewObject()
 	if err := setAll(host, map[string]any{

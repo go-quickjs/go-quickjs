@@ -201,6 +201,10 @@ func (v Value) Bytes() ([]byte, bool) {
 // Promise is a promise a host settles, which is how a host operation that
 // finishes later is handed to script.
 //
+// A promise cannot be cancelled, and has no lifetime of its own: the work
+// that settles it belongs to the runtime, and is started with the runtime's
+// Context, which Close cancels.
+//
 // Settling it queues the reactions rather than running them, exactly as
 // settling a promise from script does: they run when the job queue is next
 // drained, which Eval does before returning and which RunJobs does on demand.

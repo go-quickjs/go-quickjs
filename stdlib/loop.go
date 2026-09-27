@@ -83,14 +83,16 @@ type Loop struct {
 	// failed is an exception that work posted from elsewhere raised and
 	// nothing caught, which Run returns as it returns one a timer raises.
 	failed error
-	// closers run when the loop is closed: they stop the workers the runtime
-	// started.
-	closers []func()
+
+	// ctx is the loop's lifetime: its runtime's, ended early by Close.
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // NewLoop returns a loop for a runtime.
 func NewLoop(rt *quickjs.Runtime) *Loop {
 	l := &Loop{rt: rt, tasks: make(chan func(), 64), wake: make(chan struct{}, 1)}
+	l.ctx, l.cancel = context.WithCancel(rt.Context())
 	// What another goroutine finishes for the runtime -- the settling of an
 	// Atomics.waitAsync -- is posted to the loop like any other work.
 	hostjobs.Attach(rt, l.Post)
@@ -178,20 +180,26 @@ func (l *Loop) Pending() bool {
 func (l *Loop) Close() {
 	l.mu.Lock()
 	l.closed = true
-	closers := l.closers
-	l.closers = nil
 	l.mu.Unlock()
-	for _, fn := range closers {
-		fn()
-	}
+	l.cancel()
 	l.nudge()
 }
 
-// onClose has fn run when the loop is closed.
-func (l *Loop) onClose(fn func()) {
-	l.mu.Lock()
-	l.closers = append(l.closers, fn)
-	l.mu.Unlock()
+// Context is cancelled when the loop is closed, or its runtime is. What the
+// standard library started for the script stops then -- a request is
+// abandoned, a program killed, a socket and a server closed, a worker
+// terminated -- and a host's own functions should start their work with it
+// too, rather than finishing it for a runtime that is gone. Run's context is
+// not this: a Run that ends may be followed by another. It is safe to call
+// from any goroutine.
+func (l *Loop) Context() context.Context { return l.ctx }
+
+// loopContext is a loop's context, or the background for none.
+func loopContext(l *Loop) context.Context {
+	if l == nil {
+		return context.Background()
+	}
+	return l.ctx
 }
 
 // Run works until there is nothing left to do.

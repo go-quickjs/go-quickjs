@@ -150,20 +150,31 @@ func (r *runner) start(name string, args []string, dir string, env map[string]st
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 
-	var waitErr error
+	// A program is killed when it runs too long, or when the runtime it was
+	// started for is closed.
+	var timeout <-chan time.Time
 	if r.cfg.Timeout > 0 {
-		select {
-		case waitErr = <-done:
-		case <-time.After(r.cfg.Timeout):
-			cmd.Process.Kill()
-			<-done
-			return &result{
-				stdout: out.Bytes(), stderr: errOut.Bytes(), code: -1,
-				err: fmt.Errorf("%s took longer than %s", name, r.cfg.Timeout),
-			}
+		timer := time.NewTimer(r.cfg.Timeout)
+		defer timer.Stop()
+		timeout = timer.C
+	}
+	var waitErr error
+	select {
+	case waitErr = <-done:
+	case <-timeout:
+		cmd.Process.Kill()
+		<-done
+		return &result{
+			stdout: out.Bytes(), stderr: errOut.Bytes(), code: -1,
+			err: fmt.Errorf("%s took longer than %s", name, r.cfg.Timeout),
 		}
-	} else {
-		waitErr = <-done
+	case <-loopContext(r.cfg.Loop).Done():
+		cmd.Process.Kill()
+		<-done
+		return &result{
+			stdout: out.Bytes(), stderr: errOut.Bytes(), code: -1,
+			err: fmt.Errorf("%s was stopped: the runtime was closed", name),
+		}
 	}
 
 	res := &result{stdout: out.Bytes(), stderr: errOut.Bytes()}

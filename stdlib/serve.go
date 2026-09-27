@@ -189,6 +189,9 @@ func (s *servers) listen(opts quickjs.Value, dispatch quickjs.Value) (quickjs.Va
 	var closeOnce sync.Once
 
 	srv := &http.Server{
+		// A request waiting on a handler stops waiting when the runtime
+		// that would answer it is closed.
+		BaseContext:       func(net.Listener) context.Context { return loop.Context() },
 		ReadHeaderTimeout: readTimeout,
 		IdleTimeout:       idleTimeout,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -292,6 +295,8 @@ func (s *servers) listen(opts quickjs.Value, dispatch quickjs.Value) (quickjs.Va
 			loop.Done()
 		})
 	}
+	// A server stops listening when its runtime is closed.
+	context.AfterFunc(loop.Context(), closer)
 
 	out := s.rt.NewObject()
 	addr := listener.Addr().(*net.TCPAddr)

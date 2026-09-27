@@ -461,6 +461,12 @@ request before it is made, `Serve.Allow` every address before it is listened on,
 and `Run.Allow` every program before it is started. What is not installed cannot
 be reached.
 
+Nor does anything outlive the runtime it was started for. `Runtime.Context` is
+cancelled by `Close`, and `Loop.Context` by that or by the loop's own `Close`:
+a request in flight is abandoned, a program killed, a socket and a server
+closed, and a worker terminated. A host's own asynchronous functions start
+their work with the same context.
+
 A server's handler is script, so it runs on the loop; the connections are served
 on their own goroutines and wait for it. A program that is given the environment
 is the one that passes it on: `Run.Env` is what a started program sees, and nil

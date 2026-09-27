@@ -2,6 +2,7 @@ package stdlib
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -117,6 +118,9 @@ type socket struct {
 	// opened settles when the handshake has finished, one way or the other.
 	opened *quickjs.Promise
 	conn   *wsConn
+	// unwatch stops the connection being closed with the runtime, once it
+	// has been closed anyway.
+	unwatch func() bool
 
 	mu     sync.Mutex
 	queue  []outgoing
@@ -178,7 +182,7 @@ func (h *wsHost) connect(rawURL string, protocols quickjs.Value) (quickjs.Value,
 	loop.Begin()
 	go func() {
 		defer loop.Done()
-		conn, protocol, err := dialWebSocket(target, names, timeout, tlsCfg, limit)
+		conn, protocol, err := dialWebSocket(loop.Context(), target, names, timeout, tlsCfg, limit)
 		loop.Post(func() {
 			if err != nil {
 				s.opened.RejectError(err)
@@ -261,6 +265,8 @@ func (s *socket) start(conn *wsConn) {
 	// The loop is held open while the socket is: a program whose last act is
 	// to open one is waiting for what comes back.
 	s.loop.Begin()
+	// And the connection is closed with the runtime.
+	s.unwatch = context.AfterFunc(s.loop.Context(), conn.close)
 	go s.writing()
 }
 
@@ -431,6 +437,9 @@ func (s *socket) finish() {
 	if s.conn != nil {
 		s.conn.close()
 	}
+	if s.unwatch != nil {
+		s.unwatch()
+	}
 	s.releaseLoop()
 }
 
@@ -445,7 +454,7 @@ func (s *socket) releaseLoop() {
 
 // dialWebSocket opens the connection and does the handshake. It touches no
 // JavaScript value, which is what lets it run on another goroutine.
-func dialWebSocket(target *url.URL, protocols []string, timeout time.Duration, tlsCfg *tls.Config, limit int) (*wsConn, string, error) {
+func dialWebSocket(ctx context.Context, target *url.URL, protocols []string, timeout time.Duration, tlsCfg *tls.Config, limit int) (*wsConn, string, error) {
 	host := target.Host
 	if target.Port() == "" {
 		if target.Scheme == "wss" {
@@ -459,9 +468,9 @@ func dialWebSocket(target *url.URL, protocols []string, timeout time.Duration, t
 	var conn net.Conn
 	var err error
 	if target.Scheme == "wss" {
-		conn, err = tls.DialWithDialer(dialer, "tcp", host, tlsCfg)
+		conn, err = (&tls.Dialer{NetDialer: dialer, Config: tlsCfg}).DialContext(ctx, "tcp", host)
 	} else {
-		conn, err = dialer.Dial("tcp", host)
+		conn, err = dialer.DialContext(ctx, "tcp", host)
 	}
 	if err != nil {
 		return nil, "", err

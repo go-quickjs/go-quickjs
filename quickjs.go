@@ -90,6 +90,9 @@ type Runtime struct {
 	// posting is the engine that work from other goroutines is posted to,
 	// until the runtime is closed: the one field another goroutine reads.
 	posting atomic.Pointer[vm.Runtime]
+	// ctx is the runtime's lifetime, which Close ends.
+	ctx    context.Context
+	cancel context.CancelFunc
 	// nodeQuirks is WithNodeQuirks, which the parser and compiler are told.
 	nodeQuirks bool
 	// noCodeGeneration is WithoutCodeGeneration, which node:vm respects too.
@@ -176,6 +179,7 @@ func New(opts ...Option) *Runtime {
 	}), nodeQuirks: c.nodeQuirks, noCodeGeneration: c.noCodeGeneration}
 	r.rt.Host = r
 	r.posting.Store(r.rt)
+	r.ctx, r.cancel = context.WithCancel(context.Background())
 	if !c.noCodeGeneration {
 		r.installCodeGeneration()
 	}
@@ -188,7 +192,22 @@ func (r *Runtime) Close() error {
 	r.closed = true
 	r.posting.Store(nil)
 	r.rt = nil
+	if r.cancel != nil {
+		r.cancel()
+	}
 	return nil
+}
+
+// Context is the runtime's lifetime: it is cancelled when the runtime is
+// closed. A host function that starts work for the script -- a request, a
+// program, anything that settles a Promise later -- starts it with this
+// context, so that closing the runtime stops the work rather than leaving it
+// to finish for no one. It is safe to call from any goroutine.
+func (r *Runtime) Context() context.Context {
+	if r.ctx == nil {
+		return context.Background()
+	}
+	return r.ctx
 }
 
 // ErrClosed is returned by a Runtime that has been closed.
@@ -216,6 +235,9 @@ func (r *Runtime) guard(err *error) {
 	}
 	r.closed = true
 	r.posting.Store(nil)
+	if r.cancel != nil {
+		r.cancel()
+	}
 	*err = fmt.Errorf("%w: %v\n%s", ErrInternal, p, debug.Stack())
 }
 

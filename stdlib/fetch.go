@@ -90,7 +90,8 @@ func Network(rt *quickjs.Runtime, cfg *Fetch) error {
 		// The script is given a way to cancel what is about to be sent, which
 		// it hangs on its abort signal. Cancelling stops the request wherever
 		// it has got to rather than merely ignoring the answer.
-		spec.ctx, spec.cancel = context.WithCancel(context.Background())
+		// Nor does a request outlive the runtime it was made for.
+		spec.ctx, spec.cancel = context.WithCancel(loopContext(cfg.Loop))
 		if register.IsFunction() {
 			if _, err := register.Call(func() { spec.cancel() }); err != nil {
 				spec.cancel()
