@@ -246,9 +246,9 @@ func sharedUpdate(b []byte, at, size int, op func(old uint64) uint64) uint64 {
 // --- Waiting -------------------------------------------------------------------
 
 // wait blocks while the element at a byte offset holds v, until another agent
-// notifies it, the time runs out, or done is closed. It reports whether it
-// waited at all, and whether it was notified.
-func (m *SharedMemory) wait(at, size int, v uint64, timeout float64, done <-chan struct{}) (waited, notified bool) {
+// notifies it, the time runs out, or done or abort is closed. It reports
+// whether it waited at all, and whether it was notified.
+func (m *SharedMemory) wait(at, size int, v uint64, timeout float64, done, abort <-chan struct{}) (waited, notified bool) {
 	m.mu.Lock()
 	if sharedLoad(m.mem, at, size) != v&sizeMask(size) {
 		m.mu.Unlock()
@@ -272,6 +272,7 @@ func (m *SharedMemory) wait(at, size int, v uint64, timeout float64, done <-chan
 		return true, true
 	case <-timer:
 	case <-done:
+	case <-abort:
 	}
 	// Out of time, or stopped: the waiter leaves the list -- unless a notify
 	// took it off first, which then counts.

@@ -207,6 +207,10 @@ qjs --allow-run=git release.js           start programs, or only some
 qjs -A script.js                         all of it, for code you trust
 ```
 
+A worker is started as in node -- `new Worker("./work.mjs")` from
+`node:worker_threads`, or the web's `new Worker(url)` -- and is given what the
+program was given: the same flags hold for it.
+
 A script that reaches for something it was not given is told which flag would
 have given it, rather than finding a hole where a function should be:
 
@@ -427,6 +431,7 @@ loop.Run(ctx)     // timers, and work that finished on other goroutines
 | `Serve` | `serve`, the `http` module — an HTTP server whose handler is `(Request) => Response` |
 | `Sockets` | `WebSocket`, and `upgradeWebSocket` where there is a server to accept one on |
 | `Run` | the `child_process` module: `execFileSync`, `execFile`, `spawnSync`, `exec` |
+| `Workers` | `Worker`, and `node:worker_threads`' — each worker a runtime of its own on a goroutine of its own, installed with the same `Config` |
 
 `structuredClone` and a `MessagePort`'s `postMessage` clone as V8 does, word
 for word where they refuse: an object is read by what it is rather than what it
@@ -435,6 +440,20 @@ moves, and a `SharedArrayBuffer` is shared. A port posted through another
 arrives with what was sent to it on the way. As in a browser, a port dispatches
 once it is started -- by `start()` or by setting `onmessage` -- and, as in node,
 a started port keeps the `Loop` running until it is closed or `unref()`'d.
+`BroadcastChannel` reaches every channel of its name in the process.
+
+A worker talks to the runtime that started it through such a port, so a
+`SharedArrayBuffer` posted to it is memory the two share -- `Atomics.wait` in
+one, `Atomics.notify` in the other -- and a port posted to it is a line to
+anywhere. The host says how a worker's runtime is made and where its code comes
+from; `terminate()` stops it whatever it is doing.
+
+```go
+Workers: &stdlib.Workers{
+    New:  func() (*quickjs.Runtime, error) { return newRuntime(), nil },
+    Load: func(spec string) (src, name string, module bool, err error) { ... },
+},
+```
 
 A root is a boundary: a path that climbs out of it, or a symbolic link that
 points out of it, is refused rather than followed. `Fetch.Allow` sees every
@@ -575,7 +594,9 @@ backtracking regular expression fails with an error rather than stalling.
 ## Concurrency
 
 A `Runtime` is not safe for concurrent use. Give each goroutine its own, which
-also isolates untrusted scripts from one another.
+also isolates untrusted scripts from one another. Runtimes share nothing unless
+a host shares it: a `SharedArrayBuffer`, or a message, which `stdlib`'s workers
+post.
 
 ## Design notes
 

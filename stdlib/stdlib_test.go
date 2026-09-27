@@ -38,6 +38,9 @@ func run(t *testing.T, cfg stdlib.Config, src string) (string, string) {
 	if err := stdlib.Install(rt, cfg); err != nil {
 		t.Fatal(err)
 	}
+	if err := requireWorkerThreads(rt); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := rt.Eval(src); err != nil {
 		t.Fatalf("%v", err)
 	}

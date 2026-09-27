@@ -25,11 +25,13 @@ import (
 // runs its jobs; installed by Install, a port that is listening keeps the
 // Loop running, as node's does, until it is closed or unref'd.
 func WebAPIs(rt *quickjs.Runtime, random io.Reader) error {
-	return webAPIs(rt, random, nil)
+	_, err := webAPIs(rt, random, nil)
+	return err
 }
 
-// webAPIs is WebAPIs, with the loop a listening MessagePort keeps running.
-func webAPIs(rt *quickjs.Runtime, random io.Reader, loop *Loop) error {
+// webAPIs is WebAPIs, with the loop a listening MessagePort keeps running. It
+// returns the runtime's messaging, which its workers talk through.
+func webAPIs(rt *quickjs.Runtime, random io.Reader, loop *Loop) (*messaging, error) {
 	if random == nil {
 		random = rand.Reader
 	}
@@ -88,16 +90,16 @@ func webAPIs(rt *quickjs.Runtime, random io.Reader, loop *Loop) error {
 			return r.NewBytes(sum), nil
 		},
 	}); err != nil {
-		return err
+		return nil, err
 	}
 	m := &messaging{rt: rt, loop: loop, ports: map[int]*portEnd{}}
 	if err := setAll(host, m.host()); err != nil {
-		return err
+		return nil, err
 	}
 
 	api, err := evalWithHost(rt, "<webapis>", webAPIsJS, host)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// Each name goes on the global object, which is where a program written for
 	// a browser looks for it.
@@ -106,17 +108,17 @@ func webAPIs(rt *quickjs.Runtime, random io.Reader, loop *Loop) error {
 		"atob", "btoa", "structuredClone", "performance", "crypto",
 		"AbortController", "AbortSignal", "Event", "EventTarget",
 		"Blob", "File", "FormData", "URLPattern",
-		"DOMException", "MessageChannel", "MessagePort", "MessageEvent",
+		"DOMException", "MessageChannel", "MessagePort", "MessageEvent", "BroadcastChannel",
 	} {
 		v, err := api.Get(name)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if err := rt.Set(name, v); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return m, nil
 }
 
 // decodeBase64Loosely decodes what atob accepts: padding is optional, and
@@ -1240,8 +1242,45 @@ const webAPIsJS = `(function (host) {
       portIdOf(this);
       portHandlers.get(this).messageerror = typeof fn === "function" ? fn : null;
     }
+
+    // Node's ports are its event emitters too, whose listeners are given a
+    // message's data rather than its event -- which is how parentPort is
+    // listened to -- and a message listener starts the port.
+    on(type, fn) { return this.addListener(type, fn); }
+    addListener(type, fn) { nodeListen(this, type, fn, false); return this; }
+    once(type, fn) { nodeListen(this, type, fn, true); return this; }
+    off(type, fn) { return this.removeListener(type, fn); }
+    removeListener(type, fn) {
+      const list = nodeListeners.get(this) || [];
+      const at = list.findIndex((l) => l.type === String(type) && l.fn === fn);
+      if (at >= 0) {
+        this.removeEventListener(list[at].type, list[at].listener);
+        list.splice(at, 1);
+      }
+      return this;
+    }
+    removeAllListeners(type) {
+      const list = nodeListeners.get(this) || [];
+      for (const l of list.slice()) {
+        if (type === undefined || l.type === String(type)) this.removeListener(l.type, l.fn);
+      }
+      return this;
+    }
   }
   Object.defineProperty(MessagePort.prototype, Symbol.toStringTag, {value: "MessagePort", configurable: true});
+
+  const nodeListeners = new WeakMap();
+  function nodeListen(port, type, fn, once) {
+    type = String(type);
+    const call = type === "message" || type === "messageerror" ? (e) => fn.call(port, e.data)
+      : type === "close" ? () => fn.call(port) : (e) => fn.call(port, e);
+    const listener = once ? (e) => { port.removeListener(type, fn); call(e); } : call;
+    let list = nodeListeners.get(port);
+    if (!list) nodeListeners.set(port, list = []);
+    list.push({type, fn, listener});
+    port.addEventListener(type, listener);
+    if (type === "message") port.start();
+  }
 
   class MessageChannel {
     constructor() {
@@ -1271,7 +1310,64 @@ const webAPIsJS = `(function (host) {
     port.dispatchEvent(type === "close" ? new Event("close") : new MessageEvent(type, {data, ports}));
   }
 
-  host.bindMessaging((id) => new MessagePort(makingPort, id), newDOMException, hostKind, deliver);
+  // receiveMessageOnPort takes the next message waiting on a port, if there
+  // is one, as node's worker_threads does.
+  function receiveMessageOnPort(port) {
+    const id = portIds.get(port);
+    if (id === undefined) {
+      const e = new TypeError('The "port" argument must be a MessagePort instance');
+      e.code = "ERR_INVALID_ARG_TYPE";
+      throw e;
+    }
+    const got = host.portReceive(id);
+    return got === null ? undefined : {message: got[0]};
+  }
+
+  host.bindMessaging((id) => new MessagePort(makingPort, id), newDOMException, hostKind, deliver,
+    receiveMessageOnPort);
+
+  // --- BroadcastChannel ----------------------------------------------------
+
+  const broadcastState = new WeakMap();
+  function broadcastOf(bc) {
+    const s = broadcastState.get(bc);
+    if (s === undefined) throw new TypeError('Value of "this" must be of type BroadcastChannel');
+    return s;
+  }
+
+  // A BroadcastChannel hears what the others of its name -- in this runtime
+  // and in its workers -- post.
+  class BroadcastChannel extends EventTarget {
+    constructor(name) {
+      if (arguments.length === 0) {
+        const e = new TypeError('The "name" argument must be specified');
+        e.code = "ERR_MISSING_ARGS";
+        throw e;
+      }
+      super();
+      const s = {name: String(name), onmessage: null, onmessageerror: null};
+      broadcastState.set(this, s);
+      s.id = host.broadcastOpen(s.name, this);
+    }
+    get name() { return broadcastOf(this).name; }
+    postMessage(message) {
+      const s = broadcastOf(this);
+      if (arguments.length === 0) {
+        const e = new TypeError('The "message" argument must be specified');
+        e.code = "ERR_MISSING_ARGS";
+        throw e;
+      }
+      host.broadcastPost(s.id, message);
+    }
+    close() { host.portClose(broadcastOf(this).id); }
+    ref() { host.portRef(broadcastOf(this).id, true); return this; }
+    unref() { host.portRef(broadcastOf(this).id, false); return this; }
+    get onmessage() { return broadcastOf(this).onmessage; }
+    set onmessage(fn) { broadcastOf(this).onmessage = typeof fn === "function" ? fn : null; }
+    get onmessageerror() { return broadcastOf(this).onmessageerror; }
+    set onmessageerror(fn) { broadcastOf(this).onmessageerror = typeof fn === "function" ? fn : null; }
+  }
+  Object.defineProperty(BroadcastChannel.prototype, Symbol.toStringTag, {value: "BroadcastChannel", configurable: true});
 
   // --- Cloning -------------------------------------------------------------
 
@@ -1349,6 +1445,6 @@ const webAPIsJS = `(function (host) {
     structuredClone, performance, crypto,
     AbortController, AbortSignal, Event, EventTarget,
     Blob, File, FormData, URLPattern,
-    DOMException, MessageChannel, MessagePort, MessageEvent,
+    DOMException, MessageChannel, MessagePort, MessageEvent, BroadcastChannel,
   };
 })`

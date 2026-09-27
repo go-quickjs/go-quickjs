@@ -71,6 +71,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
@@ -86,6 +87,9 @@ import (
 type Runtime struct {
 	rt     *vm.Runtime
 	closed bool
+	// posting is the engine that work from other goroutines is posted to,
+	// until the runtime is closed: the one field another goroutine reads.
+	posting atomic.Pointer[vm.Runtime]
 	// nodeQuirks is WithNodeQuirks, which the parser and compiler are told.
 	nodeQuirks bool
 	// noCodeGeneration is WithoutCodeGeneration, which node:vm respects too.
@@ -171,6 +175,7 @@ func New(opts ...Option) *Runtime {
 		NodeQuirks:   c.nodeQuirks,
 	}), nodeQuirks: c.nodeQuirks, noCodeGeneration: c.noCodeGeneration}
 	r.rt.Host = r
+	r.posting.Store(r.rt)
 	if !c.noCodeGeneration {
 		r.installCodeGeneration()
 	}
@@ -181,6 +186,7 @@ func New(opts ...Option) *Runtime {
 // from every method.
 func (r *Runtime) Close() error {
 	r.closed = true
+	r.posting.Store(nil)
 	r.rt = nil
 	return nil
 }
@@ -209,6 +215,7 @@ func (r *Runtime) guard(err *error) {
 		return
 	}
 	r.closed = true
+	r.posting.Store(nil)
 	*err = fmt.Errorf("%w: %v\n%s", ErrInternal, p, debug.Stack())
 }
 
@@ -361,14 +368,7 @@ func (r *Runtime) wrapError(err error) error {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("quickjs: execution interrupted: %w", err)
 	}
-	var thrown *vm.Thrown
-	if errors.As(err, &thrown) {
-		return &Error{
-			value: Value{v: thrown.Value, rt: r.rt},
-			stack: thrown.Stack,
-		}
-	}
-	return err
+	return wrapThrown(r.rt, err)
 }
 
 // SetClock installs the source of the current time that Date and Date.now read.

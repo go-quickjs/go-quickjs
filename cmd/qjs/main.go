@@ -25,9 +25,11 @@ package main
 import (
 	"cmp"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -93,20 +95,7 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	rtOpts := []quickjs.Option{}
-	if opts.memoryLimit > 0 {
-		rtOpts = append(rtOpts, quickjs.WithMemoryLimit(opts.memoryLimit))
-	}
-	if opts.stackSize > 0 {
-		rtOpts = append(rtOpts, quickjs.WithStackSize(opts.stackSize))
-	}
-	if opts.nodeQuirks {
-		rtOpts = append(rtOpts, quickjs.WithNodeQuirks())
-	}
-	if opts.noCodegen {
-		rtOpts = append(rtOpts, quickjs.WithoutCodeGeneration())
-	}
-	rt := quickjs.New(rtOpts...)
+	rt := newRuntime(opts)
 	defer rt.Close()
 
 	loop := stdlib.NewLoop(rt)
@@ -115,20 +104,6 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "qjs:", err)
 		return 1
 	}
-	setModuleLoader(rt)
-
-	// What a module is told about itself: where it came from, in the forms
-	// node offers, so that the usual ways of finding a file beside a module
-	// work.
-	rt.OnImportMeta(func(specifier string, meta quickjs.Value) {
-		if !filepath.IsAbs(specifier) {
-			meta.Set("url", specifier)
-			return
-		}
-		meta.Set("url", fileURL(specifier))
-		meta.Set("filename", specifier)
-		meta.Set("dirname", filepath.Dir(specifier))
-	})
 
 	// A rejection nothing took is a failure of the program, as it is in node:
 	// it is reported where it happened and the exit code says so, rather than
@@ -186,6 +161,98 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// newRuntime makes a runtime as the options say, able to import files: the
+// program's, and each of its workers'.
+func newRuntime(opts *options) *quickjs.Runtime {
+	rtOpts := []quickjs.Option{}
+	if opts.memoryLimit > 0 {
+		rtOpts = append(rtOpts, quickjs.WithMemoryLimit(opts.memoryLimit))
+	}
+	if opts.stackSize > 0 {
+		rtOpts = append(rtOpts, quickjs.WithStackSize(opts.stackSize))
+	}
+	if opts.nodeQuirks {
+		rtOpts = append(rtOpts, quickjs.WithNodeQuirks())
+	}
+	if opts.noCodegen {
+		rtOpts = append(rtOpts, quickjs.WithoutCodeGeneration())
+	}
+	rt := quickjs.New(rtOpts...)
+	setModuleLoader(rt)
+
+	// What a module is told about itself: where it came from, in the forms
+	// node offers, so that the usual ways of finding a file beside a module
+	// work.
+	rt.OnImportMeta(func(specifier string, meta quickjs.Value) {
+		if !filepath.IsAbs(specifier) {
+			meta.Set("url", specifier)
+			return
+		}
+		meta.Set("url", fileURL(specifier))
+		meta.Set("filename", specifier)
+		meta.Set("dirname", filepath.Dir(specifier))
+	})
+	return rt
+}
+
+// loadWorker reads a worker's code, as node does: a path relative to the
+// working directory, a file URL, or a data URL, which is a module.
+func loadWorker(specifier string) (string, string, bool, error) {
+	if strings.HasPrefix(specifier, "data:") {
+		src, err := decodeDataURL(specifier)
+		return src, specifier, true, err
+	}
+	path, err := localPath(specifier, cwd())
+	if err != nil {
+		return "", "", false, err
+	}
+	src, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", "", false, fmt.Errorf("Cannot find module '%s'", path)
+	}
+	if err != nil {
+		return "", "", false, err
+	}
+	return string(src), path, moduleByName(path, string(src)), nil
+}
+
+// decodeDataURL is the text a data URL holds.
+func decodeDataURL(spec string) (string, error) {
+	meta, payload, ok := strings.Cut(strings.TrimPrefix(spec, "data:"), ",")
+	if !ok {
+		return "", fmt.Errorf("the data URL %q has no data", spec)
+	}
+	if strings.HasSuffix(meta, ";base64") {
+		b, err := base64.StdEncoding.DecodeString(payload)
+		return string(b), err
+	}
+	return url.PathUnescape(payload)
+}
+
+// localPath is the absolute path a specifier names: a file URL, or a path,
+// which is relative to base.
+func localPath(specifier, base string) (string, error) {
+	path := specifier
+	if strings.HasPrefix(specifier, "file:") {
+		u, err := url.Parse(specifier)
+		if err != nil {
+			return "", err
+		}
+		path = u.Path
+		if u.Host != "" && u.Host != "localhost" {
+			path = `\\` + u.Host + filepath.FromSlash(path)
+		} else if len(path) >= 3 && path[0] == '/' && path[2] == ':' {
+			// file:///C:/x names C:/x.
+			path = path[1:]
+		}
+		path = filepath.FromSlash(path)
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(base, path)
+	}
+	return filepath.Abs(path)
 }
 
 // fileURL writes an absolute native path as a file URL. Drive-letter paths
@@ -318,6 +385,15 @@ func install(rt *quickjs.Runtime, loop *stdlib.Loop, opts *options, stdin io.Rea
 				return fmt.Errorf("%s is not allowed: pass --allow-net=%s", host, host)
 			},
 		}
+	}
+	// A worker is a runtime of its own, made as this one is and given what
+	// this one is given.
+	cfg.Workers = &stdlib.Workers{
+		New: func() (*quickjs.Runtime, error) { return newRuntime(opts), nil },
+		Installed: func(rt *quickjs.Runtime) error {
+			return explainMissing(rt, opts)
+		},
+		Load: loadWorker,
 	}
 	if err := stdlib.Install(rt, cfg); err != nil {
 		return err
@@ -464,6 +540,12 @@ func (o *options) isModule(name, src string) bool {
 	if o.script {
 		return false
 	}
+	return moduleByName(name, src)
+}
+
+// moduleByName is isModule without the flags, which are about the program's
+// own file: what a worker's is, its name and its source say.
+func moduleByName(name, src string) bool {
 	switch strings.ToLower(filepath.Ext(name)) {
 	case ".mjs":
 		return true
@@ -788,15 +870,13 @@ func setModuleLoader(rt *quickjs.Runtime) {
 			return "", "", fmt.Errorf(
 				"%q is not a module this runtime has; imports of files are written as paths", specifier)
 		}
-		path := strings.TrimPrefix(specifier, "file://")
-		if !filepath.IsAbs(path) {
-			base := filepath.Dir(referrer)
-			if referrer == "" || referrer == "<cmdline>" || referrer == "<stdin>" {
-				base = cwd()
-			}
-			path = filepath.Join(base, path)
+		base := filepath.Dir(referrer)
+		if !filepath.IsAbs(referrer) {
+			// A script from the command line or stdin, or a worker's eval
+			// code, imports from the working directory.
+			base = cwd()
 		}
-		resolved, err := filepath.Abs(path)
+		resolved, err := localPath(specifier, base)
 		if err != nil {
 			return "", "", err
 		}
@@ -1023,6 +1103,7 @@ what the script may do (nothing, unless said here):
       --allow-env         read the environment
       --allow-run[=LIST]  start programs, or only these comma-separated ones.
                           A program can do anything you can
+  A worker the script starts may do what the script may.
 
 bounds:
       --memory-limit N    stop the script at N bytes (64m, 1g)

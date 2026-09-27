@@ -11,9 +11,14 @@ var (
 	// Attach makes work for rt go to post, which runs a function on rt's
 	// goroutine: an event loop's Post.
 	Attach func(rt any, post func(func()))
-	// Post runs fn on rt's goroutine, from any goroutine.
+	// Post runs fn on rt's goroutine, from any goroutine, even while rt is
+	// being closed on its own, when fn is dropped.
 	Post func(rt any, fn func())
 	// Ready has a value when work is waiting for rt to run its jobs, for a
 	// host with no loop attached.
 	Ready func(rt any) <-chan struct{}
+	// Abort makes rt stop whatever it runs once done is closed -- a script,
+	// a callback, a wait -- as a cancelled context stops an Eval: how a host
+	// ends a worker.
+	Abort func(rt any, done <-chan struct{})
 )

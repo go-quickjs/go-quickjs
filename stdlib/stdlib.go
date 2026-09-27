@@ -1,6 +1,7 @@
 package stdlib
 
 import (
+	"errors"
 	"io"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
@@ -59,6 +60,15 @@ type Config struct {
 	// events, util, assert, buffer, crypto, zlib and the web's streams. All of
 	// it is pure computation, and all of it is installed by default.
 	NoWebAPIs bool
+
+	// Workers lets the script start workers, runtimes of its own that run
+	// alongside it, each installed with this same Config. Nil means none:
+	// node:worker_threads is there, but its Worker refuses to start. Workers
+	// need a Loop and the web APIs.
+	Workers *Workers
+
+	// worker is set in the Config a worker's runtime is installed with.
+	worker *workerContext
 }
 
 // Install gives a runtime everything the configuration asks for.
@@ -76,6 +86,17 @@ type Config struct {
 //	    Process: &stdlib.Process{Args: os.Args},
 //	})
 func Install(rt *quickjs.Runtime, cfg Config) error {
+	if cfg.Workers != nil {
+		if cfg.Loop == nil {
+			return errNoLoop
+		}
+		if cfg.NoWebAPIs {
+			return errors.New("stdlib: Workers needs the web APIs")
+		}
+		// The console and process.stdout are written to from the workers'
+		// goroutines too.
+		cfg.shareWriters()
+	}
 	if err := Console(rt, cfg.Stdout, cfg.Stderr); err != nil {
 		return err
 	}
@@ -85,12 +106,22 @@ func Install(rt *quickjs.Runtime, cfg Config) error {
 		}
 	}
 	if !cfg.NoWebAPIs {
-		if err := webAPIs(rt, cfg.Random, cfg.Loop); err != nil {
+		m, err := webAPIs(rt, cfg.Random, cfg.Loop)
+		if err != nil {
 			return err
 		}
 		// The node modules that need no capability go with them: an
 		// EventEmitter is a list of functions and a Buffer is bytes.
-		if err := NodeModules(rt); err != nil {
+		events, err := nodeModules(rt)
+		if err != nil {
+			return err
+		}
+		if cfg.worker != nil {
+			cfg.worker.m = m
+		}
+		// Workers are started from worker_threads, which is there whether
+		// or not the script may start one: the rest of it is messaging.
+		if err := installWorkers(rt, cfg, m, events); err != nil {
 			return err
 		}
 		// Hashing is arithmetic too, and it comes after the web APIs because

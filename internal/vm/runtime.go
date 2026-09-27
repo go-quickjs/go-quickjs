@@ -84,6 +84,10 @@ type Runtime struct {
 	// it periodically, which is how a timeout or a cancelled request stops a
 	// runaway script.
 	ctx context.Context
+	// abort stops whatever the runtime runs once it is closed, with or
+	// without a context in force: it is how a host ends a worker, which may be
+	// running a timer's callback rather than anything evaluated.
+	abort <-chan struct{}
 	// interruptCounter counts down to the next cancellation check, so that the
 	// check costs one decrement per instruction rather than a context read.
 	interruptCounter int
@@ -696,6 +700,13 @@ func (r *Runtime) checkInterrupt() error {
 // makes it unsuitable for inlining.
 func (r *Runtime) checkInterruptNow() error {
 	r.interruptCounter = interruptCheckInterval
+	if r.abort != nil {
+		select {
+		case <-r.abort:
+			return context.Canceled
+		default:
+		}
+	}
 	if r.ctx == nil {
 		return nil
 	}

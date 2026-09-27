@@ -119,6 +119,26 @@ func defaultLocale(host intl.Locale) string {
 // SetContext installs the context the interpreter checks for cancellation.
 func (r *Runtime) SetContext(ctx context.Context) { r.ctx = ctx }
 
+// SetAbort makes the runtime stop whatever it is running, from then on, once
+// done is closed, as a cancelled context stops what it was given to.
+func (r *Runtime) SetAbort(done <-chan struct{}) { r.abort = done }
+
+// aborted reports whether the host has stopped the runtime, by its context
+// or for good.
+func (r *Runtime) aborted() error {
+	if r.abort != nil {
+		select {
+		case <-r.abort:
+			return context.Canceled
+		default:
+		}
+	}
+	if r.ctx != nil {
+		return r.ctx.Err()
+	}
+	return nil
+}
+
 // Context returns the context the running code stops for, or nil for none.
 func (r *Runtime) Context() context.Context { return r.ctx }
 

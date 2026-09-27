@@ -14,15 +14,22 @@ import (
 // Buffer is also a global, as it is in node, because a great deal of code
 // assumes it is there.
 func NodeModules(rt *quickjs.Runtime) error {
+	_, err := nodeModules(rt)
+	return err
+}
+
+// nodeModules is NodeModules, returning the events module's EventEmitter,
+// which a Worker is.
+func nodeModules(rt *quickjs.Runtime) (quickjs.Value, error) {
 	host := rt.NewObject()
 	if err := host.Set("inspect", func(r *quickjs.Runtime, v quickjs.Value) string {
 		return Inspect(r, v)
 	}); err != nil {
-		return err
+		return quickjs.Value{}, err
 	}
 	api, err := evalWithHost(rt, "<node>", nodeJS, host)
 	if err != nil {
-		return err
+		return quickjs.Value{}, err
 	}
 
 	for _, mod := range []struct {
@@ -36,30 +43,37 @@ func NodeModules(rt *quickjs.Runtime) error {
 	} {
 		v, err := api.Get(mod.member)
 		if err != nil {
-			return err
+			return quickjs.Value{}, err
 		}
 		exports, err := moduleExports(rt, v)
 		if err != nil {
-			return err
+			return quickjs.Value{}, err
 		}
 		if err := rt.SetModuleValues(mod.name, exports); err != nil {
-			return err
+			return quickjs.Value{}, err
 		}
 		if err := rt.SetModuleValues("node:"+mod.name, exports); err != nil {
-			return err
+			return quickjs.Value{}, err
 		}
 	}
 
 	// Buffer is a global in node, and code that uses it rarely imports it.
 	buffer, err := api.Get("buffer")
 	if err != nil {
-		return err
+		return quickjs.Value{}, err
 	}
 	b, err := buffer.Get("Buffer")
 	if err != nil {
-		return err
+		return quickjs.Value{}, err
 	}
-	return rt.Set("Buffer", b)
+	if err := rt.Set("Buffer", b); err != nil {
+		return quickjs.Value{}, err
+	}
+	events, err := api.Get("events")
+	if err != nil {
+		return quickjs.Value{}, err
+	}
+	return events.Get("EventEmitter")
 }
 
 // moduleExports turns an object into the exports of a module: every own

@@ -83,6 +83,9 @@ type Loop struct {
 	// failed is an exception that work posted from elsewhere raised and
 	// nothing caught, which Run returns as it returns one a timer raises.
 	failed error
+	// closers run when the loop is closed: they stop the workers the runtime
+	// started.
+	closers []func()
 }
 
 // NewLoop returns a loop for a runtime.
@@ -175,8 +178,20 @@ func (l *Loop) Pending() bool {
 func (l *Loop) Close() {
 	l.mu.Lock()
 	l.closed = true
+	closers := l.closers
+	l.closers = nil
 	l.mu.Unlock()
+	for _, fn := range closers {
+		fn()
+	}
 	l.nudge()
+}
+
+// onClose has fn run when the loop is closed.
+func (l *Loop) onClose(fn func()) {
+	l.mu.Lock()
+	l.closers = append(l.closers, fn)
+	l.mu.Unlock()
 }
 
 // Run works until there is nothing left to do.
@@ -194,6 +209,9 @@ func (l *Loop) Run(ctx context.Context) error {
 			return err
 		}
 		if err := l.rt.RunJobs(); err != nil {
+			return err
+		}
+		if err := l.takeFailure(); err != nil {
 			return err
 		}
 		// A timer that is due runs before the loop waits for anything: the

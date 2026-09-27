@@ -9,7 +9,8 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/structclone"
 )
 
-// Messaging: structuredClone, and the ports of a MessageChannel.
+// Messaging: structuredClone, the ports of a MessageChannel, and
+// BroadcastChannel.
 //
 // A port's two ends are entangled, and each may be anywhere: in the runtime
 // that made the channel, in another runtime a port was posted to, or between
@@ -18,6 +19,10 @@ import (
 // through one end is serialized, queued on the other end's core, and
 // deserialized and dispatched on the goroutine of whichever runtime holds that
 // end by then, one message to a task.
+//
+// A worker talks to the runtime that started it through such a channel, and
+// its word that it is running, that it failed, and that it has ended travels
+// the same way, so that it arrives after what the worker posted before.
 
 // portCore is one end of a channel.
 type portCore struct {
@@ -36,12 +41,28 @@ type portCore struct {
 	closed             bool
 }
 
+// msgKind is what a portMsg says.
+type msgKind uint8
+
+const (
+	// msgData is a message posted.
+	msgData msgKind = iota
+	// msgClose is word that the other end has closed -- for a worker's
+	// port, that the worker has ended, with its exit code.
+	msgClose
+	// msgOnline and msgError are a worker's word that it is running, and
+	// that it failed, with the error.
+	msgOnline
+	msgError
+)
+
 // portMsg is a message on its way: a serialized value and the ports posted
-// with it, or word that the other end has closed.
+// with it, or word from the other end.
 type portMsg struct {
+	kind  msgKind
 	data  any
 	ports []*portCore
-	close bool
+	code  int
 }
 
 // portEnd is a runtime's hold on a port: its id, and the script's object.
@@ -53,6 +74,12 @@ type portEnd struct {
 	// reffed is whether a started port keeps the loop running, which it does
 	// until it is unref'd; holding, whether it is doing so.
 	reffed, holding bool
+	// worker is the worker this end is the starting runtime's port to, which
+	// hears the worker's word.
+	worker *workerHandle
+	// channel is a BroadcastChannel's name, for an end that is one.
+	channel   string
+	broadcast bool
 }
 
 // messaging is a runtime's ports, and the script functions they are made
@@ -65,8 +92,8 @@ type messaging struct {
 
 	// What the script provides: a port object for an id, a DOMException, a
 	// look at what kind of host object a value is, and the dispatch of a
-	// message event.
-	makePort, newDOMException, hostKind, deliver quickjs.Value
+	// message event; and receiveMessageOnPort, for worker_threads.
+	makePort, newDOMException, hostKind, deliver, receive quickjs.Value
 }
 
 // domToken is a DOMException, serialized.
@@ -75,8 +102,9 @@ type domToken struct{ name, message, stack string }
 // messagingHost is the functions webAPIsJS reaches messaging through.
 func (m *messaging) host() map[string]any {
 	return map[string]any{
-		"bindMessaging": func(makePort, newDOMException, hostKind, deliver quickjs.Value) {
+		"bindMessaging": func(makePort, newDOMException, hostKind, deliver, receive quickjs.Value) {
 			m.makePort, m.newDOMException, m.hostKind, m.deliver = makePort, newDOMException, hostKind, deliver
+			m.receive = receive
 		},
 		"clone": func(v quickjs.Value, transfer []quickjs.Value) (quickjs.Value, error) {
 			data, ports, err := m.serialize(v, transfer, nil)
@@ -137,23 +165,72 @@ func (m *messaging) host() map[string]any {
 			e := m.ports[id]
 			return e != nil && e.holding
 		},
+		// portReceive takes the next message waiting on a port, as
+		// receiveMessageOnPort does, in a list; or null for none.
+		"portReceive": func(id int) (any, error) {
+			e := m.ports[id]
+			if e == nil {
+				return nil, nil
+			}
+			c := e.core
+			c.mu.Lock()
+			if len(c.queue) == 0 || c.queue[0].kind != msgData {
+				c.mu.Unlock()
+				return nil, nil
+			}
+			msg := c.queue[0]
+			c.queue = c.queue[1:]
+			c.mu.Unlock()
+			v, _, err := m.deserialize(msg.data, msg.ports)
+			if err != nil {
+				return nil, err
+			}
+			return m.rt.NewArray(v)
+		},
+		"broadcastOpen": func(name string, obj quickjs.Value) int {
+			return m.openBroadcast(name, obj)
+		},
+		"broadcastPost": func(id int, v quickjs.Value) error {
+			e := m.ports[id]
+			if e == nil || !e.broadcast {
+				return m.rt.Throw(m.newDOMExceptionOr("BroadcastChannel is closed.", "InvalidStateError"))
+			}
+			return e.broadcastMessage(v)
+		},
 	}
+}
+
+// newDOMExceptionOr is a DOMException, or an Error if one cannot be made.
+func (m *messaging) newDOMExceptionOr(message, name string) quickjs.Value {
+	if e, err := m.newDOMException.Call(message, name); err == nil {
+		return e
+	}
+	return m.rt.NewError("Error", message)
 }
 
 // adopt makes core an end of this runtime's, and returns its object.
 func (m *messaging) adopt(core *portCore) (quickjs.Value, error) {
+	e, err := m.adoptEnd(core)
+	if err != nil {
+		return quickjs.Value{}, err
+	}
+	return e.obj, nil
+}
+
+// adoptEnd is adopt, returning the end.
+func (m *messaging) adoptEnd(core *portCore) (*portEnd, error) {
 	m.next++
 	e := &portEnd{m: m, id: m.next, core: core, reffed: true}
 	obj, err := m.makePort.Call(e.id)
 	if err != nil {
-		return quickjs.Value{}, err
+		return nil, err
 	}
 	e.obj = obj
 	m.ports[e.id] = e
 	core.mu.Lock()
 	core.owner, core.started, core.scheduled = e, false, false
 	core.mu.Unlock()
-	return obj, nil
+	return e, nil
 }
 
 // serialize serializes v, transferring what transfer lists, for from --
@@ -290,7 +367,7 @@ func (c *portCore) enqueue(msg portMsg) {
 	}
 	c.queue = append(c.queue, msg)
 	owner := c.owner
-	post := owner != nil && (c.started || msg.close) && !c.scheduled
+	post := owner != nil && (c.started || msg.kind == msgClose) && !c.scheduled
 	if post {
 		c.scheduled = true
 	}
@@ -329,7 +406,7 @@ func (e *portEnd) dispatchNext() {
 		// what was sent it before is dropped.
 		at := -1
 		for i, q := range c.queue {
-			if q.close {
+			if q.kind == msgClose {
 				at = i
 				break
 			}
@@ -343,9 +420,14 @@ func (e *portEnd) dispatchNext() {
 	}
 	c.mu.Unlock()
 
-	if msg.close {
-		e.closed()
-	} else {
+	switch msg.kind {
+	case msgClose:
+		e.closed(msg.code)
+	case msgOnline:
+		e.worker.online()
+	case msgError:
+		e.worker.failed(msg.data)
+	default:
 		e.dispatch(msg)
 	}
 
@@ -409,31 +491,141 @@ func (e *portEnd) start() {
 }
 
 // close disentangles the port. Both ends hear it, as node's do, this one
-// first and the other after what this one sent before.
+// first and the other after what this one sent before. A BroadcastChannel
+// stops hearing its name.
 func (e *portEnd) close() {
-	c := e.core
+	if e.broadcast {
+		e.closeBroadcast()
+		return
+	}
+	e.release()
+	hostjobs.Post(e.m.rt, func() { e.m.raise(e.m.deliver.Call(e.obj, "close")) })
+	e.core.disentangle(0)
+}
+
+// disentangle closes a port's core, and tells the other end, after what this
+// one sent before: with the exit code, when this is a worker's end.
+func (c *portCore) disentangle(code int) {
 	c.mu.Lock()
 	peer := c.peer
 	c.peer, c.closed, c.queue = nil, true, nil
 	c.mu.Unlock()
-	e.release()
-	hostjobs.Post(e.m.rt, func() { e.m.raise(e.m.deliver.Call(e.obj, "close")) })
 	if peer != nil {
 		peer.mu.Lock()
 		peer.peer = nil
 		peer.mu.Unlock()
-		peer.enqueue(portMsg{close: true})
+		peer.enqueue(portMsg{kind: msgClose, code: code})
 	}
 }
 
-// closed is an end hearing that the other has closed.
-func (e *portEnd) closed() {
+// send queues word on the other end of a port, if it has one.
+func (c *portCore) send(msg portMsg) {
+	c.mu.Lock()
+	peer := c.peer
+	c.mu.Unlock()
+	if peer != nil {
+		peer.enqueue(msg)
+	}
+}
+
+// closed is an end hearing that the other has closed -- or, for the port to
+// a worker, that the worker has ended.
+func (e *portEnd) closed(code int) {
 	c := e.core
 	c.mu.Lock()
 	c.closed, c.queue = true, nil
 	c.mu.Unlock()
 	e.release()
+	if e.worker != nil {
+		e.worker.exited(code)
+		return
+	}
 	e.m.raise(e.m.deliver.Call(e.obj, "close"))
+}
+
+// shutdown closes every port of a runtime that is ending but keep, as a
+// worker's are when it has ended: the other ends hear it, and nothing is held
+// open for a runtime that is gone.
+func (m *messaging) shutdown(keep *portCore) {
+	for _, e := range m.ports {
+		switch {
+		case e.core == keep:
+		case e.broadcast:
+			e.closeBroadcast()
+		default:
+			e.release()
+			e.core.disentangle(0)
+		}
+	}
+}
+
+// --- BroadcastChannel ----------------------------------------------------------
+
+// broadcasts is every BroadcastChannel open in the process, by name: those of
+// every runtime, which is what lets a worker hear its parent's.
+var broadcasts = struct {
+	sync.Mutex
+	byName map[string]map[*portCore]bool
+}{byName: map[string]map[*portCore]bool{}}
+
+// openBroadcast makes obj a BroadcastChannel of a name, returning its id. It
+// dispatches what it hears at once, and, as in node, holds the loop until it
+// is closed or unref'd.
+func (m *messaging) openBroadcast(name string, obj quickjs.Value) int {
+	m.next++
+	core := &portCore{started: true}
+	e := &portEnd{m: m, id: m.next, core: core, obj: obj, reffed: true, channel: name, broadcast: true}
+	core.owner = e
+	m.ports[e.id] = e
+	broadcasts.Lock()
+	if broadcasts.byName[name] == nil {
+		broadcasts.byName[name] = map[*portCore]bool{}
+	}
+	broadcasts.byName[name][core] = true
+	broadcasts.Unlock()
+	e.hold()
+	return e.id
+}
+
+// broadcastMessage posts a clone of v to every other channel of the name.
+func (e *portEnd) broadcastMessage(v quickjs.Value) error {
+	broadcasts.Lock()
+	var to []*portCore
+	for c := range broadcasts.byName[e.channel] {
+		if c != e.core {
+			to = append(to, c)
+		}
+	}
+	broadcasts.Unlock()
+	if len(to) == 0 {
+		// Nothing hears it, but what cannot be cloned is still refused.
+		_, _, err := e.m.serialize(v, nil, e)
+		return err
+	}
+	for _, c := range to {
+		data, _, err := e.m.serialize(v, nil, e)
+		if err != nil {
+			return err
+		}
+		c.enqueue(portMsg{data: data})
+	}
+	return nil
+}
+
+// closeBroadcast stops a BroadcastChannel hearing its name.
+func (e *portEnd) closeBroadcast() {
+	broadcasts.Lock()
+	if set := broadcasts.byName[e.channel]; set != nil {
+		delete(set, e.core)
+		if len(set) == 0 {
+			delete(broadcasts.byName, e.channel)
+		}
+	}
+	broadcasts.Unlock()
+	e.core.mu.Lock()
+	e.core.closed, e.core.queue = true, nil
+	e.core.mu.Unlock()
+	e.release()
 }
 
 // detach lets go of a port being posted: its messages wait in its queue for

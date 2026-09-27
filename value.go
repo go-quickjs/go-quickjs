@@ -1,6 +1,7 @@
 package quickjs
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -170,7 +171,7 @@ func (v Value) Equal(other Value) (bool, error) {
 	res, err := v.rt.Call(v.rt.NewFunction("", 2, looseEqualsNative), vm.Undefined,
 		[]vm.Value{v.v, other.v})
 	if err != nil {
-		return false, err
+		return false, wrapThrown(v.rt, err)
 	}
 	return res.Truthy(), nil
 }
@@ -188,7 +189,7 @@ func (v Value) Get(name string) (Value, error) {
 	}
 	res, err := v.rt.GetProp(v.v, v.rt.Intern(name))
 	if err != nil {
-		return Value{}, err
+		return Value{}, wrapThrown(v.rt, err)
 	}
 	return Value{v: res, rt: v.rt}, nil
 }
@@ -202,7 +203,7 @@ func (v Value) Set(name string, val any) error {
 	if err != nil {
 		return err
 	}
-	return v.rt.SetProp(v.v, v.rt.Intern(name), encoded)
+	return wrapThrown(v.rt, v.rt.SetProp(v.v, v.rt.Intern(name), encoded))
 }
 
 // Index reads an array element.
@@ -212,7 +213,7 @@ func (v Value) Index(i int) (Value, error) {
 	}
 	res, err := v.rt.GetProp(v.v, v.rt.Intern(fmt.Sprint(i)))
 	if err != nil {
-		return Value{}, err
+		return Value{}, wrapThrown(v.rt, err)
 	}
 	return Value{v: res, rt: v.rt}, nil
 }
@@ -272,7 +273,7 @@ func (v Value) CallWithThis(this Value, args ...any) (Value, error) {
 	}
 	res, err := v.rt.Call(v.v, this.v, vals)
 	if err != nil {
-		return Value{}, err
+		return Value{}, wrapThrown(v.rt, err)
 	}
 	return Value{v: res, rt: v.rt}, nil
 }
@@ -292,7 +293,7 @@ func (v Value) New(args ...any) (Value, error) {
 	}
 	res, err := v.rt.Construct(v.v, vals)
 	if err != nil {
-		return Value{}, err
+		return Value{}, wrapThrown(v.rt, err)
 	}
 	return Value{v: res, rt: v.rt}, nil
 }
@@ -304,6 +305,19 @@ func (v Value) New(args ...any) (Value, error) {
 type Error struct {
 	value Value
 	stack []vm.StackEntry
+	// thrown is the exception as the engine threw it, which a Go function
+	// returning the error throws on unchanged.
+	thrown *vm.Thrown
+}
+
+// wrapThrown is an error from the engine as the API reports it: an exception
+// is an *Error.
+func wrapThrown(rt *vm.Runtime, err error) error {
+	var thrown *vm.Thrown
+	if errors.As(err, &thrown) {
+		return &Error{value: Value{v: thrown.Value, rt: rt}, stack: thrown.Stack, thrown: thrown}
+	}
+	return err
 }
 
 func (e *Error) Error() string {

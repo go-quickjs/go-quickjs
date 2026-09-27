@@ -147,6 +147,51 @@ func TestPermissionsAreOff(t *testing.T) {
 	}
 }
 
+// TestWorkers pins that qjs starts workers, as node does, from a file URL, a
+// path and a data URL; that a worker imports beside itself; and that it is
+// given what the program was given and no more.
+func TestWorkers(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"helper.mjs": `export const twice = (n) => n * 2;`,
+		"w.mjs": `
+			import { parentPort, workerData } from "node:worker_threads";
+			import { twice } from "./helper.mjs";
+			let fs = "refused";
+			try { (await import("node:fs")).default.readFileSync("x") } catch (e) { fs = e.message }
+			parentPort.postMessage(twice(workerData) + " " + fs);`,
+		"main.mjs": `
+			import { Worker } from "node:worker_threads";
+			const run = (spec, data) => new Promise((resolve) => {
+				const w = new Worker(spec, { workerData: data });
+				w.on("message", (m) => console.log(m));
+				w.on("error", (e) => console.log("error", e.message));
+				w.on("exit", resolve);
+			});
+			await run(new URL("./w.mjs", import.meta.url), 1);
+			await run(` + quote(filepath.Join(dir, "w.mjs")) + `, 2);
+			await run("data:text/javascript,import { parentPort } from 'node:worker_threads'; parentPort.postMessage('from data')");
+			await run("./nowhere.mjs");
+			new globalThis.Worker(new URL("./w.mjs", import.meta.url)).terminate();`,
+	}
+	for name, src := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	code, out, errOut := exec(t, "", filepath.Join(dir, "main.mjs"))
+	nowhere, _ := filepath.Abs("nowhere.mjs")
+	want := strings.Join([]string{
+		"2 filesystem access is not allowed: run qjs with --allow-read",
+		"4 filesystem access is not allowed: run qjs with --allow-read",
+		"from data",
+		"error Cannot find module '" + nowhere + "'",
+	}, "\n") + "\n"
+	if code != 0 || out != want {
+		t.Errorf("code=%d out=\n%s\nwant\n%s\nerr=%s", code, out, want, errOut)
+	}
+}
+
 func TestAllowRead(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("contents"), 0o644); err != nil {

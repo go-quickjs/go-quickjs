@@ -314,7 +314,7 @@ func (r *Runtime) initAtomicsBuiltins() {
 		if rt.ctx != nil {
 			done = rt.ctx.Done()
 		}
-		waited, notified := t.storage().block.wait(at, t.info().size, v, timeout, done)
+		waited, notified := t.storage().block.wait(at, t.info().size, v, timeout, done, rt.abort)
 		switch {
 		case !waited:
 			return Str(NewString("not-equal")), nil
@@ -322,8 +322,8 @@ func (r *Runtime) initAtomicsBuiltins() {
 			return Str(NewString("ok")), nil
 		}
 		// The host stopping the agent is not a timeout.
-		if rt.ctx != nil && rt.ctx.Err() != nil {
-			return Undefined, rt.ctx.Err()
+		if err := rt.aborted(); err != nil {
+			return Undefined, err
 		}
 		return Str(NewString("timed-out")), nil
 	})

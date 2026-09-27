@@ -1,6 +1,7 @@
 package stdlib
 
 import (
+	"context"
 	"io"
 	"os"
 	"runtime"
@@ -39,6 +40,9 @@ type Process struct {
 	Exit func(code int)
 	// Version is what process.version reports.
 	Version string
+
+	// worker marks a worker's process, whose exit ends the worker.
+	worker bool
 }
 
 // Processes installs the process object, as a global and as the "process"
@@ -109,6 +113,11 @@ func Processes(rt *quickjs.Runtime, cfg *Process) error {
 					"this runtime cannot end the process"))
 			}
 			cfg.Exit(n)
+			if cfg.worker {
+				// A worker's exit ends the worker at once, as a program's
+				// ends the program.
+				return context.Canceled
+			}
 			return nil
 		},
 		// nextTick is a microtask here. Node's runs before promise reactions

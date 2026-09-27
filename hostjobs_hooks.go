@@ -10,9 +10,17 @@ func init() {
 			r.rt.AttachHostLoop(post)
 		}
 	}
+	// Post may be called from any goroutine.
 	hostjobs.Post = func(rt any, fn func()) {
+		// Posting is what other goroutines do, so it reads nothing of the
+		// runtime but the one field that is safe for them to.
+		if vr := rt.(*Runtime).posting.Load(); vr != nil {
+			vr.PostFromElsewhere(fn)
+		}
+	}
+	hostjobs.Abort = func(rt any, done <-chan struct{}) {
 		if r := rt.(*Runtime); !r.closed {
-			r.rt.PostFromElsewhere(fn)
+			r.rt.SetAbort(done)
 		}
 	}
 	hostjobs.Ready = func(rt any) <-chan struct{} {
