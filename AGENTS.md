@@ -154,6 +154,20 @@ operations in one warmed process. Report bundle size, first-use latency,
 allocations, and peak RSS. Distinguish work moved from package startup to first
 feature use.
 
+`internal/cmd/v8bench` runs the V8 v7 suite: `-mode fixed` does the same
+work on every run, which is what compares two builds (build each to a binary
+and alternate them), `-mode compile` is the parser and compiler alone, and
+`-mode score` gives the suite's own scores. `-cpuprofile` and `-memprofile`
+write profiles.
+
+```sh
+go run ./internal/cmd/v8bench -dir /tmp/v8-v7 -fetch -mode fixed -n 5
+```
+
+A change that keeps memory longer shows in neither: compare the conformance
+run's peak memory as well, which is how a cache that outlived its objects was
+caught.
+
 ## Releases
 
 Every release is named the same way, in go-quickjs and in go-intl alike:

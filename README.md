@@ -903,6 +903,9 @@ round trips.
 
 ### V8 version 7 benchmark suite
 
+`go run ./internal/cmd/v8bench -dir /tmp/v8-v7 -fetch -mode score` runs the
+suite on go-quickjs; see that command for its other modes.
+
 For a comparison with another pure-Go JavaScript engine, the Mozilla
 [AreWeFastYet V8 version 7 suite][v8-v7] was run against go-quickjs and
 [goja]. The figures below are the median of three alternating-order,
