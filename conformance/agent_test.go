@@ -3,7 +3,9 @@ package conformance_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	"github.com/go-quickjs/go-quickjs"
@@ -22,8 +24,11 @@ type agentPool struct {
 	cancel     context.CancelFunc
 	start      time.Time
 
-	mu      sync.Mutex
-	agents  []*agent
+	mu     sync.Mutex
+	agents []*agent
+	// failed is the first error an agent threw once it had started, which
+	// the main agent is thrown the next time it waits on the agents.
+	failed  error
 	wg      sync.WaitGroup
 	reports chan string
 }
@@ -58,17 +63,39 @@ func (p *agentPool) stop() {
 	p.wg.Wait()
 }
 
+// fail records what an agent threw, unless the pool is stopping, when an
+// agent's error is only the stop.
+func (p *agentPool) fail(err error) {
+	if err == nil || p.ctx.Err() != nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.failed == nil {
+		p.failed = fmt.Errorf("agent: %w", err)
+	}
+}
+
+// err is the first error an agent threw, or nil.
+func (p *agentPool) err() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.failed
+}
+
 // now is monotonicNow: milliseconds since the pool was made.
 func (p *agentPool) now() float64 {
 	return float64(time.Since(p.start).Microseconds()) / 1000
 }
 
-// sleep blocks for ms milliseconds, or until the test ends.
-func (p *agentPool) sleep(ms float64) {
+// sleep blocks for ms milliseconds, or until the test ends. It throws what
+// an agent threw, since whoever sleeps is waiting on the agents.
+func (p *agentPool) sleep(ms float64) error {
 	select {
 	case <-time.After(time.Duration(ms * float64(time.Millisecond))):
 	case <-p.ctx.Done():
 	}
+	return p.err()
 }
 
 // install gives the main agent's runtime the functions its $262.agent is
@@ -79,12 +106,15 @@ func (p *agentPool) install(rt *quickjs.Runtime) error {
 		"agentBroadcast": func(sab, id quickjs.Value) error {
 			return p.broadcast(sab, id)
 		},
-		"agentGetReport": func() any {
+		// With no report waiting, it throws what an agent threw, which
+		// would otherwise leave the test waiting for a report until its
+		// time is up.
+		"agentGetReport": func() (any, error) {
 			select {
 			case r := <-p.reports:
-				return r
+				return r, nil
 			default:
-				return nil
+				return nil, p.err()
 			}
 		},
 		"agentSleep":        p.sleep,
@@ -135,6 +165,9 @@ func (p *agentPool) startAgent(src string) error {
 func (p *agentPool) run(a *agent, src string, started chan<- error) {
 	rt := p.newRuntime()
 	defer rt.Close()
+	// Stopping the pool stops whatever the agent is running, a callback
+	// or an Atomics.wait with no timeout as well as a script.
+	hostjobs.Abort(rt, p.ctx.Done())
 	var receiver quickjs.Value
 	for name, fn := range map[string]any{
 		"agentReceiveBroadcast": func(f quickjs.Value) { receiver = f },
@@ -172,21 +205,28 @@ func (p *agentPool) run(a *agent, src string, started chan<- error) {
 		select {
 		case <-hostjobs.Ready(rt):
 			// A waitAsync another agent settled, run with the test's time.
-			rt.EvalContext(p.ctx, "undefined")
+			_, err := rt.EvalContext(p.ctx, "undefined")
+			p.fail(err)
 		case msg := <-a.inbox:
 			sab, err := sharedmem.Attach(rt, msg.mem)
 			a.taken <- struct{}{}
-			if err != nil || !receiver.IsFunction() {
+			if err != nil {
+				p.fail(err)
+				continue
+			}
+			if !receiver.IsFunction() {
 				continue
 			}
 			id, err := rt.EvalContext(p.ctx, msg.id)
 			if err != nil {
+				p.fail(err)
 				continue
 			}
 			if _, err := receiver.Call(sab.(quickjs.Value), id); err != nil {
+				p.fail(err)
 				continue
 			}
-			rt.RunJobs()
+			p.fail(rt.RunJobs())
 		case <-p.ctx.Done():
 			return
 		}
@@ -221,4 +261,61 @@ func (p *agentPool) broadcast(sab, id quickjs.Value) error {
 		}
 	}
 	return nil
+}
+
+// runAgents runs src in a main agent whose $262.agent is a pool's, and
+// returns the pool, its answer, and the error src threw.
+func runAgents(src string) (*agentPool, string, error) {
+	pool := newAgentPool(func() *quickjs.Runtime { return quickjs.New() })
+	rt := quickjs.New()
+	defer rt.Close()
+	if err := pool.install(rt); err != nil {
+		return pool, "", err
+	}
+	v, err := rt.Eval("var $262 = { agent: " + agentMain + " };\n" + src)
+	if err != nil {
+		return pool, "", err
+	}
+	return pool, v.String(), nil
+}
+
+// Stopping the pool stops an agent blocked in an Atomics.wait with no
+// timeout, which otherwise waits on past the test, and the harness with it.
+func TestAgentPoolStopsAWait(t *testing.T) {
+	pool, _, err := runAgents(`$262.agent.start("$262.agent.receiveBroadcast(function (sab) { Atomics.wait(new Int32Array(sab), 0, 0); });");
+		$262.agent.broadcast(new SharedArrayBuffer(4), 0);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped := make(chan struct{})
+	go func() { pool.stop(); close(stopped) }()
+	select {
+	case <-stopped:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the agent's wait did not stop")
+	}
+	if err := pool.err(); err != nil {
+		t.Errorf("a stopped agent failed: %v", err)
+	}
+}
+
+// What an agent throws once it has started is thrown to the main agent
+// waiting on its report, rather than dropped, which would leave the test
+// waiting until its time is up.
+func TestAgentPoolReportsErrors(t *testing.T) {
+	pool, got, err := runAgents(`$262.agent.start("$262.agent.receiveBroadcast(function () { throw new TypeError('boom'); });");
+		$262.agent.broadcast(new SharedArrayBuffer(4), 0);
+		var out;
+		try { while ($262.agent.getReport() === null) $262.agent.sleep(10); out = "no error" } catch (e) { out = String(e) }
+		out`)
+	defer pool.stop()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "TypeError: boom") {
+		t.Errorf("the main agent got %q, want the agent's TypeError", got)
+	}
+	if err := pool.err(); err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Errorf("the pool's error is %v", err)
+	}
 }

@@ -446,6 +446,11 @@ func runOne(suite *conformance.Suite, tc *conformance.Test,
 			}
 		}
 	}
+	// An agent that threw fails the test, though the main agent was not
+	// waiting on it to find out.
+	if err := agents.err(); err != nil {
+		return resultFail, summarize(err)
+	}
 	if runErr != nil && errors.Is(runErr, context.DeadlineExceeded) {
 		return resultFail, "timed out"
 	}

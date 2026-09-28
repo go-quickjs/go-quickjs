@@ -613,7 +613,12 @@ Paths are relative to this repository; `go-intl:` paths are in
 ### KI-59 The conformance agent harness hangs on a failing test
 - **Effect:** an agent blocked in an infinite `Atomics.wait` ignores
   cancellation, and an agent's errors are dropped.
-- **Status:** open.
+- **Status:** fixed.
+  - Each agent's runtime is aborted when the pool stops, so its callbacks
+    and waits stop with it.
+  - An agent's first error is thrown to the main agent from `getReport` and
+    `sleep`, and it fails the test.
+  - Tests: `TestAgentPoolStopsAWait`, `TestAgentPoolReportsErrors`.
 
 ### KI-60 Host job details
 - `notify` calls a host's `post` while holding the memory's lock.
