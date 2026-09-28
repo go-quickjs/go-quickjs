@@ -460,8 +460,9 @@ func (p *parser) parseNew() ast.Expr {
 	if p.isPunct("(") {
 		args = p.parseArguments()
 	}
-	expr := ast.Expr(&ast.New{Callee: callee, Args: args, Start: start})
-	return p.parseMemberTail(expr, true)
+	n := p.nodes.news.alloc()
+	n.Callee, n.Args, n.Start = callee, args, start
+	return p.parseMemberTail(n, true)
 }
 
 // parseMemberTail consumes property accesses and tagged templates. When
@@ -571,19 +572,20 @@ func (p *parser) parseArguments() []ast.Expr {
 	p.noIn = false
 	defer func() { p.noIn = saved }()
 
-	var args []ast.Expr
+	mark := p.nodes.exprs.begin()
 	for !p.isPunct(")") {
 		if p.isPunct("...") {
 			start := p.tok.Pos
 			p.next()
-			args = append(args, &ast.Spread{Arg: p.parseAssign(), Start: start})
+			p.nodes.exprs.add(&ast.Spread{Arg: p.parseAssign(), Start: start})
 		} else {
-			args = append(args, p.parseAssign())
+			p.nodes.exprs.add(p.parseAssign())
 		}
 		if !p.eatPunct(",") {
 			break
 		}
 	}
+	args := p.nodes.exprs.finish(mark)
 	p.expectPunct(")")
 	return args
 }

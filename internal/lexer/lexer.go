@@ -335,7 +335,8 @@ func (l *Lexer) Next() (Token, error) {
 		return tok, nil
 	}
 
-	for _, p := range punctuators {
+	// c is ASCII here: anything else began an identifier.
+	for _, p := range punctuatorsBy[c] {
 		if strings.HasPrefix(l.src[l.pos:], p) {
 			// `?.3` is a ternary followed by .3, not optional chaining.
 			if p == "?." && isDigit(l.peekByte(2)) {

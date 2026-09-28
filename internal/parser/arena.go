@@ -47,6 +47,61 @@ func (s *slab[T]) alloc() *T {
 	return &s.buf[len(s.buf)-1]
 }
 
+// lists builds the lists of a syntax tree -- arguments, statements,
+// declarators -- on a scratch stack, and hands each finished one out as an
+// exactly-sized slice of a shared block: a list costs neither the
+// reallocations of appending to it nor an allocation of its own.
+//
+// A list begun inside another, an argument's own arguments, is finished
+// before the outer one goes on, so the stack only ever grows and shrinks at
+// its top. A finished list's capacity is its length, so appending to it
+// later copies it rather than writing over the list after it.
+type lists[T any] struct {
+	scratch []T
+	buf     []T
+	nextCap int
+}
+
+const (
+	listMin = 64
+	listMax = 4096
+)
+
+// begin starts a list, returning where it begins on the stack.
+func (l *lists[T]) begin() int { return len(l.scratch) }
+
+// add appends an item to the list being built.
+func (l *lists[T]) add(x T) { l.scratch = append(l.scratch, x) }
+
+// finish ends the list begun at mark, and returns it; nil for none.
+func (l *lists[T]) finish(mark int) []T {
+	items := l.scratch[mark:]
+	n := len(items)
+	if n == 0 {
+		return nil
+	}
+	if cap(l.buf)-len(l.buf) < n {
+		if l.nextCap < listMax {
+			l.nextCap = max(l.nextCap*2, listMin)
+		}
+		l.buf = make([]T, 0, max(n, l.nextCap))
+	}
+	start := len(l.buf)
+	l.buf = append(l.buf, items...)
+	clear(items)
+	l.scratch = l.scratch[:mark]
+	return l.buf[start:len(l.buf):len(l.buf)]
+}
+
+// truncate abandons whatever lists were begun past mark, which a parse that
+// is rewound after an error, and retried another way, leaves unfinished.
+func (l *lists[T]) truncate(mark int) {
+	if len(l.scratch) > mark {
+		clear(l.scratch[mark:])
+		l.scratch = l.scratch[:mark]
+	}
+}
+
 // arena groups the slabs for the node types that dominate a typical parse.
 // Rarer nodes -- classes, templates, switch statements -- are allocated
 // individually, because a slab for them would waste more than it saves.
@@ -63,6 +118,13 @@ type arena struct {
 	update   slab[ast.Update]
 	exprStmt slab[ast.ExprStmt]
 	cond     slab[ast.Conditional]
+	news     slab[ast.New]
+	varDecls slab[ast.VarDecl]
+	returns  slab[ast.ReturnStmt]
+
+	exprs lists[ast.Expr]
+	stmts lists[ast.Stmt]
+	decls lists[ast.Declarator]
 }
 
 func (a *arena) ident(name string, start int) *ast.Ident {

@@ -232,7 +232,9 @@ func (p *parser) parseVarDecl(kind ast.DeclKind) *ast.VarDecl {
 	start := p.tok.Pos
 	p.next() // consume var/let/const
 
-	decl := &ast.VarDecl{Kind: kind, Start: start}
+	decl := p.nodes.varDecls.alloc()
+	decl.Kind, decl.Start = kind, start
+	mark := p.nodes.decls.begin()
 	for {
 		nameTok := p.tok
 		target := p.parseBindingTarget()
@@ -271,11 +273,12 @@ func (p *parser) parseVarDecl(kind ast.DeclKind) *ast.VarDecl {
 				}
 			}
 		}
-		decl.Decls = append(decl.Decls, ast.Declarator{Target: target, Init: init})
+		p.nodes.decls.add(ast.Declarator{Target: target, Init: init})
 		if !p.eatPunct(",") {
 			break
 		}
 	}
+	decl.Decls = p.nodes.decls.finish(mark)
 	return decl
 }
 
@@ -539,7 +542,8 @@ func (p *parser) parseReturn() ast.Stmt {
 	}
 	p.next()
 
-	stmt := &ast.ReturnStmt{Start: start}
+	stmt := p.nodes.returns.alloc()
+	stmt.Start = start
 	if !p.isPunct(";") && !p.canInsertSemicolon() {
 		stmt.Arg = p.parseExpr()
 	}
@@ -691,6 +695,10 @@ func (p *parser) parseLabeled(name string, start int) ast.Stmt {
 	// Whether the label names an iteration statement decides if `continue` may
 	// target it, which is known only from the statement that follows.
 	isLoop := p.isKeyword("for") || p.isKeyword("while") || p.isKeyword("do")
+	// A function's set is made when it has a label to hold, as most never do.
+	if p.labels == nil {
+		p.labels = make(map[string]bool)
+	}
 	p.labels[name] = isLoop
 	defer delete(p.labels, name)
 

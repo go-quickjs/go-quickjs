@@ -6,7 +6,10 @@
 // parser telling the lexer which it expects, via ScanRegExp and ScanTemplateTail.
 package lexer
 
-import "fmt"
+import (
+	"fmt"
+	"unicode/utf8"
+)
 
 // Kind classifies a token.
 type Kind uint8
@@ -154,3 +157,13 @@ var punctuators = []string{
 	"{", "}", "(", ")", "[", "]", ";", ",", "<", ">", "+", "-", "*", "/", "%",
 	"&", "|", "^", "!", "~", "?", ":", "=", ".", "#", "@",
 }
+
+// punctuatorsBy is punctuators grouped by their first byte, each group in the
+// same order, so that the scanner tries only those that could match -- a few
+// rather than every one of them.
+var punctuatorsBy = func() (by [utf8.RuneSelf][]string) {
+	for _, p := range punctuators {
+		by[p[0]] = append(by[p[0]], p)
+	}
+	return by
+}()

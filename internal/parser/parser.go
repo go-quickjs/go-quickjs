@@ -161,6 +161,9 @@ type parserMark struct {
 	lineStart int
 	prevEnd   int
 	tok       lexer.Token
+	// exprs, stmts and decls are where the lists being built stood, which a
+	// rewind after an error abandons back to.
+	exprs, stmts, decls int
 }
 
 func (p *parser) mark() parserMark {
@@ -170,6 +173,9 @@ func (p *parser) mark() parserMark {
 		lineStart: p.lex.LineStart(),
 		prevEnd:   p.prevEnd,
 		tok:       p.tok,
+		exprs:     p.nodes.exprs.begin(),
+		stmts:     p.nodes.stmts.begin(),
+		decls:     p.nodes.decls.begin(),
 	}
 }
 
@@ -177,6 +183,9 @@ func (p *parser) reset(m parserMark) {
 	p.lex.Seek(m.pos, m.line, m.lineStart)
 	p.prevEnd = m.prevEnd
 	p.tok = m.tok
+	p.nodes.exprs.truncate(m.exprs)
+	p.nodes.stmts.truncate(m.stmts)
+	p.nodes.decls.truncate(m.decls)
 }
 
 // Parse parses src into a Program.
@@ -188,7 +197,6 @@ func Parse(src string, opts Options) (prog *ast.Program, err error) {
 		// A module's top level is an await context: top-level await is what
 		// lets a module finish loading something before its importers run.
 		allowAwait: opts.Module,
-		labels:     make(map[string]bool),
 
 		allowSuperProp: opts.AllowSuperProp,
 		allowSuperCall: opts.AllowSuperCall,
@@ -538,15 +546,15 @@ func (p *parser) parseStatementList(atEnd func() bool, allowUsing bool) []ast.St
 	saved := p.usingAllowed
 	p.usingAllowed = allowUsing
 	defer func() { p.usingAllowed = saved }()
-	var out []ast.Stmt
+	mark := p.nodes.stmts.begin()
 	for !atEnd() {
 		if p.tok.Kind == lexer.EOF {
 			break
 		}
 		p.listItem = true
-		out = append(out, p.parseStatement())
+		p.nodes.stmts.add(p.parseStatement())
 	}
-	return out
+	return p.nodes.stmts.finish(mark)
 }
 
 // ---------------------------------------------------------------------------

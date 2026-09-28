@@ -64,7 +64,7 @@ func (p *parser) parseFunctionParamsAndBody(fn *ast.FuncLit) {
 	// class field initializer.
 	p.noArguments = false
 	p.noAwaitIdent = false
-	p.labels = make(map[string]bool)
+	p.labels = nil
 
 	switch fn.Kind {
 	case ast.FuncMethod, ast.FuncGetter, ast.FuncSetter:
@@ -314,7 +314,7 @@ func (p *parser) parseArrowBody(params []ast.Expr, start int, async bool) ast.Ex
 	p.inLoop = false
 	p.inSwitch = false
 	p.noIn = false
-	p.labels = make(map[string]bool)
+	p.labels = nil
 	// A class static block forbids `await` as an identifier in what it
 	// contains, but not in a function written inside it: the rule is about the
 	// block's own statements.
@@ -356,7 +356,7 @@ func (p *parser) parseParenOrArrow() ast.Expr {
 	saved := p.noIn
 	p.noIn = false
 
-	var items []ast.Expr
+	mark := p.nodes.exprs.begin()
 	sawRest := false
 	trailingComma := false
 
@@ -369,11 +369,11 @@ func (p *parser) parseParenOrArrow() ast.Expr {
 			if p.isPunct("=") {
 				p.errorf("a rest parameter cannot have a default value")
 			}
-			items = append(items, &ast.RestElement{Arg: target, Start: restStart})
+			p.nodes.exprs.add(&ast.RestElement{Arg: target, Start: restStart})
 			sawRest = true
 			break
 		}
-		items = append(items, p.parseAssign())
+		p.nodes.exprs.add(p.parseAssign())
 		if !p.eatPunct(",") {
 			break
 		}
@@ -382,6 +382,7 @@ func (p *parser) parseParenOrArrow() ast.Expr {
 			break
 		}
 	}
+	items := p.nodes.exprs.finish(mark)
 	p.noIn = saved
 	p.expectPunct(")")
 
@@ -720,7 +721,7 @@ func (p *parser) parseClassMember(cls *ast.ClassLit, sawConstructor *bool, priva
 		// identifier in it.
 		p.noArguments = true
 		p.noAwaitIdent = true
-		p.labels = make(map[string]bool)
+		p.labels = nil
 		field.Value = p.parseAssign()
 		p.restoreContext(ctx)
 	}
@@ -747,7 +748,7 @@ func (p *parser) parseStaticBlock() []ast.Stmt {
 	// `await` is not an identifier in it.
 	p.noArguments = true
 	p.noAwaitIdent = true
-	p.labels = make(map[string]bool)
+	p.labels = nil
 
 	p.expectPunct("{")
 	body := p.parseStatements(func() bool { return p.isPunct("}") })
