@@ -3890,6 +3890,37 @@ func (r *Runtime) callIntrinsic1(fn *Object, this, a Value) (Value, error) {
 	return res, err
 }
 
+// ordinaryHasInstance answers what Function.prototype[Symbol.hasInstance]
+// would, where it can be answered without running anything a script could
+// see: c an ordinary function whose own prototype is a data property holding
+// an object, and v's chain free of proxies, whose traps are code. It reports
+// false in ok for anything else, which has the method called.
+func ordinaryHasInstance(c *Object, v Value) (yes, ok bool) {
+	if !v.IsObject() {
+		return false, false
+	}
+	fd := c.fn()
+	if fd == nil || fd.boundTarget != nil || proxyOf(c) != nil {
+		return false, false
+	}
+	p := c.getOwnVisible(atomPrototype)
+	if p == nil || p.flags&propAccessor != 0 || !p.value.IsObject() {
+		return false, false
+	}
+	target := p.value.Object()
+	for o := v.Object(); ; {
+		if proxyOf(o) != nil {
+			return false, false
+		}
+		if o = o.proto; o == nil {
+			return false, true
+		}
+		if o == target {
+			return true, true
+		}
+	}
+}
+
 // instanceOf implements the instanceof operator.
 func (r *Runtime) instanceOf(obj, ctor Value) (bool, error) {
 	if !ctor.IsObject() {
@@ -3898,13 +3929,16 @@ func (r *Runtime) instanceOf(obj, ctor Value) (bool, error) {
 	c := ctor.Object()
 
 	// A Symbol.hasInstance method overrides the default behaviour.
-	hasInstance, err := r.getProp(c, r.atoms.internSymbol(r.wellKnown.hasInstance), ctor)
+	hasInstance, err := r.getProp(c, r.hasInstanceAtom, ctor)
 	if err != nil {
 		return false, err
 	}
 	if !hasInstance.IsNullish() {
 		var res Value
 		if hasInstance.IsObject() && hasInstance.Object() == r.hasInstanceFn {
+			if yes, ok := ordinaryHasInstance(c, obj); ok {
+				return yes, nil
+			}
 			res, err = r.callIntrinsic1(r.hasInstanceFn, ctor, obj)
 		} else {
 			res, err = r.call(hasInstance, ctor, []Value{obj})

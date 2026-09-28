@@ -85,3 +85,25 @@ func TestIndexedReadsOfLocals(t *testing.T) {
 		return JSON.stringify(out);
 	})()`, `["proto","b","one",3,3,null,null,0,null,"changed","TypeError","at <eval>:11:11"]`)
 }
+
+func TestInstanceofWithoutTheMethodCall(t *testing.T) {
+	// The default Symbol.hasInstance is answered without calling it where
+	// nothing a script could see would run; everywhere else it is called,
+	// and what it does is observed as it was.
+	checkEval(t, `(function () {
+		var out = [];
+		class A {} class B extends A {}
+		function F() {} function G() {}
+		out.push(new B() instanceof A, new A() instanceof B, 5 instanceof F, Object.create(G.prototype) instanceof G);
+		var log = [];
+		var p = new Proxy({}, { getPrototypeOf() { log.push(new Error().stack.split("\n")[2].trim()); return F.prototype; } });
+		out.push(Object.create(p) instanceof F, p instanceof F, log.length, log[0]);
+		var bound = F.bind(null); out.push(new F() instanceof bound);
+		F.prototype = 5;
+		try { ({}) instanceof F; } catch (e) { out.push(e.constructor.name); }
+		try { ({}) instanceof Math.max; } catch (e) { out.push(e.constructor.name); }
+		var H = function () {}; Object.defineProperty(H, Symbol.hasInstance, { value: function (v) { return v === 1; } });
+		out.push(1 instanceof H, 2 instanceof H);
+		return JSON.stringify(out);
+	})()`, `[true,false,false,true,true,true,2,"at F.[Symbol.hasInstance] (<anonymous>)",true,"TypeError","TypeError",true,false]`)
+}

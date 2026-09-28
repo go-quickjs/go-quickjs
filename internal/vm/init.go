@@ -176,6 +176,7 @@ func (r *Runtime) initWellKnownSymbols() {
 		dispose:            mk("dispose"),
 		asyncDispose:       mk("asyncDispose"),
 	}
+	r.hasInstanceAtom = r.atoms.internSymbol(r.wellKnown.hasInstance)
 }
 
 // initIntrinsics creates the prototype objects.

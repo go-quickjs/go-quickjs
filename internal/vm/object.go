@@ -933,10 +933,10 @@ func (o *Object) setArrayLength(n uint32) {
 		// Drop any sparse index properties beyond the new length.
 		for i := range o.props {
 			p := &o.props[i]
-			if p.flags&propDeleted == 0 && p.key.IsIndex() && p.key.Index() >= n {
+			if key := p.key; p.flags&propDeleted == 0 && key.IsIndex() && key.Index() >= n {
 				o.props[i] = Property{key: atomEmpty, flags: propDeleted}
 				if o.index != nil {
-					delete(o.index, p.key)
+					delete(o.index, key)
 				}
 			}
 		}

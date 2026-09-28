@@ -125,6 +125,9 @@ type Runtime struct {
 	// wellKnown holds the well-known symbols, which the interpreter consults
 	// for iteration, coercion and instanceof.
 	wellKnown wellKnownSymbols
+	// hasInstanceAtom is Symbol.hasInstance's atom, which every instanceof
+	// looks up.
+	hasInstanceAtom Atom
 
 	// keptAlive holds the values a WeakRef has handed out during the current
 	// job. Two calls to deref in one turn have to answer the same way, so the
