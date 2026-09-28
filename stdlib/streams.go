@@ -58,7 +58,7 @@ func Streams(rt *quickjs.Runtime) error {
 // streamsJS is the whole of it. Streams are promises and queues, and saying
 // that in script is both shorter and closer to the standard than saying it in
 // Go and handing the pieces over.
-const streamsJS = `(function () {
+const streamsJS = `(function (host) {
   "use strict";
 
   const noop = () => {};
@@ -165,6 +165,7 @@ const streamsJS = `(function () {
 
   class ReadableStream {
     constructor(source = {}, strategy = {}) {
+      host.cloneAs(this, "transfer");
       this._source = source || {};
       this._state = "readable";
       this._storedError = undefined;
@@ -392,6 +393,7 @@ const streamsJS = `(function () {
 
   class WritableStream {
     constructor(sink = {}, strategy = {}) {
+      host.cloneAs(this, "transfer");
       this._sink = sink || {};
       this._state = "writable";
       this._storedError = undefined;
@@ -562,6 +564,7 @@ const streamsJS = `(function () {
 
   class TransformStream {
     constructor(transformer = {}, writableStrategy = {}, readableStrategy = {}) {
+      host.cloneAs(this, "transfer");
       transformer = transformer || {};
       let inner = null;
       let terminated = false;

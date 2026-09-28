@@ -29,7 +29,28 @@ type Codec struct {
 	Revive func(token any) (any, error)
 }
 
+// Brand is how a host object clones, which a host sets on it when it makes
+// it: its prototype, which a script may change, cannot say.
+type Brand int
+
+const (
+	// Host objects are asked of the codec's Serialize, whatever their
+	// prototype, and are not cloned if it declines them.
+	Host Brand = iota + 1
+	// Opaque objects clone as empty objects: their state is not in their
+	// properties.
+	Opaque
+	// Unsupported objects cannot be cloned.
+	Unsupported
+	// NeedsTransfer objects can only be transferred.
+	NeedsTransfer
+)
+
 var (
+	// SetBrand brands v, an ordinary object, with how it clones. It reports
+	// false for anything else.
+	SetBrand func(v any, b Brand) bool
+
 	// Serialize serializes v in rt, transferring what transfer lists: an
 	// ArrayBuffer is detached, its bytes moving with the result. A value that
 	// cannot be cloned is a *DataCloneError; an exception a getter throws is

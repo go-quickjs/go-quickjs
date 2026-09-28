@@ -30,6 +30,38 @@ type Serialized struct {
 // it. The host turns it into the DOMException it is.
 type DataCloneError struct{ Message string }
 
+// CloneBrand says how a host's object clones. It is kept as the internal
+// slot of an ordinary object, which has none of its own.
+type CloneBrand uint8
+
+const (
+	// CloneHost is asked of the host's codec, whatever its prototype.
+	CloneHost CloneBrand = iota + 1
+	// CloneOpaque clones as an empty object: its state is not in its
+	// properties.
+	CloneOpaque
+	// CloneUnsupported cannot be cloned.
+	CloneUnsupported
+	// CloneNeedsTransfer can only be transferred, as a stream is.
+	CloneNeedsTransfer
+)
+
+// SetCloneBrand brands an ordinary object with how it clones. It reports
+// false for any other.
+func (r *Runtime) SetCloneBrand(v Value, b CloneBrand) bool {
+	if !v.IsObject() {
+		return false
+	}
+	o := v.Object()
+	if o.class != ClassObject || o.data != nil && !isBrand(o.data) {
+		return false
+	}
+	o.data = b
+	return true
+}
+
+func isBrand(d any) bool { _, ok := d.(CloneBrand); return ok }
+
 func (e *DataCloneError) Error() string { return e.Message }
 
 // Codec lets the host serialize objects of its own.
@@ -206,13 +238,40 @@ func (s *serializer) value(v Value) (int, error) {
 		if p.target != nil && p.target.class == ClassArray {
 			return 0, &DataCloneError{"[object Array] could not be cloned."}
 		}
+		// A proxy of a function is named by the function, as V8 names it.
+		for t := p.target; t != nil; {
+			if tp := proxyOf(t); tp != nil {
+				t = tp.target
+				continue
+			}
+			if t.IsCallable() {
+				return 0, &DataCloneError{functionText(t) + " could not be cloned."}
+			}
+			break
+		}
 		return 0, &DataCloneError{"#<Object> could not be cloned."}
 	}
 	if o.IsCallable() {
 		return 0, &DataCloneError{functionText(o) + " could not be cloned."}
 	}
-	if s.codec != nil && s.codec.Serialize != nil &&
-		(o.class == ClassError || o.class == ClassObject && o.proto != s.r.proto.object && o.proto != nil) {
+	// A host object is branded with how it clones, which its prototype --
+	// that a script may change -- cannot say.
+	brand, branded := o.data.(CloneBrand)
+	if branded && o.class == ClassObject {
+		switch brand {
+		case CloneUnsupported:
+			return 0, &DataCloneError{"Cannot clone object of unsupported type."}
+		case CloneNeedsTransfer:
+			return 0, &DataCloneError{"Object that needs transfer was found in message but not listed in transferList"}
+		case CloneOpaque:
+			// Its state is its own, and none of it is cloned.
+			i := s.add(snode{kind: snObject})
+			s.memory[o] = i
+			return i, nil
+		}
+	}
+	if s.codec != nil && s.codec.Serialize != nil && (branded ||
+		o.class == ClassError || o.class == ClassObject && o.proto != s.r.proto.object && o.proto != nil) {
 		token, ok, err := s.codec.Serialize(v)
 		if err != nil {
 			return 0, err
@@ -222,6 +281,10 @@ func (s *serializer) value(v Value) (int, error) {
 			s.memory[o] = i
 			return i, nil
 		}
+	}
+	if branded && o.class == ClassObject {
+		// A host object its host did not serialize has nothing else to it.
+		return 0, &DataCloneError{"Cannot clone object of unsupported type."}
 	}
 
 	i := s.add(snode{})
@@ -242,7 +305,7 @@ func (s *serializer) value(v Value) (int, error) {
 			n.big = new(big.Int).Set(&prim.BigInt().V)
 		}
 	case ClassSymbolWrapper:
-		return 0, &DataCloneError{primitiveOf(o).Symbol().String() + " could not be cloned."}
+		return 0, &DataCloneError{"[object Symbol] could not be cloned."}
 	case ClassDate:
 		n.kind = snDate
 		d, ok := o.data.(*date.Date)
@@ -287,6 +350,18 @@ func (s *serializer) value(v Value) (int, error) {
 		}
 		if b, ok := buf.data.(*arrayBufferData); ok && b.detached {
 			return 0, &DataCloneError{"An ArrayBuffer is detached and could not be cloned."}
+		}
+		// A view its buffer has shrunk out from under is refused, as V8
+		// refuses it, rather than cloned out of bounds.
+		switch d := o.data.(type) {
+		case *typedArrayData:
+			if d.outOfBounds() {
+				return 0, s.uncloneable(o)
+			}
+		case *dataViewData:
+			if d.outOfBounds() {
+				return 0, s.uncloneable(o)
+			}
 		}
 		n.kind = snView
 		bi, err := s.value(Obj(buf))
@@ -345,7 +420,7 @@ func (s *serializer) value(v Value) (int, error) {
 		}
 	case ClassObject, ClassMathObject, ClassJSONObject:
 		// Math and JSON are ordinary objects, as far as a clone can tell.
-		if o.class == ClassObject && o.data != nil {
+		if o.class == ClassObject && o.data != nil && !branded {
 			return 0, s.uncloneable(o)
 		}
 		n.kind = snObject
@@ -411,17 +486,23 @@ func (s *serializer) properties(o *Object) ([]sprop, error) {
 	if err != nil {
 		return nil, err
 	}
-	var props []sprop
+	// Which keys are enumerable is settled once, before any is read, as
+	// EnumerableOwnProperties settles it: a getter that makes a later key
+	// non-enumerable does not take it out.
+	var enumerable []Atom
 	for _, k := range keys {
-		// A getter run for an earlier property may have removed this one.
-		if !s.r.hasOwnProp(o, k) {
-			continue
-		}
-		enumerable, err := s.r.isEnumerable(o, k)
+		e, err := s.r.isEnumerable(o, k)
 		if err != nil {
 			return nil, err
 		}
-		if !enumerable {
+		if e {
+			enumerable = append(enumerable, k)
+		}
+	}
+	var props []sprop
+	for _, k := range enumerable {
+		// A getter run for an earlier property may have removed this one.
+		if !s.r.hasOwnProp(o, k) {
 			continue
 		}
 		v, err := s.r.getProp(o, k, Obj(o))

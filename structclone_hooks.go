@@ -10,6 +10,13 @@ import (
 // Values are cloned between runtimes through structclone, which is filled in
 // here.
 func init() {
+	structclone.SetBrand = func(v any, b structclone.Brand) bool {
+		val, ok := v.(Value)
+		if !ok || val.rt == nil {
+			return false
+		}
+		return val.rt.SetCloneBrand(val.v, vm.CloneBrand(b))
+	}
 	structclone.Serialize = func(rt, v any, transfer []any, codec *structclone.Codec) (any, error) {
 		r := rt.(*Runtime)
 		if r.closed {

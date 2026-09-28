@@ -100,18 +100,28 @@ type messaging struct {
 	// What the script provides: a port object for an id, a DOMException, a
 	// look at what kind of host object a value is, and the dispatch of a
 	// message event; and receiveMessageOnPort, for worker_threads.
-	makePort, newDOMException, hostKind, deliver, receive quickjs.Value
+	makePort, newDOMException, hostKind, deliver, receive, makeBlob quickjs.Value
 }
 
 // domToken is a DOMException, serialized.
 type domToken struct{ name, message, stack string }
 
+// blobToken is a Blob, or a File, serialized: its bytes are copied, as a
+// Blob's never change.
+type blobToken struct {
+	bytes        []byte
+	typ          string
+	file         bool
+	name         string
+	lastModified float64
+}
+
 // messagingHost is the functions webAPIsJS reaches messaging through.
 func (m *messaging) host() map[string]any {
 	return map[string]any{
-		"bindMessaging": func(makePort, newDOMException, hostKind, deliver, receive quickjs.Value) {
+		"bindMessaging": func(makePort, newDOMException, hostKind, deliver, receive, makeBlob quickjs.Value) {
 			m.makePort, m.newDOMException, m.hostKind, m.deliver = makePort, newDOMException, hostKind, deliver
-			m.receive = receive
+			m.receive, m.makeBlob = receive, makeBlob
 		},
 		"clone": func(v quickjs.Value, transfer []quickjs.Value) (quickjs.Value, error) {
 			data, ports, err := m.serialize(v, transfer, nil)
@@ -274,6 +284,13 @@ func (m *messaging) serialize(v quickjs.Value, transfer []quickjs.Value, from *p
 				message, _ := kind.Index(2)
 				stack, _ := kind.Index(3)
 				return domToken{name.String(), message.String(), stack.String()}, true, nil
+			case "blob":
+				field := func(i int) quickjs.Value { f, _ := kind.Index(i); return f }
+				b, _ := field(1).Bytes()
+				return blobToken{
+					bytes: append([]byte(nil), b...), typ: field(2).String(), file: field(3).Bool(),
+					name: field(4).String(), lastModified: field(5).Float(),
+				}, true, nil
 			}
 			return nil, false, nil
 		},
@@ -332,6 +349,8 @@ func (m *messaging) deserialize(data any, ports []*portCore) (quickjs.Value, []q
 				return obj, err
 			case domToken:
 				return m.newDOMException.Call(t.message, t.name, t.stack)
+			case blobToken:
+				return m.makeBlob.Call(m.rt.NewBytes(t.bytes), t.typ, t.file, t.name, t.lastModified)
 			}
 			return nil, errors.New("stdlib: an object of an unknown kind was cloned")
 		},

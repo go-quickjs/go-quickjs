@@ -318,3 +318,60 @@ func TestDroppedMessagesClosePorts(t *testing.T) {
 		})
 	}
 }
+
+// TestCloneLikeNode pins how the standard library's own objects clone, which
+// is what they do in Node: a URL, Headers, Request, Response, FormData and
+// MessageEvent cannot be; an AbortController, an Event, a TextDecoder,
+// performance and crypto clone as the empty objects their state leaves
+// them; a Blob or a File as one; a stream only by transferring it. They
+// cloned as plain objects of their own properties, whatever their kind; a
+// port whose prototype was changed escaped the check; an out-of-bounds view
+// was cloned; enumerability was asked again for each key; and two messages
+// were not V8's (KI-47).
+func TestCloneLikeNode(t *testing.T) {
+	out, _ := run(t, stdlib.Config{}, `
+		const t = (f) => { try { return f() } catch (e) { return e.name + ": " + e.message } };
+		const kind = (v) => { const c = structuredClone(v); return Object.prototype.toString.call(c) + " " + JSON.stringify(Object.keys(c)); };
+		const lines = [];
+		for (const [k, f] of Object.entries({
+			URL: () => new URL("http://a/"), URLSearchParams: () => new URLSearchParams("a=1"), Headers: () => new Headers(),
+			Request: () => new Request("http://a/"), Response: () => new Response("x"), FormData: () => new FormData(),
+			MessageEvent: () => new MessageEvent("x"), AbortController: () => new AbortController(),
+			Event: () => new Event("x"), TextDecoder: () => new TextDecoder(), performance: () => performance, crypto: () => crypto,
+			ReadableStream: () => new ReadableStream(),
+		})) lines.push(k + " " + t(() => kind(f())));
+		lines.push("blob " + t(() => { const c = structuredClone(new Blob(["hi"], {type: "text/plain"})); return [c instanceof Blob, c.size, c.type, String(c)].join(); }));
+		lines.push("file " + t(() => { const c = structuredClone(new File(["x"], "f.txt", {lastModified: 5})); return [c instanceof File, c.name, c.lastModified].join(); }));
+		lines.push("port proto " + t(() => { const {port1} = new MessageChannel(); Object.setPrototypeOf(port1, null); return structuredClone(port1); }));
+		lines.push("oob " + t(() => { const ab = new ArrayBuffer(8, {maxByteLength: 16}); const v = new DataView(ab, 4, 4); ab.resize(2); return structuredClone(v); }));
+		lines.push("proxy fn " + t(() => structuredClone(new Proxy(function(){}, {}))));
+		lines.push("symbol " + t(() => structuredClone(Object(Symbol()))));
+		lines.push("enum " + t(() => { const o = {a: 1, b: 2}; Object.defineProperty(o, "a", {get() { Object.defineProperty(o, "b", {enumerable: false}); return 1 }, enumerable: true}); return JSON.stringify(structuredClone(o)); }));
+		console.log(lines.join("\n"));
+	`)
+	want := strings.Join([]string{
+		"URL DataCloneError: Cannot clone object of unsupported type.",
+		"URLSearchParams DataCloneError: Cannot clone object of unsupported type.",
+		"Headers DataCloneError: Cannot clone object of unsupported type.",
+		"Request DataCloneError: Cannot clone object of unsupported type.",
+		"Response DataCloneError: Cannot clone object of unsupported type.",
+		"FormData DataCloneError: Cannot clone object of unsupported type.",
+		"MessageEvent DataCloneError: Cannot clone object of unsupported type.",
+		"AbortController [object Object] []",
+		"Event [object Object] []",
+		"TextDecoder [object Object] []",
+		"performance [object Object] []",
+		"crypto [object Object] []",
+		"ReadableStream DataCloneError: Object that needs transfer was found in message but not listed in transferList",
+		"blob true,2,text/plain,[object Blob]",
+		"file true,f.txt,5",
+		"port proto DataCloneError: Object that needs transfer was found in message but not listed in transferList",
+		"oob DataCloneError: #<DataView> could not be cloned.",
+		"proxy fn DataCloneError: function(){} could not be cloned.",
+		"symbol DataCloneError: [object Symbol] could not be cloned.",
+		`enum {"a":1,"b":2}`,
+	}, "\n")
+	if out != want {
+		t.Errorf("got\n%s\nwant\n%s", out, want)
+	}
+}

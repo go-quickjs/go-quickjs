@@ -431,6 +431,7 @@ const fetchJS = `(function (host) {
 
   class Headers {
     constructor(init) {
+      host.cloneAs(this, "unsupported");
       Object.defineProperty(this, "_list", {value: [], writable: true});
       if (init instanceof Headers) {
         for (const [k, v] of init) this.append(k, v);
@@ -495,6 +496,7 @@ const fetchJS = `(function (host) {
   // error, as it is on the web, because there is nothing left to read.
   class Body {
     constructor(source, headers) {
+      host.cloneAs(this, "unsupported");
       const stream = isStream(source);
       Object.defineProperty(this, "_bytes",
         {value: stream ? undefined : source, writable: true});

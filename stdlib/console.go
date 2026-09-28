@@ -7,6 +7,7 @@ import (
 	"time"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
+	"github.com/go-quickjs/go-quickjs/internal/structclone"
 )
 
 // Console installs the console object, writing to the given streams.
@@ -50,12 +51,35 @@ func Console(rt *quickjs.Runtime, out, errOut io.Writer) error {
 // The host object is never a global: what the script gets is whatever the
 // function returns, and the hooks it was built out of are reachable only
 // through the closure. A script cannot get at the raw ones.
+//
+// Every host has cloneAs(obj, kind), with which a script's constructor says how
+// the object it made clones: "host" (as the codec says), "opaque" (as an
+// empty object), "unsupported", or "transfer" (only by transferring it).
 func evalWithHost(rt *quickjs.Runtime, name, src string, host quickjs.Value) (quickjs.Value, error) {
 	fn, err := rt.EvalFile(name, src)
 	if err != nil {
 		return quickjs.Value{}, err
 	}
+	if !host.IsObject() {
+		host = rt.NewObject()
+	}
+	if err := host.Set("cloneAs", cloneAs); err != nil {
+		return quickjs.Value{}, err
+	}
 	return fn.Call(host)
+}
+
+// cloneBrands are the kinds cloneAs takes.
+var cloneBrands = map[string]structclone.Brand{
+	"host": structclone.Host, "opaque": structclone.Opaque,
+	"unsupported": structclone.Unsupported, "transfer": structclone.NeedsTransfer,
+}
+
+// cloneAs brands an object a script of the standard library made with how it
+// clones, as Node's are: a URL cannot be cloned, an AbortController clones as
+// an empty object, a Blob as a Blob.
+func cloneAs(obj quickjs.Value, kind string) {
+	structclone.SetBrand(obj, cloneBrands[kind])
 }
 
 // consoleJS is the console, in script.

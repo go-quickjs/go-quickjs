@@ -210,6 +210,7 @@ const compressJS = `(function (host) {
   // holds more than what has not been written out yet.
   class CompressionStream {
     constructor(format) {
+      host.cloneAs(this, "opaque");
       const packer = host.packer(String(format));
       const inner = new TransformStream({
         transform(chunk, controller) {
@@ -230,6 +231,7 @@ const compressJS = `(function (host) {
   // rather than pushed, and there is nothing here to pull it.
   class DecompressionStream {
     constructor(format) {
+      host.cloneAs(this, "opaque");
       const name = String(format);
       const chunks = [];
       const inner = new TransformStream({

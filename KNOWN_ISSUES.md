@@ -485,7 +485,12 @@ Paths are relative to this repository; `go-intl:` paths are in
 - Enumerability is checked again for each key.
 - Two refusal messages differ from V8's: a proxy of a function, and
   `Object(Symbol())`.
-- **Status:** open.
+- **Status:** fixed. The standard library brands each object it makes with
+  how it clones, as Node's do -- unsupported, opaque, a Blob, or needing
+  transfer -- in the object's internal slot, which a changed prototype does
+  not hide. Out-of-bounds views are refused, enumerability is settled once,
+  and the messages are V8's. `CustomEvent`, which the library lacks, is the
+  one class Node has that this does not cover.
 
 ### KI-48 Messaging semantics
 - A listener that throws stops the rest of the dispatch.

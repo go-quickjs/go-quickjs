@@ -172,6 +172,7 @@ const webAPIsJS = `(function (host) {
   // becomes U+FFFD: that is what the standard says, and what makes the result
   // safe to hand to anything expecting UTF-8.
   class TextEncoder {
+    constructor() { host.cloneAs(this, "opaque"); }
     get encoding() { return "utf-8"; }
     encode(input = "") {
       const s = String(input);
@@ -209,6 +210,7 @@ const webAPIsJS = `(function (host) {
 
   class TextDecoder {
     constructor(label = "utf-8", options = {}) {
+      host.cloneAs(this, "opaque");
       const enc = String(label).toLowerCase();
       if (enc !== "utf-8" && enc !== "utf8" && enc !== "unicode-1-1-utf-8") {
         throw new RangeError("only utf-8 is supported, not " + label);
@@ -580,13 +582,22 @@ const webAPIsJS = `(function (host) {
     return out;
   }
 
+  // blobs are the Blobs this runtime made, which clone as Blobs.
+  const blobs = new WeakSet();
+
   class Blob {
     constructor(parts = [], options = {}) {
+      host.cloneAs(this, "host");
+      blobs.add(this);
       const pieces = [];
       for (const part of parts) pieces.push(bytesOfPart(part));
       Object.defineProperty(this, "_bytes", {value: joinBytes(pieces)});
-      this.type = String((options && options.type) || "").toLowerCase();
+      Object.defineProperty(this, "_type", {value: String((options && options.type) || "").toLowerCase()});
     }
+    // What a Blob is lives in it, not in properties of its own, as in Node:
+    // Object.keys and a clone see none.
+    get type() { return this._type; }
+    get [Symbol.toStringTag]() { return "Blob"; }
     get size() { return this._bytes.length; }
     async text() { return new TextDecoder().decode(this._bytes); }
     async bytes() { return this._bytes.slice(); }
@@ -610,16 +621,20 @@ const webAPIsJS = `(function (host) {
   class File extends Blob {
     constructor(parts, name, options = {}) {
       super(parts, options);
-      this.name = String(name);
-      this.lastModified = options && options.lastModified !== undefined
-        ? Number(options.lastModified) : Date.now();
+      Object.defineProperty(this, "_name", {value: String(name)});
+      Object.defineProperty(this, "_lastModified", {value: options && options.lastModified !== undefined
+        ? Number(options.lastModified) : Date.now()});
     }
+    get name() { return this._name; }
+    get lastModified() { return this._lastModified; }
+    get [Symbol.toStringTag]() { return "File"; }
   }
 
   // FormData keeps its entries in order and allows a name more than once,
   // which is the whole reason it is not an object.
   class FormData {
     constructor() {
+      host.cloneAs(this, "unsupported");
       Object.defineProperty(this, "_entries", {value: [], writable: true});
     }
     append(name, value, filename) {
@@ -821,6 +836,7 @@ const webAPIsJS = `(function (host) {
 
   class URLSearchParams {
     constructor(init = "") {
+      host.cloneAs(this, "unsupported");
       let pairs = [];
       if (typeof init === "string") {
         pairs = parseQuery(init);
@@ -917,6 +933,7 @@ const webAPIsJS = `(function (host) {
 
   class URL {
     constructor(input, base) {
+      host.cloneAs(this, "unsupported");
       let parsedBase = null;
       if (base !== undefined) {
         parsedBase = base instanceof URL ? internal.get(base).url : parseURL(String(base));
@@ -1013,6 +1030,7 @@ const webAPIsJS = `(function (host) {
 
   class Event {
     constructor(type, init = {}) {
+      host.cloneAs(this, "opaque");
       this.type = String(type);
       this.defaultPrevented = false;
       this.cancelable = !!init.cancelable;
@@ -1024,7 +1042,10 @@ const webAPIsJS = `(function (host) {
   }
 
   class EventTarget {
-    constructor() { Object.defineProperty(this, "_listeners", {value: new Map()}); }
+    constructor() {
+      host.cloneAs(this, "opaque");
+      Object.defineProperty(this, "_listeners", {value: new Map()});
+    }
     addEventListener(type, fn, options = {}) {
       if (typeof fn !== "function" && (!fn || typeof fn.handleEvent !== "function")) return;
       const key = String(type);
@@ -1080,7 +1101,7 @@ const webAPIsJS = `(function (host) {
   }
 
   class AbortController {
-    constructor() { this.signal = new AbortSignal(); }
+    constructor() { host.cloneAs(this, "opaque"); this.signal = new AbortSignal(); }
     abort(reason) {
       const s = this.signal;
       if (s.aborted) return;
@@ -1172,6 +1193,7 @@ const webAPIsJS = `(function (host) {
   class MessageEvent extends Event {
     constructor(type, init = {}) {
       super(type, init);
+      host.cloneAs(this, "unsupported");
       const {data = null, origin = "", lastEventId = "", source = null, ports = []} = init || {};
       messageEventState.set(this, {
         data, origin: String(origin), lastEventId: String(lastEventId), source,
@@ -1219,6 +1241,7 @@ const webAPIsJS = `(function (host) {
         throw e;
       }
       super();
+      host.cloneAs(this, "host");
       portIds.set(this, id);
       portHandlers.set(this, {message: null, messageerror: null});
     }
@@ -1296,6 +1319,11 @@ const webAPIsJS = `(function (host) {
   function hostKind(v) {
     const id = portIds.get(v);
     if (id !== undefined) return ["port", id];
+    if (blobs.has(v)) {
+      // A File is a Blob with a name and a date, which it keeps.
+      const file = v instanceof File;
+      return ["blob", v._bytes, v.type, file, file ? v.name : "", file ? v.lastModified : 0];
+    }
     const d = domState.get(v);
     if (d !== undefined) {
       const stack = v.stack;
@@ -1323,8 +1351,14 @@ const webAPIsJS = `(function (host) {
     return got === null ? undefined : {message: got[0]};
   }
 
+  // makeBlob makes the Blob, or the File, that one cloned from another stands
+  // for.
+  function makeBlob(bytes, type, file, name, lastModified) {
+    return file ? new File([bytes], name, {type, lastModified}) : new Blob([bytes], {type});
+  }
+
   host.bindMessaging((id) => new MessagePort(makingPort, id), newDOMException, hostKind, deliver,
-    receiveMessageOnPort);
+    receiveMessageOnPort, makeBlob);
 
   // --- BroadcastChannel ----------------------------------------------------
 
@@ -1437,6 +1471,10 @@ const webAPIsJS = `(function (host) {
       },
     },
   };
+  // Both clone as the empty objects they are in Node.
+  host.cloneAs(performance, "opaque");
+  host.cloneAs(crypto, "opaque");
+  host.cloneAs(crypto.subtle, "opaque");
 
   return {
     URL, URLSearchParams, TextEncoder, TextDecoder,
