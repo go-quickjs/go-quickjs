@@ -70,11 +70,17 @@ func parseDecimal(s string) (decimal, bool) {
 		if err != nil {
 			return decimal{}, false
 		}
-		d.exp += n
+		// An exponent this far out is an infinity or zero to anything that
+		// writes the number; held to it, adding the digits cannot overflow.
+		d.exp += min(max(n, -maxDecimalExponent), maxDecimalExponent)
 	}
 	d.normalize()
 	return d, true
 }
+
+// maxDecimalExponent bounds a decimal's exponent: past it a number is written
+// as an infinity or zero, which go-intl makes of it too.
+const maxDecimalExponent = 1 << 40
 
 // normalize strips the zeros that say nothing: the ones in front of the first
 // digit and the ones after the last.

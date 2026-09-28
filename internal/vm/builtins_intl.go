@@ -227,7 +227,8 @@ func (r *Runtime) numberArgument(v Value) (decimal, string, error) {
 		return decimal{}, "", err
 	}
 	if prim.IsString() {
-		text := strings.TrimSpace(prim.String().Go())
+		// JavaScript's whitespace, which is not Go's: U+0085 is not trimmed.
+		text := strings.Trim(prim.String().Go(), jsWhitespace)
 		switch text {
 		case "":
 			return decimal{}, "", nil
@@ -237,6 +238,13 @@ func (r *Runtime) numberArgument(v Value) (decimal, string, error) {
 			return decimal{}, "-inf", nil
 		}
 		if d, ok := parseDecimal(text); ok {
+			if r.nodeQuirks && d.digits != "" && d.exp-1 < -999999999 {
+				// ICU holds a number whose first digit is no further below the
+				// point than this, and V8 reports one that is as ICU's failure.
+				// The standard has no such bound: the number is written as
+				// any other, which rounds it to zero.
+				return decimal{}, "", r.throwTypeError("Internal error. Icu error.")
+			}
 			return d, "", nil
 		}
 	}

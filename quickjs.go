@@ -160,8 +160,10 @@ func WithLocale(tag string) Option {
 //
 // In Intl and Temporal it reproduces Node 26's proleptic Islamic era names,
 // Japanese h12 preference, and Temporal locale-formatting behavior for
-// standalone era and hour-cycle options, among go-intl's named divergences.
-// In the language it follows V8: strict code may assign to a call, which
+// standalone era and hour-cycle options, among go-intl's named divergences;
+// and Intl.NumberFormat refuses, as ICU does, a numeric string whose first
+// digit is more than 999,999,999 places below the point, which the standard
+// formats as the number it is. In the language it follows V8: strict code may assign to a call, which
 // throws a ReferenceError when it runs; and Annex B hoists a function declared
 // in a block over the arguments object, and over a function an enclosing
 // block declares with the same name; and a script's global functions and vars

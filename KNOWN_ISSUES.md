@@ -142,9 +142,10 @@ Paths are relative to this repository; `go-intl:` paths are in
   - `"-1e9223372036854775807"` overflows the engine's exponent and panics.
 - **Expected:** V8 throws `Error: Internal error. Icu error.` when the
   leading digit is below 10^-999999999.
-- **Status:** the go-intl half is fixed in go-intl 4b0b612, which counts
-  the zeros instead of writing them. The engine's exponent arithmetic
-  (`internal/vm/intldecimal.go`) and ICU's bound are open.
+- **Status:** fixed. go-intl 4b0b612 counts the zeros instead of writing
+  them, the engine holds an exponent where adding to it cannot overflow, and
+  ICU's bound is a Node divergence: the standard formats the number, and
+  `WithNodeQuirks` throws V8's `TypeError`.
 
 ### KI-11 Waiting on shared memory that grew after it was shared panics
 - **Where:** `internal/vm/sharedmem.go`. `wait` and `waitAsync` index the
@@ -483,7 +484,7 @@ Paths are relative to this repository; `go-intl:` paths are in
 - `DurationFormat` reads fields in the wrong order.
 - `Collator.prototype.compare` is a new function each time.
 - A compound unit gets "Internal error" instead of V8's message.
-- Numeric strings are trimmed of U+0085.
+- Numeric strings are trimmed of U+0085. *Fixed with KI-10.*
 - Lone surrogates compare equal.
 - `supportedLocalesOf(…, null)`'s message differs.
 - `new Intl.Locale("en-u-fw").firstDayOfWeek` is `""`.
