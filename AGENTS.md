@@ -153,3 +153,35 @@ Performance-sensitive work should compare fresh processes, not just repeated
 operations in one warmed process. Report bundle size, first-use latency,
 allocations, and peak RSS. Distinguish work moved from package startup to first
 feature use.
+
+## Releases
+
+Every release is named the same way, in go-quickjs and in go-intl alike:
+
+| | Form | Example |
+|---|---|---|
+| Tag | `vX.Y.Z`, annotated | `v0.9.1` |
+| Tag message | `<module> vX.Y.Z` | `go-quickjs v0.9.1` |
+| GitHub release title | `<module> vX.Y.Z` | `go-quickjs v0.9.1` |
+
+`<module>` is the repository's name: `go-quickjs` or `go-intl`. Nothing else
+goes in a title, such as a date, a codename or a summary; what a release
+contains belongs in its notes.
+
+```sh
+git tag -a v0.9.1 -m "go-quickjs v0.9.1"
+git push origin v0.9.1
+gh release create v0.9.1 --repo go-quickjs/go-quickjs --verify-tag \
+  --title "go-quickjs v0.9.1" --notes-file notes.md
+```
+
+Versions follow semantic versioning. Before 1.0, a new exported identifier or
+a change in behavior bumps the minor version, and a release with only fixes
+bumps the patch.
+
+A go-quickjs release requires a tagged go-intl, never a pseudo-version: tag
+and release go-intl first, then take it with `go get` and `go mod tidy`.
+
+Before tagging, run the full suite and the checks in [Validation](#validation)
+that apply to what changed since the last release. After publishing, confirm
+that `proxy.golang.org` serves the new version.
