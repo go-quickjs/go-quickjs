@@ -346,6 +346,14 @@ func (r *Runtime) resumeFull(g *generator, sent Value, mode resumeMode) (resumeR
 		return resumeResult{value: Undefined, done: true}, nil
 	}
 
+	// The body runs in the realm it was written in, as a call of it does,
+	// whichever realm's next resumes it.
+	if re := g.cl.realm; re != nil && re != r.Realm {
+		prev := r.Realm
+		r.Realm = re
+		defer func() { r.Realm = prev }()
+	}
+
 	// A return or throw before the body starts finishes it without running.
 	if g.state == genSuspendedStart {
 		switch mode {

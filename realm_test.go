@@ -156,3 +156,29 @@ func TestRealmAPI(t *testing.T) {
 		t.Errorf("cancelled run: %v", err)
 	}
 }
+
+// TestGeneratorRunsInItsRealm pins that a generator's body runs in the realm
+// it was written in when another realm's next resumes it, as a call of it
+// would: it ran in the caller's, where its own realm's top-level let bindings
+// are not (KI-30).
+func TestGeneratorRunsInItsRealm(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	re, err := rt.NewRealm()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := re.Eval(`let secret = 42; function* g() { yield secret; yield Array === globalThis.Array; }`); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.Set("other", re.Global()); err != nil {
+		t.Fatal(err)
+	}
+	v, err := rt.Eval(`
+		const next = Object.getPrototypeOf(function* () {}).prototype.next;
+		const it = other.g();
+		try { [next.call(it).value, next.call(it).value].join() } catch (e) { e.name + ": " + e.message }`)
+	if err != nil || v.String() != "42,true" {
+		t.Errorf("= %v, %v", v, err)
+	}
+}

@@ -357,7 +357,7 @@ Paths are relative to this repository; `go-intl:` paths are in
   `r.Realm`.
 - **Effect:** the generator's own realm's top-level `let` bindings become
   unreachable.
-- **Status:** open.
+- **Status:** fixed. A resumption runs in the generator's closure's realm.
 
 ### KI-31 A non-writable array `length` can be bypassed
 - **Where:** `internal/vm/property.go` (`createOwnProp`).
