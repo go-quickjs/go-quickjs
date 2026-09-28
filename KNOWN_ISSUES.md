@@ -585,7 +585,14 @@ Paths are relative to this repository; `go-intl:` paths are in
 - `DisplayNames` `"weekOfYear"`.
 - `"und-Zzzz-ZZ".maximize()`.
 - `minimize()` with the `Zzzz` script.
-- **Status:** open.
+- **Status:** fixed in go-intl v0.3.1.
+  - `dayPeriod` and `timeZoneName` had no names either. All three are
+    CLDR's `week`, `dayperiod` and `zone`.
+  - `Zzzz` and `ZZ` count as missing subtags, as UTS #35 says.
+  - `WithNodeQuirks` keeps ICU's answer, go-intl's `UnknownSubtags`: a
+    locale that names all three subtags maximizes to itself. Standards mode
+    gives `en-Zzzz-US` → `en-Latn-US`; Node gives `en-Zzzz-US`.
+  - Test: `TestIntlUnknownSubtagsAndFieldNames`.
 
 ### KI-58 A cyclic `join` throws
 - **Effect:** `a.push(a); a.join()` throws `RangeError`; V8 returns `"1,"`.

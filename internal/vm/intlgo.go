@@ -26,8 +26,9 @@ import (
 // the days of the Chinese and Korean calendars, which are Temporal's, the
 // region of a locale's hour cycles, the time zones in no region, the two
 // roundings of Temporal the standard fixed after Node's temporal_rs, the
-// calendar uz-AF's date patterns are read from, and the digit options
-// PluralRules reports.
+// calendar uz-AF's date patterns are read from, the digit options
+// PluralRules reports, and the unknown script and region a locale
+// maximizes past.
 func (r *Runtime) intlCompat() intl.Compat {
 	if r.nodeQuirks {
 		return intl.NodeICU
@@ -36,7 +37,8 @@ func (r *Runtime) intlCompat() intl.Compat {
 		intl.CurrencyNames | intl.DurationOverflow | intl.DurationSeparator | intl.LiteralFields |
 		intl.IslamicFallback | intl.HourCycleKeyword | intl.PlainValueZone | intl.ZoneIdentifiers |
 		intl.CopticEra | intl.ChineseAstronomy | intl.SubdivisionHourCycles | intl.RegionZones |
-		intl.RoundingWindow | intl.RepeatedMidnight | intl.PatternCalendar | intl.PluralRulesDigits)
+		intl.RoundingWindow | intl.RepeatedMidnight | intl.PatternCalendar | intl.PluralRulesDigits |
+		intl.UnknownSubtags)
 }
 
 // canonicalizer puts locale identifiers in canonical form, as

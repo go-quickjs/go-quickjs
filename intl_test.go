@@ -1098,3 +1098,22 @@ func TestIntlSmallDetails(t *testing.T) {
 		t.Errorf("quirks: %s", got)
 	}
 }
+
+// DisplayNames names weekOfYear, dayPeriod and timeZoneName, which CLDR files
+// as week, dayperiod and zone; and the unknown script "Zzzz" and region "ZZ"
+// count as left out when a locale is maximized and minimized, as UTS #35 has
+// it. Under WithNodeQuirks, as ICU does, a locale naming all three maximizes
+// to itself.
+func TestIntlUnknownSubtagsAndFieldNames(t *testing.T) {
+	const fields = `["en", "de", "ja"].map(l => { const d = new Intl.DisplayNames(l, {type: "dateTimeField"});
+		return [d.of("weekOfYear"), d.of("dayPeriod"), d.of("timeZoneName")].join() }).join("|")`
+	checkEval(t, fields, "week,AM/PM,time zone|Woche,Tageshälfte,Zeitzone|週,午前/午後,タイムゾーン")
+	const likely = `["und-Zzzz-ZZ", "en-Zzzz-US", "sr-Zzzz-ME", "zh-Zzzz", "en-Zzzz-001"].map(t => {
+		const l = new Intl.Locale(t); return l.maximize() + " " + l.minimize() }).join("|")`
+	checkEval(t, likely, "en-Latn-US en|en-Latn-US en|sr-Latn-ME sr-ME|zh-Hans-CN zh|en-Latn-001 en-001")
+	rt := quickjs.New(quickjs.WithNodeQuirks())
+	defer rt.Close()
+	if got := evalString(t, rt, likely); got != "en-Latn-US en|en-Zzzz-US en|sr-Zzzz-ME sr-ME|zh-Hans-CN zh|en-Zzzz-001 en-001" {
+		t.Errorf("quirks: %s", got)
+	}
+}

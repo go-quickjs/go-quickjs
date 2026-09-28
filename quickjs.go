@@ -175,7 +175,10 @@ func WithLocale(tag string) Option {
 // refuses, with V8's RangeError, a Temporal plain date whose midnight, or a
 // plain date-time, is past the instants a Date can hold, which the standard
 // formats; and Intl.Locale answers a firstDayOfWeek keyword with no value as
-// "true", where the standard answers "".
+// "true", where the standard answers ""; and Intl.Locale's maximize keeps a
+// locale that names a language, a script and a region as it is, as ICU
+// does, though the script is "Zzzz" or the region "ZZ", which the standard
+// fills in: "en-Zzzz-US" rather than "en-Latn-US".
 //
 // It is useful for hosts that prioritize Node compatibility over conformance.
 func WithNodeQuirks() Option {
