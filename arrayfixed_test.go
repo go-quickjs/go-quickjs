@@ -62,3 +62,25 @@ func TestIndexOrderWithAttributes(t *testing.T) {
 		out.join(" | ")`,
 		`0,1,2,3,length | 0,1,2,10,length,x | 0,1,2,3 | {"0":0,"1":9,"2":2,"3":3} | 0,1,2,3,length`)
 }
+
+// TestForOfArrayFastPath pins that the ways an array is iterated without the
+// protocol's objects -- for-of, spread -- answer as the protocol does: they
+// go to the array's length, where for-of stopped at the end of its dense
+// storage, so freezing the array or writing far past its end ended the
+// loop; and a replaced %ArrayIteratorPrototype%.next is called, where it
+// was ignored (KI-36). The answers are node's.
+func TestForOfArrayFastPath(t *testing.T) {
+	checkEval(t, `const out = [];
+		{ const a = [1, 2, 3]; const r = []; for (const v of a) { r.push(v); if (v === 1) Object.freeze(a); } out.push("freeze " + r.join()); }
+		{ const a = [1, 2]; const r = []; for (const v of a) { r.push(v); if (v === 1) a[5000] = 9; if (r.length > 10) break; } out.push("sparse " + r.length + " " + r[r.length - 1]); }
+		{ const a = [1, 2, 3]; const r = []; for (const v of a) { r.push(v); if (v === 1) Object.defineProperty(a, 2, {get() { return "g" }}); } out.push("accessor " + r.join()); }
+		{ const a = [1, 2, 3]; const r = []; for (const v of a) { r.push(v); a.length = 1; } out.push("shrink " + r.join()); }
+		const AIP = Object.getPrototypeOf([][Symbol.iterator]()); const orig = AIP.next;
+		let n = 0; AIP.next = function () { n++; return orig.call(this); };
+		for (const v of [1, 2]) ; out.push("for-of next " + n);
+		n = 0; [...[1, 2]]; out.push("spread next " + n);
+		n = 0; Math.max(...[1, 2]); out.push("call spread next " + n);
+		AIP.next = orig;
+		out.join(" | ")`,
+		"freeze 1,2,3 | sparse 11 undefined | accessor 1,2,g | shrink 1 | for-of next 3 | spread next 3 | call spread next 3")
+}

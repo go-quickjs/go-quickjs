@@ -285,6 +285,9 @@ type Realm struct {
 	// compare against: an array iterates the way they assume only if this is
 	// still what its Symbol.iterator resolves to.
 	arrayValuesFn *Object
+	// arrayIterNextFn is %ArrayIteratorPrototype%.next, which for-of's fast
+	// path stands in for only while it is still there.
+	arrayIterNextFn *Object
 	// uint8Proto is Uint8Array.prototype, which the base64 conversions need in
 	// order to build their results.
 	uint8Proto *Object

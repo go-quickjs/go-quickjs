@@ -1925,7 +1925,7 @@ type arrayIterData struct {
 // makes the prototype worth having.
 func (r *Runtime) initArrayIteratorProto() {
 	p := r.proto.arrayIter
-	r.defMethod(p, "next", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	r.arrayIterNextFn = r.defMethod(p, "next", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		d, ok := arrayIterOf(this)
 		if !ok {
 			return Undefined, rt.throwTypeError(

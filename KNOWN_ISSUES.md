@@ -405,7 +405,9 @@ Paths are relative to this repository; `go-intl:` paths are in
   - Iteration stops at the end of the dense elements, so freezing the array
     or growing it sparsely ends it early.
   - A replaced `%ArrayIteratorPrototype%.next` is ignored.
-- **Status:** open.
+- **Status:** fixed. The walk goes to the array's length, reading what is
+  not in dense storage with a Get, and every array fast path -- for-of,
+  spread, destructuring -- steps aside once `next` is replaced.
 
 ### KI-37 Views don't see another runtime's growth of a shared buffer
 - **Where:** `typedArrayData.count()` and `DataView` storage, and the

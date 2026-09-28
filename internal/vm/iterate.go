@@ -156,20 +156,27 @@ func (r *Runtime) iterNext(cursor Value) (Value, bool, error) {
 	}
 
 	if st.arr != nil {
-		if st.idx >= len(st.arr.elems) {
+		// The walk goes to the array's length, as the iterator's does, not
+		// to the end of its dense storage: freezing an array, or writing far
+		// past its end, moves elements out of it.
+		if st.idx >= int(st.arr.arrayLength()) {
 			st.done = true
 			return Undefined, false, nil
 		}
 		i := st.idx
 		st.idx++
-		v := st.arr.elems[i]
-		if isHole(v) {
-			// A hole is read through the prototype chain, which is what the
-			// real iterator's Get would do.
-			got, err := r.getProp(st.arr, r.atoms.indexAtom(uint32(i)), Obj(st.arr))
-			return got, err == nil, err
+		if i < len(st.arr.elems) {
+			if v := st.arr.elems[i]; !isHole(v) {
+				return v, true, nil
+			}
 		}
-		return v, true, nil
+		// Anything else is read as the iterator's Get reads it: a hole through
+		// the prototype chain, an element with attributes from the table.
+		got, err := r.getProp(st.arr, r.atoms.indexAtom(uint32(i)), Obj(st.arr))
+		if err != nil {
+			st.done = true
+		}
+		return got, err == nil, err
 	}
 
 	if st.forIn {
@@ -353,12 +360,18 @@ func (r *Runtime) plainDenseElems(src Value) ([]Value, bool) {
 // usesIntrinsicArrayIterator reports whether an array still iterates the way
 // Array.prototype does.
 //
-// Anything else -- an own Symbol.iterator, a replaced one on the prototype, or
-// none at all, which `delete Array.prototype[Symbol.iterator]` leaves -- means
+// Anything else -- a replaced %ArrayIteratorPrototype%.next, an own
+// Symbol.iterator, a replaced one on the prototype, or none at all, which `delete Array.prototype[Symbol.iterator]` leaves -- means
 // the fast path would answer differently from the protocol. The last case is
 // the one that matters most: without an iterator, destructuring an array is a
 // TypeError, and a fast path that skipped the lookup would quietly succeed.
 func (r *Runtime) usesIntrinsicArrayIterator(o *Object) bool {
+	// The iterator's next is called for each element, so a replaced one is
+	// as much a different way of iterating as a replaced Symbol.iterator.
+	if p := r.proto.arrayIter.getOwn(atomNext); p == nil || p.isAccessor() ||
+		!p.value.IsObject() || p.value.Object() != r.arrayIterNextFn {
+		return false
+	}
 	key := r.atoms.internSymbol(r.wellKnown.iterator)
 	for cur := o; cur != nil; cur = cur.proto {
 		if p := cur.getOwn(key); p != nil {
