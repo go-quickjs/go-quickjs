@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"errors"
 	"math"
 	"math/big"
 	"strconv"
@@ -66,21 +67,23 @@ func parseDecimal(s string) (decimal, bool) {
 	d.digits = whole + fraction
 	d.exp = len(whole)
 	if hasExp {
-		n, err := strconv.Atoi(exponent)
-		if err != nil {
+		// An exponent this far out is an infinity or zero to anything that
+		// writes the number; held to it, adding the digits cannot overflow
+		// an int, of either size. One too long for an int64 is as far out.
+		n, err := strconv.ParseInt(exponent, 10, 64)
+		if err != nil && !errors.Is(err, strconv.ErrRange) {
 			return decimal{}, false
 		}
-		// An exponent this far out is an infinity or zero to anything that
-		// writes the number; held to it, adding the digits cannot overflow.
-		d.exp += min(max(n, -maxDecimalExponent), maxDecimalExponent)
+		d.exp += int(min(max(n, -maxDecimalExponent), maxDecimalExponent))
 	}
 	d.normalize()
 	return d, true
 }
 
 // maxDecimalExponent bounds a decimal's exponent: past it a number is written
-// as an infinity or zero, which go-intl makes of it too.
-const maxDecimalExponent = 1 << 40
+// as an infinity or zero, which go-intl makes of it too, past 2^30. With the
+// digits of a string, at most 2^29, it stays within an int32.
+const maxDecimalExponent = 3 << 29
 
 // normalize strips the zeros that say nothing: the ones in front of the first
 // digit and the ones after the last.
