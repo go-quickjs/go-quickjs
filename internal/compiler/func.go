@@ -1153,15 +1153,6 @@ func topLevelLexicalNames(body []ast.Stmt) []string {
 	return out
 }
 
-// classFieldName returns the name to infer for an anonymous function assigned
-// to a class field.
-func classFieldName(key ast.Expr, computed bool) string {
-	if computed {
-		return ""
-	}
-	return propKeyName(key)
-}
-
 // compileMethodValue emits a method's closure.
 func (c *compiler) compileMethodValue(fn *ast.FuncLit, name string) {
 	lit := *fn

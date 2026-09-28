@@ -222,13 +222,15 @@ func dumpExpr(sb *strings.Builder, e ast.Expr) {
 	case *ast.Ident:
 		sb.WriteString(n.Name)
 	case *ast.PrivateName:
-		sb.WriteString("#" + n.Name)
+		sb.WriteByte('#')
+		sb.WriteString(n.Name)
 	case *ast.NumberLit:
 		sb.WriteString(jsnum.FormatFloat(n.Value))
 	case *ast.StringLit:
 		sb.WriteString(strconv.Quote(n.Value))
 	case *ast.BigIntLit:
-		sb.WriteString(n.Raw + "n")
+		sb.WriteString(n.Raw)
+		sb.WriteByte('n')
 	case *ast.BoolLit:
 		if n.Value {
 			sb.WriteString("true")

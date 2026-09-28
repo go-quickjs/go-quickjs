@@ -1003,13 +1003,6 @@ func boolBit(b bool) uint32 {
 	return 0
 }
 
-// collectVarNames gathers the names bound by `var` and by function
-// declarations, descending through every construct that does not introduce a
-// new function scope.
-func collectVarNames(body []ast.Stmt, out *[]string) {
-	collectVarNamesIn(body, out, false)
-}
-
 // collectVarNamesIn gathers the names a function's var-scoped bindings cover.
 //
 // Real `var` declarations and top-level function declarations are

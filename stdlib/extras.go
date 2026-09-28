@@ -27,7 +27,7 @@ func Extras(rt *quickjs.Runtime, hasTimers bool) error {
 		if err != nil {
 			return err
 		}
-		exports, err := moduleExports(rt, v)
+		exports, err := moduleExports(v)
 		if err != nil {
 			return err
 		}
@@ -47,7 +47,7 @@ func Extras(rt *quickjs.Runtime, hasTimers bool) error {
 	if err != nil {
 		return err
 	}
-	exports, err := moduleExports(rt, promises)
+	exports, err := moduleExports(promises)
 	if err != nil {
 		return err
 	}

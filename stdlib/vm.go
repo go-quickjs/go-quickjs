@@ -68,7 +68,7 @@ func VM(rt *quickjs.Runtime) error {
 	if err != nil {
 		return err
 	}
-	exports, err := moduleExports(rt, api)
+	exports, err := moduleExports(api)
 	if err != nil {
 		return err
 	}

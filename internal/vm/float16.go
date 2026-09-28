@@ -27,11 +27,11 @@ func float16frombits(h uint16) float64 {
 	exp := int32(h>>10) & 0x1F
 	frac := uint32(h) & 0x3FF
 
-	switch {
-	case exp == 0x1F:
+	switch exp {
+	case 0x1F:
 		// Infinity or NaN, which widen to the same.
 		return float64(math.Float32frombits(sign | 0xFF<<23 | frac<<13))
-	case exp == 0:
+	case 0:
 		if frac == 0 {
 			return float64(math.Float32frombits(sign))
 		}

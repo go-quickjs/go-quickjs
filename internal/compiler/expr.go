@@ -458,8 +458,8 @@ func (c *compiler) compileArrayLit(n *ast.ArrayLit) {
 
 	c.emit(bytecode.OpNewArray, 0, 0)
 	for _, el := range n.Elements {
-		switch {
-		case el == nil:
+		switch el {
+		case nil:
 			// A hole advances the length without creating a property, which is
 			// what makes `1 in [1,,3]` false and what the iteration methods
 			// skip.

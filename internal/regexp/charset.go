@@ -242,12 +242,6 @@ var (
 	}
 	classSpace    = buildSet(false, spaceRanges...)
 	classNotSpace = complementSet(spaceRanges...)
-
-	// The characters . excludes when dotAll is off.
-	lineTerminators = []charRange{
-		{'\n', '\n'}, {'\r', '\r'}, {0x2028, 0x2029},
-	}
-	classNotLineTerminator = complementSet(lineTerminators...)
 )
 
 func buildSet(negated bool, ranges ...charRange) *charSet {
@@ -369,12 +363,3 @@ var digitValues = func() (t [256]byte) {
 	}
 	return t
 }()
-
-func indexByte(s string, c byte) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == c {
-			return i
-		}
-	}
-	return -1
-}

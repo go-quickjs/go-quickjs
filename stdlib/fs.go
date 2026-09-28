@@ -600,20 +600,6 @@ func (f *fsHost) settle(p *quickjs.Promise, v any, err error) {
 // Argument helpers
 // ---------------------------------------------------------------------------
 
-func arg(args []quickjs.Value, i int) quickjs.Value {
-	if i < len(args) {
-		return args[i]
-	}
-	return quickjs.Value{}
-}
-
-func argStr(args []quickjs.Value, i int) string {
-	if i < len(args) {
-		return args[i].String()
-	}
-	return ""
-}
-
 // encodingOf reads the encoding argument, which is either a string or an
 // object with an encoding property, as node accepts both.
 func encodingOf(v quickjs.Value) string {

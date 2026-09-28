@@ -51,11 +51,11 @@ func indirectSource(local string) (specifier, imported string, ok bool) {
 		return "", "", false
 	}
 	rest := local[len(reExportPrefix):]
-	i := strings.Index(rest, ":")
-	if i < 0 {
+	specifier, imported, ok = strings.Cut(rest, ":")
+	if !ok {
 		return "", "", false
 	}
-	return rest[:i], rest[i+1:], true
+	return specifier, imported, true
 }
 
 // exportBinding is where an export name leads.

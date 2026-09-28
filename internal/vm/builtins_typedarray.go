@@ -1852,18 +1852,6 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 	}
 }
 
-// newTypedArrayOf builds a view of the given kind holding the given values.
-func (r *Runtime) newTypedArrayOf(kind elemType, vals []Value) (Value, error) {
-	o := newObject(r.typedArrayProtoFor(kind), ClassTypedArray)
-	t := r.allocTypedArray(o, kind, len(vals))
-	for i, el := range vals {
-		if err := r.setElem(t, i, el); err != nil {
-			return Undefined, err
-		}
-	}
-	return Obj(o), nil
-}
-
 // typedArrayFromValues builds a view of the given kind holding the values of an
 // array.
 // typedArrayProtoFor returns the prototype a view of the given element type
@@ -2018,18 +2006,6 @@ func (r *Runtime) typedArrayResultFor(ctor Value, n int64) (Value, *typedArrayDa
 		return Undefined, nil, r.throwTypeError("the result is too short")
 	}
 	return res, t, nil
-}
-
-// typedArrayKindOf recovers the element type a static was reached through.
-func (r *Runtime) typedArrayKindOf(this Value, name string) (elemType, error) {
-	if this.IsObject() {
-		for kind := elemInt8; int(kind) < len(elemInfos); kind++ {
-			if c := r.typedArrayCtors[kind]; c != nil && c == this.Object() {
-				return kind, nil
-			}
-		}
-	}
-	return 0, r.throwTypeError("%%TypedArray%%.%s requires a typed array constructor", name)
 }
 
 // compareNumeric orders two elements of a typed array.

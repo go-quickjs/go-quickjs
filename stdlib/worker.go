@@ -148,7 +148,7 @@ func installWorkers(rt *quickjs.Runtime, cfg Config, m *messaging, events quickj
 	if err != nil {
 		return err
 	}
-	exports, err := moduleExports(rt, threads)
+	exports, err := moduleExports(threads)
 	if err != nil {
 		return err
 	}

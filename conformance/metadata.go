@@ -94,11 +94,11 @@ func indentOf(line string) int {
 
 // splitKey separates "key: value", reporting false for a line that is not one.
 func splitKey(line string) (key, value string, ok bool) {
-	i := strings.IndexByte(line, ':')
-	if i < 0 {
+	key, value, ok = strings.Cut(line, ":")
+	if !ok {
 		return "", "", false
 	}
-	return strings.TrimSpace(line[:i]), strings.TrimSpace(line[i+1:]), true
+	return strings.TrimSpace(key), strings.TrimSpace(value), true
 }
 
 // parseList reads a list written either inline as [a, b] or as following

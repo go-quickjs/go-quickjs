@@ -359,12 +359,5 @@ func (r *Runtime) wrapEvalError(err error) error {
 }
 
 func joinComma(parts []string) string {
-	out := ""
-	for i, p := range parts {
-		if i > 0 {
-			out += ","
-		}
-		out += p
-	}
-	return out
+	return strings.Join(parts, ",")
 }

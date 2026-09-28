@@ -76,7 +76,7 @@ func (r *Runtime) initArrayExtras2() {
 				return Undefined, err
 			}
 			if !present {
-				if err := out.pushHole(rt); err != nil {
+				if err := out.pushHole(); err != nil {
 					return Undefined, err
 				}
 				continue
@@ -407,16 +407,6 @@ func (r *Runtime) initArrayExtras2() {
 		}
 		return Obj(out), nil
 	})
-}
-
-func clampInt(v, lo, hi int) int {
-	switch {
-	case v < lo:
-		return lo
-	case v > hi:
-		return hi
-	}
-	return v
 }
 
 // ---------------------------------------------------------------------------

@@ -45,7 +45,7 @@ func nodeModules(rt *quickjs.Runtime) (quickjs.Value, error) {
 		if err != nil {
 			return quickjs.Value{}, err
 		}
-		exports, err := moduleExports(rt, v)
+		exports, err := moduleExports(v)
 		if err != nil {
 			return quickjs.Value{}, err
 		}
@@ -78,7 +78,7 @@ func nodeModules(rt *quickjs.Runtime) (quickjs.Value, error) {
 
 // moduleExports turns an object into the exports of a module: every own
 // property by name, and the object itself as the default.
-func moduleExports(rt *quickjs.Runtime, o quickjs.Value) (map[string]quickjs.Value, error) {
+func moduleExports(o quickjs.Value) (map[string]quickjs.Value, error) {
 	out := map[string]quickjs.Value{"default": o}
 	for _, k := range o.Keys() {
 		v, err := o.Get(k)

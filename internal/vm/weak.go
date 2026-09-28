@@ -73,15 +73,6 @@ func (w weakTarget) get() (Value, bool) {
 	return Undefined, false
 }
 
-// kind reports which sort of value the target names, which the map index needs
-// so that an object and a symbol cannot collide.
-func (w weakTarget) kind() Kind {
-	if w.isSymbol {
-		return KindSymbol
-	}
-	return KindObject
-}
-
 // alive reports whether the target is still there.
 func (w weakTarget) alive() bool {
 	_, ok := w.get()

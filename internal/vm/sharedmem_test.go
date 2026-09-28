@@ -38,8 +38,8 @@ func TestNotifyDeliversUnlocked(t *testing.T) {
 	delivered := make(chan string, 1)
 	w, now := m.waitAsync(0, 4, 0, math.Inf(1), func(outcome string) {
 		m.mu.Lock()
-		m.mu.Unlock()
 		delivered <- outcome
+		m.mu.Unlock()
 	})
 	if w == nil {
 		t.Fatalf("waitAsync answered %q at once", now)

@@ -144,19 +144,6 @@ func containsArgumentsInStmts(body []ast.Stmt) bool {
 	return w.found
 }
 
-// needsHomeObject reports whether an expression mentions super, or a direct
-// eval that might.
-//
-// It decides whether a static field initializer has to be an immediately
-// invoked method of the class, which is what gives super a home object to
-// resolve against. Only an initializer that needs one pays for the call -- and
-// an eval counts, because what it will say cannot be known from here.
-func needsHomeObject(e ast.Expr) bool {
-	w := &argumentsScanner{seekThis: true, seekSuper: true, seekEval: true}
-	w.expr(e)
-	return w.found
-}
-
 // referencesThis reports whether a function body can observe its `this`.
 //
 // It is asked so that a sloppy-mode call can skip substituting the global

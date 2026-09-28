@@ -1101,7 +1101,7 @@ func TestCryptoUsesTheHostsRandomness(t *testing.T) {
 			console.log(crypto.randomInt(0, 100) < 100)
 		})
 	`)
-	first := strings.SplitN(out, "\n", 2)[0]
+	first, _, _ := strings.Cut(out, "\n")
 	again, _ := run(t, stdlib.Config{Random: rand.New(rand.NewSource(1))}, `
 		import("crypto").then((c) => console.log(c.randomBytes(4).toString("hex")))
 	`)

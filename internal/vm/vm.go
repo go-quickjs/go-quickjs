@@ -2,10 +2,11 @@ package vm
 
 import (
 	"errors"
-	"github.com/go-quickjs/go-quickjs/internal/fdlibm"
 	"math"
 	"math/big"
 	"unsafe"
+
+	"github.com/go-quickjs/go-quickjs/internal/fdlibm"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jsnum"
@@ -554,25 +555,6 @@ func (r *Runtime) bindParameters(f *frame, fn *bytecode.Function, args []Value) 
 	// rest parameter -- is compiled into the function prologue rather than
 	// handled here, so there is nothing more to do.
 	return nil
-}
-
-// bindLexicalParameters fills the slots of a parameter list whose bindings are
-// initialized one at a time.
-//
-// Such a parameter is not bound until the prologue reaches it, so one that has
-// not been reached has to be distinguishable from one that has:
-// `function f(a = b, b) {}` is a reference error, and so is
-// `function f(a = a) {}`. What makes a default run is the argument being
-// undefined -- passed or missing, which nothing can tell apart -- so both leave
-// the marker in place, and the prologue replaces it.
-func bindLexicalParameters(slots []Value, args []Value) {
-	for i := range slots {
-		if i < len(args) && !args[i].IsUndefined() {
-			slots[i] = args[i]
-		} else {
-			slots[i] = uninitialized
-		}
-	}
 }
 
 // execute runs the interpreter loop for one frame.
@@ -3505,7 +3487,7 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 	// here -- and reading new.target's prototype now would be out of order: a
 	// built-in checks its arguments first, and the read is observable.
 	if fd.native != nil {
-		return r.constructNative(o, fd, args, newTarget, target != o)
+		return r.constructNative(o, args, newTarget, target != o)
 	}
 
 	protoVal, err := r.getProp(target, atomPrototype, Obj(target))
@@ -3567,8 +3549,7 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 // produce an F. The ones that do know ask through protoFromNewTarget, and the
 // read that answers them is the only one: doing it again here would run a
 // prototype getter twice.
-func (r *Runtime) constructNative(o *Object, fd *funcData, args []Value,
-	newTarget Value, derived bool) (Value, error) {
+func (r *Runtime) constructNative(o *Object, args []Value, newTarget Value, derived bool) (Value, error) {
 	saved := r.usedNewTargetProto
 	r.usedNewTargetProto = false
 	res, err := r.callObject(o, Undefined, args, newTarget)

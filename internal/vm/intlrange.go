@@ -1,5 +1,7 @@
 package vm
 
+import "strings"
+
 // rangePieces is a range of numbers or dates as go-intl wrote it, one piece
 // at a time, along with where each piece came from: the start, the end, or
 // the two of them, as formatRangeToParts reports it.
@@ -16,9 +18,5 @@ func (p *rangePieces) add(kind, value, source string) {
 }
 
 func (p *rangePieces) text() string {
-	out := ""
-	for _, v := range p.values {
-		out += v
-	}
-	return out
+	return strings.Join(p.values, "")
 }

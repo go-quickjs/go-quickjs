@@ -97,7 +97,7 @@ type compiler struct {
 	reverse bool
 }
 
-func compileNode(n node, flags Flags, groupCount int) *program {
+func compileNode(n node, flags Flags) *program {
 	c := &compiler{prog: &program{
 		unicodeFold: flags&(FlagUnicode|FlagUnicodeSets) != 0,
 	}, flags: flags}

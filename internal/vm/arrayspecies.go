@@ -147,7 +147,7 @@ func (a *arrayOut) push(r *Runtime, v Value) error {
 // pushHole leaves a gap, which slice and map do where the source had one: a
 // hole is not the same as an undefined element, and copying it as one would be
 // visible to `in` and to every method that skips holes.
-func (a *arrayOut) pushHole(r *Runtime) error {
+func (a *arrayOut) pushHole() error {
 	if a.plain {
 		// Counted, not written: setLength or the next element decides what
 		// they become.

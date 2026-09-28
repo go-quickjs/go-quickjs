@@ -1182,7 +1182,7 @@ func (r *Runtime) initArrayBuiltins() {
 			}
 			if !present {
 				// A hole in the source stays a hole in the result.
-				if err := out.pushHole(rt); err != nil {
+				if err := out.pushHole(); err != nil {
 					return Undefined, err
 				}
 				continue
@@ -1397,7 +1397,7 @@ func (r *Runtime) initArrayBuiltins() {
 					return Undefined, err
 				}
 				if !present {
-					if err := out.pushHole(rt); err != nil {
+					if err := out.pushHole(); err != nil {
 						return Undefined, err
 					}
 					continue
@@ -1489,7 +1489,7 @@ func (r *Runtime) initArrayBuiltins() {
 			}
 			if !present {
 				// A hole in the source stays a hole in the result.
-				if err := out.pushHole(rt); err != nil {
+				if err := out.pushHole(); err != nil {
 					return Undefined, err
 				}
 				continue
@@ -2777,46 +2777,6 @@ func (r *Runtime) flatten(a *arrayLike, depth int, out *arrayOut) error {
 		}
 	}
 	return nil
-}
-
-// elemAt reads a dense element defensively, reporting false for an index that
-// is out of range or holds a hole.
-//
-// A callback may shrink the array while an iteration method is running, so an
-// index that was valid when the length was captured may not be by the time it
-// is reached.
-func elemAt(o *Object, i int) (Value, bool) {
-	if i < 0 || i >= len(o.elems) {
-		return Undefined, false
-	}
-	return o.getElem(uint32(i))
-}
-
-// clipRange re-clamps a range against an array's current length.
-//
-// Every index a built-in computes goes through ToInteger, which may call a
-// valueOf that mutates the array the indices were derived from:
-//
-//	var a = [1, 2, 3];
-//	a.fill(0, {valueOf() { a.length = 0; return 0; }});
-//
-// By the time the range is used it may name elements that no longer exist, so
-// it is clipped immediately before indexing rather than only when computed.
-func clipRange(o *Object, start, end int) (int, int) {
-	n := len(o.elems)
-	if start > n {
-		start = n
-	}
-	if end > n {
-		end = n
-	}
-	if start < 0 {
-		start = 0
-	}
-	if end < start {
-		end = start
-	}
-	return start, end
 }
 
 // sortIndexed collects an array-like's present elements and sorts them.

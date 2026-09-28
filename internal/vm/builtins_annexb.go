@@ -50,9 +50,11 @@ func escapeLegacy(s string) string {
 		case u < 128 && strings.IndexByte(keep, byte(u)) >= 0:
 			b.WriteByte(byte(u))
 		case u < 256:
-			b.WriteString("%" + pad(strings.ToUpper(strconv.FormatUint(uint64(u), 16)), 2))
+			b.WriteByte('%')
+			b.WriteString(pad(strings.ToUpper(strconv.FormatUint(uint64(u), 16)), 2))
 		default:
-			b.WriteString("%u" + pad(strings.ToUpper(strconv.FormatUint(uint64(u), 16)), 4))
+			b.WriteString("%u")
+			b.WriteString(pad(strings.ToUpper(strconv.FormatUint(uint64(u), 16)), 4))
 		}
 	}
 	return b.String()

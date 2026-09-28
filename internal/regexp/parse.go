@@ -997,11 +997,6 @@ func (p *parser) parseOctal() rune {
 	return v
 }
 
-func isIdentifierRune(r rune) bool {
-	return r == '_' || (r >= '0' && r <= '9') ||
-		(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
-}
-
 // parseClass parses a bracketed character class.
 func (p *parser) parseClass() (*charSet, error) {
 	p.pos++ // consume '['

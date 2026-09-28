@@ -315,10 +315,10 @@ func (m *messaging) serialize(v quickjs.Value, transfer []quickjs.Value, from *p
 			}
 			id, _ := kind.Index(1)
 			e := m.ports[id.Int()]
-			switch {
-			case e == nil:
+			switch e {
+			case nil:
 				return nil, false, m.cloneError("MessagePort in transfer list is already detached")
-			case e == from:
+			case from:
 				return nil, false, m.cloneError("Transfer list contains source port")
 			}
 			for _, p := range moved {

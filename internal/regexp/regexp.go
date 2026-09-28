@@ -33,7 +33,7 @@ func CompileFlags(source string, f Flags) (*Regexp, error) {
 	return &Regexp{
 		source:     source,
 		flags:      f,
-		prog:       compileNode(tree, f, groups),
+		prog:       compileNode(tree, f),
 		groupCount: groups,
 		groupNames: names,
 	}, nil

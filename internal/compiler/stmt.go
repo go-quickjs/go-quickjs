@@ -124,7 +124,7 @@ func (c *compiler) predeclareFunction(h hoistedFunc) {
 		// declared -- and what a reference to the name finds afterwards,
 		// whether it is written inside the eval or outside it.
 		if b, known := c.callerBinding(h.name); known && b.VarScoped {
-			c.storeVar(h.name, h.fd.Start)
+			c.storeVar(h.name)
 			return
 		}
 		c.emit(bytecode.OpDefineGlobalFunc, c.nameIdx(h.name),
@@ -413,7 +413,7 @@ func (c *compiler) compileVarDecl(n *ast.VarDecl) {
 func (c *compiler) initBinding(target ast.Expr, kind ast.DeclKind) {
 	if id, ok := target.(*ast.Ident); ok {
 		if kind == ast.DeclVar {
-			c.storeVar(id.Name, id.Start)
+			c.storeVar(id.Name)
 			return
 		}
 		// A lexical binding is initialized rather than assigned, which also
@@ -462,7 +462,7 @@ func (c *compiler) emitReturnValue(pos int) {
 }
 
 // storeVar assigns to a var binding or a global.
-func (c *compiler) storeVar(name string, pos int) {
+func (c *compiler) storeVar(name string) {
 	// A var's initializer is an assignment rather than a binding
 	// initialization: the declaration hoists out of a `with` body, but the
 	// store happens inside it, where the object may be what is written to.

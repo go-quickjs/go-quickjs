@@ -58,7 +58,7 @@ func Crypto(rt *quickjs.Runtime, random io.Reader) error {
 	if err != nil {
 		return err
 	}
-	exports, err := moduleExports(rt, api)
+	exports, err := moduleExports(api)
 	if err != nil {
 		return err
 	}

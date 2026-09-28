@@ -42,6 +42,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+
 	// The time zone database, so that a script can format a date in any zone
 	// on any machine, including one that keeps no zone files of its own.
 	_ "time/tzdata"
@@ -130,7 +131,7 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case opts.check:
 		return check(rt, opts, stderr)
 	case opts.hasEval:
-		if code := evaluate(rt, loop, ctx, opts, "<cmdline>", opts.eval, stdout, stderr); code != 0 {
+		if code := evaluate(rt, loop, ctx, opts, "<cmdline>", opts.eval, stderr); code != 0 {
 			return code
 		}
 	case opts.file == "-":
@@ -139,7 +140,7 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "qjs:", err)
 			return 1
 		}
-		if code := evaluate(rt, loop, ctx, opts, "<stdin>", string(src), stdout, stderr); code != 0 {
+		if code := evaluate(rt, loop, ctx, opts, "<stdin>", string(src), stderr); code != 0 {
 			return code
 		}
 	case opts.file != "":
@@ -152,7 +153,7 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if err != nil {
 			name = opts.file
 		}
-		if code := evaluate(rt, loop, ctx, opts, name, string(src), stdout, stderr); code != 0 {
+		if code := evaluate(rt, loop, ctx, opts, name, string(src), stderr); code != 0 {
 			return code
 		}
 	default:
@@ -603,8 +604,7 @@ func explainMissing(rt *quickjs.Runtime, opts *options) error {
 }
 
 // evaluate runs source as a script or a module and then lets the loop finish.
-func evaluate(rt *quickjs.Runtime, loop *stdlib.Loop, ctx context.Context,
-	opts *options, name, src string, stdout, stderr io.Writer) int {
+func evaluate(rt *quickjs.Runtime, loop *stdlib.Loop, ctx context.Context, opts *options, name, src string, stderr io.Writer) int {
 	// Ctrl-C stops the program, as it stops node's, with the status a
 	// program an interrupt ended has: a loop kept running by a listening port
 	// runs until it is stopped.
@@ -626,7 +626,7 @@ func evaluate(rt *quickjs.Runtime, loop *stdlib.Loop, ctx context.Context,
 		if interrupted() {
 			return 130
 		}
-		report(rt, stderr, err)
+		report(stderr, err)
 		return 1
 	}
 	return 0
@@ -705,7 +705,7 @@ func check(rt *quickjs.Runtime, opts *options, stderr io.Writer) int {
 }
 
 // report prints what went wrong, with the stack when there is one.
-func report(rt *quickjs.Runtime, w io.Writer, err error) {
+func report(w io.Writer, err error) {
 	var jsErr *quickjs.Error
 	if errors.As(err, &jsErr) {
 		if stack := jsErr.Stack(); stack != "" {
@@ -825,7 +825,7 @@ func evalInput(rt *quickjs.Runtime, loop *stdlib.Loop, ctx context.Context,
 			fmt.Fprintln(stderr, "Interrupted")
 			return
 		}
-		report(rt, stderr, err)
+		report(stderr, err)
 	}
 	v, err := rt.EvalContext(evalCtx, src)
 	if err != nil {
@@ -841,7 +841,7 @@ func evalInput(rt *quickjs.Runtime, loop *stdlib.Loop, ctx context.Context,
 			return
 		}
 		if failed {
-			report(rt, stderr, rt.Throw(settled))
+			report(stderr, rt.Throw(settled))
 			return
 		}
 		v = settled

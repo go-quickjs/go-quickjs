@@ -702,21 +702,6 @@ func (o *Object) ownKeys(includeSymbols bool, atoms *atomTable) []Atom {
 	return keys
 }
 
-// sortAtomsByIndex sorts index atoms ascending. Insertion sort is used because
-// the slice is almost always tiny; an object with many index properties keeps
-// them in elems instead.
-func sortAtomsByIndex(a []Atom) {
-	for i := 1; i < len(a); i++ {
-		v := a[i]
-		j := i - 1
-		for j >= 0 && a[j].Index() > v.Index() {
-			a[j+1] = a[j]
-			j--
-		}
-		a[j+1] = v
-	}
-}
-
 // indexedAtom pairs a key with the index it names, so that keys spelled out as
 // names sort with the ones carried in an atom.
 type indexedAtom struct {

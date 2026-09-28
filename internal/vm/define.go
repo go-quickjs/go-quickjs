@@ -1,7 +1,5 @@
 package vm
 
-import "math"
-
 // Defining a property.
 //
 // Object.defineProperty is where an object's shape is actually decided, and it
@@ -563,19 +561,6 @@ func shrinkArray(o *Object, newLen uint32, atoms *atomTable) uint32 {
 		o.deleteOwn(keys[j].atom)
 	}
 	return stop
-}
-
-// toIndexLength converts a value to an array length, rejecting anything that
-// is not one.
-func (r *Runtime) toIndexLength(v Value) (uint32, error) {
-	n, err := r.toNumber(v)
-	if err != nil {
-		return 0, err
-	}
-	if math.IsNaN(n) || n < 0 || n > 4294967295 || n != math.Trunc(n) {
-		return 0, r.throwRangeError("invalid array length")
-	}
-	return uint32(n), nil
 }
 
 // descriptorObject renders a descriptor as the object a trap is handed.

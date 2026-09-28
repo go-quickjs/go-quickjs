@@ -116,15 +116,15 @@ func (p *parser) parseAssignFrom(left ast.Expr) ast.Expr {
 	opTok := p.tok
 	p.next()
 
-	switch {
-	case op == "=":
+	switch op {
+	case "=":
 		// The left side of a plain assignment may be a destructuring pattern,
 		// which until now was parsed as an object or array literal.
 		p.checkAssignTarget(left, opTok)
 		if !p.isCallTarget(left) {
 			left = p.toPattern(left, false)
 		}
-	case op == "&&=" || op == "||=" || op == "??=":
+	case "&&=", "||=", "??=":
 		// A logical assignment may skip the store, so its target has to be
 		// one that can be stored to: a call is not, even in sloppy code.
 		if _, call := left.(*ast.Call); call {

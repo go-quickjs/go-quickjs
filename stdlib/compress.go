@@ -55,7 +55,7 @@ func Compression(rt *quickjs.Runtime) error {
 	if err != nil {
 		return err
 	}
-	exports, err := moduleExports(rt, zlibAPI)
+	exports, err := moduleExports(zlibAPI)
 	if err != nil {
 		return err
 	}
