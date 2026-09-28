@@ -118,6 +118,7 @@ func Install(rt *quickjs.Runtime, cfg Config) error {
 		}
 		if cfg.worker != nil {
 			cfg.worker.m = m
+			m.halted = cfg.worker.ctx
 		}
 		// Workers are started from worker_threads, which is there whether
 		// or not the script may start one: the rest of it is messaging.

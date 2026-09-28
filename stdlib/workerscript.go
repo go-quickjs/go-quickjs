@@ -204,7 +204,7 @@ const workerJS = `(function (host) {
       return EventTarget.prototype.dispatchEvent.call(g, event);
     });
     define("postMessage", function postMessage(message, transfer) { port.postMessage(message, transfer); });
-    define("close", function close() { host.exit(0); });
+    define("close", function close() { host.close(); });
     let onmessage = null;
     let onmessageerror = null;
     Object.defineProperty(g, "onmessage", {

@@ -57,8 +57,12 @@ type workerContext struct {
 	ports []*portCore
 	// m is the worker's messaging, once it is installed.
 	m *messaging
-	// exit ends the worker, with a code: process.exit, and close.
-	exit func(code int)
+	// exit ends the worker at once, with a code: process.exit. close ends
+	// it once what is running returns, as a web worker's close does.
+	exit  func(code int)
+	close func()
+	// ctx ends when the worker is terminated.
+	ctx context.Context
 }
 
 // workerHost is a runtime's workers: those it started, and what it needs to
@@ -125,6 +129,11 @@ func installWorkers(rt *quickjs.Runtime, cfg Config, m *messaging, events quickj
 		"exit": func(code int) {
 			if h.self != nil {
 				h.self.exit(code)
+			}
+		},
+		"close": func() {
+			if h.self != nil && h.self.close != nil {
+				h.self.close()
 			}
 		},
 	}); err != nil {
@@ -251,7 +260,7 @@ func (h *workerHost) start(obj quickjs.Value, specifier string, data quickjs.Val
 	h.mu.Unlock()
 	wh.hold()
 
-	w := &workerContext{threadID: wh.thread, name: o.Name, web: o.Web, port: child, data: serialized, ports: ports}
+	w := &workerContext{threadID: wh.thread, name: o.Name, web: o.Web, port: child, data: serialized, ports: ports, ctx: ctx}
 	w.exit = func(code int) { wh.terminate(code) }
 	cfg := h.childConfig(w, specifier, o)
 	go runWorker(ctx, cfg, w, wh, specifier, o)
@@ -341,12 +350,17 @@ func (wh *workerHandle) hold() {
 // terminate ends the worker with code, unless it has already ended or been
 // given one. It is safe to call from any goroutine.
 func (wh *workerHandle) terminate(code int) {
+	wh.setCode(code)
+	wh.stop()
+}
+
+// setCode gives the worker the code it ends with, unless it has one.
+func (wh *workerHandle) setCode(code int) {
 	wh.mu.Lock()
 	if !wh.coded {
 		wh.code, wh.coded = code, true
 	}
 	wh.mu.Unlock()
-	wh.stop()
 }
 
 // exitCode is the code the worker was ended with, if it was.
@@ -453,8 +467,17 @@ func runWorker(ctx context.Context, cfg Config, w *workerContext, wh *workerHand
 		fail = errors.New("the host made no runtime for the worker")
 		return
 	}
-	loop := NewLoop(rt)
+	// The loop's context ends when the worker is terminated, and with it
+	// what the worker's host functions are waiting on: a program it is
+	// running, a request.
+	loop := newLoop(rt, ctx)
 	cfg.bindLoop(loop)
+	w.close = func() {
+		// What is running runs to its end, and then the loop, closed,
+		// runs nothing more.
+		wh.setCode(0)
+		loop.Close()
+	}
 	hostjobs.Abort(rt, ctx.Done())
 	if err := Install(rt, cfg); err != nil {
 		fail = err

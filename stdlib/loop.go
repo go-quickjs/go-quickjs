@@ -91,8 +91,17 @@ type Loop struct {
 
 // NewLoop returns a loop for a runtime.
 func NewLoop(rt *quickjs.Runtime) *Loop {
+	return newLoop(rt, rt.Context())
+}
+
+// newLoop is NewLoop for a loop whose context ends with ctx as well as with
+// its runtime: a worker's, which terminate ends.
+func newLoop(rt *quickjs.Runtime, ctx context.Context) *Loop {
 	l := &Loop{rt: rt, tasks: make(chan func(), 64), wake: make(chan struct{}, 1)}
-	l.ctx, l.cancel = context.WithCancel(rt.Context())
+	l.ctx, l.cancel = context.WithCancel(ctx)
+	if ctx != rt.Context() {
+		context.AfterFunc(rt.Context(), l.cancel)
+	}
 	// What another goroutine finishes for the runtime -- the settling of an
 	// Atomics.waitAsync -- is posted to the loop like any other work.
 	hostjobs.Attach(rt, l.Post)
@@ -176,7 +185,8 @@ func (l *Loop) Pending() bool {
 
 // Close stops the loop from accepting further work. Work already posted is
 // dropped, and a request that finishes afterwards has nowhere to deliver its
-// result, which is what makes it safe to abandon a runtime.
+// result, which is what makes it safe to abandon a runtime. A Run or RunUntil
+// returns once the callback it is running, if any, does.
 func (l *Loop) Close() {
 	l.mu.Lock()
 	l.closed = true
@@ -193,6 +203,13 @@ func (l *Loop) Close() {
 // not this: a Run that ends may be followed by another. It is safe to call
 // from any goroutine.
 func (l *Loop) Context() context.Context { return l.ctx }
+
+// isClosed reports whether Close has been called.
+func (l *Loop) isClosed() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.closed
+}
 
 // loopContext is a loop's context, or the background for none.
 func loopContext(l *Loop) context.Context {
@@ -218,6 +235,10 @@ func (l *Loop) Run(ctx context.Context) error {
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if l.isClosed() {
+			// What the loop was waiting for will not be delivered.
+			return nil
 		}
 		if err := l.rt.RunJobs(); err != nil {
 			return err
@@ -277,6 +298,9 @@ func (l *Loop) RunUntil(ctx context.Context, done <-chan struct{}) error {
 		}
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if l.isClosed() {
+			return nil
 		}
 		if err := l.rt.RunJobs(); err != nil {
 			return err

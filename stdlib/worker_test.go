@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -283,5 +284,75 @@ func TestLoopDeadlineStopsACallback(t *testing.T) {
 	}
 	if v, _ := rt.Eval(`later`); v.Int() != 1 {
 		t.Errorf("later = %v", v)
+	}
+}
+
+// TestWorkerTerminateStopsAHostCall pins that terminate stops a worker waiting
+// in a host function -- here a program it runs, which is killed -- and that
+// the worker neither catches that nor posts anything after: the program ran
+// to its end, and the worker on (KI-20).
+func TestWorkerTerminateStopsAHostCall(t *testing.T) {
+	sleep := `cp.execFileSync("sleep", ["30"])`
+	if runtime.GOOS == "windows" {
+		sleep = `cp.execFileSync("ping", ["-n", "30", "127.0.0.1"])`
+	}
+	worker := `
+		import { parentPort } from "node:worker_threads";
+		const cp = (await import("child_process")).default;
+		parentPort.postMessage("sleeping");
+		try { ` + sleep + ` } catch (e) { parentPort.postMessage("caught " + e.message) }
+		parentPort.postMessage("after");`
+	cfg := stdlib.Config{
+		Workers: workerFiles(map[string]string{"./sleep.mjs": worker}),
+		Run:     &stdlib.Run{Allow: func(string, []string) error { return nil }},
+	}
+	start := time.Now()
+	out, _ := run(t, cfg, `
+		const w = new require_worker_threads.Worker("./sleep.mjs");
+		w.on("message", (m) => { console.log(m); if (m === "sleeping") w.terminate(); });
+		w.on("exit", (code) => console.log("exit", code));
+	`)
+	if want := "sleeping\nexit 1"; out != want {
+		t.Errorf("got %q, want %q", out, want)
+	}
+	if d := time.Since(start); d > 15*time.Second {
+		t.Errorf("terminated after %v", d)
+	}
+}
+
+// TestWebWorkerClose pins that a web worker's close ends it once what is
+// running returns, as the HTML standard has it: the rest of the script runs,
+// what it posts is delivered, and a timer set before is not run.
+func TestWebWorkerClose(t *testing.T) {
+	worker := `
+		setTimeout(() => postMessage("timer"), 0);
+		postMessage("before");
+		close();
+		postMessage("after close");`
+	out, _ := run(t, stdlib.Config{Workers: workerFiles(map[string]string{"./close.js": worker})}, `
+		new Worker("./close.js").onmessage = (e) => console.log(e.data);
+	`)
+	if want := "before\nafter close"; out != want {
+		t.Errorf("got %q, want %q", out, want)
+	}
+}
+
+// TestLoopCloseEndsRun pins that closing a loop ends its Run, even one a
+// worker is holding: the worker's notice that it has ended is dropped by the
+// closed loop, and Run waited for it until its own context ended (KI-21).
+func TestLoopCloseEndsRun(t *testing.T) {
+	rt, loop := workerRuntime(t, map[string]string{"./spin.mjs": `for (;;) {}`})
+	if _, err := rt.Eval(`new require_worker_threads.Worker("./spin.mjs")`); err != nil {
+		t.Fatal(err)
+	}
+	time.AfterFunc(100*time.Millisecond, loop.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	start := time.Now()
+	if err := loop.Run(ctx); err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("Run ended after %v", d)
 	}
 }

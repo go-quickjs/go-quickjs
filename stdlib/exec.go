@@ -171,9 +171,11 @@ func (r *runner) start(name string, args []string, dir string, env map[string]st
 	case <-loopContext(r.cfg.Loop).Done():
 		cmd.Process.Kill()
 		<-done
+		// The context's error goes with it: a worker that has been
+		// terminated stops, rather than catching it and running on.
 		return &result{
 			stdout: out.Bytes(), stderr: errOut.Bytes(), code: -1,
-			err: fmt.Errorf("%s was stopped: the runtime was closed", name),
+			err: fmt.Errorf("%s was stopped: the runtime was closed: %w", name, loopContext(r.cfg.Loop).Err()),
 		}
 	}
 

@@ -250,13 +250,15 @@ Paths are relative to this repository; `go-intl:` paths are in
 - **Effect:** a program started with `execFileSync` runs to the end, and
   the worker posts again after it was terminated. Code after `close()` or
   `terminate()` runs until the next interrupt check.
-- **Status:** open.
+- **Status:** fixed. A worker's loop context ends when it is terminated, so a
+  program it runs is killed and nothing it posts after is delivered. A web
+  worker's `close()` lets what is running finish, as the HTML standard has it.
 
 ### KI-21 `Loop.Close` doesn't end a `Run` that a worker holds
 - **Effect:** the worker's exit notice is posted to the closed loop and
   dropped, so the hold is never released. `Run` waits until its own context
   ends.
-- **Status:** open.
+- **Status:** fixed. `Run` and `RunUntil` return once the loop is closed.
 
 ### KI-22 BroadcastChannels of a closed runtime stay registered
 - **Where:** `stdlib/messaging.go`. Only a worker's shutdown unregisters its

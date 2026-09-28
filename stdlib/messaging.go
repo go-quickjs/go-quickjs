@@ -1,6 +1,7 @@
 package stdlib
 
 import (
+	"context"
 	"errors"
 	"sync"
 
@@ -89,6 +90,10 @@ type messaging struct {
 	loop  *Loop
 	ports map[int]*portEnd
 	next  int
+	// halted ends when a worker is terminated, from when what it posts goes
+	// nowhere: it would have been stopped by then, were it not between
+	// checks for that. It is nil but in a worker.
+	halted context.Context
 
 	// What the script provides: a port object for an id, a DOMException, a
 	// look at what kind of host object a value is, and the dispatch of a
@@ -129,7 +134,7 @@ func (m *messaging) host() map[string]any {
 		},
 		"portPost": func(id int, v quickjs.Value, transfer []quickjs.Value) error {
 			e := m.ports[id]
-			if e == nil {
+			if e == nil || m.isHalted() {
 				// A port posted elsewhere, or closed, posts nothing.
 				return nil
 			}
@@ -195,9 +200,18 @@ func (m *messaging) host() map[string]any {
 			if e == nil || !e.broadcast {
 				return m.rt.Throw(m.newDOMExceptionOr("BroadcastChannel is closed.", "InvalidStateError"))
 			}
+			if m.isHalted() {
+				return nil
+			}
 			return e.broadcastMessage(v)
 		},
 	}
+}
+
+// isHalted is whether the worker these are the ports of has been
+// terminated.
+func (m *messaging) isHalted() bool {
+	return m.halted != nil && m.halted.Err() != nil
 }
 
 // newDOMExceptionOr is a DOMException, or an Error if one cannot be made.
