@@ -35,7 +35,9 @@ func TestInterruptIsNotAValue(t *testing.T) {
 			if !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("err = %v, want the deadline", err)
 			}
-			if d := time.Since(start); d > 5*time.Second {
+			// A walk of a dense array counts towards the next check too: a
+			// script calling a.slice() in a loop took seconds to stop.
+			if d := time.Since(start); d > 2*time.Second {
 				t.Errorf("stopped after %v", d)
 			}
 			if v, err := rt.Eval(`1 + 1`); err != nil || v.Int() != 2 {

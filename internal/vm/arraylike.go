@@ -144,15 +144,16 @@ func (a *arrayLike) has(r *Runtime, i int64) (bool, error) {
 
 // at reads the index, reporting whether it was present at all.
 func (a *arrayLike) at(r *Runtime, i int64) (Value, bool, error) {
-	if v, fast := a.dense(i); fast {
-		return v, true, nil
-	}
-	// An array-like may report a length of 2**53-1 while holding nothing, and
-	// walking it is then a loop the interpreter never sees. The check belongs
-	// on the slow path only: the dense case above is bounded by the array's
-	// actual storage.
+	// An array-like may report a length of 2**53-1 while holding nothing,
+	// and walking it is a loop the interpreter never sees; and a dense one,
+	// walked by a script again and again -- a.slice() in a loop -- is one
+	// step of the script's each time. Either way the walk counts towards
+	// the next check for an interrupt, or a deadline waits on it.
 	if err := r.tick(); err != nil {
 		return Undefined, false, err
+	}
+	if v, fast := a.dense(i); fast {
+		return v, true, nil
 	}
 	present, err := a.has(r, i)
 	if err != nil || !present {
@@ -165,11 +166,11 @@ func (a *arrayLike) at(r *Runtime, i int64) (Value, bool, error) {
 // get reads the index, treating a missing one as undefined. Methods that do not
 // distinguish holes use this and avoid the extra HasProperty call.
 func (a *arrayLike) get(r *Runtime, i int64) (Value, error) {
-	if v, fast := a.dense(i); fast {
-		return v, nil
-	}
 	if err := r.tick(); err != nil {
 		return Undefined, err
+	}
+	if v, fast := a.dense(i); fast {
+		return v, nil
 	}
 	key, ok := r.knownIndexKey(a.o, i)
 	if !ok {
