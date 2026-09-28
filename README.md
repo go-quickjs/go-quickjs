@@ -279,23 +279,6 @@ rt.Set("mustBePositive", func(n int) (int, error) {
 rt.Eval(`try { mustBePositive(-1) } catch (e) { e.message }`) // "negative"
 ```
 
-A JavaScript exception that reaches Go is a `*quickjs.Error`, which holds the
-thrown value. When the exception came from a Go function's error, `errors.Is`
-and `errors.As` find that Go error through the `*quickjs.Error`. This works
-whether the script let the exception through or caught it and rethrew the same
-object:
-
-```go
-fn, _ := rt.Get("handler")
-_, err := fn.Call(req)
-var jsErr *quickjs.Error
-switch {
-case errors.Is(err, errNotFound): // the Go error, thrown by a Go function
-case errors.As(err, &jsErr):      // any other exception: jsErr.Value(), jsErr.Stack()
-case err != nil:                  // not an exception: interrupted, closed, ...
-}
-```
-
 Taking a `*quickjs.Runtime` as the first parameter lets a Go function call back
 into the engine:
 
@@ -310,6 +293,149 @@ rt.Set("applyTwice", func(r *quickjs.Runtime, fn quickjs.Value, v int) (int, err
 })
 rt.Eval(`applyTwice(n => n + 3, 1)`) // 7
 ```
+
+## Calling JavaScript from Go
+
+A function the script defines is a `Value`, and `Call` calls it:
+
+```go
+rt.Eval(`function greet(name) { return "hello, " + name }`)
+greet, _ := rt.Get("greet")
+v, err := greet.Call("Ada") // v.String() == "hello, Ada"
+```
+
+Arguments are converted as `Set` converts values: numbers, strings, booleans,
+slices, maps, structs and functions all work, and a `Value` is passed as it is.
+The result is a `Value`. Read it with `String`, `Int`, `Float` and `Bool`, or
+`Decode` it into a Go type (see [Reading values back](#reading-values-back)):
+
+```go
+type User struct {
+    Name string `js:"name"`
+    Age  int    `js:"age"`
+}
+older, _ := rt.Eval(`(u => ({...u, age: u.age + 1}))`)
+v, _ := older.Call(User{Name: "Ada", Age: 36})
+var u User
+v.Decode(&u) // {Name:Ada Age:37}
+```
+
+A Go function passed as an argument is a callback the script can call:
+
+```go
+mapFn, _ := rt.Eval(`((xs, f) => xs.map(f))`)
+v, _ := mapFn.Call([]int{1, 2, 3}, func(x int) int { return x * 10 }) // [10, 20, 30]
+```
+
+### Finding the function
+
+- `rt.Get` reads a property of the global object. That covers `function` and
+  `var` declarations and anything assigned to `globalThis`.
+- A top-level `class`, `let` or `const` is not a property of the global object,
+  so `rt.Get` doesn't see it. Evaluate its name instead: `rt.Eval("Point")`.
+- A method is a property of its object, read with `Get`. Call it with
+  `CallWithThis` so that `this` is the object.
+- `Get` of a name that doesn't exist returns `undefined`, not an error. Calling
+  that gives the error `quickjs: undefined is not a function`, so check
+  `IsFunction` first when the name may be missing.
+
+```go
+counter, _ := rt.Eval(`({n: 0, add(k) { return this.n += k }})`)
+add, _ := counter.Get("add")
+add.CallWithThis(counter, 5) // 5
+add.CallWithThis(counter, 2) // 7
+
+rt.Eval(`class Point { constructor(x, y) { this.x = x; this.y = y } }`)
+Point, _ := rt.Eval("Point")
+p, _ := Point.New(3, 4) // new Point(3, 4)
+```
+
+### Deadlines
+
+`Call` has no deadline, so a function that never returns blocks the caller.
+`CallContext` and `CallWithThisContext` take a context, as `EvalContext` does.
+When the context ends, the function stops and the error wraps `ctx.Err()`:
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+defer cancel()
+v, err := handler.CallContext(ctx, req)
+// errors.Is(err, context.DeadlineExceeded) when it ran too long
+```
+
+A Go function the script called may call back into the script with
+`CallContext`. That call stops at the script's deadline too, even if its own
+context has none.
+
+### Async functions
+
+An `async` function returns a promise. Its callbacks run when the runtime runs
+its jobs. `Eval` does that before it returns; after a `Call`, `RunJobs` does:
+
+```go
+rt.Eval(`async function fetchUser(id) { await null; return {id, name: "Ada"} }`)
+fetchUser, _ := rt.Get("fetchUser")
+p, _ := fetchUser.Call(7)
+
+then, _ := p.Get("then")
+var user quickjs.Value
+var failed error
+then.CallWithThis(p,
+    func(v quickjs.Value) { user = v },
+    func(e quickjs.Value) { failed = errors.New(e.String()) })
+if err := rt.RunJobs(); err != nil {
+    // ...
+}
+// user.Get("name") is "Ada"
+```
+
+A promise that waits on the host, such as a timer or a request from the
+[standard library](#the-standard-library), settles only while its event loop
+runs.
+
+### Errors
+
+A JavaScript exception that reaches Go is a `*quickjs.Error`. `Value` returns
+what was thrown (usually an `Error` object, but a script may throw anything),
+and `Stack` returns the JavaScript stack trace.
+
+When the exception came from a Go function's error, `errors.Is` and `errors.As`
+find that Go error through the `*quickjs.Error`. This works whether the script
+let the exception through or caught it and rethrew the same object:
+
+```go
+rt.Set("load", func(key string) (string, error) {
+    return "", fmt.Errorf("load %s: %w", key, errNotFound)
+})
+rt.Eval(`function handler(req) { return load(req.key) }`)
+handler, _ := rt.Get("handler")
+
+_, err := handler.Call(map[string]any{"key": "a"})
+var jsErr *quickjs.Error
+switch {
+case errors.Is(err, errNotFound): // the Go error behind the exception
+case errors.As(err, &jsErr):      // any other exception: jsErr.Value(), jsErr.Stack()
+case err != nil:                  // not an exception; see below
+}
+```
+
+The errors that are not exceptions are:
+
+| Error | Cause |
+|---|---|
+| wraps `context.DeadlineExceeded` or `context.Canceled` | `CallContext`'s context, or the script's, ended |
+| `quickjs.ErrMemoryLimit` | the script went over `WithMemoryLimit` |
+| `quickjs.ErrClosed` | the runtime was closed |
+| `quickjs.ErrInternal` | a bug in the engine; please report it |
+| `quickjs: … is not a function` | the value called isn't a function |
+
+The script can't catch any of these. A Go function's own deadline error is
+different: it is thrown as an ordinary exception, so if you need to tell "my
+call ran out of time" apart from "a Go function reported a timeout", check for
+`*quickjs.Error` first.
+
+A `Value` belongs to its runtime, so call it on the goroutine that uses that
+runtime (see [Concurrency](#concurrency)).
 
 ## Reading values back
 
@@ -615,7 +741,8 @@ _, err := rt.EvalContext(ctx, `while (true) {}`)
 
 `EvalFileContext` does the same for a script with a name, which is what its
 stack traces call it: `at main (app.js:12:5)` rather than `<eval>`.
-`CallContext` and `CallWithThisContext` do it for a function called from Go.
+`CallContext` and `CallWithThisContext` do it for a function called from Go
+(see [Deadlines](#deadlines)).
 
 An interruption is deliberately **not** catchable from script, so a sandboxed
 program cannot defeat its own timeout with `try`/`catch`. A catastrophically
