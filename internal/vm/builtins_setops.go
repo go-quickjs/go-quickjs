@@ -184,6 +184,7 @@ func liveEntries(m *jsMap) []Value {
 func (r *Runtime) newSetFrom(vals []Value) *Object {
 	m := newJSMap(false)
 	for _, v := range vals {
+		v = canonicalKey(v)
 		m.set(r, v, v)
 	}
 	o := newObject(r.proto.setProto, ClassSet)
@@ -304,6 +305,7 @@ func (r *Runtime) initSetOps(p *Object) {
 			if _, ok := m.get(rt, v); ok {
 				rm.delete(rt, v)
 			} else {
+				v = canonicalKey(v)
 				rm.set(rt, v, v)
 			}
 		}

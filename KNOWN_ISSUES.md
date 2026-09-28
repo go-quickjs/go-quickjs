@@ -432,7 +432,7 @@ Paths are relative to this repository; `go-intl:` paths are in
 
 ### KI-40 `Map` and `Set` keep `-0` as a key
 - **Where:** `internal/vm/builtins_map.go`. `set` doesn't normalise the key.
-- **Status:** open.
+- **Status:** fixed. A key, and a Set's member, of -0 is kept as +0.
 
 ### KI-41 `Set.prototype.intersection` works on a snapshot
 - **Effect:** changes made by the argument's `has` or `keys` during the call

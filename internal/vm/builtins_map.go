@@ -185,7 +185,18 @@ func (m *jsMap) live(i int) bool {
 	return m.weakKeys[i].alive()
 }
 
+// canonicalKey is a key as a Map or Set keeps it: -0 as +0, which
+// Map.prototype.set and Set.prototype.add both say. The two are the one key,
+// and the one kept is what keys(), forEach and the rest hand back.
+func canonicalKey(k Value) Value {
+	if k.IsNumber() && k.Number() == 0 {
+		return Int(0)
+	}
+	return k
+}
+
 func (m *jsMap) set(r *Runtime, k, v Value) {
+	k = canonicalKey(k)
 	mk := r.mapKeyOf(k, m.weak)
 	if i, ok := m.lookup(mk); ok && !m.entries[i].deleted && m.live(i) {
 		// Re-setting an existing key updates the value and keeps its position.
@@ -497,7 +508,7 @@ func (r *Runtime) initSetBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		v := arg(args, 0)
+		v := canonicalKey(arg(args, 0))
 		// A Set stores the value as both key and value, which is what its
 		// entries iterator reports.
 		m.set(rt, v, v)
