@@ -437,7 +437,8 @@ Paths are relative to this repository; `go-intl:` paths are in
 ### KI-41 `Set.prototype.intersection` works on a snapshot
 - **Effect:** changes made by the argument's `has` or `keys` during the call
   are not seen.
-- **Status:** open.
+- **Status:** fixed. It walks the receiver live, as `forEach` does, and steps
+  the argument's keys one at a time.
 
 ### KI-42 Number formatting and parsing
 - `(-0).toExponential()` gives `"-0e+0"`.

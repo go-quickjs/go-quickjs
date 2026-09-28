@@ -221,8 +221,14 @@ func (r *Runtime) initSetOps(p *Object) {
 		var out []Value
 		if float64(m.size) <= rec.size {
 			// The receiver is smaller: walk it and probe the argument. The
-			// result is in the receiver's order.
-			for _, v := range liveEntries(m) {
+			// result is in the receiver's order. The walk is of the receiver
+			// as it is, as forEach's is: what the argument's has deletes is
+			// not reached, and what it adds is.
+			for i := 0; i < len(m.entries); i++ {
+				if m.entries[i].deleted {
+					continue
+				}
+				v := m.entries[i].key
 				in, err := rt.probe(rec, v)
 				if err != nil {
 					return Undefined, err
@@ -234,11 +240,20 @@ func (r *Runtime) initSetOps(p *Object) {
 		} else {
 			// The argument is smaller: walk it instead. The result is then in
 			// the argument's order, which the specification makes observable.
-			keys, err := rt.keysOf(rec)
+			// Each key is looked for as it comes, since producing the next may
+			// change the receiver.
+			cur, err := rt.openKeys(rec)
 			if err != nil {
 				return Undefined, err
 			}
-			for _, v := range keys {
+			for {
+				v, done, err := cur.step(rt)
+				if err != nil {
+					return Undefined, err
+				}
+				if done {
+					break
+				}
 				if _, ok := m.get(rt, v); ok {
 					out = append(out, v)
 				}

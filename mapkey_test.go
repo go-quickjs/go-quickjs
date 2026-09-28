@@ -16,3 +16,20 @@ func TestMapSetKeepPlusZero(t *testing.T) {
 		 z(new Map([[1, -0]]).get(1)), new Map([[0, "x"]]).get(-0)].join()`,
 		"0,0,0,0,0,0,0,-0,x")
 }
+
+// TestIntersectionSeesChanges pins that Set.prototype.intersection walks the
+// receiver as it is, and asks for each of the argument's keys as it comes, so
+// that what the argument's has or keys change during the call is seen: it
+// worked on a snapshot of each (KI-41). The answers are node's.
+func TestIntersectionSeesChanges(t *testing.T) {
+	checkEval(t, `const out = [];
+		{ const s = new Set([1, 2, 3]); const other = { size: 10, has(v) { if (v === 1) { s.delete(2); s.add(4); } return true; }, keys() { return [][Symbol.iterator](); } };
+		  out.push([...s.intersection(other)].join()); }
+		{ const s = new Set([1, 2, 3]); const other = { size: 10, has(v) { if (v === 1) s.delete(2); return v !== 3; }, keys() { return [][Symbol.iterator](); } };
+		  out.push([...s.intersection(other)].join()); }
+		{ const s = new Set([2, 3]); const other = { size: 1, has() { return true }, keys() { const it = [2, 3][Symbol.iterator](); return { next() { const r = it.next(); if (r.value === 3) s.delete(2); return r; } }; } };
+		  out.push([...s.intersection(other)].join()); }
+		{ const s = new Set([1, 2, 3]); const other = { size: 1, has() { return true }, keys() { const it = [3, 2, 5][Symbol.iterator](); return { next() { const r = it.next(); if (r.value === 3) s.delete(2); return r; } }; } };
+		  out.push([...s.intersection(other)].join()); }
+		out.join(" | ")`, "1,3,4 | 1 | 2,3 | 3")
+}
