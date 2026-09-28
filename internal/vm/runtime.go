@@ -196,6 +196,10 @@ type Realm struct {
 	// same module twice in a realm yields the same instance. Each realm has its
 	// own: a ShadowRealm that imports a module gets an instance of its own.
 	modules map[string]*Module
+	// requested remembers what a module a request of a referrer resolved to,
+	// which the standard requires to be the same every time: linking asks
+	// again for each import, and the host's loader is not asked again.
+	requested map[[2]string]*Module
 
 	// scope and sandbox are set for a context, as node:vm makes them: scope
 	// is what its global code resolves names against, a proxy of the global

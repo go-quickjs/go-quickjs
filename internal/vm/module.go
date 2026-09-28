@@ -122,7 +122,11 @@ type moduleImport struct {
 type ModuleLoader func(specifier, referrer string) (source string, resolved string, err error)
 
 // SetModuleLoader installs the loader used to resolve imports.
-func (r *Runtime) SetModuleLoader(fn ModuleLoader) { r.moduleLoader = fn }
+func (r *Runtime) SetModuleLoader(fn ModuleLoader) {
+	r.moduleLoader = fn
+	// What the old loader resolved requests to is the old loader's.
+	r.requested = nil
+}
 
 // ModuleNamespace returns a module's namespace object, for a host that wants to
 // read its exports.
@@ -217,9 +221,26 @@ func (r *Runtime) Link(m *Module) error {
 	// Everything the graph names is loaded before any of it is linked, so
 	// that a module that cannot be found is what is reported rather than a
 	// link error elsewhere in the graph that happened to be reached first.
+	// It is loaded once: the modules it names are linked without loading
+	// their graphs again, which for a chain of them would load it over and
+	// over.
 	if err := r.loadGraph(m, map[*Module]bool{}); err != nil {
 		m.state, m.err = ModuleFailed, err
 		return err
+	}
+	return r.linkLoaded(m)
+}
+
+// linkLoaded links a module whose graph is loaded.
+func (r *Runtime) linkLoaded(m *Module) error {
+	switch m.state {
+	case ModuleLinked, ModuleEvaluating, ModuleEvaluated, ModuleLinking:
+		return nil
+	case ModuleFailed:
+		if m.evalFailed {
+			return nil
+		}
+		return m.err
 	}
 	m.state = ModuleLinking
 
@@ -236,7 +257,7 @@ func (r *Runtime) Link(m *Module) error {
 		if _, source := bytecode.SplitSourceRequest(spec); source {
 			continue
 		}
-		if err := r.Link(src); err != nil {
+		if err := r.linkLoaded(src); err != nil {
 			m.state, m.err = ModuleFailed, err
 			return err
 		}
@@ -330,17 +351,28 @@ func (r *Runtime) loadDependency(request, referrer string) (*Module, error) {
 		return nil, r.throwError(errType,
 			"cannot import %q: this runtime has no module loader", specifier)
 	}
+	key := [2]string{referrer, specifier}
+	if m, ok := r.requested[key]; ok {
+		return m, nil
+	}
 	source, resolved, err := r.moduleLoader(specifier, referrer)
 	if err != nil {
 		return nil, r.throwError(errType, "cannot resolve %q: %s", specifier, err.Error())
 	}
-	if m, ok := r.modules[resolved]; ok {
-		return m, nil
+	m, ok := r.modules[resolved]
+	if !ok {
+		if r.compileModule == nil {
+			return nil, r.throwError(errType, "this runtime cannot compile modules")
+		}
+		if m, err = r.compileModule(resolved, source); err != nil {
+			return nil, err
+		}
 	}
-	if r.compileModule == nil {
-		return nil, r.throwError(errType, "this runtime cannot compile modules")
+	if r.requested == nil {
+		r.requested = map[[2]string]*Module{}
 	}
-	return r.compileModule(resolved, source)
+	r.requested[key] = m
+	return m, nil
 }
 
 // SetModuleCompiler installs the function that turns module source into a
@@ -756,6 +788,9 @@ func (r *Runtime) resolvedNameOf(request, referrer string) string {
 	}
 	if m := r.nativeModule(specifier); m != nil {
 		return specifier
+	}
+	if m, ok := r.requested[[2]string{referrer, specifier}]; ok {
+		return m.Specifier
 	}
 	if r.moduleLoader == nil {
 		return specifier
