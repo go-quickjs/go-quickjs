@@ -241,7 +241,8 @@ Paths are relative to this repository; `go-intl:` paths are in
 - **Effect:** `throwGoError` matches any error wrapping `context.Canceled`
   or `DeadlineExceeded`, so an embedder's `http.Client` timeout ends the
   script instead of throwing an `Error`.
-- **Status:** open.
+- **Status:** fixed. Such an error passes through uncatchable only when the
+  runtime's own context has ended or it has been aborted.
 
 ### KI-20 `terminate()` doesn't stop a worker waiting in a host call
 - **Where:** `stdlib/worker.go`. The worker's `Loop` context is its

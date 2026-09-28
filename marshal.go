@@ -222,11 +222,15 @@ func fieldName(f reflect.StructField) (name string, omitEmpty, skip bool) {
 // failure of its own, and wrapping it would lose which kind it was. Source that
 // failed to compile is a SyntaxError for the same reason.
 func throwGoError(rt *vm.Runtime, err error) error {
-	// A host function that says the context has ended is stopping the
-	// script, not throwing: nothing catches it, as nothing catches a
-	// cancelled context the interpreter notices itself.
+	// A host function that says the runtime's own context has ended -- or
+	// its worker has been told to stop -- is stopping the script, not
+	// throwing: nothing catches it, as nothing catches a cancelled context
+	// the interpreter notices itself. Any other deadline, one of the host's
+	// own requests say, is an error like any other.
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return rt.Stop(err)
+		if stopped := rt.Interrupted(); stopped != nil {
+			return rt.Stop(stopped)
+		}
 	}
 	var jsErr *Error
 	if errors.As(err, &jsErr) {

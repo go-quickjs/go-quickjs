@@ -3,6 +3,8 @@ package quickjs_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
@@ -46,21 +48,34 @@ func TestCallReturnsError(t *testing.T) {
 	}
 }
 
-// TestHostCancellationIsUncatchable pins that a Go function reporting a
-// cancelled context stops the script, as the context itself would, rather
-// than throwing something it can catch.
+// TestHostCancellationIsUncatchable pins that a Go function reporting that
+// the runtime's own context has ended stops the script, as the context itself
+// would, rather than throwing something it can catch -- and that any other
+// deadline a Go function reports, one of its own requests', is an error the
+// script can catch, as it was before that (KI-19).
 func TestHostCancellationIsUncatchable(t *testing.T) {
 	rt := quickjs.New()
 	defer rt.Close()
-	if err := rt.Set("stop", func() error { return context.Canceled }); err != nil {
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := rt.Set("stop", func() error { cancel(); return ctx.Err() }); err != nil {
 		t.Fatal(err)
 	}
-	_, err := rt.Eval(`var after = false; try { stop() } catch (e) { after = "caught" } after = true`)
+	_, err := rt.EvalContext(ctx, `var after = false; try { stop() } catch (e) { after = "caught" } after = true`)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want the cancellation", err)
 	}
 	if v, _ := rt.Eval("after"); v.Bool() {
 		t.Errorf("after = %v: the script ran on", v)
+	}
+
+	if err := rt.Set("fetchSlowly", func() error {
+		return fmt.Errorf("Get \"http://example.com\": %w", context.DeadlineExceeded)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	v, err := rt.Eval(`try { fetchSlowly(); "no error" } catch (e) { e instanceof Error ? "caught: " + e.message : "?" }`)
+	if err != nil || !strings.HasPrefix(v.String(), "caught: ") {
+		t.Errorf("= %v, %v", v, err)
 	}
 }
 

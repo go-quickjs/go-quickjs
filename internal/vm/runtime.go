@@ -737,6 +737,10 @@ func (r *Runtime) EndNestedStop() { r.stopped = nil }
 // made from inside it, by a host function the script called.
 func (r *Runtime) Running() bool { return r.frameDepth > 0 }
 
+// Interrupted is why the host has stopped the runtime -- its context ended,
+// or its abort -- or nil when it has not.
+func (r *Runtime) Interrupted() error { return r.aborted() }
+
 // Stop is stop, for a host function that reports its context cancelled.
 func (r *Runtime) Stop(err error) error { return r.stop(err) }
 
