@@ -313,9 +313,13 @@ Paths are relative to this repository; `go-intl:` paths are in
   - Thai and CJK word segmentation
   - `Segments.containing`
   - `Segmenter.segment()` also splits the whole string up front
+  - *Fixed in go-intl 9b59e27, all but the last: a list is written from
+    the front, and the breaks and boundaries are searched. Splitting up
+    front costs one pass over the string per `segment()`, not more.*
 - **Temporal:** a Chinese-calendar `until` over the whole date range steps
   one month at a time. Node hangs here too.
-- **Status:** open for Intl and Temporal; the rest is fixed.
+- **Status:** fixed, but for Temporal's Chinese `until`, which Node shares,
+  and `segment()` splitting up front, which is linear.
 
 ### KI-28 32-bit platforms truncate lengths and offsets
 - **Panics on GOARCH=386:**

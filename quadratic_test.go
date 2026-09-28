@@ -9,9 +9,11 @@ import (
 )
 
 // TestLinearBuilds pins that building a string a surrogate half at a time,
-// and binding a function to itself over and over, take time in proportion to
-// how much is built: joining the halves of a pair flattened the string, and
-// each bind copied the "bound bound ..." name in full (KI-27).
+// binding a function to itself over and over, joining a long list and
+// breaking long Thai into words take time in proportion to how much there is:
+// joining the halves of a pair flattened the string, each bind copied the
+// "bound bound ..." name in full, a list was folded an item at a time, and
+// each of Thai's words was searched for from the first (KI-27).
 func TestLinearBuilds(t *testing.T) {
 	for name, tc := range map[string]struct{ src, want string }{
 		"surrogate halves": {`
@@ -24,6 +26,16 @@ func TestLinearBuilds(t *testing.T) {
 			for (let i = 0; i < 100000; i++) f = f.bind();
 			[f.name.length, f.name.startsWith("bound bound "), f.name.endsWith("bound g")].join()`,
 			"600001,true,true"},
+		"a long list": {`
+			new Intl.ListFormat("en").format(Array(200000).fill("x")).length`,
+			"600002"},
+		"long Thai": {`
+			const s = "สวัสดีครับ".repeat(30000);
+			const segs = new Intl.Segmenter("th", {granularity: "word"}).segment(s);
+			let n = 0;
+			for (let i = 0; i < s.length; i += 5) n += segs.containing(i).segment.length > 0;
+			[n, [...segs].length > 30000].join()`,
+			"60000,true"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			rt := quickjs.New()
