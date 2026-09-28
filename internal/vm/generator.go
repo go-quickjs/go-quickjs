@@ -240,6 +240,7 @@ func (r *Runtime) bindGeneratorParams(g *generator) error {
 		return r.throwRangeError("maximum call stack size exceeded")
 	}
 	r.stackTop = base + fn.MaxStack
+	r.stackHigh = max(r.stackHigh, r.stackTop)
 
 	f := r.pushFrame()
 	*f = frame{
@@ -377,6 +378,8 @@ func (r *Runtime) resumeFull(g *generator, sent Value, mode resumeMode) (resumeR
 		return resumeResult{value: Undefined, done: true}, r.throwRangeError("maximum call stack size exceeded")
 	}
 	r.stackTop = base + fn.MaxStack
+	// What endTurn clears back to, as for any other frame.
+	r.stackHigh = max(r.stackHigh, r.stackTop)
 
 	// Restore the operand stack from the previous suspension.
 	copy(r.stack[base:], g.stack)

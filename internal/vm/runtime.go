@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
+	"sync"
 	"time"
 
 	intl "github.com/go-quickjs/go-intl"
@@ -771,6 +772,46 @@ func (r *Runtime) Interrupted() error { return r.aborted() }
 // Close lets go of what the runtime has left with other agents: its waiters
 // in Atomics.waitAsync. It is safe to call from any goroutine.
 func (r *Runtime) Close() { r.asyncWaits.close() }
+
+// stackPools keeps the stacks of closed runtimes for the next runtime made
+// with a stack of the same size, a pool for each size: a host that makes a
+// runtime for each request would otherwise allocate and clear a stack -- 6 MB
+// of the default size -- for each.
+var stackPools sync.Map // int -> *sync.Pool
+
+func stackPool(size int) *sync.Pool {
+	if p, ok := stackPools.Load(size); ok {
+		return p.(*sync.Pool)
+	}
+	p, _ := stackPools.LoadOrStore(size, new(sync.Pool))
+	return p.(*sync.Pool)
+}
+
+// newStack is a stack of the given size: one a closed runtime gave back,
+// which is clear already, or a new one.
+func newStack(size int) []Value {
+	if p, _ := stackPool(size).Get().(*[]Value); p != nil {
+		return *p
+	}
+	return make([]Value, size)
+}
+
+// ReleaseStack gives a closed runtime's stack to the next runtime made. It is
+// called on the runtime's own goroutine, as everything but Close is, and does
+// nothing while a script is running on the stack -- one closing its own
+// runtime from a Go function it called. Every slot past stackHigh is clear
+// already, endTurn having cleared back to where the frames reached, so only
+// those below it are cleared. A script that runs after this, from a function
+// the host kept, finds no room on the stack and throws a RangeError.
+func (r *Runtime) ReleaseStack() {
+	if r.frameDepth > 0 || r.stack == nil {
+		return
+	}
+	clear(r.stack[:max(r.stackHigh, r.stackTop)])
+	s := r.stack
+	r.stack, r.stackTop, r.stackHigh = nil, 0, 0
+	stackPool(len(s)).Put(&s)
+}
 
 // Stop is stop, for a host function that reports its context cancelled.
 func (r *Runtime) Stop(err error) error { return r.stop(err) }

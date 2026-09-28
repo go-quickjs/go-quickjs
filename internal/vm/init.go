@@ -40,7 +40,7 @@ func New(cfg Config) *Runtime {
 
 	r := &Runtime{
 		atoms: newAtomTable(),
-		stack: make([]Value, stackSize),
+		stack: newStack(stackSize),
 		// The frames are allocated in blocks as the depth grows. None of the
 		// blocks ever moves, which is what lets the interpreter hold a *frame
 		// across nested calls; what bounds recursion is the depth limit

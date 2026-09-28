@@ -217,6 +217,7 @@ func (r *Runtime) Close() error {
 	r.posting.Store(nil)
 	if r.rt != nil {
 		r.rt.Close()
+		r.rt.ReleaseStack()
 	}
 	r.rt = nil
 	if r.cancel != nil {
@@ -315,14 +316,24 @@ func (r *Runtime) evalIn(ctx context.Context, re *vm.Realm, name, src string) (r
 // runIn runs compiled code in a realm, or in the runtime's own when re is
 // nil, and then the jobs it queued.
 func (r *Runtime) runIn(ctx context.Context, re *vm.Realm, fn *bytecodeFunc) (result Value, err error) {
+	rt := r.rt
 	nested, leave := r.enter(ctx)
 	defer leave()
 
 	var v vm.Value
 	if re == nil {
-		v, err = r.rt.Run(fn)
+		v, err = rt.Run(fn)
 	} else {
-		v, err = r.rt.RunIn(re, fn)
+		v, err = rt.RunIn(re, fn)
+	}
+	if r.closed {
+		// A Go function the script called closed the Runtime, which has
+		// nothing left to run and nothing to hand back. Its stack, which the
+		// script was still running on when it was closed, is free now.
+		if !nested {
+			rt.ReleaseStack()
+		}
+		return Value{}, ErrClosed
 	}
 	if err != nil {
 		return Value{}, r.wrapError(err)
@@ -347,14 +358,18 @@ func (r *Runtime) runIn(ctx context.Context, re *vm.Realm, fn *bytecodeFunc) (re
 // the script's deadline still bounds it, and the script's is what is in
 // force again after it.
 func (r *Runtime) enter(ctx context.Context) (nested bool, leave func()) {
-	if !r.rt.Running() {
+	// The engine is held here rather than read again on the way out: a Go
+	// function the script called may have closed the Runtime, which lets go
+	// of it.
+	rt := r.rt
+	if !rt.Running() {
 		// Whatever was in force before -- a loop's, between its tasks -- is
 		// again after.
-		prev := r.rt.Context()
-		r.rt.SetContext(ctx)
-		return false, func() { r.rt.SetContext(prev) }
+		prev := rt.Context()
+		rt.SetContext(ctx)
+		return false, func() { rt.SetContext(prev) }
 	}
-	outer := r.rt.Context()
+	outer := rt.Context()
 	run, cancel := ctx, func() {}
 	switch {
 	case outer == nil:
@@ -368,10 +383,10 @@ func (r *Runtime) enter(ctx context.Context) (nested bool, leave func()) {
 		prev := cancel
 		cancel = func() { stop(); prev() }
 	}
-	r.rt.SetContext(run)
+	rt.SetContext(run)
 	return true, func() {
 		cancel()
-		r.rt.SetContext(outer)
+		rt.SetContext(outer)
 	}
 }
 
