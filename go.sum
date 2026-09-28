@@ -1,5 +1,5 @@
-github.com/go-quickjs/go-intl v0.2.2-0.20260928035845-781eb4892022 h1:N5dT371ViLMKZcn4VqCZsvjZDE+gEdxHdjUGWK8ujzg=
-github.com/go-quickjs/go-intl v0.2.2-0.20260928035845-781eb4892022/go.mod h1:/Kn3soBxkmtIHevMspxdnTc5Br6+wHbzxM312CdeupM=
+github.com/go-quickjs/go-intl v0.3.0 h1:ZQKaLJgmRekNssjo8VX+5/NypIGeisIS8Y0/9ztXiX4=
+github.com/go-quickjs/go-intl v0.3.0/go.mod h1:/Kn3soBxkmtIHevMspxdnTc5Br6+wHbzxM312CdeupM=
 golang.org/x/sys v0.41.0 h1:Ivj+2Cp/ylzLiEU89QhWblYnOE9zerudt9Ftecq2C6k=
 golang.org/x/sys v0.41.0/go.mod h1:OgkHotnGiDImocRcuBABYBEXf8A9a87e/uXjp9XT3ks=
 golang.org/x/term v0.40.0 h1:36e4zGLqU4yhjlmxEaagx2KuYbJq3EwY8K943ZsHcvg=
