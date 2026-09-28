@@ -623,4 +623,10 @@ Paths are relative to this repository; `go-intl:` paths are in
 ### KI-60 Host job details
 - `notify` calls a host's `post` while holding the memory's lock.
 - `HostJobsReady` keeps a stale signal after a loop is attached.
-- **Status:** open.
+- **Status:** fixed.
+  - `notify` tells asynchronous waiters once it has let go of the lock.
+    This also removes a deadlock between a notify and a runtime closing.
+  - `HostJobsReady` signals only while jobs wait. Attaching a loop and
+    running the jobs both clear it.
+  - `TestWaitForAges` had relied on the stale signal.
+  - Tests: `TestNotifyDeliversUnlocked`, `TestHostJobsReadyAfterAttach`.

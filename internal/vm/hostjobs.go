@@ -33,14 +33,23 @@ func (r *Runtime) postFromElsewhere(fn func()) {
 	post := q.post
 	if post == nil {
 		q.jobs = append(q.jobs, fn)
+		// Signalled with the lock held, so that it cannot come after the
+		// jobs were taken, and stay with nothing to run.
+		select {
+		case q.ready <- struct{}{}:
+		default:
+		}
 	}
 	q.mu.Unlock()
 	if post != nil {
 		post(fn)
-		return
 	}
+}
+
+// taken empties the signal once the jobs have been taken. The lock is held.
+func (q *hostQueue) taken() {
 	select {
-	case q.ready <- struct{}{}:
+	case <-q.ready:
 	default:
 	}
 }
@@ -51,6 +60,7 @@ func (r *Runtime) runHostJobs() {
 	q.mu.Lock()
 	jobs := q.jobs
 	q.jobs = nil
+	q.taken()
 	q.mu.Unlock()
 	for _, fn := range jobs {
 		fn()
@@ -64,13 +74,14 @@ func (r *Runtime) PostFromElsewhere(fn func()) { r.postFromElsewhere(fn) }
 
 // AttachHostLoop makes work from other goroutines go to post, a host loop's
 // way to run a function on the runtime's goroutine. Work already waiting is
-// handed over too.
+// handed over too, and HostJobsReady no longer signals it.
 func (r *Runtime) AttachHostLoop(post func(func())) {
 	q := &r.hostJobs
 	q.mu.Lock()
 	q.post = post
 	jobs := q.jobs
 	q.jobs = nil
+	q.taken()
 	q.mu.Unlock()
 	for _, fn := range jobs {
 		post(fn)

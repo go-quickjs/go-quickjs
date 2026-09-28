@@ -281,7 +281,8 @@ func TestWaitForAges(t *testing.T) {
 	if got := <-blocked; got != "ok" {
 		t.Errorf("wait = %s", got)
 	}
-	runHostJobs(t, a)
+	// The waitAsync was a's own, so the Eval that notified it ran its answer
+	// too, and there is nothing left for the host to run.
 	if v, _ := a.Eval("outcome"); v.String() != "ok" {
 		t.Errorf("outcome = %v", v)
 	}

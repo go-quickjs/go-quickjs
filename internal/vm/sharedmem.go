@@ -403,7 +403,7 @@ func (a *asyncWaits) done(w *waiter) {
 }
 
 // close cancels every waiter left. The runtime's lock is let go before a
-// memory's is taken, which a notify holds while it tells a waiter.
+// memory's is taken.
 func (a *asyncWaits) close() {
 	a.mu.Lock()
 	a.closed = true
@@ -416,15 +416,17 @@ func (a *asyncWaits) close() {
 }
 
 // notify wakes up to count of the agents waiting on a byte offset, the
-// longest waiting first, and returns how many it woke.
+// longest waiting first, and returns how many it woke. An asynchronous
+// waiter is told once the lock is let go: telling it hands the answer to its
+// runtime's host, which a host may do by taking locks of its own.
 func (m *SharedMemory) notify(at int, count float64) int {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	list := m.waiters[at]
 	n := len(list)
 	if count < float64(n) {
 		n = int(count)
 	}
+	var deliver []func(string)
 	for _, w := range list[:n] {
 		w.notified = true
 		if w.deliver == nil {
@@ -434,12 +436,16 @@ func (m *SharedMemory) notify(at int, count float64) int {
 		if w.timer != nil {
 			w.timer.Stop()
 		}
-		w.deliver("ok")
+		deliver = append(deliver, w.deliver)
 	}
 	if n == len(list) {
 		delete(m.waiters, at)
 	} else {
 		m.waiters[at] = list[n:]
+	}
+	m.mu.Unlock()
+	for _, d := range deliver {
+		d("ok")
 	}
 	return n
 }
