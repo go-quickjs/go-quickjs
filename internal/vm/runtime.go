@@ -737,6 +737,11 @@ func itoa32(v int32) string {
 // the interpreter loop.
 const interruptCheckInterval = 4096
 
+// backEdgeCheckInterval is how many backward jumps the interpreter makes
+// between checks, fewer than interruptCheckInterval counts of other work
+// since each is at least a loop's worth of instructions.
+const backEdgeCheckInterval = 1024
+
 func (r *Runtime) checkInterrupt() error {
 	if r.stopped != nil {
 		return r.stopped

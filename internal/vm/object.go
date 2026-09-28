@@ -94,8 +94,7 @@ type Property struct {
 func (p *Property) isAccessor() bool { return p.flags&propAccessor != 0 }
 
 func (p *Property) getterSetter() *accessor {
-	a, _ := p.value.ref.(*accessor)
-	return a
+	return p.value.accessorPair()
 }
 
 // objFlags holds per-object booleans.

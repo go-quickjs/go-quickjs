@@ -247,7 +247,7 @@ func (r *Runtime) initStackTraces() {
 		}
 		return Undefined, nil
 	})
-	r.stackAccessor = Value{num: mkTag(KindObject, 0), ref: &accessor{getter: get, setter: set}}
+	r.stackAccessor = accessorValue(&accessor{getter: get, setter: set})
 	r.stackGetter, r.stackSetter = get, set
 
 	errorCtor := r.proto.errorCtors[errError]

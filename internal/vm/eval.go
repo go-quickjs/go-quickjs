@@ -46,7 +46,7 @@ func (r *Runtime) materialize(c bytecode.Constant) Value {
 		// A nested template is prepared eagerly and stored as a closure with no
 		// upvalues bound; OpClosure copies it and binds them per instantiation.
 		tmpl := r.prepare(c.Fn)
-		return Value{num: mkTag(KindObject, 0), ref: tmpl}
+		return templateValue(tmpl)
 	case bytecode.ConstRegExp:
 		// A regexp literal is built fresh each time it is evaluated, so the
 		// pool entry stays unmaterialized and OpNewRegExp reads it directly.

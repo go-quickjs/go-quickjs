@@ -66,7 +66,7 @@ func (r *Runtime) definePrivateAccessor(target *Object, key Atom, fn *Object, ge
 		set = fn
 	}
 	a := &accessor{getter: get, setter: set}
-	target.setOwnRaw(key, Value{num: mkTag(KindObject, 0), ref: a},
+	target.setOwnRaw(key, accessorValue(a),
 		propAccessor|propPrivate)
 }
 

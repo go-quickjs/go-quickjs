@@ -716,12 +716,8 @@ func (c *compiler) compileUnary(n *ast.Unary) {
 // Anything with more to it than that, a const, a name a `with` object may
 // answer for, a binding still in its dead zone, is left to the general path.
 func (c *compiler) compileLocalUpdate(n *ast.Update) bool {
-	id, ok := n.Operand.(*ast.Ident)
-	if !ok || c.withLimit(id.Name) > 0 {
-		return false
-	}
-	l, ok := c.resolveLocal(id.Name)
-	if !ok || !l.initialized || l.kind == bindConst || l.kind == bindFuncSelf {
+	l, ok := c.updatableLocal(n)
+	if !ok {
 		return false
 	}
 	op := bytecode.OpIncLocal
@@ -732,6 +728,21 @@ func (c *compiler) compileLocalUpdate(n *ast.Update) bool {
 	return true
 }
 
+// updatableLocal is the local an update names, when it names one that the
+// local-update instructions may write: a plain one, initialized, that is not
+// a constant or a named function expression's own name.
+func (c *compiler) updatableLocal(n *ast.Update) (*localVar, bool) {
+	id, ok := n.Operand.(*ast.Ident)
+	if !ok || c.withLimit(id.Name) > 0 {
+		return nil, false
+	}
+	l, ok := c.resolveLocal(id.Name)
+	if !ok || !l.initialized || l.kind == bindConst || l.kind == bindFuncSelf {
+		return nil, false
+	}
+	return l, true
+}
+
 func (c *compiler) compileUpdate(n *ast.Update) {
 	if call, ok := n.Operand.(*ast.Call); ok {
 		c.compileCallTarget(call, n.Start)
@@ -740,6 +751,18 @@ func (c *compiler) compileUpdate(n *ast.Update) {
 	op := bytecode.OpInc
 	if n.Op == "--" {
 		op = bytecode.OpDec
+	}
+	if l, ok := c.updatableLocal(n); ok {
+		// An update of a local whose value is read is one instruction.
+		var flags uint32
+		if n.Op == "--" {
+			flags |= bytecode.UpdateDec
+		}
+		if !n.Prefix {
+			flags |= bytecode.UpdatePostfix
+		}
+		c.emitAt(n.Start, bytecode.OpUpdateLocal, l.slot, flags)
+		return
 	}
 
 	switch target := n.Operand.(type) {

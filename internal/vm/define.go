@@ -419,7 +419,7 @@ func (r *Runtime) installProperty(o *Object, key Atom, d *propDesc, cur *propDes
 			o.markSparse()
 			o.elems[key.Index()] = elemHole
 		}
-		o.setOwnRaw(key, Value{ref: &accessor{getter: merged.getter, setter: merged.setter}},
+		o.setOwnRaw(key, accessorValue(&accessor{getter: merged.getter, setter: merged.setter}),
 			flags|propAccessor)
 		return
 	}

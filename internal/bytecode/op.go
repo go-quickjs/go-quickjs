@@ -45,6 +45,11 @@ const (
 
 	// --- Local variables --------------------------------------------------
 	OpGetLocal // push Locals[A]
+	// OpGetLocal2 is two get_locals in one: push Locals[A], then Locals[B].
+	// Reading two locals in a row is a sixth of what a program does -- the
+	// operands of a binary operator, a call's receiver and argument -- and
+	// one instruction to dispatch is half the cost of two.
+	OpGetLocal2
 	OpSetLocal // pop into Locals[A]
 	OpPutLocal // store the top into Locals[A] without popping
 	// OpGetLocalCheck reports a ReferenceError if the local is still in its
@@ -187,6 +192,11 @@ const (
 	// instruction rather than four.
 	OpIncLocal
 	OpDecLocal
+	// OpUpdateLocal is ++ or -- on a local whose value is read: B's
+	// UpdateDec bit says which, and UpdatePostfix whether the value pushed
+	// is the old one, coerced, or the new. `a[i++]` is then one instruction
+	// where it was five.
+	OpUpdateLocal
 
 	// --- Bitwise ----------------------------------------------------------
 	OpBitAnd
@@ -479,6 +489,12 @@ const (
 	opCount
 )
 
+// The flags OpUpdateLocal's B operand carries.
+const (
+	UpdateDec     = 1 << 0
+	UpdatePostfix = 1 << 1
+)
+
 // opNames gives each opcode a readable name for disassembly and panics.
 var opNames = [opCount]string{
 	OpNop: "nop", OpPushConst: "push_const", OpPushUndef: "push_undef",
@@ -493,7 +509,7 @@ var opNames = [opCount]string{
 	OpRot3: "rot3", OpRot4: "rot4",
 	OpInsert2: "insert2", OpInsert3: "insert3", OpInsert4: "insert4",
 
-	OpGetLocal: "get_local", OpSetLocal: "set_local", OpPutLocal: "put_local",
+	OpGetLocal: "get_local", OpGetLocal2: "get_local2", OpSetLocal: "set_local", OpPutLocal: "put_local",
 	OpGetLocalCheck: "get_local_check", OpSetLocalCheck: "set_local_check",
 	OpInitLocal: "init_local",
 
@@ -542,7 +558,7 @@ var opNames = [opCount]string{
 
 	OpAdd: "add", OpSub: "sub", OpMul: "mul", OpDiv: "div", OpMod: "mod",
 	OpPow: "pow", OpNeg: "neg", OpPos: "pos", OpInc: "inc", OpDec: "dec",
-	OpIncLocal: "inc_local", OpDecLocal: "dec_local",
+	OpIncLocal: "inc_local", OpDecLocal: "dec_local", OpUpdateLocal: "update_local",
 
 	OpBitAnd: "bit_and", OpBitOr: "bit_or", OpBitXor: "bit_xor",
 	OpBitNot: "bit_not", OpShl: "shl", OpShr: "shr", OpUShr: "ushr",

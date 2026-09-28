@@ -483,9 +483,31 @@ func (c *compiler) finish() {
 
 // emit appends an instruction and returns its program counter.
 func (c *compiler) emit(op bytecode.Op, a, b uint32) int {
+	if op == bytecode.OpGetLocal && c.fusible(bytecode.OpGetLocal) {
+		// A second local read straight after a first is made part of it.
+		last := &c.fn.Code[len(c.fn.Code)-1]
+		last.Op, last.B = bytecode.OpGetLocal2, a
+		c.adjustStack(op, a, b)
+		return len(c.fn.Code) - 1
+	}
 	c.fn.Code = append(c.fn.Code, bytecode.Instr{Op: op, A: a, B: b})
 	c.adjustStack(op, a, b)
 	return len(c.fn.Code) - 1
+}
+
+// fusible reports whether the instruction about to be emitted may be made
+// part of the last one, which is an op: the position it would have had is
+// one nothing jumps to, and no new source position begins there, which a
+// stack trace would want to point at.
+func (c *compiler) fusible(op bytecode.Op) bool {
+	n := len(c.fn.Code)
+	if n == 0 || c.fn.Code[n-1].Op != op || c.targets[n] {
+		return false
+	}
+	if l := len(c.fn.Lines); l > 0 && c.fn.Lines[l-1].PC == uint32(n) {
+		return false
+	}
+	return true
 }
 
 // emitAt emits an instruction and records its source line.
@@ -1263,6 +1285,10 @@ func collectPatternNames(target ast.Expr, out *[]string) {
 // corrupt the stack, so anything uncertain is rounded up.
 func stackEffect(op bytecode.Op, a, b uint32) int {
 	switch op {
+	case bytecode.OpGetLocal2:
+		return 2
+	case bytecode.OpUpdateLocal:
+		return 1
 	case bytecode.OpPushConst, bytecode.OpPushUndef, bytecode.OpPushNull,
 		bytecode.OpPushTrue, bytecode.OpPushFalse, bytecode.OpPushThis,
 		bytecode.OpPushInt, bytecode.OpPushEmptyString,

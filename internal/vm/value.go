@@ -8,7 +8,10 @@
 // cycle.
 package vm
 
-import "math"
+import (
+	"math"
+	"unsafe"
+)
 
 // Kind enumerates the JavaScript language types, plus the internal
 // KindUninitialized used for bindings in their temporal dead zone.
@@ -66,7 +69,55 @@ func (k Kind) String() string {
 // normalizes NaN to the canonical positive form.
 type Value struct {
 	num float64
-	ref any
+	// ref is what a string, symbol, BigInt or object value holds, as a
+	// pointer of no type: the tag in num says which it is. One word is half
+	// what an interface is to copy and to trace, and the kind is known
+	// already, so nothing is asserted to find it. Two internal values ride
+	// on an object's tag, told apart by its payload: an accessor pair, which
+	// is an accessor property's value, and a closure template, which is a
+	// function constant's.
+	ref unsafe.Pointer
+}
+
+// The payloads of KindObject's tag: an object, or one of the internal values
+// a Value carries.
+const (
+	objPlain    = 0
+	objAccessor = 1
+	objTemplate = 2
+)
+
+var (
+	objectBits   = math.Float64bits(mkTag(KindObject, objPlain))
+	accessorBits = math.Float64bits(mkTag(KindObject, objAccessor))
+	templateBits = math.Float64bits(mkTag(KindObject, objTemplate))
+)
+
+// accessorValue is an accessor property's value.
+func accessorValue(a *accessor) Value {
+	return Value{num: mkTag(KindObject, objAccessor), ref: unsafe.Pointer(a)}
+}
+
+// templateValue is a function constant: the template OpClosure copies.
+func templateValue(cl *closure) Value {
+	return Value{num: mkTag(KindObject, objTemplate), ref: unsafe.Pointer(cl)}
+}
+
+// accessorPair is the getter and setter an accessor property's value holds,
+// or nil.
+func (v Value) accessorPair() *accessor {
+	if math.Float64bits(v.num) == accessorBits {
+		return (*accessor)(v.ref)
+	}
+	return nil
+}
+
+// template is the closure template a function constant holds, or nil.
+func (v Value) template() *closure {
+	if math.Float64bits(v.num) == templateBits {
+		return (*closure)(v.ref)
+	}
+	return nil
 }
 
 const (
@@ -138,22 +189,22 @@ func Bool(b bool) Value {
 // Str returns a string value, interning short strings through the runtime is
 // the caller's choice; this wraps an already-built *String.
 func Str(s *String) Value {
-	return Value{num: mkTag(KindString, 0), ref: s}
+	return Value{num: mkTag(KindString, 0), ref: unsafe.Pointer(s)}
 }
 
 // Sym returns a symbol value.
 func Sym(s *Symbol) Value {
-	return Value{num: mkTag(KindSymbol, 0), ref: s}
+	return Value{num: mkTag(KindSymbol, 0), ref: unsafe.Pointer(s)}
 }
 
 // Big returns a BigInt value.
 func Big(b *BigInt) Value {
-	return Value{num: mkTag(KindBigInt, 0), ref: b}
+	return Value{num: mkTag(KindBigInt, 0), ref: unsafe.Pointer(b)}
 }
 
 // Obj returns an object value.
 func Obj(o *Object) Value {
-	return Value{num: mkTag(KindObject, 0), ref: o}
+	return Value{num: mkTag(KindObject, 0), ref: unsafe.Pointer(o)}
 }
 
 // ---------------------------------------------------------------------------
@@ -199,7 +250,7 @@ func (v Value) IsSymbol() bool { return v.isTag(KindSymbol) }
 func (v Value) IsBigInt() bool { return v.isTag(KindBigInt) }
 
 // IsObject reports whether the value is an object.
-func (v Value) IsObject() bool { return v.isTag(KindObject) }
+func (v Value) IsObject() bool { return math.Float64bits(v.num) == objectBits }
 
 // IsUninitialized reports whether the value is a binding in its temporal dead
 // zone.
@@ -232,26 +283,56 @@ func (v Value) BoolValue() bool {
 
 // String returns the string payload.
 func (v Value) String() *String {
-	s, _ := v.ref.(*String)
-	return s
+	if v.isTag(KindString) {
+		return (*String)(v.ref)
+	}
+	return nil
 }
 
 // Symbol returns the symbol payload.
 func (v Value) Symbol() *Symbol {
-	s, _ := v.ref.(*Symbol)
-	return s
+	if v.isTag(KindSymbol) {
+		return (*Symbol)(v.ref)
+	}
+	return nil
 }
 
 // BigInt returns the BigInt payload.
 func (v Value) BigInt() *BigInt {
-	b, _ := v.ref.(*BigInt)
-	return b
+	if v.isTag(KindBigInt) {
+		return (*BigInt)(v.ref)
+	}
+	return nil
 }
 
 // Object returns the object payload, or nil if the value is not an object.
 func (v Value) Object() *Object {
-	o, _ := v.ref.(*Object)
-	return o
+	if math.Float64bits(v.num) == objectBits {
+		return (*Object)(v.ref)
+	}
+	return nil
+}
+
+// refAny is what the value holds, as a pointer of its own type, for what
+// has to know the type: the memory meter's reflection.
+func (v Value) refAny() any {
+	switch bits := math.Float64bits(v.num); {
+	case v.ref == nil:
+		return nil
+	case bits == objectBits:
+		return (*Object)(v.ref)
+	case bits == accessorBits:
+		return (*accessor)(v.ref)
+	case bits == templateBits:
+		return (*closure)(v.ref)
+	case v.isTag(KindString):
+		return (*String)(v.ref)
+	case v.isTag(KindSymbol):
+		return (*Symbol)(v.ref)
+	case v.isTag(KindBigInt):
+		return (*BigInt)(v.ref)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

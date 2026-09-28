@@ -831,7 +831,7 @@ func (r *Runtime) defineAccessor(o *Object, key Atom, getter, setter *Object, fl
 		}
 	}
 	a := &accessor{getter: getter, setter: setter}
-	o.setOwnRaw(key, Value{num: mkTag(KindObject, 0), ref: a}, flags)
+	o.setOwnRaw(key, accessorValue(a), flags)
 }
 
 // toArrayLength converts a value assigned to an array's length, rejecting

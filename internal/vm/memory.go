@@ -217,14 +217,16 @@ func (m *memoryMeter) walk(r *Runtime) int64 {
 
 // value visits one value.
 func (m *memoryMeter) value(v Value) {
-	switch ref := v.ref.(type) {
-	case nil:
-	case *Object:
-		m.addObject(ref)
-	case *String:
-		m.addString(ref)
+	switch {
+	case v.ref == nil:
+	case v.IsObject():
+		m.addObject(v.Object())
+	case v.isTag(KindString):
+		m.addString(v.String())
 	default:
-		m.values = append(m.values, reflect.ValueOf(ref))
+		if ref := v.refAny(); ref != nil {
+			m.values = append(m.values, reflect.ValueOf(ref))
+		}
 	}
 }
 
@@ -330,7 +332,7 @@ func (m *memoryMeter) generic(v reflect.Value) {
 			if v.CanAddr() {
 				m.value(*(*Value)(unsafe.Pointer(v.UnsafeAddr())))
 			} else {
-				m.generic(v.Field(1))
+				m.value(Value{num: v.Field(0).Float(), ref: v.Field(1).UnsafePointer()})
 			}
 			return
 		}
