@@ -511,7 +511,11 @@ func (l *Lexer) scanString(tok Token, quote byte) (Token, error) {
 	start := l.pos
 	l.pos++
 	l.legacyEscape = false
+	// A literal with no escape is the text between its quotes, which is
+	// sliced rather than copied; the value is only built once an escape
+	// makes it differ.
 	var sb strings.Builder
+	escaped := false
 	for {
 		if l.atEnd() {
 			return tok, l.errf(start, "unterminated string literal")
@@ -519,18 +523,32 @@ func (l *Lexer) scanString(tok Token, quote byte) (Token, error) {
 		c := l.src[l.pos]
 		if c == quote {
 			l.pos++
-			tok.Kind, tok.Value, tok.Raw = String, sb.String(), l.src[start:l.pos]
+			value := l.src[start+1 : l.pos-1]
+			if escaped {
+				value = sb.String()
+			}
+			tok.Kind, tok.Value, tok.Raw = String, value, l.src[start:l.pos]
 			tok.LegacyEscape = l.legacyEscape
 			return tok, nil
 		}
 		switch c {
 		case '\\':
+			if !escaped {
+				sb.WriteString(l.src[start+1 : l.pos])
+				escaped = true
+			}
 			if err := l.scanEscape(&sb); err != nil {
 				return tok, err
 			}
 		case '\n', '\r':
 			return tok, l.errf(start, "unterminated string literal")
 		default:
+			if !escaped {
+				// The quote, a backslash and a line break are all ASCII, so
+				// no byte of a longer character is mistaken for one.
+				l.pos++
+				continue
+			}
 			r, size := l.peekRune()
 			// Lone surrogates may appear via \u escapes; preserve them by
 			// writing the replacement-free raw bytes when decoding fails.
