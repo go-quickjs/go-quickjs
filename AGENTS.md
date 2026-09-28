@@ -164,6 +164,15 @@ write profiles.
 go run ./internal/cmd/v8bench -dir /tmp/v8-v7 -fetch -mode fixed -n 5
 ```
 
+`internal/cmd/v8bench/goja` runs the same suite the same way on goja, for
+comparing the two engines. It is a module of its own, run from its
+directory, so that go-quickjs never depends on goja; `TestNoGojaDependency`
+fails if goja reaches go-quickjs's `go.mod` or `go.sum`.
+
+```sh
+(cd internal/cmd/v8bench/goja && go run . -dir /tmp/v8-v7 -mode fixed -n 5)
+```
+
 A change that keeps memory longer shows in neither: compare the conformance
 run's peak memory as well, which is how a cache that outlived its objects was
 caught.
