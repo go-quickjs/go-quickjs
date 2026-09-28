@@ -87,6 +87,8 @@ func (r *Runtime) runNested(re *vm.Realm, src string, opts vmhook.Options) (Valu
 	}
 	if err != nil {
 		if inner != nil && inner.Err() != nil && (outer == nil || outer.Err() == nil) {
+			// The run's own time ran out, which stopped it and nothing else.
+			r.rt.EndNestedStop()
 			e := r.NewError("Error", fmt.Sprintf("Script execution timed out after %dms", opts.Timeout.Milliseconds()))
 			if err := e.Set("code", "ERR_SCRIPT_EXECUTION_TIMEOUT"); err != nil {
 				return Value{}, err

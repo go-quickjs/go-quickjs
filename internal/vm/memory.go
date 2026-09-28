@@ -96,7 +96,7 @@ func (r *Runtime) measureMemory(need int64) error {
 	m.allocsAt = m.allocated()
 	m.live = max(0, m.walk(r)-m.baseline)
 	if m.live+need > m.limit {
-		return ErrMemoryLimit
+		return r.stop(ErrMemoryLimit)
 	}
 	m.live += need
 	return nil

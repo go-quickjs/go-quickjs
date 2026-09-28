@@ -184,7 +184,10 @@ Paths are relative to this repository; `go-intl:` paths are in
     per-job check rarely sees it.
 - **Effect:** a script past its deadline, or a terminated worker, keeps
   running. `.then(spin).catch(again)` loops for good.
-- **Status:** open.
+- **Status:** fixed. An interrupt is remembered once seen: every check after
+  it reports it, no function starts, and the job queue stops. The host's
+  next call starts afresh, without the jobs the stopped script left, and a
+  `node:vm` timeout stops only the run it bounds.
 
 ### KI-15 A nested `Runtime.Eval` clears the outer deadline
 - **Where:** `quickjs.go`. `evalIn` resets the context to nil on return, and

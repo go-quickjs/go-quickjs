@@ -276,6 +276,8 @@ func (r *Runtime) RunJobs() (err error) {
 		return ErrClosed
 	}
 	defer r.guard(&err)
+	// An interrupt the last call ended with is that call's.
+	r.rt.ClearStop()
 	if err := r.rt.DrainJobs(); err != nil {
 		return r.wrapError(err)
 	}

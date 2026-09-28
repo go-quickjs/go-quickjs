@@ -226,7 +226,7 @@ func throwGoError(rt *vm.Runtime, err error) error {
 	// script, not throwing: nothing catches it, as nothing catches a
 	// cancelled context the interpreter notices itself.
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return err
+		return rt.Stop(err)
 	}
 	var jsErr *Error
 	if errors.As(err, &jsErr) {

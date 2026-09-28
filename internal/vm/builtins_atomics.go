@@ -329,7 +329,7 @@ func (r *Runtime) initAtomicsBuiltins() {
 		}
 		// The host stopping the agent is not a timeout.
 		if err := rt.aborted(); err != nil {
-			return Undefined, err
+			return Undefined, rt.stop(err)
 		}
 		return Str(NewString("timed-out")), nil
 	})

@@ -118,7 +118,10 @@ func defaultLocale(host intl.Locale) string {
 }
 
 // SetContext installs the context the interpreter checks for cancellation.
-func (r *Runtime) SetContext(ctx context.Context) { r.ctx = ctx }
+func (r *Runtime) SetContext(ctx context.Context) {
+	r.ctx = ctx
+	r.ClearStop()
+}
 
 // SetAbort makes the runtime stop whatever it is running, from then on, once
 // done is closed, as a cancelled context stops what it was given to.

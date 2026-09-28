@@ -72,6 +72,8 @@ type Runtime struct {
 	// meter measures the heap against the memory limit, and is nil when
 	// there is none.
 	meter *memoryMeter
+	// stopped is the interrupt the script was stopped with; see stop.
+	stopped error
 	// nesting is how deep the engine is in recursion the frames do not
 	// count; see nest.
 	nesting    int
@@ -699,11 +701,48 @@ func itoa32(v int32) string {
 const interruptCheckInterval = 4096
 
 func (r *Runtime) checkInterrupt() error {
+	if r.stopped != nil {
+		return r.stopped
+	}
 	r.interruptCounter--
 	if r.interruptCounter > 0 {
 		return nil
 	}
 	return r.checkInterruptNow()
+}
+
+// stop records that the host has stopped the script -- a cancelled context,
+// an abort, the memory limit -- and returns why.
+//
+// An interrupt is not an exception, but much of the engine turns a failure
+// into a value: a promise reaction rejects with it, an iterator being closed
+// on the way out drops it. So it is remembered, and every check after
+// reports it at once, and the job queue stops at the job that met it: a
+// script cannot catch it and carry on. The host's next call starts afresh.
+func (r *Runtime) stop(err error) error {
+	r.stopped = err
+	return err
+}
+
+// EndNestedStop forgets an interrupt that stopped only a nested run -- one
+// that node:vm gave a timeout of its own -- so that the code that started it
+// carries on, as the caller of a run that timed out does.
+func (r *Runtime) EndNestedStop() { r.stopped = nil }
+
+// Stop is stop, for a host function that reports its context cancelled.
+func (r *Runtime) Stop(err error) error { return r.stop(err) }
+
+// ClearStop forgets an interrupt the host's last call ended with, as its
+// next call begins, and drops the jobs the stopped script left queued: they
+// were its own, and running them now would be running it on. Called from
+// within a script -- a host function calling back in -- it does nothing: the
+// script it is part of is still stopped.
+func (r *Runtime) ClearStop() {
+	if r.frameDepth == 0 && r.stopped != nil {
+		r.stopped = nil
+		clear(r.microtasks)
+		r.microtasks = r.microtasks[:0]
+	}
 }
 
 // checkInterruptNow performs the actual check and rearms the counter.
@@ -713,17 +752,20 @@ func (r *Runtime) checkInterrupt() error {
 // makes it unsuitable for inlining.
 func (r *Runtime) checkInterruptNow() error {
 	r.interruptCounter = interruptCheckInterval
+	if r.stopped != nil {
+		return r.stopped
+	}
 	if r.abort != nil {
 		select {
 		case <-r.abort:
-			return context.Canceled
+			return r.stop(context.Canceled)
 		default:
 		}
 	}
 	if r.ctx != nil {
 		select {
 		case <-r.ctx.Done():
-			return r.ctx.Err()
+			return r.stop(r.ctx.Err())
 		default:
 		}
 	}

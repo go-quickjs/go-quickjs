@@ -271,6 +271,7 @@ func (v Value) CallWithThis(this Value, args ...any) (Value, error) {
 		}
 		vals[i] = enc
 	}
+	v.rt.ClearStop()
 	res, err := v.rt.Call(v.v, this.v, vals)
 	if err != nil {
 		return Value{}, wrapThrown(v.rt, err)
@@ -291,6 +292,7 @@ func (v Value) New(args ...any) (Value, error) {
 		}
 		vals[i] = enc
 	}
+	v.rt.ClearStop()
 	res, err := v.rt.Construct(v.v, vals)
 	if err != nil {
 		return Value{}, wrapThrown(v.rt, err)

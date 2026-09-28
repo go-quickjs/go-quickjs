@@ -586,6 +586,12 @@ func (r *Runtime) execute(f *frame) (Value, error) {
 // stack, so execution starts part-way up, and generator.throw() injects an
 // exception at the suspension point so that a try inside the body can catch it.
 func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error) {
+	// A script that has been stopped runs nothing more, even where the
+	// interrupt was turned into a value -- a rejection, an error an iterator
+	// being closed dropped -- that let the caller carry on and call again.
+	if r.stopped != nil {
+		return Undefined, r.stopped
+	}
 	cl := f.cl
 	code := cl.fn.Code
 	// sp is the operand stack pointer, an absolute index into r.stack.

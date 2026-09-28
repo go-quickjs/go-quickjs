@@ -286,6 +286,9 @@ func (r *Runtime) runJob(j job) {
 // is bounded so that a promise chain that queues itself forever cannot wedge
 // the host.
 func (r *Runtime) DrainJobs() error {
+	if r.stopped != nil {
+		return r.stopped
+	}
 	const maxJobs = 1_000_000
 	// A finalization callback is a job of its own, and one queued by the
 	// collector between turns has no other moment to run; so is what another
@@ -299,6 +302,8 @@ func (r *Runtime) DrainJobs() error {
 		j := r.microtasks[0]
 		r.microtasks = r.microtasks[1:]
 		r.runJob(j)
+		// A job that met an interrupt has turned it into a rejection, or
+		// dropped it; the queue stops here all the same.
 		if err := r.checkInterrupt(); err != nil {
 			return err
 		}
