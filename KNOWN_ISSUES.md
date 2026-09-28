@@ -544,7 +544,10 @@ Paths are relative to this repository; `go-intl:` paths are in
 
 ### KI-53 BigInts above about 1.8e308 are formatted as `∞`
 - **Where:** go-intl has no exact decimal for a BigInt.
-- **Status:** open.
+- **Status:** fixed. go-intl 781eb48's `ParseExactDecimal` reads one without
+  rounding it to a double's range, which `NumberFormat` and
+  `BigInt.prototype.toLocaleString` use; a numeric string that large is
+  still `∞`, as ECMA-402 has it.
 
 ### KI-54 `unwrapFormatter` reads the legacy symbol unconditionally
 - **Effect:** there is no `OrdinaryHasInstance` check first, and it also

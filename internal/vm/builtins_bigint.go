@@ -62,7 +62,7 @@ func (r *Runtime) initBigIntBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(o.nf.FormatDecimal(intl.ParseDecimal(b.V.String())))), nil
+		return Str(NewString(o.nf.FormatDecimal(intl.ParseExactDecimal(b.V.String())))), nil
 	})
 
 	r.defMethod(p, "valueOf", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {

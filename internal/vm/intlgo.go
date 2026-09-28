@@ -183,6 +183,9 @@ func intlDecimal(d decimal, special string) intl.Decimal {
 	if d.negative {
 		text = "-" + text
 	}
+	if special == "exact" {
+		return intl.ParseExactDecimal(text)
+	}
 	return intl.ParseDecimal(text)
 }
 

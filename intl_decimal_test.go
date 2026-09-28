@@ -43,3 +43,18 @@ func TestIntlNumericStringExtremes(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// TestIntlHugeBigInt pins that a BigInt past a double's range is written in
+// full, as ToIntlMathematicalValue takes one and V8 writes it -- it was ∞ --
+// while a numeric string that large is still ∞, as ECMA-402 has it (KI-53).
+func TestIntlHugeBigInt(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	got := evalString(t, rt, `const nf = new Intl.NumberFormat("en");
+		[nf.format(10n ** 400n).length, nf.format(-(10n ** 400n)).slice(0, 5), nf.format("1" + "0".repeat(400)),
+		 nf.formatRange(1n, 10n ** 400n).length, (10n ** 400n).toLocaleString("de").slice(0, 12),
+		 new Intl.NumberFormat("en", {notation: "compact"}).format(10n ** 400n).length].join()`)
+	if want := "534,-10,0,∞,536,10.000.000.0,519"; got != want {
+		t.Errorf("got %s, want %s", got, want)
+	}
+}

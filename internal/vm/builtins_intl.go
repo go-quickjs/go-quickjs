@@ -265,8 +265,10 @@ func allAlphanumeric(s string) bool {
 // still comes out right.
 func (r *Runtime) numberArgument(v Value) (decimal, string, error) {
 	if v.IsBigInt() {
+		// A BigInt is taken as the integer it is, however large, where a
+		// string past a double's range is an infinity (KI-53).
 		if d, ok := parseDecimal(v.BigInt().V.String()); ok {
-			return d, "", nil
+			return d, "exact", nil
 		}
 	}
 	prim, err := r.toPrimitive(v, hintNumber)
