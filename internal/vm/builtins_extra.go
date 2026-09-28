@@ -435,11 +435,21 @@ func (r *Runtime) initObjectExtras() {
 		if err != nil {
 			return Undefined, err
 		}
-		key, err := rt.toPropertyKey(arg(args, 1))
+		name, err := rt.toPropertyName(arg(args, 1))
 		if err != nil {
 			return Undefined, err
 		}
-		return Bool(rt.hasOwnProp(o, key)), nil
+		key, known := rt.keyFor(o, name)
+		if !known {
+			return False, nil
+		}
+		// A proxy's getOwnPropertyDescriptor trap may throw, which is the
+		// answer's to report.
+		has, err := rt.hasOwnPropOf(o, key)
+		if err != nil {
+			return Undefined, err
+		}
+		return Bool(has), nil
 	})
 
 	r.defMethod(ctor, "getOwnPropertySymbols", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {

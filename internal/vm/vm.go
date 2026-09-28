@@ -1261,12 +1261,18 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				vmErr = r.throwTypeError("cannot delete a property of %s", r.describe(obj))
 				goto onError
 			}
-			k, err := r.toPropertyKey(key)
+			n, err := r.toPropertyName(key)
 			if err != nil {
 				vmErr = err
 				goto onError
 			}
 			if !obj.IsObject() {
+				push(True)
+				break
+			}
+			k, has := r.keyFor(obj.Object(), n)
+			if !has {
+				// Deleting what is not there succeeds.
 				push(True)
 				break
 			}
@@ -1665,10 +1671,15 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				vmErr = r.throwTypeError("the right operand of \"in\" must be an object")
 				goto onError
 			}
-			k, err := r.toPropertyKey(key)
+			n, err := r.toPropertyName(key)
 			if err != nil {
 				vmErr = err
 				goto onError
+			}
+			k, known := r.keyFor(obj.Object(), n)
+			if !known {
+				push(False)
+				break
 			}
 			has, err := r.hasPropErr(obj.Object(), k)
 			if err != nil {
@@ -3358,9 +3369,17 @@ func (r *Runtime) getIndexed(obj, key Value) (Value, error) {
 			}
 		}
 	}
-	k, err := r.toPropertyKey(key)
+	n, err := r.toPropertyName(key)
 	if err != nil {
 		return Undefined, err
+	}
+	o := r.protoOfPrimitive(obj)
+	if obj.IsObject() {
+		o = obj.Object()
+	}
+	k, ok := r.keyFor(o, n)
+	if !ok {
+		return Undefined, nil
 	}
 	return r.getValueProp(obj, k)
 }

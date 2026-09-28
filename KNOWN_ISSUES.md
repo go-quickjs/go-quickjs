@@ -109,7 +109,11 @@ Paths are relative to this repository; `go-intl:` paths are in
   lifetime, even when it is only read. The same goes for every symbol key and
   every index at or above 2^31. A script that only reads `o["k"+i]` grows the
   heap without bound.
-- **Status:** open.
+- **Status:** fixed for keys that are only read, tested or deleted -- by
+  `[]`, `in`, `delete`, `hasOwnProperty` and `Object.hasOwn` -- which make no
+  atom for a name that has none, unless a proxy or a module namespace on the
+  chain has to be asked. A key a script writes keeps its atom for the
+  runtime's life, as before; the memory limit counts the table.
 
 ### KI-08 ShadowRealm isolation escapes through `CallSite`
 - **Where:** `internal/vm/stacktrace.go`. An anonymous native frame, such as

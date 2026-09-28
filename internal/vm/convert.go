@@ -207,6 +207,92 @@ func (r *Runtime) toPropertyKey(v Value) (Atom, error) {
 	return r.atoms.intern(s.Go()), nil
 }
 
+// A propertyName is a key as ToPropertyKey makes it, before an atom is made
+// for it: an atom lasts as long as the runtime, and a key that is only read
+// -- o["k" + i], o[Symbol()] -- need not have one. A name no atom was ever
+// made for is no object's key, so reading it finds nothing.
+type propertyName struct {
+	atom    Atom
+	hasAtom bool
+	name    string
+	sym     *Symbol
+}
+
+// toPropertyName converts a key as toPropertyKey does, with the same calls
+// to toString and valueOf, but makes no atom for it.
+func (r *Runtime) toPropertyName(v Value) (propertyName, error) {
+	switch v.Kind() {
+	case KindNumber:
+		f := v.Number()
+		if i := uint32(f); float64(i) == f && i < atomIndexTag {
+			return propertyName{atom: Atom(atomIndexTag | i), hasAtom: true}, nil
+		}
+		return propertyName{name: jsnum.FormatFloat(f)}, nil
+	case KindString:
+		return propertyName{name: v.String().Go()}, nil
+	case KindSymbol:
+		return propertyName{sym: v.Symbol()}, nil
+	}
+	p, err := r.toPrimitive(v, hintString)
+	if err != nil {
+		return propertyName{}, err
+	}
+	if p.IsSymbol() {
+		return propertyName{sym: p.Symbol()}, nil
+	}
+	s, err := r.toString(p)
+	if err != nil {
+		return propertyName{}, err
+	}
+	return propertyName{name: s.Go()}, nil
+}
+
+// keyFor is the atom a name has, for reading, testing or deleting a property
+// of o; false means it has none, and so o has no such property. A proxy on
+// o's chain is asked about any key at all, and a deferred module namespace
+// is evaluated by any string key, so there one is made.
+func (r *Runtime) keyFor(o *Object, n propertyName) (Atom, bool) {
+	if n.hasAtom {
+		return n.atom, true
+	}
+	var a Atom
+	var ok bool
+	if n.sym != nil {
+		a, ok = r.atoms.bySymbol[n.sym]
+	} else {
+		a, ok = r.atoms.lookup(n.name)
+	}
+	if ok {
+		return a, true
+	}
+	for p := o; p != nil; p = p.proto {
+		if proxyOf(p) != nil || p.class == ClassModuleNamespace {
+			if n.sym != nil {
+				return r.atoms.internSymbol(n.sym), true
+			}
+			return r.atoms.intern(n.name), true
+		}
+	}
+	return 0, false
+}
+
+// protoOfPrimitive is where a property of a primitive is looked for.
+func (r *Runtime) protoOfPrimitive(v Value) *Object {
+	switch v.Kind() {
+	case KindString:
+		return r.proto.str
+	case KindNumber:
+		return r.proto.number
+	case KindBool:
+		return r.proto.boolean
+	case KindSymbol:
+		return r.proto.symbol
+	case KindBigInt:
+		return r.proto.bigint
+	}
+	return nil
+}
+
 // toObject implements ToObject, wrapping a primitive in its object form.
 func (r *Runtime) toObject(v Value) (*Object, error) {
 	switch v.Kind() {

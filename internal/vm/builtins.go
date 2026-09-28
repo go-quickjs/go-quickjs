@@ -23,13 +23,17 @@ func (r *Runtime) initObjectBuiltins() {
 	p := r.proto.object
 
 	r.defMethod(p, "hasOwnProperty", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		key, err := rt.toPropertyKey(arg(args, 0))
+		name, err := rt.toPropertyName(arg(args, 0))
 		if err != nil {
 			return Undefined, err
 		}
 		o, err := rt.toObject(this)
 		if err != nil {
 			return Undefined, err
+		}
+		key, known := rt.keyFor(o, name)
+		if !known {
+			return False, nil
 		}
 		has, err := rt.hasOwnPropOf(o, key)
 		if err != nil {
