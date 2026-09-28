@@ -47,7 +47,7 @@ type durationOptions struct {
 
 func (r *Runtime) initDurationFormat(intlObj *Object) {
 	proto := newObject(r.proto.object, ClassObject)
-	ctor := r.newCtor("DurationFormat", 0, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	ctor := r.newMemberCtor("DurationFormat", 0, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		made, err := rt.protoFromNewTargetErr(rt.intlProtoOf("DurationFormat"))
 		if err != nil {
 			return Undefined, err

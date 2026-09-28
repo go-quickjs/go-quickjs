@@ -22,7 +22,7 @@ type collatorOptions struct {
 
 func (r *Runtime) initCollator(intlObj *Object) {
 	proto := newObject(r.proto.object, ClassObject)
-	ctor := r.newCtor("Collator", 0, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	ctor := r.newMemberCtor("Collator", 0, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		proto, err := rt.protoFromNewTargetErr(rt.intlProtoOf("Collator"))
 		if err != nil {
 			return Undefined, err
@@ -179,7 +179,7 @@ type pluralOptions struct {
 
 func (r *Runtime) initPluralRules(intlObj *Object) {
 	proto := newObject(r.proto.object, ClassObject)
-	ctor := r.newCtor("PluralRules", 0, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	ctor := r.newMemberCtor("PluralRules", 0, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		proto, err := rt.protoFromNewTargetErr(rt.intlProtoOf("PluralRules"))
 		if err != nil {
 			return Undefined, err
@@ -337,7 +337,7 @@ type displayOptions struct {
 
 func (r *Runtime) initDisplayNames(intlObj *Object) {
 	proto := newObject(r.proto.object, ClassObject)
-	ctor := r.newCtor("DisplayNames", 2, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	ctor := r.newMemberCtor("DisplayNames", 2, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		proto, err := rt.protoFromNewTargetErr(rt.intlProtoOf("DisplayNames"))
 		if err != nil {
 			return Undefined, err
@@ -530,7 +530,7 @@ type listOptions struct {
 
 func (r *Runtime) initListFormat(intlObj *Object) {
 	proto := newObject(r.proto.object, ClassObject)
-	ctor := r.newCtor("ListFormat", 0, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	ctor := r.newMemberCtor("ListFormat", 0, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		proto, err := rt.protoFromNewTargetErr(rt.intlProtoOf("ListFormat"))
 		if err != nil {
 			return Undefined, err
@@ -660,7 +660,7 @@ type relativeOptions struct {
 
 func (r *Runtime) initRelativeTimeFormat(intlObj *Object) {
 	proto := newObject(r.proto.object, ClassObject)
-	ctor := r.newCtor("RelativeTimeFormat", 0, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	ctor := r.newMemberCtor("RelativeTimeFormat", 0, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		proto, err := rt.protoFromNewTargetErr(rt.intlProtoOf("RelativeTimeFormat"))
 		if err != nil {
 			return Undefined, err

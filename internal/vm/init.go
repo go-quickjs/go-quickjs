@@ -318,15 +318,22 @@ func (r *Runtime) defGetter(target *Object, name string, fn NativeFunc) {
 	r.defineAccessor(target, r.atoms.intern(name), g, nil, propConfigurable)
 }
 
-// newCtor creates a constructor function with its prototype link established
-// in both directions.
+// newCtor creates a global constructor function with its prototype link
+// established in both directions.
 func (r *Runtime) newCtor(name string, length int, proto *Object, fn NativeFunc) *Object {
+	c := r.newMemberCtor(name, length, proto, fn)
+	r.defValue(r.global, name, Obj(c))
+	return c
+}
+
+// newMemberCtor is newCtor for a constructor that is not a global but a
+// member of a namespace, as Intl's are, which the caller puts there.
+func (r *Runtime) newMemberCtor(name string, length int, proto *Object, fn NativeFunc) *Object {
 	c, fd := r.newSlabFuncObject(r.proto.function, ClassFunction)
 	*fd = funcData{native: fn, name: name, length: length, ctorKind: ctorBase, realm: r.Realm}
 	c.setOwnRaw(atomPrototype, Obj(proto), 0)
 	r.registerIntrinsic(name, proto)
 	proto.setOwnRaw(atomConstructor, Obj(c), propWritable|propConfigurable)
-	r.defValue(r.global, name, Obj(c))
 	return c
 }
 

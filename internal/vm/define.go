@@ -137,6 +137,11 @@ func (r *Runtime) definePropertyFromDescriptor(target *Object, key Atom, desc Va
 // The caller decides what a refusal means: Object.defineProperty throws,
 // Reflect.defineProperty returns false.
 func (r *Runtime) defineProperty(o *Object, key Atom, d *propDesc) (bool, error) {
+	if o == r.global {
+		if settle := r.lazyGlobals[key]; settle != nil {
+			settle(r)
+		}
+	}
 	// A proxy decides for itself what defining a property means.
 	if p := proxyOf(o); p != nil {
 		return r.proxyDefineProperty(p, key, r.descriptorObject(d))
@@ -617,6 +622,12 @@ func (r *Runtime) setIntegrity(o *Object, freeze bool) error {
 	// A function's name and length are synthesized on demand, and about to be
 	// constrained, so they have to exist first.
 	r.materializeFunctionProp(o, atomLength)
+	// So are the globals built when first read.
+	if o == r.global {
+		for _, settle := range r.lazyGlobals {
+			settle(r)
+		}
+	}
 	ok, err := r.preventExtensionsOf(o)
 	if err != nil {
 		return err

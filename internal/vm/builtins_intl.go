@@ -25,22 +25,61 @@ import (
 // leaving an ordinary property behind. The only way to tell is to ask for the
 // property's descriptor before anything has touched it.
 func (r *Runtime) initIntlBuiltins() {
-	name := r.atoms.intern("Intl")
-	build := r.newNativeFunc("get Intl", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		intl := rt.buildIntl()
-		rt.global.setOwnRaw(name, Obj(intl), propWritable|propConfigurable)
-		return Obj(intl), nil
-	})
-	// A setter, so that a host that wants its own Intl can simply assign one.
-	set := r.newNativeFunc("set Intl", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		rt.global.setOwnRaw(name, arg(args, 0), propWritable|propConfigurable)
-		return Undefined, nil
-	})
-	r.defineAccessor(r.global, name, build, set, propConfigurable)
+	r.defineLazyGlobal("Intl", (*Runtime).buildIntl)
 }
 
-// buildIntl makes the namespace, the first time anything asks for it.
+// defineLazyGlobal puts a global on the global object that is built the
+// first time it is read, and then becomes the ordinary writable property it
+// stands for.
+//
+// It becomes one only while it is still the configurable accessor it was
+// made as: a global object frozen before it was read keeps the accessor, as
+// frozen, and reading it only builds what it returns. And assigning to it
+// through something that inherits from the global object defines the name on
+// that, as it would were the property the data property it stands for.
+func (r *Runtime) defineLazyGlobal(name string, build func(*Runtime) *Object) {
+	key := r.atoms.intern(name)
+	var getter *Object
+	settle := func(rt *Runtime, v Value) {
+		p := rt.global.getOwn(key)
+		if p == nil || !p.isAccessor() || p.flags&propConfigurable == 0 {
+			return
+		}
+		if acc := p.getterSetter(); acc == nil || acc.getter != getter {
+			return
+		}
+		rt.global.setOwnRaw(key, v, propWritable|propConfigurable)
+	}
+	if r.lazyGlobals == nil {
+		r.lazyGlobals = map[Atom]func(*Runtime){}
+	}
+	// A script that redefines the property, or freezes or seals the global
+	// object, is given the data property it stands for, as it would find in
+	// any other engine: frozen, it is read-only, not an accessor to call.
+	r.lazyGlobals[key] = func(rt *Runtime) { settle(rt, Obj(build(rt))) }
+	getter = r.newNativeFunc("get "+name, 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		ns := Obj(build(rt))
+		settle(rt, ns)
+		return ns, nil
+	})
+	// A setter, so that a host that wants its own namespace can simply
+	// assign one.
+	set := r.newNativeFunc("set "+name, 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		if this.IsObject() && this.Object() != rt.global {
+			return Undefined, rt.createDataProperty(this.Object(), key, arg(args, 0), propDefault)
+		}
+		settle(rt, arg(args, 0))
+		return Undefined, nil
+	})
+	r.defineAccessor(r.global, key, getter, set, propConfigurable)
+}
+
+// buildIntl makes the namespace the first time anything asks for it, and
+// answers with the same one every time after.
 func (r *Runtime) buildIntl() *Object {
+	if r.intlNamespace != nil {
+		return r.intlNamespace
+	}
 	r.intlProtos = map[string]*Object{}
 	// The symbol a formatter made without new is hidden under. Calling
 	// Intl.NumberFormat as a function on an object that is already one of them
@@ -49,6 +88,7 @@ func (r *Runtime) buildIntl() *Object {
 	// uses it.
 	r.intlFallback = NewSymbol("IntlLegacyConstructedSymbol", true)
 	intlObj := newObject(r.proto.object, ClassObject)
+	r.intlNamespace = intlObj
 	r.defToStringTag(intlObj, "Intl")
 
 	r.initLocale(intlObj)
@@ -467,7 +507,7 @@ func (r *Runtime) intOption(o *Object, name string, min, max, fallback int) (int
 
 func (r *Runtime) initNumberFormat(intlObj *Object) {
 	proto := newObject(r.proto.object, ClassObject)
-	ctor := r.newCtor("NumberFormat", 0, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	ctor := r.newMemberCtor("NumberFormat", 0, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		made, err := rt.protoFromNewTargetErr(rt.intlProtoOf("NumberFormat"))
 		if err != nil {
 			return Undefined, err
@@ -881,7 +921,7 @@ func (r *Runtime) numberFormatOf(this Value, method string) (*numberOptions, err
 
 func (r *Runtime) initDateTimeFormat(namespace *Object) {
 	proto := newObject(r.proto.object, ClassObject)
-	ctor := r.newCtor("DateTimeFormat", 0, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	ctor := r.newMemberCtor("DateTimeFormat", 0, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		made, err := rt.protoFromNewTargetErr(rt.intlProtoOf("DateTimeFormat"))
 		if err != nil {
 			return Undefined, err

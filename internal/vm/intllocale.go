@@ -16,7 +16,7 @@ type localeOptions struct {
 
 func (r *Runtime) initLocale(namespace *Object) {
 	proto := newObject(r.proto.object, ClassObject)
-	ctor := r.newCtor("Locale", 1, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	ctor := r.newMemberCtor("Locale", 1, proto, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if !rt.Constructing() {
 			return Undefined, rt.intlRequiresNew("Intl.Locale")
 		}

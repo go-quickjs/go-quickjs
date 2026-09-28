@@ -13,17 +13,7 @@ import (
 // initTemporalBuiltins installs a lazy namespace. Temporal is large enough
 // that runtimes which never ask for it should not allocate all its prototypes.
 func (r *Runtime) initTemporalBuiltins() {
-	name := r.atoms.intern("Temporal")
-	build := r.newNativeFunc("get Temporal", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		ns := rt.buildTemporal()
-		rt.global.setOwnRaw(name, Obj(ns), propWritable|propConfigurable)
-		return Obj(ns), nil
-	})
-	set := r.newNativeFunc("set Temporal", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		rt.global.setOwnRaw(name, arg(args, 0), propWritable|propConfigurable)
-		return Undefined, nil
-	})
-	r.defineAccessor(r.global, name, build, set, propConfigurable)
+	r.defineLazyGlobal("Temporal", (*Runtime).buildTemporal)
 }
 
 func (r *Runtime) buildTemporal() *Object {

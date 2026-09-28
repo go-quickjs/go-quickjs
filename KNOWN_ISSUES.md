@@ -167,7 +167,11 @@ Paths are relative to this repository; `go-intl:` paths are in
   accessor replaces itself with `setOwnRaw`, and its setter ignores `this`.
 - **Effect:** after `Object.freeze(globalThis)`, reading `Intl` makes the
   property configurable again, and `globalThis.Intl = 5` succeeds.
-- **Status:** open.
+- **Status:** fixed. Redefining the property, or freezing or sealing the
+  global object, first makes it the data property it stands for; the getter
+  replaces only its own configurable accessor; and the setter respects its
+  receiver. Building `Intl` also stopped defining its constructors,
+  `NumberFormat` and the rest, as globals.
 
 ## P1: limits, hangs, leaks
 
@@ -459,7 +463,7 @@ Paths are relative to this repository; `go-intl:` paths are in
 ### KI-51 The `Intl` getter can build a second `Intl`
 - **Effect:** calling the lazy getter again rebuilds `Intl`, which breaks
   formatters made from the first.
-- **Status:** open.
+- **Status:** fixed with KI-13. `Intl` is built once.
 
 ### KI-52 Temporal constructors take the wrong realm's prototype
 - **When:** `new.target.prototype` is not an object.

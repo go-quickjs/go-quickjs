@@ -209,6 +209,12 @@ type Realm struct {
 	intlProtos map[string]*Object
 	// intlFallback is the symbol a formatter made without new is hidden under.
 	intlFallback *Symbol
+	// intlNamespace is Intl, once it has been built.
+	intlNamespace *Object
+	// lazyGlobals settles each global built when first read -- Intl,
+	// Temporal -- into the data property it stands for; see
+	// defineLazyGlobal.
+	lazyGlobals map[Atom]func(*Runtime)
 	// temporalDurationProto is retained because Instant difference operations
 	// create Duration results after the lazy Temporal namespace has been built.
 	temporalNamespace     *Object
