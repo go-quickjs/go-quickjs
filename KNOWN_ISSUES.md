@@ -475,7 +475,7 @@ Paths are relative to this repository; `go-intl:` paths are in
   now takes it too. Both modes give V8's message for NaN and negatives.
 
 ### KI-46 `toLocaleLowerCase` for tr, az and lt loses the final-sigma rule
-- **Status:** open.
+- **Status:** fixed. Their loops ask `finalSigma` with the whole string.
 
 ### KI-47 Structured clone gaps
 - The stdlib's own objects, `Blob` and `URL`, clone silently as `{}`.

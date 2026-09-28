@@ -79,3 +79,13 @@ func TestCodeUnitCounts(t *testing.T) {
 		"SyntaxError: Input string must contain hex characters in even length | "+
 			"SyntaxError: Input string must contain hex characters in even length | 5 | 4 | 6 | true | true")
 }
+
+// TestLocaleFinalSigma pins that Turkish, Azerbaijani and Lithuanian
+// lowercasing keeps the rule every language has for a capital sigma, which
+// ends a word as U+03C2: those three lowercased one character at a time and
+// always wrote U+03C3 (KI-46). The answers are node's.
+func TestLocaleFinalSigma(t *testing.T) {
+	checkEval(t, `const cps = (s) => [...s].map(c => c.codePointAt(0).toString(16)).join(" ");
+		["tr", "az", "lt", "en"].map(l => cps("ΟΔΟΣ".toLocaleLowerCase(l)) + "/" + cps("IİΣ".toLocaleLowerCase(l))).join(" | ")`,
+		"3bf 3b4 3bf 3c2/131 69 3c2 | 3bf 3b4 3bf 3c2/131 69 3c2 | 3bf 3b4 3bf 3c2/69 69 307 3c2 | 3bf 3b4 3bf 3c2/69 69 307 3c2")
+}

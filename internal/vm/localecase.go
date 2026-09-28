@@ -65,6 +65,10 @@ func turkishCase(s string, upper bool, n *intl.Normalizer) string {
 				continue
 			}
 			b.WriteRune(0x0131)
+		case !upper && r == 'Σ':
+			// A sigma lowercases by what stands around it, which one
+			// character on its own does not show.
+			b.WriteRune(finalSigma(s, i))
 		default:
 			b.WriteString(caseConvert(s[i:i+size], upper))
 		}
@@ -112,6 +116,8 @@ func lithuanianLower(s string, n *intl.Normalizer) string {
 			b.WriteString("i̇́")
 		case 0x0128: // I with tilde
 			b.WriteString("i̇̃")
+		case 'Σ':
+			b.WriteRune(finalSigma(s, i))
 		default:
 			b.WriteString(caseConvert(s[i:i+size], false))
 		}
