@@ -303,10 +303,11 @@ Paths are relative to this repository; `go-intl:` paths are in
 
 ### KI-27 Operations whose cost grows quadratically
 - **Strings:** concatenating a surrogate pair's halves flattens the whole
-  string each time.
+  string each time. *Fixed: the halves come off the ends of the ropes.*
 - **Proxies:** creating a proxy walks the whole proxy chain. *Fixed with
   KI-04.*
 - **`bind`:** the "bound bound ..." name is copied in full each time.
+  *Fixed: the name is a rope, and messages show its first KiB.*
 - **Intl** (go-intl):
   - `ListFormat` of many items
   - Thai and CJK word segmentation
@@ -314,7 +315,7 @@ Paths are relative to this repository; `go-intl:` paths are in
   - `Segmenter.segment()` also splits the whole string up front
 - **Temporal:** a Chinese-calendar `until` over the whole date range steps
   one month at a time. Node hangs here too.
-- **Status:** open.
+- **Status:** open for Intl and Temporal; the rest is fixed.
 
 ### KI-28 32-bit platforms truncate lengths and offsets
 - **Panics on GOARCH=386:**

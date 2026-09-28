@@ -203,8 +203,12 @@ func (s *String) Concat(t *String) *String {
 	}
 	if s.endsHigh && t.startsLow {
 		// The join makes a code point out of two halves, which WTF-8 spells as
-		// one sequence rather than two. Rare enough to take the slow path.
-		return NewString(wtf8.Join(s.Go(), t.Go()))
+		// one sequence rather than two. The halves come off the ends and go
+		// back as one, leaving the rest of either rope as it is: flattening
+		// both made building a string a half at a time quadratic.
+		hi, lo := s.lastLeaf().s, t.firstLeaf().s
+		pair := NewString(wtf8.Join(hi[len(hi)-3:], lo[:3]))
+		return s.withoutLast().Concat(pair).Concat(t.withoutFirst())
 	}
 	ascii := s.ascii && t.ascii
 	length := s.length + t.length
@@ -218,6 +222,94 @@ func (s *String) Concat(t *String) *String {
 	}
 	out.left, out.right = s, t
 	return out
+}
+
+// A lone surrogate is three bytes of WTF-8, and the four functions below find
+// and take off the one at either end of a string without flattening it.
+
+// lastLeaf is the piece of a rope its last code unit is in.
+func (s *String) lastLeaf() *String {
+	for s.left != nil {
+		s = s.right
+	}
+	return s
+}
+
+// firstLeaf is the piece of a rope its first code unit is in.
+func (s *String) firstLeaf() *String {
+	for s.left != nil {
+		s = s.left
+	}
+	return s
+}
+
+// withoutLast is s without the lone high surrogate it ends with.
+func (s *String) withoutLast() *String {
+	var spine []*String
+	for n := s; n.left != nil; n = n.right {
+		spine = append(spine, n)
+	}
+	leaf := s.lastLeaf().s
+	out := NewString(leaf[:len(leaf)-3])
+	for i := len(spine) - 1; i >= 0; i-- {
+		out = spine[i].left.Concat(out)
+	}
+	return out
+}
+
+// withoutFirst is s without the lone low surrogate it starts with.
+func (s *String) withoutFirst() *String {
+	var spine []*String
+	for n := s; n.left != nil; n = n.left {
+		spine = append(spine, n)
+	}
+	out := NewString(s.firstLeaf().s[3:])
+	for i := len(spine) - 1; i >= 0; i-- {
+		out = out.Concat(spine[i].right)
+	}
+	return out
+}
+
+// prefix is at most the first max bytes of s, cut where a character begins,
+// read off a rope without flattening it.
+func (s *String) prefix(max int) string {
+	if s.left == nil && len(s.s) <= max {
+		return s.s
+	}
+	var sb strings.Builder
+	stack := []*String{s}
+	for len(stack) > 0 && sb.Len() < max {
+		n := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if n.left == nil {
+			sb.WriteString(n.s[:min(len(n.s), max-sb.Len())])
+			continue
+		}
+		stack = append(stack, n.right, n.left)
+	}
+	// A character cut short is left out.
+	out := sb.String()
+	i := len(out) - 1
+	for i > 0 && out[i]&0xC0 == 0x80 {
+		i--
+	}
+	if i >= 0 && i+utf8SeqLen(out[i]) > len(out) {
+		out = out[:i]
+	}
+	return out
+}
+
+// utf8SeqLen is how long a UTF-8 sequence is that begins with b.
+func utf8SeqLen(b byte) int {
+	switch {
+	case b < 0xC0:
+		return 1
+	case b < 0xE0:
+		return 2
+	case b < 0xF0:
+		return 3
+	}
+	return 4
 }
 
 // partsBuilder assembles a string out of pieces a script can see, joining the

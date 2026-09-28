@@ -480,3 +480,57 @@ func TestSearchUnitsMatchesNaive(t *testing.T) {
 		}
 	}
 }
+
+// TestConcatAcrossSurrogatesAgreesWithUnits pins that joining strings whose
+// ends are the halves of a pair -- which takes the halves off the ends of
+// the ropes rather than flattening them -- gives the code units of the
+// pieces laid end to end, in the one WTF-8 spelling those units have,
+// whatever shape of rope either side is.
+func TestConcatAcrossSurrogatesAgreesWithUnits(t *testing.T) {
+	rng := rand.New(rand.NewSource(3))
+	pieces := [][]uint16{
+		{0xD83D}, {0xDE00}, {'a'}, {0xD83D, 'x', 0xDE00}, {0xDE00, 'b', 0xD83D},
+		{0xD800, 0xD800}, {0xDC00, 0xDC00}, []uint16(utf16.Encode([]rune(strings.Repeat("long enough to be a rope ", 3)))),
+	}
+	for trial := 0; trial < 2000; trial++ {
+		var want []uint16
+		s := emptyString
+		for n := rng.Intn(12); n >= 0; n-- {
+			p := pieces[rng.Intn(len(pieces))]
+			want = append(want, p...)
+			if rng.Intn(2) == 0 {
+				s = s.Concat(fromUnits(p))
+			} else {
+				// Built up from the other side, a rope leans the other way.
+				var rest []uint16
+				for m := rng.Intn(3); m >= 0; m-- {
+					rest = append(rest, pieces[rng.Intn(len(pieces))]...)
+				}
+				want = append(want, rest...)
+				s = s.Concat(fromUnits(p).Concat(fromUnits(rest)))
+			}
+		}
+		if got := s.codeUnits(); !slices.Equal(got, want) && !(len(got) == 0 && len(want) == 0) {
+			t.Fatalf("trial %d: units %x, want %x", trial, got, want)
+		}
+		if s.length != len(want) {
+			t.Fatalf("trial %d: length %d, want %d", trial, s.length, len(want))
+		}
+		if flat := fromUnits(want); s.Go() != flat.Go() {
+			t.Fatalf("trial %d: spelled %q, want %q", trial, s.Go(), flat.Go())
+		}
+	}
+}
+
+// TestPrefixCutsWhereACharacterBegins pins what a bound function's name
+// shows of a long one.
+func TestPrefixCutsWhereACharacterBegins(t *testing.T) {
+	s := NewString(strings.Repeat("é", 40)).Concat(NewString(strings.Repeat("x", 40)))
+	for max, want := range map[int]string{
+		5: "éé", 6: "ééé", 200: strings.Repeat("é", 40) + strings.Repeat("x", 40),
+	} {
+		if got := s.prefix(max); got != want {
+			t.Errorf("prefix(%d) = %q, want %q", max, got, want)
+		}
+	}
+}

@@ -720,11 +720,18 @@ func (r *Runtime) initFunctionBuiltins() {
 				}
 			}
 		}
-		name := ""
+		name := emptyString
 		if n, err := rt.getProp(target, atomName, this); err != nil {
 			return Undefined, err
 		} else if n.IsString() {
-			name = n.String().Go()
+			name = n.String()
+		}
+		// The name is a rope over the target's, and what the engine shows
+		// in a message or a trace is its start: a chain of binds copied
+		// "bound bound ..." in full at each.
+		boundName, err := rt.concat(NewString("bound "), name)
+		if err != nil {
+			return Undefined, err
 		}
 
 		o := newObject(rt.proto.function, ClassFunction)
@@ -732,7 +739,7 @@ func (r *Runtime) initFunctionBuiltins() {
 			boundTarget: target,
 			boundThis:   arg(args, 0),
 			boundArgs:   bound,
-			name:        "bound " + name,
+			name:        boundName.prefix(maxShownName),
 			ctorKind:    target.fn().ctorKind,
 			// Both are settled here rather than synthesized on demand, because
 			// a length of infinity is not something the synthesized form can
@@ -740,7 +747,7 @@ func (r *Runtime) initFunctionBuiltins() {
 			propsMaterialized: true,
 		}
 		o.setOwnRaw(atomLength, length, propConfigurable)
-		o.setOwnRaw(atomName, Str(NewString("bound "+name)), propConfigurable)
+		o.setOwnRaw(atomName, Str(boundName), propConfigurable)
 		return Obj(o), nil
 	})
 
@@ -2909,6 +2916,10 @@ func (r *Runtime) createIndexed(o *Object, i int64, v Value) error {
 	}
 	return nil
 }
+
+// maxShownName is the most of a bound function's name that a message or a
+// stack trace shows.
+const maxShownName = 1 << 10
 
 // nativeFunctionName renders a built-in's name where Function.prototype.toString
 // puts it, which has to be a property name the grammar accepts: an identifier,
