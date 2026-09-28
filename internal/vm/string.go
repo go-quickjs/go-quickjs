@@ -400,6 +400,11 @@ func (s *String) units() []uint16 {
 // same string over and over is what a program does with a pattern. The slice is
 // the string's own and must not be written to.
 func (s *String) codeUnits() []uint16 {
+	if s.length == 0 {
+		// Nothing to cache -- and the empty string is shared by every
+		// runtime, which a write to it would race between.
+		return nil
+	}
 	if s.u16 == nil {
 		s.u16 = wtf8.ToUTF16(s.Go())
 	}

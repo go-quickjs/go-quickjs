@@ -160,7 +160,7 @@ Paths are relative to this repository; `go-intl:` paths are in
   of the process-wide `emptyString`.
 - **Repro:** runtimes on different goroutines running
   `"".replace("", "$'")` race.
-- **Status:** open.
+- **Status:** fixed. The empty string caches nothing.
 
 ### KI-13 Freezing the global object doesn't freeze `Intl` and `Temporal`
 - **Where:** `internal/vm/builtins_intl.go`, `temporal.go`. The lazy
