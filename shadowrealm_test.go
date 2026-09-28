@@ -88,3 +88,47 @@ type notFound struct{}
 func (notFound) Error() string { return "not found" }
 
 var errNotFound error = notFound{}
+
+// TestShadowRealmCallSitesStayOnTheirSide pins that a stack trace made on
+// one side of a ShadowRealm's boundary gives no CallSite's this or function
+// from the other: code inside the realm used to get the outer realm's
+// objects from one, and could use them (KI-08).
+func TestShadowRealmCallSitesStayOnTheirSide(t *testing.T) {
+	checkEval(t, `
+		var sr = new ShadowRealm();
+		var probe = sr.evaluate(`+"`"+`
+			Error.prepareStackTrace = (e, sites) => sites;
+			(0, function named() {
+				var sites = new Error().stack;
+				Error.prepareStackTrace = undefined;
+				var leaked = 0;
+				for (var s of sites) {
+					var f = s.getFunction(), t = s.getThis();
+					if (f && f !== named) leaked++;
+					if (t && typeof t === "object" && t !== globalThis) leaked++;
+				}
+				return leaked;
+			})
+		`+"`"+`);
+		var holder = {secret: 1, run() { return probe() }};
+		var inward = holder.run();
+
+		// And outward: a function of this realm, called from inside the other,
+		// sees none of the other's frames either.
+		var seen = 0;
+		function outer() {
+			Error.prepareStackTrace = (e, sites) => sites;
+			var sites = new Error().stack;
+			Error.prepareStackTrace = undefined;
+			for (var s of sites) {
+				var f = s.getFunction(), t = s.getThis();
+				if (f && f !== outer && f !== caller) seen++;
+				if (t && typeof t === "object" && t !== globalThis) seen++;
+			}
+			return 0;
+		}
+		var inner = sr.evaluate("(function inner(cb) { return {m() { return cb() }}.m() })");
+		function caller() { return inner(outer) }
+		caller();
+		inward + "," + seen`, "0,0")
+}

@@ -182,6 +182,9 @@ type Runtime struct {
 type Realm struct {
 	// agent is the runtime the realm belongs to.
 	agent *Runtime
+	// shadow marks a ShadowRealm's realm, which shares nothing with any
+	// other: not its objects, and not through a stack trace either.
+	shadow bool
 	// names records the intrinsic prototypes by name, so that one realm's
 	// can be found for another's: a constructor whose new.target names no
 	// prototype falls back to the one of new.target's realm.

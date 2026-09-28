@@ -121,7 +121,9 @@ Paths are relative to this repository; `go-intl:` paths are in
 - **Effect:** code inside a ShadowRealm that sets
   `Error.prepareStackTrace = (e, s) => s` gets the outer realm's `this` and
   functions through `getThis()` and `getFunction()`.
-- **Status:** open.
+- **Status:** fixed. A trace made on one side of a ShadowRealm's boundary
+  hides the frames on the other, both ways, and a built-in frame a trace
+  leaves out hides its callers as one it shows does.
 
 ### KI-09 An exception from one runtime can be rethrown into another
 - **Where:** `marshal.go` (`throwGoError`).

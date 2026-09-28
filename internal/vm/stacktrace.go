@@ -99,9 +99,19 @@ func (r *Runtime) captureTrace(until *Object, skipTop bool) stackTrace {
 		return st
 	}
 	hidden := false
+	// A trace made on one side of a ShadowRealm's boundary hides what is on
+	// the other: a CallSite's getThis and getFunction would otherwise hand
+	// code inside the realm objects of the realm outside, and back.
+	here := r.Realm
 	for i := r.frameDepth - 1; i >= 0 && len(st.frames) < limit; i-- {
 		f := r.frameAt(i)
+		if re := frameRealm(f); re != nil && re != here && (re.shadow || here.shadow) {
+			hidden = true
+		}
 		if f.cl == nil && (f.native == "" || r.isFrameless(f.callee)) {
+			// A built-in left out of the trace is strict all the same, and
+			// hides its callers as one that is shown does.
+			hidden = true
 			continue
 		}
 		if skipTop {

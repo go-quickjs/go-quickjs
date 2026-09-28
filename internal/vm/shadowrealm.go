@@ -29,7 +29,9 @@ func (r *Runtime) initShadowRealm() {
 			return Undefined, err
 		}
 		o := newObject(p, ClassObject)
-		o.data = &shadowRealmData{realm: rt.NewRealm()}
+		re := rt.NewRealm()
+		re.shadow = true
+		o.data = &shadowRealmData{realm: re}
 		return Obj(o), nil
 	})
 
