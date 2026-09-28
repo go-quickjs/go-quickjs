@@ -237,8 +237,8 @@ func throwGoError(rt *vm.Runtime, err error) error {
 		if jsErr.value.rt != rt {
 			// An exception of another runtime is its objects, which this one
 			// must not hold -- nor run their code on its goroutine. Only its
-			// message crosses.
-			return rt.ThrowError(errors.New(jsErr.Error()))
+			// message crosses, and the Go error it was made from.
+			return rt.ThrowError(&crossedError{msg: jsErr.Error(), cause: jsErr.Unwrap()})
 		}
 		if jsErr.thrown != nil {
 			return jsErr.thrown
@@ -254,6 +254,16 @@ func throwGoError(rt *vm.Runtime, err error) error {
 	}
 	return rt.ThrowError(err)
 }
+
+// crossedError is another runtime's exception as it reaches this one: its
+// message, and the Go error it was made from, if any.
+type crossedError struct {
+	msg   string
+	cause error
+}
+
+func (e *crossedError) Error() string { return e.msg }
+func (e *crossedError) Unwrap() error { return e.cause }
 
 // wrapGoFunc makes a Go function callable from JavaScript.
 //

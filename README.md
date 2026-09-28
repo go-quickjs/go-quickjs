@@ -279,6 +279,23 @@ rt.Set("mustBePositive", func(n int) (int, error) {
 rt.Eval(`try { mustBePositive(-1) } catch (e) { e.message }`) // "negative"
 ```
 
+A JavaScript exception that reaches Go is a `*quickjs.Error`, which holds the
+thrown value. When the exception came from a Go function's error, `errors.Is`
+and `errors.As` find that Go error through the `*quickjs.Error`. This works
+whether the script let the exception through or caught it and rethrew the same
+object:
+
+```go
+fn, _ := rt.Get("handler")
+_, err := fn.Call(req)
+var jsErr *quickjs.Error
+switch {
+case errors.Is(err, errNotFound): // the Go error, thrown by a Go function
+case errors.As(err, &jsErr):      // any other exception: jsErr.Value(), jsErr.Stack()
+case err != nil:                  // not an exception: interrupted, closed, ...
+}
+```
+
 Taking a `*quickjs.Runtime` as the first parameter lets a Go function call back
 into the engine:
 
@@ -598,6 +615,7 @@ _, err := rt.EvalContext(ctx, `while (true) {}`)
 
 `EvalFileContext` does the same for a script with a name, which is what its
 stack traces call it: `at main (app.js:12:5)` rather than `<eval>`.
+`CallContext` and `CallWithThisContext` do it for a function called from Go.
 
 An interruption is deliberately **not** catchable from script, so a sandboxed
 program cannot defeat its own timeout with `try`/`catch`. A catastrophically

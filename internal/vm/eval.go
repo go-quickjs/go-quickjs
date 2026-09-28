@@ -172,7 +172,9 @@ func (r *Runtime) ThrowError(err error) error {
 	if t, ok := err.(*Thrown); ok {
 		return t
 	}
-	return r.throw(Obj(r.newError(errError, err.Error())))
+	o := r.newError(errError, err.Error())
+	o.data.(*Thrown).cause = err
+	return r.throw(Obj(o))
 }
 
 // ThrowValue raises a value that is already a JavaScript value, which is what

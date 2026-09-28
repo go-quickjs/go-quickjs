@@ -551,7 +551,14 @@ type Thrown struct {
 	// trace is an error's own stack: the frames it was made in, until its
 	// stack property is first read.
 	trace stackTrace
+	// cause is the Go error an error object was made from, by ThrowError.
+	cause error
 }
+
+// Cause is the Go error the thrown error object was made from, when a Go
+// function's error was thrown as it; nil for anything else. The object keeps
+// it however often the script catches and rethrows it.
+func (t *Thrown) Cause() error { return t.cause }
 
 // StackEntry is one line of a JavaScript stack trace.
 type StackEntry struct {

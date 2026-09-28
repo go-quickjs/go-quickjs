@@ -1,6 +1,7 @@
 package quickjs
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -279,6 +280,36 @@ func (v Value) CallWithThis(this Value, args ...any) (Value, error) {
 	return Value{v: res, rt: v.rt}, nil
 }
 
+// CallContext is Call with cancellation, as EvalContext is Eval with it: the
+// function stops when ctx is cancelled or its deadline passes, and the error
+// then wraps ctx.Err(), so errors.Is(err, context.DeadlineExceeded) identifies
+// a timeout. Called from inside a running script -- by a Go function the
+// script called -- it is bounded by the script's context as well.
+func (v Value) CallContext(ctx context.Context, args ...any) (Value, error) {
+	return v.CallWithThisContext(ctx, Value{v: vm.Undefined, rt: v.rt}, args...)
+}
+
+// CallWithThisContext is CallWithThis with cancellation, as CallContext is
+// Call with it.
+func (v Value) CallWithThisContext(ctx context.Context, this Value, args ...any) (Value, error) {
+	if v.rt == nil {
+		return Value{}, ErrClosed
+	}
+	r, _ := v.rt.Host.(*Runtime)
+	if r == nil || r.closed {
+		return Value{}, ErrClosed
+	}
+	_, leave := r.enter(ctx)
+	defer leave()
+	res, err := v.CallWithThis(this, args...)
+	var jsErr *Error
+	if err != nil && !errors.As(err, &jsErr) &&
+		(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		return Value{}, fmt.Errorf("quickjs: execution interrupted: %w", err)
+	}
+	return res, err
+}
+
 // New invokes the value as a constructor.
 func (v Value) New(args ...any) (Value, error) {
 	if v.rt == nil {
@@ -328,6 +359,17 @@ func (e *Error) Error() string {
 
 // Value returns the thrown value.
 func (e *Error) Value() Value { return e.value }
+
+// Unwrap returns the Go error the exception was made from: what a Go function
+// the script called returned, which the script threw on -- uncaught, or
+// caught and rethrown as the same object. errors.Is and errors.As reach it
+// through the *Error. It is nil for an exception the script made itself.
+func (e *Error) Unwrap() error {
+	if e.thrown == nil {
+		return nil
+	}
+	return e.thrown.Cause()
+}
 
 // Stack renders the JavaScript stack trace at the point of the throw.
 //
