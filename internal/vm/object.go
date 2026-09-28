@@ -126,6 +126,13 @@ const (
 	// has: typeof says "undefined", ToBoolean says false, and == says it
 	// equals null and undefined. Everything else sees an ordinary object.
 	objHTMLDDA
+	// objInlineProps marks an object whose properties are still in the room
+	// its own allocation carries for its first few. Grown past it, they move
+	// to a slice of their own, and the room is cleared as they leave: it is
+	// part of the object, and what it still held would stay reachable for as
+	// long as the object is -- a node's old links, and through them every
+	// node a linked structure has let go of since.
+	objInlineProps
 )
 
 // linearScanLimit is the property count below which lookup scans the slice
@@ -211,7 +218,7 @@ func newLiteralObject(proto *Object, class Class, n int) *Object {
 		return o
 	}
 	lo := &literalObject{
-		Object: Object{proto: proto, class: class, flags: objExtensible},
+		Object: Object{proto: proto, class: class, flags: objExtensible | objInlineProps},
 	}
 	lo.props = lo.inline[:0]
 	return &lo.Object
@@ -232,6 +239,7 @@ func newErrorObject(proto *Object) *Object {
 		},
 	}
 	eo.props = eo.inline[:0]
+	eo.flags |= objInlineProps
 	eo.data = &eo.thrown
 	return &eo.Object
 }
@@ -282,6 +290,7 @@ func newMatchResult(proto *Object, n int) *Object {
 		},
 	}
 	mo.props = mo.fields[:0]
+	mo.flags |= objInlineProps
 	if n <= len(mo.inline) {
 		mo.elems = mo.inline[:n]
 	} else {
@@ -554,12 +563,29 @@ func (o *Object) prependProps(ps []Property) {
 	if len(ps) == 0 {
 		return
 	}
+	inline := o.flags&objInlineProps != 0
+	old := o.props[:cap(o.props)]
 	o.props = append(ps[:len(ps):len(ps)], o.props...)
+	if inline {
+		clear(old)
+		o.flags &^= objInlineProps
+	}
 	if o.index != nil {
 		o.buildIndex()
 	} else if len(o.props) > linearScanLimit {
 		o.buildIndex()
 	}
+}
+
+// leaveInlineProps moves the properties out of the room the object carries
+// for them, with room past them for more of them, and clears the room.
+func (o *Object) leaveInlineProps(more int) {
+	old := o.props[:cap(o.props)]
+	props := make([]Property, len(o.props), 2*cap(o.props)+more)
+	copy(props, o.props)
+	o.props = props
+	clear(old)
+	o.flags &^= objInlineProps
 }
 
 // insertProp puts a property at a given position rather than at the end, which
@@ -570,6 +596,9 @@ func (o *Object) insertProp(at int, p Property) {
 		o.appendProp(p)
 		return
 	}
+	if o.flags&objInlineProps != 0 && len(o.props) == cap(o.props) {
+		o.leaveInlineProps(1)
+	}
 	o.props = append(o.props, Property{})
 	copy(o.props[at+1:], o.props[at:])
 	o.props[at] = p
@@ -579,6 +608,9 @@ func (o *Object) insertProp(at int, p Property) {
 }
 
 func (o *Object) appendProp(p Property) {
+	if o.flags&objInlineProps != 0 && len(o.props) == cap(o.props) {
+		o.leaveInlineProps(1)
+	}
 	o.props = append(o.props, p)
 	switch {
 	case o.index != nil:

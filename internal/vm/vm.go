@@ -488,6 +488,9 @@ func (r *Runtime) pushFrame() *frame {
 		off = r.frameDepth - r.frameBase
 	}
 	r.frameDepth++
+	if r.frameDepth > r.frameHigh {
+		r.frameHigh = r.frameDepth
+	}
 	return &r.cur[off]
 }
 
@@ -649,6 +652,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				// JavaScript exception, so it is not catchable.
 				return Undefined, err
 			}
+			r.sweepStaleSlots(sp)
 		}
 
 		in = code[pc]
@@ -4365,5 +4369,6 @@ func (r *Runtime) endTurn() {
 		clear(r.stack[r.stackTop:r.stackHigh])
 		r.stackHigh = r.stackTop
 	}
+	r.clearReturnedFrames()
 	r.releaseKeptValues()
 }

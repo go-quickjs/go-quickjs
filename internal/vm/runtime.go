@@ -87,6 +87,11 @@ type Runtime struct {
 	argStack []Value
 	// capsBuf holds the indices of the match regexpExec is reading.
 	capsBuf []int
+	// sweptEpoch is the collector's cycle sweepStaleSlots last cleared in.
+	sweptEpoch uint32
+	// frameHigh is the deepest the frames have reached since the frames past
+	// the current depth were last cleared; see clearReturnedFrames.
+	frameHigh int
 	// joining is the objects a join or toLocaleString of Array or
 	// TypedArray is under way on; see joinOnce.
 	joining []*Object
