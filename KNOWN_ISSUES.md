@@ -597,7 +597,14 @@ Paths are relative to this repository; `go-intl:` paths are in
 ### KI-58 A cyclic `join` throws
 - **Effect:** `a.push(a); a.join()` throws `RangeError`; V8 returns `"1,"`.
 - **Note:** this is not a specification violation.
-- **Status:** open.
+- **Status:** fixed under `WithNodeQuirks`, which keeps V8's join stack:
+  - A join or `toLocaleString` (Array's or TypedArray's) of an object whose
+    own join is under way already is `""`.
+  - Standards mode keeps the standard's recursion. It differs where the
+    recursion ends: an element that joins its array once more is written as
+    that join (`"1,1-x"` where V8 writes `"1,"`).
+  - SpiderMonkey returns `"1,"` too.
+  - Tests: `TestNodeQuirksLanguage`.
 
 ### KI-59 The conformance agent harness hangs on a failing test
 - **Effect:** an agent blocked in an infinite `Atomics.wait` ignores

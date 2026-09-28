@@ -171,7 +171,10 @@ func WithLocale(tag string) Option {
 // functions first; and strict code assigning to a global name asks a proxy on
 // the global object's chain nothing first, taking it to have the name, where
 // the standard asks its has trap; and Iterator.prototype.take and drop take a
-// finite count past 2^53 - 1, which the standard refuses. Intl.DateTimeFormat
+// finite count past 2^53 - 1, which the standard refuses; and Array's and
+// TypedArray's join and toLocaleString of an object whose own join is under
+// way already are "", so that an array holding itself joins as "1," where the
+// standard recurses until the stack runs out. Intl.DateTimeFormat
 // refuses, with V8's RangeError, a Temporal plain date whose midnight, or a
 // plain date-time, is past the instants a Date can hold, which the standard
 // formats; and Intl.Locale answers a firstDayOfWeek keyword with no value as

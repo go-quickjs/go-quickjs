@@ -1300,6 +1300,10 @@ func (r *Runtime) arrayLikeToLocaleString(this Value, n int64, locale []Value) (
 		return Undefined, err
 	}
 	a := &arrayLike{o: o, n: n}
+	if !r.joinOnce(o) {
+		return Str(NewString("")), nil
+	}
+	defer r.joinDone()
 	var sb strings.Builder
 	for i := int64(0); i < a.n; i++ {
 		if i > 0 {

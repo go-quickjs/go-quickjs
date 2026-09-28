@@ -1490,6 +1490,10 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 			}
 			sep = ss.Go()
 		}
+		if !rt.joinOnce(this.Object()) {
+			return Str(NewString("")), nil
+		}
+		defer rt.joinDone()
 		// The length is the one the view had before the separator was
 		// converted, and each element is read as it comes: a separator whose
 		// toString detached or shrank the buffer leaves the elements past its
