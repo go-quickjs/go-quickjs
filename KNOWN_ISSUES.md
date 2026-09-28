@@ -212,8 +212,8 @@ Paths are relative to this repository; `go-intl:` paths are in
 - **Status:** in progress. `fill` on an array-like, `JSON.stringify`'s walk
   and Intl's locale lists check for an interrupt; `JSON.stringify` is held
   to KI-03's longest string. A regular expression's match checks for one
-  where the host can stop the script. Compiling a regular expression,
-  `indexOf`, `toUpperCase`, BigInt `**` and module linking are open.
+  where the host can stop the script, and compiling one is linear. `indexOf`,
+  `toUpperCase`, BigInt `**` and module linking are open.
 
 ### KI-17 The regular expression step budget rejects ordinary patterns
 - **Effect:** `/z/.test("a".repeat(6e7))` and `/a*z/.test("a".repeat(2e4))`

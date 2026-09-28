@@ -168,7 +168,7 @@ func (p *parser) scanGroupNames() error {
 	inClass := false
 	stack := []groupPlace{{}}
 	disjunctions := 1
-	places := make(map[string][][]groupPlace)
+	places := make(map[string]*placeTrie)
 	for i := 0; i < len(p.src); i++ {
 		switch p.src[i] {
 		case '\\':
@@ -187,7 +187,9 @@ func (p *parser) scanGroupNames() error {
 			}
 			// The group sits where its parenthesis is, and what it holds is a
 			// disjunction of its own.
-			place := append([]groupPlace(nil), stack...)
+			// place is read before anything else is pushed, and an append
+			// leaves the elements it covers as they are.
+			place := stack
 			stack = append(stack, groupPlace{disjunction: disjunctions})
 			disjunctions++
 			if i+1 < len(p.src) && p.src[i+1] == '?' {
@@ -206,12 +208,14 @@ func (p *parser) scanGroupNames() error {
 					idx++
 					// A name shared by two groups that could both take part
 					// in a match would make match.groups ambiguous.
-					for _, other := range places[name] {
-						if mightBothParticipate(place, other) {
-							return p.errorf("duplicate group name %q", name)
-						}
+					t := places[name]
+					if t == nil {
+						t = &placeTrie{}
+						places[name] = t
 					}
-					places[name] = append(places[name], place)
+					if !t.add(place) {
+						return p.errorf("duplicate group name %q", name)
+					}
 					p.groupNames[name] = append(p.groupNames[name], idx)
 				}
 				continue
@@ -233,18 +237,69 @@ type groupPlace struct {
 	disjunction, alt int
 }
 
-// mightBothParticipate reports whether a match could take part in groups at
-// two places. It cannot when some disjunction around both has them in
-// different alternatives.
-func mightBothParticipate(a, b []groupPlace) bool {
-	for k := 0; k < len(a) && k < len(b); k++ {
-		if a[k].disjunction != b[k].disjunction {
-			return true
-		}
-		if a[k].alt != b[k].alt {
+// placeTrie holds the places of the groups that share a name, as a trie of
+// their paths, so that whether a new one could take part in a match with any
+// of them is a walk down its own path rather than a comparison with each.
+//
+// A match cannot take part in groups at two places only when, where their
+// paths first differ, they are in different alternatives of one disjunction.
+// It can when they first differ in which disjunction they are in -- groups
+// side by side in one alternative -- or when one path is the other's
+// beginning, or they are the same.
+type placeTrie struct {
+	// end marks a place that ends here.
+	end bool
+	// next is the places going on from here, by the disjunction and then
+	// the alternative of their next step.
+	next map[int]map[int]*placeTrie
+}
+
+// add adds a place, reporting false -- and adding nothing -- when a match
+// could take part in both it and a place already held.
+func (t *placeTrie) add(place []groupPlace) bool {
+	n, walked := t, 0
+	for _, step := range place {
+		if n.end {
+			// A place held is where this one's path begins.
 			return false
 		}
+		for d := range n.next {
+			if d != step.disjunction {
+				// A place held first differs from this one in its
+				// disjunction: a group beside this one's.
+				return false
+			}
+		}
+		child := n.next[step.disjunction][step.alt]
+		if child == nil {
+			// The places held go on in other alternatives of this one's
+			// disjunction, none of which can share a match with it.
+			break
+		}
+		n, walked = child, walked+1
 	}
+	if walked == len(place) && (n.end || len(n.next) > 0) {
+		// A place held is this one, or its path begins with this one's.
+		return false
+	}
+	n = t
+	for _, step := range place {
+		if n.next == nil {
+			n.next = map[int]map[int]*placeTrie{}
+		}
+		alts := n.next[step.disjunction]
+		if alts == nil {
+			alts = map[int]*placeTrie{}
+			n.next[step.disjunction] = alts
+		}
+		child := alts[step.alt]
+		if child == nil {
+			child = &placeTrie{}
+			alts[step.alt] = child
+		}
+		n = child
+	}
+	n.end = true
 	return true
 }
 
