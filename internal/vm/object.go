@@ -263,6 +263,33 @@ func newArrayObject(proto *Object, n int) *Object {
 	return &ao.Object
 }
 
+// matchResultObject is the array a regular expression's match gives, with
+// room in the same allocation for its index, input, groups and indices and
+// for its first few elements: a program that matches in a loop makes one
+// each time round.
+type matchResultObject struct {
+	Object
+	fields [4]Property
+	inline [4]Value
+}
+
+// newMatchResult returns a match's array, about to be given n elements.
+func newMatchResult(proto *Object, n int) *Object {
+	mo := &matchResultObject{
+		Object: Object{
+			proto: proto, class: ClassArray,
+			flags: objExtensible | objArrayLengthWritable,
+		},
+	}
+	mo.props = mo.fields[:0]
+	if n <= len(mo.inline) {
+		mo.elems = mo.inline[:n]
+	} else {
+		mo.elems = make([]Value, n)
+	}
+	return &mo.Object
+}
+
 // funcObject is an object that is also a function.
 //
 // The two parts are allocated together: a callable object always needs both,

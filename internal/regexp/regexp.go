@@ -93,13 +93,21 @@ func (re *Regexp) Match(units []uint16, start int) ([]int, error) {
 // every few thousand steps, and what it returns stops the match and is
 // returned. With a check there is no step budget; with none, Match's applies.
 func (re *Regexp) MatchChecked(units []uint16, start int, check func() error) ([]int, error) {
+	return re.MatchCheckedInto(nil, units, start, check)
+}
+
+// MatchCheckedInto is MatchChecked, but for a match's indices written over
+// dst, which is grown if it is too small: a caller that is done with one
+// match's indices before it asks for the next lends the same buffer every
+// time rather than having one made for each.
+func (re *Regexp) MatchCheckedInto(dst []int, units []uint16, start int, check func() error) ([]int, error) {
 	if start < 0 {
 		start = 0
 	}
 	if start > len(units) {
 		return nil, nil
 	}
-	return re.exec(units, start, check)
+	return re.exec(dst, units, start, check)
 }
 
 // MatchString is Match on a Go string, which is converted to code units first.

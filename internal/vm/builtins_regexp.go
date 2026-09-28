@@ -367,7 +367,13 @@ func (r *Runtime) regexpExec(this Value, s *String) (Value, error) {
 	if r.abort != nil || r.ctx != nil && r.ctx.Done() != nil {
 		check = r.checkInterruptNow
 	}
-	caps, err := re.MatchChecked(units, start, check)
+	// The indices are read into a buffer the runtime keeps: they are done
+	// with -- copied into the result and the legacy statics -- before
+	// anything else can run, and so before the next match.
+	caps, err := re.MatchCheckedInto(r.capsBuf, units, start, check)
+	if caps != nil {
+		r.capsBuf = caps
+	}
 	if errors.Is(err, regexp.ErrComplexity) {
 		return Undefined, r.throwError(errSyntax, "%s", err.Error())
 	}
@@ -399,7 +405,7 @@ func (r *Runtime) buildMatchResult(re *regexp.Regexp, caps []int, input *String)
 	// itself and copied in. Each piece is cut from the subject, which for text
 	// that is all ASCII -- most of it -- shares the bytes rather than encoding
 	// them again.
-	arr := newArrayObject(r.proto.array, n)
+	arr := newMatchResult(r.proto.array, n)
 	elems := arr.elems
 	for i := 0; i < n; i++ {
 		lo, hi := caps[2*i], caps[2*i+1]
@@ -413,12 +419,7 @@ func (r *Runtime) buildMatchResult(re *regexp.Regexp, caps []int, input *String)
 	}
 
 	// index, input and groups, and where the d flag asks for them the indices
-	// as well: the table is made the right size rather than grown three times.
-	fields := 3
-	if re.Flags()&regexp.FlagHasIndices != 0 {
-		fields++
-	}
-	arr.reserveProps(fields)
+	// as well, go in the room the array was made with.
 	arr.setOwnRaw(atomIndex, Int(caps[0]), propDefault)
 	arr.setOwnRaw(atomInput, Str(input), propDefault)
 

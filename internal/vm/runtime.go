@@ -84,6 +84,8 @@ type Runtime struct {
 	regexpCache map[regexpKey]*regexp.Regexp
 	// argStack holds the arguments of the calls callIntrinsic1 makes.
 	argStack []Value
+	// capsBuf holds the indices of the match regexpExec is reading.
+	capsBuf []int
 	// joining is the objects a join or toLocaleString of Array or
 	// TypedArray is under way on; see joinOnce.
 	joining []*Object
