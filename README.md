@@ -437,6 +437,44 @@ call ran out of time" apart from "a Go function reported a timeout", check for
 A `Value` belongs to its runtime, so call it on the goroutine that uses that
 runtime (see [Concurrency](#concurrency)).
 
+## Compiling a script once
+
+`Compile` parses and compiles a script into a `*Program`, which any runtime can
+then run with `RunProgram`. This is the same idea as goja's `Compile`. A server
+that gives each request its own runtime pays for parsing once instead of once
+per request:
+
+```go
+var handler = func() *quickjs.Program {
+    p, err := quickjs.Compile("handler.js", handlerSource, false)
+    if err != nil {
+        panic(err)
+    }
+    return p
+}()
+
+func serve(req Request) (string, error) {
+    rt := quickjs.New()
+    defer rt.Close()
+    v, err := rt.RunProgram(handler)
+    // ...
+}
+```
+
+- A `Program` holds no runtime's values, so it can be shared between
+  goroutines and run on several runtimes at once.
+- `strict` makes the whole script strict code, as a leading `"use strict"`
+  would.
+- The name is what stack traces call the script, as in `EvalFile`.
+- A syntax error is a `*quickjs.SyntaxError`, returned by `Compile`.
+- `RunProgramContext` takes a deadline, as `EvalContext` does.
+- A program runs as a script, like `Eval`. Running it twice on one runtime
+  redeclares its top-level `class`, `let` and `const`, which is a SyntaxError,
+  as evaluating the same source twice would be.
+- A program is compiled as the standard has it. A runtime `WithNodeQuirks`
+  compiles it once more, the first time one runs it, so that it runs as that
+  runtime would compile it.
+
 ## Reading values back
 
 `Decode` follows the conventions of `encoding/json`, including struct tags. A

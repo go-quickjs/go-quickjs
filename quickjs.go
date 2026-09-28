@@ -306,6 +306,12 @@ func (r *Runtime) evalIn(ctx context.Context, re *vm.Realm, name, src string) (r
 	if err != nil {
 		return Value{}, err
 	}
+	return r.runIn(ctx, re, fn)
+}
+
+// runIn runs compiled code in a realm, or in the runtime's own when re is
+// nil, and then the jobs it queued.
+func (r *Runtime) runIn(ctx context.Context, re *vm.Realm, fn *bytecodeFunc) (result Value, err error) {
 	nested, leave := r.enter(ctx)
 	defer leave()
 
@@ -374,12 +380,19 @@ func (r *Runtime) compile(src, name string) (*bytecodeFunc, error) {
 // compileAt is compile for source placed within a larger file, whose first
 // line is lineOffset lines down and columnOffset columns in.
 func (r *Runtime) compileAt(src, name string, lineOffset, columnOffset int) (*bytecodeFunc, error) {
-	prog, err := parser.Parse(src, parser.Options{NodeQuirks: r.nodeQuirks})
+	return compileScript(src, name, lineOffset, columnOffset, false, r.nodeQuirks)
+}
+
+// compileScript parses and compiles a script, strict throughout if strict is
+// set, and as V8 has it where it departs from the standard if nodeQuirks is.
+// It depends on no runtime: what it returns any runtime may run.
+func compileScript(src, name string, lineOffset, columnOffset int, strict, nodeQuirks bool) (*bytecodeFunc, error) {
+	prog, err := parser.Parse(src, parser.Options{Strict: strict, NodeQuirks: nodeQuirks})
 	if err != nil {
 		return nil, &SyntaxError{err: err}
 	}
 	fn, err := compiler.Compile(prog, compiler.Options{
-		Source: name, Text: src, NodeQuirks: r.nodeQuirks,
+		Source: name, Text: src, NodeQuirks: nodeQuirks,
 		LineOffset: lineOffset, ColumnOffset: columnOffset,
 	})
 	if err != nil {
