@@ -54,6 +54,17 @@ func (r *Runtime) withFound(scopes []*Object, name Atom, limit int) (*Object, bo
 	return nil, false, nil
 }
 
+// chainHasProxy reports whether a proxy is on an object's prototype chain,
+// which can observe what is asked of it and in what order.
+func chainHasProxy(o *Object) bool {
+	for ; o != nil; o = o.proto {
+		if proxyOf(o) != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // withRead reads a binding through a `with` object.
 //
 // It asks again whether the property is there, because deciding that the object

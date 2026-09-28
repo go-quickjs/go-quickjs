@@ -386,8 +386,11 @@ Paths are relative to this repository; `go-intl:` paths are in
   `vm.go`.
 - **Repro:** `"x" in new Proxy(new Proxy({}, {has() { throw 1 }}), {})`
   answers `false`.
-- **Status:** the proxy half is fixed with KI-04; the `with`-scope lookups are
-  open.
+- **Status:** fixed. The proxy half was fixed with KI-04; the `with`-scope
+  lookups already passed errors on. What swallowed them was the global
+  object's: a read, `typeof` and a strict assignment of a global name now ask a
+  proxy on its chain `has` first, as V8 does, and throw what it throws. V8
+  asks nothing before a strict assignment, which `WithNodeQuirks` follows.
 
 ### KI-35 Own keys list array indices out of order
 - **Where:** `internal/vm/object.go`. An index that became an accessor is

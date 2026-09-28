@@ -44,3 +44,19 @@ func TestProxyInvariantsAskTheTarget(t *testing.T) {
 	}, "\n")
 	checkEval(t, src, want)
 }
+
+// TestGlobalProxyTrapErrors pins that a proxy on the global object's chain
+// is asked whether it has a name before it is asked for it, as V8 asks it,
+// and that what its trap throws is thrown: an undeclared name was a
+// ReferenceError and its typeof undefined whatever the trap threw (KI-34).
+func TestGlobalProxyTrapErrors(t *testing.T) {
+	checkEval(t, `const log = [];
+		Object.setPrototypeOf(globalThis, new Proxy(Object.getPrototypeOf(globalThis), {
+			has(t, k) { if (k === "boom") throw "boom"; if (k.startsWith?.("q")) log.push("has " + k); return k === "qfound" || Reflect.has(t, k) },
+			get(t, k, r) { if (k.startsWith?.("q")) log.push("get " + k); return k === "qfound" ? 5 : Reflect.get(t, k, r) },
+		}));
+		const run = (s) => { log.length = 0; let r; try { r = (0, eval)(s) } catch (e) { r = "threw " + (e.name || e) } return r + " (" + log.join(", ") + ")" };
+		[run("boom"), run("typeof boom"), run("qfound"), run("qmissing"), run("typeof qfound"), run("typeof qmissing")].join(" | ")`,
+		"threw boom () | threw boom () | 5 (has qfound, get qfound) | threw ReferenceError (has qmissing) | "+
+			"number (has qfound, get qfound) | undefined (has qmissing)")
+}

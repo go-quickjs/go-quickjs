@@ -168,7 +168,9 @@ func WithLocale(tag string) Option {
 // in a block over the arguments object, and over a function an enclosing
 // block declares with the same name; and a script's global functions and vars
 // are created in the order they are written, where the standard creates the
-// functions first.
+// functions first; and strict code assigning to a global name asks a proxy on
+// the global object's chain nothing first, taking it to have the name, where
+// the standard asks its has trap.
 //
 // It is useful for hosts that prioritize Node compatibility over conformance.
 func WithNodeQuirks() Option {

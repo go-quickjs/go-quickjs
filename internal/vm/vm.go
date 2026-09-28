@@ -900,12 +900,25 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// The read comes first and the existence check only follows an
 			// undefined result: an undeclared name is the rare case, and
 			// asking twice for every global read is not worth paying for it.
+			// A proxy on the global object's chain can tell the order, and is
+			// asked as V8 asks it: whether it has the name, and then for it.
+			if chainHasProxy(env) {
+				has, err := r.hasPropErr(env, name)
+				if err != nil {
+					vmErr = err
+					goto onError
+				}
+				if !has {
+					vmErr = r.throwReferenceError("%s is not defined", r.atoms.name(name))
+					goto onError
+				}
+			}
 			v, err := r.getProp(env, name, Obj(env))
 			if err != nil {
 				vmErr = err
 				goto onError
 			}
-			if v.IsUndefined() && !r.hasProp(env, name) {
+			if v.IsUndefined() && !chainHasProxy(env) && !r.hasProp(env, name) {
 				vmErr = r.throwReferenceError("%s is not defined", r.atoms.name(name))
 				goto onError
 			}
@@ -942,6 +955,19 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 					}
 				}
 			}
+			if chainHasProxy(env) {
+				// Asked whether it has the name first, as for a read; what is
+				// not there is undefined.
+				has, err := r.hasPropErr(env, cl.names[in.A])
+				if err != nil {
+					vmErr = err
+					goto onError
+				}
+				if !has {
+					push(Undefined)
+					break
+				}
+			}
 			v, err := r.getProp(env, cl.names[in.A], Obj(env))
 			if err != nil {
 				vmErr = err
@@ -961,8 +987,15 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			case f.evalVars != nil && evalVarProp(f.evalVars, name) != nil:
 			case r.globalLexProp(env, name) != nil:
 			case !r.isGlobalScope(env) && r.moduleLexProp(env, name) != nil:
+			case r.nodeQuirks && chainHasProxy(env):
+				// V8 asks a proxy on the global object's chain nothing
+				// before the store, which it counts as finding the name.
 			default:
-				found = r.hasProp(env, name)
+				var err error
+				if found, err = r.hasPropErr(env, name); err != nil {
+					vmErr = err
+					goto onError
+				}
 			}
 			push(Bool(found))
 		case bytecode.OpAssertResolved:
@@ -1025,9 +1058,16 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 			// Strict mode refuses to create a global by assignment, which is
 			// the rule that catches a misspelled variable.
-			if cl.fn.Strict && !r.hasProp(env, name) {
-				vmErr = r.throwReferenceError("%s is not defined", r.atoms.name(name))
-				goto onError
+			if cl.fn.Strict && !(r.nodeQuirks && chainHasProxy(env)) {
+				has, err := r.hasPropErr(env, name)
+				if err != nil {
+					vmErr = err
+					goto onError
+				}
+				if !has {
+					vmErr = r.throwReferenceError("%s is not defined", r.atoms.name(name))
+					goto onError
+				}
 			}
 			if _, err := r.setProp(env, name, pop(), Obj(env), cl.fn.Strict); err != nil {
 				vmErr = err
