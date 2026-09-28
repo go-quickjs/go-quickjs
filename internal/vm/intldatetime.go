@@ -224,6 +224,13 @@ func (r *Runtime) forValue(d *dateTimeFormat, v Value) (*intl.DateTimeFormat, ti
 	if !d.f.CalendarMatches(kind, calendar) {
 		return nil, time.Time{}, r.throwRangeError("Mismatched calendars.")
 	}
+	// The standard formats a plain date or date-time however far out it
+	// is, as test262 checks; V8 refuses one whose midnight, or whose own
+	// time, is past the instants a Date can hold (KI-55).
+	if r.nodeQuirks && beyondV8Instants(v) {
+		return nil, time.Time{}, r.throwRangeError(
+			"Temporal error: Instant nanoseconds are not within a valid epoch range.")
+	}
 	f, err := d.forKind(kind)
 	if errors.Is(err, intl.ErrTemporalFormat) {
 		return nil, time.Time{}, r.throwTypeError("Invalid argument for Temporal %s", r.v8Describe(v))
@@ -232,6 +239,25 @@ func (r *Runtime) forValue(d *dateTimeFormat, v Value) (*intl.DateTimeFormat, ti
 		return nil, time.Time{}, r.intlInternal()
 	}
 	return f, d.temporalInstant(v), nil
+}
+
+// beyondV8Instants reports whether V8 refuses to format a plain date, taken
+// at midnight, or a plain date-time: whether it is further from the epoch, as
+// UTC, than the 8.64e15 milliseconds a Date may be.
+func beyondV8Instants(v Value) bool {
+	var at temporal.ISODateTime
+	switch value := v.Object().data.(type) {
+	case temporal.PlainDate:
+		at.Date = value.ISO()
+	case temporal.PlainDateTime:
+		at = value.ISO()
+	default:
+		return false
+	}
+	t := at.Time
+	when := time.Date(at.Date.Year, time.Month(at.Date.Month), at.Date.Day, t.Hour, t.Minute, t.Second,
+		(t.Millisecond*1000+t.Microsecond)*1000+t.Nanosecond, time.UTC)
+	return when.Before(time.UnixMilli(-8.64e15)) || when.After(time.UnixMilli(8.64e15))
 }
 
 func (d *dateTimeFormat) forKind(kind intl.TemporalKind) (*intl.DateTimeFormat, error) {

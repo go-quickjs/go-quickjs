@@ -300,3 +300,36 @@ func TestAnnexBCallAssignmentTarget(t *testing.T) {
 		errs.join()`, "SyntaxError,SyntaxError,SyntaxError,SyntaxError,SyntaxError,SyntaxError,SyntaxError,SyntaxError"},
 	})
 }
+
+// TestNodeQuirksTemporalRange pins the one difference in formatting Temporal
+// plain values at the ends of their range: the standard, as test262's
+// temporal-objects-no-time-clip tests have it, formats them; V8 refuses a
+// plain date whose midnight, or a plain date-time, past the instants a Date
+// can hold (KI-55).
+func TestNodeQuirksTemporalRange(t *testing.T) {
+	src := `const t = (f) => { try { return f() } catch (e) { return e.name + ": " + e.message } };
+		const dtf = new Intl.DateTimeFormat("en", {timeZone: "UTC"});
+		[new Temporal.PlainDate(-271821, 4, 19), new Temporal.PlainDate(-271821, 4, 20),
+		 new Temporal.PlainDate(275760, 9, 13), new Temporal.PlainDateTime(275760, 9, 13, 23, 59),
+		 new Temporal.PlainDateTime(-271821, 4, 20)].map((v) => t(() => dtf.format(v))).join(" | ")`
+	for _, c := range []struct {
+		quirks bool
+		want   string
+	}{
+		{false, "4/19/271822 | 4/20/271822 | 9/13/275760 | 9/13/275760, 11:59:00 PM | 4/20/271822, 12:00:00 AM"},
+		{true, "RangeError: Temporal error: Instant nanoseconds are not within a valid epoch range. | 4/20/271822 | " +
+			"9/13/275760 | RangeError: Temporal error: Instant nanoseconds are not within a valid epoch range. | " +
+			"4/20/271822, 12:00:00 AM"},
+	} {
+		var opts []quickjs.Option
+		if c.quirks {
+			opts = append(opts, quickjs.WithNodeQuirks())
+		}
+		rt := quickjs.New(opts...)
+		v, err := rt.Eval(src)
+		if err != nil || v.String() != c.want {
+			t.Errorf("quirks %v:\n got %v, %v\nwant %s", c.quirks, v, err, c.want)
+		}
+		rt.Close()
+	}
+}

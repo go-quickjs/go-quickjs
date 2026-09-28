@@ -555,7 +555,10 @@ Paths are relative to this repository; `go-intl:` paths are in
 
 ### KI-55 Out-of-range Temporal plain values are formatted
 - **Expected:** a `RangeError`.
-- **Status:** open.
+- **Status:** resolved as a Node quirk. The standard, as test262's
+  `temporal-objects-no-time-clip` tests have it, formats them, as the engine
+  did; V8 refuses a plain date whose midnight, or a plain date-time, is past
+  the instants a Date can hold. `WithNodeQuirks` now refuses them too.
 
 ## P3: small divergences
 
