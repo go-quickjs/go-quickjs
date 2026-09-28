@@ -426,7 +426,9 @@ Paths are relative to this repository; `go-intl:` paths are in
   `"a"`.
 - **`/u` matching:** sticky and global matches can start in the middle of a
   surrogate pair.
-- **Status:** open.
+- **Status:** fixed. A counted quantifier's iterations past its minimum are
+  guarded as `*`'s are, and a `/u` or `/v` lastIndex between the halves of a
+  pair reads from the first. 408 exec results agree with Node.
 
 ### KI-40 `Map` and `Set` keep `-0` as a key
 - **Where:** `internal/vm/builtins_map.go`. `set` doesn't normalise the key.

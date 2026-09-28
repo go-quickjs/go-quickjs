@@ -49,3 +49,17 @@ func TestLinearBuilds(t *testing.T) {
 		})
 	}
 }
+
+// TestUnicodeLastIndexInAPair pins that a /u pattern's lastIndex between the
+// halves of a surrogate pair reads the character it falls in, as the
+// standard and V8 have it, rather than starting a match at the second half
+// (KI-39).
+func TestUnicodeLastIndexInAPair(t *testing.T) {
+	checkEval(t, `const out = [];
+		{ const r = /\udc00/uy; r.lastIndex = 1; out.push(JSON.stringify(r.exec("\ud800\udc00"))); }
+		{ const r = /\udc00/ug; r.lastIndex = 1; out.push(JSON.stringify(r.exec("\ud800\udc00")) + " " + r.lastIndex); }
+		{ const r = /./uy; r.lastIndex = 1; const m = r.exec("\ud800\udc00"); out.push(m.index + " " + m[0].length + " " + r.lastIndex); }
+		{ const r = /./vg; r.lastIndex = 1; const m = r.exec("\ud800\udc00x"); out.push(m.index + " " + m[0].length + " " + r.lastIndex); }
+		{ const r = /\udc00/y; r.lastIndex = 1; out.push(JSON.stringify(r.exec("\ud800\udc00"))); }
+		out.join(" | ")`, `null | null 0 | 0 2 2 | 0 2 2 | ["\udc00"]`)
+}

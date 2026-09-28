@@ -513,3 +513,32 @@ func TestUnicodePropertyNames(t *testing.T) {
 		}
 	}
 }
+
+// TestCountedEmptyIteration pins that an iteration of a counted quantifier
+// past its minimum that matches nothing is no iteration, as for * and +: the
+// counted form never checked, so the empty alternative ran as a last
+// iteration and overwrote the group (KI-39). The answers are V8's.
+func TestCountedEmptyIteration(t *testing.T) {
+	for _, tt := range []struct{ pattern, subject, want string }{
+		{"(a|){0,2}b", "ab", "a"},
+		{"(a|){1,3}b", "aab", "a"},
+		{"(a?){0,5}x", "aax", "a"},
+		{"(a|){1,3}?b", "ab", "a"},
+		// A required iteration may match nothing.
+		{"(a*){2}", "aa", ""},
+		{"(a|b|){3}c", "abc", ""},
+	} {
+		re, err := Compile(tt.pattern, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		caps, err := re.MatchString(tt.subject, 0)
+		if err != nil || caps == nil {
+			t.Fatalf("/%s/ on %q: %v, %v", tt.pattern, tt.subject, caps, err)
+		}
+		units := wtf8.ToUTF16(tt.subject)
+		if got := wtf8.FromUTF16(units[caps[2]:caps[3]]); got != tt.want {
+			t.Errorf("/%s/ on %q: group %q, want %q", tt.pattern, tt.subject, got, tt.want)
+		}
+	}
+}

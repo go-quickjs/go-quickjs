@@ -337,6 +337,23 @@ func (c *compiler) compileRepeat(t nodeRepeat) {
 		return
 	}
 
+	empty := canMatchEmpty(t.item)
+	if empty && t.min > 0 && t.max != t.min {
+		// {n,m} over a body that can match nothing: an iteration past the
+		// minimum that matches nothing is no iteration, as for the other
+		// quantifiers, so /(a|){0,2}b/ leaves "a" in its group on "ab".
+		// The n required ones are not checked.
+		c.compileRepeat(nodeRepeat{item: t.item, min: t.min, max: t.min, greedy: t.greedy})
+		c.compileRepeat(nodeRepeat{item: t.item, min: 0, max: t.max - t.min, greedy: t.greedy})
+		return
+	}
+	// With a minimum of zero every iteration is optional, and guarded.
+	guard := -1
+	if empty && t.min == 0 {
+		guard = c.prog.emptyChecks
+		c.prog.emptyChecks++
+	}
+
 	// The general counted form.
 	counter := c.prog.counters
 	c.prog.counters++
@@ -350,8 +367,14 @@ func (c *compiler) compileRepeat(t nodeRepeat) {
 
 	split := c.emit(instr{op: opSplit})
 	c.setSplit(split, t.greedy, c.here(), 0)
+	if guard >= 0 {
+		c.emit(instr{op: opEmptyCheck, arg: guard, arg2: 0})
+	}
 	c.clearCapsFor(t.item)
 	c.compile(t.item)
+	if guard >= 0 {
+		c.emit(instr{op: opEmptyCheck, arg: guard, arg2: 1})
+	}
 	c.emit(instr{op: opJmp, arg: start})
 	c.patchSplitAlt(split, t.greedy, c.here())
 }

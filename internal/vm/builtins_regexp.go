@@ -313,6 +313,12 @@ func (r *Runtime) regexpExec(this Value, s *String) (Value, error) {
 		}
 		return Null, nil
 	}
+	// A pattern that reads code points reads the one lastIndex falls in,
+	// which for an index between the halves of a pair begins at the first.
+	if re.Flags()&(regexp.FlagUnicode|regexp.FlagUnicodeSets) != 0 && start > 0 && start < len(units) &&
+		units[start]&0xFC00 == 0xDC00 && units[start-1]&0xFC00 == 0xD800 {
+		start--
+	}
 
 	// A match takes as long as it takes, as in V8, where the host can stop
 	// it. Where nothing can -- no deadline, no abort -- a catastrophic
