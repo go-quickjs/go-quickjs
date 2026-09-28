@@ -429,6 +429,15 @@ func (r *Runtime) initStringBuiltins() {
 		if err := rt.reserveMemory(stringBytes(s) * int(n)); err != nil {
 			return Undefined, err
 		}
+		if s.endsHigh && s.startsLow {
+			// Each copy's high half meets the next one's low half, which
+			// together are one character, spelled as one.
+			var sb partsBuilder
+			for i := 0; i < int(n); i++ {
+				sb.WriteString(s.Go())
+			}
+			return rt.builtString(sb.String())
+		}
 		return Str(NewString(strings.Repeat(s.Go(), int(n)))), nil
 	})
 
@@ -636,23 +645,29 @@ func (r *Runtime) padString(thisStr thisStrFunc, this Value, args []Value, atSta
 	if target > maxStringLength {
 		return Undefined, r.throwStringLength()
 	}
-	pad := " "
+	pad := NewString(" ")
 	if pv := arg(args, 1); !pv.IsUndefined() {
 		ps, err := r.toString(pv)
 		if err != nil {
 			return Undefined, err
 		}
-		pad = ps.Go()
+		pad = ps
 	}
-	if pad == "" {
+	if pad.Len() == 0 {
 		return Str(s), nil
 	}
 	need := int(target) - s.Len()
 	if err := r.reserveMemory(need * 3); err != nil {
 		return Undefined, err
 	}
-	filler := NewString(strings.Repeat(pad, need/len([]rune(pad))+1))
-	filler = filler.Substring(0, need)
+	// The filler is counted in code units, as the result is: in runes a lone
+	// surrogate is three, and the result came out short. It is built with
+	// the halves of a pair joined where one copy meets the next.
+	var sb partsBuilder
+	for i, copies := 0, need/pad.Len()+1; i < copies; i++ {
+		sb.WriteString(pad.Go())
+	}
+	filler := NewString(sb.String()).Substring(0, need)
 	if atStart {
 		return Str(filler.Concat(s)), nil
 	}

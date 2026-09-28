@@ -416,12 +416,17 @@ func (r *Runtime) decodeBase64Into(s string, opts base64Options, max int) ([]byt
 	return append(out, tail...), len(s), nil
 }
 
+// hexError is V8's message for any hex string it cannot decode.
+const hexError = "Input string must contain hex characters in even length"
+
 // decodeHex decodes a hex string, writing at most max bytes.
 func (r *Runtime) decodeHex(s string, max int) ([]byte, int, error) {
 	// An odd length is settled before anything is decoded, so a caller writing
-	// into an array is left with it untouched.
-	if len(s)%2 != 0 {
-		return nil, 0, r.throwSyntaxError("a hex string must have an even length")
+	// into an array is left with it untouched. The length is in code units,
+	// as a string's is: "aé" is even, and fails on its second character
+	// instead. V8 says the one thing for either.
+	if _, units := scanString(s); units%2 != 0 {
+		return nil, 0, r.throwSyntaxError(hexError)
 	}
 	var out []byte
 	for i := 0; i+1 < len(s); i += 2 {
@@ -433,7 +438,7 @@ func (r *Runtime) decodeHex(s string, max int) ([]byte, int, error) {
 		if !ok1 || !ok2 {
 			// Whatever was decoded before the bad pair is still handed back,
 			// so that a caller writing into an array keeps it.
-			return out, i, r.throwSyntaxError("invalid character in hex input")
+			return out, i, r.throwSyntaxError(hexError)
 		}
 		out = append(out, hi<<4|lo)
 	}

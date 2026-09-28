@@ -63,3 +63,19 @@ func TestUnicodeLastIndexInAPair(t *testing.T) {
 		{ const r = /\udc00/y; r.lastIndex = 1; out.push(JSON.stringify(r.exec("\ud800\udc00"))); }
 		out.join(" | ")`, `null | null 0 | 0 2 2 | 0 2 2 | ["\udc00"]`)
 }
+
+// TestCodeUnitCounts pins lengths counted as a string's are, in UTF-16 code
+// units: setFromHex counted UTF-8 bytes, so "a\u00e9" was odd and "ab\u00e9"
+// even; padStart and padEnd counted the filler in runes, so a lone surrogate
+// made the result short; and repeat, like padding, joins the halves of a pair
+// that meet into the one spelling a character has (KI-44). The answers are
+// node's.
+func TestCodeUnitCounts(t *testing.T) {
+	checkEval(t, `const e = (f) => { try { return f() } catch (x) { return x.name + ": " + x.message } };
+		[e(() => new Uint8Array(4).setFromHex("a\u00e9")), e(() => new Uint8Array(4).setFromHex("ab\u00e9")),
+		 "x".padStart(5, "\uD83D").length, "x".padEnd(4, "\uDE00").length, "x".padStart(6, "\u{1F600}").length,
+		 "\uDE00\uD83D".repeat(2) === "\uDE00" + "\uD83D\uDE00" + "\uD83D",
+		 "x".padEnd(5, "\uDE00\uD83D") === "x\uDE00\uD83D\uDE00\uD83D"].join(" | ")`,
+		"SyntaxError: Input string must contain hex characters in even length | "+
+			"SyntaxError: Input string must contain hex characters in even length | 5 | 4 | 6 | true | true")
+}

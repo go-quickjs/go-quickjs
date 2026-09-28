@@ -466,7 +466,8 @@ Paths are relative to this repository; `go-intl:` paths are in
 - **`setFromHex`:** its odd-length check counts UTF-8 bytes.
 - **`padStart` and `padEnd`:** they count the filler in runes, so a lone
   surrogate filler makes the result short.
-- **Status:** open.
+- **Status:** fixed. Both count code units, and padding and `repeat` join
+  the halves of a pair where copies meet; the hex errors take V8's message.
 
 ### KI-45 `Iterator.prototype.take` and `drop` reject counts above 2^53 - 1
 - **Status:** open.
