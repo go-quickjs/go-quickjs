@@ -2,6 +2,7 @@ package stdlib_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -248,5 +249,39 @@ func TestWorkersRefused(t *testing.T) {
 	want := "undefined function true\nthis runtime may not start workers"
 	if out != want {
 		t.Errorf("got\n%s\nwant\n%s", out, want)
+	}
+}
+
+// TestLoopDeadlineStopsACallback pins that the context a loop runs under
+// stops a callback that never returns, not only the waiting between
+// callbacks: qjs's --timeout and Ctrl-C could not stop one (KI-26). The
+// runtime is usable after, and a later Run has its own context.
+func TestLoopDeadlineStopsACallback(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	loop := stdlib.NewLoop(rt)
+	if err := stdlib.Install(rt, stdlib.Config{Loop: loop}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.Eval(`setTimeout(() => { for (;;) {} })`); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if err := loop.Run(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Run = %v, want the deadline", err)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Errorf("stopped after %v", d)
+	}
+	if _, err := rt.Eval(`var later = 0; setTimeout(() => { later = 1 })`); err != nil {
+		t.Fatal(err)
+	}
+	if err := loop.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := rt.Eval(`later`); v.Int() != 1 {
+		t.Errorf("later = %v", v)
 	}
 }

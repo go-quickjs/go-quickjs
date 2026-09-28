@@ -7,6 +7,8 @@
 // *quickjs.Runtime, passed as any so that this package need not import it.
 package hostjobs
 
+import "context"
+
 var (
 	// Attach makes work for rt go to post, which runs a function on rt's
 	// goroutine: an event loop's Post.
@@ -21,4 +23,8 @@ var (
 	// a callback, a wait -- as a cancelled context stops an Eval: how a host
 	// ends a worker.
 	Abort func(rt any, done <-chan struct{})
+	// WithContext makes ctx the one rt's callbacks run under, as an Eval's
+	// runs under its own, until restore is called: how a loop's deadline
+	// reaches a timer's callback that never returns.
+	WithContext func(rt any, ctx context.Context) (restore func())
 )

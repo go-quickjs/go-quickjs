@@ -285,7 +285,10 @@ Paths are relative to this repository; `go-intl:` paths are in
   tasks.
 - **Effect:** `setTimeout(() => { for (;;) {} })` can't be interrupted, and
   neither can `--timeout`.
-- **Status:** open.
+- **Note:** Node can't interrupt such a callback on Ctrl-C either.
+- **Status:** fixed. A loop's callbacks run under the context the loop runs
+  under, so `--timeout` -- and qjs's Ctrl-C, which cancels the same context --
+  stops one that never returns.
 
 ### KI-27 Operations whose cost grows quadratically
 - **Strings:** concatenating a surrogate pair's halves flattens the whole

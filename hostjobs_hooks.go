@@ -1,6 +1,10 @@
 package quickjs
 
-import "github.com/go-quickjs/go-quickjs/internal/hostjobs"
+import (
+	"context"
+
+	"github.com/go-quickjs/go-quickjs/internal/hostjobs"
+)
 
 // Work from other goroutines reaches a runtime through hostjobs, which is
 // filled in here.
@@ -21,6 +25,19 @@ func init() {
 	hostjobs.Abort = func(rt any, done <-chan struct{}) {
 		if r := rt.(*Runtime); !r.closed {
 			r.rt.SetAbort(done)
+		}
+	}
+	hostjobs.WithContext = func(rt any, ctx context.Context) func() {
+		r := rt.(*Runtime)
+		if r.closed {
+			return func() {}
+		}
+		prev := r.rt.Context()
+		r.rt.SetContext(ctx)
+		return func() {
+			if !r.closed {
+				r.rt.SetContext(prev)
+			}
 		}
 	}
 	hostjobs.Ready = func(rt any) <-chan struct{} {

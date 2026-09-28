@@ -209,9 +209,12 @@ func loopContext(l *Loop) context.Context {
 // running until the answer arrives and its reactions have run.
 //
 // Run returns the first error a callback raises, which is what an uncaught
-// exception in a timer or a reaction becomes. Cancelling ctx stops the loop and
-// returns its error.
+// exception in a timer or a reaction becomes. Cancelling ctx stops the loop --
+// and the callback running, should one never return -- and returns its error.
 func (l *Loop) Run(ctx context.Context) error {
+	// The callbacks run under ctx, so that one that never returns is
+	// stopped by it too, not only the waiting between them.
+	defer hostjobs.WithContext(l.rt, ctx)()
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -265,6 +268,7 @@ func (l *Loop) Run(ctx context.Context) error {
 // RunUntil works until the given promise settles, which is what a host running
 // one asynchronous thing wants rather than a loop that outlives it.
 func (l *Loop) RunUntil(ctx context.Context, done <-chan struct{}) error {
+	defer hostjobs.WithContext(l.rt, ctx)()
 	for {
 		select {
 		case <-done:

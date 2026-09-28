@@ -326,8 +326,11 @@ func (r *Runtime) evalIn(ctx context.Context, re *vm.Realm, name, src string) (r
 // force again after it.
 func (r *Runtime) enter(ctx context.Context) (nested bool, leave func()) {
 	if !r.rt.Running() {
+		// Whatever was in force before -- a loop's, between its tasks -- is
+		// again after.
+		prev := r.rt.Context()
 		r.rt.SetContext(ctx)
-		return false, func() { r.rt.SetContext(nil) }
+		return false, func() { r.rt.SetContext(prev) }
 	}
 	outer := r.rt.Context()
 	run, cancel := ctx, func() {}
