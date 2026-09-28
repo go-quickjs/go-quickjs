@@ -265,7 +265,8 @@ Paths are relative to this repository; `go-intl:` paths are in
   channels.
 - **Effect:** each channel keeps its runtime's heap reachable, and every
   later broadcast of that name queues on it without bound.
-- **Status:** open.
+- **Status:** fixed. A channel stops being registered when its runtime's
+  context ends.
 
 ### KI-23 Ports inside messages that are dropped are never closed
 - **When messages are dropped:**

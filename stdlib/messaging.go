@@ -81,6 +81,8 @@ type portEnd struct {
 	// channel is a BroadcastChannel's name, for an end that is one.
 	channel   string
 	broadcast bool
+	// unwatch stops a BroadcastChannel's watch on its runtime's end.
+	unwatch func() bool
 }
 
 // messaging is a runtime's ports, and the script functions they are made
@@ -597,6 +599,10 @@ func (m *messaging) openBroadcast(name string, obj quickjs.Value) int {
 	}
 	broadcasts.byName[name][core] = true
 	broadcasts.Unlock()
+	// A channel the script never closes stops hearing its name when its
+	// runtime is closed: until then it kept the runtime reachable, and what
+	// was broadcast to it queued up without end.
+	e.unwatch = context.AfterFunc(m.rt.Context(), func() { unregisterBroadcast(name, core) })
 	e.hold()
 	return e.id
 }
@@ -628,18 +634,25 @@ func (e *portEnd) broadcastMessage(v quickjs.Value) error {
 
 // closeBroadcast stops a BroadcastChannel hearing its name.
 func (e *portEnd) closeBroadcast() {
+	e.unwatch()
+	unregisterBroadcast(e.channel, e.core)
+	e.release()
+}
+
+// unregisterBroadcast takes a BroadcastChannel out of those of its name and
+// drops what it has not dispatched. It is safe to call from any goroutine.
+func unregisterBroadcast(name string, core *portCore) {
 	broadcasts.Lock()
-	if set := broadcasts.byName[e.channel]; set != nil {
-		delete(set, e.core)
+	if set := broadcasts.byName[name]; set != nil {
+		delete(set, core)
 		if len(set) == 0 {
-			delete(broadcasts.byName, e.channel)
+			delete(broadcasts.byName, name)
 		}
 	}
 	broadcasts.Unlock()
-	e.core.mu.Lock()
-	e.core.closed, e.core.queue = true, nil
-	e.core.mu.Unlock()
-	e.release()
+	core.mu.Lock()
+	core.closed, core.queue = true, nil
+	core.mu.Unlock()
 }
 
 // detach lets go of a port being posted: its messages wait in its queue for
