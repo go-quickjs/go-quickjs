@@ -79,7 +79,7 @@ type Runtime struct {
 	nesting    int
 	nodeQuirks bool
 	// joining is the objects a join or toLocaleString of Array or
-	// TypedArray is under way on, which WithNodeQuirks keeps; see joinOnce.
+	// TypedArray is under way on; see joinOnce.
 	joining []*Object
 
 	// stackAccessor is the stack property every error has, whose getter and

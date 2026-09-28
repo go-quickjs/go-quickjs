@@ -2967,16 +2967,13 @@ func isIdentifierName(name string) bool {
 }
 
 // joinOnce begins a join, or a toLocaleString, of o, as V8's
-// CycleProtectedArrayJoin does under WithNodeQuirks: it reports false where
-// one of o is under way already, and the join is then "", so that an array
-// that holds itself writes "1," rather than recursing until the stack runs
-// out. The standard has no such check, and an element whose toString joins
-// the array once more is written as that join. A join that began is ended
-// with joinDone.
+// CycleProtectedArrayJoin and SpiderMonkey's cycle detector do: it reports
+// false where one of o is under way already, and the join is then "", so
+// that an array that holds itself writes "1," rather than recursing until
+// the stack runs out. The standard has no such check, and would write an
+// element whose toString joins the array once more as that join; every
+// engine writes it as "" instead. A join that began is ended with joinDone.
 func (r *Runtime) joinOnce(o *Object) bool {
-	if !r.nodeQuirks {
-		return true
-	}
 	for _, j := range r.joining {
 		if j == o {
 			return false
@@ -2988,7 +2985,5 @@ func (r *Runtime) joinOnce(o *Object) bool {
 
 // joinDone ends the join joinOnce began last.
 func (r *Runtime) joinDone() {
-	if r.nodeQuirks {
-		r.joining = r.joining[:len(r.joining)-1]
-	}
+	r.joining = r.joining[:len(r.joining)-1]
 }

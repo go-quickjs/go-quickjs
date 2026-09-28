@@ -597,14 +597,18 @@ Paths are relative to this repository; `go-intl:` paths are in
 ### KI-58 A cyclic `join` throws
 - **Effect:** `a.push(a); a.join()` throws `RangeError`; V8 returns `"1,"`.
 - **Note:** this is not a specification violation.
-- **Status:** fixed under `WithNodeQuirks`, which keeps V8's join stack:
+- **Status:** fixed, in both modes, as every engine does.
   - A join or `toLocaleString` (Array's or TypedArray's) of an object whose
     own join is under way already is `""`.
-  - Standards mode keeps the standard's recursion. It differs where the
-    recursion ends: an element that joins its array once more is written as
-    that join (`"1,1-x"` where V8 writes `"1,"`).
-  - SpiderMonkey returns `"1,"` too.
-  - Tests: `TestNodeQuirksLanguage`.
+  - V8, SpiderMonkey and JavaScriptCore agree (Chrome, Node, Firefox,
+    Safari, Bun).
+  - The standard has no cycle check. `ToString` of an element that is an
+    array calls `join` on it again, so a self-holding array ends only in
+    stack exhaustion.
+  - An element that joins its array once more differs from the standard:
+    `"1,"` here and in every engine, `"1,1-x"` in the standard. No test262
+    test covers it.
+  - Test: `TestJoinCycle`.
 
 ### KI-59 The conformance agent harness hangs on a failing test
 - **Effect:** an agent blocked in an infinite `Atomics.wait` ignores

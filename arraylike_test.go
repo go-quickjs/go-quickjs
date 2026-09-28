@@ -376,3 +376,34 @@ func TestReverseLeavesHolesAlone(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// Array's and TypedArray's join and toLocaleString of an object whose own
+// join is under way already are "", as V8, SpiderMonkey and JavaScriptCore
+// all have it: an array that holds itself joins as "1," rather than
+// recursing until the stack runs out, and an element that joins its array
+// once more is written as "", not as that join, which the standard writes.
+// The separator is written before the join begins, so a separator that joins
+// the array is not a cycle, and a join that threw has ended.
+func TestJoinCycle(t *testing.T) {
+	for src, want := range map[string]string{
+		`var a = [1]; a.push(a); a.join()`:           "1,",
+		`var a = [1]; a.push(a); String([a, 2])`:     "1,,2",
+		`var a = [1]; a.push(a); a.toLocaleString()`: "1,",
+		`var once = true, a = [1, {toString() { if (once) { once = false; return a.join("-") } return "x" }}];
+		a.join()`: "1,",
+		`var once = true, a = [1, {toLocaleString() { if (once) { once = false; return a.toLocaleString() } return "x" }}];
+		a.toLocaleString()`: "1,",
+		`var once = true, a = [1, {toString() { if (once) { once = false; return a.toLocaleString() } return "x" }}];
+		a.join()`: "1,",
+		`var once = true, o = {length: 2, 0: 1, 1: {toString() { if (once) { once = false; return Array.prototype.join.call(o) } return "x" }}};
+		Array.prototype.join.call(o)`: "1,",
+		`var once = true, t = new Uint8Array([1, 2]);
+		Number.prototype.toLocaleString = function () { if (once) { once = false; return "<" + t.toLocaleString() + ">" } return "n" };
+		t.toLocaleString()`: "<>,n",
+		`var t = new Uint8Array([1, 2]); t.join({toString() { return t.join("+") }})`:                           "11+22",
+		`var a = [1]; a.join({toString() { return a.join("+") + a.join() }})`:                                   "1",
+		`var a = [1, {toString() { throw 0 }}]; try { a.join() } catch {} a.pop(); a.push(2); [a, a].join(";")`: "1,2;1,2",
+	} {
+		checkEval(t, src, want)
+	}
+}
