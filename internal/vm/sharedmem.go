@@ -52,6 +52,19 @@ type waiter struct {
 	// promise, and what does so when its time runs out.
 	deliver func(result string)
 	timer   *time.Timer
+	// at is the byte offset an asynchronous waiter waits on.
+	at int
+}
+
+// waitTimer is how long a timeout of ms milliseconds is, and false for one
+// too long to be anything but forever: a time.Duration holds 292 years, and
+// a longer timeout overflowed it into one that had already run out.
+func waitTimer(ms float64) (time.Duration, bool) {
+	const most = float64(math.MaxInt64 / int64(time.Millisecond))
+	if math.IsInf(ms, 1) || ms >= most {
+		return 0, false
+	}
+	return time.Duration(ms * float64(time.Millisecond)), true
 }
 
 // alignedBytes allocates n bytes, and room for reserve, in 64-bit words.
@@ -262,8 +275,8 @@ func (m *SharedMemory) wait(at, size int, v uint64, timeout float64, done, abort
 	m.mu.Unlock()
 
 	var timer <-chan time.Time
-	if !math.IsInf(timeout, 1) {
-		t := time.NewTimer(time.Duration(timeout * float64(time.Millisecond)))
+	if d, ok := waitTimer(timeout); ok {
+		t := time.NewTimer(d)
 		defer t.Stop()
 		timer = t.C
 	}
@@ -302,24 +315,25 @@ func (m *SharedMemory) remove(at int, w *waiter) {
 
 // waitAsync begins an asynchronous wait on the element at a byte offset. It
 // answers at once, with "not-equal" or -- for a timeout of zero -- with
-// "timed-out", or else returns "" and calls deliver later, from whichever
-// goroutine notifies it or finds its time is up, with "ok" or "timed-out".
-func (m *SharedMemory) waitAsync(at, size int, v uint64, timeout float64, deliver func(string)) string {
+// "timed-out", or else returns the waiter and calls deliver later, from
+// whichever goroutine notifies it or finds its time is up, with "ok" or
+// "timed-out".
+func (m *SharedMemory) waitAsync(at, size int, v uint64, timeout float64, deliver func(string)) (*waiter, string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if sharedLoad(m.bytes(), at, size) != v&sizeMask(size) {
-		return "not-equal"
+		return nil, "not-equal"
 	}
 	if timeout == 0 {
-		return "timed-out"
+		return nil, "timed-out"
 	}
-	w := &waiter{deliver: deliver}
+	w := &waiter{deliver: deliver, at: at}
 	if m.waiters == nil {
 		m.waiters = make(map[int][]*waiter)
 	}
 	m.waiters[at] = append(m.waiters[at], w)
-	if !math.IsInf(timeout, 1) {
-		w.timer = time.AfterFunc(time.Duration(timeout*float64(time.Millisecond)), func() {
+	if d, ok := waitTimer(timeout); ok {
+		w.timer = time.AfterFunc(d, func() {
 			m.mu.Lock()
 			if w.notified {
 				m.mu.Unlock()
@@ -331,7 +345,68 @@ func (m *SharedMemory) waitAsync(at, size int, v uint64, timeout float64, delive
 			deliver("timed-out")
 		})
 	}
-	return ""
+	return w, ""
+}
+
+// cancelAsync takes an asynchronous waiter off the list, unless it has been
+// told already, and says nothing to it.
+func (m *SharedMemory) cancelAsync(w *waiter) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if w.notified {
+		return
+	}
+	w.notified = true
+	if w.timer != nil {
+		w.timer.Stop()
+	}
+	m.remove(w.at, w)
+}
+
+// asyncWaits is a runtime's waiters in Atomics.waitAsync that have not been
+// told, which it takes off their lists when it closes: they would take a
+// notify meant for a live agent, and keep the runtime's heap reachable.
+type asyncWaits struct {
+	mu      sync.Mutex
+	waiters map[*waiter]*SharedMemory
+	closed  bool
+}
+
+// add records a waiter, or cancels it at once for a runtime that has
+// closed. It is safe to call from any goroutine.
+func (a *asyncWaits) add(w *waiter, m *SharedMemory) {
+	a.mu.Lock()
+	if !a.closed {
+		if a.waiters == nil {
+			a.waiters = map[*waiter]*SharedMemory{}
+		}
+		a.waiters[w] = m
+		a.mu.Unlock()
+		return
+	}
+	a.mu.Unlock()
+	m.cancelAsync(w)
+}
+
+// done forgets a waiter that has been told. It is safe to call from any
+// goroutine.
+func (a *asyncWaits) done(w *waiter) {
+	a.mu.Lock()
+	delete(a.waiters, w)
+	a.mu.Unlock()
+}
+
+// close cancels every waiter left. The runtime's lock is let go before a
+// memory's is taken, which a notify holds while it tells a waiter.
+func (a *asyncWaits) close() {
+	a.mu.Lock()
+	a.closed = true
+	waiters := a.waiters
+	a.waiters = nil
+	a.mu.Unlock()
+	for w, m := range waiters {
+		m.cancelAsync(w)
+	}
 }
 
 // notify wakes up to count of the agents waiting on a byte offset, the

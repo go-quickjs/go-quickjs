@@ -138,6 +138,8 @@ type Runtime struct {
 	microtasks []job
 	// hostJobs is what other goroutines have finished for the runtime.
 	hostJobs hostQueue
+	// asyncWaits are the runtime's waiters in Atomics.waitAsync.
+	asyncWaits asyncWaits
 
 	// rng backs Math.random, created on first use.
 	rng *rand.Rand
@@ -740,6 +742,10 @@ func (r *Runtime) Running() bool { return r.frameDepth > 0 }
 // Interrupted is why the host has stopped the runtime -- its context ended,
 // or its abort -- or nil when it has not.
 func (r *Runtime) Interrupted() error { return r.aborted() }
+
+// Close lets go of what the runtime has left with other agents: its waiters
+// in Atomics.waitAsync. It is safe to call from any goroutine.
+func (r *Runtime) Close() { r.asyncWaits.close() }
 
 // Stop is stop, for a host function that reports its context cancelled.
 func (r *Runtime) Stop(err error) error { return r.stop(err) }

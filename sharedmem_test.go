@@ -196,3 +196,87 @@ func TestWaitPastSharedLength(t *testing.T) {
 		t.Errorf("= %v, %v", v, err)
 	}
 }
+
+// TestClosedRuntimeLeavesWaitAsync pins that a runtime's waiters in
+// Atomics.waitAsync leave with it when it is closed: they stayed, and a
+// notify for one agent woke the dead waiter instead of the live one (KI-24).
+func TestClosedRuntimeLeavesWaitAsync(t *testing.T) {
+	a, b := sharedPair(t, "new SharedArrayBuffer(8)")
+	c := quickjs.New()
+	defer c.Close()
+	sab, err := b.Get("sab")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mem, _, err := sharedmem.Share(sab)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attached, err := sharedmem.Attach(c, mem)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Set("sab", attached); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Eval(`Atomics.waitAsync(new Int32Array(sab), 0, 0)`); err != nil {
+		t.Fatal(err)
+	}
+	a.Close()
+	if _, err := c.Eval(`var outcome; Atomics.waitAsync(new Int32Array(sab), 0, 0).value.then(v => { outcome = v })`); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := b.Eval("Atomics.notify(new Int32Array(sab), 0, 1)"); err != nil || v.Int() != 1 {
+		t.Fatalf("notify = %v, %v", v, err)
+	}
+	runHostJobs(t, c)
+	if v, _ := c.Eval("outcome"); v.String() != "ok" {
+		t.Errorf("outcome = %v", v)
+	}
+}
+
+// TestWaitForAges pins that a timeout too long for a time.Duration waits
+// until notified, as one of Infinity does: it overflowed, and ended at once
+// (KI-25).
+func TestWaitForAges(t *testing.T) {
+	a, b := sharedPair(t, "new SharedArrayBuffer(8)")
+	if _, err := a.Eval(`var outcome; const w = Atomics.waitAsync(new Int32Array(sab), 0, 0, 1e300);
+		w.value.then(v => { outcome = v })`); err != nil {
+		t.Fatal(err)
+	}
+	blocked := make(chan string, 1)
+	go func() {
+		v, err := b.Eval(`Atomics.wait(new Int32Array(sab), 4 >> 2, 0, 2 ** 63)`)
+		if err != nil {
+			blocked <- err.Error()
+			return
+		}
+		blocked <- v.String()
+	}()
+	if v, err := a.Eval(`Atomics.notify(new Int32Array(sab), 0)`); err != nil || v.Int() != 1 {
+		t.Fatalf("notified %v, %v", v, err)
+	}
+	// The other agent is notified once it is waiting -- unless it has ended
+	// already, which is the failure.
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		select {
+		case got := <-blocked:
+			t.Fatalf("wait = %s before it was notified", got)
+		default:
+		}
+		if v, err := a.Eval(`Atomics.notify(new Int32Array(sab), 1)`); err != nil || v.Int() == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the other agent never waited")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if got := <-blocked; got != "ok" {
+		t.Errorf("wait = %s", got)
+	}
+	runHostJobs(t, a)
+	if v, _ := a.Eval("outcome"); v.String() != "ok" {
+		t.Errorf("outcome = %v", v)
+	}
+}

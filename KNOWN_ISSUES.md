@@ -283,12 +283,13 @@ Paths are relative to this repository; `go-intl:` paths are in
 - **Effect:** asynchronous waiters stay in the list after their runtime
   closes. `Atomics.notify(i, 0, 1)` wakes a dead waiter instead of a live
   one, and each dead waiter keeps its runtime's heap reachable.
-- **Status:** open.
+- **Status:** fixed. A runtime keeps its waiters, and `Close` takes them off
+  their lists.
 
 ### KI-25 `Atomics.wait` timeouts above about 9.2e12 ms end at once
 - **Where:** `internal/vm/sharedmem.go`. The conversion to a `time.Duration`
   overflows, so `wait(..., 1e300)` answers `"timed-out"` immediately.
-- **Status:** open.
+- **Status:** fixed. A timeout past what a `time.Duration` holds is forever.
 
 ### KI-26 qjs's Ctrl-C can't interrupt a running callback
 - **Where:** `cmd/qjs/main.go`. `Loop.Run` checks its context only between

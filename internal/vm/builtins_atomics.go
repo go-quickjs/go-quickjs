@@ -357,10 +357,21 @@ func (r *Runtime) initAtomicsBuiltins() {
 		}
 		result := newObject(rt.proto.object, ClassObject)
 		p := rt.newPromise()
+		var w *waiter
+		ready := make(chan struct{})
 		deliver := func(outcome string) {
+			// A notify may tell the waiter before waitAsync has returned it.
+			<-ready
+			rt.asyncWaits.done(w)
 			rt.postFromElsewhere(func() { rt.resolvePromise(p, Str(NewString(outcome))) })
 		}
-		if now := t.storage().block.waitAsync(at, t.info().size, v, timeout, deliver); now != "" {
+		mem := t.storage().block
+		w, now := mem.waitAsync(at, t.info().size, v, timeout, deliver)
+		if w != nil {
+			rt.asyncWaits.add(w, mem)
+		}
+		close(ready)
+		if now != "" {
 			result.setOwnRaw(rt.atoms.intern("async"), False, propWritable|propEnumerable|propConfigurable)
 			result.setOwnRaw(atomValue, Str(NewString(now)), propWritable|propEnumerable|propConfigurable)
 			return Obj(result), nil

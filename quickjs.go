@@ -202,6 +202,9 @@ func New(opts ...Option) *Runtime {
 func (r *Runtime) Close() error {
 	r.closed = true
 	r.posting.Store(nil)
+	if r.rt != nil {
+		r.rt.Close()
+	}
 	r.rt = nil
 	if r.cancel != nil {
 		r.cancel()
