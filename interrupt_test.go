@@ -149,3 +149,24 @@ func TestStringSearchIsLinear(t *testing.T) {
 		t.Errorf("took %v", d)
 	}
 }
+
+// TestLongJobQueue pins that a program whose promise chain is merely long
+// runs to its end: the job queue gave up after a million jobs, with an error
+// nothing could catch (KI-18). One that queues itself forever is stopped by
+// the host's deadline, as a loop is.
+func TestLongJobQueue(t *testing.T) {
+	checkEval(t, `var n = 0; (async () => { for (let i = 0; i < 1.1e6; i++) await null; n = 1 })(); 0`, "0")
+	rt := quickjs.New()
+	defer rt.Close()
+	if v, err := rt.Eval(`var done = false; (async () => { for (let i = 0; i < 1.1e6; i++) await null; done = true })(); 0`); err != nil || v.Int() != 0 {
+		t.Fatalf("= %v, %v", v, err)
+	}
+	if v, _ := rt.Eval(`done`); !v.Bool() {
+		t.Errorf("done = %v", v)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := rt.EvalContext(ctx, `(function again() { Promise.resolve().then(again) })()`); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want the deadline", err)
+	}
+}

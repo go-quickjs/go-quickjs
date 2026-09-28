@@ -282,23 +282,20 @@ func (r *Runtime) runJob(j job) {
 
 // DrainJobs runs queued microtasks until none remain.
 //
-// A job may queue more jobs, which is how a chain of thens progresses; the loop
-// is bounded so that a promise chain that queues itself forever cannot wedge
-// the host.
+// A job may queue more jobs, which is how a chain of thens progresses. A chain
+// that queues itself forever is a loop like any other, which the host's
+// deadline stops -- the queue checks for one between its jobs -- and a count
+// of jobs would stop a program that is only long, as V8 does not.
 func (r *Runtime) DrainJobs() error {
 	if r.stopped != nil {
 		return r.stopped
 	}
-	const maxJobs = 1_000_000
 	// A finalization callback is a job of its own, and one queued by the
 	// collector between turns has no other moment to run; so is what another
 	// goroutine has finished for the runtime.
 	r.runCleanups()
 	r.runHostJobs()
-	for n := 0; len(r.microtasks) > 0; n++ {
-		if n > maxJobs {
-			return r.throwRangeError("the microtask queue did not drain")
-		}
+	for len(r.microtasks) > 0 {
 		j := r.microtasks[0]
 		r.microtasks = r.microtasks[1:]
 		r.runJob(j)

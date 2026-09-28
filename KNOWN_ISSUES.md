@@ -233,7 +233,8 @@ Paths are relative to this repository; `go-intl:` paths are in
 - **Where:** `internal/vm/promise.go`.
 - **Effect:** a legitimate loop of 1.1M `await`s fails with an uncatchable
   "the microtask queue did not drain".
-- **Status:** open.
+- **Status:** fixed. The queue has no count; a chain that queues itself
+  forever is stopped by the host's deadline, as a loop is.
 
 ### KI-19 A Go error that wraps a cancelled context can't be caught
 - **Where:** `marshal.go`, since 98da02a.
