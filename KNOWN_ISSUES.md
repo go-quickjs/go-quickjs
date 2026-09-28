@@ -363,14 +363,15 @@ Paths are relative to this repository; `go-intl:` paths are in
 - **Where:** `internal/vm/property.go` (`createOwnProp`).
 - **Repro:** with `length` made non-writable, `a[5000] = 4` still extends
   the array.
-- **Status:** open.
+- **Status:** fixed with KI-32.
 
 ### KI-32 `Object.preventExtensions` leaves dense arrays growable
 - **Effect:**
   - Holes can be filled.
   - `length` can be raised and written past.
   - `arguments` can gain keys.
-- **Status:** open.
+- **Status:** fixed. `createOwnProp` adds an element only to an extensible
+  object, and to an array only below a read-only length.
 
 ### KI-33 Proxy invariants are checked against raw properties
 - **Where:** `internal/vm/builtins_proxy.go`. The `has` and `ownKeys`

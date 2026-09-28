@@ -547,11 +547,18 @@ func (r *Runtime) createOwnProp(o *Object, key Atom, val Value, strict bool) (bo
 		// The largest indices are spelled out rather than carried in the atom,
 		// and they are indices of the array all the same.
 		if ix, ok := r.atoms.arrayIndex(key); ok {
-			if !o.IsExtensible() && int64(ix) >= int64(len(o.elems)) {
+			// The element is new -- a hole is no element -- so an array that
+			// may not be extended refuses it wherever it would go, and one
+			// whose length may not change refuses it at or past the end.
+			if !o.IsExtensible() {
 				if strict {
 					return false, r.throwTypeError("cannot add a property to a non-extensible array")
 				}
 				return false, nil
+			}
+			if ix >= o.arrayLength() && o.flags&objArrayLengthWritable == 0 {
+				return false, r.assignFailed(atomLength, strict,
+					"cannot assign to read-only property %q")
 			}
 			if o.setElem(ix, val) {
 				return true, nil
@@ -560,8 +567,10 @@ func (r *Runtime) createOwnProp(o *Object, key Atom, val Value, strict bool) (bo
 			// property and remember that the array is no longer dense.
 			o.noteArrayIndex(ix)
 		}
-	} else if key.IsIndex() && uint(key.Index()) <= uint(len(o.elems)) && len(o.elems) > 0 {
-		// A non-array that already has dense storage keeps using it.
+	} else if key.IsIndex() && uint(key.Index()) <= uint(len(o.elems)) && len(o.elems) > 0 &&
+		o.IsExtensible() {
+		// A non-array that already has dense storage keeps using it, if it
+		// may gain the element at all.
 		if o.setElem(key.Index(), val) {
 			return true, nil
 		}
