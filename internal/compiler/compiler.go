@@ -483,31 +483,57 @@ func (c *compiler) finish() {
 
 // emit appends an instruction and returns its program counter.
 func (c *compiler) emit(op bytecode.Op, a, b uint32) int {
-	if op == bytecode.OpGetLocal && c.fusible(bytecode.OpGetLocal) {
-		// A second local read straight after a first is made part of it.
-		last := &c.fn.Code[len(c.fn.Code)-1]
-		last.Op, last.B = bytecode.OpGetLocal2, a
+	if fused, ok := c.fuse(op, a); ok {
 		c.adjustStack(op, a, b)
-		return len(c.fn.Code) - 1
+		return fused
 	}
 	c.fn.Code = append(c.fn.Code, bytecode.Instr{Op: op, A: a, B: b})
 	c.adjustStack(op, a, b)
 	return len(c.fn.Code) - 1
 }
 
-// fusible reports whether the instruction about to be emitted may be made
-// part of the last one, which is an op: the position it would have had is
-// one nothing jumps to, and no new source position begins there, which a
-// stack trace would want to point at.
-func (c *compiler) fusible(op bytecode.Op) bool {
+// fuse makes the instruction about to be emitted part of the last one, where
+// the two are a pair a single instruction does, and reports whether it did.
+// The instruction each pair dispatches is the one a program runs most:
+// fewer of them is less of the loop's own cost.
+//
+// The position the second would have had must be one nothing jumps to. A
+// source position recorded for it is left where it is, for the instruction
+// emitted next, when the second cannot throw -- nothing would ever report
+// it -- and moved onto the pair when it can.
+func (c *compiler) fuse(op bytecode.Op, a uint32) (int, bool) {
 	n := len(c.fn.Code)
-	if n == 0 || c.fn.Code[n-1].Op != op || c.targets[n] {
-		return false
+	if n == 0 || c.targets[n] {
+		return 0, false
 	}
-	if l := len(c.fn.Lines); l > 0 && c.fn.Lines[l-1].PC == uint32(n) {
-		return false
+	last := &c.fn.Code[n-1]
+	switch {
+	case op == bytecode.OpGetLocal && last.Op == bytecode.OpGetLocal:
+		last.Op, last.B = bytecode.OpGetLocal2, a
+	case op == bytecode.OpGetLocal && last.Op == bytecode.OpSetLocal:
+		last.Op, last.B = bytecode.OpSetLocalGet, a
+	case op == bytecode.OpSetLocal && last.Op == bytecode.OpPushUndef:
+		last.Op, last.A = bytecode.OpClearLocal, a
+	case immediateOp(op) && last.Op == bytecode.OpPushInt:
+		last.Op, last.B = bytecode.OpBinImm, uint32(op)
+		if l := len(c.fn.Lines); l > 0 && c.fn.Lines[l-1].PC == uint32(n) {
+			c.fn.Lines[l-1].PC = uint32(n - 1)
+		}
+	default:
+		return 0, false
 	}
-	return true
+	return n - 1, true
+}
+
+// immediateOp reports whether a binary operator has a form taking its right
+// operand as an immediate, OpBinImm.
+func immediateOp(op bytecode.Op) bool {
+	switch op {
+	case bytecode.OpAdd, bytecode.OpSub, bytecode.OpMul, bytecode.OpBitAnd, bytecode.OpBitOr,
+		bytecode.OpBitXor, bytecode.OpShl, bytecode.OpShr, bytecode.OpUShr:
+		return true
+	}
+	return false
 }
 
 // emitAt emits an instruction and records its source line.
@@ -1287,6 +1313,10 @@ func stackEffect(op bytecode.Op, a, b uint32) int {
 	switch op {
 	case bytecode.OpGetLocal2:
 		return 2
+	case bytecode.OpSetLocalGet, bytecode.OpBinImm:
+		return 0
+	case bytecode.OpClearLocal:
+		return 0
 	case bytecode.OpUpdateLocal:
 		return 1
 	case bytecode.OpPushConst, bytecode.OpPushUndef, bytecode.OpPushNull,

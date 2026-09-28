@@ -761,6 +761,45 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		// --- Locals -------------------------------------------------------
 		case bytecode.OpGetLocal:
 			sp = pushAt(stack, sp, f.locals[in.A])
+		case bytecode.OpSetLocalGet:
+			locals := f.locals
+			locals[in.A] = stack[sp-1]
+			stack[sp-1] = locals[in.B]
+		case bytecode.OpClearLocal:
+			f.locals[in.A] = Undefined
+		case bytecode.OpBinImm:
+			a, b := stack[sp-1], Int32(int32(in.A))
+			op := bytecode.Op(in.B)
+			if a.IsNumber() {
+				x, y := a.Number(), int32(in.A)
+				switch op {
+				case bytecode.OpAdd:
+					stack[sp-1] = Float(x + float64(y))
+				case bytecode.OpSub:
+					stack[sp-1] = Float(x - float64(y))
+				case bytecode.OpMul:
+					stack[sp-1] = Float(x * float64(y))
+				case bytecode.OpBitAnd:
+					stack[sp-1] = Int32(jsnum.ToInt32(x) & y)
+				case bytecode.OpBitOr:
+					stack[sp-1] = Int32(jsnum.ToInt32(x) | y)
+				case bytecode.OpBitXor:
+					stack[sp-1] = Int32(jsnum.ToInt32(x) ^ y)
+				case bytecode.OpShl:
+					stack[sp-1] = Int32(jsnum.ToInt32(x) << (uint32(y) & 31))
+				case bytecode.OpShr:
+					stack[sp-1] = Int32(jsnum.ToInt32(x) >> (uint32(y) & 31))
+				default:
+					stack[sp-1] = Uint32(uint32(jsnum.ToInt32(x)) >> (uint32(y) & 31))
+				}
+				break
+			}
+			v, err := r.binImm(op, a, b)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			stack[sp-1] = v
 		case bytecode.OpGetLocal2:
 			locals := f.locals
 			stack[sp] = locals[in.A]
@@ -1620,38 +1659,36 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			sp = pushAt(stack, sp, Float(n.Number()+delta))
 
 		// --- Bitwise ------------------------------------------------------
-		case bytecode.OpBitAnd, bytecode.OpBitOr, bytecode.OpBitXor:
+		case bytecode.OpBitAnd, bytecode.OpBitOr, bytecode.OpBitXor, bytecode.OpShl, bytecode.OpShr, bytecode.OpUShr:
 			b, a := stack[sp-1], stack[sp-2]
 			sp -= 2
-			if !a.IsNumber() || !b.IsNumber() {
-				v, done, err := r.bigBitwise(in.Op, a, b)
-				if err != nil {
-					vmErr = err
-					goto onError
+			if a.IsNumber() && b.IsNumber() {
+				// Worked out here rather than in a call, which in Go costs
+				// the loop every register it had.
+				x := jsnum.ToInt32(a.Number())
+				switch in.Op {
+				case bytecode.OpBitAnd:
+					sp = pushAt(stack, sp, Int32(x&jsnum.ToInt32(b.Number())))
+				case bytecode.OpBitOr:
+					sp = pushAt(stack, sp, Int32(x|jsnum.ToInt32(b.Number())))
+				case bytecode.OpBitXor:
+					sp = pushAt(stack, sp, Int32(x^jsnum.ToInt32(b.Number())))
+				case bytecode.OpShl:
+					// Only the low five bits of the shift count are used.
+					sp = pushAt(stack, sp, Int32(x<<(jsnum.ToUint32(b.Number())&31)))
+				case bytecode.OpShr:
+					sp = pushAt(stack, sp, Int32(x>>(jsnum.ToUint32(b.Number())&31)))
+				default:
+					sp = pushAt(stack, sp, Uint32(uint32(x)>>(jsnum.ToUint32(b.Number())&31)))
 				}
-				if done {
-					sp = pushAt(stack, sp, v)
-					break
-				}
+				break
 			}
-			x, err := r.toInt32(a)
+			v, err := r.bitwise(in.Op, a, b)
 			if err != nil {
 				vmErr = err
 				goto onError
 			}
-			y, err := r.toInt32(b)
-			if err != nil {
-				vmErr = err
-				goto onError
-			}
-			switch in.Op {
-			case bytecode.OpBitAnd:
-				sp = pushAt(stack, sp, Int32(x&y))
-			case bytecode.OpBitOr:
-				sp = pushAt(stack, sp, Int32(x|y))
-			default:
-				sp = pushAt(stack, sp, Int32(x^y))
-			}
+			sp = pushAt(stack, sp, v)
 		case bytecode.OpBitNot:
 			sp--
 			v := stack[sp]
@@ -1677,69 +1714,6 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				goto onError
 			}
 			sp = pushAt(stack, sp, Int32(^x))
-		case bytecode.OpShl, bytecode.OpShr:
-			b, a := stack[sp-1], stack[sp-2]
-			sp -= 2
-			if !a.IsNumber() || !b.IsNumber() {
-				v, done, err := r.bigBitwise(in.Op, a, b)
-				if err != nil {
-					vmErr = err
-					goto onError
-				}
-				if done {
-					sp = pushAt(stack, sp, v)
-					break
-				}
-			}
-			x, err := r.toInt32(a)
-			if err != nil {
-				vmErr = err
-				goto onError
-			}
-			y, err := r.toUint32(b)
-			if err != nil {
-				vmErr = err
-				goto onError
-			}
-			// Only the low five bits of the shift count are used.
-			if in.Op == bytecode.OpShl {
-				sp = pushAt(stack, sp, Int32(x<<(y&31)))
-			} else {
-				sp = pushAt(stack, sp, Int32(x>>(y&31)))
-			}
-		case bytecode.OpUShr:
-			b, a := stack[sp-1], stack[sp-2]
-			sp -= 2
-			if !a.IsNumber() || !b.IsNumber() {
-				// Unsigned shift has no BigInt form: a BigInt has no width for
-				// the sign bit to be shifted out of.
-				na, err := r.toNumeric(a)
-				if err != nil {
-					vmErr = err
-					goto onError
-				}
-				nb, err := r.toNumeric(b)
-				if err != nil {
-					vmErr = err
-					goto onError
-				}
-				if na.IsBigInt() || nb.IsBigInt() {
-					vmErr = r.throwTypeError("BigInt has no unsigned right shift")
-					goto onError
-				}
-				a, b = na, nb
-			}
-			x, err := r.toUint32(a)
-			if err != nil {
-				vmErr = err
-				goto onError
-			}
-			y, err := r.toUint32(b)
-			if err != nil {
-				vmErr = err
-				goto onError
-			}
-			sp = pushAt(stack, sp, Uint32(x>>(y&31)))
 
 		// --- Comparison ---------------------------------------------------
 		case bytecode.OpEq, bytecode.OpNe:
@@ -3994,6 +3968,61 @@ func (r *Runtime) arith(op bytecode.Op, a, b Value) (Value, error) {
 		return r.bigArith(op, na.BigInt(), nb.BigInt())
 	}
 	return Float(numericOp(op, na.Number(), nb.Number())), nil
+}
+
+// int32Op applies a bitwise or shift operator to two numbers.
+func int32Op(op bytecode.Op, x, y float64) Value {
+	switch op {
+	case bytecode.OpBitAnd:
+		return Int32(jsnum.ToInt32(x) & jsnum.ToInt32(y))
+	case bytecode.OpBitOr:
+		return Int32(jsnum.ToInt32(x) | jsnum.ToInt32(y))
+	case bytecode.OpBitXor:
+		return Int32(jsnum.ToInt32(x) ^ jsnum.ToInt32(y))
+	case bytecode.OpShl:
+		// Only the low five bits of the shift count are used.
+		return Int32(jsnum.ToInt32(x) << (jsnum.ToUint32(y) & 31))
+	case bytecode.OpShr:
+		return Int32(jsnum.ToInt32(x) >> (jsnum.ToUint32(y) & 31))
+	default:
+		return Uint32(jsnum.ToUint32(x) >> (jsnum.ToUint32(y) & 31))
+	}
+}
+
+// bitwise applies a bitwise or shift operator to operands that are not both
+// numbers. Each is coerced once -- a valueOf runs once, as it does in every
+// engine -- and a pair of BigInts has the BigInt operator.
+func (r *Runtime) bitwise(op bytecode.Op, a, b Value) (Value, error) {
+	na, err := r.toNumeric(a)
+	if err != nil {
+		return Undefined, err
+	}
+	nb, err := r.toNumeric(b)
+	if err != nil {
+		return Undefined, err
+	}
+	if na.IsBigInt() || nb.IsBigInt() {
+		if op == bytecode.OpUShr {
+			// Unsigned shift has no BigInt form: a BigInt has no width for
+			// the sign bit to be shifted out of.
+			return Undefined, r.throwTypeError("BigInt has no unsigned right shift")
+		}
+		v, _, err := r.bigBitwise(op, na, nb)
+		return v, err
+	}
+	return int32Op(op, na.Number(), nb.Number()), nil
+}
+
+// binImm is OpBinImm for a left operand that is not a number: what the
+// operator's own instruction does then.
+func (r *Runtime) binImm(op bytecode.Op, a, b Value) (Value, error) {
+	switch op {
+	case bytecode.OpAdd:
+		return r.add(a, b)
+	case bytecode.OpSub, bytecode.OpMul:
+		return r.arith(op, a, b)
+	}
+	return r.bitwise(op, a, b)
 }
 
 // bigBitwise applies a bitwise or shift operator when either side may be a

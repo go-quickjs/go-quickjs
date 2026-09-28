@@ -50,6 +50,15 @@ const (
 	// operands of a binary operator, a call's receiver and argument -- and
 	// one instruction to dispatch is half the cost of two.
 	OpGetLocal2
+	// OpSetLocalGet is set_local A then get_local B: a statement storing to a
+	// local, and the next reading one.
+	OpSetLocalGet
+	// OpClearLocal is push_undef then set_local A: `let x;` in a loop.
+	OpClearLocal
+	// OpBinImm is push_int A then the binary operator B: `x & 0xff`,
+	// `x >> 16`, `i + 1`. A number on the left is worked out here; anything
+	// else has A pushed and B run as it would have been.
+	OpBinImm
 	OpSetLocal // pop into Locals[A]
 	OpPutLocal // store the top into Locals[A] without popping
 	// OpGetLocalCheck reports a ReferenceError if the local is still in its
@@ -509,7 +518,8 @@ var opNames = [opCount]string{
 	OpRot3: "rot3", OpRot4: "rot4",
 	OpInsert2: "insert2", OpInsert3: "insert3", OpInsert4: "insert4",
 
-	OpGetLocal: "get_local", OpGetLocal2: "get_local2", OpSetLocal: "set_local", OpPutLocal: "put_local",
+	OpGetLocal: "get_local", OpGetLocal2: "get_local2", OpSetLocalGet: "set_local_get",
+	OpClearLocal: "clear_local", OpBinImm: "bin_imm", OpSetLocal: "set_local", OpPutLocal: "put_local",
 	OpGetLocalCheck: "get_local_check", OpSetLocalCheck: "set_local_check",
 	OpInitLocal: "init_local",
 
