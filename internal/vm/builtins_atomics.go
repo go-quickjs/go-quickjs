@@ -123,13 +123,17 @@ func (r *Runtime) initSharedArrayBufferBuiltins() {
 		if n > b.maxByteLength {
 			return Undefined, rt.throwRangeError("the new length exceeds the SharedArrayBuffer's maxByteLength")
 		}
+		b.sharedMemory()
 		if n < int64(len(b.bytes)) {
 			return Undefined, rt.throwRangeError("a SharedArrayBuffer cannot shrink")
 		}
 		if err := rt.reserveMemory(int(n) - len(b.bytes)); err != nil {
 			return Undefined, err
 		}
-		b.block.grow(int(n))
+		if !b.block.grow(int(n)) {
+			// Another agent grew it past n in the meantime.
+			return Undefined, rt.throwRangeError("a SharedArrayBuffer cannot shrink")
+		}
 		b.sharedMemory()
 		return Undefined, nil
 	})

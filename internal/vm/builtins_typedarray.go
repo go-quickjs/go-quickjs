@@ -166,8 +166,7 @@ func (r *Runtime) searchStart(v Value, length int) (int, bool, error) {
 // Answering zero is what turns a detached or shrunk buffer into an
 // out-of-range access instead of a crash.
 func (t *typedArrayData) count() int {
-	b, _ := t.buffer.data.(*arrayBufferData)
-	return t.countIn(b)
+	return t.countIn(t.storage())
 }
 
 // countIn is count over the storage the caller has already looked up, which
@@ -875,6 +874,8 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 		// A view over an existing buffer, which aliases rather than copies.
 		buf := first.Object()
 		b := buf.data.(*arrayBufferData)
+		// Measured as it is now: another agent may have grown it.
+		b.sharedMemory()
 		off, err := r.toIndex(arg(args, 1))
 		if err != nil {
 			return Undefined, err

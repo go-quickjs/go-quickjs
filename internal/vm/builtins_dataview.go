@@ -65,6 +65,11 @@ func (r *Runtime) requireViewInBounds(d *dataViewData) error {
 
 func (d *dataViewData) storage() *arrayBufferData {
 	b, _ := d.buffer.data.(*arrayBufferData)
+	if b != nil && b.block != nil {
+		// Another agent may have grown shared memory since it was last
+		// looked at here.
+		b.sharedMemory()
+	}
 	return b
 }
 
@@ -111,6 +116,7 @@ func (r *Runtime) initDataViewBuiltins() {
 		}
 		buf := bufArg.Object()
 		storage := buf.data.(*arrayBufferData)
+		storage.sharedMemory()
 
 		off, err := rt.toIndex(arg(args, 1))
 		if err != nil {

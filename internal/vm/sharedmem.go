@@ -90,10 +90,15 @@ func (m *SharedMemory) bytes() []byte {
 	return m.mem[:m.length.Load()]
 }
 
-// grow makes the memory n bytes long, which is no shorter than it is.
-func (m *SharedMemory) grow(n int) {
+// grow makes the memory n bytes long, and reports false, changing nothing,
+// when it is longer than that already: another agent may have grown it since
+// the caller looked, and the check has to be made where no other can.
+func (m *SharedMemory) grow(n int) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if int64(n) < m.length.Load() {
+		return false
+	}
 	if n > cap(m.mem) {
 		// Only memory no other agent sees can move, and memory that is
 		// shared has reserved its maximum.
@@ -104,6 +109,7 @@ func (m *SharedMemory) grow(n int) {
 	if int64(n) > m.length.Load() {
 		m.length.Store(int64(n))
 	}
+	return true
 }
 
 // maxShareableReserve bounds what a growable buffer may reserve to be

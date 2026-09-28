@@ -286,3 +286,47 @@ func TestWaitForAges(t *testing.T) {
 		t.Errorf("outcome = %v", v)
 	}
 }
+
+// TestViewsSeeSharedGrowth pins that views, and the constructors of views,
+// measure a growable SharedArrayBuffer as it is after another runtime grew
+// it: they measured it as it was when this runtime last read its byteLength,
+// so a length-tracking view stayed short and a view past the old end was a
+// RangeError (KI-37).
+func TestViewsSeeSharedGrowth(t *testing.T) {
+	a, b := sharedPair(t, "new SharedArrayBuffer(8, { maxByteLength: 64 })")
+	if _, err := b.Eval(`var tracking = new Int32Array(sab), dv = new DataView(sab), fixed = new Int32Array(sab, 0, 2)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Eval(`sab.grow(32); new Int32Array(sab)[6] = 42`); err != nil {
+		t.Fatal(err)
+	}
+	// Nothing reads sab.byteLength before the views are asked.
+	v, err := b.Eval(`const attempt = (f) => { try { return f() } catch (e) { return e.name } };
+		[attempt(() => new Int32Array(sab, 16).length), attempt(() => new DataView(sab, 16).byteLength),
+		 tracking.length, tracking[6], dv.byteLength, attempt(() => dv.getInt32(24, true)), fixed.length,
+		 Atomics.load(tracking, 6), sab.byteLength].join()`)
+	if err != nil || v.String() != "4,16,8,42,32,42,2,42,32" {
+		t.Errorf("= %v, %v", v, err)
+	}
+}
+
+// TestSharedGrowCannotShrink pins that growing a shared buffer to less than
+// another runtime has grown it to is the RangeError a shrink is. The check is
+// made again under the memory's lock, where a grow racing a larger one used
+// to succeed doing nothing (KI-38); TestSharedMemoryGrowRefusesShrink in the
+// vm package pins that part, which no script can time.
+func TestSharedGrowCannotShrink(t *testing.T) {
+	a, b := sharedPair(t, "new SharedArrayBuffer(8, { maxByteLength: 64 })")
+	if _, err := a.Eval(`sab.grow(32)`); err != nil {
+		t.Fatal(err)
+	}
+	v, err := b.Eval(`let r; try { sab.grow(16); r = "grew" } catch (e) { r = e.name } r + "," + sab.byteLength`)
+	if err != nil || v.String() != "RangeError,32" {
+		t.Errorf("= %v, %v", v, err)
+	}
+	// Growing to what it already is, or more, is fine.
+	v, err = b.Eval(`sab.grow(32); sab.grow(40); sab.byteLength`)
+	if err != nil || v.String() != "40" {
+		t.Errorf("= %v, %v", v, err)
+	}
+}

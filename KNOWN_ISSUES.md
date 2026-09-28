@@ -412,12 +412,13 @@ Paths are relative to this repository; `go-intl:` paths are in
 ### KI-37 Views don't see another runtime's growth of a shared buffer
 - **Where:** `typedArrayData.count()` and `DataView` storage, and the
   constructors, read the buffer's cached length.
-- **Status:** open.
+- **Status:** fixed. Both kinds of view, and both constructors, bring the
+  length up to date before they measure it.
 
 ### KI-38 A `grow` that loses a race to a larger one succeeds *(plausible)*
 - **Where:** `internal/vm/builtins_atomics.go`. The length check is made
   outside the memory's lock.
-- **Status:** open.
+- **Status:** fixed. `grow` checks again under the lock and refuses a shrink.
 
 ### KI-39 Regular expression semantics
 - **Counted quantifiers:** they never apply the empty-iteration check:
