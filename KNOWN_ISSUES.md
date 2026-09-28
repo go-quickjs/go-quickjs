@@ -528,7 +528,9 @@ Paths are relative to this repository; `go-intl:` paths are in
   are refused.
 - *Plausible:* qjs's own error output doesn't take the lock the workers'
   writes take.
-- **Status:** open.
+- **Status:** fixed. File URLs are read as node's `fileURLToPath` reads them
+  on the platform, data URLs as the Fetch standard reads them, and qjs's own
+  output takes a lock the workers' writes take too.
 
 ### KI-51 The `Intl` getter can build a second `Intl`
 - **Effect:** calling the lazy getter again rebuilds `Intl`, which breaks

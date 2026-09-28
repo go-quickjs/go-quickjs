@@ -40,6 +40,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	// The time zone database, so that a script can format a date in any zone
 	// on any machine, including one that keeps no zone files of its own.
@@ -84,6 +85,9 @@ type options struct {
 }
 
 func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	// The program's workers write from goroutines of their own, and so does
+	// qjs, reporting what went wrong: every write to either takes one lock.
+	stdout, stderr = &lockedWriter{w: stdout}, &lockedWriter{w: stderr}
 	opts, err := parseArgs(argv, stdout)
 	if err != nil {
 		fmt.Fprintln(stderr, "qjs:", err)
@@ -223,17 +227,76 @@ func loadWorker(specifier string) (string, string, bool, error) {
 	return string(src), path, moduleByName(path, string(src)), nil
 }
 
-// decodeDataURL is the text a data URL holds.
+// lockedWriter is a writer written to by one goroutine at a time.
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
+}
+
+// decodeDataURL is the text a data URL holds, as the Fetch standard reads
+// one: the payload is percent-decoded, leaving a % that begins no escape as
+// it is; a ";base64" in any case says the rest is base64, which is read
+// forgivingly -- white space skipped, and the padding optional.
 func decodeDataURL(spec string) (string, error) {
 	meta, payload, ok := strings.Cut(strings.TrimPrefix(spec, "data:"), ",")
 	if !ok {
 		return "", fmt.Errorf("the data URL %q has no data", spec)
 	}
-	if strings.HasSuffix(meta, ";base64") {
-		b, err := base64.StdEncoding.DecodeString(payload)
-		return string(b), err
+	body := percentDecode(payload)
+	meta = strings.TrimRight(meta, " \t\n\f\r")
+	if len(meta) >= 7 && strings.EqualFold(meta[len(meta)-7:], ";base64") {
+		b, err := forgivingBase64(body)
+		if err != nil {
+			return "", fmt.Errorf("the data URL %q is not base64", spec)
+		}
+		return string(b), nil
 	}
-	return url.PathUnescape(payload)
+	return body, nil
+}
+
+// percentDecode decodes %XX escapes, and leaves a % that begins none as it
+// is, as the URL standard's percent-decode does.
+func percentDecode(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '%' && i+2 < len(s) && isHex(s[i+1]) && isHex(s[i+2]) {
+			v, _ := strconv.ParseUint(s[i+1:i+3], 16, 8)
+			b.WriteByte(byte(v))
+			i += 2
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
+func isHex(c byte) bool {
+	return '0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F'
+}
+
+// forgivingBase64 is the Infra standard's forgiving-base64 decode: ASCII
+// white space is dropped, and the padding may be left off.
+func forgivingBase64(s string) ([]byte, error) {
+	s = strings.Map(func(r rune) rune {
+		if r == ' ' || r == '\t' || r == '\n' || r == '\f' || r == '\r' {
+			return -1
+		}
+		return r
+	}, s)
+	if len(s)%4 == 0 {
+		s = strings.TrimSuffix(s, "=")
+		s = strings.TrimSuffix(s, "=")
+	}
+	if len(s)%4 == 1 {
+		return nil, errors.New("invalid base64")
+	}
+	return base64.RawStdEncoding.DecodeString(s)
 }
 
 // localPath is the absolute path a specifier names: a file URL, or a path,
@@ -241,23 +304,57 @@ func decodeDataURL(spec string) (string, error) {
 func localPath(specifier, base string) (string, error) {
 	path := specifier
 	if strings.HasPrefix(specifier, "file:") {
-		u, err := url.Parse(specifier)
-		if err != nil {
+		var err error
+		if path, err = fileURLPath(specifier, filepath.Separator == '\\'); err != nil {
 			return "", err
 		}
-		path = u.Path
-		if u.Host != "" && u.Host != "localhost" {
-			path = `\\` + u.Host + filepath.FromSlash(path)
-		} else if len(path) >= 3 && path[0] == '/' && path[2] == ':' {
-			// file:///C:/x names C:/x.
-			path = path[1:]
-		}
-		path = filepath.FromSlash(path)
 	}
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(base, path)
 	}
 	return filepath.Abs(path)
+}
+
+// fileURLPath is the path a file URL names, as node's fileURLToPath reads it
+// on Windows or elsewhere: the host localhost, in any case, is no host; any
+// other is a UNC server on Windows and refused elsewhere; a drive letter is
+// one only on Windows; and an encoded separator is refused, as it would name
+// another path.
+func fileURLPath(specifier string, windows bool) (string, error) {
+	u, err := url.Parse(specifier)
+	if err != nil {
+		return "", err
+	}
+	path := u.Path
+	escaped := strings.ToLower(u.EscapedPath())
+	if u.Opaque != "" {
+		// file:C:/x is file:///C:/x, as the URL standard parses it.
+		escaped = strings.ToLower(u.Opaque)
+		if path, err = url.PathUnescape(u.Opaque); err != nil {
+			return "", err
+		}
+		path = "/" + path
+	}
+	if strings.Contains(escaped, "%2f") || windows && strings.Contains(escaped, "%5c") {
+		return "", fmt.Errorf("the file URL %q has an encoded path separator", specifier)
+	}
+	host := u.Host
+	if strings.EqualFold(host, "localhost") {
+		host = ""
+	}
+	switch {
+	case host != "" && windows:
+		return `\\` + host + strings.ReplaceAll(path, "/", `\`), nil
+	case host != "":
+		return "", fmt.Errorf(`the file URL %q has a host, which must be "localhost" or empty`, specifier)
+	case windows && len(path) >= 3 && path[0] == '/' && path[2] == ':':
+		// file:///C:/x names C:/x.
+		return strings.ReplaceAll(path[1:], "/", `\`), nil
+	case windows:
+		// A path on Windows is on a drive or a server.
+		return "", fmt.Errorf("the file URL %q must be absolute", specifier)
+	}
+	return path, nil
 }
 
 // fileURL writes an absolute native path as a file URL. Drive-letter paths

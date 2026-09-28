@@ -650,3 +650,43 @@ func TestProcessEnding(t *testing.T) {
 		t.Errorf("not listening: code=%d err=%q", code, errOut)
 	}
 }
+
+// TestFileAndDataURLs pins how qjs reads file and data URLs, as node's
+// fileURLToPath and import do, on Windows and elsewhere: localhost, in any
+// case, is no host; another host is a UNC server on Windows and refused
+// elsewhere; file:C:/x is file:///C:/x; an encoded separator is refused; a
+// data URL's ;BASE64 is in any case, its padding optional, and a % that
+// begins no escape is kept (KI-50).
+func TestFileAndDataURLs(t *testing.T) {
+	for _, c := range []struct{ url, posix, windows string }{
+		{"file://LOCALHOST/tmp/x.js", "/tmp/x.js", "error"},
+		{"file://127.0.0.1/share/x.js", "error", `\\127.0.0.1\share\x.js`},
+		{"file:///C:", "/C:", "C:"},
+		{"file:///C:/x/y.js", "/C:/x/y.js", `C:\x\y.js`},
+		{"file:C:/x/y.js", "/C:/x/y.js", `C:\x\y.js`},
+		{"file:///tmp/a%2Fb.js", "error", "error"},
+		{"file:///tmp/a%5Cb.js", `/tmp/a\b.js`, "error"},
+		{"file:///tmp/a%20b.js", "/tmp/a b.js", "error"},
+	} {
+		for _, w := range []bool{false, true} {
+			got, err := fileURLPath(c.url, w)
+			if err != nil {
+				got = "error"
+			}
+			if want := map[bool]string{false: c.posix, true: c.windows}[w]; got != want {
+				t.Errorf("%s (windows %v) = %q, want %q", c.url, w, got, want)
+			}
+		}
+	}
+	for spec, want := range map[string]string{
+		"data:text/javascript;BASE64,ZXhwb3J0IGRlZmF1bHQgMQ":     "export default 1",
+		"data:text/javascript;base64,ZXhwb3J0IGRlZmF1bHQgMg==":   "export default 2",
+		`data:text/javascript,export default "a%zzb%41"`:         `export default "a%zzbA"`,
+		"data:text/javascript;base64 ,ZXhwb3J0IGRlZmF1bHQgMw==":  "export default 3",
+		"data:text/javascript;base64,ZXhw b3J0 IGRlZmF1bHQgNA==": "export default 4",
+	} {
+		if got, err := decodeDataURL(spec); err != nil || got != want {
+			t.Errorf("%s = %q, %v; want %q", spec, got, err, want)
+		}
+	}
+}
