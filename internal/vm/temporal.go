@@ -83,6 +83,9 @@ func (k temporalKind[T]) ctor(ns *Object, length int, make func(rt *Runtime, arg
 		}}
 	c.setOwnRaw(atomPrototype, Obj(proto), 0)
 	proto.setOwnRaw(atomConstructor, Obj(c), propWritable|propConfigurable)
+	// Named, so that another realm's new.target without a prototype of its
+	// own finds its realm's counterpart of this one.
+	k.r.registerIntrinsic("Temporal."+k.name, proto)
 	k.r.defValue(ns, k.name, Obj(c))
 	k.r.defToStringTag(proto, "Temporal."+k.name)
 	return c

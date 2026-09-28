@@ -539,7 +539,8 @@ Paths are relative to this repository; `go-intl:` paths are in
 
 ### KI-52 Temporal constructors take the wrong realm's prototype
 - **When:** `new.target.prototype` is not an object.
-- **Status:** open.
+- **Status:** fixed. Temporal's prototypes are named intrinsics, as Intl's
+  are, so another realm's counterpart is found.
 
 ### KI-53 BigInts above about 1.8e308 are formatted as `∞`
 - **Where:** go-intl has no exact decimal for a BigInt.

@@ -182,3 +182,45 @@ func TestGeneratorRunsInItsRealm(t *testing.T) {
 		t.Errorf("= %v, %v", v, err)
 	}
 }
+
+// TestTemporalProtoFromConstructorRealm pins that a Temporal constructor
+// called with a new.target from another realm, whose prototype property is
+// not an object, gives the object the prototype of new.target's realm, as
+// GetPrototypeFromConstructor has it; it took the running realm's (KI-52).
+func TestTemporalProtoFromConstructorRealm(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	re, err := rt.NewRealm()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := re.Eval(`var nt = function () {}; nt.prototype = null;`); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.Set("other", re.Global()); err != nil {
+		t.Fatal(err)
+	}
+	v, err := rt.Eval(`const kinds = {
+			PlainDate: [2020, 1, 1], PlainTime: [], PlainDateTime: [2020, 1, 1], PlainYearMonth: [2020, 1],
+			PlainMonthDay: [1, 1], Duration: [], Instant: [0n], ZonedDateTime: [0n, "UTC"],
+		};
+		Object.entries(kinds).map(([k, args]) => {
+			const o = Reflect.construct(Temporal[k], args, other.nt);
+			return k + ":" + (Object.getPrototypeOf(o) === other.Temporal[k].prototype);
+		}).join()`)
+	want := "PlainDate:true,PlainTime:true,PlainDateTime:true,PlainYearMonth:true,PlainMonthDay:true,Duration:true,Instant:true,ZonedDateTime:true"
+	if err != nil || v.String() != want {
+		t.Errorf("= %v, %v", v, err)
+	}
+	// Intl's constructors, built as lazily, find theirs too.
+	v, err = rt.Eval(`["Collator", "DateTimeFormat", "NumberFormat", "PluralRules", "RelativeTimeFormat",
+		"ListFormat", "Segmenter", "DurationFormat"].map((k) => {
+			const o = Reflect.construct(Intl[k], [], other.nt);
+			return k + ":" + (Object.getPrototypeOf(o) === other.Intl[k].prototype);
+		}).join()`)
+	want = "Collator:true,DateTimeFormat:true,NumberFormat:true,PluralRules:true,RelativeTimeFormat:true," +
+		"ListFormat:true,Segmenter:true,DurationFormat:true"
+	if err != nil || v.String() != want {
+		t.Errorf("Intl = %v, %v", v, err)
+	}
+}
