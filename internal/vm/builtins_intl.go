@@ -3,7 +3,6 @@ package vm
 import (
 	"fmt"
 	"math"
-	"strconv"
 	"strings"
 	"time"
 
@@ -185,7 +184,15 @@ func (r *Runtime) requestedLocales(v Value) ([]string, error) {
 	}
 	var out []string
 	for i := int64(0); i < length; i++ {
-		key := r.atoms.intern(strconv.FormatInt(i, 10))
+		// A length of 2^53 - 1 is a loop the interpreter never sees, and
+		// most of its indices are names nothing has.
+		if err := r.tick(); err != nil {
+			return nil, err
+		}
+		key, known := r.knownIndexKey(o, i)
+		if !known {
+			continue
+		}
 		has, err := r.hasPropErr(o, key)
 		if err != nil {
 			return nil, err

@@ -78,3 +78,29 @@ func TestNestedEvalKeepsTheOuterCall(t *testing.T) {
 		t.Errorf("stopped after %v", d)
 	}
 }
+
+// TestNativeLoopsAreInterruptible pins that a deadline stops the engine's
+// own loops that run no script between their steps: fill over an array-like
+// of four billion, JSON.stringify of a long dense array, and Intl's reading
+// of a locale list of length 2^53 - 1 (KI-16).
+func TestNativeLoopsAreInterruptible(t *testing.T) {
+	for name, src := range map[string]string{
+		"fill":        `Array.prototype.fill.call({length: 2 ** 32 + 3}, 7)`,
+		"stringify":   `JSON.stringify(new Array(3e7).fill(1)).length`,
+		"locale list": `Intl.getCanonicalLocales({length: 2 ** 53 - 1})`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			rt := quickjs.New()
+			defer rt.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+			defer cancel()
+			start := time.Now()
+			if _, err := rt.EvalContext(ctx, src); !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("err = %v, want the deadline", err)
+			}
+			if d := time.Since(start); d > 3*time.Second {
+				t.Errorf("stopped after %v", d)
+			}
+		})
+	}
+}

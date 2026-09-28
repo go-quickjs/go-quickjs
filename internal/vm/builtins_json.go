@@ -54,7 +54,7 @@ func (r *Runtime) initJSONBuiltins() {
 			// function, stringifies to undefined rather than to a string.
 			return Undefined, nil
 		}
-		return Str(NewString(string(buf))), nil
+		return rt.builtString(string(buf))
 	})
 
 	r.defMethod(j, "parse", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -519,6 +519,15 @@ func (e *jsonEncoder) encode(buf []byte, v Value, prefix string) ([]byte, bool, 
 		buf = append(buf, open...)
 		var keybuf []byte
 		for i := int64(0); i < a.n; i++ {
+			// A dense array is read without the script running, so the
+			// walk checks for an interrupt itself; and what it writes may
+			// grow past what a string can be.
+			if err := e.rt.tick(); err != nil {
+				return buf, false, err
+			}
+			if len(buf) > 3*maxStringLength {
+				return buf, false, e.rt.throwStringLength()
+			}
 			if i > 0 {
 				buf = append(buf, sep...)
 			}
@@ -593,6 +602,12 @@ func (e *jsonEncoder) encode(buf []byte, v Value, prefix string) ([]byte, bool, 
 	buf = append(buf, open...)
 	written := 0
 	for _, k := range keys {
+		if err := e.rt.tick(); err != nil {
+			return buf, false, err
+		}
+		if len(buf) > 3*maxStringLength {
+			return buf, false, e.rt.throwStringLength()
+		}
 		val, err := e.rt.getProp(o, k, v)
 		if err != nil {
 			return buf, false, err

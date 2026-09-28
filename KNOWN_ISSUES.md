@@ -209,7 +209,10 @@ Paths are relative to this repository; `go-intl:` paths are in
   - `JSON.stringify` of 1e7 elements
   - `Intl.getCanonicalLocales` on a huge array-like
   - module linking, which is also quadratic
-- **Status:** open.
+- **Status:** in progress. `fill` on an array-like, `JSON.stringify`'s walk
+  and Intl's locale lists check for an interrupt; `JSON.stringify` is held
+  to KI-03's longest string. Regular expressions, `indexOf`, `toUpperCase`,
+  BigInt `**` and module linking are open.
 
 ### KI-17 The regular expression step budget rejects ordinary patterns
 - **Effect:** `/z/.test("a".repeat(6e7))` and `/a*z/.test("a".repeat(2e4))`

@@ -178,8 +178,12 @@ func (a *arrayLike) get(r *Runtime, i int64) (Value, error) {
 	return r.getProp(a.o, key, Obj(a.o))
 }
 
-// set writes the index.
+// set writes the index. Writing need not run the script, and a method that
+// writes every index of a length of 2^53 - 1 checks for an interrupt here.
 func (a *arrayLike) set(r *Runtime, i int64, v Value) error {
+	if err := r.tick(); err != nil {
+		return err
+	}
 	_, err := r.setProp(a.o, r.indexKey(i), v, Obj(a.o), true)
 	return err
 }
