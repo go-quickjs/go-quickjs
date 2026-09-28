@@ -917,31 +917,32 @@ better.
 
 | Workload | go-quickjs | goja | Relative result |
 |---|---:|---:|---:|
-| Richards | 757 | 505 | go-quickjs 1.50x |
-| DeltaBlue | 961 | 610 | go-quickjs 1.58x |
-| Crypto | 655 | 321 | go-quickjs 2.04x |
-| RayTrace | 2,036 | 726 | go-quickjs 2.80x |
-| EarleyBoyer | 2,621 | 1,359 | go-quickjs 1.93x |
-| RegExp | 417 | 563 | goja 1.35x |
-| Splay | 4,958 | 2,392 | go-quickjs 2.07x |
-| NavierStokes | 1,404 | 541 | go-quickjs 2.60x |
-| **Composite score** | **1,286** | **720** | **go-quickjs 1.79x** |
+| Richards | 736 | 489 | go-quickjs 1.51x |
+| DeltaBlue | 868 | 610 | go-quickjs 1.42x |
+| Crypto | 697 | 317 | go-quickjs 2.20x |
+| RayTrace | 1,900 | 704 | go-quickjs 2.70x |
+| EarleyBoyer | 2,458 | 1,274 | go-quickjs 1.93x |
+| RegExp | 557 | 555 | effectively tied |
+| Splay | 4,123 | 2,526 | go-quickjs 1.63x |
+| NavierStokes | 1,424 | 547 | go-quickjs 2.60x |
+| **Composite score** | **1,279** | **711** | **go-quickjs 1.80x** |
 
 The complete fresh-process run includes runtime construction, parsing,
 compilation, the suite's warmups and its measured iterations:
 
 | Metric | go-quickjs | goja | Relative result |
 |---|---:|---:|---:|
-| Wall time | 40.07 s | 53.51 s | go-quickjs 1.34x faster |
-| Total allocation | 20.16 GiB | 32.17 GiB | go-quickjs 37.4% less |
+| Wall time | 37.89 s | 54.21 s | go-quickjs 1.43x faster |
+| Total allocation | 14.65 GiB | 31.79 GiB | go-quickjs 53.9% less |
 
 The suite warms every workload for at least one second, then measures for at
 least another second and continues until it has 32 measured iterations. Both
 engines evaluated the same concatenated benchmark sources and validation code.
-The measured revisions were go-quickjs `8046d79`, goja `793a2a6`, and
+The measured revisions were go-quickjs `eb139ef`, goja `793a2a6`, and
 AreWeFastYet `0e21608`. These results characterize this older interpreter
-workload suite rather than every application; notably, goja is faster on its
-regular-expression workload even though go-quickjs leads the other seven.
+workload suite rather than every application; notably, the engines are
+effectively tied on its regular-expression workload even though go-quickjs
+leads the other seven materially.
 
 ## License
 
