@@ -470,7 +470,9 @@ Paths are relative to this repository; `go-intl:` paths are in
   the halves of a pair where copies meet; the hex errors take V8's message.
 
 ### KI-45 `Iterator.prototype.take` and `drop` reject counts above 2^53 - 1
-- **Status:** open.
+- **Status:** resolved as a Node quirk. The standard (and test262) refuses a
+  finite count past 2^53 - 1, as the engine did; V8 takes it. `WithNodeQuirks`
+  now takes it too. Both modes give V8's message for NaN and negatives.
 
 ### KI-46 `toLocaleLowerCase` for tr, az and lt loses the final-sigma rule
 - **Status:** open.

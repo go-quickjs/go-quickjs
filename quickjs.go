@@ -170,7 +170,8 @@ func WithLocale(tag string) Option {
 // are created in the order they are written, where the standard creates the
 // functions first; and strict code assigning to a global name asks a proxy on
 // the global object's chain nothing first, taking it to have the name, where
-// the standard asks its has trap.
+// the standard asks its has trap; and Iterator.prototype.take and drop take a
+// finite count past 2^53 - 1, which the standard refuses.
 //
 // It is useful for hosts that prioritize Node compatibility over conformance.
 func WithNodeQuirks() Option {

@@ -175,6 +175,16 @@ Object.keys(globalThis).filter(k => /^(v|fn)[0-9]$/.test(k)).join()`, "fn1,fn2,v
 		{`Object.setPrototypeOf(globalThis, new Proxy(Object.getPrototypeOf(globalThis), {has(t, k) {
 			if (k === "unasked") throw "asked"; return Reflect.has(t, k) }}));
 		try { (0, eval)("'use strict'; unasked = 1; 'stored'") } catch (e) { e }`, "asked", "stored"},
+		// The standard refuses a finite take or drop count past 2^53 - 1;
+		// V8 takes it (KI-45). Both refuse NaN and negatives, with V8's
+		// message.
+		{`const e = (f) => { try { return f() } catch (x) { return x.name + ": " + x.message } };
+		const it = () => [1, 2, 3].values();
+		[e(() => it().take(2 ** 53).toArray().join()), e(() => it().drop(1e300).toArray().length),
+		 e(() => it().take(Infinity).toArray().join()), e(() => it().take(-1)), e(() => it().drop(NaN))].join(" | ")`,
+			"RangeError: 9007199254740992 must be at most 2^53 - 1 | RangeError: 1e+300 must be at most 2^53 - 1 | 1,2,3 | " +
+				"RangeError: -1 must be positive | RangeError: NaN must be positive",
+			"1,2,3 | 0 | 1,2,3 | RangeError: -1 must be positive | RangeError: NaN must be positive"},
 		// Anything else in the enclosing block still stops it.
 		{`(function () { { let h = 1; { function h() {} } } return typeof h; })()`, "undefined", "undefined"},
 		{`(function () { { async function h() {} { function h() {} } } return typeof h; })()`, "undefined", "undefined"},

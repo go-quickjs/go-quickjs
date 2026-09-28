@@ -1,6 +1,10 @@
 package vm
 
-import "math"
+import (
+	"math"
+
+	"github.com/go-quickjs/go-quickjs/internal/jsnum"
+)
 
 // Iterator helpers.
 //
@@ -196,18 +200,19 @@ func (r *Runtime) initIteratorHelpers() {
 					return Undefined, err
 				}
 				// NaN would otherwise compare false against every bound and
-				// silently behave as zero, and a count past the integer range
-				// cannot be counted down to.
-				if math.IsNaN(n) || (!math.IsInf(n, 0) && n > maxArrayLength) {
+				// silently behave as zero. The message is V8's.
+				if math.IsNaN(n) || math.Trunc(n) < 0 {
 					rt.closeIterator(this)
-					return Undefined, rt.throwRangeError("%s requires a count in range", name)
+					return Undefined, rt.throwRangeError("%s must be positive", jsnum.FormatFloat(n))
 				}
-				n = math.Trunc(n)
-				if n < 0 {
+				// The standard refuses a finite count past 2^53 - 1, which
+				// V8 does not: it takes one as given, as good as infinite
+				// (KI-45).
+				if !math.IsInf(n, 0) && n > maxArrayLength && !rt.nodeQuirks {
 					rt.closeIterator(this)
-					return Undefined, rt.throwRangeError("%s requires a non-negative count", name)
+					return Undefined, rt.throwRangeError("%s must be at most 2^53 - 1", jsnum.FormatFloat(n))
 				}
-				h.limit = n
+				h.limit = math.Trunc(n)
 			default:
 				fn := arg(args, 0)
 				if !isCallable(fn) {
