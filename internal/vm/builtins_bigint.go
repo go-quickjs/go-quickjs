@@ -150,6 +150,15 @@ func (r *Runtime) toBigIntOperand(v Value) (*BigInt, error) {
 	return out.BigInt(), nil
 }
 
+// maxBigIntBits is the most bits a BigInt may have: V8's, past which it
+// throws "Maximum BigInt size exceeded".
+const maxBigIntBits = 1 << 30
+
+// throwBigIntSize refuses a BigInt wider than maxBigIntBits.
+func (r *Runtime) throwBigIntSize() error {
+	return r.throwRangeError("Maximum BigInt size exceeded")
+}
+
 // bigIntAsN implements BigInt.asIntN and BigInt.asUintN, which truncate a
 // BigInt to a given number of bits.
 //
@@ -169,6 +178,17 @@ func (r *Runtime) bigIntAsN(args []Value, signed bool) (Value, error) {
 	}
 	if bits == 0 {
 		return Big(NewBigInt(0)), nil
+	}
+	// A value that already fits is itself, however wide the width: 2^bits
+	// need not be made to learn that. One that does not fit is a result as
+	// wide as bits, which past the limit no BigInt can be.
+	if signed && int64(bv.V.BitLen()) < bits || !signed && bv.V.Sign() >= 0 && int64(bv.V.BitLen()) <= bits {
+		b := &BigInt{}
+		b.V.Set(&bv.V)
+		return Big(b), nil
+	}
+	if bits > maxBigIntBits {
+		return Undefined, r.throwBigIntSize()
 	}
 
 	mod := new(big.Int).Lsh(big.NewInt(1), uint(bits))

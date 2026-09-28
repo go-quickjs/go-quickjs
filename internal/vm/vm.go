@@ -3719,9 +3719,12 @@ func (r *Runtime) bigBitwise(op bytecode.Op, a, b Value) (Value, bool, error) {
 			neg := new(big.Int).Neg(n)
 			n, left = neg, !left
 		}
-		if !n.IsInt64() || n.Int64() > 1<<24 {
+		if !n.IsInt64() || n.Int64() > maxBigIntBits {
 			if left {
-				return Undefined, false, r.throwRangeError("BigInt shift is too large")
+				if x.Sign() == 0 {
+					break
+				}
+				return Undefined, false, r.throwBigIntSize()
 			}
 			// Shifting right past every bit leaves the sign: zero, or minus
 			// one for a negative value.
@@ -3731,6 +3734,9 @@ func (r *Runtime) bigBitwise(op bytecode.Op, a, b Value) (Value, bool, error) {
 			break
 		}
 		if left {
+			if x.Sign() != 0 && int64(x.BitLen())+n.Int64() > maxBigIntBits {
+				return Undefined, false, r.throwBigIntSize()
+			}
 			out.V.Lsh(x, uint(n.Int64()))
 		} else {
 			// An arithmetic shift, which big.Int's Rsh already is.
@@ -3827,11 +3833,29 @@ func relationalResult(op bytecode.Op, c cmpResult) bool {
 func (r *Runtime) bigArith(op bytecode.Op, a, b *BigInt) (Value, error) {
 	out := &BigInt{}
 	switch op {
-	case bytecode.OpAdd:
-		out.V.Add(&a.V, &b.V)
-	case bytecode.OpSub:
-		out.V.Sub(&a.V, &b.V)
+	case bytecode.OpAdd, bytecode.OpSub:
+		if max(a.V.BitLen(), b.V.BitLen())+1 > maxBigIntBits {
+			// The one case where a sum could exceed the limit.
+			if op == bytecode.OpAdd {
+				out.V.Add(&a.V, &b.V)
+			} else {
+				out.V.Sub(&a.V, &b.V)
+			}
+			if out.V.BitLen() > maxBigIntBits {
+				return Undefined, r.throwBigIntSize()
+			}
+			return Big(out), nil
+		}
+		if op == bytecode.OpAdd {
+			out.V.Add(&a.V, &b.V)
+		} else {
+			out.V.Sub(&a.V, &b.V)
+		}
 	case bytecode.OpMul:
+		// A product has at least as many bits as its factors' less one.
+		if a.V.Sign() != 0 && b.V.Sign() != 0 && a.V.BitLen()+b.V.BitLen()-1 > maxBigIntBits {
+			return Undefined, r.throwBigIntSize()
+		}
 		out.V.Mul(&a.V, &b.V)
 	case bytecode.OpDiv:
 		if b.IsZero() {
@@ -3848,10 +3872,29 @@ func (r *Runtime) bigArith(op bytecode.Op, a, b *BigInt) (Value, error) {
 		if b.V.Sign() < 0 {
 			return Undefined, r.throwRangeError("a BigInt cannot be raised to a negative power")
 		}
+		// Zero, one and minus one stay small whatever the power; anything
+		// else has at least as many bits as the power, times its own less
+		// one, which is checked before the work -- and exactly after it.
+		if a.V.CmpAbs(big.NewInt(1)) > 0 && b.V.Sign() > 0 {
+			if !b.V.IsInt64() || b.V.Int64() > maxBigIntBits ||
+				int64(a.V.BitLen()-1)*b.V.Int64() > maxBigIntBits {
+				return Undefined, r.throwBigIntSize()
+			}
+		}
 		if !b.V.IsInt64() {
-			return Undefined, r.throwRangeError("BigInt exponent is too large")
+			// The base is 0, 1 or -1, and the power's parity is all that
+			// matters.
+			if b.V.Bit(0) == 0 {
+				out.V.Exp(&a.V, big.NewInt(2), nil)
+			} else {
+				out.V.Set(&a.V)
+			}
+			return Big(out), nil
 		}
 		out.V.Exp(&a.V, &b.V, nil)
+		if out.V.BitLen() > maxBigIntBits {
+			return Undefined, r.throwBigIntSize()
+		}
 	default:
 		return Undefined, r.throwTypeError("unsupported BigInt operation")
 	}

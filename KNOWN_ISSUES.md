@@ -213,8 +213,11 @@ Paths are relative to this repository; `go-intl:` paths are in
   and Intl's locale lists check for an interrupt; `JSON.stringify` is held
   to KI-03's longest string. A regular expression's match checks for one
   where the host can stop the script, and compiling one is linear, as are
-  `indexOf` and `lastIndexOf`. `toUpperCase`, BigInt `**` and module linking
-  are open.
+  `indexOf` and `lastIndexOf`. A BigInt is held to V8's 2^30 bits, checked
+  before the work where it can be. `toUpperCase` of a string as long as one
+  can be, and BigInt `**` within the limit, take a few seconds that cannot
+  be interrupted, as they take V8 somewhat less; that is accepted. Module
+  linking is open.
 
 ### KI-17 The regular expression step budget rejects ordinary patterns
 - **Effect:** `/z/.test("a".repeat(6e7))` and `/a*z/.test("a".repeat(2e4))`
