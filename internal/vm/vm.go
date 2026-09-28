@@ -2,6 +2,7 @@ package vm
 
 import (
 	"errors"
+	"github.com/go-quickjs/go-quickjs/internal/fdlibm"
 	"math"
 	"math/big"
 	"unsafe"
@@ -3835,17 +3836,27 @@ func numericOp(op bytecode.Op, a, b float64) float64 {
 	return math.NaN()
 }
 
-// jsPow implements the ** operator, which differs from math.Pow in one case:
-// any base raised to a NaN exponent is NaN, including 1 ** NaN.
+// jsPow implements the ** operator and Math.pow as V8 does: the C library's
+// pow -- here Arm's, from its Optimized Routines, which glibc ships and so
+// Node on Linux uses -- after the cases where JavaScript's differs from C's,
+// and the two V8 answers without calling it.
 func jsPow(a, b float64) float64 {
-	if math.IsNaN(b) {
+	switch {
+	case math.IsNaN(b):
+		// 1 ** NaN is 1 in C.
 		return math.NaN()
-	}
-	// math.Pow(1, ±Inf) is 1 in Go but NaN in JavaScript.
-	if (a == 1 || a == -1) && math.IsInf(b, 0) {
+	case (a == 1 || a == -1) && math.IsInf(b, 0):
 		return math.NaN()
+	case b == 2:
+		return a * a
+	case b == 0.5:
+		if math.IsInf(a, 0) {
+			return math.Inf(1)
+		}
+		// +0 for -0, where sqrt keeps the sign.
+		return math.Sqrt(a + 0)
 	}
-	return math.Pow(a, b)
+	return fdlibm.PowC(a, b)
 }
 
 // compareFloats evaluates a relational operator on two numbers.

@@ -454,7 +454,13 @@ Paths are relative to this repository; `go-intl:` paths are in
 - `Math.cosh(710)` and `Math.sinh(710)` give `Infinity`.
 - `10**308 !== 1e308`.
 - `Math.sumPrecise` loses `5e-324` beside `±1e308`.
-- **Status:** open.
+- **Status:** fixed. Math's functions are a port of V8 14.6's fdlibm
+  (`internal/fdlibm`), and agree with Node to the last bit on 66,000 seeded
+  arguments; Go's differed on up to 900 of 3000 per function. `pow` and `**`
+  are Arm's, ported from Arm's Optimized Routines under its MIT license:
+  glibc ships the same code, which V8 calls on Linux. Node on Windows calls the C
+  library's and rounds a few arguments in a thousand near a midpoint the
+  other way. `sumPrecise` keeps all 2098 bits a double can span.
 
 ### KI-44 Code units counted as bytes or runes
 - **`setFromHex`:** its odd-length check counts UTF-8 bytes.

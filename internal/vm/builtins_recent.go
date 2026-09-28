@@ -208,7 +208,11 @@ func (r *Runtime) initMathSumPrecise() {
 		// Infinities and NaN cannot participate in the exact sum, so they are
 		// tracked separately: a NaN anywhere wins, and infinities of both
 		// signs make the result NaN.
-		sum := new(big.Float).SetPrec(2048)
+		// Exact: a double's bits run from 2^1023 to 2^-1074, 2098 of them,
+		// and 64 more hold the carries of any count of them there could be.
+		// 2048 lost 5e-324 beside 1e308.
+		const exact = 2098 + 64
+		sum := new(big.Float).SetPrec(exact)
 		sawNaN := false
 		posInf, negInf := false, false
 		// The running total starts at -0, and -0 added to -0 is -0 while +0
@@ -240,7 +244,7 @@ func (r *Runtime) initMathSumPrecise() {
 				if n != 0 || !math.Signbit(n) {
 					allNegZero = false
 				}
-				sum.Add(sum, new(big.Float).SetPrec(2048).SetFloat64(n))
+				sum.Add(sum, new(big.Float).SetPrec(exact).SetFloat64(n))
 			}
 		}
 

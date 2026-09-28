@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"github.com/go-quickjs/go-quickjs/internal/fdlibm"
 	"math"
 	"math/rand/v2"
 	"sort"
@@ -2397,14 +2398,16 @@ func (r *Runtime) initMathBuiltins() {
 	r.defConst(m, "SQRT1_2", Float(math.Sqrt(0.5)))
 
 	// The single-argument functions differ only in which Go function they call.
+	// The transcendental ones are V8's, fdlibm's, which answer to the last bit
+	// as V8 does, where Go's differ there and further in places.
 	unary := map[string]func(float64) float64{
 		"abs": math.Abs, "floor": math.Floor, "ceil": math.Ceil,
-		"sqrt": math.Sqrt, "cbrt": math.Cbrt, "sin": math.Sin, "cos": math.Cos,
-		"tan": math.Tan, "asin": math.Asin, "acos": math.Acos, "atan": math.Atan,
-		"sinh": math.Sinh, "cosh": math.Cosh, "tanh": math.Tanh,
-		"asinh": math.Asinh, "acosh": math.Acosh, "atanh": math.Atanh,
-		"log": math.Log, "log2": math.Log2, "log10": math.Log10,
-		"log1p": math.Log1p, "exp": math.Exp, "expm1": math.Expm1,
+		"sqrt": math.Sqrt, "cbrt": fdlibm.Cbrt, "sin": fdlibm.Sin, "cos": fdlibm.Cos,
+		"tan": fdlibm.Tan, "asin": fdlibm.Asin, "acos": fdlibm.Acos, "atan": fdlibm.Atan,
+		"sinh": fdlibm.Sinh, "cosh": fdlibm.Cosh, "tanh": fdlibm.Tanh,
+		"asinh": fdlibm.Asinh, "acosh": fdlibm.Acosh, "atanh": fdlibm.Atanh,
+		"log": fdlibm.Log, "log2": fdlibm.Log2, "log10": fdlibm.Log10,
+		"log1p": fdlibm.Log1p, "exp": fdlibm.Exp, "expm1": fdlibm.Expm1,
 		"trunc": math.Trunc,
 		// JavaScript rounds half away from zero for positive values but half
 		// up overall, which is neither math.Round nor math.Floor.
@@ -2447,7 +2450,7 @@ func (r *Runtime) initMathBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		return Float(math.Atan2(a, b)), nil
+		return Float(fdlibm.Atan2(a, b)), nil
 	})
 
 	r.defMethod(m, "max", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {

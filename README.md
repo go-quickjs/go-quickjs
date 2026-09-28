@@ -758,9 +758,15 @@ regular-expression workload even though go-quickjs leads the other seven.
 
 MIT, matching the upstream project.
 
+`internal/fdlibm`, which computes `Math`, is ported from other code under
+its own terms, kept in [its LICENSE](internal/fdlibm/LICENSE): fdlibm, by way
+of V8's `src/base/ieee754.cc` (the fdlibm notice and V8's BSD license), and
+the `pow` of [Arm's Optimized Routines][arm-aor] (MIT).
+
 [QuickJS-NG]: https://github.com/quickjs-ng/quickjs
 [test262]: https://github.com/tc39/test262
 [goja]: https://github.com/dop251/goja
 [v8-v7]: https://github.com/mozilla/arewefastyet/tree/master/benchmarks/v8-v7
 [go-intl]: https://github.com/go-quickjs/go-intl
 [go-intl-compat]: https://github.com/go-quickjs/go-intl/blob/main/compat.go
+[arm-aor]: https://github.com/ARM-software/optimized-routines
