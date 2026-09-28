@@ -95,7 +95,11 @@ func (r *Runtime) initLocale(namespace *Object) {
 			if !ok {
 				return Undefined
 			}
-			if value == "" && !field.raw {
+			// The standard answers firstDayOfWeek's keyword with no value as
+			// the empty string, and test262 checks it; V8 answers "true", as
+			// it does the rest.
+			raw := field.raw && !(field.key == "fw" && r.nodeQuirks)
+			if value == "" && !raw {
 				value = "true"
 			}
 			return Str(NewString(value))

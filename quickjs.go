@@ -174,7 +174,8 @@ func WithLocale(tag string) Option {
 // finite count past 2^53 - 1, which the standard refuses. Intl.DateTimeFormat
 // refuses, with V8's RangeError, a Temporal plain date whose midnight, or a
 // plain date-time, is past the instants a Date can hold, which the standard
-// formats.
+// formats; and Intl.Locale answers a firstDayOfWeek keyword with no value as
+// "true", where the standard answers "".
 //
 // It is useful for hosts that prioritize Node compatibility over conformance.
 func WithNodeQuirks() Option {

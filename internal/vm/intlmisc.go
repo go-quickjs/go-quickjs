@@ -18,6 +18,8 @@ type collatorOptions struct {
 	collator    *intl.Collator
 	usage       string // sort, search
 	sensitivity string // base, accent, case, variant
+	// compareFn is what the compare getter answers, made once.
+	compareFn *Object
 }
 
 func (r *Runtime) initCollator(intlObj *Object) {
@@ -47,7 +49,8 @@ func (r *Runtime) initCollator(intlObj *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		fn := rt.newNativeFunc("", 2, func(rt *Runtime, _ Value, args []Value) (Value, error) {
+		// The same function each time, as the standard's [[BoundCompare]] is.
+		return rt.bound(&o.compareFn, 2, func(rt *Runtime, _ Value, args []Value) (Value, error) {
 			a, err := rt.toString(arg(args, 0))
 			if err != nil {
 				return Undefined, err
@@ -57,8 +60,7 @@ func (r *Runtime) initCollator(intlObj *Object) {
 				return Undefined, err
 			}
 			return Int(o.compare(a.Go(), b.Go())), nil
-		})
-		return Obj(fn), nil
+		}), nil
 	})
 
 	r.defMethod(proto, "resolvedOptions", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {

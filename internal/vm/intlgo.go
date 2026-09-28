@@ -96,6 +96,11 @@ func (r *Runtime) defSupportedLocalesOfService(ctor *Object, service intl.Servic
 		if err != nil {
 			return Undefined, err
 		}
+		if arg(args, 1).IsNull() {
+			// V8's words for CoerceOptionsToObject(null).
+			return Undefined, rt.throwTypeError("Intl.%s.supportedLocalesOf called on null or undefined",
+				ctor.fn().name)
+		}
 		options, err := rt.optionsObject(arg(args, 1))
 		if err != nil {
 			return Undefined, err

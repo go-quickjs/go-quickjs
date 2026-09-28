@@ -26,6 +26,10 @@ var durationUnits = [...]struct{ field, unit string }{
 	{"nanoseconds", "nanosecond"},
 }
 
+// durationFieldsByName are durationUnits' indices in the order of their
+// fields' names.
+var durationFieldsByName = [...]int{3, 4, 8, 7, 5, 1, 9, 6, 2, 0}
+
 // durationOptions is a resolved Intl.DurationFormat: go-intl's formatter,
 // and the options as the runtime settled them.
 type durationOptions struct {
@@ -283,7 +287,10 @@ func (r *Runtime) durationFrom(v Value) ([len(durationUnits)]float64, error) {
 		return [10]float64(temporalDurationFields(duration)), nil
 	}
 	any := false
-	for i, unit := range durationUnits {
+	// The fields are read, and each converted, in the order of their names,
+	// as ToDurationRecord reads them, which a getter can see.
+	for _, i := range durationFieldsByName {
+		unit := durationUnits[i]
 		field, err := r.getProp(o, r.atoms.intern(unit.field), v)
 		if err != nil {
 			return out, err

@@ -1064,3 +1064,37 @@ func TestLegacyFormatterUnwrap(t *testing.T) {
 		"string gpo",
 	}, "\n"))
 }
+
+// TestIntlSmallDetails pins KI-56's details as V8 has them: DurationFormat
+// reads a duration's fields in the order of their names; Collator's compare
+// is one function; a unit divided twice is refused as the unit it is; lone
+// surrogates compare by code point; supportedLocalesOf with null options
+// says so in V8's words. A firstDayOfWeek keyword with no value is "", as
+// the standard and test262 have it, and "true" under WithNodeQuirks, as V8
+// has it.
+func TestIntlSmallDetails(t *testing.T) {
+	checkEval(t, `const t = (f) => { try { return f() } catch (e) { return e.constructor.name + ": " + e.message } };
+		const out = [];
+		{ const log = []; const d = new Proxy({}, {get(o, k) { if (typeof k === "string") log.push(k); }});
+		  t(() => new Intl.DurationFormat("en").format(d)); out.push(log.join()); }
+		{ const c = new Intl.Collator("en"); out.push(c.compare === c.compare); }
+		out.push(t(() => new Intl.NumberFormat("en", {style: "unit", unit: "meter-per-second-per-second"})));
+		out.push(["\udc00", "\ud800", "a"].sort(new Intl.Collator("en").compare).map(s => s.charCodeAt(0).toString(16)).join()
+			+ " " + new Intl.Collator("en").compare("\ud800", "\ud801"));
+		out.push(t(() => Intl.Collator.supportedLocalesOf(["en"], null)));
+		out.push(JSON.stringify([new Intl.Locale("en-u-fw").firstDayOfWeek, new Intl.Locale("en-u-kf").caseFirst]));
+		out.join("\n")`, strings.Join([]string{
+		"days,hours,microseconds,milliseconds,minutes,months,nanoseconds,seconds,weeks,years",
+		"true",
+		"RangeError: Invalid unit argument for Intl.NumberFormat() 'meter-per-second-per-second'",
+		"61,d800,dc00 -1",
+		"TypeError: Intl.Collator.supportedLocalesOf called on null or undefined",
+		`["",""]`,
+	}, "\n"))
+	rt := quickjs.New(quickjs.WithNodeQuirks())
+	defer rt.Close()
+	if got := evalString(t, rt, `JSON.stringify([new Intl.Locale("en-u-fw").firstDayOfWeek,
+		new Intl.Locale("en", {firstDayOfWeek: true}).firstDayOfWeek, new Intl.Locale("en-u-kf").caseFirst])`); got != `["true","true",""]` {
+		t.Errorf("quirks: %s", got)
+	}
+}

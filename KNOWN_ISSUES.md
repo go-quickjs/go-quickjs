@@ -576,7 +576,10 @@ Paths are relative to this repository; `go-intl:` paths are in
 - `new Intl.Locale("en-u-fw").firstDayOfWeek` is `""`.
 - *Plausible:* `temporalTime` computes sub-milliseconds wrongly for a
   negative instant.
-- **Status:** open.
+- **Status:** fixed, as V8 has each, but for `firstDayOfWeek`: test262 wants
+  `""`, as the engine gave, and `WithNodeQuirks` now gives V8's `"true"`.
+  Lone surrogates are weighed by code point in go-intl afe5892. A negative
+  instant's sub-milliseconds were already right.
 
 ### KI-57 go-intl data
 - `DisplayNames` `"weekOfYear"`.

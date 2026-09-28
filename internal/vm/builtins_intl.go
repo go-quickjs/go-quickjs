@@ -923,7 +923,9 @@ func wellFormedUnit(unit string) bool {
 	if !intl.HasUnit(numerator) {
 		return false
 	}
-	return !divided || intl.HasUnit(denominator)
+	// Each side is a single sanctioned unit, as IsWellFormedUnitIdentifier
+	// has it: "meter-per-second-per-second" is not one divided by another.
+	return !divided || !strings.Contains(denominator, "-per-") && intl.HasUnit(denominator)
 }
 
 func (r *Runtime) numberFormatOf(this Value, method string) (*numberOptions, error) {
