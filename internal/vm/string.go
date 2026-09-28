@@ -557,26 +557,120 @@ func (s *String) IndexOf(t *String, from int) int {
 		}
 		return from + i
 	}
-	a, b := s.units(), t.units()
-	if a == nil {
-		a = s.forCompare()
+	return indexUnits(s.unitsOrCompare(), t.unitsOrCompare(), from)
+}
+
+// LastIndexOf returns the last code-unit index at or before end where t
+// occurs in s, or -1.
+func (s *String) LastIndexOf(t *String, end int) int {
+	end = min(end, s.length-t.length)
+	if end < 0 {
+		return -1
 	}
-	if b == nil {
-		b = t.forCompare()
+	if s.ascii && t.ascii {
+		return strings.LastIndex(s.Go()[:end+t.length], t.Go())
 	}
-	for i := from; i+len(b) <= len(a); i++ {
-		match := true
-		for j := range b {
-			if a[i+j] != b[j] {
-				match = false
-				break
+	return lastIndexUnits(s.unitsOrCompare(), t.unitsOrCompare(), end)
+}
+
+// unitsOrCompare is the string's code units, however it holds them.
+func (s *String) unitsOrCompare() []uint16 {
+	if u := s.units(); u != nil {
+		return u
+	}
+	return s.forCompare()
+}
+
+// shortNeedle is the length up to which a search compares at each position:
+// linear in practice for a needle this short, and cheaper than a table.
+const shortNeedle = 8
+
+// indexUnits finds b in a from position from, in time linear in both: a
+// needle past shortNeedle long is searched for by Knuth, Morris and Pratt's
+// method, so that one that almost matches everywhere is not compared again
+// at every position.
+func indexUnits(a, b []uint16, from int) int {
+	if len(b) <= shortNeedle {
+		for i := from; i+len(b) <= len(a); i++ {
+			j := 0
+			for j < len(b) && a[i+j] == b[j] {
+				j++
+			}
+			if j == len(b) {
+				return i
 			}
 		}
-		if match {
-			return i
+		return -1
+	}
+	fail := kmpTable(b, false)
+	j := 0
+	for i := from; i < len(a); i++ {
+		for j > 0 && a[i] != b[j] {
+			j = fail[j-1]
+		}
+		if a[i] == b[j] {
+			j++
+			if j == len(b) {
+				return i - len(b) + 1
+			}
 		}
 	}
 	return -1
+}
+
+// lastIndexUnits is indexUnits searching backwards from end, the last
+// position a match may start at.
+func lastIndexUnits(a, b []uint16, end int) int {
+	if len(b) <= shortNeedle {
+		for i := end; i >= 0; i-- {
+			j := 0
+			for j < len(b) && a[i+j] == b[j] {
+				j++
+			}
+			if j == len(b) {
+				return i
+			}
+		}
+		return -1
+	}
+	// The needle is matched from its end, against the text read backwards
+	// from where a match starting at end would end.
+	fail := kmpTable(b, true)
+	m, j := len(b), 0
+	for i := end + m - 1; i >= 0; i-- {
+		for j > 0 && a[i] != b[m-1-j] {
+			j = fail[j-1]
+		}
+		if a[i] == b[m-1-j] {
+			j++
+			if j == m {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// kmpTable is the failure function of b, or of b reversed.
+func kmpTable(b []uint16, reversed bool) []int {
+	at := func(i int) uint16 {
+		if reversed {
+			return b[len(b)-1-i]
+		}
+		return b[i]
+	}
+	fail := make([]int, len(b))
+	k := 0
+	for i := 1; i < len(b); i++ {
+		for k > 0 && at(i) != at(k) {
+			k = fail[k-1]
+		}
+		if at(i) == at(k) {
+			k++
+		}
+		fail[i] = k
+	}
+	return fail
 }
 
 // ---------------------------------------------------------------------------

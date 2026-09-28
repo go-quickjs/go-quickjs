@@ -1,8 +1,11 @@
 package vm
 
 import (
+	"math/rand"
+	"slices"
 	"strings"
 	"testing"
+	"unicode/utf16"
 )
 
 func TestStringLengthIsInCodeUnits(t *testing.T) {
@@ -433,5 +436,47 @@ func TestLoneSurrogateSurvivesRopeFlattening(t *testing.T) {
 	}
 	if got, want := joined.Go(), pad.Go()+"\U0001F600"+pad.Go(); got != want {
 		t.Errorf("joined = %q, want %q", got, want)
+	}
+}
+
+// TestSearchUnitsMatchesNaive checks the linear searches against the obvious
+// quadratic ones, on random strings over a small alphabet where near misses
+// are everywhere.
+func TestSearchUnitsMatchesNaive(t *testing.T) {
+	naive := func(a, b []uint16, from int) int {
+		for i := from; i+len(b) <= len(a); i++ {
+			if slices.Equal(a[i:i+len(b)], b) {
+				return i
+			}
+		}
+		return -1
+	}
+	naiveLast := func(a, b []uint16, end int) int {
+		for i := min(end, len(a)-len(b)); i >= 0; i-- {
+			if slices.Equal(a[i:i+len(b)], b) {
+				return i
+			}
+		}
+		return -1
+	}
+	rng := rand.New(rand.NewSource(1))
+	gen := func(n int) []uint16 {
+		out := make([]uint16, n)
+		for i := range out {
+			out[i] = uint16('a' + rng.Intn(2))
+		}
+		return out
+	}
+	for n := 0; n < 20000; n++ {
+		a, b := gen(rng.Intn(60)), gen(rng.Intn(20))
+		from := rng.Intn(len(a) + 1)
+		if got, want := indexUnits(a, b, from), naive(a, b, from); got != want {
+			t.Fatalf("indexUnits(%q, %q, %d) = %d, want %d", string(utf16.Decode(a)), string(utf16.Decode(b)), from, got, want)
+		}
+		if end := rng.Intn(len(a)+1) - len(b); end >= 0 {
+			if got, want := lastIndexUnits(a, b, end), naiveLast(a, b, end); got != want {
+				t.Fatalf("lastIndexUnits(%q, %q, %d) = %d, want %d", string(utf16.Decode(a)), string(utf16.Decode(b)), end, got, want)
+			}
+		}
 	}
 }

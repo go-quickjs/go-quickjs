@@ -135,3 +135,17 @@ func TestRegExpMatchingIsInterruptible(t *testing.T) {
 		t.Errorf("stopped after %v", d)
 	}
 }
+
+// TestStringSearchIsLinear pins that indexOf and lastIndexOf take time
+// linear in the string and the needle: on a string with anything but ASCII
+// in it, a needle that almost matched everywhere was compared again at every
+// position, which took seconds and could not be interrupted (KI-16).
+func TestStringSearchIsLinear(t *testing.T) {
+	start := time.Now()
+	checkEval(t, `const s = "€" + "a".repeat(3.2e5);
+		[s.indexOf("a".repeat(1.6e5) + "b"), s.lastIndexOf("b" + "a".repeat(1.6e5)),
+		 "a".repeat(1e6).lastIndexOf("a".repeat(5e5))].join()`, "-1,-1,500000")
+	if d := time.Since(start); d > 3*time.Second {
+		t.Errorf("took %v", d)
+	}
+}

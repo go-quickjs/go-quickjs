@@ -250,16 +250,7 @@ func (r *Runtime) initStringBuiltins() {
 				}
 			}
 		}
-		best := -1
-		for i := 0; i <= end; {
-			at := s.IndexOf(needle, i)
-			if at < 0 || at > end {
-				break
-			}
-			best = at
-			i = at + 1
-		}
-		return Int(best), nil
+		return Int(s.LastIndexOf(needle, end)), nil
 	})
 
 	r.defMethod(p, "includes", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
