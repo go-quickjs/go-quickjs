@@ -1,6 +1,9 @@
 package quickjs_test
 
-import "testing"
+import (
+	"runtime"
+	"testing"
+)
 
 // TestStringLengthLimit pins V8's limit on a string's length, 2^29 - 24
 // code units, and its message, however the string would have been made: a
@@ -21,6 +24,9 @@ func TestStringLengthLimit(t *testing.T) {
 		"regexp repl": `"x".repeat(2 ** 12).replace(/x/g, "y".repeat(2 ** 18))`,
 	} {
 		t.Run(name, func(t *testing.T) {
+			// What the last case built is let go of first: on a 32-bit
+			// platform the two need not fit together.
+			runtime.GC()
 			checkEval(t, `try { `+src+`; "made" } catch (e) { e.name + ": " + e.message }`,
 				"RangeError: Invalid string length")
 		})

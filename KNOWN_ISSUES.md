@@ -334,7 +334,10 @@ Paths are relative to this repository; `go-intl:` paths are in
   - `lastIndex` above 2^32 wraps
   - `splice` on a length past 2^31 throws
   - a typed array offset or `set` offset of 2^32 becomes 0
-- **Status:** open.
+- **Status:** fixed. The whole suite passes with `GOARCH=386`. A string's
+  longest there is V8's for 32 bits, 2^28 - 16. `sort` and `String.raw` of a
+  length of 2^31 take long, but V8 runs out of memory on the first and grows
+  without bound on the second.
 
 ## P2: wrong results
 

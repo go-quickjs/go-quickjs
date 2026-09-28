@@ -113,7 +113,11 @@ For portability-sensitive changes:
 ```sh
 GOOS=windows GOARCH=amd64 go build ./...
 GOOS=windows GOARCH=arm64 go build ./...
+GOARCH=386 go test ./...
 ```
+
+An int is 32 bits on 386 and arm: convert an index, a length or an offset
+from a uint32 or an int64 only once it is known to fit.
 
 For Intl changes, also run the exact golden tests:
 

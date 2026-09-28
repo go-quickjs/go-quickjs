@@ -42,8 +42,9 @@ type arrayBufferData struct {
 
 // maxBufferLength bounds how large a buffer may actually be. A resizable
 // buffer may declare a larger maximum, since nothing is reserved for it, but
-// is refused when it tries to grow past this.
-const maxBufferLength = 1 << 31
+// is refused when it tries to grow past this -- and on a 32-bit platform
+// the most bytes a slice can hold.
+const maxBufferLength = min(1<<31, math.MaxInt)
 
 // resize changes a resizable buffer's length. What it gains reads as zero,
 // including bytes it had before a shrink took them away.
@@ -878,7 +879,7 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 		if err != nil {
 			return Undefined, err
 		}
-		if int(off)%info.size != 0 {
+		if off%int64(info.size) != 0 {
 			return Undefined, r.throwRangeError("the byte offset must be a multiple of %d", info.size)
 		}
 		var explicit int64 = -1
@@ -895,7 +896,7 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 		if b.detached {
 			return Undefined, r.throwTypeError("the buffer is detached")
 		}
-		if int(off) > len(b.bytes) {
+		if off > int64(len(b.bytes)) {
 			return Undefined, r.throwRangeError("the byte offset is out of range")
 		}
 		if explicit < 0 && b.resizable {

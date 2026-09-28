@@ -20,7 +20,7 @@ func TestMemoryLimit(t *testing.T) {
 		"a wide string":   `"一".repeat(2 ** 27).length`,
 		"a doubled rope":  `let s = "ab".repeat(100); for (let i = 0; i < 30; i++) s += s; s.indexOf("zz")`,
 		"concat":          `let s = "ab".repeat(100); for (let i = 0; i < 30; i++) s = s.concat(s); s.indexOf("zz")`,
-		"padding":         `"x".padStart(2 ** 28).length`,
+		"padding":         `"x".padStart(2 ** 26).length`,
 		"a shared buffer": `new SharedArrayBuffer(200 * 1024 * 1024).byteLength`,
 		"caught":          `try { new ArrayBuffer(200 * 1024 * 1024) } catch (e) { "caught" }`,
 		"arrays":          `let a = []; for (let i = 0; i < 1e5; i++) a.push(new Array(100).fill(i)); a.length`,

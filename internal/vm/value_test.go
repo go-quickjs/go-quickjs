@@ -84,7 +84,7 @@ func TestEveryNonNumberTagIsDistinct(t *testing.T) {
 func TestValueSizeIsTwoWordsPlusPayload(t *testing.T) {
 	// The representation is chosen for size; if it grows, the operand stack and
 	// every property slot grow with it.
-	const want = 24
+	const want = 8 + 2*unsafe.Sizeof(uintptr(0))
 	if got := unsafe.Sizeof(Value{}); got != want {
 		t.Errorf("sizeof(Value) = %d, want %d", got, want)
 	}

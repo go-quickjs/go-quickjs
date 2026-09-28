@@ -54,10 +54,14 @@ type String struct {
 var emptyString = &String{ascii: true}
 
 // maxStringLength is the longest a string may be, in code units: V8's,
-// 2^29 - 24, beyond which making one throws "Invalid string length". It
-// keeps every length within an int on every platform, and a string doubled
-// again and again from growing until writing it out exhausts the process.
-const maxStringLength = 1<<29 - 24
+// 2^29 - 24 -- or on a 32-bit platform 2^28 - 16 -- beyond which making one
+// throws "Invalid string length". It keeps every length within an int, and
+// a string doubled again and again from growing until writing it out
+// exhausts the process, or a 32-bit one's address space.
+const maxStringLength = is64Bit*(1<<29-24) + (1-is64Bit)*(1<<28-16)
+
+// is64Bit is 1 where an int has 64 bits, and 0 where it has 32.
+const is64Bit = math.MaxInt >> 62 & 1
 
 // throwStringLength refuses a string longer than maxStringLength.
 func (r *Runtime) throwStringLength() error {

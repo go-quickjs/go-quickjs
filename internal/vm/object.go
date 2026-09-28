@@ -737,7 +737,7 @@ func isHole(v Value) bool { return v.IsUninitialized() }
 
 // getElem returns a dense element and whether the slot is present.
 func (o *Object) getElem(i uint32) (Value, bool) {
-	if int(i) >= len(o.elems) {
+	if uint(i) >= uint(len(o.elems)) {
 		return Undefined, false
 	}
 	v := o.elems[i]
@@ -758,7 +758,7 @@ func (o *Object) getElem(i uint32) (Value, bool) {
 // aliases, or nil when the index does not alias one.
 func (o *Object) argumentBinding(i uint32) *upvalue {
 	d, _ := o.data.(*argumentsData)
-	if d == nil || int(i) >= len(d.mapped) {
+	if d == nil || uint(i) >= uint(len(d.mapped)) {
 		return nil
 	}
 	return d.mapped[i]
@@ -771,7 +771,7 @@ func (o *Object) unmapArgument(i uint32) {
 	if o.flags&objMappedArguments == 0 {
 		return
 	}
-	if d, _ := o.data.(*argumentsData); d != nil && int(i) < len(d.mapped) {
+	if d, _ := o.data.(*argumentsData); d != nil && uint(i) < uint(len(d.mapped)) {
 		d.mapped[i] = nil
 	}
 }
@@ -783,7 +783,7 @@ func (o *Object) unmapArgument(i uint32) {
 // falls back to storing the element as an ordinary property instead. The
 // threshold bounds the memory a single sparse write can commit.
 func (o *Object) setElem(i uint32, v Value) bool {
-	if o.flags&objMappedArguments != 0 && int(i) < len(o.elems) {
+	if o.flags&objMappedArguments != 0 && uint(i) < uint(len(o.elems)) {
 		if u := o.argumentBinding(i); u != nil {
 			// The value goes to the parameter, and to the slot as well so that
 			// the index stays present.
@@ -793,19 +793,20 @@ func (o *Object) setElem(i uint32, v Value) bool {
 		}
 	}
 	switch {
-	case int(i) < len(o.elems):
+	case uint(i) < uint(len(o.elems)):
 		o.elems[i] = v
 		return true
-	case int(i) == len(o.elems):
+	case uint(i) == uint(len(o.elems)):
 		o.elems = append(o.elems, v)
 		return true
 	}
 
 	const maxHoleRun = 1024
-	if int(i)-len(o.elems) > maxHoleRun {
+	// Unsigned, as the index is: an int is 32 bits on some platforms.
+	if uint(i)-uint(len(o.elems)) > maxHoleRun {
 		return false
 	}
-	for len(o.elems) < int(i) {
+	for uint(len(o.elems)) < uint(i) {
 		o.elems = append(o.elems, elemHole)
 	}
 	o.elems = append(o.elems, v)
@@ -849,19 +850,19 @@ func (o *Object) noteArrayIndex(i uint32) {
 // setArrayLength truncates or extends an array.
 func (o *Object) setArrayLength(n uint32) {
 	switch {
-	case int(n) < len(o.elems):
+	case uint(n) < uint(len(o.elems)):
 		// Truncating releases the discarded values for collection.
 		clear(o.elems[n:])
 		o.elems = o.elems[:n]
 		if o.flags&objHasSparseElements != 0 {
 			o.arrayLen = n
 		}
-	case int(n) > len(o.elems):
+	case uint(n) > uint(len(o.elems)):
 		// Extending an array only makes it longer; the new slots are holes.
 		// Beyond a short run they are not materialized at all, since a length
 		// of four billion is a number rather than four billion holes.
-		if o.flags&objHasSparseElements == 0 && int(n)-len(o.elems) <= maxHoleRun {
-			for len(o.elems) < int(n) {
+		if o.flags&objHasSparseElements == 0 && uint(n)-uint(len(o.elems)) <= maxHoleRun {
+			for uint(len(o.elems)) < uint(n) {
 				o.elems = append(o.elems, elemHole)
 			}
 		} else {

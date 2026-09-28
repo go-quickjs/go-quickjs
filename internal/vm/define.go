@@ -417,7 +417,7 @@ func (r *Runtime) installProperty(o *Object, key Atom, d *propDesc, cur *propDes
 
 	if merged.hasGet || merged.hasSet {
 		// Vacate any dense slot, which cannot hold an accessor.
-		if key.IsIndex() && int(key.Index()) < len(o.elems) {
+		if key.IsIndex() && uint(key.Index()) < uint(len(o.elems)) {
 			o.markSparse()
 			o.elems[key.Index()] = elemHole
 		}

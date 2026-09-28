@@ -296,7 +296,9 @@ func (r *Runtime) regexpExec(this Value, s *String) (Value, error) {
 	stateful := re.Flags()&(regexp.FlagGlobal|regexp.FlagSticky) != 0
 	start := 0
 	if stateful {
-		start = int(li)
+		// Anything past the longest string is past this one, and stays so
+		// in an int of 32 bits.
+		start = int(min(li, maxStringLength+1))
 	}
 
 	units := s.codeUnits()

@@ -1,6 +1,8 @@
 package quickjs_test
 
 import (
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -122,11 +124,15 @@ func TestSharedMemoryGrowth(t *testing.T) {
 	if err != nil || v.String() != "32,true,64,7,9,8" {
 		t.Errorf("= %v, %v", v, err)
 	}
-	// One whose maximum could never be reserved cannot be shared.
+	// One whose maximum could never be reserved cannot be shared -- nor,
+	// on a 32-bit platform, made.
 	rt := quickjs.New()
 	defer rt.Close()
 	big, err := rt.Eval("new SharedArrayBuffer(0, { maxByteLength: 2 ** 31 })")
 	if err != nil {
+		if strconv.IntSize == 32 && strings.Contains(err.Error(), "RangeError") {
+			return
+		}
 		t.Fatal(err)
 	}
 	if _, _, err := sharedmem.Share(big); err == nil {

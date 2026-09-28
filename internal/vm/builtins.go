@@ -868,7 +868,7 @@ func (r *Runtime) arrayLikeToSlice(v Value, limit int64) ([]Value, error) {
 		}
 		return nil, r.throwRangeError("maximum call stack size exceeded")
 	}
-	out := make([]Value, 0, min(int(n), 1024))
+	out := make([]Value, 0, int(min(n, 1024)))
 	for i := int64(0); i < n; i++ {
 		// A length is whatever the object says it is, and may be 2**53-1 with
 		// nothing behind it, so the walk has to stay interruptible.
@@ -2697,15 +2697,15 @@ func (r *Runtime) initArrayExtras() {
 			return Undefined, err
 		}
 		v := arg(args, 0)
-		start, err := rt.relativeIndex(arg(args, 1), int(a.n), 0)
+		start, err := rt.relativeIndex64(arg(args, 1), a.n, 0)
 		if err != nil {
 			return Undefined, err
 		}
-		end, err := rt.relativeIndex(arg(args, 2), int(a.n), int(a.n))
+		end, err := rt.relativeIndex64(arg(args, 2), a.n, a.n)
 		if err != nil {
 			return Undefined, err
 		}
-		for i := int64(start); i < int64(end) && i < a.n; i++ {
+		for i := start; i < end && i < a.n; i++ {
 			// Through the property protocol, so that a read-only element is
 			// the TypeError it should be rather than a silent write.
 			if err := a.set(rt, i, v); err != nil {
@@ -2732,7 +2732,9 @@ func (r *Runtime) initArrayExtras() {
 		if err != nil {
 			return Undefined, err
 		}
-		if err := rt.flatten(a, int(min(depth, maxArrayLength)), out); err != nil {
+		// Any depth past what Go's stack is allowed is as deep; and an int
+		// may be 32 bits.
+		if err := rt.flatten(a, int(min(depth, math.MaxInt32)), out); err != nil {
 			return Undefined, err
 		}
 		return out.value(), nil
@@ -2828,7 +2830,7 @@ func clipRange(o *Object, start, end int) (int, int) {
 // up at the end because the caller puts nothing there -- while undefined sorts
 // after everything, without the comparator being asked.
 func (r *Runtime) sortIndexed(a *arrayLike, cmp Value) ([]Value, error) {
-	items := make([]Value, 0, min(int(a.n), 1024))
+	items := make([]Value, 0, int(min(a.n, 1024)))
 	for i := int64(0); i < a.n; i++ {
 		v, present, err := a.at(r, i)
 		if err != nil {

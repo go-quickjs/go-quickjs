@@ -187,7 +187,7 @@ func (t *atomTable) arrayIndex(a Atom) (uint32, bool) {
 	if a.IsIndex() {
 		return a.Index(), true
 	}
-	if int(a) >= len(t.entries) || t.entries[a].sym != nil {
+	if uint(a) >= uint(len(t.entries)) || t.entries[a].sym != nil {
 		return 0, false
 	}
 	return arrayIndexOf(t.entries[a].name)

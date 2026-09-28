@@ -81,6 +81,10 @@ func (r *Runtime) advanceAfterEmptyMatch(rx Value, units []uint16, fullUnicode b
 	if err != nil {
 		return err
 	}
+	if n >= int64(len(units)) {
+		// Past the end it only counts on, from where an int may not reach.
+		return r.setValueProp(rx, atomLastIndex, Float(float64(n+1)), true)
+	}
 	return r.setValueProp(rx, atomLastIndex,
 		Int(advanceStringIndex(units, int(n), fullUnicode)), true)
 }

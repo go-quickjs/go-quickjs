@@ -1967,6 +1967,18 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				}
 				parts[i] = Str(s)
 			}
+			// The strings alone may be too long, which is known before
+			// anything is written out.
+			total := 0
+			for _, p := range parts {
+				if p.IsString() && total <= maxStringLength {
+					total += p.String().length
+				}
+			}
+			if total > maxStringLength {
+				vmErr = r.throwStringLength()
+				goto onError
+			}
 			out := joinValues(parts)
 			if out.length > maxStringLength {
 				vmErr = r.throwStringLength()
@@ -3369,7 +3381,7 @@ func (r *Runtime) getIndexed(obj, key Value) (Value, error) {
 		// A mapped arguments object's indices are not what its dense storage
 		// says, so it has no fast path.
 		if i := uint32(key.Number()); float64(i) == key.Number() &&
-			int(i) < len(o.elems) && o.flags&objMappedArguments == 0 {
+			uint(i) < uint(len(o.elems)) && o.flags&objMappedArguments == 0 {
 			if v := o.elems[i]; !isHole(v) {
 				return v, nil
 			}

@@ -74,20 +74,30 @@ func (r *Runtime) initStringBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		parts, err := rt.arrayToSlice(rawVal)
+		raw, err := rt.viewArrayLike(rawVal)
 		if err != nil {
 			return Undefined, err
 		}
 		// A raw piece and the substitution after it may end and begin with the
-		// halves of one character, which the builder joins.
+		// halves of one character, which the builder joins. The pieces are
+		// read as they are written, as the standard has it: listed first, a
+		// length of billions was billions of values before the string was
+		// found too long.
 		var sb partsBuilder
-		for i, part := range parts {
+		for i := int64(0); i < raw.n; i++ {
+			if err := rt.tick(); err != nil {
+				return Undefined, err
+			}
+			part, err := raw.get(rt, i)
+			if err != nil {
+				return Undefined, err
+			}
 			s, err := rt.toString(part)
 			if err != nil {
 				return Undefined, err
 			}
 			sb.WriteString(s.Go())
-			if i+1 < len(parts) && i+1 < len(args) {
+			if i+1 < raw.n && i+1 < int64(len(args)) {
 				sub, err := rt.toString(args[i+1])
 				if err != nil {
 					return Undefined, err
@@ -456,7 +466,9 @@ func (r *Runtime) initStringBuiltins() {
 			if err != nil {
 				return Undefined, err
 			}
-			limit = int(n)
+			// No string splits into more pieces than an int32 counts, and
+			// an int may be no wider.
+			limit = int(min(n, math.MaxInt32))
 		}
 		// The separator is converted before the limit is looked at, so a
 		// toString that throws is heard even for a limit of zero. Undefined is

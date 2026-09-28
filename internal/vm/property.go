@@ -312,7 +312,7 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 				"cannot assign to %q of a module namespace")
 		}
 		if key.IsIndex() {
-			if int(key.Index()) < len(o.elems) && !isHole(o.elems[key.Index()]) {
+			if uint(key.Index()) < uint(len(o.elems)) && !isHole(o.elems[key.Index()]) {
 				// A dense element is always a writable data property, so the
 				// assignment lands here.
 				if o == obj && rcv == obj {
@@ -560,7 +560,7 @@ func (r *Runtime) createOwnProp(o *Object, key Atom, val Value, strict bool) (bo
 			// property and remember that the array is no longer dense.
 			o.noteArrayIndex(ix)
 		}
-	} else if key.IsIndex() && int(key.Index()) <= len(o.elems) && len(o.elems) > 0 {
+	} else if key.IsIndex() && uint(key.Index()) <= uint(len(o.elems)) && len(o.elems) > 0 {
 		// A non-array that already has dense storage keeps using it.
 		if o.setElem(key.Index(), val) {
 			return true, nil
@@ -731,7 +731,7 @@ func (r *Runtime) deleteProp(o *Object, key Atom, strict bool) (bool, error) {
 	}
 	if key.IsIndex() {
 		i := key.Index()
-		if int(i) < len(o.elems) && !isHole(o.elems[i]) {
+		if uint(i) < uint(len(o.elems)) && !isHole(o.elems[i]) {
 			// Deleting leaves a hole wherever it happens, including at the
 			// end: an array's length is a number rather than a count of what
 			// is present, so `delete a[a.length - 1]` does not shorten it.
@@ -783,7 +783,7 @@ func (r *Runtime) defineOwnProp(o *Object, key Atom, val Value, flags propFlags)
 	}
 	// A dense element being redefined with non-default attributes must move out
 	// of dense storage, which cannot express attributes.
-	if key.IsIndex() && int(key.Index()) < len(o.elems) && flags != propDefault {
+	if key.IsIndex() && uint(key.Index()) < uint(len(o.elems)) && flags != propDefault {
 		i := key.Index()
 		o.markSparse()
 		o.elems[i] = elemHole
@@ -803,7 +803,7 @@ func (r *Runtime) defineAccessor(o *Object, key Atom, getter, setter *Object, fl
 	// index being turned into one has to leave it. Everything that reads a
 	// dense element takes it as a data property with default attributes, which
 	// would otherwise shadow the accessor being defined here.
-	if key.IsIndex() && int(key.Index()) < len(o.elems) {
+	if key.IsIndex() && uint(key.Index()) < uint(len(o.elems)) {
 		o.markSparse()
 		o.elems[key.Index()] = elemHole
 		// An accessor is not the parameter it replaced.
