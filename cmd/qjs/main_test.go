@@ -633,3 +633,20 @@ func TestREPLUnfinishedAwait(t *testing.T) {
 		t.Errorf("an unfinished line was reported as an error: %q", errOut)
 	}
 }
+
+// TestProcessEnding pins how a program's end is decided, as node decides it:
+// a rejection the script listens for with process.on("unhandledRejection")
+// is handled, where it failed the program regardless; and a program that
+// set process.exitCode ends with it, where it ended with 0 (KI-49). One that
+// does not listen still fails.
+func TestProcessEnding(t *testing.T) {
+	code, out, errOut := exec(t, "", "-e", `process.on("unhandledRejection", (r) => console.log("handled", r));
+		Promise.reject("nope"); process.exitCode = 3;`)
+	if code != 3 || out != "handled nope\n" || errOut != "" {
+		t.Errorf("listening: code=%d out=%q err=%q", code, out, errOut)
+	}
+	code, _, errOut = exec(t, "", "-e", `Promise.reject("nope")`)
+	if code != 1 || !strings.Contains(errOut, "uncaught (in promise)") {
+		t.Errorf("not listening: code=%d err=%q", code, errOut)
+	}
+}

@@ -87,6 +87,10 @@ type Loop struct {
 	// ctx is the loop's lifetime: its runtime's, ended early by Close.
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	// report is asked about an error a callback raised, before Run returns
+	// it; true means it was reported, and Run goes on.
+	report func(error) bool
 }
 
 // NewLoop returns a loop for a runtime.
@@ -240,17 +244,17 @@ func (l *Loop) Run(ctx context.Context) error {
 			// What the loop was waiting for will not be delivered.
 			return nil
 		}
-		if err := l.rt.RunJobs(); err != nil {
+		if err := l.rt.RunJobs(); l.fatal(err) {
 			return err
 		}
-		if err := l.takeFailure(); err != nil {
+		if err := l.takeFailure(); l.fatal(err) {
 			return err
 		}
 		// A timer that is due runs before the loop waits for anything: the
 		// queue may be long, and each callback may queue microtasks of its own.
 		now := time.Now()
 		if t := l.timers.due(now); t != nil {
-			if err := l.fire(t, now); err != nil {
+			if err := l.fire(t, now); l.fatal(err) {
 				return err
 			}
 			continue
@@ -275,7 +279,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		case fn := <-l.tasks:
 			fn()
 			l.ran()
-			if err := l.takeFailure(); err != nil {
+			if err := l.takeFailure(); l.fatal(err) {
 				return err
 			}
 		case <-l.wake:
@@ -284,6 +288,13 @@ func (l *Loop) Run(ctx context.Context) error {
 			return ctx.Err()
 		}
 	}
+}
+
+// fatal reports whether an error a callback raised ends Run: any does,
+// unless the loop's report takes it, which a web worker's does with an
+// exception -- the standard reports it, and the worker runs on.
+func (l *Loop) fatal(err error) bool {
+	return err != nil && (l.report == nil || !l.report(err))
 }
 
 // RunUntil works until the given promise settles, which is what a host running

@@ -356,3 +356,52 @@ func TestLoopCloseEndsRun(t *testing.T) {
 		t.Errorf("Run ended after %v", d)
 	}
 }
+
+// TestWorkersLikeNode pins a worker's ending as Node has it: a worker
+// listening for process's "unhandledRejection" handles a rejection, where it
+// was ended by it; one that sets process.exitCode ends with it; code that does
+// not compile is a SyntaxError to the parent; and, as the HTML standard has
+// it, a web worker's uncaught exception is reported to its parent and the
+// worker runs on, where it ended (KI-49).
+func TestWorkersLikeNode(t *testing.T) {
+	files := map[string]string{
+		"./rej.mjs": `import { parentPort } from "node:worker_threads";
+			process.on("unhandledRejection", (r) => parentPort.postMessage("handled " + r));
+			Promise.reject("nope");
+			setTimeout(() => parentPort.postMessage("still running"), 20);`,
+		"./code.mjs":   `process.exitCode = 7;`,
+		"./syntax.mjs": `let = ;`,
+		"./web.js": `self.onmessage = (e) => {
+			if (e.data === "boom") throw new TypeError("web boom");
+			postMessage("echo " + e.data);
+		};`,
+	}
+	out, _ := run(t, stdlib.Config{Workers: workerFiles(files), Process: &stdlib.Process{}}, `
+		const { Worker: NodeWorker } = require_worker_threads;
+		const node = (file) => new Promise((res) => {
+			const w = new NodeWorker(file), ev = [];
+			w.on("message", (m) => ev.push(m));
+			w.on("error", (e) => ev.push(e.constructor.name));
+			w.on("exit", (c) => { ev.push("exit " + c); res(ev.join(", ")); });
+		});
+		(async () => {
+			for (const f of ["./rej.mjs", "./code.mjs", "./syntax.mjs"]) console.log(await node(f));
+			await new Promise((res) => {
+				const w = new Worker("./web.js");
+				w.onerror = (e) => { console.log("error", e.message); e.preventDefault(); w.postMessage("again"); };
+				w.onmessage = (e) => { console.log(e.data); w.terminate(); res(); };
+				w.postMessage("boom");
+			});
+		})();
+	`)
+	want := strings.Join([]string{
+		"handled nope, still running, exit 0",
+		"exit 7",
+		"SyntaxError, exit 1",
+		"error web boom",
+		"echo again",
+	}, "\n")
+	if out != want {
+		t.Errorf("got\n%s\nwant\n%s", out, want)
+	}
+}

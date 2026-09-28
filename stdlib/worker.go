@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"maps"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -280,6 +281,8 @@ func (h *workerHost) childConfig(w *workerContext, specifier string, o workerOpt
 		p := *h.cfg.Process
 		p.Stdin = nil
 		p.Exit, p.worker = w.exit, true
+		// The parent's handling of its own rejections is not the worker's.
+		p.Unhandled = nil
 		script := specifier
 		if o.Eval {
 			script = "[worker eval]"
@@ -436,6 +439,11 @@ func runWorker(ctx context.Context, cfg Config, w *workerContext, wh *workerHand
 			// Ended by process.exit or terminate, whose code it is, and
 			// whatever was running when it was stopped is no failure.
 			code, fail = c, nil
+		} else if fail == nil && rt != nil {
+			// Ended of itself, with the code it set, if it set one.
+			if c, ok := ExitCode(rt); ok {
+				code = c
+			}
 		}
 		if fail != nil {
 			code = 1
@@ -479,12 +487,20 @@ func runWorker(ctx context.Context, cfg Config, w *workerContext, wh *workerHand
 		loop.Close()
 	}
 	hostjobs.Abort(rt, ctx.Done())
+	// A rejection nothing handles ends the worker, as in node -- unless the
+	// worker listens for process's "unhandledRejection", which handles it.
+	// The process is told before it is installed, when it takes it.
+	failWith := func(reason quickjs.Value) { loop.fail(&uncaughtRejection{reason}) }
+	if cfg.Process != nil {
+		cfg.Process.Unhandled = failWith
+	}
 	if err := Install(rt, cfg); err != nil {
 		fail = err
 		return
 	}
-	// A rejection nothing handles ends the worker, as in node.
-	rt.OnUnhandledRejection(func(reason quickjs.Value) { loop.fail(&uncaughtRejection{reason}) })
+	if cfg.Process == nil {
+		rt.OnUnhandledRejection(failWith)
+	}
 	if cfg.Workers != nil && cfg.Workers.Installed != nil {
 		if err := cfg.Workers.Installed(rt); err != nil {
 			fail = err
@@ -513,13 +529,26 @@ func runWorker(ctx context.Context, cfg Config, w *workerContext, wh *workerHand
 		}
 	}
 
+	// A web worker reports an exception to its parent and runs on, as the
+	// HTML standard has it; a node worker ends with it.
+	report := func(err error) bool {
+		var jsErr *quickjs.Error
+		var rejection *uncaughtRejection
+		if !w.web || !errors.As(err, &jsErr) && !errors.As(err, &rejection) {
+			return false
+		}
+		w.port.send(portMsg{kind: msgError, data: w.errorData(rt, err)})
+		return true
+	}
+	loop.report = report
+
 	w.port.send(portMsg{kind: msgOnline})
 	if module {
 		_, err = rt.EvalModuleContext(ctx, name, src)
 	} else {
 		_, err = rt.EvalFileContext(ctx, name, src)
 	}
-	if err == nil {
+	if err == nil || report(err) {
 		err = loop.Run(ctx)
 	}
 	fail = err
@@ -531,6 +560,7 @@ func (w *workerContext) errorData(rt *quickjs.Runtime, err error) any {
 	var v quickjs.Value
 	var jsErr *quickjs.Error
 	var rejection *uncaughtRejection
+	var syntax *quickjs.SyntaxError
 	switch {
 	case w.m == nil || rt == nil:
 		return err
@@ -538,6 +568,9 @@ func (w *workerContext) errorData(rt *quickjs.Runtime, err error) any {
 		v = jsErr.Value()
 	case errors.As(err, &rejection):
 		v = rejection.reason
+	case errors.As(err, &syntax):
+		// Code that did not compile is a SyntaxError, as the parent hears it.
+		v = rt.NewError("SyntaxError", strings.TrimPrefix(syntax.Unwrap().Error(), "SyntaxError: "))
 	default:
 		return err
 	}

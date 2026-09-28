@@ -515,7 +515,11 @@ Paths are relative to this repository; `go-intl:` paths are in
 - `close()` cuts the running task short.
 - A syntax error is reported as an `Error`.
 - `process.exitCode` is ignored.
-- **Status:** open.
+- **Status:** fixed. `Process.Unhandled` is called only when the script does
+  not listen for `unhandledRejection`, in a worker and in qjs; `ExitCode`
+  reads `process.exitCode`, which both end with; a compile error is a
+  `SyntaxError`; a web worker reports an exception and runs on; and
+  `close()` lets the running task finish, since KI-20.
 
 ### KI-50 qjs `file:` and `data:` URLs
 - `file://LOCALHOST/`, `file://127.0.0.1/`, `file:///C:` and `file:C:/x`

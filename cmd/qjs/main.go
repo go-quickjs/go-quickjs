@@ -100,19 +100,20 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	loop := stdlib.NewLoop(rt)
 	defer loop.Close()
-	if err := install(rt, loop, opts, stdin, stdout, stderr); err != nil {
-		fmt.Fprintln(stderr, "qjs:", err)
-		return 1
-	}
 
 	// A rejection nothing took is a failure of the program, as it is in node:
 	// it is reported where it happened and the exit code says so, rather than
-	// disappearing.
+	// disappearing -- unless the script listens for process's
+	// "unhandledRejection", which takes it.
 	rejected := false
-	rt.OnUnhandledRejection(func(reason quickjs.Value) {
+	unhandled := func(reason quickjs.Value) {
 		rejected = true
 		fmt.Fprintln(stderr, "uncaught (in promise)", describe(rt, reason))
-	})
+	}
+	if err := install(rt, loop, opts, stdin, stdout, stderr, unhandled); err != nil {
+		fmt.Fprintln(stderr, "qjs:", err)
+		return 1
+	}
 
 	ctx := context.Background()
 	if opts.timeout > 0 {
@@ -159,6 +160,10 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	if rejected {
 		return 1
+	}
+	// A program that set process.exitCode ends with it, as in node.
+	if code, ok := stdlib.ExitCode(rt); ok {
+		return code
 	}
 	return 0
 }
@@ -283,19 +288,21 @@ func describe(rt *quickjs.Runtime, v quickjs.Value) string {
 }
 
 // install gives the runtime what the command line asked for.
-func install(rt *quickjs.Runtime, loop *stdlib.Loop, opts *options, stdin io.Reader, stdout, stderr io.Writer) error {
+func install(rt *quickjs.Runtime, loop *stdlib.Loop, opts *options, stdin io.Reader, stdout, stderr io.Writer,
+	unhandled func(quickjs.Value)) error {
 	cfg := stdlib.Config{
 		Stdout: stdout,
 		Stderr: stderr,
 		Loop:   loop,
 		Process: &stdlib.Process{
-			Args:    append([]string{"qjs", opts.file}, opts.args...),
-			Cwd:     cwd(),
-			Stdout:  stdout,
-			Stderr:  stderr,
-			Stdin:   stdin,
-			Version: version,
-			Exit:    func(code int) { os.Exit(code) },
+			Args:      append([]string{"qjs", opts.file}, opts.args...),
+			Cwd:       cwd(),
+			Stdout:    stdout,
+			Stderr:    stderr,
+			Stdin:     stdin,
+			Version:   version,
+			Exit:      func(code int) { os.Exit(code) },
+			Unhandled: unhandled,
 		},
 		OS: &stdlib.OSInfo{Real: true},
 	}

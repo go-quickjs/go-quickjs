@@ -40,6 +40,11 @@ type Process struct {
 	Exit func(code int)
 	// Version is what process.version reports.
 	Version string
+	// Unhandled is called with the reason of a promise rejected with nothing
+	// to handle it, when the script is not listening for process's
+	// "unhandledRejection" -- which, as in Node, handles it. A host that
+	// leaves it nil lets such a rejection pass.
+	Unhandled func(reason quickjs.Value)
 
 	// worker marks a worker's process, whose exit ends the worker.
 	worker bool
@@ -174,12 +179,17 @@ func Processes(rt *quickjs.Runtime, cfg *Process) error {
 			return err
 		}
 	}
+	unhandled := cfg.Unhandled
 	rt.OnUnhandledRejection(func(reason quickjs.Value) {
-		emit, err := p.Get("emit")
-		if err != nil || !emit.IsFunction() {
-			return
+		if listening(p, "unhandledRejection") {
+			if emit, err := p.Get("emit"); err == nil && emit.IsFunction() {
+				emit.CallWithThis(p, "unhandledRejection", reason)
+				return
+			}
 		}
-		emit.CallWithThis(p, "unhandledRejection", reason)
+		if unhandled != nil {
+			unhandled(reason)
+		}
 	})
 
 	if err := rt.Set("process", p); err != nil {
@@ -190,6 +200,35 @@ func Processes(rt *quickjs.Runtime, cfg *Process) error {
 		return err
 	}
 	return rt.SetModule("node:process", exports)
+}
+
+// listening reports whether the script listens for one of process's events.
+func listening(p quickjs.Value, event string) bool {
+	listeners, err := p.Get("listeners")
+	if err != nil || !listeners.IsFunction() {
+		return false
+	}
+	list, err := listeners.CallWithThis(p, event)
+	return err == nil && list.Len() > 0
+}
+
+// ExitCode is the code a program asked to end with by setting
+// process.exitCode, which Node ends it with when it ends of itself; false
+// when it set none.
+func ExitCode(rt *quickjs.Runtime) (int, bool) {
+	p, err := rt.Get("process")
+	if err != nil || !p.IsObject() {
+		return 0, false
+	}
+	c, err := p.Get("exitCode")
+	if err != nil || c.IsNullish() {
+		return 0, false
+	}
+	f := c.Float()
+	if f != f || f != float64(int(f)) {
+		return 0, false
+	}
+	return int(f), true
 }
 
 // writableStream is the little of a stream that a script writing output needs.
