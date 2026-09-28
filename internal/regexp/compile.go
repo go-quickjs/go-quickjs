@@ -62,7 +62,10 @@ type instr struct {
 
 // program is a compiled pattern.
 type program struct {
-	code    []instr
+	code []instr
+	// first is the units a match can begin with, or nil when any can; see
+	// firstUnits.
+	first   *firstUnits
 	classes []*charSet
 	// looks holds the sub-programs of lookarounds, referenced by index.
 	looks []lookProgram
@@ -107,6 +110,7 @@ func compileNode(n node, flags Flags) *program {
 	c.compile(n)
 	c.emit(instr{op: opSave, arg: 1})
 	c.emit(instr{op: opMatch})
+	c.prog.first = firstOf(n, flags&FlagIgnoreCase != 0)
 	return c.prog
 }
 

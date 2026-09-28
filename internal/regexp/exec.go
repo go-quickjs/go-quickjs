@@ -163,7 +163,25 @@ func (re *Regexp) exec(units []uint16, start int, check func() error) ([]int, er
 		m.input, m.in, m.check = input{}, nil, nil
 	}()
 
+	first := re.prog.first
 	for pos := start; pos <= in.length(); {
+		if first != nil {
+			// Where no match can begin, none is tried: a position is passed
+			// over as the search below would pass it, a character at a
+			// time, so that under the unicode flag it never lands inside a
+			// surrogate pair.
+			if pos >= len(in.units) || !first.admits(in.units[pos]) {
+				if pos >= len(in.units) || re.flags&FlagSticky != 0 {
+					return nil, nil
+				}
+				_, w := in.at(pos)
+				if w == 0 {
+					w = 1
+				}
+				pos += w
+				continue
+			}
+		}
 		m.reset()
 		ok, err := m.run(re.prog.code, pos)
 		if err != nil {
