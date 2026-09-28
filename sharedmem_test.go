@@ -182,3 +182,17 @@ func TestWaitAsync(t *testing.T) {
 		t.Errorf("outcome = %v", v)
 	}
 }
+
+// TestWaitPastSharedLength pins that an agent may wait on memory a growable
+// SharedArrayBuffer gained after it was shared: wait and waitAsync read the
+// memory at the length it had when shared, and panicked past it, which
+// closed the runtime (KI-11).
+func TestWaitPastSharedLength(t *testing.T) {
+	a, _ := sharedPair(t, "new SharedArrayBuffer(4, { maxByteLength: 64 })")
+	v, err := a.Eval(`sab.grow(16);
+		const i = new Int32Array(sab);
+		[Atomics.wait(i, 2, 0, 1), Atomics.wait(i, 3, 5, 1), Atomics.waitAsync(i, 2, 0, 0).value].join()`)
+	if err != nil || v.String() != "timed-out,not-equal,timed-out" {
+		t.Errorf("= %v, %v", v, err)
+	}
+}

@@ -250,7 +250,7 @@ func sharedUpdate(b []byte, at, size int, op func(old uint64) uint64) uint64 {
 // whether it waited at all, and whether it was notified.
 func (m *SharedMemory) wait(at, size int, v uint64, timeout float64, done, abort <-chan struct{}) (waited, notified bool) {
 	m.mu.Lock()
-	if sharedLoad(m.mem, at, size) != v&sizeMask(size) {
+	if sharedLoad(m.bytes(), at, size) != v&sizeMask(size) {
 		m.mu.Unlock()
 		return false, false
 	}
@@ -307,7 +307,7 @@ func (m *SharedMemory) remove(at int, w *waiter) {
 func (m *SharedMemory) waitAsync(at, size int, v uint64, timeout float64, deliver func(string)) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if sharedLoad(m.mem, at, size) != v&sizeMask(size) {
+	if sharedLoad(m.bytes(), at, size) != v&sizeMask(size) {
 		return "not-equal"
 	}
 	if timeout == 0 {

@@ -153,7 +153,7 @@ Paths are relative to this repository; `go-intl:` paths are in
 - **Repro:** `sab.grow(16); Atomics.wait(new Int32Array(sab), 2, 0, 1)`
   after sharing an 8-byte growable buffer.
 - **Effect:** index out of range; the runtime is closed.
-- **Status:** open.
+- **Status:** fixed. Both read the memory at its current length.
 
 ### KI-12 A data race on the shared empty string
 - **Where:** `internal/vm/string.go`. `codeUnits()` writes the `u16` cache
