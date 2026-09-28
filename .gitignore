@@ -1,6 +1,9 @@
 # Build artifacts
 /qjs
 /bin/
+# A generator built from the root, which go build ./internal/... writes here.
+/*gen
+/*gen.exe
 *.test
 *.out
 
