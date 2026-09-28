@@ -1309,6 +1309,19 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			key := stack[sp]
 			sp--
 			obj := stack[sp]
+			// An element already in an array's dense storage is a writable
+			// data property -- one with any other attributes has left it --
+			// so a store to it is the store. A hole is not: a setter up the
+			// prototype chain would be asked, so it takes the long way, as a
+			// mapped arguments object's indices do.
+			if obj.IsObject() && key.IsNumber() {
+				o := obj.Object()
+				if i := uint32(key.Number()); float64(i) == key.Number() &&
+					uint(i) < uint(len(o.elems)) && o.flags&objMappedArguments == 0 && !isHole(o.elems[i]) {
+					o.elems[i] = val
+					break
+				}
+			}
 			if obj.IsNullish() {
 				vmErr = r.throwTypeError("cannot set property of %s", r.describe(obj))
 				goto onError

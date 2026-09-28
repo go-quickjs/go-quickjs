@@ -45,3 +45,25 @@ func TestOperatorCoercionAndImmediates(t *testing.T) {
 		return JSON.stringify([r, errs]);
 	})()`, `[["51",4,10,1,null,13,4,6,4294967295,-1,3,1,3,1,-2147483648,-1,0,14,2147483644,1.5,0,0],["TypeError","TypeError","TypeError"]]`)
 }
+
+// TestIndexedStores pins the stores the dense-element fast path must leave
+// to [[Set]]: a hole, which a setter up the prototype chain is asked about,
+// a frozen array, an element made non-writable, in sloppy and strict code,
+// and a mapped arguments object, whose indices are its parameters. The
+// answers are Node's.
+func TestIndexedStores(t *testing.T) {
+	checkEval(t, `(function () {
+		var log = [];
+		Object.defineProperty(Array.prototype, 3, { set(v) { log.push("proto set " + v); }, configurable: true });
+		var a = [1, 2, 3, , 5]; a[3] = 9; a[0] = 7;
+		delete Array.prototype[3];
+		var b = [1, 2]; Object.freeze(b); b[0] = 5;
+		var c = [1, 2]; Object.defineProperty(c, 0, { writable: false }); c[0] = 5; c[1] = 6;
+		var d = (function () { "use strict"; var x = [1, 2]; Object.defineProperty(x, 1, { writable: false }); try { x[1] = 3; return "no"; } catch (e) { return e.constructor.name; } })();
+		function m(p) { arguments[0] = 42; return p; }
+		function um(p) { "use strict"; arguments[0] = 42; return p; }
+		var e = [m(1), um(1)];
+		var f = [0, 1, 2]; f[1.5] = "x"; f["1"] = "y"; f[-0] = "z";
+		return JSON.stringify([a, log, b, c, d, e, f, Object.keys(f)]);
+	})()`, `[[7,2,3,null,5],["proto set 9"],[1,2],[1,6],"TypeError",[42,1],["z","y",2],["0","1","2","1.5"]]`)
+}
