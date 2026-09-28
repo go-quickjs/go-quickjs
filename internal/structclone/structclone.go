@@ -59,4 +59,8 @@ var (
 	// Deserialize makes in rt the value that Serialize returned, which is
 	// deserialized once.
 	Deserialize func(rt, data any, codec *Codec) (any, error)
+	// Copy is another of what Serialize returned, to be deserialized as it
+	// is: a value sent to many is serialized once, as the standard has it,
+	// and copied for each. It is safe to call from any goroutine.
+	Copy func(data any) any
 )

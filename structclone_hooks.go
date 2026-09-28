@@ -32,6 +32,12 @@ func init() {
 		}
 		return data, nil
 	}
+	structclone.Copy = func(data any) any {
+		if s, ok := data.(*vm.Serialized); ok {
+			return s.Copy()
+		}
+		return data
+	}
 	structclone.Deserialize = func(rt, data any, codec *structclone.Codec) (any, error) {
 		r := rt.(*Runtime)
 		if r.closed {

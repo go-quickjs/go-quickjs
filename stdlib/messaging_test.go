@@ -375,3 +375,78 @@ func TestCloneLikeNode(t *testing.T) {
 		t.Errorf("got\n%s\nwant\n%s", out, want)
 	}
 }
+
+// TestMessagingLikeNode pins messaging as Node has it: onmessage runs where
+// it was first set among the listeners, not after them all; a broadcast is
+// serialized once, however many hear it; posting on a closed port still
+// serializes, throwing and detaching as it does; a MessageEvent's ports must
+// be ports; a message is dispatched as the port's own, not through a
+// dispatchEvent the script put on it -- its close is; and a listener that
+// throws does not stop the others, what it threw being uncaught after
+// (KI-48).
+func TestMessagingLikeNode(t *testing.T) {
+	out, _ := run(t, stdlib.Config{}, `
+		const out = [];
+		const t = (f) => { try { return f() } catch (e) { return e.name + ": " + e.message } };
+		(async () => {
+			await new Promise((res) => {
+				const {port1, port2} = new MessageChannel();
+				port2.addEventListener("message", () => out.push("L1"));
+				port2.onmessage = () => out.push("onmessage");
+				port2.addEventListener("message", () => { out.push("L2"); port2.close(); res(); });
+				port1.postMessage(1);
+			});
+			await new Promise((res) => {
+				const a = new BroadcastChannel("k"), b = new BroadcastChannel("k"), c = new BroadcastChannel("k");
+				let n = 0, got = 0;
+				b.onmessage = c.onmessage = () => { if (++got === 2) { a.close(); b.close(); c.close(); res(); } };
+				a.postMessage({ get x() { n++; return 1; } });
+				out.push("getter calls " + n);
+			});
+			{ const {port1} = new MessageChannel(); port1.close();
+				out.push("closed post " + t(() => port1.postMessage(() => 1)));
+				const ab = new ArrayBuffer(8); t(() => port1.postMessage(ab, [ab])); out.push("closed detach " + ab.byteLength); }
+			out.push(t(() => new MessageEvent("m", {ports: [1]})));
+			out.push(t(() => new MessageEvent("m", {ports: 5})));
+			await new Promise((res) => {
+				const {port1, port2} = new MessageChannel();
+				port2.dispatchEvent = (e) => { out.push("replaced dispatch " + e.type); return true; };
+				port2.onmessage = () => { out.push("delivered"); port2.close(); setTimeout(res, 10); };
+				port1.postMessage(1);
+			});
+			console.log(out.join("\n"));
+		})();
+	`)
+	want := strings.Join([]string{
+		"L1", "onmessage", "L2", "getter calls 1",
+		"closed post DataCloneError: () => 1 could not be cloned.", "closed detach 0",
+		`TypeError: MessageEvent constructor: Expected eventInitDict.ports[0] ("1") to be an instance of MessagePort.`,
+		"TypeError: MessageEvent constructor: eventInitDict.ports (5) is not iterable.",
+		"delivered", "replaced dispatch close",
+	}, "\n")
+	if out != want {
+		t.Errorf("got\n%s\nwant\n%s", out, want)
+	}
+
+	// A listener that throws: the next still runs, and the error is uncaught
+	// after, which is what the loop returns.
+	rt := quickjs.New()
+	defer rt.Close()
+	var buf strings.Builder
+	loop := stdlib.NewLoop(rt)
+	if err := stdlib.Install(rt, stdlib.Config{Loop: loop, Stdout: &buf}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rt.Eval(`const {port1, port2} = new MessageChannel();
+		port2.addEventListener("message", () => { console.log("L1"); throw new Error("boom"); });
+		port2.addEventListener("message", () => { console.log("L2"); port2.close(); });
+		port2.start(); port1.postMessage(1);`); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err := loop.Run(ctx)
+	if err == nil || !strings.Contains(err.Error(), "boom") || buf.String() != "L1\nL2\n" {
+		t.Errorf("Run = %v, printed %q", err, buf.String())
+	}
+}

@@ -1063,13 +1063,58 @@ const webAPIsJS = `(function (host) {
       const list = (this._listeners.get(event.type) || []).slice();
       for (const l of list) {
         if (l.once) this.removeEventListener(event.type, l.fn);
-        if (typeof l.fn === "function") l.fn.call(this, event);
-        else l.fn.handleEvent(event);
+        // A listener that throws does not stop the others: what it threw is
+        // reported afterwards, uncaught, as Node reports it.
+        try {
+          if (typeof l.fn === "function") l.fn.call(this, event);
+          else l.fn.handleEvent(event);
+        } catch (e) {
+          queueMicrotask(() => { throw e; });
+        }
       }
-      const on = this["on" + event.type];
-      if (typeof on === "function") on.call(this, event);
+      // A handler set through a property that is a plain one, which it is
+      // for some, runs after the listeners; the ones setHandler keeps are
+      // among them, where they were set.
+      if (!(eventHandlers.get(this) || new Map()).has(event.type)) {
+        const on = this["on" + event.type];
+        if (typeof on === "function") {
+          try { on.call(this, event); } catch (e) { queueMicrotask(() => { throw e; }); }
+        }
+      }
       return !event.defaultPrevented;
     }
+  }
+  const addListener = EventTarget.prototype.addEventListener;
+  const removeListener = EventTarget.prototype.removeEventListener;
+  const dispatch = EventTarget.prototype.dispatchEvent;
+
+  // An event handler -- onmessage and the like -- is a listener that runs
+  // where it was first set among the others, calling whatever the handler is
+  // then, as the DOM has it; setting null takes it out.
+  const eventHandlers = new WeakMap();
+  function getHandler(target, type) {
+    const h = (eventHandlers.get(target) || new Map()).get(type);
+    return h ? h.fn : null;
+  }
+  function setHandler(target, type, fn) {
+    let handlers = eventHandlers.get(target);
+    if (!handlers) eventHandlers.set(target, handlers = new Map());
+    let h = handlers.get(type);
+    if (typeof fn !== "function") {
+      if (h) {
+        removeListener.call(target, type, h.listener);
+        handlers.delete(type);
+      }
+      return;
+    }
+    if (h) {
+      h.fn = fn;
+      return;
+    }
+    h = {fn, listener: null};
+    h.listener = function (event) { return h.fn.call(this, event); };
+    handlers.set(type, h);
+    addListener.call(target, type, h.listener);
   }
 
   class AbortSignal extends EventTarget {
@@ -1197,7 +1242,7 @@ const webAPIsJS = `(function (host) {
       const {data = null, origin = "", lastEventId = "", source = null, ports = []} = init || {};
       messageEventState.set(this, {
         data, origin: String(origin), lastEventId: String(lastEventId), source,
-        ports: Object.freeze([...ports]),
+        ports: Object.freeze(messagePorts(ports)),
       });
     }
     get data() { return messageEventOf(this).data; }
@@ -1207,9 +1252,31 @@ const webAPIsJS = `(function (host) {
     get ports() { return messageEventOf(this).ports; }
   }
 
+  // messagePorts checks a MessageEvent's ports, which have to be ports, with
+  // Node's messages.
+  function messagePorts(ports) {
+    const show = (v) => typeof v === "string" ? JSON.stringify(v)
+      : v !== null && typeof v === "object"
+        ? (Array.isArray(v) ? (v.length ? "[...]" : "[]") : (Object.keys(v).length ? "{...}" : "{}"))
+        : String(v);
+    if (ports === null || typeof ports !== "object") {
+      throw new TypeError("MessageEvent constructor: eventInitDict.ports (" + show(ports) + ") is not iterable.");
+    }
+    if (typeof ports[Symbol.iterator] !== "function") {
+      throw new TypeError("MessageEvent constructor: eventInitDict.ports is not iterable.");
+    }
+    const list = [...ports];
+    list.forEach((p, i) => {
+      if (!portIds.has(p)) {
+        throw new TypeError("MessageEvent constructor: Expected eventInitDict.ports[" + i + "] (\"" + show(p) +
+          "\") to be an instance of MessagePort.");
+      }
+    });
+    return list;
+  }
+
   // A port's id is what Go knows it by.
   const portIds = new WeakMap();
-  const portHandlers = new WeakMap();
   const makingPort = Symbol("makingPort");
   function portIdOf(port) {
     const id = portIds.get(port);
@@ -1243,7 +1310,6 @@ const webAPIsJS = `(function (host) {
       super();
       host.cloneAs(this, "host");
       portIds.set(this, id);
-      portHandlers.set(this, {message: null, messageerror: null});
     }
     postMessage(message, transfer = undefined) {
       host.portPost(portIdOf(this), message, transferList(transfer));
@@ -1253,17 +1319,17 @@ const webAPIsJS = `(function (host) {
     ref() { host.portRef(portIdOf(this), true); return this; }
     unref() { host.portRef(portIdOf(this), false); return this; }
     hasRef() { return host.portHasRef(portIdOf(this)); }
-    get onmessage() { portIdOf(this); return portHandlers.get(this).message; }
+    get onmessage() { portIdOf(this); return getHandler(this, "message"); }
     set onmessage(fn) {
       portIdOf(this);
       // Setting the handler starts the port, as start() would.
-      portHandlers.get(this).message = typeof fn === "function" ? fn : null;
+      setHandler(this, "message", fn);
       if (typeof fn === "function") this.start();
     }
-    get onmessageerror() { portIdOf(this); return portHandlers.get(this).messageerror; }
+    get onmessageerror() { portIdOf(this); return getHandler(this, "messageerror"); }
     set onmessageerror(fn) {
       portIdOf(this);
-      portHandlers.get(this).messageerror = typeof fn === "function" ? fn : null;
+      setHandler(this, "messageerror", fn);
     }
 
     // Node's ports are its event emitters too, whose listeners are given a
@@ -1335,7 +1401,10 @@ const webAPIsJS = `(function (host) {
   // deliver dispatches what arrived for a port. An exception a listener
   // throws is uncaught, as one from a timer is.
   function deliver(port, type, data, ports) {
-    port.dispatchEvent(type === "close" ? new Event("close") : new MessageEvent(type, {data, ports}));
+    // A message is dispatched as the port's own, not through a dispatchEvent
+    // the script may have put on it; its close is, as in Node.
+    if (type === "close") port.dispatchEvent(new Event("close"));
+    else dispatch.call(port, new MessageEvent(type, {data, ports}));
   }
 
   // receiveMessageOnPort takes the next message waiting on a port, if there
@@ -1379,7 +1448,7 @@ const webAPIsJS = `(function (host) {
         throw e;
       }
       super();
-      const s = {name: String(name), onmessage: null, onmessageerror: null};
+      const s = {name: String(name)};
       broadcastState.set(this, s);
       s.id = host.broadcastOpen(s.name, this);
     }
@@ -1396,10 +1465,10 @@ const webAPIsJS = `(function (host) {
     close() { host.portClose(broadcastOf(this).id); }
     ref() { host.portRef(broadcastOf(this).id, true); return this; }
     unref() { host.portRef(broadcastOf(this).id, false); return this; }
-    get onmessage() { return broadcastOf(this).onmessage; }
-    set onmessage(fn) { broadcastOf(this).onmessage = typeof fn === "function" ? fn : null; }
-    get onmessageerror() { return broadcastOf(this).onmessageerror; }
-    set onmessageerror(fn) { broadcastOf(this).onmessageerror = typeof fn === "function" ? fn : null; }
+    get onmessage() { broadcastOf(this); return getHandler(this, "message"); }
+    set onmessage(fn) { broadcastOf(this); setHandler(this, "message", fn); }
+    get onmessageerror() { broadcastOf(this); return getHandler(this, "messageerror"); }
+    set onmessageerror(fn) { broadcastOf(this); setHandler(this, "messageerror", fn); }
   }
   Object.defineProperty(BroadcastChannel.prototype, Symbol.toStringTag, {value: "BroadcastChannel", configurable: true});
 

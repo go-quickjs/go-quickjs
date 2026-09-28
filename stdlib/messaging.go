@@ -145,9 +145,20 @@ func (m *messaging) host() map[string]any {
 			return m.rt.NewArray(pa, pb)
 		},
 		"portPost": func(id int, v quickjs.Value, transfer []quickjs.Value) error {
+			if m.isHalted() {
+				return nil
+			}
 			e := m.ports[id]
-			if e == nil || m.isHalted() {
-				// A port posted elsewhere, or closed, posts nothing.
+			if e == nil {
+				// A port posted elsewhere, or closed, posts nothing -- but the
+				// message is serialized all the same, as the standard has it:
+				// what cannot be cloned throws, and what is transferred is
+				// detached, and closed if it is a port.
+				data, ports, err := m.serialize(v, transfer, nil)
+				if err != nil {
+					return err
+				}
+				dropMessages(portMsg{data: data, ports: ports})
 				return nil
 			}
 			data, ports, err := m.serialize(v, transfer, e)
@@ -648,17 +659,23 @@ func (e *portEnd) broadcastMessage(v quickjs.Value) error {
 		}
 	}
 	broadcasts.Unlock()
-	if len(to) == 0 {
-		// Nothing hears it, but what cannot be cloned is still refused.
-		_, _, err := e.m.serialize(v, nil, e)
+	// Serialized once, as the standard has it -- a getter in it runs once,
+	// however many hear it -- and copied for each: each deserializes its own.
+	// What nothing hears is serialized all the same, so what cannot be cloned
+	// is still refused.
+	data, _, err := e.m.serialize(v, nil, e)
+	if err != nil || len(to) == 0 {
 		return err
 	}
-	for _, c := range to {
-		data, _, err := e.m.serialize(v, nil, e)
-		if err != nil {
-			return err
-		}
-		c.enqueue(portMsg{data: data})
+	// Every copy is made before any is sent: one sent may be deserialized,
+	// and its bytes moved, while the next is being copied.
+	copies := make([]any, len(to))
+	copies[0] = data
+	for i := 1; i < len(to); i++ {
+		copies[i] = structclone.Copy(data)
+	}
+	for i, c := range to {
+		c.enqueue(portMsg{data: copies[i]})
 	}
 	return nil
 }

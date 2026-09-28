@@ -26,6 +26,25 @@ type Serialized struct {
 	root  int
 }
 
+// Copy is another serialization of the same value, which can be deserialized
+// as this one can, once: deserializing moves an ArrayBuffer's bytes, and a
+// value sent to many -- a broadcast -- is serialized once and copied for each.
+// A transferred buffer's bytes are copied like any other's; a shared memory
+// is shared, as it is.
+func (s *Serialized) Copy() *Serialized {
+	out := &Serialized{nodes: make([]snode, len(s.nodes)), root: s.root}
+	for i, n := range s.nodes {
+		if n.bytes != nil {
+			n.bytes = append([]byte(nil), n.bytes...)
+		}
+		if n.big != nil {
+			n.big = new(big.Int).Set(n.big)
+		}
+		out.nodes[i] = n
+	}
+	return out
+}
+
 // DataCloneError is a value that cannot be serialized, with V8's message for
 // it. The host turns it into the DOMException it is.
 type DataCloneError struct{ Message string }

@@ -68,7 +68,13 @@ func Timers(rt *quickjs.Runtime, loop *Loop) error {
 		if !fn.IsFunction() {
 			return rt.Throw(rt.NewError("TypeError", "the argument must be a function"))
 		}
-		rt.EnqueueJob(func() { fn.Call() })
+		rt.EnqueueJob(func() {
+			// What it throws is uncaught, as in Node, where it ends the
+			// program as a timer's does: Run returns it.
+			if _, err := fn.Call(); err != nil {
+				loop.fail(err)
+			}
+		})
 		return nil
 	})
 }

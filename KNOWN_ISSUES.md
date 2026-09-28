@@ -502,7 +502,11 @@ Paths are relative to this repository; `go-intl:` paths are in
 - `deliver` calls a `dispatchEvent` the script can replace.
 - A primitive in a transfer list, and bad `ports` for `MessageEvent`, are
   reported unlike Node.
-- **Status:** open.
+- **Status:** fixed, as Node has each. A listener's exception is reported
+  after the dispatch, as `queueMicrotask`'s now are (they were dropped).
+  A port in transit already heard its peer close, since KI-23. Node starts
+  a port on `addEventListener("message")`, where the HTML standard does
+  not; this engine keeps the standard's.
 
 ### KI-49 Workers diverge from Node
 - `process.on('unhandledRejection')` is overridden.
