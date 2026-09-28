@@ -907,7 +907,9 @@ round trips.
 suite on go-quickjs; see that command for its other modes. Run from
 `internal/cmd/v8bench/goja`, `go run . -dir /tmp/v8-v7 -mode score` runs it
 the same way on goja. That runner is a Go module of its own, so go-quickjs
-does not depend on goja.
+does not depend on goja. `go run ./internal/cmd/v8bench/external -engine qjs
+-cmd /path/to/qjs -dir /tmp/v8-v7 -mode score` runs it on QuickJS itself, or
+with `-engine node` on Node.
 
 For a comparison with another pure-Go JavaScript engine, the Mozilla
 [AreWeFastYet V8 version 7 suite][v8-v7] was run against go-quickjs and

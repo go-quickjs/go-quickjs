@@ -104,6 +104,9 @@ func Main(name string, e Engine) {
 	}
 
 	fmt.Printf("%s, %s\n", name, *mode)
+	// The runtime the suite ran in is kept to the end, so that what is live
+	// after the run is measured with it: a leak is what a live runtime keeps.
+	var rt Runtime
 	var before runtime.MemStats
 	runtime.ReadMemStats(&before)
 	start := time.Now()
@@ -117,19 +120,27 @@ func Main(name string, e Engine) {
 			}
 		}
 	case "score":
-		rt := newRuntime(e, src)
+		rt = newRuntime(e, src)
 		if err := rt.Run("run.js", src["run.js"]); err != nil {
 			fail(err)
 		}
 	case "fixed":
-		runFixed(e, src, *n, *only)
+		rt = runFixed(e, src, *n, *only)
 	default:
 		fail(fmt.Errorf("unknown mode %q", *mode))
 	}
 	var after runtime.MemStats
 	runtime.ReadMemStats(&after)
 	report("TOTAL", time.Since(start), &before, &after)
-	fmt.Printf("peak heap %.1f MB\n", float64(after.HeapSys)/(1<<20))
+	// What is live once a collection has run: after a suite's teardown,
+	// anything a run left behind that grows with the runs is a leak. The
+	// allocation profile's in-use figures are as of this collection too.
+	runtime.GC()
+	var settled runtime.MemStats
+	runtime.ReadMemStats(&settled)
+	fmt.Printf("peak heap %.1f MB, live after GC %.1f MB\n",
+		float64(after.HeapSys)/(1<<20), float64(settled.HeapAlloc)/(1<<20))
+	runtime.KeepAlive(rt)
 
 	if *mem != "" {
 		f, err := os.Create(*mem)
@@ -144,8 +155,8 @@ func Main(name string, e Engine) {
 }
 
 // runFixed loads the suite and runs each benchmark n times, reporting each
-// suite as it finishes.
-func runFixed(e Engine, src map[string]string, n int, only string) {
+// suite as it finishes, and returns the runtime it ran them in.
+func runFixed(e Engine, src map[string]string, n int, only string) Runtime {
 	rt := newRuntime(e, src)
 	for _, f := range files {
 		if err := rt.Run(f, src[f]); err != nil {
@@ -179,6 +190,7 @@ func runFixed(e Engine, src map[string]string, n int, only string) {
 		}
 		report(name, d, &m0, &m1)
 	}
+	return rt
 }
 
 func report(name string, d time.Duration, m0, m1 *runtime.MemStats) {

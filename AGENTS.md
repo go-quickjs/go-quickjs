@@ -173,6 +173,17 @@ fails if goja reaches go-quickjs's `go.mod` or `go.sum`.
 (cd internal/cmd/v8bench/goja && go run . -dir /tmp/v8-v7 -mode fixed -n 5)
 ```
 
+`internal/cmd/v8bench/external` runs it on an engine that is a program of
+its own -- QuickJS's `qjs`, or `node` -- from a driver script that does the
+same work, and reports the same times without the allocations Go counts.
+
+```sh
+go run ./internal/cmd/v8bench/external -engine qjs -cmd /path/to/qjs -dir /tmp/v8-v7 -mode fixed -n 5
+```
+
+Each Go runner ends with the live heap after a collection, with the runtime
+still alive: one that grows with `-n` is a leak.
+
 A change that keeps memory longer shows in neither: compare the conformance
 run's peak memory as well, which is how a cache that outlived its objects was
 caught.
