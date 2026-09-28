@@ -34,7 +34,7 @@ var out;
 // more than once on one -- where, as for Eval, a top-level class or const
 // declared again is a SyntaxError.
 func TestProgramRunsOnManyRuntimes(t *testing.T) {
-	p, err := quickjs.Compile("shared.js", programSrc, false)
+	p, err := quickjs.Compile("shared.js", programSrc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestProgramRunsOnManyRuntimes(t *testing.T) {
 	}
 }
 
-// TestCompile pins Compile's options and errors: strict makes the whole
+// TestCompile pins Compile's options and errors: WithStrict makes the whole
 // script strict, a syntax error is a *SyntaxError from Compile, the name is
 // what stack traces call the script, and RunProgramContext stops a program
 // whose context ends.
@@ -79,14 +79,14 @@ func TestCompile(t *testing.T) {
 	rt := quickjs.New()
 	defer rt.Close()
 
-	sloppy, err := quickjs.Compile("sloppy.js", `undeclared = 1; typeof undeclared`, false)
+	sloppy, err := quickjs.Compile("sloppy.js", `undeclared = 1; typeof undeclared`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if v, err := rt.RunProgram(sloppy); err != nil || v.String() != "number" {
 		t.Errorf("sloppy = %v, %v", v, err)
 	}
-	strict, err := quickjs.Compile("strict.js", `undeclaredToo = 1`, true)
+	strict, err := quickjs.Compile("strict.js", `undeclaredToo = 1`, quickjs.WithStrict())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,16 +94,16 @@ func TestCompile(t *testing.T) {
 	if _, err := rt.RunProgram(strict); !errors.As(err, &jsErr) || !strings.HasPrefix(err.Error(), "ReferenceError") {
 		t.Errorf("strict = %T %v, want a ReferenceError", err, err)
 	}
-	if _, err := quickjs.Compile("with.js", `with ({}) {}`, true); err == nil {
+	if _, err := quickjs.Compile("with.js", `with ({}) {}`, quickjs.WithStrict()); err == nil {
 		t.Error("with in strict code compiled")
 	}
 
 	var synErr *quickjs.SyntaxError
-	if _, err := quickjs.Compile("bad.js", `1 +`, false); !errors.As(err, &synErr) {
+	if _, err := quickjs.Compile("bad.js", `1 +`); !errors.As(err, &synErr) {
 		t.Errorf("bad = %T %v, want a *SyntaxError", err, err)
 	}
 
-	named, err := quickjs.Compile("app.js", "function main() {\n  return new Error('x').stack\n}\nmain()", false)
+	named, err := quickjs.Compile("app.js", "function main() {\n  return new Error('x').stack\n}\nmain()")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,7 +111,7 @@ func TestCompile(t *testing.T) {
 		t.Errorf("stack = %v, %v", v, err)
 	}
 
-	spin, err := quickjs.Compile("spin.js", `for (;;) {}`, false)
+	spin, err := quickjs.Compile("spin.js", `for (;;) {}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestCompile(t *testing.T) {
 // named arguments over the arguments object there, and not in standards mode.
 func TestProgramNodeQuirks(t *testing.T) {
 	p, err := quickjs.Compile("quirk.js",
-		`(function (x) { var a = typeof arguments; { function arguments() {} } return a + "," + typeof arguments; })(1)`, false)
+		`(function (x) { var a = typeof arguments; { function arguments() {} } return a + "," + typeof arguments; })(1)`)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -27,16 +27,32 @@ type Program struct {
 	quirksErr  error
 }
 
+// CompileOption configures Compile, as an Option configures New.
+type CompileOption func(*compileConfig)
+
+type compileConfig struct {
+	strict bool
+}
+
+// WithStrict compiles the whole script as strict code, as though it began
+// with "use strict".
+func WithStrict() CompileOption {
+	return func(c *compileConfig) { c.strict = true }
+}
+
 // Compile parses and compiles a script, to run with RunProgram. The name is
-// what its stack traces call it, as EvalFile's is. With strict set the whole
-// script is strict code, as though it began with "use strict". Source that
-// fails to parse is a *SyntaxError.
-func Compile(name, src string, strict bool) (*Program, error) {
-	fn, err := compileScript(src, name, 0, 0, strict, false)
+// what its stack traces call it, as EvalFile's is. Source that fails to parse
+// is a *SyntaxError.
+func Compile(name, src string, opts ...CompileOption) (*Program, error) {
+	var c compileConfig
+	for _, o := range opts {
+		o(&c)
+	}
+	fn, err := compileScript(src, name, 0, 0, c.strict, false)
 	if err != nil {
 		return nil, err
 	}
-	return &Program{name: name, src: src, strict: strict, standard: fn}, nil
+	return &Program{name: name, src: src, strict: c.strict, standard: fn}, nil
 }
 
 // code is the program as the runtime compiles source: WithNodeQuirks parses

@@ -446,7 +446,7 @@ per request:
 
 ```go
 var handler = func() *quickjs.Program {
-    p, err := quickjs.Compile("handler.js", handlerSource, false)
+    p, err := quickjs.Compile("handler.js", handlerSource)
     if err != nil {
         panic(err)
     }
@@ -463,8 +463,8 @@ func serve(req Request) (string, error) {
 
 - A `Program` holds no runtime's values, so it can be shared between
   goroutines and run on several runtimes at once.
-- `strict` makes the whole script strict code, as a leading `"use strict"`
-  would.
+- `quickjs.WithStrict()` makes the whole script strict code, as a leading
+  `"use strict"` would.
 - The name is what stack traces call the script, as in `EvalFile`.
 - A syntax error is a `*quickjs.SyntaxError`, returned by `Compile`.
 - `RunProgramContext` takes a deadline, as `EvalContext` does.
