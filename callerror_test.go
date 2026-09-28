@@ -63,3 +63,26 @@ func TestHostCancellationIsUncatchable(t *testing.T) {
 		t.Errorf("after = %v: the script ran on", v)
 	}
 }
+
+// TestErrorStaysInItsRuntime pins that an exception one runtime threw, which
+// a Go function returns to another, reaches the other as an Error with its
+// message and nothing of the first runtime's: it used to be rethrown as it
+// was, handing the second runtime the first's objects (KI-09).
+func TestErrorStaysInItsRuntime(t *testing.T) {
+	a, b := quickjs.New(), quickjs.New()
+	defer a.Close()
+	defer b.Close()
+	fail, err := a.Eval(`(function () { const e = new RangeError("from A"); e.secret = {x: 1}; throw e })`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.Set("callA", func() error { _, err := fail.Call(); return err }); err != nil {
+		t.Fatal(err)
+	}
+	v, err := b.Eval(`try { callA() } catch (e) {
+		[e instanceof Error, Object.getPrototypeOf(e) === Error.prototype, e.message, "secret" in e].join()
+	}`)
+	if err != nil || v.String() != "true,true,RangeError: from A,false" {
+		t.Errorf("= %v, %v", v, err)
+	}
+}

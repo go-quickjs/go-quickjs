@@ -230,6 +230,12 @@ func throwGoError(rt *vm.Runtime, err error) error {
 	}
 	var jsErr *Error
 	if errors.As(err, &jsErr) {
+		if jsErr.value.rt != rt {
+			// An exception of another runtime is its objects, which this one
+			// must not hold -- nor run their code on its goroutine. Only its
+			// message crosses.
+			return rt.ThrowError(errors.New(jsErr.Error()))
+		}
 		if jsErr.thrown != nil {
 			return jsErr.thrown
 		}

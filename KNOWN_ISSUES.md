@@ -132,7 +132,8 @@ Paths are relative to this repository; `go-intl:` paths are in
   holds the other runtime's objects and can run its code on the wrong
   goroutine. Since v0.5.0, `Call`/`Get`/`Set`/`New` return `*Error`, which
   makes this easy to hit.
-- **Status:** open.
+- **Status:** fixed. An exception of another runtime crosses as an `Error`
+  with its message.
 
 ### KI-10 `Intl.NumberFormat` given a numeric string with a huge exponent
 - **Effect:**
