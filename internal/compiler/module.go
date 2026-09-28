@@ -58,6 +58,7 @@ func CompileModule(prog *ast.Program, opts Options) (fn *bytecode.Function, info
 
 	c := newCompiler(nil, opts)
 	c.fn.Name = "<module>"
+	c.fn.TopLevel = true
 	c.fn.Strict = true
 	c.fn.IsModule = true
 	c.fn.Source = opts.Source
@@ -312,6 +313,7 @@ func moduleLexNames(body []ast.Stmt) []lexicalName {
 func compileModuleInit(prog *ast.Program, opts Options, info *ModuleInfo) *bytecode.Function {
 	c := newCompiler(nil, opts)
 	c.fn.Name = "<module bindings>"
+	c.fn.TopLevel = true
 	c.fn.Strict = true
 	c.fn.IsModule = true
 	c.fn.Source = opts.Source

@@ -659,14 +659,7 @@ func (r *Runtime) defineProperties(target *Object, props Value) error {
 func (r *Runtime) initFunctionBuiltins() {
 	p := r.proto.function
 
-	// The two properties that once let a function walk the call stack. They
-	// are still there, and reading or writing either throws: the same function
-	// an unmapped arguments object's callee uses, which is what makes them
-	// indistinguishable from one another.
-	r.defineAccessor(p, r.atoms.intern("caller"),
-		r.throwTypeErrorFn, r.throwTypeErrorFn, propConfigurable)
-	r.defineAccessor(p, atomArguments,
-		r.throwTypeErrorFn, r.throwTypeErrorFn, propConfigurable)
+	r.initLegacyReflection()
 
 	r.defMethod(p, "call", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		rest := args

@@ -270,6 +270,10 @@ type Function struct {
 	// IsModule marks module code, whose top-level `this` is undefined rather
 	// than the global object.
 	IsModule bool
+	// TopLevel marks the code of a script, a module or an eval, rather than of
+	// a function: what a function's caller passes over to the function that
+	// ran it.
+	TopLevel bool
 	// HasDirectEval marks a sloppy function whose body contains a direct eval
 	// that could declare a var in it. The frame gets somewhere to put one: a
 	// var the evaluated code declares belongs to the function that called it,

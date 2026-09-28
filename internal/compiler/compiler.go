@@ -378,6 +378,7 @@ type constKey struct {
 func Compile(prog *ast.Program, opts Options) (fn *bytecode.Function, err error) {
 	c := newCompiler(nil, opts)
 	c.fn.Name = "<main>"
+	c.fn.TopLevel = true
 	c.fn.Strict = prog.Strict
 	c.fn.IsModule = prog.Module
 	c.fn.Source = opts.Source
