@@ -25,6 +25,8 @@ type regexpData struct {
 	// realm is the realm the RegExp was made in, which compile has to be
 	// called from.
 	realm *Realm
+	// source is what the source getter answers, made when it is first read.
+	source *String
 }
 
 // regexpOf recovers the compiled pattern from a receiver.
@@ -41,7 +43,7 @@ func (r *Runtime) regexpOf(this Value, name string) (*regexp.Regexp, error) {
 
 // newRegExp builds a RegExp object from a pattern and flags.
 func (r *Runtime) newRegExp(source, flags string) (Value, error) {
-	re, err := regexp.Compile(source, flags)
+	re, err := r.compileRegExp(source, flags)
 	if err != nil {
 		return Undefined, r.throwSyntaxError("%s", err.Error())
 	}
@@ -50,6 +52,37 @@ func (r *Runtime) newRegExp(source, flags string) (Value, error) {
 	// lastIndex is writable but neither enumerable nor configurable.
 	o.setOwnRaw(atomLastIndex, Int(0), propWritable)
 	return Obj(o), nil
+}
+
+// regexpKey is a pattern as it was written: its source and its flags.
+type regexpKey struct{ source, flags string }
+
+// maxRegExpCache bounds the patterns a runtime keeps compiled.
+const maxRegExpCache = 256
+
+// compileRegExp compiles a pattern, or finds it compiled already. A literal
+// in a loop is a new RegExp each time it is reached, and a program builds the
+// same pattern from a string over and over, but the pattern is the same one,
+// which need not be parsed and compiled again.
+//
+// Each RegExp is given a clone, which shares the compiled program but has a
+// matcher of its own: the matcher grows to fit the longest subject the
+// RegExp has matched, and kept in the cache instead, it would outlive the
+// RegExp by as long as the runtime.
+func (r *Runtime) compileRegExp(source, flags string) (*regexp.Regexp, error) {
+	key := regexpKey{source, flags}
+	if re, ok := r.regexpCache[key]; ok {
+		return re.Clone(), nil
+	}
+	re, err := regexp.Compile(source, flags)
+	if err != nil {
+		return nil, err
+	}
+	if r.regexpCache == nil || len(r.regexpCache) >= maxRegExpCache {
+		r.regexpCache = make(map[regexpKey]*regexp.Regexp)
+	}
+	r.regexpCache[key] = re
+	return re.Clone(), nil
 }
 
 // isRegExpLike reports whether a value says it is a regular expression.
@@ -177,12 +210,17 @@ func (r *Runtime) initRegExpBuiltins() {
 			}
 			return Undefined, err
 		}
-		if re.Source() == "" {
+		d := this.Object().data.(*regexpData)
+		if d.source == nil {
 			// An empty pattern reports "(?:)" so that the result can be fed
 			// back to the constructor.
-			return Str(NewString("(?:)")), nil
+			text := "(?:)"
+			if re.Source() != "" {
+				text = escapeRegExpSource(re.Source())
+			}
+			d.source = NewString(text)
 		}
-		return Str(NewString(escapeRegExpSource(re.Source()))), nil
+		return Str(d.source), nil
 	})
 
 	// flags is assembled from the individual getters rather than from the
@@ -210,8 +248,9 @@ func (r *Runtime) initRegExpBuiltins() {
 	// that feature detection does not have to guard every one.
 	for _, fg := range regExpFlagNames {
 		bit, name := fg.bit, fg.name
+		method := "RegExp.prototype." + name
 		r.defGetter(p, name, func(rt *Runtime, this Value, args []Value) (Value, error) {
-			re, err := rt.regexpOf(this, "RegExp.prototype."+name)
+			re, err := rt.regexpOf(this, method)
 			if err != nil {
 				if this.IsObject() && this.Object() == rt.proto.regexp {
 					return Undefined, nil
@@ -253,7 +292,7 @@ func (r *Runtime) initRegExpBuiltins() {
 		return Str(NewString("/" + srcStr.Go() + "/" + flagStr.Go())), nil
 	})
 
-	r.defMethod(p, "exec", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	r.regexpExecFn = r.defMethod(p, "exec", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		s, err := rt.toString(arg(args, 0))
 		if err != nil {
 			return Undefined, err

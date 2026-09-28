@@ -218,8 +218,9 @@ func (r *Runtime) initDateBuiltins() {
 				name = "getUTC" + f.name
 			}
 			get, isUTC := f.get, utc
+			method := "Date.prototype." + name
 			r.defMethod(p, name, 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-				d, err := rt.dateOf(this, "Date.prototype."+name)
+				d, err := rt.dateOf(this, method)
 				if err != nil {
 					return Undefined, err
 				}
@@ -268,8 +269,9 @@ func (r *Runtime) initDateBuiltins() {
 				name = "setUTC" + s.name
 			}
 			start, count, isUTC := s.start, s.count, utc
+			method := "Date.prototype." + name
 			r.defMethod(p, name, count, func(rt *Runtime, this Value, args []Value) (Value, error) {
-				d, err := rt.dateOf(this, "Date.prototype."+name)
+				d, err := rt.dateOf(this, method)
 				if err != nil {
 					return Undefined, err
 				}
@@ -284,8 +286,9 @@ func (r *Runtime) initDateBuiltins() {
 
 	// Formatting.
 	format := func(name string, write func(env *date.Environment, t float64) string) {
+		method := "Date.prototype." + name
 		r.defMethod(p, name, 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-			t, err := rt.dateValueOf(this, "Date.prototype."+name)
+			t, err := rt.dateValueOf(this, method)
 			if err != nil {
 				return Undefined, err
 			}
@@ -299,8 +302,9 @@ func (r *Runtime) initDateBuiltins() {
 	// The three toLocale methods are Intl.DateTimeFormat with the fields each
 	// of them stands for, which is what ECMA-402 defines them as.
 	locale := func(name string, required, defaults intl.DateTimeComponents) {
+		method := "Date.prototype." + name
 		r.defMethod(p, name, 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-			t, err := rt.dateValueOf(this, "Date.prototype."+name)
+			t, err := rt.dateValueOf(this, method)
 			if err != nil {
 				return Undefined, err
 			}

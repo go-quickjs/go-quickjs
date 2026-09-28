@@ -1559,8 +1559,9 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		{"findLast", 1}, {"findLastIndex", 1}, {"some", 1}, {"every", 1},
 	} {
 		method := m.name
+		full := "TypedArray.prototype." + method
 		r.defMethod(p, method, m.length, func(rt *Runtime, this Value, args []Value) (Value, error) {
-			t, err := rt.typedArrayOf(this, "TypedArray.prototype."+method)
+			t, err := rt.typedArrayOf(this, full)
 			if err != nil {
 				return Undefined, err
 			}
@@ -1647,8 +1648,9 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		if reversed {
 			name = "reduceRight"
 		}
+		full := "TypedArray.prototype." + name
 		r.defMethod(p, name, 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-			t, err := rt.typedArrayOf(this, "TypedArray.prototype."+name)
+			t, err := rt.typedArrayOf(this, full)
 			if err != nil {
 				return Undefined, err
 			}
@@ -1835,8 +1837,9 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 	} {
 		kind := m.kind
 		name := m.name
+		full := "TypedArray.prototype." + name
 		r.defMethod(p, name, 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-			if _, err := rt.typedArrayOf(this, "TypedArray.prototype."+name); err != nil {
+			if _, err := rt.typedArrayOf(this, full); err != nil {
 				return Undefined, err
 			}
 			return rt.newArrayIteratorKind(this, kind)

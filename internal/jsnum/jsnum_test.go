@@ -2,6 +2,7 @@ package jsnum
 
 import (
 	"math"
+	"math/rand"
 	"testing"
 )
 
@@ -288,5 +289,30 @@ func BenchmarkToNumber(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		ToNumber("3.141592653589793")
+	}
+}
+
+// TestToInt32FastPath pins that ToInt32's shortcut for operands an int64
+// holds agrees with reducing modulo 2^32 exactly, at the edges of both
+// ranges and between them.
+func TestToInt32FastPath(t *testing.T) {
+	exact := func(v float64) int32 {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return 0
+		}
+		return int32(uint32(int64(math.Mod(math.Trunc(v), 4294967296))))
+	}
+	values := []float64{0, math.Copysign(0, -1), 0.5, -0.5, 1.9, -1.9, 2147483647, 2147483648, -2147483648,
+		-2147483649, 4294967295, 4294967296, 4294967297, -4294967297, 1 << 52, 1<<53 + 2, -(1 << 53),
+		1<<63 - 1024, -(1<<63 - 1024), 1 << 63, -(1 << 63), 1e300, -1e300, math.MaxFloat64,
+		math.SmallestNonzeroFloat64, math.NaN(), math.Inf(1), math.Inf(-1)}
+	r := rand.New(rand.NewSource(1))
+	for i := 0; i < 100000; i++ {
+		values = append(values, (r.Float64()-0.5)*math.Pow(2, float64(r.Intn(70))))
+	}
+	for _, v := range values {
+		if got, want := ToInt32(v), exact(v); got != want {
+			t.Errorf("ToInt32(%v) = %d, want %d", v, got, want)
+		}
 	}
 }

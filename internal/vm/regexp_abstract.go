@@ -28,7 +28,12 @@ func (r *Runtime) regExpExec(rx Value, s *String) (Value, error) {
 		return Undefined, err
 	}
 	if isCallable(exec) {
-		res, err := r.call(exec, rx, []Value{Str(s)})
+		var res Value
+		if exec.Object() == r.regexpExecFn {
+			res, err = r.callIntrinsic1(r.regexpExecFn, rx, Str(s))
+		} else {
+			res, err = r.call(exec, rx, []Value{Str(s)})
+		}
 		if err != nil {
 			return Undefined, err
 		}

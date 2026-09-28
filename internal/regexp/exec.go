@@ -108,6 +108,7 @@ type capWrite struct {
 type matcher struct {
 	prog  *program
 	in    *input
+	input input
 	caps  []int
 	trail []capWrite
 	stack []frame
@@ -134,7 +135,7 @@ type matcher struct {
 // backtracking stack and capture trail are what it spends its allocations on.
 // A pattern used again while a match is running -- a replacement callback that
 // uses the same one -- gets a matcher of its own.
-func (re *Regexp) exec(in *input, start int, check func() error) ([]int, error) {
+func (re *Regexp) exec(units []uint16, start int, check func() error) ([]int, error) {
 	m := re.scratch
 	if m == nil || m.busy {
 		m = &matcher{
@@ -146,6 +147,9 @@ func (re *Regexp) exec(in *input, start int, check func() error) ([]int, error) 
 			re.scratch = m
 		}
 	}
+	// The input is the matcher's own, rather than made for each match.
+	m.input = input{units: units, unicode: re.flags&FlagUnicode != 0}
+	in := &m.input
 	m.prog, m.in, m.check = re.prog, in, check
 	// The budget is what this attempt may spend, so it starts again here: a
 	// matcher is lent out over and over, and a pattern that had spent its
@@ -156,7 +160,7 @@ func (re *Regexp) exec(in *input, start int, check func() error) ([]int, error) 
 		m.busy = false
 		// The input is not held on to: it would keep the subject string alive
 		// for as long as the pattern.
-		m.in, m.check = nil, nil
+		m.input, m.in, m.check = input{}, nil, nil
 	}()
 
 	for pos := start; pos <= in.length(); {

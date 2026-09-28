@@ -290,9 +290,10 @@ func (r *Runtime) defMethod(target *Object, name string, length int, fn NativeFu
 }
 
 // defSymbolMethod defines a method keyed by a well-known symbol.
-func (r *Runtime) defSymbolMethod(target *Object, sym *Symbol, name string, length int, fn NativeFunc) {
+func (r *Runtime) defSymbolMethod(target *Object, sym *Symbol, name string, length int, fn NativeFunc) *Object {
 	f := r.newNativeFunc(name, length, fn)
 	defBuiltin(target, r.atoms.internSymbol(sym), Obj(f), propWritable|propConfigurable)
+	return f
 }
 
 // defValue defines a non-enumerable data property.

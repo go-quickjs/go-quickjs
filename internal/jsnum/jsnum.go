@@ -448,6 +448,12 @@ const whitespace = " \t\n\v\f\r" +
 
 // ToInt32 implements the ToInt32 abstract operation.
 func ToInt32(v float64) int32 {
+	// Almost every operand lies within what an int64 holds, where Go's
+	// conversion truncates toward zero and keeping the low 32 bits is the
+	// reduction modulo 2^32. NaN fails both comparisons.
+	if v > -(1<<63) && v < 1<<63 {
+		return int32(int64(v))
+	}
 	if math.IsNaN(v) || math.IsInf(v, 0) {
 		return 0
 	}

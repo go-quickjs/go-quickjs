@@ -165,6 +165,7 @@ func (r *Runtime) initRegExpLegacyStatics(ctor *Object) {
 			return Undefined, err
 		}
 		d.re = fresh.Object().data.(*regexpData).re
+		d.source = nil
 		if _, err := rt.setProp(this.Object(), atomLastIndex, Int(0), this, true); err != nil {
 			return Undefined, err
 		}

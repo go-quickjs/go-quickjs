@@ -10,6 +10,7 @@ import (
 	"github.com/go-quickjs/go-intl/date"
 	"github.com/go-quickjs/go-intl/temporal"
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/regexp"
 )
 
 // Runtime holds all state for one JavaScript world: the intern table, the
@@ -78,6 +79,11 @@ type Runtime struct {
 	// count; see nest.
 	nesting    int
 	nodeQuirks bool
+	// regexpCache is the patterns the runtime has compiled; see
+	// compileRegExp.
+	regexpCache map[regexpKey]*regexp.Regexp
+	// argStack holds the arguments of the calls callIntrinsic1 makes.
+	argStack []Value
 	// joining is the objects a join or toLocaleString of Array or
 	// TypedArray is under way on; see joinOnce.
 	joining []*Object
@@ -281,6 +287,10 @@ type Realm struct {
 	// and writing a restricted property calls. There is exactly one of it per
 	// realm, which a script can observe.
 	throwTypeErrorFn *Object
+	// hasInstanceFn and regexpExecFn are Function.prototype[Symbol.hasInstance]
+	// and RegExp.prototype.exec, which instanceof and the RegExp methods call
+	// with callIntrinsic1.
+	hasInstanceFn, regexpExecFn *Object
 	// objectToStringFn is Object.prototype.toString, which tells a structured
 	// clone how V8 would name an object it refuses.
 	objectToStringFn *Object

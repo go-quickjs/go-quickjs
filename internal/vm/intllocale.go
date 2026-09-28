@@ -111,8 +111,9 @@ func (r *Runtime) initLocale(namespace *Object) {
 	})
 
 	list := func(name string, get func(*intl.LocaleInfo, intl.Locale) ([]string, error)) {
+		method := "Intl.Locale.prototype." + name
 		r.defMethod(proto, name, 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-			o, err := rt.localeOf(this, "Intl.Locale.prototype."+name)
+			o, err := rt.localeOf(this, method)
 			if err != nil {
 				return Undefined, err
 			}
@@ -211,8 +212,9 @@ func optionalString(value string) Value {
 }
 
 func (r *Runtime) localeGetter(proto *Object, name string, get func(intl.Locale) Value) {
+	method := "Intl.Locale.prototype." + name
 	r.defGetter(proto, name, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		o, err := rt.localeOf(this, "Intl.Locale.prototype."+name)
+		o, err := rt.localeOf(this, method)
 		if err != nil {
 			return Undefined, err
 		}

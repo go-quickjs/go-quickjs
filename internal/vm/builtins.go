@@ -769,7 +769,7 @@ func (r *Runtime) initFunctionBuiltins() {
 			pd.flags &^= propWritable | propConfigurable
 		}
 	}()
-	r.defSymbolMethod(p, r.wellKnown.hasInstance, "[Symbol.hasInstance]", 1,
+	r.hasInstanceFn = r.defSymbolMethod(p, r.wellKnown.hasInstance, "[Symbol.hasInstance]", 1,
 		func(rt *Runtime, this Value, args []Value) (Value, error) {
 			// The default implementation is the ordinary prototype-chain walk,
 			// expressed without recursing back through instanceOf.

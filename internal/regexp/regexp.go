@@ -55,6 +55,16 @@ func Validate(source, flags string) error {
 	return err
 }
 
+// Clone returns the pattern with a matcher of its own: the compiled program is
+// shared, being immutable, but what a match lends itself -- the backtracking
+// stack and the capture trail, which grow to fit the longest subject -- lives
+// and dies with the clone.
+func (re *Regexp) Clone() *Regexp {
+	c := *re
+	c.scratch = nil
+	return &c
+}
+
 // Source returns the pattern text.
 func (re *Regexp) Source() string { return re.source }
 
@@ -89,8 +99,7 @@ func (re *Regexp) MatchChecked(units []uint16, start int, check func() error) ([
 	if start > len(units) {
 		return nil, nil
 	}
-	in := &input{units: units, unicode: re.flags&FlagUnicode != 0}
-	return re.exec(in, start, check)
+	return re.exec(units, start, check)
 }
 
 // MatchString is Match on a Go string, which is converted to code units first.

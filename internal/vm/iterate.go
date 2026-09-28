@@ -507,7 +507,9 @@ type argumentsData struct {
 // The aliases are the ordinary captured-binding cells, so they keep working
 // after the call returns -- which they must, since the object can outlive it.
 func (r *Runtime) newArgumentsObject(f *frame) *Object {
-	o := newObject(r.proto.object, ClassArguments)
+	// Its length, callee and Symbol.iterator are carried in the object's own
+	// allocation, rather than in a table grown as each is added.
+	o := newLiteralObject(r.proto.object, ClassArguments, 3)
 	o.elems = append(o.elems, f.args...)
 	o.setOwnRaw(atomLength, Int(len(f.args)), propWritable|propConfigurable)
 	mapped := f.cl != nil && f.cl.fn.MappedArguments

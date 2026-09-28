@@ -3596,6 +3596,21 @@ func (fd *funcData) nameOr(fallback string) string {
 	return fd.name
 }
 
+// callIntrinsic1 calls a function with one argument, as call does, but for
+// one of the realm's own built-ins that reads its argument before anything
+// else can run and keeps nothing of it, when the argument list comes from a
+// stack the runtime keeps rather than being allocated for the call. A call
+// made while this one runs stacks its own above it; one that grows the stack
+// leaves this call's list where it was, unchanged.
+func (r *Runtime) callIntrinsic1(fn *Object, this, a Value) (Value, error) {
+	i := len(r.argStack)
+	r.argStack = append(r.argStack, a)
+	res, err := r.call(Obj(fn), this, r.argStack[i:i+1:i+1])
+	r.argStack[i] = Undefined
+	r.argStack = r.argStack[:i]
+	return res, err
+}
+
 // instanceOf implements the instanceof operator.
 func (r *Runtime) instanceOf(obj, ctor Value) (bool, error) {
 	if !ctor.IsObject() {
@@ -3609,7 +3624,12 @@ func (r *Runtime) instanceOf(obj, ctor Value) (bool, error) {
 		return false, err
 	}
 	if !hasInstance.IsNullish() {
-		res, err := r.call(hasInstance, ctor, []Value{obj})
+		var res Value
+		if hasInstance.IsObject() && hasInstance.Object() == r.hasInstanceFn {
+			res, err = r.callIntrinsic1(r.hasInstanceFn, ctor, obj)
+		} else {
+			res, err = r.call(hasInstance, ctor, []Value{obj})
+		}
 		if err != nil {
 			return false, err
 		}
