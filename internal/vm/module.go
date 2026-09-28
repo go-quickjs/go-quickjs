@@ -653,7 +653,7 @@ func (r *Runtime) executeModuleBody(m *Module) error {
 func (r *Runtime) executeAsyncModule(m *Module) error {
 	cl := r.prepare(m.fn)
 	cl.env = m.env
-	gen, err := r.newGenerator(cl, Undefined, nil, nil, true)
+	gen, err := r.newGenerator(cl, Undefined, nil, nil, true, Undefined)
 	if err != nil {
 		return err
 	}

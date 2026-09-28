@@ -54,6 +54,11 @@ type generator struct {
 	// generator may yield from inside a with body, and the body still has to
 	// resolve names against the object when it resumes.
 	withScopes []*Object
+	// thisRef and evalVars are what run gives a frame: an async arrow's
+	// share of the derived constructor's `this`, and where a direct eval's
+	// vars go.
+	thisRef  *thisBinding
+	evalVars *Object
 
 	state genState
 	// started marks a generator whose body has begun, which decides whether a
@@ -136,7 +141,7 @@ const (
 
 // newGenerator builds the generator object a call to a generator function
 // returns.
-func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Object, async bool) (*Object, error) {
+func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Object, async bool, newTarget Value) (*Object, error) {
 	g := &generator{
 		cl:     cl,
 		this:   this,
@@ -145,9 +150,9 @@ func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Ob
 		locals: make([]Value, cl.fn.LocalCount),
 		async:  async,
 		// Nothing constructs a generator or an async function, so new.target
-		// there is undefined -- which has to be said, since a zero Value is
-		// the number zero rather than undefined.
-		newTarget: Undefined,
+		// there is undefined, but for an async arrow's, which is where it
+		// was written.
+		newTarget: newTarget,
 	}
 	// Parameters are bound now rather than on first resumption, because the
 	// specification evaluates them when the generator is created. A default
@@ -169,10 +174,26 @@ func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Ob
 	// body against the objects too. An ordinary call picks that up when the
 	// frame is set up; a generator builds its frames itself, so it records the
 	// chain once here and restores it on every resumption.
+	// The rest is what run sets up for a frame, which a generator's are
+	// given on every resumption: an async arrow in a derived constructor
+	// shares its `this` binding, and a body with a direct eval gets
+	// somewhere for the vars the eval declares -- without which they went
+	// onto the global object.
 	if callee != nil {
-		if fd := callee.fn(); fd != nil && len(fd.lexWith) > 0 {
-			g.withScopes = fd.lexWith[:len(fd.lexWith):len(fd.lexWith)]
+		if fd := callee.fn(); fd != nil {
+			if len(fd.lexWith) > 0 {
+				g.withScopes = fd.lexWith[:len(fd.lexWith):len(fd.lexWith)]
+			}
+			if fd.arrow && fd.lexThisRef != nil {
+				g.thisRef = fd.lexThisRef
+			}
+			g.evalVars = fd.lexEvalVars
 		}
+	}
+	if cl.fn.HasDirectEval {
+		g.evalVars = newObject(nil, ClassObject)
+		g.evalVars.flags |= objEvalVars
+		g.withScopes = append(g.withScopes[:len(g.withScopes):len(g.withScopes)], g.evalVars)
 	}
 
 	if err := r.bindGeneratorParams(g); err != nil {
@@ -230,6 +251,8 @@ func (r *Runtime) bindGeneratorParams(g *generator) error {
 		callee:     g.callee,
 		args:       g.args,
 		withScopes: g.withScopes,
+		thisRef:    g.thisRef,
+		evalVars:   g.evalVars,
 		paramsOnly: true,
 	}
 	_, err := r.executeAt(f, base, nil)
@@ -364,6 +387,8 @@ func (r *Runtime) resumeFull(g *generator, sent Value, mode resumeMode) (resumeR
 		handlers:     g.handlers,
 		openUpvalues: g.openUpvalues,
 		withScopes:   g.withScopes,
+		thisRef:      g.thisRef,
+		evalVars:     g.evalVars,
 	}
 	f := gf
 

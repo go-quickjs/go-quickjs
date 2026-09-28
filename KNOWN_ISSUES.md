@@ -349,7 +349,8 @@ Paths are relative to this repository; `go-intl:` paths are in
     `x` onto the global object.
   - In a derived constructor, an async arrow sees `this` before `super()`,
     fails its own `super()`, and reads `new.target` as `undefined`.
-- **Status:** open.
+- **Status:** fixed. A generator is set up as `run` sets up a frame, and each
+  resumption restores it.
 
 ### KI-30 A generator resumed from another realm runs in that realm
 - **Where:** `internal/vm/generator.go`. `resumeFull` never switches

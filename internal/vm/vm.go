@@ -176,7 +176,7 @@ func (r *Runtime) callClosure(o *Object, fd *funcData, this Value, args []Value,
 				this = Obj(w)
 			}
 		}
-		gen, err := r.newGenerator(fd.closure, this, args, o, fn.Async)
+		gen, err := r.newGenerator(fd.closure, this, args, o, fn.Async, newTarget)
 		if err != nil {
 			// A generator binds its parameters at the call, so a destructuring
 			// error surfaces here rather than at the first next(). An async
