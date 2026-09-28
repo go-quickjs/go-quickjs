@@ -293,8 +293,8 @@ func (r *Runtime) evalIn(ctx context.Context, re *vm.Realm, name, src string) (r
 	if err != nil {
 		return Value{}, err
 	}
-	r.rt.SetContext(ctx)
-	defer r.rt.SetContext(nil)
+	nested, leave := r.enter(ctx)
+	defer leave()
 
 	var v vm.Value
 	if re == nil {
@@ -307,11 +307,47 @@ func (r *Runtime) evalIn(ctx context.Context, re *vm.Realm, name, src string) (r
 	}
 	// Promise reactions are queued rather than run synchronously, so the queue
 	// is drained before returning; otherwise a then callback registered by the
-	// script would never run.
-	if err := r.rt.DrainJobs(); err != nil {
-		return Value{}, r.wrapError(err)
+	// script would never run. From inside a running script it is left for
+	// that script's turn to drain, as its own reactions are.
+	if !nested {
+		if err := r.rt.DrainJobs(); err != nil {
+			return Value{}, r.wrapError(err)
+		}
 	}
 	return Value{v: v, rt: r.rt}, nil
+}
+
+// enter sets the context a call runs under, and returns whether the call is
+// made from inside a running script and what restores things after it.
+//
+// A call from inside a script -- a host function evaluating more -- is part
+// of that script: it runs under the script's context as well as its own, so
+// the script's deadline still bounds it, and the script's is what is in
+// force again after it.
+func (r *Runtime) enter(ctx context.Context) (nested bool, leave func()) {
+	if !r.rt.Running() {
+		r.rt.SetContext(ctx)
+		return false, func() { r.rt.SetContext(nil) }
+	}
+	outer := r.rt.Context()
+	run, cancel := ctx, func() {}
+	switch {
+	case outer == nil:
+	case ctx == nil || ctx.Done() == nil:
+		run = outer
+	default:
+		var c context.Context
+		c, cancel = context.WithCancel(ctx)
+		stop := context.AfterFunc(outer, cancel)
+		run = c
+		prev := cancel
+		cancel = func() { stop(); prev() }
+	}
+	r.rt.SetContext(run)
+	return true, func() {
+		cancel()
+		r.rt.SetContext(outer)
+	}
 }
 
 // compile parses and compiles source text.
@@ -528,8 +564,8 @@ func (r *Runtime) EvalModuleContext(ctx context.Context, specifier, source strin
 		return Value{}, ErrClosed
 	}
 	defer r.guard(&err)
-	r.rt.SetContext(ctx)
-	defer r.rt.SetContext(nil)
+	_, leave := r.enter(ctx)
+	defer leave()
 
 	// The compiler callback is needed even without a loader, so that the entry
 	// point itself can be compiled.

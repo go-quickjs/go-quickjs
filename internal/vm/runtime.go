@@ -729,6 +729,10 @@ func (r *Runtime) stop(err error) error {
 // carries on, as the caller of a run that timed out does.
 func (r *Runtime) EndNestedStop() { r.stopped = nil }
 
+// Running reports whether script is running: a call the host makes now is
+// made from inside it, by a host function the script called.
+func (r *Runtime) Running() bool { return r.frameDepth > 0 }
+
 // Stop is stop, for a host function that reports its context cancelled.
 func (r *Runtime) Stop(err error) error { return r.stop(err) }
 

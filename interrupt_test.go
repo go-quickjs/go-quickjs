@@ -44,3 +44,37 @@ func TestInterruptIsNotAValue(t *testing.T) {
 		})
 	}
 }
+
+// TestNestedEvalKeepsTheOuterCall pins that a Go function evaluating more
+// script, from inside a running one, leaves the running one as it was: it
+// used to clear the outer deadline when it returned, so a script that
+// looped after calling it ran for good, and to drain the outer script's jobs
+// in the middle of it (KI-15).
+func TestNestedEvalKeepsTheOuterCall(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	if err := rt.Set("helper", func(r *quickjs.Runtime) (int, error) {
+		v, err := r.Eval(`log.push("helper"); 21 * 2`)
+		return v.Int(), err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	v, err := rt.Eval(`var log = []; Promise.resolve().then(() => log.push("job"));
+		log.push("before"); const n = helper(); log.push("after " + n); log.join()`)
+	if err != nil || v.String() != "before,helper,after 42" {
+		t.Errorf("= %v, %v", v, err)
+	}
+	if v, _ := rt.Eval(`log.join()`); v.String() != "before,helper,after 42,job" {
+		t.Errorf("after the turn: %v", v)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := rt.EvalContext(ctx, `helper(); for (;;) {}`); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v, want the outer deadline", err)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("stopped after %v", d)
+	}
+}

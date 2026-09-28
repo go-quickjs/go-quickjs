@@ -194,7 +194,9 @@ Paths are relative to this repository; `go-intl:` paths are in
   drains the job queue in the middle of the outer script.
 - **Effect:** a Go callback that evaluates, as `stdlib.Inspect` does,
   removes the caller's timeout.
-- **Status:** open.
+- **Status:** fixed. A call made from inside a running script runs under the
+  script's context as well as its own, restores the script's after it, and
+  leaves the script's jobs for its turn.
 
 ### KI-16 Native work that a deadline cannot stop
 - **Regular expressions:** an `exec` may take 100M steps with no interrupt
