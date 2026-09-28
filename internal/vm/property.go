@@ -52,14 +52,33 @@ func (r *Runtime) getProp(obj *Object, key Atom, receiver Value) (Value, error) 
 		//
 		// A mapped arguments object is left out whole: its indices name
 		// parameters, and only the binding knows what they hold now.
-		if o.index == nil && o.flags&objMappedArguments == 0 {
-			for i := range o.props {
-				p := &o.props[i]
-				if p.key == key &&
-					p.flags&(propDeleted|propPrivate|propAccessor) == 0 {
-					return p.value, nil
+		//
+		// One search answers both: a miss goes straight on to the prototype,
+		// which is where a method is, rather than asking the table again.
+		if o.flags&objMappedArguments == 0 {
+			var p *Property
+			if o.index == nil {
+				for i := range o.props {
+					if o.props[i].key == key && o.props[i].flags&propDeleted == 0 {
+						p = &o.props[i]
+						break
+					}
 				}
+			} else if i := o.findOwn(key); i >= 0 {
+				p = &o.props[i]
 			}
+			if p == nil || p.flags&propPrivate != 0 {
+				continue
+			}
+			if p.flags&propAccessor == 0 {
+				return p.value, nil
+			}
+			a := p.getterSetter()
+			if a == nil || a.getter == nil {
+				// An accessor with no getter reads as undefined.
+				return Undefined, nil
+			}
+			return r.call(Obj(a.getter), receiver, nil)
 		}
 		if p := o.getOwnVisible(key); p != nil {
 			if p.isAccessor() {
