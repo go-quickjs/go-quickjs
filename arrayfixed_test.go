@@ -45,3 +45,20 @@ func TestFixedArraysStayFixed(t *testing.T) {
 	}, "\n")
 	checkEval(t, src, want)
 }
+
+// TestIndexOrderWithAttributes pins that an element given an accessor or
+// attributes -- which moves it out of an array's dense storage -- is still
+// listed where its index puts it, by Reflect.ownKeys, for-in and
+// Object.assign: it came after the rest (KI-35). The answers are node's.
+func TestIndexOrderWithAttributes(t *testing.T) {
+	checkEval(t, `const out = [];
+		const a = [0, 1, 2, 3]; Object.defineProperty(a, 1, {get() { return 9 }, enumerable: true});
+		out.push(Reflect.ownKeys(a).join());
+		const b = [0, 1, 2]; Object.defineProperty(b, 0, {value: 5, writable: false, enumerable: true, configurable: true}); b.x = 1; b[10] = 1;
+		out.push(Reflect.ownKeys(b).join());
+		const k = []; for (const i in a) k.push(i); out.push(k.join());
+		out.push(JSON.stringify(Object.assign({}, a)));
+		const c = [1,2,3]; Object.defineProperty(c, 2, {get() { return 1 }}); c.length = 5; c[3] = 1; out.push(Reflect.ownKeys(c).join());
+		out.join(" | ")`,
+		`0,1,2,3,length | 0,1,2,10,length,x | 0,1,2,3 | {"0":0,"1":9,"2":2,"3":3} | 0,1,2,3,length`)
+}

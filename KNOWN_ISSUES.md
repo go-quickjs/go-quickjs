@@ -397,7 +397,7 @@ Paths are relative to this repository; `go-intl:` paths are in
   listed after the dense elements.
 - **Effect:** `Reflect.ownKeys`, `for-in`, `Object.assign` and structured
   clone read in the wrong order.
-- **Status:** open.
+- **Status:** fixed. The table's indices are merged among the dense ones.
 
 ### KI-36 `for-of`'s array fast path diverges
 - **Where:** `internal/vm/iterate.go`.

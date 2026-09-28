@@ -607,6 +607,7 @@ func (o *Object) ownKeys(includeSymbols bool, atoms *atomTable) []Atom {
 	}
 
 	// Dense elements are already in ascending index order.
+	dense := len(keys)
 	for i, v := range o.elems {
 		if v.ref == nil && v.IsUninitialized() {
 			// A hole in a dense array is not an own property.
@@ -629,10 +630,21 @@ func (o *Object) ownKeys(includeSymbols bool, atoms *atomTable) []Atom {
 		}
 	}
 	if len(indexKeys) > 0 {
+		// They go among the dense elements, not after them: an element
+		// given attributes or an accessor moves to the table, and is still
+		// where its index puts it.
 		sortIndexedAtoms(indexKeys)
+		elems := append([]Atom(nil), keys[dense:]...)
+		keys = keys[:dense]
+		i := 0
 		for _, k := range indexKeys {
+			for i < len(elems) && elems[i].Index() < k.index {
+				keys = append(keys, elems[i])
+				i++
+			}
 			keys = append(keys, k.atom)
 		}
+		keys = append(keys, elems[i:]...)
 	}
 
 	// An array's length is synthesized rather than stored, but it is an own
