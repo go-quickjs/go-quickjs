@@ -55,6 +55,9 @@ const (
 	OpSetLocalGet
 	// OpClearLocal is push_undef then set_local A: `let x;` in a loop.
 	OpClearLocal
+	// OpGetLocalIndex is get_local2 A B then get_index: `a[i]` where both
+	// are locals, which is most of what an array loop reads.
+	OpGetLocalIndex
 	// OpBinImm is push_int A then the binary operator B: `x & 0xff`,
 	// `x >> 16`, `i + 1`. A number on the left is worked out here; anything
 	// else has A pushed and B run as it would have been.
@@ -519,7 +522,7 @@ var opNames = [opCount]string{
 	OpInsert2: "insert2", OpInsert3: "insert3", OpInsert4: "insert4",
 
 	OpGetLocal: "get_local", OpGetLocal2: "get_local2", OpSetLocalGet: "set_local_get",
-	OpClearLocal: "clear_local", OpBinImm: "bin_imm", OpSetLocal: "set_local", OpPutLocal: "put_local",
+	OpClearLocal: "clear_local", OpBinImm: "bin_imm", OpGetLocalIndex: "get_local_index", OpSetLocal: "set_local", OpPutLocal: "put_local",
 	OpGetLocalCheck: "get_local_check", OpSetLocalCheck: "set_local_check",
 	OpInitLocal: "init_local",
 

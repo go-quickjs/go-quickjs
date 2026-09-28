@@ -67,3 +67,21 @@ func TestIndexedStores(t *testing.T) {
 		return JSON.stringify([a, log, b, c, d, e, f, Object.keys(f)]);
 	})()`, `[[7,2,3,null,5],["proto set 9"],[1,2],[1,6],"TypeError",[42,1],["z","y",2],["0","1","2","1.5"]]`)
 }
+
+func TestIndexedReadsOfLocals(t *testing.T) {
+	// a[i] with both a local is one instruction; what it reads is what the
+	// separate ones read, down to the error and where it points.
+	checkEval(t, `(function () {
+		Object.defineProperty(Array.prototype, 1, { get() { return "proto"; }, configurable: true });
+		var a = [0, , 2], i = 1, s = "abc", o = { 1: "one" }, k = "length";
+		var out = [a[i], s[i], o[i], a[k], s[k]];
+		delete Array.prototype[1];
+		out.push(a[i]);
+		var j = 1.5; out.push(a[j]); j = -0; out.push(a[j]); j = 7; out.push(a[j]);
+		function m(p) { var args = arguments, z = 0; p = "changed"; return args[z]; }
+		out.push(m("orig"));
+		var n = null;
+		try { n[i]; } catch (e) { out.push(e.constructor.name, e.stack.split("\n")[1].trim()); }
+		return JSON.stringify(out);
+	})()`, `["proto","b","one",3,3,null,null,0,null,"changed","TypeError","at <eval>:11:11"]`)
+}

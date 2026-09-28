@@ -710,24 +710,24 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		case bytecode.OpDrop:
 			sp--
 		case bytecode.OpSwap:
-			r.stack[sp-1], r.stack[sp-2] = r.stack[sp-2], r.stack[sp-1]
+			stack[sp-1], stack[sp-2] = stack[sp-2], stack[sp-1]
 		case bytecode.OpRot3:
-			a := r.stack[sp-3]
-			r.stack[sp-3] = r.stack[sp-2]
-			r.stack[sp-2] = r.stack[sp-1]
-			r.stack[sp-1] = a
+			a := stack[sp-3]
+			stack[sp-3] = stack[sp-2]
+			stack[sp-2] = stack[sp-1]
+			stack[sp-1] = a
 		case bytecode.OpRot4:
-			a := r.stack[sp-4]
-			r.stack[sp-4] = r.stack[sp-3]
-			r.stack[sp-3] = r.stack[sp-2]
-			r.stack[sp-2] = r.stack[sp-1]
-			r.stack[sp-1] = a
+			a := stack[sp-4]
+			stack[sp-4] = stack[sp-3]
+			stack[sp-3] = stack[sp-2]
+			stack[sp-2] = stack[sp-1]
+			stack[sp-1] = a
 		case bytecode.OpInsert2:
 			// a b -> b a b
-			b := r.stack[sp-1]
-			r.stack[sp] = b
-			r.stack[sp-1] = r.stack[sp-2]
-			r.stack[sp-2] = b
+			b := stack[sp-1]
+			stack[sp] = b
+			stack[sp-1] = stack[sp-2]
+			stack[sp-2] = b
 			sp++
 		case bytecode.OpAssignConst:
 			// Assigning to a const is a runtime error, not an early one: the
@@ -738,24 +738,24 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		case bytecode.OpNipUnder:
 			// The top value stays; the A beneath it go.
 			n := int(in.A)
-			r.stack[sp-1-n] = r.stack[sp-1]
+			stack[sp-1-n] = stack[sp-1]
 			sp -= n
 		case bytecode.OpInsert3:
 			// a b c -> c a b c
-			c := r.stack[sp-1]
-			r.stack[sp] = c
-			r.stack[sp-1] = r.stack[sp-2]
-			r.stack[sp-2] = r.stack[sp-3]
-			r.stack[sp-3] = c
+			c := stack[sp-1]
+			stack[sp] = c
+			stack[sp-1] = stack[sp-2]
+			stack[sp-2] = stack[sp-3]
+			stack[sp-3] = c
 			sp++
 		case bytecode.OpInsert4:
 			// a b c d -> d a b c d
-			d := r.stack[sp-1]
-			r.stack[sp] = d
-			r.stack[sp-1] = r.stack[sp-2]
-			r.stack[sp-2] = r.stack[sp-3]
-			r.stack[sp-3] = r.stack[sp-4]
-			r.stack[sp-4] = d
+			d := stack[sp-1]
+			stack[sp] = d
+			stack[sp-1] = stack[sp-2]
+			stack[sp-2] = stack[sp-3]
+			stack[sp-3] = stack[sp-4]
+			stack[sp-4] = d
 			sp++
 
 		// --- Locals -------------------------------------------------------
@@ -800,6 +800,24 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				goto onError
 			}
 			stack[sp-1] = v
+		case bytecode.OpGetLocalIndex:
+			obj, key := f.locals[in.A], f.locals[in.B]
+			if obj.IsObject() && key.IsNumber() {
+				o := obj.Object()
+				if i := uint32(key.Number()); float64(i) == key.Number() &&
+					uint(i) < uint(len(o.elems)) && o.flags&objMappedArguments == 0 {
+					if v := o.elems[i]; !isHole(v) {
+						sp = pushAt(stack, sp, v)
+						break
+					}
+				}
+			}
+			v, err := r.getIndexed(obj, key)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			sp = pushAt(stack, sp, v)
 		case bytecode.OpGetLocal2:
 			locals := f.locals
 			stack[sp] = locals[in.A]
@@ -1031,11 +1049,11 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// that resolved to nothing cannot be assigned to in strict mode,
 			// and that is reported now -- after the value, which may have
 			// thrown or created the global, and neither changes this.
-			if !r.stack[sp-2].Truthy() {
+			if !stack[sp-2].Truthy() {
 				vmErr = r.throwReferenceError("%s is not defined", r.atoms.name(cl.names[in.A]))
 				goto onError
 			}
-			r.stack[sp-2] = r.stack[sp-1]
+			stack[sp-2] = stack[sp-1]
 			sp--
 		case bytecode.OpSetGlobal:
 			name := cl.names[in.A]
@@ -1284,8 +1302,20 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		case bytecode.OpGetIndex:
 			sp--
 			key := stack[sp]
+			obj := stack[sp-1]
+			// An element in an array's dense storage is read here, as
+			// getIndexed would first thing, without the call.
+			if obj.IsObject() && key.IsNumber() {
+				o := obj.Object()
+				if i := uint32(key.Number()); float64(i) == key.Number() &&
+					uint(i) < uint(len(o.elems)) && o.flags&objMappedArguments == 0 {
+					if v := o.elems[i]; !isHole(v) {
+						stack[sp-1] = v
+						break
+					}
+				}
+			}
 			sp--
-			obj := stack[sp]
 			v, err := r.getIndexed(obj, key)
 			if err != nil {
 				vmErr = err
@@ -1480,10 +1510,10 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// over the first of them: the overwhelmingly common case is two
 			// numbers, and a pop and a push for each would touch the same
 			// slots twice.
-			a, b := r.stack[sp-2], r.stack[sp-1]
+			a, b := stack[sp-2], stack[sp-1]
 			sp--
 			if a.IsNumber() && b.IsNumber() {
-				r.stack[sp-1] = Float(a.Number() + b.Number())
+				stack[sp-1] = Float(a.Number() + b.Number())
 				break
 			}
 			v, err := r.add(a, b)
@@ -1491,12 +1521,12 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				vmErr = err
 				goto onError
 			}
-			r.stack[sp-1] = v
+			stack[sp-1] = v
 		case bytecode.OpSub:
-			a, b := r.stack[sp-2], r.stack[sp-1]
+			a, b := stack[sp-2], stack[sp-1]
 			sp--
 			if a.IsNumber() && b.IsNumber() {
-				r.stack[sp-1] = Float(a.Number() - b.Number())
+				stack[sp-1] = Float(a.Number() - b.Number())
 				break
 			}
 			v, err := r.arith(bytecode.OpSub, a, b)
@@ -1504,12 +1534,12 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				vmErr = err
 				goto onError
 			}
-			r.stack[sp-1] = v
+			stack[sp-1] = v
 		case bytecode.OpMul:
-			a, b := r.stack[sp-2], r.stack[sp-1]
+			a, b := stack[sp-2], stack[sp-1]
 			sp--
 			if a.IsNumber() && b.IsNumber() {
-				r.stack[sp-1] = Float(a.Number() * b.Number())
+				stack[sp-1] = Float(a.Number() * b.Number())
 				break
 			}
 			v, err := r.arith(bytecode.OpMul, a, b)
@@ -1517,12 +1547,12 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				vmErr = err
 				goto onError
 			}
-			r.stack[sp-1] = v
+			stack[sp-1] = v
 		case bytecode.OpDiv:
-			a, b := r.stack[sp-2], r.stack[sp-1]
+			a, b := stack[sp-2], stack[sp-1]
 			sp--
 			if a.IsNumber() && b.IsNumber() {
-				r.stack[sp-1] = Float(a.Number() / b.Number())
+				stack[sp-1] = Float(a.Number() / b.Number())
 				break
 			}
 			v, err := r.arith(bytecode.OpDiv, a, b)
@@ -1530,12 +1560,12 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				vmErr = err
 				goto onError
 			}
-			r.stack[sp-1] = v
+			stack[sp-1] = v
 		case bytecode.OpMod, bytecode.OpPow:
-			a, b := r.stack[sp-2], r.stack[sp-1]
+			a, b := stack[sp-2], stack[sp-1]
 			sp--
 			if a.IsNumber() && b.IsNumber() {
-				r.stack[sp-1] = Float(numericOp(in.Op, a.Number(), b.Number()))
+				stack[sp-1] = Float(numericOp(in.Op, a.Number(), b.Number()))
 				break
 			}
 			v, err := r.arith(in.Op, a, b)
@@ -1543,7 +1573,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				vmErr = err
 				goto onError
 			}
-			r.stack[sp-1] = v
+			stack[sp-1] = v
 		case bytecode.OpNeg:
 			sp--
 			a := stack[sp]
@@ -1730,29 +1760,29 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 
 		// --- Comparison ---------------------------------------------------
 		case bytecode.OpEq, bytecode.OpNe:
-			a, b := r.stack[sp-2], r.stack[sp-1]
+			a, b := stack[sp-2], stack[sp-1]
 			sp--
 			eq, err := r.looseEquals(a, b)
 			if err != nil {
 				vmErr = err
 				goto onError
 			}
-			r.stack[sp-1] = Bool(eq == (in.Op == bytecode.OpEq))
+			stack[sp-1] = Bool(eq == (in.Op == bytecode.OpEq))
 		case bytecode.OpStrictEq:
-			a, b := r.stack[sp-2], r.stack[sp-1]
+			a, b := stack[sp-2], stack[sp-1]
 			sp--
-			r.stack[sp-1] = Bool(a.StrictEquals(b))
+			stack[sp-1] = Bool(a.StrictEquals(b))
 		case bytecode.OpStrictNe:
-			a, b := r.stack[sp-2], r.stack[sp-1]
+			a, b := stack[sp-2], stack[sp-1]
 			sp--
-			r.stack[sp-1] = Bool(!a.StrictEquals(b))
+			stack[sp-1] = Bool(!a.StrictEquals(b))
 		case bytecode.OpLt, bytecode.OpLe, bytecode.OpGt, bytecode.OpGe:
-			a, b := r.stack[sp-2], r.stack[sp-1]
+			a, b := stack[sp-2], stack[sp-1]
 			sp--
 			// Two numbers are compared directly, which also gets the NaN
 			// behaviour right without going through cmpUndefined.
 			if a.IsNumber() && b.IsNumber() {
-				r.stack[sp-1] = Bool(compareFloats(in.Op, a.Number(), b.Number()))
+				stack[sp-1] = Bool(compareFloats(in.Op, a.Number(), b.Number()))
 				break
 			}
 			c, err := r.compare(a, b)
@@ -1760,7 +1790,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				vmErr = err
 				goto onError
 			}
-			r.stack[sp-1] = Bool(relationalResult(in.Op, c))
+			stack[sp-1] = Bool(relationalResult(in.Op, c))
 		case bytecode.OpIn:
 			obj, key := stack[sp-1], stack[sp-2]
 			sp -= 2
@@ -1858,7 +1888,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		case bytecode.OpJumpIfCmpFalse:
 			// A loop's test: the comparison and the branch that reads it,
 			// without the boolean in between.
-			a, b := r.stack[sp-2], r.stack[sp-1]
+			a, b := stack[sp-2], stack[sp-1]
 			sp -= 2
 			cmp := bytecode.Op(in.B)
 			var res bool
@@ -1925,8 +1955,8 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		// --- Calls --------------------------------------------------------
 		case bytecode.OpCall:
 			argc := int(in.A)
-			args := r.stack[sp-argc : sp]
-			callee := r.stack[sp-argc-1]
+			args := stack[sp-argc : sp]
+			callee := stack[sp-argc-1]
 			sp -= argc + 1
 			v, err := r.call(callee, Undefined, args)
 			if err != nil {
@@ -1936,12 +1966,12 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			sp = pushAt(stack, sp, v)
 		case bytecode.OpTailCall, bytecode.OpTailCallMethod:
 			argc := int(in.A)
-			args := r.stack[sp-argc : sp]
-			callee := r.stack[sp-argc-1]
+			args := stack[sp-argc : sp]
+			callee := stack[sp-argc-1]
 			this := Undefined
 			sp -= argc + 1
 			if in.Op == bytecode.OpTailCallMethod {
-				this = r.stack[sp-1]
+				this = stack[sp-1]
 				sp--
 			}
 			// The frame can be given up only when it is an ordinary call's:
@@ -1979,9 +2009,9 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				}
 			} else {
 				argc := int(in.B)
-				args = r.stack[sp-argc : sp]
-				callee = r.stack[sp-argc-1]
-				recv = r.stack[sp-argc-2]
+				args = stack[sp-argc : sp]
+				callee = stack[sp-argc-1]
+				recv = stack[sp-argc-2]
 				sp -= argc + 2
 			}
 			src := arg(args, 0)
@@ -2017,9 +2047,9 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 		case bytecode.OpCallMethod:
 			argc := int(in.A)
-			args := r.stack[sp-argc : sp]
-			callee := r.stack[sp-argc-1]
-			this := r.stack[sp-argc-2]
+			args := stack[sp-argc : sp]
+			callee := stack[sp-argc-1]
+			this := stack[sp-argc-2]
 			sp -= argc + 2
 			v, err := r.call(callee, this, args)
 			if err != nil {
@@ -2029,8 +2059,8 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			sp = pushAt(stack, sp, v)
 		case bytecode.OpNew:
 			argc := int(in.A)
-			args := r.stack[sp-argc : sp]
-			callee := r.stack[sp-argc-1]
+			args := stack[sp-argc : sp]
+			callee := stack[sp-argc-1]
 			sp -= argc + 1
 			v, err := r.construct(callee, args)
 			if err != nil {
@@ -2085,7 +2115,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			sp = pushAt(stack, sp, Obj(newLiteralObject(r.proto.object, ClassObject, int(in.A))))
 		case bytecode.OpNewArray:
 			n := int(in.A)
-			arr := r.newArrayFrom(r.stack[sp-n : sp])
+			arr := r.newArrayFrom(stack[sp-n : sp])
 			sp -= n
 			sp = pushAt(stack, sp, Obj(arr))
 		case bytecode.OpArrayPush:
@@ -2098,7 +2128,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 		case bytecode.OpConcat:
 			n := int(in.A)
-			parts := r.stack[sp-n : sp]
+			parts := stack[sp-n : sp]
 			// Every part is converted before any of them is joined: a toString
 			// may run user code, and when it runs is fixed. A number is left
 			// as it is, having no conversion anything can observe and no need
@@ -2218,7 +2248,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 			// The placeholder beneath becomes the object the name resolved to,
 			// so that the write goes back where the read came from.
-			r.stack[sp-1] = Obj(o)
+			stack[sp-1] = Obj(o)
 			sp = pushAt(stack, sp, v)
 			if in.B < pc {
 				if budget--; budget <= 0 {
@@ -2238,10 +2268,10 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			if found {
 				// The placeholder becomes the object the name resolved to; the
 				// value is evaluated next and written back to it.
-				r.stack[sp-1] = Obj(o)
+				stack[sp-1] = Obj(o)
 			}
 		case bytecode.OpWithPutUnder:
-			base := r.stack[sp-2]
+			base := stack[sp-2]
 			if !base.IsObject() {
 				// The read came from a binding rather than from a `with`
 				// object, so the static store follows.
@@ -2256,7 +2286,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				vmErr = err
 				goto onError
 			}
-			r.stack[sp-2] = v
+			stack[sp-2] = v
 			sp--
 			if in.B < pc {
 				if budget--; budget <= 0 {
@@ -2498,8 +2528,8 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		case bytecode.OpObjectRest:
 			// The excluded keys sit above the source on the stack.
 			n := int(in.A)
-			excluded := r.stack[sp-n : sp]
-			src := r.stack[sp-n-1]
+			excluded := stack[sp-n : sp]
+			src := stack[sp-n-1]
 			sp -= n + 1
 			rest, err := r.objectRest(src, excluded)
 			if err != nil {
@@ -2981,7 +3011,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				}
 			} else {
 				argc := int(in.A)
-				args = append([]Value(nil), r.stack[sp-argc:sp]...)
+				args = append([]Value(nil), stack[sp-argc:sp]...)
 				sp -= argc
 			}
 			if err := r.superCall(f, args); err != nil {

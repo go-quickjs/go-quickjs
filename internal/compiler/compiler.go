@@ -516,13 +516,23 @@ func (c *compiler) fuse(op bytecode.Op, a uint32) (int, bool) {
 		last.Op, last.A = bytecode.OpClearLocal, a
 	case immediateOp(op) && last.Op == bytecode.OpPushInt:
 		last.Op, last.B = bytecode.OpBinImm, uint32(op)
-		if l := len(c.fn.Lines); l > 0 && c.fn.Lines[l-1].PC == uint32(n) {
-			c.fn.Lines[l-1].PC = uint32(n - 1)
-		}
+		c.movePosition(n)
+	case op == bytecode.OpGetIndex && last.Op == bytecode.OpGetLocal2:
+		last.Op = bytecode.OpGetLocalIndex
+		c.movePosition(n)
 	default:
 		return 0, false
 	}
 	return n - 1, true
+}
+
+// movePosition gives the instruction before n the source position recorded
+// for n, which a pair fused from the two needs when it is the second of them
+// that can throw.
+func (c *compiler) movePosition(n int) {
+	if l := len(c.fn.Lines); l > 0 && c.fn.Lines[l-1].PC == uint32(n) {
+		c.fn.Lines[l-1].PC = uint32(n - 1)
+	}
 }
 
 // immediateOp reports whether a binary operator has a form taking its right
@@ -1313,6 +1323,8 @@ func stackEffect(op bytecode.Op, a, b uint32) int {
 	switch op {
 	case bytecode.OpGetLocal2:
 		return 2
+	case bytecode.OpGetLocalIndex:
+		return 1
 	case bytecode.OpSetLocalGet, bytecode.OpBinImm:
 		return 0
 	case bytecode.OpClearLocal:
