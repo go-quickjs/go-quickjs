@@ -858,7 +858,11 @@ func (r *Runtime) initNumberExtras() {
 		}
 		if !hasDigits {
 			// No count given: as few digits as round-trip, which is what the
-			// shortest representation is.
+			// shortest representation is. -0 is no less than 0, and has no
+			// sign written.
+			if n == 0 {
+				n = 0
+			}
 			return Str(NewString(fixExponent(strconv.FormatFloat(n, 'e', -1, 64)))), nil
 		}
 		return Str(NewString(formatExponential(n, digits))), nil

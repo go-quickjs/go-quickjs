@@ -445,7 +445,9 @@ Paths are relative to this repository; `go-intl:` paths are in
 - `parseInt("0x")` gives `0`, not `NaN`.
 - `Number("0x…")` and binary or octal strings are rounded twice, as is
   `parseInt` of a long decimal.
-- **Status:** open.
+- **Status:** fixed. Radix 10 and powers of two are rounded once, correctly,
+  and other radices take V8's approximation; 22415 seeded answers agree with
+  Node.
 
 ### KI-43 `Math` inaccuracies
 - `Math.log` of a subnormal is wrong.

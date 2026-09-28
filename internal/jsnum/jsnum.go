@@ -11,6 +11,7 @@ package jsnum
 
 import (
 	"math"
+	"math/bits"
 	"strconv"
 	"strings"
 )
@@ -252,16 +253,18 @@ func ParseIntPrefix(s string, radix int) float64 {
 		neg = s[0] == '-'
 		s = s[1:]
 	}
+	// The 0x is taken off even with nothing after it, which leaves no
+	// digits: parseInt("0x") is NaN.
 	switch radix {
 	case 0:
-		if hasHexPrefix(s) {
+		if hasHexMark(s) {
 			s, radix = s[2:], 16
 		} else {
 			radix = 10
 		}
 	case 16:
 		// An explicit radix of 16 still permits the 0x prefix.
-		if hasHexPrefix(s) {
+		if hasHexMark(s) {
 			s = s[2:]
 		}
 	}
@@ -278,24 +281,88 @@ func ParseIntPrefix(s string, radix int) float64 {
 	}
 	s = s[:end]
 
-	// Fast path: values that fit in an int64 convert exactly.
-	if v, err := strconv.ParseInt(s, radix, 64); err == nil {
-		if neg {
-			return float64(-v)
-		}
-		return float64(v)
-	}
-	// Slow path: accumulate in float64, accepting the precision loss the spec
-	// permits for values beyond 2^53.
-	var v float64
-	for i := 0; i < len(s); i++ {
-		// Rounded before the sum, as on every platform that does not fuse.
-		v = float64(v*float64(radix)) + float64(digitVal(s[i]))
-	}
+	v := parseDigits(s, radix)
 	if neg {
 		return -v
 	}
 	return v
+}
+
+// parseDigits is the value of a string of digits in a radix, as V8 works it
+// out: correctly rounded in radix 10 and in a power of two, where the
+// standard asks for the exact value; and in any other radix by V8's own
+// approximation, which the standard allows and which a script can see.
+func parseDigits(s string, radix int) float64 {
+	// Values that fit in an int64 are exact, and the conversion rounds once.
+	if v, err := strconv.ParseInt(s, radix, 64); err == nil {
+		return float64(v)
+	}
+	switch radix {
+	case 10:
+		f, _ := strconv.ParseFloat(s, 64)
+		return f
+	case 2, 4, 8, 16, 32:
+		return parsePow2(s, bits.TrailingZeros(uint(radix)))
+	}
+	// V8 multiplies in chunks that keep the multiplier within 32 bits, and
+	// folds each chunk into the double -- the chunks counted from the first
+	// digit that is not a zero, which it skips first.
+	s = strings.TrimLeft(s, "0")
+	const maxMultiplier = 0xFFFFFFFF / 36
+	var v float64
+	for i := 0; i < len(s); {
+		part, multiplier := uint32(0), uint32(1)
+		for i < len(s) {
+			m := multiplier * uint32(radix)
+			if m > maxMultiplier {
+				break
+			}
+			part = part*uint32(radix) + uint32(digitVal(s[i]))
+			multiplier = m
+			i++
+		}
+		// The product is rounded before the sum, as V8's is: an arm64 build
+		// would otherwise fuse them.
+		v = float64(v*float64(multiplier)) + float64(part)
+	}
+	return v
+}
+
+// parsePow2 is the correctly rounded value of digits in a radix of 2^k: the
+// first 64 significant bits are kept, whether any after them are set is
+// remembered, and the rounding to 53 is made once, to nearest, ties to even.
+func parsePow2(s string, k int) float64 {
+	var m uint64
+	n, extra := 0, 0
+	sticky := false
+	for i := 0; i < len(s); i++ {
+		d := uint64(digitVal(s[i]))
+		for b := k - 1; b >= 0; b-- {
+			bit := d >> uint(b) & 1
+			switch {
+			case n == 0 && bit == 0:
+				// A leading zero.
+			case n < 64:
+				m = m<<1 | bit
+				n++
+			default:
+				extra++
+				sticky = sticky || bit == 1
+			}
+		}
+	}
+	if n <= 53 {
+		return math.Ldexp(float64(m), extra)
+	}
+	shift := uint(n - 53)
+	keep, rest := m>>shift, m&(1<<shift-1)
+	half := uint64(1) << (shift - 1)
+	// Past half, or half with anything set after it, rounds up; exactly
+	// half rounds to the even one.
+	if rest > half || rest == half && (sticky || keep&1 == 1) {
+		keep++
+	}
+	return math.Ldexp(float64(keep), extra+int(shift))
 }
 
 // ToNumber implements the String-to-Number conversion used by the abstract
@@ -344,19 +411,19 @@ func parseRadixExact(s string, radix int) float64 {
 	if s == "" {
 		return math.NaN()
 	}
-	var v float64
 	for i := 0; i < len(s); i++ {
-		d := digitVal(s[i])
-		if d >= radix {
+		if digitVal(s[i]) >= radix {
 			return math.NaN()
 		}
-		v = float64(v*float64(radix)) + float64(d)
 	}
-	return v
+	// Once, correctly rounded: accumulating in a double rounded at every
+	// digit past 2^53.
+	return parseDigits(s, radix)
 }
 
-func hasHexPrefix(s string) bool {
-	return len(s) > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')
+// hasHexMark reports whether s begins with 0x or 0X.
+func hasHexMark(s string) bool {
+	return len(s) >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')
 }
 
 func digitVal(c byte) int {
