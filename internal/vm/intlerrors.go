@@ -63,6 +63,10 @@ func (r *Runtime) v8Describe(v Value) string {
 				if n := fn.getOwnVisible(r.atoms.intern("name")); n != nil && !n.isAccessor() &&
 					n.value.IsString() && n.value.String().Go() != "" {
 					name = n.value.String().Go()
+				} else if fd := fn.fn(); n == nil && fd != nil && fd.name != "" && !fd.propsMaterialized {
+					// A built-in's name is made when first asked for, and
+					// is the one it was made with until then.
+					name = fd.name
 				}
 			}
 			break

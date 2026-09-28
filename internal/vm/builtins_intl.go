@@ -329,15 +329,29 @@ func (r *Runtime) legacyFormatter(this Value, made *Object) Value {
 
 // unwrapFormatter follows the symbol a formatter made without new was hidden
 // under, for the methods that have to work on either.
-func (r *Runtime) unwrapFormatter(this Value) Value {
-	o := this.Object()
-	if o == nil {
-		return this
+// It is ECMA-402's UnwrapNumberFormat and UnwrapDateTimeFormat: an object
+// that is a formatter is one already; one that is not is followed only if it
+// inherits from the formatter's prototype, as OrdinaryHasInstance asks --
+// through [[GetPrototypeOf]], which a proxy's trap answers -- and anything a
+// getter or a trap throws is thrown.
+func (r *Runtime) unwrapFormatter(this Value, proto *Object, is func(*Object) bool) (Value, error) {
+	if !this.IsObject() || is(this.Object()) {
+		return this, nil
 	}
-	if v, err := r.getProp(o, r.atoms.internSymbol(r.intlFallback), this); err == nil && v.IsObject() {
-		return v
+	for o := this.Object(); ; {
+		p, err := r.protoOf(o)
+		if err != nil {
+			return Undefined, err
+		}
+		if !p.IsObject() {
+			return this, nil
+		}
+		if p.Object() == proto {
+			break
+		}
+		o = p.Object()
 	}
-	return this
+	return r.getProp(this.Object(), r.atoms.internSymbol(r.intlFallback), this)
 }
 
 // bound hands out the function a format getter answers with. It is made once
@@ -911,9 +925,25 @@ func wellFormedUnit(unit string) bool {
 }
 
 func (r *Runtime) numberFormatOf(this Value, method string) (*numberOptions, error) {
-	if o := r.unwrapFormatter(this).Object(); o != nil {
-		if opts, ok := o.data.(*numberOptions); ok {
+	if this.IsObject() {
+		if opts, ok := this.Object().data.(*numberOptions); ok {
 			return opts, nil
+		}
+	}
+	// Only the format getter and resolvedOptions unwrap a formatter made
+	// without new; the rest require one.
+	if method == "UnwrapNumberFormat" || method == "get Intl.NumberFormat.prototype.format" {
+		v, err := r.unwrapFormatter(this, r.intlProtoOf("NumberFormat"), func(o *Object) bool {
+			_, ok := o.data.(*numberOptions)
+			return ok
+		})
+		if err != nil {
+			return nil, err
+		}
+		if v.IsObject() {
+			if opts, ok := v.Object().data.(*numberOptions); ok {
+				return opts, nil
+			}
 		}
 	}
 	// V8 unwraps an object as a legacy formatter first, and reports one that

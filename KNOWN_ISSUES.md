@@ -549,7 +549,9 @@ Paths are relative to this repository; `go-intl:` paths are in
 ### KI-54 `unwrapFormatter` reads the legacy symbol unconditionally
 - **Effect:** there is no `OrdinaryHasInstance` check first, and it also
   unwraps where the spec does not.
-- **Status:** open.
+- **Status:** fixed. Only the format getters and `resolvedOptions` unwrap,
+  after `OrdinaryHasInstance`, and a built-in constructor's name is right in
+  V8's receiver messages.
 
 ### KI-55 Out-of-range Temporal plain values are formatted
 - **Expected:** a `RangeError`.

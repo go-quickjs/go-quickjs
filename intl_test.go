@@ -1032,3 +1032,35 @@ func TestIntlResolvedDigits(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// TestLegacyFormatterUnwrap pins ECMA-402's UnwrapNumberFormat and
+// UnwrapDateTimeFormat: only the format getter and resolvedOptions follow a
+// formatter made without new, and only on an object that inherits from the
+// formatter's prototype, asked through [[GetPrototypeOf]]; the messages are
+// V8's. formatToParts unwrapped too, and so did an object that merely held
+// the symbol (KI-54). The answers are node's.
+func TestLegacyFormatterUnwrap(t *testing.T) {
+	checkEval(t, `const t = (f) => { try { return f() } catch (e) { return e.constructor.name + ": " + e.message } };
+		const out = [];
+		for (const C of [Intl.NumberFormat, Intl.DateTimeFormat]) {
+			const legacy = Object.create(C.prototype); C.call(legacy);
+			const sym = Object.getOwnPropertySymbols(legacy)[0];
+			out.push(t(() => typeof C.prototype.resolvedOptions.call(legacy).locale));
+			out.push(t(() => typeof Object.getOwnPropertyDescriptor(C.prototype, "format").get.call(legacy)));
+			out.push(t(() => C.prototype.formatToParts.call(legacy, 0).length));
+			out.push(t(() => C.prototype.resolvedOptions.call({[sym]: new C()}).locale));
+			const traps = [];
+			const px = new Proxy(legacy, {getPrototypeOf(t) { traps.push("gpo"); return Reflect.getPrototypeOf(t); }});
+			out.push(t(() => typeof C.prototype.resolvedOptions.call(px).locale) + " " + traps.join());
+		}
+		out.join("\n")`, strings.Join([]string{
+		"string", "function",
+		"TypeError: Method Intl.NumberFormat.prototype.formatToParts called on incompatible receiver #<NumberFormat>",
+		"TypeError: Method UnwrapNumberFormat called on incompatible receiver undefined",
+		"string gpo",
+		"string", "function",
+		"TypeError: Method Intl.DateTimeFormat.prototype.formatToParts called on incompatible receiver #<DateTimeFormat>",
+		"TypeError: Method UnwrapDateTimeFormat called on incompatible receiver #<Object>",
+		"string gpo",
+	}, "\n"))
+}

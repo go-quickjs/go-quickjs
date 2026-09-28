@@ -389,9 +389,25 @@ func (r *Runtime) dateTimeRange(this Value, args []Value, method string) (*range
 }
 
 func (r *Runtime) dateTimeFormatOf(this Value, method string) (*dateTimeFormat, error) {
-	if o := r.unwrapFormatter(this).Object(); o != nil {
-		if d, ok := o.data.(*dateTimeFormat); ok {
+	if this.IsObject() {
+		if d, ok := this.Object().data.(*dateTimeFormat); ok {
 			return d, nil
+		}
+	}
+	// Only the format getter and resolvedOptions unwrap a formatter made
+	// without new; the rest require one.
+	if method == "UnwrapDateTimeFormat" || method == "get Intl.DateTimeFormat.prototype.format" {
+		v, err := r.unwrapFormatter(this, r.intlProtoOf("DateTimeFormat"), func(o *Object) bool {
+			_, ok := o.data.(*dateTimeFormat)
+			return ok
+		})
+		if err != nil {
+			return nil, err
+		}
+		if v.IsObject() {
+			if d, ok := v.Object().data.(*dateTimeFormat); ok {
+				return d, nil
+			}
 		}
 	}
 	// V8 unwraps an object as a legacy formatter first, and reports one that
