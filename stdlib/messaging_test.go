@@ -291,3 +291,30 @@ func TestDOMException(t *testing.T) {
 		t.Errorf("got\n%s\nwant\n%s", out, want)
 	}
 }
+
+// TestDroppedMessagesClosePorts pins that the ports inside a message that is
+// never delivered are closed, as node closes them, so their other ends hear
+// it: they stayed entangled with nothing holding them, and a started port
+// held its loop forever (KI-23).
+func TestDroppedMessagesClosePorts(t *testing.T) {
+	const listen = `
+		const c = new MessageChannel();
+		c.port2.onmessage = () => {};
+		c.port2.addEventListener("close", () => console.log("closed"));`
+	for name, src := range map[string]string{
+		"posted to a closed port": `const a = new MessageChannel(); a.port2.close();` + listen + `
+			a.port1.postMessage(null, [c.port1]);`,
+		"queued on a port that closes": `const a = new MessageChannel();` + listen + `
+			a.port1.postMessage(null, [c.port1]);
+			a.port2.close();`,
+		"unread by a worker that ends": `const w = new require_worker_threads.Worker("./idle.mjs");` + listen + `
+			w.postMessage(null, [c.port1]);`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := stdlib.Config{Workers: workerFiles(map[string]string{"./idle.mjs": ``})}
+			if out, _ := run(t, cfg, src); out != "closed" {
+				t.Errorf("got %q", out)
+			}
+		})
+	}
+}

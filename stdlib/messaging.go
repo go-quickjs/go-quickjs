@@ -147,9 +147,14 @@ func (m *messaging) host() map[string]any {
 			e.core.mu.Lock()
 			peer := e.core.peer
 			e.core.mu.Unlock()
-			if peer != nil {
-				peer.enqueue(portMsg{data: data, ports: ports})
+			msg := portMsg{data: data, ports: ports}
+			if peer == nil {
+				// Posted to a port whose other end has closed, the message
+				// goes nowhere, and the ports it carries are closed.
+				dropMessages(msg)
+				return nil
 			}
+			peer.enqueue(msg)
 			return nil
 		},
 		"portStart": func(id int) {
@@ -379,6 +384,7 @@ func (c *portCore) enqueue(msg portMsg) {
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
+		dropMessages(msg)
 		return
 	}
 	c.queue = append(c.queue, msg)
@@ -410,6 +416,7 @@ func (e *portEnd) dispatchNext() {
 		return
 	}
 	var msg portMsg
+	var dropped []portMsg
 	switch {
 	case len(c.queue) == 0 || c.closed:
 		c.scheduled = false
@@ -432,9 +439,11 @@ func (e *portEnd) dispatchNext() {
 			c.mu.Unlock()
 			return
 		}
+		dropped = c.queue[:at]
 		msg, c.queue = c.queue[at], nil
 	}
 	c.mu.Unlock()
+	dropMessages(dropped...)
 
 	switch msg.kind {
 	case msgClose:
@@ -523,9 +532,10 @@ func (e *portEnd) close() {
 // one sent before: with the exit code, when this is a worker's end.
 func (c *portCore) disentangle(code int) {
 	c.mu.Lock()
-	peer := c.peer
+	peer, dropped := c.peer, c.queue
 	c.peer, c.closed, c.queue = nil, true, nil
 	c.mu.Unlock()
+	dropMessages(dropped...)
 	if peer != nil {
 		peer.mu.Lock()
 		peer.peer = nil
@@ -549,8 +559,10 @@ func (c *portCore) send(msg portMsg) {
 func (e *portEnd) closed(code int) {
 	c := e.core
 	c.mu.Lock()
+	dropped := c.queue
 	c.closed, c.queue = true, nil
 	c.mu.Unlock()
+	dropMessages(dropped...)
 	e.release()
 	if e.worker != nil {
 		e.worker.exited(code)
@@ -651,8 +663,21 @@ func unregisterBroadcast(name string, core *portCore) {
 	}
 	broadcasts.Unlock()
 	core.mu.Lock()
+	dropped := core.queue
 	core.closed, core.queue = true, nil
 	core.mu.Unlock()
+	dropMessages(dropped...)
+}
+
+// dropMessages closes the ports inside messages that will never be
+// delivered, as node does: their other ends hear that they have closed,
+// rather than holding their loops open waiting on ports no runtime has.
+func dropMessages(msgs ...portMsg) {
+	for _, msg := range msgs {
+		for _, c := range msg.ports {
+			c.disentangle(0)
+		}
+	}
 }
 
 // detach lets go of a port being posted: its messages wait in its queue for

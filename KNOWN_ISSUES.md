@@ -275,7 +275,8 @@ Paths are relative to this repository; `go-intl:` paths are in
   - a worker ending with messages unread
 - **Effect:** the ports inside those messages are left entangled with no
   owner, so a started peer holds its loop forever. Node closes them.
-- **Status:** open.
+- **Status:** fixed. Every place a queue or a message is dropped closes the
+  ports it carries.
 
 ### KI-24 A closed runtime's `waitAsync` waiters absorb notifies
 - **Where:** `internal/vm/sharedmem.go`.
