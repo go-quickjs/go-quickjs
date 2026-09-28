@@ -378,7 +378,8 @@ Paths are relative to this repository; `go-intl:` paths are in
   checks read the target's property table.
 - **Effect:** they miss an array's `length`, String indices, a lazy
   `prototype`, dense elements, and a target that is itself a proxy.
-- **Status:** open.
+- **Status:** fixed. Both ask the target through its `[[GetOwnProperty]]`,
+  `[[OwnPropertyKeys]]` and `[[IsExtensible]]`, in the standard's order.
 
 ### KI-34 Proxy trap errors are swallowed
 - **Where:** `hasProp` on a proxy's target, and the `with`-scope lookups in

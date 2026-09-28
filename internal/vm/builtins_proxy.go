@@ -176,11 +176,27 @@ func (r *Runtime) proxyHas(p *proxyData, key Atom) (bool, error) {
 		return false, err
 	}
 	if !res.Truthy() {
-		// A property that cannot be deleted cannot be denied either.
-		if prop := p.target.getOwnVisible(key); prop != nil {
-			if prop.flags&propConfigurable == 0 || !p.target.IsExtensible() {
+		// A property that cannot be deleted cannot be denied either, nor any
+		// of a target that may not change. The target is asked as anything
+		// would ask it -- an array for its length, a string for its
+		// characters, a proxy through its traps -- not read off its table.
+		desc, err := r.ownPropDesc(p.target, key)
+		if err != nil {
+			return false, err
+		}
+		if desc != nil {
+			if !desc.configurable {
 				return false, r.throwTypeError(
 					"the proxy \"has\" trap denied the non-configurable property %q",
+					r.atoms.name(key))
+			}
+			ext, err := r.isExtensibleOf(p.target)
+			if err != nil {
+				return false, err
+			}
+			if !ext {
+				return false, r.throwTypeError(
+					"the proxy \"has\" trap denied the property %q of a non-extensible target",
 					r.atoms.name(key))
 			}
 		}
@@ -284,41 +300,60 @@ func (r *Runtime) proxyOwnKeys(p *proxyData) ([]Atom, error) {
 	}
 
 	// A key that cannot be deleted has to be listed, and a non-extensible
-	// target's list has to be exactly its own.
-	r.materializeFunctionProto(p.target)
-	for _, k := range p.target.ownKeys(true, r.atoms) {
-		if seen[k] {
-			continue
-		}
-		if prop := p.target.getOwnVisible(k); prop != nil && prop.flags&propConfigurable == 0 {
-			return nil, r.throwTypeError(
-				"the proxy \"ownKeys\" trap omitted the non-configurable property %q",
-				r.atoms.name(k))
-		}
-		if !p.target.IsExtensible() {
-			return nil, r.throwTypeError(
-				"the proxy \"ownKeys\" trap omitted a property of a non-extensible target")
-		}
-	}
+	// target's list has to be exactly its own. The target is asked, in the
+	// standard's order, as anything would ask it: its keys and their
+	// descriptors are an array's length, a string's characters, a lazy
+	// prototype, and a proxy's traps' answers, not its table.
 	targetExt, err := r.isExtensibleOf(p.target)
 	if err != nil {
 		return nil, err
 	}
-	if !targetExt {
-		own := make(map[Atom]bool)
-		targetKeys, err := r.ownKeysOf(p.target, true)
+	targetKeys, err := r.ownKeysOf(p.target, true)
+	if err != nil {
+		return nil, err
+	}
+	var fixed, loose []Atom
+	for _, k := range targetKeys {
+		desc, err := r.ownPropDesc(p.target, k)
 		if err != nil {
 			return nil, err
 		}
-		for _, k := range targetKeys {
-			own[k] = true
+		if desc != nil && !desc.configurable {
+			fixed = append(fixed, k)
+		} else {
+			loose = append(loose, k)
 		}
-		for _, k := range keys {
-			if !own[k] {
-				return nil, r.throwTypeError(
-					"the proxy \"ownKeys\" trap invented %q on a non-extensible target",
-					r.atoms.name(k))
-			}
+	}
+	if targetExt && len(fixed) == 0 {
+		return keys, nil
+	}
+	unchecked := make(map[Atom]bool, len(keys))
+	for _, k := range keys {
+		unchecked[k] = true
+	}
+	for _, k := range fixed {
+		if !unchecked[k] {
+			return nil, r.throwTypeError(
+				"the proxy \"ownKeys\" trap omitted the non-configurable property %q",
+				r.atoms.name(k))
+		}
+		delete(unchecked, k)
+	}
+	if targetExt {
+		return keys, nil
+	}
+	for _, k := range loose {
+		if !unchecked[k] {
+			return nil, r.throwTypeError(
+				"the proxy \"ownKeys\" trap omitted a property of a non-extensible target")
+		}
+		delete(unchecked, k)
+	}
+	for _, k := range keys {
+		if unchecked[k] {
+			return nil, r.throwTypeError(
+				"the proxy \"ownKeys\" trap invented %q on a non-extensible target",
+				r.atoms.name(k))
 		}
 	}
 	return keys, nil
@@ -646,6 +681,11 @@ func (r *Runtime) ownPropDesc(o *Object, key Atom) (*propDesc, error) {
 			if err := r.touchDeferred(o, key); err != nil {
 				return nil, err
 			}
+		}
+		// A function's prototype is made when first asked for, and this is
+		// asking.
+		if key == atomPrototype {
+			r.materializeFunctionProto(o)
 		}
 		return r.currentDescriptor(o, key)
 	}
