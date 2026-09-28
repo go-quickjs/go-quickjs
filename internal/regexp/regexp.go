@@ -76,6 +76,13 @@ func (re *Regexp) GroupNames() map[string][]int { return re.groupNames }
 // each group's, with -1 for a group that did not participate. A nil result
 // means no match.
 func (re *Regexp) Match(units []uint16, start int) ([]int, error) {
+	return re.MatchChecked(units, start, nil)
+}
+
+// MatchChecked is Match for a caller that can be interrupted: check is asked
+// every few thousand steps, and what it returns stops the match and is
+// returned. With a check there is no step budget; with none, Match's applies.
+func (re *Regexp) MatchChecked(units []uint16, start int, check func() error) ([]int, error) {
 	if start < 0 {
 		start = 0
 	}
@@ -83,7 +90,7 @@ func (re *Regexp) Match(units []uint16, start int) ([]int, error) {
 		return nil, nil
 	}
 	in := &input{units: units, unicode: re.flags&FlagUnicode != 0}
-	return re.exec(in, start)
+	return re.exec(in, start, check)
 }
 
 // MatchString is Match on a Go string, which is converted to code units first.

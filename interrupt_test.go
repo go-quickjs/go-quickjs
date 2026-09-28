@@ -104,3 +104,34 @@ func TestNativeLoopsAreInterruptible(t *testing.T) {
 		})
 	}
 }
+
+// TestRegExpMatchingIsInterruptible pins that a regular expression's match
+// takes as long as it takes, as in V8, and that a deadline stops it: a match
+// had a budget of steps instead, which a pattern with a catastrophic backtrack
+// spent on every call of a loop that caught the error -- running long past
+// any deadline -- and which ordinary patterns over long strings ran out of,
+// throwing where V8 answers (KI-16, KI-17).
+//
+// A host that cannot stop a script -- no deadline -- keeps the budget, so
+// that a catastrophic pattern cannot hang it for good.
+func TestRegExpMatchingIsInterruptible(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	long, cancelLong := context.WithTimeout(context.Background(), time.Minute)
+	defer cancelLong()
+	v, err := rt.EvalContext(long, `[/z/.test("a".repeat(6e7)), "a".repeat(6e7).replace(/b/g, "c").length].join()`)
+	if err != nil || v.String() != "false,60000000" {
+		t.Errorf("long subjects: %v, %v", v, err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err = rt.EvalContext(ctx, `for (;;) { try { /(a+)+$/.test("a".repeat(28) + "b") } catch (e) {} }`)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want the deadline", err)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Errorf("stopped after %v", d)
+	}
+}

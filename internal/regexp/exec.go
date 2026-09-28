@@ -17,6 +17,11 @@ import (
 // embedded in a host cannot be allowed to hang, so the matcher gives up after a
 // bounded number of steps and reports ErrComplexity, which the caller turns
 // into a thrown error.
+//
+// A caller that can be interrupted -- a JavaScript runtime, which has a
+// deadline of its own -- passes a check instead, which the matcher asks every
+// few thousand steps, and has no budget: a match takes as long as it takes,
+// as it does in V8, until the check says to stop.
 
 // ErrComplexity reports that a match exceeded its step budget.
 var ErrComplexity = errors.New("regular expression is too complex")
@@ -27,6 +32,10 @@ var ErrComplexity = errors.New("regular expression is too complex")
 // a megabyte of text with a linear pattern costs a few million steps -- and
 // small enough that a pathological one fails in well under a second.
 const maxSteps = 100_000_000
+
+// checkInterval is how many steps a matcher with a check takes between asking
+// it.
+const checkInterval = 4096
 
 // input is the subject string, viewed either as UTF-16 code units or as code
 // points depending on the unicode flag.
@@ -109,6 +118,9 @@ type matcher struct {
 	emptyMarks []int
 
 	steps int
+	// check, when there is one, is asked every checkInterval steps whether to
+	// stop, and the step budget does not apply.
+	check func() error
 	// busy marks the matcher a pattern lends out, so that a pattern used again
 	// while a match is running does not have its state overwritten.
 	busy bool
@@ -122,7 +134,7 @@ type matcher struct {
 // backtracking stack and capture trail are what it spends its allocations on.
 // A pattern used again while a match is running -- a replacement callback that
 // uses the same one -- gets a matcher of its own.
-func (re *Regexp) exec(in *input, start int) ([]int, error) {
+func (re *Regexp) exec(in *input, start int, check func() error) ([]int, error) {
 	m := re.scratch
 	if m == nil || m.busy {
 		m = &matcher{
@@ -134,7 +146,7 @@ func (re *Regexp) exec(in *input, start int) ([]int, error) {
 			re.scratch = m
 		}
 	}
-	m.prog, m.in = re.prog, in
+	m.prog, m.in, m.check = re.prog, in, check
 	// The budget is what this attempt may spend, so it starts again here: a
 	// matcher is lent out over and over, and a pattern that had spent its
 	// budget once would have been refused for the rest of the program.
@@ -144,7 +156,7 @@ func (re *Regexp) exec(in *input, start int) ([]int, error) {
 		m.busy = false
 		// The input is not held on to: it would keep the subject string alive
 		// for as long as the pattern.
-		m.in = nil
+		m.in, m.check = nil, nil
 	}()
 
 	for pos := start; pos <= in.length(); {
@@ -193,7 +205,13 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 	pc := 0
 	for {
 		m.steps++
-		if m.steps > maxSteps {
+		if m.check != nil {
+			if m.steps%checkInterval == 0 {
+				if err := m.check(); err != nil {
+					return false, err
+				}
+			}
+		} else if m.steps > maxSteps {
 			return false, ErrComplexity
 		}
 
@@ -520,6 +538,7 @@ func (m *matcher) runLook(idx, pos int) (bool, error) {
 		counters:   make([]int, m.prog.counters),
 		emptyMarks: make([]int, m.prog.emptyChecks),
 		steps:      m.steps,
+		check:      m.check,
 	}
 	for i := range sub.emptyMarks {
 		sub.emptyMarks[i] = -1

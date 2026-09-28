@@ -211,15 +211,19 @@ Paths are relative to this repository; `go-intl:` paths are in
   - module linking, which is also quadratic
 - **Status:** in progress. `fill` on an array-like, `JSON.stringify`'s walk
   and Intl's locale lists check for an interrupt; `JSON.stringify` is held
-  to KI-03's longest string. Regular expressions, `indexOf`, `toUpperCase`,
-  BigInt `**` and module linking are open.
+  to KI-03's longest string. A regular expression's match checks for one
+  where the host can stop the script. Compiling a regular expression,
+  `indexOf`, `toUpperCase`, BigInt `**` and module linking are open.
 
 ### KI-17 The regular expression step budget rejects ordinary patterns
 - **Effect:** `/z/.test("a".repeat(6e7))` and `/a*z/.test("a".repeat(2e4))`
   throw `SyntaxError: regular expression is too complex`; Node returns
   `false`.
 - **Fix:** an interruptible matcher (KI-16) removes the need for the budget.
-- **Status:** open.
+- **Status:** fixed where the host can stop the script -- a context with a
+  deadline, or an abort, as qjs always has: there a match has no budget and
+  takes as long as it does in V8. A host that cannot stop the script keeps the
+  budget, which is all that stands between a catastrophic pattern and a hang.
 
 ### KI-18 The job queue gives up after a million microtasks
 - **Where:** `internal/vm/promise.go`.

@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"errors"
 	"sort"
 	"strings"
 
@@ -311,9 +312,20 @@ func (r *Runtime) regexpExec(this Value, s *String) (Value, error) {
 		return Null, nil
 	}
 
-	caps, err := re.Match(units, start)
-	if err != nil {
+	// A match takes as long as it takes, as in V8, where the host can stop
+	// it. Where nothing can -- no deadline, no abort -- a catastrophic
+	// backtrack would hang the host for good, so the matcher's step budget
+	// bounds it instead.
+	var check func() error
+	if r.abort != nil || r.ctx != nil && r.ctx.Done() != nil {
+		check = r.checkInterruptNow
+	}
+	caps, err := re.MatchChecked(units, start, check)
+	if errors.Is(err, regexp.ErrComplexity) {
 		return Undefined, r.throwError(errSyntax, "%s", err.Error())
+	}
+	if err != nil {
+		return Undefined, err
 	}
 	if caps == nil {
 		if stateful {
