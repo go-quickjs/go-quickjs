@@ -300,10 +300,14 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 	// what this settles once: no proxy, no exotic own property, no receiver in
 	// between, and a plain writable data property to write to.
 	if rcv == obj && obj.class == ClassObject && obj.index == nil {
+		own := false
 		for i := range obj.props {
 			p := &obj.props[i]
-			if p.key != key ||
-				p.flags&(propDeleted|propPrivate|propAccessor) != 0 {
+			if p.key != key {
+				continue
+			}
+			own = true
+			if p.flags&(propDeleted|propPrivate|propAccessor) != 0 {
 				continue
 			}
 			if p.flags&propWritable == 0 {
@@ -312,6 +316,16 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 				break
 			}
 			p.value = val
+			return true, nil
+		}
+		// Creating one is the other thing most assignments are -- a
+		// constructor filling in its object -- and where nothing up the chain
+		// has the name, the walk has nothing to find: an ordinary object
+		// neither holds a setter for it nor synthesizes it, and a name that is
+		// no index cannot be an element. The property is added as the walk
+		// would have ended by adding it.
+		if !own && !key.IsIndex() && obj.flags&objExtensible != 0 && noneHas(obj.proto, key) {
+			obj.appendProp(Property{key: key, flags: propDefault, value: val})
 			return true, nil
 		}
 	}
@@ -433,6 +447,17 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 		return r.setOnReceiver(rcv, key, val, strict)
 	}
 	return r.createOwnProp(obj, key, val, strict)
+}
+
+// noneHas reports whether no object of a chain has a property named key, all
+// of them being ordinary objects, which have no property they do not store.
+func noneHas(o *Object, key Atom) bool {
+	for ; o != nil; o = o.proto {
+		if o.class != ClassObject || o.findOwn(key) >= 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // setOnReceiver completes an assignment that landed on an object other than the

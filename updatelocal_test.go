@@ -156,3 +156,26 @@ func TestGlobalUpdatesForEffect(t *testing.T) {
 		JSON.stringify([gu, gk, gv, gw, calls, gx, err]);
 	`, `[2,3,4,6,1,3,"ReferenceError"]`)
 }
+
+func TestCreatingPropertiesByAssignment(t *testing.T) {
+	// A property created by assignment is added directly only where nothing
+	// up the chain could have taken the assignment instead.
+	checkEval(t, `(function () {
+		"use strict";
+		var out = [], log = [];
+		function P(v) { this.a = v; this.b = v; this[Symbol.iterator] = v; }
+		out.push(Object.keys(new P(1)).join());
+		Object.defineProperty(Object.prototype, "b", { set(v) { log.push("set " + v); }, configurable: true });
+		var p = new P(2); out.push(Object.keys(p).join(), log.join());
+		delete Object.prototype.b;
+		Object.defineProperty(P.prototype, "a", { value: 0, writable: false, configurable: true });
+		try { new P(3); } catch (e) { out.push(e.constructor.name); }
+		delete P.prototype.a;
+		var viaProxy = Object.create(new Proxy({}, { set(t, k, v, r) { log.push("trap " + String(k)); return true; } }));
+		viaProxy.z = 1; out.push(Object.hasOwn(viaProxy, "z"), log.at(-1));
+		var viaArray = Object.create([]); viaArray.length = 5; out.push(Object.hasOwn(viaArray, "length"));
+		var sealed = Object.preventExtensions({});
+		try { sealed.q = 1; } catch (e) { out.push(e.constructor.name); }
+		return JSON.stringify(out);
+	})()`, `["a,b","a","set 2","TypeError",false,"trap z",true,"TypeError"]`)
+}
