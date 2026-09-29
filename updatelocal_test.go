@@ -235,3 +235,16 @@ func TestApplyingArgumentsWithoutTheObject(t *testing.T) {
 		return JSON.stringify(out);
 	})()`, `["1,2,3","","A,2,3","","1,2",[true,"changed",2,"function","[object Arguments]"],"TypeError",[7,"7,8"],"TypeError","replaced:2"]`)
 }
+
+func TestOperatorsWithALocalOnTheRight(t *testing.T) {
+	// `expr op local` is one instruction for + - *; the left operand is still
+	// coerced before the right, and anything but two numbers is the operator's.
+	checkEval(t, `(function () {
+		var log = [], s = "x", n = 3, big = 2n;
+		var l = { valueOf() { log.push("l"); return 10; } }, r = { valueOf() { log.push("r"); return 4; } };
+		var out = [(1 + 1) + s, (2 * 2) - n, (log.length >= 0 ? l : 0) * r, (5n * 5n) + big, [1] + n];
+		try { (1 + 1) * big; } catch (e) { out.push(e.constructor.name); }
+		out.push(log.join(""));
+		return JSON.stringify(out, (k, v) => typeof v === "bigint" ? String(v) + "n" : v);
+	})()`, `["2x",1,40,"27n","13","TypeError","lr"]`)
+}

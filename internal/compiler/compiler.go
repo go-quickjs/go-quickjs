@@ -527,6 +527,9 @@ func (c *compiler) fuse(op bytecode.Op, a uint32) (int, bool) {
 	case immediateOp(op) && last.Op == bytecode.OpPushInt:
 		last.Op, last.B = bytecode.OpBinImm, uint32(op)
 		c.movePosition(n)
+	case (op == bytecode.OpAdd || op == bytecode.OpSub || op == bytecode.OpMul) && last.Op == bytecode.OpGetLocal:
+		last.Op, last.B = bytecode.OpBinLocal, uint32(op)
+		c.movePosition(n)
 	case op == bytecode.OpGetIndex && last.Op == bytecode.OpGetLocal2:
 		last.Op = bytecode.OpGetLocalIndex
 		c.movePosition(n)
@@ -1358,7 +1361,7 @@ func stackEffect(op bytecode.Op, a, b uint32) int {
 		return 2
 	case bytecode.OpGetLocalIndex:
 		return 1
-	case bytecode.OpSetLocalGet, bytecode.OpBinImm:
+	case bytecode.OpSetLocalGet, bytecode.OpBinImm, bytecode.OpBinLocal:
 		return 0
 	case bytecode.OpApplyArguments:
 		return -2

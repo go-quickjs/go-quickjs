@@ -512,6 +512,9 @@ const (
 	// OpLazyArguments pushes the arguments object kept in Locals[A], making it
 	// there first if it has not been made.
 	OpLazyArguments
+	// OpBinLocal is get_local A then the arithmetic operator B -- add, sub or
+	// mul -- with the local as its right operand: `a*b + c`, `s + x`.
+	OpBinLocal
 
 	// opCount is the number of opcodes, used to size the name table.
 	opCount
@@ -584,6 +587,7 @@ var opNames = [opCount]string{
 	OpGetArguments:          "get_arguments",
 	OpApplyArguments:        "apply_arguments",
 	OpLazyArguments:         "lazy_arguments",
+	OpBinLocal:              "bin_local",
 	OpArrayRest:             "array_rest",
 	OpObjectRest:            "object_rest",
 

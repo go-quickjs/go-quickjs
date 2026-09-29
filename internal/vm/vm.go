@@ -2642,6 +2642,26 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			sp = pushAt(stack, sp, Obj(r.newArrayFrom(rest)))
 		case bytecode.OpGetArguments:
 			sp = pushAt(stack, sp, Obj(r.newArgumentsObject(f)))
+		case bytecode.OpBinLocal:
+			a, b := stack[sp-1], f.locals[in.A]
+			op := bytecode.Op(in.B)
+			if a.IsNumber() && b.IsNumber() {
+				x, y := a.Number(), b.Number()
+				if op == bytecode.OpAdd {
+					stack[sp-1] = Float(x + y)
+				} else if op == bytecode.OpMul {
+					stack[sp-1] = Float(x * y)
+				} else {
+					stack[sp-1] = Float(x - y)
+				}
+				break
+			}
+			v, err := r.binImm(op, a, b)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			stack[sp-1] = v
 		case bytecode.OpLazyArguments:
 			if !f.locals[in.A].IsObject() {
 				f.locals[in.A] = Obj(r.newArgumentsObject(f))
