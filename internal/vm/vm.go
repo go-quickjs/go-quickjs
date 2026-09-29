@@ -3943,7 +3943,20 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 			return Undefined, err
 		}
 	}
-	res, err := r.callObject(o, this, args, newTarget)
+	var res Value
+	if fd.boundTarget == nil && fd.closure != nil && fd.closure.realm == r.Realm {
+		// A compiled constructor of this realm is run directly: nothing
+		// callObject would ask of it -- a proxy, a bound target, a generator,
+		// a realm to switch to -- applies.
+		if err = r.tick(); err == nil {
+			res, err = r.run(fd.closure, this, args, newTarget, o)
+			if err == errNoSuper {
+				err = r.throwError(errReference, "%s", errNoSuper.Error())
+			}
+		}
+	} else {
+		res, err = r.callObject(o, this, args, newTarget)
+	}
 	if err != nil {
 		return Undefined, err
 	}

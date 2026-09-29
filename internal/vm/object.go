@@ -206,16 +206,40 @@ type literalObject struct {
 	inline [3]Property
 }
 
+// literalObject1 and literalObject2 are literalObject for an object that says
+// it will have one property or two. Each is the next size class down: a pair's
+// two fields, the commonest of all, fit in 144 bytes rather than 160.
+type literalObject1 struct {
+	Object
+	inline [1]Property
+}
+
+type literalObject2 struct {
+	Object
+	inline [2]Property
+}
+
 // newLiteralObject returns an object that is about to be given n properties.
+// One that says none -- a constructor that fills its object in elsewhere --
+// gets the room for three.
 func newLiteralObject(proto *Object, class Class, n int) *Object {
+	o := Object{proto: proto, class: class, flags: objExtensible | objInlineProps}
+	switch n {
+	case 1:
+		lo := &literalObject1{Object: o}
+		lo.props = lo.inline[:0]
+		return &lo.Object
+	case 2:
+		lo := &literalObject2{Object: o}
+		lo.props = lo.inline[:0]
+		return &lo.Object
+	}
 	if n > len(literalObject{}.inline) {
 		o := &Object{proto: proto, class: class, flags: objExtensible}
 		o.props = make([]Property, 0, n)
 		return o
 	}
-	lo := &literalObject{
-		Object: Object{proto: proto, class: class, flags: objExtensible | objInlineProps},
-	}
+	lo := &literalObject{Object: o}
 	lo.props = lo.inline[:0]
 	return &lo.Object
 }
