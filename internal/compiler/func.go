@@ -126,6 +126,14 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 			// parameter scope, which the body may shadow.
 			c.locals[len(c.locals)-1].paramScoped = true
 		}
+		// A body that only hands the object to apply gets none: each such
+		// call is one instruction, which gives the arguments themselves to
+		// the built-in apply, and makes the object then for anything else.
+		if !fn.Generator && !fn.Async && !referencesArgumentsInParams(fn.Params) &&
+			argumentsOnlyApplied(fn.Body) {
+			c.lazyArguments, c.lazyArgumentsSlot = true, slot
+			return
+		}
 		c.emit(bytecode.OpGetArguments, 0, 0)
 		c.emit(bytecode.OpSetLocal, slot, 0)
 	}, wantArguments)

@@ -200,3 +200,38 @@ func TestIndexedReadsWithAnUpdatedKey(t *testing.T) {
 		return JSON.stringify(out);
 	})()`, `[20,20,2,30,10,0,1,1,"replaced","proto","y","y",2,5,"1","one","TypeError",1,"at <eval>:13:14"]`)
 }
+
+func TestApplyingArgumentsWithoutTheObject(t *testing.T) {
+	// A function that only passes its arguments on with apply makes no
+	// arguments object for the built-in apply; what the callee receives, and
+	// what any other apply is given, is what the object would have been.
+	checkEval(t, `(function () {
+		var out = [];
+		function list() { return Array.prototype.join.call(arguments, ","); }
+		function pass(a, b) { return list.apply(this, arguments); }
+		function reassign(a, b) { a = "A"; return list.apply(this, arguments); }
+		function strictReassign(a, b) { "use strict"; a = "A"; return list.apply(this, arguments); }
+		out.push(pass(1, 2, 3), pass(), reassign(1, 2, 3), reassign(), strictReassign(1, 2));
+		function viaOwn(a) {
+			var f = { apply: function (t, args) { return args; } };
+			var first = f.apply(null, arguments);
+			a = "changed";
+			var second = f.apply(null, arguments);
+			return [first === second, first[0], first.length, typeof first.callee, Object.prototype.toString.call(first)];
+		}
+		out.push(viaOwn("x", "y"));
+		function notCallable() { return ({}).apply ? 0 : Function.prototype.apply.call(5, null, []); }
+		function badTarget() { var o = { apply: Function.prototype.apply }; return o.apply(null, arguments); }
+		try { badTarget(1); } catch (e) { out.push(e.constructor.name); }
+		function withArrow(a) { var g = () => arguments[0]; return [g(), list.apply(null, arguments)]; }
+		out.push(withArrow(7, 8));
+		class K {}
+		function ctor() { return K.apply(null, arguments); }
+		try { ctor(); } catch (e) { out.push(e.constructor.name); }
+		var saved = Function.prototype.apply;
+		Function.prototype.apply = function (t, args) { return "replaced:" + args.length; };
+		out.push(pass(1, 2));
+		Function.prototype.apply = saved;
+		return JSON.stringify(out);
+	})()`, `["1,2,3","","A,2,3","","1,2",[true,"changed",2,"function","[object Arguments]"],"TypeError",[7,"7,8"],"TypeError","replaced:2"]`)
+}

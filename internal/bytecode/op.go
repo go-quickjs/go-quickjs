@@ -501,6 +501,18 @@ const (
 	OpInitParam
 	OpParamNeedsDefault
 
+	// --- Added last, so that no instruction before them is renumbered -----
+	// Go lays the interpreter's cases out in the order of their values, and
+	// renumbering moves them all.
+	// OpApplyArguments is f.apply(x, arguments) in a function whose arguments
+	// object is made only on demand, in Locals[A]: with f, apply and x on the
+	// stack, it calls f with the arguments themselves where apply is the
+	// built-in, and apply with the object, made now, where it is not.
+	OpApplyArguments
+	// OpLazyArguments pushes the arguments object kept in Locals[A], making it
+	// there first if it has not been made.
+	OpLazyArguments
+
 	// opCount is the number of opcodes, used to size the name table.
 	opCount
 )
@@ -570,6 +582,8 @@ var opNames = [opCount]string{
 	OpInstallPrivateMethods: "install_private_methods",
 	OpRestParam:             "rest_param",
 	OpGetArguments:          "get_arguments",
+	OpApplyArguments:        "apply_arguments",
+	OpLazyArguments:         "lazy_arguments",
 	OpArrayRest:             "array_rest",
 	OpObjectRest:            "object_rest",
 

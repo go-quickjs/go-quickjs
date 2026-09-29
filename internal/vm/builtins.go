@@ -669,7 +669,7 @@ func (r *Runtime) initFunctionBuiltins() {
 		return rt.call(this, arg(args, 0), rest)
 	})
 
-	r.defMethod(p, "apply", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	r.applyFn = r.defMethod(p, "apply", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		list := arg(args, 1)
 		var callArgs []Value
 		if !list.IsNullish() {

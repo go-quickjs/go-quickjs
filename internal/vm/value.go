@@ -339,6 +339,12 @@ func (v Value) refAny() any {
 // Equality
 // ---------------------------------------------------------------------------
 
+// sameBits reports whether two values are the very same bits: the same
+// value, spelled the same way.
+func (v Value) sameBits(w Value) bool {
+	return math.Float64bits(v.num) == math.Float64bits(w.num) && v.ref == w.ref
+}
+
 // StrictEquals implements the === operator, which compares without coercion.
 func (v Value) StrictEquals(w Value) bool {
 	vk, wk := v.Kind(), w.Kind()

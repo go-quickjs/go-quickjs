@@ -55,6 +55,32 @@ type argumentsScanner struct {
 	// what a constructor's object is about to be given. It is non-nil only in
 	// that mode, where nothing is being sought and the walk runs to the end.
 	thisProps []string
+	// applyOnly looks for a use of `arguments` other than as what a call of
+	// .apply is given: `f.apply(x, arguments)`. A `with` counts, since it
+	// may take the name, and so does anything in an arrow, which would reach
+	// the object through a capture. inArrow is how deep in arrows the walk is.
+	applyOnly bool
+	inArrow   int
+}
+
+// argumentsOnlyApplied reports whether a function body uses `arguments` only
+// to pass it on whole, as `f.apply(x, arguments)`: then the object need never
+// be made, where apply is the built-in, since the call can be given the
+// arguments themselves.
+func argumentsOnlyApplied(body []ast.Stmt) bool {
+	w := &argumentsScanner{applyOnly: true}
+	w.stmts(body)
+	return !w.found
+}
+
+// isApplyOfArguments reports whether a call is `<expr>.apply(<expr>, arguments)`.
+func isApplyOfArguments(n *ast.Call) bool {
+	m, ok := n.Callee.(*ast.Member)
+	if !ok || m.Computed || m.Optional || n.Optional || len(n.Args) != 2 || propKeyName(m.Property) != "apply" {
+		return false
+	}
+	id, ok := n.Args[1].(*ast.Ident)
+	return ok && id.Name == "arguments"
 }
 
 // noteThisProp records an assignment of the form `this.name = ...`.
@@ -239,6 +265,10 @@ func (w *argumentsScanner) stmt(s ast.Stmt) {
 	case *ast.LabeledStmt:
 		w.stmt(n.Body)
 	case *ast.WithStmt:
+		if w.applyOnly {
+			w.found = true
+			return
+		}
 		w.expr(n.Object)
 		w.stmt(n.Body)
 	}
@@ -264,6 +294,11 @@ func (w *argumentsScanner) expr(e ast.Expr) {
 				w.found = true
 				return
 			}
+		}
+		if w.applyOnly && w.inArrow == 0 && isApplyOfArguments(n) {
+			w.expr(n.Callee)
+			w.expr(n.Args[0])
+			return
 		}
 		w.expr(n.Callee)
 		for _, a := range n.Args {
@@ -313,10 +348,12 @@ func (w *argumentsScanner) expr(e ast.Expr) {
 			return
 		}
 		if w.seekName != "" || n.Kind == ast.FuncArrow {
+			w.inArrow++
 			for _, p := range n.Params {
 				w.expr(p)
 			}
 			w.stmts(n.Body)
+			w.inArrow--
 		}
 	case *ast.ClassLit:
 		w.class(n)

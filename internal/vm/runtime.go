@@ -307,6 +307,9 @@ type Realm struct {
 	// and RegExp.prototype.exec, which instanceof and the RegExp methods call
 	// with callIntrinsic1.
 	hasInstanceFn, regexpExecFn *Object
+	// applyFn is Function.prototype.apply, which a call of apply given a
+	// function's own arguments stands in for; see applyArguments.
+	applyFn *Object
 	// regexpFlagProps is RegExp.prototype's flags getter and the getters it
 	// reads, as the realm made them: see builtinFlags.
 	regexpFlagProps []builtinProp

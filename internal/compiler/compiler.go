@@ -236,6 +236,11 @@ type compiler struct {
 	parent *compiler
 	opts   Options
 
+	// lazyArguments is set for a function whose arguments object is made
+	// only where a call of apply needs it, in lazyArgumentsSlot.
+	lazyArguments     bool
+	lazyArgumentsSlot uint32
+
 	locals   []localVar
 	nextSlot uint32
 	// hiddenCount names the compiler-generated bindings, which are spelled
@@ -483,6 +488,11 @@ func (c *compiler) finish() {
 
 // emit appends an instruction and returns its program counter.
 func (c *compiler) emit(op bytecode.Op, a, b uint32) int {
+	if op == bytecode.OpGetLocal && c.lazyArguments && a == c.lazyArgumentsSlot {
+		// Every read of an arguments object made on demand makes it, but for
+		// the one a call of apply fuses with.
+		op = bytecode.OpLazyArguments
+	}
 	if fused, ok := c.fuse(op, a); ok {
 		c.adjustStack(op, a, b)
 		return fused
@@ -519,6 +529,10 @@ func (c *compiler) fuse(op bytecode.Op, a uint32) (int, bool) {
 		c.movePosition(n)
 	case op == bytecode.OpGetIndex && last.Op == bytecode.OpGetLocal2:
 		last.Op = bytecode.OpGetLocalIndex
+		c.movePosition(n)
+	case op == bytecode.OpCallMethod && a == 2 && last.Op == bytecode.OpLazyArguments:
+		// f.apply(x, arguments), with the arguments object never made.
+		last.Op = bytecode.OpApplyArguments
 		c.movePosition(n)
 	case op == bytecode.OpGetIndex && last.Op == bytecode.OpUpdateLocal && n >= 2 &&
 		c.fn.Code[n-2].Op == bytecode.OpGetLocal && !c.targets[n-1] && !c.hasPosition(n) &&
@@ -1346,6 +1360,10 @@ func stackEffect(op bytecode.Op, a, b uint32) int {
 		return 1
 	case bytecode.OpSetLocalGet, bytecode.OpBinImm:
 		return 0
+	case bytecode.OpApplyArguments:
+		return -2
+	case bytecode.OpLazyArguments:
+		return 1
 	case bytecode.OpClearLocal:
 		return 0
 	case bytecode.OpUpdateLocal, bytecode.OpGetLocalIndexUpdate:

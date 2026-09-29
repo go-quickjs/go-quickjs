@@ -200,6 +200,43 @@ func (r *Runtime) callFromLoop(callee, this Value, args []Value) (Value, error) 
 	return r.call(callee, this, args)
 }
 
+// applyArguments is f.apply(x, arguments) in a function that makes its
+// arguments object only when it has to. The built-in apply given the object
+// would call f with what the object holds -- the arguments as passed, or as
+// the parameters now are for an object that maps them -- so it is given them
+// directly, in apply's frame as ever. Any other apply gets the object, made
+// now and kept in its slot, so that every call is given the same one.
+func (r *Runtime) applyArguments(f *frame, slot uint32, target, apply, this Value) (Value, error) {
+	if !apply.IsObject() || apply.Object() != r.applyFn {
+		o := f.locals[slot]
+		if !o.IsObject() {
+			o = Obj(r.newArgumentsObject(f))
+			f.locals[slot] = o
+		}
+		return r.call(apply, target, []Value{this, o})
+	}
+	args := f.args
+	if f.cl.fn.MappedArguments {
+		n := min(f.cl.fn.ParamCount, len(args), len(f.locals))
+		for i := 0; i < n; i++ {
+			if !f.locals[i].sameBits(args[i]) {
+				// A parameter has been assigned, which a mapped object
+				// would show.
+				args = append([]Value(nil), args...)
+				copy(args, f.locals[:n])
+				break
+			}
+		}
+	}
+	frameArgs := [2]Value{this, Undefined}
+	if err := r.pushNativeFrame(r.applyFn, target, frameArgs[:], Undefined); err != nil {
+		return Undefined, err
+	}
+	v, err := r.call(target, this, args)
+	r.frameDepth--
+	return v, err
+}
+
 // callClosure calls a compiled function, in the realm it belongs to.
 func (r *Runtime) callClosure(o *Object, fd *funcData, this Value, args []Value, newTarget Value) (Value, error) {
 	// An arrow ignores the this and new.target it was called with.
@@ -591,16 +628,16 @@ func (r *Runtime) popFrame(base int) {
 
 // bindParameters copies arguments into the parameter slots.
 func (r *Runtime) bindParameters(f *frame, fn *bytecode.Function, args []Value) error {
-	n := fn.ParamCount
-	if n > len(f.locals) {
-		n = len(f.locals)
+	locals := f.locals
+	n := min(fn.ParamCount, len(locals))
+	m := min(n, len(args))
+	// Sliced to the same length first, so the copy checks no bounds.
+	given, slots := args[:m], locals[:m]
+	for i := range given {
+		slots[i] = given[i]
 	}
-	for i := 0; i < n; i++ {
-		if i < len(args) {
-			f.locals[i] = args[i]
-		} else {
-			f.locals[i] = Undefined
-		}
+	for i := m; i < n; i++ {
+		locals[i] = Undefined
 	}
 	// Anything beyond the simple positional case -- defaults, destructuring, a
 	// rest parameter -- is compiled into the function prologue rather than
@@ -2605,6 +2642,20 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			sp = pushAt(stack, sp, Obj(r.newArrayFrom(rest)))
 		case bytecode.OpGetArguments:
 			sp = pushAt(stack, sp, Obj(r.newArgumentsObject(f)))
+		case bytecode.OpLazyArguments:
+			if !f.locals[in.A].IsObject() {
+				f.locals[in.A] = Obj(r.newArgumentsObject(f))
+			}
+			sp = pushAt(stack, sp, f.locals[in.A])
+		case bytecode.OpApplyArguments:
+			target, apply, this := stack[sp-3], stack[sp-2], stack[sp-1]
+			sp -= 3
+			v, err := r.applyArguments(f, in.A, target, apply, this)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			sp = pushAt(stack, sp, v)
 		case bytecode.OpArrayRest:
 			sp--
 			src := stack[sp]
