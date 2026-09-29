@@ -49,6 +49,9 @@ func (r *Runtime) regExpExec(rx Value, s *String) (Value, error) {
 
 // regExpFlagsOf reads the receiver's flags as the string a script would see.
 func (r *Runtime) regExpFlagsOf(rx Value) (string, error) {
+	if flags, ok := r.builtinFlags(rx); ok {
+		return flags, nil
+	}
 	v, err := r.getValueProp(rx, atomFlags)
 	if err != nil {
 		return "", err
@@ -497,7 +500,7 @@ func (r *Runtime) regExpSymbolReplace(rx Value, args []Value) (Value, error) {
 		// Results are taken in order, so one claiming an index behind where the
 		// last left off contributes its replacement and nothing else.
 		if position >= next {
-			sb.WriteString(wtf8.FromUTF16(units[next:position]))
+			sb.WriteString(s.unitSlice(units, next, position))
 			sb.WriteString(replacement)
 			next = position + matchLen
 			if next > size {
@@ -506,7 +509,7 @@ func (r *Runtime) regExpSymbolReplace(rx Value, args []Value) (Value, error) {
 		}
 	}
 	if next < size {
-		sb.WriteString(wtf8.FromUTF16(units[next:]))
+		sb.WriteString(s.unitSlice(units, next, size))
 	}
 	return r.builtString(sb.String())
 }

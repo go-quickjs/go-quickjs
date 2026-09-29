@@ -128,6 +128,8 @@ type Runtime struct {
 	// hasInstanceAtom is Symbol.hasInstance's atom, which every instanceof
 	// looks up.
 	hasInstanceAtom Atom
+	// regexpFlagAtoms are the names of regExpFlagNames' getters.
+	regexpFlagAtoms [len(regExpFlagNames)]Atom
 
 	// keptAlive holds the values a WeakRef has handed out during the current
 	// job. Two calls to deref in one turn have to answer the same way, so the
@@ -302,6 +304,9 @@ type Realm struct {
 	// and RegExp.prototype.exec, which instanceof and the RegExp methods call
 	// with callIntrinsic1.
 	hasInstanceFn, regexpExecFn *Object
+	// regexpFlagProps is RegExp.prototype's flags getter and the getters it
+	// reads, as the realm made them: see builtinFlags.
+	regexpFlagProps []builtinProp
 	// objectToStringFn is Object.prototype.toString, which tells a structured
 	// clone how V8 would name an object it refuses.
 	objectToStringFn *Object

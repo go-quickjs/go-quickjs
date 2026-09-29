@@ -2,6 +2,7 @@ package vm
 
 import (
 	"errors"
+	"math"
 	"sort"
 	"strings"
 
@@ -231,8 +232,8 @@ func (r *Runtime) initRegExpBuiltins() {
 			return Undefined, rt.throwTypeError("RegExp.prototype.flags called on a non-object")
 		}
 		var sb strings.Builder
-		for _, fg := range regExpFlagNames {
-			v, err := rt.getValueProp(this, rt.atoms.intern(fg.name))
+		for i, fg := range regExpFlagNames {
+			v, err := rt.getValueProp(this, rt.regexpFlagAtoms[i])
 			if err != nil {
 				return Undefined, err
 			}
@@ -311,6 +312,13 @@ func (r *Runtime) initRegExpBuiltins() {
 		}
 		return Bool(!res.IsNull()), nil
 	})
+
+	names := []string{"flags"}
+	for i, fg := range regExpFlagNames {
+		r.regexpFlagAtoms[i] = r.atoms.intern(fg.name)
+		names = append(names, fg.name)
+	}
+	r.regexpFlagProps = r.snapshotProps(p, names...)
 }
 
 // regexpExec runs a pattern against a string, honouring and updating lastIndex.
@@ -641,9 +649,90 @@ func (r *Runtime) initRegExpSymbolMethods(p *Object) {
 	r.defToStringTag(r.proto.regexpStringIter, "RegExp String Iterator")
 }
 
+// builtinProp is a property as a realm made it, where in its object's table
+// it made it, and for an accessor the functions it made it with -- which a
+// redefinition changes in place.
+type builtinProp struct {
+	i              int
+	p              Property
+	getter, setter *Object
+}
+
+// snapshotProps records properties of o as they are now.
+func (r *Runtime) snapshotProps(o *Object, names ...string) []builtinProp {
+	out := make([]builtinProp, 0, len(names))
+	for _, name := range names {
+		i := o.findOwn(r.atoms.intern(name))
+		e := builtinProp{i: int(i), p: o.props[i]}
+		if a := e.p.getterSetter(); e.p.isAccessor() && a != nil {
+			e.getter, e.setter = a.getter, a.setter
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// propsIntact reports whether o's properties are still those recorded.
+func propsIntact(o *Object, want []builtinProp) bool {
+	props := o.props
+	for k := range want {
+		e := &want[k]
+		// The value is compared by its bits: a boxed value's number is a
+		// NaN, which is equal to nothing.
+		if e.i >= len(props) {
+			return false
+		}
+		p := &props[e.i]
+		if p.key != e.p.key || p.flags != e.p.flags || p.value.ref != e.p.value.ref ||
+			math.Float64bits(p.value.num) != math.Float64bits(e.p.value.num) {
+			return false
+		}
+		if a := e.p.getterSetter(); e.p.isAccessor() && a != nil &&
+			(a.getter != e.getter || a.setter != e.setter) {
+			return false
+		}
+	}
+	return true
+}
+
+// builtinFlags is the flags string a RegExp's flags property would read, when
+// reading it would run nothing but the built-in getters: the RegExp inherits
+// them from this realm's prototype, as the realm made them, and has no
+// property of its own but lastIndex to shadow them. The getters only read
+// the pattern, so asking the pattern is the same answer. ok is false for any
+// other object, whose flags are read the long way.
+func (r *Runtime) builtinFlags(rx Value) (flags string, ok bool) {
+	if !rx.IsObject() {
+		return "", false
+	}
+	o := rx.Object()
+	if o.class != ClassRegExp || o.proto == nil || o.proto != r.proto.regexp ||
+		len(o.props) != 1 || o.props[0].key != atomLastIndex ||
+		!propsIntact(o.proto, r.regexpFlagProps) {
+		return "", false
+	}
+	d, ok := o.data.(*regexpData)
+	if !ok {
+		return "", false
+	}
+	fl := d.re.Flags()
+	if fl&regexp.FlagUnicodeSets != 0 {
+		fl &^= regexp.FlagUnicode
+	}
+	var buf [len(regExpFlagNames)]byte
+	n := 0
+	for _, fg := range regExpFlagNames {
+		if fl&fg.bit != 0 {
+			buf[n] = fg.letter
+			n++
+		}
+	}
+	return string(buf[:n]), true
+}
+
 // regExpFlagNames pairs each flag's property name with the letter it
 // contributes to the flags string, in the order the string uses.
-var regExpFlagNames = []struct {
+var regExpFlagNames = [...]struct {
 	name   string
 	letter byte
 	bit    regexp.Flags

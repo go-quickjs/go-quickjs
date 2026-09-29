@@ -563,6 +563,16 @@ func (s *String) Substring(start, end int) *String {
 	return fromUnits(s.units()[start:end])
 }
 
+// unitSlice is the WTF-8 text of code units [i, j) of s, whose code units are
+// units. Text that is all ASCII is its own code units, and is cut rather than
+// encoded again.
+func (s *String) unitSlice(units []uint16, i, j int) string {
+	if s.ascii {
+		return s.Go()[i:j]
+	}
+	return wtf8.FromUTF16(units[i:j])
+}
+
 // fromUnits builds a String from UTF-16 code units.
 //
 // Slicing between the halves of a surrogate pair is legal in JavaScript and
