@@ -259,3 +259,16 @@ func TestLocalOperatorImmediate(t *testing.T) {
 		return JSON.stringify(out.map(v => Object.is(v, -0) ? "-0" : v));
 	})()`, `[7,2,"a1","-0",15,-3,2,8,2,"TypeError","at <eval>:4:9"]`)
 }
+
+func TestCompoundAssignmentToANumberKey(t *testing.T) {
+	// a[i] += x keeps a number key as a number between the read and the
+	// write, which convert it as ever: what either sees is the same key.
+	checkEval(t, `(function () {
+		var a = [1, 2, 3], o = {}, log = [];
+		var i = 1; a[i] += 10; a[i]++; a[0.5] = 1; a[0.5] += 1; a[-0] += 5;
+		o[NaN] = 1; o[NaN] += 1; o[1e21] = 1; o[1e21] += 1;
+		var p = new Proxy({}, { get(t, k) { log.push(typeof k + ":" + k); return 1; }, set(t, k, v) { log.push("set " + typeof k + ":" + k); return true; } });
+		p[2] += 1; p[1.5]++;
+		return JSON.stringify([a, a[0.5], o, log]);
+	})()`, `[[6,13,3],2,{"NaN":2,"1e+21":2},["string:2","set string:2","string:1.5","set string:1.5"]]`)
+}

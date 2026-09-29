@@ -2572,9 +2572,12 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		case bytecode.OpToPropertyKey:
 			// A string or symbol is already a property key and must be left
 			// alone; stringifying a symbol here would turn a computed symbol
-			// key into an ordinary named one.
+			// key into an ordinary named one. A number whose key is only for
+			// the read and the write of `a[i] += x` is left alone too: its
+			// conversion runs nothing, and they convert it the same way, where
+			// making the string would cost an allocation each time.
 			v := stack[sp-1]
-			if v.IsString() || v.IsSymbol() {
+			if v.IsString() || v.IsSymbol() || in.Op == bytecode.OpToPropertyKeyOfBase && v.IsNumber() {
 				break
 			}
 			sp--
