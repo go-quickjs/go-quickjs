@@ -170,6 +170,36 @@ func (r *Runtime) pushNativeFrame(o *Object, this Value, args []Value, newTarget
 	return r.nativeFrame(o, o.fn(), this, args, newTarget)
 }
 
+// callFromLoop is call for the interpreter's call instructions. A compiled
+// function of this realm that runs when called -- not a generator, whose body
+// waits for next(), not a class constructor, which a call refuses, not bound
+// -- is run directly: what callObject and callClosure would have established
+// about it, it establishes in one place. Anything else is called as call
+// calls it.
+func (r *Runtime) callFromLoop(callee, this Value, args []Value) (Value, error) {
+	if callee.IsObject() {
+		o := callee.Object()
+		if fd := o.fn(); fd != nil && fd.native == nil && fd.boundTarget == nil &&
+			fd.closure != nil && fd.closure.realm == r.Realm {
+			if fn := fd.closure.fn; !isGeneratorTemplate(fn) && !isClassConstructorKind(fn.Kind) {
+				if err := r.tick(); err != nil {
+					return Undefined, err
+				}
+				newTarget := Undefined
+				if fd.arrow {
+					this, newTarget = fd.lexThis, fd.lexNewTarget
+				}
+				v, err := r.run(fd.closure, this, args, newTarget, o)
+				if err == errNoSuper {
+					err = r.throwError(errReference, "%s", errNoSuper.Error())
+				}
+				return v, err
+			}
+		}
+	}
+	return r.call(callee, this, args)
+}
+
 // callClosure calls a compiled function, in the realm it belongs to.
 func (r *Runtime) callClosure(o *Object, fd *funcData, this Value, args []Value, newTarget Value) (Value, error) {
 	// An arrow ignores the this and new.target it was called with.
@@ -2019,7 +2049,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			args := stack[sp-argc : sp]
 			callee := stack[sp-argc-1]
 			sp -= argc + 1
-			v, err := r.call(callee, Undefined, args)
+			v, err := r.callFromLoop(callee, Undefined, args)
 			if err != nil {
 				vmErr = err
 				goto onError
@@ -2112,7 +2142,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			callee := stack[sp-argc-1]
 			this := stack[sp-argc-2]
 			sp -= argc + 2
-			v, err := r.call(callee, this, args)
+			v, err := r.callFromLoop(callee, this, args)
 			if err != nil {
 				vmErr = err
 				goto onError
