@@ -228,12 +228,19 @@ func (r *Runtime) applyArguments(f *frame, slot uint32, target, apply, this Valu
 			}
 		}
 	}
-	frameArgs := [2]Value{this, Undefined}
-	if err := r.pushNativeFrame(r.applyFn, target, frameArgs[:], Undefined); err != nil {
-		return Undefined, err
+	// apply's own arguments are what its frame records, which is all they
+	// are for: they are kept on the runtime's argument stack rather than
+	// allocated.
+	i := len(r.argStack)
+	r.argStack = append(r.argStack, this, Undefined)
+	var v Value
+	err := r.pushNativeFrame(r.applyFn, target, r.argStack[i:i+2:i+2], Undefined)
+	if err == nil {
+		v, err = r.call(target, this, args)
+		r.frameDepth--
 	}
-	v, err := r.call(target, this, args)
-	r.frameDepth--
+	clear(r.argStack[i:])
+	r.argStack = r.argStack[:i]
 	return v, err
 }
 
