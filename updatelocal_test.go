@@ -179,3 +179,24 @@ func TestCreatingPropertiesByAssignment(t *testing.T) {
 		return JSON.stringify(out);
 	})()`, `["a,b","a","set 2","TypeError",false,"trap z",true,"TypeError"]`)
 }
+
+func TestIndexedReadsWithAnUpdatedKey(t *testing.T) {
+	// a[++i] and a[i++] with both locals are one instruction; the object is
+	// read before the key is updated, and every way the update or the read
+	// can go is what it was.
+	checkEval(t, `(function () {
+		var out = [];
+		var a = [10, 20, 30], i = 0, j = 2;
+		out.push(a[++i], a[i++], i, a[j--], a[--j], j);
+		var b = [1, 2], k = { valueOf() { b = ["replaced", "x"]; return 0; } };
+		out.push(b[k++], k, b[0]);
+		Object.defineProperty(Array.prototype, 1, { get() { return "proto"; }, configurable: true });
+		var h = [0, , 2], m = 0; var hv = h[++m]; delete Array.prototype[1]; out.push(hv);
+		var s = "xyz", n = 0; out.push(s[++n], s[n++], n);
+		var big = [5, 6], bk = 0n; out.push(big[bk++], String(bk));
+		var o = { "1": "one" }, ok = 0; out.push(o[++ok]);
+		var none = null, z = 0;
+		try { none[++z]; } catch (e) { out.push(e.constructor.name, z, e.stack.split("\n")[1].trim()); }
+		return JSON.stringify(out);
+	})()`, `[20,20,2,30,10,0,1,1,"replaced","proto","y","y",2,5,"1","one","TypeError",1,"at <eval>:13:14"]`)
+}

@@ -209,6 +209,10 @@ const (
 	// is the old one, coerced, or the new. `a[i++]` is then one instruction
 	// where it was five.
 	OpUpdateLocal
+	// OpGetLocalIndexUpdate is get_local A, update_local, get_index: `a[++i]`,
+	// `x[k++]`, where a and the key are locals. B is the key's slot shifted
+	// past the update's flags, which are its low two bits.
+	OpGetLocalIndexUpdate
 
 	// --- Bitwise ----------------------------------------------------------
 	OpBitAnd
@@ -571,7 +575,7 @@ var opNames = [opCount]string{
 
 	OpAdd: "add", OpSub: "sub", OpMul: "mul", OpDiv: "div", OpMod: "mod",
 	OpPow: "pow", OpNeg: "neg", OpPos: "pos", OpInc: "inc", OpDec: "dec",
-	OpIncLocal: "inc_local", OpDecLocal: "dec_local", OpUpdateLocal: "update_local",
+	OpIncLocal: "inc_local", OpDecLocal: "dec_local", OpUpdateLocal: "update_local", OpGetLocalIndexUpdate: "get_local_index_update",
 
 	OpBitAnd: "bit_and", OpBitOr: "bit_or", OpBitXor: "bit_xor",
 	OpBitNot: "bit_not", OpShl: "shl", OpShr: "shr", OpUShr: "ushr",

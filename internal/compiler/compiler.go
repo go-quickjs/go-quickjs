@@ -520,10 +520,29 @@ func (c *compiler) fuse(op bytecode.Op, a uint32) (int, bool) {
 	case op == bytecode.OpGetIndex && last.Op == bytecode.OpGetLocal2:
 		last.Op = bytecode.OpGetLocalIndex
 		c.movePosition(n)
+	case op == bytecode.OpGetIndex && last.Op == bytecode.OpUpdateLocal && n >= 2 &&
+		c.fn.Code[n-2].Op == bytecode.OpGetLocal && !c.targets[n-1] && !c.hasPosition(n) &&
+		last.A < 1<<29:
+		// The update and the read can both throw, and report the same
+		// position, the update's; the read of the object before them cannot.
+		// So the three are one where nothing jumps between them, with the
+		// update's position.
+		first := &c.fn.Code[n-2]
+		first.Op, first.B = bytecode.OpGetLocalIndexUpdate, last.A<<2|last.B
+		c.fn.Code = c.fn.Code[:n-1]
+		c.movePosition(n - 1)
+		return n - 2, true
 	default:
 		return 0, false
 	}
 	return n - 1, true
+}
+
+// hasPosition reports whether a source position has been recorded for the
+// instruction at n.
+func (c *compiler) hasPosition(n int) bool {
+	l := len(c.fn.Lines)
+	return l > 0 && c.fn.Lines[l-1].PC == uint32(n)
 }
 
 // movePosition gives the instruction before n the source position recorded
@@ -1329,7 +1348,7 @@ func stackEffect(op bytecode.Op, a, b uint32) int {
 		return 0
 	case bytecode.OpClearLocal:
 		return 0
-	case bytecode.OpUpdateLocal:
+	case bytecode.OpUpdateLocal, bytecode.OpGetLocalIndexUpdate:
 		return 1
 	case bytecode.OpPushConst, bytecode.OpPushUndef, bytecode.OpPushNull,
 		bytecode.OpPushTrue, bytecode.OpPushFalse, bytecode.OpPushThis,

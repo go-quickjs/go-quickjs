@@ -1637,6 +1637,45 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			} else {
 				sp = pushAt(stack, sp, next)
 			}
+		case bytecode.OpGetLocalIndexUpdate:
+			// The object is read before the update, which may run a valueOf
+			// that assigns to it.
+			obj := f.locals[in.A]
+			slot := &f.locals[in.B>>2]
+			var key Value
+			if old := *slot; old.IsNumber() {
+				next := old.Number() + 1
+				if in.B&bytecode.UpdateDec != 0 {
+					next = old.Number() - 1
+				}
+				*slot = Float(next)
+				key = old
+				if in.B&bytecode.UpdatePostfix == 0 {
+					key = Float(next)
+				}
+			} else {
+				var err error
+				if key, err = r.updateLocal(slot, in.B&3); err != nil {
+					vmErr = err
+					goto onError
+				}
+			}
+			if obj.IsObject() && key.IsNumber() {
+				o := obj.Object()
+				if i := uint32(key.Number()); float64(i) == key.Number() &&
+					uint(i) < uint(len(o.elems)) && o.flags&objMappedArguments == 0 {
+					if v := o.elems[i]; !isHole(v) {
+						sp = pushAt(stack, sp, v)
+						break
+					}
+				}
+			}
+			v, err := r.getIndexed(obj, key)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			sp = pushAt(stack, sp, v)
 		case bytecode.OpIncLocal, bytecode.OpDecLocal:
 			// `i++` as a statement, which is most of the increments a program
 			// does. A number is the case worth having the instruction for; the
@@ -4092,6 +4131,33 @@ func (r *Runtime) bitwise(op bytecode.Op, a, b Value) (Value, error) {
 		return v, err
 	}
 	return int32Op(op, na.Number(), nb.Number()), nil
+}
+
+// updateLocal is ++ or -- on a local that does not hold a number, with
+// OpUpdateLocal's flags: it coerces, steps, stores, and returns the old value,
+// coerced, or the new.
+func (r *Runtime) updateLocal(slot *Value, flags uint32) (Value, error) {
+	n, err := r.toNumeric(*slot)
+	if err != nil {
+		return Undefined, err
+	}
+	delta := 1.0
+	if flags&bytecode.UpdateDec != 0 {
+		delta = -1
+	}
+	var next Value
+	if n.IsBigInt() {
+		if next, err = r.arith(bytecode.OpAdd, n, Big(NewBigInt(int64(delta)))); err != nil {
+			return Undefined, err
+		}
+	} else {
+		next = Float(n.Number() + delta)
+	}
+	*slot = next
+	if flags&bytecode.UpdatePostfix != 0 {
+		return n, nil
+	}
+	return next, nil
 }
 
 // binImm is OpBinImm for a left operand that is not a number: what the
