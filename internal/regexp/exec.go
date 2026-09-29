@@ -164,6 +164,7 @@ func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error)
 	}()
 
 	first := re.prog.first
+	m.reset()
 	for pos := start; pos <= in.length(); {
 		if first != nil {
 			// Where no match can begin, none is tried: a position is passed
@@ -182,7 +183,6 @@ func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error)
 				continue
 			}
 		}
-		m.reset()
 		ok, err := m.run(re.prog.code, pos)
 		if err != nil {
 			return nil, err
@@ -190,6 +190,11 @@ func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error)
 		if ok {
 			return append(dst[:0], m.caps...), nil
 		}
+		// A failed attempt has put back everything it changed but the
+		// captures it wrote before its first choice point, which are taken
+		// back here: the next position starts from the state this one did,
+		// with no reset to pay for.
+		m.undoCaps(0)
 		// A sticky pattern is anchored at the start position and does not
 		// search forward.
 		if re.flags&FlagSticky != 0 {
@@ -255,7 +260,14 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 
 		case opClass:
 			r, w := m.read(in.rev, pos)
-			if r < 0 || !m.prog.classes[in.arg].contains(r, m.prog.unicodeFold) {
+			if r < 0 {
+				goto backtrack
+			}
+			if r < 128 {
+				if m.prog.asciiClasses[in.arg][r>>6]&(1<<(r&63)) == 0 {
+					goto backtrack
+				}
+			} else if !m.prog.classes[in.arg].contains(r, m.prog.unicodeFold) {
 				goto backtrack
 			}
 			pos = m.advance(in.rev, pos, w)

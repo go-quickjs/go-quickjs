@@ -111,6 +111,30 @@ func (s *charSet) contains(r rune, unicodeFold bool) bool {
 	return in
 }
 
+// asciiMembers is which ASCII characters contains says are in the set, as a
+// bitmap: bit r&63 of word r>>6.
+func (s *charSet) asciiMembers(unicodeFold bool) [2]uint64 {
+	var m [2]uint64
+	if s.foldCase {
+		// What folds into the set is worked out by asking.
+		for r := rune(0); r < 128; r++ {
+			if s.contains(r, unicodeFold) {
+				m[r>>6] |= 1 << (r & 63)
+			}
+		}
+		return m
+	}
+	for _, rg := range s.ranges {
+		for r := rg.lo; r <= rg.hi && r < 128; r++ {
+			m[r>>6] |= 1 << (r & 63)
+		}
+	}
+	if s.negated {
+		m[0], m[1] = ^m[0], ^m[1]
+	}
+	return m
+}
+
 // rawContains tests membership without negation or folding.
 func (s *charSet) rawContains(r rune) bool {
 	lo, hi := 0, len(s.ranges)-1

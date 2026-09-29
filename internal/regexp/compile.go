@@ -67,6 +67,10 @@ type program struct {
 	// firstUnits.
 	first   *firstUnits
 	classes []*charSet
+	// asciiClasses is, for each class, which ASCII characters it matches --
+	// folding and negation applied -- which are most of what a class is asked
+	// about, answered with a bit rather than a search.
+	asciiClasses [][2]uint64
 	// looks holds the sub-programs of lookarounds, referenced by index.
 	looks []lookProgram
 	// refSets holds the groups each reference to a shared name may mean.
@@ -111,6 +115,10 @@ func compileNode(n node, flags Flags) *program {
 	c.emit(instr{op: opSave, arg: 1})
 	c.emit(instr{op: opMatch})
 	c.prog.first = firstOf(n, flags&FlagIgnoreCase != 0)
+	c.prog.asciiClasses = make([][2]uint64, len(c.prog.classes))
+	for i, s := range c.prog.classes {
+		c.prog.asciiClasses[i] = s.asciiMembers(c.prog.unicodeFold)
+	}
 	return c.prog
 }
 
