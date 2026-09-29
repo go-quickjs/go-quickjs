@@ -911,3 +911,20 @@ func (r *Runtime) toElementValue(t *typedArrayData, v Value) (Value, error) {
 	}
 	return Float(n), nil
 }
+
+// plainOwn is a property read answered by the object itself: an ordinary
+// object, whose table is small enough to scan, holding the name as a plain
+// data property. Anything else -- another class, an index, an accessor, a
+// property further up -- reports false, for getValueProp to answer. It is
+// small enough to be inlined where the interpreter reads a property.
+func plainOwn(o *Object, key Atom) (Value, bool) {
+	if o.class != ClassObject || o.index != nil {
+		return Undefined, false
+	}
+	for i := range o.props {
+		if p := &o.props[i]; p.key == key {
+			return p.value, p.flags&(propAccessor|propPrivate|propDeleted) == 0
+		}
+	}
+	return Undefined, false
+}

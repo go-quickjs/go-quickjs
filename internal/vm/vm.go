@@ -1363,8 +1363,17 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 
 		// --- Properties ---------------------------------------------------
 		case bytecode.OpGetProp:
+			// A plain property of an ordinary object is read here; anything
+			// else by getValueProp.
+			obj := stack[sp-1]
+			if obj.IsObject() {
+				if v, ok := plainOwn(obj.Object(), cl.names[in.A]); ok {
+					stack[sp-1] = v
+					break
+				}
+			}
 			sp--
-			v, err := r.getValueProp(stack[sp], cl.names[in.A])
+			v, err := r.getValueProp(obj, cl.names[in.A])
 			if err != nil {
 				vmErr = err
 				goto onError
