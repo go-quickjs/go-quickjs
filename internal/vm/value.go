@@ -451,3 +451,7 @@ func (v Value) TypeOf() string {
 	}
 	return "undefined"
 }
+
+// trueBits and falseBits are how true and false are spelled, which a branch
+// compares a value against before asking it anything more.
+var trueBits, falseBits = math.Float64bits(True.num), math.Float64bits(False.num)

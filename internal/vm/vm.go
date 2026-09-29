@@ -864,18 +864,27 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 					stack[sp-1] = Float(x - float64(y))
 				case bytecode.OpMul:
 					stack[sp-1] = Float(x * float64(y))
-				case bytecode.OpBitAnd:
-					stack[sp-1] = Int32(jsnum.ToInt32(x) & y)
-				case bytecode.OpBitOr:
-					stack[sp-1] = Int32(jsnum.ToInt32(x) | y)
-				case bytecode.OpBitXor:
-					stack[sp-1] = Int32(jsnum.ToInt32(x) ^ y)
-				case bytecode.OpShl:
-					stack[sp-1] = Int32(jsnum.ToInt32(x) << (uint32(y) & 31))
-				case bytecode.OpShr:
-					stack[sp-1] = Int32(jsnum.ToInt32(x) >> (uint32(y) & 31))
 				default:
-					stack[sp-1] = Uint32(uint32(jsnum.ToInt32(x)) >> (uint32(y) & 31))
+					// The operand is converted where it already is an int32,
+					// which it almost always is, without the call.
+					xi := int32(x)
+					if float64(xi) != x {
+						xi = jsnum.ToInt32(x)
+					}
+					switch op {
+					case bytecode.OpBitAnd:
+						stack[sp-1] = Int32(xi & y)
+					case bytecode.OpBitOr:
+						stack[sp-1] = Int32(xi | y)
+					case bytecode.OpBitXor:
+						stack[sp-1] = Int32(xi ^ y)
+					case bytecode.OpShl:
+						stack[sp-1] = Int32(xi << (uint32(y) & 31))
+					case bytecode.OpShr:
+						stack[sp-1] = Int32(xi >> (uint32(y) & 31))
+					default:
+						stack[sp-1] = Uint32(uint32(xi) >> (uint32(y) & 31))
+					}
 				}
 				break
 			}
@@ -983,19 +992,33 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 					break
 				}
 			}
-			if p := r.globalLexProp(env, name); p != nil {
-				if p.value.IsUninitialized() {
-					vmErr = r.throwReferenceError(
-						"cannot access %q before it is initialized", r.atoms.name(name))
-					goto onError
+			// The script-level lexical bindings are asked first, and only
+			// when there are any: most scripts declare none.
+			if len(r.globalLex.props) != 0 {
+				if p := r.globalLexProp(env, name); p != nil {
+					if p.value.IsUninitialized() {
+						vmErr = r.throwReferenceError(
+							"cannot access %q before it is initialized", r.atoms.name(name))
+						goto onError
+					}
+					sp = pushAt(stack, sp, p.value)
+					break
 				}
-				sp = pushAt(stack, sp, p.value)
-				break
 			}
 			// A plain own data property of the environment -- which is what
 			// every declared global is -- needs none of the machinery a
 			// general read carries: no proxy trap, no exotic index, no
-			// prototype walk.
+			// prototype walk. The lookup cache is read here first, without
+			// the call findOwn is.
+			if x := env.index; x != nil {
+				if c := &x.recent[name&15]; c.key == name && c.idx >= 0 && int(c.idx) < len(env.props) {
+					if p := &env.props[c.idx]; p.key == name &&
+						p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
+						sp = pushAt(stack, sp, p.value)
+						break
+					}
+				}
+			}
 			if i := env.findOwn(name); i >= 0 {
 				if p := &env.props[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
 					sp = pushAt(stack, sp, p.value)
@@ -1845,21 +1868,31 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			if a.IsNumber() && b.IsNumber() {
 				// Worked out here rather than in a call, which in Go costs
 				// the loop every register it had.
-				x := jsnum.ToInt32(a.Number())
+				// Each operand is converted where it already is an int32
+				// without the call; the low bits of the int32 are the uint32
+				// a shift count takes.
+				fa, fb := a.Number(), b.Number()
+				x, y := int32(fa), int32(fb)
+				if float64(x) != fa {
+					x = jsnum.ToInt32(fa)
+				}
+				if float64(y) != fb {
+					y = jsnum.ToInt32(fb)
+				}
 				switch in.Op {
 				case bytecode.OpBitAnd:
-					sp = pushAt(stack, sp, Int32(x&jsnum.ToInt32(b.Number())))
+					sp = pushAt(stack, sp, Int32(x&y))
 				case bytecode.OpBitOr:
-					sp = pushAt(stack, sp, Int32(x|jsnum.ToInt32(b.Number())))
+					sp = pushAt(stack, sp, Int32(x|y))
 				case bytecode.OpBitXor:
-					sp = pushAt(stack, sp, Int32(x^jsnum.ToInt32(b.Number())))
+					sp = pushAt(stack, sp, Int32(x^y))
 				case bytecode.OpShl:
 					// Only the low five bits of the shift count are used.
-					sp = pushAt(stack, sp, Int32(x<<(jsnum.ToUint32(b.Number())&31)))
+					sp = pushAt(stack, sp, Int32(x<<(uint32(y)&31)))
 				case bytecode.OpShr:
-					sp = pushAt(stack, sp, Int32(x>>(jsnum.ToUint32(b.Number())&31)))
+					sp = pushAt(stack, sp, Int32(x>>(uint32(y)&31)))
 				default:
-					sp = pushAt(stack, sp, Uint32(uint32(x)>>(jsnum.ToUint32(b.Number())&31)))
+					sp = pushAt(stack, sp, Uint32(uint32(x)>>(uint32(y)&31)))
 				}
 				break
 			}
@@ -1961,7 +1994,8 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 			sp = pushAt(stack, sp, Bool(ok))
 		case bytecode.OpNot:
-			stack[sp-1] = Bool(!stack[sp-1].Truthy())
+			v := stack[sp-1]
+			stack[sp-1] = Bool(!(math.Float64bits(v.num) == trueBits || math.Float64bits(v.num) != falseBits && v.Truthy()))
 		case bytecode.OpTypeOf:
 			stack[sp-1] = Str(NewString(stack[sp-1].TypeOf()))
 		case bytecode.OpIsNullish:
@@ -1978,7 +2012,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			pc = in.A
 		case bytecode.OpJumpIfFalse:
 			sp--
-			if !stack[sp].Truthy() {
+			if v := stack[sp]; !(math.Float64bits(v.num) == trueBits || math.Float64bits(v.num) != falseBits && v.Truthy()) {
 				if in.A < pc {
 					if r.backEdges--; r.backEdges <= 0 {
 						pc = in.A
@@ -1989,7 +2023,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 		case bytecode.OpJumpIfTrue:
 			sp--
-			if stack[sp].Truthy() {
+			if v := stack[sp]; math.Float64bits(v.num) == trueBits || math.Float64bits(v.num) != falseBits && v.Truthy() {
 				if in.A < pc {
 					if r.backEdges--; r.backEdges <= 0 {
 						pc = in.A
@@ -1999,7 +2033,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				pc = in.A
 			}
 		case bytecode.OpJumpIfFalseKeep:
-			if !stack[sp-1].Truthy() {
+			if v := stack[sp-1]; !(math.Float64bits(v.num) == trueBits || math.Float64bits(v.num) != falseBits && v.Truthy()) {
 				if in.A < pc {
 					if r.backEdges--; r.backEdges <= 0 {
 						pc = in.A
@@ -2011,7 +2045,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				sp--
 			}
 		case bytecode.OpJumpIfTrueKeep:
-			if stack[sp-1].Truthy() {
+			if v := stack[sp-1]; math.Float64bits(v.num) == trueBits || math.Float64bits(v.num) != falseBits && v.Truthy() {
 				if in.A < pc {
 					if r.backEdges--; r.backEdges <= 0 {
 						pc = in.A
@@ -2033,7 +2067,17 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			case a.IsNumber() && b.IsNumber() &&
 				cmp != bytecode.OpStrictEq && cmp != bytecode.OpStrictNe &&
 				cmp != bytecode.OpEq && cmp != bytecode.OpNe:
-				res = compareFloats(cmp, a.Number(), b.Number())
+				// Written out: a call would not be inlined here.
+				switch x, y := a.Number(), b.Number(); cmp {
+				case bytecode.OpLt:
+					res = x < y
+				case bytecode.OpLe:
+					res = x <= y
+				case bytecode.OpGt:
+					res = x > y
+				default:
+					res = x >= y
+				}
 			case cmp == bytecode.OpStrictEq:
 				res = a.StrictEquals(b)
 			case cmp == bytecode.OpStrictNe:
@@ -2663,18 +2707,27 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 					sp = pushAt(stack, sp, Float(x-float64(y)))
 				case bytecode.OpMul:
 					sp = pushAt(stack, sp, Float(x*float64(y)))
-				case bytecode.OpBitAnd:
-					sp = pushAt(stack, sp, Int32(jsnum.ToInt32(x)&y))
-				case bytecode.OpBitOr:
-					sp = pushAt(stack, sp, Int32(jsnum.ToInt32(x)|y))
-				case bytecode.OpBitXor:
-					sp = pushAt(stack, sp, Int32(jsnum.ToInt32(x)^y))
-				case bytecode.OpShl:
-					sp = pushAt(stack, sp, Int32(jsnum.ToInt32(x)<<(uint32(y)&31)))
-				case bytecode.OpShr:
-					sp = pushAt(stack, sp, Int32(jsnum.ToInt32(x)>>(uint32(y)&31)))
 				default:
-					sp = pushAt(stack, sp, Uint32(uint32(jsnum.ToInt32(x))>>(uint32(y)&31)))
+					// The operand is converted where it already is an int32,
+					// which it almost always is, without the call.
+					xi := int32(x)
+					if float64(xi) != x {
+						xi = jsnum.ToInt32(x)
+					}
+					switch op {
+					case bytecode.OpBitAnd:
+						sp = pushAt(stack, sp, Int32(xi&y))
+					case bytecode.OpBitOr:
+						sp = pushAt(stack, sp, Int32(xi|y))
+					case bytecode.OpBitXor:
+						sp = pushAt(stack, sp, Int32(xi^y))
+					case bytecode.OpShl:
+						sp = pushAt(stack, sp, Int32(xi<<(uint32(y)&31)))
+					case bytecode.OpShr:
+						sp = pushAt(stack, sp, Int32(xi>>(uint32(y)&31)))
+					default:
+						sp = pushAt(stack, sp, Uint32(uint32(xi)>>(uint32(y)&31)))
+					}
 				}
 				break
 			}
