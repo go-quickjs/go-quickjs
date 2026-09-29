@@ -636,15 +636,15 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 	// inside a call reads, which is the instruction after the one calling --
 	// the same as it ever was.
 	pc := f.pc
-	// The cancellation check is counted down at each backward jump, and only
-	// its rare expiry is a call. A frame runs forever only by jumping back, so
-	// that is where it has to be checked, and checking nowhere else keeps the
-	// counter out of every other instruction -- and out of the registers the
-	// dispatch needs. Each frame gets its own, so what this bounds is how many
-	// times one frame may loop without a check; a program that leaves this
-	// loop again and again instead of looping in it is bounded by the count of
-	// calls that callObject keeps.
-	budget := backEdgeCheckInterval
+	// The cancellation check is counted down at each backward jump, in
+	// r.backEdges, and only its rare expiry is a call. A frame runs forever
+	// only by jumping back, so that is where it has to be checked, and
+	// checking nowhere else keeps the counter out of every other instruction.
+	// It is the runtime's rather than a variable of this loop, which would be
+	// one more thing for the dispatch to keep; what it bounds is how many
+	// backward jumps any frames make between checks. A program that leaves
+	// this loop again and again instead of looping in it is bounded by the
+	// count of calls that callObject keeps.
 	for {
 		in = code[pc]
 		pc++
@@ -1837,7 +1837,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		// --- Control flow -------------------------------------------------
 		case bytecode.OpJump:
 			if in.A < pc {
-				if budget--; budget <= 0 {
+				if r.backEdges--; r.backEdges <= 0 {
 					pc = in.A
 					goto interrupted
 				}
@@ -1847,7 +1847,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			sp--
 			if !stack[sp].Truthy() {
 				if in.A < pc {
-					if budget--; budget <= 0 {
+					if r.backEdges--; r.backEdges <= 0 {
 						pc = in.A
 						goto interrupted
 					}
@@ -1858,7 +1858,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			sp--
 			if stack[sp].Truthy() {
 				if in.A < pc {
-					if budget--; budget <= 0 {
+					if r.backEdges--; r.backEdges <= 0 {
 						pc = in.A
 						goto interrupted
 					}
@@ -1868,7 +1868,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		case bytecode.OpJumpIfFalseKeep:
 			if !stack[sp-1].Truthy() {
 				if in.A < pc {
-					if budget--; budget <= 0 {
+					if r.backEdges--; r.backEdges <= 0 {
 						pc = in.A
 						goto interrupted
 					}
@@ -1880,7 +1880,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		case bytecode.OpJumpIfTrueKeep:
 			if stack[sp-1].Truthy() {
 				if in.A < pc {
-					if budget--; budget <= 0 {
+					if r.backEdges--; r.backEdges <= 0 {
 						pc = in.A
 						goto interrupted
 					}
@@ -1922,7 +1922,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 			if !res {
 				if in.A < pc {
-					if budget--; budget <= 0 {
+					if r.backEdges--; r.backEdges <= 0 {
 						pc = in.A
 						goto interrupted
 					}
@@ -1936,7 +1936,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// of the next link otherwise.
 			if stack[sp-1].IsNullish() {
 				if in.A < pc {
-					if budget--; budget <= 0 {
+					if r.backEdges--; r.backEdges <= 0 {
 						pc = in.A
 						goto interrupted
 					}
@@ -1946,7 +1946,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		case bytecode.OpJumpIfNotNullish:
 			if !stack[sp-1].IsNullish() {
 				if in.A < pc {
-					if budget--; budget <= 0 {
+					if r.backEdges--; r.backEdges <= 0 {
 						pc = in.A
 						goto interrupted
 					}
@@ -2228,7 +2228,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				sp = pushAt(stack, sp, v)
 			}
 			if in.B < pc {
-				if budget--; budget <= 0 {
+				if r.backEdges--; r.backEdges <= 0 {
 					pc = in.B
 					goto interrupted
 				}
@@ -2255,7 +2255,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			stack[sp-1] = Obj(o)
 			sp = pushAt(stack, sp, v)
 			if in.B < pc {
-				if budget--; budget <= 0 {
+				if r.backEdges--; r.backEdges <= 0 {
 					pc = in.B
 					goto interrupted
 				}
@@ -2293,7 +2293,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			stack[sp-2] = v
 			sp--
 			if in.B < pc {
-				if budget--; budget <= 0 {
+				if r.backEdges--; r.backEdges <= 0 {
 					pc = in.B
 					goto interrupted
 				}
@@ -2315,7 +2315,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				goto onError
 			}
 			if in.B < pc {
-				if budget--; budget <= 0 {
+				if r.backEdges--; r.backEdges <= 0 {
 					pc = in.B
 					goto interrupted
 				}
@@ -2339,7 +2339,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 			sp = pushAt(stack, sp, Bool(ok))
 			if in.B < pc {
-				if budget--; budget <= 0 {
+				if r.backEdges--; r.backEdges <= 0 {
 					pc = in.B
 					goto interrupted
 				}
@@ -2640,7 +2640,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 			if !ok {
 				if in.A < pc {
-					if budget--; budget <= 0 {
+					if r.backEdges--; r.backEdges <= 0 {
 						pc = in.A
 						goto interrupted
 					}
@@ -2684,7 +2684,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				// when the generator is an async one.
 				sp = pushAt(stack, sp, res)
 				if in.B < pc {
-					if budget--; budget <= 0 {
+					if r.backEdges--; r.backEdges <= 0 {
 						pc = in.B
 						goto interrupted
 					}
@@ -2733,7 +2733,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// generator was the one asked to return -- what it returns.
 			sp = pushAt(stack, sp, val)
 			if in.A < pc {
-				if budget--; budget <= 0 {
+				if r.backEdges--; r.backEdges <= 0 {
 					pc = in.A
 					goto interrupted
 				}
@@ -2779,7 +2779,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 					st.done = true
 				}
 				if in.A < pc {
-					if budget--; budget <= 0 {
+					if r.backEdges--; r.backEdges <= 0 {
 						pc = in.A
 						goto interrupted
 					}
@@ -2800,7 +2800,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 			if done.Truthy() {
 				if in.A < pc {
-					if budget--; budget <= 0 {
+					if r.backEdges--; r.backEdges <= 0 {
 						pc = in.A
 						goto interrupted
 					}
@@ -3160,7 +3160,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		// program cannot run without reaching, since it runs no longer than
 		// its code is long but through a loop, or a call, which callObject
 		// counts.
-		budget = backEdgeCheckInterval
+		r.backEdges = backEdgeCheckInterval
 		if err := r.checkInterruptNow(); err != nil {
 			// An interrupt is the host stopping the script rather than a
 			// JavaScript exception, so it is not catchable.

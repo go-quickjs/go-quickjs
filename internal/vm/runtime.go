@@ -128,6 +128,9 @@ type Runtime struct {
 	// hasInstanceAtom is Symbol.hasInstance's atom, which every instanceof
 	// looks up.
 	hasInstanceAtom Atom
+	// backEdges counts down the backward jumps until the interpreter next
+	// checks whether it has been interrupted.
+	backEdges int
 	// regexpFlagAtoms are the names of regExpFlagNames' getters.
 	regexpFlagAtoms [len(regExpFlagNames)]Atom
 
