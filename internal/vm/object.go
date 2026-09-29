@@ -152,10 +152,7 @@ type Object struct {
 	props []Property
 	// index maps a key to its slot in props, built lazily once the object grows
 	// past linearScanLimit.
-	index map[Atom]int32
-	// lastKey and lastIdx cache the most recent successful lookup in index.
-	lastKey Atom
-	lastIdx int32
+	index *propIndex
 
 	// elems holds dense array elements. Arrays and other index-keyed objects
 	// keep their elements here rather than in props, so that a[i] is a slice
@@ -470,24 +467,56 @@ func (o *Object) IsArray() bool {
 // Own property access
 // ---------------------------------------------------------------------------
 
+// propIndex is the lookup table of an object with many properties.
+type propIndex struct {
+	slots map[Atom]int32
+	// recent caches lookups in slots, by the key's low bits. The same few keys
+	// are asked for over and over -- the globals a loop reads and writes, the
+	// methods of a prototype, the setters an assignment looks for up the chain
+	// -- and hashing each time is most of what finding them costs.
+	//
+	// An entry is a key and where it is, or -1 for a key the object does not
+	// have. Where a key is is checked against the table on every use, so a
+	// delete or a move makes an entry miss rather than lie; and a key being
+	// added overwrites its entry, so that it is never found missing.
+	recent [16]recentKey
+}
+
+type recentKey struct {
+	key Atom
+	idx int32
+}
+
+func newPropIndex(n int) *propIndex {
+	return &propIndex{slots: make(map[Atom]int32, n)}
+}
+
+// add records a key's slot.
+func (x *propIndex) add(key Atom, i int32) {
+	x.slots[key] = i
+	x.recent[key&15] = recentKey{key, i}
+}
+
 // findOwn returns the index of an own property in props, or -1.
 func (o *Object) findOwn(key Atom) int32 {
-	if o.index != nil {
-		// One entry of cache in front of the map. The same key is asked for
-		// over and over -- a global function called in a loop, a property read
-		// in one -- and hashing it each time is most of what finding it costs.
-		// The entry carries its own key, so a delete or a rebuild invalidates
-		// the cache by failing the comparison rather than by being tracked.
-		if o.lastKey == key && int(o.lastIdx) < len(o.props) {
-			if p := &o.props[o.lastIdx]; p.key == key && p.flags&propDeleted == 0 {
-				return o.lastIdx
+	if x := o.index; x != nil {
+		c := &x.recent[key&15]
+		if c.key == key {
+			if c.idx < 0 {
+				return -1
+			}
+			if int(c.idx) < len(o.props) {
+				if p := &o.props[c.idx]; p.key == key && p.flags&propDeleted == 0 {
+					return c.idx
+				}
 			}
 		}
-		if i, ok := o.index[key]; ok {
-			o.lastKey, o.lastIdx = key, i
-			return i
+		i, ok := x.slots[key]
+		if !ok {
+			i = -1
 		}
-		return -1
+		c.key, c.idx = key, i
+		return i
 	}
 	for i := range o.props {
 		if o.props[i].key == key && o.props[i].flags&propDeleted == 0 {
@@ -500,10 +529,10 @@ func (o *Object) findOwn(key Atom) int32 {
 // buildIndex populates the lookup map once an object has enough properties for
 // it to pay off.
 func (o *Object) buildIndex() {
-	o.index = make(map[Atom]int32, len(o.props)*2)
+	o.index = newPropIndex(len(o.props) * 2)
 	for i := range o.props {
 		if o.props[i].flags&propDeleted == 0 {
-			o.index[o.props[i].key] = int32(i)
+			o.index.add(o.props[i].key, int32(i))
 		}
 	}
 }
@@ -613,7 +642,7 @@ func (o *Object) appendProp(p Property) {
 	o.props = append(o.props, p)
 	switch {
 	case o.index != nil:
-		o.index[p.key] = int32(len(o.props) - 1)
+		o.index.add(p.key, int32(len(o.props)-1))
 	case len(o.props) > linearScanLimit:
 		o.buildIndex()
 	}
@@ -632,7 +661,7 @@ func (o *Object) deleteOwn(key Atom) bool {
 	// Tombstone rather than splice, so that the remaining indices stay valid.
 	o.props[i] = Property{key: atomEmpty, flags: propDeleted}
 	if o.index != nil {
-		delete(o.index, key)
+		delete(o.index.slots, key)
 	}
 	return true
 }
@@ -936,7 +965,7 @@ func (o *Object) setArrayLength(n uint32) {
 			if key := p.key; p.flags&propDeleted == 0 && key.IsIndex() && key.Index() >= n {
 				o.props[i] = Property{key: atomEmpty, flags: propDeleted}
 				if o.index != nil {
-					delete(o.index, key)
+					delete(o.index.slots, key)
 				}
 			}
 		}

@@ -107,3 +107,40 @@ func TestInstanceofWithoutTheMethodCall(t *testing.T) {
 		return JSON.stringify(out);
 	})()`, `[true,false,false,true,true,true,2,"at F.[Symbol.hasInstance] (<anonymous>)",true,"TypeError","TypeError",true,false]`)
 }
+
+func TestLookupsOfObjectsWithManyProperties(t *testing.T) {
+	// An object with many properties caches its lookups, misses included;
+	// what a lookup finds is what the object has at the time.
+	checkEval(t, `(function () {
+		var out = [];
+		var o = {}; for (var i = 0; i < 20; i++) o["k" + i] = i;
+		var P = Object.create(o), c = Object.create(P);
+		out.push(c.missing, "missing" in c);
+		o.missing = "added"; out.push(c.missing, "missing" in c);
+		delete o.missing; out.push(c.missing);
+		o.missing = "again"; out.push(c.missing);
+		delete o.k3; out.push(o.k3, c.k3); o.k3 = "new"; out.push(o.k3, Object.keys(o).pop());
+		Object.defineProperty(o, "k5", { get() { return "getter"; } }); out.push(c.k5);
+		var log = []; Object.defineProperty(o, "s", { set(v) { log.push(v); }, configurable: true });
+		c.s = 1; out.push(log.join(), Object.hasOwn(c, "s"));
+		delete o.s; c.s = 2; out.push(log.join(), c.s, Object.hasOwn(c, "s"));
+		return JSON.stringify(out);
+	})()`, `[null,false,"added",true,null,"again",null,null,"new","k3","getter","1",false,"1",2,true]`)
+}
+
+func TestGlobalsReadAndWrittenInPlace(t *testing.T) {
+	// A global written by assignment is written in place only when it is a
+	// plain writable data property; anything else is written the long way.
+	checkEval(t, `
+		var g1 = 1; g1 = 2;
+		globalThis.g2 = 1; g2 = 3; delete globalThis.g2; g2 = 4;
+		var g3 = 1; Object.defineProperty(globalThis, "g4", { value: 1, writable: false, configurable: true });
+		g4 = 5;
+		var setterLog = []; Object.defineProperty(globalThis, "g5", { get() { return "got"; }, set(v) { setterLog.push(v); }, configurable: true });
+		g5 = 6;
+		var strictErr = (function () { "use strict"; try { g4 = 7; return "no"; } catch (e) { return e.constructor.name; } })();
+		for (var k = 0; k < 20; k++) globalThis["filler" + k] = k;
+		var sum = 0; for (var j = 0; j < 5; j++) sum += g1;
+		JSON.stringify([g1, g2, g3, g4, g5, setterLog, strictErr, sum, Object.getOwnPropertyDescriptor(globalThis, "g2").configurable]);
+	`, `[2,4,1,1,"got",[6],"TypeError",10,true]`)
+}

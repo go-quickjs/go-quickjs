@@ -910,16 +910,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// A plain own data property of the environment -- which is what
 			// every declared global is -- needs none of the machinery a
 			// general read carries: no proxy trap, no exotic index, no
-			// prototype walk. The environment's own one-entry cache is read
-			// here rather than through findOwn, so that the common case is a
-			// comparison rather than a call.
-			if env.lastKey == name && int(env.lastIdx) < len(env.props) {
-				if p := &env.props[env.lastIdx]; p.key == name &&
-					p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
-					sp = pushAt(stack, sp, p.value)
-					break
-				}
-			}
+			// prototype walk.
 			if i := env.findOwn(name); i >= 0 {
 				if p := &env.props[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
 					sp = pushAt(stack, sp, p.value)
@@ -1103,6 +1094,19 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 					// What is left is an imported binding, stored as an
 					// accessor with no setter, which the assignment below
 					// refuses for us.
+				}
+			}
+			// A plain writable data property of a global object that is no
+			// proxy -- what every declared global is -- is written in place:
+			// an assignment to one sets it and nothing else.
+			if env.class != ClassProxy {
+				if i := env.findOwn(name); i >= 0 {
+					if p := &env.props[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 &&
+						p.flags&propWritable != 0 {
+						sp--
+						p.value = stack[sp]
+						break
+					}
 				}
 			}
 			// Strict mode refuses to create a global by assignment, which is
