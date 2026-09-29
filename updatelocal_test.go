@@ -248,3 +248,14 @@ func TestOperatorsWithALocalOnTheRight(t *testing.T) {
 		return JSON.stringify(out, (k, v) => typeof v === "bigint" ? String(v) + "n" : v);
 	})()`, `["2x",1,40,"27n","13","TypeError","lr"]`)
 }
+
+func TestLocalOperatorImmediate(t *testing.T) {
+	// `local op integer` is one instruction; anything but a number in the
+	// local runs the operator itself, and an error points where it did.
+	checkEval(t, `(function () {
+		var calls = 0, o = { valueOf() { calls++; return 6; } }, s = "a", neg = -5, big = 3n, f = 2.5;
+		var out = [o + 1, o & 3, s + 1, neg * 0, neg >>> 28, neg >> 1, f | 0, f << 2, calls];
+		try { big + 1; } catch (e) { out.push(e.constructor.name, e.stack.split("\n")[1].trim()); }
+		return JSON.stringify(out.map(v => Object.is(v, -0) ? "-0" : v));
+	})()`, `[7,2,"a1","-0",15,-3,2,8,2,"TypeError","at <eval>:4:9"]`)
+}

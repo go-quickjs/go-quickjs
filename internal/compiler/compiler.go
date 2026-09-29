@@ -524,6 +524,14 @@ func (c *compiler) fuse(op bytecode.Op, a uint32) (int, bool) {
 		last.Op, last.B = bytecode.OpSetLocalGet, a
 	case op == bytecode.OpSetLocal && last.Op == bytecode.OpPushUndef:
 		last.Op, last.A = bytecode.OpClearLocal, a
+	case immediateOp(op) && last.Op == bytecode.OpPushInt && n >= 2 && !c.targets[n-1] &&
+		c.fn.Code[n-2].Op == bytecode.OpGetLocal && c.fn.Code[n-2].A < 1<<24:
+		// A local, an integer and the operator: `x & 0xff`.
+		first := &c.fn.Code[n-2]
+		first.Op, first.A, first.B = bytecode.OpLocalBinImm, first.A|uint32(op)<<24, last.A
+		c.fn.Code = c.fn.Code[:n-1]
+		c.collapsePositions(n - 2)
+		return n - 2, true
 	case immediateOp(op) && last.Op == bytecode.OpPushInt:
 		last.Op, last.B = bytecode.OpBinImm, uint32(op)
 		c.movePosition(n)
@@ -553,6 +561,15 @@ func (c *compiler) fuse(op bytecode.Op, a uint32) (int, bool) {
 		return 0, false
 	}
 	return n - 1, true
+}
+
+// collapsePositions gives the instruction at n every source position recorded
+// past it, which instructions fused into it had: the last of them, which is
+// the one that can throw, is the one it keeps.
+func (c *compiler) collapsePositions(n int) {
+	for i := len(c.fn.Lines) - 1; i >= 0 && c.fn.Lines[i].PC > uint32(n); i-- {
+		c.fn.Lines[i].PC = uint32(n)
+	}
 }
 
 // hasPosition reports whether a source position has been recorded for the
@@ -1363,6 +1380,8 @@ func stackEffect(op bytecode.Op, a, b uint32) int {
 		return 1
 	case bytecode.OpSetLocalGet, bytecode.OpBinImm, bytecode.OpBinLocal:
 		return 0
+	case bytecode.OpLocalBinImm:
+		return 1
 	case bytecode.OpApplyArguments:
 		return -2
 	case bytecode.OpLazyArguments:

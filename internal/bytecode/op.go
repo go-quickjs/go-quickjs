@@ -515,6 +515,10 @@ const (
 	// OpBinLocal is get_local A then the arithmetic operator B -- add, sub or
 	// mul -- with the local as its right operand: `a*b + c`, `s + x`.
 	OpBinLocal
+	// OpLocalBinImm is get_local then bin_imm: `x & 0xff`, `i + 1` with x and
+	// i locals. A's low 24 bits are the local's slot and its high 8 the
+	// operator, one of those OpBinImm takes; B is the integer.
+	OpLocalBinImm
 
 	// opCount is the number of opcodes, used to size the name table.
 	opCount
@@ -588,6 +592,7 @@ var opNames = [opCount]string{
 	OpApplyArguments:        "apply_arguments",
 	OpLazyArguments:         "lazy_arguments",
 	OpBinLocal:              "bin_local",
+	OpLocalBinImm:           "local_bin_imm",
 	OpArrayRest:             "array_rest",
 	OpObjectRest:            "object_rest",
 

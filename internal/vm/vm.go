@@ -2642,6 +2642,39 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			sp = pushAt(stack, sp, Obj(r.newArrayFrom(rest)))
 		case bytecode.OpGetArguments:
 			sp = pushAt(stack, sp, Obj(r.newArgumentsObject(f)))
+		case bytecode.OpLocalBinImm:
+			a := f.locals[in.A&(1<<24-1)]
+			op := bytecode.Op(in.A >> 24)
+			if a.IsNumber() {
+				x, y := a.Number(), int32(in.B)
+				switch op {
+				case bytecode.OpAdd:
+					sp = pushAt(stack, sp, Float(x+float64(y)))
+				case bytecode.OpSub:
+					sp = pushAt(stack, sp, Float(x-float64(y)))
+				case bytecode.OpMul:
+					sp = pushAt(stack, sp, Float(x*float64(y)))
+				case bytecode.OpBitAnd:
+					sp = pushAt(stack, sp, Int32(jsnum.ToInt32(x)&y))
+				case bytecode.OpBitOr:
+					sp = pushAt(stack, sp, Int32(jsnum.ToInt32(x)|y))
+				case bytecode.OpBitXor:
+					sp = pushAt(stack, sp, Int32(jsnum.ToInt32(x)^y))
+				case bytecode.OpShl:
+					sp = pushAt(stack, sp, Int32(jsnum.ToInt32(x)<<(uint32(y)&31)))
+				case bytecode.OpShr:
+					sp = pushAt(stack, sp, Int32(jsnum.ToInt32(x)>>(uint32(y)&31)))
+				default:
+					sp = pushAt(stack, sp, Uint32(uint32(jsnum.ToInt32(x))>>(uint32(y)&31)))
+				}
+				break
+			}
+			v, err := r.binImm(op, a, Int32(int32(in.B)))
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			sp = pushAt(stack, sp, v)
 		case bytecode.OpBinLocal:
 			a, b := stack[sp-1], f.locals[in.A]
 			op := bytecode.Op(in.B)
