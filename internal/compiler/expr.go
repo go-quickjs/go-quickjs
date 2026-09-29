@@ -62,6 +62,19 @@ func (c *compiler) compileExprForEffect(e ast.Expr) {
 			c.adjustStack(bytecode.OpDrop, 0, 0)
 			return
 		}
+		// A store to a global copies the value first, for the drop; the store
+		// takes the value itself instead. Neither the copy nor the drop can
+		// throw, so where a position is recorded changes nothing.
+		if n >= 2 && !c.targets[n-1] && c.fn.Code[n-1].Op == bytecode.OpSetGlobal &&
+			c.fn.Code[n-2].Op == bytecode.OpDup {
+			c.fn.Code[n-2] = c.fn.Code[n-1]
+			c.fn.Code = c.fn.Code[:n-1]
+			for i := len(c.fn.Lines) - 1; i >= 0 && c.fn.Lines[i].PC == uint32(n-1); i-- {
+				c.fn.Lines[i].PC = uint32(n - 2)
+			}
+			c.adjustStack(bytecode.OpDrop, 0, 0)
+			return
+		}
 	}
 	c.emit(bytecode.OpDrop, 0, 0)
 }

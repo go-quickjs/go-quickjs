@@ -144,3 +144,15 @@ func TestGlobalsReadAndWrittenInPlace(t *testing.T) {
 		JSON.stringify([g1, g2, g3, g4, g5, setterLog, strictErr, sum, Object.getOwnPropertyDescriptor(globalThis, "g2").configurable]);
 	`, `[2,4,1,1,"got",[6],"TypeError",10,true]`)
 }
+
+func TestGlobalUpdatesForEffect(t *testing.T) {
+	// A global updated where its value is not wanted is stored without the
+	// copy the value would have needed.
+	checkEval(t, `
+		var gu = 0, calls = 0, go1 = { valueOf() { calls++; return 5; } };
+		for (var gk = 0; gk < 3; gk++) gu += 2;
+		(function () { for (gv = 0; gv < 4; gv++) gu--; gw = go1; gw++; gx = 1; gx *= 3; })();
+		var err = (function () { "use strict"; try { undeclaredGlobal++; } catch (e) { return e.constructor.name; } })();
+		JSON.stringify([gu, gk, gv, gw, calls, gx, err]);
+	`, `[2,3,4,6,1,3,"ReferenceError"]`)
+}
