@@ -319,13 +319,29 @@ func (r *Runtime) initRegExpBuiltins() {
 		names = append(names, fg.name)
 	}
 	r.regexpFlagProps = r.snapshotProps(p, names...)
+	r.regexpExecProps = r.snapshotProps(p, "exec")
 }
 
 // regexpExec runs a pattern against a string, honouring and updating lastIndex.
 func (r *Runtime) regexpExec(this Value, s *String) (Value, error) {
+	caps, re, err := r.regexpMatch(this, s)
+	if err != nil || caps == nil {
+		if err == nil {
+			return Null, nil
+		}
+		return Undefined, err
+	}
+	return Obj(r.buildMatchResult(re, caps, s)), nil
+}
+
+// regexpMatch is exec but for the array it returns: it reads and writes
+// lastIndex and records the legacy statics as exec does, and returns the
+// match's indices, or nil for none. They are the runtime's buffer, good until
+// the next match.
+func (r *Runtime) regexpMatch(this Value, s *String) ([]int, *regexp.Regexp, error) {
 	re, err := r.regexpOf(this, "RegExp.prototype.exec")
 	if err != nil {
-		return Undefined, err
+		return nil, nil, err
 	}
 	o := this.Object()
 
@@ -334,11 +350,11 @@ func (r *Runtime) regexpExec(this Value, s *String) (Value, error) {
 	// back, when the pattern is global or sticky.
 	liVal, err := r.getProp(o, atomLastIndex, this)
 	if err != nil {
-		return Undefined, err
+		return nil, nil, err
 	}
 	li, err := r.toLength(liVal)
 	if err != nil {
-		return Undefined, err
+		return nil, nil, err
 	}
 	stateful := re.Flags()&(regexp.FlagGlobal|regexp.FlagSticky) != 0
 	start := 0
@@ -355,10 +371,10 @@ func (r *Runtime) regexpExec(this Value, s *String) (Value, error) {
 	if start < 0 || start > len(units) {
 		if stateful {
 			if _, err := r.setProp(o, atomLastIndex, Int(0), this, true); err != nil {
-				return Undefined, err
+				return nil, nil, err
 			}
 		}
-		return Null, nil
+		return nil, re, nil
 	}
 	// A pattern that reads code points reads the one lastIndex falls in,
 	// which for an index between the halves of a pair begins at the first.
@@ -383,26 +399,56 @@ func (r *Runtime) regexpExec(this Value, s *String) (Value, error) {
 		r.capsBuf = caps
 	}
 	if errors.Is(err, regexp.ErrComplexity) {
-		return Undefined, r.throwError(errSyntax, "%s", err.Error())
+		return nil, nil, r.throwError(errSyntax, "%s", err.Error())
 	}
 	if err != nil {
-		return Undefined, err
+		return nil, nil, err
 	}
 	if caps == nil {
 		if stateful {
 			if _, err := r.setProp(o, atomLastIndex, Int(0), this, true); err != nil {
-				return Undefined, err
+				return nil, nil, err
 			}
 		}
-		return Null, nil
+		return nil, re, nil
 	}
 	if stateful {
 		if _, err := r.setProp(o, atomLastIndex, Int(caps[1]), this, true); err != nil {
-			return Undefined, err
+			return nil, nil, err
 		}
 	}
 	r.recordLegacyMatch(o.data.(*regexpData), s, caps)
-	return Obj(r.buildMatchResult(re, caps, s)), nil
+	return caps, re, nil
+}
+
+// builtinExec reports whether exec, called on rx, would be the built-in
+// running on an unnamed-group pattern: rx's flags are the built-in's to read
+// (see builtinFlags), and so is exec, which the realm's prototype still holds.
+// Its caller can then match without the result array, which nothing but it
+// would see. Groups with names are left to the array, which has them.
+func (r *Runtime) builtinExec(rx Value) bool {
+	if _, ok := r.builtinFlags(rx); !ok || !propsIntact(r.proto.regexp, r.regexpExecProps) {
+		return false
+	}
+	d, ok := rx.Object().data.(*regexpData)
+	return ok && len(d.re.GroupNames()) == 0
+}
+
+// execMatch is what calling the built-in exec on rx does -- its frame, the
+// match, lastIndex, the legacy statics -- but for making the array.
+func (r *Runtime) execMatch(rx Value, s *String) ([]int, error) {
+	i := len(r.argStack)
+	r.argStack = append(r.argStack, Str(s))
+	args := r.argStack[i : i+1 : i+1]
+	var caps []int
+	err := r.pushNativeFrame(r.regexpExecFn, rx, args, Undefined)
+	if err == nil {
+		caps, _, err = r.regexpMatch(rx, s)
+		r.frameDepth--
+	}
+	r.argStack[i] = Undefined
+	r.argStack = r.argStack[:i]
+	return caps, err
 }
 
 // buildMatchResult assembles the array exec returns: the matched text, then

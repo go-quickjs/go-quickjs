@@ -310,6 +310,8 @@ type Realm struct {
 	// regexpFlagProps is RegExp.prototype's flags getter and the getters it
 	// reads, as the realm made them: see builtinFlags.
 	regexpFlagProps []builtinProp
+	// regexpExecProps is RegExp.prototype.exec as the realm made it.
+	regexpExecProps []builtinProp
 	// objectToStringFn is Object.prototype.toString, which tells a structured
 	// clone how V8 would name an object it refuses.
 	objectToStringFn *Object

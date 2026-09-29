@@ -105,19 +105,9 @@ func (r *Runtime) callObject(o *Object, this Value, args []Value, newTarget Valu
 	}
 
 	if fd.native != nil {
-		if r.frameDepth >= r.maxFrames {
-			return Undefined, r.throwRangeError("maximum call stack size exceeded")
+		if err := r.nativeFrame(o, fd, this, args, newTarget); err != nil {
+			return Undefined, err
 		}
-		// A native frame is pushed so that stack traces include it.
-		f := r.pushFrame()
-		f.cl = nil
-		f.native = fd.name
-		f.this = this
-		f.newTarget = newTarget
-		f.callee = o
-		f.args = args
-		f.handlers = f.handlers[:0]
-		f.openUpvalues = f.openUpvalues[:0]
 		// A built-in runs in its own realm, whoever calls it.
 		if re := fd.realm; re != nil && re != r.Realm {
 			prev := r.Realm
@@ -150,6 +140,34 @@ func (r *Runtime) callObject(o *Object, this Value, args []Value, newTarget Valu
 		err = r.throwError(errReference, "%s", errNoSuper.Error())
 	}
 	return v, err
+}
+
+// nativeFrame pushes the frame a built-in runs in, so that stack traces
+// include it; the caller pops it when the built-in returns.
+func (r *Runtime) nativeFrame(o *Object, fd *funcData, this Value, args []Value, newTarget Value) error {
+	if r.frameDepth >= r.maxFrames {
+		return r.throwRangeError("maximum call stack size exceeded")
+	}
+	f := r.pushFrame()
+	f.cl = nil
+	f.native = fd.name
+	f.this = this
+	f.newTarget = newTarget
+	f.callee = o
+	f.args = args
+	f.handlers = f.handlers[:0]
+	f.openUpvalues = f.openUpvalues[:0]
+	return nil
+}
+
+// pushNativeFrame is what callObject does for the built-in o up to running
+// it: the call is counted, and its frame pushed. It is for running what a
+// built-in of this realm does directly, as the built-in would.
+func (r *Runtime) pushNativeFrame(o *Object, this Value, args []Value, newTarget Value) error {
+	if err := r.tick(); err != nil {
+		return err
+	}
+	return r.nativeFrame(o, o.fn(), this, args, newTarget)
 }
 
 // callClosure calls a compiled function, in the realm it belongs to.

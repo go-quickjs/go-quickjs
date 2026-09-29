@@ -382,8 +382,35 @@ func (r *Runtime) regExpSymbolReplace(rx Value, args []Value) (Value, error) {
 
 	// Every match is collected before any replacement runs, because a
 	// replacement function may itself use the pattern.
+	//
+	// Where exec is the built-in, and nothing a script wrote can run until
+	// the matching is done, the matches are kept as their indices rather than
+	// as the arrays exec would have made of them, which only this reads.
 	var results []Value
-	for {
+	var spans []int
+	fast := r.builtinExec(rx)
+	for fast {
+		if err := r.tick(); err != nil {
+			return Undefined, err
+		}
+		caps, err := r.execMatch(rx, s)
+		if err != nil {
+			return Undefined, err
+		}
+		if caps == nil {
+			break
+		}
+		spans = append(spans, caps...)
+		if !global {
+			break
+		}
+		if caps[0] == caps[1] {
+			if err := r.advanceAfterEmptyMatch(rx, units, fullUnicode); err != nil {
+				return Undefined, err
+			}
+		}
+	}
+	for !fast {
 		if err := r.tick(); err != nil {
 			return Undefined, err
 		}
@@ -419,51 +446,70 @@ func (r *Runtime) regExpSymbolReplace(rx Value, args []Value) (Value, error) {
 	// not keep what it was called with, any more than it may keep the
 	// interpreter's own stack.
 	var captures, callArgs []Value
-	for _, result := range results {
+	count := len(results)
+	width := 0
+	if fast {
+		width = 2 * (rx.Object().data.(*regexpData).re.GroupCount() + 1)
+		count = len(spans) / width
+	}
+	for k := 0; k < count; k++ {
 		if sb.overlong() {
 			return Undefined, r.throwStringLength()
 		}
-		nCaps, err := r.resultCaptureCount(result)
-		if err != nil {
-			return Undefined, err
-		}
-		matched, err := r.resultMatchString(result)
-		if err != nil {
-			return Undefined, err
-		}
-		matchLen := matched.Len()
-
-		posv, err := r.getValueProp(result, atomIndex)
-		if err != nil {
-			return Undefined, err
-		}
-		posf, err := r.toInteger(posv)
-		if err != nil {
-			return Undefined, err
-		}
-		// A result may claim any index at all; it is clamped rather than
-		// trusted, since it indexes the string being built.
-		position := clampFloatIndex(posf, size)
-
+		var matched *String
+		var position int
+		named := Undefined
 		captures = captures[:0]
-		for i := int64(1); i <= nCaps; i++ {
-			c, err := r.getValueProp(result, r.indexKey(i))
+		if fast {
+			caps := spans[k*width : (k+1)*width]
+			matched, position = s.Substring(caps[0], caps[1]), caps[0]
+			for i := 2; i < width; i += 2 {
+				c := Undefined
+				if caps[i] >= 0 && caps[i+1] >= 0 {
+					c = Str(s.Substring(caps[i], caps[i+1]))
+				}
+				captures = append(captures, c)
+			}
+		} else {
+			result := results[k]
+			nCaps, err := r.resultCaptureCount(result)
 			if err != nil {
 				return Undefined, err
 			}
-			if !c.IsUndefined() {
-				cs, err := r.toString(c)
+			if matched, err = r.resultMatchString(result); err != nil {
+				return Undefined, err
+			}
+			posv, err := r.getValueProp(result, atomIndex)
+			if err != nil {
+				return Undefined, err
+			}
+			posf, err := r.toInteger(posv)
+			if err != nil {
+				return Undefined, err
+			}
+			// A result may claim any index at all; it is clamped rather than
+			// trusted, since it indexes the string being built.
+			position = clampFloatIndex(posf, size)
+
+			for i := int64(1); i <= nCaps; i++ {
+				c, err := r.getValueProp(result, r.indexKey(i))
 				if err != nil {
 					return Undefined, err
 				}
-				c = Str(cs)
+				if !c.IsUndefined() {
+					cs, err := r.toString(c)
+					if err != nil {
+						return Undefined, err
+					}
+					c = Str(cs)
+				}
+				captures = append(captures, c)
 			}
-			captures = append(captures, c)
+			if named, err = r.getValueProp(result, atomGroups); err != nil {
+				return Undefined, err
+			}
 		}
-		named, err := r.getValueProp(result, atomGroups)
-		if err != nil {
-			return Undefined, err
-		}
+		matchLen := matched.Len()
 
 		var replacement string
 		if functional {
