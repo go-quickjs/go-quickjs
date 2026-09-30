@@ -967,15 +967,15 @@ scores are the suite's own (higher is better).
 
 | Workload | go-quickjs | QuickJS | QuickJS faster by | go-quickjs score | QuickJS score |
 |---|---:|---:|---:|---:|---:|
-| Richards | 26.7 ms | 11.0 ms | 2.4x | 410 | 951 |
-| DeltaBlue | 38.4 ms | 24.0 ms | 1.6x | 486 | 838 |
-| Crypto | 580 ms | 329 ms | 1.8x | 618 | 1,097 |
-| RayTrace | 188 ms | 145 ms | 1.3x | 1,195 | 1,530 |
-| EarleyBoyer | 675 ms | 424 ms | 1.6x | 1,340 | 2,095 |
-| RegExp | 764 ms | 876 ms | 0.87x | 501 | 432 |
-| Splay | 390 ms | 552 ms | 0.71x | 2,168 | 3,211 |
-| NavierStokes | 459 ms | 198 ms | 2.3x | 1,023 | 2,351 |
-| **Total / composite** | **3,167 ms** | **2,601 ms** | **1.22x** | **827** | **1,318** |
+| Richards | 26.3 ms | 11.0 ms | 2.4x | 408 | 939 |
+| DeltaBlue | 40.5 ms | 24.0 ms | 1.7x | 494 | 812 |
+| Crypto | 598 ms | 323 ms | 1.9x | 606 | 1,107 |
+| RayTrace | 180 ms | 142 ms | 1.3x | 1,246 | 1,552 |
+| EarleyBoyer | 633 ms | 402 ms | 1.6x | 1,392 | 2,148 |
+| RegExp | 472 ms | 874 ms | 0.54x | 824 | 421 |
+| Splay | 381 ms | 539 ms | 0.71x | 2,232 | 3,278 |
+| NavierStokes | 432 ms | 193 ms | 2.2x | 1,105 | 2,411 |
+| **Total / composite** | **2,763 ms** | **2,508 ms** | **1.10x** | **900** | **1,323** |
 
 The scored run weighs more heavily than the fixed one what a long-running
 program pays for its heap. Each workload is warmed for a second and then
@@ -1001,18 +1001,18 @@ What the gap is made of:
   variables and array elements. Fusing common instruction sequences into
   single instructions (`a[i]`, `a[++i]`, `x & 0xff`, `local * local`) reduces
   how many are dispatched.
-- **Calls.** A call from JavaScript to JavaScript passes through several Go
-  functions and fills in a frame record. Go has no callee-saved registers, so
-  each Go call spills what the caller holds. Richards and DeltaBlue are mostly
-  small method calls.
+- **Calls.** A call from JavaScript to JavaScript fills in a frame record of
+  some twenty fields, and each pointer it stores pays a write barrier's
+  check. An empty call costs about 47 ns here, against about 25 ns in
+  QuickJS. Richards and DeltaBlue are mostly small method calls.
 - **Property access.** Objects built the same way share a shape, as in
-  QuickJS and V8, and each property read and write remembers the shape it
-  last saw and where the property was. A QuickJS object holds only its
-  values, though, while a go-quickjs object still keeps its keys beside them
-  in a table of its own, so each object is larger. The cache is also
-  checked in a call rather than where the instruction runs, since the
-  interpreter's loop grows slower with every line added to it. Richards and
-  DeltaBlue read and write object fields constantly.
+  QuickJS and V8, and each property read and write, each getter, each
+  global variable read and each `instanceof` remembers where it last found
+  what it looked for. The cache is checked in a call rather than where the
+  instruction runs, since the interpreter's loop grows slower with every line
+  added to it. A go-quickjs object keeps its keys beside its values, where a
+  QuickJS object holds only its values, but that matters little: making every
+  object 24 bytes larger moved Splay and EarleyBoyer by about 1%.
 - **Memory management.** QuickJS counts references: an object is freed the
   moment the last reference to it goes, and a cycle collector handles the
   rest. go-quickjs relies on Go's garbage collector. It traces the live heap
@@ -1026,12 +1026,16 @@ What the gap is made of:
 
 Where go-quickjs is level or ahead:
 
-- **RegExp.** With an unmodified RegExp, `replace` and `split` find their
-  matches without building the arrays `exec` would return. `split` searches
-  for each separator instead of trying every position. The matcher passes
-  over positions where no match can begin in a loop of their own, reads a
-  code unit that is a whole character without a call, and takes a greedy
-  run of one character in a single step.
+- **RegExp.** A pattern that contains a run of plain text every match must
+  have, near where the match begins, is searched for that text first, and
+  tried only where it could have been reached from -- what V8's regexp
+  compiler gets from its lookahead analysis, and most of the lead here. With
+  an unmodified RegExp, `replace` and `split` find their matches without
+  building the arrays `exec` would return, and `split` searches for each
+  separator instead of trying every position. The matcher passes over
+  positions where no match can begin in a loop of their own, reads a code
+  unit that is a whole character without a call, and takes a greedy run of
+  one character in a single step.
 - **Splay, in fixed work.** Go's allocator makes many short-lived objects
   cheaply.
 - **`apply(this, arguments)`.** In a function whose only use of `arguments` is
@@ -1040,8 +1044,11 @@ Where go-quickjs is level or ahead:
 
 Most of what remains is the interpreter itself: the cost of dispatching an
 instruction and of a call, which is most of the gap in Crypto, NavierStokes
-and Richards. In the object model, what is left is keeping only values in an
-object, with its keys in the shape it shares.
+and Richards. The ways around that which an engine in C or with a JIT has are
+not open to one in Go, as measured here: running calls in the same loop
+rather than a Go call each made the loop slower than the calls it saved, and
+turning each instruction into a Go closure instead of a case of the switch
+came to little more than 10% on the loop best suited to it.
 
 ## License
 
