@@ -448,8 +448,31 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 			item := code[pc+1]
 			units := m.in.units
 			end := pos
-			for end < len(units) && m.unitMatches(item, units[end]) {
-				end++
+			// Each kind of unit is scanned for by a loop of its own, which
+			// asks nothing it does not need to of each unit.
+			switch item.op {
+			case opClass:
+				ascii := &m.prog.asciiClasses[item.arg]
+				for end < len(units) {
+					if u := units[end]; u < 128 {
+						if ascii[u>>6]&(1<<(u&63)) == 0 {
+							break
+						}
+					} else if !m.prog.classes[item.arg].contains(rune(u), m.prog.unicodeFold) {
+						break
+					}
+					end++
+				}
+			case opChar:
+				for end < len(units) && rune(units[end]) == item.r {
+					end++
+				}
+			case opAny:
+				end = len(units)
+			default:
+				for end < len(units) && m.unitMatches(item, units[end]) {
+					end++
+				}
 			}
 			m.steps += end - pos
 			if end-pos < in.arg {
