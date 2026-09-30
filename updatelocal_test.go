@@ -312,3 +312,30 @@ func TestSortIsStableAndThorough(t *testing.T) {
 		return JSON.stringify(out);
 	})()`, `[true,"1,2,3,,","1,10,9,a,b","stop",true,true,true,"-1,2,3","3,2,1"]`)
 }
+
+func TestPushAndPopOfPlainArrays(t *testing.T) {
+	// push and pop change a plain dense array in place; anything a setter,
+	// a frozen or sealed array, a hole or a subclass makes different still is.
+	checkEval(t, `(function () {
+		var out = [], log = [];
+		var a = [1, , 3]; out.push(a.push(4, 5), JSON.stringify(a), a.pop(), a.length);
+		var h = [1, , ]; out.push(h.pop(), h.length, 1 in h);
+		Object.defineProperty(Array.prototype, 5, { set(v) { log.push("set " + v); }, configurable: true });
+		var b = [0, 1, 2, 3, 4]; b.push("x"); delete Array.prototype[5];
+		out.push(log.join(), b.length, Object.hasOwn(b, 5));
+		Object.defineProperty(Object.prototype, 1, { get() { return "proto"; }, configurable: true });
+		var c = [0, , 2]; c.pop(); out.push(c.pop(), c.length); delete Object.prototype[1];
+		var f = Object.freeze([1, 2]);
+		try { f.push(3); } catch (e) { out.push(e.constructor.name); }
+		try { f.pop(); } catch (e) { out.push(e.constructor.name); }
+		var s = Object.seal([1, 2]);
+		try { s.pop(); } catch (e) { out.push(e.constructor.name); }
+		var ne = Object.preventExtensions([1, 2]); out.push(ne.pop(), ne.length);
+		try { ne.push(9); } catch (e) { out.push(e.constructor.name); }
+		var nw = [1, 2]; Object.defineProperty(nw, "length", { writable: false });
+		try { nw.push(3); } catch (e) { out.push(e.constructor.name); }
+		try { nw.pop(); } catch (e) { out.push(e.constructor.name, nw.length); }
+		class A extends Array {} var sa = new A(); sa.push(1); out.push(sa.length, sa.pop());
+		return JSON.stringify(out);
+	})()`, `[5,"[1,null,3,4,5]",5,4,null,1,false,"set x",6,false,"proto",1,"TypeError","TypeError","TypeError",2,1,"TypeError","TypeError","TypeError",2,1,1]`)
+}

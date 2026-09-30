@@ -1044,6 +1044,16 @@ func (r *Runtime) initArrayBuiltins() {
 	// refusal to be written, and see a length that is a number rather than a
 	// count of what is present.
 	r.defMethod(p, "push", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		if o := rt.plainArray(this); o != nil && rt.noInheritedIndices(o) &&
+			o.flags&(objExtensible|objArrayLengthWritable) == objExtensible|objArrayLengthWritable &&
+			len(o.elems)+len(args) <= maxArrayLength {
+			// A dense array of its own, extensible and with its length
+			// writable, whose prototypes have no element a setter could be
+			// asked about: each value is an element added at the end, and the
+			// length is how many there are.
+			o.elems = append(o.elems, args...)
+			return Float(float64(len(o.elems))), nil
+		}
 		a, err := rt.viewArrayLike(this)
 		if err != nil {
 			return Undefined, err
@@ -1064,6 +1074,17 @@ func (r *Runtime) initArrayBuiltins() {
 	})
 
 	r.defMethod(p, "pop", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		if o := rt.plainArray(this); o != nil && len(o.elems) > 0 && o.flags&objArrayLengthWritable != 0 {
+			// The last element of a dense array, its own, is read, deleted
+			// and the length shortened past it -- unless it is a hole,
+			// which the prototypes answer for.
+			n := len(o.elems) - 1
+			if v := o.elems[n]; !isHole(v) {
+				o.elems[n] = Undefined
+				o.elems = o.elems[:n]
+				return v, nil
+			}
+		}
 		a, err := rt.viewArrayLike(this)
 		if err != nil {
 			return Undefined, err
@@ -2810,6 +2831,41 @@ func (r *Runtime) sortIndexed(a *arrayLike, cmp Value) ([]Value, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+// plainArray is this when it is an array in dense storage -- not a proxy, not
+// sparse, not an array subclass's -- and nil otherwise.
+func (r *Runtime) plainArray(this Value) *Object {
+	if !this.IsObject() {
+		return nil
+	}
+	o := this.Object()
+	if o.class != ClassArray || o.flags&objHasSparseElements != 0 || o.proto != r.proto.array {
+		return nil
+	}
+	return o
+}
+
+// noInheritedIndices reports whether an array's prototypes are the realm's
+// own two, as they came, with no element or indexed property that an
+// assignment to one of the array's indices would have to consult.
+func (r *Runtime) noInheritedIndices(o *Object) bool {
+	ap := o.proto
+	op := ap.proto
+	if op != r.proto.object || op.proto != nil {
+		return false
+	}
+	for _, p := range [2]*Object{ap, op} {
+		if len(p.elems) != 0 || p.flags&objHasSparseElements != 0 {
+			return false
+		}
+		for i := range p.props {
+			if p.props[i].key.IsIndex() {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // compareForSort reports whether x sorts before y.
