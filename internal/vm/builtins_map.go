@@ -11,6 +11,8 @@ package vm
 // specification requires that an entry deleted during iteration is skipped
 // while the entries around it keep their positions.
 
+import "math"
+
 // mapKey is the comparable form of a Value, used as a Go map key.
 //
 // The fields are separated by kind so that values of different types never
@@ -103,10 +105,15 @@ type jsMap struct {
 	// and a Set, which is most of them, would carry three words per entry that
 	// nothing ever reads. It has one element per entry when it is there at all.
 	weakKeys []weakTarget
-	// byValue and byRef index the entries by key. They are separate because
-	// what identifies a key is either its value or its address, never both,
-	// and a map that holds one kind should not pay for room for the other.
-	// Each is created when the first key of its kind arrives.
+	// byNum, byStr, byValue and byRef index the entries by key. They are
+	// separate because what identifies a key is its value or its address,
+	// never both, and a map that holds one kind should not pay for room for
+	// the other. A number, by its bits, and a string are the commonest keys,
+	// and Go's maps of those are much quicker than one of a struct; byValue
+	// holds the other primitives. Each is created when the first key of its
+	// kind arrives.
+	byNum   map[uint64]int
+	byStr   map[string]int
 	byValue map[valueKey]int
 	byRef   map[any]int
 	size    int
@@ -134,8 +141,26 @@ func (m *jsMap) lookup(k mapKey) (int, bool) {
 		i, ok := m.byRef[k.ref]
 		return i, ok
 	}
-	i, ok := m.byValue[k.val]
+	var i int
+	var ok bool
+	switch k.val.kind {
+	case KindNumber:
+		i, ok = m.byNum[numKeyBits(k.val)]
+	case KindString:
+		i, ok = m.byStr[k.val.str]
+	default:
+		i, ok = m.byValue[k.val]
+	}
 	return i, ok
+}
+
+// numKeyBits is a number key's index in byNum: its bits, with every NaN,
+// which strongKeyOf gives a string instead, as one.
+func numKeyBits(k valueKey) uint64 {
+	if k.str != "" {
+		return canonicalNaN
+	}
+	return math.Float64bits(k.num)
 }
 
 // record points a key at an entry.
@@ -147,10 +172,23 @@ func (m *jsMap) record(k mapKey, i int) {
 		m.byRef[k.ref] = i
 		return
 	}
-	if m.byValue == nil {
-		m.byValue = make(map[valueKey]int)
+	switch k.val.kind {
+	case KindNumber:
+		if m.byNum == nil {
+			m.byNum = make(map[uint64]int)
+		}
+		m.byNum[numKeyBits(k.val)] = i
+	case KindString:
+		if m.byStr == nil {
+			m.byStr = make(map[string]int)
+		}
+		m.byStr[k.val.str] = i
+	default:
+		if m.byValue == nil {
+			m.byValue = make(map[valueKey]int)
+		}
+		m.byValue[k.val] = i
 	}
-	m.byValue[k.val] = i
 }
 
 // forget removes a key from the index.
@@ -159,11 +197,20 @@ func (m *jsMap) forget(k mapKey) {
 		delete(m.byRef, k.ref)
 		return
 	}
-	delete(m.byValue, k.val)
+	switch k.val.kind {
+	case KindNumber:
+		delete(m.byNum, numKeyBits(k.val))
+	case KindString:
+		delete(m.byStr, k.val.str)
+	default:
+		delete(m.byValue, k.val)
+	}
 }
 
 // clearIndex empties the index, keeping what it has allocated.
 func (m *jsMap) clearIndex() {
+	clear(m.byNum)
+	clear(m.byStr)
 	clear(m.byValue)
 	clear(m.byRef)
 }
