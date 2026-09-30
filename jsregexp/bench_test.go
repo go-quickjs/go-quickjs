@@ -12,8 +12,9 @@ import (
 
 // The benchmarks compare this package with Go's regexp on work both can do:
 // the same pattern, meaning the same thing in both syntaxes, over the same
-// input. Each case runs once per engine, as engine=jsregexp and engine=regexp,
-// so that benchstat can set them side by side:
+// input. Each case runs once per engine, as engine=jsregexp, engine=regexp and
+// engine=jsregexp-utf8 -- a pattern from CompileUTF8, which matches a subject's
+// UTF-8 where it is -- so that benchstat can set them side by side:
 //
 //	go test ./jsregexp -run '^$' -bench Compare -count 10 > bench.txt
 //	benchstat -col /engine bench.txt
@@ -63,6 +64,10 @@ var compareCases = []compareCase{
 	{name: "Email", js: `[a-z]+@[a-z]+\.[a-z]{2,}`, re: `[a-z]+@[a-z]+\.[a-z]{2,}`, op: "findall", input: logText, findAllN: -1},
 	{name: "ReplaceSpaces", js: `\s+`, re: `\s+`, op: "replace", input: logText, replace: " "},
 	{name: "Split", js: `,\s*`, re: `,\s*`, op: "split", input: logText},
+	{name: "LiteralFoundUnicode", js: `needle`, re: `needle`, op: "find", input: unicodeText},
+	{name: "DigitsUnicode", js: `\d+`, re: `\d+`, op: "findall", input: unicodeText, findAllN: -1},
+	{name: "CapturesUnicode", js: `(\w+)@(\w+)\.com`, re: `(\w+)@(\w+)\.com`, op: "submatch", input: unicodeText},
+	{name: "ReplaceSpacesUnicode", js: `\s+`, re: `\s+`, op: "replace", input: unicodeText, replace: " "},
 }
 
 // compareOp is one case's work on one engine, returning what it found so
@@ -70,7 +75,15 @@ var compareCases = []compareCase{
 type compareOp func() []string
 
 func jsOp(b testing.TB, c compareCase) compareOp {
-	re, err := jsregexp.Compile(c.js, c.jsFlags)
+	return jsOpWith(b, c, jsregexp.Compile)
+}
+
+func jsUTF8Op(b testing.TB, c compareCase) compareOp {
+	return jsOpWith(b, c, jsregexp.CompileUTF8)
+}
+
+func jsOpWith(b testing.TB, c compareCase, compile func(pattern, flags string) (*jsregexp.Regexp, error)) compareOp {
+	re, err := compile(c.js, c.jsFlags)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -132,9 +145,12 @@ func goOp(b testing.TB, c compareCase) compareOp {
 // anything.
 func TestCompareCasesAgree(t *testing.T) {
 	for _, c := range compareCases {
-		got, want := jsOp(t, c)(), goOp(t, c)()
-		if !slices.Equal(got, want) {
+		want := goOp(t, c)()
+		if got := jsOp(t, c)(); !slices.Equal(got, want) {
 			t.Errorf("%s: jsregexp and regexp disagree: %d results against %d", c.name, len(got), len(want))
+		}
+		if got := jsUTF8Op(t, c)(); !slices.Equal(got, want) {
+			t.Errorf("%s: jsregexp's UTF-8 mode and regexp disagree: %d results against %d", c.name, len(got), len(want))
 		}
 	}
 }
@@ -144,7 +160,7 @@ func BenchmarkCompare(b *testing.B) {
 		engines := []struct {
 			name string
 			op   func(testing.TB, compareCase) compareOp
-		}{{"jsregexp", jsOp}, {"regexp", goOp}}
+		}{{"jsregexp", jsOp}, {"jsregexp-utf8", jsUTF8Op}, {"regexp", goOp}}
 		for _, e := range engines {
 			b.Run(c.name+"/engine="+e.name, func(b *testing.B) {
 				op := e.op(b, c)

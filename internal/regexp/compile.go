@@ -111,12 +111,21 @@ type compiler struct {
 	// works leftwards, so its terms run last-first and each consumes the
 	// character before the cursor rather than the one at it.
 	reverse bool
+	// noGreedy keeps opGreedy to items that match ASCII alone: opGreedy
+	// takes a code unit to be a character, and the program is for the
+	// matcher over UTF-8, where only a byte of ASCII is one.
+	noGreedy bool
 }
 
 func compileNode(n node, flags Flags) *program {
+	return compileNodeFor(n, flags, false)
+}
+
+// compileNodeFor is compileNode for the matcher over UTF-8 where utf8 is set.
+func compileNodeFor(n node, flags Flags, utf8 bool) *program {
 	c := &compiler{prog: &program{
 		unicodeFold: flags&(FlagUnicode|FlagUnicodeSets) != 0,
-	}, flags: flags}
+	}, flags: flags, noGreedy: utf8}
 	// Slot 0 and 1 hold the whole match's bounds, so group k uses slots 2k and
 	// 2k+1.
 	c.emit(instr{op: opSave, arg: 0})
@@ -296,9 +305,31 @@ func oneUnit(n node) bool {
 	return false
 }
 
+// asciiOnly reports whether a node oneUnit accepts matches ASCII characters
+// alone, without the unicode flag: none past ASCII is one of them, and none
+// folds into them, since the uppercase rule the i flag then uses never takes
+// a character past ASCII into it.
+func asciiOnly(n node) bool {
+	switch t := n.(type) {
+	case nodeChar:
+		return t.r < 0x80
+	case nodeClass:
+		if t.set.negated || t.set.wordComplement {
+			return false
+		}
+		for _, rg := range t.set.ranges {
+			if rg.hi >= 0x80 {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
 func (c *compiler) compileRepeat(t nodeRepeat) {
 	if greedyLoops && t.greedy && t.max < 0 && t.min <= 1 && !c.reverse &&
-		c.flags&(FlagUnicode|FlagUnicodeSets) == 0 && oneUnit(t.item) {
+		c.flags&(FlagUnicode|FlagUnicodeSets) == 0 && oneUnit(t.item) && (!c.noGreedy || asciiOnly(t.item)) {
 		c.emit(instr{op: opGreedy, arg: t.min})
 		c.compile(t.item)
 		return
@@ -449,7 +480,7 @@ func (c *compiler) patchSplitAlt(pc int, greedy bool, target int) {
 func (c *compiler) compileLook(t nodeLook) {
 	// A lookaround sets its own direction: a lookbehind inside a lookahead
 	// still matches leftwards, and a lookahead inside a lookbehind rightwards.
-	sub := &compiler{prog: c.prog, flags: c.flags, reverse: t.behind}
+	sub := &compiler{prog: c.prog, flags: c.flags, reverse: t.behind, noGreedy: c.noGreedy}
 	// The body is compiled into a scratch buffer and then moved, so that its
 	// jump targets are relative to its own start.
 	saved := c.prog.code

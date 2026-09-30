@@ -732,6 +732,12 @@ to the UTF-16 code units JavaScript matches over. Telling the two apart reads
 the whole string, some 3 µs for 16 KB, which is most of what the two slower
 cases above take.
 
+`CompileUTF8` matches a string's UTF-8 where it is, by code point as the `u`
+flag reads text, and needs neither step: with the `u` or `v` flag its matches
+are exactly JavaScript's, and on text that is not all ASCII it is up to 100
+times faster than converting it. [The package's README](jsregexp/README.md)
+has the details and the numbers.
+
 ## Sandboxing
 
 A runtime has no I/O, no network access, no timers, no filesystem and no module

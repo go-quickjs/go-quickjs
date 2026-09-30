@@ -21,6 +21,8 @@ type Regexp struct {
 	// concurrent marks a pattern goroutines match with at once, which lends
 	// no matcher: each match takes one from matcherPool and gives it back.
 	concurrent bool
+	// utf8 marks a pattern compiled for MatchUTF8Into.
+	utf8 bool
 	// lender is the pattern a clone was made from, whose matcher the clone
 	// borrows when it has none of its own; see exec.
 	lender *Regexp

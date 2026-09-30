@@ -235,6 +235,42 @@ func TestEmptyMatchesAdvance(t *testing.T) {
 	}
 }
 
+// Under the u flag an empty match advances past a whole surrogate pair, as
+// AdvanceStringIndex does, and without it by one code unit, into the pair:
+// "a😀".replace(/(?:)/gu, "[]") is "[]a[]😀[]" in Node.
+func TestEmptyMatchesAdvancePastPairs(t *testing.T) {
+	for _, tt := range []struct {
+		flags string
+		want  string
+	}{
+		{"u", "[]a[]😀[]"},
+		{"v", "[]a[]😀[]"},
+		{"", "[]a[]\xed\xa0\xbd[]\xed\xb8\x80[]"},
+	} {
+		got, err := jsregexp.MustCompile(`(?:)`, tt.flags).ReplaceAllString("a😀", "[]")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != tt.want {
+			t.Errorf("/(?:)/%s: got %q, want %q", tt.flags, got, tt.want)
+		}
+	}
+	idx, err := jsregexp.MustCompile(`(?=.)`, "u").FindAllStringIndex("a😀b", -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := fmt.Sprint(idx), "[[0 0] [1 1] [5 5]]"; got != want {
+		t.Errorf("(?=.) under u: got %s, want %s", got, want)
+	}
+	parts, err := jsregexp.MustCompile(`(?:)`, "u").Split("a😀", -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := fmt.Sprintf("%q", parts), `["a" "😀"]`; got != want {
+		t.Errorf("split under u: got %s, want %s", got, want)
+	}
+}
+
 func TestReplace(t *testing.T) {
 	cases := []struct{ pattern, flags, subject, repl, want string }{
 		{`\d+`, "", "a1b22", "#", "a#b#"},
@@ -307,6 +343,12 @@ func TestSplit(t *testing.T) {
 		{`x`, "abc", -1, "abc"},
 		{`,`, "", -1, ""},
 		{`,`, "a,b", 0, ""},
+		// An empty match at either end splits nothing off, in Node and in
+		// Go's regexp: "ab".split(/$/) is ["ab"].
+		{`(?:)`, "ab", -1, "a|b"},
+		{`x*`, "ab", -1, "a|b"},
+		{`$`, "ab", -1, "ab"},
+		{`,`, "a,", -1, "a|"},
 	}
 	for _, tc := range cases {
 		re := jsregexp.MustCompile(tc.pattern, "")

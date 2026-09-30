@@ -69,6 +69,12 @@ type Regexp struct {
 	lit            string
 	litMin, litMax int
 	sticky         bool
+	// unicode is set for the u and v flags, under which an empty match
+	// moves the next search past a whole character, not half of a pair.
+	unicode bool
+	// utf8 is set for a pattern from CompileUTF8, which matches the subject's
+	// UTF-8 where it is, by code point.
+	utf8 bool
 }
 
 // Compile parses a pattern and its flags.
@@ -105,6 +111,39 @@ func MustCompile(pattern, flags string) *Regexp {
 	return r
 }
 
+// CompileUTF8 is Compile for matching a subject's UTF-8 where it is, by code
+// point, rather than as the UTF-16 code units JavaScript matches over, which
+// every subject not all in ASCII is otherwise converted to first.
+//
+// A subject is then read as the u flag reads one, whatever the flags: for a
+// pattern with the u or v flag the matches are exactly JavaScript's, and for
+// one without they differ only on characters outside the Basic Multilingual
+// Plane, such as an emoji, each of which is one character where JavaScript sees
+// two. /./ and /[^a]/ match the whole of one, not half, and /^.$/ matches it; a
+// class of surrogates, which only its halves are in, matches neither of them. A
+// pair spelled out in a row, as /\uD83D\uDE00/ or the emoji itself, still
+// matches the character. The positions reported are byte offsets, as they are
+// for Compile; an empty match moves the next search past a whole character.
+func CompileUTF8(pattern, flags string) (*Regexp, error) {
+	compiled, err := re.CompileUTF8(pattern, flags)
+	if err != nil {
+		return nil, err
+	}
+	out := newRegexp(compiled, pattern, flags)
+	out.utf8 = true
+	return out, nil
+}
+
+// MustCompileUTF8 is CompileUTF8 for a pattern known to be good. It panics if
+// the pattern does not compile.
+func MustCompileUTF8(pattern, flags string) *Regexp {
+	r, err := CompileUTF8(pattern, flags)
+	if err != nil {
+		panic("jsregexp: " + err.Error())
+	}
+	return r
+}
+
 func newRegexp(compiled *re.Regexp, pattern, flags string) *Regexp {
 	// The names are held the way Go's regexp holds them: one entry per group,
 	// empty where the group has no name, with the whole match at index zero.
@@ -120,7 +159,8 @@ func newRegexp(compiled *re.Regexp, pattern, flags string) *Regexp {
 	// A Regexp is shared between goroutines, so its matches do not share a
 	// matcher.
 	compiled.Concurrent()
-	out := &Regexp{re: compiled, src: pattern, flags: flags, names: names, sticky: strings.ContainsRune(flags, 'y')}
+	out := &Regexp{re: compiled, src: pattern, flags: flags, names: names, sticky: strings.ContainsRune(flags, 'y'),
+		unicode: strings.ContainsAny(flags, "uv")}
 	out.lit, out.litMin, out.litMax, _ = compiled.RequiredLiteral()
 	return out
 }
@@ -168,12 +208,14 @@ func QuoteMeta(s string) string { return re.QuoteMeta(s) }
 //
 // A subject that is all ASCII is matched where it is, a byte being a code unit,
 // and has no code units made for it; any other is converted when a match first
-// needs it -- a subject the pattern's required literal rules out never is.
+// needs it -- a subject the pattern's required literal rules out never is. A
+// pattern from CompileUTF8 matches every subject where it is. Where a subject
+// is matched where it is, bytes is set: its positions are byte offsets.
 type subject struct {
 	s       string
 	units   []uint16
 	offsets []int
-	ascii   bool
+	bytes   bool
 	made    bool
 	// ruledOut records that the pattern's required literal is not in s,
 	// once that has been looked for, and litAt where it was last found.
@@ -181,14 +223,16 @@ type subject struct {
 	litAt               int
 }
 
-func newSubject(s string) *subject {
-	return &subject{s: s}
+// subject prepares s for matching with r: for a pattern from CompileUTF8 it
+// needs nothing more.
+func (r *Regexp) subject(s string) *subject {
+	return &subject{s: s, bytes: r.utf8, made: r.utf8}
 }
 
 // n is how many code units the subject has.
 func (sub *subject) n() int {
 	sub.make()
-	if sub.ascii {
+	if sub.bytes {
 		return len(sub.s)
 	}
 	return len(sub.units)
@@ -203,7 +247,7 @@ func (sub *subject) make() {
 	sub.made = true
 	s := sub.s
 	if isASCII(s) {
-		sub.ascii = true
+		sub.bytes = true
 		return
 	}
 	units := make([]uint16, 0, len(s))
@@ -227,8 +271,8 @@ func (sub *subject) make() {
 // match is the leftmost match at or after pos, into dst. The pattern's
 // required literal is looked for first, in the string itself with
 // strings.Index: a subject without it has no match, found without converting
-// it, and in an ASCII subject, where a character is a byte, the search starts
-// where the literal can first be reached from.
+// it, and in a subject matched where it is the search starts where the literal
+// can first be reached from.
 func (r *Regexp) match(sub *subject, pos int, dst []int) ([]int, error) {
 	if r.lit != "" {
 		if !sub.litLooked {
@@ -241,7 +285,14 @@ func (r *Regexp) match(sub *subject, pos int, dst []int) ([]int, error) {
 		}
 	}
 	sub.make()
-	if r.lit != "" && sub.ascii && !r.sticky {
+	if r.lit != "" && sub.bytes && !r.sticky {
+		// The literal's distance from the start of a match is in code units,
+		// each a byte of ASCII. Read by code point, each is at least a byte,
+		// and at most the four of a character past the BMP.
+		litMax := r.litMax
+		if r.utf8 {
+			litMax *= utf8.UTFMax
+		}
 		from := pos + r.litMin
 		if from > len(sub.s) {
 			return nil, nil
@@ -255,9 +306,18 @@ func (r *Regexp) match(sub *subject, pos int, dst []int) ([]int, error) {
 			}
 			sub.litAt = from + i
 		}
-		pos = max(pos, sub.litAt-r.litMax)
+		if p := sub.litAt - litMax; p > pos {
+			// A search by code point starts where a character does.
+			for p > pos && sub.s[p]&0xC0 == 0x80 {
+				p--
+			}
+			pos = p
+		}
 	}
-	if sub.ascii {
+	if r.utf8 {
+		return r.re.MatchUTF8Into(dst, sub.s, pos, nil)
+	}
+	if sub.bytes {
 		return r.re.MatchASCIIInto(dst, sub.s, pos, nil)
 	}
 	return r.re.MatchCheckedInto(dst, sub.units, pos, nil)
@@ -268,7 +328,7 @@ func (sub *subject) byteAt(unit int) int {
 	if unit < 0 {
 		return -1
 	}
-	if sub.ascii {
+	if sub.bytes {
 		return unit
 	}
 	if unit >= len(sub.offsets) {
@@ -286,7 +346,7 @@ func (sub *subject) text(lo, hi int) string {
 	if lo < 0 || hi < 0 {
 		return ""
 	}
-	if sub.ascii {
+	if sub.bytes {
 		return sub.s[lo:hi]
 	}
 	if sub.splits(lo) || sub.splits(hi) {
@@ -321,7 +381,7 @@ func isASCII(s string) bool {
 
 // MatchString reports whether the pattern matches anywhere in s.
 func (r *Regexp) MatchString(s string) (bool, error) {
-	sub := newSubject(s)
+	sub := r.subject(s)
 	var buf [capsOnStack]int
 	caps, err := r.match(sub, 0, buf[:0])
 	return caps != nil, err
@@ -346,7 +406,7 @@ func MatchString(pattern, flags, s string) (bool, error) {
 // An empty string is also what a pattern that matched emptiness returns, so
 // FindStringIndex is what tells the two apart.
 func (r *Regexp) FindString(s string) (string, error) {
-	sub := newSubject(s)
+	sub := r.subject(s)
 	var buf [capsOnStack]int
 	caps, err := r.match(sub, 0, buf[:0])
 	if err != nil || caps == nil {
@@ -357,7 +417,7 @@ func (r *Regexp) FindString(s string) (string, error) {
 
 // FindStringIndex returns the byte bounds of the leftmost match, or nil.
 func (r *Regexp) FindStringIndex(s string) ([]int, error) {
-	sub := newSubject(s)
+	sub := r.subject(s)
 	var buf [capsOnStack]int
 	caps, err := r.match(sub, 0, buf[:0])
 	if err != nil || caps == nil {
@@ -372,7 +432,7 @@ func (r *Regexp) FindStringIndex(s string) ([]int, error) {
 // A group that did not participate is an empty string, as in Go's regexp;
 // FindStringSubmatchIndex tells it apart from one that matched emptiness.
 func (r *Regexp) FindStringSubmatch(s string) ([]string, error) {
-	sub := newSubject(s)
+	sub := r.subject(s)
 	var buf [capsOnStack]int
 	caps, err := r.match(sub, 0, buf[:0])
 	if err != nil || caps == nil {
@@ -387,7 +447,7 @@ func (r *Regexp) FindStringSubmatch(s string) ([]string, error) {
 // The result holds two entries per group, the whole match first, with -1 for a
 // group that did not participate.
 func (r *Regexp) FindStringSubmatchIndex(s string) ([]int, error) {
-	sub := newSubject(s)
+	sub := r.subject(s)
 	var buf [capsOnStack]int
 	caps, err := r.match(sub, 0, buf[:0])
 	if err != nil || caps == nil {
@@ -402,7 +462,7 @@ func (r *Regexp) FindStringSubmatchIndex(s string) ([]int, error) {
 // group that participated. Groups without names are left out; use
 // FindStringSubmatch for those.
 func (r *Regexp) FindStringSubmatchMap(s string) (map[string]string, error) {
-	sub := newSubject(s)
+	sub := r.subject(s)
 	var buf [capsOnStack]int
 	caps, err := r.match(sub, 0, buf[:0])
 	if err != nil || caps == nil {
@@ -444,8 +504,9 @@ func submatchIndex(sub *subject, caps []int) []int {
 // eachMatch calls visit for successive non-overlapping matches, at most n of
 // them, or all of them when n is negative.
 //
-// An empty match advances by one position, which is what keeps a pattern that
-// can match nothing from finding it for ever at the same place.
+// An empty match advances by one position -- one character under the u or v
+// flag or for a pattern from CompileUTF8 -- which is what keeps a pattern that can match nothing from
+// finding it for ever at the same place.
 //
 // The bounds visit is given are overwritten by the next match: a visit that
 // keeps them copies them.
@@ -471,6 +532,15 @@ func (r *Regexp) eachMatch(sub *subject, n int, visit func(caps []int)) error {
 		}
 		if caps[1] == caps[0] {
 			pos = caps[1] + 1
+			switch {
+			case r.utf8 && caps[1] < len(sub.s):
+				_, w := wtf8.DecodeRune(sub.s[caps[1]:])
+				pos = caps[1] + w
+			case r.unicode && !sub.bytes && sub.splits(pos):
+				// Under the u flag the next search is past the whole of a
+				// surrogate pair, as AdvanceStringIndex makes it.
+				pos++
+			}
 		} else {
 			pos = caps[1]
 		}
@@ -481,7 +551,7 @@ func (r *Regexp) eachMatch(sub *subject, n int, visit func(caps []int)) error {
 // FindAllString returns up to n successive matches, or all of them when n is
 // negative. It returns nil if there are none.
 func (r *Regexp) FindAllString(s string, n int) ([]string, error) {
-	sub := newSubject(s)
+	sub := r.subject(s)
 	var out []string
 	err := r.eachMatch(sub, n, func(caps []int) {
 		out = append(out, sub.text(caps[0], caps[1]))
@@ -491,7 +561,7 @@ func (r *Regexp) FindAllString(s string, n int) ([]string, error) {
 
 // FindAllStringIndex returns the byte bounds of up to n successive matches.
 func (r *Regexp) FindAllStringIndex(s string, n int) ([][]int, error) {
-	sub := newSubject(s)
+	sub := r.subject(s)
 	var out [][]int
 	err := r.eachMatch(sub, n, func(caps []int) {
 		out = append(out, []int{sub.byteAt(caps[0]), sub.byteAt(caps[1])})
@@ -501,7 +571,7 @@ func (r *Regexp) FindAllStringIndex(s string, n int) ([][]int, error) {
 
 // FindAllStringSubmatch returns up to n successive matches with their groups.
 func (r *Regexp) FindAllStringSubmatch(s string, n int) ([][]string, error) {
-	sub := newSubject(s)
+	sub := r.subject(s)
 	var out [][]string
 	err := r.eachMatch(sub, n, func(caps []int) {
 		out = append(out, submatchStrings(sub, caps))
@@ -512,7 +582,7 @@ func (r *Regexp) FindAllStringSubmatch(s string, n int) ([][]string, error) {
 // FindAllStringSubmatchIndex returns the byte bounds of up to n successive
 // matches and of their groups.
 func (r *Regexp) FindAllStringSubmatchIndex(s string, n int) ([][]int, error) {
-	sub := newSubject(s)
+	sub := r.subject(s)
 	var out [][]int
 	err := r.eachMatch(sub, n, func(caps []int) {
 		out = append(out, submatchIndex(sub, caps))
@@ -566,7 +636,7 @@ func (r *Regexp) ReplaceAllStringSubmatchFunc(s string, repl func(groups []strin
 }
 
 func (r *Regexp) replaceAll(s string, repl func(*subject, []int) string) (string, error) {
-	sub := newSubject(s)
+	sub := r.subject(s)
 	var b strings.Builder
 	last, matched := 0, false
 	err := r.eachMatch(sub, -1, func(caps []int) {
@@ -657,15 +727,16 @@ func (r *Regexp) Split(s string, n int) ([]string, error) {
 	if n == 0 {
 		return nil, nil
 	}
-	sub := newSubject(s)
+	sub := r.subject(s)
 	var out []string
 	last := 0
 	err := r.eachMatch(sub, -1, func(caps []int) {
 		if n > 0 && len(out) >= n-1 {
 			return
 		}
-		// A match of nothing at the very start splits nothing off.
-		if caps[1] == 0 && caps[0] == 0 {
+		// A match of nothing at the very start or the very end splits
+		// nothing off, in JavaScript as in Go's regexp.
+		if caps[0] == caps[1] && (caps[0] == 0 || caps[0] == sub.n()) {
 			return
 		}
 		out = append(out, sub.text(last, caps[0]))
