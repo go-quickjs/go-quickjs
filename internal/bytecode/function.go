@@ -259,10 +259,10 @@ type Function struct {
 	// name, which says how large the object a constructor builds will be. It is
 	// a hint: the table grows as usual if the body adds more.
 	ThisProps uint8
-	// PropSites is how many property reads and writes and object literals the
-	// code has that keep a cache -- of where a read or a write last found its
-	// property, or of the shape a literal's objects start from: each such
-	// instruction's B is its cache's number, from 1.
+	// PropSites is how many property reads and writes, object literals and
+	// instanceof operators the code has that keep a cache -- of where a read
+	// or a write last found its property, or of the shape a literal's objects
+	// start from: each such instruction's B is its cache's number, from 1.
 	PropSites uint32
 
 	// UsesThis records whether the body can observe its `this`, which lets a

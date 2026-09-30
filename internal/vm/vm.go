@@ -2035,7 +2035,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		case bytecode.OpInstanceOf:
 			ctor, obj := stack[sp-1], stack[sp-2]
 			sp -= 2
-			ok, err := r.instanceOf(obj, ctor)
+			ok, err := r.instanceOfAt(&cl.ic[in.B], obj, ctor)
 			if err != nil {
 				vmErr = err
 				goto onError
@@ -4253,16 +4253,30 @@ func ordinaryHasInstance(c *Object, v Value) (yes, ok bool) {
 
 // instanceOf implements the instanceof operator.
 func (r *Runtime) instanceOf(obj, ctor Value) (bool, error) {
+	return r.instanceOfAt(nil, obj, ctor)
+}
+
+// instanceOfAt is instanceOf with the cache of the instanceof operator's
+// read of Symbol.hasInstance, or nil.
+func (r *Runtime) instanceOfAt(ic *propCache, obj, ctor Value) (bool, error) {
 	if !ctor.IsObject() {
 		return false, r.throwTypeError("the right operand of \"instanceof\" must be an object")
 	}
 	c := ctor.Object()
 
-	// A Symbol.hasInstance method overrides the default behaviour.
-	hasInstance, err := r.getProp(c, r.hasInstanceAtom, ctor)
-	if err != nil {
-		return false, err
+	// A Symbol.hasInstance method overrides the default behaviour. Where the
+	// constructor is one the operator has met, the cache says where it is.
+	hasInstance, found := Undefined, false
+	if ic != nil {
+		hasInstance, found = r.cachedProp(ic, c, r.hasInstanceAtom)
 	}
+	if !found {
+		var err error
+		if hasInstance, err = r.getProp(c, r.hasInstanceAtom, ctor); err != nil {
+			return false, err
+		}
+	}
+	var err error
 	if !hasInstance.IsNullish() {
 		var res Value
 		if hasInstance.IsObject() && hasInstance.Object() == r.hasInstanceFn {

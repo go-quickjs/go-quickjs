@@ -181,3 +181,44 @@ func TestLiteralSizes(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestInstanceOfCache covers instanceof, whose read of the constructor's
+// Symbol.hasInstance is cached: a site must notice the method defined on the
+// constructor, a replaced prototype, and constructors of other kinds.
+func TestInstanceOfCache(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`function test(o, C) { return o instanceof C }
+		  function C() {} var r = []
+		  for (var i = 0; i < 3; i++) r.push(test(new C(), C))
+		  Object.defineProperty(C, Symbol.hasInstance, {value: () => "yes"})
+		  r.push(test({}, C))
+		  C.prototype = {}; r.push(test(new C(), C))
+		  r.join()`, "true,true,true,true,true"},
+		{`function test(o, C) { return o instanceof C }
+		  function C() {} var o = new C(), r = []
+		  for (var i = 0; i < 3; i++) r.push(test(o, C))
+		  C.prototype = {}; r.push(test(o, C))
+		  r.push(test(o, C.bind(null)), test(new C(), C.bind(null)))
+		  var log = []
+		  var P = new Proxy(C, {get(t, k) { log.push(typeof k); return Reflect.get(t, k) }})
+		  r.push(test(new C(), P), log.join())
+		  r.join()`, "true,true,true,false,false,true,true,symbol,string"},
+		{`function test(o, C) { return o instanceof C }
+		  class A {} class B extends A {} var r = []
+		  for (var i = 0; i < 3; i++) r.push(test(new B(), A), test(new A(), B))
+		  class D { static [Symbol.hasInstance](v) { return v === 1 } }
+		  r.push(test(1, D), test(new D(), D))
+		  r.join()`, "true,false,true,false,true,false,true,false"},
+		{`"use strict"
+		  function test(o, C) { return o instanceof C }
+		  function C() {} for (var i = 0; i < 3; i++) test({}, C)
+		  var e = []
+		  for (var bad of [{}, 1, {[Symbol.hasInstance]: 1}]) {
+		    try { test({}, bad); e.push("none") } catch (x) { e.push(x.constructor.name) }
+		  }
+		  e.join()`, "TypeError,TypeError,TypeError"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
