@@ -290,6 +290,57 @@ func TestHostThrow(t *testing.T) {
 	}
 }
 
+// Each Throw*Error method throws a new error of its kind, with its message
+// formatted, which a script catches as the kind it is, with a stack that
+// shows the script's frame that made the call.
+func TestHostThrowKinds(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+
+	throwers := map[string]func(format string, args ...any) error{
+		"Error":          rt.ThrowError,
+		"TypeError":      rt.ThrowTypeError,
+		"RangeError":     rt.ThrowRangeError,
+		"ReferenceError": rt.ThrowReferenceError,
+		"SyntaxError":    rt.ThrowSyntaxError,
+		"EvalError":      rt.ThrowEvalError,
+		"URIError":       rt.ThrowURIError,
+	}
+	for kind, throw := range throwers {
+		rt.Set("fail", func(n int) error { return throw("%s number %d, at 100%%", kind, n) })
+		v, err := rt.Eval(`
+			function caller() { fail(7) }
+			try { caller() } catch (e) {
+				[e.constructor.name, e instanceof ` + kind + `, e instanceof Error, e.message,
+				 /at caller /.test(e.stack)].join("|")
+			}
+		`)
+		if err != nil {
+			t.Fatalf("%s: %v", kind, err)
+		}
+		if got, want := v.String(), kind+"|true|true|"+kind+" number 7, at 100%|true"; got != want {
+			t.Errorf("%s: = %q, want %q", kind, got, want)
+		}
+	}
+
+	// Uncaught, it reaches the Go caller as the error it is.
+	rt.Set("refuse", func() error { return rt.ThrowRangeError("out of range: %d", 300) })
+	_, err := rt.Eval(`refuse()`)
+	var jsErr *quickjs.Error
+	if !errors.As(err, &jsErr) {
+		t.Fatalf("uncaught: %v, want a *quickjs.Error", err)
+	}
+	if got, want := jsErr.Error(), "RangeError: out of range: 300"; !strings.Contains(got, want) {
+		t.Errorf("uncaught: %q, want it to contain %q", got, want)
+	}
+
+	closed := quickjs.New()
+	closed.Close()
+	if err := closed.ThrowTypeError("late"); !errors.Is(err, quickjs.ErrClosed) {
+		t.Errorf("on a closed runtime: %v, want ErrClosed", err)
+	}
+}
+
 // A Go function may hand back a promise directly, which is the shape of every
 // host API that finishes later.
 func TestHostFunctionReturningPromise(t *testing.T) {

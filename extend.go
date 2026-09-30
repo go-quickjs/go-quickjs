@@ -374,3 +374,72 @@ func (r *Runtime) NewError(kind, message string) Value {
 	}
 	return Value{v: r.rt.NewError(kind, message), rt: r.rt}
 }
+
+// ThrowError returns an error that throws a new Error when returned from a Go
+// function called by script, as the Throw*Error methods below do for the other
+// kinds. They are the host's counterparts of QuickJS's JS_ThrowTypeError and
+// its kin:
+//
+//	rt.Set("open", func(name string) (quickjs.Value, error) {
+//	    if name == "" {
+//	        return quickjs.Value{}, rt.ThrowTypeError("open: a name is required")
+//	    }
+//	    ...
+//	})
+//
+// The message is format with args applied, as by fmt.Sprintf, and go vet
+// checks the two agree as it does for fmt.Errorf: a message that is not a
+// constant goes in as ThrowError("%s", msg). The error's stack is where it was made. ThrowError differs from returning
+// an ordinary Go error, which also throws an Error, only in formatting the
+// message; for an AggregateError or a SuppressedError, which carry more than
+// a message, build the object with NewError and throw it with Throw.
+//
+// On a closed runtime each returns ErrClosed.
+func (r *Runtime) ThrowError(format string, args ...any) error {
+	return r.throwKind("Error", format, args...)
+}
+
+// ThrowTypeError returns an error that throws a new TypeError: the value is
+// not of the type the function needs. See ThrowError.
+func (r *Runtime) ThrowTypeError(format string, args ...any) error {
+	return r.throwKind("TypeError", format, args...)
+}
+
+// ThrowRangeError returns an error that throws a new RangeError: a number is
+// outside the range the function accepts. See ThrowError.
+func (r *Runtime) ThrowRangeError(format string, args ...any) error {
+	return r.throwKind("RangeError", format, args...)
+}
+
+// ThrowReferenceError returns an error that throws a new ReferenceError: a
+// name the function was asked for does not exist. See ThrowError.
+func (r *Runtime) ThrowReferenceError(format string, args ...any) error {
+	return r.throwKind("ReferenceError", format, args...)
+}
+
+// ThrowSyntaxError returns an error that throws a new SyntaxError: source the
+// function parsed is malformed. See ThrowError.
+func (r *Runtime) ThrowSyntaxError(format string, args ...any) error {
+	return r.throwKind("SyntaxError", format, args...)
+}
+
+// ThrowEvalError returns an error that throws a new EvalError, which the
+// language itself no longer throws but a host may. See ThrowError.
+func (r *Runtime) ThrowEvalError(format string, args ...any) error {
+	return r.throwKind("EvalError", format, args...)
+}
+
+// ThrowURIError returns an error that throws a new URIError: a URI the
+// function decoded or encoded is malformed. See ThrowError.
+func (r *Runtime) ThrowURIError(format string, args ...any) error {
+	return r.throwKind("URIError", format, args...)
+}
+
+// throwKind throws a new error of the standard kind named, with format and
+// args made its message.
+func (r *Runtime) throwKind(kind, format string, args ...any) error {
+	if r.closed {
+		return ErrClosed
+	}
+	return r.rt.ThrowValue(r.rt.NewError(kind, fmt.Sprintf(format, args...)))
+}

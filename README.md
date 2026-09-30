@@ -279,6 +279,21 @@ rt.Set("mustBePositive", func(n int) (int, error) {
 rt.Eval(`try { mustBePositive(-1) } catch (e) { e.message }`) // "negative"
 ```
 
+That exception is an `Error`. To throw one of the other kinds, return what
+`ThrowTypeError`, `ThrowRangeError`, `ThrowReferenceError`,
+`ThrowSyntaxError`, `ThrowEvalError` or `ThrowURIError` makes, each
+formatting its message as `fmt.Errorf` does (`ThrowError` makes an `Error`):
+
+```go
+rt.Set("setVolume", func(n int) error {
+    if n < 0 || n > 11 {
+        return rt.ThrowRangeError("volume must be between 0 and 11, not %d", n)
+    }
+    return nil
+})
+rt.Eval(`try { setVolume(12) } catch (e) { e instanceof RangeError }`) // true
+```
+
 Taking a `*quickjs.Runtime` as the first parameter lets a Go function call back
 into the engine:
 
@@ -532,7 +547,7 @@ rt.Set("readLater", func(name string) *quickjs.Promise {
 ```
 
 `NewObject`, `NewArray`, `NewBytes`, `NewError` and `Throw` build the values a
-marshalled Go value cannot express; `Value.Bytes` reads a typed array back.
+marshalled Go value cannot express, and the `Throw*Error` methods the errors; `Value.Bytes` reads a typed array back.
 `OnUnhandledRejection` reports a promise nobody took.
 
 A host that emulates a browser's document can make its `document.all`:
