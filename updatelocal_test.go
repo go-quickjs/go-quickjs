@@ -272,3 +272,20 @@ func TestCompoundAssignmentToANumberKey(t *testing.T) {
 		return JSON.stringify([a, a[0.5], o, log]);
 	})()`, `[[6,13,3],2,{"NaN":2,"1e+21":2},["string:2","set string:2","string:1.5","set string:1.5"]]`)
 }
+
+func TestEqualityOfObjectsAndNull(t *testing.T) {
+	// x == null, and equality between objects, are answered without the
+	// general comparison; what they answer is what it would.
+	checkEval(t, `(function () {
+		var o = {}, p = {}, u, n = null, z = 0, s = "", f = false, out = [];
+		var vals = [o, p, u, n, z, s, f, NaN, "null", {valueOf() { return null; }}];
+		for (var i = 0; i < vals.length; i++) {
+			var a = vals[i], row = "";
+			row += (a == null ? 1 : 0) + "" + (a != null ? 1 : 0) + (a == undefined ? 1 : 0);
+			row += (a === null ? 1 : 0) + "" + (a !== undefined ? 1 : 0) + (a == o ? 1 : 0) + (a === p ? 1 : 0);
+			if (a == null) row += "t"; if (a === u) row += "u"; if (o == a) row += "o"; if (null != a) row += "n";
+			out.push(row);
+		}
+		return out.join(" ");
+	})()`, `0100110on 0100101n 1010000tu 1011100t 0100100n 0100100n 0100100n 0100100n 0100100n 0100100n`)
+}
