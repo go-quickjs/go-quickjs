@@ -56,6 +56,9 @@ var compareCases = []compareCase{
 	{name: "LiteralMissing", js: `zebra`, re: `zebra`, op: "match", input: logText},
 	{name: "LiteralMissingUnicode", js: `zebra`, re: `zebra`, op: "match", input: unicodeText},
 	{name: "Anchored", js: `^\d{4}-\d{2}-\d{2}$`, re: `^\d{4}-\d{2}-\d{2}$`, op: "match", input: "2026-09-30"},
+	// The log begins with a date, but not only a date: the match fails, at
+	// the start, which is the only place it could begin.
+	{name: "AnchoredMissing", js: `^\d{4}-\d{2}-\d{2}$`, re: `^\d{4}-\d{2}-\d{2}$`, op: "match", input: logText},
 	{name: "Digits", js: `\d+`, re: `\d+`, op: "findall", input: logText, findAllN: -1},
 	{name: "Words", js: `\b\w+ing\b`, re: `\b\w+ing\b`, op: "findall", input: logText, findAllN: -1},
 	{name: "Alternation", js: `WARN|ERROR|FATAL`, re: `WARN|ERROR|FATAL`, op: "findall", input: logText, findAllN: -1},

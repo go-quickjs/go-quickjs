@@ -124,3 +124,46 @@ func first(n node, fold bool) (f firstUnits, empty, ok bool) {
 	// anything, or with what only the match knows.
 	return f, false, false
 }
+
+// anchorStarts turns anchoredStart on; a test turns it off, to compare.
+var anchorStarts = true
+
+// anchoredStart reports whether every match of n begins at the start of the
+// subject: whether every way through it meets a ^ without the m flag before
+// it consumes anything. A search then tries the start alone, where it would
+// otherwise try every position of a subject the pattern fails on at once.
+func anchoredStart(n node) bool {
+	switch n := n.(type) {
+	case nodeAssert:
+		return n.kind == assertStart && !n.multiline
+	case nodeSeq:
+		for _, item := range n.items {
+			if anchoredStart(item) {
+				return true
+			}
+			switch item.(type) {
+			case nodeEmpty, nodeAssert, nodeLook:
+				// Consuming nothing, it leaves the ^ still to come at the
+				// position the match began.
+			default:
+				return false
+			}
+		}
+		return false
+	case nodeAlt:
+		for _, alt := range n.alts {
+			if !anchoredStart(alt) {
+				return false
+			}
+		}
+		return len(n.alts) > 0
+	case nodeGroup:
+		return anchoredStart(n.item)
+	case nodeModifier:
+		return anchoredStart(n.item)
+	case nodeRepeat:
+		// The first iteration of one that must happen begins the match.
+		return n.min > 0 && anchoredStart(n.item)
+	}
+	return false
+}

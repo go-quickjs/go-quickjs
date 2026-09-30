@@ -242,6 +242,15 @@ func (m *matcher) search(re *Regexp, dst []int, start int, sticky bool) ([]int, 
 	// can begin only where it is within reach, so the positions before that
 	// are passed over, and a subject without it has no match.
 	lit, litAt := re.prog.lit, -1
+	if re.prog.anchored {
+		// A pattern that begins with ^, without the m flag, matches at the
+		// start of the subject or nowhere: it is tried there alone, as a
+		// sticky one is where it is asked to match.
+		if start != 0 {
+			return nil, nil
+		}
+		sticky = true
+	}
 	if sticky || in.unicode {
 		lit = nil
 	}

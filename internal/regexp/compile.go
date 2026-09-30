@@ -72,6 +72,9 @@ type program struct {
 	// first is the units a match can begin with, or nil when any can; see
 	// firstUnits.
 	first *firstUnits
+	// anchored is set when a match can begin only at the start of the
+	// subject; see anchoredStart.
+	anchored bool
 	// lit is a literal every match contains near its start, or nil; see
 	// requiredLit. Only a pattern without the unicode flag has one.
 	lit     *requiredLit
@@ -133,6 +136,7 @@ func compileNodeFor(n node, flags Flags, utf8 bool) *program {
 	c.emit(instr{op: opSave, arg: 1})
 	c.emit(instr{op: opMatch})
 	c.prog.first = firstOf(n, flags&FlagIgnoreCase != 0)
+	c.prog.anchored = anchorStarts && anchoredStart(n)
 	if flags&(FlagUnicode|FlagUnicodeSets) == 0 {
 		c.prog.lit = requiredOf(n, flags&FlagIgnoreCase != 0)
 	}

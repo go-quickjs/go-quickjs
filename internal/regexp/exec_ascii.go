@@ -60,6 +60,12 @@ func (m *matcherASCII) search(re *Regexp, dst []int, start int, sticky bool) ([]
 	in := m.in
 	first := re.prog.first
 	lit, litAt := re.prog.lit, -1
+	if re.prog.anchored {
+		if start != 0 {
+			return nil, nil
+		}
+		sticky = true
+	}
 	if sticky || in.unicode {
 		lit = nil
 	}

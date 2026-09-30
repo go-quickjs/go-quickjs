@@ -245,6 +245,7 @@ has a word outside ASCII on every line.
 | `(\w+)@(\w+)\.com`, first match, mixed text | 137 µs | 1.2 µs | 3.0 µs | 2.6x |
 | `\b\w+ing\b`, all matches | 421 µs | 431 µs | 698 µs | 1.6x |
 | `zebra`, not there | 314 ns | 313 ns | 479 ns | 1.5x |
+| `^\d{4}-\d{2}-\d{2}$` on the log, not there | 3.1 µs | 172 ns | 233 ns | 1.4x |
 | `,\s*` split | 39 µs | 39 µs | 50 µs | 1.3x |
 | `^\d{4}-\d{2}-\d{2}$` on a date | 196 ns | 179 ns | 219 ns | 1.2x |
 | `[a-z]+@[a-z]+\.[a-z]{2,}`, all matches | 338 µs | 349 µs | 389 µs | 1.1x |
@@ -264,7 +265,9 @@ a case-insensitive pattern. Text that every match must contain is looked for
 first, with the vectorized `strings.Index` RE2 also uses, so a subject without
 it is turned away without being matched at all. A character repeated a fixed
 number of times, as in `\d{4}`, is written out rather than counted, so a
-pattern like the date's runs straight through with nothing to undo.
+pattern like the date's runs straight through with nothing to undo. A
+pattern that begins with `^`, without the `m` flag, is tried at the start of
+the string alone, where it fails on the log after ten characters.
 
 Linear time is RE2's real advantage. If patterns come from users and
 `ErrComplexity` would be a problem, prefer `regexp` whenever it can express
