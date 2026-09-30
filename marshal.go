@@ -340,6 +340,12 @@ func wrapGoFunc(rt *vm.Runtime, fv reflect.Value) (vm.Value, error) {
 
 		out := fv.Call(in)
 
+		// A function that closed its runtime -- as process.exit does -- has
+		// ended the script there: nothing more of it runs, not a catch and
+		// not a finally, as V8's TerminateExecution has it.
+		if host, _ := callRT.Host.(*Runtime); host != nil && host.closed {
+			return vm.Undefined, ErrClosed
+		}
 		if returnsError {
 			if e := out[len(out)-1]; !e.IsNil() {
 				// A returned error becomes a thrown exception.

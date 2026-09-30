@@ -93,6 +93,8 @@ type Runtime struct {
 	// ctx is the runtime's lifetime, which Close ends.
 	ctx    context.Context
 	cancel context.CancelFunc
+	// onClose is what Close runs, newest last; see OnClose.
+	onClose []*func()
 	// nodeQuirks is WithNodeQuirks, which the parser and compiler are told.
 	nodeQuirks bool
 	// noCodeGeneration is WithoutCodeGeneration, which node:vm respects too.
@@ -222,20 +224,60 @@ func New(opts ...Option) *Runtime {
 func (r *Runtime) Close() error {
 	r.closed = true
 	r.posting.Store(nil)
-	if r.rt != nil {
-		if r.rt.Running() {
-			r.rt.Halt(ErrClosed)
+	rt := r.rt
+	if rt != nil {
+		if rt.Running() {
+			rt.Halt(ErrClosed)
 		}
-		r.rt.Close()
+		rt.Close()
 		// What was posted to an AsyncWork and has not run is told now.
-		r.rt.CloseHostJobs()
-		r.rt.ReleaseStack()
+		rt.CloseHostJobs()
 	}
-	r.rt = nil
+	// The runtime's work stops, and then what the host holds is released,
+	// as a node worker's handles are closed and its cleanup hooks run.
 	if r.cancel != nil {
 		r.cancel()
 	}
+	hooks := r.onClose
+	r.onClose = nil
+	for i := len(hooks) - 1; i >= 0; i-- {
+		if hooks[i] != nil {
+			(*hooks[i])()
+		}
+	}
+	if rt != nil {
+		rt.ReleaseStack()
+	}
+	r.rt = nil
 	return nil
+}
+
+// OnClose has fn run when the runtime is closed, which is where a host
+// releases what it holds for the script: a file, a connection, a goroutine
+// to wait for. Close runs the hooks on its own goroutine before it returns,
+// the newest first, after the script has stopped, what was posted to an
+// AsyncWork has been told, and the runtime's Context has been cancelled -- as
+// a node worker runs its cleanup hooks when it ends, process.exit included.
+// The runtime is closed when they run: they touch nothing of it.
+//
+// It returns what removes the hook, for a resource released before then. On
+// a closed runtime, fn runs at once. Both are called on the runtime's
+// goroutine, as every Runtime method is.
+func (r *Runtime) OnClose(fn func()) (remove func()) {
+	if r.closed {
+		fn()
+		return func() {}
+	}
+	p := &fn
+	r.onClose = append(r.onClose, p)
+	return func() {
+		for i, h := range r.onClose {
+			if h == p {
+				r.onClose[i] = nil
+				return
+			}
+		}
+	}
 }
 
 // Context is the runtime's lifetime: it is cancelled when the runtime is
