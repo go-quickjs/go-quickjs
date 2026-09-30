@@ -48,3 +48,30 @@ func TestMathCallFastPaths(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestCallThrough covers f.call(x, ...) made from the interpreter's loop
+// without going through call's own call: the receiver, strict and sloppy, the
+// arguments, call applied to itself and to built-ins, and what is not a
+// function.
+func TestCallThrough(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`function who() { return this === globalThis ? "global" : String(this) }
+		  function strictWho() { "use strict"; return String(this) }
+		  function args() { return arguments.length + ":" + [].join.call(arguments) }
+		  [who.call(7), who.call(), who.call(null), strictWho.call(), strictWho.call(null), strictWho.call(7),
+		   args.call(0), args.call(0, 1, 2), Function.prototype.call.call(args, 0, "a"),
+		   Math.max.call(null, 3, 9), [].slice.call("abc").join("")].join()`,
+			"7,global,global,undefined,null,7,0:,2:1,2,1:a,9,abc"},
+		{`function Base(v) { this.v = v } function Derived(v) { Base.call(this, v * 2); this.w = v }
+		  var d = new Derived(3); [d.v, d.w, d instanceof Derived].join()`, "6,3,true"},
+		{`var r = []
+		  try { ({}).nope.call(null) } catch (e) { r.push(e.constructor.name) }
+		  try { Function.prototype.call.call(5) } catch (e) { r.push(e.constructor.name) }
+		  try { Function.prototype.call.call({}) } catch (e) { r.push(e.constructor.name) }
+		  try { (class A {}).call({}) } catch (e) { r.push(e.constructor.name) }
+		  r.join()`, "TypeError,TypeError,TypeError,TypeError"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

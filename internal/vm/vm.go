@@ -186,6 +186,9 @@ func (r *Runtime) callFromLoop(callee, this Value, args []Value) (Value, error) 
 			// the function is applied here.
 			return Float(unaryMath[fd.unary](args[0].Number())), nil
 		}
+		if o == r.callFn {
+			return r.callThrough(o, this, args)
+		}
 		if fd != nil && fd.native == nil && fd.boundTarget == nil &&
 			fd.closure != nil && fd.closure.realm == r.Realm {
 			if fn := fd.closure.fn; !isGeneratorTemplate(fn) && !isClassConstructorKind(fn.Kind) {
@@ -205,6 +208,24 @@ func (r *Runtime) callFromLoop(callee, this Value, args []Value) (Value, error) 
 		}
 	}
 	return r.call(callee, this, args)
+}
+
+// callThrough is f.call(x, ...rest) from the interpreter's loop: what call
+// does, done here -- its frame pushed, as the built-in would have it, and f
+// called with x and the rest the way the loop calls a function, rather than
+// through call's own and then call's call of f. A class uses it to run its
+// parent's constructor on the object it is building.
+func (r *Runtime) callThrough(call *Object, f Value, args []Value) (Value, error) {
+	this, rest := Undefined, args
+	if len(args) > 0 {
+		this, rest = args[0], args[1:]
+	}
+	if err := r.pushNativeFrame(call, f, args, Undefined); err != nil {
+		return Undefined, err
+	}
+	v, err := r.callFromLoop(f, this, rest)
+	r.frameDepth--
+	return v, err
 }
 
 // applyArguments is f.apply(x, arguments) in a function that makes its

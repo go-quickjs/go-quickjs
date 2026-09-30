@@ -661,7 +661,7 @@ func (r *Runtime) initFunctionBuiltins() {
 
 	r.initLegacyReflection()
 
-	r.defMethod(p, "call", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	r.callFn = r.defMethod(p, "call", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		rest := args
 		if len(rest) > 0 {
 			rest = rest[1:]
