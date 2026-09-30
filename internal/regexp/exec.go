@@ -176,7 +176,18 @@ func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error,
 	first := re.prog.first
 	m.reset()
 	for pos := start; pos <= in.length(); {
-		if first != nil {
+		if first != nil && !in.unicode && !sticky {
+			// Where no match can begin, none is tried. Without the unicode
+			// flag a character is a code unit, so the units no match can
+			// begin with are passed over in a loop of their own.
+			units := in.units
+			for pos < len(units) && !first.admits(units[pos]) {
+				pos++
+			}
+			if pos >= len(units) {
+				return nil, nil
+			}
+		} else if first != nil {
 			// Where no match can begin, none is tried: a position is passed
 			// over as the search below would pass it, a character at a
 			// time, so that under the unicode flag it never lands inside a
@@ -212,6 +223,10 @@ func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error,
 		}
 		// Advance by a whole character, so that under the unicode flag the
 		// search never starts in the middle of a surrogate pair.
+		if !in.unicode {
+			pos++
+			continue
+		}
 		_, w := in.at(pos)
 		if w == 0 {
 			w = 1
