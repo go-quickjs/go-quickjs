@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"math"
 	"slices"
-	"sort"
 )
 
 // ArrayBuffer, typed arrays and DataView.
@@ -1694,29 +1693,21 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 	// had left them, which handed a replacement the engine's working array --
 	// and a hole put in it reached places no hole may.
 	sortValues := func(rt *Runtime, vals []Value, cmp Value) error {
-		var sortErr error
 		var argv [2]Value
-		sort.SliceStable(vals, func(i, j int) bool {
-			if sortErr != nil {
-				return false
-			}
+		return stableSort(vals, func(x, y Value) (bool, error) {
 			if cmp.IsUndefined() {
 				// A typed array sorts numerically by default, where an
 				// ordinary array sorts by string: [10, 9] is [9, 10] here.
-				return compareNumeric(vals[i], vals[j]) < 0
+				return compareNumeric(x, y) < 0, nil
 			}
-			argv[0], argv[1] = vals[i], vals[j]
-			res, err := rt.call(cmp, Undefined, argv[:])
-			if err == nil {
-				var n float64
-				if n, err = rt.toNumber(res); err == nil {
-					return n < 0
-				}
+			argv[0], argv[1] = x, y
+			res, err := rt.callFromLoop(cmp, Undefined, argv[:])
+			if err != nil {
+				return false, err
 			}
-			sortErr = err
-			return false
+			n, err := rt.toNumber(res)
+			return n < 0, err
 		})
-		return sortErr
 	}
 	// comparator is sort's argument, which must be undefined or callable:
 	// a mistake reported before the receiver is even looked at.

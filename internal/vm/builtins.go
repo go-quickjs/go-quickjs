@@ -4,7 +4,6 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/fdlibm"
 	"math"
 	"math/rand/v2"
-	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -2801,24 +2800,14 @@ func (r *Runtime) sortIndexed(a *arrayLike, cmp Value) ([]Value, error) {
 		}
 	}
 
-	var sortErr error
 	// The comparator is called O(n log n) times with two arguments each time,
 	// so the list they go in is made once for the whole sort. A comparator that
 	// sorts something else of its own gets its own, being another call to this.
 	var argv [2]Value
-	sort.SliceStable(items, func(i, j int) bool {
-		if sortErr != nil {
-			return false
-		}
-		less, err := r.compareForSort(items[i], items[j], cmp, &argv)
-		if err != nil {
-			sortErr = err
-			return false
-		}
-		return less
-	})
-	if sortErr != nil {
-		return nil, sortErr
+	if err := stableSort(items, func(x, y Value) (bool, error) {
+		return r.compareForSort(x, y, cmp, &argv)
+	}); err != nil {
+		return nil, err
 	}
 	return items, nil
 }
@@ -2836,7 +2825,7 @@ func (r *Runtime) compareForSort(x, y, cmp Value, argv *[2]Value) (bool, error) 
 	}
 	if isCallable(cmp) {
 		argv[0], argv[1] = x, y
-		res, err := r.call(cmp, Undefined, argv[:])
+		res, err := r.callFromLoop(cmp, Undefined, argv[:])
 		if err != nil {
 			return false, err
 		}

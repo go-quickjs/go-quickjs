@@ -289,3 +289,26 @@ func TestEqualityOfObjectsAndNull(t *testing.T) {
 		return out.join(" ");
 	})()`, `0100110on 0100101n 1010000tu 1011100t 0100100n 0100100n 0100100n 0100100n 0100100n 0100100n`)
 }
+
+func TestSortIsStableAndThorough(t *testing.T) {
+	// The merge sort keeps equal values in order, stops at a comparator's
+	// error with the array still a permutation, and sorts what it is given.
+	checkEval(t, `(function () {
+		var out = [];
+		var recs = []; for (var i = 0; i < 100; i++) recs.push({ k: (i * 37) % 7, i: i });
+		recs.sort(function (a, b) { return a.k - b.k; });
+		var stable = recs.every(function (r, j) { return j === 0 || recs[j - 1].k < r.k || recs[j - 1].k === r.k && recs[j - 1].i < r.i; });
+		out.push(stable, [3, undefined, 1, undefined, 2].sort().join(), [10, 9, 1, "b", "a"].sort().join());
+		var a = []; for (var i = 0; i < 50; i++) a.push(50 - i);
+		var calls = 0;
+		try { a.sort(function (x, y) { if (++calls === 10) throw new Error("stop"); return x - y; }); } catch (e) { out.push(e.message); }
+		out.push(a.slice().sort(function (x, y) { return x - y; }).join() === Array.from({ length: 50 }, function (_, i) { return i + 1; }).join());
+		var r = []; for (var i = 0; i < 200; i++) r.push(i);
+		r.sort(function () { return Math.random() - 0.5; });
+		out.push(r.slice().sort(function (x, y) { return x - y; }).every(function (v, i) { return v === i; }));
+		var sorted = []; for (var i = 0; i < 1000; i++) sorted.push(i); var n = 0;
+		sorted.sort(function (x, y) { n++; return x - y; }); out.push(n < 1100);
+		out.push(new Int8Array([3, -1, 2]).sort().join(), new Float64Array([3, 1, 2]).sort(function (x, y) { return y - x; }).join());
+		return JSON.stringify(out);
+	})()`, `[true,"1,2,3,,","1,10,9,a,b","stop",true,true,true,"-1,2,3","3,2,1"]`)
+}
