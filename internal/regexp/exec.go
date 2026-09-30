@@ -146,6 +146,36 @@ type matcher struct {
 // A pattern used again while a match is running -- a replacement callback that
 // uses the same one -- gets a matcher of its own, as does every match of a
 // pattern marked concurrent.
+// newMatcher makes a matcher for the pattern.
+func (re *Regexp) newMatcher() *matcher {
+	return &matcher{
+		caps:       make([]int, 2*(re.groupCount+1)),
+		counters:   make([]int, re.prog.counters),
+		emptyMarks: make([]int, re.prog.emptyChecks),
+	}
+}
+
+// takeMatcher is a pooled matcher fitted to the pattern: its captures,
+// counters and marks the lengths the pattern's program uses.
+func (re *Regexp) takeMatcher() *matcher {
+	m, _ := matcherPool.Get().(*matcher)
+	if m == nil {
+		return re.newMatcher()
+	}
+	m.caps = fitInts(m.caps, 2*(re.groupCount+1))
+	m.counters = fitInts(m.counters, re.prog.counters)
+	m.emptyMarks = fitInts(m.emptyMarks, re.prog.emptyChecks)
+	return m
+}
+
+// fitInts is s at length n, reusing its array where it has room.
+func fitInts(s []int, n int) []int {
+	if cap(s) < n {
+		return make([]int, n)
+	}
+	return s[:n]
+}
+
 // maxLentFrames is the most choice points and capture writes a lent matcher
 // keeps room for: some kilobytes, for each pattern a runtime keeps compiled.
 const maxLentFrames = 256
@@ -157,17 +187,17 @@ func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error,
 		owner, m = re.lender, re.lender.scratch
 	}
 	if m == nil || m.busy || re.concurrent {
-		m = &matcher{
-			caps:       make([]int, 2*(re.groupCount+1)),
-			counters:   make([]int, re.prog.counters),
-			emptyMarks: make([]int, re.prog.emptyChecks),
-		}
-		switch {
-		case re.concurrent:
-		case owner.scratch == nil:
-			owner.scratch = m
-		case re.scratch == nil:
-			owner, re.scratch = re, m
+		if re.concurrent {
+			// Goroutines matching at once each take a pooled matcher.
+			m = re.takeMatcher()
+		} else {
+			m = re.newMatcher()
+			switch {
+			case owner.scratch == nil:
+				owner.scratch = m
+			case re.scratch == nil:
+				owner, re.scratch = re, m
+			}
 		}
 	}
 	// The input is the matcher's own, rather than made for each match.
@@ -189,6 +219,9 @@ func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error,
 		// the borrower's from now on, and goes when the borrower does.
 		if owner != re && owner.scratch == m && (cap(m.stack) > maxLentFrames || cap(m.trail) > maxLentFrames) {
 			owner.scratch, re.scratch = nil, m
+		}
+		if re.concurrent {
+			matcherPool.Put(m)
 		}
 	}()
 

@@ -710,24 +710,26 @@ On an AMD Ryzen 5 3600 with Go 1.27.1, the median of five runs:
 
 | Case | jsregexp | regexp | jsregexp's speed |
 |---|---:|---:|---:|
-| `WARN\|ERROR\|FATAL`, all matches | 66 µs | 900 µs | 13.5x |
-| `error` under `i`, all matches | 94 µs | 311 µs | 3.3x |
-| `\b\w+ing\b`, all matches | 472 µs | 718 µs | 1.5x |
-| `\d+`, all matches | 548 µs | 479 µs | 0.87x |
-| `[a-z]+@[a-z]+\.[a-z]{2,}`, all matches | 456 µs | 395 µs | 0.87x |
-| `\s+` replaced | 724 µs | 585 µs | 0.81x |
-| `,\s*` split | 134 µs | 53 µs | 0.39x |
-| `^\d{4}-\d{2}-\d{2}$` on a date | 807 ns | 233 ns | 0.29x |
-| `(\w+)@(\w+)\.com`, first match | 21 µs | 2.0 µs | 0.10x |
-| `needle`, found near the end | 29 µs | 2.8 µs | 0.10x |
-| `zebra`, not there | 31 µs | 483 ns | 0.02x |
+| `WARN\|ERROR\|FATAL`, all matches | 47 µs | 907 µs | 19x |
+| `error` under `i`, all matches | 82 µs | 313 µs | 3.8x |
+| `\d+`, all matches | 201 µs | 494 µs | 2.5x |
+| `\s+` replaced | 242 µs | 583 µs | 2.4x |
+| `\b\w+ing\b`, all matches | 433 µs | 721 µs | 1.7x |
+| `zebra`, not there | 321 ns | 473 ns | 1.5x |
+| `[a-z]+@[a-z]+\.[a-z]{2,}`, all matches | 369 µs | 399 µs | 1.1x |
+| `,\s*` split | 53 µs | 50 µs | 0.94x |
+| `^\d{4}-\d{2}-\d{2}$` on a date | 333 ns | 226 ns | 0.68x |
+| `needle`, found near the end | 20 µs | 2.8 µs | 0.14x |
+| `(\w+)@(\w+)\.com`, first match | 15 µs | 2.1 µs | 0.13x |
 
 A backtracking matcher that skips where no match can begin does well where
 RE2's automaton has many states to carry, as with an alternation or a
-case-insensitive pattern. It loses where the work is small next to the cost of
-a call: a match converts the subject to the UTF-16 code units JavaScript
-matches over, which for a large text is most of the time a quick match takes,
-and RE2 finds a literal with a vectorized `strings.Index`.
+case-insensitive pattern. Text every match must contain is looked for first,
+with the same vectorized `strings.Index` RE2 uses, so a subject without it is
+turned away without being matched at all. Where a match is found quickly in a
+large text, jsregexp is slower: JavaScript matches over UTF-16 code units, and
+the whole subject is converted to them before the match runs, which for 16 KB
+is most of the time taken.
 
 ## Sandboxing
 

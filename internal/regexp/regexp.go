@@ -1,6 +1,11 @@
 package regexp
 
-import "github.com/go-quickjs/go-quickjs/internal/wtf8"
+import (
+	"sync"
+	"unicode/utf16"
+
+	"github.com/go-quickjs/go-quickjs/internal/wtf8"
+)
 
 // Regexp is a compiled pattern.
 type Regexp struct {
@@ -14,7 +19,7 @@ type Regexp struct {
 	// per match.
 	scratch *matcher
 	// concurrent marks a pattern goroutines match with at once, which lends
-	// no matcher: each match makes its own.
+	// no matcher: each match takes one from matcherPool and gives it back.
 	concurrent bool
 	// lender is the pattern a clone was made from, whose matcher the clone
 	// borrows when it has none of its own; see exec.
@@ -91,6 +96,22 @@ func (re *Regexp) CloneInto(c *Regexp) {
 // the state it needs rather than borrowing the pattern's, which is only safe
 // for one match at a time. It is called before the pattern is shared.
 func (re *Regexp) Concurrent() { re.concurrent = true }
+
+// matcherPool holds the matchers of concurrent patterns' finished matches,
+// for the next match of any of them: takeMatcher fits one to its pattern.
+var matcherPool sync.Pool
+
+// RequiredLiteral returns text every match of the pattern contains, and the
+// least and the most code units between where a match begins and where the
+// text does, when the pattern has any worth looking for first; see
+// requiredLit. A subject without the text has no match.
+func (re *Regexp) RequiredLiteral() (text string, minOff, maxOff int, ok bool) {
+	lit := re.prog.lit
+	if lit == nil {
+		return "", 0, 0, false
+	}
+	return string(utf16.Decode(lit.units)), lit.minOff, lit.maxOff, true
+}
 
 // Source returns the pattern text.
 func (re *Regexp) Source() string { return re.source }
