@@ -19,6 +19,12 @@ It is the regular expression engine of [go-quickjs](../README.md), a
 JavaScript engine in pure Go, made usable on its own. There is no cgo and no
 WebAssembly, and it needs Go 1.24.
 
+A pattern is compiled in one of two modes. `Compile` matches exactly as
+JavaScript does, over UTF-16. `CompileUTF8` reads Go's UTF-8 where it is, as
+Go's `regexp` does, and is what most Go code wants. The two agree except on
+emoji and other characters outside the Basic Multilingual Plane, for patterns
+without the `u` flag: [Which to use](#which-to-use) explains the choice.
+
 ## Why not Go's regexp
 
 Go's `regexp` is RE2. It guarantees linear time by refusing every feature
@@ -65,8 +71,10 @@ The methods follow Go's `regexp` and use its names. Only the string forms
 exist; there are no `[]byte` methods.
 
 ```go
-re, err := jsregexp.Compile(pattern, flags)
+re, err := jsregexp.Compile(pattern, flags)     // JavaScript's UTF-16 matching
 re := jsregexp.MustCompile(pattern, flags)
+re, err := jsregexp.CompileUTF8(pattern, flags) // UTF-8 mode
+re := jsregexp.MustCompileUTF8(pattern, flags)
 
 re.MatchString(s)                   // (bool, error)
 re.FindString(s)                    // (string, error)
@@ -164,10 +172,51 @@ words, err := re.FindAllString("naïve café 😀 déjà vu", -1)
 - **Invalid UTF-8 reads as Go reads it.** A byte that begins no character is
   U+FFFD, one byte wide. A lone surrogate in WTF-8 is that surrogate.
 
-Use it unless a pattern without the `u` flag must treat emoji exactly as
-JavaScript does. On ASCII text it runs within about 5% of `Compile`, and on
-text that is not all ASCII it is much faster, since `Compile` converts such
-text to UTF-16 first: see [Performance](#performance).
+## Which to use
+
+Both modes accept the same patterns and flags, have the same methods and
+report byte offsets. They differ in one thing: how a pattern without the `u`
+or `v` flag counts a character outside the Basic Multilingual Plane, such as
+an emoji. JavaScript, and `Compile`, count it as two UTF-16 code units;
+`CompileUTF8` counts it as one character.
+
+| | `Compile` | `CompileUTF8` |
+|---|---|---|
+| Pattern with `u` or `v` | JavaScript's results | the same results |
+| Pattern without, on text without emoji | JavaScript's results | the same results |
+| Pattern without, on text with emoji | an emoji is two characters, as in JavaScript | an emoji is one character |
+| Text all in ASCII | matched where it is | matched where it is, within about 5% of `Compile`'s time |
+| Text not all ASCII | converted to UTF-16 on every call | matched where it is, up to 100 times faster |
+
+**Choose `CompileUTF8`** for most Go code: text from files, logs, requests
+and users. It reads text as Go's `regexp` does, and a string not all in ASCII
+costs no conversion. When the pattern has the `u` or `v` flag, or the text has
+no emoji, its results are JavaScript's too, so there is nothing to give up.
+
+**Choose `Compile`** when a pattern without the `u` flag must give the same
+answer as JavaScript on text that may hold emoji. The usual case is a check
+shared with a browser or Node front end:
+
+```go
+name := strings.Repeat("😀", 6)
+
+ok, _ := jsregexp.MustCompile(`^.{1,10}$`, "").MatchString(name)     // false: 12 code units, as in JavaScript
+ok, _ = jsregexp.MustCompileUTF8(`^.{1,10}$`, "").MatchString(name) // true: 6 characters
+```
+
+With `CompileUTF8` the server would accept a name the browser refuses. The
+other way to keep them in step is to give the pattern the `u` flag on both
+sides. Then JavaScript counts characters too, both modes answer `true`, and
+`CompileUTF8` is the faster way to get that answer.
+
+`Compile` is also the one for a pattern that works on the halves of a pair
+on purpose, such as `[\uD800-\uDBFF][\uDC00-\uDFFF]` to find pairs, which never
+matches in UTF-8 mode, where no half is ever read alone. And it is the one for
+porting JavaScript code whose behavior must be reproduced exactly.
+
+In short: if the pattern has `u` or `v`, or its text has no emoji, the modes
+agree, so take `CompileUTF8`. Otherwise the choice comes down to whether an
+emoji is one character or two.
 
 ## Performance
 
@@ -203,10 +252,11 @@ has a word outside ASCII on every line.
 | `^\d{4}-\d{2}-\d{2}$` on a date | 302 ns | 277 ns | 222 ns | 0.80x |
 
 `Compile` has to convert mixed text to UTF-16 before it can match, which is
-most of what it spends on the mixed cases. On ASCII text it matches the bytes
+most of what it spends on the mixed cases; `CompileUTF8` matches the same
+text where it is. On ASCII text it matches the bytes
 where they are, but it must read the whole string first to know that the text
-is ASCII: that is the few microseconds it loses on a single early match.
-`CompileUTF8` does neither.
+is ASCII: that is the few microseconds it loses on a single early match,
+where `CompileUTF8` reads no further than it matches.
 
 A backtracking matcher that skips positions where no match can begin does
 well where RE2's automaton has many states to carry, as with an alternation or
