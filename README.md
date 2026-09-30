@@ -697,6 +697,38 @@ differences it documents: every method returns an error, because a backtracking
 matcher can give up where RE2 cannot, and a replacement follows
 `String.prototype.replace`.
 
+For a pattern both can express, `BenchmarkCompare` runs it on both engines
+over the same 16 KB of log text, after a test checks they give the same
+answer:
+
+```
+go test ./jsregexp -run '^$' -bench Compare -count 10 > bench.txt
+benchstat -col /engine bench.txt
+```
+
+On an AMD Ryzen 5 3600 with Go 1.27.1, the median of five runs:
+
+| Case | jsregexp | regexp | jsregexp's speed |
+|---|---:|---:|---:|
+| `WARN\|ERROR\|FATAL`, all matches | 66 µs | 900 µs | 13.5x |
+| `error` under `i`, all matches | 94 µs | 311 µs | 3.3x |
+| `\b\w+ing\b`, all matches | 472 µs | 718 µs | 1.5x |
+| `\d+`, all matches | 548 µs | 479 µs | 0.87x |
+| `[a-z]+@[a-z]+\.[a-z]{2,}`, all matches | 456 µs | 395 µs | 0.87x |
+| `\s+` replaced | 724 µs | 585 µs | 0.81x |
+| `,\s*` split | 134 µs | 53 µs | 0.39x |
+| `^\d{4}-\d{2}-\d{2}$` on a date | 807 ns | 233 ns | 0.29x |
+| `(\w+)@(\w+)\.com`, first match | 21 µs | 2.0 µs | 0.10x |
+| `needle`, found near the end | 29 µs | 2.8 µs | 0.10x |
+| `zebra`, not there | 31 µs | 483 ns | 0.02x |
+
+A backtracking matcher that skips where no match can begin does well where
+RE2's automaton has many states to carry, as with an alternation or a
+case-insensitive pattern. It loses where the work is small next to the cost of
+a call: a match converts the subject to the UTF-16 code units JavaScript
+matches over, which for a large text is most of the time a quick match takes,
+and RE2 finds a literal with a vectorized `strings.Index`.
+
 ## Sandboxing
 
 A runtime has no I/O, no network access, no timers, no filesystem and no module
