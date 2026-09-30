@@ -327,11 +327,56 @@ func asciiOnly(n node) bool {
 	return false
 }
 
+// unrollRepeats turns writing out a repeat's iterations on; a test turns it
+// off, to compare.
+var unrollRepeats = true
+
+// maxUnrolled is the most required iterations of one character written out
+// rather than counted: enough for a date, a time or a UUID's groups, without
+// a pattern like a{1000} growing a thousand instructions.
+const maxUnrolled = 16
+
+// oneCharacter reports whether a node matches exactly one character and
+// compiles to one instruction, with or without the unicode flag: a character,
+// a class, a dot. A repeat of one has no captures to reset between iterations
+// and no iteration that matches nothing.
+func oneCharacter(n node) bool {
+	switch n.(type) {
+	case nodeChar, nodeAny, nodeClass:
+		return true
+	}
+	return false
+}
+
 func (c *compiler) compileRepeat(t nodeRepeat) {
 	if greedyLoops && t.greedy && t.max < 0 && t.min <= 1 && !c.reverse &&
 		c.flags&(FlagUnicode|FlagUnicodeSets) == 0 && oneUnit(t.item) && (!c.noGreedy || asciiOnly(t.item)) {
 		c.emit(instr{op: opGreedy, arg: t.min})
 		c.compile(t.item)
+		return
+	}
+
+	if unrollRepeats && t.min > 0 && t.min <= maxUnrolled && oneCharacter(t.item) && (t.min > 1 || t.max >= 0) {
+		// The required iterations of one character are written out, as RE2
+		// and V8 write them: \d{4} is four \d, with no counter to keep and no
+		// choice point to push for each. What may repeat past them is a
+		// repeat of its own, which for \d{2,} is a \d+ after one \d.
+		// Leftwards the rest is nearer the cursor, so it comes first; the
+		// iterations are all alike and capture nothing, so which of them
+		// the optional ones are changes nothing but the order.
+		fixed, rest := t.min, nodeRepeat{item: t.item, min: 0, max: t.max - t.min, greedy: t.greedy}
+		if t.max < 0 {
+			fixed, rest.min, rest.max = t.min-1, 1, -1
+		}
+		if c.reverse && rest.max != 0 {
+			c.compileRepeat(rest)
+		}
+		for i := 0; i < fixed; i++ {
+			c.compile(t.item)
+		}
+		if !c.reverse && rest.max != 0 {
+			c.compileRepeat(rest)
+		}
 		return
 	}
 

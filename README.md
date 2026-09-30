@@ -717,8 +717,8 @@ On an AMD Ryzen 5 3600 with Go 1.27.1, the median of five runs:
 | `\b\w+ing\b`, all matches | 420 µs | 708 µs | 1.7x |
 | `zebra`, not there | 305 ns | 467 ns | 1.5x |
 | `,\s*` split | 39 µs | 48 µs | 1.2x |
-| `[a-z]+@[a-z]+\.[a-z]{2,}`, all matches | 348 µs | 393 µs | 1.1x |
-| `^\d{4}-\d{2}-\d{2}$` on a date | 292 ns | 216 ns | 0.74x |
+| `^\d{4}-\d{2}-\d{2}$` on a date | 196 ns | 219 ns | 1.1x |
+| `[a-z]+@[a-z]+\.[a-z]{2,}`, all matches | 338 µs | 389 µs | 1.2x |
 | `(\w+)@(\w+)\.com`, first match | 4.0 µs | 2.0 µs | 0.51x |
 | `needle`, found near the end | 5.5 µs | 2.7 µs | 0.50x |
 

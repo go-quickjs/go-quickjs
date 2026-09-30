@@ -246,24 +246,25 @@ has a word outside ASCII on every line.
 | `\b\w+ing\b`, all matches | 421 µs | 431 µs | 698 µs | 1.6x |
 | `zebra`, not there | 314 ns | 313 ns | 479 ns | 1.5x |
 | `,\s*` split | 39 µs | 39 µs | 50 µs | 1.3x |
-| `[a-z]+@[a-z]+\.[a-z]{2,}`, all matches | 353 µs | 358 µs | 391 µs | 1.1x |
+| `^\d{4}-\d{2}-\d{2}$` on a date | 196 ns | 179 ns | 219 ns | 1.2x |
+| `[a-z]+@[a-z]+\.[a-z]{2,}`, all matches | 338 µs | 349 µs | 389 µs | 1.1x |
 | `needle`, found near the end | 5.5 µs | 2.6 µs | 2.8 µs | 1.1x |
 | `needle`, found near the end, mixed text | 141 µs | 2.6 µs | 2.8 µs | 1.1x |
-| `^\d{4}-\d{2}-\d{2}$` on a date | 302 ns | 277 ns | 222 ns | 0.80x |
 
 `Compile` has to convert mixed text to UTF-16 before it can match, which is
 most of what it spends on the mixed cases; `CompileUTF8` matches the same
-text where it is. On ASCII text it matches the bytes
-where they are, but it must read the whole string first to know that the text
-is ASCII: that is the few microseconds it loses on a single early match,
-where `CompileUTF8` reads no further than it matches.
+text where it is. On ASCII text `Compile` matches the bytes where they are
+too, but it must read the whole string first to know that the text is ASCII:
+that is the few microseconds it loses on a single early match, where
+`CompileUTF8` reads no further than it matches.
 
 A backtracking matcher that skips positions where no match can begin does
 well where RE2's automaton has many states to carry, as with an alternation or
 a case-insensitive pattern. Text that every match must contain is looked for
 first, with the vectorized `strings.Index` RE2 also uses, so a subject without
-it is turned away without being matched at all. RE2 is ahead on anchored
-patterns over short strings.
+it is turned away without being matched at all. A character repeated a fixed
+number of times, as in `\d{4}`, is written out rather than counted, so a
+pattern like the date's runs straight through with nothing to undo.
 
 Linear time is RE2's real advantage. If patterns come from users and
 `ErrComplexity` would be a problem, prefer `regexp` whenever it can express
