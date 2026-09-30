@@ -1046,7 +1046,7 @@ func (r *Runtime) initArrayBuiltins() {
 	r.defMethod(p, "push", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if o := rt.plainArray(this); o != nil && rt.noInheritedIndices(o) &&
 			o.flags&(objExtensible|objArrayLengthWritable) == objExtensible|objArrayLengthWritable &&
-			len(o.elems)+len(args) <= maxArrayLength {
+			int64(len(o.elems))+int64(len(args)) <= maxArrayLength {
 			// A dense array of its own, extensible and with its length
 			// writable, whose prototypes have no element a setter could be
 			// asked about: each value is an element added at the end, and the
