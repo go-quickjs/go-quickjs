@@ -797,12 +797,12 @@ post.
 
 A few decisions worth knowing about if you read the source.
 
-**Values are NaN-boxed into 24 bytes.** A `Value` is a `float64` plus an
-interface. Real numbers live in the float; every other kind is a quiet NaN whose
-payload encodes the type, with the pointer in the interface. Nothing allocates —
-a pointer stored in an interface does not — and a type check is a mask and
-compare. The invariant this rests on is that a genuine NaN must never collide
-with a tag, so every number is normalized on the way in.
+**Values are NaN-boxed into 16 bytes.** A `Value` is a `float64` plus an
+untyped pointer. Real numbers live in the float; every other kind is a quiet
+NaN whose payload encodes the type, and the pointer is what that type refers to.
+Nothing allocates, and a type check is a mask and compare. The invariant this
+rests on is that a genuine NaN must never collide with a tag, so every number
+is normalized on the way in.
 
 **The interpreter allocates nothing per call.** One contiguous slice backs both
 locals and operands; a frame is a window into it. Neither that slice nor the
@@ -954,6 +954,90 @@ The measured revisions were go-quickjs `d4df5b3`, goja `793a2a6`, and
 AreWeFastYet `0e21608`. These results characterize this older interpreter
 workload suite rather than every application; go-quickjs leads all eight of
 its workloads in this comparison.
+
+### Compared with C QuickJS
+
+go-quickjs has the same design as QuickJS: a bytecode compiler, a
+stack-based interpreter, NaN-boxed values. Running that design in Go costs
+speed. The same suite ran on an AMD Ryzen 5 3600 under Windows, with Go 1.27.1
+and QuickJS 2026-06-04. The first two columns are milliseconds for the same
+fixed work (the median of three fresh-process runs, lower is better). The
+scores are the suite's own (higher is better).
+
+| Workload | go-quickjs | QuickJS | QuickJS faster by | go-quickjs score | QuickJS score |
+|---|---:|---:|---:|---:|---:|
+| Richards | 27.3 ms | 11.0 ms | 2.5x | 387 | 937 |
+| DeltaBlue | 45.3 ms | 24.0 ms | 1.9x | 433 | 812 |
+| Crypto | 579 ms | 326 ms | 1.8x | 632 | 1,107 |
+| RayTrace | 221 ms | 146 ms | 1.5x | 1,027 | 1,570 |
+| EarleyBoyer | 715 ms | 398 ms | 1.8x | 1,296 | 2,098 |
+| RegExp | 902 ms | 863 ms | 1.04x | 426 | 425 |
+| Splay | 397 ms | 520 ms | 0.76x | 2,130 | 3,269 |
+| NavierStokes | 417 ms | 195 ms | 2.1x | 1,135 | 2,399 |
+| **Total / composite** | **3,317 ms** | **2,523 ms** | **1.31x** | **786** | **1,321** |
+
+The scored run weighs more heavily than the fixed one what a long-running
+program pays for its heap. Each workload is warmed for a second and then
+measured for another. That is why Splay and EarleyBoyer, which allocate the
+most, fare worse there. Figures move by a few percent between builds from
+code placement alone. To reproduce them, run
+`go run ./internal/cmd/v8bench -dir /tmp/v8-v7 -mode fixed -n 3` and the
+`external` runner with `-engine qjs`.
+
+What the gap is made of:
+
+- **Dispatching instructions.** QuickJS's interpreter jumps straight from one
+  instruction's code to the next, and the C compiler keeps the interpreter's
+  state in registers. Go has neither computed jumps nor a way to keep state in
+  registers across a switch that large.
+  - Every instruction goes through one `switch`. Around it, the interpreter's
+    state is stored to memory and loaded back.
+  - Go inlines only the smallest functions into a function of that size, so
+    the common cases are written out by hand where they are used.
+
+  An instruction costs about twice what it costs QuickJS. That is most of the
+  gap in Crypto and NavierStokes, which do little but arithmetic, local
+  variables and array elements. Fusing common instruction sequences into
+  single instructions (`a[i]`, `a[++i]`, `x & 0xff`, `local * local`) reduces
+  how many are dispatched.
+- **Calls.** A call from JavaScript to JavaScript passes through several Go
+  functions and fills in a frame record. Go has no callee-saved registers, so
+  each Go call spills what the caller holds. Richards and DeltaBlue are mostly
+  small method calls.
+- **Property access.** A QuickJS object shares its layout (its shape) with
+  every object built the same way, and holds only the values. A go-quickjs
+  object keeps its keys in a table of its own, so each object is larger and
+  there is no shared layout to remember a lookup by. An ordinary object's
+  own property is found by scanning its table where the instruction runs.
+  Richards, DeltaBlue and RayTrace read and write object fields constantly.
+- **Memory management.** QuickJS counts references: an object is freed the
+  moment the last reference to it goes, and a cycle collector handles the
+  rest. go-quickjs relies on Go's garbage collector. It traces the live heap
+  concurrently and needs a write barrier on every pointer stored, including
+  every value written to the interpreter's stack. The collector does most of
+  its work on other cores, so with cores to spare it costs less wall-clock
+  time than CPU time. A long-running program that allocates heavily pays for
+  it all the same. The scored Splay and EarleyBoyer show this.
+- **Bounds checks.** Go checks every slice index, and the interpreter's stack,
+  locals and array elements are all slices.
+
+Where go-quickjs is level or ahead:
+
+- **RegExp.** With an unmodified RegExp, `replace` and `split` find their
+  matches without building the arrays `exec` would return. `split` searches
+  for each separator instead of trying every position. The matcher skips
+  positions where no match can begin and takes a greedy run of one character
+  in a single step.
+- **Splay, in fixed work.** Go's allocator makes many short-lived objects
+  cheaply.
+- **`apply(this, arguments)`.** In a function whose only use of `arguments` is
+  passing it to `apply` (a common way to write a class constructor), the
+  arguments object is never made.
+
+The largest remaining step is the object model. Shared shapes, with a cache at
+each property access that remembers where the last object of that shape kept
+the property, would narrow the gap in the object-heavy workloads. Engines such
+as V8 are built this way.
 
 ## License
 
