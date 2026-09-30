@@ -358,12 +358,18 @@ func (r *Runtime) initStringBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
+		if s.ascii {
+			return Str(asciiCase(s, true)), nil
+		}
 		return Str(NewString(caseConvert(s.Go(), true))), nil
 	})
 	r.defMethod(p, "toLowerCase", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		s, err := thisStr(rt, this)
 		if err != nil {
 			return Undefined, err
+		}
+		if s.ascii {
+			return Str(asciiCase(s, false)), nil
 		}
 		return Str(NewString(caseConvert(s.Go(), false))), nil
 	})

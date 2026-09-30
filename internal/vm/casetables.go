@@ -127,6 +127,35 @@ var specialUpper = map[rune][]rune{
 	0xFB17: {0x0544, 0x053D},
 }
 
+// asciiCase is caseConvert for an ASCII string, in which only the 26 letters
+// have a case, each the other's with bit 5 flipped. A string with none to
+// change is returned as it is.
+func asciiCase(s *String, upper bool) *String {
+	g := s.Go()
+	lo, hi := byte('A'), byte('Z')
+	if upper {
+		lo, hi = 'a', 'z'
+	}
+	i := 0
+	for i < len(g) && (g[i] < lo || g[i] > hi) {
+		i++
+	}
+	if i == len(g) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(g))
+	b.WriteString(g[:i])
+	for ; i < len(g); i++ {
+		c := g[i]
+		if c >= lo && c <= hi {
+			c ^= 0x20
+		}
+		b.WriteByte(c)
+	}
+	return &String{s: b.String(), length: s.length, ascii: true}
+}
+
 // caseConvert maps a string to upper or lower case, character by character.
 //
 // Most characters have a single-character mapping the standard library knows.

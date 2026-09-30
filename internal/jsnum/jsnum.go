@@ -54,6 +54,11 @@ func FormatFloat(v float64) string {
 	case math.IsInf(v, -1):
 		return "-Infinity"
 	}
+	if i := int64(v); float64(i) == v && v > -1<<53 && v < 1<<53 {
+		// An integer below 2^53 is its own shortest representation, and
+		// printing it as one is much quicker than finding that out.
+		return strconv.FormatInt(i, 10)
+	}
 	if v == math.Trunc(v) && math.Abs(v) < 1e21 {
 		// Integral values below 1e21 always print without a decimal point or
 		// exponent, which strconv's 'f' gives us directly.
