@@ -985,7 +985,11 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			sp--
 			cl.upvalues[in.A].set(stack[sp])
 		case bytecode.OpCloseUpvalues:
-			r.closeUpvaluesFrom(f, int(in.A))
+			// A loop's per-iteration binding closes its upvalues every time
+			// round, and mostly nothing captured it: that costs no call.
+			if len(f.openUpvalues) != 0 {
+				r.closeUpvaluesFrom(f, int(in.A))
+			}
 
 		// --- Globals ------------------------------------------------------
 		case bytecode.OpGetGlobal:
