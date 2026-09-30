@@ -559,7 +559,11 @@ func TestFetch(t *testing.T) {
 			console.log(missing.status, missing.ok)
 
 			try { await fetch("http://127.0.0.1:1/nothing") }
-			catch (e) { console.log("failed to connect") }
+			catch (e) {
+				// As Node has it: a TypeError, with what went wrong as its cause.
+				console.log("failed to connect:", e instanceof TypeError, e.message,
+					e.cause instanceof Error, Object.keys(e).length)
+			}
 		})()
 	`)
 	want := strings.Join([]string{
@@ -571,7 +575,7 @@ func TestFetch(t *testing.T) {
 		"POST sent",
 		"the body",
 		"404 false",
-		"failed to connect",
+		"failed to connect: true fetch failed true 0",
 	}, "\n")
 	if out != want {
 		t.Errorf("fetch output =\n%s\nwant\n%s", out, want)
@@ -596,10 +600,10 @@ func TestFetchAllow(t *testing.T) {
 		;(async () => {
 			console.log(await (await fetch("`+srv.URL+`/allowed")).text())
 			try { await fetch("`+srv.URL+`/other") }
-			catch (e) { console.log("refused: " + /not allowed/.test(e.message)) }
+			catch (e) { console.log("refused: " + (e instanceof TypeError) + " " + /not allowed/.test(e.cause.message)) }
 		})()
 	`)
-	if want := "reached\nrefused: true"; out != want {
+	if want := "reached\nrefused: true true"; out != want {
 		t.Errorf("allow output =\n%s\nwant\n%s", out, want)
 	}
 }
@@ -1603,6 +1607,34 @@ func TestLoopKeepsPostedWork(t *testing.T) {
 
 // A response is read as it arrives rather than gathered first, so a body larger
 // than anything the runtime would hold still goes through a chunk at a time.
+// A response cut off part way is read to a TypeError, as Node words it:
+// "terminated", with what went wrong as its cause.
+func TestFetchBodyCutOff(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-length", "100")
+		w.Write([]byte("0123456789"))
+		w.(http.Flusher).Flush()
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err == nil {
+			conn.Close()
+		}
+	}))
+	defer srv.Close()
+
+	out, errOut := run(t, stdlib.Config{Fetch: &stdlib.Fetch{}}, `
+		;(async () => {
+			const res = await fetch("`+srv.URL+`")
+			try { await res.text(); console.log("read it all") }
+			catch (e) {
+				console.log(e instanceof TypeError, e.message, e.cause instanceof Error, Object.keys(e).length)
+			}
+		})()
+	`)
+	if want := "true terminated true 0"; out != want {
+		t.Errorf("cut-off body = %q, want %q\nstderr: %s", out, want, errOut)
+	}
+}
+
 func TestFetchStreamsTheResponse(t *testing.T) {
 	const chunks, size = 40, 8 << 10
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

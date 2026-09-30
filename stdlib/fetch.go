@@ -808,6 +808,9 @@ const fetchJS = `(function (host) {
     const body = request._stream && request._bytes === undefined
       ? await request._consume() : request._bytes;
 
+    // A request that fails -- refused, unreachable, cut off -- rejects with a
+    // TypeError, as the standard has it, and as Node words it: "fetch
+    // failed", with what went wrong as its cause.
     const sent = host.send({
       method: request.method,
       url: request.url,
@@ -815,7 +818,7 @@ const fetchJS = `(function (host) {
       body,
     }, (cancel) => {
       if (signal) signal.addEventListener("abort", cancel, {once: true});
-    });
+    }).catch((cause) => { throw new TypeError("fetch failed", {cause}); });
 
     // An abort races the request: whichever settles first is the answer.
     const raw = signal
@@ -831,7 +834,11 @@ const fetchJS = `(function (host) {
     const incoming = typeof raw.read === "function"
       ? new ReadableStream({
           async pull(controller) {
-            const chunk = await raw.read();
+            // A body cut off part way is a TypeError too, which Node calls
+            // "terminated".
+            const chunk = await raw.read().catch((cause) => {
+              throw new TypeError("terminated", {cause});
+            });
             if (chunk === null || chunk === undefined) controller.close();
             else controller.enqueue(chunk);
           },
