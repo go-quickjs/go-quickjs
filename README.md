@@ -710,26 +710,27 @@ On an AMD Ryzen 5 3600 with Go 1.27.1, the median of five runs:
 
 | Case | jsregexp | regexp | jsregexp's speed |
 |---|---:|---:|---:|
-| `WARN\|ERROR\|FATAL`, all matches | 47 µs | 907 µs | 19x |
-| `error` under `i`, all matches | 82 µs | 313 µs | 3.8x |
-| `\d+`, all matches | 201 µs | 494 µs | 2.5x |
-| `\s+` replaced | 242 µs | 583 µs | 2.4x |
-| `\b\w+ing\b`, all matches | 433 µs | 721 µs | 1.7x |
-| `zebra`, not there | 321 ns | 473 ns | 1.5x |
-| `[a-z]+@[a-z]+\.[a-z]{2,}`, all matches | 369 µs | 399 µs | 1.1x |
-| `,\s*` split | 53 µs | 50 µs | 0.94x |
-| `^\d{4}-\d{2}-\d{2}$` on a date | 333 ns | 226 ns | 0.68x |
-| `needle`, found near the end | 20 µs | 2.8 µs | 0.14x |
-| `(\w+)@(\w+)\.com`, first match | 15 µs | 2.1 µs | 0.13x |
+| `WARN\|ERROR\|FATAL`, all matches | 34 µs | 887 µs | 26x |
+| `error` under `i`, all matches | 70 µs | 306 µs | 4.3x |
+| `\d+`, all matches | 161 µs | 485 µs | 3.0x |
+| `\s+` replaced | 212 µs | 576 µs | 2.7x |
+| `\b\w+ing\b`, all matches | 420 µs | 708 µs | 1.7x |
+| `zebra`, not there | 305 ns | 467 ns | 1.5x |
+| `,\s*` split | 39 µs | 48 µs | 1.2x |
+| `[a-z]+@[a-z]+\.[a-z]{2,}`, all matches | 348 µs | 393 µs | 1.1x |
+| `^\d{4}-\d{2}-\d{2}$` on a date | 292 ns | 216 ns | 0.74x |
+| `(\w+)@(\w+)\.com`, first match | 4.0 µs | 2.0 µs | 0.51x |
+| `needle`, found near the end | 5.5 µs | 2.7 µs | 0.50x |
 
 A backtracking matcher that skips where no match can begin does well where
 RE2's automaton has many states to carry, as with an alternation or a
 case-insensitive pattern. Text every match must contain is looked for first,
 with the same vectorized `strings.Index` RE2 uses, so a subject without it is
-turned away without being matched at all. Where a match is found quickly in a
-large text, jsregexp is slower: JavaScript matches over UTF-16 code units, and
-the whole subject is converted to them before the match runs, which for 16 KB
-is most of the time taken.
+turned away without being matched at all. A string all in ASCII is matched
+where it is, since each of its bytes is a code unit; any other is converted
+to the UTF-16 code units JavaScript matches over. Telling the two apart reads
+the whole string, some 3 µs for 16 KB, which is most of what the two slower
+cases above take.
 
 ## Sandboxing
 

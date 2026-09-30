@@ -137,6 +137,8 @@ type matcher struct {
 	busy bool
 }
 
+//go:generate go run ./internal/asciigen/cmd
+
 // exec runs the program from a starting position, returning the capture slots
 // or nil if there is no match.
 //
@@ -202,8 +204,7 @@ func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error,
 	}
 	// The input is the matcher's own, rather than made for each match.
 	m.input = input{units: units, unicode: re.flags&FlagUnicode != 0}
-	in := &m.input
-	m.prog, m.in, m.check = re.prog, in, check
+	m.prog, m.in, m.check = re.prog, &m.input, check
 	// The budget is what this attempt may spend, so it starts again here: a
 	// matcher is lent out over and over, and a pattern that had spent its
 	// budget once would have been refused for the rest of the program.
@@ -224,7 +225,18 @@ func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error,
 			matcherPool.Put(m)
 		}
 	}()
+	return m.search(re, dst, start, sticky)
+}
 
+// search is the leftmost match at or after start, into dst, made with the
+// matcher exec has made ready.
+//
+// It and the rest of the matcher's methods are also compiled over the bytes
+// of an ASCII string, in exec_ascii.go, which is generated from this file: a
+// code unit handed on is converted to uint16 where it is, which compiles to
+// nothing here and is what the copy needs.
+func (m *matcher) search(re *Regexp, dst []int, start int, sticky bool) ([]int, error) {
+	in := m.in
 	first := re.prog.first
 	// lit is the required literal and litAt where it was last found: a match
 	// can begin only where it is within reach, so the positions before that
@@ -248,7 +260,7 @@ func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error,
 			// flag a character is a code unit, so the units no match can
 			// begin with are passed over in a loop of their own.
 			units := in.units
-			for pos < len(units) && !first.admits(units[pos]) {
+			for pos < len(units) && !first.admits(uint16(units[pos])) {
 				pos++
 			}
 			if pos >= len(units) {
@@ -264,7 +276,7 @@ func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error,
 			// over as the search below would pass it, a character at a
 			// time, so that under the unicode flag it never lands inside a
 			// surrogate pair.
-			if pos >= len(in.units) || !first.admits(in.units[pos]) {
+			if pos >= len(in.units) || !first.admits(uint16(in.units[pos])) {
 				if pos >= len(in.units) || sticky {
 					return nil, nil
 				}
@@ -591,7 +603,7 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 			case opAny:
 				end = len(units)
 			default:
-				for end < len(units) && m.unitMatches(item, units[end]) {
+				for end < len(units) && m.unitMatches(item, uint16(units[end])) {
 					end++
 				}
 			}

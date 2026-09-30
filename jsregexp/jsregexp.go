@@ -40,7 +40,6 @@ package jsregexp
 
 import (
 	"strings"
-	"sync"
 	"unicode/utf16"
 	"unicode/utf8"
 
@@ -167,48 +166,36 @@ func QuoteMeta(s string) string { return re.QuoteMeta(s) }
 // string the caller passed in. A subject that is all ASCII needs none, since a
 // code unit is then a byte.
 //
-// The code units are made when a match first needs them -- a subject the
-// pattern's required literal rules out never needs them -- and an ASCII
-// subject's go in a buffer of unitPool's, which release gives back.
+// A subject that is all ASCII is matched where it is, a byte being a code unit,
+// and has no code units made for it; any other is converted when a match first
+// needs it -- a subject the pattern's required literal rules out never is.
 type subject struct {
 	s       string
 	units   []uint16
 	offsets []int
 	ascii   bool
 	made    bool
-	pooled  *[]uint16
 	// ruledOut records that the pattern's required literal is not in s,
-	// once that has been looked for.
+	// once that has been looked for, and litAt where it was last found.
 	litLooked, ruledOut bool
+	litAt               int
 }
-
-// unitPool holds the code-unit buffers of ASCII subjects no larger than
-// maxPooledUnits, so that a match does not allocate one each time.
-var unitPool sync.Pool
-
-const maxPooledUnits = 1 << 16
 
 func newSubject(s string) *subject {
 	return &subject{s: s}
 }
 
-// release gives the subject's pooled buffer back. The subject is not used
-// after.
-func (sub *subject) release() {
-	if sub.pooled != nil {
-		*sub.pooled = sub.units[:0]
-		unitPool.Put(sub.pooled)
-		sub.pooled, sub.units = nil, nil
-	}
-}
-
 // n is how many code units the subject has.
 func (sub *subject) n() int {
 	sub.make()
+	if sub.ascii {
+		return len(sub.s)
+	}
 	return len(sub.units)
 }
 
-// make converts the subject to code units, once.
+// make prepares the subject for matching, once: an ASCII one needs nothing
+// more, and any other is converted to code units.
 func (sub *subject) make() {
 	if sub.made {
 		return
@@ -217,20 +204,6 @@ func (sub *subject) make() {
 	s := sub.s
 	if isASCII(s) {
 		sub.ascii = true
-		if len(s) > maxPooledUnits {
-			sub.units = asciiUnits(s)
-			return
-		}
-		p, _ := unitPool.Get().(*[]uint16)
-		if p == nil || cap(*p) < len(s) {
-			buf := make([]uint16, 0, max(len(s), 256))
-			p = &buf
-		}
-		units := (*p)[:len(s)]
-		for i := 0; i < len(s); i++ {
-			units[i] = uint16(s[i])
-		}
-		sub.units, sub.pooled = units, p
 		return
 	}
 	units := make([]uint16, 0, len(s))
@@ -260,7 +233,8 @@ func (r *Regexp) match(sub *subject, pos int, dst []int) ([]int, error) {
 	if r.lit != "" {
 		if !sub.litLooked {
 			sub.litLooked = true
-			sub.ruledOut = !strings.Contains(sub.s, r.lit)
+			sub.litAt = strings.Index(sub.s, r.lit)
+			sub.ruledOut = sub.litAt < 0
 		}
 		if sub.ruledOut {
 			return nil, nil
@@ -272,11 +246,19 @@ func (r *Regexp) match(sub *subject, pos int, dst []int) ([]int, error) {
 		if from > len(sub.s) {
 			return nil, nil
 		}
-		i := strings.Index(sub.s[from:], r.lit)
-		if i < 0 {
-			return nil, nil
+		// Where the literal was last found is where it next is, if that is
+		// no earlier than it can be.
+		if sub.litAt < from {
+			i := strings.Index(sub.s[from:], r.lit)
+			if i < 0 {
+				return nil, nil
+			}
+			sub.litAt = from + i
 		}
-		pos = max(pos, from+i-r.litMax)
+		pos = max(pos, sub.litAt-r.litMax)
+	}
+	if sub.ascii {
+		return r.re.MatchASCIIInto(dst, sub.s, pos, nil)
 	}
 	return r.re.MatchCheckedInto(dst, sub.units, pos, nil)
 }
@@ -318,8 +300,18 @@ func (sub *subject) splits(unit int) bool {
 	return unit > 0 && unit < len(sub.offsets) && sub.offsets[unit] == sub.offsets[unit-1]
 }
 
+// isASCII reports whether every byte of s is below 0x80, eight at a time where
+// it can: a byte past ASCII has its top bit set.
 func isASCII(s string) bool {
-	for i := 0; i < len(s); i++ {
+	i := 0
+	for ; i+8 <= len(s); i += 8 {
+		w := uint64(s[i]) | uint64(s[i+1])<<8 | uint64(s[i+2])<<16 | uint64(s[i+3])<<24 |
+			uint64(s[i+4])<<32 | uint64(s[i+5])<<40 | uint64(s[i+6])<<48 | uint64(s[i+7])<<56
+		if w&0x8080808080808080 != 0 {
+			return false
+		}
+	}
+	for ; i < len(s); i++ {
 		if s[i] >= utf8.RuneSelf {
 			return false
 		}
@@ -327,18 +319,9 @@ func isASCII(s string) bool {
 	return true
 }
 
-func asciiUnits(s string) []uint16 {
-	units := make([]uint16, len(s))
-	for i := 0; i < len(s); i++ {
-		units[i] = uint16(s[i])
-	}
-	return units
-}
-
 // MatchString reports whether the pattern matches anywhere in s.
 func (r *Regexp) MatchString(s string) (bool, error) {
 	sub := newSubject(s)
-	defer sub.release()
 	var buf [capsOnStack]int
 	caps, err := r.match(sub, 0, buf[:0])
 	return caps != nil, err
@@ -364,7 +347,6 @@ func MatchString(pattern, flags, s string) (bool, error) {
 // FindStringIndex is what tells the two apart.
 func (r *Regexp) FindString(s string) (string, error) {
 	sub := newSubject(s)
-	defer sub.release()
 	var buf [capsOnStack]int
 	caps, err := r.match(sub, 0, buf[:0])
 	if err != nil || caps == nil {
@@ -376,7 +358,6 @@ func (r *Regexp) FindString(s string) (string, error) {
 // FindStringIndex returns the byte bounds of the leftmost match, or nil.
 func (r *Regexp) FindStringIndex(s string) ([]int, error) {
 	sub := newSubject(s)
-	defer sub.release()
 	var buf [capsOnStack]int
 	caps, err := r.match(sub, 0, buf[:0])
 	if err != nil || caps == nil {
@@ -392,7 +373,6 @@ func (r *Regexp) FindStringIndex(s string) ([]int, error) {
 // FindStringSubmatchIndex tells it apart from one that matched emptiness.
 func (r *Regexp) FindStringSubmatch(s string) ([]string, error) {
 	sub := newSubject(s)
-	defer sub.release()
 	var buf [capsOnStack]int
 	caps, err := r.match(sub, 0, buf[:0])
 	if err != nil || caps == nil {
@@ -408,7 +388,6 @@ func (r *Regexp) FindStringSubmatch(s string) ([]string, error) {
 // group that did not participate.
 func (r *Regexp) FindStringSubmatchIndex(s string) ([]int, error) {
 	sub := newSubject(s)
-	defer sub.release()
 	var buf [capsOnStack]int
 	caps, err := r.match(sub, 0, buf[:0])
 	if err != nil || caps == nil {
@@ -424,7 +403,6 @@ func (r *Regexp) FindStringSubmatchIndex(s string) ([]int, error) {
 // FindStringSubmatch for those.
 func (r *Regexp) FindStringSubmatchMap(s string) (map[string]string, error) {
 	sub := newSubject(s)
-	defer sub.release()
 	var buf [capsOnStack]int
 	caps, err := r.match(sub, 0, buf[:0])
 	if err != nil || caps == nil {
@@ -504,7 +482,6 @@ func (r *Regexp) eachMatch(sub *subject, n int, visit func(caps []int)) error {
 // negative. It returns nil if there are none.
 func (r *Regexp) FindAllString(s string, n int) ([]string, error) {
 	sub := newSubject(s)
-	defer sub.release()
 	var out []string
 	err := r.eachMatch(sub, n, func(caps []int) {
 		out = append(out, sub.text(caps[0], caps[1]))
@@ -515,7 +492,6 @@ func (r *Regexp) FindAllString(s string, n int) ([]string, error) {
 // FindAllStringIndex returns the byte bounds of up to n successive matches.
 func (r *Regexp) FindAllStringIndex(s string, n int) ([][]int, error) {
 	sub := newSubject(s)
-	defer sub.release()
 	var out [][]int
 	err := r.eachMatch(sub, n, func(caps []int) {
 		out = append(out, []int{sub.byteAt(caps[0]), sub.byteAt(caps[1])})
@@ -526,7 +502,6 @@ func (r *Regexp) FindAllStringIndex(s string, n int) ([][]int, error) {
 // FindAllStringSubmatch returns up to n successive matches with their groups.
 func (r *Regexp) FindAllStringSubmatch(s string, n int) ([][]string, error) {
 	sub := newSubject(s)
-	defer sub.release()
 	var out [][]string
 	err := r.eachMatch(sub, n, func(caps []int) {
 		out = append(out, submatchStrings(sub, caps))
@@ -538,7 +513,6 @@ func (r *Regexp) FindAllStringSubmatch(s string, n int) ([][]string, error) {
 // matches and of their groups.
 func (r *Regexp) FindAllStringSubmatchIndex(s string, n int) ([][]int, error) {
 	sub := newSubject(s)
-	defer sub.release()
 	var out [][]int
 	err := r.eachMatch(sub, n, func(caps []int) {
 		out = append(out, submatchIndex(sub, caps))
@@ -593,7 +567,6 @@ func (r *Regexp) ReplaceAllStringSubmatchFunc(s string, repl func(groups []strin
 
 func (r *Regexp) replaceAll(s string, repl func(*subject, []int) string) (string, error) {
 	sub := newSubject(s)
-	defer sub.release()
 	var b strings.Builder
 	last, matched := 0, false
 	err := r.eachMatch(sub, -1, func(caps []int) {
@@ -685,7 +658,6 @@ func (r *Regexp) Split(s string, n int) ([]string, error) {
 		return nil, nil
 	}
 	sub := newSubject(s)
-	defer sub.release()
 	var out []string
 	last := 0
 	err := r.eachMatch(sub, -1, func(caps []int) {

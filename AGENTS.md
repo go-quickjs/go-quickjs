@@ -49,6 +49,11 @@ concurrently.
 Do not manually edit generated files or their binary companions:
 
 - `internal/regexp/unicodetables.go`
+- `internal/regexp/exec_ascii.go`, the regexp matcher over an ASCII string's
+  bytes, made from `exec.go`'s matcher over UTF-16 code units so that the two
+  stay the same code. After changing `exec.go`, run
+  `go generate ./internal/regexp`. `TestASCIIMatcherGenerated` fails while
+  the file is out of date.
 
 go-intl's data is generated in go-intl, and changes there; a new go-intl is
 taken with `go get` and `go mod tidy`, never by copying its files here.
