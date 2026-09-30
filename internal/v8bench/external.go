@@ -37,6 +37,18 @@ globalThis.print = function (s) { console.log(s); };
 // args are the arguments each kind of program takes before the driver.
 var args = map[string][]string{"qjs": {"--std"}, "node": nil}
 
+// argList is a flag given once for each argument it adds, so that an
+// argument needs no quoting and none is split: -arg --jitless -arg
+// --max-old-space-size=4096.
+type argList []string
+
+func (a *argList) String() string { return strings.Join(*a, " ") }
+
+func (a *argList) Set(s string) error {
+	*a = append(*a, s)
+	return nil
+}
+
 // fixedDriver is the fixed mode in JavaScript: each benchmark n times, the
 // suites a comma-separated list names, or all.
 const fixedDriver = `%s
@@ -66,6 +78,8 @@ func MainExternal() {
 	mode := flag.String("mode", "fixed", "score or fixed")
 	n := flag.Int("n", 5, "runs of each benchmark (fixed)")
 	only := flag.String("suite", "", "comma-separated suites to run, all by default (fixed)")
+	var extra argList
+	flag.Var(&extra, "arg", "an argument for the program, before the driver script; given once for each, as -arg --jitless")
 	flag.Parse()
 	prelude, ok := preludes[*kind]
 	if !ok {
@@ -113,8 +127,14 @@ func MainExternal() {
 	if program == "" {
 		program = *kind
 	}
-	fmt.Printf("%s, %s\n", filepath.Base(program), *mode)
-	cmd := exec.Command(program, append(append([]string(nil), args[*kind]...), script)...)
+	// The header names the arguments too: node --jitless is not node.
+	name := filepath.Base(program)
+	if len(extra) > 0 {
+		name += " " + extra.String()
+	}
+	fmt.Printf("%s, %s\n", name, *mode)
+	argv := append(append(append([]string(nil), args[*kind]...), extra...), script)
+	cmd := exec.Command(program, argv...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	start := time.Now()
 	if err := cmd.Run(); err != nil {

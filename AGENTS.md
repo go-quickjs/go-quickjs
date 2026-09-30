@@ -181,6 +181,9 @@ same work, and reports the same times without the allocations Go counts.
 go run ./internal/cmd/v8bench/external -engine qjs -cmd /path/to/qjs -dir /tmp/v8-v7 -mode fixed -n 5
 ```
 
+`-arg` passes the program an argument of its own, once for each:
+`-engine node -arg --jitless` runs Node with its JIT compilers off.
+
 Each Go runner ends with the live heap after a collection, with the runtime
 still alive: one that grows with `-n` is a leak.
 
