@@ -489,11 +489,12 @@ func (c *compiler) finish() {
 // emit appends an instruction and returns its program counter.
 func (c *compiler) emit(op bytecode.Op, a, b uint32) int {
 	if (op == bytecode.OpGetProp || op == bytecode.OpGetPropThis || op == bytecode.OpSetProp ||
-		op == bytecode.OpNewObject || op == bytecode.OpInstanceOf) && b == 0 {
+		op == bytecode.OpNewObject || op == bytecode.OpInstanceOf || op == bytecode.OpGetGlobal) && b == 0 {
 		// Each property read and write has a cache of its own, numbered
 		// here, and so does each object literal, which keeps the shape its
-		// objects start from in it, and each instanceof, for its read of
-		// the constructor's Symbol.hasInstance.
+		// objects start from in it, each instanceof, for its read of the
+		// constructor's Symbol.hasInstance, and each global read, for where
+		// in the global object its name was.
 		c.fn.PropSites++
 		b = c.fn.PropSites
 	}

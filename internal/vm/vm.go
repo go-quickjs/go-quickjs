@@ -1047,12 +1047,23 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// A plain own data property of the environment -- which is what
 			// every declared global is -- needs none of the machinery a
 			// general read carries: no proxy trap, no exotic index, no
-			// prototype walk. The lookup cache is read here first, without
-			// the call findOwn is.
+			// prototype walk. Where the site last found its name is looked
+			// at first: a table holds a key once, so the key there being the
+			// name is the property still being there. Then the lookup cache,
+			// without the call findOwn is.
+			site := &cl.ic[in.B]
+			if i := uint(site.idx); i < uint(len(env.props)) {
+				if p := &env.props[i]; p.key == name &&
+					p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
+					sp = pushAt(stack, sp, p.value)
+					break
+				}
+			}
 			if x := env.shapeIndex(); x != nil {
 				if c := &x.recent[name&15]; c.key == name && c.idx >= 0 && int(c.idx) < len(env.props) {
 					if p := &env.props[c.idx]; p.key == name &&
 						p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
+						site.idx = c.idx
 						sp = pushAt(stack, sp, p.value)
 						break
 					}
@@ -1060,6 +1071,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 			if i := env.findOwn(name); i >= 0 {
 				if p := &env.props[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
+					site.idx = i
 					sp = pushAt(stack, sp, p.value)
 					break
 				}

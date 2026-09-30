@@ -1,6 +1,10 @@
 package quickjs_test
 
-import "testing"
+import (
+	"testing"
+
+	quickjs "github.com/go-quickjs/go-quickjs"
+)
 
 // TestPropertyCaches covers what a property read's or write's cache must
 // notice: each case runs a site until its cache has filled, then changes
@@ -250,5 +254,43 @@ func TestGetterCache(t *testing.T) {
 	}
 	for _, tc := range cases {
 		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// TestGlobalReadCache covers a global read that remembers where in the
+// global object its name was: it must see the global deleted and made again,
+// turned into a getter, moved by the table's reordering, and shadowed by a
+// script's let or a direct eval's var.
+func TestGlobalReadCache(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`globalThis.g1 = "a"; function read() { try { return g1 } catch (e) { return e.name } }
+		  var r = [read(), read()]
+		  delete globalThis.g1; r.push(read())
+		  globalThis.g1 = "b"; r.push(read())
+		  Object.defineProperty(globalThis, "g1", {get() { return "getter" }, configurable: true}); r.push(read())
+		  delete globalThis.g1; globalThis.g1 = "c"; globalThis[0] = "zero"; r.push(read(), read())
+		  delete globalThis[0]; r.join()`, "a,a,ReferenceError,b,getter,c,c"},
+		{`globalThis.g4a = "A"; globalThis.g4 = "B"; function read() { return g4 }
+		  var r = [read(), read()]; globalThis[5] = "index"; r.push(read())
+		  delete globalThis[5]; r.push(read()); r.join()`, "B,B,B,B"},
+		{`globalThis.g3 = "global"
+		  function f(code) { eval(code); return g3 }
+		  [f(""), f(""), f("var g3 = 'eval'"), f("")].join()`, "global,global,eval,global"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// TestGlobalReadCacheShadowed covers a global read made again after a later
+// script declares a let of the same name, which is looked for before the
+// global object: the read must find the let, not where the property was.
+func TestGlobalReadCacheShadowed(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	evalString(t, rt, `globalThis.g2 = "prop"; function read() { return g2 }; read(); read()`)
+	evalString(t, rt, `let g2 = "lex"`)
+	if got := evalString(t, rt, `[read(), globalThis.g2].join()`); got != "lex,prop" {
+		t.Errorf("got %s, want lex,prop", got)
 	}
 }
