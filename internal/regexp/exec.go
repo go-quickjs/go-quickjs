@@ -193,8 +193,23 @@ func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error,
 	}()
 
 	first := re.prog.first
+	// lit is the required literal and litAt where it was last found: a match
+	// can begin only where it is within reach, so the positions before that
+	// are passed over, and a subject without it has no match.
+	lit, litAt := re.prog.lit, -1
+	if sticky || in.unicode {
+		lit = nil
+	}
 	m.reset()
 	for pos := start; pos <= in.length(); {
+		if lit != nil {
+			if litAt < pos+lit.minOff {
+				if litAt = indexUnits(in.units, lit.units, pos+lit.minOff); litAt < 0 {
+					return nil, nil
+				}
+			}
+			pos = max(pos, litAt-lit.maxOff)
+		}
 		if first != nil && !in.unicode && !sticky {
 			// Where no match can begin, none is tried. Without the unicode
 			// flag a character is a code unit, so the units no match can
@@ -205,6 +220,11 @@ func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error,
 			}
 			if pos >= len(units) {
 				return nil, nil
+			}
+			if lit != nil && litAt < pos+lit.minOff {
+				// Past where the literal could be reached from: it is
+				// looked for again.
+				continue
 			}
 		} else if first != nil {
 			// Where no match can begin, none is tried: a position is passed

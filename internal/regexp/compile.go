@@ -71,7 +71,10 @@ type program struct {
 	code []instr
 	// first is the units a match can begin with, or nil when any can; see
 	// firstUnits.
-	first   *firstUnits
+	first *firstUnits
+	// lit is a literal every match contains near its start, or nil; see
+	// requiredLit. Only a pattern without the unicode flag has one.
+	lit     *requiredLit
 	classes []*charSet
 	// asciiClasses is, for each class, which ASCII characters it matches --
 	// folding and negation applied -- which are most of what a class is asked
@@ -121,6 +124,9 @@ func compileNode(n node, flags Flags) *program {
 	c.emit(instr{op: opSave, arg: 1})
 	c.emit(instr{op: opMatch})
 	c.prog.first = firstOf(n, flags&FlagIgnoreCase != 0)
+	if flags&(FlagUnicode|FlagUnicodeSets) == 0 {
+		c.prog.lit = requiredOf(n, flags&FlagIgnoreCase != 0)
+	}
 	c.prog.asciiClasses = make([][2]uint64, len(c.prog.classes))
 	for i, s := range c.prog.classes {
 		c.prog.asciiClasses[i] = s.asciiMembers(c.prog.unicodeFold)
