@@ -188,6 +188,27 @@ func (r *Runtime) ThrowSyntaxError(format string, args ...any) error {
 	return r.throwSyntaxError(format, args...)
 }
 
+// ThrowReferenceError builds a ReferenceError for a native function to return.
+func (r *Runtime) ThrowReferenceError(format string, args ...any) error {
+	return r.throwReferenceError(format, args...)
+}
+
+// ThrowEvalError builds an EvalError for a native function to return.
+func (r *Runtime) ThrowEvalError(format string, args ...any) error {
+	return r.throwEvalError(format, args...)
+}
+
+// ThrowURIError builds a URIError for a native function to return.
+func (r *Runtime) ThrowURIError(format string, args ...any) error {
+	return r.throwURIError(format, args...)
+}
+
+// ThrowPlainError builds an Error for a native function to return, its
+// message formatted; ThrowError is the one for a Go error.
+func (r *Runtime) ThrowPlainError(format string, args ...any) error {
+	return r.throwError(errError, format, args...)
+}
+
 // LooseEquals applies the == operator, which may call user code.
 func (r *Runtime) LooseEquals(a, b Value) (Value, error) {
 	eq, err := r.looseEquals(a, b)

@@ -1,6 +1,7 @@
 package quickjs_test
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -205,6 +206,60 @@ func TestHostPromiseRejection(t *testing.T) {
 	}
 	if v, _ := rt.Eval(`out`); v.String() != "it broke" {
 		t.Errorf("out = %q, want %q", v.String(), "it broke")
+	}
+}
+
+// RejectError rejects with what returning the error would throw: the error a
+// Throw*Error method made, the value a script threw, or an Error carrying a Go
+// error's message that unwraps to it -- a cancellation included, which rejects
+// and stops nothing.
+func TestHostPromiseRejectErrorKinds(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+
+	var p *quickjs.Promise
+	rt.Set("later", func() quickjs.Value {
+		p = rt.NewPromise()
+		return p.Value()
+	})
+	reject := func(err error) string {
+		t.Helper()
+		if _, err := rt.Eval(`
+			var out = "pending", reason
+			later().catch(e => {
+				reason = e
+				out = e instanceof Error ? [e.constructor.name, e.message].join("|") : "code " + e.code
+			})
+		`); err != nil {
+			t.Fatal(err)
+		}
+		p.RejectError(err)
+		if err := rt.RunJobs(); err != nil {
+			t.Fatal(err)
+		}
+		v, err := rt.Eval(`out`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v.String()
+	}
+
+	if got, want := reject(rt.ThrowTypeError("bad port %d", 70000)), "TypeError|bad port 70000"; got != want {
+		t.Errorf("a TypeError: %q, want %q", got, want)
+	}
+	_, thrown := rt.Eval(`throw { code: 42 }`)
+	if got, want := reject(thrown), "code 42"; got != want {
+		t.Errorf("a script's exception: %q, want %q", got, want)
+	}
+	if got, want := reject(context.Canceled), "Error|context canceled"; got != want {
+		t.Errorf("a cancellation: %q, want %q", got, want)
+	}
+	// The reason unwraps to the Go error it was made from, thrown on.
+	if _, err := rt.Eval(`throw reason`); !errors.Is(err, context.Canceled) {
+		t.Errorf("the reason thrown on: %v, want it to unwrap to context.Canceled", err)
+	}
+	if v, err := rt.Eval(`1 + 1`); err != nil || v.String() != "2" {
+		t.Errorf("after a cancellation: %v, %v; the runtime should run on", v, err)
 	}
 }
 

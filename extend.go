@@ -1,6 +1,7 @@
 package quickjs
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -257,10 +258,20 @@ func (p *Promise) Reject(v any) error {
 	return nil
 }
 
-// RejectError rejects the promise with an Error carrying a Go error's message,
-// which is what a host operation that failed usually has to offer.
+// RejectError rejects the promise with what returning err from a Go function
+// the script called would throw: an error from ThrowTypeError and its kin is
+// the error it made, an exception caught from script is the value the script
+// threw, and any other Go error is an Error carrying its message, which a Go
+// caller that gets it back unwraps to err.
+//
+//	p.RejectError(rt.ThrowRangeError("port %d is out of range", port))
 func (p *Promise) RejectError(err error) {
 	if p.p == nil {
+		return
+	}
+	var thrown *vm.Thrown
+	if errors.As(thrownGoError(p.rt.rt, err), &thrown) {
+		p.p.Reject(thrown.Value)
 		return
 	}
 	p.p.RejectError(err)
@@ -396,50 +407,62 @@ func (r *Runtime) NewError(kind, message string) Value {
 //
 // On a closed runtime each returns ErrClosed.
 func (r *Runtime) ThrowError(format string, args ...any) error {
-	return r.throwKind("Error", format, args...)
+	if r.closed {
+		return ErrClosed
+	}
+	return r.rt.ThrowPlainError(format, args...)
 }
 
 // ThrowTypeError returns an error that throws a new TypeError: the value is
 // not of the type the function needs. See ThrowError.
 func (r *Runtime) ThrowTypeError(format string, args ...any) error {
-	return r.throwKind("TypeError", format, args...)
+	if r.closed {
+		return ErrClosed
+	}
+	return r.rt.ThrowTypeError(format, args...)
 }
 
 // ThrowRangeError returns an error that throws a new RangeError: a number is
 // outside the range the function accepts. See ThrowError.
 func (r *Runtime) ThrowRangeError(format string, args ...any) error {
-	return r.throwKind("RangeError", format, args...)
+	if r.closed {
+		return ErrClosed
+	}
+	return r.rt.ThrowRangeError(format, args...)
 }
 
 // ThrowReferenceError returns an error that throws a new ReferenceError: a
 // name the function was asked for does not exist. See ThrowError.
 func (r *Runtime) ThrowReferenceError(format string, args ...any) error {
-	return r.throwKind("ReferenceError", format, args...)
+	if r.closed {
+		return ErrClosed
+	}
+	return r.rt.ThrowReferenceError(format, args...)
 }
 
 // ThrowSyntaxError returns an error that throws a new SyntaxError: source the
 // function parsed is malformed. See ThrowError.
 func (r *Runtime) ThrowSyntaxError(format string, args ...any) error {
-	return r.throwKind("SyntaxError", format, args...)
+	if r.closed {
+		return ErrClosed
+	}
+	return r.rt.ThrowSyntaxError(format, args...)
 }
 
 // ThrowEvalError returns an error that throws a new EvalError, which the
 // language itself no longer throws but a host may. See ThrowError.
 func (r *Runtime) ThrowEvalError(format string, args ...any) error {
-	return r.throwKind("EvalError", format, args...)
+	if r.closed {
+		return ErrClosed
+	}
+	return r.rt.ThrowEvalError(format, args...)
 }
 
 // ThrowURIError returns an error that throws a new URIError: a URI the
 // function decoded or encoded is malformed. See ThrowError.
 func (r *Runtime) ThrowURIError(format string, args ...any) error {
-	return r.throwKind("URIError", format, args...)
-}
-
-// throwKind throws a new error of the standard kind named, with format and
-// args made its message.
-func (r *Runtime) throwKind(kind, format string, args ...any) error {
 	if r.closed {
 		return ErrClosed
 	}
-	return r.rt.ThrowValue(r.rt.NewError(kind, fmt.Sprintf(format, args...)))
+	return r.rt.ThrowURIError(format, args...)
 }

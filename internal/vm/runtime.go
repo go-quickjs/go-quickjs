@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand/v2"
+	"strings"
 	"sync"
 	"time"
 
@@ -655,10 +656,13 @@ func (r *Runtime) throw(v Value) error {
 	return &Thrown{Value: v, Stack: r.captureStack()}
 }
 
-// throwError constructs and throws one of the standard error types.
+// throwError constructs and throws one of the standard error types, its
+// message format with args applied as by fmt.Sprintf, which go vet checks its
+// callers against. A format without a verb is the message as it stands, and
+// is not parsed.
 func (r *Runtime) throwError(kind errorKind, format string, args ...any) error {
 	msg := format
-	if len(args) > 0 {
+	if len(args) > 0 || strings.IndexByte(format, '%') >= 0 {
 		msg = fmt.Sprintf(format, args...)
 	}
 	return r.throw(Obj(r.newError(kind, msg)))
@@ -678,6 +682,14 @@ func (r *Runtime) throwReferenceError(format string, args ...any) error {
 
 func (r *Runtime) throwSyntaxError(format string, args ...any) error {
 	return r.throwError(errSyntax, format, args...)
+}
+
+func (r *Runtime) throwEvalError(format string, args ...any) error {
+	return r.throwError(errEval, format, args...)
+}
+
+func (r *Runtime) throwURIError(format string, args ...any) error {
+	return r.throwError(errURI, format, args...)
 }
 
 // newError builds an error object of the given kind.

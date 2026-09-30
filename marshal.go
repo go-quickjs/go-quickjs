@@ -232,6 +232,14 @@ func throwGoError(rt *vm.Runtime, err error) error {
 			return rt.Stop(stopped)
 		}
 	}
+	return thrownGoError(rt, err)
+}
+
+// thrownGoError is the exception a Go error is thrown as, which is also the
+// reason a promise the host rejects with it is rejected with: the value it
+// already carries, a SyntaxError for source that failed to compile, or an
+// Error with its message.
+func thrownGoError(rt *vm.Runtime, err error) error {
 	var jsErr *Error
 	if errors.As(err, &jsErr) {
 		if jsErr.value.rt != rt {

@@ -174,11 +174,5 @@ func (h *HostPromise) RejectError(err error) {
 	h.Reject(h.rt.NewError("Error", err.Error()))
 }
 
-// ThrowTypeErrorf returns the error a native function returns to throw a
-// TypeError, which is what a host rejects a bad argument with.
-func (r *Runtime) ThrowTypeErrorf(format string, args ...any) error {
-	return r.throwTypeError(format, args...)
-}
-
 // EnqueueJob adds a microtask, which runs when the queue is next drained.
 func (r *Runtime) EnqueueJob(fn func()) { r.enqueueJob(fn) }

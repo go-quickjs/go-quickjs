@@ -546,8 +546,12 @@ rt.Set("readLater", func(name string) *quickjs.Promise {
 })
 ```
 
+`RejectError` rejects with what returning its error would throw: an `Error`
+carrying a Go error's message, or the error of another kind a `Throw*Error`
+method made, as in `p.RejectError(rt.ThrowTypeError("not a file: %s", name))`.
+
 `NewObject`, `NewArray`, `NewBytes`, `NewError` and `Throw` build the values a
-marshalled Go value cannot express, and the `Throw*Error` methods the errors; `Value.Bytes` reads a typed array back.
+marshalled Go value cannot express; `Value.Bytes` reads a typed array back.
 `OnUnhandledRejection` reports a promise nobody took.
 
 A host that emulates a browser's document can make its `document.all`:
