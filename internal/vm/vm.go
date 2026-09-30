@@ -1420,7 +1420,11 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 					stack[sp-1] = v
 					break
 				}
-				if v, ok := r.cachedProp(&cl.ic[in.B], o, cl.names[in.A]); ok {
+				if v, ok, err := r.cachedGet(&cl.ic[in.B], o, cl.names[in.A]); ok {
+					if err != nil {
+						vmErr = err
+						goto onError
+					}
 					stack[sp-1] = v
 					break
 				}

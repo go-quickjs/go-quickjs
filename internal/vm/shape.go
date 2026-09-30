@@ -315,6 +315,9 @@ type propCache struct {
 	p1, p2 *Object
 	s1, s2 *shape
 	idx    int32
+	// getter marks a read's entry for an accessor, whose getter is called:
+	// only cachedGet fills one, for OpGetProp.
+	getter bool
 	// fills counts the times the entry has been filled. A site that keeps
 	// meeting new shapes stops trying: filling costs a lookup of its own. A
 	// read then uses the runtime's shared cache.
@@ -334,8 +337,44 @@ func (r *Runtime) cachedProp(c *propCache, o *Object, key Atom) (Value, bool) {
 	if c.fills >= maxCacheFills {
 		return r.sharedProp(o, key)
 	}
-	r.fillPropCache(c, o, key)
+	r.fillPropCache(c, o, key, false)
 	return Undefined, false
+}
+
+// cachedGet is cachedProp for OpGetProp, whose cache may also remember an
+// accessor: a hit on one calls the getter, with o as this, as a call from the
+// interpreter's loop is made. A class's getter is read as often as a field.
+// It reports false for anything the cache does not answer, which is left to
+// getValueProp, and an error only with true.
+func (r *Runtime) cachedGet(c *propCache, o *Object, key Atom) (Value, bool, error) {
+	if h := c.holder(o); h != nil {
+		p := &h.props[c.idx]
+		if !c.getter {
+			if verifyShapes {
+				r.verifyPropCache(o, h, c, key)
+			}
+			return p.value, true, nil
+		}
+		if verifyShapes {
+			checkShape(o)
+			checkShape(h)
+			if p.key != key || p.flags&propAccessor == 0 {
+				panic("property cache's accessor is not where it was for " + r.atoms.name(key))
+			}
+		}
+		a := p.getterSetter()
+		if a == nil || a.getter == nil {
+			return Undefined, true, nil
+		}
+		v, err := r.callFromLoop(Obj(a.getter), Obj(o), nil)
+		return v, true, err
+	}
+	if c.fills >= maxCacheFills {
+		v, ok := r.sharedProp(o, key)
+		return v, ok, nil
+	}
+	r.fillPropCache(c, o, key, true)
+	return Undefined, false, nil
 }
 
 // holder is the object the cache says has the property for o, or nil if o is
@@ -395,7 +434,7 @@ func (r *Runtime) sharedProp(o *Object, key Atom) (Value, bool) {
 		}
 	}
 	var c propCache
-	r.fillPropCache(&c, o, key)
+	r.fillPropCache(&c, o, key, false)
 	if c.fills == 0 {
 		return Undefined, false
 	}
@@ -434,7 +473,9 @@ func synthesized(c Class, key Atom) bool {
 // classes whose tables are all there is to them for the key, and what is
 // found is a plain data property no more than two prototypes up. It only
 // looks; the read itself is done by the caller.
-func (r *Runtime) fillPropCache(c *propCache, o *Object, key Atom) {
+//
+// With accessors set, an accessor property is remembered too, for cachedGet.
+func (r *Runtime) fillPropCache(c *propCache, o *Object, key Atom, accessors bool) {
 	if c.fills >= maxCacheFills || key.IsIndex() || r.ensureShape(o) == nil {
 		return
 	}
@@ -445,11 +486,12 @@ func (r *Runtime) fillPropCache(c *propCache, o *Object, key Atom) {
 			return
 		}
 		if i := h.findOwn(key); i >= 0 {
-			if h.props[i].flags&(propAccessor|propPrivate|propDeleted|propUninit) != 0 {
+			getter := h.props[i].flags&propAccessor != 0
+			if h.props[i].flags&(propPrivate|propDeleted|propUninit) != 0 || getter && !accessors {
 				return
 			}
 			c.fills++
-			*c = propCache{shape: o.shape, idx: i, fills: c.fills}
+			*c = propCache{shape: o.shape, idx: i, fills: c.fills, getter: getter}
 			if depth >= 1 {
 				c.p1, c.s1 = up[0], up[0].shape
 			}

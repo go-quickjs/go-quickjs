@@ -222,3 +222,33 @@ func TestInstanceOfCache(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestGetterCache covers a property read whose cache remembers an accessor:
+// the getter is called with the object read as this, and the site must see
+// the getter redefined, removed, turned into a data property or thrown from.
+func TestGetterCache(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`class P { constructor(x) { this.x = x } get double() { return this.x * 2 } }
+		  class Q extends P {}
+		  function read(o) { return o.double }
+		  var r = []; for (var i = 1; i <= 3; i++) r.push(read(new P(i)), read(new Q(i * 10)))
+		  Object.defineProperty(P.prototype, "double", {get() { return "new " + this.x }, configurable: true})
+		  r.push(read(new Q(5)))
+		  Object.defineProperty(P.prototype, "double", {value: "data", configurable: true})
+		  r.push(read(new P(1)))
+		  delete P.prototype.double; r.push(read(new P(1)))
+		  r.join()`, "2,20,4,40,6,60,new 5,data,"},
+		{`var o = {get g() { throw new RangeError("no") }, set s(v) {}}
+		  function g(o) { return o.g } function s(o) { return o.s }
+		  var r = []; for (var i = 0; i < 3; i++) { try { g(o) } catch (e) { r.push(e.name) } r.push(s(o)) }
+		  r.join()`, "RangeError,,RangeError,,RangeError,"},
+		{`var log = [], base = {get who() { log.push(this.name); return this.name }}
+		  var mid = Object.create(base), a = Object.create(mid), b = Object.create(mid)
+		  a.name = "a"; b.name = "b"
+		  function who(o) { return o.who }
+		  [who(a), who(b), who(a), who(mid), log.length].join()`, "a,b,a,,4"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
