@@ -765,6 +765,7 @@ func (r *Runtime) initFunctionBuiltins() {
 	// script rely on `instanceof` meaning what it says.
 	defer func() {
 		if pd := p.getOwn(r.atoms.internSymbol(r.wellKnown.hasInstance)); pd != nil {
+			p.layoutChanged()
 			pd.flags &^= propWritable | propConfigurable
 		}
 	}()
@@ -2269,6 +2270,7 @@ func (r *Runtime) initSymbolBuiltins() {
 	// The method is not writable, which is how a script can tell it apart from
 	// one a program installed.
 	if pd := p.getOwn(r.atoms.internSymbol(r.wellKnown.toPrimitive)); pd != nil {
+		p.layoutChanged()
 		pd.flags &^= propWritable
 	}
 }

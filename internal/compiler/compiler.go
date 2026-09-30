@@ -488,6 +488,14 @@ func (c *compiler) finish() {
 
 // emit appends an instruction and returns its program counter.
 func (c *compiler) emit(op bytecode.Op, a, b uint32) int {
+	if (op == bytecode.OpGetProp || op == bytecode.OpGetPropThis || op == bytecode.OpSetProp ||
+		op == bytecode.OpNewObject) && b == 0 {
+		// Each property read and write has a cache of its own, numbered
+		// here, and so does each object literal, which keeps the shape its
+		// objects start from in it.
+		c.fn.PropSites++
+		b = c.fn.PropSites
+	}
 	if op == bytecode.OpGetLocal && c.lazyArguments && a == c.lazyArgumentsSlot {
 		// Every read of an arguments object made on demand makes it, but for
 		// the one a call of apply fuses with.

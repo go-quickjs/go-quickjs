@@ -1017,7 +1017,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// general read carries: no proxy trap, no exotic index, no
 			// prototype walk. The lookup cache is read here first, without
 			// the call findOwn is.
-			if x := env.index; x != nil {
+			if x := env.shapeIndex(); x != nil {
 				if c := &x.recent[name&15]; c.key == name && c.idx >= 0 && int(c.idx) < len(env.props) {
 					if p := &env.props[c.idx]; p.key == name &&
 						p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
@@ -1345,7 +1345,10 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			cl.scope().setOwnRaw(name, uninitialized, flags)
 		case bytecode.OpInitModuleLex:
 			name := cl.names[in.A]
-			if p := cl.scope().getOwn(name); p != nil {
+			if env := cl.scope(); env.getOwn(name) != nil {
+				// Its attributes change, so its layout does.
+				env.layoutChanged()
+				p := env.getOwn(name)
 				sp--
 				p.value = stack[sp]
 				p.flags &^= propUninit
@@ -1393,11 +1396,20 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 
 		// --- Properties ---------------------------------------------------
 		case bytecode.OpGetProp:
-			// A plain property of an ordinary object is read here; anything
-			// else by getValueProp.
+			// A plain property of an ordinary object's own small table is
+			// read here, which is as quick as the site's cache would be. What
+			// the cache answers -- a property up the prototype chain, or in
+			// a larger table -- is read by cachedProp, out of line: the
+			// checks it makes would otherwise make every other instruction
+			// here slower. Anything else is getValueProp's.
 			obj := stack[sp-1]
 			if obj.IsObject() {
-				if v, ok := plainOwn(obj.Object(), cl.names[in.A]); ok {
+				o := obj.Object()
+				if v, ok := plainOwn(o, cl.names[in.A]); ok {
+					stack[sp-1] = v
+					break
+				}
+				if v, ok := r.cachedProp(&cl.ic[in.B], o, cl.names[in.A]); ok {
 					stack[sp-1] = v
 					break
 				}
@@ -1411,7 +1423,14 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			sp = pushAt(stack, sp, v)
 		case bytecode.OpGetPropThis:
 			// Leave the receiver beneath the value so a method call can use it.
+			// The site's cache is tried first, as for OpGetProp.
 			recv := stack[sp-1]
+			if recv.IsObject() {
+				if v, ok := r.cachedProp(&cl.ic[in.B], recv.Object(), cl.names[in.A]); ok {
+					sp = pushAt(stack, sp, v)
+					break
+				}
+			}
 			v, err := r.getValueProp(recv, cl.names[in.A])
 			if err != nil {
 				vmErr = err
@@ -1423,6 +1442,16 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			val := stack[sp]
 			sp--
 			obj := stack[sp]
+			if obj.IsObject() {
+				// The site's cache answers a write to a property the object
+				// has, or one it adds as objects of its shape did before;
+				// setPropCached does anything else as setValueProp would.
+				if err := r.setPropCached(&cl.ic[in.B], obj.Object(), cl.names[in.A], val, cl.fn.Strict); err != nil {
+					vmErr = err
+					goto onError
+				}
+				break
+			}
 			if err := r.setValueProp(obj, cl.names[in.A], val, cl.fn.Strict); err != nil {
 				vmErr = err
 				goto onError
@@ -1561,6 +1590,14 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			val := stack[sp]
 			obj := stack[sp-1]
 			if obj.IsObject() {
+				// An object whose layout has been extended by this key before
+				// cannot have it: the property is appended without a search.
+				if o := obj.Object(); o.class == ClassObject && o.flags&objExtensible != 0 {
+					if next := o.transition(cl.names[in.A], propDefault); next != nil {
+						o.appendTransition(Property{key: cl.names[in.A], flags: propDefault, value: val}, next)
+						break
+					}
+				}
 				if err := r.defineOwnProp(obj.Object(), cl.names[in.A], val, propDefault); err != nil {
 					vmErr = err
 					goto onError
@@ -2300,7 +2337,11 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// The literal says how many properties it will write, so the table
 			// is sized for them -- and, when there are few enough, carried in
 			// the object's own allocation.
-			sp = pushAt(stack, sp, Obj(newLiteralObject(r.proto.object, ClassObject, int(in.A))))
+			// Its objects start from a shape of the literal's own, so that the
+			// properties it writes take the one transition out of each.
+			o := newLiteralObject(r.proto.object, ClassObject, int(in.A))
+			o.shape = r.shapes.siteRoot(&cl.ic[in.B])
+			sp = pushAt(stack, sp, Obj(o))
 		case bytecode.OpNewArray:
 			n := int(in.A)
 			arr := r.newArrayFrom(stack[sp-n : sp])
@@ -3712,7 +3753,7 @@ func (r *Runtime) makeClosure(f *frame, c Value) *Object {
 	// The environment is inherited, so a function declared in a module sees
 	// the module's bindings rather than only the globals.
 	*child = closure{
-		fn: tmpl.fn, names: tmpl.names, consts: tmpl.consts,
+		fn: tmpl.fn, names: tmpl.names, consts: tmpl.consts, ic: tmpl.ic,
 		realm: r.Realm, env: f.cl.env, upvalues: upvalues,
 	}
 	for i, desc := range tmpl.fn.Upvalues {
@@ -4058,7 +4099,12 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 	if fd.closure != nil {
 		props = int(fd.closure.fn.ThisProps)
 	}
-	this := Obj(newLiteralObject(proto, ClassObject, props))
+	obj := newLiteralObject(proto, ClassObject, props)
+	if fd.closure != nil {
+		// The constructor's objects start from a shape of its own.
+		obj.shape = r.shapes.ctorRoot(fd)
+	}
+	this := Obj(obj)
 
 	// A base class gives the instance its private methods and fields before the
 	// constructor body runs, so the body finds them already there. A derived one
@@ -5021,6 +5067,7 @@ func (r *Runtime) freezeArray(o *Object) *Object {
 	// The length is synthesized rather than stored, so its writability is a
 	// flag rather than a property attribute.
 	o.flags &^= objExtensible | objArrayLengthWritable
+	o.layoutChanged()
 	for i := range o.props {
 		o.props[i].flags &^= propWritable | propConfigurable
 	}

@@ -838,6 +838,7 @@ func (r *Runtime) initProxyBuiltins() {
 	// the proxy, never an instance of anything -- so the constructor has no
 	// prototype property to hand out.
 	if pr := ctor.getOwn(atomPrototype); pr != nil {
+		ctor.layoutChanged()
 		pr.flags |= propConfigurable
 	}
 	ctor.deleteOwn(atomPrototype)

@@ -125,6 +125,8 @@ type Runtime struct {
 	// wellKnown holds the well-known symbols, which the interpreter consults
 	// for iteration, coercion and instanceof.
 	wellKnown wellKnownSymbols
+	// shapes is the runtime's tree of object layouts; see shape.go.
+	shapes *shapeTree
 	// hasInstanceAtom is Symbol.hasInstance's atom, which every instanceof
 	// looks up.
 	hasInstanceAtom Atom
@@ -444,6 +446,9 @@ type closure struct {
 	names []Atom
 	// consts caches the materialized constant pool for the same reason.
 	consts []Value
+	// ic is the caches of the template's property reads, shared by every
+	// closure made from it in the runtime; see propCache.
+	ic []propCache
 	// realm is the realm the closure belongs to.
 	realm *Realm
 	// env is the environment an unqualified name resolves against. It is nil

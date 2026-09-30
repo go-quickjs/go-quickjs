@@ -52,12 +52,14 @@ func newRealm(r *Runtime) *Realm {
 // initRealm builds the current realm's intrinsics and global object.
 func (r *Runtime) initRealm() {
 	r.building = true
+	r.shapes.building = true
 	r.initIntrinsics()
 	r.initGlobals()
 	r.registerIntrinsics()
 	// What is left of the slab would be kept alive by the objects cut from it,
 	// and a realm is built once.
 	r.funcSlab, r.building = nil, false
+	r.shapes.building = false
 }
 
 // Global returns the realm's global object.

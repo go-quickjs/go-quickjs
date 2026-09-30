@@ -150,9 +150,11 @@ type Object struct {
 	// props holds named and symbol-keyed properties in insertion order, which
 	// is the order enumeration must report them in.
 	props []Property
-	// index maps a key to its slot in props, built lazily once the object grows
-	// past linearScanLimit.
-	index *propIndex
+	// shape is the table's layout as an identity a property cache can
+	// remember, and holds the table's lookup index; see shape.go. Whatever
+	// changes the table's keys, their order or their attributes keeps it
+	// right: appendProp and layoutChanged.
+	shape *shape
 
 	// elems holds dense array elements. Arrays and other index-keyed objects
 	// keep their elements here rather than in props, so that a[i] is a slice
@@ -523,7 +525,7 @@ func (x *propIndex) add(key Atom, i int32) {
 
 // findOwn returns the index of an own property in props, or -1.
 func (o *Object) findOwn(key Atom) int32 {
-	if x := o.index; x != nil {
+	if x := o.shapeIndex(); x != nil {
 		c := &x.recent[key&15]
 		if c.key == key {
 			if c.idx < 0 {
@@ -552,13 +554,20 @@ func (o *Object) findOwn(key Atom) int32 {
 
 // buildIndex populates the lookup map once an object has enough properties for
 // it to pay off.
+//
+// The index is the shape's: an object with no shape is given one of its own
+// to hold it.
 func (o *Object) buildIndex() {
-	o.index = newPropIndex(len(o.props) * 2)
+	if o.shape == nil {
+		o.shape = &shape{unique: true, n: int32(len(o.props))}
+	}
+	x := newPropIndex(len(o.props) * 2)
 	for i := range o.props {
 		if o.props[i].flags&propDeleted == 0 {
-			o.index.add(o.props[i].key, int32(i))
+			x.add(o.props[i].key, int32(i))
 		}
 	}
+	o.shape.index = x
 }
 
 // getOwn returns an own property, excluding dense elements.
@@ -595,6 +604,9 @@ func (o *Object) reserveProps(n int) {
 func (o *Object) setOwnRaw(key Atom, value Value, flags propFlags) {
 	if i := o.findOwn(key); i >= 0 {
 		p := &o.props[i]
+		if p.flags != flags {
+			o.layoutChanged()
+		}
 		p.value, p.flags = value, flags
 		return
 	}
@@ -615,6 +627,7 @@ func (o *Object) prependProps(ps []Property) {
 	if len(ps) == 0 {
 		return
 	}
+	o.layoutChanged()
 	inline := o.flags&objInlineProps != 0
 	old := o.props[:cap(o.props)]
 	o.props = append(ps[:len(ps):len(ps)], o.props...)
@@ -622,9 +635,10 @@ func (o *Object) prependProps(ps []Property) {
 		clear(old)
 		o.flags &^= objInlineProps
 	}
-	if o.index != nil {
-		o.buildIndex()
-	} else if len(o.props) > linearScanLimit {
+	if o.shape != nil {
+		o.shape.n = int32(len(o.props))
+	}
+	if o.shapeIndex() != nil || len(o.props) > linearScanLimit {
 		o.buildIndex()
 	}
 }
@@ -648,13 +662,17 @@ func (o *Object) insertProp(at int, p Property) {
 		o.appendProp(p)
 		return
 	}
+	o.layoutChanged()
 	if o.flags&objInlineProps != 0 && len(o.props) == cap(o.props) {
 		o.leaveInlineProps(1)
 	}
 	o.props = append(o.props, Property{})
 	copy(o.props[at+1:], o.props[at:])
 	o.props[at] = p
-	if o.index != nil || len(o.props) > linearScanLimit {
+	if o.shape != nil {
+		o.shape.n = int32(len(o.props))
+	}
+	if o.shapeIndex() != nil || len(o.props) > linearScanLimit {
 		o.buildIndex()
 	}
 }
@@ -664,12 +682,7 @@ func (o *Object) appendProp(p Property) {
 		o.leaveInlineProps(1)
 	}
 	o.props = append(o.props, p)
-	switch {
-	case o.index != nil:
-		o.index.add(p.key, int32(len(o.props)-1))
-	case len(o.props) > linearScanLimit:
-		o.buildIndex()
-	}
+	o.shapeAdded(p)
 }
 
 // deleteOwn removes an own property, reporting whether it existed and was
@@ -683,9 +696,10 @@ func (o *Object) deleteOwn(key Atom) bool {
 		return false
 	}
 	// Tombstone rather than splice, so that the remaining indices stay valid.
+	o.layoutChanged()
 	o.props[i] = Property{key: atomEmpty, flags: propDeleted}
-	if o.index != nil {
-		delete(o.index.slots, key)
+	if x := o.shapeIndex(); x != nil {
+		delete(x.slots, key)
 	}
 	return true
 }
@@ -987,9 +1001,10 @@ func (o *Object) setArrayLength(n uint32) {
 		for i := range o.props {
 			p := &o.props[i]
 			if key := p.key; p.flags&propDeleted == 0 && key.IsIndex() && key.Index() >= n {
+				o.layoutChanged()
 				o.props[i] = Property{key: atomEmpty, flags: propDeleted}
-				if o.index != nil {
-					delete(o.index.slots, key)
+				if x := o.shapeIndex(); x != nil {
+					delete(x.slots, key)
 				}
 			}
 		}
@@ -1019,6 +1034,9 @@ type funcData struct {
 	// homeObject is the object a method was defined on, which `super` resolves
 	// against.
 	homeObject *Object
+	// ctorShape is the empty shape the objects the function constructs start
+	// from, made when it first constructs one; see siteRoot.
+	ctorShape *shape
 	// ctorKind says how the function responds to `new`. It sits with the
 	// flags below, which share its word.
 	ctorKind ctorKind

@@ -396,6 +396,7 @@ func (r *Runtime) initDateBuiltins() {
 	// The method is not writable, which is how a script can tell it apart from
 	// one a program installed.
 	if pd := p.getOwn(r.atoms.internSymbol(r.wellKnown.toPrimitive)); pd != nil {
+		p.layoutChanged()
 		pd.flags &^= propWritable
 	}
 }

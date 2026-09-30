@@ -57,7 +57,7 @@ func (r *Runtime) getProp(obj *Object, key Atom, receiver Value) (Value, error) 
 		// which is where a method is, rather than asking the table again.
 		if o.flags&objMappedArguments == 0 {
 			var p *Property
-			if o.index == nil {
+			if o.shapeIndex() == nil {
 				for i := range o.props {
 					if o.props[i].key == key && o.props[i].flags&propDeleted == 0 {
 						p = &o.props[i]
@@ -299,7 +299,7 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 	// what most assignments are, and the walk below establishes for each step
 	// what this settles once: no proxy, no exotic own property, no receiver in
 	// between, and a plain writable data property to write to.
-	if rcv == obj && obj.class == ClassObject && obj.index == nil {
+	if rcv == obj && obj.class == ClassObject && obj.shapeIndex() == nil {
 		own := false
 		for i := range obj.props {
 			p := &obj.props[i]
@@ -870,6 +870,9 @@ func (r *Runtime) defineAccessor(o *Object, key Atom, getter, setter *Object, fl
 			if setter != nil {
 				a.setter = setter
 			}
+			if p.flags != flags {
+				o.layoutChanged()
+			}
 			p.flags = flags
 			return
 		}
@@ -918,7 +921,7 @@ func (r *Runtime) toElementValue(t *typedArrayData, v Value) (Value, error) {
 // property further up -- reports false, for getValueProp to answer. It is
 // small enough to be inlined where the interpreter reads a property.
 func plainOwn(o *Object, key Atom) (Value, bool) {
-	if o.class != ClassObject || o.index != nil {
+	if o.class != ClassObject || o.shapeIndex() != nil {
 		return Undefined, false
 	}
 	for i := range o.props {

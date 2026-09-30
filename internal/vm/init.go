@@ -39,8 +39,9 @@ func New(cfg Config) *Runtime {
 	maxFrames = min(maxFrames, maxGoRecursion)
 
 	r := &Runtime{
-		atoms: newAtomTable(),
-		stack: newStack(stackSize),
+		atoms:  newAtomTable(),
+		shapes: &shapeTree{},
+		stack:  newStack(stackSize),
 		// The frames are allocated in blocks as the depth grows. None of the
 		// blocks ever moves, which is what lets the interpreter hold a *frame
 		// across nested calls; what bounds recursion is the depth limit
@@ -186,6 +187,9 @@ func (r *Runtime) initWellKnownSymbols() {
 // be created.
 func (r *Runtime) initIntrinsics() {
 	r.proto.object = newObject(nil, ClassObject)
+	// The root of every ordinary chain has the first shape of the runtime's
+	// tree, which every object inheriting from it joins.
+	r.proto.object.shape = newUniqueShape(r.shapes, 0, nil)
 	// Every ordinary chain ends here, so giving this object a prototype would
 	// put whatever it was given above everything in the realm. It is refused
 	// however extensible the object is.
