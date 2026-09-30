@@ -146,16 +146,28 @@ type matcher struct {
 // A pattern used again while a match is running -- a replacement callback that
 // uses the same one -- gets a matcher of its own, as does every match of a
 // pattern marked concurrent.
+// maxLentFrames is the most choice points and capture writes a lent matcher
+// keeps room for: some kilobytes, for each pattern a runtime keeps compiled.
+const maxLentFrames = 256
+
 func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error, sticky bool) ([]int, error) {
-	m := re.scratch
+	// A clone with no matcher of its own borrows its lender's.
+	owner, m := re, re.scratch
+	if m == nil && re.lender != nil {
+		owner, m = re.lender, re.lender.scratch
+	}
 	if m == nil || m.busy || re.concurrent {
 		m = &matcher{
 			caps:       make([]int, 2*(re.groupCount+1)),
 			counters:   make([]int, re.prog.counters),
 			emptyMarks: make([]int, re.prog.emptyChecks),
 		}
-		if re.scratch == nil && !re.concurrent {
-			re.scratch = m
+		switch {
+		case re.concurrent:
+		case owner.scratch == nil:
+			owner.scratch = m
+		case re.scratch == nil:
+			owner, re.scratch = re, m
 		}
 	}
 	// The input is the matcher's own, rather than made for each match.
@@ -172,6 +184,12 @@ func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error,
 		// The input is not held on to: it would keep the subject string alive
 		// for as long as the pattern.
 		m.input, m.in, m.check = input{}, nil, nil
+		// A lender keeps only a small matcher, since it lives as long as
+		// the runtime's cache of patterns: one a match has made large is
+		// the borrower's from now on, and goes when the borrower does.
+		if owner != re && owner.scratch == m && (cap(m.stack) > maxLentFrames || cap(m.trail) > maxLentFrames) {
+			owner.scratch, re.scratch = nil, m
+		}
 	}()
 
 	first := re.prog.first

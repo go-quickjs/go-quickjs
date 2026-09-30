@@ -48,11 +48,25 @@ func (r *Runtime) newRegExp(source, flags string) (Value, error) {
 	if err != nil {
 		return Undefined, r.throwSyntaxError("%s", err.Error())
 	}
-	o := newObject(r.proto.regexp, ClassRegExp)
-	o.data = &regexpData{re: re, legacy: true, realm: r.Realm}
+	// The object, its data, its clone of the pattern and its table are one
+	// allocation: a literal in a loop is a new RegExp each time round.
+	ro := &regexpObject{Object: Object{proto: r.proto.regexp, class: ClassRegExp, flags: objExtensible | objInlineProps}}
+	ro.props = ro.inline[:0]
+	re.CloneInto(&ro.re)
+	ro.rd = regexpData{re: &ro.re, legacy: true, realm: r.Realm}
+	ro.data = &ro.rd
 	// lastIndex is writable but neither enumerable nor configurable.
-	o.setOwnRaw(atomLastIndex, Int(0), propWritable)
-	return Obj(o), nil
+	ro.setOwnRaw(atomLastIndex, Int(0), propWritable)
+	return Obj(&ro.Object), nil
+}
+
+// regexpObject is a RegExp with its data, its clone of the compiled pattern
+// and room for lastIndex, its one own property, in the same allocation.
+type regexpObject struct {
+	Object
+	rd     regexpData
+	re     regexp.Regexp
+	inline [1]Property
 }
 
 // regexpKey is a pattern as it was written: its source and its flags.
@@ -66,14 +80,13 @@ const maxRegExpCache = 256
 // same pattern from a string over and over, but the pattern is the same one,
 // which need not be parsed and compiled again.
 //
-// Each RegExp is given a clone, which shares the compiled program but has a
-// matcher of its own: the matcher grows to fit the longest subject the
-// RegExp has matched, and kept in the cache instead, it would outlive the
-// RegExp by as long as the runtime.
+// What it returns is the cache's: each RegExp is given a clone, which shares
+// the compiled program and borrows the cached pattern's matcher while that
+// one stays small (see regexp.Regexp.CloneInto).
 func (r *Runtime) compileRegExp(source, flags string) (*regexp.Regexp, error) {
 	key := regexpKey{source, flags}
 	if re, ok := r.regexpCache[key]; ok {
-		return re.Clone(), nil
+		return re, nil
 	}
 	re, err := regexp.Compile(source, flags)
 	if err != nil {
@@ -83,7 +96,7 @@ func (r *Runtime) compileRegExp(source, flags string) (*regexp.Regexp, error) {
 		r.regexpCache = make(map[regexpKey]*regexp.Regexp)
 	}
 	r.regexpCache[key] = re
-	return re.Clone(), nil
+	return re, nil
 }
 
 // isRegExpLike reports whether a value says it is a regular expression.

@@ -16,6 +16,9 @@ type Regexp struct {
 	// concurrent marks a pattern goroutines match with at once, which lends
 	// no matcher: each match makes its own.
 	concurrent bool
+	// lender is the pattern a clone was made from, whose matcher the clone
+	// borrows when it has none of its own; see exec.
+	lender *Regexp
 }
 
 // Compile parses and compiles a pattern.
@@ -63,9 +66,24 @@ func Validate(source, flags string) error {
 // stack and the capture trail, which grow to fit the longest subject -- lives
 // and dies with the clone.
 func (re *Regexp) Clone() *Regexp {
-	c := *re
+	c := new(Regexp)
+	re.CloneInto(c)
+	return c
+}
+
+// CloneInto makes c a clone of the pattern, as Clone does, in memory the
+// caller provides -- a field of a larger object, say, allocated with it.
+//
+// A clone matches with the matcher of the pattern it was cloned from while
+// that one is small and free: many clones of one pattern, most of them used
+// a few times, then share one rather than each making its own. A clone that
+// needs a large one keeps it, and it goes when the clone does.
+func (re *Regexp) CloneInto(c *Regexp) {
+	*c = *re
 	c.scratch = nil
-	return &c
+	if c.lender == nil {
+		c.lender = re
+	}
 }
 
 // Concurrent marks the pattern as one that goroutines will match with at the
