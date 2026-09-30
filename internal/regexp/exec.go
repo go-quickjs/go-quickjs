@@ -83,6 +83,10 @@ func (in *input) before(i int) (rune, int) {
 }
 
 // frame is a saved choice point.
+// greedyFrame marks, in counterIdx, the choice point of an opGreedy run:
+// pos is where the run now ends and counterVal the least it may end at.
+const greedyFrame = -2
+
 type frame struct {
 	pc  int
 	pos int
@@ -438,6 +442,27 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 			}
 			pc++
 
+		case opGreedy:
+			// The run is taken whole, and each unit of it counts as the step
+			// it would have been.
+			item := code[pc+1]
+			units := m.in.units
+			end := pos
+			for end < len(units) && m.unitMatches(item, units[end]) {
+				end++
+			}
+			m.steps += end - pos
+			if end-pos < in.arg {
+				goto backtrack
+			}
+			if lo := pos + in.arg; end > lo {
+				// One choice point stands for every shorter run, down to
+				// the least the loop may take.
+				m.push(frame{pc: pc + 2, pos: end, capsLen: len(m.trail), counterIdx: greedyFrame, counterVal: lo})
+			}
+			pos = end
+			pc += 2
+
 		case opEmptyCheck:
 			if in.arg2 == 0 {
 				// Entering an iteration: remember where it started.
@@ -469,6 +494,17 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 			f := m.stack[len(m.stack)-1]
 			m.stack = m.stack[:len(m.stack)-1]
 			m.undoCaps(f.capsLen)
+			if f.counterIdx == greedyFrame {
+				// A greedy run gives back one unit, and stays a choice
+				// point while it has more to give.
+				p := f.pos - 1
+				if p > f.counterVal {
+					f.pos = p
+					m.stack = append(m.stack, f)
+				}
+				pc, pos = f.pc, p
+				break
+			}
 			if f.counterIdx >= 0 && f.pc == -1 {
 				m.counters[f.counterIdx] = f.counterVal
 				continue
@@ -506,6 +542,27 @@ func (m *matcher) push(f frame) {
 		f.counterIdx = -1
 	}
 	m.stack = append(m.stack, f)
+}
+
+// unitMatches reports whether one code unit is what a one-unit matcher --
+// the instruction opGreedy repeats -- matches.
+func (m *matcher) unitMatches(in instr, u uint16) bool {
+	r := rune(u)
+	switch in.op {
+	case opChar:
+		return r == in.r
+	case opCharFold:
+		return canonical(r, m.prog.unicodeFold) == in.r
+	case opClass:
+		if r < 128 {
+			return m.prog.asciiClasses[in.arg][r>>6]&(1<<(r&63)) != 0
+		}
+		return m.prog.classes[in.arg].contains(r, m.prog.unicodeFold)
+	case opAny:
+		return true
+	default:
+		return !isLineTerminator(r)
+	}
 }
 
 // setCap records a capture write so that backtracking can undo it.

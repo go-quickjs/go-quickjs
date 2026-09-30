@@ -47,6 +47,12 @@ const (
 	// opEmptyCheck fails a repetition whose body matched nothing, which is what
 	// stops (a*)* from looping forever.
 	opEmptyCheck
+	// opGreedy is a greedy * or + of the one-unit matcher that follows it --
+	// a character, a class, a dot -- outside unicode mode and matching
+	// rightwards: it takes the longest run it can, at least arg units, and
+	// gives them back one at a time as the rest fails, from one choice point
+	// rather than one per unit.
+	opGreedy
 )
 
 // instr is one instruction of the program.
@@ -268,7 +274,30 @@ func (c *compiler) compileAlt(t nodeAlt) {
 //
 // The common unbounded forms get a two-instruction loop. A counted form uses a
 // runtime counter rather than being unrolled, so that {0,65535} is small.
+// greedyLoops turns opGreedy on; a test turns it off, to compare.
+var greedyLoops = true
+
+// oneUnit reports whether a node matches exactly one code unit outside unicode
+// mode, and compiles to one instruction that does: a character of the basic
+// plane, a class, a dot.
+func oneUnit(n node) bool {
+	switch t := n.(type) {
+	case nodeChar:
+		return t.r <= 0xFFFF
+	case nodeAny, nodeClass:
+		return true
+	}
+	return false
+}
+
 func (c *compiler) compileRepeat(t nodeRepeat) {
+	if greedyLoops && t.greedy && t.max < 0 && t.min <= 1 && !c.reverse &&
+		c.flags&(FlagUnicode|FlagUnicodeSets) == 0 && oneUnit(t.item) {
+		c.emit(instr{op: opGreedy, arg: t.min})
+		c.compile(t.item)
+		return
+	}
+
 	// A body that can match the empty string needs a guard, or an unbounded
 	// repetition of it would never terminate -- and an iteration that matched
 	// nothing is not one, so whatever it captured is undone.
