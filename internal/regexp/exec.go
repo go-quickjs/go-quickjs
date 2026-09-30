@@ -244,7 +244,7 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 			return false, ErrComplexity
 		}
 
-		in := code[pc]
+		in := &code[pc]
 		switch in.op {
 		case opChar:
 			r, w := m.read(in.rev, pos)
