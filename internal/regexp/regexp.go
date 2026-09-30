@@ -13,6 +13,9 @@ type Regexp struct {
 	// backtracking stack and the capture trail are allocated once rather than
 	// per match.
 	scratch *matcher
+	// concurrent marks a pattern goroutines match with at once, which lends
+	// no matcher: each match makes its own.
+	concurrent bool
 }
 
 // Compile parses and compiles a pattern.
@@ -64,6 +67,12 @@ func (re *Regexp) Clone() *Regexp {
 	c.scratch = nil
 	return &c
 }
+
+// Concurrent marks the pattern as one that goroutines will match with at the
+// same time, as a Go program shares a compiled pattern: each match then makes
+// the state it needs rather than borrowing the pattern's, which is only safe
+// for one match at a time. It is called before the pattern is shared.
+func (re *Regexp) Concurrent() { re.concurrent = true }
 
 // Source returns the pattern text.
 func (re *Regexp) Source() string { return re.source }

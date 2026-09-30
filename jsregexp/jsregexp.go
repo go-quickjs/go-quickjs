@@ -109,6 +109,9 @@ func newRegexp(compiled *re.Regexp, pattern, flags string) *Regexp {
 			}
 		}
 	}
+	// A Regexp is shared between goroutines, so its matches do not share a
+	// matcher.
+	compiled.Concurrent()
 	return &Regexp{re: compiled, src: pattern, flags: flags, names: names}
 }
 

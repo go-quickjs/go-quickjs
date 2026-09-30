@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/jsregexp"
@@ -440,4 +441,34 @@ func ExampleRegexp_ReplaceAllString() {
 	out, _ := re.ReplaceAllString("mail bob@example now", "$2/$1")
 	fmt.Println(out)
 	// Output: mail example/bob now
+}
+
+// TestConcurrentMatching pins that goroutines can match with one Regexp at
+// once, as the type promises: each match has state of its own, rather than
+// the state the pattern lends to one match at a time. Run with -race, a
+// shared matcher is a reported race; without, it shows as wrong captures.
+func TestConcurrentMatching(t *testing.T) {
+	re := jsregexp.MustCompile(`(a+)(b+)?c`, "")
+	subjects := []string{"xxaaabbc", "ac", "zzaabc", "aaaaaaaaaac"}
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < 500; i++ {
+				s := subjects[(g+i)%len(subjects)]
+				want, err := jsregexp.MustCompile(`(a+)(b+)?c`, "").FindStringSubmatch(s)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				got, err := re.FindStringSubmatch(s)
+				if err != nil || fmt.Sprint(got) != fmt.Sprint(want) {
+					t.Errorf("%q: got %q, %v; want %q", s, got, err, want)
+					return
+				}
+			}
+		}(g)
+	}
+	wg.Wait()
 }

@@ -144,16 +144,17 @@ type matcher struct {
 // the same pattern over and over is what a program does with one, and its
 // backtracking stack and capture trail are what it spends its allocations on.
 // A pattern used again while a match is running -- a replacement callback that
-// uses the same one -- gets a matcher of its own.
+// uses the same one -- gets a matcher of its own, as does every match of a
+// pattern marked concurrent.
 func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error, sticky bool) ([]int, error) {
 	m := re.scratch
-	if m == nil || m.busy {
+	if m == nil || m.busy || re.concurrent {
 		m = &matcher{
 			caps:       make([]int, 2*(re.groupCount+1)),
 			counters:   make([]int, re.prog.counters),
 			emptyMarks: make([]int, re.prog.emptyChecks),
 		}
-		if re.scratch == nil {
+		if re.scratch == nil && !re.concurrent {
 			re.scratch = m
 		}
 	}
