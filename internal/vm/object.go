@@ -1,5 +1,7 @@
 package vm
 
+import "unsafe"
+
 // Class identifies an object's exotic behaviour. Most objects are ClassObject
 // and behave ordinarily; the rest have internal slots or overridden property
 // semantics that the interpreter must know about.
@@ -221,6 +223,20 @@ type literalObject2 struct {
 	inline [2]Property
 }
 
+// largeLiteralObject is literalObject for an object that says it will have
+// four to eight properties, each in the size class its count needs; seven
+// takes the room for eight, a size class of its own being no smaller.
+type largeLiteralObject[A [4]Property | [5]Property | [6]Property | [8]Property] struct {
+	Object
+	inline A
+}
+
+func newLargeLiteralObject[A [4]Property | [5]Property | [6]Property | [8]Property](o Object) *Object {
+	lo := &largeLiteralObject[A]{Object: o}
+	lo.props = unsafe.Slice(&lo.inline[0], len(lo.inline))[:0]
+	return &lo.Object
+}
+
 // newLiteralObject returns an object that is about to be given n properties.
 // One that says none -- a constructor that fills its object in elsewhere --
 // gets the room for three.
@@ -235,6 +251,14 @@ func newLiteralObject(proto *Object, class Class, n int) *Object {
 		lo := &literalObject2{Object: o}
 		lo.props = lo.inline[:0]
 		return &lo.Object
+	case 4:
+		return newLargeLiteralObject[[4]Property](o)
+	case 5:
+		return newLargeLiteralObject[[5]Property](o)
+	case 6:
+		return newLargeLiteralObject[[6]Property](o)
+	case 7, 8:
+		return newLargeLiteralObject[[8]Property](o)
 	}
 	if n > len(literalObject{}.inline) {
 		o := &Object{proto: proto, class: class, flags: objExtensible}

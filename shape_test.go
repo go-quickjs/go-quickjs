@@ -158,3 +158,26 @@ func TestPropertyCaches(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestLiteralSizes covers object literals of every size that carries its
+// table in its own allocation, grown past it and changed afterwards.
+func TestLiteralSizes(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var r = []
+		  for (var n = 0; n <= 10; n++) {
+		    var o = n == 0 ? {} : n == 1 ? {a: 1} : n == 2 ? {a: 1, b: 2} : n == 3 ? {a: 1, b: 2, c: 3} :
+		      n == 4 ? {a: 1, b: 2, c: 3, d: 4} : n == 5 ? {a: 1, b: 2, c: 3, d: 4, e: 5} :
+		      n == 6 ? {a: 1, b: 2, c: 3, d: 4, e: 5, f: 6} : n == 7 ? {a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7} :
+		      n == 8 ? {a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8} :
+		      n == 9 ? {a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9} :
+		      {a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9, j: 10}
+		    o.x = "x"; o.y = "y"; delete o.a; o.a = 0
+		    r.push(Object.keys(o).join("") + "=" + Object.values(o).join(""))
+		  }
+		  r.join()`, "xya=xy0,xya=xy0,bxya=2xy0,bcxya=23xy0,bcdxya=234xy0,bcdexya=2345xy0,bcdefxya=23456xy0," +
+			"bcdefgxya=234567xy0,bcdefghxya=2345678xy0,bcdefghixya=23456789xy0,bcdefghijxya=2345678910xy0"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
