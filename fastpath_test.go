@@ -17,8 +17,32 @@ func TestNumberAndCaseFastPaths(t *testing.T) {
 		{`var s = "Hello, World 123!";
 		  [s.toUpperCase(), s.toLowerCase(), "abc".toLowerCase() === "abc", "".toUpperCase(),
 		   "@[\x60{".toUpperCase(), "@[\x60{".toLowerCase(), "straße".toUpperCase(), "ΑΣ".toLowerCase(),
-		   "i̇".toUpperCase() === "İ"].join("|")`,
+		   "i\u0307".toUpperCase() === "I\u0307"].join("|")`,
 			"HELLO, WORLD 123!|hello, world 123!|true||@[`{|@[`{|STRASSE|ας|true"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// TestMathCallFastPaths covers Math functions applied without a call: a
+// function of one number, and min or max of two. Anything else -- an argument
+// to convert, one missing, a replaced method -- still makes the call, with
+// its conversions in order and its frame in a stack trace.
+func TestMathCallFastPaths(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`[Math.floor(-1.5), Math.ceil(-0.5), Math.round(-2.5), Math.round(2.5), Math.sign(-0), Math.abs(-0),
+		   Math.sqrt(-1), Math.trunc(-0.9), Math.fround(5.5), Math.floor(), Math.floor(NaN), Math.cbrt(27)]
+		   .map(v => Object.is(v, -0) ? "-0" : String(v)).join()`, "-2,-0,-2,3,-0,0,NaN,-0,5.5,NaN,NaN,3"},
+		{`var log = [], o = {valueOf() { log.push("v"); return 4.5 }};
+		  [Math.floor(o), Math.floor("7.9"), Math.floor.call(null, 2.5), Math.abs(-3, o), log.join("")].join()`, "4,7,2,3,v"},
+		{`function f(x) { return Math.floor(x) }
+		  var saved = Math.floor, r = [f(1.5)]; Math.floor = x => "mine " + x; r.push(f(1.5)); Math.floor = saved; r.push(f(1.5))
+		  try { f({valueOf() { throw new Error("boom") }}) } catch (e) { r.push(/Math\.floor|floor/.test(e.stack)) }
+		  r.join()`, "1,mine 1.5,1,true"},
+		{`[Math.max(1, 2), Math.min(1, 2), Math.max(-0, 0), Math.max(0, -0), Math.min(-0, 0), Math.min(0, -0),
+		   Math.max(NaN, 1), Math.min(1, NaN), Math.max(), Math.min(), Math.max(3), Math.max(1, 5, 2), Math.min(2, "1")]
+		   .map(v => Object.is(v, -0) ? "-0" : String(v)).join()`, "2,1,0,0,-0,-0,NaN,NaN,-Infinity,Infinity,3,5,1"},
 	}
 	for _, tc := range cases {
 		checkEval(t, tc.src, tc.want)

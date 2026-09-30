@@ -1073,6 +1073,10 @@ type funcData struct {
 	// which for most functions is nothing at all.
 	protoPending bool
 
+	// unary is, for a Math function of one number, its place in unaryMath:
+	// the call instruction applies it to a number itself, without a call.
+	unary uint8
+
 	// arrow marks a function with no bindings of its own. An arrow does not
 	// get this, new.target, super or arguments from its call: it uses the ones
 	// in scope where it was written, which is the whole reason to reach for

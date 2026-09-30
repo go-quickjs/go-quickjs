@@ -4,6 +4,7 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/fdlibm"
 	"math"
 	"math/rand/v2"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -2416,36 +2417,18 @@ func (r *Runtime) initMathBuiltins() {
 	r.defConst(m, "SQRT2", Float(math.Sqrt2))
 	r.defConst(m, "SQRT1_2", Float(math.Sqrt(0.5)))
 
-	// The single-argument functions differ only in which Go function they call.
-	// The transcendental ones are V8's, fdlibm's, which answer to the last bit
-	// as V8 does, where Go's differ there and further in places.
-	unary := map[string]func(float64) float64{
-		"abs": math.Abs, "floor": math.Floor, "ceil": math.Ceil,
-		"sqrt": math.Sqrt, "cbrt": fdlibm.Cbrt, "sin": fdlibm.Sin, "cos": fdlibm.Cos,
-		"tan": fdlibm.Tan, "asin": fdlibm.Asin, "acos": fdlibm.Acos, "atan": fdlibm.Atan,
-		"sinh": fdlibm.Sinh, "cosh": fdlibm.Cosh, "tanh": fdlibm.Tanh,
-		"asinh": fdlibm.Asinh, "acosh": fdlibm.Acosh, "atanh": fdlibm.Atanh,
-		"log": fdlibm.Log, "log2": fdlibm.Log2, "log10": fdlibm.Log10,
-		"log1p": fdlibm.Log1p, "exp": fdlibm.Exp, "expm1": fdlibm.Expm1,
-		"trunc": math.Trunc,
-		// JavaScript rounds half away from zero for positive values but half
-		// up overall, which is neither math.Round nor math.Floor.
-		"round":  jsRound,
-		"sign":   jsSign,
-		"fround": func(f float64) float64 { return float64(float32(f)) },
-		// The half-precision counterpart, which is how a script sees what a
-		// Float16Array would store without allocating one.
-		"f16round": func(f float64) float64 { return float16frombits(float16bits(f)) },
-	}
-	for name, fn := range unary {
-		f := fn
-		r.defMethod(m, name, 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	// The single-argument functions differ only in which Go function they
+	// call; see unaryMathFuncs.
+	for i, name := range unaryMathNames {
+		f := unaryMath[i+1]
+		fo := r.defMethod(m, name, 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 			n, err := rt.toNumber(arg(args, 0))
 			if err != nil {
 				return Undefined, err
 			}
 			return Float(f(n)), nil
 		})
+		fo.fn().unary = uint8(i + 1)
 	}
 
 	r.defMethod(m, "pow", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -2540,9 +2523,31 @@ func (r *Runtime) coerceAll(args []Value) ([]float64, error) {
 	return nums, nil
 }
 
+// extremum2 is Math.max or Math.min of two numbers: NaN if either is, and -0
+// below +0.
+func extremum2(a, b float64, wantMax bool) float64 {
+	switch {
+	case a != a || b != b:
+		return nan()
+	case a == b:
+		// Only the zeros' signs can differ.
+		if wantMax == math.Signbit(a) {
+			return b
+		}
+		return a
+	case (a > b) == wantMax:
+		return a
+	}
+	return b
+}
+
 // mathExtremum implements Math.max and Math.min, which return NaN if any
 // argument is NaN and treat -0 as less than +0.
 func (r *Runtime) mathExtremum(args []Value, wantMax bool) (Value, error) {
+	if len(args) == 2 && args[0].IsNumber() && args[1].IsNumber() {
+		// Two numbers, the usual call, need no list converted first.
+		return Float(extremum2(args[0].Number(), args[1].Number(), wantMax)), nil
+	}
 	nums, err := r.coerceAll(args)
 	if err != nil {
 		return Undefined, err
@@ -2987,3 +2992,46 @@ func (r *Runtime) joinOnce(o *Object) bool {
 func (r *Runtime) joinDone() {
 	r.joining = r.joining[:len(r.joining)-1]
 }
+
+// The single-argument functions differ only in which Go function they call.
+// The transcendental ones are V8's, fdlibm's, which answer to the last bit
+// as V8 does, where Go's differ there and further in places.
+var unaryMathFuncs = map[string]func(float64) float64{
+	"abs": math.Abs, "floor": math.Floor, "ceil": math.Ceil,
+	"sqrt": math.Sqrt, "cbrt": fdlibm.Cbrt, "sin": fdlibm.Sin, "cos": fdlibm.Cos,
+	"tan": fdlibm.Tan, "asin": fdlibm.Asin, "acos": fdlibm.Acos, "atan": fdlibm.Atan,
+	"sinh": fdlibm.Sinh, "cosh": fdlibm.Cosh, "tanh": fdlibm.Tanh,
+	"asinh": fdlibm.Asinh, "acosh": fdlibm.Acosh, "atanh": fdlibm.Atanh,
+	"log": fdlibm.Log, "log2": fdlibm.Log2, "log10": fdlibm.Log10,
+	"log1p": fdlibm.Log1p, "exp": fdlibm.Exp, "expm1": fdlibm.Expm1,
+	"trunc": math.Trunc,
+	// JavaScript rounds half away from zero for positive values but half
+	// up overall, which is neither math.Round nor math.Floor.
+	"round":  jsRound,
+	"sign":   jsSign,
+	"fround": func(f float64) float64 { return float64(float32(f)) },
+	// The half-precision counterpart, which is how a script sees what a
+	// Float16Array would store without allocating one.
+	"f16round": func(f float64) float64 { return float16frombits(float16bits(f)) },
+}
+
+// unaryMathNames is unaryMathFuncs' names in order, and unaryMath their
+// functions in the same order from index 1, which is what a function's
+// unary field indexes. Both are made once and never changed, so the
+// runtimes that share them do so safely.
+var unaryMathNames = func() []string {
+	names := make([]string, 0, len(unaryMathFuncs))
+	for name := range unaryMathFuncs {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
+}()
+
+var unaryMath = func() []func(float64) float64 {
+	fns := []func(float64) float64{nil}
+	for _, name := range unaryMathNames {
+		fns = append(fns, unaryMathFuncs[name])
+	}
+	return fns
+}()

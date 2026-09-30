@@ -179,7 +179,14 @@ func (r *Runtime) pushNativeFrame(o *Object, this Value, args []Value, newTarget
 func (r *Runtime) callFromLoop(callee, this Value, args []Value) (Value, error) {
 	if callee.IsObject() {
 		o := callee.Object()
-		if fd := o.fn(); fd != nil && fd.native == nil && fd.boundTarget == nil &&
+		fd := o.fn()
+		if fd != nil && fd.unary != 0 && len(args) != 0 && args[0].IsNumber() {
+			// Math.floor(x) and its kind, given a number, cannot throw or
+			// call anything, so no frame is made to show in a stack trace:
+			// the function is applied here.
+			return Float(unaryMath[fd.unary](args[0].Number())), nil
+		}
+		if fd != nil && fd.native == nil && fd.boundTarget == nil &&
 			fd.closure != nil && fd.closure.realm == r.Realm {
 			if fn := fd.closure.fn; !isGeneratorTemplate(fn) && !isClassConstructorKind(fn.Kind) {
 				if err := r.tick(); err != nil {
