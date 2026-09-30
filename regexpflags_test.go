@@ -51,3 +51,14 @@ func TestReplaceWithTheBuiltInExec(t *testing.T) {
 		return JSON.stringify(out);
 	})()`, `["a[11undefined162]b[22undefined362][22undefined462]c","-a-b-c-",".😀.","aaaa","TypeError","aXb",2,"aa","a!a!","objectobject","exec","ac",0]`)
 }
+
+func TestGlobalReplaceLeavesWhatItsExecsWould(t *testing.T) {
+	// The matches of a global replace are found in one go; lastIndex and the
+	// legacy statics end as the last of its calls to exec left them.
+	checkEval(t, `(function () {
+		var g = /(\d)/g; g.lastIndex = 4;
+		var out = ["a1b2c3".replace(g, "x"), RegExp.lastMatch, RegExp.$1, RegExp.leftContext, g.lastIndex];
+		out.push("aab".replace(/a/gy, "X"), "baa".replace(/a/gy, "X"), "x".replace(/y/g, "z"), RegExp.lastMatch);
+		return JSON.stringify(out);
+	})()`, `["axbxcx","3","3","a1b2c",0,"XXb","baa","x","a"]`)
+}

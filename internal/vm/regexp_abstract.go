@@ -389,7 +389,13 @@ func (r *Runtime) regExpSymbolReplace(rx Value, args []Value) (Value, error) {
 	var results []Value
 	var spans []int
 	fast := r.builtinExec(rx)
-	for fast {
+	if fast && global {
+		var err error
+		if spans, err = r.execMatchAll(rx, s, fullUnicode, spans); err != nil {
+			return Undefined, err
+		}
+	}
+	for fast && !global {
 		if err := r.tick(); err != nil {
 			return Undefined, err
 		}

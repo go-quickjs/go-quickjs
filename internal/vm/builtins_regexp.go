@@ -434,6 +434,86 @@ func (r *Runtime) builtinExec(rx Value) bool {
 	return ok && len(d.re.GroupNames()) == 0
 }
 
+// execMatchAll is what calling the built-in exec on a global rx, over and
+// over from a lastIndex of 0 until it finds nothing, does -- stepping past
+// an empty match as a global replace or match does -- for a caller that
+// wants the matches' indices, appended to spans. Nothing a script wrote can
+// run between the calls, so they are made as one: in one frame of exec,
+// with lastIndex written at the end, and the legacy statics for the last
+// match. Where one fails, lastIndex is left where that call found it.
+func (r *Runtime) execMatchAll(rx Value, s *String, fullUnicode bool, spans []int) ([]int, error) {
+	o := rx.Object()
+	d := o.data.(*regexpData)
+	re := d.re
+	units := s.codeUnits()
+	i := len(r.argStack)
+	r.argStack = append(r.argStack, Str(s))
+	defer func() {
+		r.argStack[i] = Undefined
+		r.argStack = r.argStack[:i]
+	}()
+	if err := r.pushNativeFrame(r.regexpExecFn, rx, r.argStack[i:i+1:i+1], Undefined); err != nil {
+		return spans, err
+	}
+	defer func() { r.frameDepth-- }()
+	var check func() error
+	if r.abort != nil || r.ctx != nil && r.ctx.Done() != nil {
+		check = r.checkInterruptNow
+	}
+	unicode := re.Flags()&(regexp.FlagUnicode|regexp.FlagUnicodeSets) != 0
+	first := len(spans)
+	pos := 0
+	fail := func(err error) ([]int, error) {
+		if _, serr := r.setProp(o, atomLastIndex, Int(pos), rx, true); serr != nil {
+			return spans, serr
+		}
+		if len(spans) > first {
+			r.recordLegacyMatch(d, s, spans[len(spans)-len(r.capsBuf):])
+		}
+		return spans, err
+	}
+	for pos <= len(units) {
+		if len(spans) > first {
+			// Each call after the first is a turn of the caller's loop, which
+			// counts it.
+			if err := r.tick(); err != nil {
+				return fail(err)
+			}
+		}
+		start := pos
+		if unicode && start > 0 && start < len(units) &&
+			units[start]&0xFC00 == 0xDC00 && units[start-1]&0xFC00 == 0xD800 {
+			start--
+		}
+		caps, err := re.MatchCheckedInto(r.capsBuf, units, start, check)
+		if caps != nil {
+			r.capsBuf = caps
+		}
+		if errors.Is(err, regexp.ErrComplexity) {
+			return fail(r.throwError(errSyntax, "%s", err.Error()))
+		}
+		if err != nil {
+			return fail(err)
+		}
+		if caps == nil {
+			break
+		}
+		spans = append(spans, caps...)
+		pos = caps[1]
+		if caps[0] == caps[1] {
+			pos = advanceStringIndex(units, pos, fullUnicode)
+		}
+	}
+	// The call that found nothing left lastIndex at 0.
+	if _, err := r.setProp(o, atomLastIndex, Int(0), rx, true); err != nil {
+		return spans, err
+	}
+	if len(spans) > first {
+		r.recordLegacyMatch(d, s, spans[len(spans)-len(r.capsBuf):])
+	}
+	return spans, nil
+}
+
 // execMatch is what calling the built-in exec on rx does -- its frame, the
 // match, lastIndex, the legacy statics -- but for making the array.
 func (r *Runtime) execMatch(rx Value, s *String) ([]int, error) {
