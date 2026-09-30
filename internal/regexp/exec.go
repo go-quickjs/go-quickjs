@@ -87,18 +87,24 @@ func (in *input) before(i int) (rune, int) {
 // pos is where the run now ends and counterVal the least it may end at.
 const greedyFrame = -2
 
+// frame is a choice point: where to resume, and what to put back first.
+//
+// Its fields are 32 bits, which every position, count and index fits in --
+// the longest string is shorter than that, and a quantifier's bounds are
+// kept in a rune -- so that a choice point, which a match pushes one of at
+// every turn, is half the size.
 type frame struct {
-	pc  int
-	pos int
+	pc  int32
+	pos int32
 	// capsLen records how many capture writes had happened, so that undoing a
 	// choice point restores the captures as well as the position.
-	capsLen int
+	capsLen int32
 	// counter state for the innermost counted quantifier, if any.
-	counterIdx int
-	counterVal int
+	counterIdx int32
+	counterVal int32
 	// emptyIdx and emptyVal restore an empty-check mark.
-	emptyIdx int
-	emptyVal int
+	emptyIdx int32
+	emptyVal int32
 }
 
 // capWrite is one recorded capture assignment, kept so that backtracking can
@@ -295,7 +301,7 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 
 		case opSplit:
 			// The second branch becomes a choice point to return to.
-			m.push(frame{pc: in.arg2, pos: pos, capsLen: len(m.trail)})
+			m.push(frame{pc: int32(in.arg2), pos: int32(pos), capsLen: int32(len(m.trail))})
 			pc = in.arg
 
 		case opJmp:
@@ -419,8 +425,8 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 			}
 			m.counters[in.arg] = cur + 1
 			m.push(frame{
-				pc: -1, counterIdx: in.arg, counterVal: cur,
-				pos: pos, capsLen: len(m.trail), emptyIdx: -1,
+				pc: -1, counterIdx: int32(in.arg), counterVal: int32(cur),
+				pos: int32(pos), capsLen: int32(len(m.trail)), emptyIdx: -1,
 			})
 			if cur < min {
 				// Below the minimum the body is mandatory, so the choice point
@@ -481,7 +487,7 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 			if lo := pos + in.arg; end > lo {
 				// One choice point stands for every shorter run, down to
 				// the least the loop may take.
-				m.push(frame{pc: pc + 2, pos: end, capsLen: len(m.trail), counterIdx: greedyFrame, counterVal: lo})
+				m.push(frame{pc: int32(pc + 2), pos: int32(end), capsLen: int32(len(m.trail)), counterIdx: greedyFrame, counterVal: int32(lo)})
 			}
 			pos = end
 			pc += 2
@@ -490,8 +496,8 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 			if in.arg2 == 0 {
 				// Entering an iteration: remember where it started.
 				m.push(frame{
-					pc: -1, emptyIdx: in.arg, emptyVal: m.emptyMarks[in.arg],
-					pos: pos, capsLen: len(m.trail), counterIdx: -1,
+					pc: -1, emptyIdx: int32(in.arg), emptyVal: int32(m.emptyMarks[in.arg]),
+					pos: int32(pos), capsLen: int32(len(m.trail)), counterIdx: -1,
 				})
 				m.emptyMarks[in.arg] = pos
 				pc++
@@ -516,7 +522,7 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 			}
 			f := m.stack[len(m.stack)-1]
 			m.stack = m.stack[:len(m.stack)-1]
-			m.undoCaps(f.capsLen)
+			m.undoCaps(int(f.capsLen))
 			if f.counterIdx == greedyFrame {
 				// A greedy run gives back one unit, and stays a choice
 				// point while it has more to give.
@@ -525,18 +531,18 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 					f.pos = p
 					m.stack = append(m.stack, f)
 				}
-				pc, pos = f.pc, p
+				pc, pos = int(f.pc), int(p)
 				break
 			}
 			if f.counterIdx >= 0 && f.pc == -1 {
-				m.counters[f.counterIdx] = f.counterVal
+				m.counters[f.counterIdx] = int(f.counterVal)
 				continue
 			}
 			if f.emptyIdx >= 0 && f.pc == -1 {
-				m.emptyMarks[f.emptyIdx] = f.emptyVal
+				m.emptyMarks[f.emptyIdx] = int(f.emptyVal)
 				continue
 			}
-			pc, pos = f.pc, f.pos
+			pc, pos = int(f.pc), int(f.pos)
 			break
 		}
 	}
