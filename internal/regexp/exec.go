@@ -215,7 +215,9 @@ func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error,
 		// captures it wrote before its first choice point, which are taken
 		// back here: the next position starts from the state this one did,
 		// with no reset to pay for.
-		m.undoCaps(0)
+		if len(m.trail) != 0 {
+			m.undoCaps(0)
+		}
 		// A sticky pattern is anchored at the start position and does not
 		// search forward.
 		if sticky {
@@ -253,6 +255,11 @@ func (m *matcher) reset() {
 // run executes a program from pos, reporting whether it matched.
 func (m *matcher) run(code []instr, pos int) (bool, error) {
 	pc := 0
+	// A forward read of a unit that is a character of its own -- any unit
+	// without the unicode flag, and any but a surrogate with it -- is done
+	// in place by the instructions that read one, rather than by read: the
+	// call is most of what the commonest instructions cost.
+	units, unicode := m.in.units, m.in.unicode
 	for {
 		m.steps++
 		if m.check != nil {
@@ -268,6 +275,16 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 		in := &code[pc]
 		switch in.op {
 		case opChar:
+			if !in.rev && uint(pos) < uint(len(units)) {
+				if u := units[pos]; !unicode || !utf16.IsSurrogate(rune(u)) {
+					if rune(u) != in.r {
+						goto backtrack
+					}
+					pos++
+					pc++
+					break
+				}
+			}
 			r, w := m.read(in.rev, pos)
 			if r != in.r {
 				goto backtrack
@@ -284,6 +301,16 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 			pc++
 
 		case opClass:
+			if !in.rev && uint(pos) < uint(len(units)) {
+				if u := units[pos]; u < 128 {
+					if m.prog.asciiClasses[in.arg][u>>6]&(1<<(u&63)) == 0 {
+						goto backtrack
+					}
+					pos++
+					pc++
+					break
+				}
+			}
 			r, w := m.read(in.rev, pos)
 			if r < 0 {
 				goto backtrack
@@ -315,8 +342,9 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 			pc++
 
 		case opSplit:
-			// The second branch becomes a choice point to return to.
-			m.push(frame{pc: int32(in.arg2), pos: int32(pos), capsLen: int32(len(m.trail))})
+			// The second branch becomes a choice point to return to, pushed
+			// here as push would push it.
+			m.stack = append(m.stack, frame{pc: int32(in.arg2), pos: int32(pos), capsLen: int32(len(m.trail)), counterIdx: -1})
 			pc = in.arg
 
 		case opJmp:
@@ -537,7 +565,9 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 			}
 			f := m.stack[len(m.stack)-1]
 			m.stack = m.stack[:len(m.stack)-1]
-			m.undoCaps(int(f.capsLen))
+			if len(m.trail) > int(f.capsLen) {
+				m.undoCaps(int(f.capsLen))
+			}
 			if f.counterIdx == greedyFrame {
 				// A greedy run gives back one unit, and stays a choice
 				// point while it has more to give.
