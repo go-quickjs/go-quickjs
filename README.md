@@ -966,15 +966,15 @@ scores are the suite's own (higher is better).
 
 | Workload | go-quickjs | QuickJS | QuickJS faster by | go-quickjs score | QuickJS score |
 |---|---:|---:|---:|---:|---:|
-| Richards | 27.3 ms | 11.0 ms | 2.5x | 387 | 937 |
-| DeltaBlue | 45.3 ms | 24.0 ms | 1.9x | 433 | 812 |
-| Crypto | 579 ms | 326 ms | 1.8x | 632 | 1,107 |
-| RayTrace | 221 ms | 146 ms | 1.5x | 1,027 | 1,570 |
-| EarleyBoyer | 715 ms | 398 ms | 1.8x | 1,296 | 2,098 |
-| RegExp | 902 ms | 863 ms | 1.04x | 426 | 425 |
-| Splay | 397 ms | 520 ms | 0.76x | 2,130 | 3,269 |
-| NavierStokes | 417 ms | 195 ms | 2.1x | 1,135 | 2,399 |
-| **Total / composite** | **3,317 ms** | **2,523 ms** | **1.31x** | **786** | **1,321** |
+| Richards | 26.7 ms | 11.0 ms | 2.4x | 410 | 951 |
+| DeltaBlue | 38.4 ms | 24.0 ms | 1.6x | 486 | 838 |
+| Crypto | 580 ms | 329 ms | 1.8x | 618 | 1,097 |
+| RayTrace | 188 ms | 145 ms | 1.3x | 1,195 | 1,530 |
+| EarleyBoyer | 675 ms | 424 ms | 1.6x | 1,340 | 2,095 |
+| RegExp | 764 ms | 876 ms | 0.87x | 501 | 432 |
+| Splay | 390 ms | 552 ms | 0.71x | 2,168 | 3,211 |
+| NavierStokes | 459 ms | 198 ms | 2.3x | 1,023 | 2,351 |
+| **Total / composite** | **3,167 ms** | **2,601 ms** | **1.22x** | **827** | **1,318** |
 
 The scored run weighs more heavily than the fixed one what a long-running
 program pays for its heap. Each workload is warmed for a second and then
@@ -1004,12 +1004,14 @@ What the gap is made of:
   functions and fills in a frame record. Go has no callee-saved registers, so
   each Go call spills what the caller holds. Richards and DeltaBlue are mostly
   small method calls.
-- **Property access.** A QuickJS object shares its layout (its shape) with
-  every object built the same way, and holds only the values. A go-quickjs
-  object keeps its keys in a table of its own, so each object is larger and
-  there is no shared layout to remember a lookup by. An ordinary object's
-  own property is found by scanning its table where the instruction runs.
-  Richards, DeltaBlue and RayTrace read and write object fields constantly.
+- **Property access.** Objects built the same way share a shape, as in
+  QuickJS and V8, and each property read and write remembers the shape it
+  last saw and where the property was. A QuickJS object holds only its
+  values, though, while a go-quickjs object still keeps its keys beside them
+  in a table of its own, so each object is larger. The cache is also
+  checked in a call rather than where the instruction runs, since the
+  interpreter's loop grows slower with every line added to it. Richards and
+  DeltaBlue read and write object fields constantly.
 - **Memory management.** QuickJS counts references: an object is freed the
   moment the last reference to it goes, and a cycle collector handles the
   rest. go-quickjs relies on Go's garbage collector. It traces the live heap
@@ -1025,19 +1027,20 @@ Where go-quickjs is level or ahead:
 
 - **RegExp.** With an unmodified RegExp, `replace` and `split` find their
   matches without building the arrays `exec` would return. `split` searches
-  for each separator instead of trying every position. The matcher skips
-  positions where no match can begin and takes a greedy run of one character
-  in a single step.
+  for each separator instead of trying every position. The matcher passes
+  over positions where no match can begin in a loop of their own, reads a
+  code unit that is a whole character without a call, and takes a greedy
+  run of one character in a single step.
 - **Splay, in fixed work.** Go's allocator makes many short-lived objects
   cheaply.
 - **`apply(this, arguments)`.** In a function whose only use of `arguments` is
   passing it to `apply` (a common way to write a class constructor), the
   arguments object is never made.
 
-The largest remaining step is the object model. Shared shapes, with a cache at
-each property access that remembers where the last object of that shape kept
-the property, would narrow the gap in the object-heavy workloads. Engines such
-as V8 are built this way.
+Most of what remains is the interpreter itself: the cost of dispatching an
+instruction and of a call, which is most of the gap in Crypto, NavierStokes
+and Richards. In the object model, what is left is keeping only values in an
+object, with its keys in the shape it shares.
 
 ## License
 
