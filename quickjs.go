@@ -212,10 +212,20 @@ func New(opts ...Option) *Runtime {
 
 // Close releases the runtime. Using a Runtime after Close returns ErrClosed
 // from every method.
+//
+// It may be called from inside the runtime's own script -- by a Go function
+// the script called, as process.exit is -- and then stops that script: it
+// runs no further than its next call or loop iteration, nothing it has can
+// catch that, and the call that ran it returns ErrClosed. Like every other
+// method, Close is for the runtime's own goroutine; a host that must end a
+// runtime from another cancels the context it runs under.
 func (r *Runtime) Close() error {
 	r.closed = true
 	r.posting.Store(nil)
 	if r.rt != nil {
+		if r.rt.Running() {
+			r.rt.Halt(ErrClosed)
+		}
 		r.rt.Close()
 		r.rt.ReleaseStack()
 	}
@@ -631,11 +641,23 @@ func (r *Runtime) EvalModuleContext(ctx context.Context, specifier, source strin
 	// here, which is what makes a module that awaits something already settled
 	// finish before this returns; one waiting on the host stays pending, and
 	// its failure -- if any -- surfaces as a rejection rather than being lost.
-	done, err := r.rt.EvaluateModule(mod)
+	rt := r.rt
+	done, err := rt.EvaluateModule(mod)
+	if r.closed {
+		// The module closed the Runtime, which stopped it; the stack it ran
+		// on is free now.
+		rt.ReleaseStack()
+		return Value{}, ErrClosed
+	}
 	if err != nil {
 		return Value{}, r.wrapError(err)
 	}
-	if err := r.rt.DrainJobs(); err != nil {
+	err = rt.DrainJobs()
+	if r.closed {
+		rt.ReleaseStack()
+		return Value{}, ErrClosed
+	}
+	if err != nil {
 		return Value{}, r.wrapError(err)
 	}
 	if err := r.rt.ModuleResult(done); err != nil {

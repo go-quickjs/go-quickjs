@@ -23,10 +23,10 @@ func TestClosedRuntimeKeepsNoStack(t *testing.T) {
 	if _, err := rt.Eval(`var state = [1, 2, 3]; function sum() { return state.reduce((a, b) => a + b) }`); err != nil {
 		t.Fatal(err)
 	}
-	_, err = fn.Call(10)
-	var jsErr *quickjs.Error
-	if err == nil || !errors.As(err, &jsErr) {
-		t.Errorf("a closed runtime's function = %v, want an exception", err)
+	// A closed runtime's function does not run, as nothing of a closed
+	// runtime does.
+	if _, err = fn.Call(10); !errors.Is(err, quickjs.ErrClosed) {
+		t.Errorf("a closed runtime's function = %v, want ErrClosed", err)
 	}
 	if v, err := rt.Eval(`sum()`); err != nil || v.Int() != 6 {
 		t.Errorf("the new runtime's sum() = %v, %v", v, err)

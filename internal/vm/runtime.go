@@ -862,6 +862,17 @@ func (r *Runtime) ReleaseStack() {
 // Stop is stop, for a host function that reports its context cancelled.
 func (r *Runtime) Stop(err error) error { return r.stop(err) }
 
+// Halt stops the script running now with err, which nothing catches, at its
+// next call or backward jump: the checks that poll for an interrupt are made
+// due at once, so that the script runs no further than the straight-line code
+// it is in. It is how closing a runtime from inside the script it runs ends
+// that script, which would otherwise run on -- for ever, if it loops.
+func (r *Runtime) Halt(err error) {
+	r.stop(err)
+	r.interruptCounter = 0
+	r.backEdges = 0
+}
+
 // ClearStop forgets an interrupt the host's last call ended with, as its
 // next call begins, and drops the jobs the stopped script left queued: they
 // were its own, and running them now would be running it on. Called from

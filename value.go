@@ -261,6 +261,10 @@ func (v Value) CallWithThis(this Value, args ...any) (Value, error) {
 	if v.rt == nil {
 		return Value{}, ErrClosed
 	}
+	host, _ := v.rt.Host.(*Runtime)
+	if host != nil && host.closed {
+		return Value{}, ErrClosed
+	}
 	if !vm.IsCallable(v.v) {
 		return Value{}, fmt.Errorf("quickjs: %s is not a function", v.Kind())
 	}
@@ -274,6 +278,11 @@ func (v Value) CallWithThis(this Value, args ...any) (Value, error) {
 	}
 	v.rt.ClearStop()
 	res, err := v.rt.Call(v.v, this.v, vals)
+	if host != nil && host.closed {
+		// The function closed its Runtime, which stopped it.
+		v.rt.ReleaseStack()
+		return Value{}, ErrClosed
+	}
 	if err != nil {
 		return Value{}, wrapThrown(v.rt, err)
 	}

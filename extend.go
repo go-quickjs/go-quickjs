@@ -287,12 +287,18 @@ func (r *Runtime) RunJobs() (err error) {
 		return ErrClosed
 	}
 	defer r.guard(&err)
+	// The engine is held here: a job that closes the Runtime lets go of it.
+	rt := r.rt
 	// An interrupt the last call ended with is that call's.
-	r.rt.ClearStop()
-	if err := r.rt.DrainJobs(); err != nil {
-		return r.wrapError(err)
+	rt.ClearStop()
+	err = rt.DrainJobs()
+	if r.closed {
+		// A job closed the Runtime, which stopped the rest; the stack the
+		// jobs ran on is free now.
+		rt.ReleaseStack()
+		return ErrClosed
 	}
-	return nil
+	return r.wrapError(err)
 }
 
 // EnqueueJob queues a microtask, which runs when the queue is next drained.
