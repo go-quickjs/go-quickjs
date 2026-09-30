@@ -270,6 +270,9 @@ func (r *Runtime) regExpSymbolSplit(rx Value, args []Value) (Value, error) {
 	// A piece is cut from the subject rather than encoded again from its code
 	// units, which for text that is all ASCII shares the bytes.
 	piece := func(lo, hi int) Value { return Str(s.Substring(lo, hi)) }
+	if r.builtinExec(splitter) {
+		return r.splitBuiltin(splitter, s, units, limit, fullUnicode)
+	}
 	p, q := 0, 0
 	for q < size {
 		if err := r.tick(); err != nil {

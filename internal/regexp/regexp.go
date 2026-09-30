@@ -107,7 +107,20 @@ func (re *Regexp) MatchCheckedInto(dst []int, units []uint16, start int, check f
 	if start > len(units) {
 		return nil, nil
 	}
-	return re.exec(dst, units, start, check)
+	return re.exec(dst, units, start, check, re.flags&FlagSticky != 0)
+}
+
+// SearchCheckedInto is MatchCheckedInto searching forward from start whatever
+// the sticky flag says: the first match at start or after it, which is what
+// trying a sticky pattern at each position in turn would find first.
+func (re *Regexp) SearchCheckedInto(dst []int, units []uint16, start int, check func() error) ([]int, error) {
+	if start < 0 {
+		start = 0
+	}
+	if start > len(units) {
+		return nil, nil
+	}
+	return re.exec(dst, units, start, check, false)
 }
 
 // MatchString is Match on a Go string, which is converted to code units first.

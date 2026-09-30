@@ -62,3 +62,20 @@ func TestGlobalReplaceLeavesWhatItsExecsWould(t *testing.T) {
 		return JSON.stringify(out);
 	})()`, `["axbxcx","3","3","a1b2c",0,"XXb","baa","x","a"]`)
 }
+
+func TestSplitWithTheBuiltInExec(t *testing.T) {
+	// split with an untouched RegExp searches for each separator rather than
+	// trying one at every position; the pieces, the captures, the limits and
+	// the legacy statics are what they were.
+	checkEval(t, `(function () {
+		var out = [];
+		out.push("a,b,,c".split(/,/), "a1b22c".split(/(\d)(x)?/), "abc".split(/(?:)/), "abc".split(/x*/),
+			"a, b ,c".split(/\s*,\s*/, 2), "a1b2".split(/(\d)/, 2), "".split(/x/), "".split(/(?:)/),
+			"\u{1F600}x\u{1F600}".split(/(?:)/u), "aXbxc".split(/x/i), "abc".split(/b/y));
+		"q1w2e".split(/(\d)/);
+		out.push(RegExp.lastMatch, RegExp.$1);
+		class R extends RegExp {}
+		out.push("a-b".split(new R("-")));
+		return JSON.stringify(out);
+	})()`, `[["a","b","","c"],["a","1",null,"b","2",null,"","2",null,"c"],["a","b","c"],["a","b","c"],["a","b"],["a","1"],[""],[],["😀","x","😀"],["a","b","c"],["a","c"],"2","2",["a","b"]]`)
+}

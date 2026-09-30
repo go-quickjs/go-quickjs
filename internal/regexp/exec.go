@@ -139,7 +139,7 @@ type matcher struct {
 // backtracking stack and capture trail are what it spends its allocations on.
 // A pattern used again while a match is running -- a replacement callback that
 // uses the same one -- gets a matcher of its own.
-func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error) ([]int, error) {
+func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error, sticky bool) ([]int, error) {
 	m := re.scratch
 	if m == nil || m.busy {
 		m = &matcher{
@@ -176,7 +176,7 @@ func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error)
 			// time, so that under the unicode flag it never lands inside a
 			// surrogate pair.
 			if pos >= len(in.units) || !first.admits(in.units[pos]) {
-				if pos >= len(in.units) || re.flags&FlagSticky != 0 {
+				if pos >= len(in.units) || sticky {
 					return nil, nil
 				}
 				_, w := in.at(pos)
@@ -201,7 +201,7 @@ func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error)
 		m.undoCaps(0)
 		// A sticky pattern is anchored at the start position and does not
 		// search forward.
-		if re.flags&FlagSticky != 0 {
+		if sticky {
 			return nil, nil
 		}
 		// Advance by a whole character, so that under the unicode flag the

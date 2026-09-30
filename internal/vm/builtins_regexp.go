@@ -514,6 +514,92 @@ func (r *Runtime) execMatchAll(rx Value, s *String, fullUnicode bool, spans []in
 	return spans, nil
 }
 
+// splitBuiltin is RegExp.prototype[Symbol.split]'s loop for a splitter whose
+// exec is the built-in, which split made and nothing else can reach. The loop
+// tries the sticky splitter at each position in turn; the first position it
+// succeeds at is where a search from the first finds its match, so each piece
+// is one search rather than a call of exec per position. It runs in exec's
+// frame, and the legacy statics are those of the last match, as they would
+// have been.
+func (r *Runtime) splitBuiltin(splitter Value, s *String, units []uint16, limit int64, fullUnicode bool) (Value, error) {
+	d := splitter.Object().data.(*regexpData)
+	re := d.re
+	size := len(units)
+	i := len(r.argStack)
+	r.argStack = append(r.argStack, Str(s))
+	defer func() {
+		r.argStack[i] = Undefined
+		r.argStack = r.argStack[:i]
+	}()
+	if err := r.pushNativeFrame(r.regexpExecFn, splitter, r.argStack[i:i+1:i+1], Undefined); err != nil {
+		return Undefined, err
+	}
+	defer func() { r.frameDepth-- }()
+	var check func() error
+	if r.abort != nil || r.ctx != nil && r.ctx.Done() != nil {
+		check = r.checkInterruptNow
+	}
+	var out []Value
+	var last []int
+	done := func(err error) (Value, error) {
+		if last != nil {
+			r.recordLegacyMatch(d, s, last)
+		}
+		if err != nil {
+			return Undefined, err
+		}
+		return Obj(r.newArrayFrom(out)), nil
+	}
+	p, q := 0, 0
+	for q < size {
+		if err := r.tick(); err != nil {
+			return done(err)
+		}
+		caps, err := re.SearchCheckedInto(r.capsBuf, units, q, check)
+		if caps != nil {
+			r.capsBuf = caps
+		}
+		if errors.Is(err, regexp.ErrComplexity) {
+			return done(r.throwError(errSyntax, "%s", err.Error()))
+		}
+		if err != nil {
+			return done(err)
+		}
+		if caps == nil || caps[0] >= size {
+			// No position left before the end matches.
+			break
+		}
+		at := caps[0]
+		last = append(last[:0], caps...)
+		e := min(caps[1], size)
+		if e == p {
+			// A separator that matched emptily where the last one ended
+			// would not make progress.
+			q = advanceStringIndex(units, at, fullUnicode)
+			continue
+		}
+		out = append(out, Str(s.Substring(p, at)))
+		if int64(len(out)) == limit {
+			return done(nil)
+		}
+		p = e
+		// A capturing separator contributes its groups to the result.
+		for g := 2; g < len(caps); g += 2 {
+			c := Undefined
+			if caps[g] >= 0 && caps[g+1] >= 0 {
+				c = Str(s.Substring(caps[g], caps[g+1]))
+			}
+			out = append(out, c)
+			if int64(len(out)) == limit {
+				return done(nil)
+			}
+		}
+		q = p
+	}
+	out = append(out, Str(s.Substring(p, size)))
+	return done(nil)
+}
+
 // execMatch is what calling the built-in exec on rx does -- its frame, the
 // match, lastIndex, the legacy statics -- but for making the array.
 func (r *Runtime) execMatch(rx Value, s *String) ([]int, error) {
