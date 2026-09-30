@@ -290,11 +290,43 @@ func (r *Runtime) DrainJobs() error {
 	if r.stopped != nil {
 		return r.stopped
 	}
-	// A finalization callback is a job of its own, and one queued by the
-	// collector between turns has no other moment to run; so is what another
-	// goroutine has finished for the runtime.
-	r.runCleanups()
-	r.runHostJobs()
+	for {
+		if err := r.runMicrotasks(); err != nil {
+			return err
+		}
+		// Between jobs is where a finalization callback belongs: it is a job
+		// of its own, and one queued by the collector between turns has no
+		// other moment to run. It may queue more.
+		r.runCleanups()
+		if len(r.microtasks) > 0 {
+			continue
+		}
+		// What another goroutine finished for the runtime is a task: it runs
+		// once the microtasks are done, one at a time, and the microtasks
+		// each queues run before the next, as they do after a message event
+		// or an I/O callback in a browser or node.
+		ran, err := r.runHostJob()
+		if err != nil {
+			return err
+		}
+		if !ran && len(r.microtasks) == 0 {
+			break
+		}
+	}
+	// The turn is over, so a rejection nothing has taken by now is one nothing
+	// is going to take. Reporting may itself queue jobs -- a handler that
+	// prints is script -- so the queue is drained again.
+	r.reportUnhandledRejections()
+	if err := r.runMicrotasks(); err != nil {
+		return err
+	}
+	r.endTurn()
+	return nil
+}
+
+// runMicrotasks runs queued microtasks until none remain, or an interrupt
+// stops them.
+func (r *Runtime) runMicrotasks() error {
 	for len(r.microtasks) > 0 {
 		j := r.microtasks[0]
 		r.microtasks = r.microtasks[1:]
@@ -304,26 +336,7 @@ func (r *Runtime) DrainJobs() error {
 		if err := r.checkInterrupt(); err != nil {
 			return err
 		}
-		if len(r.microtasks) == 0 {
-			// Between jobs is where a finalization callback belongs: it is a
-			// job of its own, and it may queue more.
-			r.runCleanups()
-			r.runHostJobs()
-		}
 	}
-	// The turn is over, so a rejection nothing has taken by now is one nothing
-	// is going to take. Reporting may itself queue jobs -- a handler that
-	// prints is script -- so the queue is drained again.
-	r.reportUnhandledRejections()
-	for len(r.microtasks) > 0 {
-		j := r.microtasks[0]
-		r.microtasks = r.microtasks[1:]
-		r.runJob(j)
-		if err := r.checkInterrupt(); err != nil {
-			return err
-		}
-	}
-	r.endTurn()
 	return nil
 }
 

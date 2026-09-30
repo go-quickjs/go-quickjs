@@ -227,6 +227,8 @@ func (r *Runtime) Close() error {
 			r.rt.Halt(ErrClosed)
 		}
 		r.rt.Close()
+		// What was posted to an AsyncWork and has not run is told now.
+		r.rt.CloseHostJobs()
 		r.rt.ReleaseStack()
 	}
 	r.rt = nil
@@ -279,6 +281,11 @@ func (r *Runtime) guard(err *error) {
 	r.posting.Store(nil)
 	if r.cancel != nil {
 		r.cancel()
+	}
+	if r.rt != nil {
+		// What was posted to an AsyncWork and has not run -- behind the
+		// function that panicked, perhaps -- is told the runtime is closed.
+		r.rt.CloseHostJobs()
 	}
 	*err = fmt.Errorf("%w: %v\n%s", ErrInternal, p, debug.Stack())
 }
