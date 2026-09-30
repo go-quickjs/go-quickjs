@@ -63,7 +63,7 @@ type editedLines struct {
 }
 
 func newEditedLines(t *terminal, complete func([]rune, int) ([]string, int)) *editedLines {
-	ed := newEditor(t.in, t.out, t.width)
+	ed := newEditor(t.in, t.w, t.width)
 	ed.complete = complete
 	l := &editedLines{t: t, ed: ed, history: historyPath()}
 	l.load()

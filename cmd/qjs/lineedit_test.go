@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"os"
 	"reflect"
 	"regexp"
 	"strings"
@@ -207,5 +208,17 @@ func TestCompleter(t *testing.T) {
 		if !reflect.DeepEqual(got, tc.want) || start != tc.start {
 			t.Errorf("%q: got %q at %d, want %q at %d", tc.line, got, start, tc.want, tc.start)
 		}
+	}
+}
+
+// TestTerminalBehindLock checks that the terminal is found behind the lock run
+// puts on qjs's output: without it the prompt was never edited, and on
+// Windows Ctrl-D did not leave it.
+func TestTerminalBehindLock(t *testing.T) {
+	if f, ok := fileOf(&lockedWriter{w: os.Stdout}); !ok || f != os.Stdout {
+		t.Errorf("fileOf(locked stdout) = %v, %v; want os.Stdout", f, ok)
+	}
+	if _, ok := fileOf(&lockedWriter{w: &bytes.Buffer{}}); ok {
+		t.Error("fileOf(locked buffer) found a file")
 	}
 }

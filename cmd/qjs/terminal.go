@@ -12,7 +12,10 @@ import (
 // editor can drive.
 type terminal struct {
 	in, out *os.File
-	cooked  *term.State
+	// w is where the editor writes: out, behind the lock qjs's other writers
+	// take.
+	w      io.Writer
+	cooked *term.State
 }
 
 // openTerminal returns the terminal behind stdin and stdout, or nil when they
@@ -23,14 +26,24 @@ func openTerminal(stdin io.Reader, stdout io.Writer) *terminal {
 	if !ok || !term.IsTerminal(int(in.Fd())) {
 		return nil
 	}
-	out, ok := stdout.(*os.File)
+	out, ok := fileOf(stdout)
 	if !ok || !term.IsTerminal(int(out.Fd())) {
 		return nil
 	}
 	if !enableEscapes(out) {
 		return nil
 	}
-	return &terminal{in: in, out: out}
+	return &terminal{in: in, out: out, w: stdout}
+}
+
+// fileOf is the file a writer writes to, when it is one: the writer itself,
+// or the one behind the lock run puts on qjs's output.
+func fileOf(w io.Writer) (*os.File, bool) {
+	if l, ok := w.(*lockedWriter); ok {
+		w = l.w
+	}
+	f, ok := w.(*os.File)
+	return f, ok
 }
 
 // raw puts the terminal in raw mode, where each key arrives as it is pressed
@@ -41,7 +54,7 @@ func (t *terminal) raw() error {
 		return err
 	}
 	t.cooked = st
-	fmt.Fprint(t.out, "\x1b[?2004h")
+	fmt.Fprint(t.w, "\x1b[?2004h")
 	return nil
 }
 
@@ -51,7 +64,7 @@ func (t *terminal) restore() {
 	if t.cooked == nil {
 		return
 	}
-	fmt.Fprint(t.out, "\x1b[?2004l")
+	fmt.Fprint(t.w, "\x1b[?2004l")
 	term.Restore(int(t.in.Fd()), t.cooked)
 	t.cooked = nil
 }
