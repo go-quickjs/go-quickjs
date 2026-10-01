@@ -50,10 +50,10 @@ func (c *compiler) compileTailExpr(e ast.Expr) {
 		c.compileExpr(e)
 		c.tailCall = saved
 	case *ast.Conditional:
-		elseJump := c.emitTestJumpIfFalse(n.Test)
+		elseJumps := c.emitTestJumpIfFalse(n.Test)
 		c.compileTailExpr(n.Cons)
 		endJump := c.emitJump(bytecode.OpJump)
-		c.patchJump(elseJump)
+		c.patchJumps(elseJumps)
 		c.stackDepth--
 		c.compileTailExpr(n.Alt)
 		c.patchJump(endJump)

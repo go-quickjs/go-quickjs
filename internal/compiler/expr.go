@@ -79,25 +79,109 @@ func (c *compiler) compileExprForEffect(e ast.Expr) {
 	c.emit(bytecode.OpDrop, 0, 0)
 }
 
-// emitTestJumpIfFalse compiles a condition and emits the jump that skips when
-// it is false, returning the jump's position for patching.
+// emitTestJumpIfFalse compiles a condition and emits the jumps taken when it
+// is false, returning them for patching: control falls through when it is
+// true.
+func (c *compiler) emitTestJumpIfFalse(test ast.Expr) []int {
+	return c.emitTestJumps(test, false, nil)
+}
+
+// emitTestJumps compiles a condition for a branch, appending to jumps the
+// jumps taken when the condition is jumpIf, and returns them for patching:
+// control falls through otherwise. Only the condition's truth is wanted, not
+// its value, which is what lets it be compiled as branches:
 //
-// A comparison and the branch that reads it are one instruction rather than
-// two, which in a loop is one fewer dispatch per iteration. Only a comparison
-// fuses: every other condition has to produce a value for the branch to test.
-func (c *compiler) emitTestJumpIfFalse(test ast.Expr) int {
-	if b, ok := test.(*ast.Binary); ok {
-		if op, fusable := comparisonOpcode(b.Op); fusable {
-			c.enter(b.Pos())
-			defer c.leave()
-			c.compileExpr(b.Left)
-			c.compileExpr(b.Right)
-			c.recordLine(b.Start)
-			return c.emitJumpB(bytecode.OpJumpIfCmpFalse, uint32(op))
+//   - A comparison and the branch that reads it are one instruction rather
+//     than two, which in a loop is one fewer dispatch per iteration. An
+//     equality is negated by its opposite. An ordering is not, since both
+//     a < b and a >= b are false when either is NaN: to jump when it is
+//     true, it branches over an unconditional jump.
+//   - !x branches on x the other way, without the negation.
+//   - x && y and x || y branch on each operand in turn, straight to where
+//     the whole condition sends them, rather than producing a value for one
+//     more test to read.
+//   - A constant needs no test: the branch is always or never taken.
+func (c *compiler) emitTestJumps(test ast.Expr, jumpIf bool, jumps []int) []int {
+	c.enter(test.Pos())
+	defer c.leave()
+	switch n := test.(type) {
+	case *ast.BoolLit:
+		if n.Value == jumpIf {
+			jumps = append(jumps, c.emitJump(bytecode.OpJump))
+		}
+		return jumps
+	case *ast.NumberLit:
+		if truthy := n.Value != 0 && n.Value == n.Value; truthy == jumpIf {
+			jumps = append(jumps, c.emitJump(bytecode.OpJump))
+		}
+		return jumps
+	case *ast.Unary:
+		if n.Op == "!" {
+			return c.emitTestJumps(n.Operand, !jumpIf, jumps)
+		}
+	case *ast.Logical:
+		// x && y is false where either is, and x || y true where either is:
+		// both operands jump where the whole does. Otherwise the first
+		// operand decides only one way, and skips the second when it does.
+		if n.Op == "&&" && !jumpIf || n.Op == "||" && jumpIf {
+			jumps = c.emitTestJumps(n.Left, jumpIf, jumps)
+			return c.emitTestJumps(n.Right, jumpIf, jumps)
+		}
+		if n.Op == "&&" || n.Op == "||" {
+			skip := c.emitTestJumps(n.Left, !jumpIf, nil)
+			jumps = c.emitTestJumps(n.Right, jumpIf, jumps)
+			for _, j := range skip {
+				c.patchJump(j)
+			}
+			return jumps
+		}
+	case *ast.Binary:
+		if op, fusable := comparisonOpcode(n.Op); fusable {
+			c.compileExpr(n.Left)
+			c.compileExpr(n.Right)
+			c.recordLine(n.Start)
+			if !jumpIf {
+				return append(jumps, c.emitJumpB(bytecode.OpJumpIfCmpFalse, uint32(op)))
+			}
+			if neg, ok := negatedEquality(op); ok {
+				return append(jumps, c.emitJumpB(bytecode.OpJumpIfCmpFalse, uint32(neg)))
+			}
+			// An ordering branches over the jump: when it is false, which is
+			// most of the time for a loop's break, that is one dispatch.
+			skip := c.emitJumpB(bytecode.OpJumpIfCmpFalse, uint32(op))
+			jumps = append(jumps, c.emitJump(bytecode.OpJump))
+			c.patchJump(skip)
+			return jumps
 		}
 	}
 	c.compileExpr(test)
-	return c.emitJump(bytecode.OpJumpIfFalse)
+	if jumpIf {
+		return append(jumps, c.emitJump(bytecode.OpJumpIfTrue))
+	}
+	return append(jumps, c.emitJump(bytecode.OpJumpIfFalse))
+}
+
+// negatedEquality is the comparison true exactly where an equality is false,
+// and whether op is an equality: an ordering has none.
+func negatedEquality(op bytecode.Op) (bytecode.Op, bool) {
+	switch op {
+	case bytecode.OpEq:
+		return bytecode.OpNe, true
+	case bytecode.OpNe:
+		return bytecode.OpEq, true
+	case bytecode.OpStrictEq:
+		return bytecode.OpStrictNe, true
+	case bytecode.OpStrictNe:
+		return bytecode.OpStrictEq, true
+	}
+	return op, false
+}
+
+// patchJumps points jumps emitted earlier at the current position.
+func (c *compiler) patchJumps(jumps []int) {
+	for _, j := range jumps {
+		c.patchJump(j)
+	}
 }
 
 // comparisonOpcode is the opcode of a comparison operator, and whether the
@@ -918,10 +1002,10 @@ func (c *compiler) compileLogical(n *ast.Logical) {
 }
 
 func (c *compiler) compileConditional(n *ast.Conditional) {
-	elseJump := c.emitTestJumpIfFalse(n.Test)
+	elseJumps := c.emitTestJumpIfFalse(n.Test)
 	c.compileExpr(n.Cons)
 	endJump := c.emitJump(bytecode.OpJump)
-	c.patchJump(elseJump)
+	c.patchJumps(elseJumps)
 	// Both branches leave one value, so the depth tracked after the jump is
 	// one too high; correct it so MaxStack is not inflated.
 	c.stackDepth--

@@ -496,15 +496,28 @@ func (c *compiler) storeVar(name string) {
 }
 
 func (c *compiler) compileIf(n *ast.IfStmt) {
-	elseJump := c.emitTestJumpIfFalse(n.Test)
+	// if (test) break; is the condition's own jumps, to where the break goes,
+	// when the break has nothing to undo on its way: so is a continue.
+	if n.Alt == nil {
+		if i, cont := c.bareJumpTarget(n.Cons); i >= 0 {
+			jumps := c.emitTestJumps(n.Test, true, nil)
+			if cont {
+				c.loops[i].continues = append(c.loops[i].continues, jumps...)
+			} else {
+				c.loops[i].breaks = append(c.loops[i].breaks, jumps...)
+			}
+			return
+		}
+	}
+	elseJumps := c.emitTestJumpIfFalse(n.Test)
 	c.compileStatement(n.Cons)
 
 	if n.Alt == nil {
-		c.patchJump(elseJump)
+		c.patchJumps(elseJumps)
 		return
 	}
 	endJump := c.emitJump(bytecode.OpJump)
-	c.patchJump(elseJump)
+	c.patchJumps(elseJumps)
 	c.compileStatement(n.Alt)
 	c.patchJump(endJump)
 }
@@ -542,10 +555,10 @@ func (c *compiler) popLoop(continueTarget int) {
 func (c *compiler) compileWhile(n *ast.WhileStmt) {
 	start := c.here()
 	c.pushLoop("", true)
-	exit := c.emitTestJumpIfFalse(n.Test)
+	exits := c.emitTestJumpIfFalse(n.Test)
 	c.compileStatement(n.Body)
 	c.emit(bytecode.OpJump, uint32(start), 0)
-	c.patchJump(exit)
+	c.patchJumps(exits)
 	c.popLoop(start)
 }
 
@@ -554,8 +567,9 @@ func (c *compiler) compileDoWhile(n *ast.DoWhileStmt) {
 	c.pushLoop("", true)
 	c.compileStatement(n.Body)
 	testAt := c.here()
-	c.compileExpr(n.Test)
-	c.emit(bytecode.OpJumpIfTrue, uint32(start), 0)
+	for _, j := range c.emitTestJumps(n.Test, true, nil) {
+		c.patchJumpTo(j, start)
+	}
 	c.popLoop(testAt)
 }
 
@@ -613,9 +627,9 @@ func (c *compiler) compileForLoop(n *ast.ForStmt, firstSlot uint32, perIteration
 	start := c.here()
 	c.pushLoop("", true)
 
-	exit := -1
+	var exits []int
 	if n.Test != nil {
-		exit = c.emitTestJumpIfFalse(n.Test)
+		exits = c.emitTestJumpIfFalse(n.Test)
 	}
 	c.compileStatement(n.Body)
 
@@ -630,9 +644,7 @@ func (c *compiler) compileForLoop(n *ast.ForStmt, firstSlot uint32, perIteration
 		c.compileExprForEffect(n.Update)
 	}
 	c.emit(bytecode.OpJump, uint32(start), 0)
-	if exit >= 0 {
-		c.patchJump(exit)
-	}
+	c.patchJumps(exits)
 	// `continue` jumps to the update clause, not the test.
 	c.popLoop(updateAt)
 }
@@ -734,6 +746,39 @@ func (c *compiler) compileForBody(left ast.Node, body ast.Stmt) {
 	// exhausted one is already closed and the instruction leaves it alone.
 	c.emit(bytecode.OpIterClose, 0, 0)
 	c.emit(bytecode.OpDrop, 0, 0)
+}
+
+// bareJumpTarget is the index in c.loops of the statement a break or
+// continue goes to, alone or alone in a block, and whether it is a continue,
+// if it is one that is a jump and nothing else: it leaves no finally clause,
+// exception handler, iterator, operand or with object behind. It is -1 for
+// anything else.
+func (c *compiler) bareJumpTarget(s ast.Stmt) (int, bool) {
+	if b, ok := s.(*ast.BlockStmt); ok && len(b.Body) == 1 {
+		s = b.Body[0]
+	}
+	label, cont := "", false
+	switch n := s.(type) {
+	case *ast.BreakStmt:
+		label = n.Label
+	case *ast.ContinueStmt:
+		label, cont = n.Label, true
+	default:
+		return -1, false
+	}
+	for i := len(c.loops) - 1; i >= 0; i-- {
+		l := &c.loops[i]
+		if cont && !l.isLoop {
+			continue
+		}
+		if label == "" || l.label == label {
+			if len(c.finallys) > l.finallys || c.handlerDepth > l.handlers || len(c.exits) > l.exits {
+				return -1, false
+			}
+			return i, cont
+		}
+	}
+	return -1, false
 }
 
 func (c *compiler) compileBreak(n *ast.BreakStmt) {
