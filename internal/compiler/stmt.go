@@ -985,7 +985,13 @@ func (c *compiler) compileSwitch(n *ast.SwitchStmt) {
 	for _, cs := range n.Cases {
 		all = append(all, cs.Body...)
 	}
+	first := len(c.locals)
 	c.hoistBlockDeclarations(all)
+	for i := first; i < len(c.locals); i++ {
+		if k := c.locals[i].kind; k == bindLet || k == bindConst {
+			c.locals[i].jumpedOver = true
+		}
+	}
 
 	// Each case's test is compared against the discriminant, which stays on the
 	// stack for the duration.

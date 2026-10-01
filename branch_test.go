@@ -108,3 +108,25 @@ func TestLetLoopBindings(t *testing.T) {
 		checkEval(t, tt.src, tt.want)
 	}
 }
+
+// TestSwitchDeadZone covers the let, const and class bindings of a switch's
+// case block, which a case can be entered past the declaration of: reading
+// one there is a ReferenceError, wherever the read is written, and not the
+// value of the dead zone's mark. Each answer is Node's.
+func TestSwitchDeadZone(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`var r; switch (1) { case 0: let y = 1; break; case 1: try { y } catch (e) { r = e.constructor.name } } r`, "ReferenceError"},
+		{`try { (() => { switch (2) { case 1: let a = 5; case 2: return typeof a } })() } catch (e) { e.constructor.name }`, "ReferenceError"},
+		{`try { (() => { switch (2) { case 1: let a = 5; case 2: return (() => a)() } })() } catch (e) { e.constructor.name }`, "ReferenceError"},
+		{`try { (() => { switch (2) { case 1: let a = 5; case 2: a = 3; return a } })() } catch (e) { e.constructor.name }`, "ReferenceError"},
+		{`var r = []; for (var i = 0; i < 3; i++) switch (i) { case 0: let v = "zero"; r.push(v); break; default: try { r.push(v) } catch (e) { r.push(e.constructor.name) } } r.join()`,
+			"zero,ReferenceError,ReferenceError"},
+		{`try { (() => { switch (1) { case 0: class K {} case 1: return typeof K } })() } catch (e) { e.constructor.name }`, "ReferenceError"},
+		{`(() => { switch (1) { case 1: const c = 1; try { c = 2 } catch (e) { return e.constructor.name + c } } })()`, "TypeError1"},
+		{`(() => { switch (1) { case 1: let a = 5; a++; return a + (() => a)() } })()`, "12"},
+		{`(() => { switch (0) { case 0: class K {} return typeof K } })()`, "function"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}

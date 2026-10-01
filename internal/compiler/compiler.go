@@ -133,6 +133,10 @@ type localVar struct {
 	// dead zone, which lets the compiler emit the checked accessors only where
 	// they are actually needed.
 	initialized bool
+	// jumpedOver marks a binding of a switch's case block, which a case can
+	// be entered past the declaration of: it stays in its dead zone to the
+	// compiler, whatever has been compiled, so every access is checked.
+	jumpedOver bool
 }
 
 // varScoped reports whether a binding belongs to its function's variable scope
@@ -861,7 +865,7 @@ func (c *compiler) declare(name string, kind bindKind, pos int) uint32 {
 func (c *compiler) markInitialized(name string) {
 	for i := len(c.locals) - 1; i >= 0; i-- {
 		if c.locals[i].name == name {
-			c.locals[i].initialized = true
+			c.locals[i].initialized = !c.locals[i].jumpedOver
 			return
 		}
 	}
