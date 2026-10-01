@@ -495,7 +495,13 @@ start:
 		return Undefined, err
 	}
 
-	v, err := r.execute(f)
+	var v Value
+	var err error
+	if t := treeOf(fn); t != nil {
+		v, err = r.runTree(f, t)
+	} else {
+		v, err = r.execute(f)
+	}
 	r.popFrame(base)
 	if err != errTailCall {
 		return v, err

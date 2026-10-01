@@ -3,6 +3,7 @@ package bytecode
 import (
 	"fmt"
 	"strings"
+	"unsafe"
 )
 
 // Instr is a single instruction. Op selects the operation; A and B carry
@@ -317,6 +318,10 @@ type Function struct {
 	// LeafNone. The VM answers a call of one itself, without running the
 	// body, where nothing could see the difference.
 	Leaf LeafKind
+	// VMCode is the VM's own form of the function, which it builds the first
+	// time the function runs and stores here once, atomically: it holds
+	// nothing of any one runtime's, so every runtime can share it.
+	VMCode unsafe.Pointer
 
 	// Source is the file or origin name used in stack traces.
 	Source string

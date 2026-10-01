@@ -550,6 +550,10 @@ type frame struct {
 	// native names the Go function for a frame that is executing native code,
 	// so that stack traces can show it.
 	native string
+
+	// tc is the tree tier's state for a frame running a tree, kept here so
+	// that a call allocates none.
+	tc tctx
 }
 
 // handler is a registered catch or finally target.
