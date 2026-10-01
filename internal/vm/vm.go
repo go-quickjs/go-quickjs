@@ -4139,8 +4139,14 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 		return r.constructNative(o, args, newTarget, target != o)
 	}
 
-	protoVal, err := r.getProp(target, atomPrototype, Obj(target))
-	if err != nil {
+	// A function's own data property is what the read would find, and is
+	// read from its table. A proxy, an accessor, or a prototype still to be
+	// made is read the general way.
+	var protoVal Value
+	var err error
+	if p := target.getOwnVisible(atomPrototype); p != nil && target.class == ClassFunction && p.flags&propAccessor == 0 {
+		protoVal = p.value
+	} else if protoVal, err = r.getProp(target, atomPrototype, Obj(target)); err != nil {
 		return Undefined, err
 	}
 	var proto *Object
@@ -4305,16 +4311,18 @@ func (r *Runtime) callIntrinsic1(fn *Object, this, a Value) (Value, error) {
 
 // ordinaryHasInstance answers what Function.prototype[Symbol.hasInstance]
 // would, where it can be answered without running anything a script could
-// see: c an ordinary function whose own prototype is a data property holding
-// an object, and v's chain free of proxies, whose traps are code. It reports
-// false in ok for anything else, which has the method called.
+// see: c an ordinary function, and v a primitive -- which no function has
+// as an instance, and which OrdinaryHasInstance answers before it reads the
+// prototype -- or an object whose chain is free of proxies, whose traps are
+// code, with c's own prototype a data property holding an object. It
+// reports false in ok for anything else, which has the method called.
 func ordinaryHasInstance(c *Object, v Value) (yes, ok bool) {
-	if !v.IsObject() {
-		return false, false
-	}
 	fd := c.fn()
 	if fd == nil || fd.boundTarget != nil || proxyOf(c) != nil {
 		return false, false
+	}
+	if !v.IsObject() {
+		return false, true
 	}
 	p := c.getOwnVisible(atomPrototype)
 	if p == nil || p.flags&propAccessor != 0 || !p.value.IsObject() {

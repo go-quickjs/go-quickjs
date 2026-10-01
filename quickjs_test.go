@@ -1599,6 +1599,48 @@ func TestSmallArrayStorage(t *testing.T) {
 		bad.length ? bad.join() : "ok"`, "ok")
 }
 
+// TestInstanceOfAndNewPrototype covers instanceof with a primitive, which
+// an ordinary function answers without reading its prototype, and new,
+// which reads a function's own prototype from its table: bound, proxied and
+// class constructors, Symbol.hasInstance, a proxy's trap seen only for an
+// object, a prototype replaced, set to a primitive or to null, and one a
+// proxy for new.target supplies. Each answer is Node's.
+func TestInstanceOfAndNewPrototype(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`function F() {} var r = [];
+			for (const v of [1, "s", null, undefined, true, Symbol(), 1n, {}, new F, Object.create(F.prototype)]) r.push(v instanceof F);
+			r.join()`,
+			"false,false,false,false,false,false,false,false,true,true"},
+		{`function F() {} var B = F.bind(null), P = new Proxy(F, {}), r = [];
+			for (const v of [1, new F]) r.push(v instanceof B, v instanceof P); r.join()`,
+			"false,false,true,true"},
+		{`class C {} var r = [1 instanceof C, new C instanceof C, "x" instanceof Object, (() => 1) instanceof Function]; r.join()`,
+			"false,true,false,true"},
+		{`var log = [], H = { [Symbol.hasInstance](v) { log.push(typeof v); return v === 1 } }; [1 instanceof H, 2 instanceof H, log.join()].join()`,
+			"true,false,number,number"},
+		{`try { 1 instanceof {} } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		{`function F() {} var P = new Proxy(F, { get(t, k) { if (k === "prototype") log.push("trap"); return Reflect.get(t, k) } }), log = [];
+			[1 instanceof P, ({}) instanceof P, log.join()].join()`,
+			"false,false,trap"},
+		{`function F() { this.a = 1 } var o1 = new F; F.prototype = { kind: "new" }; var o2 = new F;
+			[Object.getPrototypeOf(o1) === Object.getPrototypeOf(o2), o2.kind, o2 instanceof F, o1 instanceof F].join()`,
+			"false,new,true,false"},
+		{`function F() {} F.prototype = 3; var o = new F; Object.getPrototypeOf(o) === Object.prototype`,
+			"true"},
+		{`function F() {} var log = [], NT = new Proxy(F, { get(t, k) { log.push(String(k)); return k === "prototype" ? { tag: 7 } : t[k] } });
+			var o = Reflect.construct(F, [], NT); [o.tag, log.join()].join()`,
+			"7,prototype"},
+		{`function F() {} var B = F.bind(null); var o = new B; [o instanceof F, Object.getPrototypeOf(o) === F.prototype].join()`,
+			"true,true"},
+		{`function F() {} for (var i = 0; i < 3; i++) new F; F.prototype = null; Object.getPrototypeOf(new F) === Object.prototype`,
+			"true"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}
+
 func TestRegExpSyntaxErrorIsThrown(t *testing.T) {
 	checkEval(t, `try { new RegExp("(") } catch (e) { e.name }`, "SyntaxError")
 }
