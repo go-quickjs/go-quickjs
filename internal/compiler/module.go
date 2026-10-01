@@ -321,7 +321,7 @@ func compileModuleInit(prog *ast.Program, opts Options, info *ModuleInfo) *bytec
 	c.completionSlot = int32(c.nextSlot)
 	c.nextSlot++
 	c.hoistModuleBindings(prog.Body)
-	c.hoistBlockDeclarations(prog.Body)
+	c.hoistBlockDeclarations(prog.Body, true)
 	c.emit(bytecode.OpPushUndef, 0, 0)
 	c.emit(bytecode.OpReturn, 0, 0)
 	c.finish()

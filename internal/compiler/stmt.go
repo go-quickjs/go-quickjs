@@ -10,7 +10,7 @@ import (
 // compileStatements compiles a statement list, hoisting the function
 // declarations it contains so that they are callable before their definition.
 func (c *compiler) compileStatements(body []ast.Stmt) {
-	c.hoistBlockDeclarations(body)
+	c.hoistBlockDeclarations(body, true)
 	if has, async := usingKind(body); has {
 		c.compileDisposeScope(body[0].Pos(), async, func() {
 			for _, s := range body {
@@ -30,8 +30,10 @@ func (c *compiler) compileStatements(body []ast.Stmt) {
 // It is separate from compiling the list because a switch's bindings belong to
 // the whole case block rather than to one clause: they are created once, before
 // the first case expression is evaluated, and the clauses are compiled one
-// after another afterwards.
-func (c *compiler) hoistBlockDeclarations(body []ast.Stmt) {
+// after another afterwards. inOrder says the list runs from its first
+// statement, which a switch's does not: a case can be jumped to past a
+// declaration.
+func (c *compiler) hoistBlockDeclarations(body []ast.Stmt, inOrder bool) {
 	// Every binding of a scope exists before any of its code runs, so the
 	// lexical ones are created first. They must precede the function
 	// declarations: a hoisted function is compiled here, and if a let it
@@ -44,9 +46,29 @@ func (c *compiler) hoistBlockDeclarations(body []ast.Stmt) {
 	// environment, installed by hoistModuleBindings, so declaring slots for
 	// them here would shadow the very properties the linker forwards to.
 	if !c.atModuleTopLevel() {
-		for _, s := range body {
+		closures := -1
+		for i, s := range body {
 			if vd, ok := s.(*ast.VarDecl); ok && vd.Kind != ast.DeclVar {
-				c.predeclareLexical(vd)
+				// A let or const is marked as in its dead zone only where
+				// something could read it there: a closure or an eval in the
+				// list, which may run at any time, or a mention of the name
+				// before the declaration is done, which is all that runs
+				// before it in a list that runs in order. Otherwise nothing
+				// reads the slot before it is initialized.
+				mark := !inOrder || vd.Kind != ast.DeclLet && vd.Kind != ast.DeclConst
+				if !mark {
+					if closures < 0 {
+						closures = 0
+						if containsClosure(stmtNodes(body)...) {
+							closures = 1
+						}
+					}
+					// Each declaration's search is of the statements before
+					// it, so in a long list a late one is marked rather than
+					// searched for: compiling stays linear in the list.
+					mark = closures == 1 || i > maxDeadZoneSearch || mentionsDeclared(vd, body[:i])
+				}
+				c.predeclareLexicalMarked(vd, mark)
 			}
 			if cd, ok := s.(*ast.ClassDecl); ok && cd.Class.Name != nil {
 				c.declareLexicalName(cd.Class.Name.Name, bindLet, cd.Start)
@@ -182,6 +204,13 @@ func (c *compiler) emitAnnexBFunctionAlias(name string) {
 // predeclareLexical creates the bindings of a let or const declaration in
 // their uninitialized state.
 func (c *compiler) predeclareLexical(vd *ast.VarDecl) {
+	c.predeclareLexicalMarked(vd, true)
+}
+
+// predeclareLexicalMarked is predeclareLexical, storing the dead zone's mark
+// in the bindings' slots only with mark: without it they hold whatever they
+// held, which nothing reads before they are initialized.
+func (c *compiler) predeclareLexicalMarked(vd *ast.VarDecl, mark bool) {
 	kind := bindLet
 	if vd.Kind.IsConst() {
 		kind = bindConst
@@ -191,12 +220,18 @@ func (c *compiler) predeclareLexical(vd *ast.VarDecl) {
 		collectPatternNames(d.Target, &names)
 	}
 	for _, n := range names {
-		c.declareLexicalName(n, kind, vd.Start)
+		c.declareLexicalNameMarked(n, kind, vd.Start, mark)
 	}
 }
 
 // declareLexicalName declares a lexical binding and leaves it uninitialized.
 func (c *compiler) declareLexicalName(name string, kind bindKind, pos int) {
+	c.declareLexicalNameMarked(name, kind, pos, true)
+}
+
+// declareLexicalNameMarked is declareLexicalName, storing the dead zone's
+// mark in a frame slot only with mark.
+func (c *compiler) declareLexicalNameMarked(name string, kind bindKind, pos int, mark bool) {
 	if c.atScriptTopLevel() {
 		// A script's top-level lexical bindings outlive it: the next script in
 		// the same realm sees them, and so does eval, which a frame slot could
@@ -221,9 +256,51 @@ func (c *compiler) declareLexicalName(name string, kind bindKind, pos int) {
 	// The slot starts as the uninitialized marker, which the checked accessors
 	// test for. Frame locals are cleared on entry, and the zero Value is the
 	// number 0, so the marker has to be stored explicitly.
-	c.emit(bytecode.OpPushUninitialized, 0, 0)
-	c.emit(bytecode.OpSetLocal, slot, 0)
+	if mark {
+		c.emit(bytecode.OpPushUninitialized, 0, 0)
+		c.emit(bytecode.OpSetLocal, slot, 0)
+	}
 	c.markUninitialized(name)
+}
+
+// maxDeadZoneSearch is how many statements before a let or const are
+// searched for a mention of it, beyond which it is marked as in its dead
+// zone whether or not anything could see the mark.
+const maxDeadZoneSearch = 64
+
+// stmtNodes is a statement list as nodes, for the walkers that take them.
+func stmtNodes(list []ast.Stmt) []ast.Node {
+	nodes := make([]ast.Node, len(list))
+	for i, s := range list {
+		nodes[i] = s
+	}
+	return nodes
+}
+
+// mentionsDeclared reports whether a declaration's bindings could be read
+// before it initializes them: whether any of their names is mentioned in the
+// statements before it, or in its own initializers. A pattern counts as a
+// mention, since a default in it could read one.
+func mentionsDeclared(vd *ast.VarDecl, before []ast.Stmt) bool {
+	var names []string
+	for _, d := range vd.Decls {
+		id, ok := d.Target.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		names = append(names, id.Name)
+	}
+	for _, n := range names {
+		w := &argumentsScanner{seekName: n}
+		w.stmts(before)
+		for _, d := range vd.Decls {
+			w.expr(d.Init)
+		}
+		if w.found {
+			return true
+		}
+	}
+	return false
 }
 
 // markUninitialized records that a binding is still in its dead zone.
@@ -986,7 +1063,7 @@ func (c *compiler) compileSwitch(n *ast.SwitchStmt) {
 		all = append(all, cs.Body...)
 	}
 	first := len(c.locals)
-	c.hoistBlockDeclarations(all)
+	c.hoistBlockDeclarations(all, false)
 	for i := first; i < len(c.locals); i++ {
 		if k := c.locals[i].kind; k == bindLet || k == bindConst {
 			c.locals[i].jumpedOver = true

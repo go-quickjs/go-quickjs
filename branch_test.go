@@ -130,3 +130,49 @@ func TestSwitchDeadZone(t *testing.T) {
 		checkEval(t, tt.src, tt.want)
 	}
 }
+
+// TestDeadZoneMarks covers let and const bindings whose slots are not marked
+// as in their dead zone, where nothing could read them there, and the ones
+// that must be: a function declared in the block, a class, an eval, a
+// mention of the name before the declaration or in its own initializer, a
+// pattern's default, a nested block, and a switch, whose cases can be
+// jumped to past a declaration. Without a mark, a binding declared with no
+// initializer is still undefined each time it is reached. Each answer is
+// Node's.
+func TestDeadZoneMarks(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`var r; { try { f() } catch (e) { r = e.constructor.name } function f() { return y } let y = 1 } r`,
+			"ReferenceError"},
+		{`try { { let x = x } } catch (e) { e.constructor.name }`,
+			"ReferenceError"},
+		{`{ let a = 1, b = a + 1; b }`,
+			"2"},
+		{`var r; switch (1) { case 0: let y = 1; break; case 1: try { y } catch (e) { r = e.constructor.name } } r`,
+			"ReferenceError"},
+		{`try { { let { a = a } = {} } } catch (e) { e.constructor.name }`,
+			"ReferenceError"},
+		{`var r = []; for (var i = 0; i < 3; i++) { try { if (i) typeof v; r.push("ok") } catch (e) { r.push(e.constructor.name) } const v = i } r.join()`,
+			"ok,ReferenceError,ReferenceError"},
+		{`var r = []; for (var i = 0; i < 2; i++) { try { eval("v"); r.push("read") } catch (e) { r.push(e.constructor.name) } let v = i } r.join()`,
+			"ReferenceError,ReferenceError"},
+		{`var r; { { try { z } catch (e) { r = e.constructor.name } } let z = 1 } r`,
+			"ReferenceError"},
+		{`var r; { try { new K } catch (e) { r = e.constructor.name } class K { m() { return w } } let w = 1 } r`,
+			"ReferenceError"},
+		{`function* g() { for (let i = 0; i < 3; i++) { yield i; const v = i * 10; yield v } } [...g()].join()`,
+			"0,0,1,10,2,20"},
+		{`function f() { try { q } catch (e) { return e.constructor.name } let q = 1; return q } f() + f()`,
+			"ReferenceErrorReferenceError"},
+		{`var s = 0; for (var i = 0; i < 5; i++) { const sq = i * i; let t = sq + 1; s += t } s`,
+			"35"},
+		{`var r = []; for (var i = 0; i < 3; i++) { lbl: { if (i == 1) break lbl; let u = i; r.push(u) } } r.join()`,
+			"0,2"},
+		{`var r = []; for (const x of [1, 2, 3]) { const y = x * 2; let z; r.push(y, z) } r.join()`,
+			"2,,4,,6,"},
+		{`"use strict"; var r = []; for (var i = 0; i < 2; i++) { const c = i; try { c = 5 } catch (e) { r.push(e.constructor.name, c) } } r.join()`,
+			"TypeError,0,TypeError,1"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}
