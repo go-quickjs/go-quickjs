@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode/utf16"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/jsnum"
 	"github.com/go-quickjs/go-quickjs/internal/wtf8"
@@ -216,16 +217,57 @@ func (s *String) Concat(t *String) *String {
 	}
 	ascii := s.ascii && t.ascii
 	length := s.length + t.length
-	out := &String{length: length, ascii: ascii,
-		endsHigh: t.endsHigh, startsLow: s.startsLow}
 
 	const ropeThreshold = 64
-	if s.byteLenShallow()+t.byteLenShallow() < ropeThreshold {
-		out.s = s.Go() + t.Go()
+	if n := s.byteLenShallow() + t.byteLenShallow(); n < ropeThreshold {
+		out, b := newStringBytes(n)
+		out.length, out.ascii, out.endsHigh, out.startsLow = length, ascii, t.endsHigh, s.startsLow
+		copy(b[copy(b, s.Go()):], t.Go())
+		out.s = unsafe.String(unsafe.SliceData(b), n)
 		return out
 	}
+	out := &String{length: length, ascii: ascii,
+		endsHigh: t.endsHigh, startsLow: s.startsLow}
 	out.left, out.right = s, t
 	return out
+}
+
+// newStringBytes makes a String with room for n bytes in the same
+// allocation, n at most 72, and returns them to be filled before the String
+// is given them: a short string is then one allocation rather than two. Each
+// room fills its String up to one of Go's size classes, on a 64-bit platform.
+func newStringBytes(n int) (*String, []byte) {
+	switch {
+	case n <= 8:
+		x := new(struct {
+			String
+			b [8]byte
+		})
+		return &x.String, x.b[:n]
+	case n <= 24:
+		x := new(struct {
+			String
+			b [24]byte
+		})
+		return &x.String, x.b[:n]
+	case n <= 40:
+		x := new(struct {
+			String
+			b [40]byte
+		})
+		return &x.String, x.b[:n]
+	case n <= 56:
+		x := new(struct {
+			String
+			b [56]byte
+		})
+		return &x.String, x.b[:n]
+	}
+	x := new(struct {
+		String
+		b [72]byte
+	})
+	return &x.String, x.b[:n]
 }
 
 // A lone surrogate is three bytes of WTF-8, and the four functions below find

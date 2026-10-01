@@ -1562,6 +1562,26 @@ func TestRegExpReplaceShortcuts(t *testing.T) {
 	}
 }
 
+// TestShortConcatenations covers strings joined into a buffer of their own,
+// in the same allocation as the String: every length up to past the largest
+// buffer and the rope threshold, ASCII or not, and a surrogate pair joined
+// across the boundary, compared with what join makes of the same parts.
+func TestShortConcatenations(t *testing.T) {
+	checkEval(t, `var bad = [];
+		for (var n = 1; n < 80; n++) for (var k = 0; k <= n; k += 7) {
+			var a = "x".repeat(k), b = "y".repeat(n - k), s = a + b;
+			if (s !== [a, b].join("") || s.length !== n || s.charCodeAt(n - 1) !== (n > k ? 121 : 120)) bad.push(n + "/" + k);
+			var w = "é".repeat(k >> 1), v = "語".repeat((n - k) >> 2), u = w + v;
+			if (u !== [w, v].join("") || u.length !== w.length + v.length) bad.push("u" + n);
+		}
+		var hi = String.fromCharCode(0xD83D), lo = String.fromCharCode(0xDE00);
+		for (var n = 0; n < 70; n += 3) {
+			var j = "z".repeat(n) + hi + (lo + "z");
+			if (j.length !== n + 3 || j.codePointAt(n) !== 0x1F600 || j !== "z".repeat(n) + String.fromCodePoint(0x1F600) + "z") bad.push("s" + n);
+		}
+		bad.length ? bad.join() : "ok"`, "ok")
+}
+
 func TestRegExpSyntaxErrorIsThrown(t *testing.T) {
 	checkEval(t, `try { new RegExp("(") } catch (e) { e.name }`, "SyntaxError")
 }
