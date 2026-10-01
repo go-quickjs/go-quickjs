@@ -461,15 +461,30 @@ func (r *Runtime) regExpSymbolReplace(rx Value, args []Value) (Value, error) {
 		width = 2 * (rx.Object().data.(*regexpData).re.GroupCount() + 1)
 		count = len(spans) / width
 	}
+	// Nothing matched: the result is the subject, whole, which is the string
+	// itself rather than a copy of it.
+	if count == 0 {
+		return Str(s), nil
+	}
+	// A template without a $ is the replacement whatever matched, so the
+	// built-in exec's matches are not made into strings at all: only where
+	// they are is read. The result is about as long as the subject.
+	plain := fast && !functional && !strings.ContainsRune(template, '$')
+	if plain {
+		sb.Grow(len(s.Go()))
+	}
 	for k := 0; k < count; k++ {
 		if sb.overlong() {
 			return Undefined, r.throwStringLength()
 		}
 		var matched *String
-		var position int
+		var position, matchLen int
 		named := Undefined
 		captures = captures[:0]
-		if fast {
+		if plain {
+			caps := spans[k*width : (k+1)*width]
+			position, matchLen = caps[0], caps[1]-caps[0]
+		} else if fast {
 			caps := spans[k*width : (k+1)*width]
 			matched, position = s.Substring(caps[0], caps[1]), caps[0]
 			for i := 2; i < width; i += 2 {
@@ -518,10 +533,14 @@ func (r *Runtime) regExpSymbolReplace(rx Value, args []Value) (Value, error) {
 				return Undefined, err
 			}
 		}
-		matchLen := matched.Len()
+		if !plain {
+			matchLen = matched.Len()
+		}
 
 		var replacement string
-		if functional {
+		if plain {
+			replacement = template
+		} else if functional {
 			callArgs = append(callArgs[:0], Str(matched))
 			callArgs = append(callArgs, captures...)
 			callArgs = append(callArgs, Int(position), Str(s))

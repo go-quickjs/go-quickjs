@@ -84,7 +84,7 @@ type Runtime struct {
 	// regexpCache is the patterns the runtime has compiled; see
 	// compileRegExp.
 	regexpCache map[regexpKey]*regexp.Regexp
-	// argStack holds the arguments of the calls callIntrinsic1 makes.
+	// argStack holds the arguments of the calls callIntrinsic1 and call2 make.
 	argStack []Value
 	// capsBuf holds the indices of the match regexpExec is reading.
 	capsBuf []int
@@ -166,6 +166,10 @@ type Runtime struct {
 	microtasks []job
 	// hostJobs is what other goroutines have finished for the runtime.
 	hostJobs hostQueue
+	// typeofStrs are the strings typeof answers, made once each: a program
+	// that asks typeof in a loop otherwise makes a string every time. They
+	// are the runtime's own, since a String caches its code units in itself.
+	typeofStrs [8]*String
 	// asyncCtx is the async context: a value the host sets, which a job
 	// carries from where it was queued -- a reaction, from where it was
 	// registered -- to where it runs. See SetAsyncContext.

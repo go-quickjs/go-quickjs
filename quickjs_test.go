@@ -1535,6 +1535,33 @@ func TestRegExpTestUsesExec(t *testing.T) {
 	}
 }
 
+// TestRegExpReplaceShortcuts pins what replace answers where it takes a
+// shortcut: no match, a template without a $, whose matches are never made
+// into strings, and a pattern's own replace or split method, given its
+// arguments on the runtime's argument stack. typeof's strings, which a
+// runtime makes once each, are here too. Each answer is Node's.
+func TestRegExpReplaceShortcuts(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`"a-b-c".replace(/-/g, "+")`, "a+b+c"},
+		{`"abc".replace(/x*/g, "_")`, "_a_b_c_"},
+		{`String.fromCodePoint(0x1F600, 97, 0x1F600).replace(/(?:)/gu, ".") === "." + String.fromCodePoint(0x1F600) + ".a." + String.fromCodePoint(0x1F600) + "."`, "true"},
+		{`String.fromCodePoint(0x1F600, 97).replace(/(?:)/g, ".").length`, "7"},
+		{`var re = /a/y; re.lastIndex = 1; "aab".replace(re, "X") + " " + re.lastIndex`, "aXb 2"},
+		{`var re = /a/g; re.lastIndex = 5; "aXa".replace(re, "") + " " + re.lastIndex`, "X 0"},
+		{`var s = "abc"; s.replace(/z/g, "y") === s`, "true"},
+		{`"aaa".replace(/a/g, "bb")`, "bbbbbb"},
+		{`"x1y22".replace(/([0-9])+/g, "<$1>") + " " + "x1y22".replace(/[0-9]+/g, "#")`, "x<1>y<2> x#y#"},
+		{`var re = /b/g; re[Symbol.replace] = function* (s, r) { yield s + r }; [..."abc".replace(re, "!")].join()`, "abc!"},
+		{`var o = { [Symbol.split]: (s, l) => [s, l] }; "abc".split(o, 7).join()`, "abc,7"},
+		{`typeof 1 + typeof "" + typeof null + typeof undefined + typeof {} + typeof (() => 0) + typeof 1n + typeof Symbol() + typeof true`,
+			"numberstringobjectundefinedobjectfunctionbigintsymbolboolean"},
+		{`var a = []; for (let i = 0; i < 3; i++) a.push(typeof i); a.join()`, "number,number,number"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}
+
 func TestRegExpSyntaxErrorIsThrown(t *testing.T) {
 	checkEval(t, `try { new RegExp("(") } catch (e) { e.name }`, "SyntaxError")
 }

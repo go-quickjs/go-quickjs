@@ -2089,7 +2089,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			v := stack[sp-1]
 			stack[sp-1] = Bool(!(math.Float64bits(v.num) == trueBits || math.Float64bits(v.num) != falseBits && v.Truthy()))
 		case bytecode.OpTypeOf:
-			stack[sp-1] = Str(NewString(stack[sp-1].TypeOf()))
+			stack[sp-1] = Str(r.typeofString(stack[sp-1]))
 		case bytecode.OpIsNullish:
 			sp = pushAt(stack, sp, Bool(stack[sp-1].IsNullish()))
 
@@ -2496,7 +2496,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				}
 				sp = pushAt(stack, sp, v)
 			case bytecode.OpWithTypeof:
-				sp = pushAt(stack, sp, Str(NewString(v.TypeOf())))
+				sp = pushAt(stack, sp, Str(r.typeofString(v)))
 			default:
 				sp = pushAt(stack, sp, v)
 			}
@@ -4247,6 +4247,19 @@ func (fd *funcData) nameOr(fallback string) string {
 		return fallback
 	}
 	return fd.name
+}
+
+// call2 calls fn with two arguments, which are passed on the runtime's
+// argument stack rather than in a slice made for the call. No callee keeps
+// the slice it is given -- the interpreter's own calls give it a piece of
+// their stack, and a generator copies its arguments -- so any fn will do.
+func (r *Runtime) call2(fn, this, a, b Value) (Value, error) {
+	i := len(r.argStack)
+	r.argStack = append(r.argStack, a, b)
+	res, err := r.call(fn, this, r.argStack[i:i+2:i+2])
+	r.argStack[i], r.argStack[i+1] = Undefined, Undefined
+	r.argStack = r.argStack[:i]
+	return res, err
 }
 
 // callIntrinsic1 calls a function with one argument, as call does, but for

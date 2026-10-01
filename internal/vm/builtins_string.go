@@ -465,7 +465,7 @@ func (r *Runtime) initStringBuiltins() {
 					return Undefined, rt.throwTypeError(
 						"the separator's split method is not callable")
 				}
-				return rt.call(m, sep, []Value{this, arg(args, 1)})
+				return rt.call2(m, sep, this, arg(args, 1))
 			}
 		}
 		s, err := thisStr(rt, this)
@@ -728,7 +728,7 @@ func (r *Runtime) stringReplace(thisStr thisStrFunc, this Value, args []Value, a
 			if !isCallable(m) {
 				return Undefined, r.throwTypeError("the pattern's replace method is not callable")
 			}
-			return r.call(m, pat, []Value{this, arg(args, 1)})
+			return r.call2(m, pat, this, arg(args, 1))
 		}
 	}
 	s, err := thisStr(r, this)

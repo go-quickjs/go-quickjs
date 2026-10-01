@@ -455,3 +455,36 @@ func (v Value) TypeOf() string {
 // trueBits and falseBits are how true and false are spelled, which a branch
 // compares a value against before asking it anything more.
 var trueBits, falseBits = math.Float64bits(True.num), math.Float64bits(False.num)
+
+// typeofNames are the answers typeof gives, in typeofStrs's order.
+var typeofNames = [8]string{"undefined", "object", "boolean", "number", "string", "symbol", "bigint", "function"}
+
+// typeofString is the string typeof answers for v, made once per runtime.
+func (r *Runtime) typeofString(v Value) *String {
+	name := v.TypeOf()
+	i := 0
+	switch name {
+	case "object":
+		i = 1
+	case "boolean":
+		i = 2
+	case "number":
+		i = 3
+	case "string":
+		i = 4
+	case "symbol":
+		i = 5
+	case "bigint":
+		i = 6
+	case "function":
+		i = 7
+	}
+	if s := r.typeofStrs[i]; s != nil && typeofNames[i] == name {
+		return s
+	}
+	s := NewString(name)
+	if typeofNames[i] == name {
+		r.typeofStrs[i] = s
+	}
+	return s
+}
