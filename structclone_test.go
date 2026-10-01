@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
-	"github.com/go-quickjs/go-quickjs/internal/structclone"
 )
 
 // TestStructuredCloneAcrossRuntimes pins that a value serialized in one
@@ -31,7 +30,7 @@ func TestStructuredCloneAcrossRuntimes(t *testing.T) {
 		t.Fatal(err)
 	}
 	transfer, _ := a.Get("buf")
-	data, err := structclone.Serialize(a, v, []any{transfer}, nil)
+	data, err := a.Serialize(v, &quickjs.CloneOptions{Transfer: []quickjs.Value{transfer}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +40,7 @@ func TestStructuredCloneAcrossRuntimes(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		out, err := structclone.Deserialize(b, data, nil)
+		out, err := b.Deserialize(data, nil)
 		if err == nil {
 			err = b.Set("value", out)
 		}
@@ -93,8 +92,8 @@ func TestStructuredCloneErrors(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, err = structclone.Serialize(rt, v, nil, nil)
-		var dce *structclone.DataCloneError
+		_, err = rt.Serialize(v, nil)
+		var dce *quickjs.DataCloneError
 		if !errors.As(err, &dce) || dce.Message != want {
 			t.Errorf("%s: %v, want DataCloneError %q", src, err, want)
 		}
@@ -105,10 +104,9 @@ func TestStructuredCloneErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if data, err := structclone.Serialize(rt, v, nil, nil); err != nil {
+	if data, err := rt.Serialize(v, nil); err != nil {
 		t.Errorf("[Math, JSON]: %v", err)
-	} else if out, err := structclone.Deserialize(rt, data, nil); err != nil ||
-		out.(quickjs.Value).Len() != 2 {
+	} else if out, err := rt.Deserialize(data, nil); err != nil || out.Len() != 2 {
 		t.Errorf("[Math, JSON] = %v, %v", out, err)
 	}
 
@@ -116,7 +114,7 @@ func TestStructuredCloneErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = structclone.Serialize(rt, v, nil, nil)
+	_, err = rt.Serialize(v, nil)
 	var jsErr *quickjs.Error
 	if !errors.As(err, &jsErr) {
 		t.Fatalf("err = %v, want the getter's exception", err)
@@ -131,7 +129,7 @@ func TestStructuredCloneErrors(t *testing.T) {
 	}
 	kept, _ := rt.Get("kept")
 	fn, _ := rt.Eval("[() => 1]")
-	if _, err := structclone.Serialize(rt, fn, []any{kept}, nil); err == nil {
+	if _, err := rt.Serialize(fn, &quickjs.CloneOptions{Transfer: []quickjs.Value{kept}}); err == nil {
 		t.Fatal("a function was cloned")
 	}
 	if got, _ := rt.Eval("kept.byteLength"); got.Int() != 2 {
@@ -148,7 +146,7 @@ func TestStructuredCloneDepth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = structclone.Serialize(rt, v, nil, nil)
+	_, err = rt.Serialize(v, nil)
 	var jsErr *quickjs.Error
 	if !errors.As(err, &jsErr) {
 		t.Fatalf("err = %v, want a RangeError", err)

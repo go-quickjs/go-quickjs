@@ -7,7 +7,6 @@ import (
 	"time"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
-	"github.com/go-quickjs/go-quickjs/internal/structclone"
 )
 
 // Console installs the console object, writing to the given streams.
@@ -70,16 +69,16 @@ func evalWithHost(rt *quickjs.Runtime, name, src string, host quickjs.Value) (qu
 }
 
 // cloneBrands are the kinds cloneAs takes.
-var cloneBrands = map[string]structclone.Brand{
-	"host": structclone.Host, "opaque": structclone.Opaque,
-	"unsupported": structclone.Unsupported, "transfer": structclone.NeedsTransfer,
+var cloneBrands = map[string]quickjs.CloneBrand{
+	"host": quickjs.CloneHost, "opaque": quickjs.CloneOpaque,
+	"unsupported": quickjs.CloneUnsupported, "transfer": quickjs.CloneTransferOnly,
 }
 
 // cloneAs brands an object a script of the standard library made with how it
 // clones, as Node's are: a URL cannot be cloned, an AbortController clones as
 // an empty object, a Blob as a Blob.
 func cloneAs(obj quickjs.Value, kind string) {
-	structclone.SetBrand(obj, cloneBrands[kind])
+	obj.SetCloneBrand(cloneBrands[kind])
 }
 
 // consoleJS is the console, in script.

@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
-	"github.com/go-quickjs/go-quickjs/internal/structclone"
 )
 
 // Messaging: structuredClone, the ports of a MessageChannel, and
@@ -283,8 +282,8 @@ func (m *messaging) adoptEnd(core *portCore) (*portEnd, error) {
 // this runtime's no longer.
 func (m *messaging) serialize(v quickjs.Value, transfer []quickjs.Value, from *portEnd) (any, []*portCore, error) {
 	var moved []*portEnd
-	codec := &structclone.Codec{
-		Serialize: func(x any) (any, bool, error) {
+	codec := &quickjs.CloneCodec{
+		Serialize: func(x quickjs.Value) (any, bool, error) {
 			kind, err := m.hostKind.Call(x)
 			if err != nil || !kind.IsArray() {
 				return nil, false, err
@@ -308,7 +307,7 @@ func (m *messaging) serialize(v quickjs.Value, transfer []quickjs.Value, from *p
 			}
 			return nil, false, nil
 		},
-		Transfer: func(x any) (any, bool, error) {
+		Transfer: func(x quickjs.Value) (any, bool, error) {
 			kind, err := m.hostKind.Call(x)
 			if err != nil || !kind.IsArray() {
 				return nil, false, err
@@ -333,11 +332,7 @@ func (m *messaging) serialize(v quickjs.Value, transfer []quickjs.Value, from *p
 			return e.core, true, nil
 		},
 	}
-	list := make([]any, len(transfer))
-	for i, t := range transfer {
-		list[i] = t
-	}
-	data, err := structclone.Serialize(m.rt, v, list, codec)
+	data, err := m.rt.Serialize(v, &quickjs.CloneOptions{Transfer: transfer, Codec: codec})
 	if err != nil {
 		return nil, nil, m.cloneError(err)
 	}
@@ -354,8 +349,8 @@ func (m *messaging) serialize(v quickjs.Value, transfer []quickjs.Value, from *p
 // ports that came with it, in the order they were listed.
 func (m *messaging) deserialize(data any, ports []*portCore) (quickjs.Value, []quickjs.Value, error) {
 	made := map[*portCore]quickjs.Value{}
-	codec := &structclone.Codec{
-		Revive: func(token any) (any, error) {
+	codec := &quickjs.CloneCodec{
+		Revive: func(token any) (quickjs.Value, error) {
 			switch t := token.(type) {
 			case *portCore:
 				obj, err := m.adopt(t)
@@ -366,10 +361,14 @@ func (m *messaging) deserialize(data any, ports []*portCore) (quickjs.Value, []q
 			case blobToken:
 				return m.makeBlob.Call(m.rt.NewBytes(t.bytes), t.typ, t.file, t.name, t.lastModified)
 			}
-			return nil, errors.New("stdlib: an object of an unknown kind was cloned")
+			return quickjs.Value{}, errors.New("stdlib: an object of an unknown kind was cloned")
 		},
 	}
-	v, err := structclone.Deserialize(m.rt, data, codec)
+	s, ok := data.(*quickjs.Serialized)
+	if !ok {
+		return quickjs.Value{}, nil, errors.New("stdlib: not a serialized message")
+	}
+	v, err := m.rt.Deserialize(s, codec)
 	if err != nil {
 		return quickjs.Value{}, nil, m.cloneError(err)
 	}
@@ -385,7 +384,7 @@ func (m *messaging) deserialize(data any, ports []*portCore) (quickjs.Value, []q
 		}
 		objs[i] = obj
 	}
-	return v.(quickjs.Value), objs, nil
+	return v, objs, nil
 }
 
 // cloneError is the exception an error from cloning becomes: a DataCloneError
@@ -396,7 +395,7 @@ func (m *messaging) cloneError(err any) error {
 	case string:
 		msg = e
 	case error:
-		var dce *structclone.DataCloneError
+		var dce *quickjs.DataCloneError
 		if !errors.As(e, &dce) {
 			return e
 		}
@@ -694,7 +693,7 @@ func (e *portEnd) broadcastMessage(v quickjs.Value) error {
 	copies := make([]any, len(to))
 	copies[0] = data
 	for i := 1; i < len(to); i++ {
-		copies[i] = structclone.Copy(data)
+		copies[i] = data.(*quickjs.Serialized).Copy()
 	}
 	for i, c := range to {
 		c.enqueue(portMsg{data: copies[i]})

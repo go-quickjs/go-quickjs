@@ -617,6 +617,29 @@ where a host releases what it holds for the script. `Close` is never for
 another goroutine: that one closes the channel given to `AbortOn`, and the
 runtime's own goroutine closes it.
 
+## Moving values between runtimes
+
+`Serialize` and `Deserialize` are structured cloning, what `structuredClone`
+and `postMessage` do: a value is serialized in one runtime into a `Serialized`
+that belongs to none, handed to another goroutine, and deserialized in the same
+runtime or another. Shared references and cycles come out as they went in, an
+`ArrayBuffer` listed in `Transfer` moves rather than being copied, and a
+`SharedArrayBuffer`'s memory is shared, so two workers given one see each
+other's writes.
+
+```go
+data, err := a.Serialize(v, &quickjs.CloneOptions{Transfer: []quickjs.Value{buf}})
+// on b's goroutine:
+w, err := b.Deserialize(data, nil)
+```
+
+A `Serialized` is deserialized once; `Copy` makes another, for a message sent
+to many. What cannot be cloned is a `*DataCloneError` with V8's message, which
+a host throws as a `DOMException`. A host's own objects take part through a
+`CloneCodec`, which turns them into tokens and back, and `SetCloneBrand` marks
+an object the host made as cloned through the codec, as an empty object, not
+at all, or only by transfer.
+
 ## Realms
 
 A runtime evaluates in the realm it was made with, and can make more: each has
