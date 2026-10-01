@@ -60,3 +60,51 @@ func TestBranchConditions(t *testing.T) {
 		checkEval(t, tt.src, tt.want)
 	}
 }
+
+// TestLetLoopBindings covers loops whose head declares let or const, which
+// get a fresh binding each iteration only where a closure could tell them
+// apart: one made by eval, in the test or the update clause, a function
+// or class declared in the body, an accessor. Without one, the binding is
+// the same slot throughout, and a for-of's is initialized without first
+// being marked uninitialized; the dead zone is still enforced, in the head
+// and in the body, and a const still refuses assignment. Each answer is
+// Node's.
+func TestLetLoopBindings(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`var s = 0; for (let i = 0; i < 5; i++) s += i; var t = 0; for (const x of [1, 2, 3]) t += x; s + " " + t`,
+			"10 6"},
+		{`var fs = []; for (let i = 0; i < 3; i++) fs.push(eval("() => i")); fs.map(f => f()).join()`,
+			"0,1,2"},
+		{`var fs = []; for (let i = 0; fs.push(() => i), i < 2; i++) {} fs.map(f => f()).join()`,
+			"0,1,2"},
+		{`var fs = []; for (let i = 0; i < 3; fs.push(() => i), i++) {} fs.map(f => f()).join()`,
+			"1,2,3"},
+		{`var fs = []; for (let i = 0; i < 3; i++) { function g() { return i } fs.push(g) } fs.map(f => f()).join()`,
+			"0,1,2"},
+		{`var fs = []; for (let i = 0; i < 3; i++) { class K { m() { return i } } fs.push(new K) } fs.map(k => k.m()).join()`,
+			"0,1,2"},
+		{`var fs = []; for (let i = 0; i < 3; i++) { var o = { get v() { return i } }; fs.push(o) } fs.map(o => o.v).join()`,
+			"0,1,2"},
+		{`try { for (let i = i; i < 1; i++) {} } catch (e) { e.constructor.name }`,
+			"ReferenceError"},
+		{`try { for (let x of [x]) {} } catch (e) { e.constructor.name }`,
+			"ReferenceError"},
+		{`var r = []; for (const x of [1, 2]) { try { y } catch (e) { r.push(e.constructor.name) } let y = x; r.push(y) } r.join()`,
+			"ReferenceError,1,ReferenceError,2"},
+		{`var r = []; for (let i = 0; i < 3; i++) { try { j } catch (e) { r.push(e.constructor.name) } let j = i * 2; r.push(j) } r.join()`,
+			"ReferenceError,0,ReferenceError,2,ReferenceError,4"},
+		{`var r = []; for (let [a, b] of [[1, 2], [3, 4]]) r.push(a + b); for (const { k } of [{ k: 5 }]) r.push(k); r.join()`,
+			"3,7,5"},
+		{`function* g() { for (let i = 0; i < 3; i++) yield i; for (const x of "ab") yield x } [...g()].join()`,
+			"0,1,2,a,b"},
+		{`var r = []; for (let i = 0; i < 3; i++) { i++; r.push(i) } r.join()`,
+			"1,3"},
+		{`var r = []; outer: for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) { if (j == 1) continue outer; r.push(i + "" + j) } r.join()`,
+			"00,10,20"},
+		{`"use strict"; var r = []; for (const x of [1, 2]) { try { x = 3 } catch (e) { r.push(e.constructor.name) } } r.join()`,
+			"TypeError,TypeError"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}

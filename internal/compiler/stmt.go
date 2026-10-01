@@ -602,7 +602,9 @@ func (c *compiler) compileFor(n *ast.ForStmt) {
 		case *ast.VarDecl:
 			if init.Kind != ast.DeclVar {
 				c.predeclareLexical(init)
-				perIteration = true
+				// Only a closure could tell one iteration's binding from
+				// the next's.
+				perIteration = containsClosure(init, n.Test, n.Update, n.Body)
 			}
 			c.compileVarDecl(init)
 		case *ast.ExprStmt:

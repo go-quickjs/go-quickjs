@@ -61,6 +61,24 @@ type argumentsScanner struct {
 	// the object through a capture. inArrow is how deep in arrows the walk is.
 	applyOnly bool
 	inArrow   int
+	// seekClosure looks for anything that could capture a binding: a
+	// function, an arrow, a class -- whose methods and fields are functions
+	// -- or a direct eval, whose code may make one.
+	seekClosure bool
+}
+
+// containsClosure reports whether code could capture a binding in scope
+// around it: whether it has a function, arrow or class in it, or a direct
+// eval. A loop with none needs no fresh copy of its head's bindings for
+// each iteration, since nothing could hold on to one.
+func containsClosure(nodes ...ast.Node) bool {
+	w := &argumentsScanner{seekClosure: true, seekDirectEval: true}
+	for _, n := range nodes {
+		if n != nil {
+			w.node(n)
+		}
+	}
+	return w.found
 }
 
 // argumentsOnlyApplied reports whether a function body uses `arguments` only
@@ -212,6 +230,10 @@ func (w *argumentsScanner) stmt(s ast.Stmt) {
 			w.expr(d.Init)
 		}
 	case *ast.FuncDecl:
+		if w.seekClosure {
+			w.found = true
+			return
+		}
 		// A nested function declaration has its own arguments object, but a
 		// name search still descends into it.
 		if w.seekName != "" {
@@ -221,6 +243,10 @@ func (w *argumentsScanner) stmt(s ast.Stmt) {
 			w.stmts(n.Fn.Body)
 		}
 	case *ast.ClassDecl:
+		if w.seekClosure {
+			w.found = true
+			return
+		}
 		w.class(n.Class)
 	case *ast.ReturnStmt:
 		w.expr(n.Arg)
@@ -340,6 +366,10 @@ func (w *argumentsScanner) expr(e ast.Expr) {
 			w.found = true
 		}
 	case *ast.FuncLit:
+		if w.seekClosure {
+			w.found = true
+			return
+		}
 		// Only an arrow shares the enclosing this and arguments; a search for
 		// a name descends into every function, since a name is in scope
 		// however deeply it is nested. A search for a direct eval stops at all
@@ -356,6 +386,10 @@ func (w *argumentsScanner) expr(e ast.Expr) {
 			w.inArrow--
 		}
 	case *ast.ClassLit:
+		if w.seekClosure {
+			w.found = true
+			return
+		}
 		w.class(n)
 	case *ast.TemplateLit:
 		for _, x := range n.Exprs {

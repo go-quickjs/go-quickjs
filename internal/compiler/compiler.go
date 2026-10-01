@@ -551,6 +551,15 @@ func (c *compiler) fuse(op bytecode.Op, a uint32) (int, bool) {
 	case op == bytecode.OpGetIndex && last.Op == bytecode.OpGetLocal2:
 		last.Op = bytecode.OpGetLocalIndex
 		c.movePosition(n)
+	case op == bytecode.OpInitLocal && last.Op == bytecode.OpSetLocal && last.A == a && n >= 2 &&
+		c.fn.Code[n-2].Op == bytecode.OpPushUninitialized && !c.targets[n-1]:
+		// A binding marked uninitialized and initialized straight after, as
+		// a for-of's is each iteration: nothing can see the mark.
+		first := &c.fn.Code[n-2]
+		first.Op, first.A = bytecode.OpInitLocal, a
+		c.fn.Code = c.fn.Code[:n-1]
+		c.collapsePositions(n - 2)
+		return n - 2, true
 	case op == bytecode.OpCallMethod && a == 2 && last.Op == bytecode.OpLazyArguments:
 		// f.apply(x, arguments), with the arguments object never made.
 		last.Op = bytecode.OpApplyArguments
