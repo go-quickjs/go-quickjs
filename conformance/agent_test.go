@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/go-quickjs/go-quickjs"
-	"github.com/go-quickjs/go-quickjs/internal/hostjobs"
 	"github.com/go-quickjs/go-quickjs/internal/sharedmem"
 )
 
@@ -167,7 +166,7 @@ func (p *agentPool) run(a *agent, src string, started chan<- error) {
 	defer rt.Close()
 	// Stopping the pool stops whatever the agent is running, a callback
 	// or an Atomics.wait with no timeout as well as a script.
-	hostjobs.Abort(rt, p.ctx.Done())
+	rt.AbortOn(p.ctx.Done())
 	var receiver quickjs.Value
 	for name, fn := range map[string]any{
 		"agentReceiveBroadcast": func(f quickjs.Value) { receiver = f },
@@ -203,7 +202,7 @@ func (p *agentPool) run(a *agent, src string, started chan<- error) {
 	started <- nil
 	for {
 		select {
-		case <-hostjobs.Ready(rt):
+		case <-rt.Wake():
 			// A waitAsync another agent settled, run with the test's time.
 			_, err := rt.EvalContext(p.ctx, "undefined")
 			p.fail(err)

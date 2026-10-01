@@ -19,7 +19,6 @@ import (
 
 	"github.com/go-quickjs/go-quickjs"
 	"github.com/go-quickjs/go-quickjs/conformance"
-	"github.com/go-quickjs/go-quickjs/internal/hostjobs"
 )
 
 // The test262 conformance run.
@@ -359,8 +358,13 @@ func runOne(suite *conformance.Suite, tc *conformance.Test,
 	waitsOnHost := slices.Contains(tc.Meta.Includes, "atomicsHelper.js")
 	if waitsOnHost {
 		rt.Set("setTimeout", func(cb quickjs.Value, delay float64) {
+			w := rt.StartAsyncWork()
 			time.AfterFunc(time.Duration(delay*float64(time.Millisecond)), func() {
-				hostjobs.Post(rt, func() { cb.Call() })
+				w.Complete(func(err error) {
+					if err == nil {
+						cb.Call()
+					}
+				})
 			})
 		})
 	}
@@ -436,7 +440,7 @@ func runOne(suite *conformance.Suite, tc *conformance.Test,
 	wait:
 		for !asyncFinished(printed) {
 			select {
-			case <-hostjobs.Ready(rt):
+			case <-rt.Wake():
 				if _, runErr = rt.EvalContext(ctx, "undefined"); runErr != nil {
 					break wait
 				}

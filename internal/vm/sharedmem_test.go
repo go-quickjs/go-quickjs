@@ -59,11 +59,10 @@ func TestNotifyDeliversUnlocked(t *testing.T) {
 	}
 }
 
-// TestHostJobsReadyAfterAttach pins that HostJobsReady signals only while
-// jobs wait for the runtime to run them: a loop attached is told to run them
-// but the runtime keeps them until it has, and running them leaves no signal
-// behind (KI-60).
-func TestHostJobsReadyAfterAttach(t *testing.T) {
+// TestHostJobsReadyAfterRun pins that HostJobsReady signals only while jobs
+// wait for the runtime to run them: running them leaves no signal behind
+// (KI-60).
+func TestHostJobsReadyAfterRun(t *testing.T) {
 	signalled := func(r *Runtime) bool {
 		select {
 		case <-r.HostJobsReady():
@@ -75,33 +74,13 @@ func TestHostJobsReadyAfterAttach(t *testing.T) {
 	r := New(Config{})
 	ran := 0
 	r.PostFromElsewhere(func() { ran++ })
-	var posted []func()
-	r.AttachHostLoop(func(fn func()) { posted = append(posted, fn) })
-	if len(posted) != 1 {
-		t.Fatalf("attaching told the loop %d times, want 1", len(posted))
-	}
 	if !signalled(r) {
-		t.Error("HostJobsReady does not signal the job still waiting")
+		t.Error("HostJobsReady does not signal the job waiting")
 	}
-	posted[0]()
-	if ran != 1 || signalled(r) {
-		t.Errorf("the loop ran the queue: %d jobs ran, want 1, and the signal is %v", ran, signalled(r))
-	}
-	r.PostFromElsewhere(func() { ran++ })
-	if len(posted) != 2 {
-		t.Fatalf("with a loop, it was told %d times, want 2", len(posted))
-	}
-	posted[1]()
-	if ran != 2 || signalled(r) {
-		t.Errorf("with a loop, %d jobs ran, want 2, and the signal is %v", ran, signalled(r))
-	}
-
-	r = New(Config{})
-	ran = 0
 	r.PostFromElsewhere(func() { ran++ })
 	_ = r.runHostJobs()
-	if ran != 1 {
-		t.Errorf("%d jobs ran, want 1", ran)
+	if ran != 2 {
+		t.Errorf("%d jobs ran, want 2", ran)
 	}
 	if signalled(r) {
 		t.Error("HostJobsReady still signals the jobs that ran")

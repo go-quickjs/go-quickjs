@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
-	"github.com/go-quickjs/go-quickjs/internal/hostjobs"
 	"github.com/go-quickjs/go-quickjs/internal/structclone"
 )
 
@@ -83,6 +82,10 @@ type portEnd struct {
 	broadcast bool
 	// unwatch stops a BroadcastChannel's watch on its runtime's end.
 	unwatch func() bool
+	// work is how what arrives from other goroutines reaches the end's
+	// runtime. It does not keep the runtime busy: hold does that for a port
+	// that is listening, as node's does.
+	work *quickjs.AsyncWork
 }
 
 // messaging is a runtime's ports, and the script functions they are made
@@ -262,7 +265,7 @@ func (m *messaging) adopt(core *portCore) (quickjs.Value, error) {
 // adoptEnd is adopt, returning the end.
 func (m *messaging) adoptEnd(core *portCore) (*portEnd, error) {
 	m.next++
-	e := &portEnd{m: m, id: m.next, core: core, reffed: true}
+	e := &portEnd{m: m, id: m.next, core: core, reffed: true, work: m.startWork()}
 	obj, err := m.makePort.Call(e.id)
 	if err != nil {
 		return nil, err
@@ -429,9 +432,23 @@ func (c *portCore) enqueue(msg portMsg) {
 	}
 }
 
-// schedule has the end's runtime dispatch the next message.
+// schedule has the end's runtime dispatch the next message, from any
+// goroutine. Once the end is no longer the runtime's, or the runtime has
+// closed, there is nothing to dispatch to.
 func (e *portEnd) schedule() {
-	hostjobs.Post(e.m.rt, e.dispatchNext)
+	e.work.Post(func(err error) {
+		if err == nil {
+			e.dispatchNext()
+		}
+	})
+}
+
+// startWork is what one of the runtime's ends hears through: work that does
+// not of itself keep the runtime busy.
+func (m *messaging) startWork() *quickjs.AsyncWork {
+	w := m.rt.StartAsyncWork()
+	w.Unref()
+	return w
 }
 
 // dispatchNext dispatches the message at the head of the queue, on the
@@ -554,7 +571,12 @@ func (e *portEnd) close() {
 		return
 	}
 	e.release()
-	hostjobs.Post(e.m.rt, func() { e.m.raise(e.m.deliver.Call(e.obj, "close")) })
+	// The close event is a task of its own, which the program waits for.
+	e.m.rt.StartAsyncWork().Complete(func(err error) {
+		if err == nil {
+			e.m.raise(e.m.deliver.Call(e.obj, "close"))
+		}
+	})
 	e.core.disentangle(0)
 }
 
@@ -632,7 +654,7 @@ var broadcasts = struct {
 func (m *messaging) openBroadcast(name string, obj quickjs.Value) int {
 	m.next++
 	core := &portCore{started: true}
-	e := &portEnd{m: m, id: m.next, core: core, obj: obj, reffed: true, channel: name, broadcast: true}
+	e := &portEnd{m: m, id: m.next, core: core, obj: obj, reffed: true, channel: name, broadcast: true, work: m.startWork()}
 	core.owner = e
 	m.ports[e.id] = e
 	broadcasts.Lock()
@@ -728,6 +750,7 @@ func (e *portEnd) detach() {
 
 // release is the end being this runtime's no longer.
 func (e *portEnd) release() {
+	e.work.Done()
 	delete(e.m.ports, e.id)
 	e.reffed = false
 	e.hold()

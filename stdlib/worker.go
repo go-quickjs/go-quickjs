@@ -10,7 +10,6 @@ import (
 	"sync/atomic"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
-	"github.com/go-quickjs/go-quickjs/internal/hostjobs"
 )
 
 // Workers lets a script start workers -- node:worker_threads' Worker, and the
@@ -486,7 +485,7 @@ func runWorker(ctx context.Context, cfg Config, w *workerContext, wh *workerHand
 		wh.setCode(0)
 		loop.Close()
 	}
-	hostjobs.Abort(rt, ctx.Done())
+	rt.AbortOn(ctx.Done())
 	// A rejection nothing handles ends the worker, as in node -- unless the
 	// worker listens for process's "unhandledRejection", which handles it.
 	// The process is told before it is installed, when it takes it.

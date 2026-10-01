@@ -45,7 +45,6 @@ import (
 	"time"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
-	"github.com/go-quickjs/go-quickjs/internal/hostjobs"
 )
 
 // Loop runs the work a runtime has waiting: the microtasks a promise queues,
@@ -62,9 +61,10 @@ type Loop struct {
 	timers timerQueue
 	nextID int64
 
-	// tasks carries work from other goroutines. It is buffered so that a
-	// finishing request does not block on a loop that is busy.
-	tasks chan func()
+	// work carries work from other goroutines to the runtime, which runs it
+	// as a task when the loop runs its jobs. It does not keep the runtime
+	// busy of itself: pending counts what does.
+	work *quickjs.AsyncWork
 	// wake is how a loop that is waiting is told to look again. Work that
 	// finishes without posting anything -- a socket closing, a request being
 	// cancelled -- changes nothing the loop is watching, and a loop waiting on
@@ -101,14 +101,12 @@ func NewLoop(rt *quickjs.Runtime) *Loop {
 // newLoop is NewLoop for a loop whose context ends with ctx as well as with
 // its runtime: a worker's, which terminate ends.
 func newLoop(rt *quickjs.Runtime, ctx context.Context) *Loop {
-	l := &Loop{rt: rt, tasks: make(chan func(), 64), wake: make(chan struct{}, 1)}
+	l := &Loop{rt: rt, work: rt.StartAsyncWork(), wake: make(chan struct{}, 1)}
+	l.work.Unref()
 	l.ctx, l.cancel = context.WithCancel(ctx)
 	if ctx != rt.Context() {
 		context.AfterFunc(rt.Context(), l.cancel)
 	}
-	// What another goroutine finishes for the runtime -- the settling of an
-	// Atomics.waitAsync -- is posted to the loop like any other work.
-	hostjobs.Attach(rt, l.Post)
 	return l
 }
 
@@ -131,16 +129,14 @@ func (l *Loop) Post(fn func()) {
 	if closed {
 		return
 	}
-	select {
-	case l.tasks <- fn:
-	default:
-		// The queue is full, which means the loop is far behind. Growing it is
-		// better than dropping the work or blocking the goroutine that has it.
-		go func() {
-			defer func() { recover() }()
-			l.tasks <- fn
-		}()
-	}
+	// The runtime holds what is posted until it runs, whatever the loop is
+	// doing; a loop closed by then runs none of it.
+	l.work.Post(func(err error) {
+		if err == nil && !l.isClosed() {
+			fn()
+		}
+		l.ran()
+	})
 }
 
 // ran records that posted work has been taken off the queue and run.
@@ -235,7 +231,6 @@ func loopContext(l *Loop) context.Context {
 func (l *Loop) Run(ctx context.Context) error {
 	// The callbacks run under ctx, so that one that never returns is
 	// stopped by it too, not only the waiting between them.
-	defer hostjobs.WithContext(l.rt, ctx)()
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -244,7 +239,9 @@ func (l *Loop) Run(ctx context.Context) error {
 			// What the loop was waiting for will not be delivered.
 			return nil
 		}
-		if err := l.rt.RunJobs(); l.fatal(err) {
+		// What other goroutines finished runs here, a task at a time, each
+		// followed by the microtasks it queued.
+		if err := l.rt.RunJobsContext(ctx); l.fatal(err) {
 			return err
 		}
 		if err := l.takeFailure(); l.fatal(err) {
@@ -254,7 +251,7 @@ func (l *Loop) Run(ctx context.Context) error {
 		// queue may be long, and each callback may queue microtasks of its own.
 		now := time.Now()
 		if t := l.timers.due(now); t != nil {
-			if err := l.fire(t, now); l.fatal(err) {
+			if err := l.fire(ctx, t, now); l.fatal(err) {
 				return err
 			}
 			continue
@@ -270,18 +267,13 @@ func (l *Loop) Run(ctx context.Context) error {
 			timer := time.NewTimer(max(0, time.Until(next)))
 			defer timer.Stop()
 			wait = timer.C
-		} else if !l.Pending() {
+		} else if !l.Pending() && !l.rt.Busy() {
 			// No timers, no host work, nothing queued: the program is over.
 			return nil
 		}
 
 		select {
-		case fn := <-l.tasks:
-			fn()
-			l.ran()
-			if err := l.takeFailure(); l.fatal(err) {
-				return err
-			}
+		case <-l.rt.Wake():
 		case <-l.wake:
 		case <-wait:
 		case <-ctx.Done():
@@ -300,11 +292,10 @@ func (l *Loop) fatal(err error) bool {
 // RunUntil works until the given promise settles, which is what a host running
 // one asynchronous thing wants rather than a loop that outlives it.
 func (l *Loop) RunUntil(ctx context.Context, done <-chan struct{}) error {
-	defer hostjobs.WithContext(l.rt, ctx)()
 	for {
 		select {
 		case <-done:
-			return l.rt.RunJobs()
+			return l.rt.RunJobsContext(ctx)
 		default:
 		}
 		if err := ctx.Err(); err != nil {
@@ -313,12 +304,15 @@ func (l *Loop) RunUntil(ctx context.Context, done <-chan struct{}) error {
 		if l.isClosed() {
 			return nil
 		}
-		if err := l.rt.RunJobs(); err != nil {
+		if err := l.rt.RunJobsContext(ctx); err != nil {
+			return err
+		}
+		if err := l.takeFailure(); err != nil {
 			return err
 		}
 		now := time.Now()
 		if t := l.timers.due(now); t != nil {
-			if err := l.fire(t, now); err != nil {
+			if err := l.fire(ctx, t, now); err != nil {
 				return err
 			}
 			continue
@@ -330,16 +324,11 @@ func (l *Loop) RunUntil(ctx context.Context, done <-chan struct{}) error {
 			wait = timer.C
 		}
 		select {
-		case fn := <-l.tasks:
-			fn()
-			l.ran()
-			if err := l.takeFailure(); err != nil {
-				return err
-			}
+		case <-l.rt.Wake():
 		case <-l.wake:
 		case <-wait:
 		case <-done:
-			return l.rt.RunJobs()
+			return l.rt.RunJobsContext(ctx)
 		case <-ctx.Done():
 			return ctx.Err()
 		}
@@ -365,19 +354,20 @@ func (l *Loop) takeFailure() error {
 	return err
 }
 
-// fire runs a timer's callback and re-arms it if it repeats.
-func (l *Loop) fire(t *timer, now time.Time) error {
+// fire runs a timer's callback, and the microtasks it queued, under ctx, and
+// re-arms it if it repeats.
+func (l *Loop) fire(ctx context.Context, t *timer, now time.Time) error {
 	if t.repeat > 0 {
 		t.at = now.Add(t.repeat)
 		l.timers.add(t)
 	} else {
 		delete(l.timers.byID, t.id)
 	}
-	_, err := t.fn.Call(t.args...)
+	_, err := t.fn.CallContext(ctx, t.args...)
 	if err != nil {
 		return err
 	}
-	return l.rt.RunJobs()
+	return l.rt.RunJobsContext(ctx)
 }
 
 // ErrLoopClosed reports work handed to a loop that has stopped.

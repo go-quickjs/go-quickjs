@@ -36,9 +36,6 @@ type hostQueue struct {
 	// ready has a value when jobs wait, or when the last live work has
 	// ended: a loop waiting on it looks again.
 	ready chan struct{}
-	// post is the host loop's way to run a function on the runtime's
-	// goroutine, when one is attached; it is told to run the queue.
-	post func(func())
 }
 
 // signal wakes whoever waits on ready. The lock is held.
@@ -81,11 +78,7 @@ func (r *Runtime) enqueueHostJob(j hostJob) bool {
 		j.work.queued++
 	}
 	q.signal()
-	post := q.post
 	q.mu.Unlock()
-	if post != nil {
-		post(r.runHostJobsForLoop)
-	}
 	return true
 }
 
@@ -134,14 +127,6 @@ func (r *Runtime) runHostJob() (bool, error) {
 	}
 }
 
-// runHostJobsForLoop is what a host loop is handed to run: the jobs, each
-// followed by the microtasks it queued, as any run of them is.
-func (r *Runtime) runHostJobsForLoop() {
-	if r.frameDepth == 0 {
-		_ = r.DrainJobs()
-	}
-}
-
 // CloseHostJobs closes the queue: every job waiting is cancelled, in order,
 // and any posted from now on is cancelled at once. The runtime has closed.
 func (r *Runtime) CloseHostJobs() {
@@ -155,7 +140,6 @@ func (r *Runtime) CloseHostJobs() {
 	jobs := q.jobs
 	q.jobs = nil
 	q.live = 0
-	q.post = nil
 	q.signal()
 	q.mu.Unlock()
 	for _, j := range jobs {
@@ -168,20 +152,6 @@ func (r *Runtime) CloseHostJobs() {
 // PostFromElsewhere runs fn on the runtime's goroutine, from any goroutine,
 // the next time the runtime runs its jobs.
 func (r *Runtime) PostFromElsewhere(fn func()) { r.postFromElsewhere(fn) }
-
-// AttachHostLoop has post told to run the queue whenever a job arrives, post
-// being a host loop's way to run a function on the runtime's goroutine. The
-// jobs stay in the runtime's queue until they run, whatever the loop does.
-func (r *Runtime) AttachHostLoop(post func(func())) {
-	q := &r.hostJobs
-	q.mu.Lock()
-	q.post = post
-	waiting := len(q.jobs) > 0 && !q.closed
-	q.mu.Unlock()
-	if waiting {
-		post(r.runHostJobsForLoop)
-	}
-}
 
 // HostJobsReady has a value when work from another goroutine is waiting for
 // the runtime to run its jobs, or when the last piece of work that kept it

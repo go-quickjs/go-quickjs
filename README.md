@@ -560,6 +560,63 @@ A host that emulates a browser's document can make its `document.all`:
 `undefined`, while everything else sees an ordinary object. Given a Go
 function, it is callable too.
 
+## Work that finishes on other goroutines
+
+A runtime belongs to one goroutine, but a host's timers, reads and requests
+finish on others. `AsyncWork` is how their results come back: it is Node-API's
+async work, and Deno's op. Work is started on the runtime's goroutine, results
+are posted to it from any goroutine, and every function posted is called
+exactly once:
+
+- with `nil`, on the runtime's goroutine, when the runtime next runs its jobs,
+  in the order posted, each followed by the microtasks it queued;
+- with `ErrClosed` if the runtime closed first, which is where the work
+  releases what it holds;
+- with `ErrWorkDone` if the work had already ended.
+
+Nothing else drops one: not a loop that stops, not an interrupted script, not
+another function that panics. A timer, and a whole event loop:
+
+```go
+rt.Set("setTimeout", func(cb quickjs.Value, ms int) {
+    w := rt.StartAsyncWork() // keeps the runtime busy until it ends
+    time.AfterFunc(time.Duration(ms)*time.Millisecond, func() {
+        w.Complete(func(err error) { // Post, then Done
+            if err == nil {
+                cb.Call()
+            }
+        })
+    })
+})
+
+for rt.Busy() {
+    select {
+    case <-rt.Wake():
+        if err := rt.RunJobsContext(ctx); err != nil {
+            return err
+        }
+    case <-ctx.Done():
+        return ctx.Err()
+    }
+}
+```
+
+A source of many results, such as a socket, calls `Post` for each and `Done`
+when it ends. `Unref` stops work keeping the runtime busy, as `unref()` does in
+node. `AbortOn` stops whatever the runtime runs once a channel closes, which is
+how a parent ends a worker from another goroutine.
+
+### Closing a runtime
+
+`Close` may be called from inside the runtime's own script, as `process.exit`
+would be, and then ends it as node ends a worker: the script stops at that
+call, running no `catch` and no `finally`; what was posted to an `AsyncWork`
+is called with `ErrClosed`; the runtime's `Context` is cancelled; and the hooks
+`OnClose` registered run, newest first, before `Close` returns. Those hooks are
+where a host releases what it holds for the script. `Close` is never for
+another goroutine: that one closes the channel given to `AbortOn`, and the
+runtime's own goroutine closes it.
+
 ## Realms
 
 A runtime evaluates in the realm it was made with, and can make more: each has

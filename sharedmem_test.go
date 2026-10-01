@@ -8,7 +8,6 @@ import (
 	"time"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
-	"github.com/go-quickjs/go-quickjs/internal/hostjobs"
 	"github.com/go-quickjs/go-quickjs/internal/sharedmem"
 )
 
@@ -144,7 +143,7 @@ func TestSharedMemoryGrowth(t *testing.T) {
 func runHostJobs(t *testing.T, rt *quickjs.Runtime) {
 	t.Helper()
 	select {
-	case <-hostjobs.Ready(rt):
+	case <-rt.Wake():
 	case <-time.After(10 * time.Second):
 		t.Fatal("nothing arrived")
 	}
