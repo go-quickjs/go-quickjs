@@ -315,11 +315,26 @@ func (r *Runtime) initRegExpBuiltins() {
 	})
 
 	r.defMethod(p, "test", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		if !this.IsObject() {
+			return Undefined, rt.throwTypeError("RegExp.prototype.test called on a non-object")
+		}
 		s, err := rt.toString(arg(args, 0))
 		if err != nil {
 			return Undefined, err
 		}
-		res, err := rt.regexpExec(this, s)
+		// An unmodified RegExp is matched directly, with lastIndex and the
+		// legacy statics as exec has them, but without the array exec
+		// would make for nobody to read.
+		if _, ok := rt.builtinFlags(this); ok && propsIntact(rt.proto.regexp, rt.regexpExecProps) {
+			caps, _, err := rt.regexpMatch(this, s)
+			if err != nil {
+				return Undefined, err
+			}
+			return Bool(caps != nil), nil
+		}
+		// Anything else goes through its exec, as RegExpExec has it: a
+		// subclass's, or one a script assigned.
+		res, err := rt.regExpExec(this, s)
 		if err != nil {
 			return Undefined, err
 		}

@@ -1517,6 +1517,24 @@ func TestStringRegExpMethods(t *testing.T) {
 	}
 }
 
+// RegExp.prototype.test goes through exec as RegExpExec has it: one a script
+// assigned, or a subclass's, is called, where test used to match directly
+// whatever exec said. An unmodified RegExp's test still keeps lastIndex and
+// the legacy statics as exec does. The answers are node's.
+func TestRegExpTestUsesExec(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`var re = /a/; re.exec = () => null; re.test("a")`, "false"},
+		{`var n = 0, re = /a/; re.exec = function (s) { n++; return RegExp.prototype.exec.call(this, s) }; re.test("xa") + " " + n`, "true 1"},
+		{`class R extends RegExp { exec() { return {} } }; new R("z").test("a")`, "true"},
+		{`var re = /a/; re.exec = () => 1; try { re.test("a") } catch (e) { e.constructor.name }`, "TypeError"},
+		{`try { RegExp.prototype.test.call(1, "a") } catch (e) { e.constructor.name }`, "TypeError"},
+		{`var re = /(b)/g; re.test("abcb"); re.lastIndex + " " + RegExp.$1`, "2 b"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}
+
 func TestRegExpSyntaxErrorIsThrown(t *testing.T) {
 	checkEval(t, `try { new RegExp("(") } catch (e) { e.name }`, "SyntaxError")
 }
