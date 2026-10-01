@@ -87,10 +87,4 @@ An interruption is deliberately **not** catchable from script, so a sandboxed
 program cannot defeat its own timeout with `try`/`catch`. A catastrophically
 backtracking regular expression fails with an error rather than stalling.
 
-[QuickJS-NG]: https://github.com/quickjs-ng/quickjs
-[test262]: https://github.com/tc39/test262
-[goja]: https://github.com/dop251/goja
-[v8-v7]: https://github.com/mozilla/arewefastyet/tree/master/benchmarks/v8-v7
-[go-intl]: https://github.com/go-quickjs/go-intl
 [go-intl-compat]: https://github.com/go-quickjs/go-intl/blob/main/compat.go
-[arm-aor]: https://github.com/ARM-software/optimized-routines

@@ -96,11 +96,3 @@ a host throws as a `DOMException`. A host's own objects take part through a
 `CloneCodec`, which turns them into tokens and back, and `SetCloneBrand` marks
 an object the host made as cloned through the codec, as an empty object, not
 at all, or only by transfer.
-
-[QuickJS-NG]: https://github.com/quickjs-ng/quickjs
-[test262]: https://github.com/tc39/test262
-[goja]: https://github.com/dop251/goja
-[v8-v7]: https://github.com/mozilla/arewefastyet/tree/master/benchmarks/v8-v7
-[go-intl]: https://github.com/go-quickjs/go-intl
-[go-intl-compat]: https://github.com/go-quickjs/go-intl/blob/main/compat.go
-[arm-aor]: https://github.com/ARM-software/optimized-routines
