@@ -308,12 +308,14 @@ func (v Value) CallWithThisContext(ctx context.Context, this Value, args ...any)
 	if r == nil || r.closed {
 		return Value{}, ErrClosed
 	}
-	_, leave := r.enter(ctx)
+	outer := v.rt.Context()
+	nested, leave := r.enter(ctx)
 	defer leave()
 	res, err := v.CallWithThis(this, args...)
 	var jsErr *Error
 	if err != nil && !errors.As(err, &jsErr) &&
 		(errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		endNested(v.rt, nested, ctx, outer)
 		return Value{}, fmt.Errorf("quickjs: execution interrupted: %w", err)
 	}
 	return res, err

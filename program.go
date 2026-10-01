@@ -18,8 +18,14 @@ import (
 type Program struct {
 	name, src string
 	strict    bool
-	// standard is the script as the standard has it, which Compile made.
-	standard *bytecodeFunc
+	// line and column place the source within the file it is named for.
+	line, column int
+	// standard is the script as the standard has it, made by Compile, or
+	// the first time a runtime without node quirks runs one that a
+	// runtime's Compile made.
+	standardOnce sync.Once
+	standard     *bytecodeFunc
+	standardErr  error
 	// quirks is the script as a runtime WithNodeQuirks compiles it, made the
 	// first time one runs it.
 	quirksOnce sync.Once
@@ -31,7 +37,16 @@ type Program struct {
 type CompileOption func(*compileConfig)
 
 type compileConfig struct {
-	strict bool
+	strict       bool
+	line, column int
+}
+
+// WithOffset places the source within a larger file -- a script in an HTML
+// page, a function body a host wraps -- so that stack traces and syntax errors
+// give positions in the whole file: its first line is line lines down, and
+// that line starts column columns in. Later lines start where they do.
+func WithOffset(line, column int) CompileOption {
+	return func(c *compileConfig) { c.line, c.column = line, column }
 }
 
 // WithStrict compiles the whole script as strict code, as though it began
@@ -48,22 +63,54 @@ func Compile(name, src string, opts ...CompileOption) (*Program, error) {
 	for _, o := range opts {
 		o(&c)
 	}
-	fn, err := compileScript(src, name, 0, 0, c.strict, false)
+	fn, err := compileScript(src, name, c.line, c.column, c.strict, false)
 	if err != nil {
 		return nil, err
 	}
-	return &Program{name: name, src: src, strict: c.strict, standard: fn}, nil
+	return &Program{name: name, src: src, strict: c.strict, line: c.line, column: c.column, standard: fn}, nil
 }
+
+// Compile is the package's Compile as this runtime parses source, which is
+// as V8 does where it departs from the standard if the runtime was made
+// WithNodeQuirks: what Eval would accept, a program from here accepts. The
+// program may still be run by any runtime.
+func (r *Runtime) Compile(name, src string, opts ...CompileOption) (*Program, error) {
+	if !r.nodeQuirks {
+		return Compile(name, src, opts...)
+	}
+	var c compileConfig
+	for _, o := range opts {
+		o(&c)
+	}
+	fn, err := compileScript(src, name, c.line, c.column, c.strict, true)
+	if err != nil {
+		return nil, err
+	}
+	p := &Program{name: name, src: src, strict: c.strict, line: c.line, column: c.column}
+	p.quirksOnce.Do(func() { p.quirks = fn })
+	return p, nil
+}
+
+// CodeGenerationAllowed reports whether the runtime compiles source a script
+// hands it, which a runtime made WithoutCodeGeneration does not: a host that
+// compiles such source for the script -- node:vm's Script -- refuses it then,
+// as eval is refused.
+func (r *Runtime) CodeGenerationAllowed() bool { return !r.noCodeGeneration }
 
 // code is the program as the runtime compiles source: WithNodeQuirks parses
 // and compiles some code as V8 does, which the program is then compiled for
 // too, once, however many runtimes run it.
 func (p *Program) code(r *Runtime) (*bytecodeFunc, error) {
 	if !r.nodeQuirks {
-		return p.standard, nil
+		p.standardOnce.Do(func() {
+			if p.standard == nil {
+				p.standard, p.standardErr = compileScript(p.src, p.name, p.line, p.column, p.strict, false)
+			}
+		})
+		return p.standard, p.standardErr
 	}
 	p.quirksOnce.Do(func() {
-		p.quirks, p.quirksErr = compileScript(p.src, p.name, 0, 0, p.strict, true)
+		p.quirks, p.quirksErr = compileScript(p.src, p.name, p.line, p.column, p.strict, true)
 	})
 	return p.quirks, p.quirksErr
 }

@@ -1,10 +1,12 @@
 package stdlib
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
-	"github.com/go-quickjs/go-quickjs/internal/vmhook"
 )
 
 // VM installs node:vm: contexts to run code in, each a realm of its own whose
@@ -17,30 +19,54 @@ import (
 // compile anything here, as it refuses eval.
 func VM(rt *quickjs.Runtime) error {
 	host := rt.NewObject()
-	run := func(r *quickjs.Runtime, realm *quickjs.Realm, src, filename string, lineOffset, columnOffset int, timeout float64) (quickjs.Value, error) {
-		var re any
-		if realm != nil {
-			re = realm
+	// compile compiles what the script hands node:vm, which a runtime made
+	// without code generation refuses, as it refuses eval.
+	compile := func(r *quickjs.Runtime, src, filename string, lineOffset, columnOffset int) (*quickjs.Program, error) {
+		if !r.CodeGenerationAllowed() {
+			return nil, r.ThrowEvalError("code generation from strings is disabled")
 		}
-		v, err := vmhook.Run(r, re, src, vmhook.Options{
-			Filename: filename, LineOffset: lineOffset, ColumnOffset: columnOffset,
-			Timeout: time.Duration(timeout * float64(time.Millisecond)),
-		})
-		val, _ := v.(quickjs.Value)
-		return val, err
+		return r.Compile(filename, src, quickjs.WithOffset(lineOffset, columnOffset))
+	}
+	// run runs src in realm, or in the realm running now when realm is nil,
+	// under a timeout of its own: running out of it stops this run alone, and
+	// is an Error the caller can catch, with node's code.
+	run := func(r *quickjs.Runtime, realm *quickjs.Realm, src, filename string, lineOffset, columnOffset int, timeout float64) (quickjs.Value, error) {
+		p, err := compile(r, src, filename, lineOffset, columnOffset)
+		if err != nil {
+			return quickjs.Value{}, err
+		}
+		ctx, d := context.Background(), time.Duration(timeout*float64(time.Millisecond))
+		if d > 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, d)
+			defer cancel()
+		}
+		var v quickjs.Value
+		if realm != nil {
+			v, err = realm.RunProgramContext(ctx, p)
+		} else {
+			v, err = r.RunProgramContext(ctx, p)
+		}
+		if err != nil && ctx.Err() != nil && errors.Is(err, context.DeadlineExceeded) {
+			e := r.NewError("Error", fmt.Sprintf("Script execution timed out after %dms", d.Milliseconds()))
+			if err := e.Set("code", "ERR_SCRIPT_EXECUTION_TIMEOUT"); err != nil {
+				return quickjs.Value{}, err
+			}
+			return quickjs.Value{}, r.Throw(e)
+		}
+		return v, err
 	}
 	for name, fn := range map[string]any{
 		// newContext makes a realm, a context of sandbox unless it is
 		// undefined, and hands back what runs code in it.
 		"newContext": func(r *quickjs.Runtime, sandbox quickjs.Value) (quickjs.Value, error) {
-			re, err := r.NewRealm()
+			var opts []quickjs.RealmOption
+			if !sandbox.IsUndefined() {
+				opts = append(opts, quickjs.WithSandbox(sandbox))
+			}
+			re, err := r.NewRealm(opts...)
 			if err != nil {
 				return quickjs.Value{}, err
-			}
-			if !sandbox.IsUndefined() {
-				if err := vmhook.Contextify(re, sandbox); err != nil {
-					return quickjs.Value{}, err
-				}
 			}
 			handle := r.NewObject()
 			if err := handle.Set("global", re.Global()); err != nil {
@@ -57,7 +83,8 @@ func VM(rt *quickjs.Runtime) error {
 		},
 		// check compiles code, which is when a Script reports a SyntaxError.
 		"check": func(r *quickjs.Runtime, src, filename string, lineOffset, columnOffset int) error {
-			return vmhook.Check(r, src, vmhook.Options{Filename: filename, LineOffset: lineOffset, ColumnOffset: columnOffset})
+			_, err := compile(r, src, filename, lineOffset, columnOffset)
+			return err
 		},
 	} {
 		if err := host.Set(name, fn); err != nil {

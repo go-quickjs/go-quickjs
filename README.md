@@ -486,9 +486,13 @@ func serve(req Request) (string, error) {
 - A program runs as a script, like `Eval`. Running it twice on one runtime
   redeclares its top-level `class`, `let` and `const`, which is a SyntaxError,
   as evaluating the same source twice would be.
+- `quickjs.WithOffset(line, column)` places the source within a larger file,
+  such as a script in an HTML page, so that stack traces and syntax errors
+  give positions in the whole file.
 - A program is compiled as the standard has it. A runtime `WithNodeQuirks`
   compiles it once more, the first time one runs it, so that it runs as that
-  runtime would compile it.
+  runtime would compile it. `rt.Compile` compiles as that runtime parses, so
+  that source only V8 accepts compiles where `Eval` would accept it.
 
 ## Reading values back
 
@@ -654,8 +658,23 @@ re.Set("log", func(s string) { fmt.Println(s) }) // a function of that realm
 re.Eval(`log(String(Array.isArray([])))`)
 ```
 
-`node:vm`, in the standard library, is realms with a sandbox object in front
-of their globals.
+A realm made `WithSandbox` is a context, as `node:vm`'s `createContext` makes
+one: its global names are the sandbox object's properties first, and what its
+scripts declare globally lands on the sandbox. `RunProgram` and
+`RunProgramContext` run a compiled program in a realm:
+
+```go
+sandbox, _ := rt.Eval(`({count: 1})`)
+re, _ := rt.NewRealm(quickjs.WithSandbox(sandbox))
+p, _ := quickjs.Compile("page.js", `var next = count + 1`)
+re.RunProgram(p) // sandbox.next is 2
+```
+
+Called from a Go function inside a running script, as `node:vm` calls them,
+they run in that script's turn, and a context of their own that ends stops that
+run alone: it returns an error wrapping the context's, and the script that made
+the call runs on. `Value.CallContext` and `EvalContext` behave the same.
+`node:vm`, in the standard library, is built on these.
 
 ## Modules
 

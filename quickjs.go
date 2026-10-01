@@ -369,6 +369,7 @@ func (r *Runtime) evalIn(ctx context.Context, re *vm.Realm, name, src string) (r
 // nil, and then the jobs it queued.
 func (r *Runtime) runIn(ctx context.Context, re *vm.Realm, fn *bytecodeFunc) (result Value, err error) {
 	rt := r.rt
+	outer := rt.Context()
 	nested, leave := r.enter(ctx)
 	defer leave()
 
@@ -388,6 +389,7 @@ func (r *Runtime) runIn(ctx context.Context, re *vm.Realm, fn *bytecodeFunc) (re
 		return Value{}, ErrClosed
 	}
 	if err != nil {
+		endNested(rt, nested, ctx, outer)
 		return Value{}, r.wrapError(err)
 	}
 	// Promise reactions are queued rather than run synchronously, so the queue
@@ -400,6 +402,18 @@ func (r *Runtime) runIn(ctx context.Context, re *vm.Realm, fn *bytecodeFunc) (re
 		}
 	}
 	return Value{v: v, rt: r.rt}, nil
+}
+
+// endNested ends the stop of a call made from inside a running script --
+// a host function evaluating more, or calling back -- that its own context
+// stopped: the call stops, with an error wrapping that context's, and the
+// script it was made from runs on, as node:vm's timeout leaves the code that
+// set it running. A stop of the script's own -- its context, an abort --
+// stops everything, as it always does.
+func endNested(rt *vm.Runtime, nested bool, ctx, outer context.Context) {
+	if nested && ctx != nil && ctx.Err() != nil && (outer == nil || outer.Err() == nil) {
+		rt.EndNestedStop()
+	}
 }
 
 // enter sets the context a call runs under, and returns whether the call is
