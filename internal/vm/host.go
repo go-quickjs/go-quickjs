@@ -174,5 +174,16 @@ func (h *HostPromise) RejectError(err error) {
 	h.Reject(h.rt.NewError("Error", err.Error()))
 }
 
+// AsyncContext is the async context: the value a job carries from where it
+// was queued to where it runs.
+func (r *Runtime) AsyncContext() Value { return r.asyncCtx }
+
+// SetAsyncContext makes v the async context, and returns the one before.
+func (r *Runtime) SetAsyncContext(v Value) Value {
+	prev := r.asyncCtx
+	r.asyncCtx = v
+	return prev
+}
+
 // EnqueueJob adds a microtask, which runs when the queue is next drained.
 func (r *Runtime) EnqueueJob(fn func()) { r.enqueueJob(fn) }

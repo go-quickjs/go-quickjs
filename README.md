@@ -610,6 +610,23 @@ when it ends. `Unref` stops work keeping the runtime busy, as `unref()` does in
 node. `AbortOn` stops whatever the runtime runs once a channel closes, which is
 how a parent ends a worker from another goroutine.
 
+### Async context
+
+The runtime holds one async context value, and the engine carries it to where
+queued work runs: a promise reaction (a `then`, an `await`) runs in the context
+it was registered in, a job in the one it was queued in, and what is posted to
+an `AsyncWork` in the one the work was started in. `AsyncContext` reads it and
+`SetAsyncContext` sets it. The value is the host's, and opaque to the engine.
+
+This is what `AsyncLocalStorage` is built on, as node's is since node 24 and as
+the TC39 AsyncContext proposal has it. The standard library's
+`node:async_hooks` keeps a map from each storage to its store in the context,
+and gives the same answers as node 26 for stores through `await`, `then`,
+microtasks, timers, `Promise.all`, `snapshot`, `AsyncResource` and
+`enterWith`. A host that runs callbacks of its own takes the context when it
+starts the work and sets it around the callback, as the standard library's
+timers do.
+
 ### Closing a runtime
 
 `Close` may be called from inside the runtime's own script, as `process.exit`

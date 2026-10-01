@@ -430,10 +430,14 @@ func (r *Runtime) enter(ctx context.Context) (nested bool, leave func()) {
 	rt := r.rt
 	if !rt.Running() {
 		// Whatever was in force before -- a loop's, between its tasks -- is
-		// again after.
-		prev := rt.Context()
+		// again after, and so is the async context: a script that set one
+		// for the rest of its turn leaves it there.
+		prev, prevAsync := rt.Context(), rt.AsyncContext()
 		rt.SetContext(ctx)
-		return false, func() { rt.SetContext(prev) }
+		return false, func() {
+			rt.SetContext(prev)
+			rt.SetAsyncContext(prevAsync)
+		}
 	}
 	outer := rt.Context()
 	run, cancel := ctx, func() {}

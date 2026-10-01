@@ -119,7 +119,14 @@ func (r *Runtime) runHostJob() (bool, error) {
 			q.update(w, was)
 		}
 		q.mu.Unlock()
-		j.run()
+		if j.work != nil {
+			prev := r.asyncCtx
+			r.asyncCtx = j.work.ctx
+			j.run()
+			r.asyncCtx = prev
+		} else {
+			j.run()
+		}
 		if r.stopped != nil {
 			return true, r.stopped
 		}
@@ -172,6 +179,9 @@ func (r *Runtime) HostBusy() bool {
 // posted to and ended from any.
 type HostWork struct {
 	r *Runtime
+	// ctx is the async context the work was started in, which what is
+	// posted to it runs in.
+	ctx Value
 	// ref is whether the work keeps the runtime busy, done whether it has
 	// ended, and queued how many of its jobs wait. The queue's lock guards
 	// them.
@@ -199,7 +209,7 @@ func (q *hostQueue) update(w *HostWork, was bool) {
 // StartHostWork begins a piece of work, which keeps the runtime busy until it
 // is done and its jobs have run.
 func (r *Runtime) StartHostWork() *HostWork {
-	w := &HostWork{r: r, ref: true}
+	w := &HostWork{r: r, ref: true, ctx: r.asyncCtx}
 	q := &r.hostJobs
 	q.mu.Lock()
 	if !q.closed {

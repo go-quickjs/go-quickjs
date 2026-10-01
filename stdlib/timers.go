@@ -28,7 +28,9 @@ func Timers(rt *quickjs.Runtime, loop *Loop) error {
 		}
 		d := time.Duration(delayMS * float64(time.Millisecond))
 		loop.nextID++
-		t := &timer{id: loop.nextID, at: time.Now().Add(d), fn: fn, args: args}
+		// The callback runs in the async context that armed it, as node's
+		// does: an AsyncLocalStorage's store survives a setTimeout.
+		t := &timer{id: loop.nextID, at: time.Now().Add(d), fn: fn, args: args, actx: rt.AsyncContext()}
 		if repeat {
 			// An interval of nothing would spin; the web clamps it to a
 			// millisecond and so does this.

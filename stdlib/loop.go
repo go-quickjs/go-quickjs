@@ -363,7 +363,9 @@ func (l *Loop) fire(ctx context.Context, t *timer, now time.Time) error {
 	} else {
 		delete(l.timers.byID, t.id)
 	}
+	prev := l.rt.SetAsyncContext(t.actx)
 	_, err := t.fn.CallContext(ctx, t.args...)
+	l.rt.SetAsyncContext(prev)
 	if err != nil {
 		return err
 	}
@@ -384,8 +386,11 @@ type timer struct {
 	repeat time.Duration
 	fn     quickjs.Value
 	args   []any
-	index  int
-	dead   bool
+	// actx is the async context the timer was armed in, which its callback
+	// runs in.
+	actx  quickjs.Value
+	index int
+	dead  bool
 }
 
 // timerQueue keeps the armed timers in the order they are due.

@@ -39,6 +39,9 @@ type reaction struct {
 	onFulfilled Value
 	onRejected  Value
 	result      *Object
+	// ctx is the async context where the reaction was registered, which
+	// its job runs in, however the promise came to settle.
+	ctx Value
 }
 
 func (r *Runtime) promiseOf(this Value, name string) (*promiseData, error) {
@@ -220,7 +223,7 @@ func (r *Runtime) enqueueReaction(p *promiseData, rc reaction) {
 	if state == promiseRejected {
 		p.handled = true
 	}
-	r.enqueueJob(func() {
+	r.enqueueJobIn(rc.ctx, func() {
 		handler := rc.onFulfilled
 		if state == promiseRejected {
 			handler = rc.onRejected
@@ -255,28 +258,39 @@ func thrownValue(err error) Value {
 	return Str(NewString(err.Error()))
 }
 
-// enqueueJob adds a microtask.
+// enqueueJob adds a microtask, which runs in the async context it was queued
+// in.
 func (r *Runtime) enqueueJob(fn func()) {
-	r.microtasks = append(r.microtasks, job{run: fn, realm: r.Realm})
+	r.enqueueJobIn(r.asyncCtx, fn)
 }
 
-// job is a queued microtask and the realm that queued it, which it runs in:
-// what it makes without calling a function -- a module it loads, a promise it
-// settles -- is that realm's.
+// enqueueJobIn adds a microtask that runs in the async context ctx.
+func (r *Runtime) enqueueJobIn(ctx Value, fn func()) {
+	r.microtasks = append(r.microtasks, job{run: fn, realm: r.Realm, ctx: ctx})
+}
+
+// job is a queued microtask, the realm that queued it, which it runs in --
+// what it makes without calling a function, a module it loads, a promise it
+// settles, is that realm's -- and the async context it runs in.
 type job struct {
 	run   func()
 	realm *Realm
+	ctx   Value
 }
 
-// runJob runs a job in its realm.
+// runJob runs a job in its realm and its async context, and puts back the
+// context there was before.
 func (r *Runtime) runJob(j job) {
+	prevCtx := r.asyncCtx
+	r.asyncCtx = j.ctx
 	if j.realm == nil || j.realm == r.Realm {
 		j.run()
+		r.asyncCtx = prevCtx
 		return
 	}
 	prev := r.Realm
 	r.Realm = j.realm
-	defer func() { r.Realm = prev }()
+	defer func() { r.Realm, r.asyncCtx = prev, prevCtx }()
 	j.run()
 }
 
@@ -357,7 +371,7 @@ func (r *Runtime) promiseThenInto(o *Object, onFulfilled, onRejected Value, resu
 	if !ok {
 		return
 	}
-	rc := reaction{onFulfilled: onFulfilled, onRejected: onRejected, result: result}
+	rc := reaction{onFulfilled: onFulfilled, onRejected: onRejected, result: result, ctx: r.asyncCtx}
 
 	if p.state == promisePending {
 		p.reactions = append(p.reactions, rc)

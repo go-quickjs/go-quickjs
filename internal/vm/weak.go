@@ -152,7 +152,11 @@ func (r *Runtime) runCleanups() {
 		if !ok || !isCallable(d.cleanup) {
 			continue
 		}
-		if _, err := r.call(d.cleanup, Undefined, []Value{p.held}); err != nil {
+		prev := r.asyncCtx
+		r.asyncCtx = d.ctx
+		_, err := r.call(d.cleanup, Undefined, []Value{p.held})
+		r.asyncCtx = prev
+		if err != nil {
 			r.reportCleanupError(err)
 		}
 	}

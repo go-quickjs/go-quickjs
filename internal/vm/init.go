@@ -54,6 +54,7 @@ func New(cfg Config) *Runtime {
 		symbolRegistry:   make(map[string]*Symbol),
 		cleanups:         &cleanupQueue{},
 		hostJobs:         hostQueue{ready: make(chan struct{}, 1)},
+		asyncCtx:         Undefined,
 	}
 	r.Realm = newRealm(r)
 	r.initWellKnownSymbols()

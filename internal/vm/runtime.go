@@ -166,6 +166,10 @@ type Runtime struct {
 	microtasks []job
 	// hostJobs is what other goroutines have finished for the runtime.
 	hostJobs hostQueue
+	// asyncCtx is the async context: a value the host sets, which a job
+	// carries from where it was queued -- a reaction, from where it was
+	// registered -- to where it runs. See SetAsyncContext.
+	asyncCtx Value
 	// asyncWaits are the runtime's waiters in Atomics.waitAsync.
 	asyncWaits asyncWaits
 

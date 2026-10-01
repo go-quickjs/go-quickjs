@@ -159,3 +159,34 @@ func (r *Runtime) AbortOn(done <-chan struct{}) {
 		r.rt.SetAbort(done)
 	}
 }
+
+// AsyncContext is the runtime's async context: a value the host sets, which
+// the engine carries from where work was queued to where it runs. A promise
+// reaction -- a then, an await -- runs in the context it was registered in,
+// a job in the one it was queued in, a FinalizationRegistry's callback in
+// the one the registry was made in, and what is posted to an AsyncWork in
+// the one the work was started in. It is undefined until a host sets it.
+//
+// It is what AsyncLocalStorage is built on, as node's is since node 24 and
+// as the TC39 AsyncContext proposal has it: the value is opaque to the
+// engine, and a host's AsyncLocalStorage keeps in it, say, a map from each
+// storage to its store, copied whenever one is set. A host that runs
+// callbacks of its own -- a timer, a read that finished -- takes the context
+// when it starts the work and sets it around the callback.
+func (r *Runtime) AsyncContext() Value {
+	if r.closed || r.rt == nil {
+		return Value{}
+	}
+	return Value{v: r.rt.AsyncContext(), rt: r.rt}
+}
+
+// SetAsyncContext makes v the async context and returns the one before, for
+// the host to put back when what it runs in v is done. A call into the
+// runtime from Go -- Eval, RunJobs -- leaves the context as it found it.
+func (r *Runtime) SetAsyncContext(v Value) (prev Value) {
+	if r.closed || r.rt == nil {
+		return Value{}
+	}
+	p := r.rt.SetAsyncContext(r.vmValue(v))
+	return Value{v: p, rt: r.rt}
+}

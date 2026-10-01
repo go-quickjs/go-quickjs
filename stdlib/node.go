@@ -57,6 +57,10 @@ func nodeModules(rt *quickjs.Runtime) (quickjs.Value, error) {
 		}
 	}
 
+	if err := asyncHooks(rt); err != nil {
+		return quickjs.Value{}, err
+	}
+
 	// Buffer is a global in node, and code that uses it rarely imports it.
 	buffer, err := api.Get("buffer")
 	if err != nil {

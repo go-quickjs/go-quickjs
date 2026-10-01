@@ -36,6 +36,9 @@ type finalizationCell struct {
 type finalizationData struct {
 	cleanup Value
 	cells   []*finalizationCell
+	// ctx is the async context the registry was made in, which its
+	// cleanup callback runs in, as the AsyncContext proposal has it.
+	ctx Value
 }
 
 // canBeWeak reports whether a value may be a weak target.
@@ -102,7 +105,7 @@ func (r *Runtime) initWeakRefBuiltins() {
 			return Undefined, rt.throwTypeError("a FinalizationRegistry requires a cleanup callback")
 		}
 		o := newObject(frProto, ClassFinalizationRegistry)
-		o.data = &finalizationData{cleanup: cleanup}
+		o.data = &finalizationData{cleanup: cleanup, ctx: rt.asyncCtx}
 		rt.registries = append(rt.registries, makeWeak(Obj(o)))
 		return Obj(o), nil
 	})
