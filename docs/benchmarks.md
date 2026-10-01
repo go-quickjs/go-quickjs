@@ -100,15 +100,15 @@ scores are the suite's own (higher is better).
 
 | Workload | go-quickjs | QuickJS | QuickJS faster by | go-quickjs score | QuickJS score |
 |---|---:|---:|---:|---:|---:|
-| Richards | 26.3 ms | 11.0 ms | 2.4x | 408 | 939 |
-| DeltaBlue | 40.5 ms | 24.0 ms | 1.7x | 494 | 812 |
-| Crypto | 598 ms | 323 ms | 1.9x | 606 | 1,107 |
-| RayTrace | 180 ms | 142 ms | 1.3x | 1,246 | 1,552 |
-| EarleyBoyer | 633 ms | 402 ms | 1.6x | 1,392 | 2,148 |
-| RegExp | 472 ms | 874 ms | 0.54x | 824 | 421 |
-| Splay | 381 ms | 539 ms | 0.71x | 2,232 | 3,278 |
-| NavierStokes | 432 ms | 193 ms | 2.2x | 1,105 | 2,411 |
-| **Total / composite** | **2,763 ms** | **2,508 ms** | **1.10x** | **900** | **1,323** |
+| Richards | 25.5 ms | 11.0 ms | 2.3x | 410 | 960 |
+| DeltaBlue | 33.4 ms | 24.0 ms | 1.4x | 586 | 838 |
+| Crypto | 575 ms | 327 ms | 1.8x | 622 | 1,103 |
+| RayTrace | 171 ms | 149 ms | 1.1x | 1,309 | 1,570 |
+| EarleyBoyer | 576 ms | 417 ms | 1.4x | 1,479 | 2,092 |
+| RegExp | 395 ms | 864 ms | 0.46x | 1,048 | 433 |
+| Splay | 375 ms | 522 ms | 0.72x | 2,271 | 3,121 |
+| NavierStokes | 435 ms | 194 ms | 2.2x | 1,128 | 2,374 |
+| **Total / composite** | **2,629 ms** | **2,530 ms** | **1.04x** | **969** | **1,322** |
 
 The scored run weighs more heavily than the fixed one what a long-running
 program pays for its heap. Each workload is warmed for a second and then
@@ -137,7 +137,11 @@ What the gap is made of:
 - **Calls.** A call from JavaScript to JavaScript fills in a frame record of
   some twenty fields, and each pointer it stores pays a write barrier's
   check. An empty call costs about 47 ns here, against about 25 ns in
-  QuickJS. Richards and DeltaBlue are mostly small method calls.
+  QuickJS. Richards and DeltaBlue are mostly small method calls. A function
+  whose whole body is `return this.x`, `return this.x.length`,
+  `return this.x[i]`, or stores of its parameters in `this` is answered
+  without a frame, where nothing it does could call code or throw; that is
+  much of DeltaBlue's calls and EarleyBoyer's constructions.
 - **Property access.** Objects built the same way share a shape, as in
   QuickJS and V8, and each property read and write, each getter, each
   global variable read and each `instanceof` remembers where it last found
@@ -164,7 +168,8 @@ Where go-quickjs is level or ahead:
   tried only where it could have been reached from -- what V8's regexp
   compiler gets from its lookahead analysis, and most of the lead here. With
   an unmodified RegExp, `replace` and `split` find their matches without
-  building the arrays `exec` would return, and `split` searches for each
+  building the arrays `exec` would return, a `replace` template without a
+  `$` makes no strings of what matched, and `split` searches for each
   separator instead of trying every position. The matcher passes over
   positions where no match can begin in a loop of their own, reads a code
   unit that is a whole character without a call, and takes a greedy run of
@@ -173,7 +178,10 @@ Where go-quickjs is level or ahead:
   cheaply.
 - **`apply(this, arguments)`.** In a function whose only use of `arguments` is
   passing it to `apply` (a common way to write a class constructor), the
-  arguments object is never made.
+  arguments object is never made. A constructor whose whole body is
+  `this.initialize.apply(this, arguments)`, as RayTrace's are, calls the
+  method directly, with the frames a stack trace would show standing in for
+  its body.
 
 Most of what remains is the interpreter itself: the cost of dispatching an
 instruction and of a call, which is most of the gap in Crypto, NavierStokes
