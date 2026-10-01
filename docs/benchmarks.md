@@ -100,15 +100,15 @@ scores are the suite's own (higher is better).
 
 | Workload | go-quickjs | QuickJS | QuickJS faster by | go-quickjs score | QuickJS score |
 |---|---:|---:|---:|---:|---:|
-| Richards | 25.5 ms | 11.0 ms | 2.3x | 410 | 960 |
-| DeltaBlue | 33.4 ms | 24.0 ms | 1.4x | 586 | 838 |
-| Crypto | 575 ms | 327 ms | 1.8x | 622 | 1,103 |
-| RayTrace | 171 ms | 149 ms | 1.1x | 1,309 | 1,570 |
-| EarleyBoyer | 576 ms | 417 ms | 1.4x | 1,479 | 2,092 |
-| RegExp | 395 ms | 864 ms | 0.46x | 1,048 | 433 |
-| Splay | 375 ms | 522 ms | 0.72x | 2,271 | 3,121 |
-| NavierStokes | 435 ms | 194 ms | 2.2x | 1,128 | 2,374 |
-| **Total / composite** | **2,629 ms** | **2,530 ms** | **1.04x** | **969** | **1,322** |
+| Richards | 25.5 ms | 12.0 ms | 2.1x | 416 | 951 |
+| DeltaBlue | 34.7 ms | 24.0 ms | 1.4x | 588 | 839 |
+| Crypto | 593 ms | 327 ms | 1.8x | 608 | 1,099 |
+| RayTrace | 165 ms | 143 ms | 1.2x | 1,338 | 1,588 |
+| EarleyBoyer | 554 ms | 413 ms | 1.3x | 1,568 | 2,146 |
+| RegExp | 389 ms | 870 ms | 0.45x | 1,045 | 431 |
+| Splay | 351 ms | 520 ms | 0.67x | 2,437 | 3,284 |
+| NavierStokes | 427 ms | 190 ms | 2.2x | 1,101 | 2,399 |
+| **Total / composite** | **2,569 ms** | **2,517 ms** | **1.02x** | **984** | **1,336** |
 
 The scored run weighs more heavily than the fixed one what a long-running
 program pays for its heap. Each workload is warmed for a second and then
@@ -175,7 +175,8 @@ Where go-quickjs is level or ahead:
   unit that is a whole character without a call, and takes a greedy run of
   one character in a single step.
 - **Splay, in fixed work.** Go's allocator makes many short-lived objects
-  cheaply.
+  cheaply, and a short string or an array of up to sixteen elements is one
+  allocation with its contents.
 - **`apply(this, arguments)`.** In a function whose only use of `arguments` is
   passing it to `apply` (a common way to write a class constructor), the
   arguments object is never made. A constructor whose whole body is
