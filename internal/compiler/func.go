@@ -179,6 +179,7 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 	}
 	c.emit(bytecode.OpReturnUndef, 0, 0)
 	c.finish()
+	c.fn.Leaf = leafKind(c.fn)
 }
 
 // bindSelfName gives a named function expression a binding for its own name.

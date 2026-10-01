@@ -181,6 +181,28 @@ const (
 	KindStaticBlock
 )
 
+// LeafKind names the few bodies Function.Leaf marks: ones that only read or
+// write a property of their `this`, which a call can be answered for
+// without a frame.
+type LeafKind uint8
+
+const (
+	// LeafNone is any other body.
+	LeafNone LeafKind = iota
+	// LeafGetThis is `return this.k`: push_this, get_prop, return.
+	LeafGetThis
+	// LeafGetThisLength is `return this.k.length`: push_this, get_prop,
+	// get_length, return.
+	LeafGetThisLength
+	// LeafGetThisIndex is `return this.k[p]`, p a parameter: push_this,
+	// get_prop, get_local, get_index, return.
+	LeafGetThisIndex
+	// LeafSetThis is `this.k = p` for parameters p, once or more, and
+	// nothing else: a run of push_this, get_local and set_prop, then the
+	// return a function or a class constructor ends with.
+	LeafSetThis
+)
+
 // SourceLoc attributes instructions to a source position, for stack traces.
 type SourceLoc struct {
 	// PC is the index of the first instruction covered by this entry.
@@ -285,6 +307,11 @@ type Function struct {
 	// var the evaluated code declares belongs to the function that called it,
 	// and there is no slot for a name nobody wrote down.
 	HasDirectEval bool
+	// Leaf is which of a few bodies that only read or write a property of
+	// their `this` this function's is, or LeafNone. The VM answers a call of
+	// one itself, without a frame, where nothing the body does could call
+	// code or throw, which is all a frame would have been seen by.
+	Leaf LeafKind
 
 	// Source is the file or origin name used in stack traces.
 	Source string

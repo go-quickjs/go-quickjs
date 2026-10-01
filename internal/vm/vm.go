@@ -195,6 +195,13 @@ func (r *Runtime) callFromLoop(callee, this Value, args []Value) (Value, error) 
 				if err := r.tick(); err != nil {
 					return Undefined, err
 				}
+				// A body that only reads or writes a property of its this is
+				// answered here where it can be, without a frame.
+				if fn.Leaf != bytecode.LeafNone && this.IsObject() {
+					if v, ok := r.leafCall(fd.closure, this.Object(), args); ok {
+						return v, nil
+					}
+				}
 				newTarget := Undefined
 				if fd.arrow {
 					this, newTarget = fd.lexThis, fd.lexNewTarget
@@ -4168,9 +4175,16 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 		// callObject would ask of it -- a proxy, a bound target, a generator,
 		// a realm to switch to -- applies.
 		if err = r.tick(); err == nil {
-			res, err = r.run(fd.closure, this, args, newTarget, o)
-			if err == errNoSuper {
-				err = r.throwError(errReference, "%s", errNoSuper.Error())
+			// So is a constructor that only stores its parameters in this.
+			done := false
+			if fd.closure.fn.Leaf != bytecode.LeafNone {
+				res, done = r.leafCall(fd.closure, obj, args)
+			}
+			if !done {
+				res, err = r.run(fd.closure, this, args, newTarget, o)
+				if err == errNoSuper {
+					err = r.throwError(errReference, "%s", errNoSuper.Error())
+				}
 			}
 		}
 	} else {

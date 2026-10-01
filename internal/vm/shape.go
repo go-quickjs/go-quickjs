@@ -521,16 +521,9 @@ func (r *Runtime) setPropCached(c *propCache, o *Object, key Atom, v Value, stri
 			o.props[c.idx].value = v
 			return nil
 		}
-		if o.flags&objExtensible != 0 && o.proto == c.p1 && (c.p1 == nil || c.p1.shape == c.s1 && c.p1.proto == c.p2) &&
-			(c.p2 == nil || c.p2.shape == c.s2 && c.p2.proto == nil) {
+		if c.adds(o) {
 			if verifyShapes {
-				checkShape(o)
-				for p := o.proto; p != nil; p = p.proto {
-					checkShape(p)
-					if !passesWrite(p, key) {
-						panic("write cache adds " + r.atoms.name(key) + " past a prototype that intercepts it")
-					}
-				}
+				r.verifyStoreCache(c, o, key)
 			}
 			o.appendTransition(Property{key: key, flags: c.next.flags, value: v}, c.next)
 			return nil
@@ -547,6 +540,55 @@ func (r *Runtime) setPropCached(c *propCache, o *Object, key Atom, v Value, stri
 		r.fillStoreCache(c, o, before, key)
 	}
 	return nil
+}
+
+// adds reports whether the property a write cache says is added may be
+// added to o, which has the shape the cache remembers: o is extensible, and
+// its prototype chain is the one found to have no setter or read-only
+// property of the name to intercept the write.
+func (c *propCache) adds(o *Object) bool {
+	return o.flags&objExtensible != 0 && o.proto == c.p1 && (c.p1 == nil || c.p1.shape == c.s1 && c.p1.proto == c.p2) &&
+		(c.p2 == nil || c.p2.shape == c.s2 && c.p2.proto == nil)
+}
+
+// verifyStoreCache checks a write the cache answers for o, of key, in a build
+// with the quickjs_verify tag: o's layout is its shape's, and nothing up its
+// prototype chain intercepts an addition of the name.
+func (r *Runtime) verifyStoreCache(c *propCache, o *Object, key Atom) {
+	checkShape(o)
+	if c.next == nil {
+		if p := o.props[c.idx]; p.key != key || p.flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) != propWritable {
+			panic("write cache's property is not a plain writable " + r.atoms.name(key))
+		}
+		return
+	}
+	for p := o.proto; p != nil; p = p.proto {
+		checkShape(p)
+		if !passesWrite(p, key) {
+			panic("write cache adds " + r.atoms.name(key) + " past a prototype that intercepts it")
+		}
+	}
+}
+
+// cachedData is a read of o's key that its cache answers with a plain data
+// property, for a read that may not call a getter: an accessor's entry,
+// which cachedGet keeps, is no answer. A cache that has given up leaves the
+// read to the runtime's shared cache, as cachedGet's does. It reports false
+// for anything else, and fills nothing of the site's.
+func (r *Runtime) cachedData(c *propCache, o *Object, key Atom) (Value, bool) {
+	if h := c.holder(o); h != nil {
+		if c.getter {
+			return Undefined, false
+		}
+		if verifyShapes {
+			r.verifyPropCache(o, h, c, key)
+		}
+		return h.props[c.idx].value, true
+	}
+	if c.fills >= maxCacheFills {
+		return r.sharedProp(o, key)
+	}
+	return Undefined, false
 }
 
 // ensureShape gives an object with an empty table, of a class that may have a
