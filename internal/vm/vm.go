@@ -263,6 +263,13 @@ func (r *Runtime) applyArguments(f *frame, slot uint32, target, apply, this Valu
 			}
 		}
 	}
+	return r.applyCall(target, this, args)
+}
+
+// applyCall is target.apply(this, arguments) by the built-in apply, given
+// the arguments themselves: apply's frame is pushed, as the built-in would
+// have it, and target called with them.
+func (r *Runtime) applyCall(target, this Value, args []Value) (Value, error) {
 	// apply's own arguments are what its frame records, which is all they
 	// are for: they are kept on the runtime's argument stack rather than
 	// allocated.
@@ -4175,9 +4182,14 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 		// callObject would ask of it -- a proxy, a bound target, a generator,
 		// a realm to switch to -- applies.
 		if err = r.tick(); err == nil {
-			// So is a constructor that only stores its parameters in this.
+			// So is a constructor that only stores its parameters in this,
+			// and one that only hands them on to a method of it.
 			done := false
-			if fd.closure.fn.Leaf != bytecode.LeafNone {
+			switch fd.closure.fn.Leaf {
+			case bytecode.LeafNone:
+			case bytecode.LeafForward:
+				done, err = r.leafForward(fd.closure, o, obj, args, newTarget)
+			default:
 				res, done = r.leafCall(fd.closure, obj, args)
 			}
 			if !done {

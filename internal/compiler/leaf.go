@@ -9,8 +9,20 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 // and a `this` of its own -- not an arrow's, and not a derived
 // constructor's, which super() binds.
 func leafKind(fn *bytecode.Function) bytecode.LeafKind {
-	if fn.Generator || fn.Async || fn.HasRest || fn.UsesArguments || fn.HasDirectEval ||
-		!fn.HasSimpleParams || fn.ParamsAreLexical {
+	if fn.Generator || fn.Async || fn.HasRest || fn.HasDirectEval || !fn.HasSimpleParams || fn.ParamsAreLexical {
+		return bytecode.LeafNone
+	}
+	// this.k.apply(this, arguments) mentions arguments, but apply_arguments
+	// hands the arguments on without the object being made.
+	code := fn.Code
+	if fn.Kind == bytecode.KindNormal && len(code) == 7 &&
+		code[0].Op == bytecode.OpPushThis && code[1].Op == bytecode.OpGetProp &&
+		code[2].Op == bytecode.OpGetPropThis && fn.Names[code[2].A] == "apply" &&
+		code[3].Op == bytecode.OpPushThis && code[4].Op == bytecode.OpApplyArguments &&
+		code[5].Op == bytecode.OpDrop && code[6].Op == bytecode.OpReturnUndef {
+		return bytecode.LeafForward
+	}
+	if fn.UsesArguments {
 		return bytecode.LeafNone
 	}
 	switch fn.Kind {
@@ -18,7 +30,6 @@ func leafKind(fn *bytecode.Function) bytecode.LeafKind {
 	default:
 		return bytecode.LeafNone
 	}
-	code := fn.Code
 	param := func(in bytecode.Instr) bool {
 		return in.Op == bytecode.OpGetLocal && int(in.A) < fn.ParamCount
 	}

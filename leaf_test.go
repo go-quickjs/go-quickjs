@@ -1,6 +1,10 @@
 package quickjs_test
 
-import "testing"
+import (
+	"testing"
+
+	quickjs "github.com/go-quickjs/go-quickjs"
+)
 
 // TestLeafFunctions covers the calls the VM answers without a frame: a body
 // that only returns this.k, this.k.length or this.k[p], or only stores its
@@ -76,5 +80,71 @@ func TestLeafFunctions(t *testing.T) {
 	}
 	for _, tt := range tests {
 		checkEval(t, tt.src, tt.want)
+	}
+}
+
+// TestLeafForward covers constructors whose body is only
+// this.k.apply(this, arguments), which the VM constructs with by calling the
+// method itself, with the constructor's frame and apply's standing in for
+// the body. Each script warms the constructor and then looks at what the
+// frames are seen by -- a stack trace's names and positions, f.caller and
+// f.arguments under Node quirks, a trace taken after an error, the depth at
+// which recursion fails -- or makes the shortcut fall back: a getter for the
+// method, a method gone, Function.prototype.apply replaced, a method that is
+// an object with an apply of its own. The answers are the ones the
+// constructor's body gave when it was run.
+func TestLeafForward(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`var Class = { create: function () { return function () { this.initialize.apply(this, arguments) } } };
+   var V = Class.create(); V.prototype = { initialize: function (x, y) { this.x = x; this.y = y; return {other: 1} } };
+   for (var i = 0; i < 5; i++) var v = new V(i, i + 1); JSON.stringify(v) + " " + (v instanceof V)`,
+			"{\"x\":4,\"y\":5} true"},
+		{`var Class = { create: function () { return function () { this.initialize.apply(this, arguments) } } };
+   var T = Class.create(); T.prototype = { initialize: function (x) { if (x) throw new Error("boom") } };
+   for (var i = 0; i < 5; i++) new T(0);
+   function at(e) { return e.stack.split(String.fromCharCode(10)).slice(1, 3).map(function (s) { s = s.trim(); return s.split(" (")[0] + " " + s.match(/:([0-9]+:[0-9]+)[)]?$/)[1] }).join(" | ") }
+   var r = []; try { new T(1) } catch (e) { r.push(at(e)) } try { null.x } catch (e) { r.push(e.stack.split(String.fromCharCode(10)).length) } r.join(" ; ")`,
+			"at Object.initialize 2:84 | at new <anonymous> 1:74 ; 2"},
+		{`var Class = { create: function () { return function () { this.initialize.apply(this, arguments) } } };
+   var C = Class.create(), seen = []; C.prototype = { initialize: function (a, b) {
+     seen.push(C.prototype.initialize.caller === C, Array.prototype.join.call(C.arguments)) } };
+   for (var i = 0; i < 4; i++) new C(i, "b"); seen.join()`,
+			"true,0,b,true,1,b,true,2,b,true,3,b"},
+		{`var Class = { create: function () { return function () { this.initialize.apply(this, arguments) } } };
+   var calls = 0, G = Class.create();
+   Object.defineProperty(G.prototype, "initialize", { get: function () { calls++; return function (x) { this.x = x } } });
+   for (var i = 0; i < 4; i++) var g = new G(i); calls + " " + g.x`,
+			"4 3"},
+		{`var Class = { create: function () { return function () { this.initialize.apply(this, arguments) } } };
+   var M = Class.create(); M.prototype = { initialize: function () {} }; for (var i = 0; i < 4; i++) new M;
+   M.prototype = {}; try { new M } catch (e) { e.constructor.name }`,
+			"TypeError"},
+		{`var Class = { create: function () { return function () { this.initialize.apply(this, arguments) } } };
+   var A = Class.create(); A.prototype = { initialize: function (x) { this.x = x } }; for (var i = 0; i < 4; i++) new A(1);
+   var real = Function.prototype.apply; Function.prototype.apply = function (t) { return real.call(this, t, [99]) };
+   var x = new A(1).x; Function.prototype.apply = real; x`,
+			"99"},
+		{`var Class = { create: function () { return function () { this.initialize.apply(this, arguments) } } };
+   var N = Class.create(); N.prototype = { initialize: { apply: function (t, a) { t.via = a.length } } };
+   for (var i = 0; i < 3; i++) var n = new N(1, 2); n.via`,
+			"2"},
+		{`var Class = { create: function () { return function () { this.initialize.apply(this, arguments) } } };
+   var R = Class.create(), depth = 0; R.prototype = { initialize: function () { depth++; new R } };
+   try { new R } catch (e) { e.constructor.name + " " + (depth > 100) }`,
+			"RangeError true"},
+		{`var Class = { create: function () { return function () { this.initialize.apply(this, arguments) } } };
+   var NT = Class.create(); NT.prototype = { initialize: function () { this.nt = typeof new.target; this.self = this instanceof NT } };
+   for (var i = 0; i < 3; i++) var nt = new NT; nt.nt + " " + nt.self`,
+			"undefined true"},
+		{`function W(a) { this.init.apply(this, arguments) } W.prototype.init = function (a, b) { this.s = a + b };
+   for (var i = 0; i < 4; i++) var w = new W(1, 2); w.s`,
+			"3"},
+	}
+	for _, tt := range tests {
+		rt := quickjs.New(quickjs.WithNodeQuirks())
+		if got := evalString(t, rt, tt.src); got != tt.want {
+			t.Errorf("%s\n got: %q\nwant: %q", tt.src, got, tt.want)
+		}
+		rt.Close()
 	}
 }

@@ -183,7 +183,8 @@ const (
 
 // LeafKind names the few bodies Function.Leaf marks: ones that only read or
 // write a property of their `this`, which a call can be answered for
-// without a frame.
+// without a frame, and a constructor's that only hands its arguments on to a
+// method of its `this`, which a construction can call directly.
 type LeafKind uint8
 
 const (
@@ -201,6 +202,11 @@ const (
 	// nothing else: a run of push_this, get_local and set_prop, then the
 	// return a function or a class constructor ends with.
 	LeafSetThis
+	// LeafForward is `this.k.apply(this, arguments)` and nothing else, a
+	// constructor that hands its arguments on to a method of its object:
+	// push_this, get_prop, get_prop_this of apply, push_this,
+	// apply_arguments, drop, return_undef.
+	LeafForward
 )
 
 // SourceLoc attributes instructions to a source position, for stack traces.
@@ -307,10 +313,9 @@ type Function struct {
 	// var the evaluated code declares belongs to the function that called it,
 	// and there is no slot for a name nobody wrote down.
 	HasDirectEval bool
-	// Leaf is which of a few bodies that only read or write a property of
-	// their `this` this function's is, or LeafNone. The VM answers a call of
-	// one itself, without a frame, where nothing the body does could call
-	// code or throw, which is all a frame would have been seen by.
+	// Leaf is which of the few bodies LeafKind names this function's is, or
+	// LeafNone. The VM answers a call of one itself, without running the
+	// body, where nothing could see the difference.
 	Leaf LeafKind
 
 	// Source is the file or origin name used in stack traces.

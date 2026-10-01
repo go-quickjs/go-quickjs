@@ -12,8 +12,12 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 // usual. A body that only writes answers undefined.
 func (r *Runtime) leafCall(cl *closure, o *Object, args []Value) (Value, bool) {
 	fn := cl.fn
-	if fn.Leaf == bytecode.LeafSetThis {
+	switch fn.Leaf {
+	case bytecode.LeafSetThis:
 		return Undefined, r.leafStores(cl, o, args)
+	case bytecode.LeafForward:
+		// Only a construction is answered, by leafForward.
+		return Undefined, false
 	}
 	in := fn.Code[1]
 	v, ok := plainOwn(o, cl.names[in.A])
@@ -89,4 +93,54 @@ func (r *Runtime) leafStores(cl *closure, o *Object, args []Value) bool {
 		}
 	}
 	return true
+}
+
+// leafForward constructs o with a constructor LeafForward marks, whose body
+// is this.k.apply(this, arguments), by calling the method itself. The
+// constructor's frame is pushed as it would stand at its apply, though the
+// body is not run in it, and apply's as applyArguments pushes it, so that a
+// stack trace, f.caller and f.arguments find what they would have. It does
+// so where this.k and its apply are plain data properties the sites' caches
+// answer, apply the built-in one, and k a function; it reports false for
+// anything else, having done nothing, and the body is run as usual.
+func (r *Runtime) leafForward(cl *closure, callee, o *Object, args []Value, newTarget Value) (bool, error) {
+	code := cl.fn.Code
+	in := code[1]
+	m, ok := plainOwn(o, cl.names[in.A])
+	if !ok {
+		m, ok = r.cachedData(&cl.ic[in.B], o, cl.names[in.A])
+	}
+	if !ok || !isCallable(m) {
+		return false, nil
+	}
+	in = code[2]
+	if ap, ok := r.cachedData(&cl.ic[in.B], m.Object(), cl.names[in.A]); !ok || !ap.IsObject() || ap.Object() != r.applyFn {
+		return false, nil
+	}
+	if r.frameDepth >= r.maxFrames {
+		// run throws the RangeError.
+		return false, nil
+	}
+	f := r.pushFrame()
+	f.cl = cl
+	f.locals = nil
+	f.base = r.stackTop
+	// The saved pc is past the instruction a frame is at: apply_arguments.
+	f.pc = 5
+	f.this = Obj(o)
+	f.thisRef = nil
+	f.newTarget = newTarget
+	f.callee = callee
+	f.args = args
+	f.paramsOnly = false
+	f.openUpvalues = f.openUpvalues[:0]
+	f.evalVars = nil
+	f.withScopes = nil
+	f.handlers = f.handlers[:0]
+	f.native = ""
+	f.savedSP = 0
+	// What the method returns, the body drops.
+	_, err := r.applyCall(m, Obj(o), args)
+	r.frameDepth--
+	return true, err
 }
