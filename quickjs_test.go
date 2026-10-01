@@ -1582,6 +1582,23 @@ func TestShortConcatenations(t *testing.T) {
 		bad.length ? bad.join() : "ok"`, "ok")
 }
 
+// TestSmallArrayStorage covers array literals of every length an array is
+// given room for in its own allocation, and past it, grown beyond that
+// room, truncated and shifted.
+func TestSmallArrayStorage(t *testing.T) {
+	checkEval(t, `var bad = [];
+		for (var n = 0; n <= 20; n++) {
+			var src = [];
+			for (var i = 0; i < n; i++) src.push(i * 3);
+			var a = eval("[" + src.join(",") + "]"), b = eval("[" + src.join(",") + "]");
+			for (var i = 0; i < 5; i++) a.push(-i);
+			a.length = n + 2; a.unshift("u");
+			var want = ["u"].concat(src, [0, -1]);
+			if (a.join() !== want.join() || a.length !== n + 3 || b.join() !== src.join() || b === a) bad.push(n);
+		}
+		bad.length ? bad.join() : "ok"`, "ok")
+}
+
 func TestRegExpSyntaxErrorIsThrown(t *testing.T) {
 	checkEval(t, `try { new RegExp("(") } catch (e) { e.name }`, "SyntaxError")
 }

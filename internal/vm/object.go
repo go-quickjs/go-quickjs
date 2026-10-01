@@ -293,8 +293,9 @@ func newErrorObject(proto *Object) *Object {
 // arrayObject is an array with room for its first few elements in the same
 // allocation, which is what an array literal and a small result array need.
 //
-// Four is what the literals a program writes mostly hold; a longer one gets
-// storage of its own, sized exactly.
+// Four is what the literals a program writes mostly hold; newArrayStorage
+// has larger rooms, up to sixteen, and a longer one gets storage of its
+// own, sized exactly.
 type arrayObject struct {
 	Object
 	inline [4]Value
@@ -302,19 +303,60 @@ type arrayObject struct {
 
 // newArrayObject returns an array about to be given n elements.
 func newArrayObject(proto *Object, n int) *Object {
-	if n > len(arrayObject{}.inline) {
-		o := newObject(proto, ClassArray)
+	o, elems := newArrayStorage(n)
+	if o == nil {
+		o = newObject(proto, ClassArray)
 		o.elems = make([]Value, n)
 		return o
 	}
-	ao := &arrayObject{
-		Object: Object{
-			proto: proto, class: ClassArray,
-			flags: objExtensible | objArrayLengthWritable,
-		},
+	o.proto, o.class, o.flags = proto, ClassArray, objExtensible|objArrayLengthWritable
+	o.elems = elems[:n]
+	return o
+}
+
+// newArrayStorage makes an Object with room for n elements in the same
+// allocation, and returns the room, or nil for an n too large for one. Each
+// room is sized so that the whole fills one of Go's size classes on a
+// 64-bit platform: an array literal of up to sixteen elements, or a small
+// result array, is one allocation rather than two, in about the space two
+// took.
+func newArrayStorage(n int) (*Object, []Value) {
+	switch {
+	case n <= len(arrayObject{}.inline):
+		ao := new(arrayObject)
+		return &ao.Object, ao.inline[:]
+	case n <= 6:
+		x := new(struct {
+			Object
+			inline [6]Value
+		})
+		return &x.Object, x.inline[:]
+	case n <= 8:
+		x := new(struct {
+			Object
+			inline [8]Value
+		})
+		return &x.Object, x.inline[:]
+	case n <= 10:
+		x := new(struct {
+			Object
+			inline [10]Value
+		})
+		return &x.Object, x.inline[:]
+	case n <= 12:
+		x := new(struct {
+			Object
+			inline [12]Value
+		})
+		return &x.Object, x.inline[:]
+	case n <= 16:
+		x := new(struct {
+			Object
+			inline [16]Value
+		})
+		return &x.Object, x.inline[:]
 	}
-	ao.elems = ao.inline[:n]
-	return &ao.Object
+	return nil, nil
 }
 
 // matchResultObject is the array a regular expression's match gives, with
