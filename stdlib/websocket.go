@@ -118,9 +118,10 @@ type socket struct {
 	// opened settles when the handshake has finished, one way or the other.
 	opened *quickjs.Promise
 	conn   *wsConn
-	// unwatch stops the connection being closed with the runtime, once it
-	// has been closed anyway.
+	// unwatch stops the connection being closed with the loop, and unhook
+	// with the runtime, once it has been closed anyway.
 	unwatch func() bool
+	unhook  func()
 
 	mu     sync.Mutex
 	queue  []outgoing
@@ -265,8 +266,10 @@ func (s *socket) start(conn *wsConn) {
 	// The loop is held open while the socket is: a program whose last act is
 	// to open one is waiting for what comes back.
 	s.loop.Begin()
-	// And the connection is closed with the runtime.
+	// And the connection is closed with the loop, and with the runtime,
+	// before its Close returns.
 	s.unwatch = context.AfterFunc(s.loop.Context(), conn.close)
+	s.unhook = s.rt.OnClose(conn.close)
 	go s.writing()
 }
 
@@ -439,6 +442,9 @@ func (s *socket) finish() {
 	}
 	if s.unwatch != nil {
 		s.unwatch()
+	}
+	if s.unhook != nil {
+		s.unhook()
 	}
 	s.releaseLoop()
 }

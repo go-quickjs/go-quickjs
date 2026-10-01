@@ -43,6 +43,8 @@ func (f *fsHost) openRead(p string, start, end int64) (quickjs.Value, error) {
 	}
 
 	r := &fileReader{rt: f.rt, loop: f.cfg.Loop, file: file, left: left}
+	// A file read partway when the runtime closes is closed with it.
+	r.unhook = f.rt.OnClose(func() { file.Close() })
 	o := f.rt.NewObject()
 	if err := errors.Join(
 		o.Set("read", r.read),
@@ -63,6 +65,8 @@ type fileReader struct {
 	left int64
 	busy bool
 	done bool
+	// unhook stops the runtime's closing closing the file, once it is.
+	unhook func()
 }
 
 // read answers with the next chunk, or null at the end of the file.
@@ -125,6 +129,7 @@ func (r *fileReader) close() {
 	}
 	r.done = true
 	r.file.Close()
+	r.unhook()
 }
 
 // openWrite opens a file for writing and hands back something the script can
@@ -147,6 +152,8 @@ func (f *fsHost) openWrite(p string, appending bool) (quickjs.Value, error) {
 	}
 
 	w := &fileWriter{rt: f.rt, loop: f.cfg.Loop, file: file}
+	// A file still being written when the runtime closes is closed with it.
+	w.unhook = f.rt.OnClose(func() { file.Close() })
 	o := f.rt.NewObject()
 	if err := errors.Join(
 		o.Set("write", w.write),
@@ -164,6 +171,8 @@ type fileWriter struct {
 	loop *Loop
 	file *os.File
 	done bool
+	// unhook stops the runtime's closing closing the file, once it is.
+	unhook func()
 }
 
 func (w *fileWriter) write(chunk quickjs.Value) *quickjs.Promise {
@@ -216,7 +225,9 @@ func (w *fileWriter) closeValue() *quickjs.Promise {
 	w.done = true
 	file := w.file
 	if w.loop == nil {
-		if err := file.Close(); err != nil {
+		err := file.Close()
+		w.unhook()
+		if err != nil {
 			p.RejectError(err)
 		} else {
 			p.Resolve(nil)
@@ -229,6 +240,9 @@ func (w *fileWriter) closeValue() *quickjs.Promise {
 		defer loop.Done()
 		err := file.Close()
 		loop.Post(func() {
+			// Closed: the hook has nothing left to do. Until now it would
+			// have closed the file itself, had the runtime closed first.
+			w.unhook()
 			if err != nil {
 				p.RejectError(err)
 				return

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
 )
@@ -91,6 +92,9 @@ type workerHandle struct {
 	reffed, holding, ended bool
 	// stop ends the worker: terminate, or the parent's loop closing.
 	stop context.CancelFunc
+	// done is closed when the worker's goroutine has returned, its runtime
+	// closed.
+	done chan struct{}
 
 	// code is the exit code the worker was ended with, by process.exit or by
 	// being terminated, before it ended of itself.
@@ -107,8 +111,10 @@ type workerHandle struct {
 func installWorkers(rt *quickjs.Runtime, cfg Config, m *messaging, events quickjs.Value) error {
 	h := &workerHost{rt: rt, cfg: cfg, m: m, loop: cfg.Loop, self: cfg.worker, workers: map[*workerHandle]bool{}}
 	if cfg.Workers != nil && cfg.Loop != nil {
-		// A runtime whose loop is closed has no use for its workers.
+		// A runtime whose loop is closed has no use for its workers, and
+		// one that is closed has them ended before its Close returns.
 		context.AfterFunc(cfg.Loop.Context(), h.terminateAll)
+		rt.OnClose(h.endAll)
 	}
 	host := rt.NewObject()
 	if err := setAll(host, map[string]any{
@@ -249,7 +255,7 @@ func (h *workerHost) start(obj quickjs.Value, specifier string, data quickjs.Val
 	}
 
 	ctx, stop := context.WithCancel(context.Background())
-	wh := &workerHandle{host: h, obj: obj, reffed: true, stop: stop, thread: int(threadIDs.Add(1))}
+	wh := &workerHandle{host: h, obj: obj, reffed: true, stop: stop, thread: int(threadIDs.Add(1)), done: make(chan struct{})}
 	end.worker = wh
 	// The port to a worker dispatches at once; the worker, not the port,
 	// is what holds the loop.
@@ -263,7 +269,10 @@ func (h *workerHost) start(obj quickjs.Value, specifier string, data quickjs.Val
 	w := &workerContext{threadID: wh.thread, name: o.Name, web: o.Web, port: child, data: serialized, ports: ports, ctx: ctx}
 	w.exit = func(code int) { wh.terminate(code) }
 	cfg := h.childConfig(w, specifier, o)
-	go runWorker(ctx, cfg, w, wh, specifier, o)
+	go func() {
+		defer close(wh.done)
+		runWorker(ctx, cfg, w, wh, specifier, o)
+	}()
 
 	result := h.rt.NewObject()
 	return result, setAll(result, map[string]any{"port": end.obj, "threadId": wh.thread})
@@ -378,6 +387,29 @@ func (h *workerHost) terminateAll() {
 	defer h.mu.Unlock()
 	for wh := range h.workers {
 		wh.terminate(1)
+	}
+}
+
+// endAll ends every worker the runtime started and waits, for at most
+// closeWait in all, for each to have stopped and closed its runtime: what
+// the runtime's closing does, as a node worker's ending ends the workers it
+// started. The lock is not held while it waits: a worker ending takes it.
+func (h *workerHost) endAll() {
+	h.mu.Lock()
+	ending := make([]*workerHandle, 0, len(h.workers))
+	for wh := range h.workers {
+		wh.terminate(1)
+		ending = append(ending, wh)
+	}
+	h.mu.Unlock()
+	deadline := time.NewTimer(closeWait)
+	defer deadline.Stop()
+	for _, wh := range ending {
+		select {
+		case <-wh.done:
+		case <-deadline.C:
+			return
+		}
 	}
 }
 

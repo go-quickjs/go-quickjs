@@ -295,8 +295,22 @@ func (s *servers) listen(opts quickjs.Value, dispatch quickjs.Value) (quickjs.Va
 			loop.Done()
 		})
 	}
-	// A server stops listening when its runtime is closed.
+	// A server stops listening when its loop is closed, letting the requests
+	// it is answering finish; and when its runtime is, at once, before Close
+	// returns, so that the port is free for whatever the host does next.
 	context.AfterFunc(loop.Context(), closer)
+	unhook := s.rt.OnClose(func() {
+		closeOnce.Do(func() {
+			srv.Close()
+			loop.Done()
+		})
+	})
+	// What the script calls closes the server, which leaves the hook nothing
+	// to do.
+	scriptClose := func() {
+		closer()
+		unhook()
+	}
 
 	out := s.rt.NewObject()
 	addr := listener.Addr().(*net.TCPAddr)
@@ -304,9 +318,9 @@ func (s *servers) listen(opts quickjs.Value, dispatch quickjs.Value) (quickjs.Va
 		out.Set("port", addr.Port),
 		out.Set("hostname", addr.IP.String()),
 		out.Set("url", fmt.Sprintf("http://%s", net.JoinHostPort(addr.IP.String(), fmt.Sprint(addr.Port)))),
-		out.Set("close", closer),
+		out.Set("close", scriptClose),
 	); err != nil {
-		closer()
+		scriptClose()
 		return quickjs.Value{}, err
 	}
 	return out, nil

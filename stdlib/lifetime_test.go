@@ -140,6 +140,98 @@ func TestCloseStopsHostWork(t *testing.T) {
 	}
 }
 
+// TestCloseReleasesBeforeReturning pins that what the standard library holds
+// for a script is released by the time Close returns, as a node worker's
+// handles are by the time it has ended: a file read partway and one being
+// written are closed, so they can be removed even on Windows; the server's
+// port is free; a program it started has exited; and a worker it started
+// has stopped. Nothing here waits after Close: each is checked at once.
+func TestCloseReleasesBeforeReturning(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "big.txt"), make([]byte, 1<<20), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	heartbeat := filepath.Join(t.TempDir(), "beat")
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rt := quickjs.New()
+	loop := stdlib.NewLoop(rt)
+	if err := stdlib.Install(rt, stdlib.Config{
+		Loop:  loop,
+		FS:    &stdlib.FS{Root: dir},
+		Serve: &stdlib.Serve{Allow: func(string) error { return nil }},
+		Run: &stdlib.Run{
+			Allow: func(string, []string) error { return nil },
+			Env:   map[string]string{"GO_QUICKJS_HEARTBEAT": heartbeat, "SYSTEMROOT": os.Getenv("SYSTEMROOT")},
+		},
+		Workers: workerFiles(map[string]string{"./beat.mjs": `
+			import fs from "fs";
+			setInterval(() => fs.appendFileSync("/wbeat", "."), 5);`}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := requireWorkerThreads(rt); err != nil {
+		t.Fatal(err)
+	}
+	v, err := rt.Eval(fmt.Sprintf(`
+		globalThis.ready = false;
+		import("fs").then(async ({default: fs}) => {
+			const reader = fs.createReadStream("/big.txt").getReader();
+			await reader.read();
+			const writer = fs.createWriteStream("/out.txt");
+			await writer.getWriter().write(new Uint8Array([1, 2, 3]));
+			globalThis.ready = true;
+		});
+		import("child_process").then(({default: cp}) => cp.execFile(%q, ["-test.run=^TestHelperHeartbeat$"]).catch(() => {}));
+		new require_worker_threads.Worker("./beat.mjs");
+		serve({port: 0, hostname: "127.0.0.1"}, () => new Response("hi")).port`, exe))
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := strconv.Itoa(v.Int())
+	wbeat := filepath.Join(dir, "wbeat")
+
+	// Run until the streams are open, the program beats and the worker too.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	for {
+		ready, _ := rt.Get("ready")
+		if ready.Bool() && size(heartbeat) > 0 && size(wbeat) > 0 {
+			break
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("never ready: streams %v, program %d, worker %d", ready.Bool(), size(heartbeat), size(wbeat))
+		}
+		short, stop := context.WithTimeout(ctx, 20*time.Millisecond)
+		loop.Run(short)
+		stop()
+	}
+	rt.Close()
+
+	// At once: nothing below waits for anything to finish.
+	for _, name := range []string{"big.txt", "out.txt"} {
+		if err := os.Remove(filepath.Join(dir, name)); err != nil {
+			t.Errorf("%s after Close: %v", name, err)
+		}
+	}
+	if l, err := net.Listen("tcp", "127.0.0.1:"+port); err != nil {
+		t.Errorf("the server's port after Close: %v", err)
+	} else {
+		l.Close()
+	}
+	beat, worker := size(heartbeat), size(wbeat)
+	time.Sleep(300 * time.Millisecond)
+	if size(heartbeat) != beat {
+		t.Error("the program was still running after Close")
+	}
+	if size(wbeat) != worker {
+		t.Error("the worker was still running after Close")
+	}
+}
+
 func size(path string) int64 {
 	fi, err := os.Stat(path)
 	if err != nil {

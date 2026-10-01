@@ -249,10 +249,18 @@ func (r *runner) execFile(name string, argv quickjs.Value, opts quickjs.Value, e
 	}
 	loop := r.cfg.Loop
 	loop.Begin()
+	// A program the runtime's closing kills -- its Context ends first -- has
+	// exited by the time Close returns.
+	done := make(chan struct{})
+	unhook := waitOnClose(r.rt, done)
 	go func() {
 		defer loop.Done()
 		res := r.start(name, args, dir, env, input)
-		loop.Post(func() { finish(res) })
+		close(done)
+		loop.Post(func() {
+			unhook()
+			finish(res)
+		})
 	}()
 	return p
 }
