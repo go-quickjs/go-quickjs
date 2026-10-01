@@ -7,8 +7,8 @@
 // depend on goja, runs it on goja, for comparison. Both report the same way.
 //
 // The suite is not part of this repository. -fetch downloads it, at the
-// revision the README's figures were measured at, into -dir. Three modes
-// measure three things:
+// revision the figures in docs/benchmarks.md were measured at, into -dir.
+// Three modes measure three things:
 //
 //   - score runs the suite as its own run.js does, and prints its scores:
 //     each benchmark runs for at least a second, so the work done depends
@@ -54,7 +54,7 @@ type Runtime interface {
 }
 
 // suiteURL is where the suite is fetched from: AreWeFastYet at the revision
-// the README's figures were measured at.
+// the figures in docs/benchmarks.md were measured at.
 const suiteURL = "https://raw.githubusercontent.com/mozilla/arewefastyet/0e21608/benchmarks/v8-v7/"
 
 // files are the suite's sources, in the order run.js loads them.
