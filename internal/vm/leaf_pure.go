@@ -282,6 +282,32 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 			} else {
 				sp--
 			}
+		case bytecode.OpGetUpvalue:
+			stack[sp] = cl.upvalues[in.A].get()
+			sp++
+		case bytecode.OpToNumeric:
+			if !stack[sp-1].IsNumber() {
+				return miss()
+			}
+		case bytecode.OpInc, bytecode.OpDec:
+			v := stack[sp-1]
+			if !v.IsNumber() {
+				return miss()
+			}
+			if in.Op == bytecode.OpInc {
+				stack[sp-1] = Float(v.num + 1)
+			} else {
+				stack[sp-1] = Float(v.num - 1)
+			}
+		case bytecode.OpSetUpvalue:
+			// Like a property's store, this is the body's last chance to give
+			// up, and is refused where the caller could still give up.
+			if !mayStore {
+				r.pureRefused = true
+				return Undefined, false
+			}
+			sp--
+			cl.upvalues[in.A].set(stack[sp])
 		case bytecode.OpReturn:
 			return stack[sp-1], true
 		case bytecode.OpReturnUndef:

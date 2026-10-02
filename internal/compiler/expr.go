@@ -15,6 +15,16 @@ import (
 // leaves a copy for that instruction to drop, and storing and popping is a
 // single instruction; a postfix update keeps the value it had before, which is
 // a copy nothing reads.
+// takesItsValue reports whether a store pops the value it stores, so that a
+// copy of it made for a drop after it need not be.
+func takesItsValue(op bytecode.Op) bool {
+	switch op {
+	case bytecode.OpSetGlobal, bytecode.OpSetUpvalue, bytecode.OpSetUpvalueCheck:
+		return true
+	}
+	return false
+}
+
 func (c *compiler) compileExprForEffect(e ast.Expr) {
 	switch n := e.(type) {
 	case *ast.Update:
@@ -62,10 +72,10 @@ func (c *compiler) compileExprForEffect(e ast.Expr) {
 			c.adjustStack(bytecode.OpDrop, 0, 0)
 			return
 		}
-		// A store to a global copies the value first, for the drop; the store
-		// takes the value itself instead. Neither the copy nor the drop can
-		// throw, so where a position is recorded changes nothing.
-		if n >= 2 && !c.isTarget(n-1) && c.fn.Code[n-1].Op == bytecode.OpSetGlobal &&
+		// A store to a global or an upvalue copies the value first, for the
+		// drop; the store takes the value itself instead. Neither the copy nor
+		// the drop can throw, so where a position is recorded changes nothing.
+		if n >= 2 && !c.isTarget(n-1) && takesItsValue(c.fn.Code[n-1].Op) &&
 			c.fn.Code[n-2].Op == bytecode.OpDup {
 			c.fn.Code[n-2] = c.fn.Code[n-1]
 			c.fn.Code = c.fn.Code[:n-1]

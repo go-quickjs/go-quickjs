@@ -285,6 +285,27 @@ func TestPureLeafStores(t *testing.T) {
 	}
 }
 
+// TestPureLeafUpvalueStores checks a body LeafPure marks whose one store is
+// to an upvalue -- count++ in a closure -- made without a frame: ++ and --,
+// before and after, on a number; on a string, a BigInt or an object with a
+// valueOf, which the body proper answers; a store a caller could still give
+// up after, which must not be made twice; a binding in its dead zone, and a
+// constant. Each answer is Node's.
+func TestPureLeafUpvalueStores(t *testing.T) {
+	checkEval(t, `var out = [];
+		out.push((function () { var n = 0; function f() { n++ } function g() { return ++n } function h() { return n-- } var r = []; for (var i = 0; i < 100; i++) { f(); r.push(g(), h()) } return n + ":" + r.slice(-2).join() })());
+		out.push((function () { var n = "5"; function f() { n++ } for (var i = 0; i < 100; i++) f(); return typeof n + n })());
+		out.push((function () { var n = 0n; function f() { n++ } for (var i = 0; i < 100; i++) f(); return typeof n + n })());
+		out.push((function () { var log = 0, n = { valueOf() { log++; return 1 } }; function f() { n++ } for (var i = 0; i < 100; i++) f(); return n + "/" + log })());
+		out.push((function () { var c = 0; function bump() { c++ } var o = { get g() { return c }, f() { bump(); return this.g } }; var r = []; for (var i = 0; i < 100; i++) r.push(o.f()); return r.slice(-2).join() + "/" + c })());
+		out.push((function () { var c = 0; function bump() { c++ } function twice() { bump(); bump() } for (var i = 0; i < 100; i++) twice(); return c })());
+		out.push((function () { try { f(); let x = 0; function f() { x++ } } catch (e) { return e.constructor.name } })());
+		out.push((function () { const k = 1; function f() { k++ } try { for (var i = 0; i < 3; i++) f() } catch (e) { return e.constructor.name + k } })());
+		out.push((function () { "use strict"; var n = 1.5; function f() { n-- } for (var i = 0; i < 70; i++) f(); return n })());
+		out.join(" | ")`,
+		"100:101,101 | number105 | bigint100 | 101/1 | 99,100/100 | 200 | ReferenceError | TypeError1 | -68.5")
+}
+
 // TestPureLeafConstructs checks new inside a body LeafPure marks, made
 // without a frame where the constructor only stores its parameters: the
 // object, its prototype read where new is, a prototype that is not an

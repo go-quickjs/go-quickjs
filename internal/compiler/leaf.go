@@ -64,7 +64,9 @@ func leafKind(fn *bytecode.Function) bytecode.LeafKind {
 // pureBody reports whether a function's code is a body LeafPure marks: no
 // local but its parameters, every jump forward, and every instruction one
 // that reads or computes, of a stack small enough to be evaluated in a
-// fixed array, but for one store in its tail. It sets fn.PureTail.
+// fixed array, but for one store, to a property or an upvalue, in its tail.
+// It sets fn.PureTail. An upvalue it reads is one get_upvalue reads, which
+// has no dead zone to check.
 func pureBody(fn *bytecode.Function) bool {
 	if fn.LocalCount != fn.ParamCount || fn.MaxStack > 24 || len(fn.Code) > 64 {
 		return false
@@ -85,13 +87,16 @@ func pureBody(fn *bytecode.Function) bool {
 			bytecode.OpLt, bytecode.OpLe, bytecode.OpGt, bytecode.OpGe,
 			bytecode.OpEq, bytecode.OpNe, bytecode.OpStrictEq, bytecode.OpStrictNe,
 			bytecode.OpDup, bytecode.OpDrop, bytecode.OpReturn, bytecode.OpReturnUndef,
-			bytecode.OpGetPropThis, bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew:
+			bytecode.OpGetPropThis, bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew,
+			bytecode.OpGetUpvalue, bytecode.OpToNumeric, bytecode.OpInc, bytecode.OpDec:
 			// A call is of a body that is itself pure, or it is not made
 			// frameless: the VM sees which when it gets there. So is a
 			// construction, of a constructor that only stores its
 			// parameters.
-		case bytecode.OpSetProp:
-			// The store is the last thing the body can give up at.
+		case bytecode.OpSetProp, bytecode.OpSetUpvalue:
+			// The store is the last thing the body can give up at: a
+			// property's, or an upvalue's -- a counter a closure keeps, as
+			// count++ does.
 			if pc+1 < tail {
 				return false
 			}
