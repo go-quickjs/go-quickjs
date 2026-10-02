@@ -96,25 +96,28 @@ stack-based interpreter, NaN-boxed values. Running that design in Go costs
 speed. The same suite ran on an AMD Ryzen 5 3600 under Windows, with Go 1.27.1
 and QuickJS 2026-06-04. The first two columns are milliseconds for the same
 fixed work (the median of three fresh-process runs, lower is better). The
-scores are the suite's own (higher is better).
+scores are the suite's own (higher is better). Richards and DeltaBlue, which
+take only a few milliseconds a run, ran thirty times in each process, scaled
+to three.
 
 | Workload | go-quickjs | QuickJS | QuickJS faster by | go-quickjs score | QuickJS score |
 |---|---:|---:|---:|---:|---:|
-| Richards | 25.5 ms | 12.0 ms | 2.1x | 416 | 951 |
-| DeltaBlue | 34.7 ms | 24.0 ms | 1.4x | 588 | 839 |
-| Crypto | 593 ms | 327 ms | 1.8x | 608 | 1,099 |
-| RayTrace | 165 ms | 143 ms | 1.2x | 1,338 | 1,588 |
-| EarleyBoyer | 554 ms | 413 ms | 1.3x | 1,568 | 2,146 |
-| RegExp | 389 ms | 870 ms | 0.45x | 1,045 | 431 |
-| Splay | 351 ms | 520 ms | 0.67x | 2,437 | 3,284 |
-| NavierStokes | 427 ms | 190 ms | 2.2x | 1,101 | 2,399 |
-| **Total / composite** | **2,569 ms** | **2,517 ms** | **1.02x** | **984** | **1,336** |
+| Richards | 28.4 ms | 11.1 ms | 2.6x | 376 | 954 |
+| DeltaBlue | 34.3 ms | 24.1 ms | 1.4x | 574 | 834 |
+| Crypto | 415 ms | 323 ms | 1.3x | 873 | 1,101 |
+| RayTrace | 167 ms | 142 ms | 1.2x | 1,339 | 1,578 |
+| EarleyBoyer | 556 ms | 411 ms | 1.4x | 1,511 | 2,126 |
+| RegExp | 385 ms | 874 ms | 0.44x | 1,049 | 430 |
+| Splay | 358 ms | 521 ms | 0.69x | 2,380 | 3,276 |
+| NavierStokes | 297 ms | 192 ms | 1.5x | 1,624 | 2,400 |
+| **Total / composite** | **2,278 ms** | **2,532 ms** | **0.90x** | **1,056** | **1,332** |
 
 The scored run weighs more heavily than the fixed one what a long-running
 program pays for its heap. Each workload is warmed for a second and then
 measured for another. That is why Splay and EarleyBoyer, which allocate the
 most, fare worse there. Figures move by a few percent between builds from
-code placement alone. To reproduce them, run
+code placement alone, and Richards by more, from 26 ms to 28 ms. To
+reproduce them, run
 `go run ./internal/cmd/v8bench -dir /tmp/v8-v7 -mode fixed -n 3` and the
 `external` runner with `-engine qjs`.
 
@@ -129,11 +132,14 @@ What the gap is made of:
   - Go inlines only the smallest functions into a function of that size, so
     the common cases are written out by hand where they are used.
 
-  An instruction costs about twice what it costs QuickJS. That is most of the
-  gap in Crypto and NavierStokes, which do little but arithmetic, local
-  variables and array elements. Fusing common instruction sequences into
-  single instructions (`a[i]`, `a[++i]`, `x & 0xff`, `local * local`) reduces
-  how many are dispatched.
+  An instruction costs about twice what it costs QuickJS. Fusing common
+  instruction sequences into single instructions (`a[i]`, `a[++i]`,
+  `x & 0xff`, `local * local`) reduces how many are dispatched. A function
+  with a loop and few calls runs instead as trees of Go closures, a node for
+  every few instructions with no operand stack between them (see the [design
+  notes](design.md)). That is what closed half the gap on Crypto and
+  NavierStokes, which do little but arithmetic, local variables and array
+  elements.
 - **Calls.** A call from JavaScript to JavaScript fills in a frame record of
   some twenty fields, and each pointer it stores pays a write barrier's
   check. An empty call costs about 47 ns here, against about 25 ns in
@@ -184,13 +190,17 @@ Where go-quickjs is level or ahead:
   method directly, with the frames a stack trace would show standing in for
   its body.
 
-Most of what remains is the interpreter itself: the cost of dispatching an
-instruction and of a call, which is most of the gap in Crypto, NavierStokes
-and Richards. The ways around that which an engine in C or with a JIT has are
-not open to one in Go, as measured here: running calls in the same loop
-rather than a Go call each made the loop slower than the calls it saved, and
-turning each instruction into a Go closure instead of a case of the switch
-came to little more than 10% on the loop best suited to it.
+Most of what remains is the cost of a call, which is most of the gap in
+Richards, DeltaBlue and EarleyBoyer, and the cost of a Go indirect call,
+which every instruction or tree node pays. The ways around that which an
+engine in C or with a JIT has are not open to one in Go, as measured here:
+- Running calls in the same loop, rather than a Go call each, made the loop
+  slower than the calls it saved.
+- Turning each instruction into a Go closure, instead of a case of the switch,
+  came to little more than 10% on the loop best suited to it.
+- Building each expression into a tree of closures made Crypto and
+  NavierStokes a quarter to a third faster, but not a call: entering a tree
+  costs what entering the interpreter does.
 
 [goja]: https://github.com/dop251/goja
 [v8-v7]: https://github.com/mozilla/arewefastyet/tree/master/benchmarks/v8-v7
