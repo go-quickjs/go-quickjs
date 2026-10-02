@@ -113,12 +113,27 @@ to three.
 | NavierStokes | 233 ms | 191 ms | 1.2x | 2,100 | 2,364 |
 | **Total / composite** | **2,023 ms** | **2,514 ms** | **0.80x** | **1,198** | **1,326** |
 
-The scored run weighs more heavily than the fixed one what a long-running
-program pays for its heap. Each workload is warmed for a second and then
-measured for another. That is why Splay and EarleyBoyer, which allocate the
-most, fare worse there. Figures move by a few percent between builds from
-code placement alone, and Richards by more, about a tenth. To reproduce
-them, run
+The two kinds of figure time different things, which is why go-quickjs
+takes less time in total and still scores lower:
+
+- A fixed run times each workload's setup, its runs and its teardown. The
+  scored run times only the runs, after a second of warming up.
+- The total adds milliseconds, so the longest workloads, RegExp and Splay,
+  make most of go-quickjs's lead. The composite score is the geometric mean
+  of the workloads' scores, so each counts the same: Richards' gap weighs as
+  much as RegExp's lead. Even the fixed figures put go-quickjs about 3%
+  behind by that mean.
+- Splay changes sides. Its fixed time is almost all setup and teardown:
+  building a tree of 8,000 nodes and dropping it. That takes about 310 ms
+  and 5 ms here, against 360 ms and 105 ms in QuickJS, which frees the tree
+  by counting references where Go's collector frees it later. A warm run,
+  which is what the score times, is splay-tree operations, calls and
+  property reads. A run takes about 3.0 ms here against 2.55 ms. Giving the
+  collector four times the room (`GOGC=400`) leaves Splay's score as it
+  was, so collection is not what the score measures.
+
+Figures move by a few percent between builds from code placement alone,
+and Richards by more, about a tenth. To reproduce them, run
 `go run ./internal/cmd/v8bench -dir /tmp/v8-v7 -mode fixed -n 3` and the
 `external` runner with `-engine qjs`.
 
@@ -169,8 +184,8 @@ What the gap is made of:
   concurrently and needs a write barrier on every pointer stored, including
   every value written to the interpreter's stack. The collector does most of
   its work on other cores, so with cores to spare it costs less wall-clock
-  time than CPU time. A long-running program that allocates heavily pays for
-  it all the same. The scored Splay and EarleyBoyer show this.
+  time than CPU time. A program that allocates heavily still pays for it in
+  CPU time.
 - **Bounds checks.** Go checks every slice index, and the interpreter's stack,
   locals and array elements are all slices.
 
@@ -190,9 +205,12 @@ Where go-quickjs is level or ahead:
   positions where no match can begin in a loop of their own, reads a code
   unit that is a whole character without a call, and takes a greedy run of
   one character in a single step.
-- **Splay, in fixed work.** Go's allocator makes many short-lived objects
-  cheaply, and a short string or an array of up to sixteen elements is one
-  allocation with its contents.
+- **Splay, in fixed work.** That is mostly building the tree and dropping
+  it. Go's allocator makes many small objects cheaply, a short string or an
+  array of up to sixteen elements is one allocation with its contents, and
+  dropping the tree costs nothing until the collector runs. The splay
+  operations themselves, which the score times, take about a sixth longer
+  than QuickJS's.
 - **`apply(this, arguments)`.** In a function whose only use of `arguments` is
   passing it to `apply` (a common way to write a class constructor), the
   arguments object is never made. A constructor whose whole body is
