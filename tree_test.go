@@ -92,6 +92,13 @@ var treeScripts = []string{
 	`function f(a) { for (var i = 0; i < a.length; i++) { if (a[i] < 0) return i; while (a[i] > 10) a[i] -= 7 } return -1 } f([3, 20, 15, -1, 2]) + "," + f([1])`,
 	// this, in a method and in a sloppy function.
 	`function f() { var s = 0; for (var i = 0; i < 3; i++) s += this.k * i; return s } f.call({ k: 7 }) + "," + (function () { var c = 0; for (var i = 0; i < 2; i++) c += this === globalThis; return c })()`,
+	// this where it is a binding: a derived constructor's before and after
+	// super(), and an arrow's inside one.
+	`class A { constructor() { this.a = 1 } } class B extends A { constructor(early) { var r = "", f = () => this.a;
+	   if (early) { try { r += this.a } catch (e) { r += e.constructor.name } try { r += f() } catch (e) { r += e.constructor.name } }
+	   super(); for (var i = 0; i < 2; i++) { this.a += i; r += "," + this.a + f() } this.r = r } }
+	 new B(true).r + " " + new B(false).r`,
+	`var o = { k: 2, m() { var s = 0; for (var i = 0; i < 3; i++) { s += this.k; this.k = this.k + 1 } return s + "," + this.k } }; o.m() + " " + o.m.call({ k: "x" })`,
 	// Exceptions from inside an expression, and their stacks.
 	`function f(a) { var s = 0; for (var i = 0; i < a.length; i++) { s += a[i].x.y } return s }
 	 try { f([{ x: { y: 1 } }, { x: null }]) } catch (e) { e.constructor.name + " " + e.message + "|" + e.stack.split("\n").slice(0, 3).join("|") }`,

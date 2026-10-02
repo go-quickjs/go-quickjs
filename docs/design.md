@@ -63,12 +63,14 @@ past the store. Each is compiled without that, and a comparison a branch tests
 directly becomes one instruction rather than two. A counted loop of the kind
 every program contains lost a fifth of its instructions to this.
 
-**Loops can run as trees of Go closures.** The interpreter pays for every
+**Functions can run as trees of Go closures.** The interpreter pays for every
 instruction it dispatches, and in Go that is most of what an arithmetic loop
-costs. A function with a loop and few calls is built instead, from its
-bytecode, into blocks of expression trees: each node is a Go closure that
-computes its value from its children's and returns it, so there is no operand
-stack and a node does the work of several instructions. What the stack would
+costs. A function with few calls is built instead, from its bytecode, into
+blocks of expression trees: each node is a Go closure that computes its value
+from its children's and returns it, so there is no operand stack and a node
+does the work of several instructions. An operand that is a local or a
+constant is read by the node itself rather than by a child, and a comparison
+that decides a jump is the end of its block. What the stack would
 hold across a statement, a call or a block's end is written to the frame's own
 slots, so things happen in the interpreter's order. A node that can throw or
 run code first records where it is, so a stack trace reads the same. Each node

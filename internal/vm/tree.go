@@ -100,8 +100,8 @@ func init() {
 }
 
 // treeEverything has the tier build every function it can, whether or not
-// it has a loop to win back the cost and few enough calls: for tests, which
-// want every instruction it builds run in it.
+// it has few enough calls to run faster as a tree: for tests, which want
+// every instruction it builds run in it.
 var treeEverything atomic.Bool
 
 // SetTreeTier turns the tree tier on or off for functions not yet run, and

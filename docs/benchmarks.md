@@ -135,11 +135,11 @@ What the gap is made of:
   An instruction costs about twice what it costs QuickJS. Fusing common
   instruction sequences into single instructions (`a[i]`, `a[++i]`,
   `x & 0xff`, `local * local`) reduces how many are dispatched. A function
-  with a loop and few calls runs instead as trees of Go closures, a node for
-  every few instructions with no operand stack between them (see the [design
-  notes](design.md)). That is what closed half the gap on Crypto and
-  NavierStokes, which do little but arithmetic, local variables and array
-  elements.
+  with few calls runs instead as trees of Go closures, a node for every few
+  instructions with no operand stack between them, and with locals and
+  constants read in place (see the [design notes](design.md)). That is what
+  closed the gap on Crypto and most of it on NavierStokes, which do little but
+  arithmetic, local variables and array elements.
 - **Calls.** A call from JavaScript to JavaScript fills in a frame record of
   some fifteen fields, and each pointer it stores pays a write barrier's
   check. An empty call costs about 45 ns here, against about 22 ns in

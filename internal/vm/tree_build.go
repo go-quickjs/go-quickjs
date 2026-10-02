@@ -13,13 +13,14 @@ type tentry struct {
 	// own position, or -1 for a tree still to be evaluated.
 	slot int
 	// local is set for a read of local k, upvalue for a read of upvalue k,
-	// and number for the number n: what a node can read in place rather than
-	// call v for.
+	// number for the number n, and this for this where it is a value rather
+	// than a binding: what a node can read in place rather than call v for.
 	local   bool
 	upvalue bool
 	k       uint32
 	number  bool
 	n       Value
+	this    bool
 }
 
 // tbuilder builds one block of a function's tree.
@@ -38,20 +39,16 @@ func buildTree(fn *bytecode.Function) *tree {
 		return nil
 	}
 	code := fn.Code
-	// Running a tree costs a little more to start than the interpreter does,
-	// which only a loop wins back: a function without one runs as bytecode.
 	// A call costs a tree more than it costs the interpreter, so a function
-	// whose code is mostly calls does too.
-	loops, calls := false, 0
-	for pc, in := range code {
+	// whose code is mostly calls runs as bytecode.
+	calls := 0
+	for _, in := range code {
 		switch in.Op {
-		case bytecode.OpJump, bytecode.OpJumpIfFalse, bytecode.OpJumpIfTrue, bytecode.OpJumpIfCmpFalse:
-			loops = loops || int(in.A) <= pc
 		case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew:
 			calls++
 		}
 	}
-	if !treeEverything.Load() && (!loops || calls*treeCallDensity > len(code)) {
+	if !treeEverything.Load() && calls*treeCallDensity > len(code) {
 		return nil
 	}
 	leader := make([]bool, len(code)+1)
@@ -381,6 +378,13 @@ func upvalueEntry(k uint32) tentry {
 	return tentry{v: func(c *tctx) Value { return c.cl.upvalues[k].get() }, slot: -1, upvalue: true, k: k}
 }
 
+// thisEntry is a read of this, in a function whose this is never a
+// binding: one that is neither a derived constructor, whose this is unbound
+// until super() binds it, nor an arrow, which may share one.
+func thisEntry() tentry {
+	return tentry{v: func(c *tctx) Value { return c.f.this }, slot: -1, this: true}
+}
+
 // numberEntry is the number n.
 func numberEntry(n Value) tentry {
 	return tentry{v: func(*tctx) Value { return n }, slot: -1, number: true, n: n}
@@ -466,6 +470,10 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 	case bytecode.OpPushInt:
 		b.pushEntry(numberEntry(Int32(int32(in.A))))
 	case bytecode.OpPushThis:
+		if fn.Kind != bytecode.KindDerivedConstructor && fn.Kind != bytecode.KindArrow {
+			b.pushEntry(thisEntry())
+			break
+		}
 		b.push(func(c *tctx) Value {
 			v, bound := c.f.thisValue()
 			if !bound {
@@ -1316,6 +1324,17 @@ func (c *tctx) setIndexSlow(o, k, v Value, pc int, strict bool) Value {
 // getPropOperand is obj.name, reading a local object in place.
 func getPropOperand(obj tentry, in bytecode.Instr, pc int) tval {
 	name, site := in.A, in.B
+	if obj.this {
+		return func(c *tctx) Value {
+			o := c.f.this
+			if o.IsObject() {
+				if v, ok := plainOwn(o.Object(), c.cl.names[name]); ok {
+					return v
+				}
+			}
+			return c.getPropSlow(o, name, site, pc)
+		}
+	}
 	if k := obj.k; obj.local {
 		return func(c *tctx) Value {
 			o := c.locals[k]
@@ -1380,6 +1399,14 @@ func getPropThisNode(d int, in bytecode.Instr, pc int) tval {
 // in place.
 func setPropOperand(obj tentry, val tval, in bytecode.Instr, pc int, strict bool) tval {
 	name, site := in.A, in.B
+	if obj.this {
+		return func(c *tctx) Value {
+			o := c.f.this
+			v := val(c)
+			c.setProp(o, v, name, site, pc, strict)
+			return v
+		}
+	}
 	if k := obj.k; obj.local {
 		return func(c *tctx) Value {
 			o := c.locals[k]
@@ -1400,6 +1427,12 @@ func setPropOperand(obj tentry, val tval, in bytecode.Instr, pc int, strict bool
 // setPropStmt is obj.name = val as a statement.
 func setPropStmt(obj tentry, val tval, in bytecode.Instr, pc int, strict bool) tstmt {
 	name, site := in.A, in.B
+	if obj.this {
+		return func(c *tctx) {
+			o := c.f.this
+			c.setProp(o, val(c), name, site, pc, strict)
+		}
+	}
 	if k := obj.k; obj.local {
 		return func(c *tctx) {
 			o := c.locals[k]
