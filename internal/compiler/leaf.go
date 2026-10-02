@@ -64,12 +64,16 @@ func leafKind(fn *bytecode.Function) bytecode.LeafKind {
 // pureBody reports whether a function's code is a body LeafPure marks: no
 // local but its parameters, every jump forward, and every instruction one
 // that reads or computes, of a stack small enough to be evaluated in a
-// fixed array.
+// fixed array, but for one store in its tail. It sets fn.PureTail.
 func pureBody(fn *bytecode.Function) bool {
 	if fn.LocalCount != fn.ParamCount || fn.MaxStack > 24 || len(fn.Code) > 64 {
 		return false
 	}
 	param := func(k uint32) bool { return int(k) < fn.ParamCount }
+	tail := len(fn.Code)
+	for tail > 0 && pureSafe(fn.Code[tail-1], param) {
+		tail--
+	}
 	for pc, in := range fn.Code {
 		switch in.Op {
 		case bytecode.OpPushThis, bytecode.OpPushInt, bytecode.OpPushConst, bytecode.OpPushNull,
@@ -84,6 +88,11 @@ func pureBody(fn *bytecode.Function) bool {
 			bytecode.OpGetPropThis, bytecode.OpCall, bytecode.OpCallMethod:
 			// A call is of a body that is itself pure, or it is not made
 			// frameless: the VM sees which when it gets there.
+		case bytecode.OpSetProp:
+			// The store is the last thing the body can give up at.
+			if pc+1 < tail {
+				return false
+			}
 		case bytecode.OpGetLocal:
 			if !param(in.A) {
 				return false
@@ -109,5 +118,27 @@ func pureBody(fn *bytecode.Function) bool {
 			return false
 		}
 	}
+	fn.PureTail = int32(tail)
 	return true
+}
+
+// pureSafe reports whether an instruction of a pure body is one its
+// frameless evaluation cannot give up at: it pushes, drops, branches or
+// returns what it has, with no read of a property or a global and no
+// operator that could call valueOf.
+func pureSafe(in bytecode.Instr, param func(uint32) bool) bool {
+	switch in.Op {
+	case bytecode.OpPushThis, bytecode.OpPushInt, bytecode.OpPushConst, bytecode.OpPushNull,
+		bytecode.OpPushTrue, bytecode.OpPushFalse, bytecode.OpPushUndef, bytecode.OpPushEmptyString,
+		bytecode.OpDup, bytecode.OpDrop, bytecode.OpReturn, bytecode.OpReturnUndef,
+		bytecode.OpNot, bytecode.OpTypeOf, bytecode.OpStrictEq, bytecode.OpStrictNe,
+		bytecode.OpJump, bytecode.OpJumpIfFalse, bytecode.OpJumpIfTrue,
+		bytecode.OpJumpIfFalseKeep, bytecode.OpJumpIfTrueKeep:
+		return true
+	case bytecode.OpGetLocal:
+		return param(in.A)
+	case bytecode.OpGetLocal2:
+		return param(in.A) && param(in.B)
+	}
+	return false
 }

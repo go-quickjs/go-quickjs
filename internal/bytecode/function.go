@@ -208,13 +208,14 @@ const (
 	// push_this, get_prop, get_prop_this of apply, push_this,
 	// apply_arguments, drop, return_undef.
 	LeafForward
-	// LeafPure is a body that only reads -- this, its parameters, constants,
+	// LeafPure is a body that reads -- this, its parameters, constants,
 	// properties and globals -- and computes from what it read, with
 	// operators, comparisons, typeof, branches forward and calls, and
-	// returns: no store, no loop and no local of its own. The VM evaluates
-	// one without a frame where each read and each operator takes its fast
-	// path and each call is of such a body too, and gives up, having changed
-	// nothing, where one would not.
+	// returns: no loop and no local of its own, and at most one store, to a
+	// property, after which nothing it does can fail (see PureTail). The VM
+	// evaluates one without a frame where each read, operator and store
+	// takes its fast path and each call is of such a body too, and gives up,
+	// having changed nothing, where one would not.
 	LeafPure
 )
 
@@ -334,6 +335,11 @@ type Function struct {
 	// LeafNone. The VM answers a call of one itself, without running the
 	// body, where nothing could see the difference.
 	Leaf LeafKind
+	// PureTail is, for a LeafPure body, where the code begins that has no
+	// instruction a frameless evaluation could give up at. A store is only
+	// in it, so that nothing can give up after one, and so is a call of a
+	// body that stores.
+	PureTail int32
 	// VMCode is the VM's own form of the function, which it builds the first
 	// time the function runs and stores here once, atomically: it holds
 	// nothing of any one runtime's, so every runtime can share it.

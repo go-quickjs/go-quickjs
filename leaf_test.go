@@ -245,3 +245,42 @@ func TestPureLeafCalls(t *testing.T) {
 		checkEval(t, tt.src, tt.want)
 	}
 }
+
+// TestPureLeafStores checks the bodies LeafPure marks that store: once
+// and last, where nothing after the store can give the frameless evaluation
+// up, so that a store is never made twice or seen half done.
+func TestPureLeafStores(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`var HELD = 4; function T(s) { this.state = s } T.prototype.mark = function () { this.state = this.state | HELD };
+			var a = new T(1), b = { other: 1, state: 2 }; for (var i = 0; i < 100; i++) { a.mark(); T.prototype.mark.call(b); a.state++ }
+			a.state + "," + b.state`,
+			"205,6"},
+		{`function In(v) { this.value = v } function C(a, b) { this.a = a; this.b = b }
+			C.prototype.input = function () { return this.a }; C.prototype.output = function () { return this.b };
+			C.prototype.execute = function () { this.output().value = this.input().value };
+			var c = new C(new In(1), new In(0)), r = []; for (var i = 0; i < 100; i++) { c.a.value = i; c.execute(); r.push(c.b.value) } r.slice(-3).join()`,
+			"97,98,99"},
+		{`var log = [], P = { set x(v) { log.push(v) } }; function sx(v) { this.x = v + 1 }
+			for (var i = 0; i < 70; i++) sx.call(i % 2 ? Object.create(P) : {}, i); log.length + "," + log.slice(-2).join()`,
+			"35,68,70"},
+		{`function add(v) { this.n = v * 2 } var r = []; for (var i = 0; i < 70; i++) { var o = i < 68 ? {} : Object.preventExtensions({}); add.call(o, i); r.push(o.n) }
+			r.slice(-4).join()`,
+			"132,134,,"},
+		{`"use strict"; function put(v) { this.k = v + 0 } var f = Object.freeze({ k: 1 }), r = [];
+			for (var i = 0; i < 70; i++) put.call({ k: 0 }, i);
+			try { put.call(f, 2) } catch (e) { r.push(e.constructor.name, e.stack.split(String.fromCharCode(10))[1].trim().split(" (")[0]) } r.join()`,
+			"TypeError,at Object.put"},
+		{`function put(v) { this.k = v + 0 } var f = Object.freeze({ k: 1 }); for (var i = 0; i < 70; i++) put.call(f, i); f.k`,
+			"1"},
+		// A store a caller could still give up after is not made by the
+		// frameless evaluation: the getter g makes f give up, and then f
+		// runs as usual, which would bump c a second time.
+		{`var o = { c: 0, bump() { this.c = this.c + 1 }, get g() { return this.c }, f() { this.bump(); return this.g },
+			t() { return this.bump() } };
+			var r = []; for (var i = 0; i < 70; i++) r.push(o.f()); for (var i = 0; i < 70; i++) o.t(); r.slice(-2).join() + "," + o.c`,
+			"69,70,140"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}

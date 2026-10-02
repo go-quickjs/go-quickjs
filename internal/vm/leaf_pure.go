@@ -14,17 +14,19 @@ const pureMissLimit = 64
 // fast path -- a plain data property, a global held in the global object's
 // table, numbers for an operator, primitives for == -- where nothing can run
 // code or throw. Where one cannot, the call reports false, and is made as
-// any other is: the body stores nothing and calls nothing, so nothing it did
-// before giving up can be seen.
+// any other is: nothing the body did before giving up can be seen, since a
+// store, a body's one, is in the tail of it that cannot give up.
 func (r *Runtime) pureCall(fd *funcData, this Value, args []Value) (Value, bool) {
-	return r.pureCallAt(fd, this, args, 0)
+	return r.pureCallAt(fd, this, args, 0, true)
 }
 
 // pureCallDepth is how deeply pure bodies are evaluated inside one another:
 // a recursive one would otherwise take the Go stack with it.
 const pureCallDepth = 8
 
-func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int) (Value, bool) {
+// pureCallAt is pureCall of a body depth calls in, which may store only
+// where mayStore says that nothing that called it can give up afterwards.
+func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, mayStore bool) (Value, bool) {
 	cl := fd.closure
 	fn := cl.fn
 	if cl.pureMiss >= pureMissLimit || fd.arrow || len(fd.lexWith) > 0 || fd.lexEvalVars != nil ||
@@ -112,13 +114,39 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int) 
 				base--
 				recv = stack[base]
 			}
-			v, ok := r.pureInvoke(callee, recv, stack[sp-n:sp], depth)
+			v, ok := r.pureInvoke(callee, recv, stack[sp-n:sp], depth, mayStore && pc+1 >= int(fn.PureTail))
 			if !ok {
 				return miss()
 			}
 			sp = base
 			stack[sp] = v
 			sp++
+		case bytecode.OpSetProp:
+			// A write the site's cache answers -- to a property the object
+			// has, or one it adds as objects of its shape did before -- is
+			// made, calling nothing; anything else gives up before writing.
+			o := stack[sp-2]
+			if !mayStore || !o.IsObject() {
+				return miss()
+			}
+			ob, c := o.Object(), &cl.ic[in.B]
+			if s := ob.shape; s == nil || s != c.shape {
+				return miss()
+			}
+			if c.next == nil {
+				if verifyShapes {
+					checkShape(ob)
+				}
+				ob.props[c.idx].value = stack[sp-1]
+			} else if c.adds(ob) {
+				if verifyShapes {
+					r.verifyStoreCache(c, ob, cl.names[in.A])
+				}
+				ob.appendTransition(Property{key: cl.names[in.A], flags: c.next.flags, value: stack[sp-1]}, c.next)
+			} else {
+				return miss()
+			}
+			sp -= 2
 		case bytecode.OpGetLength:
 			switch v := stack[sp-1]; {
 			case v.IsString():
@@ -316,7 +344,7 @@ func (r *Runtime) pureCompare(op bytecode.Op, a, b Value) (res, ok bool) {
 // be: a unary Math function given a number, as a call from the interpreter
 // would apply it, a body that only reads one property of this, or another
 // pure one. It reports false for any other callee.
-func (r *Runtime) pureInvoke(callee, this Value, args []Value, depth int) (Value, bool) {
+func (r *Runtime) pureInvoke(callee, this Value, args []Value, depth int, mayStore bool) (Value, bool) {
 	if !callee.IsObject() {
 		return Undefined, false
 	}
@@ -336,7 +364,7 @@ func (r *Runtime) pureInvoke(callee, this Value, args []Value, depth int) (Value
 		if depth+1 >= pureCallDepth {
 			return Undefined, false
 		}
-		return r.pureCallAt(fd, this, args, depth+1)
+		return r.pureCallAt(fd, this, args, depth+1, mayStore)
 	case bytecode.LeafGetThis, bytecode.LeafGetThisLength, bytecode.LeafGetThisIndex:
 		if !this.IsObject() || fd.arrow {
 			return Undefined, false
