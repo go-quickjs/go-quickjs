@@ -152,6 +152,16 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 				return miss()
 			}
 			sp -= 2
+		case bytecode.OpNew:
+			n := int(in.A)
+			base := sp - n - 1
+			v, ok := r.pureConstruct(stack[base], stack[sp-n:sp])
+			if !ok {
+				return miss()
+			}
+			sp = base
+			stack[sp] = v
+			sp++
 		case bytecode.OpGetLength:
 			switch v := stack[sp-1]; {
 			case v.IsString():
@@ -255,6 +265,36 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 		}
 	}
 	return miss()
+}
+
+// pureConstruct is new F(...args) inside a pure body, made without a frame
+// where F is a constructor of this realm whose body only stores its
+// parameters in this (LeafSetThis), with nothing to install before it runs,
+// and whose prototype property is a plain one holding an object. The object
+// is made as construct makes it, and given the stores the sites' caches
+// answer; anything else reports false. An object made and then given up with
+// the rest of the evaluation was never seen by anything.
+func (r *Runtime) pureConstruct(callee Value, args []Value) (Value, bool) {
+	if !callee.IsObject() {
+		return Undefined, false
+	}
+	o := callee.Object()
+	fd := o.fn()
+	if fd == nil || fd.ctorKind != ctorBase || fd.bound || fd.native != nil || fd.fieldInit != nil ||
+		fd.closure == nil || fd.closure.realm != r.Realm || fd.closure.fn.Leaf != bytecode.LeafSetThis ||
+		o.class != ClassFunction {
+		return Undefined, false
+	}
+	p := o.getOwnVisible(atomPrototype)
+	if p == nil || p.flags&propAccessor != 0 || !p.value.IsObject() {
+		return Undefined, false
+	}
+	obj := newLiteralObject(p.value.Object(), ClassObject, int(fd.closure.fn.ThisProps))
+	obj.shape = r.shapes.ctorRoot(fd)
+	if !r.leafStores(fd.closure, obj, args) {
+		return Undefined, false
+	}
+	return Obj(obj), true
 }
 
 // pureGlobal is get_global's fast paths: a script-level lexical binding

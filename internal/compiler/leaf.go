@@ -85,9 +85,11 @@ func pureBody(fn *bytecode.Function) bool {
 			bytecode.OpLt, bytecode.OpLe, bytecode.OpGt, bytecode.OpGe,
 			bytecode.OpEq, bytecode.OpNe, bytecode.OpStrictEq, bytecode.OpStrictNe,
 			bytecode.OpDup, bytecode.OpDrop, bytecode.OpReturn, bytecode.OpReturnUndef,
-			bytecode.OpGetPropThis, bytecode.OpCall, bytecode.OpCallMethod:
+			bytecode.OpGetPropThis, bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew:
 			// A call is of a body that is itself pure, or it is not made
-			// frameless: the VM sees which when it gets there.
+			// frameless: the VM sees which when it gets there. So is a
+			// construction, of a constructor that only stores its
+			// parameters.
 		case bytecode.OpSetProp:
 			// The store is the last thing the body can give up at.
 			if pc+1 < tail {

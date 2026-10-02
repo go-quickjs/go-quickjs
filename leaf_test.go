@@ -284,3 +284,35 @@ func TestPureLeafStores(t *testing.T) {
 		checkEval(t, tt.src, tt.want)
 	}
 }
+
+// TestPureLeafConstructs checks new inside a body LeafPure marks, made
+// without a frame where the constructor only stores its parameters: the
+// object, its prototype read where new is, a prototype that is not an
+// object, a class's fields, a setter up the chain, and a proxy and a
+// non-constructor, which are left to construct as before.
+func TestPureLeafConstructs(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`function P(a, b) { this.a = a; this.b = b } function cons(a, b) { return new P(a, b) }
+			var r = []; for (var i = 0; i < 100; i++) { var p = cons(i, i + 1); r.push(p.a + p.b) }
+			var p = cons(1, 2); [r.slice(-2).join(), p instanceof P, Object.getPrototypeOf(p) === P.prototype, Object.keys(p).join()].join()`,
+			"197,199,true,true,a,b"},
+		{`function P(a) { this.a = a } function cons(a) { return new P(a) } var r = [];
+			for (var i = 0; i < 80; i++) cons(i); var proto2 = { tag: "two" }; P.prototype = proto2; r.push(cons(1).tag);
+			P.prototype = 5; var q = cons(2); r.push(Object.getPrototypeOf(q) === Object.prototype, q.a); r.join()`,
+			"two,true,2"},
+		{`class C { x = 7; constructor(a) { this.a = a } } function cons(a) { return new C(a) } var r = [];
+			for (var i = 0; i < 80; i++) r.push(cons(i).x + cons(i).a); r.slice(-2).join()`,
+			"85,86"},
+		{`function P(a) { this.a = a } function cons(a) { return new P(a) } var log = [];
+			for (var i = 0; i < 80; i++) cons(i); Object.defineProperty(P.prototype, "a", { set(v) { log.push("set" + v) }, configurable: true });
+			var o = cons(5); [log.join(), Object.keys(o).length].join()`,
+			"set5,0"},
+		{`function P(a) { this.a = a } var X = new Proxy(P, { construct(t, args) { log.push("trap"); return { a: "proxied" } } }), log = [];
+			function cons(F, a) { return new F(a) } var r = []; for (var i = 0; i < 70; i++) r.push(cons(P, i).a); r.push(cons(X, 1).a, log.join());
+			try { cons(Math.max, 1) } catch (e) { r.push(e.constructor.name) } r.slice(-3).join()`,
+			"proxied,trap,TypeError"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}
