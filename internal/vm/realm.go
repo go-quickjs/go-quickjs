@@ -60,6 +60,9 @@ func (r *Runtime) initRealm() {
 	// and a realm is built once.
 	r.funcSlab, r.building = nil, false
 	r.shapes.building = false
+	// The names a built realm has interned are the base of the atom tables
+	// made after it.
+	r.atoms.publish()
 }
 
 // Global returns the realm's global object.
