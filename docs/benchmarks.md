@@ -63,28 +63,28 @@ better.
 
 | Workload | go-quickjs | goja | Relative result |
 |---|---:|---:|---:|
-| Richards | 1,211 | 510 | go-quickjs 2.37x |
-| DeltaBlue | 1,631 | 618 | go-quickjs 2.64x |
-| Crypto | 1,859 | 328 | go-quickjs 5.67x |
-| RayTrace | 4,241 | 775 | go-quickjs 5.47x |
-| EarleyBoyer | 4,460 | 1,426 | go-quickjs 3.13x |
-| RegExp | 3,203 | 574 | go-quickjs 5.58x |
-| Splay | 6,495 | 2,375 | go-quickjs 2.73x |
-| NavierStokes | 3,441 | 538 | go-quickjs 6.40x |
-| **Composite score** | **2,897** | **739** | **go-quickjs 3.92x** |
+| Richards | 1,397 | 515 | go-quickjs 2.71x |
+| DeltaBlue | 1,997 | 629 | go-quickjs 3.17x |
+| Crypto | 2,720 | 325 | go-quickjs 8.37x |
+| RayTrace | 4,301 | 771 | go-quickjs 5.58x |
+| EarleyBoyer | 4,630 | 1,391 | go-quickjs 3.33x |
+| RegExp | 3,182 | 576 | go-quickjs 5.52x |
+| Splay | 6,788 | 2,393 | go-quickjs 2.84x |
+| NavierStokes | 5,072 | 541 | go-quickjs 9.38x |
+| **Composite score** | **3,367** | **734** | **go-quickjs 4.59x** |
 
 The complete fresh-process run includes runtime construction, parsing,
 compilation, the suite's warmups and its measured iterations:
 
 | Metric | go-quickjs | goja | Relative result |
 |---|---:|---:|---:|
-| Wall time | 23.47 s | 52.22 s | go-quickjs 2.23x faster |
-| Total allocation | 11.37 GiB | 31.85 GiB | go-quickjs 64.3% less |
+| Wall time | 22.36 s | 52.29 s | go-quickjs 2.34x faster |
+| Total allocation | 11.77 GiB | 31.43 GiB | go-quickjs 62.6% less |
 
 The suite warms every workload for at least one second, then measures for at
 least another second and continues until it has 32 measured iterations. Both
 engines evaluated the same concatenated benchmark sources and validation code.
-The measured revisions were go-quickjs `5986188`, goja `793a2a6`, and
+The measured revisions were go-quickjs `b0c87ef`, goja `793a2a6`, and
 AreWeFastYet `0e21608`. These results characterize this older interpreter
 workload suite rather than every application; go-quickjs leads all eight of
 its workloads in this comparison.
