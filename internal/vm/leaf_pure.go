@@ -17,6 +17,7 @@ const pureMissLimit = 64
 // any other is: nothing the body did before giving up can be seen, since a
 // store, a body's one, is in the tail of it that cannot give up.
 func (r *Runtime) pureCall(fd *funcData, this Value, args []Value) (Value, bool) {
+	r.pureRefused = false
 	return r.pureCallAt(fd, this, args, 0, true)
 }
 
@@ -116,6 +117,13 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 			}
 			v, ok := r.pureInvoke(callee, recv, stack[sp-n:sp], depth, mayStore && pc+1 >= int(fn.PureTail))
 			if !ok {
+				// A store refused below is the miss of the body that called
+				// where it could not store, not of a body that was itself
+				// called so: that one's caller is answerable.
+				if r.pureRefused && !mayStore {
+					return Undefined, false
+				}
+				r.pureRefused = false
 				return miss()
 			}
 			sp = base
@@ -128,6 +136,7 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 			// A store where the caller could still give up is refused, but is
 			// not this body's miss: called where it may store, it can.
 			if !mayStore {
+				r.pureRefused = true
 				return Undefined, false
 			}
 			o := stack[sp-2]
@@ -309,6 +318,7 @@ const (
 // the last one off, calling nothing. It reports false for anything else.
 func (r *Runtime) pureElemOp(op uint8, this Value, args []Value, mayStore bool) (Value, bool) {
 	if !mayStore {
+		r.pureRefused = true
 		return Undefined, false
 	}
 	o := r.plainArray(this)

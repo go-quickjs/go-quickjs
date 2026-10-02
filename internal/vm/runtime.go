@@ -346,6 +346,10 @@ type Realm struct {
 	iteratorCtor *Object
 	helperProto  *Object
 	wrapProto    *Object
+	// pureRefused records, while a pure body is evaluated, that a store
+	// below was refused for want of mayStore; see pureCallAt.
+	pureRefused bool
+
 	// funcSlab is what the built-in functions are cut from, so that a realm's
 	// hundreds of them are a few dozen allocations rather than one each, and
 	// building says whether it is still open. Both are done with once the
