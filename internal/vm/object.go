@@ -1153,6 +1153,9 @@ type funcData struct {
 	// unary is, for a Math function of one number, its place in unaryMath:
 	// the call instruction applies it to a number itself, without a call.
 	unary uint8
+	// elemOp marks the built-in Array.prototype.push or pop, which a pure
+	// body may call without a frame; see pureElemOp.
+	elemOp uint8
 
 	// arrow marks a function with no bindings of its own. An arrow does not
 	// get this, new.target, super or arguments from its call: it uses the ones

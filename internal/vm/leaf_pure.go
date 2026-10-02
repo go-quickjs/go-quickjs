@@ -297,6 +297,45 @@ func (r *Runtime) pureConstruct(callee Value, args []Value) (Value, bool) {
 	return Obj(obj), true
 }
 
+// The built-in array methods a pure body may call without a frame.
+const (
+	elemPush = iota + 1
+	elemPop
+)
+
+// pureElemOp is the built-in push or pop called from a pure body, where it
+// may store and the array is one the built-in's own fast path takes: a dense
+// array of its own, whose push adds elements at the end and whose pop takes
+// the last one off, calling nothing. It reports false for anything else.
+func (r *Runtime) pureElemOp(op uint8, this Value, args []Value, mayStore bool) (Value, bool) {
+	if !mayStore {
+		return Undefined, false
+	}
+	o := r.plainArray(this)
+	if o == nil {
+		return Undefined, false
+	}
+	switch op {
+	case elemPush:
+		if !r.noInheritedIndices(o) || o.flags&(objExtensible|objArrayLengthWritable) != objExtensible|objArrayLengthWritable ||
+			int64(len(o.elems))+int64(len(args)) > maxArrayLength {
+			return Undefined, false
+		}
+		o.elems = append(o.elems, args...)
+		return Float(float64(len(o.elems))), true
+	case elemPop:
+		n := len(o.elems) - 1
+		if n < 0 || o.flags&objArrayLengthWritable == 0 || isHole(o.elems[n]) {
+			return Undefined, false
+		}
+		v := o.elems[n]
+		o.elems[n] = Undefined
+		o.elems = o.elems[:n]
+		return v, true
+	}
+	return Undefined, false
+}
+
 // pureGlobal is get_global's fast paths: a script-level lexical binding
 // already initialized, or a plain data property of the global environment's
 // own table, which the site may already know the place of.
@@ -399,6 +438,9 @@ func (r *Runtime) pureInvoke(callee, this Value, args []Value, depth int, maySto
 	}
 	if fd.unary != 0 && len(args) != 0 && args[0].IsNumber() {
 		return Float(unaryMath[fd.unary](args[0].Number())), true
+	}
+	if fd.elemOp != 0 {
+		return r.pureElemOp(fd.elemOp, this, args, mayStore)
 	}
 	if fd.native != nil || fd.bound || fd.closure == nil || fd.closure.realm != r.Realm ||
 		!fd.closure.fn.DirectCall {

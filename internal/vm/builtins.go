@@ -1108,6 +1108,11 @@ func (r *Runtime) initArrayBuiltins() {
 		return v, nil
 	})
 
+	// A pure body may call push and pop without a frame.
+	for name, op := range map[string]uint8{"push": elemPush, "pop": elemPop} {
+		p.getOwn(r.atoms.intern(name)).value.Object().fn().elemOp = op
+	}
+
 	r.defMethod(p, "shift", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		a, err := rt.viewArrayLike(this)
 		if err != nil {

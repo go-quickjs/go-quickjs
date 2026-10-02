@@ -316,3 +316,36 @@ func TestPureLeafConstructs(t *testing.T) {
 		checkEval(t, tt.src, tt.want)
 	}
 }
+
+// TestPureLeafPushPop checks the built-in push and pop called from a body
+// LeafPure marks, made without a frame on a dense array of its own: a
+// frozen or sealed array, a hole the prototype answers for, an element
+// setter up the chain and a replaced push are left to the built-in or the
+// call as before, and a push that a caller could still give up after is not
+// made twice.
+func TestPureLeafPushPop(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`function C() { this.elms = [] } C.prototype.add = function (x) { this.elms.push(x) }; C.prototype.removeFirst = function () { return this.elms.pop() };
+			var c = new C(), r = []; for (var i = 0; i < 100; i++) c.add(i); for (var i = 0; i < 3; i++) r.push(c.removeFirst()); r.join() + " " + c.elms.length`,
+			"99,98,97 97"},
+		{`function add(a, x) { a.push(x) } function rem(a) { return a.pop() } var r = "";
+			for (var i = 0; i < 80; i++) add([], i); var f = Object.freeze([1]), s = Object.seal([1]);
+			try { add(f, 2) } catch (e) { r += e.constructor.name + "," } try { add(s, 2) } catch (e) { r += e.constructor.name + "," }
+			try { rem(f) } catch (e) { r += e.constructor.name + "," } try { rem(s) } catch (e) { r += e.constructor.name + "," } r += s.length;
+			var h = [1, , ]; Array.prototype[1] = "proto"; r += "," + rem(h) + "," + h.length; delete Array.prototype[1]; r`,
+			"TypeError,TypeError,TypeError,TypeError,1,proto,1"},
+		{`function add(a, x) { a.push(x) } var log = "";
+			for (var i = 0; i < 80; i++) add([], i); Object.defineProperty(Array.prototype, "0", { set(v) { log += "set" + v }, configurable: true });
+			var a = []; add(a, 9); delete Array.prototype[0]; log + " " + a.length`,
+			"set9 1"},
+		{`var o = { a: [], get g() { return this.a.length }, f(x) { this.a.push(x); return this.g } }; var r = [];
+			for (var i = 0; i < 70; i++) r.push(o.f(i)); r.slice(-2).join() + " " + o.a.length`,
+			"69,70 70"},
+		{`function add(a, x) { a.push(x) } var a = []; for (var i = 0; i < 70; i++) add(a, i); var saved = Array.prototype.push, log = "";
+			Array.prototype.push = function (x) { log += "mine" + x; return 0 }; add(a, 1); Array.prototype.push = saved; log + " " + a.length`,
+			"mine1 70"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}
