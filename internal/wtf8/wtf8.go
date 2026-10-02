@@ -144,8 +144,8 @@ func FromUTF16(u []uint16) string {
 
 // FromUTF16ASCII is FromUTF16, and reports whether every code unit is ASCII.
 //
-// The text's length is measured first, so that it is written once into room
-// of its size, which becomes the string without being copied.
+// The text's length is measured first, so that it is written once, into room
+// of its size.
 func FromUTF16ASCII(u []uint16) (string, bool) {
 	n, ascii := 0, true
 	for i := 0; i < len(u); i++ {
@@ -168,12 +168,26 @@ func FromUTF16ASCII(u []uint16) (string, bool) {
 	if n == 0 {
 		return "", true
 	}
-	buf := make([]byte, 0, n)
+	// Short text is written on the stack and converted, which costs a string
+	// of a byte nothing at all and a short one the allocator's smallest
+	// size; longer text is written into room of its own, which becomes the
+	// string.
+	if n <= 32 {
+		var short [32]byte
+		return string(appendUTF16(short[:0], u, ascii)), ascii
+	}
+	buf := appendUTF16(make([]byte, 0, n), u, ascii)
+	return unsafe.String(unsafe.SliceData(buf), len(buf)), ascii
+}
+
+// appendUTF16 appends the WTF-8 encoding of UTF-16 code units, every one of
+// them ASCII where ascii says so.
+func appendUTF16(buf []byte, u []uint16, ascii bool) []byte {
 	if ascii {
 		for _, c := range u {
 			buf = append(buf, byte(c))
 		}
-		return unsafe.String(unsafe.SliceData(buf), n), true
+		return buf
 	}
 	for i := 0; i < len(u); i++ {
 		c := rune(u[i])
@@ -191,7 +205,7 @@ func FromUTF16ASCII(u []uint16) (string, bool) {
 			buf = append(buf, byte(0xE0|c>>12), byte(0x80|(c>>6)&0x3F), byte(0x80|c&0x3F))
 		}
 	}
-	return unsafe.String(unsafe.SliceData(buf), len(buf)), false
+	return buf
 }
 
 // Count returns the number of UTF-16 code units a WTF-8 string encodes, which
