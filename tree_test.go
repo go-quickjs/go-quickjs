@@ -142,6 +142,13 @@ var treeScripts = []string{
 	 Object.defineProperty(globalThis, "g1", { get() { log.push("get"); return 7 }, set(v) { log.push("set" + v) }, configurable: true });
 	 r.push(w(2), s(1)); Object.defineProperty(globalThis, "g2", { value: 1, writable: false });
 	 try { w(1) } catch (e) { r.push(e.constructor.name) } r.push(s(1), g2, log.join()); r.join(" ")`,
+	// Reads at a constant index: a hole, past the end, an element up the
+	// chain, a string, a typed array, a mapped arguments object, -0, and a
+	// base that is null.
+	`Array.prototype[1] = "q"; Array.prototype[2] = "p"; function f(a) { var r = []; for (var i = 0; i < 1; i++) r.push(String(a[0]), String(a[1]), String(a[2]), String(a[3]), String(a[-0]), String(a[2147483648])); return r.join("/") }
+	 function g(x) { var a = arguments; x = 5; return f(a) } function h(a) { for (var i = 0; i < 1; i++) return a[0] }
+	 var d = [1, 2, 3]; delete d[1]; var e = new Array(3); var r = [f([1, , 3]), f(d), f(e), f([1]), f("str"), f(new Int8Array([7, 8])), f({ 0: "o", 3: "t" }), g(1)];
+	 try { h(null) } catch (e) { r.push(e.constructor.name + ": " + e.message) } delete Array.prototype[1]; delete Array.prototype[2]; r.join(" ")`,
 	// Updates of an element -- op=, ++ and -- as statements and as values --
 	// and the order the object, the key, the element and the value are taken
 	// in: the key converted once, the object and key read before the value
