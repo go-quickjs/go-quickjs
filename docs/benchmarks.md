@@ -102,15 +102,15 @@ to three.
 
 | Workload | go-quickjs | QuickJS | QuickJS faster by | go-quickjs score | QuickJS score |
 |---|---:|---:|---:|---:|---:|
-| Richards | 24.6 ms | 11.1 ms | 2.2x | 420 | 949 |
-| DeltaBlue | 31.2 ms | 24.1 ms | 1.3x | 632 | 840 |
-| Crypto | 402 ms | 325 ms | 1.2x | 885 | 1,100 |
-| RayTrace | 171 ms | 146 ms | 1.2x | 1,329 | 1,573 |
-| EarleyBoyer | 521 ms | 409 ms | 1.3x | 1,604 | 2,133 |
-| RegExp | 388 ms | 867 ms | 0.45x | 1,056 | 417 |
-| Splay | 356 ms | 520 ms | 0.68x | 2,442 | 3,178 |
-| NavierStokes | 299 ms | 193 ms | 1.6x | 1,592 | 2,356 |
-| **Total / composite** | **2,244 ms** | **2,538 ms** | **0.88x** | **1,094** | **1,319** |
+| Richards | 22.9 ms | 11.0 ms | 2.1x | 461 | 939 |
+| DeltaBlue | 30.0 ms | 24.0 ms | 1.25x | 664 | 838 |
+| Crypto | 317 ms | 325 ms | 0.98x | 1,125 | 1,096 |
+| RayTrace | 161 ms | 143 ms | 1.1x | 1,347 | 1,565 |
+| EarleyBoyer | 510 ms | 402 ms | 1.3x | 1,608 | 2,133 |
+| RegExp | 385 ms | 862 ms | 0.45x | 1,045 | 431 |
+| Splay | 335 ms | 522 ms | 0.64x | 2,594 | 3,253 |
+| NavierStokes | 233 ms | 191 ms | 1.2x | 2,100 | 2,364 |
+| **Total / composite** | **2,023 ms** | **2,514 ms** | **0.80x** | **1,198** | **1,326** |
 
 The scored run weighs more heavily than the fixed one what a long-running
 program pays for its heap. Each workload is warmed for a second and then
@@ -142,16 +142,18 @@ What the gap is made of:
   arithmetic, local variables and array elements.
 - **Calls.** A call from JavaScript to JavaScript fills in a frame record of
   some fifteen fields, and each pointer it stores pays a write barrier's
-  check. An empty call costs about 45 ns here, against about 22 ns in
-  QuickJS. Richards and DeltaBlue are mostly small method calls. Two kinds
-  of function are answered without a frame, where nothing they do could
-  call code or throw:
+  check. A method call that makes a frame costs about 70 ns here, against
+  about 40 ns in QuickJS. Richards, DeltaBlue and EarleyBoyer are mostly
+  small calls. Two kinds of function are answered without a frame, where
+  nothing they do could call code or throw:
   - one whose whole body is `return this.x`, `return this.x.length`,
     `return this.x[i]`, or stores of its parameters in `this`, which is much
     of EarleyBoyer's constructions;
-  - one that only reads and computes, as `isHeldOrSuspended`, DeltaBlue's
-    `input` and `output` and RayTrace's `dot` do, which may call another
-    such function.
+  - one that reads and computes, and may store to a property once as the
+    last thing it can fail at, as `isHeldOrSuspended`, DeltaBlue's `input`,
+    `output` and `execute` and RayTrace's `dot` do. It may call another such
+    function. Called that way, an empty function costs about 42 ns, against
+    about 34 ns in QuickJS.
 - **Property access.** Objects built the same way share a shape, as in
   QuickJS and V8, and each property read and write, each getter, each
   global variable read and each `instanceof` remembers where it last found
@@ -173,6 +175,9 @@ What the gap is made of:
 
 Where go-quickjs is level or ahead:
 
+- **Crypto.** Its arithmetic runs as trees, whose nodes read their locals
+  and constants in place, and each bitwise operator has a node of its own
+  that skips the conversion where its operand is already an integer.
 - **RegExp.** A pattern that contains a run of plain text every match must
   have, near where the match begins, is searched for that text first, and
   tried only where it could have been reached from -- what V8's regexp
@@ -202,9 +207,10 @@ engine in C or with a JIT has are not open to one in Go, as measured here:
   slower than the calls it saved.
 - Turning each instruction into a Go closure, instead of a case of the switch,
   came to little more than 10% on the loop best suited to it.
-- Building each expression into a tree of closures made Crypto and
-  NavierStokes a quarter to a third faster, but not a call: entering a tree
-  costs what entering the interpreter does.
+- Building each expression into a tree of closures that reads its locals
+  and constants in place nearly halved the time Crypto and NavierStokes
+  take, but did not make a call cheaper: entering a tree costs what entering
+  the interpreter does.
 
 [goja]: https://github.com/dop251/goja
 [v8-v7]: https://github.com/mozilla/arewefastyet/tree/master/benchmarks/v8-v7
