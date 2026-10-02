@@ -299,6 +299,14 @@ type Function struct {
 	// sloppy-mode call skip substituting the global object when nothing would
 	// see the difference.
 	UsesThis bool
+	// CoerceThis says a call must make this an object, as a sloppy function
+	// that can see it requires and an arrow, which has none of its own, does
+	// not: UsesThis, not Strict, and no arrow.
+	CoerceThis bool
+	// DirectCall says a call runs the body: not a generator's or an async
+	// function's, which make an object first, nor a class constructor's,
+	// which a call refuses.
+	DirectCall bool
 	// IsExprBody marks a concise arrow body, which affects nothing at runtime
 	// but is useful when printing a function's source.
 	IsExprBody bool

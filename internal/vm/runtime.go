@@ -496,6 +496,10 @@ func (u *upvalue) close() {
 
 // frame is one activation record.
 type frame struct {
+	// The fields every call sets come first, and then the ones almost no
+	// call has, which a call reads and leaves alone: a frame is five cache
+	// lines, and a call touches the fewest of them it can.
+
 	cl *closure
 	// locals is a window into the runtime's shared local storage.
 	locals []Value
@@ -503,14 +507,7 @@ type frame struct {
 	base int
 	pc   uint32
 
-	this Value
-	// thisRef is a derived constructor's `this`, which is a binding rather than
-	// a value: it is unbound until super() runs, and reading it before then is
-	// a ReferenceError -- which is what stops a subclass from touching an
-	// object the base class has not finished building. It is shared with every
-	// arrow created inside the constructor, so that binding it is visible
-	// through them too. Nil for everything else, which is the common case.
-	thisRef   *thisBinding
+	this      Value
 	newTarget Value
 	// callee is the function object being executed, which a named function
 	// expression refers to by its own name.
@@ -519,14 +516,20 @@ type frame struct {
 	// parameter both read.
 	args []Value
 
-	// paramsOnly runs the frame's parameter prologue and stops there, which is
-	// how a generator binds its parameters when it is called rather than on
-	// its first resumption.
-	paramsOnly bool
-
 	// openUpvalues lists the upvalues that point into this frame's locals and
 	// must be closed when it returns.
 	openUpvalues []*upvalue
+
+	// handlers is the exception handler stack for this frame.
+	handlers []handler
+
+	// thisRef is a derived constructor's `this`, which is a binding rather than
+	// a value: it is unbound until super() runs, and reading it before then is
+	// a ReferenceError -- which is what stops a subclass from touching an
+	// object the base class has not finished building. It is shared with every
+	// arrow created inside the constructor, so that binding it is visible
+	// through them too. Nil for everything else, which is the common case.
+	thisRef *thisBinding
 
 	// evalVars holds the bindings a direct eval declared in this frame, which
 	// have no slot because nothing in the source named them. It is nil for
@@ -540,16 +543,18 @@ type frame struct {
 	// strict mode, so nothing modern has one.
 	withScopes []*Object
 
-	// handlers is the exception handler stack for this frame.
-	handlers []handler
+	// native names the Go function for a frame that is executing native code,
+	// so that stack traces can show it.
+	native string
 
 	// savedSP records the operand stack depth at a suspension, so that a
 	// generator saves exactly the live portion of its stack.
 	savedSP int
 
-	// native names the Go function for a frame that is executing native code,
-	// so that stack traces can show it.
-	native string
+	// paramsOnly runs the frame's parameter prologue and stops there, which is
+	// how a generator binds its parameters when it is called rather than on
+	// its first resumption.
+	paramsOnly bool
 
 	// tc is the tree tier's state for a frame running a tree, kept here so
 	// that a call allocates none.

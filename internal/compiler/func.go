@@ -184,6 +184,10 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 	c.emit(bytecode.OpReturnUndef, 0, 0)
 	c.finish()
 	c.fn.Leaf = leafKind(c.fn)
+	// What a call asks of the function every time, asked once here.
+	c.fn.CoerceThis = c.fn.UsesThis && !c.fn.Strict && c.fn.Kind != bytecode.KindArrow
+	c.fn.DirectCall = !c.fn.Generator && !c.fn.Async &&
+		c.fn.Kind != bytecode.KindConstructor && c.fn.Kind != bytecode.KindDerivedConstructor
 }
 
 // bindSelfName gives a named function expression a binding for its own name.

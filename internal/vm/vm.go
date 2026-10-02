@@ -192,7 +192,7 @@ func (r *Runtime) callFromLoop(callee, this Value, args []Value) (Value, error) 
 		}
 		if fd != nil && fd.native == nil && fd.boundTarget == nil &&
 			fd.closure != nil && fd.closure.realm == r.Realm {
-			if fn := fd.closure.fn; !isGeneratorTemplate(fn) && !isClassConstructorKind(fn.Kind) {
+			if fn := fd.closure.fn; fn.DirectCall {
 				if err := r.tick(); err != nil {
 					return Undefined, err
 				}
@@ -404,8 +404,7 @@ start:
 	// The object case is tested first because it is the common one and costs a
 	// single mask: a method call already has an object receiver and needs no
 	// coercion at all.
-	if fn.UsesThis && !this.IsObject() && !fn.Strict &&
-		fn.Kind != bytecode.KindArrow && newTarget.IsUndefined() {
+	if fn.CoerceThis && !this.IsObject() && newTarget.IsUndefined() {
 		if this.IsNullish() {
 			this = r.globalThis
 		} else {
@@ -463,15 +462,25 @@ start:
 	// The kind alone does not say which constructors are derived: a derived
 	// class with no explicit constructor gets a synthesized one, and what makes
 	// it derived is the heritage clause the class object records.
-	f.thisRef = nil
 	f.newTarget = newTarget
 	f.callee = callee
 	f.args = args
-	f.openUpvalues = f.openUpvalues[:0]
+	if len(f.openUpvalues) != 0 {
+		f.openUpvalues = f.openUpvalues[:0]
+	}
+	// What almost no function has is reset only where the frame's last call
+	// left it set: reading a field is cheaper than writing a pointer to it.
+	if f.thisRef != nil {
+		f.thisRef = nil
+	}
 	// The chain is inherited whole, capped so that a push inside this call
 	// copies rather than writing into the creating frame's array.
-	f.withScopes = nil
-	f.evalVars = nil
+	if f.withScopes != nil {
+		f.withScopes = nil
+	}
+	if f.evalVars != nil {
+		f.evalVars = nil
+	}
 	if fd != nil {
 		switch {
 		case !newTarget.IsUndefined() && fd.ctorKind == ctorDerived:
@@ -486,7 +495,9 @@ start:
 		}
 		// What an eval declared in an enclosing function is still in scope
 		// here, whether or not this one has anything of its own.
-		f.evalVars = fd.lexEvalVars
+		if fd.lexEvalVars != nil {
+			f.evalVars = fd.lexEvalVars
+		}
 	}
 	if fn.HasDirectEval {
 		// The body contains a direct eval, so it needs somewhere for the vars
@@ -497,9 +508,15 @@ start:
 		f.evalVars.flags |= objEvalVars
 		f.withScopes = append(f.withScopes[:len(f.withScopes):len(f.withScopes)], f.evalVars)
 	}
-	f.handlers = f.handlers[:0]
-	f.native = ""
-	f.savedSP = 0
+	if len(f.handlers) != 0 {
+		f.handlers = f.handlers[:0]
+	}
+	if f.native != "" {
+		f.native = ""
+	}
+	if f.savedSP != 0 {
+		f.savedSP = 0
+	}
 
 	if err := r.bindParameters(f, fn, args); err != nil {
 		r.popFrameOf(f, base)
