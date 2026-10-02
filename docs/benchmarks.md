@@ -95,7 +95,7 @@ its workloads in this comparison.
 go-quickjs has the same design as QuickJS: a bytecode compiler, a
 stack-based interpreter, NaN-boxed values. Running that design in Go costs
 speed. The same suite ran on an AMD Ryzen 5 3600 under Windows, with Go 1.27.1,
-go-quickjs `c13db5a` and QuickJS 2026-06-04. The first two columns are milliseconds for the same
+go-quickjs `8328077` and QuickJS 2026-06-04. The first two columns are milliseconds for the same
 fixed work (the median of three fresh-process runs, lower is better). The
 scores are the suite's own (higher is better). Richards and DeltaBlue, which
 take only a few milliseconds a run, ran thirty times in each process, scaled
@@ -103,15 +103,15 @@ to three.
 
 | Workload | go-quickjs | QuickJS | QuickJS faster by | go-quickjs score | QuickJS score |
 |---|---:|---:|---:|---:|---:|
-| Richards | 20.8 ms | 11.1 ms | 1.9x | 508 | 952 |
-| DeltaBlue | 30.5 ms | 24.1 ms | 1.27x | 653 | 842 |
-| Crypto | 312 ms | 325 ms | 0.96x | 1,138 | 1,093 |
-| RayTrace | 152 ms | 149 ms | 1.02x | 1,442 | 1,504 |
-| EarleyBoyer | 481 ms | 404 ms | 1.19x | 1,703 | 2,169 |
-| RegExp | 386 ms | 866 ms | 0.45x | 1,051 | 433 |
-| Splay | 322 ms | 522 ms | 0.62x | 2,700 | 3,309 |
-| NavierStokes | 244 ms | 191 ms | 1.28x | 2,007 | 2,367 |
-| **Total / composite** | **1,973 ms** | **2,523 ms** | **0.78x** | **1,231** | **1,328** |
+| Richards | 18.2 ms | 11.1 ms | 1.64x | 584 | 953 |
+| DeltaBlue | 30.4 ms | 24.1 ms | 1.26x | 654 | 827 |
+| Crypto | 316 ms | 326 ms | 0.97x | 1,120 | 1,086 |
+| RayTrace | 156 ms | 150 ms | 1.04x | 1,467 | 1,509 |
+| EarleyBoyer | 472 ms | 428 ms | 1.10x | 1,734 | 2,036 |
+| RegExp | 384 ms | 874 ms | 0.44x | 1,036 | 427 |
+| Splay | 322 ms | 526 ms | 0.61x | 2,670 | 3,089 |
+| NavierStokes | 257 ms | 192 ms | 1.34x | 1,899 | 2,391 |
+| **Total / composite** | **1,981 ms** | **2,590 ms** | **0.76x** | **1,243** | **1,303** |
 
 The two kinds of figure time different things, which is why go-quickjs
 takes less time in total and still scores lower:
@@ -121,8 +121,8 @@ takes less time in total and still scores lower:
 - The total adds milliseconds, so the longest workloads, RegExp and Splay,
   make most of go-quickjs's lead. The composite score is the geometric mean
   of the workloads' scores, so each counts the same: Richards' gap weighs as
-  much as RegExp's lead. By that mean the fixed figures put the two
-  level.
+  much as RegExp's lead. By that mean the fixed figures put go-quickjs
+  about 2% ahead.
 - Splay changes sides. Its fixed time is almost all setup and teardown:
   building a tree of 8,000 nodes and dropping it. That takes about 305 ms
   and 5 ms here, against 360 ms and 100 ms in QuickJS, which frees the tree
