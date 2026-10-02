@@ -591,25 +591,30 @@ func (r *Runtime) newArgumentsObject(f *frame) *Object {
 	return o
 }
 
-// argsLayout is the layout an arguments object of one kind has -- its length,
-// its callee and Symbol.iterator, and their shape if they have one -- kept
-// from the first one made, for the rest to copy.
+// argsLayout is the layout of the three properties every object of a kind
+// is made with -- an arguments object's length, callee and Symbol.iterator, a
+// match result's index, input and groups -- and their shape if they have one,
+// kept from the first one made, for the rest to copy.
 type argsLayout struct {
 	shape *shape
 	props [3]Property
 }
 
-// keepArgsLayout keeps the layout of a first arguments object of a kind, if
-// it is one the rest can share: three properties, with no shape -- an
-// arguments object's table is small enough to scan -- or one of the tree
-// rather than one of the object's own.
-func (r *Runtime) keepArgsLayout(kind int, o *Object) {
+// layoutOf is the layout of an object just made, if it is one the rest of its
+// kind can share: three properties, with no shape -- a table small enough to
+// scan -- or one of the tree rather than one of the object's own.
+func layoutOf(o *Object) *argsLayout {
 	if len(o.props) != 3 || o.shape != nil && (o.shape.unique || o.shape.n != 3) {
-		return
+		return nil
 	}
 	t := &argsLayout{shape: o.shape}
 	copy(t.props[:], o.props)
-	r.argsLayouts[kind] = t
+	return t
+}
+
+// keepArgsLayout keeps the layout of a first arguments object of a kind.
+func (r *Runtime) keepArgsLayout(kind int, o *Object) {
+	r.argsLayouts[kind] = layoutOf(o)
 }
 
 // mapArguments aliases each index to the parameter it was passed to.

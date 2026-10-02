@@ -667,18 +667,32 @@ func (r *Runtime) buildMatchResult(re *regexp.Regexp, caps []int, input *String)
 	}
 
 	// index, input and groups, and where the d flag asks for them the indices
-	// as well, go in the room the array was made with.
+	// as well, go in the room the array was made with. Without the d flag,
+	// every result has the first's three properties, which are copied from
+	// it with values of its own.
+	names := orderedGroupNames(re)
+	groups := r.groupObject(names, re.GroupNames(), func(i int) Value {
+		return elems[i]
+	})
+	hasIndices := re.Flags()&regexp.FlagHasIndices != 0
+	if t := r.matchLayout; t != nil && !hasIndices {
+		arr.props = append(arr.props, t.props[:]...)
+		arr.shape = t.shape
+		arr.props[0].value = Int(caps[0])
+		arr.props[1].value = Str(input)
+		arr.props[2].value = groups
+		return arr
+	}
 	arr.setOwnRaw(atomIndex, Int(caps[0]), propDefault)
 	arr.setOwnRaw(atomInput, Str(input), propDefault)
-
-	names := orderedGroupNames(re)
-	arr.setOwnRaw(atomGroups, r.groupObject(names, re.GroupNames(), func(i int) Value {
-		return elems[i]
-	}), propDefault)
+	arr.setOwnRaw(atomGroups, groups, propDefault)
+	if !hasIndices && r.matchLayout == nil {
+		r.matchLayout = layoutOf(arr)
+	}
 
 	// The d flag asks for where each group matched as well as what it matched,
 	// which a script would otherwise have to work out by searching the input.
-	if re.Flags()&regexp.FlagHasIndices != 0 {
+	if hasIndices {
 		pairs := make([]Value, n)
 		for i := 0; i < n; i++ {
 			pairs[i] = r.indexPair(caps[2*i], caps[2*i+1])

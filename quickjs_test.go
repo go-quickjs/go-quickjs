@@ -1570,6 +1570,21 @@ func TestStringRegExpMethods(t *testing.T) {
 // assigned, or a subclass's, is called, where test used to match directly
 // whatever exec said. An unmodified RegExp's test still keeps lastIndex and
 // the legacy statics as exec does. The answers are node's.
+// TestRegExpMatchResults pins match results, whose index, input and groups
+// every result after a runtime's first copies from it: each result keeps its
+// own values, one changed or extended leaves the next alone, and a result
+// with indices is made as before. Node gives the same answers.
+func TestRegExpMatchResults(t *testing.T) {
+	checkEval(t, `var r = [], a = /b(c)?/.exec("abd"), b = /(?<x>ᶠ)(ᵒ)/.exec("zᶠᵒ"), c = /q/d.exec("pq"), d = /b/.exec("cb");
+		a.index = 9; delete a.input; a.extra = 1;
+		r.push(JSON.stringify(a), a.index, Object.keys(a).join(), b.index, b.input, b.groups.x, Object.keys(b).join(), JSON.stringify(c.indices), Object.keys(c).join());
+		r.push(d.index, d.input, d.groups, Object.keys(d).join(), Object.getOwnPropertyNames(d).join(), JSON.stringify(Object.getOwnPropertyDescriptor(d, "index")));
+		r.join(" | ")`,
+		`["b",null] | 9 | 0,1,index,groups,extra | 1 | zᶠᵒ | ᶠ | 0,1,2,index,input,groups | [[1,2]] | `+
+			`0,index,input,groups,indices | 1 | cb |  | 0,index,input,groups | 0,length,index,input,groups | `+
+			`{"value":1,"writable":true,"enumerable":true,"configurable":true}`)
+}
+
 func TestRegExpTestUsesExec(t *testing.T) {
 	tests := []struct{ src, want string }{
 		{`var re = /a/; re.exec = () => null; re.test("a")`, "false"},

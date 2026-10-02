@@ -139,6 +139,9 @@ type Runtime struct {
 	// argsLayouts are the layouts of an unmapped and a mapped arguments
 	// object, from the first of each made.
 	argsLayouts [2]*argsLayout
+	// matchLayout is the layout of a match result made by a regexp without
+	// the d flag, from the first one made.
+	matchLayout *argsLayout
 	// intStrings are the strings of the integers below len(intStrings),
 	// each made the first time it is asked for: see intString.
 	intStrings *[1024]*String
