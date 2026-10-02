@@ -12,6 +12,14 @@ type tentry struct {
 	// slot is the stack slot the entry is a read of, which is always its
 	// own position, or -1 for a tree still to be evaluated.
 	slot int
+	// local is set for a read of local k, upvalue for a read of upvalue k,
+	// and number for the number n: what a node can read in place rather than
+	// call v for.
+	local   bool
+	upvalue bool
+	k       uint32
+	number  bool
+	n       Value
 }
 
 // tbuilder builds one block of a function's tree.
@@ -20,6 +28,8 @@ type tbuilder struct {
 	stack []tentry
 	body  []tstmt
 }
+
+//go:generate go run ./internal/treegen/cmd
 
 // buildTree builds a function's tree, or reports nil where the function has
 // an instruction the tier does not build, or code it cannot follow.
@@ -108,6 +118,22 @@ func buildTree(fn *bytecode.Function) *tree {
 			t.blocks[i].next = func(*tctx) int { panic("unreachable block of a tree") }
 		}
 	}
+	// A jump to a block with nothing in it but its end -- a loop's test,
+	// which the jump at the bottom of the loop goes back to -- ends in that
+	// end, rather than going round the blocks' loop to get to it.
+	for i := range t.blocks {
+		blk := &t.blocks[i]
+		s := blk.jump - 1
+		if s < 0 || s == i || len(t.blocks[s].body) != 0 || t.blocks[s].jump != 0 {
+			continue
+		}
+		to := t.blocks[s].next
+		if pc, d := blk.pc, blk.depth; blk.back {
+			blk.next = func(c *tctx) int { c.backEdge(pc, d); return to(c) }
+		} else {
+			blk.next = to
+		}
+	}
 	return t
 }
 
@@ -181,24 +207,27 @@ func buildBlock(t *tree, fn *bytecode.Function, bi, start, end, entry int, index
 			}
 			d := len(b.stack)
 			if int(in.A) <= pc {
-				t.blocks[bi] = tblock{body: b.body, next: func(c *tctx) int { c.backEdge(pc, d); return s }}
+				t.blocks[bi] = tblock{body: b.body, next: func(c *tctx) int { c.backEdge(pc, d); return s },
+					jump: s + 1, back: true, pc: pc, depth: d}
 			} else {
-				t.blocks[bi] = tblock{body: b.body, next: func(*tctx) int { return s }}
+				t.blocks[bi] = tblock{body: b.body, next: func(*tctx) int { return s }, jump: s + 1}
 			}
 			return succ, true
 		case bytecode.OpJumpIfFalse, bytecode.OpJumpIfTrue, bytecode.OpJumpIfCmpFalse:
 			var cond func(c *tctx) bool
+			var x, y tentry
 			switch in.Op {
 			case bytecode.OpJumpIfCmpFalse:
-				y, x := b.pop(), b.pop()
-				cmp := bytecode.Op(in.B)
-				test := compareNode(cmp, x.v, y.v, pc)
+				y, x = b.pop(), b.pop()
+				test := compareNode(bytecode.Op(in.B), x.v, y.v, pc)
 				cond = func(c *tctx) bool { return !test(c) }
 			case bytecode.OpJumpIfFalse:
-				v := b.pop().v
+				x = b.pop()
+				v := x.v
 				cond = func(c *tctx) bool { return !truthy(v(c)) }
 			default:
-				v := b.pop().v
+				x = b.pop()
+				v := x.v
 				cond = func(c *tctx) bool { return truthy(v(c)) }
 			}
 			if !b.spill() {
@@ -213,22 +242,44 @@ func buildBlock(t *tree, fn *bytecode.Function, bi, start, end, entry int, index
 			if !ok {
 				return nil, false
 			}
-			if int(in.A) <= pc {
-				t.blocks[bi] = tblock{body: b.body, next: func(c *tctx) int {
+			// A forward jump's test is the block's end itself, rather than
+			// a condition the end calls.
+			var next tnext
+			switch v := x.v; {
+			case int(in.A) <= pc:
+				next = func(c *tctx) int {
 					if cond(c) {
 						c.backEdge(pc, d)
 						return taken
 					}
 					return fall
-				}}
-			} else {
-				t.blocks[bi] = tblock{body: b.body, next: func(c *tctx) int {
+				}
+			case in.Op == bytecode.OpJumpIfCmpFalse:
+				next = cmpJump(bytecode.Op(in.B), x, y, pc, taken, fall)
+			case in.Op == bytecode.OpJumpIfFalse:
+				next = func(c *tctx) int {
+					if truthy(v(c)) {
+						return fall
+					}
+					return taken
+				}
+			default:
+				next = func(c *tctx) int {
+					if truthy(v(c)) {
+						return taken
+					}
+					return fall
+				}
+			}
+			if next == nil {
+				next = func(c *tctx) int {
 					if cond(c) {
 						return taken
 					}
 					return fall
-				}}
+				}
 			}
+			t.blocks[bi] = tblock{body: b.body, next: next}
 			return succ, true
 		case bytecode.OpJumpIfFalseKeep, bytecode.OpJumpIfTrueKeep:
 			// x && y and x || y as values: x stays on the stack where the
@@ -317,7 +368,23 @@ func buildBlock(t *tree, fn *bytecode.Function, bi, start, end, entry int, index
 	return succ, true
 }
 
-func (b *tbuilder) push(v tval) { b.stack = append(b.stack, tentry{v: v, slot: -1}) }
+func (b *tbuilder) push(v tval)        { b.stack = append(b.stack, tentry{v: v, slot: -1}) }
+func (b *tbuilder) pushEntry(e tentry) { b.stack = append(b.stack, e) }
+
+// localEntry is a read of local k.
+func localEntry(k uint32) tentry {
+	return tentry{v: func(c *tctx) Value { return c.locals[k] }, slot: -1, local: true, k: k}
+}
+
+// upvalueEntry is a read of upvalue k.
+func upvalueEntry(k uint32) tentry {
+	return tentry{v: func(c *tctx) Value { return c.cl.upvalues[k].get() }, slot: -1, upvalue: true, k: k}
+}
+
+// numberEntry is the number n.
+func numberEntry(n Value) tentry {
+	return tentry{v: func(*tctx) Value { return n }, slot: -1, number: true, n: n}
+}
 func (b *tbuilder) pop() tentry {
 	e := b.stack[len(b.stack)-1]
 	b.stack = b.stack[:len(b.stack)-1]
@@ -397,8 +464,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 	case bytecode.OpPushFalse:
 		b.push(func(*tctx) Value { return False })
 	case bytecode.OpPushInt:
-		v := Int32(int32(in.A))
-		b.push(func(*tctx) Value { return v })
+		b.pushEntry(numberEntry(Int32(int32(in.A))))
 	case bytecode.OpPushThis:
 		b.push(func(c *tctx) Value {
 			v, bound := c.f.thisValue()
@@ -425,12 +491,12 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		if in.Op == bytecode.OpInsert3 && more && code[pc+1].Op == bytecode.OpSetIndex {
 			// a[k] = v as an expression: the store, and its value.
 			val, key, obj := b.pop(), b.pop(), b.pop()
-			b.push(setIndexNode(obj.v, key.v, val.v, pc+1, fn.Strict))
+			b.push(setIndexOperands(obj, key, val.v, pc+1, fn.Strict))
 			return 1, true
 		}
 		if in.Op == bytecode.OpInsert2 && more && code[pc+1].Op == bytecode.OpSetProp {
 			val, obj := b.pop(), b.pop()
-			b.push(setPropNode(obj.v, val.v, code[pc+1], pc+1, fn.Strict))
+			b.push(setPropOperand(obj, val.v, code[pc+1], pc+1, fn.Strict))
 			return 1, true
 		}
 		if !b.spill() {
@@ -459,12 +525,10 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		}
 		b.pushSlot(d)
 	case bytecode.OpGetLocal:
-		k := in.A
-		b.push(func(c *tctx) Value { return c.locals[k] })
+		b.pushEntry(localEntry(in.A))
 	case bytecode.OpGetLocal2:
-		k, j := in.A, in.B
-		b.push(func(c *tctx) Value { return c.locals[k] })
-		b.push(func(c *tctx) Value { return c.locals[j] })
+		b.pushEntry(localEntry(in.A))
+		b.pushEntry(localEntry(in.B))
 	case bytecode.OpSetLocal, bytecode.OpInitLocal:
 		k, v := in.A, b.pop().v
 		return 0, b.stmt(func(c *tctx) { c.locals[k] = v(c) })
@@ -473,7 +537,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		if !b.stmt(func(c *tctx) { c.locals[k] = v(c) }) {
 			return 0, false
 		}
-		b.push(func(c *tctx) Value { return c.locals[j] })
+		b.pushEntry(localEntry(j))
 	case bytecode.OpClearLocal:
 		k := in.A
 		return 0, b.stmt(func(c *tctx) { c.locals[k] = Undefined })
@@ -520,14 +584,13 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			return next
 		})
 	case bytecode.OpGetUpvalue:
-		k := in.A
-		b.push(func(c *tctx) Value { return c.cl.upvalues[k].get() })
+		b.pushEntry(upvalueEntry(in.A))
 	case bytecode.OpSetUpvalue:
 		k, v := in.A, b.pop().v
 		return 0, b.stmt(func(c *tctx) { c.cl.upvalues[k].set(v(c)) })
 	case bytecode.OpAdd, bytecode.OpSub, bytecode.OpMul, bytecode.OpDiv, bytecode.OpMod:
 		y, x := b.pop(), b.pop()
-		b.push(binaryNode(in.Op, x.v, y.v, pc))
+		b.push(arithEntries(in.Op, x, y, pc))
 	case bytecode.OpBitAnd, bytecode.OpBitOr, bytecode.OpBitXor, bytecode.OpShl, bytecode.OpShr, bytecode.OpUShr:
 		y, x := b.pop(), b.pop()
 		b.push(bitwiseNode(in.Op, x.v, y.v, pc))
@@ -582,41 +645,33 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		x := b.pop().v
 		b.push(func(c *tctx) Value { return Bool(!truthy(x(c))) })
 	case bytecode.OpBinImm:
-		x := b.pop().v
+		x := b.pop()
 		if op := bytecode.Op(in.B); isBitwise(op) {
-			b.push(bitwiseImmNode(op, x, int32(in.A), pc))
+			b.push(bitwiseImmOperand(op, x, int32(in.A), pc))
 			break
 		}
-		imm := Int32(int32(in.A))
-		b.push(binaryNode(bytecode.Op(in.B), x, func(*tctx) Value { return imm }, pc))
+		b.push(arithEntries(bytecode.Op(in.B), x, numberEntry(Int32(int32(in.A))), pc))
 	case bytecode.OpBinLocal:
-		x, k := b.pop().v, in.A
-		b.push(binaryNode(bytecode.Op(in.B), x, func(c *tctx) Value { return c.locals[k] }, pc))
+		b.push(arithEntries(bytecode.Op(in.B), b.pop(), localEntry(in.A), pc))
 	case bytecode.OpLocalBinImm:
-		k := in.A & (1<<24 - 1)
-		local := func(c *tctx) Value { return c.locals[k] }
+		x := localEntry(in.A & (1<<24 - 1))
 		if op := bytecode.Op(in.A >> 24); isBitwise(op) {
-			b.push(bitwiseImmNode(op, local, int32(in.B), pc))
+			b.push(bitwiseImmOperand(op, x, int32(in.B), pc))
 			break
 		}
-		imm := Int32(int32(in.B))
-		b.push(binaryNode(bytecode.Op(in.A>>24), local, func(*tctx) Value { return imm }, pc))
+		b.push(arithEntries(bytecode.Op(in.A>>24), x, numberEntry(Int32(int32(in.B))), pc))
 	case bytecode.OpGetIndex:
-		key, obj := b.pop().v, b.pop().v
-		b.push(getIndexNode(obj, key, pc))
+		key, obj := b.pop(), b.pop()
+		b.push(getIndexOperands(obj, key, pc))
 	case bytecode.OpGetLocalIndex:
-		k, j := in.A, in.B
-		b.push(getIndexNode(func(c *tctx) Value { return c.locals[k] },
-			func(c *tctx) Value { return c.locals[j] }, pc))
+		b.push(getIndexOperands(localEntry(in.A), localEntry(in.B), pc))
 	case bytecode.OpGetLocalIndexUpdate:
 		b.push(getLocalIndexUpdateNode(in, pc))
 	case bytecode.OpSetIndex:
 		val, key, obj := b.pop(), b.pop(), b.pop()
-		set := setIndexNode(obj.v, key.v, val.v, pc, fn.Strict)
-		return 0, b.stmt(func(c *tctx) { set(c) })
+		return 0, b.stmt(setIndexStmt(obj, key, val.v, pc, fn.Strict))
 	case bytecode.OpGetProp:
-		obj := b.pop().v
-		b.push(getPropNode(obj, in, pc))
+		b.push(getPropOperand(b.pop(), in, pc))
 	case bytecode.OpGetPropThis:
 		// The receiver stays beneath the method: it is read from its slot
 		// twice rather than evaluated twice.
@@ -627,8 +682,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		b.push(getPropThisNode(d, in, pc))
 	case bytecode.OpSetProp:
 		val, obj := b.pop(), b.pop()
-		set := setPropNode(obj.v, val.v, in, pc, fn.Strict)
-		return 0, b.stmt(func(c *tctx) { set(c) })
+		return 0, b.stmt(setPropStmt(obj, val.v, in, pc, fn.Strict))
 	case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew:
 		// The callee and the arguments go to their slots, which is where a
 		// call takes its arguments from.
@@ -873,21 +927,7 @@ func (c *tctx) step(v Value, delta float64) Value {
 // binaryNode is a binary operator over two trees, with the interpreter's
 // fast path for two numbers.
 func binaryNode(op bytecode.Op, x, y tval, pc int) tval {
-	slow := func(c *tctx, a, b Value) Value {
-		c.at(pc)
-		var v Value
-		var err error
-		switch op {
-		case bytecode.OpAdd:
-			v, err = c.r.add(a, b)
-		default:
-			v, err = c.r.arith(op, a, b)
-		}
-		if err != nil {
-			c.throw(err)
-		}
-		return v
-	}
+	slow := arithSlow(op, pc)
 	switch op {
 	case bytecode.OpAdd:
 		return func(c *tctx) Value {
@@ -1070,6 +1110,33 @@ func bitwiseImmNode(op bytecode.Op, x tval, k int32, pc int) tval {
 	}
 }
 
+// arithSlow is an arithmetic operator on what is not two numbers.
+func arithSlow(op bytecode.Op, pc int) func(c *tctx, a, b Value) Value {
+	return func(c *tctx, a, b Value) Value {
+		c.at(pc)
+		var v Value
+		var err error
+		switch op {
+		case bytecode.OpAdd:
+			v, err = c.r.add(a, b)
+		default:
+			v, err = c.r.arith(op, a, b)
+		}
+		if err != nil {
+			c.throw(err)
+		}
+		return v
+	}
+}
+
+// arithEntries is an arithmetic operator over two entries.
+func arithEntries(op bytecode.Op, x, y tentry, pc int) tval {
+	if v := arithOperands(op, x, y, pc); v != nil {
+		return v
+	}
+	return binaryNode(op, x.v, y.v, pc)
+}
+
 // compareNode is a comparison over two trees, as a condition.
 func compareNode(op bytecode.Op, x, y tval, pc int) func(c *tctx) bool {
 	switch op {
@@ -1151,13 +1218,18 @@ func getIndexNode(obj, key tval, pc int) tval {
 		if v, ok := elemAt(o, k); ok {
 			return v
 		}
-		c.at(pc)
-		v, err := c.r.getIndexed(o, k)
-		if err != nil {
-			c.throw(err)
-		}
-		return v
+		return c.getIndexSlow(o, k, pc)
 	}
+}
+
+// getIndexSlow is obj[key] where elemAt cannot read it.
+func (c *tctx) getIndexSlow(o, k Value, pc int) Value {
+	c.at(pc)
+	v, err := c.r.getIndexed(o, k)
+	if err != nil {
+		c.throw(err)
+	}
+	return v
 }
 
 // getLocalIndexUpdateNode is a[i++] and its kind over locals: the object is
@@ -1204,53 +1276,86 @@ func setIndexNode(obj, key, val tval, pc int, strict bool) tval {
 	return func(c *tctx) Value {
 		o, k := obj(c), key(c)
 		v := val(c)
-		if o.IsObject() && k.IsNumber() {
-			a := o.Object()
-			if i := uint32(k.num); float64(i) == k.num &&
-				uint(i) < uint(len(a.elems)) && a.flags&objMappedArguments == 0 && !isHole(a.elems[i]) {
-				a.elems[i] = v
-				return v
-			}
+		if setElem(o, k, v) {
+			return v
 		}
-		c.at(pc)
-		if o.IsNullish() {
-			c.throw(c.r.throwTypeError("cannot set property of %s", c.r.describe(o)))
-		}
-		pk, err := c.r.toPropertyKey(k)
-		if err != nil {
-			c.throw(err)
-		}
-		if err := c.r.setValueProp(o, pk, v, strict); err != nil {
-			c.throw(err)
-		}
-		return v
+		return c.setIndexSlow(o, k, v, pc, strict)
 	}
 }
 
-func getPropNode(obj tval, in bytecode.Instr, pc int) tval {
-	name, site := in.A, in.B
-	return func(c *tctx) Value {
-		o := obj(c)
-		if o.IsObject() {
-			ob := o.Object()
-			if v, ok := plainOwn(ob, c.cl.names[name]); ok {
-				return v
-			}
-			c.at(pc)
-			if v, ok, err := c.r.cachedGet(&c.cl.ic[site], ob, c.cl.names[name]); ok {
-				if err != nil {
-					c.throw(err)
-				}
-				return v
-			}
+// setElem stores v in an array's dense storage, as set_index does first
+// thing, or reports false.
+func setElem(o, k, v Value) bool {
+	if o.IsObject() && k.IsNumber() {
+		a := o.Object()
+		if i := uint32(k.num); float64(i) == k.num &&
+			uint(i) < uint(len(a.elems)) && a.flags&objMappedArguments == 0 && !isHole(a.elems[i]) {
+			a.elems[i] = v
+			return true
 		}
-		c.at(pc)
-		v, err := c.r.getValueProp(o, c.cl.names[name])
-		if err != nil {
-			c.throw(err)
-		}
-		return v
 	}
+	return false
+}
+
+// setIndexSlow is obj[key] = val where setElem cannot store it.
+func (c *tctx) setIndexSlow(o, k, v Value, pc int, strict bool) Value {
+	c.at(pc)
+	if o.IsNullish() {
+		c.throw(c.r.throwTypeError("cannot set property of %s", c.r.describe(o)))
+	}
+	pk, err := c.r.toPropertyKey(k)
+	if err != nil {
+		c.throw(err)
+	}
+	if err := c.r.setValueProp(o, pk, v, strict); err != nil {
+		c.throw(err)
+	}
+	return v
+}
+
+// getPropOperand is obj.name, reading a local object in place.
+func getPropOperand(obj tentry, in bytecode.Instr, pc int) tval {
+	name, site := in.A, in.B
+	if k := obj.k; obj.local {
+		return func(c *tctx) Value {
+			o := c.locals[k]
+			if o.IsObject() {
+				if v, ok := plainOwn(o.Object(), c.cl.names[name]); ok {
+					return v
+				}
+			}
+			return c.getPropSlow(o, name, site, pc)
+		}
+	}
+	x := obj.v
+	return func(c *tctx) Value {
+		o := x(c)
+		if o.IsObject() {
+			if v, ok := plainOwn(o.Object(), c.cl.names[name]); ok {
+				return v
+			}
+		}
+		return c.getPropSlow(o, name, site, pc)
+	}
+}
+
+// getPropSlow is obj.name where it is not a plain own property: the site's
+// cache, and then the full lookup.
+func (c *tctx) getPropSlow(o Value, name, site uint32, pc int) Value {
+	c.at(pc)
+	if o.IsObject() {
+		if v, ok, err := c.r.cachedGet(&c.cl.ic[site], o.Object(), c.cl.names[name]); ok {
+			if err != nil {
+				c.throw(err)
+			}
+			return v
+		}
+	}
+	v, err := c.r.getValueProp(o, c.cl.names[name])
+	if err != nil {
+		c.throw(err)
+	}
+	return v
 }
 
 func getPropThisNode(d int, in bytecode.Instr, pc int) tval {
@@ -1271,22 +1376,54 @@ func getPropThisNode(d int, in bytecode.Instr, pc int) tval {
 	}
 }
 
-// setPropNode is obj.name = val, and gives val.
-func setPropNode(obj, val tval, in bytecode.Instr, pc int, strict bool) tval {
+// setPropOperand is obj.name = val, and gives val, reading a local object
+// in place.
+func setPropOperand(obj tentry, val tval, in bytecode.Instr, pc int, strict bool) tval {
 	name, site := in.A, in.B
-	return func(c *tctx) Value {
-		o, v := obj(c), val(c)
-		c.at(pc)
-		if o.IsObject() {
-			if err := c.r.setPropCached(&c.cl.ic[site], o.Object(), c.cl.names[name], v, strict); err != nil {
-				c.throw(err)
-			}
+	if k := obj.k; obj.local {
+		return func(c *tctx) Value {
+			o := c.locals[k]
+			v := val(c)
+			c.setProp(o, v, name, site, pc, strict)
 			return v
 		}
-		if err := c.r.setValueProp(o, c.cl.names[name], v, strict); err != nil {
+	}
+	x := obj.v
+	return func(c *tctx) Value {
+		o := x(c)
+		v := val(c)
+		c.setProp(o, v, name, site, pc, strict)
+		return v
+	}
+}
+
+// setPropStmt is obj.name = val as a statement.
+func setPropStmt(obj tentry, val tval, in bytecode.Instr, pc int, strict bool) tstmt {
+	name, site := in.A, in.B
+	if k := obj.k; obj.local {
+		return func(c *tctx) {
+			o := c.locals[k]
+			c.setProp(o, val(c), name, site, pc, strict)
+		}
+	}
+	x := obj.v
+	return func(c *tctx) {
+		o := x(c)
+		c.setProp(o, val(c), name, site, pc, strict)
+	}
+}
+
+// setProp is obj.name = val.
+func (c *tctx) setProp(o, v Value, name, site uint32, pc int, strict bool) {
+	c.at(pc)
+	if o.IsObject() {
+		if err := c.r.setPropCached(&c.cl.ic[site], o.Object(), c.cl.names[name], v, strict); err != nil {
 			c.throw(err)
 		}
-		return v
+		return
+	}
+	if err := c.r.setValueProp(o, c.cl.names[name], v, strict); err != nil {
+		c.throw(err)
 	}
 }
 
@@ -1321,5 +1458,87 @@ func callNode(op bytecode.Op, p, n, this, pc int) tval {
 			c.throw(err)
 		}
 		return v
+	}
+}
+
+// getIndexOperands is obj[key], reading a local object or key in place.
+func getIndexOperands(obj, key tentry, pc int) tval {
+	switch o, k := obj.k, key.k; {
+	case obj.local && key.local:
+		return func(c *tctx) Value {
+			o, k := c.locals[o], c.locals[k]
+			if v, ok := elemAt(o, k); ok {
+				return v
+			}
+			return c.getIndexSlow(o, k, pc)
+		}
+	case obj.local:
+		key := key.v
+		return func(c *tctx) Value {
+			o := c.locals[o]
+			k := key(c)
+			if v, ok := elemAt(o, k); ok {
+				return v
+			}
+			return c.getIndexSlow(o, k, pc)
+		}
+	}
+	return getIndexNode(obj.v, key.v, pc)
+}
+
+// setIndexOperands is obj[key] = val, and gives val, reading a local object
+// or key in place.
+func setIndexOperands(obj, key tentry, val tval, pc int, strict bool) tval {
+	switch o, k := obj.k, key.k; {
+	case obj.local && key.local:
+		return func(c *tctx) Value {
+			o, k := c.locals[o], c.locals[k]
+			v := val(c)
+			if setElem(o, k, v) {
+				return v
+			}
+			return c.setIndexSlow(o, k, v, pc, strict)
+		}
+	case obj.local:
+		key := key.v
+		return func(c *tctx) Value {
+			o := c.locals[o]
+			k := key(c)
+			v := val(c)
+			if setElem(o, k, v) {
+				return v
+			}
+			return c.setIndexSlow(o, k, v, pc, strict)
+		}
+	}
+	return setIndexNode(obj.v, key.v, val, pc, strict)
+}
+
+// setIndexStmt is obj[key] = val as a statement.
+func setIndexStmt(obj, key tentry, val tval, pc int, strict bool) tstmt {
+	switch o, k := obj.k, key.k; {
+	case obj.local && key.local:
+		return func(c *tctx) {
+			o, k := c.locals[o], c.locals[k]
+			if v := val(c); !setElem(o, k, v) {
+				c.setIndexSlow(o, k, v, pc, strict)
+			}
+		}
+	case obj.local:
+		key := key.v
+		return func(c *tctx) {
+			o := c.locals[o]
+			k := key(c)
+			if v := val(c); !setElem(o, k, v) {
+				c.setIndexSlow(o, k, v, pc, strict)
+			}
+		}
+	}
+	x, y := obj.v, key.v
+	return func(c *tctx) {
+		o, k := x(c), y(c)
+		if v := val(c); !setElem(o, k, v) {
+			c.setIndexSlow(o, k, v, pc, strict)
+		}
 	}
 }

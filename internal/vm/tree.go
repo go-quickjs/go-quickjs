@@ -62,6 +62,12 @@ type (
 type tblock struct {
 	body []tstmt
 	next tnext
+	// jump is 1 + the block an unconditional jump ends this one with, for
+	// threading the jump into a block with no body of its own; back says it
+	// jumps back, at pc, from a stack depth of depth.
+	jump      int
+	back      bool
+	pc, depth int
 }
 
 // tree is a function's code as the tier runs it. It holds nothing of a
@@ -180,15 +186,23 @@ func (c *tctx) at(pc int) {
 // backEdge counts a backward jump, as the interpreter's do, and runs the
 // interrupt check when the budget is spent.
 func (c *tctx) backEdge(pc, depth int) {
-	r := c.r
-	if r.backEdges--; r.backEdges <= 0 {
-		r.backEdges = backEdgeCheckInterval
-		c.at(pc)
-		if err := r.checkInterruptNow(); err != nil {
-			c.throw(err)
-		}
-		r.sweepStaleSlots(c.f.base + depth)
+	if r := c.r; r.backEdges > 1 {
+		r.backEdges--
+		return
 	}
+	c.backEdgeCheck(pc, depth)
+}
+
+// backEdgeCheck is backEdge's interrupt check, out of line so that the count
+// is inlined where a loop jumps back.
+func (c *tctx) backEdgeCheck(pc, depth int) {
+	r := c.r
+	r.backEdges = backEdgeCheckInterval
+	c.at(pc)
+	if err := r.checkInterruptNow(); err != nil {
+		c.throw(err)
+	}
+	r.sweepStaleSlots(c.f.base + depth)
 }
 
 func truthy(v Value) bool {

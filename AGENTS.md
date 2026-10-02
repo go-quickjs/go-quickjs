@@ -55,6 +55,11 @@ Do not manually edit generated files or their binary companions:
   same code; the UTF-8 one is patched where `internal/asciigen` says. After
   changing `exec.go`, run `go generate ./internal/regexp`.
   `TestASCIIMatcherGenerated` fails while either file is out of date.
+- `internal/vm/tree_operand.go`, the tree tier's nodes for an operator over
+  each pairing of a local, an upvalue, a number constant and a tree, written
+  by `internal/vm/internal/treegen`. After changing the generator, run
+  `go generate ./internal/vm`; `TestTreeOperandsGenerated` fails while the
+  file is out of date.
 
 go-intl's data is generated in go-intl, and changes there; a new go-intl is
 taken with `go get` and `go mod tidy`, never by copying its files here.

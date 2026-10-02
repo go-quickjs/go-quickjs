@@ -73,6 +73,19 @@ var treeScripts = []string{
 	// Calls in the middle of an expression that change what the rest reads.
 	`function f() { var h = [1, 2, 3], s = 0; function g(i) { h[i] = h[i] * 10; return i } for (var i = 0; i < 3; i++) { s += h[i] + g(i) * h[i] + h[i] } return s + " " + h } f()`,
 	`function f() { var x = 1, r = []; for (var i = 0; i < 3; i++) { r.push(x + (x = x + 1) + x, x++ + x, x + x++) } return r.join() } f()`,
+	// Operands read in place, a local's or an upvalue's: each is read where
+	// the operator's own operand would have been, before what follows it
+	// can change it.
+	`function f() { var x = 1, y = 2.5, a = [5, 6, 7, 8], r = []; for (var i = 0; i < 3; i++) {
+	   r.push(x * x++, x - (x = 10), y / (y = 4), (x = 3) - x, x + 0.5, 0.5 - x, 2 * y, x * y, a[i] + a[x - i], a[i++] + a[i]) } return r.join() } f()`,
+	`function f() { var a = [0, 0, 0], i = 0, r = []; for (var n = 0; n < 2; n++) { a[i] = (i = 2); r.push(a.join(), i); a[i - 1] = i++ } return r.join("|") + " " + a } f()`,
+	`function outer() { var lim = 3, u = 1.5; function f() { var r = []; for (var i = 0; i < lim; i++) { if (u < i) r.push("u" + i); if (i >= u) r.push("ge"); r.push(i) } lim = 1; return r.join() }
+	   return f() + " " + f() } outer()`,
+	`function f() { var n = 0; for (var i = 0; i < i++ + 1 && n < 5;) n++; var r = [n, i];
+	   for (var j = 0; j < NaN; j++) r.push("nan"); for (var s = "a"; s < "aaa"; s += "a") r.push(s);
+	   for (var k = 0; k <= "2"; k++) r.push(k); var o = { valueOf() { r.push("v"); return 1 } };
+	   for (var m = 0; m < o; m++) r.push("m"); for (var p = 3; p > 1n; p--) r.push(p); return r.join() } f()`,
+	`function f(a) { var s = "abc", r = ""; for (var i = -1; i < 4; i++) { r += a[i] + "/" + s[i] + "/" + a[i + 1] + ";"; a[i] = i } return r + " " + a } f([1, , 3])`,
 	// Labelled loops, break, continue, switch, returns from inside a loop.
 	`function f(n) { var r = []; outer: for (var i = 0; i < n; i++) { for (var j = 0; j < n; j++) { if (j > i) continue outer; if (i + j > 5) break outer;
 	   switch (j % 3) { case 0: r.push("z"); break; case 1: r.push(i); default: r.push(j) } } } return r.join() } f(5)`,
