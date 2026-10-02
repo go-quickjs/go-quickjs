@@ -326,7 +326,8 @@ func (r *Runtime) setElem(t *typedArrayData, i int, v Value) error {
 		n  float64
 		bv *BigInt
 	)
-	if t.info().big {
+	big := elemInfos[t.kind].big
+	if big {
 		// ToBigInt, not a type check: a string or a boolean converts, and only
 		// a Number is refused -- mixing the two kinds is almost always a
 		// mistake rather than a request to convert.
@@ -334,6 +335,8 @@ func (r *Runtime) setElem(t *typedArrayData, i int, v Value) error {
 		if bv, err = r.toBigIntOperand(v); err != nil {
 			return err
 		}
+	} else if v.IsNumber() {
+		n = v.num
 	} else {
 		var err error
 		if n, err = r.toNumber(v); err != nil {
@@ -352,7 +355,7 @@ func (r *Runtime) setElem(t *typedArrayData, i int, v Value) error {
 	b := st.bytes
 	off := t.byteOffset + i*elemInfos[t.kind].size
 
-	if t.info().big {
+	if big {
 		binary.LittleEndian.PutUint64(b[off:], bigLowUint64(bv))
 		return nil
 	}
@@ -384,11 +387,9 @@ func (r *Runtime) setElem(t *typedArrayData, i int, v Value) error {
 
 // toInt32Wrap converts a number to a 32-bit value with the wrapping the
 // integer element types use.
+// It is ToInt32, whose low bits are what every narrower type keeps.
 func toInt32Wrap(n float64) int32 {
-	if math.IsNaN(n) || math.IsInf(n, 0) {
-		return 0
-	}
-	return int32(uint32(int64(math.Mod(math.Trunc(n), 4294967296))))
+	return toInt32(n)
 }
 
 // clampUint8 implements the Uint8ClampedArray conversion: saturate to the

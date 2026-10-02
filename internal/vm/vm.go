@@ -1625,16 +1625,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 					break
 				}
 			}
-			if obj.IsNullish() {
-				vmErr = r.throwTypeError("cannot set property of %s", r.describe(obj))
-				goto onError
-			}
-			k, err := r.toPropertyKey(key)
-			if err != nil {
-				vmErr = err
-				goto onError
-			}
-			if err := r.setValueProp(obj, k, val, cl.fn.Strict); err != nil {
+			if err := r.setIndexed(obj, key, val, cl.fn.Strict); err != nil {
 				vmErr = err
 				goto onError
 			}
@@ -4114,6 +4105,9 @@ func (r *Runtime) getIndexed(obj, key Value) (Value, error) {
 				return v, nil
 			}
 		}
+		if t, i, ok := typedElemIndex(o, key.num); ok {
+			return t.getElem(i), nil
+		}
 	}
 	n, err := r.toPropertyName(key)
 	if err != nil {
@@ -4128,6 +4122,30 @@ func (r *Runtime) getIndexed(obj, key Value) (Value, error) {
 		return Undefined, nil
 	}
 	return r.getValueProp(obj, k)
+}
+
+// setIndexed assigns to a computed property, where the dense storage of an
+// array has not taken the store.
+func (r *Runtime) setIndexed(obj, key, val Value, strict bool) error {
+	if obj.IsNullish() {
+		// The base is checked before the key is converted, as for a read.
+		return r.throwTypeError("cannot set property of %s", r.describe(obj))
+	}
+	if obj.IsObject() && key.IsNumber() {
+		// A typed array is its own receiver here, so an integer index is a
+		// write to its buffer -- unless the buffer is immutable, whose refusal
+		// the long way words.
+		if t, i, ok := typedElemIndex(obj.Object(), key.num); ok {
+			if st, _ := t.buffer.data.(*arrayBufferData); st != nil && !st.immutable {
+				return r.setElem(t, i, val)
+			}
+		}
+	}
+	k, err := r.toPropertyKey(key)
+	if err != nil {
+		return err
+	}
+	return r.setValueProp(obj, k, val, strict)
 }
 
 // construct implements the `new` operator.

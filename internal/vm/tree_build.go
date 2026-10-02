@@ -1387,14 +1387,7 @@ func setElem(o, k, v Value) bool {
 // setIndexSlow is obj[key] = val where setElem cannot store it.
 func (c *tctx) setIndexSlow(o, k, v Value, pc int, strict bool) Value {
 	c.at(pc)
-	if o.IsNullish() {
-		c.throw(c.r.throwTypeError("cannot set property of %s", c.r.describe(o)))
-	}
-	pk, err := c.r.toPropertyKey(k)
-	if err != nil {
-		c.throw(err)
-	}
-	if err := c.r.setValueProp(o, pk, v, strict); err != nil {
+	if err := c.r.setIndexed(o, k, v, strict); err != nil {
 		c.throw(err)
 	}
 	return v

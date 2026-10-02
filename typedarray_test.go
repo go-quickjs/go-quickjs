@@ -1182,3 +1182,58 @@ func TestTypedArraySortOwnsItsValues(t *testing.T) {
 		"1,2 | -1,0,0,9,10,NaN | -1,2,3")
 	checkEval(t, `try { Int8Array.prototype.sort.call({}, 5) } catch (e) { e.constructor.name }`, "TypeError")
 }
+
+// A number key goes straight to a typed array's buffer, in a loop as much as
+// once, and means what its string would.
+func TestTypedArrayNumberKeys(t *testing.T) {
+	const a = `var a = new Int32Array([1, 2]); `
+	cases := []struct{ src, want string }{
+		{a + `for (var i = 0; i < 4; i++) a[i] = i * 10; [a[0], a[1], a[2], a[3]].join(",")`,
+			"0,10,,"},
+		{a + `function f(o) { var s = 0; for (var i = 0; i < 3; i++) s += o[i] | 0; return s; }
+		  f(a) + f(a)`, "6"},
+		// Neither a read nor a write past the end asks the prototype.
+		{a + `Object.defineProperty(Int32Array.prototype, 2, {get() { return "g"; },
+		  set(v) { throw new Error("set"); }}); a[2] = 5; String(a[2])`, "undefined"},
+		// -0 names element 0; a fraction, a negative number and 2**32 name
+		// nothing and are dropped.
+		{a + `a[-0] = 7; a[0.5] = 8; a[-1] = 9; a[2 ** 32] = 9;
+		  [a[0], a[0.5], a[-1], a[2 ** 32], Object.keys(a)].join("|")`, "7||||0,1"},
+		// The value is converted for the view, and before the index is checked.
+		{a + `var seen = 0; a[0] = "12"; a[1] = 2 ** 32 + 3; a[9] = {valueOf() { seen++; return 1; }};
+		  [a[0], a[1], seen].join(",")`, "12,3,1"},
+		{`var a = new Uint8ClampedArray(1); a[0] = 300; String(a[0])`, "255"},
+		{`var a = new Float64Array(1); a[0] = 0.1; String(a[0])`, "0.1"},
+		{`var a = new BigInt64Array(1); a[0] = 2n ** 63n; String(a[0])`, "-9223372036854775808"},
+		// A detached buffer has no elements to read or write.
+		{a + `a.buffer.transfer(); a[0] = 5; String(a[0])`, "undefined"},
+		// An immutable buffer refuses a write, quietly outside strict mode.
+		{`var a = new Uint8Array(new Uint8Array([1]).buffer.transferToImmutable());
+		  a[0] = 5; String(a[0])`, "1"},
+	}
+	for _, tc := range cases {
+		rt := quickjs.New()
+		v, err := rt.Eval(tc.src)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+
+	bad := []string{
+		`"use strict"; var a = new Uint8Array(new Uint8Array([1]).buffer.transferToImmutable()); a[0] = 5`,
+		`var a = new BigInt64Array(1); a[0] = 1`,
+		`var a = new Int32Array(1); a[0] = Symbol()`,
+	}
+	for _, src := range bad {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err == nil {
+			t.Errorf("%s: accepted, want TypeError", src)
+		} else if !strings.Contains(err.Error(), "TypeError") {
+			t.Errorf("%s: got %v, want TypeError", src, err)
+		}
+		rt.Close()
+	}
+}

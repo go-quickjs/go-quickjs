@@ -37,6 +37,23 @@ type numericIndex struct {
 	i        int
 }
 
+// typedElemIndex is the element a number key names in a typed array, for the
+// reads and writes that need no property key. A typed array answers every
+// integer index from its buffer and never from its prototype, so the number
+// goes straight to the element. Anything else -- a fraction, a negative
+// number, one past what an int holds -- takes the long way.
+func typedElemIndex(o *Object, key float64) (*typedArrayData, int, bool) {
+	if o.class != ClassTypedArray {
+		return nil, 0, false
+	}
+	i := uint32(key)
+	if float64(i) != key || i > math.MaxInt32 {
+		return nil, 0, false
+	}
+	t, ok := o.data.(*typedArrayData)
+	return t, int(i), ok
+}
+
 // typedArrayIndex classifies a key against a typed array.
 func (r *Runtime) typedArrayIndex(o *Object, key Atom) numericIndex {
 	t, ok := o.data.(*typedArrayData)
