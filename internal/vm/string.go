@@ -852,15 +852,33 @@ func (s *Symbol) String() string {
 // ---------------------------------------------------------------------------
 
 // BigInt is an arbitrary-precision integer.
+//
+// A BigInt is never copied: one newBigResult made keeps its digits in the
+// allocation that holds it, which a copy's V would go on pointing into.
 type BigInt struct {
 	V big.Int
 }
 
 // NewBigInt returns a BigInt with the given value.
 func NewBigInt(v int64) *BigInt {
-	b := &BigInt{}
+	b := newBigResult()
 	b.V.SetInt64(v)
 	return b
+}
+
+// smallBigInt is a BigInt and room for two words of digits, which is all most
+// BigInts need: one allocation where a BigInt and its digits are two.
+type smallBigInt struct {
+	b     BigInt
+	words [2]big.Word
+}
+
+// newBigResult is a BigInt of zero that keeps its digits in its own
+// allocation while they fit in two words, for a result that will.
+func newBigResult() *BigInt {
+	s := &smallBigInt{}
+	s.b.V.SetBits(s.words[:0])
+	return &s.b
 }
 
 // ParseBigInt parses a BigInt literal, which may carry a 0x, 0o or 0b prefix.
