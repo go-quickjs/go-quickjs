@@ -2,6 +2,7 @@ package vm
 
 import (
 	"math"
+	"strconv"
 	"strings"
 
 	"github.com/go-quickjs/go-quickjs/internal/jsnum"
@@ -893,6 +894,19 @@ func formatFixed(n float64, digits int) string {
 	if n < 0 {
 		sign, n = "-", -n
 	}
+	// strconv rounds the exact value correctly, but a tie to even. A tie is
+	// an expansion that ends one place past the last digit kept, with a 5,
+	// and the expansion of m*2**p ends -p places after the point -- so only
+	// that one case needs the digits taken by hand. -0 has no sign here.
+	if _, p := binaryParts(n); n == 0 || -p != digits+1 {
+		return sign + strconv.FormatFloat(math.Abs(n), 'f', digits, 64)
+	}
+	return sign + formatFixedExact(n, digits)
+}
+
+// formatFixedExact is formatFixed of a non-negative number from all its
+// digits, which is where a tie is broken upward.
+func formatFixedExact(n float64, digits int) string {
 	d, e := exactDecimal(n)
 	if n == 0 {
 		d, e = "0", 0
@@ -903,9 +917,9 @@ func formatFixed(n float64, digits int) string {
 		// Everything rounds away unless the first dropped digit carries, which
 		// leaves one unit in the last place.
 		if keep == 0 && d[0] >= '5' {
-			return sign + withPoint(strings.Repeat("0", digits)+"1", digits)
+			return withPoint(strings.Repeat("0", digits)+"1", digits)
 		}
-		return sign + withPoint(strings.Repeat("0", digits+1), digits)
+		return withPoint(strings.Repeat("0", digits+1), digits)
 	}
 	rounded, carried := roundSignificant(d, keep)
 	if carried {
@@ -920,7 +934,7 @@ func formatFixed(n float64, digits int) string {
 	for len(rounded) < intDigits+digits {
 		rounded += "0"
 	}
-	return sign + withPoint(rounded[:intDigits+digits], digits)
+	return withPoint(rounded[:intDigits+digits], digits)
 }
 
 // withPoint puts the decimal point digits places from the right.

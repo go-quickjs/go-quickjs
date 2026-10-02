@@ -3602,6 +3602,18 @@ func TestNumberFormatting(t *testing.T) {
 		{`(5e-10).toFixed(9)`, "0.000000001"},
 		{`(4e-10).toFixed(9)`, "0.000000000"},
 		{`(1000000000000000128).toFixed(0)`, "1000000000000000128"},
+		{`(-0).toFixed(2)`, "0.00"},
+		{`(-1e-10).toFixed(2)`, "-0.00"},
+		{`(0.125).toFixed(2)`, "0.13"},
+		{`(0.375).toFixed(2)`, "0.38"},
+		{`(1.005).toFixed(2)`, "1.00"},
+
+		// A tie among significant digits, in a fraction and in an integer
+		// whose last digits are zeros.
+		{`(0.125).toPrecision(2)`, "0.13"},
+		{`(125).toPrecision(2)`, "1.3e+2"},
+		{`(1250000).toExponential(1)`, "1.3e+6"},
+		{`(4.5).toExponential(0)`, "5e+0"},
 
 		// The argument is coerced before the value is looked at.
 		{`try { NaN.toExponential(Symbol()) } catch (e) { e.constructor.name }`, "TypeError"},

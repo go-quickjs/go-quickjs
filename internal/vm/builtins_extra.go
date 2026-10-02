@@ -951,6 +951,63 @@ func significantDigits(x float64, n int) (digits string, exp int) {
 	if x == 0 {
 		return strings.Repeat("0", n), 0
 	}
+	// strconv rounds correctly too, except that it breaks a tie to even.
+	s := strconv.FormatFloat(x, 'e', n-1, 64)
+	i := strings.IndexByte(s, 'e')
+	exp, err := strconv.Atoi(s[i+1:])
+	if err == nil && !mayTie(x, n, exp) {
+		if n == 1 {
+			return s[:1], exp
+		}
+		return s[:1] + s[2:i], exp
+	}
+	return significantDigitsExact(x, n)
+}
+
+// mayTie reports whether rounding a positive x to n significant digits could
+// be a tie, which is the one case strconv's rounding to even and the larger
+// value JavaScript takes differ on: an exact expansion of n+1 digits whose
+// last is a 5. e is the exponent of the rounded result's first digit, which a
+// carry may have put one above x's own.
+func mayTie(x float64, n, e int) bool {
+	m, p := binaryParts(x)
+	if p < 0 {
+		// m*2**p ends -p places after the point, ending in a 5, so it has
+		// e+1-p digits from its first, or one fewer after a carry.
+		return e+1-p == n+1 || e-p == n+1
+	}
+	if x >= 1<<63 {
+		return true
+	}
+	// An integer: count its digits up to the last that is not a zero.
+	v := m << p
+	for v%10 == 0 {
+		v /= 10
+	}
+	return v%10 == 5 && len(strconv.FormatUint(v, 10)) == n+1
+}
+
+// binaryParts splits a finite, non-zero x into an odd integer and a power of
+// two: |x| = m * 2**p.
+func binaryParts(x float64) (m uint64, p int) {
+	b := math.Float64bits(x) &^ (1 << 63)
+	e := int(b >> 52)
+	m = b & (1<<52 - 1)
+	if e == 0 {
+		e = 1
+	} else {
+		m |= 1 << 52
+	}
+	if m == 0 {
+		return 0, 0
+	}
+	tz := bits.TrailingZeros64(m)
+	return m >> tz, e - 1075 + tz
+}
+
+// significantDigitsExact is significantDigits from all of a positive x's
+// digits, which is where a tie is broken upward.
+func significantDigitsExact(x float64, n int) (digits string, exp int) {
 	d, e := exactDecimal(x)
 	rounded, carried := roundSignificant(d, n)
 	if carried {
