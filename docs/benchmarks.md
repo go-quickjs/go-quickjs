@@ -1,12 +1,13 @@
 # Benchmarks
 
-On an Apple M5 Max, taking the median of five runs:
+On an Apple M5 Max with Go 1.27.0, taking the median of five fresh-process
+runs at go-quickjs `d0122e4`:
 
 ```
-BenchmarkEvalArithmetic-18  1.22µs/op   4040 B/op    23 allocs/op
-BenchmarkFibonacci-18        664µs/op     16 B/op     1 allocs/op
-BenchmarkPropertyAccess-18  1.51µs/op   4952 B/op    30 allocs/op
-BenchmarkCallGoFunction-18  1.51µs/op   5840 B/op    33 allocs/op
+BenchmarkEvalArithmetic-18  1.25µs/op   4184 B/op    24 allocs/op
+BenchmarkFibonacci-18        709µs/op     16 B/op     1 allocs/op
+BenchmarkPropertyAccess-18  1.63µs/op   5448 B/op    31 allocs/op
+BenchmarkCallGoFunction-18  1.59µs/op   6032 B/op    34 allocs/op
 ```
 
 `fib(20)` costs one allocation because the interpreter loop allocates nothing
@@ -17,24 +18,24 @@ iteration.
 plus compilation and runtime-construction benchmarks. That complete set is:
 
 ```
-BenchmarkLoopArithmetic-18          150µs/op        0 B/op     0 allocs/op
-BenchmarkDateUTC-18                 490µs/op        0 B/op     0 allocs/op
-BenchmarkLoopPropertyAccess-18      422µs/op        0 B/op     0 allocs/op
-BenchmarkLoopArrayIndex-18         26.2µs/op        0 B/op     0 allocs/op
-BenchmarkLoopFunctionCall-18        333µs/op        0 B/op     0 allocs/op
-BenchmarkLoopMethodCall-18          530µs/op        0 B/op     0 allocs/op
-BenchmarkAllocObjects-18            129µs/op   320 KB/op  2000 allocs/op
-BenchmarkAllocArrays-18            84.0µs/op   320 KB/op  2000 allocs/op
-BenchmarkStringConcat-18           63.5µs/op   161 KB/op  2029 allocs/op
-BenchmarkClosureCreateAndCall-18    493µs/op  2.08 MB/op  5001 allocs/op
-BenchmarkArrayCallbacks-18          106µs/op  36.9 KB/op    24 allocs/op
-BenchmarkMapOperations-18           403µs/op   633 KB/op    46 allocs/op
-BenchmarkRegExpExec-18              551µs/op   496 KB/op  4000 allocs/op
-BenchmarkThrowCatch-18              281µs/op   768 KB/op  6000 allocs/op
-BenchmarkJSONRoundTrip-18           485µs/op   764 KB/op 10000 allocs/op
-BenchmarkCompileScript-18          20.2µs/op  38.5 KB/op   279 allocs/op
-BenchmarkNewRuntime-18             99.2µs/op   407 KB/op  1243 allocs/op
-BenchmarkNewRuntimeSmallStack-18   89.9µs/op   400 KB/op  1243 allocs/op
+BenchmarkLoopArithmetic-18         84.4µs/op        0 B/op     0 allocs/op
+BenchmarkDateUTC-18                 446µs/op        1 B/op     0 allocs/op
+BenchmarkLoopPropertyAccess-18      307µs/op        0 B/op     0 allocs/op
+BenchmarkLoopArrayIndex-18         18.8µs/op        0 B/op     0 allocs/op
+BenchmarkLoopFunctionCall-18        251µs/op        0 B/op     0 allocs/op
+BenchmarkLoopMethodCall-18          517µs/op        1 B/op     0 allocs/op
+BenchmarkAllocObjects-18           94.8µs/op   320 KB/op  2000 allocs/op
+BenchmarkAllocArrays-18            72.9µs/op   320 KB/op  2000 allocs/op
+BenchmarkStringConcat-18           53.9µs/op   161 KB/op  1999 allocs/op
+BenchmarkClosureCreateAndCall-18    507µs/op  2.40 MB/op  5001 allocs/op
+BenchmarkArrayCallbacks-18          108µs/op  37.0 KB/op    24 allocs/op
+BenchmarkMapOperations-18           268µs/op   394 KB/op    46 allocs/op
+BenchmarkRegExpExec-18              342µs/op   496 KB/op  4000 allocs/op
+BenchmarkThrowCatch-18              286µs/op   768 KB/op  6000 allocs/op
+BenchmarkJSONRoundTrip-18           478µs/op   772 KB/op  9500 allocs/op
+BenchmarkCompileScript-18          21.6µs/op  43.0 KB/op   325 allocs/op
+BenchmarkNewRuntime-18             94.9µs/op   432 KB/op  1426 allocs/op
+BenchmarkNewRuntimeSmallStack-18    104µs/op   425 KB/op  1426 allocs/op
 ```
 
 Each compile-once benchmark runs its workload many times: the main loop
