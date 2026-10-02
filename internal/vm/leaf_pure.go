@@ -58,6 +58,27 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 		in := code[pc]
 		switch in.Op {
 		case bytecode.OpPushThis:
+			if pc+1 < len(code) && code[pc+1].Op == bytecode.OpGetProp {
+				// this.k, a method's commonest read, in one turn of the loop
+				// rather than two.
+				next := code[pc+1]
+				if !this.IsObject() {
+					return miss()
+				}
+				ob, ic := this.Object(), &cl.ic[next.B]
+				v, ok := ic.own(ob)
+				if !ok {
+					if v, ok = ownScan(ic, ob, cl.names[next.A]); !ok {
+						if v, ok = r.cachedData(ic, ob, cl.names[next.A]); !ok {
+							return miss()
+						}
+					}
+				}
+				stack[sp] = v
+				sp++
+				pc++
+				break
+			}
 			stack[sp] = this
 			sp++
 		case bytecode.OpGetLocal:
@@ -456,6 +477,17 @@ func pureArith(op bytecode.Op, a, b Value) (Value, bool) {
 // in ok for anything else -- an object, whose valueOf could be called, or
 // strings ordered.
 func (r *Runtime) pureCompare(op bytecode.Op, a, b Value) (res, ok bool) {
+	if a.IsNumber() && b.IsNumber() {
+		// Two numbers are equal, loosely or strictly, as floats are: NaN
+		// to nothing, and 0 to -0.
+		switch op {
+		case bytecode.OpEq, bytecode.OpStrictEq:
+			return a.num == b.num, true
+		case bytecode.OpNe, bytecode.OpStrictNe:
+			return a.num != b.num, true
+		}
+		return compareFloats(op, a.num, b.num), true
+	}
 	switch op {
 	case bytecode.OpStrictEq:
 		return a.StrictEquals(b), true

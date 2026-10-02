@@ -285,6 +285,23 @@ func TestPureLeafStores(t *testing.T) {
 	}
 }
 
+// TestPureLeafCompareAndThisReads checks comparisons and this.k in bodies
+// LeafPure marks, which compare two numbers as floats and read this.k in one
+// step: NaN, 0 and -0, a number beside a string, null or undefined, a getter
+// on this, which the body proper answers, and a primitive this. Each answer is
+// Node's.
+func TestPureLeafCompareAndThisReads(t *testing.T) {
+	checkEval(t, `function T(s) { this.s = s } T.prototype.held = function () { return (this.s & 4) != 0 || this.s == 2 };
+		T.prototype.eq = function (v) { return this.s === v }; T.prototype.le = function (v) { return this.s <= v };
+		function sv() { "use strict"; return this.length }
+		var r = [], vals = [0, -0, 2, 4, 6, NaN, "2", null, undefined, Infinity];
+		for (var k = 0; k < 3; k++) for (var i = 0; i < vals.length; i++) { var t = new T(vals[i]); r.push([t.held(), t.eq(-0), t.eq(NaN), t.le(2)].map(Number).join("")) }
+		var g = Object.create(T.prototype, { s: { get() { return 6 } } }); for (var i = 0; i < 70; i++) r.push(g.held());
+		for (var i = 0; i < 70; i++) r.push(sv.call("abc"), T.prototype.held.call(5));
+		r.slice(0, 10).join(",") + " | " + r.slice(30, 32).join() + " | " + r.slice(-4).join()`,
+		"0101,0101,1001,1000,1000,0000,1001,0001,0000,0000 | true,true | 3,false,3,false")
+}
+
 // TestPureLeafUpvalueStores checks a body LeafPure marks whose one store is
 // to an upvalue -- count++ in a closure -- made without a frame: ++ and --,
 // before and after, on a number; on a string, a BigInt or an object with a
