@@ -396,8 +396,8 @@ func (s *serializer) value(v Value) (int, error) {
 		// The entries are copied first: serializing one may run a getter
 		// that changes the collection.
 		var entries []mapEntry
-		for j, e := range m.entries {
-			if !e.deleted && m.live(j) {
+		for _, e := range m.entries {
+			if !e.deleted {
 				entries = append(entries, e)
 			}
 		}

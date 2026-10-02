@@ -84,8 +84,8 @@ func TestWeakSetReleasesCollectedValues(t *testing.T) {
 	runtime.KeepAlive(kept)
 }
 
-// A weak.Pointer is the identity the index is keyed by, so two references to
-// the same object have to find the same entry.
+// The address is what the index is keyed by, so two references to the same
+// object have to find the same entry.
 func TestWeakMapKeyIdentity(t *testing.T) {
 	r := New(Config{})
 	m := newJSMap(true)
@@ -105,4 +105,56 @@ func TestWeakMapKeyIdentity(t *testing.T) {
 	if _, ok := m.get(r, k); ok {
 		t.Error("the entry survived delete")
 	}
+}
+
+// An address outlives its object and comes back as another's. The entry it
+// led to belongs to the collected key, and must not answer for the new one --
+// whether asked, set, or deleted -- nor the new one's entry be lost to it.
+func TestWeakMapAddressReuse(t *testing.T) {
+	r := New(Config{})
+	m := newJSMap(true)
+	// Room enough that no sweep runs and the stale entries stay indexed.
+	m.nextSweep = 1 << 20
+	func() {
+		for i := 0; i < 2000; i++ {
+			m.set(r, Obj(newObject(nil, ClassObject)), Int(i))
+		}
+	}()
+	for i := 0; i < 4; i++ {
+		runtime.GC()
+	}
+
+	reused := 0
+	var held []Value
+	for i := 0; i < 4000; i++ {
+		k := Obj(newObject(nil, ClassObject))
+		held = append(held, k)
+		if _, ok := m.byAddr[uintptr(k.ref)]; ok {
+			reused++
+		}
+		if v, ok := m.get(r, k); ok {
+			t.Fatalf("a new object found the collected key's value %v", v)
+		}
+		if m.delete(r, k) {
+			t.Fatal("a new object deleted the collected key's entry")
+		}
+		m.set(r, k, Int(-i))
+	}
+	for i, k := range held {
+		if v, ok := m.get(r, k); !ok || v.Number() != float64(-i) {
+			t.Fatalf("key %d: get = %v %v, want %d", i, v, ok, -i)
+		}
+	}
+	for _, k := range held[:100] {
+		if !m.delete(r, k) {
+			t.Fatal("delete reported nothing to remove")
+		}
+		if _, ok := m.get(r, k); ok {
+			t.Fatal("the entry survived delete")
+		}
+	}
+	if reused == 0 {
+		t.Log("no address was reused, so this run did not test reuse")
+	}
+	runtime.KeepAlive(held)
 }

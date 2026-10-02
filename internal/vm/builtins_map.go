@@ -19,9 +19,8 @@ import "math"
 // collide: the number 1, the string "1" and a boolean are distinct keys even
 // though they might otherwise hash alike.
 type mapKey struct {
-	// Exactly one of these carries the key: ref for an object, a symbol or a
-	// weak reference to one, whose identity is the comparison, and val for
-	// everything else. They are indexed separately, so what is stored is one
+	// Exactly one of these carries the key: ref for an object or a symbol,
+	// whose identity is the comparison, and val for everything else. They are indexed separately, so what is stored is one
 	// or the other rather than room for both.
 	val valueKey
 	ref any
@@ -34,20 +33,8 @@ type valueKey struct {
 	str  string
 }
 
-// mapKeyOf converts a value to its comparable key form.
-//
-// weak selects the form a WeakMap or WeakSet uses, where an object or symbol
-// key is identified by a weak.Pointer rather than by the pointer itself. A
-// weak.Pointer is comparable and equal exactly when it names the same object,
-// which is what lets the index find an entry without the index being what keeps
-// the key alive.
-func (r *Runtime) mapKeyOf(v Value, weakKey bool) mapKey {
-	if weakKey && (v.IsObject() || v.IsSymbol()) {
-		return mapKey{ref: makeWeak(v)}
-	}
-	return r.strongKeyOf(v)
-}
-
+// strongKeyOf converts a value to its comparable key form, for a Map or a Set.
+// A WeakMap or a WeakSet indexes its keys by address instead; see weakFind.
 func (r *Runtime) strongKeyOf(v Value) mapKey {
 	switch v.Kind() {
 	case KindNumber:
@@ -105,7 +92,8 @@ type jsMap struct {
 	// and a Set, which is most of them, would carry three words per entry that
 	// nothing ever reads. It has one element per entry when it is there at all.
 	weakKeys []weakTarget
-	// byNum, byStr, byValue and byRef index the entries by key. They are
+	// byNum, byStr, byValue and byRef index the entries by key, and byAddr
+	// a weak collection's. They are
 	// separate because what identifies a key is its value or its address,
 	// never both, and a map that holds one kind should not pay for room for
 	// the other. A number, by its bits, and a string are the commonest keys,
@@ -116,6 +104,7 @@ type jsMap struct {
 	byStr   map[string]int
 	byValue map[valueKey]int
 	byRef   map[any]int
+	byAddr  map[uintptr]int
 	size    int
 	// weak marks a WeakMap or WeakSet, whose keys are held weakly: an entry
 	// stops existing once nothing else refers to its key.
@@ -213,23 +202,40 @@ func (m *jsMap) clearIndex() {
 	clear(m.byStr)
 	clear(m.byValue)
 	clear(m.byRef)
+	clear(m.byAddr)
 }
 
 func (m *jsMap) get(r *Runtime, k Value) (Value, bool) {
-	i, ok := m.lookup(r.mapKeyOf(k, m.weak))
-	if !ok || m.entries[i].deleted || !m.live(i) {
+	if m.weak {
+		if i, ok := m.weakFind(k); ok {
+			return m.entries[i].value, true
+		}
+		return Undefined, false
+	}
+	i, ok := m.lookup(r.strongKeyOf(k))
+	if !ok || m.entries[i].deleted {
 		return Undefined, false
 	}
 	return m.entries[i].value, true
 }
 
-// live reports whether an entry's key is still there, which only a weak
-// collection can answer no to.
-func (m *jsMap) live(i int) bool {
-	if !m.weak {
-		return true
+// weakFind finds the entry a WeakMap or a WeakSet holds for a key.
+//
+// The index is by address, which names one live object or symbol because Go's
+// collector does not move them, and which asks for no weak reference to be
+// made at every lookup, as an index of weak references would. An address can
+// outlive what was there and come back as something else's, so the entry it
+// leads to counts only while its weak reference still names the key: the
+// reference to what was collected is cleared before its memory is reused.
+func (m *jsMap) weakFind(k Value) (int, bool) {
+	if !k.IsObject() && !k.IsSymbol() {
+		return 0, false
 	}
-	return m.weakKeys[i].alive()
+	i, ok := m.byAddr[uintptr(k.ref)]
+	if !ok || m.entries[i].deleted || !m.weakKeys[i].is(k) {
+		return 0, false
+	}
+	return i, true
 }
 
 // canonicalKey is a key as a Map or Set keeps it: -0 as +0, which
@@ -243,23 +249,40 @@ func canonicalKey(k Value) Value {
 }
 
 func (m *jsMap) set(r *Runtime, k, v Value) {
+	if m.weak {
+		m.setWeak(k, v)
+		return
+	}
 	k = canonicalKey(k)
-	mk := r.mapKeyOf(k, m.weak)
-	if i, ok := m.lookup(mk); ok && !m.entries[i].deleted && m.live(i) {
+	mk := r.strongKeyOf(k)
+	if i, ok := m.lookup(mk); ok && !m.entries[i].deleted {
 		// Re-setting an existing key updates the value and keeps its position.
 		m.entries[i].value = v
 		return
 	}
-	e := mapEntry{key: k, value: v}
-	if m.weak {
-		// The key is not stored, only a weak reference to it: an entry must
-		// not be what keeps its own key alive.
-		e.key = Undefined
-		m.sweep()
-		m.weakKeys = append(m.weakKeys, makeWeak(k))
-	}
-	m.entries = append(m.entries, e)
+	m.entries = append(m.entries, mapEntry{key: k, value: v})
 	m.record(mk, len(m.entries)-1)
+	m.size++
+}
+
+// setWeak is set for a WeakMap or a WeakSet, whose key is an object or a
+// symbol the caller has checked can be held weakly.
+func (m *jsMap) setWeak(k, v Value) {
+	if i, ok := m.weakFind(k); ok {
+		m.entries[i].value = v
+		return
+	}
+	m.sweep()
+	// The key is not stored, only a weak reference to it: an entry must not
+	// be what keeps its own key alive.
+	m.entries = append(m.entries, mapEntry{key: Undefined, value: v})
+	m.weakKeys = append(m.weakKeys, makeWeak(k))
+	if m.byAddr == nil {
+		m.byAddr = make(map[uintptr]int)
+	}
+	// What the address led to before, if anything, is an entry whose key has
+	// gone, which the next sweep drops.
+	m.byAddr[uintptr(k.ref)] = len(m.entries) - 1
 	m.size++
 }
 
@@ -284,12 +307,13 @@ func (m *jsMap) sweep() {
 	m.size = 0
 	for i, e := range m.entries {
 		w := m.weakKeys[i]
-		if e.deleted || !w.alive() {
+		p := w.pointer()
+		if e.deleted || p == nil {
 			continue
 		}
 		kept = append(kept, e)
 		keptWeak = append(keptWeak, w)
-		m.record(mapKey{ref: w}, len(kept)-1)
+		m.byAddr[uintptr(p)] = len(kept) - 1
 		m.size++
 	}
 	clear(m.entries[len(kept):])
@@ -300,9 +324,20 @@ func (m *jsMap) sweep() {
 }
 
 func (m *jsMap) delete(r *Runtime, k Value) bool {
-	mk := r.mapKeyOf(k, m.weak)
+	if m.weak {
+		i, ok := m.weakFind(k)
+		if !ok {
+			return false
+		}
+		m.entries[i].value = Undefined
+		m.entries[i].deleted = true
+		delete(m.byAddr, uintptr(k.ref))
+		m.size--
+		return true
+	}
+	mk := r.strongKeyOf(k)
 	i, ok := m.lookup(mk)
-	if !ok || m.entries[i].deleted || !m.live(i) {
+	if !ok || m.entries[i].deleted {
 		return false
 	}
 	// Tombstone rather than remove, so that an iteration in progress keeps its
