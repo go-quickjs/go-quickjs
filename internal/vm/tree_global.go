@@ -115,13 +115,11 @@ func (r *Runtime) setGlobalAt(c *tctx, in bytecode.Instr, v Value, pc int) error
 			}
 		}
 	}
-	if env.class != ClassProxy {
-		if i := env.findOwn(name); i >= 0 {
-			if p := &env.props[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 &&
-				p.flags&propWritable != 0 {
-				p.value = v
-				return nil
-			}
+	if i := globalSlot(env, &cl.ic[in.B], name); i >= 0 {
+		if p := &env.props[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 &&
+			p.flags&propWritable != 0 {
+			p.value = v
+			return nil
 		}
 	}
 	if cl.fn.Strict && !(r.nodeQuirks && chainHasProxy(env)) {

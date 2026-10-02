@@ -130,6 +130,18 @@ var treeScripts = []string{
 	   super(); for (var i = 0; i < 2; i++) { this.a += i; r += "," + this.a + f() } this.r = r } }
 	 new B(true).r + " " + new B(false).r`,
 	`var o = { k: 2, m() { var s = 0; for (var i = 0; i < 3; i++) { s += this.k; this.k = this.k + 1 } return s + "," + this.k } }; o.m() + " " + o.m.call({ k: "x" })`,
+	// Writes to globals, and strict mode's check before one, where the slot
+	// the site remembers stops being the name's: deleted, made again
+	// elsewhere, turned into an accessor or read-only.
+	`globalThis.g1 = 0; globalThis.g2 = 0; var log = []; function w(n) { "use strict"; for (var i = 0; i < n; i++) { g1 = i; g2 = g1 + 1 } return g1 + "," + g2 }
+	 function s(n) { for (var i = 0; i < n; i++) { g1 = i; g3 = i } return g1 + "," + g3 }
+	 function c(n) { "use strict"; for (var i = 0; i < n; i++) g1 = (globalThis.g1 = 9, i) }
+	 var r = [w(3), s(2), c(1)]; delete globalThis.g1; try { w(1) } catch (e) { r.push(e.constructor.name + ": " + e.message) }
+	 try { c(1) } catch (e) { r.push(e.constructor.name + ": " + e.message + " " + g1) } delete globalThis.g1;
+	 globalThis.zz = 1; globalThis.g1 = 5; r.push(w(2), s(1));
+	 Object.defineProperty(globalThis, "g1", { get() { log.push("get"); return 7 }, set(v) { log.push("set" + v) }, configurable: true });
+	 r.push(w(2), s(1)); Object.defineProperty(globalThis, "g2", { value: 1, writable: false });
+	 try { w(1) } catch (e) { r.push(e.constructor.name) } r.push(s(1), g2, log.join()); r.join(" ")`,
 	// Updates of an element -- op=, ++ and -- as statements and as values --
 	// and the order the object, the key, the element and the value are taken
 	// in: the key converted once, the object and key read before the value
@@ -189,6 +201,29 @@ func TestTreeTierMatchesInterpreter(t *testing.T) {
 		}
 		if vm.TreesBuilt() == before {
 			t.Errorf("%s\nno function was built as a tree", src)
+		}
+	}
+}
+
+// TestGlobalWriteSites pins, in both tiers, writes to globals and strict
+// mode's check before one where the slot a site remembers stops being the
+// name's. The tiers share the sites' code, so comparing them is not enough.
+// A strict assignment whose value creates the global it names is still a
+// ReferenceError, as the specification says and C QuickJS no longer does.
+func TestGlobalWriteSites(t *testing.T) {
+	defer vm.SetTreeTier(true, false)
+	var src string
+	for _, s := range treeScripts {
+		if strings.HasPrefix(s, "globalThis.g1 = 0;") {
+			src = s
+		}
+	}
+	const want = "2,3 1,1  ReferenceError: g1 is not defined ReferenceError: g1 is not defined 9 1,2 0,0 7,8 7,0 " +
+		"TypeError 7,0 1 set0,get,set1,get,get,set0,get,set0,get,set0,get"
+	for _, tier := range []bool{false, true} {
+		vm.SetTreeTier(tier, tier)
+		if got := treeRun(t, src); got != want {
+			t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, want)
 		}
 	}
 }

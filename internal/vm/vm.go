@@ -1248,6 +1248,9 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			env := cl.scope()
 			found := true
 			switch {
+			// Each case is a way to find the name. The global object's own
+			// table, which is where a global variable is, is asked first.
+			case hasOwnGlobal(env, &cl.ic[in.B], name):
 			case f.evalVars != nil && evalVarProp(f.evalVars, name) != nil:
 			case r.globalLexProp(env, name) != nil:
 			case !r.isGlobalScope(env) && r.moduleLexProp(env, name) != nil:
@@ -1326,14 +1329,12 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// A plain writable data property of a global object that is no
 			// proxy -- what every declared global is -- is written in place:
 			// an assignment to one sets it and nothing else.
-			if env.class != ClassProxy {
-				if i := env.findOwn(name); i >= 0 {
-					if p := &env.props[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 &&
-						p.flags&propWritable != 0 {
-						sp--
-						p.value = stack[sp]
-						break
-					}
+			if i := globalSlot(env, &cl.ic[in.B], name); i >= 0 {
+				if p := &env.props[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 &&
+					p.flags&propWritable != 0 {
+					sp--
+					p.value = stack[sp]
+					break
 				}
 			}
 			// Strict mode refuses to create a global by assignment, which is

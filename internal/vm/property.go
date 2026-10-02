@@ -707,6 +707,36 @@ func (r *Runtime) hasPropErr(o *Object, key Atom) (bool, error) {
 	return false, nil
 }
 
+// globalSlot is where a global object that is no proxy has a name in its
+// table, or -1: where the site last found it, while the name is still there,
+// or else where findOwn finds it, which the site then remembers.
+func globalSlot(env *Object, site *propCache, name Atom) int32 {
+	if i := uint(site.idx); i < uint(len(env.props)) {
+		if p := &env.props[i]; p.key == name && p.flags&propDeleted == 0 {
+			return int32(i)
+		}
+	}
+	if env.class == ClassProxy {
+		return -1
+	}
+	i := env.findOwn(name)
+	if i >= 0 {
+		site.idx = i
+	}
+	return i
+}
+
+// hasOwnGlobal reports whether a global object that is no proxy has a name in
+// its table, which is the first place HasProperty looks and where a global
+// variable is: the answer needs no walk when it is yes.
+func hasOwnGlobal(env *Object, site *propCache, name Atom) bool {
+	if env.class != ClassObject {
+		return false
+	}
+	i := globalSlot(env, site, name)
+	return i >= 0 && env.props[i].flags&propPrivate == 0
+}
+
 // hasOwnProp reports whether the object itself has the property.
 func (r *Runtime) hasOwnProp(o *Object, key Atom) bool {
 	if o.class == ClassTypedArray {

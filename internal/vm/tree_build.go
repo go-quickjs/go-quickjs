@@ -797,12 +797,15 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		}
 		b.push(callNode(in.Op, p, n, this, pc))
 	case bytecode.OpCheckGlobalRef:
-		name := in.A
+		name, site := in.A, in.B
 		b.push(func(c *tctx) Value {
 			r, f, cl := c.r, c.f, c.cl
 			name := cl.names[name]
 			env := cl.scope()
 			switch {
+			// Each case is a way to find the name. The global object's own
+			// table, which is where a global variable is, is asked first.
+			case hasOwnGlobal(env, &cl.ic[site], name):
 			case f.evalVars != nil && evalVarProp(f.evalVars, name) != nil:
 			case r.globalLexProp(env, name) != nil:
 			case !r.isGlobalScope(env) && r.moduleLexProp(env, name) != nil:
