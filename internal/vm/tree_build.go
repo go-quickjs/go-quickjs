@@ -1021,7 +1021,20 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		k := in.A
 		b.push(func(c *tctx) Value { return Obj(c.r.makeClosure(c.f, c.cl.consts[k])) })
 	case bytecode.OpGetGlobal:
+		name, site := in.A, in.B
 		b.push(func(c *tctx) Value {
+			// The global object's slot the site remembers, read here where
+			// nothing can shadow it -- a direct eval's variables or a
+			// script's lexical bindings, which getGlobalAt asks first.
+			if r, cl := c.r, c.cl; c.f.evalVars == nil && len(r.globalLex.props) == 0 {
+				env := cl.scope()
+				if i := uint(cl.ic[site].idx); i < uint(len(env.props)) {
+					if p := &env.props[i]; p.key == cl.names[name] &&
+						p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
+						return p.value
+					}
+				}
+			}
 			v, err := c.r.getGlobalAt(c, in, pc)
 			if err != nil {
 				c.throw(err)
@@ -1029,9 +1042,26 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			return v
 		})
 	case bytecode.OpSetGlobal:
-		v := b.pop().tree()
+		v, name, site := b.pop().tree(), in.A, in.B
 		return 0, b.stmt(func(c *tctx) {
-			if err := c.r.setGlobalAt(c, in, v(c), pc); err != nil {
+			value := v(c)
+			// A plain writable property of the global object, in the slot
+			// the site remembers, is written here where nothing can shadow
+			// it -- a direct eval's variables or a script's lexical
+			// bindings, which setGlobalAt asks first. In a module the slot is
+			// the binding itself, and one in its dead zone, a constant or an
+			// import is none of these, and goes the long way to its error.
+			if r, cl := c.r, c.cl; c.f.evalVars == nil && len(r.globalLex.props) == 0 {
+				env := cl.scope()
+				if i := uint(cl.ic[site].idx); i < uint(len(env.props)) {
+					if p := &env.props[i]; p.key == cl.names[name] &&
+						p.flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) == propWritable {
+						p.value = value
+						return
+					}
+				}
+			}
+			if err := c.r.setGlobalAt(c, in, value, pc); err != nil {
 				c.throw(err)
 			}
 		})
