@@ -84,17 +84,33 @@ func (r *Runtime) startForIn(v Value) (Value, error) {
 	}
 
 	st.obj = o
-	seen := make(map[Atom]bool)
-	for cur := o; cur != nil; cur = cur.proto {
+	// The walk ends at the last object up the chain that could add a key.
+	// Beyond it are objects with nothing enumerable -- Array.prototype and
+	// Object.prototype are -- whose keys could only shadow keys that nothing
+	// further up adds. When that is the object itself, its own keys are
+	// distinct and none needs remembering.
+	last := o
+	for cur := o.proto; cur != nil; cur = cur.proto {
+		if !noEnumerableKeys(cur) {
+			last = cur
+		}
+	}
+	var seen map[Atom]bool
+	if last != o {
+		seen = make(map[Atom]bool)
+	}
+	for cur := o; ; cur = cur.proto {
 		keys, err := r.ownKeysOf(cur, false)
 		if err != nil {
 			return Undefined, err
 		}
 		for _, k := range keys {
-			if seen[k] {
-				continue
+			if seen != nil {
+				if seen[k] {
+					continue
+				}
+				seen[k] = true
 			}
-			seen[k] = true
 			// A non-enumerable property still shadows an enumerable one of the
 			// same name further up the chain, which is why it is recorded in
 			// seen before being skipped.
@@ -105,11 +121,34 @@ func (r *Runtime) startForIn(v Value) (Value, error) {
 			if !enumerable {
 				continue
 			}
-			st.keys = append(st.keys, Str(NewString(r.atoms.name(k))))
+			if k.IsIndex() && k.Index() < 1024 {
+				st.keys = append(st.keys, Str(r.intString(k.Index())))
+			} else {
+				st.keys = append(st.keys, Str(NewString(r.atoms.name(k))))
+			}
 			st.keyAtoms = append(st.keyAtoms, k)
+		}
+		if cur == last {
+			break
 		}
 	}
 	return r.newIterObject(st), nil
+}
+
+// noEnumerableKeys reports whether an object has no enumerable own string key,
+// as an ordinary object or array that only stores its properties answers
+// without being asked: one whose keys are synthesized, or a proxy, which would
+// see itself asked, are not looked at.
+func noEnumerableKeys(o *Object) bool {
+	if o.class != ClassObject && o.class != ClassArray || len(o.elems) != 0 || proxyOf(o) != nil {
+		return false
+	}
+	for i := range o.props {
+		if o.props[i].flags&(propEnumerable|propDeleted) == propEnumerable {
+			return false
+		}
+	}
+	return true
 }
 
 // startForOf opens an iterator over a value.

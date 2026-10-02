@@ -136,6 +136,9 @@ type Runtime struct {
 	backEdges int
 	// regexpFlagAtoms are the names of regExpFlagNames' getters.
 	regexpFlagAtoms [len(regExpFlagNames)]Atom
+	// intStrings are the strings of the integers below len(intStrings),
+	// each made the first time it is asked for: see intString.
+	intStrings *[1024]*String
 
 	// keptAlive holds the values a WeakRef has handed out during the current
 	// job. Two calls to deref in one turn have to answer the same way, so the

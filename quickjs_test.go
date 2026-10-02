@@ -336,6 +336,43 @@ func TestForInIteration(t *testing.T) {
 	checkEval(t, "let s = ''; for (const k in {a:1, b:2}) s += k; s", "ab")
 }
 
+// for-in stops at the last object up the chain that has an enumerable key, so
+// what it skips must be what could add nothing: these pin the keys through
+// chains where something up them does, or might.
+func TestForInPrototypeChains(t *testing.T) {
+	const keys = `function keys(o) { var s = []; for (var k in o) s.push(typeof k + ":" + k); return s.join(","); } `
+	cases := []struct{ src, want string }{
+		{keys + `keys([5, 6])`, "string:0,string:1"},
+		{keys + `var a = []; a[1500] = 1; a[3] = 2; keys(a)`, "string:3,string:1500"},
+		{keys + `keys({b: 1, a: 2, 1: 3})`, "string:1,string:b,string:a"},
+		// An enumerable key added to a prototype everything shares is seen,
+		// once, after the object's own.
+		{keys + `Object.prototype.z = 1; Array.prototype.y = 2; keys([7])`, "string:0,string:y,string:z"},
+		{keys + `Object.prototype.x = 1; keys({x: 2, w: 3})`, "string:x,string:w"},
+		// A non-enumerable key between them still shadows one further up.
+		{keys + `var top = {k: 1, j: 2}; var mid = Object.create(top);
+		  Object.defineProperty(mid, "k", {value: 3, enumerable: false});
+		  keys(Object.create(mid))`, "string:j"},
+		// An object with only non-enumerable keys adds nothing, at either end.
+		{keys + `var p = Object.create(null); Object.defineProperty(p, "h", {value: 1});
+		  var o = Object.create(p); o.g = 1; keys(o)`, "string:g"},
+		// Elements of a prototype that is an array, and a string wrapper's.
+		{keys + `keys(Object.create([8, 9]))`, "string:0,string:1"},
+		{keys + `keys(Object.create(new String("ab")))`, "string:0,string:1"},
+		// A proxy up the chain is asked for its keys.
+		{keys + `var asked = []; var p = new Proxy({q: 1}, {ownKeys(t) { asked.push("keys"); return ["q"]; }});
+		  keys(Object.create(p)) + "|" + asked.join()`, "string:q|keys"},
+		// A key deleted during the loop is not visited.
+		{keys + `var o = {a: 1, b: 2}; var s = ""; for (var k in o) { s += k; delete o.b; } s`, "a"},
+		// The index strings are the same strings as any other.
+		{`var s = []; for (var k in [1, 2]) s.push(k === String(Number(k)), k + 1); s.join()`,
+			"true,01,true,11"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
 func TestDestructuring(t *testing.T) {
 	tests := []struct{ src, want string }{
 		{"const [a, b] = [1, 2]; a + ',' + b", "1,2"},

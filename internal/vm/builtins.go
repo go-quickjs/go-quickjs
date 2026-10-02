@@ -2083,6 +2083,9 @@ func (r *Runtime) initNumberBuiltins() {
 			}
 			radix = int(ri)
 		}
+		if radix == 10 {
+			return Str(rt.numberString(n)), nil
+		}
 		return Str(NewString(jsnum.FormatRadix(n, radix))), nil
 	})
 

@@ -2,6 +2,7 @@ package vm
 
 import (
 	"math"
+	"strconv"
 
 	"github.com/go-quickjs/go-quickjs/internal/jsnum"
 )
@@ -147,12 +148,37 @@ func (r *Runtime) toNumeric(v Value) (Value, error) {
 }
 
 // toString implements the ToString abstract operation.
+// numberString is ToString of a number.
+func (r *Runtime) numberString(f float64) *String {
+	// -0 is "0" as much as 0 is, so it may take 0's string.
+	if i := uint32(f); float64(i) == f && i < 1024 {
+		return r.intString(i)
+	}
+	return NewString(jsnum.FormatFloat(f))
+}
+
+// intString is the string of an integer below 1024. A small integer becomes a
+// string over and over -- an index for-in hands out, a counter joined to a
+// name -- so each is made once per runtime; a string is never changed, so it
+// can be shared.
+func (r *Runtime) intString(i uint32) *String {
+	if r.intStrings == nil {
+		r.intStrings = new([1024]*String)
+	}
+	s := r.intStrings[i]
+	if s == nil {
+		s = NewString(strconv.FormatUint(uint64(i), 10))
+		r.intStrings[i] = s
+	}
+	return s
+}
+
 func (r *Runtime) toString(v Value) (*String, error) {
 	switch v.Kind() {
 	case KindString:
 		return v.String(), nil
 	case KindNumber:
-		return NewString(jsnum.FormatFloat(v.Number())), nil
+		return r.numberString(v.num), nil
 	case KindUndefined:
 		return NewString("undefined"), nil
 	case KindNull:
