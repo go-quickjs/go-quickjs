@@ -40,6 +40,9 @@ type tbuilder struct {
 	index, depths []int
 	// succ is the blocks the one being built can go on to.
 	succ []int
+	// end is where the block being built ends, for an instruction that
+	// takes in those after it.
+	end int
 }
 
 // target records a way from the block being built to the one at pc, whose
@@ -204,6 +207,7 @@ func treeBuilds(op bytecode.Op) bool {
 func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) {
 	fn := b.fn
 	b.stack, b.body, b.succ = b.stack[:0], b.body[:0], b.succ[:0]
+	b.end = end
 	for d := 0; d < entry; d++ {
 		b.pushSlot(d)
 	}
@@ -855,6 +859,22 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			})
 		}
 	case bytecode.OpToPropertyKey, bytecode.OpToPropertyKeyOfBase:
+		if in.Op == bytecode.OpToPropertyKeyOfBase && pc+2 < b.end &&
+			code[pc+1].Op == bytecode.OpDup2 && code[pc+2].Op == bytecode.OpGetIndex {
+			// obj[key] op= v, up to the read of the element: the object, the
+			// key and the element go to their slots in one statement, where
+			// what dup2 and get_index leave would put them.
+			key, obj := b.pop(), b.pop()
+			if !b.spill() {
+				return 0, false
+			}
+			d := b.depth()
+			b.body = append(b.body, elemReadForUpdate(obj, key, d, pc))
+			b.pushSlot(d)
+			b.pushSlot(d + 1)
+			b.pushSlot(d + 2)
+			return 2, true
+		}
 		// The object beneath the key is looked at first, and stays: it is
 		// read from its slot.
 		key := b.pop().tree()
@@ -1652,6 +1672,54 @@ func setIndexOperands(obj, key tentry, val tval, pc int, strict bool) tval {
 	return setIndexNode(obj.tree(), key.tree(), val, pc, strict)
 }
 
+// elemReadForUpdate is to_property_key_of_base at pc, dup2 and get_index, as
+// obj[key] op= v and obj[key]++ begin: the object to slot d, its key to d+1,
+// and the element to d+2.
+func elemReadForUpdate(obj, key tentry, d, pc int) tstmt {
+	read := func(c *tctx, o, k Value) {
+		if o.IsNullish() || !k.IsNumber() && !k.IsString() && !k.IsSymbol() {
+			k = c.keyOfBase(o, k, pc)
+		}
+		s := c.stack
+		s[d], s[d+1] = o, k
+		if v, ok := elemAt(o, k); ok {
+			s[d+2] = v
+			return
+		}
+		s[d+2] = c.getIndexSlow(o, k, pc+2)
+	}
+	switch o, k, n := obj.k, key.k, key.n; {
+	case obj.local && key.local:
+		return func(c *tctx) { read(c, c.locals[o], c.locals[k]) }
+	case obj.local && key.number:
+		return func(c *tctx) { read(c, c.locals[o], n) }
+	}
+	x, y := obj.tree(), key.tree()
+	return func(c *tctx) {
+		o := x(c)
+		read(c, o, y(c))
+	}
+}
+
+// keyOfBase is to_property_key_of_base at pc: a key of a base that is null or
+// undefined is an error before it is converted, and one that is not a
+// number, a string or a symbol is converted to a key.
+func (c *tctx) keyOfBase(base, v Value, pc int) Value {
+	if base.IsNullish() {
+		c.at(pc)
+		c.throw(c.r.throwTypeError("cannot read property of %s", c.r.describe(base)))
+	}
+	if v.IsString() || v.IsSymbol() || v.IsNumber() {
+		return v
+	}
+	c.at(pc)
+	k, err := c.r.toPropertyKey(v)
+	if err != nil {
+		c.throw(err)
+	}
+	return c.r.keyToValue(k)
+}
+
 // setIndexStmt is obj[key] = val as a statement.
 func setIndexStmt(obj, key tentry, val tval, pc int, strict bool) tstmt {
 	switch o, k := obj.k, key.k; {
@@ -1668,6 +1736,16 @@ func setIndexStmt(obj, key tentry, val tval, pc int, strict bool) tstmt {
 			o := c.locals[o]
 			k := key(c)
 			if v := val(c); !setElem(o, k, v) {
+				c.setIndexSlow(o, k, v, pc, strict)
+			}
+		}
+	case obj.slot >= 0 && key.slot >= 0:
+		// The object and key an update read: nothing the value does writes
+		// their slots.
+		o, k := obj.slot, key.slot
+		return func(c *tctx) {
+			v := val(c)
+			if o, k := c.stack[o], c.stack[k]; !setElem(o, k, v) {
 				c.setIndexSlow(o, k, v, pc, strict)
 			}
 		}

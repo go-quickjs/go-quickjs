@@ -130,6 +130,26 @@ var treeScripts = []string{
 	   super(); for (var i = 0; i < 2; i++) { this.a += i; r += "," + this.a + f() } this.r = r } }
 	 new B(true).r + " " + new B(false).r`,
 	`var o = { k: 2, m() { var s = 0; for (var i = 0; i < 3; i++) { s += this.k; this.k = this.k + 1 } return s + "," + this.k } }; o.m() + " " + o.m.call({ k: "x" })`,
+	// Updates of an element -- op=, ++ and -- as statements and as values --
+	// and the order the object, the key, the element and the value are taken
+	// in: the key converted once, the object and key read before the value
+	// changes them.
+	`var log = [], k = { toString() { log.push("k"); return "x" } };
+	 function f() { var a = [1, 2, 3], o = { x: 1 }, i = 0, r = [];
+	   for (var j = 0; j < 3; j++) { a[j] += j; a[i] *= 2; a[j] -= a[i]; o[k] += 1; o["x"] |= 4; a[i] += (i = 1);
+	     r.push((a[0] += 5) * 2, a[1]++, ++a[2], a[j]--, a[i] ** 1, o.x) }
+	   return a.join() + " " + o.x + " " + log.join() + " " + r.join() } f()`,
+	`var log = [], p = new Proxy([1, 2], { get(t, k) { log.push("get " + String(k)); return t[k] },
+	   set(t, k, v) { log.push("set " + String(k) + "=" + v); t[k] = v; return true } });
+	 var g = { get 0() { log.push("g"); return 1 }, set 0(v) { log.push("s" + v) } };
+	 function f(h, s, ta) { for (var i = 0; i < 2; i++) { h[1] += 1; p[i] += 10; ta[i] += 200; g[0] += 1; h[5] -= 1; s[0] += "x"; h[i + 0.5] += 1 }
+	   return h.join() + "|" + h[5] + "|" + h[0.5] + "|" + ta.join() + "|" + s + "|" + log.join() } f([0, , 2], "ab", new Int8Array(2))`,
+	`var bad = { toString() { throw new Error("key") } };
+	 function f(n, k) { for (var i = 0; i < 1; i++) n[k] += 1 }
+	 function g(a) { "use strict"; for (var i = 0; i < 1; i++) a[0] += 1 }
+	 var r = []; for (var v of [null, undefined, {}]) { try { f(v, bad) } catch (e) { r.push(e.constructor.name + ": " + e.message) } }
+	 try { g(Object.freeze([1])) } catch (e) { r.push(e.constructor.name + ": " + e.message) }
+	 r.join()`,
 	// Exceptions from inside an expression, and their stacks.
 	`function f(a) { var s = 0; for (var i = 0; i < a.length; i++) { s += a[i].x.y } return s }
 	 try { f([{ x: { y: 1 } }, { x: null }]) } catch (e) { e.constructor.name + " " + e.message + "|" + e.stack.split("\n").slice(0, 3).join("|") }`,
