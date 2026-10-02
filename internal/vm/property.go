@@ -920,6 +920,19 @@ func (r *Runtime) toElementValue(t *typedArrayData, v Value) (Value, error) {
 // data property. Anything else -- another class, an index, an accessor, a
 // property further up -- reports false, for getValueProp to answer. It is
 // small enough to be inlined where the interpreter reads a property.
+// plainOwnAt is plainOwn, also giving where in the table the property is.
+func plainOwnAt(o *Object, key Atom) (Value, int32, bool) {
+	if o.class != ClassObject || o.shapeIndex() != nil {
+		return Undefined, 0, false
+	}
+	for i := range o.props {
+		if p := &o.props[i]; p.key == key {
+			return p.value, int32(i), p.flags&(propAccessor|propPrivate|propDeleted) == 0
+		}
+	}
+	return Undefined, 0, false
+}
+
 func plainOwn(o *Object, key Atom) (Value, bool) {
 	if o.class != ClassObject || o.shapeIndex() != nil {
 		return Undefined, false

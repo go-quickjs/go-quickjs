@@ -377,6 +377,37 @@ func (r *Runtime) cachedGet(c *propCache, o *Object, key Atom) (Value, bool, err
 	return Undefined, false, nil
 }
 
+// own is the value of the property the cache says o has itself: o is of the
+// shape it remembers, and the property is its own and holds data. The shape
+// settles the layout and the attributes, so the value is where the cache
+// says. It is small enough to be inlined where a read is made, and asks
+// less than scanning even a small table.
+func (c *propCache) own(o *Object) (Value, bool) {
+	if s := o.shape; s == c.shape && s != nil && c.p1 == nil && !c.getter {
+		return o.props[c.idx].value, true
+	}
+	return Undefined, false
+}
+
+// noteOwn remembers a plain own property a read found at index i of o's
+// table, for own to answer the next object of its shape -- unless the site
+// has met too many shapes to keep trying.
+func (c *propCache) noteOwn(o *Object, i int32) {
+	if c.fills < maxCacheFills && o.shape != nil {
+		*c = propCache{shape: o.shape, idx: i, fills: c.fills + 1}
+	}
+}
+
+// ownScan is a plain own property of an ordinary object's small table, which
+// the cache then remembers for objects of o's shape.
+func ownScan(c *propCache, o *Object, key Atom) (Value, bool) {
+	v, i, ok := plainOwnAt(o, key)
+	if ok {
+		c.noteOwn(o, i)
+	}
+	return v, ok
+}
+
 // holder is the object the cache says has the property for o, or nil if o is
 // not what the cache remembers.
 func (c *propCache) holder(o *Object) *Object {

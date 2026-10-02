@@ -1407,7 +1407,11 @@ func getPropOperand(obj tentry, in bytecode.Instr, pc int) tval {
 		return func(c *tctx) Value {
 			o := c.f.this
 			if o.IsObject() {
-				if v, ok := plainOwn(o.Object(), c.cl.names[name]); ok {
+				ob := o.Object()
+				if v, ok := c.cl.ic[site].own(ob); ok {
+					return v
+				}
+				if v, ok := ownScan(&c.cl.ic[site], ob, c.cl.names[name]); ok {
 					return v
 				}
 			}
@@ -1418,7 +1422,11 @@ func getPropOperand(obj tentry, in bytecode.Instr, pc int) tval {
 		return func(c *tctx) Value {
 			o := c.locals[k]
 			if o.IsObject() {
-				if v, ok := plainOwn(o.Object(), c.cl.names[name]); ok {
+				ob := o.Object()
+				if v, ok := c.cl.ic[site].own(ob); ok {
+					return v
+				}
+				if v, ok := ownScan(&c.cl.ic[site], ob, c.cl.names[name]); ok {
 					return v
 				}
 			}
@@ -1429,7 +1437,11 @@ func getPropOperand(obj tentry, in bytecode.Instr, pc int) tval {
 	return func(c *tctx) Value {
 		o := x(c)
 		if o.IsObject() {
-			if v, ok := plainOwn(o.Object(), c.cl.names[name]); ok {
+			ob := o.Object()
+			if v, ok := c.cl.ic[site].own(ob); ok {
+				return v
+			}
+			if v, ok := ownScan(&c.cl.ic[site], ob, c.cl.names[name]); ok {
 				return v
 			}
 		}

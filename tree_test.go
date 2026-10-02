@@ -92,6 +92,18 @@ var treeScripts = []string{
 	`function f(a) { for (var i = 0; i < a.length; i++) { if (a[i] < 0) return i; while (a[i] > 10) a[i] -= 7 } return -1 } f([3, 20, 15, -1, 2]) + "," + f([1])`,
 	// this, in a method and in a sloppy function.
 	`function f() { var s = 0; for (var i = 0; i < 3; i++) s += this.k * i; return s } f.call({ k: 7 }) + "," + (function () { var c = 0; for (var i = 0; i < 2; i++) c += this === globalThis; return c })()`,
+	// A read the site's cache answers for an own property: the property
+	// deleted and added back, made a getter, inherited at the same site,
+	// frozen, and the site meeting objects of other shapes.
+	`function rd(o) { var s = ""; for (var i = 0; i < 3; i++) s += o.x + ","; return s }
+	 function P() { this.x = 1; this.y = 2 } P.prototype.z = "pz";
+	 var a = new P(), b = new P(), r = [rd(a), rd(b)];
+	 delete b.x; r.push(rd(b)); b.x = 5; r.push(rd(b));
+	 Object.defineProperty(a, "x", { get() { return "g" }, configurable: true }); r.push(rd(a));
+	 var c = Object.create({ x: "inh" }), d = { x: "own" }; for (var k = 0; k < 4; k++) r.push(rd(k % 2 ? c : d));
+	 var f = Object.freeze(new P()); r.push(rd(f)); var q = new P(); q.x = "changed"; r.push(rd(q));
+	 function m(o) { var s = 0; for (var i = 0; i < 3; i++) s += o.y; return s } r.push(m(new P()), m({ y: 10 }), m({ a: 1, y: 20 }));
+	 r.join("|")`,
 	// Equalities ending a block: against undefined, null and the booleans,
 	// which are tested for without a call, and between two values, strict
 	// and loose -- NaN, -0, a string and a number, a valueOf, and one that

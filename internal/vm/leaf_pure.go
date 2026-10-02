@@ -97,11 +97,13 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 			if !o.IsObject() {
 				return miss()
 			}
-			name := cl.names[in.A]
-			v, ok := plainOwn(o.Object(), name)
+			ob, ic := o.Object(), &cl.ic[in.B]
+			v, ok := ic.own(ob)
 			if !ok {
-				if v, ok = r.cachedData(&cl.ic[in.B], o.Object(), name); !ok {
-					return miss()
+				if v, ok = ownScan(ic, ob, cl.names[in.A]); !ok {
+					if v, ok = r.cachedData(ic, ob, cl.names[in.A]); !ok {
+						return miss()
+					}
 				}
 			}
 			stack[sp-1] = v
@@ -111,10 +113,12 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 			if !o.IsObject() {
 				return miss()
 			}
-			name := cl.names[in.A]
-			v, ok := plainOwn(o.Object(), name)
+			// A method is mostly the prototype's, which the cache answers
+			// and a scan of the receiver's own table would not.
+			ob := o.Object()
+			v, ok := r.cachedData(&cl.ic[in.B], ob, cl.names[in.A])
 			if !ok {
-				if v, ok = r.cachedData(&cl.ic[in.B], o.Object(), name); !ok {
+				if v, ok = plainOwn(ob, cl.names[in.A]); !ok {
 					return miss()
 				}
 			}
