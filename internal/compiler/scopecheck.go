@@ -319,8 +319,11 @@ func (s *scopeChecker) function(fn *ast.FuncLit) {
 	if fn == nil {
 		return
 	}
+	// The function's scopes go on above the enclosing ones' end, which
+	// nothing reads while it is walked, so that each function does not grow
+	// a stack of its own.
 	saved := s.scopes
-	s.scopes = nil
+	s.scopes = saved[len(saved):]
 	for _, p := range fn.Params {
 		s.expr(paramExpr(p))
 	}

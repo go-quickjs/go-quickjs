@@ -93,6 +93,7 @@ func CompileModule(prog *ast.Program, opts Options) (fn *bytecode.Function, info
 	c.emit(bytecode.OpGetLocal, uint32(c.completionSlot), 0)
 	c.emit(bytecode.OpReturn, 0, 0)
 	c.finish()
+	c.done()
 	return c.fn, info, nil
 }
 
@@ -325,6 +326,7 @@ func compileModuleInit(prog *ast.Program, opts Options, info *ModuleInfo) *bytec
 	c.emit(bytecode.OpPushUndef, 0, 0)
 	c.emit(bytecode.OpReturn, 0, 0)
 	c.finish()
+	c.done()
 	return c.fn
 }
 

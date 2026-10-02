@@ -14,6 +14,7 @@ package compiler
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/go-quickjs/go-quickjs/internal/ast"
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
@@ -313,10 +314,10 @@ type compiler struct {
 	// module environment. They are declared in their dead zone, so the
 	// declaration compiles to an initialization rather than an assignment.
 	moduleLex map[string]bool
-	// pendingLocals holds what is known about each slot, gathered as scopes
-	// close so that a binding is still described after it has gone out of
-	// scope.
-	pendingLocals map[uint32]bytecode.LocalDesc
+	// pendingLocals holds what is known about each slot, by slot, gathered
+	// as scopes close so that a binding is still described after it has gone
+	// out of scope.
+	pendingLocals []bytecode.LocalDesc
 	// withStatements counts the enclosing `with` statements, which is not the
 	// same as withDepth: a function containing a direct eval has a scope of
 	// its own on that chain without any `with` being written.
@@ -359,9 +360,15 @@ type compiler struct {
 	stackDepth int
 	maxStack   int
 
-	// targets holds the positions something jumps to, which is what says
-	// whether the instruction last emitted is the end of one path.
-	targets map[int]bool
+	// targets marks, by position, what something jumps to, which is what
+	// says whether the instruction last emitted is the end of one path.
+	targets []bool
+
+	// scratch is where the tables above, the code and the function's own
+	// tables are built, taken from pool and given back when the function is
+	// done.
+	scratch *scratch
+	pool    *scratchPool
 
 	// recursionDepth bounds how deeply the compiler descends into the tree. The
 	// parser caps nesting too, but a function body nests independently of its
@@ -434,24 +441,75 @@ func Compile(prog *ast.Program, opts Options) (fn *bytecode.Function, err error)
 	c.emit(bytecode.OpGetLocal, uint32(c.completionSlot), 0)
 	c.emit(bytecode.OpReturn, 0, 0)
 	c.finish()
+	c.done()
 	return c.fn, nil
 }
 
+// scratch is what compiling one function grows as it goes: its code and
+// tables, before they are copied out at their size, and the maps and lists
+// that only the compiling needs. A script's functions are compiled one inside
+// another, so a few of these serve them all, in turn.
+type scratch struct {
+	code       []bytecode.Instr
+	lines      []bytecode.SourceLoc
+	names      []string
+	consts     []bytecode.Constant
+	locals     []localVar
+	pending    []bytecode.LocalDesc
+	targets    []bool
+	nameIndex  map[string]uint32
+	constIndex map[constKey]uint32
+}
+
+// scratchPool holds the scratch no function being compiled has.
+type scratchPool struct{ free []*scratch }
+
+// scratchPools keep a compile's scratch for the next, so that each script
+// does not grow its buffers from nothing. A compile takes a pool of its own:
+// separate runtimes compile at once.
+var scratchPools = sync.Pool{New: func() any { return &scratchPool{} }}
+
+func (p *scratchPool) get() *scratch {
+	if n := len(p.free); n > 0 {
+		s := p.free[n-1]
+		p.free = p.free[:n-1]
+		return s
+	}
+	return &scratch{
+		// Room for a small function's whole body, which saves growing the
+		// code from nothing a doubling at a time.
+		code:       make([]bytecode.Instr, 0, 32),
+		nameIndex:  make(map[string]uint32, 8),
+		constIndex: make(map[constKey]uint32, 8),
+	}
+}
+
 func newCompiler(parent *compiler, opts Options) *compiler {
+	var pool *scratchPool
+	if parent != nil {
+		pool = parent.pool
+	} else {
+		pool = scratchPools.Get().(*scratchPool)
+	}
+	s := pool.get()
 	c := &compiler{
 		fn: &bytecode.Function{
-			Source: opts.Source,
-			// Room for a small function's whole body, which saves growing the
-			// code from nothing a doubling at a time. A larger one grows from
-			// here as before.
-			Code: make([]bytecode.Instr, 0, 32),
+			Source:    opts.Source,
+			Code:      s.code[:0],
+			Lines:     s.lines[:0],
+			Names:     s.names[:0],
+			Constants: s.consts[:0],
 		},
-		parent:      parent,
-		opts:        opts,
-		lastPos:     -1,
-		nameIndex:   make(map[string]uint32, 8),
-		constIndex:  make(map[constKey]uint32, 8),
-		hiddenCount: new(int),
+		parent:        parent,
+		opts:          opts,
+		lastPos:       -1,
+		locals:        s.locals[:0],
+		pendingLocals: s.pending[:0],
+		targets:       s.targets[:0],
+		nameIndex:     s.nameIndex,
+		constIndex:    s.constIndex,
+		scratch:       s,
+		pool:          pool,
 		// A function has no completion value of its own; only the top-level
 		// program tracks one, and Compile overwrites this.
 		completionSlot: -1,
@@ -464,6 +522,7 @@ func newCompiler(parent *compiler, opts Options) *compiler {
 		c.withDepth = parent.withDepth
 		c.withStatements = parent.withStatements
 	} else {
+		c.hiddenCount = new(int)
 		c.script = bytecode.NewScript(opts.Source, opts.Text)
 		c.script.SetOffset(int32(opts.LineOffset), int32(opts.ColumnOffset))
 	}
@@ -479,11 +538,53 @@ func (c *compiler) finish() {
 	for _, l := range c.locals {
 		c.recordLocal(l)
 	}
-	for slot, d := range c.pendingLocals {
-		if int(slot) < len(c.fn.Locals) {
-			c.fn.Locals[slot] = d
-		}
+	copy(c.fn.Locals, c.pendingLocals)
+}
+
+// release copies the function's tables out of the scratch they were built
+// in, at their size, and gives the scratch back for the next function. It is
+// the last thing done with a function's compiler.
+func (c *compiler) release() {
+	s := c.scratch
+	fn := c.fn
+	s.code, fn.Code = fn.Code[:0], exact(fn.Code)
+	s.lines, fn.Lines = fn.Lines[:0], exact(fn.Lines)
+	s.names, fn.Names = fn.Names[:0], exact(fn.Names)
+	s.consts, fn.Constants = fn.Constants[:0], exact(fn.Constants)
+	s.locals = c.locals[:0]
+	s.pending = c.pendingLocals[:0]
+	s.targets = c.targets[:0]
+	// What points into the script -- a name is a slice of its text, and a
+	// constant may hold a nested function -- is cleared, so that a pool kept
+	// for the next compile does not keep this one's script alive.
+	clear(s.names[:cap(s.names)])
+	clear(s.consts[:cap(s.consts)])
+	clear(s.locals[:cap(s.locals)])
+	clear(s.pending[:cap(s.pending)])
+	clear(s.nameIndex)
+	clear(s.constIndex)
+	c.scratch = nil
+	c.pool.free = append(c.pool.free, s)
+}
+
+// done releases a script's own compiler, the last of a compile, and hands
+// its pool on to the next compile. One that fails keeps neither.
+func (c *compiler) done() {
+	c.release()
+	scratchPools.Put(c.pool)
+}
+
+// exact is a copy of s no larger than it, or nil for an empty s.
+func exact[T any](s []T) []T {
+	if len(s) == 0 {
+		return nil
 	}
+	return append(make([]T, 0, len(s)), s...)
+}
+
+// isTarget reports whether something jumps to pc.
+func (c *compiler) isTarget(pc int) bool {
+	return pc < len(c.targets) && c.targets[pc]
 }
 
 // ---------------------------------------------------------------------------
@@ -527,7 +628,7 @@ func (c *compiler) emit(op bytecode.Op, a, b uint32) int {
 // it -- and moved onto the pair when it can.
 func (c *compiler) fuse(op bytecode.Op, a uint32) (int, bool) {
 	n := len(c.fn.Code)
-	if n == 0 || c.targets[n] {
+	if n == 0 || c.isTarget(n) {
 		return 0, false
 	}
 	last := &c.fn.Code[n-1]
@@ -538,7 +639,7 @@ func (c *compiler) fuse(op bytecode.Op, a uint32) (int, bool) {
 		last.Op, last.B = bytecode.OpSetLocalGet, a
 	case op == bytecode.OpSetLocal && last.Op == bytecode.OpPushUndef:
 		last.Op, last.A = bytecode.OpClearLocal, a
-	case immediateOp(op) && last.Op == bytecode.OpPushInt && n >= 2 && !c.targets[n-1] &&
+	case immediateOp(op) && last.Op == bytecode.OpPushInt && n >= 2 && !c.isTarget(n-1) &&
 		c.fn.Code[n-2].Op == bytecode.OpGetLocal && c.fn.Code[n-2].A < 1<<24:
 		// A local, an integer and the operator: `x & 0xff`.
 		first := &c.fn.Code[n-2]
@@ -556,7 +657,7 @@ func (c *compiler) fuse(op bytecode.Op, a uint32) (int, bool) {
 		last.Op = bytecode.OpGetLocalIndex
 		c.movePosition(n)
 	case op == bytecode.OpInitLocal && last.Op == bytecode.OpSetLocal && last.A == a && n >= 2 &&
-		c.fn.Code[n-2].Op == bytecode.OpPushUninitialized && !c.targets[n-1]:
+		c.fn.Code[n-2].Op == bytecode.OpPushUninitialized && !c.isTarget(n-1):
 		// A binding marked uninitialized and initialized straight after, as
 		// a for-of's is each iteration: nothing can see the mark.
 		first := &c.fn.Code[n-2]
@@ -569,7 +670,7 @@ func (c *compiler) fuse(op bytecode.Op, a uint32) (int, bool) {
 		last.Op = bytecode.OpApplyArguments
 		c.movePosition(n)
 	case op == bytecode.OpGetIndex && last.Op == bytecode.OpUpdateLocal && n >= 2 &&
-		c.fn.Code[n-2].Op == bytecode.OpGetLocal && !c.targets[n-1] && !c.hasPosition(n) &&
+		c.fn.Code[n-2].Op == bytecode.OpGetLocal && !c.isTarget(n-1) && !c.hasPosition(n) &&
 		last.A < 1<<29:
 		// The update and the read can both throw, and report the same
 		// position, the update's; the read of the object before them cannot.
@@ -704,8 +805,8 @@ func (c *compiler) here() int {
 // may be rewritten -- see compileExprForEffect. Marking a position that nothing
 // actually jumps to only gives up a rewrite, so the callers mark freely.
 func (c *compiler) markTarget(pc int) {
-	if c.targets == nil {
-		c.targets = map[int]bool{}
+	for len(c.targets) <= pc {
+		c.targets = append(c.targets, false)
 	}
 	c.targets[pc] = true
 }
@@ -798,8 +899,8 @@ func (c *compiler) endScope() {
 // them when reporting an assignment to a constant or a read before
 // initialization.
 func (c *compiler) recordLocal(l localVar) {
-	if c.pendingLocals == nil {
-		c.pendingLocals = map[uint32]bytecode.LocalDesc{}
+	for uint32(len(c.pendingLocals)) <= l.slot {
+		c.pendingLocals = append(c.pendingLocals, bytecode.LocalDesc{})
 	}
 	c.pendingLocals[l.slot] = bytecode.LocalDesc{
 		Name:     l.name,
@@ -1258,11 +1359,9 @@ func (c *varCollector) stmt(s ast.Stmt) {
 		if n.Kind != ast.DeclVar {
 			return
 		}
-		var names []string
 		for _, d := range n.Decls {
-			collectPatternNames(d.Target, &names)
+			collectPatternNames(d.Target, &c.out)
 		}
-		c.out = append(c.out, names...)
 
 	case *ast.FuncDecl:
 		if n.Fn.Name == nil {

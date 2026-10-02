@@ -27,6 +27,7 @@ func (c *compiler) compileFunctionLiteral(fn *ast.FuncLit, inferredName string) 
 	}
 
 	sub.compileFunctionBody(fn)
+	sub.release()
 
 	idx := c.addConst(bytecode.Constant{Kind: bytecode.ConstFunction, Fn: sub.fn})
 	c.emit(bytecode.OpClosure, idx, 0)

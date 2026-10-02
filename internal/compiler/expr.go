@@ -56,7 +56,7 @@ func (c *compiler) compileExprForEffect(e ast.Expr) {
 	// The store may only become a store-and-pop if nothing jumps to where the
 	// drop would have been: a short-circuiting assignment reaches that point
 	// without having stored anything, with its value still on the stack.
-	if n := len(c.fn.Code); n > 0 && !c.targets[n] {
+	if n := len(c.fn.Code); n > 0 && !c.isTarget(n) {
 		if last := &c.fn.Code[n-1]; last.Op == bytecode.OpPutLocal {
 			last.Op = bytecode.OpSetLocal
 			c.adjustStack(bytecode.OpDrop, 0, 0)
@@ -65,7 +65,7 @@ func (c *compiler) compileExprForEffect(e ast.Expr) {
 		// A store to a global copies the value first, for the drop; the store
 		// takes the value itself instead. Neither the copy nor the drop can
 		// throw, so where a position is recorded changes nothing.
-		if n >= 2 && !c.targets[n-1] && c.fn.Code[n-1].Op == bytecode.OpSetGlobal &&
+		if n >= 2 && !c.isTarget(n-1) && c.fn.Code[n-1].Op == bytecode.OpSetGlobal &&
 			c.fn.Code[n-2].Op == bytecode.OpDup {
 			c.fn.Code[n-2] = c.fn.Code[n-1]
 			c.fn.Code = c.fn.Code[:n-1]
