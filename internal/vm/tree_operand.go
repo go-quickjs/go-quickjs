@@ -7,10 +7,9 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 // arithOperands is an arithmetic operator over two entries, reading a local
 // or a number in place, or nil where there is no node for the pairing.
 func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
-	slow := arithSlow(op, pc)
 	switch {
 	case x.local && !y.local && !y.number:
-		x, y := x.k, y.v
+		x, y := x.k, y.tree()
 		switch op {
 		case bytecode.OpAdd:
 			return func(c *tctx) Value {
@@ -19,7 +18,7 @@ func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
 				if a.IsNumber() && b.IsNumber() {
 					return Float(a.num + b.num)
 				}
-				return slow(c, a, b)
+				return c.arithSlow(op, a, b, pc)
 			}
 		case bytecode.OpSub:
 			return func(c *tctx) Value {
@@ -28,7 +27,7 @@ func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
 				if a.IsNumber() && b.IsNumber() {
 					return Float(a.num - b.num)
 				}
-				return slow(c, a, b)
+				return c.arithSlow(op, a, b, pc)
 			}
 		case bytecode.OpMul:
 			return func(c *tctx) Value {
@@ -37,7 +36,7 @@ func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
 				if a.IsNumber() && b.IsNumber() {
 					return Float(a.num * b.num)
 				}
-				return slow(c, a, b)
+				return c.arithSlow(op, a, b, pc)
 			}
 		case bytecode.OpDiv:
 			return func(c *tctx) Value {
@@ -46,11 +45,11 @@ func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
 				if a.IsNumber() && b.IsNumber() {
 					return Float(a.num / b.num)
 				}
-				return slow(c, a, b)
+				return c.arithSlow(op, a, b, pc)
 			}
 		}
 	case !x.local && !x.number && y.local:
-		x, y := x.v, y.k
+		x, y := x.tree(), y.k
 		switch op {
 		case bytecode.OpAdd:
 			return func(c *tctx) Value {
@@ -59,7 +58,7 @@ func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
 				if a.IsNumber() && b.IsNumber() {
 					return Float(a.num + b.num)
 				}
-				return slow(c, a, b)
+				return c.arithSlow(op, a, b, pc)
 			}
 		case bytecode.OpSub:
 			return func(c *tctx) Value {
@@ -68,7 +67,7 @@ func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
 				if a.IsNumber() && b.IsNumber() {
 					return Float(a.num - b.num)
 				}
-				return slow(c, a, b)
+				return c.arithSlow(op, a, b, pc)
 			}
 		case bytecode.OpMul:
 			return func(c *tctx) Value {
@@ -77,7 +76,7 @@ func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
 				if a.IsNumber() && b.IsNumber() {
 					return Float(a.num * b.num)
 				}
-				return slow(c, a, b)
+				return c.arithSlow(op, a, b, pc)
 			}
 		case bytecode.OpDiv:
 			return func(c *tctx) Value {
@@ -86,7 +85,7 @@ func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
 				if a.IsNumber() && b.IsNumber() {
 					return Float(a.num / b.num)
 				}
-				return slow(c, a, b)
+				return c.arithSlow(op, a, b, pc)
 			}
 		}
 	case x.local && y.local:
@@ -99,7 +98,7 @@ func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
 				if a.IsNumber() && b.IsNumber() {
 					return Float(a.num + b.num)
 				}
-				return slow(c, a, b)
+				return c.arithSlow(op, a, b, pc)
 			}
 		case bytecode.OpSub:
 			return func(c *tctx) Value {
@@ -108,7 +107,7 @@ func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
 				if a.IsNumber() && b.IsNumber() {
 					return Float(a.num - b.num)
 				}
-				return slow(c, a, b)
+				return c.arithSlow(op, a, b, pc)
 			}
 		case bytecode.OpMul:
 			return func(c *tctx) Value {
@@ -117,7 +116,7 @@ func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
 				if a.IsNumber() && b.IsNumber() {
 					return Float(a.num * b.num)
 				}
-				return slow(c, a, b)
+				return c.arithSlow(op, a, b, pc)
 			}
 		case bytecode.OpDiv:
 			return func(c *tctx) Value {
@@ -126,11 +125,11 @@ func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
 				if a.IsNumber() && b.IsNumber() {
 					return Float(a.num / b.num)
 				}
-				return slow(c, a, b)
+				return c.arithSlow(op, a, b, pc)
 			}
 		}
 	case !x.local && !x.number && y.number:
-		x, y := x.v, y.n
+		x, y := x.tree(), y.n
 		switch op {
 		case bytecode.OpAdd:
 			return func(c *tctx) Value {
@@ -139,7 +138,7 @@ func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
 				if a.IsNumber() {
 					return Float(a.num + b.num)
 				}
-				return slow(c, a, b)
+				return c.arithSlow(op, a, b, pc)
 			}
 		case bytecode.OpSub:
 			return func(c *tctx) Value {
@@ -148,7 +147,7 @@ func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
 				if a.IsNumber() {
 					return Float(a.num - b.num)
 				}
-				return slow(c, a, b)
+				return c.arithSlow(op, a, b, pc)
 			}
 		case bytecode.OpMul:
 			return func(c *tctx) Value {
@@ -157,7 +156,7 @@ func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
 				if a.IsNumber() {
 					return Float(a.num * b.num)
 				}
-				return slow(c, a, b)
+				return c.arithSlow(op, a, b, pc)
 			}
 		case bytecode.OpDiv:
 			return func(c *tctx) Value {
@@ -166,7 +165,7 @@ func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
 				if a.IsNumber() {
 					return Float(a.num / b.num)
 				}
-				return slow(c, a, b)
+				return c.arithSlow(op, a, b, pc)
 			}
 		}
 	case x.local && y.number:
@@ -179,7 +178,7 @@ func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
 				if a.IsNumber() {
 					return Float(a.num + b.num)
 				}
-				return slow(c, a, b)
+				return c.arithSlow(op, a, b, pc)
 			}
 		case bytecode.OpSub:
 			return func(c *tctx) Value {
@@ -188,7 +187,7 @@ func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
 				if a.IsNumber() {
 					return Float(a.num - b.num)
 				}
-				return slow(c, a, b)
+				return c.arithSlow(op, a, b, pc)
 			}
 		case bytecode.OpMul:
 			return func(c *tctx) Value {
@@ -197,7 +196,7 @@ func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
 				if a.IsNumber() {
 					return Float(a.num * b.num)
 				}
-				return slow(c, a, b)
+				return c.arithSlow(op, a, b, pc)
 			}
 		case bytecode.OpDiv:
 			return func(c *tctx) Value {
@@ -206,11 +205,11 @@ func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
 				if a.IsNumber() {
 					return Float(a.num / b.num)
 				}
-				return slow(c, a, b)
+				return c.arithSlow(op, a, b, pc)
 			}
 		}
 	case x.number && !y.local && !y.number:
-		x, y := x.n, y.v
+		x, y := x.n, y.tree()
 		switch op {
 		case bytecode.OpAdd:
 			return func(c *tctx) Value {
@@ -219,7 +218,7 @@ func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
 				if b.IsNumber() {
 					return Float(a.num + b.num)
 				}
-				return slow(c, a, b)
+				return c.arithSlow(op, a, b, pc)
 			}
 		case bytecode.OpSub:
 			return func(c *tctx) Value {
@@ -228,7 +227,7 @@ func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
 				if b.IsNumber() {
 					return Float(a.num - b.num)
 				}
-				return slow(c, a, b)
+				return c.arithSlow(op, a, b, pc)
 			}
 		case bytecode.OpMul:
 			return func(c *tctx) Value {
@@ -237,7 +236,7 @@ func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
 				if b.IsNumber() {
 					return Float(a.num * b.num)
 				}
-				return slow(c, a, b)
+				return c.arithSlow(op, a, b, pc)
 			}
 		case bytecode.OpDiv:
 			return func(c *tctx) Value {
@@ -246,7 +245,7 @@ func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
 				if b.IsNumber() {
 					return Float(a.num / b.num)
 				}
-				return slow(c, a, b)
+				return c.arithSlow(op, a, b, pc)
 			}
 		}
 	case x.number && y.local:
@@ -259,7 +258,7 @@ func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
 				if b.IsNumber() {
 					return Float(a.num + b.num)
 				}
-				return slow(c, a, b)
+				return c.arithSlow(op, a, b, pc)
 			}
 		case bytecode.OpSub:
 			return func(c *tctx) Value {
@@ -268,7 +267,7 @@ func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
 				if b.IsNumber() {
 					return Float(a.num - b.num)
 				}
-				return slow(c, a, b)
+				return c.arithSlow(op, a, b, pc)
 			}
 		case bytecode.OpMul:
 			return func(c *tctx) Value {
@@ -277,7 +276,7 @@ func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
 				if b.IsNumber() {
 					return Float(a.num * b.num)
 				}
-				return slow(c, a, b)
+				return c.arithSlow(op, a, b, pc)
 			}
 		case bytecode.OpDiv:
 			return func(c *tctx) Value {
@@ -286,7 +285,7 @@ func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {
 				if b.IsNumber() {
 					return Float(a.num / b.num)
 				}
-				return slow(c, a, b)
+				return c.arithSlow(op, a, b, pc)
 			}
 		}
 	}
@@ -492,7 +491,7 @@ func cmpJump(op bytecode.Op, x, y tentry, pc, taken, fall int) tnext {
 			}
 		}
 	case x.local && !y.local && !y.upvalue && !y.number:
-		x, y := x.k, y.v
+		x, y := x.k, y.tree()
 		switch op {
 		case bytecode.OpLt:
 			return func(c *tctx) int {
@@ -556,7 +555,7 @@ func cmpJump(op bytecode.Op, x, y tentry, pc, taken, fall int) tnext {
 			}
 		}
 	case !x.local && !x.upvalue && !x.number && y.number:
-		x, y := x.v, y.n
+		x, y := x.tree(), y.n
 		switch op {
 		case bytecode.OpLt:
 			return func(c *tctx) int {
@@ -620,7 +619,7 @@ func cmpJump(op bytecode.Op, x, y tentry, pc, taken, fall int) tnext {
 			}
 		}
 	case !x.local && !x.upvalue && !x.number && y.local:
-		x, y := x.v, y.k
+		x, y := x.tree(), y.k
 		switch op {
 		case bytecode.OpLt:
 			return func(c *tctx) int {
@@ -684,7 +683,7 @@ func cmpJump(op bytecode.Op, x, y tentry, pc, taken, fall int) tnext {
 			}
 		}
 	case !x.local && !x.upvalue && !x.number && y.upvalue:
-		x, y := x.v, y.k
+		x, y := x.tree(), y.k
 		switch op {
 		case bytecode.OpLt:
 			return func(c *tctx) int {
@@ -748,7 +747,7 @@ func cmpJump(op bytecode.Op, x, y tentry, pc, taken, fall int) tnext {
 			}
 		}
 	case !x.local && !x.upvalue && !x.number && !y.local && !y.upvalue && !y.number:
-		x, y := x.v, y.v
+		x, y := x.tree(), y.tree()
 		switch op {
 		case bytecode.OpLt:
 			return func(c *tctx) int {
@@ -947,7 +946,7 @@ func cmpJump(op bytecode.Op, x, y tentry, pc, taken, fall int) tnext {
 // constant, reading a local in place.
 func bitwiseImmOperand(op bytecode.Op, x tentry, k int32, pc int) tval {
 	if !x.local {
-		return bitwiseImmNode(op, x.v, k, pc)
+		return bitwiseImmNode(op, x.tree(), k, pc)
 	}
 	j, kv, n := x.k, Int32(k), uint32(k)&31
 	switch op {
@@ -1000,5 +999,5 @@ func bitwiseImmOperand(op bytecode.Op, x tentry, k int32, pc int) tval {
 			}
 		}
 	}
-	return bitwiseImmNode(op, x.v, k, pc)
+	return bitwiseImmNode(op, x.tree(), k, pc)
 }

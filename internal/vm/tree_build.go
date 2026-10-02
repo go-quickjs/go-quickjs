@@ -8,6 +8,8 @@ import (
 // tentry is a value on the operand stack, as the builder follows it: a tree
 // to evaluate, or the frame's stack slot it is in.
 type tentry struct {
+	// v is the tree, for an entry that is one; tree makes one for the other
+	// kinds, where a node calls it rather than reading it in place.
 	v tval
 	// slot is the stack slot the entry is a read of, which is always its
 	// own position, or -1 for a tree still to be evaluated.
@@ -23,11 +25,41 @@ type tentry struct {
 	this    bool
 }
 
-// tbuilder builds one block of a function's tree.
+// tbuilder builds a function's tree a block at a time, keeping what it grows
+// from block to block.
 type tbuilder struct {
 	fn    *bytecode.Function
 	stack []tentry
 	body  []tstmt
+	// index is the block each instruction begins, and depth each block's
+	// operand stack depth on entry, or -1 before a way into it is built.
+	index, depths []int
+	// succ is the blocks the one being built can go on to.
+	succ []int
+}
+
+// target records a way from the block being built to the one at pc, whose
+// entry depth every way into it must agree on, and reports that block.
+func (b *tbuilder) target(pc, d int) (int, bool) {
+	if pc >= len(b.fn.Code) {
+		return 0, false
+	}
+	s := b.index[pc]
+	if b.depths[s] >= 0 && b.depths[s] != d {
+		return 0, false
+	}
+	b.depths[s] = d
+	b.succ = append(b.succ, s)
+	return s, true
+}
+
+// takeBody is the block's statements, which the builder's own list is then
+// reused for the next block.
+func (b *tbuilder) takeBody() []tstmt {
+	if len(b.body) == 0 {
+		return nil
+	}
+	return append(make([]tstmt, 0, len(b.body)), b.body...)
 }
 
 //go:generate go run ./internal/treegen/cmd
@@ -89,6 +121,7 @@ func buildTree(fn *bytecode.Function) *tree {
 	// end that says so.
 	work := []int{0}
 	done := make([]bool, len(starts))
+	b := &tbuilder{fn: fn, index: index, depths: depth}
 	for len(work) > 0 {
 		bi := work[len(work)-1]
 		work = work[:len(work)-1]
@@ -100,7 +133,7 @@ func buildTree(fn *bytecode.Function) *tree {
 		if bi+1 < len(starts) {
 			end = starts[bi+1]
 		}
-		succ, ok := buildBlock(t, fn, bi, starts[bi], end, depth[bi], index, depth)
+		succ, ok := b.buildBlock(t, bi, starts[bi], end, depth[bi])
 		if !ok {
 			return nil
 		}
@@ -171,80 +204,74 @@ func treeBuilds(op bytecode.Op) bool {
 
 // buildBlock builds the block at bi, which runs code[start:end] from an
 // operand stack depth of entry, and reports the blocks it can go on to.
-func buildBlock(t *tree, fn *bytecode.Function, bi, start, end, entry int, index, depth []int) ([]int, bool) {
-	b := &tbuilder{fn: fn}
+func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) {
+	fn := b.fn
+	b.stack, b.body, b.succ = b.stack[:0], b.body[:0], b.succ[:0]
 	for d := 0; d < entry; d++ {
 		b.pushSlot(d)
 	}
-	// target records a successor's entry depth, which every way into it
-	// must agree on.
-	var succ []int
-	target := func(pc, d int) (int, bool) {
-		if pc >= len(fn.Code) {
-			return 0, false
-		}
-		s := index[pc]
-		if depth[s] >= 0 && depth[s] != d {
-			return 0, false
-		}
-		depth[s] = d
-		succ = append(succ, s)
-		return s, true
-	}
 	code := fn.Code
-	for pc := start; pc < end; pc++ {
+	// The ends below capture pc, so it is a copy that never changes: a
+	// closure takes such a variable's value, where one it could see change
+	// would be moved to the heap at every instruction.
+	for i := start; i < end; i++ {
+		pc := i
 		in := code[pc]
 		switch in.Op {
 		case bytecode.OpJump:
 			if !b.spill() {
 				return nil, false
 			}
-			s, ok := target(int(in.A), len(b.stack))
+			s, ok := b.target(int(in.A), len(b.stack))
 			if !ok {
 				return nil, false
 			}
 			d := len(b.stack)
 			if int(in.A) <= pc {
-				t.blocks[bi] = tblock{body: b.body, next: func(c *tctx) int { c.backEdge(pc, d); return s },
+				t.blocks[bi] = tblock{body: b.takeBody(), next: func(c *tctx) int { c.backEdge(pc, d); return s },
 					jump: s + 1, back: true, pc: pc, depth: d}
 			} else {
-				t.blocks[bi] = tblock{body: b.body, next: func(*tctx) int { return s }, jump: s + 1}
+				t.blocks[bi] = tblock{body: b.takeBody(), next: func(*tctx) int { return s }, jump: s + 1}
 			}
-			return succ, true
+			return b.succ, true
 		case bytecode.OpJumpIfFalse, bytecode.OpJumpIfTrue, bytecode.OpJumpIfCmpFalse:
-			var cond func(c *tctx) bool
 			var x, y tentry
-			switch in.Op {
-			case bytecode.OpJumpIfCmpFalse:
+			if in.Op == bytecode.OpJumpIfCmpFalse {
 				y, x = b.pop(), b.pop()
-				test := compareNode(bytecode.Op(in.B), x.v, y.v, pc)
-				cond = func(c *tctx) bool { return !test(c) }
-			case bytecode.OpJumpIfFalse:
+			} else {
 				x = b.pop()
-				v := x.v
-				cond = func(c *tctx) bool { return !truthy(v(c)) }
-			default:
-				x = b.pop()
-				v := x.v
-				cond = func(c *tctx) bool { return truthy(v(c)) }
 			}
 			if !b.spill() {
 				return nil, false
 			}
 			d := len(b.stack)
-			taken, ok := target(int(in.A), d)
+			taken, ok := b.target(int(in.A), d)
 			if !ok {
 				return nil, false
 			}
-			fall, ok := target(pc+1, d)
+			fall, ok := b.target(pc+1, d)
 			if !ok {
 				return nil, false
+			}
+			// cond is the jump's test as a tree, for an end that calls one.
+			cond := func() func(c *tctx) bool {
+				switch in.Op {
+				case bytecode.OpJumpIfCmpFalse:
+					test := compareNode(bytecode.Op(in.B), x.tree(), y.tree(), pc)
+					return func(c *tctx) bool { return !test(c) }
+				case bytecode.OpJumpIfFalse:
+					v := x.tree()
+					return func(c *tctx) bool { return !truthy(v(c)) }
+				}
+				v := x.tree()
+				return func(c *tctx) bool { return truthy(v(c)) }
 			}
 			// A forward jump's test is the block's end itself, rather than
 			// a condition the end calls.
 			var next tnext
-			switch v := x.v; {
+			switch {
 			case int(in.A) <= pc:
+				cond := cond()
 				next = func(c *tctx) int {
 					if cond(c) {
 						c.backEdge(pc, d)
@@ -255,6 +282,7 @@ func buildBlock(t *tree, fn *bytecode.Function, bi, start, end, entry int, index
 			case in.Op == bytecode.OpJumpIfCmpFalse:
 				next = cmpJump(bytecode.Op(in.B), x, y, pc, taken, fall)
 			case in.Op == bytecode.OpJumpIfFalse:
+				v := x.tree()
 				next = func(c *tctx) int {
 					if truthy(v(c)) {
 						return fall
@@ -262,6 +290,7 @@ func buildBlock(t *tree, fn *bytecode.Function, bi, start, end, entry int, index
 					return taken
 				}
 			default:
+				v := x.tree()
 				next = func(c *tctx) int {
 					if truthy(v(c)) {
 						return taken
@@ -270,6 +299,7 @@ func buildBlock(t *tree, fn *bytecode.Function, bi, start, end, entry int, index
 				}
 			}
 			if next == nil {
+				cond := cond()
 				next = func(c *tctx) int {
 					if cond(c) {
 						return taken
@@ -277,8 +307,8 @@ func buildBlock(t *tree, fn *bytecode.Function, bi, start, end, entry int, index
 					return fall
 				}
 			}
-			t.blocks[bi] = tblock{body: b.body, next: next}
-			return succ, true
+			t.blocks[bi] = tblock{body: b.takeBody(), next: next}
+			return b.succ, true
 		case bytecode.OpJumpIfFalseKeep, bytecode.OpJumpIfTrueKeep:
 			// x && y and x || y as values: x stays on the stack where the
 			// jump is taken, and goes where it is not, so it is in its slot
@@ -287,17 +317,17 @@ func buildBlock(t *tree, fn *bytecode.Function, bi, start, end, entry int, index
 				return nil, false
 			}
 			d := b.depth()
-			taken, ok := target(int(in.A), d)
+			taken, ok := b.target(int(in.A), d)
 			if !ok {
 				return nil, false
 			}
-			fall, ok := target(pc+1, d-1)
+			fall, ok := b.target(pc+1, d-1)
 			if !ok {
 				return nil, false
 			}
 			want := in.Op == bytecode.OpJumpIfTrueKeep
 			back := int(in.A) <= pc
-			t.blocks[bi] = tblock{body: b.body, next: func(c *tctx) int {
+			t.blocks[bi] = tblock{body: b.takeBody(), next: func(c *tctx) int {
 				if truthy(c.stack[d-1]) == want {
 					if back {
 						c.backEdge(pc, d)
@@ -306,29 +336,29 @@ func buildBlock(t *tree, fn *bytecode.Function, bi, start, end, entry int, index
 				}
 				return fall
 			}}
-			return succ, true
+			return b.succ, true
 		case bytecode.OpThrow:
-			v := b.pop().v
+			v := b.pop().tree()
 			if !b.spill() {
 				return nil, false
 			}
-			t.blocks[bi] = tblock{body: b.body, next: func(c *tctx) int {
+			t.blocks[bi] = tblock{body: b.takeBody(), next: func(c *tctx) int {
 				e := v(c)
 				c.at(pc)
 				c.throw(c.r.throw(e))
 				return -1
 			}}
-			return succ, true
+			return b.succ, true
 		case bytecode.OpReturn, bytecode.OpReturnUndef:
 			v := tval(func(*tctx) Value { return Undefined })
 			if in.Op == bytecode.OpReturn {
-				v = b.pop().v
+				v = b.pop().tree()
 			}
 			if !b.spill() {
 				return nil, false
 			}
 			d := len(b.stack)
-			t.blocks[bi] = tblock{body: b.body, next: func(c *tctx) int {
+			t.blocks[bi] = tblock{body: b.takeBody(), next: func(c *tctx) int {
 				res := v(c)
 				if d > 0 {
 					c.at(pc)
@@ -346,24 +376,24 @@ func buildBlock(t *tree, fn *bytecode.Function, bi, start, end, entry int, index
 				c.ret = res
 				return -1
 			}}
-			return succ, true
+			return b.succ, true
 		}
 		skip, ok := b.op(pc, in, code, pc+1 < end)
 		if !ok {
 			return nil, false
 		}
-		pc += skip
+		i += skip
 	}
 	// The block runs on into the next.
 	if !b.spill() {
 		return nil, false
 	}
-	s, ok := target(end, len(b.stack))
+	s, ok := b.target(end, len(b.stack))
 	if !ok {
 		return nil, false
 	}
-	t.blocks[bi] = tblock{body: b.body, next: func(*tctx) int { return s }}
-	return succ, true
+	t.blocks[bi] = tblock{body: b.takeBody(), next: func(*tctx) int { return s }}
+	return b.succ, true
 }
 
 func (b *tbuilder) push(v tval)        { b.stack = append(b.stack, tentry{v: v, slot: -1}) }
@@ -371,24 +401,46 @@ func (b *tbuilder) pushEntry(e tentry) { b.stack = append(b.stack, e) }
 
 // localEntry is a read of local k.
 func localEntry(k uint32) tentry {
-	return tentry{v: func(c *tctx) Value { return c.locals[k] }, slot: -1, local: true, k: k}
+	return tentry{slot: -1, local: true, k: k}
 }
 
 // upvalueEntry is a read of upvalue k.
 func upvalueEntry(k uint32) tentry {
-	return tentry{v: func(c *tctx) Value { return c.cl.upvalues[k].get() }, slot: -1, upvalue: true, k: k}
+	return tentry{slot: -1, upvalue: true, k: k}
 }
 
 // thisEntry is a read of this, in a function whose this is never a
 // binding: one that is neither a derived constructor, whose this is unbound
 // until super() binds it, nor an arrow, which may share one.
 func thisEntry() tentry {
-	return tentry{v: func(c *tctx) Value { return c.f.this }, slot: -1, this: true}
+	return tentry{slot: -1, this: true}
 }
 
 // numberEntry is the number n.
 func numberEntry(n Value) tentry {
-	return tentry{v: func(*tctx) Value { return n }, slot: -1, number: true, n: n}
+	return tentry{slot: -1, number: true, n: n}
+}
+
+// tree is the entry as a tree to call. Only an entry that is a tree has one
+// already: one a node reads in place needs none, and most never get one.
+func (e tentry) tree() tval {
+	switch {
+	case e.v != nil:
+		return e.v
+	case e.local:
+		k := e.k
+		return func(c *tctx) Value { return c.locals[k] }
+	case e.upvalue:
+		k := e.k
+		return func(c *tctx) Value { return c.cl.upvalues[k].get() }
+	case e.number:
+		n := e.n
+		return func(*tctx) Value { return n }
+	case e.this:
+		return func(c *tctx) Value { return c.f.this }
+	}
+	d := e.slot
+	return func(c *tctx) Value { return c.stack[d] }
 }
 func (b *tbuilder) pop() tentry {
 	e := b.stack[len(b.stack)-1]
@@ -397,7 +449,7 @@ func (b *tbuilder) pop() tentry {
 }
 func (b *tbuilder) depth() int { return len(b.stack) }
 func (b *tbuilder) pushSlot(d int) {
-	b.stack = append(b.stack, tentry{v: func(c *tctx) Value { return c.stack[d] }, slot: d})
+	b.stack = append(b.stack, tentry{slot: d})
 }
 
 // spill evaluates every entry still a tree into its stack slot, in order,
@@ -405,40 +457,55 @@ func (b *tbuilder) pushSlot(d int) {
 // read. Every entry is then a read of its slot. It reports false where it
 // cannot, which it always can.
 func (b *tbuilder) spill() bool {
-	var pos []int
-	var vals []tval
-	for i, e := range b.stack {
-		if e.slot != i {
-			pos = append(pos, i)
-			vals = append(vals, e.v)
-		}
-	}
 	// Each is written as soon as it is evaluated. A tree at a position is
 	// made of what was pushed above it, so it reads only the slots from its
 	// own up, and none of them is written before it is evaluated.
-	switch len(pos) {
+	n := 0
+	var p, q, o int
+	var v, w, u tval
+	for i := range b.stack {
+		if e := b.stack[i]; e.slot != i {
+			switch n {
+			case 0:
+				p, v = i, e.tree()
+			case 1:
+				q, w = i, e.tree()
+			case 2:
+				o, u = i, e.tree()
+			}
+			n++
+		}
+	}
+	switch n {
 	case 0:
 		return true
 	case 1:
-		p, v := pos[0], vals[0]
 		b.body = append(b.body, func(c *tctx) { c.stack[p] = v(c) })
 	case 2:
-		p, v, q, w := pos[0], vals[0], pos[1], vals[1]
 		b.body = append(b.body, func(c *tctx) { c.stack[p] = v(c); c.stack[q] = w(c) })
 	case 3:
-		p, v, q, w, o, u := pos[0], vals[0], pos[1], vals[1], pos[2], vals[2]
 		b.body = append(b.body, func(c *tctx) { c.stack[p] = v(c); c.stack[q] = w(c); c.stack[o] = u(c) })
 	default:
+		var pos []int
+		vals := []tval{v, w, u}
+		for i, e := range b.stack {
+			if e.slot != i {
+				pos = append(pos, i)
+				if len(pos) > 3 {
+					vals = append(vals, e.tree())
+				}
+			}
+		}
 		b.body = append(b.body, func(c *tctx) {
 			for i, v := range vals {
 				c.stack[pos[i]] = v(c)
 			}
 		})
 	}
-	for _, p := range pos {
-		b.stack[p] = tentry{}
-		d := p
-		b.stack[p] = tentry{v: func(c *tctx) Value { return c.stack[d] }, slot: d}
+	for i := range b.stack {
+		if b.stack[i].slot != i {
+			b.stack[i] = tentry{slot: i}
+		}
 	}
 	return true
 }
@@ -493,19 +560,19 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 	case bytecode.OpDrop:
 		e := b.pop()
 		if e.slot < 0 {
-			v := e.v
+			v := e.tree()
 			return 0, b.stmt(func(c *tctx) { v(c) })
 		}
 	case bytecode.OpInsert2, bytecode.OpInsert3:
 		if in.Op == bytecode.OpInsert3 && more && code[pc+1].Op == bytecode.OpSetIndex {
 			// a[k] = v as an expression: the store, and its value.
 			val, key, obj := b.pop(), b.pop(), b.pop()
-			b.push(setIndexOperands(obj, key, val.v, pc+1, fn.Strict))
+			b.push(setIndexOperands(obj, key, val.tree(), pc+1, fn.Strict))
 			return 1, true
 		}
 		if in.Op == bytecode.OpInsert2 && more && code[pc+1].Op == bytecode.OpSetProp {
 			val, obj := b.pop(), b.pop()
-			b.push(setPropOperand(obj, val.v, code[pc+1], pc+1, fn.Strict))
+			b.push(setPropOperand(obj, val.tree(), code[pc+1], pc+1, fn.Strict))
 			return 1, true
 		}
 		if !b.spill() {
@@ -539,10 +606,10 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		b.pushEntry(localEntry(in.A))
 		b.pushEntry(localEntry(in.B))
 	case bytecode.OpSetLocal, bytecode.OpInitLocal:
-		k, v := in.A, b.pop().v
+		k, v := in.A, b.pop().tree()
 		return 0, b.stmt(func(c *tctx) { c.locals[k] = v(c) })
 	case bytecode.OpSetLocalGet:
-		k, j, v := in.A, in.B, b.pop().v
+		k, j, v := in.A, in.B, b.pop().tree()
 		if !b.stmt(func(c *tctx) { c.locals[k] = v(c) }) {
 			return 0, false
 		}
@@ -595,21 +662,21 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 	case bytecode.OpGetUpvalue:
 		b.pushEntry(upvalueEntry(in.A))
 	case bytecode.OpSetUpvalue:
-		k, v := in.A, b.pop().v
+		k, v := in.A, b.pop().tree()
 		return 0, b.stmt(func(c *tctx) { c.cl.upvalues[k].set(v(c)) })
 	case bytecode.OpAdd, bytecode.OpSub, bytecode.OpMul, bytecode.OpDiv, bytecode.OpMod:
 		y, x := b.pop(), b.pop()
 		b.push(arithEntries(in.Op, x, y, pc))
 	case bytecode.OpBitAnd, bytecode.OpBitOr, bytecode.OpBitXor, bytecode.OpShl, bytecode.OpShr, bytecode.OpUShr:
 		y, x := b.pop(), b.pop()
-		b.push(bitwiseNode(in.Op, x.v, y.v, pc))
+		b.push(bitwiseNode(in.Op, x.tree(), y.tree(), pc))
 	case bytecode.OpLt, bytecode.OpLe, bytecode.OpGt, bytecode.OpGe,
 		bytecode.OpEq, bytecode.OpNe, bytecode.OpStrictEq, bytecode.OpStrictNe:
 		y, x := b.pop(), b.pop()
-		test := compareNode(in.Op, x.v, y.v, pc)
+		test := compareNode(in.Op, x.tree(), y.tree(), pc)
 		b.push(func(c *tctx) Value { return Bool(test(c)) })
 	case bytecode.OpNeg:
-		x := b.pop().v
+		x := b.pop().tree()
 		b.push(func(c *tctx) Value {
 			a := x(c)
 			if a.IsNumber() {
@@ -623,7 +690,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			return v
 		})
 	case bytecode.OpInc, bytecode.OpDec:
-		x := b.pop().v
+		x := b.pop().tree()
 		delta := 1.0
 		if in.Op == bytecode.OpDec {
 			delta = -1
@@ -637,7 +704,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			return c.step(a, delta)
 		})
 	case bytecode.OpToNumeric:
-		x := b.pop().v
+		x := b.pop().tree()
 		b.push(func(c *tctx) Value {
 			a := x(c)
 			if a.IsNumber() {
@@ -651,7 +718,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			return n
 		})
 	case bytecode.OpInstanceOf:
-		y, x := b.pop().v, b.pop().v
+		y, x := b.pop().tree(), b.pop().tree()
 		site := in.B
 		b.push(func(c *tctx) Value {
 			o, k := x(c), y(c)
@@ -663,7 +730,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			return Bool(ok)
 		})
 	case bytecode.OpNot:
-		x := b.pop().v
+		x := b.pop().tree()
 		b.push(func(c *tctx) Value { return Bool(!truthy(x(c))) })
 	case bytecode.OpBinImm:
 		x := b.pop()
@@ -690,7 +757,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		b.push(getLocalIndexUpdateNode(in, pc))
 	case bytecode.OpSetIndex:
 		val, key, obj := b.pop(), b.pop(), b.pop()
-		return 0, b.stmt(setIndexStmt(obj, key, val.v, pc, fn.Strict))
+		return 0, b.stmt(setIndexStmt(obj, key, val.tree(), pc, fn.Strict))
 	case bytecode.OpGetProp:
 		b.push(getPropOperand(b.pop(), in, pc))
 	case bytecode.OpGetPropThis:
@@ -703,7 +770,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		b.push(getPropThisNode(d, in, pc))
 	case bytecode.OpSetProp:
 		val, obj := b.pop(), b.pop()
-		return 0, b.stmt(setPropStmt(obj, val.v, in, pc, fn.Strict))
+		return 0, b.stmt(setPropStmt(obj, val.tree(), in, pc, fn.Strict))
 	case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew:
 		// The callee and the arguments go to their slots, which is where a
 		// call takes its arguments from.
@@ -745,7 +812,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			return True
 		})
 	case bytecode.OpAssertResolved:
-		v, found, name := b.pop().v, b.pop().v, in.A
+		v, found, name := b.pop().tree(), b.pop().tree(), in.A
 		b.push(func(c *tctx) Value {
 			ok := found(c)
 			x := v(c)
@@ -760,7 +827,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 	case bytecode.OpPutLocal:
 		// The value is stored and stays: it is stored when it is evaluated,
 		// which is in its turn.
-		k, v := in.A, b.pop().v
+		k, v := in.A, b.pop().tree()
 		b.push(func(c *tctx) Value { x := v(c); c.locals[k] = x; return x })
 	case bytecode.OpDup2, bytecode.OpSwap, bytecode.OpRot3, bytecode.OpRot4:
 		if !b.spill() {
@@ -788,7 +855,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 	case bytecode.OpToPropertyKey, bytecode.OpToPropertyKeyOfBase:
 		// The object beneath the key is looked at first, and stays: it is
 		// read from its slot.
-		key := b.pop().v
+		key := b.pop().tree()
 		if !b.spill() {
 			return 0, false
 		}
@@ -824,7 +891,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			}
 		})
 	case bytecode.OpBitNot:
-		x := b.pop().v
+		x := b.pop().tree()
 		b.push(func(c *tctx) Value {
 			v := x(c)
 			if !v.IsNumber() {
@@ -867,7 +934,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 	case bytecode.OpDefineField:
 		// The object stays where it is, beneath the value: it is defined on
 		// in its slot.
-		val := b.pop().v
+		val := b.pop().tree()
 		if !b.spill() {
 			return 0, false
 		}
@@ -891,7 +958,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			}
 		})
 	case bytecode.OpGetLength:
-		x := b.pop().v
+		x := b.pop().tree()
 		b.push(func(c *tctx) Value {
 			o := x(c)
 			c.at(pc)
@@ -902,7 +969,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			return v
 		})
 	case bytecode.OpTypeOf:
-		x := b.pop().v
+		x := b.pop().tree()
 		b.push(func(c *tctx) Value { return Str(c.r.typeofString(x(c))) })
 	case bytecode.OpClosure:
 		k := in.A
@@ -916,7 +983,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			return v
 		})
 	case bytecode.OpSetGlobal:
-		v := b.pop().v
+		v := b.pop().tree()
 		return 0, b.stmt(func(c *tctx) {
 			if err := c.r.setGlobalAt(c, in, v(c), pc); err != nil {
 				c.throw(err)
@@ -948,7 +1015,6 @@ func (c *tctx) step(v Value, delta float64) Value {
 // binaryNode is a binary operator over two trees, with the interpreter's
 // fast path for two numbers.
 func binaryNode(op bytecode.Op, x, y tval, pc int) tval {
-	slow := arithSlow(op, pc)
 	switch op {
 	case bytecode.OpAdd:
 		return func(c *tctx) Value {
@@ -956,7 +1022,7 @@ func binaryNode(op bytecode.Op, x, y tval, pc int) tval {
 			if a.IsNumber() && b.IsNumber() {
 				return Float(a.num + b.num)
 			}
-			return slow(c, a, b)
+			return c.arithSlow(op, a, b, pc)
 		}
 	case bytecode.OpSub:
 		return func(c *tctx) Value {
@@ -964,7 +1030,7 @@ func binaryNode(op bytecode.Op, x, y tval, pc int) tval {
 			if a.IsNumber() && b.IsNumber() {
 				return Float(a.num - b.num)
 			}
-			return slow(c, a, b)
+			return c.arithSlow(op, a, b, pc)
 		}
 	case bytecode.OpMul:
 		return func(c *tctx) Value {
@@ -972,7 +1038,7 @@ func binaryNode(op bytecode.Op, x, y tval, pc int) tval {
 			if a.IsNumber() && b.IsNumber() {
 				return Float(a.num * b.num)
 			}
-			return slow(c, a, b)
+			return c.arithSlow(op, a, b, pc)
 		}
 	case bytecode.OpDiv:
 		return func(c *tctx) Value {
@@ -980,7 +1046,7 @@ func binaryNode(op bytecode.Op, x, y tval, pc int) tval {
 			if a.IsNumber() && b.IsNumber() {
 				return Float(a.num / b.num)
 			}
-			return slow(c, a, b)
+			return c.arithSlow(op, a, b, pc)
 		}
 	case bytecode.OpMod:
 		return func(c *tctx) Value {
@@ -988,7 +1054,7 @@ func binaryNode(op bytecode.Op, x, y tval, pc int) tval {
 			if a.IsNumber() && b.IsNumber() {
 				return Float(numericOp(op, a.num, b.num))
 			}
-			return slow(c, a, b)
+			return c.arithSlow(op, a, b, pc)
 		}
 	}
 	return bitwiseNode(op, x, y, pc)
@@ -1132,22 +1198,20 @@ func bitwiseImmNode(op bytecode.Op, x tval, k int32, pc int) tval {
 }
 
 // arithSlow is an arithmetic operator on what is not two numbers.
-func arithSlow(op bytecode.Op, pc int) func(c *tctx, a, b Value) Value {
-	return func(c *tctx, a, b Value) Value {
-		c.at(pc)
-		var v Value
-		var err error
-		switch op {
-		case bytecode.OpAdd:
-			v, err = c.r.add(a, b)
-		default:
-			v, err = c.r.arith(op, a, b)
-		}
-		if err != nil {
-			c.throw(err)
-		}
-		return v
+func (c *tctx) arithSlow(op bytecode.Op, a, b Value, pc int) Value {
+	c.at(pc)
+	var v Value
+	var err error
+	switch op {
+	case bytecode.OpAdd:
+		v, err = c.r.add(a, b)
+	default:
+		v, err = c.r.arith(op, a, b)
 	}
+	if err != nil {
+		c.throw(err)
+	}
+	return v
 }
 
 // arithEntries is an arithmetic operator over two entries.
@@ -1155,7 +1219,7 @@ func arithEntries(op bytecode.Op, x, y tentry, pc int) tval {
 	if v := arithOperands(op, x, y, pc); v != nil {
 		return v
 	}
-	return binaryNode(op, x.v, y.v, pc)
+	return binaryNode(op, x.tree(), y.tree(), pc)
 }
 
 // compareNode is a comparison over two trees, as a condition.
@@ -1359,7 +1423,7 @@ func getPropOperand(obj tentry, in bytecode.Instr, pc int) tval {
 			return c.getPropSlow(o, name, site, pc)
 		}
 	}
-	x := obj.v
+	x := obj.tree()
 	return func(c *tctx) Value {
 		o := x(c)
 		if o.IsObject() {
@@ -1428,7 +1492,7 @@ func setPropOperand(obj tentry, val tval, in bytecode.Instr, pc int, strict bool
 			return v
 		}
 	}
-	x := obj.v
+	x := obj.tree()
 	return func(c *tctx) Value {
 		o := x(c)
 		v := val(c)
@@ -1452,7 +1516,7 @@ func setPropStmt(obj tentry, val tval, in bytecode.Instr, pc int, strict bool) t
 			c.setProp(o, val(c), name, site, pc, strict)
 		}
 	}
-	x := obj.v
+	x := obj.tree()
 	return func(c *tctx) {
 		o := x(c)
 		c.setProp(o, val(c), name, site, pc, strict)
@@ -1519,7 +1583,7 @@ func getIndexOperands(obj, key tentry, pc int) tval {
 			return c.getIndexSlow(o, k, pc)
 		}
 	case obj.local:
-		key := key.v
+		key := key.tree()
 		return func(c *tctx) Value {
 			o := c.locals[o]
 			k := key(c)
@@ -1529,7 +1593,7 @@ func getIndexOperands(obj, key tentry, pc int) tval {
 			return c.getIndexSlow(o, k, pc)
 		}
 	}
-	return getIndexNode(obj.v, key.v, pc)
+	return getIndexNode(obj.tree(), key.tree(), pc)
 }
 
 // setIndexOperands is obj[key] = val, and gives val, reading a local object
@@ -1546,7 +1610,7 @@ func setIndexOperands(obj, key tentry, val tval, pc int, strict bool) tval {
 			return c.setIndexSlow(o, k, v, pc, strict)
 		}
 	case obj.local:
-		key := key.v
+		key := key.tree()
 		return func(c *tctx) Value {
 			o := c.locals[o]
 			k := key(c)
@@ -1557,7 +1621,7 @@ func setIndexOperands(obj, key tentry, val tval, pc int, strict bool) tval {
 			return c.setIndexSlow(o, k, v, pc, strict)
 		}
 	}
-	return setIndexNode(obj.v, key.v, val, pc, strict)
+	return setIndexNode(obj.tree(), key.tree(), val, pc, strict)
 }
 
 // setIndexStmt is obj[key] = val as a statement.
@@ -1571,7 +1635,7 @@ func setIndexStmt(obj, key tentry, val tval, pc int, strict bool) tstmt {
 			}
 		}
 	case obj.local:
-		key := key.v
+		key := key.tree()
 		return func(c *tctx) {
 			o := c.locals[o]
 			k := key(c)
@@ -1580,7 +1644,7 @@ func setIndexStmt(obj, key tentry, val tval, pc int, strict bool) tstmt {
 			}
 		}
 	}
-	x, y := obj.v, key.v
+	x, y := obj.tree(), key.tree()
 	return func(c *tctx) {
 		o, k := x(c), y(c)
 		if v := val(c); !setElem(o, k, v) {

@@ -47,7 +47,7 @@ func (k kind) capture(e string) string {
 	case number:
 		return e + ".n"
 	}
-	return e + ".v"
+	return e + ".tree()"
 }
 
 // read is the node's read of the operand it captured as v.
@@ -83,7 +83,6 @@ func Generate() ([]byte, error) {
 	w("// arithOperands is an arithmetic operator over two entries, reading a local")
 	w("// or a number in place, or nil where there is no node for the pairing.")
 	w("func arithOperands(op bytecode.Op, x, y tentry, pc int) tval {")
-	w("	slow := arithSlow(op, pc)")
 	w("	switch {")
 	arith := []op{{"OpAdd", "+"}, {"OpSub", "-"}, {"OpMul", "*"}, {"OpDiv", "/"}}
 	asTree := func(k kind, e string) string {
@@ -107,7 +106,7 @@ func Generate() ([]byte, error) {
 			w("				if %s {", numberTests(p))
 			w("					return Float(a.num %s b.num)", o.expr)
 			w("				}")
-			w("				return slow(c, a, b)")
+			w("				return c.arithSlow(op, a, b, pc)")
 			w("			}")
 		}
 		w("		}")
@@ -158,7 +157,7 @@ func Generate() ([]byte, error) {
 	w("// constant, reading a local in place.")
 	w("func bitwiseImmOperand(op bytecode.Op, x tentry, k int32, pc int) tval {")
 	w("	if !x.local {")
-	w("		return bitwiseImmNode(op, x.v, k, pc)")
+	w("		return bitwiseImmNode(op, x.tree(), k, pc)")
 	w("	}")
 	w("	j, kv, n := x.k, Int32(k), uint32(k)&31")
 	w("	switch op {")
@@ -180,7 +179,7 @@ func Generate() ([]byte, error) {
 		w("		}")
 	}
 	w("	}")
-	w("	return bitwiseImmNode(op, x.v, k, pc)")
+	w("	return bitwiseImmNode(op, x.tree(), k, pc)")
 	w("}")
 
 	return format.Source(b.Bytes())
