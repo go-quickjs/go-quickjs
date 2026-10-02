@@ -24,6 +24,12 @@ var treeScripts = []string{
 	     i < y, i <= y, i > y, i >= y, i == y, i != y, i === y, i !== y, 1 / -0 * i, i % 0) } return r.join() } f(5)`,
 	`function f() { var r = []; for (var i = 0; i < 4; i++) { var x = 2147483647 + i, y = -2147483648 - i;
 	   r.push(x | 0, y | 0, x >>> 0, y >>> 0, x << 1, y >> 33, x & y, ~~x, x ^ -1, 1e21 | 0, NaN | 0) } return r.join() } f()`,
+	// == and != of two numbers, as a value and ending a block: NaN, 0 and
+	// -0, infinities, and a number beside a string, a boolean, null and an
+	// object, which are not two numbers.
+	`function f(a, b) { var r = []; for (var i = 0; i < 1; i++) { r.push(a == b, a != b); if (a == b) r.push("eq"); if (a != b) r.push("ne") } return r.join("") }
+	 var vals = [0, -0, 1, NaN, Infinity, -Infinity, "1", true, null, { valueOf() { return 1 } }], out = [];
+	 for (var x of vals) for (var y of vals) out.push(f(x, y)); out.join(" ")`,
 	// Strings, objects with valueOf, and the order they are converted in.
 	`function f() { var log = [], s = ""; var o = { valueOf() { log.push("v" + s.length); return 2 } };
 	   for (var i = 0; i < 3; i++) { s = s + i + "-"; var t = o * i + o - i / o; log.push(t, "a" < "b" + i, "10" < 9 + i, o > i) }

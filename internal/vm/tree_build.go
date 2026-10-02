@@ -1279,6 +1279,10 @@ func compareNode(op bytecode.Op, x, y tval, pc int) func(c *tctx) bool {
 		want := op == bytecode.OpEq
 		return func(c *tctx) bool {
 			a, b := x(c), y(c)
+			if a.IsNumber() && b.IsNumber() {
+				// Two numbers are loosely equal as floats are.
+				return (a.num == b.num) == want
+			}
 			c.at(pc)
 			eq, err := c.r.looseEquals(a, b)
 			if err != nil {
@@ -1848,6 +1852,9 @@ func eqJump(op bytecode.Op, x, y tentry, pc, taken, fall int) tnext {
 	}
 	return func(c *tctx) int {
 		l, r := a(c), b(c)
+		if l.IsNumber() && r.IsNumber() {
+			return end(l.num == r.num)
+		}
 		c.at(pc)
 		eq, err := c.r.looseEquals(l, r)
 		if err != nil {
