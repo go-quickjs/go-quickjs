@@ -1,8 +1,10 @@
 package wtf8
 
 import (
+	"math/rand"
 	"strings"
 	"testing"
+	"unicode/utf16"
 	"unicode/utf8"
 )
 
@@ -238,5 +240,40 @@ func BenchmarkCountASCII(b *testing.B) {
 	b.SetBytes(int64(len(s)))
 	for b.Loop() {
 		Count(s)
+	}
+}
+
+// FromUTF16ASCII measures its text before writing it, and writes the common
+// lengths out by hand. Both must give what encoding unit by unit gives, for
+// every kind of unit: ASCII, two and three bytes, a pair, either half alone,
+// and a pair split by the end of the slice.
+func TestFromUTF16MatchesUnitByUnit(t *testing.T) {
+	ref := func(u []uint16) string {
+		var buf []byte
+		for i := 0; i < len(u); i++ {
+			c := rune(u[i])
+			if c >= surrHighMin && c <= surrHighMax && i+1 < len(u) {
+				if lo := rune(u[i+1]); lo >= surrLowMin && lo <= surrLowMax {
+					buf = utf8.AppendRune(buf, utf16.DecodeRune(c, lo))
+					i++
+					continue
+				}
+			}
+			buf = AppendRune(buf, c)
+		}
+		return string(buf)
+	}
+	units := []uint16{0, 'a', 0x7F, 0x80, 0x7FF, 0x800, 0xD7FF, 0xD800, 0xDBFF, 0xDC00, 0xDFFF, 0xE000, 0xFFFF}
+	rng := rand.New(rand.NewSource(1))
+	for n := 0; n < 20000; n++ {
+		u := make([]uint16, rng.Intn(12))
+		for i := range u {
+			u[i] = units[rng.Intn(len(units))]
+		}
+		want := ref(u)
+		got, ascii := FromUTF16ASCII(u)
+		if got != want || ascii != IsASCII(want) || FromUTF16(u) != want {
+			t.Fatalf("%x: got %q (ascii %v), want %q", u, got, ascii, want)
+		}
 	}
 }

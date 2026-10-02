@@ -621,8 +621,8 @@ func (s *String) unitSlice(units []uint16, i, j int) string {
 // yields a lone surrogate, so the encoder must preserve one rather than
 // substituting U+FFFD.
 func fromUnits(u []uint16) *String {
-	s := wtf8.FromUTF16(u)
-	out := &String{s: s, length: len(u), ascii: wtf8.IsASCII(s)}
+	s, ascii := wtf8.FromUTF16ASCII(u)
+	out := &String{s: s, length: len(u), ascii: ascii}
 	if !out.ascii {
 		// Which halves are unpaired is what a concatenation looks at, so a
 		// string built here has to know as much about itself as one built by

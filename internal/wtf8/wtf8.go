@@ -23,6 +23,7 @@ package wtf8
 import (
 	"unicode/utf16"
 	"unicode/utf8"
+	"unsafe"
 )
 
 const (
@@ -137,19 +138,60 @@ func ToUTF16(s string) []uint16 {
 // built from well-formed halves is ordinary UTF-8; an unpaired half is encoded
 // on its own rather than replaced.
 func FromUTF16(u []uint16) string {
-	buf := make([]byte, 0, len(u))
+	s, _ := FromUTF16ASCII(u)
+	return s
+}
+
+// FromUTF16ASCII is FromUTF16, and reports whether every code unit is ASCII.
+//
+// The text's length is measured first, so that it is written once into room
+// of its size, which becomes the string without being copied.
+func FromUTF16ASCII(u []uint16) (string, bool) {
+	n, ascii := 0, true
+	for i := 0; i < len(u); i++ {
+		switch c := rune(u[i]); {
+		case c < utf8.RuneSelf:
+			n++
+		case c < 0x800:
+			n += 2
+			ascii = false
+		case c >= surrHighMin && c <= surrHighMax && i+1 < len(u) &&
+			rune(u[i+1]) >= surrLowMin && rune(u[i+1]) <= surrLowMax:
+			n += 4
+			i++
+			ascii = false
+		default:
+			n += 3
+			ascii = false
+		}
+	}
+	if n == 0 {
+		return "", true
+	}
+	buf := make([]byte, 0, n)
+	if ascii {
+		for _, c := range u {
+			buf = append(buf, byte(c))
+		}
+		return unsafe.String(unsafe.SliceData(buf), n), true
+	}
 	for i := 0; i < len(u); i++ {
 		c := rune(u[i])
-		if c >= surrHighMin && c <= surrHighMax && i+1 < len(u) {
-			if lo := rune(u[i+1]); lo >= surrLowMin && lo <= surrLowMax {
-				buf = utf8.AppendRune(buf, utf16.DecodeRune(c, lo))
-				i++
-				continue
-			}
+		switch {
+		case c < utf8.RuneSelf:
+			buf = append(buf, byte(c))
+		case c < 0x800:
+			buf = append(buf, byte(0xC0|c>>6), byte(0x80|c&0x3F))
+		case c >= surrHighMin && c <= surrHighMax && i+1 < len(u) &&
+			rune(u[i+1]) >= surrLowMin && rune(u[i+1]) <= surrLowMax:
+			buf = utf8.AppendRune(buf, utf16.DecodeRune(c, rune(u[i+1])))
+			i++
+		default:
+			// The three-byte layout, which a lone surrogate has too.
+			buf = append(buf, byte(0xE0|c>>12), byte(0x80|(c>>6)&0x3F), byte(0x80|c&0x3F))
 		}
-		buf = AppendRune(buf, c)
 	}
-	return string(buf)
+	return unsafe.String(unsafe.SliceData(buf), len(buf)), false
 }
 
 // Count returns the number of UTF-16 code units a WTF-8 string encodes, which
