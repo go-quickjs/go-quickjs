@@ -2870,13 +2870,8 @@ func (r *Runtime) noInheritedIndices(o *Object) bool {
 		return false
 	}
 	for _, p := range [2]*Object{ap, op} {
-		if len(p.elems) != 0 || p.flags&objHasSparseElements != 0 {
+		if len(p.elems) != 0 || p.flags&objHasSparseElements != 0 || !p.noIndexKeys() {
 			return false
-		}
-		for i := range p.props {
-			if p.props[i].key.IsIndex() {
-				return false
-			}
 		}
 	}
 	return true

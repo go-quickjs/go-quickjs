@@ -328,6 +328,33 @@ func TestArgumentsReads(t *testing.T) {
 	}
 }
 
+// TestArrayPushThroughTheChain pins, in both tiers, push and the other array
+// methods that skip the walk up the chain when its prototypes have no index:
+// a setter on Array.prototype or Object.prototype, and a read-only element on
+// an Array.prototype large enough to be indexed. Node gives the same answers.
+func TestArrayPushThroughTheChain(t *testing.T) {
+	defer vm.SetTreeTier(true, false)
+	const src = `var log = "", r = [];
+		function fill(n) { var a = []; for (var i = 0; i < n; i++) a.push(i); return a; }
+		r.push(fill(3).join());
+		Object.defineProperty(Array.prototype, 1, { set(v) { log += "A" + v + "," }, get() { return "g" }, configurable: true });
+		r.push(fill(3).join()); delete Array.prototype[1];
+		Object.defineProperty(Object.prototype, 0, { set(v) { log += "O" + v + "," }, configurable: true });
+		r.push(fill(2).length); delete Object.prototype[0];
+		for (var k = 0; k < 40; k++) Array.prototype["m" + k] = k;
+		Object.defineProperty(Array.prototype, 2, { value: "ro", writable: false, configurable: true });
+		try { r.push(fill(3).join()) } catch (e) { r.push(e.constructor.name) } delete Array.prototype[2];
+		r.push(fill(4).join(), [1, 2].concat([3]).join(), [3, 1, 2].sort().join(), log);
+		r.join(" | ")`
+	const want = "0,1,2 |  | 2 | TypeError | 0,1,2,3 | 1,2,3 | 1,2,3 | A1,A0,g,2,O0,"
+	for _, tier := range []bool{false, true} {
+		vm.SetTreeTier(tier, tier)
+		if got := treeRun(t, src); got != want {
+			t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, want)
+		}
+	}
+}
+
 // TestTreeTierInterrupted stops a loop running as a tree, as one running in
 // the interpreter is stopped.
 func TestTreeTierInterrupted(t *testing.T) {
