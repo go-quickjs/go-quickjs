@@ -228,6 +228,44 @@ func TestGlobalWriteSites(t *testing.T) {
 	}
 }
 
+// TestArrayAppendThroughTheChain pins, in both tiers, assignments at an
+// array's end, which skip the walk up the chain when nothing on it has an
+// element or an index -- and must take it whenever something does: a setter
+// or a read-only element on Array.prototype or Object.prototype, a proxy or
+// an object with indices as the prototype, an accessor on the array itself,
+// an array that may not grow, a sparse one. C QuickJS and Node agree.
+func TestArrayAppendThroughTheChain(t *testing.T) {
+	defer vm.SetTreeTier(true, false)
+	const src = `function fill(a, n) { for (var i = 0; i < n; i++) a[i] = i; return a; }
+		function sfill(a, n) { "use strict"; for (var i = 0; i < n; i++) a[i] = i; return a; }
+		var log = [], r = [];
+		r.push(fill([], 3).join());
+		Object.defineProperty(Array.prototype, 2, { set(v) { log.push("A" + v) }, get() { return "g" }, configurable: true });
+		r.push(fill([], 4).join() + "|" + fill([], 4).length); delete Array.prototype[2];
+		Object.prototype[1] = "op"; Object.defineProperty(Object.prototype, 1, { set(v) { log.push("O" + v) }, configurable: true });
+		r.push(fill([], 3).length); delete Object.prototype[1];
+		Object.defineProperty(Object.prototype, 0, { value: "ro", writable: false, configurable: true });
+		r.push(fill([], 2).join()); try { sfill([], 1) } catch (e) { r.push(e.constructor.name) } delete Object.prototype[0];
+		r.push(fill(Object.preventExtensions([]), 2).length); try { sfill(Object.preventExtensions([]), 1) } catch (e) { r.push(e.constructor.name) }
+		var ro = []; Object.defineProperty(ro, "length", { writable: false }); r.push(fill(ro, 2).length); try { sfill(ro, 1) } catch (e) { r.push(e.constructor.name) }
+		var p = new Proxy({}, { set(t, k, v, rcv) { log.push("P" + k); return Reflect.set(t, k, v, rcv) } });
+		var a = []; Object.setPrototypeOf(a, p); r.push(fill(a, 2).length);
+		var b = [], q = { 1: "q" }; Object.setPrototypeOf(b, q); r.push(Array.prototype.join.call(fill(b, 2)));
+		var c = []; Object.defineProperty(c, 0, { get() { return "own" }, set(v) { log.push("C" + v) }, configurable: true }); r.push(fill(c, 2).join());
+		var s = []; s[5000] = 1; r.push(fill(s, 3).slice(0, 3).join() + "," + s.length);
+		class Sub extends Array {} r.push(fill(new Sub(), 3).length, Array.isArray(fill(new Sub(), 1)));
+		var t = Object.create(fill([], 2)); r.push(fill(t, 3).length, Object.keys(t).join());
+		r.push(log.join()); r.join(" ")`
+	const want = "0,1,2 0,1,g,3|4 3 ro,1 TypeError 0 TypeError 0 TypeError 2 0,1 own,1 0,1,2,5001 3 true 2 0,1,2 " +
+		"A2,A2,O1,P0,P1,C0"
+	for _, tier := range []bool{false, true} {
+		vm.SetTreeTier(tier, tier)
+		if got := treeRun(t, src); got != want {
+			t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, want)
+		}
+	}
+}
+
 // TestTreeTierInterrupted stops a loop running as a tree, as one running in
 // the interpreter is stopped.
 func TestTreeTierInterrupted(t *testing.T) {

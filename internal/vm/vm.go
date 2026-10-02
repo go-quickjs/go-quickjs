@@ -4141,12 +4141,35 @@ func (r *Runtime) setIndexed(obj, key, val Value, strict bool) error {
 				return r.setElem(t, i, val)
 			}
 		}
+		if appendElem(obj.Object(), key.num, val) {
+			return nil
+		}
 	}
 	k, err := r.toPropertyKey(key)
 	if err != nil {
 		return err
 	}
 	return r.setValueProp(obj, k, val, strict)
+}
+
+// appendElem stores v at index n of an array whose length is n, as an
+// assignment would, and reports whether it did. That is the assignment when
+// the array may grow -- extensible, its length writable, dense, no index in
+// its own table to be asked first -- and nothing up the chain has an element
+// or an index in its table, to hold a setter or a read-only one.
+func appendElem(o *Object, n float64, v Value) bool {
+	const want = objExtensible | objArrayLengthWritable
+	i := uint32(n)
+	if o.class != ClassArray || float64(i) != n || uint(i) != uint(len(o.elems)) ||
+		o.flags&(want|objHasSparseElements|objMappedArguments) != want || !o.noIndexKeys() {
+		return false
+	}
+	for p := o.proto; p != nil; p = p.proto {
+		if p.class != ClassObject && p.class != ClassArray || len(p.elems) != 0 || !p.noIndexKeys() {
+			return false
+		}
+	}
+	return o.setElem(i, v)
 }
 
 // construct implements the `new` operator.

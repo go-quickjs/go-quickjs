@@ -607,6 +607,10 @@ type propIndex struct {
 	// delete or a move makes an entry miss rather than lie; and a key being
 	// added overwrites its entry, so that it is never found missing.
 	recent [16]recentKey
+	// indexKeys is set once a key that is an array index has been added,
+	// and stays set: that the table has none is then certain when it is
+	// clear.
+	indexKeys bool
 }
 
 type recentKey struct {
@@ -622,6 +626,24 @@ func newPropIndex(n int) *propIndex {
 func (x *propIndex) add(key Atom, i int32) {
 	x.slots[key] = i
 	x.recent[key&15] = recentKey{key, i}
+	if key.IsIndex() {
+		x.indexKeys = true
+	}
+}
+
+// noIndexKeys reports whether the object's table certainly has no key that is
+// an array index short enough for an atom to carry, which a large table's
+// index knows and a small one is scanned for.
+func (o *Object) noIndexKeys() bool {
+	if x := o.shapeIndex(); x != nil {
+		return !x.indexKeys
+	}
+	for i := range o.props {
+		if o.props[i].key.IsIndex() {
+			return false
+		}
+	}
+	return true
 }
 
 // findOwn returns the index of an own property in props, or -1.

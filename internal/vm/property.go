@@ -333,6 +333,13 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 	// either of which changes what a plain assignment does. A proxy anywhere
 	// along it decides the rest for itself.
 	for o := obj; o != nil; o = o.proto {
+		if o != obj && key.IsIndex() && (o.class == ClassObject || o.class == ClassArray) &&
+			len(o.elems) == 0 && o.noIndexKeys() {
+			// A prototype with no element and no index in its table, as
+			// Array.prototype and Object.prototype are, has nothing to say
+			// about one: no setter, nothing read-only.
+			continue
+		}
 		if p := proxyOf(o); p != nil {
 			return r.proxySet(p, key, val, receiver, strict)
 		}
