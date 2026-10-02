@@ -21,6 +21,9 @@ func (r *Runtime) pureCall(fd *funcData, this Value, args []Value) (Value, bool)
 	return r.pureCallAt(fd, this, args, 0, true)
 }
 
+// pureStackSize is the most operands a pure body has; see pureBody.
+const pureStackSize = 24
+
 // pureCallDepth is how deeply pure bodies are evaluated inside one another:
 // a recursive one would otherwise take the Go stack with it.
 const pureCallDepth = 8
@@ -34,7 +37,17 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 		fn.CoerceThis && !this.IsObject() {
 		return Undefined, false
 	}
-	var stack [24]Value
+	// The body's operands go in the runtime's stack above every frame's,
+	// each depth of pure calls above the one that called it: an array of
+	// its own would be cleared at every call.
+	base := r.stackTop + depth*pureStackSize
+	if base+pureStackSize > len(r.stack) {
+		return Undefined, false
+	}
+	if base+pureStackSize > r.stackHigh {
+		r.stackHigh = base + pureStackSize
+	}
+	stack := r.stack[base : base+pureStackSize : base+pureStackSize]
 	sp := 0
 	code := fn.Code
 	miss := func() (Value, bool) {
