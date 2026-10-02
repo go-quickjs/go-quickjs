@@ -125,8 +125,13 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 			// A write the site's cache answers -- to a property the object
 			// has, or one it adds as objects of its shape did before -- is
 			// made, calling nothing; anything else gives up before writing.
+			// A store where the caller could still give up is refused, but is
+			// not this body's miss: called where it may store, it can.
+			if !mayStore {
+				return Undefined, false
+			}
 			o := stack[sp-2]
-			if !mayStore || !o.IsObject() {
+			if !o.IsObject() {
 				return miss()
 			}
 			ob, c := o.Object(), &cl.ic[in.B]
