@@ -92,6 +92,17 @@ var treeScripts = []string{
 	`function f(a) { for (var i = 0; i < a.length; i++) { if (a[i] < 0) return i; while (a[i] > 10) a[i] -= 7 } return -1 } f([3, 20, 15, -1, 2]) + "," + f([1])`,
 	// this, in a method and in a sloppy function.
 	`function f() { var s = 0; for (var i = 0; i < 3; i++) s += this.k * i; return s } f.call({ k: 7 }) + "," + (function () { var c = 0; for (var i = 0; i < 2; i++) c += this === globalThis; return c })()`,
+	// Equalities ending a block: against undefined, null and the booleans,
+	// which are tested for without a call, and between two values, strict
+	// and loose -- NaN, -0, a string and a number, a valueOf, and one that
+	// throws.
+	`function f(vals) { var r = ""; for (var i = 0; i < vals.length; i++) { var v = vals[i];
+	   if (v === null) r += "N"; if (v !== undefined) r += "d"; if (v == null) r += "n"; if (null != v) r += "m"; if (v === true) r += "T"; if (v !== false) r += "f";
+	   if (v == true) r += "t"; if (v === v) r += "s"; if (v == 0) r += "z"; if (v === "1") r += "q"; r += ";" } return r }
+	 var log = [], o = { valueOf() { log.push("v"); return 1 } }, bad = { valueOf() { throw new RangeError("no") } };
+	 function g(a, b) { var r = ""; for (var i = 0; i < 2; i++) { if (a == b) r += "e"; if (a != b) r += "x"; if (a === b) r += "S" } return r }
+	 var out = f([null, undefined, 0, -0, "", "1", 1, true, false, NaN, {}, [], o]) + " " + log.join() + " " + g(0, -0) + g(NaN, NaN) + g("1", 1) + g(o, 1) + g(null, undefined) + " " + log.join();
+	 try { g(bad, 1) } catch (e) { out += " " + e.constructor.name + "|" + e.stack.split("\n")[1].trim().split(" (")[0] } out`,
 	// instanceof: the prototype chain, Symbol.hasInstance, a bound function,
 	// a primitive, and a right operand that is not an object.
 	`function P() {} var Q = { [Symbol.hasInstance](v) { log.push("has"); return v === 1 } }, log = [];

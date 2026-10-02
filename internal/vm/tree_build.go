@@ -1,6 +1,8 @@
 package vm
 
 import (
+	"math"
+
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jsnum"
 )
@@ -23,6 +25,8 @@ type tentry struct {
 	number  bool
 	n       Value
 	this    bool
+	// literal is set for undefined, null, true or false, in n.
+	literal bool
 }
 
 // tbuilder builds a function's tree a block at a time, keeping what it grows
@@ -72,15 +76,8 @@ func buildTree(fn *bytecode.Function) *tree {
 	}
 	code := fn.Code
 	// A call costs a tree more than it costs the interpreter, so a function
-	// whose code is mostly calls runs as bytecode.
-	calls := 0
-	for _, in := range code {
-		switch in.Op {
-		case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew:
-			calls++
-		}
-	}
-	if !treeEverything.Load() && calls*treeCallDensity > len(code) {
+	// whose code is mostly calls runs as bytecode. The compiler counted them.
+	if !treeEverything.Load() && int(fn.Calls)*treeCallDensity > len(code) {
 		return nil
 	}
 	leader := make([]bool, len(code)+1)
@@ -279,6 +276,8 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 					}
 					return fall
 				}
+			case in.Op == bytecode.OpJumpIfCmpFalse && isEquality(bytecode.Op(in.B)):
+				next = eqJump(bytecode.Op(in.B), x, y, pc, taken, fall)
 			case in.Op == bytecode.OpJumpIfCmpFalse:
 				next = cmpJump(bytecode.Op(in.B), x, y, pc, taken, fall)
 			case in.Op == bytecode.OpJumpIfFalse:
@@ -438,6 +437,9 @@ func (e tentry) tree() tval {
 		return func(*tctx) Value { return n }
 	case e.this:
 		return func(c *tctx) Value { return c.f.this }
+	case e.literal:
+		n := e.n
+		return func(*tctx) Value { return n }
 	}
 	d := e.slot
 	return func(c *tctx) Value { return c.stack[d] }
@@ -528,13 +530,13 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		k := in.A
 		b.push(func(c *tctx) Value { return c.cl.consts[k] })
 	case bytecode.OpPushUndef:
-		b.push(func(*tctx) Value { return Undefined })
+		b.pushEntry(tentry{slot: -1, literal: true, n: Undefined})
 	case bytecode.OpPushNull:
-		b.push(func(*tctx) Value { return Null })
+		b.pushEntry(tentry{slot: -1, literal: true, n: Null})
 	case bytecode.OpPushTrue:
-		b.push(func(*tctx) Value { return True })
+		b.pushEntry(tentry{slot: -1, literal: true, n: True})
 	case bytecode.OpPushFalse:
-		b.push(func(*tctx) Value { return False })
+		b.pushEntry(tentry{slot: -1, literal: true, n: False})
 	case bytecode.OpPushInt:
 		b.pushEntry(numberEntry(Int32(int32(in.A))))
 	case bytecode.OpPushThis:
@@ -1650,5 +1652,65 @@ func setIndexStmt(obj, key tentry, val tval, pc int, strict bool) tstmt {
 		if v := val(c); !setElem(o, k, v) {
 			c.setIndexSlow(o, k, v, pc, strict)
 		}
+	}
+}
+
+// isEquality reports whether op is ==, !=, === or !==.
+func isEquality(op bytecode.Op) bool {
+	switch op {
+	case bytecode.OpEq, bytecode.OpNe, bytecode.OpStrictEq, bytecode.OpStrictNe:
+		return true
+	}
+	return false
+}
+
+// eqJump ends a block with an equality and a forward jump where it is false,
+// the equality being the block's end itself. One side that is undefined,
+// null, true or false -- x === null, x == undefined, x !== false -- is
+// tested for without a call: === against undefined or null asks the other's
+// kind, and == against either asks whether it is one of them, which nothing
+// else equals loosely; === against a boolean is that boolean, whose value
+// has one spelling.
+func eqJump(op bytecode.Op, x, y tentry, pc, taken, fall int) tnext {
+	if x.literal && !y.literal {
+		x, y = y, x
+	}
+	want := op == bytecode.OpEq || op == bytecode.OpStrictEq
+	strict := op == bytecode.OpStrictEq || op == bytecode.OpStrictNe
+	end := func(res bool) int {
+		if res == want {
+			return fall
+		}
+		return taken
+	}
+	if y.literal && !x.literal {
+		v := x.tree()
+		switch lit := y.n; {
+		case strict && lit.IsNull():
+			return func(c *tctx) int { return end(v(c).IsNull()) }
+		case strict && lit.IsUndefined():
+			return func(c *tctx) int { return end(v(c).IsUndefined()) }
+		case strict:
+			bits := math.Float64bits(lit.num)
+			return func(c *tctx) int { return end(math.Float64bits(v(c).num) == bits) }
+		case lit.IsNullish():
+			return func(c *tctx) int { return end(v(c).IsNullish()) }
+		}
+	}
+	a, b := x.tree(), y.tree()
+	if strict {
+		return func(c *tctx) int {
+			l := a(c)
+			return end(l.StrictEquals(b(c)))
+		}
+	}
+	return func(c *tctx) int {
+		l, r := a(c), b(c)
+		c.at(pc)
+		eq, err := c.r.looseEquals(l, r)
+		if err != nil {
+			c.throw(err)
+		}
+		return end(eq)
 	}
 }
