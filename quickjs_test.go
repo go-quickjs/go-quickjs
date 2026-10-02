@@ -43,7 +43,7 @@ func TestArithmetic(t *testing.T) {
 		{"1 / 0", "Infinity"},
 		{"-1 / 0", "-Infinity"},
 		{"0 / 0", "NaN"},
-		// Modulo keeps the sign of the dividend, unlike Go's integer %.
+		// Modulo keeps the sign of the dividend.
 		{"-7 % 3", "-1"},
 		{"7 % -3", "1"},
 		{"0.1 + 0.2", "0.30000000000000004"},
@@ -51,6 +51,18 @@ func TestArithmetic(t *testing.T) {
 	for _, tt := range tests {
 		checkEval(t, tt.src, tt.want)
 	}
+}
+
+// % of two integers is taken as one, which must agree with the float
+// remainder everywhere else: a zero keeps the dividend's sign, and a divisor
+// of zero, a fraction or a number past int32 is no integer case.
+func TestModuloOfRuntimeValues(t *testing.T) {
+	const src = `function m(a, b) { var r = a % b; return r === 0 && 1 / r < 0 ? "-0" : String(r); }
+	  var pairs = [[7, 3], [7, -3], [-7, 3], [-7, -3], [6, 3], [-6, 3], [0, 5], [-0, 5], [5, 0],
+	    [-5, 0], [2147483647, 2], [-2147483648, -1], [-2147483648, 3], [2147483648, 3],
+	    [5.5, 2], [5, 2.5], [1, 2147483647], [3, -2147483648], [NaN, 3], [3, NaN], [Infinity, 3], [3, Infinity]];
+	  var out = []; for (var i = 0; i < pairs.length; i++) out.push(m(pairs[i][0], pairs[i][1])); out.join(" ")`
+	checkEval(t, src, "1 1 -1 -1 0 -0 0 -0 NaN NaN 1 -0 -2 2 1.5 0 1 3 NaN NaN NaN 3")
 }
 
 func TestStringConcatenationAndCoercion(t *testing.T) {

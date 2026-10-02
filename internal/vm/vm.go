@@ -4732,13 +4732,23 @@ func numericOp(op bytecode.Op, a, b float64) float64 {
 	case bytecode.OpDiv:
 		return a / b
 	case bytecode.OpMod:
-		// JavaScript's % keeps the sign of the dividend, which is what Go's
-		// math.Mod does, unlike the integer % operator.
-		return math.Mod(a, b)
+		return jsMod(a, b)
 	case bytecode.OpPow:
 		return jsPow(a, b)
 	}
 	return math.NaN()
+}
+
+// jsMod is the % operator on numbers, which truncates and keeps the sign of the
+// dividend, as math.Mod does. So does Go's % on integers, without math.Mod's
+// work over the exponents, for the positive int32 dividend and int32 divisor
+// most code has; a dividend of zero or less is left to math.Mod, which gives
+// -0 for one that is negative and divides exactly.
+func jsMod(a, b float64) float64 {
+	if ai, bi := int32(a), int32(b); float64(ai) == a && float64(bi) == b && ai > 0 && bi != 0 {
+		return float64(ai % bi)
+	}
+	return math.Mod(a, b)
 }
 
 // jsPow implements the ** operator and Math.pow as V8 does: the C library's
