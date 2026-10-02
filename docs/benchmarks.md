@@ -102,22 +102,22 @@ to three.
 
 | Workload | go-quickjs | QuickJS | QuickJS faster by | go-quickjs score | QuickJS score |
 |---|---:|---:|---:|---:|---:|
-| Richards | 28.4 ms | 11.1 ms | 2.6x | 376 | 954 |
-| DeltaBlue | 34.3 ms | 24.1 ms | 1.4x | 574 | 834 |
-| Crypto | 415 ms | 323 ms | 1.3x | 873 | 1,101 |
-| RayTrace | 167 ms | 142 ms | 1.2x | 1,339 | 1,578 |
-| EarleyBoyer | 556 ms | 411 ms | 1.4x | 1,511 | 2,126 |
-| RegExp | 385 ms | 874 ms | 0.44x | 1,049 | 430 |
-| Splay | 358 ms | 521 ms | 0.69x | 2,380 | 3,276 |
-| NavierStokes | 297 ms | 192 ms | 1.5x | 1,624 | 2,400 |
-| **Total / composite** | **2,278 ms** | **2,532 ms** | **0.90x** | **1,056** | **1,332** |
+| Richards | 24.6 ms | 11.1 ms | 2.2x | 420 | 949 |
+| DeltaBlue | 31.2 ms | 24.1 ms | 1.3x | 632 | 840 |
+| Crypto | 402 ms | 325 ms | 1.2x | 885 | 1,100 |
+| RayTrace | 171 ms | 146 ms | 1.2x | 1,329 | 1,573 |
+| EarleyBoyer | 521 ms | 409 ms | 1.3x | 1,604 | 2,133 |
+| RegExp | 388 ms | 867 ms | 0.45x | 1,056 | 417 |
+| Splay | 356 ms | 520 ms | 0.68x | 2,442 | 3,178 |
+| NavierStokes | 299 ms | 193 ms | 1.6x | 1,592 | 2,356 |
+| **Total / composite** | **2,244 ms** | **2,538 ms** | **0.88x** | **1,094** | **1,319** |
 
 The scored run weighs more heavily than the fixed one what a long-running
 program pays for its heap. Each workload is warmed for a second and then
 measured for another. That is why Splay and EarleyBoyer, which allocate the
 most, fare worse there. Figures move by a few percent between builds from
-code placement alone, and Richards by more, from 26 ms to 28 ms. To
-reproduce them, run
+code placement alone, and Richards by more, about a tenth. To reproduce
+them, run
 `go run ./internal/cmd/v8bench -dir /tmp/v8-v7 -mode fixed -n 3` and the
 `external` runner with `-engine qjs`.
 
@@ -141,13 +141,17 @@ What the gap is made of:
   NavierStokes, which do little but arithmetic, local variables and array
   elements.
 - **Calls.** A call from JavaScript to JavaScript fills in a frame record of
-  some twenty fields, and each pointer it stores pays a write barrier's
-  check. An empty call costs about 47 ns here, against about 25 ns in
-  QuickJS. Richards and DeltaBlue are mostly small method calls. A function
-  whose whole body is `return this.x`, `return this.x.length`,
-  `return this.x[i]`, or stores of its parameters in `this` is answered
-  without a frame, where nothing it does could call code or throw; that is
-  much of DeltaBlue's calls and EarleyBoyer's constructions.
+  some fifteen fields, and each pointer it stores pays a write barrier's
+  check. An empty call costs about 45 ns here, against about 22 ns in
+  QuickJS. Richards and DeltaBlue are mostly small method calls. Two kinds
+  of function are answered without a frame, where nothing they do could
+  call code or throw:
+  - one whose whole body is `return this.x`, `return this.x.length`,
+    `return this.x[i]`, or stores of its parameters in `this`, which is much
+    of EarleyBoyer's constructions;
+  - one that only reads and computes, as `isHeldOrSuspended`, DeltaBlue's
+    `input` and `output` and RayTrace's `dot` do, which may call another
+    such function.
 - **Property access.** Objects built the same way share a shape, as in
   QuickJS and V8, and each property read and write, each getter, each
   global variable read and each `instanceof` remembers where it last found
