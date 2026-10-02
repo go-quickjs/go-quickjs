@@ -162,7 +162,8 @@ func treeBuilds(op bytecode.Op) bool {
 		bytecode.OpNewArray, bytecode.OpNewObject, bytecode.OpDefineField, bytecode.OpGetLength, bytecode.OpTypeOf,
 		bytecode.OpPushEmptyString, bytecode.OpPutLocal, bytecode.OpDup2, bytecode.OpSwap, bytecode.OpRot3, bytecode.OpRot4,
 		bytecode.OpToPropertyKey, bytecode.OpToPropertyKeyOfBase, bytecode.OpSetHomeObject, bytecode.OpBitNot,
-		bytecode.OpJumpIfFalseKeep, bytecode.OpJumpIfTrueKeep, bytecode.OpCheckGlobalRef, bytecode.OpAssertResolved:
+		bytecode.OpJumpIfFalseKeep, bytecode.OpJumpIfTrueKeep, bytecode.OpCheckGlobalRef, bytecode.OpAssertResolved,
+		bytecode.OpInstanceOf:
 		return true
 	}
 	return false
@@ -648,6 +649,18 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 				c.throw(err)
 			}
 			return n
+		})
+	case bytecode.OpInstanceOf:
+		y, x := b.pop().v, b.pop().v
+		site := in.B
+		b.push(func(c *tctx) Value {
+			o, k := x(c), y(c)
+			c.at(pc)
+			ok, err := c.r.instanceOfAt(&c.cl.ic[site], o, k)
+			if err != nil {
+				c.throw(err)
+			}
+			return Bool(ok)
 		})
 	case bytecode.OpNot:
 		x := b.pop().v

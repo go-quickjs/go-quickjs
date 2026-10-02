@@ -92,6 +92,14 @@ var treeScripts = []string{
 	`function f(a) { for (var i = 0; i < a.length; i++) { if (a[i] < 0) return i; while (a[i] > 10) a[i] -= 7 } return -1 } f([3, 20, 15, -1, 2]) + "," + f([1])`,
 	// this, in a method and in a sloppy function.
 	`function f() { var s = 0; for (var i = 0; i < 3; i++) s += this.k * i; return s } f.call({ k: 7 }) + "," + (function () { var c = 0; for (var i = 0; i < 2; i++) c += this === globalThis; return c })()`,
+	// instanceof: the prototype chain, Symbol.hasInstance, a bound function,
+	// a primitive, and a right operand that is not an object.
+	`function P() {} var Q = { [Symbol.hasInstance](v) { log.push("has"); return v === 1 } }, log = [];
+	 function f(vals) { var r = ""; for (var i = 0; i < vals.length; i++) { var v = vals[i];
+	   r += (v instanceof P) + "/" + (v instanceof Q) + "/" + (v instanceof P.bind(null)) + "/" + (v instanceof Object) + ";" } return r }
+	 function g(v) { for (var i = 0; i < 1; i++) return v instanceof 3 }
+	 f([new P(), 1, "s", null, Object.create(P.prototype)]) + " " + log.join() + " " +
+	   (function () { try { g({}) } catch (e) { return e.constructor.name + ": " + e.message + "|" + e.stack.split("\n")[1].trim() } })()`,
 	// this where it is a binding: a derived constructor's before and after
 	// super(), and an arrow's inside one.
 	`class A { constructor() { this.a = 1 } } class B extends A { constructor(early) { var r = "", f = () => this.a;
