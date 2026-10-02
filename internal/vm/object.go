@@ -692,15 +692,21 @@ func (o *Object) getOwnVisible(key Atom) *Property {
 	return p
 }
 
+// reserveProps makes room for n properties in all, so that an object built
+// all at once grows its table once rather than at every doubling -- whether
+// or not it has a table yet: a constructor is given its prototype before its
+// methods. A table in the object's own allocation is left as it is.
+func (o *Object) reserveProps(n int) {
+	if cap(o.props) >= n || o.flags&objInlineProps != 0 {
+		return
+	}
+	props := make([]Property, len(o.props), n)
+	copy(props, o.props)
+	o.props = props
+}
+
 // setOwnRaw installs a property, replacing any existing one, without consulting
 // the prototype chain or any setter.
-// reserveProps makes room for a known number of properties, so that an object
-// built all at once grows its table once rather than at every doubling.
-func (o *Object) reserveProps(n int) {
-	if o.props == nil && n > 0 {
-		o.props = make([]Property, 0, n)
-	}
-}
 
 func (o *Object) setOwnRaw(key Atom, value Value, flags propFlags) {
 	if i := o.findOwn(key); i >= 0 {

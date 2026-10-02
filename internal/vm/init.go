@@ -341,6 +341,9 @@ func (r *Runtime) newCtor(name string, length int, proto *Object, fn NativeFunc)
 func (r *Runtime) newMemberCtor(name string, length int, proto *Object, fn NativeFunc) *Object {
 	c, fd := r.newSlabFuncObject(r.proto.function, ClassFunction)
 	*fd = funcData{native: fn, name: name, length: length, ctorKind: ctorBase, realm: r.Realm}
+	// Both are about to be given their methods.
+	c.reserveProps(8)
+	proto.reserveProps(8)
 	c.setOwnRaw(atomPrototype, Obj(proto), 0)
 	r.registerIntrinsic(name, proto)
 	proto.setOwnRaw(atomConstructor, Obj(c), propWritable|propConfigurable)
