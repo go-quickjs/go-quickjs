@@ -198,7 +198,11 @@ func (r *Runtime) callFromLoop(callee, this Value, args []Value) (Value, error) 
 				}
 				// A body that only reads or writes a property of its this is
 				// answered here where it can be, without a frame.
-				if fn.Leaf != bytecode.LeafNone && this.IsObject() {
+				if leaf := fn.Leaf; leaf == bytecode.LeafPure {
+					if v, ok := r.pureCall(fd, this, args); ok {
+						return v, nil
+					}
+				} else if leaf != bytecode.LeafNone && this.IsObject() {
 					if v, ok := r.leafCall(fd.closure, this.Object(), args); ok {
 						return v, nil
 					}
@@ -4242,7 +4246,7 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 			// and one that only hands them on to a method of it.
 			done := false
 			switch fd.closure.fn.Leaf {
-			case bytecode.LeafNone:
+			case bytecode.LeafNone, bytecode.LeafPure:
 			case bytecode.LeafForward:
 				done, err = r.leafForward(fd.closure, o, obj, args, newTarget)
 			default:

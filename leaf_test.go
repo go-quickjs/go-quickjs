@@ -148,3 +148,100 @@ func TestLeafForward(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// TestPureLeaves covers bodies that only read and compute, which a call
+// evaluates without a frame where every read and operator takes its fast
+// path, and otherwise makes as usual: a getter or a proxy for a property,
+// an object, a string or a boolean where an operator wants numbers, a
+// global in its dead zone, undeclared or an accessor, a primitive this for
+// a sloppy function, an exception and its stack. Each answer is Node's.
+func TestPureLeaves(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`var FWD = 1; function input() { return this.dir == FWD ? this.a : this.b }
+			var r = []; for (var i = 0; i < 4; i++) r.push(input.call({ dir: i % 2, a: "A", b: "B" })); r.join()`,
+			"B,A,B,A"},
+		{`var HELD = 4, SUSP = 2; function held() { return (this.state & HELD) != 0 || this.state == SUSP }
+			var r = []; for (const s of [0, 2, 4, 6, 1]) r.push(held.call({ state: s })); r.join()`,
+			"false,true,true,true,false"},
+		{`function dot(w) { return this.x * w.x + this.y * w.y } var v = { x: 1, y: 2 }, r = [];
+			for (var i = 0; i < 3; i++) r.push(dot.call(v, { x: i, y: 10 })); r.join()`,
+			"20,21,22"},
+		{`function isNum(n) { return typeof n === "number" } [1, "1", null, undefined, 1n, {}].map(isNum).join()`,
+			"true,false,false,false,false,false"},
+		{`function len(s) { return s.length + 1 } [len("abc"), len([1, 2]), len({ length: 7 })].join()`,
+			"4,3,8"},
+		{`function g() { return this.x } var log = [], o = { get x() { log.push("get"); return 5 } };
+			var r = []; for (var i = 0; i < 3; i++) r.push(g.call(o)); r.join() + " " + log.join()`,
+			"5,5,5 get,get,get"},
+		{`function g() { return this.x } var p = new Proxy({}, { get(t, k) { return "trap:" + String(k) } }); [g.call(p), g.call({ x: 1 })].join()`,
+			"trap:x,1"},
+		{`function add(a, b) { return a + b } var o = { valueOf() { return 41 } }; [add(1, 2), add("a", 1), add(o, 1), add(1n, 2n)].join()`,
+			"3,a1,42,3"},
+		{`function lt(a, b) { return a < b } [lt(1, 2), lt("b", "a"), lt("10", "9"), lt({ valueOf() { return 1 } }, 2)].join()`,
+			"true,false,true,true"},
+		{`function eq(a, b) { return a == b } [eq(1, "1"), eq(null, undefined), eq(0, ""), eq({ valueOf() { return 1 } }, 1), eq(1n, 1), eq("x", "x")].join()`,
+			"true,true,true,true,true,true"},
+		{`function sloppy() { return typeof this } function strict() { "use strict"; return typeof this }
+			[sloppy.call(1), sloppy.call(undefined), strict.call(1), strict.call(undefined)].join()`,
+			"object,object,number,undefined"},
+		{`function readTdz() { return later } var r; try { readTdz() } catch (e) { r = e.constructor.name } let later = 3; r + " " + readTdz()`,
+			"ReferenceError 3"},
+		{`function readUndeclared() { return nope + 1 } try { readUndeclared() } catch (e) { e.constructor.name + ": " + e.message }`,
+			"ReferenceError: nope is not defined"},
+		{`Object.defineProperty(globalThis, "acc", { get() { return "accessor" }, configurable: true }); function readAcc() { return acc } [readAcc(), readAcc()].join()`,
+			"accessor,accessor"},
+		{`function boom(o) { return o.a.b } try { boom({}) } catch (e) { e.constructor.name + "|" + e.stack.split(String.fromCharCode(10))[1].trim().split(" (")[0] }`,
+			"TypeError|at boom"},
+		{`function bits(x) { return (x << 3) ^ (x >>> 1) | ~~-x } [1, -5, 2147483647, 3.7].map(bits).join()`,
+			"-1,-2147483611,-1073741817,-3"},
+		{`function pick(a, b) { return a && b || "none" } [pick(1, 2), pick(0, 2), pick(1, 0), pick("", "")].join()`,
+			"2,none,none,none"},
+		{`function neg(a) { return -a + !a } [neg(3), neg(0), neg("4")].join()`,
+			"-3,1,-4"},
+		{`var o = { m(x) { return this.k * x } , k: 3 }; var r = 0; for (var i = 0; i < 100; i++) r += o.m(i); r`,
+			"14850"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}
+
+// TestPureLeafCalls covers calls inside bodies that only read and compute,
+// made without a frame where the callee is such a body too, a body that
+// reads one property of this, or a unary Math function given a number: a
+// chain of delegating methods, a callee that stores, a Math function given
+// an object, recursion past the depth evaluated without frames, a native
+// method, a getter for the method, an operand that is an object, and an
+// exception from a callee with its stack. Each answer is Node's.
+func TestPureLeafCalls(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`function Coll() { this.elms = [1, 2, 3] } Coll.prototype.size = function () { return this.elms.length };
+			Coll.prototype.at = function (i) { return this.elms[i] };
+			function Plan() { this.v = new Coll() } Plan.prototype.size = function () { return this.v.size() };
+			Plan.prototype.at = function (i) { return this.v.at(i) }; Plan.prototype.last = function () { return this.at(this.size() - 1) };
+			var p = new Plan(), r = []; for (var i = 0; i < 4; i++) r.push(p.size(), p.at(i), p.last()); r.join()`,
+			"3,1,3,3,2,3,3,3,3,3,,3"},
+		{`var log = []; var o = { n: 0, bump() { this.n++; log.push(this.n); return this.n }, twice() { return this.bump() + this.bump() } };
+			var r = []; for (var i = 0; i < 3; i++) r.push(o.twice()); r.join() + " " + log.join()`,
+			"3,7,11 1,2,3,4,5,6"},
+		{`function mag(v) { return Math.sqrt(v.x * v.x + v.y * v.y) } var r = []; for (var i = 0; i < 3; i++) r.push(mag({ x: 3 * i, y: 4 * i }));
+			r.push(Math.sqrt({ valueOf() { return 9 } })); function sq(v) { return Math.sqrt(v) } r.push(sq({ valueOf() { r.push("v"); return 16 } })); r.join()`,
+			"0,5,10,3,v,4"},
+		{`function down(n) { return n == 0 ? 0 : 1 + down(n - 1) } [down(3), down(20), down(100)].join()`,
+			"3,20,100"},
+		{`function cap(s) { return s.toUpperCase() } [cap("ab"), cap("x")].join()`,
+			"AB,X"},
+		{`var o = { get m() { log.push("getm"); return function () { return 1 } }, call() { return this.m() } }, log = [];
+			[o.call(), o.call()].join() + " " + log.join()`,
+			"1,1 getm,getm"},
+		{`function add(a, b) { return a + b } function sum3(a, b, c) { return add(add(a, b), c) } var o = { valueOf() { return 10 } };
+			[sum3(1, 2, 3), sum3(1, o, 2), sum3("a", 1, 2)].join()`,
+			"6,13,a12"},
+		{`function thrower() { return null.x } function calls() { return thrower() + 1 }
+			try { calls() } catch (e) { e.constructor.name + "|" + e.stack.split(String.fromCharCode(10)).slice(1, 3).map(s => s.trim().split(" (")[0]).join("|") }`,
+			"TypeError|at thrower|at calls"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}

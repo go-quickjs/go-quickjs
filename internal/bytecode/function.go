@@ -208,6 +208,14 @@ const (
 	// push_this, get_prop, get_prop_this of apply, push_this,
 	// apply_arguments, drop, return_undef.
 	LeafForward
+	// LeafPure is a body that only reads -- this, its parameters, constants,
+	// properties and globals -- and computes from what it read, with
+	// operators, comparisons, typeof, branches forward and calls, and
+	// returns: no store, no loop and no local of its own. The VM evaluates
+	// one without a frame where each read and each operator takes its fast
+	// path and each call is of such a body too, and gives up, having changed
+	// nothing, where one would not.
+	LeafPure
 )
 
 // SourceLoc attributes instructions to a source position, for stack traces.

@@ -468,6 +468,9 @@ type closure struct {
 	// environment for module code -- which inherits from the global object, so
 	// the prototype chain performs the scope lookup.
 	env *Object
+	// pureMiss counts the calls pureCall gave up on, for a body LeafPure
+	// marks: past pureMissLimit it is not tried.
+	pureMiss uint8
 }
 
 // upvalue is a captured variable.

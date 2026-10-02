@@ -15,8 +15,9 @@ func (r *Runtime) leafCall(cl *closure, o *Object, args []Value) (Value, bool) {
 	switch fn.Leaf {
 	case bytecode.LeafSetThis:
 		return Undefined, r.leafStores(cl, o, args)
-	case bytecode.LeafForward:
-		// Only a construction is answered, by leafForward.
+	case bytecode.LeafForward, bytecode.LeafPure:
+		// A construction is answered by leafForward, and a call of a pure
+		// body by pureCall.
 		return Undefined, false
 	}
 	in := fn.Code[1]

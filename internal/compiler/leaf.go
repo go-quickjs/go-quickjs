@@ -55,5 +55,59 @@ func leafKind(fn *bytecode.Function) bytecode.LeafKind {
 	if n > 0 && ends {
 		return bytecode.LeafSetThis
 	}
+	if pureBody(fn) {
+		return bytecode.LeafPure
+	}
 	return bytecode.LeafNone
+}
+
+// pureBody reports whether a function's code is a body LeafPure marks: no
+// local but its parameters, every jump forward, and every instruction one
+// that reads or computes, of a stack small enough to be evaluated in a
+// fixed array.
+func pureBody(fn *bytecode.Function) bool {
+	if fn.LocalCount != fn.ParamCount || fn.MaxStack > 24 || len(fn.Code) > 64 {
+		return false
+	}
+	param := func(k uint32) bool { return int(k) < fn.ParamCount }
+	for pc, in := range fn.Code {
+		switch in.Op {
+		case bytecode.OpPushThis, bytecode.OpPushInt, bytecode.OpPushConst, bytecode.OpPushNull,
+			bytecode.OpPushTrue, bytecode.OpPushFalse, bytecode.OpPushUndef, bytecode.OpPushEmptyString,
+			bytecode.OpGetProp, bytecode.OpGetLength, bytecode.OpGetGlobal,
+			bytecode.OpAdd, bytecode.OpSub, bytecode.OpMul, bytecode.OpDiv,
+			bytecode.OpBitAnd, bytecode.OpBitOr, bytecode.OpBitXor, bytecode.OpShl, bytecode.OpShr, bytecode.OpUShr,
+			bytecode.OpBinImm, bytecode.OpNeg, bytecode.OpNot, bytecode.OpTypeOf,
+			bytecode.OpLt, bytecode.OpLe, bytecode.OpGt, bytecode.OpGe,
+			bytecode.OpEq, bytecode.OpNe, bytecode.OpStrictEq, bytecode.OpStrictNe,
+			bytecode.OpDup, bytecode.OpDrop, bytecode.OpReturn, bytecode.OpReturnUndef,
+			bytecode.OpGetPropThis, bytecode.OpCall, bytecode.OpCallMethod:
+			// A call is of a body that is itself pure, or it is not made
+			// frameless: the VM sees which when it gets there.
+		case bytecode.OpGetLocal:
+			if !param(in.A) {
+				return false
+			}
+		case bytecode.OpGetLocal2:
+			if !param(in.A) || !param(in.B) {
+				return false
+			}
+		case bytecode.OpBinLocal:
+			if !param(in.A) {
+				return false
+			}
+		case bytecode.OpLocalBinImm:
+			if !param(in.A & (1<<24 - 1)) {
+				return false
+			}
+		case bytecode.OpJump, bytecode.OpJumpIfFalse, bytecode.OpJumpIfTrue, bytecode.OpJumpIfCmpFalse,
+			bytecode.OpJumpIfFalseKeep, bytecode.OpJumpIfTrueKeep:
+			if int(in.A) <= pc || int(in.A) > len(fn.Code) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
