@@ -196,7 +196,7 @@ func treeBuilds(op bytecode.Op) bool {
 		bytecode.OpPushEmptyString, bytecode.OpPutLocal, bytecode.OpDup2, bytecode.OpSwap, bytecode.OpRot3, bytecode.OpRot4,
 		bytecode.OpToPropertyKey, bytecode.OpToPropertyKeyOfBase, bytecode.OpSetHomeObject, bytecode.OpBitNot,
 		bytecode.OpJumpIfFalseKeep, bytecode.OpJumpIfTrueKeep, bytecode.OpCheckGlobalRef, bytecode.OpAssertResolved,
-		bytecode.OpInstanceOf:
+		bytecode.OpInstanceOf, bytecode.OpArgumentsIndex, bytecode.OpArgumentsLength:
 		return true
 	}
 	return false
@@ -757,6 +757,27 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 	case bytecode.OpGetIndex:
 		key, obj := b.pop(), b.pop()
 		b.push(getIndexOperands(obj, key, pc))
+	case bytecode.OpArgumentsIndex:
+		key, slot := b.pop().tree(), in.A
+		b.push(func(c *tctx) Value {
+			k := key(c)
+			c.at(pc)
+			v, err := c.r.argumentsIndex(c.f, slot, k)
+			if err != nil {
+				c.throw(err)
+			}
+			return v
+		})
+	case bytecode.OpArgumentsLength:
+		slot := in.A
+		b.push(func(c *tctx) Value {
+			c.at(pc)
+			v, err := c.r.argumentsLength(c.f, slot)
+			if err != nil {
+				c.throw(err)
+			}
+			return v
+		})
 	case bytecode.OpGetLocalIndex:
 		b.push(getIndexOperands(localEntry(in.A), localEntry(in.B), pc))
 	case bytecode.OpGetLocalIndexUpdate:

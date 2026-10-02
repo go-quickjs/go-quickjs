@@ -266,6 +266,61 @@ func TestArrayAppendThroughTheChain(t *testing.T) {
 	}
 }
 
+// TestArgumentsReads pins, in both tiers, arguments[i] and arguments.length in
+// functions that read the arguments themselves until something needs the
+// object: a mapped index naming a parameter, a key that names no argument, a
+// write, a delete, a call through it, apply. And that a function that
+// rebinds the name arguments does not. Node gives the same answers.
+func TestArgumentsReads(t *testing.T) {
+	defer vm.SetTreeTier(true, false)
+	cases := []struct{ src, want string }{
+		{`var r = [];
+		function s1(a, b) { "use strict"; a = 9; var x = []; for (var i = 0; i < arguments.length + 1; i++) x.push(arguments[i]); return x.join("/") + ":" + arguments.length; }
+		function m1(a, b) { a = 9; var x = []; for (var i = 0; i < arguments.length + 1; i++) x.push(arguments[i]); return x.join("/") + ":" + arguments.length; }
+		function m2(a) { var x = arguments[1]; a = 7; return [x, arguments[0], arguments[1], arguments.length].join("/"); }
+		function keys(k) { return [arguments[k], arguments["1"], arguments[-0], arguments[0.5], arguments[1e10], arguments.length].join("/"); }
+		function wr() { arguments[0] = "w"; arguments.length = 7; return [arguments[0], arguments[1], arguments.length].join("/"); }
+		function del() { var a = arguments[0]; delete arguments[0]; return [a, arguments[0], arguments.length].join("/"); }
+		function swr() { "use strict"; arguments[1] = "s"; return [arguments[0], arguments[1], arguments.length].join("/"); }
+		function call() { return arguments[0](); }
+		function both(f) { var n = arguments.length; return f.apply(this, arguments) + n + arguments[1]; }
+		function sum() { var s = 0; for (var i = 0; i < arguments.length; i++) s += arguments[i]; return s; }
+		function viaProto() { return arguments[3]; }
+		function getter(o) { "use strict"; return arguments[0].x + arguments.length; }
+		r.push(s1(1, 2, 3), m1(1, 2, 3), m1(), s1(), m2(1, 2), keys(0, 1), keys("length", "b"), wr(1, 2), del(1, 2), swr(1, 2));
+		r.push(call(function () { return typeof this + (this.length) }, 5), both(function () { return arguments.length }, "x"), sum(1, 2, 3, 4));
+		Object.prototype[3] = "proto"; r.push(viaProto(1, 2), viaProto(1, 2, 3, 4)); delete Object.prototype[3];
+		r.push(getter({ x: 1 }, 2));
+		r.join(" | ")`,
+			"1/2/3/:3 | 9/2/3/:3 | :0 | :0 | 2/7/2/2 | 0/1/0///2 | 2/b/length///2 | w/2/7 | 1//2 | 1/s/2 | " +
+				"object2 | 4x | 10 | proto | 4 | 3"},
+		{`var r = [];
+		function v1() { var arguments = "xy"; return arguments[0] + arguments.length; }
+		function v2() { arguments = "pq"; return arguments[1] + arguments.length; }
+		function v3() { function arguments() {} return arguments.length + "/" + arguments[0]; }
+		function v4() { for (var arguments of ["ab"]) ; return arguments[0] + arguments.length; }
+		function v5() { try { throw "zz" } catch (arguments) { return arguments[0] + arguments.length } }
+		function v6() { { let arguments = "kk"; r.push(arguments[1]) } return arguments[0]; }
+		function v7() { [arguments] = ["dd"]; return arguments[0] + arguments.length; }
+		function v8() { ({ a: arguments } = { a: "ee" }); return arguments[1]; }
+		function v9() { var f = () => arguments[0]; return f() + arguments[1]; }
+		function v10(a = arguments[1]) { return a + arguments[0]; }
+		function v11() { eval("var q = 1"); return arguments[0]; }
+		function v12() { arguments++; return arguments + "/" + arguments[0]; }
+		r.push(v1(1), v2(1), v3(1), v4(1), v5(1), v6(1), v7(1), v8(1), v9(1, 2), v10(1, 2), v11(3), v12(4));
+		r.join(" | ")`,
+			"k | x2 | q2 | 0/undefined | a2 | z2 | 1 | d2 | e | 3 | 2 | 3 | NaN/undefined"},
+	}
+	for _, tc := range cases {
+		for _, tier := range []bool{false, true} {
+			vm.SetTreeTier(tier, tier)
+			if got := treeRun(t, tc.src); got != tc.want {
+				t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, tc.want)
+			}
+		}
+	}
+}
+
 // TestTreeTierInterrupted stops a loop running as a tree, as one running in
 // the interpreter is stopped.
 func TestTreeTierInterrupted(t *testing.T) {

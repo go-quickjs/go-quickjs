@@ -1514,8 +1514,10 @@ func stackEffect(op bytecode.Op, a, b uint32) int {
 		return 1
 	case bytecode.OpApplyArguments:
 		return -2
-	case bytecode.OpLazyArguments:
+	case bytecode.OpLazyArguments, bytecode.OpArgumentsLength:
 		return 1
+	case bytecode.OpArgumentsIndex:
+		return 0
 	case bytecode.OpClearLocal:
 		return 0
 	case bytecode.OpUpdateLocal, bytecode.OpGetLocalIndexUpdate:

@@ -519,6 +519,16 @@ const (
 	// i locals. A's low 24 bits are the local's slot and its high 8 the
 	// operator, one of those OpBinImm takes; B is the integer.
 	OpLocalBinImm
+	// OpArgumentsIndex is arguments[key], with the key on the stack, in a
+	// function whose arguments object is made only on demand, in Locals[A]:
+	// while it has not been made, an index of the arguments that names no
+	// parameter is read from them, and anything else makes the object and
+	// reads it.
+	OpArgumentsIndex
+	// OpArgumentsLength is arguments.length in such a function: how many
+	// arguments there are while the object has not been made, and its length
+	// once it has.
+	OpArgumentsLength
 
 	// opCount is the number of opcodes, used to size the name table.
 	opCount
@@ -593,6 +603,8 @@ var opNames = [opCount]string{
 	OpLazyArguments:         "lazy_arguments",
 	OpBinLocal:              "bin_local",
 	OpLocalBinImm:           "local_bin_imm",
+	OpArgumentsIndex:        "arguments_index",
+	OpArgumentsLength:       "arguments_length",
 	OpArrayRest:             "array_rest",
 	OpObjectRest:            "object_rest",
 

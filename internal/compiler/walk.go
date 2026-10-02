@@ -82,13 +82,24 @@ func containsClosure(nodes ...ast.Node) bool {
 }
 
 // argumentsOnlyApplied reports whether a function body uses `arguments` only
-// to pass it on whole, as `f.apply(x, arguments)`: then the object need never
-// be made, where apply is the built-in, since the call can be given the
-// arguments themselves.
+// to pass it on whole, as `f.apply(x, arguments)`, or to read an element or
+// its length: then the object need never be made, where apply is the
+// built-in, since the call can be given the arguments themselves, and a read
+// can read them.
 func argumentsOnlyApplied(body []ast.Stmt) bool {
 	w := &argumentsScanner{applyOnly: true}
 	w.stmts(body)
 	return !w.found
+}
+
+// isArgumentsRead reports whether a member expression is `arguments[key]` or
+// `arguments.length`.
+func isArgumentsRead(m *ast.Member) bool {
+	id, ok := m.Object.(*ast.Ident)
+	if !ok || id.Name != "arguments" || m.Optional {
+		return false
+	}
+	return m.Computed || propKeyName(m.Property) == "length"
 }
 
 // isApplyOfArguments reports whether a call is `<expr>.apply(<expr>, arguments)`.
@@ -432,6 +443,15 @@ func (w *argumentsScanner) expr(e ast.Expr) {
 			w.expr(a)
 		}
 	case *ast.Member:
+		if w.applyOnly && w.inArrow == 0 && isArgumentsRead(n) {
+			// arguments[i] and arguments.length read the arguments
+			// themselves; anything else made of them -- a store, a call,
+			// a delete -- makes the object first, from the arguments.
+			if n.Computed {
+				w.expr(n.Property)
+			}
+			return
+		}
 		w.expr(n.Object)
 		if n.Computed {
 			w.expr(n.Property)

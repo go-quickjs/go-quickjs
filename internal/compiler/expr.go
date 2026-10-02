@@ -1022,6 +1022,17 @@ func (c *compiler) compileMemberKey(m *ast.Member) {
 	c.emit(bytecode.OpPushConst, c.stringConst(propKeyName(m.Property)), 0)
 }
 
+// isLazyArguments reports whether an expression is the name arguments meaning
+// the function's own arguments object, made only on demand.
+func (c *compiler) isLazyArguments(e ast.Expr) bool {
+	id, ok := e.(*ast.Ident)
+	if !ok || id.Name != "arguments" {
+		return false
+	}
+	l, ok := c.resolveLocal("arguments")
+	return ok && l.slot == c.lazyArgumentsSlot
+}
+
 func (c *compiler) compileMemberRead(n *ast.Member) {
 	if _, isSuper := n.Object.(*ast.Super); isSuper {
 		c.compileSuperMemberGet(n)
@@ -1032,6 +1043,19 @@ func (c *compiler) compileMemberRead(n *ast.Member) {
 		c.compileExpr(n.Object)
 		c.emitAt(n.Start, bytecode.OpGetPrivate, name, ref)
 		return
+	}
+	if c.lazyArguments && !n.Optional && c.isLazyArguments(n.Object) {
+		// arguments[i] and arguments.length in a function whose arguments
+		// object is made only on demand read the arguments themselves.
+		if n.Computed {
+			c.compileExpr(n.Property)
+			c.emitAt(n.Property.Pos(), bytecode.OpArgumentsIndex, c.lazyArgumentsSlot, 0)
+			return
+		}
+		if propKeyName(n.Property) == "length" {
+			c.emitAt(n.Property.Pos(), bytecode.OpArgumentsLength, c.lazyArgumentsSlot, 0)
+			return
+		}
 	}
 	c.compileExpr(n.Object)
 	// A failed read is reported where the property is named, as V8 reports

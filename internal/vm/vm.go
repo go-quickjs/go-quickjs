@@ -2921,6 +2921,20 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				f.locals[in.A] = Obj(r.newArgumentsObject(f))
 			}
 			sp = pushAt(stack, sp, f.locals[in.A])
+		case bytecode.OpArgumentsIndex:
+			v, err := r.argumentsIndex(f, in.A, stack[sp-1])
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			stack[sp-1] = v
+		case bytecode.OpArgumentsLength:
+			v, err := r.argumentsLength(f, in.A)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			sp = pushAt(stack, sp, v)
 		case bytecode.OpApplyArguments:
 			target, apply, this := stack[sp-3], stack[sp-2], stack[sp-1]
 			sp -= 3
@@ -4150,6 +4164,31 @@ func (r *Runtime) setIndexed(obj, key, val Value, strict bool) error {
 		return err
 	}
 	return r.setValueProp(obj, k, val, strict)
+}
+
+// argumentsIndex is arguments[key] in a function whose arguments object is
+// made only on demand, in local slot. Until it is made, the object would hold
+// the arguments as they were passed, so an index of them is read from them --
+// unless the object would be mapped and the index name a parameter, whose
+// value the object would give. Anything else makes the object and reads it.
+func (r *Runtime) argumentsIndex(f *frame, slot uint32, key Value) (Value, error) {
+	if !f.locals[slot].IsObject() {
+		if i := uint32(key.num); key.IsNumber() && float64(i) == key.num && uint(i) < uint(len(f.args)) &&
+			!(f.cl.fn.MappedArguments && uint(i) < uint(f.cl.fn.ParamCount)) {
+			return f.args[i], nil
+		}
+		f.locals[slot] = Obj(r.newArgumentsObject(f))
+	}
+	return r.getIndexed(f.locals[slot], key)
+}
+
+// argumentsLength is arguments.length in such a function: how many arguments
+// were passed, until the object is made and may have been given another.
+func (r *Runtime) argumentsLength(f *frame, slot uint32) (Value, error) {
+	if !f.locals[slot].IsObject() {
+		return Int(len(f.args)), nil
+	}
+	return r.getValueProp(f.locals[slot], atomLength)
 }
 
 // appendElem stores v at index n of an array whose length is n, as an
