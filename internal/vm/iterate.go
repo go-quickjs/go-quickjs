@@ -550,11 +550,31 @@ func (r *Runtime) newArgumentsObject(f *frame) *Object {
 	// allocation, rather than in a table grown as each is added.
 	o := newLiteralObject(r.proto.object, ClassArguments, 3)
 	o.elems = append(o.elems, f.args...)
-	o.setOwnRaw(atomLength, Int(len(f.args)), propWritable|propConfigurable)
 	mapped := f.cl != nil && f.cl.fn.MappedArguments
+	kind := 0
+	if mapped {
+		kind = 1
+	}
+	if t := r.argsLayouts[kind]; t != nil && (!mapped || f.callee != nil) {
+		// Every arguments object of the kind has the same three properties
+		// in the same layout as the first, so they are copied from it, with
+		// the values that are this one's own.
+		o.props = append(o.props, t.props[:]...)
+		o.shape = t.shape
+		o.props[0].value = Int(len(f.args))
+		if mapped {
+			o.props[1].value = Obj(f.callee)
+			r.mapArguments(o, f)
+		} else {
+			o.props[1].value = accessorValue(&accessor{getter: r.throwTypeErrorFn, setter: r.throwTypeErrorFn})
+		}
+		return o
+	}
+	o.setOwnRaw(atomLength, Int(len(f.args)), propWritable|propConfigurable)
 	if mapped {
 		r.mapArguments(o, f)
 	}
+	defer r.keepArgsLayout(kind, o)
 	switch {
 	case !mapped:
 		// An unmapped arguments object refuses to say what called it: the
@@ -569,6 +589,27 @@ func (r *Runtime) newArgumentsObject(f *frame) *Object {
 	o.setOwnRaw(r.atoms.internSymbol(r.wellKnown.iterator),
 		Obj(r.arrayValuesFn), propWritable|propConfigurable)
 	return o
+}
+
+// argsLayout is the layout an arguments object of one kind has -- its length,
+// its callee and Symbol.iterator, and their shape if they have one -- kept
+// from the first one made, for the rest to copy.
+type argsLayout struct {
+	shape *shape
+	props [3]Property
+}
+
+// keepArgsLayout keeps the layout of a first arguments object of a kind, if
+// it is one the rest can share: three properties, with no shape -- an
+// arguments object's table is small enough to scan -- or one of the tree
+// rather than one of the object's own.
+func (r *Runtime) keepArgsLayout(kind int, o *Object) {
+	if len(o.props) != 3 || o.shape != nil && (o.shape.unique || o.shape.n != 3) {
+		return
+	}
+	t := &argsLayout{shape: o.shape}
+	copy(t.props[:], o.props)
+	r.argsLayouts[kind] = t
 }
 
 // mapArguments aliases each index to the parameter it was passed to.

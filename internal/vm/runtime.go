@@ -136,6 +136,9 @@ type Runtime struct {
 	backEdges int
 	// regexpFlagAtoms are the names of regExpFlagNames' getters.
 	regexpFlagAtoms [len(regExpFlagNames)]Atom
+	// argsLayouts are the layouts of an unmapped and a mapped arguments
+	// object, from the first of each made.
+	argsLayouts [2]*argsLayout
 	// intStrings are the strings of the integers below len(intStrings),
 	// each made the first time it is asked for: see intString.
 	intStrings *[1024]*String
