@@ -389,6 +389,21 @@ func (c *propCache) own(o *Object) (Value, bool) {
 	return Undefined, false
 }
 
+// storeOwn writes v to the property a write site's cache says o has: o is of
+// the shape it remembers, and the write is to a property the shape already
+// has, writable. It is small enough to be inlined where a write is made; it
+// reports false for anything else, which setPropCached does.
+func (c *propCache) storeOwn(o *Object, v Value) bool {
+	if s := o.shape; s == c.shape && s != nil && c.next == nil {
+		if verifyShapes {
+			checkShape(o)
+		}
+		o.props[c.idx].value = v
+		return true
+	}
+	return false
+}
+
 // noteOwn remembers a plain own property a read found at index i of o's
 // table, for own to answer the next object of its shape -- unless the site
 // has met too many shapes to keep trying.

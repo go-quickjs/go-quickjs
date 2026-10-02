@@ -1494,6 +1494,9 @@ func setPropOperand(obj tentry, val tval, in bytecode.Instr, pc int, strict bool
 		return func(c *tctx) Value {
 			o := c.f.this
 			v := val(c)
+			if o.IsObject() && c.cl.ic[site].storeOwn(o.Object(), v) {
+				return v
+			}
 			c.setProp(o, v, name, site, pc, strict)
 			return v
 		}
@@ -1502,6 +1505,9 @@ func setPropOperand(obj tentry, val tval, in bytecode.Instr, pc int, strict bool
 		return func(c *tctx) Value {
 			o := c.locals[k]
 			v := val(c)
+			if o.IsObject() && c.cl.ic[site].storeOwn(o.Object(), v) {
+				return v
+			}
 			c.setProp(o, v, name, site, pc, strict)
 			return v
 		}
@@ -1510,6 +1516,9 @@ func setPropOperand(obj tentry, val tval, in bytecode.Instr, pc int, strict bool
 	return func(c *tctx) Value {
 		o := x(c)
 		v := val(c)
+		if o.IsObject() && c.cl.ic[site].storeOwn(o.Object(), v) {
+			return v
+		}
 		c.setProp(o, v, name, site, pc, strict)
 		return v
 	}
@@ -1521,19 +1530,31 @@ func setPropStmt(obj tentry, val tval, in bytecode.Instr, pc int, strict bool) t
 	if obj.this {
 		return func(c *tctx) {
 			o := c.f.this
-			c.setProp(o, val(c), name, site, pc, strict)
+			v := val(c)
+			if o.IsObject() && c.cl.ic[site].storeOwn(o.Object(), v) {
+				return
+			}
+			c.setProp(o, v, name, site, pc, strict)
 		}
 	}
 	if k := obj.k; obj.local {
 		return func(c *tctx) {
 			o := c.locals[k]
-			c.setProp(o, val(c), name, site, pc, strict)
+			v := val(c)
+			if o.IsObject() && c.cl.ic[site].storeOwn(o.Object(), v) {
+				return
+			}
+			c.setProp(o, v, name, site, pc, strict)
 		}
 	}
 	x := obj.tree()
 	return func(c *tctx) {
 		o := x(c)
-		c.setProp(o, val(c), name, site, pc, strict)
+		v := val(c)
+		if o.IsObject() && c.cl.ic[site].storeOwn(o.Object(), v) {
+			return
+		}
+		c.setProp(o, v, name, site, pc, strict)
 	}
 }
 
