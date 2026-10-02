@@ -68,3 +68,31 @@ func TestReleaseStackWhileRunning(t *testing.T) {
 		t.Error("the stack was released while a script ran on it")
 	}
 }
+
+// TestReturnedTreeFramesAreCleared pins that the sweep of returned frames
+// clears the tree tier's context too, which a tree leaves set when it
+// returns: the closure it ran, its locals and the value it returned would
+// otherwise stay reachable until the frame was used again.
+func TestReturnedTreeFramesAreCleared(t *testing.T) {
+	defer SetTreeTier(true, false)
+	SetTreeTier(true, true)
+	r := New(Config{})
+	defer r.Close()
+	before := TreesBuilt()
+	if _, err := r.Run(compileForTest(t, `
+		function make(n) { var o = { list: [] }; for (var i = 0; i < n; i++) o.list.push(i); return o }
+		function outer() { return make(3).list.length }
+		outer()`)); err != nil {
+		t.Fatal(err)
+	}
+	if TreesBuilt() == before {
+		t.Fatal("nothing was built as a tree")
+	}
+	r.clearReturnedFrames()
+	for i := r.frameDepth; i < len(r.cur)+r.frameBase && i < 16; i++ {
+		f := r.frameAt(i)
+		if f.tc.cl != nil || f.tc.locals != nil || f.tc.stack != nil || f.tc.ret != (Value{}) {
+			t.Fatalf("frame %d still holds its tree's context", i)
+		}
+	}
+}

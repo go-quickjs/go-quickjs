@@ -525,10 +525,12 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 	case bytecode.OpSetUpvalue:
 		k, v := in.A, b.pop().v
 		return 0, b.stmt(func(c *tctx) { c.cl.upvalues[k].set(v(c)) })
-	case bytecode.OpAdd, bytecode.OpSub, bytecode.OpMul, bytecode.OpDiv, bytecode.OpMod,
-		bytecode.OpBitAnd, bytecode.OpBitOr, bytecode.OpBitXor, bytecode.OpShl, bytecode.OpShr, bytecode.OpUShr:
+	case bytecode.OpAdd, bytecode.OpSub, bytecode.OpMul, bytecode.OpDiv, bytecode.OpMod:
 		y, x := b.pop(), b.pop()
 		b.push(binaryNode(in.Op, x.v, y.v, pc))
+	case bytecode.OpBitAnd, bytecode.OpBitOr, bytecode.OpBitXor, bytecode.OpShl, bytecode.OpShr, bytecode.OpUShr:
+		y, x := b.pop(), b.pop()
+		b.push(bitwiseNode(in.Op, x.v, y.v, pc))
 	case bytecode.OpLt, bytecode.OpLe, bytecode.OpGt, bytecode.OpGe,
 		bytecode.OpEq, bytecode.OpNe, bytecode.OpStrictEq, bytecode.OpStrictNe:
 		y, x := b.pop(), b.pop()
@@ -581,6 +583,10 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		b.push(func(c *tctx) Value { return Bool(!truthy(x(c))) })
 	case bytecode.OpBinImm:
 		x := b.pop().v
+		if op := bytecode.Op(in.B); isBitwise(op) {
+			b.push(bitwiseImmNode(op, x, int32(in.A), pc))
+			break
+		}
 		imm := Int32(int32(in.A))
 		b.push(binaryNode(bytecode.Op(in.B), x, func(*tctx) Value { return imm }, pc))
 	case bytecode.OpBinLocal:
@@ -588,9 +594,13 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		b.push(binaryNode(bytecode.Op(in.B), x, func(c *tctx) Value { return c.locals[k] }, pc))
 	case bytecode.OpLocalBinImm:
 		k := in.A & (1<<24 - 1)
+		local := func(c *tctx) Value { return c.locals[k] }
+		if op := bytecode.Op(in.A >> 24); isBitwise(op) {
+			b.push(bitwiseImmNode(op, local, int32(in.B), pc))
+			break
+		}
 		imm := Int32(int32(in.B))
-		b.push(binaryNode(bytecode.Op(in.A>>24), func(c *tctx) Value { return c.locals[k] },
-			func(*tctx) Value { return imm }, pc))
+		b.push(binaryNode(bytecode.Op(in.A>>24), local, func(*tctx) Value { return imm }, pc))
 	case bytecode.OpGetIndex:
 		key, obj := b.pop().v, b.pop().v
 		b.push(getIndexNode(obj, key, pc))
@@ -870,8 +880,6 @@ func binaryNode(op bytecode.Op, x, y tval, pc int) tval {
 		switch op {
 		case bytecode.OpAdd:
 			v, err = c.r.add(a, b)
-		case bytecode.OpBitAnd, bytecode.OpBitOr, bytecode.OpBitXor, bytecode.OpShl, bytecode.OpShr, bytecode.OpUShr:
-			v, err = c.r.bitwise(op, a, b)
 		default:
 			v, err = c.r.arith(op, a, b)
 		}
@@ -922,33 +930,143 @@ func binaryNode(op bytecode.Op, x, y tval, pc int) tval {
 			return slow(c, a, b)
 		}
 	}
+	return bitwiseNode(op, x, y, pc)
+}
+
+func isBitwise(op bytecode.Op) bool {
+	switch op {
+	case bytecode.OpBitAnd, bytecode.OpBitOr, bytecode.OpBitXor, bytecode.OpShl, bytecode.OpShr, bytecode.OpUShr:
+		return true
+	}
+	return false
+}
+
+// toInt32 is ToInt32 of a number, without the call where it is already an
+// int32, which in code that uses bitwise operators it almost always is.
+func toInt32(f float64) int32 {
+	if i := int32(f); float64(i) == f {
+		return i
+	}
+	return jsnum.ToInt32(f)
+}
+
+// bitwiseSlow is a bitwise operator on what is not two numbers.
+func (c *tctx) bitwiseSlow(op bytecode.Op, a, b Value, pc int) Value {
+	c.at(pc)
+	v, err := c.r.bitwise(op, a, b)
+	if err != nil {
+		c.throw(err)
+	}
+	return v
+}
+
+// bitwiseNode is a bitwise operator over two trees, a node for each
+// operator rather than one that asks which it is every time.
+func bitwiseNode(op bytecode.Op, x, y tval, pc int) tval {
+	switch op {
+	case bytecode.OpBitAnd:
+		return func(c *tctx) Value {
+			a, b := x(c), y(c)
+			if a.IsNumber() && b.IsNumber() {
+				return Int32(toInt32(a.num) & toInt32(b.num))
+			}
+			return c.bitwiseSlow(op, a, b, pc)
+		}
+	case bytecode.OpBitOr:
+		return func(c *tctx) Value {
+			a, b := x(c), y(c)
+			if a.IsNumber() && b.IsNumber() {
+				return Int32(toInt32(a.num) | toInt32(b.num))
+			}
+			return c.bitwiseSlow(op, a, b, pc)
+		}
+	case bytecode.OpBitXor:
+		return func(c *tctx) Value {
+			a, b := x(c), y(c)
+			if a.IsNumber() && b.IsNumber() {
+				return Int32(toInt32(a.num) ^ toInt32(b.num))
+			}
+			return c.bitwiseSlow(op, a, b, pc)
+		}
+	case bytecode.OpShl:
+		return func(c *tctx) Value {
+			a, b := x(c), y(c)
+			if a.IsNumber() && b.IsNumber() {
+				return Int32(toInt32(a.num) << (uint32(toInt32(b.num)) & 31))
+			}
+			return c.bitwiseSlow(op, a, b, pc)
+		}
+	case bytecode.OpShr:
+		return func(c *tctx) Value {
+			a, b := x(c), y(c)
+			if a.IsNumber() && b.IsNumber() {
+				return Int32(toInt32(a.num) >> (uint32(toInt32(b.num)) & 31))
+			}
+			return c.bitwiseSlow(op, a, b, pc)
+		}
+	}
 	return func(c *tctx) Value {
 		a, b := x(c), y(c)
 		if a.IsNumber() && b.IsNumber() {
-			fa, fb := a.num, b.num
-			p, q := int32(fa), int32(fb)
-			if float64(p) != fa {
-				p = jsnum.ToInt32(fa)
-			}
-			if float64(q) != fb {
-				q = jsnum.ToInt32(fb)
-			}
-			switch op {
-			case bytecode.OpBitAnd:
-				return Int32(p & q)
-			case bytecode.OpBitOr:
-				return Int32(p | q)
-			case bytecode.OpBitXor:
-				return Int32(p ^ q)
-			case bytecode.OpShl:
-				return Int32(p << (uint32(q) & 31))
-			case bytecode.OpShr:
-				return Int32(p >> (uint32(q) & 31))
-			default:
-				return Uint32(uint32(p) >> (uint32(q) & 31))
+			return Uint32(uint32(toInt32(a.num)) >> (uint32(toInt32(b.num)) & 31))
+		}
+		return c.bitwiseSlow(op, a, b, pc)
+	}
+}
+
+// bitwiseImmNode is a bitwise operator over a tree and an integer constant,
+// x & 0x3fff and x >> 14: the constant is already an int32, and a shift's
+// count already masked.
+func bitwiseImmNode(op bytecode.Op, x tval, k int32, pc int) tval {
+	kv, n := Int32(k), uint32(k)&31
+	switch op {
+	case bytecode.OpBitAnd:
+		return func(c *tctx) Value {
+			if a := x(c); a.IsNumber() {
+				return Int32(toInt32(a.num) & k)
+			} else {
+				return c.bitwiseSlow(op, a, kv, pc)
 			}
 		}
-		return slow(c, a, b)
+	case bytecode.OpBitOr:
+		return func(c *tctx) Value {
+			if a := x(c); a.IsNumber() {
+				return Int32(toInt32(a.num) | k)
+			} else {
+				return c.bitwiseSlow(op, a, kv, pc)
+			}
+		}
+	case bytecode.OpBitXor:
+		return func(c *tctx) Value {
+			if a := x(c); a.IsNumber() {
+				return Int32(toInt32(a.num) ^ k)
+			} else {
+				return c.bitwiseSlow(op, a, kv, pc)
+			}
+		}
+	case bytecode.OpShl:
+		return func(c *tctx) Value {
+			if a := x(c); a.IsNumber() {
+				return Int32(toInt32(a.num) << n)
+			} else {
+				return c.bitwiseSlow(op, a, kv, pc)
+			}
+		}
+	case bytecode.OpShr:
+		return func(c *tctx) Value {
+			if a := x(c); a.IsNumber() {
+				return Int32(toInt32(a.num) >> n)
+			} else {
+				return c.bitwiseSlow(op, a, kv, pc)
+			}
+		}
+	}
+	return func(c *tctx) Value {
+		if a := x(c); a.IsNumber() {
+			return Uint32(uint32(toInt32(a.num)) >> n)
+		} else {
+			return c.bitwiseSlow(op, a, kv, pc)
+		}
 	}
 }
 

@@ -146,9 +146,17 @@ func (r *Runtime) runTree(f *frame, t *tree) (v Value, err error) {
 			}
 			v, err = Undefined, th.err
 		}
-		c.r, c.cl, c.locals, c.stack = nil, nil, nil, nil
 	}()
 	blocks := t.blocks
+	if len(blocks) == 1 {
+		// Straight-line code, as most small functions are.
+		blk := &blocks[0]
+		for _, s := range blk.body {
+			s(c)
+		}
+		blk.next(c)
+		return c.ret, nil
+	}
 	b := 0
 	for {
 		blk := &blocks[b]
