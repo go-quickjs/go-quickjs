@@ -176,3 +176,46 @@ func TestDeadZoneMarks(t *testing.T) {
 		checkEval(t, tt.src, tt.want)
 	}
 }
+
+// TestHoistedVarsStartUndefined covers a var read before it is assigned, in
+// every kind of function: a call's frame starts its locals as undefined,
+// which the compiler relies on rather than setting each var itself, but for
+// a generator's or an async function's. A call made just before leaves its
+// values in the slots the next frame takes. Each answer is Node's.
+func TestHoistedVarsStartUndefined(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`function dirty() { var a = {}, b = 7, c = "x", d = [1]; return a + b + c + d } function f() { var r = [typeof v, typeof w]; var v = 1; if (false) { var w = 2 } return r.join() } dirty(); f()`,
+			"undefined,undefined"},
+		{`function g(n) { var x; var r = typeof x + (x === undefined); x = n; return n ? r + "," + g(n - 1) : r } g(3)`,
+			"undefinedtrue,undefinedtrue,undefinedtrue,undefinedtrue"},
+		{`var o = { m() { var y; return y }, get p() { var z; return z } }; [o.m(), o.p].join("|") + (o.m() === undefined)`,
+			"|true"},
+		{`class C { constructor() { var q; this.q = q } meth() { var s; return s } } var c = new C; String(c.q) + String(c.meth())`,
+			"undefinedundefined"},
+		{`var arrow = () => { var a1; return a1 }; String(arrow())`,
+			"undefined"},
+		{`function* gen() { var gv; yield gv; gv = 1; yield gv } [...gen()].join()`,
+			",1"},
+		{`async function af() { var av; return av } var res; af().then(v => res = v); String(res)`,
+			"undefined"},
+		{`function p(a, b = 2) { var a; var c; return [a, b, c].join() } p(1)`,
+			"1,2,"},
+		{`function arg(x) { var x; return x } String(arg(5))`,
+			"5"},
+		{`function loop() { var out = []; for (var i = 0; i < 3; i++) { var t; out.push(t); t = i } return out.join() } loop()`,
+			",0,1"},
+		{`function outer() { function inner() { var iv; return iv } return [inner(), inner()].join() } outer()`,
+			","},
+		{`"use strict"; function st() { var sv; return sv } String(st())`,
+			"undefined"},
+		{`function tco(n) { "use strict"; var acc; if (n == 0) return String(acc); return tco(n - 1) } tco(50)`,
+			"undefined"},
+		{`function wd() { var x = 1; with ({}) { var y } return [x, y].join() } wd()`,
+			"1,"},
+		{`function ev() { var e1; return eval("e1") } String(ev())`,
+			"undefined"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}

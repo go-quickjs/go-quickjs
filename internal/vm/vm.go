@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 	"math/big"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/fdlibm"
@@ -206,7 +207,7 @@ func (r *Runtime) callFromLoop(callee, this Value, args []Value) (Value, error) 
 				if fd.arrow {
 					this, newTarget = fd.lexThis, fd.lexNewTarget
 				}
-				v, err := r.run(fd.closure, this, args, newTarget, o)
+				v, err := r.runFD(fd.closure, this, args, newTarget, o, fd)
 				if err == errNoSuper {
 					err = r.throwError(errReference, "%s", errNoSuper.Error())
 				}
@@ -344,7 +345,7 @@ func (r *Runtime) callClosure(o *Object, fd *funcData, this Value, args []Value,
 		return Undefined, r.throwTypeError(
 			"class constructor %s cannot be invoked without \"new\"", fd.name)
 	}
-	return r.run(fd.closure, this, args, newTarget, o)
+	return r.runFD(fd.closure, this, args, newTarget, o, fd)
 }
 
 // isClassConstructorKind reports whether a function is a class's constructor,
@@ -382,6 +383,17 @@ func (r *Runtime) describe(v Value) string {
 // for -- a native function, a proxy, a generator -- is called the ordinary
 // way, which ends the chain.
 func (r *Runtime) run(cl *closure, this Value, args []Value, newTarget Value, callee *Object) (Value, error) {
+	var fd *funcData
+	if callee != nil {
+		fd = callee.fn()
+	}
+	return r.runFD(cl, this, args, newTarget, callee, fd)
+}
+
+// runFD is run for a caller that has the callee's function data already,
+// which run would otherwise look up again: fd is callee's, or nil with no
+// callee.
+func (r *Runtime) runFD(cl *closure, this Value, args []Value, newTarget Value, callee *Object, fd *funcData) (Value, error) {
 start:
 	fn := cl.fn
 
@@ -418,13 +430,14 @@ start:
 	r.stackTop = base + need
 
 	locals := r.stack[base : base+fn.LocalCount : base+fn.LocalCount]
-	// Locals must start clear, since the window was last used by an unrelated
-	// frame and a stale value could be read by a binding whose declaration was
-	// never reached. The parameter slots are skipped because bindParameters
-	// overwrites every one of them immediately below; clearing a Value costs a
-	// write barrier, so the saving is real.
-	if n := fn.ParamCount; n < len(locals) {
-		clear(locals[n:])
+	// Locals start as undefined, since the window was last used by an
+	// unrelated frame and a stale value could be read by a binding whose
+	// declaration was never reached. The parameter slots are skipped because
+	// bindParameters overwrites every one of them immediately below. They are
+	// stored one at a time: clear would call memclr, with a bulk write
+	// barrier, which for a frame's few locals cost more than the call.
+	for i := fn.ParamCount; i < len(locals); i++ {
+		locals[i] = Undefined
 	}
 
 	// The high-water mark is what endTurn clears back to, so that a value left
@@ -459,23 +472,21 @@ start:
 	// copies rather than writing into the creating frame's array.
 	f.withScopes = nil
 	f.evalVars = nil
-	if callee != nil {
-		if fd := callee.fn(); fd != nil {
-			switch {
-			case !newTarget.IsUndefined() && fd.ctorKind == ctorDerived:
-				f.thisRef = &thisBinding{value: this}
-			case fd.arrow && fd.lexThisRef != nil:
-				// An arrow written inside a derived constructor shares its
-				// binding, so calling one before super() is the same error.
-				f.thisRef = fd.lexThisRef
-			}
-			if len(fd.lexWith) > 0 {
-				f.withScopes = fd.lexWith[:len(fd.lexWith):len(fd.lexWith)]
-			}
-			// What an eval declared in an enclosing function is still in scope
-			// here, whether or not this one has anything of its own.
-			f.evalVars = fd.lexEvalVars
+	if fd != nil {
+		switch {
+		case !newTarget.IsUndefined() && fd.ctorKind == ctorDerived:
+			f.thisRef = &thisBinding{value: this}
+		case fd.arrow && fd.lexThisRef != nil:
+			// An arrow written inside a derived constructor shares its
+			// binding, so calling one before super() is the same error.
+			f.thisRef = fd.lexThisRef
 		}
+		if len(fd.lexWith) > 0 {
+			f.withScopes = fd.lexWith[:len(fd.lexWith):len(fd.lexWith)]
+		}
+		// What an eval declared in an enclosing function is still in scope
+		// here, whether or not this one has anything of its own.
+		f.evalVars = fd.lexEvalVars
 	}
 	if fn.HasDirectEval {
 		// The body contains a direct eval, so it needs somewhere for the vars
@@ -491,18 +502,25 @@ start:
 	f.savedSP = 0
 
 	if err := r.bindParameters(f, fn, args); err != nil {
-		r.popFrame(base)
+		r.popFrameOf(f, base)
 		return Undefined, err
 	}
 
+	// The tree the function runs as, if the tier built it one. Every call
+	// asks, so once the answer is known it is a load and two comparisons
+	// here; firstTree settles it the first time.
 	var v Value
 	var err error
-	if t := treeOf(fn); t != nil {
+	t := (*tree)(atomic.LoadPointer(&fn.VMCode))
+	if t == nil {
+		t = firstTree(fn)
+	}
+	if t != noTree {
 		v, err = r.runTree(f, t)
 	} else {
 		v, err = r.execute(f)
 	}
-	r.popFrame(base)
+	r.popFrameOf(f, base)
 	if err != errTailCall {
 		return v, err
 	}
@@ -513,6 +531,10 @@ start:
 		return this, err
 	}
 	newTarget = Undefined
+	fd = nil
+	if callee != nil {
+		fd = callee.fn()
+	}
 	goto start
 }
 
@@ -673,7 +695,12 @@ func (r *Runtime) topFrame() *frame {
 // cleared once per turn instead -- see endTurn, which is where a program could
 // next observe the difference.
 func (r *Runtime) popFrame(base int) {
-	f := r.frameAt(r.frameDepth - 1)
+	r.popFrameOf(r.frameAt(r.frameDepth-1), base)
+}
+
+// popFrameOf is popFrame for a caller that has the frame, which is the top
+// one: finding it again by its depth is a cost every call would pay.
+func (r *Runtime) popFrameOf(f *frame, base int) {
 	for _, u := range f.openUpvalues {
 		u.close()
 	}
@@ -4205,7 +4232,7 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 				res, done = r.leafCall(fd.closure, obj, args)
 			}
 			if !done {
-				res, err = r.run(fd.closure, this, args, newTarget, o)
+				res, err = r.runFD(fd.closure, this, args, newTarget, o, fd)
 				if err == errNoSuper {
 					err = r.throwError(errReference, "%s", errNoSuper.Error())
 				}

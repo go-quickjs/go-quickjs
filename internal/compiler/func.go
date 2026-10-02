@@ -160,9 +160,13 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 	for _, n := range varNames {
 		if _, exists := c.resolveLocal(n); !exists {
 			slot := c.declare(n, bindVar, fn.Start)
-			// A hoisted var starts as undefined.
-			c.emit(bytecode.OpPushUndef, 0, 0)
-			c.emit(bytecode.OpSetLocal, slot, 0)
+			// A hoisted var starts as undefined, which is what the frame a
+			// call makes starts every local as: only a generator's or an
+			// async function's, which their objects keep, is set here.
+			if fn.Generator || fn.Async {
+				c.emit(bytecode.OpPushUndef, 0, 0)
+				c.emit(bytecode.OpSetLocal, slot, 0)
+			}
 		}
 	}
 

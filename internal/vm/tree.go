@@ -110,22 +110,19 @@ func SetTreeTier(on, everything bool) {
 // check it ran.
 func TreesBuilt() int64 { return treesBuilt.Load() }
 
-// treeOf is the tree the function runs as, building it the first time, or
-// nil for one the tier does not build.
-func treeOf(fn *bytecode.Function) *tree {
-	p := (*tree)(atomic.LoadPointer(&fn.VMCode))
+// firstTree builds a function's tree, or settles that it has none, and
+// records which in its VMCode: what runFD reads, at every call, to choose
+// between the tree, noTree's interpreter, and building one.
+//
+//go:noinline
+func firstTree(fn *bytecode.Function) *tree {
+	p := buildTree(fn)
 	if p == nil {
-		p = buildTree(fn)
-		if p == nil {
-			p = noTree
-		} else {
-			treesBuilt.Add(1)
-		}
-		atomic.StorePointer(&fn.VMCode, unsafe.Pointer(p))
+		p = noTree
+	} else {
+		treesBuilt.Add(1)
 	}
-	if p == noTree {
-		return nil
-	}
+	atomic.StorePointer(&fn.VMCode, unsafe.Pointer(p))
 	return p
 }
 
