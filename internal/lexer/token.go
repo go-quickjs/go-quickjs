@@ -125,28 +125,34 @@ func (t Token) String() string {
 	}
 }
 
-// reservedWords are the ECMAScript reserved words. Contextual keywords (async,
+// IsReservedWord reports whether name is a reserved word and so cannot be used
+// as a binding identifier.
+//
+// The reserved words are the ECMAScript ones. Contextual keywords (async,
 // let, static, get, set, of, ...) are deliberately absent: they lex as
 // identifiers and the parser decides what they mean from position.
 //
 // "yield" and "await" are contextual too. Each is an operator only inside a
 // generator or async function respectively, and an ordinary identifier
 // everywhere else, so `var yield = 1` is legal sloppy-mode code.
-var reservedWords = map[string]bool{
-	"break": true, "case": true, "catch": true, "class": true,
-	"const": true, "continue": true, "debugger": true, "default": true,
-	"delete": true, "do": true, "else": true, "enum": true, "export": true,
-	"extends": true, "false": true, "finally": true, "for": true,
-	"function": true, "if": true, "import": true, "in": true,
-	"instanceof": true, "new": true, "null": true, "return": true,
-	"super": true, "switch": true, "this": true, "throw": true, "true": true,
-	"try": true, "typeof": true, "var": true, "void": true, "while": true,
-	"with": true,
+//
+// They are a switch rather than a map: every identifier is looked up, and a
+// switch on a string compares lengths before any bytes.
+func IsReservedWord(name string) bool {
+	switch name {
+	case "break", "case", "catch", "class",
+		"const", "continue", "debugger", "default",
+		"delete", "do", "else", "enum", "export",
+		"extends", "false", "finally", "for",
+		"function", "if", "import", "in",
+		"instanceof", "new", "null", "return",
+		"super", "switch", "this", "throw", "true",
+		"try", "typeof", "var", "void", "while",
+		"with":
+		return true
+	}
+	return false
 }
-
-// IsReservedWord reports whether name is a reserved word and so cannot be used
-// as a binding identifier.
-func IsReservedWord(name string) bool { return reservedWords[name] }
 
 // punctuators, longest first within each starting byte, so that the scanner can
 // greedily match the longest operator (>>>= before >>> before >> before >).

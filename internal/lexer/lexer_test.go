@@ -2,6 +2,7 @@ package lexer
 
 import (
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/wtf8"
@@ -170,6 +171,43 @@ func TestEscapedKeywordIsAnIdentifier(t *testing.T) {
 	}
 	if toks[0].Kind != Ident || toks[0].Value != "if" {
 		t.Errorf("got %v %q, want identifier \"if\"", toks[0].Kind, toks[0].Value)
+	}
+}
+
+// TestIdentifierNames covers names that leave the ASCII run partway: an
+// escape or a letter beyond ASCII after plain letters, and the keyword a name
+// spells only when written without an escape. A ~ in src stands for a
+// backslash.
+func TestIdentifierNames(t *testing.T) {
+	zwnj := string(rune(0x200C))
+	tests := []struct {
+		src     string
+		kind    Kind
+		value   string
+		escaped bool
+	}{
+		{"if", Keyword, "if", false},
+		{"iff", Ident, "iff", false},
+		{"$a_1", Ident, "$a_1", false},
+		{"i~u0066", Ident, "if", true},
+		{"ab~u0063d", Ident, "abcd", true},
+		{"cafés", Ident, "cafés", false},
+		{"x~u200Cy", Ident, "x" + zwnj + "y", true},
+		{"aé~u0062", Ident, "aéb", true},
+		{"~u0061é", Ident, "aé", true},
+	}
+	for _, tt := range tests {
+		src := strings.ReplaceAll(tt.src, "~", string(rune(0x5C)))
+		toks := scanAll(t, src+" z")
+		if len(toks) != 2 {
+			t.Fatalf("%s: got %d tokens, want 2", src, len(toks))
+		}
+		if g := toks[0]; g.Kind != tt.kind || g.Value != tt.value || g.Escaped != tt.escaped {
+			t.Errorf("%s: got %v %q escaped=%v, want %v %q escaped=%v", src, g.Kind, g.Value, g.Escaped, tt.kind, tt.value, tt.escaped)
+		}
+		if toks[1].Value != "z" {
+			t.Errorf("%s: then %q, want z", src, toks[1].Value)
+		}
 	}
 }
 

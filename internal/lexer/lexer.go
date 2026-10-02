@@ -47,6 +47,9 @@ type Lexer struct {
 	html bool
 	// inputStart is where the first token may begin, past a hashbang.
 	inputStart int
+	// identEscaped records that the identifier name last scanned was written
+	// with an escape.
+	identEscaped bool
 }
 
 // AllowHTMLComments makes <!-- start a single-line comment anywhere, and -->
@@ -324,10 +327,10 @@ func (l *Lexer) Next() (Token, error) {
 			return tok, err
 		}
 		tok.Value = name
-		tok.Escaped = strings.Contains(l.src[tok.Pos:l.pos], "\\")
+		tok.Escaped = l.identEscaped
 		// A name written with escapes is never a keyword (`\u0069f` is an
 		// identifier, not `if`), which matters for correctness of `var if`.
-		if reservedWords[name] && !tok.Escaped {
+		if !tok.Escaped && IsReservedWord(name) {
 			tok.Kind = Keyword
 		} else {
 			tok.Kind = Ident
@@ -714,11 +717,24 @@ func (l *Lexer) scanUnicodeEscape(start int) (rune, error) {
 // scanIdentName reads an identifier name, resolving any \u escapes it contains.
 func (l *Lexer) scanIdentName() (string, error) {
 	start := l.pos
+	l.identEscaped = false
+	// Most names are ASCII letters, digits, _ and $ to their end, which are
+	// taken a byte at a time; anything else goes on to the loop below.
+	if start < len(l.src) && isIdentStartByte(l.src[start]) {
+		l.pos++
+		for l.pos < len(l.src) && identPartByte[l.src[l.pos]] {
+			l.pos++
+		}
+		if l.pos == len(l.src) || l.src[l.pos] < utf8.RuneSelf && l.src[l.pos] != '\\' {
+			return l.src[start:l.pos], nil
+		}
+	}
 	var sb *strings.Builder // allocated lazily, only when an escape appears
-	first := true
+	first := l.pos == start
 	for !l.atEnd() {
 		c := l.src[l.pos]
 		if c == '\\' {
+			l.identEscaped = true
 			if sb == nil {
 				sb = &strings.Builder{}
 				sb.WriteString(l.src[start:l.pos])
@@ -958,6 +974,14 @@ func parseHex(s string) (int, bool) {
 	}
 	return v, true
 }
+
+// identPartByte marks the ASCII bytes that continue an identifier.
+var identPartByte = func() (t [256]bool) {
+	for c := 0; c < utf8.RuneSelf; c++ {
+		t[c] = isIdentStartByte(byte(c)) || isDigit(byte(c))
+	}
+	return t
+}()
 
 func isIdentStartByte(c byte) bool {
 	return c == '$' || c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')

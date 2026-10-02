@@ -9,37 +9,55 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/regexp"
 )
 
-// binaryPrec maps a binary operator to its precedence. Higher binds tighter.
-// Operators absent from the table are not binary operators.
+// binaryPrec is a binary operator's precedence, and false for what is not
+// one. Higher binds tighter. It is a switch rather than a map, since it is
+// asked after every operand.
 //
 // `in` and `instanceof` share the relational level, and `**` is the only
 // right-associative entry.
-var binaryPrec = map[string]int{
-	"??": 1,
-	"||": 2,
-	"&&": 3,
-	"|":  4,
-	"^":  5,
-	"&":  6,
-
-	"==": 7, "!=": 7, "===": 7, "!==": 7,
-
-	"<": 8, ">": 8, "<=": 8, ">=": 8, "instanceof": 8, "in": 8,
-
-	"<<": 9, ">>": 9, ">>>": 9,
-
-	"+": 10, "-": 10,
-
-	"*": 11, "/": 11, "%": 11,
-
-	"**": 12,
+func binaryPrec(op string) (int, bool) {
+	switch op {
+	case "??":
+		return 1, true
+	case "||":
+		return 2, true
+	case "&&":
+		return 3, true
+	case "|":
+		return 4, true
+	case "^":
+		return 5, true
+	case "&":
+		return 6, true
+	case "==", "!=", "===", "!==":
+		return 7, true
+	case "<", ">", "<=", ">=", "instanceof", "in":
+		return relationalPrec, true
+	case "<<", ">>", ">>>":
+		return 9, true
+	case "+", "-":
+		return 10, true
+	case "*", "/", "%":
+		return 11, true
+	case "**":
+		return 12, true
+	}
+	return 0, false
 }
 
-// assignOps are the compound assignment operators.
-var assignOps = map[string]bool{
-	"=": true, "+=": true, "-=": true, "*=": true, "/=": true, "%=": true,
-	"**=": true, "<<=": true, ">>=": true, ">>>=": true, "&=": true,
-	"|=": true, "^=": true, "&&=": true, "||=": true, "??=": true,
+// relationalPrec is the precedence of <, in and instanceof.
+const relationalPrec = 8
+
+// isAssignOp reports whether op is an assignment operator, = or a compound
+// one.
+func isAssignOp(op string) bool {
+	switch op {
+	case "=", "+=", "-=", "*=", "/=", "%=",
+		"**=", "<<=", ">>=", ">>>=", "&=",
+		"|=", "^=", "&&=", "||=", "??=":
+		return true
+	}
+	return false
 }
 
 // parseExpr parses a full Expression, including the comma operator.
@@ -109,7 +127,7 @@ func (p *parser) parseAssign() ast.Expr {
 
 // parseAssignFrom completes an assignment whose left side is already parsed.
 func (p *parser) parseAssignFrom(left ast.Expr) ast.Expr {
-	if p.tok.Kind != lexer.Punct || !assignOps[p.tok.Value] {
+	if p.tok.Kind != lexer.Punct || !isAssignOp(p.tok.Value) {
 		return left
 	}
 	op := p.tok.Value
@@ -308,17 +326,17 @@ func (p *parser) checkNullishOperand(e ast.Expr, op string) {
 func (p *parser) peekBinaryOp() (op string, prec int, ok bool) {
 	switch p.tok.Kind {
 	case lexer.Punct:
-		prec, ok = binaryPrec[p.tok.Value]
+		prec, ok = binaryPrec(p.tok.Value)
 		return p.tok.Value, prec, ok
 	case lexer.Keyword:
 		switch p.tok.Value {
 		case "instanceof":
-			return "instanceof", binaryPrec["instanceof"], true
+			return "instanceof", relationalPrec, true
 		case "in":
 			if p.noIn {
 				return "", 0, false
 			}
-			return "in", binaryPrec["in"], true
+			return "in", relationalPrec, true
 		}
 	}
 	return "", 0, false
@@ -379,7 +397,7 @@ func (p *parser) parseUnary() ast.Expr {
 // and `#x in y` is a RelationalExpression, so neither can be the operand of a
 // unary operator -- `typeof () => {}` and `typeof #x in y` are both errors.
 func (p *parser) parseOperand() ast.Expr {
-	return p.parseOperandAt(binaryPrec["in"])
+	return p.parseOperandAt(relationalPrec)
 }
 
 // parseOperandAt parses the right operand of a binary operator of the given
@@ -388,7 +406,7 @@ func (p *parser) parseOperand() ast.Expr {
 func (p *parser) parseOperandAt(prec int) ast.Expr {
 	savedArrow, savedPrivate := p.noArrow, p.noPrivateName
 	p.noArrow = true
-	p.noPrivateName = p.noPrivateName || prec >= binaryPrec["in"]
+	p.noPrivateName = p.noPrivateName || prec >= relationalPrec
 	e := p.parseUnary()
 	p.noArrow, p.noPrivateName = savedArrow, savedPrivate
 	return e
@@ -630,7 +648,7 @@ func (p *parser) parsePrimary() ast.Expr {
 			p.errorAt(p.tok, "a private name is only valid as the left operand of \"in\"")
 		}
 		p.next()
-		relPrec := binaryPrec["in"]
+		relPrec := relationalPrec
 		right := p.parseBinaryFrom(p.parseOperandAt(relPrec), relPrec)
 		return p.nodes.binaryOp("in", name, right)
 
