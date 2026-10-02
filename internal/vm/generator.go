@@ -181,13 +181,15 @@ func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Ob
 	// onto the global object.
 	if callee != nil {
 		if fd := callee.fn(); fd != nil {
-			if len(fd.lexWith) > 0 {
-				g.withScopes = fd.lexWith[:len(fd.lexWith):len(fd.lexWith)]
+			if fd.extra != nil && len(fd.extra.lexWith) > 0 {
+				g.withScopes = fd.extra.lexWith[:len(fd.extra.lexWith):len(fd.extra.lexWith)]
 			}
-			if fd.arrow && fd.lexThisRef != nil {
-				g.thisRef = fd.lexThisRef
+			if fd.arrow && fd.extra.lexThisRef != nil {
+				g.thisRef = fd.extra.lexThisRef
 			}
-			g.evalVars = fd.lexEvalVars
+			if fd.extra != nil {
+				g.evalVars = fd.extra.lexEvalVars
+			}
 		}
 	}
 	if cl.fn.HasDirectEval {

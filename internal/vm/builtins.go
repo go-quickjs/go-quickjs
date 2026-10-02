@@ -730,11 +730,10 @@ func (r *Runtime) initFunctionBuiltins() {
 
 		o := newObject(rt.proto.function, ClassFunction)
 		o.data = &funcData{
-			boundTarget: target,
-			boundThis:   arg(args, 0),
-			boundArgs:   bound,
-			name:        boundName.prefix(maxShownName),
-			ctorKind:    target.fn().ctorKind,
+			bound:    true,
+			extra:    &funcExtra{boundTarget: target, boundThis: arg(args, 0), boundArgs: bound},
+			name:     boundName.prefix(maxShownName),
+			ctorKind: target.fn().ctorKind,
 			// Both are settled here rather than synthesized on demand, because
 			// a length of infinity is not something the synthesized form can
 			// hold.
@@ -782,8 +781,8 @@ func (r *Runtime) initFunctionBuiltins() {
 			// not what its instances were built from: the question is about
 			// the function it was bound from, asked afresh so that a
 			// Symbol.hasInstance there is honoured.
-			if fd := this.Object().fn(); fd != nil && fd.boundTarget != nil {
-				yes, err := rt.instanceOf(v, Obj(fd.boundTarget))
+			if fd := this.Object().fn(); fd != nil && fd.bound {
+				yes, err := rt.instanceOf(v, Obj(fd.extra.boundTarget))
 				return Bool(yes), err
 			}
 			if !v.IsObject() {

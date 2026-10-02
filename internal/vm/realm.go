@@ -186,8 +186,8 @@ func (r *Runtime) functionRealm(o *Object) (*Realm, error) {
 		switch {
 		case fd == nil:
 			return r.Realm, nil
-		case fd.boundTarget != nil:
-			o = fd.boundTarget
+		case fd.bound:
+			o = fd.extra.boundTarget
 			continue
 		case fd.closure != nil:
 			return fd.closure.realm, nil

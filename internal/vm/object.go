@@ -460,12 +460,47 @@ type scriptFuncObject4 struct {
 	captured [4]*upvalue
 }
 
+// arrowFuncObject is scriptFuncObject for an arrow, with the surroundings it
+// captures, which every arrow has, in the same allocation.
+type arrowFuncObject struct {
+	scriptFuncObject
+	extra funcExtra
+}
+
+type arrowFuncObject1 struct {
+	arrowFuncObject
+	captured [1]*upvalue
+}
+
+type arrowFuncObject2 struct {
+	arrowFuncObject
+	captured [2]*upvalue
+}
+
 // newScriptFuncObject creates a callable object together with the closure and
-// the upvalue slots that go with it.
-func newScriptFuncObject(proto *Object, class Class, upvalues int) (*Object, *funcData, *closure, []*upvalue) {
+// the upvalue slots that go with it, and, for an arrow, its funcExtra.
+func newScriptFuncObject(proto *Object, class Class, upvalues int, arrow bool) (*Object, *funcData, *closure, []*upvalue, *funcExtra) {
 	var fo *scriptFuncObject
 	var captured []*upvalue
+	var extra *funcExtra
+	switch {
+	case arrow && upvalues == 0:
+		x := &arrowFuncObject{}
+		fo, extra = &x.scriptFuncObject, &x.extra
+	case arrow && upvalues == 1:
+		x := &arrowFuncObject1{}
+		fo, extra, captured = &x.scriptFuncObject, &x.extra, x.captured[:]
+	case arrow && upvalues == 2:
+		x := &arrowFuncObject2{}
+		fo, extra, captured = &x.scriptFuncObject, &x.extra, x.captured[:]
+	case arrow:
+		extra = &funcExtra{}
+	}
+	if fo != nil {
+		upvalues = -1
+	}
 	switch upvalues {
+	case -1:
 	case 0:
 		fo = &scriptFuncObject{}
 	case 1:
@@ -486,7 +521,7 @@ func newScriptFuncObject(proto *Object, class Class, upvalues int) (*Object, *fu
 	}
 	fo.Object = Object{proto: proto, class: class, flags: objExtensible}
 	fo.Object.data = &fo.fn
-	return &fo.Object, &fo.fn, &fo.cl, captured
+	return &fo.Object, &fo.fn, &fo.cl, captured, extra
 }
 
 // Class returns the object's class.
@@ -1124,27 +1159,15 @@ type funcData struct {
 	// in scope where it was written, which is the whole reason to reach for
 	// one instead of an ordinary function.
 	arrow bool
-	// lexThis, lexNewTarget and lexArgs hold what an arrow captured from the
-	// frame that created it.
-	lexThis Value
-	// lexThisRef is the binding an arrow captured when it was created inside a
-	// derived constructor, where `this` is not a value until super() runs.
-	lexThisRef *thisBinding
-	// lexEvalVars is where a direct eval had put the bindings it declared in
-	// the function this one was created inside, which this one can still see.
-	lexEvalVars *Object
-	// lexWith are the `with` objects in scope where the function was created.
-	// Names in its body resolve against them, so they outlive the frame that
-	// pushed them.
-	lexWith      []*Object
-	lexNewTarget Value
-	lexArgs      []Value
+	// bound marks a function produced by Function.prototype.bind.
+	bound bool
 
-	// boundTarget, boundThis and boundArgs are set for a function produced by
-	// Function.prototype.bind.
-	boundTarget *Object
-	boundThis   Value
-	boundArgs   []Value
+	// extra is what only some functions have -- an arrow's surroundings, a
+	// bound function's target, the scopes of one made inside a `with` body
+	// or beside a direct eval -- or nil. Every built-in and most closures have
+	// none, and are the smaller for it.
+	extra *funcExtra
+
 	// superCtor is the class constructor whose prototype super() reads.
 	//
 	// It is the function rather than the parent because the link is live:
@@ -1160,6 +1183,40 @@ type funcData struct {
 	// one runs it inside super(), wherever in the body that call is and however
 	// deep in an arrow it was written, and only for the call that binds `this`.
 	fieldInit *Object
+}
+
+// funcExtra is the part of a function's data that only some functions
+// have; see funcData.extra.
+type funcExtra struct {
+	// lexThis and lexNewTarget hold what an arrow captured from the frame
+	// that created it.
+	lexThis      Value
+	lexNewTarget Value
+	// lexThisRef is the binding an arrow captured when it was created inside a
+	// derived constructor, where `this` is not a value until super() runs.
+	lexThisRef *thisBinding
+	// lexEvalVars is where a direct eval had put the bindings it declared in
+	// the function this one was created inside, which this one can still see.
+	lexEvalVars *Object
+	// lexWith are the `with` objects in scope where the function was created.
+	// Names in its body resolve against them, so they outlive the frame that
+	// pushed them.
+	lexWith []*Object
+
+	// boundTarget, boundThis and boundArgs are set for a function produced by
+	// Function.prototype.bind.
+	boundTarget *Object
+	boundThis   Value
+	boundArgs   []Value
+}
+
+// boundTarget is the function a bound function calls, or nil for one that
+// is not bound.
+func (fd *funcData) boundTarget() *Object {
+	if !fd.bound {
+		return nil
+	}
+	return fd.extra.boundTarget
 }
 
 type ctorKind uint8

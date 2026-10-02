@@ -29,7 +29,7 @@ const pureCallDepth = 8
 func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, mayStore bool) (Value, bool) {
 	cl := fd.closure
 	fn := cl.fn
-	if cl.pureMiss >= pureMissLimit || fd.arrow || len(fd.lexWith) > 0 || fd.lexEvalVars != nil ||
+	if cl.pureMiss >= pureMissLimit || fd.arrow || fd.extra != nil && len(fd.extra.lexWith) > 0 || fd.extra != nil && fd.extra.lexEvalVars != nil ||
 		fn.CoerceThis && !this.IsObject() {
 		return Undefined, false
 	}
@@ -360,7 +360,7 @@ func (r *Runtime) pureInvoke(callee, this Value, args []Value, depth int, maySto
 	if fd.unary != 0 && len(args) != 0 && args[0].IsNumber() {
 		return Float(unaryMath[fd.unary](args[0].Number())), true
 	}
-	if fd.native != nil || fd.boundTarget != nil || fd.closure == nil || fd.closure.realm != r.Realm ||
+	if fd.native != nil || fd.bound || fd.closure == nil || fd.closure.realm != r.Realm ||
 		!fd.closure.fn.DirectCall {
 		return Undefined, false
 	}

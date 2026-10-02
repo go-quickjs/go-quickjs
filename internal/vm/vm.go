@@ -83,14 +83,14 @@ func (r *Runtime) callObject(o *Object, this Value, args []Value, newTarget Valu
 
 	// A bound function prepends its stored arguments and replaces `this`,
 	// except under `new`, where the original `this` is discarded anyway.
-	if fd.boundTarget != nil {
+	if fd.bound {
 		merged := args
-		if len(fd.boundArgs) > 0 {
-			merged = make([]Value, 0, len(fd.boundArgs)+len(args))
-			merged = append(merged, fd.boundArgs...)
+		if len(fd.extra.boundArgs) > 0 {
+			merged = make([]Value, 0, len(fd.extra.boundArgs)+len(args))
+			merged = append(merged, fd.extra.boundArgs...)
 			merged = append(merged, args...)
 		}
-		boundThis := fd.boundThis
+		boundThis := fd.extra.boundThis
 		if !newTarget.IsUndefined() {
 			boundThis = this
 		}
@@ -100,7 +100,7 @@ func (r *Runtime) callObject(o *Object, this Value, args []Value, newTarget Valu
 		if err := r.nest(); err != nil {
 			return Undefined, err
 		}
-		v, err := r.callObject(fd.boundTarget, boundThis, merged, newTarget)
+		v, err := r.callObject(fd.extra.boundTarget, boundThis, merged, newTarget)
 		r.unnest()
 		return v, err
 	}
@@ -190,7 +190,7 @@ func (r *Runtime) callFromLoop(callee, this Value, args []Value) (Value, error) 
 		if o == r.callFn {
 			return r.callThrough(o, this, args)
 		}
-		if fd != nil && fd.native == nil && fd.boundTarget == nil &&
+		if fd != nil && fd.native == nil && !fd.bound &&
 			fd.closure != nil && fd.closure.realm == r.Realm {
 			if fn := fd.closure.fn; fn.DirectCall {
 				if err := r.tick(); err != nil {
@@ -209,7 +209,7 @@ func (r *Runtime) callFromLoop(callee, this Value, args []Value) (Value, error) 
 				}
 				newTarget := Undefined
 				if fd.arrow {
-					this, newTarget = fd.lexThis, fd.lexNewTarget
+					this, newTarget = fd.extra.lexThis, fd.extra.lexNewTarget
 				}
 				v, err := r.runFD(fd.closure, this, args, newTarget, o, fd)
 				if err == errNoSuper {
@@ -295,8 +295,8 @@ func (r *Runtime) applyCall(target, this Value, args []Value) (Value, error) {
 func (r *Runtime) callClosure(o *Object, fd *funcData, this Value, args []Value, newTarget Value) (Value, error) {
 	// An arrow ignores the this and new.target it was called with.
 	if fd.arrow {
-		this = fd.lexThis
-		newTarget = fd.lexNewTarget
+		this = fd.extra.lexThis
+		newTarget = fd.extra.lexNewTarget
 	}
 
 	// A generator or async function does not run its body on call. A generator
@@ -489,18 +489,18 @@ start:
 		switch {
 		case !newTarget.IsUndefined() && fd.ctorKind == ctorDerived:
 			f.thisRef = &thisBinding{value: this}
-		case fd.arrow && fd.lexThisRef != nil:
+		case fd.arrow && fd.extra.lexThisRef != nil:
 			// An arrow written inside a derived constructor shares its
 			// binding, so calling one before super() is the same error.
-			f.thisRef = fd.lexThisRef
+			f.thisRef = fd.extra.lexThisRef
 		}
-		if len(fd.lexWith) > 0 {
-			f.withScopes = fd.lexWith[:len(fd.lexWith):len(fd.lexWith)]
+		if fd.extra != nil && len(fd.extra.lexWith) > 0 {
+			f.withScopes = fd.extra.lexWith[:len(fd.extra.lexWith):len(fd.extra.lexWith)]
 		}
 		// What an eval declared in an enclosing function is still in scope
 		// here, whether or not this one has anything of its own.
-		if fd.lexEvalVars != nil {
-			f.evalVars = fd.lexEvalVars
+		if fd.extra != nil && fd.extra.lexEvalVars != nil {
+			f.evalVars = fd.extra.lexEvalVars
 		}
 	}
 	if fn.HasDirectEval {
@@ -613,13 +613,13 @@ func (r *Runtime) tailTarget(tc tailCall) (*closure, Value, []Value, *Object, bo
 		if fd == nil || fd.native != nil {
 			return nil, Undefined, nil, nil, false, nil
 		}
-		if fd.boundTarget != nil {
-			if len(fd.boundArgs) > 0 {
-				merged := make([]Value, 0, len(fd.boundArgs)+len(args))
-				merged = append(merged, fd.boundArgs...)
+		if fd.bound {
+			if len(fd.extra.boundArgs) > 0 {
+				merged := make([]Value, 0, len(fd.extra.boundArgs)+len(args))
+				merged = append(merged, fd.extra.boundArgs...)
 				args = append(merged, args...)
 			}
-			o, this = fd.boundTarget, fd.boundThis
+			o, this = fd.extra.boundTarget, fd.extra.boundThis
 			continue
 		}
 		// A function of another realm is called the ordinary way, which is
@@ -629,8 +629,8 @@ func (r *Runtime) tailTarget(tc tailCall) (*closure, Value, []Value, *Object, bo
 			return nil, Undefined, nil, nil, false, nil
 		}
 		if fd.arrow {
-			this = fd.lexThis
-			if !fd.lexNewTarget.IsUndefined() {
+			this = fd.extra.lexThis
+			if !fd.extra.lexNewTarget.IsUndefined() {
 				// An arrow inside a constructor sees its new.target, which run
 				// would have to be given: the ordinary call path does that.
 				return nil, Undefined, nil, nil, false, nil
@@ -3863,8 +3863,9 @@ func (r *Runtime) makeClosure(f *frame, c Value) *Object {
 	// The object, its function data, its closure and the bindings that closure
 	// captures are one allocation: a closure made in a loop is as common as
 	// any object literal, and each of the four was a separate one.
-	o, fd, child, upvalues := newScriptFuncObject(
-		r.funcProtoFor(tmpl.fn), ClassFunction, len(tmpl.fn.Upvalues))
+	arrow := tmpl.fn.Kind == bytecode.KindArrow
+	o, fd, child, upvalues, extra := newScriptFuncObject(
+		r.funcProtoFor(tmpl.fn), ClassFunction, len(tmpl.fn.Upvalues), arrow)
 
 	// The environment is inherited, so a function declared in a module sees
 	// the module's bindings rather than only the globals.
@@ -3886,30 +3887,31 @@ func (r *Runtime) makeClosure(f *frame, c Value) *Object {
 		name:     tmpl.fn.Name,
 		length:   tmpl.fn.Length,
 		ctorKind: kind,
-		// A function created inside a `with` body keeps the objects: the names
-		// in its own body resolve against them too, and the frame that pushed
-		// them is gone by the time it runs. What a direct eval declared in the
-		// enclosing function travels the same way.
-		lexWith:     f.withScopes,
-		lexEvalVars: f.evalVars,
 	}
-	if tmpl.fn.Kind == bytecode.KindArrow {
+	// A function created inside a `with` body keeps the objects: the names
+	// in its own body resolve against them too, and the frame that pushed
+	// them is gone by the time it runs. What a direct eval declared in the
+	// enclosing function travels the same way.
+	if f.withScopes != nil || f.evalVars != nil {
+		if extra == nil {
+			extra = &funcExtra{}
+		}
+		extra.lexWith, extra.lexEvalVars = f.withScopes, f.evalVars
+	}
+	fd.extra = extra
+	if arrow {
 		// An arrow captures its surroundings rather than receiving them from
 		// the call. Nesting works because an arrow created inside another has
 		// already inherited them, so reading the creating frame is enough.
 		fd.arrow = true
-		fd.lexThis = f.this
-		fd.lexThisRef = f.thisRef
-		fd.lexNewTarget = f.newTarget
-		fd.lexArgs = f.args
+		fd.extra.lexThis = f.this
+		fd.extra.lexThisRef = f.thisRef
+		fd.extra.lexNewTarget = f.newTarget
 		if f.callee != nil {
 			if outer := f.callee.fn(); outer != nil {
 				// super resolves against the enclosing method's home object.
 				fd.homeObject = outer.homeObject
 				fd.superCtor = outer.superCtor
-				if outer.arrow {
-					fd.lexArgs = outer.lexArgs
-				}
 			}
 		}
 	}
@@ -4170,13 +4172,13 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 	// being built and the new.target the innermost function sees.
 	for at := o; ; {
 		fd := at.fn()
-		if fd == nil || fd.boundTarget == nil {
+		if fd == nil || !fd.bound {
 			break
 		}
 		if newTarget.IsObject() && newTarget.Object() == at {
-			newTarget = Obj(fd.boundTarget)
+			newTarget = Obj(fd.extra.boundTarget)
 		}
-		at = fd.boundTarget
+		at = fd.extra.boundTarget
 	}
 
 	// The new object's prototype comes from new.target's .prototype property,
@@ -4237,7 +4239,7 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 		}
 	}
 	var res Value
-	if fd.boundTarget == nil && fd.closure != nil && fd.closure.realm == r.Realm {
+	if !fd.bound && fd.closure != nil && fd.closure.realm == r.Realm {
 		// A compiled constructor of this realm is run directly: nothing
 		// callObject would ask of it -- a proxy, a bound target, a generator,
 		// a realm to switch to -- applies.
@@ -4372,7 +4374,7 @@ func (r *Runtime) callIntrinsic1(fn *Object, this, a Value) (Value, error) {
 // reports false in ok for anything else, which has the method called.
 func ordinaryHasInstance(c *Object, v Value) (yes, ok bool) {
 	fd := c.fn()
-	if fd == nil || fd.boundTarget != nil || proxyOf(c) != nil {
+	if fd == nil || fd.bound || proxyOf(c) != nil {
 		return false, false
 	}
 	if !v.IsObject() {

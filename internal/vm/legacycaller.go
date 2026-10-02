@@ -21,7 +21,7 @@ const errLegacyReflection = "'caller', 'callee', and 'arguments' properties may 
 // require: not strict code, an arrow, a method, an accessor, a class, a
 // generator, an async function, a bound function or a built-in.
 func isLegacyFunc(fd *funcData) bool {
-	if fd == nil || fd.closure == nil || fd.boundTarget != nil || fd.arrow {
+	if fd == nil || fd.closure == nil || fd.bound || fd.arrow {
 		return false
 	}
 	fn := fd.closure.fn

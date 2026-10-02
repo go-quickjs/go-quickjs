@@ -69,23 +69,21 @@ func (r *Runtime) evalDirect(caller *frame, scope bytecode.EvalScope, src string
 	// object, which is what an arrow does -- so it is run as one.
 	callee := newObject(r.proto.function, ClassFunction)
 	fd := &funcData{
-		closure:      cl,
-		name:         "eval",
-		arrow:        true,
-		lexThis:      caller.this,
-		lexThisRef:   caller.thisRef,
-		lexNewTarget: caller.newTarget,
-		lexArgs:      caller.args,
-		lexWith:      caller.withScopes,
-		lexEvalVars:  caller.evalVars,
+		closure: cl,
+		name:    "eval",
+		arrow:   true,
+		extra: &funcExtra{
+			lexThis:      caller.this,
+			lexThisRef:   caller.thisRef,
+			lexNewTarget: caller.newTarget,
+			lexWith:      caller.withScopes,
+			lexEvalVars:  caller.evalVars,
+		},
 	}
 	if caller.callee != nil {
 		if outer := caller.callee.fn(); outer != nil {
 			fd.homeObject = outer.homeObject
 			fd.superCtor = outer.superCtor
-			if outer.arrow {
-				fd.lexArgs = outer.lexArgs
-			}
 		}
 	}
 	callee.data = fd
