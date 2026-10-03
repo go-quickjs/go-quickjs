@@ -184,6 +184,34 @@ func asciiString(b []byte) *String {
 	return out
 }
 
+// keyString is the string of a key a script is handed to read the property
+// by -- what for-in gives it -- remembered with its atom, so that reading
+// the property by it, o[k], finds the atom without looking the name up.
+func (r *Runtime) keyString(k Atom) *String {
+	var s *String
+	if k.IsIndex() && k.Index() < 1024 {
+		s = r.intString(k.Index())
+	} else {
+		s = NewString(r.atoms.name(k))
+	}
+	r.keyAtoms[keySlot(s)] = keyAtom{s: s, atom: k}
+	return s
+}
+
+// keyAtom is a string a runtime handed out as a key, and the atom it names.
+// The entry holds the string, so its address names it for as long as the
+// entry is there.
+type keyAtom struct {
+	s    *String
+	atom Atom
+}
+
+// keySlot is where a key string goes in a runtime's keyAtoms, by its
+// address.
+func keySlot(s *String) uint64 {
+	return uint64(uintptr(unsafe.Pointer(s))) * 0x9E3779B97F4A7C15 >> 56
+}
+
 // intString is the string of an integer below 1024. A small integer becomes a
 // string over and over -- an index for-in hands out, a counter joined to a
 // name -- so each is made once per runtime; a string is never changed, so it
@@ -282,7 +310,11 @@ func (r *Runtime) toPropertyName(v Value) (propertyName, error) {
 		}
 		return propertyName{name: jsnum.FormatFloat(f)}, nil
 	case KindString:
-		return propertyName{name: v.String().Go()}, nil
+		s := v.String()
+		if e := &r.keyAtoms[keySlot(s)]; e.s == s {
+			return propertyName{atom: e.atom, hasAtom: true}, nil
+		}
+		return propertyName{name: s.Go()}, nil
 	case KindSymbol:
 		return propertyName{sym: v.Symbol()}, nil
 	}

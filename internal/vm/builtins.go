@@ -536,6 +536,11 @@ func (r *Runtime) objectKeysLike(v Value, mode keysMode) (Value, error) {
 	if err != nil {
 		return Undefined, err
 	}
+	if mode == keysOnly {
+		if c := r.shapeKeys(o); c != nil {
+			return Obj(r.newArrayFrom(c.keys)), nil
+		}
+	}
 	keys, err := r.ownKeysOf(o, false)
 	if err != nil {
 		return Undefined, err
@@ -571,7 +576,7 @@ func (r *Runtime) objectKeysLike(v Value, mode keysMode) (Value, error) {
 		}
 		switch mode {
 		case keysOnly:
-			out = append(out, Str(NewString(r.atoms.name(k))))
+			out = append(out, Str(r.keyString(k)))
 		case valuesOnly:
 			val, err := r.getProp(o, k, v)
 			if err != nil {

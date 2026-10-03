@@ -45,6 +45,16 @@ type shape struct {
 	nextEdge shapeEdge
 	more     map[shapeEdge]*shape
 	index    *propIndex
+	// forIn is what a for-in loop visits on an object of a shared shape,
+	// made the first time one is walked; see startForIn.
+	forIn *forInKeys
+}
+
+// forInKeys is the keys a for-in loop visits, as the strings it hands out
+// and the atoms they name.
+type forInKeys struct {
+	keys  []Value
+	atoms []Atom
 }
 
 // shapeEdge is a property added: a transition's key.

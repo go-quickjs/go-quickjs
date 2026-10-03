@@ -153,6 +153,9 @@ type Runtime struct {
 	// splitBuf is where split collects its pieces before the array is made
 	// of them, kept for the next split.
 	splitBuf []Value
+	// keyAtoms remembers the atoms of key strings the runtime handed out;
+	// see keyString.
+	keyAtoms [256]keyAtom
 	// intStrings are the strings of the integers below len(intStrings),
 	// each made the first time it is asked for: see intString.
 	intStrings *[1024]*String

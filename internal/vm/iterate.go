@@ -23,6 +23,9 @@ type iterState struct {
 	keyAtoms []Atom
 	obj      *Object
 	idx      int
+	// shape is obj's shape when the keys are its own and came from its
+	// shape's cache: while obj keeps it, nothing has been deleted from it.
+	shape *shape
 
 	// iter and next drive the for-of protocol.
 	iter Value
@@ -95,6 +98,15 @@ func (r *Runtime) startForIn(v Value) (Value, error) {
 			last = cur
 		}
 	}
+	// A plain object whose keys are all its own, of a layout objects share,
+	// has the keys its layout has, made once for every loop over an object
+	// of that layout.
+	if last == o {
+		if c := r.shapeKeys(o); c != nil {
+			st.keys, st.keyAtoms, st.shape = c.keys, c.atoms, o.shape
+			return r.newIterObject(st), nil
+		}
+	}
 	var seen map[Atom]bool
 	if last != o {
 		seen = make(map[Atom]bool)
@@ -121,11 +133,7 @@ func (r *Runtime) startForIn(v Value) (Value, error) {
 			if !enumerable {
 				continue
 			}
-			if k.IsIndex() && k.Index() < 1024 {
-				st.keys = append(st.keys, Str(r.intString(k.Index())))
-			} else {
-				st.keys = append(st.keys, Str(NewString(r.atoms.name(k))))
-			}
+			st.keys = append(st.keys, Str(r.keyString(k)))
 			st.keyAtoms = append(st.keyAtoms, k)
 		}
 		if cur == last {
@@ -133,6 +141,29 @@ func (r *Runtime) startForIn(v Value) (Value, error) {
 		}
 	}
 	return r.newIterObject(st), nil
+}
+
+// shapeKeys is the enumerable own string keys of a plain object of a layout
+// objects share, as strings and as atoms, or nil for any other object. They
+// are its layout's -- its keys, their order and which are enumerable -- so
+// they are made the first time they are asked for and kept with the layout.
+// An object with elements has keys of those as well, and is not one.
+func (r *Runtime) shapeKeys(o *Object) *forInKeys {
+	s := o.shape
+	if o.class != ClassObject || len(o.elems) != 0 || s == nil || s.unique {
+		return nil
+	}
+	if s.forIn == nil {
+		c := &forInKeys{}
+		for _, k := range o.ownKeys(false, r.atoms) {
+			if p := o.getOwn(k); p != nil && p.flags&(propEnumerable|propPrivate|propDeleted) == propEnumerable {
+				c.keys = append(c.keys, Str(r.keyString(k)))
+				c.atoms = append(c.atoms, k)
+			}
+		}
+		s.forIn = c
+	}
+	return s.forIn
 }
 
 // noEnumerableKeys reports whether an object has no enumerable own string key,
@@ -224,7 +255,7 @@ func (r *Runtime) iterNext(cursor Value) (Value, bool, error) {
 		for st.idx < len(st.keys) {
 			k, key := st.keys[st.idx], st.keyAtoms[st.idx]
 			st.idx++
-			if st.obj != nil {
+			if st.obj != nil && (st.shape == nil || st.obj.shape != st.shape) {
 				has, err := r.hasPropErr(st.obj, key)
 				if err != nil {
 					st.done = true
