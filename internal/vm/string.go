@@ -969,6 +969,10 @@ func bigIntFromFloat(f float64) (*BigInt, bool) {
 	if math.IsNaN(f) || math.IsInf(f, 0) || f != math.Trunc(f) {
 		return nil, false
 	}
+	if f > -(1<<63) && f < 1<<63 {
+		// What an int64 holds converts exactly, and most are this small.
+		return NewBigInt(int64(f)), true
+	}
 	b := &BigInt{}
 	if _, acc := new(big.Float).SetFloat64(f).Int(&b.V); acc != big.Exact {
 		// SetFloat64 on an integral value is always exact, so this only

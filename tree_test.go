@@ -148,6 +148,27 @@ var treeScripts = []string{
 	 Object.defineProperty(globalThis, "g1", { get() { log.push("get"); return 7 }, set(v) { log.push("set" + v) }, configurable: true });
 	 r.push(w(2), s(1)); Object.defineProperty(globalThis, "g2", { value: 1, writable: false });
 	 try { w(1) } catch (e) { r.push(e.constructor.name) } r.push(s(1), g2, log.join()); r.join(" ")`,
+	// .length of an array, a sparse one, one whose length was set, a
+	// subclass's, a string, a string wrapper, a typed array, an object with
+	// a length and one with a getter, a function, and null.
+	`class A extends Array {} var sp = []; sp[100000] = 1; var big = [1, 2]; big.length = 7;
+	 var vals = [[1, 2, 3], sp, big, new A(4), "héllo", new String("ab"), new Int8Array(3), { length: "x" },
+	   { get length() { return 9 } }, function (a, b) {}, ""];
+	 function f(v) { for (var i = 0; i < 1; i++) return v.length } var r = vals.map(f);
+	 try { f(null) } catch (e) { r.push(e.constructor.name) } r.join(",")`,
+	// Updates of a property -- op=, ++ and -- as statements and values -- and
+	// the order the object, the property and the value are taken in: the
+	// object read before a value that reassigns it, a getter and a setter
+	// called once each, a proxy's traps, a primitive base, and a frozen
+	// object, quietly and in strict mode.
+	`var log = [], g = { get k() { log.push("get"); return 1 }, set k(v) { log.push("set" + v) } };
+	 var p = new Proxy({ k: 5 }, { get(t, n) { log.push("pget " + String(n)); return t[n] }, set(t, n, v) { log.push("pset " + String(n) + "=" + v); t[n] = v; return true } });
+	 function f(o, q) { var r = []; for (var i = 0; i < 2; i++) { o.a += i; o.b *= 2; r.push(o.a++, ++o.b, (o.c -= 1) * 10); o.a += (o = q, 100) }
+	   g.k += 1; p.k += 2; var s = "ab"; s.length += 1; return r.join() + "|" + JSON.stringify(q) + "|" + s.length }
+	 function h(o) { for (var i = 0; i < 1; i++) o.k += 1 } function sh(o) { "use strict"; for (var i = 0; i < 1; i++) o.k += 1 }
+	 var out = [f({ a: 1, b: 1, c: 0 }, { a: 7, b: 2, c: 1 })], fr = Object.freeze({ k: 1 }); h(fr); out.push(fr.k);
+	 for (var v of [null, undefined, fr]) { try { sh(v) } catch (e) { out.push(e.constructor.name + ": " + e.message) } }
+	 out.join(" ") + " " + log.join()`,
 	// Reads at a constant index: a hole, past the end, an element up the
 	// chain, a string, a typed array, a mapped arguments object, -0, and a
 	// base that is null.

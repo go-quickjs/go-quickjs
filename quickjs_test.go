@@ -1585,6 +1585,24 @@ func TestRegExpMatchResults(t *testing.T) {
 			`{"value":1,"writable":true,"enumerable":true,"configurable":true}`)
 }
 
+// TestMapBigIntKeys pins BigInt keys of a Map and a Set, which a value of no
+// more than 2**53 is indexed by as the float that is exactly it and a larger
+// one by its decimal form: the values either side of 2**53, both signs, a
+// number of the same value, which is another key. Node gives the same
+// answers.
+func TestMapBigIntKeys(t *testing.T) {
+	checkEval(t, `var m = new Map(), keys = [0n, 1n, -1n, 2n ** 53n, 2n ** 53n + 1n, -(2n ** 53n), -(2n ** 53n) - 1n, 2n ** 64n, -(2n ** 64n), 2n ** 200n];
+		keys.forEach((k, i) => m.set(k, i));
+		var r = [m.size, m.get(BigInt(1)), m.get(2n ** 53n), m.get(9007199254740993n), m.get(-9007199254740992n), m.get(-9007199254740993n), m.get(18446744073709551616n), m.get(2n ** 200n), m.has(1), m.has("1"), m.get(BigInt("0"))];
+		m.set(1, "num"); m.set(9007199254740992, "big num"); r.push(m.get(1n), m.get(1), m.get(2n ** 53n), m.get(2 ** 53), m.size);
+		var s = new Set([1n, 1n, BigInt(1), 2n ** 53n + 1n, 9007199254740993n]); r.push(s.size, [...m.keys()].map(String).join("|"));
+		r.join(" ")`,
+		"10 1 3 4 5 6 7 9 false false 0 1 num 3 big num 12 2 "+
+			"0|1|-1|9007199254740992|9007199254740993|-9007199254740992|-9007199254740993|"+
+			"18446744073709551616|-18446744073709551616|"+
+			"1606938044258990275541962092341162602522202993782792835301376|1|9007199254740992")
+}
+
 func TestRegExpTestUsesExec(t *testing.T) {
 	tests := []struct{ src, want string }{
 		{`var re = /a/; re.exec = () => null; re.test("a")`, "false"},

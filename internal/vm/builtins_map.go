@@ -55,8 +55,15 @@ func (r *Runtime) strongKeyOf(v Value) mapKey {
 	case KindBool:
 		return mapKey{val: valueKey{kind: KindBool, num: boolToFloat(v.BoolValue())}}
 	case KindBigInt:
-		// Two BigInts with the same value are the same key, so the decimal
-		// form rather than the pointer identifies them.
+		// Two BigInts with the same value are the same key, so the value
+		// rather than the pointer identifies them: one of no more than 2**53
+		// as the float that is exactly it, and a larger one by its decimal
+		// form. A value has one of the two, so they cannot collide.
+		if b := &v.BigInt().V; b.IsInt64() {
+			if i := b.Int64(); i >= -1<<53 && i <= 1<<53 {
+				return mapKey{val: valueKey{kind: KindBigInt, num: float64(i)}}
+			}
+		}
 		return mapKey{val: valueKey{kind: KindBigInt, str: v.BigInt().String()}}
 	case KindObject:
 		return mapKey{ref: v.Object()}
