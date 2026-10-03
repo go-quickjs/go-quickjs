@@ -505,13 +505,16 @@ func (r *Runtime) initStringBuiltins() {
 		if sepVal.IsUndefined() {
 			return Obj(rt.newArrayFrom([]Value{Str(s)})), nil
 		}
-		var out []Value
+		// The pieces are collected in the runtime's buffer and copied into
+		// the array once there are all of them: nothing in the walk can run
+		// a script, which might split as well.
+		out := rt.splitBuf[:0]
 		if sep.Len() == 0 {
 			// An empty separator splits into individual code units.
 			for i := 0; i < s.Len() && len(out) < limit; i++ {
 				out = append(out, Str(s.Substring(i, i+1)))
 			}
-			return Obj(rt.newArrayFrom(out)), nil
+			return Obj(rt.splitArray(out)), nil
 		}
 		// The search is over code units rather than bytes: a separator that is
 		// half of a surrogate pair matches inside the pair, which shares no
@@ -528,7 +531,7 @@ func (r *Runtime) initStringBuiltins() {
 			out = append(out, Str(s.Substring(pos, i)))
 			pos = i + sep.Len()
 		}
-		return Obj(rt.newArrayFrom(out)), nil
+		return Obj(rt.splitArray(out)), nil
 	})
 
 	// One argument each: the padding string is optional, and a function's
@@ -887,21 +890,26 @@ const jsWhitespace = " \t\n\v\f\r" +
 // the rounding takes the larger value on a tie, which is what the
 // specification asks for and not what formatting a float would do.
 func formatFixed(n float64, digits int) string {
+	return string(appendFixed(nil, n, digits))
+}
+
+// appendFixed is formatFixed appending to dst, which lets toFixed write the
+// digits where the string will keep them.
+func appendFixed(dst []byte, n float64, digits int) []byte {
 	if math.Abs(n) >= 1e21 {
-		return jsnum.FormatFloat(n)
+		return jsnum.AppendFloat(dst, n)
 	}
-	sign := ""
 	if n < 0 {
-		sign, n = "-", -n
+		dst, n = append(dst, '-'), -n
 	}
 	// strconv rounds the exact value correctly, but a tie to even. A tie is
 	// an expansion that ends one place past the last digit kept, with a 5,
 	// and the expansion of m*2**p ends -p places after the point -- so only
 	// that one case needs the digits taken by hand. -0 has no sign here.
 	if _, p := binaryParts(n); n == 0 || -p != digits+1 {
-		return sign + strconv.FormatFloat(math.Abs(n), 'f', digits, 64)
+		return strconv.AppendFloat(dst, math.Abs(n), 'f', digits, 64)
 	}
-	return sign + formatFixedExact(n, digits)
+	return append(dst, formatFixedExact(n, digits)...)
 }
 
 // formatFixedExact is formatFixed of a non-negative number from all its
@@ -943,6 +951,20 @@ func withPoint(s string, digits int) string {
 		return s
 	}
 	return s[:len(s)-digits] + "." + s[len(s)-digits:]
+}
+
+// splitArray makes split's array of the pieces collected in the runtime's
+// buffer, and gives the buffer back for the next split -- unless it grew
+// large, which would keep that much memory for as long as the runtime.
+func (r *Runtime) splitArray(out []Value) *Object {
+	a := r.newArrayFrom(out)
+	clear(out)
+	if cap(out) <= 1024 {
+		r.splitBuf = out[:0]
+	} else {
+		r.splitBuf = nil
+	}
+	return a
 }
 
 // clampedPosition narrows a position argument into a string, which is what

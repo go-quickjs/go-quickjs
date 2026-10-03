@@ -148,6 +148,11 @@ type Runtime struct {
 	// primProps remembers where methods of primitives were found on their
 	// prototypes; see primProp.
 	primProps [64]primEntry
+	// comma is ",", join's separator when it is given none.
+	comma *String
+	// splitBuf is where split collects its pieces before the array is made
+	// of them, kept for the next split.
+	splitBuf []Value
 	// intStrings are the strings of the integers below len(intStrings),
 	// each made the first time it is asked for: see intString.
 	intStrings *[1024]*String

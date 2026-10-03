@@ -1326,13 +1326,11 @@ func (r *Runtime) initArrayBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		sep := ","
+		sep := rt.commaString()
 		if s := arg(args, 0); !s.IsUndefined() {
-			ss, err := rt.toString(s)
-			if err != nil {
+			if sep, err = rt.toString(s); err != nil {
 				return Undefined, err
 			}
-			sep = ss.Go()
 		}
 		if !rt.joinOnce(a.o) {
 			return Str(NewString("")), nil
@@ -1341,9 +1339,11 @@ func (r *Runtime) initArrayBuiltins() {
 		// The pieces are joined rather than merely appended: two elements can
 		// end and begin with the halves of one character.
 		var sb partsBuilder
+		sb.Grow(joinSize(a, sep))
+		ascii := sep.ascii
 		for i := int64(0); i < a.n; i++ {
 			if i > 0 {
-				sb.WriteString(sep)
+				sb.WriteStr(sep)
 			}
 			el, err := a.get(rt, i)
 			if err != nil {
@@ -1357,10 +1357,17 @@ func (r *Runtime) initArrayBuiltins() {
 			if err != nil {
 				return Undefined, err
 			}
-			sb.WriteString(s.Go())
+			sb.WriteStr(s)
+			ascii = ascii && s.ascii
 			if sb.overlong() {
 				return Undefined, rt.throwStringLength()
 			}
+		}
+		if ascii {
+			// Every piece was ASCII, so the result is, and is as long as its
+			// bytes, which overlong has kept within a string's length.
+			t := sb.String()
+			return Str(&String{s: t, length: len(t), ascii: true}), nil
 		}
 		return rt.builtString(sb.String())
 	})
@@ -2101,7 +2108,10 @@ func (r *Runtime) initNumberBuiltins() {
 		if math.IsNaN(n) || math.IsInf(n, 0) {
 			return Str(NewString(jsnum.FormatFloat(n))), nil
 		}
-		return Str(NewString(formatFixed(n, int(digits)))), nil
+		// Below 1e21 the digits are at most 21 before the point and 100
+		// after it.
+		var buf [128]byte
+		return Str(asciiString(appendFixed(buf[:0], n, int(digits)))), nil
 	})
 }
 

@@ -35,6 +35,49 @@ type arrayLike struct {
 	n int64
 }
 
+// commaString is ",", the runtime's own: join uses it whenever it is given
+// no separator.
+func (r *Runtime) commaString() *String {
+	if r.comma == nil {
+		r.comma = NewString(",")
+	}
+	return r.comma
+}
+
+// joinSize is about how many bytes joining a's elements with sep makes, for
+// the builder to start with: the separators, the strings among a dense
+// array's elements, and a few bytes for anything else. It looks only at what
+// is stored, so it asks nothing a getter or a toString would be asked. A
+// guess too small just means the builder grows; anything it cannot guess,
+// or that could not be a string, is 0.
+func joinSize(a *arrayLike, sep *String) int {
+	o := a.o
+	if o.class != ClassArray || a.n == 0 || int64(len(o.elems)) != a.n || a.n > 1<<16 {
+		return 0
+	}
+	size := int64(guessBytes(sep)) * (a.n - 1)
+	for _, v := range o.elems {
+		if v.IsString() {
+			size += int64(guessBytes(v.String()))
+		} else {
+			size += 8
+		}
+	}
+	if size > maxStringLength {
+		return 0
+	}
+	return int(size)
+}
+
+// guessBytes is a string's length in bytes, or for a rope, which would have
+// to be walked, its length in code units, which is no more.
+func guessBytes(s *String) int {
+	if s.left == nil {
+		return len(s.s)
+	}
+	return s.length
+}
+
 // viewArrayLike coerces a receiver and reads its length.
 func (r *Runtime) viewArrayLike(this Value) (*arrayLike, error) {
 	o, err := r.toObject(this)

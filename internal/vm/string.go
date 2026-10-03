@@ -416,6 +416,18 @@ func (b *partsBuilder) WriteString(s string) {
 		return
 	}
 	endsHigh, startsLow := wtf8.UnpairedEnds(s)
+	b.write(s, endsHigh, startsLow)
+}
+
+// WriteStr adds a String, whose unpaired ends it knows already.
+func (b *partsBuilder) WriteStr(s *String) {
+	if s.length != 0 {
+		b.write(s.Go(), s.endsHigh, s.startsLow)
+	}
+}
+
+// write adds a piece that is not empty, with its unpaired ends.
+func (b *partsBuilder) write(s string, endsHigh, startsLow bool) {
 	if b.endsHigh && startsLow {
 		b.last = wtf8.Join(b.last, s)
 		b.endsHigh, _ = wtf8.UnpairedEnds(b.last)
