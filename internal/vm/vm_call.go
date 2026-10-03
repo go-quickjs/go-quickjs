@@ -154,11 +154,14 @@ func (r *Runtime) callFromLoop(callee, this Value, args []Value) (Value, error) 
 	if callee.IsObject() {
 		o := callee.Object()
 		fd := o.fn()
-		if fd != nil && fd.unary != 0 && len(args) != 0 && args[0].IsNumber() {
-			// Math.floor(x) and its kind, given a number, cannot throw or
-			// call anything, so no frame is made to show in a stack trace:
-			// the function is applied here.
-			return Float(unaryMath[fd.unary](args[0].Number())), nil
+		if fd != nil && fd.mathOp != 0 {
+			// Math.floor(x) and its kind, given a number, and Math.max(a, b)
+			// and Math.min(a, b), given two, cannot throw or call anything,
+			// so no frame is made to show in a stack trace: the function is
+			// applied here.
+			if v, ok := mathCall(fd.mathOp, args); ok {
+				return v, nil
+			}
 		}
 		if o == r.callFn {
 			return r.callThrough(o, this, args)

@@ -621,7 +621,7 @@ func (r *Runtime) pureCompare(op bytecode.Op, a, b Value) (res, ok bool) {
 }
 
 // pureInvoke is a call inside a pure body, made without a frame where it can
-// be: a unary Math function given a number, as a call from the interpreter
+// be: a Math function given numbers, as a call from the interpreter
 // would apply it, a body that only reads one property of this, or another
 // pure one. It reports false for any other callee.
 func (r *Runtime) pureInvoke(callee, this Value, args []Value, depth int, mayStore bool) (Value, bool) {
@@ -632,8 +632,10 @@ func (r *Runtime) pureInvoke(callee, this Value, args []Value, depth int, maySto
 	if fd == nil {
 		return Undefined, false
 	}
-	if fd.unary != 0 && len(args) != 0 && args[0].IsNumber() {
-		return Float(unaryMath[fd.unary](args[0].Number())), true
+	if fd.mathOp != 0 {
+		if v, ok := mathCall(fd.mathOp, args); ok {
+			return v, true
+		}
 	}
 	if fd.elemOp != 0 {
 		return r.pureElemOp(fd.elemOp, this, args, mayStore)

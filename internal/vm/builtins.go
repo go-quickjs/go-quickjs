@@ -2439,7 +2439,7 @@ func (r *Runtime) initMathBuiltins() {
 			}
 			return Float(f(n)), nil
 		})
-		fo.fn().unary = uint8(i + 1)
+		fo.fn().mathOp = uint8(i + 1)
 	}
 
 	r.defMethod(m, "pow", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -2468,10 +2468,10 @@ func (r *Runtime) initMathBuiltins() {
 
 	r.defMethod(m, "max", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		return rt.mathExtremum(args, true)
-	})
+	}).fn().mathOp = mathMax
 	r.defMethod(m, "min", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		return rt.mathExtremum(args, false)
-	})
+	}).fn().mathOp = mathMin
 
 	r.defMethod(m, "hypot", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		nums, err := rt.coerceAll(args)
@@ -2536,6 +2536,30 @@ func (r *Runtime) coerceAll(args []Value) ([]float64, error) {
 
 // extremum2 is Math.max or Math.min of two numbers: NaN if either is, and -0
 // below +0.
+// mathMax and mathMin are funcData.mathOp for Math.max and Math.min, past
+// every index of unaryMath.
+const (
+	mathMax = 254
+	mathMin = 255
+)
+
+// mathCall applies the Math function op marks to args, where they are what
+// it takes without a conversion that could call anything: a number for a
+// function of one, two numbers for max and min. It reports false otherwise,
+// for the function to be called.
+func mathCall(op uint8, args []Value) (Value, bool) {
+	if op < mathMax {
+		if len(args) != 0 && args[0].IsNumber() {
+			return Float(unaryMath[op](args[0].num)), true
+		}
+		return Undefined, false
+	}
+	if len(args) == 2 && args[0].IsNumber() && args[1].IsNumber() {
+		return Float(extremum2(args[0].num, args[1].num, op == mathMax)), true
+	}
+	return Undefined, false
+}
+
 func extremum2(a, b float64, wantMax bool) float64 {
 	switch {
 	case a != a || b != b:

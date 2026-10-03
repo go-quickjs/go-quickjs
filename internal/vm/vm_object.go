@@ -1178,9 +1178,10 @@ type funcData struct {
 	// which for most functions is nothing at all.
 	protoPending bool
 
-	// unary is, for a Math function of one number, its place in unaryMath:
-	// the call instruction applies it to a number itself, without a call.
-	unary uint8
+	// mathOp marks a Math function a call applies itself, without a frame,
+	// to numbers: one of one number by its place in unaryMath, or max and
+	// min of two (mathMax, mathMin); see mathCall.
+	mathOp uint8
 	// elemOp marks the built-in Array.prototype.push or pop, which a pure
 	// body may call without a frame; see pureElemOp.
 	elemOp uint8
