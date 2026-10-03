@@ -4,6 +4,7 @@ import (
 	"strings"
 	"unicode/utf16"
 
+	"github.com/go-quickjs/go-quickjs/internal/regexp"
 	"github.com/go-quickjs/go-quickjs/internal/wtf8"
 )
 
@@ -361,26 +362,35 @@ func (r *Runtime) regExpSymbolReplace(rx Value, args []Value) (Value, error) {
 
 	replValue := arg(args, 1)
 	functional := isCallable(replValue)
-	template := ""
+	template, tv := "", emptyString
 	if !functional {
-		tv, err := r.toString(replValue)
-		if err != nil {
+		if tv, err = r.toString(replValue); err != nil {
 			return Undefined, err
 		}
 		template = tv.Go()
 	}
 
-	flags, err := r.regExpFlagsOf(rx)
-	if err != nil {
-		return Undefined, err
-	}
-	global := strings.ContainsRune(flags, 'g')
-	fullUnicode := false
-	if global {
+	// A RegExp whose flags would be read through the built-in getters is
+	// asked for them as bits, which is the same answer without the string.
+	var global, fullUnicode bool
+	fl, builtin := r.builtinFlagBits(rx)
+	if builtin {
+		global = fl&regexp.FlagGlobal != 0
+		fullUnicode = fl&(regexp.FlagUnicode|regexp.FlagUnicodeSets) != 0
+	} else {
+		flags, err := r.regExpFlagsOf(rx)
+		if err != nil {
+			return Undefined, err
+		}
+		global = strings.ContainsRune(flags, 'g')
 		fullUnicode = strings.ContainsAny(flags, "uv")
+	}
+	if global {
 		if err := r.setValueProp(rx, atomLastIndex, Int(0), true); err != nil {
 			return Undefined, err
 		}
+	} else {
+		fullUnicode = false
 	}
 
 	// Every match is collected before any replacement runs, because a
@@ -391,7 +401,7 @@ func (r *Runtime) regExpSymbolReplace(rx Value, args []Value) (Value, error) {
 	// as the arrays exec would have made of them, which only this reads.
 	var results []Value
 	var spans []int
-	fast := r.builtinExec(rx)
+	fast := builtin && r.builtinExecOf(rx)
 	if fast && global {
 		var err error
 		if spans, err = r.execMatchAll(rx, s, fullUnicode, spans); err != nil {
@@ -574,8 +584,17 @@ func (r *Runtime) regExpSymbolReplace(rx Value, args []Value) (Value, error) {
 		// Results are taken in order, so one claiming an index behind where the
 		// last left off contributes its replacement and nothing else.
 		if position >= next {
-			sb.WriteString(s.unitSlice(units, next, position))
-			sb.WriteString(replacement)
+			if plain && s.ascii {
+				// An ASCII subject's pieces have no surrogate halves at
+				// their ends, and the template is the String it was.
+				if position > next {
+					sb.write(s.unitSlice(units, next, position), false, false)
+				}
+				sb.WriteStr(tv)
+			} else {
+				sb.WriteString(s.unitSlice(units, next, position))
+				sb.WriteString(replacement)
+			}
 			next = position + matchLen
 			if next > size {
 				next = size
@@ -584,6 +603,12 @@ func (r *Runtime) regExpSymbolReplace(rx Value, args []Value) (Value, error) {
 	}
 	if next < size {
 		sb.WriteString(s.unitSlice(units, next, size))
+	}
+	if plain && s.ascii && tv.ascii {
+		// Made of ASCII alone, as long as its bytes, which overlong has
+		// kept within a string's length.
+		t := sb.String()
+		return Str(&String{s: t, length: len(t), ascii: true}), nil
 	}
 	return r.builtString(sb.String())
 }

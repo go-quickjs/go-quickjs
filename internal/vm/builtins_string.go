@@ -689,6 +689,11 @@ func (r *Runtime) stringReplace(thisStr thisStrFunc, this Value, args []Value, a
 	if this.IsNullish() {
 		return Undefined, r.throwTypeError("String.prototype.replace called on %s", this.Kind())
 	}
+	// A string replaced in a string, by a RegExp whose replace is the
+	// built-in, is replaced by the built-in directly; see replaceDirect.
+	if pat := arg(args, 0); !all && this.IsString() && arg(args, 1).IsString() && r.replaceDirect(pat) {
+		return r.regExpSymbolReplace(pat, []Value{this, args[1]})
+	}
 	// The pattern is asked for its symbol method first, so that a subclass --
 	// or anything else -- can define how it replaces. Only an object is asked:
 	// a primitive cannot carry the method itself, and reaching through to its

@@ -455,7 +455,27 @@ func (r *Runtime) regexpMatch(this Value, s *String) ([]int, *regexp.Regexp, err
 // Its caller can then match without the result array, which nothing but it
 // would see. Groups with names are left to the array, which has them.
 func (r *Runtime) builtinExec(rx Value) bool {
-	if _, ok := r.builtinFlags(rx); !ok || !propsIntact(r.proto.regexp, r.regexpExecProps) {
+	if _, ok := r.builtinFlagBits(rx); !ok {
+		return false
+	}
+	return r.builtinExecOf(rx)
+}
+
+// replaceDirect reports whether s.replace(rx, t), for strings s and t, may
+// call the built-in Symbol.replace itself rather than look it up and call
+// it: rx's Symbol.replace, flags and exec are the built-ins and its lastIndex
+// can be written, so that nothing the call does runs a script or throws, and
+// its frame could not be seen.
+func (r *Runtime) replaceDirect(rx Value) bool {
+	if _, ok := r.builtinFlagBits(rx); !ok || !propsIntact(r.proto.regexp, r.regexpReplaceProps) || !r.builtinExecOf(rx) {
+		return false
+	}
+	return rx.Object().props[0].flags&propWritable != 0
+}
+
+// builtinExecOf is builtinExec for a RegExp builtinFlagBits has answered for.
+func (r *Runtime) builtinExecOf(rx Value) bool {
+	if !propsIntact(r.proto.regexp, r.regexpExecProps) {
 		return false
 	}
 	d, ok := rx.Object().data.(*regexpData)
@@ -897,6 +917,8 @@ func (r *Runtime) initRegExpSymbolMethods(p *Object) {
 		func(rt *Runtime, this Value, args []Value) (Value, error) {
 			return rt.regExpSymbolReplace(this, args)
 		})
+	i := p.findOwn(r.atoms.internSymbol(r.wellKnown.replace))
+	r.regexpReplaceProps = []builtinProp{{i: int(i), p: p.props[i]}}
 
 	// The iterator matchAll returns has its own prototype, so that adding a
 	// method to it does not add one to every array iterator.
@@ -949,6 +971,25 @@ func propsIntact(o *Object, want []builtinProp) bool {
 	return true
 }
 
+// builtinFlagBits is the pattern's flags, where builtinFlags would give them
+// as a string: for a caller that only asks which are set.
+func (r *Runtime) builtinFlagBits(rx Value) (regexp.Flags, bool) {
+	if !rx.IsObject() {
+		return 0, false
+	}
+	o := rx.Object()
+	if o.class != ClassRegExp || o.proto == nil || o.proto != r.proto.regexp ||
+		len(o.props) != 1 || o.props[0].key != atomLastIndex ||
+		!propsIntact(o.proto, r.regexpFlagProps) {
+		return 0, false
+	}
+	d, ok := o.data.(*regexpData)
+	if !ok {
+		return 0, false
+	}
+	return d.re.Flags(), true
+}
+
 // builtinFlags is the flags string a RegExp's flags property would read, when
 // reading it would run nothing but the built-in getters: the RegExp inherits
 // them from this realm's prototype, as the realm made them, and has no
@@ -956,20 +997,10 @@ func propsIntact(o *Object, want []builtinProp) bool {
 // the pattern, so asking the pattern is the same answer. ok is false for any
 // other object, whose flags are read the long way.
 func (r *Runtime) builtinFlags(rx Value) (flags string, ok bool) {
-	if !rx.IsObject() {
-		return "", false
-	}
-	o := rx.Object()
-	if o.class != ClassRegExp || o.proto == nil || o.proto != r.proto.regexp ||
-		len(o.props) != 1 || o.props[0].key != atomLastIndex ||
-		!propsIntact(o.proto, r.regexpFlagProps) {
-		return "", false
-	}
-	d, ok := o.data.(*regexpData)
+	fl, ok := r.builtinFlagBits(rx)
 	if !ok {
 		return "", false
 	}
-	fl := d.re.Flags()
 	if fl&regexp.FlagUnicodeSets != 0 {
 		fl &^= regexp.FlagUnicode
 	}

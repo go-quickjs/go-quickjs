@@ -357,6 +357,9 @@ type Realm struct {
 	regexpFlagProps []builtinProp
 	// regexpExecProps is RegExp.prototype.exec as the realm made it.
 	regexpExecProps []builtinProp
+	// regexpReplaceProps is RegExp.prototype[Symbol.replace] as the realm
+	// made it.
+	regexpReplaceProps []builtinProp
 	// objectToStringFn is Object.prototype.toString, which tells a structured
 	// clone how V8 would name an object it refuses.
 	objectToStringFn *Object
