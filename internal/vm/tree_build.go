@@ -91,7 +91,7 @@ func buildTree(fn *bytecode.Function) *tree {
 		}
 		switch in.Op {
 		case bytecode.OpJump, bytecode.OpJumpIfFalse, bytecode.OpJumpIfTrue, bytecode.OpJumpIfCmpFalse,
-			bytecode.OpJumpIfFalseKeep, bytecode.OpJumpIfTrueKeep:
+			bytecode.OpJumpIfFalseKeep, bytecode.OpJumpIfTrueKeep, bytecode.OpJumpIfNullish, bytecode.OpJumpIfNotNullish:
 			if int(in.A) > len(code) {
 				return nil
 			}
@@ -196,7 +196,8 @@ func treeBuilds(op bytecode.Op) bool {
 		bytecode.OpPushEmptyString, bytecode.OpPutLocal, bytecode.OpDup2, bytecode.OpSwap, bytecode.OpRot3, bytecode.OpRot4,
 		bytecode.OpToPropertyKey, bytecode.OpToPropertyKeyOfBase, bytecode.OpSetHomeObject, bytecode.OpBitNot,
 		bytecode.OpJumpIfFalseKeep, bytecode.OpJumpIfTrueKeep, bytecode.OpCheckGlobalRef, bytecode.OpAssertResolved,
-		bytecode.OpInstanceOf, bytecode.OpArgumentsIndex, bytecode.OpArgumentsLength:
+		bytecode.OpInstanceOf, bytecode.OpArgumentsIndex, bytecode.OpArgumentsLength,
+		bytecode.OpJumpIfNullish, bytecode.OpJumpIfNotNullish:
 		return true
 	}
 	return false
@@ -339,6 +340,33 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 				}
 				return fall
 			}}
+			return b.succ, true
+		case bytecode.OpJumpIfNullish, bytecode.OpJumpIfNotNullish:
+			// a?.b and a ?? b: the value is tested where it stays. A ?. link
+			// leaves it on both paths, as the next link's base or as what
+			// the chain short-circuits from; ?? leaves it where it is the
+			// answer, and lets it go where the default replaces it. The
+			// test is x == null's: != jumps where the value is nullish, ==
+			// where it is not. Both jumps go forward, to the chain's end or
+			// past the default.
+			if !b.spill() || int(in.A) <= pc {
+				return nil, false
+			}
+			d := b.depth()
+			taken, ok := b.target(int(in.A), d)
+			if !ok {
+				return nil, false
+			}
+			op, fallDepth := bytecode.OpNe, d
+			if in.Op == bytecode.OpJumpIfNotNullish {
+				op, fallDepth = bytecode.OpEq, d-1
+			}
+			fall, ok := b.target(pc+1, fallDepth)
+			if !ok {
+				return nil, false
+			}
+			next := eqJump(op, b.stack[d-1], tentry{slot: -1, literal: true, n: Null}, pc, taken, fall)
+			t.blocks[bi] = tblock{body: b.takeBody(), next: next}
 			return b.succ, true
 		case bytecode.OpThrow:
 			v := b.pop().tree()

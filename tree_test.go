@@ -205,6 +205,21 @@ var treeScripts = []string{
 	`function f() { var o = { valueOf() { throw new TypeError("no") } }; var s = 0; for (var i = 0; i < 2; i++) s += i * o; return s }
 	 try { f() } catch (e) { e.message + "|" + e.stack.split("\n").slice(0, 3).join("|") }`,
 	`function f(o) { for (var i = 0; i < 2; i++) o.p.q = i } try { f({}) } catch (e) { e.message + "|" + e.stack.split("\n").slice(0, 2).join("|") }`,
+	// Optional chains and ??, whose value stays on the stack across the
+	// jump that tests it: links that short-circuit at each place, method
+	// calls keeping their receiver, computed links, a getter in the chain,
+	// ?? over falsy values that are not nullish, ??= and ?. in a loop's
+	// condition, which jumps back, and a link without ?. that throws.
+	`function f(objs) { var r = []; for (var i = 0; i < objs.length; i++) { var o = objs[i];
+	   r.push(String(o?.a?.b?.c), String(o?.a?.["b"]?.c ?? "dflt"), String(o?.m?.(i)), String(o?.a?.b?.c ?? 0)) } return r.join() }
+	 var g = { get a() { return { b: { c: "gc" } } } };
+	 f([undefined, null, {}, { a: null }, { a: { b: { c: 0 } } }, { a: { b: { c: "" } } }, { m(x) { return this === objs3 ? "self" + x : "other" } }, g])
+	 var objs3; objs3 = { m(x) { return this === objs3 ? "self" + x : "other" } }; f([objs3, { a: { b: { c: false } } }])`,
+	`function f(n) { var r = [], x = null, y; for (var i = 0; i < n; i++) { x ??= i; y = (y ?? 10) - 1; r.push(x, y, i ?? -1, null ?? i, undefined ?? null ?? i) } return r.join() } f(4)`,
+	`function f(list) { var n = 0, p = list; while ((p = p?.next) ?? false) n++; return n }
+	 f({ next: { next: { next: null } } }) + "," + f(null) + "," + f({ next: undefined })`,
+	`function f(o) { var s = 0; for (var i = 0; i < 2; i++) s += o?.a.b ?? 1; return s }
+	 [f(undefined), f({ a: { b: 5 } })].join() + "|" + (function () { try { return f({}) } catch (e) { return e.constructor.name } })()`,
 }
 
 // treeRun evaluates a script and gives its value, or its error.
