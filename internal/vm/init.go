@@ -425,7 +425,6 @@ func (r *Runtime) initGlobals() {
 	r.initRecentBuiltins()
 	r.initExtraBuiltins()
 	r.initAnnexB()
-	r.initDynamicImport()
-	r.initDeferredImport()
+	r.initModuleSource()
 	r.initShadowRealm()
 }

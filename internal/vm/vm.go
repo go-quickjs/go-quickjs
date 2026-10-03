@@ -3568,6 +3568,13 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			sp = pushAt(stack, sp, f.newTarget)
 		case bytecode.OpImportMeta:
 			sp = pushAt(stack, sp, r.importMeta(cl.env))
+		case bytecode.OpImport:
+			specifier, options := stack[sp-int(in.B)], Undefined
+			if in.B > 1 {
+				options = stack[sp-1]
+			}
+			sp -= int(in.B)
+			sp = pushAt(stack, sp, r.importCall(in.A, specifier, options))
 		case bytecode.OpPushCallee:
 			if f.callee == nil {
 				sp = pushAt(stack, sp, Undefined)

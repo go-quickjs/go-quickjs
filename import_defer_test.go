@@ -174,3 +174,31 @@ func TestImportSource(t *testing.T) {
 		t.Errorf("out = %q", out.String())
 	}
 }
+
+// TestImportIsNoBinding checks that import(), import.defer() and
+// import.source() reach no function a script can see: they are not properties
+// of the global object, and neither a global assigned under their names nor a
+// with object holding one stands in for them.
+func TestImportIsNoBinding(t *testing.T) {
+	rt := deferRuntime(map[string]string{
+		"dep.js": `export const x = 1;`,
+	})
+	defer rt.Close()
+	ns, err := rt.EvalModule("main.js", `
+		const names = Object.getOwnPropertyNames(globalThis).filter(n => n.startsWith("import"));
+		const has = ["import", "import.defer", "import.source"].map(n => n in globalThis);
+		globalThis.import = globalThis["import.defer"] = globalThis["import.source"] = () => "replaced";
+		const a = await import("./dep.js");
+		const b = await import.defer("./dep.js");
+		const c = await import.source("./dep.js").then(() => "resolved", e => e.constructor.name);
+		const w = await new Function("with ({ import: () => 'with' }) return import('./dep.js')")();
+		export const out = [names.length, has.join(), a.x, b.x, c, w.x].join("|");
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _ := ns.Get("out")
+	if got, want := out.String(), "0|false,false,false|1|1|SyntaxError|1"; got != want {
+		t.Errorf("out = %q, want %q", got, want)
+	}
+}

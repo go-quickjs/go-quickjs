@@ -813,74 +813,81 @@ func (c *closure) scope() *Object {
 	return c.realm.globalScope()
 }
 
-// initDynamicImport defines the global that `import(...)` compiles into a call
-// to.
+// importCall is `import(...)`, `import.defer(...)` or `import.source(...)`,
+// which phase says, and returns the promise it evaluates to.
 //
-// The parser turns `import(x)` into a call to an identifier named "import",
-// which cannot collide with anything a script could write, since `import` is a
-// reserved word.
-func (r *Runtime) initDynamicImport() {
-	fn := r.newNativeFunc("import", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		// A dynamic import always returns a promise, so a failure to resolve
-		// rejects rather than throws.
-		result := rt.newPromise()
+// Each is an instruction of its own rather than a call of a function: a script
+// has no function it could read, replace or call some other way, and no frame
+// of one shows in a stack trace. A failure to resolve the specifier rejects
+// the promise rather than throws.
+func (r *Runtime) importCall(phase uint32, specifier, options Value) Value {
+	result := r.newPromise()
+	spec, err := r.toString(specifier)
+	if err != nil {
+		r.rejectPromise(result, thrownValue(err))
+		return Obj(result)
+	}
+	typ, err := r.importAttributes(options)
+	if err != nil {
+		r.rejectPromise(result, thrownValue(err))
+		return Obj(result)
+	}
+	request := bytecode.ModuleRequest(spec.Go(), typ)
+	switch phase {
+	case bytecode.ImportDefer:
+		r.importDeferred(request, result)
+	case bytecode.ImportSource:
+		r.importSource(request, result)
+	default:
+		r.importEvaluated(request, result)
+	}
+	return Obj(result)
+}
 
-		spec, err := rt.toString(arg(args, 0))
+// importEvaluated settles import()'s promise with the module's namespace once
+// the module has been evaluated.
+func (r *Runtime) importEvaluated(request string, result *Object) {
+	// The module is fetched and evaluated in a job rather than here. A host's
+	// loading is asynchronous even when this one's is not, and the difference
+	// is observable: the code that asked for the module runs to the end of its
+	// turn before the module is evaluated, so a dynamic import cannot preempt
+	// the evaluation it was written inside.
+	r.enqueueJob(func() {
+		// A module that will not load, parse or link fails the way a static
+		// import of it would, as an error the script can catch and inspect --
+		// not as a Go error the host would have to interpret.
+		mod, err := r.loadDependency(request, "")
 		if err != nil {
-			rt.rejectPromise(result, thrownValue(err))
-			return Obj(result), nil
+			r.rejectPromise(result, thrownValue(r.wrapEvalError(err)))
+			return
 		}
-		typ, err := rt.importAttributes(arg(args, 1))
+		if err := r.Link(mod); err != nil {
+			r.rejectPromise(result, thrownValue(r.wrapEvalError(err)))
+			return
+		}
+		// Evaluation hands back a promise for the whole graph: a module that
+		// awaits at the top level has not finished when this returns, and the
+		// namespace is only handed over once it has.
+		done, err := r.EvaluateModule(mod)
 		if err != nil {
-			rt.rejectPromise(result, thrownValue(err))
-			return Obj(result), nil
+			r.rejectPromise(result, thrownValue(err))
+			return
 		}
-		request := bytecode.ModuleRequest(spec.Go(), typ)
-
-		// The module is fetched and evaluated in a job rather than here. A
-		// host's loading is asynchronous even when this one's is not, and the
-		// difference is observable: the code that asked for the module runs to
-		// the end of its turn before the module is evaluated, so a dynamic
-		// import cannot preempt the evaluation it was written inside.
-		rt.enqueueJob(func() {
-			// A module that will not load, parse or link fails the way a
-			// static import of it would, as an error the script can catch and
-			// inspect -- not as a Go error the host would have to interpret.
-			mod, err := rt.loadDependency(request, "")
+		onFulfilled := r.newNativeFunc("", 0, func(rt *Runtime, _ Value, _ []Value) (Value, error) {
+			ns, err := rt.namespaceObject(mod)
 			if err != nil {
 				rt.rejectPromise(result, thrownValue(rt.wrapEvalError(err)))
-				return
-			}
-			if err := rt.Link(mod); err != nil {
-				rt.rejectPromise(result, thrownValue(rt.wrapEvalError(err)))
-				return
-			}
-			// Evaluation hands back a promise for the whole graph: a module
-			// that awaits at the top level has not finished when this returns,
-			// and the namespace is only handed over once it has.
-			done, err := rt.EvaluateModule(mod)
-			if err != nil {
-				rt.rejectPromise(result, thrownValue(err))
-				return
-			}
-			onFulfilled := rt.newNativeFunc("", 0, func(rt *Runtime, _ Value, _ []Value) (Value, error) {
-				ns, err := rt.namespaceObject(mod)
-				if err != nil {
-					rt.rejectPromise(result, thrownValue(rt.wrapEvalError(err)))
-					return Undefined, nil
-				}
-				rt.resolvePromise(result, Obj(ns))
 				return Undefined, nil
-			})
-			onRejected := rt.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
-				rt.rejectPromise(result, arg(a, 0))
-				return Undefined, nil
-			})
-			rt.promiseThen(rt.toPromise(done), Obj(onFulfilled), Obj(onRejected))
+			}
+			rt.resolvePromise(result, Obj(ns))
+			return Undefined, nil
 		})
-		return Obj(result), nil
+		onRejected := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
+			rt.rejectPromise(result, arg(a, 0))
+			return Undefined, nil
+		})
+		r.promiseThen(r.toPromise(done), Obj(onFulfilled), Obj(onRejected))
 	})
-	r.global.setOwnRaw(r.atoms.intern("import"), Obj(fn), propWritable|propConfigurable)
 }
 
 // importMeta returns the running module's import.meta object, creating it on

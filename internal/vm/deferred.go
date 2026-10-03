@@ -178,101 +178,73 @@ func (r *Runtime) evaluationList(m *Module) []*Module {
 	return list
 }
 
-// initDeferredImport defines import.defer, which loads and links a module, runs
-// what of its graph awaits at the top level, and hands back its deferred
-// namespace.
-func (r *Runtime) initDeferredImport() {
-	fn := r.newNativeFunc("import.defer", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		result := rt.newPromise()
-		spec, err := rt.toString(arg(args, 0))
-		if err != nil {
-			rt.rejectPromise(result, thrownValue(err))
-			return Obj(result), nil
+// importDeferred settles import.defer()'s promise: it loads and links the
+// module, runs what of its graph awaits at the top level, and hands back its
+// deferred namespace.
+func (r *Runtime) importDeferred(request string, result *Object) {
+	r.enqueueJob(func() {
+		mod, err := r.loadDependency(request, "")
+		if err == nil {
+			err = r.Link(mod)
 		}
-		typ, err := rt.importAttributes(arg(args, 1))
 		if err != nil {
-			rt.rejectPromise(result, thrownValue(err))
-			return Obj(result), nil
+			r.rejectPromise(result, thrownValue(r.wrapEvalError(err)))
+			return
 		}
-		request := bytecode.ModuleRequest(spec.Go(), typ)
-		rt.enqueueJob(func() {
-			mod, err := rt.loadDependency(request, "")
-			if err == nil {
-				err = rt.Link(mod)
-			}
+		settle := func() {
+			ns, err := r.deferredNamespaceObject(mod)
 			if err != nil {
-				rt.rejectPromise(result, thrownValue(rt.wrapEvalError(err)))
+				r.rejectPromise(result, thrownValue(r.wrapEvalError(err)))
 				return
 			}
-			settle := func() {
-				ns, err := rt.deferredNamespaceObject(mod)
-				if err != nil {
-					rt.rejectPromise(result, thrownValue(rt.wrapEvalError(err)))
-					return
-				}
-				rt.resolvePromise(result, Obj(ns))
-			}
-			async := rt.gatherAsyncDependencies(mod, map[*Module]bool{}, nil)
-			if len(async) == 0 {
-				settle()
+			r.resolvePromise(result, Obj(ns))
+		}
+		async := r.gatherAsyncDependencies(mod, map[*Module]bool{}, nil)
+		if len(async) == 0 {
+			settle()
+			return
+		}
+		// What awaits at the top level is run now, and the namespace handed
+		// over once all of it has finished.
+		pending := len(async)
+		failed := false
+		for _, dep := range async {
+			done, err := r.EvaluateModule(dep)
+			if err != nil {
+				r.rejectPromise(result, thrownValue(err))
 				return
 			}
-			// What awaits at the top level is run now, and the namespace
-			// handed over once all of it has finished.
-			pending := len(async)
-			failed := false
-			for _, dep := range async {
-				done, err := rt.EvaluateModule(dep)
-				if err != nil {
-					rt.rejectPromise(result, thrownValue(err))
-					return
+			r.awaitThen(done, func(rt *Runtime, _ Value) {
+				if pending--; pending == 0 && !failed {
+					settle()
 				}
-				rt.awaitThen(done, func(rt *Runtime, _ Value) {
-					if pending--; pending == 0 && !failed {
-						settle()
-					}
-				}, func(rt *Runtime, reason Value) {
-					if !failed {
-						failed = true
-						rt.rejectPromise(result, reason)
-					}
-				})
-			}
-		})
-		return Obj(result), nil
-	})
-	r.global.setOwnRaw(r.atoms.intern("import.defer"), Obj(fn), propWritable|propConfigurable)
-
-	// import.source loads a module for its source, which a module here never
-	// has: once the module is found it rejects, as linking a static source
-	// import of it fails.
-	src := r.newNativeFunc("import.source", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		result := rt.newPromise()
-		spec, err := rt.toString(arg(args, 0))
-		if err != nil {
-			rt.rejectPromise(result, thrownValue(err))
-			return Obj(result), nil
+			}, func(rt *Runtime, reason Value) {
+				if !failed {
+					failed = true
+					rt.rejectPromise(result, reason)
+				}
+			})
 		}
-		typ, err := rt.importAttributes(arg(args, 1))
-		if err != nil {
-			rt.rejectPromise(result, thrownValue(err))
-			return Obj(result), nil
-		}
-		request := bytecode.ModuleRequest(spec.Go(), typ)
-		rt.enqueueJob(func() {
-			mod, err := rt.loadDependency(request, "")
-			if err == nil {
-				err = rt.moduleSourceError(mod)
-			}
-			rt.rejectPromise(result, thrownValue(rt.wrapEvalError(err)))
-		})
-		return Obj(result), nil
 	})
-	r.global.setOwnRaw(r.atoms.intern("import.source"), Obj(src), propWritable|propConfigurable)
+}
 
-	// %AbstractModuleSource% is what the module source classes of a host
-	// extend. It is abstract, and not a global: a host reaches it through
-	// the Runtime.
+// importSource settles import.source()'s promise. It asks for a module's
+// source, which a module here never has: once the module is found it rejects,
+// as linking a static source import of it fails.
+func (r *Runtime) importSource(request string, result *Object) {
+	r.enqueueJob(func() {
+		mod, err := r.loadDependency(request, "")
+		if err == nil {
+			err = r.moduleSourceError(mod)
+		}
+		r.rejectPromise(result, thrownValue(r.wrapEvalError(err)))
+	})
+}
+
+// initModuleSource defines %AbstractModuleSource%, what the module source
+// classes of a host extend. It is abstract, and not a global: a host reaches
+// it through the Runtime.
+func (r *Runtime) initModuleSource() {
 	proto := newObject(r.proto.object, ClassObject)
 	r.abstractModuleSource = r.newCtor("AbstractModuleSource", 0, proto,
 		func(rt *Runtime, this Value, args []Value) (Value, error) {

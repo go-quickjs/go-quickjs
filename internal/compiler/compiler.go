@@ -1604,6 +1604,8 @@ func stackEffect(op bytecode.Op, a, b uint32) int {
 	case bytecode.OpCall:
 		// Pops the callee and its arguments, pushes the result.
 		return -int(a)
+	case bytecode.OpImport:
+		return 1 - int(b)
 	case bytecode.OpCallMethod:
 		return -int(a) - 1
 	case bytecode.OpNew:

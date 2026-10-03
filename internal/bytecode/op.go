@@ -529,9 +529,21 @@ const (
 	// arguments there are while the object has not been made, and its length
 	// once it has.
 	OpArgumentsLength
+	// OpImport is `import(...)`, `import.defer(...)` or `import.source(...)`,
+	// which A says as one of the Import constants: it pops B arguments, the
+	// specifier and, if B is 2, the options, and pushes the promise of the
+	// module. It is not a call: there is no function a script could reach.
+	OpImport
 
 	// opCount is the number of opcodes, used to size the name table.
 	opCount
+)
+
+// The phases of an import OpImport's A operand names.
+const (
+	ImportEvaluate = iota // import(): the module, evaluated
+	ImportDefer           // import.defer(): its deferred namespace
+	ImportSource          // import.source(): its source
 )
 
 // The flags OpUpdateLocal's B operand carries.
@@ -605,6 +617,7 @@ var opNames = [opCount]string{
 	OpLocalBinImm:           "local_bin_imm",
 	OpArgumentsIndex:        "arguments_index",
 	OpArgumentsLength:       "arguments_length",
+	OpImport:                "import",
 	OpArrayRest:             "array_rest",
 	OpObjectRest:            "object_rest",
 

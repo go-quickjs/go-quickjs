@@ -2,6 +2,8 @@ package vm
 
 import (
 	"math"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
 // ShadowRealm.
@@ -237,14 +239,10 @@ func (r *Runtime) shadowImportValue(re *Realm, spec string, exportName *String) 
 	result := r.newPromise()
 	// The import is the shadow realm's own import(), which runs in it -- and
 	// so do the jobs it queues, which load and evaluate the module there.
-	importFn := re.global.getOwn(r.atoms.intern("import"))
-	if importFn == nil || !importFn.value.IsObject() {
-		return Undefined, r.throwTypeError("the ShadowRealm cannot import")
-	}
-	inner, err := r.call(importFn.value, Undefined, []Value{Str(NewString(spec))})
-	if err != nil {
-		return Undefined, err
-	}
+	var inner Value
+	r.InRealm(re, func() {
+		inner = r.importCall(bytecode.ImportEvaluate, Str(NewString(spec)), Undefined)
+	})
 	name := exportName.Go()
 	onFulfilled := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, args []Value) (Value, error) {
 		ns := arg(args, 0)

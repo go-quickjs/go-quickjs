@@ -1106,6 +1106,10 @@ func callPos(n *ast.Call) int {
 }
 
 func (c *compiler) compileCall(n *ast.Call) {
+	if phase, ok := importPhase(n); ok {
+		c.compileImport(n, phase)
+		return
+	}
 	// A parenthesized optional chain keeps the reference it produced, so the
 	// object it read from is what the call binds `this` to.
 	if chain, ok := n.Callee.(*ast.OptionalChain); ok {
@@ -1191,6 +1195,35 @@ func (c *compiler) compileCall(n *ast.Call) {
 	c.compileExpr(n.Callee)
 	argc := c.compileArguments(n.Args)
 	c.emitAt(callPos(n), c.callOp(n, bytecode.OpCall), uint32(argc), 0)
+}
+
+// importPhase reports whether n is `import(...)`, `import.defer(...)` or
+// `import.source(...)`, and which. The parser writes each as a call of an
+// identifier named for it, which no script can write: `import` is a reserved
+// word, and the other two are not identifiers at all.
+func importPhase(n *ast.Call) (uint32, bool) {
+	id, ok := n.Callee.(*ast.Ident)
+	if !ok {
+		return 0, false
+	}
+	switch id.Name {
+	case "import":
+		return bytecode.ImportEvaluate, true
+	case "import.defer":
+		return bytecode.ImportDefer, true
+	case "import.source":
+		return bytecode.ImportSource, true
+	}
+	return 0, false
+}
+
+// compileImport compiles an import call as an instruction of its own. It
+// names no binding, so nothing a script declares, assigns or puts in a with
+// object can stand in for it. The parser has seen to the arguments: one or
+// two, and no spread.
+func (c *compiler) compileImport(n *ast.Call, phase uint32) {
+	argc := c.compileArguments(n.Args)
+	c.emitAt(callPos(n), bytecode.OpImport, phase, uint32(argc))
 }
 
 // compileArguments pushes a call's arguments and returns how many there are.
@@ -1429,6 +1462,11 @@ func (c *compiler) compileChainLink(e ast.Expr, jumps *[]chainJump) {
 			// `super()?.x`: the call is the base the chain reads from, and a
 			// super call is never itself optional.
 			c.compileCall(n)
+			return
+		}
+		if phase, ok := importPhase(n); ok {
+			// `import(x)?.then`: never optional itself either.
+			c.compileImport(n, phase)
 			return
 		}
 		if chain, ok := n.Callee.(*ast.OptionalChain); ok {
