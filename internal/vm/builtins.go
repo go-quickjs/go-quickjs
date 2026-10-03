@@ -1849,23 +1849,12 @@ func (r *Runtime) iterate(v Value, fn func(Value) error) error {
 		return err
 	}
 	for {
-		res, err := r.call(next, iter, nil)
+		val, ok, err := r.stepIter(iter, next)
 		if err != nil {
 			return err
 		}
-		if !res.IsObject() {
-			return r.throwTypeError("an iterator result must be an object")
-		}
-		done, err := r.getValueProp(res, atomDone)
-		if err != nil {
-			return err
-		}
-		if done.Truthy() {
+		if !ok {
 			return nil
-		}
-		val, err := r.getValueProp(res, atomValue)
-		if err != nil {
-			return err
 		}
 		if err := fn(val); err != nil {
 			// An error from the body closes the iterator, giving it a chance

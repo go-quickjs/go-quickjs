@@ -902,33 +902,38 @@ func (r *Runtime) newMapIterator(m *jsMap, kind mapIterKind, proto *Object) Valu
 // initMapIteratorProto fills in %MapIteratorPrototype% or
 // %SetIteratorPrototype%, which differ only in the tag they report.
 func (r *Runtime) initMapIteratorProto(proto *Object, tag string) {
-	r.defMethod(proto, "next", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	next := r.defMethod(proto, "next", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		d, err := rt.mapIterOf(this, tag)
 		if err != nil {
 			return Undefined, err
 		}
-		i := -1
-		if !d.done {
-			i = d.m.next(&d.at)
-		}
-		if i < 0 {
-			d.done = true
-			return Obj(rt.iterResult(Undefined, true)), nil
-		}
-		e := d.m.entries[i]
-		var v Value
-		switch d.kind {
-		case mapIterKeys:
-			v = e.key
-		case mapIterValues:
-			v = e.value
-		default:
-			v = Obj(rt.newArrayFrom([]Value{e.key, e.value}))
-		}
-		return Obj(rt.iterResult(v, false)), nil
+		v, ok := rt.mapIterStep(d)
+		return Obj(rt.iterResult(v, !ok)), nil
 	})
+	next.fn().iterNext = iterNextMap
 	proto.setOwnRaw(r.atoms.internSymbol(r.wellKnown.toStringTag),
 		Str(NewString(tag)), propConfigurable)
+}
+
+// mapIterStep is a Map or Set iterator's next, as its value and false once it
+// is done, without the result object.
+func (r *Runtime) mapIterStep(d *mapIterData) (Value, bool) {
+	i := -1
+	if !d.done {
+		i = d.m.next(&d.at)
+	}
+	if i < 0 {
+		d.done = true
+		return Undefined, false
+	}
+	e := d.m.entries[i]
+	switch d.kind {
+	case mapIterKeys:
+		return e.key, true
+	case mapIterValues:
+		return e.value, true
+	}
+	return Obj(r.newArrayFrom([]Value{e.key, e.value})), true
 }
 
 // mapIterOf recovers an iterator's state, refusing anything else.

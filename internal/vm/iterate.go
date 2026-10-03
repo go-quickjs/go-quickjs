@@ -240,30 +240,82 @@ func (r *Runtime) iterNext(cursor Value) (Value, bool, error) {
 		return Undefined, false, nil
 	}
 
-	res, err := r.call(st.next, st.iter, nil)
-	if err != nil {
-		st.done = true
-		return Undefined, false, err
-	}
-	if !res.IsObject() {
-		st.done = true
-		return Undefined, false, r.throwTypeError("an iterator result must be an object")
-	}
 	// A result the iterator has handed over is the iterator's last word: if
 	// reading done or value from it throws, the iteration is over and the
 	// iterator is not asked to return. It was not the loop that gave up.
+	val, ok, err := r.stepIter(st.iter, st.next)
+	if !ok {
+		st.done = true
+	}
+	return val, ok, err
+}
+
+// The built-in next methods a loop steps itself; see funcData.iterNext.
+const (
+	iterNextMap = 1 + iota
+	iterNextGenerator
+)
+
+// stepIter calls an iterator's next method and reads its result: the value,
+// or false once the iterator is done or has failed.
+//
+// A built-in next of this realm -- a Map or Set iterator's, a generator's --
+// is applied directly, without the result object it would make: a loop reads
+// only the object's own done and value, which nothing could have changed, so
+// the object is never seen. A generator's next still has its frame, which a
+// stack trace taken in the generator's body shows. A result a generator hands
+// over from a yield* is the delegate's own object, and is read as any other.
+func (r *Runtime) stepIter(iter, next Value) (Value, bool, error) {
+	var res Value
+	have := false
+	if next.IsObject() && iter.IsObject() {
+		n, it := next.Object(), iter.Object()
+		if fd := n.fn(); fd != nil && fd.iterNext != 0 && (fd.realm == nil || fd.realm == r.Realm) {
+			switch fd.iterNext {
+			case iterNextMap:
+				if d, ok := it.data.(*mapIterData); ok {
+					if err := r.tick(); err != nil {
+						return Undefined, false, err
+					}
+					v, ok := r.mapIterStep(d)
+					return v, ok, nil
+				}
+			case iterNextGenerator:
+				if g, ok := it.data.(*generator); ok && it.class == ClassGenerator {
+					if err := r.pushNativeFrame(n, iter, nil, Undefined); err != nil {
+						return Undefined, false, err
+					}
+					got, err := r.resumeFull(g, Undefined, resumeNext)
+					r.frameDepth--
+					if err != nil {
+						return Undefined, false, err
+					}
+					if !got.raw || !got.value.IsObject() {
+						return got.value, !got.done, nil
+					}
+					res, have = got.value, true
+				}
+			}
+		}
+	}
+	if !have {
+		var err error
+		if res, err = r.call(next, iter, nil); err != nil {
+			return Undefined, false, err
+		}
+	}
+	if !res.IsObject() {
+		return Undefined, false, r.throwTypeError("an iterator result must be an object")
+	}
 	done, err := r.getValueProp(res, atomDone)
 	if err != nil {
-		st.done = true
 		return Undefined, false, err
 	}
 	if done.Truthy() {
-		st.done = true
 		return Undefined, false, nil
 	}
 	val, err := r.getValueProp(res, atomValue)
 	if err != nil {
-		st.done = true
 		return Undefined, false, err
 	}
 	return val, true, nil

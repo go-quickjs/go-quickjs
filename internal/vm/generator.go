@@ -563,7 +563,7 @@ func (r *Runtime) initGeneratorBuiltins() {
 	r.proto.generator = newObject(r.proto.iterator, ClassObject)
 	p := r.proto.generator
 
-	r.defMethod(p, "next", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	next := r.defMethod(p, "next", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		g, err := rt.generatorOf(this, "Generator.prototype.next")
 		if err != nil {
 			return Undefined, err
@@ -574,6 +574,7 @@ func (r *Runtime) initGeneratorBuiltins() {
 		}
 		return rt.result(res), nil
 	})
+	next.fn().iterNext = iterNextGenerator
 
 	r.defMethod(p, "return", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		g, err := rt.generatorOf(this, "Generator.prototype.return")

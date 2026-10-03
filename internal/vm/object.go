@@ -1184,6 +1184,10 @@ type funcData struct {
 	// elemOp marks the built-in Array.prototype.push or pop, which a pure
 	// body may call without a frame; see pureElemOp.
 	elemOp uint8
+	// iterNext marks a built-in iterator's next -- a Map or Set iterator's,
+	// or a generator's -- which a loop over the iterator steps itself,
+	// without the result object; see stepIter.
+	iterNext uint8
 
 	// arrow marks a function with no bindings of its own. An arrow does not
 	// get this, new.target, super or arguments from its call: it uses the ones
