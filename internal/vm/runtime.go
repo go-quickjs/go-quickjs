@@ -142,6 +142,9 @@ type Runtime struct {
 	// matchLayout is the layout of a match result made by a regexp without
 	// the d flag, from the first one made.
 	matchLayout *argsLayout
+	// iterResultShape is the shape of a { value, done } result, from the
+	// first one made.
+	iterResultShape *shape
 	// intStrings are the strings of the integers below len(intStrings),
 	// each made the first time it is asked for: see intString.
 	intStrings *[1024]*String

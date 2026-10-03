@@ -608,10 +608,24 @@ func (r *Runtime) initGeneratorBuiltins() {
 }
 
 // iterResult builds the { value, done } object the iteration protocol uses.
+//
+// Every one is made with room for its two properties, and every one has the
+// same two, so after the first the rest copy its shape rather than finding
+// each property's place: one allocation where there were three.
 func (r *Runtime) iterResult(v Value, done bool) *Object {
-	o := newObject(r.proto.object, ClassObject)
+	o := newLiteralObject(r.proto.object, ClassObject, 2)
+	if s := r.iterResultShape; s != nil {
+		o.props = append(o.props,
+			Property{key: atomValue, flags: propDefault, value: v},
+			Property{key: atomDone, flags: propDefault, value: Bool(done)})
+		o.shape = s
+		return o
+	}
 	o.setOwnRaw(atomValue, v, propDefault)
 	o.setOwnRaw(atomDone, Bool(done), propDefault)
+	if s := o.shape; s != nil && !s.unique && s.n == 2 {
+		r.iterResultShape = s
+	}
 	return o
 }
 
