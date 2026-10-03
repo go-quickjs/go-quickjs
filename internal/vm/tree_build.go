@@ -1367,7 +1367,7 @@ func (c *tctx) compareSlow(op bytecode.Op, a, b Value, pc int) bool {
 // first thing, or false.
 func elemAt(obj, key Value) (Value, bool) {
 	if obj.IsObject() && key.IsNumber() {
-		o := obj.Object()
+		o := obj.object()
 		if i := uint32(key.num); float64(i) == key.num && uint(i) < uint(len(o.elems)) && o.flags&objMappedArguments == 0 {
 			if v := o.elems[i]; !isHole(v) {
 				return v, true
@@ -1452,7 +1452,7 @@ func setIndexNode(obj, key, val tval, pc int, strict bool) tval {
 // thing, or reports false.
 func setElem(o, k, v Value) bool {
 	if o.IsObject() && k.IsNumber() {
-		a := o.Object()
+		a := o.object()
 		if i := uint32(k.num); float64(i) == k.num &&
 			uint(i) < uint(len(a.elems)) && a.flags&objMappedArguments == 0 && !isHole(a.elems[i]) {
 			a.elems[i] = v
@@ -1478,7 +1478,7 @@ func getPropOperand(obj tentry, in bytecode.Instr, pc int) tval {
 		return func(c *tctx) Value {
 			o := c.f.this
 			if o.IsObject() {
-				ob := o.Object()
+				ob := o.object()
 				if v, ok := c.cl.ic[site].own(ob); ok {
 					return v
 				}
@@ -1493,7 +1493,7 @@ func getPropOperand(obj tentry, in bytecode.Instr, pc int) tval {
 		return func(c *tctx) Value {
 			o := c.locals[k]
 			if o.IsObject() {
-				ob := o.Object()
+				ob := o.object()
 				if v, ok := c.cl.ic[site].own(ob); ok {
 					return v
 				}
@@ -1508,7 +1508,7 @@ func getPropOperand(obj tentry, in bytecode.Instr, pc int) tval {
 	return func(c *tctx) Value {
 		o := x(c)
 		if o.IsObject() {
-			ob := o.Object()
+			ob := o.object()
 			if v, ok := c.cl.ic[site].own(ob); ok {
 				return v
 			}
@@ -1525,7 +1525,7 @@ func getPropOperand(obj tentry, in bytecode.Instr, pc int) tval {
 func (c *tctx) getPropSlow(o Value, name, site uint32, pc int) Value {
 	c.at(pc)
 	if o.IsObject() {
-		if v, ok, err := c.r.cachedGet(&c.cl.ic[site], o.Object(), c.cl.names[name]); ok {
+		if v, ok, err := c.r.cachedGet(&c.cl.ic[site], o.object(), c.cl.names[name]); ok {
 			if err != nil {
 				c.throw(err)
 			}
@@ -1544,7 +1544,7 @@ func getPropThisNode(d int, in bytecode.Instr, pc int) tval {
 	return func(c *tctx) Value {
 		recv := c.stack[d]
 		if recv.IsObject() {
-			if v, ok := c.r.cachedProp(&c.cl.ic[site], recv.Object(), c.cl.names[name]); ok {
+			if v, ok := c.r.cachedProp(&c.cl.ic[site], recv.object(), c.cl.names[name]); ok {
 				return v
 			}
 		}
@@ -1565,7 +1565,7 @@ func setPropOperand(obj tentry, val tval, in bytecode.Instr, pc int, strict bool
 		return func(c *tctx) Value {
 			o := c.f.this
 			v := val(c)
-			if o.IsObject() && c.cl.ic[site].storeOwn(o.Object(), v) {
+			if o.IsObject() && c.cl.ic[site].storeOwn(o.object(), v) {
 				return v
 			}
 			c.setProp(o, v, name, site, pc, strict)
@@ -1576,7 +1576,7 @@ func setPropOperand(obj tentry, val tval, in bytecode.Instr, pc int, strict bool
 		return func(c *tctx) Value {
 			o := c.locals[k]
 			v := val(c)
-			if o.IsObject() && c.cl.ic[site].storeOwn(o.Object(), v) {
+			if o.IsObject() && c.cl.ic[site].storeOwn(o.object(), v) {
 				return v
 			}
 			c.setProp(o, v, name, site, pc, strict)
@@ -1587,7 +1587,7 @@ func setPropOperand(obj tentry, val tval, in bytecode.Instr, pc int, strict bool
 	return func(c *tctx) Value {
 		o := x(c)
 		v := val(c)
-		if o.IsObject() && c.cl.ic[site].storeOwn(o.Object(), v) {
+		if o.IsObject() && c.cl.ic[site].storeOwn(o.object(), v) {
 			return v
 		}
 		c.setProp(o, v, name, site, pc, strict)
@@ -1602,7 +1602,7 @@ func setPropStmt(obj tentry, val tval, in bytecode.Instr, pc int, strict bool) t
 		return func(c *tctx) {
 			o := c.f.this
 			v := val(c)
-			if o.IsObject() && c.cl.ic[site].storeOwn(o.Object(), v) {
+			if o.IsObject() && c.cl.ic[site].storeOwn(o.object(), v) {
 				return
 			}
 			c.setProp(o, v, name, site, pc, strict)
@@ -1612,7 +1612,7 @@ func setPropStmt(obj tentry, val tval, in bytecode.Instr, pc int, strict bool) t
 		return func(c *tctx) {
 			o := c.locals[k]
 			v := val(c)
-			if o.IsObject() && c.cl.ic[site].storeOwn(o.Object(), v) {
+			if o.IsObject() && c.cl.ic[site].storeOwn(o.object(), v) {
 				return
 			}
 			c.setProp(o, v, name, site, pc, strict)
@@ -1622,7 +1622,7 @@ func setPropStmt(obj tentry, val tval, in bytecode.Instr, pc int, strict bool) t
 	return func(c *tctx) {
 		o := x(c)
 		v := val(c)
-		if o.IsObject() && c.cl.ic[site].storeOwn(o.Object(), v) {
+		if o.IsObject() && c.cl.ic[site].storeOwn(o.object(), v) {
 			return
 		}
 		c.setProp(o, v, name, site, pc, strict)
@@ -1633,7 +1633,7 @@ func setPropStmt(obj tentry, val tval, in bytecode.Instr, pc int, strict bool) t
 func (c *tctx) setProp(o, v Value, name, site uint32, pc int, strict bool) {
 	c.at(pc)
 	if o.IsObject() {
-		if err := c.r.setPropCached(&c.cl.ic[site], o.Object(), c.cl.names[name], v, strict); err != nil {
+		if err := c.r.setPropCached(&c.cl.ic[site], o.object(), c.cl.names[name], v, strict); err != nil {
 			c.throw(err)
 		}
 		return
@@ -1686,7 +1686,7 @@ func getIndexOperands(obj, key tentry, pc int) tval {
 		return func(c *tctx) Value {
 			o := c.locals[o]
 			if o.IsObject() {
-				if a := o.Object(); uint(i) < uint(len(a.elems)) && a.flags&objMappedArguments == 0 {
+				if a := o.object(); uint(i) < uint(len(a.elems)) && a.flags&objMappedArguments == 0 {
 					if v := a.elems[i]; !isHole(v) {
 						return v
 					}

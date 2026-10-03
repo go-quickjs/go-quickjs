@@ -305,6 +305,11 @@ func (v Value) BigInt() *BigInt {
 	return nil
 }
 
+// object is the object a value IsObject has just said it is, read without
+// testing its kind a second time, which the compiler does not fold into the
+// first.
+func (v Value) object() *Object { return (*Object)(v.ref) }
+
 // Object returns the object payload, or nil if the value is not an object.
 func (v Value) Object() *Object {
 	if math.Float64bits(v.num) == objectBits {
