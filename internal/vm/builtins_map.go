@@ -5,86 +5,43 @@ package vm
 // All four share one structure. Keys are compared by SameValueZero, which is
 // strict equality except that NaN equals itself, and iteration follows
 // insertion order -- both are observable, so the storage is a hash index over
-// an append-only entry list rather than a plain Go map.
+// an entry list in insertion order rather than a plain Go map.
 //
 // Deletion tombstones an entry instead of removing it, because the
 // specification requires that an entry deleted during iteration is skipped
-// while the entries around it keep their positions.
+// while the entries around it keep their positions. The tombstones are
+// dropped once they are as many as the live entries, or when the index next
+// grows; an iterator that was between entries then finds its place again by
+// the order the entries were added in (see mapCursor).
 
-import "math"
-
-// mapKey is the comparable form of a Value, used as a Go map key.
-//
-// The fields are separated by kind so that values of different types never
-// collide: the number 1, the string "1" and a boolean are distinct keys even
-// though they might otherwise hash alike.
-type mapKey struct {
-	// Exactly one of these carries the key: ref for an object or a symbol,
-	// whose identity is the comparison, and val for everything else. They are indexed separately, so what is stored is one
-	// or the other rather than room for both.
-	val valueKey
-	ref any
-}
-
-// valueKey identifies a key that is compared by value rather than by identity.
-type valueKey struct {
-	kind Kind
-	num  float64
-	str  string
-}
-
-// strongKeyOf converts a value to its comparable key form, for a Map or a Set.
-// A WeakMap or a WeakSet indexes its keys by address instead; see weakFind.
-func (r *Runtime) strongKeyOf(v Value) mapKey {
-	switch v.Kind() {
-	case KindNumber:
-		n := v.Number()
-		switch {
-		case n != n:
-			// SameValueZero makes NaN equal to itself, so every NaN has to
-			// produce one key. Go's NaN is not equal to itself, so a sentinel
-			// stands in for it.
-			return mapKey{val: valueKey{kind: KindNumber, str: "NaN"}}
-		case n == 0:
-			// +0 and -0 are the same key.
-			return mapKey{val: valueKey{kind: KindNumber}}
-		}
-		return mapKey{val: valueKey{kind: KindNumber, num: n}}
-	case KindString:
-		return mapKey{val: valueKey{kind: KindString, str: v.String().Go()}}
-	case KindBool:
-		return mapKey{val: valueKey{kind: KindBool, num: boolToFloat(v.BoolValue())}}
-	case KindBigInt:
-		// Two BigInts with the same value are the same key, so the value
-		// rather than the pointer identifies them: one of no more than 2**53
-		// as the float that is exactly it, and a larger one by its decimal
-		// form. A value has one of the two, so they cannot collide.
-		if b := &v.BigInt().V; b.IsInt64() {
-			if i := b.Int64(); i >= -1<<53 && i <= 1<<53 {
-				return mapKey{val: valueKey{kind: KindBigInt, num: float64(i)}}
-			}
-		}
-		return mapKey{val: valueKey{kind: KindBigInt, str: v.BigInt().String()}}
-	case KindObject:
-		return mapKey{ref: v.Object()}
-	case KindSymbol:
-		return mapKey{ref: v.Symbol()}
-	}
-	return mapKey{val: valueKey{kind: v.Kind()}}
-}
-
-func boolToFloat(b bool) float64 {
-	if b {
-		return 1
-	}
-	return 0
-}
+import (
+	"hash/maphash"
+	"math"
+	"sort"
+	"unsafe"
+)
 
 // mapEntry is one key/value pair. A Set stores the key in both fields, which is
 // what its iteration protocol reports.
 type mapEntry struct {
 	key, value Value
-	deleted    bool
+	// seq numbers the entries in the order they were added, from 1. The list
+	// stays in that order through every compaction, so an iterator that has
+	// lost its place finds it again by the last entry it gave.
+	seq uint64
+}
+
+// deletedKey is the key of a deleted entry. No script can hold it, so no key
+// matches it, and nothing it referred to is kept alive.
+var deletedKey = Value{num: mkTag(KindUninitialized, 1)}
+
+func (e *mapEntry) deleted() bool { return e.key.sameBits(deletedKey) }
+
+// mapSlot is one place in a collection's index: the hash of an entry's key,
+// and 1 + where the entry is, or 0 in a slot never used.
+type mapSlot struct {
+	hash uint32
+	at   int32
 }
 
 // jsMap is the shared storage for all four collection types.
@@ -99,20 +56,22 @@ type jsMap struct {
 	// and a Set, which is most of them, would carry three words per entry that
 	// nothing ever reads. It has one element per entry when it is there at all.
 	weakKeys []weakTarget
-	// byNum, byStr, byValue and byRef index the entries by key, and byAddr
-	// a weak collection's. They are
-	// separate because what identifies a key is its value or its address,
-	// never both, and a map that holds one kind should not pay for room for
-	// the other. A number, by its bits, and a string are the commonest keys,
-	// and Go's maps of those are much quicker than one of a struct; byValue
-	// holds the other primitives. Each is created when the first key of its
-	// kind arrives.
-	byNum   map[uint64]int
-	byStr   map[string]int
-	byValue map[valueKey]int
-	byRef   map[any]int
-	byAddr  map[uintptr]int
-	size    int
+	// index finds an entry by its key: open addressing with linear probing,
+	// over a power-of-two table at most half full. Every entry has a slot,
+	// a deleted one too, until the next rebuild drops it; so a lookup never
+	// has to tell an emptied slot from a used one, and a delete leaves the
+	// index alone.
+	//
+	// It is the collection's own rather than a Go map because a key's hash
+	// and its equality are SameValueZero's: a Go map would need a key struct
+	// boxing every kind of key, or one map for each kind.
+	index []mapSlot
+	size  int
+	// seq is the last seq given to an entry.
+	seq uint64
+	// gen counts the compactions, each of which moves entries; a cursor that
+	// last looked at another generation finds its place again.
+	gen uint32
 	// weak marks a WeakMap or WeakSet, whose keys are held weakly: an entry
 	// stops existing once nothing else refers to its key.
 	//
@@ -121,176 +80,264 @@ type jsMap struct {
 	// which Go's collector does not offer; it is the one thing about these that
 	// is not the real article. WeakSet stores no value beside its weak key.
 	weak bool
-	// nextSweep is the entry count at which the next scan for collected keys
-	// happens. Doubling it after each scan is what makes the scanning cost a
-	// constant per insertion however large the collection grows.
-	nextSweep int
 }
 
 func newJSMap(weak bool) *jsMap {
 	return &jsMap{weak: weak}
 }
 
-// lookup finds the entry a key indexes, if any.
-func (m *jsMap) lookup(k mapKey) (int, bool) {
-	if k.ref != nil {
-		i, ok := m.byRef[k.ref]
-		return i, ok
-	}
-	var i int
-	var ok bool
-	switch k.val.kind {
-	case KindNumber:
-		i, ok = m.byNum[numKeyBits(k.val)]
-	case KindString:
-		i, ok = m.byStr[k.val.str]
-	default:
-		i, ok = m.byValue[k.val]
-	}
-	return i, ok
+// mapSeed seeds the hash of every key, so that a script cannot pick keys that
+// all land in one place of the index without knowing it. It is made once per
+// process and never changes, so any number of runtimes may share it.
+var mapSeed = maphash.MakeSeed()
+
+// mapSalt is mapSeed for the keys hashed by their bits rather than by
+// maphash.
+var mapSalt = maphash.String(mapSeed, "jsMap")
+
+// mixHash spreads a word over a hash: murmur3's finalizer, salted.
+func mixHash(x uint64) uint32 {
+	x ^= mapSalt
+	x ^= x >> 33
+	x *= 0xff51afd7ed558ccd
+	x ^= x >> 33
+	x *= 0xc4ceb9fe1a85ec53
+	x ^= x >> 33
+	return uint32(x)
 }
 
-// numKeyBits is a number key's index in byNum: its bits, with every NaN,
-// which strongKeyOf gives a string instead, as one.
-func numKeyBits(k valueKey) uint64 {
-	if k.str != "" {
-		return canonicalNaN
-	}
-	return math.Float64bits(k.num)
-}
-
-// record points a key at an entry.
-func (m *jsMap) record(k mapKey, i int) {
-	if k.ref != nil {
-		if m.byRef == nil {
-			m.byRef = make(map[any]int)
-		}
-		m.byRef[k.ref] = i
-		return
-	}
-	switch k.val.kind {
-	case KindNumber:
-		if m.byNum == nil {
-			m.byNum = make(map[uint64]int)
-		}
-		m.byNum[numKeyBits(k.val)] = i
-	case KindString:
-		if m.byStr == nil {
-			m.byStr = make(map[string]int)
-		}
-		m.byStr[k.val.str] = i
-	default:
-		if m.byValue == nil {
-			m.byValue = make(map[valueKey]int)
-		}
-		m.byValue[k.val] = i
-	}
-}
-
-// forget removes a key from the index.
-func (m *jsMap) forget(k mapKey) {
-	if k.ref != nil {
-		delete(m.byRef, k.ref)
-		return
-	}
-	switch k.val.kind {
-	case KindNumber:
-		delete(m.byNum, numKeyBits(k.val))
-	case KindString:
-		delete(m.byStr, k.val.str)
-	default:
-		delete(m.byValue, k.val)
-	}
-}
-
-// clearIndex empties the index, keeping what it has allocated.
-func (m *jsMap) clearIndex() {
-	clear(m.byNum)
-	clear(m.byStr)
-	clear(m.byValue)
-	clear(m.byRef)
-	clear(m.byAddr)
-}
-
-func (m *jsMap) get(r *Runtime, k Value) (Value, bool) {
-	if m.weak {
-		if i, ok := m.weakFind(k); ok {
-			return m.entries[i].value, true
-		}
-		return Undefined, false
-	}
-	i, ok := m.lookup(r.strongKeyOf(k))
-	if !ok || m.entries[i].deleted {
-		return Undefined, false
-	}
-	return m.entries[i].value, true
-}
-
-// weakFind finds the entry a WeakMap or a WeakSet holds for a key.
+// keyHash is the hash of a key of a Map or a Set, which canonicalKey has
+// made the one form of its value: equal keys hash alike.
 //
-// The index is by address, which names one live object or symbol because Go's
-// collector does not move them, and which asks for no weak reference to be
-// made at every lookup, as an index of weak references would. An address can
-// outlive what was there and come back as something else's, so the entry it
-// leads to counts only while its weak reference still names the key: the
-// reference to what was collected is cleared before its memory is reused.
-func (m *jsMap) weakFind(k Value) (int, bool) {
-	if !k.IsObject() && !k.IsSymbol() {
-		return 0, false
+// A string is hashed by its text and a BigInt by its value, since two of
+// either can be the same key and different values. Anything else is the same
+// key exactly when its bits are the same: an object or a symbol by its
+// address, which Go's collector never moves.
+func keyHash(k Value) uint32 {
+	bits := math.Float64bits(k.num)
+	if bits&tagMask == tagBase {
+		switch Kind(bits & 0xFF) {
+		case KindString:
+			return uint32(maphash.String(mapSeed, k.String().Go()))
+		case KindBigInt:
+			b := &k.BigInt().V
+			if b.IsInt64() {
+				return mixHash(uint64(b.Int64()))
+			}
+			h := uint64(b.Sign())
+			for _, w := range b.Bits() {
+				h = (h ^ uint64(w)) * 0x100000001b3
+			}
+			return mixHash(h)
+		}
 	}
-	i, ok := m.byAddr[uintptr(k.ref)]
-	if !ok || m.entries[i].deleted || !m.weakKeys[i].is(k) {
-		return 0, false
+	return mixHash(bits ^ uint64(uintptr(k.ref))*0x9e3779b97f4a7c15)
+}
+
+// weakHash is the hash of a key of a WeakMap or a WeakSet, by its address:
+// what its entry still has once the key has gone.
+func weakHash(p unsafe.Pointer) uint32 {
+	return mixHash(uint64(uintptr(p)))
+}
+
+// sameKey is SameValueZero for an entry's key and a key canonicalKey has made,
+// which are the same key when their bits are -- but for strings and BigInts,
+// which are compared by what they hold.
+func sameKey(a, k Value) bool {
+	if a.sameBits(k) {
+		return true
 	}
-	return i, true
+	switch k.Kind() {
+	case KindString:
+		return a.IsString() && a.String().Equals(k.String())
+	case KindBigInt:
+		return a.IsBigInt() && a.BigInt().V.Cmp(&k.BigInt().V) == 0
+	}
+	return false
 }
 
 // canonicalKey is a key as a Map or Set keeps it: -0 as +0, which
-// Map.prototype.set and Set.prototype.add both say. The two are the one key,
-// and the one kept is what keys(), forEach and the rest hand back.
+// Map.prototype.set and Set.prototype.add both say, and every NaN as the one.
+// The two zeros are the one key, and the one kept is what keys(), forEach and
+// the rest hand back.
 func canonicalKey(k Value) Value {
-	if k.IsNumber() && k.Number() == 0 {
-		return Int(0)
+	if k.IsNumber() {
+		if k.num == 0 {
+			return Int(0)
+		}
+		if k.num != k.num {
+			return Float(math.NaN())
+		}
 	}
 	return k
 }
 
-func (m *jsMap) set(r *Runtime, k, v Value) {
+// find is where the entry for a key is in entries, or -1. A strong
+// collection's key is canonical, with its keyHash; a weak one's is an object
+// or a symbol, with its weakHash.
+func (m *jsMap) find(k Value, h uint32) int {
+	if len(m.index) == 0 {
+		return -1
+	}
+	mask := uint32(len(m.index) - 1)
+	for i := h & mask; ; i = (i + 1) & mask {
+		s := m.index[i]
+		if s.at == 0 {
+			return -1
+		}
+		if s.hash != h {
+			continue
+		}
+		j := int(s.at - 1)
+		if m.weak {
+			// The entry counts only while its weak reference names the key:
+			// an address can outlive what was there and come back as
+			// another's, and the reference to what was collected is cleared
+			// before its memory is reused. A deleted entry has no reference.
+			if m.weakKeys[j].pointer() == k.ref {
+				return j
+			}
+		} else if sameKey(m.entries[j].key, k) {
+			// A deleted entry's key matches nothing.
+			return j
+		}
+	}
+}
+
+// lookup is find for any key a script passes.
+func (m *jsMap) lookup(k Value) int {
 	if m.weak {
-		m.setWeak(k, v)
-		return
+		if !k.IsObject() && !k.IsSymbol() {
+			return -1
+		}
+		return m.find(k, weakHash(k.ref))
 	}
 	k = canonicalKey(k)
-	mk := r.strongKeyOf(k)
-	if i, ok := m.lookup(mk); ok && !m.entries[i].deleted {
-		// Re-setting an existing key updates the value and keeps its position.
-		m.entries[i].value = v
-		return
+	return m.find(k, keyHash(k))
+}
+
+// hashAt is the hash of entry j's key, which is live.
+func (m *jsMap) hashAt(j int) uint32 {
+	if m.weak {
+		return weakHash(m.weakKeys[j].pointer())
 	}
-	m.entries = append(m.entries, mapEntry{key: k, value: v})
-	m.record(mk, len(m.entries)-1)
+	return keyHash(m.entries[j].key)
+}
+
+// place gives entry j a slot in the index, which has a free one.
+func (m *jsMap) place(h uint32, j int) {
+	mask := uint32(len(m.index) - 1)
+	i := h & mask
+	for m.index[i].at != 0 {
+		i = (i + 1) & mask
+	}
+	m.index[i] = mapSlot{hash: h, at: int32(j + 1)}
+}
+
+// add appends an entry for a key find did not find, with its hash, and the
+// weak reference to it in a weak collection.
+func (m *jsMap) add(k, v Value, h uint32) {
+	if 2*(len(m.entries)+1) > len(m.index) {
+		m.rebuild()
+	}
+	j := len(m.entries)
+	m.seq++
+	if m.weak {
+		m.entries = append(m.entries, mapEntry{key: Undefined, value: v, seq: m.seq})
+		m.weakKeys = append(m.weakKeys, makeWeak(k))
+	} else {
+		m.entries = append(m.entries, mapEntry{key: k, value: v, seq: m.seq})
+	}
+	m.place(h, j)
 	m.size++
 }
 
-// setWeak is set for a WeakMap or a WeakSet, whose key is an object or a
-// symbol the caller has checked can be held weakly.
-func (m *jsMap) setWeak(k, v Value) {
-	if i, ok := m.weakFind(k); ok {
-		m.entries[i].value = v
+// rebuild drops the deleted entries, and in a weak collection the entries
+// whose keys have been collected, and makes the index again with room for at
+// least as many entries again as are left.
+//
+// It runs when the index is half full, or the entries are half deleted, so
+// its cost is a constant per entry added or deleted however large the
+// collection grows.
+func (m *jsMap) rebuild() {
+	if m.weak {
+		for j := range m.entries {
+			if e := &m.entries[j]; !e.deleted() && m.weakKeys[j].pointer() == nil {
+				e.key, e.value = deletedKey, Undefined
+				m.weakKeys[j] = weakTarget{}
+				m.size--
+			}
+		}
+	}
+	if m.size != len(m.entries) {
+		m.compact()
+	}
+	n := 8
+	for n < 3*(m.size+1) {
+		n <<= 1
+	}
+	if n == len(m.index) {
+		clear(m.index)
+	} else {
+		m.index = make([]mapSlot, n)
+	}
+	for j := range m.entries {
+		m.place(m.hashAt(j), j)
+	}
+}
+
+// compact drops the deleted entries, keeping the others in their order.
+func (m *jsMap) compact() {
+	kept := 0
+	for j := range m.entries {
+		if m.entries[j].deleted() {
+			continue
+		}
+		m.entries[kept] = m.entries[j]
+		if m.weak {
+			m.weakKeys[kept] = m.weakKeys[j]
+		}
+		kept++
+	}
+	clear(m.entries[kept:])
+	m.entries = m.entries[:kept]
+	if m.weak {
+		clear(m.weakKeys[kept:])
+		m.weakKeys = m.weakKeys[:kept]
+	}
+	// A list that has emptied is given back rather than kept at the most it
+	// ever held.
+	if c := cap(m.entries); c > 64 && c > 4*kept {
+		m.entries = append([]mapEntry(nil), m.entries...)
+		if m.weak {
+			m.weakKeys = append([]weakTarget(nil), m.weakKeys...)
+		}
+	}
+	m.gen++
+}
+
+func (m *jsMap) get(r *Runtime, k Value) (Value, bool) {
+	if j := m.lookup(k); j >= 0 {
+		return m.entries[j].value, true
+	}
+	return Undefined, false
+}
+
+func (m *jsMap) set(r *Runtime, k, v Value) {
+	var h uint32
+	if m.weak {
+		// The caller has checked that the key can be held weakly.
+		h = weakHash(k.ref)
+	} else {
+		k = canonicalKey(k)
+		h = keyHash(k)
+	}
+	if j := m.find(k, h); j >= 0 {
+		// Re-setting an existing key updates the value and keeps its position.
+		m.entries[j].value = v
 		return
 	}
-	m.sweep()
-	// The key is not stored, only a weak reference to it: an entry must not
-	// be what keeps its own key alive.
-	m.entries = append(m.entries, mapEntry{key: Undefined, value: v})
-	m.weakKeys = append(m.weakKeys, makeWeak(k))
-	if m.byAddr == nil {
-		m.byAddr = make(map[uintptr]int)
-	}
-	// What the address led to before, if anything, is an entry whose key has
-	// gone, which the next sweep drops.
-	m.byAddr[uintptr(k.ref)] = len(m.entries) - 1
-	m.size++
+	m.add(k, v, h)
 }
 
 // addWeak records WeakSet membership without retaining the member as an entry
@@ -299,72 +346,69 @@ func (m *jsMap) addWeak(r *Runtime, value Value) {
 	m.set(r, value, Undefined)
 }
 
-// sweep drops the entries whose keys have been collected.
-//
-// Finding them means walking the list, so the threshold doubles after each
-// scan: the cost is then a constant per insertion however large the collection
-// grows, and a collection that is only read never pays it at all.
-func (m *jsMap) sweep() {
-	if len(m.entries) < m.nextSweep {
-		return
-	}
-	kept := m.entries[:0]
-	keptWeak := m.weakKeys[:0]
-	m.clearIndex()
-	m.size = 0
-	for i, e := range m.entries {
-		w := m.weakKeys[i]
-		p := w.pointer()
-		if e.deleted || p == nil {
-			continue
-		}
-		kept = append(kept, e)
-		keptWeak = append(keptWeak, w)
-		m.byAddr[uintptr(p)] = len(kept) - 1
-		m.size++
-	}
-	clear(m.entries[len(kept):])
-	clear(m.weakKeys[len(keptWeak):])
-	m.entries = kept
-	m.weakKeys = keptWeak
-	m.nextSweep = 2*len(m.entries) + 16
-}
-
 func (m *jsMap) delete(r *Runtime, k Value) bool {
-	if m.weak {
-		i, ok := m.weakFind(k)
-		if !ok {
-			return false
-		}
-		m.entries[i].value = Undefined
-		m.entries[i].deleted = true
-		delete(m.byAddr, uintptr(k.ref))
-		m.size--
-		return true
-	}
-	mk := r.strongKeyOf(k)
-	i, ok := m.lookup(mk)
-	if !ok || m.entries[i].deleted {
+	j := m.lookup(k)
+	if j < 0 {
 		return false
 	}
 	// Tombstone rather than remove, so that an iteration in progress keeps its
 	// position in the entry list.
-	m.entries[i].deleted = true
-	m.entries[i].key = Undefined
-	m.entries[i].value = Undefined
-	m.forget(mk)
+	e := &m.entries[j]
+	e.key, e.value = deletedKey, Undefined
+	if m.weak {
+		m.weakKeys[j] = weakTarget{}
+	}
 	m.size--
+	if dead := len(m.entries) - m.size; dead >= 16 && dead > m.size {
+		m.rebuild()
+	}
 	return true
 }
 
 func (m *jsMap) clear() {
-	for i := range m.entries {
-		m.entries[i].deleted = true
-		m.entries[i].key = Undefined
-		m.entries[i].value = Undefined
+	// What an iterator in progress sees next is whatever is added from now
+	// on, which the new generation tells it.
+	clear(m.entries)
+	clear(m.weakKeys)
+	if cap(m.entries) > 64 {
+		m.entries, m.weakKeys, m.index = nil, nil, nil
+	} else {
+		m.entries = m.entries[:0]
+		m.weakKeys = m.weakKeys[:0]
+		clear(m.index)
 	}
-	m.clearIndex()
 	m.size = 0
+	m.gen++
+}
+
+// mapCursor is a place in a collection's entries, for walking them in order
+// while what the walk calls may add, delete, clear or compact.
+//
+// A deleted entry stays where it is until a compaction, so the place is an
+// index into the list; a compaction moves the entries after it, so the place
+// is also the seq of the last entry given, which finds it again in a list
+// still in seq order.
+type mapCursor struct {
+	i    int
+	gen  uint32
+	last uint64
+}
+
+// next is the place in entries of the next live entry, or -1 at the end.
+func (m *jsMap) next(c *mapCursor) int {
+	if c.gen != m.gen {
+		c.gen = m.gen
+		c.i = sort.Search(len(m.entries), func(j int) bool { return m.entries[j].seq > c.last })
+	}
+	for c.i < len(m.entries) {
+		j := c.i
+		c.i++
+		if !m.entries[j].deleted() {
+			c.last = m.entries[j].seq
+			return j
+		}
+	}
+	return -1
 }
 
 // getOrInsertComputed is the shared body of Map's and WeakMap's method once
@@ -548,12 +592,11 @@ func (r *Runtime) initMapBuiltins() {
 		// is made once rather than per entry: a callee may not keep it, any
 		// more than it may keep the interpreter's own stack.
 		var argv [3]Value
-		// The index is re-read each step because the callback may add entries,
-		// which the specification requires the iteration to visit.
-		for i := 0; i < len(m.entries); i++ {
-			if m.entries[i].deleted {
-				continue
-			}
+		// The cursor takes each step from where the collection now is,
+		// because the callback may add entries, which the specification
+		// requires the iteration to visit, or delete them.
+		var c mapCursor
+		for i := m.next(&c); i >= 0; i = m.next(&c) {
 			argv[0], argv[1], argv[2] = m.entries[i].value, m.entries[i].key, this
 			if _, err := rt.call(cb, arg(args, 1), argv[:]); err != nil {
 				return Undefined, err
@@ -643,10 +686,8 @@ func (r *Runtime) initSetBuiltins() {
 			return Undefined, rt.throwTypeError("Set.prototype.forEach requires a function")
 		}
 		var argv [3]Value
-		for i := 0; i < len(m.entries); i++ {
-			if m.entries[i].deleted {
-				continue
-			}
+		var c mapCursor
+		for i := m.next(&c); i >= 0; i = m.next(&c) {
 			argv[0], argv[1], argv[2] = m.entries[i].value, m.entries[i].key, this
 			if _, err := rt.call(cb, arg(args, 1), argv[:]); err != nil {
 				return Undefined, err
@@ -834,13 +875,13 @@ func (r *Runtime) defMapIterator(p *Object, class Class, name string, kind mapIt
 
 // mapIterData is where a Map or Set iterator is in its collection.
 //
-// The cursor is an index into the entry list rather than a snapshot, so an
+// The cursor is a place in the entry list rather than a snapshot, so an
 // entry added during iteration is visited and one deleted during it is skipped,
 // which is what the specification requires.
 type mapIterData struct {
 	m    *jsMap
 	kind mapIterKind
-	i    int
+	at   mapCursor
 	// done marks an iterator that reached the end. It stays done even if the
 	// collection grows afterwards: an exhausted iterator is finished with,
 	// rather than waiting for more.
@@ -866,15 +907,15 @@ func (r *Runtime) initMapIteratorProto(proto *Object, tag string) {
 		if err != nil {
 			return Undefined, err
 		}
-		for !d.done && d.i < len(d.m.entries) && d.m.entries[d.i].deleted {
-			d.i++
+		i := -1
+		if !d.done {
+			i = d.m.next(&d.at)
 		}
-		if d.done || d.i >= len(d.m.entries) {
+		if i < 0 {
 			d.done = true
 			return Obj(rt.iterResult(Undefined, true)), nil
 		}
-		e := d.m.entries[d.i]
-		d.i++
+		e := d.m.entries[i]
 		var v Value
 		switch d.kind {
 		case mapIterKeys:

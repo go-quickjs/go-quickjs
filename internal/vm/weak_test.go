@@ -113,11 +113,16 @@ func TestWeakMapKeyIdentity(t *testing.T) {
 func TestWeakMapAddressReuse(t *testing.T) {
 	r := New(Config{})
 	m := newJSMap(true)
-	// Room enough that no sweep runs and the stale entries stay indexed.
-	m.nextSweep = 1 << 20
+	// Room enough that the index is never rebuilt, which would drop the
+	// stale entries.
+	m.index = make([]mapSlot, 1<<14)
+	// The first keys' addresses, as numbers, which keep nothing alive.
+	stale := map[uintptr]bool{}
 	func() {
 		for i := 0; i < 2000; i++ {
-			m.set(r, Obj(newObject(nil, ClassObject)), Int(i))
+			k := Obj(newObject(nil, ClassObject))
+			stale[uintptr(k.ref)] = true
+			m.set(r, k, Int(i))
 		}
 	}()
 	for i := 0; i < 4; i++ {
@@ -129,7 +134,7 @@ func TestWeakMapAddressReuse(t *testing.T) {
 	for i := 0; i < 4000; i++ {
 		k := Obj(newObject(nil, ClassObject))
 		held = append(held, k)
-		if _, ok := m.byAddr[uintptr(k.ref)]; ok {
+		if stale[uintptr(k.ref)] {
 			reused++
 		}
 		if v, ok := m.get(r, k); ok {

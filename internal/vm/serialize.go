@@ -397,7 +397,7 @@ func (s *serializer) value(v Value) (int, error) {
 		// that changes the collection.
 		var entries []mapEntry
 		for _, e := range m.entries {
-			if !e.deleted {
+			if !e.deleted() {
 				entries = append(entries, e)
 			}
 		}

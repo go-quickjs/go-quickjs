@@ -173,7 +173,7 @@ func normalizeZero(v Value) Value {
 func liveEntries(m *jsMap) []Value {
 	out := make([]Value, 0, m.size)
 	for i := range m.entries {
-		if !m.entries[i].deleted {
+		if !m.entries[i].deleted() {
 			out = append(out, m.entries[i].key)
 		}
 	}
@@ -224,10 +224,8 @@ func (r *Runtime) initSetOps(p *Object) {
 			// result is in the receiver's order. The walk is of the receiver
 			// as it is, as forEach's is: what the argument's has deletes is
 			// not reached, and what it adds is.
-			for i := 0; i < len(m.entries); i++ {
-				if m.entries[i].deleted {
-					continue
-				}
+			var c mapCursor
+			for i := m.next(&c); i >= 0; i = m.next(&c) {
 				v := m.entries[i].key
 				in, err := rt.probe(rec, v)
 				if err != nil {
@@ -339,10 +337,8 @@ func (r *Runtime) initSetOps(p *Object) {
 		}
 		// The receiver is walked as it is at each step rather than from a copy:
 		// the argument's has method may remove a member before it is reached.
-		for i := 0; i < len(m.entries); i++ {
-			if m.entries[i].deleted {
-				continue
-			}
+		var c mapCursor
+		for i := m.next(&c); i >= 0; i = m.next(&c) {
 			in, err := rt.probe(rec, m.entries[i].key)
 			if err != nil {
 				return Undefined, err
@@ -391,10 +387,8 @@ func (r *Runtime) initSetOps(p *Object) {
 			return Undefined, err
 		}
 		if float64(m.size) <= rec.size {
-			for i := 0; i < len(m.entries); i++ {
-				if m.entries[i].deleted {
-					continue
-				}
+			var c mapCursor
+			for i := m.next(&c); i >= 0; i = m.next(&c) {
 				in, err := rt.probe(rec, m.entries[i].key)
 				if err != nil {
 					return Undefined, err
