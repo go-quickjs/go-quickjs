@@ -182,7 +182,9 @@ func (r *Runtime) pushNativeFrame(o *Object, this Value, args []Value, newTarget
 	return r.nativeFrame(o, o.fn(), this, args, newTarget)
 }
 
-// callFromLoop is call for the interpreter's call instructions. A compiled
+// callFromLoop is call for the interpreter's call instructions, and for the
+// built-ins that call a callback once per element -- sort, forEach, map and
+// the rest -- whose callbacks are as often small as a loop's. A compiled
 // function of this realm that runs when called -- not a generator, whose body
 // waits for next(), not a class constructor, which a call refuses, not bound
 // -- is run directly: what callObject and callClosure would have established

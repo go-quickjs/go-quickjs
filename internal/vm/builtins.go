@@ -1499,7 +1499,7 @@ func (r *Runtime) initArrayBuiltins() {
 				continue
 			}
 			argv[0], argv[1], argv[2] = el, Float(float64(i)), Obj(a.o)
-			if _, err := rt.call(cb, thisArg, argv[:]); err != nil {
+			if _, err := rt.callFromLoop(cb, thisArg, argv[:]); err != nil {
 				return Undefined, err
 			}
 		}
@@ -1528,7 +1528,7 @@ func (r *Runtime) initArrayBuiltins() {
 				continue
 			}
 			argv[0], argv[1], argv[2] = el, Float(float64(i)), Obj(a.o)
-			v, err := rt.call(cb, thisArg, argv[:])
+			v, err := rt.callFromLoop(cb, thisArg, argv[:])
 			if err != nil {
 				return Undefined, err
 			}
@@ -1557,7 +1557,7 @@ func (r *Runtime) initArrayBuiltins() {
 				continue
 			}
 			argv[0], argv[1], argv[2] = el, Float(float64(i)), Obj(a.o)
-			keep, err := rt.call(cb, thisArg, argv[:])
+			keep, err := rt.callFromLoop(cb, thisArg, argv[:])
 			if err != nil {
 				return Undefined, err
 			}
@@ -1604,7 +1604,7 @@ func (r *Runtime) initArrayBuiltins() {
 				continue
 			}
 			argv[0], argv[1], argv[2] = el, Float(float64(i)), Obj(a.o)
-			res, err := rt.call(cb, thisArg, argv[:])
+			res, err := rt.callFromLoop(cb, thisArg, argv[:])
 			if err != nil {
 				return Undefined, err
 			}
@@ -1629,7 +1629,7 @@ func (r *Runtime) initArrayBuiltins() {
 				continue
 			}
 			argv[0], argv[1], argv[2] = el, Float(float64(i)), Obj(a.o)
-			res, err := rt.call(cb, thisArg, argv[:])
+			res, err := rt.callFromLoop(cb, thisArg, argv[:])
 			if err != nil {
 				return Undefined, err
 			}
@@ -1722,7 +1722,7 @@ func (r *Runtime) findIn(a *arrayLike, cb, thisArg Value, backwards bool) (Value
 			return Undefined, -1, err
 		}
 		argv[0], argv[1], argv[2] = el, Float(float64(i)), Obj(a.o)
-		ok, err := r.call(cb, thisArg, argv[:])
+		ok, err := r.callFromLoop(cb, thisArg, argv[:])
 		if err != nil {
 			return Undefined, -1, err
 		}
@@ -1792,7 +1792,7 @@ func (r *Runtime) reduceArray(this Value, args []Value, backwards bool) (Value, 
 			continue
 		}
 		argv[0], argv[1], argv[2], argv[3] = acc, el, Float(float64(i)), Obj(a.o)
-		acc, err = r.call(cb, Undefined, argv[:])
+		acc, err = r.callFromLoop(cb, Undefined, argv[:])
 		if err != nil {
 			return Undefined, err
 		}
