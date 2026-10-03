@@ -294,3 +294,47 @@ func TestGlobalReadCacheShadowed(t *testing.T) {
 		t.Errorf("got %s, want lex,prop", got)
 	}
 }
+
+// TestPropertyCachesOtherClasses covers reads the caches remember on objects
+// of the classes that are not plain objects, arrays or functions -- a WeakMap,
+// a DataView, a generator, an iterator -- and on a prototype that was given
+// its first property before its own prototype had a shape, as
+// %MapIteratorPrototype% was. A method read must see the method replaced, an
+// own property shadowing it, and that property deleted, as a plain object's
+// does.
+func TestPropertyCachesOtherClasses(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`function get(o) { return o.get }
+		  var w = new WeakMap(), orig = WeakMap.prototype.get, r = []
+		  for (var i = 0; i < 3; i++) r.push(get(w) === orig)
+		  w.get = "own"; r.push(get(w))
+		  delete w.get; r.push(get(w) === orig)
+		  WeakMap.prototype.get = "replaced"; r.push(get(w))
+		  WeakMap.prototype.get = orig; r.join()`, "true,true,true,own,true,replaced"},
+		{`var dv = new DataView(new ArrayBuffer(4)), r = []
+		  function read() { return dv.getUint8(0) }
+		  for (var i = 0; i < 3; i++) r.push(read())
+		  Object.defineProperty(DataView.prototype, "getUint8", {value: function () { return "patched" }, configurable: true, writable: true})
+		  r.push(read()); r.join()`, "0,0,0,patched"},
+		{`var MapIter = Object.getPrototypeOf(new Map().keys()), next = MapIter.next, r = []
+		  function step(it) { return it.next().value }
+		  var m = new Map([[1, 1], [2, 2]])
+		  r.push(step(m.keys()), step(m.keys()))
+		  MapIter.next = function () { return {value: "patched"} }; r.push(step(m.keys()))
+		  MapIter.extra = 1; r.push(step(m.keys()))
+		  MapIter.next = next; delete MapIter.extra; r.push(step(m.keys()))
+		  var it = m.values(); it.next = function () { return {value: "own"} }; r.push(step(it))
+		  r.join()`, "1,1,patched,patched,1,own"},
+		{`function* g() { yield 1; yield 2 }
+		  var GenProto = Object.getPrototypeOf(g()), r = []
+		  function step(it) { return it.next().value }
+		  var it = g(); r.push(step(it), step(it))
+		  var next = Object.getPrototypeOf(GenProto).next
+		  Object.getPrototypeOf(GenProto).next = function () { return {value: "patched"} }
+		  r.push(step(g()))
+		  Object.getPrototypeOf(GenProto).next = next; r.push(step(g())); r.join()`, "1,2,patched,1"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

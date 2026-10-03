@@ -87,14 +87,22 @@ var noShape = &shape{}
 // shapeClass reports whether objects of a class may have a shape: whether a
 // cache that has found a property on one can find it on another of the same
 // layout without asking the class. The others answer some keys themselves or
-// intercept every access.
+// intercept every access. An array and a function synthesize a few keys, which
+// synthesized names, and are shaped for the rest.
+//
+// The classes kept out are the ones whose objects answer keys of their own: a
+// String wrapper its length and characters, a typed array its elements and
+// numeric strings, a module namespace its exports, which it can be asked to
+// evaluate, and a proxy all of them. An arguments object is kept out as well.
+// Every other class -- a WeakMap, a generator, an iterator, an ArrayBuffer --
+// has nothing for a key but its table, and a method read on one is as worth
+// remembering as on a Map.
 func shapeClass(c Class) bool {
 	switch c {
-	case ClassObject, ClassArray, ClassFunction, ClassError, ClassDate, ClassRegExp,
-		ClassMap, ClassSet, ClassPromise, ClassMathObject, ClassJSONObject:
-		return true
+	case ClassStringWrapper, ClassTypedArray, ClassModuleNamespace, ClassProxy, ClassArguments:
+		return false
 	}
-	return false
+	return true
 }
 
 // root is the empty layout of a class.
@@ -550,7 +558,7 @@ func (r *Runtime) fillPropCache(c *propCache, o *Object, key Atom, accessors boo
 			return
 		}
 		h = h.proto
-		r.ensureShape(h)
+		r.ensureProtoShape(h)
 		up[depth] = h
 	}
 }
@@ -650,6 +658,22 @@ func (r *Runtime) ensureShape(o *Object) *shape {
 	return o.shape
 }
 
+// ensureProtoShape is ensureShape for an object a cache meets as a prototype.
+// One that has properties and no shape got its first while its own prototype
+// had none -- as %MapIteratorPrototype% did, made in the realm before
+// %IteratorPrototype% was filled in -- and is given a layout of its own,
+// which changes with its table, so that the methods on it can be remembered.
+// A receiver is not: an object that never had a shape, such as one with a
+// null prototype used as a dictionary, would then pay for a new layout at
+// every key added to it.
+func (r *Runtime) ensureProtoShape(o *Object) *shape {
+	if o.shape == nil && len(o.props) != 0 && shapeClass(o.class) && !r.shapes.building {
+		o.shape = newUniqueShape(r.shapes, len(o.props), nil)
+		return o.shape
+	}
+	return r.ensureShape(o)
+}
+
 // passesWrite reports whether a prototype lets an assignment of key to an
 // object inheriting from it add the property to the object: it has no such
 // property, or a plain writable one, which the new one shadows -- not a setter,
@@ -679,7 +703,7 @@ func (r *Runtime) fillStoreCache(c *propCache, o *Object, before *shape, key Ato
 	var up [2]*Object
 	p := o.proto
 	for depth := 0; p != nil; depth++ {
-		if depth == 2 || r.ensureShape(p) == nil || !shapeClass(p.class) || synthesized(p.class, key) || !passesWrite(p, key) {
+		if depth == 2 || r.ensureProtoShape(p) == nil || !shapeClass(p.class) || synthesized(p.class, key) || !passesWrite(p, key) {
 			return
 		}
 		up[depth] = p
