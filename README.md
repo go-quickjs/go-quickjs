@@ -48,6 +48,12 @@ the built-ins, `Intl` and Annex B -- 99,595 pass, none fail, and 342 are
 skipped because they require an unsupported feature or host facility. See [Conformance](docs/status.md#conformance) for the
 measurement and [Not implemented](docs/status.md#not-implemented) for what is missing.
 
+On the V8 benchmark suite as a whole it is on par with C QuickJS: it takes
+less time over the suite and has a slightly higher composite score. Single
+operations still cost more: QuickJS's own micro-benchmarks take about one and
+a half times as long on average, and much longer for small BigInts and a few
+others. See [Compared with C QuickJS](docs/benchmarks.md#compared-with-c-quickjs).
+
 ## Documentation
 
 | | |

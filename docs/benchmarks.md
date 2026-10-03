@@ -92,6 +92,11 @@ its workloads in this comparison.
 
 ## Compared with C QuickJS
 
+Over the V8 suite as a whole, go-quickjs is on par with QuickJS: it takes
+less time and has a slightly higher composite score. Single operations still
+cost more, by about half on average, as [the micro-benchmarks](#micro-benchmarks)
+below show.
+
 go-quickjs has the same design as QuickJS: a bytecode compiler, a
 stack-based interpreter, NaN-boxed values. Running that design in Go costs
 speed. The same suite ran on an AMD Ryzen 5 3600 under Windows, with Go 1.27.1,
@@ -136,6 +141,42 @@ Figures move by a few percent between builds from code placement alone,
 and Richards and DeltaBlue by more, up to a tenth. To reproduce them, run
 `go run ./internal/cmd/v8bench -dir /tmp/v8-v7 -mode fixed -n 3` and the
 `external` runner with `-engine qjs`.
+
+### Micro-benchmarks
+
+QuickJS's own micro-benchmarks, [`tests/microbench.js`](https://github.com/bellard/quickjs/blob/master/tests/microbench.js),
+time one operation each. Each test was given the work QuickJS takes about
+150 ms for, and both engines ran that same work in fresh processes; the
+figure is the faster of two runs, in nanoseconds an operation. Over the 72
+tests go-quickjs takes 1.5 times QuickJS's time by the geometric mean: it is
+slower on 54, faster on 14, and level on the rest.
+
+| Test | go-quickjs | QuickJS | go-quickjs / QuickJS |
+|---|---:|---:|---:|
+| `bigint32_arith` | 235 ns | 24 ns | 9.98x |
+| `bigint64_arith` | 234 ns | 39 ns | 5.95x |
+| `map_set_bigint` | 889 ns | 217 ns | 4.10x |
+| `weak_map_set` | 359 ns | 93 ns | 3.85x |
+| `global_write_strict` | 26.2 ns | 7.6 ns | 3.44x |
+| `array_update` | 26.2 ns | 8.7 ns | 3.02x |
+| `array_prop_create` | 42.2 ns | 15.2 ns | 2.78x |
+| `regexp_utf16` | 696 ns | 268 ns | 2.60x |
+| `regexp_ascii` | 593 ns | 260 ns | 2.28x |
+| `float_toFixed` | 352 ns | 164 ns | 2.15x |
+| `func_call` | 42.7 ns | 31.0 ns | 1.38x |
+| `string_build1` | 73.7 ns | 94.2 ns | 0.78x |
+| `arguments_read` | 124 ns | 167 ns | 0.74x |
+| `array_for_of` | 30.2 ns | 46.1 ns | 0.66x |
+| `string_build2c` | 67.4 ns | 146 ns | 0.46x |
+| `array_slice` | 9.3 ns | 27.5 ns | 0.34x |
+
+The largest gaps, the BigInt tests, are where QuickJS keeps a value in a form
+go-quickjs does not: a BigInt that fits in a word is a value of its own
+there, and an allocation here. Most of the others are the cost of each step,
+which the section below explains. The suite as a whole does better than the operations it is
+made of because of the places go-quickjs leads: strings and regular
+expressions over whole texts, which Go's runtime and the engine's matcher do
+well, and Splay's allocation-heavy setup.
 
 What the gap is made of:
 
