@@ -27,6 +27,15 @@ func leafKind(fn *bytecode.Function) bytecode.LeafKind {
 	}
 	switch fn.Kind {
 	case bytecode.KindNormal, bytecode.KindMethod, bytecode.KindGetter, bytecode.KindConstructor:
+	case bytecode.KindArrow:
+		// An arrow's this is where it was written, not the call's, so the
+		// kinds that read or write this are not for it. A pure body that
+		// never reads this -- a comparator, a map callback -- is evaluated
+		// as anyone's is.
+		if !fn.UsesThis && pureBody(fn) {
+			return bytecode.LeafPure
+		}
+		return bytecode.LeafNone
 	default:
 		return bytecode.LeafNone
 	}

@@ -144,7 +144,9 @@ const pureCallDepth = 8
 func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, mayStore bool) (Value, bool) {
 	cl := fd.closure
 	fn := cl.fn
-	if cl.pureMiss >= pureMissLimit || fd.arrow || fd.extra != nil && len(fd.extra.lexWith) > 0 || fd.extra != nil && fd.extra.lexEvalVars != nil ||
+	// An arrow is marked pure by the compiler only where its body never
+	// reads this, so the this it is called with does not matter.
+	if cl.pureMiss >= pureMissLimit || fd.extra != nil && len(fd.extra.lexWith) > 0 || fd.extra != nil && fd.extra.lexEvalVars != nil ||
 		fn.CoerceThis && !this.IsObject() {
 		return Undefined, false
 	}
