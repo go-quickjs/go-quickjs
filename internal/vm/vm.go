@@ -151,14 +151,25 @@ func (r *Runtime) nativeFrame(o *Object, fd *funcData, this Value, args []Value,
 		return r.throwRangeError("maximum call stack size exceeded")
 	}
 	f := r.pushFrame()
-	f.cl = nil
+	// What a built-in's frame almost never has from the frame last at its
+	// depth is reset only where it is set, as runFD does: a read is cheaper
+	// than a pointer written.
+	if f.cl != nil {
+		f.cl = nil
+	}
 	f.native = fd.name
 	f.this = this
-	f.newTarget = newTarget
+	if !f.newTarget.sameBits(newTarget) {
+		f.newTarget = newTarget
+	}
 	f.callee = o
 	f.args = args
-	f.handlers = f.handlers[:0]
-	f.openUpvalues = f.openUpvalues[:0]
+	if len(f.handlers) != 0 {
+		f.handlers = f.handlers[:0]
+	}
+	if len(f.openUpvalues) != 0 {
+		f.openUpvalues = f.openUpvalues[:0]
+	}
 	return nil
 }
 
@@ -218,6 +229,19 @@ func (r *Runtime) callFromLoop(callee, this Value, args []Value) (Value, error) 
 				}
 				return v, err
 			}
+		}
+		if fd != nil && fd.native != nil && !fd.bound && (fd.realm == nil || fd.realm == r.Realm) {
+			// A built-in of this realm is called as callObject calls one,
+			// without going through call and callObject to find out.
+			if err := r.tick(); err != nil {
+				return Undefined, err
+			}
+			if err := r.nativeFrame(o, fd, this, args, Undefined); err != nil {
+				return Undefined, err
+			}
+			v, err := fd.native(r, this, args)
+			r.frameDepth--
+			return v, err
 		}
 	}
 	return r.call(callee, this, args)
