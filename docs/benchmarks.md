@@ -100,7 +100,7 @@ below show.
 go-quickjs has the same design as QuickJS: a bytecode compiler, a
 stack-based interpreter, NaN-boxed values. Running that design in Go costs
 speed. The same suite ran on an AMD Ryzen 5 3600 under Windows, with Go 1.27.1,
-go-quickjs `a6db9d6` and QuickJS 2026-06-04. The first two columns are milliseconds for the same
+go-quickjs `5ce7ccd` and QuickJS 2026-06-04. The first two columns are milliseconds for the same
 fixed work (the median of three fresh-process runs, lower is better). The
 scores are the suite's own (higher is better). Richards and DeltaBlue, which
 take only a few milliseconds a run, ran three hundred times in each process,
@@ -108,15 +108,15 @@ scaled to three.
 
 | Workload | go-quickjs | QuickJS | QuickJS faster by | go-quickjs score | QuickJS score |
 |---|---:|---:|---:|---:|---:|
-| Richards | 17.0 ms | 11.0 ms | 1.55x | 630 | 957 |
-| DeltaBlue | 25.5 ms | 23.6 ms | 1.08x | 799 | 841 |
-| Crypto | 311 ms | 325 ms | 0.96x | 1,139 | 1,101 |
-| RayTrace | 157 ms | 143 ms | 1.10x | 1,433 | 1,600 |
-| EarleyBoyer | 469 ms | 401 ms | 1.17x | 1,821 | 2,146 |
-| RegExp | 374 ms | 972 ms | 0.38x | 1,068 | 388 |
-| Splay | 320 ms | 517 ms | 0.62x | 2,752 | 3,333 |
-| NavierStokes | 223 ms | 190 ms | 1.17x | 2,247 | 2,416 |
-| **Total / composite** | **1,896 ms** | **2,583 ms** | **0.73x** | **1,332** | **1,325** |
+| Richards | 17.0 ms | 11.1 ms | 1.54x | 622 | 957 |
+| DeltaBlue | 24.8 ms | 23.8 ms | 1.04x | 803 | 845 |
+| Crypto | 298 ms | 324 ms | 0.92x | 1,197 | 1,102 |
+| RayTrace | 150 ms | 142 ms | 1.05x | 1,476 | 1,586 |
+| EarleyBoyer | 471 ms | 402 ms | 1.17x | 1,842 | 2,173 |
+| RegExp | 378 ms | 961 ms | 0.39x | 1,078 | 389 |
+| Splay | 320 ms | 508 ms | 0.63x | 2,776 | 3,313 |
+| NavierStokes | 226 ms | 191 ms | 1.18x | 2,215 | 2,406 |
+| **Total / composite** | **1,884 ms** | **2,563 ms** | **0.74x** | **1,346** | **1,325** |
 
 The two kinds of figure time different things, which is why they do not
 agree on how far ahead go-quickjs is:
@@ -127,7 +127,7 @@ agree on how far ahead go-quickjs is:
   make most of go-quickjs's lead. The composite score is the geometric mean
   of the workloads' scores, so each counts the same: Richards' gap weighs as
   much as RegExp's lead. By that mean the fixed figures put go-quickjs
-  about 7% ahead, and the scores level.
+  about 8% ahead, and the scores about 2%.
 - Splay changes sides. Its fixed time is almost all setup and teardown:
   building a tree of 8,000 nodes and dropping it. That takes about 305 ms
   and 5 ms here, against 360 ms and 100 ms in QuickJS, which frees the tree
@@ -148,30 +148,30 @@ QuickJS's own micro-benchmarks, [`tests/microbench.js`](https://github.com/bella
 time one operation each. Each test was given the work QuickJS takes about
 150 ms for, and both engines ran that same work in fresh processes; the
 figure is the faster of two runs, in nanoseconds an operation, at
-go-quickjs `a6db9d6`. Over the 72 tests go-quickjs takes 1.44 times
-QuickJS's time by the geometric mean: it is slower on 56, faster on 13, and
+go-quickjs `5ce7ccd`. Over the 72 tests go-quickjs takes 1.41 times
+QuickJS's time by the geometric mean: it is slower on 54, faster on 14, and
 level on the rest.
 
 | Test | go-quickjs | QuickJS | go-quickjs / QuickJS |
 |---|---:|---:|---:|
-| `bigint32_arith` | 232 ns | 23.4 ns | 9.88x |
-| `bigint64_arith` | 233 ns | 39.8 ns | 5.86x |
-| `global_write_strict` | 26.6 ns | 7.6 ns | 3.49x |
-| `array_prop_create` | 45.1 ns | 15.1 ns | 2.99x |
-| `array_update` | 24.8 ns | 8.6 ns | 2.87x |
-| `array_length_read` | 23.6 ns | 8.7 ns | 2.73x |
-| `prop_update` | 30.8 ns | 11.6 ns | 2.65x |
-| `regexp_utf16` | 718 ns | 272 ns | 2.63x |
-| `weak_map_set` | 238 ns | 92.3 ns | 2.58x |
-| `regexp_ascii` | 596 ns | 261 ns | 2.28x |
-| `map_set_bigint` | 476 ns | 216 ns | 2.20x |
-| `float_toFixed` | 281 ns | 166 ns | 1.69x |
-| `func_call` | 42.7 ns | 31.1 ns | 1.37x |
-| `arguments_read` | 134 ns | 167 ns | 0.81x |
-| `string_build1` | 68.8 ns | 94.7 ns | 0.73x |
-| `array_for_of` | 27.5 ns | 46.1 ns | 0.60x |
-| `string_build2c` | 64.5 ns | 147 ns | 0.44x |
-| `array_slice` | 8.9 ns | 27.1 ns | 0.33x |
+| `bigint32_arith` | 231 ns | 23.6 ns | 9.82x |
+| `bigint64_arith` | 230 ns | 40.0 ns | 5.74x |
+| `global_write_strict` | 26.3 ns | 7.7 ns | 3.43x |
+| `array_prop_create` | 44.2 ns | 15.1 ns | 2.92x |
+| `array_update` | 24.5 ns | 8.6 ns | 2.84x |
+| `array_length_read` | 23.5 ns | 8.7 ns | 2.71x |
+| `regexp_utf16` | 714 ns | 271 ns | 2.64x |
+| `prop_update` | 30.0 ns | 11.6 ns | 2.60x |
+| `weak_map_set` | 237 ns | 92.8 ns | 2.55x |
+| `regexp_ascii` | 585 ns | 260 ns | 2.25x |
+| `map_set_bigint` | 479 ns | 219 ns | 2.19x |
+| `float_toFixed` | 287 ns | 163 ns | 1.75x |
+| `func_call` | 42.3 ns | 30.9 ns | 1.37x |
+| `arguments_read` | 134 ns | 167 ns | 0.80x |
+| `string_build1` | 68.4 ns | 94.7 ns | 0.72x |
+| `array_for_of` | 31.1 ns | 46.4 ns | 0.67x |
+| `string_build2c` | 67.4 ns | 147 ns | 0.46x |
+| `array_slice` | 8.8 ns | 27.6 ns | 0.32x |
 
 The largest gaps, the BigInt tests, are where QuickJS keeps a value in a form
 go-quickjs does not: a BigInt that fits in a word is a value of its own
