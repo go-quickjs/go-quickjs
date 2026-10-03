@@ -315,11 +315,10 @@ func (r *Runtime) initArrayExtras2() {
 			}
 			out.elems = append(out.elems, v)
 		}
-		fn, err := rt.getValueProp(Obj(out), rt.atoms.intern("sort"))
-		if err != nil {
-			return Undefined, err
-		}
-		if _, err := rt.call(fn, Obj(out), args); err != nil {
+		// The copy is sorted as it is, not by calling its sort method: a
+		// script that replaces Array.prototype.sort has not changed toSorted.
+		// Holes were read as undefined, so there are none to keep.
+		if err := rt.sortValues(out.elems, arg(args, 0)); err != nil {
 			return Undefined, err
 		}
 		return Obj(out), nil

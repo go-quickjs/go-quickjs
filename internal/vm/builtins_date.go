@@ -455,7 +455,12 @@ func (r *Runtime) setDateParts(d *date.Date, args []Value, start, count int, utc
 		}
 		given[i] = v
 	}
+	return r.applyDateParts(d, t, given[:n], start, utc), nil
+}
 
+// applyDateParts replaces the components starting at start with given, in a
+// date whose time value was t when it was read, and sets the date's value.
+func (r *Runtime) applyDateParts(d *date.Date, t float64, given []float64, start int, utc bool) float64 {
 	env := r.dateEnv()
 	// Setting a component of an invalid date leaves it invalid, except for
 	// setFullYear, which the specification lets revive one from the epoch:
@@ -463,7 +468,7 @@ func (r *Runtime) setDateParts(d *date.Date, args []Value, start, count int, utc
 	var base float64
 	switch {
 	case math.IsNaN(t) && start != 0:
-		return math.NaN(), nil
+		return math.NaN()
 	case math.IsNaN(t):
 		base = 0
 	case utc:
@@ -474,13 +479,11 @@ func (r *Runtime) setDateParts(d *date.Date, args []Value, start, count int, utc
 	f := date.BreakDown(base)
 	parts := [7]float64{float64(f.Year), float64(f.Month), float64(f.Day),
 		float64(f.Hour), float64(f.Minute), float64(f.Second), float64(f.Millisecond)}
-	for i := 0; i < n; i++ {
-		parts[start+i] = given[i]
-	}
+	copy(parts[start:], given)
 	v := date.MakeDate(date.MakeDay(parts[0], parts[1], parts[2]),
 		date.MakeTime(parts[3], parts[4], parts[5], parts[6]))
 	if utc {
-		return env.SetTime(d, v), nil
+		return env.SetTime(d, v)
 	}
-	return env.SetLocalTime(d, v), nil
+	return env.SetLocalTime(d, v)
 }

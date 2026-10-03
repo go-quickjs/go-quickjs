@@ -185,6 +185,11 @@ Object.keys(globalThis).filter(k => /^(v|fn)[0-9]$/.test(k)).join()`, "fn1,fn2,v
 			"RangeError: 9007199254740992 must be at most 2^53 - 1 | RangeError: 1e+300 must be at most 2^53 - 1 | 1,2,3 | " +
 				"RangeError: -1 must be positive | RangeError: NaN must be positive",
 			"1,2,3 | 0 | 1,2,3 | RangeError: -1 must be positive | RangeError: NaN must be positive"},
+		// setYear reads the time value before it converts the year; V8
+		// reads it after, so a valueOf that invalidates the date leaves
+		// setYear starting from the epoch.
+		{`var d = new Date(2000, 5, 15); d.setYear({ valueOf() { d.setTime(NaN); return 1 } });
+		[d.getFullYear(), d.getMonth(), d.getDate()].join()`, "1901,5,15", "1901,0,1"},
 		// Anything else in the enclosing block still stops it.
 		{`(function () { { let h = 1; { function h() {} } } return typeof h; })()`, "undefined", "undefined"},
 		{`(function () { { async function h() {} { function h() {} } } return typeof h; })()`, "undefined", "undefined"},

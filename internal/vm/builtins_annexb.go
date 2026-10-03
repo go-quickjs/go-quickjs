@@ -155,20 +155,32 @@ func (r *Runtime) initLegacyDateMethods() {
 	}
 
 	r.defMethod(p, "getYear", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		full, err := rt.callDateMethod(this, "getFullYear", nil)
+		d, err := rt.dateOf(this, "Date.prototype.getYear")
 		if err != nil {
 			return Undefined, err
 		}
-		if !full.IsNumber() || full.Number() != full.Number() {
-			return full, nil
+		local, ok := rt.dateEnv().Local(d)
+		if !ok {
+			return Float(math.NaN()), nil
 		}
-		return Float(full.Number() - 1900), nil
+		return Float(float64(local.Year - 1900)), nil
 	})
 
 	r.defMethod(p, "setYear", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		// The time value is read before the year is converted, as
+		// setFullYear's is. V8 reads it after, which a valueOf that changes
+		// the date can tell.
+		d, err := rt.dateOf(this, "Date.prototype.setYear")
+		if err != nil {
+			return Undefined, err
+		}
+		t := d.Value()
 		n, err := rt.toNumber(arg(args, 0))
 		if err != nil {
 			return Undefined, err
+		}
+		if rt.nodeQuirks {
+			t = d.Value()
 		}
 		// A two-digit year means 19xx, which is the whole point of the method.
 		// The year is truncated before it is asked whether it has two digits,
@@ -176,7 +188,7 @@ func (r *Runtime) initLegacyDateMethods() {
 		if yi := math.Trunc(n); yi >= 0 && yi <= 99 {
 			n = 1900 + yi
 		}
-		return rt.callDateMethod(this, "setFullYear", []Value{Float(n)})
+		return Float(rt.applyDateParts(d, t, []float64{n}, 0, false)), nil
 	})
 
 	// toGMTString is not a method of its own but toUTCString under another
@@ -184,17 +196,4 @@ func (r *Runtime) initLegacyDateMethods() {
 	if utc := p.getOwn(r.atoms.intern("toUTCString")); utc != nil {
 		p.setOwnRaw(r.atoms.intern("toGMTString"), utc.value, propWritable|propConfigurable)
 	}
-}
-
-// callDateMethod forwards to another Date method, which is how the legacy ones
-// are defined in terms of the modern ones.
-func (r *Runtime) callDateMethod(this Value, name string, args []Value) (Value, error) {
-	fn, err := r.getValueProp(this, r.atoms.intern(name))
-	if err != nil {
-		return Undefined, err
-	}
-	if !isCallable(fn) {
-		return Undefined, r.throwTypeError("Date.prototype.%s is not available", name)
-	}
-	return r.call(fn, this, args)
 }

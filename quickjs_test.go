@@ -1603,6 +1603,35 @@ func TestMapBigIntKeys(t *testing.T) {
 			"1606938044258990275541962092341162602522202993782792835301376|1|9007199254740992")
 }
 
+// TestBuiltinsDoNotForward checks built-ins that once called another
+// built-in through the receiver: a script that replaces that one changed
+// them, and their errors named it and showed a frame of it.
+func TestBuiltinsDoNotForward(t *testing.T) {
+	tests := []struct{ src, want string }{
+		{`try { Date.prototype.getYear() } catch (e) { e.constructor.name + ": " + e.message + " " + e.stack.includes("getFullYear") }`,
+			"TypeError: Date.prototype.getYear called on an incompatible receiver false"},
+		{`try { Date.prototype.setYear.call({}, 1) } catch (e) { e.constructor.name + ": " + e.message + " " + e.stack.includes("setFullYear") }`,
+			"TypeError: Date.prototype.setYear called on an incompatible receiver false"},
+		{`Date.prototype.getFullYear = () => 42; Date.prototype.setFullYear = () => 42;
+			var d = new Date(2000, 0, 1); [d.getYear(), d.setYear(99) === new Date(1999, 0, 1).getTime(), d.getYear()].join()`,
+			"100,true,99"},
+		{`[new Date(NaN).getYear(), new Date(1899, 5).getYear(), new Date(NaN).setYear(5) === new Date(1905, 0, 1).getTime()].join()`,
+			"NaN,-1,true"},
+		// The receiver is checked, and the time value read, before the year
+		// is converted.
+		{`var log = []; try { Date.prototype.setYear.call({}, { valueOf() { log.push("v"); return 1 } }) } catch (e) { log.push(e.constructor.name) } log.join()`,
+			"TypeError"},
+		{`var d = new Date(2000, 5, 15); d.setYear({ valueOf() { d.setTime(NaN); return 1 } }); d.getMonth() + " " + d.getDate() + " " + d.getFullYear()`,
+			"5 15 1901"},
+		{`Array.prototype.sort = function () { return "replaced" }; [3, 1, 2].toSorted().join() + " " + [3, 1, 2].toSorted((a, b) => b - a).join()`,
+			"1,2,3 3,2,1"},
+		{`[, 2, undefined, 1].toSorted().map(String).join()`, "1,2,undefined,undefined"},
+	}
+	for _, tt := range tests {
+		checkEval(t, tt.src, tt.want)
+	}
+}
+
 func TestRegExpTestUsesExec(t *testing.T) {
 	tests := []struct{ src, want string }{
 		{`var re = /a/; re.exec = () => null; re.test("a")`, "false"},

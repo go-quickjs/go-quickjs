@@ -2834,17 +2834,23 @@ func (r *Runtime) sortIndexed(a *arrayLike, cmp Value) ([]Value, error) {
 			items = append(items, v)
 		}
 	}
+	if err := r.sortValues(items, cmp); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
 
+// sortValues sorts a list of values in place, by the comparator or, when it
+// is undefined, by their string forms. The list must be one the comparator
+// cannot reach.
+func (r *Runtime) sortValues(items []Value, cmp Value) error {
 	// The comparator is called O(n log n) times with two arguments each time,
 	// so the list they go in is made once for the whole sort. A comparator that
 	// sorts something else of its own gets its own, being another call to this.
 	var argv [2]Value
-	if err := stableSort(items, func(x, y Value) (bool, error) {
+	return stableSort(items, func(x, y Value) (bool, error) {
 		return r.compareForSort(x, y, cmp, &argv)
-	}); err != nil {
-		return nil, err
-	}
-	return items, nil
+	})
 }
 
 // plainArray is this when it is an array in dense storage -- not a proxy, not
