@@ -208,3 +208,31 @@ func (c *tctx) backEdgeCheck(pc, depth int) {
 func truthy(v Value) bool {
 	return math.Float64bits(v.num) == trueBits || math.Float64bits(v.num) != falseBits && v.Truthy()
 }
+
+// elemAt is an element in an array's dense storage, as get_index reads one
+// first thing, or false.
+func elemAt(obj, key Value) (Value, bool) {
+	if obj.IsObject() && key.IsNumber() {
+		o := obj.object()
+		if i := uint32(key.num); float64(i) == key.num && uint(i) < uint(len(o.elems)) && o.flags&objMappedArguments == 0 {
+			if v := o.elems[i]; !isHole(v) {
+				return v, true
+			}
+		}
+	}
+	return Undefined, false
+}
+
+// setElem stores v in an array's dense storage, as set_index does first
+// thing, or reports false.
+func setElem(o, k, v Value) bool {
+	if o.IsObject() && k.IsNumber() {
+		a := o.object()
+		if i := uint32(k.num); float64(i) == k.num &&
+			uint(i) < uint(len(a.elems)) && a.flags&objMappedArguments == 0 && !isHole(a.elems[i]) {
+			a.elems[i] = v
+			return true
+		}
+	}
+	return false
+}

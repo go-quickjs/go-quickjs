@@ -64,7 +64,7 @@ Paths are relative to this repository; `go-intl:` paths are in
 ### KI-04 Unbounded Go recursion ends the process with a fatal stack overflow
 - **Paths that recurse in Go with no depth limit:**
   - proxy `get`/`set`/`has` forwarding, through a cycle or a long chain
-    (`builtins_proxy.go`, `property.go`)
+    (`builtins_proxy.go`, `vm_property.go`)
   - calling a chain of bound functions (`callObject`)
   - an async generator's request queue
     (`finishAsyncRequest → pumpAsyncGenerator`)
@@ -361,7 +361,7 @@ Paths are relative to this repository; `go-intl:` paths are in
 - **Status:** fixed. A resumption runs in the generator's closure's realm.
 
 ### KI-31 A non-writable array `length` can be bypassed
-- **Where:** `internal/vm/property.go` (`createOwnProp`).
+- **Where:** `internal/vm/vm_property.go` (`createOwnProp`).
 - **Repro:** with `length` made non-writable, `a[5000] = 4` still extends
   the array.
 - **Status:** fixed with KI-32.
@@ -394,7 +394,7 @@ Paths are relative to this repository; `go-intl:` paths are in
   asks nothing before a strict assignment, which `WithNodeQuirks` follows.
 
 ### KI-35 Own keys list array indices out of order
-- **Where:** `internal/vm/object.go`. An index that became an accessor is
+- **Where:** `internal/vm/vm_object.go`. An index that became an accessor is
   listed after the dense elements.
 - **Effect:** `Reflect.ownKeys`, `for-in`, `Object.assign` and structured
   clone read in the wrong order.

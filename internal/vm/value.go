@@ -6,6 +6,16 @@
 // and an accessor property calls back into the interpreter. Splitting them
 // would require either an interface boundary on the hottest paths or an import
 // cycle.
+//
+// The files named vm*.go hold the code a running script spends its time in:
+// the interpreter's loop and its calls, the frameless evaluator, the property
+// caches, objects' and properties' lookups, and the tree tier's run. The Go
+// linker lays out a package's functions file by file in the order of their
+// names, and on this kind of code the processor is several per cent faster or
+// slower for where hot functions sit against each other. Kept together, after
+// the rest, they move together when anything else changes size, instead of
+// being moved against each other by code that never runs while they do.
+// Code that a benchmark's inner loop calls belongs in one of them.
 package vm
 
 import (

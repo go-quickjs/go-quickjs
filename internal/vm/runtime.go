@@ -126,7 +126,7 @@ type Runtime struct {
 	// wellKnown holds the well-known symbols, which the interpreter consults
 	// for iteration, coercion and instanceof.
 	wellKnown wellKnownSymbols
-	// shapes is the runtime's tree of object layouts; see shape.go.
+	// shapes is the runtime's tree of object layouts; see vm_shape.go.
 	shapes *shapeTree
 	// hasInstanceAtom is Symbol.hasInstance's atom, which every instanceof
 	// looks up.

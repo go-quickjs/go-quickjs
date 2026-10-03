@@ -153,7 +153,7 @@ type Object struct {
 	// is the order enumeration must report them in.
 	props []Property
 	// shape is the table's layout as an identity a property cache can
-	// remember, and holds the table's lookup index; see shape.go. Whatever
+	// remember, and holds the table's lookup index; see vm_shape.go. Whatever
 	// changes the table's keys, their order or their attributes keeps it
 	// right: appendProp and layoutChanged.
 	shape *shape
