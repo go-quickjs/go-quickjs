@@ -21,6 +21,117 @@ func (r *Runtime) pureCall(fd *funcData, this Value, args []Value) (Value, bool)
 	return r.pureCallAt(fd, this, args, 0, true)
 }
 
+// The cases of pureCallAt's switch, which pureCases numbers the
+// instructions with.
+const (
+	pcNone = iota
+	pcPushThis
+	pcGetLocal
+	pcGetLocal2
+	pcPushInt
+	pcPushConst
+	pcPushNull
+	pcPushTrue
+	pcPushFalse
+	pcPushUndef
+	pcPushEmptyString
+	pcDup
+	pcDrop
+	pcGetProp
+	pcGetPropThis
+	pcCall
+	pcSetProp
+	pcNew
+	pcGetLength
+	pcGetGlobal
+	pcArith
+	pcBinImm
+	pcBinLocal
+	pcLocalBinImm
+	pcNeg
+	pcNot
+	pcTypeOf
+	pcCompare
+	pcJump
+	pcJumpIfFalse
+	pcJumpIfTrue
+	pcJumpIfCmpFalse
+	pcJumpIfFalseKeep
+	pcJumpIfTrueKeep
+	pcGetUpvalue
+	pcToNumeric
+	pcIncDec
+	pcSetUpvalue
+	pcReturn
+	pcReturnUndef
+)
+
+// pureCases gives each instruction pureCallAt evaluates its case, and every
+// other instruction pcNone, its default. Switched on directly, the
+// opcodes it takes are too far apart for the compiler to make the switch a
+// jump table, and it becomes a search of a few comparisons for every
+// instruction; numbered densely, it is one indexed jump.
+var pureCases = func() (t [256]uint8) {
+	t[bytecode.OpPushThis] = pcPushThis
+	t[bytecode.OpGetLocal] = pcGetLocal
+	t[bytecode.OpGetLocal2] = pcGetLocal2
+	t[bytecode.OpPushInt] = pcPushInt
+	t[bytecode.OpPushConst] = pcPushConst
+	t[bytecode.OpPushNull] = pcPushNull
+	t[bytecode.OpPushTrue] = pcPushTrue
+	t[bytecode.OpPushFalse] = pcPushFalse
+	t[bytecode.OpPushUndef] = pcPushUndef
+	t[bytecode.OpPushEmptyString] = pcPushEmptyString
+	t[bytecode.OpDup] = pcDup
+	t[bytecode.OpDrop] = pcDrop
+	t[bytecode.OpGetProp] = pcGetProp
+	t[bytecode.OpGetPropThis] = pcGetPropThis
+	t[bytecode.OpCall] = pcCall
+	t[bytecode.OpCallMethod] = pcCall
+	t[bytecode.OpSetProp] = pcSetProp
+	t[bytecode.OpNew] = pcNew
+	t[bytecode.OpGetLength] = pcGetLength
+	t[bytecode.OpGetGlobal] = pcGetGlobal
+	t[bytecode.OpAdd] = pcArith
+	t[bytecode.OpSub] = pcArith
+	t[bytecode.OpMul] = pcArith
+	t[bytecode.OpDiv] = pcArith
+	t[bytecode.OpBitAnd] = pcArith
+	t[bytecode.OpBitOr] = pcArith
+	t[bytecode.OpBitXor] = pcArith
+	t[bytecode.OpShl] = pcArith
+	t[bytecode.OpShr] = pcArith
+	t[bytecode.OpUShr] = pcArith
+	t[bytecode.OpBinImm] = pcBinImm
+	t[bytecode.OpBinLocal] = pcBinLocal
+	t[bytecode.OpLocalBinImm] = pcLocalBinImm
+	t[bytecode.OpNeg] = pcNeg
+	t[bytecode.OpNot] = pcNot
+	t[bytecode.OpTypeOf] = pcTypeOf
+	t[bytecode.OpLt] = pcCompare
+	t[bytecode.OpLe] = pcCompare
+	t[bytecode.OpGt] = pcCompare
+	t[bytecode.OpGe] = pcCompare
+	t[bytecode.OpEq] = pcCompare
+	t[bytecode.OpNe] = pcCompare
+	t[bytecode.OpStrictEq] = pcCompare
+	t[bytecode.OpStrictNe] = pcCompare
+	t[bytecode.OpJump] = pcJump
+	t[bytecode.OpJumpIfFalse] = pcJumpIfFalse
+	t[bytecode.OpJumpIfTrue] = pcJumpIfTrue
+	t[bytecode.OpJumpIfCmpFalse] = pcJumpIfCmpFalse
+	t[bytecode.OpJumpIfFalseKeep] = pcJumpIfFalseKeep
+	t[bytecode.OpJumpIfTrueKeep] = pcJumpIfTrueKeep
+	t[bytecode.OpGetUpvalue] = pcGetUpvalue
+	t[bytecode.OpToNumeric] = pcToNumeric
+	t[bytecode.OpInc] = pcIncDec
+	t[bytecode.OpDec] = pcIncDec
+	t[bytecode.OpSetUpvalue] = pcSetUpvalue
+	t[bytecode.OpReturn] = pcReturn
+	t[bytecode.OpReturnUndef] = pcReturnUndef
+	return
+}()
+
 // pureStackSize is the most operands a pure body has; see pureBody.
 const pureStackSize = 24
 
@@ -56,8 +167,8 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 	}
 	for pc := 0; pc < len(code); pc++ {
 		in := code[pc]
-		switch in.Op {
-		case bytecode.OpPushThis:
+		switch pureCases[in.Op] {
+		case pcPushThis:
 			if pc+1 < len(code) && code[pc+1].Op == bytecode.OpGetProp {
 				// this.k, a method's commonest read, in one turn of the loop
 				// rather than two.
@@ -81,39 +192,39 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 			}
 			stack[sp] = this
 			sp++
-		case bytecode.OpGetLocal:
+		case pcGetLocal:
 			stack[sp] = arg(args, int(in.A))
 			sp++
-		case bytecode.OpGetLocal2:
+		case pcGetLocal2:
 			stack[sp], stack[sp+1] = arg(args, int(in.A)), arg(args, int(in.B))
 			sp += 2
-		case bytecode.OpPushInt:
+		case pcPushInt:
 			stack[sp] = Int32(int32(in.A))
 			sp++
-		case bytecode.OpPushConst:
+		case pcPushConst:
 			stack[sp] = cl.consts[in.A]
 			sp++
-		case bytecode.OpPushNull:
+		case pcPushNull:
 			stack[sp] = Null
 			sp++
-		case bytecode.OpPushTrue:
+		case pcPushTrue:
 			stack[sp] = True
 			sp++
-		case bytecode.OpPushFalse:
+		case pcPushFalse:
 			stack[sp] = False
 			sp++
-		case bytecode.OpPushUndef:
+		case pcPushUndef:
 			stack[sp] = Undefined
 			sp++
-		case bytecode.OpPushEmptyString:
+		case pcPushEmptyString:
 			stack[sp] = Str(emptyString)
 			sp++
-		case bytecode.OpDup:
+		case pcDup:
 			stack[sp] = stack[sp-1]
 			sp++
-		case bytecode.OpDrop:
+		case pcDrop:
 			sp--
-		case bytecode.OpGetProp:
+		case pcGetProp:
 			o := stack[sp-1]
 			if !o.IsObject() {
 				return miss()
@@ -128,7 +239,7 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 				}
 			}
 			stack[sp-1] = v
-		case bytecode.OpGetPropThis:
+		case pcGetPropThis:
 			// A method, read as get_prop reads, above its receiver.
 			o := stack[sp-1]
 			if !o.IsObject() {
@@ -145,7 +256,7 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 			}
 			stack[sp] = v
 			sp++
-		case bytecode.OpCall, bytecode.OpCallMethod:
+		case pcCall:
 			n := int(in.A)
 			base := sp - n - 1
 			callee, recv := stack[base], Undefined
@@ -167,7 +278,7 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 			sp = base
 			stack[sp] = v
 			sp++
-		case bytecode.OpSetProp:
+		case pcSetProp:
 			// A write the site's cache answers -- to a property the object
 			// has, or one it adds as objects of its shape did before -- is
 			// made, calling nothing; anything else gives up before writing.
@@ -199,7 +310,7 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 				return miss()
 			}
 			sp -= 2
-		case bytecode.OpNew:
+		case pcNew:
 			n := int(in.A)
 			base := sp - n - 1
 			v, ok := r.pureConstruct(stack[base], stack[sp-n:sp])
@@ -209,7 +320,7 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 			sp = base
 			stack[sp] = v
 			sp++
-		case bytecode.OpGetLength:
+		case pcGetLength:
 			switch v := stack[sp-1]; {
 			case v.IsString():
 				stack[sp-1] = Int(v.String().Len())
@@ -218,71 +329,69 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 			default:
 				return miss()
 			}
-		case bytecode.OpGetGlobal:
+		case pcGetGlobal:
 			v, ok := r.pureGlobal(cl, in)
 			if !ok {
 				return miss()
 			}
 			stack[sp] = v
 			sp++
-		case bytecode.OpAdd, bytecode.OpSub, bytecode.OpMul, bytecode.OpDiv,
-			bytecode.OpBitAnd, bytecode.OpBitOr, bytecode.OpBitXor, bytecode.OpShl, bytecode.OpShr, bytecode.OpUShr:
+		case pcArith:
 			v, ok := pureArith(in.Op, stack[sp-2], stack[sp-1])
 			if !ok {
 				return miss()
 			}
 			sp--
 			stack[sp-1] = v
-		case bytecode.OpBinImm:
+		case pcBinImm:
 			v, ok := pureArith(bytecode.Op(in.B), stack[sp-1], Int32(int32(in.A)))
 			if !ok {
 				return miss()
 			}
 			stack[sp-1] = v
-		case bytecode.OpBinLocal:
+		case pcBinLocal:
 			v, ok := pureArith(bytecode.Op(in.B), stack[sp-1], arg(args, int(in.A)))
 			if !ok {
 				return miss()
 			}
 			stack[sp-1] = v
-		case bytecode.OpLocalBinImm:
+		case pcLocalBinImm:
 			v, ok := pureArith(bytecode.Op(in.A>>24), arg(args, int(in.A&(1<<24-1))), Int32(int32(in.B)))
 			if !ok {
 				return miss()
 			}
 			stack[sp] = v
 			sp++
-		case bytecode.OpNeg:
+		case pcNeg:
 			v := stack[sp-1]
 			if !v.IsNumber() {
 				return miss()
 			}
 			stack[sp-1] = Float(-v.num)
-		case bytecode.OpNot:
+		case pcNot:
 			stack[sp-1] = Bool(!truthy(stack[sp-1]))
-		case bytecode.OpTypeOf:
+		case pcTypeOf:
 			stack[sp-1] = Str(r.typeofString(stack[sp-1]))
-		case bytecode.OpLt, bytecode.OpLe, bytecode.OpGt, bytecode.OpGe,
-			bytecode.OpEq, bytecode.OpNe, bytecode.OpStrictEq, bytecode.OpStrictNe:
+		case pcCompare:
 			res, ok := r.pureCompare(in.Op, stack[sp-2], stack[sp-1])
 			if !ok {
 				return miss()
 			}
 			sp--
 			stack[sp-1] = Bool(res)
-		case bytecode.OpJump:
+		case pcJump:
 			pc = int(in.A) - 1
-		case bytecode.OpJumpIfFalse:
+		case pcJumpIfFalse:
 			sp--
 			if !truthy(stack[sp]) {
 				pc = int(in.A) - 1
 			}
-		case bytecode.OpJumpIfTrue:
+		case pcJumpIfTrue:
 			sp--
 			if truthy(stack[sp]) {
 				pc = int(in.A) - 1
 			}
-		case bytecode.OpJumpIfCmpFalse:
+		case pcJumpIfCmpFalse:
 			res, ok := r.pureCompare(bytecode.Op(in.B), stack[sp-2], stack[sp-1])
 			if !ok {
 				return miss()
@@ -291,26 +400,26 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 			if !res {
 				pc = int(in.A) - 1
 			}
-		case bytecode.OpJumpIfFalseKeep:
+		case pcJumpIfFalseKeep:
 			if !truthy(stack[sp-1]) {
 				pc = int(in.A) - 1
 			} else {
 				sp--
 			}
-		case bytecode.OpJumpIfTrueKeep:
+		case pcJumpIfTrueKeep:
 			if truthy(stack[sp-1]) {
 				pc = int(in.A) - 1
 			} else {
 				sp--
 			}
-		case bytecode.OpGetUpvalue:
+		case pcGetUpvalue:
 			stack[sp] = cl.upvalues[in.A].get()
 			sp++
-		case bytecode.OpToNumeric:
+		case pcToNumeric:
 			if !stack[sp-1].IsNumber() {
 				return miss()
 			}
-		case bytecode.OpInc, bytecode.OpDec:
+		case pcIncDec:
 			v := stack[sp-1]
 			if !v.IsNumber() {
 				return miss()
@@ -320,7 +429,7 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 			} else {
 				stack[sp-1] = Float(v.num - 1)
 			}
-		case bytecode.OpSetUpvalue:
+		case pcSetUpvalue:
 			// Like a property's store, this is the body's last chance to give
 			// up, and is refused where the caller could still give up.
 			if !mayStore {
@@ -329,9 +438,9 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 			}
 			sp--
 			cl.upvalues[in.A].set(stack[sp])
-		case bytecode.OpReturn:
+		case pcReturn:
 			return stack[sp-1], true
-		case bytecode.OpReturnUndef:
+		case pcReturnUndef:
 			return Undefined, true
 		default:
 			return miss()
