@@ -145,17 +145,11 @@ type Runtime struct {
 	// iterResultShape is the shape of a { value, done } result, from the
 	// first one made.
 	iterResultShape *shape
-	// primProps remembers where methods of primitives were found on their
-	// prototypes; see primProp.
-	primProps [64]primEntry
 	// comma is ",", join's separator when it is given none.
 	comma *String
 	// splitBuf is where split collects its pieces before the array is made
 	// of them, kept for the next split.
 	splitBuf []Value
-	// keyAtoms remembers the atoms of key strings the runtime handed out;
-	// see keyString.
-	keyAtoms [256]keyAtom
 	// intStrings are the strings of the integers below len(intStrings),
 	// each made the first time it is asked for: see intString.
 	intStrings *[1024]*String
@@ -235,6 +229,17 @@ type Runtime struct {
 	// from the three above when a Date first needs it and made again when
 	// one of them changes.
 	dates *date.Environment
+
+	// The caches below are tables of their own, kilobytes long, kept last
+	// so that the fields the interpreter reads on every call and step stay
+	// together at the front, a few cache lines apart rather than kilobytes.
+
+	// primProps remembers where methods of primitives were found on their
+	// prototypes; see primProp.
+	primProps [64]primEntry
+	// keyAtoms remembers the atoms of key strings the runtime handed out;
+	// see keyString.
+	keyAtoms [256]keyAtom
 }
 
 // Realm is a set of intrinsics and the global object that goes with them.
