@@ -194,6 +194,10 @@ func (s *String) byteLen() int {
 	return total
 }
 
+// ropeThreshold is the length in bytes from which a concatenation is a rope
+// rather than a copy.
+const ropeThreshold = 64
+
 // Concat returns the concatenation of two strings.
 //
 // Short results are copied immediately; only a result long enough for the
@@ -218,7 +222,6 @@ func (s *String) Concat(t *String) *String {
 	ascii := s.ascii && t.ascii
 	length := s.length + t.length
 
-	const ropeThreshold = 64
 	if n := s.byteLenShallow() + t.byteLenShallow(); n < ropeThreshold {
 		out, b := newStringBytes(n)
 		out.length, out.ascii, out.endsHigh, out.startsLow = length, ascii, t.endsHigh, s.startsLow

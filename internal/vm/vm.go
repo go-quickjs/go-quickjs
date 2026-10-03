@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 	"math/big"
+	"strconv"
 	"sync/atomic"
 	"unsafe"
 
@@ -4576,6 +4577,15 @@ func (r *Runtime) add(a, b Value) (Value, error) {
 	}
 	// If either side is a string after coercion, the result is a string.
 	if pa.IsString() || pb.IsString() {
+		if pa.IsString() && pb.IsNumber() {
+			if s, ok := r.concatInt(pa.String(), pb.num, false); ok {
+				return Str(s), nil
+			}
+		} else if pb.IsString() && pa.IsNumber() {
+			if s, ok := r.concatInt(pb.String(), pa.num, true); ok {
+				return Str(s), nil
+			}
+		}
 		sa, err := r.toString(pa)
 		if err != nil {
 			return Undefined, err
@@ -4605,6 +4615,38 @@ func (r *Runtime) add(a, b Value) (Value, error) {
 		return r.bigArith(bytecode.OpAdd, na.BigInt(), nb.BigInt())
 	}
 	return Float(na.Number() + nb.Number()), nil
+}
+
+// concatInt is s + String(f), or with numFirst String(f) + s, for a safe
+// integer f, made in one allocation where the result is short enough for
+// Concat to have copied it: the number's own string is never made. It reports
+// false for anything else -- a long result, a rope, a runtime with a memory
+// limit -- which is left to toString and concat.
+//
+// The digits are ASCII, so no surrogate can pair across the join, and only
+// the string's own end carries an unpaired one to the result's.
+func (r *Runtime) concatInt(s *String, f float64, numFirst bool) (*String, bool) {
+	i := int64(f)
+	if float64(i) != f || f <= -1<<53 || f >= 1<<53 || s.left != nil || r.meter != nil {
+		return nil, false
+	}
+	var buf [24]byte
+	d := strconv.AppendInt(buf[:0], i, 10)
+	n := len(s.s) + len(d)
+	if n >= ropeThreshold {
+		return nil, false
+	}
+	out, b := newStringBytes(n)
+	if numFirst {
+		copy(b[copy(b, d):], s.s)
+		out.endsHigh = s.endsHigh
+	} else {
+		copy(b[copy(b, s.s):], d)
+		out.startsLow = s.startsLow
+	}
+	out.s = unsafe.String(unsafe.SliceData(b), n)
+	out.length, out.ascii = s.length+len(d), s.ascii
+	return out, true
 }
 
 // arith implements the arithmetic operators other than +.

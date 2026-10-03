@@ -3,6 +3,7 @@ package vm
 import (
 	"math"
 	"strconv"
+	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/jsnum"
 )
@@ -154,7 +155,33 @@ func (r *Runtime) numberString(f float64) *String {
 	if i := uint32(f); float64(i) == f && i < 1024 {
 		return r.intString(i)
 	}
-	return NewString(jsnum.FormatFloat(f))
+	// A safe integer is written into the String's own allocation. Anything
+	// else is formatted as a Go string, which the String keeps; either is
+	// ASCII, with nothing to scan for.
+	if i := int64(f); float64(i) == f && f > -1<<53 && f < 1<<53 {
+		var buf [24]byte
+		return asciiString(strconv.AppendInt(buf[:0], i, 10))
+	}
+	t := jsnum.FormatFloat(f)
+	return &String{s: t, length: len(t), ascii: true}
+}
+
+// asciiString is a String of ASCII bytes, which are copied: into the String's
+// own allocation when they are few enough, as a number's always are. Nothing
+// about them has to be found out by a scan.
+func asciiString(b []byte) *String {
+	n := len(b)
+	if n == 0 {
+		return emptyString
+	}
+	if n > 72 {
+		return &String{s: string(b), length: n, ascii: true}
+	}
+	out, room := newStringBytes(n)
+	copy(room, b)
+	out.s = unsafe.String(unsafe.SliceData(room), n)
+	out.length, out.ascii = n, true
+	return out
 }
 
 // intString is the string of an integer below 1024. A small integer becomes a
