@@ -151,17 +151,16 @@ func (r *Runtime) nativeFrame(o *Object, fd *funcData, this Value, args []Value,
 		return r.throwRangeError("maximum call stack size exceeded")
 	}
 	f := r.pushFrame()
-	// What a built-in's frame almost never has from the frame last at its
-	// depth is reset only where it is set, as runFD does: a read is cheaper
-	// than a pointer written.
-	if f.cl != nil {
-		f.cl = nil
-	}
+	// The closure and new.target are written whatever was there: the frame
+	// last at this depth was usually a compiled function's, with a closure,
+	// so a test would only add a load and a branch to the store. The
+	// handlers and open upvalues are almost always empty already, and are
+	// reset only where they are not, as runFD does: a read is cheaper than a
+	// pointer written.
+	f.cl = nil
 	f.native = fd.name
 	f.this = this
-	if !f.newTarget.sameBits(newTarget) {
-		f.newTarget = newTarget
-	}
+	f.newTarget = newTarget
 	f.callee = o
 	f.args = args
 	if len(f.handlers) != 0 {
