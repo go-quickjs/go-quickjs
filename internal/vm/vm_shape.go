@@ -55,6 +55,12 @@ type shape struct {
 type forInKeys struct {
 	keys  []Value
 	atoms []Atom
+	// slots is each key's place in the table, which the layout fixes.
+	slots []int32
+	// copyable says that every enumerable property of the layout, string or
+	// symbol keyed, is one of these and holds data: what an object spread
+	// copies is then the values at slots.
+	copyable bool
 }
 
 // shapeEdge is a property added: a transition's key.

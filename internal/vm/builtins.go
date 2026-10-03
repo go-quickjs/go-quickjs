@@ -174,8 +174,24 @@ func (r *Runtime) initObjectBuiltins() {
 			if err != nil {
 				return Undefined, err
 			}
-			keys, err := rt.ownKeysOf(so, true)
-			if err != nil {
+			// A plain object of a layout objects share, whose enumerable
+			// properties all hold data under string keys, gives its values
+			// from the places its layout has them -- for as long as it keeps
+			// the layout: a setter on the target may change it, and the keys
+			// left are then taken the long way, from the same list.
+			var keys []Atom
+			if c := rt.shapeKeys(so); c != nil && c.copyable {
+				s, i := so.shape, 0
+				for ; i < len(c.atoms) && so.shape == s; i++ {
+					if _, err := rt.setProp(target, c.atoms[i], so.props[c.slots[i]].value, Obj(target), true); err != nil {
+						return Undefined, err
+					}
+				}
+				if i == len(c.atoms) {
+					continue
+				}
+				keys = c.atoms[i:]
+			} else if keys, err = rt.ownKeysOf(so, true); err != nil {
 				return Undefined, err
 			}
 			for _, k := range keys {

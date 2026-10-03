@@ -154,11 +154,20 @@ func (r *Runtime) shapeKeys(o *Object) *forInKeys {
 		return nil
 	}
 	if s.forIn == nil {
-		c := &forInKeys{}
+		c := &forInKeys{copyable: true}
 		for _, k := range o.ownKeys(false, r.atoms) {
-			if p := o.getOwn(k); p != nil && p.flags&(propEnumerable|propPrivate|propDeleted) == propEnumerable {
+			if i := o.findOwn(k); i >= 0 && o.props[i].flags&(propEnumerable|propPrivate|propDeleted) == propEnumerable {
 				c.keys = append(c.keys, Str(r.keyString(k)))
 				c.atoms = append(c.atoms, k)
+				c.slots = append(c.slots, i)
+				if o.props[i].flags&propAccessor != 0 {
+					c.copyable = false
+				}
+			}
+		}
+		for i := range o.props {
+			if p := &o.props[i]; p.flags&(propEnumerable|propPrivate|propDeleted) == propEnumerable && r.atoms.IsSymbol(p.key) {
+				c.copyable = false
 			}
 		}
 		s.forIn = c
@@ -555,6 +564,18 @@ func (r *Runtime) copyDataProps(target *Object, src Value) error {
 		return nil
 	}
 	o := src.Object()
+	// A plain object of a layout objects share, whose enumerable properties
+	// all hold data under string keys, has its keys, in order, and their
+	// places with the layout: its values are read from there, with nothing
+	// a getter could see.
+	if c := r.shapeKeys(o); c != nil && c.copyable {
+		for i, k := range c.atoms {
+			if err := r.defineOwnProp(target, k, o.props[c.slots[i]].value, propDefault); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	keys, err := r.ownKeysOf(o, true)
 	if err != nil {
 		return err
