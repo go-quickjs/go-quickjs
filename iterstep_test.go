@@ -2,8 +2,8 @@ package quickjs_test
 
 import "testing"
 
-// TestBuiltinIteratorSteps covers loops over a Map or Set iterator and over a
-// generator, which step the built-in next themselves rather than calling it
+// TestBuiltinIteratorSteps covers loops over a Map, Set or array iterator and
+// over a generator, which step the built-in next themselves rather than calling it
 // for a result object. Nothing a script can see may differ: a next replaced
 // on the prototype or on the iterator is called, a yield* hands over the
 // delegate's own result objects, whose done and value the loop reads through
@@ -44,6 +44,29 @@ func TestBuiltinIteratorSteps(t *testing.T) {
 		{"generator re-entered", `var it = (function* () { yield 1; it.next() })(), r = []
 		  try { for (var v of it) r.push(v) } catch (e) { r.push(e.name) }
 		  r.join()`, "1,TypeError"},
+		{"array iterator reads", `var log = [], o = { get length() { log.push("len"); return 2 }, get 0() { log.push("g0"); return "a" }, 1: "b" }
+		  var r = []; for (var v of Array.prototype.values.call(o)) r.push(v)
+		  r.join() + " " + log.join()`, "a,b len,g0,len,len"},
+		{"array iterator getter throws", `var o = { length: 3, 0: 1, get 1() { throw new RangeError("g1") } }, r = []
+		  try { for (var v of Array.prototype.values.call(o)) r.push(v) } catch (e) { r.push(e.name) }
+		  r.join()`, "1,RangeError"},
+		{"array iterator next frame", `var seen = []
+		  var o = { length: 1, get 0() { seen.push(new Error().stack.split("\n")[2].trim()); return 0 } }
+		  for (var v of Array.prototype.values.call(o)); Array.prototype.values.call(o).next()
+		  seen[0] == seen[1]`, "true"},
+		{"array iterator kinds", `function g() { var r = []; for (var v of arguments) r.push(v); return r.join("") }
+		  var a = ["x", "y"], r = [g(1, 2, 3)]
+		  for (var e of a.entries()) r.push(e.join(":")); for (var k of a.keys()) r.push(k)
+		  for (var t of new Int8Array([5, 6])) r.push(t)
+		  r.push(Math.max(...new Uint8Array([3, 9, 4])), [...("ab")].join("+"))
+		  r.join()`, "123,0:x,1:y,0,1,5,6,9,a+b"},
+		{"array iterator next replaced", `var AI = Object.getPrototypeOf([][Symbol.iterator]()), next = AI.next, n = 0
+		  AI.next = function () { n++; return next.call(this) }
+		  function g() { return [...arguments].length } var len = g(1, 2)
+		  AI.next = next; [len, n].join()`, "2,3"},
+		{"typed array detached during the loop", `var b = new ArrayBuffer(8), t = new Uint8Array(b), r = []
+		  try { for (var v of t) { r.push(v); if (r.length == 2) b.transfer() } } catch (e) { r.push(e.name) }
+		  r.join()`, "0,0,TypeError"},
 		{"loop exits early", `var closed = 0
 		  function* g() { try { yield 1; yield 2 } finally { closed++ } }
 		  for (var v of g()) break

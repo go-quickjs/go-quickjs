@@ -285,17 +285,20 @@ func (r *Runtime) iterNext(cursor Value) (Value, bool, error) {
 const (
 	iterNextMap = 1 + iota
 	iterNextGenerator
+	iterNextArray
 )
 
 // stepIter calls an iterator's next method and reads its result: the value,
 // or false once the iterator is done or has failed.
 //
-// A built-in next of this realm -- a Map or Set iterator's, a generator's --
-// is applied directly, without the result object it would make: a loop reads
-// only the object's own done and value, which nothing could have changed, so
-// the object is never seen. A generator's next still has its frame, which a
-// stack trace taken in the generator's body shows. A result a generator hands
-// over from a yield* is the delegate's own object, and is read as any other.
+// A built-in next of this realm -- a Map or Set iterator's, an array
+// iterator's, a generator's -- is applied directly, without the result object
+// it would make: a loop reads only the object's own done and value, which
+// nothing could have changed, so the object is never seen. An array
+// iterator's and a generator's next still have their frames, which a getter
+// it runs, or a stack trace taken in the generator's body, sees. A result a
+// generator hands over from a yield* is the delegate's own object, and is
+// read as any other.
 func (r *Runtime) stepIter(iter, next Value) (Value, bool, error) {
 	var res Value
 	have := false
@@ -310,6 +313,19 @@ func (r *Runtime) stepIter(iter, next Value) (Value, bool, error) {
 					}
 					v, ok := r.mapIterStep(d)
 					return v, ok, nil
+				}
+			case iterNextArray:
+				// An array iterator over what is not an array -- arguments,
+				// a typed array, a string's wrapper, entries() -- reads the
+				// length and the element as next does, which may run a
+				// getter, so next's frame is there for it to see.
+				if d, ok := it.data.(*arrayIterData); ok {
+					if err := r.pushNativeFrame(n, iter, nil, Undefined); err != nil {
+						return Undefined, false, err
+					}
+					v, ok, err := r.arrayIterStep(d)
+					r.frameDepth--
+					return v, ok, err
 				}
 			case iterNextGenerator:
 				if g, ok := it.data.(*generator); ok && it.class == ClassGenerator {

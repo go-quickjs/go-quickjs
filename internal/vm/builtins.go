@@ -1956,44 +1956,56 @@ func (r *Runtime) initArrayIteratorProto() {
 			return Undefined, rt.throwTypeError(
 				"Array Iterator.prototype.next called on an incompatible receiver")
 		}
-		if d.done {
-			return Obj(rt.iterResult(Undefined, true)), nil
-		}
-		// A typed array whose buffer was detached mid-iteration is a TypeError
-		// rather than a silent end: its length reads as zero, which would
-		// otherwise look like exhaustion.
-		if d.a.o.class == ClassTypedArray {
-			if _, err := rt.typedArrayOf(Obj(d.a.o), "Array Iterator.prototype.next"); err != nil {
-				d.done = true
-				return Undefined, err
-			}
-		}
-		n, err := rt.lengthOf(d.a.o)
+		v, ok, err := rt.arrayIterStep(d)
 		if err != nil {
-			d.done = true
 			return Undefined, err
 		}
-		if d.i >= n {
-			d.done = true
-			return Obj(rt.iterResult(Undefined, true)), nil
-		}
-		idx := d.i
-		d.i++
-		if d.kind == iterKeys {
-			return Obj(rt.iterResult(Float(float64(idx)), false)), nil
-		}
-		v, err := d.a.get(rt, idx)
-		if err != nil {
-			d.done = true
-			return Undefined, err
-		}
-		if d.kind == iterEntries {
-			v = Obj(rt.newArrayFrom([]Value{Float(float64(idx)), v}))
-		}
-		return Obj(rt.iterResult(v, false)), nil
+		return Obj(rt.iterResult(v, !ok)), nil
 	})
+	r.arrayIterNextFn.fn().iterNext = iterNextArray
 	p.setOwnRaw(r.atoms.internSymbol(r.wellKnown.toStringTag),
 		Str(NewString("Array Iterator")), propConfigurable)
+}
+
+// arrayIterStep is an array iterator's next, as its value and false once it
+// is done, without the result object: the length read, and the element, as
+// the iterator reads them, through whatever getters there are.
+func (r *Runtime) arrayIterStep(d *arrayIterData) (Value, bool, error) {
+	if d.done {
+		return Undefined, false, nil
+	}
+	// A typed array whose buffer was detached mid-iteration is a TypeError
+	// rather than a silent end: its length reads as zero, which would
+	// otherwise look like exhaustion.
+	if d.a.o.class == ClassTypedArray {
+		if _, err := r.typedArrayOf(Obj(d.a.o), "Array Iterator.prototype.next"); err != nil {
+			d.done = true
+			return Undefined, false, err
+		}
+	}
+	n, err := r.lengthOf(d.a.o)
+	if err != nil {
+		d.done = true
+		return Undefined, false, err
+	}
+	if d.i >= n {
+		d.done = true
+		return Undefined, false, nil
+	}
+	idx := d.i
+	d.i++
+	if d.kind == iterKeys {
+		return Float(float64(idx)), true, nil
+	}
+	v, err := d.a.get(r, idx)
+	if err != nil {
+		d.done = true
+		return Undefined, false, err
+	}
+	if d.kind == iterEntries {
+		v = Obj(r.newArrayFrom([]Value{Float(float64(idx)), v}))
+	}
+	return v, true, nil
 }
 
 func arrayIterOf(v Value) (*arrayIterData, bool) {
