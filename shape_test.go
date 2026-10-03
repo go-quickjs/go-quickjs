@@ -338,3 +338,32 @@ func TestPropertyCachesOtherClasses(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestPrimitivePropertyCache covers reading a method of a primitive, which is
+// remembered by where it was found on the prototype: the method replaced,
+// deleted, made an accessor, shadowed by one added to the prototype after a
+// miss, and the prototype's own prototype changed, must all be seen.
+func TestPrimitivePropertyCache(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`function f(s) { return s.slice(1) } var slice = String.prototype.slice, r = []
+		  r.push(f("abc"), f("xyz"))
+		  String.prototype.slice = function () { return "replaced" }; r.push(f("abc"))
+		  delete String.prototype.slice; try { f("abc") } catch (e) { r.push(e.name) }
+		  Object.defineProperty(String.prototype, "slice", { get() { return function () { return "getter" } }, configurable: true }); r.push(f("abc"))
+		  Object.defineProperty(String.prototype, "slice", { value: slice, writable: true, configurable: true }); r.push(f("abc"))
+		  r.join()`, "bc,yz,replaced,TypeError,getter,bc"},
+		{`function g(n) { return n.custom } var r = []
+		  r.push(String(g(1)))
+		  Object.prototype.custom = "object"; r.push(g(1))
+		  Number.prototype.custom = "number"; r.push(g(2))
+		  delete Number.prototype.custom; r.push(g(3)); delete Object.prototype.custom
+		  r.push(String(g(4)), (12.5).toFixed(1), true.toString(), "q".at(0))
+		  r.join()`, "undefined,object,number,object,undefined,12.5,true,q"},
+		{`function h(s) { return s.trim } var trim = String.prototype.trim
+		  var r = [h("a") === trim]; Object.freeze(String.prototype); r.push(h("a") === trim)
+		  r.join()`, "true,true"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}

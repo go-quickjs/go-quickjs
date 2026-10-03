@@ -267,12 +267,12 @@ func (r *Runtime) getValueProp(v Value, key Atom) (Value, error) {
 			}
 			return Undefined, nil
 		}
-		return r.getProp(r.proto.str, key, v)
+		return r.primProp(r.proto.str, key, v)
 
 	case KindNumber:
-		return r.getProp(r.proto.number, key, v)
+		return r.primProp(r.proto.number, key, v)
 	case KindBool:
-		return r.getProp(r.proto.boolean, key, v)
+		return r.primProp(r.proto.boolean, key, v)
 	case KindSymbol:
 		return r.getProp(r.proto.symbol, key, v)
 	case KindBigInt:
@@ -281,6 +281,42 @@ func (r *Runtime) getValueProp(v Value, key Atom) (Value, error) {
 	// null and undefined have no properties at all.
 	return Undefined, r.throwTypeError("cannot read property %q of %s",
 		r.atoms.name(key), v.Kind())
+}
+
+// primEntry is where a property of a primitive's prototype was found: the
+// prototype, its shape then, and the property's place in its table.
+type primEntry struct {
+	key   Atom
+	idx   int32
+	proto *Object
+	shape *shape
+}
+
+// primProp reads a property of a primitive from its prototype, p -- what
+// `s.slice` and `n.toFixed` read. A method is read again and again from the
+// same few prototypes, whose tables are large, so where one was found is
+// remembered, by key, for as long as the prototype keeps the shape it had:
+// a built-in prototype's shape is its own, replaced at every change to its
+// layout, so a property added, deleted or made an accessor is noticed. Only
+// a data property of p itself is remembered; anything else is looked up.
+func (r *Runtime) primProp(p *Object, key Atom, v Value) (Value, error) {
+	e := &r.primProps[key&63]
+	if s := p.shape; e.key == key && e.proto == p && e.shape == s && s != nil {
+		if verifyShapes {
+			checkShape(p)
+			if want, err := r.getProp(p, key, v); err != nil || !want.sameBits(p.props[e.idx].value) {
+				panic("primitive property cache disagrees with lookup for " + r.atoms.name(key))
+			}
+		}
+		return p.props[e.idx].value, nil
+	}
+	if s := p.shape; s != nil && s.unique && !r.shapes.building && !key.IsIndex() && key != atomLength {
+		if i := p.findOwn(key); i >= 0 && p.props[i].flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
+			*e = primEntry{key: key, idx: i, proto: p, shape: s}
+			return p.props[i].value, nil
+		}
+	}
+	return r.getProp(p, key, v)
 }
 
 // setProp assigns a property, honouring setters found on the prototype chain
