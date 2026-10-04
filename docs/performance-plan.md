@@ -250,7 +250,7 @@ a project for a few of Splay's allocations.
 | B6 | RegExp per-call costs | `regexp_ascii` 2.2x, `regexp_utf16` 2.6x, V8 RegExp | Low | Done |
 | B7 | Number text without intermediate strings | `float_toExponential` 2.1x, `float_toPrecision` 1.9x | Low | Done |
 | B8 | Strings to numbers, and numbers to cached strings | `string_to_int` 1.28x, `int_to_string` 1.6x | Low | Done |
-| B9 | Date strings without `fmt.Sprintf` (go-intl) | `date_parse` 2.1x | Low | Waiting: a go-intl release |
+| B9 | Date strings without `fmt.Sprintf` (go-intl) | `date_parse` 2.1x | Low | Done |
 | B10 | Compiler: smaller code for common shapes | interpreted code (RegExp's runBlocks, EarleyBoyer) | Medium | Done, in part |
 
 - **B1.** `get_length` reaches `arrayLength` through `getValueProp`, `getProp`
@@ -347,7 +347,10 @@ a project for a few of Splay's allocations.
   `Date.parse` copies its argument to UTF-16; both are changed in go-intl,
   and taken with `go get`.
 
-  **Waiting:** it is go-intl's change, and a go-intl release to take.
+  **Done:** go-intl v0.3.2 writes Date's five strings into one buffer
+  (`toString` -60%, `toISOString` -57%), and `Date.parse` widens a short
+  ASCII string into the runtime's buffer rather than a copy the string
+  keeps (-7%). `date_parse` -43%.
 - **B10.** Compiler:
   - a call whose result is dropped can say so, instead of a `drop` after
     it (1,229 such pairs in the V8 RegExp benchmark's interpreted code);
