@@ -42,6 +42,69 @@ type reaction struct {
 	// ctx is the async context where the reaction was registered, which
 	// its job runs in, however the promise came to settle.
 	ctx Value
+	// gen, where it is set, is the generator an await resumes, in place of
+	// the callbacks and the promise: see awaitPromise. resume says how.
+	gen    *generator
+	resume awaitKind
+}
+
+// awaitKind is how a settled await resumes the generator that waits on it.
+type awaitKind uint8
+
+const (
+	// awaitAsync resumes an async function at its await.
+	awaitAsync awaitKind = iota
+	// awaitGenerator resumes an async generator at its await.
+	awaitGenerator
+	// awaitReturn resumes an async generator with the return its caller
+	// asked for, once the value returned has settled.
+	awaitReturn
+	// awaitYield settles an async generator's request with the value it
+	// yielded, once that has settled; a rejection is thrown at the yield.
+	awaitYield
+)
+
+// awaitPromise is PerformPromiseThen(p, onFulfilled, onRejected) for an
+// await, whose two functions only resume g and whose result capability is
+// none: the job resumes g itself, with no function called and no promise
+// made for nothing to read.
+func (r *Runtime) awaitPromise(p *Object, g *generator, k awaitKind) {
+	pd, ok := p.data.(*promiseData)
+	if !ok {
+		return
+	}
+	rc := reaction{ctx: r.asyncCtx, gen: g, resume: k}
+	if pd.state == promisePending {
+		pd.reactions = append(pd.reactions, rc)
+		return
+	}
+	r.enqueueReaction(pd, rc)
+}
+
+// resumeAwait resumes the generator an await's reaction names, with the
+// value the awaited promise settled to.
+func (r *Runtime) resumeAwait(rc *reaction, v Value, rejected bool) {
+	g := rc.gen
+	switch {
+	case rc.resume == awaitAsync && rejected:
+		// A rejected await throws at the await expression, so a try inside
+		// the body can catch it.
+		r.stepAsync(g, v, resumeThrow)
+	case rc.resume == awaitAsync:
+		r.stepAsync(g, v, resumeNext)
+	case rejected:
+		// In an async generator a rejection is a throw where it waited: at
+		// the await, at the yield -- a try round it can catch it, and an
+		// uncaught one finishes the generator instead of leaving it
+		// suspended -- or where a return was injected.
+		r.stepAsyncGenerator(g, v, resumeThrow)
+	case rc.resume == awaitGenerator:
+		r.stepAsyncGenerator(g, v, resumeNext)
+	case rc.resume == awaitReturn:
+		r.stepAsyncGenerator(g, v, resumeReturn)
+	default:
+		r.finishAsyncRequest(g, false, Obj(r.iterResult(v, false)))
+	}
 }
 
 func (r *Runtime) promiseOf(this Value, name string) (*promiseData, error) {
@@ -224,6 +287,10 @@ func (r *Runtime) enqueueReaction(p *promiseData, rc reaction) {
 		p.handled = true
 	}
 	r.enqueueJobIn(rc.ctx, func() {
+		if rc.gen != nil {
+			r.resumeAwait(&rc, value, state == promiseRejected)
+			return
+		}
 		handler := rc.onFulfilled
 		if state == promiseRejected {
 			handler = rc.onRejected
@@ -986,16 +1053,5 @@ func (r *Runtime) stepAsync(g *generator, sent Value, mode resumeMode) {
 
 	// The generator suspended on an await. Resume it when the awaited value
 	// settles.
-	awaited := r.toPromise(v)
-	onFulfilled := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
-		rt.stepAsync(g, arg(a, 0), resumeNext)
-		return Undefined, nil
-	})
-	onRejected := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
-		// A rejected await throws at the await expression, so a try inside the
-		// body can catch it.
-		rt.stepAsync(g, arg(a, 0), resumeThrow)
-		return Undefined, nil
-	})
-	r.promiseThen(awaited, Obj(onFulfilled), Obj(onRejected))
+	r.awaitPromise(r.toPromise(v), g, awaitAsync)
 }

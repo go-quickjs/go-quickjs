@@ -369,13 +369,31 @@ matter to hosts running classes, modules and async code.
 
 | ID | Item | Status |
 |---|---|---|
-| C1 | Strict `return f()` (a tail call) takes the generic call path, and keeps its function out of the tree tier and the frameless evaluator | Open |
-| C2 | An `await` makes about nine allocations: two functions, a promise nothing can reach, a job, an argument list | Open |
+| C1 | Strict `return f()` (a tail call) takes the generic call path, and keeps its function out of the tree tier and the frameless evaluator | Done |
+| C2 | An `await` makes about nine allocations: two functions, a promise nothing can reach, a job, an argument list | Done |
 | C3 | A generator or async call makes four allocations, and resuming copies its whole frame | Open |
 | C4 | A bound function always takes the slow call path, and allocates its arguments when it has bound ones | Open |
 | C5 | Every `for-of`, spread and array destructuring allocates an iterator object | Open |
 | C6 | An arrow function is 448 to 480 bytes, most of it fields only bound or `with` functions use | Open |
 | C7 | A closure reads a `let` or `const` it captured after its initialization with a dead-zone check, which keeps arrows out of the frameless evaluator | Open |
+
+**C1, done:** the tree tier builds `tail_call`, giving the frame up as the
+interpreter does once the stack is 32 deep; a plain tail call is a call in
+the frameless evaluator. A method's tail call stays out of the frameless
+evaluator, and the interpreter's own `tail_call` is as it was: either change
+moved Crypto by 2 to 4%, which runs neither. The builder is in the package's
+last file, as inside `op` it moved NavierStokes by 6 to 10%. Strict
+`return f()` -45%, a method's -8%, a deep chain of them -9%.
+
+**C2, done:** an await's reaction names the generator it resumes and how,
+and its job resumes it: no functions, no promise for nothing to read. A
+plain `await` -47% to -52%, `for await` over an async generator -40%.
+
+C1 and C2 together, against main over eight placements: total +0.7%,
+Crypto +1.6% to +1.8%. Neither runs in the suite: C2 alone, whose code the
+suite never reaches, moved Crypto +2.1%, and C1's variants moved it between
++1.6% and +6.1% with no relation to what they run. Taken as placement, as
+A5's DeltaBlue was.
 
 ## Rejected
 

@@ -709,16 +709,7 @@ func (r *Runtime) pumpOne(g *generator) {
 		// so returning a promise into one delivers what it settles to -- and a
 		// broken promise becomes a throw at the resumption point rather than a
 		// result nobody can use.
-		awaited := r.toPromise(req.sent)
-		onFulfilled := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
-			rt.stepAsyncGenerator(g, arg(a, 0), resumeReturn)
-			return Undefined, nil
-		})
-		onRejected := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
-			rt.stepAsyncGenerator(g, arg(a, 0), resumeThrow)
-			return Undefined, nil
-		})
-		r.promiseThen(awaited, Obj(onFulfilled), Obj(onRejected))
+		r.awaitPromise(r.toPromise(req.sent), g, awaitReturn)
 		return
 	}
 	r.stepAsyncGenerator(g, req.sent, req.mode)
@@ -753,16 +744,7 @@ func (r *Runtime) stepAsyncGenerator(g *generator, sent Value, mode resumeMode) 
 	if res.await {
 		// An await is the generator's own business: settle the awaited value
 		// and resume, without the caller seeing anything.
-		awaited := r.toPromise(res.value)
-		onFulfilled := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
-			rt.stepAsyncGenerator(g, arg(a, 0), resumeNext)
-			return Undefined, nil
-		})
-		onRejected := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
-			rt.stepAsyncGenerator(g, arg(a, 0), resumeThrow)
-			return Undefined, nil
-		})
-		r.promiseThen(awaited, Obj(onFulfilled), Obj(onRejected))
+		r.awaitPromise(r.toPromise(res.value), g, awaitGenerator)
 		return
 	}
 
@@ -780,18 +762,5 @@ func (r *Runtime) stepAsyncGenerator(g *generator, sent Value, mode resumeMode) 
 		r.finishAsyncRequest(g, false, Obj(r.iterResult(res.value, false)))
 		return
 	}
-	awaited := r.toPromise(res.value)
-	onFulfilled := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
-		rt.finishAsyncRequest(g, false, Obj(rt.iterResult(arg(a, 0), false)))
-		return Undefined, nil
-	})
-	onRejected := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
-		// The await happens inside the generator, at the yield, so a
-		// rejection is a throw there rather than merely a rejected result:
-		// a try round the yield can catch it, and an uncaught one finishes
-		// the generator instead of leaving it suspended.
-		rt.stepAsyncGenerator(g, arg(a, 0), resumeThrow)
-		return Undefined, nil
-	})
-	r.promiseThen(awaited, Obj(onFulfilled), Obj(onRejected))
+	r.awaitPromise(r.toPromise(res.value), g, awaitYield)
 }

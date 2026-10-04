@@ -4935,3 +4935,29 @@ func TestArrayLengthAssignment(t *testing.T) {
 		r.join(" ")`,
 		"1,2 2 4 false  0 RangeError RangeError RangeError 2 3 strict TypeError 50 false 0,1,2,3,4,9 1 true 4294967295 RangeError")
 }
+
+// TestAwaitOrdering pins when each await, async generator step and then
+// runs against the others -- a fulfilled and a rejected await, a thenable,
+// a yield of a promise and of a rejected one, a return given a promise and
+// a rejected one, for await -- which an await's reaction resuming its
+// generator directly, with no functions or promise between, must keep. The
+// order is Node's.
+func TestAwaitOrdering(t *testing.T) {
+	checkAsync(t, `var log = [];
+		async function a1() { log.push("a1 start"); await null; log.push("a1 after 1"); await Promise.resolve(); log.push("a1 after 2"); return "a1" }
+		async function a2() { log.push("a2 start"); try { await Promise.reject(new Error("boom")) } catch (e) { log.push("a2 caught " + e.message) } return "a2" }
+		async function a3() { await { then(res) { log.push("thenable"); res(3) } }; log.push("a3 after thenable"); throw new TypeError("a3 fail") }
+		async function* g() { try { log.push("g start"); yield 1; yield Promise.resolve(2); var x = await 3; log.push("g await " + x); yield Promise.reject(new Error("yrej")) } catch (e) { log.push("g caught " + e.message); yield "after" } finally { log.push("g finally") } }
+		Promise.resolve().then(() => log.push("then 1")).then(() => log.push("then 2")).then(() => log.push("then 3"));
+		a1().then(v => log.push("done " + v));
+		a2().then(v => log.push("done " + v));
+		a3().catch(e => log.push("a3 rejected " + e.constructor.name));
+		(async () => { var it = g(); for (var i = 0; i < 4; i++) { var r = await it.next(); log.push("g next " + JSON.stringify(r)) }
+		  var it2 = g(); await it2.next(); var r = await it2.return(Promise.resolve("ret")); log.push("g return " + JSON.stringify(r));
+		  var it3 = g(); await it3.next(); try { await it3.return(Promise.reject(new Error("rret"))) } catch (e) { log.push("g return rejected " + e.message) }
+		  var s = 0; for await (var v of (async function* () { yield 1; yield 2; yield 3 })()) s += v; log.push("for await " + s);
+		})();
+		queueMicrotask(() => log.push("microtask"));`,
+		`log.join("|")`,
+		`a1 start|a2 start|g start|then 1|a1 after 1|a2 caught boom|thenable|microtask|then 2|a1 after 2|done a2|a3 after thenable|g next {"value":1,"done":false}|then 3|done a1|a3 rejected TypeError|g next {"value":2,"done":false}|g await 3|g caught yrej|g next {"value":"after","done":false}|g finally|g next {"done":true}|g start|g finally|g return {"value":"ret","done":true}|g start|g caught rret|for await 6`)
+}
