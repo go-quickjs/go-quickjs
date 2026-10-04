@@ -42,7 +42,7 @@ func (r *Runtime) materialize(c bytecode.Constant) Value {
 		if b, ok := ParseBigInt(c.Str); ok {
 			return Big(b)
 		}
-		return Big(NewBigInt(0))
+		return shortBig(0)
 	case bytecode.ConstFunction:
 		// A nested template is prepared eagerly and stored as a closure with no
 		// upvalues bound; OpClosure copies it and binds them per instantiation.

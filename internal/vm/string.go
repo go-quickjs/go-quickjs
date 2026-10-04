@@ -881,15 +881,21 @@ func NewBigInt(v int64) *BigInt {
 	return b
 }
 
-// smallBigInt is a BigInt and room for two words of digits, which is all most
-// BigInts need: one allocation where a BigInt and its digits are two.
+// smallBigInt is a BigInt and room for four words of digits: one allocation
+// where a BigInt and its digits are two. A BigInt in the int64 range is held
+// in its Value, so one on the heap has two words or more, and big.Int asks
+// for a word more than a sum's longer operand has before it knows whether
+// the sum needs it. Three words would take the same 64-byte size class.
 type smallBigInt struct {
 	b     BigInt
-	words [2]big.Word
+	words [4]big.Word
 }
 
+// smallBigWords is how many words of digits a smallBigInt has room for.
+const smallBigWords = len(smallBigInt{}.words)
+
 // newBigResult is a BigInt of zero that keeps its digits in its own
-// allocation while they fit in two words, for a result that will.
+// allocation while they fit in smallBigWords, for a result that will.
 func newBigResult() *BigInt {
 	s := &smallBigInt{}
 	s.b.V.SetBits(s.words[:0])

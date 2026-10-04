@@ -240,6 +240,9 @@ type Runtime struct {
 	// keyAtoms remembers the atoms of key strings the runtime handed out;
 	// see keyString.
 	keyAtoms [256]keyAtom
+	// bigArgs are where a BigInt held in its Value is spelled as a big.Int
+	// for bigArith, which keeps neither operand; see bigArg.
+	bigArgs [2]smallBigInt
 }
 
 // Realm is a set of intrinsics and the global object that goes with them.

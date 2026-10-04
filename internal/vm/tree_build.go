@@ -975,9 +975,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 					c.throw(err)
 				}
 				if n.IsBigInt() {
-					out := &BigInt{}
-					out.V.Not(&n.BigInt().V)
-					return Big(out)
+					return bigNot(n)
 				}
 				v = n
 			}
@@ -1109,7 +1107,7 @@ func (c *tctx) step(v Value, delta float64) Value {
 		c.throw(err)
 	}
 	if n.IsBigInt() {
-		res, err := c.r.arith(bytecode.OpAdd, n, Big(NewBigInt(int64(delta))))
+		res, err := c.r.arith(bytecode.OpAdd, n, shortBig(int64(delta)))
 		if err != nil {
 			c.throw(err)
 		}

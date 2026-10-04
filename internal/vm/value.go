@@ -140,7 +140,53 @@ const (
 	// canonicalNaN is the positive quiet NaN that every NaN is normalized to,
 	// chosen because it lies outside the tag range.
 	canonicalNaN = 0x7FF8000000000000
+	// shortBigBase begins the NaNs that hold a BigInt in the int64 range: the
+	// low 50 bits of its value are the low 50 of num, and the high 14 are
+	// which byte of shortBigHigh ref points at. Every BigInt in that range is
+	// held so, and no other, so two are the same value exactly when their
+	// bits are the same.
+	shortBigBase    = 0xFFFC000000000000
+	shortBigLowBits = 50
+	shortBigLowMask = 1<<shortBigLowBits - 1
+	// heapBigBits is the NaN of a BigInt outside the int64 range, whose ref
+	// is its *BigInt: the one below shortBigBase, so that every BigInt is
+	// from heapBigBits up, which one comparison asks.
+	heapBigBits = shortBigBase - 1
 )
+
+// shortBigHigh is what a short BigInt's ref points into, at the byte its high
+// 14 bits number: a pointer outside Go's heap, which its collector passes
+// over, for 14 bits a NaN has no room for.
+var shortBigHigh [1 << (64 - shortBigLowBits)]byte
+
+// shortBig is the BigInt i, held in the Value.
+func shortBig(i int64) Value {
+	u := uint64(i)
+	return Value{
+		num: math.Float64frombits(shortBigBase | u&shortBigLowMask),
+		ref: unsafe.Pointer(&shortBigHigh[u>>shortBigLowBits]),
+	}
+}
+
+// heapBig is the BigInt b, which is outside the int64 range.
+func heapBig(b *BigInt) Value {
+	return Value{num: math.Float64frombits(heapBigBits), ref: unsafe.Pointer(b)}
+}
+
+// isHeapBig reports whether the value is a BigInt outside the int64 range.
+func (v Value) isHeapBig() bool { return math.Float64bits(v.num) == heapBigBits }
+
+// isShortBig reports whether the value is a BigInt held in the Value.
+func (v Value) isShortBig() bool {
+	return math.Float64bits(v.num)>>shortBigLowBits == shortBigBase>>shortBigLowBits
+}
+
+// shortBigInt is the value of a BigInt isShortBig has said is held in the
+// Value.
+func (v Value) shortBigInt() int64 {
+	high := uint64(uintptr(v.ref) - uintptr(unsafe.Pointer(&shortBigHigh)))
+	return int64(high<<shortBigLowBits | math.Float64bits(v.num)&shortBigLowMask)
+}
 
 // mkTag builds the num field for a non-number value.
 func mkTag(k Kind, payload uint8) float64 {
@@ -160,9 +206,12 @@ var (
 // Kind returns the value's language type.
 func (v Value) Kind() Kind {
 	bits := math.Float64bits(v.num)
-	if bits&tagMask != tagBase {
-		// Anything that is not a tagged NaN is a real number.
+	if bits>>51 != tagBase>>51 {
+		// Anything below the tagged NaNs is a real number.
 		return KindNumber
+	}
+	if bits >= heapBigBits {
+		return KindBigInt
 	}
 	return Kind(bits & 0xFF)
 }
@@ -207,9 +256,13 @@ func Sym(s *Symbol) Value {
 	return Value{num: mkTag(KindSymbol, 0), ref: unsafe.Pointer(s)}
 }
 
-// Big returns a BigInt value.
+// Big returns a BigInt value: held in the Value when it is in the int64
+// range, which keeps none of b.
 func Big(b *BigInt) Value {
-	return Value{num: mkTag(KindBigInt, 0), ref: unsafe.Pointer(b)}
+	if b.V.IsInt64() {
+		return shortBig(b.V.Int64())
+	}
+	return heapBig(b)
 }
 
 // Obj returns an object value.
@@ -221,9 +274,12 @@ func Obj(o *Object) Value {
 // Predicates
 // ---------------------------------------------------------------------------
 
-// IsNumber reports whether the value is a number.
+// IsNumber reports whether the value is a number: below every tag, and the
+// NaNs short BigInts are, as every number is once its NaN is normalized.
+// Those begin at tagBase, the first value with the top 13 bits set, which a
+// shift finds without the 64-bit constant a comparison would load.
 func (v Value) IsNumber() bool {
-	return math.Float64bits(v.num)&tagMask != tagBase
+	return math.Float64bits(v.num)>>51 != tagBase>>51
 }
 
 // IsUndefined reports whether the value is undefined.
@@ -257,7 +313,7 @@ func (v Value) IsString() bool { return v.isTag(KindString) }
 func (v Value) IsSymbol() bool { return v.isTag(KindSymbol) }
 
 // IsBigInt reports whether the value is a BigInt.
-func (v Value) IsBigInt() bool { return v.isTag(KindBigInt) }
+func (v Value) IsBigInt() bool { return math.Float64bits(v.num) >= heapBigBits }
 
 // IsObject reports whether the value is an object.
 func (v Value) IsObject() bool { return math.Float64bits(v.num) == objectBits }
@@ -307,9 +363,13 @@ func (v Value) Symbol() *Symbol {
 	return nil
 }
 
-// BigInt returns the BigInt payload.
+// BigInt returns the BigInt payload. One held in the Value is made a BigInt
+// of its own, which the caller may keep.
 func (v Value) BigInt() *BigInt {
-	if v.isTag(KindBigInt) {
+	if v.isShortBig() {
+		return NewBigInt(v.shortBigInt())
+	}
+	if v.isHeapBig() {
 		return (*BigInt)(v.ref)
 	}
 	return nil
@@ -344,7 +404,7 @@ func (v Value) refAny() any {
 		return (*String)(v.ref)
 	case v.isTag(KindSymbol):
 		return (*Symbol)(v.ref)
-	case v.isTag(KindBigInt):
+	case v.isHeapBig():
 		return (*BigInt)(v.ref)
 	}
 	return nil
@@ -380,6 +440,10 @@ func (v Value) StrictEquals(w Value) bool {
 	case KindSymbol:
 		return v.Symbol() == w.Symbol()
 	case KindBigInt:
+		if v.isShortBig() || w.isShortBig() {
+			// Only another held the same way can be the same value.
+			return v.sameBits(w)
+		}
 		return v.BigInt().Cmp(w.BigInt()) == 0
 	case KindObject:
 		return v.Object() == w.Object()
@@ -427,6 +491,9 @@ func (v Value) Truthy() bool {
 	case KindString:
 		return v.String().Len() != 0
 	case KindBigInt:
+		if v.isShortBig() {
+			return v.shortBigInt() != 0
+		}
 		return !v.BigInt().IsZero()
 	case KindObject:
 		// Every object is truthy but document.all.

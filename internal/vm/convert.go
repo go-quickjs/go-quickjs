@@ -657,6 +657,14 @@ func (r *Runtime) compareBigInt(a, b Value) (cmpResult, error) {
 		return cmpEqual, nil
 	}
 	switch {
+	case a.isShortBig() && b.isShortBig():
+		x, y := a.shortBigInt(), b.shortBigInt()
+		if x < y {
+			return cmpLess, nil
+		} else if x > y {
+			return cmpGreater, nil
+		}
+		return cmpEqual, nil
 	case a.IsBigInt() && b.IsBigInt():
 		return cmpFromInt(a.BigInt().Cmp(b.BigInt())), nil
 	case a.IsBigInt():

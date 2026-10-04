@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 	"math/big"
+	"math/bits"
 	"strconv"
 	"unsafe"
 
@@ -1187,7 +1188,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 					delta = -1
 				}
 				if n.IsBigInt() {
-					if next, err = r.arith(bytecode.OpAdd, n, Big(NewBigInt(int64(delta)))); err != nil {
+					if next, err = r.arith(bytecode.OpAdd, n, shortBig(int64(delta))); err != nil {
 						vmErr = err
 						goto onError
 					}
@@ -1263,7 +1264,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				if in.Op == bytecode.OpDecLocal {
 					delta = -1
 				}
-				v, err := r.arith(bytecode.OpAdd, n, Big(NewBigInt(delta)))
+				v, err := r.arith(bytecode.OpAdd, n, shortBig(delta))
 				if err != nil {
 					vmErr = err
 					goto onError
@@ -1298,7 +1299,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				goto onError
 			}
 			if n.IsBigInt() {
-				v, err := r.arith(bytecode.OpAdd, n, Big(NewBigInt(int64(delta))))
+				v, err := r.arith(bytecode.OpAdd, n, shortBig(int64(delta)))
 				if err != nil {
 					vmErr = err
 					goto onError
@@ -1359,11 +1360,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 					goto onError
 				}
 				if n.IsBigInt() {
-					// A BigInt has no width, so the complement is simply
-					// -(x+1) -- which is what Not computes.
-					out := &BigInt{}
-					out.V.Not(&n.BigInt().V)
-					sp = pushAt(stack, sp, Big(out))
+					sp = pushAt(stack, sp, bigNot(n))
 					break
 				}
 				v = n
@@ -3879,6 +3876,11 @@ func (r *Runtime) instanceOfAt(ic *propCache, obj, ctor Value) (bool, error) {
 // add implements the + operator, which is the only arithmetic operator that
 // also concatenates.
 func (r *Runtime) add(a, b Value) (Value, error) {
+	if a.isShortBig() && b.isShortBig() {
+		if v, ok := shortArith(bytecode.OpAdd, a, b); ok {
+			return v, nil
+		}
+	}
 	pa, err := r.toPrimitive(a, hintDefault)
 	if err != nil {
 		return Undefined, err
@@ -3912,6 +3914,10 @@ func (r *Runtime) add(a, b Value) (Value, error) {
 		}
 		return Str(s), nil
 	}
+	if pa.IsBigInt() && pb.IsBigInt() {
+		// What toNumeric would leave as they are.
+		return r.bigArith(bytecode.OpAdd, r.bigArg(pa, 0), r.bigArg(pb, 1))
+	}
 	na, err := r.toNumeric(pa)
 	if err != nil {
 		return Undefined, err
@@ -3924,7 +3930,7 @@ func (r *Runtime) add(a, b Value) (Value, error) {
 		return Undefined, r.throwTypeError("cannot mix BigInt and other types")
 	}
 	if na.IsBigInt() {
-		return r.bigArith(bytecode.OpAdd, na.BigInt(), nb.BigInt())
+		return r.bigArith(bytecode.OpAdd, r.bigArg(na, 0), r.bigArg(nb, 1))
 	}
 	return Float(na.Number() + nb.Number()), nil
 }
@@ -3963,6 +3969,11 @@ func (r *Runtime) concatInt(s *String, f float64, numFirst bool) (*String, bool)
 
 // arith implements the arithmetic operators other than +.
 func (r *Runtime) arith(op bytecode.Op, a, b Value) (Value, error) {
+	if a.isShortBig() && b.isShortBig() {
+		if v, ok := shortArith(op, a, b); ok {
+			return v, nil
+		}
+	}
 	na, err := r.toNumeric(a)
 	if err != nil {
 		return Undefined, err
@@ -3975,7 +3986,7 @@ func (r *Runtime) arith(op bytecode.Op, a, b Value) (Value, error) {
 		return Undefined, r.throwTypeError("cannot mix BigInt and other types")
 	}
 	if na.IsBigInt() {
-		return r.bigArith(op, na.BigInt(), nb.BigInt())
+		return r.bigArith(op, r.bigArg(na, 0), r.bigArg(nb, 1))
 	}
 	return Float(numericOp(op, na.Number(), nb.Number())), nil
 }
@@ -4003,6 +4014,11 @@ func int32Op(op bytecode.Op, x, y float64) Value {
 // numbers. Each is coerced once -- a valueOf runs once, as it does in every
 // engine -- and a pair of BigInts has the BigInt operator.
 func (r *Runtime) bitwise(op bytecode.Op, a, b Value) (Value, error) {
+	if a.isShortBig() && b.isShortBig() && op != bytecode.OpUShr {
+		if v, ok := shortBitwise(op, a, b); ok {
+			return v, nil
+		}
+	}
 	na, err := r.toNumeric(a)
 	if err != nil {
 		return Undefined, err
@@ -4037,7 +4053,7 @@ func (r *Runtime) updateLocal(slot *Value, flags uint32) (Value, error) {
 	}
 	var next Value
 	if n.IsBigInt() {
-		if next, err = r.arith(bytecode.OpAdd, n, Big(NewBigInt(int64(delta)))); err != nil {
+		if next, err = r.arith(bytecode.OpAdd, n, shortBig(int64(delta))); err != nil {
 			return Undefined, err
 		}
 	} else {
@@ -4053,6 +4069,11 @@ func (r *Runtime) updateLocal(slot *Value, flags uint32) (Value, error) {
 // binImm is OpBinImm for a left operand that is not a number: what the
 // operator's own instruction does then.
 func (r *Runtime) binImm(op bytecode.Op, a, b Value) (Value, error) {
+	if a.isShortBig() && b.isShortBig() {
+		if v, ok := shortBinImm(op, a, b); ok {
+			return v, nil
+		}
+	}
 	switch op {
 	case bytecode.OpAdd:
 		return r.add(a, b)
@@ -4081,6 +4102,11 @@ func (r *Runtime) bigBitwise(op bytecode.Op, a, b Value) (Value, bool, error) {
 	}
 	if na.IsBigInt() != nb.IsBigInt() {
 		return Undefined, false, r.throwTypeError("cannot mix BigInt and other types")
+	}
+	if na.isShortBig() && nb.isShortBig() {
+		if v, ok := shortBitwise(op, na, nb); ok {
+			return v, true, nil
+		}
 	}
 
 	x, y := &na.BigInt().V, &nb.BigInt().V
@@ -4137,6 +4163,9 @@ func (r *Runtime) negate(a Value) (Value, error) {
 		return Undefined, err
 	}
 	if n.IsBigInt() {
+		if n.isShortBig() && n.shortBigInt() != math.MinInt64 {
+			return shortBig(-n.shortBigInt()), nil
+		}
 		out := &BigInt{}
 		out.V.Neg(&n.BigInt().V)
 		return Big(out), nil
@@ -4233,17 +4262,22 @@ func relationalResult(op bytecode.Op, c cmpResult) bool {
 
 // bigArith applies an arithmetic operator to two BigInts.
 func (r *Runtime) bigArith(op bytecode.Op, a, b *BigInt) (Value, error) {
-	// A result of operands of a word each fits in two, so it can be kept in
-	// the BigInt's own room; a larger one would only leave that room empty.
+	// A sum or a product big.Int has room for in the BigInt's own words is
+	// kept there; a larger one would only leave that room empty.
+	la, lb := len(a.V.Bits()), len(b.V.Bits())
 	var out *BigInt
-	if len(a.V.Bits()) <= 1 && len(b.V.Bits()) <= 1 {
+	if op == bytecode.OpMul && la+lb <= smallBigWords ||
+		(op == bytecode.OpAdd || op == bytecode.OpSub) && max(la, lb)+1 <= smallBigWords {
 		out = newBigResult()
 	} else {
 		out = &BigInt{}
 	}
+	// Whether a result could pass maxBigIntBits is asked of the bits only
+	// for operands with words enough for it to.
+	const wordsNear = maxBigIntBits/bits.UintSize - 1
 	switch op {
 	case bytecode.OpAdd, bytecode.OpSub:
-		if max(a.V.BitLen(), b.V.BitLen())+1 > maxBigIntBits {
+		if max(la, lb) >= wordsNear && max(a.V.BitLen(), b.V.BitLen())+1 > maxBigIntBits {
 			// The one case where a sum could exceed the limit.
 			if op == bytecode.OpAdd {
 				out.V.Add(&a.V, &b.V)
@@ -4262,7 +4296,7 @@ func (r *Runtime) bigArith(op bytecode.Op, a, b *BigInt) (Value, error) {
 		}
 	case bytecode.OpMul:
 		// A product has at least as many bits as its factors' less one.
-		if a.V.Sign() != 0 && b.V.Sign() != 0 && a.V.BitLen()+b.V.BitLen()-1 > maxBigIntBits {
+		if la+lb >= wordsNear && a.V.Sign() != 0 && b.V.Sign() != 0 && a.V.BitLen()+b.V.BitLen()-1 > maxBigIntBits {
 			return Undefined, r.throwBigIntSize()
 		}
 		out.V.Mul(&a.V, &b.V)

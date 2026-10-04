@@ -115,21 +115,18 @@ func mixHash(x uint64) uint32 {
 // address, which Go's collector never moves.
 func keyHash(k Value) uint32 {
 	bits := math.Float64bits(k.num)
-	if bits&tagMask == tagBase {
-		switch Kind(bits & 0xFF) {
-		case KindString:
-			return uint32(maphash.String(mapSeed, k.String().Go()))
-		case KindBigInt:
-			b := &k.BigInt().V
-			if b.IsInt64() {
-				return mixHash(uint64(b.Int64()))
-			}
-			h := uint64(b.Sign())
-			for _, w := range b.Bits() {
-				h = (h ^ uint64(w)) * 0x100000001b3
-			}
-			return mixHash(h)
+	if bits&tagMask == tagBase && Kind(bits&0xFF) == KindString {
+		return uint32(maphash.String(mapSeed, k.String().Go()))
+	}
+	if bits == heapBigBits {
+		// One held in its Value is hashed by its bits, below, which are its
+		// value's alone.
+		b := &k.BigInt().V
+		h := uint64(b.Sign())
+		for _, w := range b.Bits() {
+			h = (h ^ uint64(w)) * 0x100000001b3
 		}
+		return mixHash(h)
 	}
 	return mixHash(bits ^ uint64(uintptr(k.ref))*0x9e3779b97f4a7c15)
 }
@@ -151,7 +148,8 @@ func sameKey(a, k Value) bool {
 	case KindString:
 		return a.IsString() && a.String().Equals(k.String())
 	case KindBigInt:
-		return a.IsBigInt() && a.BigInt().V.Cmp(&k.BigInt().V) == 0
+		// One held in its Value is the same key only as the same bits.
+		return a.isHeapBig() && k.isHeapBig() && a.BigInt().V.Cmp(&k.BigInt().V) == 0
 	}
 	return false
 }

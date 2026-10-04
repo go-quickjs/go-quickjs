@@ -5,6 +5,9 @@ import (
 
 	"math"
 	"math/big"
+	"math/bits"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
 // BigInt.
@@ -107,6 +110,10 @@ func (r *Runtime) toBigIntValue(v Value) (Value, error) {
 		if math.IsNaN(n) || math.IsInf(n, 0) || n != math.Trunc(n) {
 			return Undefined, r.throwRangeError("only an integer can be converted to a BigInt")
 		}
+		if n > -(1<<63) && n < 1<<63 {
+			// What an int64 holds converts exactly, and is held so.
+			return shortBig(int64(n)), nil
+		}
 		b := &BigInt{}
 		big.NewFloat(n).Int(&b.V)
 		return Big(b), nil
@@ -121,9 +128,9 @@ func (r *Runtime) toBigIntValue(v Value) (Value, error) {
 		return Big(b), nil
 	case prim.IsBool():
 		if prim.BoolValue() {
-			return Big(NewBigInt(1)), nil
+			return shortBig(1), nil
 		}
-		return Big(NewBigInt(0)), nil
+		return shortBig(0), nil
 	}
 	return Undefined, r.throwTypeError("cannot convert %s to a BigInt", r.describe(prim))
 }
@@ -177,7 +184,7 @@ func (r *Runtime) bigIntAsN(args []Value, signed bool) (Value, error) {
 		return Undefined, err
 	}
 	if bits == 0 {
-		return Big(NewBigInt(0)), nil
+		return shortBig(0), nil
 	}
 	// A value that already fits is itself, however wide the width: 2^bits
 	// need not be made to learn that. One that does not fit is a result as
@@ -220,4 +227,164 @@ func bigIntToFloat(b *BigInt) float64 {
 	}
 	f, _ := new(big.Float).SetInt(&b.V).Float64()
 	return f
+}
+
+// shortArith applies an arithmetic operator to two BigInts held in their
+// Values, as int64s. It reports false where bigArith must answer: a result
+// outside the int64 range, a division by zero, a negative power.
+func shortArith(op bytecode.Op, a, b Value) (Value, bool) {
+	x, y := a.shortBigInt(), b.shortBigInt()
+	switch op {
+	case bytecode.OpAdd:
+		if s := x + y; (s^x)&(s^y) >= 0 {
+			return shortBig(s), true
+		}
+	case bytecode.OpSub:
+		if s := x - y; (x^y)&(s^x) >= 0 {
+			return shortBig(s), true
+		}
+	case bytecode.OpMul:
+		if p, ok := mulInt64(x, y); ok {
+			return shortBig(p), true
+		}
+	case bytecode.OpDiv:
+		// Go's division truncates toward zero, as a BigInt's does; only the
+		// most negative value over -1 leaves the range.
+		if y != 0 && (x != math.MinInt64 || y != -1) {
+			return shortBig(x / y), true
+		}
+	case bytecode.OpMod:
+		// The remainder takes the dividend's sign in both, and Go gives 0
+		// for the most negative value over -1.
+		if y != 0 {
+			return shortBig(x % y), true
+		}
+	case bytecode.OpPow:
+		if y >= 0 {
+			p, base := int64(1), x
+			for ok := true; ; {
+				if y&1 != 0 {
+					if p, ok = mulInt64(p, base); !ok {
+						break
+					}
+				}
+				if y >>= 1; y == 0 {
+					return shortBig(p), true
+				}
+				if base, ok = mulInt64(base, base); !ok {
+					break
+				}
+			}
+		}
+	}
+	return Undefined, false
+}
+
+// mulInt64 is x*y, reporting false when the product is outside the int64
+// range.
+func mulInt64(x, y int64) (int64, bool) {
+	ux, uy := uint64(x), uint64(y)
+	if x < 0 {
+		ux = -ux
+	}
+	if y < 0 {
+		uy = -uy
+	}
+	hi, lo := bits.Mul64(ux, uy)
+	if (x < 0) != (y < 0) {
+		// Down to -2^63, which has no positive counterpart.
+		if hi != 0 || lo > 1<<63 {
+			return 0, false
+		}
+		return -int64(lo), true
+	}
+	if hi != 0 || lo > math.MaxInt64 {
+		return 0, false
+	}
+	return int64(lo), true
+}
+
+// shortBitwise applies a bitwise or shift operator other than >>> to two
+// BigInts held in their Values, which as int64s are in the two's complement
+// a BigInt's bitwise operators are defined in. It reports false for a left
+// shift whose result leaves the int64 range.
+func shortBitwise(op bytecode.Op, a, b Value) (Value, bool) {
+	x, y := a.shortBigInt(), b.shortBigInt()
+	switch op {
+	case bytecode.OpBitAnd:
+		return shortBig(x & y), true
+	case bytecode.OpBitOr:
+		return shortBig(x | y), true
+	case bytecode.OpBitXor:
+		return shortBig(x ^ y), true
+	case bytecode.OpShl, bytecode.OpShr:
+		// A negative count shifts the other way.
+		left := op == bytecode.OpShl
+		if y < 0 {
+			if y == math.MinInt64 {
+				return Undefined, false
+			}
+			y, left = -y, !left
+		}
+		if !left {
+			// Past every bit, the sign is what is left: 0 or -1.
+			return shortBig(x >> min(y, 63)), true
+		}
+		if x == 0 {
+			return shortBig(0), true
+		}
+		if y < 63 {
+			if s := x << y; s>>y == x {
+				return shortBig(s), true
+			}
+		}
+	}
+	return Undefined, false
+}
+
+// bigNot is ~ on a BigInt. A BigInt has no width, so the complement is
+// -(x+1), which is what both an int64's and big.Int's Not compute.
+func bigNot(n Value) Value {
+	if n.isShortBig() {
+		return shortBig(^n.shortBigInt())
+	}
+	out := &BigInt{}
+	out.V.Not(&n.BigInt().V)
+	return Big(out)
+}
+
+// bigArg is a BigInt operand as a *BigInt for an operation that keeps
+// neither operand: one held in its Value is written into the runtime's
+// bigArgs[i], whose own words hold any int64, rather than made anew.
+func (r *Runtime) bigArg(v Value, i int) *BigInt {
+	if !v.isShortBig() {
+		return v.BigInt()
+	}
+	s := &r.bigArgs[i]
+	s.b.V.SetBits(s.words[:0])
+	s.b.V.SetInt64(v.shortBigInt())
+	return &s.b
+}
+
+// shortBinImm is OpBinImm's operator on two BigInts held in their Values,
+// reporting false where the operator's own path must answer.
+func shortBinImm(op bytecode.Op, a, b Value) (Value, bool) {
+	switch op {
+	case bytecode.OpAdd, bytecode.OpSub, bytecode.OpMul:
+		return shortArith(op, a, b)
+	case bytecode.OpUShr:
+		return Undefined, false
+	}
+	return shortBitwise(op, a, b)
+}
+
+// bigFromUint64 is the BigInt u, held in the Value when it is in the int64
+// range.
+func bigFromUint64(u uint64) Value {
+	if u <= math.MaxInt64 {
+		return shortBig(int64(u))
+	}
+	b := &BigInt{}
+	b.V.SetUint64(u)
+	return heapBig(b)
 }

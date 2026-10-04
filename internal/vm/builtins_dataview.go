@@ -361,11 +361,9 @@ func decodeView(b []byte, spec dataViewType, little bool) Value {
 	case elemFloat64:
 		return Float(math.Float64frombits(u))
 	case elemBigInt64:
-		return Big(NewBigInt(int64(u)))
+		return shortBig(int64(u))
 	case elemBigUint64:
-		bi := &BigInt{}
-		bi.V.SetUint64(u)
-		return Big(bi)
+		return bigFromUint64(u)
 	}
 	return Undefined
 }

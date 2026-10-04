@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"cmp"
 	"encoding/binary"
 	"math"
 	"slices"
@@ -307,12 +308,9 @@ func (t *typedArrayData) getElem(i int) Value {
 	case elemFloat64:
 		return Float(math.Float64frombits(binary.LittleEndian.Uint64(b[off:])))
 	case elemBigInt64:
-		return Big(NewBigInt(int64(binary.LittleEndian.Uint64(b[off:]))))
+		return shortBig(int64(binary.LittleEndian.Uint64(b[off:])))
 	case elemBigUint64:
-		v := binary.LittleEndian.Uint64(b[off:])
-		bi := &BigInt{}
-		bi.V.SetUint64(v)
-		return Big(bi)
+		return bigFromUint64(binary.LittleEndian.Uint64(b[off:]))
 	}
 	return Undefined
 }
@@ -2008,6 +2006,9 @@ func (r *Runtime) typedArrayResultFor(ctor Value, n int64) (Value, *typedArrayDa
 // A BigInt array's elements are BigInts, which have no finite float64 form, so
 // they are compared as integers rather than converted.
 func compareNumeric(x, y Value) int {
+	if x.isShortBig() && y.isShortBig() {
+		return cmp.Compare(x.shortBigInt(), y.shortBigInt())
+	}
 	if x.IsBigInt() && y.IsBigInt() {
 		return x.BigInt().Cmp(y.BigInt())
 	}

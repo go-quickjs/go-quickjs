@@ -526,11 +526,9 @@ func intElemFromBits(kind elemType, bits uint64) Value {
 	case elemUint32:
 		return Uint32(uint32(bits))
 	case elemBigInt64:
-		return Big(NewBigInt(int64(bits)))
+		return shortBig(int64(bits))
 	case elemBigUint64:
-		bi := &BigInt{}
-		bi.V.SetUint64(bits)
-		return Big(bi)
+		return bigFromUint64(bits)
 	}
 	return Undefined
 }
