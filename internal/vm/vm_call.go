@@ -45,6 +45,9 @@ func (r *Runtime) callObject(o *Object, this Value, args []Value, newTarget Valu
 	// A bound function prepends its stored arguments and replaces `this`,
 	// except under `new`, where the original `this` is discarded anyway.
 	if fd.bound {
+		if newTarget.IsUndefined() {
+			return r.callBound(fd, args)
+		}
 		merged := args
 		if len(fd.extra.boundArgs) > 0 {
 			merged = make([]Value, 0, len(fd.extra.boundArgs)+len(args))

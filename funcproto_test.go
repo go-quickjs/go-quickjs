@@ -211,3 +211,31 @@ func TestConstructedObjectShape(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestBoundCallsFromLoop covers bound functions called from a loop's call
+// instruction, which calls the target as it calls any function: bound
+// this and arguments before the ones given, a bound function bound again, a
+// bound built-in, arrow and generator, a bound class called and
+// constructed, a stack through one, and call, apply and Reflect.apply of
+// one. The answers are Node's.
+func TestBoundCallsFromLoop(t *testing.T) {
+	checkEval(t, `var r = [];
+		function f(a, b, c) { return [this === undefined ? "u" : this.n, a, b, c, arguments.length].join() }
+		var o = { n: "o" };
+		r.push(f.bind(o)(1, 2), f.bind(o, 1)(2, 3, 4), f.bind(o, 1, 2, 3, 4)(5), f.bind(o).bind({ n: "x" }, 9)(8));
+		r.push(Math.max.bind(null, 3)(1, 7), [3, 1, 2].map(Math.max.bind(null, 2)).join("|"));
+		r.push((x => x * 2).bind(null)(21), (function* (x) { yield x })
+		  .bind(null, 5)().next().value);
+		class C { constructor(v) { this.v = v } } var BC = C.bind(null, 4);
+		try { BC() } catch (e) { r.push(e.constructor.name) } r.push(new BC().v, new BC() instanceof C);
+		function thrower() { throw new Error("t") } var bt = thrower.bind(null);
+		try { (function caller() { bt() })() } catch (e) { r.push(e.stack.split("\n").slice(0, 3).map(s => s.trim().split(" ")[1]).join("<")) }
+		"use strict";
+		var sum = 0, g = function (x, y) { "use strict"; return (this === undefined) + x + y }.bind(undefined, 1);
+		for (var i = 0; i < 1000; i++) sum += g(i); r.push(sum);
+		var ok = 0, inner = function () { return arguments.length }.bind(null, 1, 2);
+		for (var i = 0; i < 100; i++) ok += inner.call(null, 3) + inner.apply(null, [3, 4]) + Reflect.apply(inner, null, []);
+		r.push(ok);
+		r.join(" ; ")`,
+		`o,1,2,,2 ; o,1,2,3,4 ; o,1,2,3,5 ; o,9,8,,2 ; 7 ; NaN|NaN|NaN ; 42 ; 5 ; TypeError ; 4 ; true ; t<thrower<caller ; 501500 ; 900`)
+}

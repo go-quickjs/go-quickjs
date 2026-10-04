@@ -375,7 +375,7 @@ matter to hosts running classes, modules and async code.
 | C1 | Strict `return f()` (a tail call) takes the generic call path, and keeps its function out of the tree tier and the frameless evaluator | Done |
 | C2 | An `await` makes about nine allocations: two functions, a promise nothing can reach, a job, an argument list | Done |
 | C3 | A generator or async call makes four allocations, and resuming copies its whole frame | Done, in part |
-| C4 | A bound function always takes the slow call path, and allocates its arguments when it has bound ones | Declined for now |
+| C4 | A bound function always takes the slow call path, and allocates its arguments when it has bound ones | Done |
 | C5 | Every `for-of`, spread and array destructuring allocates an iterator object | Done |
 | C6 | An arrow function is 448 to 480 bytes, most of it fields only bound or `with` functions use | Deferred |
 | C7 | A closure reads a `let` or `const` it captured after its initialization with a dead-zone check, which keeps arrows out of the frameless evaluator | Done |
@@ -406,15 +406,17 @@ Taking the suspension's signal from the runtime instead of allocating it
 made a yield 14% faster, but is a change to `executeAt`, which cost Crypto
 4%: left.
 
-**C4, declined for now:** a bound function called through `callFromLoop`'s
-fast path, its arguments merged on the runtime's stack, made bound calls
-5% to 45% faster -- but any edit to `callObject` or `callFromLoop` moved
-Crypto 7 to 11%, in every form tried. Part of it is `runTree`'s alignment:
-`vm_call.go` comes before `vm_tree.go`, Go aligns functions to 32 bytes,
-and Crypto runs slower with `runTree` at 32 mod 64 than at 0; padding
-`runTree` back to 0 recovered half. The rest is `callFromLoop` and `runFD`
-moving the same way. It waits on the tier's hot functions being made
-indifferent to where they land.
+**C4, done:** `callObject` hands a bound function's call to `callBound`,
+which merges its arguments on the runtime's stack and calls the target the
+way `callFromLoop` does. Bound calls -16% to -40%, `map` with a bound
+callback -32%. It was first declined: single builds and the first
+eight-placement harness put Crypto 7 to 11% slower. That harness moved the
+whole package, so the distances between `executeAt`, the call path,
+`runTree` and the tree's closures were the change's in every placement. A
+harness that also sets each of those four at 0 and 32 mod 64 in a balanced
+design, at distances varying by up to 2 KB, measured it at +0.1% (Crypto
++0.5%, +0.8% over twelve rounds). Main's own Crypto spans 284 to 325 over
+those placements.
 
 **C5, done:** a cursor and its object are one allocation. A for-of over a
 small array -15%, array destructuring -14%, a for-in -8%.
