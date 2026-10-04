@@ -19,7 +19,7 @@ import (
 // copy of it made for a drop after it need not be.
 func takesItsValue(op bytecode.Op) bool {
 	switch op {
-	case bytecode.OpSetGlobal, bytecode.OpSetUpvalue, bytecode.OpSetUpvalueCheck:
+	case bytecode.OpSetGlobal, bytecode.OpSetGlobalStrict, bytecode.OpSetUpvalue, bytecode.OpSetUpvalueCheck:
 		return true
 	}
 	return false
@@ -1064,6 +1064,54 @@ func (c *compiler) rereadable(pc int) bool {
 	return false
 }
 
+// foldGlobalCheck makes a strict assignment to a global, whose
+// check_global_ref is at check and whose value has just been compiled, one
+// set_global_strict where the value is one instruction that runs no code: a
+// local or an upvalue read without a dead zone, a literal, this where it is
+// always bound, a function made. Nothing can then happen between resolving
+// the reference and evaluating the value, so the reference can be resolved
+// at the store instead -- even a proxy on the global object's chain is
+// asked the same questions in the same order. The check's cache site is the
+// store's, and the store reports a name that resolves to nothing where
+// assert_resolved would have, at the name.
+func (c *compiler) foldGlobalCheck(check int, id *ast.Ident) bool {
+	code := c.fn.Code
+	if len(code) != check+2 || c.isTarget(check+1) || !c.runsNoCode(code[check+1]) {
+		return false
+	}
+	site := code[check].B
+	code[check] = code[check+1]
+	c.fn.Code = code[:check+1]
+	c.adjustStack(bytecode.OpDrop, 0, 0)
+	// The value cannot throw, so it needs no position; the store gets the
+	// name's, recorded afresh.
+	l := len(c.fn.Lines)
+	for l > 0 && c.fn.Lines[l-1].PC >= uint32(check) {
+		l--
+	}
+	c.fn.Lines = c.fn.Lines[:l]
+	c.lastPos = -1
+	c.emit(bytecode.OpDup, 0, 0)
+	c.emitAt(id.Start, bytecode.OpSetGlobalStrict, c.nameIdx(id.Name), site)
+	return true
+}
+
+// runsNoCode reports whether an instruction that pushes a value can neither
+// throw nor run a script's code.
+func (c *compiler) runsNoCode(in bytecode.Instr) bool {
+	switch in.Op {
+	case bytecode.OpGetLocal, bytecode.OpGetUpvalue, bytecode.OpPushInt, bytecode.OpPushConst,
+		bytecode.OpPushUndef, bytecode.OpPushNull, bytecode.OpPushTrue, bytecode.OpPushFalse,
+		bytecode.OpPushEmptyString, bytecode.OpClosure:
+		return true
+	case bytecode.OpPushThis:
+		// A derived constructor's this, which an arrow may share, is unbound
+		// until super() binds it.
+		return c.fn.Kind != bytecode.KindDerivedConstructor && c.fn.Kind != bytecode.KindArrow
+	}
+	return false
+}
+
 // dupObject copies the object of a property's update, for the read, leaving
 // the original beneath it for the write.
 //
@@ -1671,7 +1719,11 @@ func (c *compiler) compileAssign(n *ast.Assign) {
 			// the value is evaluated and reported after it. A value that
 			// creates the global does not excuse the assignment, and a value
 			// that throws is what the assignment reports.
+			check := len(c.fn.Code) - 1
 			c.compileExprNamed(n.Value, nameOf(n.Target))
+			if c.foldGlobalCheck(check, id) {
+				return
+			}
 			c.emitAt(id.Start, bytecode.OpAssertResolved, c.nameIdx(id.Name), 0)
 			c.assignTo(n.Target, false)
 			return

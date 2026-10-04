@@ -534,6 +534,12 @@ const (
 	// specifier and, if B is 2, the options, and pushes the promise of the
 	// module. It is not a call: there is no function a script could reach.
 	OpImport
+	// OpSetGlobalStrict is a strict assignment to the global name Names[A],
+	// with B its cache site, of a value that ran no code: check_global_ref,
+	// assert_resolved and set_global in one, the reference resolved just
+	// before the store rather than before the value, which nothing could
+	// tell apart. It pops the value.
+	OpSetGlobalStrict
 
 	// opCount is the number of opcodes, used to size the name table.
 	opCount
@@ -618,6 +624,7 @@ var opNames = [opCount]string{
 	OpArgumentsIndex:        "arguments_index",
 	OpArgumentsLength:       "arguments_length",
 	OpImport:                "import",
+	OpSetGlobalStrict:       "set_global_strict",
 	OpArrayRest:             "array_rest",
 	OpObjectRest:            "object_rest",
 

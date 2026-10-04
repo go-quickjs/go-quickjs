@@ -572,6 +572,12 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 			stack[sp-2] = stack[sp-1]
 			sp--
+		case bytecode.OpSetGlobalStrict:
+			sp--
+			if err := r.setGlobalStrict(f, cl, in, stack[sp]); err != nil {
+				vmErr = err
+				goto onError
+			}
 		case bytecode.OpSetGlobal:
 			name := cl.names[in.A]
 			env := cl.scope()
@@ -582,7 +588,13 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 					break
 				}
 			}
-			if p := r.globalLexProp(env, name); p != nil {
+			// A script's let, const or class shadows the global object, and
+			// is asked for only where there is one.
+			var lex *Property
+			if len(r.globalLex.props) != 0 {
+				lex = r.globalLexProp(env, name)
+			}
+			if p := lex; p != nil {
 				switch {
 				case p.value.IsUninitialized():
 					vmErr = r.throwReferenceError(

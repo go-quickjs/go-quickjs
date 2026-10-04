@@ -70,6 +70,20 @@ var treeScripts = []string{
 	 function f() { var c = new C(), o = { count: 5, k: "9" }; for (var i = 0; i < 3; i++) { c.bump(); c.down(o) }
 	   var s = { x: Symbol() }, e1, e2; try { s.x++ } catch (e) { e1 = e.constructor.name } try { ++s.x } catch (e) { e2 = e.constructor.name }
 	   return [c.n, c.big, o.count, o.k, e1, e2].join() } f()`,
+	// Strict assignments to globals: of a value that runs no code, one
+	// set_global_strict; of anything else, the check before the value and
+	// the assertion after it. A proxy on the global object's chain is asked
+	// has twice and then set, by both; a name that resolves to nothing is a
+	// ReferenceError at the name; a value in its dead zone throws first.
+	`"use strict"; var log = [], g1 = 0, base = Object.getPrototypeOf(globalThis); base.pg1 = 1; base.pg2 = 2;
+	 Object.setPrototypeOf(globalThis, new Proxy(base, {
+	   has(t, k) { if (typeof k == "string" && k[0] == "p") log.push("has " + k); return Reflect.has(t, k) },
+	   set(t, k, v, r) { if (typeof k == "string" && k[0] == "p") log.push("set " + k); return Reflect.set(t, k, v, r) } }));
+	 function f(j) { for (var i = 0; i < 2; i++) { g1 = j; g1 = 5; pg1 = j; pg2 = i + j; pg1 = this } }
+	 function u(n) { for (var i = 0; i < 1; i++) { if (n === 0) undeclared1 = 1; else if (n === 1) undeclared2 = g1;
+	   else if (n === 2) undeclared3 = n + 1; else if (n === 3) undeclared4 = function () {}; else { g1 = z; let z = 1 } } }
+	 function errs() { var r = []; for (var n = 0; n < 5; n++) try { u(n) } catch (e) { r.push(e.message, e.stack) } return r.join() }
+	 f(3); log.join() + " | " + g1 + " " + pg1 + " " + pg2 + " " + Object.hasOwn(globalThis, "pg1") + " | " + errs()`,
 	// Array reads and writes: holes, a getter and a setter up the chain,
 	// bounds, odd keys, typed arrays, frozen arrays.
 	`function f() { Object.defineProperty(Array.prototype, 3, { get() { return "proto3" }, set(v) { log.push("set" + v) }, configurable: true });

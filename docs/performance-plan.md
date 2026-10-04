@@ -35,7 +35,7 @@ unless an item says otherwise.
 | ID | Item | Targets | Risk | Status |
 |---|---|---|---|---|
 | A1 | `dup` without a spill for property updates | `prop_update` 2.6x, `array_update` 2.8x | Low | Done |
-| A2 | Strict global writes without the separate check | `global_write_strict` 3.4x | Low | Open |
+| A2 | Strict global writes without the separate check | `global_write_strict` 3.4x | Low | Done |
 | A3 | A cheaper call path, outside the interpreter's switch | `func_call` 1.35x, DeltaBlue, Richards | Low | Open |
 | A4 | Cheaper calls from trees, then no call-density gate | EarleyBoyer, RayTrace, Richards | High | Open |
 | A5 | Fewer allocations for objects and strings | Splay, DeltaBlue, RayTrace | Medium | Open |
@@ -101,6 +101,19 @@ class.
 
 - Expected: `global_write_strict` from 26 ns to about sloppy `global_write`'s
   12.
+
+**Done**, with a correction: dropping the check is not unobservable. A
+proxy on the global object's prototype chain is asked `has` when the
+reference is resolved and again before the store, so `set_global` alone
+would ask it once where the standard asks twice. So a value that runs no
+code is followed by a new `set_global_strict`, which resolves the reference
+and stores, one straight after the other: the same questions in the same
+order, and the cached slot of a plain global answered without any. `set_global`
+asks for a script's `let` only where the script has one.
+
+- `global_write_strict` 26.3 to 11.6 ns (-56%), as fast as a sloppy write.
+- V8 suite (which has no strict code) level over eight placements, total
+  -0.2%, each within 1%; the long check level.
 
 ### A3. A cheaper call path, outside the interpreter's switch
 

@@ -1552,7 +1552,7 @@ func stackEffect(op bytecode.Op, a, b uint32) int {
 	case bytecode.OpIterCloseNormal,
 		bytecode.OpDrop, bytecode.OpSetLocal, bytecode.OpSetLocalCheck,
 		bytecode.OpInitLocal, bytecode.OpSetUpvalue, bytecode.OpSetUpvalueCheck,
-		bytecode.OpInitUpvalue, bytecode.OpSetGlobal, bytecode.OpThrow,
+		bytecode.OpInitUpvalue, bytecode.OpSetGlobal, bytecode.OpSetGlobalStrict, bytecode.OpThrow,
 		bytecode.OpReturn, bytecode.OpJumpIfFalse, bytecode.OpJumpIfTrue,
 		bytecode.OpDefineGlobalFunc, bytecode.OpArrayPush,
 		bytecode.OpDefineField, bytecode.OpDefineGetter,

@@ -4859,3 +4859,51 @@ func TestGoFunctionGetsTheHostRuntime(t *testing.T) {
 		t.Errorf("SyntaxError from Go = %q", s)
 	}
 }
+
+// TestStrictGlobalWrite pins strict assignments to globals, which compile
+// to one set_global_strict where the value runs no code and to the check,
+// the value and the assertion otherwise. A proxy on the global object's
+// prototype chain sees the same questions either way: has when the
+// reference is resolved, has again before the store, then set. A name
+// that resolves to nothing is a ReferenceError, and a value in its dead
+// zone is reported first.
+func TestStrictGlobalWrite(t *testing.T) {
+	checkEval(t, `"use strict"; var log = [], g1 = 0, base = Object.getPrototypeOf(globalThis); base.pg1 = 1; base.pg2 = 2;
+		Object.setPrototypeOf(globalThis, new Proxy(base, {
+		  has(t, k) { if (typeof k == "string" && k[0] == "p") log.push("has " + k); return Reflect.has(t, k) },
+		  set(t, k, v, r) { if (typeof k == "string" && k[0] == "p") log.push("set " + k); return Reflect.set(t, k, v, r) } }));
+		function f(j) { for (var i = 0; i < 2; i++) { g1 = j; g1 = 5; pg1 = j; pg2 = i + j; pg1 = this } }
+		f(3);
+		var e; try { (function () { pnone = 1 })() } catch (x) { e = x.constructor.name + " " + x.message }
+		log.join() + " | " + g1 + " " + pg1 + " " + pg2 + " " + Object.hasOwn(globalThis, "pg1") + " | " + e`,
+		"has pg1,has pg1,set pg1,has pg2,has pg2,set pg2,has pnone | 5 undefined 4 true | ReferenceError pnone is not defined")
+	checkEval(t, `"use strict"; var g1 = 0, r = [];
+		function u(n) { if (n === 0) undeclared1 = 1; else if (n === 1) undeclared2 = g1; else if (n === 2) undeclared3 = n + 1;
+		  else if (n === 3) undeclared4 = function () {}; else { g1 = z; let z = 1 } }
+		for (var n = 0; n < 5; n++) try { u(n) } catch (e) { r.push(e.constructor.name + ": " + e.message) }
+		r.join("; ")`,
+		`ReferenceError: undeclared1 is not defined; ReferenceError: undeclared2 is not defined; `+
+			`ReferenceError: undeclared3 is not defined; ReferenceError: undeclared4 is not defined; `+
+			`ReferenceError: cannot access "z" before initialization`)
+
+	// A script's let declared after the function was compiled is what the
+	// assignment finds, and a const refuses it.
+	rt := quickjs.New()
+	defer rt.Close()
+	for _, src := range []string{
+		`"use strict"; function setLater(v) { later = v; return later } function setFixed(v) { fixed = v }`,
+		`let later = 0; const fixed = 1;`,
+	} {
+		if _, err := rt.Eval(src); err != nil {
+			t.Fatal(err)
+		}
+	}
+	v, err := rt.Eval(`var r = [setLater(5), later, Object.hasOwn(globalThis, "later")];
+		try { setFixed(2) } catch (e) { r.push(e.constructor.name) } r.join()`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := v.String(), "5,5,false,TypeError"; got != want {
+		t.Errorf("a later script's let = %q, want %q", got, want)
+	}
+}

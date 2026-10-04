@@ -189,7 +189,7 @@ func treeBuilds(op bytecode.Op) bool {
 		bytecode.OpGetIndex, bytecode.OpGetLocalIndex, bytecode.OpGetLocalIndexUpdate, bytecode.OpSetIndex,
 		bytecode.OpGetProp, bytecode.OpGetPropThis, bytecode.OpSetProp,
 		bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew, bytecode.OpClosure,
-		bytecode.OpGetGlobal, bytecode.OpSetGlobal,
+		bytecode.OpGetGlobal, bytecode.OpSetGlobal, bytecode.OpSetGlobalStrict,
 		bytecode.OpJump, bytecode.OpJumpIfFalse, bytecode.OpJumpIfTrue, bytecode.OpJumpIfCmpFalse,
 		bytecode.OpReturn, bytecode.OpReturnUndef, bytecode.OpThrow,
 		bytecode.OpNewArray, bytecode.OpNewObject, bytecode.OpDefineField, bytecode.OpGetLength, bytecode.OpTypeOf,
@@ -1088,6 +1088,29 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 				c.throw(err)
 			}
 			return v
+		})
+	case bytecode.OpSetGlobalStrict:
+		// As set_global: a plain writable property of the global object, in
+		// the slot the site remembers, is one the check would have found in
+		// the global object's own table without asking anything, and is
+		// written here.
+		v, name, site := b.pop().tree(), in.A, in.B
+		return 0, b.stmt(func(c *tctx) {
+			value := v(c)
+			if r, cl := c.r, c.cl; c.f.evalVars == nil && (len(r.globalLex.props) == 0 || !r.lexShadows(cl.names[name])) {
+				env := cl.scope()
+				if i := uint(cl.ic[site].idx); i < uint(len(env.props)) {
+					if p := &env.props[i]; p.key == cl.names[name] &&
+						p.flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) == propWritable {
+						p.value = value
+						return
+					}
+				}
+			}
+			c.at(pc)
+			if err := c.r.setGlobalStrict(c.f, c.cl, in, value); err != nil {
+				c.throw(err)
+			}
 		})
 	case bytecode.OpSetGlobal:
 		v, name, site := b.pop().tree(), in.A, in.B
