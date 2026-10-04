@@ -422,13 +422,20 @@ start:
 	r.stackTop = base + need
 
 	locals := r.stack[base : base+fn.LocalCount : base+fn.LocalCount]
-	// Locals start as undefined, since the window was last used by an
+	// The arguments go to the parameters' slots, positionally; anything
+	// beyond the simple positional case -- defaults, destructuring, a rest
+	// parameter -- is compiled into the function's prologue. Every other
+	// local starts as undefined, since the window was last used by an
 	// unrelated frame and a stale value could be read by a binding whose
-	// declaration was never reached. The parameter slots are skipped because
-	// bindParameters overwrites every one of them immediately below. They are
-	// stored one at a time: clear would call memclr, with a bulk write
-	// barrier, which for a frame's few locals cost more than the call.
-	for i := fn.ParamCount; i < len(locals); i++ {
+	// declaration was never reached: a parameter no argument was given for,
+	// and the slots past the parameters, in one loop. They are stored one at
+	// a time: clear would call memclr, with a bulk write barrier, which for a
+	// frame's few locals cost more than the call.
+	m := min(fn.ParamCount, len(locals), len(args))
+	for i, a := range args[:m] {
+		locals[i] = a
+	}
+	for i := m; i < len(locals); i++ {
 		locals[i] = Undefined
 	}
 
@@ -474,7 +481,10 @@ start:
 	if f.evalVars != nil {
 		f.evalVars = nil
 	}
-	if fd != nil {
+	// What follows is for a derived constructor, an arrow written inside
+	// one, and a function inside a with or after an eval, all of which have
+	// an extra or are derived; most functions are neither.
+	if fd != nil && (fd.extra != nil || fd.ctorKind == ctorDerived) {
 		switch {
 		case !newTarget.IsUndefined() && fd.ctorKind == ctorDerived:
 			f.thisRef = &thisBinding{value: this}
@@ -509,11 +519,6 @@ start:
 	}
 	if f.savedSP != 0 {
 		f.savedSP = 0
-	}
-
-	if err := r.bindParameters(f, fn, args); err != nil {
-		r.popFrameOf(f, base)
-		return Undefined, err
 	}
 
 	// The tree the function runs as, if the tier built it one. Every call
@@ -716,25 +721,6 @@ func (r *Runtime) popFrameOf(f *frame, base int) {
 	}
 	r.stackTop = base
 	r.frameDepth--
-}
-
-// bindParameters copies arguments into the parameter slots.
-func (r *Runtime) bindParameters(f *frame, fn *bytecode.Function, args []Value) error {
-	locals := f.locals
-	n := min(fn.ParamCount, len(locals))
-	m := min(n, len(args))
-	// Sliced to the same length first, so the copy checks no bounds.
-	given, slots := args[:m], locals[:m]
-	for i := range given {
-		slots[i] = given[i]
-	}
-	for i := m; i < n; i++ {
-		locals[i] = Undefined
-	}
-	// Anything beyond the simple positional case -- defaults, destructuring, a
-	// rest parameter -- is compiled into the function prologue rather than
-	// handled here, so there is nothing more to do.
-	return nil
 }
 
 // pushAt stores v at sp and returns the next free slot. It takes and returns

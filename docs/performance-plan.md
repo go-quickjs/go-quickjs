@@ -36,7 +36,7 @@ unless an item says otherwise.
 |---|---|---|---|---|
 | A1 | `dup` without a spill for property updates | `prop_update` 2.6x, `array_update` 2.8x | Low | Done |
 | A2 | Strict global writes without the separate check | `global_write_strict` 3.4x | Low | Done |
-| A3 | A cheaper call path, outside the interpreter's switch | `func_call` 1.35x, DeltaBlue, Richards | Low | Open |
+| A3 | A cheaper call path, outside the interpreter's switch | `func_call` 1.35x, DeltaBlue, Richards | Low | Done, in part |
 | A4 | Cheaper calls from trees, then no call-density gate | EarleyBoyer, RayTrace, Richards | High | Open |
 | A5 | Fewer allocations for objects and strings | Splay, DeltaBlue, RayTrace | Medium | Open |
 
@@ -132,6 +132,25 @@ An empty call costs 42 ns, against 31 in QuickJS. Outside `executeAt`:
   `runFD` specialized for `callFromLoop`'s direct path drops one.
 - Expected: 2 to 5 ns a call; DeltaBlue and Richards 1 to 3%. None of it is
   in `executeAt`, whose layout is the lottery.
+
+**Done, in part.** `func_call` was the wrong target: its callee is pure and
+runs without a frame, and never reaches `runFD`.
+
+- Done: `runFD` binds the arguments and fills the other locals with
+  undefined in one pass, where `bindParameters` filled the parameters and
+  `runFD` the rest; and asks about a derived constructor, an arrow inside
+  one, `with` and `eval` only for a function that has an extra or is
+  derived. V8 suite over eight placements: total -0.7%, Splay -2.0%,
+  EarleyBoyer -1.3%, the rest within 1%.
+- Not done: `pushFrame` inlined. Keeping `seekFrameBlock` out of line made
+  it cost 104 (a call that is not inlined counts 57), and moving the
+  `frameHigh` update to the pops means twelve places that decrement the
+  depth, any one of them missed leaving returned frames uncleared, for
+  about 2 ns a frame.
+- Declined: a specialized `runFD` for `callFromLoop`. It would copy the
+  hottest call code, about 150 lines with its tail-call loop, to save a
+  Go frame on calls the frameless evaluator does not already answer, which
+  are the minority of the suite's hot calls.
 
 ### A4. Cheaper calls from trees, then no call-density gate
 
