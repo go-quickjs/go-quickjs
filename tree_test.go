@@ -84,6 +84,21 @@ var treeScripts = []string{
 	   else if (n === 2) undeclared3 = n + 1; else if (n === 3) undeclared4 = function () {}; else { g1 = z; let z = 1 } } }
 	 function errs() { var r = []; for (var n = 0; n < 5; n++) try { u(n) } catch (e) { r.push(e.message, e.stack) } return r.join() }
 	 f(3); log.join() + " | " + g1 + " " + pg1 + " " + pg2 + " " + Object.hasOwn(globalThis, "pg1") + " | " + errs()`,
+	// RegExp literals, a new object each time round with its own lastIndex,
+	// and patterns that are nothing but characters, which a search answers
+	// without the matcher: exec, test, replace, split, match, sticky and
+	// global, case folding, a miss.
+	`function f(s) { var r = []; for (var i = 0; i < 3; i++) { var re = /fox/g, a = /fox/;
+	   r.push(re.lastIndex, re.test(s), re.lastIndex, a.exec(s).index, /over the/.exec(s)[0], /cat/.exec(s),
+	     s.replace(/o/g, "0"), s.split(/ /).length, s.match(/the/g).length, /FOX/i.test(s), /quick/y.test(s), re === /fox/g) }
+	   return r.join() } f("the quick brown fox jumped over the lazy dog")`,
+	// What pushes a value the compiler once counted as pushing nothing -- a
+	// RegExp literal, a tagged template's strings -- at the deepest point of
+	// a call's operands: a frame sized one slot short spills past its end.
+	`function g(a, b, c) { return String(a) + String(b) + String(c) }
+	 function tag(s, x) { return s.raw.join("|") + x }
+	 function f() { var r = []; for (var i = 0; i < 2; i++) {
+	   r.push(g(i, i + 1, /x+/g), g(i, [i], tag` + "`a${i}b`" + `), g(/a/, /b/, /c/.source)) } return r.join() } f()`,
 	// Array reads and writes: holes, a getter and a setter up the chain,
 	// bounds, odd keys, typed arrays, frozen arrays.
 	`function f() { Object.defineProperty(Array.prototype, 3, { get() { return "proto3" }, set(v) { log.push("set" + v) }, configurable: true });

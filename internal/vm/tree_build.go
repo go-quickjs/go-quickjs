@@ -180,7 +180,7 @@ func treeBuilds(op bytecode.Op) bool {
 		bytecode.OpGetIndex, bytecode.OpGetLocalIndex, bytecode.OpGetLocalIndexUpdate, bytecode.OpSetIndex,
 		bytecode.OpGetProp, bytecode.OpGetPropThis, bytecode.OpSetProp,
 		bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew, bytecode.OpClosure,
-		bytecode.OpGetGlobal, bytecode.OpSetGlobal, bytecode.OpSetGlobalStrict,
+		bytecode.OpGetGlobal, bytecode.OpSetGlobal, bytecode.OpSetGlobalStrict, bytecode.OpNewRegExp,
 		bytecode.OpJump, bytecode.OpJumpIfFalse, bytecode.OpJumpIfTrue, bytecode.OpJumpIfCmpFalse,
 		bytecode.OpReturn, bytecode.OpReturnUndef, bytecode.OpThrow,
 		bytecode.OpNewArray, bytecode.OpNewObject, bytecode.OpDefineField, bytecode.OpGetLength, bytecode.OpTypeOf,
@@ -1070,6 +1070,16 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 				return c.getLength(o, pc)
 			})
 		}
+	case bytecode.OpNewRegExp:
+		k := in.A
+		b.push(func(c *tctx) Value {
+			v, err := c.r.newRegExpLiteral(&c.cl.fn.Constants[k])
+			if err != nil {
+				c.at(pc)
+				c.throw(err)
+			}
+			return v
+		})
 	case bytecode.OpTypeOf:
 		x := b.pop().tree()
 		b.push(func(c *tctx) Value { return Str(c.r.typeofString(x(c))) })

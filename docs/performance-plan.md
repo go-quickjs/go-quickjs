@@ -247,7 +247,7 @@ a project for a few of Splay's allocations.
 | B3 | Typed-array elements without the generic path | `typed_array_read` 2.1x, `typed_array_write` 1.8x | Medium | Done, in part |
 | B4 | Appending to an array, and `arr.length = n`, directly | `array_prop_create` 2.8x, `array_hole_length_decr` 1.7x | Low | Done |
 | B5 | No new layout on every `delete` | `prop_delete` 2.1x | High | Open |
-| B6 | RegExp per-call costs | `regexp_ascii` 2.2x, `regexp_utf16` 2.6x, V8 RegExp | Low | Open |
+| B6 | RegExp per-call costs | `regexp_ascii` 2.2x, `regexp_utf16` 2.6x, V8 RegExp | Low | Done, in part |
 | B7 | Number text without intermediate strings | `float_toExponential` 2.1x, `float_toPrecision` 1.9x | Low | Open |
 | B8 | Strings to numbers, and numbers to cached strings | `string_to_int` 1.28x, `int_to_string` 1.6x | Low | Open |
 | B9 | Date strings without `fmt.Sprintf` (go-intl) | `date_parse` 2.1x | Low | Open |
@@ -301,6 +301,19 @@ a project for a few of Splay's allocations.
   - `replace` checks that the built-ins are unmodified twice;
   - a RegExp literal in a loop looks its compiled pattern up by its text
     every time.
+
+  **Done, in part:** a pattern that is nothing but characters (no group,
+  class, folding or unicode flag) is answered by the literal search, before
+  a matcher is borrowed; a RegExp literal finds its pattern by its constant,
+  in a small table of the runtime's, and the tree tier builds it, so a
+  function with one is no longer kept in the interpreter; `test()` asks for
+  the flag bits. `regexp_ascii` -27%, `regexp_utf16` -23%, `regexp_replace`
+  -16%; the V8 suite over eight placements, with B3 and B4: RegExp -8.0%,
+  NavierStokes -3.8%, EarleyBoyer +2.0%, total -1.7%. Building RegExp
+  literals in trees showed a compiler bug, fixed on its own: four
+  instructions that push a value were counted as pushing none, so a frame
+  could be a slot short. Left: `lastIndex` at its slot, the doubled checks
+  in `replace`, split's new RegExp, match's and split's flags by bits.
 - **B7.** `toExponential` and `toPrecision` make four to six allocations;
   written into one buffer, as `toFixed` is, they make one.
 - **B8.** `ToNumber` of `"12345"` trims by Unicode and calls `ParseFloat`;

@@ -81,6 +81,9 @@ type Runtime struct {
 	// count; see nest.
 	nesting    int
 	nodeQuirks bool
+	// regexpLits is the patterns of the RegExp literals the runtime has
+	// evaluated, by their constants; see newRegExpLiteral.
+	regexpLits [64]regexpLiteral
 	// regexpCache is the patterns the runtime has compiled; see
 	// compileRegExp.
 	regexpCache map[regexpKey]*regexp.Regexp

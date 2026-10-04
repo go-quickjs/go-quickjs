@@ -77,7 +77,11 @@ type program struct {
 	anchored bool
 	// lit is a literal every match contains near its start, or nil; see
 	// requiredLit. Only a pattern without the unicode flag has one.
-	lit     *requiredLit
+	lit *requiredLit
+	// litOnly is the pattern's code units where it is nothing but them --
+	// no group, no class, no case folding, no unicode flag -- so that a match
+	// is where they are found, which a search answers without the matcher.
+	litOnly []uint16
 	classes []*charSet
 	// asciiClasses is, for each class, which ASCII characters it matches --
 	// folding and negation applied -- which are most of what a class is asked
@@ -139,6 +143,9 @@ func compileNodeFor(n node, flags Flags, utf8 bool) *program {
 	c.prog.anchored = anchorStarts && anchoredStart(n)
 	if flags&(FlagUnicode|FlagUnicodeSets) == 0 {
 		c.prog.lit = requiredOf(n, flags&FlagIgnoreCase != 0)
+		if !utf8 && flags&FlagIgnoreCase == 0 {
+			c.prog.litOnly = literalOnly(n)
+		}
 	}
 	c.prog.asciiClasses = make([][2]uint64, len(c.prog.classes))
 	for i, s := range c.prog.classes {

@@ -32,6 +32,12 @@ func (re *Regexp) MatchASCIIInto(dst []int, s string, start int, check func() er
 
 // execASCII is exec over the bytes of an ASCII string, with a pooled matcher.
 func (re *Regexp) execASCII(dst []int, b []byte, start int, check func() error, sticky bool) ([]int, error) {
+	if lit := re.prog.litOnly; lit != nil && !sticky {
+		if at := indexUnitsASCII(b, lit, start); at >= 0 {
+			return append(dst[:0], at, at+len(lit)), nil
+		}
+		return nil, nil
+	}
 	m, _ := byteMatcherPool.Get().(*matcherASCII)
 	if m == nil {
 		m = &matcherASCII{}

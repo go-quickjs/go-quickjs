@@ -5,7 +5,9 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"unsafe"
 
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/regexp"
 )
 
@@ -48,6 +50,35 @@ func (r *Runtime) newRegExp(source, flags string) (Value, error) {
 	if err != nil {
 		return Undefined, r.throwSyntaxError("%s", err.Error())
 	}
+	return r.newRegExpObject(re), nil
+}
+
+// regexpLiteral is a RegExp literal's constant and its pattern compiled, in a
+// runtime's table of them.
+type regexpLiteral struct {
+	c  *bytecode.Constant
+	re *regexp.Regexp
+}
+
+// newRegExpLiteral is the RegExp a literal evaluates to, its pattern found by
+// the constant that holds it: in the runtime's small table, by its address,
+// rather than in the cache by its text, which a literal in a loop would hash
+// each time round. An entry holds its constant, whose address is then not
+// another's.
+func (r *Runtime) newRegExpLiteral(c *bytecode.Constant) (Value, error) {
+	e := &r.regexpLits[uintptr(unsafe.Pointer(c))>>5%uintptr(len(r.regexpLits))]
+	if e.c != c {
+		re, err := r.compileRegExp(c.Str, c.Flags)
+		if err != nil {
+			return Undefined, r.throwSyntaxError("%s", err.Error())
+		}
+		*e = regexpLiteral{c: c, re: re}
+	}
+	return r.newRegExpObject(e.re), nil
+}
+
+// newRegExpObject is a RegExp object of a compiled pattern.
+func (r *Runtime) newRegExpObject(re *regexp.Regexp) Value {
 	// The object, its data, its clone of the pattern and its table are one
 	// allocation: a literal in a loop is a new RegExp each time round.
 	ro := &regexpObject{Object: Object{proto: r.proto.regexp, class: ClassRegExp, flags: objExtensible | objInlineProps}}
@@ -57,7 +88,7 @@ func (r *Runtime) newRegExp(source, flags string) (Value, error) {
 	ro.data = &ro.rd
 	// lastIndex is writable but neither enumerable nor configurable.
 	ro.setOwnRaw(atomLastIndex, Int(0), propWritable)
-	return Obj(&ro.Object), nil
+	return Obj(&ro.Object)
 }
 
 // regexpObject is a RegExp with its data, its clone of the compiled pattern
@@ -325,7 +356,7 @@ func (r *Runtime) initRegExpBuiltins() {
 		// An unmodified RegExp is matched directly, with lastIndex and the
 		// legacy statics as exec has them, but without the array exec
 		// would make for nobody to read.
-		if _, ok := rt.builtinFlags(this); ok && propsIntact(rt.proto.regexp, rt.regexpExecProps) {
+		if _, ok := rt.builtinFlagBits(this); ok && propsIntact(rt.proto.regexp, rt.regexpExecProps) {
 			caps, _, err := rt.regexpMatch(this, s)
 			if err != nil {
 				return Undefined, err

@@ -183,6 +183,14 @@ func fitInts(s []int, n int) []int {
 const maxLentFrames = 256
 
 func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error, sticky bool) ([]int, error) {
+	// A pattern that is nothing but characters matches where they are,
+	// which is found without a matcher.
+	if lit := re.prog.litOnly; lit != nil && !sticky {
+		if at := indexUnits(units, lit, start); at >= 0 {
+			return append(dst[:0], at, at+len(lit)), nil
+		}
+		return nil, nil
+	}
 	// A clone with no matcher of its own borrows its lender's.
 	owner, m := re, re.scratch
 	if m == nil && re.lender != nil {

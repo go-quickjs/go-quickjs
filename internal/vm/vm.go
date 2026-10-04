@@ -2828,8 +2828,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// The constant holds the pattern text; a fresh object is built on
 			// each evaluation, since a literal produces a new RegExp with its
 			// own lastIndex every time it is reached.
-			c := cl.fn.Constants[in.A]
-			v, err := r.newRegExp(c.Str, c.Flags)
+			v, err := r.newRegExpLiteral(&cl.fn.Constants[in.A])
 			if err != nil {
 				vmErr = err
 				goto onError

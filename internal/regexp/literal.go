@@ -12,6 +12,36 @@ package regexp
 // It is worked out for a pattern without the unicode flag, where a character
 // is a code unit and the distance a count of them.
 
+// literalOnly is the code units of a pattern that is nothing but characters
+// of the Basic Multilingual Plane, none of them a surrogate, or nil: what
+// such a pattern matches is that run of units, where it is first found.
+func literalOnly(n node) []uint16 {
+	var units []uint16
+	add := func(n node) bool {
+		c, ok := n.(nodeChar)
+		if !ok || c.r >= 0x10000 || isSurrogateRune(c.r) {
+			return false
+		}
+		units = append(units, uint16(c.r))
+		return true
+	}
+	switch n := n.(type) {
+	case nodeChar:
+		if !add(n) {
+			return nil
+		}
+	case nodeSeq:
+		for _, item := range n.items {
+			if !add(item) {
+				return nil
+			}
+		}
+	default:
+		return nil
+	}
+	return units
+}
+
 // requiredLit is a pattern's required literal: its code units, and the least
 // and the most units between the start of a match and the literal.
 type requiredLit struct {
