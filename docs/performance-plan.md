@@ -373,9 +373,9 @@ matter to hosts running classes, modules and async code.
 | C2 | An `await` makes about nine allocations: two functions, a promise nothing can reach, a job, an argument list | Done |
 | C3 | A generator or async call makes four allocations, and resuming copies its whole frame | Done, in part |
 | C4 | A bound function always takes the slow call path, and allocates its arguments when it has bound ones | Declined for now |
-| C5 | Every `for-of`, spread and array destructuring allocates an iterator object | Open |
-| C6 | An arrow function is 448 to 480 bytes, most of it fields only bound or `with` functions use | Open |
-| C7 | A closure reads a `let` or `const` it captured after its initialization with a dead-zone check, which keeps arrows out of the frameless evaluator | Open |
+| C5 | Every `for-of`, spread and array destructuring allocates an iterator object | Done |
+| C6 | An arrow function is 448 to 480 bytes, most of it fields only bound or `with` functions use | Deferred |
+| C7 | A closure reads a `let` or `const` it captured after its initialization with a dead-zone check, which keeps arrows out of the frameless evaluator | Done |
 
 **C1, done:** the tree tier builds `tail_call`, giving the frame up as the
 interpreter does once the stack is 32 deep; a plain tail call is a call in
@@ -412,6 +412,21 @@ and Crypto runs slower with `runTree` at 32 mod 64 than at 0; padding
 `runTree` back to 0 recovered half. The rest is `callFromLoop` and `runFD`
 moving the same way. It waits on the tier's hot functions being made
 indifferent to where they land.
+
+**C5, done:** a cursor and its object are one allocation. A for-of over a
+small array -15%, array destructuring -14%, a for-in -8%.
+
+**C6, deferred:** an arrow is already one allocation -- object, data,
+closure, captures and its `funcExtra` -- and what is left is the size of
+`funcExtra`, whose bound-function fields an arrow does not use. Moving them
+out means editing the bound path in `callObject`, which is C4's problem.
+
+**C7, done:** a function is compiled where it is made, so a `let` or
+`const` its maker has initialized by then is read without a dead-zone
+check, as the maker's own reads are; a hoisted declaration is made at its
+block's start, before the block's bindings, and keeps the check. An arrow
+reading such a binding may then be pure: `a.map(x => x * k)` -27%, a sort
+comparator -28%, a call -26%.
 
 ## Rejected
 

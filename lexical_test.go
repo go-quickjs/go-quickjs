@@ -772,3 +772,32 @@ func TestStrictAssignmentToAnUnresolvableName(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestCapturedBindingDeadZone covers closures reading and writing a let or
+// const of the function that made them, which read it unchecked when it
+// was initialized before they were made: made before it, in a hoisted
+// declaration, in a switch case its declaration was jumped over to reach,
+// nested in other closures, in loops, and through eval. The answers are
+// Node's.
+func TestCapturedBindingDeadZone(t *testing.T) {
+	checkEval(t, `var r = [];
+		function t(name, f) { try { r.push(name + "=" + f()) } catch (e) { r.push(name + ":" + e.constructor.name) } }
+		t("before", () => { var f = () => k; var v; try { v = f() } catch (e) { v = e.constructor.name } const k = 1; return v + "," + f() });
+		t("after", () => { const k = 2; var f = () => k * 3; return f() });
+		t("hoisted", () => { var v; try { v = h() } catch (e) { v = e.constructor.name } let k = 4; function h() { return k } return v + "," + h() });
+		t("switch", () => { var out = []; for (var x of [0, 1]) { switch (x) { case 0: let k = 5; out.push((() => k)()); break; case 1: try { out.push((() => k)()) } catch (e) { out.push(e.constructor.name) } } } return out.join() });
+		t("loop", () => { var fs = []; for (let i = 0; i < 3; i++) { const j = i * 2; fs.push(() => i + j) } return fs.map(f => f()).join() });
+		t("nested", () => { const k = 7; var f = () => () => () => k; return f()()() });
+		t("nested-before", () => { var f = () => () => k; var g = f(); var v; try { v = g() } catch (e) { v = e.constructor.name } let k = 8; return v + "," + g() });
+		t("class", () => { var v; class C { static m() { return C.name } } return C.m() });
+		t("assign", () => { let k = 1; var set = v => { k = v }; set(9); return k });
+		t("const-assign", () => { const k = 1; var set = () => { k = 2 }; try { set() } catch (e) { return e.constructor.name } });
+		t("assign-before", () => { var set = v => { k = v }; try { set(1) } catch (e) { var v = e.constructor.name } let k = 2; set(3); return v + "," + k });
+		t("eval", () => { const k = 10; return eval("(() => k + 1)()") });
+		t("map", () => { const k = 3; return [1, 2, 3].map(x => x * k).join() });
+		t("param-default", () => { function f(a = () => b, b = 2) { return a() } return f() });
+		t("let-in-block", () => { let out = []; { let k = 1; out.push((() => k)()); } { var f = () => typeof q; let q = 2; out.push(f()) } return out.join() });
+		t("generator", () => { function* g() { const k = 11; yield () => k } return g().next().value() });
+		r.join(" ; ")`,
+		`before=ReferenceError,1 ; after=6 ; hoisted=ReferenceError,4 ; switch=5,ReferenceError ; loop=0,3,6 ; nested=7 ; nested-before=ReferenceError,8 ; class=C ; assign=9 ; const-assign=TypeError ; assign-before=ReferenceError,3 ; eval=11 ; map=3,6,9 ; param-default=2 ; let-in-block=1,number ; generator=11`)
+}

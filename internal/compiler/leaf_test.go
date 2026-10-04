@@ -94,3 +94,35 @@ func TestLiteralStatementsEmitNothing(t *testing.T) {
 		}
 	}
 }
+
+// TestArrowReadingAnInitializedConst pins that an arrow made after the const
+// or let it reads has been initialized reads it without a dead-zone check,
+// and so may be pure, while one made before keeps the check.
+func TestArrowReadingAnInitializedConst(t *testing.T) {
+	cases := []struct {
+		src  string
+		want bytecode.LeafKind
+	}{
+		{`function outer() { const k = 2; return x => x * k }`, bytecode.LeafPure},
+		{`function outer() { let k = 2; { return x => x * k } }`, bytecode.LeafPure},
+		{`function outer() { var f = x => x * k; const k = 2; return f }`, bytecode.LeafNone},
+		{`function outer() { return h; function h() {} const k = 2; var f = () => k }`, bytecode.LeafPure},
+	}
+	for _, tc := range cases {
+		prog, err := parser.Parse(tc.src, parser.Options{})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.src, err)
+		}
+		main, err := Compile(prog, Options{})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.src, err)
+		}
+		arrow := findArrow(main)
+		if arrow == nil {
+			t.Fatalf("%s: no arrow compiled", tc.src)
+		}
+		if arrow.Leaf != tc.want {
+			t.Errorf("%s: leaf %v, want %v", tc.src, arrow.Leaf, tc.want)
+		}
+	}
+}

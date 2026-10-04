@@ -1014,8 +1014,13 @@ func (c *compiler) resolveUpvalue(name string) (uint32, bool) {
 	if l, ok := c.parent.resolveLocal(name); ok {
 		l.captured = true
 		immutable := l.kind == bindConst || l.kind == bindFuncSelf
+		// A function is compiled where it is made, so a binding its maker
+		// has initialized by then -- as the maker's own reads would find it
+		// -- is initialized whenever the function runs, and its reads need
+		// no check. A hoisted declaration is made at its block's start,
+		// before the block's own bindings are.
 		idx := c.addUpvalue(name, l.slot, true, !immutable,
-			l.kind == bindLet || l.kind == bindConst, l.withDepth)
+			(l.kind == bindLet || l.kind == bindConst) && !l.initialized, l.withDepth)
 		c.fn.Upvalues[idx].FuncSelf = l.kind == bindFuncSelf
 		return idx, true
 	}
