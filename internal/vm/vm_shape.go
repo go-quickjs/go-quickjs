@@ -25,8 +25,11 @@ import "unsafe"
 //   - Unique: the object has a shape of its own. It is what an object gets
 //     whose layout changes other than by adding a property -- a delete, an
 //     attribute changed, a table grown past what the tree holds -- and what a
-//     prototype made with the runtime has. Its identity is replaced whenever
-//     its layout changes, so a cache that remembered it misses.
+//     prototype made with the runtime has. Once a cache has remembered it,
+//     its identity is replaced whenever its layout changes, so that the
+//     cache misses; until then it is changed in place, which an object
+//     that has properties deleted one after another, and is read by no
+//     cache in between, does not then pay a new shape for each.
 //
 // The table's lookup index, for an object with more properties than are
 // scanned, lives in the shape: a shared shape's is shared by every object of
@@ -37,6 +40,10 @@ type shape struct {
 	key    Atom
 	flags  propFlags
 	unique bool
+	// seen says a cache has remembered the shape: a unique shape that is
+	// seen is replaced, rather than changed, when its object's layout
+	// changes. Each place that keeps a shape sets it, by remember.
+	seen bool
 	// slack is, on a constructor's root, how many properties its objects
 	// have come to need: the most an object of it has had when it outgrew
 	// the room it was made with, up to maxSlack. The constructor's next
@@ -195,6 +202,14 @@ func (s *shape) noteGrowth(n int) {
 	}
 }
 
+// remember is s, marked as kept by a cache, for the cache to keep.
+func remember(s *shape) *shape {
+	if s != nil {
+		s.seen = true
+	}
+	return s
+}
+
 // newUniqueShape makes a shape of its own for an object of n properties,
 // keeping its index.
 func newUniqueShape(t *shapeTree, n int, index *propIndex) *shape {
@@ -269,7 +284,7 @@ func (o *Object) shapeAdded(p Property) {
 		return
 	}
 	if s.unique {
-		if s.tree == nil || !s.tree.building {
+		if s.seen && (s.tree == nil || !s.tree.building) {
 			// A new identity, so that what was cached of the old one misses.
 			s = newUniqueShape(s.tree, n, s.index)
 			o.shape = s
@@ -334,11 +349,20 @@ func (o *Object) layoutChanged() {
 	if s == nil {
 		return
 	}
-	var index *propIndex
-	if s.unique {
-		// A shared index is the layout's, which this object is leaving:
-		// it gets one of its own, built below.
-		index = s.index
+	if s.unique && !s.seen {
+		// No cache has remembered the layout, so none can take it for what
+		// it was: it changes in place.
+		s.n = int32(len(o.props))
+		if s.index == nil && len(o.props) > linearScanLimit {
+			o.buildIndex()
+		}
+		return
+	}
+	index := s.index
+	if !s.unique && index != nil {
+		// A shared index is the layout's, which this object is leaving: it
+		// gets a copy of its own, which is its table's as it stands.
+		index = index.clone()
 	}
 	o.shape = newUniqueShape(s.tree, len(o.props), index)
 	if index == nil && len(o.props) > linearScanLimit {
@@ -463,7 +487,7 @@ func (c *propCache) storeOwn(o *Object, v Value) bool {
 // has met too many shapes to keep trying.
 func (c *propCache) noteOwn(o *Object, i int32) {
 	if c.fills < maxCacheFills && o.shape != nil {
-		*c = propCache{shape: o.shape, idx: i, fills: c.fills + 1}
+		*c = propCache{shape: remember(o.shape), idx: i, fills: c.fills + 1}
 	}
 }
 
@@ -591,12 +615,12 @@ func (r *Runtime) fillPropCache(c *propCache, o *Object, key Atom, accessors boo
 				return
 			}
 			c.fills++
-			*c = propCache{shape: o.shape, idx: i, fills: c.fills, getter: getter}
+			*c = propCache{shape: remember(o.shape), idx: i, fills: c.fills, getter: getter}
 			if depth >= 1 {
-				c.p1, c.s1 = up[0], up[0].shape
+				c.p1, c.s1 = up[0], remember(up[0].shape)
 			}
 			if depth == 2 {
-				c.p2, c.s2 = up[1], up[1].shape
+				c.p2, c.s2 = up[1], remember(up[1].shape)
 			}
 			return
 		}
@@ -744,7 +768,7 @@ func (r *Runtime) fillStoreCache(c *propCache, o *Object, before *shape, key Ato
 	if o.shape == before {
 		if i := o.findOwn(key); i >= 0 && o.props[i].flags&(plain|propWritable) == propWritable {
 			c.fills++
-			*c = propCache{shape: before, idx: i, fills: c.fills}
+			*c = propCache{shape: remember(before), idx: i, fills: c.fills}
 		}
 		return
 	}
@@ -763,12 +787,12 @@ func (r *Runtime) fillStoreCache(c *propCache, o *Object, before *shape, key Ato
 		p = p.proto
 	}
 	c.fills++
-	*c = propCache{shape: before, next: next, fills: c.fills, p1: up[0], p2: up[1]}
+	*c = propCache{shape: remember(before), next: next, fills: c.fills, p1: up[0], p2: up[1]}
 	if up[0] != nil {
-		c.s1 = up[0].shape
+		c.s1 = remember(up[0].shape)
 	}
 	if up[1] != nil {
-		c.s2 = up[1].shape
+		c.s2 = remember(up[1].shape)
 	}
 }
 

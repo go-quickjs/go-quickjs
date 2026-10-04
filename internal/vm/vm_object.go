@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"maps"
 	"math"
 	"unsafe"
 )
@@ -629,6 +630,14 @@ type recentKey struct {
 
 func newPropIndex(n int) *propIndex {
 	return &propIndex{slots: make(map[Atom]int32, n)}
+}
+
+// clone is a copy of the index, for an object leaving the layout it is
+// the index of.
+func (x *propIndex) clone() *propIndex {
+	c := *x
+	c.slots = maps.Clone(x.slots)
+	return &c
 }
 
 // add records a key's slot.

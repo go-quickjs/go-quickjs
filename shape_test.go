@@ -367,3 +367,68 @@ func TestPrimitivePropertyCache(t *testing.T) {
 		checkEval(t, tc.src, tc.want)
 	}
 }
+
+// TestUniqueShapeChangedInPlace covers objects whose layout is their own --
+// after a delete -- which change in place until a cache remembers them, and
+// are replaced after: each read, write or primitive's method read below runs
+// until its cache has filled, and must then see the delete, the property
+// added, or the attribute changed that follows. The answers are Node's.
+func TestUniqueShapeChangedInPlace(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	v, err := rt.Eval(`var out = [];
+		function read(o) { return o.x; }
+		function readY(o) { return o.y; }
+		function write(o, v) { o.x = v; }
+		// An object read by a cache after a delete, then changed again.
+		var o = {a: 1, x: 2, y: 3}; delete o.a;
+		for (var i = 0; i < 50; i++) read(o);
+		delete o.x; out.push(read(o));
+		o.x = 7; out.push(read(o));
+		delete o.y; out.push(readY(o));
+		// Read through a prototype whose layout a delete changed, then changes again.
+		var proto = {p: 0, x: "proto"}; delete proto.p;
+		var c = Object.create(proto);
+		for (var i = 0; i < 50; i++) read(c);
+		delete proto.x; out.push(read(c));
+		proto.x = "again"; out.push(read(c));
+		// A cached absence: x is found on the prototype, then the object gains its own.
+		var d = Object.create(proto); d.q = 1; delete d.q;
+		for (var i = 0; i < 50; i++) read(d);
+		d.x = "own"; out.push(read(d));
+		// Deletes one after another with reads between, each read a new site's.
+		var e = {a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9, j: 10};
+		for (var k of "abcdefghi") { delete e[k]; out.push(Object.keys(e).join("")); out.push(e.j); }
+		// A write cache on a deleted-from object, then the property deleted.
+		var w = {z: 0, x: 1}; delete w.z;
+		for (var i = 0; i < 50; i++) write(w, i);
+		delete w.x; write(w, "re"); out.push(JSON.stringify(w), Object.keys(w).join());
+		Object.defineProperty(w, "x", {writable: false}); try { (function () { "use strict"; write(w, 5); })(); } catch (err) { out.push(err.constructor.name); }
+		write(w, 9); out.push(w.x);
+		// A primitive's method read through its prototype, then deleted.
+		String.prototype.foo = function () { return "foo"; };
+		function callFoo(s) { return s.foo ? s.foo() : "none"; }
+		for (var i = 0; i < 50; i++) callFoo("abc");
+		delete String.prototype.foo; out.push(callFoo("abc"));
+		String.prototype.foo = function () { return "back"; }; out.push(callFoo("abc"));
+		// for-in over an object whose layout changes during the loop.
+		var f = {a: 1, b: 2, c: 3, d: 4}; delete f.a; var seen = [];
+		for (var k in f) { seen.push(k); delete f.c; f.e = 5; }
+		out.push(seen.join(""));
+		// Many deletes on large objects, read by a shared site.
+		var sum = 0;
+		for (var j = 0; j < 200; j++) {
+		  var big = {}; for (var k = 0; k < 20; k++) big["k" + k] = k;
+		  for (var k = 0; k < 19; k++) { delete big["k" + k]; sum += big.k19 + (big["k" + (k + 1)] | 0); }
+		}
+		out.push(sum);
+		out.join("|")`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "|7|||again|own|bcdefghij|10|cdefghij|10|defghij|10|efghij|10|fghij|10|" +
+		`ghij|10|hij|10|ij|10|j|10|{"x":"re"}|x|re|none|back|bd|110200`
+	if got := v.String(); got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+}

@@ -246,7 +246,7 @@ a project for a few of Splay's allocations.
 | B2 | Element reads and writes in trees without a call | `array_read` 1.85x, `array_write` 1.6x | Medium | Declined |
 | B3 | Typed-array elements without the generic path | `typed_array_read` 2.1x, `typed_array_write` 1.8x | Medium | Done, in part |
 | B4 | Appending to an array, and `arr.length = n`, directly | `array_prop_create` 2.8x, `array_hole_length_decr` 1.7x | Low | Done |
-| B5 | No new layout on every `delete` | `prop_delete` 2.1x | High | Open |
+| B5 | No new layout on every `delete` | `prop_delete` 2.1x | High | Done |
 | B6 | RegExp per-call costs | `regexp_ascii` 2.2x, `regexp_utf16` 2.6x, V8 RegExp | Low | Done |
 | B7 | Number text without intermediate strings | `float_toExponential` 2.1x, `float_toPrecision` 1.9x | Low | Done |
 | B8 | Strings to numbers, and numbers to cached strings | `string_to_int` 1.28x, `int_to_string` 1.6x | Low | Open |
@@ -290,6 +290,13 @@ a project for a few of Splay's allocations.
 - **B5.** Every `delete` allocates a new unique layout. A dictionary-mode
   layout that the caches refuse to fill would be changed in place, as V8's
   is after a delete. Every cache fill must check it: the risk.
+
+  **Done**, the other way round: a unique layout is marked when a cache
+  keeps it, which the five places that keep one do, and one no cache has
+  kept changes in place; a kept one is replaced as before. An object
+  leaving a shared layout copies its index rather than building one.
+  `prop_delete` -21%; the V8 suite -0.6%, nothing slower than noise.
+  test262 built with the caches' verification: 99,595 passed, 0 failed.
 - **B6.** RegExp:
   - a pattern that is only its required literal answers with `indexUnits`,
     without a matcher; a run of literal characters inside a pattern can be

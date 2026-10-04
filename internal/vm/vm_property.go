@@ -312,7 +312,7 @@ func (r *Runtime) primProp(p *Object, key Atom, v Value) (Value, error) {
 	}
 	if s := p.shape; s != nil && s.unique && !r.shapes.building && !key.IsIndex() && key != atomLength {
 		if i := p.findOwn(key); i >= 0 && p.props[i].flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
-			*e = primEntry{key: key, idx: i, proto: p, shape: s}
+			*e = primEntry{key: key, idx: i, proto: p, shape: remember(s)}
 			return p.props[i].value, nil
 		}
 	}
