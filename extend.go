@@ -295,7 +295,7 @@ func (r *Runtime) RunJobs() (err error) {
 	if r.closed {
 		// A job closed the Runtime, which stopped the rest; the stack the
 		// jobs ran on is free now.
-		rt.ReleaseStack()
+		rt.ReleaseClosed()
 		return ErrClosed
 	}
 	return r.wrapError(err)

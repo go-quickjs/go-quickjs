@@ -841,9 +841,14 @@ func kmpTable(b []uint16, reversed bool) []int {
 // ---------------------------------------------------------------------------
 
 // Symbol is a JavaScript symbol. Symbols are compared by identity, so the
-// struct carries only the description used when printing one.
+// struct carries only what printing one needs, and what being a WeakMap key
+// does.
 type Symbol struct {
 	Description string
+	// weakMapRefs holds the symbol's values in the WeakMaps it is a key of,
+	// made when it first becomes one (see weakmap.go). Only an unregistered
+	// symbol can be.
+	weakMapRefs *weakMapRefs
 	// HasDescription distinguishes Symbol() from Symbol(undefined), which
 	// differ in what String(sym) produces.
 	HasDescription bool

@@ -11,11 +11,11 @@ import "testing"
 func TestMapStorageBounded(t *testing.T) {
 	r := New(Config{})
 
-	queue := newJSMap(false)
+	queue := newJSMap()
 	for i := 0; i < 100000; i++ {
 		queue.set(r, Int(i), Int(i))
 		if i >= 10 {
-			if !queue.delete(r, Int(i-10)) {
+			if !queue.delete(Int(i - 10)) {
 				t.Fatalf("delete %d found nothing", i-10)
 			}
 		}
@@ -30,7 +30,7 @@ func TestMapStorageBounded(t *testing.T) {
 		}
 	}
 
-	set := newJSMap(false)
+	set := newJSMap()
 	for i := 0; i < 100000; i++ {
 		k := Str(NewString(string(rune('a' + i%10))))
 		set.set(r, k, k)
@@ -43,12 +43,12 @@ func TestMapStorageBounded(t *testing.T) {
 	}
 
 	// A map that grew large and then emptied gives the room back.
-	big := newJSMap(false)
+	big := newJSMap()
 	for i := 0; i < 50000; i++ {
 		big.set(r, Int(i), Undefined)
 	}
 	for i := 0; i < 50000; i++ {
-		big.delete(r, Int(i))
+		big.delete(Int(i))
 	}
 	if big.size != 0 || cap(big.entries) > 64 || len(big.index) > 64 {
 		t.Errorf("emptied map: size %d, entries cap %d, index %d", big.size, cap(big.entries), len(big.index))

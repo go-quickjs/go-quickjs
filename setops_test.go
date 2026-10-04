@@ -477,6 +477,89 @@ func TestSetOperationsWalkStepByStep(t *testing.T) {
 	}
 }
 
+// collectedWithin runs the collector and a turn, which releases what the
+// WeakMaps that have gone held, until the script's expression is true.
+func collectedWithin(t *testing.T, rt *quickjs.Runtime, done string) bool {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		runtime.GC()
+		runtime.GC()
+		time.Sleep(5 * time.Millisecond)
+		v, err := rt.Eval(done)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if v.String() == "true" {
+			return true
+		}
+	}
+	return false
+}
+
+// A WeakMap entry is an ephemeron: a value that refers to its own key does
+// not keep the key alive. When the map held its values itself, such a key
+// lived as long as the map did.
+func TestWeakMapValueReferringToKey(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	if _, err := rt.Eval(`
+		var wm = new WeakMap(), refs = [], kept = {}, sym = Symbol("kept");
+		(function () {
+			for (var i = 0; i < 10; i++) {
+				var k = {i: i}, s = Symbol(i);
+				wm.set(k, {owner: k, again: [k]});
+				wm.set(s, {owner: s});
+				refs.push(new WeakRef(k), new WeakRef(s));
+			}
+		})();
+		wm.set(kept, {owner: kept});
+		wm.set(sym, {owner: sym});
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if !collectedWithin(t, rt, `refs.every(r => r.deref() === undefined)`) {
+		t.Error("keys whose values refer to them stayed alive")
+	}
+	v, err := rt.Eval(`wm.get(kept).owner === kept && wm.get(sym).owner === sym && wm.has(kept)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.String() != "true" {
+		t.Error("a key that is held lost its value")
+	}
+}
+
+// A WeakMap's values go with the map, though their keys live on: a key holds
+// its values, and the map's death takes its values off its keys.
+func TestWeakMapValuesGoWithTheMap(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	if _, err := rt.Eval(`
+		var key = {}, other = new WeakMap(), refs = [];
+		other.set(key, "other");
+		(function () {
+			for (var i = 0; i < 10; i++) {
+				var m = new WeakMap(), v = {i: i};
+				m.set(key, v);
+				refs.push(new WeakRef(v));
+			}
+		})();
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if !collectedWithin(t, rt, `refs.every(r => r.deref() === undefined)`) {
+		t.Error("the values of WeakMaps that had gone stayed alive on their key")
+	}
+	v, err := rt.Eval(`other.get(key)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.String() != "other" {
+		t.Errorf("the live map's value = %q, want other", v.String())
+	}
+}
+
 // A WeakMap drops the entries whose keys have been collected, scanning for them
 // as it grows. The scan walks the entries and the weak references beside them,
 // which are two lists that have to stay in step.

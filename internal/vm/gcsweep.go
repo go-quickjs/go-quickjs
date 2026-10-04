@@ -41,11 +41,14 @@ func newGCSentinel() {
 	})
 }
 
-// sweepStaleSlots clears the stack's stale slots, when the collector has run
-// since it last did: those above sp, the running frame's operand stack
+// sweepStaleSlots releases the WeakMaps that have gone, and clears the
+// stack's stale slots when the collector has run since it last did: those above sp, the running frame's operand stack
 // pointer, whose window ends at stackTop, and the windows of the frames that
 // have returned, up to the highest the stack has reached.
 func (r *Runtime) sweepStaleSlots(sp int) {
+	// The WeakMaps the collector has found gone are reported a little after
+	// it has run, and are released as soon as they are.
+	r.releaseDeadWeakMaps()
 	e := gcEpoch.Load()
 	if e == r.sweptEpoch {
 		return

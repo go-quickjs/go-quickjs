@@ -22,7 +22,7 @@
 | Built-ins | `Object`, `Function`, `Array`, `String`, `Number`, `Boolean`, `Symbol`, `BigInt`, `Error`, `Math`, `JSON`, `Date`, `RegExp`, `Map`, `Set`, `Promise`, `Proxy`, `Reflect`, `ArrayBuffer` (resizable and immutable too), `SharedArrayBuffer`, `Atomics`, `DataView`, typed arrays |
 | Temporal | `Instant`, `Duration`, `PlainDate`, `PlainTime`, `PlainDateTime`, `PlainYearMonth`, `PlainMonthDay`, `ZonedDateTime`, `Now`, non-ISO calendars, and IANA time-zone transitions |
 | Internationalization | `Intl.Locale`, `NumberFormat`, `DateTimeFormat`, `Collator`, `PluralRules`, `ListFormat`, `RelativeTimeFormat`, `DisplayNames`, `Segmenter`, `DurationFormat`, from [go-intl], with CLDR data for every locale ICU has |
-| Weak references | `WeakRef`, `FinalizationRegistry`, `WeakMap`, `WeakSet`, backed by Go's `weak.Pointer` and `runtime.AddCleanup`: a target really is released, and a registry really is called back |
+| Weak references | `WeakRef`, `FinalizationRegistry`, `WeakMap`, `WeakSet`, backed by Go's `weak.Pointer` and `runtime.AddCleanup`: a target really is released, a registry really is called back, and a `WeakMap` value that refers to its own key does not keep the key alive |
 | Reflection | `Proxy` with every trap and its invariants, `Reflect`, property descriptors, mapped `arguments` |
 | Recent additions | Set operations, `Array.fromAsync`, `Object.groupBy`, `Promise.try`, `Promise.allKeyed`, `RegExp.escape`, `Error.isError`, `Math.sumPrecise`, `Uint8Array` base64 and hex, `Map` and `WeakMap`'s `getOrInsert`, `JSON.rawJSON` and a reviver's source text, `Atomics.pause` and `Atomics.waitAsync`, `ShadowRealm` |
 | Eval | Direct `eval` runs in the caller's scope — its variables, `this`, `new.target` and `super`; indirect `eval` runs in global scope |
@@ -88,9 +88,11 @@ nothing here can pull it without taking the runtime onto another goroutine.
 
 Known semantic gap, covered by a test that documents it:
 
-- A `WeakMap` value is held strongly, so a value that refers to its own key
-  keeps that key alive. Breaking that cycle needs ephemeron marking, which Go's
-  collector does not offer.
+- A `WeakMap` value that refers to the map itself keeps the map alive for as
+  long as its key lives. A value that refers to its own key does not keep the
+  key alive: the value is held by the key rather than by the map. But letting
+  the map go while only its own value reaches it needs ephemeron marking,
+  which Go's collector does not offer.
 
 ## Conformance
 

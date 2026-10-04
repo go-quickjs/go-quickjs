@@ -90,6 +90,10 @@ type Runtime struct {
 	capsBuf []int
 	// sweptEpoch is the collector's cycle sweepStaleSlots last cleared in.
 	sweptEpoch uint32
+	// weakMaps holds the runtime's WeakMaps, for sweepStaleSlots and endTurn
+	// to take the values of those that have gone off their keys, and
+	// ReleaseClosed those of all of them; see weakmap.go.
+	weakMaps *weakMapRegistry
 	// frameHigh is the deepest the frames have reached since the frames past
 	// the current depth were last cleared; see clearReturnedFrames.
 	frameHigh int
@@ -904,15 +908,25 @@ func newStack(size int) []Value {
 	return make([]Value, size)
 }
 
-// ReleaseStack gives a closed runtime's stack to the next runtime made. It is
-// called on the runtime's own goroutine, as everything but Close is, and does
-// nothing while a script is running on the stack -- one closing its own
-// runtime from a Go function it called. Every slot past stackHigh is clear
+// ReleaseClosed lets go of what a closed runtime still holds: its stack, for
+// the next runtime made, and its WeakMaps' values, which their keys hold
+// (see weakmap.go) and which a host that kept a key would keep with it, the
+// maps long gone.
+//
+// It is called on the runtime's own goroutine, as everything but Close is,
+// and does nothing while a script is running -- one closing its own runtime
+// from a Go function it called, which runs on to its next interrupt check
+// and must find its stack and its WeakMaps as they were; its caller calls
+// this again once it has stopped. Every slot past stackHigh is clear
 // already, endTurn having cleared back to where the frames reached, so only
 // those below it are cleared. A script that runs after this, from a function
 // the host kept, finds no room on the stack and throws a RangeError.
-func (r *Runtime) ReleaseStack() {
-	if r.frameDepth > 0 || r.stack == nil {
+func (r *Runtime) ReleaseClosed() {
+	if r.frameDepth > 0 {
+		return
+	}
+	r.releaseAllWeakMaps()
+	if r.stack == nil {
 		return
 	}
 	clear(r.stack[:max(r.stackHigh, r.stackTop)])

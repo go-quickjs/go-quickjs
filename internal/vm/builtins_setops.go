@@ -182,7 +182,7 @@ func liveEntries(m *jsMap) []Value {
 
 // newSetFrom builds a Set holding the given values, skipping duplicates.
 func (r *Runtime) newSetFrom(vals []Value) *Object {
-	m := newJSMap(false)
+	m := newJSMap()
 	for _, v := range vals {
 		v = canonicalKey(v)
 		m.set(r, v, v)
@@ -288,7 +288,7 @@ func (r *Runtime) initSetOps(p *Object) {
 		}
 		rm := result.data.(*jsMap)
 		for _, v := range keys {
-			rm.delete(rt, v)
+			rm.delete(v)
 		}
 		return Obj(result), nil
 	})
@@ -316,7 +316,7 @@ func (r *Runtime) initSetOps(p *Object) {
 				break
 			}
 			if _, ok := m.get(rt, v); ok {
-				rm.delete(rt, v)
+				rm.delete(v)
 			} else {
 				v = canonicalKey(v)
 				rm.set(rt, v, v)

@@ -679,10 +679,10 @@ func (d *deserializer) value(i int) (Value, error) {
 		}
 	case snMap:
 		o = newObject(r.proto.mapProto, ClassMap)
-		o.data = newJSMap(false)
+		o.data = newJSMap()
 	case snSet:
 		o = newObject(r.proto.setProto, ClassSet)
-		o.data = newJSMap(false)
+		o.data = newJSMap()
 	case snArray:
 		o = r.newArrayOfLength(0)
 	default:

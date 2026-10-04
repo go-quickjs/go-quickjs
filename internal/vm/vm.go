@@ -4747,4 +4747,5 @@ func (r *Runtime) endTurn() {
 	}
 	r.clearReturnedFrames()
 	r.releaseKeptValues()
+	r.releaseDeadWeakMaps()
 }

@@ -280,7 +280,7 @@ func (v Value) CallWithThis(this Value, args ...any) (Value, error) {
 	res, err := v.rt.Call(v.v, this.v, vals)
 	if host != nil && host.closed {
 		// The function closed its Runtime, which stopped it.
-		v.rt.ReleaseStack()
+		v.rt.ReleaseClosed()
 		return Value{}, ErrClosed
 	}
 	if err != nil {

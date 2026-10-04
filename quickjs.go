@@ -242,7 +242,7 @@ func (r *Runtime) Close() error {
 		}
 	}
 	if rt != nil {
-		rt.ReleaseStack()
+		rt.ReleaseClosed()
 	}
 	r.rt = nil
 	return nil
@@ -386,7 +386,7 @@ func (r *Runtime) runIn(ctx context.Context, re *vm.Realm, fn *bytecodeFunc) (re
 		// nothing left to run and nothing to hand back. Its stack, which the
 		// script was still running on when it was closed, is free now.
 		if !nested {
-			rt.ReleaseStack()
+			rt.ReleaseClosed()
 		}
 		return Value{}, ErrClosed
 	}
@@ -708,7 +708,7 @@ func (r *Runtime) EvalModuleContext(ctx context.Context, specifier, source strin
 	if r.closed {
 		// The module closed the Runtime, which stopped it; the stack it ran
 		// on is free now.
-		rt.ReleaseStack()
+		rt.ReleaseClosed()
 		return Value{}, ErrClosed
 	}
 	if err != nil {
@@ -716,7 +716,7 @@ func (r *Runtime) EvalModuleContext(ctx context.Context, specifier, source strin
 	}
 	err = rt.DrainJobs()
 	if r.closed {
-		rt.ReleaseStack()
+		rt.ReleaseClosed()
 		return Value{}, ErrClosed
 	}
 	if err != nil {

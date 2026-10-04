@@ -2,7 +2,12 @@ package vm
 
 // Map, Set, WeakMap and WeakSet.
 //
-// All four share one structure. Keys are compared by SameValueZero, which is
+// The weak collections have storage of their own, in weakmap.go and
+// weakset.go: a WeakMap's values live on its keys and a WeakSet holds weak
+// references only, and neither is iterated. This file has their methods, and
+// Map's and Set's storage.
+//
+// Map and Set share one structure. Keys are compared by SameValueZero, which is
 // strict equality except that NaN equals itself, and iteration follows
 // insertion order -- both are observable, so the storage is a hash index over
 // an entry list in insertion order rather than a plain Go map.
@@ -18,7 +23,6 @@ import (
 	"hash/maphash"
 	"math"
 	"sort"
-	"unsafe"
 )
 
 // mapEntry is one key/value pair. A Set stores the key in both fields, which is
@@ -44,18 +48,9 @@ type mapSlot struct {
 	at   int32
 }
 
-// jsMap is the shared storage for all four collection types.
+// jsMap is the shared storage for Map and Set.
 type jsMap struct {
 	entries []mapEntry
-	// weakKeys holds a weak reference to each entry's key, for a WeakMap or a
-	// WeakSet only: an entry of one must not be what keeps its own key alive,
-	// and its key field is left empty so that reading it back means asking
-	// whether the key is still there.
-	//
-	// It is a list of its own rather than a field of the entry because a Map
-	// and a Set, which is most of them, would carry three words per entry that
-	// nothing ever reads. It has one element per entry when it is there at all.
-	weakKeys []weakTarget
 	// index finds an entry by its key: open addressing with linear probing,
 	// over a power-of-two table at most half full. Every entry has a slot,
 	// a deleted one too, until the next rebuild drops it; so a lookup never
@@ -72,19 +67,9 @@ type jsMap struct {
 	// gen counts the compactions, each of which moves entries; a cursor that
 	// last looked at another generation finds its place again.
 	gen uint32
-	// weak marks a WeakMap or WeakSet, whose keys are held weakly: an entry
-	// stops existing once nothing else refers to its key.
-	//
-	// A WeakMap value is still held strongly, so a value that refers to its own
-	// key keeps that key alive. Breaking that cycle needs ephemeron marking,
-	// which Go's collector does not offer; it is the one thing about these that
-	// is not the real article. WeakSet stores no value beside its weak key.
-	weak bool
 }
 
-func newJSMap(weak bool) *jsMap {
-	return &jsMap{weak: weak}
-}
+func newJSMap() *jsMap { return &jsMap{} }
 
 // mapSeed seeds the hash of every key, so that a script cannot pick keys that
 // all land in one place of the index without knowing it. It is made once per
@@ -131,12 +116,6 @@ func keyHash(k Value) uint32 {
 	return mixHash(bits ^ uint64(uintptr(k.ref))*0x9e3779b97f4a7c15)
 }
 
-// weakHash is the hash of a key of a WeakMap or a WeakSet, by its address:
-// what its entry still has once the key has gone.
-func weakHash(p unsafe.Pointer) uint32 {
-	return mixHash(uint64(uintptr(p)))
-}
-
 // sameKey is SameValueZero for an entry's key and a key canonicalKey has made,
 // which are the same key when their bits are -- but for strings and BigInts,
 // which are compared by what they hold.
@@ -170,9 +149,7 @@ func canonicalKey(k Value) Value {
 	return k
 }
 
-// find is where the entry for a key is in entries, or -1. A strong
-// collection's key is canonical, with its keyHash; a weak one's is an object
-// or a symbol, with its weakHash.
+// find is where the canonical key's entry is in entries, or -1.
 func (m *jsMap) find(k Value, h uint32) int {
 	if len(m.index) == 0 {
 		return -1
@@ -187,15 +164,7 @@ func (m *jsMap) find(k Value, h uint32) int {
 			continue
 		}
 		j := int(s.at - 1)
-		if m.weak {
-			// The entry counts only while its weak reference names the key:
-			// an address can outlive what was there and come back as
-			// another's, and the reference to what was collected is cleared
-			// before its memory is reused. A deleted entry has no reference.
-			if m.weakKeys[j].pointer() == k.ref {
-				return j
-			}
-		} else if sameKey(m.entries[j].key, k) {
+		if sameKey(m.entries[j].key, k) {
 			// A deleted entry's key matches nothing.
 			return j
 		}
@@ -204,21 +173,12 @@ func (m *jsMap) find(k Value, h uint32) int {
 
 // lookup is find for any key a script passes.
 func (m *jsMap) lookup(k Value) int {
-	if m.weak {
-		if !k.IsObject() && !k.IsSymbol() {
-			return -1
-		}
-		return m.find(k, weakHash(k.ref))
-	}
 	k = canonicalKey(k)
 	return m.find(k, keyHash(k))
 }
 
 // hashAt is the hash of entry j's key, which is live.
 func (m *jsMap) hashAt(j int) uint32 {
-	if m.weak {
-		return weakHash(m.weakKeys[j].pointer())
-	}
 	return keyHash(m.entries[j].key)
 }
 
@@ -232,41 +192,25 @@ func (m *jsMap) place(h uint32, j int) {
 	m.index[i] = mapSlot{hash: h, at: int32(j + 1)}
 }
 
-// add appends an entry for a key find did not find, with its hash, and the
-// weak reference to it in a weak collection.
+// add appends an entry for a key find did not find, with its hash.
 func (m *jsMap) add(k, v Value, h uint32) {
 	if 2*(len(m.entries)+1) > len(m.index) {
 		m.rebuild()
 	}
 	j := len(m.entries)
 	m.seq++
-	if m.weak {
-		m.entries = append(m.entries, mapEntry{key: Undefined, value: v, seq: m.seq})
-		m.weakKeys = append(m.weakKeys, makeWeak(k))
-	} else {
-		m.entries = append(m.entries, mapEntry{key: k, value: v, seq: m.seq})
-	}
+	m.entries = append(m.entries, mapEntry{key: k, value: v, seq: m.seq})
 	m.place(h, j)
 	m.size++
 }
 
-// rebuild drops the deleted entries, and in a weak collection the entries
-// whose keys have been collected, and makes the index again with room for at
+// rebuild drops deleted entries and makes the index again with room for at
 // least as many entries again as are left.
 //
 // It runs when the index is half full, or the entries are half deleted, so
 // its cost is a constant per entry added or deleted however large the
 // collection grows.
 func (m *jsMap) rebuild() {
-	if m.weak {
-		for j := range m.entries {
-			if e := &m.entries[j]; !e.deleted() && m.weakKeys[j].pointer() == nil {
-				e.key, e.value = deletedKey, Undefined
-				m.weakKeys[j] = weakTarget{}
-				m.size--
-			}
-		}
-	}
 	if m.size != len(m.entries) {
 		m.compact()
 	}
@@ -292,24 +236,14 @@ func (m *jsMap) compact() {
 			continue
 		}
 		m.entries[kept] = m.entries[j]
-		if m.weak {
-			m.weakKeys[kept] = m.weakKeys[j]
-		}
 		kept++
 	}
 	clear(m.entries[kept:])
 	m.entries = m.entries[:kept]
-	if m.weak {
-		clear(m.weakKeys[kept:])
-		m.weakKeys = m.weakKeys[:kept]
-	}
 	// A list that has emptied is given back rather than kept at the most it
 	// ever held.
 	if c := cap(m.entries); c > 64 && c > 4*kept {
 		m.entries = append([]mapEntry(nil), m.entries...)
-		if m.weak {
-			m.weakKeys = append([]weakTarget(nil), m.weakKeys...)
-		}
 	}
 	m.gen++
 }
@@ -322,14 +256,8 @@ func (m *jsMap) get(r *Runtime, k Value) (Value, bool) {
 }
 
 func (m *jsMap) set(r *Runtime, k, v Value) {
-	var h uint32
-	if m.weak {
-		// The caller has checked that the key can be held weakly.
-		h = weakHash(k.ref)
-	} else {
-		k = canonicalKey(k)
-		h = keyHash(k)
-	}
+	k = canonicalKey(k)
+	h := keyHash(k)
 	if j := m.find(k, h); j >= 0 {
 		// Re-setting an existing key updates the value and keeps its position.
 		m.entries[j].value = v
@@ -338,13 +266,7 @@ func (m *jsMap) set(r *Runtime, k, v Value) {
 	m.add(k, v, h)
 }
 
-// addWeak records WeakSet membership without retaining the member as an entry
-// value. WeakMap uses set because its separately supplied value is strong.
-func (m *jsMap) addWeak(r *Runtime, value Value) {
-	m.set(r, value, Undefined)
-}
-
-func (m *jsMap) delete(r *Runtime, k Value) bool {
+func (m *jsMap) delete(k Value) bool {
 	j := m.lookup(k)
 	if j < 0 {
 		return false
@@ -353,9 +275,6 @@ func (m *jsMap) delete(r *Runtime, k Value) bool {
 	// position in the entry list.
 	e := &m.entries[j]
 	e.key, e.value = deletedKey, Undefined
-	if m.weak {
-		m.weakKeys[j] = weakTarget{}
-	}
 	m.size--
 	if dead := len(m.entries) - m.size; dead >= 16 && dead > m.size {
 		m.rebuild()
@@ -367,12 +286,10 @@ func (m *jsMap) clear() {
 	// What an iterator in progress sees next is whatever is added from now
 	// on, which the new generation tells it.
 	clear(m.entries)
-	clear(m.weakKeys)
 	if cap(m.entries) > 64 {
-		m.entries, m.weakKeys, m.index = nil, nil, nil
+		m.entries, m.index = nil, nil
 	} else {
 		m.entries = m.entries[:0]
-		m.weakKeys = m.weakKeys[:0]
 		clear(m.index)
 	}
 	m.size = 0
@@ -409,12 +326,19 @@ func (m *jsMap) next(c *mapCursor) int {
 	return -1
 }
 
+// mapUpsertStore is a Map's storage or a WeakMap's, which getOrInsertComputed
+// serves both of.
+type mapUpsertStore interface {
+	get(*Runtime, Value) (Value, bool)
+	set(*Runtime, Value, Value)
+}
+
 // getOrInsertComputed is the shared body of Map's and WeakMap's method once
 // the receiver, the key and the callback have been checked.
 //
 // The callback may itself have added the key, and its result still wins: set
 // overwrites the value in the position the callback gave the entry.
-func (r *Runtime) getOrInsertComputed(m *jsMap, key, cb Value) (Value, error) {
+func (r *Runtime) getOrInsertComputed(m mapUpsertStore, key, cb Value) (Value, error) {
 	if v, ok := m.get(r, key); ok {
 		return v, nil
 	}
@@ -439,6 +363,30 @@ func (r *Runtime) mapOf(this Value, class Class, name string) (*jsMap, error) {
 	return m, nil
 }
 
+// weakMapOf is mapOf for a WeakMap.
+func (r *Runtime) weakMapOf(this Value, name string) (*weakMap, error) {
+	if !this.IsObject() || this.Object().class != ClassWeakMap {
+		return nil, r.throwTypeError("%s called on an incompatible receiver", name)
+	}
+	m, ok := this.Object().data.(*weakMap)
+	if !ok {
+		return nil, r.throwTypeError("%s called on an uninitialized collection", name)
+	}
+	return m, nil
+}
+
+// weakSetOf is mapOf for a WeakSet.
+func (r *Runtime) weakSetOf(this Value, name string) (*weakSet, error) {
+	if !this.IsObject() || this.Object().class != ClassWeakSet {
+		return nil, r.throwTypeError("%s called on an incompatible receiver", name)
+	}
+	s, ok := this.Object().data.(*weakSet)
+	if !ok {
+		return nil, r.throwTypeError("%s called on an uninitialized collection", name)
+	}
+	return s, nil
+}
+
 func (r *Runtime) initMapBuiltins() {
 	r.initMapIteratorProto(r.proto.mapIter, "Map Iterator")
 	r.initMapIteratorProto(r.proto.setIter, "Set Iterator")
@@ -458,7 +406,7 @@ func (r *Runtime) initMapBuiltins() {
 			return Undefined, err
 		}
 		o := newObject(proto, ClassMap)
-		o.data = newJSMap(false)
+		o.data = newJSMap()
 		// An iterable argument seeds the map with its [key, value] pairs,
 		// through the object's own set method: a subclass that overrides it
 		// sees every entry go by.
@@ -476,7 +424,7 @@ func (r *Runtime) initMapBuiltins() {
 		if !isCallable(cb) {
 			return Undefined, rt.throwTypeError("Map.groupBy requires a function")
 		}
-		m := newJSMap(false)
+		m := newJSMap()
 		i := 0
 		err := rt.iterate(arg(args, 0), func(v Value) error {
 			key, err := rt.call(cb, Undefined, []Value{v, Int(i)})
@@ -560,7 +508,7 @@ func (r *Runtime) initMapBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		return Bool(m.delete(rt, arg(args, 0))), nil
+		return Bool(m.delete(arg(args, 0))), nil
 	})
 	r.defMethod(p, "clear", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		m, err := rt.mapOf(this, ClassMap, "Map.prototype.clear")
@@ -625,7 +573,7 @@ func (r *Runtime) initSetBuiltins() {
 			return Undefined, err
 		}
 		o := newObject(proto, ClassSet)
-		o.data = newJSMap(false)
+		o.data = newJSMap()
 		if err := rt.seedFromValues(o, arg(args, 0), "add"); err != nil {
 			return Undefined, err
 		}
@@ -657,7 +605,7 @@ func (r *Runtime) initSetBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		return Bool(m.delete(rt, arg(args, 0))), nil
+		return Bool(m.delete(arg(args, 0))), nil
 	})
 	r.defMethod(p, "clear", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		m, err := rt.mapOf(this, ClassSet, "Set.prototype.clear")
@@ -705,8 +653,7 @@ func (r *Runtime) initSetBuiltins() {
 }
 
 func (r *Runtime) initWeakCollections() {
-	// WeakMap and WeakSet accept only object keys, which is the one behaviour
-	// that distinguishes them here.
+	// WeakMap and WeakSet accept objects and unregistered symbols as keys.
 	wmProto := newObject(r.proto.object, ClassObject)
 	r.newCtor("WeakMap", 0, wmProto, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if err := rt.requireNew("WeakMap"); err != nil {
@@ -717,7 +664,7 @@ func (r *Runtime) initWeakCollections() {
 			return Undefined, err
 		}
 		o := newObject(proto, ClassWeakMap)
-		o.data = newJSMap(true)
+		o.data = newWeakMap()
 		// An iterable of [key, value] pairs populates it, exactly as for Map.
 		if err := rt.seedFromEntries(o, arg(args, 0), "set"); err != nil {
 			return Undefined, err
@@ -725,7 +672,7 @@ func (r *Runtime) initWeakCollections() {
 		return Obj(o), nil
 	})
 	r.defMethod(wmProto, "get", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		m, err := rt.mapOf(this, ClassWeakMap, "WeakMap.prototype.get")
+		m, err := rt.weakMapOf(this, "WeakMap.prototype.get")
 		if err != nil {
 			return Undefined, err
 		}
@@ -733,7 +680,7 @@ func (r *Runtime) initWeakCollections() {
 		return v, nil
 	})
 	r.defMethod(wmProto, "set", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		m, err := rt.mapOf(this, ClassWeakMap, "WeakMap.prototype.set")
+		m, err := rt.weakMapOf(this, "WeakMap.prototype.set")
 		if err != nil {
 			return Undefined, err
 		}
@@ -746,7 +693,7 @@ func (r *Runtime) initWeakCollections() {
 		return this, nil
 	})
 	r.defMethod(wmProto, "getOrInsert", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		m, err := rt.mapOf(this, ClassWeakMap, "WeakMap.prototype.getOrInsert")
+		m, err := rt.weakMapOf(this, "WeakMap.prototype.getOrInsert")
 		if err != nil {
 			return Undefined, err
 		}
@@ -763,7 +710,7 @@ func (r *Runtime) initWeakCollections() {
 		return v, nil
 	})
 	r.defMethod(wmProto, "getOrInsertComputed", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		m, err := rt.mapOf(this, ClassWeakMap, "WeakMap.prototype.getOrInsertComputed")
+		m, err := rt.weakMapOf(this, "WeakMap.prototype.getOrInsertComputed")
 		if err != nil {
 			return Undefined, err
 		}
@@ -781,7 +728,7 @@ func (r *Runtime) initWeakCollections() {
 		return rt.getOrInsertComputed(m, k, cb)
 	})
 	r.defMethod(wmProto, "has", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		m, err := rt.mapOf(this, ClassWeakMap, "WeakMap.prototype.has")
+		m, err := rt.weakMapOf(this, "WeakMap.prototype.has")
 		if err != nil {
 			return Undefined, err
 		}
@@ -789,11 +736,11 @@ func (r *Runtime) initWeakCollections() {
 		return Bool(ok), nil
 	})
 	r.defMethod(wmProto, "delete", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		m, err := rt.mapOf(this, ClassWeakMap, "WeakMap.prototype.delete")
+		m, err := rt.weakMapOf(this, "WeakMap.prototype.delete")
 		if err != nil {
 			return Undefined, err
 		}
-		return Bool(m.delete(rt, arg(args, 0))), nil
+		return Bool(m.delete(arg(args, 0))), nil
 	})
 	r.defToStringTag(wmProto, "WeakMap")
 
@@ -807,14 +754,14 @@ func (r *Runtime) initWeakCollections() {
 			return Undefined, err
 		}
 		o := newObject(proto, ClassWeakSet)
-		o.data = newJSMap(true)
+		o.data = newWeakSet()
 		if err := rt.seedFromValues(o, arg(args, 0), "add"); err != nil {
 			return Undefined, err
 		}
 		return Obj(o), nil
 	})
 	r.defMethod(wsProto, "add", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		m, err := rt.mapOf(this, ClassWeakSet, "WeakSet.prototype.add")
+		s, err := rt.weakSetOf(this, "WeakSet.prototype.add")
 		if err != nil {
 			return Undefined, err
 		}
@@ -823,26 +770,24 @@ func (r *Runtime) initWeakCollections() {
 			return Undefined, rt.throwTypeError(
 				"a WeakSet value must be an object or an unregistered symbol")
 		}
-		// Membership needs only the weak key. Storing v as the entry value would
-		// create a second, strong reference and prevent it from ever being
-		// collected.
-		m.addWeak(rt, v)
+		// The set keeps only a weak reference to v, so being a member keeps
+		// nothing alive.
+		s.add(v)
 		return this, nil
 	})
 	r.defMethod(wsProto, "has", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		m, err := rt.mapOf(this, ClassWeakSet, "WeakSet.prototype.has")
+		s, err := rt.weakSetOf(this, "WeakSet.prototype.has")
 		if err != nil {
 			return Undefined, err
 		}
-		_, ok := m.get(rt, arg(args, 0))
-		return Bool(ok), nil
+		return Bool(s.has(arg(args, 0))), nil
 	})
 	r.defMethod(wsProto, "delete", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		m, err := rt.mapOf(this, ClassWeakSet, "WeakSet.prototype.delete")
+		s, err := rt.weakSetOf(this, "WeakSet.prototype.delete")
 		if err != nil {
 			return Undefined, err
 		}
-		return Bool(m.delete(rt, arg(args, 0))), nil
+		return Bool(s.delete(arg(args, 0))), nil
 	})
 	r.defToStringTag(wsProto, "WeakSet")
 }

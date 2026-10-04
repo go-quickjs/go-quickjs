@@ -179,6 +179,12 @@ type Object struct {
 	// function, *dateData for a Date, and so on. It is nil for an ordinary
 	// object.
 	data any
+
+	// weakMapRefs holds the object's values in the WeakMaps it is a key of,
+	// made when it first becomes one (see weakmap.go). It is last, after
+	// what the interpreter reads, and takes what was the padding of the
+	// object's size class: 88 bytes were allocated as 96.
+	weakMapRefs *weakMapRefs
 }
 
 // maxHoleRun is the longest run of holes an array writes into its dense
@@ -1244,15 +1250,6 @@ type funcExtra struct {
 	boundTarget *Object
 	boundThis   Value
 	boundArgs   []Value
-}
-
-// boundTarget is the function a bound function calls, or nil for one that
-// is not bound.
-func (fd *funcData) boundTarget() *Object {
-	if !fd.bound {
-		return nil
-	}
-	return fd.extra.boundTarget
 }
 
 type ctorKind uint8

@@ -37,7 +37,7 @@ func TestReleasedStacksAreClear(t *testing.T) {
 	}
 	stack := r.stack
 	r.Close()
-	r.ReleaseStack()
+	r.ReleaseClosed()
 	if r.stack != nil {
 		t.Fatal("the stack was not released")
 	}
@@ -56,7 +56,7 @@ func TestReleaseStackWhileRunning(t *testing.T) {
 	r.global.setOwnRaw(r.atoms.intern("closeNow"), Obj(r.newNativeFunc("closeNow", 0,
 		func(rt *Runtime, this Value, args []Value) (Value, error) {
 			rt.Close()
-			rt.ReleaseStack()
+			rt.ReleaseClosed()
 			released = rt.stack == nil
 			return Undefined, nil
 		})), propDefault)

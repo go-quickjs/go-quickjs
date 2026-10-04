@@ -185,12 +185,13 @@ func (m *memoryMeter) walk(r *Runtime) int64 {
 		m.values = append(m.values, reflect.ValueOf(r.frameAt(d)).Elem())
 	}
 	// Everything else the runtime holds: its realms, jobs, modules, atoms.
-	// The host's job queue is written by other goroutines, and holds only
-	// Go functions.
+	// The host's job queue and the queue of WeakMaps that have gone are
+	// written by other goroutines; the one holds only Go functions, and what
+	// the other's maps hold is on their keys, which are counted there.
 	rv := reflect.ValueOf(r).Elem()
 	for i := 0; i < rv.NumField(); i++ {
 		switch rv.Type().Field(i).Name {
-		case "stack", "frames", "cur", "meter", "hostJobs":
+		case "stack", "frames", "cur", "meter", "hostJobs", "weakMaps":
 			continue
 		}
 		m.values = append(m.values, rv.Field(i))
@@ -246,6 +247,20 @@ func (m *memoryMeter) valueSlice(vs []Value, owned bool) {
 	}
 }
 
+// weakMapRefs counts a key's WeakMap values, which the key holds rather than
+// the maps (see weakmap.go). A symbol's are found by reflection.
+func (m *memoryMeter) weakMapRefs(refs *weakMapRefs) {
+	m.total += int64(unsafe.Sizeof(*refs)) + int64(len(refs.more))*(8+valueSize)*3/2
+	if refs.first.value.ref != nil {
+		m.value(refs.first.value)
+	}
+	for _, v := range refs.more {
+		if v.ref != nil {
+			m.value(v)
+		}
+	}
+}
+
 func (m *memoryMeter) addObject(o *Object) {
 	if o != nil && o.mark != m.epoch {
 		o.mark = m.epoch
@@ -275,6 +290,9 @@ func (m *memoryMeter) object(o *Object) {
 		}
 	}
 	m.valueSlice(o.elems, true)
+	if refs := o.weakMapRefs; refs != nil {
+		m.weakMapRefs(refs)
+	}
 	if o.data != nil {
 		m.values = append(m.values, reflect.ValueOf(o.data))
 	}
