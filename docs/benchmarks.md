@@ -92,15 +92,15 @@ its workloads in this comparison.
 
 ## Compared with C QuickJS
 
-Over the V8 suite as a whole, go-quickjs is on par with QuickJS: it takes
-less time and has a slightly higher composite score. Single operations still
-cost more, by about a third on average, as [the micro-benchmarks](#micro-benchmarks)
-below show.
+Over the V8 suite as a whole, go-quickjs is ahead of QuickJS: it takes
+0.69 times QuickJS's time and has an 8% higher composite score. Single
+operations still cost more, by about a sixth on average, as
+[the micro-benchmarks](#micro-benchmarks) below show.
 
 go-quickjs has the same design as QuickJS: a bytecode compiler, a
 stack-based interpreter, NaN-boxed values. Running that design in Go costs
 speed. The same suite ran on an AMD Ryzen 5 3600 under Windows, with Go 1.27.1,
-go-quickjs `608415b` and QuickJS 2026-06-04. The first two columns are milliseconds for the same
+go-quickjs `4e281c1` and QuickJS 2026-06-04. The first two columns are milliseconds for the same
 fixed work (the median of three fresh-process runs, lower is better). The
 scores are the suite's own (higher is better). Richards and DeltaBlue, which
 take only a few milliseconds a run, ran three hundred times in each process,
@@ -108,15 +108,15 @@ scaled to three.
 
 | Workload | go-quickjs | QuickJS | QuickJS faster by | go-quickjs score | QuickJS score |
 |---|---:|---:|---:|---:|---:|
-| Richards | 16.5 ms | 11.1 ms | 1.50x | 641 | 964 |
-| DeltaBlue | 24.8 ms | 23.7 ms | 1.05x | 797 | 837 |
-| Crypto | 306 ms | 323 ms | 0.95x | 1,147 | 1,103 |
-| RayTrace | 152 ms | 144 ms | 1.05x | 1,469 | 1,563 |
-| EarleyBoyer | 467 ms | 400 ms | 1.17x | 1,825 | 2,157 |
-| RegExp | 348 ms | 871 ms | 0.40x | 1,177 | 427 |
-| Splay | 326 ms | 521 ms | 0.63x | 2,614 | 3,309 |
-| NavierStokes | 219 ms | 193 ms | 1.14x | 2,261 | 2,414 |
-| **Total / composite** | **1,859 ms** | **2,487 ms** | **0.75x** | **1,348** | **1,338** |
+| Richards | 15.6 ms | 11.1 ms | 1.40x | 675 | 959 |
+| DeltaBlue | 25.0 ms | 24.1 ms | 1.04x | 800 | 845 |
+| Crypto | 310 ms | 325 ms | 0.95x | 1,154 | 1,106 |
+| RayTrace | 147 ms | 143 ms | 1.03x | 1,550 | 1,573 |
+| EarleyBoyer | 422 ms | 408 ms | 1.04x | 2,034 | 2,173 |
+| RegExp | 282 ms | 864 ms | 0.33x | 1,437 | 432 |
+| Splay | 301 ms | 522 ms | 0.58x | 2,960 | 3,330 |
+| NavierStokes | 221 ms | 191 ms | 1.15x | 2,327 | 2,410 |
+| **Total / composite** | **1,724 ms** | **2,488 ms** | **0.69x** | **1,451** | **1,343** |
 
 The two kinds of figure time different things, which is why they do not
 agree on how far ahead go-quickjs is:
@@ -127,13 +127,12 @@ agree on how far ahead go-quickjs is:
   make most of go-quickjs's lead. The composite score is the geometric mean
   of the workloads' scores, so each counts the same: Richards' gap weighs as
   much as RegExp's lead. By that mean the fixed figures put go-quickjs
-  about 9% ahead, and the scores under 1%.
+  about 13% ahead, and the scores 8%.
 - Splay changes sides. Its fixed time is almost all setup and teardown:
-  building a tree of 8,000 nodes and dropping it. That takes about 305 ms
-  and 5 ms here, against 360 ms and 100 ms in QuickJS, which frees the tree
-  by counting references where Go's collector frees it later. A warm run,
+  building a tree of 8,000 nodes and dropping it, which QuickJS frees by
+  counting references where Go's collector frees it later. A warm run,
   which is what the score times, is splay-tree operations, calls and
-  property reads. A run takes about 2.9 ms here against 2.55 ms. Giving the
+  property reads, and takes about an eighth longer here. Giving the
   collector four times the room (`GOGC=400`) leaves Splay's score as it
   was, so collection is not what the score measures.
 
@@ -147,31 +146,33 @@ and Richards and DeltaBlue by more, up to a tenth. To reproduce them, run
 QuickJS's own micro-benchmarks, [`tests/microbench.js`](https://github.com/bellard/quickjs/blob/master/tests/microbench.js),
 time one operation each, in nanoseconds. Each test was given the work QuickJS
 takes about 150 ms for, both engines ran that same work in fresh processes at
-go-quickjs `9746906`, and the figure is the faster of two runs. Over the 72
-tests go-quickjs takes 1.37 times QuickJS's time by the geometric mean: it is
-slower on 54, faster on 15, and level on the rest.
+go-quickjs `4e281c1`, and the figure is the faster of two runs. Over the 72
+tests go-quickjs takes 1.17 times QuickJS's time by the geometric mean: it is
+slower on 49, faster on 20, and level on the rest. The table has the largest
+gaps either way.
 
 | Test | go-quickjs | QuickJS | go-quickjs / QuickJS |
 |---|---:|---:|---:|
-| `global_write_strict` | 26.0 ns | 7.7 ns | 3.38x |
-| `bigint32_arith` | 70.4 ns | 23.6 ns | 2.99x |
-| `array_prop_create` | 44.1 ns | 14.9 ns | 2.96x |
-| `array_update` | 25.1 ns | 8.7 ns | 2.88x |
-| `array_length_read` | 23.9 ns | 8.6 ns | 2.77x |
-| `weak_map_set` | 252 ns | 92.8 ns | 2.72x |
-| `bigint64_arith` | 104 ns | 39.1 ns | 2.66x |
-| `prop_update` | 30.2 ns | 11.9 ns | 2.54x |
-| `regexp_utf16` | 684 ns | 273 ns | 2.50x |
-| `regexp_ascii` | 581 ns | 266 ns | 2.19x |
-| `float_toFixed` | 277 ns | 163 ns | 1.70x |
-| `map_set_bigint` | 312 ns | 216 ns | 1.45x |
-| `func_call` | 45.1 ns | 31.2 ns | 1.44x |
-| `string_build1` | 74.2 ns | 93.8 ns | 0.79x |
-| `arguments_read` | 123 ns | 166 ns | 0.74x |
+| `weak_map_set` | 301 ns | 92.8 ns | 3.24x |
+| `array_prop_create` | 38.6 ns | 15.3 ns | 2.52x |
+| `global_read` | 13.1 ns | 5.6 ns | 2.33x |
+| `weak_map_delete` | 579 ns | 250 ns | 2.32x |
+| `bigint256_arith` | 259 ns | 125 ns | 2.07x |
+| `bigint32_arith` | 45.0 ns | 23.4 ns | 1.92x |
+| `bigint64_arith` | 74.7 ns | 39.8 ns | 1.88x |
+| `regexp_utf16` | 500 ns | 267 ns | 1.88x |
+| `array_update` | 16.0 ns | 8.6 ns | 1.85x |
+| `typed_array_read` | 18.2 ns | 9.9 ns | 1.84x |
+| `array_read` | 11.9 ns | 6.7 ns | 1.80x |
+| `func_call` | 53.5 ns | 30.9 ns | 1.73x |
+| `float_toFixed` | 264 ns | 164 ns | 1.61x |
+| `string_build1` | 66.9 ns | 96.7 ns | 0.69x |
 | `array_for_of` | 31.1 ns | 46.1 ns | 0.68x |
-| `prop_clone` | 44.6 ns | 78.2 ns | 0.57x |
-| `string_build2c` | 73.7 ns | 162 ns | 0.45x |
-| `array_slice` | 9.3 ns | 27.2 ns | 0.34x |
+| `array_pop` | 69.3 ns | 111 ns | 0.62x |
+| `prop_clone` | 43.1 ns | 78.6 ns | 0.55x |
+| `string_build2c` | 66.4 ns | 147 ns | 0.45x |
+| `string_to_int` | 46.7 ns | 113 ns | 0.42x |
+| `array_slice` | 9.2 ns | 27.3 ns | 0.33x |
 
 Some of these tests depend on where the linker places the code more than on
 the code, by more than eight placements can average out: those vary where
@@ -189,11 +190,15 @@ engine.
 The BigInt tests were the largest gaps, 9.65 and 5.56 times QuickJS's time
 at `608415b`, where every BigInt was an allocation. A BigInt in the int64
 range is now held in the value itself (`9746906`), as QuickJS holds one that
-fits in a word. What is left of their gap is mostly the interpreter: their
-function makes calls before its loop, so it runs as bytecode rather than as
-a tree, and the same loop over numbers takes three times QuickJS's time
-there too. `bigint64_arith`'s sum also outgrows 64 bits halfway through each
-run, after which both engines allocate. Most of the others are the cost of
+fits in a word, and their loops run as trees since the tree tier stopped
+leaving a function that makes calls to the interpreter (`3df6232`).
+`bigint64_arith`'s sum also outgrows 64 bits halfway through each run, after
+which both engines allocate.
+
+The weak collections are the largest gaps now. A WeakMap holds each value on
+its key rather than in a table of its own (`2bc1620`), so that a value which
+refers to its key does not keep the key alive, as the specification
+requires; adding an entry costs about a quarter more for it. Most of the others are the cost of
 each step, which the list below explains. The suite as a whole does better than the operations it is
 made of because of the places go-quickjs leads: strings and regular
 expressions over whole texts, which Go's runtime and the engine's matcher do
@@ -212,8 +217,8 @@ What the gap is made of:
 
   An instruction costs about twice what it costs QuickJS. Fusing common
   instruction sequences into single instructions (`a[i]`, `a[++i]`,
-  `x & 0xff`, `local * local`) reduces how many are dispatched. A function
-  with few calls runs instead as trees of Go closures, a node for every few
+  `x & 0xff`, `local * local`) reduces how many are dispatched. Nearly
+  every function runs instead as trees of Go closures, a node for every few
   instructions with no operand stack between them, and with locals and
   constants read in place (see the [design notes](design.md)). That is what
   closed the gap on Crypto and most of it on NavierStokes, which do little but
@@ -232,7 +237,7 @@ What the gap is made of:
     `output` and `execute` and RayTrace's `dot` do. It may call another such
     function, `new` a constructor of the first kind, as EarleyBoyer's
     `sc_cons` does, and push onto or pop from an array, as DeltaBlue's
-    collections do. Called that way, an empty function costs about 45 ns,
+    collections do. Called that way, an empty function costs about 50 ns,
     against about 31 ns in QuickJS (`func_call`).
 - **Property access.** Objects built the same way share a shape, as in
   QuickJS and V8, and each property read and write, each getter and
