@@ -34,7 +34,7 @@ unless an item says otherwise.
 
 | ID | Item | Targets | Risk | Status |
 |---|---|---|---|---|
-| A1 | `dup` without a spill for property updates | `prop_update` 2.6x, `array_update` 2.8x | Low | Open |
+| A1 | `dup` without a spill for property updates | `prop_update` 2.6x, `array_update` 2.8x | Low | Done |
 | A2 | Strict global writes without the separate check | `global_write_strict` 3.4x | Low | Open |
 | A3 | A cheaper call path, outside the interpreter's switch | `func_call` 1.35x, DeltaBlue, Richards | Low | Open |
 | A4 | Cheaper calls from trees, then no call-density gate | EarleyBoyer, RayTrace, Richards | High | Open |
@@ -68,6 +68,20 @@ the frameless evaluator.
 - Expected: `prop_update` about 30 to 15 ns, `array_update` about 25 to 12
   ns; `this.n++` methods frameless; Richards's `holdCount++`, `queueCount++`
   and `count--`.
+
+**Done.** The compiler reads a local, an upvalue or `this` again where an
+update copied it, and a number-literal key with it, which needs no
+conversion; `++` and `--` convert only the old value a postfix form yields;
+a property's update for effect leaves nothing to drop. The tree tier reads
+a plain read twice on `dup` and `dup2`, and stores `a[0] op= v` directly.
+`insert2; set_prop; drop` was left: the compiler no longer emits it for an
+update whose value is unused.
+
+- `prop_update` 30.0 to 16.1 ns (-46%), `array_update` 25.7 to 16.7 ns
+  (-35%); `this.n++` and `o.count--` methods are frameless.
+- V8 suite over eight placements: NavierStokes -6.4% (and -5.5% over twenty
+  rounds, faster at every placement), Richards -2.2%, EarleyBoyer -1.1%,
+  the rest within 1%; total -0.4%. Crypto +0.6% in the long check.
 
 ### A2. Strict global writes without the separate check
 

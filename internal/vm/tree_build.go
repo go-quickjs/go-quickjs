@@ -447,6 +447,13 @@ func thisEntry() tentry {
 	return tentry{slot: -1, this: true}
 }
 
+// leaf reports whether the entry is a read a node makes in place -- a local,
+// an upvalue, this, a number or a literal -- which runs no code and which
+// nothing between two adjacent reads of it can change.
+func (e tentry) leaf() bool {
+	return e.v == nil && e.slot < 0 && (e.local || e.upvalue || e.this || e.number || e.literal)
+}
+
 // numberEntry is the number n.
 func numberEntry(n Value) tentry {
 	return tentry{slot: -1, number: true, n: n}
@@ -585,6 +592,13 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			return v
 		})
 	case bytecode.OpDup:
+		if e := b.stack[len(b.stack)-1]; e.leaf() {
+			// A read of what cannot change between two adjacent reads is
+			// read twice: whatever takes the copy reads it straight after
+			// the original, in stack order, before anything can run.
+			b.pushEntry(e)
+			break
+		}
 		if !b.spill() {
 			return 0, false
 		}
@@ -888,6 +902,13 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		k, v := in.A, b.pop().tree()
 		b.push(func(c *tctx) Value { x := v(c); c.locals[k] = x; return x })
 	case bytecode.OpDup2, bytecode.OpSwap, bytecode.OpRot3, bytecode.OpRot4:
+		if n := len(b.stack); in.Op == bytecode.OpDup2 && b.stack[n-2].leaf() && b.stack[n-1].leaf() {
+			// As dup's: the copies are read straight after the originals.
+			x, y := b.stack[n-2], b.stack[n-1]
+			b.pushEntry(x)
+			b.pushEntry(y)
+			break
+		}
 		if !b.spill() {
 			return 0, false
 		}
@@ -1798,6 +1819,15 @@ func setIndexStmt(obj, key tentry, val tval, pc int, strict bool) tstmt {
 	case obj.local && key.local:
 		return func(c *tctx) {
 			o, k := c.locals[o], c.locals[k]
+			if v := val(c); !setElem(o, k, v) {
+				c.setIndexSlow(o, k, v, pc, strict)
+			}
+		}
+	case obj.local && key.number:
+		// a[0] op= v, which the compiler reads twice rather than copying.
+		k := key.n
+		return func(c *tctx) {
+			o := c.locals[o]
 			if v := val(c); !setElem(o, k, v) {
 				c.setIndexSlow(o, k, v, pc, strict)
 			}

@@ -42,6 +42,34 @@ var treeScripts = []string{
 	   return r.join() } function g(b) { for (var i = 0; i < 1; i++) b = b + 1; return b }
 	 f() + " " + (function () { try { return g(1n) } catch (e) { return e.constructor.name } })()`,
 	`function f() { var r = []; var a = [1, 2, 3], i = 0, s = "1"; for (var k = 0; k < 3; k++) { r.push(a[i++], a[++i - 1], a[s++]) } return r.join() } f()`,
+	// Updates of a property, which read the object twice rather than copy
+	// it where it is a local, an upvalue or this: the order of the getter,
+	// valueOf and the setter; a getter that reassigns the very variable the
+	// update reads, which the write must not see; a key's toString once; a
+	// constant key read twice; a null base; an object that is not a plain
+	// read, which is copied; values used and unused; BigInts and Symbols.
+	`function f() { var log = [], o = {}, v = { valueOf() { log.push("v"); return 1 } };
+	   Object.defineProperty(o, "x", { get() { log.push("g"); return v }, set(n) { log.push("s" + n) } });
+	   for (var i = 0; i < 2; i++) { o.x += 1; o.x++; ++o.x; log.push(o.x++ + "|" + ++o.x) }
+	   return log.join() } f()`,
+	`function f() { var r = [], a = { n: 1 }, b = { n: 10 }, o = a;
+	   Object.defineProperty(a, "m", { get() { o = b; return 5 }, set(v) { r.push("a.m=" + v) } });
+	   for (var i = 0; i < 2; i++) { o = a; o.m += 1; r.push(o === b); o = a; o.m++; o = a; o[0] = 1; o[0] += o === a ? 1 : 2 }
+	   return r.join() + " " + a.n + " " + b.n + " " + a[0] } f()`,
+	`function f() { var r = [], k = { toString() { r.push("k"); return "p" } }, o = { p: 1 }, t = [1, 2, 3];
+	   for (var i = 0; i < 2; i++) { o[k] += 1; o[k]++; t[0] += 10; t[1]++; t[2] -= o[k]; r.push(o.p, t.join("/")) }
+	   return r.join() } f()`,
+	`function f(c) { var a = { x: 1 }, b = { x: 100 };
+	   for (var i = 0; i < 2; i++) { (c ? a : b).x += 1; (c ? a : b).x++ } return a.x + " " + b.x }
+	 function g(t) { for (var i = 0; i < 2; i++) t[0] += 1 } function h(t) { for (var i = 0; i < 2; i++) t.x++ }
+	 function errs() { var r = []; for (var t of [null, undefined]) { try { g(t) } catch (e) { r.push(e.message, e.stack) }
+	   try { h(t) } catch (e) { r.push(e.message, e.stack) } } return r.join() }
+	 f(true) + " " + f(false) + " " + errs()`,
+	`function C() { this.n = 0; this.big = 1n } C.prototype.bump = function () { this.n++; this.big += 2n; return this };
+	 C.prototype.down = function (o) { o.count--; o.k -= 3 };
+	 function f() { var c = new C(), o = { count: 5, k: "9" }; for (var i = 0; i < 3; i++) { c.bump(); c.down(o) }
+	   var s = { x: Symbol() }, e1, e2; try { s.x++ } catch (e) { e1 = e.constructor.name } try { ++s.x } catch (e) { e2 = e.constructor.name }
+	   return [c.n, c.big, o.count, o.k, e1, e2].join() } f()`,
 	// Array reads and writes: holes, a getter and a setter up the chain,
 	// bounds, odd keys, typed arrays, frozen arrays.
 	`function f() { Object.defineProperty(Array.prototype, 3, { get() { return "proto3" }, set(v) { log.push("set" + v) }, configurable: true });

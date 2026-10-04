@@ -36,7 +36,16 @@ func (c *compiler) compileExprForEffect(e ast.Expr) {
 			// neither is wanted here. The prefix form does not make the copy.
 			prefix := *n
 			prefix.Prefix = true
-			e = &prefix
+			e, n = &prefix, &prefix
+		}
+		if m, ok := n.Operand.(*ast.Member); ok {
+			if _, private := m.Property.(*ast.PrivateName); !private {
+				if _, super := m.Object.(*ast.Super); !super {
+					// A property's update stores and leaves nothing behind.
+					c.compileUpdateKeep(n, false)
+					return
+				}
+			}
 		}
 
 	case *ast.Assign:
@@ -850,7 +859,12 @@ func (c *compiler) updatableLocal(n *ast.Update) (*localVar, bool) {
 	return l, true
 }
 
-func (c *compiler) compileUpdate(n *ast.Update) {
+func (c *compiler) compileUpdate(n *ast.Update) { c.compileUpdateKeep(n, true) }
+
+// compileUpdateKeep compiles ++ or --, leaving its value when keep is set.
+// Without it, a property's update leaves nothing, where the other forms still
+// leave a value for the caller to drop.
+func (c *compiler) compileUpdateKeep(n *ast.Update, keep bool) {
 	if call, ok := n.Operand.(*ast.Call); ok {
 		c.compileCallTarget(call, n.Start)
 		return
@@ -883,12 +897,13 @@ func (c *compiler) compileUpdate(n *ast.Update) {
 		} else {
 			c.compileIdentRead(target)
 		}
-		// The operand is coerced first, so that `x = "1"; x++` leaves a number
-		// behind and the postfix form yields the coerced value rather than the
-		// original string. To a numeric, not a number: a BigInt increments as
-		// a BigInt.
-		c.emit(bytecode.OpToNumeric, 0, 0)
+		// The postfix form yields the operand coerced, so that `x = "1"; x++`
+		// leaves a number behind rather than the original string: to a
+		// numeric, not a number, since a BigInt increments as a BigInt. The
+		// prefix form yields the increment's result, and the increment
+		// converts its operand itself.
 		if !n.Prefix {
+			c.emit(bytecode.OpToNumeric, 0, 0)
 			if withRef {
 				c.emit(bytecode.OpInsert2, 0, 0)
 			} else {
@@ -924,10 +939,11 @@ func (c *compiler) compileUpdate(n *ast.Update) {
 			} else {
 				c.compileSuperMemberGet(target)
 			}
-			c.emit(bytecode.OpToNumeric, 0, 0)
-			// Postfix yields the old value, so it is copied down before the
-			// increment; prefix yields the new one, so the copy comes after.
+			// Postfix yields the old value, converted, so it is copied down
+			// before the increment; prefix yields the new one, so the copy
+			// comes after.
 			if !n.Prefix {
+				c.emit(bytecode.OpToNumeric, 0, 0)
 				c.emit(keep, 0, 0)
 				c.emitAt(n.Start, op, 0, 0)
 			} else {
@@ -949,8 +965,8 @@ func (c *compiler) compileUpdate(n *ast.Update) {
 			name, ref := c.privateName(pn, target.Start)
 			c.emit(bytecode.OpDup, 0, 0)
 			c.emit(bytecode.OpGetPrivate, name, ref)
-			c.emit(bytecode.OpToNumeric, 0, 0)
 			if !n.Prefix {
+				c.emit(bytecode.OpToNumeric, 0, 0)
 				c.emit(bytecode.OpInsert2, 0, 0)
 				c.emitAt(n.Start, op, 0, 0)
 			} else {
@@ -961,17 +977,19 @@ func (c *compiler) compileUpdate(n *ast.Update) {
 			return
 		}
 		if target.Computed {
-			c.compileExpr(target.Property)
-			c.emit(bytecode.OpToPropertyKeyOfBase, 0, 0)
-			c.emit(bytecode.OpDup2, 0, 0)
-			c.emit(bytecode.OpGetIndex, 0, 0)
-			c.emit(bytecode.OpToNumeric, 0, 0)
-			// Postfix yields the old value, so it is copied down before the
-			// increment; prefix yields the new one, so the copy comes after.
-			if !n.Prefix {
+			c.compileIndexForUpdate(target)
+			c.emitAt(target.Start, bytecode.OpGetIndex, 0, 0)
+			// Postfix yields the old value, converted, so it is copied down
+			// before the increment; prefix yields the new one, so the copy
+			// comes after; for effect there is no copy.
+			switch {
+			case !keep:
+				c.emitAt(n.Start, op, 0, 0)
+			case !n.Prefix:
+				c.emit(bytecode.OpToNumeric, 0, 0)
 				c.emit(bytecode.OpInsert3, 0, 0)
 				c.emitAt(n.Start, op, 0, 0)
-			} else {
+			default:
 				c.emitAt(n.Start, op, 0, 0)
 				c.emit(bytecode.OpInsert3, 0, 0)
 			}
@@ -979,13 +997,17 @@ func (c *compiler) compileUpdate(n *ast.Update) {
 			return
 		}
 		name := c.nameIdx(propKeyName(target.Property))
-		c.emit(bytecode.OpDup, 0, 0)
+		c.dupObject()
 		c.emit(bytecode.OpGetProp, name, 0)
-		c.emit(bytecode.OpToNumeric, 0, 0)
-		if !n.Prefix {
+		switch {
+		case !keep:
+			// Only the store is wanted, and the increment converts.
+			c.emitAt(n.Start, op, 0, 0)
+		case !n.Prefix:
+			c.emit(bytecode.OpToNumeric, 0, 0)
 			c.emit(bytecode.OpInsert2, 0, 0)
 			c.emitAt(n.Start, op, 0, 0)
-		} else {
+		default:
 			c.emitAt(n.Start, op, 0, 0)
 			c.emit(bytecode.OpInsert2, 0, 0)
 		}
@@ -994,6 +1016,74 @@ func (c *compiler) compileUpdate(n *ast.Update) {
 	default:
 		c.errorf(n.Start, "invalid update target")
 	}
+}
+
+// compileIndexForUpdate compiles the key of `obj[key] op= v` or `obj[key]++`,
+// with the object already on the stack, and leaves the object and the key
+// twice: once for the read, on top, and once for the write beneath it.
+//
+// A key is converted to a property key once, before the read, so that an
+// object's toString runs once -- and the object is asked first whether it is
+// null or undefined. A number literal needs no converting, and get_index
+// asks the same question with the same message at the same place, so its
+// key is pushed again rather than copied, and the object read again where
+// it can be.
+func (c *compiler) compileIndexForUpdate(m *ast.Member) {
+	if num, ok := m.Property.(*ast.NumberLit); ok {
+		at := len(c.fn.Code)
+		c.compileExpr(num)
+		key := c.fn.Code[len(c.fn.Code)-1]
+		if len(c.fn.Code) == at+1 && !c.isTarget(at) && c.rereadable(at-1) {
+			obj := c.fn.Code[at-1]
+			if obj.Op == bytecode.OpGetLocal2 {
+				obj = bytecode.Instr{Op: bytecode.OpGetLocal, A: obj.B}
+			}
+			c.emit(obj.Op, obj.A, 0)
+			c.emit(key.Op, key.A, key.B)
+			return
+		}
+		c.emit(bytecode.OpDup2, 0, 0)
+		return
+	}
+	c.compileExpr(m.Property)
+	c.emit(bytecode.OpToPropertyKeyOfBase, 0, 0)
+	c.emit(bytecode.OpDup2, 0, 0)
+}
+
+// rereadable reports whether the instruction at pc reads a local, an upvalue
+// or this, which cannot throw or run code, so that reading it again where it
+// would be copied gives the same value.
+func (c *compiler) rereadable(pc int) bool {
+	if pc < 0 {
+		return false
+	}
+	switch c.fn.Code[pc].Op {
+	case bytecode.OpGetLocal, bytecode.OpGetLocal2, bytecode.OpGetUpvalue, bytecode.OpPushThis:
+		return true
+	}
+	return false
+}
+
+// dupObject copies the object of a property's update, for the read, leaving
+// the original beneath it for the write.
+//
+// An object that was a plain read of a local, an upvalue or this, which
+// cannot throw or run code, is read again rather than copied: the two reads
+// are adjacent, so they see the same value, and two reads are what the
+// tiers fold into the property access -- `o.x += 1` then compiles as
+// `o.x = o.x + 1` does -- where a copy makes the tree tier spill both to
+// the stack. Not where something jumps to just after the read, which arrives
+// there without having made it.
+func (c *compiler) dupObject() {
+	if n := len(c.fn.Code); !c.isTarget(n) && c.rereadable(n-1) {
+		last := c.fn.Code[n-1]
+		if last.Op == bytecode.OpGetLocal2 {
+			last = bytecode.Instr{Op: bytecode.OpGetLocal, A: last.B}
+		}
+		c.emit(last.Op, last.A, 0)
+		return
+	}
+	c.emit(bytecode.OpDup, 0, 0)
 }
 
 func (c *compiler) compileLogical(n *ast.Logical) {
@@ -1698,9 +1788,7 @@ func (c *compiler) compileMemberUpdate(m *ast.Member, op string, emitValue func(
 
 	c.compileExpr(m.Object)
 	if m.Computed {
-		c.compileExpr(m.Property)
-		c.emit(bytecode.OpToPropertyKeyOfBase, 0, 0)
-		c.emit(bytecode.OpDup2, 0, 0)
+		c.compileIndexForUpdate(m)
 		c.emitAt(m.Start, bytecode.OpGetIndex, 0, 0)
 		c.finishUpdate(op, emitValue, pos, 2, func() {
 			if keep {
@@ -1711,7 +1799,7 @@ func (c *compiler) compileMemberUpdate(m *ast.Member, op string, emitValue func(
 		return
 	}
 	name := c.nameIdx(propKeyName(m.Property))
-	c.emit(bytecode.OpDup, 0, 0)
+	c.dupObject()
 	c.emitAt(m.Start, bytecode.OpGetProp, name, 0)
 	c.finishUpdate(op, emitValue, pos, 1, func() {
 		if keep {
