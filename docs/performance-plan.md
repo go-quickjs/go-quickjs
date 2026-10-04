@@ -249,7 +249,7 @@ a project for a few of Splay's allocations.
 | B5 | No new layout on every `delete` | `prop_delete` 2.1x | High | Done |
 | B6 | RegExp per-call costs | `regexp_ascii` 2.2x, `regexp_utf16` 2.6x, V8 RegExp | Low | Done |
 | B7 | Number text without intermediate strings | `float_toExponential` 2.1x, `float_toPrecision` 1.9x | Low | Done |
-| B8 | Strings to numbers, and numbers to cached strings | `string_to_int` 1.28x, `int_to_string` 1.6x | Low | Open |
+| B8 | Strings to numbers, and numbers to cached strings | `string_to_int` 1.28x, `int_to_string` 1.6x | Low | Done |
 | B9 | Date strings without `fmt.Sprintf` (go-intl) | `date_parse` 2.1x | Low | Open |
 | B10 | Compiler: smaller code for common shapes | interpreted code (RegExp's runBlocks, EarleyBoyer) | Medium | Open |
 
@@ -339,6 +339,10 @@ a project for a few of Splay's allocations.
 - **B8.** `ToNumber` of `"12345"` trims by Unicode and calls `ParseFloat`;
   plain digits can be read directly. `n + ""` builds a new string even for
   the integers below 1024 a runtime keeps.
+
+  **Done:** up to 15 digits, signed or not, are read before anything is
+  trimmed; `n + ""` is the number's string, the runtime's below 1024.
+  `string_to_int` -68%, `int_to_string` -29%.
 - **B9.** go-intl formats every date string with nested `fmt.Sprintf`, and
   `Date.parse` copies its argument to UTF-16; both are changed in go-intl,
   and taken with `go get`.

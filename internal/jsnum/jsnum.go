@@ -374,6 +374,9 @@ func parsePow2(s string, k int) float64 {
 // ToNumber operation: the whole string must be numeric, and an empty or
 // all-whitespace string is 0.
 func ToNumber(s string) float64 {
+	if f, ok := plainInteger(s); ok {
+		return f
+	}
 	t := strings.Trim(s, whitespace)
 	if t == "" {
 		return 0
@@ -408,6 +411,32 @@ func ToNumber(s string) float64 {
 		return math.NaN()
 	}
 	return f
+}
+
+// plainInteger reads s where it is nothing but up to 15 decimal digits,
+// after a minus sign or not -- what most strings converted to numbers are --
+// whose value a double holds exactly. -0 is -0.
+func plainInteger(s string) (float64, bool) {
+	t := s
+	if len(t) > 0 && t[0] == '-' {
+		t = t[1:]
+	}
+	if len(t) == 0 || len(t) > 15 {
+		return 0, false
+	}
+	var n int64
+	for i := 0; i < len(t); i++ {
+		c := t[i] - '0'
+		if c > 9 {
+			return 0, false
+		}
+		n = n*10 + int64(c)
+	}
+	f := float64(n)
+	if len(t) != len(s) {
+		f = -f
+	}
+	return f, true
 }
 
 // parseRadixExact converts a whole string of radix digits, returning NaN if any

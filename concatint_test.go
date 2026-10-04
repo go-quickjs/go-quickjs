@@ -14,6 +14,9 @@ func TestConcatInteger(t *testing.T) {
 			"ab12345,12345ab,x-42,-42x,z0,7,1024"},
 		{`["" + (2 ** 53 - 1), "" + -(2 ** 53 - 1), "" + 2 ** 53, "" + 1e21, "" + 0.5, "" + NaN, "" + -Infinity].join()`,
 			"9007199254740991,-9007199254740991,9007199254740992,1e+21,0.5,NaN,-Infinity"},
+		// Joined to the empty string, the number's own string is the result.
+		{`["" + -0, -5 + "", "" + 1023, 1023 + "", "" + 2 ** 52, ("" + 12) === "12"].join()`,
+			"0,-5,1023,1023,4503599627370496,true"},
 		{`var long = "a".repeat(62); [(long + 5).length, (long + 123).length, (5 + long).slice(0, 3)].join()`, "63,65,5aa"},
 		{`var s = "é"; [(s + 10).length, 10 + s, (s + 10) === "é10"].join()`, "3,10é,true"},
 		{`[(1 + "\uD83D") + "\uDE00" === "1😀", "\uD83D" + ("\uDE00" + 1) === "😀1",

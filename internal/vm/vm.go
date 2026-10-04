@@ -3962,6 +3962,11 @@ func (r *Runtime) concatInt(s *String, f float64, numFirst bool) (*String, bool)
 	if float64(i) != f || f <= -1<<53 || f >= 1<<53 || s.left != nil || r.meter != nil {
 		return nil, false
 	}
+	if s.length == 0 {
+		// n + "" is the number's string, which below 1024 the runtime
+		// keeps.
+		return r.numberString(f), true
+	}
 	var buf [24]byte
 	d := strconv.AppendInt(buf[:0], i, 10)
 	n := len(s.s) + len(d)

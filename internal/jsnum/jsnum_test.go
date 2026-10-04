@@ -132,6 +132,14 @@ func TestToNumber(t *testing.T) {
 		{"1e3", 1000},
 		{".5", 0.5},
 		{"5.", 5},
+		// Plain digits are read directly, up to the 15 a double holds
+		// whatever they are; past that ParseFloat rounds them.
+		{"007", 7},
+		{"-12", -12},
+		{"+12", 12},
+		{"999999999999999", 999999999999999},
+		{"9007199254740993", 9007199254740992},
+		{"-12345678901234567890", -12345678901234567890},
 	}
 	for _, tt := range tests {
 		if got := ToNumber(tt.in); got != tt.want {
@@ -139,7 +147,10 @@ func TestToNumber(t *testing.T) {
 		}
 	}
 	// Strings JavaScript rejects, where Go's strconv would not.
-	for _, s := range []string{"abc", "42abc", "1_000", "0x", "inf", "nan", "1p3", "--1", "0x1p2"} {
+	if got := ToNumber("-0"); got != 0 || !math.Signbit(got) {
+		t.Errorf("ToNumber(%q) = %v, want -0", "-0", got)
+	}
+	for _, s := range []string{"abc", "42abc", "1_000", "0x", "inf", "nan", "1p3", "--1", "0x1p2", "-", "1-", "-1a", "12 3"} {
 		if got := ToNumber(s); !math.IsNaN(got) {
 			t.Errorf("ToNumber(%q) = %v, want NaN", s, got)
 		}
