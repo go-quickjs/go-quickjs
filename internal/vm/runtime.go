@@ -225,6 +225,10 @@ type Runtime struct {
 	evaluator     Evaluator
 	compileModule func(specifier, source string) (*Module, error)
 
+	// dateUnits is where Date.parse widens a short ASCII string; see
+	// parseDate.
+	dateUnits []uint16
+
 	// pendingTail is the call a frame ended in, for run to make in its place.
 	pendingTail tailCall
 	// treeTail says a tree ended in such a call, which runTree then leaves

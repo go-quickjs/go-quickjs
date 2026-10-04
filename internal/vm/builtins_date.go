@@ -68,6 +68,24 @@ func (r *Runtime) dateEnv() *date.Environment {
 // newDate is a Date object's date made with a time value, clipped.
 func (r *Runtime) newDate(t float64) *date.Date { return r.dateEnv().NewDate(t) }
 
+// parseDate is Date.parse of s. The parser reads code units, and a short
+// ASCII string -- as a date string almost always is -- is widened into the
+// runtime's buffer for it, which the parser does not keep, rather than given
+// a copy of its own that the string would then keep. A string that has its
+// units already is read in them.
+func (r *Runtime) parseDate(s *String) float64 {
+	if !s.ascii || s.length > 64 || s.u16 != nil {
+		return r.dateEnv().Parse(s.codeUnits())
+	}
+	s.flatten()
+	u := r.dateUnits[:0]
+	for i := 0; i < len(s.s); i++ {
+		u = append(u, uint16(s.s[i]))
+	}
+	r.dateUnits = u
+	return r.dateEnv().Parse(u)
+}
+
 // now returns the current time value, from the host's clock if one was
 // supplied.
 func (r *Runtime) now() float64 {
@@ -111,7 +129,7 @@ func (r *Runtime) initDateBuiltins() {
 				return Undefined, err
 			}
 			if prim.IsString() {
-				o.data = rt.newDate(rt.dateEnv().Parse(prim.String().codeUnits()))
+				o.data = rt.newDate(rt.parseDate(prim.String()))
 				break
 			}
 			n, err := rt.toNumber(prim)
@@ -139,7 +157,7 @@ func (r *Runtime) initDateBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		return Float(rt.dateEnv().Parse(s.codeUnits())), nil
+		return Float(rt.parseDate(s)), nil
 	})
 	r.defMethod(ctor, "UTC", 7, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if len(args) == 0 {

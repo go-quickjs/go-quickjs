@@ -3882,6 +3882,13 @@ func TestDateParsing(t *testing.T) {
 		{`var d = new Date(0); String(Date.parse(d.toUTCString()))`, "0"},
 		{`var d = new Date(1234567890123); String(Date.parse(d.toISOString()))`,
 			"1234567890123"},
+		// A short ASCII string is read through the runtime's buffer, a long
+		// one or one with other letters in its own units, one after another.
+		{`[Date.parse("Thu, 01 Jan 1970 00:00:01 GMT"),
+		   Date.parse("Thu, 01 Jan 1970 00:00:02 GMT (" + "x".repeat(80) + ")"),
+		   Date.parse("Thu, 01 Jan 1970 00:00:03 GMT (Zeit é)"),
+		   Date.parse("1970-01-01T00:00:04Z"), Date.parse("nonsense")].join()`,
+			"1000,2000,3000,4000,NaN"},
 
 		// The extreme dates use a six-digit year, which is not a shape any
 		// ordinary layout describes.
