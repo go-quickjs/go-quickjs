@@ -739,7 +739,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			if in.B != 0 {
 				flags |= propWritable
 			}
-			r.globalLex.setOwnRaw(name, uninitialized, flags)
+			r.declareGlobalLex(name, flags)
 		case bytecode.OpInitGlobalLex:
 			sp--
 			r.globalLex.setOwnRaw(cl.names[in.A], stack[sp],
@@ -3003,7 +3003,7 @@ func (r *Runtime) moduleLexProp(env *Object, name Atom) *Property {
 	if p := env.getOwn(name); p != nil {
 		return p
 	}
-	if len(r.globalLex.props) == 0 {
+	if !r.lexShadows(name) {
 		return nil
 	}
 	return r.globalLex.getOwn(name)
@@ -3034,11 +3034,29 @@ func evalVarProp(o *Object, name Atom) *Property {
 	return nil
 }
 
+// declareGlobalLex adds a script-level lexical binding of name, in its dead
+// zone, and records that globalLex has one of the name.
+func (r *Runtime) declareGlobalLex(name Atom, flags propFlags) {
+	r.globalLex.setOwnRaw(name, uninitialized, flags)
+	i := int(uint32(name) >> 6)
+	for len(r.lexNames) <= i {
+		r.lexNames = append(r.lexNames, 0)
+	}
+	r.lexNames[i] |= 1 << (uint32(name) & 63)
+}
+
+// lexShadows reports whether globalLex has a binding of name, which a
+// global of the name is then behind.
+func (r *Runtime) lexShadows(name Atom) bool {
+	i := uint(uint32(name) >> 6)
+	return i < uint(len(r.lexNames)) && r.lexNames[i]&(1<<(uint32(name)&63)) != 0
+}
+
 // globalLexProp finds a script-level lexical binding, which sits in front of
 // the global object: `let x = 1` at a script's top level is reached by name but
 // is not a property of globalThis.
 func (r *Runtime) globalLexProp(env *Object, name Atom) *Property {
-	if !r.isGlobalScope(env) || len(r.globalLex.props) == 0 {
+	if !r.isGlobalScope(env) || !r.lexShadows(name) {
 		return nil
 	}
 	return r.globalLex.getOwn(name)

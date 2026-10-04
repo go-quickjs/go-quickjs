@@ -307,6 +307,10 @@ type Realm struct {
 	// visible to the next one and to eval, so they need somewhere of their own
 	// to live. A binding still in its dead zone is stored uninitialized.
 	globalLex *Object
+	// lexNames has a bit set for each name globalLex has a binding of, by
+	// atom: whether a global's name is shadowed by one is asked at every
+	// global read and write, and a binding, once declared, stays.
+	lexNames []uint64
 	// intrinsics holds the prototypes and constructors that the specification
 	// requires to exist before any script runs.
 	proto         intrinsics

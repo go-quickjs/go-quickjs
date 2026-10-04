@@ -13,7 +13,7 @@ func (r *Runtime) getGlobalAt(c *tctx, in bytecode.Instr, pc int) (Value, error)
 			return p.value, nil
 		}
 	}
-	if len(r.globalLex.props) != 0 {
+	if r.lexShadows(name) {
 		if p := r.globalLexProp(env, name); p != nil {
 			if p.value.IsUninitialized() {
 				c.at(pc)

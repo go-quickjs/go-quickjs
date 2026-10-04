@@ -1053,8 +1053,9 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		b.push(func(c *tctx) Value {
 			// The global object's slot the site remembers, read here where
 			// nothing can shadow it -- a direct eval's variables or a
-			// script's lexical bindings, which getGlobalAt asks first.
-			if r, cl := c.r, c.cl; c.f.evalVars == nil && len(r.globalLex.props) == 0 {
+			// script's lexical binding of the name, which getGlobalAt asks
+			// first.
+			if r, cl := c.r, c.cl; c.f.evalVars == nil && (len(r.globalLex.props) == 0 || !r.lexShadows(cl.names[name])) {
 				env := cl.scope()
 				if i := uint(cl.ic[site].idx); i < uint(len(env.props)) {
 					if p := &env.props[i]; p.key == cl.names[name] &&
@@ -1076,10 +1077,11 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			// A plain writable property of the global object, in the slot
 			// the site remembers, is written here where nothing can shadow
 			// it -- a direct eval's variables or a script's lexical
-			// bindings, which setGlobalAt asks first. In a module the slot is
-			// the binding itself, and one in its dead zone, a constant or an
-			// import is none of these, and goes the long way to its error.
-			if r, cl := c.r, c.cl; c.f.evalVars == nil && len(r.globalLex.props) == 0 {
+			// binding of the name, which setGlobalAt asks first. In a module
+			// the slot is the binding itself, and one in its dead zone, a
+			// constant or an import is none of these, and goes the long way
+			// to its error.
+			if r, cl := c.r, c.cl; c.f.evalVars == nil && (len(r.globalLex.props) == 0 || !r.lexShadows(cl.names[name])) {
 				env := cl.scope()
 				if i := uint(cl.ic[site].idx); i < uint(len(env.props)) {
 					if p := &env.props[i]; p.key == cl.names[name] &&
