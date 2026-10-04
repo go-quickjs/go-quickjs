@@ -1042,16 +1042,34 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			}
 		})
 	case bytecode.OpGetLength:
-		x := b.pop().tree()
-		b.push(func(c *tctx) Value {
-			o := x(c)
-			c.at(pc)
-			v, err := c.r.getValueProp(o, atomLength)
-			if err != nil {
-				c.throw(err)
-			}
-			return v
-		})
+		// A string's length and an array's own, which nothing can redefine,
+		// are answered here, as the frameless evaluator answers them; the
+		// rest is a property read.
+		if e := b.pop(); e.local {
+			k := e.k
+			b.push(func(c *tctx) Value {
+				o := c.locals[k]
+				switch {
+				case o.IsObject() && o.object().class == ClassArray:
+					return Uint32(o.object().arrayLength())
+				case o.IsString():
+					return Int(o.String().Len())
+				}
+				return c.getLength(o, pc)
+			})
+		} else {
+			x := e.tree()
+			b.push(func(c *tctx) Value {
+				o := x(c)
+				switch {
+				case o.IsObject() && o.object().class == ClassArray:
+					return Uint32(o.object().arrayLength())
+				case o.IsString():
+					return Int(o.String().Len())
+				}
+				return c.getLength(o, pc)
+			})
+		}
 	case bytecode.OpTypeOf:
 		x := b.pop().tree()
 		b.push(func(c *tctx) Value { return Str(c.r.typeofString(x(c))) })

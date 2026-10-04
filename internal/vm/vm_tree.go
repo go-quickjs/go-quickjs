@@ -158,6 +158,17 @@ func (r *Runtime) runTree(f *frame, t *tree) (v Value, err error) {
 	}
 }
 
+// getLength is the length of o read as a property, at pc: what get_length
+// does for anything but a string or an array.
+func (c *tctx) getLength(o Value, pc int) Value {
+	c.at(pc)
+	v, err := c.r.getValueProp(o, atomLength)
+	if err != nil {
+		c.throw(err)
+	}
+	return v
+}
+
 // throw leaves the tree with an exception.
 func (c *tctx) throw(err error) {
 	panic(treeThrow{err})

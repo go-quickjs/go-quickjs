@@ -242,7 +242,7 @@ a project for a few of Splay's allocations.
 
 | ID | Item | Targets | Risk | Status |
 |---|---|---|---|---|
-| B1 | `.length` fast path in the existing nodes | `array_length_read` 2.9x | Medium | Open |
+| B1 | `.length` fast path in the existing nodes | `array_length_read` 2.9x | Medium | Done |
 | B2 | Element reads and writes in trees without a call | `array_read` 1.85x, `array_write` 1.6x | Medium | Open |
 | B3 | Typed-array elements without the generic path | `typed_array_read` 2.1x, `typed_array_write` 1.8x | Medium | Open |
 | B4 | Appending to an array, and `arr.length = n`, directly | `array_prop_create` 2.8x, `array_hole_length_decr` 1.7x | Low | Open |
@@ -257,7 +257,11 @@ a project for a few of Splay's allocations.
   and `getExoticNamed`; an array or string answers inline before `c.at`, as
   `pureCallAt` and `leafCall` already do. This is a fast path inside the
   existing node: a separate `.length` node was rejected, for what its code's
-  placement cost.
+  placement cost. **Done** in the tree tier, with a variant for a local
+  operand: `array_length_read` 22.7 to 11.0 ns (-52%), `string_length` 17.3
+  to 10.8 ns (-38%); the V8 suite level over eight placements, and the long
+  Crypto and NavierStokes check level. The interpreter's case is left, its
+  code being the placement lottery and the hot code now in trees.
 - **B2.** `elemAt` and `setElem` (`vm_tree.go`) are not inlinable, so every
   element read and write in a tree is a direct call; their bodies written out
   in the local-operand closures save it.
