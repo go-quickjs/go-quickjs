@@ -248,7 +248,7 @@ a project for a few of Splay's allocations.
 | B4 | Appending to an array, and `arr.length = n`, directly | `array_prop_create` 2.8x, `array_hole_length_decr` 1.7x | Low | Done |
 | B5 | No new layout on every `delete` | `prop_delete` 2.1x | High | Open |
 | B6 | RegExp per-call costs | `regexp_ascii` 2.2x, `regexp_utf16` 2.6x, V8 RegExp | Low | Done |
-| B7 | Number text without intermediate strings | `float_toExponential` 2.1x, `float_toPrecision` 1.9x | Low | Open |
+| B7 | Number text without intermediate strings | `float_toExponential` 2.1x, `float_toPrecision` 1.9x | Low | Done |
 | B8 | Strings to numbers, and numbers to cached strings | `string_to_int` 1.28x, `int_to_string` 1.6x | Low | Open |
 | B9 | Date strings without `fmt.Sprintf` (go-intl) | `date_parse` 2.1x | Low | Open |
 | B10 | Compiler: smaller code for common shapes | interpreted code (RegExp's runBlocks, EarleyBoyer) | Medium | Open |
@@ -324,6 +324,11 @@ a project for a few of Splay's allocations.
   A run of literal characters inside a pattern as one instruction is left.
 - **B7.** `toExponential` and `toPrecision` make four to six allocations;
   written into one buffer, as `toFixed` is, they make one.
+  **Done:** the digits are appended to a buffer on the stack, the point,
+  the zeros and the exponent put in place around them, and the string made
+  once. `toExponential(2)` -42%, `toExponential()` -33%, `toPrecision(4)`
+  -34%, `toPrecision(12)` -37%; 207,785 answers the same as before and as
+  Node's.
 - **B8.** `ToNumber` of `"12345"` trims by Unicode and calls `ParseFloat`;
   plain digits can be read directly. `n + ""` builds a new string even for
   the integers below 1024 a runtime keeps.

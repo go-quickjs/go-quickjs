@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"bytes"
 	"math"
 	"math/bits"
 	"strconv"
@@ -852,9 +853,12 @@ func (r *Runtime) initNumberExtras() {
 			if n == 0 {
 				n = 0
 			}
-			return Str(NewString(fixExponent(strconv.FormatFloat(n, 'e', -1, 64)))), nil
+			var buf [32]byte
+			return Str(asciiString(appendShortestExponential(buf[:0], n))), nil
 		}
-		return Str(NewString(formatExponential(n, digits))), nil
+		// One digit, a point, a hundred more, and an exponent.
+		var buf [128]byte
+		return Str(asciiString(appendExponential(buf[:0], n, digits))), nil
 	})
 
 	r.defMethod(p, "toPrecision", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -878,7 +882,9 @@ func (r *Runtime) initNumberExtras() {
 		if v < 1 || v > 100 {
 			return Undefined, rt.throwRangeError("toPrecision() argument must be between 1 and 100")
 		}
-		return Str(NewString(formatPrecision(n, int(v)))), nil
+		// A sign, 0., six zeros and a hundred digits, at the most.
+		var buf [128]byte
+		return Str(asciiString(appendPrecision(buf[:0], n, int(v)))), nil
 	})
 
 	// toLocaleString is Intl.NumberFormat under another name, which is what
@@ -947,20 +953,42 @@ func roundSignificant(digits string, n int) (string, bool) {
 // significantDigits renders a number as n significant digits and the exponent
 // of the first of them.
 func significantDigits(x float64, n int) (digits string, exp int) {
+	var buf [128]byte
+	d, e := appendSignificant(buf[:0], x, n)
+	return string(d), e
+}
+
+// appendSignificant is significantDigits appending the digits to dst, for a
+// caller that writes them where the string will keep them. It returns dst
+// with the digits, and the exponent.
+func appendSignificant(dst []byte, x float64, n int) ([]byte, int) {
 	if x == 0 {
-		return strings.Repeat("0", n), 0
+		for range n {
+			dst = append(dst, '0')
+		}
+		return dst, 0
 	}
 	// strconv rounds correctly too, except that it breaks a tie to even.
-	s := strconv.FormatFloat(x, 'e', n-1, 64)
-	i := strings.IndexByte(s, 'e')
-	exp, err := strconv.Atoi(s[i+1:])
-	if err == nil && !mayTie(x, n, exp) {
-		if n == 1 {
-			return s[:1], exp
-		}
-		return s[:1] + s[2:i], exp
+	// What it writes is d.ddde±xx: the point is taken out where it stands.
+	at := len(dst)
+	dst = strconv.AppendFloat(dst, x, 'e', n-1, 64)
+	i := at + bytes.IndexByte(dst[at:], 'e')
+	exp := 0
+	for _, c := range dst[i+2:] {
+		exp = exp*10 + int(c-'0')
 	}
-	return significantDigitsExact(x, n)
+	if dst[i+1] == '-' {
+		exp = -exp
+	}
+	if mayTie(x, n, exp) {
+		d, e := significantDigitsExact(x, n)
+		return append(dst[:at], d...), e
+	}
+	if n == 1 {
+		return dst[:at+1], exp
+	}
+	copy(dst[at+1:], dst[at+2:i])
+	return dst[:i-1], exp
 }
 
 // mayTie reports whether rounding a positive x to n significant digits could
@@ -1015,87 +1043,94 @@ func significantDigitsExact(x float64, n int) (digits string, exp int) {
 	return rounded, e
 }
 
-// formatExponential renders a number as one digit, f fractional digits and an
-// exponent.
-func formatExponential(n float64, f int) string {
-	sign := ""
+// appendExponential renders a number as one digit, f fractional digits and
+// an exponent, appending to dst.
+func appendExponential(dst []byte, n float64, f int) []byte {
 	if n < 0 {
 		// Negative zero has no sign here: the test is on the value, not on the
 		// bit, so (-0).toExponential(0) is "0e+0".
-		sign, n = "-", -n
+		dst, n = append(dst, '-'), -n
 	}
-	digits, e := significantDigits(n, f+1)
-	mant := digits[:1]
+	at := len(dst)
+	dst, e := appendSignificant(dst, n, f+1)
 	if f > 0 {
-		mant += "." + digits[1:]
+		dst = insertPoint(dst, at+1)
 	}
-	return sign + mant + "e" + exponentSign(e) + strconv.Itoa(abs(e))
+	return appendExponent(dst, e)
 }
 
-// formatPrecision renders a number with exactly p significant digits.
+// appendPrecision renders a number with exactly p significant digits,
+// appending to dst.
 //
 // Go's %g drops the trailing zeros of the mantissa, where JavaScript keeps
 // them: (100).toPrecision(2) is "1.0e+2", not "1e+2". So the digits are taken
 // from the exponential form and the decimal point is placed by hand.
-func formatPrecision(n float64, p int) string {
-	sign := ""
+func appendPrecision(dst []byte, n float64, p int) []byte {
 	if n < 0 {
-		sign, n = "-", -n
+		dst, n = append(dst, '-'), -n
 	}
-	digits, e := significantDigits(n, p)
-
+	at := len(dst)
+	dst, e := appendSignificant(dst, n, p)
 	switch {
 	case e < -6 || e >= p:
 		// Too far from the decimal point to write out, so the exponent says
 		// where it went.
-		mant := digits[:1]
 		if p > 1 {
-			mant += "." + digits[1:]
+			dst = insertPoint(dst, at+1)
 		}
-		return sign + mant + "e" + exponentSign(e) + strconv.Itoa(abs(e))
+		return appendExponent(dst, e)
 	case e == p-1:
-		return sign + digits
+		return dst
 	case e >= 0:
-		return sign + digits[:e+1] + "." + digits[e+1:]
+		return insertPoint(dst, at+e+1)
 	default:
-		return sign + "0." + strings.Repeat("0", -(e+1)) + digits
+		// 0. and -(e+1) zeros go ahead of the digits.
+		k := 2 - (e + 1)
+		for range k {
+			dst = append(dst, 0)
+		}
+		copy(dst[at+k:], dst[at:len(dst)-k])
+		dst[at], dst[at+1] = '0', '.'
+		for i := at + 2; i < at+k; i++ {
+			dst[i] = '0'
+		}
+		return dst
 	}
 }
 
-func exponentSign(e int) string {
+// insertPoint puts a decimal point at i of dst, moving what follows along.
+func insertPoint(dst []byte, i int) []byte {
+	dst = append(dst, 0)
+	copy(dst[i+1:], dst[i:])
+	dst[i] = '.'
+	return dst
+}
+
+// appendExponent appends e as JavaScript writes an exponent: e, its sign
+// always, and no zero padding.
+func appendExponent(dst []byte, e int) []byte {
+	dst = append(dst, 'e', '+')
 	if e < 0 {
-		return "-"
+		dst[len(dst)-1], e = '-', -e
 	}
-	return "+"
+	return strconv.AppendInt(dst, int64(e), 10)
 }
 
-func abs(n int) int {
-	if n < 0 {
-		return -n
+// appendShortestExponential is toExponential with no digit count: as few
+// digits as round-trip, which is what the shortest representation is, with
+// Go's exponent rewritten as JavaScript writes one -- 1e+05 is 1e+5.
+func appendShortestExponential(dst []byte, n float64) []byte {
+	at := len(dst)
+	dst = strconv.AppendFloat(dst, n, 'e', -1, 64)
+	i := at + bytes.IndexByte(dst[at:], 'e')
+	e := 0
+	for _, c := range dst[i+2:] {
+		e = e*10 + int(c-'0')
 	}
-	return n
-}
-
-// fixExponent rewrites Go's exponent form into JavaScript's, which uses no
-// zero padding: 1e+05 becomes 1e+5.
-func fixExponent(s string) string {
-	i := strings.IndexAny(s, "eE")
-	if i < 0 {
-		return s
+	if dst[i+1] == '-' {
+		e = -e
 	}
-	mant, exp := s[:i], s[i+1:]
-	sign := ""
-	if len(exp) > 0 && (exp[0] == '+' || exp[0] == '-') {
-		sign, exp = string(exp[0]), exp[1:]
-	}
-	exp = strings.TrimLeft(exp, "0")
-	if exp == "" {
-		exp = "0"
-	}
-	if sign == "" {
-		sign = "+"
-	}
-	return mant + "e" + sign + exp
+	return appendExponent(dst[:i], e)
 }
 
 // ---------------------------------------------------------------------------

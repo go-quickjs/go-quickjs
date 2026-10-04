@@ -3700,6 +3700,10 @@ func TestNumberFormatting(t *testing.T) {
 		{`(123).toExponential(2)`, "1.23e+2"},
 		{`(123).toExponential()`, "1.23e+2"},
 		{`(1.45).toExponential(1)`, "1.4e+0"},
+		// The exponent and the point are written into the digits' buffer.
+		{`(5e-324).toExponential()`, "5e-324"},
+		{`(1.7976931348623157e308).toPrecision(3)`, "1.80e+308"},
+		{`(-0.00012345).toPrecision(2)`, "-0.00012"},
 
 		// toFixed, which hands a magnitude of 10**21 or more to ToString.
 		{`(1e21).toFixed()`, "1e+21"},
