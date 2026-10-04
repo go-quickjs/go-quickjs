@@ -47,8 +47,12 @@ type String struct {
 	endsHigh, startsLow bool
 	// mark is the memory meter's, which it sets on a string it has counted.
 	mark uint16
-	// u16 caches the UTF-16 code units of a non-ASCII string.
-	u16 []uint16
+	// u16 caches the UTF-16 code units, length of them, once units or
+	// codeUnits has made them. It is the first of them rather than a slice,
+	// whose length and capacity would only say length again: that keeps a
+	// String at 56 bytes, a size class below what a slice made it, and
+	// every string a short one carries in its own allocation one too.
+	u16 *uint16
 }
 
 // emptyString is shared, since scripts produce it constantly.
@@ -477,6 +481,9 @@ func joinValues(parts []Value) *String {
 		prevHigh = s.endsHigh
 	}
 
+	if size <= 72 {
+		return joinShort(parts)
+	}
 	var sb strings.Builder
 	sb.Grow(size)
 	units, ascii := 0, true
@@ -497,6 +504,49 @@ func joinValues(parts []Value) *String {
 		return emptyString
 	}
 	out := &String{s: sb.String(), length: units, ascii: ascii}
+	if first := parts[0]; first.IsString() {
+		out.startsLow = first.String().startsLow
+	}
+	if last := parts[len(parts)-1]; last.IsString() {
+		out.endsHigh = last.String().endsHigh
+	}
+	return out
+}
+
+// joinShort is joinValues for a join of at most 72 bytes, as most are: the
+// text is put together on the stack and copied into the String's own
+// allocation, one allocation where a builder and the String are two.
+func joinShort(parts []Value) *String {
+	var buf [72]byte
+	b := buf[:0]
+	units, ascii := 0, true
+	for _, p := range parts {
+		if !p.IsString() {
+			n := len(b)
+			b = jsnum.AppendFloat(b, p.Number())
+			units += len(b) - n
+			continue
+		}
+		s := p.String()
+		b = append(b, s.Go()...)
+		units += s.length
+		ascii = ascii && s.ascii
+	}
+	if units == 0 {
+		return emptyString
+	}
+	var out *String
+	if len(b) <= 72 {
+		var room []byte
+		out, room = newStringBytes(len(b))
+		copy(room, b)
+		out.s = unsafe.String(unsafe.SliceData(room), len(b))
+	} else {
+		// The measure joinValues made is an upper bound, so this is not
+		// reached; it is here so that it cannot go wrong if it ever were.
+		out = &String{s: string(b)}
+	}
+	out.length, out.ascii = units, ascii
 	if first := parts[0]; first.IsString() {
 		out.startsLow = first.String().startsLow
 	}
@@ -540,10 +590,17 @@ func (s *String) units() []uint16 {
 	if s.ascii {
 		return nil
 	}
+	return s.cachedUnits()
+}
+
+// cachedUnits is the string's code units, which are made the first time
+// they are asked for and kept. The string is not empty.
+func (s *String) cachedUnits() []uint16 {
 	if s.u16 == nil {
-		s.u16 = wtf8.ToUTF16(s.Go())
+		u := wtf8.ToUTF16(s.Go())
+		s.u16 = unsafe.SliceData(u)
 	}
-	return s.u16
+	return unsafe.Slice(s.u16, s.length)
 }
 
 // codeUnits returns the UTF-16 code units of the string, caching them.
@@ -558,10 +615,7 @@ func (s *String) codeUnits() []uint16 {
 		// runtime, which a write to it would race between.
 		return nil
 	}
-	if s.u16 == nil {
-		s.u16 = wtf8.ToUTF16(s.Go())
-	}
-	return s.u16
+	return s.cachedUnits()
 }
 
 // CharCodeAt returns the UTF-16 code unit at i, or -1 if i is out of range.

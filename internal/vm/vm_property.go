@@ -231,7 +231,7 @@ func (r *Runtime) getExoticIndex(o *Object, idx uint32) (Value, bool, error) {
 	switch o.class {
 	case ClassStringWrapper:
 		if s, ok := o.data.(*String); ok && int(idx) < s.Len() {
-			return Str(s.Substring(int(idx), int(idx)+1)), true, nil
+			return Str(r.unitString(s, int(idx))), true, nil
 		}
 	case ClassTypedArray:
 		// A typed array's elements live in its buffer, so an index never
@@ -263,7 +263,7 @@ func (r *Runtime) getValueProp(v Value, key Atom) (Value, error) {
 		if key.IsIndex() {
 			i := int(key.Index())
 			if i < s.Len() {
-				return Str(s.Substring(i, i+1)), nil
+				return Str(r.unitString(s, i)), nil
 			}
 			return Undefined, nil
 		}

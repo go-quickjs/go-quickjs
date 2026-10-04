@@ -162,8 +162,9 @@ func (r *Runtime) numberString(f float64) *String {
 		var buf [24]byte
 		return asciiString(strconv.AppendInt(buf[:0], i, 10))
 	}
-	t := jsnum.FormatFloat(f)
-	return &String{s: t, length: len(t), ascii: true}
+	// Anything else is written the same way, into the String's own room.
+	var buf [32]byte
+	return asciiString(jsnum.AppendFloat(buf[:0], f))
 }
 
 // asciiString is a String of ASCII bytes, which are copied: into the String's
@@ -228,6 +229,45 @@ func (r *Runtime) intString(i uint32) *String {
 	return s
 }
 
+// words are the strings wordString makes, by their index.
+var words = [4]string{"undefined", "null", "false", "true"}
+
+// wordString is the string of undefined, null, false or true, by its index
+// in words, made once per runtime: `"" + flag` and String(x) of these are
+// common enough that a string each time showed.
+func (r *Runtime) wordString(i int) *String {
+	s := r.wordStrings[i]
+	if s == nil {
+		s = NewString(words[i])
+		r.wordStrings[i] = s
+	}
+	return s
+}
+
+// unitString is the string of the code unit at i of s, which is in range: one
+// of the runtime's own for an ASCII character, made the first time each is
+// asked for -- s[i], charAt and split("") make them over and over -- and a
+// substring otherwise.
+func (r *Runtime) unitString(s *String, i int) *String {
+	if u := s.CharCodeAt(i); u < 128 {
+		return r.asciiCharString(byte(u))
+	}
+	return s.Substring(i, i+1)
+}
+
+// asciiCharString is the runtime's string of one ASCII character.
+func (r *Runtime) asciiCharString(b byte) *String {
+	if r.charStrings == nil {
+		r.charStrings = new([128]*String)
+	}
+	s := r.charStrings[b]
+	if s == nil {
+		s = asciiString([]byte{b})
+		r.charStrings[b] = s
+	}
+	return s
+}
+
 func (r *Runtime) toString(v Value) (*String, error) {
 	switch v.Kind() {
 	case KindString:
@@ -235,14 +275,14 @@ func (r *Runtime) toString(v Value) (*String, error) {
 	case KindNumber:
 		return r.numberString(v.num), nil
 	case KindUndefined:
-		return NewString("undefined"), nil
+		return r.wordString(0), nil
 	case KindNull:
-		return NewString("null"), nil
+		return r.wordString(1), nil
 	case KindBool:
 		if v.BoolValue() {
-			return NewString("true"), nil
+			return r.wordString(3), nil
 		}
-		return NewString("false"), nil
+		return r.wordString(2), nil
 	case KindSymbol:
 		// A symbol must be converted explicitly with String(), never
 		// implicitly, so that a typo in a template literal is caught.

@@ -300,7 +300,10 @@ func (m *memoryMeter) object(o *Object) {
 
 // string counts a string: a flat one's bytes, or a rope's nodes.
 func (m *memoryMeter) string(s *String) {
-	m.total += stringSize + int64(len(s.s)) + int64(cap(s.u16))*2
+	m.total += stringSize + int64(len(s.s))
+	if s.u16 != nil {
+		m.total += int64(s.length) * 2
+	}
 	m.addString(s.left)
 	m.addString(s.right)
 }

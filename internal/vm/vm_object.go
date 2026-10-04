@@ -781,6 +781,8 @@ func (o *Object) prependProps(ps []Property) {
 // leaveInlineProps moves the properties out of the room the object carries
 // for them, with room past them for more of them, and clears the room.
 func (o *Object) leaveInlineProps(more int) {
+	// Its constructor's next objects are given the room this one needed.
+	o.shape.noteGrowth(len(o.props) + more)
 	old := o.props[:cap(o.props)]
 	props := make([]Property, len(o.props), 2*cap(o.props)+more)
 	copy(props, o.props)

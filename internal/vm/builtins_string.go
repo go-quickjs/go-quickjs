@@ -38,12 +38,17 @@ func (r *Runtime) initStringBuiltins() {
 		// Each argument becomes one UTF-16 code unit, so this is the usual way
 		// a script produces a lone surrogate.
 		units := make([]uint16, len(args))
+		ascii := true
 		for i, a := range args {
 			n, err := rt.toUint32(a)
 			if err != nil {
 				return Undefined, err
 			}
 			units[i] = uint16(n)
+			ascii = ascii && uint16(n) < 128
+		}
+		if ascii && len(units) == 1 {
+			return Str(rt.asciiCharString(byte(units[0]))), nil
 		}
 		return Str(fromUnits(units)), nil
 	})
@@ -168,7 +173,7 @@ func (r *Runtime) initStringBuiltins() {
 		if i < 0 || i >= float64(s.Len()) {
 			return Str(emptyString), nil
 		}
-		return Str(s.Substring(int(i), int(i)+1)), nil
+		return Str(rt.unitString(s, int(i))), nil
 	})
 
 	r.defMethod(p, "charCodeAt", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -220,7 +225,7 @@ func (r *Runtime) initStringBuiltins() {
 		if i < 0 || i >= float64(s.Len()) {
 			return Undefined, nil
 		}
-		return Str(s.Substring(int(i), int(i)+1)), nil
+		return Str(rt.unitString(s, int(i))), nil
 	})
 
 	r.defMethod(p, "indexOf", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -512,7 +517,7 @@ func (r *Runtime) initStringBuiltins() {
 		if sep.Len() == 0 {
 			// An empty separator splits into individual code units.
 			for i := 0; i < s.Len() && len(out) < limit; i++ {
-				out = append(out, Str(s.Substring(i, i+1)))
+				out = append(out, Str(rt.unitString(s, i)))
 			}
 			return Obj(rt.splitArray(out)), nil
 		}

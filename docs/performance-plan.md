@@ -38,7 +38,7 @@ unless an item says otherwise.
 | A2 | Strict global writes without the separate check | `global_write_strict` 3.4x | Low | Done |
 | A3 | A cheaper call path, outside the interpreter's switch | `func_call` 1.35x, DeltaBlue, Richards | Low | Done, in part |
 | A4 | Cheaper calls from trees, then no call-density gate | EarleyBoyer, RayTrace, Richards | High | Done |
-| A5 | Fewer allocations for objects and strings | Splay, DeltaBlue, RayTrace | Medium | Open |
+| A5 | Fewer allocations for objects and strings | Splay, DeltaBlue, RayTrace | Medium | Done, in part |
 
 ### A1. `dup` without a spill for property updates
 
@@ -213,6 +213,30 @@ trees of more functions; a first run of the suite is 9% faster.
 - One-character strings, `"true"`, `"false"`, `"null"`, `"undefined"` are
   made anew at each conversion, and a non-integer number's text takes two
   allocations. Per-runtime tables, as for small integers, end both.
+
+**Done, in part.** Four of the five:
+
+- A constructor's root layout records the room its objects came to need
+  (`noteGrowth`, up to eight properties), and `new` gives the next ones
+  that room. Splay -5%; RayTrace's objects grow by 1.1 MB over a run.
+- Strings of one ASCII character and of `undefined`, `null`, `false` and
+  `true` are the runtime's own, made once; a number's text is written into
+  its String's own allocation.
+- A join of at most 72 bytes is one allocation (`joinShort`): template
+  literals about 8% faster.
+- A String holds its code units as a pointer: 72 bytes to 56, and every
+  string a size class smaller.
+
+Allocated bytes over the suite -4.0%, allocations -1.8%. V8 suite over eight
+placements: total -1.1%, Splay -5.1%, RegExp -2.2%; DeltaBlue +2% at most
+placements, in every variant measured, with or without the constructor's
+room -- it does almost no string work, and is the benchmark placement moves
+most. Not done: compiling `"lit" + x + "lit"` to one `OpConcat`. Exact, it
+needs a conversion with the default hint after each operand, a length check
+at each, the memory limit's reservation, ropes kept for long results, and
+the new instructions in the frameless evaluator and the tree tier (the
+evaluator takes `add`, so functions using `+` would otherwise lose it) --
+a project for a few of Splay's allocations.
 
 ## B. Specific gaps
 

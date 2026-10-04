@@ -3629,15 +3629,18 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 	// The object is made with room for what the constructor is about to put in
 	// it, which the compiler counted. A bound function has no body of its own
 	// to have counted, so its object starts with none.
+	// The constructor's objects start from a shape of its own, which
+	// remembers the room they came to need, where its body did not say.
 	props := 0
+	var root *shape
 	if fd.closure != nil {
 		props = int(fd.closure.fn.ThisProps)
+		if root = r.shapes.ctorRoot(fd); root != nil {
+			props = max(props, int(root.slack))
+		}
 	}
 	obj := newLiteralObject(proto, ClassObject, props)
-	if fd.closure != nil {
-		// The constructor's objects start from a shape of its own.
-		obj.shape = r.shapes.ctorRoot(fd)
-	}
+	obj.shape = root
 	this := Obj(obj)
 
 	// A base class gives the instance its private methods and fields before the

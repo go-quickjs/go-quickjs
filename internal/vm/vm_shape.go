@@ -37,6 +37,11 @@ type shape struct {
 	key    Atom
 	flags  propFlags
 	unique bool
+	// slack is, on a constructor's root, how many properties its objects
+	// have come to need: the most an object of it has had when it outgrew
+	// the room it was made with, up to maxSlack. The constructor's next
+	// objects are made with that room, rather than outgrowing it in turn.
+	slack uint8
 	// n is how many properties the layout has.
 	n int32
 	// next and nextEdge are the first transition out of the shape, which is
@@ -165,6 +170,29 @@ func (t *shapeTree) ctorRoot(fd *funcData) *shape {
 	t.count++
 	fd.ctorShape = s
 	return s
+}
+
+// maxSlack is the most room a constructor's objects are given for what they
+// came to need: the most an object carries in its own allocation.
+const maxSlack = 8
+
+// root is the shape the layout grew from.
+func (s *shape) root() *shape {
+	for s.parent != nil {
+		s = s.parent
+	}
+	return s
+}
+
+// noteGrowth records, on the root of a shared layout, that an object of it
+// came to need n properties' room.
+func (s *shape) noteGrowth(n int) {
+	if s == nil || s.unique {
+		return
+	}
+	if root := s.root(); n > int(root.slack) && n <= maxSlack {
+		root.slack = uint8(n)
+	}
 }
 
 // newUniqueShape makes a shape of its own for an object of n properties,

@@ -552,7 +552,7 @@ func (r *Runtime) copyDataProps(target *Object, src Value) error {
 		s := src.String()
 		for i := 0; i < s.Len(); i++ {
 			if err := r.defineOwnProp(target, r.atoms.indexAtom(uint32(i)),
-				Str(s.Substring(i, i+1)), propDefault); err != nil {
+				Str(r.unitString(s, i)), propDefault); err != nil {
 				return err
 			}
 		}

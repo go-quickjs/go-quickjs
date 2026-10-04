@@ -474,8 +474,13 @@ func (r *Runtime) pureConstruct(callee Value, args []Value) (Value, bool) {
 	if p == nil || p.flags&propAccessor != 0 || !p.value.IsObject() {
 		return Undefined, false
 	}
-	obj := newLiteralObject(p.value.Object(), ClassObject, int(fd.closure.fn.ThisProps))
-	obj.shape = r.shapes.ctorRoot(fd)
+	root := r.shapes.ctorRoot(fd)
+	props := int(fd.closure.fn.ThisProps)
+	if root != nil {
+		props = max(props, int(root.slack))
+	}
+	obj := newLiteralObject(p.value.Object(), ClassObject, props)
+	obj.shape = root
 	if !r.leafStores(fd.closure, obj, args) {
 		return Undefined, false
 	}

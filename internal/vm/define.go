@@ -290,7 +290,7 @@ func (r *Runtime) currentDescriptor(o *Object, key Atom) (*propDesc, error) {
 			if key.IsIndex() && int(key.Index()) < s.Len() {
 				i := int(key.Index())
 				return &propDesc{
-					value: Str(s.Substring(i, i+1)), hasValue: true,
+					value: Str(r.unitString(s, i)), hasValue: true,
 					writable: false, hasWritable: true,
 					enumerable: true, hasEnumerable: true,
 					configurable: false, hasConfigurable: true,
