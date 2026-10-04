@@ -27,6 +27,10 @@ func takesItsValue(op bytecode.Op) bool {
 
 func (c *compiler) compileExprForEffect(e ast.Expr) {
 	switch n := e.(type) {
+	case *ast.StringLit, *ast.NumberLit, *ast.BigIntLit, *ast.BoolLit, *ast.NullLit:
+		// A literal has no effect -- "use strict"; is one -- so nothing is
+		// pushed to be dropped.
+		return
 	case *ast.Update:
 		if c.compileLocalUpdate(n) {
 			return

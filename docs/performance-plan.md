@@ -250,8 +250,8 @@ a project for a few of Splay's allocations.
 | B6 | RegExp per-call costs | `regexp_ascii` 2.2x, `regexp_utf16` 2.6x, V8 RegExp | Low | Done |
 | B7 | Number text without intermediate strings | `float_toExponential` 2.1x, `float_toPrecision` 1.9x | Low | Done |
 | B8 | Strings to numbers, and numbers to cached strings | `string_to_int` 1.28x, `int_to_string` 1.6x | Low | Done |
-| B9 | Date strings without `fmt.Sprintf` (go-intl) | `date_parse` 2.1x | Low | Open |
-| B10 | Compiler: smaller code for common shapes | interpreted code (RegExp's runBlocks, EarleyBoyer) | Medium | Open |
+| B9 | Date strings without `fmt.Sprintf` (go-intl) | `date_parse` 2.1x | Low | Waiting: a go-intl release |
+| B10 | Compiler: smaller code for common shapes | interpreted code (RegExp's runBlocks, EarleyBoyer) | Medium | Done, in part |
 
 - **B1.** `get_length` reaches `arrayLength` through `getValueProp`, `getProp`
   and `getExoticNamed`; an array or string answers inline before `c.at`, as
@@ -346,6 +346,8 @@ a project for a few of Splay's allocations.
 - **B9.** go-intl formats every date string with nested `fmt.Sprintf`, and
   `Date.parse` copies its argument to UTF-16; both are changed in go-intl,
   and taken with `go get`.
+
+  **Waiting:** it is go-intl's change, and a go-intl release to take.
 - **B10.** Compiler:
   - a call whose result is dropped can say so, instead of a `drop` after
     it (1,229 such pairs in the V8 RegExp benchmark's interpreted code);
@@ -353,6 +355,12 @@ a project for a few of Splay's allocations.
   - a literal statement such as `"use strict";` can emit nothing;
   - calls to a function known to run frameless need not count against
     the tree tier's gate (`func_call` itself is refused today).
+
+  **Done, in part:** a literal statement emits nothing. The gate went
+  with A4, and with it the interpreter's share of the suite: a call and
+  its drop are already one statement in a tree, and a comparison with a
+  constant one node, so the first two would serve the little code trees
+  refuse. Left.
 
 ## C. Modern code
 
