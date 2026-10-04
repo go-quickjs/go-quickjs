@@ -37,7 +37,7 @@ unless an item says otherwise.
 | A1 | `dup` without a spill for property updates | `prop_update` 2.6x, `array_update` 2.8x | Low | Done |
 | A2 | Strict global writes without the separate check | `global_write_strict` 3.4x | Low | Done |
 | A3 | A cheaper call path, outside the interpreter's switch | `func_call` 1.35x, DeltaBlue, Richards | Low | Done, in part |
-| A4 | Cheaper calls from trees, then no call-density gate | EarleyBoyer, RayTrace, Richards | High | Open |
+| A4 | Cheaper calls from trees, then no call-density gate | EarleyBoyer, RayTrace, Richards | High | Done |
 | A5 | Fewer allocations for objects and strings | Splay, DeltaBlue, RayTrace | Medium | Open |
 
 ### A1. `dup` without a spill for property updates
@@ -174,6 +174,25 @@ dispatches five.
   number.
 - Then the gate is measured at 6 and at 0, and dropped if DeltaBlue is level.
 - Risk: the tree builder's layout (see "How an item is measured").
+
+**Done**, by the last step alone: the gate is gone, and the tier builds every
+function it can. After A1 and A3, DeltaBlue no longer loses by it. Measured
+over eight placements against main, three rounds:
+
+| | Total | EarleyBoyer | RayTrace | Richards | Crypto | DeltaBlue |
+|---|---:|---:|---:|---:|---:|---:|
+| Destinations for statements | +0.3% | -0.6% | -1.7% | -1.0% | +3.0% | -0.2% |
+| Destinations, block ends as data, no gate | -3.0% | -10.6% | -6.7% | -6.1% | +3.7% | -0.7% |
+| Block ends as data, no gate | -2.5% | -10.7% | -4.6% | -3.0% | +3.2% | +2.4% |
+| No gate | -4.1% | -11.8% | -6.7% | -5.6% | -2.7% | +0.3% |
+
+Destinations for statements cost more than the closures they saved: the
+test of which kind each statement is, at every statement of every block,
+showed in Crypto's loop as runTree's own time doubling. Block ends as data
+did not pay either. The call node that evaluates its own operands was not
+needed and was not built. The long check of the no-gate version: Crypto
+-1.9%, NavierStokes -0.5%. It allocates 0.4% more over the suite, for the
+trees of more functions; a first run of the suite is 9% faster.
 
 ### A5. Fewer allocations for objects and strings
 

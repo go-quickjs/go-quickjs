@@ -92,25 +92,11 @@ var treeTier atomic.Bool
 // treesBuilt counts the functions the tier has built.
 var treesBuilt atomic.Int64
 
-// QJS_TREEALL in the environment has the tier build every function it can,
-// for running a test suite through it.
-func init() {
-	treeTier.Store(os.Getenv("QJS_NOTREE") == "")
-	treeEverything.Store(os.Getenv("QJS_TREEALL") != "")
-}
+func init() { treeTier.Store(os.Getenv("QJS_NOTREE") == "") }
 
-// treeEverything has the tier build every function it can, whether or not
-// it has few enough calls to run faster as a tree: for tests, which want
-// every instruction it builds run in it.
-var treeEverything atomic.Bool
-
-// SetTreeTier turns the tree tier on or off for functions not yet run, and
-// with everything has it build every function it can rather than those it
-// expects to run faster. It is for tests that compare the two.
-func SetTreeTier(on, everything bool) {
-	treeTier.Store(on)
-	treeEverything.Store(everything)
-}
+// SetTreeTier turns the tree tier on or off for functions not yet run. It is
+// for tests that compare the two.
+func SetTreeTier(on bool) { treeTier.Store(on) }
 
 // TreesBuilt is how many functions the tree tier has built, for tests that
 // check it ran.

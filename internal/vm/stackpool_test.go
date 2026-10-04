@@ -74,8 +74,8 @@ func TestReleaseStackWhileRunning(t *testing.T) {
 // returns: the closure it ran, its locals and the value it returned would
 // otherwise stay reachable until the frame was used again.
 func TestReturnedTreeFramesAreCleared(t *testing.T) {
-	defer SetTreeTier(true, false)
-	SetTreeTier(true, true)
+	defer SetTreeTier(true)
+	SetTreeTier(true)
 	r := New(Config{})
 	defer r.Close()
 	before := TreesBuilt()

@@ -616,12 +616,6 @@ func (c *compiler) emit(op bytecode.Op, a, b uint32) int {
 	}
 	c.fn.Code = append(c.fn.Code, bytecode.Instr{Op: op, A: a, B: b})
 	c.adjustStack(op, a, b)
-	// Counted where it is appended: a call fused with what came before it,
-	// as f.apply(this, arguments) is, is not one.
-	switch op {
-	case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew:
-		c.fn.Calls++
-	}
 	return len(c.fn.Code) - 1
 }
 

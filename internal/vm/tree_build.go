@@ -78,11 +78,6 @@ func buildTree(fn *bytecode.Function) *tree {
 		return nil
 	}
 	code := fn.Code
-	// A call costs a tree more than it costs the interpreter, so a function
-	// whose code is mostly calls runs as bytecode. The compiler counted them.
-	if !treeEverything.Load() && int(fn.Calls)*treeCallDensity > len(code) {
-		return nil
-	}
 	leader := make([]bool, len(code)+1)
 	leader[0] = true
 	for pc, in := range code {
@@ -166,10 +161,6 @@ func buildTree(fn *bytecode.Function) *tree {
 	}
 	return t
 }
-
-// treeCallDensity is the fewest instructions a function has for each call
-// in it, for the tier to build it.
-const treeCallDensity = 12
 
 // treeBuilds reports whether the tier builds an instruction.
 func treeBuilds(op bytecode.Op) bool {

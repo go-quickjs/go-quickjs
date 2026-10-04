@@ -280,11 +280,11 @@ func treeRun(t *testing.T, src string) string {
 // function the tree tier can build built, and compares it with the
 // interpreter's run.
 func TestTreeTierMatchesInterpreter(t *testing.T) {
-	defer vm.SetTreeTier(true, false)
+	defer vm.SetTreeTier(true)
 	for _, src := range treeScripts {
-		vm.SetTreeTier(false, false)
+		vm.SetTreeTier(false)
 		want := treeRun(t, src)
-		vm.SetTreeTier(true, true)
+		vm.SetTreeTier(true)
 		before := vm.TreesBuilt()
 		got := treeRun(t, src)
 		if got != want {
@@ -302,7 +302,7 @@ func TestTreeTierMatchesInterpreter(t *testing.T) {
 // A strict assignment whose value creates the global it names is still a
 // ReferenceError, as the specification says and C QuickJS no longer does.
 func TestGlobalWriteSites(t *testing.T) {
-	defer vm.SetTreeTier(true, false)
+	defer vm.SetTreeTier(true)
 	var src string
 	for _, s := range treeScripts {
 		if strings.HasPrefix(s, "globalThis.g1 = 0;") {
@@ -312,7 +312,7 @@ func TestGlobalWriteSites(t *testing.T) {
 	const want = "2,3 1,1  ReferenceError: g1 is not defined ReferenceError: g1 is not defined 9 1,2 0,0 7,8 7,0 " +
 		"TypeError 7,0 1 set0,get,set1,get,get,set0,get,set0,get,set0,get"
 	for _, tier := range []bool{false, true} {
-		vm.SetTreeTier(tier, tier)
+		vm.SetTreeTier(tier)
 		if got := treeRun(t, src); got != want {
 			t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, want)
 		}
@@ -326,7 +326,7 @@ func TestGlobalWriteSites(t *testing.T) {
 // an object with indices as the prototype, an accessor on the array itself,
 // an array that may not grow, a sparse one. C QuickJS and Node agree.
 func TestArrayAppendThroughTheChain(t *testing.T) {
-	defer vm.SetTreeTier(true, false)
+	defer vm.SetTreeTier(true)
 	const src = `function fill(a, n) { for (var i = 0; i < n; i++) a[i] = i; return a; }
 		function sfill(a, n) { "use strict"; for (var i = 0; i < n; i++) a[i] = i; return a; }
 		var log = [], r = [];
@@ -350,7 +350,7 @@ func TestArrayAppendThroughTheChain(t *testing.T) {
 	const want = "0,1,2 0,1,g,3|4 3 ro,1 TypeError 0 TypeError 0 TypeError 2 0,1 own,1 0,1,2,5001 3 true 2 0,1,2 " +
 		"A2,A2,O1,P0,P1,C0"
 	for _, tier := range []bool{false, true} {
-		vm.SetTreeTier(tier, tier)
+		vm.SetTreeTier(tier)
 		if got := treeRun(t, src); got != want {
 			t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, want)
 		}
@@ -363,7 +363,7 @@ func TestArrayAppendThroughTheChain(t *testing.T) {
 // write, a delete, a call through it, apply. And that a function that
 // rebinds the name arguments does not. Node gives the same answers.
 func TestArgumentsReads(t *testing.T) {
-	defer vm.SetTreeTier(true, false)
+	defer vm.SetTreeTier(true)
 	cases := []struct{ src, want string }{
 		{`var r = [];
 		function s1(a, b) { "use strict"; a = 9; var x = []; for (var i = 0; i < arguments.length + 1; i++) x.push(arguments[i]); return x.join("/") + ":" + arguments.length; }
@@ -404,7 +404,7 @@ func TestArgumentsReads(t *testing.T) {
 	}
 	for _, tc := range cases {
 		for _, tier := range []bool{false, true} {
-			vm.SetTreeTier(tier, tier)
+			vm.SetTreeTier(tier)
 			if got := treeRun(t, tc.src); got != tc.want {
 				t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, tc.want)
 			}
@@ -417,7 +417,7 @@ func TestArgumentsReads(t *testing.T) {
 // a setter on Array.prototype or Object.prototype, and a read-only element on
 // an Array.prototype large enough to be indexed. Node gives the same answers.
 func TestArrayPushThroughTheChain(t *testing.T) {
-	defer vm.SetTreeTier(true, false)
+	defer vm.SetTreeTier(true)
 	const src = `var log = "", r = [];
 		function fill(n) { var a = []; for (var i = 0; i < n; i++) a.push(i); return a; }
 		r.push(fill(3).join());
@@ -432,7 +432,7 @@ func TestArrayPushThroughTheChain(t *testing.T) {
 		r.join(" | ")`
 	const want = "0,1,2 |  | 2 | TypeError | 0,1,2,3 | 1,2,3 | 1,2,3 | A1,A0,g,2,O0,"
 	for _, tier := range []bool{false, true} {
-		vm.SetTreeTier(tier, tier)
+		vm.SetTreeTier(tier)
 		if got := treeRun(t, src); got != want {
 			t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, want)
 		}
@@ -442,8 +442,8 @@ func TestArrayPushThroughTheChain(t *testing.T) {
 // TestTreeTierInterrupted stops a loop running as a tree, as one running in
 // the interpreter is stopped.
 func TestTreeTierInterrupted(t *testing.T) {
-	defer vm.SetTreeTier(true, false)
-	vm.SetTreeTier(true, true)
+	defer vm.SetTreeTier(true)
+	vm.SetTreeTier(true)
 	rt := quickjs.New()
 	defer rt.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
@@ -462,8 +462,8 @@ func TestTreeTierInterrupted(t *testing.T) {
 // several goroutines at once. They share its functions, and so the trees
 // built for them, which the first to run each one builds.
 func TestTreeTierSharedAcrossRuntimes(t *testing.T) {
-	defer vm.SetTreeTier(true, false)
-	vm.SetTreeTier(true, true)
+	defer vm.SetTreeTier(true)
+	vm.SetTreeTier(true)
 	p, err := quickjs.Compile("shared.js", `function f(n) { var s = 0, a = []; for (var i = 0; i < n; i++) { a.push(i * 2); s += a[i] % 7 } return s } f(2000)`)
 	if err != nil {
 		t.Fatal(err)

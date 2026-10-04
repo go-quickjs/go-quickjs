@@ -1,10 +1,6 @@
 package vm
 
-import (
-	"testing"
-
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-)
+import "testing"
 
 // TestPureStoreRefusalIsNotAMiss pins that a storing pure body called where
 // its caller could still give up -- so that its store is refused -- is not
@@ -66,35 +62,4 @@ func TestPureRefusalIsTheCallersMiss(t *testing.T) {
 	if n := fns[4].Object().fn().closure.pureMiss; n < pureMissLimit {
 		t.Errorf("both missed %d times; its calls are what cannot store", n)
 	}
-}
-
-// TestCompiledCallCounts pins that the count of calls the compiler keeps,
-// which the tree tier's gate reads, is the count of call, call_method and
-// new instructions in each function's code.
-func TestCompiledCallCounts(t *testing.T) {
-	fn := compileForTest(t, `
-		function a(x) { return f(x) + o.m(x, 1) + new C(x) + g?.(x) + o?.m(x) + tag`+"`t${x}`"+` }
-		function b(...xs) { return f(...xs) + o.m(...xs) + new C(...xs) + Math.max.apply(null, xs) }
-		class D extends C { constructor() { super(1); this.x = super.m(2) } get y() { return h() } }
-		var arrow = (p) => p.q(p.r(), [1, 2].map(z => z * 2));
-		function c() { if (k) return f(); else { try { g() } finally { h() } } return eval("1") }`)
-	var walk func(f *bytecode.Function)
-	walk = func(f *bytecode.Function) {
-		n := 0
-		for _, in := range f.Code {
-			switch in.Op {
-			case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew:
-				n++
-			}
-		}
-		if int(f.Calls) != n {
-			t.Errorf("%q: Calls is %d, the code has %d", f.Name, f.Calls, n)
-		}
-		for _, k := range f.Constants {
-			if k.Fn != nil {
-				walk(k.Fn)
-			}
-		}
-	}
-	walk(fn)
 }

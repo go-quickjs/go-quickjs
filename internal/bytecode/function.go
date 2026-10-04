@@ -303,9 +303,6 @@ type Function struct {
 	// literal's objects start from: each such instruction's B is its cache's
 	// number, from 1.
 	PropSites uint32
-	// Calls is how many call, call_method and new instructions the code
-	// has, which the VM asks when it decides how to run the function.
-	Calls int32
 
 	// UsesThis records whether the body can observe its `this`, which lets a
 	// sloppy-mode call skip substituting the global object when nothing would
