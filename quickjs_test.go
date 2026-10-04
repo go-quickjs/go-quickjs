@@ -4907,3 +4907,27 @@ func TestStrictGlobalWrite(t *testing.T) {
 		t.Errorf("a later script's let = %q, want %q", got, want)
 	}
 }
+
+// TestArrayLengthAssignment pins assigning to an array's length, which a
+// dense array with a writable length and a number that is a length takes
+// without the walk to defineArrayLength: truncation and extension, -0,
+// RangeErrors, frozen and read-only lengths in both modes, a sparse array,
+// a subclass, and the largest length. Each answer is Node's.
+func TestArrayLengthAssignment(t *testing.T) {
+	checkEval(t, `var r = [];
+		var a = [1, 2, 3, 4, 5]; a.length = 2; r.push(a.join(), a.length);
+		a.length = 4; r.push(a.length, 2 in a, a[3]);
+		a.length = -0; r.push(a.length);
+		try { a.length = -1 } catch (e) { r.push(e.constructor.name) }
+		try { a.length = 1.5 } catch (e) { r.push(e.constructor.name) }
+		try { a.length = NaN } catch (e) { r.push(e.constructor.name) }
+		var f = Object.freeze([1, 2]); f.length = 0; r.push(f.length);
+		var g = [1, 2, 3]; Object.defineProperty(g, "length", { writable: false }); g.length = 1; r.push(g.length);
+		(function () { "use strict"; try { g.length = 1 } catch (e) { r.push("strict " + e.constructor.name) } })();
+		var h = [1, 2, 3]; h[100] = 7; h.length = 50; r.push(h.length, 100 in h);
+		var c = []; for (var i = 0; i < 5; i++) c[i] = i; c[c.length] = 9; r.push(c.join());
+		class S extends Array {} var s = new S(); s.push(1, 2, 3); s.length = 1; r.push(s.length, s instanceof S);
+		var big = []; big.length = 4294967295; r.push(big.length); try { big.length = 4294967296 } catch (e) { r.push(e.constructor.name) }
+		r.join(" ")`,
+		"1,2 2 4 false  0 RangeError RangeError RangeError 2 3 strict TypeError 50 false 0,1,2,3,4,9 1 true 4294967295 RangeError")
+}

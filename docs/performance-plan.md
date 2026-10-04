@@ -244,8 +244,8 @@ a project for a few of Splay's allocations.
 |---|---|---|---|---|
 | B1 | `.length` fast path in the existing nodes | `array_length_read` 2.9x | Medium | Done |
 | B2 | Element reads and writes in trees without a call | `array_read` 1.85x, `array_write` 1.6x | Medium | Declined |
-| B3 | Typed-array elements without the generic path | `typed_array_read` 2.1x, `typed_array_write` 1.8x | Medium | Open |
-| B4 | Appending to an array, and `arr.length = n`, directly | `array_prop_create` 2.8x, `array_hole_length_decr` 1.7x | Low | Open |
+| B3 | Typed-array elements without the generic path | `typed_array_read` 2.1x, `typed_array_write` 1.8x | Medium | Done, in part |
+| B4 | Appending to an array, and `arr.length = n`, directly | `array_prop_create` 2.8x, `array_hole_length_decr` 1.7x | Low | Done |
 | B5 | No new layout on every `delete` | `prop_delete` 2.1x | High | Open |
 | B6 | RegExp per-call costs | `regexp_ascii` 2.2x, `regexp_utf16` 2.6x, V8 RegExp | Low | Open |
 | B7 | Number text without intermediate strings | `float_toExponential` 2.1x, `float_toPrecision` 1.9x | Low | Open |
@@ -274,11 +274,19 @@ a project for a few of Splay's allocations.
 - **B3.** A typed array's element goes through `getIndexSlow`,
   `typedElemIndex`, two interface assertions and the element-size table. A
   view of fixed length can keep its buffer, element shift and end, which a
-  detach shows by emptying the buffer.
+  detach shows by emptying the buffer. **Done, in part:** the tree tier's
+  slow paths read a typed array's element straight from it (reading one
+  can neither throw nor run code) and write one without `setIndexed`:
+  `typed_array_read` -13 to -17%, `typed_array_write` -9 to -12%. Keeping
+  the buffer and bounds in the view was left: every place that makes a
+  view would have to keep them.
 - **B4.** Appending at `length` tries `setElem`, then `setIndexed`, then
   `appendElem`, which walks the prototypes each time; try `appendElem` first.
   `arr.length = n` on a dense, writable array with a Number that is its own
   uint32 can set it directly instead of through `defineArrayLength`.
+  **Done:** `array_length_decr` -38%, `array_hole_length_decr` -22%,
+  `array_push` -8%; `array_prop_create` is level, its time the array's
+  growth.
 - **B5.** Every `delete` allocates a new unique layout. A dictionary-mode
   layout that the caches refuse to fill would be changed in place, as V8's
   is after a delete. Every cache fill must check it: the risk.

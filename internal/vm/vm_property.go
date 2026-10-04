@@ -331,6 +331,19 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 		rcv = receiver.Object()
 	}
 
+	// An array's own length, set to a number that is a length, on a dense
+	// array whose length may be written: what defineArrayLength does, without
+	// the walk to it. Dense elements are all configurable, so a truncation
+	// never stops short, and converting a number runs nothing. Anything else
+	// -- a value that is not a length is a RangeError -- goes the long way.
+	if key == atomLength && rcv == obj && obj.class == ClassArray && val.IsNumber() &&
+		obj.flags&(objArrayLengthWritable|objHasSparseElements) == objArrayLengthWritable && obj.noIndexKeys() {
+		if n := uint32(val.num); float64(n) == val.num {
+			obj.setArrayLength(n)
+			return true, nil
+		}
+	}
+
 	// Overwriting a property an ordinary object already has, on itself, is
 	// what most assignments are, and the walk below establishes for each step
 	// what this settles once: no proxy, no exotic own property, no receiver in
