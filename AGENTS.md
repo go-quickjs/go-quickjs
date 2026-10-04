@@ -40,8 +40,9 @@ concurrently.
   functions in file-name order, then all its closures, each aligned to 32
   bytes, so adding, moving or renaming code there -- even code a benchmark
   never runs -- can move the V8 suite by 5 to 10%. Do not rename or reorder
-  its files or move code between them without comparing builds over several
-  code placements; the `zcall_*.go` files sort last on purpose.
+  its files or move code between them without comparing builds with
+  `internal/cmd/v8bench/placements` (see Validation); the `zcall_*.go` files
+  sort last on purpose.
 - Add a regression test for every semantic bug. Prefer an exact result and
   error type over a broad smoke test.
 - Do not weaken conformance expectations, add skips, or change expected
@@ -180,6 +181,23 @@ write profiles.
 ```sh
 go run ./internal/cmd/v8bench -dir /tmp/v8-v7 -fetch -mode fixed -n 5
 ```
+
+To compare two builds, use `internal/cmd/v8bench/placements`: one build of
+each side compares where the linker put package vm's hot code as much as
+the code. `build` makes eight builds of the working tree, each placing
+`executeAt`, the call path, `runTree` and the tree's closures differently in
+a balanced design, and checks every one with `go tool nm`; `compare` runs two
+labels' placements in turn and reports each side's mean. Build both sides in
+the same checkout, and leave the machine idle while they run.
+
+```sh
+git checkout base   && go run ./internal/cmd/v8bench/placements build -label base
+git checkout change && go run ./internal/cmd/v8bench/placements build -label change
+go run ./internal/cmd/v8bench/placements compare -dir /tmp/v8-v7 base change
+```
+
+`-v` prints each placement's figure: a change that is slower at some
+placements and level at the others is placement, not the change.
 
 `internal/cmd/v8bench/goja` runs the same suite the same way on goja, for
 comparing the two engines. It is a module of its own, run from its
