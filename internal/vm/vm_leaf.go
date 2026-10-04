@@ -67,7 +67,8 @@ func (r *Runtime) leafStores(cl *closure, o *Object, args []Value) bool {
 	s := o.shape
 	for i := 0; i+2 < len(code) && code[i+2].Op == bytecode.OpSetProp; i += 3 {
 		c := &cl.ic[code[i+2].B]
-		if c.shape != s || s == nil {
+		// An entry for a setter calls it, which is no write of a leaf's.
+		if c.shape != s || s == nil || c.getter {
 			return false
 		}
 		if c.next != nil {

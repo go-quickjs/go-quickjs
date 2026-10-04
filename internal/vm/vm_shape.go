@@ -339,8 +339,9 @@ type propCache struct {
 	p1, p2 *Object
 	s1, s2 *shape
 	idx    int32
-	// getter marks a read's entry for an accessor, whose getter is called:
-	// only cachedGet fills one, for OpGetProp.
+	// getter marks an entry for an accessor: a read's, whose getter is
+	// called, which only cachedGet fills, for OpGetProp; or a write's, whose
+	// setter is called, which setPropCached fills.
 	getter bool
 	// fills counts the times the entry has been filled. A site that keeps
 	// meeting new shapes stops trying: filling costs a lookup of its own. A
@@ -416,7 +417,8 @@ func (c *propCache) own(o *Object) (Value, bool) {
 // storeOwn writes v to the property a write site's cache says o has: o is of
 // the shape it remembers, and the write is to a property the shape already
 // has, writable. It is small enough to be inlined where a write is made; it
-// reports false for anything else, which setPropCached does.
+// reports false for anything else, which setPropCached does -- a setter's
+// entry included, whose next is setterNext.
 func (c *propCache) storeOwn(o *Object, v Value) bool {
 	if s := o.shape; s == c.shape && s != nil && c.next == nil {
 		if verifyShapes {
@@ -591,7 +593,11 @@ func (r *Runtime) setPropCached(c *propCache, o *Object, key Atom, v Value, stri
 			o.props[c.idx].value = v
 			return nil
 		}
-		if c.adds(o) {
+		if c.next == setterNext {
+			if done, err := r.cachedSetter(c, o, key, v); done {
+				return err
+			}
+		} else if c.adds(o) {
 			if verifyShapes {
 				r.verifyStoreCache(c, o, key)
 			}
@@ -607,6 +613,9 @@ func (r *Runtime) setPropCached(c *propCache, o *Object, key Atom, v Value, stri
 		return err
 	}
 	if before != nil && c.fills < maxCacheFills && !key.IsIndex() && shapeClass(o.class) && !synthesized(o.class, key) {
+		if o.shape == before && r.fillSetterCache(c, o, key, before) {
+			return nil
+		}
 		r.fillStoreCache(c, o, before, key)
 	}
 	return nil

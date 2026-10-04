@@ -295,7 +295,8 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 				return miss()
 			}
 			ob, c := o.Object(), &cl.ic[in.B]
-			if s := ob.shape; s == nil || s != c.shape {
+			// An entry for a setter calls it, which no pure body may.
+			if s := ob.shape; s == nil || s != c.shape || c.getter {
 				return miss()
 			}
 			if c.next == nil {
