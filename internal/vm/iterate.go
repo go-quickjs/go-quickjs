@@ -53,11 +53,19 @@ type iterState struct {
 	done bool
 }
 
-// newIterObject wraps a cursor so that it can live on the operand stack.
-func (r *Runtime) newIterObject(st *iterState) Value {
-	o := newObject(nil, ClassIterator)
-	o.data = st
-	return Obj(o)
+// newIterObject wraps a cursor so that it can live on the operand stack. The
+// object and the cursor are one allocation: every for-of, for-in, spread
+// and array destructuring makes one.
+func (r *Runtime) newIterObject(st iterState) Value {
+	io := &iterObject{Object: Object{class: ClassIterator, flags: objExtensible}, st: st}
+	io.data = &io.st
+	return Obj(&io.Object)
+}
+
+// iterObject is a cursor's object and the cursor, made together.
+type iterObject struct {
+	Object
+	st iterState
 }
 
 // iterStateOf recovers the cursor from a stack slot.
@@ -79,7 +87,7 @@ func (r *Runtime) startForIn(v Value) (Value, error) {
 	// times, which is one of the few places JavaScript is forgiving.
 	if v.IsNullish() {
 		st.done = true
-		return r.newIterObject(st), nil
+		return r.newIterObject(*st), nil
 	}
 	o, err := r.toObject(v)
 	if err != nil {
@@ -104,7 +112,7 @@ func (r *Runtime) startForIn(v Value) (Value, error) {
 	if last == o {
 		if c := r.shapeKeys(o); c != nil {
 			st.keys, st.keyAtoms, st.shape = c.keys, c.atoms, o.shape
-			return r.newIterObject(st), nil
+			return r.newIterObject(*st), nil
 		}
 	}
 	var seen map[Atom]bool
@@ -140,7 +148,7 @@ func (r *Runtime) startForIn(v Value) (Value, error) {
 			break
 		}
 	}
-	return r.newIterObject(st), nil
+	return r.newIterObject(*st), nil
 }
 
 // shapeKeys is the enumerable own string keys of a plain object of a layout
@@ -202,7 +210,7 @@ func (r *Runtime) startForOf(v Value) (Value, error) {
 		o := v.Object()
 		if o.class == ClassArray && o.flags&objHasSparseElements == 0 &&
 			r.usesIntrinsicArrayIterator(o) {
-			return r.newIterObject(&iterState{arr: o}), nil
+			return r.newIterObject(iterState{arr: o}), nil
 		}
 	}
 	method, err := r.getValueProp(v, r.atoms.internSymbol(r.wellKnown.iterator))
@@ -224,7 +232,7 @@ func (r *Runtime) startForOf(v Value) (Value, error) {
 	if err != nil {
 		return Undefined, err
 	}
-	return r.newIterObject(&iterState{iter: iter, next: next}), nil
+	return r.newIterObject(iterState{iter: iter, next: next}), nil
 }
 
 // iterNext advances a cursor, reporting whether a value was produced.
@@ -806,7 +814,7 @@ func (r *Runtime) startForAwaitOf(v Value) (Value, error) {
 	if err != nil {
 		return Undefined, err
 	}
-	return r.newIterObject(&iterState{iter: iter, next: next, asyncIter: true}), nil
+	return r.newIterObject(iterState{iter: iter, next: next, asyncIter: true}), nil
 }
 
 // iterSend calls a cursor's next method with a value, which is what `yield*`
