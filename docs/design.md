@@ -5,9 +5,13 @@ A few decisions worth knowing about if you read the source.
 **Values are NaN-boxed into 16 bytes.** A `Value` is a `float64` plus an
 untyped pointer. Real numbers live in the float; every other kind is a quiet
 NaN whose payload encodes the type, and the pointer is what that type refers to.
-Nothing allocates, and a type check is a mask and compare. The invariant this
-rests on is that a genuine NaN must never collide with a tag, so every number
-is normalized on the way in.
+A BigInt in the int64 range refers to nothing: its low 50 bits are the NaN's,
+and its high 14 are which byte of a static array the pointer points at, a
+pointer outside the heap that the collector passes over. QuickJS holds a
+BigInt that fits in a word in its value the same way. Nothing allocates, and a
+type check is a shift or a mask and a compare. The invariant this rests on is
+that a genuine NaN must never collide with a tag, so every number is
+normalized on the way in.
 
 **The interpreter allocates nothing per call.** One contiguous slice backs both
 locals and operands; a frame is a window into it. Neither that slice nor the

@@ -51,8 +51,8 @@ measurement and [Not implemented](docs/status.md#not-implemented) for what is mi
 On the V8 benchmark suite as a whole it is on par with C QuickJS: it takes
 less time over the suite and has a slightly higher composite score. Single
 operations still cost more: QuickJS's own micro-benchmarks take about 1.4
-times as long on average, and much longer for small BigInts and a few
-others. See [Compared with C QuickJS](docs/benchmarks.md#compared-with-c-quickjs).
+times as long on average, and around three times as long for a few, small
+BigInts' arithmetic among them. See [Compared with C QuickJS](docs/benchmarks.md#compared-with-c-quickjs).
 
 ## Documentation
 

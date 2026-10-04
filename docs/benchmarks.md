@@ -94,7 +94,7 @@ its workloads in this comparison.
 
 Over the V8 suite as a whole, go-quickjs is on par with QuickJS: it takes
 less time and has a slightly higher composite score. Single operations still
-cost more, by about two-fifths on average, as [the micro-benchmarks](#micro-benchmarks)
+cost more, by about a third on average, as [the micro-benchmarks](#micro-benchmarks)
 below show.
 
 go-quickjs has the same design as QuickJS: a bytecode compiler, a
@@ -147,31 +147,31 @@ and Richards and DeltaBlue by more, up to a tenth. To reproduce them, run
 QuickJS's own micro-benchmarks, [`tests/microbench.js`](https://github.com/bellard/quickjs/blob/master/tests/microbench.js),
 time one operation each, in nanoseconds. Each test was given the work QuickJS
 takes about 150 ms for, both engines ran that same work in fresh processes at
-go-quickjs `608415b`, and the figure is the faster of two runs. Over the 72
-tests go-quickjs takes 1.40 times QuickJS's time by the geometric mean: it is
-slower on 54, faster on 14, and level on the rest.
+go-quickjs `9746906`, and the figure is the faster of two runs. Over the 72
+tests go-quickjs takes 1.37 times QuickJS's time by the geometric mean: it is
+slower on 54, faster on 15, and level on the rest.
 
 | Test | go-quickjs | QuickJS | go-quickjs / QuickJS |
 |---|---:|---:|---:|
-| `bigint32_arith` | 224 ns | 23.2 ns | 9.65x |
-| `bigint64_arith` | 224 ns | 40.3 ns | 5.56x |
-| `global_write_strict` | 26.3 ns | 7.6 ns | 3.45x |
-| `array_length_read` | 24.5 ns | 8.5 ns | 2.87x |
-| `array_update` | 24.4 ns | 8.8 ns | 2.78x |
-| `array_prop_create` | 41.4 ns | 15.0 ns | 2.76x |
-| `prop_update` | 30.5 ns | 11.5 ns | 2.65x |
-| `weak_map_set` | 244 ns | 94.2 ns | 2.59x |
-| `regexp_utf16` | 693 ns | 269 ns | 2.58x |
-| `map_set_bigint` | 515 ns | 215 ns | 2.40x |
-| `regexp_ascii` | 579 ns | 261 ns | 2.22x |
-| `float_toFixed` | 282 ns | 163 ns | 1.73x |
-| `func_call` | 41.8 ns | 31.0 ns | 1.35x |
-| `arguments_read` | 137 ns | 167 ns | 0.82x |
-| `string_build1` | 72.8 ns | 94.7 ns | 0.77x |
-| `array_for_of` | 28.4 ns | 46.1 ns | 0.62x |
-| `prop_clone` | 43.1 ns | 77.8 ns | 0.55x |
-| `string_build2c` | 71.8 ns | 148 ns | 0.48x |
-| `array_slice` | 9.0 ns | 27.2 ns | 0.33x |
+| `global_write_strict` | 26.0 ns | 7.7 ns | 3.38x |
+| `bigint32_arith` | 70.4 ns | 23.6 ns | 2.99x |
+| `array_prop_create` | 44.1 ns | 14.9 ns | 2.96x |
+| `array_update` | 25.1 ns | 8.7 ns | 2.88x |
+| `array_length_read` | 23.9 ns | 8.6 ns | 2.77x |
+| `weak_map_set` | 252 ns | 92.8 ns | 2.72x |
+| `bigint64_arith` | 104 ns | 39.1 ns | 2.66x |
+| `prop_update` | 30.2 ns | 11.9 ns | 2.54x |
+| `regexp_utf16` | 684 ns | 273 ns | 2.50x |
+| `regexp_ascii` | 581 ns | 266 ns | 2.19x |
+| `float_toFixed` | 277 ns | 163 ns | 1.70x |
+| `map_set_bigint` | 312 ns | 216 ns | 1.45x |
+| `func_call` | 45.1 ns | 31.2 ns | 1.44x |
+| `string_build1` | 74.2 ns | 93.8 ns | 0.79x |
+| `arguments_read` | 123 ns | 166 ns | 0.74x |
+| `array_for_of` | 31.1 ns | 46.1 ns | 0.68x |
+| `prop_clone` | 44.6 ns | 78.2 ns | 0.57x |
+| `string_build2c` | 73.7 ns | 162 ns | 0.45x |
+| `array_slice` | 9.3 ns | 27.2 ns | 0.34x |
 
 Some of these tests depend on where the linker places the code more than on
 the code, by more than eight placements can average out: those vary where
@@ -179,16 +179,22 @@ the code starts, not how far apart its pieces are. Grouping the hot files
 (`250e8f6`) left the V8 suite level but made `array_for`, `array_update` and
 `float_arith` 33–43% slower and `func_call` 26% slower, at every placement.
 `6b12267` changed none of their code, only the size of two of the tree
-tier's nodes. In the build measured above all four are as fast as before the
-grouping again; averaged over eight placements of the same commit,
-`array_update` (29.8 ns) and `func_call` (48.5 ns) had come back only part of
-the way, and `array_push` and `map_delete` were 7–10% slower. A change of that size in
-one of these tests is not by itself a change in the engine.
+tier's nodes. In the build measured above all four are about as fast as before
+the grouping again, `func_call` within 4%; averaged over eight placements of
+`6b12267`, `array_update` (29.8 ns) and `func_call` (48.5 ns) had come back
+only part of the way, and `array_push` and `map_delete` were 7–10% slower. A
+change of that size in one of these tests is not by itself a change in the
+engine.
 
-The largest gaps, the BigInt tests, are where QuickJS keeps a value in a form
-go-quickjs does not: a BigInt that fits in a word is a value of its own
-there, and an allocation here. Most of the others are the cost of each step,
-which the list below explains. The suite as a whole does better than the operations it is
+The BigInt tests were the largest gaps, 9.65 and 5.56 times QuickJS's time
+at `608415b`, where every BigInt was an allocation. A BigInt in the int64
+range is now held in the value itself (`9746906`), as QuickJS holds one that
+fits in a word. What is left of their gap is mostly the interpreter: their
+function makes calls before its loop, so it runs as bytecode rather than as
+a tree, and the same loop over numbers takes three times QuickJS's time
+there too. `bigint64_arith`'s sum also outgrows 64 bits halfway through each
+run, after which both engines allocate. Most of the others are the cost of
+each step, which the list below explains. The suite as a whole does better than the operations it is
 made of because of the places go-quickjs leads: strings and regular
 expressions over whole texts, which Go's runtime and the engine's matcher do
 well, and Splay's allocation-heavy setup.
@@ -226,7 +232,7 @@ What the gap is made of:
     `output` and `execute` and RayTrace's `dot` do. It may call another such
     function, `new` a constructor of the first kind, as EarleyBoyer's
     `sc_cons` does, and push onto or pop from an array, as DeltaBlue's
-    collections do. Called that way, an empty function costs about 42 ns,
+    collections do. Called that way, an empty function costs about 45 ns,
     against about 31 ns in QuickJS (`func_call`).
 - **Property access.** Objects built the same way share a shape, as in
   QuickJS and V8, and each property read and write, each getter and
