@@ -402,7 +402,7 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 			return b.succ, true
 		}
 		if in.Op == bytecode.OpTailCall || in.Op == bytecode.OpTailCallMethod {
-			// Built apart from op: see zz_tailcall.go.
+			// Built apart from op: see zcall_tail.go.
 			if !b.tailCall(in, pc) {
 				return nil, false
 			}

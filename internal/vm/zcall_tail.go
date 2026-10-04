@@ -3,10 +3,11 @@ package vm
 import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 
 // The tree tier's calls in tail position are built here, in the file the
-// package's code ends with, rather than beside op's calls: the tier's
-// closures are laid out in the order they are written, and NavierStokes,
-// whose code has no tail call, ran 6 to 10% slower with this built inside
-// op and tree_build.go, and as fast as before with it here.
+// package's code ends with -- the z puts it after with.go -- rather than
+// beside op's calls: the tier's closures are laid out in the order they are
+// written, and NavierStokes, whose code has no tail call, ran 6 to 10%
+// slower with this built inside op and tree_build.go, and as fast as before
+// with it here.
 
 // tailCall builds a call in tail position as op builds an ordinary one: the
 // callee, the receiver of a method and the arguments go to their slots.
