@@ -1,6 +1,9 @@
 package vm
 
-import "unsafe"
+import (
+	"math"
+	"unsafe"
+)
 
 // Class identifies an object's exotic behaviour. Most objects are ClassObject
 // and behave ordinarily; the rest have internal slots or overridden property
@@ -991,8 +994,15 @@ func sortIndexedAtoms(a []indexedAtom) {
 // It is the uninitialized value, which cannot otherwise appear in user data.
 var elemHole = uninitialized
 
-// isHole reports whether a dense element slot is empty.
-func isHole(v Value) bool { return v.IsUninitialized() }
+// isHole reports whether a dense element slot is empty. It compares the
+// whole of the value's bits with the hole's: the other uninitialized values
+// -- the markers of a Map's or a WeakMap's deleted entries -- are never
+// elements, and one comparison keeps elemAt and setElem, which ask it of
+// every element a tree reads or writes, small enough for Go to inline.
+func isHole(v Value) bool { return math.Float64bits(v.num) == holeBits }
+
+// holeBits is elemHole's bits: an uninitialized value of payload 0.
+const holeBits = tagBase | uint64(KindUninitialized)
 
 // getElem returns a dense element and whether the slot is present.
 func (o *Object) getElem(i uint32) (Value, bool) {

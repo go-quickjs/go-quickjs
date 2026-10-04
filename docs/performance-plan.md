@@ -243,7 +243,7 @@ a project for a few of Splay's allocations.
 | ID | Item | Targets | Risk | Status |
 |---|---|---|---|---|
 | B1 | `.length` fast path in the existing nodes | `array_length_read` 2.9x | Medium | Done |
-| B2 | Element reads and writes in trees without a call | `array_read` 1.85x, `array_write` 1.6x | Medium | Open |
+| B2 | Element reads and writes in trees without a call | `array_read` 1.85x, `array_write` 1.6x | Medium | Declined |
 | B3 | Typed-array elements without the generic path | `typed_array_read` 2.1x, `typed_array_write` 1.8x | Medium | Open |
 | B4 | Appending to an array, and `arr.length = n`, directly | `array_prop_create` 2.8x, `array_hole_length_decr` 1.7x | Low | Open |
 | B5 | No new layout on every `delete` | `prop_delete` 2.1x | High | Open |
@@ -264,7 +264,13 @@ a project for a few of Splay's allocations.
   code being the placement lottery and the hot code now in trees.
 - **B2.** `elemAt` and `setElem` (`vm_tree.go`) are not inlinable, so every
   element read and write in a tree is a direct call; their bodies written out
-  in the local-operand closures save it.
+  in the local-operand closures save it. **Declined.** They cost 94 and 93
+  against Go's budget of 80, and written with early returns no less: the
+  two type tests alone are 22. Writing them out in the tree builder's
+  closures adds code where its placement has cost Crypto and NavierStokes
+  before, to save one direct call, a nanosecond or two. `isHole` is now one
+  comparison of the value's bits with the hole's, which every hole test
+  gains by.
 - **B3.** A typed array's element goes through `getIndexSlow`,
   `typedElemIndex`, two interface assertions and the element-size table. A
   view of fixed length can keep its buffer, element shift and end, which a
