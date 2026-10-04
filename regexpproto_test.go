@@ -607,3 +607,83 @@ func TestRegExpLegacyStatics(t *testing.T) {
 		  typeof Object.getOwnPropertyDescriptor(RegExp, "input").set`, "function"},
 	})
 }
+
+// The built-in symbol methods take shortcuts for a RegExp nothing a script
+// wrote can reach: lastIndex read and written at its slot, a global match
+// found without exec's arrays, a split searched with the RegExp's own pattern
+// rather than the sticky copy of it the method makes, replace told the flags
+// it was found with. Each answer here is Node's, and each shortcut must give
+// way where a script could see the difference: a lastIndex that cannot be
+// written, an exec, flags getter, species, constructor or Symbol.match a
+// script replaced, a limit whose conversion runs a script.
+func TestRegExpBuiltinShortcuts(t *testing.T) {
+	evalCases(t, []struct{ src, want string }{
+		// lastIndex is converted, written and refused as an ordinary property.
+		{`var n = 0, r = /a/g; r.lastIndex = {valueOf() { n++; return 2 }};
+		  var m = r.exec("aaaa"); [m.index, r.lastIndex, n].join()`, "2,3,1"},
+		{`var r = /a/g; r.lastIndex = 1e20; [r.test("aaa"), r.lastIndex].join()`, "false,0"},
+		{`var r = /b/y; r.lastIndex = 1; [r.test("abc"), r.lastIndex, r.test("abc"), r.lastIndex].join()`,
+			"true,2,false,0"},
+		{`var r = /a/g; r.foo = 1; r.lastIndex = 1; [r.exec("aba").index, r.lastIndex].join()`, "2,3"},
+		{`var r = /a/; Object.freeze(r); r.exec("bab")[0]`, "a"},
+		{`var errs = [];
+		  for (var f of [r => r.exec("bab"), r => "aa".match(r), r => "aa".replace(r, "b")]) {
+		    var r = /a/g; Object.freeze(r);
+		    try { f(r) } catch (e) { errs.push(e.constructor.name) }
+		  }
+		  var r = /x/y; Object.defineProperty(r, "lastIndex", {writable: false});
+		  try { r.test("bab") } catch (e) { errs.push(e.constructor.name) }
+		  errs.join()`, "TypeError,TypeError,TypeError,TypeError"},
+
+		// A global match ends with lastIndex at 0 and the last match in the
+		// legacy statics, and steps past an empty match by code point under u.
+		{`var r = /a(b)?/g; r.lastIndex = 5;
+		  JSON.stringify(["xabaab".match(r), r.lastIndex, RegExp.lastMatch, RegExp.$1])`,
+			`[["ab","a","ab"],0,"ab","b"]`},
+		{`var r = /z/g; r.lastIndex = 3; JSON.stringify(["abc".match(r), r.lastIndex])`, "[null,0]"},
+		{`"\u{1F600}a\u{1F600}".match(/(?:)/gu).length + "," + "\u{1F600}a\u{1F600}".match(/(?:)/g).length`, "4,6"},
+		{`"a1b2".match(/(?<d>\d)/g).join()`, "1,2"},
+		{`var r = /a/g; r.compile("b", "g"); "abab".match(r).join()`, "b,b"},
+		{`var save = RegExp.prototype.exec, n = 0;
+		  RegExp.prototype.exec = function (s) { n++; return save.call(this, s) };
+		  var m = "aXa".match(/a/g); RegExp.prototype.exec = save; m.join() + "," + n`, "a,a,3"},
+		{`var n = 0, d = Object.getOwnPropertyDescriptor(RegExp.prototype, "global");
+		  Object.defineProperty(RegExp.prototype, "global", {get() { n++; return d.get.call(this) }, configurable: true});
+		  var m = "aa".match(/a/g); m.join() + "," + n`, "a,a,1"},
+
+		// replace leaves lastIndex alone without g, and at 0 with it.
+		{`var r = /a/g; r.lastIndex = 2; ["banana".replace(r, "o"), r.lastIndex].join()`, "bonono,0"},
+		{`var r = /a/; r.lastIndex = 2; ["banana".replace(r, "o"), r.lastIndex, RegExp.leftContext].join()`,
+			"bonana,2,b"},
+
+		// split: pieces, captures, limits and the legacy statics as the
+		// sticky copy would have left them, and rx's lastIndex untouched.
+		{`JSON.stringify(["a1b22c".split(/(\d)+/), RegExp.lastMatch, RegExp.$1, RegExp.rightContext])`,
+			`[["a","1","b","2","c"],"22","2","c"]`},
+		{`JSON.stringify(["a,b,c,d".split(/,/, 2), "a,b".split(/,/, 0), "a,b".split(/,/, -1), "a,b".split(/,/, 2.7)])`,
+			`[["a","b"],[],["a","b"],["a","b"]]`},
+		{`JSON.stringify(["".split(/x/), "".split(/(?:)/)])`, `[[""],[]]`},
+		{`var r = /,/g; r.lastIndex = 3; "a,b".split(r); r.lastIndex`, "3"},
+		{`JSON.stringify(["a,b,c".split(/,/y), "a,b,c".split(/b/y)])`, `[["a","b","c"],["a,",",c"]]`},
+		{`"\u{1F600}\u{1F600}".split(/(?:)/u).length`, "2"},
+		{`var r = /a/; r.compile(","); "1,2".split(r).join("|")`, "1|2"},
+		{`class R extends RegExp {} var r = new R(","); Object.setPrototypeOf(r, RegExp.prototype);
+		  /q(w)/.exec("qw"); "x,y".split(r).join() + "|" + RegExp.lastMatch`, "x,y|,"},
+		// What making the copy reads is read where a script replaced it.
+		{`var n = 0, d = Object.getOwnPropertyDescriptor(RegExp, Symbol.species);
+		  Object.defineProperty(RegExp, Symbol.species, {get() { n++; return RegExp }, configurable: true});
+		  var p = "a,b".split(/,/); Object.defineProperty(RegExp, Symbol.species, d); p.join() + "," + n`, "a,b,1"},
+		{`var n = 0, save = RegExp.prototype.constructor;
+		  RegExp.prototype.constructor = function () {};
+		  RegExp.prototype.constructor[Symbol.species] = function (p, f) { n++; return new RegExp(p, f) };
+		  var p = "a,b".split(/,/); RegExp.prototype.constructor = save; p.join() + "," + n`, "a,b,1"},
+		{`var n = 0, d = Object.getOwnPropertyDescriptor(RegExp.prototype, Symbol.match);
+		  Object.defineProperty(RegExp.prototype, Symbol.match, {get() { n++; return d.value }, configurable: true});
+		  var p = "a,b".split(/,/); Object.defineProperty(RegExp.prototype, Symbol.match, d); p.join() + "," + n`, "a,b,1"},
+		// A limit is converted after the copy is made, and what its valueOf
+		// does to exec is what the copy's search sees.
+		{`var save = RegExp.prototype.exec, n = 0;
+		  var lim = {valueOf() { RegExp.prototype.exec = function (s) { n++; return save.call(this, s) }; return 9 }};
+		  var p = "a,b".split(/,/, lim); RegExp.prototype.exec = save; p.join() + "," + n`, "a,b,3"},
+	})
+}

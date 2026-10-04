@@ -121,22 +121,57 @@ func (r *Runtime) regExpSymbolMatch(rx Value, args []Value) (Value, error) {
 	if err != nil {
 		return Undefined, err
 	}
-	flags, err := r.regExpFlagsOf(rx)
-	if err != nil {
-		return Undefined, err
+	// A RegExp whose flags would be read through the built-in getters is
+	// asked for them as bits, which is the same answer without the string.
+	fl, builtin := r.builtinFlagBits(rx)
+	if !builtin {
+		flags, err := r.regExpFlagsOf(rx)
+		if err != nil {
+			return Undefined, err
+		}
+		fl = 0
+		if strings.ContainsRune(flags, 'g') {
+			fl |= regexp.FlagGlobal
+		}
+		if strings.ContainsAny(flags, "uv") {
+			fl |= regexp.FlagUnicode
+		}
 	}
 	// Without the global flag, match is exec: one result with its groups.
-	if !strings.ContainsRune(flags, 'g') {
+	if fl&regexp.FlagGlobal == 0 {
 		return r.regExpExec(rx, s)
 	}
 	// With it, match returns every matched substring and no group information,
 	// which is a different shape entirely.
-	fullUnicode := strings.ContainsAny(flags, "uv")
-	if err := r.setValueProp(rx, atomLastIndex, Int(0), true); err != nil {
+	fullUnicode := fl&(regexp.FlagUnicode|regexp.FlagUnicodeSets) != 0
+	if builtin {
+		err = r.setLastIndex(rx.Object(), Int(0))
+	} else {
+		err = r.setValueProp(rx, atomLastIndex, Int(0), true)
+	}
+	if err != nil {
 		return Undefined, err
 	}
-	units := s.codeUnits()
 	var out []Value
+	// Where exec is the built-in, the matches are found as replace finds
+	// them, without the arrays exec would make of them for this to read
+	// element 0 of.
+	if builtin && r.builtinExecOf(rx) {
+		spans, err := r.execMatchAll(rx, s, fullUnicode, nil)
+		if err != nil {
+			return Undefined, err
+		}
+		if len(spans) == 0 {
+			return Null, nil
+		}
+		width := 2 * (rx.Object().data.(*regexpData).re.GroupCount() + 1)
+		out = make([]Value, 0, len(spans)/width)
+		for i := 0; i < len(spans); i += width {
+			out = append(out, Str(s.Substring(spans[i], spans[i+1])))
+		}
+		return Obj(r.newArrayFrom(out)), nil
+	}
+	units := s.codeUnits()
 	for {
 		if err := r.tick(); err != nil {
 			return Undefined, err
@@ -222,6 +257,23 @@ func (r *Runtime) regExpSymbolSplit(rx Value, args []Value) (Value, error) {
 	if err != nil {
 		return Undefined, err
 	}
+	// The copy is not made where making it would run nothing a script wrote,
+	// and nothing but the search could see it: see splitDirect. A limit that
+	// is an object could, as it is converted after the copy is made, so it
+	// is left to the long way.
+	if lv := arg(args, 1); (lv.IsUndefined() || lv.IsNumber()) && s.Len() > 0 {
+		if fl, ok := r.splitDirect(rx); ok {
+			limit, _ := r.splitLimit(lv)
+			if limit == 0 {
+				return Obj(r.newArrayFrom(nil)), nil
+			}
+			// The copy would have been the realm's RegExp's, whose matches
+			// are the legacy statics' whatever rx's are.
+			d := regexpData{re: rx.Object().data.(*regexpData).re, legacy: true, realm: r.Realm}
+			return r.splitBuiltin(rx, &d, s, s.codeUnits(), limit,
+				fl&(regexp.FlagUnicode|regexp.FlagUnicodeSets) != 0)
+		}
+	}
 	ctor, err := r.speciesConstructor(rx.Object(), r.proto.regexpCtor)
 	if err != nil {
 		return Undefined, err
@@ -240,13 +292,9 @@ func (r *Runtime) regExpSymbolSplit(rx Value, args []Value) (Value, error) {
 		return Undefined, err
 	}
 
-	limit := int64(1)<<32 - 1
-	if lv := arg(args, 1); !lv.IsUndefined() {
-		n, err := r.toUint32(lv)
-		if err != nil {
-			return Undefined, err
-		}
-		limit = int64(n)
+	limit, err := r.splitLimit(arg(args, 1))
+	if err != nil {
+		return Undefined, err
 	}
 	var out []Value
 	if limit == 0 {
@@ -272,7 +320,7 @@ func (r *Runtime) regExpSymbolSplit(rx Value, args []Value) (Value, error) {
 	// units, which for text that is all ASCII shares the bytes.
 	piece := func(lo, hi int) Value { return Str(s.Substring(lo, hi)) }
 	if r.builtinExec(splitter) {
-		return r.splitBuiltin(splitter, s, units, limit, fullUnicode)
+		return r.splitBuiltin(splitter, splitter.Object().data.(*regexpData), s, units, limit, fullUnicode)
 	}
 	p, q := 0, 0
 	for q < size {
@@ -331,6 +379,15 @@ func (r *Runtime) regExpSymbolSplit(rx Value, args []Value) (Value, error) {
 	return Obj(r.newArrayFrom(out)), nil
 }
 
+// splitLimit is split's limit argument as the count of pieces it allows.
+func (r *Runtime) splitLimit(lv Value) (int64, error) {
+	if lv.IsUndefined() {
+		return 1<<32 - 1, nil
+	}
+	n, err := r.toUint32(lv)
+	return int64(n), err
+}
+
 // resultCaptureCount reads how many groups a result carries, which is its
 // length less the whole match.
 func (r *Runtime) resultCaptureCount(result Value) (int64, error) {
@@ -350,6 +407,13 @@ func (r *Runtime) resultCaptureCount(result Value) (int64, error) {
 
 // regExpSymbolReplace implements RegExp.prototype[Symbol.replace].
 func (r *Runtime) regExpSymbolReplace(rx Value, args []Value) (Value, error) {
+	return r.regExpReplace(rx, args, 0, false)
+}
+
+// regExpReplace is RegExp.prototype[Symbol.replace], called directly where
+// replaceDirect has found rx to be a RegExp that it may be: its flags are
+// then fl, and its exec the built-in.
+func (r *Runtime) regExpReplace(rx Value, args []Value, fl regexp.Flags, direct bool) (Value, error) {
 	if !rx.IsObject() {
 		return Undefined, r.throwTypeError("RegExp.prototype[Symbol.replace] called on a non-object")
 	}
@@ -373,7 +437,10 @@ func (r *Runtime) regExpSymbolReplace(rx Value, args []Value) (Value, error) {
 	// A RegExp whose flags would be read through the built-in getters is
 	// asked for them as bits, which is the same answer without the string.
 	var global, fullUnicode bool
-	fl, builtin := r.builtinFlagBits(rx)
+	builtin := direct
+	if !direct {
+		fl, builtin = r.builtinFlagBits(rx)
+	}
 	if builtin {
 		global = fl&regexp.FlagGlobal != 0
 		fullUnicode = fl&(regexp.FlagUnicode|regexp.FlagUnicodeSets) != 0
@@ -386,7 +453,12 @@ func (r *Runtime) regExpSymbolReplace(rx Value, args []Value) (Value, error) {
 		fullUnicode = strings.ContainsAny(flags, "uv")
 	}
 	if global {
-		if err := r.setValueProp(rx, atomLastIndex, Int(0), true); err != nil {
+		if builtin {
+			err = r.setLastIndex(rx.Object(), Int(0))
+		} else {
+			err = r.setValueProp(rx, atomLastIndex, Int(0), true)
+		}
+		if err != nil {
 			return Undefined, err
 		}
 	} else {
@@ -401,7 +473,7 @@ func (r *Runtime) regExpSymbolReplace(rx Value, args []Value) (Value, error) {
 	// as the arrays exec would have made of them, which only this reads.
 	var results []Value
 	var spans []int
-	fast := builtin && r.builtinExecOf(rx)
+	fast := direct || builtin && r.builtinExecOf(rx)
 	if fast && global {
 		var err error
 		if spans, err = r.execMatchAll(rx, s, fullUnicode, spans); err != nil {

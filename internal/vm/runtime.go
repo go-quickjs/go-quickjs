@@ -379,6 +379,10 @@ type Realm struct {
 	// regexpReplaceProps is RegExp.prototype[Symbol.replace] as the realm
 	// made it.
 	regexpReplaceProps []builtinProp
+	// regexpSplitProps is RegExp.prototype's constructor and Symbol.match,
+	// and regexpSpeciesProps RegExp[Symbol.species], as the realm made them:
+	// see splitDirect.
+	regexpSplitProps, regexpSpeciesProps []builtinProp
 	// objectToStringFn is Object.prototype.toString, which tells a structured
 	// clone how V8 would name an object it refuses.
 	objectToStringFn *Object

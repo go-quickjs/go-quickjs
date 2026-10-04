@@ -379,6 +379,12 @@ func (r *Runtime) initRegExpBuiltins() {
 	}
 	r.regexpFlagProps = r.snapshotProps(p, names...)
 	r.regexpExecProps = r.snapshotProps(p, "exec")
+	match := p.findOwn(r.atoms.internSymbol(r.wellKnown.match))
+	r.regexpSplitProps = append(r.snapshotProps(p, "constructor"),
+		builtinProp{i: int(match), p: p.props[match]})
+	species := reCtor.findOwn(r.atoms.internSymbol(r.wellKnown.species))
+	sp := reCtor.props[species]
+	r.regexpSpeciesProps = []builtinProp{{i: int(species), p: sp, getter: sp.getterSetter().getter}}
 }
 
 // regexpExec runs a pattern against a string, honouring and updating lastIndex.
@@ -404,14 +410,10 @@ func (r *Runtime) regexpMatch(this Value, s *String) ([]int, *regexp.Regexp, err
 	}
 	o := this.Object()
 
-	// lastIndex is read whatever the flags say -- a getter on it runs either
+	// lastIndex is read whatever the flags say -- its valueOf runs either
 	// way -- but it only decides where the search starts, and is only written
 	// back, when the pattern is global or sticky.
-	liVal, err := r.getProp(o, atomLastIndex, this)
-	if err != nil {
-		return nil, nil, err
-	}
-	li, err := r.toLength(liVal)
+	li, err := r.toLength(o.props[0].value)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -424,12 +426,9 @@ func (r *Runtime) regexpMatch(this Value, s *String) ([]int, *regexp.Regexp, err
 	}
 
 	units := s.codeUnits()
-	// The write goes through the object rather than into its table: a
-	// lastIndex that cannot be written is an error the caller sees, which is
-	// the whole point of it being an ordinary property.
 	if start < 0 || start > len(units) {
 		if stateful {
-			if _, err := r.setProp(o, atomLastIndex, Int(0), this, true); err != nil {
+			if err := r.setLastIndex(o, Int(0)); err != nil {
 				return nil, nil, err
 			}
 		}
@@ -465,19 +464,33 @@ func (r *Runtime) regexpMatch(this Value, s *String) ([]int, *regexp.Regexp, err
 	}
 	if caps == nil {
 		if stateful {
-			if _, err := r.setProp(o, atomLastIndex, Int(0), this, true); err != nil {
+			if err := r.setLastIndex(o, Int(0)); err != nil {
 				return nil, nil, err
 			}
 		}
 		return nil, re, nil
 	}
 	if stateful {
-		if _, err := r.setProp(o, atomLastIndex, Int(caps[1]), this, true); err != nil {
+		if err := r.setLastIndex(o, Int(caps[1])); err != nil {
 			return nil, nil, err
 		}
 	}
 	r.recordLegacyMatch(o.data.(*regexpData), s, caps)
 	return caps, re, nil
+}
+
+// setLastIndex writes a RegExp's lastIndex, which is its first property:
+// newRegExpObject makes it first, and it can be neither deleted nor made an
+// accessor, so it stays there and stays a value. One that cannot be written
+// is written through the object, for the error a script sees -- the whole
+// point of lastIndex being an ordinary property.
+func (r *Runtime) setLastIndex(o *Object, v Value) error {
+	if p := &o.props[0]; p.flags&propWritable != 0 {
+		p.value = v
+		return nil
+	}
+	_, err := r.setProp(o, atomLastIndex, v, Obj(o), true)
+	return err
 }
 
 // builtinExec reports whether exec, called on rx, would be the built-in
@@ -496,12 +509,30 @@ func (r *Runtime) builtinExec(rx Value) bool {
 // call the built-in Symbol.replace itself rather than look it up and call
 // it: rx's Symbol.replace, flags and exec are the built-ins and its lastIndex
 // can be written, so that nothing the call does runs a script or throws, and
-// its frame could not be seen.
-func (r *Runtime) replaceDirect(rx Value) bool {
-	if _, ok := r.builtinFlagBits(rx); !ok || !propsIntact(r.proto.regexp, r.regexpReplaceProps) || !r.builtinExecOf(rx) {
-		return false
+// its frame could not be seen. It answers with rx's flags, which the call
+// is then given rather than asking again.
+func (r *Runtime) replaceDirect(rx Value) (regexp.Flags, bool) {
+	fl, ok := r.builtinFlagBits(rx)
+	if !ok || !propsIntact(r.proto.regexp, r.regexpReplaceProps) || !r.builtinExecOf(rx) {
+		return 0, false
 	}
-	return rx.Object().props[0].flags&propWritable != 0
+	return fl, rx.Object().props[0].flags&propWritable != 0
+}
+
+// splitDirect reports whether rx.[Symbol.split] may search with rx's own
+// pattern rather than with the sticky copy of it that it makes: rx's flags
+// and exec are the built-ins, and so are the constructor its prototype
+// names, that constructor's Symbol.species and the prototype's Symbol.match,
+// which making the copy reads -- so making it would run nothing a script
+// wrote, and nothing could see the copy but the search. It answers with
+// rx's flags.
+func (r *Runtime) splitDirect(rx Value) (regexp.Flags, bool) {
+	fl, ok := r.builtinFlagBits(rx)
+	if !ok || !propsIntact(r.proto.regexp, r.regexpSplitProps) ||
+		!propsIntact(r.proto.regexpCtor, r.regexpSpeciesProps) || !r.builtinExecOf(rx) {
+		return 0, false
+	}
+	return fl, true
 }
 
 // builtinExecOf is builtinExec for a RegExp builtinFlagBits has answered for.
@@ -543,7 +574,7 @@ func (r *Runtime) execMatchAll(rx Value, s *String, fullUnicode bool, spans []in
 	first := len(spans)
 	pos := 0
 	fail := func(err error) ([]int, error) {
-		if _, serr := r.setProp(o, atomLastIndex, Int(pos), rx, true); serr != nil {
+		if serr := r.setLastIndex(o, Int(pos)); serr != nil {
 			return spans, serr
 		}
 		if len(spans) > first {
@@ -584,7 +615,7 @@ func (r *Runtime) execMatchAll(rx Value, s *String, fullUnicode bool, spans []in
 		}
 	}
 	// The call that found nothing left lastIndex at 0.
-	if _, err := r.setProp(o, atomLastIndex, Int(0), rx, true); err != nil {
+	if err := r.setLastIndex(o, Int(0)); err != nil {
 		return spans, err
 	}
 	if len(spans) > first {
@@ -594,14 +625,13 @@ func (r *Runtime) execMatchAll(rx Value, s *String, fullUnicode bool, spans []in
 }
 
 // splitBuiltin is RegExp.prototype[Symbol.split]'s loop for a splitter whose
-// exec is the built-in, which split made and nothing else can reach. The loop
-// tries the sticky splitter at each position in turn; the first position it
-// succeeds at is where a search from the first finds its match, so each piece
-// is one search rather than a call of exec per position. It runs in exec's
-// frame, and the legacy statics are those of the last match, as they would
-// have been.
-func (r *Runtime) splitBuiltin(splitter Value, s *String, units []uint16, limit int64, fullUnicode bool) (Value, error) {
-	d := splitter.Object().data.(*regexpData)
+// exec is the built-in, which split made and nothing else can reach, and d
+// is its data. The loop tries the sticky splitter at each position in turn;
+// the first position it succeeds at is where a search from the first finds
+// its match, so each piece is one search rather than a call of exec per
+// position. It runs in exec's frame, and the legacy statics are those of the
+// last match, as they would have been.
+func (r *Runtime) splitBuiltin(splitter Value, d *regexpData, s *String, units []uint16, limit int64, fullUnicode bool) (Value, error) {
 	re := d.re
 	size := len(units)
 	i := len(r.argStack)
