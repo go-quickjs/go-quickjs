@@ -66,6 +66,7 @@ BigInts' arithmetic among them. See [Compared with C QuickJS](docs/benchmarks.md
 | [Sandboxing](docs/sandboxing.md) | what a script can reach, and how its time and memory are bounded |
 | [Design notes](docs/design.md) | how the engine is built, for reading the source |
 | [Benchmarks](docs/benchmarks.md) | Go benchmarks, and the V8 suite against goja, C QuickJS and Node |
+| [Performance plan](docs/performance-plan.md) | the optimizations still to make, how each is measured, and what was tried and rejected |
 | [jsregexp](jsregexp/README.md) | the engine's regular expressions as a Go package, against Go's `regexp` |
 
 ## License
