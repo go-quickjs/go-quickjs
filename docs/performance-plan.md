@@ -371,8 +371,8 @@ matter to hosts running classes, modules and async code.
 |---|---|---|
 | C1 | Strict `return f()` (a tail call) takes the generic call path, and keeps its function out of the tree tier and the frameless evaluator | Done |
 | C2 | An `await` makes about nine allocations: two functions, a promise nothing can reach, a job, an argument list | Done |
-| C3 | A generator or async call makes four allocations, and resuming copies its whole frame | Open |
-| C4 | A bound function always takes the slow call path, and allocates its arguments when it has bound ones | Open |
+| C3 | A generator or async call makes four allocations, and resuming copies its whole frame | Done, in part |
+| C4 | A bound function always takes the slow call path, and allocates its arguments when it has bound ones | Declined for now |
 | C5 | Every `for-of`, spread and array destructuring allocates an iterator object | Open |
 | C6 | An arrow function is 448 to 480 bytes, most of it fields only bound or `with` functions use | Open |
 | C7 | A closure reads a `let` or `const` it captured after its initialization with a dead-zone check, which keeps arrows out of the frameless evaluator | Open |
@@ -394,6 +394,24 @@ Crypto +1.6% to +1.8%. Neither runs in the suite: C2 alone, whose code the
 suite never reaches, moved Crypto +2.1%, and C1's variants moved it between
 +1.6% and +6.1% with no relation to what they run. Taken as placement, as
 A5's DeltaBlue was.
+
+**C3, done in part:** a generator and its object are one allocation, its
+arguments and locals another, and its window is no longer cleared at each
+suspension -- a returning call leaves its own for `endTurn`. A generator
+made and run -10%, an async call -7%, a yield -3%, a spread of one -4%.
+Taking the suspension's signal from the runtime instead of allocating it
+made a yield 14% faster, but is a change to `executeAt`, which cost Crypto
+4%: left.
+
+**C4, declined for now:** a bound function called through `callFromLoop`'s
+fast path, its arguments merged on the runtime's stack, made bound calls
+5% to 45% faster -- but any edit to `callObject` or `callFromLoop` moved
+Crypto 7 to 11%, in every form tried. Part of it is `runTree`'s alignment:
+`vm_call.go` comes before `vm_tree.go`, Go aligns functions to 32 bytes,
+and Crypto runs slower with `runTree` at 32 mod 64 than at 0; padding
+`runTree` back to 0 recovered half. The rest is `callFromLoop` and `runFD`
+moving the same way. It waits on the tier's hot functions being made
+indifferent to where they land.
 
 ## Rejected
 

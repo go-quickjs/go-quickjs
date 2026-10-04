@@ -142,12 +142,20 @@ const (
 // newGenerator builds the generator object a call to a generator function
 // returns.
 func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Object, async bool, newTarget Value) (*Object, error) {
-	g := &generator{
+	// The object and its generator are one allocation, and the arguments
+	// and the locals another: a generator or an async function is made at
+	// every call. The arguments' slice is full, so that nothing appended
+	// to it runs into the locals.
+	vals := make([]Value, len(args)+cl.fn.LocalCount)
+	copy(vals, args)
+	gobj := &generatorObject{Object: Object{class: ClassGenerator, flags: objExtensible}}
+	g := &gobj.g
+	*g = generator{
 		cl:     cl,
 		this:   this,
-		args:   append([]Value(nil), args...),
+		args:   vals[:len(args):len(args)],
 		callee: callee,
-		locals: make([]Value, cl.fn.LocalCount),
+		locals: vals[len(args):],
 		async:  async,
 		// Nothing constructs a generator or an async function, so new.target
 		// there is undefined, but for an async arrow's, which is where it
@@ -217,9 +225,15 @@ func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Ob
 			proto = custom.Object()
 		}
 	}
-	o := newObject(proto, ClassGenerator)
-	o.data = g
-	return o, nil
+	gobj.proto = proto
+	gobj.data = g
+	return &gobj.Object, nil
+}
+
+// generatorObject is a generator's object and its state, made together.
+type generatorObject struct {
+	Object
+	g generator
 }
 
 // bindGeneratorParams runs a generator's parameter prologue, which evaluates
@@ -266,7 +280,6 @@ func (r *Runtime) bindGeneratorParams(g *generator) error {
 	f.detachSuspended()
 
 	r.frameDepth--
-	clear(r.stack[base:r.stackTop])
 	r.stackTop = base
 	return err
 }
@@ -501,7 +514,8 @@ func (r *Runtime) releaseGeneratorFrame(g *generator, base int) {
 		f.detachSuspended()
 		r.frameDepth--
 	}
-	clear(r.stack[base:r.stackTop])
+	// The window is left as a returning call leaves its own, for endTurn
+	// to clear up to where the turn reached.
 	r.stackTop = base
 }
 

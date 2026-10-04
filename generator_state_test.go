@@ -100,3 +100,23 @@ func TestResumedFramesAreSetUp(t *testing.T) {
 		t.Errorf("got  %s\nwant %s", got, want)
 	}
 }
+
+// TestGeneratorsSuspendingInTurn covers generators that resume others, and
+// async generators awaiting between their yields: each suspension is read
+// from the runtime's one signal before the next can be made, which a
+// generator suspending inside another's resumption, yield*, and an await
+// in an async generator's body must not upset. The answers are Node's.
+func TestGeneratorsSuspendingInTurn(t *testing.T) {
+	checkAsync(t, `function* inner(k) { var x = yield k + "a"; yield k + "b" + x; return k + "r" }
+		function* outer() { var it = inner("i"); var r1 = it.next(); var y = yield r1.value; var r2 = it.next(y); yield r2.value + "|" + JSON.stringify(it.next()); var d = yield* inner("d"); yield d }
+		var out = [], g = outer(), r, n = 0;
+		while (!(r = g.next("s" + n++)).done) out.push(r.value);
+		function* fib() { var a = 0, b = 1; for (;;) { yield a; [a, b] = [b, a + b] } }
+		var f = [], it = fib(); for (var i = 0; i < 10; i++) f.push(it.next().value);
+		out.push(f.join(), [...(function* () { yield* [1, 2]; yield* (function* () { yield 3 })() })()].join());
+		var log = [];
+		async function* ag() { var x = await 1; yield x; var y = await Promise.resolve(2); yield y + (yield 3) }
+		(async () => { var a = ag(); log.push(JSON.stringify(await a.next()), JSON.stringify(await a.next()), JSON.stringify(await a.next()), JSON.stringify(await a.next(4)), JSON.stringify(await a.next())) })()`,
+		`out.join(" ; ") + " ; " + log.join(" ")`,
+		`ia ; ibs1|{"value":"ir","done":true} ; da ; dbs3 ; dr ; 0,1,1,2,3,5,8,13,21,34 ; 1,2,3 ; {"value":1,"done":false} {"value":3,"done":false} {"value":null,"done":false} {"done":true} {"done":true}`)
+}
