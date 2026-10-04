@@ -94,7 +94,7 @@ its workloads in this comparison.
 
 Over the V8 suite as a whole, go-quickjs is on par with QuickJS: it takes
 less time and has a slightly higher composite score. Single operations still
-cost more, by about half on average, as [the micro-benchmarks](#micro-benchmarks)
+cost more, by about two-fifths on average, as [the micro-benchmarks](#micro-benchmarks)
 below show.
 
 go-quickjs has the same design as QuickJS: a bytecode compiler, a
@@ -145,45 +145,53 @@ and Richards and DeltaBlue by more, up to a tenth. To reproduce them, run
 ### Micro-benchmarks
 
 QuickJS's own micro-benchmarks, [`tests/microbench.js`](https://github.com/bellard/quickjs/blob/master/tests/microbench.js),
-time one operation each. Each test was given the work QuickJS takes about
-150 ms for, and both engines ran that same work in fresh processes; the
-figure is the faster of two runs, in nanoseconds an operation, at
-go-quickjs `6105711`. Over the 72 tests go-quickjs takes 1.47 times
-QuickJS's time by the geometric mean: it is slower on 54, faster on 14, and
+time one operation each, in nanoseconds. QuickJS's figures, and go-quickjs's
+for the 20 tests marked †, are from go-quickjs `6105711`: each test was given
+the work QuickJS takes about 150 ms for, both engines ran that same work in
+fresh processes, and the figure is the faster of two runs. go-quickjs's other
+52 were measured again at `6b12267`, over eight code placements: each test ran
+until it took at least 150 ms, and the figure is the fastest of three runs,
+averaged over the placements. Over the 72 tests go-quickjs takes 1.41 times
+QuickJS's time by the geometric mean: it is slower on 52, faster on 16, and
 level on the rest.
 
 | Test | go-quickjs | QuickJS | go-quickjs / QuickJS |
 |---|---:|---:|---:|
-| `bigint32_arith` | 242 ns | 23.3 ns | 10.38x |
-| `bigint64_arith` | 244 ns | 39.3 ns | 6.21x |
-| `array_update` | 34.5 ns | 8.6 ns | 4.00x |
-| `global_write_strict` | 26.4 ns | 7.7 ns | 3.42x |
-| `array_prop_create` | 48.0 ns | 15.0 ns | 3.21x |
-| `array_length_read` | 23.9 ns | 8.6 ns | 2.78x |
-| `weak_map_set` | 253 ns | 94.2 ns | 2.68x |
-| `regexp_utf16` | 711 ns | 272 ns | 2.61x |
+| `bigint32_arith` | 232 ns | 23.3 ns | 9.93x |
+| `bigint64_arith` | 232 ns | 39.3 ns | 5.91x |
+| `array_update` | 29.8 ns | 8.6 ns | 3.45x |
+| `global_write_strict` | 25.9 ns | 7.7 ns | 3.36x |
+| `array_length_read` | 24.2 ns | 8.6 ns | 2.82x |
+| `array_prop_create` | 42.0 ns | 15.0 ns | 2.81x |
 | `prop_update` | 29.7 ns | 11.6 ns | 2.57x |
-| `regexp_ascii` | 587 ns | 260 ns | 2.26x |
-| `map_set_bigint` | 485 ns | 218 ns | 2.23x |
-| `func_call` | 55.1 ns | 31.1 ns | 1.77x |
-| `float_toFixed` | 280 ns | 163 ns | 1.71x |
-| `string_build1` | 72.8 ns | 93.3 ns | 0.78x |
-| `arguments_read` | 129 ns | 166 ns | 0.78x |
-| `array_for_of` | 29.9 ns | 46.4 ns | 0.64x |
-| `string_build2c` | 69.8 ns | 148 ns | 0.47x |
-| `array_slice` | 9.2 ns | 27.1 ns | 0.34x |
+| `weak_map_set` | 239 ns | 94.2 ns | 2.54x |
+| `regexp_utf16` | 680 ns | 272 ns | 2.50x |
+| `regexp_ascii` | 576 ns | 260 ns | 2.22x |
+| `map_set_bigint` | 475 ns | 218 ns | 2.18x |
+| `float_toFixed` † | 280 ns | 163 ns | 1.71x |
+| `func_call` | 48.5 ns | 31.1 ns | 1.56x |
+| `arguments_read` | 126 ns | 166 ns | 0.76x |
+| `string_build1` | 70.2 ns | 93.3 ns | 0.75x |
+| `array_for_of` | 29.6 ns | 46.4 ns | 0.64x |
+| `prop_clone` | 43.1 ns | 78.2 ns | 0.55x |
+| `string_build2c` † | 69.8 ns | 148 ns | 0.47x |
+| `array_slice` | 9.3 ns | 27.1 ns | 0.34x |
 
 Some of these tests depend on where the linker places the code more than on
-the code. Grouping the hot files (`250e8f6`) left the V8 suite level but made
-`array_for`, `array_update` and `float_arith` 33–43% slower and `func_call`
-26% slower, at every one of eight placements. Putting the tree tier's file
-back where it was undoes most of that, but costs Crypto 5%. These figures are
-for the grouped layout.
+the code, by more than eight placements can average out: those vary where
+the code starts, not how far apart its pieces are. Grouping the hot files
+(`250e8f6`) left the V8 suite level but made `array_for`, `array_update` and
+`float_arith` 33–43% slower and `func_call` 26% slower, at every placement.
+`6b12267` changed none of their code, only the size of two of the tree
+tier's nodes, and `array_for` and `float_arith` are as fast as before the
+grouping again, `array_update` and `func_call` part of the way; `array_push`
+and `map_delete` became 7–10% slower the same way. A change of that size in
+one of these tests is not by itself a change in the engine.
 
 The largest gaps, the BigInt tests, are where QuickJS keeps a value in a form
 go-quickjs does not: a BigInt that fits in a word is a value of its own
 there, and an allocation here. Most of the others are the cost of each step,
-which the section below explains. The suite as a whole does better than the operations it is
+which the list below explains. The suite as a whole does better than the operations it is
 made of because of the places go-quickjs leads: strings and regular
 expressions over whole texts, which Go's runtime and the engine's matcher do
 well, and Splay's allocation-heavy setup.
@@ -221,11 +229,11 @@ What the gap is made of:
     `output` and `execute` and RayTrace's `dot` do. It may call another such
     function, `new` a constructor of the first kind, as EarleyBoyer's
     `sc_cons` does, and push onto or pop from an array, as DeltaBlue's
-    collections do. Called that way, an empty function costs about 40 ns,
-    against about 33 ns in QuickJS.
+    collections do. Called that way, an empty function costs about 48 ns,
+    against about 31 ns in QuickJS (`func_call`).
 - **Property access.** Objects built the same way share a shape, as in
-  QuickJS and V8, and each property read and write, each getter, each
-  global variable read and each `instanceof` remembers where it last found
+  QuickJS and V8, and each property read and write, each getter and
+  setter, each global variable read and each `instanceof` remembers where it last found
   what it looked for. The cache is checked in a call rather than where the
   instruction runs, since the interpreter's loop grows slower with every line
   added to it. A go-quickjs object keeps its keys beside its values, where a
