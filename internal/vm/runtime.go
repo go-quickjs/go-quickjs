@@ -227,6 +227,9 @@ type Runtime struct {
 
 	// pendingTail is the call a frame ended in, for run to make in its place.
 	pendingTail tailCall
+	// treeTail says a tree ended in such a call, which runTree then leaves
+	// with errTailCall: see tailCallNode.
+	treeTail bool
 
 	// locale is the language a program means when it does not say which: the
 	// one the machine is set to, unless the host chose another.

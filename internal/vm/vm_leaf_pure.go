@@ -88,6 +88,10 @@ var pureCases = func() (t [256]uint8) {
 	t[bytecode.OpGetPropThis] = pcGetPropThis
 	t[bytecode.OpCall] = pcCall
 	t[bytecode.OpCallMethod] = pcCall
+	// A tail call is a call here: a frameless body has no frame to give
+	// up, and how deep pure calls go is bounded. A method's is not taken,
+	// which pcCall would have to tell from call_method's.
+	t[bytecode.OpTailCall] = pcCall
 	t[bytecode.OpSetProp] = pcSetProp
 	t[bytecode.OpNew] = pcNew
 	t[bytecode.OpGetLength] = pcGetLength

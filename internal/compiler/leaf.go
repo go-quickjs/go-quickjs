@@ -96,7 +96,7 @@ func pureBody(fn *bytecode.Function) bool {
 			bytecode.OpLt, bytecode.OpLe, bytecode.OpGt, bytecode.OpGe,
 			bytecode.OpEq, bytecode.OpNe, bytecode.OpStrictEq, bytecode.OpStrictNe,
 			bytecode.OpDup, bytecode.OpDrop, bytecode.OpReturn, bytecode.OpReturnUndef,
-			bytecode.OpGetPropThis, bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew,
+			bytecode.OpGetPropThis, bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew, bytecode.OpTailCall,
 			bytecode.OpGetUpvalue, bytecode.OpToNumeric, bytecode.OpInc, bytecode.OpDec:
 			// A call is of a body that is itself pure, or it is not made
 			// frameless: the VM sees which when it gets there. So is a

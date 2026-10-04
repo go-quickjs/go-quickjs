@@ -180,6 +180,7 @@ func treeBuilds(op bytecode.Op) bool {
 		bytecode.OpGetIndex, bytecode.OpGetLocalIndex, bytecode.OpGetLocalIndexUpdate, bytecode.OpSetIndex,
 		bytecode.OpGetProp, bytecode.OpGetPropThis, bytecode.OpSetProp,
 		bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew, bytecode.OpClosure,
+		bytecode.OpTailCall, bytecode.OpTailCallMethod,
 		bytecode.OpGetGlobal, bytecode.OpSetGlobal, bytecode.OpSetGlobalStrict, bytecode.OpNewRegExp,
 		bytecode.OpJump, bytecode.OpJumpIfFalse, bytecode.OpJumpIfTrue, bytecode.OpJumpIfCmpFalse,
 		bytecode.OpReturn, bytecode.OpReturnUndef, bytecode.OpThrow,
@@ -399,6 +400,13 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 				return -1
 			}}
 			return b.succ, true
+		}
+		if in.Op == bytecode.OpTailCall || in.Op == bytecode.OpTailCallMethod {
+			// Built apart from op: see zz_tailcall.go.
+			if !b.tailCall(in, pc) {
+				return nil, false
+			}
+			continue
 		}
 		skip, ok := b.op(pc, in, code, pc+1 < end)
 		if !ok {

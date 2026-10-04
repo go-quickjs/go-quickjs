@@ -144,6 +144,10 @@ func (r *Runtime) runTree(f *frame, t *tree) (v Value, err error) {
 			s(c)
 		}
 		blk.next(c)
+		if r.treeTail {
+			r.treeTail = false
+			return Undefined, errTailCall
+		}
 		return c.ret, nil
 	}
 	b := 0
@@ -153,6 +157,10 @@ func (r *Runtime) runTree(f *frame, t *tree) (v Value, err error) {
 			s(c)
 		}
 		if b = blk.next(c); b < 0 {
+			if r.treeTail {
+				r.treeTail = false
+				return Undefined, errTailCall
+			}
 			return c.ret, nil
 		}
 	}

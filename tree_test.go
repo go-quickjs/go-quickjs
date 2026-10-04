@@ -277,6 +277,19 @@ var treeScripts = []string{
 	 f({ next: { next: { next: null } } }) + "," + f(null) + "," + f({ next: undefined })`,
 	`function f(o) { var s = 0; for (var i = 0; i < 2; i++) s += o?.a.b ?? 1; return s }
 	 [f(undefined), f({ a: { b: 5 } })].join() + "|" + (function () { try { return f({}) } catch (e) { return e.constructor.name } })()`,
+	// Tail calls, which give up their frame once the stack is deep: plain,
+	// a method's with its receiver, mutual, through a bound function and a
+	// native one, from a constructor -- whose frame is kept -- and one that
+	// throws deep down, whose stack is what the frames left make it.
+	`"use strict"; function f(n, acc) { return n === 0 ? acc : f(n - 1, acc + 1) }
+	 const o = { k: 2, m(n) { return n === 0 ? this.k : this.m(n - 1) } };
+	 function even(n) { return n === 0 || odd(n - 1) } function odd(n) { return n !== 0 && even(n - 1) }
+	 function b(n) { return n === 0 ? "b" : bb(n - 1) } const bb = b.bind(null);
+	 function m(n) { return n === 0 ? Math.max(1, 2) : m(n - 1) }
+	 function C(n) { this.n = n; return n === 0 ? undefined : g(n - 1) } function g(n) { return new C(n) }
+	 [f(50000, 0), o.m(50000), even(50001), b(50000), m(50000), new C(40).n].join()`,
+	`"use strict"; function f(n) { if (n === 0) throw new Error("deep"); return f(n - 1) }
+	 try { f(100) } catch (e) { e.message + "|" + e.stack.split("\n").length }`,
 }
 
 // treeRun evaluates a script and gives its value, or its error.
