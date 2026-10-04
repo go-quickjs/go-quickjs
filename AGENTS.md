@@ -36,6 +36,12 @@ concurrently.
   compiler bug in the VM, or a VM bug in the public wrapper.
 - Keep the public API small and document exported identifiers.
 - Run `gofmt` on every changed Go file.
+- `internal/vm` is sensitive to code layout. Go lays out a package's
+  functions in file-name order, then all its closures, each aligned to 32
+  bytes, so adding, moving or renaming code there -- even code a benchmark
+  never runs -- can move the V8 suite by 5 to 10%. Do not rename or reorder
+  its files or move code between them without comparing builds over several
+  code placements; the `zcall_*.go` files sort last on purpose.
 - Add a regression test for every semantic bug. Prefer an exact result and
   error type over a broad smoke test.
 - Do not weaken conformance expectations, add skips, or change expected
