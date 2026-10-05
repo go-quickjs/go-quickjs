@@ -28,6 +28,10 @@ type arrayBufferData struct {
 	// sliceToImmutable, whose contents never change: every write through a
 	// view is refused, and it can be neither detached nor transferred.
 	immutable bool
+	// external marks memory the host made the buffer over, which it keeps
+	// using: the buffer is never transferred to another agent, which would
+	// share the memory with another goroutine.
+	external bool
 	// resizable marks a buffer made with a maxByteLength, which resize may
 	// grow or shrink up to that bound. Its length is len(bytes) whatever it
 	// is at the moment, and a view reads it afresh each time.

@@ -381,6 +381,34 @@ method made, as in `p.RejectError(rt.ThrowTypeError("not a file: %s", name))`.
 marshalled Go value cannot express; `Value.Bytes` reads a typed array back.
 `OnUnhandledRejection` reports a promise nobody took.
 
+### Typed arrays over Go memory
+
+`NewArrayBuffer` makes an `ArrayBuffer` of a `[]byte`, and `NewTypedArray` the
+typed array of a slice's element type -- a `Float64Array` of a `[]float64`, a
+`BigInt64Array` of a `[]int64`. Each takes a `BufferMode`, so that every call
+says whether the memory is copied or shared:
+
+```go
+pixels := rt.NewArrayBuffer(frame, quickjs.CopyMemory)             // the script's own copy
+samples, err := quickjs.NewTypedArray(rt, buf, quickjs.ShareMemory) // the slice itself
+table, err := quickjs.NewTypedArray(rt, lut, quickjs.ShareMemoryReadOnly)
+```
+
+`ShareMemory` copies nothing, however large the slice: what the script writes,
+the host reads, and the other way about. The host touches the slice only on the
+runtime's goroutine, or while no script runs; a slice that grows past its
+capacity leaves the buffer on the old memory. The script cannot send shared
+memory to a worker by transferring it -- that would put the host's memory on
+another goroutine -- and a clone of it is a copy. `ShareMemoryReadOnly` shares
+it as an immutable `ArrayBuffer`, which the script cannot write, detach or
+transfer.
+
+A typed array reads its elements little-endian: on a big-endian machine a copy
+is put in that order, and sharing elements wider than a byte is an error.
+
+Built with Go 1.27 or later, which has generic methods, `NewTypedArray` is a
+method too: `rt.NewTypedArray(samples, quickjs.ShareMemory)`.
+
 A host that emulates a browser's document can make its `document.all`:
 `NewHTMLDDA` returns an object with Annex B's [[IsHTMLDDA]] slot, which
 `typeof` calls `"undefined"`, which is falsy, and which is `==` to `null` and

@@ -192,7 +192,7 @@ func (r *Runtime) Serialize(v Value, transfer []Value, codec *Codec) (*Serialize
 			if _, dup := s.memory[o]; dup {
 				return nil, &DataCloneError{"Transfer list contains duplicate ArrayBuffer"}
 			}
-			if b.detached || b.immutable {
+			if b.detached || b.immutable || b.external {
 				return nil, &DataCloneError{"Cannot transfer object of unsupported type."}
 			}
 			s.memory[o] = s.add(snode{kind: snArrayBuffer})

@@ -1,6 +1,9 @@
 package vm
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+)
 
 // The extension points a host builds on: modules whose exports come from Go,
 // objects and promises made from Go, and the queue that carries the work
@@ -129,6 +132,46 @@ func (r *Runtime) NewUint8ArrayOf(b []byte) Value {
 	buf.data = &arrayBufferData{bytes: storage}
 	o.data = &typedArrayData{buffer: buf, kind: elemUint8, fixedLength: len(b)}
 	return Obj(o)
+}
+
+// NewArrayBufferOf returns an ArrayBuffer over b itself, not a copy. external
+// marks memory the host keeps using, which the buffer is never transferred to
+// another agent with -- that would share it with another goroutine -- and
+// immutable makes the buffer immutable: read, and never written, detached or
+// transferred.
+func (r *Runtime) NewArrayBufferOf(b []byte, external, immutable bool) Value {
+	buf := newObject(r.arrayBufferProto, ClassArrayBuffer)
+	buf.data = &arrayBufferData{bytes: b, external: external, immutable: immutable}
+	return Obj(buf)
+}
+
+// NewTypedArrayOf returns a typed array of the kind named -- "Float64Array"
+// -- over the whole of an ArrayBuffer, whose length is a whole number of the
+// kind's elements.
+func (r *Runtime) NewTypedArrayOf(kind string, buffer Value) (Value, error) {
+	k := -1
+	for i, info := range elemInfos {
+		if info.name == kind {
+			k = i
+		}
+	}
+	if k < 0 {
+		return Undefined, fmt.Errorf("no typed array is called %s", kind)
+	}
+	var b *arrayBufferData
+	if buffer.IsObject() && buffer.Object().class == ClassArrayBuffer {
+		b, _ = buffer.Object().data.(*arrayBufferData)
+	}
+	if b == nil || b.detached {
+		return Undefined, fmt.Errorf("a %s is made over an ArrayBuffer", kind)
+	}
+	size := elemInfos[k].size
+	if len(b.bytes)%size != 0 {
+		return Undefined, fmt.Errorf("a %s over %d bytes would end part-way through an element", kind, len(b.bytes))
+	}
+	o := newObject(r.typedArrayProtoFor(elemType(k)), ClassTypedArray)
+	o.data = &typedArrayData{buffer: buffer.Object(), kind: elemType(k), fixedLength: len(b.bytes) / size}
+	return Obj(o), nil
 }
 
 // Bytes returns the bytes behind a typed array, a DataView or an ArrayBuffer,

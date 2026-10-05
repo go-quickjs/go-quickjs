@@ -70,8 +70,10 @@ func encodeValue(rt *vm.Runtime, v any) (vm.Value, error) {
 	case float64:
 		return vm.Float(x), nil
 	case []byte:
-		// A byte slice becomes an array of numbers; a typed array would be
-		// better but is not implemented yet.
+		// A byte slice becomes an array of numbers, which is right for a
+		// small one. NewBytes, NewArrayBuffer and NewTypedArray make typed
+		// arrays, with the host saying whether the memory is copied or
+		// shared.
 		vals := make([]vm.Value, len(x))
 		for i, b := range x {
 			vals[i] = vm.Float(float64(b))

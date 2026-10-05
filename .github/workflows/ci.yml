@@ -20,10 +20,13 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      # The newest Go: gofmt parses every file, the ones only a newer Go
+      # builds too -- generic methods, behind //go:build go1.27 -- which an
+      # older gofmt cannot.
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: "1.27"
           cache: true
 
       - name: Check formatting
@@ -58,6 +61,25 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: true
+
+      - name: Run tests
+        run: go test -count=1 ./...
+
+  newest:
+    # The module builds with the Go go.mod names, which the jobs above test;
+    # this one tests what only a newer Go builds as well.
+    name: Test (Go 1.27)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
           cache: true
 
       - name: Run tests

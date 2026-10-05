@@ -43,6 +43,12 @@ concurrently.
   its files or move code between them without comparing builds with
   `internal/cmd/v8bench/placements` (see Validation); the `zcall_*.go` files
   sort last on purpose.
+- What a newer Go adds -- generic methods, in Go 1.27 -- may be offered in a
+  file built only with it, `//go:build go1.27`, which gives that file the
+  newer language whatever go.mod says, as long as what it offers is there for
+  the older Go too: `buffers_go127.go`'s method is `NewTypedArray`'s function.
+  An older gofmt cannot parse such a file, so CI formats with the newest Go
+  and tests with both.
 - Add a regression test for every semantic bug. Prefer an exact result and
   error type over a broad smoke test.
 - Do not weaken conformance expectations, add skips, or change expected
