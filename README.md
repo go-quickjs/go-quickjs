@@ -48,10 +48,10 @@ the built-ins, `Intl` and Annex B -- 99,595 pass, none fail, and 342 are
 skipped because they require an unsupported feature or host facility. See [Conformance](docs/status.md#conformance) for the
 measurement and [Not implemented](docs/status.md#not-implemented) for what is missing.
 
-On the V8 benchmark suite as a whole it is ahead of C QuickJS: it takes 0.69
-times QuickJS's time over the suite and has an 8% higher composite score.
+On the V8 benchmark suite as a whole it is ahead of C QuickJS: it takes 0.68
+times QuickJS's time over the suite and has a 9% higher composite score.
 Single operations still cost more: QuickJS's own micro-benchmarks take about
-1.2 times as long on average, and two to three times as long for a few, the
+1.13 times as long on average, and two to three times as long for a few, the
 weak collections among them. See [Compared with C QuickJS](docs/benchmarks.md#compared-with-c-quickjs).
 
 ## Documentation
