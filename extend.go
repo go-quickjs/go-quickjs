@@ -1,6 +1,7 @@
 package quickjs
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"reflect"
@@ -87,6 +88,85 @@ func (r *Runtime) SetModuleValues(name string, exports map[string]Value) error {
 	}
 	r.rt.DefineNativeModule(name, out)
 	return nil
+}
+
+// DefineSyntheticModule defines a module the host makes rather than compiles
+// -- what a module loader resolves a file that is not an ES module to, a
+// CommonJS one say -- under the name the loader resolves to it, which it then
+// returns with any source. Its export names are given now, and evaluate gives
+// their values when the module is evaluated: in its turn in the graph that
+// imports it, after what is imported before it and before the importer, as a
+// module's body runs. Each value is converted as Set converts one; a name
+// evaluate leaves out is undefined, and one it adds is a ReferenceError. An
+// error evaluate returns is thrown as a Go function's is.
+//
+// A name taken already -- by a module loaded, set or defined -- keeps its
+// module, and this does nothing: the loader is asked again for a module a
+// second importer names.
+func (r *Runtime) DefineSyntheticModule(name string, exports []string, evaluate func() (map[string]any, error)) error {
+	if r.closed {
+		return ErrClosed
+	}
+	rt := r.rt
+	r.rt.DefineSyntheticModule(name, exports, func() ([]vm.NativeExport, error) {
+		values, err := evaluate()
+		if err != nil {
+			return nil, thrownGoError(rt, err)
+		}
+		out := make([]vm.NativeExport, 0, len(values))
+		for k, v := range values {
+			ev, err := encodeValue(rt, v)
+			if err != nil {
+				return nil, rt.ThrowError(err)
+			}
+			out = append(out, vm.NativeExport{Name: k, Value: ev})
+		}
+		return out, nil
+	})
+	return nil
+}
+
+// ErrModuleAwaits is why RequireModule cannot evaluate a module that awaits
+// at the top level, or imports one that does; node calls it
+// ERR_REQUIRE_ASYNC_MODULE.
+var ErrModuleAwaits = vm.ErrModuleAwaits
+
+// ErrModuleEvaluating is why RequireModule cannot evaluate a module that is
+// being evaluated already -- whose evaluation, through a cycle, led to the
+// call; node calls it ERR_REQUIRE_CYCLE_MODULE.
+var ErrModuleEvaluating = vm.ErrModuleEvaluating
+
+// RequireModule loads, links and evaluates a module synchronously, and returns
+// its namespace, as node's require of an ES module does. specifier is
+// resolved from referrer through the loader, as an import in referrer would
+// be, so the module is the one an import of it is, evaluated once. Nothing but
+// the module's graph runs meanwhile -- no promise job, no task -- so a graph
+// that awaits at the top level cannot be evaluated, and is ErrModuleAwaits,
+// and a module whose evaluation led to the call is ErrModuleEvaluating. An
+// exception the graph throws is the error, as from EvalModule. A Go function
+// the script called may call it, which is what a host's require does.
+func (r *Runtime) RequireModule(specifier, referrer string) (v Value, err error) {
+	if r.closed || r.rt == nil {
+		return Value{}, ErrClosed
+	}
+	defer r.guard(&err)
+	_, leave := r.enter(context.Background())
+	defer leave()
+	rt := r.rt
+	m, err := rt.RequireModule(specifier, referrer)
+	if r.closed {
+		// The module closed the Runtime, which stopped it.
+		rt.ReleaseClosed()
+		return Value{}, ErrClosed
+	}
+	if err != nil {
+		return Value{}, r.wrapError(err)
+	}
+	ns, err := rt.ModuleNamespace(m)
+	if err != nil {
+		return Value{}, r.wrapError(err)
+	}
+	return Value{v: vmObj(ns), rt: rt}, nil
 }
 
 // CheckSyntax parses and compiles source without running it, reporting the

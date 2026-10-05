@@ -1,6 +1,10 @@
 package vm
 
-import "github.com/go-quickjs/go-quickjs/internal/bytecode"
+import (
+	"errors"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+)
 
 // Deferred module evaluation: `import defer * as ns from "m"` and
 // `import.defer("m")`.
@@ -74,6 +78,71 @@ func (r *Runtime) ensureDeferredEvaluation(m *Module) error {
 	}
 	if p, ok := done.Object().data.(*promiseData); ok && p.state == promiseRejected {
 		return r.throw(p.value)
+	}
+	return nil
+}
+
+// ErrModuleAwaits and ErrModuleEvaluating are why RequireModule cannot
+// evaluate a module synchronously.
+var (
+	ErrModuleAwaits     = errors.New("the module, or a module it imports, awaits at the top level")
+	ErrModuleEvaluating = errors.New("the module is being evaluated: an import of it led here")
+)
+
+// RequireModule loads, links and evaluates the module specifier names from
+// referrer, synchronously, as node's require of an ES module does: through the
+// loader, as an import in referrer would, so that it is the module that import
+// would have, evaluated once. Nothing but its graph runs -- no job waiting in
+// the queue -- so a graph that awaits at the top level cannot be, nor one part
+// of which is running already, being what led here.
+func (r *Runtime) RequireModule(specifier, referrer string) (*Module, error) {
+	m, err := r.loadDependency(specifier, referrer)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.Link(m); err != nil {
+		return nil, err
+	}
+	if !isModuleSCCEvaluated(m) {
+		if err := r.syncBlocker(m, map[*Module]bool{}); err != nil {
+			return nil, err
+		}
+	}
+	done, err := r.EvaluateModule(m)
+	if err != nil {
+		return nil, err
+	}
+	if p, ok := done.Object().data.(*promiseData); ok && p.state == promiseRejected {
+		p.handled = true
+		return nil, r.throw(p.value)
+	}
+	return m, nil
+}
+
+// syncBlocker is what stops a module's graph from running to the end now, as
+// readyForSyncExecution finds it: ErrModuleEvaluating for one part-way through
+// running, ErrModuleAwaits for one that awaits at the top level, or is waiting
+// for one that does.
+func (r *Runtime) syncBlocker(m *Module, seen map[*Module]bool) error {
+	if seen[m] || isModuleSCCEvaluated(m) {
+		return nil
+	}
+	seen[m] = true
+	switch {
+	case m.state == ModuleEvaluating:
+		return ErrModuleEvaluating
+	case m.state == ModuleEvaluatingAsync, hasTLA(m):
+		return ErrModuleAwaits
+	}
+	for _, request := range m.requests {
+		if _, source := bytecode.SplitSourceRequest(request); source {
+			continue
+		}
+		if dep, ok := r.modules[r.resolvedNameOf(request, m.Specifier)]; ok {
+			if err := r.syncBlocker(dep, seen); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }

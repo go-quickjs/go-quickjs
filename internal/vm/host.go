@@ -48,6 +48,36 @@ func (r *Runtime) DefineNativeModule(specifier string, exports []NativeExport) *
 	return m
 }
 
+// DefineSyntheticModule registers a module a host makes rather than compiles,
+// under the name a module loader resolves to it: the names it exports, known
+// now, and evaluate, which gives them their values when the module is
+// evaluated, in its turn in the graph that imports it, as a body would run. An
+// export evaluate gives no value is undefined.
+//
+// A name already taken keeps its module, which is returned: a loader asked
+// for the same module by two importers defines it twice.
+func (r *Runtime) DefineSyntheticModule(specifier string, names []string, evaluate func() ([]NativeExport, error)) *Module {
+	if m, ok := r.modules[specifier]; ok {
+		return m
+	}
+	m := r.newModule(specifier, nil)
+	m.synthetic = evaluate
+	for _, name := range names {
+		if _, ok := m.exports[name]; ok {
+			continue
+		}
+		m.env.setOwnRaw(r.atoms.intern(name), Undefined, propEnumerable)
+		m.exports[name] = name
+	}
+	// It imports nothing, so there is nothing to link.
+	m.state = ModuleLinked
+	if r.modules == nil {
+		r.modules = make(map[string]*Module)
+	}
+	r.modules[specifier] = m
+	return m
+}
+
 // nativeModule returns a module the host registered under this exact name.
 func (r *Runtime) nativeModule(specifier string) *Module {
 	if m, ok := r.modules[specifier]; ok && m.native {

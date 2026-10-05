@@ -459,6 +459,59 @@ finds the loader's error.
 read. Bindings are live: an importer sees the exporter's current value, not a
 copy taken at link time.
 
+### CommonJS
+
+The engine has no CommonJS of its own -- `require`, its cache and its
+resolution are the host's, as node's are node's -- but it has what a host needs
+to build them and to make them meet ES modules as node does.
+[cjs_host_test.go](../cjs_host_test.go) builds node's `require` this way, on an
+in-memory file system.
+
+A CommonJS file runs as a function of the names a module has, compiled with
+`Compile` and the wrapper a line above the file, so that stack traces and
+syntax errors give the file's own positions:
+
+```go
+p, err := rt.Compile(filename,
+    "(function (exports, require, module, __filename, __dirname) {\n"+src+"\n})",
+    quickjs.WithOffset(-1, 0))
+```
+
+An ES module that imports a CommonJS file gets a synthetic module, which the
+loader defines under the name it resolves the file to and returns with no
+source. Its export names are known before anything runs, and its values when
+the module's turn comes in the graph -- after what is imported before it, before
+its importer -- which is when the file is required:
+
+```go
+names, reexports, err := quickjs.CommonJSExports(filename, src)
+// ... and the names of what reexports names, found the same way.
+err = rt.DefineSyntheticModule(filename, append([]string{"default"}, names...),
+    func() (map[string]any, error) {
+        exports, err := require.Call(filename) // module.exports
+        // default is module.exports, and each name its property.
+    })
+return "", filename, err
+```
+
+`CommonJSExports` reads the source for its names as node does, without running
+it: what it assigns to `exports.name` or `module.exports.name`, defines with
+`Object.defineProperty`, or lists in an object literal it assigns to
+`module.exports`, and the modules it hands on whole.
+
+A CommonJS file that requires an ES module gets it from `RequireModule`, which
+loads it through the loader -- so it is the module an import of it is, run
+once -- and evaluates it synchronously, running nothing else meanwhile. A
+module that awaits at the top level, or imports one that does, cannot be
+evaluated that way, and is `quickjs.ErrModuleAwaits`; a module whose
+evaluation led to the require is `quickjs.ErrModuleEvaluating`. Node throws
+`ERR_REQUIRE_ASYNC_MODULE` and `ERR_REQUIRE_CYCLE_MODULE` for these.
+
+A module is the name the loader resolved it to, so a host that resolves
+`require("pkg")` from each file's own directory, as node does, gives a package
+nested in another's `node_modules` its own copy -- and one deduplicated to a
+single file one module.
+
 ## Concurrency
 
 A `Runtime` is not safe for concurrent use. Give each goroutine its own, which

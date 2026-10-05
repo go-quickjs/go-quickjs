@@ -3,9 +3,11 @@ package quickjs_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"path"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -105,13 +107,7 @@ func newCJSHost(t *testing.T, files fstest.MapFS) *cjsHost {
 	if err != nil {
 		t.Fatal(err)
 	}
-	load, _ := h.api.Get("load")
 	createRequire, _ := h.api.Get("createRequire")
-	// The modules the loader writes reach the CommonJS loader through a
-	// module of the host's, so that nothing of it is a global.
-	if err := h.rt.SetModule("cjs-host", map[string]any{"load": load}); err != nil {
-		t.Fatal(err)
-	}
 	if err := h.rt.SetModule("node:module", map[string]any{"createRequire": createRequire}); err != nil {
 		t.Fatal(err)
 	}
@@ -310,19 +306,25 @@ func (h *cjsHost) compile(filename string) (quickjs.Value, error) {
 	return h.rt.RunProgram(p)
 }
 
-// requireESM is require of an ES module: its namespace.
+// requireESM is require of an ES module: its namespace, from the module an
+// import of it is, run synchronously.
 func (h *cjsHost) requireESM(filename string) (quickjs.Value, error) {
-	src, err := h.read(filename)
-	if err != nil {
-		return quickjs.Value{}, err
+	ns, err := h.rt.RequireModule(filename, "")
+	switch {
+	case errors.Is(err, quickjs.ErrModuleAwaits):
+		return ns, h.codedError("ERR_REQUIRE_ASYNC_MODULE",
+			"require() cannot be used on an ESM graph with top-level await: %s", filename)
+	case errors.Is(err, quickjs.ErrModuleEvaluating):
+		return ns, h.codedError("ERR_REQUIRE_CYCLE_MODULE",
+			"Cannot require() ES Module %s in a cycle.", filename)
 	}
-	return h.rt.EvalModule(filename, src)
+	return ns, err
 }
 
 // loadESM is the module loader. An ES module is its source; a JSON file, for
-// an import with type "json", is its text; and a CommonJS file is a module
-// written for it, whose default export is module.exports and whose named
-// exports are its properties.
+// an import with type "json", is its text; and a CommonJS file is a synthetic
+// module, whose default export is module.exports and whose named exports are
+// the names its source exports, evaluated by requiring it in its turn.
 func (h *cjsHost) loadESM(specifier, referrer string) (string, string, error) {
 	from := "/app"
 	if referrer != "" {
@@ -336,33 +338,63 @@ func (h *cjsHost) loadESM(specifier, referrer string) (string, string, error) {
 		src, err := h.read(filename)
 		return src, filename, err
 	}
-	// The named exports have to be known before the module is linked, which
-	// node finds by reading the source; this runs the module instead.
-	load, _ := h.api.Get("load")
-	exports, err := load.Call(filename, nil, false)
+	names, err := h.exportNames(filename, map[string]bool{})
 	if err != nil {
 		return "", "", err
 	}
-	var b strings.Builder
-	quoted, _ := json.Marshal(filename)
-	fmt.Fprintf(&b, "import {load} from \"cjs-host\";\nconst m = load(%s);\nexport default m;\n", quoted)
-	if exports.IsObject() {
-		for _, k := range exports.Keys() {
-			if k != "default" && isIdentifier(k) {
-				fmt.Fprintf(&b, "export const %s = m.%s;\n", k, k)
+	load, _ := h.api.Get("load")
+	err = h.rt.DefineSyntheticModule(filename, append([]string{"default"}, names...), func() (map[string]any, error) {
+		exports, err := load.Call(filename, nil, false)
+		if err != nil {
+			return nil, err
+		}
+		values := map[string]any{"default": exports}
+		if exports.IsObject() {
+			for _, name := range names {
+				if values[name], err = exports.Get(name); err != nil {
+					return nil, err
+				}
 			}
 		}
-	}
-	return b.String(), filename, nil
+		return values, nil
+	})
+	return "", filename, err
 }
 
-func isIdentifier(s string) bool {
-	for i, r := range s {
-		if !(r == '_' || r == '$' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || i > 0 && r >= '0' && r <= '9') {
-			return false
+// exportNames is what a CommonJS file exports by name, as node finds it: what
+// its source exports, and what the modules it hands on whole export, but
+// default, which is module.exports itself.
+func (h *cjsHost) exportNames(filename string, seen map[string]bool) ([]string, error) {
+	if seen[filename] {
+		return nil, nil
+	}
+	seen[filename] = true
+	src, err := h.read(filename)
+	if err != nil {
+		return nil, err
+	}
+	names, reexports, err := quickjs.CommonJSExports(filename, src)
+	if err != nil {
+		return nil, err
+	}
+	for _, specifier := range reexports {
+		f, err := h.resolve(specifier, path.Dir(filename), "require")
+		if err != nil || h.isESM(f) || strings.HasSuffix(f, ".json") {
+			continue
+		}
+		more, err := h.exportNames(f, seen)
+		if err != nil {
+			return nil, err
+		}
+		names = append(names, more...)
+	}
+	out := names[:0]
+	for _, n := range names {
+		if n != "default" && !slices.Contains(out, n) {
+			out = append(out, n)
 		}
 	}
-	return s != ""
+	return out, nil
 }
 
 var cjsFiles = fstest.MapFS{
@@ -385,25 +417,39 @@ out.push("counter " + first + " " + require("./counter"));
 try { require("./bad") } catch (e) { out.push(e.message + " " + e.stack.split("\n")[1].trim()) }
 try { require("./syntax") } catch (e) { out.push(e.name + ": " + e.message) }
 out.push("cached after failing " + ("/app/bad.js" in require.cache));
+Promise.resolve().then(() => { globalThis.microtaskRan = true });
 const esm = require("./esm.mjs");
+out.push("microtask during require " + Boolean(globalThis.microtaskRan));
+try { require("./tla.mjs") } catch (e) { out.push(e.code) }
+const other = require("other");
+out.push("versions " + require("pkg").version + " / " + other.version + " " + other.resolved);
 out.push("esm " + esm.value + " " + esm.default);
 out.push("dynamic " + typeof require("./dynamic").then);
 module.exports = out;
 `)},
-	"app/lib/index.js": {Data: []byte(`exports.name = "lib";`)},
-	"app/data.json":    {Data: []byte(`{"x": 1}`)},
-	"app/cycle/a.js":   {Data: []byte("exports.done = false;\nconst b = require(\"./b\");\nexports.sawB = b.sawA;\nexports.done = true;\n")},
-	"app/cycle/b.js":   {Data: []byte("const a = require(\"./a\");\nexports.sawA = \"a.done=\" + a.done;\n")},
-	"app/counter.js":   {Data: []byte("globalThis.count = (globalThis.count || 0) + 1;\nmodule.exports = globalThis.count;\n")},
-	"app/bad.js":       {Data: []byte("\nfunction boom() { throw new Error(\"boom\") }\nboom();\n")},
-	"app/syntax.js":    {Data: []byte("let x = ;\n")},
-	"app/esm.mjs":      {Data: []byte(`export const value = 42; export default "esm-default";`)},
-	"app/dynamic.js":   {Data: []byte(`module.exports = import("./esm.mjs");`)},
-	"app/entry.mjs":    {Data: []byte(``)},
+	"app/lib/index.js":                    {Data: []byte(`exports.name = "lib";`)},
+	"app/data.json":                       {Data: []byte(`{"x": 1}`)},
+	"app/cycle/a.js":                      {Data: []byte("exports.done = false;\nconst b = require(\"./b\");\nexports.sawB = b.sawA;\nexports.done = true;\n")},
+	"app/cycle/b.js":                      {Data: []byte("const a = require(\"./a\");\nexports.sawA = \"a.done=\" + a.done;\n")},
+	"app/counter.js":                      {Data: []byte("globalThis.count = (globalThis.count || 0) + 1;\nmodule.exports = globalThis.count;\n")},
+	"app/bad.js":                          {Data: []byte("\nfunction boom() { throw new Error(\"boom\") }\nboom();\n")},
+	"app/syntax.js":                       {Data: []byte("let x = ;\n")},
+	"app/esm.mjs":                         {Data: []byte(`export const value = 42; export default "esm-default";`)},
+	"app/dynamic.js":                      {Data: []byte(`module.exports = import("./esm.mjs");`)},
+	"app/tla.mjs":                         {Data: []byte(`await 0; export const late = 1;`)},
+	"app/order/a.mjs":                     {Data: []byte(`(globalThis.order ??= []).push("a.mjs");`)},
+	"app/order/b.cjs":                     {Data: []byte(`(globalThis.order ??= []).push("b.cjs"); exports.b = "b";`)},
+	"app/reexport.js":                     {Data: []byte(`module.exports = { ...require("./lib"), extra: "extra" };`)},
+	"app/cycle.cjs":                       {Data: []byte(`try { require("./entry.mjs"); module.exports = "no error" } catch (e) { module.exports = e.code }`)},
+	"app/node_modules/other/package.json": {Data: []byte(`{"name": "other", "main": "index.js"}`)},
+	"app/node_modules/other/index.js":     {Data: []byte(`exports.version = require("pkg").version; exports.resolved = require.resolve("pkg");`)},
+	"app/node_modules/other/node_modules/pkg/package.json": {Data: []byte(`{"name": "pkg", "version": "1.0"}`)},
+	"app/node_modules/other/node_modules/pkg/index.js":     {Data: []byte(`exports.version = "1.0";`)},
+	"app/entry.mjs": {Data: []byte(``)},
 	"app/node_modules/pkg/package.json": {Data: []byte(`{"name": "pkg", "exports": {
 		".": {"import": "./esm.mjs", "require": "./main.cjs"},
 		"./feature": "./feature.js"}}`)},
-	"app/node_modules/pkg/main.cjs":   {Data: []byte(`module.exports = { hello: () => "hi from cjs" };`)},
+	"app/node_modules/pkg/main.cjs":   {Data: []byte(`module.exports = { hello: () => "hi from cjs", version: "2.0" };`)},
 	"app/node_modules/pkg/esm.mjs":    {Data: []byte(`export const hello = () => "hi from esm"; export default "pkg-default";`)},
 	"app/node_modules/pkg/feature.js": {Data: []byte(`exports.f = "feature";`)},
 	"app/node_modules/pkg/private.js": {Data: []byte(`exports.p = 1;`)},
@@ -434,6 +480,9 @@ func TestHostRequire(t *testing.T) {
 		"boom at boom (/app/bad.js:2:25)",
 		`SyntaxError: unexpected punctuator ";" (/app/syntax.js:1:9)`,
 		"cached after failing false",
+		"microtask during require false",
+		"ERR_REQUIRE_ASYNC_MODULE",
+		"versions 2.0 / 1.0 /app/node_modules/other/node_modules/pkg/index.js",
 		"esm 42 esm-default",
 		"dynamic function",
 	}
@@ -452,6 +501,11 @@ func TestHostRequireFromESM(t *testing.T) {
 		import pkg, {hello} from "pkg";
 		import data from "./data.json" with {type: "json"};
 		import {createRequire} from "node:module";
+		import "./order/a.mjs";
+		import {b} from "./order/b.cjs";
+		import {name as reexported, extra} from "./reexport.js";
+		import cycle from "./cycle.cjs";
+		globalThis.order.push("entry");
 		const require = createRequire(import.meta.url);
 		export const out = [
 			"lib " + lib.name + " " + name,
@@ -459,6 +513,9 @@ func TestHostRequireFromESM(t *testing.T) {
 			"json " + data.x,
 			"require " + require("pkg").hello() + " " + import.meta.dirname,
 			"same " + (require("./lib") === lib),
+			"order " + globalThis.order.join(", ") + " " + b,
+			"reexport " + reexported + " " + extra,
+			"cycle " + cycle,
 		];
 		export const later = import("./dynamic.js").then(m => m.default).then(ns => "dynamic " + ns.value);
 		const code = e => e.code || e.message;
@@ -492,6 +549,9 @@ func TestHostRequireFromESM(t *testing.T) {
 		"json 1",
 		"require hi from cjs /app",
 		"same true",
+		"order a.mjs, b.cjs, entry b",
+		"reexport lib extra",
+		"cycle ERR_REQUIRE_CYCLE_MODULE",
 		"dynamic 42",
 		"failures MODULE_NOT_FOUND, ERR_PACKAGE_PATH_NOT_EXPORTED, boom",
 	}

@@ -100,6 +100,9 @@ type Module struct {
 	// answers to its own name rather than to whatever a loader would resolve
 	// that name to.
 	native bool
+	// synthetic is, for a module a host defined with DefineSyntheticModule,
+	// what gives its exports their values: what it runs instead of a body.
+	synthetic func() ([]NativeExport, error)
 }
 
 // moduleImport is one resolved import binding.
@@ -618,7 +621,7 @@ func (r *Runtime) innerModuleEvaluation(m *Module, stack *[]*Module, index int) 
 	}
 
 	switch {
-	case m.pendingAsync > 0 || m.fn.Async:
+	case m.pendingAsync > 0 || hasTLA(m):
 		m.asyncEval = true
 		r.asyncModuleOrder++
 		m.asyncOrder = r.asyncModuleOrder
@@ -652,8 +655,22 @@ func (r *Runtime) innerModuleEvaluation(m *Module, stack *[]*Module, index int) 
 }
 
 // executeModuleBody runs a module's body, which has no top-level await and so
-// finishes before it returns.
+// finishes before it returns -- or, for a synthetic module, gives its exports
+// their values.
 func (r *Runtime) executeModuleBody(m *Module) error {
+	if m.synthetic != nil {
+		exports, err := m.synthetic()
+		if err != nil {
+			return err
+		}
+		for _, e := range exports {
+			if _, ok := m.exports[e.Name]; !ok {
+				return r.throwReferenceError("the module %q does not export %q", m.Specifier, e.Name)
+			}
+			m.env.setOwnRaw(r.atoms.intern(e.Name), e.Value, propEnumerable)
+		}
+		return nil
+	}
 	cl := r.prepare(m.fn)
 	cl.env = m.env
 	// Module code has undefined as its top-level `this`.
@@ -709,7 +726,7 @@ func (r *Runtime) asyncModuleFulfilled(m *Module) {
 		switch {
 		case mod.state == ModuleEvaluated || mod.state == ModuleFailed:
 			continue
-		case mod.fn.Async:
+		case hasTLA(mod):
 			if err := r.executeAsyncModule(mod); err != nil {
 				r.asyncModuleRejected(mod, thrownValue(err))
 			}
@@ -761,7 +778,7 @@ func (r *Runtime) gatherAvailableAncestors(m *Module, ready *[]*Module) {
 			continue
 		}
 		*ready = append(*ready, parent)
-		if !parent.fn.Async {
+		if !hasTLA(parent) {
 			// A module with nothing of its own to await finishes as soon as it
 			// runs, so whatever waits on it is ready too.
 			r.gatherAvailableAncestors(parent, ready)
