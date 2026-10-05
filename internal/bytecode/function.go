@@ -408,52 +408,8 @@ func (f *Function) disassembleTo(sb *strings.Builder, indent string) {
 	fmt.Fprintf(sb, "%sfunction %s (params=%d locals=%d stack=%d)\n",
 		indent, f, f.ParamCount, f.LocalCount, f.MaxStack)
 
-	for pc, in := range f.Code {
-		fmt.Fprintf(sb, "%s  %4d  %-20s", indent, pc, in.Op)
-		switch in.Op {
-		case OpPushConst, OpClosure, OpNewRegExp:
-			fmt.Fprintf(sb, " %d", in.A)
-			if int(in.A) < len(f.Constants) {
-				fmt.Fprintf(sb, " ; %s", f.Constants[in.A])
-			}
-		case OpGetProp, OpSetProp, OpGetPropThis, OpDefineField,
-			OpGetGlobal, OpGetGlobalOpt, OpSetGlobal, OpDefineGlobalVar,
-			OpDefineGlobalFunc, OpSetName, OpGetSuperProp, OpSetSuperProp,
-			OpCheckGlobalRef, OpAssertResolved,
-			OpGetPrivate, OpSetPrivate, OpDefinePrivate, OpPrivateIn,
-			OpDefinePrivateMethod,
-			OpGetPrivateMethod, OpDefineGetter, OpDefineSetter:
-			fmt.Fprintf(sb, " %d", in.A)
-			if int(in.A) < len(f.Names) {
-				fmt.Fprintf(sb, " ; %q", f.Names[in.A])
-			}
-		case OpGetLocal, OpSetLocal, OpPutLocal, OpGetLocalCheck,
-			OpSetLocalCheck, OpInitLocal, OpCloseUpvalues:
-			fmt.Fprintf(sb, " %d", in.A)
-			if int(in.A) < len(f.Locals) {
-				fmt.Fprintf(sb, " ; %q", f.Locals[in.A].Name)
-			}
-		case OpGetUpvalue, OpSetUpvalue, OpGetUpvalueCheck, OpSetUpvalueCheck,
-			OpInitUpvalue:
-			fmt.Fprintf(sb, " %d", in.A)
-			if int(in.A) < len(f.Upvalues) {
-				fmt.Fprintf(sb, " ; %q", f.Upvalues[in.A].Name)
-			}
-		case OpJump, OpJumpIfFalse, OpJumpIfTrue, OpJumpIfFalseKeep,
-			OpJumpIfTrueKeep, OpJumpIfNullish, OpJumpIfNotNullish,
-			OpPushCatch, OpPushFinally, OpIterNextOrJump:
-			fmt.Fprintf(sb, " -> %d", in.A)
-		case OpJumpIfCmpFalse:
-			fmt.Fprintf(sb, " %s -> %d", Op(in.B), in.A)
-		default:
-			if in.A != 0 || in.B != 0 {
-				fmt.Fprintf(sb, " %d", in.A)
-				if in.B != 0 {
-					fmt.Fprintf(sb, " %d", in.B)
-				}
-			}
-		}
-		sb.WriteByte('\n')
+	for pc := range f.Code {
+		fmt.Fprintf(sb, "%s  %4d  %s\n", indent, pc, f.FormatInstr(pc))
 	}
 
 	// Nested functions follow their parent, indented.
@@ -463,6 +419,97 @@ func (f *Function) disassembleTo(sb *strings.Builder, indent string) {
 			c.Fn.disassembleTo(sb, indent+"    ")
 		}
 	}
+}
+
+// FormatInstr renders the instruction at pc as Disassemble does: its
+// operation, its operands, and what an operand names -- a constant, a name, a
+// local or an upvalue -- after a semicolon.
+func (f *Function) FormatInstr(pc int) string {
+	var sb strings.Builder
+	in := f.Code[pc]
+	fmt.Fprintf(&sb, "%-20s", in.Op)
+	switch in.Op {
+	case OpPushConst, OpClosure, OpNewRegExp:
+		fmt.Fprintf(&sb, " %d", in.A)
+		if int(in.A) < len(f.Constants) {
+			fmt.Fprintf(&sb, " ; %s", f.Constants[in.A])
+		}
+	case OpGetProp, OpSetProp, OpGetPropThis, OpDefineField,
+		OpGetGlobal, OpGetGlobalOpt, OpSetGlobal, OpDefineGlobalVar,
+		OpDefineGlobalFunc, OpSetName, OpGetSuperProp, OpSetSuperProp,
+		OpCheckGlobalRef, OpAssertResolved,
+		OpGetPrivate, OpSetPrivate, OpDefinePrivate, OpPrivateIn,
+		OpDefinePrivateMethod,
+		OpGetPrivateMethod, OpDefineGetter, OpDefineSetter:
+		fmt.Fprintf(&sb, " %d", in.A)
+		if int(in.A) < len(f.Names) {
+			fmt.Fprintf(&sb, " ; %q", f.Names[in.A])
+		}
+	case OpGetLocal, OpSetLocal, OpPutLocal, OpGetLocalCheck,
+		OpSetLocalCheck, OpInitLocal, OpCloseUpvalues:
+		fmt.Fprintf(&sb, " %d", in.A)
+		if int(in.A) < len(f.Locals) {
+			fmt.Fprintf(&sb, " ; %q", f.Locals[in.A].Name)
+		}
+	case OpGetUpvalue, OpSetUpvalue, OpGetUpvalueCheck, OpSetUpvalueCheck,
+		OpInitUpvalue:
+		fmt.Fprintf(&sb, " %d", in.A)
+		if int(in.A) < len(f.Upvalues) {
+			fmt.Fprintf(&sb, " ; %q", f.Upvalues[in.A].Name)
+		}
+	case OpJump, OpJumpIfFalse, OpJumpIfTrue, OpJumpIfFalseKeep,
+		OpJumpIfTrueKeep, OpJumpIfNullish, OpJumpIfNotNullish,
+		OpPushCatch, OpPushFinally, OpIterNextOrJump:
+		fmt.Fprintf(&sb, " -> %d", in.A)
+	case OpJumpIfCmpFalse:
+		fmt.Fprintf(&sb, " %s -> %d", Op(in.B), in.A)
+	case OpPushInt:
+		fmt.Fprintf(&sb, " %d", int32(in.A))
+	case OpClearLocal, OpIncLocal, OpDecLocal, OpLazyArguments:
+		fmt.Fprintf(&sb, " %d ; %s", in.A, f.localName(in.A))
+	case OpGetLocal2, OpSetLocalGet, OpGetLocalIndex:
+		fmt.Fprintf(&sb, " %d %d ; %s %s", in.A, in.B, f.localName(in.A), f.localName(in.B))
+	case OpUpdateLocal:
+		fmt.Fprintf(&sb, " %d %s ; %s", in.A, updateString(in.B), f.localName(in.A))
+	case OpGetLocalIndexUpdate:
+		fmt.Fprintf(&sb, " %d %d %s ; %s %s", in.A, in.B>>2, updateString(in.B&3), f.localName(in.A), f.localName(in.B>>2))
+	case OpBinImm:
+		fmt.Fprintf(&sb, " %s %d", Op(in.B), int32(in.A))
+	case OpBinLocal:
+		fmt.Fprintf(&sb, " %s %d ; %s", Op(in.B), in.A, f.localName(in.A))
+	case OpLocalBinImm:
+		k := in.A & (1<<24 - 1)
+		fmt.Fprintf(&sb, " %d %s %d ; %s", k, Op(in.A>>24), int32(in.B), f.localName(k))
+	default:
+		if in.A != 0 || in.B != 0 {
+			fmt.Fprintf(&sb, " %d", in.A)
+			if in.B != 0 {
+				fmt.Fprintf(&sb, " %d", in.B)
+			}
+		}
+	}
+	return strings.TrimRight(sb.String(), " ")
+}
+
+// localName is local k's name, quoted, for a disassembly.
+func (f *Function) localName(k uint32) string {
+	if int(k) < len(f.Locals) {
+		return fmt.Sprintf("%q", f.Locals[k].Name)
+	}
+	return "?"
+}
+
+// updateString is an update_local's flags as the operator they make: ++x,
+// x++, --x or x--.
+func updateString(flags uint32) string {
+	op := "++"
+	if flags&UpdateDec != 0 {
+		op = "--"
+	}
+	if flags&UpdatePostfix != 0 {
+		return "x" + op
+	}
+	return op + "x"
 }
 
 func (c Constant) String() string {

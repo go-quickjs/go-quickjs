@@ -222,6 +222,17 @@ go run ./internal/cmd/v8bench/external -engine qjs -cmd /path/to/qjs -dir /tmp/v
 Each Go runner ends with the live heap after a collection, with the runtime
 still alive: one that grows with `-n` is a leak.
 
+`internal/cmd/disasm` prints the bytecode a script or module compiles to,
+each function's instructions under the source lines they come from; `-tree`
+says whether the tree tier builds each function and, where it does not,
+why, and `-func` picks functions by name. Look there first when a
+micro-benchmark moves: it shows which instructions and which tier a loop
+runs as.
+
+```sh
+go run ./internal/cmd/disasm -tree -func global_read bench.js
+```
+
 A change that keeps memory longer shows in neither: compare the conformance
 run's peak memory as well, which is how a cache that outlived its objects was
 caught.
