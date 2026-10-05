@@ -306,6 +306,27 @@ err := v.Decode(&out)
 Decoding into `any` produces the natural Go form: `nil`, `bool`, `float64`,
 `string`, `[]any` or `map[string]any`.
 
+### The zero Value
+
+The zero `quickjs.Value` -- a field the host never set, or what a call that
+failed returned -- is the number zero, not undefined or null. Handed to the
+engine it is `0`, by any route: `Set`, a call's arguments or receiver, a Go
+function's result, a struct's field. Its own methods agree:
+
+```go
+var v quickjs.Value
+v.Kind()     // quickjs.KindNumber
+v.String()   // "0"
+v.Float()    // 0
+v.Decode(&n) // n is 0
+v.Equal(x)   // as 0 == x
+```
+
+It belongs to no runtime, so what needs one -- `Get`, `Set`, `Call`, `New` --
+returns `quickjs.ErrClosed`. A struct field that may be absent is better a
+`*quickjs.Value`, which a nil pointer turns into `null`; or check the error
+before passing a `Value` on.
+
 ## Extending a runtime
 
 A runtime starts with the language and nothing else. What a script can reach is

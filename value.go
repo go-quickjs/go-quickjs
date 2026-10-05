@@ -63,6 +63,11 @@ func (k Kind) String() string {
 // A Value is only meaningful while the Runtime that produced it is open. Values
 // are compared with Equal and StrictEqual rather than ==, because JavaScript
 // equality is not Go equality.
+//
+// The zero Value is the number zero, wherever it goes: handed to the engine --
+// Set, a call's arguments, a Go function's result, a struct's field -- it is 0,
+// and Kind, String, Float, Decode and the comparisons say so. It belongs to no
+// runtime, so what needs one -- Get, Set, Call, New -- returns ErrClosed.
 type Value struct {
 	v  vm.Value
 	rt *vm.Runtime
@@ -125,7 +130,7 @@ func (v Value) IsArray() bool { return vm.IsArray(v.v) }
 // placeholder rather than panicking, because a String method must not fail.
 func (v Value) String() string {
 	if v.rt == nil {
-		return "<invalid>"
+		return "0" // the zero Value
 	}
 	s, err := v.rt.ToString(v.v)
 	if err != nil {
@@ -141,7 +146,7 @@ func (v Value) Bool() bool { return v.v.Truthy() }
 // cannot be converted yields NaN.
 func (v Value) Float() float64 {
 	if v.rt == nil {
-		return math.NaN()
+		return 0 // the zero Value
 	}
 	n, err := v.rt.ToNumber(v.v)
 	if err != nil {
@@ -165,14 +170,19 @@ func (v Value) StrictEqual(other Value) bool { return v.v.StrictEquals(other.v) 
 // Equal reports whether two values are == to each other, applying the coercion
 // rules that the loose equality operator uses.
 func (v Value) Equal(other Value) (bool, error) {
-	if v.rt == nil {
-		return false, ErrClosed
+	rt := v.rt
+	if rt == nil {
+		// The zero Value is 0, compared in the other's runtime -- or with
+		// another zero Value, equal to it.
+		if rt = other.rt; rt == nil {
+			return true, nil
+		}
 	}
 	// Loose equality can call user code through valueOf, so it can fail.
-	res, err := v.rt.Call(v.rt.NewFunction("", 2, looseEqualsNative), vm.Undefined,
+	res, err := rt.Call(rt.NewFunction("", 2, looseEqualsNative), vm.Undefined,
 		[]vm.Value{v.v, other.v})
 	if err != nil {
-		return false, wrapThrown(v.rt, err)
+		return false, wrapThrown(rt, err)
 	}
 	return res.Truthy(), nil
 }

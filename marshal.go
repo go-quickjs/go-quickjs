@@ -389,9 +389,6 @@ func wrapGoFunc(rt *vm.Runtime, fv reflect.Value) (vm.Value, error) {
 // dst must be a non-nil pointer. A *any receives the natural Go form: nil for
 // null and undefined, bool, float64, string, []any or map[string]any.
 func (v Value) Decode(dst any) error {
-	if v.rt == nil {
-		return ErrClosed
-	}
 	rv := reflect.ValueOf(dst)
 	if rv.Kind() != reflect.Pointer || rv.IsNil() {
 		return fmt.Errorf("quickjs: Decode requires a non-nil pointer, got %T", dst)
@@ -399,7 +396,9 @@ func (v Value) Decode(dst any) error {
 	return decodeInto(v.rt, v.v, rv.Elem())
 }
 
-// decodeInto converts one value into a settable destination.
+// decodeInto converts one value into a settable destination. rt is nil for
+// the zero Value, which is the number zero: decoding a number needs no
+// runtime but to make its string.
 func decodeInto(rt *vm.Runtime, val vm.Value, dst reflect.Value) error {
 	// A destination of type Value or any takes the value as-is.
 	switch dst.Type() {
@@ -474,6 +473,10 @@ func decodeInto(rt *vm.Runtime, val vm.Value, dst reflect.Value) error {
 		return nil
 
 	case reflect.String:
+		if rt == nil {
+			dst.SetString("0") // the zero Value
+			return nil
+		}
 		s, err := rt.ToString(val)
 		if err != nil {
 			return err
