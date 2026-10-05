@@ -63,13 +63,11 @@ parentPort.postMessage(require("./lib").name + " " + typeof module + " " + requi
 // module.
 func TestRequire(t *testing.T) {
 	files := map[string]string{"main.js": `const path = require("path");
-// Paths are the system's, which stdlib's path module does not read on
-// Windows; they are compared as text.
-const rel = f => f.slice(__dirname.length + 1).split(/[\\/]/).join("/");
+const rel = f => path.relative(__dirname, f).split(path.sep).join("/");
 const out = [];
 const lib = require("./lib");
 out.push("lib " + lib.name + " " + (this === module.exports) + " " + (require.main === module) + " " + module.id);
-out.push("names " + rel(__filename) + " " + __filename.startsWith(__dirname));
+out.push("names " + path.basename(__filename) + " " + (__dirname === path.dirname(__filename)) + " " + (path === path[process.platform === "win32" ? "win32" : "posix"]));
 out.push("json " + require("./data.json").x);
 const a = require("./cycle/a");
 out.push("cycle " + a.done + " " + a.sawB);
@@ -103,7 +101,7 @@ console.log(out.join("\n"));
 	code, out, errOut := exec(t, "", filepath.Join(dir, "main.js"))
 	want := strings.Join([]string{
 		"lib lib true true .",
-		"names main.js true",
+		"names main.js true true",
 		"json 1",
 		"cycle true a.done=false",
 		"dep hi from cjs, feature x",

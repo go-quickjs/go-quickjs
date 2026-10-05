@@ -2197,7 +2197,7 @@ func TestNodeModulesAreOneModule(t *testing.T) {
 	}, `
 		(async () => {
 			const out = [];
-			for (const [name, key] of [["fs", "readFileSync"], ["fs/promises", "readFile"], ["path", "join"],
+			for (const [name, key] of [["fs", "readFileSync"], ["fs/promises", "readFile"], ["path", "join"], ["path/posix", "join"], ["path/win32", "join"],
 				["os", "platform"], ["child_process", "execSync"], ["http", "serve"], ["process", null]]) {
 				const a = await import(name), b = await import("node:" + name);
 				const same = a.default === b.default && (key === null || (a[key] === b[key] && a[key] === a.default[key]));
@@ -2206,7 +2206,7 @@ func TestNodeModulesAreOneModule(t *testing.T) {
 			console.log(out.join(" "));
 		})();
 	`)
-	if want := "fs true fs/promises true path true os true child_process true http true process true"; out != want {
+	if want := "fs true fs/promises true path true path/posix true path/win32 true os true child_process true http true process true"; out != want {
 		t.Errorf("got %q, want %q", out, want)
 	}
 }

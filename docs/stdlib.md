@@ -37,6 +37,13 @@ loop.Run(ctx)     // timers, and work that finished on other goroutines
 | `Sockets` | `WebSocket`, and `upgradeWebSocket` where there is a server to accept one on |
 | `Run` | the `child_process` module: `execFileSync`, `execFile`, `spawnSync`, `exec` |
 | `Workers` | `Worker`, and `node:worker_threads`' — each worker a runtime of its own on a goroutine of its own, installed with the same `Config` |
+| `WindowsPaths` | `path` is `path.win32`, as node's is on Windows, for a host whose script sees the machine's own paths; without it `path` is `path.posix` wherever the host runs |
+
+`path` is node's, both flavors: `path.posix` and `path.win32` -- and the
+`path/posix` and `path/win32` modules -- answer as node's do, for drives, UNC
+shares, device paths and the rest. `path.resolve` resolves against
+`process.cwd()`, read when it is called. And each of node's modules is one
+module under both of its names: `require("fs") === require("node:fs")`.
 
 `structuredClone` and a `MessagePort`'s `postMessage` clone as V8 does, word
 for word where they refuse: an object is read by what it is rather than what it

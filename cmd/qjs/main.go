@@ -38,6 +38,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -399,6 +400,9 @@ func install(rt *quickjs.Runtime, loop *stdlib.Loop, opts *options, stdin io.Rea
 		Stdout: stdout,
 		Stderr: stderr,
 		Loop:   loop,
+		// A script sees the machine's own paths -- process.cwd(),
+		// __filename -- and so takes them apart with node's path for them.
+		WindowsPaths: runtime.GOOS == "windows",
 		Process: &stdlib.Process{
 			Args:      append([]string{"qjs", opts.file}, opts.args...),
 			Cwd:       cwd(),

@@ -59,6 +59,13 @@ type Config struct {
 	// wants and a test may not.
 	Random io.Reader
 
+	// WindowsPaths makes the path module path.win32, as node's is on
+	// Windows, for a host whose script sees the machine's own paths there --
+	// process.cwd(), the files it is given -- rather than paths of its own.
+	// Without it path is path.posix, whatever the host runs on; both are
+	// there either way, as path.posix and path.win32.
+	WindowsPaths bool
+
 	// NoWebAPIs leaves out the things a browser has and a language does not --
 	// URL, TextEncoder, TextDecoder, structuredClone, performance, crypto,
 	// atob, btoa -- and the node modules that need no capability either:
@@ -156,7 +163,7 @@ func Install(rt *quickjs.Runtime, cfg Config) error {
 			return err
 		}
 	}
-	if err := Path(rt); err != nil {
+	if err := installPath(rt, cfg.WindowsPaths); err != nil {
 		return err
 	}
 	if cfg.FS != nil {
