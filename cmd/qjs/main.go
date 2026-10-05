@@ -26,6 +26,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -100,7 +101,11 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	rt := newRuntime(opts)
+	rt, err := newRuntime(opts)
+	if err != nil {
+		fmt.Fprintln(stderr, "qjs:", err)
+		return 1
+	}
 	defer rt.Close()
 
 	loop := stdlib.NewLoop(rt)
@@ -161,6 +166,12 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	if opts.interactive {
+		if m, ok := modulesOf.Load(rt); ok {
+			if err := m.(*nodeModules).evalGlobals("<repl>"); err != nil {
+				fmt.Fprintln(stderr, "qjs:", err)
+				return 1
+			}
+		}
 		return repl(rt, loop, ctx, stdin, stdout, stderr)
 	}
 	if rejected {
@@ -173,9 +184,9 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// newRuntime makes a runtime as the options say, able to import files: the
-// program's, and each of its workers'.
-func newRuntime(opts *options) *quickjs.Runtime {
+// newRuntime makes a runtime as the options say, able to import and require
+// files, as node does: the program's, and each of its workers'.
+func newRuntime(opts *options) (*quickjs.Runtime, error) {
 	rtOpts := []quickjs.Option{}
 	if opts.memoryLimit > 0 {
 		rtOpts = append(rtOpts, quickjs.WithMemoryLimit(opts.memoryLimit))
@@ -190,21 +201,11 @@ func newRuntime(opts *options) *quickjs.Runtime {
 		rtOpts = append(rtOpts, quickjs.WithoutCodeGeneration())
 	}
 	rt := quickjs.New(rtOpts...)
-	setModuleLoader(rt)
-
-	// What a module is told about itself: where it came from, in the forms
-	// node offers, so that the usual ways of finding a file beside a module
-	// work.
-	rt.OnImportMeta(func(specifier string, meta quickjs.Value) {
-		if !filepath.IsAbs(specifier) {
-			meta.Set("url", specifier)
-			return
-		}
-		meta.Set("url", fileURL(specifier))
-		meta.Set("filename", specifier)
-		meta.Set("dirname", filepath.Dir(specifier))
-	})
-	return rt
+	if _, err := installModules(rt); err != nil {
+		rt.Close()
+		return nil, err
+	}
+	return rt, nil
 }
 
 // loadWorker reads a worker's code, as node does: a path relative to the
@@ -225,7 +226,13 @@ func loadWorker(specifier string) (string, string, bool, error) {
 	if err != nil {
 		return "", "", false, err
 	}
-	return string(src), path, moduleByName(path, string(src)), nil
+	if moduleByName(path, string(src)) {
+		return string(src), path, true, nil
+	}
+	// A CommonJS file runs as node runs one: through require, which the
+	// worker's runtime is given when it is installed.
+	quoted, _ := json.Marshal(path)
+	return "globalThis[Symbol.for(\"qjs.runMain\")](" + string(quoted) + ")", path, false, nil
 }
 
 // lockedWriter is a writer written to by one goroutine at a time.
@@ -516,9 +523,12 @@ func install(rt *quickjs.Runtime, loop *stdlib.Loop, opts *options, stdin io.Rea
 	// A worker is a runtime of its own, made as this one is and given what
 	// this one is given.
 	cfg.Workers = &stdlib.Workers{
-		New: func() (*quickjs.Runtime, error) { return newRuntime(opts), nil },
+		New: func() (*quickjs.Runtime, error) { return newRuntime(opts) },
 		Installed: func(rt *quickjs.Runtime) error {
-			return explainMissing(rt, opts)
+			if err := explainMissing(rt, opts); err != nil {
+				return err
+			}
+			return workerModules(rt)
 		},
 		Load: loadWorker,
 	}
@@ -528,6 +538,32 @@ func install(rt *quickjs.Runtime, loop *stdlib.Loop, opts *options, stdin io.Rea
 	// What was not allowed is explained rather than merely missing, so that a
 	// script that tries says which flag it needed.
 	return explainMissing(rt, opts)
+}
+
+// setStandIn installs a stand-in for one of node's modules under its name and
+// its node: name, as one module: the same objects whichever name imports it,
+// and a default that is an object of the same functions.
+func setStandIn(rt *quickjs.Runtime, name string, exports map[string]any) error {
+	values := map[string]quickjs.Value{}
+	def := rt.NewObject()
+	for k, v := range exports {
+		if k == "default" {
+			continue
+		}
+		ev, err := rt.Encode(v)
+		if err != nil {
+			return err
+		}
+		values[k] = ev
+		if err := def.Set(k, ev); err != nil {
+			return err
+		}
+	}
+	values["default"] = def
+	if err := rt.SetModuleValues(name, values); err != nil {
+		return err
+	}
+	return rt.SetModuleValues("node:"+name, values)
 }
 
 // explainMissing installs stand-ins for the capabilities that were withheld.
@@ -576,10 +612,7 @@ func explainMissing(rt *quickjs.Runtime, opts *options) error {
 			return err
 		}
 		denied := map[string]any{"serve": refuseServe, "default": map[string]any{"serve": refuseServe}}
-		if err := rt.SetModule("http", denied); err != nil {
-			return err
-		}
-		if err := rt.SetModule("node:http", denied); err != nil {
+		if err := setStandIn(rt, "http", denied); err != nil {
 			return err
 		}
 	}
@@ -593,10 +626,7 @@ func explainMissing(rt *quickjs.Runtime, opts *options) error {
 			def[k] = v
 		}
 		denied["default"] = def
-		if err := rt.SetModule("child_process", denied); err != nil {
-			return err
-		}
-		if err := rt.SetModule("node:child_process", denied); err != nil {
+		if err := setStandIn(rt, "child_process", denied); err != nil {
 			return err
 		}
 	}
@@ -615,10 +645,7 @@ func explainMissing(rt *quickjs.Runtime, opts *options) error {
 				denied["default"].(map[string]any)[k] = v
 			}
 		}
-		if err := rt.SetModule("fs", denied); err != nil {
-			return err
-		}
-		if err := rt.SetModule("node:fs", denied); err != nil {
+		if err := setStandIn(rt, "fs", denied); err != nil {
 			return err
 		}
 	}
@@ -635,10 +662,23 @@ func evaluate(rt *quickjs.Runtime, loop *stdlib.Loop, ctx context.Context, opts 
 	defer stop()
 	interrupted := func() bool { return ctx.Err() != nil && parent.Err() == nil }
 	var err error
-	if opts.isModule(name, src) {
+	m, _ := modulesOf.Load(rt)
+	modules, _ := m.(*nodeModules)
+	switch {
+	case opts.isModule(name, src):
 		_, err = rt.EvalModuleContext(ctx, name, src)
-	} else {
-		// Named, so that a stack trace says which file a frame is in.
+	case filepath.IsAbs(name) && !opts.script && modules != nil:
+		// A CommonJS file runs as node's entry point does.
+		err = modules.runMain(ctx, name)
+	default:
+		// Code that is not a file has the require node gives it, from the
+		// working directory; it is named, so that a stack trace says
+		// which input a frame is in.
+		if modules != nil && !opts.script {
+			if err = modules.evalGlobals(evalName(name)); err != nil {
+				break
+			}
+		}
 		_, err = rt.EvalFileContext(ctx, name, src)
 	}
 	if err == nil {
@@ -656,9 +696,11 @@ func evaluate(rt *quickjs.Runtime, loop *stdlib.Loop, ctx context.Context, opts 
 
 // isModule decides how to treat source that did not say.
 //
-// A file named .mjs is a module, one named .cjs is not, and anything else is
-// judged by whether it uses the syntax only a module may: a file with an import
-// or an export in it is a module, because it could not run as a script.
+// A file named .mjs is a module, one named .cjs is not, one named .js is what
+// its package's "type" says, and anything else is judged by whether it uses
+// the syntax only a module may: a file with an import or an export in it is a
+// module, because it could not run as CommonJS. What is not a module is
+// CommonJS, unless --script says it is a classic script.
 func (o *options) isModule(name, src string) bool {
 	if o.module {
 		return true
@@ -677,8 +719,49 @@ func moduleByName(name, src string) bool {
 		return true
 	case ".cjs":
 		return false
+	case ".js":
+		if filepath.IsAbs(name) {
+			if pkg := packageScope(filepath.Dir(name)); pkg != nil && pkg.Type != "" {
+				return pkg.Type == "module"
+			}
+		}
 	}
 	return looksLikeModule(src)
+}
+
+// evalName is what node calls code that is not a file: [eval] for -e,
+// [stdin] for standard input.
+func evalName(name string) string {
+	switch name {
+	case "<cmdline>":
+		return "[eval]"
+	case "<stdin>":
+		return "[stdin]"
+	}
+	return name
+}
+
+// workerModules gives a worker's runtime what its code is run with: the
+// entry point a CommonJS worker's file is run through, and, for code passed
+// with eval -- which node runs as CommonJS -- require and module.
+func workerModules(rt *quickjs.Runtime) error {
+	m, ok := modulesOf.Load(rt)
+	if !ok {
+		return nil
+	}
+	modules := m.(*nodeModules)
+	runMain, err := modules.api.Get("runMain")
+	if err != nil {
+		return err
+	}
+	define, err := rt.Eval(`(f) => Object.defineProperty(globalThis, Symbol.for("qjs.runMain"), { value: f })`)
+	if err != nil {
+		return err
+	}
+	if _, err := define.Call(runMain); err != nil {
+		return err
+	}
+	return modules.evalGlobals("[worker eval]")
 }
 
 // looksLikeModule reports whether source uses module syntax at the start of a
@@ -983,37 +1066,6 @@ Editing, on a terminal:
 // Modules
 // ---------------------------------------------------------------------------
 
-// setModuleLoader lets a module import another by path.
-//
-// A specifier that looks like a path is resolved against the module that named
-// it, exactly as it would be on the web; a bare one is a module the host
-// installed, and reaches the loader only when there is none, where it is an
-// error that says so.
-func setModuleLoader(rt *quickjs.Runtime) {
-	rt.SetModuleLoader(func(specifier, referrer string) (string, string, error) {
-		if !strings.HasPrefix(specifier, ".") && !strings.HasPrefix(specifier, "/") &&
-			!strings.HasPrefix(specifier, "file:") {
-			return "", "", fmt.Errorf(
-				"%q is not a module this runtime has; imports of files are written as paths", specifier)
-		}
-		base := filepath.Dir(referrer)
-		if !filepath.IsAbs(referrer) {
-			// A script from the command line or stdin, or a worker's eval
-			// code, imports from the working directory.
-			base = cwd()
-		}
-		resolved, err := localPath(specifier, base)
-		if err != nil {
-			return "", "", err
-		}
-		src, err := os.ReadFile(resolved)
-		if err != nil {
-			return "", "", err
-		}
-		return string(src), resolved, nil
-	})
-}
-
 func cwd() string {
 	dir, err := os.Getwd()
 	if err != nil {
@@ -1213,8 +1265,8 @@ usage:
 
 options:
   -e, --eval CODE         run CODE
-  -m, --module            treat the input as a module
-  -s, --script            treat the input as a script
+  -m, --module            treat the input as an ES module
+  -s, --script            treat the input as a classic script, not CommonJS
   -i, --interactive       read from a prompt after running
       --check             check the syntax and run nothing
   -h, --help              this

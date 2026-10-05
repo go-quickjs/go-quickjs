@@ -7,8 +7,34 @@ qjs                          read from a prompt
 cat script.js | qjs -        run what arrives on standard input
 ```
 
-A file that imports is run as a module without being told to; a relative
-specifier is resolved against the file that named it.
+A file is run as node runs it. One named `.mjs`, or `.js` in a package whose
+`package.json` says `"type": "module"`, is an ES module; one named `.cjs`, or
+`.js` in a package of type `"commonjs"`, is CommonJS; and a `.js` file in a
+package of neither is a module if it uses `import` or `export`, and CommonJS
+if not.
+
+CommonJS has node's `require` and `module`. `require` finds files as node does
+-- a path, with `.js` or `.json` added, or a directory's `package.json` main or
+index file -- and packages in `node_modules`, from the requiring file's
+directory up, through their `"exports"` with the `require` condition; `#name`
+reaches the package's `"imports"`. node's own modules are there by their names,
+with or without `node:`: `require("fs")`, `require("node:path")`. JSON files,
+`require.cache`, `require.resolve`, `require.main` and cycles behave as they do
+in node, and so do its errors, by their codes: `MODULE_NOT_FOUND`,
+`ERR_PACKAGE_PATH_NOT_EXPORTED` and the rest.
+
+The two kinds meet as they do in node. An ES module imports a CommonJS file
+as its `module.exports`, the default export, with the names its source exports
+named exports too; a package gives it what its `import` condition says. A
+CommonJS file may `require` an ES module, which is evaluated then and there --
+unless it awaits at the top level, which is `ERR_REQUIRE_ASYNC_MODULE`.
+`createRequire` from `node:module` gives an ES module a `require` of its own,
+and `import.meta` has `url`, `filename`, `dirname` and `resolve`.
+
+Code that is not a file -- `-e`, standard input, the prompt, a worker given
+code with `eval` -- has a `require` too, which resolves from the working
+directory. `--script` runs a file as a classic script instead, whose top-level
+`var` is a global and which has no `require`; `--module` runs it as a module.
 
 A script can do nothing outside the process until the command line says it may,
 because the engine has no ambient authority to withhold:
