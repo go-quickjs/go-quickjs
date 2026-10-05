@@ -754,6 +754,10 @@ func (r *Runtime) installModuleHooks() {
 
 // compileAndRegisterModule parses, compiles and registers module source.
 func (r *Runtime) compileAndRegisterModule(specifier, source string) (*vm.Module, error) {
+	if r.closed {
+		// A loader closed the runtime as it was asked for a module.
+		return nil, ErrClosed
+	}
 	prog, err := parser.Parse(source, parser.Options{Module: true, NodeQuirks: r.nodeQuirks})
 	if err != nil {
 		return nil, newSyntaxError(err, specifier, 0, 0)
@@ -814,18 +818,26 @@ func (r *Runtime) EvalModuleContext(ctx context.Context, specifier, source strin
 		return r.compileAndRegisterModule(spec, src)
 	})
 
+	// The engine is held here: a loader, or a module, may close the Runtime,
+	// which lets go of it.
+	rt := r.rt
 	mod, err := r.compileAndRegisterModule(specifier, source)
 	if err != nil {
 		return Value{}, err
 	}
-	if err := r.rt.Link(mod); err != nil {
+	err = rt.Link(mod)
+	if r.closed {
+		// A loader closed the Runtime, which halted the linking.
+		rt.ReleaseClosed()
+		return Value{}, ErrClosed
+	}
+	if err != nil {
 		return Value{}, r.wrapError(err)
 	}
 	// Evaluation hands back a promise for the graph. The jobs are drained
 	// here, which is what makes a module that awaits something already settled
 	// finish before this returns; one waiting on the host stays pending, and
 	// its failure -- if any -- surfaces as a rejection rather than being lost.
-	rt := r.rt
 	done, err := rt.EvaluateModule(mod)
 	if r.closed {
 		// The module closed the Runtime, which stopped it; the stack it ran

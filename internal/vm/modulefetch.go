@@ -210,17 +210,23 @@ func (r *Runtime) pumpFetches() {
 			}
 		}
 		stop := context.AfterFunc(c.g.ctx, func() { once.Do(release) })
-		f.loader(c.g.ctx, c.specifier, c.referrer, func(source, resolved string, err error) {
-			stop()
-			answered := false
-			once.Do(func() {
-				release()
-				answered = true
+		r.hostCall(func() {
+			f.loader(c.g.ctx, c.specifier, c.referrer, func(source, resolved string, err error) {
+				stop()
+				answered := false
+				once.Do(func() {
+					release()
+					answered = true
+				})
+				if answered {
+					c.g.deliver(fetchResult{call: c, source: source, resolved: resolved, err: err})
+				}
 			})
-			if answered {
-				c.g.deliver(fetchResult{call: c, source: source, resolved: resolved, err: err})
-			}
 		})
+		if r.stopped != nil {
+			// The loader closed the runtime: nothing more goes out.
+			return
+		}
 	}
 }
 
@@ -230,6 +236,10 @@ func (r *Runtime) pumpFetches() {
 func (g *graphFetch) receive(res fetchResult) {
 	r := g.r
 	g.pending--
+	if r.stopped != nil {
+		g.err = r.stopped
+		return
+	}
 	// A call has come back, so another queued may go out.
 	defer r.pumpFetches()
 	if g.err != nil {
@@ -282,6 +292,11 @@ func (r *Runtime) fetchNow(start func(g *graphFetch)) error {
 		ctx = context.Background()
 	}
 	for g.pending > 0 && g.err == nil {
+		if r.stopped != nil {
+			// Halted -- closed, from the loader.
+			g.err = r.stopped
+			break
+		}
 		if res, ok := results.pop(); ok {
 			g.receive(res)
 			continue
@@ -292,6 +307,9 @@ func (r *Runtime) fetchNow(start func(g *graphFetch)) error {
 			r.pumpFetches()
 		case <-ctx.Done():
 			g.err = ctx.Err()
+		case <-g.ctx.Done():
+			// The runtime's lifetime ended.
+			g.err = g.ctx.Err()
 		}
 	}
 	g.done = true

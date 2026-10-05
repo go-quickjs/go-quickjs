@@ -265,6 +265,10 @@ type Runtime struct {
 	// modfetch is the asynchronous module loader and its calls, made when a
 	// loader is installed; see modulefetch.go.
 	modfetch *moduleFetch
+	// hostCalls counts the host's callbacks the runtime is inside while it
+	// loads modules -- a loader, a synthetic module's evaluate -- with no
+	// script running; see hostCall.
+	hostCalls int
 }
 
 // Realm is a set of intrinsics and the global object that goes with them.
@@ -899,8 +903,21 @@ func (r *Runtime) stop(err error) error {
 func (r *Runtime) EndNestedStop() { r.stopped = nil }
 
 // Running reports whether script is running: a call the host makes now is
-// made from inside it, by a host function the script called.
-func (r *Runtime) Running() bool { return r.frameDepth > 0 }
+// made from inside it, by a host function the script called. Loading modules
+// is running too, while the host's loader or a synthetic module's evaluate
+// is called: closing the runtime from there halts the load, as closing it
+// from a Go function halts the script.
+func (r *Runtime) Running() bool { return r.frameDepth > 0 || r.hostCalls > 0 }
+
+// hostCall calls fn, a host's callback made while the runtime loads modules,
+// with the runtime counted as running meanwhile: a Close from fn halts what
+// called it -- which looks at r.stopped when fn returns -- rather than freeing
+// the stack it is still using.
+func (r *Runtime) hostCall(fn func()) {
+	r.hostCalls++
+	defer func() { r.hostCalls-- }()
+	fn()
+}
 
 // Interrupted is why the host has stopped the runtime -- its context ended,
 // or its abort -- or nil when it has not.
@@ -947,7 +964,7 @@ func newStack(size int) []Value {
 // those below it are cleared. A script that runs after this, from a function
 // the host kept, finds no room on the stack and throws a RangeError.
 func (r *Runtime) ReleaseClosed() {
-	if r.frameDepth > 0 {
+	if r.frameDepth > 0 || r.hostCalls > 0 {
 		return
 	}
 	r.releaseAllWeakMaps()

@@ -373,7 +373,12 @@ func (r *Runtime) loadDependency(request, referrer string) (*Module, error) {
 	if m, ok := r.requested[key]; ok {
 		return m, nil
 	}
-	source, resolved, err := r.moduleLoader(specifier, referrer)
+	var source, resolved string
+	var err error
+	r.hostCall(func() { source, resolved, err = r.moduleLoader(specifier, referrer) })
+	if r.stopped != nil {
+		return nil, r.stopped
+	}
 	if err != nil {
 		return nil, r.loaderError(specifier, err)
 	}
@@ -675,7 +680,12 @@ func (r *Runtime) innerModuleEvaluation(m *Module, stack *[]*Module, index int) 
 // their values.
 func (r *Runtime) executeModuleBody(m *Module) error {
 	if m.synthetic != nil {
-		exports, err := m.synthetic()
+		var exports []NativeExport
+		var err error
+		r.hostCall(func() { exports, err = m.synthetic() })
+		if r.stopped != nil {
+			return r.stopped
+		}
 		if err != nil {
 			return err
 		}
@@ -844,8 +854,10 @@ func (r *Runtime) resolvedNameOf(request, referrer string) string {
 	if r.moduleLoader == nil {
 		return specifier
 	}
-	_, resolved, err := r.moduleLoader(specifier, referrer)
-	if err != nil {
+	var resolved string
+	var err error
+	r.hostCall(func() { _, resolved, err = r.moduleLoader(specifier, referrer) })
+	if err != nil || r.stopped != nil {
 		return specifier
 	}
 	return resolved
@@ -1074,7 +1086,12 @@ func (r *Runtime) loadTypedModule(specifier, typ, referrer string) (*Module, err
 		return nil, r.throwError(errType,
 			"cannot import %q: this runtime has no module loader", specifier)
 	}
-	source, resolved, err := r.moduleLoader(specifier, referrer)
+	var source, resolved string
+	var err error
+	r.hostCall(func() { source, resolved, err = r.moduleLoader(specifier, referrer) })
+	if r.stopped != nil {
+		return nil, r.stopped
+	}
 	if err != nil {
 		return nil, r.loaderError(specifier, err)
 	}
