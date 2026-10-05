@@ -129,11 +129,13 @@ func TestWebWorker(t *testing.T) {
 func TestWorkerSharing(t *testing.T) {
 	worker := `
 		import { parentPort, workerData } from "node:worker_threads";
+		// The channel is open before the main thread hears of the worker: a
+		// broadcast reaches only the channels open when it is posted.
+		const bc = new BroadcastChannel("news");
 		const i = new Int32Array(workerData.sab);
 		Atomics.store(i, 1, 1);
 		Atomics.wait(i, 0, 0);
 		parentPort.postMessage("woken " + Atomics.load(i, 0));
-		const bc = new BroadcastChannel("news");
 		bc.onmessage = (e) => { parentPort.postMessage("bc " + e.data); bc.close(); };
 		workerData.port.on("message", (m) => { workerData.port.postMessage("port got " + m); workerData.port.close(); });`
 	out, _ := run(t, stdlib.Config{Workers: workerFiles(map[string]string{"./sab.mjs": worker})}, `
