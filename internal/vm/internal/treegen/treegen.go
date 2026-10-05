@@ -201,6 +201,11 @@ func Generate() ([]byte, error) {
 	w("")
 	w("// arithStore is local k = x op y for an arithmetic operator, over the")
 	w("// pairings arithOperands reads in place and two trees otherwise.")
+	w("//")
+	w("// Each statement takes the slot's address before it reads its operands;")
+	w("// the frame's locals never move. Taken after a tree operand's call")
+	w("// returned, `s += g` and `t = s + g` over a global g ran 40% slower on")
+	w("// a Zen 2, for a reason not pinned down.")
 	w("func arithStore(op bytecode.Op, k uint32, x, y tentry, pc int) tstmt {")
 	w("	switch {")
 	for _, p := range []pair{{local, tree}, {tree, local}, {local, local}, {tree, number}, {local, number}, {number, tree}, {number, local}, {tree, tree}} {
@@ -214,12 +219,13 @@ func Generate() ([]byte, error) {
 		for _, o := range arith {
 			w("		case bytecode.%s:", o.name)
 			w("			return func(c *tctx) {")
+			w("				l := &c.locals[k]")
 			w("				a := %s", p.x.read("x"))
 			w("				b := %s", p.y.read("y"))
 			w("				if %s {", numberTests(p))
-			w("					c.locals[k] = Float(a.num %s b.num)", o.expr)
+			w("					*l = Float(a.num %s b.num)", o.expr)
 			w("				} else {")
-			w("					c.locals[k] = c.arithSlow(op, a, b, pc)")
+			w("					*l = c.arithSlow(op, a, b, pc)")
 			w("				}")
 			w("			}")
 		}
@@ -251,10 +257,11 @@ func Generate() ([]byte, error) {
 		} {
 			w("		case bytecode.%s:", o.name)
 			w("			return func(c *tctx) {")
+			w("				l := &c.locals[k]")
 			w("				if a := %s; a.IsNumber() {", xk.read("x"))
-			w("					c.locals[k] = %s", o.expr)
+			w("					*l = %s", o.expr)
 			w("				} else {")
-			w("					c.locals[k] = c.bitwiseSlow(op, a, kv, pc)")
+			w("					*l = c.bitwiseSlow(op, a, kv, pc)")
 			w("				}")
 			w("			}")
 		}
