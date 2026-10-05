@@ -105,12 +105,12 @@ func (r *Runtime) CheckSyntax(src string) error {
 func (r *Runtime) CheckModuleSyntax(src string) error {
 	prog, err := parser.Parse(src, parser.Options{Module: true, NodeQuirks: r.nodeQuirks})
 	if err != nil {
-		return &SyntaxError{err: err}
+		return newSyntaxError(err, "", 0, 0)
 	}
 	if _, _, err := compiler.CompileModule(prog, compiler.Options{
 		Source: "<check>", Text: src, NodeQuirks: r.nodeQuirks,
 	}); err != nil {
-		return &SyntaxError{err: err}
+		return newSyntaxError(err, "", 0, 0)
 	}
 	return nil
 }

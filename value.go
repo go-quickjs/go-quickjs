@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/compiler"
+	"github.com/go-quickjs/go-quickjs/internal/parser"
 	"github.com/go-quickjs/go-quickjs/internal/vm"
 )
 
@@ -421,8 +423,70 @@ func (e *Error) Stack() string {
 	return sb.String()
 }
 
-// SyntaxError reports source that failed to parse or compile.
-type SyntaxError struct{ err error }
+// SyntaxError reports source that failed to parse or compile, and where: the
+// name the source was compiled under, and the line and column in it, which
+// Position reports and the message ends with -- "(main.js:3:9)", or "(line 3,
+// column 9)" for source with no name.
+type SyntaxError struct {
+	err          error
+	msg          string
+	file         string
+	line, column int
+}
 
-func (e *SyntaxError) Error() string { return "quickjs: " + e.err.Error() }
+// newSyntaxError is err, from the parser or the compiler, as source named
+// file reports it: with its position placed as WithOffset places the source,
+// lineOffset lines down and, on its first line, columnOffset columns in. eval
+// code, and source that is only checked, has no name.
+func newSyntaxError(err error, file string, lineOffset, columnOffset int) *SyntaxError {
+	if file == "<eval>" || file == "<check>" {
+		file = ""
+	}
+	e := &SyntaxError{err: err, msg: strings.TrimPrefix(err.Error(), "SyntaxError: "), file: file}
+	var pe *parser.Error
+	var ce *compiler.Error
+	switch {
+	case errors.As(err, &pe):
+		e.msg, e.line, e.column = pe.Msg, pe.Line, pe.Col
+		if e.line > 0 {
+			if e.line == 1 && e.column > 0 {
+				e.column += columnOffset
+			}
+			e.line += lineOffset
+		}
+	case errors.As(err, &ce):
+		// The compiler's positions are placed in the file already.
+		e.msg, e.line, e.column = ce.Msg, ce.Line, ce.Col
+	}
+	return e
+}
+
+func (e *SyntaxError) Error() string {
+	var where string
+	switch {
+	case e.line <= 0:
+		where = e.file
+	case e.file != "" && e.column > 0:
+		where = fmt.Sprintf("%s:%d:%d", e.file, e.line, e.column)
+	case e.file != "":
+		where = fmt.Sprintf("%s:%d", e.file, e.line)
+	case e.column > 0:
+		where = fmt.Sprintf("line %d, column %d", e.line, e.column)
+	default:
+		where = fmt.Sprintf("line %d", e.line)
+	}
+	if where == "" {
+		return "quickjs: SyntaxError: " + e.msg
+	}
+	return "quickjs: SyntaxError: " + e.msg + " (" + where + ")"
+}
+
 func (e *SyntaxError) Unwrap() error { return e.err }
+
+// Position reports where the source failed: the name it was compiled under --
+// empty for code with none, as Eval's and eval's -- and the line and column,
+// counting from 1 and placed as WithOffset placed the source. A line or column
+// the compiler does not know is 0.
+func (e *SyntaxError) Position() (file string, line, column int) {
+	return e.file, e.line, e.column
+}

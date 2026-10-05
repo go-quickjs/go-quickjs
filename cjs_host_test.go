@@ -383,7 +383,7 @@ const first = require("./counter");
 delete require.cache[require.resolve("./counter")];
 out.push("counter " + first + " " + require("./counter"));
 try { require("./bad") } catch (e) { out.push(e.message + " " + e.stack.split("\n")[1].trim()) }
-try { require("./syntax") } catch (e) { out.push(e.name) }
+try { require("./syntax") } catch (e) { out.push(e.name + ": " + e.message) }
 out.push("cached after failing " + ("/app/bad.js" in require.cache));
 const esm = require("./esm.mjs");
 out.push("esm " + esm.value + " " + esm.default);
@@ -432,7 +432,7 @@ func TestHostRequire(t *testing.T) {
 		"cached true 5",
 		"counter 1 2",
 		"boom at boom (/app/bad.js:2:25)",
-		"SyntaxError",
+		`SyntaxError: unexpected punctuator ";" (/app/syntax.js:1:9)`,
 		"cached after failing false",
 		"esm 42 esm-default",
 		"dynamic function",

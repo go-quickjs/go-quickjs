@@ -144,6 +144,15 @@ func TestSyntaxCheck(t *testing.T) {
 	if code != 1 || !strings.Contains(errOut, "SyntaxError") {
 		t.Errorf("code=%d err=%q", code, errOut)
 	}
+	// A file that does not compile is named, with the line and column.
+	bad := filepath.Join(t.TempDir(), "bad.js")
+	if err := os.WriteFile(bad, []byte("let ok;\nlet y = ;\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errOut = exec(t, "", bad)
+	if want := bad + ":2:9)"; code != 1 || !strings.Contains(errOut, want) {
+		t.Errorf("code=%d err=%q, want it to name %s", code, errOut, want)
+	}
 }
 
 // Nothing outside the process is reachable unless the command line said so.

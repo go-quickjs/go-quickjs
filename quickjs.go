@@ -484,14 +484,14 @@ func (r *Runtime) compileAt(src, name string, lineOffset, columnOffset int) (*by
 func compileScript(src, name string, lineOffset, columnOffset int, strict, nodeQuirks bool) (*bytecodeFunc, error) {
 	prog, err := parser.Parse(src, parser.Options{Strict: strict, NodeQuirks: nodeQuirks})
 	if err != nil {
-		return nil, &SyntaxError{err: err}
+		return nil, newSyntaxError(err, name, lineOffset, columnOffset)
 	}
 	fn, err := compiler.Compile(prog, compiler.Options{
 		Source: name, Text: src, NodeQuirks: nodeQuirks,
 		LineOffset: lineOffset, ColumnOffset: columnOffset,
 	})
 	if err != nil {
-		return nil, &SyntaxError{err: err}
+		return nil, newSyntaxError(err, name, lineOffset, columnOffset)
 	}
 	return fn, nil
 }
@@ -643,13 +643,13 @@ func (r *Runtime) SetModuleLoader(fn ModuleLoader) {
 func (r *Runtime) compileAndRegisterModule(specifier, source string) (*vm.Module, error) {
 	prog, err := parser.Parse(source, parser.Options{Module: true, NodeQuirks: r.nodeQuirks})
 	if err != nil {
-		return nil, &SyntaxError{err: err}
+		return nil, newSyntaxError(err, specifier, 0, 0)
 	}
 	fn, info, err := compiler.CompileModule(prog, compiler.Options{
 		Source: specifier, Text: source, NodeQuirks: r.nodeQuirks,
 	})
 	if err != nil {
-		return nil, &SyntaxError{err: err}
+		return nil, newSyntaxError(err, specifier, 0, 0)
 	}
 	reqs := make([]vm.ModuleImportRequest, len(info.Imports))
 	for i, imp := range info.Imports {
@@ -785,11 +785,11 @@ func (r *Runtime) installCodeGeneration() {
 		}
 		prog, err := parser.Parse(source, popts)
 		if err != nil {
-			return nil, &SyntaxError{err: err}
+			return nil, newSyntaxError(err, "", 0, 0)
 		}
 		fn, err := compiler.Compile(prog, copts)
 		if err != nil {
-			return nil, &SyntaxError{err: err}
+			return nil, newSyntaxError(err, "", 0, 0)
 		}
 		return fn, nil
 	})

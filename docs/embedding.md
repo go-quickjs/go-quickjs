@@ -243,6 +243,14 @@ different: it is thrown as an ordinary exception, so if you need to tell "my
 call ran out of time" apart from "a Go function reported a timeout", check for
 `*quickjs.Error` first.
 
+Source that doesn't compile -- given to `Eval`, `EvalFile`, `EvalModule`,
+`Compile`, or a module a loader returned -- is a `*quickjs.SyntaxError`, which
+says where: `Position` returns the name the source was compiled under and the
+line and column, placed as `WithOffset` placed the source, and the message ends
+with them, as in `unexpected punctuator ";" (main.js:3:9)`. A Go function that
+returns one throws a `SyntaxError` with that message, so a host compiling a
+file for a script -- a `require` -- reports the file's own position.
+
 A `Value` belongs to its runtime, so call it on the goroutine that uses that
 runtime (see [Concurrency](#concurrency)).
 

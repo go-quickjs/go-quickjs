@@ -601,7 +601,7 @@ func (w *workerContext) errorData(rt *quickjs.Runtime, err error) any {
 		v = rejection.reason
 	case errors.As(err, &syntax):
 		// Code that did not compile is a SyntaxError, as the parent hears it.
-		v = rt.NewError("SyntaxError", strings.TrimPrefix(syntax.Unwrap().Error(), "SyntaxError: "))
+		v = rt.NewError("SyntaxError", strings.TrimPrefix(syntax.Error(), "quickjs: SyntaxError: "))
 	default:
 		return err
 	}

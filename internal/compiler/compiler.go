@@ -24,6 +24,10 @@ import (
 type Error struct {
 	Msg  string
 	Line int
+	// Col is the column on Line, when the error has a position. Line and Col
+	// are placed in the file as Options.LineOffset and ColumnOffset place the
+	// source.
+	Col int
 }
 
 func (e *Error) Error() string {
@@ -815,9 +819,8 @@ func (c *compiler) markTarget(pc int) {
 
 // errorf reports a compile error.
 func (c *compiler) errorf(pos int, format string, args ...any) {
-	l, _ := c.script.Position(int32(pos))
-	line := int(l)
-	panic(&Error{Msg: fmt.Sprintf(format, args...), Line: line})
+	l, col := c.script.Position(int32(pos))
+	panic(&Error{Msg: fmt.Sprintf(format, args...), Line: int(l), Col: int(col)})
 }
 
 // ---------------------------------------------------------------------------
