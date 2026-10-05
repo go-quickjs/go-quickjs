@@ -16,6 +16,11 @@ type Script struct {
 	// where it was compiled, as a stack trace shows it: "eval at f
 	// (main.js:3:9)".
 	EvalOrigin string
+	// Referrer is what an import() in this code is resolved against, as the
+	// module loader's referrer: a module's specifier, a script's name, empty
+	// for code with no name ("<eval>"), and for the code of an eval or a
+	// Function call, the referrer of the code that called it.
+	Referrer string
 
 	text string
 	// lineStarts holds the byte offset at which each line begins.
@@ -34,7 +39,10 @@ func (s *Script) SetOffset(lineOffset, columnOffset int32) {
 
 // NewScript returns the script for a source text.
 func NewScript(name, text string) *Script {
-	s := &Script{Name: name, text: text, lineStarts: make([]int32, 1, 64)}
+	s := &Script{Name: name, Referrer: name, text: text, lineStarts: make([]int32, 1, 64)}
+	if name == "<eval>" {
+		s.Referrer = ""
+	}
 	for i := 0; i < len(text); i++ {
 		if text[i] == '\n' {
 			s.lineStarts = append(s.lineStarts, int32(i+1))

@@ -181,9 +181,9 @@ func (r *Runtime) evaluationList(m *Module) []*Module {
 // importDeferred settles import.defer()'s promise: it loads and links the
 // module, runs what of its graph awaits at the top level, and hands back its
 // deferred namespace.
-func (r *Runtime) importDeferred(request string, result *Object) {
+func (r *Runtime) importDeferred(request, referrer string, result *Object) {
 	r.enqueueJob(func() {
-		mod, err := r.loadDependency(request, "")
+		mod, err := r.loadDependency(request, referrer)
 		if err == nil {
 			err = r.Link(mod)
 		}
@@ -231,9 +231,9 @@ func (r *Runtime) importDeferred(request string, result *Object) {
 // importSource settles import.source()'s promise. It asks for a module's
 // source, which a module here never has: once the module is found it rejects,
 // as linking a static source import of it fails.
-func (r *Runtime) importSource(request string, result *Object) {
+func (r *Runtime) importSource(request, referrer string, result *Object) {
 	r.enqueueJob(func() {
-		mod, err := r.loadDependency(request, "")
+		mod, err := r.loadDependency(request, referrer)
 		if err == nil {
 			err = r.moduleSourceError(mod)
 		}

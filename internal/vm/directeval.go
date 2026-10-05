@@ -42,6 +42,7 @@ func (r *Runtime) evalDirect(caller *frame, scope bytecode.EvalScope, src string
 	}
 	if fn.Script != nil {
 		fn.Script.EvalOrigin = r.evalOrigin()
+		fn.Script.Referrer = r.activeReferrer()
 	}
 
 	cl := r.prepare(fn)
@@ -115,6 +116,7 @@ func (r *Runtime) evalIndirect(src string) (Value, error) {
 	}
 	if fn.Script != nil {
 		fn.Script.EvalOrigin = r.evalOrigin()
+		fn.Script.Referrer = r.activeReferrer()
 	}
 	return r.Run(fn)
 }

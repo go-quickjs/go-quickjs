@@ -612,10 +612,14 @@ func (r *Runtime) Locale() string {
 
 // ModuleLoader resolves a module specifier to its source.
 //
-// specifier is the text of the import, and referrer is the module that
-// contains it, empty for the entry point. The returned name is what the module
-// is cached under, so a loader that resolves two specifiers to the same module
-// must return the same name for both.
+// specifier is the text of the import, and referrer is the module or script
+// the import is written in, for a static import and an import() alike: the
+// name a module was loaded under, the name a script was compiled under
+// (EvalFile, Compile), or empty for code that has none (Eval). An import() in
+// code an eval or the Function constructor compiled has the referrer of the
+// code that called them. The returned name is what the module is cached under,
+// so a loader that resolves two specifiers to the same module must return the
+// same name for both.
 //
 // A runtime with no loader rejects every import. That is the default, because
 // the engine has no filesystem access of its own and should not acquire any

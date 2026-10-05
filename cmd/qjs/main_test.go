@@ -87,6 +87,36 @@ func TestRunsAModule(t *testing.T) {
 	}
 }
 
+// An import() is resolved against the file it is written in, as a static import
+// is: a module's in a directory of its own, and a script's. It was resolved
+// against the working directory.
+func TestDynamicImportIsRelativeToItsFile(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, src string) string {
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	write("lib/b.js", `export const b = "b"`)
+	write("lib/a.js", `export const load = () => import("./b.js")`)
+	main := write("main.js", "import {load} from \"./lib/a.js\"\nconsole.log((await load()).b)\n")
+	script := write("script.cjs", `import("./lib/b.js").then(m => console.log(m.b + " from a script"))`)
+	for _, c := range []struct{ file, want string }{
+		{main, "b\n"},
+		{script, "b from a script\n"},
+	} {
+		code, out, errOut := exec(t, "", c.file)
+		if code != 0 || out != c.want {
+			t.Errorf("%s: code=%d out=%q err=%q", filepath.Base(c.file), code, out, errOut)
+		}
+	}
+}
+
 // A bare specifier that is not a module the host installed says so, rather than
 // looking for a file with that name.
 func TestBareSpecifierIsExplained(t *testing.T) {

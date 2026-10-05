@@ -418,12 +418,27 @@ rejects every import, which is the default:
 
 ```go
 rt.SetModuleLoader(func(specifier, referrer string) (source, resolved string, err error) {
-    b, err := os.ReadFile(filepath.Join(root, specifier))
-    return string(b), specifier, err
+    base := root
+    if referrer != "" {
+        base = filepath.Dir(referrer)
+    }
+    resolved = filepath.Join(base, specifier)
+    b, err := os.ReadFile(resolved)
+    return string(b), resolved, err
 })
 
-ns, err := rt.EvalModule("main.js", `import {greet} from "./greet.js"; greet();`)
+main := filepath.Join(root, "main.js")
+ns, err := rt.EvalModule(main, `import {greet} from "./greet.js"; greet();`)
 ```
+
+The referrer is the name of the code the import is written in, so a relative
+specifier can be resolved against it: the name a module was loaded under -- the
+loader's resolved name, or `EvalModule`'s specifier -- or the name a script was
+compiled under, by `EvalFile` or `Compile`. It is the same for a static import
+and an `import()`, wherever that runs: in a function called from another
+module, after an `await`, or in code `eval` or `new Function` compiled, which
+resolves as the code that called them does. Code `Eval` runs has no name, and
+its referrer is empty.
 
 `EvalModule` returns the module's namespace, through which its exports can be
 read. Bindings are live: an importer sees the exporter's current value, not a

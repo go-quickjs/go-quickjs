@@ -595,6 +595,21 @@ func (r *Runtime) writeLocation(b *strings.Builder, fr *stackFrame) {
 // the trace of a frame in that code shows it: "eval at f (main.js:3:9)". It
 // is the innermost frame running JavaScript, which the eval or Function call
 // is in.
+// activeReferrer is what an import() the running code makes is resolved
+// against: the referrer of the script or module of the innermost frame running
+// JavaScript, or empty when none is.
+func (r *Runtime) activeReferrer() string {
+	for i := r.frameDepth - 1; i >= 0; i-- {
+		if f := r.frameAt(i); f.cl != nil {
+			if s := f.cl.fn.Script; s != nil {
+				return s.Referrer
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
 func (r *Runtime) evalOrigin() string {
 	for i := r.frameDepth - 1; i >= 0; i-- {
 		f := r.frameAt(i)

@@ -833,20 +833,24 @@ func (r *Runtime) importCall(phase uint32, specifier, options Value) Value {
 		return Obj(result)
 	}
 	request := bytecode.ModuleRequest(spec.Go(), typ)
+	// The module is resolved against the code that asked for it, as a static
+	// import is against its module -- found now, as the jobs that load it
+	// run with nothing on the stack.
+	referrer := r.activeReferrer()
 	switch phase {
 	case bytecode.ImportDefer:
-		r.importDeferred(request, result)
+		r.importDeferred(request, referrer, result)
 	case bytecode.ImportSource:
-		r.importSource(request, result)
+		r.importSource(request, referrer, result)
 	default:
-		r.importEvaluated(request, result)
+		r.importEvaluated(request, referrer, result)
 	}
 	return Obj(result)
 }
 
 // importEvaluated settles import()'s promise with the module's namespace once
 // the module has been evaluated.
-func (r *Runtime) importEvaluated(request string, result *Object) {
+func (r *Runtime) importEvaluated(request, referrer string, result *Object) {
 	// The module is fetched and evaluated in a job rather than here. A host's
 	// loading is asynchronous even when this one's is not, and the difference
 	// is observable: the code that asked for the module runs to the end of its
@@ -856,7 +860,7 @@ func (r *Runtime) importEvaluated(request string, result *Object) {
 		// A module that will not load, parse or link fails the way a static
 		// import of it would, as an error the script can catch and inspect --
 		// not as a Go error the host would have to interpret.
-		mod, err := r.loadDependency(request, "")
+		mod, err := r.loadDependency(request, referrer)
 		if err != nil {
 			r.rejectPromise(result, thrownValue(r.wrapEvalError(err)))
 			return
