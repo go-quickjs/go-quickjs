@@ -140,8 +140,12 @@ var pureCases = func() (t [256]uint8) {
 const pureStackSize = 24
 
 // pureCallDepth is how deeply pure bodies are evaluated inside one another:
-// a recursive one would otherwise take the Go stack with it.
-const pureCallDepth = 8
+// a recursive one would otherwise take the Go stack with it. A recursion
+// deeper than this is given up on whole, and after pureMissLimit of those is
+// made with frames, so the limit is set above what recursion over a small
+// input -- factorial(10), fib(30), a balanced tree's height -- reaches: a
+// level here takes less of the Go stack than a framed call does.
+const pureCallDepth = 32
 
 // pureCallAt is pureCall of a body depth calls in, which may store only
 // where mayStore says that nothing that called it can give up afterwards.
