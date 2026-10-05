@@ -59,6 +59,7 @@ weak collections among them. See [Compared with C QuickJS](docs/benchmarks.md#co
 | | |
 |---|---|
 | [Status and conformance](docs/status.md) | what is implemented and what is not, and how test262 is run against it |
+| [Known issues](docs/known-issues.md) | the issues a review of the engine found, by severity, and what became of each |
 | [The qjs command](docs/qjs.md) | running JavaScript from the command line, with only the capabilities you allow |
 | [Embedding the engine](docs/embedding.md) | calling Go from JavaScript and JavaScript from Go, compiled programs, realms, modules |
 | [Building a host](docs/hosting.md) | work that finishes on other goroutines, async context, closing a runtime, moving values between runtimes |
