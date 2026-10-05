@@ -52,6 +52,60 @@ rt.Set("applyTwice", func(r *quickjs.Runtime, fn quickjs.Value, v int) (int, err
 rt.Eval(`applyTwice(n => n + 3, 1)`) // 7
 ```
 
+### Sequences
+
+A Go function that returns an `iter.Seq` hands script an iterator, which
+`for-of`, spread, destructuring and the iterator helpers take. Script asks
+for one value at a time, and the sequence runs only while it waits for the
+next:
+
+```go
+rt.Set("countdown", func(n int) iter.Seq[int] {
+    return func(yield func(int) bool) {
+        for i := n; i > 0; i-- {
+            if !yield(i) {
+                return
+            }
+        }
+    }
+})
+rt.Eval(`[...countdown(3)]`)                      // [3, 2, 1]
+rt.Eval(`countdown(10).map(n => n * 2).take(2).toArray()`) // [20, 18]
+```
+
+A script that stops early -- `break`, `return`, a destructuring that takes
+fewer values than the sequence has, a helper such as `take` -- stops the
+sequence: its `yield` returns false, as it does for a Go `range` that
+breaks, and its deferred calls run. So does closing the runtime, and so does
+the garbage collector for an iterator script drops halfway, on the runtime's
+goroutine when it next runs its jobs. An `iter.Seq2` gives `[key, value]`
+arrays, as a `Map`'s entries are. A sequence that calls back into script
+must not ask its own iterator for a value while it produces one; that call
+throws a `TypeError`, as resuming a running generator does.
+
+### Async functions written in Go
+
+`rt.Go` runs a function on a goroutine of its own and returns a promise for
+its result, which a Go function hands script for work that finishes later:
+
+```go
+rt.Set("fetchUser", func(id int) quickjs.Value {
+    return rt.Go(func(ctx context.Context) (any, error) {
+        return db.LoadUser(ctx, id) // runs off the runtime's goroutine
+    })
+})
+rt.Eval(`const user = await fetchUser(7)`)
+```
+
+The result is converted as `Set` converts one, and an error rejects the
+promise as a thrown one would; both happen on the runtime's goroutine when
+it next runs its jobs, which keeps the runtime busy until then. The function
+is given the runtime's `Context`, which `Close` cancels. It runs on its own
+goroutine, so it takes what it needs from script as Go values before it
+starts, and touches neither the runtime nor its values. For work that
+reports more than once, such as a socket, see
+[AsyncWork](hosting.md#work-that-finishes-on-other-goroutines).
+
 ## Calling JavaScript from Go
 
 A function the script defines is a `Value`, and `Call` calls it:
@@ -127,29 +181,26 @@ context has none.
 
 ### Async functions
 
-An `async` function returns a promise. Its callbacks run when the runtime runs
-its jobs. `Eval` does that before it returns; after a `Call`, `RunJobs` does:
+An `async` function returns a promise. `Await` waits for it to settle,
+running the runtime's jobs and its host work meanwhile, as an event loop
+would, and returns its value, or its rejection as the error a call that
+threw would return:
 
 ```go
 rt.Eval(`async function fetchUser(id) { await null; return {id, name: "Ada"} }`)
 fetchUser, _ := rt.Get("fetchUser")
 p, _ := fetchUser.Call(7)
-
-then, _ := p.Get("then")
-var user quickjs.Value
-var failed error
-then.CallWithThis(p,
-    func(v quickjs.Value) { user = v },
-    func(e quickjs.Value) { failed = errors.New(e.String()) })
-if err := rt.RunJobs(); err != nil {
-    // ...
-}
+user, err := p.Await(ctx)
 // user.Get("name") is "Ada"
 ```
 
-A promise that waits on the host, such as a timer or a request from the
-[standard library](stdlib.md#the-standard-library), settles only while its event loop
-runs.
+`Await` takes any value, as `await` does: a thenable is followed, and
+anything else is its own result. It stops when `ctx` does, and returns
+`ErrNeverSettles` for a promise the runtime has nothing left to settle. A
+promise it waits for counts as handled. It is for the host between calls: a
+Go function that script called gets an error from it rather than running the
+runtime's jobs in the middle of the script. Without it, a `then` and
+`RunJobs` do the same by hand.
 
 ### Errors
 

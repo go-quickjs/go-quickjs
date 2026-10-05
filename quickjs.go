@@ -95,6 +95,11 @@ type Runtime struct {
 	nodeQuirks bool
 	// noCodeGeneration is WithoutCodeGeneration, which node:vm respects too.
 	noCodeGeneration bool
+	// seqs are the Go sequences script has iterators over that have not
+	// ended, which Close stops; seqDropped carries the stop of one whose
+	// iterator was collected to the runtime's goroutine. See seq.go.
+	seqs       map[*seqIter]struct{}
+	seqDropped *AsyncWork
 }
 
 // Option configures a Runtime.

@@ -187,3 +187,105 @@ func (r *Runtime) SetAsyncContext(v Value) Value {
 
 // EnqueueJob adds a microtask, which runs when the queue is next drained.
 func (r *Runtime) EnqueueJob(fn func()) { r.enqueueJob(fn) }
+
+// NewHostIterator is an iterator over a host's sequence, as for-of, spread
+// and the iterator helpers use one: it inherits from %IteratorPrototype%,
+// and its next and return are the methods of a prototype the realm makes
+// the first time one is asked for. next gives the sequence's next value, or
+// false at its end, or an error, which the call to next throws; stop ends
+// the sequence early. Once it has ended, at its end, by an error or by
+// return, stop has been called and next answers done.
+func (r *Runtime) NewHostIterator(next func() (Value, bool, error), stop func()) Value {
+	o := newObject(r.hostIterProto(), ClassObject)
+	o.data = &hostIter{next: next, stop: stop}
+	return Obj(o)
+}
+
+// hostIter is a host iterator's sequence and whether it has ended.
+type hostIter struct {
+	next func() (Value, bool, error)
+	stop func()
+	// running is set while next runs, which a call of next or return from
+	// inside the sequence is refused for, as a generator refuses one.
+	running, done bool
+}
+
+// end ends the sequence, once.
+func (h *hostIter) end() {
+	if !h.done {
+		h.done = true
+		h.stop()
+	}
+}
+
+// hostIterProto is the realm's prototype of host iterators, made when one
+// is first asked for.
+func (r *Runtime) hostIterProto() *Object {
+	if p := r.proto.hostIter; p != nil {
+		return p
+	}
+	p := newObject(r.proto.iterator, ClassObject)
+	of := func(rt *Runtime, this Value, name string) (*hostIter, error) {
+		if this.IsObject() {
+			if h, ok := this.Object().data.(*hostIter); ok {
+				if h.running {
+					return nil, rt.throwTypeError("the iterator is already running")
+				}
+				return h, nil
+			}
+		}
+		return nil, rt.throwTypeError("%s called on an incompatible receiver", name)
+	}
+	r.defMethod(p, "next", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		h, err := of(rt, this, "next")
+		if err != nil {
+			return Undefined, err
+		}
+		if h.done {
+			return Obj(rt.iterResult(Undefined, true)), nil
+		}
+		h.running = true
+		v, ok, err := h.next()
+		h.running = false
+		if err != nil || !ok {
+			h.end()
+			if err != nil {
+				return Undefined, err
+			}
+			return Obj(rt.iterResult(Undefined, true)), nil
+		}
+		return Obj(rt.iterResult(v, false)), nil
+	})
+	r.defMethod(p, "return", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		h, err := of(rt, this, "return")
+		if err != nil {
+			return Undefined, err
+		}
+		h.end()
+		return Obj(rt.iterResult(arg(args, 0), true)), nil
+	})
+	r.proto.hostIter = p
+	return p
+}
+
+// PromiseResult is a promise's state: whether v is a promise of this
+// runtime's, whether it has settled, and if so with what and whether it was
+// rejected. The caller is taking the promise's result, as a then does, so a
+// rejection -- now, or later for one still pending -- counts as handled.
+func (r *Runtime) PromiseResult(v Value) (result Value, settled, rejected, ok bool) {
+	if !v.IsObject() || v.Object().class != ClassPromise {
+		return Undefined, false, false, false
+	}
+	p, ok := v.Object().data.(*promiseData)
+	if !ok {
+		return Undefined, false, false, false
+	}
+	p.handled = true
+	switch p.state {
+	case promiseFulfilled:
+		return p.value, true, false, true
+	case promiseRejected:
+		return p.value, true, true, true
+	}
+	return Undefined, false, false, true
+}

@@ -41,8 +41,10 @@ for rt.Busy() {
 }
 ```
 
-A source of many results, such as a socket, calls `Post` for each and `Done`
-when it ends. `Unref` stops work keeping the runtime busy, as `unref()` does in
+Work with one result that settles a promise -- a query, a request -- is
+what `rt.Go` does with an `AsyncWork` (see [Async functions written in
+Go](embedding.md#async-functions-written-in-go)). A source of many results,
+such as a socket, calls `Post` for each and `Done` when it ends. `Unref` stops work keeping the runtime busy, as `unref()` does in
 node. `AbortOn` stops whatever the runtime runs once a channel closes, which is
 how a parent ends a worker from another goroutine.
 

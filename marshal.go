@@ -185,6 +185,11 @@ func encodeReflect(rt *vm.Runtime, rv reflect.Value) (vm.Value, error) {
 		return vm.Obj(o), nil
 
 	case reflect.Func:
+		// An iter.Seq is a function too, but what it stands for is its
+		// values: script is given an iterator over them (see seq.go).
+		if two, ok := seqKind(rv.Type()); ok {
+			return encodeSeq(rt, rv, two)
+		}
 		return wrapGoFunc(rt, rv)
 	}
 	return vm.Undefined, fmt.Errorf("quickjs: cannot convert %s to a JavaScript value", rv.Type())

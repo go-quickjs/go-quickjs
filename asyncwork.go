@@ -190,3 +190,110 @@ func (r *Runtime) SetAsyncContext(v Value) (prev Value) {
 	p := r.rt.SetAsyncContext(r.vmValue(v))
 	return Value{v: p, rt: r.rt}
 }
+
+// Go runs fn on a goroutine of its own and returns a promise for its result,
+// which is what a Go function hands script for work that finishes later: a
+// query, a request, a computation. When fn returns, its result is converted
+// as Set converts a value and the promise resolved with it, or rejected with
+// its error as RejectError rejects, on the runtime's goroutine when the
+// runtime next runs its jobs; the work keeps the runtime busy until then,
+// as an AsyncWork does. fn is given the runtime's Context, which Close
+// cancels; a result that arrives after Close is dropped.
+//
+//	rt.Set("fetchUser", func(id int) quickjs.Value {
+//	    return rt.Go(func(ctx context.Context) (any, error) {
+//	        return db.LoadUser(ctx, id)
+//	    })
+//	})
+//
+// fn runs on its own goroutine, so it must not touch the runtime or its
+// values: what it needs from script it takes as Go values before it starts.
+// A panic in fn is a panic of its goroutine.
+func (r *Runtime) Go(fn func(ctx context.Context) (any, error)) Value {
+	p := r.NewPromise()
+	if r.closed || r.rt == nil {
+		return p.Value()
+	}
+	w := r.StartAsyncWork()
+	ctx := r.Context()
+	go func() {
+		v, err := fn(ctx)
+		w.Complete(func(cerr error) {
+			switch {
+			case cerr != nil:
+			case err != nil:
+				p.RejectError(err)
+			default:
+				if err := p.Resolve(v); err != nil {
+					p.RejectError(err)
+				}
+			}
+		})
+	}()
+	return p.Value()
+}
+
+// ErrNeverSettles is what Await returns for a promise that is still pending
+// when the runtime has nothing left that could settle it: no job, and no
+// AsyncWork that is not done.
+var ErrNeverSettles = errors.New("quickjs: the promise is pending and nothing is left to settle it")
+
+// Await waits for a promise to settle, running the runtime's jobs and the
+// functions posted to its AsyncWorks meanwhile, as an event loop would, and
+// returns what it was fulfilled with, or what it was rejected with as an
+// error, as a call that threw returns one. A value that is not a promise is
+// awaited as script's await takes it: a thenable is followed, and anything
+// else is its own result.
+//
+// It is for the host, between calls: called while script is running -- by a
+// Go function the script called -- it returns an error rather than run the
+// runtime's jobs inside the script. It stops when ctx does, and returns
+// ErrNeverSettles when the runtime has nothing left that could settle the
+// promise. A promise it waits for counts as handled, as one a then is
+// attached to does: a rejection it returns is not also reported to
+// OnUnhandledRejection.
+func (v Value) Await(ctx context.Context) (Value, error) {
+	if v.rt == nil {
+		return Value{}, ErrClosed
+	}
+	host, _ := v.rt.Host.(*Runtime)
+	if host == nil || host.closed || host.rt == nil {
+		return Value{}, ErrClosed
+	}
+	if host.rt.Running() {
+		return Value{}, errors.New("quickjs: Await called while a script is running")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	pv := v.v
+	if _, _, _, ok := host.rt.PromiseResult(pv); !ok {
+		// What await does with a value: resolve a promise with it.
+		p := host.NewPromise()
+		p.p.Resolve(pv)
+		pv = p.p.Value()
+	}
+	for {
+		res, settled, rejected, _ := host.rt.PromiseResult(pv)
+		if settled {
+			if rejected {
+				return Value{}, host.wrapError(host.rt.ThrowValue(res))
+			}
+			return Value{v: res, rt: host.rt}, nil
+		}
+		if !host.Busy() {
+			return Value{}, ErrNeverSettles
+		}
+		select {
+		case <-host.Wake():
+			if err := host.RunJobsContext(ctx); err != nil {
+				return Value{}, err
+			}
+		case <-ctx.Done():
+			return Value{}, ctx.Err()
+		}
+		if host.closed {
+			return Value{}, ErrClosed
+		}
+	}
+}

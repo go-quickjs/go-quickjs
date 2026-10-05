@@ -491,6 +491,9 @@ type intrinsics struct {
 	// callSite is the prototype of the objects Error.prepareStackTrace is
 	// given the frames of a stack trace as.
 	callSite *Object
+	// hostIter is the prototype of the iterators a host's sequences are
+	// handed to script as, made when one first is; see NewHostIterator.
+	hostIter *Object
 }
 
 // wellKnownSymbols are the symbols the language itself uses.
