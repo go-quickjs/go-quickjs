@@ -65,8 +65,5 @@ func System(rt *quickjs.Runtime, cfg *OSInfo) error {
 		"tmpdir":   func() string { return tmpdir },
 	}
 	exports["default"] = copyExports(exports)
-	if err := rt.SetModule("os", exports); err != nil {
-		return err
-	}
-	return rt.SetModule("node:os", exports)
+	return setNodeModule(rt, "os", exports)
 }

@@ -175,10 +175,7 @@ func Files(rt *quickjs.Runtime, cfg *FS) error {
 	def := copyExports(exports)
 	exports["default"] = def
 
-	if err := rt.SetModule("fs", exports); err != nil {
-		return err
-	}
-	if err := rt.SetModule("node:fs", exports); err != nil {
+	if err := setNodeModule(rt, "fs", exports); err != nil {
 		return err
 	}
 	// fs/promises is a module of its own, as it is in node.
@@ -187,10 +184,7 @@ func Files(rt *quickjs.Runtime, cfg *FS) error {
 		pexports[k] = v
 	}
 	pexports["default"] = copyExports(pexports)
-	if err := rt.SetModule("fs/promises", pexports); err != nil {
-		return err
-	}
-	return rt.SetModule("node:fs/promises", pexports)
+	return setNodeModule(rt, "fs/promises", pexports)
 }
 
 // fsHost carries what the filesystem operations need.

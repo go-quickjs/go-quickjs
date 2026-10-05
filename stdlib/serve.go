@@ -80,10 +80,7 @@ func Servers(rt *quickjs.Runtime, cfg *Serve) error {
 		return err
 	}
 	exports := map[string]any{"serve": serve, "default": map[string]any{"serve": serve}}
-	if err := rt.SetModule("http", exports); err != nil {
-		return err
-	}
-	if err := rt.SetModule("node:http", exports); err != nil {
+	if err := setNodeModule(rt, "http", exports); err != nil {
 		return err
 	}
 	// A global too: a script that serves is usually the whole program, and

@@ -196,10 +196,7 @@ func Processes(rt *quickjs.Runtime, cfg *Process) error {
 		return err
 	}
 	exports := map[string]any{"default": p}
-	if err := rt.SetModule("process", exports); err != nil {
-		return err
-	}
-	return rt.SetModule("node:process", exports)
+	return setNodeModule(rt, "process", exports)
 }
 
 // listening reports whether the script listens for one of process's events.

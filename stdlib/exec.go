@@ -74,10 +74,7 @@ func Commands(rt *quickjs.Runtime, cfg *Run) error {
 		},
 	}
 	exports["default"] = copyExports(exports)
-	if err := rt.SetModule("child_process", exports); err != nil {
-		return err
-	}
-	return rt.SetModule("node:child_process", exports)
+	return setNodeModule(rt, "child_process", exports)
 }
 
 // shellFor is how a command line is run: through the shell, which is what

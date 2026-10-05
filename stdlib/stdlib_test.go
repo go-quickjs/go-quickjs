@@ -2182,3 +2182,31 @@ func TestLoopRunsWaitAsync(t *testing.T) {
 		t.Errorf("output = %q", out)
 	}
 }
+
+// TestNodeModulesAreOneModule pins that a module of node's installed under
+// its name and its node: name is one module: the same default, and a named
+// export the default's property of the same name. Each name was its own
+// module, with objects and functions of its own.
+func TestNodeModulesAreOneModule(t *testing.T) {
+	out, _ := run(t, stdlib.Config{
+		FS:      &stdlib.FS{Root: t.TempDir()},
+		Process: &stdlib.Process{},
+		OS:      &stdlib.OSInfo{},
+		Run:     &stdlib.Run{},
+		Serve:   &stdlib.Serve{},
+	}, `
+		(async () => {
+			const out = [];
+			for (const [name, key] of [["fs", "readFileSync"], ["fs/promises", "readFile"], ["path", "join"],
+				["os", "platform"], ["child_process", "execSync"], ["http", "serve"], ["process", null]]) {
+				const a = await import(name), b = await import("node:" + name);
+				const same = a.default === b.default && (key === null || (a[key] === b[key] && a[key] === a.default[key]));
+				out.push(name + " " + same);
+			}
+			console.log(out.join(" "));
+		})();
+	`)
+	if want := "fs true fs/promises true path true os true child_process true http true process true"; out != want {
+		t.Errorf("got %q, want %q", out, want)
+	}
+}

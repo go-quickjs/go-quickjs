@@ -87,10 +87,7 @@ func Path(rt *quickjs.Runtime) error {
 		},
 	}
 	exports["default"] = copyExports(exports)
-	if err := rt.SetModule("path", exports); err != nil {
-		return err
-	}
-	return rt.SetModule("node:path", exports)
+	return setNodeModule(rt, "path", exports)
 }
 
 // copyExports is the default export: the same names, in an object.

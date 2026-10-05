@@ -1,6 +1,8 @@
 package stdlib
 
 import (
+	"sort"
+
 	quickjs "github.com/go-quickjs/go-quickjs"
 )
 
@@ -92,6 +94,64 @@ func moduleExports(o quickjs.Value) (map[string]quickjs.Value, error) {
 		out[k] = v
 	}
 	return out, nil
+}
+
+// setNodeModule installs one of node's modules under its name and its node:
+// name, as one module: each export is made once, and a default given as a
+// map is an object of the same values, so that whichever name imports it, and
+// however -- by name, or the default's property -- it is the same function.
+func setNodeModule(rt *quickjs.Runtime, name string, exports map[string]any) error {
+	values := make(map[string]quickjs.Value, len(exports))
+	for k, v := range exports {
+		if k == "default" {
+			continue
+		}
+		ev, err := rt.Encode(v)
+		if err != nil {
+			return err
+		}
+		values[k] = ev
+	}
+	if d, ok := exports["default"]; ok {
+		def, err := nodeDefault(rt, d, values)
+		if err != nil {
+			return err
+		}
+		values["default"] = def
+	}
+	if err := rt.SetModuleValues(name, values); err != nil {
+		return err
+	}
+	return rt.SetModuleValues("node:"+name, values)
+}
+
+// nodeDefault is a module's default export: a map's names given the values
+// already made for the named exports of the same names.
+func nodeDefault(rt *quickjs.Runtime, d any, named map[string]quickjs.Value) (quickjs.Value, error) {
+	m, ok := d.(map[string]any)
+	if !ok {
+		return rt.Encode(d)
+	}
+	o := rt.NewObject()
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		v, ok := named[k]
+		if !ok {
+			ev, err := rt.Encode(m[k])
+			if err != nil {
+				return quickjs.Value{}, err
+			}
+			v = ev
+		}
+		if err := o.Set(k, v); err != nil {
+			return quickjs.Value{}, err
+		}
+	}
+	return o, nil
 }
 
 // nodeJS is the four modules, in script.
