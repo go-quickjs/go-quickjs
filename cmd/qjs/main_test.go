@@ -48,7 +48,10 @@ func TestStackNamesTheFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, _, errOut := exec(t, "", script)
-	if want := "at f (" + script + ":1:22)"; !strings.Contains(errOut, want) {
+	// The file is named by its real path, as node names its entry point: a
+	// temporary directory may be reached through a link (macOS) or a short
+	// name (Windows).
+	if want := "at f (" + realPath(script) + ":1:22)"; !strings.Contains(errOut, want) {
 		t.Errorf("stderr = %q, want it to contain %q", errOut, want)
 	}
 	_, _, errOut = exec(t, "", "-e", src)
@@ -150,7 +153,7 @@ func TestSyntaxCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, _, errOut = exec(t, "", bad)
-	if want := bad + ":2:9)"; code != 1 || !strings.Contains(errOut, want) {
+	if want := realPath(bad) + ":2:9)"; code != 1 || !strings.Contains(errOut, want) {
 		t.Errorf("code=%d err=%q, want it to name %s", code, errOut, want)
 	}
 }

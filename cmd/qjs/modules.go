@@ -74,7 +74,9 @@ var modulesOf sync.Map // *quickjs.Runtime -> *nodeModules
 // import.meta, require's machinery and the module module.
 func installModules(rt *quickjs.Runtime) (*nodeModules, error) {
 	m := &nodeModules{rt: rt}
-	boot, err := rt.Eval(modulesJS)
+	// Named as node names its loader, so that its frames in a stack trace
+	// say whose they are.
+	boot, err := rt.EvalFile("node:internal/modules/cjs/loader", modulesJS)
 	if err != nil {
 		return nil, err
 	}
