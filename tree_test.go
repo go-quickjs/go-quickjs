@@ -290,6 +290,27 @@ var treeScripts = []string{
 	 [f(50000, 0), o.m(50000), even(50001), b(50000), m(50000), new C(40).n].join()`,
 	`"use strict"; function f(n) { if (n === 0) throw new Error("deep"); return f(n - 1) }
 	 try { f(100) } catch (e) { e.message + "|" + e.stack.split("\n").length }`,
+	// A local given an arithmetic or bitwise result in one statement: each
+	// pairing of a local, a constant and a tree, the slow paths -- strings,
+	// valueOf, a BigInt, and mixing one with a number, which throws -- a
+	// local stored into from itself, %, which has no such statement, an
+	// upvalue, a chained assignment, and the bitwise operators with a
+	// constant over a local and over a tree.
+	`function f(a, b, s, o, big) { var x, y, z, r = [];
+	   for (var i = 0; i < 3; i++) {
+	     x = a + b; r.push(x); x = a - i; r.push(x); x = i * b; r.push(x); x = a / 2; r.push(x);
+	     x = 3 - a; r.push(x); x = (a + 1) * (b - 1); r.push(x); x = (a + i) / b; r.push(x); x = 2 * (b + i); r.push(x);
+	     x = s + a; r.push(x); x = a + s; r.push(x); x = o * 2; r.push(x); x = o - a; r.push(x);
+	     x = x + x; r.push(x); x = a % 3; r.push(x); y = z = a + i; r.push(y, z);
+	     x = a & 6; r.push(x); x = a | 8; r.push(x); x = a ^ 5; r.push(x); x = a << 2; r.push(x);
+	     x = -a >> 1; r.push(x); x = -a >>> 28; r.push(x); x = (a + b) & 0xff; r.push(x); x = o | 0; r.push(x);
+	     x = big + 1n; r.push(String(x));
+	     try { x = big + a } catch (e) { r.push(e.constructor.name) }
+	     a = a + 1.5 }
+	   return r.join() }
+	 f(7, 3, "s", { valueOf() { return 10 } }, 5n)`,
+	`function f(n) { var up = 4; function g(k) { var x = up * k + up; up = up - 1; return x } var s = 0;
+	   for (var i = 0; i < n; i++) s = s + g(i); return s + "," + up } f(5)`,
 }
 
 // treeRun evaluates a script and gives its value, or its error.

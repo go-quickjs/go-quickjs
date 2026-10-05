@@ -1001,3 +1001,491 @@ func bitwiseImmOperand(op bytecode.Op, x tentry, k int32, pc int) tval {
 	}
 	return bitwiseImmNode(op, x.tree(), k, pc)
 }
+
+// storeArith is local k = e as one statement, for an entry that is an
+// arithmetic or bitwise node over operands it read in place, or nil where
+// there is no statement for it. The statement does what the node and the
+// store did, in their order, without calling the node.
+func storeArith(k uint32, e tentry) tstmt {
+	a := e.arith
+	if a == nil {
+		return nil
+	}
+	if a.imm {
+		return bitwiseImmStore(a.op, k, a.x, a.k, a.pc)
+	}
+	return arithStore(a.op, k, a.x, a.y, a.pc)
+}
+
+// arithStore is local k = x op y for an arithmetic operator, over the
+// pairings arithOperands reads in place and two trees otherwise.
+func arithStore(op bytecode.Op, k uint32, x, y tentry, pc int) tstmt {
+	switch {
+	case x.local && !y.local && !y.number:
+		x, y := x.k, y.tree()
+		switch op {
+		case bytecode.OpAdd:
+			return func(c *tctx) {
+				a := c.locals[x]
+				b := y(c)
+				if a.IsNumber() && b.IsNumber() {
+					c.locals[k] = Float(a.num + b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		case bytecode.OpSub:
+			return func(c *tctx) {
+				a := c.locals[x]
+				b := y(c)
+				if a.IsNumber() && b.IsNumber() {
+					c.locals[k] = Float(a.num - b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		case bytecode.OpMul:
+			return func(c *tctx) {
+				a := c.locals[x]
+				b := y(c)
+				if a.IsNumber() && b.IsNumber() {
+					c.locals[k] = Float(a.num * b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		case bytecode.OpDiv:
+			return func(c *tctx) {
+				a := c.locals[x]
+				b := y(c)
+				if a.IsNumber() && b.IsNumber() {
+					c.locals[k] = Float(a.num / b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		}
+	case !x.local && !x.number && y.local:
+		x, y := x.tree(), y.k
+		switch op {
+		case bytecode.OpAdd:
+			return func(c *tctx) {
+				a := x(c)
+				b := c.locals[y]
+				if a.IsNumber() && b.IsNumber() {
+					c.locals[k] = Float(a.num + b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		case bytecode.OpSub:
+			return func(c *tctx) {
+				a := x(c)
+				b := c.locals[y]
+				if a.IsNumber() && b.IsNumber() {
+					c.locals[k] = Float(a.num - b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		case bytecode.OpMul:
+			return func(c *tctx) {
+				a := x(c)
+				b := c.locals[y]
+				if a.IsNumber() && b.IsNumber() {
+					c.locals[k] = Float(a.num * b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		case bytecode.OpDiv:
+			return func(c *tctx) {
+				a := x(c)
+				b := c.locals[y]
+				if a.IsNumber() && b.IsNumber() {
+					c.locals[k] = Float(a.num / b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		}
+	case x.local && y.local:
+		x, y := x.k, y.k
+		switch op {
+		case bytecode.OpAdd:
+			return func(c *tctx) {
+				a := c.locals[x]
+				b := c.locals[y]
+				if a.IsNumber() && b.IsNumber() {
+					c.locals[k] = Float(a.num + b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		case bytecode.OpSub:
+			return func(c *tctx) {
+				a := c.locals[x]
+				b := c.locals[y]
+				if a.IsNumber() && b.IsNumber() {
+					c.locals[k] = Float(a.num - b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		case bytecode.OpMul:
+			return func(c *tctx) {
+				a := c.locals[x]
+				b := c.locals[y]
+				if a.IsNumber() && b.IsNumber() {
+					c.locals[k] = Float(a.num * b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		case bytecode.OpDiv:
+			return func(c *tctx) {
+				a := c.locals[x]
+				b := c.locals[y]
+				if a.IsNumber() && b.IsNumber() {
+					c.locals[k] = Float(a.num / b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		}
+	case !x.local && !x.number && y.number:
+		x, y := x.tree(), y.n
+		switch op {
+		case bytecode.OpAdd:
+			return func(c *tctx) {
+				a := x(c)
+				b := y
+				if a.IsNumber() {
+					c.locals[k] = Float(a.num + b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		case bytecode.OpSub:
+			return func(c *tctx) {
+				a := x(c)
+				b := y
+				if a.IsNumber() {
+					c.locals[k] = Float(a.num - b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		case bytecode.OpMul:
+			return func(c *tctx) {
+				a := x(c)
+				b := y
+				if a.IsNumber() {
+					c.locals[k] = Float(a.num * b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		case bytecode.OpDiv:
+			return func(c *tctx) {
+				a := x(c)
+				b := y
+				if a.IsNumber() {
+					c.locals[k] = Float(a.num / b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		}
+	case x.local && y.number:
+		x, y := x.k, y.n
+		switch op {
+		case bytecode.OpAdd:
+			return func(c *tctx) {
+				a := c.locals[x]
+				b := y
+				if a.IsNumber() {
+					c.locals[k] = Float(a.num + b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		case bytecode.OpSub:
+			return func(c *tctx) {
+				a := c.locals[x]
+				b := y
+				if a.IsNumber() {
+					c.locals[k] = Float(a.num - b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		case bytecode.OpMul:
+			return func(c *tctx) {
+				a := c.locals[x]
+				b := y
+				if a.IsNumber() {
+					c.locals[k] = Float(a.num * b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		case bytecode.OpDiv:
+			return func(c *tctx) {
+				a := c.locals[x]
+				b := y
+				if a.IsNumber() {
+					c.locals[k] = Float(a.num / b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		}
+	case x.number && !y.local && !y.number:
+		x, y := x.n, y.tree()
+		switch op {
+		case bytecode.OpAdd:
+			return func(c *tctx) {
+				a := x
+				b := y(c)
+				if b.IsNumber() {
+					c.locals[k] = Float(a.num + b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		case bytecode.OpSub:
+			return func(c *tctx) {
+				a := x
+				b := y(c)
+				if b.IsNumber() {
+					c.locals[k] = Float(a.num - b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		case bytecode.OpMul:
+			return func(c *tctx) {
+				a := x
+				b := y(c)
+				if b.IsNumber() {
+					c.locals[k] = Float(a.num * b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		case bytecode.OpDiv:
+			return func(c *tctx) {
+				a := x
+				b := y(c)
+				if b.IsNumber() {
+					c.locals[k] = Float(a.num / b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		}
+	case x.number && y.local:
+		x, y := x.n, y.k
+		switch op {
+		case bytecode.OpAdd:
+			return func(c *tctx) {
+				a := x
+				b := c.locals[y]
+				if b.IsNumber() {
+					c.locals[k] = Float(a.num + b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		case bytecode.OpSub:
+			return func(c *tctx) {
+				a := x
+				b := c.locals[y]
+				if b.IsNumber() {
+					c.locals[k] = Float(a.num - b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		case bytecode.OpMul:
+			return func(c *tctx) {
+				a := x
+				b := c.locals[y]
+				if b.IsNumber() {
+					c.locals[k] = Float(a.num * b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		case bytecode.OpDiv:
+			return func(c *tctx) {
+				a := x
+				b := c.locals[y]
+				if b.IsNumber() {
+					c.locals[k] = Float(a.num / b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		}
+	default:
+		x, y := x.tree(), y.tree()
+		switch op {
+		case bytecode.OpAdd:
+			return func(c *tctx) {
+				a := x(c)
+				b := y(c)
+				if a.IsNumber() && b.IsNumber() {
+					c.locals[k] = Float(a.num + b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		case bytecode.OpSub:
+			return func(c *tctx) {
+				a := x(c)
+				b := y(c)
+				if a.IsNumber() && b.IsNumber() {
+					c.locals[k] = Float(a.num - b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		case bytecode.OpMul:
+			return func(c *tctx) {
+				a := x(c)
+				b := y(c)
+				if a.IsNumber() && b.IsNumber() {
+					c.locals[k] = Float(a.num * b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		case bytecode.OpDiv:
+			return func(c *tctx) {
+				a := x(c)
+				b := y(c)
+				if a.IsNumber() && b.IsNumber() {
+					c.locals[k] = Float(a.num / b.num)
+				} else {
+					c.locals[k] = c.arithSlow(op, a, b, pc)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// bitwiseImmStore is local k = x op n for a bitwise operator and an
+// integer constant.
+func bitwiseImmStore(op bytecode.Op, k uint32, x tentry, n int32, pc int) tstmt {
+	kv, s := Int32(n), uint32(n)&31
+	if x.local {
+		x := x.k
+		switch op {
+		case bytecode.OpBitAnd:
+			return func(c *tctx) {
+				if a := c.locals[x]; a.IsNumber() {
+					c.locals[k] = Int32(toInt32(a.num) & n)
+				} else {
+					c.locals[k] = c.bitwiseSlow(op, a, kv, pc)
+				}
+			}
+		case bytecode.OpBitOr:
+			return func(c *tctx) {
+				if a := c.locals[x]; a.IsNumber() {
+					c.locals[k] = Int32(toInt32(a.num) | n)
+				} else {
+					c.locals[k] = c.bitwiseSlow(op, a, kv, pc)
+				}
+			}
+		case bytecode.OpBitXor:
+			return func(c *tctx) {
+				if a := c.locals[x]; a.IsNumber() {
+					c.locals[k] = Int32(toInt32(a.num) ^ n)
+				} else {
+					c.locals[k] = c.bitwiseSlow(op, a, kv, pc)
+				}
+			}
+		case bytecode.OpShl:
+			return func(c *tctx) {
+				if a := c.locals[x]; a.IsNumber() {
+					c.locals[k] = Int32(toInt32(a.num) << s)
+				} else {
+					c.locals[k] = c.bitwiseSlow(op, a, kv, pc)
+				}
+			}
+		case bytecode.OpShr:
+			return func(c *tctx) {
+				if a := c.locals[x]; a.IsNumber() {
+					c.locals[k] = Int32(toInt32(a.num) >> s)
+				} else {
+					c.locals[k] = c.bitwiseSlow(op, a, kv, pc)
+				}
+			}
+		case bytecode.OpUShr:
+			return func(c *tctx) {
+				if a := c.locals[x]; a.IsNumber() {
+					c.locals[k] = Uint32(uint32(toInt32(a.num)) >> s)
+				} else {
+					c.locals[k] = c.bitwiseSlow(op, a, kv, pc)
+				}
+			}
+		}
+	}
+	{
+		x := x.tree()
+		switch op {
+		case bytecode.OpBitAnd:
+			return func(c *tctx) {
+				if a := x(c); a.IsNumber() {
+					c.locals[k] = Int32(toInt32(a.num) & n)
+				} else {
+					c.locals[k] = c.bitwiseSlow(op, a, kv, pc)
+				}
+			}
+		case bytecode.OpBitOr:
+			return func(c *tctx) {
+				if a := x(c); a.IsNumber() {
+					c.locals[k] = Int32(toInt32(a.num) | n)
+				} else {
+					c.locals[k] = c.bitwiseSlow(op, a, kv, pc)
+				}
+			}
+		case bytecode.OpBitXor:
+			return func(c *tctx) {
+				if a := x(c); a.IsNumber() {
+					c.locals[k] = Int32(toInt32(a.num) ^ n)
+				} else {
+					c.locals[k] = c.bitwiseSlow(op, a, kv, pc)
+				}
+			}
+		case bytecode.OpShl:
+			return func(c *tctx) {
+				if a := x(c); a.IsNumber() {
+					c.locals[k] = Int32(toInt32(a.num) << s)
+				} else {
+					c.locals[k] = c.bitwiseSlow(op, a, kv, pc)
+				}
+			}
+		case bytecode.OpShr:
+			return func(c *tctx) {
+				if a := x(c); a.IsNumber() {
+					c.locals[k] = Int32(toInt32(a.num) >> s)
+				} else {
+					c.locals[k] = c.bitwiseSlow(op, a, kv, pc)
+				}
+			}
+		case bytecode.OpUShr:
+			return func(c *tctx) {
+				if a := x(c); a.IsNumber() {
+					c.locals[k] = Uint32(uint32(toInt32(a.num)) >> s)
+				} else {
+					c.locals[k] = c.bitwiseSlow(op, a, kv, pc)
+				}
+			}
+		}
+	}
+	return nil
+}

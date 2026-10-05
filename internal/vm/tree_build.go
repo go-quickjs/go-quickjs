@@ -27,6 +27,20 @@ type tentry struct {
 	this    bool
 	// literal is set for undefined, null, true or false, in n.
 	literal bool
+	// arith is, for a tree that is an arithmetic or bitwise node over
+	// operands, what it is of: a store of it to a local can then be one
+	// statement (see storeArith).
+	arith *arithOf
+}
+
+// arithOf is an arithmetic node's operator and operands, or a bitwise
+// node's operator, operand and integer constant.
+type arithOf struct {
+	op   bytecode.Op
+	x, y tentry
+	imm  bool
+	k    int32
+	pc   int
 }
 
 // tbuilder builds a function's tree a block at a time, keeping what it grows
@@ -426,7 +440,12 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 	return b.succ, true
 }
 
-func (b *tbuilder) push(v tval)        { b.stack = append(b.stack, tentry{v: v, slot: -1}) }
+func (b *tbuilder) push(v tval) { b.stack = append(b.stack, tentry{v: v, slot: -1}) }
+
+// pushArith pushes an arithmetic or bitwise node and what it is of.
+func (b *tbuilder) pushArith(v tval, a arithOf) {
+	b.stack = append(b.stack, tentry{v: v, slot: -1, arith: &a})
+}
 func (b *tbuilder) pushEntry(e tentry) { b.stack = append(b.stack, e) }
 
 // localEntry is a read of local k.
@@ -653,11 +672,20 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		b.pushEntry(localEntry(in.A))
 		b.pushEntry(localEntry(in.B))
 	case bytecode.OpSetLocal, bytecode.OpInitLocal:
-		k, v := in.A, b.pop().tree()
+		k, e := in.A, b.pop()
+		if s := storeArith(k, e); s != nil {
+			return 0, b.stmt(s)
+		}
+		v := e.tree()
 		return 0, b.stmt(func(c *tctx) { c.locals[k] = v(c) })
 	case bytecode.OpSetLocalGet:
-		k, j, v := in.A, in.B, b.pop().tree()
-		if !b.stmt(func(c *tctx) { c.locals[k] = v(c) }) {
+		k, j, e := in.A, in.B, b.pop()
+		s := storeArith(k, e)
+		if s == nil {
+			v := e.tree()
+			s = func(c *tctx) { c.locals[k] = v(c) }
+		}
+		if !b.stmt(s) {
 			return 0, false
 		}
 		b.pushEntry(localEntry(j))
@@ -713,7 +741,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		return 0, b.stmt(func(c *tctx) { c.cl.upvalues[k].set(v(c)) })
 	case bytecode.OpAdd, bytecode.OpSub, bytecode.OpMul, bytecode.OpDiv, bytecode.OpMod:
 		y, x := b.pop(), b.pop()
-		b.push(arithEntries(in.Op, x, y, pc))
+		b.pushArith(arithEntries(in.Op, x, y, pc), arithOf{op: in.Op, x: x, y: y, pc: pc})
 	case bytecode.OpBitAnd, bytecode.OpBitOr, bytecode.OpBitXor, bytecode.OpShl, bytecode.OpShr, bytecode.OpUShr:
 		y, x := b.pop(), b.pop()
 		b.push(bitwiseNode(in.Op, x.tree(), y.tree(), pc))
@@ -782,19 +810,22 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 	case bytecode.OpBinImm:
 		x := b.pop()
 		if op := bytecode.Op(in.B); isBitwise(op) {
-			b.push(bitwiseImmOperand(op, x, int32(in.A), pc))
+			b.pushArith(bitwiseImmOperand(op, x, int32(in.A), pc), arithOf{op: op, x: x, imm: true, k: int32(in.A), pc: pc})
 			break
 		}
-		b.push(arithEntries(bytecode.Op(in.B), x, numberEntry(Int32(int32(in.A))), pc))
+		y := numberEntry(Int32(int32(in.A)))
+		b.pushArith(arithEntries(bytecode.Op(in.B), x, y, pc), arithOf{op: bytecode.Op(in.B), x: x, y: y, pc: pc})
 	case bytecode.OpBinLocal:
-		b.push(arithEntries(bytecode.Op(in.B), b.pop(), localEntry(in.A), pc))
+		x, y := b.pop(), localEntry(in.A)
+		b.pushArith(arithEntries(bytecode.Op(in.B), x, y, pc), arithOf{op: bytecode.Op(in.B), x: x, y: y, pc: pc})
 	case bytecode.OpLocalBinImm:
 		x := localEntry(in.A & (1<<24 - 1))
 		if op := bytecode.Op(in.A >> 24); isBitwise(op) {
-			b.push(bitwiseImmOperand(op, x, int32(in.B), pc))
+			b.pushArith(bitwiseImmOperand(op, x, int32(in.B), pc), arithOf{op: op, x: x, imm: true, k: int32(in.B), pc: pc})
 			break
 		}
-		b.push(arithEntries(bytecode.Op(in.A>>24), x, numberEntry(Int32(int32(in.B))), pc))
+		y := numberEntry(Int32(int32(in.B)))
+		b.pushArith(arithEntries(bytecode.Op(in.A>>24), x, y, pc), arithOf{op: bytecode.Op(in.A >> 24), x: x, y: y, pc: pc})
 	case bytecode.OpGetIndex:
 		key, obj := b.pop(), b.pop()
 		b.push(getIndexOperands(obj, key, pc))

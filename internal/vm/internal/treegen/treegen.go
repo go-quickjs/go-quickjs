@@ -182,6 +182,88 @@ func Generate() ([]byte, error) {
 	w("	return bitwiseImmNode(op, x.tree(), k, pc)")
 	w("}")
 
+	// Stores of an arithmetic result to a local, as one statement.
+	w("")
+	w("// storeArith is local k = e as one statement, for an entry that is an")
+	w("// arithmetic or bitwise node over operands it read in place, or nil where")
+	w("// there is no statement for it. The statement does what the node and the")
+	w("// store did, in their order, without calling the node.")
+	w("func storeArith(k uint32, e tentry) tstmt {")
+	w("	a := e.arith")
+	w("	if a == nil {")
+	w("		return nil")
+	w("	}")
+	w("	if a.imm {")
+	w("		return bitwiseImmStore(a.op, k, a.x, a.k, a.pc)")
+	w("	}")
+	w("	return arithStore(a.op, k, a.x, a.y, a.pc)")
+	w("}")
+	w("")
+	w("// arithStore is local k = x op y for an arithmetic operator, over the")
+	w("// pairings arithOperands reads in place and two trees otherwise.")
+	w("func arithStore(op bytecode.Op, k uint32, x, y tentry, pc int) tstmt {")
+	w("	switch {")
+	for _, p := range []pair{{local, tree}, {tree, local}, {local, local}, {tree, number}, {local, number}, {number, tree}, {number, local}, {tree, tree}} {
+		if p == (pair{tree, tree}) {
+			w("	default:")
+		} else {
+			w("	case %s && %s:", asTree(p.x, "x"), asTree(p.y, "y"))
+		}
+		w("		x, y := %s, %s", p.x.capture("x"), p.y.capture("y"))
+		w("		switch op {")
+		for _, o := range arith {
+			w("		case bytecode.%s:", o.name)
+			w("			return func(c *tctx) {")
+			w("				a := %s", p.x.read("x"))
+			w("				b := %s", p.y.read("y"))
+			w("				if %s {", numberTests(p))
+			w("					c.locals[k] = Float(a.num %s b.num)", o.expr)
+			w("				} else {")
+			w("					c.locals[k] = c.arithSlow(op, a, b, pc)")
+			w("				}")
+			w("			}")
+		}
+		w("		}")
+	}
+	w("	}")
+	w("	return nil")
+	w("}")
+	w("")
+	w("// bitwiseImmStore is local k = x op n for a bitwise operator and an")
+	w("// integer constant.")
+	w("func bitwiseImmStore(op bytecode.Op, k uint32, x tentry, n int32, pc int) tstmt {")
+	w("	kv, s := Int32(n), uint32(n)&31")
+	for _, xk := range []kind{local, tree} {
+		if xk == local {
+			w("	if x.local {")
+		} else {
+			w("	{")
+		}
+		w("		x := %s", xk.capture("x"))
+		w("		switch op {")
+		for _, o := range []op{
+			{"OpBitAnd", "Int32(toInt32(a.num) & n)"},
+			{"OpBitOr", "Int32(toInt32(a.num) | n)"},
+			{"OpBitXor", "Int32(toInt32(a.num) ^ n)"},
+			{"OpShl", "Int32(toInt32(a.num) << s)"},
+			{"OpShr", "Int32(toInt32(a.num) >> s)"},
+			{"OpUShr", "Uint32(uint32(toInt32(a.num)) >> s)"},
+		} {
+			w("		case bytecode.%s:", o.name)
+			w("			return func(c *tctx) {")
+			w("				if a := %s; a.IsNumber() {", xk.read("x"))
+			w("					c.locals[k] = %s", o.expr)
+			w("				} else {")
+			w("					c.locals[k] = c.bitwiseSlow(op, a, kv, pc)")
+			w("				}")
+			w("			}")
+		}
+		w("		}")
+		w("	}")
+	}
+	w("	return nil")
+	w("}")
+
 	return format.Source(b.Bytes())
 }
 
