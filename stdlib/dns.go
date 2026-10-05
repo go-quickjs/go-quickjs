@@ -194,7 +194,9 @@ func (d *dnsHost) query(r *quickjs.Runtime, kind, name string, family, port int,
 // answer makes the query, off the runtime's goroutine: what it returns is
 // plain Go data, which is converted where the promise is settled.
 func (d *dnsHost) answer(ctx context.Context, kind, name string, family, port int, syscall string) (any, error) {
-	fail := func(err error) error { return &dnsError{code: dnsCode(ctx, err, kind), syscall: syscall, hostname: name} }
+	fail := func(err error) error {
+		return &dnsError{code: dnsCode(ctx, err, kind), syscall: syscall, hostname: name}
+	}
 	res := d.resolver
 	switch kind {
 	case "lookup", "A", "AAAA":
