@@ -621,6 +621,12 @@ func (r *Runtime) Locale() string {
 // so a loader that resolves two specifiers to the same module must return the
 // same name for both.
 //
+// A loader's error is what the import throws, if it is one a Go function
+// would throw: what Throw, ThrowError and the like return -- an error with a
+// code of node's, say -- or a *Error or *SyntaxError the loader passes on. Any
+// other error is a TypeError saying the module cannot be resolved, through
+// which errors.Is and errors.As find the loader's error.
+//
 // A runtime with no loader rejects every import. That is the default, because
 // the engine has no filesystem access of its own and should not acquire any
 // implicitly.
@@ -631,7 +637,21 @@ func (r *Runtime) SetModuleLoader(fn ModuleLoader) {
 	if r.closed {
 		return
 	}
-	r.rt.SetModuleLoader(vm.ModuleLoader(fn))
+	if fn == nil {
+		r.rt.SetModuleLoader(nil)
+	} else {
+		r.rt.SetModuleLoader(func(specifier, referrer string) (string, string, error) {
+			source, resolved, err := fn(specifier, referrer)
+			// An exception the loader passes on -- from script it ran, or a
+			// SyntaxError from source it compiled -- is thrown as it is.
+			var jsErr *Error
+			var synErr *SyntaxError
+			if err != nil && (errors.As(err, &jsErr) || errors.As(err, &synErr)) {
+				err = thrownGoError(r.rt, err)
+			}
+			return source, resolved, err
+		})
+	}
 	// The compiler lives outside the vm package, so the runtime is given a
 	// callback rather than importing it.
 	r.rt.SetModuleCompiler(func(specifier, source string) (*vm.Module, error) {

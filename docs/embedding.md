@@ -448,6 +448,13 @@ module, after an `await`, or in code `eval` or `new Function` compiled, which
 resolves as the code that called them does. Code `Eval` runs has no name, and
 its referrer is empty.
 
+An error the loader returns is what the import throws, when it is one a Go
+function would throw: what `rt.Throw`, `rt.ThrowError` and the like make -- an
+`Error` with a `code` of node's, such as `MODULE_NOT_FOUND`, say -- or a
+`*quickjs.Error` from script the loader ran. Any other error becomes a
+`TypeError` saying the module cannot be resolved, through which `errors.Is`
+finds the loader's error.
+
 `EvalModule` returns the module's namespace, through which its exports can be
 read. Bindings are live: an importer sees the exporter's current value, not a
 copy taken at link time.

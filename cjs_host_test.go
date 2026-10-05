@@ -461,6 +461,10 @@ func TestHostRequireFromESM(t *testing.T) {
 			"same " + (require("./lib") === lib),
 		];
 		export const later = import("./dynamic.js").then(m => m.default).then(ns => "dynamic " + ns.value);
+		const code = e => e.code || e.message;
+		export const failures = Promise.all([
+			import("./nope.mjs").catch(code), import("pkg/private").catch(code), import("./bad.js").catch(code),
+		]).then(c => "failures " + c.join(", "));
 	`)
 	if err != nil {
 		t.Fatal(err)
@@ -476,6 +480,12 @@ func TestHostRequireFromESM(t *testing.T) {
 		t.Fatal(err)
 	}
 	got = append(got, l.String())
+	failures, _ := ns.Get("failures")
+	f, err := failures.Await(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = append(got, f.String())
 	want := []string{
 		"lib lib lib",
 		"pkg pkg-default hi from esm",
@@ -483,6 +493,7 @@ func TestHostRequireFromESM(t *testing.T) {
 		"require hi from cjs /app",
 		"same true",
 		"dynamic 42",
+		"failures MODULE_NOT_FOUND, ERR_PACKAGE_PATH_NOT_EXPORTED, boom",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("got:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))

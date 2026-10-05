@@ -1,6 +1,8 @@
 package vm
 
 import (
+	"errors"
+	"fmt"
 	"sort"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
@@ -357,7 +359,7 @@ func (r *Runtime) loadDependency(request, referrer string) (*Module, error) {
 	}
 	source, resolved, err := r.moduleLoader(specifier, referrer)
 	if err != nil {
-		return nil, r.throwError(errType, "cannot resolve %q: %s", specifier, err.Error())
+		return nil, r.loaderError(specifier, err)
 	}
 	m, ok := r.modules[resolved]
 	if !ok {
@@ -373,6 +375,20 @@ func (r *Runtime) loadDependency(request, referrer string) (*Module, error) {
 	}
 	r.requested[key] = m
 	return m, nil
+}
+
+// loaderError is what a module loader's failure throws: what the loader
+// threw, if it threw something -- an error of the host's own, with a code of
+// node's, say -- or else a TypeError saying the module cannot be resolved,
+// whose cause is the loader's error, for a host asking errors.Is of it.
+func (r *Runtime) loaderError(specifier string, err error) error {
+	var t *Thrown
+	if errors.As(err, &t) {
+		return t
+	}
+	o := r.newError(errType, fmt.Sprintf("cannot resolve %q: %s", specifier, err.Error()))
+	o.data.(*Thrown).cause = err
+	return r.throw(Obj(o))
 }
 
 // SetModuleCompiler installs the function that turns module source into a
@@ -1021,7 +1037,7 @@ func (r *Runtime) loadTypedModule(specifier, typ, referrer string) (*Module, err
 	}
 	source, resolved, err := r.moduleLoader(specifier, referrer)
 	if err != nil {
-		return nil, r.throwError(errType, "cannot resolve %q: %s", specifier, err.Error())
+		return nil, r.loaderError(specifier, err)
 	}
 	key := bytecode.ModuleRequest(resolved, typ)
 	if m, ok := r.modules[key]; ok {
