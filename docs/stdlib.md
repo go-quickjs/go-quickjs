@@ -33,6 +33,7 @@ loop.Run(ctx)     // timers, and work that finished on other goroutines
 | `OS` | the `os` module |
 | `Fetch` | `fetch`, `Headers`, `Request`, `Response` — bodies read as they arrive |
 | `Serve` | `serve`, the `http` module — an HTTP server whose handler is `(Request) => Response` |
+| `DNS` | the `dns` and `dns/promises` modules — `lookup`, the `resolve` family, `reverse`, `lookupService`, `Resolver` |
 | `Sockets` | `WebSocket`, and `upgradeWebSocket` where there is a server to accept one on |
 | `Run` | the `child_process` module: `execFileSync`, `execFile`, `spawnSync`, `exec` |
 | `Workers` | `Worker`, and `node:worker_threads`' — each worker a runtime of its own on a goroutine of its own, installed with the same `Config` |
@@ -62,8 +63,19 @@ Workers: &stdlib.Workers{
 A root is a boundary: a path that climbs out of it, or a symbolic link that
 points out of it, is refused rather than followed. `Fetch.Allow` sees every
 request before it is made, `Serve.Allow` every address before it is listened on,
-and `Run.Allow` every program before it is started. What is not installed cannot
+`DNS.Allow` every name before it is looked up, and `Run.Allow` every program
+before it is started. What is not installed cannot
 be reached.
+
+Names are answered by `DNS.Resolver`: the system's by default, or anything
+with `net.Resolver`'s methods -- a cache, DNS over HTTPS, a fixed table. Node's
+shapes and errors are kept (`queryA ENOTFOUND example.invalid`, with `code`,
+`syscall` and `hostname`), and what Go's resolver cannot give is refused with
+`ENOTIMP` rather than imitated: records of the types CAA, NAPTR, SOA, TLSA and
+ANY, and a record's time to live. A TXT record comes back as one string, its
+pieces joined, and `lookupService` names a service by its port's number.
+`getServers` says what `DNS.Servers` says, and `setServers` is refused: which
+servers are asked is the host's to decide.
 
 Nor does anything outlive the runtime it was started for. `Runtime.Context` is
 cancelled by `Close`, and `Loop.Context` by that or by the loop's own `Close`:

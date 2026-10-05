@@ -37,6 +37,11 @@ type Config struct {
 	// a server is written in terms of them.
 	Fetch *Fetch
 
+	// DNS lets the script look names up: the dns and dns/promises modules.
+	// Asking about a name reaches the network, and tells whoever answers for
+	// it what was asked. Nil means none.
+	DNS *DNS
+
 	// Run lets the script start programs, which is the largest capability
 	// there is: a program can do anything the user can. Nil means none.
 	Run *Run
@@ -191,6 +196,14 @@ func Install(rt *quickjs.Runtime, cfg Config) error {
 		// Headers, Request and Response are data rather than access, and a
 		// runtime that serves needs them whether or not it may fetch.
 		if err := Network(rt, nil); err != nil {
+			return err
+		}
+	}
+	if cfg.DNS != nil {
+		if cfg.DNS.Loop == nil {
+			cfg.DNS.Loop = cfg.Loop
+		}
+		if err := Names(rt, cfg.DNS); err != nil {
 			return err
 		}
 	}

@@ -491,6 +491,28 @@ func install(rt *quickjs.Runtime, loop *stdlib.Loop, opts *options, stdin io.Rea
 			},
 		}
 	}
+	// Looking a name up reaches the network as a request does, so it is
+	// allowed as one is: by --allow-net, for the names it lists and what is
+	// under them. Without it the module is there and refuses, saying why.
+	allowedNames := opts.allowNet
+	cfg.DNS = &stdlib.DNS{
+		Loop: loop,
+		Allow: func(name string) error {
+			if len(allowedNames) == 0 {
+				return fmt.Errorf("looking up %s is not allowed: run qjs with --allow-net", name)
+			}
+			if len(allowedNames) == 1 && allowedNames[0] == "" {
+				return nil
+			}
+			name = strings.TrimSuffix(name, ".")
+			for _, a := range allowedNames {
+				if a == name || strings.HasSuffix(name, "."+a) {
+					return nil
+				}
+			}
+			return fmt.Errorf("looking up %s is not allowed: pass --allow-net=%s", name, name)
+		},
+	}
 	// A worker is a runtime of its own, made as this one is and given what
 	// this one is given.
 	cfg.Workers = &stdlib.Workers{
@@ -1202,8 +1224,9 @@ what the script may do (nothing, unless said here):
   -A, --allow-all         everything below
       --allow-read[=DIR]  read files, confined to DIR when given
       --allow-write[=DIR] write them too
-      --allow-net[=HOSTS] reach the network -- fetch, sockets and listening --
-                          or only these comma-separated hosts
+      --allow-net[=HOSTS] reach the network -- fetch, sockets, listening and
+                          looking names up -- or only these comma-separated
+                          hosts
       --allow-env         read the environment
       --allow-run[=LIST]  start programs, or only these comma-separated ones.
                           A program can do anything you can

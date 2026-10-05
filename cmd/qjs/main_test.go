@@ -539,6 +539,33 @@ func TestAllowNetServes(t *testing.T) {
 	}
 }
 
+// Looking a name up is network access, granted by the same flag, for the
+// names it lists and what is under them; refused, it says which flag.
+func TestAllowNetLooksUp(t *testing.T) {
+	src := `
+		import("dns").then(async ({promises: dns}) => {
+			try {
+				const all = await dns.lookup("localhost", {all: true})
+				console.log(all.some(a => a.address === "127.0.0.1" || a.address === "::1"))
+			} catch (e) { console.log(e.code, e.cause.message) }
+		})
+	`
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{nil, "EREFUSED looking up localhost is not allowed: run qjs with --allow-net"},
+		{[]string{"--allow-net=example.com"}, "EREFUSED looking up localhost is not allowed: pass --allow-net=localhost"},
+		{[]string{"--allow-net=localhost"}, "true"},
+		{[]string{"--allow-net"}, "true"},
+	} {
+		code, out, errOut := exec(t, "", append(tc.args, "-e", src)...)
+		if code != 0 || strings.TrimSpace(out) != tc.want {
+			t.Errorf("%v: code=%d out=%q err=%q, want %q", tc.args, code, out, errOut, tc.want)
+		}
+	}
+}
+
 // --allow-run can name the programs it allows, in which case nothing else may
 // be started.
 func TestAllowRunList(t *testing.T) {
