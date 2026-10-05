@@ -129,6 +129,9 @@ type ModuleLoader func(specifier, referrer string) (source string, resolved stri
 // SetModuleLoader installs the loader used to resolve imports.
 func (r *Runtime) SetModuleLoader(fn ModuleLoader) {
 	r.moduleLoader = fn
+	if r.modfetch != nil {
+		r.modfetch.loader = nil
+	}
 	// What the old loader resolved requests to is the old loader's.
 	r.requested = nil
 }
@@ -229,6 +232,13 @@ func (r *Runtime) Link(m *Module) error {
 	// It is loaded once: the modules it names are linked without loading
 	// their graphs again, which for a chain of them would load it over and
 	// over.
+	if r.asyncLoader() != nil {
+		// An asynchronous loader's modules are fetched all at once first.
+		if err := r.fetchNow(func(g *graphFetch) { g.visit(m) }); err != nil {
+			m.state, m.err = ModuleFailed, err
+			return err
+		}
+	}
 	if err := r.loadGraph(m, map[*Module]bool{}); err != nil {
 		m.state, m.err = ModuleFailed, err
 		return err
@@ -343,6 +353,9 @@ func (r *Runtime) loadDependency(request, referrer string) (*Module, error) {
 	request, _ = bytecode.SplitDeferRequest(request)
 	request, _ = bytecode.SplitSourceRequest(request)
 	specifier, typ := bytecode.SplitModuleRequest(request)
+	if r.asyncLoader() != nil {
+		return r.fetchedDependency(request, specifier, typ, referrer)
+	}
 	if typ != "" {
 		return r.loadTypedModule(specifier, typ, referrer)
 	}
@@ -385,6 +398,9 @@ func (r *Runtime) loadDependency(request, referrer string) (*Module, error) {
 // node's, say -- or else a TypeError saying the module cannot be resolved,
 // whose cause is the loader's error, for a host asking errors.Is of it.
 func (r *Runtime) loaderError(specifier string, err error) error {
+	if r.modfetch != nil && r.modfetch.errHook != nil {
+		err = r.modfetch.errHook(err)
+	}
 	var t *Thrown
 	if errors.As(err, &t) {
 		return t
@@ -890,40 +906,46 @@ func (r *Runtime) importEvaluated(request, referrer string, result *Object) {
 	// turn before the module is evaluated, so a dynamic import cannot preempt
 	// the evaluation it was written inside.
 	r.enqueueJob(func() {
-		// A module that will not load, parse or link fails the way a static
-		// import of it would, as an error the script can catch and inspect --
-		// not as a Go error the host would have to interpret.
-		mod, err := r.loadDependency(request, referrer)
-		if err != nil {
-			r.rejectPromise(result, thrownValue(r.wrapEvalError(err)))
-			return
-		}
-		if err := r.Link(mod); err != nil {
-			r.rejectPromise(result, thrownValue(r.wrapEvalError(err)))
-			return
-		}
-		// Evaluation hands back a promise for the whole graph: a module that
-		// awaits at the top level has not finished when this returns, and the
-		// namespace is only handed over once it has.
-		done, err := r.EvaluateModule(mod)
-		if err != nil {
-			r.rejectPromise(result, thrownValue(err))
-			return
-		}
-		onFulfilled := r.newNativeFunc("", 0, func(rt *Runtime, _ Value, _ []Value) (Value, error) {
-			ns, err := rt.namespaceObject(mod)
+		r.whenFetched(request, referrer, func(err error) {
 			if err != nil {
-				rt.rejectPromise(result, thrownValue(rt.wrapEvalError(err)))
-				return Undefined, nil
+				r.rejectPromise(result, thrownValue(r.wrapEvalError(err)))
+				return
 			}
-			rt.resolvePromise(result, Obj(ns))
-			return Undefined, nil
+			// A module that will not load, parse or link fails the way a static
+			// import of it would, as an error the script can catch and inspect --
+			// not as a Go error the host would have to interpret.
+			mod, err := r.loadDependency(request, referrer)
+			if err != nil {
+				r.rejectPromise(result, thrownValue(r.wrapEvalError(err)))
+				return
+			}
+			if err := r.Link(mod); err != nil {
+				r.rejectPromise(result, thrownValue(r.wrapEvalError(err)))
+				return
+			}
+			// Evaluation hands back a promise for the whole graph: a module that
+			// awaits at the top level has not finished when this returns, and the
+			// namespace is only handed over once it has.
+			done, err := r.EvaluateModule(mod)
+			if err != nil {
+				r.rejectPromise(result, thrownValue(err))
+				return
+			}
+			onFulfilled := r.newNativeFunc("", 0, func(rt *Runtime, _ Value, _ []Value) (Value, error) {
+				ns, err := rt.namespaceObject(mod)
+				if err != nil {
+					rt.rejectPromise(result, thrownValue(rt.wrapEvalError(err)))
+					return Undefined, nil
+				}
+				rt.resolvePromise(result, Obj(ns))
+				return Undefined, nil
+			})
+			onRejected := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
+				rt.rejectPromise(result, arg(a, 0))
+				return Undefined, nil
+			})
+			r.promiseThen(r.toPromise(done), Obj(onFulfilled), Obj(onRejected))
 		})
-		onRejected := r.newNativeFunc("", 1, func(rt *Runtime, _ Value, a []Value) (Value, error) {
-			rt.rejectPromise(result, arg(a, 0))
-			return Undefined, nil
-		})
-		r.promiseThen(r.toPromise(done), Obj(onFulfilled), Obj(onRejected))
 	})
 }
 
@@ -1056,6 +1078,13 @@ func (r *Runtime) loadTypedModule(specifier, typ, referrer string) (*Module, err
 	if err != nil {
 		return nil, r.loaderError(specifier, err)
 	}
+	return r.makeTypedModule(specifier, typ, source, resolved)
+}
+
+// makeTypedModule is the module of a type a loader's source makes, or the
+// one made already from the module it resolved to.
+func (r *Runtime) makeTypedModule(specifier, typ, source, resolved string) (*Module, error) {
+	var err error
 	key := bytecode.ModuleRequest(resolved, typ)
 	if m, ok := r.modules[key]; ok {
 		return m, nil

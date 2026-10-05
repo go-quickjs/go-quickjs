@@ -262,6 +262,9 @@ type Runtime struct {
 	// bigArgs are where a BigInt held in its Value is spelled as a big.Int
 	// for bigArith, which keeps neither operand; see bigArg.
 	bigArgs [2]smallBigInt
+	// modfetch is the asynchronous module loader and its calls, made when a
+	// loader is installed; see modulefetch.go.
+	modfetch *moduleFetch
 }
 
 // Realm is a set of intrinsics and the global object that goes with them.

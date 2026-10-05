@@ -252,48 +252,53 @@ func (r *Runtime) evaluationList(m *Module) []*Module {
 // deferred namespace.
 func (r *Runtime) importDeferred(request, referrer string, result *Object) {
 	r.enqueueJob(func() {
-		mod, err := r.loadDependency(request, referrer)
-		if err == nil {
-			err = r.Link(mod)
-		}
-		if err != nil {
-			r.rejectPromise(result, thrownValue(r.wrapEvalError(err)))
-			return
-		}
-		settle := func() {
-			ns, err := r.deferredNamespaceObject(mod)
+		r.whenFetched(request, referrer, func(err error) {
+			var mod *Module
+			if err == nil {
+				mod, err = r.loadDependency(request, referrer)
+			}
+			if err == nil {
+				err = r.Link(mod)
+			}
 			if err != nil {
 				r.rejectPromise(result, thrownValue(r.wrapEvalError(err)))
 				return
 			}
-			r.resolvePromise(result, Obj(ns))
-		}
-		async := r.gatherAsyncDependencies(mod, map[*Module]bool{}, nil)
-		if len(async) == 0 {
-			settle()
-			return
-		}
-		// What awaits at the top level is run now, and the namespace handed
-		// over once all of it has finished.
-		pending := len(async)
-		failed := false
-		for _, dep := range async {
-			done, err := r.EvaluateModule(dep)
-			if err != nil {
-				r.rejectPromise(result, thrownValue(err))
+			settle := func() {
+				ns, err := r.deferredNamespaceObject(mod)
+				if err != nil {
+					r.rejectPromise(result, thrownValue(r.wrapEvalError(err)))
+					return
+				}
+				r.resolvePromise(result, Obj(ns))
+			}
+			async := r.gatherAsyncDependencies(mod, map[*Module]bool{}, nil)
+			if len(async) == 0 {
+				settle()
 				return
 			}
-			r.awaitThen(done, func(rt *Runtime, _ Value) {
-				if pending--; pending == 0 && !failed {
-					settle()
+			// What awaits at the top level is run now, and the namespace handed
+			// over once all of it has finished.
+			pending := len(async)
+			failed := false
+			for _, dep := range async {
+				done, err := r.EvaluateModule(dep)
+				if err != nil {
+					r.rejectPromise(result, thrownValue(err))
+					return
 				}
-			}, func(rt *Runtime, reason Value) {
-				if !failed {
-					failed = true
-					rt.rejectPromise(result, reason)
-				}
-			})
-		}
+				r.awaitThen(done, func(rt *Runtime, _ Value) {
+					if pending--; pending == 0 && !failed {
+						settle()
+					}
+				}, func(rt *Runtime, reason Value) {
+					if !failed {
+						failed = true
+						rt.rejectPromise(result, reason)
+					}
+				})
+			}
+		})
 	})
 }
 
@@ -302,11 +307,16 @@ func (r *Runtime) importDeferred(request, referrer string, result *Object) {
 // as linking a static source import of it fails.
 func (r *Runtime) importSource(request, referrer string, result *Object) {
 	r.enqueueJob(func() {
-		mod, err := r.loadDependency(request, referrer)
-		if err == nil {
-			err = r.moduleSourceError(mod)
-		}
-		r.rejectPromise(result, thrownValue(r.wrapEvalError(err)))
+		r.whenFetched(request, referrer, func(err error) {
+			var mod *Module
+			if err == nil {
+				mod, err = r.loadDependency(request, referrer)
+			}
+			if err == nil {
+				err = r.moduleSourceError(mod)
+			}
+			r.rejectPromise(result, thrownValue(r.wrapEvalError(err)))
+		})
 	})
 }
 

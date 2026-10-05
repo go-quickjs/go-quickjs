@@ -459,6 +459,42 @@ finds the loader's error.
 read. Bindings are live: an importer sees the exporter's current value, not a
 copy taken at link time.
 
+### Fetching modules asynchronously
+
+A `ModuleLoader` answers before it returns, which holds the runtime up while
+it reads. A loader that fetches over a network, or wants many modules at
+once, is an `AsyncModuleLoader`: it calls `done` when it has the module, from
+any goroutine. What it is asked and what it answers are structs, which can
+grow without breaking a loader.
+
+```go
+rt := quickjs.New(quickjs.WithModuleFetchLimit(16))
+rt.SetAsyncModuleLoader(func(ctx context.Context, req quickjs.ModuleRequest, done func(quickjs.LoadedModule, error)) {
+    url := resolve(req.Specifier, req.Referrer)
+    go func() {
+        src, err := fetch(ctx, url)
+        done(quickjs.LoadedModule{Source: src, Resolved: url}, err)
+    }()
+})
+```
+
+The modules a graph needs are asked for at once, each one's imports as it
+arrives, and never more than `WithModuleFetchLimit` at a time across the
+runtime -- 8 unless set; the rest wait their turn. An `import()` fetches
+without holding up the runtime: the script, its promise jobs and the host's
+work run on, and the import goes on when the last of its graph is in.
+`EvalModule` and `RequireModule` return their module, so they wait for its
+graph, running nothing else meanwhile, as they do while a `ModuleLoader` reads.
+
+`ctx` ends when the module is no longer wanted: the runtime has closed,
+another module of the graph failed, or the call waiting for the graph gave up
+as its context ended. A loader that stops then need not call `done`. An
+`import()` outlives the call that ran it, and so does its fetch.
+
+The loader itself is called on the runtime's goroutine: what it does with the
+runtime -- defining a synthetic module, or making an error for script with
+`rt.Throw` -- it does before it returns, and may hand to `done` later.
+
 ### CommonJS
 
 The engine has no CommonJS of its own -- `require`, its cache and its

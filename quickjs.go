@@ -93,6 +93,9 @@ type Runtime struct {
 	onClose []*func()
 	// nodeQuirks is WithNodeQuirks, which the parser and compiler are told.
 	nodeQuirks bool
+	// moduleFetchLimit is WithModuleFetchLimit, which an AsyncModuleLoader
+	// is installed with.
+	moduleFetchLimit int
 	// noCodeGeneration is WithoutCodeGeneration, which node:vm respects too.
 	noCodeGeneration bool
 	// seqs are the Go sequences script has iterators over that have not
@@ -106,6 +109,7 @@ type Runtime struct {
 type Option func(*config)
 
 type config struct {
+	moduleFetchLimit int
 	memoryLimit      int64
 	stackSize        int
 	maxCallDepth     int
@@ -143,6 +147,19 @@ func WithStackSize(slots int) Option {
 func WithMaxCallDepth(frames int) Option {
 	return func(c *config) { c.maxCallDepth = frames }
 }
+
+// WithModuleFetchLimit bounds how many modules an AsyncModuleLoader is asked
+// for at once: across every import the runtime is loading, not for each
+// graph. A request beyond the limit waits its turn, in the order it was made,
+// and goes out when a call comes back. It is 8 unless set, and a limit below
+// 1 is 1 -- one module at a time. A ModuleLoader answers one request at a
+// time, and is not bounded.
+func WithModuleFetchLimit(n int) Option {
+	return func(c *config) { c.moduleFetchLimit = max(n, 1) }
+}
+
+// defaultModuleFetchLimit is WithModuleFetchLimit's limit unless set.
+const defaultModuleFetchLimit = 8
 
 // WithLocale sets the language a script means when it formats something
 // without saying which language to format it in: what Intl answers with when
@@ -205,7 +222,11 @@ func New(opts ...Option) *Runtime {
 		MaxCallDepth: c.maxCallDepth,
 		Locale:       c.locale,
 		NodeQuirks:   c.nodeQuirks,
-	}), nodeQuirks: c.nodeQuirks, noCodeGeneration: c.noCodeGeneration}
+	}), nodeQuirks: c.nodeQuirks, noCodeGeneration: c.noCodeGeneration,
+		moduleFetchLimit: c.moduleFetchLimit}
+	if c.moduleFetchLimit == 0 {
+		r.moduleFetchLimit = defaultModuleFetchLimit
+	}
 	r.rt.Host = r
 	r.ctx, r.cancel = context.WithCancel(context.Background())
 	if !c.noCodeGeneration {
@@ -637,25 +658,97 @@ func (r *Runtime) SetModuleLoader(fn ModuleLoader) {
 	if r.closed {
 		return
 	}
-	if fn == nil {
-		r.rt.SetModuleLoader(nil)
-	} else {
-		r.rt.SetModuleLoader(func(specifier, referrer string) (string, string, error) {
-			source, resolved, err := fn(specifier, referrer)
-			// An exception the loader passes on -- from script it ran, or a
-			// SyntaxError from source it compiled -- is thrown as it is.
-			var jsErr *Error
-			var synErr *SyntaxError
-			if err != nil && (errors.As(err, &jsErr) || errors.As(err, &synErr)) {
-				err = thrownGoError(r.rt, err)
-			}
-			return source, resolved, err
-		})
+	r.rt.SetModuleLoader(vm.ModuleLoader(fn))
+	r.installModuleHooks()
+}
+
+// ModuleRequest is what an AsyncModuleLoader is asked for.
+type ModuleRequest struct {
+	// Specifier is the text of the import.
+	Specifier string
+	// Referrer is the name of the module or script the import is written in,
+	// as a ModuleLoader's referrer is: empty for code that has none.
+	Referrer string
+}
+
+// LoadedModule is what an AsyncModuleLoader answers with.
+type LoadedModule struct {
+	// Source is the module's source: JavaScript, or the text of a module of
+	// a type -- JSON, say -- that the import's attributes asked for. It is
+	// ignored for a name a module is defined under already, a synthetic one
+	// the loader defined, say.
+	Source string
+	// Resolved is the name the module is cached under, and what imports in
+	// it are resolved against: a loader that resolves two requests to the
+	// same module answers with the same name for both.
+	Resolved string
+}
+
+// AsyncModuleLoader is a ModuleLoader that need not answer before it returns:
+// it calls done once -- from any goroutine, then or later -- with the module,
+// or an error, and a second call does nothing. Its request and its answer
+// are structs, so that what a loader is told and may say can grow without
+// changing what it is. It is called on the
+// runtime's goroutine, so what it does with the runtime -- define a synthetic
+// module, say -- it does before it returns; done must not wait for the
+// runtime, which may be waiting for it.
+//
+// ctx ends when the module is no longer wanted: the runtime has closed,
+// another module of the graph failed to load, or the call waiting for the
+// graph -- EvalModuleContext, RequireModule -- gave up as its context ended. A
+// loader that stops then need not call done; its place under
+// WithModuleFetchLimit is given back either way. An import() outlives the
+// call that ran it, and so does its fetch: ctx is cut from the runtime's
+// lifetime, not from that call's context.
+//
+// Its error is what a ModuleLoader's is. One made for script -- by Throw,
+// ThrowError and the like -- is made on the runtime's goroutine too, before
+// the loader returns, and may be handed to done later; a Go error may come
+// from anywhere.
+type AsyncModuleLoader func(ctx context.Context, req ModuleRequest, done func(LoadedModule, error))
+
+// SetAsyncModuleLoader installs an asynchronous loader, in place of any
+// loader. The modules a graph needs are asked for at once -- as many at a
+// time as WithModuleFetchLimit allows -- and each one's imports as it
+// arrives. An import() fetches without holding up the runtime: the script,
+// its jobs and the host's work run on, and the import goes on when the last of
+// its graph has arrived. EvalModule and RequireModule return their module,
+// and so wait for its graph, running nothing else meanwhile, as they do while
+// a ModuleLoader reads; so does linking a graph whose modules have not been
+// fetched. A nil loader removes it.
+func (r *Runtime) SetAsyncModuleLoader(fn AsyncModuleLoader) {
+	if r.closed {
+		return
 	}
-	// The compiler lives outside the vm package, so the runtime is given a
-	// callback rather than importing it.
+	var loader vm.AsyncModuleLoader
+	if fn != nil {
+		loader = func(ctx context.Context, specifier, referrer string, done func(source, resolved string, err error)) {
+			fn(ctx, ModuleRequest{Specifier: specifier, Referrer: referrer}, func(m LoadedModule, err error) {
+				done(m.Source, m.Resolved, err)
+			})
+		}
+	}
+	r.rt.SetAsyncModuleLoader(loader, r.moduleFetchLimit, r.Context())
+	r.installModuleHooks()
+}
+
+// installModuleHooks gives the engine what a loader needs of this package:
+// the compiler, which lives outside the vm package, and what makes a loader's
+// error the exception it stands for.
+func (r *Runtime) installModuleHooks() {
 	r.rt.SetModuleCompiler(func(specifier, source string) (*vm.Module, error) {
 		return r.compileAndRegisterModule(specifier, source)
+	})
+	rt := r.rt
+	rt.SetLoaderErrorHook(func(err error) error {
+		// An exception the loader passes on -- from script it ran, or a
+		// SyntaxError from source it compiled -- is thrown as it is.
+		var jsErr *Error
+		var synErr *SyntaxError
+		if errors.As(err, &jsErr) || errors.As(err, &synErr) {
+			return thrownGoError(rt, err)
+		}
+		return err
 	})
 }
 
