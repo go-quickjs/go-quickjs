@@ -193,6 +193,33 @@ func BenchmarkJSONRoundTrip(b *testing.B) {
 	}`)
 }
 
+// The factorial benchmark of go-js-engines-benchmark, which compares Go's
+// JavaScript engines: a script whose top level calls a recursive
+// factorial(10) in a loop, evaluated in a new runtime as that benchmark does,
+// so that its loop over a global, the global read of factorial at each call
+// and the recursion are all measured. That one loops 1e6 times; this, 1e5,
+// which is 1e6 calls an iteration.
+func BenchmarkFactorial(b *testing.B) {
+	const src = `function factorial(n) {
+	return n <= 1 ? 1 : n * factorial(n - 1);
+}
+
+var i = 0;
+
+while (i++ < 1e5) {
+	factorial(10);
+}`
+	b.ReportAllocs()
+	for b.Loop() {
+		rt := quickjs.New()
+		if _, err := rt.Eval(src); err != nil {
+			b.Fatal(err)
+		}
+		rt.Close()
+	}
+	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N)/1e6, "ns/call")
+}
+
 // Compiling: what a host pays before anything runs.
 func BenchmarkCompileScript(b *testing.B) {
 	// Everything is inside a function so that the script declares nothing and
