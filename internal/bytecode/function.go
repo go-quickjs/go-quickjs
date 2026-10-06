@@ -316,6 +316,10 @@ type Function struct {
 	// function's, which make an object first, nor a class constructor's,
 	// which a call refuses.
 	DirectCall bool
+	// HasTailCall says the body has a call in tail position, OpTailCall,
+	// OpTailCallMethod or OpTailDirectEval, which can end its frame for the
+	// callee's.
+	HasTailCall bool
 	// IsExprBody marks a concise arrow body, which affects nothing at runtime
 	// but is useful when printing a function's source.
 	IsExprBody bool

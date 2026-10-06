@@ -157,6 +157,14 @@ func (r *Runtime) callFromLoop(callee, this Value, args []Value) (Value, error) 
 	if callee.IsObject() {
 		o := callee.Object()
 		fd := o.fn()
+		// A function planTreeCall has given a tree is called on it, without
+		// what the rest asks of a call.
+		if fd != nil && fd.treeCall != nil && fd.closure.realm == r.Realm {
+			if err := r.tick(); err != nil {
+				return Undefined, err
+			}
+			return r.callTree(o, fd, this, args)
+		}
 		if fd != nil && fd.mathOp != 0 {
 			// Math.floor(x) and its kind, given a number, and Math.max(a, b)
 			// and Math.min(a, b), given two, cannot throw or call anything,
@@ -193,6 +201,9 @@ func (r *Runtime) callFromLoop(callee, this Value, args []Value) (Value, error) 
 				v, err := r.runFD(fd.closure, this, args, newTarget, o, fd)
 				if err == errNoSuper {
 					err = r.throwError(errReference, "%s", errNoSuper.Error())
+				}
+				if !fd.treePlanned {
+					planTreeCall(fd)
 				}
 				return v, err
 			}

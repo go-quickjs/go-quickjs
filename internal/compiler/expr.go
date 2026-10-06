@@ -516,12 +516,15 @@ func (c *compiler) callOp(n ast.Expr, op bytecode.Op) bytecode.Op {
 	}
 	switch op {
 	case bytecode.OpCall:
-		return bytecode.OpTailCall
+		op = bytecode.OpTailCall
 	case bytecode.OpCallMethod:
-		return bytecode.OpTailCallMethod
+		op = bytecode.OpTailCallMethod
 	case bytecode.OpDirectEval:
-		return bytecode.OpTailDirectEval
+		op = bytecode.OpTailDirectEval
+	default:
+		return op
 	}
+	c.fn.HasTailCall = true
 	return op
 }
 

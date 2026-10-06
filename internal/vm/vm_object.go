@@ -1224,12 +1224,17 @@ type funcData struct {
 	arrow bool
 	// bound marks a function produced by Function.prototype.bind.
 	bound bool
+	// treePlanned records that planTreeCall has decided about the function.
+	treePlanned bool
 
 	// extra is what only some functions have -- an arrow's surroundings, a
 	// bound function's target, the scopes of one made inside a `with` body
 	// or beside a direct eval -- or nil. Every built-in and most closures have
 	// none, and are the smaller for it.
 	extra *funcExtra
+	// treeCall is the tree a call of the function goes straight to through
+	// callTree, or nil; see planTreeCall.
+	treeCall *tree
 
 	// superCtor is the class constructor whose prototype super() reads.
 	//
