@@ -44,7 +44,7 @@ called in every language. It is held against a full ICU build:
 not is named.
 
 Of the 99,937 test262 variants in the areas the engine claims -- the language,
-the built-ins, `Intl` and Annex B -- 99,595 pass, none fail, and 342 are
+the built-ins, `Intl` and Annex B -- 99,599 pass, none fail, and 342 are
 skipped because they require an unsupported feature or host facility. See [Conformance](docs/status.md#conformance) for the
 measurement and [Not implemented](docs/status.md#not-implemented) for what is missing.
 

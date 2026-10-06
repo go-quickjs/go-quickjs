@@ -112,7 +112,7 @@ rather than counted against it.
 By default it runs `language`, `built-ins`, `intl402` and `annexB`; `staging`
 holds proposals too early to claim, and `harness` tests the suite's own helpers.
 
-Measured coverage, as of the most recent run: 99,595 variants pass and none
+Measured coverage, as of the most recent run: 99,599 variants pass and none
 fail. The other 342 are skipped rather than counted: a test tagged with a
 feature the engine does not implement, or one that asks the host for a second
 realm or an agent, is testing something that was never claimed.
