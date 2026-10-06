@@ -98,14 +98,14 @@ its workloads in this comparison.
 ## Compared with C QuickJS
 
 Over the V8 suite as a whole, go-quickjs is ahead of QuickJS: it takes
-0.68 times QuickJS's time and has a 9% higher composite score. Single
-operations still cost more, by about an eighth on average, as
+0.65 times QuickJS's time and has an 11% higher composite score. Single
+operations still cost more, by about a seventh on average, as
 [the micro-benchmarks](#micro-benchmarks) below show.
 
 go-quickjs has the same design as QuickJS: a bytecode compiler, a
 stack-based interpreter, NaN-boxed values. Running that design in Go costs
 speed. The same suite ran on an AMD Ryzen 5 3600 under Windows, with Go 1.27.1,
-go-quickjs `69f51f7` and QuickJS 2026-06-04. The first two columns are milliseconds for the same
+go-quickjs `4629679` (v0.21.1) and QuickJS 2026-06-04. The first two columns are milliseconds for the same
 fixed work (the median of three fresh-process runs, lower is better). The
 scores are the suite's own (higher is better). Richards and DeltaBlue, which
 take only a few milliseconds a run, ran three hundred times in each process,
@@ -113,15 +113,15 @@ scaled to three.
 
 | Workload | go-quickjs | QuickJS | QuickJS faster by | go-quickjs score | QuickJS score |
 |---|---:|---:|---:|---:|---:|
-| Richards | 15.4 ms | 11.1 ms | 1.39x | 681 | 959 |
-| DeltaBlue | 25.0 ms | 23.8 ms | 1.05x | 798 | 841 |
-| Crypto | 282 ms | 325 ms | 0.87x | 1,288 | 1,102 |
-| RayTrace | 146 ms | 143 ms | 1.02x | 1,570 | 1,581 |
-| EarleyBoyer | 411 ms | 397 ms | 1.03x | 2,060 | 2,168 |
-| RegExp | 286 ms | 865 ms | 0.33x | 1,421 | 432 |
-| Splay | 300 ms | 512 ms | 0.59x | 2,993 | 3,286 |
-| NavierStokes | 221 ms | 188 ms | 1.18x | 2,255 | 2,419 |
-| **Total / composite** | **1,686 ms** | **2,465 ms** | **0.68x** | **1,466** | **1,344** |
+| Richards | 15.3 ms | 11.1 ms | 1.38x | 692 | 941 |
+| DeltaBlue | 26.0 ms | 23.8 ms | 1.09x | 764 | 840 |
+| Crypto | 293 ms | 325 ms | 0.90x | 1,223 | 1,090 |
+| RayTrace | 138 ms | 142 ms | 0.97x | 1,577 | 1,561 |
+| EarleyBoyer | 415 ms | 399 ms | 1.04x | 2,033 | 2,162 |
+| RegExp | 287 ms | 969 ms | 0.30x | 1,409 | 390 |
+| Splay | 296 ms | 530 ms | 0.56x | 2,968 | 3,297 |
+| NavierStokes | 220 ms | 189 ms | 1.17x | 2,302 | 2,420 |
+| **Total / composite** | **1,690 ms** | **2,589 ms** | **0.65x** | **1,454** | **1,315** |
 
 The two kinds of figure time different things, which is why they do not
 agree on how far ahead go-quickjs is:
@@ -132,7 +132,7 @@ agree on how far ahead go-quickjs is:
   make most of go-quickjs's lead. The composite score is the geometric mean
   of the workloads' scores, so each counts the same: Richards' gap weighs as
   much as RegExp's lead. By that mean the fixed figures put go-quickjs
-  about 14% ahead, and the scores 9%.
+  about 15% ahead, and the scores 11%.
 - Splay changes sides. Its fixed time is almost all setup and teardown:
   building a tree of 8,000 nodes and dropping it, which QuickJS frees by
   counting references where Go's collector frees it later. A warm run,
@@ -151,33 +151,34 @@ and Richards and DeltaBlue by more, up to a tenth. To reproduce them, run
 QuickJS's own micro-benchmarks, [`tests/microbench.js`](https://github.com/bellard/quickjs/blob/master/tests/microbench.js),
 time one operation each, in nanoseconds. Each test was given the work QuickJS
 takes about 150 ms for, both engines ran that same work in fresh processes at
-go-quickjs `69f51f7`, and the figure is the faster of two runs. Over the 72
-tests go-quickjs takes 1.13 times QuickJS's time by the geometric mean: it is
-slower on 46, faster on 22, and level on the rest. The table has the largest
-gaps either way.
+go-quickjs `4629679` (v0.21.1), and the figure is the faster of two runs.
+`sort_bench` is left out: it reports a run's time over its fastest sort, not
+the time of an operation. Over the other 71 tests go-quickjs takes 1.15 times
+QuickJS's time by the geometric mean: it is slower on 48, faster on 20, and
+level on the rest. The table has the largest gaps either way.
 
 | Test | go-quickjs | QuickJS | go-quickjs / QuickJS |
 |---|---:|---:|---:|
-| `weak_map_set` | 284 ns | 91.8 ns | 3.10x |
-| `array_prop_create` | 41.2 ns | 15.0 ns | 2.76x |
-| `weak_map_delete` | 585 ns | 251 ns | 2.33x |
-| `bigint256_arith` | 264 ns | 126 ns | 2.09x |
-| `global_read` | 11.5 ns | 5.6 ns | 2.06x |
-| `array_update` | 15.8 ns | 8.6 ns | 1.83x |
-| `bigint64_arith` | 71.8 ns | 39.6 ns | 1.81x |
-| `regexp_utf16` | 480 ns | 269 ns | 1.79x |
-| `typed_array_read` | 16.8 ns | 9.9 ns | 1.69x |
-| `float_toFixed` | 275 ns | 164 ns | 1.67x |
-| `bigint32_arith` | 39.3 ns | 23.6 ns | 1.67x |
-| `array_read` | 10.7 ns | 6.6 ns | 1.63x |
-| `typed_array_write` | 23.1 ns | 14.2 ns | 1.62x |
-| `string_length` | 9.2 ns | 14.1 ns | 0.65x |
-| `array_pop` | 71.3 ns | 111 ns | 0.64x |
-| `array_for_of` | 28.4 ns | 46.4 ns | 0.61x |
-| `prop_clone` | 42.7 ns | 77.4 ns | 0.55x |
-| `string_build2c` | 64.0 ns | 147 ns | 0.44x |
-| `string_to_int` | 46.7 ns | 112 ns | 0.42x |
-| `array_slice` | 8.8 ns | 27.2 ns | 0.32x |
+| `weak_map_set` | 323 ns | 92.3 ns | 3.50x |
+| `array_prop_create` | 38.4 ns | 14.9 ns | 2.58x |
+| `weak_map_delete` | 580 ns | 248 ns | 2.34x |
+| `bigint256_arith` | 269 ns | 126 ns | 2.14x |
+| `global_read` | 11.6 ns | 5.6 ns | 2.07x |
+| `bigint64_arith` | 76.9 ns | 39.6 ns | 1.94x |
+| `regexp_utf16` | 507 ns | 270 ns | 1.88x |
+| `array_update` | 15.8 ns | 8.6 ns | 1.84x |
+| `typed_array_read` | 17.2 ns | 9.9 ns | 1.74x |
+| `bigint32_arith` | 39.8 ns | 23.1 ns | 1.72x |
+| `float_toFixed` | 271 ns | 165 ns | 1.64x |
+| `array_read` | 10.8 ns | 6.6 ns | 1.63x |
+| `array_for_in` | 121 ns | 75.7 ns | 1.60x |
+| `string_build2` | 63.5 ns | 96.7 ns | 0.66x |
+| `array_for_of` | 30.2 ns | 46.4 ns | 0.65x |
+| `array_pop` | 69.3 ns | 111 ns | 0.62x |
+| `prop_clone` | 46.5 ns | 78.6 ns | 0.59x |
+| `string_build2c` | 64.5 ns | 146 ns | 0.44x |
+| `string_to_int` | 48.6 ns | 113 ns | 0.43x |
+| `array_slice` | 9.3 ns | 27.0 ns | 0.34x |
 
 Some of these tests depend on where the linker places the code more than on
 the code, by more than eight placements can average out: those vary where
