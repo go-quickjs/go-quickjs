@@ -3,7 +3,6 @@ package vm
 import (
 	"fmt"
 	"math"
-	"strconv"
 	"strings"
 	"time"
 
@@ -263,11 +262,10 @@ func allAlphanumeric(s string) bool {
 // numberArgument reads the value to format, which is not always a number: a
 // string is taken as the exact decimal it is written as rather than as the
 // nearest number a machine can hold, so that a value too long for a double
-// still comes out right. A number is handed over as the double it is where
-// double says so, which go-intl then reads as ICU does where Node's answer
-// is asked for (ApproximateIncrement), and as its shortest decimal, never a
-// double, where not.
-func (r *Runtime) numberArgument(v Value, double bool) (intl.Decimal, error) {
+// still comes out right. A number is handed over as the double it is,
+// which go-intl reads as ICU does where Node's answer is asked for
+// (ApproximateIncrement).
+func (r *Runtime) numberArgument(v Value) (intl.Decimal, error) {
 	if v.IsBigInt() {
 		// A BigInt is taken as the integer it is, however large, where a
 		// string past a double's range is an infinity (KI-53): its own
@@ -299,10 +297,7 @@ func (r *Runtime) numberArgument(v Value, double bool) (intl.Decimal, error) {
 	if err != nil {
 		return intl.Decimal{}, err
 	}
-	if double || math.IsNaN(x) || math.IsInf(x, 0) {
-		return intl.DecimalFromFloat(x), nil
-	}
-	return intl.ParseDecimal(strconv.FormatFloat(x, 'e', -1, 64)), nil
+	return intl.DecimalFromFloat(x), nil
 }
 
 // legacyFormatter is what a formatter made without new answers with. Called as
@@ -549,7 +544,7 @@ func (r *Runtime) initNumberFormat(intlObj *Object) {
 			return Undefined, err
 		}
 		return rt.bound(&o.formatFn, 1, func(rt *Runtime, _ Value, args []Value) (Value, error) {
-			d, err := rt.numberArgument(arg(args, 0), true)
+			d, err := rt.numberArgument(arg(args, 0))
 			if err != nil {
 				return Undefined, err
 			}
@@ -575,7 +570,7 @@ func (r *Runtime) initNumberFormat(intlObj *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		d, err := rt.numberArgument(arg(args, 0), true)
+		d, err := rt.numberArgument(arg(args, 0))
 		if err != nil {
 			return Undefined, err
 		}
@@ -1108,15 +1103,11 @@ func (r *Runtime) numberRange(this Value, args []Value, method string) (*rangePi
 	if arg(args, 1).IsUndefined() {
 		return nil, r.intlInvalidType("end", "undefined")
 	}
-	// A range's ends are rounded from their decimals, under Node's quirks
-	// too: ICU's range formatter reads each double through a Formattable,
-	// which corrects its fast reading (roundToInfinity), where formatDouble,
-	// which format uses, keeps it.
-	from, err := r.numberArgument(arg(args, 0), false)
+	from, err := r.numberArgument(arg(args, 0))
 	if err != nil {
 		return nil, err
 	}
-	to, err := r.numberArgument(arg(args, 1), false)
+	to, err := r.numberArgument(arg(args, 1))
 	if err != nil {
 		return nil, err
 	}
