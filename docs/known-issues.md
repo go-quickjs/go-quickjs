@@ -317,9 +317,11 @@ Paths are relative to this repository; `go-intl:` paths are in
     the front, and the breaks and boundaries are searched. Splitting up
     front costs one pass over the string per `segment()`, not more.*
 - **Temporal:** a Chinese-calendar `until` over the whole date range steps
-  one month at a time. Node hangs here too.
-- **Status:** fixed, but for Temporal's Chinese `until`, which Node shares,
-  and `segment()` splitting up front, which is linear.
+  one month at a time. Node hangs here too. *Fixed in go-intl v0.4.0: each
+  month is balanced from the one before rather than from the first year,
+  and the whole range in months takes a tenth of a second.*
+- **Status:** fixed, but for `segment()` splitting up front, which is
+  linear.
 
 ### KI-28 32-bit platforms truncate lengths and offsets
 - **Panics on GOARCH=386:**

@@ -50,7 +50,7 @@ func (r *Runtime) dateEnv() *date.Environment {
 	if r.dates != nil {
 		return r.dates
 	}
-	opts := date.Options{TimeZone: r.timeZone, Now: r.clock}
+	opts := date.Options{TimeZone: r.timeZone, Now: r.clock, Compat: r.intlCompat()}
 	if loc, err := intl.ParseLocale(r.Locale()); err == nil {
 		opts.Locale = &loc
 	}

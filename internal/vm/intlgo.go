@@ -3,6 +3,7 @@ package vm
 import (
 	"math"
 	"strconv"
+	"strings"
 
 	intl "github.com/go-quickjs/go-intl"
 )
@@ -27,8 +28,13 @@ import (
 // region of a locale's hour cycles, the time zones in no region, the two
 // roundings of Temporal the standard fixed after Node's temporal_rs, the
 // calendar uz-AF's date patterns are read from, the digit options
-// PluralRules reports, and the unknown script and region a locale
-// maximizes past.
+// PluralRules reports, the unknown script and region a locale maximizes
+// past, an accounting amount with signDisplay "never", the offsets near a
+// whole one RelativeTimeFormat names in words, a double rounded to an
+// increment, the format a currency is written in, an empty item of a list,
+// a time style under a -u-hc keyword hour12 overrode, the prefix two
+// strings a Collator compares share, and the host's zone where nothing
+// names it.
 func (r *Runtime) intlCompat() intl.Compat {
 	if r.nodeQuirks {
 		return intl.NodeICU
@@ -38,7 +44,9 @@ func (r *Runtime) intlCompat() intl.Compat {
 		intl.IslamicFallback | intl.HourCycleKeyword | intl.PlainValueZone | intl.ZoneIdentifiers |
 		intl.CopticEra | intl.ChineseAstronomy | intl.SubdivisionHourCycles | intl.RegionZones |
 		intl.RoundingWindow | intl.RepeatedMidnight | intl.PatternCalendar | intl.PluralRulesDigits |
-		intl.UnknownSubtags)
+		intl.UnknownSubtags | intl.AccountingNever | intl.RelativeEpsilon | intl.ApproximateIncrement |
+		intl.CurrencyFormats | intl.EmptyListItems | intl.HourCycleStyles | intl.IdenticalPrefix |
+		intl.HostAbbreviations)
 }
 
 // canonicalizer puts locale identifiers in canonical form, as
@@ -183,15 +191,25 @@ func intlDecimal(d decimal, special string) intl.Decimal {
 	case "-inf":
 		return intl.DecimalFromFloat(math.Inf(-1))
 	}
+	if special == "exact" && d.exp >= len(d.digits) {
+		// A BigInt, an integer, written out as its own decimal string is:
+		// go-intl keeps a number exactly only as far as its digits are
+		// written, and reads one with an exponent as a string.
+		text := d.digits + strings.Repeat("0", d.exp-len(d.digits))
+		if d.digits == "" {
+			text = "0"
+		}
+		if d.negative {
+			text = "-" + text
+		}
+		return intl.ParseExactDecimal(text)
+	}
 	text := "0"
 	if d.digits != "" {
 		text = "0." + d.digits + "e" + strconv.Itoa(d.exp)
 	}
 	if d.negative {
 		text = "-" + text
-	}
-	if special == "exact" {
-		return intl.ParseExactDecimal(text)
 	}
 	return intl.ParseDecimal(text)
 }

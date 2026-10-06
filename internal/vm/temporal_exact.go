@@ -171,7 +171,7 @@ func (r *Runtime) initTemporalInstant(ns *Object) {
 		if err != nil {
 			return "", err
 		}
-		s, err := i.String(d.Zones, nil, temporal.DefaultToStringOptions)
+		s, err := i.String(d.Zones, nil, temporal.DefaultToStringOptions())
 		return s, rt.temporalErr(err)
 	})
 	k.toLocaleString(intl.ComponentsAny, intl.ComponentsAll)
@@ -446,7 +446,7 @@ func (r *Runtime) initTemporalZonedDateTime(ns *Object) {
 		return temporalObject(rt.temporalPlainDateTimeProto, z.ToPlainDateTime()), nil
 	})
 	k.toJSON(func(rt *Runtime, z temporal.ZonedDateTime) (string, error) {
-		s, err := z.String(temporal.OffsetAuto, temporal.TimeZoneAuto, temporal.CalendarAuto, temporal.DefaultToStringOptions)
+		s, err := z.String(temporal.OffsetAuto, temporal.TimeZoneAuto, temporal.CalendarAuto, temporal.DefaultToStringOptions())
 		return s, rt.temporalErr(err)
 	})
 	k.method("toLocaleString", 0, func(rt *Runtime, z temporal.ZonedDateTime, args []Value) (Value, error) {
@@ -705,7 +705,7 @@ func (r *Runtime) initTemporalDuration(ns *Object) {
 		return Str(NewString(s)), nil
 	})
 	k.toJSON(func(rt *Runtime, d temporal.Duration) (string, error) {
-		s, err := d.String(temporal.DefaultToStringOptions)
+		s, err := d.String(temporal.DefaultToStringOptions())
 		return s, rt.temporalErr(err)
 	})
 	k.method("toLocaleString", 0, func(rt *Runtime, d temporal.Duration, args []Value) (Value, error) {

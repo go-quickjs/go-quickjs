@@ -392,7 +392,7 @@ func (r *Runtime) initTemporalPlainTime(ns *Object) {
 		return Str(NewString(s)), nil
 	})
 	k.toJSON(func(rt *Runtime, t temporal.PlainTime) (string, error) {
-		s, err := t.String(temporal.DefaultToStringOptions)
+		s, err := t.String(temporal.DefaultToStringOptions())
 		return s, rt.temporalErr(err)
 	})
 	k.toLocaleString(intl.ComponentsTime, intl.ComponentsTime)
@@ -592,7 +592,7 @@ func (r *Runtime) initTemporalPlainDateTime(ns *Object) {
 		return temporalObject(rt.temporalPlainTimeProto, dt.ToPlainTime()), nil
 	})
 	k.toJSON(func(rt *Runtime, dt temporal.PlainDateTime) (string, error) {
-		s, err := dt.String(temporal.DefaultToStringOptions, temporal.CalendarAuto)
+		s, err := dt.String(temporal.DefaultToStringOptions(), temporal.CalendarAuto)
 		return s, rt.temporalErr(err)
 	})
 	k.toLocaleString(intl.ComponentsAny, intl.ComponentsAll)

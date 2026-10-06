@@ -515,7 +515,7 @@ func (r *Runtime) temporalCanonicalCalendar(s *String) (*temporal.Calendar, erro
 // else a string CanonicalizeCalendar takes.
 func (r *Runtime) temporalCalendarArg(v Value) (*temporal.Calendar, error) {
 	if v.IsUndefined() {
-		return temporal.ISOCalendar, nil
+		return temporal.ISOCalendar(), nil
 	}
 	if !v.IsString() {
 		return nil, r.temporalType("Calendar must be string.")
@@ -534,7 +534,7 @@ func (r *Runtime) temporalCalendarWithISODefault(v Value) (*temporal.Calendar, e
 		return nil, err
 	}
 	if c.IsUndefined() {
-		return temporal.ISOCalendar, nil
+		return temporal.ISOCalendar(), nil
 	}
 	return r.temporalToCalendar(c)
 }
