@@ -1,10 +1,6 @@
 package vm
 
-import (
-	"strconv"
-
-	intl "github.com/go-quickjs/go-intl"
-)
+import intl "github.com/go-quickjs/go-intl"
 
 // go-intl, which Intl, Date's local time and Temporal are built on. Each
 // service builds its go-intl formatter from the options it has read, in the
@@ -176,19 +172,6 @@ func (o *numberOptions) intlDigits() intlDigits {
 		d.compact = intl.CompactLong
 	}
 	return d
-}
-
-// intlDecimal is a numeric string as numberArgument read it, as go-intl
-// takes it: its exact digits.
-func intlDecimal(d decimal) intl.Decimal {
-	text := "0"
-	if d.digits != "" {
-		text = "0." + d.digits + "e" + strconv.Itoa(d.exp)
-	}
-	if d.negative {
-		text = "-" + text
-	}
-	return intl.ParseDecimal(text)
 }
 
 // intlOptions is a NumberFormat's options, as the runtime settled them, as

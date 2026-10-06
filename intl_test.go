@@ -1124,11 +1124,11 @@ func TestIntlUnknownSubtagsAndFieldNames(t *testing.T) {
 // as a double for ApproximateIncrement to read it as ICU does: format,
 // formatToParts and toLocaleString give one answer, while a numeric string,
 // never a double, and a range's ends, which ICU's range formatter reads
-// accurately, are
-// the standard's on both sides. A BigInt is kept exact on both sides, a
-// range of two past a double's range too, which Node writes as "~" and one
-// end. HostAbbreviations, the host's zone where nothing names it, depends on
-// the machine, and go-intl's own tests pin it.
+// accurately, are the standard's on both sides; a hexadecimal, octal or
+// binary string is read exactly too, as V8 reads it. A BigInt is kept exact
+// on both sides, a range of two past a double's range too, which Node writes
+// as "~" and one end. HostAbbreviations, the host's zone where nothing names
+// it, depends on the machine, and go-intl's own tests pin it.
 func TestIntlNodeDivergencesV040(t *testing.T) {
 	const inc = `{minimumFractionDigits: 2, maximumFractionDigits: 2, roundingIncrement: 2}`
 	for _, c := range []struct {
@@ -1148,6 +1148,11 @@ func TestIntlNodeDivergencesV040(t *testing.T) {
 			nf.formatRange(0.30000000000000004, 3.9967620239602476e27)].join("|"))(new Intl.NumberFormat("en", ` + inc + `))`,
 			"3,996,762,023,960,247,600,000,000,000.00|0.30–3,996,762,023,960,247,600,000,000,000.00",
 			"3,996,762,023,960,247,600,000,000,000.00|0.30–3,996,762,023,960,247,600,000,000,000.00"},
+		{"numeric strings", `(nf => [nf.format("0x1fffffffffffffffff"), nf.format("0o777"), nf.format("-0x10"),
+			nf.format(""), nf.formatRange("", 5), nf.formatRange("0x10", "0x1fffffffffffffffff"),
+			new Intl.NumberFormat("en", ` + inc + `).format("0x" + "f".repeat(16))].join("|"))(new Intl.NumberFormat("en"))`,
+			"590,295,810,358,705,651,711|511|NaN|0|0–5|16–590,295,810,358,705,651,711|18,446,744,073,709,551,615.00",
+			"590,295,810,358,705,651,711|511|NaN|0|0–5|16–590,295,810,358,705,651,711|18,446,744,073,709,551,615.00"},
 		{"CurrencyFormats", `["symbol", "name"].map(d => new Intl.NumberFormat("en-DE",
 			{style: "currency", currency: "USD", currencyDisplay: d}).format(-1234.5)).join("|")`,
 			"-1.234,50\u00a0US$|-1.234,50 US dollars", "-US$1,234.50|-US$1,234.50 US dollars"},

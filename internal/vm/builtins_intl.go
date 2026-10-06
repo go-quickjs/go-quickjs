@@ -3,6 +3,7 @@ package vm
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -264,8 +265,8 @@ func allAlphanumeric(s string) bool {
 // nearest number a machine can hold, so that a value too long for a double
 // still comes out right. A number is handed over as the double it is where
 // double says so, which go-intl then reads as ICU does where Node's answer
-// is asked for (ApproximateIncrement), and as its shortest decimal where
-// not.
+// is asked for (ApproximateIncrement), and as its shortest decimal, never a
+// double, where not.
 func (r *Runtime) numberArgument(v Value, double bool) (intl.Decimal, error) {
 	if v.IsBigInt() {
 		// A BigInt is taken as the integer it is, however large, where a
@@ -278,26 +279,21 @@ func (r *Runtime) numberArgument(v Value, double bool) (intl.Decimal, error) {
 		return intl.Decimal{}, err
 	}
 	if prim.IsString() {
-		// JavaScript's whitespace, which is not Go's: U+0085 is not trimmed.
-		text := strings.Trim(prim.String().Go(), jsWhitespace)
-		switch text {
-		case "":
-			return intl.Decimal{}, nil
-		case "Infinity", "+Infinity":
-			return intl.DecimalFromFloat(math.Inf(1)), nil
-		case "-Infinity":
-			return intl.DecimalFromFloat(math.Inf(-1)), nil
-		}
-		if d, ok := parseDecimal(text); ok {
-			if r.nodeQuirks && d.digits != "" && d.exp-1 < -999999999 {
+		// go-intl reads it as ToIntlMathematicalValue does: JavaScript's
+		// numeric string grammar, hexadecimal, octal and binary digits
+		// included, exactly.
+		text := prim.String().Go()
+		if r.nodeQuirks {
+			// JavaScript's whitespace, which is not Go's: U+0085 is not trimmed.
+			if d, ok := parseDecimal(strings.Trim(text, jsWhitespace)); ok && d.digits != "" && d.exp-1 < -999999999 {
 				// ICU holds a number whose first digit is no further below the
 				// point than this, and V8 reports one that is as ICU's failure.
 				// The standard has no such bound: the number is written as
 				// any other, which rounds it to zero.
 				return intl.Decimal{}, r.throwTypeError("Internal error. Icu error.")
 			}
-			return intlDecimal(d), nil
 		}
+		return intl.ParseDecimal(text), nil
 	}
 	x, err := r.toNumber(prim)
 	if err != nil {
@@ -306,7 +302,7 @@ func (r *Runtime) numberArgument(v Value, double bool) (intl.Decimal, error) {
 	if double || math.IsNaN(x) || math.IsInf(x, 0) {
 		return intl.DecimalFromFloat(x), nil
 	}
-	return intlDecimal(decimalOf(x)), nil
+	return intl.ParseDecimal(strconv.FormatFloat(x, 'e', -1, 64)), nil
 }
 
 // legacyFormatter is what a formatter made without new answers with. Called as

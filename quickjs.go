@@ -209,10 +209,12 @@ func WithLocale(tag string) Option {
 // signDisplay "never" by the plain currency pattern, Norwegian -1 euro
 // "1,00 €" where the standard writes "€ 1,00"; writes a currency in the
 // format of the currency of the locale's region where that has one of its
-// own, German English dollars "-US$1,234.50" rather than "-1.234,50 US$";
+// own, US dollars in en-DE "-US$1,234.50" rather than "-1.234,50 US$";
 // and rounds a number to an increment other than 1 or 5 from ICU's fast
 // reading of the double, which past about sixteen digits is not the double's
-// own decimal. Intl.RelativeTimeFormat with numeric "auto" names in words any
+// own decimal -- though not a numeric string, which was never a double, nor
+// formatRange's ends, which ICU's range formatter reads accurately.
+// Intl.RelativeTimeFormat with numeric "auto" names in words any
 // offset within 0.005 of a whole one from -2 to 2, 1.004 days "tomorrow"
 // where the standard writes "in 1.004 days". Intl.ListFormat's formatToParts
 // leaves an empty item out, joining the literals either side of it.
