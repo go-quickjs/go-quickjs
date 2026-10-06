@@ -151,6 +151,14 @@ runs without a frame, and never reaches `runFD`.
   hottest call code, about 150 lines with its tail-call loop, to save a
   Go frame on calls the frameless evaluator does not already answer, which
   are the minority of the suite's hot calls.
+- Done later (2026-10-05, `0820228`), in a smaller form: `callTree`, about
+  60 lines without the tail-call loop, for a function whose call needs
+  nothing but the frame, which `planTreeCall` decides once and keeps in
+  `funcData.treeCall`; `callDirect` asks that first. V8 suite over eight
+  placements: total -1.4%, Crypto -2.8%, EarleyBoyer -2.9%, Splay -2.1%,
+  Richards and DeltaBlue -1.7%. Testing it in the tree's call nodes as
+  well cost DeltaBlue 4 to 6%: its unplanned, mostly pure callees then
+  found their funcData twice.
 
 ### A4. Cheaper calls from trees, then no call-density gate
 
