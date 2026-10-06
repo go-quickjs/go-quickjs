@@ -262,29 +262,31 @@ func allAlphanumeric(s string) bool {
 // numberArgument reads the value to format, which is not always a number: a
 // string is taken as the exact decimal it is written as rather than as the
 // nearest number a machine can hold, so that a value too long for a double
-// still comes out right.
-func (r *Runtime) numberArgument(v Value) (decimal, string, error) {
+// still comes out right. A number is handed over as the double it is where
+// double says so, which go-intl then reads as ICU does where Node's answer
+// is asked for (ApproximateIncrement), and as its shortest decimal where
+// not.
+func (r *Runtime) numberArgument(v Value, double bool) (intl.Decimal, error) {
 	if v.IsBigInt() {
 		// A BigInt is taken as the integer it is, however large, where a
-		// string past a double's range is an infinity (KI-53).
-		if d, ok := parseDecimal(v.BigInt().V.String()); ok {
-			return d, "exact", nil
-		}
+		// string past a double's range is an infinity (KI-53): its own
+		// decimal string, which has no exponent, is kept as it is written.
+		return intl.ParseExactDecimal(v.BigInt().V.String()), nil
 	}
 	prim, err := r.toPrimitive(v, hintNumber)
 	if err != nil {
-		return decimal{}, "", err
+		return intl.Decimal{}, err
 	}
 	if prim.IsString() {
 		// JavaScript's whitespace, which is not Go's: U+0085 is not trimmed.
 		text := strings.Trim(prim.String().Go(), jsWhitespace)
 		switch text {
 		case "":
-			return decimal{}, "", nil
+			return intl.Decimal{}, nil
 		case "Infinity", "+Infinity":
-			return decimal{}, "inf", nil
+			return intl.DecimalFromFloat(math.Inf(1)), nil
 		case "-Infinity":
-			return decimal{}, "-inf", nil
+			return intl.DecimalFromFloat(math.Inf(-1)), nil
 		}
 		if d, ok := parseDecimal(text); ok {
 			if r.nodeQuirks && d.digits != "" && d.exp-1 < -999999999 {
@@ -292,24 +294,19 @@ func (r *Runtime) numberArgument(v Value) (decimal, string, error) {
 				// point than this, and V8 reports one that is as ICU's failure.
 				// The standard has no such bound: the number is written as
 				// any other, which rounds it to zero.
-				return decimal{}, "", r.throwTypeError("Internal error. Icu error.")
+				return intl.Decimal{}, r.throwTypeError("Internal error. Icu error.")
 			}
-			return d, "", nil
+			return intlDecimal(d), nil
 		}
 	}
 	x, err := r.toNumber(prim)
 	if err != nil {
-		return decimal{}, "", err
+		return intl.Decimal{}, err
 	}
-	switch {
-	case math.IsNaN(x):
-		return decimal{}, "nan", nil
-	case math.IsInf(x, 1):
-		return decimal{}, "inf", nil
-	case math.IsInf(x, -1):
-		return decimal{}, "-inf", nil
+	if double || math.IsNaN(x) || math.IsInf(x, 0) {
+		return intl.DecimalFromFloat(x), nil
 	}
-	return decimalOf(x), "", nil
+	return intlDecimal(decimalOf(x)), nil
 }
 
 // legacyFormatter is what a formatter made without new answers with. Called as
@@ -556,11 +553,11 @@ func (r *Runtime) initNumberFormat(intlObj *Object) {
 			return Undefined, err
 		}
 		return rt.bound(&o.formatFn, 1, func(rt *Runtime, _ Value, args []Value) (Value, error) {
-			d, special, err := rt.numberArgument(arg(args, 0))
+			d, err := rt.numberArgument(arg(args, 0), true)
 			if err != nil {
 				return Undefined, err
 			}
-			return Str(NewString(o.nf.FormatDecimal(intlDecimal(d, special)))), nil
+			return Str(NewString(o.nf.FormatDecimal(d))), nil
 		}), nil
 	})
 	r.defMethod(proto, "formatRange", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -582,11 +579,11 @@ func (r *Runtime) initNumberFormat(intlObj *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		d, special, err := rt.numberArgument(arg(args, 0))
+		d, err := rt.numberArgument(arg(args, 0), true)
 		if err != nil {
 			return Undefined, err
 		}
-		parts := o.nf.FormatDecimalToParts(intlDecimal(d, special))
+		parts := o.nf.FormatDecimalToParts(d)
 		out := make([]Value, len(parts))
 		for i, p := range parts {
 			out[i] = Obj(rt.partObject(string(p.Kind), p.Value))
@@ -1075,8 +1072,10 @@ func temporalDateTimeKind(v Value) string {
 // DateTimeFormat and Temporal.Now take where they are given none: the name
 // the zone was set by, as ICU spells it, or its canonical name, whichever a
 // DateTimeFormat takes first -- a custom zone, "GMT+05:30", is "+05:30" --
-// or else its offset now, which for Etc/Unknown, where Node reports that,
-// is UTC.
+// or else its offset now. A host zone that nothing names is such a custom
+// zone at the host's offset, as ECMA-262 has it; under Node's quirks it is
+// ICU's guess from the C library's abbreviations, or Etc/Unknown, whose
+// offset is UTC (go-intl's HostAbbreviations).
 func (r *Runtime) localZoneName() string {
 	tz := r.dateEnv().TimeZone()
 	canonical, _ := tz.Canonical()
@@ -1113,21 +1112,25 @@ func (r *Runtime) numberRange(this Value, args []Value, method string) (*rangePi
 	if arg(args, 1).IsUndefined() {
 		return nil, r.intlInvalidType("end", "undefined")
 	}
-	from, fromSpecial, err := r.numberArgument(arg(args, 0))
+	// A range's ends are rounded from their decimals, under Node's quirks
+	// too: ICU's range formatter reads each double through a Formattable,
+	// which corrects its fast reading (roundToInfinity), where formatDouble,
+	// which format uses, keeps it.
+	from, err := r.numberArgument(arg(args, 0), false)
 	if err != nil {
 		return nil, err
 	}
-	to, toSpecial, err := r.numberArgument(arg(args, 1))
+	to, err := r.numberArgument(arg(args, 1), false)
 	if err != nil {
 		return nil, err
 	}
-	if fromSpecial == "nan" {
+	if from.IsNaN() {
 		return nil, r.intlInvalidRange("start", "NaN")
 	}
-	if toSpecial == "nan" {
+	if to.IsNaN() {
 		return nil, r.intlInvalidRange("end", "NaN")
 	}
-	parts, err := o.nf.FormatDecimalRangeToParts(intlDecimal(from, fromSpecial), intlDecimal(to, toSpecial))
+	parts, err := o.nf.FormatDecimalRangeToParts(from, to)
 	if err != nil {
 		return nil, r.intlInternal()
 	}

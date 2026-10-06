@@ -1117,3 +1117,61 @@ func TestIntlUnknownSubtagsAndFieldNames(t *testing.T) {
 		t.Errorf("quirks: %s", got)
 	}
 }
+
+// TestIntlNodeDivergencesV040 pins both answers to the divergences go-intl
+// v0.4.0 names: the standard's, and under WithNodeQuirks Node 26.10's. Each
+// formatter has to be handed the runtime's choice, and a number handed over
+// as a double for ApproximateIncrement to read it as ICU does: format,
+// formatToParts and toLocaleString give one answer, while a numeric string,
+// never a double, and a range's ends, which ICU's range formatter reads
+// accurately, are
+// the standard's on both sides. A BigInt is kept exact on both sides, a
+// range of two past a double's range too, which Node writes as "~" and one
+// end. HostAbbreviations, the host's zone where nothing names it, depends on
+// the machine, and go-intl's own tests pin it.
+func TestIntlNodeDivergencesV040(t *testing.T) {
+	const inc = `{minimumFractionDigits: 2, maximumFractionDigits: 2, roundingIncrement: 2}`
+	for _, c := range []struct {
+		name, src, standard, node string
+	}{
+		{"AccountingNever", `new Intl.NumberFormat("nb", {style: "currency", currency: "EUR",
+			currencySign: "accounting", signDisplay: "never"}).format(-1)`, "€\u00a01,00", "1,00\u00a0€"},
+		{"RelativeEpsilon", `(r => [r.format(0.0001, "day"), r.format(1.004, "day"), r.format(-1.996, "day")].join("|"))(
+			new Intl.RelativeTimeFormat("en", {numeric: "auto"}))`,
+			"in 0 days|in 1.004 days|1.996 days ago", "today|tomorrow|1.996 days ago"},
+		{"ApproximateIncrement", `(nf => [nf.format(3.9967620239602476e27),
+			nf.formatToParts(1.2345678901234567e20).map(p => p.value).join(""),
+			(0.30000000000000004).toLocaleString("en", ` + inc + `)].join("|"))(new Intl.NumberFormat("en", ` + inc + `))`,
+			"3,996,762,023,960,247,600,000,000,000.00|123,456,789,012,345,670,000.00|0.30",
+			"3,996,762,023,960,248,000,000,000,000.00|123,456,789,012,345,660,000.00|0.30"},
+		{"ApproximateIncrement, decimals", `(nf => [nf.format("3.9967620239602476e27"),
+			nf.formatRange(0.30000000000000004, 3.9967620239602476e27)].join("|"))(new Intl.NumberFormat("en", ` + inc + `))`,
+			"3,996,762,023,960,247,600,000,000,000.00|0.30–3,996,762,023,960,247,600,000,000,000.00",
+			"3,996,762,023,960,247,600,000,000,000.00|0.30–3,996,762,023,960,247,600,000,000,000.00"},
+		{"CurrencyFormats", `["symbol", "name"].map(d => new Intl.NumberFormat("en-DE",
+			{style: "currency", currency: "USD", currencyDisplay: d}).format(-1234.5)).join("|")`,
+			"-1.234,50\u00a0US$|-1.234,50 US dollars", "-US$1,234.50|-US$1,234.50 US dollars"},
+		{"EmptyListItems", `[["a", "", "b"], [""]].map(l => JSON.stringify(new Intl.ListFormat("en").formatToParts(l)
+			.map(p => p.type[0] + ":" + p.value))).join("|")`,
+			`["e:a","l:, ","e:","l:, and ","e:b"]|["e:"]`, `["e:a","l:, , and ","e:b"]|[]`},
+		{"HourCycleStyles", `new Intl.DateTimeFormat("en-US-u-hc-h23", {timeStyle: "medium", hour12: true,
+			timeZone: "UTC"}).format(Date.UTC(2020, 0, 1, 14, 12, 47))`, "2:12:47 PM", "02:12:47 PM"},
+		{"IdenticalPrefix", `[new Intl.Collator("ar", {numeric: true}).compare("١٥", "١٠٠"),
+			new Intl.Collator("en", {numeric: true}).compare("1é", "1𝟏"),
+			new Intl.Collator("en", {ignorePunctuation: true}).compare("-", "-ं")].join(" ")`, "-1 -1 0", "1 1 -1"},
+		{"BigInt", `(nf => [nf.format(-(10n ** 20n) - 1n), nf.format(10n ** 400n).length,
+			nf.formatRange(10n ** 400n, 10n ** 401n).length].join("|"))(new Intl.NumberFormat("en"))`,
+			"-100,000,000,000,000,000,001|534|1070", "-100,000,000,000,000,000,001|534|1070"},
+	} {
+		for _, side := range []struct {
+			opts []quickjs.Option
+			want string
+		}{{nil, c.standard}, {[]quickjs.Option{quickjs.WithNodeQuirks()}, c.node}} {
+			rt := quickjs.New(side.opts...)
+			if got := evalString(t, rt, c.src); got != side.want {
+				t.Errorf("%s, %d options: %q, want %q", c.name, len(side.opts), got, side.want)
+			}
+			rt.Close()
+		}
+	}
+}

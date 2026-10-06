@@ -1,9 +1,7 @@
 package vm
 
 import (
-	"math"
 	"strconv"
-	"strings"
 
 	intl "github.com/go-quickjs/go-intl"
 )
@@ -180,30 +178,9 @@ func (o *numberOptions) intlDigits() intlDigits {
 	return d
 }
 
-// intlDecimal is a number as numberArgument read it, as go-intl takes it:
-// its exact digits, or NaN or an infinity.
-func intlDecimal(d decimal, special string) intl.Decimal {
-	switch special {
-	case "nan":
-		return intl.DecimalFromFloat(math.NaN())
-	case "inf":
-		return intl.DecimalFromFloat(math.Inf(1))
-	case "-inf":
-		return intl.DecimalFromFloat(math.Inf(-1))
-	}
-	if special == "exact" && d.exp >= len(d.digits) {
-		// A BigInt, an integer, written out as its own decimal string is:
-		// go-intl keeps a number exactly only as far as its digits are
-		// written, and reads one with an exponent as a string.
-		text := d.digits + strings.Repeat("0", d.exp-len(d.digits))
-		if d.digits == "" {
-			text = "0"
-		}
-		if d.negative {
-			text = "-" + text
-		}
-		return intl.ParseExactDecimal(text)
-	}
+// intlDecimal is a numeric string as numberArgument read it, as go-intl
+// takes it: its exact digits.
+func intlDecimal(d decimal) intl.Decimal {
 	text := "0"
 	if d.digits != "" {
 		text = "0." + d.digits + "e" + strconv.Itoa(d.exp)

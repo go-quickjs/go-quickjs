@@ -205,6 +205,24 @@ func WithLocale(tag string) Option {
 // does, though the script is "Zzzz" or the region "ZZ", which the standard
 // fills in: "en-Zzzz-US" rather than "en-Latn-US".
 //
+// Under it, as ICU does, Intl.NumberFormat writes an accounting amount with
+// signDisplay "never" by the plain currency pattern, Norwegian -1 euro
+// "1,00 €" where the standard writes "€ 1,00"; writes a currency in the
+// format of the currency of the locale's region where that has one of its
+// own, German English dollars "-US$1,234.50" rather than "-1.234,50 US$";
+// and rounds a number to an increment other than 1 or 5 from ICU's fast
+// reading of the double, which past about sixteen digits is not the double's
+// own decimal. Intl.RelativeTimeFormat with numeric "auto" names in words any
+// offset within 0.005 of a whole one from -2 to 2, 1.004 days "tomorrow"
+// where the standard writes "in 1.004 days". Intl.ListFormat's formatToParts
+// leaves an empty item out, joining the literals either side of it.
+// Intl.DateTimeFormat makes a time style in a locale's -u-hc cycle even where
+// hour12 overrode it, "02:12:47 PM" rather than "2:12:47 PM". Intl.Collator
+// compares two strings from after the prefix they share, as ICU's does, so
+// that with numeric Arabic-Indic 15 sorts after 100. And the host's zone, where
+// nothing names it, is ICU's guess from the C library's abbreviations, or
+// Etc/Unknown on Windows, where the standard takes the host's offset.
+//
 // It is useful for hosts that prioritize Node compatibility over conformance.
 func WithNodeQuirks() Option {
 	return func(c *config) { c.nodeQuirks = true }

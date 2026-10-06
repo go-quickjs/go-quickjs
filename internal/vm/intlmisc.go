@@ -567,8 +567,9 @@ func (r *Runtime) initListFormat(intlObj *Object) {
 			return Undefined, err
 		}
 		opts := intl.ListFormatOptions{
-			Type:  map[string]intl.ListType{"conjunction": intl.Conjunction, "disjunction": intl.Disjunction, "unit": intl.UnitList}[o.kind],
-			Style: map[string]intl.ListStyle{"long": intl.ListLong, "short": intl.ListShort, "narrow": intl.ListNarrow}[o.style],
+			Type:   map[string]intl.ListType{"conjunction": intl.Conjunction, "disjunction": intl.Disjunction, "unit": intl.UnitList}[o.kind],
+			Style:  map[string]intl.ListStyle{"long": intl.ListLong, "short": intl.ListShort, "narrow": intl.ListNarrow}[o.style],
+			Compat: rt.intlCompat(),
 		}
 		if o.format, err = intl.NewListFormat(loc, opts); err != nil {
 			return Undefined, rt.intlInternal()
@@ -698,7 +699,7 @@ func (r *Runtime) initRelativeTimeFormat(intlObj *Object) {
 		if o.numeric, err = rt.stringOption(options, "numeric", "always", "always", "auto"); err != nil {
 			return Undefined, err
 		}
-		opts := intl.RelativeTimeFormatOptions{NumberingSystem: numbering,
+		opts := intl.RelativeTimeFormatOptions{NumberingSystem: numbering, Compat: rt.intlCompat(),
 			Style: map[string]intl.RelativeTimeStyle{"long": intl.RelativeLong,
 				"short": intl.RelativeShort, "narrow": intl.RelativeNarrow}[o.style]}
 		if o.numeric == "auto" {
