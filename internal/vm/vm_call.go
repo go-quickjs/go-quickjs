@@ -145,15 +145,27 @@ func (r *Runtime) pushNativeFrame(o *Object, this Value, args []Value, newTarget
 	return r.nativeFrame(o, o.fn(), this, args, newTarget)
 }
 
-// callFromLoop is call for the interpreter's call instructions, and for the
-// built-ins that call a callback once per element -- sort, forEach, map and
-// the rest -- whose callbacks are as often small as a loop's. A compiled
-// function of this realm that runs when called -- not a generator, whose body
-// waits for next(), not a class constructor, which a call refuses, not bound
-// -- is run directly: what callObject and callClosure would have established
-// about it, it establishes in one place. Anything else is called as call
-// calls it.
-func (r *Runtime) callFromLoop(callee, this Value, args []Value) (Value, error) {
+// callDirect is call for the engine's own calls of what is most often a
+// compiled function: the interpreter's and the tree tier's call
+// instructions, f.call(...), a bound function's target, a getter or setter
+// a property cache remembers, and the callbacks sort, forEach, map and the
+// other array methods call once per element. What call would find out
+// through callObject and callClosure, it asks in one place, in this order:
+//
+//   - a function planTreeCall has given a tree is called on it, by
+//     callTree;
+//   - a Math function given numbers is applied here, without a frame;
+//   - Function.prototype.call is made by callThrough;
+//   - a compiled function of this realm that runs when called -- not a
+//     generator, whose body waits for next(), not a class constructor,
+//     which a call refuses, not bound -- is run directly: a pure body by
+//     pureCall, and a leaf that reads or writes its this by leafCall,
+//     without a frame where they can, and otherwise by runFD, after which
+//     planTreeCall decides about it;
+//   - a built-in of this realm is called in a native frame.
+//
+// Anything else is called as call calls it.
+func (r *Runtime) callDirect(callee, this Value, args []Value) (Value, error) {
 	if callee.IsObject() {
 		o := callee.Object()
 		fd := o.fn()
@@ -238,7 +250,7 @@ func (r *Runtime) callThrough(call *Object, f Value, args []Value) (Value, error
 	if err := r.pushNativeFrame(call, f, args, Undefined); err != nil {
 		return Undefined, err
 	}
-	v, err := r.callFromLoop(f, this, rest)
+	v, err := r.callDirect(f, this, rest)
 	r.frameDepth--
 	return v, err
 }

@@ -10,7 +10,7 @@ import (
 )
 
 // TestCallTree covers calls of functions planTreeCall has given a tree,
-// which are called on it without what callFromLoop and runFD ask of other
+// which are called on it without what callDirect and runFD ask of other
 // calls: each case calls its functions enough times to be planned, and
 // gives what a frame made the other way gives -- this, sloppy and strict,
 // of a plain call and of a primitive receiver; arguments past the

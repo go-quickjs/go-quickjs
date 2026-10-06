@@ -1595,7 +1595,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			args := stack[sp-argc : sp]
 			callee := stack[sp-argc-1]
 			sp -= argc + 1
-			v, err := r.callFromLoop(callee, Undefined, args)
+			v, err := r.callDirect(callee, Undefined, args)
 			if err != nil {
 				vmErr = err
 				goto onError
@@ -1688,7 +1688,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			callee := stack[sp-argc-1]
 			this := stack[sp-argc-2]
 			sp -= argc + 2
-			v, err := r.callFromLoop(callee, this, args)
+			v, err := r.callDirect(callee, this, args)
 			if err != nil {
 				vmErr = err
 				goto onError

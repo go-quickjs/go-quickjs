@@ -15,7 +15,7 @@
 // in files the linker places there:
 //
 //	aaa_pad.go    before everything in the package    executeAt
-//	vm_b_pad.go   after vm.go, before vm_call.go      callFromLoop
+//	vm_b_pad.go   after vm.go, before vm_call.go      callDirect
 //	vm_sz_pad.go  after vm_shape.go, before vm_tree.go runTree
 //	zzz_pad.go    after every file, before the closures binaryNode.func1
 //
@@ -107,7 +107,7 @@ func exePath(out, label string, n int) string {
 // the targets, as go tool nm names them after the package's path.
 var (
 	pads    = [4]string{"internal/vm/aaa_pad.go", "internal/vm/vm_b_pad.go", "internal/vm/vm_sz_pad.go", "internal/vm/zzz_pad.go"}
-	targets = [4]string{"(*Runtime).executeAt", "(*Runtime).callFromLoop", "(*Runtime).runTree", "binaryNode.func1"}
+	targets = [4]string{"(*Runtime).executeAt", "(*Runtime).callDirect", "(*Runtime).runTree", "binaryNode.func1"}
 )
 
 const (

@@ -1520,7 +1520,7 @@ func (r *Runtime) initArrayBuiltins() {
 				continue
 			}
 			argv[0], argv[1], argv[2] = el, Float(float64(i)), Obj(a.o)
-			if _, err := rt.callFromLoop(cb, thisArg, argv[:]); err != nil {
+			if _, err := rt.callDirect(cb, thisArg, argv[:]); err != nil {
 				return Undefined, err
 			}
 		}
@@ -1549,7 +1549,7 @@ func (r *Runtime) initArrayBuiltins() {
 				continue
 			}
 			argv[0], argv[1], argv[2] = el, Float(float64(i)), Obj(a.o)
-			v, err := rt.callFromLoop(cb, thisArg, argv[:])
+			v, err := rt.callDirect(cb, thisArg, argv[:])
 			if err != nil {
 				return Undefined, err
 			}
@@ -1578,7 +1578,7 @@ func (r *Runtime) initArrayBuiltins() {
 				continue
 			}
 			argv[0], argv[1], argv[2] = el, Float(float64(i)), Obj(a.o)
-			keep, err := rt.callFromLoop(cb, thisArg, argv[:])
+			keep, err := rt.callDirect(cb, thisArg, argv[:])
 			if err != nil {
 				return Undefined, err
 			}
@@ -1625,7 +1625,7 @@ func (r *Runtime) initArrayBuiltins() {
 				continue
 			}
 			argv[0], argv[1], argv[2] = el, Float(float64(i)), Obj(a.o)
-			res, err := rt.callFromLoop(cb, thisArg, argv[:])
+			res, err := rt.callDirect(cb, thisArg, argv[:])
 			if err != nil {
 				return Undefined, err
 			}
@@ -1650,7 +1650,7 @@ func (r *Runtime) initArrayBuiltins() {
 				continue
 			}
 			argv[0], argv[1], argv[2] = el, Float(float64(i)), Obj(a.o)
-			res, err := rt.callFromLoop(cb, thisArg, argv[:])
+			res, err := rt.callDirect(cb, thisArg, argv[:])
 			if err != nil {
 				return Undefined, err
 			}
@@ -1743,7 +1743,7 @@ func (r *Runtime) findIn(a *arrayLike, cb, thisArg Value, backwards bool) (Value
 			return Undefined, -1, err
 		}
 		argv[0], argv[1], argv[2] = el, Float(float64(i)), Obj(a.o)
-		ok, err := r.callFromLoop(cb, thisArg, argv[:])
+		ok, err := r.callDirect(cb, thisArg, argv[:])
 		if err != nil {
 			return Undefined, -1, err
 		}
@@ -1813,7 +1813,7 @@ func (r *Runtime) reduceArray(this Value, args []Value, backwards bool) (Value, 
 			continue
 		}
 		argv[0], argv[1], argv[2], argv[3] = acc, el, Float(float64(i)), Obj(a.o)
-		acc, err = r.callFromLoop(cb, Undefined, argv[:])
+		acc, err = r.callDirect(cb, Undefined, argv[:])
 		if err != nil {
 			return Undefined, err
 		}
@@ -2952,7 +2952,7 @@ func (r *Runtime) compareForSort(x, y, cmp Value, argv *[2]Value) (bool, error) 
 	}
 	if isCallable(cmp) {
 		argv[0], argv[1] = x, y
-		res, err := r.callFromLoop(cmp, Undefined, argv[:])
+		res, err := r.callDirect(cmp, Undefined, argv[:])
 		if err != nil {
 			return false, err
 		}

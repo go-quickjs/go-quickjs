@@ -41,7 +41,7 @@ func planTreeCall(fd *funcData) {
 }
 
 // callTree calls o, whose funcData planTreeCall has given a tree, with this
-// and args, once callFromLoop has found it a compiled function of this
+// and args, once callDirect has found it a compiled function of this
 // realm and made its interrupt check: runFD's call for a function with no
 // extra, run as its tree. A sloppy body's this that is a primitive is left
 // to runFD, which wraps it.

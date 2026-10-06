@@ -443,7 +443,7 @@ func (r *Runtime) cachedGet(c *propCache, o *Object, key Atom) (Value, bool, err
 		if a == nil || a.getter == nil {
 			return Undefined, true, nil
 		}
-		v, err := r.callFromLoop(Obj(a.getter), Obj(o), nil)
+		v, err := r.callDirect(Obj(a.getter), Obj(o), nil)
 		return v, true, err
 	}
 	if c.fills >= maxCacheFills {

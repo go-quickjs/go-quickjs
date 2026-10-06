@@ -53,7 +53,7 @@ func (r *Runtime) fillSetterCache(c *propCache, o *Object, key Atom, before *sha
 func (r *Runtime) callSetter(setter, o *Object, v Value) error {
 	i := len(r.argStack)
 	r.argStack = append(r.argStack, v)
-	_, err := r.callFromLoop(Obj(setter), Obj(o), r.argStack[i:i+1:i+1])
+	_, err := r.callDirect(Obj(setter), Obj(o), r.argStack[i:i+1:i+1])
 	r.argStack[i] = Undefined
 	r.argStack = r.argStack[:i]
 	return err

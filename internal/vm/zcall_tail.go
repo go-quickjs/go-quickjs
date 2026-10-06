@@ -56,7 +56,7 @@ func tailCallNode(p, n, this, pc int) tval {
 			r.treeTail = true
 			return Undefined
 		}
-		v, err := r.callFromLoop(c.stack[p], recv, args)
+		v, err := r.callDirect(c.stack[p], recv, args)
 		if err != nil {
 			c.throw(err)
 		}

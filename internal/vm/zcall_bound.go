@@ -3,7 +3,7 @@ package vm
 // callBound is callObject's call of a bound function: the bound arguments
 // put before the ones given, the bound this in place of the one given, a
 // level of Go recursion entered -- and the target then called the way
-// callFromLoop calls, which runs a compiled function directly, rather than
+// callDirect calls, which runs a compiled function directly, rather than
 // through callObject again. The arguments are put together on the
 // runtime's argument stack, where a callee may not keep them, rather than
 // in a list made for the call.
@@ -19,7 +19,7 @@ func (r *Runtime) callBound(fd *funcData, args []Value) (Value, error) {
 	}
 	x := fd.extra
 	if len(x.boundArgs) == 0 {
-		v, err := r.callFromLoop(Obj(x.boundTarget), x.boundThis, args)
+		v, err := r.callDirect(Obj(x.boundTarget), x.boundThis, args)
 		r.unnest()
 		return v, err
 	}
@@ -27,7 +27,7 @@ func (r *Runtime) callBound(fd *funcData, args []Value) (Value, error) {
 	r.argStack = append(r.argStack, x.boundArgs...)
 	r.argStack = append(r.argStack, args...)
 	n := len(r.argStack)
-	v, err := r.callFromLoop(Obj(x.boundTarget), x.boundThis, r.argStack[i:n:n])
+	v, err := r.callDirect(Obj(x.boundTarget), x.boundThis, r.argStack[i:n:n])
 	clear(r.argStack[i:n])
 	r.argStack = r.argStack[:i]
 	r.unnest()

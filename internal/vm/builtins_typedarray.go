@@ -1704,7 +1704,7 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 				return compareNumeric(x, y) < 0, nil
 			}
 			argv[0], argv[1] = x, y
-			res, err := rt.callFromLoop(cmp, Undefined, argv[:])
+			res, err := rt.callDirect(cmp, Undefined, argv[:])
 			if err != nil {
 				return false, err
 			}

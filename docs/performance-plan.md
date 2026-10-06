@@ -127,9 +127,9 @@ An empty call costs 42 ns, against 31 in QuickJS. Outside `executeAt`:
   data on every call, for fields almost no function uses; one flag set when
   the closure is made can stand for them. Its two loops that fill locals with
   undefined can be one.
-- A call is three Go frames -- `callFromLoop`, `runFD`, `executeAt` -- with
+- A call is three Go frames -- `callDirect`, `runFD`, `executeAt` -- with
   nine argument registers spilled and reloaded between the first two. A
-  `runFD` specialized for `callFromLoop`'s direct path drops one.
+  `runFD` specialized for `callDirect`'s direct path drops one.
 - Expected: 2 to 5 ns a call; DeltaBlue and Richards 1 to 3%. None of it is
   in `executeAt`, whose layout is the lottery.
 
@@ -147,7 +147,7 @@ runs without a frame, and never reaches `runFD`.
   `frameHigh` update to the pops means twelve places that decrement the
   depth, any one of them missed leaving returned frames uncleared, for
   about 2 ns a frame.
-- Declined: a specialized `runFD` for `callFromLoop`. It would copy the
+- Declined: a specialized `runFD` for `callDirect`. It would copy the
   hottest call code, about 150 lines with its tail-call loop, to save a
   Go frame on calls the frameless evaluator does not already answer, which
   are the minority of the suite's hot calls.
@@ -408,7 +408,7 @@ made a yield 14% faster, but is a change to `executeAt`, which cost Crypto
 
 **C4, done:** `callObject` hands a bound function's call to `callBound`,
 which merges its arguments on the runtime's stack and calls the target the
-way `callFromLoop` does. Bound calls -16% to -40%, `map` with a bound
+way `callDirect` does. Bound calls -16% to -40%, `map` with a bound
 callback -32%. It was first declined: single builds and the first
 eight-placement harness put Crypto 7 to 11% slower. That harness moved the
 whole package, so the distances between `executeAt`, the call path,

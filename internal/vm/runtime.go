@@ -382,8 +382,8 @@ type Realm struct {
 	// applyFn is Function.prototype.apply, which a call of apply given a
 	// function's own arguments stands in for; see applyArguments.
 	applyFn *Object
-	// callFn is Function.prototype.call, whose calls from the interpreter's
-	// loop callFromLoop makes itself; see callThrough.
+	// callFn is Function.prototype.call, whose calls callDirect makes
+	// itself; see callThrough.
 	callFn *Object
 	// regexpFlagProps is RegExp.prototype's flags getter and the getters it
 	// reads, as the realm made them: see builtinFlags.

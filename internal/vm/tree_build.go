@@ -1788,7 +1788,7 @@ func callNode(op bytecode.Op, p, n, this, pc int) tval {
 	case bytecode.OpCallMethod:
 		return func(c *tctx) Value {
 			c.at(pc)
-			v, err := c.r.callFromLoop(c.stack[p], c.stack[this], c.stack[p+1:p+1+n])
+			v, err := c.r.callDirect(c.stack[p], c.stack[this], c.stack[p+1:p+1+n])
 			if err != nil {
 				c.throw(err)
 			}
@@ -1797,7 +1797,7 @@ func callNode(op bytecode.Op, p, n, this, pc int) tval {
 	}
 	return func(c *tctx) Value {
 		c.at(pc)
-		v, err := c.r.callFromLoop(c.stack[p], Undefined, c.stack[p+1:p+1+n])
+		v, err := c.r.callDirect(c.stack[p], Undefined, c.stack[p+1:p+1+n])
 		if err != nil {
 			c.throw(err)
 		}
