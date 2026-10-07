@@ -221,28 +221,53 @@ func truthy(v Value) bool {
 
 // elemAt is an element in an array's dense storage, as get_index reads one
 // first thing, or false.
+//
+// The key is not asked whether it is a number: every other value's num is
+// a NaN, which the round trip through uint32 never gives back, so the test
+// that the key is an index is that test too. Each test leaves on failure,
+// rather than joining the next with &&, which Go compiles to a flag kept
+// in a register and tested again; and the element's bits are read as an
+// integer, not as a float moved through the stack to be compared.
+//
+//go:noinline
 func elemAt(obj, key Value) (Value, bool) {
-	if obj.IsObject() && key.IsNumber() {
-		o := obj.object()
-		if i := uint32(key.num); float64(i) == key.num && uint(i) < uint(len(o.elems)) && o.flags&objMappedArguments == 0 {
-			if v := o.elems[i]; !isHole(v) {
-				return v, true
-			}
-		}
+	if !obj.IsObject() {
+		return Undefined, false
 	}
-	return Undefined, false
+	o := obj.object()
+	i, e := uint32(key.num), o.elems
+	if float64(i) != key.num || uint(i) >= uint(len(e)) || o.flags&objMappedArguments != 0 {
+		return Undefined, false
+	}
+	p := &e[i]
+	if holeAt(p) {
+		return Undefined, false
+	}
+	return *p, true
 }
 
 // setElem stores v in an array's dense storage, as set_index does first
-// thing, or reports false.
+// thing, or reports false. The key is a number when it is an index, as in
+// elemAt.
+//
+//go:noinline
 func setElem(o, k, v Value) bool {
-	if o.IsObject() && k.IsNumber() {
-		a := o.object()
-		if i := uint32(k.num); float64(i) == k.num &&
-			uint(i) < uint(len(a.elems)) && a.flags&objMappedArguments == 0 && !isHole(a.elems[i]) {
-			a.elems[i] = v
-			return true
-		}
+	if !o.IsObject() {
+		return false
 	}
-	return false
+	a := o.object()
+	i, e := uint32(k.num), a.elems
+	if float64(i) != k.num || uint(i) >= uint(len(e)) || a.flags&objMappedArguments != 0 {
+		return false
+	}
+	p := &e[i]
+	if holeAt(p) {
+		return false
+	}
+	*p = v
+	return true
 }
+
+// holeAt is isHole of the element at p, its bits read straight into an
+// integer register.
+func holeAt(p *Value) bool { return *(*uint64)(unsafe.Pointer(&p.num)) == holeBits }
