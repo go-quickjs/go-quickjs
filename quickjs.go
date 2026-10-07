@@ -213,7 +213,10 @@ func WithLocale(tag string) Option {
 // and rounds a number to an increment other than 1 or 5 from ICU's fast
 // reading of the double, which past about sixteen digits is not the double's
 // own decimal -- though not a numeric string, which was never a double, nor
-// formatRange's ends, which ICU's range formatter reads accurately.
+// formatRange's ends, which ICU's range formatter reads accurately; and
+// writes a range whose ends are the same double but not the same number, a
+// BigInt or a numeric string past an int64 among them, as the first marked
+// approximate, "~0.1" where the standard writes "0.1–0.10000000000000000001".
 // Intl.RelativeTimeFormat with numeric "auto" names in words any
 // offset within 0.005 of a whole one from -2 to 2, 1.004 days "tomorrow"
 // where the standard writes "in 1.004 days". Intl.ListFormat's formatToParts

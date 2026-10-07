@@ -1126,9 +1126,8 @@ func TestIntlUnknownSubtagsAndFieldNames(t *testing.T) {
 // never a double, and a range's ends, which ICU's range formatter reads
 // accurately, are the standard's on both sides; a hexadecimal, octal or
 // binary string is read exactly too, as V8 reads it. A BigInt is kept exact
-// on both sides, a range of two past a double's range too, which Node writes
-// as "~" and one end. HostAbbreviations, the host's zone where nothing names
-// it, depends on the machine, and go-intl's own tests pin it.
+// on both sides. HostAbbreviations, the host's zone where nothing names it,
+// depends on the machine, and go-intl's own tests pin it.
 func TestIntlNodeDivergencesV040(t *testing.T) {
 	const inc = `{minimumFractionDigits: 2, maximumFractionDigits: 2, roundingIncrement: 2}`
 	for _, c := range []struct {
@@ -1166,7 +1165,7 @@ func TestIntlNodeDivergencesV040(t *testing.T) {
 			new Intl.Collator("en", {ignorePunctuation: true}).compare("-", "-ं")].join(" ")`, "-1 -1 0", "1 1 -1"},
 		{"BigInt", `(nf => [nf.format(-(10n ** 20n) - 1n), nf.format(10n ** 400n).length,
 			nf.formatRange(10n ** 400n, 10n ** 401n).length].join("|"))(new Intl.NumberFormat("en"))`,
-			"-100,000,000,000,000,000,001|534|1070", "-100,000,000,000,000,000,001|534|1070"},
+			"-100,000,000,000,000,000,001|534|1070", "-100,000,000,000,000,000,001|534|535"},
 	} {
 		for _, side := range []struct {
 			opts []quickjs.Option
@@ -1178,5 +1177,46 @@ func TestIntlNodeDivergencesV040(t *testing.T) {
 			}
 			rt.Close()
 		}
+	}
+}
+
+// TestIntlDoubleRangeIdentity pins go-intl's DoubleRangeIdentity: a range
+// whose ends are the same double but not the same number is written in
+// full, as ECMA-402 has it, and under WithNodeQuirks as the first end marked
+// approximate, as Node writes it, ICU comparing a decimal that does not fit
+// in an int64 by the double nearest it. An int64 is compared as one and
+// never equals a double, and a hexadecimal string below 2^53 - 1 is a
+// Number, as V8 makes it. Node v26.10's are the answers.
+func TestIntlDoubleRangeIdentity(t *testing.T) {
+	const src = `(r => [
+		r({maximumFractionDigits: 20}, "0.1", "0.10000000000000000001"),
+		r({maximumFractionDigits: 20}, 0.1, "0.10000000000000000001"),
+		r({}, 10n ** 30n, 10n ** 30n + 1n),
+		r({}, -(2n ** 63n) - 1n, -(2n ** 63n) - 2n),
+		r({}, 2n ** 63n - 1n, 2n ** 63n - 2n),
+		r({}, 2 ** 53, 2n ** 53n + 1n),
+		r({maximumFractionDigits: 20}, "0x10", "16.0000000000000000001"),
+		r({style: "unit", unit: "meter", unitDisplay: "long", maximumFractionDigits: 20}, 1, "1.0000000000000000001"),
+		r({}, -0, 0),
+	].join("|"))((o, a, b) => new Intl.NumberFormat("en", o).formatRange(a, b))`
+	for _, c := range []struct {
+		opts []quickjs.Option
+		want string
+	}{
+		{nil, "0.1–0.10000000000000000001|0.1–0.10000000000000000001|" +
+			"1,000,000,000,000,000,000,000,000,000,000–1,000,000,000,000,000,000,000,000,000,001|" +
+			"-9,223,372,036,854,775,809 – -9,223,372,036,854,775,810|" +
+			"9,223,372,036,854,775,807–9,223,372,036,854,775,806|" +
+			"9,007,199,254,740,992–9,007,199,254,740,993|16–16.0000000000000000001|1–1.0000000000000000001 meters|-0 – 0"},
+		{[]quickjs.Option{quickjs.WithNodeQuirks()}, "~0.1|~0.1|" +
+			"~1,000,000,000,000,000,000,000,000,000,000|~-9,223,372,036,854,775,809|" +
+			"9,223,372,036,854,775,807–9,223,372,036,854,775,806|" +
+			"9,007,199,254,740,992–9,007,199,254,740,993|~16|~1 meter|-0 – 0"},
+	} {
+		rt := quickjs.New(c.opts...)
+		if got := evalString(t, rt, src); got != c.want {
+			t.Errorf("%d options:\n got %q\nwant %q", len(c.opts), got, c.want)
+		}
+		rt.Close()
 	}
 }

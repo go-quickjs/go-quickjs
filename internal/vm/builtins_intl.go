@@ -281,9 +281,10 @@ func (r *Runtime) numberArgument(v Value) (intl.Decimal, error) {
 		// numeric string grammar, hexadecimal, octal and binary digits
 		// included, exactly.
 		text := prim.String().Go()
+		// JavaScript's whitespace, which is not Go's: U+0085 is not trimmed.
+		trimmed := strings.Trim(text, jsWhitespace)
 		if r.nodeQuirks {
-			// JavaScript's whitespace, which is not Go's: U+0085 is not trimmed.
-			if d, ok := parseDecimal(strings.Trim(text, jsWhitespace)); ok && d.digits != "" && d.exp-1 < -999999999 {
+			if d, ok := parseDecimal(trimmed); ok && d.digits != "" && d.exp-1 < -999999999 {
 				// ICU holds a number whose first digit is no further below the
 				// point than this, and V8 reports one that is as ICU's failure.
 				// The standard has no such bound: the number is written as
@@ -291,7 +292,17 @@ func (r *Runtime) numberArgument(v Value) (intl.Decimal, error) {
 				return intl.Decimal{}, r.throwTypeError("Internal error. Icu error.")
 			}
 		}
-		return intl.ParseDecimal(text), nil
+		d := intl.ParseDecimal(text)
+		if trimmed == "" || len(trimmed) > 2 && trimmed[0] == '0' && strings.IndexByte("xXoObB", trimmed[1]) >= 0 &&
+			!d.IsNaN() && d.Float() < maxSafeInteger {
+			// V8 makes a Number of an empty string, and of a hexadecimal,
+			// octal or binary one below 2^53 - 1, which it then hands ICU as
+			// a double, as it hands every Number: the same value, but one
+			// ICU's range formatter compares as a double
+			// (DoubleRangeIdentity).
+			return intl.DecimalFromFloat(d.Float()), nil
+		}
+		return d, nil
 	}
 	x, err := r.toNumber(prim)
 	if err != nil {

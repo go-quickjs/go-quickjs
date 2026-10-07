@@ -27,8 +27,8 @@ import intl "github.com/go-quickjs/go-intl"
 // whole one RelativeTimeFormat names in words, a double rounded to an
 // increment, the format a currency is written in, an empty item of a list,
 // a time style under a -u-hc keyword hour12 overrode, the prefix two
-// strings a Collator compares share, and the host's zone where nothing
-// names it.
+// strings a Collator compares share, the host's zone where nothing names
+// it, and a range of two ends that are the same double.
 func (r *Runtime) intlCompat() intl.Compat {
 	if r.nodeQuirks {
 		return intl.NodeICU
@@ -40,7 +40,7 @@ func (r *Runtime) intlCompat() intl.Compat {
 		intl.RoundingWindow | intl.RepeatedMidnight | intl.PatternCalendar | intl.PluralRulesDigits |
 		intl.UnknownSubtags | intl.AccountingNever | intl.RelativeEpsilon | intl.ApproximateIncrement |
 		intl.CurrencyFormats | intl.EmptyListItems | intl.HourCycleStyles | intl.IdenticalPrefix |
-		intl.HostAbbreviations)
+		intl.HostAbbreviations | intl.DoubleRangeIdentity)
 }
 
 // canonicalizer puts locale identifiers in canonical form, as
