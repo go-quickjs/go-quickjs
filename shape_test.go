@@ -282,6 +282,46 @@ func TestGlobalReadCache(t *testing.T) {
 	}
 }
 
+// TestGlobalWriteCache covers a global write that remembers where in the
+// global object its name was, sloppy and strict: it must see the global
+// deleted and made again, made read-only, turned into a setter, and shadowed
+// by a direct eval's var.
+func TestGlobalWriteCache(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`globalThis.w1 = 0; function put(v) { w1 = v }
+		  var r = []; put(1); put(2); r.push(w1)
+		  delete globalThis.w1; put(3); r.push(w1)
+		  Object.defineProperty(globalThis, "w1", {value: 4, writable: false, configurable: true}); put(5); r.push(w1)
+		  var seen; Object.defineProperty(globalThis, "w1", {set(v) { seen = v }, configurable: true}); put(6); r.push(seen)
+		  delete globalThis.w1; globalThis.w1 = 7; put(8); r.push(w1); r.join()`, "2,3,4,6,8"},
+		{`globalThis.w2 = 0; function put(v) { "use strict"; w2 = v }
+		  var r = []; put(1); put(2); r.push(w2)
+		  delete globalThis.w2; try { put(3) } catch (e) { r.push(e.name) }
+		  globalThis.w2 = 4; put(5); r.push(w2)
+		  Object.defineProperty(globalThis, "w2", {value: 6, writable: false, configurable: true})
+		  try { put(7) } catch (e) { r.push(e.name) }; r.push(w2); r.join()`, "2,ReferenceError,5,TypeError,6"},
+		{`globalThis.w3 = "global"
+		  function f(code, v) { eval(code); w3 = v; return w3 }
+		  var r = [f("", 1), f("", 2), f("var w3", 3), globalThis.w3, f("", 4)]; r.join()`, "1,2,3,2,4"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
+// TestGlobalWriteCacheShadowed covers a global write made again after a
+// later script declares a let of the same name: the write must go to the
+// let, not to where the property was.
+func TestGlobalWriteCacheShadowed(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	evalString(t, rt, `globalThis.w4 = "prop"; function put(v) { w4 = v }; put("a"); put("b")`)
+	evalString(t, rt, `let w4 = "lex"`)
+	if got := evalString(t, rt, `put("c"); [w4, globalThis.w4].join()`); got != "c,b" {
+		t.Errorf("got %s, want c,b", got)
+	}
+}
+
 // TestGlobalReadCacheShadowed covers a global read made again after a later
 // script declares a let of the same name, which is looked for before the
 // global object: the read must find the let, not where the property was.

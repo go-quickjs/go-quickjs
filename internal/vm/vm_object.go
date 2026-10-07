@@ -769,8 +769,14 @@ func (o *Object) setOwnRaw(key Atom, value Value, flags propFlags) {
 // prependProps inserts properties ahead of every existing one.
 //
 // Only a function's synthesized length and name need this, and only once per
-// function, so the shift and the index rebuild are not worth avoiding.
+// function, so the shift and the index rebuild are not worth avoiding. Only a
+// function's table may be shifted: a global name's site keeps the slot its
+// name was found at for good, which holds that name or a tombstone only
+// while no table that is an environment is ever shifted (see propCache).
 func (o *Object) prependProps(ps []Property) {
+	if o.fn() == nil {
+		panic("prependProps on an object that is no function")
+	}
 	if len(ps) == 0 {
 		return
 	}
@@ -805,8 +811,12 @@ func (o *Object) leaveInlineProps(more int) {
 
 // insertProp puts a property at a given position rather than at the end, which
 // a property created later than it would have been needs: where a key sits in
-// the table is where an ownKeys walk reports it.
+// the table is where an ownKeys walk reports it. As with prependProps, only a
+// function's table may be shifted.
 func (o *Object) insertProp(at int, p Property) {
+	if o.fn() == nil {
+		panic("insertProp on an object that is no function")
+	}
 	if at >= len(o.props) {
 		o.appendProp(p)
 		return

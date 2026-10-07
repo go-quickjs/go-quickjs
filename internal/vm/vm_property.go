@@ -777,9 +777,17 @@ func globalSlot(env *Object, site *propCache, name Atom) int32 {
 	}
 	i := env.findOwn(name)
 	if i >= 0 {
-		site.idx = i
+		noteGlobalSlot(site, env, i)
 	}
 	return i
+}
+
+// noteGlobalSlot remembers that a global name's site found its name at slot
+// i of env's table. The environment is kept with it: the closures that share
+// the site share their scope, so it is the one they would ask for.
+func noteGlobalSlot(site *propCache, env *Object, i int32) {
+	site.idx = i
+	site.p1 = env
 }
 
 // hasOwnGlobal reports whether a global object that is no proxy has a name in

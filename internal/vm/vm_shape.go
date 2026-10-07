@@ -385,6 +385,13 @@ func (o *Object) layoutChanged() {
 // whole prototype chain -- none, one or two objects -- with the shapes that
 // said none of them has a setter or a read-only property of the name to
 // intercept the write.
+//
+// A global name's site keeps idx, where in the environment's table the name
+// last was, and p1, the environment itself once a fill has found it there
+// (see noteGlobalSlot): every closure that shares a site's caches shares its
+// environment, and a table position once given to a name holds that name or
+// a tombstone for good, so the tree tier reads the slot without asking the
+// closure for its scope or comparing the key.
 type propCache struct {
 	shape  *shape
 	next   *shape
