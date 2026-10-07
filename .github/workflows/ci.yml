@@ -1,8 +1,16 @@
 name: CI
 
+# A change to documentation alone builds and tests nothing: CI runs when
+# anything else changes, with the documentation or without it.
 on:
   push:
+    paths-ignore:
+      - "**.md"
+      - "LICENSE"
   pull_request:
+    paths-ignore:
+      - "**.md"
+      - "LICENSE"
 
 permissions:
   contents: read
