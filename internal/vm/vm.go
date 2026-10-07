@@ -3547,7 +3547,10 @@ func appendElem(o *Object, n float64, v Value) bool {
 			return false
 		}
 	}
-	return o.setElem(i, v)
+	// What setElem would do for an index at the length of an array that
+	// is not an arguments object.
+	o.elems = append(o.elems, v)
+	return true
 }
 
 // construct implements the `new` operator.

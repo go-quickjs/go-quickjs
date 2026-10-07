@@ -1586,10 +1586,15 @@ func setIndexNode(obj, key, val tval, pc int, strict bool) tval {
 // setIndexSlow is obj[key] = val where setElem cannot store it.
 func (c *tctx) setIndexSlow(o, k, v Value, pc int, strict bool) Value {
 	c.at(pc)
-	// A typed array's element is written to its buffer, as setIndexed's
-	// first case does, unless the buffer is immutable, whose refusal the
-	// long way words.
 	if o.IsObject() && k.IsNumber() {
+		// An element appended at an array's length, which is setIndexed's
+		// second case: asked first, an array being no typed array.
+		if appendElem(o.object(), k.num, v) {
+			return v
+		}
+		// A typed array's element is written to its buffer, as setIndexed's
+		// first case does, unless the buffer is immutable, whose refusal the
+		// long way words.
 		if t, i, ok := typedElemIndex(o.object(), k.num); ok {
 			if st, _ := t.buffer.data.(*arrayBufferData); st != nil && !st.immutable {
 				if err := c.r.setElem(t, i, v); err != nil {
@@ -1597,11 +1602,6 @@ func (c *tctx) setIndexSlow(o, k, v Value, pc int, strict bool) Value {
 				}
 				return v
 			}
-		}
-		// An element appended at an array's length, which is setIndexed's
-		// next case.
-		if appendElem(o.object(), k.num, v) {
-			return v
 		}
 	}
 	if err := c.r.setIndexed(o, k, v, strict); err != nil {
