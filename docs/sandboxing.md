@@ -87,4 +87,9 @@ An interruption is deliberately **not** catchable from script, so a sandboxed
 program cannot defeat its own timeout with `try`/`catch`. A catastrophically
 backtracking regular expression fails with an error rather than stalling.
 
+A runtime a sandbox runs should not be made `WithDebugger`: whoever attaches a
+debugger to it can read and change anything the script can, and run code of
+their own in it, code generation turned off or not. The inspector listens on
+the loopback interface unless told otherwise; see [Debugging](debugging.md).
+
 [go-intl-compat]: https://github.com/go-quickjs/go-intl/blob/main/compat.go

@@ -65,6 +65,7 @@ few, the weak collections among them. See [Compared with C QuickJS](docs/benchma
 | [Building a host](docs/hosting.md) | work that finishes on other goroutines, async context, closing a runtime, moving values between runtimes |
 | [The standard library](docs/stdlib.md) | the console, timers, fetch, the filesystem, workers and the node modules, each a capability of its own |
 | [Sandboxing](docs/sandboxing.md) | what a script can reach, and how its time and memory are bounded |
+| [Debugging](docs/debugging.md) | Chrome's DevTools and VS Code attached to a runtime, from qjs --inspect or a host |
 | [Design notes](docs/design.md) | how the engine is built, for reading the source |
 | [Benchmarks](docs/benchmarks.md) | Go benchmarks, and the V8 suite against goja, C QuickJS and Node |
 | [Performance plan](docs/performance-plan.md) | the optimizations still to make, how each is measured, and what was tried and rejected |

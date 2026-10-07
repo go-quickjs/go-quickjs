@@ -50,6 +50,7 @@ import (
 	_ "time/tzdata"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
+	"github.com/go-quickjs/go-quickjs/inspector"
 	"github.com/go-quickjs/go-quickjs/stdlib"
 )
 
@@ -85,6 +86,13 @@ type options struct {
 	timeout     time.Duration
 	nodeQuirks  bool
 	noCodegen   bool
+
+	// inspect is where --inspect and its kin listen, empty for none; wait
+	// holds the program until a debugger says to run it, and brk then stops
+	// it at its first statement.
+	inspect     string
+	inspectWait bool
+	inspectBrk  bool
 }
 
 func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -131,6 +139,22 @@ func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, opts.timeout)
 		defer cancel()
+	}
+
+	if opts.inspect != "" {
+		target, closeServer, err := startInspector(rt, opts, stderr)
+		if err != nil {
+			fmt.Fprintln(stderr, "qjs:", err)
+			return 1
+		}
+		defer closeServer()
+		if opts.inspectWait {
+			if err := target.WaitForDebugger(ctx, opts.inspectBrk); err != nil {
+				fmt.Fprintln(stderr, "qjs:", err)
+				return 1
+			}
+			fmt.Fprintln(stderr, "Debugger attached.")
+		}
 	}
 
 	switch {
@@ -200,6 +224,9 @@ func newRuntime(opts *options) (*quickjs.Runtime, error) {
 	}
 	if opts.noCodegen {
 		rtOpts = append(rtOpts, quickjs.WithoutCodeGeneration())
+	}
+	if opts.inspect != "" {
+		rtOpts = append(rtOpts, quickjs.WithDebugger())
 	}
 	rt := quickjs.New(rtOpts...)
 	if _, err := installModules(rt); err != nil {
@@ -527,7 +554,14 @@ func install(rt *quickjs.Runtime, loop *stdlib.Loop, opts *options, stdin io.Rea
 	// A worker is a runtime of its own, made as this one is and given what
 	// this one is given.
 	cfg.Workers = &stdlib.Workers{
-		New: func() (*quickjs.Runtime, error) { return newRuntime(opts) },
+		New: func() (*quickjs.Runtime, error) {
+			wrt, err := newRuntime(opts)
+			if err == nil && debugServer != nil {
+				// A worker is a target of its own, as node lists them.
+				debugServer.Attach(wrt, inspector.Options{Title: "worker", ScriptURL: scriptURL})
+			}
+			return wrt, err
+		},
 		Installed: func(rt *quickjs.Runtime) error {
 			if err := explainMissing(rt, opts); err != nil {
 				return err
@@ -1213,6 +1247,19 @@ func parseArgs(argv []string, stdout io.Writer) (*options, error) {
 			opts.noCodegen = true
 		case "--node-quirks":
 			opts.nodeQuirks = true
+		case "--inspect", "--inspect-wait", "--inspect-brk":
+			// As node's: --inspect[=[host:]port], without a value only, for
+			// a value would otherwise be taken for the program.
+			opts.inspect = inspector.DefaultAddr
+			if hasValue {
+				addr, err := inspectAddr(value)
+				if err != nil {
+					return nil, err
+				}
+				opts.inspect = addr
+			}
+			opts.inspectWait = name != "--inspect"
+			opts.inspectBrk = name == "--inspect-brk"
 		default:
 			return nil, fmt.Errorf("unknown option %q", a)
 		}
@@ -1226,6 +1273,19 @@ func parseArgs(argv []string, stdout io.Writer) (*options, error) {
 		opts.file = ""
 	}
 	return opts, nil
+}
+
+// inspectAddr is --inspect's [host:]port as an address: a port alone is on
+// the loopback interface, as node's is.
+func inspectAddr(v string) (string, error) {
+	host, port, err := net.SplitHostPort(v)
+	if err != nil {
+		host, port = "127.0.0.1", v
+	}
+	if n, err := strconv.Atoi(port); err != nil || n < 0 || n > 65535 {
+		return "", fmt.Errorf("--inspect: %q is not a port", v)
+	}
+	return net.JoinHostPort(host, port), nil
 }
 
 // parseSize reads a byte count, which may carry a k, m or g.
@@ -1295,4 +1355,57 @@ bounds:
       --no-code-generation   remove eval and the Function constructor
 
 compatibility:
-      --node-quirks       reproduce known Node.js deviations from standards`
+      --node-quirks       reproduce known Node.js deviations from standards
+
+debugging:
+      --inspect[=[HOST:]PORT]       let a debugger -- Chrome's DevTools, VS
+                                    Code -- attach, at 127.0.0.1:9229 unless
+                                    given another; a debugger can do anything
+                                    the script can
+      --inspect-wait[=[HOST:]PORT]  wait for a debugger before running
+      --inspect-brk[=[HOST:]PORT]   wait for one, and stop at the first
+                                    statement`
+
+// debugServer is the inspector --inspect started, which workers are
+// attached to as they are made.
+var debugServer *inspector.Server
+
+// startInspector listens for debuggers and attaches the program's runtime,
+// saying where as node does.
+func startInspector(rt *quickjs.Runtime, opts *options, stderr io.Writer) (*inspector.Target, func(), error) {
+	srv, err := inspector.Listen(opts.inspect)
+	if err != nil {
+		return nil, nil, fmt.Errorf("--inspect: %w", err)
+	}
+	title, url := "qjs", ""
+	if opts.file != "" && opts.file != "-" {
+		if abs, err := filepath.Abs(opts.file); err == nil {
+			title, url = filepath.Base(abs), scriptURL(abs)
+		}
+	}
+	target, err := srv.Attach(rt, inspector.Options{Title: title, URL: url, ScriptURL: scriptURL})
+	if err != nil {
+		srv.Close()
+		return nil, nil, err
+	}
+	debugServer = srv
+	fmt.Fprintln(stderr, "Debugger listening on", target.WebSocketURL())
+	fmt.Fprintln(stderr, "For help, see: https://nodejs.org/en/docs/inspector")
+	return target, func() {
+		debugServer = nil
+		srv.Close()
+	}, nil
+}
+
+// scriptURL is the URL a debugger is told a script has: a file's absolute
+// path as a file URL, as node's are, and any other name as it is.
+func scriptURL(name string) string {
+	if !filepath.IsAbs(name) {
+		return name
+	}
+	p := filepath.ToSlash(name)
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return (&url.URL{Scheme: "file", Path: p}).String()
+}
