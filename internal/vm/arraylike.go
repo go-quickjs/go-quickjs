@@ -178,6 +178,9 @@ func (a *arrayLike) has(r *Runtime, i int64) (bool, error) {
 	if _, fast := a.dense(i); fast {
 		return true, nil
 	}
+	if a.holeAbsent(i) {
+		return false, nil
+	}
 	key, ok := r.knownIndexKey(a.o, i)
 	if !ok {
 		return false, nil
@@ -275,6 +278,26 @@ func (a *arrayLike) dense(i int64) (Value, bool) {
 		return Undefined, false
 	}
 	return v, true
+}
+
+// holeAbsent reports whether index i of an array is a hole in its dense
+// storage that nothing up its prototype chain fills in, so that HasProperty
+// answers false without looking the key up anywhere: the array keeps every
+// index it has in its dense storage, and each object up the chain is an
+// ordinary object or array with no index of its own -- no proxy, no exotic
+// object, nothing a lookup could run code for.
+func (a *arrayLike) holeAbsent(i int64) bool {
+	o := a.o
+	if o.class != ClassArray || i < 0 || i >= int64(len(o.elems)) || !isHole(o.elems[i]) ||
+		o.flags&(objHasSparseElements|objMappedArguments) != 0 || !o.noIndexKeys() {
+		return false
+	}
+	for p := o.proto; p != nil; p = p.proto {
+		if p.class != ClassObject && p.class != ClassArray || len(p.elems) != 0 || !p.noIndexKeys() {
+			return false
+		}
+	}
+	return true
 }
 
 // newArrayOfLength builds an array to hold a method's result.

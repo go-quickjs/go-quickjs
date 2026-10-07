@@ -99,6 +99,39 @@ func TestArrayHoles(t *testing.T) {
 	}
 }
 
+// TestArrayHolesThroughTheChain pins what the array methods find at a hole,
+// which is answered without a lookup where nothing up the chain has an index
+// and looked up otherwise: an index on Array.prototype or Object.prototype,
+// a getter there (called once), a proxy, a String wrapper and an array with
+// elements as the prototype, no prototype, a sparse array, an accessor
+// element, arguments, and holes past the elements.
+func TestArrayHolesThroughTheChain(t *testing.T) {
+	const src = `var r = [];
+	  function show(a) { return JSON.stringify(a) + ":" + a.length + ":" + Object.keys(a).join(",") }
+	  var h = [1, , 3, , 5];
+	  r.push(show(h.slice()), show(h.slice(1, 4)), h.indexOf(undefined), h.includes(undefined), show(h.concat([6])), show(h.map(x => x * 2)));
+	  var cnt = 0; h.forEach(function () { cnt++ }); r.push(cnt);
+	  Array.prototype[1] = "AP"; r.push(show(h.slice()), h.indexOf("AP"), show(h.filter(() => true))); delete Array.prototype[1];
+	  Object.prototype[3] = "OP"; r.push(show(h.slice()), show(h.map(x => x))); delete Object.prototype[3];
+	  var calls = []; Object.defineProperty(Array.prototype, 3, { get() { calls.push("get3"); return "G" }, configurable: true });
+	  r.push(show(h.slice()), calls.join()); delete Array.prototype[3];
+	  var p = [1, , 3]; Object.setPrototypeOf(p, new Proxy([], { has(t, k) { calls.push("has" + String(k)); return k === "1" }, get(t, k) { return k === "1" ? "PX" : undefined } }));
+	  r.push(show(Array.prototype.slice.call(p)), calls.join());
+	  var q = [1, , 3]; Object.setPrototypeOf(q, new String("abc")); r.push(show(Array.prototype.slice.call(q)));
+	  var s = [1, , 3]; s[100000] = 4; r.push(show(s.slice(0, 4)));
+	  var acc = [1, , 3]; Object.defineProperty(acc, 1, { get() { return "own" }, enumerable: true, configurable: true }); r.push(show(acc.slice()));
+	  (function () { r.push(show(Array.prototype.slice.call(arguments))) })(1, 2, 3);
+	  var t = [1, , 3]; Object.setPrototypeOf(t, null); r.push(show(Array.prototype.slice.call(t)));
+	  var u = [ , , ]; Object.setPrototypeOf(u, [ , "in-proto-elems"]); r.push(show(Array.prototype.slice.call(u)));
+	  var w = [1, , 3]; w.length = 5; r.push(show(w.slice()), 1 in w, 3 in w, w.lastIndexOf(undefined));
+	  r.join(" | ")`
+	const want = `[1,null,3,null,5]:5:0,2,4 | [null,3,null]:3:1 | -1 | true | [1,null,3,null,5,6]:6:0,2,4,5 | [2,null,6,null,10]:5:0,2,4 | 3` +
+		` | [1,"AP",3,null,5]:5:0,1,2,4 | 1 | [1,"AP",3,5]:4:0,1,2,3 | [1,null,3,"OP",5]:5:0,2,3,4 | [1,null,3,"OP",5]:5:0,2,3,4` +
+		` | [1,null,3,"G",5]:5:0,2,3,4 | get3 | [1,"PX",3]:3:0,1,2 | get3,has1 | [1,"b",3]:3:0,1,2 | [1,null,3,null]:4:0,2` +
+		` | [1,"own",3]:3:0,1,2 | [1,2,3]:3:0,1,2 | [1,null,3]:3:0,2 | [null,"in-proto-elems"]:2:1 | [1,null,3,null,null]:5:0,2 | false | false | -1`
+	checkEval(t, src, want)
+}
+
 // TestArrayIndexAccessor pins that an index redefined as an accessor is
 // actually called. Dense storage cannot express one, so defining it has to
 // vacate the slot.
