@@ -178,7 +178,7 @@ func (r *Runtime) callDirect(callee, this Value, args []Value) (Value, error) {
 			if err := r.tick(); err != nil {
 				return Undefined, err
 			}
-			return r.callTree(o, fd, this, args)
+			return r.callTree(o, fd, this, args, false)
 		}
 		if fd != nil && fd.mathOp != 0 {
 			// Math.floor(x) and its kind, given a number, and Math.max(a, b)

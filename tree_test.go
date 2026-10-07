@@ -311,6 +311,24 @@ var treeScripts = []string{
 	 f(7, 3, "s", { valueOf() { return 10 } }, 5n)`,
 	`function f(n) { var up = 4; function g(k) { var x = up * k + up; up = up - 1; return x } var s = 0;
 	   for (var i = 0; i < n; i++) s = s + g(i); return s + "," + up } f(5)`,
+	// An exception thrown in a tree that trees called, which goes past
+	// their frames to the try that catches it: closures over the locals of
+	// the frames it passed see their last values, the stack trace is the
+	// same, and the frames are gone -- calls go on at the same depth, and a
+	// recursion that runs out of stack can be caught again and again.
+	`var fs = [], depth = 0;
+	 function C(n) { this.n = n }
+	 C.prototype.a = function (k) { var x = k * 2; fs.push(function () { return x }); x = x + 1; return this.b(x) };
+	 C.prototype.b = function (k) { var y = k + 100; fs.push(function () { return y }); y = y - 1; return this.c(y) };
+	 C.prototype.c = function (k) { if (k > this.n) throw new RangeError("big " + k); return k };
+	 C.prototype.deep = function (k) { depth = k; return this.deep(k + 1) + 1 };
+	 function run() { var o = new C(150), r = [];
+	   for (var i = 0; i < 40; i++) { try { r.push(o.a(i)) } catch (e) { r.push(e.message) } }
+	   for (var j = 0; j < 3; j++) { try { o.deep(0) } catch (e) { r.push(e.constructor.name, depth > 100) } }
+	   try { o.a(1000) } catch (e) { r.push(e.stack.split("\n").length) }
+	   r.push(fs.map(function (f) { return f() }).join("/"), o.a(1));
+	   return r.join() }
+	 run()`,
 }
 
 // treeRun evaluates a script and gives its value, or its error.

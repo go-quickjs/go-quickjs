@@ -119,7 +119,8 @@ func firstTree(fn *bytecode.Function) *tree {
 }
 
 // runTree runs a frame's function as its tree, as execute runs it as
-// bytecode.
+// bytecode. An exception leaving the tree, its own or one thrown in a tree it
+// called through runTreeNested, is caught here and returned.
 func (r *Runtime) runTree(f *frame, t *tree) (v Value, err error) {
 	if r.stopped != nil {
 		return Undefined, r.stopped
@@ -127,12 +128,16 @@ func (r *Runtime) runTree(f *frame, t *tree) (v Value, err error) {
 	c := &f.tc
 	c.r, c.f, c.cl, c.locals = r, f, f.cl, f.locals
 	c.stack = r.stack[f.base : f.base+f.cl.fn.MaxStack]
+	depth := r.frameDepth
 	defer func() {
 		if p := recover(); p != nil {
 			th, ok := p.(treeThrow)
 			if !ok {
 				panic(p)
 			}
+			// The trees this one called without a recover of their own
+			// (runTreeNested) left their frames to it.
+			r.unwindTreeFrames(depth)
 			v, err = Undefined, th.err
 		}
 	}()

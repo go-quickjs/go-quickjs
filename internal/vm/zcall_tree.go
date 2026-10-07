@@ -45,7 +45,12 @@ func planTreeCall(fd *funcData) {
 // realm and made its interrupt check: runFD's call for a function with no
 // extra, run as its tree. A sloppy body's this that is a primitive is left
 // to runFD, which wraps it.
-func (r *Runtime) callTree(o *Object, fd *funcData, this Value, args []Value) (Value, error) {
+//
+// nested says the caller is a tree's call node, which throws whatever error
+// the call returns: the tree is then run by runTreeNested, without a recover
+// of its own, and an exception goes on past this call, frame and all, to the
+// runTree that catches it.
+func (r *Runtime) callTree(o *Object, fd *funcData, this Value, args []Value, nested bool) (Value, error) {
 	cl := fd.closure
 	fn := cl.fn
 	if fn.CoerceThis && !this.IsObject() {
@@ -104,9 +109,60 @@ func (r *Runtime) callTree(o *Object, fd *funcData, this Value, args []Value) (V
 	if f.savedSP != 0 {
 		f.savedSP = 0
 	}
-	v, err := r.runTree(f, fd.treeCall)
+	var v Value
+	var err error
+	if nested {
+		v, err = r.runTreeNested(f, fd.treeCall)
+	} else {
+		v, err = r.runTree(f, fd.treeCall)
+	}
 	r.popFrameOf(f, base)
 	return v, err
+}
+
+// runTreeNested is runTree for a tree a tree's call node calls, through
+// callTree: the same, but an exception is not caught here. It goes through
+// the calling node, which would throw it again, to the nearest runTree,
+// whose recover pops the frames it passed, as unwindTreeFrames does. Not
+// setting up a recover is most of what entering a tree costs beyond its
+// frame.
+func (r *Runtime) runTreeNested(f *frame, t *tree) (Value, error) {
+	c := &f.tc
+	if r.stopped != nil {
+		c.throw(r.stopped)
+	}
+	c.r, c.f, c.cl, c.locals = r, f, f.cl, f.locals
+	c.stack = r.stack[f.base : f.base+f.cl.fn.MaxStack]
+	blocks := t.blocks
+	b := 0
+	for {
+		blk := &blocks[b]
+		for _, s := range blk.body {
+			s(c)
+		}
+		if b = blk.next(c); b < 0 {
+			if r.treeTail {
+				r.treeTail = false
+				return Undefined, errTailCall
+			}
+			return c.ret, nil
+		}
+	}
+}
+
+// unwindTreeFrames pops the frames above depth that an exception left,
+// trees runTreeNested ran, as callTree would have popped them on return:
+// their open upvalues are closed. depth is frameDepth with runTree's own
+// frame on the stack, so that frame, the depth-th, stays: it is its caller's
+// to pop, which also resets the stack's top.
+func (r *Runtime) unwindTreeFrames(depth int) {
+	for r.frameDepth > depth {
+		f := r.frameAt(r.frameDepth - 1)
+		for _, u := range f.openUpvalues {
+			u.close()
+		}
+		r.frameDepth--
+	}
 }
 
 // callRest is callDirect for a callee that is the object o, whose funcData

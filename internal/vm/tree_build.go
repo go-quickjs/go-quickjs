@@ -1824,7 +1824,7 @@ func callNode(op bytecode.Op, p, n, this, pc int) tval {
 					if err := r.tick(); err != nil {
 						c.throw(err)
 					}
-					v, err := r.callTree(o, fd, recv, args)
+					v, err := r.callTree(o, fd, recv, args, true)
 					if err != nil {
 						c.throw(err)
 					}
@@ -1854,7 +1854,7 @@ func callNode(op bytecode.Op, p, n, this, pc int) tval {
 				if err := r.tick(); err != nil {
 					c.throw(err)
 				}
-				v, err := r.callTree(o, fd, Undefined, args)
+				v, err := r.callTree(o, fd, Undefined, args, true)
 				if err != nil {
 					c.throw(err)
 				}
