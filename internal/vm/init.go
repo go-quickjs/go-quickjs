@@ -60,7 +60,7 @@ func New(cfg Config) *Runtime {
 		asyncCtx:         Undefined,
 	}
 	if cfg.Debug {
-		r.debug = &debugState{}
+		r.debug = newDebugState()
 	}
 	r.Realm = newRealm(r)
 	r.initWellKnownSymbols()

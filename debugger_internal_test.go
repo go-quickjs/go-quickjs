@@ -1,6 +1,7 @@
 package quickjs
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -453,5 +454,72 @@ export const result = await f();
 	}
 	if s := strings.Join(got, "|"); s != "breakpoint f:4:3 x=1" {
 		t.Errorf("%s", s)
+	}
+}
+
+// TestDebuggerCloseInPause pins closing a runtime from inside a pause, as
+// evaluating process.exit() in a debugger's console does: the script stops,
+// the debugger is told by DebugClosed and refused anything more, and what is
+// posted afterwards is dropped.
+func TestDebuggerCloseInPause(t *testing.T) {
+	r, h := newDebugged(t)
+	if err := r.Set("closeNow", func() { r.Close() }); err != nil {
+		t.Fatal(err)
+	}
+	vmrt := r.rt
+	var after error
+	h.then = func(p *vm.DebugPause) vm.StepAction {
+		f := p.Frames[0]
+		if _, err := f.Evaluate("closeNow()"); err == nil {
+			t.Error("the evaluation that closed the runtime reported nothing")
+		}
+		select {
+		case <-vmrt.DebugClosed():
+		default:
+			t.Error("DebugClosed is open after Close")
+		}
+		_, after = f.Evaluate("1")
+		if _, err := vmrt.DebugEvaluate("1"); err == nil {
+			t.Error("a closed runtime evaluated code")
+		}
+		return vm.StepOver
+	}
+	_, err := r.EvalFile("c.js", "let n = 1;\ndebugger;\nn = 2;\n")
+	if !errors.Is(err, ErrClosed) {
+		t.Errorf("Eval: %v, want ErrClosed", err)
+	}
+	if after == nil || !strings.Contains(after.Error(), "stopped") {
+		t.Errorf("evaluating after Close: %v", after)
+	}
+	ran := false
+	vmrt.DebugPost(func() { ran = true })
+	vmrt.DebugDrain()
+	if ran {
+		t.Error("work posted after Close ran")
+	}
+}
+
+// TestDebuggerPauseLoopClose pins the loop a debugger serving clients from
+// other goroutines runs in a pause: it runs what they post until told to go
+// on -- and ends when the runtime closes, here by what was posted.
+func TestDebuggerPauseLoopClose(t *testing.T) {
+	r, h := newDebugged(t)
+	vmrt := r.rt
+	h.then = func(p *vm.DebugPause) vm.StepAction {
+		go vmrt.DebugPost(func() { r.Close() })
+		for {
+			select {
+			case <-vmrt.DebugReady():
+				vmrt.DebugDrain()
+			case <-vmrt.DebugClosed():
+				return vm.Continue
+			case <-time.After(5 * time.Second):
+				t.Error("the pause loop was not woken")
+				return vm.Continue
+			}
+		}
+	}
+	if _, err := r.EvalFile("l.js", "debugger;\n1"); !errors.Is(err, ErrClosed) {
+		t.Errorf("Eval: %v, want ErrClosed", err)
 	}
 }

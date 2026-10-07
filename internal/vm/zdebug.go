@@ -4,6 +4,7 @@ import (
 	"errors"
 	"slices"
 	"sort"
+	"strings"
 	"sync/atomic"
 	"unsafe"
 
@@ -49,6 +50,16 @@ type debugState struct {
 	// requested is set by RequestPause, from any goroutine, and turned into
 	// pauseNext by the next interrupt check.
 	requested atomic.Bool
+	// posted is the work other goroutines posted for the runtime's, and
+	// hasWork says some waits, for the next interrupt check to run.
+	posted  debugInbox
+	hasWork atomic.Bool
+	// inactive turns every breakpoint off, keeping them where they are.
+	inactive bool
+	// closed is closed with the runtime, which ends a debugger's waiting:
+	// nothing more runs, and nothing posted is run.
+	closed   chan struct{}
+	isClosed atomic.Bool
 
 	exceptions ExceptionPause
 
@@ -65,7 +76,14 @@ type debugState struct {
 // Debug.State: how many breakpoints each statement has.
 type fnDebug struct {
 	breaks []int32
+	// hidden marks the statements placed above the first line of the file
+	// the script is in, by an offset: a wrapper's, which a debugger does
+	// not show or stop at. Nil where none is.
+	hidden []bool
 }
+
+// visible reports whether the code can stop at statement i.
+func (fd *fnDebug) visible(i int) bool { return fd.hidden == nil || !fd.hidden[i] }
 
 func debugOf(fn *bytecode.Function) *fnDebug {
 	if fn.Debug == nil {
@@ -78,8 +96,11 @@ func debugOf(fn *bytecode.Function) *fnDebug {
 type breakpoint struct {
 	id int
 	// url is the script name it was set by, which code loaded later is
-	// matched against; empty for one set in a script.
-	url       string
+	// matched against; empty for one set in a script, or by match.
+	url string
+	// match is the names of the scripts it is set in, for one set by a
+	// pattern.
+	match     func(string) bool
 	line, col int
 	at        []bpLocation
 }
@@ -153,7 +174,8 @@ type DebugPause struct {
 	// a catch clause on the stack will catch it.
 	Exception Value
 	Caught    bool
-	// Frames are the frames of compiled code on the stack, innermost first.
+	// Frames are the frames of code compiled for the debugger on the stack,
+	// innermost first.
 	Frames []*DebugFrame
 
 	live bool
@@ -173,8 +195,21 @@ type DebugScript struct {
 	fns        []*bytecode.Function
 }
 
-// Source is the script's text.
-func (s *DebugScript) Source() string { return s.script.Text() }
+// Source is the script's text, from the first line of the file it is in:
+// what an offset placed above it -- a wrapper's line -- is left out, so
+// that the source's lines are the file's.
+func (s *DebugScript) Source() string {
+	text := s.script.Text()
+	line, _ := s.script.Offsets()
+	for ; line < 0; line++ {
+		i := strings.IndexByte(text, '\n')
+		if i < 0 {
+			return ""
+		}
+		text = text[i+1:]
+	}
+	return text
+}
 
 // DebugLocation is a place in a script, its line and column counted from 1
 // as a stack trace's are, the column in UTF-16 code units.
@@ -225,8 +260,45 @@ type DebugBinding struct {
 	Mutable       bool
 }
 
-// errNotPaused is what a frame answers once its pause is over.
-var errNotPaused = errors.New("the runtime is no longer paused there")
+// errNotPaused is what a frame answers once its pause is over, and
+// errStopped what the debugger is told once the runtime has stopped: it has
+// been closed, or its script halted, and runs nothing more.
+var (
+	errNotPaused = errors.New("the runtime is no longer paused there")
+	errStopped   = errors.New("the runtime has stopped")
+)
+
+// debugStopped reports why the debugger may run nothing in the runtime, or
+// nil when it may.
+func (r *Runtime) debugStopped() error {
+	if r.debug == nil || r.debug.isClosed.Load() || r.stopped != nil {
+		return errStopped
+	}
+	return nil
+}
+
+// debugClose ends the debugger with the runtime: whoever waits is woken,
+// and what was posted is dropped.
+func (d *debugState) close() {
+	if d.isClosed.Swap(true) {
+		return
+	}
+	close(d.closed)
+	d.posted.mu.Lock()
+	d.posted.work = nil
+	d.posted.mu.Unlock()
+	d.hasWork.Store(false)
+}
+
+// DebugClosed is closed when the runtime is, which a debugger waiting on
+// the runtime's behalf -- during a pause, or for a client to attach --
+// waits on too, and then stops waiting: the runtime runs nothing more.
+func (r *Runtime) DebugClosed() <-chan struct{} {
+	if r.debug == nil {
+		return nil
+	}
+	return r.debug.closed
+}
 
 // Debugging reports whether the runtime was made for a debugger.
 func (r *Runtime) Debugging() bool { return r.debug != nil }
@@ -348,7 +420,7 @@ func (d *debugState) resolve(b *breakpoint, s *DebugScript) (DebugLocation, bool
 	for _, fn := range s.fns {
 		for i, st := range fn.Debug.Statements {
 			line, col := s.script.Position(st.Pos)
-			if int(line) < b.line || int(line) == b.line && int(col) < b.col {
+			if !debugOf(fn).visible(i) || int(line) < b.line || int(line) == b.line && int(col) < b.col {
 				continue
 			}
 			if bestLine < 0 || line < bestLine || line == bestLine && col < bestCol {
@@ -372,7 +444,7 @@ func (d *debugState) resolve(b *breakpoint, s *DebugScript) (DebugLocation, bool
 
 // rearm works out whether a statement has anything to ask.
 func (d *debugState) rearm() {
-	d.armed = d.handler != nil && (d.locations > 0 || d.step != Continue || d.pauseNext)
+	d.armed = d.handler != nil && (d.locations > 0 && !d.inactive || d.step != Continue || d.pauseNext)
 }
 
 // debugLoad records code compiled for the debugger as it is first run, and
@@ -402,7 +474,16 @@ func (r *Runtime) debugLoad(fn *bytecode.Function) {
 		if f.Debug == nil || f.Debug.State != nil {
 			return
 		}
-		f.Debug.State = unsafe.Pointer(&fnDebug{breaks: make([]int32, len(f.Debug.Statements))})
+		fd := &fnDebug{breaks: make([]int32, len(f.Debug.Statements))}
+		for i, st := range f.Debug.Statements {
+			if line, _ := s.Position(st.Pos); line < 1 {
+				if fd.hidden == nil {
+					fd.hidden = make([]bool, len(f.Debug.Statements))
+				}
+				fd.hidden[i] = true
+			}
+		}
+		f.Debug.State = unsafe.Pointer(fd)
 		ds.fns = append(ds.fns, f)
 		for _, c := range f.Constants {
 			if c.Kind == bytecode.ConstFunction && c.Fn != nil {
@@ -419,7 +500,7 @@ func (r *Runtime) debugLoad(fn *bytecode.Function) {
 	}
 	ids := make([]int, 0, len(d.breakpoints))
 	for id, b := range d.breakpoints {
-		if b.url == ds.Name {
+		if b.url == ds.Name || b.match != nil && b.match(ds.Name) {
 			ids = append(ids, id)
 		}
 	}
@@ -435,7 +516,11 @@ func (r *Runtime) debugLoad(fn *bytecode.Function) {
 // debugInterrupt turns a pause asked for from another goroutine into one at
 // the next statement. The interrupt check calls it.
 func (r *Runtime) debugInterrupt() {
-	if d := r.debug; d.requested.Load() {
+	d := r.debug
+	if d.hasWork.Load() {
+		r.DebugDrain()
+	}
+	if d.requested.Load() {
 		d.requested.Store(false)
 		d.pauseNext = true
 		d.rearm()
@@ -447,6 +532,9 @@ func (r *Runtime) debugInterrupt() {
 func (r *Runtime) debugStatement(f *frame, in bytecode.Instr) error {
 	d := r.debug
 	if d.paused || d.handler == nil {
+		return nil
+	}
+	if fd := debugOf(f.cl.fn); fd != nil && !fd.visible(int(in.A)) {
 		return nil
 	}
 	reason := PauseReason(-1)
@@ -461,7 +549,7 @@ func (r *Runtime) debugStatement(f *frame, in bytecode.Instr) error {
 		reason = PauseStep
 	}
 	var hit []int
-	if fd := debugOf(f.cl.fn); fd != nil && int(in.A) < len(fd.breaks) && fd.breaks[in.A] > 0 {
+	if fd := debugOf(f.cl.fn); fd != nil && !d.inactive && int(in.A) < len(fd.breaks) && fd.breaks[in.A] > 0 {
 		at := bpLocation{f.cl.fn, int(in.A)}
 		for id, b := range d.breakpoints {
 			if slices.Contains(b.at, at) {
@@ -529,12 +617,14 @@ func (r *Runtime) debugPause(p *DebugPause) error {
 	return nil
 }
 
-// debugFrames are the frames of compiled code on the stack, innermost first.
+// debugFrames are the frames of code compiled for the debugger on the
+// stack, innermost first: neither a built-in's nor one of the module's own
+// scripts', which a debugger is not to see.
 func (r *Runtime) debugFrames(p *DebugPause) []*DebugFrame {
 	var out []*DebugFrame
 	for i := r.frameDepth - 1; i >= 0; i-- {
 		f := r.frameAt(i)
-		if f.cl == nil {
+		if f.cl == nil || debugOf(f.cl.fn) == nil {
 			continue
 		}
 		pc := f.pc
@@ -646,6 +736,9 @@ func (df *DebugFrame) Evaluate(src string) (Value, error) {
 	d := r.debug
 	if !df.pause.live || d == nil {
 		return Undefined, errNotPaused
+	}
+	if err := r.debugStopped(); err != nil {
+		return Undefined, err
 	}
 	if d.compile == nil {
 		return Undefined, errors.New("the debugger has nothing to compile with")

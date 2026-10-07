@@ -51,6 +51,10 @@ func NewScript(name, text string) *Script {
 	return s
 }
 
+// Offsets are where the script's text is placed within a larger file: how
+// many lines down it starts, and how many columns in.
+func (s *Script) Offsets() (line, col int32) { return s.lineOffset, s.columnOffset }
+
 // Text is the script's source text, or empty when it is not known.
 func (s *Script) Text() string { return s.text }
 

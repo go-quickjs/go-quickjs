@@ -931,7 +931,12 @@ func (r *Runtime) Interrupted() error { return r.aborted() }
 
 // Close lets go of what the runtime has left with other agents: its waiters
 // in Atomics.waitAsync. It is safe to call from any goroutine.
-func (r *Runtime) Close() { r.asyncWaits.close() }
+func (r *Runtime) Close() {
+	r.asyncWaits.close()
+	if r.debug != nil {
+		r.debug.close()
+	}
+}
 
 // stackPools keeps the stacks of closed runtimes for the next runtime made
 // with a stack of the same size, a pool for each size: a host that makes a
