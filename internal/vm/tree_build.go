@@ -2,6 +2,7 @@ package vm
 
 import (
 	"math"
+	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/jsnum"
@@ -828,6 +829,15 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		b.pushArith(arithEntries(bytecode.Op(in.A>>24), x, y, pc), arithOf{op: bytecode.Op(in.A >> 24), x: x, y: y, pc: pc})
 	case bytecode.OpGetIndex:
 		key, obj := b.pop(), b.pop()
+		if n := len(b.stack); n >= 2 && pc+2 < b.end && sameLeaf(b.stack[n-2], obj) && sameLeaf(b.stack[n-1], key) {
+			// a[0] op= y, whose object and key the compiler reads twice
+			// rather than copying.
+			if s := elemUpdateStmt(obj, key, code, pc+1, pc, -1, fn.Strict); s != nil {
+				b.pop()
+				b.pop()
+				return 2, b.stmt(s)
+			}
+		}
 		b.push(getIndexOperands(obj, key, pc))
 	case bytecode.OpArgumentsIndex:
 		key, slot := b.pop().tree(), in.A
@@ -968,6 +978,11 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			// key and the element go to their slots in one statement, where
 			// what dup2 and get_index leave would put them.
 			key, obj := b.pop(), b.pop()
+			if pc+4 < b.end {
+				if s := elemUpdateStmt(obj, key, code, pc+3, pc+2, pc, fn.Strict); s != nil {
+					return 4, b.stmt(s)
+				}
+			}
 			if !b.spill() {
 				return 0, false
 			}
@@ -1979,6 +1994,185 @@ func elemReadForUpdate(obj, key tentry, d, pc int) tstmt {
 	return func(c *tctx) {
 		o := x(c)
 		read(c, o, y(c))
+	}
+}
+
+// sameLeaf reports whether two entries are reads of the same local or the
+// same number.
+func sameLeaf(x, y tentry) bool {
+	switch {
+	case !x.leaf() || !y.leaf():
+		return false
+	case x.local && y.local:
+		return x.k == y.k
+	case x.number && y.number:
+		return math.Float64bits(x.n.num) == math.Float64bits(y.n.num)
+	}
+	return false
+}
+
+// elemUpd is what an element update does besides its fast path: the
+// operator, its operand, and the instructions' positions.
+type elemUpd struct {
+	op bytecode.Op
+	// step is set for ++ and --, whose operand is ToNumeric'd rather than
+	// added to: y is then 1 or -1.
+	step bool
+	// y is the operand, a number, unless yLocal is a local's index.
+	y      Value
+	yLocal int
+	// ofBase is to_property_key_of_base's position, or -1 where the key is a
+	// number the compiler did not convert; get, at and set are get_index's,
+	// the update's and set_index's.
+	ofBase, get, at, set int
+	strict               bool
+}
+
+// elemUpdateStmt is obj[key] op= y or obj[key]++ as a statement, whose
+// update is code[pc] and store code[pc+1], or nil: the object is a local,
+// the key a local or a number, and y a local or a number, with + - or *.
+//
+// A number in an array's dense storage is read, updated and written back
+// where it is, in one step: nothing runs between the read and the write
+// that could change the array, the key or the operand. Anything else takes
+// the instructions' own way, elemUpdateSlow.
+//
+//go:noinline
+func elemUpdateStmt(obj, key tentry, code []bytecode.Instr, pc, get, ofBase int, strict bool) tstmt {
+	if code[pc+1].Op != bytecode.OpSetIndex || !obj.local || !key.local && !key.number {
+		return nil
+	}
+	u := &elemUpd{yLocal: -1, ofBase: ofBase, get: get, at: pc, set: pc + 1, strict: strict}
+	switch in := code[pc]; in.Op {
+	case bytecode.OpInc, bytecode.OpDec:
+		u.op, u.step, u.y = bytecode.OpAdd, true, Int(1)
+		if in.Op == bytecode.OpDec {
+			u.y = Int(-1)
+		}
+	case bytecode.OpBinLocal, bytecode.OpBinImm:
+		switch u.op = bytecode.Op(in.B); u.op {
+		case bytecode.OpAdd, bytecode.OpSub, bytecode.OpMul:
+		default:
+			return nil
+		}
+		if in.Op == bytecode.OpBinLocal {
+			u.yLocal = int(in.A)
+		} else {
+			u.y = Int32(int32(in.A))
+		}
+	default:
+		return nil
+	}
+	o, op, y, ky := obj.k, u.op, u.y, u.yLocal
+	if key.number {
+		// A constant index is an index once, when the tree is built.
+		k := key.n
+		if float64(uint32(k.num)) != k.num || uint32(k.num) >= 1<<31 {
+			return nil
+		}
+		i := uint32(k.num)
+		if ky >= 0 {
+			return func(c *tctx) {
+				if a := objectAt(&c.locals[o]); a != nil && uint(i) < uint(len(a.elems)) && a.flags&objMappedArguments == 0 {
+					if p, y := &a.elems[i], &c.locals[ky]; numberAt(p) {
+						if numberAt(y) {
+							p.num = Float(numUpdate(op, p.num, y.num)).num
+							return
+						}
+					}
+				}
+				c.elemUpdateSlow(c.locals[o], k, u)
+			}
+		}
+		return func(c *tctx) {
+			if a := objectAt(&c.locals[o]); a != nil && uint(i) < uint(len(a.elems)) && a.flags&objMappedArguments == 0 {
+				if p := &a.elems[i]; numberAt(p) {
+					p.num = Float(numUpdate(op, p.num, y.num)).num
+					return
+				}
+			}
+			c.elemUpdateSlow(c.locals[o], k, u)
+		}
+	}
+	k := key.k
+	if ky >= 0 {
+		return func(c *tctx) {
+			if a, k := objectAt(&c.locals[o]), c.locals[k]; a != nil {
+				if i := uint32(k.num); float64(i) == k.num && uint(i) < uint(len(a.elems)) && a.flags&objMappedArguments == 0 {
+					if p, y := &a.elems[i], &c.locals[ky]; numberAt(p) {
+						if numberAt(y) {
+							p.num = Float(numUpdate(op, p.num, y.num)).num
+							return
+						}
+					}
+				}
+			}
+			c.elemUpdateSlow(c.locals[o], c.locals[k], u)
+		}
+	}
+	return func(c *tctx) {
+		if a, k := objectAt(&c.locals[o]), c.locals[k]; a != nil {
+			if i := uint32(k.num); float64(i) == k.num && uint(i) < uint(len(a.elems)) && a.flags&objMappedArguments == 0 {
+				if p := &a.elems[i]; numberAt(p) {
+					p.num = Float(numUpdate(op, p.num, y.num)).num
+					return
+				}
+			}
+		}
+		c.elemUpdateSlow(c.locals[o], c.locals[k], u)
+	}
+}
+
+// objectAt is the object the value at p is, or nil, its bits read straight
+// into an integer register rather than through a float one.
+func objectAt(p *Value) *Object {
+	if *(*uint64)(unsafe.Pointer(&p.num)) == objectBits {
+		return (*Object)(p.ref)
+	}
+	return nil
+}
+
+// numberAt is IsNumber of the value at p, read as objectAt reads it.
+func numberAt(p *Value) bool { return *(*uint64)(unsafe.Pointer(&p.num))>>51 != tagBase>>51 }
+
+// numUpdate is a + b, a - b or a * b.
+func numUpdate(op bytecode.Op, a, b float64) float64 {
+	switch op {
+	case bytecode.OpAdd:
+		return a + b
+	case bytecode.OpSub:
+		return a - b
+	}
+	return a * b
+}
+
+// elemUpdateSlow is obj[key] op= y as its instructions do it, one at a
+// time: the key converted, the element read, the operand read after it,
+// the update and the store, each where it may throw or run code.
+func (c *tctx) elemUpdateSlow(o, k Value, u *elemUpd) {
+	if u.ofBase >= 0 && (o.IsNullish() || !k.IsNumber() && !k.IsString() && !k.IsSymbol()) {
+		k = c.keyOfBase(o, k, u.ofBase)
+	}
+	v, ok := elemAt(o, k)
+	if !ok {
+		v = c.getIndexSlow(o, k, u.get)
+	}
+	y := u.y
+	if u.yLocal >= 0 {
+		y = c.locals[u.yLocal]
+	}
+	var r Value
+	switch {
+	case v.IsNumber() && y.IsNumber():
+		r = Float(numUpdate(u.op, v.num, y.num))
+	case u.step:
+		c.at(u.at)
+		r = c.step(v, y.num)
+	default:
+		r = c.arithSlow(u.op, v, y, u.at)
+	}
+	if !setElem(o, k, r) {
+		c.setIndexSlow(o, k, r, u.set, u.strict)
 	}
 }
 

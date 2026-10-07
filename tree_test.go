@@ -551,6 +551,61 @@ func TestElementKeysAndViews(t *testing.T) {
 	}
 }
 
+// TestElementUpdates pins a[k] op= y and a[k]++ over a local array, which
+// the tree tier updates in place when the element is a number in the
+// array's dense storage, in both tiers: holes read through the prototype,
+// typed arrays, frozen arrays, null bases, an operand a getter changes
+// (read after the element), a valueOf that shrinks the array or reassigns
+// the local, keys that are not indices, arguments objects, BigInts,
+// strings, NaN and -0.
+func TestElementUpdates(t *testing.T) {
+	defer vm.SetTreeTier(true)
+	const src = `function f() {
+		  var r = [];
+		  function upd(a, i, x) { for (var j = 0; j < 2; j++) { a[i] += x; a[i]++; a[0]--; a[1] -= x; a[i] *= 2; a[2] += 0.5 } return a }
+		  r.push(upd([1, 2, 3, 4], 2, 3).join("/"), upd(["a", "b", "c"], 2, 3).join("/"), upd([1, , 3], 1, 1).join("/"));
+		  Array.prototype[1] = 10;
+		  r.push(upd([1, , 3], 1, 1).join("/"));
+		  delete Array.prototype[1];
+		  r.push(upd(new Int32Array([1, 2, 3]), 2, 3).join("/"), upd(new Uint8ClampedArray([1, 2, 3]), 2, 300).join("/"));
+		  r.push(upd(Object.freeze([1, 2, 3]), 2, 3).join("/"), upd({ 0: 1, 1: 2, 2: 3 }, "2", 3)[2]);
+		  function strict(a) { "use strict"; for (var j = 0; j < 2; j++) a[0] += 1; return a }
+		  try { strict(Object.freeze([1])) } catch (e) { r.push(e.constructor.name) }
+		  for (var base of [null, undefined]) {
+		    try { upd(base, 0, 1) } catch (e) { r.push(e.message) }
+		    try { (function (a) { for (var j = 0; j < 1; j++) a[3]-- })(base) } catch (e) { r.push(e.message) }
+		  }
+		  var y = 1, g = [1, 2];
+		  Object.defineProperty(g, 1, { get() { y = 100; return 5 }, set(v) { r.push("set" + v) } });
+		  (function (a) { for (var j = 0; j < 1; j++) { a[1] += y } })(g);
+		  function own(a) { var x = 1; Object.defineProperty(a, 0, { get() { x = 50; return 1 }, configurable: true }); for (var j = 0; j < 1; j++) a[0] += x; return x }
+		  r.push(own([0]));
+		  var sh = [1, 2, 3];
+		  (function (a, v) { for (var j = 0; j < 1; j++) a[2] += v })(sh, { valueOf() { sh.length = 0; return 1 } });
+		  r.push(JSON.stringify(sh));
+		  (function () { var a = [{ valueOf() { a = [7]; return 1 } }], b = a; for (var j = 0; j < 1; j++) a[0] += 1; r.push(b[0], a[0]) })();
+		  (function (a) { for (var j = 0; j < 2; j++) { a[-1] += 1; a[1.5]++; a[2147483648] -= 1; a["0"] *= 3; a[4294967295]++ } r.push(Object.keys(a).join(), a[-1], a[1.5], a[2147483648], a[0], a[4294967295]) })([2]);
+		  r.push((function (p) { for (var j = 0; j < 2; j++) arguments[0] += 1; return p })(1));
+		  r.push((function (p) { "use strict"; for (var j = 0; j < 2; j++) arguments[0] += 1; return p + "," + arguments[0] })(1));
+		  try { (function (a) { for (var j = 0; j < 1; j++) { a[0]++; a[1] *= 2 } })([1n, 2n]) } catch (e) { r.push(e.constructor.name) }
+		  r.push((function (a) { for (var j = 0; j < 2; j++) a[0]++; return a[0] })(["5"]));
+		  r.push(Object.is((function (a) { for (var j = 0; j < 1; j++) a[0] *= NaN; return a[0] })([0]), NaN));
+		  r.push(Object.is((function (a) { for (var j = 0; j < 1; j++) a[0] *= 1; return a[0] })([-0]), -0));
+		  r.push((function (a) { for (var j = 0; j < 1; j++) a[0] -= Infinity; return a[0] })([Infinity]));
+		  return r.join(" ");
+		}
+		f()`
+	const want = "-1/-4/37.5/4 NaN/NaN/NaN -1/NaN/4 -1/46/4 -1/-4/36 0/0/255 1/2/3 37.5 TypeError" +
+		" cannot read property of null cannot read property of null cannot read property of undefined cannot read property of undefined" +
+		" set105 50 [null,null,4] 2 7 0,2147483648,-1,1.5,4294967295 NaN NaN NaN 18 NaN 3 1,3 TypeError 7 true true NaN"
+	for _, tier := range []bool{false, true} {
+		vm.SetTreeTier(tier)
+		if got := treeRun(t, src); got != want {
+			t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, want)
+		}
+	}
+}
+
 // TestTreeTierInterrupted stops a loop running as a tree, as one running in
 // the interpreter is stopped.
 func TestTreeTierInterrupted(t *testing.T) {
