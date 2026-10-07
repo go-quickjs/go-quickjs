@@ -98,6 +98,9 @@ type Runtime struct {
 	moduleFetchLimit int
 	// noCodeGeneration is WithoutCodeGeneration, which node:vm respects too.
 	noCodeGeneration bool
+	// debug is WithDebugger: everything the runtime compiles is compiled for
+	// a debugger.
+	debug bool
 	// seqs are the Go sequences script has iterators over that have not
 	// ended, which Close stops; seqDropped carries the stop of one whose
 	// iterator was collected to the runtime's goroutine. See seq.go.
@@ -116,6 +119,7 @@ type config struct {
 	locale           string
 	nodeQuirks       bool
 	noCodeGeneration bool
+	debug            bool
 }
 
 // WithMemoryLimit caps the memory a script may hold, beyond what the
@@ -245,8 +249,9 @@ func New(opts ...Option) *Runtime {
 		MaxCallDepth: c.maxCallDepth,
 		Locale:       c.locale,
 		NodeQuirks:   c.nodeQuirks,
+		Debug:        c.debug,
 	}), nodeQuirks: c.nodeQuirks, noCodeGeneration: c.noCodeGeneration,
-		moduleFetchLimit: c.moduleFetchLimit}
+		moduleFetchLimit: c.moduleFetchLimit, debug: c.debug}
 	if c.moduleFetchLimit == 0 {
 		r.moduleFetchLimit = defaultModuleFetchLimit
 	}
@@ -254,6 +259,11 @@ func New(opts ...Option) *Runtime {
 	r.ctx, r.cancel = context.WithCancel(context.Background())
 	if !c.noCodeGeneration {
 		r.installCodeGeneration()
+	}
+	if c.debug {
+		// A debugger evaluates code in a paused frame whether or not the
+		// script may generate code from strings.
+		r.rt.SetDebugEvaluator(r.compileEval)
 	}
 	return r
 }
@@ -519,19 +529,20 @@ func (r *Runtime) compile(src, name string) (*bytecodeFunc, error) {
 // compileAt is compile for source placed within a larger file, whose first
 // line is lineOffset lines down and columnOffset columns in.
 func (r *Runtime) compileAt(src, name string, lineOffset, columnOffset int) (*bytecodeFunc, error) {
-	return compileScript(src, name, lineOffset, columnOffset, false, r.nodeQuirks)
+	return compileScript(src, name, lineOffset, columnOffset, false, r.nodeQuirks, r.debug)
 }
 
 // compileScript parses and compiles a script, strict throughout if strict is
 // set, and as V8 has it where it departs from the standard if nodeQuirks is.
-// It depends on no runtime: what it returns any runtime may run.
-func compileScript(src, name string, lineOffset, columnOffset int, strict, nodeQuirks bool) (*bytecodeFunc, error) {
+// It depends on no runtime: what it returns any runtime may run, but for
+// code compiled for a debugger, which only the runtime it is for may.
+func compileScript(src, name string, lineOffset, columnOffset int, strict, nodeQuirks, debug bool) (*bytecodeFunc, error) {
 	prog, err := parser.Parse(src, parser.Options{Strict: strict, NodeQuirks: nodeQuirks})
 	if err != nil {
 		return nil, newSyntaxError(err, name, lineOffset, columnOffset)
 	}
 	fn, err := compiler.Compile(prog, compiler.Options{
-		Source: name, Text: src, NodeQuirks: nodeQuirks,
+		Source: name, Text: src, NodeQuirks: nodeQuirks, Debug: debug,
 		LineOffset: lineOffset, ColumnOffset: columnOffset,
 	})
 	if err != nil {
@@ -786,7 +797,7 @@ func (r *Runtime) compileAndRegisterModule(specifier, source string) (*vm.Module
 		return nil, newSyntaxError(err, specifier, 0, 0)
 	}
 	fn, info, err := compiler.CompileModule(prog, compiler.Options{
-		Source: specifier, Text: source, NodeQuirks: r.nodeQuirks,
+		Source: specifier, Text: source, NodeQuirks: r.nodeQuirks, Debug: r.debug,
 	})
 	if err != nil {
 		return nil, newSyntaxError(err, specifier, 0, 0)
@@ -898,47 +909,67 @@ func WithoutCodeGeneration() Option {
 	return func(c *config) { c.noCodeGeneration = true }
 }
 
+// WithDebugger makes a runtime a debugger can attach to. Everything it
+// compiles -- scripts, modules, a Program it runs, the code of an eval or a
+// Function call -- is compiled for one: each statement is a place the code
+// can stop, at a breakpoint or a step, and records the bindings in scope
+// there, which a debugger shows and evaluates code against. A debugger
+// statement stops there too, once a debugger is attached.
+//
+// It is for development. The runtime runs its code in the interpreter,
+// without the tier that turns a function's bytecode into closures, and a
+// statement costs a test even with no debugger attached; and a debugger can
+// read and change anything the code can. A runtime made without it compiles
+// none of this, and pays nothing for it.
+func WithDebugger() Option {
+	return func(c *config) { c.debug = true }
+}
+
 // installCodeGeneration gives the runtime eval and the Function constructor.
 //
 // They live here rather than in the vm package because they need the parser and
 // compiler, which that package deliberately does not import.
 func (r *Runtime) installCodeGeneration() {
-	r.rt.SetEvaluator(func(source string, req vm.EvalRequest) (*bytecode.Function, error) {
-		popts := parser.Options{NodeQuirks: r.nodeQuirks}
-		copts := compiler.Options{
-			Source: "<eval>", Text: source, NodeQuirks: r.nodeQuirks,
-			// Whatever eval declares on the global object is configurable,
-			// unlike what a script declares: the evaluated code could have
-			// declared it anywhere, so nothing should be able to rely on it.
-			EvalConfigurable: true,
-			EvalOwnVarScope:  true,
-		}
-		if req.Direct {
-			// A direct eval is inside its caller: it inherits the strictness,
-			// may use the caller's `super` and `new.target`, and resolves the
-			// caller's bindings.
-			popts.Strict = req.Scope.Strict
-			popts.AllowSuperProp = req.Scope.AllowSuperProp
-			popts.AllowSuperCall = req.Scope.AllowSuperCall
-			popts.AllowNewTarget = req.Scope.AllowNewTarget
-			copts.EvalScope = req.Scope.Bindings
-			copts.EvalWithDepth = req.Scope.WithDepth
-			copts.PrivateNames = req.Scope.PrivateNames
-			copts.ArgumentNames = req.Scope.ArgumentNames
-			copts.InFieldInit = req.Scope.InFieldInit
-			copts.AllowSuperProp = req.Scope.AllowSuperProp
-			copts.AllowSuperCall = req.Scope.AllowSuperCall
-			copts.AllowNewTarget = req.Scope.AllowNewTarget
-			copts.EvalVarScopeIsGlobal = req.Scope.VarScopeIsGlobal
-		}
-		prog, err := parser.Parse(source, popts)
-		if err != nil {
-			return nil, newSyntaxError(err, "", 0, 0)
-		}
-		fn, err := compiler.Compile(prog, copts)
-		if err != nil {
-			return nil, newSyntaxError(err, "", 0, 0)
-		}
-		return fn, nil
-	})
+	r.rt.SetEvaluator(r.compileEval)
+}
+
+// compileEval compiles the code of an eval or a Function call, or code a
+// debugger evaluates in a frame.
+func (r *Runtime) compileEval(source string, req vm.EvalRequest) (*bytecode.Function, error) {
+	popts := parser.Options{NodeQuirks: r.nodeQuirks}
+	copts := compiler.Options{
+		Source: "<eval>", Text: source, NodeQuirks: r.nodeQuirks, Debug: r.debug,
+		// Whatever eval declares on the global object is configurable,
+		// unlike what a script declares: the evaluated code could have
+		// declared it anywhere, so nothing should be able to rely on it.
+		EvalConfigurable: true,
+		EvalOwnVarScope:  true,
+	}
+	if req.Direct {
+		// A direct eval is inside its caller: it inherits the strictness,
+		// may use the caller's `super` and `new.target`, and resolves the
+		// caller's bindings.
+		popts.Strict = req.Scope.Strict
+		popts.AllowSuperProp = req.Scope.AllowSuperProp
+		popts.AllowSuperCall = req.Scope.AllowSuperCall
+		popts.AllowNewTarget = req.Scope.AllowNewTarget
+		copts.EvalScope = req.Scope.Bindings
+		copts.EvalWithDepth = req.Scope.WithDepth
+		copts.PrivateNames = req.Scope.PrivateNames
+		copts.ArgumentNames = req.Scope.ArgumentNames
+		copts.InFieldInit = req.Scope.InFieldInit
+		copts.AllowSuperProp = req.Scope.AllowSuperProp
+		copts.AllowSuperCall = req.Scope.AllowSuperCall
+		copts.AllowNewTarget = req.Scope.AllowNewTarget
+		copts.EvalVarScopeIsGlobal = req.Scope.VarScopeIsGlobal
+	}
+	prog, err := parser.Parse(source, popts)
+	if err != nil {
+		return nil, newSyntaxError(err, "", 0, 0)
+	}
+	fn, err := compiler.Compile(prog, copts)
+	if err != nil {
+		return nil, newSyntaxError(err, "", 0, 0)
+	}
+	return fn, nil
 }

@@ -170,8 +170,11 @@ TEST262_DIR=/tmp/test262 go test ./conformance \
 
 For parser, compiler, VM, or built-in changes, use the narrowest applicable
 `-conformance.dir` while iterating, then broaden coverage in proportion to the
-change. A passing Go test command is not enough if its log reports newly
-introduced conformance failures.
+change. A compiler change runs test262 a second time with
+`-conformance.debugger`, every runtime made `WithDebugger`: code compiled for
+a debugger has an instruction at each statement no other code has, and must
+do exactly what other code does. A passing Go test command is not enough if
+its log reports newly introduced conformance failures.
 
 Performance-sensitive work should compare fresh processes, not just repeated
 operations in one warmed process. Report bundle size, first-use latency,

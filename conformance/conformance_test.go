@@ -53,6 +53,10 @@ var (
 	// that move from run to run.
 	testTimeout = flag.Duration("conformance.timeout", 30*time.Second,
 		"how long any one test may run before being counted as a timeout")
+	// Code compiled for a debugger has an instruction at each statement
+	// that no other code has, which must change nothing it does.
+	debugger = flag.Bool("conformance.debugger", false,
+		"run every test in a runtime made WithDebugger, its code compiled for a debugger")
 )
 
 // result is the outcome of one test.
@@ -277,11 +281,15 @@ func runOne(suite *conformance.Suite, tc *conformance.Test,
 	// suite whose answers depend on whose machine is running it is no test at
 	// all.
 	newRuntime := func() *quickjs.Runtime {
-		return quickjs.New(
+		opts := []quickjs.Option{
 			quickjs.WithMaxCallDepth(400),
-			quickjs.WithStackSize(64*1024),
+			quickjs.WithStackSize(64 * 1024),
 			quickjs.WithLocale("en-US"),
-		)
+		}
+		if *debugger {
+			opts = append(opts, quickjs.WithDebugger())
+		}
+		return quickjs.New(opts...)
 	}
 	rt := newRuntime()
 	defer rt.Close()

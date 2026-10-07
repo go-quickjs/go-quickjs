@@ -330,6 +330,9 @@ func (c *compiler) resetCompletion() {
 func (c *compiler) compileStatement(s ast.Stmt) {
 	c.enter(s.Pos())
 	defer c.leave()
+	if c.opts.Debug {
+		c.debugStatement(s)
+	}
 
 	switch n := s.(type) {
 	case *ast.ExprStmt:
@@ -424,7 +427,8 @@ func (c *compiler) compileStatement(s ast.Stmt) {
 		c.compileLabeled(n)
 
 	case *ast.DebuggerStmt:
-		// No debugger is attached, so this is a no-op.
+		// Only code compiled for a debugger stops here, at the OpDebugStmt
+		// debugStatement gave it; anything else runs on.
 
 	case *ast.ImportDecl:
 		c.compileImportDecl(n)
@@ -632,6 +636,7 @@ func (c *compiler) popLoop(continueTarget int) {
 func (c *compiler) compileWhile(n *ast.WhileStmt) {
 	start := c.here()
 	c.pushLoop("", true)
+	c.debugExpr(n.Test)
 	exits := c.emitTestJumpIfFalse(n.Test)
 	c.compileStatement(n.Body)
 	c.emit(bytecode.OpJump, uint32(start), 0)
@@ -644,6 +649,7 @@ func (c *compiler) compileDoWhile(n *ast.DoWhileStmt) {
 	c.pushLoop("", true)
 	c.compileStatement(n.Body)
 	testAt := c.here()
+	c.debugExpr(n.Test)
 	for _, j := range c.emitTestJumps(n.Test, true, nil) {
 		c.patchJumpTo(j, start)
 	}
@@ -708,6 +714,7 @@ func (c *compiler) compileForLoop(n *ast.ForStmt, firstSlot uint32, perIteration
 
 	var exits []int
 	if n.Test != nil {
+		c.debugExpr(n.Test)
 		exits = c.emitTestJumpIfFalse(n.Test)
 	}
 	c.compileStatement(n.Body)
@@ -720,6 +727,7 @@ func (c *compiler) compileForLoop(n *ast.ForStmt, firstSlot uint32, perIteration
 		c.emit(bytecode.OpCloseUpvalues, firstSlot, 0)
 	}
 	if n.Update != nil {
+		c.debugExpr(n.Update)
 		c.compileExprForEffect(n.Update)
 	}
 	c.emit(bytecode.OpJump, uint32(start), 0)
@@ -784,6 +792,7 @@ func (c *compiler) compileForOf(n *ast.ForOfStmt) {
 func (c *compiler) compileForAwaitBody(left ast.Node, body ast.Stmt) {
 	start := c.here()
 	c.pushLoop("", true)
+	c.debugAt(left.Pos())
 
 	c.emit(bytecode.OpAsyncIterNext, 0, 0)
 	c.emitAwait(start)
@@ -808,6 +817,7 @@ func (c *compiler) compileForAwaitBody(left ast.Node, body ast.Stmt) {
 func (c *compiler) compileForBody(left ast.Node, body ast.Stmt) {
 	start := c.here()
 	c.pushLoop("", true)
+	c.debugAt(left.Pos())
 
 	// IterNextOrJump advances the iterator, pushing the next value, or jumps
 	// to the exit when it is exhausted.

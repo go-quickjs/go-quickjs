@@ -64,7 +64,14 @@ func (c *compiler) compileDirectEval(n *ast.Call) {
 // evalScopeIdx records what is in scope at the current position and returns its
 // index in the function's table.
 func (c *compiler) evalScopeIdx() uint32 {
-	scope := bytecode.EvalScope{
+	c.fn.EvalScopes = append(c.fn.EvalScopes, c.evalScope())
+	return uint32(len(c.fn.EvalScopes) - 1)
+}
+
+// evalScope is what is in scope at the current position, as a direct eval
+// there would see it.
+func (c *compiler) evalScope() bytecode.EvalScope {
+	return bytecode.EvalScope{
 		Bindings:         c.visibleBindings(),
 		WithDepth:        c.withDepth,
 		Strict:           c.fn.Strict,
@@ -76,8 +83,6 @@ func (c *compiler) evalScopeIdx() uint32 {
 		PrivateNames:     c.visiblePrivateNames(),
 		ArgumentNames:    c.paramScopeNames,
 	}
-	c.fn.EvalScopes = append(c.fn.EvalScopes, scope)
-	return uint32(len(c.fn.EvalScopes) - 1)
 }
 
 // visibleBindings lists every name the evaluated code could reach, innermost

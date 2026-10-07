@@ -24,6 +24,9 @@ type Config struct {
 	// NodeQuirks reproduces known observable Node.js divergences from the
 	// standards where compatibility is more important than conformance.
 	NodeQuirks bool
+	// Debug makes the runtime for a debugger, which runs code compiled for
+	// one; see zdebug.go.
+	Debug bool
 }
 
 // New creates a Runtime with the standard globals installed.
@@ -55,6 +58,9 @@ func New(cfg Config) *Runtime {
 		cleanups:         &cleanupQueue{},
 		hostJobs:         hostQueue{ready: make(chan struct{}, 1)},
 		asyncCtx:         Undefined,
+	}
+	if cfg.Debug {
+		r.debug = &debugState{}
 	}
 	r.Realm = newRealm(r)
 	r.initWellKnownSymbols()

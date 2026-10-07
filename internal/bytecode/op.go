@@ -540,6 +540,12 @@ const (
 	// before the store rather than before the value, which nothing could
 	// tell apart. It pops the value.
 	OpSetGlobalStrict
+	// OpDebugStmt begins a statement in code compiled for a debugger, and is
+	// in no other code: A is the statement's index in the function's
+	// Statements, and B is 1 for a debugger statement. It does nothing unless
+	// a debugger has asked to stop -- at a breakpoint, a step, or anywhere --
+	// or the statement is a debugger statement and one is listening.
+	OpDebugStmt
 
 	// opCount is the number of opcodes, used to size the name table.
 	opCount
@@ -625,6 +631,7 @@ var opNames = [opCount]string{
 	OpArgumentsLength:       "arguments_length",
 	OpImport:                "import",
 	OpSetGlobalStrict:       "set_global_strict",
+	OpDebugStmt:             "debug_stmt",
 	OpArrayRest:             "array_rest",
 	OpObjectRest:            "object_rest",
 

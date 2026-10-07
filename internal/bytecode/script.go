@@ -51,6 +51,9 @@ func NewScript(name, text string) *Script {
 	return s
 }
 
+// Text is the script's source text, or empty when it is not known.
+func (s *Script) Text() string { return s.text }
+
 // HasText reports whether the script's text is known, without which no
 // position in it is.
 func (s *Script) HasText() bool { return s != nil && s.text != "" }

@@ -269,6 +269,9 @@ type Runtime struct {
 	// loads modules -- a loader, a synthetic module's evaluate -- with no
 	// script running; see hostCall.
 	hostCalls int
+	// debug is the debugger of a runtime made for one, and nil for any
+	// other; see zdebug.go.
+	debug *debugState
 }
 
 // Realm is a set of intrinsics and the global object that goes with them.
@@ -691,6 +694,9 @@ type Thrown struct {
 	trace stackTrace
 	// cause is the Go error an error object was made from, by ThrowError.
 	cause error
+	// debugSeen marks an exception a debugger has been told of, which it is
+	// once however many frames it unwinds.
+	debugSeen bool
 }
 
 // Cause is the Go error the thrown error object was made from, when a Go
@@ -1027,6 +1033,9 @@ func (r *Runtime) checkInterruptNow() error {
 			return r.stop(r.ctx.Err())
 		default:
 		}
+	}
+	if r.debug != nil {
+		r.debugInterrupt()
 	}
 	if r.meter != nil {
 		return r.checkMemory()

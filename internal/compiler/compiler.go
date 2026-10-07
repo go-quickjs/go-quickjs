@@ -90,6 +90,11 @@ type Options struct {
 	AllowSuperProp bool
 	AllowSuperCall bool
 	AllowNewTarget bool
+	// Debug compiles for a debugger: each statement begins with an
+	// OpDebugStmt, a place a debugger can stop, and the function records
+	// what is in scope there, as a direct eval's call site does. The code is
+	// for one runtime: the scopes capture what a debugger may read.
+	Debug bool
 }
 
 // bindKind classifies a binding, which decides its initialization and
@@ -531,6 +536,9 @@ func newCompiler(parent *compiler, opts Options) *compiler {
 		c.script.SetOffset(int32(opts.LineOffset), int32(opts.ColumnOffset))
 	}
 	c.fn.Script = c.script
+	if opts.Debug {
+		c.fn.Debug = &bytecode.FunctionDebug{}
+	}
 	return c
 }
 

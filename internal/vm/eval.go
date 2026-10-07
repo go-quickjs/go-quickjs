@@ -16,6 +16,9 @@ import (
 
 // prepare converts a compiled template into a closure ready to run.
 func (r *Runtime) prepare(fn *bytecode.Function) *closure {
+	if r.debug != nil && fn.TopLevel {
+		r.debugLoad(fn)
+	}
 	cl := &closure{fn: fn, realm: r.Realm}
 
 	cl.names = make([]Atom, len(fn.Names))

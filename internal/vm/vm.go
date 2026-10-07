@@ -2884,6 +2884,14 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				break
 			}
 			sp = pushAt(stack, sp, Obj(f.callee))
+		case bytecode.OpDebugStmt:
+			// Only code compiled for a debugger has one, and it does nothing
+			// until the debugger has asked to stop somewhere.
+			if d := r.debug; d != nil && (d.armed || in.B != 0) {
+				if vmErr = r.debugStatement(f, in); vmErr != nil {
+					goto onError
+				}
+			}
 
 		default:
 			vmErr = r.throwTypeError("unimplemented opcode %s", in.Op)
@@ -2928,6 +2936,9 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 // context, or the stack limit being reached -- deliberately is not, so that a
 // script cannot defeat its own sandbox with try/catch.
 func (r *Runtime) unwindToHandler(f *frame, sp int, err error) (int, bool) {
+	if r.debug != nil {
+		r.debugThrow(err)
+	}
 	thrown, ok := err.(*Thrown)
 	if !ok || len(f.handlers) == 0 {
 		return sp, false

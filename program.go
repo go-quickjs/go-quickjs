@@ -63,7 +63,7 @@ func Compile(name, src string, opts ...CompileOption) (*Program, error) {
 	for _, o := range opts {
 		o(&c)
 	}
-	fn, err := compileScript(src, name, c.line, c.column, c.strict, false)
+	fn, err := compileScript(src, name, c.line, c.column, c.strict, false, false)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +82,7 @@ func (r *Runtime) Compile(name, src string, opts ...CompileOption) (*Program, er
 	for _, o := range opts {
 		o(&c)
 	}
-	fn, err := compileScript(src, name, c.line, c.column, c.strict, true)
+	fn, err := compileScript(src, name, c.line, c.column, c.strict, true, false)
 	if err != nil {
 		return nil, err
 	}
@@ -101,16 +101,21 @@ func (r *Runtime) CodeGenerationAllowed() bool { return !r.noCodeGeneration }
 // and compiles some code as V8 does, which the program is then compiled for
 // too, once, however many runtimes run it.
 func (p *Program) code(r *Runtime) (*bytecodeFunc, error) {
+	if r.debug {
+		// Code compiled for a debugger is the runtime's own, so the
+		// program is compiled for it each time it runs.
+		return compileScript(p.src, p.name, p.line, p.column, p.strict, r.nodeQuirks, true)
+	}
 	if !r.nodeQuirks {
 		p.standardOnce.Do(func() {
 			if p.standard == nil {
-				p.standard, p.standardErr = compileScript(p.src, p.name, p.line, p.column, p.strict, false)
+				p.standard, p.standardErr = compileScript(p.src, p.name, p.line, p.column, p.strict, false, false)
 			}
 		})
 		return p.standard, p.standardErr
 	}
 	p.quirksOnce.Do(func() {
-		p.quirks, p.quirksErr = compileScript(p.src, p.name, p.line, p.column, p.strict, true)
+		p.quirks, p.quirksErr = compileScript(p.src, p.name, p.line, p.column, p.strict, true, false)
 	})
 	return p.quirks, p.quirksErr
 }

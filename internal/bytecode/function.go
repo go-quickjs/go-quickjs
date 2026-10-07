@@ -219,6 +219,27 @@ const (
 	LeafPure
 )
 
+// FunctionDebug is a function's record for a debugger.
+type FunctionDebug struct {
+	// Statements are where the statements begin.
+	Statements []Statement
+	// State is the VM's own record of the function: which statements have
+	// breakpoints.
+	State unsafe.Pointer
+}
+
+// Statement is where a statement begins in code compiled for a debugger: a
+// place it can stop.
+type Statement struct {
+	// PC is the statement's OpDebugStmt.
+	PC uint32
+	// Pos is the byte offset in the script's text the statement starts at.
+	Pos int32
+	// Scope is the index in EvalScopes of what is in scope there, the
+	// bindings a debugger shows and evaluates code against.
+	Scope uint32
+}
+
 // SourceLoc attributes instructions to a source position, for stack traces.
 type SourceLoc struct {
 	// PC is the index of the first instruction covered by this entry.
@@ -359,6 +380,11 @@ type Function struct {
 	Script *Script
 	Start  int32
 	Lines  []SourceLoc
+	// Debug is what code compiled for a debugger has of its own, and nil
+	// for any other code, which pays one pointer for it. Such code is
+	// compiled for the one runtime that runs it, so it is not shared as
+	// other templates are.
+	Debug *FunctionDebug
 	// Text is the original source text of the function, which
 	// Function.prototype.toString returns.
 	Text string

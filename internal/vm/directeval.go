@@ -44,7 +44,12 @@ func (r *Runtime) evalDirect(caller *frame, scope bytecode.EvalScope, src string
 		fn.Script.EvalOrigin = r.evalOrigin()
 		fn.Script.Referrer = r.activeReferrer()
 	}
+	return r.evalIn(caller, fn)
+}
 
+// evalIn runs a direct eval's compiled code in the caller's scope, as a
+// debugger runs code it evaluates in a frame.
+func (r *Runtime) evalIn(caller *frame, fn *bytecode.Function) (Value, error) {
 	cl := r.prepare(fn)
 	// Each upvalue the code asked for names one of the caller's bindings. A
 	// local is captured from the live frame, which is what lets the evaluated
