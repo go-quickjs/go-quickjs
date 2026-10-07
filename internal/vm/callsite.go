@@ -114,14 +114,14 @@ func (r *Runtime) initCallSite() {
 		if fr.fn == nil {
 			return Null
 		}
-		line, _ := fr.fn.Script.Position(fr.fn.Start)
+		line, _ := fr.enclosing()
 		return num(line)
 	})
 	method("getEnclosingColumnNumber", func(rt *Runtime, fr *stackFrame) Value {
 		if fr.fn == nil {
 			return Null
 		}
-		_, col := fr.fn.Script.Position(fr.fn.Start)
+		_, col := fr.enclosing()
 		return num(col)
 	})
 	method("getPosition", func(rt *Runtime, fr *stackFrame) Value {

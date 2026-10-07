@@ -93,6 +93,9 @@ type options struct {
 	inspect     string
 	inspectWait bool
 	inspectBrk  bool
+
+	// sourceMaps is --enable-source-maps.
+	sourceMaps bool
 }
 
 func run(argv []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -227,6 +230,9 @@ func newRuntime(opts *options) (*quickjs.Runtime, error) {
 	}
 	if opts.inspect != "" {
 		rtOpts = append(rtOpts, quickjs.WithDebugger())
+	}
+	if opts.sourceMaps {
+		rtOpts = append(rtOpts, quickjs.WithSourceMaps(quickjs.ReadSourceMap))
 	}
 	rt := quickjs.New(rtOpts...)
 	if _, err := installModules(rt); err != nil {
@@ -1247,6 +1253,8 @@ func parseArgs(argv []string, stdout io.Writer) (*options, error) {
 			opts.noCodegen = true
 		case "--node-quirks":
 			opts.nodeQuirks = true
+		case "--enable-source-maps":
+			opts.sourceMaps = true
 		case "--inspect", "--inspect-wait", "--inspect-brk":
 			// As node's: --inspect[=[host:]port], without a value only, for
 			// a value would otherwise be taken for the program.
@@ -1358,6 +1366,9 @@ compatibility:
       --node-quirks       reproduce known Node.js deviations from standards
 
 debugging:
+      --enable-source-maps          say where in the source a script was
+                                    compiled from -- TypeScript, say -- an
+                                    error's stack is, by its source map
       --inspect[=[HOST:]PORT]       let a debugger -- Chrome's DevTools, VS
                                     Code -- attach, at 127.0.0.1:9229 unless
                                     given another; a debugger can do anything

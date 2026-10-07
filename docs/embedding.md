@@ -243,6 +243,11 @@ different: it is thrown as an ordinary exception, so if you need to tell "my
 call ran out of time" apart from "a Go function reported a timeout", check for
 `*quickjs.Error` first.
 
+A script compiled from another language -- TypeScript, say -- may name its
+source map with `//# sourceMappingURL=`. A runtime made `WithSourceMaps` writes
+an error's stack in the original source, as Node's `--enable-source-maps` does;
+see [Debugging](debugging.md#stack-traces).
+
 Source that doesn't compile -- given to `Eval`, `EvalFile`, `EvalModule`,
 `Compile`, or a module a loader returned -- is a `*quickjs.SyntaxError`, which
 says where: `Position` returns the name the source was compiled under and the

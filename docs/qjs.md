@@ -86,7 +86,8 @@ serve({port: 8080}, async (request) => {
 The bounds are there too — `--memory-limit 64m`, `--stack-size`, `--timeout 5s`,
 `--no-code-generation` — and `--check` parses without running. `--inspect`,
 `--inspect-wait` and `--inspect-brk` let Chrome's DevTools or VS Code attach,
-as Node's do; see [Debugging](debugging.md). The prompt keeps
+as Node's do, and `--enable-source-maps` writes an error's stack in the source
+a script was compiled from; see [Debugging](debugging.md). The prompt keeps
 an unfinished line rather than refusing it, so a function can be typed over
 several lines, leaves the last value in `_`, and takes a top-level `await`. On
 a terminal the line is edited as it is typed -- the cursor moves by character

@@ -121,6 +121,8 @@ type config struct {
 	nodeQuirks       bool
 	noCodeGeneration bool
 	debug            bool
+	sourceMaps       bool
+	sourceMapLoader  SourceMapLoader
 }
 
 // WithMemoryLimit caps the memory a script may hold, beyond what the
@@ -265,6 +267,9 @@ func New(opts ...Option) *Runtime {
 		// A debugger evaluates code in a paused frame whether or not the
 		// script may generate code from strings.
 		r.rt.SetDebugEvaluator(r.compileEval)
+	}
+	if c.sourceMaps {
+		r.installSourceMaps(c.sourceMapLoader)
 	}
 	return r
 }

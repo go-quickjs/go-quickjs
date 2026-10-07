@@ -104,9 +104,32 @@ Code an `eval` or a `Function` call compiles may name itself with
 name, a breakpoint set by the name stops in it, and a stack trace calls it so,
 as V8's do -- `at eval (generated.js:1:7)` rather than where it was evaluated.
 
-Stack traces themselves are not mapped: an error thrown by compiled code is
-reported where it is in the compiled script, as Node reports it without
-`--enable-source-maps`.
+### Stack traces
+
+An error's stack can be mapped too, as Node's `--enable-source-maps` maps it,
+with or without a debugger: `qjs --enable-source-maps app.js`, or a runtime
+made `WithSourceMaps`. Each frame in a script that names its map is placed in
+the source it was compiled from, and called by the name the map gives it:
+
+```
+Error: too big: 150
+    at add (/proj/src/app.ts:3:11)
+    at Calc.push (/proj/src/app.ts:9:34)
+```
+
+where the compiled script alone says `at a (/proj/dist/app.js:5:15)`. A host
+gives the loader that reads a map: `nil` reads only one inline in the script,
+and `quickjs.ReadSourceMap` reads them as Node does, from the file a relative
+URL names beside the script too, and none of a script in `node_modules`:
+
+```go
+rt := quickjs.New(quickjs.WithSourceMaps(quickjs.ReadSourceMap))
+```
+
+A map is read the first time a stack in its script is written, once; until
+then, and in a runtime made without the option, nothing is read or kept. A
+script's own `Error.prepareStackTrace` gets the frames as they are, as Node's
+does.
 
 ## What it costs
 

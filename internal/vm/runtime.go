@@ -272,6 +272,9 @@ type Runtime struct {
 	// debug is the debugger of a runtime made for one, and nil for any
 	// other; see zdebug.go.
 	debug *debugState
+	// sourceMaps maps stack traces through scripts' source maps, once a
+	// host gives a loader; see zsourcemap.go.
+	sourceMaps *sourceMaps
 }
 
 // Realm is a set of intrinsics and the global object that goes with them.

@@ -312,6 +312,15 @@ func (r *Runtime) formatTrace(o *Object, frames []stackFrame) (Value, error) {
 	b.WriteString(header)
 	for i := range frames {
 		b.WriteString("\n    at ")
+		if r.sourceMaps != nil {
+			var next *stackFrame
+			if i+1 < len(frames) {
+				next = &frames[i+1]
+			}
+			if r.writeMappedCallSite(&b, &frames[i], next) {
+				continue
+			}
+		}
 		r.writeCallSite(&b, &frames[i])
 	}
 	return Str(NewString(b.String())), nil
