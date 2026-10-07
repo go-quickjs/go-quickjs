@@ -595,7 +595,7 @@ func explainMissing(rt *quickjs.Runtime, opts *options) error {
 		// WebSocket is reached with new, so the stand-in has to be something
 		// that can be constructed: a plain function would complain about the
 		// wrong thing entirely.
-		refusedSocket, err := rt.Eval(`(class WebSocket {
+		refusedSocket, err := evalInternal(rt, "<eval>", `(class WebSocket {
 			constructor() {
 				throw new Error(
 					"opening a socket is not allowed: run qjs with --allow-net")
@@ -758,7 +758,7 @@ func workerModules(rt *quickjs.Runtime) error {
 	if err != nil {
 		return err
 	}
-	define, err := rt.Eval(`(f) => Object.defineProperty(globalThis, Symbol.for("qjs.runMain"), { value: f })`)
+	define, err := evalInternal(rt, "<eval>", `(f) => Object.defineProperty(globalThis, Symbol.for("qjs.runMain"), { value: f })`)
 	if err != nil {
 		return err
 	}

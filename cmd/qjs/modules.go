@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
+	"github.com/go-quickjs/go-quickjs/internal/hostaccess"
 )
 
 // Node's module system, as qjs runs it: require and module for CommonJS,
@@ -76,7 +77,7 @@ func installModules(rt *quickjs.Runtime) (*nodeModules, error) {
 	m := &nodeModules{rt: rt}
 	// Named as node names its loader, so that its frames in a stack trace
 	// say whose they are.
-	boot, err := rt.EvalFile("node:internal/modules/cjs/loader", modulesJS)
+	boot, err := evalInternal(rt, "node:internal/modules/cjs/loader", modulesJS)
 	if err != nil {
 		return nil, err
 	}
@@ -849,4 +850,15 @@ func decodeJSON(dec *json.Decoder) (*jsonValue, error) {
 		return &jsonValue{kind: 'n'}, nil
 	}
 	return &jsonValue{kind: 'x'}, nil
+}
+
+// evalInternal evaluates a script of qjs's own, as EvalFile does but
+// compiled as though the runtime had no debugger: a debugger attached with
+// --inspect neither lists it nor stops in it.
+func evalInternal(rt *quickjs.Runtime, name, src string) (quickjs.Value, error) {
+	v, err := hostaccess.EvalInternal(rt, name, src)
+	if err != nil {
+		return quickjs.Value{}, err
+	}
+	return v.(quickjs.Value), nil
 }

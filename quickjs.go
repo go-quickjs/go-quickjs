@@ -75,6 +75,7 @@ import (
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/compiler"
+	"github.com/go-quickjs/go-quickjs/internal/hostaccess"
 	"github.com/go-quickjs/go-quickjs/internal/parser"
 	"github.com/go-quickjs/go-quickjs/internal/vm"
 )
@@ -410,6 +411,30 @@ func (r *Runtime) EvalFile(name, src string) (Value, error) {
 // it: the script is called name in stack traces, and stops when ctx is done.
 func (r *Runtime) EvalFileContext(ctx context.Context, name, src string) (Value, error) {
 	return r.evalIn(ctx, nil, name, src)
+}
+
+// evalInternal evaluates a script of this module's own -- the standard
+// library's, qjs's -- compiled as though the runtime had no debugger, so
+// that one neither lists it nor stops in it.
+func (r *Runtime) evalInternal(name, src string) (result Value, err error) {
+	if r.closed {
+		return Value{}, ErrClosed
+	}
+	defer r.guard(&err)
+	fn, err := compileScript(src, name, 0, 0, false, r.nodeQuirks, false)
+	if err != nil {
+		return Value{}, err
+	}
+	return r.runIn(context.Background(), nil, fn)
+}
+
+func init() {
+	hostaccess.VM = func(rt any) *vm.Runtime { return rt.(*Runtime).rt }
+	hostaccess.Wrap = func(rt any, v vm.Value) any { return Value{v: v, rt: rt.(*Runtime).rt} }
+	hostaccess.Unwrap = func(v any) vm.Value { return v.(Value).v }
+	hostaccess.EvalInternal = func(rt any, name, src string) (any, error) {
+		return rt.(*Runtime).evalInternal(name, src)
+	}
 }
 
 // evalIn runs a script in a realm, or in the runtime's own when re is nil, and

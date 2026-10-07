@@ -7,6 +7,7 @@ import (
 	"time"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
+	"github.com/go-quickjs/go-quickjs/internal/hostaccess"
 )
 
 // Console installs the console object, writing to the given streams.
@@ -44,6 +45,17 @@ func Console(rt *quickjs.Runtime, out, errOut io.Writer) error {
 	return rt.Set("console", console)
 }
 
+// evalInternal evaluates a script of the standard library's own, as EvalFile
+// does but compiled as though the runtime had no debugger: one made
+// WithDebugger neither lists it nor stops in it.
+func evalInternal(rt *quickjs.Runtime, name, src string) (quickjs.Value, error) {
+	v, err := hostaccess.EvalInternal(rt, name, src)
+	if err != nil {
+		return quickjs.Value{}, err
+	}
+	return v.(quickjs.Value), nil
+}
+
 // evalWithHost evaluates source that is a function of one argument and calls it
 // with the host object.
 //
@@ -55,7 +67,7 @@ func Console(rt *quickjs.Runtime, out, errOut io.Writer) error {
 // the object it made clones: "host" (as the codec says), "opaque" (as an
 // empty object), "unsupported", or "transfer" (only by transferring it).
 func evalWithHost(rt *quickjs.Runtime, name, src string, host quickjs.Value) (quickjs.Value, error) {
-	fn, err := rt.EvalFile(name, src)
+	fn, err := evalInternal(rt, name, src)
 	if err != nil {
 		return quickjs.Value{}, err
 	}
@@ -328,7 +340,7 @@ func Inspect(rt *quickjs.Runtime, v quickjs.Value) string {
 	if err != nil || !console.IsObject() {
 		return v.String()
 	}
-	fn, err := rt.Eval(`console[Symbol.for("quickjs.inspect")]`)
+	fn, err := evalInternal(rt, "<eval>", `console[Symbol.for("quickjs.inspect")]`)
 	if err != nil || !fn.IsFunction() {
 		return v.String()
 	}

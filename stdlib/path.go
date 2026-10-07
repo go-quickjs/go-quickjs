@@ -23,7 +23,7 @@ func Path(rt *quickjs.Runtime) error {
 
 // installPath installs path, as path.win32 if windows is set.
 func installPath(rt *quickjs.Runtime, windows bool) error {
-	f, err := rt.Eval(pathJS)
+	f, err := evalInternal(rt, "<eval>", pathJS)
 	if err != nil {
 		return err
 	}
