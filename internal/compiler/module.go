@@ -57,6 +57,7 @@ func CompileModule(prog *ast.Program, opts Options) (fn *bytecode.Function, info
 	info.Exports = make(map[string]string)
 
 	c := newCompiler(nil, opts)
+	c.script.Comments = (*bytecode.SourceComments)(prog.Comments)
 	c.fn.Name = "<module>"
 	c.fn.TopLevel = true
 	c.fn.Strict = true

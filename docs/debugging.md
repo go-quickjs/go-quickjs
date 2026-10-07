@@ -90,6 +90,24 @@ breakpoints with it, and a pause it was attending to goes on.
 `Options.ScriptURL` names scripts to clients -- `qjs` makes a file URL of an
 absolute path -- and `Options.URL` and `Options.Title` say what the target is.
 
+## Source maps
+
+A script's last `//# sourceMappingURL=` comment is told to the debugger as V8
+tells it, and the debugger does the mapping: VS Code reads the map and shows
+the original source -- TypeScript, say -- and breakpoints set in it land in the
+compiled script; Chrome's DevTools does the same with a map it can load, which
+an inline one, a `data:` URL, always is. As with Node, the target does not load
+a map for DevTools (`Network.loadNetworkResource`).
+
+Code an `eval` or a `Function` call compiles may name itself with
+`//# sourceURL=name`, as bundlers and tools do: a debugger lists it by that
+name, a breakpoint set by the name stops in it, and a stack trace calls it so,
+as V8's do -- `at eval (generated.js:1:7)` rather than where it was evaluated.
+
+Stack traces themselves are not mapped: an error thrown by compiled code is
+reported where it is in the compiled script, as Node reports it without
+`--enable-source-maps`.
+
 ## What it costs
 
 A runtime made without `WithDebugger` compiles none of this and pays nothing
@@ -118,7 +136,7 @@ alive, since a debugger may show any of them.
 | Values | objects and their properties, accessors without calling them, prototypes, a promise's state, a proxy's target and handler |
 | Evaluation | in a paused frame, reading and changing its variables; in global scope; `callFunctionOn`; changing a variable |
 | The console | each call, with its arguments and where it was made |
-| Scripts | their source, the places a breakpoint can go, a source map's URL |
+| Scripts | their source, the places a breakpoint can go, a source map's URL, a name given by `//# sourceURL=` |
 
 Not yet: async stack traces, restarting a frame, live editing, profiling and
 heap snapshots.

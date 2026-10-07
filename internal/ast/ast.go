@@ -35,6 +35,16 @@ type Program struct {
 	Strict bool
 	Module bool
 	Start  int
+	// Comments are what the source's //# sourceURL= and
+	// //# sourceMappingURL= comments say, and nil when it has neither.
+	Comments *SourceComments
+}
+
+// SourceComments are what a source's //# sourceURL= and
+// //# sourceMappingURL= comments say: the name it gives itself, which stack
+// traces and debuggers call it by, and its source map.
+type SourceComments struct {
+	SourceURL, SourceMapURL string
 }
 
 func (p *Program) Pos() int { return p.Start }

@@ -183,8 +183,12 @@ func location(at vm.DebugLocation) map[string]any {
 
 // urlOf is the URL a client is told a script has.
 func (t *Target) urlOf(s *vm.DebugScript) string {
-	if s == nil || s.Name == "" {
+	switch {
+	case s == nil || s.Name == "":
 		return ""
+	case s.HasSourceURL:
+		// A name the code gave itself is told as it is, as V8 tells it.
+		return s.Name
 	}
 	return t.opts.ScriptURL(s.Name)
 }
@@ -205,23 +209,7 @@ func (t *Target) scriptInfo(s *vm.DebugScript) map[string]any {
 		"startLine": startLine, "startColumn": startCol, "endLine": endLine, "endColumn": endCol,
 		"executionContextId": 1, "hash": hex.EncodeToString(sum[:]),
 		"length": len(utf16.Encode([]rune(src))), "scriptLanguage": "JavaScript",
-	}
-	if u := sourceMapURL(src); u != "" {
-		info["sourceMapURL"] = u
+		"sourceMapURL": s.SourceMapURL, "hasSourceURL": s.HasSourceURL,
 	}
 	return info
-}
-
-// sourceMapURL is what a script's last sourceMappingURL comment names.
-func sourceMapURL(src string) string {
-	for _, mark := range []string{"//# sourceMappingURL=", "//@ sourceMappingURL="} {
-		if i := strings.LastIndex(src, mark); i >= 0 {
-			rest := src[i+len(mark):]
-			if j := strings.IndexAny(rest, " \t\r\n"); j >= 0 {
-				rest = rest[:j]
-			}
-			return rest
-		}
-	}
-	return ""
 }

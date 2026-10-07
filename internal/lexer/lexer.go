@@ -50,6 +50,17 @@ type Lexer struct {
 	// identEscaped records that the identifier name last scanned was written
 	// with an escape.
 	identEscaped bool
+	// magic is the magic comments read so far, nil until there is one,
+	// which few sources have.
+	magic *magicComments
+}
+
+// magicComments are a source's //# sourceURL= and //# sourceMappingURL=
+// comments, each the last one in the source, and where it was, so that a
+// region scanned twice changes nothing.
+type magicComments struct {
+	sourceURL, sourceMapURL       string
+	sourceURLPos, sourceMapURLPos int
 }
 
 // AllowHTMLComments makes <!-- start a single-line comment anywhere, and -->
@@ -186,7 +197,9 @@ func (l *Lexer) skipSpace() error {
 		case '/':
 			switch l.peekByte(1) {
 			case '/':
+				start := l.pos
 				l.skipLineComment()
+				l.magicComment(start)
 			case '*':
 				start := l.pos
 				l.pos += 2
@@ -244,6 +257,61 @@ func (l *Lexer) skipSpace() error {
 		}
 	}
 	return nil
+}
+
+// magicComment records a single-line comment that names the source --
+// //# sourceURL=name -- or its source map -- //# sourceMappingURL=url --
+// as V8 reads them: # or the older @ and whitespace, the name, = and a
+// value that is the rest of the line but for whitespace around it, with
+// none inside it. The last one in the source counts.
+func (l *Lexer) magicComment(start int) {
+	text := l.src[start+2 : l.pos]
+	if len(text) < 2 || text[0] != '#' && text[0] != '@' || text[1] != ' ' && text[1] != '\t' {
+		return
+	}
+	text = strings.TrimLeft(text[1:], " \t")
+	mapping := false
+	switch {
+	case strings.HasPrefix(text, "sourceURL="):
+		text = text[len("sourceURL="):]
+	case strings.HasPrefix(text, "sourceMappingURL="):
+		text, mapping = text[len("sourceMappingURL="):], true
+	default:
+		return
+	}
+	value := strings.Trim(text, " \t\v\f")
+	if value == "" || strings.ContainsAny(value, " \t\v\f") {
+		return
+	}
+	if l.magic == nil {
+		l.magic = &magicComments{}
+	}
+	url, at := &l.magic.sourceURL, &l.magic.sourceURLPos
+	if mapping {
+		url, at = &l.magic.sourceMapURL, &l.magic.sourceMapURLPos
+	}
+	if start+1 < *at {
+		return
+	}
+	*url, *at = value, start+1
+}
+
+// SourceURL is the name the source gave itself with a //# sourceURL=
+// comment, or empty.
+func (l *Lexer) SourceURL() string {
+	if l.magic == nil {
+		return ""
+	}
+	return l.magic.sourceURL
+}
+
+// SourceMapURL is the source map a //# sourceMappingURL= comment names, or
+// empty.
+func (l *Lexer) SourceMapURL() string {
+	if l.magic == nil {
+		return ""
+	}
+	return l.magic.sourceMapURL
 }
 
 // skipLineComment consumes a single-line comment, up to but not including

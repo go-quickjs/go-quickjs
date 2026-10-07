@@ -133,9 +133,9 @@ func (r *Runtime) SetBreakpointsActive(on bool) {
 }
 
 // SetBreakpointMatching sets a breakpoint at a line and column of every
-// script whose name match accepts, and of every one loaded later, as
-// SetBreakpoint does for one name.
-func (r *Runtime) SetBreakpointMatching(match func(name string) bool, line, col int) (int, []DebugLocation) {
+// script match accepts, and of every one loaded later, as SetBreakpoint
+// does for one name.
+func (r *Runtime) SetBreakpointMatching(match func(*DebugScript) bool, line, col int) (int, []DebugLocation) {
 	d := r.debug
 	if d == nil {
 		return 0, nil
@@ -144,7 +144,7 @@ func (r *Runtime) SetBreakpointMatching(match func(name string) bool, line, col 
 	b.match = match
 	var at []DebugLocation
 	for _, s := range d.scripts {
-		if s.Name != "" && match(s.Name) {
+		if s.Name != "" && match(s) {
 			if loc, ok := d.resolve(b, s); ok {
 				at = append(at, loc)
 			}

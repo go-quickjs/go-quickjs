@@ -402,6 +402,7 @@ type constKey struct {
 // Compile compiles a parsed program into a top-level function.
 func Compile(prog *ast.Program, opts Options) (fn *bytecode.Function, err error) {
 	c := newCompiler(nil, opts)
+	c.script.Comments = (*bytecode.SourceComments)(prog.Comments)
 	c.fn.Name = "<main>"
 	c.fn.TopLevel = true
 	c.fn.Strict = prog.Strict

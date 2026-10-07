@@ -342,3 +342,44 @@ func TestInspectorServerClose(t *testing.T) {
 		t.Fatalf("%v %v", v, err)
 	}
 }
+
+// TestInspectorSourceURL pins what a client is told of a script's source
+// map and of eval code that names itself with //# sourceURL=: the map's URL
+// as written, and the name as the code's URL, by which a breakpoint set
+// before the code is evaluated stops in it.
+func TestInspectorSourceURL(t *testing.T) {
+	rt, _, tg := newTarget(t)
+	done := make(chan []string, 1)
+	go func() {
+		var got []string
+		c := dial(t, tg.WebSocketURL())
+		c.call("Debugger.enable", nil)
+		c.call("Debugger.setBreakpointByUrl", map[string]any{"url": "dyn.js", "lineNumber": 1})
+		c.call("Runtime.runIfWaitingForDebugger", nil)
+		for range 2 {
+			p := c.await("Debugger.scriptParsed")
+			got = append(got, fmt.Sprint(p["url"], " map=", p["sourceMapURL"], " sourceURL=", p["hasSourceURL"]))
+		}
+		p := c.await("Debugger.paused")
+		top := get(p, "callFrames", 0).(map[string]any)
+		got = append(got, fmt.Sprint("paused ", top["url"], ":", get(top, "location", "lineNumber")))
+		c.call("Debugger.resume", nil)
+		done <- got
+	}()
+	if err := tg.WaitForDebugger(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	src := "eval('let q = 1;' + String.fromCharCode(10) + 'q + 1;' + String.fromCharCode(10) + '//# sourceURL=dyn.js');\n//# sourceMappingURL=app.js.map\n"
+	if _, err := rt.EvalFile("app.js", src); err != nil {
+		t.Fatal(err)
+	}
+	want := "app.js map=app.js.map sourceURL=false|dyn.js map= sourceURL=true|paused dyn.js:1"
+	select {
+	case got := <-done:
+		if strings.Join(got, "|") != want {
+			t.Errorf("got  %s\nwant %s", strings.Join(got, "|"), want)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the client did not finish")
+	}
+}

@@ -246,8 +246,8 @@ func (c *session) setBreakpointByURL(p params) (any, error) {
 	if err != nil {
 		return nil, errorf("Incorrect url regex")
 	}
-	id, at := t.vm.SetBreakpointMatching(func(name string) bool {
-		return match(t.opts.ScriptURL(name))
+	id, at := t.vm.SetBreakpointMatching(func(s *vm.DebugScript) bool {
+		return match(t.urlOf(s))
 	}, p.LineNumber+1, p.ColumnNumber+1)
 	c.own(id, p.Condition)
 	locs := []any{}

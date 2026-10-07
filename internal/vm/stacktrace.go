@@ -424,6 +424,16 @@ func (fr *stackFrame) fileName() string {
 	return fr.fn.Script.Name
 }
 
+// sourceName is what a trace calls the frame's script: the name a
+// //# sourceURL= comment gave it, eval code's too, or else its file name,
+// as V8's GetScriptNameOrSourceURL has it.
+func (fr *stackFrame) sourceName() string {
+	if fr.fn != nil && fr.fn.Script != nil && fr.fn.Script.SourceURL() != "" {
+		return fr.fn.Script.SourceURL()
+	}
+	return fr.fileName()
+}
+
 // typeName is the name of the receiver's constructor, found without running
 // any code: a function receiver -- a static method's class -- is named for
 // itself, and anything else for the nearest constructor property on its
@@ -572,8 +582,10 @@ func (r *Runtime) writeLocation(b *strings.Builder, fr *stackFrame) {
 		b.WriteString("<anonymous>")
 		return
 	}
-	name := fr.fileName()
-	if fr.isEval() {
+	name := fr.sourceName()
+	if name == "" && fr.isEval() {
+		// Eval code is placed where it was evaluated, unless it named
+		// itself.
 		b.WriteString(fr.fn.Script.EvalOrigin)
 		b.WriteString(", ")
 	}

@@ -227,11 +227,16 @@ func Parse(src string, opts Options) (prog *ast.Program, err error) {
 	// not: nothing would dispose of them before the next script ran.
 	body = append(body, p.parseStatementList(func() bool { return p.tok.Kind == lexer.EOF }, p.module)...)
 
-	return &ast.Program{
+	program := &ast.Program{
 		Body:   body,
 		Strict: p.strict,
 		Module: p.module,
-	}, nil
+	}
+	// The whole source has been read, so the comments are its last.
+	if url, mapURL := p.lex.SourceURL(), p.lex.SourceMapURL(); url != "" || mapURL != "" {
+		program.Comments = &ast.SourceComments{SourceURL: url, SourceMapURL: mapURL}
+	}
+	return program, nil
 }
 
 // ---------------------------------------------------------------------------

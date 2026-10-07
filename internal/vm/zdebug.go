@@ -98,9 +98,8 @@ type breakpoint struct {
 	// url is the script name it was set by, which code loaded later is
 	// matched against; empty for one set in a script, or by match.
 	url string
-	// match is the names of the scripts it is set in, for one set by a
-	// pattern.
-	match     func(string) bool
+	// match is the scripts it is set in, for one set by a pattern.
+	match     func(*DebugScript) bool
 	line, col int
 	at        []bpLocation
 }
@@ -191,8 +190,13 @@ type DebugScript struct {
 	// EvalOrigin says where an eval's or a Function call's code was
 	// compiled, as a stack trace does.
 	EvalOrigin string
-	script     *bytecode.Script
-	fns        []*bytecode.Function
+	// HasSourceURL says the name is the one a //# sourceURL= comment gave
+	// the code, and SourceMapURL is the source map a //# sourceMappingURL=
+	// comment names.
+	HasSourceURL bool
+	SourceMapURL string
+	script       *bytecode.Script
+	fns          []*bytecode.Function
 }
 
 // Source is the script's text, from the first line of the file it is in:
@@ -459,8 +463,12 @@ func (r *Runtime) debugLoad(fn *bytecode.Function) {
 	ds := d.byScript[s]
 	loaded := ds == nil
 	if loaded {
-		ds = &DebugScript{ID: len(d.scripts) + 1, Name: s.Name, EvalOrigin: s.EvalOrigin, script: s}
-		if s.EvalOrigin != "" {
+		ds = &DebugScript{ID: len(d.scripts) + 1, Name: s.Name, EvalOrigin: s.EvalOrigin, script: s,
+			SourceMapURL: s.SourceMapURL()}
+		switch {
+		case s.SourceURL() != "":
+			ds.Name, ds.HasSourceURL = s.SourceURL(), true
+		case s.EvalOrigin != "":
 			ds.Name = ""
 		}
 		if d.byScript == nil {
@@ -500,7 +508,7 @@ func (r *Runtime) debugLoad(fn *bytecode.Function) {
 	}
 	ids := make([]int, 0, len(d.breakpoints))
 	for id, b := range d.breakpoints {
-		if b.url == ds.Name || b.match != nil && b.match(ds.Name) {
+		if b.url == ds.Name || b.match != nil && b.match(ds) {
 			ids = append(ids, id)
 		}
 	}

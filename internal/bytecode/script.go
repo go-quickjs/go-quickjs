@@ -21,6 +21,9 @@ type Script struct {
 	// for code with no name ("<eval>"), and for the code of an eval or a
 	// Function call, the referrer of the code that called it.
 	Referrer string
+	// Comments are what the source's //# sourceURL= and
+	// //# sourceMappingURL= comments say, and nil when it has neither.
+	Comments *SourceComments
 
 	text string
 	// lineStarts holds the byte offset at which each line begins.
@@ -29,6 +32,33 @@ type Script struct {
 	// node:vm's options of those names do: every line is lineOffset further
 	// down, and the first is columnOffset further right.
 	lineOffset, columnOffset int32
+}
+
+// SourceComments are what a source's //# sourceURL= and
+// //# sourceMappingURL= comments say: the name it gives itself, which stack
+// traces and debuggers call it by, an eval's code with no word of where it
+// was evaluated; and the source map it names. It has ast.SourceComments's
+// fields, so that the compiler hands the parser's on as they are.
+type SourceComments struct {
+	SourceURL, SourceMapURL string
+}
+
+// SourceURL is the name the source gave itself with a //# sourceURL=
+// comment, or empty.
+func (s *Script) SourceURL() string {
+	if s.Comments == nil {
+		return ""
+	}
+	return s.Comments.SourceURL
+}
+
+// SourceMapURL is the source map a //# sourceMappingURL= comment names, or
+// empty.
+func (s *Script) SourceMapURL() string {
+	if s.Comments == nil {
+		return ""
+	}
+	return s.Comments.SourceMapURL
 }
 
 // SetOffset places the script's text within a larger file: its first line is

@@ -95,7 +95,12 @@ func (r *Runtime) initCallSite() {
 		return Undefined
 	}
 	method("getFileName", fileName)
-	method("getScriptNameOrSourceURL", fileName)
+	method("getScriptNameOrSourceURL", func(rt *Runtime, fr *stackFrame) Value {
+		if name := fr.sourceName(); name != "" {
+			return Str(NewString(name))
+		}
+		return Undefined
+	})
 	method("getScriptHash", func(*Runtime, *stackFrame) Value { return Str(emptyString) })
 	method("getLineNumber", func(rt *Runtime, fr *stackFrame) Value {
 		line, _ := fr.position()
