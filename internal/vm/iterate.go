@@ -26,6 +26,10 @@ type iterState struct {
 	// shape is obj's shape when the keys are its own and came from its
 	// shape's cache: while obj keeps it, nothing has been deleted from it.
 	shape *shape
+	// indexKeys is, for an array whose keys were its elements 0 to
+	// indexKeys-1 and nothing else, how many there were: they are walked
+	// by index rather than snapshot (see startForIn).
+	indexKeys int
 
 	// iter and next drive the for-of protocol.
 	iter Value
@@ -114,6 +118,15 @@ func (r *Runtime) startForIn(v Value) (Value, error) {
 			st.keys, st.keyAtoms, st.shape = c.keys, c.atoms, o.shape
 			return r.newIterObject(*st), nil
 		}
+		// An array whose keys are its elements and nothing else -- dense,
+		// with no holes and no enumerable property of its own besides --
+		// has the keys 0 to its length less one, which need no snapshot:
+		// each is made when it is visited, and visited if it is still
+		// there, as a snapshot's would be.
+		if n, ok := elemKeysOnly(o); ok {
+			st.indexKeys = n
+			return r.newIterObject(*st), nil
+		}
 	}
 	var seen map[Atom]bool
 	if last != o {
@@ -181,6 +194,26 @@ func (r *Runtime) shapeKeys(o *Object) *forInKeys {
 		s.forIn = c
 	}
 	return s.forIn
+}
+
+// elemKeysOnly reports whether an array's keys are its dense elements and
+// nothing else, and how many there are: it has no holes and no index stored
+// elsewhere, and no enumerable property of its own besides.
+func elemKeysOnly(o *Object) (int, bool) {
+	if o.class != ClassArray || o.flags&objHasSparseElements != 0 {
+		return 0, false
+	}
+	for i := range o.props {
+		if o.props[i].flags&(propEnumerable|propDeleted) == propEnumerable {
+			return 0, false
+		}
+	}
+	for i := range o.elems {
+		if holeAt(&o.elems[i]) {
+			return 0, false
+		}
+	}
+	return len(o.elems), true
 }
 
 // noEnumerableKeys reports whether an object has no enumerable own string key,
@@ -267,6 +300,24 @@ func (r *Runtime) iterNext(cursor Value) (Value, bool, error) {
 	}
 
 	if st.forIn {
+		// An array's elements, walked by index: one still in its dense
+		// storage is still there, and one that is not is looked for.
+		for st.idx < st.indexKeys {
+			i := st.idx
+			st.idx++
+			if o := st.obj; i < len(o.elems) && !holeAt(&o.elems[i]) {
+				return Str(r.keyString(r.atoms.indexAtom(uint32(i)))), true, nil
+			}
+			key := r.atoms.indexAtom(uint32(i))
+			has, err := r.hasPropErr(st.obj, key)
+			if err != nil {
+				st.done = true
+				return Undefined, false, err
+			}
+			if has {
+				return Str(r.keyString(key)), true, nil
+			}
+		}
 		// A key deleted since the snapshot was taken is skipped: the loop body
 		// may have removed it, and what is gone is not visited.
 		for st.idx < len(st.keys) {
