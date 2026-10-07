@@ -108,3 +108,58 @@ func (r *Runtime) callTree(o *Object, fd *funcData, this Value, args []Value) (V
 	r.popFrameOf(f, base)
 	return v, err
 }
+
+// callRest is callDirect for a callee that is the object o, whose funcData
+// is fd or nil, once a tree's call node has found it is not one
+// planTreeCall has given a tree: callDirect's other cases, in its order.
+func (r *Runtime) callRest(o *Object, fd *funcData, this Value, args []Value) (Value, error) {
+	if fd != nil && fd.mathOp != 0 {
+		if v, ok := mathCall(fd.mathOp, args); ok {
+			return v, nil
+		}
+	}
+	if o == r.callFn {
+		return r.callThrough(o, this, args)
+	}
+	if fd != nil && fd.native == nil && !fd.bound &&
+		fd.closure != nil && fd.closure.realm == r.Realm {
+		if fn := fd.closure.fn; fn.DirectCall {
+			if err := r.tick(); err != nil {
+				return Undefined, err
+			}
+			if leaf := fn.Leaf; leaf == bytecode.LeafPure {
+				if v, ok := r.pureCall(fd, this, args); ok {
+					return v, nil
+				}
+			} else if leaf != bytecode.LeafNone && this.IsObject() {
+				if v, ok := r.leafCall(fd.closure, this.Object(), args); ok {
+					return v, nil
+				}
+			}
+			newTarget := Undefined
+			if fd.arrow {
+				this, newTarget = fd.extra.lexThis, fd.extra.lexNewTarget
+			}
+			v, err := r.runFD(fd.closure, this, args, newTarget, o, fd)
+			if err == errNoSuper {
+				err = r.throwError(errReference, "%s", errNoSuper.Error())
+			}
+			if !fd.treePlanned {
+				planTreeCall(fd)
+			}
+			return v, err
+		}
+	}
+	if fd != nil && fd.native != nil && !fd.bound && (fd.realm == nil || fd.realm == r.Realm) {
+		if err := r.tick(); err != nil {
+			return Undefined, err
+		}
+		if err := r.nativeFrame(o, fd, this, args, Undefined); err != nil {
+			return Undefined, err
+		}
+		v, err := fd.native(r, this, args)
+		r.frameDepth--
+		return v, err
+	}
+	return r.call(Obj(o), this, args)
+}

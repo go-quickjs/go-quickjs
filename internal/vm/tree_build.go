@@ -1811,7 +1811,32 @@ func callNode(op bytecode.Op, p, n, this, pc int) tval {
 	case bytecode.OpCallMethod:
 		return func(c *tctx) Value {
 			c.at(pc)
-			v, err := c.r.callDirect(c.stack[p], c.stack[this], c.stack[p+1:p+1+n])
+			f, recv, args := c.stack[p], c.stack[this], c.stack[p+1:p+1+n]
+			// What callDirect does, without its frame: a callee
+			// planTreeCall has given a tree is called on it here, and any
+			// other function is left to callRest, which asks the rest of
+			// callDirect's questions without asking this one again.
+			if f.IsObject() {
+				o := f.object()
+				fd := o.fn()
+				if fd != nil && fd.treeCall != nil && fd.closure.realm == c.r.Realm {
+					r := c.r
+					if err := r.tick(); err != nil {
+						c.throw(err)
+					}
+					v, err := r.callTree(o, fd, recv, args)
+					if err != nil {
+						c.throw(err)
+					}
+					return v
+				}
+				v, err := c.r.callRest(o, fd, recv, args)
+				if err != nil {
+					c.throw(err)
+				}
+				return v
+			}
+			v, err := c.r.call(f, recv, args)
 			if err != nil {
 				c.throw(err)
 			}
@@ -1820,7 +1845,28 @@ func callNode(op bytecode.Op, p, n, this, pc int) tval {
 	}
 	return func(c *tctx) Value {
 		c.at(pc)
-		v, err := c.r.callDirect(c.stack[p], Undefined, c.stack[p+1:p+1+n])
+		f, args := c.stack[p], c.stack[p+1:p+1+n]
+		if f.IsObject() {
+			o := f.object()
+			fd := o.fn()
+			if fd != nil && fd.treeCall != nil && fd.closure.realm == c.r.Realm {
+				r := c.r
+				if err := r.tick(); err != nil {
+					c.throw(err)
+				}
+				v, err := r.callTree(o, fd, Undefined, args)
+				if err != nil {
+					c.throw(err)
+				}
+				return v
+			}
+			v, err := c.r.callRest(o, fd, Undefined, args)
+			if err != nil {
+				c.throw(err)
+			}
+			return v
+		}
+		v, err := c.r.call(f, Undefined, args)
 		if err != nil {
 			c.throw(err)
 		}

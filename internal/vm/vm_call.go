@@ -165,6 +165,9 @@ func (r *Runtime) pushNativeFrame(o *Object, this Value, args []Value, newTarget
 //   - a built-in of this realm is called in a native frame.
 //
 // Anything else is called as call calls it.
+//
+// callRest, which a tree's call node asks once it has made the first test
+// itself, repeats every case after it: a change to one is a change to both.
 func (r *Runtime) callDirect(callee, this Value, args []Value) (Value, error) {
 	if callee.IsObject() {
 		o := callee.Object()
