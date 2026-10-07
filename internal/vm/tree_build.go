@@ -1523,6 +1523,13 @@ func (c *tctx) getIndexSlow(o, k Value, pc int) Value {
 
 // getLocalIndexUpdateNode is a[i++] and its kind over locals: the object is
 // read before the update, which may run a valueOf that assigns to it.
+//
+// It is kept out of line, as the node builders tbuilder.op calls are: a
+// builder inlined into op makes its closure part of a function big
+// enough that Go inlines almost nothing into it, and every helper the
+// node calls at run time -- c.at, Value.IsObject -- becomes a call.
+//
+//go:noinline
 func getLocalIndexUpdateNode(in bytecode.Instr, pc int) tval {
 	k, slot := in.A, in.B>>2
 	dec, postfix := in.B&bytecode.UpdateDec != 0, in.B&bytecode.UpdatePostfix != 0
@@ -1667,6 +1674,15 @@ func (c *tctx) getPropSlow(o Value, name, site uint32, pc int) Value {
 	return v
 }
 
+// getPropThisNode is get_prop_this: the method name of the receiver in slot
+// d, read above it.
+//
+// It is kept out of line, as the node builders tbuilder.op calls are: a
+// builder inlined into op makes its closure part of a function big
+// enough that Go inlines almost nothing into it, and every helper the
+// node calls at run time -- c.at, Value.IsObject -- becomes a call.
+//
+//go:noinline
 func getPropThisNode(d int, in bytecode.Instr, pc int) tval {
 	name, site := in.A, in.B
 	return func(c *tctx) Value {
@@ -1774,6 +1790,13 @@ func (c *tctx) setProp(o, v Value, name, site uint32, pc int, strict bool) {
 // callNode is a call, a method call or a construction whose callee is in
 // slot p and arguments in the n slots after it, and the receiver of a
 // method call in slot this.
+//
+// It is kept out of line, as the node builders tbuilder.op calls are: a
+// builder inlined into op makes its closure part of a function big
+// enough that Go inlines almost nothing into it, and every helper the
+// node calls at run time -- c.at, Value.IsObject -- becomes a call.
+//
+//go:noinline
 func callNode(op bytecode.Op, p, n, this, pc int) tval {
 	switch op {
 	case bytecode.OpNew:

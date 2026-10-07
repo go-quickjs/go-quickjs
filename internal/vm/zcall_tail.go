@@ -40,6 +40,13 @@ func (b *tbuilder) tailCall(in bytecode.Instr, pc int) bool {
 // is that the frame is not a constructor's, whose result is checked after
 // its body, nor one that shares a derived constructor's this. Anything
 // else is an ordinary call.
+//
+// It is kept out of line, as the node builders tbuilder.op calls are: a
+// builder inlined into op makes its closure part of a function big
+// enough that Go inlines almost nothing into it, and every helper the
+// node calls at run time -- c.at, Value.IsObject -- becomes a call.
+//
+//go:noinline
 func tailCallNode(p, n, this, pc int) tval {
 	return func(c *tctx) Value {
 		c.at(pc)
