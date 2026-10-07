@@ -1608,13 +1608,19 @@ func setIndexNode(obj, key, val tval, pc int, strict bool) tval {
 
 // setIndexSlow is obj[key] = val where setElem cannot store it.
 func (c *tctx) setIndexSlow(o, k, v Value, pc int, strict bool) Value {
-	c.at(pc)
 	if o.IsObject() && k.IsNumber() {
 		// An element appended at an array's length, which is setIndexed's
-		// second case: asked first, an array being no typed array.
+		// second case: asked first, an array being no typed array. Then a
+		// number stored in a typed array. Neither can throw or run code.
 		if appendElem(o.object(), k.num, v) {
 			return v
 		}
+		if i := uint32(k.num); float64(i) == k.num && typedWrite(o.object(), i, v) {
+			return v
+		}
+	}
+	c.at(pc)
+	if o.IsObject() && k.IsNumber() {
 		// A typed array's element is written to its buffer, as setIndexed's
 		// first case does, unless the buffer is immutable, whose refusal the
 		// long way words.
@@ -1914,6 +1920,11 @@ func getIndexOperands(obj, key tentry, pc int) tval {
 					if v := a.elems[i]; !isHole(v) {
 						return v
 					}
+				} else if t, ok := a.data.(*typedArrayData); ok {
+					// A typed array's element, which getIndexSlow would
+					// read the same way after asking again what is asked
+					// here.
+					return t.getElem(int(i))
 				}
 			}
 			return c.getIndexSlow(o, kv, pc)
@@ -2206,11 +2217,17 @@ func setIndexStmt(obj, key tentry, val tval, pc int, strict bool) tstmt {
 			}
 		}
 	case obj.local && key.number:
-		// a[0] op= v, which the compiler reads twice rather than copying.
+		// a[0] = v, and a[0] op= v, which the compiler reads twice rather
+		// than copying. A typed array's element is written here too, as
+		// setIndexSlow would first thing.
 		k := key.n
+		i := uint32(k.num)
+		if float64(i) != k.num {
+			i = math.MaxUint32
+		}
 		return func(c *tctx) {
 			o := c.locals[o]
-			if v := val(c); !setElem(o, k, v) {
+			if v := val(c); !setElem(o, k, v) && !(o.IsObject() && typedWrite(o.object(), i, v)) {
 				c.setIndexSlow(o, k, v, pc, strict)
 			}
 		}

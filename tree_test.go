@@ -606,6 +606,72 @@ func TestElementUpdates(t *testing.T) {
 	}
 }
 
+// TestTypedElementAccess pins reads and writes of typed array elements by
+// number -- read by getElem from the read node, written by typedWrite for a
+// view of a fixed length, with the view's storage kept from the first write: every element type,
+// out-of-range and fractional keys, a view at an offset, a fixed view whose
+// resizable buffer shrinks past it and grows back, a detached buffer, an
+// immutable one, shared ones (one that grows), values that are not numbers,
+// a valueOf that detaches, updates, a subclass and an index on the prototype.
+func TestTypedElementAccess(t *testing.T) {
+	defer vm.SetTreeTier(true)
+	const src = `var r = [];
+		function rw(t, n, v) { var out = []; for (var i = -1; i <= n; i++) { t[i] = v + i; out.push(t[i]); } out.push(t[0], t[1], t[2]); return out.join("/"); }
+		function rw0(t, v) { for (var j = 0; j < 2; j++) { t[0] = v; t[1] = t[0] + 1; } return [t[0], t[1], t[2]].join("/"); }
+		var kinds = [Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float16Array, Float32Array, Float64Array];
+		for (var K of kinds) r.push(K.name + ":" + rw(new K(3), 3, 300.7) + ":" + rw0(new K(4), -1.5) + ":" + rw0(new K(4), NaN) + ":" + rw0(new K(4), 1e10));
+		var big = new BigInt64Array(2); try { rw0(big, 1) } catch (e) { r.push(e.constructor.name) } big[0] = 5n; r.push(big[0], big[1]);
+		var ub = new BigUint64Array(2); ub[0] = -1n; r.push(ub[0]);
+		// offsets
+		var buf = new ArrayBuffer(16), a = new Int16Array(buf, 4, 3), whole = new Uint8Array(buf);
+		rw0(a, 0x1234); r.push(whole.join(","), a.length);
+		// resizable: shrink under a fixed view, grow back
+		var rab = new ArrayBuffer(16, { maxByteLength: 32 }), f = new Int32Array(rab, 4, 2), tr = new Int32Array(rab);
+		f[0] = 1; f[1] = 2; r.push(rw0(f, 7), tr[1], tr[2]);
+		rab.resize(8); r.push(f[0], f[1], f.length, rw0(f, 9), tr[1], tr.length); f[0] = 3; r.push(tr[1]);
+		rab.resize(32); r.push(f[0], f[1], f.length, rw0(f, 11), tr[1], tr.length);
+		// detach
+		var d = new Float64Array(4); d[0] = 1.5; rw0(d, 2); var d2 = d.buffer.transfer(); r.push(d[0], d.length, rw0(d, 3), new Float64Array(d2)[0]);
+		// immutable
+		if (ArrayBuffer.prototype.transferToImmutable) {
+		  var im = new Uint8Array([1, 2, 3]).buffer.transferToImmutable(), iv = new Uint8Array(im);
+		  r.push(rw0(iv, 9));
+		  try { (function () { "use strict"; iv[0] = 5 })() } catch (e) { r.push(e.constructor.name + ":" + e.message) }
+		}
+		// shared
+		var sab = new SharedArrayBuffer(8), sv = new Int32Array(sab); r.push(rw0(sv, 42));
+		var gsab = new SharedArrayBuffer(8, { maxByteLength: 16 }), gv = new Int32Array(gsab, 0, 2); r.push(rw0(gv, 43)); gsab.grow(16); r.push(rw0(gv, 44), new Int32Array(gsab)[3]);
+		// strings and objects stored, valueOf detaching
+		var o = { valueOf() { return 77 } }, vt = new Int8Array(2); vt[0] = o; vt[1] = "12"; r.push(vt[0], vt[1]);
+		var det = new Uint8Array(4), dv = { valueOf() { det.buffer.transfer(); return 5 } }; det[0] = dv; r.push(det[0], det.length);
+		// -0 and fractional keys
+		var fk = new Float64Array(2); fk[-0] = 3; fk[0.5] = 4; fk["1"] = 6; r.push(fk[0], fk[0.5], fk[1], Object.keys(fk).join());
+		r.push(Object.is(new Float32Array([-0])[0], -0), Object.is(new Float64Array([NaN])[0], NaN));
+		// typed array updates in a loop with constant and local keys
+		function upd(t, k) { for (var j = 0; j < 3; j++) { t[k] += 2; t[0]++; t[1] *= 3; } return Array.from(t).join("/") }
+		r.push(upd(new Int8Array([1, 2, 3]), 2), upd(new Uint8ClampedArray([250, 2, 3]), 2), upd(new Float32Array([0.1, 0.2, 0.3]), 2));
+		// subclass and proto with index
+		class MyI32 extends Int32Array {} var mi = new MyI32(2); rw0(mi, 5); r.push(mi[0], mi[1]);
+		Object.prototype[5] = "proto"; var pt = new Int8Array(2); r.push(pt[5], pt[1]); delete Object.prototype[5];
+		r.join(" | ")`
+	const want = "Int8Array:/44/45/46//44/45/46:-1/0/0:0/1/0:0/1/0 | Uint8Array:/44/45/46//44/45/46:255/0/0:0/1/0:0/1/0 | Uint8ClampedArray:/255/255/255//255/255/255:0/1/0:0/1/0:255/255/0 | Int16Array:/300/301/302//300/301/302:-1/0/0:0/1/0:-7168/-7167/0 | Uint16Array:/300/301/302//300/301/302:65535/0/0:0/1/0:58368/58369/0 | Int32Array:/300/301/302//300/301/302:-1/0/0:0/1/0:1410065408/1410065409/0" +
+		" | " + "Uint32Array:/300/301/302//300/301/302:4294967295/0/0:0/1/0:1410065408/1410065409/0 | Float16Array:/300.75/301.75/302.75//300.75/301.75/302.75:-1.5/-0.5/0:NaN/NaN/0:Infinity/Infinity/0 | Float32Array:/300.70001220703125/301.70001220703125/302.70001220703125//300.70001220703125/301.70001220703125/302.70001220703125:-1.5/-0.5/0:NaN/NaN/0:10000000000/10000000000/0 | Float64Array:/300.7/301.7/302.7//300.7/301.7/302.7:-1.5/-0.5/0:NaN/NaN/0:10000000000/10000000001/0 | TypeError | 5" +
+		" | " + "0 | 18446744073709551615 | 0,0,0,0,52,18,53,18,0,0,0,0,0,0,0,0 | 3 | 7/8/ | 7" +
+		" | " + "8 |  |  | 0 | // | 7" +
+		" | " + "2 | 7 | 7 | 0 | 2 | 11/12/" +
+		" | " + "11 | 8 |  | 0 | // | 2" +
+		" | " + "1/2/3 | TypeError:cannot assign to \"0\" of a typed array over an immutable ArrayBuffer | 42/43/ | 43/44/ | 44/45/ | 0" +
+		" | " + "77 | 12 |  | 0 | 3 | " +
+		" | " + "6 | 0,1 | true | true | 4/54/9 | 253/54/9" +
+		" | " + "3.0999999046325684/5.400000095367432/6.300000190734863 | 5 | 6 |  | 0"
+	for _, tier := range []bool{false, true} {
+		vm.SetTreeTier(tier)
+		if got := treeRun(t, src); got != want {
+			t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, want)
+		}
+	}
+}
+
 // TestTreeTierInterrupted stops a loop running as a tree, as one running in
 // the interpreter is stopped.
 func TestTreeTierInterrupted(t *testing.T) {

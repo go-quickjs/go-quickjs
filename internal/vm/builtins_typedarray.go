@@ -126,6 +126,12 @@ type typedArrayData struct {
 	// whatever the buffer holds past its offset, however that changes.
 	fixedLength int
 	tracking    bool
+	// st and end are, for a view of a fixed length, its buffer's storage and
+	// the byte past its last element, which typedWrite fills in the
+	// first time it looks: buffer.data never changes, and neither
+	// does what end is made of.
+	st  *arrayBufferData
+	end int
 }
 
 func (t *typedArrayData) info() elemInfo { return elemInfos[t.kind] }

@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"encoding/binary"
 	"math"
 	"strconv"
 
@@ -52,6 +53,65 @@ func typedElemIndex(o *Object, key float64) (*typedArrayData, int, bool) {
 	}
 	t, ok := o.data.(*typedArrayData)
 	return t, int(i), ok
+}
+
+// typedWrite stores the number v in element i of a typed array of a fixed
+// length that is inside its buffer, straight into the buffer, or reports
+// false where setElem has to: a view that tracks its buffer's length, one
+// whose buffer has been detached or has shrunk past its end, an index past
+// its own end, a value that is not a number, a BigInt or Float16 element, an
+// immutable buffer. It asks the object's data for the view, which is the
+// class check too. A number
+// converts without running code, so nothing can change the view between the
+// check and the store.
+func typedWrite(o *Object, i uint32, v Value) bool {
+	t, ok := o.data.(*typedArrayData)
+	if !ok || uint(i) >= uint(t.fixedLength) || !v.IsNumber() {
+		return false
+	}
+	st := t.st
+	if st == nil {
+		if st = t.fixedStorage(); st == nil {
+			return false
+		}
+	}
+	if t.end > len(st.bytes) || st.immutable {
+		return false
+	}
+	// The offset is an int, shifted as one: below fixedLength, the index
+	// fits, and a uint32 shifted would wrap past 4 GiB.
+	b, n, j := st.bytes[t.byteOffset:t.end], v.num, int(i)
+	switch t.kind {
+	case elemInt8, elemUint8:
+		b[j] = byte(toInt32Wrap(n))
+	case elemUint8Clamped:
+		b[j] = clampUint8(n)
+	case elemInt16, elemUint16:
+		binary.LittleEndian.PutUint16(b[j<<1:], uint16(toInt32Wrap(n)))
+	case elemInt32, elemUint32:
+		binary.LittleEndian.PutUint32(b[j<<2:], uint32(toInt32Wrap(n)))
+	case elemFloat32:
+		binary.LittleEndian.PutUint32(b[j<<2:], math.Float32bits(float32(n)))
+	case elemFloat64:
+		binary.LittleEndian.PutUint64(b[j<<3:], math.Float64bits(n))
+	default:
+		return false
+	}
+	return true
+}
+
+// fixedStorage fills in st and end for a view of a fixed length, and gives
+// st, or nil for a view that tracks its buffer's length. It is out of line,
+// as what typedWrite does once per view.
+//
+//go:noinline
+func (t *typedArrayData) fixedStorage() *arrayBufferData {
+	st, _ := t.buffer.data.(*arrayBufferData)
+	if st == nil || t.tracking {
+		return nil
+	}
+	t.st, t.end = st, t.byteOffset+t.fixedLength*elemInfos[t.kind].size
+	return st
 }
 
 // typedArrayIndex classifies a key against a typed array.
