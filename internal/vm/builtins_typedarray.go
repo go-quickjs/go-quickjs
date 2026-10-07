@@ -84,6 +84,15 @@ const (
 	elemBigUint64
 )
 
+// elemShifts is each element type's size as a power of two, sixteen long
+// so that indexing it with a kind masked to four bits needs no bounds check.
+var elemShifts = [16]uint8{
+	elemInt8: 0, elemUint8: 0, elemUint8Clamped: 0,
+	elemInt16: 1, elemUint16: 1, elemFloat16: 1,
+	elemInt32: 2, elemUint32: 2, elemFloat32: 2,
+	elemFloat64: 3, elemBigInt64: 3, elemBigUint64: 3,
+}
+
 // elemInfo describes one element type.
 type elemInfo struct {
 	name string
@@ -287,11 +296,19 @@ func (r *Runtime) typedArraySlot(this Value, name string) (*typedArrayData, erro
 // getElem reads one element as a JavaScript value.
 func (t *typedArrayData) getElem(i int) Value {
 	st, _ := t.buffer.data.(*arrayBufferData)
-	if i < 0 || i >= t.countIn(st) {
+	shift := elemShifts[t.kind&15] & 7
+	var off int
+	if st != nil && !t.tracking && uint(i) < uint(t.fixedLength) && t.byteOffset+t.fixedLength<<shift <= len(st.bytes) {
+		// A view of a fixed length is in its buffer whole or not at all,
+		// and a detached buffer's bytes are nil: this is countIn's answer
+		// for the common view, without its divisions and lookups.
+		off = t.byteOffset + i<<shift
+	} else if i < 0 || i >= t.countIn(st) {
 		return Undefined
+	} else {
+		off = t.byteOffset + i*elemInfos[t.kind].size
 	}
 	b := st.bytes
-	off := t.byteOffset + i*elemInfos[t.kind].size
 	switch t.kind {
 	case elemInt8:
 		return Int(int(int8(b[off])))
@@ -328,7 +345,7 @@ func (r *Runtime) setElem(t *typedArrayData, i int, v Value) error {
 		n  float64
 		bv *BigInt
 	)
-	big := elemInfos[t.kind].big
+	big := t.kind >= elemBigInt64
 	if big {
 		// ToBigInt, not a type check: a string or a boolean converts, and only
 		// a Number is refused -- mixing the two kinds is almost always a
@@ -349,13 +366,19 @@ func (r *Runtime) setElem(t *typedArrayData, i int, v Value) error {
 	// Re-measured after the conversion, because the conversion may have taken
 	// the buffer away.
 	st, _ := t.buffer.data.(*arrayBufferData)
-	if i < 0 || i >= t.countIn(st) {
+	shift := elemShifts[t.kind&15] & 7
+	var off int
+	if st != nil && !t.tracking && uint(i) < uint(t.fixedLength) && t.byteOffset+t.fixedLength<<shift <= len(st.bytes) {
+		// countIn's answer for a view of a fixed length, as in getElem.
+		off = t.byteOffset + i<<shift
+	} else if i < 0 || i >= t.countIn(st) {
 		// Writing out of range is silently ignored, which is what makes a
 		// typed array not grow.
 		return nil
+	} else {
+		off = t.byteOffset + i*elemInfos[t.kind].size
 	}
 	b := st.bytes
-	off := t.byteOffset + i*elemInfos[t.kind].size
 
 	if big {
 		binary.LittleEndian.PutUint64(b[off:], bigLowUint64(bv))

@@ -506,6 +506,51 @@ func TestArrayPushThroughTheChain(t *testing.T) {
 	}
 }
 
+// TestElementKeysAndViews pins, in both tiers, element reads and writes
+// whose key is not an index -- -0, a fraction, a negative, NaN, 2**32, a
+// string, null, a boolean, undefined, a BigInt, a Symbol -- which the fast
+// paths refuse by the key's number alone, and typed arrays whose view is of
+// a fixed length over a buffer that shrinks, grows back and is detached,
+// which the fast element paths answer without countIn. C QuickJS and Node
+// give the same answer.
+func TestElementKeysAndViews(t *testing.T) {
+	defer vm.SetTreeTier(true)
+	const src = `function f() {
+		  var r = [], a = [10, , 30], s = Symbol("s"), ks = [0, -0, 1, 2, 1.5, -1, NaN, 2 ** 32, "0", null, true, undefined, 0n, s];
+		  a[s] = "sym"; a["null"] = "N"; a["true"] = "T"; a["undefined"] = "U"; a["1.5"] = "F"; a["-1"] = "M"; a["NaN"] = "nan"; a["4294967296"] = "big";
+		  for (var i = 0; i < ks.length; i++) { var k = ks[i]; r.push(String(a[k])); }
+		  for (var i = 0; i < ks.length; i++) { var k = ks[i], b = [1, , 3]; b[k] = 7; r.push(b.length + ":" + b[0] + b[1] + b[2]); }
+		  return r.join(",");
+		}
+		function g() {
+		  var r = [], rab = new ArrayBuffer(16, { maxByteLength: 32 });
+		  var fixed = new Int32Array(rab, 4, 2), track = new Float64Array(rab), u8 = new Uint8ClampedArray(rab, 0, 4), i8 = new Int8Array(rab, 8, 4);
+		  for (var i = 0; i < 4; i++) { fixed[i] = i * 1000 + 0.75; u8[i] = i * 100 - 20.5; i8[i] = 200 + i; }
+		  for (var i = 0; i < 5; i++) r.push(fixed[i], u8[i], i8[i], track[i] === undefined);
+		  rab.resize(10);
+		  for (var i = 0; i < 3; i++) { fixed[i] = 5; r.push(fixed[i], fixed.length, u8[i], i8[i]); }
+		  rab.resize(32);
+		  for (var i = 0; i < 3; i++) r.push(fixed[i], fixed.length, i8[i]);
+		  var big = new BigInt64Array(2), f32 = new Float32Array(2), dv = new Float64Array([1.5, -0, NaN]);
+		  for (var i = 0; i < 2; i++) { big[i] = BigInt(i) - 3n; f32[i] = 1 / 3 + i; try { big[i] = 1 } catch (e) { r.push(e.constructor.name) } }
+		  r.push(big[0], big[1], f32[0], f32[1], dv[0], 1 / dv[1], dv[2], dv[3]);
+		  var buf = new ArrayBuffer(8), v = new Uint16Array(buf), o = { valueOf() { r.push("v"); return 9 } };
+		  for (var i = 0; i < 2; i++) { v[i] = o; r.push(v[i]); }
+		  buf.transfer();
+		  for (var i = 0; i < 2; i++) { v[i] = o; r.push(v[i], v.length); }
+		  return r.join(",");
+		}
+		f() + " | " + g()`
+	const want = "10,10,undefined,30,F,M,nan,big,10,N,T,U,10,sym,3:7undefined3,3:7undefined3,3:173,3:1undefined7,3:1undefined3,3:1undefined3,3:1undefined3,3:1undefined3,3:7undefined3,3:1undefined3,3:1undefined3,3:1undefined3,3:7undefined3,3:1undefined3" +
+		" | 0,0,-24,false,-875902488,80,-55,false,,180,-54,true,,255,-53,true,,,,true,,0,0,,,0,80,,,0,180,,0,2,-24,51688,2,-55,,2,0,TypeError,TypeError,-3,-2,0.3333333432674408,1.3333333730697632,1.5,-Infinity,NaN,,v,9,v,9,v,,0,v,,0"
+	for _, tier := range []bool{false, true} {
+		vm.SetTreeTier(tier)
+		if got := treeRun(t, src); got != want {
+			t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, want)
+		}
+	}
+}
+
 // TestTreeTierInterrupted stops a loop running as a tree, as one running in
 // the interpreter is stopped.
 func TestTreeTierInterrupted(t *testing.T) {
