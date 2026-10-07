@@ -1,4 +1,6 @@
-package stdlib
+// Package wsproto is the WebSocket protocol, RFC 6455, as much of it as a
+// message needs, for the standard library's WebSocket and the inspector.
+package wsproto
 
 import (
 	"bufio"
@@ -13,37 +15,37 @@ import (
 	"sync"
 )
 
-// The WebSocket protocol, RFC 6455, as much of it as a message needs.
-//
 // It is here rather than behind a dependency because it is small: a frame is a
 // header of at most fourteen bytes and a payload, and the handshake is one HTTP
 // request with a hash in the answer.
 
+// The frame types.
 const (
-	opContinuation = 0x0
-	opText         = 0x1
-	opBinary       = 0x2
-	opClose        = 0x8
-	opPing         = 0x9
-	opPong         = 0xA
+	OpContinuation = 0x0
+	OpText         = 0x1
+	OpBinary       = 0x2
+	OpClose        = 0x8
+	OpPing         = 0x9
+	OpPong         = 0xA
 )
 
-// wsMagic is the string the standard says to append to the client's key before
+// magic is the string the standard says to append to the client's key before
 // hashing it, which is how each end proves it is speaking this protocol and not
 // answering a request it did not understand.
-const wsMagic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+const magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
-func wsAccept(key string) string {
-	sum := sha1.Sum([]byte(key + wsMagic))
+// Accept is the Sec-WebSocket-Accept answer to a client's key.
+func Accept(key string) string {
+	sum := sha1.Sum([]byte(key + magic))
 	return base64.StdEncoding.EncodeToString(sum[:])
 }
 
-// wsConn is one open socket.
+// Conn is one open socket.
 //
 // Reads happen on whichever goroutine is doing the reading, one at a time;
 // writes are serialised, because a frame that is interleaved with another is
 // not a frame at all.
-type wsConn struct {
+type Conn struct {
 	conn net.Conn
 	br   *bufio.Reader
 	// mask says whether what this end sends must be masked, which is what the
@@ -57,19 +59,22 @@ type wsConn struct {
 	closed bool
 }
 
-func newWSConn(conn net.Conn, br *bufio.Reader, mask bool, limit int) *wsConn {
+// NewConn speaks the protocol over conn, reading through br if it is not
+// nil: masking what it sends if mask is set, as a client must, and reading
+// no message larger than limit bytes, 16 MiB if it is zero.
+func NewConn(conn net.Conn, br *bufio.Reader, mask bool, limit int) *Conn {
 	if br == nil {
 		br = bufio.NewReader(conn)
 	}
 	if limit <= 0 {
 		limit = 16 << 20
 	}
-	return &wsConn{conn: conn, br: br, mask: mask, limit: limit}
+	return &Conn{conn: conn, br: br, mask: mask, limit: limit}
 }
 
-// readMessage returns the next message, joining the frames a fragmented one
+// ReadMessage returns the next message, joining the frames a fragmented one
 // arrives in and answering the control frames that arrive in between.
-func (c *wsConn) readMessage() (byte, []byte, error) {
+func (c *Conn) ReadMessage() (byte, []byte, error) {
 	var kind byte
 	var payload []byte
 	for {
@@ -78,19 +83,19 @@ func (c *wsConn) readMessage() (byte, []byte, error) {
 			return 0, nil, err
 		}
 		switch op {
-		case opPing:
-			if err := c.writeMessage(opPong, data); err != nil {
+		case OpPing:
+			if err := c.WriteMessage(OpPong, data); err != nil {
 				return 0, nil, err
 			}
 			continue
-		case opPong:
+		case OpPong:
 			continue
-		case opClose:
-			return opClose, data, nil
-		case opText, opBinary:
+		case OpClose:
+			return OpClose, data, nil
+		case OpText, OpBinary:
 			kind = op
 			payload = data
-		case opContinuation:
+		case OpContinuation:
 			if kind == 0 {
 				return 0, nil, errors.New("a continuation frame began a message")
 			}
@@ -108,7 +113,7 @@ func (c *wsConn) readMessage() (byte, []byte, error) {
 }
 
 // readFrame reads one frame, unmasking it if it was masked.
-func (c *wsConn) readFrame() (bool, byte, []byte, error) {
+func (c *Conn) readFrame() (bool, byte, []byte, error) {
 	var head [2]byte
 	if _, err := io.ReadFull(c.br, head[:]); err != nil {
 		return false, 0, nil, err
@@ -154,8 +159,8 @@ func (c *wsConn) readFrame() (bool, byte, []byte, error) {
 	return fin, op, data, nil
 }
 
-// writeMessage writes one whole message as a single frame.
-func (c *wsConn) writeMessage(op byte, data []byte) error {
+// WriteMessage writes one whole message as a single frame.
+func (c *Conn) WriteMessage(op byte, data []byte) error {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
 	if c.closed {
@@ -205,19 +210,20 @@ func (c *wsConn) writeMessage(op byte, data []byte) error {
 	return nil
 }
 
-// sendClose says goodbye with a code and a reason, which is what lets the other
+// SendClose says goodbye with a code and a reason, which is what lets the other
 // end tell a finished conversation from a dropped connection.
-func (c *wsConn) sendClose(code int, reason string) error {
+func (c *Conn) SendClose(code int, reason string) error {
 	if code == 0 {
 		code = 1000
 	}
 	payload := make([]byte, 2, 2+len(reason))
 	binary.BigEndian.PutUint16(payload, uint16(code))
 	payload = append(payload, reason...)
-	return c.writeMessage(opClose, payload)
+	return c.WriteMessage(OpClose, payload)
 }
 
-func (c *wsConn) close() {
+// Close closes the connection, once.
+func (c *Conn) Close() {
 	c.wmu.Lock()
 	already := c.closed
 	c.closed = true
@@ -227,17 +233,17 @@ func (c *wsConn) close() {
 	}
 }
 
-// closeInfo reads the code and reason out of a close frame's payload.
-func closeInfo(payload []byte) (int, string) {
+// CloseInfo reads the code and reason out of a close frame's payload.
+func CloseInfo(payload []byte) (int, string) {
 	if len(payload) < 2 {
 		return 1005, ""
 	}
 	return int(binary.BigEndian.Uint16(payload)), string(payload[2:])
 }
 
-// wsKey is a fresh client key, which is not a secret: it is there so that a
+// Key is a fresh client key, which is not a secret: it is there so that a
 // cache or a proxy cannot answer the handshake from something it remembered.
-func wsKey() (string, error) {
+func Key() (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		return "", err

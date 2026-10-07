@@ -14,6 +14,7 @@ import (
 	"time"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
+	"github.com/go-quickjs/go-quickjs/internal/wsproto"
 )
 
 // Serve describes the listeners a script may open.
@@ -444,7 +445,7 @@ func (s *servers) takeOver(w http.ResponseWriter, r *http.Request, res *reply) {
 
 	answer := "HTTP/1.1 101 Switching Protocols\r\n" +
 		"Upgrade: websocket\r\nConnection: Upgrade\r\n" +
-		"Sec-WebSocket-Accept: " + wsAccept(key) + "\r\n"
+		"Sec-WebSocket-Accept: " + wsproto.Accept(key) + "\r\n"
 	if res.protocol != "" {
 		answer += "Sec-WebSocket-Protocol: " + res.protocol + "\r\n"
 	}

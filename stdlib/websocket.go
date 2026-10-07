@@ -15,6 +15,7 @@ import (
 	"time"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
+	"github.com/go-quickjs/go-quickjs/internal/wsproto"
 )
 
 // WebSockets describes the sockets a runtime may open and accept.
@@ -117,7 +118,7 @@ type socket struct {
 
 	// opened settles when the handshake has finished, one way or the other.
 	opened *quickjs.Promise
-	conn   *wsConn
+	conn   *wsproto.Conn
 	// unwatch stops the connection being closed with the loop, and unhook
 	// with the runtime, once it has been closed anyway.
 	unwatch func() bool
@@ -228,7 +229,7 @@ func (h *wsHost) attach(token string, conn net.Conn, br *bufio.Reader, protocol 
 		conn.Close()
 		return
 	}
-	s.start(newWSConn(conn, br, false, h.limit()))
+	s.start(wsproto.NewConn(conn, br, false, h.limit()))
 	o := s.rt.NewObject()
 	o.Set("protocol", protocol)
 	s.opened.Resolve(o)
@@ -261,15 +262,15 @@ func (s *socket) value() (quickjs.Value, error) {
 
 // start takes ownership of an open connection and begins writing whatever the
 // script has queued.
-func (s *socket) start(conn *wsConn) {
+func (s *socket) start(conn *wsproto.Conn) {
 	s.conn = conn
 	// The loop is held open while the socket is: a program whose last act is
 	// to open one is waiting for what comes back.
 	s.loop.Begin()
 	// And the connection is closed with the loop, and with the runtime,
 	// before its Close returns.
-	s.unwatch = context.AfterFunc(s.loop.Context(), conn.close)
-	s.unhook = s.rt.OnClose(conn.close)
+	s.unwatch = context.AfterFunc(s.loop.Context(), conn.Close)
+	s.unhook = s.rt.OnClose(conn.Close)
 	go s.writing()
 }
 
@@ -284,8 +285,8 @@ func (s *socket) writing() {
 		s.mu.Unlock()
 
 		for _, m := range queue {
-			if err := s.conn.writeMessage(m.op, m.data); err != nil {
-				s.conn.close()
+			if err := s.conn.WriteMessage(m.op, m.data); err != nil {
+				s.conn.Close()
 				return
 			}
 		}
@@ -302,10 +303,10 @@ func (s *socket) send(data quickjs.Value) error {
 	if s.conn == nil {
 		return s.rt.Throw(s.rt.NewError("Error", "this socket is not open yet"))
 	}
-	op := byte(opText)
+	op := byte(wsproto.OpText)
 	var payload []byte
 	if b, ok := data.Bytes(); ok {
-		op = opBinary
+		op = wsproto.OpBinary
 		payload = append([]byte(nil), b...)
 	} else {
 		payload = []byte(data.String())
@@ -345,7 +346,7 @@ func (s *socket) receive() *quickjs.Promise {
 	loop.Begin()
 	go func() {
 		defer loop.Done()
-		op, payload, err := conn.readMessage()
+		op, payload, err := conn.ReadMessage()
 		loop.Post(func() {
 			s.reading = false
 			if err != nil {
@@ -357,13 +358,13 @@ func (s *socket) receive() *quickjs.Promise {
 			}
 			out := s.rt.NewObject()
 			switch op {
-			case opClose:
-				code, reason := closeInfo(payload)
+			case wsproto.OpClose:
+				code, reason := wsproto.CloseInfo(payload)
 				s.finish()
 				out.Set("type", "close")
 				out.Set("code", code)
 				out.Set("reason", reason)
-			case opBinary:
+			case wsproto.OpBinary:
 				out.Set("type", "binary")
 				out.Set("data", s.rt.NewBytes(payload))
 			default:
@@ -402,7 +403,7 @@ func (s *socket) closeWith(code quickjs.Value, reason quickjs.Value) {
 	payload := make([]byte, 0, 2+len(text))
 	payload = append(payload, byte(n>>8), byte(n))
 	payload = append(payload, text...)
-	s.enqueue(outgoing{op: opClose, data: payload})
+	s.enqueue(outgoing{op: wsproto.OpClose, data: payload})
 
 	s.mu.Lock()
 	s.closed = true
@@ -418,7 +419,7 @@ func (s *socket) closeWith(code quickjs.Value, reason quickjs.Value) {
 	go func() {
 		defer loop.Done()
 		time.Sleep(50 * time.Millisecond)
-		conn.close()
+		conn.Close()
 	}()
 	s.releaseLoop()
 	s.ended = true
@@ -438,7 +439,7 @@ func (s *socket) finish() {
 	default:
 	}
 	if s.conn != nil {
-		s.conn.close()
+		s.conn.Close()
 	}
 	if s.unwatch != nil {
 		s.unwatch()
@@ -460,7 +461,7 @@ func (s *socket) releaseLoop() {
 
 // dialWebSocket opens the connection and does the handshake. It touches no
 // JavaScript value, which is what lets it run on another goroutine.
-func dialWebSocket(ctx context.Context, target *url.URL, protocols []string, timeout time.Duration, tlsCfg *tls.Config, limit int) (*wsConn, string, error) {
+func dialWebSocket(ctx context.Context, target *url.URL, protocols []string, timeout time.Duration, tlsCfg *tls.Config, limit int) (*wsproto.Conn, string, error) {
 	host := target.Host
 	if target.Port() == "" {
 		if target.Scheme == "wss" {
@@ -483,7 +484,7 @@ func dialWebSocket(ctx context.Context, target *url.URL, protocols []string, tim
 	}
 	conn.SetDeadline(time.Now().Add(timeout))
 
-	key, err := wsKey()
+	key, err := wsproto.Key()
 	if err != nil {
 		conn.Close()
 		return nil, "", err
@@ -519,14 +520,14 @@ func dialWebSocket(ctx context.Context, target *url.URL, protocols []string, tim
 		return nil, "", fmt.Errorf("the server answered %s rather than opening a socket", res.Status)
 	}
 	if !strings.EqualFold(res.Header.Get("Upgrade"), "websocket") ||
-		res.Header.Get("Sec-WebSocket-Accept") != wsAccept(key) {
+		res.Header.Get("Sec-WebSocket-Accept") != wsproto.Accept(key) {
 		conn.Close()
 		return nil, "", errors.New("the server's answer is not a websocket handshake")
 	}
 	// The deadline was for the handshake; what follows has no time limit of
 	// its own, since a socket is meant to stay open.
 	conn.SetDeadline(time.Time{})
-	return newWSConn(conn, br, true, limit), res.Header.Get("Sec-WebSocket-Protocol"), nil
+	return wsproto.NewConn(conn, br, true, limit), res.Header.Get("Sec-WebSocket-Protocol"), nil
 }
 
 // webSocketJS is the interface a program written for a browser expects.

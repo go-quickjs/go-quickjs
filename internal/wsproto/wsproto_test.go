@@ -1,4 +1,4 @@
-package stdlib
+package wsproto
 
 import (
 	"bytes"
@@ -10,11 +10,11 @@ import (
 
 // pair returns two ends of a connection speaking the protocol at each other,
 // the first masking as a client does.
-func pair(t *testing.T) (*wsConn, *wsConn) {
+func pair(t *testing.T) (*Conn, *Conn) {
 	t.Helper()
 	a, b := net.Pipe()
 	t.Cleanup(func() { a.Close(); b.Close() })
-	return newWSConn(a, nil, true, 1<<20), newWSConn(b, nil, false, 1<<20)
+	return NewConn(a, nil, true, 1<<20), NewConn(b, nil, false, 1<<20)
 }
 
 func TestWSMessages(t *testing.T) {
@@ -25,20 +25,20 @@ func TestWSMessages(t *testing.T) {
 		op   byte
 		data []byte
 	}{
-		{"text", opText, []byte("hello")},
-		{"empty", opText, nil},
+		{"text", OpText, []byte("hello")},
+		{"empty", OpText, nil},
 		// The three lengths a frame header has: one byte, two, and eight.
-		{"125 bytes", opBinary, bytes.Repeat([]byte("x"), 125)},
-		{"126 bytes", opBinary, bytes.Repeat([]byte("y"), 126)},
-		{"70k", opBinary, bytes.Repeat([]byte("z"), 70000)},
-		{"not ascii", opText, []byte("héllo — 世界")},
+		{"125 bytes", OpBinary, bytes.Repeat([]byte("x"), 125)},
+		{"126 bytes", OpBinary, bytes.Repeat([]byte("y"), 126)},
+		{"70k", OpBinary, bytes.Repeat([]byte("z"), 70000)},
+		{"not ascii", OpText, []byte("héllo — 世界")},
 	} {
 		go func() {
-			if err := client.writeMessage(tc.op, tc.data); err != nil {
+			if err := client.WriteMessage(tc.op, tc.data); err != nil {
 				t.Errorf("%s: write: %v", tc.name, err)
 			}
 		}()
-		op, got, err := server.readMessage()
+		op, got, err := server.ReadMessage()
 		if err != nil {
 			t.Fatalf("%s: read: %v", tc.name, err)
 		}
@@ -54,9 +54,9 @@ func TestWSMessages(t *testing.T) {
 func TestWSMasking(t *testing.T) {
 	client, server := pair(t)
 
-	go client.writeMessage(opText, []byte("from the client"))
+	go client.WriteMessage(OpText, []byte("from the client"))
 	fin, op, data, err := server.readFrame()
-	if err != nil || !fin || op != opText || string(data) != "from the client" {
+	if err != nil || !fin || op != OpText || string(data) != "from the client" {
 		t.Fatalf("frame = %v %d %q, %v", fin, op, data, err)
 	}
 
@@ -77,7 +77,7 @@ func TestWSMasking(t *testing.T) {
 		}
 		seen = append(head, body...)
 	}()
-	server.writeMessage(opText, []byte(said))
+	server.WriteMessage(OpText, []byte(said))
 	<-done
 	if len(seen) < 2 {
 		t.Fatal("nothing arrived")
@@ -96,10 +96,10 @@ func TestWSFragmentsAndPings(t *testing.T) {
 	client, server := pair(t)
 
 	go func() {
-		client.writeFrameFor(t, false, opText, []byte("one "))
-		client.writeFrameFor(t, true, opPing, []byte("are you there"))
-		client.writeFrameFor(t, false, opContinuation, []byte("two "))
-		client.writeFrameFor(t, true, opContinuation, []byte("three"))
+		client.writeFrameFor(t, false, OpText, []byte("one "))
+		client.writeFrameFor(t, true, OpPing, []byte("are you there"))
+		client.writeFrameFor(t, false, OpContinuation, []byte("two "))
+		client.writeFrameFor(t, true, OpContinuation, []byte("three"))
 	}()
 
 	// The server answers the ping while it is reading, so the pong is read
@@ -110,17 +110,17 @@ func TestWSFragmentsAndPings(t *testing.T) {
 			if err != nil {
 				return
 			}
-			if fin && op == opPong && string(data) == "are you there" {
+			if fin && op == OpPong && string(data) == "are you there" {
 				return
 			}
 		}
 	}()
 
-	op, got, err := server.readMessage()
+	op, got, err := server.ReadMessage()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if op != opText || string(got) != "one two three" {
+	if op != OpText || string(got) != "one two three" {
 		t.Errorf("message = %d %q", op, got)
 	}
 }
@@ -129,19 +129,19 @@ func TestWSFragmentsAndPings(t *testing.T) {
 // conversation is told from a dropped connection.
 func TestWSClose(t *testing.T) {
 	client, server := pair(t)
-	go client.sendClose(4000, "that is all")
-	op, payload, err := server.readMessage()
+	go client.SendClose(4000, "that is all")
+	op, payload, err := server.ReadMessage()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if op != opClose {
+	if op != OpClose {
 		t.Fatalf("op = %d", op)
 	}
-	if code, reason := closeInfo(payload); code != 4000 || reason != "that is all" {
+	if code, reason := CloseInfo(payload); code != 4000 || reason != "that is all" {
 		t.Errorf("close = %d %q", code, reason)
 	}
 	// A close frame with nothing in it means nobody said why.
-	if code, reason := closeInfo(nil); code != 1005 || reason != "" {
+	if code, reason := CloseInfo(nil); code != 1005 || reason != "" {
 		t.Errorf("empty close = %d %q", code, reason)
 	}
 }
@@ -151,11 +151,11 @@ func TestWSLimit(t *testing.T) {
 	a, b := net.Pipe()
 	defer a.Close()
 	defer b.Close()
-	client := newWSConn(a, nil, true, 8)
-	server := newWSConn(b, nil, false, 8)
+	client := NewConn(a, nil, true, 8)
+	server := NewConn(b, nil, false, 8)
 
-	go client.writeMessage(opBinary, bytes.Repeat([]byte("x"), 64))
-	if _, _, err := server.readMessage(); err == nil {
+	go client.WriteMessage(OpBinary, bytes.Repeat([]byte("x"), 64))
+	if _, _, err := server.ReadMessage(); err == nil {
 		t.Error("a message over the limit was read")
 	}
 }
@@ -164,21 +164,21 @@ func TestWSLimit(t *testing.T) {
 // end knows the other understood the request.
 func TestWSAccept(t *testing.T) {
 	// The example from RFC 6455.
-	if got := wsAccept("dGhlIHNhbXBsZSBub25jZQ=="); got != "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=" {
+	if got := Accept("dGhlIHNhbXBsZSBub25jZQ=="); got != "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=" {
 		t.Errorf("accept = %q", got)
 	}
-	key, err := wsKey()
+	key, err := Key()
 	if err != nil || len(key) != 24 {
 		t.Errorf("key = %q, %v", key, err)
 	}
-	if again, _ := wsKey(); again == key {
+	if again, _ := Key(); again == key {
 		t.Error("two keys came out the same")
 	}
 }
 
 // writeFrameFor writes one frame of a message, for the tests that need the
 // pieces rather than the whole.
-func (c *wsConn) writeFrameFor(t *testing.T, fin bool, op byte, data []byte) {
+func (c *Conn) writeFrameFor(t *testing.T, fin bool, op byte, data []byte) {
 	t.Helper()
 	head := []byte{op, 0x80 | byte(len(data))}
 	if fin {
