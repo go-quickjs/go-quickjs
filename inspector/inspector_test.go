@@ -383,3 +383,33 @@ func TestInspectorSourceURL(t *testing.T) {
 		t.Fatal("the client did not finish")
 	}
 }
+
+// TestInspectorNoProfiling pins profiling out of scope: a client may
+// enable the Profiler domain, as DevTools does on connecting, but asking it
+// to profile is refused, with the reason.
+func TestInspectorNoProfiling(t *testing.T) {
+	_, _, tg := newTarget(t)
+	done := make(chan string, 1)
+	go func() {
+		c := dial(t, tg.WebSocketURL())
+		c.call("Profiler.enable", nil)
+		c.mu.Lock()
+		c.nextID++
+		id := c.nextID
+		ch := make(chan map[string]any, 1)
+		c.replies[id] = ch
+		c.mu.Unlock()
+		b, _ := json.Marshal(map[string]any{"id": id, "method": "Profiler.start"})
+		c.conn.WriteMessage(wsproto.OpText, b)
+		m := <-ch
+		msg, _ := get(m, "error", "message").(string)
+		c.call("Runtime.runIfWaitingForDebugger", nil)
+		done <- msg
+	}()
+	if err := tg.WaitForDebugger(context.Background(), false); err != nil {
+		t.Fatal(err)
+	}
+	if msg := <-done; !strings.Contains(msg, "pprof") {
+		t.Errorf("Profiler.start: %q", msg)
+	}
+}

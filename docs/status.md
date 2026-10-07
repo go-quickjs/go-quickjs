@@ -60,6 +60,11 @@ Gregorian layout.
 
 Decorators.
 
+Profiling through the DevTools protocol -- CPU profiles and heap snapshots -- is
+out of scope for now: go-quickjs is first an engine to embed, and a host
+profiles with Go's own tools. Debugging is supported; see
+[Debugging](debugging.md).
+
 A runtime can hold more than one realm, each with its own global object and
 intrinsics, and a function runs in the realm it was made in whoever calls it;
 test262's cross-realm tests run against it, and `ShadowRealm` and node's `vm`

@@ -161,8 +161,13 @@ alive, since a debugger may show any of them.
 | The console | each call, with its arguments and where it was made |
 | Scripts | their source, the places a breakpoint can go, a source map's URL, a name given by `//# sourceURL=` |
 
-Not yet: async stack traces, restarting a frame, live editing, profiling and
-heap snapshots.
+Not yet: async stack traces, restarting a frame, live editing.
+
+Profiling is out of scope for now: the `Profiler` and `HeapProfiler` domains,
+CPU profiles and heap snapshots. go-quickjs is first an engine to embed, and a
+host profiles the program it is part of with Go's own tools -- `pprof` sees
+the time and the memory a script takes as the engine's -- while a client that
+asks the inspector to profile is refused.
 
 Where V8 can stop at an expression inside a statement, the engine stops at the
 statement; and a closure's scope shows every variable around it, where V8 shows

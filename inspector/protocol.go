@@ -6,6 +6,7 @@ import (
 	"math"
 	"slices"
 	"strconv"
+	"strings"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
 	"github.com/go-quickjs/go-quickjs/internal/vm"
@@ -174,6 +175,10 @@ func (c *session) dispatch(method string, raw json.RawMessage) (any, error) {
 			map[string]string{"name": "Runtime", "version": "1.3"},
 			map[string]string{"name": "Debugger", "version": "1.3"},
 		}}, nil
+	}
+	if strings.HasPrefix(method, "Profiler.") || strings.HasPrefix(method, "HeapProfiler.") {
+		// Profiling is out of scope: a host profiles with Go's own tools.
+		return nil, errorf("go-quickjs does not profile scripts through the inspector; profile the host with Go's pprof")
 	}
 	return nil, &protocolError{-32601, "'" + method + "' wasn't found"}
 }
