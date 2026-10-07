@@ -539,6 +539,23 @@ func (r *Runtime) pureElemOp(op uint8, this Value, args []Value, mayStore bool) 
 // already initialized, or a plain data property of the global environment's
 // own table, which the site may already know the place of.
 func (r *Runtime) pureGlobal(cl *closure, in bytecode.Instr) (Value, bool) {
+	const plain = propAccessor | propPrivate | propDeleted | propUninit
+	site := &cl.ic[in.B]
+	// The environment the site found the name in, as the tree tier's read
+	// takes it (see propCache): no scope to ask for, no key to compare.
+	if env := site.p1; env != nil && (len(r.globalLex.props) == 0 || !r.lexShadows(cl.names[in.A])) {
+		if i := uint(site.idx); i < uint(len(env.props)) {
+			if p := &env.props[i]; p.flags&plain == 0 {
+				return p.value, true
+			}
+		}
+	}
+	return r.pureGlobalSlow(cl, site, in)
+}
+
+// pureGlobalSlow is pureGlobal where the site has not got the slot.
+func (r *Runtime) pureGlobalSlow(cl *closure, site *propCache, in bytecode.Instr) (Value, bool) {
+	const plain = propAccessor | propPrivate | propDeleted | propUninit
 	name := cl.names[in.A]
 	env := cl.scope()
 	if len(r.globalLex.props) != 0 {
@@ -549,16 +566,17 @@ func (r *Runtime) pureGlobal(cl *closure, in bytecode.Instr) (Value, bool) {
 			return p.value, true
 		}
 	}
-	const plain = propAccessor | propPrivate | propDeleted | propUninit
-	site := &cl.ic[in.B]
 	if i := uint(site.idx); i < uint(len(env.props)) {
 		if p := &env.props[i]; p.key == name && p.flags&plain == 0 {
+			if site.p1 != env {
+				site.p1 = env
+			}
 			return p.value, true
 		}
 	}
 	if i := env.findOwn(name); i >= 0 {
 		if p := &env.props[i]; p.flags&plain == 0 {
-			site.idx = i
+			noteGlobalSlot(site, env, i)
 			return p.value, true
 		}
 	}

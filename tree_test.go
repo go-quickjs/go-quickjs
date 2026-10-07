@@ -721,3 +721,33 @@ func TestTreeTierSharedAcrossRuntimes(t *testing.T) {
 		}
 	}
 }
+
+// TestPureGlobalReads pins a global read in a body the frameless evaluator
+// runs, through the slot its site remembers, as the slot stops being the
+// name's: deleted, redefined as an accessor, shadowed by a script's let.
+func TestPureGlobalReads(t *testing.T) {
+	defer vm.SetTreeTier(true)
+	const want = "2,2,2,6,ReferenceError,8,get,11,11"
+	for _, tier := range []bool{false, true} {
+		vm.SetTreeTier(tier)
+		rt := quickjs.New()
+		_, err := rt.Eval(`var r = []; globalThis.G = 1; globalThis.H = 5;
+			function rd() { return G + 1 } function rh() { return H + 1 }
+			function run(f) { for (var i = 0; i < 3; i++) r.push(f()) }
+			run(rd); r.push(rh()); delete globalThis.H;
+			try { rh() } catch (e) { r.push(e.constructor.name) }
+			globalThis.H = 7; r.push(rh());
+			Object.defineProperty(globalThis, "H", { get() { r.push("get"); return 0 }, configurable: true }); rh();`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, err := rt.Eval(`let G = 10; r.push(rd(), rd()); r.join()`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := v.String(); got != want {
+			t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, want)
+		}
+		rt.Close()
+	}
+}
