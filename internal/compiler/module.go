@@ -86,7 +86,7 @@ func CompileModule(prog *ast.Program, opts Options) (fn *bytecode.Function, info
 	// The declarations are compiled into a function of their own, which the
 	// linker runs: a module's bindings exist, and its functions are callable,
 	// before any of the graph has been evaluated.
-	info.Init = compileModuleInit(prog, opts, &info)
+	info.Init = compileModuleInit(prog, opts, &info, c.script)
 	c.moduleBindingsDone = true
 	c.compileStatements(prog.Body)
 
@@ -311,8 +311,12 @@ func moduleLexNames(body []ast.Stmt) []lexicalName {
 // before its body has run -- that is what makes a cycle work at all -- so the
 // declarations belong to linking, which happens for the whole graph before any
 // of it is evaluated.
-func compileModuleInit(prog *ast.Program, opts Options, info *ModuleInfo) *bytecode.Function {
+//
+// It shares the module's script: the functions it declares are the module's,
+// and a debugger, like a stack trace, finds them in its text.
+func compileModuleInit(prog *ast.Program, opts Options, info *ModuleInfo, script *bytecode.Script) *bytecode.Function {
 	c := newCompiler(nil, opts)
+	c.script, c.fn.Script = script, script
 	c.fn.Name = "<module bindings>"
 	c.fn.TopLevel = true
 	c.fn.Strict = true
