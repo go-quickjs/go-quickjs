@@ -13,7 +13,13 @@ import (
 // of the platform's own; and a copy of it under node_modules left as it
 // is, as node leaves one.
 func TestEnableSourceMaps(t *testing.T) {
-	dir := t.TempDir()
+	// qjs names a program by its real path, as node does: macOS's temporary
+	// directory is under a link, /var to /private/var, and Windows's may be
+	// named in the short form, RUNNER~1.
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	for name, text := range map[string]string{
 		"src/app.ts":                       "function add(a: number, b: number): number {\n  if (b > 100) {\n    throw new Error(\"too big: \" + b);\n  }\n  return a + b;\n}\nclass Calc {\n  total = 0;\n  push(n: number) { this.total = add(this.total, n); }\n}\nconst c = new Calc();\nc.push(50);\nc.push(150);\n",
 		"dist/app.js":                      "\"use strict\";\nvar __header = 1;\nfunction a(x, y) {\n    if (y > 100) {\n        throw new Error(\"too big: \" + y);\n    }\n    return x + y;\n}\nclass Calc {\n    constructor() { this.total = 0; }\n    push(n) { this.total = a(this.total, n); }\n}\nconst c = new Calc();\nc.push(50);\nc.push(150);\n" + "//# sourceMappingURL=app.js.map\n",
