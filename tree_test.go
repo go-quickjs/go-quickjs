@@ -606,6 +606,389 @@ func TestElementUpdates(t *testing.T) {
 	}
 }
 
+// TestPlaceUpdates runs every compound assignment and update over every
+// kind of place the tree builds as one node -- a property of a local, of
+// this, of an object read through another, of an upvalue; an element over
+// local, constant and computed keys and objects; a typed array's; a global;
+// an upvalue; an arguments object's -- with every operator, prefix and
+// postfix, the value used and not, a constant, local, tree or call operand,
+// or a getter that, while the operand is evaluated, gives the place an
+// object, moves the property to another slot, makes the array's storage
+// again or freezes the object or the array; and values that are numbers,
+// -0, NaN, strings, BigInts, BigInts mixed with numbers, undefined, null,
+// objects with valueOf, a valueOf that changes the place, the object, the
+// array's length and the key under way, and symbols; on plain objects,
+// accessors, frozen objects, prototype setters, read-only prototype
+// properties and in strict mode. Each runs four times, the first filling
+// the caches the others' fast paths read.
+// Node and C QuickJS give the same lines; the test pins their count and a
+// hash of them, in both tiers.
+func TestPlaceUpdates(t *testing.T) {
+	if testing.Short() {
+		t.Skip("86,688 generated updates in both tiers; run without -short")
+	}
+	defer vm.SetTreeTier(true)
+	const src = `		// Every place an update can target x every operator x prefix/postfix x value
+		// used or not x operand kind x value kind, each run four times in a loop
+		// (the first run fills the caches the later ones' fast paths need).
+		var out = [];
+		function show(v) {
+		  switch (typeof v) {
+		    case "bigint": return v + "n";
+		    case "number": return Object.is(v, -0) ? "-0" : String(v);
+		    case "string": return JSON.stringify(v);
+		    case "symbol": return "sym";
+		    case "object": return v === null ? "null" : "obj";
+		    case "function": return "fn";
+		  }
+		  return String(v);
+		}
+		function ownProps(e) { return Object.keys(e.o).join() + "=" + show(e.o.x) }
+		// Places: [name, decl (run at the function's start), the place, reader of
+		// the final value from env]
+		var places = [
+		  ["prop", "var o = env.o;", "o.x", ownProps],
+		  ["this", "", "this.x", ownProps],
+		  ["propTree", "", "env.o.x", ownProps],
+		  ["propUp", "", "UO.x", ownProps],
+		  ["elem", "var a = env.a, k = env.k;", "a[k]", function (e) { return e.a.slice(0, 3).map(show).join("/") }],
+		  ["elemIdx", "var a = env.a;", "a[1]", function (e) { return e.a.slice(0, 3).map(show).join("/") }],
+		  ["elemTree", "", "env.a[env.k]", function (e) { return e.a.slice(0, 3).map(show).join("/") }],
+		  ["elemKeyTree", "var a = env.a;", "a[env.k]", function (e) { return e.a.slice(0, 3).map(show).join("/") }],
+		  ["elemTreeIdx", "", "env.a[1]", function (e) { return e.a.slice(0, 3).map(show).join("/") }],
+		  ["global", "", "G", function (e) { return globalThis.G }],
+		  ["upvalue", "", "U", null],
+		  ["typed", "var a = env.t, k = env.k;", "a[k]", function (e) { return e.t[e.k] }],
+		  ["args", "", "arguments[0]", null],
+		];
+		var ops = ["+=", "-=", "*=", "/=", "%=", "**=", "<<=", ">>=", ">>>=", "&=", "|=", "^=", "++x", "x++", "--x", "x--"];
+		// Operands: [name, decl, expression]. The getter's changes the place while
+		// the operand is evaluated: a value that is an object, the object or the
+		// array frozen, the property deleted and added again (in another slot), the
+		// array's storage made again, the upvalue and the global given objects.
+		var operands = [
+		  ["k", "", "3"],
+		  ["local", "var y = env.y;", "y"],
+		  ["tree", "", "env.y"],
+		  ["call", "", "env.fy()"],
+		  ["getter", "", "env.gm"],
+		];
+		// Values the place starts with and the operand has; "mut" values have a
+		// valueOf that changes the place, the object or the key while the update
+		// is under way.
+		function values(env) {
+		  return [
+		    ["5", 5, 2], ["frac", 2.5, -1.5], ["neg0", -0, 0], ["nan", NaN, 1], ["big", 2 ** 31 - 1, 3],
+		    ["str", "7", "1"], ["strx", "ab", 2], ["bigint", 10n, 3n], ["mixbig", 10n, 1],
+		    ["undef", undefined, 1], ["null", null, 4],
+		    ["vo", { valueOf() { env.log.push("vo"); return 6 } }, { valueOf() { env.log.push("vy"); return 2 } }],
+		    ["mut", { valueOf() { env.log.push("mut"); env.mutate(); return 4 } }, { valueOf() { env.log.push("muty"); env.mutate(); return 3 } }],
+		    ["sym", Symbol("s"), 1],
+		  ];
+		}
+		var modes = ["plain", "getset", "frozen", "protoSetter", "nonWritableProto", "strict"];
+		function build(place, op, operand, use, strict) {
+		  var expr;
+		  var p = place[2];
+		  if (op === "++x") expr = "++" + p;
+		  else if (op === "--x") expr = "--" + p;
+		  else if (op === "x++") expr = p + "++";
+		  else if (op === "x--") expr = p + "--";
+		  else expr = p + " " + op + " " + operand[2];
+		  var stmt = use ? "res.push(show(" + expr + "));" : expr + ";";
+		  var body = (strict ? '"use strict";' : "") + place[1] + operand[1] +
+		    "var res = []; for (var j = 0; j < 4; j++) { env.log.push('i' + j); " + stmt + " } return res;";
+		  if (place[0] === "upvalue") {
+		    return new Function("env", "show", "var U = env.u; env.setU = function (v) { U = v }; return [function () { " + body + " }, function () { return U }];")
+		  }
+		  if (place[0] === "args") {
+		    return new Function("env", "show", "return [function (p) { " + body + " }, null];")
+		  }
+		  return new Function("env", "show", "UO", "return [function () { " + body + " }, null];");
+		}
+		var count = 0;
+		for (var place of places) {
+		  for (var op of ops) {
+		    for (var operand of (op.length === 3 && op[1] === "x" || op[0] === "x" ? [operands[0]] : operands)) {
+		      for (var use of [false, true]) {
+		        for (var mode of modes) {
+		          if (mode !== "plain" && mode !== "strict" && !/^prop|^this/.test(place[0]) && !(place[0] === "elem" && mode === "getset")) continue;
+		          var strict = mode === "strict";
+		          var made = build(place, op, operand, use, strict);
+		          for (var vs of values(null)) {
+		            var env = { log: [] };
+		            var vals = values(env).find(function (x) { return x[0] === vs[0] });
+		            var v = vals[1], y = vals[2];
+		            env.y = y;
+		            env.fy = function () { env.log.push("fy"); return y };
+		            env.k = 1;
+		            var o;
+		            switch (mode) {
+		              case "getset":
+		                var hidden = v;
+		                o = { get x() { env.log.push("get"); return hidden }, set x(n) { env.log.push("set:" + show(n)); hidden = n } };
+		                break;
+		              case "frozen": o = Object.freeze({ x: v }); break;
+		              case "protoSetter":
+		                o = Object.create({ set x(n) { env.log.push("pset:" + show(n)) }, get x() { return v } });
+		                break;
+		              case "nonWritableProto":
+		                o = Object.create(Object.defineProperty({}, "x", { value: v, writable: false }));
+		                break;
+		              default: o = { x: v, other: 1 };
+		            }
+		            env.o = o;
+		            if (place[0] === "elem" && mode === "getset") {
+		              var ha = v;
+		              env.a = [0, 0, 2];
+		              Object.defineProperty(env.a, 1, { get() { env.log.push("eget"); return ha }, set(n) { env.log.push("eset:" + show(n)); ha = n } });
+		            } else env.a = [0, v, 2];
+		            env.t = new Int16Array([0, typeof v === "number" ? v : 7, 2]);
+		            env.u = v;
+		            globalThis.G = v;
+		            env.mutate = function () {
+		              // Changes every place under way: the property, the element,
+		              // the global; the object's shape; the array's length.
+		              if (env.o && typeof env.o === "object" && !Object.isFrozen(env.o)) { try { env.o.x = 100; env.o.added = 1 } catch (e) { env.log.push("mutE") } }
+		              if (Array.isArray(env.a)) { env.a.length = 1; if (env.log.length % 3 === 0) env.a.push(9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9) }
+		              globalThis.G = 200;
+		              env.k = 0;
+		            };
+		            env.n = 0;
+		            Object.defineProperty(env, "gm", { get() { env.log.push("gm"); env.shake(); return 3 } });
+		            env.shake = function () {
+		              var o = env.o, n = env.n++ % 4, d = o && typeof o === "object" && Object.getOwnPropertyDescriptor(o, "x");
+		              if (d && d.writable && !Object.isFrozen(o)) {
+		                if (n === 0) o.x = 7;
+		                else if (n === 1) { var x = o.x; delete o.x; o.x = x }
+		                else if (n === 2) o.x = { valueOf() { return 50 } };
+		                else Object.freeze(o);
+		              }
+		              if (Array.isArray(env.a) && !Object.isFrozen(env.a)) {
+		                if (n === 0) env.a[1] = 9;
+		                else if (n === 1) { env.a.length = 0; for (var i = 0; i < 40; i++) env.a.push(i) }
+		                else if (n === 2) env.a[1] = { valueOf() { return 60 } };
+		                else Object.freeze(env.a);
+		              }
+		              if (env.setU) { if (n === 1) env.setU(8); else if (n === 2) env.setU({ valueOf() { return 70 } }) }
+		              if (n === 2) globalThis.G = { valueOf() { return 80 } };
+		            };
+		            var fns = made(env, show, o);
+		            var f = fns[0], r;
+		            try {
+		              if (place[0] === "this") r = f.call(o);
+		              else if (place[0] === "args") r = f(v);
+		              else r = f();
+		              r = r.join(",");
+		            } catch (e) {
+		              r = "!" + e.constructor.name;
+		            }
+		            var fin;
+		            try {
+		              fin = place[3] ? show(place[3](env)) : fns[1] ? show(fns[1]()) : "-";
+		            } catch (e) { fin = "!" + e.constructor.name }
+		            out.push(place[0] + " " + op + " " + operand[0] + " " + (use ? "v" : "s") + " " + mode + " " + vs[0] + ": " + r + " | " + fin + " | " + env.log.join(","));
+		            count++;
+		          }
+		        }
+		      }
+		    }
+		  }
+		}
+		// FNV-1a over the lines, for a short expectation.
+		var h = 0x811c9dc5;
+		var all = out.join("\n");
+		for (var i = 0; i < all.length; i++) { h ^= all.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+		var summary = count + " " + h.toString(16);
+		summary`
+	const want = "86688 ca250439"
+	for _, tier := range []bool{false, true} {
+		vm.SetTreeTier(tier)
+		if got := treeRun(t, src); got != want {
+			t.Errorf("tree tier %v: got %s, want %s", tier, got, want)
+		}
+	}
+}
+
+// TestPlaceUpdateCases pins updates where a fast path's assumption stops
+// holding or the order of the steps shows: a cache warmed on a writable
+// property before the object is frozen, made read-only or given an
+// accessor; a property read on the prototype and written as the object's
+// own; a prototype's setter; an operand that reassigns the local holding
+// the object or the key, or whose getter changes the place; an object or
+// key read once through a getter; globals made read-only, deleted, or
+// accessors; open and closed upvalues; values used, with strings and
+// BigInts; this in an arrow and in a derived constructor, before and after
+// super(); typed arrays and holes; symbols. Node and C QuickJS agree.
+func TestPlaceUpdateCases(t *testing.T) {
+	defer vm.SetTreeTier(true)
+	const src = `		var r = [];
+		function err(f) { try { return f() } catch (e) { return e.constructor.name } }
+		// A cache warmed on a writable property, then the object frozen, made
+		// read-only or given an accessor in the loop.
+		function warm(o, n) { for (var j = 0; j < n; j++) { o.x += 1; if (j === 1) Object.freeze(o) } return o.x }
+		r.push(warm({ x: 1 }, 4));
+		function warmS(o, n) { "use strict"; for (var j = 0; j < n; j++) { o.x += 1; if (j === 1) Object.freeze(o) } return o.x }
+		r.push(err(function () { return warmS({ x: 1 }, 4) }));
+		function ro(o) { for (var j = 0; j < 4; j++) { o.x++; if (j === 1) Object.defineProperty(o, "x", { writable: false }) } return o.x }
+		r.push(ro({ x: 1 }));
+		function acc(o) { var h = 0; for (var j = 0; j < 4; j++) { o.x *= 2; if (j === 1) Object.defineProperty(o, "x", { get() { r.push("g"); return 3 }, set(v) { r.push("s" + v) } }) } return o.x }
+		r.push(acc({ x: 1 }));
+		function th() { for (var j = 0; j < 3; j++) { this.n++; this.n += 10; } return this.n }
+		r.push(th.call({ n: 0 }), th.call({ n: "1" }), err(function () { return th.call(Object.freeze({ n: 0 })) }));
+		// A writable property on the prototype: read there, written as own.
+		var proto = { x: 1 }, child = Object.create(proto);
+		(function (o) { for (var j = 0; j < 3; j++) o.x += 1 })(child);
+		r.push(proto.x, child.x, Object.keys(child).join());
+		// A setter on the prototype.
+		var log = [], ps = Object.create({ get x() { return 5 }, set x(v) { log.push(v) } });
+		(function (o) { for (var j = 0; j < 2; j++) { o.x -= 1; o.x++ } })(ps);
+		r.push(log.join("/"), Object.keys(ps).length);
+		// The operand changes the local holding the object: the store goes to the
+		// object read first.
+		(function () { var a = { x: 1 }, b = { x: 10 }, o = a; for (var j = 0; j < 2; j++) o.x += (o = b, 1); r.push(a.x, b.x) })();
+		(function () { var a = [1, 2], b = [10, 20], o = a, i = 0; for (var j = 0; j < 2; j++) o[i] += (o = b, i = 1, 1); r.push(a.join(), b.join()) })();
+		// The operand's getter changes the place: the old value was read first.
+		(function () { var o = { x: 1 }, src = { get v() { o.x = 100; return 1 } }; for (var j = 0; j < 2; j++) o.x += src.v; r.push(o.x) })();
+		// o.p.q op= y reads o.p once.
+		(function () { var n = 0, inner = { q: 1 }, o = { get p() { n++; return inner } }; for (var j = 0; j < 3; j++) o.p.q += 2; r.push(inner.q, n) })();
+		// A key that is an object, and a[k] = a[k] + y over a key that is a string.
+		(function () { var n = 0, k = { toString() { n++; return "1" } }, a = [0, 5]; for (var j = 0; j < 2; j++) a[k] += 1; r.push(a[1]); k = "1"; for (var j = 0; j < 2; j++) a[k] = a[k] + 1; r.push(a[1]) })();
+		(function () { var a = [1, 2, 3], i = 1, y = 2; for (var j = 0; j < 2; j++) { a[i] = a[i] * y; a[i] = a[i] - 1 } r.push(a.join()) })();
+		// o.a[0] op= y reads o.a once.
+		(function () { var n = 0, arr = [1], o = { get a() { n++; return arr } }; for (var j = 0; j < 3; j++) { o.a[0] += 1; o.a[0]++ } r.push(arr[0], n) })();
+		// Globals: warm, then read-only, deleted, an accessor, shadowed by a script's let.
+		globalThis.G = 1;
+		function g1() { for (var j = 0; j < 3; j++) { G += 1; G++ } return G }
+		r.push(g1());
+		Object.defineProperty(globalThis, "G", { writable: false });
+		r.push(g1(), err(function () { "use strict"; for (var j = 0; j < 2; j++) G += 1 }));
+		Object.defineProperty(globalThis, "G2", { value: 1, writable: true, configurable: true });
+		function g2() { for (var j = 0; j < 3; j++) G2 *= 3; return G2 }
+		r.push(g2());
+		delete globalThis.G2;
+		r.push(err(g2), err(function () { "use strict"; G2 += 1 }));
+		var ag = 0;
+		Object.defineProperty(globalThis, "G3", { get() { ag++; return 7 }, set(v) { r.push("G3=" + v) }, configurable: true });
+		(function () { for (var j = 0; j < 2; j++) { G3 += 1; G3++ } })();
+		r.push(ag);
+		// Upvalues, open and closed.
+		(function () {
+		  var n = 0;
+		  function inc(y) { for (var j = 0; j < 3; j++) { n++; n += y; n <<= 1 } }
+		  inc(1); r.push(n);
+		  n = "x"; inc(1); r.push(n);
+		  n = 1n; r.push(err(function () { inc(1) }), n);
+		})();
+		function mk() { var n = 0; return function () { for (var j = 0; j < 3; j++) n -= 2; return n } }
+		var dec = mk(); dec(); r.push(dec());
+		// Values used: prefix, postfix, compound; strings and BigInts.
+		(function () {
+		  var o = { x: "5" }, a = ["5", 1n], s = [];
+		  for (var j = 0; j < 2; j++) { s.push(o.x++, ++o.x, o.x += "1", a[0]--, --a[0], a[1]++, a[1] **= 2n) }
+		  r.push(s.join("/"), typeof o.x, a.join());
+		})();
+		var GV = "2";
+		(function () { var s = []; for (var j = 0; j < 2; j++) s.push(GV++, GV--, ++GV, GV *= 2); r.push(s.join("/")) })();
+		// Arrows and derived constructors: this as a tree.
+		function Arr() { this.c = 0; var f = () => { for (var j = 0; j < 3; j++) { this.c += 2; this.c++ } }; f(); return this.c }
+		r.push(new Arr());
+		class B { constructor() { this.v = 1 } }
+		class D extends B { constructor(early) { if (early) { try { this.v += 1 } catch (e) { r.push(e.constructor.name) } } super(); for (var j = 0; j < 3; j++) { this.v *= 3; var q = this.v++ } r.push(q) } }
+		new D(true); new D(false);
+		// Typed arrays and holes.
+		(function () { var t = new Uint8Array([250, 1]), f = new Float32Array([0.1]), h = [1, , 3]; for (var j = 0; j < 3; j++) { t[0] += 3; f[0] *= 3; h[1] += 1 } r.push(t.join(), f[0], h.join()) })();
+		// Symbols are TypeErrors at the read's ToNumeric for postfix, at the operator otherwise.
+		r.push(err(function () { var o = { x: Symbol() }; return o.x++ }), err(function () { var o = { x: Symbol() }; o.x += 1 }));
+		r.join(" ")`
+	const want = "3 TypeError 3 g s6 g s6 g 3 33 34 0 1 4 x 4/6/4/6 0 2 11 2,2 10,21 3 7 3 7 9 1,5,3 7 6 7 7 TypeError 27 ReferenceError ReferenceError G3=8 G3=8 G3=8 G3=8 4 28 12 TypeError 2 -12 5/7/71/5/3/1/4/71/73/731/3/1/4/25 string 1,25 2/3/3/6/6/7/7/14 [object Object] ReferenceError 39 39 3,1 2.700000047683716 1,NaN,3 TypeError TypeError"
+	for _, tier := range []bool{false, true} {
+		vm.SetTreeTier(tier)
+		if got := treeRun(t, src); got != want {
+			t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, want)
+		}
+	}
+}
+
+// TestPlaceUpdateGlobalLex pins updates of a global that a later script's
+// let shadows, that is in its dead zone, that is a constant, or that does
+// not exist in strict mode. Node gives the same.
+func TestPlaceUpdateGlobalLex(t *testing.T) {
+	defer vm.SetTreeTier(true)
+	scripts := []string{
+		`globalThis.G4 = 1; function g4() { for (var j = 0; j < 2; j++) { G4 += 5; G4++ } return G4 } g4()`,
+		`let G4 = 100; g4() + "," + globalThis.G4`,
+		`function tdz() { for (var j = 0; j < 2; j++) TL *= 2; return TL }`,
+		`var tr; try { tdz() } catch (e) { tr = e.constructor.name } let TL = 3; tr + "," + tdz()`,
+		`const C = 1; function cc() { for (var j = 0; j < 2; j++) C += 1 } var cr; try { cc() } catch (e) { cr = e.constructor.name } cr + "," + C`,
+		`function up() { "use strict"; for (var j = 0; j < 2; j++) U9 += 1 } var ur; try { up() } catch (e) { ur = e.constructor.name } ur`,
+	}
+	want := []string{"13", "112,13", "undefined", "ReferenceError,12", "TypeError,1", "ReferenceError"}
+	for _, tier := range []bool{false, true} {
+		vm.SetTreeTier(tier)
+		rt := quickjs.New()
+		for i, src := range scripts {
+			v, err := rt.Eval(src)
+			got := ""
+			if err != nil {
+				got = "error: " + err.Error()
+			} else {
+				got = v.String()
+			}
+			if got != want[i] {
+				t.Errorf("tree tier %v, script %d: got %s, want %s", tier, i, got, want[i])
+			}
+		}
+		rt.Close()
+	}
+}
+
+// TestPlaceUpdateModuleBindings pins updates of a module's own bindings,
+// which a module's functions reach as globals whose slot is the binding:
+// one in its dead zone, a let holding a number or a string, a var, a
+// constant, and an imported binding, which cannot be assigned to, read
+// again after its module changed it. Node and C QuickJS give the same.
+func TestPlaceUpdateModuleBindings(t *testing.T) {
+	defer vm.SetTreeTier(true)
+	const dep = `export let y = 1; export function bumpY() { y += 10 }`
+	const main = `import { y, bumpY } from "./dep.js";
+		var r = [];
+		function err(f) { try { return f() } catch (e) { return e.constructor.name } }
+		function early() { for (var j = 0; j < 2; j++) x *= 2; return x }
+		r.push(err(early));
+		let x = 3;
+		let s = "a";
+		const c = 1;
+		var v = 5;
+		function f() { for (var j = 0; j < 3; j++) { x += 1; x++; s += j; v -= 1 } return x + s + v }
+		r.push(f(), f(), early());
+		r.push(err(function () { for (var j = 0; j < 2; j++) c += 1 }));
+		r.push(err(function () { for (var j = 0; j < 2; j++) y += 1 }), y);
+		bumpY(); r.push(y);
+		r.push(err(function () { var t; for (var j = 0; j < 2; j++) t = y++; return t }));
+		export const out = r.join(" ")`
+	const want = "ReferenceError 9a0122 15a012012-1 60 TypeError TypeError 1 11 TypeError"
+	for _, tier := range []bool{false, true} {
+		vm.SetTreeTier(tier)
+		rt := quickjs.New()
+		rt.SetModuleLoader(func(specifier, referrer string) (string, string, error) {
+			return dep, specifier, nil
+		})
+		ns, err := rt.EvalModule("main.js", main)
+		if err != nil {
+			t.Fatalf("tree tier %v: %v", tier, err)
+		}
+		out, err := ns.Get("out")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := out.String(); got != want {
+			t.Errorf("tree tier %v:\n got %s\nwant %s", tier, got, want)
+		}
+		rt.Close()
+	}
+}
+
 // TestTypedElementAccess pins reads and writes of typed array elements by
 // number -- read by getElem from the read node, written by typedWrite for a
 // view of a fixed length, with the view's storage kept from the first write: every element type,

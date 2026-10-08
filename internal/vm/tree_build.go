@@ -14,8 +14,11 @@ type tentry struct {
 	// v is the tree, for an entry that is one; tree makes one for the other
 	// kinds, where a node calls it rather than reading it in place.
 	v tval
-	// slot is the stack slot the entry is a read of, which is always its
-	// own position, or -1 for a tree still to be evaluated.
+	// slot is the stack slot the entry is a read of, or -1 for a tree still
+	// to be evaluated. It is the entry's own position, except for the copy
+	// a dup or dup2 leaves for the get_prop or get_index right after it,
+	// which reads the slot it copies, beneath it (see OpDup): every reader
+	// goes by slot, and spill evaluates such an entry like a tree.
 	slot int
 	// local is set for a read of local k, upvalue for a read of upvalue k,
 	// number for the number n, and this for this where it is a value rather
@@ -58,6 +61,9 @@ type tbuilder struct {
 	// end is where the block being built ends, for an instruction that
 	// takes in those after it.
 	end int
+	// noUpdate is set while an update's operand is built, whose reads are
+	// not looked at as updates of their own (see tbuilder.update).
+	noUpdate bool
 }
 
 // target records a way from the block being built to the one at pc, whose
@@ -519,7 +525,9 @@ func (b *tbuilder) pushSlot(d int) {
 func (b *tbuilder) spill() bool {
 	// Each is written as soon as it is evaluated. A tree at a position is
 	// made of what was pushed above it, so it reads only the slots from its
-	// own up, and none of them is written before it is evaluated.
+	// own up, and none of them is written before it is evaluated -- or the
+	// slot beneath, for a dup's copy, which holds a slot entry this does not
+	// write.
 	n := 0
 	var p, q, o int
 	var v, w, u tval
@@ -622,6 +630,12 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			return 0, false
 		}
 		d := b.depth()
+		if more && code[pc+1].Op == bytecode.OpGetProp {
+			// o.p.q op= v: the copy the read takes is read from the slot
+			// beneath it, which nothing writes before the read.
+			b.pushEntry(tentry{slot: d - 1})
+			break
+		}
 		b.body = append(b.body, func(c *tctx) { c.stack[d] = c.stack[d-1] })
 		b.pushSlot(d)
 	case bytecode.OpDrop:
@@ -736,6 +750,9 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			return next
 		})
 	case bytecode.OpGetUpvalue:
+		if skip, ok := b.placeUpdate(pc, in); ok {
+			return skip, true
+		}
 		b.pushEntry(upvalueEntry(in.A))
 	case bytecode.OpSetUpvalue:
 		k, v := in.A, b.pop().tree()
@@ -828,16 +845,12 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		y := numberEntry(Int32(int32(in.B)))
 		b.pushArith(arithEntries(bytecode.Op(in.A>>24), x, y, pc), arithOf{op: bytecode.Op(in.A >> 24), x: x, y: y, pc: pc})
 	case bytecode.OpGetIndex:
-		key, obj := b.pop(), b.pop()
-		if n := len(b.stack); n >= 2 && pc+2 < b.end && sameLeaf(b.stack[n-2], obj) && sameLeaf(b.stack[n-1], key) {
-			// a[0] op= y, whose object and key the compiler reads twice
-			// rather than copying.
-			if s := elemUpdateStmt(obj, key, code, pc+1, pc, -1, fn.Strict); s != nil {
-				b.pop()
-				b.pop()
-				return 2, b.stmt(s)
-			}
+		// a[0] op= y, whose object and key the compiler reads twice rather
+		// than copying.
+		if skip, ok := b.placeUpdate(pc, in); ok {
+			return skip, true
 		}
+		key, obj := b.pop(), b.pop()
 		b.push(getIndexOperands(obj, key, pc))
 	case bytecode.OpArgumentsIndex:
 		key, slot := b.pop().tree(), in.A
@@ -861,6 +874,10 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			return v
 		})
 	case bytecode.OpGetLocalIndex:
+		// a[i] = a[i] op y.
+		if skip, ok := b.placeUpdate(pc, in); ok {
+			return skip, true
+		}
 		b.push(getIndexOperands(localEntry(in.A), localEntry(in.B), pc))
 	case bytecode.OpGetLocalIndexUpdate:
 		b.push(getLocalIndexUpdateNode(in, pc))
@@ -868,6 +885,10 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		val, key, obj := b.pop(), b.pop(), b.pop()
 		return 0, b.stmt(setIndexStmt(obj, key, val.tree(), pc, fn.Strict))
 	case bytecode.OpGetProp:
+		// o.x op= y, whose object the compiler reads twice or copies.
+		if skip, ok := b.placeUpdate(pc, in); ok {
+			return skip, true
+		}
 		b.push(getPropOperand(b.pop(), in, pc))
 	case bytecode.OpGetPropThis:
 		// The receiver stays beneath the method: it is read from its slot
@@ -953,6 +974,12 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			return 0, false
 		}
 		d := b.depth()
+		if in.Op == bytecode.OpDup2 && more && code[pc+1].Op == bytecode.OpGetIndex {
+			// o.a[0] op= v: as dup's before get_prop.
+			b.pushEntry(tentry{slot: d - 2})
+			b.pushEntry(tentry{slot: d - 1})
+			break
+		}
 		switch in.Op {
 		case bytecode.OpDup2:
 			b.body = append(b.body, func(c *tctx) { c.stack[d], c.stack[d+1] = c.stack[d-2], c.stack[d-1] })
@@ -977,12 +1004,10 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			// obj[key] op= v, up to the read of the element: the object, the
 			// key and the element go to their slots in one statement, where
 			// what dup2 and get_index leave would put them.
-			key, obj := b.pop(), b.pop()
-			if pc+4 < b.end {
-				if s := elemUpdateStmt(obj, key, code, pc+3, pc+2, pc, fn.Strict); s != nil {
-					return 4, b.stmt(s)
-				}
+			if skip, ok := b.placeUpdate(pc, in); ok {
+				return skip, true
 			}
+			key, obj := b.pop(), b.pop()
 			if !b.spill() {
 				return 0, false
 			}
@@ -1149,6 +1174,9 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		k := in.A
 		b.push(func(c *tctx) Value { return Obj(c.r.makeClosure(c.f, c.cl.consts[k])) })
 	case bytecode.OpGetGlobal:
+		if skip, ok := b.placeUpdate(pc, in); ok {
+			return skip, true
+		}
 		name, site := in.A, in.B
 		b.push(func(c *tctx) Value {
 			// The global object's slot the site remembers, read here where
@@ -2008,132 +2036,6 @@ func elemReadForUpdate(obj, key tentry, d, pc int) tstmt {
 	}
 }
 
-// sameLeaf reports whether two entries are reads of the same local or the
-// same number.
-func sameLeaf(x, y tentry) bool {
-	switch {
-	case !x.leaf() || !y.leaf():
-		return false
-	case x.local && y.local:
-		return x.k == y.k
-	case x.number && y.number:
-		return math.Float64bits(x.n.num) == math.Float64bits(y.n.num)
-	}
-	return false
-}
-
-// elemUpd is what an element update does besides its fast path: the
-// operator, its operand, and the instructions' positions.
-type elemUpd struct {
-	op bytecode.Op
-	// step is set for ++ and --, whose operand is ToNumeric'd rather than
-	// added to: y is then 1 or -1.
-	step bool
-	// y is the operand, a number, unless yLocal is a local's index.
-	y      Value
-	yLocal int
-	// ofBase is to_property_key_of_base's position, or -1 where the key is a
-	// number the compiler did not convert; get, at and set are get_index's,
-	// the update's and set_index's.
-	ofBase, get, at, set int
-	strict               bool
-}
-
-// elemUpdateStmt is obj[key] op= y or obj[key]++ as a statement, whose
-// update is code[pc] and store code[pc+1], or nil: the object is a local,
-// the key a local or a number, and y a local or a number, with + - or *.
-//
-// A number in an array's dense storage is read, updated and written back
-// where it is, in one step: nothing runs between the read and the write
-// that could change the array, the key or the operand. Anything else takes
-// the instructions' own way, elemUpdateSlow.
-//
-//go:noinline
-func elemUpdateStmt(obj, key tentry, code []bytecode.Instr, pc, get, ofBase int, strict bool) tstmt {
-	if code[pc+1].Op != bytecode.OpSetIndex || !obj.local || !key.local && !key.number {
-		return nil
-	}
-	u := &elemUpd{yLocal: -1, ofBase: ofBase, get: get, at: pc, set: pc + 1, strict: strict}
-	switch in := code[pc]; in.Op {
-	case bytecode.OpInc, bytecode.OpDec:
-		u.op, u.step, u.y = bytecode.OpAdd, true, Int(1)
-		if in.Op == bytecode.OpDec {
-			u.y = Int(-1)
-		}
-	case bytecode.OpBinLocal, bytecode.OpBinImm:
-		switch u.op = bytecode.Op(in.B); u.op {
-		case bytecode.OpAdd, bytecode.OpSub, bytecode.OpMul:
-		default:
-			return nil
-		}
-		if in.Op == bytecode.OpBinLocal {
-			u.yLocal = int(in.A)
-		} else {
-			u.y = Int32(int32(in.A))
-		}
-	default:
-		return nil
-	}
-	o, op, y, ky := obj.k, u.op, u.y, u.yLocal
-	if key.number {
-		// A constant index is an index once, when the tree is built.
-		k := key.n
-		if float64(uint32(k.num)) != k.num || uint32(k.num) >= 1<<31 {
-			return nil
-		}
-		i := uint32(k.num)
-		if ky >= 0 {
-			return func(c *tctx) {
-				if a := objectAt(&c.locals[o]); a != nil && uint(i) < uint(len(a.elems)) && a.flags&objMappedArguments == 0 {
-					if p, y := &a.elems[i], &c.locals[ky]; numberAt(p) {
-						if numberAt(y) {
-							p.num = Float(numUpdate(op, p.num, y.num)).num
-							return
-						}
-					}
-				}
-				c.elemUpdateSlow(c.locals[o], k, u)
-			}
-		}
-		return func(c *tctx) {
-			if a := objectAt(&c.locals[o]); a != nil && uint(i) < uint(len(a.elems)) && a.flags&objMappedArguments == 0 {
-				if p := &a.elems[i]; numberAt(p) {
-					p.num = Float(numUpdate(op, p.num, y.num)).num
-					return
-				}
-			}
-			c.elemUpdateSlow(c.locals[o], k, u)
-		}
-	}
-	k := key.k
-	if ky >= 0 {
-		return func(c *tctx) {
-			if a, k := objectAt(&c.locals[o]), c.locals[k]; a != nil {
-				if i := uint32(k.num); float64(i) == k.num && uint(i) < uint(len(a.elems)) && a.flags&objMappedArguments == 0 {
-					if p, y := &a.elems[i], &c.locals[ky]; numberAt(p) {
-						if numberAt(y) {
-							p.num = Float(numUpdate(op, p.num, y.num)).num
-							return
-						}
-					}
-				}
-			}
-			c.elemUpdateSlow(c.locals[o], c.locals[k], u)
-		}
-	}
-	return func(c *tctx) {
-		if a, k := objectAt(&c.locals[o]), c.locals[k]; a != nil {
-			if i := uint32(k.num); float64(i) == k.num && uint(i) < uint(len(a.elems)) && a.flags&objMappedArguments == 0 {
-				if p := &a.elems[i]; numberAt(p) {
-					p.num = Float(numUpdate(op, p.num, y.num)).num
-					return
-				}
-			}
-		}
-		c.elemUpdateSlow(c.locals[o], c.locals[k], u)
-	}
-}
-
 // objectAt is the object the value at p is, or nil, its bits read straight
 // into an integer register rather than through a float one.
 func objectAt(p *Value) *Object {
@@ -2145,47 +2047,6 @@ func objectAt(p *Value) *Object {
 
 // numberAt is IsNumber of the value at p, read as objectAt reads it.
 func numberAt(p *Value) bool { return *(*uint64)(unsafe.Pointer(&p.num))>>51 != tagBase>>51 }
-
-// numUpdate is a + b, a - b or a * b.
-func numUpdate(op bytecode.Op, a, b float64) float64 {
-	switch op {
-	case bytecode.OpAdd:
-		return a + b
-	case bytecode.OpSub:
-		return a - b
-	}
-	return a * b
-}
-
-// elemUpdateSlow is obj[key] op= y as its instructions do it, one at a
-// time: the key converted, the element read, the operand read after it,
-// the update and the store, each where it may throw or run code.
-func (c *tctx) elemUpdateSlow(o, k Value, u *elemUpd) {
-	if u.ofBase >= 0 && (o.IsNullish() || !k.IsNumber() && !k.IsString() && !k.IsSymbol()) {
-		k = c.keyOfBase(o, k, u.ofBase)
-	}
-	v, ok := elemAt(o, k)
-	if !ok {
-		v = c.getIndexSlow(o, k, u.get)
-	}
-	y := u.y
-	if u.yLocal >= 0 {
-		y = c.locals[u.yLocal]
-	}
-	var r Value
-	switch {
-	case v.IsNumber() && y.IsNumber():
-		r = Float(numUpdate(u.op, v.num, y.num))
-	case u.step:
-		c.at(u.at)
-		r = c.step(v, y.num)
-	default:
-		r = c.arithSlow(u.op, v, y, u.at)
-	}
-	if !setElem(o, k, r) {
-		c.setIndexSlow(o, k, r, u.set, u.strict)
-	}
-}
 
 // keyOfBase is to_property_key_of_base at pc: a key of a base that is null or
 // undefined is an error before it is converted, and one that is not a

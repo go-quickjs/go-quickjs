@@ -41,8 +41,9 @@ concurrently.
   bytes, so adding, moving or renaming code there -- even code a benchmark
   never runs -- can move the V8 suite by 5 to 10%. Do not rename or reorder
   its files or move code between them without comparing builds with
-  `internal/cmd/v8bench/placements` (see Validation); the `zcall_*.go` files
-  sort last on purpose.
+  `internal/cmd/v8bench/placements` (see Validation); the `zcall_*.go` and
+  `ztree_*.go` files sort last on purpose, so that what is added there moves
+  nothing before it.
 - What a newer Go adds -- generic methods, in Go 1.27 -- may be offered in a
   file built only with it, `//go:build go1.27`, which gives that file the
   newer language whatever go.mod says, as long as what it offers is there for
