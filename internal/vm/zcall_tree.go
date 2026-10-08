@@ -215,6 +215,9 @@ func (r *Runtime) callRest(o *Object, fd *funcData, this Value, args []Value) (V
 		}
 		v, err := fd.native(r, this, args)
 		r.frameDepth--
+		if r.meter != nil && err == nil {
+			err = r.chargeResult(v)
+		}
 		return v, err
 	}
 	return r.call(Obj(o), this, args)

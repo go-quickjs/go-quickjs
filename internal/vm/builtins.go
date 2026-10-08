@@ -884,10 +884,16 @@ func (r *Runtime) arrayLikeToSlice(v Value, limit int64) ([]Value, error) {
 		return nil, r.throwRangeError("maximum call stack size exceeded")
 	}
 	out := make([]Value, 0, int(min(n, 1024)))
+	// The list is in no value the memory meter's walk can reach, so it is
+	// charged as a builder's output is.
+	meter := heldMeter{r: r}
 	for i := int64(0); i < n; i++ {
 		// A length is whatever the object says it is, and may be 2**53-1 with
 		// nothing behind it, so the walk has to stay interruptible.
 		if err := r.tick(); err != nil {
+			return nil, err
+		}
+		if err := meter.charge(cap(out) * int(valueSize)); err != nil {
 			return nil, err
 		}
 		el, err := r.getProp(o, r.atoms.indexAtom(uint32(i)), v)
@@ -1359,8 +1365,10 @@ func (r *Runtime) initArrayBuiltins() {
 		defer rt.joinDone()
 		// The pieces are joined rather than merely appended: two elements can
 		// end and begin with the halves of one character.
-		var sb partsBuilder
-		sb.Grow(joinSize(a, sep))
+		sb := rt.newParts()
+		if err := sb.Grow(joinSize(a, sep)); err != nil {
+			return Undefined, err
+		}
 		ascii := sep.ascii
 		for i := int64(0); i < a.n; i++ {
 			if i > 0 {
@@ -1380,8 +1388,8 @@ func (r *Runtime) initArrayBuiltins() {
 			}
 			sb.WriteStr(s)
 			ascii = ascii && s.ascii
-			if sb.overlong() {
-				return Undefined, rt.throwStringLength()
+			if err := sb.check(); err != nil {
+				return Undefined, err
 			}
 		}
 		if ascii {

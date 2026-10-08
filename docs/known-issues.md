@@ -632,3 +632,26 @@ Paths are relative to this repository; `go-intl:` paths are in
     running the jobs both clear it.
   - `TestWaitForAges` had relied on the stale signal.
   - Tests: `TestNotifyDeliversUnlocked`, `TestHostJobsReadyAfterAttach`.
+
+### KI-61 A value doubled in a short loop escapes the memory limit
+- **Where:** `internal/vm/memory.go`; the template literal's join in
+  `vm.go`, `Array.prototype.join`, `JSON.stringify` and spread.
+- **Effect:** with a 16 MB limit, `` s = `${s}${s}` `` or `s = [s, s].join("")`
+  twenty times gave a string of 84 million characters, `a = [...a, ...a]`
+  ran on until the process itself was out of memory, and
+  `Array.from({length: 2e7})` was allowed. Each writes out as much as its
+  inputs hold in one step, and the heap was only measured from the interrupt
+  check, about once every thousand back edges: a loop of twenty turns never
+  reached it.
+- **Status:** fixed. What the engine makes at the script's bidding is
+  charged as it is made, not only measured now and then:
+  - a builder of script output -- the joins, `replace`, a template literal,
+    `JSON.stringify`, a list read from an array-like, the values of a spread
+    call -- charges what it holds as it writes, all of it, since nothing
+    the walk can reach holds it yet;
+  - what a built-in returns is charged at its size, and what a spread adds
+    to an array, so that an output a few times its inputs cannot be
+    repeated past the limit;
+  - a charge that takes the estimate over the limit measures the heap, and
+    a result the script already held is not counted twice.
+  - Tests: `TestMemoryLimitDoubling`, `TestMemoryLimitResultsCountedOnce`.

@@ -132,10 +132,13 @@ type config struct {
 //
 // The measure is the runtime's own heap -- its objects, strings and buffers
 // -- which it walks from its roots when the process has allocated a quarter
-// of the limit since it last did, and before any single allocation large
-// enough to cross the limit at once. It is an estimate: what a host holds
-// for the script, and what Go closures inside the engine capture, is not
-// counted. A runtime with a limit is a little slower to allocate.
+// of the limit since it last did, and whenever what the engine has made
+// for the script since would take it over: an allocation whose size the
+// script chose is charged before it is made, a join, a template, JSON text
+// or a spread as it is written, and what a built-in returns once it is
+// made. It is an estimate: what a host holds for the script, and what Go
+// closures inside the engine capture, is not counted. A runtime with a
+// limit is a little slower to allocate.
 func WithMemoryLimit(bytes int64) Option {
 	return func(c *config) { c.memoryLimit = bytes }
 }

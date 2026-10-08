@@ -25,8 +25,13 @@ rt := quickjs.New(
 A script that holds more than its memory limit is stopped, and the call
 running it returns `quickjs.ErrMemoryLimit`, which the script cannot catch.
 The runtime measures its own heap by walking it, as QuickJS does, once the
-process has allocated a quarter of the limit since it last did, and before
-any allocation big enough to cross the limit at once.
+process has allocated a quarter of the limit since it last did. Between
+walks, what the engine makes for the script is charged as it is made -- an
+allocation whose size the script chose before it is made, a join, a
+template, JSON text or a spread as it is written, a built-in's result once
+it is made -- and a charge that would cross the limit measures the heap at
+once. So a value doubled a few times over in a short loop is stopped as
+surely as one grown a little at a time.
 
 So is the language a script means when it formats something without saying
 which language to format it in -- what `Intl` answers with when it is given no

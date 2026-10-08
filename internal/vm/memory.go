@@ -102,6 +102,33 @@ func (r *Runtime) measureMemory(need int64) error {
 	return nil
 }
 
+// What is charged.
+//
+// The walk runs when the interrupt check finds enough allocated, once every
+// thousand back edges or so, which is too seldom for an operation that
+// writes out as much as its inputs hold: doubling a string or an array
+// twenty times takes twenty turns of a loop. So what the engine itself makes
+// at the script's bidding is charged as it is made, in three ways:
+//
+//   - An allocation whose size the script chose -- a buffer, a repeated
+//     string, a join -- is reserved before it is made (reserveMemory).
+//   - A builder, whose output can be far larger than the memory its inputs
+//     hold -- a join or a template repeating one string, JSON of an array
+//     holding one object many times -- reserves as it writes, in chunks,
+//     everything it holds (heldMeter), since nothing the walk can reach
+//     holds it yet.
+//   - What a built-in returns is charged by its size once it is made
+//     (chargeResult), and so is what a spread appends to an array
+//     (chargeGrowth): an output no more than a few times its inputs cannot
+//     run away in one call, only by repetition, which this stops.
+//
+// A charge that takes the estimate past the limit measures the heap, so
+// that what the script has let go of is not held against it.
+
+// builderChunk is how much a builder writes, and how large a result is,
+// before it is charged: smaller ones are left to the walk.
+const builderChunk = 64 << 10
+
 // reserveMemory is called before allocating n bytes at once, the size of
 // which the script chose: a buffer, a repeated string. One too large for
 // what is left of the limit is refused before it is allocated, rather than
@@ -117,6 +144,105 @@ func (r *Runtime) reserveMemory(n int) error {
 	}
 	// What was reserved may since have been let go of.
 	return r.measureMemory(int64(n))
+}
+
+// heldMeter is what a builder of the script's output keeps to charge what
+// it writes: its runtime, and how much of what it holds it has reserved.
+// A builder made without its runtime panics the first time it charges, so
+// that one cannot be left out of the count unnoticed.
+type heldMeter struct {
+	r    *Runtime
+	paid int
+}
+
+// charge is called as a builder writes, with n the bytes it holds. Each
+// builderChunk more is reserved; a measurement made for it adds all n, which
+// is in no value the walk can reach.
+func (h *heldMeter) charge(n int) error {
+	r := h.r
+	if r == nil {
+		panic("vm: a builder of script output made without its runtime")
+	}
+	m := r.meter
+	if m == nil || n-h.paid < builderChunk {
+		return nil
+	}
+	delta := n - h.paid
+	h.paid = n
+	if m.live+int64(delta) <= m.limit {
+		m.live += int64(delta)
+		return nil
+	}
+	return r.measureMemory(int64(n))
+}
+
+// chargeResult charges a string or an array a built-in returned, at its
+// size, where that is at least builderChunk. One the script already held --
+// the array sort returns, a string returned as it was -- is charged again,
+// but a measurement finds it reachable and does not count it twice.
+func (r *Runtime) chargeResult(v Value) error {
+	var n int64
+	switch {
+	case v.isTag(KindString):
+		s := v.String()
+		if s.left != nil {
+			// A rope's nodes are small; what writing it out takes was
+			// reserved when it was joined.
+			return nil
+		}
+		n = int64(len(s.s))
+		if s.u16 != nil {
+			n += int64(s.length) * 2
+		}
+	case v.IsObject():
+		n = int64(cap(v.Object().elems)) * valueSize
+	default:
+		return nil
+	}
+	if n < builderChunk {
+		return nil
+	}
+	return r.chargeValue(v, n)
+}
+
+// chargeGrowth charges n bytes an array has grown by in one step, as a
+// spread appending another array's elements grows it.
+func (r *Runtime) chargeGrowth(o *Object, n int64) error {
+	if n < builderChunk {
+		return nil
+	}
+	return r.chargeValue(Obj(o), n)
+}
+
+// chargeValue adds n bytes that v holds to the estimate, measuring the heap
+// if that takes it over the limit. A v the walk reaches is counted by the
+// walk; one it does not, a result not yet stored anywhere, is added to it.
+func (r *Runtime) chargeValue(v Value, n int64) error {
+	m := r.meter
+	if m.live+n <= m.limit {
+		m.live += n
+		return nil
+	}
+	m.allocsAt = m.allocated()
+	m.live = max(0, m.walk(r)-m.baseline)
+	if !m.reached(v) {
+		m.live += n
+	}
+	if m.live > m.limit {
+		return r.stop(ErrMemoryLimit)
+	}
+	return nil
+}
+
+// reached reports whether the walk just made visited v's object or string.
+func (m *memoryMeter) reached(v Value) bool {
+	switch {
+	case v.IsObject():
+		return v.Object().mark == m.epoch
+	case v.isTag(KindString):
+		return v.String().mark == m.epoch
+	}
+	return false
 }
 
 // reserveBigInt reserves the bytes a BigInt result of up to bits bits takes,

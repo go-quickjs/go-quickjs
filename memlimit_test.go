@@ -2,6 +2,7 @@ package quickjs_test
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
@@ -36,6 +37,73 @@ func TestMemoryLimit(t *testing.T) {
 			t.Errorf("%s: = %v, %v, want ErrMemoryLimit", name, v, err)
 		}
 		rt.Close()
+	}
+}
+
+// TestMemoryLimitDoubling pins that the limit stops a value grown by
+// doubling it in a short loop, by each way the engine can write out as much
+// as an operation's inputs hold at once. Twenty-two turns are far too few
+// for the interrupt check to measure the heap, so each of these is stopped
+// by what the operation charges as it makes its result; the loop is short
+// enough that one which is not stops at a few hundred megabytes, not at the
+// machine's memory.
+func TestMemoryLimitDoubling(t *testing.T) {
+	const limit = 16 << 20
+	loop := func(init, step, out string) string {
+		return fmt.Sprintf(`function f() { %s; for (var i = 0; i < 22; i++) { %s } return %s } f().length`, init, step, out)
+	}
+	str := `var s = "ab".repeat(10)`
+	arr := `var a = [1, 2, 3, 4]`
+	for name, src := range map[string]string{
+		"s += s":              loop(str, `s += s`, "s"),
+		"o.s += o.s":          loop(`var o = {s: "ab".repeat(10)}`, `o.s += o.s`, "o.s"),
+		"a[0] += a[0]":        loop(`var a = ["ab".repeat(10)]`, `a[0] += a[0]`, "a[0]"),
+		"a template":          loop(str, "s = `${s}${s}`", "s"),
+		"join":                loop(str, `s = [s, s].join("")`, "s"),
+		"JSON.stringify":      loop(str, `s = JSON.stringify([s, s])`, "s"),
+		"replaceAll":          loop(str, `s = s.replaceAll("a", "aa")`, "s"),
+		"padEnd":              loop(str, `s = s.padEnd(s.length * 2, s)`, "s"),
+		"an array's concat":   loop(arr, `a = a.concat(a)`, "a"),
+		"an array spread":     loop(arr, `a = [...a, ...a]`, "a"),
+		"a spread call":       loop(arr, `a.push(...a)`, "a"),
+		"flat":                loop(arr, `a = [a, a].flat()`, "a"),
+		"Array.from a length": `Array.from({length: 2e7}).length`,
+		"fill":                `new Array(2e7).fill(0).length`,
+		"a string's spread":   `[..."x".repeat(2e7)].length`,
+	} {
+		rt := quickjs.New(quickjs.WithMemoryLimit(limit))
+		v, err := rt.Eval(src)
+		if !errors.Is(err, quickjs.ErrMemoryLimit) {
+			t.Errorf("%s: = %v, %v, want ErrMemoryLimit", name, v, err)
+		}
+		rt.Close()
+	}
+}
+
+// TestMemoryLimitResultsCountedOnce pins that what a built-in returns is not
+// held against the limit twice when the script already holds it -- the array
+// sort returns, a string returned unchanged -- nor what it lets go of: a
+// script using about half its limit, over and over, runs to its end.
+func TestMemoryLimitResultsCountedOnce(t *testing.T) {
+	// About 6 MB held, and at most about 3 MB more made at once.
+	const src = `
+		let a = new Array(2e5).fill(1), s = "x".repeat(3e6), n = 0;
+		for (let i = 0; i < 40; i++) {
+			n += a.sort().length + s.trim().length + s.toString().length;
+			n += a.slice().length + [s, "y"].join("").length + [...a].length;
+			n += JSON.stringify(a).length;
+		}
+		n`
+	free := quickjs.New()
+	want, err := free.Eval(src)
+	free.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := quickjs.New(quickjs.WithMemoryLimit(16 << 20))
+	defer rt.Close()
+	if v, err := rt.Eval(src); err != nil || v.Float() != want.Float() {
+		t.Errorf("= %v, %v, want %v", v, err, want)
 	}
 }
 

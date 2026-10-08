@@ -530,7 +530,7 @@ func (r *Runtime) regExpReplace(rx Value, args []Value, fl regexp.Flags, direct 
 	// The result is built from pieces of the subject and the replacements
 	// between them, either boundary of which may fall between the halves of
 	// one character.
-	var sb partsBuilder
+	sb := r.newParts()
 	next := 0
 	// The capture list and the callback's argument list are built once and
 	// refilled for each match rather than allocated per match. A callee may
@@ -553,11 +553,13 @@ func (r *Runtime) regExpReplace(rx Value, args []Value, fl regexp.Flags, direct 
 	// they are is read. The result is about as long as the subject.
 	plain := fast && !functional && !strings.ContainsRune(template, '$')
 	if plain {
-		sb.Grow(len(s.Go()))
+		if err := sb.Grow(len(s.Go())); err != nil {
+			return Undefined, err
+		}
 	}
 	for k := 0; k < count; k++ {
-		if sb.overlong() {
-			return Undefined, r.throwStringLength()
+		if err := sb.check(); err != nil {
+			return Undefined, err
 		}
 		var matched *String
 		var position, matchLen int

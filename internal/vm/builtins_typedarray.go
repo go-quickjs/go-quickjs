@@ -1532,7 +1532,7 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 		// than the word.
 		// The pieces go into one buffer: joined one at a time, each element
 		// would be a rope node many times its own size.
-		var sb partsBuilder
+		sb := rt.newParts()
 		for i := 0; i < length; i++ {
 			if i > 0 {
 				sb.WriteString(sep)
@@ -1546,8 +1546,8 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 				return Undefined, err
 			}
 			sb.WriteString(s.Go())
-			if sb.overlong() {
-				return Undefined, rt.throwStringLength()
+			if err := sb.check(); err != nil {
+				return Undefined, err
 			}
 			if err := rt.tick(); err != nil {
 				return Undefined, err

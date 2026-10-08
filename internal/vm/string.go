@@ -373,9 +373,13 @@ func utf8SeqLen(b byte) int {
 // strings with the same code units would not compare equal. The last piece is
 // held back rather than written, so that the one after it can still be joined
 // to it; everything before is already settled.
+//
+// What it writes is charged to its runtime's memory limit as it goes (see
+// heldMeter), so it is made by Runtime.newParts.
 type partsBuilder struct {
-	sb   strings.Builder
-	last string
+	meter heldMeter
+	sb    strings.Builder
+	last  string
 	// endsHigh records that the piece held back ends with an unpaired high
 	// surrogate, which is the only thing the next piece could complete.
 	endsHigh bool
@@ -385,8 +389,28 @@ type partsBuilder struct {
 	units    int
 }
 
-// Grow reserves room for n more bytes.
-func (b *partsBuilder) Grow(n int) { b.sb.Grow(n) }
+// newParts is a builder whose output is charged to r.
+func (r *Runtime) newParts() partsBuilder { return partsBuilder{meter: heldMeter{r: r}} }
+
+// Grow makes room for n more bytes, charging them first.
+func (b *partsBuilder) Grow(n int) error {
+	if err := b.meter.charge(b.sb.Len() + len(b.last) + n); err != nil {
+		return err
+	}
+	b.sb.Grow(n)
+	return nil
+}
+
+// check reports a builder that has written more than a string may hold, or
+// more than its runtime's memory limit allows, which a builder asks as it
+// goes so that it gives up before it has built what could never be
+// returned.
+func (b *partsBuilder) check() error {
+	if b.overlong() {
+		return b.meter.r.throwStringLength()
+	}
+	return b.meter.charge(b.sb.Len() + len(b.last))
+}
 
 // overlong reports whether what has been written is already too long to be
 // a string, which a builder asks as it goes so that it gives up before it has
@@ -446,6 +470,27 @@ func (b *partsBuilder) String() string {
 	b.flush()
 	b.last, b.endsHigh = "", false
 	return b.sb.String()
+}
+
+// joinParts is joinValues, the join charged to r's memory limit first: a
+// template can repeat one string any number of times, and writes out all
+// of them.
+func (r *Runtime) joinParts(parts []Value) (*String, error) {
+	if r.meter != nil {
+		n := 0
+		for _, p := range parts {
+			if p.IsString() {
+				n += guessBytes(p.String())
+			} else {
+				n += 24
+			}
+		}
+		h := heldMeter{r: r}
+		if err := h.charge(n); err != nil {
+			return nil, err
+		}
+	}
+	return joinValues(parts), nil
 }
 
 // joinValues builds the string a template literal produces.

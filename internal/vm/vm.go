@@ -1797,7 +1797,11 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				vmErr = r.throwStringLength()
 				goto onError
 			}
-			out := joinValues(parts)
+			out, err := r.joinParts(parts)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
 			if out.length > maxStringLength {
 				vmErr = r.throwStringLength()
 				goto onError

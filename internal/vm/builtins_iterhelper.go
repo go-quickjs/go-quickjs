@@ -865,7 +865,7 @@ func (r *Runtime) initIteratorTerminals(p *Object) {
 		}
 		// As with Array.prototype.join, the pieces are joined rather than
 		// appended, and null and undefined contribute nothing.
-		var sb partsBuilder
+		sb := rt.newParts()
 		err := each(rt, this, func(v Value, i float64) (bool, error) {
 			if i > 0 {
 				sb.WriteString(sep)
@@ -878,8 +878,8 @@ func (r *Runtime) initIteratorTerminals(p *Object) {
 				return false, err
 			}
 			sb.WriteString(s.Go())
-			if sb.overlong() {
-				return false, rt.throwStringLength()
+			if err := sb.check(); err != nil {
+				return false, err
 			}
 			return true, nil
 		})

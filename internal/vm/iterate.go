@@ -527,17 +527,24 @@ func (r *Runtime) iterToArray(src Value, want uint32) (Value, error) {
 
 // spreadInto appends the elements of an iterable to an array.
 func (r *Runtime) spreadInto(arr *Object, src Value) error {
+	// What the spread adds is charged to the memory limit: spreading an
+	// array into itself, twice, doubles it in one step.
+	before := cap(arr.elems)
 	// A plain dense array is copied directly, skipping the protocol entirely.
 	// This is by far the common case and avoids allocating an iterator and a
 	// result object per element.
 	if els, ok := r.plainDenseElems(src); ok {
 		arr.elems = append(arr.elems, els...)
-		return nil
-	}
-	return r.iterate(src, func(v Value) error {
+	} else if err := r.iterate(src, func(v Value) error {
 		arr.elems = append(arr.elems, v)
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	if r.meter != nil {
+		return r.chargeGrowth(arr, int64(cap(arr.elems)-before)*valueSize)
+	}
+	return nil
 }
 
 // plainDenseElems returns an array's elements when reading them directly is
@@ -592,13 +599,22 @@ func (r *Runtime) usesIntrinsicArrayIterator(o *Object) bool {
 func (r *Runtime) spreadToStack(src Value) ([]Value, error) {
 	var out []Value
 	if els, ok := r.plainDenseElems(src); ok {
-		return append(out, els...), nil
-	}
-	err := r.iterate(src, func(v Value) error {
+		out = append(out, els...)
+	} else if err := r.iterate(src, func(v Value) error {
 		out = append(out, v)
 		return nil
-	})
-	return out, err
+	}); err != nil {
+		return out, err
+	}
+	// The values are charged to the memory limit as a builder's output is:
+	// a call spreading an array into a push onto it doubles it.
+	if r.meter != nil {
+		h := heldMeter{r: r}
+		if err := h.charge(cap(out) * int(valueSize)); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // copyDataProps implements object spread, copying own enumerable properties.

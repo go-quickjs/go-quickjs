@@ -89,7 +89,7 @@ func (r *Runtime) initStringBuiltins() {
 		// read as they are written, as the standard has it: listed first, a
 		// length of billions was billions of values before the string was
 		// found too long.
-		var sb partsBuilder
+		sb := rt.newParts()
 		for i := int64(0); i < raw.n; i++ {
 			if err := rt.tick(); err != nil {
 				return Undefined, err
@@ -110,8 +110,8 @@ func (r *Runtime) initStringBuiltins() {
 				}
 				sb.WriteString(sub.Go())
 			}
-			if sb.overlong() {
-				return Undefined, rt.throwStringLength()
+			if err := sb.check(); err != nil {
+				return Undefined, err
 			}
 		}
 		return rt.builtString(sb.String())
@@ -444,7 +444,7 @@ func (r *Runtime) initStringBuiltins() {
 		if s.endsHigh && s.startsLow {
 			// Each copy's high half meets the next one's low half, which
 			// together are one character, spelled as one.
-			var sb partsBuilder
+			sb := rt.newParts()
 			for i := 0; i < int(n); i++ {
 				sb.WriteString(s.Go())
 			}
@@ -678,7 +678,7 @@ func (r *Runtime) padString(thisStr thisStrFunc, this Value, args []Value, atSta
 	// The filler is counted in code units, as the result is: in runes a lone
 	// surrogate is three, and the result came out short. It is built with
 	// the halves of a pair joined where one copy meets the next.
-	var sb partsBuilder
+	sb := r.newParts()
 	for i, copies := 0, need/pad.Len()+1; i < copies; i++ {
 		sb.WriteString(pad.Go())
 	}
@@ -790,7 +790,7 @@ func (r *Runtime) stringReplace(thisStr thisStrFunc, this Value, args []Value, a
 
 	// The result goes into one buffer: joined one piece at a time, a string
 	// with a million matches would be a million rope nodes.
-	var sb partsBuilder
+	sb := r.newParts()
 	pos := 0
 	for {
 		i := s.IndexOf(pattern, pos)
@@ -803,8 +803,8 @@ func (r *Runtime) stringReplace(thisStr thisStrFunc, this Value, args []Value, a
 			return Undefined, err
 		}
 		sb.WriteString(repl)
-		if sb.overlong() {
-			return Undefined, r.throwStringLength()
+		if err := sb.check(); err != nil {
+			return Undefined, err
 		}
 		pos = i + patLen
 		if !all {

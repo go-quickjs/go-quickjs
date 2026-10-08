@@ -80,10 +80,16 @@ func (r *Runtime) callObject(o *Object, this Value, args []Value, newTarget Valu
 			v, err := fd.native(r, this, args)
 			r.Realm = prev
 			r.frameDepth--
+			if r.meter != nil && err == nil {
+				err = r.chargeResult(v)
+			}
 			return v, err
 		}
 		v, err := fd.native(r, this, args)
 		r.frameDepth--
+		if r.meter != nil && err == nil {
+			err = r.chargeResult(v)
+		}
 		return v, err
 	}
 
@@ -234,6 +240,9 @@ func (r *Runtime) callDirect(callee, this Value, args []Value) (Value, error) {
 			}
 			v, err := fd.native(r, this, args)
 			r.frameDepth--
+			if r.meter != nil && err == nil {
+				err = r.chargeResult(v)
+			}
 			return v, err
 		}
 	}

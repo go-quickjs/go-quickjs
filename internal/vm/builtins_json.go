@@ -27,7 +27,7 @@ func (r *Runtime) initJSONBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		enc := &jsonEncoder{rt: rt, indent: indent, seen: map[*Object]bool{}}
+		enc := &jsonEncoder{rt: rt, indent: indent, meter: heldMeter{r: rt}, seen: map[*Object]bool{}}
 		if err := enc.setReplacer(arg(args, 1)); err != nil {
 			return Undefined, err
 		}
@@ -186,6 +186,9 @@ func (r *Runtime) jsonIndent(v Value) (string, error) {
 type jsonEncoder struct {
 	rt     *Runtime
 	indent string
+	// meter charges the text as it is written: an array holding one object
+	// many times is written out in full each time.
+	meter heldMeter
 	// depth is how deeply the walk has descended, which is bounded for the
 	// same reason the parser's is: the stack cannot grow for ever, and running
 	// out of it would take the host down rather than the script.
@@ -413,6 +416,9 @@ func (r *Runtime) reviveWrite(o *Object, key Atom, v Value) error {
 // nothing and reports false, so a caller that has already written a key can
 // take it back by truncating to the length it saw.
 func (e *jsonEncoder) encode(buf []byte, v Value, prefix string) ([]byte, bool, error) {
+	if err := e.meter.charge(len(buf)); err != nil {
+		return buf, false, err
+	}
 	// toJSON and the replacer have already run: apply does both, and does it
 	// before the value is inspected, so that what they return is what gets
 	// encoded.
