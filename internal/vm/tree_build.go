@@ -64,6 +64,17 @@ type tbuilder struct {
 	// noUpdate is set while an update's operand is built, whose reads are
 	// not looked at as updates of their own (see tbuilder.update).
 	noUpdate bool
+	// how is how the block built last ends, for structureTree: endFalls
+	// where it runs on into the next one, endThrows where it throws.
+	how uint8
+	// cmp is the comparison the block built last ends with, where a loop
+	// can make it in place (see cmpOf), or one whose op is 0.
+	cmp tcmp
+	// step is the local the block built last steps by one as its last
+	// statement, where step.ok and stepAt, the length of the body once it
+	// was added, say so (see tstep).
+	step   tstep
+	stepAt int
 }
 
 // target records a way from the block being built to the one at pc, whose
@@ -101,6 +112,9 @@ func buildTree(fn *bytecode.Function) *tree {
 	code := fn.Code
 	leader := make([]bool, len(code)+1)
 	leader[0] = true
+	// back says a jump goes back, as only a loop's does: structureTree has
+	// nothing to do without one.
+	back := false
 	for pc, in := range code {
 		if !treeBuilds(in.Op) {
 			return nil
@@ -113,6 +127,7 @@ func buildTree(fn *bytecode.Function) *tree {
 			}
 			leader[in.A] = true
 			leader[pc+1] = true
+			back = back || int(in.A) <= pc
 		case bytecode.OpReturn, bytecode.OpReturnUndef, bytecode.OpThrow:
 			leader[pc+1] = true
 		}
@@ -137,6 +152,10 @@ func buildTree(fn *bytecode.Function) *tree {
 	// end that says so.
 	work := []int{0}
 	done := make([]bool, len(starts))
+	var flow *flow
+	if back {
+		flow = takeFlow(len(starts))
+	}
 	b := &tbuilder{fn: fn, index: index, depths: depth}
 	for len(work) > 0 {
 		bi := work[len(work)-1]
@@ -151,7 +170,17 @@ func buildTree(fn *bytecode.Function) *tree {
 		}
 		succ, ok := b.buildBlock(t, bi, starts[bi], end, depth[bi])
 		if !ok {
+			if flow != nil {
+				flowPool.Put(flow)
+			}
 			return nil
+		}
+		if flow != nil {
+			st := b.step
+			if len(t.blocks[bi].body) != b.stepAt {
+				st = tstep{}
+			}
+			flow.record(bi, succ, b.how, b.cmp, st)
 		}
 		for _, s := range succ {
 			if !done[s] {
@@ -163,6 +192,9 @@ func buildTree(fn *bytecode.Function) *tree {
 		if !done[i] {
 			t.blocks[i].next = func(*tctx) int { panic("unreachable block of a tree") }
 		}
+	}
+	if flow != nil {
+		flow.structure(t, done)
 	}
 	// A jump to a block with nothing in it but its end -- a loop's test,
 	// which the jump at the bottom of the loop goes back to -- ends in that
@@ -221,7 +253,7 @@ func treeBuilds(op bytecode.Op) bool {
 func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) {
 	fn := b.fn
 	b.stack, b.body, b.succ = b.stack[:0], b.body[:0], b.succ[:0]
-	b.end = end
+	b.end, b.how, b.cmp, b.step = end, 0, tcmp{}, tstep{}
 	for d := 0; d < entry; d++ {
 		b.pushSlot(d)
 	}
@@ -297,7 +329,9 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 			case in.Op == bytecode.OpJumpIfCmpFalse && isEquality(bytecode.Op(in.B)):
 				next = eqJump(bytecode.Op(in.B), x, y, pc, taken, fall)
 			case in.Op == bytecode.OpJumpIfCmpFalse:
-				next = cmpJump(bytecode.Op(in.B), x, y, pc, taken, fall)
+				if next = cmpJump(bytecode.Op(in.B), x, y, pc, taken, fall); next != nil {
+					b.cmp = cmpOf(bytecode.Op(in.B), x, y, taken, fall)
+				}
 			case in.Op == bytecode.OpJumpIfFalse:
 				v := x.tree()
 				next = func(c *tctx) int {
@@ -392,6 +426,7 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 				c.throw(c.r.throw(e))
 				return -1
 			}}
+			b.how = endThrows
 			return b.succ, true
 		case bytecode.OpReturn, bytecode.OpReturnUndef:
 			v := tval(func(*tctx) Value { return Undefined })
@@ -444,6 +479,7 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 		return nil, false
 	}
 	t.blocks[bi] = tblock{body: b.takeBody(), next: func(*tctx) int { return s }}
+	b.how = endFalls
 	return b.succ, true
 }
 
@@ -713,7 +749,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		if in.Op == bytecode.OpDecLocal {
 			delta = -1
 		}
-		return 0, b.stmt(func(c *tctx) {
+		ok := b.stmt(func(c *tctx) {
 			if v := c.locals[k]; v.IsNumber() {
 				c.locals[k] = Float(v.num + delta)
 				return
@@ -721,6 +757,8 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			c.at(pc)
 			c.locals[k] = c.step(c.locals[k], delta)
 		})
+		b.step, b.stepAt = tstep{k: k, delta: delta, ok: true}, len(b.body)
+		return 0, ok
 	case bytecode.OpUpdateLocal:
 		k, postfix := in.A, in.B&bytecode.UpdatePostfix != 0
 		delta := 1.0

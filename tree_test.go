@@ -329,6 +329,52 @@ var treeScripts = []string{
 	   r.push(fs.map(function (f) { return f() }).join("/"), o.a(1));
 	   return r.join() }
 	 run()`,
+	// Control flow the tier rebuilds as structures (ztree_flow.go): each
+	// kind of loop, if and else in them, break and continue, labelled
+	// ones to an outer loop, a return from inside, a condition of && and
+	// ||, a switch with fallthrough, and loops whose body leaves by an
+	// exception or a call in tail position.
+	`function a(n) { var r = []; for (var i = 0; i < n; i++) {} r.push(i);
+	   var j = 0; while (j < n) { r.push(j); j += 2 } var k = 0; do { k++ } while (k < n); r.push(k);
+	   do { k-- } while (false); r.push(k); var m = 0; while (true) { if (++m > n) break } r.push(m);
+	   for (;;) { m--; if (m < 0) break; if (m & 1) continue; r.push("m" + m) } return r.join() }
+	 function b(n) { var r = [], i, j; outer: for (i = 0; i < n; i++) { inner: for (j = 0; j < n; j++) {
+	     if (j == i) continue outer; if (i + j == 7) break outer; if (j > 3) break inner; r.push(i + "" + j) } r.push("e" + i) }
+	   r.push(i, j); return r.join() }
+	 function c(n) { var s = 0; for (var i = 0; i < n; i++) { if (i % 3 == 0) s += 1; else if (i % 3 == 1) s += 10; else { s += 100; if (s > 250) return "early " + s } } return s }
+	 function d(a, b) { var r = []; for (var i = 0; i < 6; i++) { if (i > a && i < b || i == 0) r.push("x" + i); else if (!(i & 1) || i == b) r.push("y" + i); if (a && b) continue } return r.join() }
+	 function e(n) { var r = []; for (var i = 0; i < n; i++) { switch (i % 4) { case 0: r.push("zero"); case 1: r.push("one"); break; case 2: continue; default: r.push("d") } r.push("|") } return r.join() }
+	 function g(n) { var i = 0, s = 0; lbl: { while (i < n) { i++; if (i == 3) break lbl; s += i } s = -1 } return s + "," + i }
+	 function h(o) { var n = 0; for (var p = o; p; p = p.next) n++; var q = o; while (q?.next) q = q.next; return n + "," + (q && q.v) }
+	 [a(5), a(0), b(6), c(5), c(20), d(1, 4), d(0, 3), e(6), g(10), g(2), h({ v: 1, next: { v: 2, next: { v: 3 } } }), h(null)].join(" ")`,
+	`function thrower(i) { if (i == 3) throw new TypeError("at " + i); return i }
+	 function f(n) { var s = 0; for (var i = 0; i < n; i++) { for (var j = 0; j < 2; j++) s += thrower(i) + j } return s }
+	 function g(n) { var i = 0; do { if (i == n) null.x; i++ } while (i < 10); return i }
+	 function k(n) { var r = []; for (var i = 0; i < 3; i++) { try { r.push(f(n + i)) } catch (e) { r.push(e.message) } } return r.join() }
+	 var out = [k(2)]; try { f(9) } catch (e) { out.push(e.stack.split("\n").slice(0, 3).join("|")) }
+	 try { g(4) } catch (e) { out.push(e.constructor.name, e.stack.split("\n").slice(0, 2).join("|")) }
+	 out.push(g(20)); out.join(" ")`,
+	`"use strict"; function count(n, acc) { while (true) { if (n === 0) return acc; if (n % 1000 === 0) return count(n - 1, acc + 1); n--; acc++ } }
+	 function pick(n) { for (var i = 0; i < 3; i++) { if (i === n) return pick2(n + 1) } return "none" }
+	 function pick2(n) { do { if (n > 2) return "big" + n; n++ } while (n < 2); return pick(n) }
+	 [count(100000, 0), pick(0), pick(1), pick(5)].join()`,
+	`function f(n) { var r = [], o = { valueOf() { r.push("v"); return 2 } }; for (var i = 0; i < n; i++) { while (i < o) { r.push("w" + i); i++ } r.push("i" + i) }
+	   var x = 0; do x += o; while (x < 7); r.push(x); return r.join() } f(5)`,
+	// A loop's comparison made in place (loopCmp), and where it is not of
+	// two numbers: a string, undefined, NaN, an object, a BigInt, and a
+	// bound that changes from a number to a string inside the loop.
+	`function f(n) { var r = []; for (var i = 0; i < n; i++) r.push(i); for (var j = 5; j >= 3; j--) r.push(j); for (var k = 0; k <= 2; k++) r.push("k" + k); return r.join() }
+	 function g(n) { var c = 0; for (var i = 0; i < n; i++) { c++; if (c > 5) break } return c }
+	 function h(n) { var c = 0, i = 0; while (i < n) { i++; c++; if (i == 2) n = "4" } return c + typeof n }
+	 [f(3), f("3"), f(undefined), f(NaN), f({ valueOf() { return 2 } }), f(2n), g(Infinity), g(-0), h(10)].join(" ")`,
+	// A step ending a loop's body, which the loop makes in place (tstep),
+	// of a number, a string, a BigInt, an object, undefined, and a local
+	// the body makes a string; by loopCmp and by loopW.
+	`function f(s) { var r = []; for (var i = s; i < 3; i++) r.push(typeof i + i); return r.join() }
+	 function g(s) { var r = [], i = s; while (r.length < 3) { r.push(typeof i + i); i-- } return r.join() }
+	 function h() { var r = []; for (var i = 0; i < 6; i++) { if (i == 2) i = "3"; r.push(typeof i + i) } return r.join() }
+	 function k(n) { var c = 0; for (var i = 0; i < n; i++) c++; for (var j = n; j > 0; j--) c--; return c + "," + i + "," + j }
+	 [f(0), f("1"), f(1n), f({ valueOf() { return 1 } }), f(undefined), f(-0.5), g(2), g("x"), g(2n), h(), k(1e5)].join(" ")`,
 }
 
 // treeRun evaluates a script and gives its value, or its error.
@@ -1071,6 +1117,36 @@ func TestTreeTierInterrupted(t *testing.T) {
 	}
 	if vm.TreesBuilt() == before {
 		t.Fatal("spin was not built as a tree")
+	}
+}
+
+// TestTreeTierInterruptedStructures stops loops of every shape the tier
+// rebuilds as a Go loop (ztree_flow.go), which count their back edges as
+// the blocks they were made of did: a while, a do-while, a loop whose back
+// edge is a continue, one inside another whose inner loop never runs, and
+// one whose body calls a function.
+func TestTreeTierInterruptedStructures(t *testing.T) {
+	defer vm.SetTreeTier(true)
+	vm.SetTreeTier(true)
+	for _, src := range []string{
+		`function spin(n) { var i = 0; while (i < n) { i = i + 1; i = i - 1 } } spin(1)`,
+		`function spin(n) { var i = 0; do { i = (i + 1) % 7 } while (i < n); return i } spin(10)`,
+		`function spin(n) { var s = 0; for (var i = 0; i < n; i++) { if (i & 1) { i--; continue } s++ } } spin(5)`,
+		`function spin(n) { for (;;) { for (var j = 0; j < n; j++) {} if (n < 0) break } } spin(0)`,
+		`function g(x) { return x + 1 } function spin(n) { var s = 0; while (true) { s = g(s); if (s < 0) return s } } spin(0)`,
+	} {
+		rt := quickjs.New()
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		before := vm.TreesBuilt()
+		_, err := rt.EvalContext(ctx, src)
+		cancel()
+		rt.Close()
+		if err == nil || !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "interrupt") {
+			t.Errorf("%s: got %v, want the deadline", src, err)
+		}
+		if vm.TreesBuilt() == before {
+			t.Errorf("%s: spin was not built as a tree", src)
+		}
 	}
 }
 
