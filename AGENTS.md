@@ -55,6 +55,17 @@ concurrently.
 - Do not weaken conformance expectations, add skips, or change expected
   failures merely to make a suite green. Establish the behavior in the
   applicable specification and, for compatibility work, in current engines.
+- Run a file the same way in every engine you compare. `qjs file.js` loads
+  a `.js` file as Node does, as a CommonJS module: its top-level `var` and
+  function declarations belong to the module, not to the global object, and
+  `this` is `module.exports`. C QuickJS's `qjs` runs a file as a classic
+  script. So for script semantics -- globals, `globalThis` properties a
+  `var` made, test262's global code, QuickJS's `microbench.js`, which finds
+  its tests through `this[name]` -- run go-quickjs's `qjs` with `-s`
+  (`--script`), and Node with `vm.runInThisContext`. A difference that comes
+  down to a file's top-level bindings is usually this, not an engine bug:
+  check it before reporting one. Go tests that call `Runtime.Eval` already
+  run scripts.
 - Preserve unrelated worktree changes. Do not rewrite history or use
   destructive Git commands unless explicitly requested.
 
