@@ -867,6 +867,41 @@ func TestDateStringsFollowNodeLegacyZoneNames(t *testing.T) {
 	}
 }
 
+// A host zone that is one of UTC's links is "UTC" to DateTimeFormat and
+// Temporal.Now, the primary identifier ECMA-402 requires and test262's
+// resolvedOptions/basic.js checks; a Linux host's /etc/localtime names
+// Etc/UTC. Another zone's link keeps its name, as in Node.
+func TestLocalZoneNameOfUTCLinks(t *testing.T) {
+	for _, tc := range []struct{ zone, want string }{
+		{"Etc/UTC", "UTC"},
+		{"Etc/GMT", "UTC"},
+		{"GMT", "UTC"},
+		{"Etc/Universal", "UTC"},
+		{"Etc/Zulu", "UTC"},
+		{"UCT", "UTC"},
+		{"Greenwich", "UTC"},
+		{"Etc/GMT+0", "UTC"},
+		{"UTC", "UTC"},
+		{"Asia/Calcutta", "Asia/Calcutta"},
+		{"Etc/GMT+5", "Etc/GMT+5"},
+	} {
+		zone, err := time.LoadLocation(tc.zone)
+		if err != nil {
+			t.Skipf("no zone files: %v", err)
+		}
+		rt := quickjs.New()
+		rt.SetTimeZone(zone)
+		v, err := rt.Eval(`Intl.DateTimeFormat().resolvedOptions().timeZone + " " + Temporal.Now.timeZoneId()`)
+		rt.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := v.String(), tc.want+" "+tc.want; got != want {
+			t.Errorf("host zone %s: got %q, want %q", tc.zone, got, want)
+		}
+	}
+}
+
 func TestDateStringsUseBundledRulesForNamedTimeZone(t *testing.T) {
 	rt := quickjs.New(quickjs.WithLocale("en-US"))
 	defer rt.Close()

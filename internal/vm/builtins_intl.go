@@ -1077,10 +1077,16 @@ func temporalDateTimeKind(v Value) string {
 // or else its offset now. A host zone that nothing names is such a custom
 // zone at the host's offset, as ECMA-262 has it; under Node's quirks it is
 // ICU's guess from the C library's abbreviations, or Etc/Unknown, whose
-// offset is UTC (go-intl's HostAbbreviations).
+// offset is UTC (go-intl's HostAbbreviations). UTC itself is "UTC" by
+// whichever of its links it was set, Etc/UTC, Etc/GMT or Zulu: ECMA-402
+// makes UTC the primary identifier of them all, and Node agrees, save
+// that its DateTimeFormat calls a host zone of plain "GMT" "+00:00".
 func (r *Runtime) localZoneName() string {
 	tz := r.dateEnv().TimeZone()
 	canonical, _ := tz.Canonical()
+	if canonical == "UTC" {
+		return "UTC"
+	}
 	for _, name := range []string{tz.ID(), canonical} {
 		if name == "" {
 			continue
