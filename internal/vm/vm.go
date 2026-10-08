@@ -4178,6 +4178,11 @@ func (r *Runtime) bigBitwise(op bytecode.Op, a, b Value) (Value, bool, error) {
 			if x.Sign() != 0 && int64(x.BitLen())+n.Int64() > maxBigIntBits {
 				return Undefined, false, r.throwBigIntSize()
 			}
+			if x.Sign() != 0 {
+				if err := r.reserveBigInt(int64(x.BitLen()) + n.Int64()); err != nil {
+					return Undefined, false, err
+				}
+			}
 			out.V.Lsh(x, uint(n.Int64()))
 		} else {
 			// An arithmetic shift, which big.Int's Rsh already is.
@@ -4332,6 +4337,9 @@ func (r *Runtime) bigArith(op bytecode.Op, a, b *BigInt) (Value, error) {
 		if la+lb >= wordsNear && a.V.Sign() != 0 && b.V.Sign() != 0 && a.V.BitLen()+b.V.BitLen()-1 > maxBigIntBits {
 			return Undefined, r.throwBigIntSize()
 		}
+		if err := r.reserveBigInt(int64(la+lb) * bits.UintSize); err != nil {
+			return Undefined, err
+		}
 		out.V.Mul(&a.V, &b.V)
 	case bytecode.OpDiv:
 		if b.IsZero() {
@@ -4355,6 +4363,11 @@ func (r *Runtime) bigArith(op bytecode.Op, a, b *BigInt) (Value, error) {
 			if !b.V.IsInt64() || b.V.Int64() > maxBigIntBits ||
 				int64(a.V.BitLen()-1)*b.V.Int64() > maxBigIntBits {
 				return Undefined, r.throwBigIntSize()
+			}
+		}
+		if a.V.CmpAbs(big.NewInt(1)) > 0 && b.V.Sign() > 0 {
+			if err := r.reserveBigInt(int64(a.V.BitLen()) * b.V.Int64()); err != nil {
+				return Undefined, err
 			}
 		}
 		if !b.V.IsInt64() {

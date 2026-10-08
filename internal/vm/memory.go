@@ -119,6 +119,18 @@ func (r *Runtime) reserveMemory(n int) error {
 	return r.measureMemory(int64(n))
 }
 
+// reserveBigInt reserves the bytes a BigInt result of up to bits bits takes,
+// before it is computed: a product or a power of large operands is made in
+// one step, which can take far longer than the script's limit allows and
+// would only be noticed after. The size limit bounds bits, so the bytes fit
+// an int.
+func (r *Runtime) reserveBigInt(bits int64) error {
+	if r.meter == nil || bits < 1<<16 {
+		return nil
+	}
+	return r.reserveMemory(int(bits / 8))
+}
+
 // concat joins two strings as the + operator does. The join itself is a rope
 // node, but writing the rope out costs its whole length -- and a string
 // joined to itself, again and again, is a rope far longer than the memory it

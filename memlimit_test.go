@@ -24,6 +24,11 @@ func TestMemoryLimit(t *testing.T) {
 		"a shared buffer": `new SharedArrayBuffer(200 * 1024 * 1024).byteLength`,
 		"caught":          `try { new ArrayBuffer(200 * 1024 * 1024) } catch (e) { "caught" }`,
 		"arrays":          `let a = []; for (let i = 0; i < 1e5; i++) a.push(new Array(100).fill(i)); a.length`,
+		// A BigInt result is reserved before it is computed, which for
+		// these would take minutes past the limit (a fuzzer's program).
+		"a squared BigInt": `let x = 5n; for (let i = 0; i < 40; i++) x = -x * x; x > 0n`,
+		"a BigInt power":   `3n ** 400000000n > 0n`,
+		"a shifted BigInt": `(1n << 800000000n) > 0n`,
 	} {
 		rt := quickjs.New(quickjs.WithMemoryLimit(limit))
 		v, err := rt.Eval(src)
