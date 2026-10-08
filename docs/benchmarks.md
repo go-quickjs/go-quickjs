@@ -98,14 +98,14 @@ its workloads in this comparison.
 ## Compared with C QuickJS
 
 Over the V8 suite as a whole, go-quickjs is ahead of QuickJS: it takes
-0.63 times QuickJS's time and has a 14% higher composite score. Single
-operations still cost more, by about a ninth on average, as
+0.63 times QuickJS's time and has a 16% higher composite score. Single
+operations still cost more, by about a twelfth on average, as
 [the micro-benchmarks](#micro-benchmarks) below show.
 
 go-quickjs has the same design as QuickJS: a bytecode compiler, a
 stack-based interpreter, NaN-boxed values. Running that design in Go costs
 speed. The same suite ran on an AMD Ryzen 5 3600 under Windows, with Go 1.27.1,
-go-quickjs `363c64c` and QuickJS 2026-06-04. The first two columns are milliseconds for the same
+go-quickjs `1c9925f` and QuickJS 2026-06-04. The first two columns are milliseconds for the same
 fixed work (the median of three fresh-process runs, lower is better). The
 scores are the suite's own (higher is better). Richards and DeltaBlue, which
 take only a few milliseconds a run, ran three hundred times in each process,
@@ -113,15 +113,15 @@ scaled to three.
 
 | Workload | go-quickjs | QuickJS | QuickJS faster by | go-quickjs score | QuickJS score |
 |---|---:|---:|---:|---:|---:|
-| Richards | 14.2 ms | 11.0 ms | 1.29x | 735 | 957 |
-| DeltaBlue | 24.7 ms | 23.8 ms | 1.04x | 798 | 840 |
-| Crypto | 288 ms | 327 ms | 0.88x | 1,243 | 1,100 |
-| RayTrace | 141 ms | 143 ms | 0.98x | 1,613 | 1,568 |
-| EarleyBoyer | 373 ms | 399 ms | 0.93x | 2,170 | 2,152 |
-| RegExp | 272 ms | 957 ms | 0.28x | 1,452 | 389 |
-| Splay | 285 ms | 515 ms | 0.55x | 3,159 | 3,317 |
-| NavierStokes | 217 ms | 191 ms | 1.14x | 2,232 | 2,410 |
-| **Total / composite** | **1,615 ms** | **2,567 ms** | **0.63x** | **1,504** | **1,320** |
+| Richards | 14.0 ms | 11.0 ms | 1.27x | 763 | 958 |
+| DeltaBlue | 24.0 ms | 23.7 ms | 1.01x | 830 | 840 |
+| Crypto | 279 ms | 324 ms | 0.86x | 1,273 | 1,104 |
+| RayTrace | 146 ms | 144 ms | 1.01x | 1,611 | 1,585 |
+| EarleyBoyer | 372 ms | 401 ms | 0.93x | 2,181 | 2,148 |
+| RegExp | 279 ms | 960 ms | 0.29x | 1,452 | 384 |
+| Splay | 292 ms | 520 ms | 0.56x | 3,102 | 3,338 |
+| NavierStokes | 212 ms | 190 ms | 1.12x | 2,330 | 2,403 |
+| **Total / composite** | **1,618 ms** | **2,574 ms** | **0.63x** | **1,528** | **1,322** |
 
 The two kinds of figure time different things, which is why they do not
 agree on how far ahead go-quickjs is:
@@ -132,12 +132,12 @@ agree on how far ahead go-quickjs is:
   make most of go-quickjs's lead. The composite score is the geometric mean
   of the workloads' scores, so each counts the same: Richards' gap weighs as
   much as RegExp's lead. By that mean the fixed figures put go-quickjs
-  about 19% ahead, and the scores 14%.
+  about 19% ahead, and the scores 16%.
 - Splay changes sides. Its fixed time is almost all setup and teardown:
   building a tree of 8,000 nodes and dropping it, which QuickJS frees by
   counting references where Go's collector frees it later. A warm run,
   which is what the score times, is splay-tree operations, calls and
-  property reads, and takes about 5% longer here. Giving the
+  property reads, and takes about 8% longer here. Giving the
   collector four times the room (`GOGC=400`) leaves Splay's score as it
   was, so collection is not what the score measures.
 
@@ -151,34 +151,34 @@ and Richards and DeltaBlue by more, up to a tenth. To reproduce them, run
 QuickJS's own micro-benchmarks, [`tests/microbench.js`](https://github.com/bellard/quickjs/blob/master/tests/microbench.js),
 time one operation each, in nanoseconds. Each test was given the work QuickJS
 takes about 150 ms for, both engines ran that same work in fresh processes at
-go-quickjs `363c64c`, and the figure is the faster of two runs.
+go-quickjs `1c9925f`, and the figure is the faster of two runs.
 `sort_bench` is left out: it reports a run's time over its fastest sort, not
-the time of an operation. Over the other 71 tests go-quickjs takes 1.12 times
-QuickJS's time by the geometric mean: it is slower on 44, faster on 24, and
+the time of an operation. Over the other 71 tests go-quickjs takes 1.08 times
+QuickJS's time by the geometric mean: it is slower on 42, faster on 25, and
 level on the rest. The table has the largest gaps either way.
 
 | Test | go-quickjs | QuickJS | go-quickjs / QuickJS |
 |---|---:|---:|---:|
-| `weak_map_set` | 293 ns | 92.3 ns | 3.17x |
-| `weak_map_delete` | 578 ns | 253 ns | 2.29x |
-| `array_prop_create` | 31.9 ns | 14.9 ns | 2.14x |
-| `bigint256_arith` | 266 ns | 126 ns | 2.10x |
+| `weak_map_set` | 318 ns | 92.8 ns | 3.43x |
+| `weak_map_delete` | 580 ns | 248 ns | 2.34x |
+| `array_prop_create` | 33.1 ns | 15.0 ns | 2.21x |
+| `bigint256_arith` | 260 ns | 127 ns | 2.05x |
 | `global_read` | 11.1 ns | 5.5 ns | 2.00x |
-| `bigint64_arith` | 75.2 ns | 40.0 ns | 1.88x |
-| `regexp_utf16` | 501 ns | 268 ns | 1.87x |
-| `array_update` | 15.6 ns | 8.6 ns | 1.82x |
-| `array_for_in` | 131 ns | 76.3 ns | 1.72x |
-| `bigint32_arith` | 39.7 ns | 23.6 ns | 1.68x |
-| `float_toFixed` | 266 ns | 163 ns | 1.63x |
-| `typed_array_write` | 23.1 ns | 14.3 ns | 1.61x |
-| `array_read` | 10.7 ns | 6.7 ns | 1.61x |
-| `string_length` | 9.0 ns | 14.1 ns | 0.64x |
-| `arguments_read` | 93.5 ns | 166 ns | 0.56x |
-| `prop_clone` | 44.2 ns | 78.6 ns | 0.56x |
-| `array_pop` | 60.5 ns | 112 ns | 0.54x |
-| `string_build2c` | 71.3 ns | 149 ns | 0.48x |
-| `string_to_int` | 47.7 ns | 113 ns | 0.42x |
-| `array_slice` | 10.0 ns | 27.1 ns | 0.37x |
+| `bigint64_arith` | 74.2 ns | 39.6 ns | 1.88x |
+| `regexp_utf16` | 485 ns | 271 ns | 1.79x |
+| `bigint32_arith` | 40.2 ns | 23.1 ns | 1.74x |
+| `float_toFixed` | 264 ns | 162 ns | 1.63x |
+| `array_read` | 10.7 ns | 6.6 ns | 1.62x |
+| `empty_loop` | 8.5 ns | 5.3 ns | 1.59x |
+| `empty_down_loop` | 7.8 ns | 5.1 ns | 1.53x |
+| `global_write_strict` | 10.5 ns | 6.9 ns | 1.52x |
+| `array_for_of` | 27.8 ns | 46.1 ns | 0.60x |
+| `array_pop` | 66.4 ns | 111 ns | 0.60x |
+| `prop_clone` | 42.7 ns | 78.2 ns | 0.55x |
+| `arguments_read` | 88.7 ns | 166 ns | 0.53x |
+| `string_build2c` | 66.4 ns | 148 ns | 0.45x |
+| `string_to_int` | 46.3 ns | 112 ns | 0.41x |
+| `array_slice` | 9.2 ns | 27.3 ns | 0.33x |
 
 Some of these tests depend on where the linker places the code more than on
 the code, by more than eight placements can average out: those vary where
@@ -242,7 +242,7 @@ What the gap is made of:
     `output` and `execute` and RayTrace's `dot` do. It may call another such
     function, `new` a constructor of the first kind, as EarleyBoyer's
     `sc_cons` does, and push onto or pop from an array, as DeltaBlue's
-    collections do. Called that way, an empty function costs about 42 ns,
+    collections do. Called that way, an empty function costs about 38 ns,
     against about 31 ns in QuickJS (`func_call`).
 - **Property access.** Objects built the same way share a shape, as in
   QuickJS and V8, and each property read and write, each getter and
@@ -283,8 +283,19 @@ Where go-quickjs is level or ahead:
   it. Go's allocator makes many small objects cheaply, a short string or an
   array of up to sixteen elements is one allocation with its contents, and
   dropping the tree costs nothing until the collector runs. The splay
-  operations themselves, which the score times, take about a tenth longer
+  operations themselves, which the score times, take about 8% longer
   than QuickJS's.
+- **Array elements updated, walked and skipped.** `a[k] += y` and `a[k]++`
+  on a number in an array's storage are one step in a tree, the element
+  updated where it is: one node where there were three, with the array and
+  the key checked once rather than twice (`array_update`, 0.84 times
+  QuickJS's time). for-in over an array whose keys are its elements walks
+  them by index rather than copying them into a list first
+  (`array_for_in`, 0.99), and the array methods pass over a hole
+  without looking its index up, where nothing up the prototype chain could
+  have it (`array_hole_length_decr`, 0.77). A typed array of a
+  fixed length is written through the storage it keeps
+  (`typed_array_write`, 1.08).
 - **`apply(this, arguments)`.** In a function whose only use of `arguments` is
   passing it to `apply` (a common way to write a class constructor), the
   arguments object is never made. A constructor whose whole body is

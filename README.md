@@ -49,9 +49,9 @@ skipped because they require an unsupported feature or host facility. See [Confo
 measurement and [Not implemented](docs/status.md#not-implemented) for what is missing.
 
 On the V8 benchmark suite as a whole it is ahead of C QuickJS: it takes 0.63
-times QuickJS's time over the suite and has a 14% higher composite score.
+times QuickJS's time over the suite and has a 16% higher composite score.
 Single operations still cost more: QuickJS's own micro-benchmarks take about
-1.12 times as long on average, and over three times as long for a
+1.08 times as long on average, and over three times as long for a
 few, the weak collections among them. See [Compared with C QuickJS](docs/benchmarks.md#compared-with-c-quickjs).
 
 ## Documentation
