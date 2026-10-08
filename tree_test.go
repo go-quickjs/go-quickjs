@@ -1134,3 +1134,39 @@ func TestPureGlobalReads(t *testing.T) {
 		rt.Close()
 	}
 }
+
+// TestPlaceUpdateNotAnUpdate pins reads that look like the start of an
+// update -- this.q, this pushed twice, with a store to q further on -- but are
+// not: building the tree once took an instruction after the read for the
+// update's operand and popped an empty stack. Each function is called twice,
+// in both tiers; Node and C QuickJS give the same.
+func TestPlaceUpdateNotAnUpdate(t *testing.T) {
+	defer vm.SetTreeTier(true)
+	const src = `var out = [];
+function swapThis() { var t = this.p; this.p = this.q; this.q = t; return this.p + "," + this.q; }
+function swapIf() { if (this.p <= 9) { var t = this.p; this.p = this.q; this.q = t; } return this.p + "," + this.q; }
+function copyThis() { this.a = this.b; this.b = this.a + 1; return this.a + "," + this.b; }
+function nested(x) { return [x, (this.p = this.q, this.q = x)].join("/"); }
+function destr() { [this.p, this.q] = [this.q, this.p]; return this.p + "," + this.q; }
+var arrow = function () { var g = () => { var t = this.p; this.p = this.q; this.q = t; }; g(); return this.p + "," + this.q; };
+function upd() { this.p += this.q; this.q = this.p - this.q; return this.p + "," + this.q; }
+var fs = [swapThis, swapIf, copyThis, nested, destr, arrow, upd];
+for (var i = 0; i < fs.length; i++) {
+  var o = { p: 1, q: 2, a: 3, b: 4 };
+  out.push(fs[i].call(o, 7), fs[i].call(o, 8));
+}
+out.join(" ")`
+	const want = "2,1 1,2 2,1 1,2 4,5 5,6 7/7 8/8 2,1 1,2 2,1 1,2 3,1 4,3"
+	for _, tier := range []bool{false, true} {
+		vm.SetTreeTier(tier)
+		rt := quickjs.New()
+		v, err := rt.Eval(src)
+		if err != nil {
+			t.Fatalf("tree tier %v: %v", tier, err)
+		}
+		if got := v.String(); got != want {
+			t.Errorf("tree tier %v: got %s, want %s", tier, got, want)
+		}
+		rt.Close()
+	}
+}

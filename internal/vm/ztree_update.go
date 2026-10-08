@@ -283,7 +283,7 @@ func (b *tbuilder) update(u *rmw, n, pc, next int) (int, bool) {
 				b.noUpdate = outer
 				return fail()
 			}
-			skip, ok := b.op(i, in, code, i+1 < b.end)
+			skip, ok := b.operandOp(i, in, code, i+1 < b.end)
 			if !ok || len(b.body) != body || len(b.stack) <= d || b.stack[d].slot != -2 {
 				b.noUpdate = outer
 				return fail()
@@ -1001,4 +1001,24 @@ func (c *tctx) globalSite(site, name uint32) *Property {
 		}
 	}
 	return nil
+}
+
+// operandOp is b.op for an instruction of what may be an update's operand.
+// The read may not begin an update at all -- `this.p = this.q; this.q = t`
+// reads this.q with this pushed twice and stores to q further on -- and the
+// instruction after it may then take more from the stack than the operand
+// put there. Taking from below the operand's base is caught after the
+// instruction (update then rolls back); taking from an empty stack panics in
+// pop, which is reported here as false, as the instruction not being an
+// operand's. Any other panic is not this one and goes on.
+func (b *tbuilder) operandOp(pc int, in bytecode.Instr, code []bytecode.Instr, more bool) (skip int, ok bool) {
+	defer func() {
+		if p := recover(); p != nil {
+			if len(b.stack) != 0 {
+				panic(p)
+			}
+			skip, ok = 0, false
+		}
+	}()
+	return b.op(pc, in, code, more)
 }
