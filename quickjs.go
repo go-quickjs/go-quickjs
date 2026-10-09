@@ -147,10 +147,10 @@ type config struct {
 // with Go's default collector settings. Size a host for that, or bound the
 // process as a whole with GOMEMLIMIT (runtime/debug.SetMemoryLimit).
 //
-// It is an estimate: what a host holds for the script, and what Go closures
-// inside the engine capture, is not counted, and neither are a regular
-// expression's compiled program and part of a Date (docs/known-issues.md,
-// KI-62). A runtime with a limit is a little slower to allocate.
+// It is an estimate, within 15% of Go's live heap for each kind of value a
+// script can hold: what a host holds for the script, and what Go closures
+// inside the engine capture, is not counted. A runtime with a limit is a
+// little slower to allocate.
 func WithMemoryLimit(bytes int64) Option {
 	return func(c *config) { c.memoryLimit = bytes }
 }

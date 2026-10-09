@@ -5,6 +5,10 @@ import (
 	"reflect"
 	"runtime/metrics"
 	"unsafe"
+
+	"github.com/go-quickjs/go-intl/date"
+
+	"github.com/go-quickjs/go-quickjs/internal/regexp"
 )
 
 // Memory limits.
@@ -303,6 +307,8 @@ var (
 	meterPtrType        = reflect.TypeOf((*memoryMeter)(nil))
 	bigIntPtrType       = reflect.TypeOf((*BigInt)(nil))
 	sharedMemoryPtrType = reflect.TypeOf((*SharedMemory)(nil))
+	regexpPtrType       = reflect.TypeOf((*regexp.Regexp)(nil))
+	datePtrType         = reflect.TypeOf((*date.Date)(nil))
 	valueSliceType      = reflect.TypeOf([]Value(nil))
 	vmPackage           = reflect.TypeOf(Object{}).PkgPath()
 )
@@ -474,6 +480,27 @@ func (m *memoryMeter) generic(v reflect.Value) {
 			// counted, which does not move.
 			m.total += int64(cap((*SharedMemory)(v.UnsafePointer()).mem))
 			return
+		case regexpPtrType:
+			// A pattern is the regexp package's, which says what it takes:
+			// the compiled program, shared by the RegExps made from one
+			// pattern and counted once, what each holds of its own, and the
+			// pattern a RegExp was cloned from, which it keeps.
+			for re := (*regexp.Regexp)(v.UnsafePointer()); re != nil && !m.has(unsafe.Pointer(re)); {
+				prog, progBytes, own, lender := re.Footprint()
+				m.total += int64(own)
+				if prog != nil && !m.has(prog) {
+					m.total += int64(progBytes)
+				}
+				re = lender
+			}
+			return
+		case datePtrType:
+			// A Date's state is go-intl's, a fixed size; what it refers to
+			// is the time zone's, which every Date shares.
+			if p := v.UnsafePointer(); !m.has(p) {
+				m.total += int64(unsafe.Sizeof(date.Date{}))
+			}
+			return
 		}
 		elem := v.Type().Elem()
 		if elem.PkgPath() != vmPackage {
@@ -549,6 +576,15 @@ func (m *memoryMeter) generic(v reflect.Value) {
 	case reflect.String:
 		m.total += int64(v.Len())
 	}
+}
+
+// has reports whether the walk has visited p, marking it visited.
+func (m *memoryMeter) has(p unsafe.Pointer) bool {
+	if _, ok := m.seen[p]; ok {
+		return true
+	}
+	m.seen[p] = struct{}{}
+	return false
 }
 
 // mayHoldHeap reports whether a value of a kind can refer to more of the

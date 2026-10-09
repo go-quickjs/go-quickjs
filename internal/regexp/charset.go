@@ -4,6 +4,7 @@ import (
 	"sort"
 	"sync"
 	"unicode"
+	"unsafe"
 )
 
 // charSet is a set of code points, stored as sorted non-overlapping ranges.
@@ -25,6 +26,10 @@ type charSet struct {
 	// foldCase is set when the i flag applies, in which case membership is
 	// tested against the simple case folds of the character too.
 	foldCase bool
+	// table is the shared property table the ranges were taken from, if
+	// they were: ranges still in it are the package's, not the pattern's,
+	// which Footprint does not count.
+	table *charRange
 }
 
 type charRange struct{ lo, hi rune }
@@ -329,7 +334,7 @@ func unicodeClass(name string, negate bool) (*charSet, bool) {
 		// property matched in reverse.
 		return complementSet(rs...), true
 	}
-	return &charSet{ranges: rs}, true
+	return &charSet{ranges: rs, table: unsafe.SliceData(rs)}, true
 }
 
 // decodedProperties caches the ranges a property decodes to. A runtime is

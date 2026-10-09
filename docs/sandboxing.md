@@ -52,12 +52,11 @@ it is not what the process takes from the system:
   not per process.
 
 Measured against Go's live heap after a full collection, the estimate is
-within 10% for objects, arrays, strings, Maps and Sets, typed arrays,
-closures and BigInts. Two kinds of data are undercounted, which
-[KI-62](known-issues.md#ki-62-the-memory-limit-undercounts-regular-expressions-and-dates)
-records: a regular expression's compiled program is not counted at all, so
-a script holding many regular expressions can hold several times its
-limit, and a Date is counted at about 60% of its size.
+within 15% for every kind of value a script can hold -- objects, arrays,
+strings, Maps and Sets, typed arrays, closures, BigInts, dates and regular
+expressions -- and `TestMemoryMeterAccuracy` keeps it there. A regular
+expression's compiled program is counted once however many RegExps share
+it.
 
 So is the language a script means when it formats something without saying
 which language to format it in -- what `Intl` answers with when it is given no

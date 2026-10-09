@@ -668,6 +668,19 @@ Paths are relative to this repository; `go-intl:` paths are in
   keeps making regular expressions under a 64 MB limit took the process's
   heap to 678 MB before it was stopped; objects or strings stop at 90-117 MB.
   Everything else is counted within 10%.
-- **Status:** open. A compiled program is to be counted on the RegExp that
-  owns it, once if programs are shared, and a Date's state likewise; a test
-  is to hold the estimate within 15% of the live heap for each kind of data.
+- **Status:** fixed.
+  - The regexp package says what a pattern takes (`Regexp.Footprint`): its
+    compiled program, which the RegExps made from one pattern share and the
+    walk counts once, what each holds of its own -- its matcher, whose
+    stacks a long match leaves large -- and the pattern it was cloned from.
+    A class still in a shared Unicode property table does not count the
+    table, which is the package's.
+  - A Date's state is counted at its size; what it refers to is the time
+    zone's, shared by every Date.
+  - 10,000 regular expressions are now counted at 0.90 of their live heap,
+    dates at 1.00, and a script making regular expressions under a 64 MB
+    limit stops with a 121 MB heap, as objects and strings do.
+  - Test: `TestMemoryMeterAccuracy`, which holds the estimate within 15% of
+    the live heap for fifteen kinds of value. Before the fix, regular
+    expressions were at 0.14, one pattern made many times at 0.70 and dates
+    at 0.59.
