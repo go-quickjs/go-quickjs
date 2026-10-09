@@ -136,9 +136,21 @@ type config struct {
 // for the script since would take it over: an allocation whose size the
 // script chose is charged before it is made, a join, a template, JSON text
 // or a spread as it is written, and what a built-in returns once it is
-// made. It is an estimate: what a host holds for the script, and what Go
-// closures inside the engine capture, is not counted. A runtime with a
-// limit is a little slower to allocate.
+// made.
+//
+// What is limited is what the script holds -- what it can still reach --
+// not what it has allocated over its life, which may be any amount, nor what
+// the process takes from the system. Memory the script has let go of is not
+// counted, though Go has not yet collected it, and Go lets its heap grow
+// past what is live before it collects, so a process running a script near
+// its limit uses more than the limit: about one and a half to two times it
+// with Go's default collector settings. Size a host for that, or bound the
+// process as a whole with GOMEMLIMIT (runtime/debug.SetMemoryLimit).
+//
+// It is an estimate: what a host holds for the script, and what Go closures
+// inside the engine capture, is not counted, and neither are a regular
+// expression's compiled program and part of a Date (docs/known-issues.md,
+// KI-62). A runtime with a limit is a little slower to allocate.
 func WithMemoryLimit(bytes int64) Option {
 	return func(c *config) { c.memoryLimit = bytes }
 }

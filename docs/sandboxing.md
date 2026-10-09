@@ -33,6 +33,32 @@ it is made -- and a charge that would cross the limit measures the heap at
 once. So a value doubled a few times over in a short loop is stopped as
 surely as one grown a little at a time.
 
+What the limit counts is what the script holds: the objects, strings, arrays
+and buffers it can still reach, each counted once, at the sizes the engine
+lays them out in. It is not what the script has allocated over its life --
+a script that makes and drops far more than its limit runs to its end -- and
+it is not what the process takes from the system:
+
+- Garbage is not counted. Memory the script has let go of is free as far as
+  the limit is concerned, though Go has not yet collected it.
+- Go lets its heap grow past what is live before it collects. With Go's
+  default settings, a script stopped at a 64 MB limit had taken the
+  process's heap to 90-117 MB on the way. Size a host at about twice the
+  limits of the runtimes it runs at once, plus what the runtimes' built-ins
+  take, or bound the process as a whole with `GOMEMLIMIT`
+  (`runtime/debug.SetMemoryLimit`), which makes Go collect sooner as it
+  nears it.
+- One process heap serves every runtime in it, so a limit is per runtime,
+  not per process.
+
+Measured against Go's live heap after a full collection, the estimate is
+within 10% for objects, arrays, strings, Maps and Sets, typed arrays,
+closures and BigInts. Two kinds of data are undercounted, which
+[KI-62](known-issues.md#ki-62-the-memory-limit-undercounts-regular-expressions-and-dates)
+records: a regular expression's compiled program is not counted at all, so
+a script holding many regular expressions can hold several times its
+limit, and a Date is counted at about 60% of its size.
+
 So is the language a script means when it formats something without saying
 which language to format it in -- what `Intl` answers with when it is given no
 locale, and what `Date`'s `toString` and `toLocaleString` write in:

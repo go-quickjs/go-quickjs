@@ -655,3 +655,19 @@ Paths are relative to this repository; `go-intl:` paths are in
   - a charge that takes the estimate over the limit measures the heap, and
     a result the script already held is not counted twice.
   - Tests: `TestMemoryLimitDoubling`, `TestMemoryLimitResultsCountedOnce`.
+
+### KI-62 The memory limit undercounts regular expressions and dates
+- **Where:** `internal/vm/memory.go`. The walk counts only the engine's own
+  types and skips those of other packages, which are shared or the host's:
+  Intl's formatters, the compiled bytecode. A RegExp's compiled program is
+  in `internal/regexp`, and so is not counted; part of a Date is held the
+  same way.
+- **Effect:** measured against Go's live heap after a full collection,
+  10,000 regular expressions take 12.3 MB and are counted as 1.7 MB, and
+  100,000 dates take 19.5 MB and are counted as 11.5 MB. A script that
+  keeps making regular expressions under a 64 MB limit took the process's
+  heap to 678 MB before it was stopped; objects or strings stop at 90-117 MB.
+  Everything else is counted within 10%.
+- **Status:** open. A compiled program is to be counted on the RegExp that
+  owns it, once if programs are shared, and a Date's state likewise; a test
+  is to hold the estimate within 15% of the live heap for each kind of data.
