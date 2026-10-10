@@ -40,7 +40,8 @@ func (r *Runtime) intlCompat() intl.Compat {
 		intl.RoundingWindow | intl.RepeatedMidnight | intl.PatternCalendar | intl.PluralRulesDigits |
 		intl.UnknownSubtags | intl.AccountingNever | intl.RelativeEpsilon | intl.ApproximateIncrement |
 		intl.CurrencyFormats | intl.EmptyListItems | intl.HourCycleStyles | intl.IdenticalPrefix |
-		intl.HostAbbreviations | intl.DoubleRangeIdentity)
+		intl.HostAbbreviations | intl.DoubleRangeIdentity | intl.TrueKeywords |
+		intl.LeftToRightDirection)
 }
 
 // canonicalizer puts locale identifiers in canonical form, as

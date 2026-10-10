@@ -684,3 +684,20 @@ Paths are relative to this repository; `go-intl:` paths are in
     the live heap for fifteen kinds of value. Before the fix, regular
     expressions were at 0.14, one pattern made many times at 0.70 and dates
     at 0.59.
+
+### KI-63 Intl.Locale's newer test262 tests
+- **Where:** `internal/vm/intllocale.go`, go-intl's `localeinfo.go`.
+- **Effect:** test262's newer Intl Locale Info tests failed on a current
+  checkout (macOS CI): `new Intl.Locale("en-u-co").collation` was `"true"`
+  and `getCollations()` `["true"]`, where the standard has `""` and `[""]`,
+  and so for `nu`; and `getTextInfo().direction` was `"ltr"` for scripts of
+  no direction of their own (`Zyyy`, `Zinh`, `Brai`, `Zzzz`), unregistered
+  or private use ones (`Aaaa`, `Qaaq`), and languages whose script cannot
+  be found (`tlh`, `abcdefgh`), where the standard has `undefined`. Node
+  v26.10 answers as the engine did.
+- **Status:** fixed, as two go-intl divergences, `TrueKeywords` and
+  `LeftToRightDirection`: the standards mode answers `""` for a keyword with
+  no value, in every getter and list, and leaves a direction no one knows
+  undefined; `WithNodeQuirks` answers `"true"`, ICU's `"yes"` in the lists,
+  and `"ltr"`, as Node does. The `firstDayOfWeek` keyword of KI-56 now goes
+  by the same divergence. Test: `TestIntlLocaleStandard`.

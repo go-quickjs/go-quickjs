@@ -80,26 +80,19 @@ func (r *Runtime) initLocale(namespace *Object) {
 		}
 		return optionalString(strings.Join(variants, "-"))
 	})
-	for _, field := range []struct {
-		name, key string
-		// raw is a key whose getter answers a keyword with no value as
-		// the empty string, where the others answer "true", as V8 does.
-		raw bool
-	}{
-		{"calendar", "ca", false}, {"collation", "co", false},
-		{"firstDayOfWeek", "fw", true}, {"hourCycle", "hc", false},
-		{"caseFirst", "kf", true}, {"numberingSystem", "nu", false},
+	for _, field := range []struct{ name, key string }{
+		{"calendar", "ca"}, {"collation", "co"}, {"firstDayOfWeek", "fw"},
+		{"hourCycle", "hc"}, {"caseFirst", "kf"}, {"numberingSystem", "nu"},
 	} {
 		r.localeGetter(proto, field.name, func(l intl.Locale) Value {
 			value, ok := l.Keyword(field.key)
 			if !ok {
 				return Undefined
 			}
-			// The standard answers firstDayOfWeek's keyword with no value as
-			// the empty string, and test262 checks it; V8 answers "true", as
-			// it does the rest.
-			raw := field.raw && !(field.key == "fw" && r.nodeQuirks)
-			if value == "" && !raw {
+			// A keyword with no value, which stands for "true", is the empty
+			// string, as the locale holds it, and test262 checks it; V8
+			// answers "true" for every key but caseFirst's (TrueKeywords).
+			if value == "" && field.key != "kf" && r.intlCompat().Has(intl.TrueKeywords) {
 				value = "true"
 			}
 			return Str(NewString(value))
@@ -159,16 +152,18 @@ func (r *Runtime) initLocale(namespace *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		rtl, err := info.RightToLeft(o.loc)
+		direction, err := info.Direction(o.loc)
 		if err != nil {
 			return Undefined, rt.intlInternal()
 		}
-		direction := "ltr"
-		if rtl {
-			direction = "rtl"
-		}
+		// A direction no one knows is undefined, the property still made
+		// (LeftToRightDirection answers "ltr").
 		out := newObject(rt.proto.object, ClassObject)
-		rt.putString(out, "direction", direction)
+		if direction == "" {
+			out.setOwnRaw(rt.atoms.intern("direction"), Undefined, propDefault)
+		} else {
+			rt.putString(out, "direction", direction)
+		}
 		return Obj(out), nil
 	})
 	r.defMethod(proto, "getWeekInfo", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {

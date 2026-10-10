@@ -940,22 +940,45 @@ func TestIntlLocaleMatchesNode(t *testing.T) {
 }
 
 // Where the standards mode answers Intl.Locale otherwise than Node: a key
-// with no value is "true" to getCalendars as to the calendar getter, where
-// Node's is ICU's "yes" (go-intl's YesValues); a subdivision is the region
-// of the hour cycles (SubdivisionHourCycles); and the variants getter and
-// option, which Node 26 has not implemented.
+// with no value, which stands for "true", is the empty string to the getters
+// and to getCalendars and the like, where Node answers "true" and ICU's
+// "yes" (go-intl's TrueKeywords, test262's
+// preferred-from-unicode-extension-true-empty); getTextInfo has no
+// direction for a script of none, one unregistered or private use, or a
+// language whose script cannot be found, where Node answers "ltr"
+// (LeftToRightDirection, test262's script-metadata-rtl-is-unknown and its
+// fellows); a subdivision is the region of the hour cycles
+// (SubdivisionHourCycles); and the variants getter and option, which Node
+// 26 has not implemented. WithNodeQuirks answers as Node does.
 func TestIntlLocaleStandard(t *testing.T) {
+	const keywords = `[...["ca", "co", "hc", "nu"].map(k => new Intl.Locale("en-u-" + k)).map(l =>
+		[l.calendar, l.collation, l.hourCycle, l.numberingSystem].filter(v => v !== undefined)[0]),
+		new Intl.Locale("en-u-ca-true").getCalendars(), new Intl.Locale("en-u-co").getCollations(),
+		new Intl.Locale("en-u-hc").getHourCycles(), new Intl.Locale("en-u-nu-true").getNumberingSystems()].join("|")`
+	const directions = `["und-Zyyy", "en-Brai", "ar-Zxxx", "und-Qaaq", "tlh", "abcdefgh", "en", "ar", "pa-PK", "ur-Aran"]
+		.map(t => String(new Intl.Locale(t).getTextInfo().direction)).join()`
 	rt := quickjs.New()
 	defer rt.Close()
 	for _, c := range []struct{ source, want string }{
-		{`new Intl.Locale("en-u-ca").getCalendars().join()`, "true"},
-		{`new Intl.Locale("en-u-co").getCollations().join()`, "true"},
+		{keywords, "|||||||"},
+		{directions, "undefined,undefined,undefined,undefined,undefined,undefined,ltr,rtl,rtl,rtl"},
+		{`"direction" in new Intl.Locale("tlh").getTextInfo()`, "true"},
 		{`new Intl.Locale("en-u-sd-gbeng").getHourCycles().join()`, "h23"},
 		{`new Intl.Locale("en-GB-oxendict").variants`, "oxendict"},
 		{`new Intl.Locale("en-US", {variants: "fonipa-1996"}).toString()`, "en-US-1996-fonipa"},
 	} {
 		if got := evalString(t, rt, c.source); got != c.want {
 			t.Errorf("%s: got %q, want %q", c.source, got, c.want)
+		}
+	}
+	quirks := quickjs.New(quickjs.WithNodeQuirks())
+	defer quirks.Close()
+	for _, c := range []struct{ source, want string }{
+		{keywords, "true|true|true|true|yes|yes|yes|yes"},
+		{directions, "ltr,ltr,ltr,ltr,ltr,ltr,ltr,rtl,rtl,ltr"},
+	} {
+		if got := evalString(t, quirks, c.source); got != c.want {
+			t.Errorf("quirks: %s: got %q, want %q", c.source, got, c.want)
 		}
 	}
 }

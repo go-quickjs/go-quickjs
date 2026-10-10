@@ -221,8 +221,13 @@ func WithLocale(tag string) Option {
 // Intl.DateTimeFormat
 // refuses, with V8's RangeError, a Temporal plain date whose midnight, or a
 // plain date-time, is past the instants a Date can hold, which the standard
-// formats; and Intl.Locale answers a firstDayOfWeek keyword with no value as
-// "true", where the standard answers ""; and Intl.Locale's maximize keeps a
+// formats; and Intl.Locale answers a Unicode extension keyword with no value
+// -- a calendar, collation, hour cycle, numbering system or first day of the
+// week -- as "true", and its getCalendars and the like as ICU's "yes", where
+// the standard answers ""; Intl.Locale's getTextInfo answers "ltr" where
+// the direction is unknown -- a script of none, like Common or Braille, one
+// unregistered or private use, or a language whose script cannot be found
+// -- where the standard has no direction; and Intl.Locale's maximize keeps a
 // locale that names a language, a script and a region as it is, as ICU
 // does, though the script is "Zzzz" or the region "ZZ", which the standard
 // fills in: "en-Zzzz-US" rather than "en-Latn-US".
