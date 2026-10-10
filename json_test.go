@@ -172,6 +172,22 @@ func TestJSONBigInt(t *testing.T) {
 	}
 }
 
+// TestJSONStringifyFinite pins that every finite number is written as one,
+// up to Number.MAX_VALUE: the test for infinity once took 1.7e308 as its
+// bound, and wrote the largest doubles as null (test262's value-number).
+func TestJSONStringifyFinite(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`JSON.stringify(Number.MAX_VALUE)`, "1.7976931348623157e+308"},
+		{`JSON.stringify([Number.MAX_VALUE, -Number.MAX_VALUE, 1.75e308, 5e-324, -0])`,
+			"[1.7976931348623157e+308,-1.7976931348623157e+308,1.75e+308,5e-324,0]"},
+		{`JSON.stringify({a: Number.MAX_VALUE})`, `{"a":1.7976931348623157e+308}`},
+		{`JSON.stringify([Infinity, -Infinity, NaN, Number.MAX_VALUE * 2])`, "[null,null,null,null]"},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
 // TestJSONStringifyShapes covers the places where the serializer writes into
 // its buffer and then has to take something back: a property whose value turns
 // out to have no JSON form is omitted along with its key and the separator

@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"math"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -473,7 +474,7 @@ func (e *jsonEncoder) encode(buf []byte, v Value, prefix string) ([]byte, bool, 
 	case KindNumber:
 		n := v.Number()
 		// A non-finite number has no JSON form and becomes null.
-		if n != n || n > 1e308*1.7 || n < -1e308*1.7 {
+		if math.IsNaN(n) || math.IsInf(n, 0) {
 			return append(buf, "null"...), true, nil
 		}
 		return jsnum.AppendFloat(buf, n), true, nil
