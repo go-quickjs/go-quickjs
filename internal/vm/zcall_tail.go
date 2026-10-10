@@ -35,11 +35,11 @@ func (b *tbuilder) tailCall(in bytecode.Instr, pc int) bool {
 // jumps to a return and the return. Deep enough in the stack, the frame is
 // given up for the callee's, as the interpreter's tail_call gives it up:
 // the call is left in pendingTail for run to make, and treeTail tells
-// runTree to leave with errTailCall rather than the value returned. A tree
-// has no handlers and no saved stack, so what decides, besides the depth,
-// is that the frame is not a constructor's, whose result is checked after
-// its body, nor one that shares a derived constructor's this. Anything
-// else is an ordinary call.
+// runTree to leave with errTailCall rather than the value returned. The
+// compiler emits no tail call under a handler or with a live cursor. Besides
+// the depth, what decides is that the frame is not a constructor's, whose
+// result is checked after its body, nor one that shares a derived
+// constructor's this. Anything else is an ordinary call.
 //
 // It is kept out of line, as the node builders tbuilder.op calls are: a
 // builder inlined into op makes its closure part of a function big

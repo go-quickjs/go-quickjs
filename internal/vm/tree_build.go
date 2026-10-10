@@ -58,6 +58,15 @@ type tbuilder struct {
 	index, depths []int
 	// succ is the blocks the one being built can go on to.
 	succ []int
+	// handlerSucc are exceptional entries, built like successors but kept
+	// apart from the normal edges the loop structurer follows.
+	handlerSucc []thandlerEntry
+	// protected says the function has handlers. handlers is then the ones
+	// in force where the block being built has got to, innermost last, and
+	// entryHandlers each block's at its start (see enterHandlers).
+	protected     bool
+	handlers      []thandlerEntry
+	entryHandlers [][]thandlerEntry
 	// end is where the block being built ends, for an instruction that
 	// takes in those after it.
 	end int
@@ -115,11 +124,18 @@ func buildTree(fn *bytecode.Function) *tree {
 	// back says a jump goes back, as only a loop's does: structureTree has
 	// nothing to do without one.
 	back := false
+	handlers := false
 	for pc, in := range code {
 		if !treeBuilds(in.Op) {
 			return nil
 		}
 		switch in.Op {
+		case bytecode.OpPushCatch, bytecode.OpPushFinally:
+			if uint64(in.A) >= uint64(len(code)) {
+				return nil
+			}
+			leader[in.A] = true
+			handlers = true
 		case bytecode.OpJump, bytecode.OpJumpIfFalse, bytecode.OpJumpIfTrue, bytecode.OpJumpIfCmpFalse,
 			bytecode.OpJumpIfFalseKeep, bytecode.OpJumpIfTrueKeep, bytecode.OpJumpIfNullish, bytecode.OpJumpIfNotNullish:
 			if int(in.A) > len(code) {
@@ -128,7 +144,7 @@ func buildTree(fn *bytecode.Function) *tree {
 			leader[in.A] = true
 			leader[pc+1] = true
 			back = back || int(in.A) <= pc
-		case bytecode.OpReturn, bytecode.OpReturnUndef, bytecode.OpThrow:
+		case bytecode.OpReturn, bytecode.OpReturnUndef, bytecode.OpThrow, bytecode.OpRethrow:
 			leader[pc+1] = true
 		}
 	}
@@ -156,7 +172,10 @@ func buildTree(fn *bytecode.Function) *tree {
 	if back {
 		flow = takeFlow(len(starts))
 	}
-	b := &tbuilder{fn: fn, index: index, depths: depth}
+	b := &tbuilder{fn: fn, index: index, depths: depth, protected: handlers}
+	if handlers {
+		b.entryHandlers = make([][]thandlerEntry, len(starts))
+	}
 	for len(work) > 0 {
 		bi := work[len(work)-1]
 		work = work[:len(work)-1]
@@ -168,7 +187,9 @@ func buildTree(fn *bytecode.Function) *tree {
 		if bi+1 < len(starts) {
 			end = starts[bi+1]
 		}
+		b.enterHandlers(bi)
 		succ, ok := b.buildBlock(t, bi, starts[bi], end, depth[bi])
+		b.leaveHandlers(succ)
 		if !ok {
 			if flow != nil {
 				flowPool.Put(flow)
@@ -181,6 +202,12 @@ func buildTree(fn *bytecode.Function) *tree {
 				st = tstep{}
 			}
 			flow.record(bi, succ, b.how, b.cmp, st)
+			flow.entries = append(flow.entries, b.handlerSucc...)
+		}
+		for _, s := range b.handlerSucc {
+			if !done[s.block] {
+				work = append(work, s.block)
+			}
 		}
 		for _, s := range succ {
 			if !done[s] {
@@ -194,7 +221,11 @@ func buildTree(fn *bytecode.Function) *tree {
 		}
 	}
 	if flow != nil {
-		flow.structure(t, done)
+		if handlers {
+			flow.structureExceptions(t, done)
+		} else {
+			flow.structure(t, done)
+		}
 	}
 	// A jump to a block with nothing in it but its end -- a loop's test,
 	// which the jump at the bottom of the loop goes back to -- ends in that
@@ -211,6 +242,9 @@ func buildTree(fn *bytecode.Function) *tree {
 		} else {
 			blk.next = to
 		}
+	}
+	if handlers {
+		return handlerTree(t, index)
 	}
 	return t
 }
@@ -245,7 +279,7 @@ func treeBuilds(op bytecode.Op) bool {
 		bytecode.OpJumpIfNullish, bytecode.OpJumpIfNotNullish:
 		return true
 	}
-	return false
+	return treeBuildsException(op)
 }
 
 // buildBlock builds the block at bi, which runs code[start:end] from an
@@ -253,6 +287,7 @@ func treeBuilds(op bytecode.Op) bool {
 func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) {
 	fn := b.fn
 	b.stack, b.body, b.succ = b.stack[:0], b.body[:0], b.succ[:0]
+	b.handlerSucc = b.handlerSucc[:0]
 	b.end, b.how, b.cmp, b.step = end, 0, tcmp{}, tstep{}
 	for d := 0; d < entry; d++ {
 		b.pushSlot(d)
@@ -265,6 +300,8 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 		pc := i
 		in := code[pc]
 		switch in.Op {
+		case bytecode.OpRethrow:
+			return b.rethrow(t, bi, pc)
 		case bytecode.OpJump:
 			if !b.spill() {
 				return nil, false
@@ -419,6 +456,9 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 			v := b.pop().tree()
 			if !b.spill() {
 				return nil, false
+			}
+			if b.protected && len(b.handlers) != 0 {
+				return b.throwToHandler(t, bi, pc, v)
 			}
 			t.blocks[bi] = tblock{body: b.takeBody(), next: func(c *tctx) int {
 				e := v(c)
@@ -1289,7 +1329,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			}
 		})
 	default:
-		return 0, false
+		return b.exceptionOp(pc, in)
 	}
 	return 0, true
 }

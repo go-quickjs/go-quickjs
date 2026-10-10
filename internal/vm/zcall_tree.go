@@ -48,8 +48,8 @@ func planTreeCall(fd *funcData) {
 //
 // nested says the caller is a tree's call node, which throws whatever error
 // the call returns: the tree is then run by runTreeNested, without a recover
-// of its own, and an exception goes on past this call, frame and all, to the
-// runTree that catches it.
+// of its own. An unhandled exception goes past this call, frame and all, to
+// the nearest handler wrapper or runTree that catches it.
 func (r *Runtime) callTree(o *Object, fd *funcData, this Value, args []Value, nested bool) (Value, error) {
 	cl := fd.closure
 	fn := cl.fn
@@ -121,9 +121,9 @@ func (r *Runtime) callTree(o *Object, fd *funcData, this Value, args []Value, ne
 }
 
 // runTreeNested is runTree for a tree a tree's call node calls, through
-// callTree: the same, but an exception is not caught here. It goes through
-// the calling node, which would throw it again, to the nearest runTree,
-// whose recover pops the frames it passed, as unwindTreeFrames does. Not
+// callTree: the same, but an unhandled exception is not caught here. It goes
+// through the calling node to the nearest handler wrapper or runTree, whose
+// recover pops the frames it passed, as unwindTreeFrames does. Not
 // setting up a recover is most of what entering a tree costs beyond its
 // frame.
 func (r *Runtime) runTreeNested(f *frame, t *tree) (Value, error) {

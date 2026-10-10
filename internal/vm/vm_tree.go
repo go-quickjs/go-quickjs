@@ -32,12 +32,12 @@ import (
 // has one, and otherwise the same helper it calls. A node that can throw or
 // run code sets the frame's pc to its instruction first, so that a stack
 // trace, and anything else that asks where the frame is, sees what it would
-// have. An exception is a Go panic of a treeThrow, caught where the function
-// began; nothing in the tier's functions catches one, so it leaves the
-// function, as an exception with no handler in it does.
+// have. An exception is a Go panic of a treeThrow. A function with handlers
+// has a wrapper block that catches one and resumes at the handler; other
+// trees let it propagate to the caller or the function's runTree boundary.
 //
-// A function with an instruction the tier does not build -- an exception
-// handler, an iterator, a generator's, anything rarer than a loop's -- runs
+// A function with an instruction the tier does not build -- an iterator's
+// instruction, a generator's, anything rarer than a loop's -- runs
 // in the interpreter as before.
 
 // tctx is a running tree's state, which every node is given.

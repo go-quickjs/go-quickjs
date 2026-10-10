@@ -79,10 +79,18 @@ hold across a statement, a call or a block's end is written to the frame's own
 slots, so things happen in the interpreter's order. A node that can throw or
 run code first records where it is, so a stack trace reads the same. Each node
 is the interpreter's fast path, or calls the helper the interpreter calls. A
-function with anything the tier does not build -- an exception handler, an
-iterator, a generator, an eval -- runs in the interpreter, and every other
-function as a tree, however many calls it makes. `QJS_NOTREE` turns the tier
-off.
+function with anything the tier does not build -- an iterator, a generator,
+an eval -- runs in the interpreter, and every other function as a tree,
+however many calls it makes. `QJS_NOTREE` turns the tier off.
+
+**An exception is a Go panic, caught once.** A node that throws panics, and
+the panic carries the exception out through every tree it passes until a
+function with a handler, or the function the interpreter called, recovers
+it. A function with a try statement is run under one recover, set up as it
+is entered rather than at each statement or turn of a loop: a throw there
+resumes the tree at the catch or finally clause, which the interpreter's own
+unwinding finds. A throw statement that its own function catches does not
+panic at all; like the interpreter's, it goes on to the handler's block.
 
 **An object is allocated the size it is about to be.** An object literal says
 how many properties it will be given, a constructor's body is walked for the

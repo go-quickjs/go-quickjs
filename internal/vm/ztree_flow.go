@@ -113,8 +113,9 @@ type tflow struct {
 
 // How a block ends, where a flow needs to know.
 const (
-	endFalls  = 1 + iota // it runs on into the next block
-	endThrows            // it throws
+	endFalls      = 1 + iota // it runs on into the next block
+	endThrows                // it throws
+	endCompletion            // a finally's record may return or enter an outer finally
 )
 
 // flow is the structuring of one function's blocks, and all it works in,
@@ -128,6 +129,9 @@ type flow struct {
 	how          []uint8
 	cmp          []tcmp
 	steps        []tstep
+	// entries are catch and finally blocks entered by the exception runner.
+	entries []thandlerEntry
+	entry   int
 
 	g      graph.DiGraph
 	nodes  []tflow
@@ -170,6 +174,8 @@ func takeFlow(n int) *flow {
 	f.start = grow32(f.start, n)
 	f.count = grow32(f.count, n)
 	f.succs = f.succs[:0]
+	f.entries = f.entries[:0]
+	f.entry = 0
 	if cap(f.how) < n {
 		f.how = make([]uint8, n)
 		f.cmp = make([]tcmp, n)
@@ -286,6 +292,9 @@ func (f *flow) structure(t *tree, done []bool) {
 		// The successors, each once, in the order the block found them: the
 		// graph's, which nothing changes.
 		raw := f.succOf(i)
+		if f.how[i] == endCompletion {
+			raw = f.completionSuccessors(i, raw)
+		}
 		if len(raw) > 1 {
 			var u []int32
 			for _, y := range raw {
@@ -309,6 +318,9 @@ func (f *flow) structure(t *tree, done []bool) {
 		if len(raw) == 0 && f.how[i] != endThrows {
 			st.raw, nd.ret = f.add(nil, -1), true
 		}
+		if f.how[i] == endCompletion {
+			st.raw, nd.ret = f.add(f.copyList(raw), -1), true
+		}
 		if blk.jump != 0 || f.how[i] == endFalls {
 			st.end, st.to, st.back, st.pc, st.depth = nil, int(raw[0]), blk.back, blk.pc, blk.depth
 		}
@@ -322,9 +334,9 @@ func (f *flow) structure(t *tree, done []bool) {
 			f.preds[y]++
 		}
 	}
-	// runTree enters the first block.
-	f.preds[0]++
-	level, parent, header, ok := f.g.LoopNest(0)
+	// The runner enters this component at its first block.
+	f.preds[f.entry]++
+	level, parent, header, ok := f.g.LoopNest(int32(f.entry))
 	if !ok {
 		// Not reducible -- which compiled JavaScript never is: the blocks
 		// are left to runTree, as they were.
@@ -387,7 +399,7 @@ func (f *flow) structure(t *tree, done []bool) {
 	if flowKept != nil {
 		flowKept(kept)
 	}
-	if live == 1 && kept == 0 && len(nodes[0].succ) == 0 {
+	if live == 1 && kept == 0 && len(nodes[0].succ) == 0 && len(f.entries) == 0 {
 		// The whole function is one structure, which runTree runs as
 		// straight-line code.
 		t.blocks = t.blocks[:1:1]
