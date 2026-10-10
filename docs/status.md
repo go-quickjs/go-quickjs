@@ -102,10 +102,12 @@ Known semantic gap, covered by a test that documents it:
 ## Conformance
 
 The engine is tested against test262. The suite is not vendored; point the
-runner at a checkout:
+runner at a checkout -- of the commit the counts below were measured at, to
+reproduce them:
 
 ```
-git clone --depth 1 https://github.com/tc39/test262 /tmp/test262
+git clone https://github.com/tc39/test262 /tmp/test262
+git -C /tmp/test262 checkout 2e0a56762801e275a9fdf96dc49d90ba0cddcf63
 TEST262_DIR=/tmp/test262 go test ./conformance -timeout 120m
 ```
 
@@ -117,10 +119,12 @@ rather than counted against it.
 By default it runs `language`, `built-ins`, `intl402` and `annexB`; `staging`
 holds proposals too early to claim, and `harness` tests the suite's own helpers.
 
-Measured coverage, as of the most recent run: 99,599 variants pass and none
-fail. The other 342 are skipped rather than counted: a test tagged with a
-feature the engine does not implement, or one that asks the host for a second
-realm or an agent, is testing something that was never claimed.
+Measured coverage, as of the most recent run, on test262 commit
+[`2e0a56762801e275a9fdf96dc49d90ba0cddcf63`](https://github.com/tc39/test262/commit/2e0a56762801e275a9fdf96dc49d90ba0cddcf63)
+of October 7, 2026: 99,637 variants pass and none fail. The other 342 are
+skipped rather than counted: a test tagged with a feature the engine does not
+implement, or one that asks the host for a second realm or an agent, is
+testing something that was never claimed.
 
 Where test262 and current engines disagree, the engine follows the standard
 and a test records the difference. Two of Annex B's block-function rules are
