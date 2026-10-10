@@ -152,7 +152,10 @@ and Richards and DeltaBlue by more, up to a tenth. To reproduce them, run
 QuickJS's own micro-benchmarks, [`tests/microbench.js`](https://github.com/bellard/quickjs/blob/master/tests/microbench.js),
 time one operation each, in nanoseconds. Each test was given the work QuickJS
 takes about 150 ms for, both engines ran that same work in fresh processes at
-go-quickjs `8d54f7e`, and the figure is the faster of two runs.
+go-quickjs `8d54f7e`, and the figure is the faster of two runs. The runners'
+micro mode does this, from a copy of the file kept in
+`internal/v8bench`: run `go run ./internal/cmd/v8bench -mode micro -n 1`
+and the `external` runner with `-engine qjs -mode micro -n 1`, twice each.
 `sort_bench` is left out: it reports a run's time over its fastest sort, not
 the time of an operation. Over the other 71 tests go-quickjs takes 0.97 times
 QuickJS's time by the geometric mean: it is slower on 36, faster on 33, and

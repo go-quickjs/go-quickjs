@@ -1,12 +1,13 @@
-// Command goja runs the V8 version 7 benchmark suite on goja, the same way
-// internal/cmd/v8bench runs it on go-quickjs, for comparing the two; see
-// package v8bench for its modes.
+// Command goja runs the V8 version 7 benchmark suite, and QuickJS's
+// micro-benchmarks, on goja, the same way internal/cmd/v8bench runs them on
+// go-quickjs, for comparing the two; see package v8bench for its modes.
 //
 // It is a module of its own, so that go-quickjs does not depend on goja: it
 // is run from its directory, and builds against the go-quickjs beside it.
 //
 //	cd internal/cmd/v8bench/goja
 //	go run . -dir /tmp/v8-v7 -fetch -mode fixed
+//	go run . -mode micro
 package main
 
 import (
@@ -23,17 +24,20 @@ func (engine) Compile(name, src string) error {
 	return err
 }
 
-func (engine) NewRuntime(print func(string), load func(string) (string, error)) (v8bench.Runtime, error) {
+func (engine) NewRuntime(host v8bench.Host) (v8bench.Runtime, error) {
 	vm := goja.New()
 	if err := vm.Set("print", func(call goja.FunctionCall) goja.Value {
-		print(call.Argument(0).String())
+		host.Print(call.Argument(0).String())
 		return goja.Undefined()
 	}); err != nil {
 		return nil, err
 	}
+	if err := vm.Set("now", host.Now); err != nil {
+		return nil, err
+	}
 	err := vm.Set("load", func(call goja.FunctionCall) goja.Value {
 		name := call.Argument(0).String()
-		src, err := load(name)
+		src, err := host.Load(name)
 		if err == nil {
 			_, err = vm.RunScript(name, src)
 		}

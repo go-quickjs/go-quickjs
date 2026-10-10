@@ -1,14 +1,18 @@
 // Package v8bench runs the V8 version 7 benchmark suite, as AreWeFastYet
-// publishes it, on a JavaScript engine, for measuring and profiling it.
+// publishes it, and QuickJS's micro-benchmarks on a JavaScript engine, for
+// measuring and profiling it.
 //
 // It knows nothing of any engine: a command gives it an Engine and calls
 // Main. internal/cmd/v8bench runs the suite on go-quickjs, and
 // internal/cmd/v8bench/goja, a module of its own so that go-quickjs does not
 // depend on goja, runs it on goja, for comparison. Both report the same way.
 //
-// The suite is not part of this repository. -fetch downloads it, at the
-// revision the figures in docs/benchmarks.md were measured at, into -dir.
-// Three modes measure three things:
+// The V8 suite is not part of this repository: some of its files are under
+// licenses this one's is not. -fetch downloads it, at the revision the
+// figures in docs/benchmarks.md were measured at, into -dir. QuickJS's
+// tests/microbench.js is: microbench.js is QuickJS 2026-06-04's (92a3d4d),
+// as it is there, under its MIT license, and is built into the package.
+// Four modes measure four things:
 //
 //   - score runs the suite as its own run.js does, and prints its scores:
 //     each benchmark runs for at least a second, so the work done depends
@@ -18,6 +22,10 @@
 //     which is what compares one build, or one engine, with another.
 //   - compile parses and compiles the suite's sources -n times, which is
 //     the parser and the compiler alone.
+//   - micro runs QuickJS's micro-benchmarks, each test -n times with the
+//     same work, and prints the fastest time of one operation, in
+//     nanoseconds (see micro.go). It needs no -dir; -suite names tests by
+//     the start of their names.
 //
 // -cpuprofile and -memprofile write profiles for go tool pprof.
 package v8bench
@@ -39,10 +47,20 @@ import (
 type Engine interface {
 	// Compile parses and compiles a script without running it.
 	Compile(name, src string) error
-	// NewRuntime makes a runtime with the two functions the suite calls:
-	// print, which writes a line, and load, which runs another of the
-	// suite's files by its name, whose source load reads.
-	NewRuntime(print func(string), load func(name string) (string, error)) (Runtime, error)
+	// NewRuntime makes a runtime with the host's functions as globals of
+	// their names: print, load and now.
+	NewRuntime(host Host) (Runtime, error)
+}
+
+// Host is the functions a runtime is given.
+type Host struct {
+	// Print writes a line.
+	Print func(string)
+	// Load reads one of the suite's files by its name, for load to run.
+	Load func(name string) (string, error)
+	// Now is the time in milliseconds, to the nanosecond, from a fixed
+	// point: what microbench.js's clock, performance.now, reads.
+	Now func() float64
 }
 
 // A Runtime runs scripts.
@@ -66,28 +84,29 @@ var files = []string{"base.js", "richards.js", "deltablue.js", "crypto.js", "ray
 func Main(name string, e Engine) {
 	dir := flag.String("dir", "", "the directory the suite is in")
 	fetch := flag.Bool("fetch", false, "download the suite into -dir first")
-	mode := flag.String("mode", "fixed", "score, fixed or compile")
-	n := flag.Int("n", 5, "runs of each benchmark (fixed), or compiles of the suite (compile)")
-	only := flag.String("suite", "", "comma-separated suites to run, all by default (fixed)")
+	mode := flag.String("mode", "fixed", "score, fixed, compile or micro")
+	n := flag.Int("n", 5, "runs of each benchmark (fixed, micro), or compiles of the suite (compile)")
+	only := flag.String("suite", "", "comma-separated suites to run, all by default (fixed); tests by the start of their names (micro)")
 	cpu := flag.String("cpuprofile", "", "write a CPU profile to this file")
 	mem := flag.String("memprofile", "", "write an allocation profile to this file")
 	flag.Parse()
-	if *dir == "" {
-		fail(fmt.Errorf("-dir is required"))
-	}
-	if *fetch {
-		if err := download(*dir); err != nil {
-			fail(err)
-		}
-	}
-
 	src := map[string]string{}
-	for _, f := range append(files, "run.js") {
-		b, err := os.ReadFile(filepath.Join(*dir, f))
-		if err != nil {
-			fail(fmt.Errorf("%w (run with -fetch to download the suite)", err))
+	if *mode != "micro" {
+		if *dir == "" {
+			fail(fmt.Errorf("-dir is required"))
 		}
-		src[f] = string(b)
+		if *fetch {
+			if err := download(*dir); err != nil {
+				fail(err)
+			}
+		}
+		for _, f := range append(files, "run.js") {
+			b, err := os.ReadFile(filepath.Join(*dir, f))
+			if err != nil {
+				fail(fmt.Errorf("%w (run with -fetch to download the suite)", err))
+			}
+			src[f] = string(b)
+		}
 	}
 	if *mem != "" {
 		runtime.MemProfileRate = 64 * 1024
@@ -126,6 +145,8 @@ func Main(name string, e Engine) {
 		}
 	case "fixed":
 		rt = runFixed(e, src, *n, *only)
+	case "micro":
+		rt = runMicro(e, *n, *only)
 	default:
 		fail(fmt.Errorf("unknown mode %q", *mode))
 	}
@@ -198,14 +219,21 @@ func report(name string, d time.Duration, m0, m1 *runtime.MemStats) {
 		float64(d.Microseconds())/1000, float64(m1.TotalAlloc-m0.TotalAlloc)/(1<<20), m1.Mallocs-m0.Mallocs)
 }
 
-// newRuntime is a runtime with the print and load the suite expects.
+// clockStart is the point the host's clock counts from.
+var clockStart = time.Now()
+
+// newRuntime is a runtime with the print, load and now the suite expects.
 func newRuntime(e Engine, src map[string]string) Runtime {
-	rt, err := e.NewRuntime(func(s string) { fmt.Println(s) }, func(name string) (string, error) {
-		s, ok := src[name]
-		if !ok {
-			return "", fmt.Errorf("no such file %q", name)
-		}
-		return s, nil
+	rt, err := e.NewRuntime(Host{
+		Print: func(s string) { fmt.Println(s) },
+		Load: func(name string) (string, error) {
+			s, ok := src[name]
+			if !ok {
+				return "", fmt.Errorf("no such file %q", name)
+			}
+			return s, nil
+		},
+		Now: func() float64 { return float64(time.Since(clockStart).Nanoseconds()) / 1e6 },
 	})
 	if err != nil {
 		fail(err)

@@ -203,6 +203,18 @@ write profiles.
 go run ./internal/cmd/v8bench -dir /tmp/v8-v7 -fetch -mode fixed -n 5
 ```
 
+`-mode micro` runs QuickJS's micro-benchmarks, `internal/v8bench/microbench.js`
+(QuickJS's `tests/microbench.js`, kept as it is there): each test is given
+the same work every run -- what QuickJS takes about 150 ms for, the work
+the comparison with QuickJS in docs/benchmarks.md is made with -- `-n`
+times, and the fastest time of one operation is printed. It needs no
+`-dir`; `-suite` names tests by the start of their names. Every runner
+below has it, so the four engines run the same driver.
+
+```sh
+go run ./internal/cmd/v8bench -mode micro -n 1 -suite empty_loop,func_call
+```
+
 To compare two builds, use `internal/cmd/v8bench/placements`: one build of
 each side compares where the linker put package vm's hot code as much as
 the code. `build` makes eight builds of the working tree, each placing

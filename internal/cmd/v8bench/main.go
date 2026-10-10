@@ -1,8 +1,10 @@
-// Command v8bench runs the V8 version 7 benchmark suite on go-quickjs, for
-// measuring and profiling the engine; see package v8bench for its modes.
-// internal/cmd/v8bench/goja runs the same suite, the same way, on goja.
+// Command v8bench runs the V8 version 7 benchmark suite, and QuickJS's
+// micro-benchmarks, on go-quickjs, for measuring and profiling the engine;
+// see package v8bench for its modes. internal/cmd/v8bench/goja runs the same
+// suite, the same way, on goja.
 //
 //	go run ./internal/cmd/v8bench -dir /tmp/v8-v7 -fetch -mode fixed
+//	go run ./internal/cmd/v8bench -mode micro -suite empty_loop,func_call
 //
 // V8BENCH_STACKPAD=n runs every script n frames of 64 bytes deeper in the
 // goroutine's stack, which moves where the engine's frames and spill slots
@@ -27,13 +29,16 @@ func (engine) Compile(name, src string) error {
 	return err
 }
 
-func (engine) NewRuntime(print func(string), load func(string) (string, error)) (v8bench.Runtime, error) {
+func (engine) NewRuntime(host v8bench.Host) (v8bench.Runtime, error) {
 	rt := quickjs.New()
-	if err := rt.Set("print", print); err != nil {
+	if err := rt.Set("print", host.Print); err != nil {
+		return nil, err
+	}
+	if err := rt.Set("now", host.Now); err != nil {
 		return nil, err
 	}
 	err := rt.Set("load", func(r *quickjs.Runtime, name string) error {
-		src, err := load(name)
+		src, err := host.Load(name)
 		if err != nil {
 			return err
 		}
