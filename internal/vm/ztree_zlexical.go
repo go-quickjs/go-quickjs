@@ -18,7 +18,8 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 // code sits after everything else's.
 
 // treeBuildsDeadZone reports whether the tier builds op, one of the
-// instructions of a binding's dead zone or of a parameter list's.
+// instructions of a binding's dead zone or of a parameter list's, or one
+// treeBuildsIter names.
 func treeBuildsDeadZone(op bytecode.Op) bool {
 	switch op {
 	case bytecode.OpPushUninitialized, bytecode.OpAssignConst, bytecode.OpGetLocalCheck, bytecode.OpSetLocalCheck,
@@ -26,10 +27,11 @@ func treeBuildsDeadZone(op bytecode.Op) bool {
 		bytecode.OpParamsToDeadZone, bytecode.OpInitParam, bytecode.OpParamNeedsDefault:
 		return true
 	}
-	return false
+	return treeBuildsIter(op)
 }
 
-// deadZoneOp builds the instructions treeBuildsDeadZone names. The names
+// deadZoneOp builds the instructions treeBuildsDeadZone names, and hands
+// iterOp those treeBuildsIter does. The names
 // and whether a binding is mutable are the function's, which every closure
 // of it shares, as the tree is.
 func (b *tbuilder) deadZoneOp(pc int, in bytecode.Instr) (int, bool) {
@@ -131,7 +133,7 @@ func (b *tbuilder) deadZoneOp(pc int, in bytecode.Instr) (int, bool) {
 	case bytecode.OpParamNeedsDefault:
 		b.push(func(c *tctx) Value { return Bool(int(k) >= len(c.f.args) || c.f.args[k].IsUndefined()) })
 	default:
-		return 0, false
+		return b.iterOp(pc, in)
 	}
 	return 0, true
 }

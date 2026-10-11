@@ -141,17 +141,27 @@ func closeTreeUpvalues(slot uint32) tstmt {
 // the innermost handler in force catches: it goes on to the handler's block
 // as an edge of the graph, without a panic. The node checks that the frame's
 // innermost handler is the one the builder found, and throws as usual if
-// it is not, which runTreeHandlers then catches.
+// it is not, which runTreeHandlers then catches. In a function with for...of
+// loops, the stack's depth at the throw is given, so that the cursors
+// between it and the handler's are closed.
 func (b *tbuilder) throwToHandler(t *tree, bi, pc int, v tval) ([]int, bool) {
 	h := b.handlers[len(b.handlers)-1]
 	b.succ = append(b.succ, h.block)
 	index := b.index
+	top := -1
+	if b.iters {
+		top = b.depth()
+	}
 	t.blocks[bi] = tblock{body: b.takeBody(), next: func(c *tctx) int {
 		e := v(c)
 		c.at(pc)
 		err := c.r.throw(e)
 		if hs := c.f.handlers; len(hs) != 0 && hs[len(hs)-1].pc == h.pc {
-			if _, ok := c.r.unwindToHandler(c.f, c.f.base+hs[len(hs)-1].stackDepth, err); ok {
+			sp := c.f.base + hs[len(hs)-1].stackDepth
+			if top >= 0 {
+				sp = c.f.base + top
+			}
+			if _, ok := c.r.unwindToHandler(c.f, sp, err); ok {
 				return index[c.f.pc]
 			}
 		}
@@ -210,21 +220,25 @@ func rethrowTreeNode(pc, depth, fall int, index []int) tnext {
 	}
 }
 
-// handlerTree wraps t, a tree with handlers, in a tree of one block that
-// runs it through runTreeHandlers.
-func handlerTree(t *tree, index []int) *tree {
+// handlerTree wraps t, a tree with handlers or with for...of loops (iters),
+// in a tree of one block that runs it through runTreeHandlers.
+func handlerTree(t *tree, index []int, iters bool) *tree {
 	return &tree{blocks: []tblock{{
-		body: []tstmt{func(c *tctx) { c.runTreeHandlers(t, index) }},
+		body: []tstmt{func(c *tctx) { c.runTreeHandlers(t, index, iters) }},
 		next: func(*tctx) int { return -1 },
 	}}}
 }
 
 // runTreeHandlers runs t from its first block, and from each handler an
 // exception enters, until it returns or an exception no handler catches
-// leaves it.
-func (c *tctx) runTreeHandlers(t *tree, index []int) {
+// leaves it. With iters, the function has for...of loops, whose cursors an
+// exception closes (see ztree_zof.go).
+func (c *tctx) runTreeHandlers(t *tree, index []int, iters bool) {
 	r := c.r
 	depth, top := r.frameDepth, r.stackTop
+	if iters {
+		clear(c.stack)
+	}
 	for b := 0; ; {
 		err := c.runTreeProtected(t, b)
 		if err == nil {
@@ -235,13 +249,19 @@ func (c *tctx) runTreeHandlers(t *tree, index []int) {
 		// frame, with the stack this frame had.
 		r.unwindTreeFrames(depth)
 		r.stackTop = top
-		// Trees do not build iterator instructions, so only the handler's
-		// saved depth matters; the slots above it are stale.
+		// Without for...of loops only the handler's saved depth matters;
+		// the slots above it are stale. With them, every slot is looked at
+		// for a cursor the exception leaves.
 		sp := c.f.base
-		if hs := c.f.handlers; len(hs) != 0 {
+		if iters {
+			sp += len(c.stack)
+		} else if hs := c.f.handlers; len(hs) != 0 {
 			sp += hs[len(hs)-1].stackDepth
 		}
 		if _, caught := r.unwindToHandler(c.f, sp, err); !caught {
+			if iters {
+				c.closeTreeIterators(0)
+			}
 			c.throw(err)
 		}
 		b = index[c.f.pc]

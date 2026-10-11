@@ -67,6 +67,8 @@ type tbuilder struct {
 	protected     bool
 	handlers      []thandlerEntry
 	entryHandlers [][]thandlerEntry
+	// iters says the function has a for...of loop (see ztree_zof.go).
+	iters bool
 	// end is where the block being built ends, for an instruction that
 	// takes in those after it.
 	end int
@@ -125,6 +127,9 @@ func buildTree(fn *bytecode.Function) *tree {
 	// nothing to do without one.
 	back := false
 	handlers := false
+	// iters says the function has a for...of loop, whose cursor an
+	// exception leaving it has to close (see ztree_zof.go).
+	iters := false
 	for pc, in := range code {
 		if !treeBuilds(in.Op) {
 			return nil
@@ -136,8 +141,11 @@ func buildTree(fn *bytecode.Function) *tree {
 			}
 			leader[in.A] = true
 			handlers = true
+		case bytecode.OpForOfStart:
+			iters = true
 		case bytecode.OpJump, bytecode.OpJumpIfFalse, bytecode.OpJumpIfTrue, bytecode.OpJumpIfCmpFalse,
-			bytecode.OpJumpIfFalseKeep, bytecode.OpJumpIfTrueKeep, bytecode.OpJumpIfNullish, bytecode.OpJumpIfNotNullish:
+			bytecode.OpJumpIfFalseKeep, bytecode.OpJumpIfTrueKeep, bytecode.OpJumpIfNullish, bytecode.OpJumpIfNotNullish,
+			bytecode.OpIterNextOrJump:
 			if int(in.A) > len(code) {
 				return nil
 			}
@@ -172,7 +180,7 @@ func buildTree(fn *bytecode.Function) *tree {
 	if back {
 		flow = takeFlow(len(starts))
 	}
-	b := &tbuilder{fn: fn, index: index, depths: depth, protected: handlers}
+	b := &tbuilder{fn: fn, index: index, depths: depth, protected: handlers, iters: iters}
 	if handlers {
 		b.entryHandlers = make([][]thandlerEntry, len(starts))
 	}
@@ -243,8 +251,8 @@ func buildTree(fn *bytecode.Function) *tree {
 			blk.next = to
 		}
 	}
-	if handlers {
-		return handlerTree(t, index)
+	if handlers || iters {
+		return handlerTree(t, index, iters)
 	}
 	return t
 }
@@ -302,6 +310,8 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 		switch in.Op {
 		case bytecode.OpRethrow:
 			return b.rethrow(t, bi, pc)
+		case bytecode.OpIterNextOrJump:
+			return b.iterNextOrJump(t, bi, pc, in)
 		case bytecode.OpJump:
 			if !b.spill() {
 				return nil, false
