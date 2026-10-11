@@ -36,9 +36,8 @@ import (
 // has a wrapper block that catches one and resumes at the handler; other
 // trees let it propagate to the caller or the function's runTree boundary.
 //
-// A function with an instruction the tier does not build -- yield*, for
-// await, with, anything rarer than a loop's -- runs in the interpreter as
-// before. A generator's or an async function's tree is run by its
+// A function with an instruction the tier does not build -- with, anything
+// rarer than a loop's -- runs in the interpreter as before. A generator's or an async function's tree is run by its
 // resumptions (see ztree_zyield.go), never by runTree.
 
 // tctx is a running tree's state, which every node is given.

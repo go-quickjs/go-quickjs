@@ -26,8 +26,9 @@ import (
 // The parameter prologue, before end_params, still runs in the interpreter,
 // when the generator is made.
 //
-// What a tree does not build -- yield*, for await -- leaves the function to
-// the interpreter as before.
+// yield* suspends as yield does, its resumption pushing the kind of
+// resumption as well as the value sent in, and for await awaits as await
+// does (see ztree_zyieldstar.go).
 //
 // Its functions are variables, each assigned a closure in init, rather
 // than functions or methods: Go lays out all of a package's functions
@@ -46,17 +47,19 @@ type tgen struct {
 
 var (
 	// treeBuildsSuspend reports whether the tier builds op: end_params, or
-	// yield or await, which end a block (see suspendEnd).
+	// yield, yield* or await, which end a block (see suspendEnd), or one
+	// treeBuildsDelegate names.
 	treeBuildsSuspend func(op bytecode.Op) bool
 
 	// suspendOp builds end_params, which a tree runs as nothing: what comes
 	// before it is the parameter prologue, which the interpreter runs when
-	// the generator is made.
+	// the generator is made. It hands delegateOp the rest.
 	suspendOp func(b *tbuilder, pc int, in bytecode.Instr) (int, bool)
 
-	// suspendEnd ends block bi with yield or await: the value is handed out
-	// and the frame suspended, to be resumed at the block after with the
-	// value sent in where the yielded one was.
+	// suspendEnd ends block bi with yield, yield* or await: the value is
+	// handed out and the frame suspended, to be resumed at the block after
+	// with the value sent in where the yielded one was -- and for yield*,
+	// the kind of resumption above it.
 	suspendEnd func(b *tbuilder, t *tree, bi, pc int, in bytecode.Instr) ([]int, bool)
 
 	// suspendTree makes t, a generator's or an async function's tree, one a
@@ -82,14 +85,17 @@ var (
 func init() {
 	treeBuildsSuspend = func(op bytecode.Op) bool {
 		switch op {
-		case bytecode.OpEndParams, bytecode.OpYield, bytecode.OpAwait:
+		case bytecode.OpEndParams, bytecode.OpYield, bytecode.OpAwait, bytecode.OpYieldStar:
 			return true
 		}
-		return false
+		return treeBuildsDelegate(op)
 	}
 
 	suspendOp = func(b *tbuilder, pc int, in bytecode.Instr) (int, bool) {
-		return 0, in.Op == bytecode.OpEndParams
+		if in.Op == bytecode.OpEndParams {
+			return 0, true
+		}
+		return delegateOp(b, pc, in)
 	}
 
 	suspendEnd = func(b *tbuilder, t *tree, bi, pc int, in bytecode.Instr) ([]int, bool) {
@@ -102,8 +108,13 @@ func init() {
 		}
 		d := b.depth()
 		// The block after is entered with the value sent in where the
-		// yielded one was.
-		s, ok := b.target(pc+1, d+1)
+		// yielded one was, and a yield*'s with the kind of resumption above
+		// it (see runDelegating).
+		sent := 1
+		if in.Op == bytecode.OpYieldStar {
+			sent = 2
+		}
+		s, ok := b.target(pc+1, d+sent)
 		if !ok {
 			return nil, false
 		}
@@ -115,13 +126,15 @@ func init() {
 			b.entryHandlers[s] = append([]thandlerEntry{}, b.handlers...)
 		}
 		await := in.Op == bytecode.OpAwait
+		delegate := in.Op == bytecode.OpYieldStar
+		raw := delegate && in.A == 1
 		t.blocks[bi] = tblock{body: b.takeBody(), next: func(c *tctx) int {
 			x := v(c)
 			// The operand is popped before the depth is recorded, so that
 			// the saved stack holds only what is still live.
 			c.f.pc = uint32(pc + 1)
 			c.f.savedSP = c.f.base + d
-			c.r.treeSig = suspendSignal{value: x, await: await}
+			c.r.treeSig = suspendSignal{value: x, await: await, delegate: delegate, raw: raw}
 			c.r.treeSuspend = &c.r.treeSig
 			return -1
 		}}

@@ -513,9 +513,10 @@ func (r *Runtime) resumeFrame(g *generator, sent Value, mode resumeMode) (resume
 }
 
 // runDelegating resumes a generator suspended inside a `yield*`, where the
-// value and the kind of resumption are already on the operand stack.
+// value and the kind of resumption are already on the operand stack, as its
+// tree where it has one.
 func (r *Runtime) runDelegating(g *generator, f *frame, base, sp int) (resumeResult, error) {
-	v, err := r.executeAt(f, sp, nil)
+	v, err := runGenerator(r, f, sp, nil)
 	return r.finishResume(g, f, base, v, err)
 }
 

@@ -141,19 +141,25 @@ func buildTree(fn *bytecode.Function) *tree {
 			}
 			leader[in.A] = true
 			handlers = true
-		case bytecode.OpForOfStart:
+		case bytecode.OpForOfStart, bytecode.OpForAwaitOfStart:
 			iters = true
 		case bytecode.OpJump, bytecode.OpJumpIfFalse, bytecode.OpJumpIfTrue, bytecode.OpJumpIfCmpFalse,
 			bytecode.OpJumpIfFalseKeep, bytecode.OpJumpIfTrueKeep, bytecode.OpJumpIfNullish, bytecode.OpJumpIfNotNullish,
-			bytecode.OpIterNextOrJump:
+			bytecode.OpIterNextOrJump, bytecode.OpIterResultOrJump, bytecode.OpIterUnpackDelegate:
 			if int(in.A) > len(code) {
 				return nil
 			}
 			leader[in.A] = true
 			leader[pc+1] = true
 			back = back || int(in.A) <= pc
+		case bytecode.OpIterResume:
+			if int(in.B) > len(code) {
+				return nil
+			}
+			leader[in.B] = true
+			leader[pc+1] = true
 		case bytecode.OpReturn, bytecode.OpReturnUndef, bytecode.OpThrow, bytecode.OpRethrow,
-			bytecode.OpEndParams, bytecode.OpYield, bytecode.OpAwait:
+			bytecode.OpEndParams, bytecode.OpYield, bytecode.OpAwait, bytecode.OpYieldStar:
 			leader[pc+1] = true
 		}
 	}
@@ -316,8 +322,10 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 			return b.rethrow(t, bi, pc)
 		case bytecode.OpIterNextOrJump:
 			return iterNextOrJump(b, t, bi, pc, in)
-		case bytecode.OpYield, bytecode.OpAwait:
+		case bytecode.OpYield, bytecode.OpAwait, bytecode.OpYieldStar:
 			return suspendEnd(b, t, bi, pc, in)
+		case bytecode.OpIterResume, bytecode.OpIterUnpackDelegate, bytecode.OpIterResultOrJump:
+			return delegateEnd(b, t, bi, pc, in)
 		case bytecode.OpJump:
 			if !b.spill() {
 				return nil, false
