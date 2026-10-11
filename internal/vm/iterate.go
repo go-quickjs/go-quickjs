@@ -407,8 +407,8 @@ func (r *Runtime) stepIter(iter, next Value) (Value, bool, error) {
 					var got resumeResult
 					var err error
 					ran := false
-					if g.state == genSuspendedYield && !g.delegating {
-						got, ran, err = resumeTree(r, g, Undefined)
+					if t := g.nextTree(); t != nil {
+						got, ran, err = resumeTree(r, g, t, Undefined)
 					}
 					if !ran {
 						got, err = r.resumeFull(g, Undefined, resumeNext)

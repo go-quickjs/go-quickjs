@@ -86,3 +86,49 @@ var s = ''; try { for (const v of f()) s += v } catch (e) { s += e.name } s`, wa
 		})
 	}
 }
+
+// TestGeneratorCreation pins what making a generator or an async function
+// binds, in both tiers, now that a prologue of end_params alone is not run
+// and the function's prototype is read as its own property: the prototype
+// replaced by an object or by null, parameters missing, repeated or
+// reassigned, no parameters, the property's attributes, and an async
+// function's arguments. The answers are Node's.
+func TestGeneratorCreation(t *testing.T) {
+	defer SetTreeTier(true)
+	src := `var out = [];
+function* g(a, b) { yield a + b }
+g.prototype = null;
+out.push(Object.getPrototypeOf(g(1, 2)) === Object.getPrototypeOf(function* () {}).prototype, g(1, 2).next().value);
+g.prototype = { hi() { return 'hi' } };
+out.push(g().hi(), typeof g(1).next);
+function* d(a, a) { yield a }
+out.push(d(1, 2).next().value);
+function* n() { for (let i = 0; i < 2; i++) yield i }
+out.push([...n()].join(''));
+function* p(a, b) { yield a; a = 5; yield a + b }
+var it = p(1); out.push(it.next().value, String(it.next().value), JSON.stringify(Object.getOwnPropertyDescriptor(p, 'prototype')));
+try { Object.defineProperty(p, 'prototype', { get() { return {} } }) } catch (e) { out.push(e.name) }
+async function af(a, b) { return a + (await b) }
+af(2, 3).then(v => out.push('async ' + v))`
+	const want = `true,3,hi,undefined,2,01,1,NaN,{"value":{},"writable":true,"enumerable":false,"configurable":false},TypeError,async 5`
+	for _, on := range []bool{false, true} {
+		SetTreeTier(on)
+		r := New(Config{})
+		_, err := r.Run(compileForTest(t, src))
+		if err == nil {
+			err = r.runMicrotasks()
+		}
+		var v Value
+		if err == nil {
+			v, err = r.Run(compileForTest(t, "out.join()"))
+		}
+		if err != nil {
+			r.Close()
+			t.Fatalf("tree %v: %v", on, err)
+		}
+		if got, err := r.ToString(v); err != nil || got.Go() != want {
+			t.Errorf("tree %v: got %v, %v\nwant %s", on, got, err, want)
+		}
+		r.Close()
+	}
+}

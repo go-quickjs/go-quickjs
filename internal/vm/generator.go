@@ -1,6 +1,10 @@
 package vm
 
-import "github.com/go-quickjs/go-quickjs/internal/bytecode"
+import (
+	"sync/atomic"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+)
 
 // Generators.
 //
@@ -218,9 +222,15 @@ func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Ob
 	}
 	// The instance inherits from the function's own prototype object, which
 	// inherits in turn from the shared one -- so a script can put something on
-	// `g.prototype` and every generator g makes will have it.
+	// `g.prototype` and every generator g makes will have it. A generator
+	// function's is a data property it cannot lose or make an accessor, which
+	// is read where it is.
 	if callee != nil {
-		if custom, err := r.getValueProp(Obj(callee), atomPrototype); err == nil &&
+		if p := callee.getOwn(atomPrototype); p != nil && p.flags&(propAccessor|propPrivate|propDeleted) == 0 {
+			if p.value.IsObject() {
+				proto = p.value.Object()
+			}
+		} else if custom, err := r.getValueProp(Obj(callee), atomPrototype); err == nil &&
 			custom.IsObject() {
 			proto = custom.Object()
 		}
@@ -254,6 +264,14 @@ func (r *Runtime) bindGeneratorParams(g *generator) error {
 	base := r.stackTop
 	if base+fn.MaxStack > len(r.stack) {
 		return r.throwRangeError("maximum call stack size exceeded")
+	}
+	if fn.ParamEnd == 1 && fn.Code[0].Op == bytecode.OpEndParams && r.debug == nil && r.stopped == nil {
+		// A prologue of end_params alone -- parameters without defaults or
+		// patterns -- binds nothing newGenerator has not: the body begins
+		// after it. A debugger is left to see it run, and a stopped runtime
+		// to refuse to.
+		g.pc = 1
+		return nil
 	}
 	r.stackTop = base + fn.MaxStack
 	r.stackHigh = max(r.stackHigh, r.stackTop)
@@ -346,12 +364,27 @@ func (r *Runtime) resume(g *generator, sent Value, mode resumeMode) (Value, bool
 	return res.value, res.done, err
 }
 
+// nextTree is g's tree, where next() on g can be made by resumeTree: g has
+// not finished and is not running, is not delegating to another iterator,
+// and its body is a tree. It is nil anywhere else.
+func (g *generator) nextTree() *tree {
+	if g.state > genSuspendedYield || g.delegating {
+		return nil
+	}
+	if t := (*tree)(atomic.LoadPointer(&g.cl.fn.VMCode)); t != nil && t.gen != nil {
+		return t
+	}
+	return nil
+}
+
 // resumeFull runs a generator and reports what kind of suspension stopped it.
 func (r *Runtime) resumeFull(g *generator, sent Value, mode resumeMode) (resumeResult, error) {
-	if g.state == genSuspendedYield && mode == resumeNext && !g.delegating {
+	if mode == resumeNext {
 		// The common case, a body its tree runs, is resumed there.
-		if res, ran, err := resumeTree(r, g, sent); ran {
-			return res, err
+		if t := g.nextTree(); t != nil {
+			if res, ran, err := resumeTree(r, g, t, sent); ran {
+				return res, err
+			}
 		}
 	}
 	switch g.state {

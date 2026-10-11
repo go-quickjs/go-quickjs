@@ -1,7 +1,5 @@
 package vm
 
-import "sync/atomic"
-
 // The common resumption of a generator, an async function or an async
 // generator whose body is a tree: next() on one suspended at a yield, or an
 // await's promise settling, where nothing is injected at the suspension
@@ -14,22 +12,21 @@ import "sync/atomic"
 // so that it is laid out after the closures already there.
 
 var (
-	// resumeTree resumes g, suspended at a yield or an await in its tree,
-	// with sent as that expression's value, and runs it to its next
-	// suspension or its end, as resumeFull(g, sent, resumeNext) does. It
-	// reports false, having done nothing, where resumeFull's general path
-	// is needed: the body has no tree, runs in another realm, or cannot be
-	// given a frame, or the runtime has been stopped.
-	resumeTree func(r *Runtime, g *generator, sent Value) (resumeResult, bool, error)
+	// resumeTree resumes g, not yet started or suspended at a yield or an
+	// await, in t, its tree (see generator.nextTree), with sent as that
+	// expression's value, and runs it to its next suspension or its end,
+	// as resumeFull(g, sent, resumeNext) does. It reports false, having
+	// done nothing, where resumeFull's general path is needed: the body
+	// runs in another realm or cannot be given a frame, or the runtime has
+	// been stopped.
+	resumeTree func(r *Runtime, g *generator, t *tree, sent Value) (resumeResult, bool, error)
 )
 
 func init() {
-	resumeTree = func(r *Runtime, g *generator, sent Value) (resumeResult, bool, error) {
+	resumeTree = func(r *Runtime, g *generator, t *tree, sent Value) (resumeResult, bool, error) {
 		cl := g.cl
 		fn := cl.fn
-		t := (*tree)(atomic.LoadPointer(&fn.VMCode))
-		if t == nil || t.gen == nil || (cl.realm != nil && cl.realm != r.Realm) ||
-			r.stopped != nil || r.frameDepth >= r.maxFrames {
+		if (cl.realm != nil && cl.realm != r.Realm) || r.stopped != nil || r.frameDepth >= r.maxFrames {
 			return resumeResult{}, false, nil
 		}
 		base := r.stackTop
@@ -41,14 +38,17 @@ func init() {
 		r.stackHigh = max(r.stackHigh, top)
 
 		// The operand stack as it was at the suspension, and on it the
-		// value sent in, which is the yield's or the await's.
+		// value sent in, which is the yield's or the await's. What starts
+		// the body is sent nowhere.
 		sp := base
 		if len(g.stack) != 0 {
 			copy(r.stack[base:], g.stack)
 			sp += len(g.stack)
 		}
-		r.stack[sp] = sent
-		sp++
+		if g.started {
+			r.stack[sp] = sent
+			sp++
+		}
 
 		f := r.pushFrame()
 		f.cl = cl
@@ -99,6 +99,7 @@ func init() {
 		g.withScopes = f.withScopes
 		g.delegating = s.delegate
 		g.state = genSuspendedYield
+		g.started = true
 		f.detachSuspended()
 		r.frameDepth--
 		r.stackTop = base
