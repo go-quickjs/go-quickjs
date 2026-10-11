@@ -3913,6 +3913,15 @@ func (r *Runtime) add(a, b Value) (Value, error) {
 			return v, nil
 		}
 	}
+	if a.IsString() && b.IsString() {
+		// Two strings, as most string building is: what toPrimitive and
+		// toString would hand back as they are.
+		s, err := r.concat(a.String(), b.String())
+		if err != nil {
+			return Undefined, err
+		}
+		return Str(s), nil
+	}
 	pa, err := r.toPrimitive(a, hintDefault)
 	if err != nil {
 		return Undefined, err

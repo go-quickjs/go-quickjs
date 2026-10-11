@@ -1548,6 +1548,13 @@ func bitwiseImmNode(op bytecode.Op, x tval, k int32, pc int) tval {
 
 // arithSlow is an arithmetic operator on what is not two numbers.
 func (c *tctx) arithSlow(op bytecode.Op, a, b Value, pc int) Value {
+	if a.isShortBig() && b.isShortBig() {
+		// What add and arith would answer first, without them: a loop over
+		// BigInts then runs two functions fewer.
+		if v, ok := shortArith(op, a, b); ok {
+			return v
+		}
+	}
 	c.at(pc)
 	var v Value
 	var err error
