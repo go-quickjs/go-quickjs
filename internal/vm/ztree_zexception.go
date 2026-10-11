@@ -114,7 +114,7 @@ func (b *tbuilder) exceptionOp(pc int, in bytecode.Instr) (int, bool) {
 	case bytecode.OpCloseUpvalues:
 		return 0, b.stmt(closeTreeUpvalues(in.A))
 	default:
-		return b.deadZoneOp(pc, in)
+		return deadZoneOp(b, pc, in)
 	}
 	return 0, true
 }
@@ -260,7 +260,7 @@ func (c *tctx) runTreeHandlers(t *tree, index []int, iters bool) {
 		}
 		if _, caught := r.unwindToHandler(c.f, sp, err); !caught {
 			if iters {
-				c.closeTreeIterators(0)
+				closeTreeIterators(c, 0)
 			}
 			c.throw(err)
 		}

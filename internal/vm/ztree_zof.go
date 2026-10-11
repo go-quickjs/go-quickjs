@@ -25,129 +25,146 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 // so that a cursor it finds there is one of its own, which a loop that is
 // over has marked done.
 //
-// It is in the package's last file, after ztree_zlexical.go, so that its
-// code sits after everything else's.
+// Its functions are variables, each assigned a closure in init, rather
+// than functions or methods: Go lays out all of a package's functions
+// before any of its closures, so code added here as functions would sit
+// between the interpreter's hot functions and the tree nodes' hot
+// closures, and move one against the other, where a closure is laid out
+// after every closure already there (see AGENTS.md).
+var (
+	// treeBuildsIter reports whether the tier builds op, one of a loop's or a
+	// destructuring pattern's iterator instructions, or one treeBuildsOps
+	// names.
+	treeBuildsIter func(op bytecode.Op) bool
 
-// treeBuildsIter reports whether the tier builds op, one of a loop's or a
-// destructuring pattern's iterator instructions.
-func treeBuildsIter(op bytecode.Op) bool {
-	switch op {
-	case bytecode.OpForOfStart, bytecode.OpForInStart, bytecode.OpIterNextOrJump, bytecode.OpIterClose,
-		bytecode.OpIterStep, bytecode.OpIterRest, bytecode.OpIterCloseNormal:
-		return true
+	// iterOp builds the instructions treeBuildsIter names other than
+	// iter_next_or_jump, which ends a block (see iterNextOrJump), and hands
+	// opsOp those treeBuildsOps does. Each runs code, and is a statement:
+	// what it pushes is written to its slot.
+	iterOp func(b *tbuilder, pc int, in bytecode.Instr) (int, bool)
+
+	// iterNextOrJump ends block bi with iter_next_or_jump: the cursor on top of
+	// the stack is stepped, and the block goes on to the next one with the
+	// value pushed, or, once the iterator is done, to where the loop ends with
+	// the cursor still there. A loop's jump is forward; its way back is the
+	// jump at the end of its body.
+	iterNextOrJump func(b *tbuilder, t *tree, bi, pc int, in bytecode.Instr) ([]int, bool)
+
+	// closeTreeIterators closes the for...of cursors in the frame's slots from
+	// slot from up that an exception leaving them abandons, as the
+	// interpreter's unwinding does from the depth it was thrown at. Nothing is
+	// closed once the host has stopped the runtime: a return method is the
+	// script's code.
+	closeTreeIterators func(c *tctx, from int)
+)
+
+func init() {
+	treeBuildsIter = func(op bytecode.Op) bool {
+		switch op {
+		case bytecode.OpForOfStart, bytecode.OpForInStart, bytecode.OpIterNextOrJump, bytecode.OpIterClose,
+			bytecode.OpIterStep, bytecode.OpIterRest, bytecode.OpIterCloseNormal:
+			return true
+		}
+		return treeBuildsOps(op)
 	}
-	return false
-}
 
-// iterOp builds the instructions treeBuildsIter names other than
-// iter_next_or_jump, which ends a block (see iterNextOrJump). Each runs
-// code, and is a statement: what it pushes is written to its slot.
-func (b *tbuilder) iterOp(pc int, in bytecode.Instr) (int, bool) {
-	switch in.Op {
-	case bytecode.OpForOfStart, bytecode.OpForInStart:
-		v := b.pop().tree()
-		if !b.spill() {
-			return 0, false
+	iterOp = func(b *tbuilder, pc int, in bytecode.Instr) (int, bool) {
+		switch in.Op {
+		case bytecode.OpForOfStart, bytecode.OpForInStart:
+			v := b.pop().tree()
+			if !b.spill() {
+				return 0, false
+			}
+			d := b.depth()
+			start := (*Runtime).startForOf
+			if in.Op == bytecode.OpForInStart {
+				start = (*Runtime).startForIn
+			}
+			b.body = append(b.body, func(c *tctx) {
+				x := v(c)
+				c.at(pc)
+				cur, err := start(c.r, x)
+				if err != nil {
+					c.throw(err)
+				}
+				c.stack[d] = cur
+			})
+			b.pushSlot(d)
+		case bytecode.OpIterStep, bytecode.OpIterRest:
+			// The cursor sits A slots below the top: a target's reference may
+			// have been pushed above it.
+			if !b.spill() || int(in.A) >= b.depth() {
+				return 0, false
+			}
+			d := b.depth()
+			at := d - 1 - int(in.A)
+			step := (*Runtime).iterStep
+			if in.Op == bytecode.OpIterRest {
+				step = (*Runtime).iterRest
+			}
+			b.body = append(b.body, func(c *tctx) {
+				c.at(pc)
+				v, err := step(c.r, c.stack[at])
+				if err != nil {
+					c.throw(err)
+				}
+				c.stack[d] = v
+			})
+			b.pushSlot(d)
+		case bytecode.OpIterClose, bytecode.OpIterCloseNormal:
+			// iter_close leaves the cursor for a drop; iter_close_normal takes
+			// it. Leaving a loop or a pattern is not a throw, so a failure in
+			// the iterator's return method is the result.
+			if !b.spill() || b.depth() == 0 {
+				return 0, false
+			}
+			at := b.depth() - 1
+			if in.Op == bytecode.OpIterCloseNormal {
+				b.pop()
+			}
+			b.body = append(b.body, func(c *tctx) {
+				c.at(pc)
+				if err := c.r.iterCloseNormal(c.stack[at]); err != nil {
+					c.throw(err)
+				}
+			})
+		default:
+			return opsOp(b, pc, in)
+		}
+		return 0, true
+	}
+
+	iterNextOrJump = func(b *tbuilder, t *tree, bi, pc int, in bytecode.Instr) ([]int, bool) {
+		if !b.spill() || b.depth() == 0 || int(in.A) <= pc {
+			return nil, false
 		}
 		d := b.depth()
-		start := (*Runtime).startForOf
-		if in.Op == bytecode.OpForInStart {
-			start = (*Runtime).startForIn
+		taken, ok := b.target(int(in.A), d)
+		if !ok {
+			return nil, false
 		}
-		b.body = append(b.body, func(c *tctx) {
-			x := v(c)
+		fall, ok := b.target(pc+1, d+1)
+		if !ok {
+			return nil, false
+		}
+		t.blocks[bi] = tblock{body: b.takeBody(), next: func(c *tctx) int {
 			c.at(pc)
-			cur, err := start(c.r, x)
+			v, more, err := c.r.iterNext(c.stack[d-1])
 			if err != nil {
 				c.throw(err)
 			}
-			c.stack[d] = cur
-		})
-		b.pushSlot(d)
-	case bytecode.OpIterStep, bytecode.OpIterRest:
-		// The cursor sits A slots below the top: a target's reference may
-		// have been pushed above it.
-		if !b.spill() || int(in.A) >= b.depth() {
-			return 0, false
-		}
-		d := b.depth()
-		at := d - 1 - int(in.A)
-		step := (*Runtime).iterStep
-		if in.Op == bytecode.OpIterRest {
-			step = (*Runtime).iterRest
-		}
-		b.body = append(b.body, func(c *tctx) {
-			c.at(pc)
-			v, err := step(c.r, c.stack[at])
-			if err != nil {
-				c.throw(err)
+			if !more {
+				return taken
 			}
 			c.stack[d] = v
-		})
-		b.pushSlot(d)
-	case bytecode.OpIterClose, bytecode.OpIterCloseNormal:
-		// iter_close leaves the cursor for a drop; iter_close_normal takes
-		// it. Leaving a loop or a pattern is not a throw, so a failure in
-		// the iterator's return method is the result.
-		if !b.spill() || b.depth() == 0 {
-			return 0, false
-		}
-		at := b.depth() - 1
-		if in.Op == bytecode.OpIterCloseNormal {
-			b.pop()
-		}
-		b.body = append(b.body, func(c *tctx) {
-			c.at(pc)
-			if err := c.r.iterCloseNormal(c.stack[at]); err != nil {
-				c.throw(err)
-			}
-		})
-	default:
-		return 0, false
+			return fall
+		}}
+		return b.succ, true
 	}
-	return 0, true
-}
 
-// iterNextOrJump ends block bi with iter_next_or_jump: the cursor on top of
-// the stack is stepped, and the block goes on to the next one with the
-// value pushed, or, once the iterator is done, to where the loop ends with
-// the cursor still there. A loop's jump is forward; its way back is the
-// jump at the end of its body.
-func (b *tbuilder) iterNextOrJump(t *tree, bi, pc int, in bytecode.Instr) ([]int, bool) {
-	if !b.spill() || b.depth() == 0 || int(in.A) <= pc {
-		return nil, false
-	}
-	d := b.depth()
-	taken, ok := b.target(int(in.A), d)
-	if !ok {
-		return nil, false
-	}
-	fall, ok := b.target(pc+1, d+1)
-	if !ok {
-		return nil, false
-	}
-	t.blocks[bi] = tblock{body: b.takeBody(), next: func(c *tctx) int {
-		c.at(pc)
-		v, more, err := c.r.iterNext(c.stack[d-1])
-		if err != nil {
-			c.throw(err)
+	closeTreeIterators = func(c *tctx, from int) {
+		if c.r.stopped == nil {
+			c.r.closeIteratorsIn(c.f.base+from, c.f.base+len(c.stack))
 		}
-		if !more {
-			return taken
-		}
-		c.stack[d] = v
-		return fall
-	}}
-	return b.succ, true
-}
-
-// closeTreeIterators closes the for...of cursors in the frame's slots from
-// slot from up that an exception leaving them abandons, as the
-// interpreter's unwinding does from the depth it was thrown at. Nothing is
-// closed once the host has stopped the runtime: a return method is the
-// script's code.
-func (c *tctx) closeTreeIterators(from int) {
-	if c.r.stopped == nil {
-		c.r.closeIteratorsIn(c.f.base+from, c.f.base+len(c.stack))
 	}
 }

@@ -311,7 +311,7 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 		case bytecode.OpRethrow:
 			return b.rethrow(t, bi, pc)
 		case bytecode.OpIterNextOrJump:
-			return b.iterNextOrJump(t, bi, pc, in)
+			return iterNextOrJump(b, t, bi, pc, in)
 		case bytecode.OpJump:
 			if !b.spill() {
 				return nil, false

@@ -44,6 +44,20 @@ concurrently.
   `internal/cmd/v8bench/placements` (see Validation); the `zcall_*.go` and
   `ztree_*.go` files sort last on purpose, so that what is added there moves
   nothing before it.
+- What decides the speed is how much of the hot path AMD Zen 2's op cache
+  holds: 64 sets of 8 entries, each set taking the code at one offset in
+  every 4 KB. Hot code that a change moves onto the same sets -- even by
+  moving it, its instructions unchanged -- is decoded again on every pass,
+  and a loop can run a quarter slower. So keep the interpreter's hot
+  functions (`executeAt`, `runTree`, `runTreeNested`, `callObject`,
+  `callTree`, `runFD`, `backEdgeCheck`) as they are -- a tree node that
+  needs what one of `executeAt`'s cases does gets its own copy, rather than
+  that case moving into a helper -- and keep the distance between the hot
+  functions and the tree nodes' hot closures: every function comes before
+  every closure, so a function added even in the last file moves every
+  closure. Code the tree tier adds is therefore written in a `ztree_*.go`
+  file as package variables, each assigned a closure in the file's `init`,
+  which is laid out after every closure there was.
 - What a newer Go adds -- generic methods, in Go 1.27 -- may be offered in a
   file built only with it, `//go:build go1.27`, which gives that file the
   newer language whatever go.mod says, as long as what it offers is there for
