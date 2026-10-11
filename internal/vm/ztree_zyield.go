@@ -134,21 +134,9 @@ func init() {
 			// is not run by.
 			return nil
 		}
-		// A resumption runs its tree under a recover of its own, which a
-		// body that runs a few instructions a resumption pays more for than
-		// the interpreter takes to run them: only a body with a loop, which
-		// is where a tree is faster, is given one.
-		loops := false
-		for pc, in := range fn.Code {
-			switch in.Op {
-			case bytecode.OpJump, bytecode.OpJumpIfFalse, bytecode.OpJumpIfTrue, bytecode.OpJumpIfCmpFalse,
-				bytecode.OpJumpIfFalseKeep, bytecode.OpJumpIfTrueKeep:
-				loops = loops || int(in.A) <= pc
-			}
-		}
-		if !loops {
-			return nil
-		}
+		// A body without a loop is given one too: what a resumption of a
+		// tree costs (see resumeTree) is less than the interpreter's, whose
+		// suspensions allocate, however few instructions the body runs.
 		t.gen = &tgen{index: index, iters: iters}
 		return t
 	}

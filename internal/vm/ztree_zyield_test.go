@@ -8,9 +8,9 @@ import "testing"
 // return and throw injected at a suspension -- caught, uncaught, through
 // finally clauses and loops over iterators -- exceptions the body throws
 // after a resumption, closures made between suspensions, parameter
-// prologues, rejections, and a script's jobs run to the end. Only a body
-// with a loop is given a tree, so a case without one starts f's body with
-// an empty loop. An async case
+// prologues, rejections, and a script's jobs run to the end. The empty
+// loops some cases begin f's body with are from when only a body with a
+// loop was given a tree. An async case
 // leaves its promise in p, and out is what that settles to: its value, or
 // E and what it threw.
 func TestTreeGenerators(t *testing.T) {

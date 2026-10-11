@@ -47,6 +47,9 @@ var g = f(); g.next(); g.next(); [g.throw('x').value, g.next().value, g.next().v
 for (const v of f()) { s += v; if (v == 2) break } s`, want: "012F"},
 		{name: "loopThrowsOut", tree: true, src: `function* f() { for (let i = 0; i < 5; i++) { if (i == 2) null.x; yield i } }
 var s = ''; try { for (const v of f()) s += v } catch (e) { s += e.name } s`, want: "01TypeError"},
+		{name: "noLoop", tree: true, src: `function* f(a, b) { yield a; var c = yield b; return a + b + c }
+var g = f(1, 2); [g.next().value, g.next().value, g.next(3).value, g.next().done].join()`, want: "1,2,6,true"},
+		{name: "asyncNoLoop", async: true, tree: true, src: `async function f(x) { var y = await x; return y + await Promise.resolve(1) } var p = f(2)`, want: "3"},
 		{name: "await", async: true, tree: true, src: `async function f(n) { let s = 0; for (let i = 0; i < n; i++) s += await new Promise(r => r(i)); return s } var p = f(20)`, want: "190"},
 		{name: "awaitRejected", async: true, tree: true, src: `async function f() { let s = ''; for (let i = 0; i < 3; i++) { try { s += await (i == 1 ? Promise.reject('r') : i) } catch (e) { s += e } } return s } var p = f()`, want: "0r2"},
 		{name: "asyncGenerator", async: true, tree: true, src: `async function* f() { for (let i = 0; i < 3; i++) yield await i } async function main() { let s = ''; for await (const x of f()) s += x; return s } var p = main()`, want: "012"},
