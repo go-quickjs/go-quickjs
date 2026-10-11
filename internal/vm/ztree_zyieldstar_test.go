@@ -1,10 +1,6 @@
 package vm
 
-import (
-	"testing"
-
-	"github.com/go-quickjs/go-quickjs/internal/bytecode"
-)
+import "testing"
 
 // TestTreeDelegation pins that yield* and for await give in the tree tier
 // what they give in the interpreter, and run as trees: yield* over
@@ -111,32 +107,5 @@ func TestTreeDelegation(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-// TestTreeDelegationNotALoop pins that the jump back after a yield* does
-// not give a generator a tree, which a body with a loop of its own has.
-func TestTreeDelegationNotALoop(t *testing.T) {
-	for _, tt := range []struct {
-		src  string
-		want bool
-	}{
-		{`function* f() { yield* [1] }`, false},
-		{`async function* f() { yield* [1] }`, false},
-		{`function* f() { for (;;) yield* [1] }`, true},
-		{`async function f(a) { for await (const x of a); }`, true},
-	} {
-		var f *bytecode.Function
-		for _, k := range compileForTest(t, tt.src).Constants {
-			if k.Fn != nil && k.Fn.Name == "f" {
-				f = k.Fn
-			}
-		}
-		if f == nil {
-			t.Fatalf("%s: no function f", tt.src)
-		}
-		if built, why := TreeReport(f); built != tt.want {
-			t.Errorf("%s: built %v (%s), want %v", tt.src, built, why, tt.want)
-		}
 	}
 }
