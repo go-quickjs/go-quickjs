@@ -27,8 +27,8 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 // a JavaScript exception -- goes on past it as before, finally clauses not
 // run, as in the interpreter.
 //
-// It is in the package's last file, after ztree_flow.go, so that its code
-// sits after everything else's.
+// It sorts after ztree_flow.go, so that its code sits after the rest of the
+// tier's.
 
 // thandlerEntry is a handler: the block it enters, a catch clause's or a
 // finally clause's, which the structuring takes as an entry of its own, and
@@ -63,14 +63,15 @@ func (b *tbuilder) leaveHandlers(succ []int) {
 }
 
 // treeBuildsException reports whether the tier builds op, one of the
-// instructions of exception handling or of a scope's closing.
+// instructions of exception handling or of a scope's closing, or one
+// treeBuildsDeadZone names.
 func treeBuildsException(op bytecode.Op) bool {
 	switch op {
 	case bytecode.OpPushCatch, bytecode.OpPushFinally, bytecode.OpPopCatch,
 		bytecode.OpRethrow, bytecode.OpCloseUpvalues:
 		return true
 	}
-	return false
+	return treeBuildsDeadZone(op)
 }
 
 // exceptionOp builds the instructions treeBuildsException names other than
@@ -113,7 +114,7 @@ func (b *tbuilder) exceptionOp(pc int, in bytecode.Instr) (int, bool) {
 	case bytecode.OpCloseUpvalues:
 		return 0, b.stmt(closeTreeUpvalues(in.A))
 	default:
-		return 0, false
+		return b.deadZoneOp(pc, in)
 	}
 	return 0, true
 }

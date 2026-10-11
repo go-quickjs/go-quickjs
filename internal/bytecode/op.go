@@ -710,6 +710,13 @@ var opNames = [opCount]string{
 	OpCheckThisInit:    "check_this_init",
 	OpInitThis:         "init_this",
 	OpThrowDeleteSuper: "throw_delete_super",
+	OpAssignConst:      "assign_const",
+	OpNipUnder:         "nip_under",
+	OpIterStep:         "iter_step",
+	OpIterRest:         "iter_rest",
+	OpIterCloseNormal:  "iter_close_normal",
+	OpGetPropUnder:     "get_prop_under",
+	OpGetIndexUnder:    "get_index_under",
 }
 
 func (op Op) String() string {
