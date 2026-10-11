@@ -245,6 +245,15 @@ func (r *Runtime) startForOf(v Value) (Value, error) {
 			r.usesIntrinsicArrayIterator(o) {
 			return r.newIterObject(iterState{arr: o}), nil
 		}
+		// A generator whose iterator method and next are the intrinsics,
+		// inherited through ordinary objects, is its own iterator, and
+		// that next is what the loop calls: nothing could see them looked
+		// up, or the iterator method called.
+		if o.class == ClassGenerator {
+			if next := r.generatorIteration(o); next != nil {
+				return r.newIterObject(iterState{iter: v, next: Obj(next)}), nil
+			}
+		}
 	}
 	method, err := r.getValueProp(v, r.atoms.internSymbol(r.wellKnown.iterator))
 	if err != nil {
@@ -605,6 +614,37 @@ func (r *Runtime) usesIntrinsicArrayIterator(o *Object) bool {
 		}
 	}
 	return false
+}
+
+// generatorIteration is the next method a for-of loop over the generator o
+// calls, where looking it up and calling o's Symbol.iterator would find
+// this realm's intrinsics: o and the objects it inherits from up to where
+// both are found are ordinary, and each is found as a data property. It is
+// nil anywhere else, which is left to the protocol.
+func (r *Runtime) generatorIteration(o *Object) *Object {
+	if r.genNextFn == nil {
+		return nil
+	}
+	iterKey := r.atoms.internSymbol(r.wellKnown.iterator)
+	var iter, next *Property
+	for cur := o; cur != nil && (iter == nil || next == nil); cur = cur.proto {
+		if cur.class != ClassObject && cur.class != ClassGenerator {
+			return nil
+		}
+		if iter == nil {
+			iter = cur.getOwn(iterKey)
+		}
+		if next == nil {
+			next = cur.getOwn(atomNext)
+		}
+	}
+	if iter == nil || next == nil || iter.flags&(propAccessor|propPrivate|propDeleted) != 0 ||
+		next.flags&(propAccessor|propPrivate|propDeleted) != 0 ||
+		!iter.value.IsObject() || iter.value.Object() != r.genIterFn ||
+		!next.value.IsObject() || next.value.Object() != r.genNextFn {
+		return nil
+	}
+	return r.genNextFn
 }
 
 // spreadToStack collects an iterable's elements for a call's argument list.

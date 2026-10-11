@@ -467,6 +467,10 @@ type Realm struct {
 	// the same template site must hand the same strings array to its tag on
 	// every evaluation.
 	templateCache map[*bytecode.Function][]*Object
+	// genIterFn and genNextFn are %GeneratorPrototype%[Symbol.iterator] and
+	// next, which a for-of loop over a generator need not look up while they
+	// are what the generator inherits; see generatorIteration.
+	genIterFn, genNextFn *Object
 }
 
 // intrinsics holds the built-in prototypes and constructors.

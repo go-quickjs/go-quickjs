@@ -655,6 +655,7 @@ func (r *Runtime) initGeneratorBuiltins() {
 		return rt.result(res), nil
 	})
 	next.fn().iterNext = iterNextGenerator
+	r.genNextFn = next
 
 	r.defMethod(p, "return", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		g, err := rt.generatorOf(this, "Generator.prototype.return")
@@ -681,7 +682,7 @@ func (r *Runtime) initGeneratorBuiltins() {
 	})
 
 	// A generator is its own iterator.
-	r.defSymbolMethod(p, r.wellKnown.iterator, "[Symbol.iterator]", 0,
+	r.genIterFn = r.defSymbolMethod(p, r.wellKnown.iterator, "[Symbol.iterator]", 0,
 		func(rt *Runtime, this Value, args []Value) (Value, error) {
 			return this, nil
 		})

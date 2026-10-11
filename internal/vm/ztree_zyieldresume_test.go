@@ -194,3 +194,53 @@ Promise.resolve().then(() => many.push('x'));`
 		r.Close()
 	}
 }
+
+// TestForOfGenerator pins that a for-of loop over a generator calls what
+// the protocol finds, in both tiers, now that one whose iterator method and
+// next are the intrinsics, inherited through ordinary objects, is not looked
+// up: a prototype that is a proxy, next a getter on the function's
+// prototype or a method of its own, an iterator method on the generator
+// itself, and the intrinsics replaced and put back. The answers are Node's.
+func TestForOfGenerator(t *testing.T) {
+	defer SetTreeTier(true)
+	src := `var log = [];
+function* g() { for (let i = 0; i < 2; i++) yield i }
+function run(it) { var s = []; for (const x of it) s.push(x); return s.join('') }
+log.push(run(g()));
+g.prototype = new Proxy(Object.create(Object.getPrototypeOf(g.prototype)), { get(t, k, r) { log.push(typeof k == 'symbol' ? 'sym' : k); return Reflect.get(t, k, r) } });
+log.push(run(g()));
+function* h() { yield 1; yield 2 }
+Object.defineProperty(h.prototype, 'next', { get() { log.push('getnext'); return function () { log.push('mynext'); return { done: true } } } });
+log.push(run(h()));
+function* k() { yield 1 }
+k.prototype.next = function () { log.push('own'); return { done: true, value: 9 } };
+log.push(run(k()));
+function* m() { yield 3 }
+var it = m(); it[Symbol.iterator] = function () { log.push('iter'); return [7, 8][Symbol.iterator]() };
+log.push(run(it));
+var GP = Object.getPrototypeOf(g).prototype, saved = GP[Symbol.iterator];
+GP[Symbol.iterator] = function () { log.push('gpiter'); return this };
+function* n() { yield 4 }
+log.push(run(n()));
+GP[Symbol.iterator] = saved;
+var savedNext = GP.next;
+GP.next = function () { log.push('gpnext'); return savedNext.call(this) };
+log.push(run(n()));
+GP.next = savedNext;
+log.push(run(n()));
+log.join()`
+	const want = "01,sym,next,01,getnext,mynext,,own,,iter,78,gpiter,4,gpnext,gpnext,4,4"
+	for _, on := range []bool{false, true} {
+		SetTreeTier(on)
+		r := New(Config{})
+		v, err := r.Run(compileForTest(t, src))
+		if err != nil {
+			r.Close()
+			t.Fatalf("tree %v: %v", on, err)
+		}
+		if got, err := r.ToString(v); err != nil || got.Go() != want {
+			t.Errorf("tree %v: got %v, %v\nwant %s", on, got, err, want)
+		}
+		r.Close()
+	}
+}
