@@ -224,8 +224,10 @@ func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Ob
 	// inherits in turn from the shared one -- so a script can put something on
 	// `g.prototype` and every generator g makes will have it. A generator
 	// function's is a data property it cannot lose or make an accessor, which
-	// is read where it is.
-	if callee != nil {
+	// is read where it is. An async function's generator is never seen, and
+	// the function has no prototype to read: one a script gives it, a getter
+	// perhaps, is not read at each call.
+	if callee != nil && cl.fn.Generator {
 		if p := callee.getOwn(atomPrototype); p != nil && p.flags&(propAccessor|propPrivate|propDeleted) == 0 {
 			if p.value.IsObject() {
 				proto = p.value.Object()

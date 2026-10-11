@@ -1057,6 +1057,16 @@ func (r *Runtime) toPromise(v Value) *Object {
 // reused -- and reading that property runs whatever getter is there.
 func (r *Runtime) toPromiseErr(v Value) (*Object, error) {
 	if v.IsObject() && v.Object().class == ClassPromise {
+		// What every await of an async function's promise finds -- a
+		// promise of this realm's with no constructor of its own, whose
+		// prototype's is the intrinsic as a data property -- is read where
+		// it is: nothing could see it read.
+		if o := v.Object(); o.proto == r.proto.promise && o.getOwn(atomConstructor) == nil {
+			if p := o.proto.getOwn(atomConstructor); p != nil && p.flags&(propAccessor|propPrivate) == 0 &&
+				p.value.IsObject() && p.value.Object() == r.promiseCtor {
+				return o, nil
+			}
+		}
 		ctor, err := r.getProp(v.Object(), atomConstructor, v)
 		if err != nil {
 			return nil, err

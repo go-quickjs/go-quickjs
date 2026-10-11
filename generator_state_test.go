@@ -120,6 +120,44 @@ func TestResumedLoopFramesAreSetUp(t *testing.T) {
 		out.join(" | ")`, "numberundefined,numbernumber | false | 1,12 | 25,26,27 | 1,2,3,012")
 }
 
+// TestAsyncFunctionPrototypeNotRead pins that calling an async function or
+// an async arrow does not read a prototype property a script gave it, as
+// Node and C QuickJS do not: the generator behind the call is never seen,
+// and a getter there ran at every call. An async generator function's is
+// still what its objects inherit from.
+func TestAsyncFunctionPrototypeNotRead(t *testing.T) {
+	checkEval(t, `
+		var n = 0, m = 0;
+		async function af() {}
+		Object.defineProperty(af, 'prototype', { get() { n++; return {} } });
+		af(); af();
+		var aa = async () => {};
+		Object.defineProperty(aa, 'prototype', { get() { m++; return {} } });
+		aa();
+		async function* ag() {}
+		ag.prototype = { mine: 1 };
+		[n, m, ag().mine].join()`, "0,0,1")
+}
+
+// TestAwaitReadsConstructor pins that an await of a promise reads its
+// constructor as PromiseResolve does, now that the intrinsic, inherited as
+// a data property, is read where it is: a getter there runs at each await,
+// and a promise with a constructor of its own is adopted. The answers are
+// Node's.
+func TestAwaitReadsConstructor(t *testing.T) {
+	checkAsync(t, `
+		var log = [];
+		var C = Promise.prototype.constructor;
+		Object.defineProperty(Promise.prototype, 'constructor', { get() { log.push('get'); return C }, configurable: true });
+		(async () => { log.push(await Promise.resolve(1)); log.push(await Promise.resolve(2)) })();
+		Promise.resolve().then(() => {
+			Object.defineProperty(Promise.prototype, 'constructor', { value: C, writable: true, configurable: true });
+			var p = Promise.resolve(3); p.constructor = function () {};
+			(async () => { log.push(await p); log.push(await Promise.resolve(4)) })();
+		});`,
+		`log.join()`, "get,get,1,get,2,3,4")
+}
+
 // TestGeneratorsSuspendingInTurn covers generators that resume others, and
 // async generators awaiting between their yields: each suspension is read
 // from the runtime's one signal before the next can be made, which a
