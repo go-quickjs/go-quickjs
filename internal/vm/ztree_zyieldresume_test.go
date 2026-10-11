@@ -1,6 +1,10 @@
 package vm
 
-import "testing"
+import (
+	"strconv"
+	"strings"
+	"testing"
+)
 
 // TestGeneratorResumption pins what a resumption keeps, in both tiers, now
 // that the common one -- next() on a generator its tree suspended, from a
@@ -128,6 +132,64 @@ af(2, 3).then(v => out.push('async ' + v))`
 		}
 		if got, err := r.ToString(v); err != nil || got.Go() != want {
 			t.Errorf("tree %v: got %v, %v\nwant %s", on, got, err, want)
+		}
+		r.Close()
+	}
+}
+
+// TestAwaitOrder pins the order awaits resume in, in both tiers, now that
+// an await of what is not an object makes no promise and an await's
+// reaction is a job of its own kind, and the job queue is reused from its
+// start: against then callbacks, a promise, undefined and null awaited, a
+// thenable whose then is read and one that is called, a rejection caught,
+// an async generator's yields and awaits under for await, and 150 async
+// functions awaiting in turn, which keep the queue from emptying. The
+// answers are Node's.
+func TestAwaitOrder(t *testing.T) {
+	defer SetTreeTier(true)
+	src := `var log = [];
+async function a() { log.push('a1'); await 1; log.push('a2'); await null; log.push('a3'); return 'A' }
+async function b() { log.push('b1'); await Promise.resolve(); log.push('b2'); await undefined; log.push('b3') }
+async function c() { log.push('c1'); await { get then() { log.push('get'); return undefined } }; log.push('c2'); await { then(r) { log.push('then'); r(5) } }; log.push('c3') }
+async function d() { try { await Promise.reject('r'); } catch (e) { log.push('d' + e) } for (let i = 0; i < 3; i++) { log.push('d' + (await i)) } }
+async function* g() { log.push('g1'); yield 1; log.push('g2'); yield await 2; log.push('g3') }
+(async () => { for await (const x of g()) log.push('gx' + x) })();
+a().then(v => log.push(v)); b(); c(); d();
+Promise.resolve().then(() => log.push('t1')).then(() => log.push('t2')).then(() => log.push('t3')).then(() => log.push('t4')).then(() => log.push('t5'));
+var many = [];
+for (let k = 0; k < 150; k++) (async () => { for (let i = 0; i < 4; i++) { await i; many.push(k * 10 + i) } })();
+Promise.resolve().then(() => many.push('x'));`
+	wantLog := "g1,a1,b1,c1,get,a2,b2,c2,dr,t1,gx1,g2,a3,b3,then,d0,t2,A,c3,d1,t3,d2,t4,gx2,g3,t5"
+	var many []string
+	for i := 0; i < 4; i++ {
+		for k := 0; k < 150; k++ {
+			many = append(many, strconv.Itoa(k*10+i))
+		}
+		if i == 0 {
+			many = append(many, "x")
+		}
+	}
+	want := wantLog + " " + strings.Join(many, ",")
+	for _, on := range []bool{false, true} {
+		SetTreeTier(on)
+		r := New(Config{})
+		_, err := r.Run(compileForTest(t, src))
+		if err == nil {
+			err = r.runMicrotasks()
+		}
+		var v Value
+		if err == nil {
+			v, err = r.Run(compileForTest(t, "log.join() + ' ' + many.join()"))
+		}
+		if err != nil {
+			r.Close()
+			t.Fatalf("tree %v: %v", on, err)
+		}
+		if got, err := r.ToString(v); err != nil || got.Go() != want {
+			t.Errorf("tree %v: got %v, %v\nwant %s", on, got, err, want)
+		}
+		if r.HasPendingJobs() || len(r.microtasks) != 0 {
+			t.Errorf("tree %v: %d jobs left from %d", on, len(r.microtasks), r.jobHead)
 		}
 		r.Close()
 	}

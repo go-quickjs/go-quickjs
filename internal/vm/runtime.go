@@ -283,6 +283,11 @@ type Runtime struct {
 	// can suspend again, so one serves them all, and a suspension allocates
 	// nothing.
 	treeSig suspendSignal
+	// jobHead is where the microtasks still to run begin: those before it
+	// have run. The queue is reused from its start once it empties, rather
+	// than each job taken from the front of the slice, which made an append
+	// at its end reallocate it about once a job.
+	jobHead int
 }
 
 // Realm is a set of intrinsics and the global object that goes with them.
@@ -1022,7 +1027,7 @@ func (r *Runtime) ClearStop() {
 	if r.frameDepth == 0 && r.stopped != nil {
 		r.stopped = nil
 		clear(r.microtasks)
-		r.microtasks = r.microtasks[:0]
+		r.microtasks, r.jobHead = r.microtasks[:0], 0
 	}
 }
 

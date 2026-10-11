@@ -81,16 +81,36 @@ func (r *Runtime) awaitPromise(p *Object, g *generator, k awaitKind) {
 	r.enqueueReaction(pd, rc)
 }
 
-// resumeAwait resumes the generator an await's reaction names, with the
-// value the awaited promise settled to.
-func (r *Runtime) resumeAwait(rc *reaction, v Value, rejected bool) {
-	g := rc.gen
+// awaitValue is awaitPromise(toPromise(v), g, k), without the promise where
+// v is not an object: PromiseResolve makes one fulfilled with v, which
+// nothing else can see, and PerformPromiseThen on a fulfilled promise
+// queues its reaction at once. That job is queued instead.
+func (r *Runtime) awaitValue(v Value, g *generator, k awaitKind) {
+	if v.IsObject() {
+		r.awaitPromise(r.toPromise(v), g, k)
+		return
+	}
+	r.enqueueAwait(r.asyncCtx, g, k, v, false)
+}
+
+// enqueueAwait queues the job of an await's reaction: resuming g, as k
+// says, with what the awaited promise settled to. It is a job of its own
+// kind, which holds what it needs rather than a function that would.
+func (r *Runtime) enqueueAwait(ctx Value, g *generator, k awaitKind, v Value, rejected bool) {
+	r.microtasks = append(r.microtasks, job{
+		realm: r.Realm, ctx: ctx, gen: g, value: v, await: k, rejected: rejected,
+	})
+}
+
+// resumeAwait resumes g, which an await's reaction names, with the value
+// the awaited promise settled to; k says how.
+func (r *Runtime) resumeAwait(g *generator, k awaitKind, v Value, rejected bool) {
 	switch {
-	case rc.resume == awaitAsync && rejected:
+	case k == awaitAsync && rejected:
 		// A rejected await throws at the await expression, so a try inside
 		// the body can catch it.
 		r.stepAsync(g, v, resumeThrow)
-	case rc.resume == awaitAsync:
+	case k == awaitAsync:
 		r.stepAsync(g, v, resumeNext)
 	case rejected:
 		// In an async generator a rejection is a throw where it waited: at
@@ -98,9 +118,9 @@ func (r *Runtime) resumeAwait(rc *reaction, v Value, rejected bool) {
 		// uncaught one finishes the generator instead of leaving it
 		// suspended -- or where a return was injected.
 		r.stepAsyncGenerator(g, v, resumeThrow)
-	case rc.resume == awaitGenerator:
+	case k == awaitGenerator:
 		r.stepAsyncGenerator(g, v, resumeNext)
-	case rc.resume == awaitReturn:
+	case k == awaitReturn:
 		r.stepAsyncGenerator(g, v, resumeReturn)
 	default:
 		r.finishAsyncRequest(g, false, Obj(r.iterResult(v, false)))
@@ -286,11 +306,11 @@ func (r *Runtime) enqueueReaction(p *promiseData, rc reaction) {
 	if state == promiseRejected {
 		p.handled = true
 	}
+	if rc.gen != nil {
+		r.enqueueAwait(rc.ctx, rc.gen, rc.resume, value, state == promiseRejected)
+		return
+	}
 	r.enqueueJobIn(rc.ctx, func() {
-		if rc.gen != nil {
-			r.resumeAwait(&rc, value, state == promiseRejected)
-			return
-		}
 		handler := rc.onFulfilled
 		if state == promiseRejected {
 			handler = rc.onRejected
@@ -339,10 +359,28 @@ func (r *Runtime) enqueueJobIn(ctx Value, fn func()) {
 // job is a queued microtask, the realm that queued it, which it runs in --
 // what it makes without calling a function, a module it loads, a promise it
 // settles, is that realm's -- and the async context it runs in.
+//
+// An await's reaction, which every await of an async function or an async
+// generator queues, is a job without a function: gen is resumed with
+// value, as await and rejected say (see resumeAwait). A function holding
+// them would be two allocations a resumption.
 type job struct {
-	run   func()
-	realm *Realm
-	ctx   Value
+	run      func()
+	realm    *Realm
+	ctx      Value
+	gen      *generator
+	value    Value
+	await    awaitKind
+	rejected bool
+}
+
+// call runs what the job does.
+func (j *job) call(r *Runtime) {
+	if j.gen != nil {
+		r.resumeAwait(j.gen, j.await, j.value, j.rejected)
+		return
+	}
+	j.run()
 }
 
 // runJob runs a job in its realm and its async context, and puts back the
@@ -351,14 +389,14 @@ func (r *Runtime) runJob(j job) {
 	prevCtx := r.asyncCtx
 	r.asyncCtx = j.ctx
 	if j.realm == nil || j.realm == r.Realm {
-		j.run()
+		j.call(r)
 		r.asyncCtx = prevCtx
 		return
 	}
 	prev := r.Realm
 	r.Realm = j.realm
 	defer func() { r.Realm, r.asyncCtx = prev, prevCtx }()
-	j.run()
+	j.call(r)
 }
 
 // DrainJobs runs queued microtasks until none remain.
@@ -379,7 +417,7 @@ func (r *Runtime) DrainJobs() error {
 		// of its own, and one queued by the collector between turns has no
 		// other moment to run. It may queue more.
 		r.runCleanups()
-		if len(r.microtasks) > 0 {
+		if r.HasPendingJobs() {
 			continue
 		}
 		// What another goroutine finished for the runtime is a task: it runs
@@ -390,7 +428,7 @@ func (r *Runtime) DrainJobs() error {
 		if err != nil {
 			return err
 		}
-		if !ran && len(r.microtasks) == 0 {
+		if !ran && !r.HasPendingJobs() {
 			break
 		}
 	}
@@ -408,9 +446,20 @@ func (r *Runtime) DrainJobs() error {
 // runMicrotasks runs queued microtasks until none remain, or an interrupt
 // stops them.
 func (r *Runtime) runMicrotasks() error {
-	for len(r.microtasks) > 0 {
-		j := r.microtasks[0]
-		r.microtasks = r.microtasks[1:]
+	for r.jobHead < len(r.microtasks) {
+		j := r.microtasks[r.jobHead]
+		r.microtasks[r.jobHead] = job{}
+		r.jobHead++
+		if r.jobHead == len(r.microtasks) {
+			// The queue is empty, and is filled again from its start.
+			r.microtasks, r.jobHead = r.microtasks[:0], 0
+		} else if r.jobHead >= 64 && 2*r.jobHead >= len(r.microtasks) {
+			// A queue that never empties is moved down, rather than grow
+			// with the jobs that have run.
+			n := copy(r.microtasks, r.microtasks[r.jobHead:])
+			clear(r.microtasks[n:])
+			r.microtasks, r.jobHead = r.microtasks[:n], 0
+		}
 		r.runJob(j)
 		// A job that met an interrupt has turned it into a rejection, or
 		// dropped it; the queue stops here all the same.
@@ -422,7 +471,7 @@ func (r *Runtime) runMicrotasks() error {
 }
 
 // HasPendingJobs reports whether any microtask is queued.
-func (r *Runtime) HasPendingJobs() bool { return len(r.microtasks) > 0 }
+func (r *Runtime) HasPendingJobs() bool { return r.jobHead < len(r.microtasks) }
 
 // promiseThen registers a reaction and returns the promise it resolves.
 func (r *Runtime) promiseThen(o *Object, onFulfilled, onRejected Value) *Object {
@@ -1053,5 +1102,5 @@ func (r *Runtime) stepAsync(g *generator, sent Value, mode resumeMode) {
 
 	// The generator suspended on an await. Resume it when the awaited value
 	// settles.
-	r.awaitPromise(r.toPromise(v), g, awaitAsync)
+	r.awaitValue(v, g, awaitAsync)
 }

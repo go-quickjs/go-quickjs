@@ -789,7 +789,7 @@ func (r *Runtime) pumpOne(g *generator) {
 		// so returning a promise into one delivers what it settles to -- and a
 		// broken promise becomes a throw at the resumption point rather than a
 		// result nobody can use.
-		r.awaitPromise(r.toPromise(req.sent), g, awaitReturn)
+		r.awaitValue(req.sent, g, awaitReturn)
 		return
 	}
 	r.stepAsyncGenerator(g, req.sent, req.mode)
@@ -824,7 +824,7 @@ func (r *Runtime) stepAsyncGenerator(g *generator, sent Value, mode resumeMode) 
 	if res.await {
 		// An await is the generator's own business: settle the awaited value
 		// and resume, without the caller seeing anything.
-		r.awaitPromise(r.toPromise(res.value), g, awaitGenerator)
+		r.awaitValue(res.value, g, awaitGenerator)
 		return
 	}
 
@@ -842,5 +842,5 @@ func (r *Runtime) stepAsyncGenerator(g *generator, sent Value, mode resumeMode) 
 		r.finishAsyncRequest(g, false, Obj(r.iterResult(res.value, false)))
 		return
 	}
-	r.awaitPromise(r.toPromise(res.value), g, awaitYield)
+	r.awaitValue(res.value, g, awaitYield)
 }
