@@ -803,12 +803,13 @@ func (c *compiler) compileForAwaitBody(left ast.Node, body ast.Stmt) {
 	c.endScope()
 
 	c.emit(bytecode.OpJump, uint32(start), 0)
-	c.patchJump(exit)
 	c.popLoop(start)
 	// A break arrives here with the iterator still open, so it is closed
-	// before the cursor is dropped. An exhausted one is already closed and the
-	// instruction leaves it alone.
+	// before the cursor is dropped. An exhausted one goes past the close:
+	// the cursor never saw the result that said so, which the loop awaited
+	// and read, and would ask the iterator to return.
 	c.emit(bytecode.OpIterClose, 0, 0)
+	c.patchJump(exit)
 	c.emit(bytecode.OpDrop, 0, 0)
 }
 

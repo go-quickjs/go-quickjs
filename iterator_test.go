@@ -462,6 +462,49 @@ func TestForAwaitOverSyncIterator(t *testing.T) {
 	}
 }
 
+// A `for await` whose iterator says it is done ends without asking the
+// iterator to return, an async one or a sync one alike, as a for-of loop
+// does; one left by break still does. The loop awaits the result that says
+// so and reads it itself, and its cursor, never having seen it, closed the
+// iterator as if the loop had been left early.
+func TestForAwaitExhaustedIsNotClosed(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`var log = [];
+		  var it = { [Symbol.asyncIterator]() { var i = 0; return {
+		    next() { return Promise.resolve({ value: i, done: i++ > 1 }) },
+		    return() { log.push("return"); return {} } } } };
+		  (async () => { for await (const x of it) log.push(x); log.push("end") })();`, "0 | 1 | end"},
+
+		{`var log = [];
+		  var it = { [Symbol.iterator]() { var i = 0; return {
+		    next() { return { value: i, done: i++ > 1 } },
+		    return() { log.push("return"); return {} } } } };
+		  (async () => { for await (const x of it) log.push(x); log.push("end") })();`, "0 | 1 | end"},
+
+		{`var log = [];
+		  var it = { [Symbol.asyncIterator]() { var i = 0; return {
+		    next() { return Promise.resolve({ value: i, done: i++ > 1 }) },
+		    return() { log.push("return"); return {} } } } };
+		  (async () => { for await (const x of it) { log.push(x); break } log.push("end") })();`, "0 | return | end"},
+	}
+
+	for _, tc := range cases {
+		rt := quickjs.New()
+		if _, err := rt.Eval(tc.src); err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+			rt.Close()
+			continue
+		}
+		v, err := rt.Eval(`log.join(" | ")`)
+		if err != nil {
+			t.Errorf("%s: %v", tc.src, err)
+		} else if got := v.String(); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.src, got, tc.want)
+		}
+		rt.Close()
+	}
+}
+
 // TestLoopExitClosesIterators covers leaving a for-of loop by break, continue
 // or a labelled jump. Every iterator between the jump and its target is closed,
 // innermost first, and what the close reports is the result.
