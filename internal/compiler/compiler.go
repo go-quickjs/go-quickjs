@@ -225,8 +225,10 @@ const (
 // finallyCtx tracks an enclosing finally clause.
 type finallyCtx struct {
 	// body is kept so that a break or continue leaving the clause can compile
-	// it inline, which a completion record cannot express.
+	// it inline, which a completion record cannot express. emit, where body
+	// is nil, emits the clause instead: a for await's close.
 	body []ast.Stmt
+	emit func()
 	// returns holds the program counters of returns routed through the clause,
 	// awaiting its start address.
 	returns []int
@@ -1596,6 +1598,13 @@ func stackEffect(op bytecode.Op, a, b uint32) int {
 
 	case bytecode.OpAsyncIterNext:
 		return 1
+	case bytecode.OpAsyncIterClose:
+		// Pops the cursor, and pushes what its return method returned where
+		// it goes on; pops the result it checks, or the cursor it marks.
+		if b == 0 {
+			return 0
+		}
+		return -1
 	case bytecode.OpIterResultOrJump:
 		// Pops the result and pushes the value when it continues.
 		return 0

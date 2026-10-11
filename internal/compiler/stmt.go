@@ -804,15 +804,46 @@ func (c *compiler) compileForOf(n *ast.ForOfStmt) {
 
 // compileForAwaitBody emits the loop of a `for await`, which differs from the
 // synchronous form in that each step awaits the promise the iterator returns
-// before unpacking the result.
+// before unpacking the result, and in how it is left.
+//
+// A loop its body leaves -- a break, a continue of an outer loop, a return,
+// a throw, or a return or a throw injected where the body is suspended --
+// closes its iterator as AsyncIteratorClose does: its return method's
+// result is awaited, and checked to be an object unless what leaves is a
+// throw, which a failure in closing does not replace. The runtime's
+// unwinding cannot await, so the loop is protected by a finally clause of
+// its own that does: inlined where a break or a continue leaves through it,
+// as a finally clause is, and the handler a return, or a throw, is routed
+// to. A loop the iterator ends, or whose next, or the result it awaited,
+// fails, is not closed. The cursor is kept in a hidden local, where the
+// close finds it whatever is on the stack above it, and another says
+// whether the body is running.
 func (c *compiler) compileForAwaitBody(left ast.Node, body ast.Stmt) {
+	cur := c.declare(fmt.Sprintf("%%fa%d", *c.hiddenCount), bindVar, left.Pos())
+	busy := c.declare(fmt.Sprintf("%%fb%d", *c.hiddenCount), bindVar, left.Pos())
+	*c.hiddenCount++
+	// Kept without a copy above the stack: what an exception unwinds past
+	// is closed, and a copy left there would be closed too.
+	c.emit(bytecode.OpSetLocalGet, cur, cur)
+
+	handler := c.emitJump(bytecode.OpPushFinally)
+	c.handlerDepth++
+	c.finallys = append(c.finallys, finallyCtx{
+		emit:     func() { c.emitAsyncClose(cur, busy, false) },
+		handlers: c.handlerDepth, exits: len(c.exits),
+	})
+
 	start := c.here()
 	c.pushLoop("", true)
 	c.debugAt(left.Pos())
 
+	c.emit(bytecode.OpPushFalse, 0, 0)
+	c.emit(bytecode.OpSetLocal, busy, 0)
 	c.emit(bytecode.OpAsyncIterNext, 0, 0)
 	c.emitAwait(start)
 	exit := c.emitJump(bytecode.OpIterResultOrJump)
+	c.emit(bytecode.OpPushTrue, 0, 0)
+	c.emit(bytecode.OpSetLocal, busy, 0)
 
 	c.beginScope()
 	c.compileIterationBody(left, body)
@@ -820,13 +851,81 @@ func (c *compiler) compileForAwaitBody(left ast.Node, body ast.Stmt) {
 
 	c.emit(bytecode.OpJump, uint32(start), 0)
 	c.popLoop(start)
-	// A break arrives here with the iterator still open, so it is closed
-	// before the cursor is dropped. An exhausted one goes past the close:
-	// the cursor never saw the result that said so, which the loop awaited
-	// and read, and would ask the iterator to return.
-	c.emit(bytecode.OpIterClose, 0, 0)
+	// A break of this loop arrives here, its handler still in force.
+	c.emit(bytecode.OpPopCatch, 0, 0)
+	c.handlerDepth--
+	c.emitAsyncClose(cur, busy, false)
+	broke := c.emitJump(bytecode.OpJump)
+	// So does a loop the iterator ended, which is not closed.
 	c.patchJump(exit)
+	c.emit(bytecode.OpPopCatch, 0, 0)
+	ended := c.emitJump(bytecode.OpJump)
+
+	// The clause's handler, and the returns routed to it, with the
+	// completion's record above the cursor.
+	c.patchJump(handler)
+	ctx := c.finallys[len(c.finallys)-1]
+	c.finallys = c.finallys[:len(c.finallys)-1]
+	for _, pc := range ctx.returns {
+		c.patchJumpTo(pc, c.here())
+	}
+	c.stackDepth += 2
+	c.emit(bytecode.OpDup, 0, 0)
+	c.emit(bytecode.OpPushInt, uint32(completionThrow), 0)
+	c.emit(bytecode.OpStrictEq, 0, 0)
+	notThrow := c.emitJump(bytecode.OpJumpIfFalse)
+	c.emitAsyncClose(cur, busy, true)
+	closed := c.emitJump(bytecode.OpJump)
+	c.patchJump(notThrow)
+	c.emitAsyncClose(cur, busy, false)
+	c.patchJump(closed)
+	c.emit(bytecode.OpRethrow, 0, 0)
+
+	c.patchJump(broke)
+	c.patchJump(ended)
 	c.emit(bytecode.OpDrop, 0, 0)
+}
+
+// emitAsyncClose emits a for await's AsyncIteratorClose of the cursor in
+// local cur, where local busy says the body is running: its return method
+// is called, and what that returns awaited and, unless quiet, checked to be
+// an object. quiet is a throw's: whatever goes wrong closing is dropped,
+// and the throw goes on. Where the body is not running, the cursor is only
+// marked done, so that nothing closes it after.
+func (c *compiler) emitAsyncClose(cur, busy uint32, quiet bool) {
+	c.emit(bytecode.OpGetLocal, busy, 0)
+	running := c.emitJump(bytecode.OpJumpIfTrue)
+	c.emit(bytecode.OpGetLocal, cur, 0)
+	c.emit(bytecode.OpAsyncIterClose, 0, 2)
+	skip := c.emitJump(bytecode.OpJump)
+	c.patchJump(running)
+	if !quiet {
+		c.emit(bytecode.OpGetLocal, cur, 0)
+		none := c.emitJump(bytecode.OpAsyncIterClose)
+		c.emit(bytecode.OpAwait, 0, 0)
+		c.emit(bytecode.OpAsyncIterClose, 0, 1)
+		c.patchJump(none)
+		c.patchJump(skip)
+		return
+	}
+	caught := c.emitJump(bytecode.OpPushCatch)
+	c.handlerDepth++
+	c.emit(bytecode.OpGetLocal, cur, 0)
+	none := c.emitJump(bytecode.OpAsyncIterClose)
+	c.emit(bytecode.OpAwait, 0, 0)
+	c.emit(bytecode.OpPopCatch, 0, 0)
+	c.emit(bytecode.OpDrop, 0, 0)
+	done := c.emitJump(bytecode.OpJump)
+	c.patchJump(none)
+	c.emit(bytecode.OpPopCatch, 0, 0)
+	ended := c.emitJump(bytecode.OpJump)
+	c.handlerDepth--
+	c.patchJump(caught)
+	c.stackDepth++
+	c.emit(bytecode.OpDrop, 0, 0)
+	c.patchJump(done)
+	c.patchJump(ended)
+	c.patchJump(skip)
 }
 
 // compileForBody emits the shared loop structure of for-in and for-of, with the
@@ -1246,6 +1345,10 @@ func (c *compiler) unwindTo(target *loopCtx) {
 		// routed through. Clauses are small and rarely nested, so the
 		// duplication is bounded.
 		c.finallys = saved[:i]
+		if saved[i].emit != nil {
+			saved[i].emit()
+			continue
+		}
 		// The clause's own statements see only the exits still in force,
 		// so that a jump inside it does not undo again what this one has.
 		c.exits = append([]pendingExit(nil), savedExits[:top]...)

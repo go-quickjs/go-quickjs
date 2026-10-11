@@ -158,6 +158,14 @@ func buildTree(fn *bytecode.Function) *tree {
 			}
 			leader[in.B] = true
 			leader[pc+1] = true
+		case bytecode.OpAsyncIterClose:
+			if in.B == 0 {
+				if int(in.A) > len(code) {
+					return nil
+				}
+				leader[in.A] = true
+				leader[pc+1] = true
+			}
 		case bytecode.OpReturn, bytecode.OpReturnUndef, bytecode.OpThrow, bytecode.OpRethrow,
 			bytecode.OpEndParams, bytecode.OpYield, bytecode.OpAwait, bytecode.OpYieldStar:
 			leader[pc+1] = true
@@ -326,6 +334,10 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 			return suspendEnd(b, t, bi, pc, in)
 		case bytecode.OpIterResume, bytecode.OpIterUnpackDelegate, bytecode.OpIterResultOrJump:
 			return delegateEnd(b, t, bi, pc, in)
+		case bytecode.OpAsyncIterClose:
+			if in.B == 0 {
+				return delegateEnd(b, t, bi, pc, in)
+			}
 		case bytecode.OpJump:
 			if !b.spill() {
 				return nil, false

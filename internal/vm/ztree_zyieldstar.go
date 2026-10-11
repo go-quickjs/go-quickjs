@@ -43,16 +43,24 @@ var (
 	// slot.
 	delegateOp func(b *tbuilder, pc int, in bytecode.Instr) (int, bool)
 
-	// delegateEnd ends block bi with iter_resume, iter_unpack_delegate or
-	// iter_result_or_jump, which go on to the next instruction or, where
-	// the delegation or the loop is over, jump forward to where it ends.
+	// delegateEnd ends block bi with iter_resume, iter_unpack_delegate,
+	// iter_result_or_jump or async_iter_close, which go on to the next
+	// instruction or, where the delegation or the loop is over, or an
+	// iterator has nothing to close with, jump forward.
 	delegateEnd func(b *tbuilder, t *tree, bi, pc int, in bytecode.Instr) ([]int, bool)
+
+	// asyncIterClose is async_iter_close, for both tiers: with mode 0, the
+	// call of the return method of the iterator of v, a for await's cursor,
+	// which reports what it returned, or false where an asynchronous
+	// iterator has none; with mode 1, the check of the result awaited, v;
+	// with mode 2, v marked done, unclosed.
+	asyncIterClose func(r *Runtime, v Value, mode uint32) (Value, bool, error)
 )
 
 func init() {
 	treeBuildsDelegate = func(op bytecode.Op) bool {
 		switch op {
-		case bytecode.OpForAwaitOfStart, bytecode.OpAsyncIterNext,
+		case bytecode.OpForAwaitOfStart, bytecode.OpAsyncIterNext, bytecode.OpAsyncIterClose,
 			bytecode.OpIterResume, bytecode.OpIterUnpackDelegate, bytecode.OpIterResultOrJump:
 			return true
 		}
@@ -92,6 +100,20 @@ func init() {
 				c.stack[d] = v
 			})
 			b.pushSlot(d)
+		case bytecode.OpAsyncIterClose:
+			// The check of a result awaited, or a cursor marked done; the
+			// call, which may jump, ends its block (see delegateEnd).
+			if in.B == 0 {
+				return 0, false
+			}
+			v, mode := b.pop().tree(), in.B
+			return 0, b.stmt(func(c *tctx) {
+				x := v(c)
+				c.at(pc)
+				if _, _, err := asyncIterClose(c.r, x, mode); err != nil {
+					c.throw(err)
+				}
+			})
 		default:
 			return 0, false
 		}
@@ -230,7 +252,98 @@ func init() {
 				return fall
 			}}
 			return b.succ, true
+		case bytecode.OpAsyncIterClose:
+			// The cursor is taken, and what its iterator's return method
+			// returned takes its place, or there is nothing to close with.
+			if b.depth() == 0 || int(in.A) <= pc {
+				return nil, false
+			}
+			cur := b.pop().tree()
+			if !b.spill() {
+				return nil, false
+			}
+			d := b.depth()
+			taken, ok := b.target(int(in.A), d)
+			if !ok {
+				return nil, false
+			}
+			fall, ok := b.target(pc+1, d+1)
+			if !ok {
+				return nil, false
+			}
+			t.blocks[bi] = tblock{body: b.takeBody(), next: func(c *tctx) int {
+				x := cur(c)
+				c.at(pc)
+				v, has, err := asyncIterClose(c.r, x, 0)
+				if err != nil {
+					c.throw(err)
+				}
+				if !has {
+					return taken
+				}
+				c.stack[d] = v
+				return fall
+			}}
+			return b.succ, true
 		}
 		return nil, false
+	}
+
+	asyncIterClose = func(r *Runtime, v Value, mode uint32) (Value, bool, error) {
+		switch mode {
+		case 1:
+			if !v.IsObject() {
+				return Undefined, false, r.throwTypeError("the iterator's return method must return an object")
+			}
+			return Undefined, false, nil
+		case 2:
+			if st := iterStateOf(v); st != nil {
+				st.done = true
+			}
+			return Undefined, false, nil
+		}
+		st := iterStateOf(v)
+		if st == nil || st.done {
+			return Undefined, false, nil
+		}
+		st.done = true
+		if st.asyncIter {
+			ret, err := r.getValueProp(st.iter, atomReturn)
+			if err != nil {
+				return Undefined, false, err
+			}
+			if ret.IsNullish() {
+				return Undefined, false, nil
+			}
+			if !isCallable(ret) {
+				return Undefined, false, r.throwTypeError("the iterator's return method is not callable")
+			}
+			res, err := r.call(ret, st.iter, nil)
+			if err != nil {
+				return Undefined, false, err
+			}
+			return res, true, nil
+		}
+		// A synchronous iterator is driven through the spec's wrapper of it,
+		// whose return method always answers: with what the iterator's own
+		// return gives, its value awaited, or, where it has none, a result
+		// saying it is done.
+		if st.arr == nil {
+			ret, err := r.getValueProp(st.iter, atomReturn)
+			if err != nil {
+				return Undefined, false, err
+			}
+			if !ret.IsNullish() {
+				if !isCallable(ret) {
+					return Undefined, false, r.throwTypeError("the iterator's return method is not callable")
+				}
+				res, err := r.call(ret, st.iter, nil)
+				if err != nil {
+					return Undefined, false, err
+				}
+				return r.asyncResult(st, res), true, nil
+			}
+		}
+		return Obj(r.iterResult(Undefined, true)), true, nil
 	}
 }

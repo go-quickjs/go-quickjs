@@ -547,6 +547,17 @@ const (
 	// or the statement is a debugger statement and one is listening.
 	OpDebugStmt
 
+	// OpAsyncIterClose is a for await's AsyncIteratorClose, in two steps the
+	// await between them separates. With B 0 it pops the loop's cursor and
+	// calls its iterator's return method, pushing what that returns, or
+	// jumps to A where an asynchronous iterator has none; a synchronous one
+	// driven asynchronously always answers, as the spec's wrapper of it does.
+	// With B 1 it pops the awaited result, a TypeError where it is not an
+	// object. With B 2 it pops the cursor and marks it done, unclosed: a
+	// loop its iterator's next failed is not closed, by this or by anything
+	// unwinding past it.
+	OpAsyncIterClose
+
 	// opCount is the number of opcodes, used to size the name table.
 	opCount
 )
@@ -710,6 +721,7 @@ var opNames = [opCount]string{
 	OpCheckThisInit:    "check_this_init",
 	OpInitThis:         "init_this",
 	OpThrowDeleteSuper: "throw_delete_super",
+	OpAsyncIterClose:   "async_iter_close",
 	OpAssignConst:      "assign_const",
 	OpNipUnder:         "nip_under",
 	OpIterStep:         "iter_step",

@@ -491,6 +491,15 @@ func (f *Function) FormatInstr(pc int) string {
 		OpJumpIfTrueKeep, OpJumpIfNullish, OpJumpIfNotNullish,
 		OpPushCatch, OpPushFinally, OpIterNextOrJump:
 		fmt.Fprintf(&sb, " -> %d", in.A)
+	case OpAsyncIterClose:
+		switch in.B {
+		case 0:
+			fmt.Fprintf(&sb, " -> %d", in.A)
+		case 1:
+			sb.WriteString(" check")
+		default:
+			sb.WriteString(" done")
+		}
 	case OpJumpIfCmpFalse:
 		fmt.Fprintf(&sb, " %s -> %d", Op(in.B), in.A)
 	case OpPushInt:

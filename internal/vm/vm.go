@@ -2390,6 +2390,18 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				goto onError
 			}
 			sp = pushAt(stack, sp, v)
+		case bytecode.OpAsyncIterClose:
+			sp--
+			v, ok, err := asyncIterClose(r, stack[sp], in.B)
+			if err != nil {
+				vmErr = err
+				goto onError
+			}
+			if ok {
+				sp = pushAt(stack, sp, v)
+			} else if in.B == 0 {
+				pc = in.A
+			}
 		case bytecode.OpEndParams:
 			// Ordinarily nothing: the body simply continues. When the frame is
 			// running only the prologue, this is where it stops.
