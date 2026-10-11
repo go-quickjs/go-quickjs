@@ -278,6 +278,11 @@ type Runtime struct {
 	// treeSuspend is the suspension a generator's tree ended its run with,
 	// for runGenerator to hand on (see ztree_zyield.go).
 	treeSuspend *suspendSignal
+	// treeSig is the suspension treeSuspend points to. What a tree's yield
+	// or await hands out is read by the resumption it ends before anything
+	// can suspend again, so one serves them all, and a suspension allocates
+	// nothing.
+	treeSig suspendSignal
 }
 
 // Realm is a set of intrinsics and the global object that goes with them.

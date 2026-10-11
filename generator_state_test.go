@@ -101,6 +101,25 @@ func TestResumedFramesAreSetUp(t *testing.T) {
 	}
 }
 
+// TestResumedLoopFramesAreSetUp is TestResumedFramesAreSetUp for bodies
+// with loops, which resume in one place where they run as trees, stepped by
+// for...of loops: a direct eval's vars, a with object's names, the
+// receiver, the arguments, and a closure over the loop's binding, from
+// resumption to resumption. The answers are Node's.
+func TestResumedLoopFramesAreSetUp(t *testing.T) {
+	checkEval(t, `
+		var out = [];
+		function* e() { for (let i = 0; i < 2; i++) { eval("var x" + i + " = i"); yield typeof x0 + typeof x1; } }
+		out.push([...e()].join(), "x0" in globalThis);
+		function* w(o) { for (var i = 0; i < 2; i++) with (o) { yield x + i; x += 10; } }
+		out.push([...w({ x: 1 })].join());
+		var o = { k: 5, *m(a) { for (let i = 0; i < 3; i++) yield this.k + arguments[0] + i + a; } };
+		out.push([...o.m(10)].join());
+		function* c() { const fs = []; for (let i = 0; i < 3; i++) { fs.push(() => i); yield fs.length; } yield fs.map(f => f()).join(""); }
+		out.push([...c()].join());
+		out.join(" | ")`, "numberundefined,numbernumber | false | 1,12 | 25,26,27 | 1,2,3,012")
+}
+
 // TestGeneratorsSuspendingInTurn covers generators that resume others, and
 // async generators awaiting between their yields: each suspension is read
 // from the runtime's one signal before the next can be made, which a

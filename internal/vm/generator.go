@@ -348,6 +348,12 @@ func (r *Runtime) resume(g *generator, sent Value, mode resumeMode) (Value, bool
 
 // resumeFull runs a generator and reports what kind of suspension stopped it.
 func (r *Runtime) resumeFull(g *generator, sent Value, mode resumeMode) (resumeResult, error) {
+	if g.state == genSuspendedYield && mode == resumeNext && !g.delegating {
+		// The common case, a body its tree runs, is resumed there.
+		if res, ran, err := resumeTree(r, g, sent); ran {
+			return res, err
+		}
+	}
 	switch g.state {
 	case genExecuting:
 		return resumeResult{value: Undefined, done: true}, r.throwTypeError("the generator is already running")
@@ -363,13 +369,22 @@ func (r *Runtime) resumeFull(g *generator, sent Value, mode resumeMode) (resumeR
 	}
 
 	// The body runs in the realm it was written in, as a call of it does,
-	// whichever realm's next resumes it.
+	// whichever realm's next resumes it. It is put back as a call puts it
+	// back, without a defer: a panic that passes here closes the runtime.
 	if re := g.cl.realm; re != nil && re != r.Realm {
 		prev := r.Realm
 		r.Realm = re
-		defer func() { r.Realm = prev }()
+		res, err := r.resumeFrame(g, sent, mode)
+		r.Realm = prev
+		return res, err
 	}
+	return r.resumeFrame(g, sent, mode)
+}
 
+// resumeFrame is resumeFull for a generator that has not finished and is
+// not running, in its own realm: it gives the generator a frame again and
+// runs it from where it was suspended.
+func (r *Runtime) resumeFrame(g *generator, sent Value, mode resumeMode) (resumeResult, error) {
 	// A return or throw before the body starts finishes it without running.
 	if g.state == genSuspendedStart {
 		switch mode {
@@ -397,26 +412,38 @@ func (r *Runtime) resumeFull(g *generator, sent Value, mode resumeMode) (resumeR
 	r.stackHigh = max(r.stackHigh, r.stackTop)
 
 	// Restore the operand stack from the previous suspension.
-	copy(r.stack[base:], g.stack)
-	sp := base + len(g.stack)
-
-	gf := r.pushFrame()
-	*gf = frame{
-		cl:           g.cl,
-		locals:       g.locals,
-		base:         base,
-		pc:           g.pc,
-		this:         g.this,
-		newTarget:    g.newTarget,
-		callee:       g.callee,
-		args:         g.args,
-		handlers:     g.handlers,
-		openUpvalues: g.openUpvalues,
-		withScopes:   g.withScopes,
-		thisRef:      g.thisRef,
-		evalVars:     g.evalVars,
+	sp := base
+	if len(g.stack) != 0 {
+		copy(r.stack[base:], g.stack)
+		sp += len(g.stack)
 	}
-	f := gf
+
+	// The frame is set field by field, as runFD sets a call's: a frame is
+	// five cache lines, and building one whole and copying it in was most
+	// of what a resumption cost. Its tree context is set by runGenerator.
+	f := r.pushFrame()
+	f.cl = g.cl
+	f.locals = g.locals
+	f.base = base
+	f.pc = g.pc
+	f.this = g.this
+	f.newTarget = g.newTarget
+	f.callee = g.callee
+	f.args = g.args
+	f.handlers = g.handlers
+	f.openUpvalues = g.openUpvalues
+	f.withScopes = g.withScopes
+	f.thisRef = g.thisRef
+	f.evalVars = g.evalVars
+	if f.native != "" {
+		f.native = ""
+	}
+	if f.savedSP != 0 {
+		f.savedSP = 0
+	}
+	if f.paramsOnly {
+		f.paramsOnly = false
+	}
 
 	if g.state == genSuspendedYield && g.delegating {
 		// Suspended inside a `yield*`: every way of resuming is forwarded to
@@ -479,7 +506,9 @@ func (r *Runtime) finishResume(g *generator, f *frame, base int,
 	if sig, ok := err.(*suspendSignal); ok {
 		// Save everything the next resumption needs and release the window.
 		g.pc = f.pc
-		g.stack = append(g.stack[:0], r.stack[base:f.savedSP]...)
+		if g.stack = g.stack[:0]; f.savedSP > base {
+			g.stack = append(g.stack, r.stack[base:f.savedSP]...)
+		}
 		g.handlers = f.handlers
 		g.openUpvalues = f.openUpvalues
 		g.withScopes = f.withScopes
@@ -487,9 +516,13 @@ func (r *Runtime) finishResume(g *generator, f *frame, base int,
 		g.state = genSuspendedYield
 		g.started = true
 		r.releaseGeneratorFrame(g, base)
-		return resumeResult{
+		res := resumeResult{
 			value: sig.value, await: sig.await, raw: sig.raw, delegate: sig.delegate,
-		}, nil
+		}
+		// A tree's suspension is the runtime's one, which is not to keep
+		// the value alive.
+		sig.value = Undefined
+		return res, nil
 	}
 
 	g.state = genCompleted

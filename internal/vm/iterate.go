@@ -397,10 +397,22 @@ func (r *Runtime) stepIter(iter, next Value) (Value, bool, error) {
 				}
 			case iterNextGenerator:
 				if g, ok := it.data.(*generator); ok && it.class == ClassGenerator {
-					if err := r.pushNativeFrame(n, iter, nil, Undefined); err != nil {
+					// As pushNativeFrame, with the function already found.
+					if err := r.tick(); err != nil {
 						return Undefined, false, err
 					}
-					got, err := r.resumeFull(g, Undefined, resumeNext)
+					if err := r.nativeFrame(n, fd, iter, nil, Undefined); err != nil {
+						return Undefined, false, err
+					}
+					var got resumeResult
+					var err error
+					ran := false
+					if g.state == genSuspendedYield && !g.delegating {
+						got, ran, err = resumeTree(r, g, Undefined)
+					}
+					if !ran {
+						got, err = r.resumeFull(g, Undefined, resumeNext)
+					}
 					r.frameDepth--
 					if err != nil {
 						return Undefined, false, err

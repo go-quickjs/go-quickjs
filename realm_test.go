@@ -183,6 +183,34 @@ func TestGeneratorRunsInItsRealm(t *testing.T) {
 	}
 }
 
+// TestGeneratorTreeRunsInItsRealm is TestGeneratorRunsInItsRealm for a body
+// with a loop, which runs as a tree, resumed by a for...of loop of the
+// other realm and by this realm's next: a resumption of it made in one
+// place still switches to its realm.
+func TestGeneratorTreeRunsInItsRealm(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	re, err := rt.NewRealm()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := re.Eval(`let secret = 42; function* g() { for (let i = 0; i < 2; i++) yield secret + i + (Array === globalThis.Array); }`); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.Set("other", re.Global()); err != nil {
+		t.Fatal(err)
+	}
+	v, err := rt.Eval(`
+		const next = Object.getPrototypeOf(function* () {}).prototype.next;
+		const s = [];
+		for (const x of other.g()) s.push(x);
+		const it = other.g();
+		try { s.push(next.call(it).value, next.call(it).value, next.call(it).done); s.join() } catch (e) { e.name + ": " + e.message }`)
+	if err != nil || v.String() != "43,44,43,44,true" {
+		t.Errorf("= %v, %v", v, err)
+	}
+}
+
 // TestTemporalProtoFromConstructorRealm pins that a Temporal constructor
 // called with a new.target from another realm, whose prototype property is
 // not an object, gives the object the prototype of new.target's realm, as

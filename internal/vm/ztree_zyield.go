@@ -71,6 +71,12 @@ var (
 	// leaves -- and then runs the body as its tree, or in the interpreter
 	// where it has none.
 	runGenerator func(r *Runtime, f *frame, sp int, pending error) (Value, error)
+
+	// runGeneratorTree runs t, the tree of the generator whose frame f is,
+	// from block b, with its context set, to its next suspension or its
+	// end: an exception the body catches is unwound to its handler, and the
+	// run goes on there.
+	runGeneratorTree func(r *Runtime, f *frame, t *tree, b int) (Value, error)
 )
 
 func init() {
@@ -115,7 +121,8 @@ func init() {
 			// the saved stack holds only what is still live.
 			c.f.pc = uint32(pc + 1)
 			c.f.savedSP = c.f.base + d
-			c.r.treeSuspend = &suspendSignal{value: x, await: await}
+			c.r.treeSig = suspendSignal{value: x, await: await}
+			c.r.treeSuspend = &c.r.treeSig
 			return -1
 		}}
 		return b.succ, true
@@ -190,8 +197,13 @@ func init() {
 			// and what lies above the stack restored is another frame's.
 			clear(r.stack[sp : base+fn.MaxStack])
 		}
+		return runGeneratorTree(r, f, t, g.index[f.pc])
+	}
+
+	runGeneratorTree = func(r *Runtime, f *frame, t *tree, b int) (Value, error) {
+		c, g, base := &f.tc, t.gen, f.base
 		depth, top := r.frameDepth, r.stackTop
-		for b := g.index[f.pc]; ; {
+		for {
 			err := c.runTreeProtected(t, b)
 			if s := r.treeSuspend; s != nil {
 				r.treeSuspend = nil
