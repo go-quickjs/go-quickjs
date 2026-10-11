@@ -39,8 +39,8 @@ async function run(a) { a[a.length - 1]++; await 0 }
 		"local_bin_imm        1 bit_and 255 ; \"s\"\n",
 		"        ; 4: for (var j = 0; j < n; j++) s += g;\n",
 		"    function gen at 7:1 (params=0 locals=0 stack=",
-		") generator\n      tree: not built: a generator\n",
-		") async\n      tree: not built: an async function\n",
+		") generator\n      tree: not built: a generator or an async function without a loop\n",
+		") async\n      tree: not built: a generator or an async function without a loop\n",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in\n%s", want, got)

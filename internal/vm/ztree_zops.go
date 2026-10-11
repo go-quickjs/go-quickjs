@@ -27,7 +27,7 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 
 var (
 	// treeBuildsOps reports whether the tier builds op, one of those opsOp
-	// builds.
+	// builds, or one treeBuildsSuspend names.
 	treeBuildsOps func(op bytecode.Op) bool
 
 	// opsOp builds the instructions treeBuildsOps names. An instruction that
@@ -72,9 +72,9 @@ var (
 	// which are converted in place.
 	concatParts func(r *Runtime, parts []Value) (Value, error)
 
-	// privateOp builds the instructions of private class members. A member's
-	// key is the private name the class made, which a local or an upvalue of
-	// the function holds (see privateKey).
+	// privateOp builds the instructions of private class members, and hands
+	// suspendOp the rest. A member's key is the private name the class made,
+	// which a local or an upvalue of the function holds (see privateKey).
 	privateOp func(b *tbuilder, pc int, in bytecode.Instr, a, k uint32) (int, bool)
 )
 
@@ -100,7 +100,7 @@ func init() {
 			bytecode.OpAddPrivateSetter, bytecode.OpInstallPrivateMethods:
 			return true
 		}
-		return false
+		return treeBuildsSuspend(op)
 	}
 
 	opsOp = func(b *tbuilder, pc int, in bytecode.Instr) (int, bool) {
@@ -909,7 +909,7 @@ func init() {
 				}
 			})
 		default:
-			return 0, false
+			return suspendOp(b, pc, in)
 		}
 		return 0, true
 	}

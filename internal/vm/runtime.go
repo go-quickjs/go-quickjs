@@ -275,6 +275,9 @@ type Runtime struct {
 	// sourceMaps maps stack traces through scripts' source maps, once a
 	// host gives a loader; see zsourcemap.go.
 	sourceMaps *sourceMaps
+	// treeSuspend is the suspension a generator's tree ended its run with,
+	// for runGenerator to hand on (see ztree_zyield.go).
+	treeSuspend *suspendSignal
 }
 
 // Realm is a set of intrinsics and the global object that goes with them.

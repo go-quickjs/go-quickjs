@@ -468,7 +468,7 @@ func (r *Runtime) runGeneratorFrom(g *generator, f *frame, base, sp int, sent Va
 		sp++
 	}
 
-	v, err := r.executeAt(f, sp, pending)
+	v, err := runGenerator(r, f, sp, pending)
 	return r.finishResume(g, f, base, v, err)
 }
 

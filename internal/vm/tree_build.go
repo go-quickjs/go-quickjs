@@ -117,7 +117,7 @@ func (b *tbuilder) takeBody() []tstmt {
 // buildTree builds a function's tree, or reports nil where the function has
 // an instruction the tier does not build, or code it cannot follow.
 func buildTree(fn *bytecode.Function) *tree {
-	if !treeTier.Load() || fn.Generator || fn.Async || fn.TopLevel || fn.HasDirectEval || fn.MaxStack > 64 {
+	if !treeTier.Load() || fn.TopLevel || fn.HasDirectEval || fn.MaxStack > 64 {
 		return nil
 	}
 	code := fn.Code
@@ -152,7 +152,8 @@ func buildTree(fn *bytecode.Function) *tree {
 			leader[in.A] = true
 			leader[pc+1] = true
 			back = back || int(in.A) <= pc
-		case bytecode.OpReturn, bytecode.OpReturnUndef, bytecode.OpThrow, bytecode.OpRethrow:
+		case bytecode.OpReturn, bytecode.OpReturnUndef, bytecode.OpThrow, bytecode.OpRethrow,
+			bytecode.OpEndParams, bytecode.OpYield, bytecode.OpAwait:
 			leader[pc+1] = true
 		}
 	}
@@ -229,7 +230,7 @@ func buildTree(fn *bytecode.Function) *tree {
 		}
 	}
 	if flow != nil {
-		if handlers {
+		if len(flow.entries) != 0 {
 			flow.structureExceptions(t, done)
 		} else {
 			flow.structure(t, done)
@@ -250,6 +251,9 @@ func buildTree(fn *bytecode.Function) *tree {
 		} else {
 			blk.next = to
 		}
+	}
+	if fn.Generator || fn.Async {
+		return suspendTree(fn, t, index, iters)
 	}
 	if handlers || iters {
 		return handlerTree(t, index, iters)
@@ -312,6 +316,8 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 			return b.rethrow(t, bi, pc)
 		case bytecode.OpIterNextOrJump:
 			return iterNextOrJump(b, t, bi, pc, in)
+		case bytecode.OpYield, bytecode.OpAwait:
+			return suspendEnd(b, t, bi, pc, in)
 		case bytecode.OpJump:
 			if !b.spill() {
 				return nil, false

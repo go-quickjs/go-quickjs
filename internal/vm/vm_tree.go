@@ -36,9 +36,10 @@ import (
 // has a wrapper block that catches one and resumes at the handler; other
 // trees let it propagate to the caller or the function's runTree boundary.
 //
-// A function with an instruction the tier does not build -- an iterator's
-// instruction, a generator's, anything rarer than a loop's -- runs
-// in the interpreter as before.
+// A function with an instruction the tier does not build -- yield*, for
+// await, with, anything rarer than a loop's -- runs in the interpreter as
+// before. A generator's or an async function's tree is run by its
+// resumptions (see ztree_zyield.go), never by runTree.
 
 // tctx is a running tree's state, which every node is given.
 type tctx struct {
@@ -76,6 +77,9 @@ type tblock struct {
 // in every runtime.
 type tree struct {
 	blocks []tblock
+	// gen is a generator's or an async function's, for its resumptions
+	// (see ztree_zyield.go), and nil for any other function's.
+	gen *tgen
 }
 
 // treeThrow carries an exception out of a tree, to runTree.
