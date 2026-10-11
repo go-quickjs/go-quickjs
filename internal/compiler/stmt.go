@@ -530,9 +530,25 @@ func (c *compiler) emitReturnValue(pos int) {
 		// the clause's own: a clause that was still protected by itself would
 		// run a second time.
 		ctx := &c.finallys[len(c.finallys)-1]
+		savedDepth := c.handlerDepth
+		if len(c.exits) > ctx.exits {
+			// What the statements inside the clause's try left in place is
+			// undone first, as they are left before the try is: a for...of
+			// there closes its iterator before the clause runs. The value
+			// waits in a hidden local meanwhile, the iterators being beneath
+			// it.
+			if c.returnSlot < 0 {
+				c.returnSlot = int32(c.declare(fmt.Sprintf("%%rv%d", *c.hiddenCount), bindVar, pos))
+				*c.hiddenCount++
+			}
+			c.emit(bytecode.OpSetLocal, uint32(c.returnSlot), 0)
+			c.unwindExits(len(c.exits), ctx.exits)
+			c.emit(bytecode.OpGetLocal, uint32(c.returnSlot), 0)
+		}
 		for d := c.handlerDepth; d >= ctx.handlers; d-- {
 			c.emit(bytecode.OpPopCatch, 0, 0)
 		}
+		c.handlerDepth = savedDepth
 		c.emit(bytecode.OpPushInt, uint32(completionReturn), 0)
 		c.emitAt(pos, bytecode.OpJump, 0, 0)
 		c.finallys[len(c.finallys)-1].returns = append(
@@ -949,7 +965,7 @@ func (c *compiler) compileTry(n *ast.TryStmt) {
 func (c *compiler) compileTryFinally(pos int, body func(), finally []ast.Stmt) {
 	finallyHandler := c.emitJump(bytecode.OpPushFinally)
 	c.handlerDepth++
-	c.finallys = append(c.finallys, finallyCtx{body: finally, handlers: c.handlerDepth})
+	c.finallys = append(c.finallys, finallyCtx{body: finally, handlers: c.handlerDepth, exits: len(c.exits)})
 
 	// finallyStart is filled in once the clause's first instruction is known.
 	finallyStart := 0
@@ -1146,28 +1162,47 @@ func nameOf(target ast.Expr) string {
 
 // pushExit records something the statement being compiled leaves in place for
 // the duration of its body.
-func (c *compiler) pushExit(e pendingExit) { c.exits = append(c.exits, e) }
+func (c *compiler) pushExit(e pendingExit) {
+	c.exits = append(c.exits, e)
+	c.exitHandlers = append(c.exitHandlers, c.handlerDepth)
+}
 
 // popExit ends the statement that pushed the innermost exit, which emits its
 // own undo on the path that falls out of the bottom.
-func (c *compiler) popExit() { c.exits = c.exits[:len(c.exits)-1] }
+func (c *compiler) popExit() {
+	c.exits = c.exits[:len(c.exits)-1]
+	c.exitHandlers = c.exitHandlers[:len(c.exitHandlers)-1]
+}
 
-// emitPendingExits undoes everything the statements between here and the jump's
-// target left in place, innermost first.
-func (c *compiler) emitPendingExits(down int) {
-	for i := len(c.exits) - 1; i >= down; i-- {
-		switch c.exits[i] {
-		case exitCursor:
-			c.emit(bytecode.OpIterClose, 0, 0)
-			c.emit(bytecode.OpDrop, 0, 0)
-		case exitDrop:
-			c.emit(bytecode.OpDrop, 0, 0)
-		case exitWith:
-			c.emit(bytecode.OpWithPop, 0, 0)
-		case exitCompletion:
-			c.emit(bytecode.OpDrop, 0, 0)
-			c.emit(bytecode.OpDrop, 0, 0)
+// unwindExits undoes what the statements from exit top-1 down to exit down
+// left in place, innermost first, and reports down. Each is undone once the
+// handlers registered inside its statement are popped, so that an error
+// closing an iterator is caught by a handler around the loop, as the loop
+// is left before the handler's try is, and not by one inside it.
+func (c *compiler) unwindExits(top, down int) int {
+	for i := top - 1; i >= down; i-- {
+		for c.handlerDepth > c.exitHandlers[i] {
+			c.emit(bytecode.OpPopCatch, 0, 0)
+			c.handlerDepth--
 		}
+		c.emitExit(c.exits[i])
+	}
+	return min(top, down)
+}
+
+// emitExit undoes one exit.
+func (c *compiler) emitExit(e pendingExit) {
+	switch e {
+	case exitCursor:
+		c.emit(bytecode.OpIterClose, 0, 0)
+		c.emit(bytecode.OpDrop, 0, 0)
+	case exitDrop:
+		c.emit(bytecode.OpDrop, 0, 0)
+	case exitWith:
+		c.emit(bytecode.OpWithPop, 0, 0)
+	case exitCompletion:
+		c.emit(bytecode.OpDrop, 0, 0)
+		c.emit(bytecode.OpDrop, 0, 0)
 	}
 }
 
@@ -1185,8 +1220,17 @@ func (c *compiler) emitPendingExits(down int) {
 // early and pops a handler that is still in use.
 func (c *compiler) unwindTo(target *loopCtx) {
 	saved, savedDepth := c.finallys, c.handlerDepth
-	defer func() { c.finallys, c.handlerDepth = saved, savedDepth }()
+	savedExits, savedExitHandlers := c.exits, c.exitHandlers
+	defer func() {
+		c.finallys, c.handlerDepth = saved, savedDepth
+		c.exits, c.exitHandlers = savedExits, savedExitHandlers
+	}()
+	top := len(c.exits)
 	for i := len(saved) - 1; i >= target.finallys; i-- {
+		// What statements inside the clause's try left in place is undone
+		// before the clause runs, as they are left before the try is: a
+		// for...of there closes its iterator first.
+		top = c.unwindExits(top, max(saved[i].exits, target.exits))
 		// Everything between here and the clause goes, the clause's own
 		// handler included.
 		for c.handlerDepth >= saved[i].handlers {
@@ -1202,22 +1246,27 @@ func (c *compiler) unwindTo(target *loopCtx) {
 		// routed through. Clauses are small and rarely nested, so the
 		// duplication is bounded.
 		c.finallys = saved[:i]
+		// The clause's own statements see only the exits still in force,
+		// so that a jump inside it does not undo again what this one has.
+		c.exits = append([]pendingExit(nil), savedExits[:top]...)
+		c.exitHandlers = append([]int(nil), savedExitHandlers[:top]...)
 		c.beginScope()
 		savedRecord := c.finallyRecord
 		c.finallyRecord = false
 		c.compileStatements(saved[i].body)
 		c.finallyRecord = savedRecord
 		c.endScope()
+		c.exits, c.exitHandlers = savedExits, savedExitHandlers
 	}
 	// What is left is the handler of a catch clause the jump leaves without
 	// passing through a finally: a try whose block breaks out of a loop around
 	// it. Nothing runs, but the handler still has to go, or a later throw
 	// lands in a catch clause that was finished with.
+	c.unwindExits(top, target.exits)
 	for c.handlerDepth > target.handlers {
 		c.emit(bytecode.OpPopCatch, 0, 0)
 		c.handlerDepth--
 	}
-	c.emitPendingExits(target.exits)
 }
 
 // atModuleTopLevel reports whether the compiler is in a module's outermost

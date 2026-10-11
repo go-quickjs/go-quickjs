@@ -234,6 +234,10 @@ type finallyCtx struct {
 	// pushed. A jump into the clause has to pop everything above that, and the
 	// clause's own handler with it -- the clause is not protected by itself.
 	handlers int
+	// exits is how many exits were in force when the clause's try began:
+	// those above were pushed by statements inside it, which a jump leaving
+	// them undoes before the clause runs.
+	exits int
 }
 
 // completionKind mirrors the runtime's encoding of how a protected block
@@ -341,8 +345,14 @@ type compiler struct {
 	// that the assignment is made exactly where the binding was.
 	annexB map[*ast.FuncDecl]bool
 	// exits records what the statements currently being compiled left in place
-	// for the duration of their bodies, innermost last.
-	exits []pendingExit
+	// for the duration of their bodies, innermost last, and exitHandlers how
+	// deep the handler stack was when each was pushed: a handler above that
+	// was registered inside the statement, and goes before it is undone.
+	exits        []pendingExit
+	exitHandlers []int
+	// returnSlot is a hidden local a return routed through a finally clause
+	// parks its value in while the statements it leaves are undone, or -1.
+	returnSlot int32
 	// pendingLabel carries a label from a labelled statement to the loop it
 	// labels, which is the next context pushed.
 	pendingLabel string
@@ -523,6 +533,7 @@ func newCompiler(parent *compiler, opts Options) *compiler {
 		// A function has no completion value of its own; only the top-level
 		// program tracks one, and Compile overwrites this.
 		completionSlot: -1,
+		returnSlot:     -1,
 	}
 	if parent != nil {
 		c.hiddenCount = parent.hiddenCount
