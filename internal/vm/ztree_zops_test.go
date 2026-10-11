@@ -121,3 +121,44 @@ func assertTreeIn(t *testing.T, fn *bytecode.Function, name string) {
 		t.Fatalf("%s did not run as a tree: %s", name, why)
 	}
 }
+
+// TestTreeHTMLDDA pins that the tree tier's tests of null and undefined
+// take document.all as the interpreter does (Annex B's [[IsHTMLDDA]]): ==
+// and != against null or undefined, from either side, find it equal to
+// both, which the tier had taken for no object -- a function with a for
+// (let ...) loop, built as a tree since its dead zone is, counted none --
+// while ?. and ?? find it neither. Each function runs as a tree.
+func TestTreeHTMLDDA(t *testing.T) {
+	defer SetTreeTier(true)
+	for _, tt := range []struct{ name, src, want string }{
+		{"eqNull", `function f(x) { let n = 0; for (let i = 0; i < 3; i++) if (x == null) n++; return n } f(dda) + ',' + f(null) + ',' + f(0)`, "3,3,0"},
+		{"neUndefined", `function f(x) { var n = 0; for (var i = 0; i < 3; i++) if (x != undefined) n++; return n } f(dda) + ',' + f(undefined) + ',' + f({})`, "0,0,3"},
+		{"nullEq", `function f(x) { let n = 0; for (let i = 0; i < 3; i++) n += (null == x ? 1 : 0) + (undefined != x ? 10 : 0); return n } f(dda) + ',' + f(1)`, "3,30"},
+		{"optional", `dda.k = 5; function f(x) { let n = 0; for (let i = 0; i < 3; i++) n += x?.k === undefined ? 1 : 10; return n } f(dda) + ',' + f(null)`, "30,3"},
+		{"coalesce", `function f(x) { let s = ''; for (let i = 0; i < 2; i++) s += typeof (x ?? 1); return s } f(dda) + ',' + f(undefined)`, "undefinedundefined,numbernumber"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, on := range []bool{false, true} {
+				SetTreeTier(on)
+				fn := compileForTest(t, tt.src)
+				r := New(Config{})
+				dda := r.NewObject()
+				dda.MarkHTMLDDA()
+				r.global.setOwnRaw(r.atoms.intern("dda"), Obj(dda), propDefault)
+				v, err := r.Run(fn)
+				if err != nil {
+					r.Close()
+					t.Fatalf("tree %v: %v", on, err)
+				}
+				got, err := r.ToString(v)
+				if err != nil || got.Go() != tt.want {
+					t.Errorf("tree %v: got %v, %v; want %s", on, got, err, tt.want)
+				}
+				r.Close()
+				if on {
+					assertExceptionTree(t, fn, "f")
+				}
+			}
+		})
+	}
+}

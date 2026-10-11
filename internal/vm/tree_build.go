@@ -485,7 +485,15 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 			if !ok {
 				return nil, false
 			}
-			next := eqJump(op, b.stack[d-1], tentry{slot: -1, literal: true, n: Null}, pc, taken, fall)
+			// Null or undefined itself: document.all, which == null, is
+			// not nullish to ?. and ??.
+			v, nullish := b.stack[d-1].tree(), op == bytecode.OpNe
+			next := func(c *tctx) int {
+				if v(c).IsNullish() == nullish {
+					return taken
+				}
+				return fall
+			}
 			t.blocks[bi] = tblock{body: b.takeBody(), next: next}
 			return b.succ, true
 		case bytecode.OpThrow:
@@ -2256,8 +2264,8 @@ func isEquality(op bytecode.Op) bool {
 // null, true or false -- x === null, x == undefined, x !== false -- is
 // tested for without a call: === against undefined or null asks the other's
 // kind, and == against either asks whether it is one of them, which nothing
-// else equals loosely; === against a boolean is that boolean, whose value
-// has one spelling.
+// else equals loosely but document.all (Annex B's [[IsHTMLDDA]]); === against
+// a boolean is that boolean, whose value has one spelling.
 func eqJump(op bytecode.Op, x, y tentry, pc, taken, fall int) tnext {
 	if x.literal && !y.literal {
 		x, y = y, x
@@ -2281,7 +2289,10 @@ func eqJump(op bytecode.Op, x, y tentry, pc, taken, fall int) tnext {
 			bits := math.Float64bits(lit.num)
 			return func(c *tctx) int { return end(math.Float64bits(v(c).num) == bits) }
 		case lit.IsNullish():
-			return func(c *tctx) int { return end(v(c).IsNullish()) }
+			return func(c *tctx) int {
+				l := v(c)
+				return end(l.IsNullish() || l.IsObject() && l.Object().flags&objHTMLDDA != 0)
+			}
 		}
 	}
 	a, b := x.tree(), y.tree()
