@@ -11,7 +11,8 @@
 // licenses this one's is not. -fetch downloads it, at the revision the
 // figures in docs/benchmarks.md were measured at, into -dir. QuickJS's
 // tests/microbench.js is: microbench.js is QuickJS 2026-06-04's (92a3d4d),
-// as it is there, under its MIT license, and is built into the package.
+// as it is there, under its MIT license, and is built into the package, as
+// is microbench_extra.js, ours, written as its tests are.
 // Four modes measure four things:
 //
 //   - score runs the suite as its own run.js does, and prints its scores:
@@ -22,10 +23,10 @@
 //     which is what compares one build, or one engine, with another.
 //   - compile parses and compiles the suite's sources -n times, which is
 //     the parser and the compiler alone.
-//   - micro runs QuickJS's micro-benchmarks, each test -n times with the
-//     same work, and prints the fastest time of one operation, in
-//     nanoseconds (see micro.go). It needs no -dir; -suite names tests by
-//     the start of their names.
+//   - micro runs QuickJS's micro-benchmarks, and ours of generators and
+//     async functions, each test -n times with the same work, and prints
+//     the fastest time of one operation, in nanoseconds (see micro.go). It
+//     needs no -dir; -suite names tests by the start of their names.
 //
 // -cpuprofile and -memprofile write profiles for go tool pprof.
 package v8bench

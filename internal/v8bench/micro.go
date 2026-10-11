@@ -18,10 +18,20 @@ import (
 // for on an AMD Ryzen 5 3600, the figures docs/benchmarks.md compares --
 // runs it -n times, and prints the fastest time of one operation, in
 // nanoseconds. One driver does this on every engine: microbench.js's tests,
-// without the call of its main that ends the file, and then the loop.
+// without the call of its main that ends the file, microbench_extra.js's,
+// and then the loop.
+//
+// microbench_extra.js is ours: tests of what microbench.js has none of --
+// generators and async functions -- written as its tests are. A test of
+// async functions returns a promise of its count, which the loop awaits, so
+// its time takes in the jobs it queued; every runner runs a script's jobs
+// before it is done with it.
 
 //go:embed microbench.js
 var microbench string
+
+//go:embed microbench_extra.js
+var microbenchExtra string
 
 // microWork is each test and the argument it is run with, in
 // microbench.js's order. sort_bench is not among them: it reports a run's
@@ -54,26 +64,36 @@ var microWork = []struct {
 	{"float_toFixed", 524288}, {"float_toPrecision", 524288}, {"float_toExponential", 524288},
 	{"string_to_int", 2097152}, {"string_to_float", 1048576}, {"bigint32_arith", 8192},
 	{"bigint64_arith", 4096}, {"bigint256_arith", 2048},
+	// microbench_extra.js's.
+	{"generator_for_of", 32768}, {"generator_next", 8192}, {"generator_busy", 8192},
+	{"generator_create", 524288}, {"generator_delegate", 4096}, {"async_await", 2048},
+	{"async_busy", 8192}, {"async_call", 131072}, {"async_chain", 65536}, {"async_generator", 1024},
 }
 
 // microLoop is the driver's loop: each test of __work whose name begins with
 // one of __only, or all of them, run __runs times, timed by microbench.js's
 // own clock. A test is found by its name with eval, which sees the file's
-// functions whether it runs as a script or as node's module.
+// functions whether it runs as a script or as node's module. The loop is an
+// async function's, so that it can await what a test of async functions
+// returns.
 const microLoop = `
 var __work = %s, __only = %s, __runs = %d;
-console.log(pad("TEST", 24) + pad_left("N", 10) + pad_left("TIME (ns)", 12));
-for (var __i = 0; __i < __work.length; __i++) {
-	var __name = __work[__i][0], __n = __work[__i][1];
-	if (__only.length && !__only.some(function (p) { return __name.startsWith(p); })) continue;
-	var __f = eval(__name), __best = Infinity;
-	for (var __r = 0; __r < __runs; __r++) {
-		var __t = get_clock(), __ops = __f(__n);
-		__t = get_clock() - __t;
-		__best = Math.min(__best, __t * 1e6 / __ops);
+(async function () {
+	console.log(pad("TEST", 24) + pad_left("N", 10) + pad_left("TIME (ns)", 12));
+	for (var __i = 0; __i < __work.length; __i++) {
+		var __name = __work[__i][0], __n = __work[__i][1];
+		if (__only.length && !__only.some(function (p) { return __name.startsWith(p); })) continue;
+		var __f = eval(__name), __best = Infinity;
+		for (var __r = 0; __r < __runs; __r++) {
+			var __t = get_clock(), __ops = __f(__n);
+			if (__ops && typeof __ops.then === "function")
+				__ops = await __ops;
+			__t = get_clock() - __t;
+			__best = Math.min(__best, __t * 1e6 / __ops);
+		}
+		console.log(pad(__name, 24) + pad_left(__n, 10) + pad_left(__best.toFixed(3), 12));
 	}
-	console.log(pad(__name, 24) + pad_left(__n, 10) + pad_left(__best.toFixed(3), 12));
-}
+})().catch(function (e) { console.log("error: " + e); });
 `
 
 // microDriver is the driver script: microbench.js without the call of its
@@ -100,7 +120,7 @@ func microDriver(runs int, only string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return microbench[:end+1] + fmt.Sprintf(microLoop, w, o, max(runs, 1)), nil
+	return microbench[:end+1] + microbenchExtra + fmt.Sprintf(microLoop, w, o, max(runs, 1)), nil
 }
 
 // runMicro runs the driver in a runtime of e's, which is given the
