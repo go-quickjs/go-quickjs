@@ -1360,6 +1360,9 @@ func (b *builder) plan() error {
 	// By PC, one past the end included.
 	entries, leaders := b.f.bools(len(p.Code)+2), b.f.bools(len(p.Code)+2)
 	entries[0], leaders[0] = true, true
+	for _, pc := range p.Entries {
+		entries[pc], leaders[pc] = true, true
+	}
 	total := 0
 	for pc := range p.Code {
 		if !reachable(p, pc) {

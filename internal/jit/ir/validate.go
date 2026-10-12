@@ -39,6 +39,11 @@ func (p *Program) Validate() error {
 			return fmt.Errorf("jit IR: invalid handler table")
 		}
 	}
+	for _, pc := range p.Entries {
+		if pc < 0 || pc >= len(p.Code) || p.Maps[pc].Depth < 0 {
+			return fmt.Errorf("jit IR: invalid entry %d", pc)
+		}
+	}
 	calls := uint32(0)
 	for pc, in := range p.Code {
 		if p.Maps[pc].Depth < 0 {

@@ -272,6 +272,13 @@ func init() {
 	}
 
 	runGeneratorTree = func(r *Runtime, f *frame, t *tree, b int) (Value, error) {
+		if r.jitOn() {
+			// Native code, where the JIT has the function's, from the
+			// resumption's entry.
+			if v, err, native := r.jitResume(f); native {
+				return v, err
+			}
+		}
 		c, g, base := &f.tc, t.gen, f.base
 		depth, top := r.frameDepth, r.stackTop
 		for {

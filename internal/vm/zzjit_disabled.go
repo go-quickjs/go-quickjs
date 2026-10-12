@@ -33,6 +33,7 @@ func (*Runtime) JITStats() JITStats { return JITStats{} }
 
 func (*Runtime) initJIT(bool, int64)                                  {}
 func (*Runtime) tryJITFrame(*frame) (Value, error, bool)              { return Value{}, nil, false }
+func (*Runtime) jitResume(*frame) (Value, error, bool)                { return Value{}, nil, false }
 func (*Runtime) jitBackEdge(*frame, uint32, int) (Value, error, bool) { return Value{}, nil, false }
 func (*Runtime) tryJITTreeLoop(*tctx, int, int, bool)                 {}
 func (*Runtime) jitTreeRecovery(*frame) bool                          { return false }

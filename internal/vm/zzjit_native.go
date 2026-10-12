@@ -1566,6 +1566,25 @@ func (r *Runtime) tryJITTreeLoopEnabled(c *tctx, pc, depth int, fullBudget bool)
 	// The tree's check set the interval: the budget varies about it.
 	r.backEdges = r.jit.backEdgeBudget()
 	if v, err, done := r.tryJITLoop(c.f, c.cl.fn.Code[pc].A, c.f.base+depth, fullBudget); done {
+		if isGeneratorTemplate(c.cl.fn) {
+			// A generator's tree runs under runGeneratorTree's recover,
+			// not runTree's: the run's end is told it as the tree tells
+			// it -- a suspension in treeSuspend, a return in ret, an
+			// exception as a throw. Native code ran no loop of for...of,
+			// whose cursors an exception would close.
+			switch s, ok := err.(*suspendSignal); {
+			case ok:
+				if s != &r.treeSig {
+					r.treeSig = *s
+				}
+				r.treeSuspend = &r.treeSig
+				panic(treeThrow{})
+			case err == nil:
+				c.ret = v
+				panic(treeThrow{})
+			}
+			panic(treeThrow{err: err})
+		}
 		// Tree branch nodes return block indices. Unwind to runTree only
 		// after native execution or its interpreter fallback has completed.
 		panic(jitTreeExit{v, err})

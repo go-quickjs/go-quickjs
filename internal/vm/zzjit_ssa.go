@@ -2562,7 +2562,7 @@ const jitInlineDepth = 3
 // be inlined, with its calls if depth allows. cl is one of its closures.
 func (r *Runtime) jitInlinesCalls(cl *closure, depth int) bool {
 	fn := cl.fn
-	if depth <= 0 || len(fn.Upvalues) != 0 || fn.TopLevel || fn.IsModule || fn.UsesArguments || fn.HasDirectEval {
+	if depth <= 0 || len(fn.Upvalues) != 0 || fn.TopLevel || fn.IsModule || fn.UsesArguments || fn.HasDirectEval || isGeneratorTemplate(fn) {
 		return false
 	}
 	p, err := r.jitLower(fn, jitLowerInline)
@@ -2695,7 +2695,7 @@ func (r *Runtime) jitSeedCalls(cl *closure, e *jitEntry, p *ir.Program) {
 			continue
 		}
 		cf := callee.fn
-		if cf == fn || cf.TopLevel || cf.IsModule || cf.UsesArguments || cf.HasDirectEval {
+		if cf == fn || cf.TopLevel || cf.IsModule || cf.UsesArguments || cf.HasDirectEval || isGeneratorTemplate(cf) {
 			continue
 		}
 		ce := r.jit.cache[weak.Make(cf)]
@@ -2805,7 +2805,7 @@ func (r *Runtime) jitSeedNativeCalls(e *jitEntry, fn *bytecode.Function, pc int,
 	for _, t := range targets {
 		cf := t.cl.fn
 		if len(e.nativeCalls) != 0 && slices.ContainsFunc(e.nativeCalls, func(x jitInline) bool { return int(x.pc) == pc && x.obj == t.o }) ||
-			cf == fn || cf.TopLevel || cf.IsModule || cf.UsesArguments || cf.HasDirectEval ||
+			cf == fn || cf.TopLevel || cf.IsModule || cf.UsesArguments || cf.HasDirectEval || isGeneratorTemplate(cf) ||
 			jitCountAt(e.nativeCalls, pc) >= jitCallTargets {
 			continue
 		}
@@ -3001,7 +3001,7 @@ func (r *Runtime) jitCalleeObjectAt(cl *closure, p *ir.Program, pc int) (*Object
 // it natively or inline it, as jitCalled has a callee; or nil.
 func (r *Runtime) jitCallableClosure(cl *closure, o *Object) (*Object, *closure) {
 	fd := o.fn()
-	if fd == nil || fd.native != nil || fd.bound || fd.closure == nil || fd.closure.realm != r.Realm ||
+	if fd == nil || fd.native != nil || fd.bound || fd.closure == nil || isGeneratorTemplate(fd.closure.fn) || fd.closure.realm != r.Realm ||
 		fd.closure.scope() != cl.scope() {
 		return nil, nil
 	}
@@ -3110,7 +3110,7 @@ func (r *Runtime) jitCalled(f *frame, sp int, in bytecode.Instr) (*Object, *clos
 	}
 	o := callee.Object()
 	fd := o.fn()
-	if fd == nil || fd.native != nil || fd.bound || fd.closure == nil || fd.closure.realm != r.Realm ||
+	if fd == nil || fd.native != nil || fd.bound || fd.closure == nil || isGeneratorTemplate(fd.closure.fn) || fd.closure.realm != r.Realm ||
 		fd.closure.scope() != f.cl.scope() {
 		return nil, nil
 	}
@@ -3219,7 +3219,7 @@ func (r *Runtime) jitForwardMethod(cl *closure, o *Object) *Object {
 	}
 	t := m.value.Object()
 	fd := t.fn()
-	if fd == nil || fd.native != nil || fd.bound || fd.closure == nil || fd.closure.realm != r.Realm || fd.closure.scope() != cl.scope() {
+	if fd == nil || fd.native != nil || fd.bound || fd.closure == nil || isGeneratorTemplate(fd.closure.fn) || fd.closure.realm != r.Realm || fd.closure.scope() != cl.scope() {
 		return nil
 	}
 	return t
@@ -3346,7 +3346,7 @@ func (r *Runtime) jitCalledVia(f *frame, sp int, in bytecode.Instr) (*Object, *c
 	}
 	o := recv.Object()
 	fd := o.fn()
-	if fd == nil || fd.native != nil || fd.bound || fd.closure == nil || fd.closure.realm != r.Realm ||
+	if fd == nil || fd.native != nil || fd.bound || fd.closure == nil || isGeneratorTemplate(fd.closure.fn) || fd.closure.realm != r.Realm ||
 		fd.closure.scope() != f.cl.scope() {
 		return nil, nil
 	}
@@ -3552,7 +3552,9 @@ func (r *Runtime) jitRefillPools(f *frame, e *jitEntry, pc, sp int, in bytecode.
 // want of code budget, which may change.
 func (r *Runtime) jitNativeCallee(cl *closure) *jitEntry {
 	fn := cl.fn
-	if fn.TopLevel || fn.IsModule || fn.UsesArguments || fn.HasDirectEval {
+	if fn.TopLevel || fn.IsModule || fn.UsesArguments || fn.HasDirectEval || isGeneratorTemplate(fn) {
+		// A call of a generator or an async function makes its object: its
+		// body is not what a call runs.
 		return nil
 	}
 	e := r.jitFor(cl)
@@ -4789,6 +4791,8 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 				}
 			}
 			switch in.Op {
+			case bytecode.OpYield, bytecode.OpAwait:
+				return r.jitSuspend(f, in, f.base+int(ctx.ExitDepth))
 			case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew:
 				r.jitCallSeen(f, e, exitPC, f.base+int(ctx.ExitDepth), in)
 			case bytecode.OpGetProp, bytecode.OpGetPropThis:
@@ -5590,4 +5594,55 @@ func jitHandlers(f *frame, p *ir.Program, pc int) {
 		h := p.Handlers[k-1]
 		f.handlers[i] = handler{pc: h.PC, stackDepth: int(h.Depth), isFinally: h.Finally}
 	}
+}
+
+// jitSuspend suspends f, a generator's or an async function's frame, at
+// in, a yield or an await native code left it at, with sp its stack's top,
+// as the interpreter's yield does: the value handed out popped, the pc
+// past the instruction, and the depth beneath it kept for the resumption,
+// which enters native code there (jitResume). The suspension is the
+// runtime's own, as the tree tier's is (treeSig).
+func (r *Runtime) jitSuspend(f *frame, in bytecode.Instr, sp int) (Value, error, bool) {
+	sp--
+	f.pc++
+	f.savedSP = sp
+	r.treeSig = suspendSignal{value: r.stack[sp], await: in.Op == bytecode.OpAwait}
+	return Undefined, &r.treeSig, true
+}
+
+// jitResume is a generator's or an async function's resumption's hook
+// (runGeneratorTree), for a runtime that runs the JIT: once resumptions
+// have made the function hot, as calls make any function hot
+// (tryJITFrame), its frame runs in native code from the entry at its pc
+// -- the first after its parameters, or one after a yield or an await --
+// to its next suspension or its end. false where it has no code, or none
+// that is entered there.
+func (r *Runtime) jitResume(f *frame) (Value, error, bool) {
+	if f.cl.jitRefused {
+		return Undefined, nil, false
+	}
+	e := r.jit.hint(f.cl)
+	if e != nil && e.entrySlow && !e.reoptPending() {
+		e.slowCalls++
+		return Undefined, nil, false
+	}
+	if f.cl.jitCalls < r.jitCallThreshold {
+		f.cl.jitCalls++
+		if f.cl.jitCalls < r.jitCallThreshold {
+			return Undefined, nil, false
+		}
+	}
+	// The depth beneath the resumption's pc, which its entry loads: the
+	// stack as the suspension left it, and the value sent in.
+	p := (*ir.Program)(nil)
+	if e != nil && e.ssa != nil {
+		p = e.ssaProg
+	} else if p, _ = r.jitLower(f.cl.fn, jitLowerSSA); p == nil {
+		return Undefined, nil, false
+	}
+	pc := int(f.pc)
+	if pc >= len(p.Maps) || p.Maps[pc].Depth < 0 {
+		return Undefined, nil, false
+	}
+	return r.tryJITAt(f, pc, p.Maps[pc].Depth, false)
 }

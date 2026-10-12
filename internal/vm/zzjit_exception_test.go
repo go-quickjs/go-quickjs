@@ -5,8 +5,9 @@ package vm
 import "testing"
 
 // jitAgreesForTest runs setup, then each round, an expression, in an
-// interpreter and in a runtime that compiles at the first call, and fails at
-// the first answer, as a string, that differs; it returns the JIT's runtime.
+// interpreter and in a runtime that compiles at the first call, the jobs it
+// queued run after it, and fails at the first answer, as a string, that
+// differs; it returns the JIT's runtime.
 func jitAgreesForTest(t *testing.T, setup string, rounds ...string) *Runtime {
 	t.Helper()
 	want := New(Config{})
@@ -20,7 +21,13 @@ func jitAgreesForTest(t *testing.T, setup string, rounds ...string) *Runtime {
 	for i, src := range rounds {
 		src = "''+(" + src + ")"
 		wv, werr := want.Run(compileForTest(t, src))
+		if werr == nil {
+			werr = want.runMicrotasks()
+		}
 		gv, gerr := r.Run(compileForTest(t, src))
+		if gerr == nil {
+			gerr = r.runMicrotasks()
+		}
 		if (werr == nil) != (gerr == nil) {
 			t.Fatalf("round %d (%s): error %v, interpreter's %v", i, src, gerr, werr)
 		}
@@ -164,5 +171,60 @@ func TestJITHandlersAtExits(t *testing.T) {
 	}
 	if !depths[0] || !depths[1] || !depths[2] {
 		t.Fatalf("handler depths seen: %v", depths)
+	}
+}
+
+// A generator's or an async function's body is compiled, and each
+// resumption enters native code at its pc: the first after the
+// parameters, or the one after the yield or the await it was suspended
+// at, with the value sent in. A suspension leaves the frame as the
+// interpreter's does, and what a resumption injects -- a throw, a return
+// -- is unwound to the body's handlers.
+func TestJITGenerators(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		function* evens(n) { let s = 0; for (let i = 0; i < n; i++) { s += i; if (i % 2 === 0) yield s } return -s }
+		function* echo(n) { let s = 0; for (let i = 0; i < n; i++) { const x = yield i * 2; s += x === undefined ? 1 : x } return s }
+		function* guarded(n) {
+			let s = 0
+			try { for (let i = 0; i < n; i++) { s += i; yield s } }
+			finally { log.push('finally ' + s) }
+		}
+		function* catches(n) {
+			let s = 0
+			for (let i = 0; i < n; i++) { try { s += yield i } catch (e) { s += 1000 } }
+			return s
+		}
+		var log = []
+		function sumOf(g) { let s = 0; for (const v of g) s += v; return s }
+		function drive(n) { const g = echo(n); let r = g.next(), s = 0; while (!r.done) { s += r.value; r = g.next(r.value + 1) } return s * 1000 + r.value }
+		function injected(n) {
+			const g = catches(n); g.next(); let s = 0
+			for (let i = 0; i < n; i++) { const r = i % 3 ? g.next(i) : g.throw(new Error('x')); if (!r.done) s += r.value }
+			return s + ':' + g.return(7).value
+		}
+		function returned(n) { const g = guarded(n); let s = 0; for (let i = 0; i < n / 2; i++) s += g.next().value; g.return(); return s + ' ' + log.join() }
+		async function adds(n) { let s = 0; for (let i = 0; i < n; i++) s += await i; return s }
+		async function fails(n) { let s = 0; for (let i = 0; i < n; i++) { try { s += await (i % 4 ? i : Promise.reject(i)) } catch (e) { s -= e } } return s }
+		var out
+	`
+	r := jitAgreesForTest(t, setup,
+		`sumOf(evens(40))`, `sumOf(evens(40))`, `[...evens(30)].join()`,
+		`drive(50)`, `drive(50)`,
+		`injected(30)`, `injected(30)`,
+		`returned(20)`, `returned(20)`,
+		`(adds(30).then(v => out = v), 0)`, `out`, `(adds(40).then(v => out = v), 0)`, `out`,
+		`(fails(30).then(v => out = v), 0)`, `out`, `(fails(30).then(v => out = v), 0)`, `out`,
+	)
+	for _, name := range []string{"evens", "echo", "catches", "adds", "fails"} {
+		// Entered at each resumption, not once.
+		if e := jitNativeForTest(t, r, name); e.ssaStats.entries < 30 {
+			t.Fatalf("%s entered natively %d times", name, e.ssaStats.entries)
+		}
+	}
+	if r.frameDepth != 0 {
+		t.Fatalf("left %d frames", r.frameDepth)
 	}
 }

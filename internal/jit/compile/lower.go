@@ -110,7 +110,10 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 	switch {
 	case fn.TopLevel || fn.IsModule:
 		return nil, refuse(-1, "top-level or module code")
-	case fn.Async || fn.Generator:
+	case (fn.Async || fn.Generator) && (!m.ssa || m.callee):
+		// A generator's or an async function's body is the new pipeline's,
+		// in its own code: a call of one makes its object, and inlining
+		// its body would run it as a call does.
 		return nil, refuse(-1, "async or generator function")
 	case fn.Kind != bytecode.KindNormal && fn.Kind != bytecode.KindArrow && fn.Kind != bytecode.KindMethod:
 		return nil, refuse(-1, "special function kind")
@@ -179,7 +182,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// throws it, as V8's code calls the runtime to throw.
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
-		host = host || str || in.Op == bytecode.OpThrow || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpApplyArguments || in.Op == bytecode.OpNew || in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict || in.Op == bytecode.OpCheckGlobalRef || in.Op == bytecode.OpNewObject || in.Op == bytecode.OpNewRegExp || in.Op == bytecode.OpDefineField || in.Op == bytecode.OpPushEmptyString || in.Op == bytecode.OpConcat || in.Op == bytecode.OpNewArray || in.Op == bytecode.OpCall || in.Op == bytecode.OpCallMethod || in.Op == bytecode.OpGetGlobal || in.Op == bytecode.OpGetPropThis || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
+		host = host || str || in.Op == bytecode.OpYield || in.Op == bytecode.OpAwait || in.Op == bytecode.OpThrow || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpApplyArguments || in.Op == bytecode.OpNew || in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict || in.Op == bytecode.OpCheckGlobalRef || in.Op == bytecode.OpNewObject || in.Op == bytecode.OpNewRegExp || in.Op == bytecode.OpDefineField || in.Op == bytecode.OpPushEmptyString || in.Op == bytecode.OpConcat || in.Op == bytecode.OpNewArray || in.Op == bytecode.OpCall || in.Op == bytecode.OpCallMethod || in.Op == bytecode.OpGetGlobal || in.Op == bytecode.OpGetPropThis || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		property = property || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		this = this || in.Op == bytecode.OpPushThis
 		raw := uint32(in.Op)
@@ -283,6 +286,16 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 	}
 	p := &ir.Program{Locals: fn.LocalCount + len(fn.Upvalues), StackSize: fn.MaxStack, This: this, Maps: maps, Code: make([]ir.Instruction, len(fn.Code)),
 		Handlers: table, HandlerAt: chains}
+	if fn.Async || fn.Generator {
+		// The first resumption enters past the parameters, which ran when
+		// the generator was made.
+		for pc, in := range fn.Code {
+			if in.Op == bytecode.OpEndParams && pc+1 < len(fn.Code) && maps[pc+1].Depth >= 0 {
+				p.Entries = append(p.Entries, pc+1)
+				break
+			}
+		}
+	}
 	if this {
 		if p.Locals+p.StackSize == MaxSlots {
 			p.This = false
@@ -1003,6 +1016,13 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 	case bytecode.OpRethrow:
 		// A finally clause's completion record: its value, then its kind.
 		return effect{need: 2, delta: -2}, nil
+	case bytecode.OpYield, bytecode.OpAwait:
+		// The value handed out, and the one a resumption sends in its
+		// place.
+		if !fn.Generator && !fn.Async {
+			return bad("suspension outside a generator")
+		}
+		return effect{need: 1}, nil
 	case bytecode.OpApplyArguments:
 		// f, apply and the receiver, for f's result.
 		if !local(in.A) {
@@ -1276,6 +1296,10 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this bool) ir.Instr
 		return ir.Instruction{Op: ir.Nop}
 	case bytecode.OpRethrow:
 		return ir.Instruction{Op: ir.Rethrow, Left: top}
+	case bytecode.OpYield, bytecode.OpAwait:
+		// Go suspends the frame where native code leaves it, and a
+		// resumption enters native code again after it.
+		return ir.Instruction{Op: ir.Host}
 	}
 	// describe accepted an opcode this switch does not translate. Becoming a
 	// Nop with describe's stack effect would be a silent miscompile; the panic

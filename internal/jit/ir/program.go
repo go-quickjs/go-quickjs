@@ -335,6 +335,11 @@ type Program struct {
 	// has none.
 	Handlers  []Handler
 	HandlerAt []int32
+	// Entries are instructions native code is entered at besides the
+	// first: where a generator's or an async function's resumptions first
+	// enter it, past its parameters (end_params), which run when the
+	// generator is made.
+	Entries []int
 }
 
 // Handler is an exception handler, as push_catch or push_finally registers
