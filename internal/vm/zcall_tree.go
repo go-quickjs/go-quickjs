@@ -232,6 +232,11 @@ func (r *Runtime) callRest(o *Object, fd *funcData, this Value, args []Value) (V
 		return r.callThrough(o, this, args)
 	}
 	if fd != nil && fd.native != nil && !fd.bound && (fd.realm == nil || fd.realm == r.Realm) {
+		if fd.elemOp != 0 {
+			if v, ok := r.pureElemOp(fd.elemOp, this, args, true); ok {
+				return v, nil
+			}
+		}
 		if err := r.tick(); err != nil {
 			return Undefined, err
 		}

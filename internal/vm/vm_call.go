@@ -234,6 +234,14 @@ func (r *Runtime) callDirect(callee, this Value, args []Value) (Value, error) {
 		if fd != nil && fd.native != nil && !fd.bound && (fd.realm == nil || fd.realm == r.Realm) {
 			// A built-in of this realm is called as callObject calls one,
 			// without going through call and callObject to find out.
+			if fd.elemOp != 0 {
+				// Array.prototype.push or pop on a dense array of its own,
+				// which calls nothing and cannot throw: as Math's functions,
+				// it is applied without a frame to show in a stack trace.
+				if v, ok := r.pureElemOp(fd.elemOp, this, args, true); ok {
+					return v, nil
+				}
+			}
 			if err := r.tick(); err != nil {
 				return Undefined, err
 			}

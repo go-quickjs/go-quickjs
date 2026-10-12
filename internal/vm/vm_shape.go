@@ -53,6 +53,13 @@ type shape struct {
 	// room its objects need is more than they are given, so slack gives
 	// them none, rather than room they carry and outgrow as well.
 	outgrown bool
+	// borrowed says, on a unique shape, that its index is a shared layout's,
+	// which its object left by deleting a key or changing an attribute: the
+	// keys it still has are where that layout has them. The index is only
+	// read, and may name a key the object has since deleted, which findOwn
+	// checks against the table; the object makes an index of its own when it
+	// adds a key.
+	borrowed bool
 	// n is how many properties the layout has.
 	n int32
 	// next and nextEdge are the first transition out of the shape, which is
@@ -297,14 +304,18 @@ func (o *Object) shapeAdded(p Property) {
 	if s.unique {
 		if s.seen && (s.tree == nil || !s.tree.building) {
 			// A new identity, so that what was cached of the old one misses.
-			s = newUniqueShape(s.tree, n, s.index)
+			ns := newUniqueShape(s.tree, n, s.index)
+			ns.borrowed = s.borrowed
+			s = ns
 			o.shape = s
 		} else {
 			s.n = int32(n)
 		}
-		if s.index != nil {
+		if s.index != nil && !s.borrowed {
 			s.index.add(p.key, int32(n-1))
-		} else if n > linearScanLimit {
+		} else if s.index != nil || n > linearScanLimit {
+			// A borrowed index is the layout's, which has no such key: the
+			// object's own is made of its table.
 			o.buildIndex()
 		}
 		return
@@ -370,12 +381,12 @@ func (o *Object) layoutChanged() {
 		return
 	}
 	index := s.index
-	if !s.unique && index != nil {
-		// A shared index is the layout's, which this object is leaving: it
-		// gets a copy of its own, which is its table's as it stands.
-		index = index.clone()
-	}
-	o.shape = newUniqueShape(s.tree, len(o.props), index)
+	ns := newUniqueShape(s.tree, len(o.props), index)
+	// A shared index is the layout's, which this object is leaving: it
+	// borrows it rather than copying it, its table's positions being the
+	// layout's until it adds a key (see borrowed).
+	ns.borrowed = s.borrowed || !s.unique && index != nil
+	o.shape = ns
 	if index == nil && len(o.props) > linearScanLimit {
 		o.buildIndex()
 	}

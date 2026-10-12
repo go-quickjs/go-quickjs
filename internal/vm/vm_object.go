@@ -1,7 +1,6 @@
 package vm
 
 import (
-	"maps"
 	"math"
 	"unsafe"
 )
@@ -632,14 +631,6 @@ func newPropIndex(n int) *propIndex {
 	return &propIndex{slots: make(map[Atom]int32, n)}
 }
 
-// clone is a copy of the index, for an object leaving the layout it is
-// the index of.
-func (x *propIndex) clone() *propIndex {
-	c := *x
-	c.slots = maps.Clone(x.slots)
-	return &c
-}
-
 // add records a key's slot.
 func (x *propIndex) add(key Atom, i int32) {
 	x.slots[key] = i
@@ -682,7 +673,13 @@ func (o *Object) findOwn(key Atom) int32 {
 		if !ok {
 			i = -1
 		}
+		// What the index says is remembered, whatever this table holds there:
+		// a borrowed index is shared with the layout's objects.
 		c.key, c.idx = key, i
+		if i >= 0 && (int(i) >= len(o.props) || o.props[i].key != key || o.props[i].flags&propDeleted != 0) {
+			// A key the object deleted, which the index it borrows has.
+			return -1
+		}
 		return i
 	}
 	for i := range o.props {
@@ -709,6 +706,7 @@ func (o *Object) buildIndex() {
 		}
 	}
 	o.shape.index = x
+	o.shape.borrowed = false
 }
 
 // getOwn returns an own property, excluding dense elements.
@@ -735,13 +733,20 @@ func (o *Object) getOwnVisible(key Atom) *Property {
 // reserveProps makes room for n properties in all, so that an object built
 // all at once grows its table once rather than at every doubling -- whether
 // or not it has a table yet: a constructor is given its prototype before its
-// methods. A table in the object's own allocation is left as it is.
+// methods, and an object spread into one is given all its keys. A table in
+// the object's own allocation too small for them leaves it, as
+// leaveInlineProps does.
 func (o *Object) reserveProps(n int) {
-	if cap(o.props) >= n || o.flags&objInlineProps != 0 {
+	if cap(o.props) >= n {
 		return
 	}
 	props := make([]Property, len(o.props), n)
 	copy(props, o.props)
+	if o.flags&objInlineProps != 0 {
+		o.shape.noteGrowth(n)
+		clear(o.props[:cap(o.props)])
+		o.flags &^= objInlineProps
+	}
 	o.props = props
 }
 
@@ -857,7 +862,7 @@ func (o *Object) deleteOwn(key Atom) bool {
 	// Tombstone rather than splice, so that the remaining indices stay valid.
 	o.layoutChanged()
 	o.props[i] = Property{key: atomEmpty, flags: propDeleted}
-	if x := o.shapeIndex(); x != nil {
+	if x := o.shapeIndex(); x != nil && !o.shape.borrowed {
 		delete(x.slots, key)
 	}
 	return true
@@ -1139,8 +1144,14 @@ func (o *Object) noteArrayIndex(i uint32) {
 func (o *Object) setArrayLength(n uint32) {
 	switch {
 	case uint(n) < uint(len(o.elems)):
-		// Truncating releases the discarded values for collection.
-		clear(o.elems[n:])
+		// Truncating releases the discarded values for collection. One
+		// element, as a loop shortening an array one at a time takes off,
+		// is a store rather than a call of the runtime's bulk clear.
+		if uint(n)+1 == uint(len(o.elems)) {
+			o.elems[n] = Value{}
+		} else {
+			clear(o.elems[n:])
+		}
 		o.elems = o.elems[:n]
 		if o.flags&objHasSparseElements != 0 {
 			o.arrayLen = n
@@ -1169,7 +1180,7 @@ func (o *Object) setArrayLength(n uint32) {
 			if key := p.key; p.flags&propDeleted == 0 && key.IsIndex() && key.Index() >= n {
 				o.layoutChanged()
 				o.props[i] = Property{key: atomEmpty, flags: propDeleted}
-				if x := o.shapeIndex(); x != nil {
+				if x := o.shapeIndex(); x != nil && !o.shape.borrowed {
 					delete(x.slots, key)
 				}
 			}

@@ -696,6 +696,10 @@ func (r *Runtime) copyDataProps(target *Object, src Value) error {
 	// places with the layout: its values are read from there, with nothing
 	// a getter could see.
 	if c := r.shapeKeys(o); c != nil && c.copyable {
+		if target.class == ClassObject && len(c.atoms) > 1 {
+			// The table grows once rather than at every doubling.
+			target.reserveProps(len(target.props) + len(c.atoms))
+		}
 		for i, k := range c.atoms {
 			if err := r.defineOwnProp(target, k, o.props[c.slots[i]].value, propDefault); err != nil {
 				return err

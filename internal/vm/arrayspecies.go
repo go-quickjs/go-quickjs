@@ -46,25 +46,41 @@ type arrayOut struct {
 }
 
 // arraySpeciesCreate makes the array a method's result goes into.
+//
+// It is small enough to be inlined, so that the result of a method that
+// keeps it to itself is on the method's stack rather than the heap: the
+// work is speciesCreate's.
 func (r *Runtime) arraySpeciesCreate(orig Value, n int64) (*arrayOut, error) {
+	a := new(arrayOut)
+	return a, r.speciesCreate(a, orig, n)
+}
+
+// speciesCreate is arraySpeciesCreate's work, into out.
+func (r *Runtime) speciesCreate(out *arrayOut, orig Value, n int64) (err error) {
+	*out, err = r.speciesArray(orig, n)
+	return err
+}
+
+// speciesArray is the result arraySpeciesCreate makes.
+func (r *Runtime) speciesArray(orig Value, n int64) (arrayOut, error) {
 	if !orig.IsObject() || !orig.Object().IsArray() {
 		o, err := r.arrayCreate(n)
 		if err != nil {
-			return nil, err
+			return arrayOut{}, err
 		}
-		return &arrayOut{o: o, plain: true}, nil
+		return arrayOut{o: o, plain: true}, nil
 	}
 
 	c, err := r.getValueProp(orig, atomConstructor)
 	if err != nil {
-		return nil, err
+		return arrayOut{}, err
 	}
 	// Another realm's Array makes this realm's arrays, so that an array
 	// passed between realms does not carry its realm into what is made of it.
 	if isConstructor(c) {
 		re, err := r.functionRealm(c.Object())
 		if err != nil {
-			return nil, err
+			return arrayOut{}, err
 		}
 		if re != r.Realm && c.Object() == re.proto.arrayCtor {
 			c = Undefined
@@ -73,7 +89,7 @@ func (r *Runtime) arraySpeciesCreate(orig Value, n int64) (*arrayOut, error) {
 	if c.IsObject() {
 		sp, err := r.getValueProp(c, r.atoms.internSymbol(r.wellKnown.species))
 		if err != nil {
-			return nil, err
+			return arrayOut{}, err
 		}
 		// Null means "a plain array", which is how a subclass opts out of
 		// having its methods return instances of itself.
@@ -86,22 +102,22 @@ func (r *Runtime) arraySpeciesCreate(orig Value, n int64) (*arrayOut, error) {
 	if c.IsUndefined() || (c.IsObject() && c.Object() == r.proto.arrayCtor) {
 		o, err := r.arrayCreate(n)
 		if err != nil {
-			return nil, err
+			return arrayOut{}, err
 		}
-		return &arrayOut{o: o, plain: true}, nil
+		return arrayOut{o: o, plain: true}, nil
 	}
 	if !isConstructor(c) {
-		return nil, r.throwTypeError("the array species is not a constructor")
+		return arrayOut{}, r.throwTypeError("the array species is not a constructor")
 	}
 	res, err := r.construct(c, []Value{Float(float64(n))})
 	if err != nil {
-		return nil, err
+		return arrayOut{}, err
 	}
 	o, err := r.toObject(res)
 	if err != nil {
-		return nil, err
+		return arrayOut{}, err
 	}
-	return &arrayOut{o: o}, nil
+	return arrayOut{o: o}, nil
 }
 
 // push appends one element.

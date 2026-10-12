@@ -426,8 +426,9 @@ func (m *memoryMeter) addString(s *String) {
 // object counts an object and what it refers to.
 func (m *memoryMeter) object(o *Object) {
 	m.total += objectSize + int64(cap(o.props))*propertySize
-	// A shared layout's index is the layout's, not the object's.
-	if s := o.shape; s != nil && s.unique && s.index != nil {
+	// A shared layout's index is the layout's, not the object's, and so is
+	// one an object borrows from it.
+	if s := o.shape; s != nil && s.unique && s.index != nil && !s.borrowed {
 		m.total += int64(len(s.index.slots)) * 16
 	}
 	m.addObject(o.proto)

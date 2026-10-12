@@ -522,10 +522,17 @@ func (r *Runtime) pureConstruct(callee Value, args []Value) (Value, bool) {
 	return Obj(obj), true
 }
 
-// The built-in array methods a pure body may call without a frame.
+// The built-in array methods a pure body may call without a frame, and the
+// collections' lookups and additions, which a call applies as it does
+// them (collectionOp).
 const (
 	elemPush = iota + 1
 	elemPop
+	elemMapGet
+	elemMapHas
+	elemMapSet
+	elemSetHas
+	elemSetAdd
 )
 
 // pureElemOp is the built-in push or pop called from a pure body, where it
@@ -533,6 +540,9 @@ const (
 // array of its own, whose push adds elements at the end and whose pop takes
 // the last one off, calling nothing. It reports false for anything else.
 func (r *Runtime) pureElemOp(op uint8, this Value, args []Value, mayStore bool) (Value, bool) {
+	if op > elemPop {
+		return r.collectionOp(op, this, args, mayStore)
+	}
 	if !mayStore {
 		r.pureRefused = true
 		return Undefined, false

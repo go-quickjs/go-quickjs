@@ -79,16 +79,27 @@ func guessBytes(s *String) int {
 }
 
 // viewArrayLike coerces a receiver and reads its length.
+//
+// It is small enough to be inlined, so that the view of a method that keeps
+// it to itself is on the method's stack rather than the heap: the work is
+// readArrayLike's.
 func (r *Runtime) viewArrayLike(this Value) (*arrayLike, error) {
+	a := new(arrayLike)
+	return a, r.readArrayLike(a, this)
+}
+
+// readArrayLike is viewArrayLike's work, into a.
+func (r *Runtime) readArrayLike(a *arrayLike, this Value) error {
 	o, err := r.toObject(this)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	n, err := r.lengthOf(o)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return &arrayLike{o: o, n: n}, nil
+	a.o, a.n = o, n
+	return nil
 }
 
 // lengthOf reads an object's length as the specification's ToLength does:
@@ -302,6 +313,13 @@ func (a *arrayLike) holeAbsent(i int64) bool {
 
 // newArrayOfLength builds an array to hold a method's result.
 func (r *Runtime) newArrayOfLength(n int64) *Object {
+	if n <= 16 {
+		// A short result has its room in the array's own allocation, as a
+		// literal of that length does.
+		o := newArrayObject(r.proto.array, int(n))
+		o.elems = o.elems[:0]
+		return o
+	}
 	o := newObject(r.proto.array, ClassArray)
 	// Only a modest length is preallocated. An array-like may report a length
 	// of 2**53-1 while holding nothing, and reserving for that would exhaust

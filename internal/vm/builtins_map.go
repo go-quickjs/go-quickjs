@@ -551,6 +551,11 @@ func (r *Runtime) initMapBuiltins() {
 		return Undefined, nil
 	})
 
+	// get, has and set are applied without a frame where they can be.
+	for name, op := range map[string]uint8{"get": elemMapGet, "has": elemMapHas, "set": elemMapSet} {
+		p.getOwn(r.atoms.intern(name)).value.Object().fn().elemOp = op
+	}
+
 	r.defMapIterator(p, ClassMap, "entries", mapIterEntries)
 	r.defMapIterator(p, ClassMap, "keys", mapIterKeys)
 	r.defMapIterator(p, ClassMap, "values", mapIterValues)
@@ -600,6 +605,10 @@ func (r *Runtime) initSetBuiltins() {
 		_, ok := m.get(rt, arg(args, 0))
 		return Bool(ok), nil
 	})
+	// add and has are applied without a frame where they can be.
+	for name, op := range map[string]uint8{"add": elemSetAdd, "has": elemSetHas} {
+		p.getOwn(r.atoms.intern(name)).value.Object().fn().elemOp = op
+	}
 	r.defMethod(p, "delete", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		m, err := rt.mapOf(this, ClassSet, "Set.prototype.delete")
 		if err != nil {
