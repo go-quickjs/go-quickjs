@@ -4999,6 +4999,7 @@ func (r *Runtime) jitGrowContexts() bool {
 	chunk := make([]abi.Context, add)
 	for i := range chunk {
 		chunk[i].Host = unsafe.Pointer(r)
+		chunk[i].SetConsts(&jitEncoding)
 		s.ssaCtxs = append(s.ssaCtxs, &chunk[i])
 	}
 	for i := max(old, 1); i < len(s.ssaCtxs); i++ {

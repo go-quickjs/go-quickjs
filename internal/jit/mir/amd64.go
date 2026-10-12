@@ -29,6 +29,8 @@ const (
 type compiler struct {
 	*core
 	a *amd64.Asm
+	// consts are the words every context holds (abi.Context's Consts).
+	consts [abi.NumConsts]uint64
 	// label of each block's code.
 	labels []amd64.Label // by block ID
 	// stubs: one exit per frame state and kind, by state ID and kind
@@ -96,7 +98,7 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 	if err != nil {
 		return nil, err
 	}
-	c := &compiler{core: k}
+	c := &compiler{core: k, consts: enc.ConstWords()}
 	c.stubAt = k.ints(2 * f.NumStates())
 	if w != nil {
 		g := &w.amd64
@@ -178,6 +180,21 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 	return &Code{Bytes: bytes, Entries: entries, Exits: c.exits, core: c.core}, nil
 }
 
+// movImm sets dst to the word v: a load of the context's copy where v is
+// one of its constants, four bytes where a 64-bit immediate takes ten, and
+// otherwise the shortest move of the immediate.
+func (c *compiler) movImm(dst amd64.Reg, v uint64) {
+	if v>>32 != 0 && int64(v) != int64(int32(v)) {
+		for i, w := range c.consts {
+			if w == v {
+				c.a.Load(dst, regCtx, abi.OffConsts+int32(i)*8)
+				return
+			}
+		}
+	}
+	c.a.MovImm(dst, v)
+}
+
 // storeImm stores the word v at [base + disp]: as an immediate, in one
 // instruction, where it is a 32-bit value sign-extended -- a context's
 // field, an exit's PC, a record's slot -- else through scratch, which
@@ -187,7 +204,7 @@ func (c *compiler) storeImm(base amd64.Reg, disp int32, v uint64, scratch amd64.
 		c.a.StoreImm(base, disp, int32(v))
 		return
 	}
-	c.a.MovImm(scratch, v)
+	c.movImm(scratch, v)
 	c.a.Store(base, disp, scratch)
 }
 
@@ -304,10 +321,10 @@ func (c *compiler) setX(v *ssa.Value, src amd64.XReg) {
 func (c *compiler) materialize(v *ssa.Value, dst amd64.Reg) {
 	switch v.Op {
 	case ssa.OpConst:
-		c.a.MovImm(dst, c.constWord(v.Const))
+		c.movImm(dst, c.constWord(v.Const))
 	case ssa.OpConstSource:
 		if v.Aux < 0 {
-			c.a.MovImm(dst, 0)
+			c.movImm(dst, 0)
 		} else {
 			c.slotSource(v.Aux, dst)
 		}
@@ -326,7 +343,7 @@ func (c *compiler) boxF64(x amd64.XReg, dst amd64.Reg) {
 	c.a.MovQFromX(dst, x)
 	c.a.SSEOp(amd64.UcomiSD, x, x)
 	c.a.Jcc(amd64.CondNP, done)
-	c.a.MovImm(dst, c.enc.CanonicalNaN)
+	c.movImm(dst, c.enc.CanonicalNaN)
 	c.a.Bind(done)
 }
 
@@ -335,10 +352,10 @@ func (c *compiler) boxBool(b, dst amd64.Reg) {
 	tr, done := c.a.NewLabel(), c.a.NewLabel()
 	c.a.Op(amd64.Test, b, b, false)
 	c.a.Jcc(amd64.CondNE, tr)
-	c.a.MovImm(dst, c.enc.False)
+	c.movImm(dst, c.enc.False)
 	c.a.Jmp(done)
 	c.a.Bind(tr)
-	c.a.MovImm(dst, c.enc.True)
+	c.movImm(dst, c.enc.True)
 	c.a.Bind(done)
 }
 
@@ -431,7 +448,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		// An object literal's object: its pool's next, as a built-in's
 		// construction takes it (Alloc) -- by Go while the collector marks
 		// (markingTake).
-		c.a.MovImm(scratchA, uint64(site.Pool))
+		c.movImm(scratchA, uint64(site.Pool))
 		c.a.Load(scratchB, scratchA, abi.OffPoolCount)
 		c.refillOnEmpty(site.Pool, guard)
 		if join, ok := c.markingTake(v, site); ok {
@@ -468,7 +485,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		c.a.Jmp(c.stubLabel(s, exitKind(v.Aux)))
 		return
 	}
-	c.a.MovImm(scratchB, c.enc.Object)
+	c.movImm(scratchB, c.enc.Object)
 	c.a.Op(amd64.Cmp, c.gpr(callee, scratchA), scratchB, true)
 	guard(amd64.CondNE)
 	c.sourceRef(callee, guard)
@@ -479,7 +496,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		if t.Via != 0 {
 			want = t.Via
 		}
-		c.a.MovImm(scratchB, uint64(want))
+		c.movImm(scratchB, uint64(want))
 		c.a.Op(amd64.Cmp, scratchC, scratchB, true)
 		c.a.Jcc(amd64.CondNE, next)
 		if t.Via != 0 {
@@ -518,7 +535,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 			if t.Via != 0 {
 				recv = v.Args[2]
 			}
-			c.a.MovImm(scratchB, c.enc.Object)
+			c.movImm(scratchB, c.enc.Object)
 			c.a.Op(amd64.Cmp, c.gpr(recv, scratchA), scratchB, true)
 			guard(amd64.CondNE)
 		}
@@ -587,7 +604,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		k++
 	}
 	high := c.a.NewLabel()
-	c.a.MovImm(scratchA, uint64(k))
+	c.movImm(scratchA, uint64(k))
 	c.a.Store(regCtx, abi.OffRecords, scratchA)
 	c.a.Load(scratchB, regCtx, abi.OffRecordHi)
 	c.a.Op(amd64.Cmp, scratchB, scratchA, true)
@@ -656,7 +673,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	c.a.Store(calleeCtx, abi.OffLocals, locals)
 	// The callee's context's own; what it shares with this one, and its
 	// level, Go wrote (abi.Context).
-	c.a.MovImm(tmp, 0)
+	c.movImm(tmp, 0)
 	c.a.Store(calleeCtx, abi.OffUpvalues, tmp)
 	c.a.Store(calleeCtx, abi.OffTailReturn, tmp)
 	c.a.Store(calleeCtx, abi.OffBase, base)
@@ -672,7 +689,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	for i, t := range sites {
 		next := c.a.NewLabel()
 		if i < len(sites)-1 {
-			c.a.MovImm(top, uint64(t.Callee))
+			c.movImm(top, uint64(t.Callee))
 			c.a.Op(amd64.Cmp, tmp, top, true)
 			c.a.Jcc(amd64.CondNE, next)
 		}
@@ -704,7 +721,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		}
 		if t.Pool != 0 {
 			// The receiver: the pool's last object, its cell cleared.
-			c.a.MovImm(tmp, uint64(t.Pool))
+			c.movImm(tmp, uint64(t.Pool))
 			c.a.Load(top, tmp, abi.OffPoolCount)
 			c.a.OpImm(amd64.Sub, top, 1, true)
 			c.a.Store(tmp, abi.OffPoolCount, top)
@@ -736,7 +753,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 			c.storeImm(calleeCtx, abi.OffNewTarget, uint64(t.Callee), top)
 		}
 		if t.Count != 0 {
-			c.a.MovImm(top, uint64(t.Count))
+			c.movImm(top, uint64(t.Count))
 			c.a.Load(high2, top, 0)
 			c.a.OpImm(amd64.Add, high2, 1, true)
 			c.a.Store(top, 0, high2)
@@ -753,7 +770,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		c.a.Jcc(amd64.CondBE, same)
 		c.a.Store(tmp, 0, top)
 		c.a.Bind(same)
-		c.a.MovImm(scratchA, uint64(t.Entry))
+		c.movImm(scratchA, uint64(t.Entry))
 		c.a.Load(scratchA, scratchA, 0)
 		c.a.MovRR(regCtx, calleeCtx)
 		enter := c.a.NewLabel()
@@ -761,7 +778,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		c.a.Jcc(amd64.CondE, enter)
 		c.a.JmpReg(scratchA)
 		c.a.Bind(enter)
-		c.a.MovImm(scratchA, uint64(t.Callee))
+		c.movImm(scratchA, uint64(t.Callee))
 		if !c.enterUsed {
 			c.enter, c.enterUsed = c.a.NewLabel(), true
 		}
@@ -781,7 +798,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		// A construction's result, if not an object, is its receiver.
 		object := c.a.NewLabel()
 		c.a.Load(scratchA, calleeCtx, abi.OffRetValue+c.enc.NumOffset)
-		c.a.MovImm(scratchB, c.enc.Object)
+		c.movImm(scratchB, c.enc.Object)
 		c.a.Op(amd64.Cmp, scratchA, scratchB, true)
 		c.a.Jcc(amd64.CondE, object)
 		c.a.Load(tmp, calleeCtx, abi.OffThis+c.enc.RefOffset)
@@ -797,7 +814,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	c.a.Load(tmp, regCtx, abi.OffStackTop)
 	c.a.Load(top, calleeCtx, abi.OffBase)
 	c.a.Store(tmp, 0, top)
-	c.a.MovImm(tmp, 0)
+	c.movImm(tmp, 0)
 	c.a.Store(calleeCtx, abi.OffLive, tmp)
 	c.a.Store(calleeCtx, abi.OffReturnTo, tmp)
 	for _, sv := range c.savesOf(v) {
@@ -848,12 +865,12 @@ func (c *compiler) iterStep(v *ssa.Value, slow amd64.Label) {
 	c.pointerWord(x, c.gpr(x, scratchA))
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
 	c.a.Jcc(amd64.CondE, slow)
-	c.a.MovImm(scratchC, c.enc.WriteBarrier)
+	c.movImm(scratchC, c.enc.WriteBarrier)
 	c.a.LoadU8(scratchC, scratchC, 0)
 	c.a.Op(amd64.Test, scratchC, scratchC, false)
 	c.a.Jcc(amd64.CondNE, slow)
 	c.a.Load(scratchC, scratchB, c.enc.ObjectData)
-	c.a.MovImm(scratchA, c.enc.IterState)
+	c.movImm(scratchA, c.enc.IterState)
 	c.a.Op(amd64.Cmp, scratchC, scratchA, true)
 	c.a.Jcc(amd64.CondNE, slow)
 	c.a.Load(scratchB, scratchB, c.enc.ObjectData+8)
@@ -872,7 +889,7 @@ func (c *compiler) iterStep(v *ssa.Value, slow amd64.Label) {
 	c.a.ShiftImm(amd64.Shl, scratchA, 4, true)
 	c.a.Op(amd64.Add, scratchA, scratchB, true)
 	c.a.Load(scratchB, scratchA, c.enc.NumOffset)
-	c.a.MovImm(scratchC, c.enc.Uninitialized)
+	c.movImm(scratchC, c.enc.Uninitialized)
 	c.a.Op(amd64.Cmp, scratchB, scratchC, true)
 	c.a.Jcc(amd64.CondE, slow)
 	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
@@ -913,14 +930,14 @@ func (c *compiler) goCallOp(v *ssa.Value, op uint64, guard func(amd64.Cond), sav
 		c.a.Store(regCtx, at+c.enc.NumOffset, w)
 		number, have := c.a.NewLabel(), c.a.NewLabel()
 		if x.Shadow != nil || c.origin.At(x) >= 0 {
-			c.a.MovImm(scratchB, abi.NumberLimit)
+			c.movImm(scratchB, abi.NumberLimit)
 			c.a.Op(amd64.Cmp, w, scratchB, true)
 			c.a.Jcc(amd64.CondB, number)
 		}
 		c.pointerWord(x, w)
 		c.a.Jmp(have)
 		c.a.Bind(number)
-		c.a.MovImm(scratchB, 0)
+		c.movImm(scratchB, 0)
 		c.a.Bind(have)
 		c.a.Store(regCtx, at+c.enc.RefOffset, scratchB)
 	}
@@ -954,7 +971,7 @@ func (c *compiler) callGo(v *ssa.Value, op uint64, keep int) {
 	back := c.a.NewLabel()
 	c.a.LeaLabel(scratchA, back)
 	c.a.Store(regCtx, abi.OffGoResume, scratchA)
-	c.a.MovImm(scratchA, c.enc.CallGo)
+	c.movImm(scratchA, c.enc.CallGo)
 	c.a.JmpReg(scratchA)
 	c.a.Bind(back)
 	c.a.Load(regLocals, regCtx, abi.OffLocals)
@@ -992,7 +1009,7 @@ func (c *compiler) markingExit(v *ssa.Value) {
 // GoArgs cannot hold, or code that calls no Go, leaves for Go instead
 // (markingExit), and has no label.
 func (c *compiler) markingCall(v *ssa.Value, site *ssa.CallSite, guard func(amd64.Cond)) (amd64.Label, bool) {
-	c.a.MovImm(scratchB, c.enc.WriteBarrier)
+	c.movImm(scratchB, c.enc.WriteBarrier)
 	c.a.LoadU8(scratchB, scratchB, 0)
 	c.a.Op(amd64.Test, scratchB, scratchB, false)
 	if c.enc.CallGo == 0 || len(v.Args) > abi.MaxGoArgs {
@@ -1018,7 +1035,7 @@ func (c *compiler) markingCall(v *ssa.Value, site *ssa.CallSite, guard func(amd6
 // at the label returned, which the caller binds after its take. Code that
 // calls no Go leaves for Go instead (markingExit), and has no label.
 func (c *compiler) markingTake(v *ssa.Value, site *ssa.CallSite) (amd64.Label, bool) {
-	c.a.MovImm(scratchB, c.enc.WriteBarrier)
+	c.movImm(scratchB, c.enc.WriteBarrier)
 	c.a.LoadU8(scratchB, scratchB, 0)
 	c.a.Op(amd64.Test, scratchB, scratchB, false)
 	if c.enc.CallGo == 0 {
@@ -1035,7 +1052,7 @@ func (c *compiler) markingTake(v *ssa.Value, site *ssa.CallSite) (amd64.Label, b
 		if site.Literal && site.Argc != 0 {
 			c.arrayElements(v, true)
 		} else {
-			c.a.MovImm(scratchA, c.enc.Object)
+			c.movImm(scratchA, c.enc.Object)
 			c.setG(v, scratchA)
 		}
 		c.a.Jmp(join)
@@ -1081,7 +1098,7 @@ func (c *compiler) pushGuards(t *ssa.CallSite, recv *ssa.Value, guard func(amd64
 		guard(amd64.CondNE)
 		return
 	}
-	c.a.MovImm(scratchB, c.enc.Object)
+	c.movImm(scratchB, c.enc.Object)
 	c.a.Op(amd64.Cmp, c.gpr(recv, scratchA), scratchB, true)
 	guard(amd64.CondNE)
 	c.sourceRef(recv, guard)
@@ -1098,13 +1115,13 @@ func (c *compiler) pushGuards(t *ssa.CallSite, recv *ssa.Value, guard func(amd64
 	c.a.Op(amd64.Cmp, scratchB, scratchA, true)
 	guard(amd64.CondAE)
 	c.a.Load(scratchB, scratchC, c.enc.ObjectProto)
-	c.a.MovImm(scratchA, uint64(t.Protos[0].Object))
+	c.movImm(scratchA, uint64(t.Protos[0].Object))
 	c.a.Op(amd64.Cmp, scratchB, scratchA, true)
 	guard(amd64.CondNE)
 	for i, h := range t.Protos {
-		c.a.MovImm(scratchA, uint64(h.Object))
+		c.movImm(scratchA, uint64(h.Object))
 		c.a.Load(scratchB, scratchA, c.enc.ObjectShape)
-		c.a.MovImm(scratchC, uint64(h.Shape))
+		c.movImm(scratchC, uint64(h.Shape))
 		c.a.Op(amd64.Cmp, scratchB, scratchC, true)
 		guard(amd64.CondNE)
 		c.a.Load(scratchB, scratchA, c.enc.ObjectElems+8)
@@ -1116,7 +1133,7 @@ func (c *compiler) pushGuards(t *ssa.CallSite, recv *ssa.Value, guard func(amd64
 		// Its prototype: the next, or none.
 		c.a.Load(scratchB, scratchA, c.enc.ObjectProto)
 		if i == 0 {
-			c.a.MovImm(scratchC, uint64(t.Protos[1].Object))
+			c.movImm(scratchC, uint64(t.Protos[1].Object))
 			c.a.Op(amd64.Cmp, scratchB, scratchC, true)
 		} else {
 			c.a.Op(amd64.Test, scratchB, scratchB, true)
@@ -1136,7 +1153,7 @@ func (c *compiler) popGuards(t *ssa.CallSite, recv *ssa.Value, guard func(amd64.
 		guard(amd64.CondNE)
 		return
 	}
-	c.a.MovImm(scratchB, c.enc.Object)
+	c.movImm(scratchB, c.enc.Object)
 	c.a.Op(amd64.Cmp, c.gpr(recv, scratchA), scratchB, true)
 	guard(amd64.CondNE)
 	c.sourceRef(recv, guard)
@@ -1148,7 +1165,7 @@ func (c *compiler) popGuards(t *ssa.CallSite, recv *ssa.Value, guard func(amd64.
 	c.a.OpImm(amd64.Cmp, scratchB, int32(c.enc.FlagLengthWritable), false)
 	guard(amd64.CondNE)
 	c.a.Load(scratchB, scratchC, c.enc.ObjectProto)
-	c.a.MovImm(scratchA, uint64(t.Protos[0].Object))
+	c.movImm(scratchA, uint64(t.Protos[0].Object))
 	c.a.Op(amd64.Cmp, scratchB, scratchA, true)
 	guard(amd64.CondNE)
 	// Not empty, and its last element no hole.
@@ -1160,7 +1177,7 @@ func (c *compiler) popGuards(t *ssa.CallSite, recv *ssa.Value, guard func(amd64.
 	c.a.Load(scratchA, scratchC, c.enc.ObjectElems)
 	c.a.Op(amd64.Add, scratchA, scratchB, true)
 	c.a.Load(scratchB, scratchA, c.enc.NumOffset)
-	c.a.MovImm(scratchC, c.enc.Uninitialized)
+	c.movImm(scratchC, c.enc.Uninitialized)
 	c.a.Op(amd64.Cmp, scratchB, scratchC, true)
 	guard(amd64.CondE)
 }
@@ -1212,14 +1229,14 @@ func (c *compiler) push(v *ssa.Value) {
 	c.a.MovQToX(xScratch0, w)
 	number, have := c.a.NewLabel(), c.a.NewLabel()
 	if x.Shadow != nil || c.origin.At(x) >= 0 {
-		c.a.MovImm(scratchB, abi.NumberLimit)
+		c.movImm(scratchB, abi.NumberLimit)
 		c.a.Op(amd64.Cmp, w, scratchB, true)
 		c.a.Jcc(amd64.CondB, number)
 	}
 	c.pointerWord(x, w)
 	c.a.Jmp(have)
 	c.a.Bind(number)
-	c.a.MovImm(scratchB, 0)
+	c.movImm(scratchB, 0)
 	c.a.Bind(have)
 	c.a.MovQToX(xScratch1, scratchB)
 	// The array, checked: its length grown, then the element's address.
@@ -1255,11 +1272,11 @@ func (c *compiler) viaGuards(t *ssa.CallSite, recv *ssa.Value, guard func(amd64.
 		guard(amd64.CondNE)
 		return
 	}
-	c.a.MovImm(scratchB, c.enc.Object)
+	c.movImm(scratchB, c.enc.Object)
 	c.a.Op(amd64.Cmp, c.gpr(recv, scratchA), scratchB, true)
 	guard(amd64.CondNE)
 	c.sourceRef(recv, guard)
-	c.a.MovImm(scratchB, uint64(t.Callee))
+	c.movImm(scratchB, uint64(t.Callee))
 	c.a.Op(amd64.Cmp, scratchC, scratchB, true)
 	guard(amd64.CondNE)
 }
@@ -1274,7 +1291,7 @@ func (c *compiler) arrayLiteral(v *ssa.Value, site *ssa.CallSite) {
 		panic("mir: a value that is not 16 bytes")
 	}
 	at := abi.OffKeep + int32(v.Index)*vs
-	c.a.MovImm(scratchA, uint64(site.Pool))
+	c.movImm(scratchA, uint64(site.Pool))
 	c.a.Load(scratchB, scratchA, abi.OffPoolCount)
 	c.a.OpImm(amd64.Sub, scratchB, 1, true)
 	c.a.Store(scratchA, abi.OffPoolCount, scratchB)
@@ -1308,14 +1325,14 @@ func (c *compiler) arrayElements(v *ssa.Value, viaGo bool) {
 		c.a.MovQToX(xScratch0, w)
 		number, have := c.a.NewLabel(), c.a.NewLabel()
 		if x.Shadow != nil || c.origin.At(x) >= 0 {
-			c.a.MovImm(scratchB, abi.NumberLimit)
+			c.movImm(scratchB, abi.NumberLimit)
 			c.a.Op(amd64.Cmp, w, scratchB, true)
 			c.a.Jcc(amd64.CondB, number)
 		}
 		c.pointerWord(x, w)
 		c.a.Jmp(have)
 		c.a.Bind(number)
-		c.a.MovImm(scratchB, 0)
+		c.movImm(scratchB, 0)
 		c.a.Bind(have)
 		c.a.MovQToX(xScratch1, scratchB)
 		c.a.Load(scratchC, regCtx, at+c.enc.RefOffset)
@@ -1335,7 +1352,7 @@ func (c *compiler) arrayElements(v *ssa.Value, viaGo bool) {
 	}
 	c.a.Load(scratchC, regCtx, at+c.enc.RefOffset)
 	c.storeImm(scratchC, c.enc.ObjectElems+8, uint64(len(v.Args)), scratchB)
-	c.a.MovImm(scratchA, c.enc.Object)
+	c.movImm(scratchA, c.enc.Object)
 	c.setG(v, scratchA)
 }
 
@@ -1344,7 +1361,7 @@ func (c *compiler) arrayElements(v *ssa.Value, viaGo bool) {
 // saved. The pool has one, and the collector is not marking.
 func (c *compiler) poolTake(v *ssa.Value, site *ssa.CallSite) {
 	vs := int32(c.enc.ValueSize)
-	c.a.MovImm(scratchA, uint64(site.Pool))
+	c.movImm(scratchA, uint64(site.Pool))
 	c.a.Load(scratchB, scratchA, abi.OffPoolCount)
 	c.a.OpImm(amd64.Sub, scratchB, 1, true)
 	c.a.Store(scratchA, abi.OffPoolCount, scratchB)
@@ -1354,7 +1371,7 @@ func (c *compiler) poolTake(v *ssa.Value, site *ssa.CallSite) {
 	c.storeImm(scratchB, abi.OffPoolObjects, 0, scratchA)
 	at := abi.OffKeep + int32(v.Index)*vs
 	c.a.Store(regCtx, at+c.enc.RefOffset, scratchC)
-	c.a.MovImm(scratchA, c.enc.Object)
+	c.movImm(scratchA, c.enc.Object)
 	c.a.Store(regCtx, at+c.enc.NumOffset, scratchA)
 	c.setG(v, scratchA)
 }
@@ -1364,7 +1381,7 @@ func (c *compiler) poolTake(v *ssa.Value, site *ssa.CallSite) {
 // is in scratchC, has the prototype the pool's were made with still, its
 // own property where it was. It uses every scratch register.
 func (c *compiler) constructGuards(t *ssa.CallSite, guard func(amd64.Cond)) {
-	c.a.MovImm(scratchA, uint64(t.Pool))
+	c.movImm(scratchA, uint64(t.Pool))
 	c.a.Load(scratchB, scratchA, abi.OffPoolCount)
 	c.refillOnEmpty(t.Pool, guard)
 	if t.Alloc {
@@ -1417,7 +1434,7 @@ func (c *compiler) directOperand(x *ssa.Value, local bool, disp int32) {
 // origin is -- or 0 for a primitive's. It uses scratchC.
 func (c *compiler) pointerWord(x *ssa.Value, w amd64.Reg) {
 	done := c.a.NewLabel()
-	c.a.MovImm(scratchB, 0)
+	c.movImm(scratchB, 0)
 	switch o, static := c.origin.Of(x); {
 	case x.Shadow != nil && cellSource(x.Shadow):
 		c.a.Load(scratchB, c.gpr(x.Shadow, scratchC), c.enc.RefOffset)
@@ -1466,7 +1483,7 @@ func (c *compiler) exitThen(s *ssa.FrameState, kind uint64, then *amd64.Label) {
 		}
 	}
 	c.recorded = false
-	c.a.MovImm(scratchC, 0)
+	c.movImm(scratchC, 0)
 	c.a.Store(regCtx, abi.OffRecords, scratchC)
 	for i, v := range s.Slots {
 		if v == nil || v.Op == ssa.OpLoadSlot && v.Aux == i || c.captured(i) {
@@ -1578,7 +1595,7 @@ func (c *compiler) tableExit() {
 // host exit, which writes the caller's frame and has Go make the call.
 func (c *compiler) enterExit() {
 	c.a.Store(regCtx, abi.OffEnterCallee, scratchA)
-	c.a.MovImm(scratchA, 0)
+	c.movImm(scratchA, 0)
 	for _, off := range []int32{abi.OffRecords, abi.OffExitPC, abi.OffExitDepth} {
 		c.a.Store(regCtx, off, scratchA)
 	}
@@ -1669,7 +1686,7 @@ func (c *compiler) record(kind, pc, depth, site uint64, then *amd64.Label) {
 func (c *compiler) recordsTail() {
 	ret, read, write, maybe, scalar, copyValue, next := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(),
 		c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
-	c.a.MovImm(scratchB, c.enc.WriteBarrier)
+	c.movImm(scratchB, c.enc.WriteBarrier)
 	c.a.LoadU8(scratchB, scratchB, 0)
 	c.a.Op(amd64.Test, scratchB, scratchB, false)
 	c.a.Jcc(amd64.CondNE, ret)
@@ -1685,10 +1702,10 @@ func (c *compiler) recordsTail() {
 	c.a.ShiftImm(amd64.Shl, scratchA, 5, true)
 	c.a.Op(amd64.Add, scratchA, regCtx, true)
 	c.a.Load(scratchC, scratchA, abi.OffRecord)
-	c.a.MovImm(scratchB, abi.RecordScalar)
+	c.movImm(scratchB, abi.RecordScalar)
 	c.a.Op(amd64.Test, scratchC, scratchB, true)
 	c.a.Jcc(amd64.CondNE, scalar)
-	c.a.MovImm(scratchB, abi.RecordMaybe)
+	c.movImm(scratchB, abi.RecordMaybe)
 	c.a.Op(amd64.Test, scratchC, scratchB, true)
 	c.a.Jcc(amd64.CondNE, maybe)
 	// Another slot's value, a reference.
@@ -1722,7 +1739,7 @@ func (c *compiler) recordsTail() {
 	c.a.ShiftImm(amd64.Shl, scratchA, 5, true)
 	c.a.Op(amd64.Add, scratchA, regCtx, true)
 	c.a.Load(scratchC, scratchA, abi.OffRecord)
-	c.a.MovImm(scratchB, ^uint64(abi.RecordScalar|abi.RecordMaybe))
+	c.movImm(scratchB, ^uint64(abi.RecordScalar|abi.RecordMaybe))
 	c.a.Op(amd64.And, scratchC, scratchB, true)
 	c.sourceAddr()
 	c.a.Load(scratchB, scratchA, abi.OffRecord+16)
@@ -1766,7 +1783,7 @@ func (c *compiler) block(b *ssa.Block, next *ssa.Block) {
 	case ssa.BlockReturn:
 		r := c.gpr(b.Control, scratchA)
 		c.a.Store(regCtx, abi.OffRet, r)
-		c.a.MovImm(scratchC, 0)
+		c.movImm(scratchC, 0)
 		c.a.Store(regCtx, abi.OffRetFrom, scratchC)
 		if s := b.Control.Shadow; s != nil {
 			// RetFrom is the source, 0 for a primitive's; Go checks that
@@ -1926,13 +1943,13 @@ func (c *compiler) instanceOf(v *ssa.Value, guard func(amd64.Cond)) {
 	a := v.Args[0]
 	if a.Shadow == nil && c.origin.At(a) < 0 {
 		// A primitive, never an instance.
-		c.a.MovImm(scratchB, 0)
+		c.movImm(scratchB, 0)
 		c.setG(v, scratchB)
 		return
 	}
 	no, loop, done := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
 	w := c.gpr(a, scratchA)
-	c.a.MovImm(scratchB, c.enc.Object)
+	c.movImm(scratchB, c.enc.Object)
 	c.a.Op(amd64.Cmp, w, scratchB, true)
 	c.a.Jcc(amd64.CondNE, no)
 	c.sourceRef(a, guard)
@@ -1948,10 +1965,10 @@ func (c *compiler) instanceOf(v *ssa.Value, guard func(amd64.Cond)) {
 	c.a.Jcc(amd64.CondE, no)
 	c.a.Op(amd64.Cmp, scratchC, p, true)
 	c.a.Jcc(amd64.CondNE, loop)
-	c.a.MovImm(scratchB, 1)
+	c.movImm(scratchB, 1)
 	c.a.Jmp(done)
 	c.a.Bind(no)
-	c.a.MovImm(scratchB, 0)
+	c.movImm(scratchB, 0)
 	c.a.Bind(done)
 	c.setG(v, scratchB)
 }
@@ -1966,13 +1983,13 @@ func (c *compiler) typeIs(v *ssa.Value, guard func(amd64.Cond)) {
 	yes, no, done := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
 	w := c.gpr(a, scratchB)
 	is := func(word uint64) {
-		c.a.MovImm(scratchA, word)
+		c.movImm(scratchA, word)
 		c.a.Op(amd64.Cmp, w, scratchA, true)
 		c.a.Jcc(amd64.CondE, yes)
 	}
 	switch v.Index {
 	case ir.TypeNumber:
-		c.a.MovImm(scratchA, abi.NumberLimit)
+		c.movImm(scratchA, abi.NumberLimit)
 		c.a.Op(amd64.Cmp, w, scratchA, true)
 		c.a.Jcc(amd64.CondB, yes)
 	case ir.TypeString:
@@ -1984,7 +2001,7 @@ func (c *compiler) typeIs(v *ssa.Value, guard func(amd64.Cond)) {
 		if v.Index == ir.TypeUndefined {
 			is(c.enc.Undefined)
 		}
-		c.a.MovImm(scratchA, c.enc.Object)
+		c.movImm(scratchA, c.enc.Object)
 		c.a.Op(amd64.Cmp, w, scratchA, true)
 		c.a.Jcc(amd64.CondNE, no)
 		if c.reference(v, a, c.enc.Object, guard) {
@@ -2006,10 +2023,10 @@ func (c *compiler) typeIs(v *ssa.Value, guard func(amd64.Cond)) {
 		}
 	}
 	c.a.Bind(no)
-	c.a.MovImm(scratchA, v.Const.Bits)
+	c.movImm(scratchA, v.Const.Bits)
 	c.a.Jmp(done)
 	c.a.Bind(yes)
-	c.a.MovImm(scratchA, v.Const.Bits^1)
+	c.movImm(scratchA, v.Const.Bits^1)
 	c.a.Bind(done)
 	c.setG(v, scratchA)
 }
@@ -2034,7 +2051,7 @@ func (c *compiler) reference(v, a *ssa.Value, word uint64, guard func(amd64.Cond
 		return false
 	}
 	w := c.gpr(a, scratchA)
-	c.a.MovImm(scratchB, word)
+	c.movImm(scratchB, word)
 	c.a.Op(amd64.Cmp, w, scratchB, true)
 	guard(amd64.CondNE)
 	c.sourceRef(a, guard)
@@ -2124,14 +2141,14 @@ func (c *compiler) propStore(v *ssa.Value, guard func(amd64.Cond)) {
 	// else's is read where it came from.
 	number, have := c.a.NewLabel(), c.a.NewLabel()
 	if x.Shadow != nil || c.origin.At(x) >= 0 {
-		c.a.MovImm(scratchB, abi.NumberLimit)
+		c.movImm(scratchB, abi.NumberLimit)
 		c.a.Op(amd64.Cmp, w, scratchB, true)
 		c.a.Jcc(amd64.CondB, number)
 	}
 	c.pointerWord(x, w)
 	c.a.Jmp(have)
 	c.a.Bind(number)
-	c.a.MovImm(scratchB, 0)
+	c.movImm(scratchB, 0)
 	c.a.Bind(have)
 	c.a.MovQToX(xScratch1, scratchB)
 	added := c.a.NewLabel()
@@ -2192,7 +2209,7 @@ func (c *compiler) propStore(v *ssa.Value, guard func(amd64.Cond)) {
 	// A pointer word written or overwritten: while the collector marks,
 	// Go stores it, with its write barrier (goStore).
 	c.a.MovQToX(xScratch0, c.gpr(x, scratchB))
-	c.a.MovImm(scratchB, c.enc.WriteBarrier)
+	c.movImm(scratchB, c.enc.WriteBarrier)
 	c.a.LoadU8(scratchB, scratchB, 0)
 	c.a.Op(amd64.Test, scratchB, scratchB, false)
 	if c.enc.CallGo == 0 {
@@ -2307,7 +2324,7 @@ func (c *compiler) savingCall() {
 	back := c.a.NewLabel()
 	c.a.LeaLabel(scratchA, back)
 	c.a.Store(regCtx, abi.OffGoResume, scratchA)
-	c.a.MovImm(scratchA, c.enc.CallGo)
+	c.movImm(scratchA, c.enc.CallGo)
 	c.a.JmpReg(scratchA)
 	c.a.Bind(back)
 	c.a.Load(regLocals, regCtx, abi.OffLocals)
@@ -2339,7 +2356,7 @@ func (c *compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss amd64.Label
 	}
 	o := c.gpr(v.Args[0], scratchA)
 	c.a.Load(scratchB, o, c.enc.ObjectShape)
-	c.a.MovImm(scratchC, uint64(add.From))
+	c.movImm(scratchC, uint64(add.From))
 	c.a.Op(amd64.Cmp, scratchB, scratchC, true)
 	c.a.Jcc(amd64.CondNE, miss)
 	c.a.LoadU8(scratchB, o, c.enc.ObjectFlags)
@@ -2350,14 +2367,14 @@ func (c *compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss amd64.Label
 	c.a.Load(scratchB, o, c.enc.ObjectProto)
 	if !add.Define {
 		for _, h := range add.Chain() {
-			c.a.MovImm(scratchC, uint64(h.Object))
+			c.movImm(scratchC, uint64(h.Object))
 			c.a.Op(amd64.Cmp, scratchB, scratchC, true)
 			c.a.Jcc(amd64.CondNE, miss)
 			c.a.Load(scratchB, scratchC, c.enc.ObjectShape)
-			c.a.MovImm(scratchC, uint64(h.Shape))
+			c.movImm(scratchC, uint64(h.Shape))
 			c.a.Op(amd64.Cmp, scratchB, scratchC, true)
 			c.a.Jcc(amd64.CondNE, miss)
-			c.a.MovImm(scratchC, uint64(h.Object))
+			c.movImm(scratchC, uint64(h.Object))
 			c.a.Load(scratchB, scratchC, c.enc.ObjectProto)
 		}
 		c.a.Op(amd64.Test, scratchB, scratchB, true)
@@ -2369,7 +2386,7 @@ func (c *compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss amd64.Label
 	c.a.Op(amd64.Cmp, scratchB, scratchC, true)
 	c.a.Jcc(amd64.CondAE, miss)
 	// The collector not marking; while it marks, Go adds it.
-	c.a.MovImm(scratchC, c.enc.WriteBarrier)
+	c.movImm(scratchC, c.enc.WriteBarrier)
 	c.a.LoadU8(scratchC, scratchC, 0)
 	c.a.Op(amd64.Test, scratchC, scratchC, false)
 	marked, done := c.a.NewLabel(), c.a.NewLabel()
@@ -2390,7 +2407,7 @@ func (c *compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss amd64.Label
 		c.a.Store(regCtx, abi.OffGoArgs+2*size+c.enc.NumOffset, c.gpr(x, scratchA))
 		c.a.Store(regCtx, abi.OffGoArgs+c.enc.RefOffset, c.gpr(v.Args[0], scratchA))
 		c.storeImm(regCtx, abi.OffGoArgs+c.enc.NumOffset, uint64(v.Key)|uint64(add.Flags)<<32, scratchB)
-		c.a.MovImm(scratchB, uint64(add.Next))
+		c.movImm(scratchB, uint64(add.Next))
 		c.a.Store(regCtx, abi.OffGoArgs+size+c.enc.RefOffset, scratchB)
 		c.goSaving(uint64(ssa.GoAddAlong), &miss)
 		c.a.Jmp(done)
@@ -2433,7 +2450,7 @@ func (c *compiler) property(v *ssa.Value, guard func(amd64.Cond)) {
 		scan := c.a.NewLabel()
 		p := c.gpr(v.Args[0], scratchA)
 		c.a.Load(scratchB, p, c.enc.ObjectShape)
-		c.a.MovImm(scratchA, v.Const.Bits)
+		c.movImm(scratchA, v.Const.Bits)
 		c.a.Op(amd64.Cmp, scratchB, scratchA, true)
 		c.a.Jcc(amd64.CondNE, scan)
 		p = c.gpr(v.Args[0], scratchA)
@@ -2571,10 +2588,10 @@ func (c *compiler) keepSource(x *ssa.Value) {
 		c.slotSource(o, scratchC)
 		c.a.Jmp(done)
 		c.a.Bind(scalar)
-		c.a.MovImm(scratchC, 0)
+		c.movImm(scratchC, 0)
 		c.a.Bind(done)
 	default:
-		c.a.MovImm(scratchC, 0)
+		c.movImm(scratchC, 0)
 	}
 }
 
@@ -2585,7 +2602,7 @@ func (c *compiler) keepRef(v *ssa.Value) {
 	x := v.Args[0]
 	scalar := c.a.NewLabel()
 	c.keepSource(x)
-	c.a.MovImm(scratchA, 0)
+	c.movImm(scratchA, 0)
 	c.a.Op(amd64.Test, scratchC, scratchC, true)
 	c.a.Jcc(amd64.CondE, scalar)
 	c.a.Load(scratchA, scratchC, c.enc.RefOffset)
@@ -2609,7 +2626,7 @@ func (c *compiler) keep(v *ssa.Value) {
 		// keep writes nothing then, the value its own source.
 		c.keepSource(x)
 		c.a.MovRR(scratchA, scratchC)
-		c.a.MovImm(scratchB, c.enc.WriteBarrier)
+		c.movImm(scratchB, c.enc.WriteBarrier)
 		c.a.LoadU8(scratchB, scratchB, 0)
 		c.a.Op(amd64.Test, scratchB, scratchB, false)
 		c.a.Jcc(amd64.CondNE, done)
@@ -2625,7 +2642,7 @@ func (c *compiler) keep(v *ssa.Value) {
 	if r := c.gpr(v.Args[1], scratchC); r != scratchC {
 		c.a.MovRR(scratchC, r)
 	}
-	c.a.MovImm(scratchB, c.enc.WriteBarrier)
+	c.movImm(scratchB, c.enc.WriteBarrier)
 	c.a.LoadU8(scratchB, scratchB, 0)
 	c.a.Op(amd64.Test, scratchB, scratchB, false)
 	c.a.Jcc(amd64.CondNE, viaGo)
@@ -2666,7 +2683,7 @@ func (c *compiler) holder(v *ssa.Value, guard func(amd64.Cond)) {
 		next := c.a.NewLabel()
 		p := c.gpr(v.Args[0], scratchA)
 		c.a.Load(scratchB, p, c.enc.ObjectShape)
-		c.a.MovImm(scratchC, uint64(k.Shape))
+		c.movImm(scratchC, uint64(k.Shape))
 		c.a.Op(amd64.Cmp, scratchB, scratchC, true)
 		if i == len(cases)-1 {
 			scan := c.a.NewLabel()
@@ -2694,11 +2711,11 @@ func (c *compiler) holder(v *ssa.Value, guard func(amd64.Cond)) {
 			if h.Object == 0 {
 				break
 			}
-			c.a.MovImm(scratchA, uint64(h.Object))
+			c.movImm(scratchA, uint64(h.Object))
 			c.a.Op(amd64.Cmp, scratchB, scratchA, true)
 			guard(amd64.CondNE)
 			c.a.Load(scratchB, scratchA, c.enc.ObjectShape)
-			c.a.MovImm(scratchC, uint64(h.Shape))
+			c.movImm(scratchC, uint64(h.Shape))
 			c.a.Op(amd64.Cmp, scratchB, scratchC, true)
 			guard(amd64.CondNE)
 			c.a.Load(scratchB, scratchA, c.enc.ObjectProto)
@@ -2770,7 +2787,7 @@ func (c *compiler) remainder(v *ssa.Value, guard func(amd64.Cond)) {
 	c.a.Jmp(done)
 	c.a.Bind(zero)
 	c.a.MovQFromX(scratchA, xScratch0)
-	c.a.MovImm(scratchB, 1<<63)
+	c.movImm(scratchB, 1<<63)
 	c.a.Op(amd64.And, scratchA, scratchB, true)
 	c.a.MovQToX(xScratch0, scratchA)
 	c.a.Bind(done)
@@ -2829,7 +2846,7 @@ func (c *compiler) round(v *ssa.Value) {
 	}
 	down, done := c.a.NewLabel(), c.a.NewLabel()
 	c.a.RoundSD(xScratch0, xScratch1, amd64.RoundCeil)
-	c.a.MovImm(scratchA, math.Float64bits(0.5))
+	c.movImm(scratchA, math.Float64bits(0.5))
 	c.a.MovQToX(xScratch2, scratchA)
 	c.a.SSEOp(amd64.SubSD, xScratch0, xScratch2)
 	c.a.SSEOp(amd64.UcomiSD, xScratch0, xScratch1)
@@ -2854,11 +2871,11 @@ func (c *compiler) sign(v *ssa.Value) {
 	c.a.Jcc(amd64.CondP, done)
 	c.a.Jcc(amd64.CondE, done)
 	c.a.Jcc(amd64.CondA, above)
-	c.a.MovImm(scratchA, math.Float64bits(-1))
+	c.movImm(scratchA, math.Float64bits(-1))
 	c.a.MovQToX(xScratch0, scratchA)
 	c.a.Jmp(done)
 	c.a.Bind(above)
-	c.a.MovImm(scratchA, math.Float64bits(1))
+	c.movImm(scratchA, math.Float64bits(1))
 	c.a.MovQToX(xScratch0, scratchA)
 	c.a.Bind(done)
 	c.setX(v, xScratch0)
@@ -2895,7 +2912,7 @@ func (c *compiler) power(v *ssa.Value, guard func(amd64.Cond)) {
 		c.a.SSEOp(amd64.MovAPD, xScratch1, y)
 	}
 	general, loop, skip, last, done := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
-	c.a.MovImm(scratchA, math.Float64bits(2))
+	c.movImm(scratchA, math.Float64bits(2))
 	c.a.MovQToX(xScratch2, scratchA)
 	c.a.SSEOp(amd64.UcomiSD, xScratch1, xScratch2)
 	c.a.Jcc(amd64.CondP, general)
@@ -2934,7 +2951,7 @@ func (c *compiler) power(v *ssa.Value, guard func(amd64.Cond)) {
 	c.a.OpImm(amd64.Cmp, scratchC, 64, true)
 	guard(amd64.CondA)
 	// The result in xScratch2, x's powers in xScratch0.
-	c.a.MovImm(scratchA, math.Float64bits(1))
+	c.movImm(scratchA, math.Float64bits(1))
 	c.a.MovQToX(xScratch2, scratchA)
 	c.a.Op(amd64.Test, scratchC, scratchC, true)
 	c.a.Jcc(amd64.CondE, last)
@@ -2951,9 +2968,9 @@ func (c *compiler) power(v *ssa.Value, guard func(amd64.Cond)) {
 	c.a.Bind(last)
 	// At most 2**53, its bits compared as an integer's, the sign cleared.
 	c.a.MovQFromX(scratchA, xScratch2)
-	c.a.MovImm(scratchB, 1<<63-1)
+	c.movImm(scratchB, 1<<63-1)
 	c.a.Op(amd64.And, scratchA, scratchB, true)
-	c.a.MovImm(scratchB, math.Float64bits(1<<53))
+	c.movImm(scratchB, math.Float64bits(1<<53))
 	c.a.Op(amd64.Cmp, scratchA, scratchB, true)
 	guard(amd64.CondA)
 	c.a.SSEOp(amd64.MovAPD, xScratch0, xScratch2)
@@ -2971,7 +2988,7 @@ func (c *compiler) length(v *ssa.Value, guard func(amd64.Cond)) {
 		return
 	}
 	array, have := c.a.NewLabel(), c.a.NewLabel()
-	c.a.MovImm(scratchB, c.enc.String)
+	c.movImm(scratchB, c.enc.String)
 	c.a.Op(amd64.Cmp, c.gpr(a, scratchA), scratchB, true)
 	c.a.Jcc(amd64.CondNE, array)
 	c.reference(v, a, c.enc.String, guard)
@@ -3066,7 +3083,7 @@ func (c *compiler) element(array *ssa.Value, fail func(amd64.Cond)) {
 	c.a.ShiftImm(amd64.Shl, scratchA, 4, true)
 	c.a.Op(amd64.Add, scratchA, scratchB, true)
 	c.a.Load(scratchB, scratchA, c.enc.NumOffset)
-	c.a.MovImm(scratchC, abi.NumberLimit)
+	c.movImm(scratchC, abi.NumberLimit)
 	c.a.Op(amd64.Cmp, scratchB, scratchC, true)
 	fail(amd64.CondAE)
 }
@@ -3084,7 +3101,7 @@ func (c *compiler) elementCell(array *ssa.Value, fail func(amd64.Cond)) {
 	c.a.ShiftImm(amd64.Shl, scratchA, 4, true)
 	c.a.Op(amd64.Add, scratchA, scratchB, true)
 	c.a.Load(scratchB, scratchA, c.enc.NumOffset)
-	c.a.MovImm(scratchC, c.enc.Uninitialized)
+	c.movImm(scratchC, c.enc.Uninitialized)
 	c.a.Op(amd64.Cmp, scratchB, scratchC, true)
 	fail(amd64.CondE)
 }
@@ -3114,11 +3131,11 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.setG(v, d)
 	case ssa.OpConst:
 		d := c.gdst(v)
-		c.a.MovImm(d, c.constWord(v.Const))
+		c.movImm(d, c.constWord(v.Const))
 		c.setG(v, d)
 	case ssa.OpConstCell:
 		d := c.gdst(v)
-		c.a.MovImm(d, v.Const.Bits)
+		c.movImm(d, v.Const.Bits)
 		c.setG(v, d)
 	case ssa.OpUpvalueCell:
 		// The binding's cell, then where its value is now.
@@ -3128,7 +3145,7 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Load(d, d, c.enc.UpvalueSlot)
 		c.setG(v, d)
 	case ssa.OpConstF64:
-		c.a.MovImm(scratchA, v.Const.Bits)
+		c.movImm(scratchA, v.Const.Bits)
 		c.a.MovQToX(xScratch0, scratchA)
 		c.setX(v, xScratch0)
 	case ssa.OpUnboxF64:
@@ -3141,12 +3158,12 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.setX(v, xScratch0)
 	case ssa.OpCheckInit:
 		r := c.gpr(arg(0), scratchB)
-		c.a.MovImm(scratchA, c.enc.Uninitialized)
+		c.movImm(scratchA, c.enc.Uninitialized)
 		c.a.Op(amd64.Cmp, r, scratchA, true)
 		guard(amd64.CondE)
 	case ssa.OpCheckTrue:
 		r := c.gpr(arg(0), scratchB)
-		c.a.MovImm(scratchA, c.enc.True)
+		c.movImm(scratchA, c.enc.True)
 		c.a.Op(amd64.Cmp, r, scratchA, true)
 		guard(amd64.CondNE)
 	case ssa.OpTruth:
@@ -3162,7 +3179,7 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 	case ssa.OpTypeIs:
 		c.typeIs(v, c.guardFor(v))
 	case ssa.OpSameObject:
-		c.a.MovImm(scratchB, v.Const.Bits)
+		c.movImm(scratchB, v.Const.Bits)
 		c.a.Op(amd64.Cmp, c.gpr(arg(0), scratchA), scratchB, true)
 		guard(amd64.CondNE)
 	case ssa.OpCall:
@@ -3194,7 +3211,7 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 	case ssa.OpPropRead:
 		c.property(v, c.guardFor(v))
 		c.a.Load(scratchB, scratchA, c.enc.NumOffset)
-		c.a.MovImm(scratchC, abi.NumberLimit)
+		c.movImm(scratchC, abi.NumberLimit)
 		c.a.Op(amd64.Cmp, scratchB, scratchC, true)
 		guard(amd64.CondAE)
 		c.a.MovQToX(xScratch0, scratchB)
@@ -3214,7 +3231,7 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Jcc(amd64.CondBE, unshadowed)
 		c.a.Load(scratchB, scratchB, 0)
 		c.a.Load(scratchB, scratchB, word*8)
-		c.a.MovImm(scratchA, 1<<(v.Key&63))
+		c.movImm(scratchA, 1<<(v.Key&63))
 		c.a.Op(amd64.Test, scratchB, scratchA, true)
 		guard(amd64.CondNE)
 		c.a.Bind(unshadowed)
@@ -3251,7 +3268,7 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		guard(amd64.CondNE)
 		c.a.OpImm(amd64.Add, scratchA, c.enc.PropertyValue, true)
 		c.a.Load(scratchB, scratchA, c.enc.NumOffset)
-		c.a.MovImm(scratchC, c.enc.Uninitialized)
+		c.movImm(scratchC, c.enc.Uninitialized)
 		c.a.Op(amd64.Cmp, scratchB, scratchC, true)
 		guard(amd64.CondE)
 		c.setG(v, scratchA)
@@ -3260,7 +3277,7 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		// the one Go found the intrinsic in: the call compares what it
 		// holds with the intrinsic (stringCode), which a call made
 		// meanwhile may have replaced.
-		c.a.MovImm(scratchB, c.enc.String)
+		c.movImm(scratchB, c.enc.String)
 		c.a.Op(amd64.Cmp, c.gpr(arg(0), scratchA), scratchB, true)
 		guard(amd64.CondNE)
 		c.a.Load(scratchA, regCtx, abi.OffStringProto)
@@ -3277,14 +3294,14 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 	case ssa.OpStringProp:
 		// A string's method where String.prototype has it, its shape the
 		// one the code was compiled for, which says where.
-		c.a.MovImm(scratchB, c.enc.String)
+		c.movImm(scratchB, c.enc.String)
 		c.a.Op(amd64.Cmp, c.gpr(arg(0), scratchA), scratchB, true)
 		guard(amd64.CondNE)
 		c.a.Load(scratchA, regCtx, abi.OffStringMethods)
 		c.a.Op(amd64.Test, scratchA, scratchA, true)
 		guard(amd64.CondE)
 		c.a.Load(scratchB, scratchA, c.enc.ObjectShape)
-		c.a.MovImm(scratchC, v.Const.Bits)
+		c.movImm(scratchC, v.Const.Bits)
 		c.a.Op(amd64.Cmp, scratchB, scratchC, true)
 		guard(amd64.CondNE)
 		c.a.Load(scratchA, scratchA, c.enc.ObjectProps)
@@ -3326,7 +3343,7 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 				c.a.MovQFromX(scratchA, c.xmm(v.Args[1], xScratch0))
 				c.a.Store(regCtx, abi.OffGoArgs+size+c.enc.NumOffset, scratchA)
 				c.goSaving(uint64(ssa.GoElemCell), &stub)
-				c.a.MovImm(scratchA, c.enc.UndefinedCell)
+				c.movImm(scratchA, c.enc.UndefinedCell)
 				c.a.Jmp(done)
 			})
 		}
@@ -3410,7 +3427,7 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		if x != xScratch0 {
 			c.a.SSEOp(amd64.MovAPD, xScratch0, x)
 		}
-		c.a.MovImm(scratchA, 1<<63)
+		c.movImm(scratchA, 1<<63)
 		c.a.MovQToX(xScratch1, scratchA)
 		c.a.SSEOp(amd64.XorPD, xScratch0, xScratch1)
 		c.setX(v, xScratch0)
@@ -3422,7 +3439,7 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		if x != xScratch0 {
 			c.a.SSEOp(amd64.MovAPD, xScratch0, x)
 		}
-		c.a.MovImm(scratchA, 1<<63-1)
+		c.movImm(scratchA, 1<<63-1)
 		c.a.MovQToX(xScratch1, scratchA)
 		c.a.SSEOp(amd64.AndPD, xScratch0, xScratch1)
 		c.setX(v, xScratch0)
@@ -3437,7 +3454,7 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 			word = c.enc.Undefined
 		}
 		w := c.gpr(arg(0), scratchB)
-		c.a.MovImm(scratchA, word)
+		c.movImm(scratchA, word)
 		c.a.Op(amd64.Cmp, w, scratchA, true)
 		c.a.Setcc(amd64.CondE, scratchA)
 		c.a.MovZX8(scratchA, scratchA)
@@ -3517,11 +3534,11 @@ func (c *compiler) looseNullish(v *ssa.Value, guard func(amd64.Cond)) {
 	yes, no, done := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
 	w := c.gpr(a, scratchB)
 	for _, word := range []uint64{c.enc.Null, c.enc.Undefined} {
-		c.a.MovImm(scratchA, word)
+		c.movImm(scratchA, word)
 		c.a.Op(amd64.Cmp, w, scratchA, true)
 		c.a.Jcc(amd64.CondE, yes)
 	}
-	c.a.MovImm(scratchA, c.enc.Object)
+	c.movImm(scratchA, c.enc.Object)
 	c.a.Op(amd64.Cmp, w, scratchA, true)
 	c.a.Jcc(amd64.CondNE, no)
 	if c.reference(v, a, c.enc.Object, guard) {
@@ -3530,10 +3547,10 @@ func (c *compiler) looseNullish(v *ssa.Value, guard func(amd64.Cond)) {
 		c.a.Jcc(amd64.CondNE, yes)
 	}
 	c.a.Bind(no)
-	c.a.MovImm(scratchA, 0)
+	c.movImm(scratchA, 0)
 	c.a.Jmp(done)
 	c.a.Bind(yes)
-	c.a.MovImm(scratchA, 1)
+	c.movImm(scratchA, 1)
 	c.a.Bind(done)
 	c.setG(v, scratchA)
 }
@@ -3548,19 +3565,19 @@ func (c *compiler) eqTagged(v *ssa.Value, guard func(amd64.Cond)) {
 	c.a.Op(amd64.Cmp, wx, wy, true)
 	c.a.Jcc(amd64.CondNE, differ)
 	// One word: a number (NaN unequal to itself), a primitive, or objects.
-	c.a.MovImm(scratchC, abi.NumberLimit)
+	c.movImm(scratchC, abi.NumberLimit)
 	c.a.Op(amd64.Cmp, wx, scratchC, true)
 	c.a.Jcc(amd64.CondB, number)
 	for _, w := range []uint64{c.enc.Null, c.enc.Undefined, c.enc.True, c.enc.False} {
-		c.a.MovImm(scratchC, w)
+		c.movImm(scratchC, w)
 		c.a.Op(amd64.Cmp, wx, scratchC, true)
 		c.a.Jcc(amd64.CondE, yes)
 	}
 	strings := c.a.NewLabel()
-	c.a.MovImm(scratchC, c.enc.String)
+	c.movImm(scratchC, c.enc.String)
 	c.a.Op(amd64.Cmp, wx, scratchC, true)
 	c.a.Jcc(amd64.CondE, strings)
-	c.a.MovImm(scratchC, c.enc.Object)
+	c.movImm(scratchC, c.enc.Object)
 	c.a.Op(amd64.Cmp, wx, scratchC, true)
 	c.a.Jcc(amd64.CondNE, exit)
 	if c.reference(v, x, c.enc.Object, guard) {
@@ -3603,7 +3620,7 @@ func (c *compiler) eqTagged(v *ssa.Value, guard func(amd64.Cond)) {
 		other = exit
 		numbers, xNullish, yNullish := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
 		for _, w := range []uint64{c.enc.Null, c.enc.Undefined} {
-			c.a.MovImm(scratchC, w)
+			c.movImm(scratchC, w)
 			c.a.Op(amd64.Cmp, wx, scratchC, true)
 			c.a.Jcc(amd64.CondE, xNullish)
 			c.a.Op(amd64.Cmp, wy, scratchC, true)
@@ -3618,11 +3635,11 @@ func (c *compiler) eqTagged(v *ssa.Value, guard func(amd64.Cond)) {
 		}{{xNullish, y, wy}, {yNullish, x, wx}} {
 			c.a.Bind(k.at)
 			for _, w := range []uint64{c.enc.Null, c.enc.Undefined} {
-				c.a.MovImm(scratchC, w)
+				c.movImm(scratchC, w)
 				c.a.Op(amd64.Cmp, k.w, scratchC, true)
 				c.a.Jcc(amd64.CondE, yes)
 			}
-			c.a.MovImm(scratchC, c.enc.Object)
+			c.movImm(scratchC, c.enc.Object)
 			c.a.Op(amd64.Cmp, k.w, scratchC, true)
 			c.a.Jcc(amd64.CondNE, no)
 			if c.reference(v, k.other, c.enc.Object, guard) {
@@ -3634,7 +3651,7 @@ func (c *compiler) eqTagged(v *ssa.Value, guard func(amd64.Cond)) {
 		}
 		c.a.Bind(numbers)
 	}
-	c.a.MovImm(scratchC, abi.NumberLimit)
+	c.movImm(scratchC, abi.NumberLimit)
 	c.a.Op(amd64.Cmp, wx, scratchC, true)
 	c.a.Jcc(amd64.CondAE, other)
 	c.a.Op(amd64.Cmp, wy, scratchC, true)
@@ -3645,10 +3662,10 @@ func (c *compiler) eqTagged(v *ssa.Value, guard func(amd64.Cond)) {
 	c.a.Jcc(amd64.CondNE, no)
 	c.a.Jcc(amd64.CondP, no)
 	c.a.Bind(yes)
-	c.a.MovImm(scratchA, 1)
+	c.movImm(scratchA, 1)
 	c.a.Jmp(done)
 	c.a.Bind(no)
-	c.a.MovImm(scratchA, 0)
+	c.movImm(scratchA, 0)
 	c.a.Bind(done)
 	c.setG(v, scratchA)
 }
@@ -3666,7 +3683,7 @@ func (c *compiler) truth(v *ssa.Value, guard func(amd64.Cond)) {
 		word uint64
 		to   amd64.Label
 	}{{c.enc.True, yes}, {c.enc.False, no}, {c.enc.Undefined, no}, {c.enc.Null, no}} {
-		c.a.MovImm(scratchA, w.word)
+		c.movImm(scratchA, w.word)
 		c.a.Op(amd64.Cmp, r, scratchA, true)
 		c.a.Jcc(amd64.CondE, w.to)
 	}
@@ -3675,7 +3692,7 @@ func (c *compiler) truth(v *ssa.Value, guard func(amd64.Cond)) {
 	// Anything else -- the uninitialized marker, a symbol, a BigInt -- is
 	// not decided here.
 	notObject := c.a.NewLabel()
-	c.a.MovImm(scratchA, c.enc.Object)
+	c.movImm(scratchA, c.enc.Object)
 	c.a.Op(amd64.Cmp, r, scratchA, true)
 	c.a.Jcc(amd64.CondNE, notObject)
 	if c.reference(v, v.Args[0], c.enc.Object, guard) {
@@ -3685,7 +3702,7 @@ func (c *compiler) truth(v *ssa.Value, guard func(amd64.Cond)) {
 		c.a.Jmp(yes)
 	}
 	c.a.Bind(notObject)
-	c.a.MovImm(scratchA, c.enc.String)
+	c.movImm(scratchA, c.enc.String)
 	c.a.Op(amd64.Cmp, r, scratchA, true)
 	guard(amd64.CondNE)
 	if c.reference(v, v.Args[0], c.enc.String, guard) {
@@ -3706,10 +3723,10 @@ func (c *compiler) truth(v *ssa.Value, guard func(amd64.Cond)) {
 	c.a.MovZX8(scratchA, scratchA)
 	c.a.Jmp(done)
 	c.a.Bind(yes)
-	c.a.MovImm(scratchA, 1)
+	c.movImm(scratchA, 1)
 	c.a.Jmp(done)
 	c.a.Bind(no)
-	c.a.MovImm(scratchA, 0)
+	c.movImm(scratchA, 0)
 	c.a.Bind(done)
 	c.setG(v, scratchA)
 }
@@ -3722,7 +3739,7 @@ func (c *compiler) toInt32(v *ssa.Value) {
 	slow, back := c.a.NewLabel(), c.a.NewLabel()
 	x := c.xmm(xv, xScratch0)
 	c.a.Cvttsd2si(scratchA, x)
-	c.a.MovImm(scratchB, 1<<63)
+	c.movImm(scratchB, 1<<63)
 	c.a.Op(amd64.Cmp, scratchA, scratchB, true)
 	c.a.Jcc(amd64.CondE, slow)
 	c.a.Bind(back)

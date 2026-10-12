@@ -88,6 +88,7 @@ func TestLinuxArenaProtectionAndRelease(t *testing.T) {
 		}
 	}
 	var ctx abi.Context
+	ctx.SetConsts(&testEncoding)
 	if err := last.Run(0, &ctx); err != nil || ctx.Ret != math.Float64bits(2) {
 		t.Fatalf("code beside released code: %v, %v", ctx.Ret, err)
 	}

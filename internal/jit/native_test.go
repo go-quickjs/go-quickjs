@@ -36,6 +36,7 @@ func TestNativeInvalidCodeSize(t *testing.T) {
 // runValue runs code that returns a number, and reports it.
 func runValue(c *SSACode) (float64, error) {
 	var ctx abi.Context
+	ctx.SetConsts(&testEncoding)
 	if err := c.Run(0, &ctx); err != nil {
 		return 0, err
 	}

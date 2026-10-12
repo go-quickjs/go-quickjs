@@ -75,6 +75,7 @@ func TestNativeCallsGo(t *testing.T) {
 		return calls != 2
 	}
 	ctx := new(abi.Context)
+	ctx.SetConsts(&testEncoding)
 	ctx.GoKeep = 3
 	done := make(chan struct{})
 	go func() {

@@ -45,19 +45,72 @@ const (
 
 // Context is the block native code reaches through its context register.
 // Go sets the frame's addresses before every entry; native code writes the
-// exit record and spills, and, for a native call, the callee's context.
+// exit record and spills, and, for a native call, the callee's context. The
+// fields most code reads or writes -- the frame's, how an exit left, a
+// return's and a native call's, and the constants -- come first, within a
+// byte's displacement of the start.
 type Context struct {
 	// Locals and Stack are the frame's first local and first operand: each
 	// slot is an Encoding.ValueSize-byte VM value.
 	Locals unsafe.Pointer
 	Stack  unsafe.Pointer
-	// BackEdges is the interpreter's back-edge counter, which every native
-	// back-edge decrements; at zero or below native code polls.
-	BackEdges *int
 	// Upvalues is the function's first captured binding's cell: an array of
 	// pointers to cells, each holding at Encoding.UpvalueSlot a pointer to
 	// the binding's value. Native code only reads them.
 	Upvalues unsafe.Pointer
+	// ExitKind is the exit record's kind, which every exit writes; the rest
+	// of the record is past the constants.
+	ExitKind uint64
+	// Ret is a return's number word. RetFrom is 0 when that is the result,
+	// or the address of the value, a reference, that is: a source (ssa's
+	// origin.go).
+	Ret, RetFrom uint64
+	// A native call (mir's): a caller's code sets up its callee's frame in
+	// the VM's stack, and its context, the next (Next), and jumps to its
+	// code. ReturnTo is where a
+	// return goes in its caller's code, or 0 for Run's caller in Go;
+	// RetValue is the value it returns there, both words. Next and Prev
+	// are the contexts a call from this one runs in and this one's caller
+	// ran in, which Go links and never moves, adding more as calls need
+	// them, as V8's frames take a stack that grows. Live marks a context
+	// a native call runs in; Closure, Base and Level say whose
+	// frame it is -- the VM's closure, the frame's index in the VM's stack,
+	// and the context's in the array -- for Go to make the VM's frames from
+	// when a callee leaves native code; Level stays below LevelLimit.
+	// StackBase and StackEnd are the VM's stack's first value and length,
+	// StackTop and StackHigh its next free and highest used indices, which
+	// a call moves. TailReturn is where the records' tail goes on, in a
+	// caller's code, instead of returning to Go: 0 but during a call.
+	ReturnTo uintptr
+	RetValue Slot
+	// Consts are the words native code makes most, the tags of Encoding's
+	// that ConstWords lists, which a load from here makes in four bytes
+	// where a move of the constant takes ten. Go fills them in every
+	// context it makes (SetConsts), and native code only reads them.
+	Consts [NumConsts]uint64
+	// The rest of the exit record. ExitSite is the slot IR PC of the
+	// operation whose guard or exit this was, or -1 (all ones) for a
+	// block's entry or loop header state -- an entry's speculation, or a
+	// poll: what a policy that stops speculating where it failed needs,
+	// since ExitPC is where the interpreter resumes, often the start of
+	// the statement.
+	ExitPC    uint64
+	ExitDepth uint64
+	ExitSite  uint64
+	// BackEdges is the interpreter's back-edge counter, which every native
+	// back-edge decrements; at zero or below native code polls.
+	BackEdges  *int
+	Live       uint64
+	Closure    unsafe.Pointer
+	Base       uint64
+	Level      uint64
+	LevelLimit uint64
+	StackBase  unsafe.Pointer
+	StackEnd   uint64
+	StackTop   *int
+	StackHigh  *int
+	TailReturn uintptr
+	Next, Prev unsafe.Pointer
 	// Global is the object a function's global names are read from, its
 	// closure's scope, and LexNames the names script-level lexical bindings
 	// have, which shadow them: a slice of uint64, a bit for each atom.
@@ -84,48 +137,6 @@ type Context struct {
 	// every entry of a function that reads it; uninitialized in a derived
 	// constructor before super() returns.
 	This Slot
-	// The exit record. ExitSite is the slot IR PC of the operation whose
-	// guard or exit this was, or -1 (all ones) for a block's entry or loop
-	// header state -- an entry's speculation, or a poll: what a policy that
-	// stops speculating where it failed needs, since ExitPC is where the
-	// interpreter resumes, often the start of the statement.
-	ExitKind  uint64
-	ExitPC    uint64
-	ExitDepth uint64
-	ExitSite  uint64
-	// Ret is a return's number word. RetFrom is 0 when that is the result,
-	// or the address of the value, a reference, that is: a source (ssa's
-	// origin.go).
-	Ret, RetFrom uint64
-	// A native call (mir's): a caller's code sets up its callee's frame in
-	// the VM's stack, and its context, the next (Next), and jumps to its
-	// code. ReturnTo is where a
-	// return goes in its caller's code, or 0 for Run's caller in Go;
-	// RetValue is the value it returns there, both words. Next and Prev
-	// are the contexts a call from this one runs in and this one's caller
-	// ran in, which Go links and never moves, adding more as calls need
-	// them, as V8's frames take a stack that grows. Live marks a context
-	// a native call runs in; Closure, Base and Level say whose
-	// frame it is -- the VM's closure, the frame's index in the VM's stack,
-	// and the context's in the array -- for Go to make the VM's frames from
-	// when a callee leaves native code; Level stays below LevelLimit.
-	// StackBase and StackEnd are the VM's stack's first value and length,
-	// StackTop and StackHigh its next free and highest used indices, which
-	// a call moves. TailReturn is where the records' tail goes on, in a
-	// caller's code, instead of returning to Go: 0 but during a call.
-	ReturnTo   uintptr
-	RetValue   Slot
-	Live       uint64
-	Closure    unsafe.Pointer
-	Base       uint64
-	Level      uint64
-	LevelLimit uint64
-	StackBase  unsafe.Pointer
-	StackEnd   uint64
-	StackTop   *int
-	StackHigh  *int
-	TailReturn uintptr
-	Next, Prev unsafe.Pointer
 	// An inlined callee's frame, which an exit inside it wrote past its
 	// caller's operands (ssa's InlineState), is in the next context, whose
 	// Live is LiveInline: InlineClosure is the callee's closure's address,
@@ -292,6 +303,21 @@ type ExitInline struct {
 	Site, Base                        int64
 }
 
+// NumConsts is how many words a context holds as constants
+// (Context.Consts).
+const NumConsts = 7
+
+// ConstWords are the words a context holds as constants, in Consts'
+// order: the tags native code makes most, by how many sites a corpus of
+// npm packages' code makes each at.
+func (e *Encoding) ConstWords() [NumConsts]uint64 {
+	return [NumConsts]uint64{e.Object, e.String, e.Uninitialized, NumberLimit, e.Undefined, e.True, e.False}
+}
+
+// SetConsts fills c's constants from e, which the code run in c was
+// compiled for (Context.Consts).
+func (c *Context) SetConsts(e *Encoding) { c.Consts = e.ConstWords() }
+
 // Slot is a VM value's layout -- a number word, then a pointer word -- held
 // where the garbage collector sees the pointer.
 type Slot struct {
@@ -305,6 +331,7 @@ var (
 	OffStack     = int32(unsafe.Offsetof(Context{}.Stack))
 	OffBackEdges = int32(unsafe.Offsetof(Context{}.BackEdges))
 	OffUpvalues  = int32(unsafe.Offsetof(Context{}.Upvalues))
+	OffConsts    = int32(unsafe.Offsetof(Context{}.Consts))
 	OffThis      = int32(unsafe.Offsetof(Context{}.This))
 	OffGlobal    = int32(unsafe.Offsetof(Context{}.Global))
 	OffLexNames  = int32(unsafe.Offsetof(Context{}.LexNames))

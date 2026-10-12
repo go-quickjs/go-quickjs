@@ -73,6 +73,7 @@ func TestArenaPacksCode(t *testing.T) {
 				continue
 			}
 			var ctx abi.Context
+			ctx.SetConsts(&testEncoding)
 			if err := c.Run(0, &ctx); err != nil || ctx.ExitKind != abi.ExitReturn || ctx.Ret != math.Float64bits(float64(i)) {
 				t.Fatalf("%s: code %d returned %+v, %v", when, i, ctx.Ret, err)
 			}

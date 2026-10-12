@@ -881,6 +881,7 @@ func nativeMismatch(c *compiled, pc int, slots []ir.Value, poll int, heap testHe
 	// Captured bindings live in cells, and the receiver in the context;
 	// their numbers' entries in the frame are poison.
 	ctx := &abi.Context{}
+	ctx.SetConsts(&testEncoding)
 	this := (*testValue)(unsafe.Pointer(&ctx.This))
 	captured := make([]testValue, f.Locals-f.FrameLocals)
 	cells := make([]*testUpvalue, len(captured))
@@ -1666,6 +1667,7 @@ func BenchmarkSSARoundTrip(b *testing.B) {
 			frame := make([]testValue, locals)
 			counter := 1 << 62
 			ctx := &abi.Context{Locals: unsafe.Pointer(&frame[0]), BackEdges: &counter}
+			ctx.SetConsts(&testEncoding)
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
