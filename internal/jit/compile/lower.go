@@ -191,7 +191,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// throws it, as V8's code calls the runtime to throw.
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
-		host = host || str || iters || in.Op == bytecode.OpYield || in.Op == bytecode.OpAwait || in.Op == bytecode.OpThrow ||
+		host = host || str || iters || in.Op == bytecode.OpImport || in.Op == bytecode.OpImportMeta || in.Op == bytecode.OpYield || in.Op == bytecode.OpAwait || in.Op == bytecode.OpThrow ||
 			in.Op == bytecode.OpNewDisposeCapability || in.Op == bytecode.OpAddDisposable || in.Op == bytecode.OpDispose || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpApplyArguments || in.Op == bytecode.OpNew || in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict || in.Op == bytecode.OpCheckGlobalRef || in.Op == bytecode.OpNewObject || in.Op == bytecode.OpNewRegExp || in.Op == bytecode.OpDefineField || in.Op == bytecode.OpPushEmptyString || in.Op == bytecode.OpConcat || in.Op == bytecode.OpNewArray || in.Op == bytecode.OpCall || in.Op == bytecode.OpCallMethod || in.Op == bytecode.OpGetGlobal || in.Op == bytecode.OpGetPropThis || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		property = property || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		this = this || in.Op == bytecode.OpPushThis
@@ -1123,6 +1123,15 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 			return bad("suspension outside a generator")
 		}
 		return effect{need: 1, delta: 1}, nil
+	case bytecode.OpImportMeta:
+		return effect{delta: 1}, nil
+	case bytecode.OpImport:
+		// The specifier, and with B 2 the options, for the import's
+		// promise.
+		if in.B != 1 && in.B != 2 {
+			return bad("invalid import")
+		}
+		return effect{need: int(in.B), delta: 1 - int(in.B)}, nil
 	case bytecode.OpNipUnder:
 		// The top stays; the A beneath it go.
 		if in.A > MaxSlots {
@@ -1473,6 +1482,10 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this bool) ir.Instr
 		return ir.Instruction{Op: ir.Host}
 	case bytecode.OpNipUnder:
 		return copyTo(sp-1-int(in.A), top)
+	case bytecode.OpImport, bytecode.OpImportMeta:
+		// Go's (jitHost): a dynamic import's promise, the module's
+		// import.meta.
+		return ir.Instruction{Op: ir.Host}
 	}
 	// describe accepted an opcode this switch does not translate. Becoming a
 	// Nop with describe's stack effect would be a silent miscompile; the panic

@@ -87,6 +87,13 @@ finally clause's normal completion goes on natively; any other (a return,
 a throw) deoptimizes, the interpreter reproducing it. A using declaration's
 scope is such a try statement, its resources added and disposed of by Go.
 
+**Iteration.** A for...of or for...in loop's cursor, and `yield*`'s
+delegate, are Go's: native code leaves at each step and goes on past it
+with the value, or, the cursor done, at the loop's end, an entry of its
+own. A step's iterator is closed however the loop is left, as the
+interpreter closes it. So are an `await using` scope's disposal steps,
+`import()` and `import.meta`.
+
 **Generators and async functions.** `yield` and `await` are exits at which
 Go suspends the frame as the interpreter does, and each resumption enters
 native code at the frame's pc -- the entry after the yield or await, or,
@@ -94,11 +101,11 @@ the first time, past the parameters -- as the tree tier resumes a tree at
 the block there (`jitResume`, `runGeneratorTree`). A call of one makes its
 object, so none is called natively or inlined.
 
-**Not compiled yet.** Top-level and module code, `yield*`, an
-`await using` scope's disposal, closures and the locals they capture,
-dynamic `import()` and `import.meta`, and code using private fields run in
-the tree tier, which handles all of them; the JIT is to follow it there. Top-level code is refused before any
-entry is made (`jitCompiles`).
+**Not compiled yet.** Top-level and module code, closures and the locals
+they capture, destructuring from an iterator, and code using private
+fields run in the tree tier, which handles all of them; the JIT is to
+follow it there. Top-level code is refused before any entry is made
+(`jitCompiles`).
 
 **Profitability.** Each native stretch's work is estimated, exits and
 calls of Go counted against it; code whose stretches do too little between

@@ -1,6 +1,7 @@
 package quickjs_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/go-quickjs/go-quickjs"
 	"github.com/go-quickjs/go-quickjs/internal/hostaccess"
+	"github.com/go-quickjs/go-quickjs/internal/vm"
 )
 
 // The opt-in is valid in ordinary builds too, where it falls back. Pin its
@@ -106,5 +108,71 @@ func TestJITMemoryLimitOption(t *testing.T) {
 		if !errors.Is(err, quickjs.ErrMemoryLimit) {
 			t.Fatalf("over a script's limit, with %d options: %v", len(opts), err)
 		}
+	}
+}
+
+// import() and import.meta in functions the JIT compiles give what they
+// give in the interpreter: modules loaded by a loop, with the referrer each
+// is resolved against, import attributes passed on, a specifier whose
+// toString throws rejecting rather than throwing, and the module's
+// import.meta read in a loop.
+func TestJITImport(t *testing.T) {
+	run := func(opts ...quickjs.Option) (string, vm.JITStats) {
+		rt := quickjs.New(opts...)
+		defer rt.Close()
+		var got []string
+		rt.SetModuleLoader(func(specifier, referrer string) (string, string, error) {
+			got = append(got, specifier+" from "+referrer)
+			if strings.HasSuffix(specifier, ".json") {
+				return `{"v": 7}`, "/app/" + specifier, nil
+			}
+			return `export const name = "` + specifier + `";`, "/app/" + specifier, nil
+		})
+		ns, err := rt.EvalModule("/app/main.mjs", `
+			// No closures: each runs natively (what the JIT does not compile
+			// yet is left outside).
+			function load(n, ps) {
+				for (let i = 0; i < n; i++) ps.push(import("./m" + (i % 4) + ".mjs"));
+				return ps;
+			}
+			function json(n, ps, opts) {
+				for (let i = 0; i < n; i++) ps.push(import("./d" + (i % 2) + ".json", opts));
+				return ps;
+			}
+			function bad(n, ps, spec) {
+				for (let i = 0; i < n; i++) ps.push(import(spec));
+				return ps;
+			}
+			function meta(n) {
+				let same = 0;
+				for (let i = 0; i < n; i++) if (import.meta === import.meta && typeof import.meta === "object") same++;
+				return same;
+			}
+			const spec = { toString() { throw "S" } }, opts = { with: { type: "json" } };
+			const rounds = [];
+			for (let k = 0; k < 20; k++) rounds.push(Promise.all([
+				Promise.all(load(5, [])).then(ms => ms.map(m => m.name).join()),
+				Promise.all(json(2, [], opts)).then(ms => ms.map(m => m.default.v).join()),
+				Promise.allSettled(bad(2, [], spec)).then(r => r.map(x => x.status + x.reason).join()),
+				meta(30)]).then(r => r.join(" ")));
+			export const all = Promise.all(rounds).then(r => r[0] + " / " + r[19]);`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		all, _ := ns.Get("all")
+		v, err := all.Await(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v.String() + " | " + strings.Join(got, ", "), hostaccess.VM(rt).JITStats()
+	}
+	want, _ := run()
+	got, st := run(quickjs.WithJIT())
+	if got != want {
+		t.Errorf("jit: %s\ninterpreter: %s", got, want)
+	}
+	if st.Budget != 0 && (st.Compiled < 4 || st.SSAEntries == 0) {
+		// load, json, bad and meta among those compiled.
+		t.Errorf("the functions did not run natively: %+v", st)
 	}
 }

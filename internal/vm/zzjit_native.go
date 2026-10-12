@@ -1721,7 +1721,7 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			bytecode.OpPushEmptyString, bytecode.OpGetUpvalue, bytecode.OpGetUpvalueCheck, bytecode.OpSetUpvalue,
 			bytecode.OpInitUpvalue, bytecode.OpSetUpvalueCheck, bytecode.OpConcat, bytecode.OpNewDisposeCapability, bytecode.OpAddDisposable,
 			bytecode.OpForOfStart, bytecode.OpForInStart, bytecode.OpIterNextOrJump, bytecode.OpIterClose, bytecode.OpIterCloseNormal,
-			bytecode.OpIterResume, bytecode.OpIterUnpackDelegate:
+			bytecode.OpIterResume, bytecode.OpIterUnpackDelegate, bytecode.OpImport, bytecode.OpImportMeta:
 		case bytecode.OpDispose:
 		default:
 			return sp, steps, nil
@@ -1895,6 +1895,16 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 				return sp, steps, err
 			}
 			continue
+		case bytecode.OpImportMeta:
+			v = r.importMeta(f.cl.env)
+		case bytecode.OpImport:
+			// As executeAt's case: the import's promise, never a throw.
+			options := Undefined
+			if in.B > 1 {
+				options = stack[sp-1]
+			}
+			sp -= int(in.B)
+			v = r.importCall(in.A, stack[sp], options)
 		case bytecode.OpIterResume:
 			// yield*'s step of its delegate, as executeAt's case makes it:
 			// the delegation ended, native code goes on at B with the value.
