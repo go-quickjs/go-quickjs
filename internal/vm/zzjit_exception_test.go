@@ -124,6 +124,13 @@ func TestJITExceptionHandlers(t *testing.T) {
 			return s
 		}
 		function callsReturnThrough(n) { let s = 0; for (let i = 0; i < n; i++) s += returnThrough(i % 5); return s }
+		function throwsOwn(n) {
+			let s = 0
+			for (let i = 0; i < n; i++) {
+				try { if (i % 3 === 0) throw { code: i }; s += 1 } catch (e) { s += e.code }
+			}
+			return s
+		}
 	`
 	r := jitAgreesForTest(t, setup,
 		`caught(50)`, `caught(50)`, `caught(200)`,
@@ -135,24 +142,27 @@ func TestJITExceptionHandlers(t *testing.T) {
 		`(() => { try { return uncaught(10) } catch (e) { return e.message } })()`,
 		`rethrows(50)`, `rethrows(50)`,
 		`operation({p: {q: 1}}, 50)`, `operation({}, 50)`, `operation({p: {q: 2}}, 50)`,
+		`throwsOwn(60)`, `throwsOwn(60)`,
 	)
-	for _, name := range []string{"caught", "withFinally", "returnThrough", "nested", "breaks", "rethrows", "operation"} {
+	for _, name := range []string{"caught", "withFinally", "returnThrough", "nested", "breaks", "rethrows", "operation", "throwsOwn"} {
 		jitNativeForTest(t, r, name)
 	}
 	// A throw caught in the function goes on natively at its handler: a
-	// run in which every turn's property read throws never finishes in
-	// the interpreter.
+	// run in which every turn's property read throws, or every third's
+	// throw statement, never finishes in the interpreter.
 	// (The first run's reads, speculated for an object that has p, are
 	// compiled again for one that has not.)
 	if _, err := r.Run(compileForTest(t, `operation({}, 100)`)); err != nil {
 		t.Fatal(err)
 	}
-	interpreted := r.jit.interpreted
-	if _, err := r.Run(compileForTest(t, `operation({}, 100)`)); err != nil {
-		t.Fatal(err)
-	}
-	if r.jit.interpreted != interpreted {
-		t.Fatalf("operation finished in the interpreter %d times", r.jit.interpreted-interpreted)
+	for _, src := range []string{`operation({}, 100)`, `throwsOwn(100)`} {
+		interpreted := r.jit.interpreted
+		if _, err := r.Run(compileForTest(t, src)); err != nil {
+			t.Fatal(err)
+		}
+		if r.jit.interpreted != interpreted {
+			t.Fatalf("%s finished in the interpreter %d times", src, r.jit.interpreted-interpreted)
+		}
 	}
 }
 

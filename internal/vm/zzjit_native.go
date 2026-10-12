@@ -1686,6 +1686,14 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			}
 			continue
 		}
+		if in.Op == bytecode.OpThrow {
+			// Made here, so that a handler of the function's that catches
+			// it goes on natively (jitCatch), as the tree tier's throw
+			// goes on to its handler (throwToHandler).
+			f.pc++
+			steps++
+			return sp - 1, steps, r.throw(r.stack[sp-1])
+		}
 		if in.Op == bytecode.OpRethrow {
 			// A finally clause's normal completion: its record dropped. Any
 			// other the interpreter reproduces.
