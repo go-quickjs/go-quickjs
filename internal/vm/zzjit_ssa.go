@@ -5660,6 +5660,10 @@ func (r *Runtime) jitResume(f *frame) (Value, error, bool) {
 	if e != nil && e.ssa != nil {
 		p = e.ssaProg
 	} else if p, _ = r.jitLower(f.cl.fn, jitLowerSSA); p == nil {
+		// Refused for good, as tryJITAt has a refusal: asked again at each
+		// resumption, a short generator's -- one with no loop -- looked
+		// its lowering up every time, a quarter of what it cost.
+		f.cl.jitRefused = true
 		return Undefined, nil, false
 	}
 	pc := int(f.pc)
