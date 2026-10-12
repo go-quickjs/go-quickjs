@@ -1570,8 +1570,8 @@ func (r *Runtime) tryJITTreeLoopEnabled(c *tctx, pc, depth int, fullBudget bool)
 			// A generator's tree runs under runGeneratorTree's recover,
 			// not runTree's: the run's end is told it as the tree tells
 			// it -- a suspension in treeSuspend, a return in ret, an
-			// exception as a throw. Native code ran no loop of for...of,
-			// whose cursors an exception would close.
+			// exception as a throw, whose loops' iterators the run closed
+			// already (jitInterpret), closing them again doing nothing.
 			switch s, ok := err.(*suspendSignal); {
 			case ok:
 				if s != &r.treeSig {
@@ -1719,7 +1719,8 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			bytecode.OpGetIndex, bytecode.OpNew, bytecode.OpPushConst, bytecode.OpInstanceOf, bytecode.OpTypeOf,
 			bytecode.OpCheckGlobalRef, bytecode.OpAssertResolved, bytecode.OpNewObject, bytecode.OpNewRegExp, bytecode.OpDefineField,
 			bytecode.OpPushEmptyString, bytecode.OpGetUpvalue, bytecode.OpGetUpvalueCheck, bytecode.OpSetUpvalue,
-			bytecode.OpInitUpvalue, bytecode.OpSetUpvalueCheck, bytecode.OpConcat, bytecode.OpNewDisposeCapability, bytecode.OpAddDisposable:
+			bytecode.OpInitUpvalue, bytecode.OpSetUpvalueCheck, bytecode.OpConcat, bytecode.OpNewDisposeCapability, bytecode.OpAddDisposable,
+			bytecode.OpForOfStart, bytecode.OpForInStart, bytecode.OpIterNextOrJump, bytecode.OpIterClose, bytecode.OpIterCloseNormal:
 		case bytecode.OpDispose:
 			if in.B != 0 {
 				// A step of an await using scope's disposal.
@@ -1875,6 +1876,34 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			var yes bool
 			yes, err = r.instanceOfAt(&f.cl.ic[in.B], stack[sp], stack[sp+1])
 			v = Bool(yes)
+		case bytecode.OpForOfStart, bytecode.OpForInStart:
+			// A loop's cursor, as executeAt's cases make it.
+			sp--
+			if in.Op == bytecode.OpForOfStart {
+				v, err = r.startForOf(stack[sp])
+			} else {
+				v, err = r.startForIn(stack[sp])
+			}
+		case bytecode.OpIterNextOrJump:
+			// The cursor stays: its next value, or, done, the loop's end,
+			// which native code goes on at (an entry, ir.Program's
+			// Entries). Native code polls at the loop's back edge.
+			var ok bool
+			if v, ok, err = r.iterNext(stack[sp-1]); err == nil && !ok {
+				f.pc = in.A
+				continue
+			}
+		case bytecode.OpIterClose:
+			if err := r.iterCloseNormal(stack[sp-1]); err != nil {
+				return sp, steps, err
+			}
+			continue
+		case bytecode.OpIterCloseNormal:
+			sp--
+			if err := r.iterCloseNormal(stack[sp]); err != nil {
+				return sp, steps, err
+			}
+			continue
 		case bytecode.OpNewDisposeCapability, bytecode.OpAddDisposable, bytecode.OpDispose:
 			var push bool
 			if sp, v, push, err = r.jitUsing(in, sp); err != nil {
@@ -1996,6 +2025,18 @@ func (r *Runtime) jitFrameValue(f *frame, index int) Value {
 }
 
 func (r *Runtime) jitInterpret(f *frame, sp int, pending error) (Value, error, bool) {
+	if _, ok := pending.(*Thrown); ok {
+		// Unwound here, as executeAt's onError unwinds what it throws: one
+		// nothing in the frame catches leaves it, every loop it was in
+		// abandoned, its iterators closed -- which executeAt does not for
+		// an exception it is given.
+		var caught bool
+		if sp, caught = r.unwindToHandler(f, sp, pending); !caught {
+			r.closeIteratorsIn(f.base, sp)
+			return Undefined, pending, true
+		}
+		pending = nil
+	}
 	if r.jit != nil {
 		r.jit.interpreted++
 	}

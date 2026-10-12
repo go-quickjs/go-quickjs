@@ -317,3 +317,49 @@ func TestJITUsing(t *testing.T) {
 		t.Fatalf("scoped finished in the interpreter %d times", r.jit.interpreted-interpreted)
 	}
 }
+
+// A for...of or for...in loop's cursor is Go's: native code leaves at each
+// step, and goes on past it with the value, or at the loop's end. Its
+// iterator is closed however the loop is left -- break, return, a throw
+// caught in the function or leaving it -- as the interpreter closes it.
+func TestJITForOf(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		var log = []
+		function counter(n, failAt) {
+			let i = 0
+			return { [Symbol.iterator]() { return this },
+				next() { if (i === failAt) throw new Error('next ' + i); return i < n ? { value: i++, done: false } : { value: undefined, done: true } },
+				return() { log.push('closed@' + i); return {} } }
+		}
+		function sumArray(a) { let s = 0; for (const x of a) s += x; return s }
+		function sumMap(m) { let s = 0; for (const [k, v] of m) s += v; return s }
+		function sumKeys(o) { let s = ''; for (const k in o) s += k + o[k]; return s }
+		function breaks(n) { let s = 0; for (const x of counter(n)) { if (x === 4) break; s += x } return s }
+		function returns(n) { for (const x of counter(n)) { if (x === 3) return x * 100 } return -1 }
+		function nested(n) { let s = 0; for (const x of counter(n)) for (const y of counter(3)) { if (y === 2) break; s += x * y } return s }
+		function throwsOut(n) { for (const x of counter(n)) { if (x === 2) throw new Error('out ' + x) } }
+		function caughtIn(n) { let s = 0; for (let k = 0; k < n; k++) { try { for (const x of counter(5)) { if (x === k % 4) throw x; s++ } } catch (e) { s += 100 } } return s }
+		function nextFails(n) { try { let s = 0; for (const x of counter(10, n)) s += x; return s } catch (e) { return e.message } }
+		function* gen(n) { for (const x of counter(n)) { yield x * 2; if (x === 3) return } }
+		function take() { const l = log.join(); log = []; return l }
+	`
+	r := jitAgreesForTest(t, setup,
+		`sumArray([1,2,3,4,5])`, `sumArray([1,2,3,4,5,6,7])`, `sumArray([1.5, 'x', 3])`,
+		`sumMap(new Map([[1,10],[2,20]]))`, `sumMap(new Map([[1,10],[2,20],[3,30]]))`,
+		`sumKeys({a: 1, b: 2})`, `sumKeys({a: 1, b: 2, c: 3})`,
+		`breaks(10) + take()`, `breaks(10) + take()`,
+		`returns(10) + take()`, `returns(10) + take()`,
+		`nested(5) + take()`, `nested(5) + take()`,
+		`(() => { try { throwsOut(5) } catch (e) { return e.message } })() + take()`,
+		`(() => { try { throwsOut(5) } catch (e) { return e.message } })() + take()`,
+		`caughtIn(12) + take()`, `caughtIn(12) + take()`,
+		`nextFails(3) + take()`, `nextFails(3) + take()`,
+		`[...gen(10)].join() + take()`, `[...gen(10)].join() + take()`,
+	)
+	for _, name := range []string{"sumArray", "sumKeys", "breaks", "returns", "nested", "caughtIn", "gen"} {
+		jitNativeForTest(t, r, name)
+	}
+}

@@ -136,7 +136,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		}
 	}
 	effects := make([]effect, len(fn.Code))
-	host, loop, indexed, property, bitwise, this, handlers := false, false, false, false, false, false, false
+	host, loop, indexed, property, bitwise, this, handlers, iters := false, false, false, false, false, false, false, false
 	for pc, in := range fn.Code {
 		e, err := describe(fn, pc, in)
 		if err != nil {
@@ -176,13 +176,21 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// give them to.
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
+		switch in.Op {
+		case bytecode.OpForOfStart, bytecode.OpForInStart, bytecode.OpIterNextOrJump, bytecode.OpIterClose, bytecode.OpIterCloseNormal:
+			if !m.ssa || m.callee {
+				// A loop's cursor is Go's, in the function's own frame.
+				return nil, refuse(pc, "unsupported opcode "+in.Op.String())
+			}
+			iters = true
+		}
 		handlers = handlers || in.Op == bytecode.OpPushCatch || in.Op == bytecode.OpPushFinally
 		if in.Op == bytecode.OpThrow && !m.ssa {
 			// The new pipeline leaves a throw to the interpreter, which
 			// throws it, as V8's code calls the runtime to throw.
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
-		host = host || str || in.Op == bytecode.OpYield || in.Op == bytecode.OpAwait || in.Op == bytecode.OpThrow ||
+		host = host || str || iters || in.Op == bytecode.OpYield || in.Op == bytecode.OpAwait || in.Op == bytecode.OpThrow ||
 			in.Op == bytecode.OpNewDisposeCapability || in.Op == bytecode.OpAddDisposable || in.Op == bytecode.OpDispose || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpApplyArguments || in.Op == bytecode.OpNew || in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict || in.Op == bytecode.OpCheckGlobalRef || in.Op == bytecode.OpNewObject || in.Op == bytecode.OpNewRegExp || in.Op == bytecode.OpDefineField || in.Op == bytecode.OpPushEmptyString || in.Op == bytecode.OpConcat || in.Op == bytecode.OpNewArray || in.Op == bytecode.OpCall || in.Op == bytecode.OpCallMethod || in.Op == bytecode.OpGetGlobal || in.Op == bytecode.OpGetPropThis || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		property = property || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		this = this || in.Op == bytecode.OpPushThis
@@ -298,6 +306,18 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 	}
 	p := &ir.Program{Locals: fn.LocalCount + len(fn.Upvalues), StackSize: fn.MaxStack, This: this, Maps: maps, Code: make([]ir.Instruction, len(fn.Code)),
 		Handlers: table, HandlerAt: chains}
+	if iters {
+		for pc, in := range fn.Code {
+			switch {
+			case maps[pc].Depth < 0:
+			case in.Op == bytecode.OpIterNextOrJump:
+				// Go goes on at the loop's end, where the cursor is done.
+				if !slices.Contains(p.Entries, int(in.A)) {
+					p.Entries = append(p.Entries, int(in.A))
+				}
+			}
+		}
+	}
 	for _, h := range table {
 		// A throw Go catches goes on natively at its handler.
 		if !slices.Contains(p.Entries, int(h.PC)) {
@@ -322,7 +342,14 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		}
 	}
 	for pc, in := range fn.Code {
-		if maps[pc].Depth >= 0 {
+		switch {
+		case maps[pc].Depth < 0:
+		case iters && (in.Op == bytecode.OpReturn && maps[pc].Depth > 1 || in.Op == bytecode.OpReturnUndef && maps[pc].Depth > 0):
+			// A return with operands beneath its value, which may be the
+			// cursors of the loops it leaves: Go's, as the interpreter
+			// closes them (closeIteratorsReturning).
+			p.Code[pc] = ir.Instruction{Op: ir.Host}
+		default:
 			p.Code[pc] = lower(fn, in, p.Locals+maps[pc].Depth, p.This)
 		}
 	}
@@ -1034,6 +1061,20 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 	case bytecode.OpRethrow:
 		// A finally clause's completion record: its value, then its kind.
 		return effect{need: 2, delta: -2}, nil
+	case bytecode.OpForOfStart, bytecode.OpForInStart:
+		// The iterable popped, its loop's cursor pushed.
+		return effect{need: 1}, nil
+	case bytecode.OpIterNextOrJump:
+		// The cursor kept; its next value pushed, or, done, a jump to A,
+		// which Go takes (jitHost).
+		if uint64(in.A) >= uint64(len(fn.Code)) {
+			return bad("branch target out of bounds")
+		}
+		return effect{need: 1, delta: 1, branch: true, keep: true}, nil
+	case bytecode.OpIterClose:
+		return effect{need: 1}, nil
+	case bytecode.OpIterCloseNormal:
+		return effect{need: 1, delta: -1}, nil
 	case bytecode.OpNewDisposeCapability:
 		return effect{delta: 1}, nil
 	case bytecode.OpAddDisposable:
@@ -1341,6 +1382,11 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this bool) ir.Instr
 		return ir.Instruction{Op: ir.Host}
 	case bytecode.OpNewDisposeCapability, bytecode.OpAddDisposable, bytecode.OpDispose:
 		// A using declaration's resources, Go's (jitHost).
+		return ir.Instruction{Op: ir.Host}
+	case bytecode.OpForOfStart, bytecode.OpForInStart, bytecode.OpIterNextOrJump, bytecode.OpIterClose, bytecode.OpIterCloseNormal:
+		// A for...of or for...in loop's cursor, Go's (jitHost), which
+		// sets where native code goes on: past a step that has a value,
+		// or, done, at the loop's end.
 		return ir.Instruction{Op: ir.Host}
 	}
 	// describe accepted an opcode this switch does not translate. Becoming a

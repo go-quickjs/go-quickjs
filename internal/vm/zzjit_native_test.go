@@ -6423,9 +6423,18 @@ func TestJITSSALooseNullishOperands(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// Entered from Go, or called natively, now that its callers'
+		// for...of loops are compiled too.
+		ran := func(e *jitEntry) uint64 {
+			n := e.ssaStats.entries
+			if e.link != nil {
+				n += e.link.in
+			}
+			return n
+		}
 		var hosts, entries uint64
 		if e := r.jit.hint(eq); e != nil {
-			hosts, entries = e.ssaStats.hosts, e.ssaStats.entries
+			hosts, entries = e.ssaStats.hosts, ran(e)
 		}
 		gv, err := r.Run(compileForTest(t, src))
 		if err != nil {
@@ -6438,7 +6447,7 @@ func TestJITSSALooseNullishOperands(t *testing.T) {
 			// null or undefined against null, undefined, an object or a
 			// primitive: native, never Go's (code that left for each was
 			// demoted, and ran no more).
-			if e := r.jit.hint(eq); e == nil || e.ssa == nil || e.entrySlow || e.ssaStats.entries == entries || e.ssaStats.hosts != hosts {
+			if e := r.jit.hint(eq); e == nil || e.ssa == nil || e.entrySlow || ran(e) == entries || e.ssaStats.hosts != hosts {
 				t.Fatalf("eq left native code to compare null, undefined and objects: %+v", e)
 			}
 		}
