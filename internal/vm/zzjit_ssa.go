@@ -4688,7 +4688,12 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			jitHandlers(f, e.ssaProg, exitPC)
 			sp, ok := r.jitCallResult(f, exitPC, exitDepth, v, err)
 			if !ok || r.stopped != nil {
-				return r.jitInterpret(f, sp, err)
+				sp, err, native := r.jitCatch(f, e, sp, err)
+				if !native {
+					return r.jitInterpret(f, sp, err)
+				}
+				pc, depth = int(f.pc), sp-f.base
+				continue
 			}
 			pc, depth = int(f.pc), sp-f.base
 			if e.reoptDue() {
@@ -4720,7 +4725,12 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			v, err := r.jitUnwindNative(idx, e, f.cl.fn)
 			sp, ok := r.jitCallResult(f, exitPC, exitDepth, v, err)
 			if !ok || r.stopped != nil {
-				return r.jitInterpret(f, sp, err)
+				sp, err, native := r.jitCatch(f, e, sp, err)
+				if !native {
+					return r.jitInterpret(f, sp, err)
+				}
+				pc, depth = int(f.pc), sp-f.base
+				continue
 			}
 			pc, depth = int(f.pc), sp-f.base
 			if e.reoptDue() {
@@ -4774,7 +4784,12 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 				if p.pc == exitPC && p.ctx == idx {
 					sp, ok := r.jitCallResult(f, exitPC, int(ctx.ExitDepth), p.v, p.err)
 					if !ok || r.stopped != nil {
-						return r.jitInterpret(f, sp, p.err)
+						sp, err, native := r.jitCatch(f, e, sp, p.err)
+						if !native {
+							return r.jitInterpret(f, sp, err)
+						}
+						pc, depth = int(f.pc), sp-f.base
+						continue
 					}
 					pc, depth = int(f.pc), sp-f.base
 					if e.reoptDue() {
@@ -4808,7 +4823,12 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 				r.jitPolyWriteSeen(f, e, exitPC, in, o, before)
 			}
 			if err != nil || r.stopped != nil || steps == 0 {
-				return r.jitInterpret(f, sp, err)
+				sp, err, native := r.jitCatch(f, e, sp, err)
+				if !native {
+					return r.jitInterpret(f, sp, err)
+				}
+				pc, depth = int(f.pc), sp-f.base
+				continue
 			}
 			pc, depth = int(f.pc), sp-f.base
 			switch in.Op {
@@ -5645,4 +5665,22 @@ func (r *Runtime) jitResume(f *frame) (Value, error, bool) {
 		return Undefined, nil, false
 	}
 	return r.tryJITAt(f, pc, p.Maps[pc].Depth, false)
+}
+
+// jitCatch unwinds f, a frame of e's code, for err, which what Go did at
+// an exit threw with the operands' top at sp, as the interpreter does
+// (unwindToHandler): where a handler of the function catches it and e's
+// code has an entry there -- every handler has one -- native code goes on
+// from it (true), as V8's code goes on at a handler. Otherwise the
+// interpreter takes the frame from what it returns: unwound, with no
+// error, where a handler caught it; as it was where none did.
+func (r *Runtime) jitCatch(f *frame, e *jitEntry, sp int, err error) (int, error, bool) {
+	if err == nil || r.stopped != nil || len(f.handlers) == 0 {
+		return sp, err, false
+	}
+	sp, caught := r.unwindToHandler(f, sp, err)
+	if !caught {
+		return sp, err, false
+	}
+	return sp, nil, !e.entrySlow && e.ssa.HasEntry(int(f.pc))
 }

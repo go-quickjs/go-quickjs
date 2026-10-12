@@ -254,6 +254,17 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 				if pushed[pc] == 0 {
 					table = append(table, ir.Handler{PC: in.A, Depth: int32(depth), Outer: chain, Finally: in.Op == bytecode.OpPushFinally})
 					pushed[pc] = int32(len(table))
+					// The handler is entered as the interpreter enters it:
+					// the stack cut to its depth, the thrown value -- for a
+					// finally clause, a completion record -- pushed, and
+					// the handler dropped.
+					n := 1
+					if in.Op == bytecode.OpPushFinally {
+						n = 2
+					}
+					if err := join(int(in.A), depth+n, chain); err != nil {
+						return nil, err
+					}
 				}
 				chain = pushed[pc]
 			case bytecode.OpPopCatch:
@@ -287,6 +298,12 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 	}
 	p := &ir.Program{Locals: fn.LocalCount + len(fn.Upvalues), StackSize: fn.MaxStack, This: this, Maps: maps, Code: make([]ir.Instruction, len(fn.Code)),
 		Handlers: table, HandlerAt: chains}
+	for _, h := range table {
+		// A throw Go catches goes on natively at its handler.
+		if !slices.Contains(p.Entries, int(h.PC)) {
+			p.Entries = append(p.Entries, int(h.PC))
+		}
+	}
 	if fn.Async || fn.Generator {
 		// The first resumption enters past the parameters, which ran when
 		// the generator was made.

@@ -59,8 +59,9 @@ func jitNativeForTest(t *testing.T, r *Runtime, name string) *jitEntry {
 // A function with try statements is compiled, its handlers known at each
 // instruction rather than registered: a throw from a call of Go, from an
 // operation Go makes, or from a throw statement is caught by the handler in
-// force there, and finally clauses run on every completion -- normal, a
-// return, a throw, a break -- with the value each leaves.
+// force there -- native code going on at the handler, where Go caught it --
+// and finally clauses run on every completion -- normal, a return, a
+// throw, a break -- with the value each leaves.
 func TestJITExceptionHandlers(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -137,6 +138,21 @@ func TestJITExceptionHandlers(t *testing.T) {
 	)
 	for _, name := range []string{"caught", "withFinally", "returnThrough", "nested", "breaks", "rethrows", "operation"} {
 		jitNativeForTest(t, r, name)
+	}
+	// A throw caught in the function goes on natively at its handler: a
+	// run in which every turn's property read throws never finishes in
+	// the interpreter.
+	// (The first run's reads, speculated for an object that has p, are
+	// compiled again for one that has not.)
+	if _, err := r.Run(compileForTest(t, `operation({}, 100)`)); err != nil {
+		t.Fatal(err)
+	}
+	interpreted := r.jit.interpreted
+	if _, err := r.Run(compileForTest(t, `operation({}, 100)`)); err != nil {
+		t.Fatal(err)
+	}
+	if r.jit.interpreted != interpreted {
+		t.Fatalf("operation finished in the interpreter %d times", r.jit.interpreted-interpreted)
 	}
 }
 
