@@ -22,8 +22,10 @@ import (
 // disposing is thrown, which is the specification's rule that it replaces
 // whatever the scope was completing with.
 //
-// An `await using` makes the whole scope's disposal asynchronous, since the
-// resources are disposed of in one walk: the clause awaits a promise of it.
+// An `await using` makes the whole scope's disposal asynchronous: a loop of
+// steps, each running the disposers until one leaves a value to await, with
+// the awaits between them, which the specification's are, one for one --
+// an await of one promise of the whole walk would take a turn more.
 
 // disposeScope is the innermost scope a using declaration adds its value to.
 type disposeScope struct {
@@ -71,18 +73,42 @@ func (c *compiler) compileDispose(n *ast.DisposeStmt) {
 	if c.finallyRecord {
 		flags |= bytecode.DisposeRecord
 	}
-	if n.Async {
-		flags |= bytecode.DisposeAsync
+	if !n.Async {
+		c.emitAt(n.Start, bytecode.OpDispose, flags, 0)
+		return
 	}
-	c.emitAt(n.Start, bytecode.OpDispose, flags, 0)
-	if n.Async {
-		// The disposal leaves undefined rather than a promise when there was
-		// nothing to await: no `await using` was reached.
-		skip := c.emitJump(bytecode.OpJumpIfNullish)
-		c.emitAwait(n.Start)
-		c.patchJump(skip)
-		c.emit(bytecode.OpDrop, 0, 0)
+	// Each step runs the disposers until one leaves something to await,
+	// which the loop awaits before the next; what is awaited is dropped. An
+	// await that throws goes to the step that folds it in.
+	done := []int{c.emitAtJumpB(n.Start, bytecode.OpDispose, flags|bytecode.DisposeStep|bytecode.DisposeStart)}
+	loop := c.here()
+	threw := c.emitJump(bytecode.OpPushCatch)
+	c.handlerDepth++
+	c.emitAwait(n.Start)
+	c.emit(bytecode.OpPopCatch, 0, 0)
+	c.handlerDepth--
+	c.emit(bytecode.OpDrop, 0, 0)
+	c.emit(bytecode.OpGetLocal, l.slot, 0)
+	done = append(done, c.emitAtJumpB(n.Start, bytecode.OpDispose, bytecode.DisposeStep))
+	c.emit(bytecode.OpJump, uint32(loop), 0)
+	// The handler's own depth is the awaited value's, under what it threw.
+	c.patchJump(threw)
+	c.stackDepth++
+	c.emit(bytecode.OpNipUnder, 1, 0)
+	c.emit(bytecode.OpGetLocal, l.slot, 0)
+	done = append(done, c.emitAtJumpB(n.Start, bytecode.OpDispose, bytecode.DisposeStep|bytecode.DisposeFail))
+	c.emit(bytecode.OpJump, uint32(loop), 0)
+	for _, pc := range done {
+		c.patchJump(pc)
 	}
+	c.emit(bytecode.OpGetLocal, l.slot, 0)
+	c.emitAt(n.Start, bytecode.OpDispose, 0, bytecode.DisposeStep|bytecode.DisposeFinish)
+}
+
+// emitAtJumpB is emitJumpB with a source position.
+func (c *compiler) emitAtJumpB(pos int, op bytecode.Op, b uint32) int {
+	c.recordLine(pos)
+	return c.emitJumpB(op, b)
 }
 
 // addDisposable adds the value on top of the stack, which stays there, to the

@@ -2079,6 +2079,29 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				goto onError
 			}
 		case bytecode.OpDispose:
+			if in.B&bytecode.DisposeStep != 0 {
+				// A step of an await using scope's disposal.
+				sp--
+				cp := stack[sp]
+				var a, b Value
+				if in.B&bytecode.DisposeFail != 0 {
+					sp--
+					a = stack[sp]
+				} else if in.B&bytecode.DisposeStart != 0 && in.B&bytecode.DisposeRecord != 0 {
+					a, b = stack[sp-2], stack[sp-1]
+				}
+				v, more, err := usingStep(r, cp, a, b, in.B)
+				if err != nil {
+					vmErr = err
+					goto onError
+				}
+				if more {
+					sp = pushAt(stack, sp, v)
+				} else if in.B&bytecode.DisposeFinish == 0 {
+					pc = in.A
+				}
+				break
+			}
 			sp--
 			c := stack[sp].Object().data.(*disposeCapability)
 			// A finally clause knows from its record whether an exception is

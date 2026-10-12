@@ -783,9 +783,24 @@ const (
 )
 
 // The flags of OpDispose.
+//
+// DisposeStep, in B, makes it one step of an await using scope's
+// disposal instead, the awaits between them the compiler's own: the
+// capability is popped, and the disposers are run until one leaves a value
+// to await, which is pushed, or none is left, when it jumps to A. With
+// DisposeStart it is the first step, which reads a finally clause's
+// record beneath the capability where DisposeRecord says there is one;
+// with DisposeFail the await before it threw what lies beneath the
+// capability, which is popped and folded into the completion; with
+// DisposeFinish it is the end, which throws what the disposers threw, and
+// jumps nowhere.
 const (
 	DisposeRecord = 1 << iota
 	DisposeAsync
+	DisposeStep
+	DisposeStart
+	DisposeFail
+	DisposeFinish
 )
 
 // ModuleRequest names a module a module asks for: its specifier and, when its

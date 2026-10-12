@@ -22,8 +22,19 @@ type disposableResource struct {
 }
 
 // disposeCapability is a stack of resources waiting to be disposed of.
+//
+// The rest is an await using scope's disposal as it goes, between the
+// awaits the compiler makes (see usingStep): the resources being walked,
+// the next of them, whether an await of nothing is owed and whether
+// anything has been awaited, the completion so far, and the one the scope
+// was leaving with.
 type disposeCapability struct {
 	stack []disposableResource
+
+	walk                   []disposableResource
+	next                   int
+	needsAwait, hasAwaited bool
+	completion, leaving    error
 }
 
 // hasAsync reports whether any resource is an async one, without which a
