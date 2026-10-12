@@ -83,3 +83,97 @@ func TestTreeGenerators(t *testing.T) {
 		})
 	}
 }
+
+// TestTreeResumedLoopStructured pins that a loop a resumption goes on into
+// is structured from its own header, as a block of its own: a resumption
+// enters the loop partway round, and the loop rebuilt as part of the
+// function's first block was run from block to block after the first
+// suspension, every turn of it.
+func TestTreeResumedLoopStructured(t *testing.T) {
+	if !treeTier.Load() {
+		t.Skip("the tree tier is off")
+	}
+	for _, src := range []string{
+		`function* f(n) { var i, s = 0; for (i = 0; i < n; i++) { s = (s + i * 3) | 0; if ((i & 255) == 0) yield s } return s }`,
+		`async function f(n) { var i, s = 0; for (i = 0; i < n; i++) { s = (s + i * 3) | 0; if ((i & 255) == 0) await null } return s }`,
+		`function* f(n) { var s = 0; for (var j = 0; j < n; j++) { for (var i = 0; i < n; i++) s += i; yield s } }`,
+	} {
+		headers := 0
+		flowSeen = func(f *flow, _ *tree) {
+			if f.entry == 0 {
+				return
+			}
+			for _, nd := range f.nodes {
+				if !nd.dead && nd.changed {
+					headers++
+					break
+				}
+			}
+			for i, nd := range f.nodes {
+				if !nd.dead && (nd.level >= 0 || has(nd.succ, i)) {
+					t.Errorf("%s: block %d, in the loop at %d, is left to dispatch", src, i, nd.level)
+				}
+			}
+		}
+		tr := buildTree(flowFunc(t, src))
+		flowSeen = nil
+		if tr == nil || tr.gen == nil {
+			t.Errorf("%s: not built", src)
+		} else if headers != 1 {
+			t.Errorf("%s: %d parts rebuilt from a resumption's loop header, want 1", src, headers)
+		}
+	}
+}
+
+// TestTreeResumedLoops pins what loops a generator or an async function is
+// suspended in do once resumed, in both tiers, now that a loop a
+// resumption goes on into is a structure of its own: a yield in an inner
+// loop, in an outer loop around a busy inner one, in a loop's test, in a
+// do-while, with labelled break and continue, in a try inside a loop, and
+// an await in a loop of a loop.
+func TestTreeResumedLoops(t *testing.T) {
+	defer SetTreeTier(true)
+	for _, tt := range []struct {
+		name, src, want string
+		async           bool
+	}{
+		{name: "inner", src: `function* f(n) { for (var j = 0; j < n; j++) for (var i = 0; i < j; i++) yield j * 10 + i } [...f(4)].join()`, want: "10,20,21,30,31,32"},
+		{name: "outer", src: `function* f(n) { var s = 0; for (var j = 0; j < n; j++) { for (var i = 0; i < 100; i++) s += i; yield s } return -s } var g = f(3), a = []; for (var r = g.next(); !r.done; r = g.next()) a.push(r.value); a.push(r.value); a.join()`, want: "4950,9900,14850,-14850"},
+		{name: "inTest", src: `function* f() { var n = 0; while ((yield n) < 3) n++; return n } var g = f(), a = [g.next().value]; for (var k = 0; k < 5; k++) { var r = g.next(k); a.push(r.value, r.done) } a.join()`, want: "0,1,false,2,false,3,false,3,true,,true"},
+		{name: "doWhile", src: `function* f(n) { var i = 0; do { yield i; i += 2 } while (i < n) } [...f(7)].join()`, want: "0,2,4,6"},
+		{name: "labels", src: `function* f() { outer: for (var j = 0; j < 4; j++) { for (var i = 0; i < 4; i++) { if (i == 2) continue outer; if (j == 3) break outer; yield j + '' + i } } yield 'end' } [...f()].join()`, want: "00,01,10,11,20,21,end"},
+		{name: "tryInLoop", src: `function* f(n) { var s = ''; for (var i = 0; i < n; i++) { try { if (i == 1) throw 'x'; yield i } catch (e) { s += e } finally { s += 'f' } } return s } var g = f(3), a = []; for (var r = g.next(); !r.done; r = g.next()) a.push(r.value); a.push(r.value); a.join()`, want: "0,2,fxff"},
+		{name: "sentValues", src: `function* f() { var s = 0; for (var i = 0; i < 3; i++) s += yield i; return s } var g = f(); g.next(); g.next(10); g.next(20); g.next(30).value`, want: "60"},
+		{name: "awaitNested", async: true, src: `async function f(n) { var s = 0; for (var j = 0; j < n; j++) for (var i = 0; i < n; i++) { s += i * j; if (i == j) await null } return s } var p = f(10)`, want: "2025"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, on := range []bool{false, true} {
+				SetTreeTier(on)
+				src := tt.src
+				if tt.async {
+					src = "var out = 'pending'; " + src + "; Promise.resolve(p).then(v => out = String(v), e => out = 'E ' + e)"
+				}
+				fn := compileForTest(t, src)
+				r := New(Config{})
+				v, err := r.Run(fn)
+				if err == nil && tt.async {
+					if err = r.runMicrotasks(); err == nil {
+						v, err = r.Run(compileForTest(t, "out"))
+					}
+				}
+				if err != nil {
+					r.Close()
+					t.Fatalf("tree %v: %v", on, err)
+				}
+				got, err := r.ToString(v)
+				if err != nil || got.Go() != tt.want {
+					t.Errorf("tree %v: got %v, %v; want %s", on, got, err, tt.want)
+				}
+				r.Close()
+				if on {
+					assertTreeIn(t, fn, "f")
+				}
+			}
+		})
+	}
+}

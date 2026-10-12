@@ -37,19 +37,25 @@ const (
 )
 
 // generator holds a suspended generator's state.
+//
+// One is made at every call of a generator or an async function, so what
+// few of them need is kept apart, in rare, and the arguments and the locals
+// share one slice: the object and its generator then fit a smaller size
+// class, with room for a small function's values beside them (see
+// newGenerator).
 type generator struct {
-	cl        *closure
-	this      Value
-	newTarget Value
-	args      []Value
-	callee    *Object
+	cl     *closure
+	this   Value
+	callee *Object
 
-	// locals is heap-allocated so that upvalues captured by closures created
-	// inside the generator survive suspension.
-	locals []Value
+	// vals is the arguments, nargs of them, and then the locals: see args
+	// and locals. It is heap-allocated so that upvalues captured by closures
+	// created inside the generator survive suspension.
+	vals []Value
 	// stack holds the operand stack contents at the point of suspension.
 	stack    []Value
 	pc       uint32
+	nargs    uint32
 	handlers []handler
 	// openUpvalues carries the captures across a suspension, so that two
 	// closures made in different resumptions still share a binding.
@@ -58,11 +64,8 @@ type generator struct {
 	// generator may yield from inside a with body, and the body still has to
 	// resolve names against the object when it resumes.
 	withScopes []*Object
-	// thisRef and evalVars are what run gives a frame: an async arrow's
-	// share of the derived constructor's `this`, and where a direct eval's
-	// vars go.
-	thisRef  *thisBinding
-	evalVars *Object
+	// rare is what only some generators need, or nil.
+	rare *genRare
 
 	state genState
 	// started marks a generator whose body has begun, which decides whether a
@@ -79,6 +82,18 @@ type generator struct {
 	async bool
 	// promise is the async function's result promise.
 	promise *Object
+}
+
+// genRare is what a generator needs only where it is an async generator,
+// an async arrow or has a direct eval: any other has an undefined
+// new.target and neither a this binding nor eval vars.
+type genRare struct {
+	newTarget Value
+	// thisRef and evalVars are what run gives a frame: an async arrow's
+	// share of the derived constructor's `this`, and where a direct eval's
+	// vars go.
+	thisRef  *thisBinding
+	evalVars *Object
 
 	// queue holds the async generator requests still to be serviced.
 	//
@@ -93,6 +108,30 @@ type generator struct {
 	// draining marks a request being serviced, so that one arriving meanwhile
 	// joins the queue instead of re-entering the body.
 	draining bool
+}
+
+// args is the arguments g was called with, a full slice, so that nothing
+// appended to it runs into the locals.
+func (g *generator) args() []Value { return g.vals[:g.nargs:g.nargs] }
+
+// locals is g's locals.
+func (g *generator) locals() []Value { return g.vals[g.nargs:] }
+
+// rareOf is g's rare part, made if it has none.
+func (g *generator) rareOf() *genRare {
+	if g.rare == nil {
+		g.rare = &genRare{newTarget: Undefined}
+	}
+	return g.rare
+}
+
+// frameRare gives f the new.target, this binding and eval vars of g.
+func (g *generator) frameRare(f *frame) {
+	if x := g.rare; x != nil {
+		f.newTarget, f.thisRef, f.evalVars = x.newTarget, x.thisRef, x.evalVars
+	} else {
+		f.newTarget, f.thisRef, f.evalVars = Undefined, nil, nil
+	}
 }
 
 // asyncRequest is one pending call to an async generator's next, return or
@@ -146,39 +185,59 @@ const (
 // newGenerator builds the generator object a call to a generator function
 // returns.
 func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Object, async bool, newTarget Value) (*Object, error) {
-	// The object and its generator are one allocation, and the arguments
-	// and the locals another: a generator or an async function is made at
-	// every call. The arguments' slice is full, so that nothing appended
-	// to it runs into the locals.
-	vals := make([]Value, len(args)+cl.fn.LocalCount)
+	// The object, its generator, and the arguments and the locals are one
+	// allocation where the function has few of them: a generator or an
+	// async function is made at every call.
+	n := len(args) + cl.fn.LocalCount
+	var gobj *generatorObject
+	var vals []Value
+	switch {
+	case n <= 2:
+		o := &generatorVals[[2]Value]{}
+		gobj, vals = &o.generatorObject, o.vals[:n]
+	case n <= 4:
+		o := &generatorVals[[4]Value]{}
+		gobj, vals = &o.generatorObject, o.vals[:n]
+	case n <= 8:
+		o := &generatorVals[[8]Value]{}
+		gobj, vals = &o.generatorObject, o.vals[:n]
+	default:
+		gobj, vals = &generatorObject{}, make([]Value, n)
+	}
 	copy(vals, args)
-	gobj := &generatorObject{Object: Object{class: ClassGenerator, flags: objExtensible}}
+	gobj.Object = Object{class: ClassGenerator, flags: objExtensible}
 	g := &gobj.g
 	*g = generator{
 		cl:     cl,
 		this:   this,
-		args:   vals[:len(args):len(args)],
 		callee: callee,
-		locals: vals[len(args):],
+		vals:   vals,
+		nargs:  uint32(len(args)),
 		async:  async,
-		// Nothing constructs a generator or an async function, so new.target
-		// there is undefined, but for an async arrow's, which is where it
-		// was written.
-		newTarget: newTarget,
 	}
+	// Nothing constructs a generator or an async function, so new.target
+	// there is undefined, but for an async arrow's, which is where it was
+	// written. An async generator queues its requests.
+	if !newTarget.IsUndefined() {
+		g.rareOf().newTarget = newTarget
+	}
+	if async && cl.fn.Generator {
+		g.rareOf()
+	}
+	locals := g.locals()
 	// Parameters are bound now rather than on first resumption, because the
 	// specification evaluates them when the generator is created. A default
 	// value or a destructuring pattern therefore runs -- and can throw -- at
 	// the call rather than at the first next().
-	n := cl.fn.ParamCount
-	if n > len(g.locals) {
-		n = len(g.locals)
+	n = cl.fn.ParamCount
+	if n > len(locals) {
+		n = len(locals)
 	}
 	for i := 0; i < n; i++ {
 		if i < len(args) {
-			g.locals[i] = args[i]
+			locals[i] = args[i]
 		} else {
-			g.locals[i] = Undefined
+			locals[i] = Undefined
 		}
 	}
 
@@ -197,17 +256,18 @@ func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Ob
 				g.withScopes = fd.extra.lexWith[:len(fd.extra.lexWith):len(fd.extra.lexWith)]
 			}
 			if fd.arrow && fd.extra.lexThisRef != nil {
-				g.thisRef = fd.extra.lexThisRef
+				g.rareOf().thisRef = fd.extra.lexThisRef
 			}
-			if fd.extra != nil {
-				g.evalVars = fd.extra.lexEvalVars
+			if fd.extra != nil && fd.extra.lexEvalVars != nil {
+				g.rareOf().evalVars = fd.extra.lexEvalVars
 			}
 		}
 	}
 	if cl.fn.HasDirectEval {
-		g.evalVars = newObject(nil, ClassObject)
-		g.evalVars.flags |= objEvalVars
-		g.withScopes = append(g.withScopes[:len(g.withScopes):len(g.withScopes)], g.evalVars)
+		ev := newObject(nil, ClassObject)
+		ev.flags |= objEvalVars
+		g.rareOf().evalVars = ev
+		g.withScopes = append(g.withScopes[:len(g.withScopes):len(g.withScopes)], ev)
 	}
 
 	if err := r.bindGeneratorParams(g); err != nil {
@@ -248,6 +308,13 @@ type generatorObject struct {
 	g generator
 }
 
+// generatorVals is a generatorObject and the arguments and locals of a
+// generator with few of them, V being an array of Values.
+type generatorVals[V any] struct {
+	generatorObject
+	vals V
+}
+
 // bindGeneratorParams runs a generator's parameter prologue, which evaluates
 // defaults and unpacks patterns.
 //
@@ -281,17 +348,15 @@ func (r *Runtime) bindGeneratorParams(g *generator) error {
 	f := r.pushFrame()
 	*f = frame{
 		cl:         g.cl,
-		locals:     g.locals,
+		locals:     g.locals(),
 		base:       base,
 		this:       g.this,
-		newTarget:  g.newTarget,
 		callee:     g.callee,
-		args:       g.args,
+		args:       g.args(),
 		withScopes: g.withScopes,
-		thisRef:    g.thisRef,
-		evalVars:   g.evalVars,
 		paramsOnly: true,
 	}
+	g.frameRare(f)
 	_, err := r.executeAt(f, base, nil)
 	// The body resumes where the prologue stopped.
 	g.pc = f.pc
@@ -349,6 +414,12 @@ type resumeResult struct {
 	// delegate marks a suspension inside a `yield*`, whose value has already
 	// been through whatever awaiting it needed.
 	delegate bool
+	// realm is the realm a result object for the value is made in, where it
+	// is not the running one's: a synchronous `yield*` that stepped a
+	// generator itself yields what it gave as a value (see delegateNext),
+	// and the generator's next it called would have made the object in the
+	// realm the body runs in.
+	realm *Realm
 }
 
 // result renders a resumption as the object a generator's next, return or
@@ -356,6 +427,13 @@ type resumeResult struct {
 func (r *Runtime) result(res resumeResult) Value {
 	if res.raw && res.value.IsObject() {
 		return res.value
+	}
+	if re := res.realm; re != nil && re != r.Realm {
+		prev := r.Realm
+		r.Realm = re
+		o := r.iterResult(res.value, res.done)
+		r.Realm = prev
+		return Obj(o)
 	}
 	return Obj(r.iterResult(res.value, res.done))
 }
@@ -367,10 +445,10 @@ func (r *Runtime) resume(g *generator, sent Value, mode resumeMode) (Value, bool
 }
 
 // nextTree is g's tree, where next() on g can be made by resumeTree: g has
-// not finished and is not running, is not delegating to another iterator,
-// and its body is a tree. It is nil anywhere else.
+// not finished and is not running, and its body is a tree. It is nil
+// anywhere else.
 func (g *generator) nextTree() *tree {
-	if g.state > genSuspendedYield || g.delegating {
+	if g.state > genSuspendedYield {
 		return nil
 	}
 	if t := (*tree)(atomic.LoadPointer(&g.cl.fn.VMCode)); t != nil && t.gen != nil {
@@ -458,18 +536,16 @@ func (r *Runtime) resumeFrame(g *generator, sent Value, mode resumeMode) (resume
 	// of what a resumption cost. Its tree context is set by runGenerator.
 	f := r.pushFrame()
 	f.cl = g.cl
-	f.locals = g.locals
+	f.locals = g.locals()
 	f.base = base
 	f.pc = g.pc
 	f.this = g.this
-	f.newTarget = g.newTarget
 	f.callee = g.callee
-	f.args = g.args
+	f.args = g.args()
 	f.handlers = g.handlers
 	f.openUpvalues = g.openUpvalues
 	f.withScopes = g.withScopes
-	f.thisRef = g.thisRef
-	f.evalVars = g.evalVars
+	g.frameRare(f)
 	if f.native != "" {
 		f.native = ""
 	}
@@ -554,6 +630,9 @@ func (r *Runtime) finishResume(g *generator, f *frame, base int,
 		r.releaseGeneratorFrame(g, base)
 		res := resumeResult{
 			value: sig.value, await: sig.await, raw: sig.raw, delegate: sig.delegate,
+		}
+		if sig.delegate && !sig.raw && !g.async {
+			res.realm = g.cl.realm
 		}
 		// A tree's suspension is the runtime's one, which is not to keep
 		// the value alive.
@@ -755,7 +834,7 @@ func (r *Runtime) initAsyncGeneratorBuiltins() {
 				return Obj(p), nil
 			}
 			result := rt.newPromise()
-			g.queue = append(g.queue, asyncRequest{
+			g.rare.queue = append(g.rare.queue, asyncRequest{
 				result: result, sent: arg(args, 0), mode: mode,
 			})
 			rt.pumpAsyncGenerator(g)
@@ -774,20 +853,21 @@ func (r *Runtime) initAsyncGeneratorBuiltins() {
 // starting it itself, so that a long queue on a generator that has ended is
 // a loop and not a recursion as deep as the queue is long.
 func (r *Runtime) pumpAsyncGenerator(g *generator) {
-	if g.pumping {
+	x := g.rare
+	if x.pumping {
 		return
 	}
-	g.pumping = true
-	defer func() { g.pumping = false }()
-	for !g.draining && len(g.queue) > 0 {
+	x.pumping = true
+	defer func() { x.pumping = false }()
+	for !x.draining && len(x.queue) > 0 {
 		r.pumpOne(g)
 	}
 }
 
 // pumpOne starts the request at the head of the queue.
 func (r *Runtime) pumpOne(g *generator) {
-	g.draining = true
-	req := g.queue[0]
+	g.rare.draining = true
+	req := g.rare.queue[0]
 	if req.mode == resumeReturn {
 		// The value a return injects is awaited before the generator sees it,
 		// so returning a promise into one delivers what it settles to -- and a
@@ -802,12 +882,13 @@ func (r *Runtime) pumpOne(g *generator) {
 // finishAsyncRequest settles the request being serviced and moves on to the
 // next one.
 func (r *Runtime) finishAsyncRequest(g *generator, reject bool, v Value) {
-	if len(g.queue) == 0 {
+	x := g.rare
+	if len(x.queue) == 0 {
 		return
 	}
-	req := g.queue[0]
-	g.queue = g.queue[1:]
-	g.draining = false
+	req := x.queue[0]
+	x.queue = x.queue[1:]
+	x.draining = false
 	if reject {
 		r.rejectPromise(req.result, v)
 	} else {

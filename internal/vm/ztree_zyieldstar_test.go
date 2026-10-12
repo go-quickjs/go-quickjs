@@ -35,7 +35,7 @@ func TestTreeDelegation(t *testing.T) {
 		{name: "throwNoMethod", src: `var log = []; var it = { [Symbol.iterator]() { return this }, next() { return { value: 1, done: false } }, return() { log.push('ret'); return {} } }; function* f() { for (var k = 0; k < 1; k++); try { yield* it } catch (e) { log.push(e.constructor.name) } } var g = f(); g.next(); log.push(JSON.stringify(g.throw('x'))); log.join()`, want: "ret,TypeError,{\"done\":true}"},
 		{name: "throwNoMethodUncaught", src: `var log = []; var it = { [Symbol.iterator]() { return this }, next() { return { value: 1, done: false } } }; function* f() { for (var k = 0; k < 1; k++); yield* it } var g = f(); g.next(); try { g.throw('x') } catch (e) { log.push(e.constructor.name) } log.push(g.next().done); log.join()`, want: "TypeError,true"},
 		{name: "throwUncaughtByInner", src: `var s = ''; function* inner() { try { yield 1 } finally { s += 'I' } } function* f() { for (var k = 0; k < 1; k++); try { yield* inner() } catch (e) { s += 'c' + e; yield 'y' } } var g = f(); g.next(); g.throw('x').value + s`, want: "yIcx"},
-		{name: "raw", src: `var res = { value: 1, done: false }; var it = { [Symbol.iterator]() { return this }, next() { return res } }; function* f() { for (var k = 0; k < 1; k++); yield* it } var g = f(); String(g.next() === res)`, want: "true"},
+		{name: "raw", src: `var res = { value: 1, done: false }, n = 0; var it = { [Symbol.iterator]() { return this }, next() { return n++ < 2 ? res : { value: 'end', done: true } } }; function* f() { for (var k = 0; k < 1; k++); yield* it } var g = f(); String(g.next() === res)`, want: "true"},
 		{name: "valueGetter", src: `var log = []; var it = { [Symbol.iterator]() { return this }, n: 0, next() { var d = this.n++ > 0; return { get value() { log.push('v' + d); return 7 }, get done() { log.push('d'); return d } } } }; function* f() { for (var k = 0; k < 1; k++); var r = yield* it; log.push('r' + r) } var g = f(); g.next(); g.next(); log.join()`, want: "d,d,vtrue,r7"},
 		{name: "notObject", src: `var it = { [Symbol.iterator]() { return this }, next() { return 1 } }; function* f() { for (var k = 0; k < 1; k++); try { yield* it } catch (e) { yield e.constructor.name } } f().next().value`, want: "TypeError"},
 		{name: "nextThrows", src: `var it = { [Symbol.iterator]() { return this }, next() { throw 'nt' } }; function* f() { for (var k = 0; k < 1; k++); try { yield* it } catch (e) { yield 'c' + e } } f().next().value`, want: "cnt"},
@@ -107,5 +107,85 @@ func TestTreeDelegation(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestTreeDelegateToGenerator pins what a yield* to a generator gives now
+// that the tree steps the generator itself (see delegateNext), in both
+// tiers, the interpreter calling the delegate's next: result objects of
+// their own, in order and of Object.prototype; values sent on and returned
+// through a chain of delegations; a result object a delegate hands over as
+// it is, still the same object at the top of a chain; a next of the
+// delegate's own, or %GeneratorPrototype%.next replaced, called as it is;
+// the frames a stack trace in the delegate sees; a delegate already
+// running; and return and throw after steps made directly.
+func TestTreeDelegateToGenerator(t *testing.T) {
+	defer SetTreeTier(true)
+	for _, tt := range []struct{ name, src, want string }{
+		{name: "results", src: `function* inner() { yield 1; return 2 } function* f() { var r = yield* inner(); yield r }
+var g = f(), a = g.next(), b = g.next(), c = g.next(); [Object.keys(a).join(), Object.getPrototypeOf(a) === Object.prototype, a.value, a.done, a === b, b.value, b.done, c.value, c.done].join()`, want: "value,done,true,1,false,false,2,false,,true"},
+		{name: "chain", src: `function* a(n) { var s = 0; for (var i = 0; i < n; i++) s += yield i; return s } function* b(n) { var r = yield* a(n); yield 'b' + r; return r * 2 } function* f(n) { var r = yield* b(n); return 'f' + r }
+var g = f(3), out = [], r = g.next(); for (var k = 10; !r.done; k += 10) { out.push(r.value); r = g.next(k) } out.push(r.value); out.push([...f(2)].join()); out.join()`, want: "0,1,2,b60,f120,0,1,bNaN"},
+		{name: "forOf", src: `function* inner(n) { for (var i = 0; i < n; i++) yield i } function* mid(n) { yield* inner(n); yield* inner(n) } function* f(n) { yield* mid(n) } var s = 0; for (var v of f(100)) s += v; s`, want: "9900"},
+		{name: "rawThroughChain", src: `var res = { value: 1, done: false }, n = 0; var it = { [Symbol.iterator]() { return this }, next() { return n++ < 2 ? res : { value: 'end', done: true } } }; function* mid() { yield* it } function* f() { yield* mid() } var x = f().next(); String(x === res) + [...(function* () { yield* f() })()].length`, want: "true1"},
+		{name: "ownNext", src: `function* inner() { yield 1 } var d = inner(); d.next = function (v) { return { value: 'own' + v, done: false } }; function* f() { yield* d } var g = f(); g.next(); g.next('x').value`, want: "ownx"},
+		{name: "replacedNext", src: `function* inner() { yield 1; yield 2 } var GP = Object.getPrototypeOf(inner.prototype), orig = GP.next, log = []; GP.next = function (v) { log.push(v); return orig.call(this, v) }; function* f() { yield* inner() } var s = []; var g = f(); s.push(orig.call(g).value); s.push(orig.call(g, 'a').value); GP.next = orig; s.join() + ';' + log.join()`, want: "1,2;,a"},
+		{name: "stackTrace", src: `function* inner() { yield new Error().stack.split('\n').slice(1, 5).map(l => l.trim().split(' ')[1]).join() } function* f() { yield* inner() } var r; for (var v of f()) r = v; r`, want: "inner,Object.next,f,Object.next"},
+		{name: "running", src: `var g; function* f() { try { yield* g } catch (e) { yield e.message } } g = f(); g.next().value`, want: "the generator is already running"},
+		{name: "returnAfterSteps", src: `var s = ''; function* inner() { try { for (var i = 0; ; i++) yield i } finally { s += 'I' } } function* f() { try { yield* inner() } finally { s += 'F' } } var g = f(); g.next(); g.next(); JSON.stringify(g.return(5)) + s`, want: `{"value":5,"done":true}IF`},
+		{name: "throwAfterSteps", src: `function* inner() { for (var i = 0; ; i++) try { yield i } catch (e) { yield 'c' + e } } function* f() { yield* inner() } var g = f(); g.next(); g.next(); [g.throw('x').value, g.next().value].join()`, want: "cx,2"},
+		{name: "doneDelegate", src: `function* inner() { return 'r' } function* f() { var x = yield* inner(); var y = yield* inner(); yield x + y } var g = f(); var a = g.next(); [a.value, a.done, g.next().done].join()`, want: "rr,false,true"},
+		{name: "spreadArgs", src: `function* inner(a, b) { yield a; yield b } function* f() { yield* inner(1, 2); yield* inner(3) } Math.max(...f()) + ',' + [...f()].join()`, want: "NaN,1,2,3,"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			for _, on := range []bool{false, true} {
+				SetTreeTier(on)
+				fn := compileForTest(t, tt.src)
+				r := New(Config{})
+				v, err := r.Run(fn)
+				if err != nil {
+					r.Close()
+					t.Fatalf("tree %v: %v", on, err)
+				}
+				got, err := r.ToString(v)
+				if err != nil || got.Go() != tt.want {
+					t.Errorf("tree %v: got %v, %v; want %s", on, got, err, tt.want)
+				}
+				if r.frameDepth != 0 {
+					t.Errorf("tree %v: left %d frames", on, r.frameDepth)
+				}
+				r.Close()
+			}
+		})
+	}
+}
+
+// TestTreeDelegateToGeneratorRealm pins the realm of the result object a
+// delegating generator hands to another realm's next: the object the
+// delegate's next makes is of the delegate's next's realm, and one made for
+// a value yield* stepped a generator to (see delegateNext) is of the same.
+func TestTreeDelegateToGeneratorRealm(t *testing.T) {
+	defer SetTreeTier(true)
+	for _, on := range []bool{false, true} {
+		SetTreeTier(on)
+		r := New(Config{})
+		other := r.NewRealm()
+		next, err := r.RunIn(other, compileForTest(t, `Object.getPrototypeOf(function* () {}).prototype.next`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.globalThis.Object().setOwnRaw(r.atoms.intern("otherNext"), next, propDefault)
+		v, err := r.Run(compileForTest(t, `function* inner() { yield 1; yield 2 } function* f() { yield* inner() }
+var g = f(), a = otherNext.call(g), b = otherNext.call(g), c = otherNext.call(g);
+[Object.getPrototypeOf(a) === Object.prototype, a.value, Object.getPrototypeOf(b) === Object.prototype, b.value, Object.getPrototypeOf(c) === Object.prototype, c.done].join()`))
+		if err != nil {
+			r.Close()
+			t.Fatalf("tree %v: %v", on, err)
+		}
+		got, err := r.ToString(v)
+		if want := "true,1,true,2,false,true"; err != nil || got.Go() != want {
+			t.Errorf("tree %v: got %v, %v; want %s", on, got, err, want)
+		}
+		r.Close()
 	}
 }

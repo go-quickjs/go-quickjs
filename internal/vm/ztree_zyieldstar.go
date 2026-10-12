@@ -150,7 +150,12 @@ func init() {
 				s := sent(c)
 				k := kind(c)
 				c.at(pc)
-				res, done, err := c.r.iterResume(c.stack[d-1], s, resumeMode(k.Number()), async)
+				mode := resumeMode(k.Number())
+				if !async && mode == resumeNext && delegateNext(c, d, s) {
+					// A generator stepped directly (see ztree_zzzdelegate.go).
+					return fall
+				}
+				res, done, err := c.r.iterResume(c.stack[d-1], s, mode, async)
 				if err != nil {
 					c.throw(err)
 				}
@@ -188,6 +193,21 @@ func init() {
 				c.at(pc)
 				if !x.IsObject() {
 					c.throw(c.r.throwTypeError("an iterator result must be an object"))
+				}
+				if cur := c.stack[d-1]; x.ref == cur.ref {
+					// The cursor, standing for what delegateNext stepped the
+					// delegate to: the value is above it, and a delegate that
+					// has finished has its cursor marked done. A raw yield
+					// is left the mark, for yield_star to yield the value.
+					v := c.stack[d+1]
+					if iterStateOf(cur).done {
+						c.stack[d] = v
+						return taken
+					}
+					if !raw {
+						c.stack[d] = v
+					}
+					return fall
 				}
 				done, err := c.r.getValueProp(x, atomDone)
 				if err != nil {

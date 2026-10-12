@@ -1,9 +1,9 @@
 package vm
 
 // The common resumption of a generator, an async function or an async
-// generator whose body is a tree: next() on one suspended at a yield, or an
-// await's promise settling, where nothing is injected at the suspension
-// point and nothing is delegated to. It is what resumeFull, resumeFrame,
+// generator whose body is a tree: next() on one suspended at a yield, a
+// yield* or an await's promise settling, where nothing is injected at the
+// suspension point. It is what resumeFull, resumeFrame,
 // runGenerator and finishResume do for it, in one place: a for...of loop
 // over a generator resumes it once a value, and passing the frame and the
 // result through each of them was most of what a value cost.
@@ -12,8 +12,8 @@ package vm
 // so that it is laid out after the closures already there.
 
 var (
-	// resumeTree resumes g, not yet started or suspended at a yield or an
-	// await, in t, its tree (see generator.nextTree), with sent as that
+	// resumeTree resumes g, not yet started or suspended at a yield, a
+	// yield* or an await, in t, its tree (see generator.nextTree), with sent as that
 	// expression's value, and runs it to its next suspension or its end,
 	// as resumeFull(g, sent, resumeNext) does. It reports false, having
 	// done nothing, where resumeFull's general path is needed: the body
@@ -49,21 +49,32 @@ func init() {
 			r.stack[sp] = sent
 			sp++
 		}
+		if g.delegating {
+			// Suspended inside a yield*, whose resumption is given the kind
+			// of resumption above the value, to forward to the delegate
+			// (see runDelegating).
+			g.delegating = false
+			r.stack[sp] = Int(int(resumeNext))
+			sp++
+		}
 
 		f := r.pushFrame()
+		locals := g.vals[g.nargs:]
 		f.cl = cl
-		f.locals = g.locals
+		f.locals = locals
 		f.base = base
 		f.pc = g.pc
 		f.this = g.this
-		f.newTarget = g.newTarget
 		f.callee = g.callee
-		f.args = g.args
+		f.args = g.vals[:g.nargs:g.nargs]
 		f.handlers = g.handlers
 		f.openUpvalues = g.openUpvalues
 		f.withScopes = g.withScopes
-		f.thisRef = g.thisRef
-		f.evalVars = g.evalVars
+		if x := g.rare; x != nil {
+			f.newTarget, f.thisRef, f.evalVars = x.newTarget, x.thisRef, x.evalVars
+		} else {
+			f.newTarget, f.thisRef, f.evalVars = Undefined, nil, nil
+		}
 		if f.native != "" {
 			f.native = ""
 		}
@@ -76,7 +87,7 @@ func init() {
 		g.state = genExecuting
 
 		c := &f.tc
-		c.r, c.f, c.cl, c.locals = r, f, cl, g.locals
+		c.r, c.f, c.cl, c.locals = r, f, cl, locals
 		c.stack = r.stack[base:top]
 		if t.gen.iters {
 			// As runGenerator: an exception looks for cursors in every
@@ -104,6 +115,10 @@ func init() {
 		r.frameDepth--
 		r.stackTop = base
 		res := resumeResult{value: s.value, await: s.await, raw: s.raw, delegate: s.delegate}
+		if s.delegate && !s.raw && !g.async {
+			// A value a yield* stepped a generator to (see delegateNext).
+			res.realm = cl.realm
+		}
 		// The suspension is the runtime's one, which is not to keep the
 		// value alive.
 		s.value = Undefined

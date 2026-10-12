@@ -80,6 +80,17 @@ var (
 	// end: an exception the body catches is unwound to its handler, and the
 	// run goes on there.
 	runGeneratorTree func(r *Runtime, f *frame, t *tree, b int) (Value, error)
+
+	// resumeRoots is, for f, a flow of a function that suspends, the loop
+	// headers its resumptions reach first, going on from where they enter,
+	// which structureExceptions structures on their own, each from its
+	// header; or nil where f has no resumptions. A structure is entered
+	// only at its first block, and a resumption enters a loop it was
+	// suspended in partway round: structured from the function's first
+	// block, the loop would be run from block to block after the first
+	// suspension, every turn of it. Each a structure of its own, a loop a
+	// resumption goes on into runs as one from its next turn.
+	resumeRoots func(f *flow, done []bool) []bool
 )
 
 func init() {
@@ -121,20 +132,37 @@ func init() {
 		// Nothing goes on to it but a resumption, so it is kept apart, as a
 		// handler's block is, with the handlers in force here.
 		b.succ = b.succ[:len(b.succ)-1]
-		b.handlerSucc = append(b.handlerSucc, thandlerEntry{block: s, pc: uint32(pc + 1)})
+		b.handlerSucc = append(b.handlerSucc, thandlerEntry{block: s, pc: uint32(pc + 1), resume: true})
 		if b.protected && b.entryHandlers[s] == nil {
 			b.entryHandlers[s] = append([]thandlerEntry{}, b.handlers...)
 		}
 		await := in.Op == bytecode.OpAwait
 		delegate := in.Op == bytecode.OpYieldStar
 		raw := delegate && in.A == 1
+		if delegate {
+			t.blocks[bi] = tblock{body: b.takeBody(), next: func(c *tctx) int {
+				x := v(c)
+				c.f.pc = uint32(pc + 1)
+				c.f.savedSP = c.f.base + d
+				if d > 0 && x.IsObject() && x.ref == c.stack[d-1].ref {
+					// The delegate's cursor, standing for the value above it
+					// (see delegateNext), which is yielded on as a value.
+					c.r.treeSig = suspendSignal{value: c.stack[d+1], delegate: true}
+				} else {
+					c.r.treeSig = suspendSignal{value: x, delegate: true, raw: raw}
+				}
+				c.r.treeSuspend = &c.r.treeSig
+				return -1
+			}}
+			return b.succ, true
+		}
 		t.blocks[bi] = tblock{body: b.takeBody(), next: func(c *tctx) int {
 			x := v(c)
 			// The operand is popped before the depth is recorded, so that
 			// the saved stack holds only what is still live.
 			c.f.pc = uint32(pc + 1)
 			c.f.savedSP = c.f.base + d
-			c.r.treeSig = suspendSignal{value: x, await: await, delegate: delegate, raw: raw}
+			c.r.treeSig = suspendSignal{value: x, await: await}
 			c.r.treeSuspend = &c.r.treeSig
 			return -1
 		}}
@@ -199,6 +227,48 @@ func init() {
 			clear(r.stack[sp : base+fn.MaxStack])
 		}
 		return runGeneratorTree(r, f, t, g.index[f.pc])
+	}
+
+	resumeRoots = func(f *flow, done []bool) []bool {
+		var stop, header, seen []bool
+		var work []int
+		for _, h := range f.entries {
+			if !h.resume {
+				continue
+			}
+			if stop == nil {
+				// A loop goes back to its header, a block no later than the
+				// one it goes back from, as structure finds loops.
+				n := len(done)
+				stop, header, seen = make([]bool, n), make([]bool, n), make([]bool, n)
+				for i := range n {
+					if done[i] {
+						for _, y := range f.succOf(i) {
+							if int(y) <= i {
+								header[y] = true
+							}
+						}
+					}
+				}
+			}
+			work = append(work, h.block)
+		}
+		for len(work) != 0 {
+			i := work[len(work)-1]
+			work = work[:len(work)-1]
+			if seen[i] || !done[i] {
+				continue
+			}
+			seen[i] = true
+			if header[i] {
+				stop[i] = true
+				continue
+			}
+			for _, y := range f.succOf(i) {
+				work = append(work, int(y))
+			}
+		}
+		return stop
 	}
 
 	runGeneratorTree = func(r *Runtime, f *frame, t *tree, b int) (Value, error) {

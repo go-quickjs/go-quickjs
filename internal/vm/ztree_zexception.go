@@ -37,6 +37,9 @@ type thandlerEntry struct {
 	block   int
 	pc      uint32
 	finally bool
+	// resume marks a suspension's resumption, which goes on into the code
+	// after the yield or the await (see suspendEnd).
+	resume bool
 }
 
 // enterHandlers sets the handlers in force at the start of block bi, in a
@@ -303,6 +306,12 @@ func (f *flow) structureExceptions(t *tree, done []bool) {
 	n := len(t.blocks)
 	seen, region := make([]bool, n), make([]bool, n)
 	roots := []int{0}
+	stop := resumeRoots(f, done)
+	for i, s := range stop {
+		if s {
+			roots = append(roots, i)
+		}
+	}
 	for _, h := range f.entries {
 		roots = append(roots, h.block)
 	}
@@ -315,7 +324,7 @@ func (f *flow) structureExceptions(t *tree, done []bool) {
 		for len(work) != 0 {
 			i := work[len(work)-1]
 			work = work[:len(work)-1]
-			if seen[i] || !done[i] {
+			if seen[i] || !done[i] || (i != root && stop != nil && stop[i]) {
 				continue
 			}
 			seen[i], region[i] = true, true
