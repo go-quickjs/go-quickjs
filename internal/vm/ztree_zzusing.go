@@ -24,12 +24,12 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 
 var (
 	// treeBuildsUsing reports whether the tier builds op, one of a using
-	// declaration's.
+	// declaration's, or one treeBuildsImport names.
 	treeBuildsUsing func(op bytecode.Op) bool
 
 	// usingOp builds new_dispose_capability, add_disposable and dispose,
 	// but for the steps of an await using scope's disposal that may end its
-	// loop (see usingEnd).
+	// loop (see usingEnd), and hands importOp what treeBuildsImport names.
 	usingOp func(b *tbuilder, pc int, in bytecode.Instr) (int, bool)
 
 	// usingEnd ends block bi with a step of an await using scope's disposal
@@ -58,7 +58,7 @@ func init() {
 		case bytecode.OpNewDisposeCapability, bytecode.OpAddDisposable, bytecode.OpDispose:
 			return true
 		}
-		return false
+		return treeBuildsImport(op)
 	}
 
 	usingOp = func(b *tbuilder, pc int, in bytecode.Instr) (int, bool) {
@@ -142,7 +142,7 @@ func init() {
 				b.pushSlot(d - 1)
 			}
 		default:
-			return 0, false
+			return importOp(b, pc, in)
 		}
 		return 0, true
 	}
