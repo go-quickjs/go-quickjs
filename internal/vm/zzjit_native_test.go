@@ -2181,56 +2181,71 @@ func TestJITNoHeapWalks(t *testing.T) {
 }
 
 // A program refused for want of code budget is not recompiled at every
-// warmup: the refusal is cached until the cache has released code.
+// warmup: the refusal is cached until the cache has released code. The
+// refusal holds no more than itself -- not the program lowered for it,
+// which had left no room to remember it in -- and leaves the JIT within its
+// budget. The budget is set from what the JIT holds, room for a refusal
+// short of a compile's, so that how large a target's code is decides
+// nothing: one where code was larger had no refusal at all.
 func TestJITBudgetRefusalWaitsForRelease(t *testing.T) {
-	r := jitRuntimeForTest(t, Config{JIT: true, MemoryLimit: 1 << 20})
-	var refused *bytecode.Function
-	var deferred *jitEntry
+	// The code compiled stays young: none is dropped for another's.
+	defer func(was func() uint64) { jitEpochNow = was }(jitEpochNow)
+	jitEpochNow = func() uint64 { return 0 }
 	// The functions are kept: a collection would drop the code of those
-	// already compiled (the cache's keys are weak), and the budget never
-	// fill -- as under checkptr, or GOGC=1.
+	// already compiled (the cache's keys are weak).
 	var keep []*bytecode.Function
 	defer runtime.KeepAlive(&keep)
-	for i := 0; i < 128 && deferred == nil; i++ {
-		// Each some kilobytes of code, so that the budget fills before the
-		// cache does, and of two sizes, so that the last to fit leaves room
-		// short of the next: an allowance of nothing refuses without a
-		// compile, and caches nothing.
-		more := ""
-		if i%2 == 1 {
-			more = "s=(s+t*7)|0; t=(t^s)>>1;"
+	copyOf := jitCopiesForTest(jitFunctionForTest(t, `function f(n) { let s=0,t=1; for(let i=0;i<n;i++){ s+=i*3; t=(t*3+s)|0; s=(s^t)+1; t=t-s; s=(s+t*7)|0; t=(t^s)>>1; } return s+t }`), &keep)
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	s := r.jitState()
+	// What the JIT holds apart from the compiles' workspaces, which it
+	// drops to make room.
+	held := func() int { return s.held() - s.workBytes() }
+	// Enough code for a budget a compile of f fits (jitCompiles), and what
+	// each compile of it adds.
+	refused := copyOf()
+	grows := 0
+	for held() < len(refused.Code)*ir.MaxSlots*8+32<<10 {
+		before := held()
+		if e := r.jitForFunction(copyOf(), nil); e == nil || e.ssa == nil {
+			t.Fatal("native compilation refused")
 		}
-		fn := jitFunctionForTest(t, fmt.Sprintf(`function f(n) { let s=0,t=1; for(let i=0;i<n;i++){ s+=i*%d; t=(t*3+s)|0; s=(s^t)+1; t=t-s; %s } return s+t }`, i+1, more))
-		keep = append(keep, fn)
-		// The room a compile is likely to need short of its code's, as for
-		// a function unlike those compiled before: the compile is made,
-		// and refused room for its code.
-		if r.jit != nil {
-			r.jit.perInstr = 0
-		}
-		if e := r.jitForFunction(fn, nil); e != nil && e.deferred {
-			refused, deferred = fn, e
-		}
+		grows = held() - before
 	}
-	if deferred == nil || deferred.ssa != nil {
-		t.Fatalf("no refusal for want of budget within %d bytes", r.jitBudget())
+	if grows/2 < jitEntryFixed+jitLinkFixed+1<<10 {
+		t.Fatalf("a compile adds %d bytes: no room for a refusal short of it", grows)
 	}
-	compiled := r.jit.compiled
-	r.jit.perInstr = 0
-	if e := r.jitForFunction(refused, nil); e != deferred || r.jit.compiled != compiled {
+	r.jitMemoryLimit = int64(held() + grows/2)
+	// The room a compile is likely to need short of its code's, as for a
+	// function unlike those compiled before: the compile is made, and
+	// refused room for its code.
+	s.perInstr = 0
+	deferred := r.jitForFunction(refused, nil)
+	if deferred == nil || !deferred.deferred || deferred.ssa != nil {
+		t.Fatalf("no refusal for want of budget within %d bytes: %+v", r.jitBudget(), deferred)
+	}
+	if s.held() > r.jitBudget() {
+		t.Fatalf("%d bytes held after a refusal, of %d", s.held(), r.jitBudget())
+	}
+	compiled := s.compiled
+	s.perInstr = 0
+	if e := r.jitForFunction(refused, nil); e != deferred || s.compiled != compiled {
 		t.Fatal("a budget refusal was retried before any code was released")
 	}
-	var biggest *jitEntry
-	var key weak.Pointer[bytecode.Function]
-	for k, e := range r.jit.cache {
-		if e.ssa != nil && (biggest == nil || e.bytes > biggest.bytes) {
-			key, biggest = k, e
+	for held()+grows > r.jitBudget() {
+		var key weak.Pointer[bytecode.Function]
+		var victim *jitEntry
+		for k, e := range s.cache {
+			if e.ssa != nil {
+				key, victim = k, e
+				break
+			}
+		}
+		if victim == nil || !s.dropEntry(key, victim) {
+			t.Fatal("could not release code")
 		}
 	}
-	if !r.jit.dropEntry(key, biggest) {
-		t.Fatal("could not release code")
-	}
-	r.jit.perInstr = 0
+	s.perInstr = 0
 	if e := r.jitForFunction(refused, nil); e == nil || e == deferred || e.ssa == nil {
 		t.Fatal("a budget refusal was not retried once code was released")
 	}

@@ -1008,6 +1008,7 @@ func (s *jitState) age(now uint64) {
 func (s *jitState) dropLowering(key weak.Pointer[bytecode.Function], l *jitLowering) {
 	delete(s.lowered, key)
 	s.lowerBytes -= l.bytes
+	s.floorAt = 0
 }
 
 // jitCodeAge is how many epochs code goes unused before the cache may
@@ -1076,6 +1077,9 @@ func (s *jitState) disown(e *jitEntry) {
 	if l := e.link; l != nil && l.owner == e {
 		l.owner, l.entry = nil, 0
 		s.unlink(l)
+		// Its function's lowering is now one makeRoom may reclaim: the
+		// floor noted before counted it as held for good.
+		s.floorAt = 0
 	}
 }
 
@@ -1259,16 +1263,27 @@ func (r *Runtime) jitForFunction(fn *bytecode.Function, cl *closure) *jitEntry {
 			return nil
 		case errors.Is(err, jit.ErrCodeBudget):
 			// It may fit once the cache has released code. Until then the
-			// cached refusal spares a compile at every warm-up.
+			// cached refusal spares a compile at every warm-up, and holds
+			// no more than itself: the program lowered for it, which the
+			// retry lowers again, would take the room it is remembered in
+			// -- with the young code holding the rest, no refusal was
+			// remembered, and each warm-up compiled again.
 			e.deferred, e.generation = true, s.generation
+			if l := s.lowered[key]; l != nil {
+				s.dropLowering(key, l)
+			}
 		}
 	}
 	if !s.makeRoom(jitEntryFixed) {
 		// No room to remember the refusal in, for now.
 		s.disown(e)
+		s.settle()
 		return nil
 	}
 	s.remember(key, e)
+	// The compile's workspaces, kept only if there is the room, as after
+	// a compile that places its code.
+	s.settle()
 	return e
 }
 
