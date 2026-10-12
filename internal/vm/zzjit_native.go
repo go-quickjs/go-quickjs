@@ -1720,7 +1720,8 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			bytecode.OpCheckGlobalRef, bytecode.OpAssertResolved, bytecode.OpNewObject, bytecode.OpNewRegExp, bytecode.OpDefineField,
 			bytecode.OpPushEmptyString, bytecode.OpGetUpvalue, bytecode.OpGetUpvalueCheck, bytecode.OpSetUpvalue,
 			bytecode.OpInitUpvalue, bytecode.OpSetUpvalueCheck, bytecode.OpConcat, bytecode.OpNewDisposeCapability, bytecode.OpAddDisposable,
-			bytecode.OpForOfStart, bytecode.OpForInStart, bytecode.OpIterNextOrJump, bytecode.OpIterClose, bytecode.OpIterCloseNormal:
+			bytecode.OpForOfStart, bytecode.OpForInStart, bytecode.OpIterNextOrJump, bytecode.OpIterClose, bytecode.OpIterCloseNormal,
+			bytecode.OpIterResume, bytecode.OpIterUnpackDelegate:
 		case bytecode.OpDispose:
 			if in.B != 0 {
 				// A step of an await using scope's disposal.
@@ -1898,6 +1899,25 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 				return sp, steps, err
 			}
 			continue
+		case bytecode.OpIterResume:
+			// yield*'s step of its delegate, as executeAt's case makes it:
+			// the delegation ended, native code goes on at B with the value.
+			sp -= 2
+			var done bool
+			if v, done, err = r.iterResume(stack[sp-1], stack[sp], resumeMode(stack[sp+1].Number()), in.A == 1); err == nil && done {
+				stack[sp] = v
+				sp++
+				f.pc = in.B
+				continue
+			}
+		case bytecode.OpIterUnpackDelegate:
+			var to bool
+			if sp, v, to, err = r.jitUnpackDelegate(in, sp); err == nil && to {
+				stack[sp] = v
+				sp++
+				f.pc = in.A
+				continue
+			}
 		case bytecode.OpIterCloseNormal:
 			sp--
 			if err := r.iterCloseNormal(stack[sp]); err != nil {
@@ -1955,6 +1975,34 @@ func (r *Runtime) jitConcat(parts []Value) (*String, error) {
 		return nil, r.throwStringLength()
 	}
 	return out, nil
+}
+
+// jitUnpackDelegate is iter_unpack_delegate, with the stack's top at sp,
+// as executeAt's case makes it: what yield* hands out of the delegate's
+// result, or, the delegate done, its value and true, for the code at A.
+func (r *Runtime) jitUnpackDelegate(in bytecode.Instr, sp int) (int, Value, bool, error) {
+	stack := r.stack
+	sp--
+	res := stack[sp]
+	if !res.IsObject() {
+		return sp, Undefined, false, r.throwTypeError("an iterator result must be an object")
+	}
+	done, err := r.getValueProp(res, atomDone)
+	if err != nil {
+		return sp, Undefined, false, err
+	}
+	if !done.Truthy() && in.B&1 == 1 {
+		// A synchronous delegation hands the result object out as it is.
+		return sp, res, false, nil
+	}
+	val, err := r.getValueProp(res, atomValue)
+	if err != nil || !done.Truthy() {
+		return sp, val, false, err
+	}
+	if st := iterStateOf(stack[sp-1]); st != nil {
+		st.done = true
+	}
+	return sp, val, true, nil
 }
 
 // jitUsing runs in, new_dispose_capability, add_disposable or dispose (but

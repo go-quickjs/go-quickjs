@@ -4806,7 +4806,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 				}
 			}
 			switch in.Op {
-			case bytecode.OpYield, bytecode.OpAwait:
+			case bytecode.OpYield, bytecode.OpAwait, bytecode.OpYieldStar:
 				return r.jitSuspend(f, in, f.base+int(ctx.ExitDepth))
 			case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew:
 				r.jitCallSeen(f, e, exitPC, f.base+int(ctx.ExitDepth), in)
@@ -5617,7 +5617,8 @@ func jitHandlers(f *frame, p *ir.Program, pc int) {
 }
 
 // jitSuspend suspends f, a generator's or an async function's frame, at
-// in, a yield or an await native code left it at, with sp its stack's top,
+// in, a yield, a yield* or an await native code left it at, with sp its
+// stack's top,
 // as the interpreter's yield does: the value handed out popped, the pc
 // past the instruction, and the depth beneath it kept for the resumption,
 // which enters native code there (jitResume). The suspension is the
@@ -5626,7 +5627,8 @@ func (r *Runtime) jitSuspend(f *frame, in bytecode.Instr, sp int) (Value, error,
 	sp--
 	f.pc++
 	f.savedSP = sp
-	r.treeSig = suspendSignal{value: r.stack[sp], await: in.Op == bytecode.OpAwait}
+	r.treeSig = suspendSignal{value: r.stack[sp], await: in.Op == bytecode.OpAwait,
+		delegate: in.Op == bytecode.OpYieldStar, raw: in.Op == bytecode.OpYieldStar && in.A == 1}
 	return Undefined, &r.treeSig, true
 }
 

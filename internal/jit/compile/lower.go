@@ -177,7 +177,8 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
 		switch in.Op {
-		case bytecode.OpForOfStart, bytecode.OpForInStart, bytecode.OpIterNextOrJump, bytecode.OpIterClose, bytecode.OpIterCloseNormal:
+		case bytecode.OpForOfStart, bytecode.OpForInStart, bytecode.OpIterNextOrJump, bytecode.OpIterClose, bytecode.OpIterCloseNormal,
+			bytecode.OpIterResume, bytecode.OpIterUnpackDelegate, bytecode.OpYieldStar:
 			if !m.ssa || m.callee {
 				// A loop's cursor is Go's, in the function's own frame.
 				return nil, refuse(pc, "unsupported opcode "+in.Op.String())
@@ -204,7 +205,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		op, _ := operator(raw)
 		host = host || raw == uint32(bytecode.OpMod)
 		bitwise = bitwise || op >= ir.BitAnd && op <= ir.UShr || in.Op == bytecode.OpBitNot
-		loop = loop || e.branch && int(in.A) <= pc
+		loop = loop || e.branch && e.target(in) <= pc
 		indexed = indexed || in.Op == bytecode.OpGetIndex || in.Op == bytecode.OpSetIndex || in.Op == bytecode.OpGetLocalIndex || in.Op == bytecode.OpGetLocalIndexUpdate
 	}
 	// Tiny host-only wrappers pay the bridge overhead without enough native work.
@@ -294,7 +295,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			if e.keep {
 				targetDepth = depth
 			}
-			if err := join(int(fn.Code[pc].A), targetDepth, chain); err != nil {
+			if err := join(e.target(fn.Code[pc]), targetDepth, chain); err != nil {
 				return nil, err
 			}
 		}
@@ -310,10 +311,15 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		for pc, in := range fn.Code {
 			switch {
 			case maps[pc].Depth < 0:
-			case in.Op == bytecode.OpIterNextOrJump:
-				// Go goes on at the loop's end, where the cursor is done.
-				if !slices.Contains(p.Entries, int(in.A)) {
-					p.Entries = append(p.Entries, int(in.A))
+			case in.Op == bytecode.OpIterNextOrJump, in.Op == bytecode.OpIterUnpackDelegate, in.Op == bytecode.OpIterResume:
+				// Go goes on at the loop's end, where the cursor is done, or
+				// where the delegation ends.
+				to := int(in.A)
+				if in.Op == bytecode.OpIterResume {
+					to = int(in.B)
+				}
+				if !slices.Contains(p.Entries, to) {
+					p.Entries = append(p.Entries, to)
 				}
 			}
 		}
@@ -820,7 +826,7 @@ func liveLocals(fn *bytecode.Function, p *ir.Program, effects []effect) {
 				}
 			}
 			if e.branch {
-				for w, x := range at(int(ins.A)) {
+				for w, x := range at(e.target(ins)) {
 					in[w] |= x
 				}
 			}
@@ -860,6 +866,16 @@ type effect struct {
 	branch      bool
 	keep        bool
 	terminal    bool
+	// targetB says the branch's target is the instruction's B, not its A.
+	targetB bool
+}
+
+// target is the instruction in's branch target, where e says it branches.
+func (e effect) target(in bytecode.Instr) int {
+	if e.targetB {
+		return int(in.B)
+	}
+	return int(in.A)
 }
 
 func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) {
@@ -1073,6 +1089,33 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 		return effect{need: 1, delta: 1, branch: true, keep: true}, nil
 	case bytecode.OpIterClose:
 		return effect{need: 1}, nil
+	case bytecode.OpIterResume:
+		// yield*'s step of its delegate: the cursor, the value sent and
+		// the kind of resumption, for the delegate's result -- with which,
+		// the delegation ended, Go jumps to B.
+		if !fn.Generator || uint64(in.B) >= uint64(len(fn.Code)) {
+			return bad("invalid delegation")
+		}
+		return effect{need: 3, delta: -1, branch: true, targetB: true}, nil
+	case bytecode.OpIterUnpackDelegate:
+		// The delegate's result for what yield* hands out, or, done, its
+		// value, with which Go jumps to A.
+		if !fn.Generator || uint64(in.A) >= uint64(len(fn.Code)) {
+			return bad("invalid delegation")
+		}
+		return effect{need: 1, branch: true}, nil
+	case bytecode.OpYieldStar:
+		// The value handed out; a resumption sends a value and its kind.
+		if !fn.Generator {
+			return bad("suspension outside a generator")
+		}
+		return effect{need: 1, delta: 1}, nil
+	case bytecode.OpNipUnder:
+		// The top stays; the A beneath it go.
+		if in.A > MaxSlots {
+			return bad("invalid nip")
+		}
+		return effect{need: int(in.A) + 1, delta: -int(in.A)}, nil
 	case bytecode.OpIterCloseNormal:
 		return effect{need: 1, delta: -1}, nil
 	case bytecode.OpNewDisposeCapability:
@@ -1383,11 +1426,15 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this bool) ir.Instr
 	case bytecode.OpNewDisposeCapability, bytecode.OpAddDisposable, bytecode.OpDispose:
 		// A using declaration's resources, Go's (jitHost).
 		return ir.Instruction{Op: ir.Host}
-	case bytecode.OpForOfStart, bytecode.OpForInStart, bytecode.OpIterNextOrJump, bytecode.OpIterClose, bytecode.OpIterCloseNormal:
-		// A for...of or for...in loop's cursor, Go's (jitHost), which
-		// sets where native code goes on: past a step that has a value,
-		// or, done, at the loop's end.
+	case bytecode.OpForOfStart, bytecode.OpForInStart, bytecode.OpIterNextOrJump, bytecode.OpIterClose, bytecode.OpIterCloseNormal,
+		bytecode.OpIterResume, bytecode.OpIterUnpackDelegate, bytecode.OpYieldStar:
+		// A for...of or for...in loop's cursor, or yield*'s delegate, Go's
+		// (jitHost), which sets where native code goes on: past a step
+		// that has a value, or, done, where the loop or the delegation
+		// ends; and yield*'s suspension, as yield's.
 		return ir.Instruction{Op: ir.Host}
+	case bytecode.OpNipUnder:
+		return copyTo(sp-1-int(in.A), top)
 	}
 	// describe accepted an opcode this switch does not translate. Becoming a
 	// Nop with describe's stack effect would be a silent miscompile; the panic

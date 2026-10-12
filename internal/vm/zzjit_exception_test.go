@@ -363,3 +363,38 @@ func TestJITForOf(t *testing.T) {
 		jitNativeForTest(t, r, name)
 	}
 }
+
+// yield* is compiled: its delegate's steps are Go's (iter_resume,
+// iter_unpack_delegate), its suspension as yield's, and its resumption,
+// which sends a value and its kind, enters native code after it. What
+// the outer generator is sent, thrown or asked to return goes to the
+// delegate, and the delegate's return value is yield*'s.
+func TestJITYieldStar(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		var log = []
+		function* inner(n) { let got = 0; try { for (let i = 0; i < n; i++) got += (yield i) || 0 } finally { log.push('inner done ' + got) } return got }
+		function* outer(n) { let s = 0; for (let k = 0; k < n; k++) s += yield* inner(3); return s }
+		function* overArray(n) { for (let k = 0; k < n; k++) yield* [k, k * 10] }
+		function sumOf(g) { let s = 0; for (const v of g) s += v; return s }
+		function driven(n) { const g = outer(n); let r = g.next(), s = 0; while (!r.done) { s += r.value; r = g.next(r.value + 1) } return s + ':' + r.value }
+		function thrown(n) { const g = outer(n); g.next(); g.next(); try { g.throw(new Error('x')) } catch (e) { return e.message + ' ' + log.join() } return 'no' }
+		function returned(n) { const g = outer(n); g.next(); g.next(); const r = g.return(42); return r.value + ' ' + r.done + ' ' + log.join() }
+		function take() { const l = log.join(); log = []; return l }
+	`
+	r := jitAgreesForTest(t, setup,
+		`sumOf(outer(10)) + take()`, `sumOf(outer(10)) + take()`,
+		`sumOf(overArray(20))`, `sumOf(overArray(20))`,
+		`driven(8) + take()`, `driven(8) + take()`,
+		`thrown(5) + take()`, `thrown(5) + take()`,
+		`returned(5) + take()`, `returned(5) + take()`,
+	)
+	for _, name := range []string{"outer", "overArray"} {
+		// Entered at each resumption, not once.
+		if e := jitNativeForTest(t, r, name); e.ssaStats.entries < 30 {
+			t.Fatalf("%s entered natively %d times", name, e.ssaStats.entries)
+		}
+	}
+}
