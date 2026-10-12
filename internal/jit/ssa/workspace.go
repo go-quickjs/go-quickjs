@@ -24,6 +24,7 @@ type Workspace struct {
 	bools     arena.Arena[bool]
 	bytes     arena.Arena[uint8]
 	ints      arena.Arena[int]
+	caches    arena.Arena[InlineCache]
 	scratch   scratch
 	ready     bool
 }
@@ -43,13 +44,14 @@ func (w *Workspace) init() {
 	w.bools.KeepBig()
 	w.bytes.KeepBig()
 	w.ints.KeepBig()
+	w.caches.KeepBig()
 }
 
 // Bytes is the memory the workspace keeps between compiles: its arenas'
 // chunks and its passes' scratch tables.
 func (w *Workspace) Bytes() int {
 	n := w.values.Bytes() + w.refs.Bytes() + w.states.Bytes() + w.blocks.Bytes() + w.blockRefs.Bytes() +
-		w.refLists.Bytes() + w.bools.Bytes() + w.bytes.Bytes() + w.ints.Bytes()
+		w.refLists.Bytes() + w.bools.Bytes() + w.bytes.Bytes() + w.ints.Bytes() + w.caches.Bytes()
 	s := &w.scratch
 	n += capBytes(s.flags) + capBytes(s.vals) + capBytes(s.phis) + capBytes(s.ordered) + capBytes(s.front) +
 		capBytes(s.boxes) + capBytes(s.rest) + capBytes(s.work) + capBytes(s.first) + capBytes(s.last) +
@@ -78,6 +80,7 @@ func (w *Workspace) Rewind() {
 	w.bools.Rewind()
 	w.bytes.Rewind()
 	w.ints.Rewind()
+	w.caches.Rewind()
 }
 
 // BuildIn is BuildWith, building in w.

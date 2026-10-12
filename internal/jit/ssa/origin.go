@@ -519,7 +519,7 @@ func liveAcrossSets(f *Func) ([]*Value, [][]*Value) {
 	for _, b := range f.Blocks {
 		for _, v := range b.Values {
 			switch {
-			case v.Op == OpPropWrite, v.Op == OpCall && v.Calls != nil:
+			case v.Op == OpPropWrite, v.Op == OpCall && v.Calls() != nil:
 				stores = append(stores, v)
 			case v.Type == Tagged && v.Shadow != nil:
 				// A kept value's too: while the collector marks, it is still

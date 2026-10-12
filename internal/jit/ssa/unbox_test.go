@@ -305,7 +305,7 @@ func TestBuildLoadsCapturedBindingsWhereRead(t *testing.T) {
 			switch {
 			case v.Op == OpLoadCell && v.Args[0].Op == OpUpvalueCell:
 				loads++
-			case v.Op == OpCall && len(v.Calls) != 0:
+			case v.Op == OpCall && len(v.Calls()) != 0:
 				calls++
 			case v.Op == OpUpvalueStale:
 				t.Fatalf("a stale marker in block b%d", b.ID)
@@ -452,7 +452,7 @@ func TestBuildNoEntriesAfterCallsOfGo(t *testing.T) {
 	for _, b := range f.Blocks {
 		in := false
 		for _, v := range b.Values {
-			if v.Op == OpCall && len(v.Calls) == 1 && v.Calls[0].Go == GoCall {
+			if v.Op == OpCall && len(v.Calls()) == 1 && v.Calls()[0].Go == GoCall {
 				calls++
 				in = true
 			}

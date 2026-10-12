@@ -1177,11 +1177,11 @@ func (c *a64Compiler) propStore(v *ssa.Value, guard func(arm64.Cond)) {
 	c.a.Bind(have)
 	c.a.FMovToF(a64F1, a64B)
 	added := c.a.NewLabel()
-	if v.Add != nil || len(v.Adds) != 0 {
+	if v.Add() != nil || len(v.Adds()) != 0 {
 		// As amd64's: along each transition the site met.
-		adds := v.Adds
-		if v.Add != nil {
-			adds = append([]*ssa.PropertyAdd{v.Add}, adds...)
+		adds := v.Adds()
+		if v.Add() != nil {
+			adds = append([]*ssa.PropertyAdd{v.Add()}, adds...)
 		}
 		for _, add := range adds {
 			next := c.a.NewLabel()
@@ -1189,7 +1189,7 @@ func (c *a64Compiler) propStore(v *ssa.Value, guard func(arm64.Cond)) {
 			c.a.B(added)
 			c.a.Bind(next)
 		}
-		if v.Add != nil && v.Add.Define {
+		if v.Add() != nil && v.Add().Define {
 			// As amd64's: a literal's field is added so, or by Go.
 			c.a.B(c.stubLabel(v.State, exitKind(v.Aux)))
 			c.a.Bind(added)
@@ -1428,7 +1428,7 @@ func (c *a64Compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss arm64.La
 // property finds the property a property operation names and leaves the
 // address of its value in A, as amd64's does. It uses B, C and D.
 func (c *a64Compiler) property(v *ssa.Value, guard func(arm64.Cond)) {
-	if v.Holders != nil || v.Cases != nil {
+	if v.Holders() != nil || v.Cases() != nil {
 		c.holder(v, guard)
 		return
 	}
@@ -1637,7 +1637,7 @@ func (c *a64Compiler) poolTake(v *ssa.Value, site *ssa.CallSite) {
 }
 
 func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
-	sites, s := v.Calls, v.State
+	sites, s := v.Calls(), v.State
 	stub := c.stubLabel(s, exitKind(v.Aux))
 	if len(sites) == 0 {
 		c.a.B(stub)
@@ -2544,10 +2544,10 @@ func (c *a64Compiler) keep(v *ssa.Value) {
 // does.
 func (c *a64Compiler) holder(v *ssa.Value, guard func(arm64.Cond)) {
 	var first ssa.HolderChain
-	if v.Holders != nil {
-		first = *v.Holders
+	if v.Holders() != nil {
+		first = *v.Holders()
 	}
-	cases := append([]ssa.PropertyCase{{Shape: uintptr(v.Const.Bits), Index: int32(v.Index), Holders: first.Holders, More: first.More}}, v.Cases...)
+	cases := append([]ssa.PropertyCase{{Shape: uintptr(v.Const.Bits), Index: int32(v.Index), Holders: first.Holders, More: first.More}}, v.Cases()...)
 	// As amd64's: a receiver of a shape not among the cases has its own
 	// table searched.
 	done := c.a.NewLabel()

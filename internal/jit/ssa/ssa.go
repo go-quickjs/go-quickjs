@@ -327,16 +327,10 @@ type Value struct {
 	// kind, as every guard's is.
 	Index int
 	Key   uint32
-	// Holders, for a property read the receiver's prototypes answered, are
-	// those prototypes (PropertySite); nil otherwise. Cases, for a read or
-	// a write that met objects of other shapes, are those (PropertyCase),
-	// checked after Const's: a write's are own properties.
-	Holders *HolderChain
-	Cases   []PropertyCase
-	// Add, for a write whose cache adds its property, is how (OpPropWrite);
-	// Adds are more, from objects of other shapes, tried after it.
-	Add  *PropertyAdd
-	Adds []*PropertyAdd
+	// IC is what a property access's or a call's cache saw beyond Const's
+	// shape (InlineCache), or nil: most values are neither, and leave it
+	// out of their size.
+	IC *InlineCache
 	// Upvalue marks an OpPropWrite to a captured binding (ir.UpvalueWrite):
 	// its first operand is the binding's cell (OpUpvalueCell).
 	Upvalue bool
@@ -344,8 +338,6 @@ type Value struct {
 	// its first operand is the binding's cell (OpGlobalCell, OpLexCell),
 	// not an object.
 	Global bool
-	// Calls, for a call, are the functions it may call natively (OpCall).
-	Calls []*CallSite
 	// State is the frame to exit to, for guards.
 	State *FrameState
 	// Shadow is a tagged value's origin at run time, where no compiler can
@@ -358,6 +350,89 @@ type Value struct {
 }
 
 func (v *Value) String() string { return fmt.Sprintf("v%d", v.ID) }
+
+// InlineCache is what a property access's or a call's inline cache saw,
+// apart from Value, which most values -- arithmetic, guards, phis -- need
+// none of.
+type InlineCache struct {
+	// Holders, for a property read the receiver's prototypes answered, are
+	// those prototypes (PropertySite); nil otherwise. Cases, for a read or
+	// a write that met objects of other shapes, are those (PropertyCase),
+	// checked after Const's: a write's are own properties.
+	Holders *HolderChain
+	Cases   []PropertyCase
+	// Add, for a write whose cache adds its property, is how (OpPropWrite);
+	// Adds are more, from objects of other shapes, tried after it.
+	Add  *PropertyAdd
+	Adds []*PropertyAdd
+	// Calls, for a call, are the functions it may call natively (OpCall).
+	Calls []*CallSite
+}
+
+// Holders are v's cache's prototypes (InlineCache), or nil.
+func (v *Value) Holders() *HolderChain {
+	if v.IC == nil {
+		return nil
+	}
+	return v.IC.Holders
+}
+
+// Cases are v's cache's other shapes (InlineCache), or nil.
+func (v *Value) Cases() []PropertyCase {
+	if v.IC == nil {
+		return nil
+	}
+	return v.IC.Cases
+}
+
+// Add is how v's cache adds its property (InlineCache), or nil.
+func (v *Value) Add() *PropertyAdd {
+	if v.IC == nil {
+		return nil
+	}
+	return v.IC.Add
+}
+
+// Adds are v's cache's other additions (InlineCache), or nil.
+func (v *Value) Adds() []*PropertyAdd {
+	if v.IC == nil {
+		return nil
+	}
+	return v.IC.Adds
+}
+
+// Calls are the functions v, a call, may call natively (InlineCache), or
+// nil.
+func (v *Value) Calls() []*CallSite {
+	if v.IC == nil {
+		return nil
+	}
+	return v.IC.Calls
+}
+
+// setProperty sets what v's property cache saw (InlineCache), making v a
+// cache only if any of it is there: a nil slice stays nil, an empty one
+// empty.
+func (f *Func) setProperty(v *Value, holders *HolderChain, cases []PropertyCase, add *PropertyAdd, adds []*PropertyAdd) {
+	if holders == nil && cases == nil && add == nil && adds == nil && v.IC == nil {
+		return
+	}
+	c := f.cache(v)
+	c.Holders, c.Cases, c.Add, c.Adds = holders, cases, add, adds
+}
+
+// cache is v's inline cache, made, from the workspace if there is one,
+// if it has none.
+func (f *Func) cache(v *Value) *InlineCache {
+	if v.IC == nil {
+		if f.ws != nil {
+			v.IC = &f.ws.caches.Make(1)[0]
+		} else {
+			v.IC = new(InlineCache)
+		}
+	}
+	return v.IC
+}
 
 // FrameState is the interpreter's state at a bytecode PC: the PC to resume
 // and the value of every live slot (locals, then Depth operands).
@@ -563,20 +638,27 @@ func (f *Func) newState(s FrameState) *FrameState {
 
 // alloc returns a new value like v, numbered next.
 func (f *Func) alloc(v Value) *Value {
-	if f.ws != nil {
-		p := &f.ws.values.Make(1)[0]
-		*p = v
-		p.ID = f.nextID
-		f.nextID++
-		return p
-	}
-	if len(f.values) == 0 {
-		f.valueChunk = min(max(2*f.valueChunk, 16), 256)
-		f.values = make([]Value, f.valueChunk)
-	}
-	p := &f.values[0]
-	f.values = f.values[1:]
+	p := f.slot()
+	id := p.ID
 	*p = v
+	p.ID = id
+	return p
+}
+
+// slot is a new value, zero but for its ID: alloc without a Value to
+// copy, for newValue, which most values are made by.
+func (f *Func) slot() *Value {
+	var p *Value
+	if f.ws != nil {
+		p = &f.ws.values.Make(1)[0]
+	} else {
+		if len(f.values) == 0 {
+			f.valueChunk = min(max(2*f.valueChunk, 16), 256)
+			f.values = make([]Value, f.valueChunk)
+		}
+		p = &f.values[0]
+		f.values = f.values[1:]
+	}
 	p.ID = f.nextID
 	f.nextID++
 	return p
@@ -613,7 +695,8 @@ func (f *Func) newBlock(pc int) *Block {
 }
 
 func (f *Func) newValue(b *Block, op Op, t Type, args ...*Value) *Value {
-	v := f.alloc(Value{Op: op, Type: t, Args: f.refsOf(len(args)), Block: b})
+	v := f.slot()
+	v.Op, v.Type, v.Args, v.Block = op, t, f.refsOf(len(args)), b
 	copy(v.Args, args)
 	for _, a := range args {
 		a.Uses++

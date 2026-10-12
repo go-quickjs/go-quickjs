@@ -430,7 +430,7 @@ func (c *compiler) returnNative() {
 // among what each needs, and after, from the callee's record. Anything
 // that does not allow the call fails the guard: Go makes it.
 func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
-	sites, s := v.Calls, v.State
+	sites, s := v.Calls(), v.State
 	if len(sites) == 0 {
 		c.a.Jmp(c.stubLabel(s, exitKind(v.Aux)))
 		return
@@ -2152,12 +2152,12 @@ func (c *compiler) propStore(v *ssa.Value, guard func(amd64.Cond)) {
 	c.a.Bind(have)
 	c.a.MovQToX(xScratch1, scratchB)
 	added := c.a.NewLabel()
-	if v.Add != nil || len(v.Adds) != 0 {
+	if v.Add() != nil || len(v.Adds()) != 0 {
 		// A property the cache adds, along the transition of the object's
 		// shape among those the site met, or else one the object has.
-		adds := v.Adds
-		if v.Add != nil {
-			adds = append([]*ssa.PropertyAdd{v.Add}, adds...)
+		adds := v.Adds()
+		if v.Add() != nil {
+			adds = append([]*ssa.PropertyAdd{v.Add()}, adds...)
 		}
 		for _, add := range adds {
 			next := c.a.NewLabel()
@@ -2165,7 +2165,7 @@ func (c *compiler) propStore(v *ssa.Value, guard func(amd64.Cond)) {
 			c.a.Jmp(added)
 			c.a.Bind(next)
 		}
-		if v.Add != nil && v.Add.Define {
+		if v.Add() != nil && v.Add().Define {
 			// A literal's field: added so, or by Go.
 			c.a.Jmp(c.stubLabel(v.State, exitKind(v.Aux)))
 			c.a.Bind(added)
@@ -2440,7 +2440,7 @@ func (c *compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss amd64.Label
 // key, unrolled, as the VM's own small objects are; the entry must be plain
 // data, and writable for a write. It uses scratchB and scratchC.
 func (c *compiler) property(v *ssa.Value, guard func(amd64.Cond)) {
-	if v.Holders != nil || v.Cases != nil {
+	if v.Holders() != nil || v.Cases() != nil {
 		c.holder(v, guard)
 		return
 	}
@@ -2669,10 +2669,10 @@ func (c *compiler) keep(v *ssa.Value) {
 // them the receiver's is (ssa.PropertyCase). Any other shape fails.
 func (c *compiler) holder(v *ssa.Value, guard func(amd64.Cond)) {
 	var first ssa.HolderChain
-	if v.Holders != nil {
-		first = *v.Holders
+	if v.Holders() != nil {
+		first = *v.Holders()
 	}
-	cases := append([]ssa.PropertyCase{{Shape: uintptr(v.Const.Bits), Index: int32(v.Index), Holders: first.Holders, More: first.More}}, v.Cases...)
+	cases := append([]ssa.PropertyCase{{Shape: uintptr(v.Const.Bits), Index: int32(v.Index), Holders: first.Holders, More: first.More}}, v.Cases()...)
 	// A receiver of a shape not among the cases has its own table searched
 	// (scan), as V8's megamorphic loads look further rather than
 	// deoptimize, and leaves only if the property is not its own: RayTrace's

@@ -357,14 +357,14 @@ type Object struct {
 // index there, as Holders say, or -1: o itself, as property finds it, for a
 // site without them or a shape none of its cases has.
 func (h *Heap) holder(o *Object, v *Value) (*Object, int) {
-	if v.Holders == nil && v.Cases == nil {
+	if v.Holders() == nil && v.Cases() == nil {
 		return o, o.property(v)
 	}
 	var first HolderChain
-	if v.Holders != nil {
-		first = *v.Holders
+	if v.Holders() != nil {
+		first = *v.Holders()
 	}
-	cases := append([]PropertyCase{{Shape: uintptr(v.Const.Bits), Index: int32(v.Index), Holders: first.Holders, More: first.More}}, v.Cases...)
+	cases := append([]PropertyCase{{Shape: uintptr(v.Const.Bits), Index: int32(v.Index), Holders: first.Holders, More: first.More}}, v.Cases()...)
 	for _, c := range cases {
 		if o.Shape != c.Shape {
 			continue
@@ -637,7 +637,7 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 					// The heap model has no global object: Go assigns.
 					return exit(v.State, ir.ExitKind(v.Aux))
 				}
-				if v.Add != nil || len(v.Adds) != 0 || len(v.Cases) != 0 {
+				if v.Add() != nil || len(v.Adds()) != 0 || len(v.Cases()) != 0 {
 					// The heap model's objects have no shapes to add along,
 					// nor to tell a write's cases by.
 					return ir.Exit{}, fmt.Errorf("%w: a property added", ErrUnsupported)

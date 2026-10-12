@@ -93,7 +93,9 @@ func keepAcrossStores(f *Func) (bool, []*Value, [][]*Value) {
 		if f.Keeps+fresh > f.keepLimit() {
 			if s.Op == OpCall {
 				// Not kept, the references could be lost: Go makes the call.
-				s.Calls = nil
+				if s.IC != nil {
+					s.IC.Calls = nil
+				}
 			}
 			continue
 		}

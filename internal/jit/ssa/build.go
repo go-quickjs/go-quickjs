@@ -282,7 +282,7 @@ const (
 // RefillsPools reports whether a call takes an object from a pool, which
 // a call of Go fills again when it runs out (GoRefill).
 func RefillsPools(v *Value) bool {
-	for _, c := range v.Calls {
+	for _, c := range v.Calls() {
 		if c.Pool != 0 {
 			return true
 		}
@@ -293,26 +293,26 @@ func RefillsPools(v *Value) bool {
 // popsElement reports whether a call is Array.prototype.pop's (CallSite's
 // Pop): it writes an element's cell, and its own result's.
 func popsElement(v *Value) bool {
-	for _, c := range v.Calls {
+	for _, c := range v.Calls() {
 		if !c.Pop {
 			return false
 		}
 	}
-	return len(v.Calls) != 0
+	return len(v.Calls()) != 0
 }
 
 // allocOnly reports whether a call runs nothing that can write the heap
 // but past what any value was read from: it makes a pool's object
 // (CallSite.Alloc), or adds an element past an array's last (Push).
 func allocOnly(v *Value) bool {
-	for _, c := range v.Calls {
+	for _, c := range v.Calls() {
 		// A call of Go makes what it returns, and writes nothing else --
 		// but a call it makes (GoCall), which runs anything.
 		if !c.Alloc && !c.Receiver && !c.Push && (c.Go == 0 || c.Go == GoCall) {
 			return false
 		}
 	}
-	return len(v.Calls) != 0
+	return len(v.Calls()) != 0
 }
 
 // InlineSite is a call the VM has seen call one function, whose program,
@@ -1085,7 +1085,7 @@ func (b *builder) inlineCall(blk *Block, pc int, fr *frame, guard func(Op, Type,
 			args[i] = b.read(sp-site.Argc-1+i, blk)
 		}
 		call := guard(OpCall, Tagged, ir.HostExit, args...)
-		call.Calls = []*CallSite{{Callee: site.Callee, Argc: site.Argc, ThisSlot: -1, Pool: site.Pool,
+		b.f.cache(call).Calls = []*CallSite{{Callee: site.Callee, Argc: site.Argc, ThisSlot: -1, Pool: site.Pool,
 			ProtoIndex: site.ProtoIndex, ProtoKey: site.ProtoKey, Receiver: true}}
 		call.Index = fr.keep
 		cell := b.f.newValue(blk, OpCallCell, Source, call)
@@ -1130,7 +1130,7 @@ func (b *builder) goCalls() bool {
 func (b *builder) goAdd(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
 	call := guard(OpCall, Tagged, ir.HostExit, operand(in.Left), operand(in.Right))
 	if b.f.Keeps < b.f.keepLimit() {
-		call.Calls, call.Index = []*CallSite{{Go: GoAdd, ThisSlot: -1}}, b.f.Keeps
+		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoAdd, ThisSlot: -1}}, b.f.Keeps
 		b.f.Keeps++
 	}
 	cell := b.f.newValue(blk, OpCallCell, Source, call)
@@ -1148,7 +1148,7 @@ func (b *builder) goAdd(blk *Block, in ir.Instruction, operand func(ir.Operand) 
 func (b *builder) iterStep(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
 	call := guard(OpCall, Tagged, ir.HostExit, operand(in.Left))
 	if b.f.Keeps < b.f.keepLimit() {
-		call.Calls, call.Index = []*CallSite{{Go: GoCall, Step: true, ThisSlot: -1}}, b.f.Keeps
+		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoCall, Step: true, ThisSlot: -1}}, b.f.Keeps
 		b.f.Keeps++
 	}
 	cell := b.f.newValue(blk, OpCallCell, Source, call)
@@ -1174,7 +1174,7 @@ func (b *builder) goConcat(blk *Block, in ir.Instruction, operand func(ir.Operan
 	}
 	call := guard(OpCall, Tagged, ir.HostExit, parts...)
 	if b.f.Keeps < b.f.keepLimit() {
-		call.Calls, call.Index = []*CallSite{{Go: GoConcat, Argc: len(parts), ThisSlot: -1}}, b.f.Keeps
+		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoConcat, Argc: len(parts), ThisSlot: -1}}, b.f.Keeps
 		b.f.Keeps++
 	}
 	cell := b.f.newValue(blk, OpCallCell, Source, call)
@@ -1227,7 +1227,7 @@ func (b *builder) instanceOfOp(blk *Block, pc int, k InstanceOfSite, guard func(
 		cell := guard(OpPropCell, Source, ir.HostExit, ctor)
 		cell.Const, cell.Index, cell.Key = ir.Value{Bits: uint64(site.Shape)}, int(site.Index), site.Key
 		if site.Holders[0].Object != 0 {
-			cell.Holders = &HolderChain{Holders: site.Holders, More: site.More}
+			b.f.cache(cell).Holders = &HolderChain{Holders: site.Holders, More: site.More}
 		}
 		v := f.newValue(blk, OpLoadCell, Tagged, cell)
 		v.Shadow = cell
@@ -2279,7 +2279,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			// unbox it (Feedback's Generic).
 			cell := guard(OpPropCell, Source, ir.HostExit, object)
 			cell.Const, cell.Index, cell.Key = ir.Value{Bits: uint64(site.Shape)}, int(site.Index), site.Key
-			cell.Holders, cell.Cases = holders, cases
+			f.setProperty(cell, holders, cases, nil, nil)
 			v := f.newValue(blk, OpLoadCell, Tagged, cell)
 			v.Shadow = cell
 			b.assign(in.Dest, blk, v)
@@ -2288,7 +2288,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 		if in.Op == ir.PropertyRead {
 			v := guard(OpPropRead, Float64, ir.HostExit, object)
 			v.Const, v.Index, v.Key = ir.Value{Bits: uint64(site.Shape)}, int(site.Index), site.Key
-			v.Holders, v.Cases = holders, cases
+			f.setProperty(v, holders, cases, nil, nil)
 			b.assign(in.Dest, blk, boxF(v))
 			break
 		}
@@ -2297,7 +2297,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 		// A property the write adds, as V8's stores do along a map's
 		// transition; or, to an object that has it, stores: of any of the
 		// shapes the site met.
-		v.Add, v.Adds, v.Cases = site.Add, site.Adds, cases
+		f.setProperty(v, nil, cases, site.Add, site.Adds)
 	case ir.BindingWrite:
 		// The binding's cell, as a read finds it, written as a property
 		// store writes one: the stores' checks and keeps take it for a
@@ -2374,7 +2374,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			}
 		}
 		call := guard(OpCall, Tagged, ir.HostExit, elems...)
-		call.Calls = []*CallSite{{Pool: site.Pool, Alloc: true, Literal: true, Argc: len(elems), ThisSlot: -1}}
+		b.f.cache(call).Calls = []*CallSite{{Pool: site.Pool, Alloc: true, Literal: true, Argc: len(elems), ThisSlot: -1}}
 		call.Index = keep
 		cell := f.newValue(blk, OpCallCell, Source, call)
 		r := f.newValue(blk, OpKept, Tagged, cell, call)
@@ -2444,7 +2444,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		object := guard(OpObjectOf, Ptr, ir.HostExit, operand(in.Left))
 		w := guard(OpPropWrite, None, ir.HostExit, object, operand(in.Right))
-		w.Key, w.Add = add.Key, add
+		w.Key, b.f.cache(w).Add = add.Key, add
 	case ir.TypeTest:
 		v := guard(OpTypeIs, Bool, ir.HostExit, operand(in.Left))
 		v.Index = int(in.Key)
@@ -2478,7 +2478,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 				args[i] = b.read(sp-n+i, blk)
 			}
 			call := guard(OpCall, Tagged, ir.HostExit, args...)
-			call.Calls, call.Index = calls, b.callKeeps[pc]
+			b.f.cache(call).Calls, call.Index = calls, b.callKeeps[pc]
 			cell := f.newValue(blk, OpCallCell, Source, call)
 			r := f.newValue(blk, OpKept, Tagged, cell, call)
 			r.Shadow = cell

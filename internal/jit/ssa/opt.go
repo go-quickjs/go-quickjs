@@ -125,9 +125,17 @@ func Optimize(f *Func) {
 		if replaced {
 			rewrite(f, find)
 		}
-		removed := removeDead(f)
+		// Another round is for what this one's replacements may simplify
+		// further: a phi its back edge's operand, replaced after the phi
+		// was met, may now make trivial. Taking dead values away, and a
+		// value rewritten in place -- a constant folded, met by its users
+		// later in the walk, or a guard that cannot fail, which nothing
+		// uses -- simplify nothing more: a value's simplification asks
+		// only what its operands are, and a phi's only which, so a round
+		// that only did those is the last.
+		removeDead(f)
 		f.rounds = round + 1
-		if !changed && !removed {
+		if !changed {
 			break
 		}
 	}
@@ -403,7 +411,15 @@ func unboxPhis(f *Func) bool {
 	// built in buffers the pass reuses. An old phi becomes its box, so
 	// whatever used it -- values, frame states, controls -- uses the box.
 	front, boxes, rest := f.scr().front, f.scr().boxes, f.scr().rest
-	for _, b := range f.Blocks {
+	// Only the blocks of the phis unboxed change: ordered is in block
+	// order, and phis come first in a block, where every pass puts them.
+	var last *Block
+	for _, o := range ordered {
+		b := o.Block
+		if b == last {
+			continue
+		}
+		last = b
 		front, boxes, rest = front[:0], boxes[:0], rest[:0]
 		for _, v := range b.Values {
 			if v.Op != OpPhi {

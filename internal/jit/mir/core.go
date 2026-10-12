@@ -39,7 +39,8 @@ type core struct {
 	// used are the registers the allocation gave a value, by number: the
 	// general ones, then the floating-point ones. Only these hold values an
 	// exit or a call of Go must keep (usedRegs).
-	used [2]uint64
+	used     [2]uint64
+	usedList [2][]int
 	// ws is the workspace the compile takes its tables from, or nil.
 	ws *Workspace
 	// sched is phiSchedule's lists, reused from edge to edge: the
@@ -176,19 +177,23 @@ func (c *core) setLoc(v *ssa.Value, l loc) {
 // usedRegs are those of regs, the general registers or the floating-point
 // ones, the allocation gave a value, in regs' order: what the routines that
 // save the registers for an exit or a call of Go save, as a register no
-// value is in holds nothing either needs.
+// value is in holds nothing either needs. Each list is made once, from the
+// compile's tables.
 func (c *core) usedRegs(regs []int, float bool) []int {
 	k := 0
 	if float {
 		k = 1
 	}
-	var out []int
-	for _, r := range regs {
-		if c.used[k]&(1<<r) != 0 {
-			out = append(out, r)
+	if c.usedList[k] == nil {
+		out := c.ints(bits.OnesCount64(c.used[k]))[:0]
+		for _, r := range regs {
+			if c.used[k]&(1<<r) != 0 {
+				out = append(out, r)
+			}
 		}
+		c.usedList[k] = out
 	}
-	return out
+	return c.usedList[k]
 }
 
 // valueSet is a set of value IDs.
@@ -362,7 +367,7 @@ func (c *core) allocate() error {
 				}
 			}
 			at := pos[v.ID]
-			if v.Op == ssa.OpCall && len(v.Calls) != 0 && (v.Calls[0].Go != 0 || ssa.RefillsPools(v)) {
+			if v.Op == ssa.OpCall && len(v.Calls()) != 0 && (v.Calls()[0].Go != 0 || ssa.RefillsPools(v)) {
 				// A call of Go that Go refuses exits after it, Go having
 				// taken the registers: what its state reads lives across
 				// it, saved and restored (saves). So does a call whose
@@ -697,7 +702,7 @@ func (c *core) allocate() error {
 	open, next := c.intervalRefs(len(all))[:0], 0
 	for _, b := range c.order {
 		for _, v := range b.Values {
-			if v.Op != ssa.OpCall || v.Calls == nil {
+			if v.Op != ssa.OpCall || v.Calls() == nil {
 				continue
 			}
 			if home == nil {
@@ -777,7 +782,7 @@ func (c *core) colorKeeps(iv []interval, pos []int) error {
 		}
 	}
 	writes := func(v *ssa.Value) bool {
-		return v.Op == ssa.OpCall && len(v.Calls) != 0 || v.Op == ssa.OpKeep
+		return v.Op == ssa.OpCall && len(v.Calls()) != 0 || v.Op == ssa.OpKeep
 	}
 	// cell is, by value ID, 1 plus the cell an address is of.
 	cell := c.ints(f.NumValues())
