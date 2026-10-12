@@ -1561,10 +1561,10 @@ func (c *compiler) exitThen(s *ssa.FrameState, kind uint64, then *amd64.Label) {
 // which writes the frame (jit.ApplyExit).
 func (c *compiler) tableExit() {
 	c.a.Store(regCtx, abi.OffExitDesc, scratchA)
-	for _, r := range append([]int{int(regLocals), int(regStack)}, c.gprs...) {
+	for _, r := range append([]int{int(regLocals), int(regStack)}, c.usedRegs(c.gprs, false)...) {
 		c.a.Store(regCtx, abi.OffRegs+int32(r)*8, amd64.Reg(r))
 	}
-	for _, x := range c.fprs {
+	for _, x := range c.usedRegs(c.fprs, true) {
 		c.a.StoreSD(regCtx, abi.OffXRegs+int32(x)*8, amd64.XReg(x))
 	}
 	c.storeImm(regCtx, abi.OffExitKind, abi.ExitTable, scratchA)
@@ -2298,10 +2298,10 @@ func (c *compiler) goSavingKeep(op uint64, keep int, stub *amd64.Label) {
 // back to it; the frame's registers read again, and every allocatable one
 // restored; then back to the call, at GoSite.
 func (c *compiler) savingCall() {
-	for _, r := range c.gprs {
+	for _, r := range c.usedRegs(c.gprs, false) {
 		c.a.Store(regCtx, abi.OffRegs+int32(r)*8, amd64.Reg(r))
 	}
-	for _, r := range c.fprs {
+	for _, r := range c.usedRegs(c.fprs, true) {
 		c.a.StoreSD(regCtx, abi.OffXRegs+int32(r)*8, amd64.XReg(r))
 	}
 	back := c.a.NewLabel()
@@ -2312,10 +2312,10 @@ func (c *compiler) savingCall() {
 	c.a.Bind(back)
 	c.a.Load(regLocals, regCtx, abi.OffLocals)
 	c.a.Load(regStack, regCtx, abi.OffStack)
-	for _, r := range c.gprs {
+	for _, r := range c.usedRegs(c.gprs, false) {
 		c.a.Load(amd64.Reg(r), regCtx, abi.OffRegs+int32(r)*8)
 	}
-	for _, r := range c.fprs {
+	for _, r := range c.usedRegs(c.fprs, true) {
 		c.a.LoadSD(amd64.XReg(r), regCtx, abi.OffXRegs+int32(r)*8)
 	}
 	c.a.Load(scratchA, regCtx, abi.OffGoSite)

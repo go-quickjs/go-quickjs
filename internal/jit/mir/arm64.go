@@ -495,10 +495,10 @@ func (c *a64Compiler) enterExit() {
 
 func (c *a64Compiler) tableExit() {
 	c.a.Store(a64Ctx, abi.OffExitDesc, a64A)
-	for _, r := range append([]int{int(a64Locals), int(a64Stack)}, c.gprs...) {
+	for _, r := range append([]int{int(a64Locals), int(a64Stack)}, c.usedRegs(c.gprs, false)...) {
 		c.a.Store(a64Ctx, abi.OffRegs+int32(r)*8, arm64.Reg(r))
 	}
-	for _, x := range c.fprs {
+	for _, x := range c.usedRegs(c.fprs, true) {
 		c.a.StoreF(a64Ctx, abi.OffXRegs+int32(x)*8, arm64.FReg(x))
 	}
 	c.a.MovImm(a64A, abi.ExitTable)
@@ -1295,10 +1295,10 @@ func (c *a64Compiler) goSavingKeep(op uint64, keep int, stub *arm64.Label) {
 // savingCall is the routine the code's calls of Go that save every register
 // share, as amd64's.
 func (c *a64Compiler) savingCall() {
-	for _, r := range c.gprs {
+	for _, r := range c.usedRegs(c.gprs, false) {
 		c.a.Store(a64Ctx, abi.OffRegs+int32(r)*8, arm64.Reg(r))
 	}
-	for _, r := range c.fprs {
+	for _, r := range c.usedRegs(c.fprs, true) {
 		c.a.StoreF(a64Ctx, abi.OffXRegs+int32(r)*8, arm64.FReg(r))
 	}
 	back := c.a.NewLabel()
@@ -1309,10 +1309,10 @@ func (c *a64Compiler) savingCall() {
 	c.a.Bind(back)
 	c.a.Load(a64Locals, a64Ctx, abi.OffLocals)
 	c.a.Load(a64Stack, a64Ctx, abi.OffStack)
-	for _, r := range c.gprs {
+	for _, r := range c.usedRegs(c.gprs, false) {
 		c.a.Load(arm64.Reg(r), a64Ctx, abi.OffRegs+int32(r)*8)
 	}
-	for _, r := range c.fprs {
+	for _, r := range c.usedRegs(c.fprs, true) {
 		c.a.LoadF(arm64.FReg(r), a64Ctx, abi.OffXRegs+int32(r)*8)
 	}
 	c.a.Load(a64A, a64Ctx, abi.OffGoSite)

@@ -36,6 +36,10 @@ type core struct {
 	origin ssa.OriginMap
 	// gprs and fprs are the architecture's allocatable registers, by number.
 	gprs, fprs []int
+	// used are the registers the allocation gave a value, by number: the
+	// general ones, then the floating-point ones. Only these hold values an
+	// exit or a call of Go must keep (usedRegs).
+	used [2]uint64
 	// ws is the workspace the compile takes its tables from, or nil.
 	ws *Workspace
 	// sched is phiSchedule's lists, reused from edge to edge: the
@@ -160,6 +164,31 @@ func (c *core) locAt(v *ssa.Value) loc {
 
 func (c *core) setLoc(v *ssa.Value, l loc) {
 	c.locs[v.ID], c.hasLoc[v.ID] = l, true
+	if l.reg >= 0 {
+		k := 0
+		if isFloat(v) {
+			k = 1
+		}
+		c.used[k] |= 1 << l.reg
+	}
+}
+
+// usedRegs are those of regs, the general registers or the floating-point
+// ones, the allocation gave a value, in regs' order: what the routines that
+// save the registers for an exit or a call of Go save, as a register no
+// value is in holds nothing either needs.
+func (c *core) usedRegs(regs []int, float bool) []int {
+	k := 0
+	if float {
+		k = 1
+	}
+	var out []int
+	for _, r := range regs {
+		if c.used[k]&(1<<r) != 0 {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // valueSet is a set of value IDs.
