@@ -186,3 +186,109 @@ async function async_generator(n)
     global_res = sum;
     return n * 100;
 }
+
+/* a try statement around a loop's body, which never throws */
+function try_catch(n)
+{
+    var i, s = 0;
+    for (i = 0; i < n; i++) {
+        try {
+            s = (s + i) | 0;
+        } catch (e) {
+            s = 0;
+        }
+    }
+    global_res = s;
+    return n;
+}
+
+/* an exception thrown and caught each turn */
+function try_throw(n)
+{
+    var i, s = 0;
+    for (i = 0; i < n; i++) {
+        try {
+            throw i;
+        } catch (e) {
+            s = (s + e) | 0;
+        }
+    }
+    global_res = s;
+    return n;
+}
+
+/* a finally clause run each turn */
+function try_finally(n)
+{
+    var i, s = 0;
+    for (i = 0; i < n; i++) {
+        try {
+            s = (s + i) | 0;
+        } finally {
+            s ^= 1;
+        }
+    }
+    global_res = s;
+    return n;
+}
+
+function ExtraRange(n)
+{
+    this.i = 0;
+    this.n = n;
+}
+ExtraRange.prototype.next = function () {
+    if (this.i < this.n)
+        return { value: this.i++, done: false };
+    return { value: undefined, done: true };
+};
+ExtraRange.prototype[Symbol.iterator] = function () { return this; };
+
+/* a for-of loop over an iterator written in JavaScript */
+function iterator_for_of(n)
+{
+    var j, v, sum = 0;
+    for(j = 0; j < n; j++) {
+        for (v of new ExtraRange(100))
+            sum += v;
+    }
+    global_res = sum;
+    return n * 100;
+}
+
+/* a for-of loop over a Map's values */
+function map_for_of(n)
+{
+    var i, j, v, sum = 0, m = new Map();
+    for (i = 0; i < 100; i++)
+        m.set(i, i);
+    for(j = 0; j < n; j++) {
+        for (v of m.values())
+            sum += v;
+    }
+    global_res = sum;
+    return n * 100;
+}
+
+/* a scope with a using declaration each turn, made with Function, as an
+   engine without using declarations cannot parse them: there it does
+   nothing, and reports none */
+var extra_resource = { count: 0 };
+if (typeof Symbol.dispose === "symbol")
+    extra_resource[Symbol.dispose] = function () { this.count++; };
+var extra_using;
+
+function using_scope(n)
+{
+    if (extra_using === undefined) {
+        try {
+            extra_using = new Function("n", "r", "var i, s = 0; for (i = 0; i < n; i++) { using u = r; s = (s + i) | 0; } return s;");
+        } catch (e) {
+            extra_using = null;
+        }
+    }
+    if (!extra_using)
+        return 0;
+    global_res = extra_using(n, extra_resource);
+    return n;
+}

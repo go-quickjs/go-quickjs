@@ -22,7 +22,8 @@ import (
 // and then the loop.
 //
 // microbench_extra.js is ours: tests of what microbench.js has none of --
-// generators and async functions -- written as its tests are. A test of
+// generators, async functions, try statements, iterators and using
+// declarations -- written as its tests are. A test of
 // async functions returns a promise of its count, which the loop awaits, so
 // its time takes in the jobs it queued; every runner runs a script's jobs
 // before it is done with it.
@@ -68,6 +69,8 @@ var microWork = []struct {
 	{"generator_for_of", 32768}, {"generator_next", 8192}, {"generator_busy", 8192},
 	{"generator_create", 524288}, {"generator_delegate", 4096}, {"async_await", 2048},
 	{"async_busy", 8192}, {"async_call", 131072}, {"async_chain", 65536}, {"async_generator", 1024},
+	{"try_catch", 8388608}, {"try_throw", 4194304}, {"try_finally", 8388608}, {"iterator_for_of", 8192},
+	{"map_for_of", 32768}, {"using_scope", 8388608},
 }
 
 // microLoop is the driver's loop: each test of __work whose name begins with

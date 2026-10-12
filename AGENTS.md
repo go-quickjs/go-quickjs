@@ -219,8 +219,9 @@ go run ./internal/cmd/v8bench -dir /tmp/v8-v7 -fetch -mode fixed -n 5
 
 `-mode micro` runs QuickJS's micro-benchmarks, `internal/v8bench/microbench.js`
 (QuickJS's `tests/microbench.js`, kept as it is there), and ours beside it,
-`microbench_extra.js`, of what it has none of -- generators and async
-functions -- written as its tests are: each test is given
+`microbench_extra.js`, of what it has none of -- generators, async
+functions, try statements, iterators and using declarations -- written as
+its tests are: each test is given
 the same work every run -- what QuickJS takes about 150 ms for, the work
 the comparison with QuickJS in docs/benchmarks.md is made with -- `-n`
 times, and the fastest time of one operation is printed. It needs no
