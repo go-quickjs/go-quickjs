@@ -207,8 +207,10 @@ func (r *Runtime) callDirect(callee, this Value, args []Value) (Value, error) {
 				// A body that only reads or writes a property of its this is
 				// answered here where it can be, without a frame.
 				if leaf := fn.Leaf; leaf == bytecode.LeafPure {
-					if v, ok := r.pureCall(fd, this, args); ok {
-						return v, nil
+					if pureFirst(fd, fn) {
+						if v, ok := r.pureCall(fd, this, args); ok {
+							return v, nil
+						}
 					}
 				} else if leaf != bytecode.LeafNone && this.IsObject() {
 					if v, ok := r.leafCall(fd.closure, this.Object(), args); ok {
@@ -300,7 +302,9 @@ func (r *Runtime) applyArguments(f *frame, slot uint32, target, apply, this Valu
 
 // applyCall is target.apply(this, arguments) by the built-in apply, given
 // the arguments themselves: apply's frame is pushed, as the built-in would
-// have it, and target called with them.
+// have it, and target called with them -- as a call from the interpreter's
+// loop is made, by callDirect, so that a function called this way is given
+// its tree's call (planTreeCall) like any other.
 func (r *Runtime) applyCall(target, this Value, args []Value) (Value, error) {
 	// apply's own arguments are what its frame records, which is all they
 	// are for: they are kept on the runtime's argument stack rather than
@@ -310,7 +314,7 @@ func (r *Runtime) applyCall(target, this Value, args []Value) (Value, error) {
 	var v Value
 	err := r.pushNativeFrame(r.applyFn, target, r.argStack[i:i+2:i+2], Undefined)
 	if err == nil {
-		v, err = r.call(target, this, args)
+		v, err = r.callDirect(target, this, args)
 		r.frameDepth--
 	}
 	clear(r.argStack[i:])

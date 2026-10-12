@@ -425,6 +425,22 @@ type propCache struct {
 	// meeting new shapes stops trying: filling costs a lookup of its own. A
 	// read then uses the runtime's shared cache.
 	fills uint8
+	// ownShape is shape where the entry is of a plain data property the
+	// object has itself and keeps -- not a prototype's, not an accessor, not
+	// one a write adds -- and noShape otherwise: what own and storeOwn
+	// compare an object's shape with, so that their test is one comparison
+	// rather than four. refill sets it from the entry as a whole, and
+	// newPropCaches to noShape: the zero value's nil would match an object
+	// with no shape.
+	ownShape *shape
+}
+
+// ownOf is the ownShape of a cache entry n: see propCache.
+func ownOf(n *propCache) *shape {
+	if n.shape != nil && n.p1 == nil && !n.getter && n.next == nil {
+		return n.shape
+	}
+	return noShape
 }
 
 // refill makes c n, what the site now remembers; with the JIT on, what it
@@ -434,6 +450,7 @@ func (c *propCache) refill(n propCache, jit bool) {
 	if jit {
 		seen = jitNoteSeen(seen, *c, n)
 	}
+	n.ownShape = ownOf(&n)
 	*c = n
 	c.seen = seen
 }
@@ -497,7 +514,7 @@ func (r *Runtime) cachedGet(c *propCache, o *Object, key Atom) (Value, bool, err
 // says. It is small enough to be inlined where a read is made, and asks
 // less than scanning even a small table.
 func (c *propCache) own(o *Object) (Value, bool) {
-	if s := o.shape; s == c.shape && s != nil && c.p1 == nil && !c.getter {
+	if o.shape == c.ownShape {
 		return o.props[c.idx].value, true
 	}
 	return Undefined, false
@@ -509,7 +526,7 @@ func (c *propCache) own(o *Object) (Value, bool) {
 // reports false for anything else, which setPropCached does -- a setter's
 // entry included, whose next is setterNext.
 func (c *propCache) storeOwn(o *Object, v Value) bool {
-	if s := o.shape; s == c.shape && s != nil && c.next == nil {
+	if o.shape == c.ownShape {
 		if verifyShapes {
 			checkShape(o)
 		}
@@ -612,7 +629,7 @@ const maxCacheFills = 16
 func newPropCaches(n int) []propCache {
 	ic := make([]propCache, n+1)
 	for i := range ic {
-		ic[i].shape = noShape
+		ic[i].shape, ic[i].ownShape = noShape, noShape
 	}
 	return ic
 }
@@ -652,13 +669,14 @@ func (r *Runtime) fillPropCache(c *propCache, o *Object, key Atom, accessors boo
 			if h.props[i].flags&(propPrivate|propDeleted|propUninit) != 0 || getter && !accessors {
 				return
 			}
-			c.refill(propCache{shape: remember(o.shape), idx: i, fills: c.fills + 1, getter: getter}, jitBuilt && r.jitOn())
+			n := propCache{shape: remember(o.shape), idx: i, fills: c.fills + 1, getter: getter}
 			if depth >= 1 {
-				c.p1, c.s1 = up[0], remember(up[0].shape)
+				n.p1, n.s1 = up[0], remember(up[0].shape)
 			}
 			if depth == 2 {
-				c.p2, c.s2 = up[1], remember(up[1].shape)
+				n.p2, n.s2 = up[1], remember(up[1].shape)
 			}
+			c.refill(n, jitBuilt && r.jitOn())
 			return
 		}
 		if depth == 2 || h.proto == nil {
@@ -833,13 +851,14 @@ func (r *Runtime) fillStoreCache(c *propCache, o *Object, before *shape, key Ato
 		up[depth] = p
 		p = p.proto
 	}
-	c.refill(propCache{shape: remember(before), next: next, fills: c.fills + 1, p1: up[0], p2: up[1]}, jitBuilt && r.jitOn())
+	n := propCache{shape: remember(before), next: next, fills: c.fills + 1, p1: up[0], p2: up[1]}
 	if up[0] != nil {
-		c.s1 = remember(up[0].shape)
+		n.s1 = remember(up[0].shape)
 	}
 	if up[1] != nil {
-		c.s2 = remember(up[1].shape)
+		n.s2 = remember(up[1].shape)
 	}
+	c.refill(n, jitBuilt && r.jitOn())
 }
 
 // verifyPropCache checks a cache's answer against the read it stands for, and

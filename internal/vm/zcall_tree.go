@@ -19,7 +19,8 @@ import (
 // planTreeCall decides whether calls of fd's function may go to callTree,
 // after a call that ran it, which has built its tree if the tier builds
 // one. A pure body is left undecided while pureCall may still answer its
-// calls, which it tries first.
+// calls, which it tries first -- unless pureByTree says they go to its
+// tree.
 func planTreeCall(fd *funcData) {
 	cl := fd.closure
 	fn := cl.fn
@@ -27,7 +28,7 @@ func planTreeCall(fd *funcData) {
 	switch {
 	case t == nil:
 		return
-	case fn.Leaf == bytecode.LeafPure && cl.pureMiss < pureMissLimit:
+	case fn.Leaf == bytecode.LeafPure && cl.pureMiss < pureMissLimit && !pureByTree(fn):
 		return
 	case t == noTree || fd.native != nil || fd.bound || fd.arrow || fd.extra != nil ||
 		fd.ctorKind == ctorDerived || !fn.DirectCall || fn.HasDirectEval ||
@@ -79,7 +80,18 @@ func (r *Runtime) callTree(o *Object, fd *funcData, this Value, args []Value, ne
 	if r.stackTop > r.stackHigh {
 		r.stackHigh = r.stackTop
 	}
-	f := r.pushFrame()
+	// pushFrame, written out: called, it costs the call and the registers
+	// saved around it, which are most of what it does.
+	off := r.frameDepth - r.frameBase
+	if uint(off) >= uint(len(r.cur)) {
+		r.seekFrameBlock()
+		off = r.frameDepth - r.frameBase
+	}
+	r.frameDepth++
+	if r.frameDepth > r.frameHigh {
+		r.frameHigh = r.frameDepth
+	}
+	f := &r.cur[off]
 	f.cl = cl
 	f.locals = locals
 	f.base = base + fn.LocalCount
@@ -174,16 +186,12 @@ func (r *Runtime) unwindTreeFrames(depth int) {
 
 // callRest is callDirect for a callee that is the object o, whose funcData
 // is fd or nil, once a tree's call node has found it is not one
-// planTreeCall has given a tree: callDirect's other cases, in its order.
+// planTreeCall has given a tree: callDirect's other cases. A compiled
+// function's comes first, which is callDirect's third: the two before it,
+// a Math function and Function.prototype.call, are built-ins, so no callee
+// is of both, and a pure body's call, the commonest here, asks nothing
+// first that cannot be its answer.
 func (r *Runtime) callRest(o *Object, fd *funcData, this Value, args []Value) (Value, error) {
-	if fd != nil && fd.mathOp != 0 {
-		if v, ok := mathCall(fd.mathOp, args); ok {
-			return v, nil
-		}
-	}
-	if o == r.callFn {
-		return r.callThrough(o, this, args)
-	}
 	if fd != nil && fd.native == nil && !fd.bound &&
 		fd.closure != nil && fd.closure.realm == r.Realm {
 		if fn := fd.closure.fn; fn.DirectCall {
@@ -191,8 +199,10 @@ func (r *Runtime) callRest(o *Object, fd *funcData, this Value, args []Value) (V
 				return Undefined, err
 			}
 			if leaf := fn.Leaf; leaf == bytecode.LeafPure {
-				if v, ok := r.pureCall(fd, this, args); ok {
-					return v, nil
+				if pureFirst(fd, fn) {
+					if v, ok := r.pureCall(fd, this, args); ok {
+						return v, nil
+					}
 				}
 			} else if leaf != bytecode.LeafNone && this.IsObject() {
 				if v, ok := r.leafCall(fd.closure, this.Object(), args); ok {
@@ -212,6 +222,14 @@ func (r *Runtime) callRest(o *Object, fd *funcData, this Value, args []Value) (V
 			}
 			return v, err
 		}
+	}
+	if fd != nil && fd.mathOp != 0 {
+		if v, ok := mathCall(fd.mathOp, args); ok {
+			return v, nil
+		}
+	}
+	if o == r.callFn {
+		return r.callThrough(o, this, args)
 	}
 	if fd != nil && fd.native != nil && !fd.bound && (fd.realm == nil || fd.realm == r.Realm) {
 		if err := r.tick(); err != nil {

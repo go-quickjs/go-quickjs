@@ -360,6 +360,10 @@ type Function struct {
 	// LeafNone. The VM answers a call of one itself, without running the
 	// body, where nothing could see the difference.
 	Leaf LeafKind
+	// PureCalls says a LeafPure body calls or constructs: the VM keeps such
+	// a body frameless where it can, since its calls are frameless with it,
+	// while one that calls nothing may be run as its tree.
+	PureCalls bool
 	// PureTail is, for a LeafPure body, where the code begins that has no
 	// instruction a frameless evaluation could give up at. A store is only
 	// in it, so that nothing can give up after one, and so is a call of a

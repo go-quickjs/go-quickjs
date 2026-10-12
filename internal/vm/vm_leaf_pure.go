@@ -21,6 +21,33 @@ func (r *Runtime) pureCall(fd *funcData, this Value, args []Value) (Value, bool)
 	return r.pureCallAt(fd, this, args, 0, true)
 }
 
+// pureTreeCode is the shortest pure body, in instructions, that is called
+// as its tree rather than evaluated here when it calls nothing.
+const pureTreeCode = 7
+
+// pureByTree reports whether calls of a pure body go to its tree, as
+// planTreeCall gives them, rather than to pureCall: its first call is made
+// with a frame, after which planTreeCall gives it its tree's call (see
+// pureFirst). pureCallAt pays an
+// indirect jump of its one switch for every instruction, which is often
+// mispredicted, as the bodies it evaluates are all different; a tree pays
+// a frame once, and runs each node through a call of its own. A body that
+// calls nothing gains nothing else from being frameless, and from about
+// seven instructions on its tree is the cheaper; one that calls keeps its
+// calls frameless here, which a tree would make with frames. A call from
+// inside another pure body (pureInvoke) is still evaluated here.
+func pureByTree(fn *bytecode.Function) bool {
+	return !fn.PureCalls && len(fn.Code) >= pureTreeCode
+}
+
+// pureFirst reports whether a call of fd's pure body fn tries pureCall: the
+// body is not one pureByTree gives its tree, or planTreeCall has decided
+// about it and found it none. A short body, the commonest, is answered by
+// the first test.
+func pureFirst(fd *funcData, fn *bytecode.Function) bool {
+	return len(fn.Code) < pureTreeCode || fn.PureCalls || fd.treePlanned
+}
+
 // The cases of pureCallAt's switch, which pureCases numbers the
 // instructions with.
 const (
