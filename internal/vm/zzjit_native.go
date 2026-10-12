@@ -1643,6 +1643,17 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			}
 			continue
 		}
+		if in.Op == bytecode.OpRethrow {
+			// A finally clause's normal completion: its record dropped. Any
+			// other the interpreter reproduces.
+			if k := r.stack[sp-1]; !k.IsNumber() || completionKind(k.Number()) != completionNormal {
+				return sp, steps, nil
+			}
+			sp -= 2
+			f.pc++
+			steps++
+			continue
+		}
 		if in.Op == bytecode.OpSetLocalGet {
 			f.locals[in.A] = r.stack[sp-1]
 			r.stack[sp-1] = f.locals[in.B]

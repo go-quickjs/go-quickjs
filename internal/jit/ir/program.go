@@ -189,7 +189,15 @@ const (
 	// has Go make, called from native code (ssa.GoConcat), and leaves to
 	// Go otherwise. At most MaxStringConcat parts.
 	StringConcat
+	// Rethrow is rethrow, the end of a finally clause, with Left the kind
+	// of its completion record, the operand on top: a normal completion's
+	// record (the number 0) is dropped and the code goes on; any other --
+	// a throw, a return -- the interpreter reproduces, from a guard's exit.
+	Rethrow
 )
+
+// RethrowNormal is the kind a normal completion's record has (Rethrow).
+const RethrowNormal = 0
 
 // MaxArrayLiteral is the most elements an ArrayLiteral has: new_array
 // with more is Go's.
@@ -320,6 +328,24 @@ type Program struct {
 	// assigns in their cells (UpvalueRead, UpvalueWrite), their slots from
 	// UpvalueBase on.
 	UpvalueBase, Upvalues int
+	// Handlers are the exception handlers the function registers, and
+	// HandlerAt, for each instruction, the innermost of those in force
+	// there, 1 plus its index, 0 for none: the interpreter's frame has them
+	// (its handlers) wherever native code leaves it. Nil where the function
+	// has none.
+	Handlers  []Handler
+	HandlerAt []int32
+}
+
+// Handler is an exception handler, as push_catch or push_finally registers
+// it: the clause at PC, entered with the operand stack cut to Depth, a
+// finally clause's if Finally, and Outer the handler in force around it, 1
+// plus its index in Program.Handlers, 0 for none.
+type Handler struct {
+	PC      uint32
+	Depth   int32
+	Outer   int32
+	Finally bool
 }
 
 // Footprint is the memory p holds: its instructions, state maps and
@@ -329,7 +355,7 @@ func (p *Program) Footprint() int {
 		return 0
 	}
 	return int(unsafe.Sizeof(*p)) + cap(p.Globals)*4 + cap(p.Code)*int(unsafe.Sizeof(Instruction{})) +
-		cap(p.Maps)*int(unsafe.Sizeof(StateMap{})) + cap(p.Live)*8
+		cap(p.Maps)*int(unsafe.Sizeof(StateMap{})) + cap(p.Live)*8 + cap(p.Handlers)*int(unsafe.Sizeof(Handler{})) + cap(p.HandlerAt)*4
 }
 
 // LiveAt reports whether local i may be read from pc on before it is

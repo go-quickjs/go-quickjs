@@ -26,6 +26,19 @@ func (p *Program) Validate() error {
 	if p.Maps[0].Depth != 0 {
 		return fmt.Errorf("jit IR: invalid initial stack depth")
 	}
+	if p.HandlerAt != nil && len(p.HandlerAt) != len(p.Code) {
+		return fmt.Errorf("jit IR: invalid handler table")
+	}
+	for i, h := range p.Handlers {
+		if int(h.PC) >= len(p.Code) || h.Depth < 0 || h.Outer < 0 || int(h.Outer) > i {
+			return fmt.Errorf("jit IR: invalid handler %d", i)
+		}
+	}
+	for _, h := range p.HandlerAt {
+		if h < 0 || int(h) > len(p.Handlers) {
+			return fmt.Errorf("jit IR: invalid handler table")
+		}
+	}
 	calls := uint32(0)
 	for pc, in := range p.Code {
 		if p.Maps[pc].Depth < 0 {
@@ -142,7 +155,7 @@ func (p *Program) Validate() error {
 			if !target(in.Target) || in.Operator != Truth && (in.Operator < Lt || in.Operator > Ne) {
 				return bad("invalid conditional branch")
 			}
-		case Return:
+		case Return, Rethrow:
 			left = true
 		default:
 			return bad("invalid opcode")

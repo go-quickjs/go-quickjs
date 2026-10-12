@@ -4679,6 +4679,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			}
 			e.ssaStats.records += ctx.Records
 			r.jitApplyRecords(f, e, ctx)
+			jitHandlers(f, e.ssaProg, exitPC)
 			sp, ok := r.jitCallResult(f, exitPC, exitDepth, v, err)
 			if !ok || r.stopped != nil {
 				return r.jitInterpret(f, sp, err)
@@ -4707,6 +4708,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			e.ssaStats.records += ctx.Records
 			r.jitApplyRecords(f, e, ctx)
 			exitPC, exitDepth := int(ctx.ExitPC), int(ctx.ExitDepth)
+			jitHandlers(f, e.ssaProg, exitPC)
 			// Past its call meanwhile, as a stack trace shows it.
 			f.pc = uint32(exitPC) + 1
 			v, err := r.jitUnwindNative(idx, e, f.cl.fn)
@@ -4735,6 +4737,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 		}
 		e.ssaStats.records += ctx.Records
 		r.jitApplyRecords(f, e, ctx)
+		jitHandlers(f, e.ssaProg, int(ctx.ExitPC))
 		switch ctx.ExitKind {
 		case abi.ExitDeopt:
 			// The frame holds the state at the guard; the interpreter runs
@@ -5169,6 +5172,13 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, code *bytecode.Function)
 		}
 		f.openUpvalues, f.handlers = f.openUpvalues[:0], f.handlers[:0]
 		f.thisRef, f.withScopes, f.evalVars, f.native, f.savedSP = nil, nil, nil, "", 0
+		if !l.inline {
+			// Those in force at its exit, or at its call: an exception
+			// from the call unwinds the frame from there.
+			if e := s.cache[weak.Make(fn)]; e != nil {
+				jitHandlers(f, e.ssaProg, int(l.pc))
+			}
+		}
 		s.unwindingFrames = append(s.unwindingFrames, f)
 	}
 	var v Value
@@ -5557,4 +5567,23 @@ func (r *Runtime) jitCallResult(f *frame, pc, depth int, v Value, err error) (in
 	}
 	r.stack[sp] = v
 	return sp + 1, true
+}
+
+// jitHandlers gives f, a frame native code ran p's code in, the exception
+// handlers in force at pc (ir.Program's HandlerAt), as the interpreter's
+// push_catch and pop_catch would have left them there: native code
+// registers none, and a throw Go unwinds the frame from finds them.
+func jitHandlers(f *frame, p *ir.Program, pc int) {
+	if p == nil || p.HandlerAt == nil || pc < 0 || pc >= len(p.HandlerAt) {
+		return
+	}
+	n := 0
+	for k := p.HandlerAt[pc]; k != 0; k = p.Handlers[k-1].Outer {
+		n++
+	}
+	f.handlers = slices.Grow(f.handlers[:0], n)[:n]
+	for k, i := p.HandlerAt[pc], n-1; k != 0; k, i = p.Handlers[k-1].Outer, i-1 {
+		h := p.Handlers[k-1]
+		f.handlers[i] = handler{pc: h.PC, stackDepth: int(h.Depth), isFinally: h.Finally}
+	}
 }

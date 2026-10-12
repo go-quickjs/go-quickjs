@@ -133,7 +133,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		}
 	}
 	effects := make([]effect, len(fn.Code))
-	host, loop, indexed, property, bitwise, this := false, false, false, false, false, false
+	host, loop, indexed, property, bitwise, this, handlers := false, false, false, false, false, false, false
 	for pc, in := range fn.Code {
 		e, err := describe(fn, pc, in)
 		if err != nil {
@@ -167,6 +167,13 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		if in.Op == bytecode.OpApplyArguments && !m.forward {
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
+		if (in.Op == bytecode.OpPushCatch || in.Op == bytecode.OpPushFinally || in.Op == bytecode.OpPopCatch || in.Op == bytecode.OpRethrow) && (!m.ssa || m.callee) {
+			// Exception handlers are the new pipeline's, in a function's
+			// own code: a callee inlined has no frame of its own for Go to
+			// give them to.
+			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
+		}
+		handlers = handlers || in.Op == bytecode.OpPushCatch || in.Op == bytecode.OpPushFinally
 		if in.Op == bytecode.OpThrow && !m.ssa {
 			// The new pipeline leaves a throw to the interpreter, which
 			// throws it, as V8's code calls the runtime to throw.
@@ -202,7 +209,17 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 	maps[0].Depth = 0
 	queue := make([]int, 1, len(fn.Code))
 	queue[0] = 0
-	join := func(pc, depth int) error {
+	// The handlers in force at each instruction, as Program's HandlerAt has
+	// them, where the function has any: the code is structured, so every way
+	// into an instruction has the same ones, as the tree tier's builder
+	// finds them (enterHandlers).
+	var chains []int32
+	var table []ir.Handler
+	var pushed []int32
+	if handlers {
+		chains, pushed = make([]int32, len(fn.Code)), make([]int32, len(fn.Code))
+	}
+	join := func(pc, depth int, chain int32) error {
 		if pc >= len(maps) {
 			return refuse(pc-1, "fallthrough past function")
 		}
@@ -210,15 +227,38 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			if maps[pc].Depth != depth {
 				return refuse(pc, "inconsistent stack depth at join")
 			}
+			if chains != nil && chains[pc] != chain {
+				return refuse(pc, "inconsistent handlers at join")
+			}
 			return nil
 		}
 		maps[pc].Depth = depth
+		if chains != nil {
+			chains[pc] = chain
+		}
 		queue = append(queue, pc)
 		return nil
 	}
 	for head := 0; head < len(queue); head++ {
 		pc := queue[head]
 		e, depth := effects[pc], maps[pc].Depth
+		var chain int32
+		if chains != nil {
+			chain = chains[pc]
+			switch in := fn.Code[pc]; in.Op {
+			case bytecode.OpPushCatch, bytecode.OpPushFinally:
+				if pushed[pc] == 0 {
+					table = append(table, ir.Handler{PC: in.A, Depth: int32(depth), Outer: chain, Finally: in.Op == bytecode.OpPushFinally})
+					pushed[pc] = int32(len(table))
+				}
+				chain = pushed[pc]
+			case bytecode.OpPopCatch:
+				if chain == 0 {
+					return nil, refuse(pc, "no handler to drop")
+				}
+				chain = table[chain-1].Outer
+			}
+		}
 		if depth < e.need {
 			return nil, refuse(pc, "operand stack underflow")
 		}
@@ -231,17 +271,18 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			if e.keep {
 				targetDepth = depth
 			}
-			if err := join(int(fn.Code[pc].A), targetDepth); err != nil {
+			if err := join(int(fn.Code[pc].A), targetDepth, chain); err != nil {
 				return nil, err
 			}
 		}
 		if !e.terminal {
-			if err := join(pc+1, nextDepth); err != nil {
+			if err := join(pc+1, nextDepth, chain); err != nil {
 				return nil, err
 			}
 		}
 	}
-	p := &ir.Program{Locals: fn.LocalCount + len(fn.Upvalues), StackSize: fn.MaxStack, This: this, Maps: maps, Code: make([]ir.Instruction, len(fn.Code))}
+	p := &ir.Program{Locals: fn.LocalCount + len(fn.Upvalues), StackSize: fn.MaxStack, This: this, Maps: maps, Code: make([]ir.Instruction, len(fn.Code)),
+		Handlers: table, HandlerAt: chains}
 	if this {
 		if p.Locals+p.StackSize == MaxSlots {
 			p.This = false
@@ -258,6 +299,18 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 	if m.ssa {
 		liveLocals(fn, p, effects)
 		typeTests(fn, p, effects)
+		if p.Live != nil && chains != nil {
+			// A throw resumes the interpreter at a handler, which native
+			// code never runs, so what the handler reads is not known:
+			// every local is live where one is in force.
+			for pc, h := range chains {
+				if h != 0 {
+					for w := range p.LiveWords {
+						p.Live[pc*p.LiveWords+w] = ^uint64(0)
+					}
+				}
+			}
+		}
 	}
 	if m.ssa {
 		for pc, in := range p.Code {
@@ -619,7 +672,7 @@ func stringConcats(p *ir.Program) {
 			for i := in.Dest; i >= 0 && i <= in.Dest+3; i++ {
 				set(i, false)
 			}
-		case ir.Branch, ir.Jump, ir.Return, ir.Nop, ir.ArrayWrite, ir.PropertyWrite, ir.BindingWrite, ir.FieldDefine, ir.UpvalueWrite:
+		case ir.Branch, ir.Jump, ir.Return, ir.Nop, ir.ArrayWrite, ir.PropertyWrite, ir.BindingWrite, ir.FieldDefine, ir.UpvalueWrite, ir.Rethrow:
 		default:
 			set(in.Dest, false)
 		}
@@ -940,6 +993,16 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 		return effect{need: 2, delta: -1}, nil
 	case bytecode.OpTypeOf:
 		return effect{need: 1}, nil
+	case bytecode.OpPushCatch, bytecode.OpPushFinally:
+		if uint64(in.A) >= uint64(len(fn.Code)) {
+			return bad("handler out of bounds")
+		}
+		return effect{}, nil
+	case bytecode.OpPopCatch:
+		return effect{}, nil
+	case bytecode.OpRethrow:
+		// A finally clause's completion record: its value, then its kind.
+		return effect{need: 2, delta: -2}, nil
 	case bytecode.OpApplyArguments:
 		// f, apply and the receiver, for f's result.
 		if !local(in.A) {
@@ -1206,6 +1269,13 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this bool) ir.Instr
 	case bytecode.OpNop, bytecode.OpEndParams, bytecode.OpDrop:
 		// A pop writes no slot: the next map's depth is the whole effect.
 		return ir.Instruction{Op: ir.Nop}
+	case bytecode.OpPushCatch, bytecode.OpPushFinally, bytecode.OpPopCatch:
+		// The handlers in force are known at each instruction (Program's
+		// HandlerAt), and Go gives the frame them where native code
+		// leaves it: native code registers none.
+		return ir.Instruction{Op: ir.Nop}
+	case bytecode.OpRethrow:
+		return ir.Instruction{Op: ir.Rethrow, Left: top}
 	}
 	// describe accepted an opcode this switch does not translate. Becoming a
 	// Nop with describe's stack effect would be a silent miscompile; the panic

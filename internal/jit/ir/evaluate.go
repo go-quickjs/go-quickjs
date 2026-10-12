@@ -309,6 +309,12 @@ func (p *Program) EvaluateArrays(slots []Value, arrays []ArrayView, pc int, budg
 			}
 			exit.Kind, exit.Value, exit.Steps = Returned, v, steps+1
 			return exit, nil
+		case Rethrow:
+			// A normal completion goes on; the interpreter reproduces any
+			// other.
+			if v := read(in.Left); v != Float(RethrowNormal) {
+				return exit, nil
+			}
 		default:
 			return Exit{}, ErrState
 		}

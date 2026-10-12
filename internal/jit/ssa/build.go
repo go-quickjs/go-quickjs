@@ -642,6 +642,8 @@ func (b *builder) hostOf(pc int) bool {
 	case ir.FieldDefine:
 		_, ok := b.define(pc)
 		return !ok
+	case ir.Rethrow:
+		return b.generic(pc)
 	}
 	return false
 }
@@ -790,7 +792,7 @@ func (b *builder) wantsEntry(pc int) bool {
 // which resumes after it, as they do for == and %.
 func (b *builder) generic(pc int) bool {
 	switch in := b.p.Code[pc]; {
-	case in.Op == ir.Binary, in.Op == ir.Branch && in.Operator != ir.Truth:
+	case in.Op == ir.Binary, in.Op == ir.Branch && in.Operator != ir.Truth, in.Op == ir.Rethrow:
 		return b.fb != nil && b.fb.Generic(pc)
 	}
 	return false
@@ -1415,6 +1417,13 @@ func (b *builder) plan() error {
 		case ir.UpvalueRead:
 			// The function's own captured binding is read natively, its
 			// check deoptimizing; an inlined callee's leaves at its call.
+		case ir.Rethrow:
+			// A normal completion goes on natively, any other deoptimizing;
+			// once one has (Generic), Go runs each, and native code goes on
+			// after a normal one.
+			if b.host(pc) && resumes(pc) {
+				entries[pc+1] = true
+			}
 		case ir.TypeTest:
 			// An object it cannot tell exits at the typeof, which Go makes;
 			// the interpreter goes on, the boolean not where the typeof's
@@ -1516,7 +1525,7 @@ func (b *builder) plan() error {
 		case ir.Return:
 			blk.Kind = BlockReturn
 		case ir.Host, ir.Call, ir.PropertyRead, ir.PropertyWrite, ir.ReferenceRead, ir.BindingRead, ir.BindingWrite, ir.BindingCheck,
-			ir.ObjectLiteral, ir.FieldDefine, ir.ArrayLiteral, ir.StringConst, ir.UpvalueRead, ir.UpvalueWrite, ir.StringAdd, ir.StringConcat:
+			ir.ObjectLiteral, ir.FieldDefine, ir.ArrayLiteral, ir.StringConst, ir.UpvalueRead, ir.UpvalueWrite, ir.StringAdd, ir.StringConcat, ir.Rethrow:
 			if fr := b.inlined[end]; fr != nil {
 				// Into the callee, whose returns go to the block after it.
 				blk.Kind = BlockPlain
@@ -2268,6 +2277,21 @@ func (b *builder) instruction(blk *Block, pc int) {
 		k := f.newValue(blk, OpConst, Tagged)
 		k.Const = ir.Bool(true)
 		b.assign(in.Dest, blk, k)
+	case ir.Rethrow:
+		if b.host(pc) {
+			blk.ExitKind = ir.HostExit
+			blk.State = state()
+			blk.State.addUse()
+			break
+		}
+		// The completion record is a normal completion's, which is
+		// dropped; for any other the interpreter reproduces it, from the
+		// state before the rethrow.
+		normal := f.newValue(blk, OpConstF64, Float64)
+		normal.Const = ir.Float(ir.RethrowNormal)
+		is := f.newValue(blk, OpCmpF64, Bool, number(in.Left, ir.GuardExit), normal)
+		is.Aux = int(ir.Eq)
+		guard(OpCheckTrue, None, ir.GuardExit, boxB(is))
 	case ir.Resolved:
 		// True where native code checked; Go's answer, after an exit,
 		// checked here, and Go throws for an unresolved name.
