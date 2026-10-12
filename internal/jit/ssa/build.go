@@ -1155,6 +1155,11 @@ func (b *builder) iterStep(blk *Block, in ir.Instruction, operand func(ir.Operan
 	r := b.f.newValue(blk, OpKept, Tagged, cell, call)
 	r.Shadow = cell
 	b.assign(in.Dest, blk, r)
+	// The step runs the iterator's next, which may assign a captured
+	// binding, as a native call's callee may.
+	if b.p.Upvalues > 0 {
+		b.reloadUpvalues(blk)
+	}
 	done := b.f.newValue(blk, OpConst, Tagged)
 	done.Const = ir.Value{Kind: ir.Uninitialized}
 	// Never left: the constant is no string (OpEqTagged).

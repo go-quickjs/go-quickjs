@@ -176,3 +176,37 @@ func TestJITImport(t *testing.T) {
 		t.Errorf("the functions did not run natively: %+v", st)
 	}
 }
+
+// A for...of step the JIT makes by a call of Go runs the iterator's next,
+// which may assign a binding the loop's function captured: the loop reads
+// it again after each step, as the interpreter does, rather than the value
+// it had before.
+func TestJITUpvalueAfterIteratorStep(t *testing.T) {
+	src := `(function () {
+		let x = 0;
+		function make(n) {
+			let i = 0;
+			return { [Symbol.iterator]() { return this }, next() { x++; i++; return { done: i > n, value: i } } };
+		}
+		function g(it) { let s = 0; for (const v of it) s = s * 3 + x + v; return s }
+		const out = [];
+		for (let k = 0; k < 200; k++) { x = k; out.push(g(make(5))) }
+		return out[0] + "," + out[1] + "," + out[199] + "," + out.reduce((a, b) => (a + b) % 1000003, 0);
+	})()`
+	run := func(opts ...quickjs.Option) (string, vm.JITStats) {
+		r := quickjs.New(opts...)
+		defer r.Close()
+		return evalString(t, r, src), hostaccess.VM(r).JITStats()
+	}
+	want, _ := run()
+	if want != "358,479,24437,479494" {
+		t.Fatalf("interpreter: %s", want)
+	}
+	got, st := run(quickjs.WithJIT())
+	if got != want {
+		t.Fatalf("jit: %s, interpreter: %s", got, want)
+	}
+	if st.Budget != 0 && st.SSAEntries == 0 {
+		t.Fatalf("g did not run natively: %+v", st)
+	}
+}
