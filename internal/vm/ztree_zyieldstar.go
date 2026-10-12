@@ -35,12 +35,14 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 // after every closure already there (see AGENTS.md).
 var (
 	// treeBuildsDelegate reports whether the tier builds op, one of
-	// yield*'s or for await's instructions other than the suspensions.
+	// yield*'s or for await's instructions other than the suspensions, or
+	// one treeBuildsUsing names.
 	treeBuildsDelegate func(op bytecode.Op) bool
 
-	// delegateOp builds for_await_of_start and async_iter_next, each of
-	// which runs code, and is a statement: what it pushes is written to its
-	// slot.
+	// delegateOp builds for_await_of_start, async_iter_next and
+	// async_iter_close's check and mark, each of which runs code, and is a
+	// statement: what it pushes is written to its slot. It hands usingOp
+	// what treeBuildsUsing names.
 	delegateOp func(b *tbuilder, pc int, in bytecode.Instr) (int, bool)
 
 	// delegateEnd ends block bi with iter_resume, iter_unpack_delegate,
@@ -64,7 +66,7 @@ func init() {
 			bytecode.OpIterResume, bytecode.OpIterUnpackDelegate, bytecode.OpIterResultOrJump:
 			return true
 		}
-		return false
+		return treeBuildsUsing(op)
 	}
 
 	delegateOp = func(b *tbuilder, pc int, in bytecode.Instr) (int, bool) {
@@ -115,7 +117,7 @@ func init() {
 				}
 			})
 		default:
-			return 0, false
+			return usingOp(b, pc, in)
 		}
 		return 0, true
 	}
