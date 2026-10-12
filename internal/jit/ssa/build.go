@@ -165,8 +165,11 @@ type CallSite struct {
 	Callee, Closure, Entry, Count uintptr
 	Argc                          int
 	Method                        bool
-	// New marks a construction Go makes (GoCall at a new).
-	New                          bool
+	// New marks a construction Go makes (GoCall at a new), Step a
+	// for...of or for...in loop's step (GoCall at an ir.IterStep): its
+	// cursor the one operand, the result the next value or, done, the
+	// uninitialized value.
+	New, Step                    bool
 	Params, LocalCount, MaxStack int
 	ThisSlot                     int
 	Coerce                       bool
@@ -644,6 +647,9 @@ func (b *builder) hostOf(pc int) bool {
 		return !ok
 	case ir.Rethrow:
 		return b.generic(pc)
+	case ir.IterStep:
+		// A call of Go (GoCall, Step), where the VM answers it.
+		return !b.goCalls()
 	}
 	return false
 }
@@ -1133,6 +1139,31 @@ func (b *builder) goAdd(blk *Block, in ir.Instruction, operand func(ir.Operand) 
 	b.assign(in.Dest, blk, r)
 }
 
+// iterStep makes in, a loop's step, by a call of Go from native code
+// (GoCall, Step) -- as the tree tier's step calls iterNext, where an exit
+// and an entry at every turn had cost a small loop's body four times over
+// -- and ends blk with the branch on its answer: the uninitialized value,
+// which no step yields, for a cursor done, any other its next value. What
+// Go refuses leaves for Go to make after an exit.
+func (b *builder) iterStep(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+	call := guard(OpCall, Tagged, ir.HostExit, operand(in.Left))
+	if b.f.Keeps < b.f.keepLimit() {
+		call.Calls, call.Index = []*CallSite{{Go: GoCall, Step: true, ThisSlot: -1}}, b.f.Keeps
+		b.f.Keeps++
+	}
+	cell := b.f.newValue(blk, OpCallCell, Source, call)
+	r := b.f.newValue(blk, OpKept, Tagged, cell, call)
+	r.Shadow = cell
+	b.assign(in.Dest, blk, r)
+	done := b.f.newValue(blk, OpConst, Tagged)
+	done.Const = ir.Value{Kind: ir.Uninitialized}
+	// Never left: the constant is no string (OpEqTagged).
+	is := guard(OpEqTagged, Bool, ir.HostExit, r, done)
+	is.Index = 1
+	blk.Control = is
+	is.Uses++
+}
+
 // goConcat makes in, a concat, by a call of Go from native code (GoConcat),
 // its parts the call's operands: what Go refuses leaves for Go to make
 // after an exit.
@@ -1387,7 +1418,7 @@ func (b *builder) plan() error {
 	// go on without one too often is compiled with them (EntryFeedback).
 	resumes := func(pc int) bool {
 		switch op := p.Code[pc].Op; {
-		case b.host(pc), op == ir.ObjectLiteral, op == ir.ArrayLiteral, op == ir.StringAdd, op == ir.StringConcat, op == ir.ArrayWrite:
+		case b.host(pc), op == ir.ObjectLiteral, op == ir.ArrayLiteral, op == ir.StringAdd, op == ir.StringConcat, op == ir.ArrayWrite, op == ir.IterStep:
 			return true
 		}
 		return b.wantsEntry(pc + 1)
@@ -1420,6 +1451,13 @@ func (b *builder) plan() error {
 		case ir.UpvalueRead:
 			// The function's own captured binding is read natively, its
 			// check deoptimizing; an inlined callee's leaves at its call.
+		case ir.IterStep:
+			// Go goes on after a step it made, past it or at the loop's
+			// end (ir.Program's Entries), where native code did not.
+			leaders[in.Target] = true
+			if resumes(pc) {
+				entries[pc+1] = true
+			}
 		case ir.Rethrow:
 			// A normal completion goes on natively, any other deoptimizing;
 			// once one has (Generic), Go runs each, and native code goes on
@@ -1475,7 +1513,7 @@ func (b *builder) plan() error {
 			return fmt.Errorf("%w: %d at pc %d", ErrUnsupported, in.Op, pc)
 		}
 		switch {
-		case in.Op == ir.Jump || in.Op == ir.Branch || in.Op == ir.Return || b.host(pc) && !b.goesOn(pc):
+		case in.Op == ir.Jump || in.Op == ir.Branch || in.Op == ir.Return || in.Op == ir.IterStep || b.host(pc) && !b.goesOn(pc):
 			leaders[pc+1] = true
 		}
 	}
@@ -1503,7 +1541,7 @@ func (b *builder) plan() error {
 			end = starts[i+1] - 1
 		}
 		for q := pc; q <= end; q++ {
-			if op := p.Code[q].Op; op == ir.Jump || op == ir.Branch || op == ir.Return || b.host(q) && !b.goesOn(q) {
+			if op := p.Code[q].Op; op == ir.Jump || op == ir.Branch || op == ir.Return || op == ir.IterStep || b.host(q) && !b.goesOn(q) {
 				end = q
 				break
 			}
@@ -1527,6 +1565,15 @@ func (b *builder) plan() error {
 			}
 		case ir.Return:
 			blk.Kind = BlockReturn
+		case ir.IterStep:
+			if b.host(end) {
+				blk.Kind = BlockExit
+				break
+			}
+			// Done, to the loop's end; else on, with the value.
+			blk.Kind = BlockIf
+			b.edge(blk, b.blockAt[last.Target])
+			b.edge(blk, b.blockAt[end+1])
 		case ir.Host, ir.Call, ir.PropertyRead, ir.PropertyWrite, ir.ReferenceRead, ir.BindingRead, ir.BindingWrite, ir.BindingCheck,
 			ir.ObjectLiteral, ir.FieldDefine, ir.ArrayLiteral, ir.StringConst, ir.UpvalueRead, ir.UpvalueWrite, ir.StringAdd, ir.StringConcat, ir.Rethrow:
 			if fr := b.inlined[end]; fr != nil {
@@ -2280,6 +2327,14 @@ func (b *builder) instruction(blk *Block, pc int) {
 		k := f.newValue(blk, OpConst, Tagged)
 		k.Const = ir.Bool(true)
 		b.assign(in.Dest, blk, k)
+	case ir.IterStep:
+		if b.host(pc) {
+			blk.ExitKind = ir.HostExit
+			blk.State = state()
+			blk.State.addUse()
+			break
+		}
+		b.iterStep(blk, in, operand, guard)
 	case ir.Rethrow:
 		if b.host(pc) {
 			blk.ExitKind = ir.HostExit

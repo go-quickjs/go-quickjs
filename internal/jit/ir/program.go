@@ -194,6 +194,12 @@ const (
 	// record (the number 0) is dropped and the code goes on; any other --
 	// a throw, a return -- the interpreter reproduces, from a guard's exit.
 	Rethrow
+	// IterStep is iter_next_or_jump, a for...of or for...in loop's step:
+	// the next value of the cursor at Left at Dest, or, the cursor done, a
+	// jump to Target, the cursor kept either way. The new pipeline has Go
+	// make it, called from native code (ssa's GoCall, Step), and leaves
+	// it to Go otherwise.
+	IterStep
 )
 
 // RethrowNormal is the kind a normal completion's record has (Rethrow).

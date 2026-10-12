@@ -162,6 +162,11 @@ func (p *Program) Validate() error {
 			}
 		case Return, Rethrow:
 			left = true
+		case IterStep:
+			left, write = true, true
+			if !target(in.Target) {
+				return bad("invalid branch target")
+			}
 		default:
 			return bad("invalid opcode")
 		}

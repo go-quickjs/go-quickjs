@@ -467,6 +467,16 @@ type Encoding struct {
 	// slice: a pointer to the first value, then the count.
 	ObjectClass, ObjectFlags, ObjectArrayLen, ObjectElems int32
 	ClassArray, FlagSparse                                uint8
+	// A for...of or for...in loop's cursor is an object whose data, an
+	// interface at ObjectData, is the VM's iteration state when its type
+	// word is IterState (0 where native code does not step one): the
+	// state's byte at IterDone says the loop is done, the pointer at IterArr
+	// is the array a for...of walks in place, nil for any other iteration,
+	// and the int at IterIdx the next element's index. Native code writes
+	// nothing there but that index.
+	ObjectData                 int32
+	IterState                  uint64
+	IterDone, IterArr, IterIdx int32
 	// FlagHTMLDDA is the flags byte's bit for Annex B's [[IsHTMLDDA]],
 	// which makes an object == null and == undefined.
 	FlagHTMLDDA uint8
@@ -543,7 +553,9 @@ func IsNumber(word uint64) bool { return word < NumberLimit }
 
 // A call's GoOp (Context.GoOp): the operation in its low byte, the
 // arguments' count in the next, the kind in the next -- a method call's,
-// with its receiver below its function, or a construction's. GoOpMarking
+// with its receiver below its function, or a construction's; or an
+// iterator's step (GoCallStep), its loop's cursor the one operand, the
+// result its next value or, done, the uninitialized value. GoOpMarking
 // marks a call native code makes through Go only because the collector
 // marks -- a native call's, whose setup would store pointers without a
 // write barrier: Go makes it, and does not count it against the code's
@@ -553,5 +565,6 @@ const (
 	GoOpKindShift = 16
 	GoCallMethod  = 1
 	GoCallNew     = 2
+	GoCallStep    = 3
 	GoOpMarking   = 1 << 24
 )

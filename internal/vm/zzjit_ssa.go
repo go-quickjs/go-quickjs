@@ -75,6 +75,11 @@ var jitEncoding = abi.Encoding{
 	ObjectFlags:        int32(unsafe.Offsetof(Object{}.flags)),
 	ObjectArrayLen:     int32(unsafe.Offsetof(Object{}.arrayLen)),
 	ObjectElems:        int32(unsafe.Offsetof(Object{}.elems)),
+	ObjectData:         int32(unsafe.Offsetof(Object{}.data)),
+	IterState:          jitTypeWord((*iterState)(nil)),
+	IterDone:           int32(unsafe.Offsetof(iterState{}.done)),
+	IterArr:            int32(unsafe.Offsetof(iterState{}.arr)),
+	IterIdx:            int32(unsafe.Offsetof(iterState{}.idx)),
 	ClassArray:         uint8(ClassArray),
 	FlagSparse:         uint8(objHasSparseElements),
 	FlagHTMLDDA:        uint8(objHTMLDDA),
@@ -2065,13 +2070,17 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 	}
 	sp := top + n
 	r.stackTop, r.stackHigh = sp, max(r.stackHigh, sp)
+	step := in.Op == bytecode.OpIterNextOrJump
 	if ctx.GoOp&abi.GoOpMarking == 0 {
 		// A call made through Go only because the collector marks costs
-		// the code nothing it chose (abi.GoOpMarking).
+		// the code nothing it chose (abi.GoOpMarking). A loop's step Go
+		// makes costs what any call of Go does: a loop of them, over a Map
+		// or a generator, whose body does little, the tree tier runs (one
+		// over an array native code steps itself, and calls nothing).
 		e.ssaStats.goCalls++
 	}
 	s.goCalls++
-	if jitCallUnsettled(e, pc, in) {
+	if !step && jitCallUnsettled(e, pc, in) {
 		r.jitCallSeen(f, e, pc, sp, in)
 	}
 	// Past its call meanwhile, as the interpreter's frame is during one,
@@ -2236,7 +2245,7 @@ framed:
 		e.ssaStats.goCalls++
 	}
 	s.goCalls++
-	if jitCallUnsettled(e, pc, in) {
+	if in.Op != bytecode.OpIterNextOrJump && jitCallUnsettled(e, pc, in) {
 		r.jitCallSeen(f, e, pc, sp, in)
 	}
 	if !marking {
@@ -2453,6 +2462,9 @@ func jitGoCallInstr(op uint64) (bytecode.Instr, int) {
 		n++
 	case abi.GoCallNew:
 		in.Op = bytecode.OpNew
+	case abi.GoCallStep:
+		// A loop's step, its cursor the one operand.
+		return bytecode.Instr{Op: bytecode.OpIterNextOrJump}, 1
 	}
 	return in, n
 }
@@ -2473,6 +2485,15 @@ func jitCallUnsettled(e *jitEntry, pc int, in bytecode.Instr) bool {
 // as V8's code calls a builtin it knows through its own stub, not the
 // generic Call.
 func (r *Runtime) jitCallMade(in bytecode.Instr, sp int) (Value, error) {
+	if in.Op == bytecode.OpIterNextOrJump {
+		// A loop's step: its next value, or, the cursor done, the
+		// uninitialized value (abi.GoCallStep).
+		v, ok, err := r.iterNext(r.stack[sp-1])
+		if err == nil && !ok {
+			v = uninitialized
+		}
+		return v, err
+	}
 	if in.Op != bytecode.OpNew {
 		argc := int(in.A)
 		if callee := r.stack[sp-argc-1]; callee.IsObject() {
@@ -5580,6 +5601,21 @@ func (r *Runtime) jitFinishExit(f *frame, e *jitEntry, l *jitNativeLevel) (Value
 // the interpreter takes from there.
 func (r *Runtime) jitCallResult(f *frame, pc, depth int, v Value, err error) (int, bool) {
 	in := f.cl.fn.Code[pc]
+	if in.Op == bytecode.OpIterNextOrJump {
+		// A loop's step Go made (abi.GoCallStep): its cursor stays, and the
+		// next value goes on it; or, done, the loop's end is next.
+		sp := f.base + depth
+		f.pc = uint32(pc + 1)
+		switch {
+		case err != nil:
+			return sp, false
+		case v == uninitialized:
+			f.pc = in.A
+			return sp, true
+		}
+		r.stack[sp] = v
+		return sp + 1, true
+	}
 	sp := f.base + depth - int(in.A) - 1
 	switch in.Op {
 	case bytecode.OpCallMethod:
@@ -5689,4 +5725,11 @@ func (r *Runtime) jitCatch(f *frame, e *jitEntry, sp int, err error) (int, error
 		return sp, err, false
 	}
 	return sp, nil, !e.entrySlow && e.ssa.HasEntry(int(f.pc))
+}
+
+// jitTypeWord is the type word an interface holding x has (abi.Encoding's
+// IterState): what native code compares an object's data with to know
+// what it holds.
+func jitTypeWord(x any) uint64 {
+	return uint64((*[2]uintptr)(unsafe.Pointer(&x))[0])
 }

@@ -816,7 +816,69 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 // collector included: the frame's registers are read again, and every
 // store after it tests the collector's flag, as every store does.
 func (c *compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(amd64.Cond)) {
+	if site.Step && c.enc.IterState != 0 {
+		// A loop's step over an array native code makes itself; any other
+		// Go makes.
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.iterStep(v, slow)
+		c.a.Jmp(join)
+		c.a.Bind(slow)
+		c.goCallOp(v, goOpWord(site), guard, false)
+		c.a.Bind(join)
+		c.a.Load(scratchA, regCtx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
+		c.setG(v, scratchA)
+		return
+	}
 	c.goCallOp(v, goOpWord(site), guard, false)
+}
+
+// iterStep makes call v, a loop's step (ssa.CallSite's Step), where the
+// cursor's state, read in place (abi.Encoding's IterState), walks an array
+// whose next element is within its dense elements and no hole, and the
+// collector does not mark: the element is copied into the call's keep cell,
+// both words, and the index advanced, as iterNext does -- as V8's code
+// iterates an array without a call. Any other step goes to slow, where Go
+// makes it. It uses every scratch register and xScratch2, and no other.
+func (c *compiler) iterStep(v *ssa.Value, slow amd64.Label) {
+	x := v.Args[0]
+	c.pointerWord(x, c.gpr(x, scratchA))
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	c.a.Jcc(amd64.CondE, slow)
+	c.a.MovImm(scratchC, c.enc.WriteBarrier)
+	c.a.LoadU8(scratchC, scratchC, 0)
+	c.a.Op(amd64.Test, scratchC, scratchC, false)
+	c.a.Jcc(amd64.CondNE, slow)
+	c.a.Load(scratchC, scratchB, c.enc.ObjectData)
+	c.a.MovImm(scratchA, c.enc.IterState)
+	c.a.Op(amd64.Cmp, scratchC, scratchA, true)
+	c.a.Jcc(amd64.CondNE, slow)
+	c.a.Load(scratchB, scratchB, c.enc.ObjectData+8)
+	c.a.LoadU8(scratchC, scratchB, c.enc.IterDone)
+	c.a.Op(amd64.Test, scratchC, scratchC, false)
+	c.a.Jcc(amd64.CondNE, slow)
+	c.a.MovQToX(xScratch2, scratchB)
+	c.a.Load(scratchA, scratchB, c.enc.IterIdx)
+	c.a.Load(scratchC, scratchB, c.enc.IterArr)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	c.a.Jcc(amd64.CondE, slow)
+	c.a.Load(scratchB, scratchC, c.enc.ObjectElems+8)
+	c.a.Op(amd64.Cmp, scratchA, scratchB, true)
+	c.a.Jcc(amd64.CondAE, slow)
+	c.a.Load(scratchB, scratchC, c.enc.ObjectElems)
+	c.a.ShiftImm(amd64.Shl, scratchA, 4, true)
+	c.a.Op(amd64.Add, scratchA, scratchB, true)
+	c.a.Load(scratchB, scratchA, c.enc.NumOffset)
+	c.a.MovImm(scratchC, c.enc.Uninitialized)
+	c.a.Op(amd64.Cmp, scratchB, scratchC, true)
+	c.a.Jcc(amd64.CondE, slow)
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.a.Store(regCtx, keep+c.enc.NumOffset, scratchB)
+	c.a.Load(scratchC, scratchA, c.enc.RefOffset)
+	c.a.Store(regCtx, keep+c.enc.RefOffset, scratchC)
+	c.a.MovQFromX(scratchB, xScratch2)
+	c.a.Load(scratchC, scratchB, c.enc.IterIdx)
+	c.a.OpImm(amd64.Add, scratchC, 1, true)
+	c.a.Store(scratchB, c.enc.IterIdx, scratchC)
 }
 
 // goCallOp is goCall's, of the call of Go op (ssa.CallSite's Go, and what

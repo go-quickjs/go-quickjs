@@ -1002,6 +1002,18 @@ func TestJITObjectLayout(t *testing.T) {
 	if int(ClassArray) > 255 || int(objHasSparseElements) > 255 {
 		t.Fatal("a class or flag native code tests is out of a byte")
 	}
+	// A loop's cursor, which a step reads in place (mir's iterStep): its
+	// data an interface, the type word then the pointer; the state's done
+	// a byte, its array a pointer, its index an int it adds one to.
+	var st iterState
+	if unsafe.Sizeof(o.data) != 2*unsafe.Sizeof(uintptr(0)) || unsafe.Sizeof(st.done) != 1 ||
+		unsafe.Sizeof(st.arr) != unsafe.Sizeof(uintptr(0)) || unsafe.Sizeof(st.idx) != 8 {
+		t.Fatal("an iteration state field native code reads changed its width; update jitEncoding and mir")
+	}
+	var x any = &st
+	if jitTypeWord(x) != jitEncoding.IterState || (*[2]unsafe.Pointer)(unsafe.Pointer(&x))[1] != unsafe.Pointer(&st) {
+		t.Fatal("an interface's words are not the type's and the pointer, as native code reads them")
+	}
 }
 
 func TestJITEqualityBoundaries(t *testing.T) {

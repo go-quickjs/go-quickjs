@@ -1293,6 +1293,8 @@ func goOpWord(site *ssa.CallSite) uint64 {
 			op |= abi.GoCallMethod << abi.GoOpKindShift
 		case site.New:
 			op |= abi.GoCallNew << abi.GoOpKindShift
+		case site.Step:
+			op |= abi.GoCallStep << abi.GoOpKindShift
 		}
 	}
 	return op

@@ -2225,7 +2225,56 @@ func (c *a64Compiler) pointerWord(x *ssa.Value, w arm64.Reg) {
 
 // goCall calls Go, as amd64's does.
 func (c *a64Compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(arm64.Cond)) {
+	if site.Step && c.enc.IterState != 0 {
+		slow, join := c.a.NewLabel(), c.a.NewLabel()
+		c.iterStep(v, slow)
+		c.a.B(join)
+		c.a.Bind(slow)
+		c.goCallOp(v, goOpWord(site), false)
+		c.a.Bind(join)
+		c.a.Load(a64A, a64Ctx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
+		c.setG(v, a64A)
+		return
+	}
 	c.goCallOp(v, goOpWord(site), false)
+}
+
+// iterStep is amd64's: a loop's step over an array, made in place. It
+// uses A, B, C and D, and no other.
+func (c *a64Compiler) iterStep(v *ssa.Value, slow arm64.Label) {
+	x := v.Args[0]
+	c.pointerWord(x, c.gpr(x, a64A))
+	c.a.Cbz(a64B, slow, true)
+	c.a.MovImm(a64C, c.enc.WriteBarrier)
+	c.a.LoadU8(a64C, a64C, 0)
+	c.a.Cbnz(a64C, slow, false)
+	c.a.Load(a64C, a64B, c.enc.ObjectData)
+	c.a.MovImm(a64A, c.enc.IterState)
+	c.a.Cmp(a64C, a64A, true)
+	c.a.BCond(arm64.NE, slow)
+	c.a.Load(a64D, a64B, c.enc.ObjectData+8)
+	c.a.LoadU8(a64C, a64D, c.enc.IterDone)
+	c.a.Cbnz(a64C, slow, false)
+	c.a.Load(a64A, a64D, c.enc.IterIdx)
+	c.a.Load(a64C, a64D, c.enc.IterArr)
+	c.a.Cbz(a64C, slow, true)
+	c.a.Load(a64B, a64C, c.enc.ObjectElems+8)
+	c.a.Cmp(a64A, a64B, true)
+	c.a.BCond(arm64.HS, slow)
+	c.a.Load(a64B, a64C, c.enc.ObjectElems)
+	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
+	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.Load(a64B, a64A, c.enc.NumOffset)
+	c.a.MovImm(a64C, c.enc.Uninitialized)
+	c.a.Cmp(a64B, a64C, true)
+	c.a.BCond(arm64.EQ, slow)
+	keep := abi.OffKeep + int32(v.Index)*int32(c.enc.ValueSize)
+	c.a.Store(a64Ctx, keep+c.enc.NumOffset, a64B)
+	c.a.Load(a64C, a64A, c.enc.RefOffset)
+	c.a.Store(a64Ctx, keep+c.enc.RefOffset, a64C)
+	c.a.Load(a64C, a64D, c.enc.IterIdx)
+	c.a.AddImm(a64C, a64C, 1, true)
+	c.a.Store(a64D, c.enc.IterIdx, a64C)
 }
 
 // goCallOp is goCall's, of the call of Go op, as amd64's, every

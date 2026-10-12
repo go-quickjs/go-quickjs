@@ -1473,7 +1473,11 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this bool) ir.Instr
 	case bytecode.OpNewDisposeCapability, bytecode.OpAddDisposable, bytecode.OpDispose:
 		// A using declaration's resources, Go's (jitHost).
 		return ir.Instruction{Op: ir.Host}
-	case bytecode.OpForOfStart, bytecode.OpForInStart, bytecode.OpIterNextOrJump, bytecode.OpIterClose, bytecode.OpIterCloseNormal,
+	case bytecode.OpIterNextOrJump:
+		// A call of Go from native code where it can, which branches on
+		// its answer; an exit otherwise.
+		return ir.Instruction{Op: ir.IterStep, Left: top, Dest: sp, Target: int(in.A)}
+	case bytecode.OpForOfStart, bytecode.OpForInStart, bytecode.OpIterClose, bytecode.OpIterCloseNormal,
 		bytecode.OpIterResume, bytecode.OpIterUnpackDelegate, bytecode.OpYieldStar:
 		// A for...of or for...in loop's cursor, or yield*'s delegate, Go's
 		// (jitHost), which sets where native code goes on: past a step
