@@ -292,8 +292,11 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		}
 		if e.branch {
 			targetDepth := nextDepth
-			if e.keep {
+			switch {
+			case e.keep:
 				targetDepth = depth
+			case e.jumps:
+				targetDepth = depth + e.jump
 			}
 			if err := join(e.target(fn.Code[pc]), targetDepth, chain); err != nil {
 				return nil, err
@@ -307,21 +310,9 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 	}
 	p := &ir.Program{Locals: fn.LocalCount + len(fn.Upvalues), StackSize: fn.MaxStack, This: this, Maps: maps, Code: make([]ir.Instruction, len(fn.Code)),
 		Handlers: table, HandlerAt: chains}
-	if iters {
-		for pc, in := range fn.Code {
-			switch {
-			case maps[pc].Depth < 0:
-			case in.Op == bytecode.OpIterNextOrJump, in.Op == bytecode.OpIterUnpackDelegate, in.Op == bytecode.OpIterResume:
-				// Go goes on at the loop's end, where the cursor is done, or
-				// where the delegation ends.
-				to := int(in.A)
-				if in.Op == bytecode.OpIterResume {
-					to = int(in.B)
-				}
-				if !slices.Contains(p.Entries, to) {
-					p.Entries = append(p.Entries, to)
-				}
-			}
+	for pc, in := range fn.Code {
+		if to, ok := goBranch(in); ok && maps[pc].Depth >= 0 && !slices.Contains(p.Entries, to) {
+			p.Entries = append(p.Entries, to)
 		}
 	}
 	for _, h := range table {
@@ -868,6 +859,28 @@ type effect struct {
 	terminal    bool
 	// targetB says the branch's target is the instruction's B, not its A.
 	targetB bool
+	// jumps says the branch's target has jump operands more than the
+	// instruction had, rather than as many as after it (or, keep, before).
+	jumps bool
+	jump  int
+}
+
+// goBranch is where Go may go on at, past in, an instruction it runs
+// (jitHost) and that may jump: a loop's end, where its cursor is done; a
+// delegation's; an await using scope's disposal's, where nothing is left
+// to await. Native code has an entry there (ir.Program's Entries).
+func goBranch(in bytecode.Instr) (int, bool) {
+	switch in.Op {
+	case bytecode.OpIterNextOrJump, bytecode.OpIterUnpackDelegate:
+		return int(in.A), true
+	case bytecode.OpIterResume:
+		return int(in.B), true
+	case bytecode.OpDispose:
+		if in.B&bytecode.DisposeStep != 0 && in.B&bytecode.DisposeFinish == 0 {
+			return int(in.A), true
+		}
+	}
+	return 0, false
 }
 
 // target is the instruction in's branch target, where e says it branches.
@@ -1128,6 +1141,31 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 		// beneath it, read; with DisposeAsync, the disposal's promise
 		// pushed. A step of an await using scope's disposal, which jumps
 		// where Go says, is the tree tier's.
+		if in.B&bytecode.DisposeStep != 0 {
+			// A step of an await using scope's disposal: the capability
+			// popped, and with DisposeFail what the await before it threw;
+			// with DisposeStart and DisposeRecord a finally clause's record
+			// beneath read. A value to await pushed; or, none left, a jump
+			// to A, which Go takes (jitHost), but at the end.
+			if !fn.Async {
+				return bad("invalid disposal step")
+			}
+			e := effect{need: 1}
+			if in.B&bytecode.DisposeFail != 0 {
+				e.need, e.delta = 2, -1
+			} else if in.B&bytecode.DisposeStart != 0 && in.B&bytecode.DisposeRecord != 0 {
+				e.need = 3
+			}
+			if in.B&bytecode.DisposeFinish != 0 {
+				e.delta--
+				return e, nil
+			}
+			if uint64(in.A) >= uint64(len(fn.Code)) {
+				return bad("branch target out of bounds")
+			}
+			e.branch, e.jumps, e.jump = true, true, e.delta-1
+			return e, nil
+		}
 		if in.B != 0 {
 			return bad("unsupported opcode " + in.Op.String())
 		}

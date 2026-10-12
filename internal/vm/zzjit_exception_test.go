@@ -398,3 +398,44 @@ func TestJITYieldStar(t *testing.T) {
 		}
 	}
 }
+
+// An await using scope's disposal is compiled: each step is Go's, which
+// runs the disposers until one leaves a value to await -- awaited natively
+// as any await -- or none is left, when native code goes on where the
+// disposal ends.
+func TestJITAwaitUsing(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		var log = []
+		function res(name, fail) { return { [Symbol.asyncDispose]: makeDispose(name, fail) } }
+		function syncRes(name) { return { [Symbol.dispose]: makeDispose(name) } }
+		function makeDispose(name, fail) { return function () { log.push(name); if (fail) return Promise.reject(new Error('dispose ' + name)); return Promise.resolve() } }
+		async function scoped(n) {
+			let s = 0
+			for (let i = 0; i < n; i++) {
+				await using a = res('a' + i), b = syncRes('b' + i)
+				s += i
+			}
+			return s
+		}
+		async function failing(n) {
+			let msg = ''
+			for (let i = 0; i < n; i++) {
+				try { await using r = res('f' + i, i % 2 === 1); if (i === 2) throw new Error('body') }
+				catch (e) { msg += e.constructor.name + ':' + e.message + ';' }
+			}
+			return msg
+		}
+		function take() { const l = log.join(); log = []; return l }
+		var out
+	`
+	r := jitAgreesForTest(t, setup,
+		`(scoped(6).then(v => out = v + take()), 0)`, `out`, `(scoped(6).then(v => out = v + take()), 0)`, `out`,
+		`(failing(5).then(v => out = v + take()), 0)`, `out`, `(failing(5).then(v => out = v + take()), 0)`, `out`,
+	)
+	for _, name := range []string{"scoped", "failing"} {
+		jitNativeForTest(t, r, name)
+	}
+}

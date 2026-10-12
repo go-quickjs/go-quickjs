@@ -1723,10 +1723,6 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			bytecode.OpForOfStart, bytecode.OpForInStart, bytecode.OpIterNextOrJump, bytecode.OpIterClose, bytecode.OpIterCloseNormal,
 			bytecode.OpIterResume, bytecode.OpIterUnpackDelegate:
 		case bytecode.OpDispose:
-			if in.B != 0 {
-				// A step of an await using scope's disposal.
-				return sp, steps, nil
-			}
 		default:
 			return sp, steps, nil
 		}
@@ -1926,7 +1922,7 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			continue
 		case bytecode.OpNewDisposeCapability, bytecode.OpAddDisposable, bytecode.OpDispose:
 			var push bool
-			if sp, v, push, err = r.jitUsing(in, sp); err != nil {
+			if sp, v, push, err = r.jitUsing(f, in, sp); err != nil {
 				return sp, steps, err
 			}
 			if !push {
@@ -2005,12 +2001,32 @@ func (r *Runtime) jitUnpackDelegate(in bytecode.Instr, sp int) (int, Value, bool
 	return sp, val, true, nil
 }
 
-// jitUsing runs in, new_dispose_capability, add_disposable or dispose (but
-// a step of an await using scope's disposal), with the stack's top at sp,
-// as executeAt's cases do: the top after it, and the value it pushes, if
-// push.
-func (r *Runtime) jitUsing(in bytecode.Instr, sp int) (int, Value, bool, error) {
+// jitUsing runs in, new_dispose_capability, add_disposable or dispose,
+// with the stack's top at sp, as executeAt's cases do: the top after it,
+// and the value it pushes, if push. A step of an await using scope's
+// disposal that has nothing left to await jumps (goBranch's target),
+// where f's pc is left.
+func (r *Runtime) jitUsing(f *frame, in bytecode.Instr, sp int) (int, Value, bool, error) {
 	stack := r.stack
+	if in.Op == bytecode.OpDispose && in.B&bytecode.DisposeStep != 0 {
+		sp--
+		cp := stack[sp]
+		var a, b Value
+		if in.B&bytecode.DisposeFail != 0 {
+			sp--
+			a = stack[sp]
+		} else if in.B&bytecode.DisposeStart != 0 && in.B&bytecode.DisposeRecord != 0 {
+			a, b = stack[sp-2], stack[sp-1]
+		}
+		v, more, err := usingStep(r, cp, a, b, in.B)
+		if err != nil || more {
+			return sp, v, more, err
+		}
+		if in.B&bytecode.DisposeFinish == 0 {
+			f.pc = in.A
+		}
+		return sp, Undefined, false, nil
+	}
 	switch in.Op {
 	case bytecode.OpNewDisposeCapability:
 		o := newObject(nil, ClassObject)
