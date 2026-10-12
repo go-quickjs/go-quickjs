@@ -228,3 +228,66 @@ func TestJITGenerators(t *testing.T) {
 		t.Fatalf("left %d frames", r.frameDepth)
 	}
 }
+
+// A scope with using declarations is a try statement whose finally clause
+// disposes of what it bound: its resources are Go's to add and dispose of
+// at host exits, and native code goes on after each. Disposal runs on every
+// way out of the scope, last resource first, an error from a disposer
+// folded into the exception in flight (SuppressedError).
+func TestJITUsing(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		var log = []
+		function res(name, fail) { return { [Symbol.dispose]: makeDispose(name, fail) } }
+		function makeDispose(name, fail) { return function () { log.push(name); if (fail) throw new Error('dispose ' + name) } }
+		function scoped(n) {
+			let s = 0
+			for (let i = 0; i < n; i++) {
+				using a = res('a' + i), b = res('b' + i)
+				s += i
+				if (i === 5) break
+			}
+			return s
+		}
+		function early(x) { using r = res('r' + x); if (x > 1) return x * 10; return -1 }
+		function callsEarly(n) { let s = 0; for (let i = 0; i < n; i++) s += early(i % 3); return s }
+		function throwsIn(n) {
+			let s = 0
+			for (let i = 0; i < n; i++) {
+				try { using r = res('t' + i); if (i % 2) throw new Error('body ' + i); s++ }
+				catch (e) { s += 100 }
+			}
+			return s
+		}
+		function failing(n) {
+			let msg = ''
+			for (let i = 0; i < n; i++) {
+				try { using r = res('f' + i, true); if (i === 1) throw new Error('body') }
+				catch (e) { msg += e.constructor.name + ':' + e.message + (e.suppressed ? '/' + e.suppressed.message : '') + ';' }
+			}
+			return msg
+		}
+		function take() { const l = log.join(); log = []; return l }
+	`
+	r := jitAgreesForTest(t, setup,
+		`scoped(10) + take()`, `scoped(10) + take()`,
+		`callsEarly(12) + take()`, `callsEarly(12) + take()`,
+		`throwsIn(10) + take()`, `throwsIn(10) + take()`,
+		`failing(3) + take()`, `failing(3) + take()`,
+	)
+	for _, name := range []string{"scoped", "throwsIn", "failing"} {
+		jitNativeForTest(t, r, name)
+	}
+	// A scope's resources are added and disposed of at exits native code
+	// goes on after: scoped's runs, which throw nothing, never finish in
+	// the interpreter.
+	interpreted := r.jit.interpreted
+	if _, err := r.Run(compileForTest(t, `scoped(5)`)); err != nil {
+		t.Fatal(err)
+	}
+	if r.jit.interpreted != interpreted {
+		t.Fatalf("scoped finished in the interpreter %d times", r.jit.interpreted-interpreted)
+	}
+}

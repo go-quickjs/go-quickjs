@@ -1711,7 +1711,12 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			bytecode.OpGetIndex, bytecode.OpNew, bytecode.OpPushConst, bytecode.OpInstanceOf, bytecode.OpTypeOf,
 			bytecode.OpCheckGlobalRef, bytecode.OpAssertResolved, bytecode.OpNewObject, bytecode.OpNewRegExp, bytecode.OpDefineField,
 			bytecode.OpPushEmptyString, bytecode.OpGetUpvalue, bytecode.OpGetUpvalueCheck, bytecode.OpSetUpvalue,
-			bytecode.OpInitUpvalue, bytecode.OpSetUpvalueCheck, bytecode.OpConcat:
+			bytecode.OpInitUpvalue, bytecode.OpSetUpvalueCheck, bytecode.OpConcat, bytecode.OpNewDisposeCapability, bytecode.OpAddDisposable:
+		case bytecode.OpDispose:
+			if in.B != 0 {
+				// A step of an await using scope's disposal.
+				return sp, steps, nil
+			}
 		default:
 			return sp, steps, nil
 		}
@@ -1862,6 +1867,14 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			var yes bool
 			yes, err = r.instanceOfAt(&f.cl.ic[in.B], stack[sp], stack[sp+1])
 			v = Bool(yes)
+		case bytecode.OpNewDisposeCapability, bytecode.OpAddDisposable, bytecode.OpDispose:
+			var push bool
+			if sp, v, push, err = r.jitUsing(in, sp); err != nil {
+				return sp, steps, err
+			}
+			if !push {
+				continue
+			}
 		default:
 			panic("invalid JIT host operation")
 		}
@@ -1905,6 +1918,47 @@ func (r *Runtime) jitConcat(parts []Value) (*String, error) {
 		return nil, r.throwStringLength()
 	}
 	return out, nil
+}
+
+// jitUsing runs in, new_dispose_capability, add_disposable or dispose (but
+// a step of an await using scope's disposal), with the stack's top at sp,
+// as executeAt's cases do: the top after it, and the value it pushes, if
+// push.
+func (r *Runtime) jitUsing(in bytecode.Instr, sp int) (int, Value, bool, error) {
+	stack := r.stack
+	switch in.Op {
+	case bytecode.OpNewDisposeCapability:
+		o := newObject(nil, ClassObject)
+		o.data = &disposeCapability{}
+		return sp, Obj(o), true, nil
+	case bytecode.OpAddDisposable:
+		sp--
+		c := stack[sp].Object().data.(*disposeCapability)
+		return sp, Undefined, false, r.addDisposableResource(c, stack[sp-1], in.A == 1)
+	}
+	sp--
+	c := stack[sp].Object().data.(*disposeCapability)
+	// A finally clause knows from its record whether an exception is what
+	// is leaving the scope, which the disposal folds into what it throws.
+	var completion error
+	if in.A&bytecode.DisposeRecord != 0 && completionKind(stack[sp-1].Number()) == completionThrow {
+		completion = r.throw(stack[sp-2])
+	}
+	if in.A&bytecode.DisposeAsync != 0 && c.hasAsync() {
+		p := r.newPromise()
+		r.disposeResourcesAsync(c, completion, func(err error) {
+			if err == nil || err == completion {
+				r.resolvePromise(p, Undefined)
+				return
+			}
+			r.rejectPromise(p, thrownValue(err))
+		})
+		return sp, Obj(p), true, nil
+	}
+	if err := r.disposeResources(c, completion); err != nil && err != completion {
+		return sp, Undefined, false, err
+	}
+	return sp, Undefined, in.A&bytecode.DisposeAsync != 0, nil
 }
 
 // jitGetProp is get_prop as the interpreter does it for an object: its own

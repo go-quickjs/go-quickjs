@@ -182,7 +182,8 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// throws it, as V8's code calls the runtime to throw.
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
-		host = host || str || in.Op == bytecode.OpYield || in.Op == bytecode.OpAwait || in.Op == bytecode.OpThrow || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpApplyArguments || in.Op == bytecode.OpNew || in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict || in.Op == bytecode.OpCheckGlobalRef || in.Op == bytecode.OpNewObject || in.Op == bytecode.OpNewRegExp || in.Op == bytecode.OpDefineField || in.Op == bytecode.OpPushEmptyString || in.Op == bytecode.OpConcat || in.Op == bytecode.OpNewArray || in.Op == bytecode.OpCall || in.Op == bytecode.OpCallMethod || in.Op == bytecode.OpGetGlobal || in.Op == bytecode.OpGetPropThis || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
+		host = host || str || in.Op == bytecode.OpYield || in.Op == bytecode.OpAwait || in.Op == bytecode.OpThrow ||
+			in.Op == bytecode.OpNewDisposeCapability || in.Op == bytecode.OpAddDisposable || in.Op == bytecode.OpDispose || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpApplyArguments || in.Op == bytecode.OpNew || in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict || in.Op == bytecode.OpCheckGlobalRef || in.Op == bytecode.OpNewObject || in.Op == bytecode.OpNewRegExp || in.Op == bytecode.OpDefineField || in.Op == bytecode.OpPushEmptyString || in.Op == bytecode.OpConcat || in.Op == bytecode.OpNewArray || in.Op == bytecode.OpCall || in.Op == bytecode.OpCallMethod || in.Op == bytecode.OpGetGlobal || in.Op == bytecode.OpGetPropThis || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		property = property || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		this = this || in.Op == bytecode.OpPushThis
 		raw := uint32(in.Op)
@@ -1016,6 +1017,27 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 	case bytecode.OpRethrow:
 		// A finally clause's completion record: its value, then its kind.
 		return effect{need: 2, delta: -2}, nil
+	case bytecode.OpNewDisposeCapability:
+		return effect{delta: 1}, nil
+	case bytecode.OpAddDisposable:
+		// The capability popped, the resource beneath it kept.
+		return effect{need: 2, delta: -1}, nil
+	case bytecode.OpDispose:
+		// The capability popped; with a record, a finally clause's,
+		// beneath it, read; with DisposeAsync, the disposal's promise
+		// pushed. A step of an await using scope's disposal, which jumps
+		// where Go says, is the tree tier's.
+		if in.B != 0 {
+			return bad("unsupported opcode " + in.Op.String())
+		}
+		e := effect{need: 1, delta: -1}
+		if in.A&bytecode.DisposeRecord != 0 {
+			e.need = 3
+		}
+		if in.A&bytecode.DisposeAsync != 0 {
+			e.delta = 0
+		}
+		return e, nil
 	case bytecode.OpYield, bytecode.OpAwait:
 		// The value handed out, and the one a resumption sends in its
 		// place.
@@ -1299,6 +1321,9 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this bool) ir.Instr
 	case bytecode.OpYield, bytecode.OpAwait:
 		// Go suspends the frame where native code leaves it, and a
 		// resumption enters native code again after it.
+		return ir.Instruction{Op: ir.Host}
+	case bytecode.OpNewDisposeCapability, bytecode.OpAddDisposable, bytecode.OpDispose:
+		// A using declaration's resources, Go's (jitHost).
 		return ir.Instruction{Op: ir.Host}
 	}
 	// describe accepted an opcode this switch does not translate. Becoming a
