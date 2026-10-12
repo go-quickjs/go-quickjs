@@ -63,16 +63,61 @@ func (c Cond) Invert() Cond { return c ^ 1 }
 // Label is a position in the code, bound once.
 type Label int
 
-// Asm accumulates code. Branches to labels are patched by Finish.
+// Asm accumulates code. Branches to labels are patched by Finish, which
+// shortens those that reach their labels with a byte's displacement.
 type Asm struct {
 	buf    []byte
 	labels []int // offset, or -1 while unbound
 	fixups []fixup
+	// short says which fixups' jumps Finish shortened, and removed how many
+	// bytes the fixups before each, and it, removed (Moved).
+	short   []bool
+	never   []bool
+	removed []int
+	past    []int32
+	out     []byte
+	// bound are the labels in the order they were bound, which is their
+	// positions' order; at, by label, the index of the first fixup at or
+	// past it (Finish's).
+	bound []Label
+	at    []int32
 }
 
 type fixup struct {
 	at    int // where the rel32 is
 	label Label
+	kind  uint8
+}
+
+// The fixups' kinds: a lea's displacement, which stays 32 bits, and a
+// jump's or a conditional jump's, which Finish shortens where it can --
+// to two bytes from five and from six.
+const (
+	fixLea uint8 = iota
+	fixJmp
+	fixJcc
+)
+
+// shortened is how many bytes a fixup of kind k's jump loses shortened, and
+// opLen how many bytes precede its displacement.
+func shortened(k uint8) int {
+	switch k {
+	case fixJmp:
+		return 3
+	case fixJcc:
+		return 4
+	}
+	return 0
+}
+
+func opLen(k uint8) int {
+	switch k {
+	case fixJmp:
+		return 1
+	case fixJcc:
+		return 2
+	}
+	return 3
 }
 
 // Len is the number of bytes emitted so far.
@@ -81,11 +126,13 @@ func (a *Asm) Len() int { return len(a.buf) }
 // Reset empties the assembler for the next function, keeping its memory.
 func (a *Asm) Reset() {
 	a.buf, a.labels, a.fixups = a.buf[:0], a.labels[:0], a.fixups[:0]
+	a.short, a.never, a.removed, a.past, a.bound, a.at = a.short[:0], a.never[:0], a.removed[:0], a.past[:0], a.bound[:0], a.at[:0]
 }
 
 // Bytes is the memory the assembler keeps for the next function.
 func (a *Asm) Bytes() int {
-	return cap(a.buf)*int(unsafe.Sizeof(a.buf[:1][0])) + cap(a.labels)*int(unsafe.Sizeof(0)) + cap(a.fixups)*int(unsafe.Sizeof(fixup{}))
+	return cap(a.buf)*int(unsafe.Sizeof(a.buf[:1][0])) + cap(a.labels)*int(unsafe.Sizeof(0)) + cap(a.fixups)*int(unsafe.Sizeof(fixup{})) +
+		cap(a.short) + cap(a.never) + cap(a.removed)*int(unsafe.Sizeof(0)) + cap(a.past)*4 + cap(a.out) + cap(a.bound)*int(unsafe.Sizeof(Label(0))) + cap(a.at)*4
 }
 
 // NewLabel makes an unbound label.
@@ -100,22 +147,160 @@ func (a *Asm) Bind(l Label) {
 		panic(fmt.Sprintf("amd64: label %d bound twice", l))
 	}
 	a.labels[l] = len(a.buf)
+	a.bound = append(a.bound, l)
 }
 
 // Offset is a bound label's position.
 func (a *Asm) Offset(l Label) int { return a.labels[l] }
 
-// Finish patches every branch and returns the code.
+// Finish patches every branch and returns the code. A jump whose label is
+// within a byte's displacement of it is shortened, as an assembler relaxes
+// branches: most of a function's jumps are to code near them -- a guard's
+// to its exit's stub, a branch's over a block -- and a jump of four or five
+// bytes' displacement had been an eighth of all the code. Shortening one
+// only brings others' labels nearer, so jumps are shortened until no more
+// can be. Positions taken before (Len) are where Moved says after.
 func (a *Asm) Finish() ([]byte, error) {
-	for _, f := range a.fixups {
-		to := a.labels[f.label]
-		if to < 0 {
+	n := len(a.fixups)
+	a.short = grow(a.short, n)
+	a.removed = grow(a.removed, n)
+	// Each label's index of the first fixup at or past it -- what the
+	// jumps before that remove moves it by -- found in one walk of both,
+	// in their positions' order; and each fixup's label's.
+	a.at = grow(a.at, len(a.labels))
+	k := 0
+	for _, l := range a.bound {
+		for k < n && a.fixups[k].at-opLen(a.fixups[k].kind) < a.labels[l] {
+			k++
+		}
+		a.at[l] = int32(k)
+	}
+	a.past = grow(a.past, n)
+	for i, f := range a.fixups {
+		if a.labels[f.label] < 0 {
 			return nil, fmt.Errorf("amd64: label %d never bound", f.label)
 		}
-		binary.LittleEndian.PutUint32(a.buf[f.at:], uint32(int32(to-(f.at+4))))
+		a.past[i] = a.at[f.label]
 	}
-	return a.buf, nil
+	// A jump too far for a byte's displacement even were every jump
+	// between it and its label shortened never is: it is passed over from
+	// the first round on, as most -- a guard's to its stub, past the
+	// function's blocks -- are.
+	a.never = grow(a.never, n)
+	for i, f := range a.fixups {
+		if f.kind == fixLea {
+			a.never[i] = true
+			continue
+		}
+		start := f.at - opLen(f.kind)
+		d, between := a.labels[f.label]-(start+2), int(a.past[i])-i-1
+		if d < 0 {
+			d, between = -d, i-int(a.past[i])
+		}
+		a.never[i] = d-4*max(between, 0)-4 > 127
+	}
+	for changed := true; changed; {
+		changed = false
+		a.count()
+		for i, f := range a.fixups {
+			if a.short[i] || a.never[i] {
+				continue
+			}
+			start := f.at - opLen(f.kind)
+			from := start + 2
+			if i > 0 {
+				from -= a.removed[i-1]
+			}
+			d := a.movedPast(a.labels[f.label], int(a.past[i])) - from
+			if a.labels[f.label] > start {
+				// A label past it comes nearer by what it loses itself.
+				d -= shortened(f.kind)
+			}
+			if d >= -128 && d <= 127 {
+				a.short[i], changed = true, true
+			}
+		}
+	}
+	a.count()
+	out := a.out[:0]
+	last := 0
+	for i, f := range a.fixups {
+		start := f.at - opLen(f.kind)
+		out = append(out, a.buf[last:start]...)
+		to := a.movedPast(a.labels[f.label], int(a.past[i]))
+		switch {
+		case a.short[i] && f.kind == fixJmp:
+			out = append(out, 0xEB, byte(int8(to-(len(out)+2))))
+		case a.short[i]:
+			out = append(out, 0x70|a.buf[start+1]&0x0F, byte(int8(to-(len(out)+2))))
+		default:
+			out = append(out, a.buf[start:f.at]...)
+			out = binary.LittleEndian.AppendUint32(out, uint32(int32(to-(len(out)+4))))
+		}
+		last = f.at + 4
+	}
+	out = append(out, a.buf[last:]...)
+	for _, l := range a.bound {
+		a.labels[l] = a.movedPast(a.labels[l], int(a.at[l]))
+	}
+	// The code is the buffer kept for the next function's: the
+	// assembler's two buffers trade places.
+	a.out, a.buf = a.buf[:0], out
+	return out, nil
 }
+
+// grow is s with n elements, cleared, from its memory where it has room.
+func grow[T any](s []T, n int) []T {
+	if cap(s) < n {
+		return make([]T, n, n+n/4)
+	}
+	s = s[:n]
+	clear(s)
+	return s
+}
+
+// count fills removed: how many bytes the shortened jumps up to each
+// fixup's, it included, remove.
+func (a *Asm) count() {
+	sum := 0
+	for i, f := range a.fixups {
+		if a.short[i] {
+			sum += shortened(f.kind)
+		}
+		a.removed[i] = sum
+	}
+}
+
+// after is the index of the first fixup whose jump starts at or past at.
+func (a *Asm) after(at int) int {
+	lo, hi := 0, len(a.fixups)
+	for lo < hi {
+		m := int(uint(lo+hi) >> 1)
+		if f := a.fixups[m]; f.at-opLen(f.kind) < at {
+			lo = m + 1
+		} else {
+			hi = m
+		}
+	}
+	return lo
+}
+
+// movedPast is where position at, before Finish, is in the code it returns,
+// i the index of the first fixup at or past it: a position is never inside
+// a jump, so it moves back by what the jumps before it remove.
+func (a *Asm) movedPast(at, i int) int {
+	if i == 0 {
+		return at
+	}
+	return at - a.removed[i-1]
+}
+
+// moved is movedPast, the fixup found.
+func (a *Asm) moved(at int) int { return a.movedPast(at, a.after(at)) }
+
+// Moved is where position at, a Len taken before Finish, is in the code
+// Finish returned.
+func (a *Asm) Moved(at int) int { return a.moved(at) }
 
 // emit, emit2 and emit3 append one, two and three bytes: appends of a
 // fixed number, which the compiler makes a capacity check and stores, not
@@ -178,7 +363,7 @@ func (a *Asm) Ret() { a.emit(0xC3) }
 // Jmp jumps to l.
 func (a *Asm) Jmp(l Label) {
 	a.emit(0xE9)
-	a.fixups = append(a.fixups, fixup{len(a.buf), l})
+	a.fixups = append(a.fixups, fixup{len(a.buf), l, fixJmp})
 	a.imm32(0)
 }
 
@@ -197,14 +382,14 @@ func (a *Asm) LeaLabel(dst Reg, l Label) {
 		rex |= 0x04
 	}
 	a.emit3(rex, 0x8D, byte(dst&7)<<3|5)
-	a.fixups = append(a.fixups, fixup{len(a.buf), l})
+	a.fixups = append(a.fixups, fixup{len(a.buf), l, fixLea})
 	a.imm32(0)
 }
 
 // Jcc jumps to l if c holds.
 func (a *Asm) Jcc(c Cond, l Label) {
 	a.emit2(0x0F, 0x80|byte(c))
-	a.fixups = append(a.fixups, fixup{len(a.buf), l})
+	a.fixups = append(a.fixups, fixup{len(a.buf), l, fixJcc})
 	a.imm32(0)
 }
 
@@ -304,6 +489,14 @@ func (a *Asm) Store(base Reg, disp int32, src Reg) {
 	a.modrmMem(byte(src), base, disp)
 }
 
+// StoreImm stores imm, sign-extended to 64 bits, at [base + disp].
+func (a *Asm) StoreImm(base Reg, disp int32, imm int32) {
+	a.rex(true, 0, byte(base), false)
+	a.emit(0xC7)
+	a.modrmMem(0, base, disp)
+	a.imm32(imm)
+}
+
 // DecMem decrements the 64-bit integer at [base + disp], setting the flags.
 func (a *Asm) DecMem(base Reg, disp int32) {
 	a.rex(true, 0, byte(base), false)
@@ -352,9 +545,15 @@ func (a *Asm) Op(op ALU, dst, src Reg, wide bool) {
 	a.modrmRR(byte(src), byte(dst))
 }
 
-// OpImm is dst op= imm, sign-extended to 64 bits if wide.
+// OpImm is dst op= imm, sign-extended to 64 bits if wide: in a byte where
+// it fits one, signed, as most do -- an increment, a slot's offset.
 func (a *Asm) OpImm(op ALU, dst Reg, imm int32, wide bool) {
 	a.rex(wide, 0, byte(dst), false)
+	if imm >= -128 && imm <= 127 {
+		a.emit2(0x83, 0xC0|op.subcode()<<3|byte(dst)&7)
+		a.emit(byte(int8(imm)))
+		return
+	}
 	a.emit(0x81)
 	a.modrmRR(op.subcode(), byte(dst))
 	a.imm32(imm)

@@ -171,7 +171,24 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 	if err != nil {
 		return nil, err
 	}
+	for pc, at := range entries {
+		// Where the jumps shortened before it moved it.
+		entries[pc] = c.a.Moved(at)
+	}
 	return &Code{Bytes: bytes, Entries: entries, Exits: c.exits, core: c.core}, nil
+}
+
+// storeImm stores the word v at [base + disp]: as an immediate, in one
+// instruction, where it is a 32-bit value sign-extended -- a context's
+// field, an exit's PC, a record's slot -- else through scratch, which
+// holds v after; where an immediate does, scratch is as it was.
+func (c *compiler) storeImm(base amd64.Reg, disp int32, v uint64, scratch amd64.Reg) {
+	if int64(v) == int64(int32(v)) {
+		c.a.StoreImm(base, disp, int32(v))
+		return
+	}
+	c.a.MovImm(scratch, v)
+	c.a.Store(base, disp, scratch)
 }
 
 // slotAddr is the base register and displacement of a frame slot's word.
@@ -370,8 +387,7 @@ func (c *compiler) returnNative() {
 	c.a.Jcc(amd64.CondE, toGo)
 	c.a.Load(scratchA, regCtx, abi.OffRet)
 	c.a.Store(regCtx, abi.OffRetValue+c.enc.NumOffset, scratchA)
-	c.a.MovImm(scratchB, 0)
-	c.a.Store(regCtx, abi.OffRetValue+c.enc.RefOffset, scratchB)
+	c.storeImm(regCtx, abi.OffRetValue+c.enc.RefOffset, 0, scratchB)
 	c.a.Load(scratchC, regCtx, abi.OffRetFrom)
 	c.a.Op(amd64.Test, scratchC, scratchC, true)
 	c.a.Jcc(amd64.CondE, word)
@@ -566,8 +582,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		c.a.Store(regCtx, at+16, w)
 		c.pointerWord(x, w)
 		c.a.Store(regCtx, abi.OffRecordRef+k*8, scratchB)
-		c.a.MovImm(scratchB, uint64(i)|abi.RecordDirect)
-		c.a.Store(regCtx, at, scratchB)
+		c.storeImm(regCtx, at, uint64(i)|abi.RecordDirect, scratchB)
 		record[i] = k
 		k++
 	}
@@ -583,8 +598,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		off int32
 		v   uint64
 	}{{abi.OffExitKind, abi.ExitHost}, {abi.OffExitPC, uint64(s.PC)}, {abi.OffExitDepth, uint64(s.Depth)}, {abi.OffExitSite, uint64(int64(s.Site))}} {
-		c.a.MovImm(scratchA, f.v)
-		c.a.Store(regCtx, f.off, scratchA)
+		c.storeImm(regCtx, f.off, f.v, scratchA)
 	}
 	args, this := sp-site.Argc, calleeSlot-1
 	if site.Via != 0 {
@@ -646,8 +660,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	c.a.Store(calleeCtx, abi.OffUpvalues, tmp)
 	c.a.Store(calleeCtx, abi.OffTailReturn, tmp)
 	c.a.Store(calleeCtx, abi.OffBase, base)
-	c.a.MovImm(tmp, 1)
-	c.a.Store(calleeCtx, abi.OffLive, tmp)
+	c.storeImm(calleeCtx, abi.OffLive, 1, tmp)
 	back := c.a.NewLabel()
 	c.a.LeaLabel(tmp, back)
 	c.a.Store(calleeCtx, abi.OffReturnTo, tmp)
@@ -686,10 +699,8 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 				c.a.Store(locals, at+c.enc.RefOffset, top)
 				continue
 			}
-			c.a.MovImm(top, c.enc.Undefined)
-			c.a.Store(locals, at+c.enc.NumOffset, top)
-			c.a.MovImm(top, 0)
-			c.a.Store(locals, at+c.enc.RefOffset, top)
+			c.storeImm(locals, at+c.enc.NumOffset, c.enc.Undefined, top)
+			c.storeImm(locals, at+c.enc.RefOffset, 0, top)
 		}
 		if t.Pool != 0 {
 			// The receiver: the pool's last object, its cell cleared.
@@ -700,11 +711,9 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 			c.a.ShiftImm(amd64.Shl, top, 3, true)
 			c.a.Op(amd64.Add, top, tmp, true)
 			c.a.Load(high2, top, abi.OffPoolObjects)
-			c.a.MovImm(tmp, 0)
-			c.a.Store(top, abi.OffPoolObjects, tmp)
+			c.storeImm(top, abi.OffPoolObjects, 0, tmp)
 			c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, high2)
-			c.a.MovImm(tmp, c.enc.Object)
-			c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, tmp)
+			c.storeImm(calleeCtx, abi.OffThis+c.enc.NumOffset, c.enc.Object, tmp)
 		} else if (t.ThisSlot >= 0 || site.Method && site.Via == 0) && !direct {
 			nb, nd, rb, rd := words(calleeSlot - 1)
 			c.a.Load(top, nb, nd)
@@ -714,22 +723,17 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		} else if !receiver {
 			// A plain call's receiver, undefined, as the interpreter's frame
 			// has it.
-			c.a.MovImm(top, c.enc.Undefined)
-			c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, top)
-			c.a.MovImm(top, 0)
-			c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, top)
+			c.storeImm(calleeCtx, abi.OffThis+c.enc.NumOffset, c.enc.Undefined, top)
+			c.storeImm(calleeCtx, abi.OffThis+c.enc.RefOffset, 0, top)
 		}
-		c.a.MovImm(top, uint64(t.Closure))
-		c.a.Store(calleeCtx, abi.OffClosure, top)
+		c.storeImm(calleeCtx, abi.OffClosure, uint64(t.Closure), top)
 		if t.Upvalues != 0 {
 			// Its closure's captured bindings (OpUpvalueCell).
-			c.a.MovImm(top, uint64(t.Upvalues))
-			c.a.Store(calleeCtx, abi.OffUpvalues, top)
+			c.storeImm(calleeCtx, abi.OffUpvalues, uint64(t.Upvalues), top)
 		}
 		if t.Pool != 0 {
 			// A construction's new.target, for Go to make its frame with.
-			c.a.MovImm(top, uint64(t.Callee))
-			c.a.Store(calleeCtx, abi.OffNewTarget, top)
+			c.storeImm(calleeCtx, abi.OffNewTarget, uint64(t.Callee), top)
 		}
 		if t.Count != 0 {
 			c.a.MovImm(top, uint64(t.Count))
@@ -922,10 +926,8 @@ func (c *compiler) goCallOp(v *ssa.Value, op uint64, guard func(amd64.Cond), sav
 	}
 	if ssa.GoOp(op&0xff) == ssa.GoCall {
 		// Which call, as an exit at it says.
-		c.a.MovImm(scratchA, uint64(v.State.PC))
-		c.a.Store(regCtx, abi.OffExitPC, scratchA)
-		c.a.MovImm(scratchA, uint64(v.State.Depth))
-		c.a.Store(regCtx, abi.OffExitDepth, scratchA)
+		c.storeImm(regCtx, abi.OffExitPC, uint64(v.State.PC), scratchA)
+		c.storeImm(regCtx, abi.OffExitDepth, uint64(v.State.Depth), scratchA)
 	}
 	if saving {
 		stub := c.stubLabel(v.State, exitKind(v.Aux))
@@ -940,10 +942,8 @@ func (c *compiler) goCallOp(v *ssa.Value, op uint64, guard func(amd64.Cond), sav
 // here; the frame's registers read again, what was live restored. The
 // caller tests GoStatus.
 func (c *compiler) callGo(v *ssa.Value, op uint64, keep int) {
-	c.a.MovImm(scratchA, op)
-	c.a.Store(regCtx, abi.OffGoOp, scratchA)
-	c.a.MovImm(scratchA, uint64(keep))
-	c.a.Store(regCtx, abi.OffGoKeep, scratchA)
+	c.storeImm(regCtx, abi.OffGoOp, op, scratchA)
+	c.storeImm(regCtx, abi.OffGoKeep, uint64(keep), scratchA)
 	for _, sv := range c.savesOf(v) {
 		if sv.float {
 			c.a.StoreSD(regCtx, c.spillDisp(sv.slot), amd64.XReg(sv.reg))
@@ -977,8 +977,7 @@ func (c *compiler) markingExit(v *ssa.Value) {
 	stub := c.stubLabel(v.State, exitKind(v.Aux))
 	c.cold = append(c.cold, func() {
 		c.a.Bind(marked)
-		c.a.MovImm(scratchB, 1)
-		c.a.Store(regCtx, abi.OffExitMarking, scratchB)
+		c.storeImm(regCtx, abi.OffExitMarking, 1, scratchB)
 		c.a.Jmp(stub)
 	})
 }
@@ -1031,8 +1030,7 @@ func (c *compiler) markingTake(v *ssa.Value, site *ssa.CallSite) (amd64.Label, b
 	stub := c.stubLabel(v.State, exitKind(v.Aux))
 	c.cold = append(c.cold, func() {
 		c.a.Bind(marked)
-		c.a.MovImm(scratchA, uint64(site.Pool))
-		c.a.Store(regCtx, abi.OffGoArgs+c.enc.RefOffset, scratchA)
+		c.storeImm(regCtx, abi.OffGoArgs+c.enc.RefOffset, uint64(site.Pool), scratchA)
 		c.goSavingKeep(uint64(ssa.GoTake), v.Index, &stub)
 		if site.Literal && site.Argc != 0 {
 			c.arrayElements(v, true)
@@ -1062,8 +1060,7 @@ func (c *compiler) refillOnEmpty(pool uintptr, guard func(amd64.Cond)) {
 	c.a.Jcc(amd64.CondE, refill)
 	c.cold = append(c.cold, func() {
 		c.a.Bind(refill)
-		c.a.MovImm(scratchA, uint64(pool))
-		c.a.Store(regCtx, abi.OffGoArgs+c.enc.RefOffset, scratchA)
+		c.storeImm(regCtx, abi.OffGoArgs+c.enc.RefOffset, uint64(pool), scratchA)
 		c.callGo(v, uint64(ssa.GoRefill), 0)
 		c.a.Load(scratchB, regCtx, abi.OffGoStatus)
 		c.a.Op(amd64.Test, scratchB, scratchB, true)
@@ -1188,10 +1185,8 @@ func (c *compiler) pop(v *ssa.Value) {
 	c.a.Store(regCtx, at+c.enc.RefOffset, scratchB)
 	c.a.Load(scratchB, scratchA, c.enc.NumOffset)
 	c.a.Store(regCtx, at+c.enc.NumOffset, scratchB)
-	c.a.MovImm(scratchC, c.enc.Undefined)
-	c.a.Store(scratchA, c.enc.NumOffset, scratchC)
-	c.a.MovImm(scratchC, 0)
-	c.a.Store(scratchA, c.enc.RefOffset, scratchC)
+	c.storeImm(scratchA, c.enc.NumOffset, c.enc.Undefined, scratchC)
+	c.storeImm(scratchA, c.enc.RefOffset, 0, scratchC)
 	c.setG(v, scratchB)
 }
 
@@ -1246,8 +1241,7 @@ func (c *compiler) push(v *ssa.Value) {
 	c.a.MovQFromX(scratchA, xScratch0)
 	at := abi.OffKeep + int32(v.Index)*vs
 	c.a.Store(regCtx, at+c.enc.NumOffset, scratchA)
-	c.a.MovImm(scratchB, 0)
-	c.a.Store(regCtx, at+c.enc.RefOffset, scratchB)
+	c.storeImm(regCtx, at+c.enc.RefOffset, 0, scratchB)
 	c.setG(v, scratchA)
 }
 
@@ -1287,11 +1281,9 @@ func (c *compiler) arrayLiteral(v *ssa.Value, site *ssa.CallSite) {
 	c.a.ShiftImm(amd64.Shl, scratchB, 3, true)
 	c.a.Op(amd64.Add, scratchB, scratchA, true)
 	c.a.Load(scratchC, scratchB, abi.OffPoolObjects)
-	c.a.MovImm(scratchA, 0)
-	c.a.Store(scratchB, abi.OffPoolObjects, scratchA)
+	c.storeImm(scratchB, abi.OffPoolObjects, 0, scratchA)
 	c.a.Store(regCtx, at+c.enc.RefOffset, scratchC)
-	c.a.MovImm(scratchA, c.enc.Object)
-	c.a.Store(regCtx, at+c.enc.NumOffset, scratchA)
+	c.storeImm(regCtx, at+c.enc.NumOffset, c.enc.Object, scratchA)
 	c.arrayElements(v, false)
 }
 
@@ -1342,8 +1334,7 @@ func (c *compiler) arrayElements(v *ssa.Value, viaGo bool) {
 		c.a.Store(scratchA, int32(i)*vs+c.enc.RefOffset, scratchB)
 	}
 	c.a.Load(scratchC, regCtx, at+c.enc.RefOffset)
-	c.a.MovImm(scratchB, uint64(len(v.Args)))
-	c.a.Store(scratchC, c.enc.ObjectElems+8, scratchB)
+	c.storeImm(scratchC, c.enc.ObjectElems+8, uint64(len(v.Args)), scratchB)
 	c.a.MovImm(scratchA, c.enc.Object)
 	c.setG(v, scratchA)
 }
@@ -1360,8 +1351,7 @@ func (c *compiler) poolTake(v *ssa.Value, site *ssa.CallSite) {
 	c.a.ShiftImm(amd64.Shl, scratchB, 3, true)
 	c.a.Op(amd64.Add, scratchB, scratchA, true)
 	c.a.Load(scratchC, scratchB, abi.OffPoolObjects)
-	c.a.MovImm(scratchA, 0)
-	c.a.Store(scratchB, abi.OffPoolObjects, scratchA)
+	c.storeImm(scratchB, abi.OffPoolObjects, 0, scratchA)
 	at := abi.OffKeep + int32(v.Index)*vs
 	c.a.Store(regCtx, at+c.enc.RefOffset, scratchC)
 	c.a.MovImm(scratchA, c.enc.Object)
@@ -1546,8 +1536,7 @@ func (c *compiler) exitThen(s *ssa.FrameState, kind uint64, then *amd64.Label) {
 				{abi.OffInlineCallee, uint64(in.Callee)},
 				{abi.OffExitKind, k}, {abi.OffExitPC, uint64(in.PC)}, {abi.OffExitDepth, uint64(in.Depth)}, {abi.OffExitSite, uint64(int64(in.Site))},
 				{abi.OffLive, abi.LiveInline}} {
-				c.a.MovImm(scratchA, f.v)
-				c.a.Store(next, f.off, scratchA)
+				c.storeImm(next, f.off, f.v, scratchA)
 			}
 			if i == 0 {
 				// The callers' frames' first slot, in the VM's stack.
@@ -1578,8 +1567,7 @@ func (c *compiler) tableExit() {
 	for _, x := range c.fprs {
 		c.a.StoreSD(regCtx, abi.OffXRegs+int32(x)*8, amd64.XReg(x))
 	}
-	c.a.MovImm(scratchA, abi.ExitTable)
-	c.a.Store(regCtx, abi.OffExitKind, scratchA)
+	c.storeImm(regCtx, abi.OffExitKind, abi.ExitTable, scratchA)
 	c.a.Ret()
 }
 
@@ -1594,10 +1582,8 @@ func (c *compiler) enterExit() {
 	for _, off := range []int32{abi.OffRecords, abi.OffExitPC, abi.OffExitDepth} {
 		c.a.Store(regCtx, off, scratchA)
 	}
-	c.a.MovImm(scratchA, ^uint64(0))
-	c.a.Store(regCtx, abi.OffExitSite, scratchA)
-	c.a.MovImm(scratchA, abi.ExitEnter)
-	c.a.Store(regCtx, abi.OffExitKind, scratchA)
+	c.storeImm(regCtx, abi.OffExitSite, ^uint64(0), scratchA)
+	c.storeImm(regCtx, abi.OffExitKind, abi.ExitEnter, scratchA)
 	c.a.Ret()
 }
 
@@ -1631,11 +1617,9 @@ func (c *compiler) appendRecord(slot uint64, arg func() amd64.Reg, imm uint64, u
 	if word != nil {
 		c.a.Store(scratchC, abi.OffRecord+16, *word)
 	}
-	c.a.MovImm(scratchB, slot)
-	c.a.Store(scratchC, abi.OffRecord, scratchB)
+	c.storeImm(scratchC, abi.OffRecord, slot, scratchB)
 	if useImm {
-		c.a.MovImm(scratchB, imm)
-		c.a.Store(scratchC, abi.OffRecord+8, scratchB)
+		c.storeImm(scratchC, abi.OffRecord+8, imm, scratchB)
 	} else {
 		c.a.Store(scratchC, abi.OffRecord+8, arg())
 	}
@@ -1653,14 +1637,10 @@ func (c *compiler) gprAfter(v *ssa.Value) func() amd64.Reg {
 
 // record fills the exit record and returns to Go.
 func (c *compiler) record(kind, pc, depth, site uint64, then *amd64.Label) {
-	c.a.MovImm(scratchA, kind)
-	c.a.Store(regCtx, abi.OffExitKind, scratchA)
-	c.a.MovImm(scratchA, pc)
-	c.a.Store(regCtx, abi.OffExitPC, scratchA)
-	c.a.MovImm(scratchA, depth)
-	c.a.Store(regCtx, abi.OffExitDepth, scratchA)
-	c.a.MovImm(scratchA, site)
-	c.a.Store(regCtx, abi.OffExitSite, scratchA)
+	c.storeImm(regCtx, abi.OffExitKind, kind, scratchA)
+	c.storeImm(regCtx, abi.OffExitPC, pc, scratchA)
+	c.storeImm(regCtx, abi.OffExitDepth, depth, scratchA)
+	c.storeImm(regCtx, abi.OffExitSite, site, scratchA)
 	switch {
 	case !c.recorded && then == nil:
 		c.a.Ret()
@@ -1730,8 +1710,7 @@ func (c *compiler) recordsTail() {
 	c.a.Jcc(amd64.CondNE, copyValue)
 	// The primitive Word, with no pointer.
 	c.a.Bind(scalar)
-	c.a.MovImm(scratchB, 0)
-	c.a.Store(scratchA, abi.OffRecord+8, scratchB)
+	c.storeImm(scratchA, abi.OffRecord+8, 0, scratchB)
 	c.a.Bind(next)
 	c.a.MovQFromX(scratchA, xScratch1)
 	c.a.Op(amd64.Test, scratchA, scratchA, true)
@@ -1753,8 +1732,7 @@ func (c *compiler) recordsTail() {
 	c.a.MovQFromX(scratchA, xScratch1)
 	c.a.Op(amd64.Test, scratchA, scratchA, true)
 	c.a.Jcc(amd64.CondNE, write)
-	c.a.MovImm(scratchB, 0)
-	c.a.Store(regCtx, abi.OffRecords, scratchB)
+	c.storeImm(regCtx, abi.OffRecords, 0, scratchB)
 	c.a.Bind(ret)
 	// A native call's writing of its caller's state goes on in the
 	// caller's code (exitThen).
@@ -1762,8 +1740,7 @@ func (c *compiler) recordsTail() {
 	c.a.Load(scratchB, regCtx, abi.OffTailReturn)
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
 	c.a.Jcc(amd64.CondE, toGo)
-	c.a.MovImm(scratchA, 0)
-	c.a.Store(regCtx, abi.OffTailReturn, scratchA)
+	c.storeImm(regCtx, abi.OffTailReturn, 0, scratchA)
 	c.a.JmpReg(scratchB)
 	c.a.Bind(toGo)
 	c.a.Ret()
@@ -1802,12 +1779,10 @@ func (c *compiler) block(b *ssa.Block, next *ssa.Block) {
 			c.a.Store(regCtx, abi.OffRetFrom, scratchC)
 			c.a.Bind(done)
 		}
-		c.a.MovImm(scratchA, abi.ExitReturn)
-		c.a.Store(regCtx, abi.OffExitKind, scratchA)
+		c.storeImm(regCtx, abi.OffExitKind, abi.ExitReturn, scratchA)
 		// Where it returned from, roughly -- its block's PC -- for the work
 		// the stretch did (the VM's jitSSAProfit).
-		c.a.MovImm(scratchA, uint64(b.PC))
-		c.a.Store(regCtx, abi.OffExitSite, scratchA)
+		c.storeImm(regCtx, abi.OffExitSite, uint64(b.PC), scratchA)
 		c.returnNative()
 		c.a.Ret()
 	case ssa.BlockExit:
@@ -2279,10 +2254,8 @@ func (c *compiler) storingCall() {
 	c.a.Store(regCtx, abi.OffGoArgs+c.enc.NumOffset, scratchB)
 	c.a.Store(regCtx, abi.OffGoArgs+c.enc.RefOffset, scratchC)
 	c.a.Store(regCtx, abi.OffGoArgs+size+c.enc.RefOffset, scratchA)
-	c.a.MovImm(scratchA, uint64(ssa.GoStore))
-	c.a.Store(regCtx, abi.OffGoOp, scratchA)
-	c.a.MovImm(scratchA, 0)
-	c.a.Store(regCtx, abi.OffGoKeep, scratchA)
+	c.storeImm(regCtx, abi.OffGoOp, uint64(ssa.GoStore), scratchA)
+	c.storeImm(regCtx, abi.OffGoKeep, 0, scratchA)
 	if !c.savingUsed {
 		c.saving, c.savingUsed = c.a.NewLabel(), true
 	}
@@ -2298,10 +2271,8 @@ func (c *compiler) goSaving(op uint64, stub *amd64.Label) {
 
 // goSavingKeep is goSaving whose result Go writes to keep cell keep.
 func (c *compiler) goSavingKeep(op uint64, keep int, stub *amd64.Label) {
-	c.a.MovImm(scratchA, op)
-	c.a.Store(regCtx, abi.OffGoOp, scratchA)
-	c.a.MovImm(scratchA, uint64(keep))
-	c.a.Store(regCtx, abi.OffGoKeep, scratchA)
+	c.storeImm(regCtx, abi.OffGoOp, op, scratchA)
+	c.storeImm(regCtx, abi.OffGoKeep, uint64(keep), scratchA)
 	// The routine the code's calls of Go share (savingCall), which comes
 	// back here: a site is its operands, not every register's save and
 	// restore, as V8's code calls its RecordWrite and CallRuntime
@@ -2408,8 +2379,7 @@ func (c *compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss amd64.Label
 		if c.enc.CallGo == 0 {
 			// No calls of Go: the collector's marking's exit
 			// (abi.Context.ExitMarking), if it leaves.
-			c.a.MovImm(scratchB, 1)
-			c.a.Store(regCtx, abi.OffExitMarking, scratchB)
+			c.storeImm(regCtx, abi.OffExitMarking, 1, scratchB)
 			c.a.Jmp(miss)
 			return
 		}
@@ -2419,8 +2389,7 @@ func (c *compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss amd64.Label
 		c.a.Store(regCtx, abi.OffGoArgs+2*size+c.enc.RefOffset, scratchB)
 		c.a.Store(regCtx, abi.OffGoArgs+2*size+c.enc.NumOffset, c.gpr(x, scratchA))
 		c.a.Store(regCtx, abi.OffGoArgs+c.enc.RefOffset, c.gpr(v.Args[0], scratchA))
-		c.a.MovImm(scratchB, uint64(v.Key)|uint64(add.Flags)<<32)
-		c.a.Store(regCtx, abi.OffGoArgs+c.enc.NumOffset, scratchB)
+		c.storeImm(regCtx, abi.OffGoArgs+c.enc.NumOffset, uint64(v.Key)|uint64(add.Flags)<<32, scratchB)
 		c.a.MovImm(scratchB, uint64(add.Next))
 		c.a.Store(regCtx, abi.OffGoArgs+size+c.enc.RefOffset, scratchB)
 		c.goSaving(uint64(ssa.GoAddAlong), &miss)
@@ -2431,16 +2400,14 @@ func (c *compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss amd64.Label
 	c.a.MovRR(scratchC, scratchB)
 	c.a.OpImm(amd64.Add, scratchB, 1, true)
 	c.a.Store(o, c.enc.ObjectProps+8, scratchB)
-	c.a.MovImm(scratchB, uint64(add.Next))
-	c.a.Store(o, c.enc.ObjectShape, scratchB)
+	c.storeImm(o, c.enc.ObjectShape, uint64(add.Next), scratchB)
 	c.a.MovRR(scratchB, scratchC)
 	c.a.ShiftImm(amd64.Shl, scratchB, 1, true)
 	c.a.Op(amd64.Add, scratchC, scratchB, true)
 	c.a.ShiftImm(amd64.Shl, scratchC, 3, true)
 	c.a.Load(scratchB, o, c.enc.ObjectProps)
 	c.a.Op(amd64.Add, scratchC, scratchB, true)
-	c.a.MovImm(scratchB, uint64(v.Key)|uint64(add.Flags)<<32)
-	c.a.Store(scratchC, c.enc.PropertyKey, scratchB)
+	c.storeImm(scratchC, c.enc.PropertyKey, uint64(v.Key)|uint64(add.Flags)<<32, scratchB)
 	// The pointer word first: making a lazy value's number word may use
 	// xScratch1.
 	c.a.MovQFromX(scratchB, xScratch1)
@@ -2908,8 +2875,7 @@ func (c *compiler) mathCall(v *ssa.Value) {
 		c.a.Store(regCtx, abi.OffGoArgs+int32(i)*size+c.enc.NumOffset, scratchA)
 	}
 	if ssa.GoOp(v.Index) == ssa.GoMath {
-		c.a.MovImm(scratchA, uint64(v.Aux))
-		c.a.Store(regCtx, abi.OffGoArgs+size+c.enc.NumOffset, scratchA)
+		c.storeImm(regCtx, abi.OffGoArgs+size+c.enc.NumOffset, uint64(v.Aux), scratchA)
 	}
 	c.goSaving(uint64(v.Index), nil)
 	c.a.LoadSD(xScratch0, regCtx, abi.OffGoArgs+c.enc.NumOffset)

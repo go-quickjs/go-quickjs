@@ -47,3 +47,84 @@ func TestMemoryDisplacements(t *testing.T) {
 		}
 	}
 }
+
+// decodeJumps walks code made of single-byte NOPs, jumps and leas (as
+// TestRelaxedJumps makes), and returns each jump's or lea's target.
+func decodeJumps(t *testing.T, code []byte) (targets []int, shortCount int) {
+	t.Helper()
+	for i := 0; i < len(code); {
+		switch b := code[i]; {
+		case b == 0x90:
+			i++
+		case b == 0xEB || b&0xF0 == 0x70:
+			targets = append(targets, i+2+int(int8(code[i+1])))
+			shortCount++
+			i += 2
+		case b == 0xE9:
+			targets = append(targets, i+5+int(int32(binary.LittleEndian.Uint32(code[i+1:]))))
+			i += 5
+		case b == 0x0F && code[i+1]&0xF0 == 0x80:
+			targets = append(targets, i+6+int(int32(binary.LittleEndian.Uint32(code[i+2:]))))
+			i += 6
+		case b == 0x48 && code[i+1] == 0x8D:
+			targets = append(targets, i+7+int(int32(binary.LittleEndian.Uint32(code[i+3:]))))
+			i += 7
+		default:
+			t.Fatalf("unexpected byte %#x at %d", b, i)
+		}
+	}
+	return targets, shortCount
+}
+
+// Finish shortens the jumps whose labels are within a byte's displacement
+// -- one shortened can bring another's label in reach -- and leaves the
+// rest, and every lea, at 32 bits; every branch reaches the position its
+// label moved to, which Moved gives for a position taken before.
+func TestRelaxedJumps(t *testing.T) {
+	var a Asm
+	nops := func(n int) {
+		for range n {
+			a.buf = append(a.buf, 0x90)
+		}
+	}
+	near, far, chained, back, entry := a.NewLabel(), a.NewLabel(), a.NewLabel(), a.NewLabel(), 0
+	a.Bind(back)
+	nops(3)
+	a.Jcc(CondE, near) // 0: near, short
+	nops(10)
+	a.Bind(near)
+	a.Jmp(far) // 1: far, stays long
+	// 2: 126 bytes of code to chained once the jumps between shrink, but
+	// 138 before.
+	a.Jcc(CondNE, chained)
+	for range 4 {
+		a.Jmp(near) // backward, near: short
+	}
+	nops(118)
+	a.Bind(chained)
+	entry = a.Len()
+	nops(300)
+	a.LeaLabel(RAX, back)
+	a.Bind(far)
+	a.Jmp(back) // far back: long
+	code, err := a.Finish()
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets, short := decodeJumps(t, code)
+	want := []int{a.Offset(near), a.Offset(far), a.Offset(chained), a.Offset(near), a.Offset(near), a.Offset(near), a.Offset(near), a.Offset(back), a.Offset(back)}
+	if len(targets) != len(want) {
+		t.Fatalf("%d branches, want %d: % x", len(targets), len(want), code)
+	}
+	for i := range want {
+		if targets[i] != want[i] {
+			t.Fatalf("branch %d reaches %d, its label is at %d", i, targets[i], want[i])
+		}
+	}
+	if short != 6 {
+		t.Fatalf("%d jumps shortened, want 6 (the near ones and the chained one)", short)
+	}
+	if a.Moved(entry) != a.Offset(chained) {
+		t.Fatalf("a position taken before moved to %d, its label to %d", a.Moved(entry), a.Offset(chained))
+	}
+}

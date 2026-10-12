@@ -157,6 +157,9 @@ func TestAMD64Moves(t *testing.T) {
 		}
 		for _, disp := range disps {
 			expect(t, "DecMem", encode(func(a *amd64.Asm) { a.DecMem(d, disp) }), x86asm.DEC, mem{r64(d), int64(disp)})
+			for _, imm := range []int32{0, 1, -1, 0x7fffffff, -0x80000000} {
+				expect(t, "StoreImm", encode(func(a *amd64.Asm) { a.StoreImm(d, disp, imm) }), x86asm.MOV, mem{r64(d), int64(disp)}, int64(imm))
+			}
 		}
 	}
 }
@@ -173,8 +176,10 @@ func TestAMD64Integer(t *testing.T) {
 			if op == amd64.Test {
 				continue
 			}
-			for _, imm := range []int32{0, 1, -1, 0x7fffffff, -0x80000000} {
+			// A byte's immediate where it fits one, signed; four bytes past.
+			for _, imm := range []int32{0, 1, -1, 127, -128, 128, -129, 0x7fffffff, -0x80000000} {
 				expect(t, fmt.Sprintf("%v r%d,%d", xop, d, imm), encode(func(a *amd64.Asm) { a.OpImm(op, d, imm, true) }), xop, r64(d), int64(imm))
+				expect(t, fmt.Sprintf("%v32 r%d,%d", xop, d, imm), encode(func(a *amd64.Asm) { a.OpImm(op, d, imm, false) }), xop, r32(d), int64(imm))
 			}
 		}
 	}
@@ -232,28 +237,47 @@ func TestAMD64SSE(t *testing.T) {
 }
 
 func TestAMD64Branches(t *testing.T) {
-	// A forward branch over n bytes, and a backward one to the start.
+	// A forward branch over n bytes, and a backward one to the start: in
+	// two bytes where the label is within a byte's displacement (Finish's
+	// shortening), in six and five where it is not.
 	for c := amd64.Cond(0); c < 16; c++ {
-		code := encode(func(a *amd64.Asm) {
-			l := a.NewLabel()
-			a.Jcc(c, l)
-			a.MovImm(amd64.RAX, 1)
-			a.Bind(l)
-			a.Ret()
-		})
-		inst := decodeOne(t, "Jcc", code[:6])
-		if inst.Op != jcc[c] || inst.Args[0] != x86asm.Rel(5) {
-			t.Fatalf("Jcc %d: %v", c, inst)
+		for _, n := range []int{1, 40} {
+			code := encode(func(a *amd64.Asm) {
+				l := a.NewLabel()
+				a.Jcc(c, l)
+				for range n {
+					a.MovImm(amd64.RAX, 1)
+				}
+				a.Bind(l)
+				a.Ret()
+			})
+			size, rel := 2, 5*n
+			if rel > 127 {
+				size = 6
+			}
+			inst := decodeOne(t, "Jcc", code[:size])
+			if inst.Op != jcc[c] || inst.Args[0] != x86asm.Rel(rel) {
+				t.Fatalf("Jcc %d over %d bytes: %v", c, rel, inst)
+			}
 		}
 	}
-	code := encode(func(a *amd64.Asm) {
-		l := a.NewLabel()
-		a.Bind(l)
-		a.Ret()
-		a.Jmp(l)
-	})
-	if inst := decodeOne(t, "Jmp", code[1:]); inst.Op != x86asm.JMP || inst.Args[0] != x86asm.Rel(-6) {
-		t.Fatalf("Jmp back: %v", inst)
+	for _, n := range []int{0, 40} {
+		code := encode(func(a *amd64.Asm) {
+			l := a.NewLabel()
+			a.Bind(l)
+			a.Ret()
+			for range n {
+				a.MovImm(amd64.RAX, 1)
+			}
+			a.Jmp(l)
+		})
+		at, rel := 1+5*n, -(1 + 5*n + 2)
+		if n != 0 {
+			rel = -(1 + 5*n + 5)
+		}
+		if inst := decodeOne(t, "Jmp", code[at:]); inst.Op != x86asm.JMP || inst.Args[0] != x86asm.Rel(rel) {
+			t.Fatalf("Jmp back over %d bytes: %v", 5*n, inst)
+		}
 	}
 }
 
