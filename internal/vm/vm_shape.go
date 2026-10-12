@@ -49,6 +49,10 @@ type shape struct {
 	// the room it was made with, up to maxSlack. The constructor's next
 	// objects are made with that room, rather than outgrowing it in turn.
 	slack uint8
+	// outgrown says, on a root, that an object of it outgrew maxSlack: the
+	// room its objects need is more than they are given, so slack gives
+	// them none, rather than room they carry and outgrow as well.
+	outgrown bool
 	// n is how many properties the layout has.
 	n int32
 	// next and nextEdge are the first transition out of the shape, which is
@@ -197,7 +201,14 @@ func (s *shape) noteGrowth(n int) {
 	if s == nil || s.unique {
 		return
 	}
-	if root := s.root(); n > int(root.slack) && n <= maxSlack {
+	switch root := s.root(); {
+	case root.outgrown:
+	case n > maxSlack:
+		// Room for maxSlack would be carried by every object and outgrown
+		// by them all, so they are made as they would be without slack.
+		root.outgrown = true
+		root.slack = 0
+	case n > int(root.slack):
 		root.slack = uint8(n)
 	}
 }
