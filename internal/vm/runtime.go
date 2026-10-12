@@ -482,6 +482,11 @@ type Realm struct {
 	// next, which a for-of loop over a generator need not look up while they
 	// are what the generator inherits; see generatorIteration.
 	genIterFn *Object
+	// throwTypeErrorPair is the accessor pair of an unmapped arguments
+	// object's callee, %ThrowTypeError% for both halves: one per realm, as
+	// the function is, shared by every such object, since a
+	// non-configurable pair is never changed in place.
+	throwTypeErrorPair Value
 	jitRealmFields
 	genNextFn *Object
 }

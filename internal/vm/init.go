@@ -235,6 +235,7 @@ func (r *Runtime) initIntrinsics() {
 		fd.propsMaterialized = true
 	}
 	r.throwTypeErrorFn.flags &^= objExtensible
+	r.throwTypeErrorPair = accessorValue(&accessor{getter: r.throwTypeErrorFn, setter: r.throwTypeErrorFn})
 
 	r.proto.array = newObject(r.proto.object, ClassArray)
 	r.proto.str = newObject(r.proto.object, ClassStringWrapper)

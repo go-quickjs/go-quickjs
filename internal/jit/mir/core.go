@@ -1283,6 +1283,9 @@ func (c *core) exitSource(s *ssa.Value) (abi.ExitLoc, bool) {
 // otherwise read from the bytecode.
 func goOpWord(site *ssa.CallSite) uint64 {
 	op := uint64(site.Go)
+	if site.Go == ssa.GoConcat {
+		op |= uint64(site.Argc) << abi.GoOpArgcShift
+	}
 	if site.Go == ssa.GoCall {
 		op |= uint64(site.Argc) << abi.GoOpArgcShift
 		switch {

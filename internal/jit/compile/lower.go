@@ -143,7 +143,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		if in.Op == bytecode.OpNew && (!m.ssa || !SSAConstruct) || (in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict ||
 			in.Op == bytecode.OpCheckGlobalRef || in.Op == bytecode.OpAssertResolved ||
 			in.Op == bytecode.OpNewObject || in.Op == bytecode.OpNewRegExp || in.Op == bytecode.OpDefineField || in.Op == bytecode.OpPushEmptyString ||
-			in.Op == bytecode.OpSetUpvalue || in.Op == bytecode.OpSetUpvalueCheck || in.Op == bytecode.OpInitUpvalue) && !m.ssa {
+			in.Op == bytecode.OpConcat || in.Op == bytecode.OpSetUpvalue || in.Op == bytecode.OpSetUpvalueCheck || in.Op == bytecode.OpInitUpvalue) && !m.ssa {
 			// The new pipeline constructs natively (mir's native calls),
 			// and assigns to a global natively where the VM knows it, Go
 			// otherwise; the old one does neither.
@@ -172,7 +172,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// throws it, as V8's code calls the runtime to throw.
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
-		host = host || str || in.Op == bytecode.OpThrow || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpApplyArguments || in.Op == bytecode.OpNew || in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict || in.Op == bytecode.OpCheckGlobalRef || in.Op == bytecode.OpNewObject || in.Op == bytecode.OpNewRegExp || in.Op == bytecode.OpDefineField || in.Op == bytecode.OpPushEmptyString || in.Op == bytecode.OpNewArray || in.Op == bytecode.OpCall || in.Op == bytecode.OpCallMethod || in.Op == bytecode.OpGetGlobal || in.Op == bytecode.OpGetPropThis || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
+		host = host || str || in.Op == bytecode.OpThrow || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpApplyArguments || in.Op == bytecode.OpNew || in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict || in.Op == bytecode.OpCheckGlobalRef || in.Op == bytecode.OpNewObject || in.Op == bytecode.OpNewRegExp || in.Op == bytecode.OpDefineField || in.Op == bytecode.OpPushEmptyString || in.Op == bytecode.OpConcat || in.Op == bytecode.OpNewArray || in.Op == bytecode.OpCall || in.Op == bytecode.OpCallMethod || in.Op == bytecode.OpGetGlobal || in.Op == bytecode.OpGetPropThis || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		property = property || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		this = this || in.Op == bytecode.OpPushThis
 		raw := uint32(in.Op)
@@ -313,6 +313,12 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 				// site's pool where the VM knows the site.
 				n := int(b.A)
 				p.Code[pc] = ir.Instruction{Op: ir.ArrayLiteral, Dest: p.Locals + p.Maps[pc].Depth - n, Extra: n}
+			}
+			if b := fn.Code[pc]; in.Op == ir.Host && b.Op == bytecode.OpConcat && b.A <= ir.MaxStringConcat && p.Maps[pc].Depth >= 0 {
+				// A template's or a string chain's parts joined: the new
+				// pipeline has Go join them, called from native code.
+				n := int(b.A)
+				p.Code[pc] = ir.Instruction{Op: ir.StringConcat, Dest: p.Locals + p.Maps[pc].Depth - n, Extra: n}
 			}
 			if in.Op == ir.BindingRead {
 				// No operand: native code reads the binding where the
@@ -598,7 +604,7 @@ func stringConcats(p *ir.Program) {
 				continue
 			}
 			set(in.Dest, false)
-		case ir.StringAdd:
+		case ir.StringAdd, ir.StringConcat:
 			set(in.Dest, true)
 		case ir.Host, ir.Call:
 			// Its results, past what it leaves below them.
@@ -778,6 +784,12 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 	case bytecode.OpNewArray:
 		if in.A > MaxSlots {
 			return bad("array literal budget")
+		}
+		return effect{need: int(in.A), delta: 1 - int(in.A)}, nil
+	case bytecode.OpConcat:
+		// The parts of a template or of a string chain, joined into one.
+		if in.A == 0 || in.A > MaxSlots {
+			return bad("concat part count")
 		}
 		return effect{need: int(in.A), delta: 1 - int(in.A)}, nil
 	case bytecode.OpGetUpvalue, bytecode.OpGetUpvalueCheck, bytecode.OpGetLocalIndex, bytecode.OpGetLocalIndexUpdate:
@@ -1043,6 +1055,9 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this bool) ir.Instr
 		}
 		return ir.Instruction{Op: ir.Host}
 	case bytecode.OpNewArray, bytecode.OpCall, bytecode.OpMod, bytecode.OpNew:
+		return ir.Instruction{Op: ir.Host}
+	case bytecode.OpConcat:
+		// Go converts the parts and joins them, as the interpreter does.
 		return ir.Instruction{Op: ir.Host}
 	case bytecode.OpSetGlobal, bytecode.OpSetGlobalStrict:
 		// Native where the VM knows the binding (ssa's), Go's otherwise.

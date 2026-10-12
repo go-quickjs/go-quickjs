@@ -1836,6 +1836,40 @@ func jitHostCall(ctx *abi.Context) bool {
 		}
 		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
 		return true
+	case ssa.GoConcat:
+		// As concat joins its parts: primitives, converted without running
+		// anything, and nothing that throws -- the same refusals as GoAdd's.
+		n := int(ctx.GoOp>>abi.GoOpArgcShift) & 0xff
+		if n < 1 || n > abi.MaxGoArgs || r.meter != nil {
+			return false
+		}
+		var parts [abi.MaxGoArgs]Value
+		total := 0
+		for i := range n {
+			p := jitGoArg(ctx, i)
+			if !jitPlainOperand(p) {
+				return false
+			}
+			if !p.IsString() && !p.IsNumber() {
+				s, err := r.toString(p)
+				if err != nil {
+					return false
+				}
+				p = Str(s)
+			}
+			if p.IsString() {
+				if total += p.String().length; total > maxStringLength-64 {
+					return false
+				}
+			}
+			parts[i] = p
+		}
+		s, err := r.joinParts(parts[:n])
+		if err != nil || s.length > maxStringLength-64 {
+			return false
+		}
+		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = Str(s)
+		return true
 	case ssa.GoRefill:
 		// The pool's address, a constant of the code's, which keeps it.
 		return r.jitRefillPool(*(**abi.ObjectPool)(unsafe.Pointer(&ctx.GoArgs[0].Ref)))

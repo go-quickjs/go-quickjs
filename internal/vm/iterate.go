@@ -1,6 +1,10 @@
 package vm
 
-import "github.com/go-quickjs/go-quickjs/internal/bytecode"
+import (
+	"unsafe"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+)
 
 // Loop iteration.
 //
@@ -798,8 +802,9 @@ type argumentsData struct {
 // after the call returns -- which they must, since the object can outlive it.
 func (r *Runtime) newArgumentsObject(f *frame) *Object {
 	// Its length, callee and Symbol.iterator are carried in the object's own
-	// allocation, rather than in a table grown as each is added.
-	o := newLiteralObject(r.proto.object, ClassArguments, 3)
+	// allocation, rather than in a table grown as each is added, and so are
+	// its first few elements.
+	o := newArgumentsStorage(r.proto.object, len(f.args))
 	o.elems = append(o.elems, f.args...)
 	mapped := f.cl != nil && f.cl.fn.MappedArguments
 	kind := 0
@@ -813,11 +818,16 @@ func (r *Runtime) newArgumentsObject(f *frame) *Object {
 		o.props = append(o.props, t.props[:]...)
 		o.shape = t.shape
 		o.props[0].value = Int(len(f.args))
+		// An unmapped one's callee is its realm's accessor pair, shared:
+		// it can never be changed, being non-configurable, and nothing
+		// writes an accessor pair in place but the definitions of an object
+		// or class literal. The layout is the runtime's, shared by its
+		// realms, so the pair is set for each object.
 		if mapped {
 			o.props[1].value = Obj(f.callee)
 			r.mapArguments(o, f)
 		} else {
-			o.props[1].value = accessorValue(&accessor{getter: r.throwTypeErrorFn, setter: r.throwTypeErrorFn})
+			o.props[1].value = r.throwTypeErrorPair
 		}
 		return o
 	}
@@ -840,6 +850,38 @@ func (r *Runtime) newArgumentsObject(f *frame) *Object {
 	o.setOwnRaw(r.atoms.internSymbol(r.wellKnown.iterator),
 		Obj(r.arrayValuesFn), propWritable|propConfigurable)
 	return o
+}
+
+// argumentsObject is an arguments object with room for its three
+// properties and its first few elements in its own allocation. Each room
+// fills one of Go's size classes on a 64-bit platform, but for 8 bytes.
+type argumentsObject[A [2]Value | [4]Value | [7]Value] struct {
+	literalObject
+	room A
+}
+
+func newArgumentsObjectOf[A [2]Value | [4]Value | [7]Value](proto *Object) *Object {
+	ao := &argumentsObject[A]{}
+	ao.Object = Object{proto: proto, class: ClassArguments, flags: objExtensible | objInlineProps}
+	ao.props = ao.inline[:0]
+	ao.elems = unsafe.Slice(&ao.room[0], len(ao.room))[:0]
+	return &ao.Object
+}
+
+// newArgumentsStorage returns an arguments object about to be given its
+// three properties and n elements: one allocation, for up to seven.
+func newArgumentsStorage(proto *Object, n int) *Object {
+	switch {
+	case n == 0:
+		return newLiteralObject(proto, ClassArguments, 3)
+	case n <= 2:
+		return newArgumentsObjectOf[[2]Value](proto)
+	case n <= 4:
+		return newArgumentsObjectOf[[4]Value](proto)
+	case n <= 7:
+		return newArgumentsObjectOf[[7]Value](proto)
+	}
+	return newLiteralObject(proto, ClassArguments, 3)
 }
 
 // argsLayout is the layout of the three properties every object of a kind
@@ -882,21 +924,41 @@ func (r *Runtime) mapArguments(o *Object, f *frame) {
 	if n <= 0 {
 		return
 	}
+	// The aliases are one allocation with the slice that holds them, but for
+	// a parameter some closure has already captured.
 	mapped := make([]*upvalue, n)
-	seen := make(map[string]bool, n)
+	var room []upvalue
 	for i := n - 1; i >= 0; i-- {
-		name := ""
-		if i < len(fn.Locals) {
-			name = fn.Locals[i].Name
-		}
-		if name == "" || seen[name] {
+		if !mapsArgument(fn, i) {
 			continue
 		}
-		seen[name] = true
-		mapped[i] = r.captureLocal(f, i)
+		u := openUpvalue(f, i)
+		if u == nil {
+			if len(room) == 0 {
+				room = make([]upvalue, i+1)
+			}
+			u = &room[i]
+			u.slot = &f.locals[i]
+			f.openUpvalues = append(f.openUpvalues, u)
+		}
+		mapped[i] = u
 	}
 	o.data = &argumentsData{mapped: mapped}
 	o.flags |= objMappedArguments
+}
+
+// mapsArgument reports whether index i of a mapped arguments object aliases
+// its parameter: one that has a name, which no later parameter repeats.
+func mapsArgument(fn *bytecode.Function, i int) bool {
+	if i >= len(fn.Locals) || fn.Locals[i].Name == "" {
+		return false
+	}
+	for j := i + 1; j < fn.ParamCount && j < len(fn.Locals); j++ {
+		if fn.Locals[j].Name == fn.Locals[i].Name {
+			return false
+		}
+	}
+	return true
 }
 
 // completionKind says how a protected block finished, which a finally clause

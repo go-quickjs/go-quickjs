@@ -1657,7 +1657,7 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			bytecode.OpGetIndex, bytecode.OpNew, bytecode.OpPushConst, bytecode.OpInstanceOf, bytecode.OpTypeOf,
 			bytecode.OpCheckGlobalRef, bytecode.OpAssertResolved, bytecode.OpNewObject, bytecode.OpNewRegExp, bytecode.OpDefineField,
 			bytecode.OpPushEmptyString, bytecode.OpGetUpvalue, bytecode.OpGetUpvalueCheck, bytecode.OpSetUpvalue,
-			bytecode.OpInitUpvalue, bytecode.OpSetUpvalueCheck:
+			bytecode.OpInitUpvalue, bytecode.OpSetUpvalueCheck, bytecode.OpConcat:
 		default:
 			return sp, steps, nil
 		}
@@ -1672,6 +1672,14 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			var o *Object
 			o = r.newArrayFrom(stack[sp-n : sp])
 			v = Obj(o)
+			sp -= n
+		case bytecode.OpConcat:
+			n := int(in.A)
+			var s *String
+			if s, err = r.jitConcat(stack[sp-n : sp]); err != nil {
+				return sp, steps, err
+			}
+			v = Str(s)
 			sp -= n
 		case bytecode.OpPushThis:
 			var bound bool
@@ -1810,6 +1818,39 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 		sp++
 	}
 	return sp, steps, nil
+}
+
+// jitConcat is concat as the interpreter does it: every part converted
+// before any is joined, a number left as it is, and the length checked
+// before and after the join.
+func (r *Runtime) jitConcat(parts []Value) (*String, error) {
+	for i := range parts {
+		if parts[i].IsString() || parts[i].IsNumber() {
+			continue
+		}
+		s, err := r.toString(parts[i])
+		if err != nil {
+			return nil, err
+		}
+		parts[i] = Str(s)
+	}
+	total := 0
+	for _, p := range parts {
+		if p.IsString() && total <= maxStringLength {
+			total += p.String().length
+		}
+	}
+	if total > maxStringLength {
+		return nil, r.throwStringLength()
+	}
+	out, err := r.joinParts(parts)
+	if err != nil {
+		return nil, err
+	}
+	if out.length > maxStringLength {
+		return nil, r.throwStringLength()
+	}
+	return out, nil
 }
 
 // jitGetProp is get_prop as the interpreter does it for an object: its own

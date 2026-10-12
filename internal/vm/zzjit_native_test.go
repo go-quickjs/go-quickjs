@@ -10993,3 +10993,57 @@ func TestJITSSAGoesOnNatively(t *testing.T) {
 		t.Fatalf("once did not stay native: %+v", e)
 	}
 }
+
+// concat (a string chain's, or a template's) is made by Go, called from
+// native code (ssa.GoConcat), which stays in it, as + with a string does:
+// a loop joining strings, numbers, booleans and null runs natively without
+// leaving. Parts whose conversion runs code -- an object's toString,
+// through a chain's addition or a template's own conversion -- are Go's
+// after the code leaves, in the order the interpreter runs them. Each
+// answer is the interpreter's.
+func TestJITSSAConcatCallsGo(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `function chain(n){let t=0,s='';for(let i=0;i<n;i++){s='k'+i+':'+(i*0.5)+'/'+(i%2===0)+null;t=(t+s.length)|0}return t+'|'+s}
+		var o={n:0,toString(){this.n++;return 'O'+this.n}};
+		function objs(n,x){let s='';for(let i=0;i<n;i++){s='a'+i+'b'+x+'c'}return s+'|'+o.n}
+		function tmpl(n,x){let s='';for(let i=0;i<n;i++){s=` + "`<${i}|${x}>`" + `}return s+'|'+o.n}`
+	want := New(Config{})
+	defer func() { want.Close(); want.ReleaseClosed() }()
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	for _, rt := range []*Runtime{want, r} {
+		if _, err := rt.Run(compileForTest(t, setup)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	chain := r.global.getOwn(r.atoms.intern("chain")).value.Object().fn().closure
+	rounds := []string{`chain(300)`, `chain(300)`, `chain(300)`, `chain(300)`, `objs(300,o)`, `objs(300,o)`, `objs(300,7)`,
+		`tmpl(300,o)`, `tmpl(300,o)`, `tmpl(300,true)`, `chain(300)`}
+	for i, src := range rounds {
+		wv, err := want.Run(compileForTest(t, src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var hosts uint64
+		if e := r.jit.cache[weak.Make(chain.fn)]; e != nil {
+			hosts = e.ssaStats.hosts
+		}
+		gv, err := r.Run(compileForTest(t, src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := gv.String().Go(), wv.String().Go(); got != want {
+			t.Fatalf("round %d (%s): got %s, interpreter %s", i, src, got, want)
+		}
+		if i == 3 {
+			e := r.jit.cache[weak.Make(chain.fn)]
+			if e == nil || e.ssa == nil {
+				t.Fatalf("chain did not run natively: %+v", e)
+			}
+			if n := e.ssaStats.hosts - hosts; n > 2 {
+				t.Fatalf("chain left native code %d times", n)
+			}
+		}
+	}
+}

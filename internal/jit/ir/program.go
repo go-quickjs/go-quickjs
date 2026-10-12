@@ -184,11 +184,20 @@ const (
 	// make, called from native code (ssa.GoAdd), and leaves to Go
 	// otherwise.
 	StringAdd
+	// StringConcat is concat: the Extra operands from Dest on, each
+	// converted to a string and joined, at Dest, which the new pipeline
+	// has Go make, called from native code (ssa.GoConcat), and leaves to
+	// Go otherwise. At most MaxStringConcat parts.
+	StringConcat
 )
 
 // MaxArrayLiteral is the most elements an ArrayLiteral has: new_array
 // with more is Go's.
 const MaxArrayLiteral = 16
+
+// MaxStringConcat is the most parts a StringConcat has, as many as a call
+// of Go takes (abi.MaxGoArgs): concat with more is Go's.
+const MaxStringConcat = 8
 
 // The types a TypeTest asks about.
 const (

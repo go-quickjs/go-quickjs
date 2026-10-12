@@ -254,6 +254,10 @@ type GoOp uint8
 // with its write barrier. The first operand's pointer word is the object,
 // its number word the entry's key and its flags, past bit 32; the
 // second's pointer word the next shape; the third the value.
+//
+// GoConcat is concat (ir.StringConcat): Go converts its Argc operands to
+// strings and joins them, as GoAdd adds; what could run code or throw it
+// leaves to an exit, after which Go makes it.
 const (
 	GoAdd GoOp = 1 + iota
 	GoRefill
@@ -269,6 +273,7 @@ const (
 	GoElemCell
 	GoTake
 	GoAddAlong
+	GoConcat
 )
 
 // RefillsPools reports whether a call takes an object from a pool, which
@@ -631,8 +636,8 @@ func (b *builder) hostOf(pc int) bool {
 		// The function's own captured bindings, which its context has;
 		// an inlined callee's, Go's.
 		return b.cur != b.root
-	case ir.StringAdd:
-		// A call of Go (GoAdd), where the VM answers it.
+	case ir.StringAdd, ir.StringConcat:
+		// A call of Go (GoAdd, GoConcat), where the VM answers it.
 		return !b.goCalls()
 	case ir.FieldDefine:
 		_, ok := b.define(pc)
@@ -1126,6 +1131,25 @@ func (b *builder) goAdd(blk *Block, in ir.Instruction, operand func(ir.Operand) 
 	b.assign(in.Dest, blk, r)
 }
 
+// goConcat makes in, a concat, by a call of Go from native code (GoConcat),
+// its parts the call's operands: what Go refuses leaves for Go to make
+// after an exit.
+func (b *builder) goConcat(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+	parts := make([]*Value, in.Extra)
+	for i := range parts {
+		parts[i] = operand(ir.Slot(in.Dest + i))
+	}
+	call := guard(OpCall, Tagged, ir.HostExit, parts...)
+	if b.f.Keeps < b.f.keepLimit() {
+		call.Calls, call.Index = []*CallSite{{Go: GoConcat, Argc: len(parts), ThisSlot: -1}}, b.f.Keeps
+		b.f.Keeps++
+	}
+	cell := b.f.newValue(blk, OpCallCell, Source, call)
+	r := b.f.newValue(blk, OpKept, Tagged, cell, call)
+	r.Shadow = cell
+	b.assign(in.Dest, blk, r)
+}
+
 // nativeHost reports whether native code makes the host operation at pc
 // itself: an intrinsic call or instanceof the VM knows.
 func (b *builder) nativeHost(pc int) bool {
@@ -1358,7 +1382,7 @@ func (b *builder) plan() error {
 	// go on without one too often is compiled with them (EntryFeedback).
 	resumes := func(pc int) bool {
 		switch op := p.Code[pc].Op; {
-		case b.host(pc), op == ir.ObjectLiteral, op == ir.ArrayLiteral, op == ir.StringAdd, op == ir.ArrayWrite:
+		case b.host(pc), op == ir.ObjectLiteral, op == ir.ArrayLiteral, op == ir.StringAdd, op == ir.StringConcat, op == ir.ArrayWrite:
 			return true
 		}
 		return b.wantsEntry(pc + 1)
@@ -1397,7 +1421,7 @@ func (b *builder) plan() error {
 			// string was (compile's typeTests): no entry after it.
 		case ir.ArrayWrite, ir.PropertyRead, ir.PropertyWrite, ir.ReferenceRead, ir.BindingRead,
 			ir.StringMethod, ir.StringCode, ir.BindingWrite, ir.BindingCheck, ir.Resolved, ir.ObjectLiteral, ir.FieldDefine,
-			ir.ArrayLiteral, ir.StringConst, ir.UpvalueWrite, ir.StringAdd:
+			ir.ArrayLiteral, ir.StringConst, ir.UpvalueWrite, ir.StringAdd, ir.StringConcat:
 			// What native code does not do exits to Go, which resumes after
 			// it. A fixed global's check only deoptimizes: the binding can
 			// never move, so it never fails, and what follows sees its
@@ -1492,7 +1516,7 @@ func (b *builder) plan() error {
 		case ir.Return:
 			blk.Kind = BlockReturn
 		case ir.Host, ir.Call, ir.PropertyRead, ir.PropertyWrite, ir.ReferenceRead, ir.BindingRead, ir.BindingWrite, ir.BindingCheck,
-			ir.ObjectLiteral, ir.FieldDefine, ir.ArrayLiteral, ir.StringConst, ir.UpvalueRead, ir.UpvalueWrite, ir.StringAdd:
+			ir.ObjectLiteral, ir.FieldDefine, ir.ArrayLiteral, ir.StringConst, ir.UpvalueRead, ir.UpvalueWrite, ir.StringAdd, ir.StringConcat:
 			if fr := b.inlined[end]; fr != nil {
 				// Into the callee, whose returns go to the block after it.
 				blk.Kind = BlockPlain
@@ -2282,6 +2306,14 @@ func (b *builder) instruction(blk *Block, pc int) {
 			break
 		}
 		b.goAdd(blk, in, operand, guard)
+	case ir.StringConcat:
+		if !b.goCalls() || in.Extra > abi.MaxGoArgs {
+			blk.ExitKind = ir.HostExit
+			blk.State = state()
+			blk.State.addUse()
+			break
+		}
+		b.goConcat(blk, in, operand, guard)
 	case ir.UpvalueRead, ir.UpvalueWrite:
 		if b.cur != b.root {
 			blk.ExitKind = ir.HostExit

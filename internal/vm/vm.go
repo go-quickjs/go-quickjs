@@ -3265,12 +3265,26 @@ func (r *Runtime) makeClosure(f *frame, c Value) *Object {
 		fn: tmpl.fn, names: tmpl.names, consts: tmpl.consts, ic: tmpl.ic,
 		realm: r.Realm, env: f.cl.env, upvalues: upvalues,
 	}
+	// The bindings it is the first to capture share one allocation: a
+	// closure made in a loop often captures several of its maker's, each of
+	// which was one. Like a scope's context in other engines, the room lives
+	// as long as any binding in it does.
+	var room []upvalue
 	for i, desc := range tmpl.fn.Upvalues {
-		if desc.FromParent {
-			upvalues[i] = r.captureLocal(f, int(desc.Index))
-		} else {
+		if !desc.FromParent {
 			upvalues[i] = f.cl.upvalues[desc.Index]
+			continue
 		}
+		u := openUpvalue(f, int(desc.Index))
+		if u == nil {
+			if len(room) == 0 {
+				room = make([]upvalue, uncaptured(f, tmpl.fn.Upvalues[i:]))
+			}
+			u, room = &room[0], room[1:]
+			u.slot = &f.locals[desc.Index]
+			f.openUpvalues = append(f.openUpvalues, u)
+		}
+		upvalues[i] = u
 	}
 
 	kind := ctorKindOf(tmpl.fn)
@@ -3478,6 +3492,28 @@ func (r *Runtime) captureLocal(f *frame, slot int) *upvalue {
 	u := &upvalue{slot: &f.locals[slot]}
 	f.openUpvalues = append(f.openUpvalues, u)
 	return u
+}
+
+// openUpvalue is the upvalue already open on a local slot, or nil.
+func openUpvalue(f *frame, slot int) *upvalue {
+	for _, u := range f.openUpvalues {
+		if u.slot == &f.locals[slot] {
+			return u
+		}
+	}
+	return nil
+}
+
+// uncaptured counts the bindings of a frame's that the upvalues descs name
+// and no upvalue is open on yet.
+func uncaptured(f *frame, descs []bytecode.UpvalueDesc) int {
+	n := 0
+	for _, desc := range descs {
+		if desc.FromParent && openUpvalue(f, int(desc.Index)) == nil {
+			n++
+		}
+	}
+	return n
 }
 
 // newArrayFrom builds an array holding a copy of the given values.

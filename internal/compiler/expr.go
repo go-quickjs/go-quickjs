@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/go-quickjs/go-quickjs/internal/ast"
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
@@ -327,6 +328,9 @@ func (c *compiler) compileExprNamed(e ast.Expr, name string) {
 			c.emitAt(n.Start, bytecode.OpPrivateIn, name, ref)
 			break
 		}
+		if n.Op == "+" && c.compileStringChain(n) {
+			break
+		}
 		c.compileExpr(n.Left)
 		c.compileExpr(n.Right)
 		c.emitAt(n.Start, binaryOpcode(n.Op), 0, 0)
@@ -464,6 +468,136 @@ func (c *compiler) compileTemplate(n *ast.TemplateLit) {
 	if parts > 1 {
 		c.emit(bytecode.OpConcat, uint32(parts), 0)
 	}
+}
+
+// maxChainParts is the most parts compileStringChain joins in one concat. A
+// longer chain is joined a run at a time, each run's string the first part
+// of the next, so that its operands never pile up on the stack.
+const maxChainParts = 32
+
+// compileStringChain compiles a + b + c + ..., once a string literal among
+// its operands has made every addition from there on a concatenation, as one
+// concat of the parts rather than an addition at a time: each addition but
+// the last would make a string only for the next one to copy and drop.
+//
+// What each addition does is kept, and when. The operands before the
+// literal are added as they were, and their sum converted where the literal
+// would have been added to it; each operand after it is converted as soon as
+// it is evaluated, before the next one is, by adding it to the empty string,
+// which is ToPrimitive and then ToString -- the conversion the addition
+// would have made of it. A literal, a template's string and a number need
+// none: concat writes a number out itself, as ToString would.
+//
+// It reports false, having emitted nothing, for a chain with no string
+// literal, or one that would join fewer than three parts, where a concat
+// saves nothing over the additions.
+func (c *compiler) compileStringChain(n *ast.Binary) bool {
+	// The chain's additions, innermost first: adds[0].Left is its first
+	// operand, and adds[i].Right the one after.
+	var adds []*ast.Binary
+	for b := n; ; {
+		adds = append(adds, b)
+		l, ok := b.Left.(*ast.Binary)
+		if !ok || l.Op != "+" {
+			break
+		}
+		b = l
+	}
+	if len(adds) < 2 {
+		return false
+	}
+	slices.Reverse(adds)
+	operand := func(i int) ast.Expr {
+		if i == 0 {
+			return adds[0].Left
+		}
+		return adds[i-1].Right
+	}
+	// The first string literal. A template is a string too, but only at the
+	// start: after an operand, its substitutions would run before the
+	// conversion of the operands it follows rather than after.
+	first := -1
+	for i := range len(adds) + 1 {
+		if _, ok := operand(i).(*ast.StringLit); ok {
+			first = i
+			break
+		}
+		if t, ok := operand(i).(*ast.TemplateLit); ok && i == 0 && templateValid(t) {
+			first = 0
+			break
+		}
+	}
+	if first < 0 {
+		return false
+	}
+	empty := func(e ast.Expr) bool {
+		s, ok := e.(*ast.StringLit)
+		return ok && s.Value == ""
+	}
+	parts := 0
+	if first > 0 {
+		parts++
+	}
+	for i := first; i <= len(adds); i++ {
+		if !empty(operand(i)) {
+			parts++
+		}
+	}
+	if parts < 3 {
+		return false
+	}
+
+	parts = 0
+	part := func() {
+		parts++
+		if parts == maxChainParts {
+			c.emitAt(n.Start, bytecode.OpConcat, uint32(parts), 0)
+			parts = 1
+		}
+	}
+	if first > 0 {
+		// What comes before the literal, converted where the literal was
+		// added to it.
+		c.emit(bytecode.OpPushEmptyString, 0, 0)
+		if first == 1 {
+			c.compileExpr(operand(0))
+		} else {
+			c.compileExpr(adds[first-2])
+		}
+		c.emitAt(adds[first-1].Start, bytecode.OpAdd, 0, 0)
+		part()
+	}
+	for i := first; i <= len(adds); i++ {
+		switch e := operand(i); e.(type) {
+		case *ast.StringLit:
+			if empty(e) {
+				continue
+			}
+			c.compileExpr(e)
+		case *ast.TemplateLit, *ast.NumberLit:
+			c.compileExpr(e)
+		default:
+			c.emit(bytecode.OpPushEmptyString, 0, 0)
+			c.compileExpr(e)
+			c.emitAt(adds[i-1].Start, bytecode.OpAdd, 0, 0)
+		}
+		part()
+	}
+	if parts > 1 {
+		c.emitAt(n.Start, bytecode.OpConcat, uint32(parts), 0)
+	}
+	return true
+}
+
+// templateValid reports whether every part of a template has a cooked
+// value, which only a tag can do without.
+func templateValid(t *ast.TemplateLit) bool {
+	for _, q := range t.Quasis {
+		if !q.Valid {
+			return false
+		}
+	}
+	return true
 }
 
 // compileTaggedTemplate compiles tag`a${x}b`.

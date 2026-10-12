@@ -475,7 +475,17 @@ func (b *partsBuilder) String() string {
 // joinParts is joinValues, the join charged to r's memory limit first: a
 // template can repeat one string any number of times, and writes out all
 // of them.
+//
+// A join with a long part is made as + makes it, a pair at a time, which
+// for a long string is a rope over it rather than a copy of it: a loop
+// that wraps a string, s = '(' + s + ')', would otherwise copy all of it
+// every time round.
 func (r *Runtime) joinParts(parts []Value) (*String, error) {
+	for _, p := range parts {
+		if p.IsString() && p.String().byteLenShallow() >= longJoinPart {
+			return r.joinPairwise(parts)
+		}
+	}
 	if r.meter != nil {
 		n := 0
 		for _, p := range parts {
@@ -491,6 +501,30 @@ func (r *Runtime) joinParts(parts []Value) (*String, error) {
 		}
 	}
 	return joinValues(parts), nil
+}
+
+// longJoinPart is the length in bytes from which a part of a join is
+// joined to the others as a rope rather than copied with them.
+const longJoinPart = 4 * ropeThreshold
+
+// joinPairwise is joinParts for parts of which one is long: each is joined
+// to what the ones before it made as + joins two strings, charged as it
+// charges them.
+func (r *Runtime) joinPairwise(parts []Value) (*String, error) {
+	out := emptyString
+	for _, p := range parts {
+		var s *String
+		if p.IsString() {
+			s = p.String()
+		} else {
+			s = r.numberString(p.Number())
+		}
+		var err error
+		if out, err = r.concat(out, s); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // joinValues builds the string a template literal produces.

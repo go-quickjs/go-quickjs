@@ -72,6 +72,11 @@ func (p *Program) Validate() error {
 			if in.Extra < 0 || in.Extra > MaxArrayLiteral || in.Dest < 0 || in.Dest+in.Extra != active {
 				return bad("invalid array literal")
 			}
+		case StringConcat:
+			write = true
+			if in.Extra < 1 || in.Extra > MaxStringConcat || in.Dest < 0 || in.Dest+in.Extra != active {
+				return bad("invalid string concat")
+			}
 		case StringCode:
 			left, right, third, write = true, true, true, true
 		case Call:
