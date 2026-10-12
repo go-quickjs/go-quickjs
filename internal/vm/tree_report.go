@@ -15,8 +15,6 @@ func TreeReport(fn *bytecode.Function) (built bool, why string) {
 	switch {
 	case !treeTier.Load():
 		return false, "the tree tier is off (QJS_NOTREE)"
-	case fn.TopLevel:
-		return false, "top-level code"
 	case fn.HasDirectEval:
 		return false, "it calls eval directly"
 	case fn.MaxStack > 64:
@@ -28,9 +26,28 @@ func TreeReport(fn *bytecode.Function) (built bool, why string) {
 		}
 	}
 	if buildTree(fn) == nil {
+		if fn.TopLevel && !jumpsBack(fn) {
+			return false, "top-level code without a loop"
+		}
 		// buildBlock gave up: an instruction the tier builds, in a place or
 		// with operands it does not build it in.
 		return false, "the builder gave up on a block"
 	}
 	return true, ""
+}
+
+// jumpsBack reports whether fn has a loop, a jump to an instruction no later
+// than itself, which buildTree asks of top-level code.
+func jumpsBack(fn *bytecode.Function) bool {
+	for pc, in := range fn.Code {
+		switch in.Op {
+		case bytecode.OpJump, bytecode.OpJumpIfFalse, bytecode.OpJumpIfTrue, bytecode.OpJumpIfCmpFalse,
+			bytecode.OpJumpIfFalseKeep, bytecode.OpJumpIfTrueKeep, bytecode.OpJumpIfNullish, bytecode.OpJumpIfNotNullish,
+			bytecode.OpIterNextOrJump, bytecode.OpIterResultOrJump, bytecode.OpIterUnpackDelegate:
+			if int(in.A) <= pc {
+				return true
+			}
+		}
+	}
+	return false
 }

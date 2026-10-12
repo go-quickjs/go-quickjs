@@ -117,7 +117,7 @@ func (b *tbuilder) takeBody() []tstmt {
 // buildTree builds a function's tree, or reports nil where the function has
 // an instruction the tier does not build, or code it cannot follow.
 func buildTree(fn *bytecode.Function) *tree {
-	if !treeTier.Load() || fn.TopLevel || fn.HasDirectEval || fn.MaxStack > 64 {
+	if !treeTier.Load() || fn.HasDirectEval || fn.MaxStack > 64 {
 		return nil
 	}
 	code := fn.Code
@@ -178,6 +178,11 @@ func buildTree(fn *bytecode.Function) *tree {
 			bytecode.OpEndParams, bytecode.OpYield, bytecode.OpAwait, bytecode.OpYieldStar:
 			leader[pc+1] = true
 		}
+	}
+	if fn.TopLevel && !back {
+		// Top-level code runs once: only a loop makes its tree pay for
+		// itself (see ztree_zzglobal.go).
+		return nil
 	}
 	// Blocks are numbered in code order, from their first instruction.
 	index := make([]int, len(code)+1)

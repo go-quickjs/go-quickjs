@@ -21,16 +21,17 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 
 var (
 	// treeBuildsImport reports whether the tier builds op, import or
-	// import_meta.
+	// import_meta, or one treeBuildsGlobal names.
 	treeBuildsImport func(op bytecode.Op) bool
 
-	// importOp builds import and import_meta.
+	// importOp builds import and import_meta, and hands globalOp what
+	// treeBuildsGlobal names.
 	importOp func(b *tbuilder, pc int, in bytecode.Instr) (int, bool)
 )
 
 func init() {
 	treeBuildsImport = func(op bytecode.Op) bool {
-		return op == bytecode.OpImport || op == bytecode.OpImportMeta
+		return op == bytecode.OpImport || op == bytecode.OpImportMeta || treeBuildsGlobal(op)
 	}
 
 	importOp = func(b *tbuilder, pc int, in bytecode.Instr) (int, bool) {
@@ -60,7 +61,7 @@ func init() {
 			})
 			b.pushSlot(at)
 		default:
-			return 0, false
+			return globalOp(b, pc, in)
 		}
 		return 0, true
 	}

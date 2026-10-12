@@ -28,7 +28,7 @@ async function run(a) { a[a.length - 1]++; await 0 }
 	got := out.String()
 	for _, want := range []string{
 		"function <main> at 1:1 (params=0 locals=1 stack=",
-		"  tree: not built: top-level code\n",
+		"  tree: not built: top-level code without a loop\n",
 		"  locals: 0:(temp)\n",
 		"    function sum at 2:1 (params=1 locals=3 stack=",
 		"      tree: built\n",
