@@ -65,8 +65,27 @@ func (r *Runtime) dateEnv() *date.Environment {
 	return env
 }
 
-// newDate is a Date object's date made with a time value, clipped.
-func (r *Runtime) newDate(t float64) *date.Date { return r.dateEnv().NewDate(t) }
+// dateObject is a Date object and its date, which every Date has, in one
+// allocation.
+type dateObject struct {
+	Object
+	d date.Date
+}
+
+// newDateObject is a Date object of prototype proto, and its date, to be set.
+func newDateObject(proto *Object) (*Object, *date.Date) {
+	x := &dateObject{Object: Object{proto: proto, class: ClassDate, flags: objExtensible}}
+	x.data = &x.d
+	return &x.Object, &x.d
+}
+
+// newDateObjectAt is a Date object of prototype proto with a time value,
+// clipped.
+func (r *Runtime) newDateObjectAt(proto *Object, t float64) *Object {
+	o, d := newDateObject(proto)
+	r.dateEnv().SetTime(d, t)
+	return o
+}
 
 // parseDate is Date.parse of s. The parser reads code units, and a short
 // ASCII string -- as a date string almost always is -- is widened into the
@@ -106,10 +125,9 @@ func (r *Runtime) initDateBuiltins() {
 			// that does something else entirely without `new`.
 			return Str(NewString(rt.dateEnv().String(rt.now()))), nil
 		}
-		o := newObject(rt.proto.date, ClassDate)
 		switch len(args) {
 		case 0:
-			o.data = rt.newDate(rt.now())
+			return Obj(rt.newDateObjectAt(rt.proto.date, rt.now())), nil
 		case 1:
 			// A Date is taken at its time value rather than through its string
 			// form, so that `new Date(d)` copies d exactly -- and does not run
@@ -119,8 +137,7 @@ func (r *Runtime) initDateBuiltins() {
 				if d, ok := v.Object().data.(*date.Date); ok {
 					t = d.Value()
 				}
-				o.data = rt.newDate(t)
-				break
+				return Obj(rt.newDateObjectAt(rt.proto.date, t)), nil
 			}
 			// Otherwise it is a time value, a date string, or an object whose
 			// primitive form is one of those.
@@ -129,24 +146,22 @@ func (r *Runtime) initDateBuiltins() {
 				return Undefined, err
 			}
 			if prim.IsString() {
-				o.data = rt.newDate(rt.parseDate(prim.String()))
-				break
+				return Obj(rt.newDateObjectAt(rt.proto.date, rt.parseDate(prim.String()))), nil
 			}
 			n, err := rt.toNumber(prim)
 			if err != nil {
 				return Undefined, err
 			}
-			o.data = rt.newDate(n)
+			return Obj(rt.newDateObjectAt(rt.proto.date, n)), nil
 		default:
 			local, err := rt.dateFromParts(args)
 			if err != nil {
 				return Undefined, err
 			}
-			d := new(date.Date)
+			o, d := newDateObject(rt.proto.date)
 			rt.dateEnv().SetLocalTime(d, local)
-			o.data = d
+			return Obj(o), nil
 		}
-		return Obj(o), nil
 	})
 
 	r.defMethod(ctor, "now", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {

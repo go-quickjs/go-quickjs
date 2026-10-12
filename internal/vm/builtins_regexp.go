@@ -734,9 +734,13 @@ func (r *Runtime) buildMatchResult(re *regexp.Regexp, caps []int, input *String)
 	// itself and copied in. Each piece is cut from the subject, which for text
 	// that is all ASCII -- most of it -- shares the bytes rather than encoding
 	// them again.
-	arr := newMatchResult(r.proto.array, n)
+	hasIndices := re.Flags()&regexp.FlagHasIndices != 0
+	arr, room := newMatchResult(r.proto.array, n, hasIndices)
 	elems := arr.elems
-	for i := 0; i < n; i++ {
+	// What matched is always there, and is written in the room the array
+	// has for it.
+	elems[0] = Str(input.substringInto(room, caps[0], caps[1]))
+	for i := 1; i < n; i++ {
 		lo, hi := caps[2*i], caps[2*i+1]
 		if lo < 0 || hi < 0 {
 			// A group that did not participate reads as undefined, which is
@@ -755,7 +759,6 @@ func (r *Runtime) buildMatchResult(re *regexp.Regexp, caps []int, input *String)
 	groups := r.groupObject(names, re.GroupNames(), func(i int) Value {
 		return elems[i]
 	})
-	hasIndices := re.Flags()&regexp.FlagHasIndices != 0
 	if t := r.matchLayout; t != nil && !hasIndices {
 		arr.props = append(arr.props, t.props[:]...)
 		arr.shape = t.shape

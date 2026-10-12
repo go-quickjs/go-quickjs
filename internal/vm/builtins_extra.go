@@ -968,6 +968,9 @@ func appendSignificant(dst []byte, x float64, n int) ([]byte, int) {
 		}
 		return dst, 0
 	}
+	if q, e, ok := significandHalfUp(x, n); ok {
+		return strconv.AppendUint(dst, q, 10), e
+	}
 	// strconv rounds correctly too, except that it breaks a tie to even.
 	// What it writes is d.ddde±xx: the point is taken out where it stands.
 	at := len(dst)
@@ -989,6 +992,102 @@ func appendSignificant(dst []byte, x float64, n int) ([]byte, int) {
 	}
 	copy(dst[at+1:], dst[at+2:i])
 	return dst[:i-1], exp
+}
+
+// significandHalfUp is a positive finite x rounded to n significant digits,
+// n at most 17, as the integer q of them and the exponent e of the first:
+// x is about q*10**(e-n+1). It works in integers -- x is m*2**p exactly,
+// and q is x*10**k rounded, k = n-1-e, the larger on a tie, which is
+// what the specification asks for -- and reports false for an x whose
+// scaling does not fit in them, which is then left to strconv: one far from
+// 1, below about 10**-3 or above about 10**21.
+func significandHalfUp(x float64, n int) (q uint64, e int, ok bool) {
+	if n > 17 {
+		return 0, 0, false
+	}
+	m, p := binaryParts(x)
+	// floor(log10(x)), from floor(log2(x)): low by one at most, and put
+	// right by the loop below.
+	e = ((bits.Len64(m) - 1 + p) * 78913) >> 18
+	lo10, hi10 := pow10Uint64[n-1], pow10Uint64[n]
+	for range 3 {
+		// t is x*10**k rounded down; up says the part dropped is a half or
+		// more.
+		var t uint64
+		var up bool
+		k := n - 1 - e
+		switch {
+		case k >= 0 && k <= maxFixedIntDigits && p >= 0:
+			if bits.Len64(m)+p > 64 {
+				return 0, 0, false
+			}
+			hi, lo := bits.Mul64(m<<p, pow10Uint64[k])
+			if hi != 0 {
+				return 0, 0, false
+			}
+			t = lo
+		case k >= 0 && k <= maxFixedIntDigits:
+			// m*10**k is below 2**117: shifted down s places, its bit s-1
+			// is the half.
+			s := uint(-p)
+			hi, lo := bits.Mul64(m, pow10Uint64[k])
+			switch {
+			case s >= 118:
+				t = 0
+			case s > 64:
+				t, up = hi>>(s-64), hi>>(s-65)&1 != 0
+			case s == 64:
+				t, up = hi, lo>>63 != 0
+			case hi>>s != 0:
+				// Past 64 bits, and so past n digits.
+				t = math.MaxUint64
+			default:
+				t, up = lo>>s|hi<<(64-s), lo>>(s-1)&1 != 0
+			}
+		case k < 0 && -k <= maxFixedIntDigits && p >= 0:
+			d := pow10Uint64[-k]
+			if bits.Len64(m)+p > 128 {
+				return 0, 0, false
+			}
+			var hi, lo uint64
+			if p >= 64 {
+				hi = m << (p - 64)
+			} else {
+				hi, lo = m>>(64-p), m<<p
+			}
+			if hi >= d {
+				return 0, 0, false
+			}
+			var r uint64
+			t, r = bits.Div64(hi, lo, d)
+			up = r >= d/2
+		case k < 0 && -k <= maxFixedIntDigits:
+			s := uint(-p)
+			if bits.Len64(pow10Uint64[-k])+int(s) > 63 {
+				return 0, 0, false
+			}
+			d := pow10Uint64[-k] << s
+			t = m / d
+			up = m%d >= d/2
+		default:
+			return 0, 0, false
+		}
+		switch {
+		case t < lo10:
+			e--
+		case t >= hi10:
+			e++
+		default:
+			if up {
+				t++
+				if t == hi10 {
+					t, e = lo10, e+1
+				}
+			}
+			return t, e, true
+		}
+	}
+	return 0, 0, false
 }
 
 // mayTie reports whether rounding a positive x to n significant digits could

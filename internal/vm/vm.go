@@ -4356,14 +4356,17 @@ func relationalResult(op bytecode.Op, c cmpResult) bool {
 
 // bigArith applies an arithmetic operator to two BigInts.
 func (r *Runtime) bigArith(op bytecode.Op, a, b *BigInt) (Value, error) {
-	// A sum or a product big.Int has room for in the BigInt's own words is
-	// kept there; a larger one would only leave that room empty.
+	// A sum or a product is kept in words of the BigInt's own allocation,
+	// sized for the most big.Int will ask for: a word more than the longer
+	// operand for a sum, both operands' words for a product.
 	la, lb := len(a.V.Bits()), len(b.V.Bits())
 	var out *BigInt
-	if op == bytecode.OpMul && la+lb <= smallBigWords ||
-		(op == bytecode.OpAdd || op == bytecode.OpSub) && max(la, lb)+1 <= smallBigWords {
-		out = newBigResult()
-	} else {
+	switch op {
+	case bytecode.OpMul:
+		out = newBigResultFor(la + lb)
+	case bytecode.OpAdd, bytecode.OpSub:
+		out = newBigResultFor(max(la, lb) + 1)
+	default:
 		out = &BigInt{}
 	}
 	// Whether a result could pass maxBigIntBits is asked of the bits only

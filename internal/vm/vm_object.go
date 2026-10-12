@@ -369,31 +369,49 @@ func newArrayStorage(n int) (*Object, []Value) {
 }
 
 // matchResultObject is the array a regular expression's match gives, with
-// room in the same allocation for its index, input, groups and indices and
-// for its first few elements: a program that matches in a loop makes one
-// each time round.
+// room in the same allocation for its index, input, groups and indices, for
+// its first few elements, and for the string of what matched: a program that
+// matches in a loop makes one each time round, and the matched text is the
+// one element every match has.
 type matchResultObject struct {
 	Object
 	fields [4]Property
 	inline [4]Value
+	str    String
 }
 
-// newMatchResult returns a match's array, about to be given n elements.
-func newMatchResult(proto *Object, n int) *Object {
-	mo := &matchResultObject{
-		Object: Object{
-			proto: proto, class: ClassArray,
-			flags: objExtensible | objArrayLengthWritable,
-		},
+// matchResult1Object is matchResultObject for the commonest match, of a
+// pattern with no groups and no d flag: one element, and index, input and
+// groups.
+type matchResult1Object struct {
+	Object
+	fields [3]Property
+	inline [1]Value
+	str    String
+}
+
+// newMatchResult returns a match's array, about to be given n elements, and
+// room for the string of its first. indices says whether it will have the
+// d flag's indices too.
+func newMatchResult(proto *Object, n int, indices bool) (*Object, *String) {
+	o := Object{
+		proto: proto, class: ClassArray,
+		flags: objExtensible | objArrayLengthWritable | objInlineProps,
 	}
+	if n == 1 && !indices {
+		mo := &matchResult1Object{Object: o}
+		mo.props = mo.fields[:0]
+		mo.elems = mo.inline[:]
+		return &mo.Object, &mo.str
+	}
+	mo := &matchResultObject{Object: o}
 	mo.props = mo.fields[:0]
-	mo.flags |= objInlineProps
 	if n <= len(mo.inline) {
 		mo.elems = mo.inline[:n]
 	} else {
 		mo.elems = make([]Value, n)
 	}
-	return &mo.Object
+	return &mo.Object, &mo.str
 }
 
 // funcObject is an object that is also a function.

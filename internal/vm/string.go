@@ -713,10 +713,101 @@ func (s *String) Substring(start, end int) *String {
 		s.flatten()
 		return &String{s: s.s[start:end], length: end - start, ascii: true}
 	}
+	if from, to, ascii, ok := s.sharedSubstring(start, end); ok {
+		return s.cut(new(String), from, to, end-start, ascii)
+	}
 	// Slicing UTF-16 can split a surrogate pair, which is legal in JavaScript
 	// and produces a lone surrogate. utf16.Decode maps those to U+FFFD, so the
 	// pieces are re-encoded unit by unit to preserve them.
 	return fromUnits(s.units()[start:end])
+}
+
+// substringInto is Substring written into dst where it would make a String
+// of its own, which is then dst; a caller with room for one in an allocation
+// it makes anyway saves the String one.
+func (s *String) substringInto(dst *String, start, end int) *String {
+	if start < 0 || end > s.length || start >= end || start == 0 && end == s.length {
+		return s.Substring(start, end)
+	}
+	if s.ascii {
+		s.flatten()
+		*dst = String{s: s.s[start:end], length: end - start, ascii: true}
+		return dst
+	}
+	if from, to, ascii, ok := s.sharedSubstring(start, end); ok {
+		return s.cut(dst, from, to, end-start, ascii)
+	}
+	return s.Substring(start, end)
+}
+
+// cut makes dst bytes [from, to) of s, length code units long, as
+// sharedSubstring found them.
+func (s *String) cut(dst *String, from, to, length int, ascii bool) *String {
+	*dst = String{s: s.s[from:to], length: length, ascii: ascii}
+	if !ascii {
+		dst.endsHigh, dst.startsLow = wtf8.UnpairedEnds(dst.s)
+	}
+	return dst
+}
+
+// sharedSubstring finds where in the bytes of a string that is not all ASCII
+// code units [start, end) are, so that Substring can cut them from its bytes
+// as it does an ASCII one's rather than encode them again from its code
+// units, and whether they are all ASCII. It cannot where either end falls
+// between the halves of a pair, which WTF-8 spells as one code point, and
+// will not where finding the first byte would read further than encoding the
+// piece would. It is given 0 <= start < end <= s.length, and flattens s.
+func (s *String) sharedSubstring(start, end int) (from, to int, ascii, ok bool) {
+	if start > 4*(end-start)+64 {
+		return 0, 0, false, false
+	}
+	s.flatten()
+	b := s.s
+	// i walks the bytes and u the code units they spell: a lead byte below
+	// 0xF0 begins one unit -- a lone surrogate too, which WTF-8 writes in
+	// three bytes -- and one from 0xF0 two.
+	i, u := 0, 0
+	for u < start {
+		c := b[i]
+		switch {
+		case c < 0x80:
+			i++
+		case c < 0xE0:
+			i += 2
+		case c < 0xF0:
+			i += 3
+		default:
+			if u+1 == start {
+				return 0, 0, false, false
+			}
+			i += 4
+			u++
+		}
+		u++
+	}
+	from, ascii = i, true
+	for u < end {
+		c := b[i]
+		switch {
+		case c < 0x80:
+			i++
+		case c < 0xE0:
+			i += 2
+			ascii = false
+		case c < 0xF0:
+			i += 3
+			ascii = false
+		default:
+			if u+1 == end {
+				return 0, 0, false, false
+			}
+			i += 4
+			u++
+			ascii = false
+		}
+		u++
+	}
+	return from, i, ascii, true
 }
 
 // unitSlice is the WTF-8 text of code units [i, j) of s, whose code units are
@@ -1004,6 +1095,33 @@ func newBigResult() *BigInt {
 	s := &smallBigInt{}
 	s.b.V.SetBits(s.words[:0])
 	return &s.b
+}
+
+// newBigResultFor is newBigResult for a result of up to words words of
+// digits: a BigInt with room for them in its own allocation, in the smallest
+// of a few sizes that holds them -- 4, 8 or 16 words, each filling one of
+// Go's size classes -- or a BigInt whose digits will be an allocation of
+// their own past that.
+func newBigResultFor(words int) *BigInt {
+	switch {
+	case words <= smallBigWords:
+		return newBigResult()
+	case words <= 8:
+		s := &struct {
+			b     BigInt
+			words [8]big.Word
+		}{}
+		s.b.V.SetBits(s.words[:0])
+		return &s.b
+	case words <= 16:
+		s := &struct {
+			b     BigInt
+			words [16]big.Word
+		}{}
+		s.b.V.SetBits(s.words[:0])
+		return &s.b
+	}
+	return &BigInt{}
 }
 
 // ParseBigInt parses a BigInt literal, which may carry a 0x, 0o or 0b prefix.

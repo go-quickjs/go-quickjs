@@ -191,22 +191,24 @@ func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error,
 		}
 		return nil, nil
 	}
-	// A clone with no matcher of its own borrows its lender's.
-	owner, m := re, re.scratch
-	if m == nil && re.lender != nil {
-		owner, m = re.lender, re.lender.scratch
+	// A Regexp with no matcher of its own borrows the one its core lends.
+	m, lent := re.scratch, false
+	if m == nil {
+		m, lent = re.lent, true
 	}
 	if m == nil || m.busy || re.concurrent {
 		if re.concurrent {
 			// Goroutines matching at once each take a pooled matcher.
-			m = re.takeMatcher()
+			m, lent = re.takeMatcher(), false
 		} else {
 			m = re.newMatcher()
 			switch {
-			case owner.scratch == nil:
-				owner.scratch = m
+			case re.lent == nil:
+				re.lent, lent = m, true
 			case re.scratch == nil:
-				owner, re.scratch = re, m
+				re.scratch, lent = m, false
+			default:
+				lent = false
 			}
 		}
 	}
@@ -223,11 +225,11 @@ func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error,
 		// The input is not held on to: it would keep the subject string alive
 		// for as long as the pattern.
 		m.input, m.in, m.check = input{}, nil, nil
-		// A lender keeps only a small matcher, since it lives as long as
-		// the runtime's cache of patterns: one a match has made large is
-		// the borrower's from now on, and goes when the borrower does.
-		if owner != re && owner.scratch == m && (cap(m.stack) > maxLentFrames || cap(m.trail) > maxLentFrames) {
-			owner.scratch, re.scratch = nil, m
+		// A core lends only a small matcher, since it lives as long as the
+		// runtime's cache of patterns: one a match has made large is the
+		// borrower's from now on, and goes when the borrower does.
+		if lent && re.lent == m && (cap(m.stack) > maxLentFrames || cap(m.trail) > maxLentFrames) {
+			re.lent, re.scratch = nil, m
 		}
 		if re.concurrent {
 			matcherPool.Put(m)

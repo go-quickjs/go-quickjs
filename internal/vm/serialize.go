@@ -627,8 +627,7 @@ func (d *deserializer) value(i int) (Value, error) {
 		}
 		o = w
 	case snDate:
-		o = newObject(r.proto.date, ClassDate)
-		o.data = r.newDate(n.num)
+		o = r.newDateObjectAt(r.proto.date, n.num)
 	case snRegExp:
 		v, err := r.newRegExp(n.str, n.flag)
 		if err != nil {

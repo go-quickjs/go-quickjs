@@ -3,29 +3,31 @@ package regexp
 import "unsafe"
 
 // Footprint reports the memory re takes, for a runtime's memory limit: its
-// compiled program, which the clones of one pattern share and which prog
-// identifies, so that a program is counted once however many patterns use
-// it; and what re holds of its own -- itself and its matcher, whose stacks
-// a match on a long subject leaves large. A clone keeps the pattern it was
-// made from, lender, whose own bytes are its to count once. The Unicode
-// property tables the package shares between patterns are not any
-// pattern's, and are not counted, nor is the subject a matcher was last
-// given, which is a string's.
+// core, which the clones of one pattern share and which prog identifies, so
+// that it is counted once however many patterns use it -- the compiled
+// program, the source, the group names and the matcher the core lends --
+// and what re holds of its own: itself and its matcher, whose stacks a
+// match on a long subject leaves large. The Unicode property tables the
+// package shares between patterns are not any pattern's, and are not
+// counted, nor is the subject a matcher was last given, which is a
+// string's. lender is nil: a clone keeps nothing but the core.
 func (re *Regexp) Footprint() (prog unsafe.Pointer, progBytes, ownBytes int, lender *Regexp) {
 	ownBytes = int(unsafe.Sizeof(*re))
 	if m := re.scratch; m != nil {
 		ownBytes += m.footprint()
 	}
-	if re.prog == nil {
-		return nil, 0, ownBytes, re.lender
+	c := re.core
+	progBytes = int(unsafe.Sizeof(*c)) + len(c.source)
+	if c.prog != nil {
+		progBytes += c.prog.footprint()
 	}
-	// The source and the group names are the clones' too: a clone copies
-	// the pattern it was made from.
-	progBytes = re.prog.footprint() + len(re.source)
-	for name, slots := range re.groupNames {
+	if m := c.lent; m != nil {
+		progBytes += m.footprint()
+	}
+	for name, slots := range c.groupNames {
 		progBytes += 48 + len(name) + cap(slots)*int(unsafe.Sizeof(0))
 	}
-	return unsafe.Pointer(re.prog), progBytes, ownBytes, re.lender
+	return unsafe.Pointer(c), progBytes, ownBytes, nil
 }
 
 // footprint is what a program takes.

@@ -8,24 +8,34 @@ import (
 )
 
 // Regexp is a compiled pattern.
+//
+// What compiling made is a pattern's core, which its clones share; a
+// Regexp itself is that and the matcher it keeps of its own, if any, so that
+// a clone is two words.
 type Regexp struct {
+	*core
+	// scratch is the matcher this Regexp keeps for itself: one a match made
+	// too large for the core to go on lending (see exec).
+	scratch *matcher
+}
+
+// core is what a pattern's clones share: the compiled program and what was
+// learnt compiling it, and the matcher it lends to each match.
+type core struct {
 	source     string
 	flags      Flags
 	prog       *program
 	groupCount int
 	groupNames map[string][]int
-	// scratch is the matcher this pattern lends to each match, so that the
-	// backtracking stack and the capture trail are allocated once rather than
-	// per match.
-	scratch *matcher
+	// lent is the matcher the pattern lends to each match by any of its
+	// clones, so that the backtracking stack and the capture trail are
+	// allocated once rather than per match.
+	lent *matcher
 	// concurrent marks a pattern goroutines match with at once, which lends
 	// no matcher: each match takes one from matcherPool and gives it back.
 	concurrent bool
 	// utf8 marks a pattern compiled for MatchUTF8Into.
 	utf8 bool
-	// lender is the pattern a clone was made from, whose matcher the clone
-	// borrows when it has none of its own; see exec.
-	lender *Regexp
 }
 
 // Compile parses and compiles a pattern.
@@ -43,13 +53,13 @@ func CompileFlags(source string, f Flags) (*Regexp, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Regexp{
+	return &Regexp{core: &core{
 		source:     source,
 		flags:      f,
 		prog:       compileNode(tree, f),
 		groupCount: groups,
 		groupNames: names,
-	}, nil
+	}}, nil
 }
 
 // Validate reports whether a pattern and its flags are well formed.
@@ -86,11 +96,7 @@ func (re *Regexp) Clone() *Regexp {
 // a few times, then share one rather than each making its own. A clone that
 // needs a large one keeps it, and it goes when the clone does.
 func (re *Regexp) CloneInto(c *Regexp) {
-	*c = *re
-	c.scratch = nil
-	if c.lender == nil {
-		c.lender = re
-	}
+	*c = Regexp{core: re.core}
 }
 
 // Concurrent marks the pattern as one that goroutines will match with at the

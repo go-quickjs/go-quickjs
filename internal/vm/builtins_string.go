@@ -2,6 +2,7 @@ package vm
 
 import (
 	"math"
+	"math/bits"
 	"strconv"
 	"strings"
 
@@ -916,6 +917,9 @@ func appendFixed(dst []byte, n float64, digits int) []byte {
 	if n < 0 {
 		dst, n = append(dst, '-'), -n
 	}
+	if digits <= maxFixedIntDigits {
+		return appendFixedInt(dst, n, digits)
+	}
 	// strconv rounds the exact value correctly, but a tie to even. A tie is
 	// an expansion that ends one place past the last digit kept, with a 5,
 	// and the expansion of m*2**p ends -p places after the point -- so only
@@ -924,6 +928,121 @@ func appendFixed(dst []byte, n float64, digits int) []byte {
 		return strconv.AppendFloat(dst, math.Abs(n), 'f', digits, 64)
 	}
 	return append(dst, formatFixedExact(n, digits)...)
+}
+
+// maxFixedIntDigits is the most digits after the point appendFixedInt
+// writes: 10**19 is the largest power of ten a uint64 holds.
+const maxFixedIntDigits = 19
+
+// pow10Uint64 holds the powers of ten a uint64 holds.
+var pow10Uint64 = [20]uint64{
+	1, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9,
+	1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19,
+}
+
+// appendFixedInt is appendFixed of a non-negative x below 10**21 with at most
+// maxFixedIntDigits digits after the point, worked out in integers: x is
+// m*2**p exactly, so x*10**digits is m*10**digits*2**p, which in 128 bits is
+// exact, and the integer the specification asks for -- the nearest, the
+// larger on a tie -- is that plus a half, rounded down. It is what strconv
+// would do for 'f' with a precision, which is to work through every digit of
+// x in a decimal of its own, without the work.
+func appendFixedInt(dst []byte, x float64, digits int) []byte {
+	m, p := binaryParts(x)
+	var hi, lo uint64
+	if p >= 0 {
+		// An integer, of 70 bits at most below 10**21: its digits, then
+		// zeros after the point.
+		if p >= 64 {
+			hi = m << (p - 64)
+		} else {
+			hi, lo = m>>(64-p), m<<p
+		}
+		at := len(dst)
+		dst = appendUint128(dst, hi, lo)
+		if len(dst) == at {
+			dst = append(dst, '0')
+		}
+		if digits > 0 {
+			dst = append(dst, '.')
+			for range digits {
+				dst = append(dst, '0')
+			}
+		}
+		return dst
+	}
+	// m is below 2**53 and 10**digits below 2**64, so their product is
+	// below 2**117; shifted down by more than that, it and the half added
+	// are below one, and the result is zero.
+	if s := uint(-p); s <= 117 {
+		hi, lo = bits.Mul64(m, pow10Uint64[digits])
+		var c uint64
+		if s <= 64 {
+			lo, c = bits.Add64(lo, 1<<(s-1), 0)
+			hi += c
+		} else {
+			hi += 1 << (s - 65)
+		}
+		if s >= 64 {
+			hi, lo = 0, hi>>(s-64)
+		} else {
+			hi, lo = hi>>s, lo>>s|hi<<(64-s)
+		}
+	}
+	// The integer's digits, with the point placed digits from the right and
+	// zeros ahead where it has fewer.
+	at := len(dst)
+	dst = appendUint128(dst, hi, lo)
+	n := len(dst) - at
+	if n <= digits {
+		pad := digits + 1 - n
+		for range pad {
+			dst = append(dst, 0)
+		}
+		copy(dst[at+pad:], dst[at:at+n])
+		for i := at; i < at+pad; i++ {
+			dst[i] = '0'
+		}
+		n += pad
+	}
+	if digits == 0 {
+		return dst
+	}
+	return insertPoint(dst, at+n-digits)
+}
+
+// appendUint128 appends the decimal digits of hi*2**64+lo, and nothing for
+// zero.
+func appendUint128(dst []byte, hi, lo uint64) []byte {
+	if hi == 0 {
+		if lo == 0 {
+			return dst
+		}
+		return strconv.AppendUint(dst, lo, 10)
+	}
+	// Nineteen digits at a time from the bottom, the top first: below 2**128
+	// there are three such chunks at most.
+	const chunk = 1e19
+	var parts [3]uint64
+	k := 0
+	for hi != 0 {
+		var r uint64
+		qhi := hi / chunk
+		lo, r = bits.Div64(hi%chunk, lo, chunk)
+		hi = qhi
+		parts[k] = r
+		k++
+	}
+	dst = strconv.AppendUint(dst, lo, 10)
+	for k--; k >= 0; k-- {
+		var buf [19]byte
+		b := strconv.AppendUint(buf[:0], parts[k], 10)
+		for range 19 - len(b) {
+			dst = append(dst, '0')
+		}
+		dst = append(dst, b...)
+	}
+	return dst
 }
 
 // formatFixedExact is formatFixed of a non-negative number from all its

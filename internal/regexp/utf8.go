@@ -41,14 +41,14 @@ func CompileUTF8(source, flags string) (*Regexp, error) {
 	if f&(FlagUnicode|FlagUnicodeSets) == 0 {
 		tree = joinPairs(tree)
 	}
-	return &Regexp{
+	return &Regexp{core: &core{
 		source:     source,
 		flags:      f,
 		prog:       compileNodeFor(tree, f, true),
 		groupCount: groups,
 		groupNames: names,
 		utf8:       true,
-	}, nil
+	}}, nil
 }
 
 // joinPairs makes each surrogate pair that a pattern without the u flag spells

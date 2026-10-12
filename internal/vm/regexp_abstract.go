@@ -3,6 +3,7 @@ package vm
 import (
 	"strings"
 	"unicode/utf16"
+	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/regexp"
 	"github.com/go-quickjs/go-quickjs/internal/wtf8"
@@ -157,7 +158,8 @@ func (r *Runtime) regExpSymbolMatch(rx Value, args []Value) (Value, error) {
 	// them, without the arrays exec would make of them for this to read
 	// element 0 of.
 	if builtin && r.builtinExecOf(rx) {
-		spans, err := r.execMatchAll(rx, s, fullUnicode, nil)
+		var spanRoom [16]int
+		spans, err := r.execMatchAll(rx, s, fullUnicode, spanRoom[:0])
 		if err != nil {
 			return Undefined, err
 		}
@@ -472,7 +474,10 @@ func (r *Runtime) regExpReplace(rx Value, args []Value, fl regexp.Flags, direct 
 	// the matching is done, the matches are kept as their indices rather than
 	// as the arrays exec would have made of them, which only this reads.
 	var results []Value
-	var spans []int
+	// The matches of a pattern used to replace a few of them are kept where
+	// they cost nothing to make.
+	var spanRoom [16]int
+	spans := spanRoom[:0]
 	fast := direct || builtin && r.builtinExecOf(rx)
 	if fast && global {
 		var err error
@@ -552,6 +557,11 @@ func (r *Runtime) regExpReplace(rx Value, args []Value, fl regexp.Flags, direct 
 	// built-in exec's matches are not made into strings at all: only where
 	// they are is read. The result is about as long as the subject.
 	plain := fast && !functional && !strings.ContainsRune(template, '$')
+	if plain && s.ascii && tv.ascii {
+		if out := replacedShort(s, tv, spans, width, count); out != nil {
+			return Str(out), nil
+		}
+	}
 	if plain {
 		if err := sb.Grow(len(s.Go())); err != nil {
 			return Undefined, err
@@ -685,6 +695,36 @@ func (r *Runtime) regExpReplace(rx Value, args []Value, fl regexp.Flags, direct 
 		return Str(&String{s: t, length: len(t), ascii: true}), nil
 	}
 	return r.builtString(sb.String())
+}
+
+// replacedShort is the result of replacing the built-in exec's matches of an
+// ASCII subject, spans of width each, by an ASCII template without a $, when
+// it is short enough for a String and its bytes to be one allocation; or nil
+// where it is not. The matches are in order and do not overlap, so its length
+// is known before it is written.
+func replacedShort(s, tv *String, spans []int, width, count int) *String {
+	n := s.length + count*tv.length
+	for k := 0; k < count; k++ {
+		n -= spans[k*width+1] - spans[k*width]
+	}
+	if n > 72 {
+		return nil
+	}
+	if n == 0 {
+		return emptyString
+	}
+	src, t := s.Go(), tv.Go()
+	out, b := newStringBytes(n)
+	w, next := 0, 0
+	for k := 0; k < count; k++ {
+		w += copy(b[w:], src[next:spans[k*width]])
+		w += copy(b[w:], t)
+		next = spans[k*width+1]
+	}
+	copy(b[w:], src[next:])
+	out.s = unsafe.String(unsafe.SliceData(b), n)
+	out.length, out.ascii = n, true
+	return out
 }
 
 // getSubstitution expands the $ forms in a replacement template.
