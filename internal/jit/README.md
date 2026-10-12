@@ -76,10 +76,29 @@ receivers of constructions, are taken from pools of objects the VM makes
 ahead (`abi.ObjectPool`), as V8's code allocates inline; Go refills a pool
 that runs out.
 
-**Not compiled yet.** Top-level and module code, async functions and
-generators, and code using private fields run in the tree tier, which
-handles all of them; the JIT is to follow it there. Top-level code is
-refused before any entry is made (`jitCompiles`).
+**Exceptions.** The compiler emits structured code, so the handlers in
+force at each instruction are known when lowering (`ir.Program`'s
+`Handlers`), and native code registers none: wherever Go takes the frame
+at an exit it gives it those handlers. A throw from what Go does there --
+a call, an operation, a throw statement -- is unwound to its handler as
+the interpreter unwinds it, and native code goes on at the handler, an
+entry of its own, as V8's code goes on at a handler (`jitCatch`). A
+finally clause's normal completion goes on natively; any other (a return,
+a throw) deoptimizes, the interpreter reproducing it. A using declaration's
+scope is such a try statement, its resources added and disposed of by Go.
+
+**Generators and async functions.** `yield` and `await` are exits at which
+Go suspends the frame as the interpreter does, and each resumption enters
+native code at the frame's pc -- the entry after the yield or await, or,
+the first time, past the parameters -- as the tree tier resumes a tree at
+the block there (`jitResume`, `runGeneratorTree`). A call of one makes its
+object, so none is called natively or inlined.
+
+**Not compiled yet.** Top-level and module code, `yield*`, an
+`await using` scope's disposal, closures and the locals they capture, and
+code using private fields run in the tree tier, which handles all of
+them; the JIT is to follow it there. Top-level code is refused before any
+entry is made (`jitCompiles`).
 
 **Profitability.** Each native stretch's work is estimated, exits and
 calls of Go counted against it; code whose stretches do too little between
