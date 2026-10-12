@@ -84,3 +84,99 @@ func TestForget(t *testing.T) {
 		t.Error("Forget did not hand back the same slots as they were")
 	}
 }
+
+// TestKeepBig pins that an arena that keeps big requests (KeepBig) cuts
+// the next job's big slice from the chunk the last one made, allocating
+// nothing; one that does not hands big slices out on their own each time.
+func TestKeepBig(t *testing.T) {
+	job := func(a *Arena[int]) {
+		a.Make(10)
+		a.Make(5000)
+		a.Make(3)
+		a.Rewind()
+	}
+	var kept Arena[int]
+	kept.KeepBig()
+	job(&kept)
+	if n := testing.AllocsPerRun(10, func() { job(&kept) }); n != 0 {
+		t.Fatalf("a job no bigger than the last allocated %v times", n)
+	}
+	if s := kept.Make(5000); len(s) != 5000 || cap(s) != 5000 {
+		t.Fatalf("Make(5000): len %d cap %d", len(s), cap(s))
+	}
+	var plain Arena[int]
+	job(&plain)
+	if n := testing.AllocsPerRun(10, func() { job(&plain) }); n == 0 {
+		t.Fatal("an arena that does not keep big requests kept one")
+	}
+}
+
+// TestKeepBigTrims pins what an arena that keeps big requests keeps: a job
+// bigger than every recent one before it gives its chunks back as it is
+// rewound, down to what those needed; jobs as big that come among the
+// recent ones keep them.
+func TestKeepBigTrims(t *testing.T) {
+	small := func(a *Arena[int]) {
+		a.Make(10)
+		a.Make(500)
+		a.Rewind()
+	}
+	big := func(a *Arena[int]) {
+		a.Make(10)
+		a.Make(1 << 20)
+		a.Rewind()
+	}
+	var a Arena[int]
+	a.KeepBig()
+	small(&a)
+	usual := a.Cap()
+	big(&a)
+	if a.Cap() > usual {
+		t.Fatalf("a big job's chunks kept: %d slots, %d after the usual job", a.Cap(), usual)
+	}
+	small(&a)
+	if n := testing.AllocsPerRun(10, func() { small(&a) }); n != 0 {
+		t.Fatalf("the usual job allocated %v times after a big one", n)
+	}
+	// A big job among the recent ones: the next as big allocates nothing.
+	big(&a)
+	big(&a)
+	if a.Cap() < 1<<20 {
+		t.Fatalf("a big job among the recent ones did not keep its chunks: %d slots", a.Cap())
+	}
+	if n := testing.AllocsPerRun(10, func() { big(&a) }); n != 0 {
+		t.Fatalf("a big job like a recent one allocated %v times", n)
+	}
+	// Once the big jobs are past the recent ones, the next big one goes.
+	for range recentJobs {
+		small(&a)
+	}
+	big(&a)
+	if a.Cap() > usual {
+		t.Fatalf("a big job past the recent ones kept its chunks: %d slots", a.Cap())
+	}
+}
+
+// TestRewindSkippedTail pins that a rewind clears what was cut from a chunk
+// a later request did not fit in, and that slots past it, never handed out,
+// come out zeroed in the next job too: Rewind clears only what was cut.
+func TestRewindSkippedTail(t *testing.T) {
+	var a Arena[int]
+	fill := func(s []int) {
+		for i := range s {
+			s[i] = 7
+		}
+	}
+	for job := range 4 {
+		for _, n := range []int{40 + job*8, 30, 64, 10} {
+			s := a.Make(n)
+			for i, v := range s {
+				if v != 0 {
+					t.Fatalf("job %d: Make(%d)[%d] = %d", job, n, i, v)
+				}
+			}
+			fill(s)
+		}
+		a.Rewind()
+	}
+}

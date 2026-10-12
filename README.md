@@ -57,6 +57,12 @@ long, the weak collections and BigInt arithmetic among them. See [Compared with 
 
 ## Documentation
 
+An experimental optimizing JIT compiles hot functions to native code on
+`linux/amd64`, `windows/amd64` and `darwin/arm64`. It needs both a build with
+`-tags quickjs_jit` and a runtime made with `quickjs.WithJIT()` (or
+`qjs --jit`); anything else runs exactly as before. See
+[its design notes](internal/jit/README.md).
+
 | | |
 |---|---|
 | [Status and conformance](docs/status.md) | what is implemented and what is not, and how test262 is run against it |

@@ -113,6 +113,8 @@ type Runtime struct {
 type Option func(*config)
 
 type config struct {
+	jit              bool
+	jitMemoryLimit   int64
 	moduleFetchLimit int
 	memoryLimit      int64
 	stackSize        int
@@ -123,6 +125,44 @@ type config struct {
 	debug            bool
 	sourceMaps       bool
 	sourceMapLoader  SourceMapLoader
+}
+
+// WithJIT enables the experimental native numeric tier. It requires a build
+// with the quickjs_jit tag on linux/amd64, windows/amd64, or darwin/arm64.
+// Unsupported builds, denied executable memory, and unsupported functions
+// use the existing execution tiers. Native code is owned by this Runtime;
+// what the JIT holds is bounded by WithJITMemoryLimit, never by
+// WithMemoryLimit, so a script fails with ErrMemoryLimit the same with the
+// JIT on and off. Eligible functions may promote after repeated calls or
+// sustained looping; native execution and speedup are not guaranteed.
+// Runtimes made with WithDebugger use the existing execution tiers.
+// This is independent of WithoutCodeGeneration.
+func WithJIT() Option { return func(c *config) { c.jit = true } }
+
+// WithJITMemoryLimit bounds the memory the JIT (WithJIT) holds for the
+// Runtime: its machine code and all that describes it, what it has learned
+// of the functions it compiled, the programs it lowered, the contexts its
+// code runs in and its compiler's workspaces. It is apart from
+// WithMemoryLimit, which never counts the JIT's memory. Zero or less keeps
+// the default: 8 MB, or an eighth of WithMemoryLimit when that is set. It
+// does nothing in a build without the JIT, or a runtime without WithJIT.
+//
+// When the JIT's memory is full, it drops the code that has gone longest
+// unused, once it is old -- not used within the last two collections or
+// 100 ms -- to make room, as V8 flushes old code; while all of it is in
+// use, a function newly hot is not compiled, and runs in the existing
+// tiers, until some is old.
+//
+// A lower limit makes the JIT slower: with less room, hot code is dropped
+// and compiled again more often, or refused and interpreted, so a program
+// with many hot functions loses much of what the JIT gains it. A program
+// running 600 hot functions, whose code and all the JIT keeps for it come
+// to 4.5 MB, took 1.1 times as long under a 4 MB limit as under the
+// default, 2 times under 2 MB, 2.5 times under 1 MB, and 2.8 times under
+// 512 KB, against 2.9 times without the JIT. Lower it to run many runtimes
+// in one process, or where memory is tight; otherwise leave the default.
+func WithJITMemoryLimit(bytes int64) Option {
+	return func(c *config) { c.jitMemoryLimit = bytes }
 }
 
 // WithMemoryLimit caps the memory a script may hold, beyond what the
@@ -267,12 +307,14 @@ func New(opts ...Option) *Runtime {
 		o(&c)
 	}
 	r := &Runtime{rt: vm.New(vm.Config{
-		MemoryLimit:  c.memoryLimit,
-		StackSize:    c.stackSize,
-		MaxCallDepth: c.maxCallDepth,
-		Locale:       c.locale,
-		NodeQuirks:   c.nodeQuirks,
-		Debug:        c.debug,
+		JIT:            c.jit,
+		JITMemoryLimit: c.jitMemoryLimit,
+		MemoryLimit:    c.memoryLimit,
+		StackSize:      c.stackSize,
+		MaxCallDepth:   c.maxCallDepth,
+		Locale:         c.locale,
+		NodeQuirks:     c.nodeQuirks,
+		Debug:          c.debug,
 	}), nodeQuirks: c.nodeQuirks, noCodeGeneration: c.noCodeGeneration,
 		moduleFetchLimit: c.moduleFetchLimit, debug: c.debug}
 	if c.moduleFetchLimit == 0 {

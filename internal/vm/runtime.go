@@ -272,6 +272,12 @@ type Runtime struct {
 	// debug is the debugger of a runtime made for one, and nil for any
 	// other; see zdebug.go.
 	debug *debugState
+	// powFn is Math.pow, which the native tier computes itself where its
+	// answer is exact (jitFeedback.Intrinsic).
+	powFn *Object
+	// atan2Fn and hypotFn are Math.atan2 and Math.hypot, which native code
+	// has Go compute.
+	atan2Fn, hypotFn *Object
 	// sourceMaps maps stack traces through scripts' source maps, once a
 	// host gives a loader; see zsourcemap.go.
 	sourceMaps *sourceMaps
@@ -283,6 +289,11 @@ type Runtime struct {
 	// can suspend again, so one serves them all, and a suspension allocates
 	// nothing.
 	treeSig suspendSignal
+	// jitFields is the optional native tier's state, empty in builds
+	// without it. It comes after everything the interpreter reads, so that
+	// a build with the tier moves none of their offsets, and before the last
+	// field, so that an empty one adds no padding.
+	jitFields
 	// jobHead is where the microtasks still to run begin: those before it
 	// have run. The queue is reused from its start once it empties, rather
 	// than each job taken from the front of the slice, which made an append
@@ -470,7 +481,9 @@ type Realm struct {
 	// genIterFn and genNextFn are %GeneratorPrototype%[Symbol.iterator] and
 	// next, which a for-of loop over a generator need not look up while they
 	// are what the generator inherits; see generatorIteration.
-	genIterFn, genNextFn *Object
+	genIterFn *Object
+	jitRealmFields
+	genNextFn *Object
 }
 
 // intrinsics holds the built-in prototypes and constructors.
@@ -566,6 +579,7 @@ type closure struct {
 	// environment for module code -- which inherits from the global object, so
 	// the prototype chain performs the scope lookup.
 	env *Object
+	jitClosureFields
 	// pureMiss counts the calls pureCall gave up on, for a body LeafPure
 	// marks: past pureMissLimit it is not tried.
 	pureMiss uint8
@@ -999,6 +1013,7 @@ func (r *Runtime) ReleaseClosed() {
 		return
 	}
 	r.releaseAllWeakMaps()
+	r.releaseJIT()
 	if r.stack == nil {
 		return
 	}

@@ -2939,6 +2939,14 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		continue
 
 	interrupted:
+		// A build with the JIT checks the same and may then promote the loop
+		// (jitBackEdge); without it, this block is compiled out.
+		if jitBuilt {
+			if v, err, done := r.jitBackEdge(f, pc, sp); done {
+				return v, err
+			}
+			continue
+		}
 		// A backward jump has run the budget out: the check an unbounded
 		// program cannot run without reaching, since it runs no longer than
 		// its code is long but through a loop, or a call, which callObject

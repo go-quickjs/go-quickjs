@@ -8,7 +8,7 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/parser"
 )
 
-func compileForTest(t *testing.T, src string) *bytecode.Function {
+func compileForTest(t testing.TB, src string) *bytecode.Function {
 	t.Helper()
 	prog, err := parser.Parse(src, parser.Options{})
 	if err != nil {

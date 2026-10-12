@@ -1,0 +1,172 @@
+package jit
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"sync"
+	"unsafe"
+)
+
+// An Arena holds a runtime's native code in a few large mappings, rather
+// than one mapping per function: a process with many runtimes, each with
+// its cache of compiled functions, would otherwise run out of mappings
+// (Linux's vm.max_map_count) and, on Windows, of address space, which
+// VirtualAlloc hands out 64 KiB at a time.
+//
+// Functions are packed into chunks of chunkBytes. A chunk's pages are
+// executable and never writable at once: placing a function makes the pages
+// it touches writable, copies it and seals them again. That is sound only
+// while no code in those pages runs, and a runtime's native code never does
+// while Go runs it: native code returns to Go before Go does anything, and
+// an arena belongs to one runtime, which is not used concurrently. A chunk
+// is unmapped when the last function in it is released.
+//
+// Code is released by its owner, or by its finalizer on another goroutine,
+// so the arena locks.
+type Arena struct {
+	mu     sync.Mutex
+	chunks []*chunk
+}
+
+type chunk struct {
+	mem  []byte
+	used int // bytes handed out, from the start
+	live int // bytes still owned
+}
+
+const (
+	// chunkBytes is a chunk's size: Windows' allocation granularity, and a
+	// whole number of pages everywhere. A larger function gets a chunk of
+	// its own, rounded up to a multiple of it.
+	chunkBytes = 64 << 10
+	// codeAlign aligns each function to a cache line, and to the 64 bytes
+	// arm64's instruction cache maintenance works in.
+	codeAlign = 64
+)
+
+// NewArena returns an empty arena; it maps nothing until code is placed.
+func NewArena() *Arena { return &Arena{} }
+
+// Mapped reports how many bytes of code the arena has mapped, and how many
+// of them functions own: the rest is space their release left in chunks
+// that others still hold.
+func (a *Arena) Mapped() (mapped, live int) {
+	if a == nil {
+		return 0, 0
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, c := range a.chunks {
+		mapped += len(c.mem)
+		live += c.live
+	}
+	return mapped, live
+}
+
+// Chunks reports how many mappings the arena holds.
+func (a *Arena) Chunks() int {
+	if a == nil {
+		return 0
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.chunks)
+}
+
+func alignUp(n, to int) int { return (n + to - 1) / to * to }
+
+// place copies instructions into the arena and seals them executable. The
+// slice it returns is the code's whole allocation, codeAlign-rounded, which
+// release takes back.
+func (a *Arena) place(instructions []byte) ([]byte, error) {
+	if len(instructions) == 0 || len(instructions) > MaxCodeBytes {
+		return nil, fmt.Errorf("invalid native kernel size: %d", len(instructions))
+	}
+	if err := executablePolicy(); err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	n := alignUp(len(instructions), codeAlign)
+	var c *chunk
+	if k := len(a.chunks); k > 0 && a.chunks[k-1].used+n <= len(a.chunks[k-1].mem) {
+		c = a.chunks[k-1]
+	} else {
+		mem, err := mapCode(alignUp(n, chunkBytes))
+		if err != nil {
+			return nil, fmt.Errorf("allocate code: %w", err)
+		}
+		c = &chunk{mem: mem}
+		a.chunks = append(a.chunks, c)
+	}
+	start := c.used
+	page := os.Getpagesize()
+	pages := c.mem[start/page*page : min(alignUp(start+n, page), len(c.mem))]
+	code := c.mem[start : start+n : start+n]
+	if err := a.write(c, pages, code, instructions); err != nil {
+		if c.live == 0 {
+			// A chunk mapped for this code, or emptied before it, holds
+			// nothing: give it back.
+			err = errors.Join(err, a.unmap(c))
+		}
+		return nil, err
+	}
+	c.used += n
+	c.live += n
+	return code, nil
+}
+
+// write copies instructions into code, through its pages made writable for
+// the copy, then seals the pages and publishes them to instruction fetch.
+func (a *Arena) write(c *chunk, pages, code, instructions []byte) error {
+	if err := protectCode(pages, false); err != nil {
+		return fmt.Errorf("open code: %w", err)
+	}
+	copy(code, instructions)
+	if err := protectCode(pages, true); err != nil {
+		return fmt.Errorf("seal code: %w", err)
+	}
+	if err := flushCode(code); err != nil {
+		return fmt.Errorf("flush instruction cache: %w", err)
+	}
+	return nil
+}
+
+// unmap gives c back to the OS and drops it.
+func (a *Arena) unmap(c *chunk) error {
+	if err := unmapCode(c.mem); err != nil {
+		return err
+	}
+	for i := range a.chunks {
+		if a.chunks[i] == c {
+			a.chunks = append(a.chunks[:i], a.chunks[i+1:]...)
+			break
+		}
+	}
+	return nil
+}
+
+// release gives code back. Its chunk is unmapped once nothing in it is
+// owned; if the OS refuses, the code stays owned, for a retry.
+func (a *Arena) release(code []byte) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	at := uintptr(unsafe.Pointer(unsafe.SliceData(code)))
+	for _, c := range a.chunks {
+		base := uintptr(unsafe.Pointer(unsafe.SliceData(c.mem)))
+		if at < base || at >= base+uintptr(len(c.mem)) {
+			continue
+		}
+		if c.live > len(code) {
+			c.live -= len(code)
+			return nil
+		}
+		if err := a.unmap(c); err != nil {
+			return err
+		}
+		c.live = 0
+		return nil
+	}
+	return errors.New("jit: code is not in its arena")
+}

@@ -2478,7 +2478,7 @@ func (r *Runtime) initMathBuiltins() {
 		fo.fn().mathOp = uint8(i + 1)
 	}
 
-	r.defMethod(m, "pow", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	r.powFn = r.defMethod(m, "pow", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		a, err := rt.toNumber(arg(args, 0))
 		if err != nil {
 			return Undefined, err
@@ -2490,7 +2490,7 @@ func (r *Runtime) initMathBuiltins() {
 		return Float(jsPow(a, b)), nil
 	})
 
-	r.defMethod(m, "atan2", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	r.atan2Fn = r.defMethod(m, "atan2", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		a, err := rt.toNumber(arg(args, 0))
 		if err != nil {
 			return Undefined, err
@@ -2509,42 +2509,12 @@ func (r *Runtime) initMathBuiltins() {
 		return rt.mathExtremum(args, false)
 	}).fn().mathOp = mathMin
 
-	r.defMethod(m, "hypot", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	r.hypotFn = r.defMethod(m, "hypot", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		nums, err := rt.coerceAll(args)
 		if err != nil {
 			return Undefined, err
 		}
-		// An infinity wins over a NaN here, unlike everywhere else: the length
-		// of a vector with an infinite side is infinite whatever the other
-		// sides are, including unknown.
-		sawNaN, largest := false, 0.0
-		for _, n := range nums {
-			switch {
-			case math.IsInf(n, 0):
-				return Float(inf(1)), nil
-			case math.IsNaN(n):
-				sawNaN = true
-			default:
-				if a := math.Abs(n); a > largest {
-					largest = a
-				}
-			}
-		}
-		if sawNaN {
-			return Float(nan()), nil
-		}
-		if largest == 0 {
-			return Float(0), nil
-		}
-		// The squares are scaled by the largest term, so that a vector of large
-		// or small components neither overflows nor underflows on the way.
-		sum := 0.0
-		for _, n := range nums {
-			q := n / largest
-			// Rounded before the sum, which arm64 would fuse.
-			sum += float64(q * q)
-		}
-		return Float(largest * math.Sqrt(sum)), nil
+		return Float(jsHypot(nums)), nil
 	})
 
 	r.defMethod(m, "random", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -2660,6 +2630,41 @@ func jsRound(f float64) float64 {
 		return f
 	}
 	return math.Floor(f + 0.5)
+}
+
+// jsHypot is Math.hypot of numbers.
+func jsHypot(nums []float64) float64 {
+	// An infinity wins over a NaN here, unlike everywhere else: the length
+	// of a vector with an infinite side is infinite whatever the other
+	// sides are, including unknown.
+	sawNaN, largest := false, 0.0
+	for _, n := range nums {
+		switch {
+		case math.IsInf(n, 0):
+			return inf(1)
+		case math.IsNaN(n):
+			sawNaN = true
+		default:
+			if a := math.Abs(n); a > largest {
+				largest = a
+			}
+		}
+	}
+	if sawNaN {
+		return nan()
+	}
+	if largest == 0 {
+		return 0
+	}
+	// The squares are scaled by the largest term, so that a vector of large
+	// or small components neither overflows nor underflows on the way.
+	sum := 0.0
+	for _, n := range nums {
+		q := n / largest
+		// Rounded before the sum, which arm64 would fuse.
+		sum += float64(q * q)
+	}
+	return largest * math.Sqrt(sum)
 }
 
 func jsSign(f float64) float64 {

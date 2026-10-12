@@ -301,10 +301,13 @@ var (
 
 // Types the walk treats specially.
 var (
-	objectPtrType       = reflect.TypeOf((*Object)(nil))
-	stringPtrType       = reflect.TypeOf((*String)(nil))
-	runtimePtrType      = reflect.TypeOf((*Runtime)(nil))
-	meterPtrType        = reflect.TypeOf((*memoryMeter)(nil))
+	objectPtrType  = reflect.TypeOf((*Object)(nil))
+	stringPtrType  = reflect.TypeOf((*String)(nil))
+	runtimePtrType = reflect.TypeOf((*Runtime)(nil))
+	meterPtrType   = reflect.TypeOf((*memoryMeter)(nil))
+	// The JIT's state and cache are not the script's memory: see jitBudget.
+	jitStatePtrType     = reflect.TypeOf((*jitState)(nil))
+	jitEntryPtrType     = reflect.TypeOf((*jitEntry)(nil))
 	bigIntPtrType       = reflect.TypeOf((*BigInt)(nil))
 	sharedMemoryPtrType = reflect.TypeOf((*SharedMemory)(nil))
 	regexpPtrType       = reflect.TypeOf((*regexp.Regexp)(nil))
@@ -469,7 +472,7 @@ func (m *memoryMeter) generic(v reflect.Value) {
 		case stringPtrType:
 			m.addString((*String)(v.UnsafePointer()))
 			return
-		case runtimePtrType, meterPtrType:
+		case runtimePtrType, meterPtrType, jitStatePtrType, jitEntryPtrType:
 			return
 		case bigIntPtrType:
 			b := (*BigInt)(v.UnsafePointer())

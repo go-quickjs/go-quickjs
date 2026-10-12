@@ -19,6 +19,9 @@ import (
 
 	"github.com/go-quickjs/go-quickjs"
 	"github.com/go-quickjs/go-quickjs/conformance"
+	"github.com/go-quickjs/go-quickjs/internal/hostaccess"
+	"github.com/go-quickjs/go-quickjs/internal/jit"
+	"github.com/go-quickjs/go-quickjs/internal/vm"
 )
 
 // The test262 conformance run.
@@ -34,6 +37,7 @@ import (
 // example, -conformance.force-feature=Temporal.
 
 var (
+	jitFlag    = flag.Bool("conformance.jit", false, "enable the optional native numeric tier")
 	reportPath = flag.String("conformance.report", "",
 		"write the list of failing tests to this file")
 	subdirFlag = flag.String("conformance.dir", "",
@@ -120,6 +124,7 @@ func TestConformance(t *testing.T) {
 	type outcome struct {
 		res    result
 		reason string
+		jit    vm.JITStats
 	}
 	outcomes := make([]outcome, len(tests))
 	next := int64(-1)
@@ -145,16 +150,18 @@ func TestConformance(t *testing.T) {
 				if *allocReport > 0 {
 					var before, after runtime.MemStats
 					runtime.ReadMemStats(&before)
-					res, reason := runOne(suite, tests[i], forcedFeatures)
+					var jitStats vm.JITStats
+					res, reason := runOne(suite, tests[i], forcedFeatures, &jitStats)
 					runtime.ReadMemStats(&after)
 					if d := after.TotalAlloc - before.TotalAlloc; d > uint64(*allocReport) {
 						t.Logf("ALLOC %s: %d MB", tests[i].Name(), d/(1<<20))
 					}
-					outcomes[i] = outcome{res, reason}
+					outcomes[i] = outcome{res, reason, jitStats}
 					continue
 				}
-				res, reason := runOne(suite, tests[i], forcedFeatures)
-				outcomes[i] = outcome{res, reason}
+				var jitStats vm.JITStats
+				res, reason := runOne(suite, tests[i], forcedFeatures, &jitStats)
+				outcomes[i] = outcome{res, reason, jitStats}
 			}
 		}()
 	}
@@ -176,6 +183,15 @@ func TestConformance(t *testing.T) {
 			st = &areaStats{}
 			byArea[area] = st
 		}
+		if js := outcomes[i].jit; js.Entries != 0 {
+			st.native++
+			st.jit.Entries += js.Entries
+			st.jit.Guards += js.Guards
+			st.jit.Interpreted += js.Interpreted
+			st.jit.SSAEntries += js.SSAEntries
+			st.jit.SSARecords += js.SSARecords
+		}
+		st.jit.Compiled += outcomes[i].jit.Compiled
 
 		switch res {
 		case resultSkip:
@@ -229,6 +245,10 @@ func TestConformance(t *testing.T) {
 		t.Logf("  %-44s %5d failed / %5d run", a, st.fail, st.pass+st.fail)
 	}
 
+	if *jitFlag {
+		reportJIT(t, byArea)
+	}
+
 	if *reportPath != "" {
 		sort.Strings(failures)
 		if err := os.WriteFile(*reportPath, []byte(strings.Join(failures, "\n")+"\n"), 0o644); err != nil {
@@ -238,7 +258,43 @@ func TestConformance(t *testing.T) {
 	}
 }
 
-type areaStats struct{ pass, fail, skip int }
+type areaStats struct {
+	pass, fail, skip int
+	// native counts the tests that ran native code, and jit sums their
+	// counters, under -conformance.jit.
+	native int
+	jit    vm.JITStats
+}
+
+// reportJIT logs, per area, how many tests ran native code. A pass under
+// -conformance.jit means little for native code that never ran, so the
+// coverage is reported with it, and a build with a native tier that runs no
+// test natively -- the JIT silently falling back -- fails. QJS_JIT_STRESS (see
+// internal/vm) compiles on the first call and drives exits and fallbacks.
+func reportJIT(t *testing.T, byArea map[string]*areaStats) {
+	areas := make([]string, 0, len(byArea))
+	var native, compiled, entries, guards, interpreted, records uint64
+	for a, st := range byArea {
+		areas = append(areas, a)
+		native += uint64(st.native)
+		compiled += st.jit.Compiled
+		entries += st.jit.Entries
+		guards += st.jit.Guards
+		interpreted += st.jit.Interpreted
+		records += st.jit.SSARecords
+	}
+	sort.Strings(areas)
+	t.Logf("native code ran in %d tests: %d programs compiled, %d entries, %d guard failures, %d finished in the interpreter, %d slots left to Go at exits",
+		native, compiled, entries, guards, interpreted, records)
+	for _, a := range areas {
+		if st := byArea[a]; st.native != 0 {
+			t.Logf("  %-44s %5d of %5d tests native, %d entries", a, st.native, st.pass+st.fail, st.jit.Entries)
+		}
+	}
+	if jit.Supported() && native == 0 {
+		t.Errorf("-conformance.jit: no test ran native code; the JIT fell back everywhere")
+	}
+}
 
 // areaOf groups a test path into a reportable area, which is the first two
 // path segments.
@@ -250,9 +306,10 @@ func areaOf(path string) string {
 	return parts[0]
 }
 
-// runOne executes a single test and classifies the outcome.
+// runOne executes a single test and classifies the outcome. It sets
+// *jitStats to what the JIT did in the test.
 func runOne(suite *conformance.Suite, tc *conformance.Test,
-	forcedFeatures map[string]bool) (result, string) {
+	forcedFeatures map[string]bool, jitStats *vm.JITStats) (result, string) {
 	for _, f := range tc.Meta.Features {
 		if reason, unsupported := unsupportedFeatures[f]; unsupported &&
 			reason != "" && !forcedFeatures[f] {
@@ -289,10 +346,14 @@ func runOne(suite *conformance.Suite, tc *conformance.Test,
 		if *debugger {
 			opts = append(opts, quickjs.WithDebugger())
 		}
+		if *jitFlag {
+			opts = append(opts, quickjs.WithJIT())
+		}
 		return quickjs.New(opts...)
 	}
 	rt := newRuntime()
 	defer rt.Close()
+	defer func() { *jitStats = hostaccess.VM(rt).JITStats() }()
 	// Agents are runtimes of their own, stopped when the test is over.
 	agents := newAgentPool(newRuntime)
 	defer agents.stop()

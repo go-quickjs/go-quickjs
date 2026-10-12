@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"github.com/go-quickjs/go-quickjs/internal/jit"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -757,5 +758,18 @@ func TestFileAndDataURLs(t *testing.T) {
 		if got, err := decodeDataURL(spec); err != nil || got != want {
 			t.Errorf("%s = %q, %v; want %q", spec, got, err, want)
 		}
+	}
+}
+
+// --jit runs the script either way, and says so when the build cannot honour
+// it, rather than falling back silently.
+func TestJITFlag(t *testing.T) {
+	code, out, errOut := exec(t, "", "--jit", "-e", `console.log(6 * 7)`)
+	if code != 0 || strings.TrimSpace(out) != "42" {
+		t.Fatalf("--jit: exit %d, out %q, err %q", code, out, errOut)
+	}
+	warned := strings.Contains(errOut, "--jit has no effect")
+	if warned == jit.Supported() {
+		t.Fatalf("supported %v, warned %v: %q", jit.Supported(), warned, errOut)
 	}
 }

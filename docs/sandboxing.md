@@ -51,6 +51,18 @@ it is not what the process takes from the system:
 - One process heap serves every runtime in it, so a limit is per runtime,
   not per process.
 
+The optional JIT (`WithJIT`) holds memory of its own -- its machine code
+and all that describes it -- which the script's limit never counts, so a
+script fails with `ErrMemoryLimit` the same with the JIT on and off.
+`WithJITMemoryLimit` bounds it: 8 MB by default, or an eighth of the
+memory limit when one is set. When it is full, the JIT drops the code that
+has gone longest unused, once it is old; while all of it is in use, a
+function newly hot runs in the interpreter. A lower limit makes the JIT
+slower for programs with many hot functions: 600 of them, which hold 4.5 MB,
+took 2 times as long under 2 MB and 2.5 times under 1 MB, against 2.9 times
+without the JIT. Lower it to run many runtimes in one process, or where
+memory is tight; otherwise leave the default.
+
 Measured against Go's live heap after a full collection, the estimate is
 within 15% for every kind of value a script can hold -- objects, arrays,
 strings, Maps and Sets, typed arrays, closures, BigInts, dates and regular

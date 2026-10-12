@@ -1,9 +1,12 @@
 // Command disasm prints the bytecode go-quickjs compiles a script or a module
 // to: each function's instructions, with the source line each comes from and,
 // with -tree, whether the tree tier builds the function and, if not, why.
+// With -jit it reports numeric JIT IR eligibility and interpreter exit maps;
+// this report neither emits native code nor enables native execution.
 //
 //	go run ./internal/cmd/disasm file.js
 //	go run ./internal/cmd/disasm -tree -func global_read bench.js
+//	go run ./internal/cmd/disasm -jit -func sum bench.js
 //	go run ./internal/cmd/disasm -e 'let s = 0; for (const x of a) s += x'
 //
 // A file ending in .mjs is compiled as a module, as -m compiles any other.
@@ -25,6 +28,7 @@ import (
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"github.com/go-quickjs/go-quickjs/internal/compiler"
+	jitcompile "github.com/go-quickjs/go-quickjs/internal/jit/compile"
 	"github.com/go-quickjs/go-quickjs/internal/parser"
 	"github.com/go-quickjs/go-quickjs/internal/vm"
 )
@@ -37,6 +41,7 @@ func main() {
 		quirks = flag.Bool("node-quirks", false, "compile as WithNodeQuirks does")
 		only   = flag.String("func", "", "print only the functions of this name")
 		tree   = flag.Bool("tree", false, "say whether the tree tier builds each function, and why not")
+		jit    = flag.Bool("jit", false, "show numeric JIT IR eligibility and pre-instruction exit maps (no native compilation)")
 		src    = flag.Bool("src", true, "show the source line before the instructions it compiles to")
 	)
 	flag.Usage = func() {
@@ -59,7 +64,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "disasm:", err)
 		os.Exit(1)
 	}
-	p := printer{w: os.Stdout, lines: splitLines(text), only: *only, tree: *tree, src: *src}
+	p := printer{w: os.Stdout, lines: splitLines(text), only: *only, tree: *tree, jit: *jit, src: *src}
 	p.function(fn, "")
 	if p.only != "" && p.printed == 0 {
 		fmt.Fprintf(os.Stderr, "disasm: no function is named %q\n", p.only)
@@ -112,6 +117,7 @@ type printer struct {
 	lines   []string
 	only    string
 	tree    bool
+	jit     bool
 	src     bool
 	printed int
 }
@@ -190,6 +196,22 @@ func (p *printer) header(fn *bytecode.Function, indent string) {
 			fmt.Fprintf(p.w, "%s  tree: built\n", indent)
 		} else {
 			fmt.Fprintf(p.w, "%s  tree: not built: %s\n", indent, why)
+		}
+	}
+	if p.jit {
+		if ir, err := jitcompile.LowerSSA(fn); err == nil {
+			fmt.Fprintf(p.w, "%s  jit IR: eligible (this tool does not compile or execute native code)\n", indent)
+			fmt.Fprintf(p.w, "%s  jit slots: %d locals + %d operands\n", indent, ir.Locals, ir.StackSize)
+			for _, state := range ir.Maps {
+				if state.Depth >= 0 {
+					fmt.Fprintf(p.w, "%s  jit exit: pc=%d depth=%d\n", indent, state.PC, state.Depth)
+				}
+			}
+		} else {
+			fmt.Fprintf(p.w, "%s  jit IR: refused: %s\n", indent, err)
+			if _, err := jitcompile.LowerSSAInline(fn); err == nil {
+				fmt.Fprintf(p.w, "%s  jit callee IR: eligible for native callers and inlining\n", indent)
+			}
 		}
 	}
 	if len(fn.Locals) > 0 {

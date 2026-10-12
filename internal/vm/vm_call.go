@@ -564,14 +564,20 @@ start:
 	// here; firstTree settles it the first time.
 	var v Value
 	var err error
-	t := (*tree)(atomic.LoadPointer(&fn.VMCode))
-	if t == nil {
-		t = firstTree(fn)
+	var native bool
+	if r.jitOn() {
+		v, err, native = r.tryJITFrame(f)
 	}
-	if t != noTree {
-		v, err = r.runTree(f, t)
-	} else {
-		v, err = r.execute(f)
+	if !native {
+		t := (*tree)(atomic.LoadPointer(&fn.VMCode))
+		if t == nil {
+			t = firstTree(fn)
+		}
+		if t != noTree {
+			v, err = r.runTree(f, t)
+		} else {
+			v, err = r.execute(f)
+		}
 	}
 	r.popFrameOf(f, base)
 	if err != errTailCall {

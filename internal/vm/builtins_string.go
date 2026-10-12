@@ -195,6 +195,8 @@ func (r *Runtime) initStringBuiltins() {
 		return Int(c), nil
 	})
 
+	r.recordJITStringIntrinsic()
+
 	r.defMethod(p, "codePointAt", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		s, err := thisStr(rt, this)
 		if err != nil {

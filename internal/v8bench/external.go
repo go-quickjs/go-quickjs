@@ -15,8 +15,8 @@ import (
 // suite from a driver script, which loads the suite and does in JavaScript
 // what the fixed and score modes do in Go, and prints what they print. What
 // it cannot report is what Go counts: the allocations. The time is the
-// script's own, measured by Date.now around each suite, and the total is the
-// process's, from start to exit.
+// script's own, measured with Node's monotonic clock or Date.now for QuickJS;
+// the total is the process's, from start to exit.
 
 // preludes define, for each kind of program, the load and print the suite
 // calls, from a directory the driver is given.
@@ -24,11 +24,14 @@ var preludes = map[string]string{
 	// QuickJS's qjs, run with --std, which makes std a global.
 	"qjs": `var __dir = %q;
 globalThis.load = function (f) { std.loadScript(__dir + "/" + f); };
+globalThis.__v8benchNow = function () { return Date.now(); };
 `,
 	// node, where a file is a module of its own: a script loaded into the
 	// global context declares its names there, as load does elsewhere.
 	"node": `var __dir = %q;
 var __fs = require("fs"), __vm = require("vm");
+var __v8benchPerformance = require("perf_hooks").performance;
+globalThis.__v8benchNow = function () { return __v8benchPerformance.now(); };
 globalThis.load = function (f) { __vm.runInThisContext(__fs.readFileSync(__dir + "/" + f, "utf8"), { filename: f }); };
 globalThis.print = function (s) { console.log(s); };
 `,
@@ -58,13 +61,13 @@ var __only = %q;
 function __pad(s, n, left) { s = String(s); while (s.length < n) s = left ? " " + s : s + " "; return s; }
 for (var s of BenchmarkSuite.suites) {
 	if (__only && ("," + __only + ",").indexOf("," + s.name + ",") < 0) continue;
-	var __t0 = Date.now();
+	var __t0 = __v8benchNow();
 	for (var b of s.benchmarks) {
 		b.Setup();
 		for (var i = 0; i < %d; i++) b.run();
 		b.TearDown();
 	}
-	print(__pad(s.name, 13) + " " + __pad((Date.now() - __t0).toFixed(1), 9, true) + " ms");
+	print(__pad(s.name, 13) + " " + __pad((__v8benchNow() - __t0).toFixed(1), 9, true) + " ms");
 }
 `
 

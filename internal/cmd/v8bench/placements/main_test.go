@@ -1,9 +1,71 @@
 package main
 
 import (
+	"fmt"
 	"math/rand"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 )
+
+func TestPadFunctionsOccupy32Bytes(t *testing.T) {
+	dir := t.TempDir()
+	for p := range 4 {
+		body := strings.Replace(string(padFile(p, 4, 0)), "package vm", "package main", 1)
+		if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("pad%d.go", p)), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\nfunc main() {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, arch := range []string{"amd64", "arm64"} {
+		t.Run(arch, func(t *testing.T) {
+			binary := filepath.Join(dir, "pads-"+arch)
+			cmd := exec.Command("go", "build", "-o", binary, "main.go", "pad0.go", "pad1.go", "pad2.go", "pad3.go")
+			cmd.Dir = dir
+			cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH="+arch, "CGO_ENABLED=0")
+			if output, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("build padding: %v\n%s", err, output)
+			}
+			output, err := exec.Command("go", "tool", "nm", "-size", binary).Output()
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := 0
+			var addresses [4][4]uint64
+			for _, line := range strings.Split(string(output), "\n") {
+				fields := strings.Fields(line)
+				if len(fields) != 4 || fields[2] != "T" || !strings.HasPrefix(fields[3], "main.padF") {
+					continue
+				}
+				var p, n int
+				if _, err := fmt.Sscanf(fields[3], "main.padF%d_%d", &p, &n); err != nil {
+					t.Fatal(err)
+				}
+				address, err := strconv.ParseUint(fields[0], 16, 64)
+				if err != nil {
+					t.Fatal(err)
+				}
+				addresses[p][n] = address
+				found++
+			}
+			if found != 16 {
+				t.Fatalf("found %d padding functions, want 16", found)
+			}
+			for p := range addresses {
+				for n := 1; n < 4; n++ {
+					if addresses[p][n]-addresses[p][n-1] != 32 {
+						t.Fatalf("padding must occupy a 32-byte slot: %x", addresses[p])
+					}
+				}
+			}
+		})
+	}
+}
 
 // TestDesignBalanced pins that over the eight placements every target is at
 // each phase four times, and every pair of targets in each combination of

@@ -72,6 +72,36 @@ func newDebugged(t *testing.T) (*Runtime, *recorder) {
 	return r, h
 }
 
+func TestDebuggerWithJIT(t *testing.T) {
+	r := New(WithDebugger(), WithJIT())
+	t.Cleanup(func() { r.Close() })
+	h := &recorder{t: t, r: r}
+	r.rt.SetDebugHandler(h)
+	var sums []string
+	h.then = func(p *vm.DebugPause) vm.StepAction {
+		if p.Reason != vm.PauseDebuggerStatement {
+			t.Fatalf("pause reason %v", p.Reason)
+		}
+		v, err := p.Frames[0].Evaluate("s")
+		if err != nil {
+			t.Fatal(err)
+		}
+		sums = append(sums, h.show(v))
+		if _, err := p.Frames[0].Evaluate("s += 7"); err != nil {
+			t.Fatal(err)
+		}
+		return vm.Continue
+	}
+	v, err := r.Eval(`function sum(n){let s=0;for(let i=0;i<n;i++)s+=i;debugger;return s}
+		sum(10000)+sum(3)`)
+	if err != nil || v.String() != "49995017" {
+		t.Fatalf("debugger result %s, %v", v.String(), err)
+	}
+	if got := strings.Join(sums, ","); got != "49995000,3" {
+		t.Fatalf("paused sums %q", got)
+	}
+}
+
 const debugSource = `function add(a, b) {
   const sum = a + b;
   return sum;

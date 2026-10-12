@@ -93,6 +93,183 @@ jobs:
       - name: Run tests
         run: go test -count=1 ./...
 
+  native-boundary:
+    name: Native boundary (${{ matrix.os }}, Go ${{ matrix.go }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-15]
+        go: ["1.24", "1.27"]
+    env:
+      CGO_ENABLED: "0"
+      QUICKJS_REQUIRE_JIT: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
+
+      - name: Check native code and assembly
+        run: go vet -tags quickjs_jit ./internal/jit/... ./internal/vm
+
+      - name: Exercise native execution
+        run: |
+          go test -tags quickjs_jit -count=1 -timeout=5m ./internal/jit/...
+          go test -tags quickjs_jit -count=1 -timeout=10m ./internal/vm . -run 'JIT|Native'
+
+      # The compiler's cross-checks: liveness against its reference, the
+      # origins and stores' checks it keeps against those made afresh.
+      - name: Check the compiler against its references
+        run: go test -tags quickjs_jit,quickjs_verify -count=1 -timeout=10m ./internal/jit/... ./internal/vm -run 'JIT|Native|SSA|Optimize|Build|Live'
+
+      - name: Check native pointer lifetimes
+        run: go test -tags quickjs_jit -gcflags=all=-d=checkptr=2 -count=1 -timeout=10m ./internal/jit/... ./internal/vm . -run 'JIT|Native|Program|Validate|Lower'
+
+      # Both emitters' code, for every target, against golang.org/x/arch's
+      # disassemblers: a module of its own, so go-quickjs never depends on it.
+      - name: Check encodings
+        working-directory: internal/jit/verify
+        run: go test -tags quickjs_jit -count=1 ./...
+
+  # test262 with the JIT made to compile on the first call, poll Go every
+  # few back edges and finish in the interpreter from wherever it got to
+  # (QJS_JIT_STRESS, internal/vm). The runner fails a run in which no
+  # test ran native code.
+  jit-conformance:
+    name: JIT test262 under stress (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-15]
+    env:
+      CGO_ENABLED: "0"
+      QUICKJS_REQUIRE_JIT: "1"
+      QJS_JIT_STRESS: threshold,budget=3,deopt=7
+    steps:
+      # test262 counts a source's bytes and line terminators: keep its LFs on
+      # Windows.
+      - name: Keep line endings
+        run: git config --global core.autocrlf false
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check out test262
+        uses: actions/checkout@v4
+        with:
+          repository: tc39/test262
+          ref: 7ab7fafa0003f73fc85c1b95d88094d33f7eb8bd
+          path: test262
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache: true
+
+      # amd64 on Linux and Windows, arm64 on macOS.
+      - name: Run test262
+        shell: bash
+        run: TEST262_DIR="$GITHUB_WORKSPACE/test262" go test -tags quickjs_jit ./conformance -run TestConformance -count=1 -timeout 35m -v -args -conformance.jit 2>&1 | tee test262.log | grep -E "test262:|native code ran|FAIL|^ok"; test "${PIPESTATUS[0]}" -eq 0
+
+  # The JIT's kernels and the tree tier's, on arm64 (macOS) and amd64
+  # (Linux). A shared
+  # runner's times are noisy, so the summary compares the tiers within one
+  # run: medians, and the JIT's time over the tree tier's.
+  jit-bench:
+    name: JIT kernels (${{ matrix.os }})
+    if: github.event_name == 'push' && github.ref == 'refs/heads/jit-wip'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15]
+    env:
+      CGO_ENABLED: "0"
+      QUICKJS_REQUIRE_JIT: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache: true
+
+      - name: Run the kernels
+        run: go test -tags quickjs_jit -run '^$' -bench '^BenchmarkJIT(NumericKernels|ArrayKernels|DenseKernels|NumericFields|HostRoundTrip|ScalarCalls)$' -benchtime 300ms -count 5 ./internal/vm | tee bench.txt
+
+      # Each includes compiling, so it shows first use too.
+      - name: Run the promotion benchmarks
+        run: go test -tags quickjs_jit -run '^$' -bench '^BenchmarkJIT(CallPromotion|KernelPromotion)$' -benchtime 200ms -count 3 ./internal/vm | tee promotion.txt
+
+      - name: Summarize
+        shell: python
+        run: |
+          import collections, os, re, statistics
+
+          def medians(path):
+              runs = collections.defaultdict(list)
+              for line in open(path):
+                  m = re.match(r"(Benchmark\S+?)(?:-\d+)?\s+\d+\s+([\d.]+) ns/op", line)
+                  if m:
+                      runs[m.group(1)].append(float(m.group(2)))
+              kernels = collections.defaultdict(dict)
+              for name, times in runs.items():
+                  kernel, mode = name.rsplit("/", 1)
+                  kernels[kernel][mode] = statistics.median(times)
+              return kernels
+
+          rows = []  # name, tree, JIT
+          for kernel, modes in sorted(medians("bench.txt").items()):
+              if "ssa" in modes:
+                  rows.append((kernel, modes.get("existing"), modes["ssa"]))
+          for kernel, modes in sorted(medians("promotion.txt").items()):
+              for mode in ("eager", "automatic"):
+                  if mode in modes:
+                      rows.append((f"{kernel}/{mode}", modes.get("existing"), modes[mode]))
+          out = ["| Kernel | tree tier (us) | JIT (us) | JIT / tree |", "|---|---:|---:|---:|"]
+          us = lambda t: f"{t / 1000:.1f}" if t else "-"
+          for name, tree, jit in rows:
+              ratio = f"{jit / tree:.2f}x" if tree else "-"
+              out.append(f"| {name.removeprefix('BenchmarkJIT')} | {us(tree)} | {us(jit)} | {ratio} |")
+          table = "\n".join(out)
+          print(table)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write(f"### {os.environ['RUNNER_OS']} {os.environ['RUNNER_ARCH']}\n\n{table}\n")
+
+  # Generated programs, run in the interpreter, the tree tier and the JIT
+  # under stress, must give the same answer.
+  jit-fuzz:
+    name: JIT differential fuzzing
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CGO_ENABLED: "0"
+      QUICKJS_REQUIRE_JIT: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache: true
+
+      - name: Fuzz
+        run: go test -tags quickjs_jit ./internal/vm -run '^$' -fuzz '^FuzzJITDifferential$' -fuzztime=5m
+
   race:
     name: Race detector
     runs-on: ubuntu-latest

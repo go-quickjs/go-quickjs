@@ -13,10 +13,13 @@
 package main
 
 import (
+	"errors"
+	"flag"
 	"os"
 	"strconv"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
+	"github.com/go-quickjs/go-quickjs/internal/jit"
 	"github.com/go-quickjs/go-quickjs/internal/v8bench"
 )
 
@@ -24,13 +27,22 @@ func main() { v8bench.Main("go-quickjs", engine{}) }
 
 type engine struct{}
 
+var jitFlag = flag.Bool("jit", false, "enable the optional native numeric tier")
+
 func (engine) Compile(name, src string) error {
 	_, err := quickjs.Compile(name, src)
 	return err
 }
 
 func (engine) NewRuntime(host v8bench.Host) (v8bench.Runtime, error) {
-	rt := quickjs.New()
+	if *jitFlag && !jit.Supported() {
+		return nil, errors.New("JIT benchmarking requires a supported build with -tags quickjs_jit")
+	}
+	var opts []quickjs.Option
+	if *jitFlag {
+		opts = append(opts, quickjs.WithJIT())
+	}
+	rt := quickjs.New(opts...)
 	if err := rt.Set("print", host.Print); err != nil {
 		return nil, err
 	}
