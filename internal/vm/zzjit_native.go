@@ -830,8 +830,9 @@ func (s *jitState) makeRoom(need int) bool {
 		}
 	}
 	if s.victimPos == len(s.victims) {
-		clear(s.victims)
-		s.victims, s.victimsAt, s.victimLeft = s.victims[:0], 0, 0
+		// Let go, not kept empty: it is listed anew at the next look, and
+		// what it held counted against the budget meanwhile.
+		s.victims, s.victimsAt, s.victimLeft = nil, 0, 0
 	}
 	return s.roomHeld()+need <= s.budget
 }
@@ -870,8 +871,7 @@ func (s *jitState) listVictims(now uint64, need int) bool {
 	}
 	if floor := s.roomHeld() - reclaimable; floor+need > s.budget {
 		s.floor, s.floorAt = floor, now+1
-		clear(v)
-		s.victims, s.victimsAt, s.victimPos, s.victimLeft = v[:0], 0, 0, 0
+		s.victims, s.victimsAt, s.victimPos, s.victimLeft = nil, 0, 0, 0
 		return false
 	}
 	slices.SortFunc(v, func(a, b jitVictim) int {
@@ -1129,6 +1129,10 @@ func (s *jitState) remember(key weak.Pointer[bytecode.Function], e *jitEntry) {
 	if n := len(s.hintFree); n != 0 {
 		i, s.hintFree = s.hintFree[n-1], s.hintFree[:n-1]
 	} else {
+		if n := s.hintsCap(); n != cap(s.hints) {
+			// Grown as hintGrowth said, for the room made for it.
+			s.hints = append(make([]jitHintSlot, 0, n), s.hints...)
+		}
 		if len(s.hints) == 0 {
 			// Slot 0 is no hint.
 			s.hints = append(s.hints, jitHintSlot{})
@@ -1139,6 +1143,26 @@ func (s *jitState) remember(key weak.Pointer[bytecode.Function], e *jitEntry) {
 	s.hints[i] = jitHintSlot{e: e, fn: uintptr(unsafe.Pointer(key.Value()))}
 	e.hint = i
 	s.account(e)
+}
+
+// hintsCap is the hint table's capacity once remember has taken a slot of
+// it, and hintGrowth the bytes that adds to what the JIT holds: none while
+// a slot is free, and the table's growth when it is full. A compile makes
+// room for it with its code's, before remember: the table grew past the
+// budget the room had been made in, a full one by half again.
+func (s *jitState) hintsCap() int {
+	n := len(s.hints) + 1
+	if len(s.hints) == 0 {
+		n++
+	}
+	if len(s.hintFree) != 0 || n <= cap(s.hints) {
+		return cap(s.hints)
+	}
+	return max(n, 2*cap(s.hints), 16)
+}
+
+func (s *jitState) hintGrowth() int {
+	return (s.hintsCap() - cap(s.hints)) * int(unsafe.Sizeof(jitHintSlot{}))
 }
 
 func (r *Runtime) releaseJIT() {
@@ -1274,7 +1298,7 @@ func (r *Runtime) jitForFunction(fn *bytecode.Function, cl *closure) *jitEntry {
 			}
 		}
 	}
-	if !s.makeRoom(jitEntryFixed) {
+	if !s.makeRoom(jitEntryFixed + s.hintGrowth()) {
 		// No room to remember the refusal in, for now.
 		s.disown(e)
 		s.settle()

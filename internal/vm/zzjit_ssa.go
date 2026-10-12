@@ -1114,6 +1114,10 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 	if e != nil {
 		need += e.learnedBytes()
 	}
+	if e == nil || e.hint == 0 {
+		// The hint table's slot, which remember takes once it is placed.
+		need += s.hintGrowth()
+	}
 	if !s.roomFor(e, fb.links, need) {
 		return nil, nil, jit.ErrCodeBudget
 	}

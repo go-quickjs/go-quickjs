@@ -2601,6 +2601,51 @@ func TestJITNoEntryForTopLevelCode(t *testing.T) {
 // an epoch and takes from that order look after look, rather than listing
 // and sorting all the cache holds at each compile: a run of compiles each
 // finding the budget full of refusals was quadratic.
+// What a compile adds is all in the room made for it: the JIT holds no
+// more than its budget after any compile -- its hint table's growth too,
+// which, once the table was full, took it past a budget a compile had just
+// fitted, by half the table again. The budgets tried are those about the
+// point where the table is full.
+func TestJITCompileKeepsBudget(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	defer func(was func() uint64) { jitEpochNow = was }(jitEpochNow)
+	jitEpochNow = func() uint64 { return 0 }
+	var keep []*bytecode.Function
+	defer runtime.KeepAlive(&keep)
+	copyOf := jitCopiesForTest(jitFunctionForTest(t, `function f(n) { var s=0; for(var i=0;i<n;i++) s+=i; return s }`), &keep)
+	// What is held, the workspaces apart, when the table is next full, and
+	// what a compile adds.
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	full, grows := 0, 0
+	for i := 0; i < 1000 && full == 0; i++ {
+		before := r.jitState().held() - r.jit.workBytes()
+		if e := r.jitForFunction(copyOf(), nil); e == nil || e.ssa == nil {
+			t.Fatal("native compilation refused")
+		}
+		grows = r.jit.held() - r.jit.workBytes() - before
+		if s := r.jit; i > 8 && len(s.hints) == cap(s.hints) {
+			full = s.held() - s.workBytes()
+		}
+	}
+	if full == 0 {
+		t.Fatal("the hint table never filled")
+	}
+	for d := 0; d < grows+1024; d += 64 {
+		r := jitRuntimeForTest(t, Config{JIT: true, JITMemoryLimit: int64(full + d)})
+		for i := 0; i < 1000; i++ {
+			e := r.jitForFunction(copyOf(), nil)
+			if held := r.jit.held(); held > r.jitBudget() {
+				t.Fatalf("budget %d, compile %d: %d bytes held", r.jitBudget(), i, held)
+			}
+			if e == nil {
+				break
+			}
+		}
+	}
+}
+
 func TestJITMakeRoomListsOncePerEpoch(t *testing.T) {
 	r := jitRuntimeForTest(t, Config{JIT: true, MemoryLimit: 1 << 20})
 	defer func(was func() uint64) { jitEpochNow = was }(jitEpochNow)
