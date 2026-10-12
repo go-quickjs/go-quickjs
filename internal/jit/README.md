@@ -95,9 +95,9 @@ the block there (`jitResume`, `runGeneratorTree`). A call of one makes its
 object, so none is called natively or inlined.
 
 **Not compiled yet.** Top-level and module code, `yield*`, an
-`await using` scope's disposal, closures and the locals they capture, and
-code using private fields run in the tree tier, which handles all of
-them; the JIT is to follow it there. Top-level code is refused before any
+`await using` scope's disposal, closures and the locals they capture,
+dynamic `import()` and `import.meta`, and code using private fields run in
+the tree tier, which handles all of them; the JIT is to follow it there. Top-level code is refused before any
 entry is made (`jitCompiles`).
 
 **Profitability.** Each native stretch's work is estimated, exits and
