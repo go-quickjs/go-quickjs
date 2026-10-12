@@ -2927,6 +2927,43 @@ func TestJITMemoryLimitKeepsEighth(t *testing.T) {
 	}
 }
 
+// A callee's list of native callers grows as a caller's code that calls it
+// natively is placed, in the room the caller's compile made: what each
+// entry holds is counted as it grows, never later. The list had grown when
+// the call was first seen, counted only when the cache measured the callee
+// again, so that a runtime held more than its budget between -- a few
+// hundred bytes past 2 MB, at budgets that left no slack, such as macOS's.
+func TestJITCallersCountedAsTheyJoin(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	if _, err := r.Run(compileForTest(t, jitChurnSource(6, 4))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Run(compileForTest(t, `round(4,4)`)); err != nil {
+		t.Fatal(err)
+	}
+	s, callers := r.jit, 0
+	for _, e := range s.cache {
+		callers += len(e.nativeCallers)
+		if e.hint != 0 && e.bytes != e.measure() {
+			t.Fatalf("an entry holds %d bytes, %d counted", e.measure(), e.bytes)
+		}
+	}
+	if callers == 0 {
+		t.Fatal("no native callers: the chains were not called natively")
+	}
+	for _, e := range s.cache {
+		for _, c := range e.nativeCallers {
+			if !slices.Contains(c.ssaLinks, e.link) {
+				t.Fatal("a native caller whose code does not call the entry through its link")
+			}
+		}
+	}
+}
+
 // The JIT refuses a compile room only when nothing it may reclaim would
 // make it: then it reclaims nothing -- not the old code there is, not the
 // lowerings -- and the newcomer runs in the existing tiers. Once code is

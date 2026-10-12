@@ -1112,6 +1112,50 @@ func (s *jitState) setLinks(e *jitEntry, links []*jitLink) {
 		l.refs--
 		s.unlink(l)
 	}
+	// e's code calls each link's owner natively now: it is among their
+	// native callers, in room its compile made for them (callersGrowth).
+	for _, l := range links {
+		if ce := l.owner; joinsCallers(ce, e) {
+			if len(ce.nativeCallers) == cap(ce.nativeCallers) {
+				ce.nativeCallers = append(make([]*jitEntry, 0, callersCap(ce.nativeCallers)), ce.nativeCallers...)
+			}
+			ce.nativeCallers = append(ce.nativeCallers, e)
+			s.account(ce)
+		}
+	}
+}
+
+// joinsCallers reports whether e, whose code calls ce natively, is to
+// join ce's native callers: not ce itself, nor one there already, nor past
+// jitNativeCallers.
+func joinsCallers(ce, e *jitEntry) bool {
+	return ce != nil && ce != e && len(ce.nativeCallers) < jitNativeCallers && !slices.Contains(ce.nativeCallers, e)
+}
+
+// callersCap is the capacity c, a list of native callers, grows to when it
+// takes one more: double, up to jitNativeCallers.
+func callersCap(c []*jitEntry) int {
+	if len(c) < cap(c) {
+		return cap(c)
+	}
+	return min(max(2*cap(c), 1), jitNativeCallers)
+}
+
+// callersGrowth is what the lists of native callers of links' owners grow
+// by once e's code calls them through links (setLinks): a callee's list
+// grows as its caller's code is placed, which the caller's compile makes
+// room for, as for its own -- it had grown when the call was first seen,
+// counted only when the callee was measured again, past the budget.
+func (s *jitState) callersGrowth(e *jitEntry, links []*jitLink) int {
+	n := 0
+	for i, l := range links {
+		ce := l.owner
+		if !joinsCallers(ce, e) || slices.ContainsFunc(links[:i], func(m *jitLink) bool { return m.owner == ce }) {
+			continue
+		}
+		n += (callersCap(ce.nativeCallers) - cap(ce.nativeCallers)) * int(unsafe.Sizeof(e))
+	}
+	return n
 }
 
 // unlink forgets l once no entry owns it and no code calls through it.

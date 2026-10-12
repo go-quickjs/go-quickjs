@@ -1123,6 +1123,9 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 		// The hint table's slot, which remember takes once it is placed.
 		need += s.hintGrowth()
 	}
+	// The lists of native callers its callees keep, which it joins once
+	// placed (setLinks).
+	need += s.callersGrowth(e, fb.links)
 	if !s.roomFor(e, fb.links, need) {
 		return nil, nil, jit.ErrCodeBudget
 	}
@@ -1739,13 +1742,10 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 	if in.Op == bytecode.OpNew && !r.jitConstructs(o) {
 		return
 	}
-	if ce := r.jitNativeCallee(cl); ce != nil {
+	if r.jitNativeCallee(cl) != nil {
 		e.nativeCalls = append(e.nativeCalls, r.jitNativeTarget(int32(pc), cl, o, in))
 		e.callSites[pc] = jitCallNative
 		e.inlinePending = true
-		if ce != e && len(ce.nativeCallers) < jitNativeCallers && !slices.Contains(ce.nativeCallers, e) {
-			ce.nativeCallers = append(ce.nativeCallers, e)
-		}
 	}
 }
 
@@ -2739,9 +2739,6 @@ func (r *Runtime) jitSeedCalls(cl *closure, e *jitEntry, p *ir.Program) {
 		}
 		e.nativeCalls = append(e.nativeCalls, r.jitNativeTarget(int32(pc), callee, o, in))
 		e.callSites[pc] = jitCallNative
-		if ce != e && len(ce.nativeCallers) < jitNativeCallers && !slices.Contains(ce.nativeCallers, e) {
-			ce.nativeCallers = append(ce.nativeCallers, e)
-		}
 	}
 }
 
@@ -2838,9 +2835,6 @@ func (r *Runtime) jitSeedNativeCalls(e *jitEntry, fn *bytecode.Function, pc int,
 		}
 		e.nativeCalls = append(e.nativeCalls, r.jitNativeTarget(int32(pc), t.cl, t.o, in))
 		e.callSites[pc] = jitCallNative
-		if ce != e && len(ce.nativeCallers) < jitNativeCallers && !slices.Contains(ce.nativeCallers, e) {
-			ce.nativeCallers = append(ce.nativeCallers, e)
-		}
 	}
 }
 
