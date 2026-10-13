@@ -318,7 +318,7 @@ func TestJITGlobalCacheOwner(t *testing.T) {
 	if _, err := r.Run(compileForTest(t, `globalThis.g=3;function f(a){return g+a[0]}f([1])`)); err != nil {
 		t.Fatal(err)
 	}
-	cl := r.global.getOwn(r.atoms.intern("f")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
 	for _, in := range cl.fn.Code {
 		if in.Op != bytecode.OpGetGlobal {
 			continue
@@ -348,7 +348,7 @@ func TestJITCallbackTierSelection(t *testing.T) {
 		}
 	}
 	// Its calls are native code's: Go enters it and it runs to the end.
-	cl := r.global.getOwn(r.atoms.intern("f")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
 	if e := r.entryOf(cl); e == nil || e.ssa == nil || e.entrySlow || cl.jitRefused {
 		t.Fatal("callback-heavy entry did not stay native")
 	}
@@ -401,7 +401,7 @@ func TestJITWeakMapKeyArray(t *testing.T) {
 func TestJITBoundaryDensityBudget(t *testing.T) {
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	v, err := r.Run(compileForTest(t, `function f(a,n){let s=0;for(let i=0;i<n;i++){s+=a[0]%3;a[0]+=3}return s}let a=[2];f(a,20000)===40000&&a[0]===60002`))
-	cl := r.global.getOwn(r.atoms.intern("f")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
 	// The loop's budget runs out, and native code polls and goes on.
 	if e := r.entryOf(cl); err != nil || !v.IsBool() || !v.Truthy() || e == nil || e.ssa == nil || e.entrySlow ||
 		r.jit.budgets == 0 || r.jit.guards != 0 || r.jit.hosts != 0 || r.jit.interpreted != 0 {
@@ -415,7 +415,7 @@ func TestJITClosureCacheRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	call := compileForTest(t, `f([2])`)
-	cl := r.global.getOwn(r.atoms.intern("f")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
 	for range 3 {
 		v, err := r.Run(call)
 		if err != nil || v.Number() != 3 || r.entryOf(cl) == nil || r.entryOf(cl).ssa.Size() == 0 {
@@ -1396,10 +1396,10 @@ func TestJITCryptoCorpus(t *testing.T) {
 		t.Fatalf("Crypto corpus: %v, %v", v, err)
 	}
 	prop := r.global.getOwn(r.atoms.intern("am3"))
-	if !prop.value.IsObject() || prop.value.Object().fn() == nil {
+	if !prop.value().IsObject() || prop.value().Object().fn() == nil {
 		t.Fatal("missing am3 benchmark function")
 	}
-	fn := prop.value.Object().fn().closure.fn
+	fn := prop.value().Object().fn().closure.fn
 	entry := r.jit.cache[weak.Make(fn)]
 	if entry == nil || entry.ssa == nil || entry.notNative || r.JITStats().SSAEntries == 0 {
 		t.Fatal("am3 did not run natively")
@@ -1596,7 +1596,7 @@ func TestJITSSANullish(t *testing.T) {
 		t.Fatalf("native comparisons with null failed guards: %+v %v", st, sites)
 	}
 	// count only compares: it never leaves native code.
-	count := r.global.getOwn(r.atoms.intern("count")).value.Object().fn().closure
+	count := r.global.getOwn(r.atoms.intern("count")).value().Object().fn().closure
 	if e := r.jit.hint(count); e == nil || e.ssa == nil || e.ssaStats.entries == 0 || e.ssaStats.hosts != 0 {
 		t.Fatalf("count did not compare natively: %+v", e)
 	}
@@ -1649,7 +1649,7 @@ func TestJITSSAManySpills(t *testing.T) {
 			t.Fatalf("%s: got %s, interpreter %s", m, got, want)
 		}
 	}
-	fn := r.global.getOwn(r.atoms.intern("f")).value.Object().fn().closure
+	fn := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
 	if e := r.jit.hint(fn); e == nil || e.ssa == nil || e.ssaStats.entries == 0 {
 		t.Fatalf("f did not run in the new pipeline: %+v", e)
 	}
@@ -1695,7 +1695,7 @@ func TestJITSSAProfitability(t *testing.T) {
 		}
 	}
 	entry := func(name string) *jitEntry {
-		cl := r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure
+		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 		return r.jit.hint(cl)
 	}
 	if e := entry("calls"); e == nil || e.ssa == nil || !e.entrySlow || e.ssaStats.entries > 2*jitSSAProbe {
@@ -1758,7 +1758,7 @@ func TestJITSSAProfitabilityOfCallsOfGo(t *testing.T) {
 		}
 	}
 	entry := func(name string) *jitEntry {
-		cl := r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure
+		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 		return r.jit.cache[weak.Make(cl.fn)]
 	}
 	if e := entry("builtins"); e == nil || e.ssa == nil || !e.entrySlow || e.ssaStats.entries >= jitSSAProbe {
@@ -1816,7 +1816,7 @@ func TestJITSSAEquality(t *testing.T) {
 			t.Fatalf("round %d: got %s, interpreter %s", i, got, want)
 		}
 	}
-	assq := r.global.getOwn(r.atoms.intern("assq")).value.Object().fn().closure
+	assq := r.global.getOwn(r.atoms.intern("assq")).value().Object().fn().closure
 	if e := r.jit.hint(assq); e == nil || e.ssa == nil || e.ssaStats.entries == 0 || e.ssaStats.hosts != 0 || e.ssaStats.guards != 0 {
 		t.Fatalf("assq left native code: %+v", e)
 	}
@@ -1853,7 +1853,7 @@ func TestJITSSACompareReferences(t *testing.T) {
 			t.Fatalf("%s: got %s, interpreter %s", src, got, want)
 		}
 		if src == `''+f(o,a,40)` {
-			fn := r.global.getOwn(r.atoms.intern("f")).value.Object().fn().closure
+			fn := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
 			if e := r.jit.hint(fn); e == nil || e.ssa == nil || e.ssaStats.hosts != 0 || e.ssaStats.guards != 0 {
 				t.Fatalf("comparisons of references left native code: %+v", e)
 			}
@@ -1894,7 +1894,7 @@ func TestJITSSAElementReferences(t *testing.T) {
 			t.Fatalf("round %d: got %v, %v; interpreter %v, %v", i, gv, gerr, wv, werr)
 		}
 	}
-	sum := r.global.getOwn(r.atoms.intern("sum")).value.Object().fn().closure
+	sum := r.global.getOwn(r.atoms.intern("sum")).value().Object().fn().closure
 	e := r.jit.hint(sum)
 	if e == nil || e.ssa == nil || e.ssaStats.entries == 0 || e.ssaStats.guards != 0 {
 		t.Fatalf("sum: %+v", e)
@@ -1969,7 +1969,7 @@ func TestJITCachedTreeCall(t *testing.T) {
 		t.Fatal(err)
 	}
 	o := r.global.getOwn(r.atoms.intern("sum"))
-	if o.value.Object().fn().treeCall == nil {
+	if o.value().Object().fn().treeCall == nil {
 		t.Fatal("test did not establish cached tree call")
 	}
 	// Enable on the same runtime after repeated calls have cached their tree.
@@ -2486,7 +2486,7 @@ func TestJITCacheKeepsHotCode(t *testing.T) {
 		for c := 0; c < chains; c++ {
 			for _, name := range []string{"top_%d", "mid_%d", "leaf_%d"} {
 				name = fmt.Sprintf(name, c)
-				fn := r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure.fn
+				fn := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure.fn
 				if e := r.jit.cache[weak.Make(fn)]; e == nil || e.ssa == nil {
 					t.Fatalf("round %d: %s was dropped: %+v", round, name, e)
 				}
@@ -2978,7 +2978,7 @@ func TestJITMemoryLimitKeepsEighth(t *testing.T) {
 			t.Fatalf("%+v: the stream never filled the budget", cfg)
 		}
 		for c := 0; c < 30; c++ {
-			fn := r.global.getOwn(r.atoms.intern(fmt.Sprintf("top_%d", c))).value.Object().fn().closure.fn
+			fn := r.global.getOwn(r.atoms.intern(fmt.Sprintf("top_%d", c))).value().Object().fn().closure.fn
 			if e := r.jit.cache[weak.Make(fn)]; e == nil || e.ssa == nil {
 				t.Fatalf("%+v: hot top_%d was dropped", cfg, c)
 			}
@@ -3253,7 +3253,7 @@ func TestJITPromotionKeepsFramelessCalls(t *testing.T) {
 	if err != nil || v.Number() != 1000 {
 		t.Fatalf("frameless calls = %v, %v", v, err)
 	}
-	cl := r.global.getOwn(r.atoms.intern("f")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
 	if cl.jitCalls != 0 || r.jit != nil {
 		t.Fatal("frameless calls accumulated framed hotness")
 	}
@@ -3283,7 +3283,7 @@ func TestJITLoopPromotionFirstCall(t *testing.T) {
 			if r.jit == nil || r.jit.osrs != 1 || r.jit.budgets == 0 {
 				t.Fatal("first long call did not complete bounded OSR")
 			}
-			cl := r.global.getOwn(r.atoms.intern("sum")).value.Object().fn().closure
+			cl := r.global.getOwn(r.atoms.intern("sum")).value().Object().fn().closure
 			tree := (*tree)(atomic.LoadPointer(&cl.fn.VMCode))
 			if tc.tree && (tree == nil || tree == noTree) || !tc.tree && tree != nil && tree != noTree {
 				t.Fatal("test did not exercise its expected existing tier")
@@ -3709,7 +3709,7 @@ func BenchmarkJITCryptoWorkload(b *testing.B) {
 			}
 			b.StopTimer()
 			if mode == "native" {
-				cl := r.global.getOwn(r.atoms.intern("am3")).value.Object().fn().closure
+				cl := r.global.getOwn(r.atoms.intern("am3")).value().Object().fn().closure
 				e := r.jit.cache[weak.Make(cl.fn)]
 				if e == nil || e.ssa == nil || e.notNative {
 					b.Fatal("Crypto limb method did not stay native")
@@ -3795,7 +3795,7 @@ func BenchmarkJITCryptoLimb(b *testing.B) {
 				if last.Number() != float64(want) {
 					b.Fatalf("carry %v, want %v", last.Number(), want)
 				}
-				obj := r.global.getOwn(r.atoms.intern("rhs")).value.Object()
+				obj := r.global.getOwn(r.atoms.intern("rhs")).value().Object()
 				array, ok := plainOwn(obj, r.atoms.intern("array"))
 				if !ok || len(array.Object().elemsOf()) != n {
 					b.Fatal("missing output limbs")
@@ -4393,7 +4393,7 @@ func BenchmarkJITCompile(b *testing.B) {
 				if _, err := r.Run(compileForTest(b, tc.src+";f(2)")); err != nil {
 					b.Fatal(err)
 				}
-				cl := r.global.getOwn(r.atoms.intern("f")).value.Object().fn().closure
+				cl := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
 				compile := func() *jitEntry {
 					if r.jit != nil {
 						for key, e := range r.jit.cache {
@@ -4512,7 +4512,7 @@ func TestJITSSAReoptimize(t *testing.T) {
 		}
 	}
 	entry := func(name string) *jitEntry {
-		cl := r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure
+		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 		return r.jit.hint(cl)
 	}
 	// cmp's comparisons of objects go to Go at every iteration, which makes
@@ -4591,7 +4591,7 @@ func TestJITSSAPrototypeMethods(t *testing.T) {
 	}
 	// Every round ran natively: none was demoted to the tree tier.
 	for _, name := range []string{"run", "swap"} {
-		cl := r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure
+		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 		if e := r.jit.hint(cl); e == nil || e.ssa == nil || e.entrySlow || e.ssaStats.entries == 0 {
 			t.Fatalf("%s did not stay native: %+v", name, e)
 		}
@@ -4641,7 +4641,7 @@ func TestJITSSAStringEquality(t *testing.T) {
 			t.Fatalf("count left native code %d times", r.jit.hosts-hosts)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("count")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("count")).value().Object().fn().closure
 	if e := r.jit.hint(cl); e == nil || e.ssa == nil || e.entrySlow || e.ssaStats.entries == 0 {
 		t.Fatalf("count did not stay native: %+v", e)
 	}
@@ -4694,7 +4694,7 @@ func TestJITSSAReferenceStores(t *testing.T) {
 		}
 	}
 	entry := func(name string) *jitEntry {
-		cl := r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure
+		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 		return r.jit.hint(cl)
 	}
 	if e := entry("relink"); e == nil || e.ssa == nil || e.entrySlow || e.ssaStats.entries == 0 || e.ssaStats.hosts != 0 || e.ssaStats.guards != 0 {
@@ -4783,7 +4783,7 @@ func TestJITSSAReferenceStoresWhileMarking(t *testing.T) {
 		}
 	}
 	entry := func(name string) *jitEntry {
-		cl := r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure
+		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 		return r.jit.hint(cl)
 	}
 	// relink's reference stores are Go's, called; it never leaves.
@@ -4836,7 +4836,7 @@ func TestJITSSAKeepsWhileMarking(t *testing.T) {
 			t.Fatalf("round %d: got %s, interpreter %s", i, got, want)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("rev")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("rev")).value().Object().fn().closure
 	if e := r.jit.cache[weak.Make(cl.fn)]; e == nil || e.ssa == nil || calls == 0 {
 		t.Fatalf("rev did not run natively, calling Go (%d calls): %+v", calls, e)
 	}
@@ -4870,7 +4870,7 @@ func TestJITSSAMarkingExitsNotJudged(t *testing.T) {
 			t.Fatalf("round %d: %v, %v", i, v, err)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("lit")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("lit")).value().Object().fn().closure
 	if e := r.jit.cache[weak.Make(cl.fn)]; e == nil || e.ssa == nil || e.entrySlow || e.ssaStats.hosts <= jitSSAProbe || len(e.nativeCalls) == 0 || r.jit.markingExits <= jitSSAProbe {
 		t.Fatalf("lit, leaving at its call while the collector marked (%d exits), was judged: %+v", r.jit.markingExits, e)
 	}
@@ -4925,7 +4925,7 @@ func TestJITSSAInline(t *testing.T) {
 		}
 	}
 	entry := func(name string) *jitEntry {
-		cl := r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure
+		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 		return r.jit.hint(cl)
 	}
 	for i, src := range rounds {
@@ -4996,7 +4996,7 @@ func TestJITSSAInlineEffects(t *testing.T) {
 				}
 			}
 			entry := func(name string) *jitEntry {
-				cl := r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure
+				cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 				return r.jit.hint(cl)
 			}
 			if marking == 0 {
@@ -5074,10 +5074,10 @@ func TestJITSSANestedInline(t *testing.T) {
 		}
 	}
 	method := func(name string) *closure {
-		proto := r.global.getOwn(r.atoms.intern("T")).value.Object().getOwn(r.atoms.intern("prototype")).value.Object()
-		return proto.getOwn(r.atoms.intern(name)).value.Object().fn().closure
+		proto := r.global.getOwn(r.atoms.intern("T")).value().Object().getOwn(r.atoms.intern("prototype")).value().Object()
+		return proto.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 	}
-	cl := r.global.getOwn(r.atoms.intern("run")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("run")).value().Object().fn().closure
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	for i, src := range rounds {
 		wv, err := want.Run(compileForTest(t, src))
@@ -5165,7 +5165,7 @@ func TestJITSSANativeConstruct(t *testing.T) {
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	entry := func(name string) *jitEntry {
-		return r.jit.hint(r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure)
+		return r.jit.hint(r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure)
 	}
 	checked := false
 	for i, src := range rounds {
@@ -5202,7 +5202,7 @@ func TestJITSSANativeConstruct(t *testing.T) {
 			checked = true
 		}
 		if i == len(rounds)-1 {
-			proto := r.global.getOwn(r.atoms.intern("V")).value.Object().getOwnVisible(atomPrototype).value.Object()
+			proto := r.global.getOwn(r.atoms.intern("V")).value().Object().getOwnVisible(atomPrototype).value().Object()
 			for _, x := range slices.Concat(entry("run").nativeCalls, entry("run").inlines) {
 				if x.pool != nil && x.pool.Proto != unsafe.Pointer(proto) {
 					t.Fatal("run's pool was not made again for V's new prototype")
@@ -5240,7 +5240,7 @@ func TestJITSSANativeArrayConstruct(t *testing.T) {
 	}
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	cl := r.global.getOwn(r.atoms.intern("arrays")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("arrays")).value().Object().fn().closure
 	checked := false
 	for i := range 6 {
 		wv, err := want.Run(compileForTest(t, src))
@@ -5310,7 +5310,7 @@ func TestJITSSANativeCallThroughCall(t *testing.T) {
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	entry := func(name string) *jitEntry {
-		return r.jit.cache[weak.Make(r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure.fn)]
+		return r.jit.cache[weak.Make(r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure.fn)]
 	}
 	checked := false
 	for i, src := range rounds {
@@ -5376,7 +5376,7 @@ func TestJITSSANativePop(t *testing.T) {
 	}
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	cl := r.global.getOwn(r.atoms.intern("drain")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("drain")).value().Object().fn().closure
 	checked := false
 	for i, src := range rounds {
 		wv, err := want.Run(compileForTest(t, src))
@@ -5416,7 +5416,7 @@ func TestJITSSANativePop(t *testing.T) {
 	if _, err := r.Run(compileForTest(t, `var kept=mk(300);drain(kept)`)); err != nil {
 		t.Fatal(err)
 	}
-	a := r.global.getOwn(r.atoms.intern("kept")).value.Object()
+	a := r.global.getOwn(r.atoms.intern("kept")).value().Object()
 	if len(a.elemsOf()) != 0 || cap(a.elemsOf()) < 300 {
 		t.Fatalf("kept: length %d, capacity %d", len(a.elemsOf()), cap(a.elemsOf()))
 	}
@@ -5481,7 +5481,7 @@ func TestJITSSANativePush(t *testing.T) {
 		for range 4 {
 			run(c.name, warm)
 		}
-		e := r.jit.hint(r.global.getOwn(r.atoms.intern(c.fn)).value.Object().fn().closure)
+		e := r.jit.hint(r.global.getOwn(r.atoms.intern(c.fn)).value().Object().fn().closure)
 		if e == nil || !slices.ContainsFunc(e.nativeCalls, func(x jitInline) bool { return x.push }) {
 			t.Fatalf("%s: %s does not push natively", c.name, c.fn)
 		}
@@ -5554,7 +5554,7 @@ func TestJITSSAPropertyAdds(t *testing.T) {
 		for range 4 {
 			run(c.name, c.warm)
 		}
-		e := r.jit.hint(r.global.getOwn(r.atoms.intern(c.fn)).value.Object().fn().closure)
+		e := r.jit.hint(r.global.getOwn(r.atoms.intern(c.fn)).value().Object().fn().closure)
 		if e == nil || e.ssa == nil {
 			t.Fatalf("%s: %s has no code", c.name, c.fn)
 		}
@@ -5607,7 +5607,7 @@ func TestJITSSASharedContextsFollowDepth(t *testing.T) {
 	if wv, _ := want.Run(compileForTest(t, `tryAt(185,20)`)); wv.String().Go() != "RangeError" {
 		t.Fatalf("the interpreter did not run out of depth: %s", wv.String().Go())
 	}
-	cl := r.global.getOwn(r.atoms.intern("rec")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("rec")).value().Object().fn().closure
 	if e := r.jit.cache[weak.Make(cl.fn)]; e == nil || e.ssa == nil || !slices.Contains(e.callSites, jitCallNative) {
 		t.Fatal("rec does not call itself natively")
 	}
@@ -5643,7 +5643,7 @@ func TestJITSSACallsSettleLate(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		g := r.jit.cache[weak.Make(r.global.getOwn(r.atoms.intern("g")).value.Object().fn().closure.fn)]
+		g := r.jit.cache[weak.Make(r.global.getOwn(r.atoms.intern("g")).value().Object().fn().closure.fn)]
 		if g != nil {
 			hosts = g.ssaStats.hosts
 		}
@@ -5702,7 +5702,7 @@ func TestJITSSAPolymorphicReads(t *testing.T) {
 		}
 	}
 	entry := func(name string) *jitEntry {
-		cl := r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure
+		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 		return r.jit.hint(cl)
 	}
 	for i, src := range rounds {
@@ -5760,7 +5760,7 @@ func TestJITSSAStoreOverLiveCell(t *testing.T) {
 	}
 	entry := func(name string) *jitEntry {
 		// By its function: a native callee's closure need not know it.
-		cl := r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure
+		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 		return r.jit.cache[weak.Make(cl.fn)]
 	}
 	for i := 0; i < 4; i++ {
@@ -5881,7 +5881,7 @@ func TestJITSSANativeCallsGoOn(t *testing.T) {
 			t.Fatalf("round %d: got %s, interpreter %s", i, got, want)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("zero")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("zero")).value().Object().fn().closure
 	if e := r.jit.cache[weak.Make(cl.fn)]; e == nil || e.link.in == 0 {
 		t.Fatalf("zero was never called natively: %+v", e)
 	}
@@ -5974,7 +5974,7 @@ func TestJITSSAElementsKeptAcrossCalls(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			cl := r.global.getOwn(r.atoms.intern(c.name)).value.Object().fn().closure
+			cl := r.global.getOwn(r.atoms.intern(c.name)).value().Object().fn().closure
 			native := false
 			for i := range 6 {
 				wv, err := want.Run(compileForTest(t, c.src))
@@ -6029,8 +6029,8 @@ func TestJITSSACallSeenWhileCalleeLeaves(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	leaf := r.global.getOwn(r.atoms.intern("leaf")).value.Object().fn().closure
-	outer := r.global.getOwn(r.atoms.intern("outer")).value.Object().fn().closure
+	leaf := r.global.getOwn(r.atoms.intern("leaf")).value().Object().fn().closure
+	outer := r.global.getOwn(r.atoms.intern("outer")).value().Object().fn().closure
 	for i, src := range rounds {
 		wv, err := want.Run(compileForTest(t, src))
 		if err != nil {
@@ -6100,7 +6100,7 @@ func TestJITSSAPolymorphicReadsSettle(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			cl := r.global.getOwn(r.atoms.intern(c.fn)).value.Object().fn().closure
+			cl := r.global.getOwn(r.atoms.intern(c.fn)).value().Object().fn().closure
 			var compiles uint64
 			for i, src := range rounds {
 				wv, err := want.Run(compileForTest(t, src))
@@ -6179,10 +6179,10 @@ func TestJITSSASeedsMethodCalls(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("run")).value.Object().fn().closure
-	proto := r.global.getOwn(r.atoms.intern("P")).value.Object().getOwn(atomPrototype).value.Object()
-	get, big := proto.getOwn(r.atoms.intern("get")).value.Object(), proto.getOwn(r.atoms.intern("big")).value.Object()
-	sq, heavy := r.global.getOwn(r.atoms.intern("sq")).value.Object(), r.global.getOwn(r.atoms.intern("heavy")).value.Object()
+	cl := r.global.getOwn(r.atoms.intern("run")).value().Object().fn().closure
+	proto := r.global.getOwn(r.atoms.intern("P")).value().Object().getOwn(atomPrototype).value().Object()
+	get, big := proto.getOwn(r.atoms.intern("get")).value().Object(), proto.getOwn(r.atoms.intern("big")).value().Object()
+	sq, heavy := r.global.getOwn(r.atoms.intern("sq")).value().Object(), r.global.getOwn(r.atoms.intern("heavy")).value().Object()
 	targets := func(list []jitInline) []*Object {
 		var objs []*Object
 		for _, x := range list {
@@ -6244,8 +6244,8 @@ func TestJITSSASeedsConstructions(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	v := r.global.getOwn(r.atoms.intern("V")).value.Object()
-	cl := r.global.getOwn(r.atoms.intern("mk2")).value.Object().fn().closure
+	v := r.global.getOwn(r.atoms.intern("V")).value().Object()
+	cl := r.global.getOwn(r.atoms.intern("mk2")).value().Object().fn().closure
 	for i, src := range []string{`String(mk1(20000))`, `String(mk1(20000))`, `String(mk2(20000))`, `String(mk2(20000))`} {
 		wv, err := want.Run(compileForTest(t, src))
 		if err != nil {
@@ -6312,7 +6312,7 @@ func TestJITLoopPromotedPastCalleesLoops(t *testing.T) {
 	if got, want := gv.String().Go(), wv.String().Go(); got != want {
 		t.Fatalf("got %s, interpreter %s", got, want)
 	}
-	cl := r.global.getOwn(r.atoms.intern("run")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("run")).value().Object().fn().closure
 	if e := r.jit.hint(cl); e == nil || e.ssa == nil {
 		t.Fatal("run's loop was not promoted in 20000 iterations")
 	}
@@ -6357,10 +6357,10 @@ func TestJITSSASeedsCalleesWithoutCode(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	proto := r.global.getOwn(r.atoms.intern("P")).value.Object().getOwn(atomPrototype).value.Object()
-	put := proto.getOwn(r.atoms.intern("put")).value.Object()
-	f := proto.getOwn(r.atoms.intern("f")).value.Object().fn().closure
-	cl := r.global.getOwn(r.atoms.intern("run")).value.Object().fn().closure
+	proto := r.global.getOwn(r.atoms.intern("P")).value().Object().getOwn(atomPrototype).value().Object()
+	put := proto.getOwn(r.atoms.intern("put")).value().Object()
+	f := proto.getOwn(r.atoms.intern("f")).value().Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("run")).value().Object().fn().closure
 	for i, src := range []string{`String(run(p,20000))`, `String(run(p,20000))`} {
 		wv, err := want.Run(compileForTest(t, src))
 		if err != nil {
@@ -6413,8 +6413,8 @@ func TestJITSSASeedsWhenCompiledAgain(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	m := r.global.getOwn(r.atoms.intern("P")).value.Object().getOwn(atomPrototype).value.Object().getOwn(r.atoms.intern("m")).value.Object()
-	cl := r.global.getOwn(r.atoms.intern("f")).value.Object().fn().closure
+	m := r.global.getOwn(r.atoms.intern("P")).value().Object().getOwn(atomPrototype).value().Object().getOwn(r.atoms.intern("m")).value().Object()
+	cl := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
 	for i, src := range []string{`String(f(p,false,20000))`, `String(f(p,false,20000))`, `String(f(p,true,20000))`, `String(f(p,true,20000))`} {
 		wv, err := want.Run(compileForTest(t, src))
 		if err != nil {
@@ -6525,7 +6525,7 @@ func TestJITSSALooseNullishOperands(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	eq := r.global.getOwn(r.atoms.intern("eq")).value.Object().fn().closure
+	eq := r.global.getOwn(r.atoms.intern("eq")).value().Object().fn().closure
 	for i, src := range rounds {
 		wv, err := want.Run(compileForTest(t, src))
 		if err != nil {
@@ -6606,7 +6606,7 @@ func TestJITSSAAssignsGlobals(t *testing.T) {
 		}
 	}
 	for _, name := range []string{"bump", "sbump", "bad"} {
-		cl := r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure
+		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 		if e := r.jit.cache[weak.Make(cl.fn)]; e == nil || e.ssa == nil || e.ssaStats.entries == 0 || name == "bad" && e.entrySlow {
 			t.Fatalf("%s did not run natively", name)
 		}
@@ -6650,7 +6650,7 @@ func TestJITSSAWritesGlobals(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("w")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("w")).value().Object().fn().closure
 	for i, src := range rounds {
 		wv, err := want.Run(compileForTest(t, src))
 		if err != nil {
@@ -6679,7 +6679,7 @@ func TestJITSSAWritesGlobals(t *testing.T) {
 		}
 	}
 	for _, name := range []string{"sw", "lw", "dw", "rw"} {
-		cl := r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure
+		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 		if e := r.jit.cache[weak.Make(cl.fn)]; e == nil || e.ssa == nil || e.ssaStats.entries == 0 {
 			t.Fatalf("%s did not run natively %+v", name, e)
 		}
@@ -6771,7 +6771,7 @@ func TestJITSSANestedExits(t *testing.T) {
 		}
 	}
 	for _, name := range []string{"inner", "outer"} {
-		cl := r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure
+		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 		e := r.jit.cache[weak.Make(cl.fn)]
 		if e == nil || e.ssa == nil || e.ssaStats.entries == 0 && e.link.in == 0 {
 			t.Fatalf("%s did not run natively: %+v", name, e)
@@ -6826,12 +6826,12 @@ func TestJITSSAProfitReturns(t *testing.T) {
 			t.Fatalf("round %d: got %s, interpreter %s", i, got, want)
 		}
 	}
-	proto := r.global.getOwn(r.atoms.intern("T")).value.Object().getOwn(r.atoms.intern("prototype")).value.Object()
-	step := proto.getOwn(r.atoms.intern("step")).value.Object().fn().closure
+	proto := r.global.getOwn(r.atoms.intern("T")).value().Object().getOwn(r.atoms.intern("prototype")).value().Object()
+	step := proto.getOwn(r.atoms.intern("step")).value().Object().fn().closure
 	if e := r.jit.hint(step); e == nil || e.ssa == nil || !e.entrySlow || e.ssaStats.entries > 2*jitSSAProbe {
 		t.Fatalf("step kept running natively: %+v", e)
 	}
-	heavy := r.global.getOwn(r.atoms.intern("heavy")).value.Object().fn().closure
+	heavy := r.global.getOwn(r.atoms.intern("heavy")).value().Object().fn().closure
 	if e := r.jit.cache[weak.Make(heavy.fn)]; e == nil || e.ssa == nil || e.entrySlow {
 		t.Fatalf("heavy left native code: %+v", e)
 	}
@@ -6933,7 +6933,7 @@ func TestJITSSANativeCalls(t *testing.T) {
 		}
 	}
 	entry := func(name string) *jitEntry {
-		cl := r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure
+		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 		return r.jit.hint(cl)
 	}
 	for i, src := range rounds {
@@ -7011,7 +7011,7 @@ func TestJITSSANativeCallsUnderGC(t *testing.T) {
 	if err != nil || !v.IsBool() || !v.Truthy() {
 		t.Fatalf("= %v, %v", v, err)
 	}
-	cl := r.global.getOwn(r.atoms.intern("walk")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("walk")).value().Object().fn().closure
 	if e := r.jit.hint(cl); e == nil || e.ssa == nil || len(e.nativeCalls) == 0 {
 		t.Fatalf("walk made no native calls: %+v", e)
 	}
@@ -7047,7 +7047,7 @@ func TestJITSSANativeCallsWhileMarking(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("sum")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("sum")).value().Object().fn().closure
 	e := r.jit.hint(cl)
 	if e == nil || e.ssa == nil || len(e.nativeCalls) == 0 {
 		t.Fatalf("sum was not compiled to call natively: %+v", e)
@@ -7091,7 +7091,7 @@ func TestJITSSAMarkingCallThrows(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("f")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
 	if e := r.jit.hint(cl); e == nil || e.ssa == nil || len(e.nativeCalls) == 0 {
 		t.Fatalf("f was not compiled to call natively: %+v", e)
 	}
@@ -7142,7 +7142,7 @@ func TestJITSSAMarkingBeginsInNativeCallee(t *testing.T) {
 		}
 	}
 	entry := func(name string) *jitEntry {
-		cl := r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure
+		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 		e := r.jit.hint(cl)
 		if e == nil || e.ssa == nil || len(e.nativeCalls) == 0 {
 			t.Fatalf("%s was not compiled to call natively: %+v", name, e)
@@ -7358,7 +7358,7 @@ func TestJITSSANativeCallTargets(t *testing.T) {
 		}
 	}
 	entry := func(name string) *jitEntry {
-		cl := r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure
+		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 		return r.jit.cache[weak.Make(cl.fn)]
 	}
 	for i, src := range rounds {
@@ -7404,7 +7404,7 @@ func TestJITSSANativeCallTargets(t *testing.T) {
 	// A callee whose code is gone when its caller is compiled again is not
 	// compiled then, inside the caller's compile, whose workspaces it would
 	// share: the call leaves for Go.
-	leaf := r.global.getOwn(r.atoms.intern("leaf")).value.Object().fn().closure
+	leaf := r.global.getOwn(r.atoms.intern("leaf")).value().Object().fn().closure
 	if !r.jit.dropEntry(weak.Make(leaf.fn), entry("leaf")) {
 		t.Fatal("leaf's code was not dropped")
 	}
@@ -7464,9 +7464,9 @@ func TestJITSSANativeCallsSurviveEviction(t *testing.T) {
 		run("warm-up")
 	}
 	fnOf := func(name string) *bytecode.Function {
-		return r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure.fn
+		return r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure.fn
 	}
-	method := r.global.getOwn(r.atoms.intern("M")).value.Object().getOwn(r.atoms.intern("prototype")).value.Object().getOwn(r.atoms.intern("m")).value.Object().fn().closure.fn
+	method := r.global.getOwn(r.atoms.intern("M")).value().Object().getOwn(r.atoms.intern("prototype")).value().Object().getOwn(r.atoms.intern("m")).value().Object().fn().closure.fn
 	caller := r.jit.cache[weak.Make(fnOf("caller"))]
 	if caller == nil || caller.ssa == nil || len(caller.ssaLinks) != 2 {
 		t.Fatalf("caller does not call leaf and m natively: %+v", caller)
@@ -7557,7 +7557,7 @@ func TestJITSSALooplessCalleeRecompiledAfterEviction(t *testing.T) {
 		run("warm-up")
 	}
 	fnOf := func(name string) *bytecode.Function {
-		return r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure.fn
+		return r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure.fn
 	}
 	key := weak.Make(fnOf("leaf"))
 	e, caller := r.jit.cache[key], r.jit.cache[weak.Make(fnOf("useLeaf"))]
@@ -7591,7 +7591,7 @@ func TestJITSSANativeCalleeRefusalKept(t *testing.T) {
 	if _, err := r.Run(compileForTest(t, `function g(x){try{return x.a}catch(e){return 0}}g({a:1})`)); err != nil {
 		t.Fatal(err)
 	}
-	cl := r.global.getOwn(r.atoms.intern("g")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("g")).value().Object().fn().closure
 	if _, err := r.jitLower(cl.fn, jitLowerInline); err == nil {
 		t.Skip("g compiles for native callers now: the test needs one that does not")
 	}
@@ -7654,7 +7654,7 @@ func TestJITSSAEntersCalleesWithoutCode(t *testing.T) {
 				t.Fatal(err)
 			}
 			// The callees the caller calls natively: native callers stop.
-			cl := r.global.getOwn(r.atoms.intern(tc.caller)).value.Object().fn().closure
+			cl := r.global.getOwn(r.atoms.intern(tc.caller)).value().Object().fn().closure
 			e := r.jit.hint(cl)
 			if e == nil || len(e.nativeCalls) == 0 {
 				t.Fatalf("%s calls nothing natively: %+v", tc.caller, e)
@@ -7719,7 +7719,7 @@ func TestJITSSACallerDroppedWhileItsCalleeLeaves(t *testing.T) {
 						return Undefined, nil
 					}
 					drop = false
-					cl := rt.global.getOwn(rt.atoms.intern("caller")).value.Object().fn().closure
+					cl := rt.global.getOwn(rt.atoms.intern("caller")).value().Object().fn().closure
 					e := rt.jit.hint(cl)
 					inUse = e != nil && rt.jit.inUse(e)
 					dropped = e != nil && rt.jit.dropEntry(weak.Make(cl.fn), e)
@@ -7739,7 +7739,7 @@ func TestJITSSACallerDroppedWhileItsCalleeLeaves(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			cl := r.global.getOwn(r.atoms.intern("caller")).value.Object().fn().closure
+			cl := r.global.getOwn(r.atoms.intern("caller")).value().Object().fn().closure
 			e := r.jit.hint(cl)
 			if e == nil || e.ssa == nil {
 				t.Fatalf("caller was not compiled: %+v", e)
@@ -7789,11 +7789,11 @@ func TestJITSSACalleeContextsKeepNothing(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("sum")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("sum")).value().Object().fn().closure
 	if e := r.jit.hint(cl); e == nil || e.ssa == nil || len(e.nativeCalls) == 0 || e.ssaStats.entries == 0 {
 		t.Fatalf("sum calls nothing natively: %+v", e)
 	}
-	o := weak.Make(r.global.getOwn(r.atoms.intern("o")).value.Object())
+	o := weak.Make(r.global.getOwn(r.atoms.intern("o")).value().Object())
 	if _, err := r.Run(compileForTest(t, `o=undefined`)); err != nil {
 		t.Fatal(err)
 	}
@@ -7836,7 +7836,7 @@ func TestJITSSAStringConstantsAndThrows(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("scale")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("scale")).value().Object().fn().closure
 	for i, src := range rounds {
 		wv, err := want.Run(compileForTest(t, src))
 		if err != nil {
@@ -7892,8 +7892,8 @@ func TestJITSSAInlinedConstructions(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("build")).value.Object().fn().closure
-	w := r.global.getOwn(r.atoms.intern("W")).value.Object()
+	cl := r.global.getOwn(r.atoms.intern("build")).value().Object().fn().closure
+	w := r.global.getOwn(r.atoms.intern("W")).value().Object()
 	var compiles uint64
 	for i, src := range rounds {
 		wv, err := want.Run(compileForTest(t, src))
@@ -7965,9 +7965,9 @@ func TestJITSSAInlinedForwardingConstructions(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("build")).value.Object().fn().closure
-	v := r.global.getOwn(r.atoms.intern("V")).value.Object()
-	c := r.global.getOwn(r.atoms.intern("C")).value.Object()
+	cl := r.global.getOwn(r.atoms.intern("build")).value().Object().fn().closure
+	v := r.global.getOwn(r.atoms.intern("V")).value().Object()
+	c := r.global.getOwn(r.atoms.intern("C")).value().Object()
 	var hosts uint64
 	for i, src := range rounds {
 		wv, err := want.Run(compileForTest(t, src))
@@ -8029,7 +8029,7 @@ func TestJITSSAMathIntrinsics(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("sum")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("sum")).value().Object().fn().closure
 	for i, src := range rounds {
 		wv, err := want.Run(compileForTest(t, src))
 		if err != nil {
@@ -8103,10 +8103,10 @@ func TestJITSSAStringAddCallsGo(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cat := r.global.getOwn(r.atoms.intern("cat")).value.Object().fn().closure
-	tree := r.global.getOwn(r.atoms.intern("tree")).value.Object().fn().closure
-	odd := r.global.getOwn(r.atoms.intern("odd")).value.Object().fn().closure
-	syms := r.global.getOwn(r.atoms.intern("syms")).value.Object().fn().closure
+	cat := r.global.getOwn(r.atoms.intern("cat")).value().Object().fn().closure
+	tree := r.global.getOwn(r.atoms.intern("tree")).value().Object().fn().closure
+	odd := r.global.getOwn(r.atoms.intern("odd")).value().Object().fn().closure
+	syms := r.global.getOwn(r.atoms.intern("syms")).value().Object().fn().closure
 	rounds := []string{`cat(300)`, `cat(300)`, `cat(300)`, `cat(300)`, `String(walk(40))`, `String(walk(40))`, `String(walk(40))`,
 		`String(walk(40))`, `odd(300,obj)`, `odd(300,obj)`, `odd(300,obj)`, `[sym(),sym(),sym()].join()`, `big()`, `big()`, `cat(300)`}
 	for i, src := range rounds {
@@ -8215,7 +8215,7 @@ func TestJITSSAPoolsRefilledByGo(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	mk := r.global.getOwn(r.atoms.intern("mk")).value.Object().fn().closure
+	mk := r.global.getOwn(r.atoms.intern("mk")).value().Object().fn().closure
 	rounds := []string{`String(mk(2000))`, `String(mk(2000))`, `String(mk(2000))`, `String(mk(2000))`, `String(mk(2000))`,
 		`P.prototype={z:5};String(mk(2000))`, `String(mk(2000))`, `String(mk(2000))`}
 	for i, src := range rounds {
@@ -8296,7 +8296,7 @@ func TestJITSSAPolymorphicStores(t *testing.T) {
 		}
 	}
 	exits := func(name string) uint64 {
-		cl := r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure
+		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 		if e := r.jit.cache[weak.Make(cl.fn)]; e != nil {
 			return e.ssaStats.hosts + e.ssaStats.guards
 		}
@@ -8329,7 +8329,7 @@ func TestJITSSAPolymorphicStores(t *testing.T) {
 				t.Fatalf("deep left native code %d times", n)
 			}
 			for _, name := range []string{"adds", "writes", "deep"} {
-				cl := r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure
+				cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 				if e := r.jit.cache[weak.Make(cl.fn)]; e == nil || e.ssa == nil || e.entrySlow {
 					t.Fatalf("%s did not run natively: %+v", name, e)
 				}
@@ -8380,7 +8380,7 @@ func TestJITSSAInlineBudgetCallsNatively(t *testing.T) {
 		}
 	}
 	e := func() *jitEntry {
-		cl := r.global.getOwn(r.atoms.intern("wide")).value.Object().fn().closure
+		cl := r.global.getOwn(r.atoms.intern("wide")).value().Object().fn().closure
 		return r.jit.cache[weak.Make(cl.fn)]
 	}
 	exits := func() uint64 {
@@ -8460,7 +8460,7 @@ func TestJITSSAGoCalls(t *testing.T) {
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	entry := func(name string) *jitEntry {
-		cl := r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure
+		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 		return r.jit.cache[weak.Make(cl.fn)]
 	}
 	// drop(1) drops held's code, as the cache does to make room; drop(2)
@@ -8471,7 +8471,7 @@ func TestJITSSAGoCalls(t *testing.T) {
 			if rt != r {
 				return Undefined, nil
 			}
-			cl := r.global.getOwn(r.atoms.intern("held")).value.Object().fn().closure
+			cl := r.global.getOwn(r.atoms.intern("held")).value().Object().fn().closure
 			e := r.jit.cache[weak.Make(cl.fn)]
 			if e == nil || e.ssa == nil || len(r.jit.goPinned) == 0 {
 				return Undefined, nil
@@ -8582,7 +8582,7 @@ func TestJITCacheKeepsCodeOverRefusals(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	fn := r.global.getOwn(r.atoms.intern("hot")).value.Object().fn().closure.fn
+	fn := r.global.getOwn(r.atoms.intern("hot")).value().Object().fn().closure.fn
 	if e := r.jit.cache[weak.Make(fn)]; e == nil || !e.holdsCode() {
 		t.Fatalf("hot has no code: %+v", e)
 	}
@@ -8638,7 +8638,7 @@ func TestJITSSACallSavesReuseSlots(t *testing.T) {
 			t.Fatalf("round %d: got %v, interpreter %v", i, got, want)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("many")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("many")).value().Object().fn().closure
 	if e := r.jit.cache[weak.Make(cl.fn)]; e == nil || e.ssa == nil {
 		t.Fatalf("many was not compiled by the new pipeline: %+v", e)
 	}
@@ -8675,7 +8675,7 @@ func TestJITSSASeedsGlobalsNativeCodeRead(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("f")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
 	var compiles uint64
 	for i, call := range []string{`f(300,1e9)`, `f(300,1e9)`, `f(300,1e9)`, `f(300,0)`, `f(300,0)`, `f(300,0)`, `f(300,0)`} {
 		wv, err := want.Run(compileForTest(t, call))
@@ -8721,7 +8721,7 @@ func TestJITSSAUnfedSitesCompiledAtNextCall(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("f")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
 	calls := []string{`f(300,false)`, `f(300,false)`, `f(300,false)`, `f(300,true)`, `f(300,true)`, `f(300,true)`, `f(300,true)`}
 	var compiles []uint64
 	for i, call := range calls {
@@ -8781,7 +8781,7 @@ func TestJITSSAReadsDropSupersededShapes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("g")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("g")).value().Object().fn().closure
 	var hosts uint64
 	for i := range 6 {
 		wv, err := want.Run(compileForTest(t, `g(3000)`))
@@ -8905,9 +8905,9 @@ func TestJITSSAMathPow(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("pw")).value.Object().fn().closure
-	odd := r.global.getOwn(r.atoms.intern("odd")).value.Object().fn().closure
-	one := r.global.getOwn(r.atoms.intern("one")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("pw")).value().Object().fn().closure
+	odd := r.global.getOwn(r.atoms.intern("odd")).value().Object().fn().closure
+	one := r.global.getOwn(r.atoms.intern("one")).value().Object().fn().closure
 	rounds := []string{`String(pw(300))`, `String(pw(300))`, `String(pw(300))`, `String(pw(300))`, `String(pw(300))`,
 		`odd(300)`, `odd(300)`, `odd(300)`, `String(one(10,3,300))`, `String(one(10,3,300))`, `String(one(10,3,300))`, `all()`, `all()`,
 		`Math.pow=function(x,y){return x+y};String(pw(300))+all()`}
@@ -8986,8 +8986,8 @@ func TestJITSSAKnownReceivers(t *testing.T) {
 		}
 	}
 	entry := func() *jitEntry {
-		o := r.global.getOwn(r.atoms.intern("m")).value.Object()
-		cl := o.getOwn(r.atoms.intern("blocks")).value.Object().fn().closure
+		o := r.global.getOwn(r.atoms.intern("m")).value().Object()
+		cl := o.getOwn(r.atoms.intern("blocks")).value().Object().fn().closure
 		return r.jit.cache[weak.Make(cl.fn)]
 	}
 	rounds := []string{`m.blocks(400)`, `m.blocks(400)`, `m.blocks(400)`,
@@ -9042,7 +9042,7 @@ func TestJITSSACompileLowersOnce(t *testing.T) {
 	if _, err := r.Run(compileForTest(t, `blocks(400)`)); err != nil {
 		t.Fatal(err)
 	}
-	cl := r.global.getOwn(r.atoms.intern("blocks")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("blocks")).value().Object().fn().closure
 	e := r.jit.cache[weak.Make(cl.fn)]
 	if e == nil || e.ssa == nil {
 		t.Fatalf("blocks did not compile: %+v", e)
@@ -9081,9 +9081,9 @@ func TestJITSSARemainder(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	col := r.global.getOwn(r.atoms.intern("col")).value.Object().fn().closure
-	wrap := r.global.getOwn(r.atoms.intern("wrap")).value.Object().fn().closure
-	md := r.global.getOwn(r.atoms.intern("md")).value.Object().fn().closure
+	col := r.global.getOwn(r.atoms.intern("col")).value().Object().fn().closure
+	wrap := r.global.getOwn(r.atoms.intern("wrap")).value().Object().fn().closure
+	md := r.global.getOwn(r.atoms.intern("md")).value().Object().fn().closure
 	rounds := []string{`sh(col(400))`, `sh(col(400))`, `sh(col(400))`, `sh(col(400))`, `sh(col(400))`, `odd()`, `odd()`, `odd()`}
 	for i, src := range rounds {
 		wv, err := want.Run(compileForTest(t, src))
@@ -9149,7 +9149,7 @@ func TestJITSSAReadsWhatIsNotANumber(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	sp := r.global.getOwn(r.atoms.intern("eng")).value.Object().proto.getOwn(r.atoms.intern("sp")).value.Object().fn().closure
+	sp := r.global.getOwn(r.atoms.intern("eng")).value().Object().proto.getOwn(r.atoms.intern("sp")).value().Object().fn().closure
 	rounds := []string{`String(run(500))`, `String(run(500))`, `String(run(500))`, `String(run(500))`, `String(run(500))`,
 		`eng.canvas={};String(run(500))`, `String(run(500))`}
 	for i, src := range rounds {
@@ -9214,12 +9214,12 @@ func TestJITSSAGoCallsFromNativeCallees(t *testing.T) {
 					names = append(names, fmt.Sprintf("%s:%d:%d", e.Function, e.Line, e.Column))
 				}
 				stacks[k] = names
-				switch rt.global.getOwn(rt.atoms.intern("c")).value.Object().getOwn(rt.atoms.intern("mode")).value.num {
+				switch rt.global.getOwn(rt.atoms.intern("c")).value().Object().getOwn(rt.atoms.intern("mode")).value().num {
 				case 1:
 					return Undefined, rt.throwTypeError("probe %d", len(names))
 				case 2:
 					if k == 1 && dropCaller && rt.jit != nil {
-						cl := rt.global.getOwn(rt.atoms.intern("outer")).value.Object().fn().closure
+						cl := rt.global.getOwn(rt.atoms.intern("outer")).value().Object().fn().closure
 						if e := rt.jit.hint(cl); e != nil {
 							rt.jit.dropEntry(weak.Make(cl.fn), e)
 						}
@@ -9239,7 +9239,7 @@ func TestJITSSAGoCallsFromNativeCallees(t *testing.T) {
 		}
 	}
 	entry := func(name string) *jitEntry {
-		cl := r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure
+		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 		return r.jit.cache[weak.Make(cl.fn)]
 	}
 	rounds := []string{`String(outer(400))`, `String(outer(400))`, `String(outer(400))`, `String(outer(400))`,
@@ -9320,7 +9320,7 @@ func TestJITSSAGoCallsFromNativeCalleesCallBack(t *testing.T) {
 				if rt.jit == nil {
 					return Str(NewString("")), nil
 				}
-				cl := rt.global.getOwn(rt.atoms.intern(args[0].String().Go())).value.Object().fn().closure
+				cl := rt.global.getOwn(rt.atoms.intern(args[0].String().Go())).value().Object().fn().closure
 				e := rt.jit.cache[weak.Make(cl.fn)]
 				if e == nil || e.ssa == nil || len(rt.jit.goPinned) == 0 {
 					return Str(NewString("")), nil
@@ -9349,7 +9349,7 @@ func TestJITSSAGoCallsFromNativeCalleesCallBack(t *testing.T) {
 		}
 	}
 	entry := func(name string) *jitEntry {
-		cl := r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure
+		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 		return r.jit.cache[weak.Make(cl.fn)]
 	}
 	for i := range 6 {
@@ -9497,7 +9497,7 @@ func TestJITSSABuiltinCallsAsCallDirect(t *testing.T) {
 			if i == 3 {
 				charged = r.meter.live - live
 				if jit {
-					cl := r.global.getOwn(r.atoms.intern("body")).value.Object().fn().closure
+					cl := r.global.getOwn(r.atoms.intern("body")).value().Object().fn().closure
 					if e := r.jit.cache[weak.Make(cl.fn)]; e == nil || e.ssa == nil || e.ssaStats.goCalls == 0 {
 						t.Fatalf("body did not call Go natively: %+v", e)
 					}
@@ -9560,7 +9560,7 @@ func TestJITSSAKeepCellsReused(t *testing.T) {
 		}
 	}
 	entry := func(name string) *jitEntry {
-		cl := r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure
+		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 		return r.jit.cache[weak.Make(cl.fn)]
 	}
 	for i := range 4 {
@@ -9619,7 +9619,7 @@ func TestJITSSAGoCallLeavesWithoutEntry(t *testing.T) {
 				if mode != 1 || i != 100 || rt.jit == nil {
 					return Int(1), nil
 				}
-				cl := rt.global.getOwn(rt.atoms.intern("loop")).value.Object().fn().closure
+				cl := rt.global.getOwn(rt.atoms.intern("loop")).value().Object().fn().closure
 				if e := rt.jit.cache[weak.Make(cl.fn)]; e != nil && e.ssa != nil {
 					code := e.ssa
 					e.reopt = true
@@ -9690,7 +9690,7 @@ func TestJITSSAGoCallPinsALevelsNewCode(t *testing.T) {
 				if rt.jit == nil || !args[0].Truthy() {
 					return Str(NewString("")), nil
 				}
-				cl := rt.global.getOwn(rt.atoms.intern("leaf")).value.Object().fn().closure
+				cl := rt.global.getOwn(rt.atoms.intern("leaf")).value().Object().fn().closure
 				e := rt.jit.cache[weak.Make(cl.fn)]
 				if e == nil || e.ssa == nil || len(rt.jit.goPinned) == 0 {
 					return Str(NewString("")), nil
@@ -9731,7 +9731,7 @@ func TestJITSSAGoCallPinsALevelsNewCode(t *testing.T) {
 			t.Fatalf("round %d: got %s, interpreter's %s", i, got, want)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("leaf")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("leaf")).value().Object().fn().closure
 	// A level's pin: leaf called Go as root's native callee.
 	if e := r.jit.cache[weak.Make(cl.fn)]; e == nil || e.ssa == nil || e.pinSerial == 0 {
 		t.Fatalf("leaf did not call Go as a native callee: %+v", e)
@@ -9771,7 +9771,7 @@ func TestJITSSAPollsAsCallsOfGo(t *testing.T) {
 	for _, rt := range []*Runtime{want, r} {
 		rt.global.setOwnRaw(rt.atoms.intern("cancel"), rt.NewFunction("cancel", 0,
 			func(rt *Runtime, _ Value, _ []Value) (Value, error) {
-				at = rt.global.getOwn(rt.atoms.intern("c")).value.Object().getOwn(rt.atoms.intern("n")).value.num
+				at = rt.global.getOwn(rt.atoms.intern("c")).value().Object().getOwn(rt.atoms.intern("n")).value().num
 				cancel()
 				return Undefined, nil
 			}), propDefault)
@@ -9780,7 +9780,7 @@ func TestJITSSAPollsAsCallsOfGo(t *testing.T) {
 		}
 	}
 	entry := func(name string) *jitEntry {
-		cl := r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure
+		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 		return r.jit.cache[weak.Make(cl.fn)]
 	}
 	for i := range 4 {
@@ -9816,7 +9816,7 @@ func TestJITSSAPollsAsCallsOfGo(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled script ended with %v", err)
 	}
-	n := r.global.getOwn(r.atoms.intern("c")).value.Object().getOwn(r.atoms.intern("n")).value.num
+	n := r.global.getOwn(r.atoms.intern("c")).value().Object().getOwn(r.atoms.intern("n")).value().num
 	if n-at > 2*backEdgeCheckInterval {
 		t.Fatalf("leaf ran %v iterations past its interrupt", n-at)
 	}
@@ -9868,7 +9868,7 @@ func TestJITSSAElementStoresGrow(t *testing.T) {
 			t.Fatalf("round %d: got %s, interpreter %s", i, got, want)
 		}
 		if i == 3 {
-			cl := r.global.getOwn(r.atoms.intern("fill")).value.Object().fn().closure
+			cl := r.global.getOwn(r.atoms.intern("fill")).value().Object().fn().closure
 			if e := r.jit.cache[weak.Make(cl.fn)]; e == nil || e.ssa == nil {
 				t.Fatalf("fill has no code: %+v", e)
 			}
@@ -9928,18 +9928,18 @@ func TestJITSSACharCodeAtInNativeCallees(t *testing.T) {
 		if i == 3 {
 			// Called natively, or inlined, as a helper with no operation
 			// left to Go may be.
-			cl := r.global.getOwn(r.atoms.intern("intAt")).value.Object().fn().closure
+			cl := r.global.getOwn(r.atoms.intern("intAt")).value().Object().fn().closure
 			if e := r.jit.cache[weak.Make(cl.fn)]; e != nil && e.notNative {
 				t.Fatalf("intAt is not called natively: %+v", e)
 			}
-			pl := r.global.getOwn(r.atoms.intern("parse")).value.Object().fn().closure
+			pl := r.global.getOwn(r.atoms.intern("parse")).value().Object().fn().closure
 			if e := r.jit.cache[weak.Make(pl.fn)]; e == nil || e.ssa == nil {
 				t.Fatalf("parse has no code: %+v", e)
 			}
 			// codes, with a loop, is called natively, in a context of its own.
-			cc := r.global.getOwn(r.atoms.intern("codes")).value.Object().fn().closure
+			cc := r.global.getOwn(r.atoms.intern("codes")).value().Object().fn().closure
 			if e := r.jit.cache[weak.Make(cc.fn)]; e == nil || e.ssa == nil || e.notNative || e.link.in == 0 {
-				pe := r.jit.cache[weak.Make(r.global.getOwn(r.atoms.intern("pairs")).value.Object().fn().closure.fn)]
+				pe := r.jit.cache[weak.Make(r.global.getOwn(r.atoms.intern("pairs")).value().Object().fn().closure.fn)]
 				t.Fatalf("codes was not called natively: notNative %v nativeIn %d entries %d; pairs %v", e.notNative, e.link.in, e.ssaStats.entries, func() string {
 					if pe == nil {
 						return "no entry"
@@ -10002,7 +10002,7 @@ func TestJITSSAAbsentElementsAreUndefined(t *testing.T) {
 		}
 		if i == 3 {
 			for _, name := range []string{"look", "scan"} {
-				cl := r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure
+				cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 				if e := r.jit.cache[weak.Make(cl.fn)]; e == nil || e.ssa == nil || e.notNative {
 					t.Fatalf("%s does not run natively: %+v", name, e)
 				}
@@ -10133,7 +10133,7 @@ func testJITSSAMathFunctions(t *testing.T) {
 		}
 	}
 	exits := func(name string) (uint64, *jitEntry) {
-		cl := r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure
+		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 		e := r.jit.cache[weak.Make(cl.fn)]
 		if e == nil {
 			return 0, nil
@@ -10205,7 +10205,7 @@ func TestJITSSAInlinedNestedForwardingConstructions(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("f")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
 	for i := range 6 {
 		wv, err := want.Run(compileForTest(t, `String(f(300))`))
 		if err != nil {
@@ -10315,8 +10315,8 @@ func TestJITSSAObjectLiterals(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("run")).value.Object().fn().closure
-	late := r.global.getOwn(r.atoms.intern("late")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("run")).value().Object().fn().closure
+	late := r.global.getOwn(r.atoms.intern("late")).value().Object().fn().closure
 	rounds := []string{`String(run(300))`, `String(run(300))`, `String(run(300))`, `String(run(300))`, `odd(40)`, `odd(40)`,
 		`shapes(100)`, `shapes(100)`, `look(last(300))`, `look(last(300))`, `look(last(300))`,
 		`String(late(400))`, `String(late(400))`, `String(late(400))`, `String(late(400))`,
@@ -10384,7 +10384,7 @@ func TestJITSSAStringConstants(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("run")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("run")).value().Object().fn().closure
 	for i := range 5 {
 		wv, err := want.Run(compileForTest(t, `run(xs,300)`))
 		if err != nil {
@@ -10446,11 +10446,11 @@ func TestJITSSACapturedBindings(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("run")).value.Object().fn().closure
-	rnd := r.global.getOwn(r.atoms.intern("rnd")).value.Object().fn().closure
-	step := r.global.getOwn(r.atoms.intern("step")).value.Object().fn().closure
-	grow := r.global.getOwn(r.atoms.intern("grow")).value.Object().fn().closure
-	keep := r.global.getOwn(r.atoms.intern("keep")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("run")).value().Object().fn().closure
+	rnd := r.global.getOwn(r.atoms.intern("rnd")).value().Object().fn().closure
+	step := r.global.getOwn(r.atoms.intern("step")).value().Object().fn().closure
+	grow := r.global.getOwn(r.atoms.intern("grow")).value().Object().fn().closure
+	keep := r.global.getOwn(r.atoms.intern("keep")).value().Object().fn().closure
 	rounds := []string{`String(run(300))`, `String(run(300))`, `String(run(300))`, `String(run(300))`,
 		`String(both(300))`, `String(both(300))`, `String(both(300))`, `[tdz(),tdz(),cst(),cst()].join()`,
 		`String(step(300))`, `String(step(300))`, `String(step(300))`, `String(step(300))`,
@@ -10525,7 +10525,7 @@ func TestJITSSAStringConcatsAndCalleeDeopts(t *testing.T) {
 		}
 	}
 	fnOf := func(name string) *bytecode.Function {
-		return r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure.fn
+		return r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure.fn
 	}
 	rounds := []string{`String(run(300))`, `String(run(300))`, `String(run(300))`, `String(run(300))`, `bad()`,
 		`String(mix([1,2,3],300))`, `String(mix([1,2,3],300))`, `String(mix([1,'a',3],300))`, `String(mix([1,'a',3],300))`,
@@ -10595,7 +10595,7 @@ func TestJITSSAArrayLiterals(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("run")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("run")).value().Object().fn().closure
 	rounds := []string{`String(run(300))`, `String(run(300))`, `String(run(300))`, `String(run(300))`,
 		`look(last(300))`, `look(last(300))`, `look(last(300))`, `String(big(100))`, `String(big(100))`,
 		`Object.defineProperty(Array.prototype,'1',{set(v){throw new Error('set')},configurable:true});[run(300),look(last(10))].join()`}
@@ -10651,7 +10651,7 @@ func TestJITSSAMegamorphicOwnReads(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("sum")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("sum")).value().Object().fn().closure
 	rounds := []string{`String(sum(objs,700))`, `String(sum(objs,700))`, `String(sum(objs,700))`, `String(sum(objs,700))`,
 		`String(sum(odd,900))`}
 	for i, src := range rounds {
@@ -10722,8 +10722,8 @@ func TestJITPoolLookupsAllocateNothing(t *testing.T) {
 	if _, err := r.Run(compileForTest(t, `function P(){} function f(){return new P()} f()`)); err != nil {
 		t.Fatal(err)
 	}
-	cl := r.global.getOwn(r.atoms.intern("f")).value.Object().fn().closure
-	ctor := r.global.getOwn(r.atoms.intern("P")).value.Object()
+	cl := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
+	ctor := r.global.getOwn(r.atoms.intern("P")).value().Object()
 	pc := slices.IndexFunc(cl.fn.Code, func(in bytecode.Instr) bool { return in.Op == bytecode.OpNew })
 	if pc < 0 || r.jit == nil {
 		t.Fatal("no construction")
@@ -10769,8 +10769,8 @@ func TestJITSSAReadsFunctionProperties(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("run")).value.Object().fn().closure
-	cl2 := r.global.getOwn(r.atoms.intern("run2")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("run")).value().Object().fn().closure
+	cl2 := r.global.getOwn(r.atoms.intern("run2")).value().Object().fn().closure
 	rounds := []string{`String(run(300))+run2(300)`, `String(run(300))+run2(300)`, `String(run(300))+run2(300)`, `String(run(300))+run2(300)`,
 		`String(odd(300))`, `String(odd(300))`, `V.prototype={add(a,b){return (a-b)|0}};String(run(300))+run2(300)`, `String(run(300))+run2(300)`}
 	for i, src := range rounds {
@@ -10822,8 +10822,8 @@ func TestJITForwardPropertyEmptyPool(t *testing.T) {
 	if _, err := r.Run(compileForTest(t, setup)); err != nil {
 		t.Fatal(err)
 	}
-	ctor := r.global.getOwn(r.atoms.intern("Ray")).value.Object()
-	proto := ctor.getOwnVisible(atomPrototype).value.Object()
+	ctor := r.global.getOwn(r.atoms.intern("Ray")).value().Object()
+	proto := ctor.getOwnVisible(atomPrototype).value().Object()
 	cl := ctor.fn().closure
 	if cl.fn.Code[1].Op != bytecode.OpGetProp {
 		t.Fatalf("the forwarding constructor reads its method with %v", cl.fn.Code[1].Op)
@@ -10870,7 +10870,7 @@ func TestJITSSAInlinedCalleeLearns(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("run")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("run")).value().Object().fn().closure
 	start := r.jit.reoptimized
 	for i := range 5 {
 		wv, err := want.Run(compileForTest(t, `String(run(300))`))
@@ -10928,7 +10928,7 @@ func TestJITSSAUnwoundCompilesAgainFirst(t *testing.T) {
 	if _, err := r.Run(compileForTest(t, `function g(n){let s=0;for(let i=0;i<n;i++)s=(s+i)|0;return s}g(300);g(300)`)); err != nil {
 		t.Fatal(err)
 	}
-	g := r.jit.cache[weak.Make(r.global.getOwn(r.atoms.intern("g")).value.Object().fn().closure.fn)]
+	g := r.jit.cache[weak.Make(r.global.getOwn(r.atoms.intern("g")).value().Object().fn().closure.fn)]
 	if g == nil || g.ssa == nil {
 		t.Fatal("g has no code")
 	}
@@ -10990,7 +10990,7 @@ func TestJITSSAInstanceOf(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("count")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("count")).value().Object().fn().closure
 	for i, src := range rounds {
 		wv, err := want.Run(compileForTest(t, src))
 		if err != nil {
@@ -11052,7 +11052,7 @@ func TestJITSSATypeOf(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("kinds")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("kinds")).value().Object().fn().closure
 	for i, src := range rounds {
 		wv, err := want.Run(compileForTest(t, src))
 		if err != nil {
@@ -11105,7 +11105,7 @@ func TestJITSSAGoesOnNatively(t *testing.T) {
 		}
 	}
 	entry := func(name string) *jitEntry {
-		cl := r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure
+		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 		return r.jit.hint(cl)
 	}
 	checked := 0
@@ -11179,7 +11179,7 @@ func TestJITSSAConcatCallsGo(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	chain := r.global.getOwn(r.atoms.intern("chain")).value.Object().fn().closure
+	chain := r.global.getOwn(r.atoms.intern("chain")).value().Object().fn().closure
 	rounds := []string{`chain(300)`, `chain(300)`, `chain(300)`, `chain(300)`, `objs(300,o)`, `objs(300,o)`, `objs(300,7)`,
 		`tmpl(300,o)`, `tmpl(300,o)`, `tmpl(300,true)`, `chain(300)`}
 	for i, src := range rounds {

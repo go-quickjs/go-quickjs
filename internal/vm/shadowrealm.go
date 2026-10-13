@@ -114,13 +114,13 @@ func (r *Runtime) safeString(v Value) (string, error) {
 		var name, msg string
 		for p := o; p != nil; p = p.proto {
 			if name == "" {
-				if n := p.getOwn(atomName); n != nil && !n.isAccessor() && n.value.IsString() {
-					name = n.value.String().Go()
+				if n := p.getOwn(atomName); n.ok() && !n.isAccessor() && n.value().IsString() {
+					name = n.value().String().Go()
 				}
 			}
 			if msg == "" {
-				if m := p.getOwn(atomMessage); m != nil && !m.isAccessor() && m.value.IsString() {
-					msg = m.value.String().Go()
+				if m := p.getOwn(atomMessage); m.ok() && !m.isAccessor() && m.value().IsString() {
+					msg = m.value().String().Go()
 				}
 			}
 		}

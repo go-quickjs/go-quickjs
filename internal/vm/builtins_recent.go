@@ -274,8 +274,8 @@ func (r *Runtime) globalFunc(name string) (*Object, bool) { return r.globalObj(n
 
 func (r *Runtime) globalObj(name string) (*Object, bool) {
 	p := r.global.getOwn(r.atoms.intern(name))
-	if p == nil || !p.value.IsObject() {
+	if !p.ok() || !p.value().IsObject() {
 		return nil, false
 	}
-	return p.value.Object(), true
+	return p.value().Object(), true
 }

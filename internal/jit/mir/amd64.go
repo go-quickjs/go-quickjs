@@ -1695,12 +1695,13 @@ func (c *compiler) constructGuards(t *ssa.CallSite, guard func(amd64.Cond)) {
 	c.a.Load(scratchB, scratchC, c.enc.ObjectProps+8)
 	c.a.OpImm(amd64.Cmp, scratchB, int32(t.ProtoIndex), true)
 	guard(amd64.CondBE)
-	at := int32(t.ProtoIndex) * c.enc.PropertySize
-	c.a.Load(scratchB, scratchC, c.enc.ObjectProps)
-	c.a.LoadU32(scratchC, scratchB, at+c.enc.PropertyKey)
-	c.a.OpImm(amd64.Cmp, scratchC, int32(t.ProtoKey), false)
+	c.a.Load(scratchB, scratchC, c.enc.ObjectShape)
+	c.a.Load(scratchB, scratchB, c.enc.ShapeKeys)
+	c.a.LoadU32(scratchB, scratchB, int32(t.ProtoIndex)*c.enc.KeySize+c.enc.PropertyKey)
+	c.a.OpImm(amd64.Cmp, scratchB, int32(t.ProtoKey), false)
 	guard(amd64.CondNE)
-	c.a.Load(scratchC, scratchB, at+c.enc.PropertyValue+c.enc.RefOffset)
+	c.a.Load(scratchB, scratchC, c.enc.ObjectProps)
+	c.a.Load(scratchC, scratchB, int32(t.ProtoIndex)*c.enc.ValueSize+c.enc.RefOffset)
 	c.a.Load(scratchB, scratchA, abi.OffPoolProto)
 	c.a.Op(amd64.Cmp, scratchC, scratchB, true)
 	guard(amd64.CondNE)
@@ -2483,11 +2484,25 @@ func (c *compiler) propStore(v *ssa.Value, guard func(amd64.Cond)) {
 		}
 	} else if v.Global {
 		// A global binding's cell, found as a read finds it, and
-		// writable.
+		// writable: its attributes are its object's shape's, at the cell's
+		// position.
 		if r := c.gpr(v.Args[0], scratchA); r != scratchA {
 			c.a.MovRR(scratchA, r)
 		}
-		c.a.LoadU8(scratchB, scratchA, c.enc.PropertyFlags-c.enc.PropertyValue)
+		cell := v.Args[0]
+		switch cell.Op {
+		case ssa.OpGlobalCell:
+			c.a.Load(scratchB, regCtx, abi.OffGlobal)
+		case ssa.OpLexCell:
+			c.a.Load(scratchB, regCtx, abi.OffGlobalLex)
+		case ssa.OpBindingCell:
+			c.movImm(scratchB, cell.Const.Bits)
+		default:
+			panic("mir: a global binding's write of no binding's cell")
+		}
+		c.a.Load(scratchB, scratchB, c.enc.ObjectShape)
+		c.a.Load(scratchB, scratchB, c.enc.ShapeKeys)
+		c.a.LoadU8(scratchB, scratchB, int32(cell.Index)*c.enc.KeySize+c.enc.PropertyFlags)
 		c.a.OpImm(amd64.And, scratchB, int32(c.enc.PropNotWritable), false)
 		c.a.OpImm(amd64.Cmp, scratchB, int32(c.enc.PropWritable), false)
 		guard(amd64.CondNE)
@@ -2653,8 +2668,8 @@ func (c *compiler) savingCall() {
 // write barrier (ssa.GoAddAlong). It uses every scratch register.
 func (c *compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss amd64.Label) {
 	x := v.Args[1]
-	if c.enc.PropertyFlags != c.enc.PropertyKey+4 || c.enc.PropertySize != 24 {
-		// The key and flags are written as one word, the offset as a sum.
+	if c.enc.ValueSize != 16 {
+		// The offset is a shift.
 		c.a.Jmp(miss)
 		return
 	}
@@ -2710,30 +2725,25 @@ func (c *compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss amd64.Label
 		c.a.Store(regCtx, abi.OffGoArgs+2*size+c.enc.RefOffset, scratchB)
 		c.a.Store(regCtx, abi.OffGoArgs+2*size+c.enc.NumOffset, c.gpr(x, scratchA))
 		c.a.Store(regCtx, abi.OffGoArgs+c.enc.RefOffset, c.gpr(v.Args[0], scratchA))
-		c.storeImm(regCtx, abi.OffGoArgs+c.enc.NumOffset, uint64(v.Key)|uint64(add.Flags)<<32, scratchB)
 		c.movImm(scratchB, uint64(add.Next))
 		c.a.Store(regCtx, abi.OffGoArgs+size+c.enc.RefOffset, scratchB)
 		c.goSaving(uint64(ssa.GoAddAlong), &miss)
 		c.a.Jmp(done)
 	})
-	// The length, then the shape, then the entry, at the old length times
-	// the entry's size, 24.
+	// The length, then the shape, which has the key, then the value, at
+	// the old length times a value's size, 16.
 	c.a.MovRR(scratchC, scratchB)
 	c.a.OpImm(amd64.Add, scratchB, 1, true)
 	c.a.Store(o, c.enc.ObjectProps+8, scratchB)
 	c.storeImm(o, c.enc.ObjectShape, uint64(add.Next), scratchB)
-	c.a.MovRR(scratchB, scratchC)
-	c.a.ShiftImm(amd64.Shl, scratchB, 1, true)
-	c.a.Op(amd64.Add, scratchC, scratchB, true)
-	c.a.ShiftImm(amd64.Shl, scratchC, 3, true)
+	c.a.ShiftImm(amd64.Shl, scratchC, 4, true)
 	c.a.Load(scratchB, o, c.enc.ObjectProps)
 	c.a.Op(amd64.Add, scratchC, scratchB, true)
-	c.storeImm(scratchC, c.enc.PropertyKey, uint64(v.Key)|uint64(add.Flags)<<32, scratchB)
 	// The pointer word first: making a lazy value's number word may use
 	// xScratch1.
 	c.a.MovQFromX(scratchB, xScratch1)
-	c.a.Store(scratchC, c.enc.PropertyValue+c.enc.RefOffset, scratchB)
-	c.a.Store(scratchC, c.enc.PropertyValue+c.enc.NumOffset, c.gpr(x, scratchA))
+	c.a.Store(scratchC, c.enc.RefOffset, scratchB)
+	c.a.Store(scratchC, c.enc.NumOffset, c.gpr(x, scratchA))
 	c.a.Bind(done)
 }
 
@@ -2759,7 +2769,7 @@ func (c *compiler) property(v *ssa.Value, guard func(amd64.Cond)) {
 		c.a.Jcc(amd64.CondNE, scan)
 		p = c.gpr(v.Args[0], scratchA)
 		c.a.Load(scratchA, p, c.enc.ObjectProps)
-		c.a.OpImm(amd64.Add, scratchA, int32(v.Index)*c.enc.PropertySize+c.enc.PropertyValue, true)
+		c.a.OpImm(amd64.Add, scratchA, int32(v.Index)*c.enc.ValueSize, true)
 		c.cold = append(c.cold, func() {
 			c.a.Bind(scan)
 			c.scan(v, guard, found)
@@ -2796,14 +2806,18 @@ func (c *compiler) scan(v *ssa.Value, guard func(amd64.Cond), found amd64.Label)
 	c.a.Load(scratchB, p, c.enc.ObjectProps+8)
 	c.a.OpImm(amd64.Cmp, scratchB, abi.MaxScan, true)
 	guard(amd64.CondA)
-	c.a.Load(scratchA, p, c.enc.ObjectProps)
+	// No properties, no shape.
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	guard(amd64.CondE)
+	c.a.Load(scratchA, p, c.enc.ObjectShape)
+	c.a.Load(scratchA, scratchA, c.enc.ShapeKeys)
 	mask, want := int32(c.enc.PropNotData), int32(0)
 	if v.Op == ssa.OpPropWrite {
 		mask, want = int32(c.enc.PropNotWritable), int32(c.enc.PropWritable)
 	}
-	// A loop over the table, its entries left in scratchB: the slow path's
-	// few dozen bytes, where it had been unrolled into hundreds, at every
-	// site -- a third of all the code made.
+	// A loop over the keys, those left in scratchB: the slow path's few
+	// dozen bytes, where it had been unrolled into hundreds, at every site
+	// -- a third of all the code made.
 	loop, hit := c.a.NewLabel(), c.a.NewLabel()
 	c.a.Bind(loop)
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
@@ -2811,7 +2825,7 @@ func (c *compiler) scan(v *ssa.Value, guard func(amd64.Cond), found amd64.Label)
 	c.a.LoadU32(scratchC, scratchA, c.enc.PropertyKey)
 	c.a.OpImm(amd64.Cmp, scratchC, int32(v.Key), false)
 	c.a.Jcc(amd64.CondE, hit)
-	c.a.OpImm(amd64.Add, scratchA, c.enc.PropertySize, true)
+	c.a.OpImm(amd64.Add, scratchA, c.enc.KeySize, true)
 	c.a.OpImm(amd64.Sub, scratchB, 1, true)
 	c.a.Jmp(loop)
 	c.a.Bind(hit)
@@ -2819,8 +2833,30 @@ func (c *compiler) scan(v *ssa.Value, guard func(amd64.Cond), found amd64.Label)
 	c.a.OpImm(amd64.And, scratchC, mask, false)
 	c.a.OpImm(amd64.Cmp, scratchC, want, false)
 	guard(amd64.CondNE)
-	c.a.OpImm(amd64.Add, scratchA, c.enc.PropertyValue, true)
+	// The value at the key's position: the table's length less the keys
+	// that were left, the one found among them.
+	p = c.gpr(v.Args[0], scratchC)
+	c.a.Load(scratchC, p, c.enc.ObjectProps+8)
+	c.a.Op(amd64.Sub, scratchC, scratchB, true)
+	c.a.ShiftImm(amd64.Shl, scratchC, 4, true)
+	p = c.gpr(v.Args[0], scratchA)
+	c.a.Load(scratchA, p, c.enc.ObjectProps)
+	c.a.Op(amd64.Add, scratchA, scratchC, true)
 	c.a.Jmp(found)
+}
+
+// keyAt checks that the object in scratchA has a property at v's index
+// (ssa.Value's Index), of v's key, leaving its shape's keys in scratchB for
+// the attributes there. It uses scratchC.
+func (c *compiler) keyAt(v *ssa.Value, guard func(amd64.Cond)) {
+	c.a.Load(scratchB, scratchA, c.enc.ObjectProps+8)
+	c.a.OpImm(amd64.Cmp, scratchB, int32(v.Index), true)
+	guard(amd64.CondBE)
+	c.a.Load(scratchB, scratchA, c.enc.ObjectShape)
+	c.a.Load(scratchB, scratchB, c.enc.ShapeKeys)
+	c.a.LoadU32(scratchC, scratchB, int32(v.Index)*c.enc.KeySize+c.enc.PropertyKey)
+	c.a.OpImm(amd64.Cmp, scratchC, int32(v.Key), false)
+	guard(amd64.CondNE)
 }
 
 // stringBytes compares two strings of one length, in code units, by their
@@ -3025,7 +3061,7 @@ func (c *compiler) holder(v *ssa.Value, guard func(amd64.Cond)) {
 			c.a.Load(scratchB, scratchA, c.enc.ObjectProto)
 		}
 		c.a.Load(scratchA, scratchA, c.enc.ObjectProps)
-		c.a.OpImm(amd64.Add, scratchA, k.Index*c.enc.PropertySize+c.enc.PropertyValue, true)
+		c.a.OpImm(amd64.Add, scratchA, k.Index*c.enc.ValueSize, true)
 		if i < len(cases)-1 {
 			c.a.Jmp(done)
 			c.a.Bind(next)
@@ -3585,18 +3621,12 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 			c.a.Op(amd64.Test, scratchA, scratchA, true)
 			guard(amd64.CondE)
 		}
-		c.a.Load(scratchB, scratchA, c.enc.ObjectProps+8)
-		c.a.OpImm(amd64.Cmp, scratchB, int32(v.Index), true)
-		guard(amd64.CondBE)
-		c.a.Load(scratchA, scratchA, c.enc.ObjectProps)
-		c.a.OpImm(amd64.Add, scratchA, int32(v.Index)*c.enc.PropertySize, true)
-		c.a.LoadU32(scratchB, scratchA, c.enc.PropertyKey)
-		c.a.OpImm(amd64.Cmp, scratchB, int32(v.Key), false)
-		guard(amd64.CondNE)
-		c.a.LoadU8(scratchB, scratchA, c.enc.PropertyFlags)
+		c.keyAt(v, guard)
+		c.a.LoadU8(scratchB, scratchB, int32(v.Index)*c.enc.KeySize+c.enc.PropertyFlags)
 		c.a.OpImm(amd64.And, scratchB, int32(c.enc.PropNotData|c.enc.PropUninit), false)
 		guard(amd64.CondNE)
-		c.a.OpImm(amd64.Add, scratchA, c.enc.PropertyValue, true)
+		c.a.Load(scratchA, scratchA, c.enc.ObjectProps)
+		c.a.OpImm(amd64.Add, scratchA, int32(v.Index)*c.enc.ValueSize, true)
 		c.setG(v, scratchA)
 	case ssa.OpLexCell:
 		// The script-level lexical bindings' object, where the global
@@ -3605,15 +3635,9 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Load(scratchA, regCtx, abi.OffGlobalLex)
 		c.a.Op(amd64.Test, scratchA, scratchA, true)
 		guard(amd64.CondE)
-		c.a.Load(scratchB, scratchA, c.enc.ObjectProps+8)
-		c.a.OpImm(amd64.Cmp, scratchB, int32(v.Index), true)
-		guard(amd64.CondBE)
+		c.keyAt(v, guard)
 		c.a.Load(scratchA, scratchA, c.enc.ObjectProps)
-		c.a.OpImm(amd64.Add, scratchA, int32(v.Index)*c.enc.PropertySize, true)
-		c.a.LoadU32(scratchB, scratchA, c.enc.PropertyKey)
-		c.a.OpImm(amd64.Cmp, scratchB, int32(v.Key), false)
-		guard(amd64.CondNE)
-		c.a.OpImm(amd64.Add, scratchA, c.enc.PropertyValue, true)
+		c.a.OpImm(amd64.Add, scratchA, int32(v.Index)*c.enc.ValueSize, true)
 		c.a.Load(scratchB, scratchA, c.enc.NumOffset)
 		c.movImm(scratchC, c.enc.Uninitialized)
 		c.a.Op(amd64.Cmp, scratchB, scratchC, true)
@@ -3651,12 +3675,13 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.movImm(scratchC, v.Const.Bits)
 		c.a.Op(amd64.Cmp, scratchB, scratchC, true)
 		guard(amd64.CondNE)
-		c.a.Load(scratchA, scratchA, c.enc.ObjectProps)
-		c.a.OpImm(amd64.Add, scratchA, int32(v.Index)*c.enc.PropertySize, true)
-		c.a.LoadU32(scratchB, scratchA, c.enc.PropertyKey)
+		c.a.Load(scratchB, scratchA, c.enc.ObjectShape)
+		c.a.Load(scratchB, scratchB, c.enc.ShapeKeys)
+		c.a.LoadU32(scratchB, scratchB, int32(v.Index)*c.enc.KeySize+c.enc.PropertyKey)
 		c.a.OpImm(amd64.Cmp, scratchB, int32(v.Key), false)
 		guard(amd64.CondNE)
-		c.a.OpImm(amd64.Add, scratchA, c.enc.PropertyValue, true)
+		c.a.Load(scratchA, scratchA, c.enc.ObjectProps)
+		c.a.OpImm(amd64.Add, scratchA, int32(v.Index)*c.enc.ValueSize, true)
 		c.setG(v, scratchA)
 	case ssa.OpStringCode:
 		c.stringCode(v, c.guardFor(v))

@@ -288,9 +288,9 @@ func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Ob
 	// the function has no prototype to read: one a script gives it, a getter
 	// perhaps, is not read at each call.
 	if callee != nil && cl.fn.Generator {
-		if p := callee.getOwn(atomPrototype); p != nil && p.flags&(propAccessor|propPrivate|propDeleted) == 0 {
-			if p.value.IsObject() {
-				proto = p.value.Object()
+		if p := callee.getOwn(atomPrototype); p.ok() && p.flags()&(propAccessor|propPrivate|propDeleted) == 0 {
+			if p.value().IsObject() {
+				proto = p.value().Object()
 			}
 		} else if custom, err := r.getValueProp(Obj(callee), atomPrototype); err == nil &&
 			custom.IsObject() {
@@ -781,9 +781,7 @@ func (r *Runtime) initGeneratorBuiltins() {
 func (r *Runtime) iterResult(v Value, done bool) *Object {
 	o := newLiteralObject(r.proto.object, ClassObject, 2)
 	if s := r.iterResultShape; s != nil {
-		o.props = append(o.props,
-			Property{key: atomValue, flags: propDefault, value: v},
-			Property{key: atomDone, flags: propDefault, value: Bool(done)})
+		o.vals = append(o.vals, v, Bool(done))
 		o.shape = s
 		return o
 	}

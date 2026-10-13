@@ -553,7 +553,7 @@ func (r *Runtime) initMapBuiltins() {
 
 	// get, has and set are applied without a frame where they can be.
 	for name, op := range map[string]uint8{"get": elemMapGet, "has": elemMapHas, "set": elemMapSet} {
-		p.getOwn(r.atoms.intern(name)).value.Object().fn().elemOp = op
+		p.getOwn(r.atoms.intern(name)).value().Object().fn().elemOp = op
 	}
 
 	r.defMapIterator(p, ClassMap, "entries", mapIterEntries)
@@ -607,7 +607,7 @@ func (r *Runtime) initSetBuiltins() {
 	})
 	// add and has are applied without a frame where they can be.
 	for name, op := range map[string]uint8{"add": elemSetAdd, "has": elemSetHas} {
-		p.getOwn(r.atoms.intern(name)).value.Object().fn().elemOp = op
+		p.getOwn(r.atoms.intern(name)).value().Object().fn().elemOp = op
 	}
 	r.defMethod(p, "delete", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		m, err := rt.mapOf(this, ClassSet, "Set.prototype.delete")
@@ -990,10 +990,10 @@ func (r *Runtime) seedFromEntries(o *Object, src Value, name string) error {
 // same: `Set.prototype.keys === Set.prototype.values` is observable.
 func (r *Runtime) aliasMethod(p *Object, key Atom, from string) {
 	src := p.getOwn(r.atoms.intern(from))
-	if src == nil {
+	if !src.ok() {
 		return
 	}
-	p.setOwnRaw(key, src.value, propWritable|propConfigurable)
+	p.setOwnRaw(key, src.value(), propWritable|propConfigurable)
 }
 
 // eachEntry walks an iterable of two-element entries, which is the shape Map

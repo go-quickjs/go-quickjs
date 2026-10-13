@@ -1202,11 +1202,25 @@ func (c *a64Compiler) propStore(v *ssa.Value, guard func(arm64.Cond)) {
 			c.a.MovRR(a64A, r)
 		}
 	} else if v.Global {
-		// As amd64's: a global binding's cell, writable.
+		// As amd64's: a global binding's cell, writable, its attributes
+		// its object's shape's.
 		if r := c.gpr(v.Args[0], a64A); r != a64A {
 			c.a.MovRR(a64A, r)
 		}
-		c.a.LoadU8(a64B, a64A, c.enc.PropertyFlags-c.enc.PropertyValue)
+		cell := v.Args[0]
+		switch cell.Op {
+		case ssa.OpGlobalCell:
+			c.a.Load(a64B, a64Ctx, abi.OffGlobal)
+		case ssa.OpLexCell:
+			c.a.Load(a64B, a64Ctx, abi.OffGlobalLex)
+		case ssa.OpBindingCell:
+			c.movImm(a64B, cell.Const.Bits)
+		default:
+			panic("mir: a global binding's write of no binding's cell")
+		}
+		c.a.Load(a64B, a64B, c.enc.ObjectShape)
+		c.a.Load(a64B, a64B, c.enc.ShapeKeys)
+		c.a.LoadU8(a64B, a64B, int32(cell.Index)*c.enc.KeySize+c.enc.PropertyFlags)
 		c.movImm(a64C, uint64(c.enc.PropNotWritable))
 		c.a.Op(arm64.And, a64B, a64B, a64C, false)
 		c.a.CmpImm(a64B, int64(c.enc.PropWritable), false)
@@ -1392,7 +1406,7 @@ func (c *a64Compiler) savingCall() {
 // goes to miss. It uses A, B, C and D.
 func (c *a64Compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss arm64.Label) {
 	x := v.Args[1]
-	if c.enc.PropertyFlags != c.enc.PropertyKey+4 || c.enc.PropertySize != 24 {
+	if c.enc.ValueSize != 16 {
 		c.a.B(miss)
 		return
 	}
@@ -1443,8 +1457,6 @@ func (c *a64Compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss arm64.La
 		c.a.Store(a64Ctx, abi.OffGoArgs+2*size+c.enc.RefOffset, a64B)
 		c.a.Store(a64Ctx, abi.OffGoArgs+2*size+c.enc.NumOffset, c.gpr(x, a64A))
 		c.a.Store(a64Ctx, abi.OffGoArgs+c.enc.RefOffset, c.gpr(v.Args[0], a64A))
-		c.movImm(a64B, uint64(v.Key)|uint64(add.Flags)<<32)
-		c.a.Store(a64Ctx, abi.OffGoArgs+c.enc.NumOffset, a64B)
 		c.movImm(a64B, uint64(add.Next))
 		c.a.Store(a64Ctx, abi.OffGoArgs+size+c.enc.RefOffset, a64B)
 		c.goSaving(uint64(ssa.GoAddAlong), &miss)
@@ -1454,17 +1466,14 @@ func (c *a64Compiler) addAlong(v *ssa.Value, add *ssa.PropertyAdd, miss arm64.La
 	c.a.Store(o, c.enc.ObjectProps+8, a64C)
 	c.movImm(a64C, uint64(add.Next))
 	c.a.Store(o, c.enc.ObjectShape, a64C)
-	// The entry's address: the old length times 24, past the table's start.
-	c.a.ShiftImm(arm64.Lsl, a64C, a64B, 1, true)
-	c.a.Op(arm64.Add, a64B, a64B, a64C, true)
-	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 3, true)
+	// The value's address: the old length times 16, past the table's
+	// start; the shape has the key.
+	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 4, true)
 	c.a.Load(a64C, o, c.enc.ObjectProps)
 	c.a.Op(arm64.Add, a64C, a64C, a64B, true)
-	c.movImm(a64B, uint64(v.Key)|uint64(add.Flags)<<32)
-	c.a.Store(a64C, c.enc.PropertyKey, a64B)
 	c.a.FMovFromF(a64B, a64F1)
-	c.a.Store(a64C, c.enc.PropertyValue+c.enc.RefOffset, a64B)
-	c.a.Store(a64C, c.enc.PropertyValue+c.enc.NumOffset, c.gpr(x, a64A))
+	c.a.Store(a64C, c.enc.RefOffset, a64B)
+	c.a.Store(a64C, c.enc.NumOffset, c.gpr(x, a64A))
 	c.a.Bind(done)
 }
 
@@ -1485,7 +1494,7 @@ func (c *a64Compiler) property(v *ssa.Value, guard func(arm64.Cond)) {
 		c.a.Cmp(a64B, a64C, true)
 		c.a.BCond(arm64.NE, scan)
 		c.a.Load(a64A, p, c.enc.ObjectProps)
-		c.a.AddImm(a64A, a64A, int64(int32(v.Index)*c.enc.PropertySize+c.enc.PropertyValue), true)
+		c.a.AddImm(a64A, a64A, int64(int32(v.Index)*c.enc.ValueSize), true)
 		c.cold = append(c.cold, func() {
 			c.a.Bind(scan)
 			c.scan(v, guard, found)
@@ -1516,13 +1525,17 @@ func (c *a64Compiler) scan(v *ssa.Value, guard func(arm64.Cond), found arm64.Lab
 	c.a.Load(a64B, p, c.enc.ObjectProps+8)
 	c.a.CmpImm(a64B, abi.MaxScan, true)
 	guard(arm64.HI)
-	c.a.Load(a64A, p, c.enc.ObjectProps)
+	// No properties, no shape.
+	c.a.CmpImm(a64B, 0, true)
+	guard(arm64.EQ)
+	c.a.Load(a64A, p, c.enc.ObjectShape)
+	c.a.Load(a64A, a64A, c.enc.ShapeKeys)
 	mask, want := int64(c.enc.PropNotData), int64(0)
 	if v.Op == ssa.OpPropWrite {
 		mask, want = int64(c.enc.PropNotWritable), int64(c.enc.PropWritable)
 	}
 	c.movImm(a64D, uint64(mask))
-	// A loop over the table, as amd64's.
+	// A loop over the keys, as amd64's.
 	loop, hit := c.a.NewLabel(), c.a.NewLabel()
 	c.a.Bind(loop)
 	c.a.CmpImm(a64B, 0, true)
@@ -1530,7 +1543,7 @@ func (c *a64Compiler) scan(v *ssa.Value, guard func(arm64.Cond), found arm64.Lab
 	c.a.LoadU32(a64C, a64A, c.enc.PropertyKey)
 	c.a.CmpImm(a64C, int64(v.Key), false)
 	c.a.BCond(arm64.EQ, hit)
-	c.a.AddImm(a64A, a64A, int64(c.enc.PropertySize), true)
+	c.a.AddImm(a64A, a64A, int64(c.enc.KeySize), true)
 	c.a.AddImm(a64B, a64B, -1, true)
 	c.a.B(loop)
 	c.a.Bind(hit)
@@ -1538,8 +1551,28 @@ func (c *a64Compiler) scan(v *ssa.Value, guard func(arm64.Cond), found arm64.Lab
 	c.a.Op(arm64.And, a64C, a64C, a64D, false)
 	c.a.CmpImm(a64C, want, false)
 	guard(arm64.NE)
-	c.a.AddImm(a64A, a64A, int64(c.enc.PropertyValue), true)
+	// As amd64's: the value at the key's position.
+	p = c.gpr(v.Args[0], a64C)
+	c.a.Load(a64C, p, c.enc.ObjectProps+8)
+	c.a.Op(arm64.Sub, a64C, a64C, a64B, true)
+	c.a.ShiftImm(arm64.Lsl, a64C, a64C, 4, true)
+	p = c.gpr(v.Args[0], a64A)
+	c.a.Load(a64A, p, c.enc.ObjectProps)
+	c.a.Op(arm64.Add, a64A, a64A, a64C, true)
 	c.a.B(found)
+}
+
+// keyAt is amd64's: the object in A has a property at v's index, of v's
+// key, its shape's keys left in B. It uses C.
+func (c *a64Compiler) keyAt(v *ssa.Value, guard func(arm64.Cond)) {
+	c.a.Load(a64B, a64A, c.enc.ObjectProps+8)
+	c.a.CmpImm(a64B, int64(v.Index), true)
+	guard(arm64.LS)
+	c.a.Load(a64B, a64A, c.enc.ObjectShape)
+	c.a.Load(a64B, a64B, c.enc.ShapeKeys)
+	c.a.LoadU32(a64C, a64B, int32(v.Index)*c.enc.KeySize+c.enc.PropertyKey)
+	c.a.CmpImm(a64C, int64(v.Key), false)
+	guard(arm64.NE)
 }
 
 // stringBytes compares two strings of one length by their bytes, as
@@ -2276,13 +2309,14 @@ func (c *a64Compiler) constructGuards(t *ssa.CallSite, guard func(arm64.Cond)) {
 	c.a.Load(a64B, a64C, c.enc.ObjectProps+8)
 	c.a.CmpImm(a64B, int64(t.ProtoIndex), true)
 	guard(arm64.LS)
-	at := int32(t.ProtoIndex) * c.enc.PropertySize
-	c.a.Load(a64B, a64C, c.enc.ObjectProps)
-	c.a.LoadU32(a64C, a64B, at+c.enc.PropertyKey)
+	c.a.Load(a64B, a64C, c.enc.ObjectShape)
+	c.a.Load(a64B, a64B, c.enc.ShapeKeys)
+	c.a.LoadU32(a64B, a64B, int32(t.ProtoIndex)*c.enc.KeySize+c.enc.PropertyKey)
 	c.movImm(a64A, uint64(t.ProtoKey))
-	c.a.Cmp(a64C, a64A, false)
+	c.a.Cmp(a64B, a64A, false)
 	guard(arm64.NE)
-	c.a.Load(a64C, a64B, at+c.enc.PropertyValue+c.enc.RefOffset)
+	c.a.Load(a64B, a64C, c.enc.ObjectProps)
+	c.a.Load(a64C, a64B, int32(t.ProtoIndex)*c.enc.ValueSize+c.enc.RefOffset)
 	c.movImm(a64A, uint64(t.Pool))
 	c.a.Load(a64B, a64A, abi.OffPoolProto)
 	c.a.Cmp(a64C, a64B, true)
@@ -2878,7 +2912,7 @@ func (c *a64Compiler) holder(v *ssa.Value, guard func(arm64.Cond)) {
 			c.a.Load(a64B, a64A, c.enc.ObjectProto)
 		}
 		c.a.Load(a64A, a64A, c.enc.ObjectProps)
-		c.a.AddImm(a64A, a64A, int64(k.Index*c.enc.PropertySize+c.enc.PropertyValue), true)
+		c.a.AddImm(a64A, a64A, int64(k.Index*c.enc.ValueSize), true)
 		if i < len(cases)-1 {
 			c.a.B(done)
 			c.a.Bind(next)
@@ -3350,34 +3384,22 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 			c.a.Load(a64A, a64Ctx, abi.OffGlobal)
 			c.a.Cbz(a64A, c.stubLabel(v.State, exitKind(v.Aux)), true)
 		}
-		c.a.Load(a64B, a64A, c.enc.ObjectProps+8)
-		c.a.CmpImm(a64B, int64(v.Index), true)
-		guard(arm64.LS)
-		c.a.Load(a64A, a64A, c.enc.ObjectProps)
-		c.a.AddImm(a64A, a64A, int64(int32(v.Index)*c.enc.PropertySize), true)
-		c.a.LoadU32(a64B, a64A, c.enc.PropertyKey)
-		c.a.CmpImm(a64B, int64(v.Key), false)
-		guard(arm64.NE)
-		c.a.LoadU8(a64B, a64A, c.enc.PropertyFlags)
+		c.keyAt(v, guard)
+		c.a.LoadU8(a64B, a64B, int32(v.Index)*c.enc.KeySize+c.enc.PropertyFlags)
 		c.movImm(a64C, uint64(c.enc.PropNotData|c.enc.PropUninit))
 		c.a.Tst(a64B, a64C, false)
 		guard(arm64.NE)
-		c.a.AddImm(a64A, a64A, int64(c.enc.PropertyValue), true)
+		c.a.Load(a64A, a64A, c.enc.ObjectProps)
+		c.a.AddImm(a64A, a64A, int64(int32(v.Index)*c.enc.ValueSize), true)
 		c.setG(v, a64A)
 	case ssa.OpLexCell:
 		// As amd64's: the bindings' object, the binding's key, and out of
 		// its temporal dead zone.
 		c.a.Load(a64A, a64Ctx, abi.OffGlobalLex)
 		c.a.Cbz(a64A, c.stubLabel(v.State, exitKind(v.Aux)), true)
-		c.a.Load(a64B, a64A, c.enc.ObjectProps+8)
-		c.a.CmpImm(a64B, int64(v.Index), true)
-		guard(arm64.LS)
+		c.keyAt(v, guard)
 		c.a.Load(a64A, a64A, c.enc.ObjectProps)
-		c.a.AddImm(a64A, a64A, int64(int32(v.Index)*c.enc.PropertySize), true)
-		c.a.LoadU32(a64B, a64A, c.enc.PropertyKey)
-		c.a.CmpImm(a64B, int64(v.Key), false)
-		guard(arm64.NE)
-		c.a.AddImm(a64A, a64A, int64(c.enc.PropertyValue), true)
+		c.a.AddImm(a64A, a64A, int64(int32(v.Index)*c.enc.ValueSize), true)
 		c.a.Load(a64B, a64A, c.enc.NumOffset)
 		c.movImm(a64C, c.enc.Uninitialized)
 		c.a.Cmp(a64B, a64C, true)
@@ -3410,12 +3432,13 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.movImm(a64C, v.Const.Bits)
 		c.a.Cmp(a64B, a64C, true)
 		guard(arm64.NE)
-		c.a.Load(a64A, a64A, c.enc.ObjectProps)
-		c.a.AddImm(a64A, a64A, int64(int32(v.Index)*c.enc.PropertySize), true)
-		c.a.LoadU32(a64B, a64A, c.enc.PropertyKey)
+		c.a.Load(a64B, a64A, c.enc.ObjectShape)
+		c.a.Load(a64B, a64B, c.enc.ShapeKeys)
+		c.a.LoadU32(a64B, a64B, int32(v.Index)*c.enc.KeySize+c.enc.PropertyKey)
 		c.a.CmpImm(a64B, int64(v.Key), false)
 		guard(arm64.NE)
-		c.a.AddImm(a64A, a64A, int64(c.enc.PropertyValue), true)
+		c.a.Load(a64A, a64A, c.enc.ObjectProps)
+		c.a.AddImm(a64A, a64A, int64(int32(v.Index)*c.enc.ValueSize), true)
 		c.setG(v, a64A)
 	case ssa.OpStringCode:
 		c.stringCode(v, c.guardFor(v))

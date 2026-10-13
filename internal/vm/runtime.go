@@ -757,16 +757,16 @@ func (t *Thrown) Error() string {
 	// already-materialized message is used.
 	if t.Value.IsObject() {
 		o := t.Value.Object()
-		if p := o.getOwn(atomMessage); p != nil && !p.isAccessor() && p.value.IsString() {
+		if p := o.getOwn(atomMessage); p.ok() && !p.isAccessor() && p.value().IsString() {
 			name := "Error"
-			if np := o.getOwn(atomName); np != nil && !np.isAccessor() && np.value.IsString() {
-				name = np.value.String().Go()
+			if np := o.getOwn(atomName); np.ok() && !np.isAccessor() && np.value().IsString() {
+				name = np.value().String().Go()
 			} else if o.proto != nil {
-				if np := o.proto.getOwn(atomName); np != nil && !np.isAccessor() && np.value.IsString() {
-					name = np.value.String().Go()
+				if np := o.proto.getOwn(atomName); np.ok() && !np.isAccessor() && np.value().IsString() {
+					name = np.value().String().Go()
 				}
 			}
-			return name + ": " + p.value.String().Go()
+			return name + ": " + p.value().String().Go()
 		}
 	}
 	if t.Value.IsString() {

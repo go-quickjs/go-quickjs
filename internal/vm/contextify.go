@@ -64,7 +64,7 @@ func (r *Runtime) sandboxGet(p *proxyData, key Atom, receiver Value) (Value, err
 // sandbox -- unless the realm's global holds the name read-only, as it holds
 // undefined, NaN and Infinity, which no context may shadow by assignment.
 func (r *Runtime) sandboxSet(p *proxyData, key Atom, val Value, strict bool) (bool, error) {
-	if own := p.target.getOwn(key); own != nil && !own.isAccessor() && own.flags&propWritable == 0 {
+	if own := p.target.getOwn(key); own.ok() && !own.isAccessor() && own.flags()&propWritable == 0 {
 		if has, err := r.hasPropErr(p.sandbox, key); err != nil || !has {
 			return false, err
 		}

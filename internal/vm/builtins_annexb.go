@@ -193,7 +193,7 @@ func (r *Runtime) initLegacyDateMethods() {
 
 	// toGMTString is not a method of its own but toUTCString under another
 	// name: the same function object.
-	if utc := p.getOwn(r.atoms.intern("toUTCString")); utc != nil {
-		p.setOwnRaw(r.atoms.intern("toGMTString"), utc.value, propWritable|propConfigurable)
+	if utc := p.getOwn(r.atoms.intern("toUTCString")); utc.ok() {
+		p.setOwnRaw(r.atoms.intern("toGMTString"), utc.value(), propWritable|propConfigurable)
 	}
 }

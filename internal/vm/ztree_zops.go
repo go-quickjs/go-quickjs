@@ -654,23 +654,23 @@ func init() {
 	getGlobalOpt = func(r *Runtime, f *frame, cl *closure, name Atom) (Value, error) {
 		env := cl.scope()
 		if f.evalVars != nil {
-			if p := evalVarProp(f.evalVars, name); p != nil {
-				return p.value, nil
+			if p := evalVarProp(f.evalVars, name); p.ok() {
+				return p.value(), nil
 			}
 		}
-		if p := r.globalLexProp(env, name); p != nil {
-			if p.value.IsUninitialized() {
+		if p := r.globalLexProp(env, name); p.ok() {
+			if p.value().IsUninitialized() {
 				return Undefined, r.throwReferenceError("cannot access %q before it is initialized", r.atoms.name(name))
 			}
-			return p.value, nil
+			return p.value(), nil
 		}
 		if !r.isGlobalScope(env) {
-			if p := r.moduleLexProp(env, name); p != nil {
-				if p.flags&propUninit != 0 {
+			if p := r.moduleLexProp(env, name); p.ok() {
+				if p.flags()&propUninit != 0 {
 					return Undefined, r.throwReferenceError("cannot access %q before it is initialized", r.atoms.name(name))
 				}
-				if p.flags&(propAccessor|propPrivate|propDeleted) == 0 {
-					return p.value, nil
+				if p.flags()&(propAccessor|propPrivate|propDeleted) == 0 {
+					return p.value(), nil
 				}
 			}
 		}
@@ -739,7 +739,7 @@ func init() {
 		if deleteEvalVar(f.evalVars, name) {
 			return True, nil
 		}
-		if r.globalLexProp(cl.scope(), name) != nil {
+		if r.globalLexProp(cl.scope(), name).ok() {
 			// A lexical binding is not a property and cannot be removed.
 			return False, nil
 		}
@@ -860,7 +860,7 @@ func init() {
 				c.at(pc)
 				// A private field can only be added once, and only to an object
 				// open to new members.
-				if target.Object().getOwn(key) != nil {
+				if target.Object().getOwn(key).ok() {
 					c.throw(c.r.throwTypeError("%s is already present on this object", c.r.atoms.name(key)))
 				}
 				if !target.Object().IsExtensible() {
@@ -884,7 +884,7 @@ func init() {
 				}
 				// An own property and nothing else: an object that inherits from
 				// an instance's prototype is not an instance.
-				return Bool(o.Object().getOwn(privateKey(c.f, c.cl, k)) != nil)
+				return Bool(o.Object().getOwn(privateKey(c.f, c.cl, k)).ok())
 			})
 		case bytecode.OpNewPrivateMethods:
 			b.push(func(c *tctx) Value { return c.r.newPrivateMethods() })

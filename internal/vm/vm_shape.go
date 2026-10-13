@@ -1,6 +1,9 @@
 package vm
 
-import "unsafe"
+import (
+	"slices"
+	"unsafe"
+)
 
 // A shape is an object's layout -- the keys of its property table, their
 // attributes and their order -- as an identity that can be compared by
@@ -10,11 +13,19 @@ import "unsafe"
 // shape it last saw and where the property was, and the next object of that
 // shape needs no search. It is what V8 calls a map and QuickJS a shape.
 //
-// An object's shape is one of three kinds.
+// A shape holds its layout's keys and their attributes (keys); the object
+// holds only the values, at the same positions (Object.vals). So an object
+// with properties always has a shape, and an object's kind of shape is one
+// of four.
 //
-//   - None (nil): the object has no identity a cache can use. An object of a
-//     class a cache cannot follow -- a proxy, a typed array, an arguments
-//     object -- stays so.
+//   - None (nil): the object has no properties, and no identity a cache can
+//     use yet.
+//   - Loose: the object has no identity a cache can use. An object of a class
+//     a cache cannot follow -- a proxy, a typed array, an arguments object --
+//     has one, and so does one with no tree to join, such as one whose
+//     prototype is null. No cache remembers a loose shape. It is the
+//     object's own, changed in place, or a template several objects made
+//     alike share until one of them changes (unique says which).
 //   - Shared: the object's layout is a node in its runtime's tree of shapes,
 //     reached from a root by one transition per property added, in the order
 //     they were added. Objects built the same way share the node. An object
@@ -34,12 +45,24 @@ import "unsafe"
 // The table's lookup index, for an object with more properties than are
 // scanned, lives in the shape: a shared shape's is shared by every object of
 // it, since their layouts are the same, and a unique shape's is the object's.
+//
+// So do the keys: a shared shape's are never changed, and are a prefix of an
+// array its first child extends in place (extended), each child after it
+// having a copy of its own; a unique shape's are its object's, which the
+// object changes in place, and which a new identity for the object takes
+// over (layoutChanged), the old one being no object's shape.
 type shape struct {
 	tree   *shapeTree
 	parent *shape
+	keys   []propKey
 	key    Atom
 	flags  propFlags
 	unique bool
+	// loose says no cache may remember the shape: see the kinds above.
+	loose bool
+	// extended says, on a shared shape, that a child has extended its keys'
+	// array in place: the next child's are a copy.
+	extended bool
 	// seen says a cache has remembered the shape: a unique shape that is
 	// seen is replaced, rather than changed, when its object's layout
 	// changes. Each place that keeps a shape sets it, by remember.
@@ -205,7 +228,7 @@ func (s *shape) root() *shape {
 // noteGrowth records, on the root of a shared layout, that an object of it
 // came to need n properties' room.
 func (s *shape) noteGrowth(n int) {
-	if s == nil || s.unique {
+	if s == nil || s.unique || s.loose {
 		return
 	}
 	switch root := s.root(); {
@@ -228,10 +251,36 @@ func remember(s *shape) *shape {
 	return s
 }
 
-// newUniqueShape makes a shape of its own for an object of n properties,
+// newUniqueShape makes a shape of its own for an object of the given keys,
 // keeping its index.
-func newUniqueShape(t *shapeTree, n int, index *propIndex) *shape {
-	return &shape{tree: t, unique: true, n: int32(n), index: index}
+func newUniqueShape(t *shapeTree, keys []propKey, index *propIndex) *shape {
+	return &shape{tree: t, unique: true, n: int32(len(keys)), keys: keys, index: index}
+}
+
+// newLooseShape makes a loose shape of its own for an object of the given
+// keys.
+func newLooseShape(keys []propKey) *shape {
+	return &shape{unique: true, loose: true, n: int32(len(keys)), keys: keys}
+}
+
+// extendKeys is s's keys with k after them: in s's array, if no child has
+// extended it yet, or in a copy.
+func (s *shape) extendKeys(k propKey) []propKey {
+	keys := s.keys[:s.n:s.n]
+	if !s.extended && !s.unique {
+		s.extended = true
+		keys = s.keys[:s.n]
+	}
+	return append(keys, k)
+}
+
+// cacheShape is the object's shape as a cache may remember it: nil for
+// none, or a loose one.
+func (o *Object) cacheShape() *shape {
+	if s := o.shape; s != nil && !s.loose {
+		return s
+	}
+	return nil
 }
 
 // child is the shape one property added makes, or nil where the tree will not
@@ -249,7 +298,7 @@ func (s *shape) child(e shapeEdge) *shape {
 	if s.n >= maxShapeDepth || t.count >= maxShapes || len(s.more) >= maxShapeFanout {
 		return nil
 	}
-	c := &shape{tree: t, parent: s, key: e.key, flags: e.flags, n: s.n + 1}
+	c := &shape{tree: t, parent: s, key: e.key, flags: e.flags, n: s.n + 1, keys: s.extendKeys(propKey(e))}
 	t.count++
 	if s.next == nil {
 		s.next, s.nextEdge = c, e
@@ -272,31 +321,49 @@ func (o *Object) shapeIndex() *propIndex {
 }
 
 // shapeAdded brings the object's shape up to the property just appended to its
-// table.
-func (o *Object) shapeAdded(p Property) {
+// table, whose value is the last of vals.
+func (o *Object) shapeAdded(k propKey) {
 	s := o.shape
-	n := len(o.props)
+	n := len(o.vals)
 	if s == nil {
 		// A first property: an object whose prototype has a tree joins it,
 		// at the root for its class -- or, while the realm is being made,
 		// gets a layout of its own, being one of a kind.
-		if n == 1 && shapeClass(o.class) && o.proto != nil && o.proto.shape != nil {
+		if n == 1 && shapeClass(o.class) && o.proto != nil && o.proto.cacheShape() != nil {
 			t := o.proto.shape.tree
 			if t.building {
-				o.shape = newUniqueShape(t, 1, nil)
+				o.shape = newUniqueShape(t, []propKey{k}, nil)
 				return
 			}
-			if c := t.root(o.class).child(shapeEdge{p.key, p.flags}); c != nil {
+			if c := t.root(o.class).child(shapeEdge(k)); c != nil {
 				o.shape = c
 				return
 			}
-			o.shape = newUniqueShape(t, 1, nil)
+			o.shape = newUniqueShape(t, []propKey{k}, nil)
 			return
 		}
+		// No tree to join: a layout no cache will see holds the keys.
+		o.shape = newLooseShape(append(make([]propKey, 0, max(n, 2)), k))
 		if n > linearScanLimit {
-			// No tree to join, but a table that needs an index: a layout
-			// of its own holds it, which no cache will see.
-			o.shape = &shape{unique: true, n: int32(n)}
+			o.buildIndex()
+		}
+		return
+	}
+	if s.loose {
+		if !s.unique {
+			// A template: the object's own copy, then its key.
+			s = newLooseShape(append(s.keys[:s.n:s.n], k))
+			o.shape = s
+		} else {
+			s.keys = append(s.keys[:s.n], k)
+			s.n = int32(n)
+		}
+		if s.index != nil && !s.borrowed {
+			s.index.add(k.key, int32(n-1))
+		} else if s.index != nil || n > linearScanLimit {
+			// A table that needs an index of its own: no tree to join, but a
+			// layout a cache may remember, as one of a kind.
+			s.loose = false
 			o.buildIndex()
 		}
 		return
@@ -304,15 +371,15 @@ func (o *Object) shapeAdded(p Property) {
 	if s.unique {
 		if s.seen && (s.tree == nil || !s.tree.building) {
 			// A new identity, so that what was cached of the old one misses.
-			ns := newUniqueShape(s.tree, n, s.index)
+			ns := newUniqueShape(s.tree, s.keys[:s.n], s.index)
 			ns.borrowed = s.borrowed
 			s = ns
 			o.shape = s
-		} else {
-			s.n = int32(n)
 		}
+		s.keys = append(s.keys[:s.n], k)
+		s.n = int32(n)
 		if s.index != nil && !s.borrowed {
-			s.index.add(p.key, int32(n-1))
+			s.index.add(k.key, int32(n-1))
 		} else if s.index != nil || n > linearScanLimit {
 			// A borrowed index is the layout's, which has no such key: the
 			// object's own is made of its table.
@@ -320,7 +387,7 @@ func (o *Object) shapeAdded(p Property) {
 		}
 		return
 	}
-	if c := s.child(shapeEdge{p.key, p.flags}); c != nil {
+	if c := s.child(shapeEdge(k)); c != nil {
 		o.shape = c
 		if n > linearScanLimit && c.index == nil {
 			// The objects of this shape all have this layout, so the index
@@ -329,7 +396,7 @@ func (o *Object) shapeAdded(p Property) {
 		}
 		return
 	}
-	o.shape = newUniqueShape(s.tree, n, nil)
+	o.shape = newUniqueShape(s.tree, append(s.keys[:s.n:s.n], k), nil)
 	if n > linearScanLimit {
 		o.buildIndex()
 	}
@@ -346,15 +413,15 @@ func (o *Object) transition(key Atom, flags propFlags) *shape {
 	return nil
 }
 
-// appendTransition appends a property the object is known not to have,
-// giving it the shape transition found for it.
-func (o *Object) appendTransition(p Property, next *shape) {
-	if o.flags&objInlineProps != 0 && len(o.props) == cap(o.props) {
+// appendTransition appends the value of a property the object is known not
+// to have, giving it the shape transition found for it, which has its key.
+func (o *Object) appendTransition(v Value, next *shape) {
+	if o.flags&objInlineProps != 0 && len(o.vals) == cap(o.vals) {
 		o.leaveInlineProps(1)
 	}
-	o.props = append(o.props, p)
+	o.vals = append(o.vals, v)
 	o.shape = next
-	if next.index == nil && len(o.props) > linearScanLimit {
+	if next.index == nil && len(o.vals) > linearScanLimit {
 		o.buildIndex()
 	}
 	if verifyShapes {
@@ -364,30 +431,42 @@ func (o *Object) appendTransition(p Property, next *shape) {
 
 // layoutChanged gives the object a layout of its own before its table changes
 // other than by an append -- a property deleted or moved, an attribute changed
-// -- so that no cache takes it for what it was. The index is kept, which the
-// change then keeps up to date.
+// -- so that no cache takes it for what it was, and so that its keys are its
+// own to change. The index is kept, which the change then keeps up to date.
 func (o *Object) layoutChanged() {
 	s := o.shape
 	if s == nil {
 		return
 	}
+	if s.loose {
+		if !s.unique {
+			o.shape = newLooseShape(slices.Clone(s.keys[:s.n]))
+			o.shape.index = s.index
+			o.shape.borrowed = s.index != nil
+		}
+		return
+	}
 	if s.unique && !s.seen {
 		// No cache has remembered the layout, so none can take it for what
 		// it was: it changes in place.
-		s.n = int32(len(o.props))
-		if s.index == nil && len(o.props) > linearScanLimit {
+		if s.index == nil && len(o.vals) > linearScanLimit {
 			o.buildIndex()
 		}
 		return
 	}
 	index := s.index
-	ns := newUniqueShape(s.tree, len(o.props), index)
+	keys := s.keys[:s.n]
+	if !s.unique {
+		// A shared layout's keys are not the object's to change.
+		keys = slices.Clone(keys)
+	}
+	ns := newUniqueShape(s.tree, keys, index)
 	// A shared index is the layout's, which this object is leaving: it
 	// borrows it rather than copying it, its table's positions being the
 	// layout's until it adds a key (see borrowed).
 	ns.borrowed = s.borrowed || !s.unique && index != nil
 	o.shape = ns
-	if index == nil && len(o.props) > linearScanLimit {
+	if index == nil && len(o.vals) > linearScanLimit {
 		o.buildIndex()
 	}
 }
@@ -474,7 +553,7 @@ func (r *Runtime) cachedProp(c *propCache, o *Object, key Atom) (Value, bool) {
 		if verifyShapes {
 			r.verifyPropCache(o, h, c, key)
 		}
-		return h.props[c.idx].value, true
+		return h.vals[c.idx], true
 	}
 	if c.fills >= maxCacheFills {
 		return r.sharedProp(o, key)
@@ -490,21 +569,21 @@ func (r *Runtime) cachedProp(c *propCache, o *Object, key Atom) (Value, bool) {
 // getValueProp, and an error only with true.
 func (r *Runtime) cachedGet(c *propCache, o *Object, key Atom) (Value, bool, error) {
 	if h := c.holder(o); h != nil {
-		p := &h.props[c.idx]
+		v := h.vals[c.idx]
 		if !c.getter {
 			if verifyShapes {
 				r.verifyPropCache(o, h, c, key)
 			}
-			return p.value, true, nil
+			return v, true, nil
 		}
 		if verifyShapes {
 			checkShape(o)
 			checkShape(h)
-			if p.key != key || p.flags&propAccessor == 0 {
+			if k := h.shape.keys[c.idx]; k.key != key || k.flags&propAccessor == 0 {
 				panic("property cache's accessor is not where it was for " + r.atoms.name(key))
 			}
 		}
-		a := p.getterSetter()
+		a := v.accessorPair()
 		if a == nil || a.getter == nil {
 			return Undefined, true, nil
 		}
@@ -526,7 +605,7 @@ func (r *Runtime) cachedGet(c *propCache, o *Object, key Atom) (Value, bool, err
 // less than scanning even a small table.
 func (c *propCache) own(o *Object) (Value, bool) {
 	if o.shape == c.ownShape {
-		return o.props[c.idx].value, true
+		return o.vals[c.idx], true
 	}
 	return Undefined, false
 }
@@ -541,7 +620,7 @@ func (c *propCache) storeOwn(o *Object, v Value) bool {
 		if verifyShapes {
 			checkShape(o)
 		}
-		o.props[c.idx].value = v
+		o.vals[c.idx] = v
 		return true
 	}
 	return false
@@ -551,7 +630,7 @@ func (c *propCache) storeOwn(o *Object, v Value) bool {
 // table, for own to answer the next object of its shape -- unless the site
 // has met too many shapes to keep trying.
 func (c *propCache) noteOwn(o *Object, i int32) {
-	if c.fills < maxCacheFills && o.shape != nil {
+	if c.fills < maxCacheFills && o.cacheShape() != nil {
 		// Native code searches a small object's own table itself.
 		c.refill(propCache{shape: remember(o.shape), idx: i, fills: c.fills + 1}, false)
 	}
@@ -620,7 +699,7 @@ func (r *Runtime) sharedProp(o *Object, key Atom) (Value, bool) {
 			if verifyShapes {
 				r.verifyPropCache(o, h, &e.c, key)
 			}
-			return h.props[e.c.idx].value, true
+			return h.vals[e.c.idx], true
 		}
 	}
 	var c propCache
@@ -629,7 +708,7 @@ func (r *Runtime) sharedProp(o *Object, key Atom) (Value, bool) {
 		return Undefined, false
 	}
 	e.key, e.c = key, c
-	return c.holder(o).props[c.idx].value, true
+	return c.holder(o).vals[c.idx], true
 }
 
 // maxCacheFills is how many times a cache is filled before it gives up.
@@ -672,12 +751,13 @@ func (r *Runtime) fillPropCache(c *propCache, o *Object, key Atom, accessors boo
 	var up [2]*Object
 	h := o
 	for depth := 0; ; depth++ {
-		if h.shape == nil || !shapeClass(h.class) || synthesized(h.class, key) {
+		if h.cacheShape() == nil || !shapeClass(h.class) || synthesized(h.class, key) {
 			return
 		}
 		if i := h.findOwn(key); i >= 0 {
-			getter := h.props[i].flags&propAccessor != 0
-			if h.props[i].flags&(propPrivate|propDeleted|propUninit) != 0 || getter && !accessors {
+			flags := h.shape.keys[i].flags
+			getter := flags&propAccessor != 0
+			if flags&(propPrivate|propDeleted|propUninit) != 0 || getter && !accessors {
 				return
 			}
 			n := propCache{shape: remember(o.shape), idx: i, fills: c.fills + 1, getter: getter}
@@ -712,7 +792,7 @@ func (r *Runtime) setPropCached(c *propCache, o *Object, key Atom, v Value, stri
 			if verifyShapes {
 				checkShape(o)
 			}
-			o.props[c.idx].value = v
+			o.vals[c.idx] = v
 			return nil
 		}
 		if c.next == setterNext {
@@ -723,7 +803,7 @@ func (r *Runtime) setPropCached(c *propCache, o *Object, key Atom, v Value, stri
 			if verifyShapes {
 				r.verifyStoreCache(c, o, key)
 			}
-			o.appendTransition(Property{key: key, flags: c.next.flags, value: v}, c.next)
+			o.appendTransition(v, c.next)
 			return nil
 		}
 	}
@@ -758,7 +838,7 @@ func (c *propCache) adds(o *Object) bool {
 func (r *Runtime) verifyStoreCache(c *propCache, o *Object, key Atom) {
 	checkShape(o)
 	if c.next == nil {
-		if p := o.props[c.idx]; p.key != key || p.flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) != propWritable {
+		if k := o.shape.keys[c.idx]; k.key != key || k.flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) != propWritable {
 			panic("write cache's property is not a plain writable " + r.atoms.name(key))
 		}
 		return
@@ -784,7 +864,7 @@ func (r *Runtime) cachedData(c *propCache, o *Object, key Atom) (Value, bool) {
 		if verifyShapes {
 			r.verifyPropCache(o, h, c, key)
 		}
-		return h.props[c.idx].value, true
+		return h.vals[c.idx], true
 	}
 	if c.fills >= maxCacheFills {
 		return r.sharedProp(o, key)
@@ -798,25 +878,31 @@ func (r *Runtime) cachedData(c *propCache, o *Object, key Atom) (Value, bool) {
 // added, which is what gives an object a shape otherwise. It returns the
 // object's shape, or nil.
 func (r *Runtime) ensureShape(o *Object) *shape {
-	if s := o.shape; s != nil || len(o.props) != 0 || !shapeClass(o.class) || r.shapes.building {
-		return s
+	if s := o.shape; s != nil || !shapeClass(o.class) || r.shapes.building {
+		return o.cacheShape()
 	}
 	o.shape = r.shapes.root(o.class)
 	return o.shape
 }
 
 // ensureProtoShape is ensureShape for an object a cache meets as a prototype.
-// One that has properties and no shape got its first while its own prototype
+// One that has a loose shape got its first property while its own prototype
 // had none -- as %MapIteratorPrototype% did, made in the realm before
-// %IteratorPrototype% was filled in -- and is given a layout of its own,
-// which changes with its table, so that the methods on it can be remembered.
-// A receiver is not: an object that never had a shape, such as one with a
-// null prototype used as a dictionary, would then pay for a new layout at
-// every key added to it.
+// %IteratorPrototype% was filled in -- and is given a layout a cache may
+// remember, of its own, which changes with its table, so that the methods on
+// it can be remembered. A receiver is not: an object with a loose shape, such
+// as one with a null prototype used as a dictionary, would then pay for a new
+// layout at every key added to it.
 func (r *Runtime) ensureProtoShape(o *Object) *shape {
-	if o.shape == nil && len(o.props) != 0 && shapeClass(o.class) && !r.shapes.building {
-		o.shape = newUniqueShape(r.shapes, len(o.props), nil)
-		return o.shape
+	if s := o.shape; s != nil && s.loose && shapeClass(o.class) && !r.shapes.building {
+		keys := s.keys[:s.n]
+		if !s.unique {
+			keys = slices.Clone(keys)
+		}
+		ns := newUniqueShape(r.shapes, keys, s.index)
+		ns.borrowed = s.borrowed || !s.unique && s.index != nil
+		o.shape = ns
+		return ns
 	}
 	return r.ensureShape(o)
 }
@@ -827,7 +913,7 @@ func (r *Runtime) ensureProtoShape(o *Object) *shape {
 // and not a read-only one.
 func passesWrite(p *Object, key Atom) bool {
 	i := p.findOwn(key)
-	return i < 0 || p.props[i].flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) == propWritable
+	return i < 0 || p.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) == propWritable
 }
 
 // fillStoreCache remembers a write of key to o, whose shape was before: a
@@ -836,13 +922,13 @@ func passesWrite(p *Object, key Atom) bool {
 func (r *Runtime) fillStoreCache(c *propCache, o *Object, before *shape, key Atom) {
 	const plain = propAccessor | propPrivate | propDeleted | propUninit
 	if o.shape == before {
-		if i := o.findOwn(key); i >= 0 && o.props[i].flags&(plain|propWritable) == propWritable {
+		if i := o.findOwn(key); i >= 0 && o.shape.keys[i].flags&(plain|propWritable) == propWritable {
 			c.refill(propCache{shape: remember(before), idx: i, fills: c.fills + 1}, jitBuilt && r.jitOn())
 		}
 		return
 	}
 	next := o.shape
-	if before.unique || next == nil || next.unique || next.parent != before || next.key != key ||
+	if before.unique || next == nil || next.unique || next.loose || next.parent != before || next.key != key ||
 		next.flags&(plain|propWritable) != propWritable {
 		return
 	}
@@ -880,7 +966,7 @@ func (r *Runtime) verifyPropCache(o, h *Object, c *propCache, key Atom) {
 	checkShape(o)
 	checkShape(h)
 	want, err := r.getValueProp(Obj(o), key)
-	got := h.props[c.idx].value
+	got := h.vals[c.idx]
 	if err != nil || !want.sameBits(got) {
 		panic("property cache disagrees with lookup for " + r.atoms.name(key))
 	}
@@ -891,17 +977,19 @@ func (r *Runtime) verifyPropCache(o, h *Object, c *propCache, key Atom) {
 func checkShape(o *Object) {
 	s := o.shape
 	if s == nil {
+		if len(o.vals) != 0 {
+			panic("properties without a shape")
+		}
 		return
 	}
-	if int(s.n) != len(o.props) {
+	if int(s.n) != len(o.vals) || len(s.keys) < len(o.vals) {
 		panic("shape size disagrees with table")
 	}
-	if s.unique {
+	if s.unique || s.loose {
 		return
 	}
-	for i := len(o.props) - 1; i >= 0; i-- {
-		p := &o.props[i]
-		if s == nil || p.key != s.key || p.flags != s.flags {
+	for i := len(o.vals) - 1; i >= 0; i-- {
+		if s == nil || s.keys[i] != (propKey{s.key, s.flags}) {
 			panic("shape disagrees with table")
 		}
 		s = s.parent

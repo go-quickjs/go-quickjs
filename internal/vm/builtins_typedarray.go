@@ -1568,8 +1568,8 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 
 	// %TypedArray%.prototype.toString is not merely equivalent to the Array
 	// one, it is the same function object, which a script can check.
-	if fn := r.proto.array.getOwn(atomToString); fn != nil {
-		p.setOwnRaw(atomToString, fn.value, propWritable|propConfigurable)
+	if fn := r.proto.array.getOwn(atomToString); fn.ok() {
+		p.setOwnRaw(atomToString, fn.value(), propWritable|propConfigurable)
 	}
 
 	// The callback-taking methods.

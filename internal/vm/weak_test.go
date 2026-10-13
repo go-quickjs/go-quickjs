@@ -69,7 +69,7 @@ func TestWeakMapValueRefersToKey(t *testing.T) {
 
 		sym := NewSymbol("key", true)
 		value = newObject(nil, ClassObject)
-		value.props = []Property{{value: Sym(sym)}}
+		value.appendProp(Property{value: Sym(sym)})
 		symRef = weak.Make(sym)
 		m.set(r, Sym(sym), Obj(value))
 	}()
@@ -220,8 +220,8 @@ func TestWeakMapKeptWhileClosingScriptRuns(t *testing.T) {
 		t.Fatalf("wm.get after closing = %v, %v; want 42", v, err)
 	}
 	r.ReleaseClosed()
-	wm := r.global.getOwn(r.atoms.intern("wm")).value.object().dataOf().(*weakMap)
-	k := r.global.getOwn(r.atoms.intern("k")).value
+	wm := r.global.getOwn(r.atoms.intern("wm")).value().object().dataOf().(*weakMap)
+	k := r.global.getOwn(r.atoms.intern("k")).value()
 	if _, ok := wm.get(r, k); ok {
 		t.Error("the entry survived ReleaseClosed once the script had stopped")
 	}
@@ -503,7 +503,7 @@ func TestWeakMapKeySideFields(t *testing.T) {
 	if got, want := v.String().Go(), "a f o d 1,2,3,4 4 42 e 5 true"; got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
-	get := func(name string) *Object { return r.global.getOwn(r.atoms.intern(name)).value.Object() }
+	get := func(name string) *Object { return r.global.getOwn(r.atoms.intern(name)).value().Object() }
 	a, f, o, d := get("a"), get("f"), get("o"), get("d")
 	if !a.extEmbedded() || a.weakMapRefsOf() == nil || a.dataOf() != a.weakMapRefsOf() {
 		t.Error("the array's side fields are not its own, holding its WeakMaps")

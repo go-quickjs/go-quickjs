@@ -29,7 +29,7 @@ func TestSlackOutgrown(t *testing.T) {
 				t.Fatal(err)
 			}
 			o := v.Object()
-			if room, inline := cap(o.props), o.flags&objInlineProps != 0; room != tt.room || inline != tt.inline {
+			if room, inline := cap(o.vals), o.flags&objInlineProps != 0; room != tt.room || inline != tt.inline {
 				t.Errorf("made with room for %d (inline %v), want %d (inline %v)", room, inline, tt.room, tt.inline)
 			}
 		})

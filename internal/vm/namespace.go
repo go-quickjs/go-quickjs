@@ -143,7 +143,7 @@ func (r *Runtime) namespaceDefine(o *Object, key Atom, d *propDesc) (bool, error
 // export, which the caller then describes in the ordinary way.
 func (r *Runtime) namespaceDescriptor(o *Object, key Atom) (*propDesc, error) {
 	p := o.getOwnVisible(key)
-	if p == nil || p.flags&propNamespaceExport == 0 {
+	if !p.ok() || p.flags()&propNamespaceExport == 0 {
 		return nil, nil
 	}
 	v := Undefined

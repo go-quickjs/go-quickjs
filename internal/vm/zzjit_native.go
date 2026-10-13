@@ -118,7 +118,7 @@ type jitRealmFields struct {
 }
 
 func (r *Runtime) recordJITStringIntrinsic() {
-	r.jitCharCodeAt = r.proto.str.getOwn(r.atoms.intern("charCodeAt")).value
+	r.jitCharCodeAt = r.proto.str.getOwn(r.atoms.intern("charCodeAt")).value()
 }
 
 // A closure belongs to one runtime. Hotness and permanent selection refusals
@@ -694,7 +694,7 @@ func jitPoolBytes(pool *abi.ObjectPool) int {
 	n := jitPoolFixed
 	if c := pool.Count; c > 0 && c <= abi.PoolCapacity {
 		o := (*Object)(pool.Objects[c-1])
-		n += int(pool.Size) * (int(objectSize) + jitCapBytes(o.props) + jitCapBytes(o.elemsOf()))
+		n += int(pool.Size) * (int(objectSize) + jitCapBytes(o.vals) + jitCapBytes(o.elemsOf()))
 	}
 	return n
 }
@@ -1899,7 +1899,7 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			if obj.IsObject() {
 				if o := obj.Object(); o.class == ClassObject && o.flags&objExtensible != 0 {
 					if next := o.transition(f.cl.names[in.A], propDefault); next != nil {
-						o.appendTransition(Property{key: f.cl.names[in.A], flags: propDefault, value: val}, next)
+						o.appendTransition(val, next)
 						continue
 					}
 				}
@@ -2178,7 +2178,7 @@ func (r *Runtime) jitPrivate(f *frame, in bytecode.Instr, sp int) (int, Value, b
 			return sp, Undefined, false, nil
 		}
 		key := privateKey(f, cl, in.B)
-		if target.Object().getOwn(key) != nil {
+		if target.Object().getOwn(key).ok() {
 			return sp, Undefined, false, r.throwTypeError("%s is already present on this object", r.atoms.name(key))
 		}
 		if !target.Object().IsExtensible() {
@@ -2203,7 +2203,7 @@ func (r *Runtime) jitPrivate(f *frame, in bytecode.Instr, sp int) (int, Value, b
 		if !obj.IsObject() {
 			return sp, Undefined, false, r.throwTypeError("the right operand of \"in\" must be an object, not %s", r.describe(obj))
 		}
-		return sp, Bool(obj.Object().getOwn(privateKey(f, cl, in.B)) != nil), true, nil
+		return sp, Bool(obj.Object().getOwn(privateKey(f, cl, in.B)).ok()), true, nil
 	case bytecode.OpAddPrivateMethod, bytecode.OpAddPrivateGetter, bytecode.OpAddPrivateSetter:
 		sp -= 2
 		r.addPrivateMethod(stack[sp], privateKey(f, cl, in.B), stack[sp+1], in.Op)
@@ -2225,15 +2225,13 @@ func (r *Runtime) jitPrivate(f *frame, in bytecode.Instr, sp int) (int, Value, b
 func (r *Runtime) jitInitLex(cl *closure, in bytecode.Instr, v Value) {
 	name := cl.names[in.A]
 	if in.Op == bytecode.OpInitGlobalLex {
-		r.globalLex.setOwnRaw(name, v, r.globalLex.getOwn(name).flags)
+		r.globalLex.setOwnRaw(name, v, r.globalLex.getOwn(name).flags())
 		return
 	}
-	if env := cl.scope(); env.getOwn(name) != nil {
+	if p := cl.scope().getOwn(name); p.ok() {
 		// Its attributes change, so its layout does.
-		env.layoutChanged()
-		p := env.getOwn(name)
-		p.value = v
-		p.flags &^= propUninit
+		p.setValue(v)
+		p.setFlags(p.flags() &^ propUninit)
 	}
 }
 
@@ -2417,9 +2415,9 @@ func (r *Runtime) jitGlobalRef(f *frame, in bytecode.Instr) (bool, error) {
 	name, env := cl.names[in.A], cl.scope()
 	switch {
 	case hasOwnGlobal(env, &cl.ic[in.B], name):
-	case f.evalVars != nil && evalVarProp(f.evalVars, name) != nil:
-	case r.globalLexProp(env, name) != nil:
-	case !r.isGlobalScope(env) && r.moduleLexProp(env, name) != nil:
+	case f.evalVars != nil && evalVarProp(f.evalVars, name).ok():
+	case r.globalLexProp(env, name).ok():
+	case !r.isGlobalScope(env) && r.moduleLexProp(env, name).ok():
 	case r.nodeQuirks && chainHasProxy(env):
 	default:
 		return r.hasPropErr(env, name)

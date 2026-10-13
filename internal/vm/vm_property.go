@@ -56,22 +56,26 @@ func (r *Runtime) getProp(obj *Object, key Atom, receiver Value) (Value, error) 
 		// One search answers both: a miss goes straight on to the prototype,
 		// which is where a method is, rather than asking the table again.
 		if o.flags&objMappedArguments == 0 {
-			var p *Property
+			i := int32(-1)
 			if o.shapeIndex() == nil {
-				for i := range o.props {
-					if o.props[i].key == key && o.props[i].flags&propDeleted == 0 {
-						p = &o.props[i]
+				for j, k := range o.keys() {
+					if k.key == key && k.flags&propDeleted == 0 {
+						i = int32(j)
 						break
 					}
 				}
-			} else if i := o.findOwn(key); i >= 0 {
-				p = &o.props[i]
+			} else {
+				i = o.findOwn(key)
 			}
-			if p == nil || p.flags&propPrivate != 0 {
+			if i < 0 {
 				continue
 			}
-			if p.flags&propAccessor == 0 {
-				return p.value, nil
+			p := ownProp{o, i}
+			if p.flags()&propPrivate != 0 {
+				continue
+			}
+			if p.flags()&propAccessor == 0 {
+				return p.value(), nil
 			}
 			a := p.getterSetter()
 			if a == nil || a.getter == nil {
@@ -80,7 +84,7 @@ func (r *Runtime) getProp(obj *Object, key Atom, receiver Value) (Value, error) 
 			}
 			return r.call(Obj(a.getter), receiver, nil)
 		}
-		if p := o.getOwnVisible(key); p != nil {
+		if p := o.getOwnVisible(key); p.ok() {
 			if p.isAccessor() {
 				a := p.getterSetter()
 				if a == nil || a.getter == nil {
@@ -94,7 +98,7 @@ func (r *Runtime) getProp(obj *Object, key Atom, receiver Value) (Value, error) 
 				// has left dense storage, which redefining it does.
 				return u.get(), nil
 			}
-			return p.value, nil
+			return p.value(), nil
 		}
 	}
 	return Undefined, nil
@@ -115,7 +119,7 @@ func (r *Runtime) getExoticNamed(o *Object, key Atom) (Value, bool, error) {
 			}
 		}
 	case ClassTypedArray:
-		if key == atomLength && o.getOwn(atomLength) == nil {
+		if key == atomLength && !o.getOwn(atomLength).ok() {
 			if t, ok := o.dataOf().(*typedArrayData); ok {
 				// A view over a buffer that has gone is empty, not eight
 				// elements of nothing. The answer comes from the prototype's
@@ -140,11 +144,11 @@ func (r *Runtime) getExoticNamed(o *Object, key Atom) (Value, bool, error) {
 			if !fd.propsMaterialized {
 				switch key {
 				case atomLength:
-					if o.getOwn(atomLength) == nil {
+					if !o.getOwn(atomLength).ok() {
 						return Int(fd.length), true, nil
 					}
 				case atomName:
-					if o.getOwn(atomName) == nil {
+					if !o.getOwn(atomName).ok() {
 						return Str(NewString(fd.name)), true, nil
 					}
 				}
@@ -196,11 +200,11 @@ func (r *Runtime) materializeFunctionProp(o *Object, key Atom) {
 	fd.propsMaterialized = true
 	var head [2]Property
 	n := 0
-	if o.getOwn(atomLength) == nil {
+	if !o.getOwn(atomLength).ok() {
 		head[n] = Property{key: atomLength, value: Int(fd.length), flags: propConfigurable}
 		n++
 	}
-	if o.getOwn(atomName) == nil {
+	if !o.getOwn(atomName).ok() {
 		head[n] = Property{key: atomName, value: Str(NewString(fd.name)), flags: propConfigurable}
 		n++
 	}
@@ -304,16 +308,16 @@ func (r *Runtime) primProp(p *Object, key Atom, v Value) (Value, error) {
 	if s := p.shape; e.key == key && e.proto == p && e.shape == s && s != nil {
 		if verifyShapes {
 			checkShape(p)
-			if want, err := r.getProp(p, key, v); err != nil || !want.sameBits(p.props[e.idx].value) {
+			if want, err := r.getProp(p, key, v); err != nil || !want.sameBits(p.vals[e.idx]) {
 				panic("primitive property cache disagrees with lookup for " + r.atoms.name(key))
 			}
 		}
-		return p.props[e.idx].value, nil
+		return p.vals[e.idx], nil
 	}
-	if s := p.shape; s != nil && s.unique && !r.shapes.building && !key.IsIndex() && key != atomLength {
-		if i := p.findOwn(key); i >= 0 && p.props[i].flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
+	if s := p.shape; s != nil && s.unique && !s.loose && !r.shapes.building && !key.IsIndex() && key != atomLength {
+		if i := p.findOwn(key); i >= 0 && p.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
 			*e = primEntry{key: key, idx: i, proto: p, shape: remember(s)}
-			return p.props[i].value, nil
+			return p.vals[i], nil
 		}
 	}
 	return r.getProp(p, key, v)
@@ -350,8 +354,7 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 	// between, and a plain writable data property to write to.
 	if rcv == obj && obj.class == ClassObject && obj.shapeIndex() == nil {
 		own := false
-		for i := range obj.props {
-			p := &obj.props[i]
+		for i, p := range obj.keys() {
 			if p.key != key {
 				continue
 			}
@@ -364,7 +367,7 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 				// says so with the message it has for it.
 				break
 			}
-			p.value = val
+			obj.vals[i] = val
 			return true, nil
 		}
 		// Creating one is the other thing most assignments are -- a
@@ -462,7 +465,7 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 			break
 		}
 		p := o.getOwnVisible(key)
-		if p == nil {
+		if !p.ok() {
 			continue
 		}
 		if p.isAccessor() {
@@ -474,12 +477,12 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 			_, err := r.call(Obj(a.setter), receiver, []Value{val})
 			return err == nil, err
 		}
-		if p.flags&propWritable == 0 {
+		if p.flags()&propWritable == 0 {
 			return false, r.assignFailed(key, strict,
 				"cannot assign to read-only property %q")
 		}
 		if o == obj && rcv == obj {
-			p.value = val
+			p.setValue(val)
 			if u := mappedArgument(o, key); u != nil {
 				u.set(val)
 			}
@@ -767,8 +770,8 @@ func (r *Runtime) hasPropErr(o *Object, key Atom) (bool, error) {
 // table, or -1: where the site last found it, while the name is still there,
 // or else where findOwn finds it, which the site then remembers.
 func globalSlot(env *Object, site *propCache, name Atom) int32 {
-	if i := uint(site.idx); i < uint(len(env.props)) {
-		if p := &env.props[i]; p.key == name && p.flags&propDeleted == 0 {
+	if i := uint(site.idx); i < uint(len(env.vals)) {
+		if p := env.shape.keys[i]; p.key == name && p.flags&propDeleted == 0 {
 			return int32(i)
 		}
 	}
@@ -798,7 +801,7 @@ func hasOwnGlobal(env *Object, site *propCache, name Atom) bool {
 		return false
 	}
 	i := globalSlot(env, site, name)
-	return i >= 0 && env.props[i].flags&propPrivate == 0
+	return i >= 0 && env.shape.keys[i].flags&propPrivate == 0
 }
 
 // hasOwnProp reports whether the object itself has the property.
@@ -840,7 +843,7 @@ func (r *Runtime) hasOwnProp(o *Object, key Atom) bool {
 			return true
 		}
 	}
-	return o.getOwnVisible(key) != nil
+	return o.getOwnVisible(key).ok()
 }
 
 // deleteProp implements the delete operator.
@@ -922,7 +925,7 @@ func (r *Runtime) defineOwnProp(o *Object, key Atom, val Value, flags propFlags)
 	// left it. Writing to the slot as well would leave the index described
 	// twice, and deleting it would remove only one of the two.
 	if o.class == ClassArray && key.IsIndex() && flags == propDefault &&
-		(o.flags&objHasSparseElements == 0 || o.getOwn(key) == nil) {
+		(o.flags&objHasSparseElements == 0 || !o.getOwn(key).ok()) {
 		if o.setElem(key.Index(), val) {
 			return nil
 		}
@@ -956,7 +959,7 @@ func (r *Runtime) defineAccessor(o *Object, key Atom, getter, setter *Object, fl
 		// An accessor is not the parameter it replaced.
 		o.unmapArgument(key.Index())
 	}
-	if p := o.getOwnVisible(key); p != nil && p.isAccessor() {
+	if p := o.getOwnVisible(key); p.ok() && p.isAccessor() {
 		if a := p.getterSetter(); a != nil {
 			if getter != nil {
 				a.getter = getter
@@ -964,10 +967,7 @@ func (r *Runtime) defineAccessor(o *Object, key Atom, getter, setter *Object, fl
 			if setter != nil {
 				a.setter = setter
 			}
-			if p.flags != flags {
-				o.layoutChanged()
-			}
-			p.flags = flags
+			p.setFlags(flags)
 			return
 		}
 	}
@@ -1019,9 +1019,9 @@ func plainOwnAt(o *Object, key Atom) (Value, int32, bool) {
 	if o.class != ClassObject || o.shapeIndex() != nil {
 		return Undefined, 0, false
 	}
-	for i := range o.props {
-		if p := &o.props[i]; p.key == key {
-			return p.value, int32(i), p.flags&(propAccessor|propPrivate|propDeleted) == 0
+	for i, p := range o.keys() {
+		if p.key == key {
+			return o.vals[i], int32(i), p.flags&(propAccessor|propPrivate|propDeleted) == 0
 		}
 	}
 	return Undefined, 0, false
@@ -1031,9 +1031,9 @@ func plainOwn(o *Object, key Atom) (Value, bool) {
 	if o.class != ClassObject || o.shapeIndex() != nil {
 		return Undefined, false
 	}
-	for i := range o.props {
-		if p := &o.props[i]; p.key == key {
-			return p.value, p.flags&(propAccessor|propPrivate|propDeleted) == 0
+	for i, p := range o.keys() {
+		if p.key == key {
+			return o.vals[i], p.flags&(propAccessor|propPrivate|propDeleted) == 0
 		}
 	}
 	return Undefined, false

@@ -51,7 +51,7 @@ func TestJITSSADeepChainsSeenByTheInterpreter(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	cl := r.global.getOwn(r.atoms.intern("deep")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("deep")).value().Object().fn().closure
 	for i := range 2 {
 		var wv, gv Value
 		for _, src := range []string{src, call} {
@@ -115,8 +115,8 @@ func TestJITSSASeedsBuiltinsAndCalleesCalls(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	work := r.global.getOwn(r.atoms.intern("work")).value.Object().fn().closure
-	h := r.global.getOwn(r.atoms.intern("H")).value.Object().fn().closure
+	work := r.global.getOwn(r.atoms.intern("work")).value().Object().fn().closure
+	h := r.global.getOwn(r.atoms.intern("H")).value().Object().fn().closure
 	for i, src := range []string{`String(work(20000))`, `String(work(20000))`} {
 		wv, err := want.Run(compileForTest(t, src))
 		if err != nil {
@@ -194,7 +194,7 @@ func TestJITSSAUnwoundCompiledAgainOnlyForWhatItLearned(t *testing.T) {
 			t.Fatalf("round %d: got %s, interpreter %s", i, got, want)
 		}
 	}
-	w := r.global.getOwn(r.atoms.intern("w")).value.Object().fn().closure
+	w := r.global.getOwn(r.atoms.intern("w")).value().Object().fn().closure
 	e := r.jit.cache[weak.Make(w.fn)]
 	if e == nil || e.ssa == nil {
 		t.Fatal("w has no code")

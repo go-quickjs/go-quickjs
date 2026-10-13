@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"slices"
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
@@ -183,17 +184,17 @@ func (r *Runtime) shapeKeys(o *Object) *forInKeys {
 	if s.forIn == nil {
 		c := &forInKeys{copyable: true}
 		for _, k := range o.ownKeys(false, r.atoms) {
-			if i := o.findOwn(k); i >= 0 && o.props[i].flags&(propEnumerable|propPrivate|propDeleted) == propEnumerable {
+			if i := o.findOwn(k); i >= 0 && o.shape.keys[i].flags&(propEnumerable|propPrivate|propDeleted) == propEnumerable {
 				c.keys = append(c.keys, Str(r.keyString(k)))
 				c.atoms = append(c.atoms, k)
 				c.slots = append(c.slots, i)
-				if o.props[i].flags&propAccessor != 0 {
+				if o.shape.keys[i].flags&propAccessor != 0 {
 					c.copyable = false
 				}
 			}
 		}
-		for i := range o.props {
-			if p := &o.props[i]; p.flags&(propEnumerable|propPrivate|propDeleted) == propEnumerable && r.atoms.IsSymbol(p.key) {
+		for _, p := range o.keys() {
+			if p.flags&(propEnumerable|propPrivate|propDeleted) == propEnumerable && r.atoms.IsSymbol(p.key) {
 				c.copyable = false
 			}
 		}
@@ -209,8 +210,8 @@ func elemKeysOnly(o *Object) (int, bool) {
 	if o.class != ClassArray || o.flags&objHasSparseElements != 0 {
 		return 0, false
 	}
-	for i := range o.props {
-		if o.props[i].flags&(propEnumerable|propDeleted) == propEnumerable {
+	for _, p := range o.keys() {
+		if p.flags&(propEnumerable|propDeleted) == propEnumerable {
 			return 0, false
 		}
 	}
@@ -230,8 +231,8 @@ func noEnumerableKeys(o *Object) bool {
 	if o.class != ClassObject && o.class != ClassArray || len(o.elemsOf()) != 0 || proxyOf(o) != nil {
 		return false
 	}
-	for i := range o.props {
-		if o.props[i].flags&(propEnumerable|propDeleted) == propEnumerable {
+	for _, p := range o.keys() {
+		if p.flags&(propEnumerable|propDeleted) == propEnumerable {
 			return false
 		}
 	}
@@ -608,15 +609,15 @@ func (r *Runtime) plainDenseElems(src Value) ([]Value, bool) {
 func (r *Runtime) usesIntrinsicArrayIterator(o *Object) bool {
 	// The iterator's next is called for each element, so a replaced one is
 	// as much a different way of iterating as a replaced Symbol.iterator.
-	if p := r.proto.arrayIter.getOwn(atomNext); p == nil || p.isAccessor() ||
-		!p.value.IsObject() || p.value.Object() != r.arrayIterNextFn {
+	if p := r.proto.arrayIter.getOwn(atomNext); !p.ok() || p.isAccessor() ||
+		!p.value().IsObject() || p.value().Object() != r.arrayIterNextFn {
 		return false
 	}
 	key := r.atoms.internSymbol(r.wellKnown.iterator)
 	for cur := o; cur != nil; cur = cur.proto {
-		if p := cur.getOwn(key); p != nil {
-			return !p.isAccessor() && p.value.IsObject() &&
-				p.value.Object() == r.arrayValuesFn
+		if p := cur.getOwn(key); p.ok() {
+			return !p.isAccessor() && p.value().IsObject() &&
+				p.value().Object() == r.arrayValuesFn
 		}
 	}
 	return false
@@ -632,22 +633,22 @@ func (r *Runtime) generatorIteration(o *Object) *Object {
 		return nil
 	}
 	iterKey := r.atoms.internSymbol(r.wellKnown.iterator)
-	var iter, next *Property
-	for cur := o; cur != nil && (iter == nil || next == nil); cur = cur.proto {
+	iter, next := ownProp{i: -1}, ownProp{i: -1}
+	for cur := o; cur != nil && (!iter.ok() || !next.ok()); cur = cur.proto {
 		if cur.class != ClassObject && cur.class != ClassGenerator {
 			return nil
 		}
-		if iter == nil {
+		if !iter.ok() {
 			iter = cur.getOwn(iterKey)
 		}
-		if next == nil {
+		if !next.ok() {
 			next = cur.getOwn(atomNext)
 		}
 	}
-	if iter == nil || next == nil || iter.flags&(propAccessor|propPrivate|propDeleted) != 0 ||
-		next.flags&(propAccessor|propPrivate|propDeleted) != 0 ||
-		!iter.value.IsObject() || iter.value.Object() != r.genIterFn ||
-		!next.value.IsObject() || next.value.Object() != r.genNextFn {
+	if !iter.ok() || !next.ok() || iter.flags()&(propAccessor|propPrivate|propDeleted) != 0 ||
+		next.flags()&(propAccessor|propPrivate|propDeleted) != 0 ||
+		!iter.value().IsObject() || iter.value().Object() != r.genIterFn ||
+		!next.value().IsObject() || next.value().Object() != r.genNextFn {
 		return nil
 	}
 	return r.genNextFn
@@ -704,10 +705,10 @@ func (r *Runtime) copyDataProps(target *Object, src Value) error {
 	if c := r.shapeKeys(o); c != nil && c.copyable {
 		if target.class == ClassObject && len(c.atoms) > 1 {
 			// The table grows once rather than at every doubling.
-			target.reserveProps(len(target.props) + len(c.atoms))
+			target.reserveProps(len(target.vals) + len(c.atoms))
 		}
 		for i, k := range c.atoms {
-			if err := r.defineOwnProp(target, k, o.props[c.slots[i]].value, propDefault); err != nil {
+			if err := r.defineOwnProp(target, k, o.vals[c.slots[i]], propDefault); err != nil {
 				return err
 			}
 		}
@@ -817,19 +818,19 @@ func (r *Runtime) newArgumentsObject(f *frame) *Object {
 		// Every arguments object of the kind has the same three properties
 		// in the same layout as the first, so they are copied from it, with
 		// the values that are this one's own.
-		o.props = append(o.props, t.props[:]...)
+		o.vals = append(o.vals, t.vals[:]...)
 		o.shape = t.shape
-		o.props[0].value = Int(len(f.args))
+		o.vals[0] = Int(len(f.args))
 		// An unmapped one's callee is its realm's accessor pair, shared:
 		// it can never be changed, being non-configurable, and nothing
 		// writes an accessor pair in place but the definitions of an object
 		// or class literal. The layout is the runtime's, shared by its
 		// realms, so the pair is set for each object.
 		if mapped {
-			o.props[1].value = Obj(f.callee)
+			o.vals[1] = Obj(f.callee)
 			r.mapArguments(o, f)
 		} else {
-			o.props[1].value = r.throwTypeErrorPair
+			o.vals[1] = r.throwTypeErrorPair
 		}
 		return o
 	}
@@ -867,12 +868,12 @@ type argumentsObject[A [2]Value | [4]Value | [7]Value] struct {
 type argumentsObject0 struct {
 	Object
 	side   objectExt
-	inline [3]Property
+	inline [3]Value
 }
 
 func newArgumentsObject0(proto *Object) *Object {
 	ao := &argumentsObject0{Object: Object{proto: proto, class: ClassArguments, flags: objExtensible | objInlineProps}}
-	ao.props = ao.inline[:0]
+	ao.vals = ao.inline[:0]
 	ao.embedExt(&ao.side)
 	return &ao.Object
 }
@@ -880,7 +881,7 @@ func newArgumentsObject0(proto *Object) *Object {
 func newArgumentsObjectOf[A [2]Value | [4]Value | [7]Value](proto *Object) *Object {
 	ao := &argumentsObject[A]{}
 	ao.Object = Object{proto: proto, class: ClassArguments, flags: objExtensible | objInlineProps}
-	ao.props = ao.inline[:0]
+	ao.vals = ao.inline[:0]
 	ao.embedExt(&ao.side)
 	ao.side.elems = unsafe.Slice(&ao.room[0], len(ao.room))[:0]
 	return &ao.Object
@@ -904,22 +905,26 @@ func newArgumentsStorage(proto *Object, n int) *Object {
 
 // argsLayout is the layout of the three properties every object of a kind
 // is made with -- an arguments object's length, callee and Symbol.iterator, a
-// match result's index, input and groups -- and their shape if they have one,
+// match result's index, input and groups -- and their shape, and values,
 // kept from the first one made, for the rest to copy.
 type argsLayout struct {
 	shape *shape
-	props [3]Property
+	vals  [3]Value
 }
 
 // layoutOf is the layout of an object just made, if it is one the rest of its
-// kind can share: three properties, with no shape -- a table small enough to
-// scan -- or one of the tree rather than one of the object's own.
+// kind can share: three properties, of a shape of the tree, or a loose one --
+// whose keys the rest share, as a template, until one of them changes them.
 func layoutOf(o *Object) *argsLayout {
-	if len(o.props) != 3 || o.shape != nil && (o.shape.unique || o.shape.n != 3) {
+	s := o.shape
+	if len(o.vals) != 3 || s.n != 3 || s.unique && !s.loose || s.index != nil {
 		return nil
 	}
-	t := &argsLayout{shape: o.shape}
-	copy(t.props[:], o.props)
+	if s.loose {
+		s = &shape{loose: true, n: 3, keys: slices.Clone(s.keys[:3])}
+	}
+	t := &argsLayout{shape: s}
+	copy(t.vals[:], o.vals)
 	return t
 }
 

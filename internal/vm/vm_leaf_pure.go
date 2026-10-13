@@ -338,12 +338,12 @@ func (r *Runtime) pureCallAt(fd *funcData, this Value, args []Value, depth int, 
 				if verifyShapes {
 					checkShape(ob)
 				}
-				ob.props[c.idx].value = stack[sp-1]
+				ob.vals[c.idx] = stack[sp-1]
 			} else if c.adds(ob) {
 				if verifyShapes {
 					r.verifyStoreCache(c, ob, cl.names[in.A])
 				}
-				ob.appendTransition(Property{key: cl.names[in.A], flags: c.next.flags, value: stack[sp-1]}, c.next)
+				ob.appendTransition(stack[sp-1], c.next)
 			} else {
 				return miss()
 			}
@@ -506,7 +506,7 @@ func (r *Runtime) pureConstruct(callee Value, args []Value) (Value, bool) {
 		return Undefined, false
 	}
 	p := o.getOwnVisible(atomPrototype)
-	if p == nil || p.flags&propAccessor != 0 || !p.value.IsObject() {
+	if !p.ok() || p.flags()&propAccessor != 0 || !p.value().IsObject() {
 		return Undefined, false
 	}
 	root := r.shapes.ctorRoot(fd)
@@ -514,7 +514,7 @@ func (r *Runtime) pureConstruct(callee Value, args []Value) (Value, bool) {
 	if root != nil {
 		props = max(props, int(root.slack))
 	}
-	obj := newLiteralObject(p.value.Object(), ClassObject, props)
+	obj := newLiteralObject(p.value().Object(), ClassObject, props)
 	obj.shape = root
 	if !r.leafStores(fd.closure, obj, args) {
 		return Undefined, false
@@ -580,10 +580,10 @@ func (r *Runtime) pureGlobal(cl *closure, in bytecode.Instr) (Value, bool) {
 	site := &cl.ic[in.B]
 	// The environment the site found the name in, as the tree tier's read
 	// takes it (see propCache): no scope to ask for, no key to compare.
-	if env := site.p1; env != nil && (len(r.globalLex.props) == 0 || !r.lexShadows(cl.names[in.A])) {
-		if i := uint(site.idx); i < uint(len(env.props)) {
-			if p := &env.props[i]; p.flags&plain == 0 {
-				return p.value, true
+	if env := site.p1; env != nil && (len(r.globalLex.vals) == 0 || !r.lexShadows(cl.names[in.A])) {
+		if i := uint(site.idx); i < uint(len(env.vals)) {
+			if p := env.shape.keys[i]; p.flags&plain == 0 {
+				return env.vals[i], true
 			}
 		}
 	}
@@ -595,26 +595,26 @@ func (r *Runtime) pureGlobalSlow(cl *closure, site *propCache, in bytecode.Instr
 	const plain = propAccessor | propPrivate | propDeleted | propUninit
 	name := cl.names[in.A]
 	env := cl.scope()
-	if len(r.globalLex.props) != 0 {
-		if p := r.globalLexProp(env, name); p != nil {
-			if p.value.IsUninitialized() {
+	if len(r.globalLex.vals) != 0 {
+		if p := r.globalLexProp(env, name); p.ok() {
+			if p.value().IsUninitialized() {
 				return Undefined, false
 			}
-			return p.value, true
+			return p.value(), true
 		}
 	}
-	if i := uint(site.idx); i < uint(len(env.props)) {
-		if p := &env.props[i]; p.key == name && p.flags&plain == 0 {
+	if i := uint(site.idx); i < uint(len(env.vals)) {
+		if p := env.shape.keys[i]; p.key == name && p.flags&plain == 0 {
 			if site.p1 != env {
 				site.p1 = env
 			}
-			return p.value, true
+			return env.vals[i], true
 		}
 	}
 	if i := env.findOwn(name); i >= 0 {
-		if p := &env.props[i]; p.flags&plain == 0 {
+		if p := env.shape.keys[i]; p.flags&plain == 0 {
 			noteGlobalSlot(site, env, i)
-			return p.value, true
+			return env.vals[i], true
 		}
 	}
 	return Undefined, false

@@ -28,8 +28,8 @@ func TestSpreadReservesRoom(t *testing.T) {
 			return e
 		}
 		plain := get(0).Object()
-		if cap(plain.props) != 20 || plain.flags&objInlineProps != 0 {
-			t.Errorf("tree %v: spread of 20 made room for %d (inline %v)", tree, cap(plain.props), plain.flags&objInlineProps != 0)
+		if cap(plain.vals) != 20 || plain.flags&objInlineProps != 0 {
+			t.Errorf("tree %v: spread of 20 made room for %d (inline %v)", tree, cap(plain.vals), plain.flags&objInlineProps != 0)
 		}
 		const want = `{"x":1,"k0":0,"k1":1,"k2":2,"k3":"three","k4":4,"k5":5,"k6":6,"k7":7,"k8":8,"k9":9,` +
 			`"k10":10,"k11":11,"k12":12,"k13":13,"k14":14,"k15":15,"k16":16,"k17":17,"k18":18,"k19":19,"y":2}`

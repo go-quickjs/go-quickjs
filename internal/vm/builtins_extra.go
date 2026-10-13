@@ -523,13 +523,13 @@ func (r *Runtime) initObjectExtras() {
 				return err
 			}
 			group := out.getOwn(key)
-			if group == nil {
+			if !group.ok() {
 				arr := rt.newArrayFrom([]Value{v})
 				out.setOwnRaw(key, Obj(arr), propDefault)
 				return nil
 			}
-			if group.value.IsObject() {
-				g := group.value.Object()
+			if group.value().IsObject() {
+				g := group.value().Object()
 				g.extOf().elems = append(g.elemsOf(), v)
 			}
 			return nil

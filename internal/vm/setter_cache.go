@@ -22,11 +22,11 @@ func (r *Runtime) cachedSetter(c *propCache, o *Object, key Atom, v Value) (bool
 	if verifyShapes {
 		checkShape(o)
 		checkShape(h)
-		if p := &h.props[c.idx]; p.key != key || p.flags&propAccessor == 0 {
+		if p := h.shape.keys[c.idx]; p.key != key || p.flags&propAccessor == 0 {
 			panic("write cache's accessor is not where it was for " + r.atoms.name(key))
 		}
 	}
-	a := h.props[c.idx].getterSetter()
+	a := h.vals[c.idx].accessorPair()
 	if a == nil || a.setter == nil {
 		return false, nil
 	}

@@ -205,7 +205,7 @@ func (r *Runtime) initIntrinsics() {
 	r.proto.object = newObject(nil, ClassObject)
 	// The root of every ordinary chain has the first shape of the runtime's
 	// tree, which every object inheriting from it joins.
-	r.proto.object.shape = newUniqueShape(r.shapes, 0, nil)
+	r.proto.object.shape = newUniqueShape(r.shapes, nil, nil)
 	// Every ordinary chain ends here, so giving this object a prototype would
 	// put whatever it was given above everything in the realm. It is refused
 	// however extensible the object is.

@@ -2,6 +2,7 @@ package vm
 
 import (
 	"math"
+	"slices"
 	"unsafe"
 )
 
@@ -85,11 +86,14 @@ type accessor struct {
 	setter *Object
 }
 
-// Property is one own property of an object.
+// Property is one own property of an object, as a value: what is added to
+// an object, or read from one. An object keeps its properties' keys and
+// attributes in its shape (propKey) and only their values itself
+// (Object.vals).
 //
 // An accessor stores its getter and setter in an *accessor hung off the value's
-// reference field, so that the common data property costs no more than a value
-// plus a word.
+// reference field, so that the common data property costs no more than a
+// value.
 type Property struct {
 	key   Atom
 	flags propFlags
@@ -101,6 +105,35 @@ func (p *Property) isAccessor() bool { return p.flags&propAccessor != 0 }
 func (p *Property) getterSetter() *accessor {
 	return p.value.accessorPair()
 }
+
+// propKey is a property's key and attributes, which its object's shape keeps
+// for it (shape.keys). Its layout is shapeEdge's.
+type propKey struct {
+	key   Atom
+	flags propFlags
+}
+
+func (k propKey) isAccessor() bool { return k.flags&propAccessor != 0 }
+
+// ownProp is an object's own property, as getOwn finds it: its value is the
+// object's, at i, and its key and attributes the object's shape's. An i of
+// -1 is none.
+type ownProp struct {
+	o *Object
+	i int32
+}
+
+func (p ownProp) ok() bool                { return p.i >= 0 }
+func (p ownProp) value() Value            { return p.o.vals[p.i] }
+func (p ownProp) flags() propFlags        { return p.o.shape.keys[p.i].flags }
+func (p ownProp) isAccessor() bool        { return p.flags()&propAccessor != 0 }
+func (p ownProp) getterSetter() *accessor { return p.value().accessorPair() }
+
+// setValue changes the property's value, which its layout does not settle.
+func (p ownProp) setValue(v Value) { p.o.vals[p.i] = v }
+
+// setFlags changes the property's attributes, and so its object's layout.
+func (p ownProp) setFlags(flags propFlags) { p.o.setFlagsAt(p.i, flags) }
 
 // objFlags holds per-object booleans.
 type objFlags uint8
@@ -139,26 +172,27 @@ const (
 	objInlineProps
 )
 
-// linearScanLimit is the property count below which lookup scans the slice
+// linearScanLimit is the property count below which lookup scans the keys
 // instead of consulting a map.
 //
 // Most objects are small, and for a handful of properties a linear scan over a
-// contiguous slice of 32-byte entries beats a map probe: it touches one or two
-// cache lines and needs no hashing. The index map is built only once an object
-// grows past this.
+// contiguous slice of 8-byte keys beats a map probe: it touches one cache line
+// and needs no hashing. The index map is built only once an object grows past
+// this.
 const linearScanLimit = 8
 
 // Object is a JavaScript object.
 type Object struct {
 	proto *Object
 
-	// props holds named and symbol-keyed properties in insertion order, which
-	// is the order enumeration must report them in.
-	props []Property
-	// shape is the table's layout as an identity a property cache can
-	// remember, and holds the table's lookup index; see vm_shape.go. Whatever
-	// changes the table's keys, their order or their attributes keeps it
-	// right: appendProp and layoutChanged.
+	// vals holds the values of the named and symbol-keyed properties in
+	// insertion order, which is the order enumeration must report them in.
+	vals []Value
+	// shape is the table's layout: its keys and their attributes, at the
+	// values' positions; an identity a property cache can remember, unless it
+	// is loose; and the table's lookup index. See vm_shape.go. An object with
+	// properties always has one. Whatever changes the table's keys, their
+	// order or their attributes keeps it right: appendProp and layoutChanged.
 	shape *shape
 
 	// ext holds what only some objects have -- an array's elements, an
@@ -196,8 +230,8 @@ type Object struct {
 // ObjectElems).
 type objectExt struct {
 	// elems holds dense array elements. Arrays and other index-keyed objects
-	// keep their elements here rather than in props, so that a[i] is a slice
-	// index rather than a map lookup.
+	// keep their elements here rather than in the property table, so that
+	// a[i] is a slice index rather than a map lookup.
 	elems []Value
 
 	// data carries the internal slots of an exotic object: *funcData for a
@@ -332,33 +366,33 @@ type extObject struct {
 // allocator.
 type literalObject struct {
 	Object
-	inline [3]Property
+	inline [3]Value
 }
 
 // literalObject1 and literalObject2 are literalObject for an object that says
 // it will have one property or two. Each is the next size class down: a pair's
-// two fields, the commonest of all, fit in 112 bytes rather than 128.
+// two fields, the commonest of all, fit in 96 bytes rather than 112.
 type literalObject1 struct {
 	Object
-	inline [1]Property
+	inline [1]Value
 }
 
 type literalObject2 struct {
 	Object
-	inline [2]Property
+	inline [2]Value
 }
 
 // largeLiteralObject is literalObject for an object that says it will have
 // four to eight properties, each in the size class its count needs; seven
 // takes the room for eight, a size class of its own being no smaller.
-type largeLiteralObject[A [4]Property | [5]Property | [6]Property | [8]Property] struct {
+type largeLiteralObject[A [4]Value | [5]Value | [6]Value | [8]Value] struct {
 	Object
 	inline A
 }
 
-func newLargeLiteralObject[A [4]Property | [5]Property | [6]Property | [8]Property](o Object) *Object {
+func newLargeLiteralObject[A [4]Value | [5]Value | [6]Value | [8]Value](o Object) *Object {
 	lo := &largeLiteralObject[A]{Object: o}
-	lo.props = unsafe.Slice(&lo.inline[0], len(lo.inline))[:0]
+	lo.vals = unsafe.Slice(&lo.inline[0], len(lo.inline))[:0]
 	return &lo.Object
 }
 
@@ -370,28 +404,28 @@ func newLiteralObject(proto *Object, class Class, n int) *Object {
 	switch n {
 	case 1:
 		lo := &literalObject1{Object: o}
-		lo.props = lo.inline[:0]
+		lo.vals = lo.inline[:0]
 		return &lo.Object
 	case 2:
 		lo := &literalObject2{Object: o}
-		lo.props = lo.inline[:0]
+		lo.vals = lo.inline[:0]
 		return &lo.Object
 	case 4:
-		return newLargeLiteralObject[[4]Property](o)
+		return newLargeLiteralObject[[4]Value](o)
 	case 5:
-		return newLargeLiteralObject[[5]Property](o)
+		return newLargeLiteralObject[[5]Value](o)
 	case 6:
-		return newLargeLiteralObject[[6]Property](o)
+		return newLargeLiteralObject[[6]Value](o)
 	case 7, 8:
-		return newLargeLiteralObject[[8]Property](o)
+		return newLargeLiteralObject[[8]Value](o)
 	}
 	if n > len(literalObject{}.inline) {
 		o := &Object{proto: proto, class: class, flags: objExtensible}
-		o.props = make([]Property, 0, n)
+		o.vals = make([]Value, 0, n)
 		return o
 	}
 	lo := &literalObject{Object: o}
-	lo.props = lo.inline[:0]
+	lo.vals = lo.inline[:0]
 	return &lo.Object
 }
 
@@ -401,7 +435,7 @@ func newLiteralObject(proto *Object, class Class, n int) *Object {
 type errorObject struct {
 	Object
 	side   objectExt
-	inline [3]Property
+	inline [3]Value
 	thrown Thrown
 }
 
@@ -409,7 +443,7 @@ func newErrorObject(proto *Object) *Object {
 	eo := &errorObject{
 		Object: Object{proto: proto, class: ClassError, flags: objExtensible | objInlineProps},
 	}
-	eo.props = eo.inline[:0]
+	eo.vals = eo.inline[:0]
 	eo.embedExt(&eo.side)
 	eo.side.data = &eo.thrown
 	return &eo.Object
@@ -504,7 +538,7 @@ func newArrayStorage(n int) (*Object, []Value) {
 type matchResultObject struct {
 	Object
 	side   objectExt
-	fields [4]Property
+	fields [4]Value
 	inline [4]Value
 	str    String
 }
@@ -515,7 +549,7 @@ type matchResultObject struct {
 type matchResult1Object struct {
 	Object
 	side   objectExt
-	fields [3]Property
+	fields [3]Value
 	inline [1]Value
 	str    String
 }
@@ -530,13 +564,13 @@ func newMatchResult(proto *Object, n int, indices bool) (*Object, *String) {
 	}
 	if n == 1 && !indices {
 		mo := &matchResult1Object{Object: o}
-		mo.props = mo.fields[:0]
+		mo.vals = mo.fields[:0]
 		mo.embedExt(&mo.side)
 		mo.side.elems = mo.inline[:]
 		return &mo.Object, &mo.str
 	}
 	mo := &matchResultObject{Object: o}
-	mo.props = mo.fields[:0]
+	mo.vals = mo.fields[:0]
 	mo.embedExt(&mo.side)
 	if n <= len(mo.inline) {
 		mo.side.elems = mo.inline[:n]
@@ -801,24 +835,50 @@ func (o *Object) noIndexKeys() bool {
 	if x := o.shapeIndex(); x != nil {
 		return !x.indexKeys
 	}
-	for i := range o.props {
-		if o.props[i].key.IsIndex() {
+	for _, k := range o.keys() {
+		if k.key.IsIndex() {
 			return false
 		}
 	}
 	return true
 }
 
-// findOwn returns the index of an own property in props, or -1.
+// keys is the keys and attributes of the object's properties, by position:
+// its shape's, as many as it has values.
+func (o *Object) keys() []propKey {
+	if len(o.vals) == 0 {
+		return nil
+	}
+	return o.shape.keys[:len(o.vals)]
+}
+
+// propAt is the property at position i of the table.
+func (o *Object) propAt(i int32) Property {
+	k := o.shape.keys[i]
+	return Property{key: k.key, flags: k.flags, value: o.vals[i]}
+}
+
+// setFlagsAt changes the attributes of the property at position i, and so
+// the object's layout.
+func (o *Object) setFlagsAt(i int32, flags propFlags) {
+	if o.shape.keys[i].flags == flags {
+		return
+	}
+	o.layoutChanged()
+	o.shape.keys[i].flags = flags
+}
+
+// findOwn returns the position of an own property in the table, or -1.
 func (o *Object) findOwn(key Atom) int32 {
 	if x := o.shapeIndex(); x != nil {
+		keys := o.keys()
 		c := &x.recent[key&15]
 		if c.key == key {
 			if c.idx < 0 {
 				return -1
 			}
-			if int(c.idx) < len(o.props) {
-				if p := &o.props[c.idx]; p.key == key && p.flags&propDeleted == 0 {
+			if int(c.idx) < len(keys) {
+				if k := keys[c.idx]; k.key == key && k.flags&propDeleted == 0 {
 					return c.idx
 				}
 			}
@@ -830,14 +890,14 @@ func (o *Object) findOwn(key Atom) int32 {
 		// What the index says is remembered, whatever this table holds there:
 		// a borrowed index is shared with the layout's objects.
 		c.key, c.idx = key, i
-		if i >= 0 && (int(i) >= len(o.props) || o.props[i].key != key || o.props[i].flags&propDeleted != 0) {
+		if i >= 0 && (int(i) >= len(keys) || keys[i].key != key || keys[i].flags&propDeleted != 0) {
 			// A key the object deleted, which the index it borrows has.
 			return -1
 		}
 		return i
 	}
-	for i := range o.props {
-		if o.props[i].key == key && o.props[i].flags&propDeleted == 0 {
+	for i, k := range o.keys() {
+		if k.key == key && k.flags&propDeleted == 0 {
 			return int32(i)
 		}
 	}
@@ -845,18 +905,12 @@ func (o *Object) findOwn(key Atom) int32 {
 }
 
 // buildIndex populates the lookup map once an object has enough properties for
-// it to pay off.
-//
-// The index is the shape's: an object with no shape is given one of its own
-// to hold it.
+// it to pay off. The index is the shape's.
 func (o *Object) buildIndex() {
-	if o.shape == nil {
-		o.shape = &shape{unique: true, n: int32(len(o.props))}
-	}
-	x := newPropIndex(len(o.props) * 2)
-	for i := range o.props {
-		if o.props[i].flags&propDeleted == 0 {
-			x.add(o.props[i].key, int32(i))
+	x := newPropIndex(len(o.vals) * 2)
+	for i, k := range o.keys() {
+		if k.flags&propDeleted == 0 {
+			x.add(k.key, int32(i))
 		}
 	}
 	o.shape.index = x
@@ -867,19 +921,16 @@ func (o *Object) buildIndex() {
 //
 // It sees private members, so it is the lookup the private accessors use.
 // Every path reachable from source goes through getOwnVisible instead.
-func (o *Object) getOwn(key Atom) *Property {
-	if i := o.findOwn(key); i >= 0 {
-		return &o.props[i]
-	}
-	return nil
+func (o *Object) getOwn(key Atom) ownProp {
+	return ownProp{o, o.findOwn(key)}
 }
 
 // getOwnVisible returns an own property that source can observe, which excludes
 // private class members.
-func (o *Object) getOwnVisible(key Atom) *Property {
+func (o *Object) getOwnVisible(key Atom) ownProp {
 	p := o.getOwn(key)
-	if p != nil && p.flags&propPrivate != 0 {
-		return nil
+	if p.ok() && p.flags()&propPrivate != 0 {
+		p.i = -1
 	}
 	return p
 }
@@ -891,29 +942,25 @@ func (o *Object) getOwnVisible(key Atom) *Property {
 // the object's own allocation too small for them leaves it, as
 // leaveInlineProps does.
 func (o *Object) reserveProps(n int) {
-	if cap(o.props) >= n {
+	if cap(o.vals) >= n {
 		return
 	}
-	props := make([]Property, len(o.props), n)
-	copy(props, o.props)
+	vals := make([]Value, len(o.vals), n)
+	copy(vals, o.vals)
 	if o.flags&objInlineProps != 0 {
 		o.shape.noteGrowth(n)
-		clear(o.props[:cap(o.props)])
+		clear(o.vals[:cap(o.vals)])
 		o.flags &^= objInlineProps
 	}
-	o.props = props
+	o.vals = vals
 }
 
 // setOwnRaw installs a property, replacing any existing one, without consulting
 // the prototype chain or any setter.
-
 func (o *Object) setOwnRaw(key Atom, value Value, flags propFlags) {
 	if i := o.findOwn(key); i >= 0 {
-		p := &o.props[i]
-		if p.flags != flags {
-			o.layoutChanged()
-		}
-		p.value, p.flags = value, flags
+		o.setFlagsAt(i, flags)
+		o.vals[i] = value
 		return
 	}
 	if o.class == ClassArray && key.IsIndex() {
@@ -939,19 +986,8 @@ func (o *Object) prependProps(ps []Property) {
 	if len(ps) == 0 {
 		return
 	}
-	o.layoutChanged()
-	inline := o.flags&objInlineProps != 0
-	old := o.props[:cap(o.props)]
-	o.props = append(ps[:len(ps):len(ps)], o.props...)
-	if inline {
-		clear(old)
-		o.flags &^= objInlineProps
-	}
-	if o.shape != nil {
-		o.shape.n = int32(len(o.props))
-	}
-	if o.shapeIndex() != nil || len(o.props) > linearScanLimit {
-		o.buildIndex()
+	for i := len(ps) - 1; i >= 0; i-- {
+		o.insertProp(0, ps[i])
 	}
 }
 
@@ -959,11 +995,11 @@ func (o *Object) prependProps(ps []Property) {
 // for them, with room past them for more of them, and clears the room.
 func (o *Object) leaveInlineProps(more int) {
 	// Its constructor's next objects are given the room this one needed.
-	o.shape.noteGrowth(len(o.props) + more)
-	old := o.props[:cap(o.props)]
-	props := make([]Property, len(o.props), 2*cap(o.props)+more)
-	copy(props, o.props)
-	o.props = props
+	o.shape.noteGrowth(len(o.vals) + more)
+	old := o.vals[:cap(o.vals)]
+	vals := make([]Value, len(o.vals), 2*cap(o.vals)+more)
+	copy(vals, o.vals)
+	o.vals = vals
 	clear(old)
 	o.flags &^= objInlineProps
 }
@@ -976,31 +1012,29 @@ func (o *Object) insertProp(at int, p Property) {
 	if o.fn() == nil {
 		panic("insertProp on an object that is no function")
 	}
-	if at >= len(o.props) {
+	if at >= len(o.vals) {
 		o.appendProp(p)
 		return
 	}
 	o.layoutChanged()
-	if o.flags&objInlineProps != 0 && len(o.props) == cap(o.props) {
+	if o.flags&objInlineProps != 0 && len(o.vals) == cap(o.vals) {
 		o.leaveInlineProps(1)
 	}
-	o.props = append(o.props, Property{})
-	copy(o.props[at+1:], o.props[at:])
-	o.props[at] = p
-	if o.shape != nil {
-		o.shape.n = int32(len(o.props))
-	}
-	if o.shapeIndex() != nil || len(o.props) > linearScanLimit {
+	s := o.shape
+	o.vals = slices.Insert(o.vals, at, p.value)
+	s.keys = slices.Insert(s.keys[:s.n], at, propKey{p.key, p.flags})
+	s.n = int32(len(o.vals))
+	if o.shapeIndex() != nil || len(o.vals) > linearScanLimit {
 		o.buildIndex()
 	}
 }
 
 func (o *Object) appendProp(p Property) {
-	if o.flags&objInlineProps != 0 && len(o.props) == cap(o.props) {
+	if o.flags&objInlineProps != 0 && len(o.vals) == cap(o.vals) {
 		o.leaveInlineProps(1)
 	}
-	o.props = append(o.props, p)
-	o.shapeAdded(p)
+	o.vals = append(o.vals, p.value)
+	o.shapeAdded(propKey{p.key, p.flags})
 }
 
 // deleteOwn removes an own property, reporting whether it existed and was
@@ -1010,23 +1044,31 @@ func (o *Object) deleteOwn(key Atom) bool {
 	if i < 0 {
 		return true // deleting an absent property succeeds
 	}
-	if o.props[i].flags&propConfigurable == 0 {
+	if o.shape.keys[i].flags&propConfigurable == 0 {
 		return false
 	}
-	// Tombstone rather than splice, so that the remaining indices stay valid.
+	o.tombstone(i)
+	return true
+}
+
+// tombstone deletes the property at position i of the table, leaving a
+// tombstone rather than splicing it out, so that the remaining positions stay
+// valid.
+func (o *Object) tombstone(i int32) {
+	key := o.shape.keys[i].key
 	o.layoutChanged()
-	o.props[i] = Property{key: atomEmpty, flags: propDeleted}
+	o.shape.keys[i] = propKey{key: atomEmpty, flags: propDeleted}
+	o.vals[i] = Value{}
 	if x := o.shapeIndex(); x != nil && !o.shape.borrowed {
 		delete(x.slots, key)
 	}
-	return true
 }
 
 // ownKeys returns the object's own property keys in specification order:
 // integer indices in ascending numeric order, then string keys in insertion
 // order, then symbol keys in insertion order.
 func (o *Object) ownKeys(includeSymbols bool, atoms *atomTable) []Atom {
-	keys := make([]Atom, 0, len(o.elemsOf())+len(o.props)+2)
+	keys := make([]Atom, 0, len(o.elemsOf())+len(o.vals)+2)
 
 	// A typed array's elements are backed by a buffer rather than by the
 	// property table, but they are own properties and must be listed.
@@ -1059,12 +1101,12 @@ func (o *Object) ownKeys(includeSymbols bool, atoms *atomTable) []Atom {
 		keys = append(keys, atoms.indexAtom(uint32(i)))
 	}
 
-	// Index-valued keys stored in props must be merged in ascending order
-	// ahead of the string keys. The largest indices are spelled out rather
-	// than carried in the atom, and they belong with the rest.
+	// Index-valued keys stored in the property table must be merged in
+	// ascending order ahead of the string keys. The largest indices are
+	// spelled out rather than carried in the atom, and they belong with the
+	// rest.
 	var indexKeys []indexedAtom
-	for i := range o.props {
-		p := &o.props[i]
+	for _, p := range o.keys() {
 		if p.flags&propDeleted != 0 {
 			continue
 		}
@@ -1098,7 +1140,7 @@ func (o *Object) ownKeys(includeSymbols bool, atoms *atomTable) []Atom {
 	if o.class == ClassArray {
 		keys = append(keys, atomLength)
 	}
-	if o.class == ClassStringWrapper && o.getOwn(atomLength) == nil {
+	if o.class == ClassStringWrapper && !o.getOwn(atomLength).ok() {
 		if _, ok := o.dataOf().(*String); ok {
 			keys = append(keys, atomLength)
 		}
@@ -1109,16 +1151,15 @@ func (o *Object) ownKeys(includeSymbols bool, atoms *atomTable) []Atom {
 	// order, as they would have been had the function been built with them, and
 	// after the indices, which always come first however late they were added.
 	if o.class == ClassFunction && o.fn() != nil && !o.fn().propsMaterialized {
-		if o.getOwn(atomLength) == nil {
+		if !o.getOwn(atomLength).ok() {
 			keys = append(keys, atomLength)
 		}
-		if o.getOwn(atomName) == nil {
+		if !o.getOwn(atomName).ok() {
 			keys = append(keys, atomName)
 		}
 	}
 
-	for i := range o.props {
-		p := &o.props[i]
+	for _, p := range o.keys() {
 		if p.flags&(propDeleted|propPrivate) != 0 {
 			continue
 		}
@@ -1132,8 +1173,7 @@ func (o *Object) ownKeys(includeSymbols bool, atoms *atomTable) []Atom {
 	}
 
 	if includeSymbols {
-		for i := range o.props {
-			p := &o.props[i]
+		for _, p := range o.keys() {
 			if p.flags&(propDeleted|propPrivate) != 0 || p.key.IsIndex() {
 				continue
 			}
@@ -1329,14 +1369,9 @@ func (o *Object) setArrayLength(n uint32) {
 	}
 	if o.flags&objHasSparseElements != 0 {
 		// Drop any sparse index properties beyond the new length.
-		for i := range o.props {
-			p := &o.props[i]
+		for i, p := range o.keys() {
 			if key := p.key; p.flags&propDeleted == 0 && key.IsIndex() && key.Index() >= n {
-				o.layoutChanged()
-				o.props[i] = Property{key: atomEmpty, flags: propDeleted}
-				if x := o.shapeIndex(); x != nil && !o.shape.borrowed {
-					delete(x.slots, key)
-				}
+				o.tombstone(int32(i))
 			}
 		}
 	}

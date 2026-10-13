@@ -1063,9 +1063,9 @@ func (r *Runtime) toPromiseErr(v Value) (*Object, error) {
 		// promise of this realm's with no constructor of its own, whose
 		// prototype's is the intrinsic as a data property -- is read where
 		// it is: nothing could see it read.
-		if o := v.Object(); o.proto == r.proto.promise && o.getOwn(atomConstructor) == nil {
-			if p := o.proto.getOwn(atomConstructor); p != nil && p.flags&(propAccessor|propPrivate) == 0 &&
-				p.value.IsObject() && p.value.Object() == r.promiseCtor {
+		if o := v.Object(); o.proto == r.proto.promise && !o.getOwn(atomConstructor).ok() {
+			if p := o.proto.getOwn(atomConstructor); p.ok() && p.flags()&(propAccessor|propPrivate) == 0 &&
+				p.value().IsObject() && p.value().Object() == r.promiseCtor {
 				return o, nil
 			}
 		}

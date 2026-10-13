@@ -425,7 +425,7 @@ func propValueUpdate(u *rmw) tval {
 			ov = c.locals[o]
 		}
 		if ob := objectAt(&ov); ob != nil {
-			if p := storeSlot(&c.cl.ic[site], ob); p != nil && numberAt(&p.value) {
+			if p := storeSlot(&c.cl.ic[site], ob); p != nil && numberAt(p) {
 				b := y
 				if yl >= 0 {
 					v := &c.locals[yl]
@@ -434,9 +434,9 @@ func propValueUpdate(u *rmw) tval {
 					}
 					b = v.num
 				}
-				old := p.value
+				old := *p
 				r := Float(updateNum(op, old.num, b))
-				p.value.num = r.num
+				p.num = r.num
 				return updated(old, r, post)
 			}
 		}
@@ -582,12 +582,12 @@ func updateNumOp(op bytecode.Op, a, b float64) float64 {
 // storeSlot is the property the write cache s says o has itself, holding
 // data, writable: o is of the shape s remembers, as for storeOwn. The value
 // in it is what a read of the property gives.
-func storeSlot(s *propCache, o *Object) *Property {
+func storeSlot(s *propCache, o *Object) *Value {
 	if sh := o.shape; sh == s.shape && sh != nil && s.next == nil {
 		if verifyShapes {
 			checkShape(o)
 		}
-		return &o.props[s.idx]
+		return &o.vals[s.idx]
 	}
 	return nil
 }
@@ -603,9 +603,9 @@ func propLocalUpdate(u *rmw) tstmt {
 	if yl >= 0 {
 		return func(c *tctx) {
 			if ob := objectAt(&c.locals[o]); ob != nil {
-				if p := storeSlot(&c.cl.ic[site], ob); p != nil && numberAt(&p.value) {
+				if p := storeSlot(&c.cl.ic[site], ob); p != nil && numberAt(p) {
 					if b := &c.locals[yl]; numberAt(b) {
-						p.value.num = Float(updateNum(op, p.value.num, b.num)).num
+						p.num = Float(updateNum(op, p.num, b.num)).num
 						return
 					}
 				}
@@ -615,8 +615,8 @@ func propLocalUpdate(u *rmw) tstmt {
 	}
 	return func(c *tctx) {
 		if ob := objectAt(&c.locals[o]); ob != nil {
-			if p := storeSlot(&c.cl.ic[site], ob); p != nil && numberAt(&p.value) {
-				p.value.num = Float(updateNum(op, p.value.num, y)).num
+			if p := storeSlot(&c.cl.ic[site], ob); p != nil && numberAt(p) {
+				p.num = Float(updateNum(op, p.num, y)).num
 				return
 			}
 		}
@@ -632,9 +632,9 @@ func propThisUpdate(u *rmw) tstmt {
 	if yl >= 0 {
 		return func(c *tctx) {
 			if ob := objectAt(&c.f.this); ob != nil {
-				if p := storeSlot(&c.cl.ic[site], ob); p != nil && numberAt(&p.value) {
+				if p := storeSlot(&c.cl.ic[site], ob); p != nil && numberAt(p) {
 					if b := &c.locals[yl]; numberAt(b) {
-						p.value.num = Float(updateNum(op, p.value.num, b.num)).num
+						p.num = Float(updateNum(op, p.num, b.num)).num
 						return
 					}
 				}
@@ -644,8 +644,8 @@ func propThisUpdate(u *rmw) tstmt {
 	}
 	return func(c *tctx) {
 		if ob := objectAt(&c.f.this); ob != nil {
-			if p := storeSlot(&c.cl.ic[site], ob); p != nil && numberAt(&p.value) {
-				p.value.num = Float(updateNum(op, p.value.num, y)).num
+			if p := storeSlot(&c.cl.ic[site], ob); p != nil && numberAt(p) {
+				p.num = Float(updateNum(op, p.num, y)).num
 				return
 			}
 		}
@@ -727,9 +727,9 @@ func globalUpdateStmt(u *rmw) tstmt {
 	return func(c *tctx) {
 		s := &c.cl.ic[site]
 		if env := s.p1; env != nil && c.f.evalVars == nil {
-			if r := c.r; len(r.globalLex.props) == 0 || !r.lexShadows(c.cl.names[name]) {
-				if i := uint(s.idx); i < uint(len(env.props)) {
-					if p := &env.props[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) == propWritable && numberAt(&p.value) {
+			if r := c.r; len(r.globalLex.vals) == 0 || !r.lexShadows(c.cl.names[name]) {
+				if i := uint(s.idx); i < uint(len(env.vals)) {
+					if p := env.shape.keys[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) == propWritable && numberAt(&env.vals[i]) {
 						b := y
 						if yl >= 0 {
 							if v := &c.locals[yl]; numberAt(v) {
@@ -739,7 +739,7 @@ func globalUpdateStmt(u *rmw) tstmt {
 								return
 							}
 						}
-						p.value.num = Float(updateNum(op, p.value.num, b)).num
+						env.vals[i].num = Float(updateNum(op, env.vals[i].num, b)).num
 						return
 					}
 				}
@@ -786,12 +786,12 @@ func propTreeUpdate(u *rmw) tstmt {
 		}
 		if ob := objectAt(&ov); ob != nil {
 			s := &c.cl.ic[site]
-			if p := storeSlot(s, ob); p != nil && numberAt(&p.value) {
-				old := p.value
+			if p := storeSlot(s, ob); p != nil && numberAt(p) {
+				old := *p
 				y := yv(c)
 				if y.IsNumber() {
-					if p := storeSlot(s, ob); p != nil && numberAt(&p.value) {
-						p.value.num = Float(updateNum(op, old.num, y.num)).num
+					if p := storeSlot(s, ob); p != nil && numberAt(p) {
+						p.num = Float(updateNum(op, old.num, y.num)).num
 						return
 					}
 				}
@@ -911,8 +911,8 @@ func (c *tctx) rmwAt(u *rmw, o, k Value) Value {
 		}
 		old = v
 	case placeGlobal:
-		if p := c.globalSite(u.site, u.name); p != nil && p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
-			old = p.value
+		if p := c.globalSite(u.site, u.name); p.ok() && p.flags()&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
+			old = p.value()
 			break
 		}
 		v, err := c.r.getGlobalAt(c, u.getIn, u.getPC)
@@ -976,8 +976,8 @@ func (c *tctx) rmwSet(u *rmw, o, k, r Value) {
 			c.setIndexSlow(o, k, r, u.setPC, u.strict)
 		}
 	case placeGlobal:
-		if p := c.globalSite(u.set, u.name); p != nil && p.flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) == propWritable {
-			p.value = r
+		if p := c.globalSite(u.set, u.name); p.ok() && p.flags()&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) == propWritable {
+			p.setValue(r)
 			return
 		}
 		if err := c.r.setGlobalAt(c, u.setIn, r, u.setPC); err != nil {
@@ -991,16 +991,16 @@ func (c *tctx) rmwSet(u *rmw, o, k, r Value) {
 // globalSite is the global object's property in the slot a global read's or
 // write's site remembers for name, where nothing can shadow it -- a direct
 // eval's variables or a script's lexical binding of the name -- or nil.
-func (c *tctx) globalSite(site, name uint32) *Property {
+func (c *tctx) globalSite(site, name uint32) ownProp {
 	s := &c.cl.ic[site]
 	if env := s.p1; env != nil && c.f.evalVars == nil {
-		if r := c.r; len(r.globalLex.props) == 0 || !r.lexShadows(c.cl.names[name]) {
-			if i := uint(s.idx); i < uint(len(env.props)) {
-				return &env.props[i]
+		if r := c.r; len(r.globalLex.vals) == 0 || !r.lexShadows(c.cl.names[name]) {
+			if i := uint(s.idx); i < uint(len(env.vals)) {
+				return ownProp{env, int32(i)}
 			}
 		}
 	}
-	return nil
+	return ownProp{i: -1}
 }
 
 // operandOp is b.op for an instruction of what may be an update's operand.

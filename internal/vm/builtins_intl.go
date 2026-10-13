@@ -41,7 +41,7 @@ func (r *Runtime) defineLazyGlobal(name string, build func(*Runtime) *Object) {
 	var getter *Object
 	settle := func(rt *Runtime, v Value) {
 		p := rt.global.getOwn(key)
-		if p == nil || !p.isAccessor() || p.flags&propConfigurable == 0 {
+		if !p.ok() || !p.isAccessor() || p.flags()&propConfigurable == 0 {
 			return
 		}
 		if acc := p.getterSetter(); acc == nil || acc.getter != getter {

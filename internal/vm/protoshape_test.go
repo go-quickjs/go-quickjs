@@ -2,9 +2,10 @@ package vm
 
 import "testing"
 
-// A cache gives a layout of its own only to a prototype that has properties
-// and no shape. A receiver like that -- a dictionary with a null prototype --
-// keeps having none, or every key added to it would make a new layout.
+// A cache gives a layout it can remember only to a prototype that has
+// properties and a loose shape. A receiver like that -- a dictionary with a
+// null prototype -- keeps its loose one, or every key added to it would make
+// a new layout.
 func TestProtoShapeOnlyForPrototypes(t *testing.T) {
 	r := New(Config{})
 	key := r.atoms.intern("k")
@@ -14,8 +15,8 @@ func TestProtoShapeOnlyForPrototypes(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		r.cachedProp(&c, dict, key)
 	}
-	if dict.shape != nil {
-		t.Errorf("a dictionary read through a cache was given a shape")
+	if dict.shape == nil || !dict.shape.loose {
+		t.Errorf("a dictionary read through a cache was given a shape a cache remembers")
 	}
 
 	proto := newObject(nil, ClassObject)

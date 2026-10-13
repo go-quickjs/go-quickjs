@@ -55,7 +55,7 @@ func privateKey(f *frame, cl *closure, ref uint32) Atom {
 // other half if that is already there.
 func (r *Runtime) definePrivateAccessor(target *Object, key Atom, fn *Object, getter bool) {
 	var get, set *Object
-	if p := target.getOwn(key); p != nil && p.isAccessor() {
+	if p := target.getOwn(key); p.ok() && p.isAccessor() {
 		if a := p.getterSetter(); a != nil {
 			get, set = a.getter, a.setter
 		}
@@ -129,7 +129,7 @@ func (r *Runtime) installPrivateMethods(this Value, list Value) error {
 		// constructor that returns an object it has already built would
 		// otherwise do. The two halves of an accessor are one member, so only
 		// a key this installation has not already reached counts.
-		if o.getOwn(e.key) != nil && !hasPrivateKey(m.entries[:i], e.key) {
+		if o.getOwn(e.key).ok() && !hasPrivateKey(m.entries[:i], e.key) {
 			return r.throwTypeError("%s is already present on this object",
 				r.atoms.name(e.key))
 		}

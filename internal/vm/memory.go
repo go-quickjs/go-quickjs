@@ -296,7 +296,7 @@ var (
 	objectSize   = int64(unsafe.Sizeof(Object{}))
 	extSize      = int64(unsafe.Sizeof(objectExt{}))
 	keyedExtSize = int64(unsafe.Sizeof(keyedExt{}))
-	propertySize = int64(unsafe.Sizeof(Property{}))
+	propKeySize  = int64(unsafe.Sizeof(propKey{}))
 	valueSize    = int64(unsafe.Sizeof(Value{}))
 	stringSize   = int64(unsafe.Sizeof(String{}))
 )
@@ -427,7 +427,7 @@ func (m *memoryMeter) addString(s *String) {
 
 // object counts an object and what it refers to.
 func (m *memoryMeter) object(o *Object) {
-	m.total += objectSize + int64(cap(o.props))*propertySize
+	m.total += objectSize + int64(cap(o.vals))*valueSize
 	switch {
 	case o.ext == nil:
 	case o.extEmbedded():
@@ -440,10 +440,14 @@ func (m *memoryMeter) object(o *Object) {
 	if s := o.shape; s != nil && s.unique && s.index != nil && !s.borrowed {
 		m.total += int64(len(s.index.slots)) * 16
 	}
+	// So are a shared layout's keys; the object's own layout's are its.
+	if s := o.shape; s != nil && s.unique {
+		m.total += int64(cap(s.keys)) * propKeySize
+	}
 	m.addObject(o.proto)
-	for i := range o.props {
-		if o.props[i].value.ref != nil {
-			m.value(o.props[i].value)
+	for _, v := range o.vals {
+		if v.ref != nil {
+			m.value(v)
 		}
 	}
 	m.valueSlice(o.elemsOf(), true)

@@ -296,7 +296,7 @@ func (r *Runtime) currentDescriptor(o *Object, key Atom) (*propDesc, error) {
 					configurable: false, hasConfigurable: true,
 				}, nil
 			}
-			if key == atomLength && o.getOwn(atomLength) == nil {
+			if key == atomLength && !o.getOwn(atomLength).ok() {
 				return &propDesc{
 					value: Int(s.Len()), hasValue: true,
 					writable: false, hasWritable: true,
@@ -330,12 +330,12 @@ func (r *Runtime) currentDescriptor(o *Object, key Atom) (*propDesc, error) {
 		}
 	}
 	p := o.getOwnVisible(key)
-	if p == nil {
+	if !p.ok() {
 		return nil, nil
 	}
 	d := &propDesc{
-		enumerable: p.flags&propEnumerable != 0, hasEnumerable: true,
-		configurable: p.flags&propConfigurable != 0, hasConfigurable: true,
+		enumerable: p.flags()&propEnumerable != 0, hasEnumerable: true,
+		configurable: p.flags()&propConfigurable != 0, hasConfigurable: true,
 	}
 	if p.isAccessor() {
 		a := p.getterSetter()
@@ -345,11 +345,11 @@ func (r *Runtime) currentDescriptor(o *Object, key Atom) (*propDesc, error) {
 		}
 		return d, nil
 	}
-	d.value, d.hasValue = p.value, true
+	d.value, d.hasValue = p.value(), true
 	if u := mappedArgument(o, key); u != nil {
 		d.value = u.get()
 	}
-	d.writable, d.hasWritable = p.flags&propWritable != 0, true
+	d.writable, d.hasWritable = p.flags()&propWritable != 0, true
 	return d, nil
 }
 
@@ -537,8 +537,7 @@ func shrinkArray(o *Object, newLen uint32, atoms *atomTable) uint32 {
 	}
 	stop := newLen
 	var keys []indexedAtom
-	for i := range o.props {
-		p := &o.props[i]
+	for _, p := range o.keys() {
 		if p.flags&propDeleted != 0 {
 			continue
 		}
@@ -551,10 +550,10 @@ func shrinkArray(o *Object, newLen uint32, atoms *atomTable) uint32 {
 	sortIndexedAtoms(keys)
 	for j := len(keys) - 1; j >= 0; j-- {
 		p := o.getOwn(keys[j].atom)
-		if p == nil {
+		if !p.ok() {
 			continue
 		}
-		if p.flags&propConfigurable == 0 {
+		if p.flags()&propConfigurable == 0 {
 			stop = keys[j].index + 1
 			break
 		}

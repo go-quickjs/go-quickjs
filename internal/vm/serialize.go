@@ -470,11 +470,11 @@ func (r *Runtime) describeReceiver(o *Object) string {
 			if proxyOf(p) != nil {
 				return Undefined
 			}
-			if d := p.getOwnVisible(key); d != nil {
+			if d := p.getOwnVisible(key); d.ok() {
 				if d.isAccessor() {
 					return Undefined
 				}
-				return d.value
+				return d.value()
 			}
 		}
 		return Undefined
@@ -557,8 +557,8 @@ func (s *serializer) errorNode(o *Object, n *snode) error {
 	if name.IsString() {
 		n.errKind = clonedErrorKinds[name.String().Go()]
 	}
-	if p := o.getOwn(atomMessage); p != nil && !p.isAccessor() {
-		msg, err := s.r.toString(p.value)
+	if p := o.getOwn(atomMessage); p.ok() && !p.isAccessor() {
+		msg, err := s.r.toString(p.value())
 		if err != nil {
 			return err
 		}
@@ -572,8 +572,8 @@ func (s *serializer) errorNode(o *Object, n *snode) error {
 		n.hasStack, n.stack = true, stack.String().Go()
 	}
 	causeKey := s.r.atoms.intern("cause")
-	if p := o.getOwn(causeKey); p != nil && !p.isAccessor() {
-		ci, err := s.value(p.value)
+	if p := o.getOwn(causeKey); p.ok() && !p.isAccessor() {
+		ci, err := s.value(p.value())
 		if err != nil {
 			return err
 		}

@@ -68,14 +68,14 @@ func init() {
 		case bytecode.OpCheckGlobalLex:
 			return 0, b.stmt(func(c *tctx) {
 				r, name := c.r, c.cl.names[a]
-				if r.globalLex.getOwn(name) != nil {
+				if r.globalLex.getOwn(name).ok() {
 					c.at(pc)
 					c.throw(r.throwError(errSyntax, "%q has already been declared", r.atoms.name(name)))
 				}
 				// A lexical binding shadows the global object's property of
 				// the same name for good, so one that cannot be deleted may
 				// not be shadowed.
-				if p := r.global.getOwn(name); p != nil && p.flags&propConfigurable == 0 {
+				if p := r.global.getOwn(name); p.ok() && p.flags()&propConfigurable == 0 {
 					c.at(pc)
 					c.throw(r.throwError(errSyntax,
 						"%q is already a property of the global object that cannot be removed", r.atoms.name(name)))
@@ -88,7 +88,7 @@ func init() {
 					// The evaluated code is inside a function, so what it
 					// declares belongs to that function rather than to the
 					// global object.
-					if evalVarProp(ev, name) == nil {
+					if !evalVarProp(ev, name).ok() {
 						ev.setOwnRaw(name, Undefined, propWritable|propConfigurable)
 					}
 					return
@@ -148,10 +148,10 @@ func init() {
 					if err := r.canDeclareGlobalFunc(name); err != nil {
 						c.throw(err)
 					}
-					if p := env.getOwn(name); p != nil && p.flags&(propConfigurable|propAccessor) == 0 {
+					if p := env.getOwn(name); p.ok() && p.flags()&(propConfigurable|propAccessor) == 0 {
 						// A property that cannot be redefined is updated in
 						// place, keeping the attributes it was given.
-						p.value = fn
+						p.setValue(fn)
 						return
 					}
 				}
@@ -168,7 +168,7 @@ func init() {
 			return 0, b.stmt(func(c *tctx) {
 				x := v(c)
 				r, name := c.r, c.cl.names[a]
-				r.globalLex.setOwnRaw(name, x, r.globalLex.getOwn(name).flags)
+				r.globalLex.setOwnRaw(name, x, r.globalLex.getOwn(name).flags())
 			})
 		case bytecode.OpDeclareModuleLex:
 			return 0, b.stmt(func(c *tctx) {
@@ -184,12 +184,10 @@ func init() {
 			return 0, b.stmt(func(c *tctx) {
 				x := v(c)
 				name := c.cl.names[a]
-				if env := c.cl.scope(); env.getOwn(name) != nil {
+				if p := c.cl.scope().getOwn(name); p.ok() {
 					// Its attributes change, so its layout does.
-					env.layoutChanged()
-					p := env.getOwn(name)
-					p.value = x
-					p.flags &^= propUninit
+					p.setValue(x)
+					p.setFlags(p.flags() &^ propUninit)
 				}
 			})
 		default:

@@ -70,10 +70,10 @@ type stackTrace struct {
 // one.
 func (r *Runtime) stackTraceLimit() (int, bool) {
 	p := r.proto.errorCtors[errError].getOwn(r.atoms.intern("stackTraceLimit"))
-	if p == nil || p.isAccessor() || !p.value.IsNumber() {
+	if !p.ok() || p.isAccessor() || !p.value().IsNumber() {
 		return 0, false
 	}
-	n := p.value.Number()
+	n := p.value().Number()
 	switch {
 	case math.IsNaN(n) || n <= 0:
 		return 0, true
@@ -193,8 +193,8 @@ func (r *Runtime) traceOf(o *Object) *stackTrace {
 	if t, ok := o.dataOf().(*Thrown); ok && o.class == ClassError && t.trace.set {
 		return &t.trace
 	}
-	if p := o.getOwn(r.stackSlot); p != nil && p.value.IsObject() {
-		st, _ := p.value.Object().dataOf().(*stackTrace)
+	if p := o.getOwn(r.stackSlot); p.ok() && p.value().IsObject() {
+		st, _ := p.value().Object().dataOf().(*stackTrace)
 		return st
 	}
 	return nil
@@ -205,15 +205,15 @@ func (r *Runtime) traceOf(o *Object) *stackTrace {
 func (r *Runtime) initStackTraces() {
 	r.stackSlot = r.atoms.internSymbol(NewSymbol("stack trace", true))
 	method := func(o *Object, name string) *Object {
-		if p := o.getOwn(r.atoms.intern(name)); p != nil && p.value.IsObject() {
-			return p.value.Object()
+		if p := o.getOwn(r.atoms.intern(name)); p.ok() && p.value().IsObject() {
+			return p.value().Object()
 		}
 		return nil
 	}
-	if reflect := r.global.getOwn(r.atoms.intern("Reflect")); reflect != nil && reflect.value.IsObject() {
+	if reflect := r.global.getOwn(r.atoms.intern("Reflect")); reflect.ok() && reflect.value().IsObject() {
 		r.frameless = [4]*Object{
 			method(r.proto.function, "call"), method(r.proto.function, "apply"),
-			method(reflect.value.Object(), "apply"), method(reflect.value.Object(), "construct"),
+			method(reflect.value().Object(), "apply"), method(reflect.value().Object(), "construct"),
 		}
 	}
 
@@ -273,7 +273,7 @@ func (r *Runtime) initStackTraces() {
 			return Undefined, err
 		}
 		if !ok {
-			if p := o.getOwn(atomStack); p != nil {
+			if p := o.getOwn(atomStack); p.ok() {
 				return Undefined, rt.throwTypeError("Cannot redefine property: stack")
 			}
 			return Undefined, rt.throwTypeError("Cannot define property stack, object is not extensible")
@@ -471,11 +471,11 @@ func (r *Runtime) typeName(fr *stackFrame) string {
 	}
 	for p := o; p != nil; p = p.proto {
 		c := p.getOwn(atomConstructor)
-		if c == nil {
+		if !c.ok() {
 			continue
 		}
-		if !c.isAccessor() && c.value.IsObject() {
-			if fd := c.value.Object().fn(); fd != nil && fd.name != "" {
+		if !c.isAccessor() && c.value().IsObject() {
+			if fd := c.value().Object().fn(); fd != nil && fd.name != "" {
 				return fd.name
 			}
 		}
@@ -492,7 +492,7 @@ func (r *Runtime) methodName(fr *stackFrame) string {
 		return ""
 	}
 	fn := fr.callee
-	holds := func(p *Property) bool {
+	holds := func(p Property) bool {
 		if p.flags&propPrivate != 0 {
 			return false
 		}
@@ -505,8 +505,8 @@ func (r *Runtime) methodName(fr *stackFrame) string {
 	if name := fr.functionName(); name != "" {
 		key := r.atoms.intern(name)
 		for o := fr.this.Object(); o != nil; o = o.proto {
-			if p := o.getOwn(key); p != nil {
-				if holds(p) {
+			if p := o.getOwn(key); p.ok() {
+				if holds(o.propAt(p.i)) {
 					return name
 				}
 				break
@@ -515,9 +515,8 @@ func (r *Runtime) methodName(fr *stackFrame) string {
 	}
 	found := ""
 	for o := fr.this.Object(); o != nil; o = o.proto {
-		for i := range o.props {
-			p := &o.props[i]
-			if p.flags&propDeleted != 0 || r.atoms.IsSymbol(p.key) || !holds(p) {
+		for i, p := range o.keys() {
+			if p.flags&propDeleted != 0 || r.atoms.IsSymbol(p.key) || !holds(o.propAt(int32(i))) {
 				continue
 			}
 			name := r.atoms.name(p.key)

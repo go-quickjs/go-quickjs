@@ -183,7 +183,7 @@ func (r *Runtime) initObjectBuiltins() {
 			if c := rt.shapeKeys(so); c != nil && c.copyable {
 				s, i := so.shape, 0
 				for ; i < len(c.atoms) && so.shape == s; i++ {
-					if _, err := rt.setProp(target, c.atoms[i], so.props[c.slots[i]].value, Obj(target), true); err != nil {
+					if _, err := rt.setProp(target, c.atoms[i], so.vals[c.slots[i]], Obj(target), true); err != nil {
 						return Undefined, err
 					}
 				}
@@ -532,8 +532,8 @@ func (r *Runtime) isEnumerable(o *Object, key Atom) (bool, error) {
 			}
 		}
 	}
-	if p := o.getOwnVisible(key); p != nil {
-		return p.flags&propEnumerable != 0, nil
+	if p := o.getOwnVisible(key); p.ok() {
+		return p.flags()&propEnumerable != 0, nil
 	}
 	return false, nil
 }
@@ -785,9 +785,8 @@ func (r *Runtime) initFunctionBuiltins() {
 	// The method is neither writable nor configurable, which is what lets a
 	// script rely on `instanceof` meaning what it says.
 	defer func() {
-		if pd := p.getOwn(r.atoms.internSymbol(r.wellKnown.hasInstance)); pd != nil {
-			p.layoutChanged()
-			pd.flags &^= propWritable | propConfigurable
+		if pd := p.getOwn(r.atoms.internSymbol(r.wellKnown.hasInstance)); pd.ok() {
+			pd.setFlags(pd.flags() &^ (propWritable | propConfigurable))
 		}
 	}()
 	r.hasInstanceFn = r.defSymbolMethod(p, r.wellKnown.hasInstance, "[Symbol.hasInstance]", 1,
@@ -1137,7 +1136,7 @@ func (r *Runtime) initArrayBuiltins() {
 
 	// A pure body may call push and pop without a frame.
 	for name, op := range map[string]uint8{"push": elemPush, "pop": elemPop} {
-		p.getOwn(r.atoms.intern(name)).value.Object().fn().elemOp = op
+		p.getOwn(r.atoms.intern(name)).value().Object().fn().elemOp = op
 	}
 
 	r.defMethod(p, "shift", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -2317,9 +2316,8 @@ func (r *Runtime) initSymbolBuiltins() {
 		})
 	// The method is not writable, which is how a script can tell it apart from
 	// one a program installed.
-	if pd := p.getOwn(r.atoms.internSymbol(r.wellKnown.toPrimitive)); pd != nil {
-		p.layoutChanged()
-		pd.flags &^= propWritable
+	if pd := p.getOwn(r.atoms.internSymbol(r.wellKnown.toPrimitive)); pd.ok() {
+		pd.setFlags(pd.flags() &^ propWritable)
 	}
 }
 
@@ -2695,8 +2693,8 @@ func (r *Runtime) initGlobalFunctions() {
 		}
 		for _, name := range []string{"parseInt", "parseFloat"} {
 			key := r.atoms.intern(name)
-			if p := r.global.getOwn(key); p != nil {
-				ctor.setOwnRaw(key, p.value, propWritable|propConfigurable)
+			if p := r.global.getOwn(key); p.ok() {
+				ctor.setOwnRaw(key, p.value(), propWritable|propConfigurable)
 			}
 		}
 	}()

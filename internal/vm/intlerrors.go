@@ -44,9 +44,9 @@ func (r *Runtime) v8Describe(v Value) string {
 		// A Temporal value, whose tag names it, V8 prints as
 		// Object.prototype.toString would: "[object Temporal.PlainDate]".
 		for p := o.proto; p != nil; p = p.proto {
-			if t := p.getOwnVisible(r.atoms.internSymbol(r.wellKnown.toStringTag)); t != nil {
-				if !t.isAccessor() && t.value.IsString() && strings.HasPrefix(t.value.String().Go(), "Temporal.") {
-					return "[object " + t.value.String().Go() + "]"
+			if t := p.getOwnVisible(r.atoms.internSymbol(r.wellKnown.toStringTag)); t.ok() {
+				if !t.isAccessor() && t.value().IsString() && strings.HasPrefix(t.value().String().Go(), "Temporal.") {
+					return "[object " + t.value().String().Go() + "]"
 				}
 				break
 			}
@@ -56,14 +56,14 @@ func (r *Runtime) v8Describe(v Value) string {
 		// as data only, so that no getter runs.
 		for p := o.proto; p != nil; p = p.proto {
 			c := p.getOwnVisible(r.atoms.intern("constructor"))
-			if c == nil {
+			if !c.ok() {
 				continue
 			}
-			if fn := c.value.Object(); fn != nil && !c.isAccessor() {
-				if n := fn.getOwnVisible(r.atoms.intern("name")); n != nil && !n.isAccessor() &&
-					n.value.IsString() && n.value.String().Go() != "" {
-					name = n.value.String().Go()
-				} else if fd := fn.fn(); n == nil && fd != nil && fd.name != "" && !fd.propsMaterialized {
+			if fn := c.value().Object(); fn != nil && !c.isAccessor() {
+				if n := fn.getOwnVisible(r.atoms.intern("name")); n.ok() && !n.isAccessor() &&
+					n.value().IsString() && n.value().String().Go() != "" {
+					name = n.value().String().Go()
+				} else if fd := fn.fn(); !n.ok() && fd != nil && fd.name != "" && !fd.propsMaterialized {
 					// A built-in's name is made when first asked for, and
 					// is the one it was made with until then.
 					name = fd.name

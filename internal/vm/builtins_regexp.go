@@ -82,7 +82,7 @@ func (r *Runtime) newRegExpObject(re *regexp.Regexp) Value {
 	// The object, its data, its clone of the pattern and its table are one
 	// allocation: a literal in a loop is a new RegExp each time round.
 	ro := &regexpObject{Object: Object{proto: r.proto.regexp, class: ClassRegExp, flags: objExtensible | objInlineProps}}
-	ro.props = ro.inline[:0]
+	ro.vals = ro.inline[:0]
 	re.CloneInto(&ro.re)
 	ro.rd = regexpData{re: &ro.re, legacy: true, realm: r.Realm}
 	ro.embedExt(&ro.side)
@@ -99,7 +99,7 @@ type regexpObject struct {
 	side   objectExt
 	rd     regexpData
 	re     regexp.Regexp
-	inline [1]Property
+	inline [1]Value
 }
 
 // regexpKey is a pattern as it was written: its source and its flags.
@@ -383,9 +383,9 @@ func (r *Runtime) initRegExpBuiltins() {
 	r.regexpExecProps = r.snapshotProps(p, "exec")
 	match := p.findOwn(r.atoms.internSymbol(r.wellKnown.match))
 	r.regexpSplitProps = append(r.snapshotProps(p, "constructor"),
-		builtinProp{i: int(match), p: p.props[match]})
+		builtinProp{i: int(match), p: p.propAt(match)})
 	species := reCtor.findOwn(r.atoms.internSymbol(r.wellKnown.species))
-	sp := reCtor.props[species]
+	sp := reCtor.propAt(species)
 	r.regexpSpeciesProps = []builtinProp{{i: int(species), p: sp, getter: sp.getterSetter().getter}}
 }
 
@@ -415,7 +415,7 @@ func (r *Runtime) regexpMatch(this Value, s *String) ([]int, *regexp.Regexp, err
 	// lastIndex is read whatever the flags say -- its valueOf runs either
 	// way -- but it only decides where the search starts, and is only written
 	// back, when the pattern is global or sticky.
-	li, err := r.toLength(o.props[0].value)
+	li, err := r.toLength(o.vals[0])
 	if err != nil {
 		return nil, nil, err
 	}
@@ -487,8 +487,8 @@ func (r *Runtime) regexpMatch(this Value, s *String) ([]int, *regexp.Regexp, err
 // is written through the object, for the error a script sees -- the whole
 // point of lastIndex being an ordinary property.
 func (r *Runtime) setLastIndex(o *Object, v Value) error {
-	if p := &o.props[0]; p.flags&propWritable != 0 {
-		p.value = v
+	if o.shape.keys[0].flags&propWritable != 0 {
+		o.vals[0] = v
 		return nil
 	}
 	_, err := r.setProp(o, atomLastIndex, v, Obj(o), true)
@@ -518,7 +518,7 @@ func (r *Runtime) replaceDirect(rx Value) (regexp.Flags, bool) {
 	if !ok || !propsIntact(r.proto.regexp, r.regexpReplaceProps) || !r.builtinExecOf(rx) {
 		return 0, false
 	}
-	return fl, rx.Object().props[0].flags&propWritable != 0
+	return fl, rx.Object().shape.keys[0].flags&propWritable != 0
 }
 
 // splitDirect reports whether rx.[Symbol.split] may search with rx's own
@@ -762,11 +762,11 @@ func (r *Runtime) buildMatchResult(re *regexp.Regexp, caps []int, input *String)
 		return elems[i]
 	})
 	if t := r.matchLayout; t != nil && !hasIndices {
-		arr.props = append(arr.props, t.props[:]...)
+		arr.vals = append(arr.vals, t.vals[:]...)
 		arr.shape = t.shape
-		arr.props[0].value = Int(caps[0])
-		arr.props[1].value = Str(input)
-		arr.props[2].value = groups
+		arr.vals[0] = Int(caps[0])
+		arr.vals[1] = Str(input)
+		arr.vals[2] = groups
 		return arr
 	}
 	arr.setOwnRaw(atomIndex, Int(caps[0]), propDefault)
@@ -984,7 +984,7 @@ func (r *Runtime) initRegExpSymbolMethods(p *Object) {
 			return rt.regExpSymbolReplace(this, args)
 		})
 	i := p.findOwn(r.atoms.internSymbol(r.wellKnown.replace))
-	r.regexpReplaceProps = []builtinProp{{i: int(i), p: p.props[i]}}
+	r.regexpReplaceProps = []builtinProp{{i: int(i), p: p.propAt(i)}}
 
 	// The iterator matchAll returns has its own prototype, so that adding a
 	// method to it does not add one to every array iterator.
@@ -1005,7 +1005,7 @@ func (r *Runtime) snapshotProps(o *Object, names ...string) []builtinProp {
 	out := make([]builtinProp, 0, len(names))
 	for _, name := range names {
 		i := o.findOwn(r.atoms.intern(name))
-		e := builtinProp{i: int(i), p: o.props[i]}
+		e := builtinProp{i: int(i), p: o.propAt(i)}
 		if a := e.p.getterSetter(); e.p.isAccessor() && a != nil {
 			e.getter, e.setter = a.getter, a.setter
 		}
@@ -1016,17 +1016,17 @@ func (r *Runtime) snapshotProps(o *Object, names ...string) []builtinProp {
 
 // propsIntact reports whether o's properties are still those recorded.
 func propsIntact(o *Object, want []builtinProp) bool {
-	props := o.props
+	keys, vals := o.keys(), o.vals
 	for k := range want {
 		e := &want[k]
 		// The value is compared by its bits: a boxed value's number is a
 		// NaN, which is equal to nothing.
-		if e.i >= len(props) {
+		if e.i >= len(vals) {
 			return false
 		}
-		p := &props[e.i]
-		if p.key != e.p.key || p.flags != e.p.flags || p.value.ref != e.p.value.ref ||
-			math.Float64bits(p.value.num) != math.Float64bits(e.p.value.num) {
+		p, v := keys[e.i], vals[e.i]
+		if p.key != e.p.key || p.flags != e.p.flags || v.ref != e.p.value.ref ||
+			math.Float64bits(v.num) != math.Float64bits(e.p.value.num) {
 			return false
 		}
 		if a := e.p.getterSetter(); e.p.isAccessor() && a != nil &&
@@ -1045,7 +1045,7 @@ func (r *Runtime) builtinFlagBits(rx Value) (regexp.Flags, bool) {
 	}
 	o := rx.Object()
 	if o.class != ClassRegExp || o.proto == nil || o.proto != r.proto.regexp ||
-		len(o.props) != 1 || o.props[0].key != atomLastIndex ||
+		len(o.vals) != 1 || o.shape.keys[0].key != atomLastIndex ||
 		!propsIntact(o.proto, r.regexpFlagProps) {
 		return 0, false
 	}

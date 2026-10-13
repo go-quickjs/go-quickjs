@@ -730,7 +730,7 @@ func (df *DebugFrame) Scopes() []DebugScope {
 	if len(closure.Bindings) > 0 {
 		out = append(out, closure)
 	}
-	if r.globalLex != nil && len(r.globalLex.props) != 0 {
+	if r.globalLex != nil && len(r.globalLex.vals) != 0 {
 		out = append(out, DebugScope{Kind: ScopeScript, Object: r.globalLex})
 	}
 	return append(out, DebugScope{Kind: ScopeGlobal, Object: r.global})

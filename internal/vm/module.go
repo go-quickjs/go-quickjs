@@ -977,8 +977,8 @@ func (r *Runtime) importMeta(env *Object) Value {
 		return Undefined
 	}
 	key := r.atoms.intern("*meta*")
-	if p := env.getOwn(key); p != nil {
-		return p.value
+	if p := env.getOwn(key); p.ok() {
+		return p.value()
 	}
 	o := newObject(nil, ClassObject)
 	meta := Obj(o)

@@ -107,10 +107,9 @@ func testWTF8(units []uint16) string {
 // testCharCodeAt is the handle of the object that is charCodeAt, the
 // intrinsic, in a heap whose context has it; testStringShape the shape of
 // the String.prototype that holds it.
-const (
-	testCharCodeAt  = 6
-	testStringShape = 0x7000
-)
+const testCharCodeAt = 6
+
+var testStringShape = &testShape{keys: []testKey{{key: 15}}}
 
 // testObject is an object's layout as far as native code reads it: its
 // side fields are its own, which ext points to when it has them, as an
@@ -120,10 +119,37 @@ type testObject struct {
 	flags    uint8
 	arrayLen uint32
 	ext      *testObjectExt
-	shape    uintptr
-	props    []testProperty
+	shape    *testShape
+	vals     []testValue
 	proto    *testObject
 	testObjectExt
+}
+
+// shapeID is the object's shape's address, which native code compares with
+// a site's.
+func (o *testObject) shapeID() uintptr { return uintptr(unsafe.Pointer(o.shape)) }
+
+// testShape is a shape as far as native code reads one: its properties'
+// keys and flags, at their values' positions in an object of it. An object
+// with properties has one: one of testShapes, which sites name, or one of
+// its own, which none do.
+type testShape struct {
+	keys []testKey
+}
+
+// testKey is a property's key and flags.
+type testKey struct {
+	key   uint32
+	flags uint8
+}
+
+// newTestShape is the shape of the given keys and flags.
+func newTestShape(keys []uint32, flags []uint8) *testShape {
+	s := &testShape{}
+	for i, k := range keys {
+		s.keys = append(s.keys, testKey{k, flags[i]})
+	}
+	return s
 }
 
 // testObjectExt is an object's side fields (abi.Encoding's ObjectExt).
@@ -138,13 +164,10 @@ type testObjectExt struct {
 // every heap.
 var testHolders = func() *[2]testObject {
 	h := new([2]testObject)
-	h[0] = testObject{shape: 0x5000, proto: &h[1], props: []testProperty{
-		{key: 12, flags: testWritable, value: testValue{num: math.Float64bits(7)}},
-		{key: 13, value: testValue{num: testEncoding.True}},
-	}}
-	h[1] = testObject{shape: 0x6000, props: []testProperty{
-		{key: 11, flags: testWritable, value: testValue{num: math.Float64bits(-2)}},
-	}}
+	h[0] = testObject{shape: newTestShape([]uint32{12, 13}, []uint8{testWritable, 0}), proto: &h[1],
+		vals: []testValue{{num: math.Float64bits(7)}, {num: testEncoding.True}}}
+	h[1] = testObject{shape: newTestShape([]uint32{11}, []uint8{testWritable}),
+		vals: []testValue{{num: math.Float64bits(-2)}}}
 	return h
 }()
 
@@ -159,13 +182,13 @@ var testHolderValues = [2][]ir.Value{{ir.Float(7), ir.Bool(true)}, {ir.Float(-2)
 func testHolderSite(r *rand.Rand) site {
 	sh := testShapes[r.IntN(len(testShapes))]
 	s := site{Shape: sh.shape}
-	h0 := ssa.Holder{Object: uintptr(unsafe.Pointer(&testHolders[0])), Shape: testHolders[0].shape}
-	h1 := ssa.Holder{Object: uintptr(unsafe.Pointer(&testHolders[1])), Shape: testHolders[1].shape}
+	h0 := ssa.Holder{Object: uintptr(unsafe.Pointer(&testHolders[0])), Shape: testHolders[0].shapeID()}
+	h1 := ssa.Holder{Object: uintptr(unsafe.Pointer(&testHolders[1])), Shape: testHolders[1].shapeID()}
 	if r.IntN(2) == 0 {
-		i := r.IntN(len(testHolders[0].props))
-		s.Key, s.Index, s.Holders = testHolders[0].props[i].key, int32(i), [2]ssa.Holder{h0}
+		i := r.IntN(len(testHolders[0].vals))
+		s.Key, s.Index, s.Holders = testHolders[0].shape.keys[i].key, int32(i), [2]ssa.Holder{h0}
 	} else {
-		s.Key, s.Index, s.Holders = testHolders[1].props[0].key, 0, [2]ssa.Holder{h0, h1}
+		s.Key, s.Index, s.Holders = testHolders[1].shape.keys[0].key, 0, [2]ssa.Holder{h0, h1}
 	}
 	if r.IntN(5) == 0 {
 		last := 0
@@ -191,24 +214,27 @@ func testHolderSite(r *rand.Rand) site {
 	return s
 }
 
-// testProperty is a property table's entry.
-type testProperty struct {
-	key   uint32
-	flags uint8
-	value testValue
-}
-
 // testShapes are the shapes test objects have, each with its table's keys
-// and flags: native code only compares a shape's address, so these are just
-// distinct numbers. A site's feedback names one, or one no object has.
-var testShapes = []struct {
+// and flags, and its address, which a site's feedback names (or one no
+// object has).
+var testShapes = func() []testShapeSpec {
+	specs := []testShapeSpec{
+		{keys: []uint32{10, 11, 12}, flags: []uint8{testWritable, testWritable, 0}},
+		{keys: []uint32{11}, flags: []uint8{testWritable}},
+		{keys: []uint32{12, 10}, flags: []uint8{testWritable, testAccessor}},
+	}
+	for i := range specs {
+		specs[i].s = newTestShape(specs[i].keys, specs[i].flags)
+		specs[i].shape = uintptr(unsafe.Pointer(specs[i].s))
+	}
+	return specs
+}()
+
+type testShapeSpec struct {
+	s     *testShape
 	shape uintptr
 	keys  []uint32
 	flags []uint8
-}{
-	{0x1000, []uint32{10, 11, 12}, []uint8{testWritable, testWritable, 0}},
-	{0x2000, []uint32{11}, []uint8{testWritable}},
-	{0x3000, []uint32{12, 10}, []uint8{testWritable, testAccessor}},
 }
 
 // testBarrier is the harness's write-barrier flag (abi.Encoding's
@@ -252,11 +278,11 @@ var testEncoding = abi.Encoding{
 	String:      testTagBase | 4, StringData: int32(unsafe.Offsetof(testString{}.s)),
 	StringLeft: int32(unsafe.Offsetof(testString{}.left)), StringLength: int32(unsafe.Offsetof(testString{}.length)),
 	StringASCII: int32(unsafe.Offsetof(testString{}.ascii)), StringU16: int32(unsafe.Offsetof(testString{}.u16)),
-	ObjectShape: int32(unsafe.Offsetof(testObject{}.shape)), ObjectProps: int32(unsafe.Offsetof(testObject{}.props)),
+	ObjectShape: int32(unsafe.Offsetof(testObject{}.shape)), ObjectProps: int32(unsafe.Offsetof(testObject{}.vals)),
 	ObjectProto:  int32(unsafe.Offsetof(testObject{}.proto)),
 	WriteBarrier: uint64(uintptr(unsafe.Pointer(&testBarrier))),
-	PropertySize: int32(unsafe.Sizeof(testProperty{})), PropertyValue: int32(unsafe.Offsetof(testProperty{}.value)),
-	PropertyKey: int32(unsafe.Offsetof(testProperty{}.key)), PropertyFlags: int32(unsafe.Offsetof(testProperty{}.flags)),
+	ShapeKeys:    int32(unsafe.Offsetof(testShape{}.keys)), KeySize: int32(unsafe.Sizeof(testKey{})),
+	PropertyKey: int32(unsafe.Offsetof(testKey{}.key)), PropertyFlags: int32(unsafe.Offsetof(testKey{}.flags)),
 	ClassObject: testClassObject, PropNotData: testAccessor | testDeleted | testPrivate,
 	PropNotWritable: testAccessor | testDeleted | testPrivate | testUninit | testWritable, PropWritable: testWritable,
 	PropUninit: testUninit,
@@ -403,15 +429,20 @@ func (h testHeap) native() *nativeHeap {
 		if a.htmldda {
 			o.flags |= testFlagHTMLDDA
 		}
-		if a.shape >= 0 {
-			o.shape = testShapes[a.shape].shape
+		if a.shape >= 0 && slices.Equal(testShapes[a.shape].keys, a.keys) && slices.Equal(testShapes[a.shape].flags, a.flags) {
+			o.shape = testShapes[a.shape].s
+		} else if len(a.props) > 0 {
+			// A layout of its own, which no site names: a shapeless
+			// object's, or one a test says is of another shape than its
+			// keys are.
+			o.shape = newTestShape(a.keys, a.flags)
 		}
 		if a.proto >= 0 {
 			o.proto = &testHolders[a.proto]
 		}
-		o.props = make([]testProperty, len(a.props))
+		o.vals = make([]testValue, len(a.props))
 		for j, v := range a.props {
-			o.props[j] = testProperty{key: a.keys[j], flags: a.flags[j], value: n.word(v)}
+			o.vals[j] = n.word(v)
 		}
 		n.evaluated = append(n.evaluated, slices.Clone(a.props))
 	}
@@ -447,7 +478,7 @@ func (h testHeap) native() *nativeHeap {
 		}
 		if h[4].intrinsic {
 			n.intrinsic = n.word(ir.Value{Kind: ir.Opaque, Bits: testCharCodeAt})
-			n.strProto = testObject{shape: testStringShape, props: []testProperty{{key: 15, value: n.intrinsic}}}
+			n.strProto = testObject{shape: testStringShape, vals: []testValue{n.intrinsic}}
 		}
 	}
 	return n
@@ -459,13 +490,17 @@ func (n *nativeHeap) heap() ssa.Heap {
 	h := ssa.Heap{Arrays: n.views(), Word: testWordValue, Holders: map[uintptr]*ssa.Object{}, WriteBarrier: testBarrier != 0}
 	for i := range testHolders {
 		o := &testHolders[i]
-		h.Holders[uintptr(unsafe.Pointer(o))] = &ssa.Object{Shape: o.shape, Proto: uintptr(unsafe.Pointer(o.proto)), Props: slices.Clone(testHolderValues[i])}
+		h.Holders[uintptr(unsafe.Pointer(o))] = &ssa.Object{Shape: o.shapeID(), Proto: uintptr(unsafe.Pointer(o.proto)), Props: slices.Clone(testHolderValues[i])}
 	}
 	for i := range n.objects {
 		o := &n.objects[i]
-		e := ssa.Object{Shape: o.shape, Ordinary: o.class == testClassObject, Props: n.evaluated[i], HTMLDDA: o.flags&testFlagHTMLDDA != 0,
+		e := ssa.Object{Shape: o.shapeID(), Ordinary: o.class == testClassObject, Props: n.evaluated[i], HTMLDDA: o.flags&testFlagHTMLDDA != 0,
 			Proto: uintptr(unsafe.Pointer(o.proto))}
-		for _, p := range o.props {
+		var keys []testKey
+		if o.shape != nil {
+			keys = o.shape.keys[:len(o.vals)]
+		}
+		for _, p := range keys {
 			e.Keys = append(e.Keys, p.key)
 			e.Data = append(e.Data, p.flags&testEncoding.PropNotData == 0)
 			e.Writable = append(e.Writable, p.flags&testEncoding.PropNotWritable == testWritable)
@@ -522,8 +557,8 @@ func (n *nativeHeap) same(m *nativeHeap) bool {
 		if !slices.Equal(n.objects[i].elems, m.objects[i].elems) {
 			return false
 		}
-		for j, p := range n.objects[i].props {
-			if p.value != n.word(m.evaluated[i][j]) {
+		for j, v := range n.objects[i].vals {
+			if v != n.word(m.evaluated[i][j]) {
 				return false
 			}
 		}
@@ -941,8 +976,8 @@ func nativeMismatch(c *compiled, pc int, slots []ir.Value, poll int, heap testHe
 		ctx.Global, ctx.LexNames = unsafe.Pointer(&nh.objects[4]), unsafe.Pointer(&nh.lexNames)
 		*(*testValue)(unsafe.Pointer(&ctx.CharCodeAt)) = nh.intrinsic
 		if nh.intrinsic.ref != nil {
-			ctx.StringProto, ctx.StringShape = unsafe.Pointer(&nh.strProto), testStringShape
-			ctx.CharCodeAtOffset = uint64(testEncoding.PropertyValue)
+			ctx.StringProto, ctx.StringShape = unsafe.Pointer(&nh.strProto), uint64(uintptr(unsafe.Pointer(testStringShape)))
+			ctx.CharCodeAtOffset = 0
 		}
 	}
 	if err := c.code.Run(pc, ctx); err != nil {

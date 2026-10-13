@@ -1069,9 +1069,9 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			// Each case is a way to find the name. The global object's own
 			// table, which is where a global variable is, is asked first.
 			case hasOwnGlobal(env, &cl.ic[site], name):
-			case f.evalVars != nil && evalVarProp(f.evalVars, name) != nil:
-			case r.globalLexProp(env, name) != nil:
-			case !r.isGlobalScope(env) && r.moduleLexProp(env, name) != nil:
+			case f.evalVars != nil && evalVarProp(f.evalVars, name).ok():
+			case r.globalLexProp(env, name).ok():
+			case !r.isGlobalScope(env) && r.moduleLexProp(env, name).ok():
 			case r.nodeQuirks && chainHasProxy(env):
 			default:
 				c.at(pc)
@@ -1258,7 +1258,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			key := c.cl.names[name]
 			if o := obj.Object(); o.class == ClassObject && o.flags&objExtensible != 0 {
 				if next := o.transition(key, propDefault); next != nil {
-					o.appendTransition(Property{key: key, flags: propDefault, value: v}, next)
+					o.appendTransition(v, next)
 					return
 				}
 			}
@@ -1325,10 +1325,10 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			// which holds the name there or a tombstone (see propCache).
 			s := &c.cl.ic[site]
 			if env := s.p1; env != nil && c.f.evalVars == nil {
-				if r := c.r; len(r.globalLex.props) == 0 || !r.lexShadows(c.cl.names[name]) {
-					if i := uint(s.idx); i < uint(len(env.props)) {
-						if p := &env.props[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
-							return p.value
+				if r := c.r; len(r.globalLex.vals) == 0 || !r.lexShadows(c.cl.names[name]) {
+					if i := uint(s.idx); i < uint(len(env.vals)) {
+						if p := env.shape.keys[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
+							return env.vals[i]
 						}
 					}
 				}
@@ -1349,10 +1349,10 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			value := v(c)
 			s := &c.cl.ic[site]
 			if env := s.p1; env != nil && c.f.evalVars == nil {
-				if r := c.r; len(r.globalLex.props) == 0 || !r.lexShadows(c.cl.names[name]) {
-					if i := uint(s.idx); i < uint(len(env.props)) {
-						if p := &env.props[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) == propWritable {
-							p.value = value
+				if r := c.r; len(r.globalLex.vals) == 0 || !r.lexShadows(c.cl.names[name]) {
+					if i := uint(s.idx); i < uint(len(env.vals)) {
+						if p := env.shape.keys[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) == propWritable {
+							env.vals[i] = value
 							return
 						}
 					}
@@ -1376,10 +1376,10 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			// to its error.
 			s := &c.cl.ic[site]
 			if env := s.p1; env != nil && c.f.evalVars == nil {
-				if r := c.r; len(r.globalLex.props) == 0 || !r.lexShadows(c.cl.names[name]) {
-					if i := uint(s.idx); i < uint(len(env.props)) {
-						if p := &env.props[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) == propWritable {
-							p.value = value
+				if r := c.r; len(r.globalLex.vals) == 0 || !r.lexShadows(c.cl.names[name]) {
+					if i := uint(s.idx); i < uint(len(env.vals)) {
+						if p := env.shape.keys[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) == propWritable {
+							env.vals[i] = value
 							return
 						}
 					}

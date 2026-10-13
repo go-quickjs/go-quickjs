@@ -9,54 +9,54 @@ func (r *Runtime) getGlobalAt(c *tctx, in bytecode.Instr, pc int) (Value, error)
 	name := cl.names[in.A]
 	env := cl.scope()
 	if f.evalVars != nil {
-		if p := evalVarProp(f.evalVars, name); p != nil {
-			return p.value, nil
+		if p := evalVarProp(f.evalVars, name); p.ok() {
+			return p.value(), nil
 		}
 	}
 	if r.lexShadows(name) {
-		if p := r.globalLexProp(env, name); p != nil {
-			if p.value.IsUninitialized() {
+		if p := r.globalLexProp(env, name); p.ok() {
+			if p.value().IsUninitialized() {
 				c.at(pc)
 				return Undefined, r.throwReferenceError(
 					"cannot access %q before it is initialized", r.atoms.name(name))
 			}
-			return p.value, nil
+			return p.value(), nil
 		}
 	}
 	site := &cl.ic[in.B]
-	if i := uint(site.idx); i < uint(len(env.props)) {
-		if p := &env.props[i]; p.key == name &&
+	if i := uint(site.idx); i < uint(len(env.vals)) {
+		if p := env.shape.keys[i]; p.key == name &&
 			p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
 			if site.p1 != env {
 				site.p1 = env
 			}
-			return p.value, nil
+			return env.vals[i], nil
 		}
 	}
 	if x := env.shapeIndex(); x != nil {
-		if e := &x.recent[name&15]; e.key == name && e.idx >= 0 && int(e.idx) < len(env.props) {
-			if p := &env.props[e.idx]; p.key == name &&
+		if e := &x.recent[name&15]; e.key == name && e.idx >= 0 && int(e.idx) < len(env.vals) {
+			if p := env.shape.keys[e.idx]; p.key == name &&
 				p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
 				noteGlobalSlot(site, env, e.idx)
-				return p.value, nil
+				return env.vals[e.idx], nil
 			}
 		}
 	}
 	if i := env.findOwn(name); i >= 0 {
-		if p := &env.props[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
+		if p := env.shape.keys[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
 			noteGlobalSlot(site, env, i)
-			return p.value, nil
+			return env.vals[i], nil
 		}
 	}
 	c.at(pc)
 	if !r.isGlobalScope(env) {
-		if p := r.moduleLexProp(env, name); p != nil {
-			if p.flags&propUninit != 0 {
+		if p := r.moduleLexProp(env, name); p.ok() {
+			if p.flags()&propUninit != 0 {
 				return Undefined, r.throwReferenceError(
 					"cannot access %q before it is initialized", r.atoms.name(name))
 			}
-			if p.flags&(propAccessor|propPrivate|propDeleted) == 0 {
-				return p.value, nil
+			if p.flags()&(propAccessor|propPrivate|propDeleted) == 0 {
+				return p.value(), nil
 			}
 		}
 	}
@@ -92,37 +92,37 @@ func (r *Runtime) setGlobalIn(f *frame, cl *closure, in bytecode.Instr, v Value)
 	name := cl.names[in.A]
 	env := cl.scope()
 	if f.evalVars != nil {
-		if p := evalVarProp(f.evalVars, name); p != nil {
-			p.value = v
+		if p := evalVarProp(f.evalVars, name); p.ok() {
+			p.setValue(v)
 			return nil
 		}
 	}
-	var lex *Property
-	if len(r.globalLex.props) != 0 {
+	lex := ownProp{i: -1}
+	if len(r.globalLex.vals) != 0 {
 		lex = r.globalLexProp(env, name)
 	}
-	if p := lex; p != nil {
+	if p := lex; p.ok() {
 		switch {
-		case p.value.IsUninitialized():
+		case p.value().IsUninitialized():
 			return r.throwReferenceError(
 				"cannot access %q before it is initialized", r.atoms.name(name))
-		case p.flags&propWritable == 0:
+		case p.flags()&propWritable == 0:
 			return r.throwTypeError("assignment to constant variable %q", r.atoms.name(name))
 		}
-		p.value = v
+		p.setValue(v)
 		return nil
 	}
 	if !r.isGlobalScope(env) {
-		if p := r.moduleLexProp(env, name); p != nil {
+		if p := r.moduleLexProp(env, name); p.ok() {
 			switch {
-			case p.flags&propUninit != 0:
+			case p.flags()&propUninit != 0:
 				return r.throwReferenceError(
 					"cannot access %q before it is initialized", r.atoms.name(name))
-			case p.flags&(propWritable|propAccessor) == 0:
+			case p.flags()&(propWritable|propAccessor) == 0:
 				return r.throwTypeError("assignment to constant variable %q", r.atoms.name(name))
 			}
-			if p.flags&(propAccessor|propPrivate|propDeleted) == 0 {
-				p.value = v
+			if p.flags()&(propAccessor|propPrivate|propDeleted) == 0 {
+				p.setValue(v)
 				return nil
 			}
 		}
@@ -131,9 +131,9 @@ func (r *Runtime) setGlobalIn(f *frame, cl *closure, in bytecode.Instr, v Value)
 		if s := &cl.ic[in.B]; s.p1 != env {
 			s.p1 = env
 		}
-		if p := &env.props[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 &&
+		if p := env.shape.keys[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 &&
 			p.flags&propWritable != 0 {
-			p.value = v
+			env.vals[i] = v
 			return nil
 		}
 	}
@@ -159,9 +159,9 @@ func (r *Runtime) globalRefResolves(f *frame, cl *closure, site uint32, name Ato
 	env := cl.scope()
 	switch {
 	case hasOwnGlobal(env, &cl.ic[site], name):
-	case f.evalVars != nil && evalVarProp(f.evalVars, name) != nil:
-	case r.globalLexProp(env, name) != nil:
-	case !r.isGlobalScope(env) && r.moduleLexProp(env, name) != nil:
+	case f.evalVars != nil && evalVarProp(f.evalVars, name).ok():
+	case r.globalLexProp(env, name).ok():
+	case !r.isGlobalScope(env) && r.moduleLexProp(env, name).ok():
 	case r.nodeQuirks && chainHasProxy(env):
 		// V8 asks a proxy on the global object's chain nothing before the
 		// store, which it counts as finding the name.

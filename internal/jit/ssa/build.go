@@ -273,10 +273,10 @@ type GoOp uint8
 //
 // GoAddAlong adds a property along a transition while the collector marks
 // (mir's addAlong), as V8's code calls its write barrier: Go appends the
-// entry to the object's table, which has room, and sets its next shape,
-// with its write barrier. The first operand's pointer word is the object,
-// its number word the entry's key and its flags, past bit 32; the
-// second's pointer word the next shape; the third the value.
+// value to the object's table, which has room, and sets its next shape,
+// which has the key, with its write barrier. The first operand's pointer
+// word is the object; the second's pointer word the next shape; the third
+// the value.
 //
 // GoConcat is concat (ir.StringConcat): Go converts its Argc operands to
 // strings and joins them, as GoAdd adds; what could run code or throw it

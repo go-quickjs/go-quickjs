@@ -390,21 +390,21 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			if f.evalVars != nil {
 				// A name a direct eval declared in this function shadows
 				// anything outside it, including a global of the same name.
-				if p := evalVarProp(f.evalVars, name); p != nil {
-					sp = pushAt(stack, sp, p.value)
+				if p := evalVarProp(f.evalVars, name); p.ok() {
+					sp = pushAt(stack, sp, p.value())
 					break
 				}
 			}
 			// The script-level lexical bindings are asked first, and only
 			// when there are any: most scripts declare none.
-			if len(r.globalLex.props) != 0 {
-				if p := r.globalLexProp(env, name); p != nil {
-					if p.value.IsUninitialized() {
+			if len(r.globalLex.vals) != 0 {
+				if p := r.globalLexProp(env, name); p.ok() {
+					if p.value().IsUninitialized() {
 						vmErr = r.throwReferenceError(
 							"cannot access %q before it is initialized", r.atoms.name(name))
 						goto onError
 					}
-					sp = pushAt(stack, sp, p.value)
+					sp = pushAt(stack, sp, p.value())
 					break
 				}
 			}
@@ -416,27 +416,27 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// name is the property still being there. Then the lookup cache,
 			// without the call findOwn is.
 			site := &cl.ic[in.B]
-			if i := uint(site.idx); i < uint(len(env.props)) {
-				if p := &env.props[i]; p.key == name &&
+			if i := uint(site.idx); i < uint(len(env.vals)) {
+				if p := env.shape.keys[i]; p.key == name &&
 					p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
-					sp = pushAt(stack, sp, p.value)
+					sp = pushAt(stack, sp, env.vals[i])
 					break
 				}
 			}
 			if x := env.shapeIndex(); x != nil {
-				if c := &x.recent[name&15]; c.key == name && c.idx >= 0 && int(c.idx) < len(env.props) {
-					if p := &env.props[c.idx]; p.key == name &&
+				if c := &x.recent[name&15]; c.key == name && c.idx >= 0 && int(c.idx) < len(env.vals) {
+					if p := env.shape.keys[c.idx]; p.key == name &&
 						p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
 						site.idx = c.idx
-						sp = pushAt(stack, sp, p.value)
+						sp = pushAt(stack, sp, env.vals[c.idx])
 						break
 					}
 				}
 			}
 			if i := env.findOwn(name); i >= 0 {
-				if p := &env.props[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
+				if p := env.shape.keys[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
 					site.idx = i
-					sp = pushAt(stack, sp, p.value)
+					sp = pushAt(stack, sp, env.vals[i])
 					break
 				}
 			}
@@ -445,14 +445,14 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				// script-level lexical ones sit between the module environment
 				// and the global object it inherits from. An import is stored
 				// as an accessor, which the general read below runs.
-				if p := r.moduleLexProp(env, name); p != nil {
-					if p.flags&propUninit != 0 {
+				if p := r.moduleLexProp(env, name); p.ok() {
+					if p.flags()&propUninit != 0 {
 						vmErr = r.throwReferenceError(
 							"cannot access %q before it is initialized", r.atoms.name(name))
 						goto onError
 					}
-					if p.flags&(propAccessor|propPrivate|propDeleted) == 0 {
-						sp = pushAt(stack, sp, p.value)
+					if p.flags()&(propAccessor|propPrivate|propDeleted) == 0 {
+						sp = pushAt(stack, sp, p.value())
 						break
 					}
 				}
@@ -488,29 +488,29 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// in its dead zone is declared, though, so that one still does.
 			env := cl.scope()
 			if f.evalVars != nil {
-				if p := evalVarProp(f.evalVars, cl.names[in.A]); p != nil {
-					sp = pushAt(stack, sp, p.value)
+				if p := evalVarProp(f.evalVars, cl.names[in.A]); p.ok() {
+					sp = pushAt(stack, sp, p.value())
 					break
 				}
 			}
-			if p := r.globalLexProp(env, cl.names[in.A]); p != nil {
-				if p.value.IsUninitialized() {
+			if p := r.globalLexProp(env, cl.names[in.A]); p.ok() {
+				if p.value().IsUninitialized() {
 					vmErr = r.throwReferenceError("cannot access %q before it is initialized",
 						r.atoms.name(cl.names[in.A]))
 					goto onError
 				}
-				sp = pushAt(stack, sp, p.value)
+				sp = pushAt(stack, sp, p.value())
 				break
 			}
 			if !r.isGlobalScope(env) {
-				if p := r.moduleLexProp(env, cl.names[in.A]); p != nil {
-					if p.flags&propUninit != 0 {
+				if p := r.moduleLexProp(env, cl.names[in.A]); p.ok() {
+					if p.flags()&propUninit != 0 {
 						vmErr = r.throwReferenceError("cannot access %q before it is initialized",
 							r.atoms.name(cl.names[in.A]))
 						goto onError
 					}
-					if p.flags&(propAccessor|propPrivate|propDeleted) == 0 {
-						sp = pushAt(stack, sp, p.value)
+					if p.flags()&(propAccessor|propPrivate|propDeleted) == 0 {
+						sp = pushAt(stack, sp, p.value())
 						break
 					}
 				}
@@ -547,9 +547,9 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// Each case is a way to find the name. The global object's own
 			// table, which is where a global variable is, is asked first.
 			case hasOwnGlobal(env, &cl.ic[in.B], name):
-			case f.evalVars != nil && evalVarProp(f.evalVars, name) != nil:
-			case r.globalLexProp(env, name) != nil:
-			case !r.isGlobalScope(env) && r.moduleLexProp(env, name) != nil:
+			case f.evalVars != nil && evalVarProp(f.evalVars, name).ok():
+			case r.globalLexProp(env, name).ok():
+			case !r.isGlobalScope(env) && r.moduleLexProp(env, name).ok():
 			case r.nodeQuirks && chainHasProxy(env):
 				// V8 asks a proxy on the global object's chain nothing
 				// before the store, which it counts as finding the name.
@@ -582,51 +582,51 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			name := cl.names[in.A]
 			env := cl.scope()
 			if f.evalVars != nil {
-				if p := evalVarProp(f.evalVars, name); p != nil {
+				if p := evalVarProp(f.evalVars, name); p.ok() {
 					sp--
-					p.value = stack[sp]
+					p.setValue(stack[sp])
 					break
 				}
 			}
 			// A script's let, const or class shadows the global object, and
 			// is asked for only where there is one.
-			var lex *Property
-			if len(r.globalLex.props) != 0 {
+			lex := ownProp{i: -1}
+			if len(r.globalLex.vals) != 0 {
 				lex = r.globalLexProp(env, name)
 			}
-			if p := lex; p != nil {
+			if p := lex; p.ok() {
 				switch {
-				case p.value.IsUninitialized():
+				case p.value().IsUninitialized():
 					vmErr = r.throwReferenceError(
 						"cannot access %q before it is initialized", r.atoms.name(name))
 					goto onError
-				case p.flags&propWritable == 0:
+				case p.flags()&propWritable == 0:
 					vmErr = r.throwTypeError("assignment to constant variable %q",
 						r.atoms.name(name))
 					goto onError
 				}
 				sp--
-				p.value = stack[sp]
+				p.setValue(stack[sp])
 				break
 			}
 			if !r.isGlobalScope(env) {
 				// Module code. Its own bindings and the script-level lexical
 				// ones are properties rather than slots, so what the compiler
 				// checks for a local is checked here instead.
-				if p := r.moduleLexProp(env, name); p != nil {
+				if p := r.moduleLexProp(env, name); p.ok() {
 					switch {
-					case p.flags&propUninit != 0:
+					case p.flags()&propUninit != 0:
 						vmErr = r.throwReferenceError(
 							"cannot access %q before it is initialized", r.atoms.name(name))
 						goto onError
-					case p.flags&(propWritable|propAccessor) == 0:
+					case p.flags()&(propWritable|propAccessor) == 0:
 						vmErr = r.throwTypeError("assignment to constant variable %q",
 							r.atoms.name(name))
 						goto onError
 					}
-					if p.flags&(propAccessor|propPrivate|propDeleted) == 0 {
+					if p.flags()&(propAccessor|propPrivate|propDeleted) == 0 {
 						sp--
-						p.value = stack[sp]
+						p.setValue(stack[sp])
 						break
 					}
 					// What is left is an imported binding, stored as an
@@ -638,10 +638,10 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// proxy -- what every declared global is -- is written in place:
 			// an assignment to one sets it and nothing else.
 			if i := globalSlot(env, &cl.ic[in.B], name); i >= 0 {
-				if p := &env.props[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 &&
+				if p := env.shape.keys[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 &&
 					p.flags&propWritable != 0 {
 					sp--
-					p.value = stack[sp]
+					env.vals[i] = stack[sp]
 					break
 				}
 			}
@@ -668,7 +668,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			if f.evalVars != nil {
 				// The evaluated code is inside a function, so what it declares
 				// belongs to that function rather than to the global object.
-				if evalVarProp(f.evalVars, name) == nil {
+				if !evalVarProp(f.evalVars, name).ok() {
 					f.evalVars.setOwnRaw(name, Undefined, propWritable|propConfigurable)
 				}
 				break
@@ -734,13 +734,13 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 					vmErr = err
 					goto onError
 				}
-				if p := env.getOwn(name); p != nil &&
-					p.flags&(propConfigurable|propAccessor) == 0 {
+				if p := env.getOwn(name); p.ok() &&
+					p.flags()&(propConfigurable|propAccessor) == 0 {
 					// A property that cannot be redefined is updated in place
 					// instead, so a non-configurable global keeps the
 					// attributes it was given.
 					sp--
-					p.value = stack[sp]
+					p.setValue(stack[sp])
 					break
 				}
 			}
@@ -756,7 +756,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 		case bytecode.OpInitGlobalLex:
 			sp--
 			r.globalLex.setOwnRaw(cl.names[in.A], stack[sp],
-				r.globalLex.getOwn(cl.names[in.A]).flags)
+				r.globalLex.getOwn(cl.names[in.A]).flags())
 		case bytecode.OpDeclareModuleLex:
 			name := cl.names[in.A]
 			flags := propUninit | moduleBindingFlags(r.atoms.name(name))
@@ -766,13 +766,11 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			cl.scope().setOwnRaw(name, uninitialized, flags)
 		case bytecode.OpInitModuleLex:
 			name := cl.names[in.A]
-			if env := cl.scope(); env.getOwn(name) != nil {
+			if p := cl.scope().getOwn(name); p.ok() {
 				// Its attributes change, so its layout does.
-				env.layoutChanged()
-				p := env.getOwn(name)
 				sp--
-				p.value = stack[sp]
-				p.flags &^= propUninit
+				p.setValue(stack[sp])
+				p.setFlags(p.flags() &^ propUninit)
 			} else {
 				sp--
 			}
@@ -797,7 +795,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 		case bytecode.OpCheckGlobalLex:
 			name := cl.names[in.A]
-			if r.globalLex.getOwn(name) != nil {
+			if r.globalLex.getOwn(name).ok() {
 				vmErr = r.throwError(errSyntax, "%q has already been declared",
 					r.atoms.name(name))
 				goto onError
@@ -808,7 +806,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// var or function a script declared is such a property, which is
 			// how the collision with one of those is caught; one eval declared
 			// is configurable and so is not a collision at all.
-			if p := r.global.getOwn(name); p != nil && p.flags&propConfigurable == 0 {
+			if p := r.global.getOwn(name); p.ok() && p.flags()&propConfigurable == 0 {
 				vmErr = r.throwError(errSyntax,
 					"%q is already a property of the global object that cannot be removed",
 					r.atoms.name(name))
@@ -949,7 +947,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				sp = pushAt(stack, sp, True)
 				break
 			}
-			if r.globalLexProp(cl.scope(), name) != nil {
+			if r.globalLexProp(cl.scope(), name).ok() {
 				// A lexical binding is not a property and cannot be removed.
 				sp = pushAt(stack, sp, False)
 				break
@@ -1010,7 +1008,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				// cannot have it: the property is appended without a search.
 				if o := obj.Object(); o.class == ClassObject && o.flags&objExtensible != 0 {
 					if next := o.transition(cl.names[in.A], propDefault); next != nil {
-						o.appendTransition(Property{key: cl.names[in.A], flags: propDefault, value: val}, next)
+						o.appendTransition(val, next)
 						break
 					}
 				}
@@ -2672,7 +2670,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				// A private field can only be added once. A constructor that
 				// returns an object it has already built would otherwise give
 				// it the same field twice.
-				if target.Object().getOwn(key) != nil {
+				if target.Object().getOwn(key).ok() {
 					vmErr = r.throwTypeError("%s is already present on this object",
 						r.atoms.name(key))
 					goto onError
@@ -2712,7 +2710,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			// An own property and nothing else: a private member belongs to the
 			// object that has it, and an object that merely inherits from an
 			// instance's prototype is not an instance.
-			sp = pushAt(stack, sp, Bool(obj.Object().getOwn(privateKey(f, cl, in.B)) != nil))
+			sp = pushAt(stack, sp, Bool(obj.Object().getOwn(privateKey(f, cl, in.B)).ok()))
 		case bytecode.OpNewPrivateMethods:
 			sp = pushAt(stack, sp, r.newPrivateMethods())
 		case bytecode.OpAddPrivateMethod, bytecode.OpAddPrivateGetter,
@@ -3065,12 +3063,12 @@ func memberFlags(isClassMember uint32) propFlags {
 // moduleLexProp finds the binding a name has in module code, which is either
 // one of the module's own or a script-level lexical binding: the module
 // environment inherits from the global object, and those sit in front of it.
-func (r *Runtime) moduleLexProp(env *Object, name Atom) *Property {
-	if p := env.getOwn(name); p != nil {
+func (r *Runtime) moduleLexProp(env *Object, name Atom) ownProp {
+	if p := env.getOwn(name); p.ok() {
 		return p
 	}
 	if !r.lexShadows(name) {
-		return nil
+		return ownProp{i: -1}
 	}
 	return r.globalLex.getOwn(name)
 }
@@ -3079,7 +3077,7 @@ func (r *Runtime) moduleLexProp(env *Object, name Atom) *Property {
 // there was one.
 func deleteEvalVar(o *Object, name Atom) bool {
 	for ; o != nil; o = o.proto {
-		if o.getOwn(name) != nil {
+		if o.getOwn(name).ok() {
 			o.deleteOwn(name)
 			return true
 		}
@@ -3091,13 +3089,13 @@ func deleteEvalVar(o *Object, name Atom) bool {
 //
 // The objects are chained by prototype, innermost first, so one lookup covers
 // every function between here and the one that declared the name.
-func evalVarProp(o *Object, name Atom) *Property {
+func evalVarProp(o *Object, name Atom) ownProp {
 	for ; o != nil; o = o.proto {
-		if p := o.getOwn(name); p != nil {
+		if p := o.getOwn(name); p.ok() {
 			return p
 		}
 	}
-	return nil
+	return ownProp{i: -1}
 }
 
 // declareGlobalLex adds a script-level lexical binding of name, in its dead
@@ -3121,9 +3119,9 @@ func (r *Runtime) lexShadows(name Atom) bool {
 // globalLexProp finds a script-level lexical binding, which sits in front of
 // the global object: `let x = 1` at a script's top level is reached by name but
 // is not a property of globalThis.
-func (r *Runtime) globalLexProp(env *Object, name Atom) *Property {
+func (r *Runtime) globalLexProp(env *Object, name Atom) ownProp {
 	if !r.isGlobalScope(env) || !r.lexShadows(name) {
-		return nil
+		return ownProp{i: -1}
 	}
 	return r.globalLex.getOwn(name)
 }
@@ -3131,7 +3129,7 @@ func (r *Runtime) globalLexProp(env *Object, name Atom) *Property {
 // checkGlobalVarName rejects a script-level var or function declaration whose
 // name a lexical binding already has.
 func (r *Runtime) checkGlobalVarName(name Atom) error {
-	if r.globalLex.getOwn(name) != nil {
+	if r.globalLex.getOwn(name).ok() {
 		return r.throwError(errSyntax, "%q has already been declared", r.atoms.name(name))
 	}
 	return nil
@@ -3145,18 +3143,18 @@ func (r *Runtime) checkGlobalVarName(name Atom) error {
 // data property -- or the declaration cannot honour it.
 func (r *Runtime) canDeclareGlobalFunc(name Atom) error {
 	p := r.global.getOwn(name)
-	if p == nil {
+	if !p.ok() {
 		if !r.global.IsExtensible() {
 			return r.throwTypeError("cannot declare %q on a non-extensible global",
 				r.atoms.name(name))
 		}
 		return nil
 	}
-	if p.flags&propConfigurable != 0 {
+	if p.flags()&propConfigurable != 0 {
 		return nil
 	}
-	if p.flags&propAccessor != 0 ||
-		p.flags&propWritable == 0 || p.flags&propEnumerable == 0 {
+	if p.flags()&propAccessor != 0 ||
+		p.flags()&propWritable == 0 || p.flags()&propEnumerable == 0 {
 		return r.throwTypeError("cannot redeclare %q as a function", r.atoms.name(name))
 	}
 	return nil
@@ -3387,8 +3385,8 @@ func (r *Runtime) materializeFunctionProto(o *Object) {
 	// before anything a script has added since. An ownKeys walk reports the
 	// table's order, so building it late may not reorder it.
 	at := 0
-	for at < len(o.props) &&
-		(o.props[at].key == atomLength || o.props[at].key == atomName) {
+	for at < len(o.vals) &&
+		(o.shape.keys[at].key == atomLength || o.shape.keys[at].key == atomName) {
 		at++
 	}
 	o.insertProp(at, Property{
@@ -3457,7 +3455,7 @@ func (r *Runtime) declareOnScope(env *Object, name Atom, v Value, flags propFlag
 			return err
 		}
 	}
-	if own := p.target.getOwn(name); own == nil || own.flags&propConfigurable != 0 {
+	if own := p.target.getOwn(name); !own.ok() || own.flags()&propConfigurable != 0 {
 		p.target.setOwnRaw(name, v, flags|propEnumerable)
 	}
 	if !replace {
@@ -3706,8 +3704,8 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 	// made is read the general way.
 	var protoVal Value
 	var err error
-	if p := target.getOwnVisible(atomPrototype); p != nil && target.class == ClassFunction && p.flags&propAccessor == 0 {
-		protoVal = p.value
+	if p := target.getOwnVisible(atomPrototype); p.ok() && target.class == ClassFunction && p.flags()&propAccessor == 0 {
+		protoVal = p.value()
 	} else if protoVal, err = r.getProp(target, atomPrototype, Obj(target)); err != nil {
 		return Undefined, err
 	}
@@ -3890,10 +3888,10 @@ func ordinaryHasInstance(c *Object, v Value) (yes, ok bool) {
 		return false, true
 	}
 	p := c.getOwnVisible(atomPrototype)
-	if p == nil || p.flags&propAccessor != 0 || !p.value.IsObject() {
+	if !p.ok() || p.flags()&propAccessor != 0 || !p.value().IsObject() {
 		return false, false
 	}
-	target := p.value.Object()
+	target := p.value().Object()
 	for o := v.Object(); ; {
 		if proxyOf(o) != nil {
 			return false, false
@@ -4656,9 +4654,9 @@ func (r *Runtime) parentConstructorOf(f *frame) *Object {
 	// A method reaches the parent through its home object rather than through
 	// a stored link.
 	if fd.homeObject != nil && fd.homeObject.proto != nil {
-		if ctor := fd.homeObject.proto.getOwn(atomConstructor); ctor != nil &&
-			ctor.value.IsObject() {
-			return ctor.value.Object()
+		if ctor := fd.homeObject.proto.getOwn(atomConstructor); ctor.ok() &&
+			ctor.value().IsObject() {
+			return ctor.value().Object()
 		}
 	}
 	return nil
@@ -4776,7 +4774,7 @@ func (r *Runtime) setPrivate(o *Object, key, name Atom, val Value) error {
 	// that has it, so an object that merely inherits from an instance's
 	// prototype is not one and cannot be written through.
 	p := o.getOwn(key)
-	if p == nil {
+	if !p.ok() {
 		// A private field is added when the object is constructed and never
 		// afterwards, so writing one to an object that does not have it is a
 		// mistake rather than a way to add it.
@@ -4791,17 +4789,17 @@ func (r *Runtime) setPrivate(o *Object, key, name Atom, val Value) error {
 		_, err := r.call(Obj(a.setter), Obj(o), []Value{val})
 		return err
 	}
-	if p.flags&propWritable == 0 {
+	if p.flags()&propWritable == 0 {
 		// A method is installed read-only, so this is one.
 		return r.throwTypeError("private method %s is read-only", r.atoms.name(name))
 	}
-	p.value = val
+	p.setValue(val)
 	return nil
 }
 
 func (r *Runtime) getPrivate(o *Object, key, name Atom) (Value, error) {
 	p := o.getOwn(key)
-	if p == nil {
+	if !p.ok() {
 		return Undefined, r.throwTypeError(
 			"private member %s is not present on this object", r.atoms.name(name))
 	}
@@ -4813,7 +4811,7 @@ func (r *Runtime) getPrivate(o *Object, key, name Atom) (Value, error) {
 		}
 		return r.call(Obj(a.getter), Obj(o), nil)
 	}
-	return p.value, nil
+	return p.value(), nil
 }
 
 // templateObject returns the strings a tagged template site hands its tag.
@@ -4867,8 +4865,8 @@ func (r *Runtime) freezeArray(o *Object) *Object {
 	// flag rather than a property attribute.
 	o.flags &^= objExtensible | objArrayLengthWritable
 	o.layoutChanged()
-	for i := range o.props {
-		o.props[i].flags &^= propWritable | propConfigurable
+	for i := range o.vals {
+		o.shape.keys[i].flags &^= propWritable | propConfigurable
 	}
 	return o
 }

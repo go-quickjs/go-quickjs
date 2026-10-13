@@ -585,12 +585,14 @@ type Encoding struct {
 
 	// An object's properties: ObjectShape is the offset of its shape
 	// pointer, which says where each property is and what it is, and
-	// ObjectProps of its property table's slice. Each entry is PropertySize
-	// bytes: its key, a uint32 atom, at PropertyKey, a flags byte at
-	// PropertyFlags, and its value at PropertyValue. ObjectProto is the
-	// offset of its prototype's pointer, which the shape does not settle.
-	ObjectShape, ObjectProps, PropertySize, PropertyKey, PropertyFlags, PropertyValue int32
-	ObjectProto                                                                       int32
+	// ObjectProps of the slice of their values, a value each, in order. An
+	// object with properties has a shape, and their keys and attributes
+	// are its: the slice at ShapeKeys, an entry of KeySize bytes each, at
+	// the values' positions, with the key, a uint32 atom, at PropertyKey
+	// and a flags byte at PropertyFlags. ObjectProto is the offset of its
+	// prototype's pointer, which the shape does not settle.
+	ObjectShape, ObjectProps, ShapeKeys, KeySize, PropertyKey, PropertyFlags int32
+	ObjectProto                                                              int32
 
 	// WriteBarrier is the address of the byte compiled Go tests before it
 	// stores a pointer: the runtime's write-barrier flag, set while the

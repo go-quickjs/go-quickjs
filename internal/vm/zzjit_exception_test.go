@@ -48,7 +48,7 @@ func jitAgreesForTest(t *testing.T, setup string, rounds ...string) *Runtime {
 // that was entered.
 func jitNativeForTest(t *testing.T, r *Runtime, name string) *jitEntry {
 	t.Helper()
-	cl := r.global.getOwn(r.atoms.intern(name)).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 	e := r.jit.hint(cl)
 	if e == nil || e.ssa == nil || e.ssaStats.entries == 0 {
 		t.Fatalf("%s never ran natively: %+v", name, e)
@@ -178,7 +178,7 @@ func TestJITHandlersAtExits(t *testing.T) {
 	if _, err := r.Run(fn); err != nil {
 		t.Fatal(err)
 	}
-	cl := r.global.getOwn(r.atoms.intern("f")).value.Object().fn().closure
+	cl := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
 	p, err := r.jitLower(cl.fn, jitLowerSSA)
 	if err != nil {
 		t.Fatal(err)
