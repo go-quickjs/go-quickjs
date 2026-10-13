@@ -243,6 +243,10 @@ const (
 	// entry, after a native call -- for a read to load it from its cell
 	// there (builder.read). It is never in a block.
 	OpUpvalueStale
+	// OpLocalCell is the cell local Index, which an inner closure captures
+	// (ir.Program's Captured), is in: its slot in the frame, where the
+	// closure reads and assigns it too.
+	OpLocalCell // -> source
 	// OpPowF64 is Math.pow of two numbers (Intrinsic) where its answer is
 	// exact, and so the VM's (ExactPow); a guard, which leaves the call
 	// to Go otherwise -- a call of Go from native code that can make one
@@ -283,7 +287,7 @@ var opNames = [...]string{
 	OpSarI32: "sar", OpShrU32: "shr", OpNotI32: "noti", OpI32ToF64: "i2f", OpU32ToF64: "u2f",
 	OpSameObject: "sameobject", OpFrameRoom: "frameroom", OpKeepRef: "keepref", OpKeep: "keep", OpKept: "kept",
 	OpCall: "call", OpCallCell: "callcell", OpSqrtF64: "sqrtf", OpAbsF64: "absf", OpInstanceOf: "instanceof", OpTypeIs: "typeis",
-	OpCheckTrue: "checktrue", OpConstCell: "constcell", OpUpvalueCell: "upvaluecell", OpUpvalueStale: "upvaluestale", OpPowF64: "powf",
+	OpCheckTrue: "checktrue", OpConstCell: "constcell", OpUpvalueCell: "upvaluecell", OpUpvalueStale: "upvaluestale", OpLocalCell: "localcell", OpPowF64: "powf",
 	OpMaxF64: "maxf", OpMinF64: "minf", OpFloorF64: "floorf", OpCeilF64: "ceilf", OpTruncF64: "truncf", OpRoundF64: "roundf",
 	OpSignF64: "signf", OpFroundF64: "froundf", OpMathCall: "mathcall",
 }

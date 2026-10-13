@@ -512,16 +512,22 @@ type jitState struct {
 	// meanwhile, closed once none is (closeSSA). goPending is a call of
 	// Go that made the call and left the rest to Go, at its exit; goCalls
 	// counts the calls Go made so.
-	goCalls    uint64
-	pinSerial  uint64
-	goMark     jitGoMark
-	levels     jitLevels
-	goRuns     []jitGoRun
-	goPinned   []*jit.SSACode
-	retired    []jitRetired
-	goPending  jitGoPending
-	ssaEntries uint64
-	ssaRecords uint64
+	goCalls   uint64
+	pinSerial uint64
+	goMark    jitGoMark
+	levels    jitLevels
+	goRuns    []jitGoRun
+	// calleeOpen is, by context, what closures a native callee made
+	// captured of its locals, not closed yet (abi.Context's Open), and
+	// calleeFrame the frame a callee's context stands for while Go makes
+	// one or closes them (jitCalleeFrame).
+	calleeOpen  [][]*upvalue
+	calleeFrame frame
+	goPinned    []*jit.SSACode
+	retired     []jitRetired
+	goPending   jitGoPending
+	ssaEntries  uint64
+	ssaRecords  uint64
 	// backendPanics counts the compiles a backend refused for panicking.
 	backendPanics uint64
 	// entered counts the native calls Go ran the callee of from its
@@ -708,7 +714,7 @@ func (s *jitState) held() int {
 func (s *jitState) sharedBytes() int {
 	n := int(unsafe.Sizeof(*s)) + len(s.ssaCtxs)*jitContextBytes + jitCapBytes(s.ssaCtxs) + jitCapBytes(s.hints) +
 		jitCapBytes(s.hintFree) + len(s.links)*jitLinkFixed + jitCapBytes(s.victims) + jitCapBytes(s.goRuns) +
-		jitCapBytes(s.goPinned) + jitCapBytes(s.retired) + jitCapBytes(s.unwinding) + jitCapBytes(s.unwindingFrames) +
+		jitCapBytes(s.goPinned) + jitCapBytes(s.retired) + jitCapBytes(s.calleeOpen) + jitCapBytes(s.unwinding) + jitCapBytes(s.unwindingFrames) +
 		jitCapBytes(s.seedingFns) + s.workBytes()
 	for _, x := range s.retired {
 		n += x.code.Footprint()

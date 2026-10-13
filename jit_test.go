@@ -210,3 +210,115 @@ func TestJITUpvalueAfterIteratorStep(t *testing.T) {
 		t.Fatalf("g did not run natively: %+v", st)
 	}
 }
+
+// Functions whose locals inner closures capture, and that make closures,
+// give what the interpreter gives with the JIT on: a closure reads and
+// assigns a captured local where the frame has it, so native code writes
+// one there as it assigns it, and reads it again after anything that may
+// have run a closure -- a call, an iterator's step. Each case's function
+// loops, so that the JIT compiles it.
+func TestJITCapturedLocals(t *testing.T) {
+	cases := []struct{ name, src string }{
+		{"per-iteration bindings", `function f(n) { const fs = []; for (let i = 0; i < n; i++) { fs.push(() => i * 2) } let s = 0; for (const g of fs) s += g(); return s }
+			let r = 0; for (let k = 0; k < 60; k++) r += f(k); r`},
+		{"callback assigns", `function f(a) { let sum = 0, count = 0; for (let i = 0; i < a.length; i++) { a[i].forEach(x => { sum += x; count++ }) } return sum + "/" + count }
+			const a = []; for (let i = 0; i < 40; i++) a.push([i, i + 1, i * 2]); let r = ""; for (let k = 0; k < 30; k++) r = f(a); r`},
+		{"closure reads the latest", `function f(n) { let x = 0; const get = () => x; let s = 0; for (let i = 0; i < n; i++) { x = i * 3; s += get() } x = -1; return s + get() }
+			let r = 0; for (let k = 0; k < 80; k++) r += f(k); r`},
+		{"closure assigns, loop reads", `function f(n) { let x = 1; const bump = () => { x = x * 2 % 1000003 }; let s = 0; for (let i = 0; i < n; i++) { bump(); s = (s + x) % 1000003 } return s }
+			let r = 0; for (let k = 0; k < 80; k++) r += f(k); r`},
+		{"temporal dead zone", `function f(n) { let s = 0; for (let i = 0; i < n; i++) { const peek = () => { try { return y } catch (e) { return e.name } }; s += peek() === "ReferenceError" ? 1 : 0; let y = i; s += peek() } return s }
+			let r = 0; for (let k = 0; k < 50; k++) r += f(k); r`},
+		{"arrow this", `const o = { base: 5, run(n) { let t = 0; for (let i = 0; i < n; i++) { const add = v => this.base + v + t; t = add(i) % 9973 } return t } };
+			let r = 0; for (let k = 0; k < 60; k++) r += o.run(k); r`},
+		{"try and catch", `function f(n) { let last = "", c = 0; for (let i = 0; i < n; i++) { try { if (i % 3 == 0) throw new Error("e" + i); c++ } catch (e) { const m = () => e.message; last = m() } } return last + ":" + c }
+			let r = ""; for (let k = 0; k < 60; k++) r = f(k + 1); r`},
+		{"two levels", `function f(n) { let a = 0; let s = 0; for (let i = 0; i < n; i++) { let b = i; const g = () => { const h = () => a + b; a++; return h() }; s += g() } return s + a }
+			let r = 0; for (let k = 0; k < 60; k++) r += f(k); r`},
+		{"natively called", `function leaf(n) { let c = 0; const inc = () => c++; for (let i = 0; i < n; i++) inc(); return c }
+			function top(n) { let s = 0; for (let i = 0; i < n; i++) s += leaf(i % 7); return s }
+			let r = 0; for (let k = 0; k < 60; k++) r += top(k * 3); r`},
+		{"generator", `function* gen(n) { let x = 0; const next = () => ++x; for (let i = 0; i < n; i++) yield next() * 10 + i }
+			let r = 0; for (let k = 0; k < 60; k++) for (const v of gen(k)) r = (r + v) % 1000003; r`},
+		{"async", `async function af(n) { let total = 0; const add = v => { total += v }; for (let i = 0; i < n; i++) { add(await i) } return total }
+			let r = 0; (async () => { for (let k = 0; k < 40; k++) r += await af(k) })(); r`},
+		{"escapes and is called later", `function make(n) { let acc = []; for (let i = 0; i < n; i++) acc.push(i); let total = 0; for (const v of acc) total += v; return () => total + acc.length }
+			let r = 0; for (let k = 0; k < 60; k++) r += make(k)(); r`},
+		{"callbacks of one function", `function each(a, fn) { let s = 0; for (let i = 0; i < a.length; i++) s += fn(a[i]); return s }
+			function run(k) { let calls = 0; const r = each([1, 2, 3, 4, 5, 6, 7, 8], x => { calls++; return x * k }); return r + calls }
+			let r = 0; for (let k = 0; k < 200; k++) r += run(k); r`},
+		{"a callback that assigns its maker's local", `function each(a, fn) { for (let i = 0; i < a.length; i++) fn(a[i]) }
+			function run(k) { let acc = k; each([3, 1, 4, 1, 5], x => { acc = (acc * 31 + x) % 1000003 }); return acc }
+			let r = 0; for (let k = 0; k < 200; k++) r = (r + run(k)) % 1000003; r`},
+		{"different functions at one site", `function each(a, fn) { let s = 0; for (let i = 0; i < a.length; i++) s += fn(a[i]); return s }
+			function run(k) { const f = k % 3 == 0 ? (x => x + k) : k % 3 == 1 ? (x => x * k) : (x => x - k); return each([1, 2, 3, 4], f) }
+			let r = 0; for (let k = 0; k < 200; k++) r += run(k); r`},
+		// A captured local read straight from its slot by an operation
+		// that finds an object's pointer word where the value came from,
+		// a merge of its cell's loads: what the merge is kept live there,
+		// though no frame state names the local (mir's shadow uses).
+		{"pointer word from a captured local's merge", `var r = 0;
+			for (var rep = 0; rep < 300; rep++) {
+			function Fmt(locales, opts) { this.l = locales; this.o = opts; }
+			var dates = [1, 2, 3];
+			var defaults = {year: "numeric"};
+			var f = function (l, o) { return String(this) + l + (o ? o.hour12 : "") };
+			[undefined, ["de"], ["en"], ["ja"]].forEach(function (locales) {
+			    [{hour12: false}, {hour12: true, x: 1}].forEach(function (options) {
+			        var constructorOptions = options;
+			        if (options === undefined) {
+			        } else if (options.day === undefined) {
+			            constructorOptions = Object.create(defaults);
+			            for (var prop in options) {
+			                if (options.hasOwnProperty(prop)) {
+			                    constructorOptions[prop] = options[prop];
+			                }
+			            }
+			        }
+			        var ref = new Fmt(locales, constructorOptions);
+			        var formatted = dates.map(function (a) { return f.call(a, locales, options); });
+			        if (formatted.length !== 3 || ref.o === undefined) throw new Error("bad"); r++;
+			    });
+			});
+			}`},
+		// A native callee makes closures on its own frame: what they
+		// captured is closed as it returns natively, or given to the frame
+		// Go makes of it as a throw leaves it.
+		{"closures a native callee makes and returns", `function mk(n) { let c = 0; for (let j = 0; j < n % 3 + 1; j++) c += j; const inc = () => ++c; return inc }
+			for (let w = 0; w < 50; w++) mk(w);
+			function top(n) { let s = 0; for (let i = 0; i < n; i++) { const f = mk(i), g = mk(i + 7); f(); s += f() * 1000 + g() } return s }
+			let r = 0; for (let k = 0; k < 60; k++) r += top(k); r`},
+		{"closures thrown from a native callee", `function mk(n) { let c = 0; for (let j = 0; j < n % 3 + 1; j++) c += j; const g = () => c; if (n % 5 == 4) throw g; c++; return g }
+			for (let w = 0; w < 50; w++) try { mk(w) } catch (e) {}
+			function burn(n) { let a = n, b = n * 2, c = n * 3; for (let j = 0; j < 2; j++) a += b + c; return a }
+			function top(n) { let s = 0; for (let i = 0; i < n; i++) { try { s += mk(i)() } catch (g) { s += burn(i) + g() * 100 } } return s }
+			let r = 0; for (let k = 0; k < 60; k++) r += top(k); r`},
+		{"per-iteration bindings in a native callee", `function fill(n) { const fs = []; for (let i = 0; i < n; i++) fs.push(() => i); return fs }
+			for (let w = 0; w < 50; w++) fill(w % 9);
+			function top(n) { let s = 0; for (let k = 0; k < n; k++) { const a = fill(k % 9), b = fill(k % 7); for (const f of a) s += f() * 10; for (const f of b) s += f() } return s }
+			let r = 0; for (let k = 0; k < 40; k++) r += top(k); r`},
+		{"sort comparator", `function f(a) { let calls = 0; const b = a.slice(); for (let i = 0; i < 3; i++) b.sort((x, y) => { calls++; return x - y }); return b[0] + b[b.length - 1] + calls * 0 }
+			const a = []; for (let i = 0; i < 50; i++) a.push((i * 37) % 101); let r = 0; for (let k = 0; k < 40; k++) r += f(a); r`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			run := func(opts ...quickjs.Option) (string, vm.JITStats) {
+				r := quickjs.New(opts...)
+				defer r.Close()
+				if _, err := r.Eval(tc.src); err != nil {
+					t.Fatal(err)
+				}
+				// The async case settles its promises first.
+				return evalString(t, r, "String(r)"), hostaccess.VM(r).JITStats()
+			}
+			want, _ := run()
+			got, st := run(quickjs.WithJIT())
+			if got != want {
+				t.Fatalf("jit: %s, interpreter: %s", got, want)
+			}
+			if st.Budget != 0 && st.SSAEntries == 0 {
+				t.Errorf("nothing ran natively: %+v", st)
+			}
+		})
+	}
+}

@@ -76,8 +76,12 @@ func (p *Program) Validate() error {
 			write = true
 		case Resolved:
 			left, right, write = true, true, true
-		case ObjectLiteral, StringConst:
+		case ObjectLiteral, StringConst, Closure:
 			write = true
+		case CloseUpvalues:
+			if int(in.Key) > p.Locals {
+				return bad("invalid local")
+			}
 		case UpvalueRead, UpvalueWrite:
 			left, write = in.Op == UpvalueWrite, in.Op == UpvalueRead
 			if int(in.Key) >= p.Upvalues || p.UpvalueBase+p.Upvalues > p.Locals {

@@ -298,7 +298,7 @@ func unboxPhis(f *Func) bool {
 	// failed, or a captured binding read from its cell there or after a
 	// call, with the state to exit to (builder.reloadUpvalues).
 	loaded := func(a *Value) bool {
-		upvalue := a.Op == OpLoadCell && a.Args[0].Op == OpUpvalueCell
+		upvalue := a.Op == OpLoadCell && (a.Args[0].Op == OpUpvalueCell || a.Args[0].Op == OpLocalCell)
 		return upvalue && a.State != nil || (a.Op == OpLoadSlot || upvalue) && a.Block.PC < 0 && !a.Block.Generic
 	}
 	// Filter until stable: a candidate's arguments must be acceptable, and it

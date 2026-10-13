@@ -88,11 +88,29 @@ a throw) deoptimizes, the interpreter reproducing it. A using declaration's
 scope is such a try statement, its resources added and disposed of by Go.
 
 **Iteration.** A for...of or for...in loop's cursor, and `yield*`'s
-delegate, are Go's: native code leaves at each step and goes on past it
-with the value, or, the cursor done, at the loop's end, an entry of its
-own. A step's iterator is closed however the loop is left, as the
-interpreter closes it. So are an `await using` scope's disposal steps,
-`import()` and `import.meta`.
+delegate, are Go's. Native code steps an array's for...of in place; any
+other step is a call of Go, which answers the next value or, done, the
+uninitialized value native code branches on. A step's iterator is closed
+however the loop is left, as the interpreter closes it. `yield*`, an
+`await using` scope's disposal steps, `import()` and `import.meta` leave
+for Go and go on past it.
+
+**Closures.** A local an inner closure captures stays in the frame's slot,
+which the closure's upvalue points at until the frame returns, as in the
+interpreter. Native code treats that slot as the local's cell
+(`ssa.OpLocalCell`), as it does a captured binding's: it assigns the local
+there as it assigns it, and reads it there again after anything that may
+have run a closure -- a native call, a call of Go that runs script, an
+entry -- and frame states leave it out, the frame holding it already. A
+closure is made, and a scope's end closes what closures captured, by a
+call of Go on the frame Go entered the code with (`ssa.GoClosure`,
+`GoClose`); a native callee, which has no frame of the VM's, leaves for Go
+to make it. A call of a closure that captures bindings checks the
+function the callee runs, in its environment and realm, not the object
+(`ssa.CallSite`'s `ByCode`), and gives the callee the closure it finds, as
+V8 checks a call's code: a callback made anew at each call of its maker is
+a new object, the same function. Such a closure is not inlined: an inlined
+callee's captured bindings are Go's.
 
 **Generators and async functions.** `yield` and `await` are exits at which
 Go suspends the frame as the interpreter does, and each resumption enters
@@ -101,9 +119,8 @@ the first time, past the parameters -- as the tree tier resumes a tree at
 the block there (`jitResume`, `runGeneratorTree`). A call of one makes its
 object, so none is called natively or inlined.
 
-**Not compiled yet.** Top-level and module code, closures and the locals
-they capture, destructuring from an iterator, and code using private
-fields run in the tree tier, which handles all of them; the JIT is to
+**Not compiled yet.** Top-level and module code, destructuring from an
+iterator, tail calls and code using private fields run in the tree tier, which handles all of them; the JIT is to
 follow it there. Top-level code is refused before any entry is made
 (`jitCompiles`).
 

@@ -305,7 +305,7 @@ func TestMalformedBytecode(t *testing.T) {
 			bytecode.Instr{Op: bytecode.OpJumpIfTrueKeep, A: 3},
 			bytecode.Instr{Op: bytecode.OpJump, A: 3},
 			bytecode.Instr{Op: bytecode.OpReturnUndef}), 3, "inconsistent stack depth"},
-		{"unreachable", fixture(bytecode.Instr{Op: bytecode.OpReturnUndef}, bytecode.Instr{Op: bytecode.OpClosure}), 1, "unsupported opcode closure"},
+		{"unreachable", fixture(bytecode.Instr{Op: bytecode.OpReturnUndef}, bytecode.Instr{Op: bytecode.OpTailCall}), 1, "unsupported opcode tail_call"},
 	}
 	tooDeep := fixture(bytecode.Instr{Op: bytecode.OpGetLocal2}, bytecode.Instr{Op: bytecode.OpReturn})
 	tooDeep.MaxStack = 1

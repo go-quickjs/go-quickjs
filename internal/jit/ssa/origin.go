@@ -425,6 +425,14 @@ const anyKey = ^uint32(0)
 // Upvalue).
 const upvalueKey = ^uint32(1)
 
+// localKey is the key of a store to captured local slot, in its cell
+// (OpLocalCell): its own, as no other store writes the frame's slot -- not
+// a captured binding's, which is another frame's, or a box -- and a call
+// may. One key for every local made each store to one check every value
+// loaded from any of them: a function of sixty captured locals compiled to
+// a hundred and forty kilobytes.
+func localKey(slot int) uint32 { return ^uint32(2) - uint32(slot) }
+
 // may reports whether a store through key may write the cell at s.
 func (a *aliases) may(key uint32, s *Value) bool {
 	switch s.Op {
@@ -440,6 +448,8 @@ func (a *aliases) may(key uint32, s *Value) bool {
 		// A call may assign it, or an assignment to a captured binding,
 		// any: two closures may capture one binding.
 		return key == anyKey || key == upvalueKey
+	case OpLocalCell:
+		return key == anyKey || key == localKey(s.Index)
 	case OpKeep:
 		if x := s.Args[0]; x.Shadow != nil {
 			return a.may(key, x.Shadow)

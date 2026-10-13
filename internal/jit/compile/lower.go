@@ -130,9 +130,15 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 	case fn.ParamCount < 0 || fn.ParamCount > fn.LocalCount || len(fn.Locals) != fn.LocalCount:
 		return nil, refuse(-1, "invalid local layout")
 	}
+	captured := false
 	for _, local := range fn.Locals {
 		if local.Captured {
-			return nil, refuse(-1, "captured local")
+			if !m.ssa || m.callee {
+				// Its frame is the VM's, which a callee inlined, or the
+				// old pipeline's code, has none of.
+				return nil, refuse(-1, "captured local")
+			}
+			captured = true
 		}
 	}
 	effects := make([]effect, len(fn.Code))
@@ -167,6 +173,11 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// constructor (ssa.InstanceOfSite), Go otherwise.
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
+		if (in.Op == bytecode.OpClosure || in.Op == bytecode.OpCloseUpvalues) && (!m.ssa || m.callee) {
+			// Go makes a closure, and closes what one captured, on the
+			// frame (jitHost): a function's own, in the new pipeline.
+			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
+		}
 		if in.Op == bytecode.OpApplyArguments && !m.forward {
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
@@ -191,7 +202,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// throws it, as V8's code calls the runtime to throw.
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
-		host = host || str || iters || in.Op == bytecode.OpImport || in.Op == bytecode.OpImportMeta || in.Op == bytecode.OpYield || in.Op == bytecode.OpAwait || in.Op == bytecode.OpThrow ||
+		host = host || str || iters || in.Op == bytecode.OpClosure || in.Op == bytecode.OpCloseUpvalues || in.Op == bytecode.OpImport || in.Op == bytecode.OpImportMeta || in.Op == bytecode.OpYield || in.Op == bytecode.OpAwait || in.Op == bytecode.OpThrow ||
 			in.Op == bytecode.OpNewDisposeCapability || in.Op == bytecode.OpAddDisposable || in.Op == bytecode.OpDispose || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpApplyArguments || in.Op == bytecode.OpNew || in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict || in.Op == bytecode.OpCheckGlobalRef || in.Op == bytecode.OpNewObject || in.Op == bytecode.OpNewRegExp || in.Op == bytecode.OpDefineField || in.Op == bytecode.OpPushEmptyString || in.Op == bytecode.OpConcat || in.Op == bytecode.OpNewArray || in.Op == bytecode.OpCall || in.Op == bytecode.OpCallMethod || in.Op == bytecode.OpGetGlobal || in.Op == bytecode.OpGetPropThis || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		property = property || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		this = this || in.Op == bytecode.OpPushThis
@@ -444,6 +455,12 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		}
 		stringConcats(p)
 		p.UpvalueBase, p.Upvalues = fn.LocalCount, len(fn.Upvalues)
+		if captured {
+			p.Captured = make([]bool, fn.LocalCount)
+			for i, local := range fn.Locals {
+				p.Captured[i] = local.Captured
+			}
+		}
 		return p, nil
 	}
 	selectPropertyLoops(fn, p, m.calls, m.callee)
@@ -598,7 +615,7 @@ func selectNumericProperties(p *ir.Program, cells bool) {
 			read(in.Left, take(in.Dest))
 		case ir.Resolved:
 			read(in.Right, take(in.Dest))
-		case ir.BindingCheck, ir.ObjectLiteral, ir.StringConst, ir.UpvalueRead:
+		case ir.BindingCheck, ir.ObjectLiteral, ir.StringConst, ir.UpvalueRead, ir.Closure:
 			take(in.Dest)
 		case ir.FieldDefine:
 			read(in.Left, reference)
@@ -727,7 +744,7 @@ func stringConcats(p *ir.Program) {
 			for i := in.Dest; i >= 0 && i <= in.Dest+3; i++ {
 				set(i, false)
 			}
-		case ir.Branch, ir.Jump, ir.Return, ir.Nop, ir.ArrayWrite, ir.PropertyWrite, ir.BindingWrite, ir.FieldDefine, ir.UpvalueWrite, ir.Rethrow:
+		case ir.Branch, ir.Jump, ir.Return, ir.Nop, ir.ArrayWrite, ir.PropertyWrite, ir.BindingWrite, ir.FieldDefine, ir.UpvalueWrite, ir.Rethrow, ir.CloseUpvalues:
 		default:
 			set(in.Dest, false)
 		}
@@ -1125,6 +1142,16 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 		return effect{need: 1, delta: 1}, nil
 	case bytecode.OpImportMeta:
 		return effect{delta: 1}, nil
+	case bytecode.OpClosure:
+		if uint64(in.A) >= uint64(len(fn.Constants)) || fn.Constants[in.A].Kind != bytecode.ConstFunction {
+			return bad("invalid closure template")
+		}
+		return effect{delta: 1}, nil
+	case bytecode.OpCloseUpvalues:
+		if uint64(in.A) > uint64(fn.LocalCount) {
+			return bad("local index out of bounds")
+		}
+		return effect{}, nil
 	case bytecode.OpImport:
 		// The specifier, and with B 2 the options, for the import's
 		// promise.
@@ -1490,6 +1517,13 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this bool) ir.Instr
 		// Go's (jitHost): a dynamic import's promise, the module's
 		// import.meta.
 		return ir.Instruction{Op: ir.Host}
+	case bytecode.OpClosure:
+		// Go's: a closure made on the frame, capturing its locals where
+		// the frame has them.
+		return ir.Instruction{Op: ir.Closure, Dest: sp, Key: in.A}
+	case bytecode.OpCloseUpvalues:
+		// Go's: what closures captured closed as a scope ends.
+		return ir.Instruction{Op: ir.CloseUpvalues, Key: in.A}
 	}
 	// describe accepted an opcode this switch does not translate. Becoming a
 	// Nop with describe's stack effect would be a silent miscompile; the panic

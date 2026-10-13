@@ -490,15 +490,24 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	guard(amd64.CondNE)
 	c.sourceRef(callee, guard)
 	checked := c.a.NewLabel()
-	for _, t := range sites {
+	for k, t := range sites {
 		next := c.a.NewLabel()
 		want := t.Callee
 		if t.Via != 0 {
 			want = t.Via
 		}
-		c.movImm(scratchB, uint64(want))
-		c.a.Op(amd64.Cmp, scratchC, scratchB, true)
-		c.a.Jcc(amd64.CondNE, next)
+		if t.ByCode != 0 {
+			c.byCode(t, next)
+		} else {
+			c.movImm(scratchB, uint64(want))
+			c.a.Op(amd64.Cmp, scratchC, scratchB, true)
+			c.a.Jcc(amd64.CondNE, next)
+		}
+		if len(sites) > 1 {
+			// Which one, for its frame to be made for (abi.Context's
+			// CallTarget): a closure checked by its code is no one object.
+			c.a.StoreImm(regCtx, abi.OffCallTarget, int32(k))
+		}
 		if t.Via != 0 {
 			c.viaGuards(t, v.Args[0], guard)
 		}
@@ -675,22 +684,19 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	// level, Go wrote (abi.Context).
 	c.movImm(tmp, 0)
 	c.a.Store(calleeCtx, abi.OffUpvalues, tmp)
+	c.a.Store(calleeCtx, abi.OffOpen, tmp)
 	c.a.Store(calleeCtx, abi.OffTailReturn, tmp)
 	c.a.Store(calleeCtx, abi.OffBase, base)
 	c.storeImm(calleeCtx, abi.OffLive, 1, tmp)
 	back := c.a.NewLabel()
 	c.a.LeaLabel(tmp, back)
 	c.a.Store(calleeCtx, abi.OffReturnTo, tmp)
-	// Which one: the callee's pointer, from its record.
-	if !direct {
-		_, _, rb, rd := words(calleeSlot)
-		c.a.Load(tmp, rb, rd)
-	}
+	// Which one the checks found (abi.Context's CallTarget).
 	for i, t := range sites {
 		next := c.a.NewLabel()
 		if i < len(sites)-1 {
-			c.movImm(top, uint64(t.Callee))
-			c.a.Op(amd64.Cmp, tmp, top, true)
+			c.a.Load(top, regCtx, abi.OffCallTarget)
+			c.a.OpImm(amd64.Cmp, top, int32(i), true)
 			c.a.Jcc(amd64.CondNE, next)
 		}
 		c.a.MovRR(top, locals)
@@ -743,10 +749,18 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 			c.storeImm(calleeCtx, abi.OffThis+c.enc.NumOffset, c.enc.Undefined, top)
 			c.storeImm(calleeCtx, abi.OffThis+c.enc.RefOffset, 0, top)
 		}
-		c.storeImm(calleeCtx, abi.OffClosure, uint64(t.Closure), top)
-		if t.Upvalues != 0 {
-			// Its closure's captured bindings (OpUpvalueCell).
-			c.storeImm(calleeCtx, abi.OffUpvalues, uint64(t.Upvalues), top)
+		if t.ByCode != 0 {
+			// The closure the checks found, and its captured bindings.
+			c.a.Load(top, regCtx, abi.OffCallClosure)
+			c.a.Store(calleeCtx, abi.OffClosure, top)
+			c.a.Load(top, regCtx, abi.OffCallUpvalues)
+			c.a.Store(calleeCtx, abi.OffUpvalues, top)
+		} else {
+			c.storeImm(calleeCtx, abi.OffClosure, uint64(t.Closure), top)
+			if t.Upvalues != 0 {
+				// Its closure's captured bindings (OpUpvalueCell).
+				c.storeImm(calleeCtx, abi.OffUpvalues, uint64(t.Upvalues), top)
+			}
 		}
 		if t.Pool != 0 {
 			// A construction's new.target, for Go to make its frame with.
@@ -770,6 +784,9 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		c.a.Jcc(amd64.CondBE, same)
 		c.a.Store(tmp, 0, top)
 		c.a.Bind(same)
+		if t.ByCode != 0 {
+			c.a.Load(high2, regCtx, abi.OffCallCallee)
+		}
 		c.movImm(scratchA, uint64(t.Entry))
 		c.a.Load(scratchA, scratchA, 0)
 		c.a.MovRR(regCtx, calleeCtx)
@@ -778,7 +795,11 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		c.a.Jcc(amd64.CondE, enter)
 		c.a.JmpReg(scratchA)
 		c.a.Bind(enter)
-		c.movImm(scratchA, uint64(t.Callee))
+		if t.ByCode != 0 {
+			c.a.MovRR(scratchA, high2)
+		} else {
+			c.movImm(scratchA, uint64(t.Callee))
+		}
 		if !c.enterUsed {
 			c.enter, c.enterUsed = c.a.NewLabel(), true
 		}
@@ -848,6 +869,17 @@ func (c *compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(amd64.Con
 		c.a.Bind(join)
 		c.a.Load(scratchA, regCtx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
 		c.setG(v, scratchA)
+		return
+	}
+	if site.Go == ssa.GoClose {
+		// Only while closures have captured the frame's locals
+		// (abi.Context's Open): its result nothing reads.
+		skip := c.a.NewLabel()
+		c.a.Load(scratchA, regCtx, abi.OffOpen)
+		c.a.Op(amd64.Test, scratchA, scratchA, true)
+		c.a.Jcc(amd64.CondE, skip)
+		c.goCallOp(v, goOpWord(site), guard, false)
+		c.a.Bind(skip)
 		return
 	}
 	c.goCallOp(v, goOpWord(site), guard, false)
@@ -952,6 +984,36 @@ func (c *compiler) goCallOp(v *ssa.Value, op uint64, guard func(amd64.Cond), sav
 		return
 	}
 	c.callGo(v, op, v.Index)
+}
+
+// byCode checks that the callee, the function object whose pointer word is
+// in scratchC, runs t's function, in t's environment and realm, jumping to
+// next if not (ssa.CallSite's ByCode); and keeps the object, its closure
+// and its captured bindings' first cell in the context (abi.Context's
+// CallCallee), for the call to give its callee. It uses every scratch
+// register.
+func (c *compiler) byCode(t *ssa.CallSite, next amd64.Label) {
+	c.a.Store(regCtx, abi.OffCallCallee, scratchC)
+	c.a.Load(scratchB, scratchC, c.enc.ObjectData)
+	c.movImm(scratchA, c.enc.FuncData)
+	c.a.Op(amd64.Cmp, scratchB, scratchA, true)
+	c.a.Jcc(amd64.CondNE, next)
+	c.a.Load(scratchB, scratchC, c.enc.ObjectData+8)
+	c.a.Load(scratchB, scratchB, c.enc.FuncClosure)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	c.a.Jcc(amd64.CondE, next)
+	for _, f := range [...]struct {
+		off  int32
+		want uintptr
+	}{{c.enc.ClosureFn, t.ByCode}, {c.enc.ClosureEnv, t.Env}, {c.enc.ClosureRealm, t.Realm}} {
+		c.a.Load(scratchA, scratchB, f.off)
+		c.movImm(scratchC, uint64(f.want))
+		c.a.Op(amd64.Cmp, scratchA, scratchC, true)
+		c.a.Jcc(amd64.CondNE, next)
+	}
+	c.a.Store(regCtx, abi.OffCallClosure, scratchB)
+	c.a.Load(scratchA, scratchB, c.enc.ClosureUpvalues)
+	c.a.Store(regCtx, abi.OffCallUpvalues, scratchA)
 }
 
 // callGo is a call of Go, op, its operands in the context's GoArgs: what
@@ -3136,6 +3198,11 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 	case ssa.OpConstCell:
 		d := c.gdst(v)
 		c.movImm(d, v.Const.Bits)
+		c.setG(v, d)
+	case ssa.OpLocalCell:
+		// The captured local's slot in the frame.
+		d := c.gdst(v)
+		c.a.Lea(d, regLocals, int32(v.Index)*c.enc.ValueSize)
 		c.setG(v, d)
 	case ssa.OpUpvalueCell:
 		// The binding's cell, then where its value is now.

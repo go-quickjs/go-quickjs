@@ -200,6 +200,15 @@ const (
 	// make it, called from native code (ssa's GoCall, Step), and leaves
 	// it to Go otherwise.
 	IterStep
+	// Closure is closure, the function of constant Key made at Dest,
+	// capturing the frame's locals where the frame has them (Program's
+	// Captured). The new pipeline has Go make it, called from native code
+	// (ssa.GoClosure), and leaves it to Go otherwise.
+	Closure
+	// CloseUpvalues is close_upvalues, a scope's end: what closures
+	// captured of locals Key on is closed, the value kept for them. Go's,
+	// called from native code (ssa.GoClose), or left to it.
+	CloseUpvalues
 )
 
 // RethrowNormal is the kind a normal completion's record has (Rethrow).
@@ -346,7 +355,16 @@ type Program struct {
 	// enter it, past its parameters (end_params), which run when the
 	// generator is made.
 	Entries []int
+	// Captured marks the locals inner closures capture, by slot, or is nil
+	// for none: a closure reads and assigns such a local where the frame
+	// has it, so native code does too, as it does a captured binding in
+	// its cell (IsCaptured).
+	Captured []bool
 }
+
+// IsCaptured reports whether local i is one an inner closure captures
+// (Captured).
+func (p *Program) IsCaptured(i int) bool { return i >= 0 && i < len(p.Captured) && p.Captured[i] }
 
 // Handler is an exception handler, as push_catch or push_finally registers
 // it: the clause at PC, entered with the operand stack cut to Depth, a
@@ -366,7 +384,7 @@ func (p *Program) Footprint() int {
 		return 0
 	}
 	return int(unsafe.Sizeof(*p)) + cap(p.Globals)*4 + cap(p.Code)*int(unsafe.Sizeof(Instruction{})) +
-		cap(p.Maps)*int(unsafe.Sizeof(StateMap{})) + cap(p.Live)*8 + cap(p.Handlers)*int(unsafe.Sizeof(Handler{})) + cap(p.HandlerAt)*4
+		cap(p.Maps)*int(unsafe.Sizeof(StateMap{})) + cap(p.Live)*8 + cap(p.Handlers)*int(unsafe.Sizeof(Handler{})) + cap(p.HandlerAt)*4 + cap(p.Captured)
 }
 
 // LiveAt reports whether local i may be read from pc on before it is

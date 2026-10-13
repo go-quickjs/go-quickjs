@@ -361,8 +361,13 @@ func (c *core) allocate() error {
 			}
 			for _, a := range v.Args {
 				uses = append(uses, use{a, pos[v.ID]})
-				if (v.Op == ssa.OpKeep || v.Op == ssa.OpKeepRef) && a == v.Args[0] && a.Shadow != nil {
-					// It reads where its value came from (mir's keep).
+				if a.Shadow != nil {
+					// It may read where its operand came from: a keep
+					// (mir's keep), or an operation that finds an object's
+					// pointer word there (sourceRef). A value the frame
+					// state names keeps its shadow alive there too, but a
+					// captured local's is in no state (its slot is its
+					// cell), and the slot IR reads a local as an operand.
 					uses = append(uses, use{a.Shadow, pos[v.ID]})
 				}
 			}
@@ -944,7 +949,7 @@ func inlineLevels(s *ssa.FrameState) []*ssa.InlineState {
 // read there with no decoding (sourceAddr).
 func cellSource(s *ssa.Value) bool {
 	switch s.Op {
-	case ssa.OpPropCell, ssa.OpElemCell, ssa.OpGlobalCell, ssa.OpLexCell, ssa.OpStringMethod, ssa.OpStringProp, ssa.OpCallCell, ssa.OpConstCell, ssa.OpUpvalueCell:
+	case ssa.OpPropCell, ssa.OpElemCell, ssa.OpGlobalCell, ssa.OpLexCell, ssa.OpStringMethod, ssa.OpStringProp, ssa.OpCallCell, ssa.OpConstCell, ssa.OpUpvalueCell, ssa.OpLocalCell:
 		return true
 	}
 	return false
@@ -1317,6 +1322,10 @@ func (c *core) exitSource(s *ssa.Value) (abi.ExitLoc, bool) {
 // otherwise read from the bytecode.
 func goOpWord(site *ssa.CallSite) uint64 {
 	op := uint64(site.Go)
+	if site.Go == ssa.GoClosure || site.Go == ssa.GoClose {
+		// The template's constant, or the first local closed (abi.GoOpIndexShift).
+		op |= uint64(uint32(site.Argc)) << abi.GoOpIndexShift
+	}
 	if site.Go == ssa.GoConcat {
 		op |= uint64(site.Argc) << abi.GoOpArgcShift
 	}

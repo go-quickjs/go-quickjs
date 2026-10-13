@@ -185,6 +185,14 @@ type CallSite struct {
 	// Upvalues is the address of the callee closure's captured bindings'
 	// cells, its context's (abi.Context.Upvalues), or 0 for none.
 	Upvalues uintptr
+	// ByCode, where not 0, has the call check the function the callee's
+	// closure runs, the address of its bytecode, and that the closure's
+	// environment and realm are Env and Realm, rather than that the callee
+	// is the object Callee: the closure, and its captured bindings, are the
+	// callee's at run time. A closure an enclosing function makes at each
+	// of its calls is a new object each time, the same function, as V8's
+	// calls check the function's code, not the closure.
+	ByCode, Env, Realm uintptr
 	// Literal marks an object literal's object (ir.ObjectLiteral), the
 	// pool's, with Alloc: no function, no operands; or an array literal's
 	// (ir.ArrayLiteral), whose Argc operands are its elements.
@@ -261,6 +269,12 @@ type GoOp uint8
 // GoConcat is concat (ir.StringConcat): Go converts its Argc operands to
 // strings and joins them, as GoAdd adds; what could run code or throw it
 // leaves to an exit, after which Go makes it.
+//
+// GoClosure makes the function of constant Argc on the code's own frame
+// (ir.Closure), capturing its locals there, and GoClose closes what
+// closures captured of locals Argc on (ir.CloseUpvalues): both Go's, on
+// the frame Go entered the code with, and refused on any other -- a native
+// callee's -- which leaves for Go to make them after an exit.
 const (
 	GoAdd GoOp = 1 + iota
 	GoRefill
@@ -277,6 +291,8 @@ const (
 	GoTake
 	GoAddAlong
 	GoConcat
+	GoClosure
+	GoClose
 )
 
 // RefillsPools reports whether a call takes an object from a pool, which
@@ -557,12 +573,19 @@ type builder struct {
 	// literals are the literals made natively, by PC, each with the keep
 	// cell planning gave it (literal).
 	literals map[int]literalKeep
-	// stale are the captured bindings' markers (OpUpvalueStale), by index;
-	// here is the block of the instruction being built, at herePC, whose
-	// state a read there loads a binding from its cell with (read).
-	stale  []*Value
-	here   *Block
-	herePC int
+	// stale are the captured bindings' and captured locals' markers
+	// (OpUpvalueStale), by slot; here is the block of the instruction
+	// being built, at herePC, whose state a read there loads a binding
+	// from its cell with (read); rootSt is the state of the root frame's
+	// instruction being built, at rootPC in rootBlk, which an inlined
+	// callee's leaves as it is, made once, as its guards share it
+	// (rootState).
+	stale   []*Value
+	here    *Block
+	herePC  int
+	rootSt  *FrameState
+	rootBlk *Block
+	rootPC  int
 
 	entryPCs []int
 	blockAt  []*Block // by the PC a block starts at
@@ -650,6 +673,9 @@ func (b *builder) hostOf(pc int) bool {
 	case ir.IterStep:
 		// A call of Go (GoCall, Step), where the VM answers it.
 		return !b.goCalls()
+	case ir.Closure, ir.CloseUpvalues:
+		// A call of Go (GoClosure, GoClose), on the function's own frame.
+		return b.cur != b.root || !b.goCalls()
 	}
 	return false
 }
@@ -695,28 +721,83 @@ func (b *builder) literal(pc int) (LiteralSite, int, bool) {
 // is; unused, the loads are dead. After a call, the loads carry the state
 // there, st, which a guard that unboxes one exits to (unboxPhis), as an
 // entry's header is for its loads.
+//
+// A local an inner closure captures (ir.Program's Captured) is so too: the
+// closure reads and assigns it where the frame has it, which is its cell.
 func (b *builder) reloadUpvalues(blk *Block) {
 	p := b.root.p
 	if b.stale == nil {
-		b.stale = make([]*Value, p.Upvalues)
+		b.stale = make([]*Value, p.UpvalueBase+p.Upvalues)
+	}
+	mark := func(slot int) {
+		if b.stale[slot] == nil {
+			b.stale[slot] = b.f.alloc(Value{Op: OpUpvalueStale, Type: Tagged, Index: slot})
+		}
+		b.write(slot, blk, b.stale[slot])
 	}
 	for i := range p.Upvalues {
-		if b.stale[i] == nil {
-			b.stale[i] = b.f.alloc(Value{Op: OpUpvalueStale, Type: Tagged, Index: i})
+		mark(p.UpvalueBase + i)
+	}
+	for i, c := range p.Captured {
+		if c {
+			mark(i)
 		}
-		b.write(p.UpvalueBase+i, blk, b.stale[i])
 	}
 }
 
-// loadUpvalue is captured binding i, loaded from its cell at the end of
-// blk, with st the state a guard that unboxes it exits to (unboxPhis), if
-// any: a read's, which the binding's variable met marked stale.
-func (b *builder) loadUpvalue(blk *Block, i int, st *FrameState) *Value {
-	cell := b.f.newValue(blk, OpUpvalueCell, Source)
-	cell.Index = i
+// hasCells reports whether the function has captured bindings, or locals
+// closures capture: what a call may assign (reloadUpvalues).
+func (b *builder) hasCells() bool { return b.root.p.Upvalues > 0 || b.root.p.Captured != nil }
+
+// cellOf is the cell of slot, a captured binding's or a captured local's,
+// in blk: where its value is now.
+func (b *builder) cellOf(blk *Block, slot int) *Value {
+	p := b.root.p
+	if slot >= p.UpvalueBase {
+		cell := b.f.newValue(blk, OpUpvalueCell, Source)
+		cell.Index = slot - p.UpvalueBase
+		return cell
+	}
+	cell := b.f.newValue(blk, OpLocalCell, Source)
+	cell.Index = slot
+	return cell
+}
+
+// loadUpvalue is slot, a captured binding or a captured local, loaded from
+// its cell at the end of blk, with st the state a guard that unboxes it
+// exits to (unboxPhis), if any: a read's, which the binding's variable met
+// marked stale.
+func (b *builder) loadUpvalue(blk *Block, slot int, st *FrameState) *Value {
+	cell := b.cellOf(blk, slot)
 	v := b.f.newValue(blk, OpLoadCell, Tagged, cell)
 	v.Shadow, v.State = cell, st
 	return v
+}
+
+// rootState is the state of the root frame's instruction being built,
+// made the first time it is asked for.
+func (b *builder) rootState() *FrameState {
+	if b.rootSt == nil {
+		cur := b.cur
+		b.cur = b.root
+		b.rootSt = b.state(b.rootBlk, b.rootPC)
+		b.cur = cur
+	}
+	return b.rootSt
+}
+
+// storeCaptured assigns v to captured local slot in its cell, where an
+// inner closure reads it, as an assignment to a captured binding does
+// (ir.UpvalueWrite): exiting, if it must, to the state of the root frame's
+// instruction that assigns it, which Go makes again -- the state its
+// guards share, not one of its own: a state names every live slot, and a
+// function of many captured locals made one at each assignment.
+func (b *builder) storeCaptured(blk *Block, slot int, v *Value) {
+	st := b.rootState()
+	w := b.f.newValue(blk, OpPropWrite, None, b.cellOf(blk, slot), v)
+	w.Aux, w.State = int(ir.HostExit), st
+	st.addUse()
+	w.Key, w.Upvalue = localKey(slot), true
 }
 
 // stringCell is the cell of the string constant at pc (ConstantFeedback).
@@ -1157,7 +1238,7 @@ func (b *builder) iterStep(blk *Block, in ir.Instruction, operand func(ir.Operan
 	b.assign(in.Dest, blk, r)
 	// The step runs the iterator's next, which may assign a captured
 	// binding, as a native call's callee may.
-	if b.p.Upvalues > 0 {
+	if b.hasCells() {
 		b.reloadUpvalues(blk)
 	}
 	done := b.f.newValue(blk, OpConst, Tagged)
@@ -1167,6 +1248,28 @@ func (b *builder) iterStep(blk *Block, in ir.Instruction, operand func(ir.Operan
 	is.Index = 1
 	blk.Control = is
 	is.Uses++
+}
+
+// goFrame makes in, a closure or the end of a scope that closes what
+// closures captured, by a call of Go from native code on the function's
+// own frame (GoClosure, GoClose), as the interpreter makes them: the
+// captured locals are where the frame has them, as native code assigns
+// them there (storeCaptured). What Go refuses -- a frame it has none of,
+// as a native callee's -- leaves for Go to make after an exit.
+func (b *builder) goFrame(blk *Block, in ir.Instruction, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+	call := guard(OpCall, Tagged, ir.HostExit)
+	site := &CallSite{Go: GoClosure, Argc: int(in.Key), ThisSlot: -1}
+	if in.Op == ir.CloseUpvalues {
+		site.Go = GoClose
+	}
+	b.f.cache(call).Calls, call.Index = []*CallSite{site}, b.f.Keeps
+	b.f.Keeps++
+	cell := b.f.newValue(blk, OpCallCell, Source, call)
+	r := b.f.newValue(blk, OpKept, Tagged, cell, call)
+	r.Shadow = cell
+	if in.Op == ir.Closure {
+		b.assign(in.Dest, blk, r)
+	}
 }
 
 // goConcat makes in, a concat, by a call of Go from native code (GoConcat),
@@ -1423,7 +1526,8 @@ func (b *builder) plan() error {
 	// go on without one too often is compiled with them (EntryFeedback).
 	resumes := func(pc int) bool {
 		switch op := p.Code[pc].Op; {
-		case b.host(pc), op == ir.ObjectLiteral, op == ir.ArrayLiteral, op == ir.StringAdd, op == ir.StringConcat, op == ir.ArrayWrite, op == ir.IterStep:
+		case b.host(pc), op == ir.ObjectLiteral, op == ir.ArrayLiteral, op == ir.StringAdd, op == ir.StringConcat, op == ir.ArrayWrite, op == ir.IterStep,
+			op == ir.Closure, op == ir.CloseUpvalues:
 			return true
 		}
 		return b.wantsEntry(pc + 1)
@@ -1476,7 +1580,7 @@ func (b *builder) plan() error {
 			// string was (compile's typeTests): no entry after it.
 		case ir.ArrayWrite, ir.PropertyRead, ir.PropertyWrite, ir.ReferenceRead, ir.BindingRead,
 			ir.StringMethod, ir.StringCode, ir.BindingWrite, ir.BindingCheck, ir.Resolved, ir.ObjectLiteral, ir.FieldDefine,
-			ir.ArrayLiteral, ir.StringConst, ir.UpvalueWrite, ir.StringAdd, ir.StringConcat:
+			ir.ArrayLiteral, ir.StringConst, ir.UpvalueWrite, ir.StringAdd, ir.StringConcat, ir.Closure, ir.CloseUpvalues:
 			// What native code does not do exits to Go, which resumes after
 			// it. A fixed global's check only deoptimizes: the binding can
 			// never move, so it never fails, and what follows sees its
@@ -1580,7 +1684,8 @@ func (b *builder) plan() error {
 			b.edge(blk, b.blockAt[last.Target])
 			b.edge(blk, b.blockAt[end+1])
 		case ir.Host, ir.Call, ir.PropertyRead, ir.PropertyWrite, ir.ReferenceRead, ir.BindingRead, ir.BindingWrite, ir.BindingCheck,
-			ir.ObjectLiteral, ir.FieldDefine, ir.ArrayLiteral, ir.StringConst, ir.UpvalueRead, ir.UpvalueWrite, ir.StringAdd, ir.StringConcat, ir.Rethrow:
+			ir.ObjectLiteral, ir.FieldDefine, ir.ArrayLiteral, ir.StringConst, ir.UpvalueRead, ir.UpvalueWrite, ir.StringAdd, ir.StringConcat, ir.Rethrow,
+			ir.Closure, ir.CloseUpvalues:
 			if fr := b.inlined[end]; fr != nil {
 				// Into the callee, whose returns go to the block after it.
 				blk.Kind = BlockPlain
@@ -1737,6 +1842,9 @@ func (b *builder) seal(blk *Block) {
 func (b *builder) assign(slot int, blk *Block, v *Value) {
 	if slot < len(b.f.written) {
 		b.f.written[slot] = true
+	}
+	if b.cur == b.root && b.p.IsCaptured(slot) {
+		b.storeCaptured(blk, slot, v)
 	}
 	b.write(slot, blk, v)
 }
@@ -1940,7 +2048,7 @@ func (b *builder) frameState(blk *Block, pc int) *FrameState {
 	depth := b.p.Maps[pc].Depth
 	s := b.f.newState(FrameState{PC: b.p.Maps[pc].PC, Depth: depth, Slots: b.f.refsOf(b.p.Locals + depth), Site: pc})
 	for i := range s.Slots {
-		if !b.p.LiveAt(pc, i) || i >= b.p.UpvalueBase && i < b.p.UpvalueBase+b.p.Upvalues {
+		if !b.p.LiveAt(pc, i) || i >= b.p.UpvalueBase && i < b.p.UpvalueBase+b.p.Upvalues || b.p.IsCaptured(i) {
 			// A local the interpreter writes before it reads from here:
 			// not written, nor kept alive for the exit, as V8 leaves dead
 			// registers out of a frame state. Nor is a captured binding,
@@ -1965,7 +2073,7 @@ func (b *builder) fill(blk *Block) {
 		e, _ := f.entryForBlock(blk)
 		blk.Header = f.newState(FrameState{PC: b.p.Maps[e.PC].PC, Depth: e.Depth, Slots: f.refsOf(b.p.Locals + e.Depth), Site: -1})
 		for i := range blk.Header.Slots {
-			if !b.p.LiveAt(e.PC, i) || i >= b.p.UpvalueBase && i < b.p.UpvalueBase+b.p.Upvalues {
+			if !b.p.LiveAt(e.PC, i) || i >= b.p.UpvalueBase && i < b.p.UpvalueBase+b.p.Upvalues || b.p.IsCaptured(i) {
 				// A local the interpreter writes before it reads from
 				// here is not loaded, as frame states leave it out: an
 				// entry's state names a slot's own load, which an exit
@@ -2012,8 +2120,18 @@ func (b *builder) instruction(blk *Block, pc int) {
 	if b.cur != b.root {
 		in = shifted(in, b.cur.base)
 	}
+	// The root frame's instruction's state is the builder's, which an
+	// assignment to a captured local shares (storeCaptured); an inlined
+	// callee's, this call's.
+	root := b.cur == b.root
+	if root {
+		b.rootSt, b.rootBlk, b.rootPC = nil, blk, pc
+	}
 	var st *FrameState
 	state := func() *FrameState {
+		if root {
+			return b.rootState()
+		}
 		if st == nil {
 			st = b.state(blk, pc)
 		}
@@ -2166,6 +2284,13 @@ func (b *builder) instruction(blk *Block, pc int) {
 			}
 			b.assign(b.cur.result, blk, v)
 			break
+		}
+		if b.p.Captured != nil && b.f.Keeps < b.f.keepLimit() {
+			// What closures captured of its locals closed before it
+			// returns, as the interpreter's frame's are as it is popped:
+			// a native callee's frame is gone once it returns (GoClose,
+			// which native code makes only while any is open).
+			b.goFrame(blk, ir.Instruction{Op: ir.CloseUpvalues}, guard)
 		}
 		blk.Control = v
 		v.Uses++
@@ -2340,6 +2465,14 @@ func (b *builder) instruction(blk *Block, pc int) {
 			break
 		}
 		b.iterStep(blk, in, operand, guard)
+	case ir.Closure, ir.CloseUpvalues:
+		if b.host(pc) || b.f.Keeps >= b.f.keepLimit() {
+			blk.ExitKind = ir.HostExit
+			blk.State = state()
+			blk.State.addUse()
+			break
+		}
+		b.goFrame(blk, in, guard)
 	case ir.Rethrow:
 		if b.host(pc) {
 			blk.ExitKind = ir.HostExit
@@ -2491,7 +2624,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			// The callee may have assigned a captured binding. A guard
 			// after the call exits to the next instruction, as the site
 			// there fails: never again, once it has (Generic).
-			if b.p.Upvalues > 0 {
+			if b.hasCells() {
 				b.reloadUpvalues(blk)
 			}
 			break

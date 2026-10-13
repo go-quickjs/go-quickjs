@@ -80,6 +80,12 @@ var jitEncoding = abi.Encoding{
 	IterDone:           int32(unsafe.Offsetof(iterState{}.done)),
 	IterArr:            int32(unsafe.Offsetof(iterState{}.arr)),
 	IterIdx:            int32(unsafe.Offsetof(iterState{}.idx)),
+	FuncData:           jitTypeWord((*funcData)(nil)),
+	FuncClosure:        int32(unsafe.Offsetof(funcData{}.closure)),
+	ClosureFn:          int32(unsafe.Offsetof(closure{}.fn)),
+	ClosureUpvalues:    int32(unsafe.Offsetof(closure{}.upvalues)),
+	ClosureEnv:         int32(unsafe.Offsetof(closure{}.env)),
+	ClosureRealm:       int32(unsafe.Offsetof(closure{}.realm)),
 	ClassArray:         uint8(ClassArray),
 	FlagSparse:         uint8(objHasSparseElements),
 	FlagHTMLDDA:        uint8(objHTMLDDA),
@@ -1472,12 +1478,19 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 		return nil
 	}
 	var sites []ssa.CallSite
-	for _, x := range jitTargets(fb.e) {
+	targets := jitTargets(fb.e)
+	for _, x := range targets {
 		// The calls it makes natively, and those it inlines, which a
 		// compile past its budget for inlining (ssa's maxInlines) calls
 		// instead, as V8's does: they had been made by Go.
 		in := *x
 		if int(in.pc) != pc || slices.ContainsFunc(sites, func(s ssa.CallSite) bool { return s.Callee == uintptr(unsafe.Pointer(in.obj)) }) {
+			continue
+		}
+		if in.cl != nil && slices.ContainsFunc(sites, func(s ssa.CallSite) bool {
+			return s.ByCode == uintptr(unsafe.Pointer(in.cl.fn)) && s.Env == uintptr(unsafe.Pointer(in.cl.env)) && s.Realm == uintptr(unsafe.Pointer(in.cl.realm))
+		}) {
+			// Another object of a function the call checks by its code.
 			continue
 		}
 		if in.cl == nil && in.pop {
@@ -1556,6 +1569,19 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 			site.Coerce = false
 			fb.pools = append(fb.pools, in.pool)
 		}
+		byCode := len(in.cl.upvalues) != 0 || in.byCode
+		for _, y := range targets {
+			if byCode {
+				break
+			}
+			byCode = int(y.pc) == pc && y.cl != nil && y.obj != in.obj && jitSameCode(y.cl, in.cl)
+		}
+		if site.Pool == 0 && !in.via && byCode {
+			// A closure: checked by its function, its closure the callee's
+			// at run time (ByCode), as the one an enclosing function makes
+			// at each of its calls is a new object each time.
+			site.ByCode, site.Env, site.Realm = uintptr(unsafe.Pointer(in.cl.fn)), uintptr(unsafe.Pointer(in.cl.env)), uintptr(unsafe.Pointer(in.cl.realm))
+		}
 		sites = append(sites, site)
 	}
 	if len(sites) == 0 {
@@ -1589,6 +1615,9 @@ type jitInline struct {
 	// push marks a call of Array.prototype.push (jitPushes), pop one of
 	// Array.prototype.pop (jitPops).
 	push, pop bool
+	// byCode marks a function the call met two objects of, closures its
+	// maker makes anew at each call: called by its code (jitSameCode).
+	byCode bool
 	// fwd, for an inlined forwarding constructor's construction
 	// (bytecode.LeafForward), is the method it forwards to, as the code was
 	// last compiled for (jitForwardMethod).
@@ -1892,6 +1921,33 @@ func jitHostCall(ctx *abi.Context) bool {
 		return true
 	case ssa.GoCall:
 		return r.jitGoCall(ctx)
+	case ssa.GoClosure, ssa.GoClose:
+		// On the frame whose locals are where native code assigns
+		// captured ones: the one Go entered the code with, or a native
+		// callee's, which its context stands for (jitCalleeFrame).
+		f := r.jitRunFrame(ctx)
+		callee := f == nil
+		if callee {
+			if f = r.jitCalleeFrame(ctx); f == nil {
+				return false
+			}
+		}
+		i := int(ctx.GoOp >> abi.GoOpIndexShift)
+		v := Undefined
+		if ssa.GoOp(ctx.GoOp&0xff) == ssa.GoClosure {
+			if i >= len(f.cl.consts) || callee && jitNeedsMaker(f.cl.consts[i]) {
+				return false
+			}
+			v = Obj(r.makeClosure(f, f.cl.consts[i]))
+		} else if len(f.openUpvalues) != 0 {
+			r.closeUpvaluesFrom(f, i)
+		}
+		if callee {
+			r.jit.calleeOpen[ctx.Level] = f.openUpvalues
+		}
+		ctx.Open = uint64(len(f.openUpvalues))
+		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+		return true
 	case ssa.GoElemCell:
 		o := *(**Object)(unsafe.Pointer(&ctx.GoArgs[0].Ref))
 		return o != nil && jitElemAbsent(o, math.Float64frombits(ctx.GoArgs[1].Num))
@@ -2105,6 +2161,75 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 	}
 	*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
 	return true
+}
+
+// jitRunFrame is the frame Go entered the code running in ctx with, or
+// nil for code a native call runs in it, which has none of the VM's.
+func (r *Runtime) jitRunFrame(ctx *abi.Context) *frame {
+	s := r.jit
+	idx := int(ctx.Level)
+	if ctx.Live != 0 || idx >= len(s.goRuns) || s.ssaCtxs[idx] != ctx {
+		return nil
+	}
+	return s.goRuns[idx].f
+}
+
+// jitCalleeFrame is a frame for the native callee running in ctx, which
+// has none of the VM's, to make a closure on or close what closures
+// captured (ssa.GoClosure, GoClose): its closure, its locals where its
+// context has them, its receiver, and the upvalues its closures have
+// captured of those locals, which its context keeps (calleeOpen) -- none
+// once its context's Open says so, as a native call clears it. Its code
+// closes them as it returns, and Go gives them to the frame it makes of
+// the callee if it finishes it (jitUnwindNative). Or nil.
+func (r *Runtime) jitCalleeFrame(ctx *abi.Context) *frame {
+	s := r.jit
+	cl := (*closure)(ctx.Closure)
+	if ctx.Live != abi.LiveCall || cl == nil || ctx.Locals == nil {
+		return nil
+	}
+	idx := int(ctx.Level)
+	if len(s.calleeOpen) < len(s.ssaCtxs) {
+		s.calleeOpen = append(s.calleeOpen, make([][]*upvalue, len(s.ssaCtxs)-len(s.calleeOpen))...)
+	}
+	if ctx.Open == 0 {
+		clear(s.calleeOpen[idx])
+		s.calleeOpen[idx] = s.calleeOpen[idx][:0]
+	}
+	f := &s.calleeFrame
+	*f = frame{}
+	f.cl = cl
+	f.locals = unsafe.Slice((*Value)(ctx.Locals), cl.fn.LocalCount)
+	f.openUpvalues = s.calleeOpen[idx]
+	f.this, f.newTarget = *(*Value)(unsafe.Pointer(&ctx.This)), Undefined
+	return f
+}
+
+// jitNeedsMaker reports whether the function template c makes is an arrow
+// that reads, or whose arrows read, its maker's new.target or super,
+// which a native callee's context does not have (jitCalleeFrame).
+func jitNeedsMaker(c Value) bool {
+	t := c.template()
+	if t == nil || t.fn.Kind != bytecode.KindArrow {
+		return false
+	}
+	var reads func(fn *bytecode.Function) bool
+	reads = func(fn *bytecode.Function) bool {
+		for _, in := range fn.Code {
+			switch in.Op {
+			case bytecode.OpNewTarget, bytecode.OpSuperCall, bytecode.OpGetSuperProp, bytecode.OpGetSuperIndex,
+				bytecode.OpSetSuperProp, bytecode.OpSetSuperIndex, bytecode.OpSuperBase:
+				return true
+			}
+		}
+		for _, k := range fn.Constants {
+			if k.Kind == bytecode.ConstFunction && k.Fn != nil && k.Fn.Kind == bytecode.KindArrow && reads(k.Fn) {
+				return true
+			}
+		}
+		return false
+	}
+	return reads(t.fn)
 }
 
 // jitGoPin pins the code the run in context idx runs, until its native code
@@ -3142,8 +3267,17 @@ func (r *Runtime) jitCallTarget(f *frame, e *jitEntry, pc, sp int, in bytecode.I
 		return
 	}
 	n := 0
-	for _, x := range e.nativeCalls {
+	for i := range e.nativeCalls {
+		x := &e.nativeCalls[i]
 		if int(x.pc) == pc {
+			if x.cl != nil && x.obj != o && jitSameCode(x.cl, cl) {
+				// Another closure of the function: called by its code from
+				// the next compile on.
+				if !x.byCode {
+					x.byCode, e.inlineReopt = true, true
+				}
+				return
+			}
 			if x.obj == o || x.cl == nil {
 				// One it calls, or a built-in's construction, which a site
 				// makes alone. One it calls whose code native callers do not
@@ -3165,6 +3299,26 @@ func (r *Runtime) jitCallTarget(f *frame, e *jitEntry, pc, sp int, in bytecode.I
 	}
 }
 
+// jitReadsUpvalues reports whether cl's code reads or assigns a binding it
+// captured.
+func jitReadsUpvalues(cl *closure) bool {
+	return len(cl.upvalues) != 0 && slices.ContainsFunc(cl.fn.Code, func(x bytecode.Instr) bool {
+		switch x.Op {
+		case bytecode.OpGetUpvalue, bytecode.OpGetUpvalueCheck, bytecode.OpSetUpvalue, bytecode.OpSetUpvalueCheck, bytecode.OpInitUpvalue:
+			return true
+		}
+		return false
+	})
+}
+
+// jitSameCode reports whether a and b are closures of one function, in one
+// environment and realm: a call native code makes of either may check the
+// function, and run the closure it finds (ssa.CallSite's ByCode), as each
+// call of their maker makes a new one.
+func jitSameCode(a, b *closure) bool {
+	return a.fn == b.fn && a.env == b.env && a.realm == b.realm
+}
+
 // jitNativeTarget is a function a call at pc calls natively: for a
 // construction, with the pool its objects come from, filled.
 // jitInlinesAt reports whether a call of o, cl's function, by in may be
@@ -3178,6 +3332,12 @@ func (r *Runtime) jitInlinesAt(cl *closure, o *Object, in bytecode.Instr) bool {
 		return r.jitConstructs(o) && r.jitForwardTarget(cl, o, jitInlineDepth) != nil
 	}
 	if !r.jitInlinable(cl.fn) && !r.jitInlinesCalls(cl, jitInlineDepth-1) {
+		return false
+	}
+	if jitReadsUpvalues(cl) {
+		// A closure that reads what it captured, which an inlined callee
+		// leaves to Go: called natively, by its code (jitSameCode), as a
+		// closure made anew at each call of its maker is a new object.
 		return false
 	}
 	return in.Op != bytecode.OpNew || r.jitConstructs(o) &&
@@ -4630,6 +4790,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 		ctx.Locals = unsafe.Pointer(unsafe.SliceData(f.locals))
 		ctx.Stack = unsafe.Pointer(&r.stack[f.base])
 		ctx.Upvalues = unsafe.Pointer(unsafe.SliceData(f.cl.upvalues))
+		ctx.Open = uint64(len(f.openUpvalues))
 		if e.this {
 			this, bound := f.thisValue()
 			if !bound {
@@ -5215,6 +5376,13 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, code *bytecode.Function)
 			f.newTarget = l.newTarget
 		}
 		f.openUpvalues, f.handlers = f.openUpvalues[:0], f.handlers[:0]
+		if c := s.ssaCtxs[l.ctx]; !l.inline && c.Open != 0 && l.ctx < len(s.calleeOpen) {
+			// What its closures captured, which its context kept, the
+			// frame's now, which closes it as it is popped.
+			f.openUpvalues = append(f.openUpvalues, s.calleeOpen[l.ctx]...)
+			clear(s.calleeOpen[l.ctx])
+			s.calleeOpen[l.ctx], c.Open = s.calleeOpen[l.ctx][:0], 0
+		}
 		f.thisRef, f.withScopes, f.evalVars, f.native, f.savedSP = nil, nil, nil, "", 0
 		if !l.inline {
 			// Those in force at its exit, or at its call: an exception

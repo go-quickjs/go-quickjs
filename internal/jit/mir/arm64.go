@@ -1318,6 +1318,32 @@ func (c *a64Compiler) goSavingKeep(op uint64, keep int, stub *arm64.Label) {
 	}
 }
 
+// byCode is amd64's: the callee's function checked, its pointer word in C,
+// and the object, its closure and its captured bindings kept in the
+// context. It uses A, B and C.
+func (c *a64Compiler) byCode(t *ssa.CallSite, next arm64.Label) {
+	c.a.Store(a64Ctx, abi.OffCallCallee, a64C)
+	c.a.Load(a64B, a64C, c.enc.ObjectData)
+	c.movImm(a64A, c.enc.FuncData)
+	c.a.Cmp(a64B, a64A, true)
+	c.a.BCond(arm64.NE, next)
+	c.a.Load(a64B, a64C, c.enc.ObjectData+8)
+	c.a.Load(a64B, a64B, c.enc.FuncClosure)
+	c.a.Cbz(a64B, next, true)
+	for _, f := range [...]struct {
+		off  int32
+		want uintptr
+	}{{c.enc.ClosureFn, t.ByCode}, {c.enc.ClosureEnv, t.Env}, {c.enc.ClosureRealm, t.Realm}} {
+		c.a.Load(a64A, a64B, f.off)
+		c.movImm(a64C, uint64(f.want))
+		c.a.Cmp(a64A, a64C, true)
+		c.a.BCond(arm64.NE, next)
+	}
+	c.a.Store(a64Ctx, abi.OffCallClosure, a64B)
+	c.a.Load(a64A, a64B, c.enc.ClosureUpvalues)
+	c.a.Store(a64Ctx, abi.OffCallUpvalues, a64A)
+}
+
 // savingCall is the routine the code's calls of Go that save every register
 // share, as amd64's.
 func (c *a64Compiler) savingCall() {
@@ -1691,15 +1717,24 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	guard(arm64.NE)
 	c.sourceRef(callee, guard)
 	checked := c.a.NewLabel()
-	for _, t := range sites {
+	for k, t := range sites {
 		next := c.a.NewLabel()
 		want := t.Callee
 		if t.Via != 0 {
 			want = t.Via
 		}
-		c.movImm(a64B, uint64(want))
-		c.a.Cmp(a64C, a64B, true)
-		c.a.BCond(arm64.NE, next)
+		if t.ByCode != 0 {
+			c.byCode(t, next)
+		} else {
+			c.movImm(a64B, uint64(want))
+			c.a.Cmp(a64C, a64B, true)
+			c.a.BCond(arm64.NE, next)
+		}
+		if len(sites) > 1 {
+			// As amd64's: which one (abi.Context's CallTarget).
+			c.movImm(a64B, uint64(k))
+			c.a.Store(a64Ctx, abi.OffCallTarget, a64B)
+		}
 		if t.Via != 0 {
 			c.viaGuards(t, v.Args[0], guard)
 		}
@@ -1856,6 +1891,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	c.a.Store(calleeCtx, abi.OffLocals, locals)
 	// As amd64's: what the callee's context shares, Go wrote.
 	c.a.Store(calleeCtx, abi.OffUpvalues, arm64.ZR)
+	c.a.Store(calleeCtx, abi.OffOpen, arm64.ZR)
 	c.a.Store(calleeCtx, abi.OffTailReturn, arm64.ZR)
 	c.a.Store(calleeCtx, abi.OffBase, base)
 	c.movImm(tmp, 1)
@@ -1863,15 +1899,11 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	back := c.a.NewLabel()
 	c.a.Adr(tmp, back)
 	c.a.Store(calleeCtx, abi.OffReturnTo, tmp)
-	if !direct {
-		_, _, rb, rd := words(calleeSlot)
-		c.a.Load(tmp, rb, rd)
-	}
 	for i, t := range sites {
 		next := c.a.NewLabel()
 		if i < len(sites)-1 {
-			c.movImm(top, uint64(t.Callee))
-			c.a.Cmp(tmp, top, true)
+			c.a.Load(top, a64Ctx, abi.OffCallTarget)
+			c.a.CmpImm(top, int64(i), true)
 			c.a.BCond(arm64.NE, next)
 		}
 		c.a.AddImm(top, locals, int64(t.LocalCount)*int64(vs), true)
@@ -1925,11 +1957,20 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 			c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, top)
 			c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, arm64.ZR)
 		}
-		c.movImm(top, uint64(t.Closure))
-		c.a.Store(calleeCtx, abi.OffClosure, top)
-		if t.Upvalues != 0 {
-			c.movImm(top, uint64(t.Upvalues))
+		if t.ByCode != 0 {
+			// As amd64's: the closure the checks found, and its captured
+			// bindings.
+			c.a.Load(top, a64Ctx, abi.OffCallClosure)
+			c.a.Store(calleeCtx, abi.OffClosure, top)
+			c.a.Load(top, a64Ctx, abi.OffCallUpvalues)
 			c.a.Store(calleeCtx, abi.OffUpvalues, top)
+		} else {
+			c.movImm(top, uint64(t.Closure))
+			c.a.Store(calleeCtx, abi.OffClosure, top)
+			if t.Upvalues != 0 {
+				c.movImm(top, uint64(t.Upvalues))
+				c.a.Store(calleeCtx, abi.OffUpvalues, top)
+			}
 		}
 		if t.Pool != 0 {
 			// A construction's new.target, for Go to make its frame with.
@@ -1952,6 +1993,9 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		c.a.BCond(arm64.LS, same)
 		c.a.Store(tmp, 0, top)
 		c.a.Bind(same)
+		if t.ByCode != 0 {
+			c.a.Load(high2, a64Ctx, abi.OffCallCallee)
+		}
 		c.movImm(a64A, uint64(t.Entry))
 		c.a.Load(a64A, a64A, 0)
 		c.a.MovRR(a64Ctx, calleeCtx)
@@ -1959,7 +2003,11 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		c.a.Cbz(a64A, enter, true)
 		c.a.Br(a64A)
 		c.a.Bind(enter)
-		c.movImm(a64A, uint64(t.Callee))
+		if t.ByCode != 0 {
+			c.a.MovRR(a64A, high2)
+		} else {
+			c.movImm(a64A, uint64(t.Callee))
+		}
 		if !c.enterUsed {
 			c.enter, c.enterUsed = c.a.NewLabel(), true
 		}
@@ -2260,6 +2308,15 @@ func (c *a64Compiler) goCall(v *ssa.Value, site *ssa.CallSite, guard func(arm64.
 		c.a.Bind(join)
 		c.a.Load(a64A, a64Ctx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
 		c.setG(v, a64A)
+		return
+	}
+	if site.Go == ssa.GoClose {
+		// As amd64's: only while closures have captured the frame's locals.
+		skip := c.a.NewLabel()
+		c.a.Load(a64A, a64Ctx, abi.OffOpen)
+		c.a.Cbz(a64A, skip, true)
+		c.goCallOp(v, goOpWord(site), false)
+		c.a.Bind(skip)
 		return
 	}
 	c.goCallOp(v, goOpWord(site), false)
@@ -2927,6 +2984,11 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 	case ssa.OpConstCell:
 		d := c.gdst(v)
 		c.movImm(d, v.Const.Bits)
+		c.setG(v, d)
+	case ssa.OpLocalCell:
+		// As amd64's: the captured local's slot in the frame.
+		d := c.gdst(v)
+		c.a.AddImm(d, a64Locals, int64(v.Index)*int64(c.enc.ValueSize), true)
 		c.setG(v, d)
 	case ssa.OpUpvalueCell:
 		// As amd64's: the binding's cell, then where its value is now.

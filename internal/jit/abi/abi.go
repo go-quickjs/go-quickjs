@@ -155,6 +155,21 @@ type Context struct {
 	// native code for native callers to call (ExitEnter), which its
 	// caller's code keeps alive.
 	EnterCallee uintptr
+	// CallCallee, CallClosure and CallUpvalues are the function object a
+	// native call that checks its function (ssa.CallSite's ByCode) found,
+	// its closure and its captured bindings' first cell: what the call
+	// gives its callee's context, kept here between its checks and its
+	// frame, while the callee's operands keep the object alive.
+	CallCallee, CallClosure, CallUpvalues uintptr
+	// CallTarget is which of a native call's functions its checks found,
+	// by its index among them, which its frame is made for.
+	CallTarget uint64
+	// Open counts what closures captured of the frame's locals and is not
+	// closed yet, which Go keeps, the frame's or, for a native callee's,
+	// its context's: a scope's end, and a return, call Go to close them
+	// only where one is (ssa.GoClose). A native call clears it for its
+	// callee.
+	Open uint64
 	// Records counts the Record entries an exit filled. Every other slot of
 	// its state is in the frame already.
 	Records uint64
@@ -379,6 +394,11 @@ var (
 	OffXRegs    = int32(unsafe.Offsetof(Context{}.XRegs))
 
 	OffInlineClosure = int32(unsafe.Offsetof(Context{}.InlineClosure))
+	OffCallCallee    = int32(unsafe.Offsetof(Context{}.CallCallee))
+	OffCallClosure   = int32(unsafe.Offsetof(Context{}.CallClosure))
+	OffCallUpvalues  = int32(unsafe.Offsetof(Context{}.CallUpvalues))
+	OffOpen          = int32(unsafe.Offsetof(Context{}.Open))
+	OffCallTarget    = int32(unsafe.Offsetof(Context{}.CallTarget))
 	OffEnterCallee   = int32(unsafe.Offsetof(Context{}.EnterCallee))
 	OffInlineLocals  = int32(unsafe.Offsetof(Context{}.InlineLocals))
 	OffInlineThis    = int32(unsafe.Offsetof(Context{}.InlineThis))
@@ -506,6 +526,14 @@ type Encoding struct {
 	ObjectData                 int32
 	IterState                  uint64
 	IterDone, IterArr, IterIdx int32
+	// A function object made from script is one whose data's type word is
+	// FuncData: the pointer at FuncClosure, in the data, is its closure,
+	// whose function's address is at ClosureFn, its captured bindings'
+	// first cell at ClosureUpvalues, its environment at ClosureEnv and its
+	// realm at ClosureRealm -- what a native call that checks the function,
+	// not the object (ssa.CallSite's ByCode), reads.
+	FuncData                                                          uint64
+	FuncClosure, ClosureFn, ClosureUpvalues, ClosureEnv, ClosureRealm int32
 	// FlagHTMLDDA is the flags byte's bit for Annex B's [[IsHTMLDDA]],
 	// which makes an object == null and == undefined.
 	FlagHTMLDDA uint8
@@ -589,11 +617,16 @@ func IsNumber(word uint64) bool { return word < NumberLimit }
 // marks -- a native call's, whose setup would store pointers without a
 // write barrier: Go makes it, and does not count it against the code's
 // profit, as it does not count an exit the marking made (ExitMarking).
+//
+// GoOpIndexShift is where a closure's (ssa.GoClosure) is the index of its
+// function's constant, and a scope's end's (ssa.GoClose) the first local it
+// closes, in the high half.
 const (
-	GoOpArgcShift = 8
-	GoOpKindShift = 16
-	GoCallMethod  = 1
-	GoCallNew     = 2
-	GoCallStep    = 3
-	GoOpMarking   = 1 << 24
+	GoOpArgcShift  = 8
+	GoOpKindShift  = 16
+	GoOpIndexShift = 32
+	GoCallMethod   = 1
+	GoCallNew      = 2
+	GoCallStep     = 3
+	GoOpMarking    = 1 << 24
 )
