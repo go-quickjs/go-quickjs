@@ -1218,15 +1218,17 @@ func (c *compiler) tailJump(t *ssa.CallSite, n int, this bool, guard func(amd64.
 // CallCallee), for the call to give its callee. It uses every scratch
 // register.
 func (c *compiler) byCode(t *ssa.CallSite, next amd64.Label) {
+	// A miss has the callee in scratchC again, for the next site to check.
+	miss, done := c.a.NewLabel(), c.a.NewLabel()
 	c.a.Store(regCtx, abi.OffCallCallee, scratchC)
 	c.a.Load(scratchB, scratchC, c.enc.ObjectData)
 	c.movImm(scratchA, c.enc.FuncData)
 	c.a.Op(amd64.Cmp, scratchB, scratchA, true)
-	c.a.Jcc(amd64.CondNE, next)
+	c.a.Jcc(amd64.CondNE, miss)
 	c.a.Load(scratchB, scratchC, c.enc.ObjectData+8)
 	c.a.Load(scratchB, scratchB, c.enc.FuncClosure)
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
-	c.a.Jcc(amd64.CondE, next)
+	c.a.Jcc(amd64.CondE, miss)
 	for _, f := range [...]struct {
 		off  int32
 		want uintptr
@@ -1234,11 +1236,16 @@ func (c *compiler) byCode(t *ssa.CallSite, next amd64.Label) {
 		c.a.Load(scratchA, scratchB, f.off)
 		c.movImm(scratchC, uint64(f.want))
 		c.a.Op(amd64.Cmp, scratchA, scratchC, true)
-		c.a.Jcc(amd64.CondNE, next)
+		c.a.Jcc(amd64.CondNE, miss)
 	}
 	c.a.Store(regCtx, abi.OffCallClosure, scratchB)
 	c.a.Load(scratchA, scratchB, c.enc.ClosureUpvalues)
 	c.a.Store(regCtx, abi.OffCallUpvalues, scratchA)
+	c.a.Jmp(done)
+	c.a.Bind(miss)
+	c.a.Load(scratchC, regCtx, abi.OffCallCallee)
+	c.a.Jmp(next)
+	c.a.Bind(done)
 }
 
 // callGo is a call of Go, op, its operands in the context's GoArgs: what

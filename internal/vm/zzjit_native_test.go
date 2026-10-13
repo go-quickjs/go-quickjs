@@ -359,6 +359,27 @@ func TestJITCallbackTierSelection(t *testing.T) {
 	}
 }
 
+// A call site that has seen closures of several functions checks each by
+// its code in turn, and one that misses the first goes on to the next with
+// the callee it was given: each's calls stay native, none left to Go.
+func TestJITCallByCodeSecondCandidate(t *testing.T) {
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	setup := `function each(a, fn) { let s = 0; for (let i = 0; i < a.length; i++) s += fn(a[i]); return s }
+		function run(k) { const f = k % 3 == 0 ? (x => x + k) : k % 3 == 1 ? (x => x * k) : (x => x - k); return each([1, 2, 3, 4], f) }
+		function runs(n) { let r = 0; for (let k = 0; k < n; k++) r += run(k); return r }
+		runs(200)`
+	if _, err := r.Run(compileForTest(t, setup)); err != nil {
+		t.Fatal(err)
+	}
+	e := jitNativeForTest(t, r, "each")
+	hosts, slow, guards := e.ssaStats.hosts, e.slowCalls, r.jit.guards
+	v, err := r.Run(compileForTest(t, `runs(300)`))
+	if err != nil || v.Number() != 150700 || e.ssaStats.hosts != hosts || e.slowCalls != slow || r.jit.guards != guards {
+		t.Fatalf("runs(300) = %v, %v; each ended in Go %d times, called slowly %d times, %d guards failed",
+			v, err, e.ssaStats.hosts-hosts, e.slowCalls-slow, r.jit.guards-guards)
+	}
+}
+
 func TestJITBoundaryDensityBudget(t *testing.T) {
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	v, err := r.Run(compileForTest(t, `function f(a,n){let s=0;for(let i=0;i<n;i++){s+=a[0]%3;a[0]+=3}return s}let a=[2];f(a,20000)===40000&&a[0]===60002`))

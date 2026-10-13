@@ -1322,14 +1322,16 @@ func (c *a64Compiler) goSavingKeep(op uint64, keep int, stub *arm64.Label) {
 // and the object, its closure and its captured bindings kept in the
 // context. It uses A, B and C.
 func (c *a64Compiler) byCode(t *ssa.CallSite, next arm64.Label) {
+	// A miss has the callee in C again, for the next site to check.
+	miss, done := c.a.NewLabel(), c.a.NewLabel()
 	c.a.Store(a64Ctx, abi.OffCallCallee, a64C)
 	c.a.Load(a64B, a64C, c.enc.ObjectData)
 	c.movImm(a64A, c.enc.FuncData)
 	c.a.Cmp(a64B, a64A, true)
-	c.a.BCond(arm64.NE, next)
+	c.a.BCond(arm64.NE, miss)
 	c.a.Load(a64B, a64C, c.enc.ObjectData+8)
 	c.a.Load(a64B, a64B, c.enc.FuncClosure)
-	c.a.Cbz(a64B, next, true)
+	c.a.Cbz(a64B, miss, true)
 	for _, f := range [...]struct {
 		off  int32
 		want uintptr
@@ -1337,11 +1339,16 @@ func (c *a64Compiler) byCode(t *ssa.CallSite, next arm64.Label) {
 		c.a.Load(a64A, a64B, f.off)
 		c.movImm(a64C, uint64(f.want))
 		c.a.Cmp(a64A, a64C, true)
-		c.a.BCond(arm64.NE, next)
+		c.a.BCond(arm64.NE, miss)
 	}
 	c.a.Store(a64Ctx, abi.OffCallClosure, a64B)
 	c.a.Load(a64A, a64B, c.enc.ClosureUpvalues)
 	c.a.Store(a64Ctx, abi.OffCallUpvalues, a64A)
+	c.a.B(done)
+	c.a.Bind(miss)
+	c.a.Load(a64C, a64Ctx, abi.OffCallCallee)
+	c.a.B(next)
+	c.a.Bind(done)
 }
 
 // savingCall is the routine the code's calls of Go that save every register
