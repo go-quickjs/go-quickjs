@@ -3272,6 +3272,12 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		guard(arm64.HS)
 	case ssa.OpTailSelf:
 		c.tailSelf(v, guard)
+	case ssa.OpSameSymbol:
+		if c.reference(v, v.Args[0], c.enc.Symbol, guard) {
+			c.movImm(a64B, v.Const.Bits)
+			c.a.Cmp(a64C, a64B, true)
+			guard(arm64.NE)
+		}
 	case ssa.OpTailRoom:
 		c.a.Load(a64A, a64Ctx, abi.OffLevel)
 		c.a.Load(a64B, a64Ctx, abi.OffTailLevel)

@@ -152,9 +152,20 @@ entered the code with, which the VM's frame describes, is given up by Go
 keeps for such a call -- a construction's, an arrow's sharing a derived
 constructor's this -- native code keeps too (`TailFrame`).
 
-**Not compiled yet.** Destructuring from an iterator and code using
-private fields run in the tree tier, which handles both; the JIT is to
-follow it there.
+**Private members.** A private member is a property under a key each
+evaluation of its class mints, a symbol, which a binding the class's
+methods capture holds. A read or a write of one is a property's (an
+`ir.PropertyRead` or `PropertyWrite` marked `Private`), native in objects
+of the shapes its site met, which the VM learns as Go makes it at an exit
+(`jitPrivateSeen`), as V8's inline caches learn a private name's maps; and
+`#x in o` is true natively where the read would find the member. Two
+evaluations of a class share their methods' code, so the code checks that
+the binding holds the key it was compiled for (`ssa.OpSameSymbol`). Go
+makes the rest -- a member's definition, an accessor, a key in a local,
+and a class's or an object literal's other members (`jitHost`).
+
+**Not compiled yet.** Destructuring from an iterator runs in the tree
+tier; the JIT is to follow it there.
 
 **Profitability.** Each native stretch's work is estimated, exits and
 calls of Go counted against it; code whose stretches do too little between

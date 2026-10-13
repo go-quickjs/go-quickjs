@@ -65,6 +65,7 @@ var jitEncoding = abi.Encoding{
 	PropUninit:      uint8(propUninit),
 
 	String:       math.Float64bits(mkTag(KindString, 0)),
+	Symbol:       math.Float64bits(mkTag(KindSymbol, 0)),
 	StringData:   int32(unsafe.Offsetof(String{}.s)),
 	StringLeft:   int32(unsafe.Offsetof(String{}.left)),
 	StringLength: int32(unsafe.Offsetof(String{}.length)),
@@ -284,6 +285,81 @@ func (r *Runtime) jitPolySeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 		return
 	}
 	e.polyPending, e.polySettled = true, 0
+}
+
+// jitPrivateSeen notes a private member's read or write, or #x in o,
+// native code left to Go at pc, its operands on the frame's up to sp: an
+// object of a shape the site has not met, whose own data the member is --
+// a field, or, but for a write, a method -- joins the site's cases, as a property read's do
+// (jitPolySeen), and the code is compiled again for them. A key in a local,
+// of a class the function itself evaluates, is Go's.
+func (r *Runtime) jitPrivateSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Instr) {
+	if e == nil || in.B&1 == 0 || int(in.B>>1) >= len(f.cl.upvalues) {
+		return
+	}
+	at := sp - 1
+	if in.Op == bytecode.OpSetPrivate {
+		at = sp - 2
+	}
+	if at < 0 || !r.stack[at].IsObject() {
+		return
+	}
+	o := r.stack[at].Object()
+	sh, i := o.shape, o.findOwn(privateKey(f, f.cl, in.B))
+	if sh == nil || sh == noShape || i < 0 || i >= sh.n || int(i) >= len(o.props) {
+		return
+	}
+	if p := &o.props[i]; p.isAccessor() || in.Op == bytecode.OpSetPrivate && p.flags&propWritable == 0 {
+		return
+	} else if in.Op == bytecode.OpGetPrivate && !p.value.IsNumber() {
+		// A read that met a value not a number reads it as a value.
+		jitNumberMissed(e, pc)
+	}
+	if jitAddReadCase(jitPolySiteAt(e, pc), propCache{shape: sh, idx: i}) {
+		e.polyPending, e.polySettled = true, 0
+	}
+}
+
+// privateProperty is Property's site for a private member's read or write
+// at pc: the property of the key the closure's binding holds -- a symbol
+// each evaluation of the class mints, which the code checks the binding
+// holds (ssa.PropertySite's Private) -- in the objects of the shapes the
+// site met (jitPrivateSeen), the first its own, the rest its cases. A site
+// that has met none, or whose key is in a local, is Go's.
+func (fb *jitFeedback) privateProperty(pc int, in bytecode.Instr) (ssa.PropertySite, bool) {
+	ref := int(in.B >> 1)
+	if in.B&1 == 0 || ref >= len(fb.cl.upvalues) || fb.cl.upvalues[ref] == nil {
+		return ssa.PropertySite{}, false
+	}
+	key := fb.cl.upvalues[ref].get()
+	e := fb.e
+	if fb.root != nil || e == nil {
+		// An inlined callee's: what its own code met.
+		e = fb.r.jit.cache[weak.Make(fb.fn)]
+	}
+	if !key.IsSymbol() || e == nil {
+		return ssa.PropertySite{}, false
+	}
+	var cases []propCache
+	for i := range e.poly {
+		if int(e.poly[i].pc) == pc {
+			cases = e.poly[i].cases
+		}
+	}
+	if len(cases) == 0 {
+		return ssa.PropertySite{}, false
+	}
+	site := ssa.PropertySite{Key: uint32(fb.r.atoms.internSymbol(key.Symbol())), Private: uintptr(unsafe.Pointer(key.Symbol()))}
+	k := fb.keep()
+	for i, c := range cases {
+		k.shapes = append(k.shapes, remember(c.shape))
+		if i == 0 {
+			site.Shape, site.Index = uintptr(unsafe.Pointer(c.shape)), c.idx
+			continue
+		}
+		site.Cases = append(site.Cases, ssa.PropertyCase{Shape: uintptr(unsafe.Pointer(c.shape)), Index: c.idx})
+	}
+	return site, true
 }
 
 // jitNumberMissed notes that the read at pc met a value that is not a
@@ -4212,6 +4288,11 @@ func (fb *jitFeedback) StringProperty(pc int) (ssa.PropertySite, bool) {
 }
 
 func (fb *jitFeedback) Property(pc int) (ssa.PropertySite, bool) {
+	if fb.cl != nil && pc < len(fb.fn.Code) {
+		if in := fb.fn.Code[pc]; in.Op == bytecode.OpGetPrivate || in.Op == bytecode.OpSetPrivate || in.Op == bytecode.OpPrivateIn {
+			return fb.privateProperty(pc, in)
+		}
+	}
 	site, ok := fb.property(pc)
 	deep := false
 	if ok && fb.fwd == nil && site.Shape == 0 && site.Holders[0].Object == 0 {
@@ -5162,6 +5243,8 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 				r.jitCallSeen(f, e, exitPC, f.base+int(ctx.ExitDepth), jitCallInstr(in))
 			case bytecode.OpGetProp, bytecode.OpGetPropThis:
 				r.jitPolySeen(f, e, exitPC, f.base+int(ctx.ExitDepth), in)
+			case bytecode.OpGetPrivate, bytecode.OpSetPrivate, bytecode.OpPrivateIn:
+				r.jitPrivateSeen(f, e, exitPC, f.base+int(ctx.ExitDepth), in)
 			case bytecode.OpNewObject, bytecode.OpNewArray, bytecode.OpNewRegExp:
 				r.jitRefillLiteral(f, e, exitPC)
 			case bytecode.OpDefineField:
@@ -5897,6 +5980,8 @@ func (r *Runtime) jitFinishExit(f *frame, e *jitEntry, l *jitNativeLevel) (Value
 				r.jitCallSeen(f, e, pc, f.base+depth, jitCallInstr(in))
 			case bytecode.OpGetProp, bytecode.OpGetPropThis:
 				r.jitPolySeen(f, e, pc, f.base+depth, in)
+			case bytecode.OpGetPrivate, bytecode.OpSetPrivate, bytecode.OpPrivateIn:
+				r.jitPrivateSeen(f, e, pc, f.base+depth, in)
 			case bytecode.OpNewObject, bytecode.OpNewArray, bytecode.OpNewRegExp:
 				r.jitRefillLiteral(f, e, pc)
 			case bytecode.OpDefineField:

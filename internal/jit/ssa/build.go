@@ -472,6 +472,10 @@ type PropertySite struct {
 	// has it inherits, as DeltaBlue's constraints' addConstraint.
 	More  []Holder
 	Cases []PropertyCase
+	// Private, for a private member's read or write, is the address of
+	// its key, the symbol the code checks the binding holds
+	// (OpSameSymbol), the VM keeping it.
+	Private uintptr
 	// Add, for a write whose cache adds the property, says how; Shape is
 	// then 0. Adds are the adds a write met objects of other shapes take,
 	// as V8's polymorphic stores keep a transition for each map; a write's
@@ -2431,6 +2435,12 @@ func (b *builder) instruction(blk *Block, pc int) {
 			blk.State.addUse()
 			break
 		}
+		if in.Private {
+			// The key this evaluation of the class minted, the one the
+			// site's shapes have.
+			k := guard(OpSameSymbol, None, ir.HostExit, operand(in.Third))
+			k.Const = ir.Value{Bits: uint64(site.Private)}
+		}
 		object := guard(OpObjectOf, Ptr, ir.HostExit, operand(in.Left))
 		// A read the receiver's prototypes answered checks them too; a
 		// write, which makes a property of the receiver's own, never meets
@@ -2444,6 +2454,17 @@ func (b *builder) instruction(blk *Block, pc int) {
 		var cases []PropertyCase
 		if site.Shape != 0 || in.Op == ir.PropertyWrite {
 			cases = site.Cases
+		}
+		if in.Private && in.When {
+			// #x in o: true where the read finds the member -- an object of
+			// a shape the site has met -- and Go's answer elsewhere.
+			cell := guard(OpPropCell, Source, ir.HostExit, object)
+			cell.Const, cell.Index, cell.Key = ir.Value{Bits: uint64(site.Shape)}, int(site.Index), site.Key
+			f.setProperty(cell, holders, cases, nil, nil)
+			k := f.newValue(blk, OpConst, Tagged)
+			k.Const = ir.Bool(true)
+			b.assign(in.Dest, blk, k)
+			break
 		}
 		if in.Op == ir.ReferenceRead || in.Op == ir.PropertyRead && b.fb != nil && b.fb.Generic(pc) {
 			// A reference's read; or a number's that met a value that was

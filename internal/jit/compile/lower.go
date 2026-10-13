@@ -231,6 +231,20 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		if in.Op == bytecode.OpApplyArguments && !m.forward {
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
+		if (isPrivate(in.Op) || isDefinition(in.Op)) && !m.ssa {
+			// The new pipeline reads and writes a private member as a
+			// property, its key checked; Go makes the rest.
+			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
+		}
+		if m.callee && (isDefinition(in.Op) || isPrivate(in.Op) && in.Op != bytecode.OpGetPrivate && in.Op != bytecode.OpSetPrivate && in.Op != bytecode.OpPrivateIn) {
+			// What Go makes of them -- a class's or a literal's member, a
+			// private member's definition -- leaves native code, after which
+			// Go goes on natively in a function's own code, at the entry
+			// after it, but finishes a callee in the interpreter, which has
+			// none: a callee's every call would leave, and Go is the one to
+			// call it.
+			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
+		}
 		if (in.Op == bytecode.OpTailCall || in.Op == bytecode.OpTailCallMethod) && (!m.ssa || m.callee) {
 			// A tail call gives up its frame deep enough in the stack: a
 			// function's own, in the new pipeline, which a callee inlined
@@ -258,7 +272,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// throws it, as V8's code calls the runtime to throw.
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
-		host = host || str || iters || in.Op == bytecode.OpClosure || in.Op == bytecode.OpCloseUpvalues || in.Op == bytecode.OpImport || in.Op == bytecode.OpImportMeta || in.Op == bytecode.OpYield || in.Op == bytecode.OpAwait || in.Op == bytecode.OpThrow ||
+		host = host || str || iters || isPrivate(in.Op) || isDefinition(in.Op) || in.Op == bytecode.OpClosure || in.Op == bytecode.OpCloseUpvalues || in.Op == bytecode.OpImport || in.Op == bytecode.OpImportMeta || in.Op == bytecode.OpYield || in.Op == bytecode.OpAwait || in.Op == bytecode.OpThrow ||
 			in.Op == bytecode.OpNewDisposeCapability || in.Op == bytecode.OpAddDisposable || in.Op == bytecode.OpDispose || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpApplyArguments || in.Op == bytecode.OpNew || in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict || in.Op == bytecode.OpCheckGlobalRef || in.Op == bytecode.OpNewObject || in.Op == bytecode.OpNewRegExp || in.Op == bytecode.OpDefineField || in.Op == bytecode.OpPushEmptyString || in.Op == bytecode.OpConcat || in.Op == bytecode.OpNewArray || in.Op == bytecode.OpCall || in.Op == bytecode.OpCallMethod || in.Op == bytecode.OpTailCall || in.Op == bytecode.OpTailCallMethod || in.Op == bytecode.OpGetGlobal || in.Op == bytecode.OpGetGlobalOpt || in.Op == bytecode.OpGetPropThis || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		property = property || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		this = this || in.Op == bytecode.OpPushThis
@@ -1053,6 +1067,54 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 		return effect{delta: 1}, nil
 	case bytecode.OpPushThis, bytecode.OpPushEmptyString:
 		return effect{delta: 1}, nil
+	case bytecode.OpGetPrivate, bytecode.OpSetPrivate, bytecode.OpPrivateIn,
+		bytecode.OpDefinePrivate, bytecode.OpDefinePrivateMethod, bytecode.OpDefinePrivateGetter, bytecode.OpDefinePrivateSetter,
+		bytecode.OpAddPrivateMethod, bytecode.OpAddPrivateGetter, bytecode.OpAddPrivateSetter:
+		// A is the name; B where its key is: a local, or, its low bit
+		// set, a captured binding.
+		if uint64(in.A) >= uint64(len(fn.Names)) || in.B&1 == 0 && !local(in.B>>1) || in.B&1 != 0 && uint64(in.B>>1) >= uint64(len(fn.Upvalues)) {
+			return bad("invalid private name")
+		}
+		switch in.Op {
+		case bytecode.OpGetPrivate, bytecode.OpPrivateIn:
+			return effect{need: 1}, nil
+		case bytecode.OpSetPrivate, bytecode.OpAddPrivateMethod, bytecode.OpAddPrivateGetter, bytecode.OpAddPrivateSetter:
+			return effect{need: 2, delta: -2}, nil
+		}
+		// A definition: the value popped, its object kept.
+		return effect{need: 2, delta: -1}, nil
+	case bytecode.OpPrivateName, bytecode.OpNewPrivateMethods:
+		if uint64(in.A) >= uint64(len(fn.Names)) {
+			return bad("invalid name")
+		}
+		return effect{delta: 1}, nil
+	case bytecode.OpNewClass, bytecode.OpSetFieldInit:
+		// The constructor kept, its parent or its fields' initializer
+		// popped.
+		return effect{need: 2, delta: -1}, nil
+	case bytecode.OpSetHomeObject:
+		// The method, its home object A slots below it.
+		if in.A > MaxSlots {
+			return bad("invalid home object")
+		}
+		return effect{need: int(in.A) + 1}, nil
+	case bytecode.OpDefineMethod, bytecode.OpDefineGetter, bytecode.OpDefineSetter:
+		// The function popped, its object kept; A the name.
+		if uint64(in.A) >= uint64(len(fn.Names)) {
+			return bad("invalid name")
+		}
+		return effect{need: 2, delta: -1}, nil
+	case bytecode.OpDefineIndex, bytecode.OpDefineGetterIndex, bytecode.OpDefineSetterIndex:
+		// The key and the value popped, the object kept.
+		return effect{need: 3, delta: -2}, nil
+	case bytecode.OpSetFuncName:
+		// The function named after the key below it.
+		return effect{need: 2}, nil
+	case bytecode.OpToPropertyKey:
+		return effect{need: 1}, nil
+	case bytecode.OpInstallPrivateMethods:
+		// The class's private methods, popped, onto the receiver.
+		return effect{need: 1, delta: -1}, nil
 	case bytecode.OpGetGlobalOpt:
 		// typeof's read of a name, which has no site of its own.
 		if uint64(in.A) >= uint64(len(fn.Names)) {
@@ -1307,6 +1369,41 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 	return bad("unsupported opcode " + in.Op.String())
 }
 
+// isPrivate reports whether op is a private member's (bytecode's private
+// class members), which only the new pipeline compiles.
+func isPrivate(op bytecode.Op) bool {
+	switch op {
+	case bytecode.OpGetPrivate, bytecode.OpSetPrivate, bytecode.OpPrivateIn,
+		bytecode.OpDefinePrivate, bytecode.OpDefinePrivateMethod, bytecode.OpDefinePrivateGetter, bytecode.OpDefinePrivateSetter,
+		bytecode.OpAddPrivateMethod, bytecode.OpAddPrivateGetter, bytecode.OpAddPrivateSetter,
+		bytecode.OpPrivateName, bytecode.OpNewPrivateMethods, bytecode.OpInstallPrivateMethods:
+		return true
+	}
+	return false
+}
+
+// isDefinition reports whether op makes a class's or an object literal's
+// member, which only the new pipeline compiles, as Go's (jitHost).
+func isDefinition(op bytecode.Op) bool {
+	switch op {
+	case bytecode.OpNewClass, bytecode.OpSetHomeObject, bytecode.OpSetFieldInit, bytecode.OpDefineMethod,
+		bytecode.OpDefineIndex, bytecode.OpDefineGetter, bytecode.OpDefineSetter, bytecode.OpSetFuncName,
+		bytecode.OpDefineGetterIndex, bytecode.OpDefineSetterIndex, bytecode.OpToPropertyKey:
+		return true
+	}
+	return false
+}
+
+// privateKeySlot is the slot of the binding a private instruction's B
+// names, which holds its key: a local, or, its low bit set, a captured
+// binding, whose slots follow the locals.
+func privateKeySlot(fn *bytecode.Function, ref uint32) ir.Operand {
+	if ref&1 != 0 {
+		return ir.Slot(fn.LocalCount + int(ref>>1))
+	}
+	return ir.Slot(int(ref >> 1))
+}
+
 // strictOp reports whether a raw comparison opcode is === or !==.
 func strictOp(raw uint32) bool {
 	return raw == uint32(bytecode.OpStrictEq) || raw == uint32(bytecode.OpStrictNe)
@@ -1412,6 +1509,25 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this bool) ir.Instr
 		}
 		return ir.Instruction{Op: ir.Host}
 	case bytecode.OpNewArray, bytecode.OpCall, bytecode.OpMod, bytecode.OpNew:
+		return ir.Instruction{Op: ir.Host}
+	case bytecode.OpGetPrivate:
+		// A property read, of the key the binding holds (Private).
+		return ir.Instruction{Op: ir.PropertyRead, Left: top, Dest: sp - 1, Key: in.A, Third: privateKeySlot(fn, in.B), Private: true}
+	case bytecode.OpSetPrivate:
+		return ir.Instruction{Op: ir.PropertyWrite, Left: ir.Slot(sp - 2), Right: top, Key: in.A, Third: privateKeySlot(fn, in.B), Private: true}
+	case bytecode.OpPrivateIn:
+		// #x in o: a read of whether it is there (When).
+		return ir.Instruction{Op: ir.PropertyRead, Left: top, Dest: sp - 1, Key: in.A, Third: privateKeySlot(fn, in.B), Private: true, When: true}
+	case bytecode.OpDefinePrivate, bytecode.OpDefinePrivateMethod, bytecode.OpDefinePrivateGetter,
+		bytecode.OpDefinePrivateSetter, bytecode.OpAddPrivateMethod, bytecode.OpAddPrivateGetter, bytecode.OpAddPrivateSetter,
+		bytecode.OpPrivateName, bytecode.OpNewPrivateMethods, bytecode.OpInstallPrivateMethods:
+		// Go's (jitHost): a class's members made and given to an
+		// instance as it is constructed, and #x in o.
+		return ir.Instruction{Op: ir.Host}
+	case bytecode.OpNewClass, bytecode.OpSetHomeObject, bytecode.OpSetFieldInit, bytecode.OpDefineMethod,
+		bytecode.OpDefineIndex, bytecode.OpDefineGetter, bytecode.OpDefineSetter, bytecode.OpSetFuncName,
+		bytecode.OpDefineGetterIndex, bytecode.OpDefineSetterIndex, bytecode.OpToPropertyKey:
+		// Go's (jitHost): a class or an object literal's members made.
 		return ir.Instruction{Op: ir.Host}
 	case bytecode.OpTailCall, bytecode.OpTailCallMethod:
 		// A call, made as an ordinary one where the stack is shallow, as

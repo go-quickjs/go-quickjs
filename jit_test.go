@@ -178,6 +178,53 @@ func TestJITImport(t *testing.T) {
 	}
 }
 
+// A private member is read and written natively as a property of its key,
+// a symbol each evaluation of its class mints, in objects of the shapes the
+// site met; the code checks the key its binding holds is the one it was
+// compiled for, since two evaluations of a class share their methods' code.
+// #x in o is true natively where the read would find the member. Go makes
+// the rest: a class's members, accessors, a key in a local.
+func TestJITPrivateMembers(t *testing.T) {
+	cases := []struct{ name, src string }{
+		{"fields and methods", `class C { #x = 1; #y = 0.5; #m() { return this.#x * 2 } run(n) { let s = 0; for (let i = 0; i < n; i++) { this.#x = i; this.#y += 1; s += this.#m() + (#x in this ? 1 : 0) } return s + this.#y } }
+			const c = new C(); let r = 0; for (let k = 0; k < 50; k++) r += c.run(2000); r`},
+		{"two evaluations of a class", `function make(v) { return class { #x = v; static get(o) { let s = 0; for (let i = 0; i < 100; i++) s += o.#x; return s } } }
+			const A = make(1), B = make(2), a = new A(), b = new B(); let r = "";
+			for (let k = 0; k < 200; k++) r = A.get(a) + ":" + B.get(b);
+			for (let k = 0; k < 3; k++) { try { A.get(b) } catch (e) { r += ":" + e.constructor.name } try { B.get(a) } catch (e) { r += ":" + e.constructor.name } } r`},
+		{"#x in o", `class K { #k; static has(o) { let n = 0; for (let i = 0; i < 100; i++) if (#k in o) n++; return n } }
+			const objs = [new K(), {}, new K(), Object.create(K.prototype)]; let r = 0; for (let k = 0; k < 400; k++) r += K.has(objs[k % 4]); r`},
+		{"accessors, statics and errors", `class G { #v = 3; static #count = 0; get #twice() { return this.#v * 2 } set #twice(x) { this.#v = x / 2 } #f() {}
+			step() { let s = 0; for (let i = 0; i < 100; i++) { this.#twice = i * 2; s += this.#twice; G.#count++ } return s }
+			static count() { return G.#count } bad() { try { this.#f = 1 } catch (e) { return e.constructor.name } } }
+			const g = new G(); let r = 0; for (let k = 0; k < 50; k++) r += g.step(); r + ":" + G.count() + ":" + g.bad()`},
+		{"shapes", `class Q { #p = 0; constructor(extra) { if (extra) this.e = 1 } bump(n) { for (let i = 0; i < n; i++) this.#p += i; return this.#p } }
+			const qs = [new Q(false), new Q(true)]; let r = 0; for (let k = 0; k < 200; k++) r += qs[k & 1].bump(100); r`},
+		{"strings", `class S { #s = ""; grow(n) { for (let i = 0; i < n; i++) this.#s += i % 10; return this.#s.length } } let r = 0; for (let k = 0; k < 50; k++) r += new S().grow(500); r`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			run := func(opts ...quickjs.Option) (string, vm.JITStats) {
+				r := quickjs.New(opts...)
+				defer r.Close()
+				v, err := r.Eval(tc.src)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return v.String(), hostaccess.VM(r).JITStats()
+			}
+			want, _ := run()
+			got, st := run(quickjs.WithJIT())
+			if got != want {
+				t.Fatalf("jit: %s, interpreter: %s", got, want)
+			}
+			if st.Budget != 0 && st.SSAEntries == 0 {
+				t.Errorf("nothing ran natively: %+v", st)
+			}
+		})
+	}
+}
+
 // A call in tail position is an ordinary call where the stack is shallow
 // and gives its frame up deeper, as the interpreter's does (tailCallDepth):
 // native code makes a call of the function itself a jump to its start, and,

@@ -3502,6 +3502,12 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		guard(amd64.CondAE)
 	case ssa.OpTailSelf:
 		c.tailSelf(v, guard)
+	case ssa.OpSameSymbol:
+		if c.reference(v, v.Args[0], c.enc.Symbol, guard) {
+			c.movImm(scratchB, v.Const.Bits)
+			c.a.Op(amd64.Cmp, scratchC, scratchB, true)
+			guard(amd64.CondNE)
+		}
 	case ssa.OpTailRoom:
 		c.a.Load(scratchA, regCtx, abi.OffLevel)
 		c.a.Load(scratchB, regCtx, abi.OffTailLevel)

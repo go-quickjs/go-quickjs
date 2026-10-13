@@ -312,6 +312,12 @@ type Instruction struct {
 	// Extra is its arguments' count; When marks a method's call, whose
 	// receiver is below the function.
 	Tail bool
+	// Private marks a PropertyRead or PropertyWrite of a private member,
+	// whose key -- a symbol each evaluation of its class mints -- is in
+	// the binding Third names: the read or write is native where the key
+	// is the one the code was compiled for. A read with When is #x in o:
+	// true where the read would find the member.
+	Private bool
 }
 
 // StateMap describes state immediately before a bytecode instruction. PC is

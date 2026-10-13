@@ -1800,7 +1800,14 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			bytecode.OpInitUpvalue, bytecode.OpSetUpvalueCheck, bytecode.OpConcat, bytecode.OpNewDisposeCapability, bytecode.OpAddDisposable,
 			bytecode.OpForOfStart, bytecode.OpForInStart, bytecode.OpIterNextOrJump, bytecode.OpIterClose, bytecode.OpIterCloseNormal,
 			bytecode.OpIterResume, bytecode.OpIterUnpackDelegate, bytecode.OpImport, bytecode.OpImportMeta,
-			bytecode.OpInitGlobalLex, bytecode.OpInitModuleLex:
+			bytecode.OpInitGlobalLex, bytecode.OpInitModuleLex,
+			bytecode.OpNewClass, bytecode.OpSetHomeObject, bytecode.OpSetFieldInit, bytecode.OpDefineMethod,
+			bytecode.OpDefineIndex, bytecode.OpDefineGetter, bytecode.OpDefineSetter, bytecode.OpSetFuncName,
+			bytecode.OpDefineGetterIndex, bytecode.OpDefineSetterIndex, bytecode.OpToPropertyKey, bytecode.OpToPropertyKeyOfBase,
+			bytecode.OpGetPrivate, bytecode.OpSetPrivate, bytecode.OpPrivateIn,
+			bytecode.OpDefinePrivate, bytecode.OpDefinePrivateMethod, bytecode.OpDefinePrivateGetter, bytecode.OpDefinePrivateSetter,
+			bytecode.OpAddPrivateMethod, bytecode.OpAddPrivateGetter, bytecode.OpAddPrivateSetter,
+			bytecode.OpPrivateName, bytecode.OpNewPrivateMethods, bytecode.OpInstallPrivateMethods:
 		case bytecode.OpDispose:
 		default:
 			return sp, steps, nil
@@ -1918,6 +1925,27 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			sp--
 			r.jitInitLex(f.cl, in, stack[sp])
 			continue
+		case bytecode.OpNewClass, bytecode.OpSetHomeObject, bytecode.OpSetFieldInit, bytecode.OpDefineMethod,
+			bytecode.OpDefineIndex, bytecode.OpDefineGetter, bytecode.OpDefineSetter, bytecode.OpSetFuncName,
+			bytecode.OpDefineGetterIndex, bytecode.OpDefineSetterIndex, bytecode.OpToPropertyKey, bytecode.OpToPropertyKeyOfBase:
+			var push bool
+			if sp, v, push, err = r.jitDefinition(f, in, sp); err != nil {
+				return sp, steps, err
+			}
+			if !push {
+				continue
+			}
+		case bytecode.OpGetPrivate, bytecode.OpSetPrivate, bytecode.OpPrivateIn,
+			bytecode.OpDefinePrivate, bytecode.OpDefinePrivateMethod, bytecode.OpDefinePrivateGetter, bytecode.OpDefinePrivateSetter,
+			bytecode.OpAddPrivateMethod, bytecode.OpAddPrivateGetter, bytecode.OpAddPrivateSetter,
+			bytecode.OpPrivateName, bytecode.OpNewPrivateMethods, bytecode.OpInstallPrivateMethods:
+			var push bool
+			if sp, v, push, err = r.jitPrivate(f, in, sp); err != nil {
+				return sp, steps, err
+			}
+			if !push {
+				continue
+			}
 		case bytecode.OpSetIndex:
 			sp -= 3
 			obj, key, value := stack[sp], stack[sp+1], stack[sp+2]
@@ -2035,6 +2063,154 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 		sp++
 	}
 	return sp, steps, nil
+}
+
+// jitDefinition is an instruction that makes a class or an object
+// literal's member, in, as the interpreter makes it, its operands on the
+// VM's stack up to sp: the operands' top after it, and what it pushes, if
+// it does (push).
+func (r *Runtime) jitDefinition(f *frame, in bytecode.Instr, sp int) (int, Value, bool, error) {
+	stack, cl := r.stack, f.cl
+	switch in.Op {
+	case bytecode.OpNewClass:
+		sp--
+		return sp, Undefined, false, r.linkClass(stack[sp-1], stack[sp])
+	case bytecode.OpSetHomeObject:
+		if fnVal := stack[sp-1]; fnVal.IsObject() {
+			if home := stack[sp-1-int(in.A)]; fnVal.Object().fn() != nil && home.IsObject() {
+				fnVal.Object().fn().homeObject = home.Object()
+			}
+		}
+		return sp, Undefined, false, nil
+	case bytecode.OpSetFieldInit:
+		sp--
+		if ctor, init := stack[sp-1], stack[sp]; ctor.IsObject() && init.IsObject() {
+			if fd := ctor.Object().fn(); fd != nil {
+				fd.fieldInit = init.Object()
+			}
+		}
+		return sp, Undefined, false, nil
+	case bytecode.OpDefineMethod:
+		sp--
+		if target := stack[sp-1]; target.IsObject() {
+			key := cl.names[in.A]
+			r.materializeFunctionProp(target.Object(), key)
+			target.Object().setOwnRaw(key, stack[sp], propWritable|propConfigurable)
+		}
+		return sp, Undefined, false, nil
+	case bytecode.OpDefineIndex:
+		sp -= 2
+		key, val, obj := stack[sp], stack[sp+1], stack[sp-1]
+		k, err := r.toPropertyKey(key)
+		if err == nil && obj.IsObject() {
+			err = r.createDataProperty(obj.Object(), k, val, memberFlags(in.A))
+		}
+		return sp, Undefined, false, err
+	case bytecode.OpDefineGetter, bytecode.OpDefineSetter:
+		sp--
+		if fnVal, obj := stack[sp], stack[sp-1]; obj.IsObject() && fnVal.IsObject() {
+			r.defineHalfAccessor(obj.Object(), cl.names[in.A], fnVal.Object(), in.Op == bytecode.OpDefineGetter, memberFlags(in.B))
+		}
+		return sp, Undefined, false, nil
+	case bytecode.OpSetFuncName:
+		if fnVal := stack[sp-1]; fnVal.IsObject() {
+			if fd := fnVal.Object().fn(); fd != nil {
+				fd.name = functionNameFromKey(stack[sp-2], in.A)
+			}
+		}
+		return sp, Undefined, false, nil
+	case bytecode.OpDefineGetterIndex, bytecode.OpDefineSetterIndex:
+		sp -= 2
+		key, fnVal, obj := stack[sp], stack[sp+1], stack[sp-1]
+		k, err := r.toPropertyKey(key)
+		if err == nil && obj.IsObject() && fnVal.IsObject() {
+			err = r.defineHalfAccessorChecked(obj.Object(), k, fnVal.Object(), in.Op == bytecode.OpDefineGetterIndex, memberFlags(in.A))
+		}
+		return sp, Undefined, false, err
+	}
+	// OpToPropertyKey and OpToPropertyKeyOfBase.
+	v := stack[sp-1]
+	if v.IsString() || v.IsSymbol() || in.Op == bytecode.OpToPropertyKeyOfBase && v.IsNumber() {
+		return sp, Undefined, false, nil
+	}
+	sp--
+	k, err := r.toPropertyKey(stack[sp])
+	if err != nil {
+		return sp, Undefined, false, err
+	}
+	return sp, r.keyToValue(k), true, nil
+}
+
+// jitPrivate is a private member's instruction, in, as the interpreter
+// makes it, its operands on the VM's stack up to sp: the operands' top
+// after it, and what it pushes, if it does (push).
+func (r *Runtime) jitPrivate(f *frame, in bytecode.Instr, sp int) (int, Value, bool, error) {
+	stack, cl := r.stack, f.cl
+	switch in.Op {
+	case bytecode.OpPrivateName:
+		return sp, r.newPrivateName(cl.names[in.A]), true, nil
+	case bytecode.OpNewPrivateMethods:
+		return sp, r.newPrivateMethods(), true, nil
+	case bytecode.OpGetPrivate:
+		sp--
+		obj := stack[sp]
+		if !obj.IsObject() {
+			return sp, Undefined, false, r.throwTypeError("cannot read a private member of %s", r.describe(obj))
+		}
+		v, err := r.getPrivate(obj.Object(), privateKey(f, cl, in.B), cl.names[in.A])
+		return sp, v, err == nil, err
+	case bytecode.OpSetPrivate:
+		sp -= 2
+		obj, val := stack[sp], stack[sp+1]
+		if !obj.IsObject() {
+			return sp, Undefined, false, r.throwTypeError("cannot write a private member of %s", r.describe(obj))
+		}
+		return sp, Undefined, false, r.setPrivate(obj.Object(), privateKey(f, cl, in.B), cl.names[in.A], val)
+	case bytecode.OpDefinePrivate, bytecode.OpDefinePrivateMethod:
+		sp--
+		val, target := stack[sp], stack[sp-1]
+		if !target.IsObject() {
+			return sp, Undefined, false, nil
+		}
+		key := privateKey(f, cl, in.B)
+		if target.Object().getOwn(key) != nil {
+			return sp, Undefined, false, r.throwTypeError("%s is already present on this object", r.atoms.name(key))
+		}
+		if !target.Object().IsExtensible() {
+			return sp, Undefined, false, r.throwTypeError("cannot add %s to a non-extensible object", r.atoms.name(key))
+		}
+		flags := propFlags(propWritable | propPrivate)
+		if in.Op == bytecode.OpDefinePrivateMethod {
+			flags = propPrivate
+		}
+		target.Object().setOwnRaw(key, val, flags)
+		return sp, Undefined, false, nil
+	case bytecode.OpDefinePrivateGetter, bytecode.OpDefinePrivateSetter:
+		sp--
+		val, target := stack[sp], stack[sp-1]
+		if target.IsObject() && val.IsObject() {
+			r.definePrivateAccessor(target.Object(), privateKey(f, cl, in.B), val.Object(), in.Op == bytecode.OpDefinePrivateGetter)
+		}
+		return sp, Undefined, false, nil
+	case bytecode.OpPrivateIn:
+		sp--
+		obj := stack[sp]
+		if !obj.IsObject() {
+			return sp, Undefined, false, r.throwTypeError("the right operand of \"in\" must be an object, not %s", r.describe(obj))
+		}
+		return sp, Bool(obj.Object().getOwn(privateKey(f, cl, in.B)) != nil), true, nil
+	case bytecode.OpAddPrivateMethod, bytecode.OpAddPrivateGetter, bytecode.OpAddPrivateSetter:
+		sp -= 2
+		r.addPrivateMethod(stack[sp], privateKey(f, cl, in.B), stack[sp+1], in.Op)
+		return sp, Undefined, false, nil
+	}
+	// OpInstallPrivateMethods.
+	this, bound := f.thisValue()
+	if !bound {
+		return sp, Undefined, false, r.throwError(errReference, "\"this\" is not bound until super() has been called")
+	}
+	sp--
+	return sp, Undefined, false, r.installPrivateMethods(this, stack[sp])
 }
 
 // jitInitLex gives a script's or a module's top-level let, const or class

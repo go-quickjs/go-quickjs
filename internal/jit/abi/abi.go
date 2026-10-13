@@ -569,6 +569,8 @@ type Encoding struct {
 	// unit; and StringU16, when not nil, points to its code units.
 	String                                                       uint64
 	StringData, StringLeft, StringLength, StringASCII, StringU16 int32
+	// Symbol is every symbol's number word, its pointer word the symbol.
+	Symbol uint64
 
 	// UpvalueSlot is the offset, in a captured binding's cell, of the
 	// pointer to its value (Context.Upvalues).

@@ -736,6 +736,8 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 				}
 			case OpTailRoom, OpTailSelf:
 				// The model's stack is shallow: the call is made.
+			case OpSameSymbol:
+				return ir.Exit{}, fmt.Errorf("%w: a symbol", ErrUnsupported)
 			default:
 				vals[v.ID] = apply(v.Op, v.Aux, a, b)
 			}
