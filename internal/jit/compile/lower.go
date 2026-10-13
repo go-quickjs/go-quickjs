@@ -293,7 +293,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		// A call in tail position may be the function's own, which native
 		// code makes a jump to its start deep in the stack: a loop.
 		loop = loop || e.branch && e.target(in) <= pc || in.Op == bytecode.OpTailCall || in.Op == bytecode.OpTailCallMethod
-		indexed = indexed || in.Op == bytecode.OpGetIndex || in.Op == bytecode.OpSetIndex || in.Op == bytecode.OpGetLocalIndex || in.Op == bytecode.OpGetLocalIndexUpdate
+		indexed = indexed || in.Op == bytecode.OpGetIndex || in.Op == bytecode.OpGetIndexThis || in.Op == bytecode.OpSetIndex || in.Op == bytecode.OpGetLocalIndex || in.Op == bytecode.OpGetLocalIndexUpdate
 	}
 	// Tiny host-only wrappers pay the bridge overhead without enough native work.
 	if host && !loop && !indexed && !m.callee {
@@ -1034,6 +1034,11 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 		return effect{need: 1, delta: -1}, nil
 	case bytecode.OpGetIndex:
 		return effect{need: 2, delta: -1}, nil
+	case bytecode.OpGetIndexThis:
+		// The element, past the object, its receiver: a method called by
+		// its index, as Emscripten's code calls through its function
+		// table, __FUNCTION_TABLE__[i](...).
+		return effect{need: 2}, nil
 	case bytecode.OpSetIndex:
 		return effect{need: 3, delta: -3}, nil
 	case bytecode.OpGetLength:
@@ -1503,6 +1508,8 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this bool) ir.Instr
 		return out
 	case bytecode.OpGetIndex:
 		return ir.Instruction{Op: ir.ArrayRead, Dest: sp - 2, Left: ir.Slot(sp - 2), Right: top}
+	case bytecode.OpGetIndexThis:
+		return ir.Instruction{Op: ir.ArrayRead, Dest: sp - 1, Left: ir.Slot(sp - 2), Right: top}
 	case bytecode.OpGetLocalIndex:
 		return ir.Instruction{Op: ir.ArrayRead, Dest: sp, Left: ir.Slot(int(in.A)), Right: ir.Slot(int(in.B))}
 	case bytecode.OpGetLocalIndexUpdate:

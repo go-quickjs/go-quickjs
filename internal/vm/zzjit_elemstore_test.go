@@ -212,3 +212,29 @@ func TestJITBooleansAsNumbersNative(t *testing.T) {
 	}
 }
 
+// A method called by its index, obj[i](...) -- Emscripten's calls through
+// its function table -- is compiled: the element read natively, the
+// object the call's receiver. A function with one had been refused, and
+// Mandreel's collision sorting ran in the tree tier. Each answer is the
+// interpreter's, in every tier and under every stress setting: the
+// callee's this the table, a hole, a function past the table's end, an
+// object with an index for a key, and a table of getters.
+func TestJITIndexedMethodCalls(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const src = `
+		function f(x) { return x + 1 }
+		function g(x) { return this.length * x }
+		function h(x) { return this === T ? x * 3 : -1 }
+		const T = [f, g, h, , f]
+		const O = { 0: g, 1: h, length: 7 }
+		const G = []; Object.defineProperty(G, 0, { get() { return f } })
+		function run(t, n) { let s = 0; for (let i = 0; i < n; i++) { try { s += t[i % 4](i) } catch (e) { s += e instanceof TypeError ? 1000 : 0 } } return s }
+		const log = []
+		for (let r = 0; r < 30; r++) log.push(run(T, 40), run(O, 6), run(G, 1))
+		try { log.push(run(T, 5) + T[9](1)) } catch (e) { log.push(e.name) }
+		log.join()`
+	jitDifferential(t, src)
+}
+
