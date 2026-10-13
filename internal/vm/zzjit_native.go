@@ -168,6 +168,29 @@ func (s *jitState) hint(cl *closure) *jitEntry {
 	return slot.e
 }
 
+// entryFor is the entry the cache holds for fn, as s.cache[weak.Make(fn)]
+// is, by fn's address, which names fn while fn lives, the entry's weak key
+// telling it from a function collected at the address: weak.Make finds
+// or makes the runtime's handle of fn at each call -- a search of its
+// span's specials -- which unwinding native calls made at every level,
+// a fifth of Are We Fast Yet's Towers.
+func (s *jitState) entryFor(fn *bytecode.Function) *jitEntry {
+	if s == nil {
+		return nil
+	}
+	if x, ok := s.byFn[uintptr(unsafe.Pointer(fn))]; ok && x.key.Value() == fn {
+		return x.e
+	}
+	return nil
+}
+
+// jitFnEntry is the entry the cache holds for a function, by its address
+// (jitState.byFn), and its key.
+type jitFnEntry struct {
+	e   *jitEntry
+	key weak.Pointer[bytecode.Function]
+}
+
 // entryOf is the program cached for cl's function, as cl's hint names it.
 func (r *Runtime) entryOf(cl *closure) *jitEntry { return r.jit.hint(cl) }
 
@@ -183,6 +206,8 @@ type jitEntry struct {
 	// hint is the slot a closure remembers this entry by (jitState.hints),
 	// which only an entry the cache holds has.
 	hint uint32
+	// fnAddr is its function's address, its key in the cache's byFn.
+	fnAddr uintptr
 	// bytes is what the entry holds, as last measured (measure), which the
 	// cache counts against the JIT's budget while it holds the entry; busy
 	// marks an entry being compiled, whose code the cache does not drop
@@ -421,6 +446,8 @@ type jitState struct {
 	reporting bool
 	skipped   map[weak.Pointer[bytecode.Function]]string
 	cache     map[weak.Pointer[bytecode.Function]]*jitEntry
+	// byFn is cache by its functions' addresses (entryFor).
+	byFn map[uintptr]jitFnEntry
 	// links are the functions' links (jitLink), by the same keys.
 	links map[weak.Pointer[bytecode.Function]]*jitLink
 	// resumed counts native calls whose callee Go finished, after which
@@ -642,7 +669,7 @@ const jitMapSlot = 64
 // holds: an entry with its hint slot (jitEntryFixed), a link, a lowering,
 // an object pool, a context.
 var (
-	jitEntryFixed    = int(unsafe.Sizeof(jitEntry{})) + int(unsafe.Sizeof(jitHintSlot{})) + jitMapSlot
+	jitEntryFixed    = int(unsafe.Sizeof(jitEntry{})) + int(unsafe.Sizeof(jitHintSlot{})) + 2*jitMapSlot
 	jitLinkFixed     = int(unsafe.Sizeof(jitLink{})) + jitMapSlot
 	jitLoweringFixed = int(unsafe.Sizeof(jitLowering{})) + jitMapSlot
 	jitPoolFixed     = int(unsafe.Sizeof(abi.ObjectPool{})) + int(unsafe.Sizeof(jitPoolSource{}))
@@ -1149,6 +1176,9 @@ func (e *jitEntry) holdsCode() bool {
 // no longer its.
 func (s *jitState) forget(key weak.Pointer[bytecode.Function], e *jitEntry) {
 	delete(s.cache, key)
+	if fn := s.byFn[e.fnAddr]; fn.e == e {
+		delete(s.byFn, e.fnAddr)
+	}
 	if e.hint != 0 {
 		s.hints[e.hint] = jitHintSlot{}
 		s.hintFree = append(s.hintFree, e.hint)
@@ -1257,6 +1287,11 @@ func (s *jitState) unlink(l *jitLink) {
 // what it holds.
 func (s *jitState) remember(key weak.Pointer[bytecode.Function], e *jitEntry) {
 	s.cache[key] = e
+	if s.byFn == nil {
+		s.byFn = map[uintptr]jitFnEntry{}
+	}
+	e.fnAddr = uintptr(unsafe.Pointer(key.Value()))
+	s.byFn[e.fnAddr] = jitFnEntry{e, key}
 	var i uint32
 	if n := len(s.hintFree); n != 0 {
 		i, s.hintFree = s.hintFree[n-1], s.hintFree[:n-1]

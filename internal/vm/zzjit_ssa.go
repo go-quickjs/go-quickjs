@@ -347,7 +347,7 @@ func (fb *jitFeedback) privateProperty(pc int, in bytecode.Instr) (ssa.PropertyS
 	e := fb.e
 	if fb.root != nil || e == nil {
 		// An inlined callee's: what its own code met.
-		e = fb.r.jit.cache[weak.Make(fb.fn)]
+		e = fb.r.jit.entryFor(fb.fn)
 	}
 	if !key.IsSymbol() || e == nil {
 		return ssa.PropertySite{}, false
@@ -1668,7 +1668,7 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 		}
 		// Only looked up: a compile here would share the workspaces of the
 		// one asking. jitCallSeen compiled it.
-		ce := fb.r.jit.cache[weak.Make(in.cl.fn)]
+		ce := fb.r.jit.entryFor(in.cl.fn)
 		if ce == nil || ce.ssa == nil {
 			if (ce == nil || ce.ssa == nil) && !slices.Contains(fb.wanted, in.cl) {
 				k := fb.keep()
@@ -1978,7 +1978,7 @@ func (r *Runtime) jitNativeCallsInline(e *jitEntry, inline func(int)) bool {
 		x := e.nativeCalls[i]
 		pc := int(x.pc)
 		one := !slices.ContainsFunc(e.nativeCalls, func(y jitInline) bool { return y.pc == x.pc && y.cl != x.cl })
-		if !one || x.cl == nil || r.jit.cache[weak.Make(x.cl.fn)] == e || e.callSites == nil || pc >= len(e.callSites) ||
+		if !one || x.cl == nil || r.jit.entryFor(x.cl.fn) == e || e.callSites == nil || pc >= len(e.callSites) ||
 			e.callSites[pc] != jitCallNative || slices.Contains(e.notInline, x.pc) || !r.jitInlinesCalls(x.cl, jitInlineDepth-1) ||
 			x.pool != nil && !r.jitInlinesAt(x.cl, x.obj, bytecode.Instr{Op: bytecode.OpNew}) {
 			continue
@@ -2416,7 +2416,7 @@ func (r *Runtime) jitEntryOf(cl *closure) *jitEntry {
 	if e := s.hint(cl); e != nil {
 		return e
 	}
-	e := s.cache[weak.Make(cl.fn)]
+	e := s.entryFor(cl.fn)
 	if e != nil && e.ssa != nil {
 		cl.setHint(hintFor(e))
 	}
@@ -2934,7 +2934,7 @@ func (r *Runtime) jitInlinesCalls(cl *closure, depth int) bool {
 			continue
 		}
 		if e == nil {
-			if e = r.jit.cache[weak.Make(fn)]; e == nil || e.callSites == nil {
+			if e = r.jit.entryFor(fn); e == nil || e.callSites == nil {
 				return false
 			}
 		}
@@ -2950,7 +2950,7 @@ func (r *Runtime) jitInlinesCalls(cl *closure, depth int) bool {
 // inlines there, or the one it calls natively there, and no other, which
 // may be inlined, with its own calls if depth allows (jitInlinesCalls).
 func (r *Runtime) jitInlineSite(fn *bytecode.Function, pc, depth int) (jitInline, bool) {
-	e := r.jit.cache[weak.Make(fn)]
+	e := r.jit.entryFor(fn)
 	if e == nil || pc >= len(e.callSites) || slices.Contains(e.notInline, int32(pc)) {
 		return jitInline{}, false
 	}
@@ -3050,7 +3050,7 @@ func (r *Runtime) jitSeedCalls(cl *closure, e *jitEntry, p *ir.Program) {
 		if cf == fn || cf.TopLevel || cf.IsModule || cf.UsesArguments || cf.HasDirectEval || isGeneratorTemplate(cf) {
 			continue
 		}
-		ce := r.jit.cache[weak.Make(cf)]
+		ce := r.jit.entryFor(cf)
 		if ce == nil || ce.ssa == nil {
 			// A target the existing tiers have met is compiled for native
 			// callers now, as the call would have it compiled once learned
@@ -3103,7 +3103,7 @@ func (r *Runtime) jitSeedBuiltin(cl *closure, e *jitEntry, p *ir.Program, pc int
 		if gcl == nil {
 			return
 		}
-		if ce := r.jit.cache[weak.Make(gcl.fn)]; (ce == nil || ce.ssa == nil) && r.jitSeedCallee(gcl) == nil {
+		if ce := r.jit.entryFor(gcl.fn); (ce == nil || ce.ssa == nil) && r.jitSeedCallee(gcl) == nil {
 			return
 		}
 		x = jitInline{pc: int32(pc), cl: gcl, obj: g, via: true}
@@ -3158,7 +3158,7 @@ func (r *Runtime) jitSeedNativeCalls(e *jitEntry, fn *bytecode.Function, pc int,
 			jitCountAt(e.nativeCalls, pc) >= jitCallTargets {
 			continue
 		}
-		ce := r.jit.cache[weak.Make(cf)]
+		ce := r.jit.entryFor(cf)
 		if ce == nil || ce.ssa == nil {
 			if ce = r.jitSeedCallee(t.cl); ce == nil {
 				continue
@@ -3496,7 +3496,7 @@ func (r *Runtime) jitCallTarget(f *frame, e *jitEntry, pc, sp int, in bytecode.I
 				// One it calls, or a built-in's construction, which a site
 				// makes alone. One it calls whose code native callers do not
 				// call for now is called again after so many such calls.
-				if ce := r.jit.cache[weak.Make(cl.fn)]; (x.obj == o || x.byCode) && ce != nil && ce.notNative {
+				if ce := r.jit.entryFor(cl.fn); (x.obj == o || x.byCode) && ce != nil && ce.notNative {
 					jitRetryNative(ce)
 				}
 				return
@@ -3580,7 +3580,7 @@ func (r *Runtime) jitForwardTarget(cl *closure, o *Object, depth int) *closure {
 	if r.jitInlinable(tc.fn) {
 		return tc
 	}
-	if e := r.jit.cache[weak.Make(tc.fn)]; (e == nil || e.callSites == nil) && r.jit.seeding == 0 {
+	if e := r.jit.entryFor(tc.fn); (e == nil || e.callSites == nil) && r.jit.seeding == 0 {
 		r.jit.seeding = jitSeedDepth
 		r.jitNativeCallee(tc)
 		r.jit.seeding = 0
@@ -5729,7 +5729,7 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, code *bytecode.Function)
 			outer := true
 			for k := len(s.unwinding) - 1; k >= start; k-- {
 				if caller := &s.unwinding[k]; !caller.inline {
-					parent, parentPC = s.cache[weak.Make(caller.cl.fn)], caller.pc
+					parent, parentPC = r.jitEntryOf(caller.cl), caller.pc
 					break
 				}
 				outer = false
@@ -5756,7 +5756,7 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, code *bytecode.Function)
 			l.returnTo = c.ReturnTo
 			if k := len(s.unwinding) - 1; k >= start && !s.unwinding[k].inline {
 				// The caller, a level of its own: its code now.
-				if ce := s.cache[weak.Make(s.unwinding[k].cl.fn)]; ce != nil {
+				if ce := r.jitEntryOf(s.unwinding[k].cl); ce != nil {
 					l.code = ce.ssa
 				}
 			}
@@ -5779,7 +5779,7 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, code *bytecode.Function)
 			// Its entry by its function: a callee only native callers
 			// call has no hint. Not one that left for its pool to be
 			// filled again.
-			if e := s.cache[weak.Make(l.cl.fn)]; e != nil {
+			if e := r.jitEntryOf(l.cl); e != nil {
 				r.jitUnwound(e)
 			}
 		}
@@ -5831,7 +5831,7 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, code *bytecode.Function)
 			// Records its exit left to Go, the collector marking: before
 			// anything else reads its frame, an inlined callee's past it
 			// included.
-			if e := s.cache[weak.Make(fn)]; e != nil {
+			if e := r.jitEntryOf(l.cl); e != nil {
 				f.cl, f.locals, f.base = l.cl, r.stack[l.base:l.base+fn.LocalCount:l.base+fn.LocalCount], l.base+fn.LocalCount
 				saved := s.ssaCtx
 				s.ssaCtx = c
@@ -5865,7 +5865,7 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, code *bytecode.Function)
 		if !l.inline {
 			// Those in force at its exit, or at its call: an exception
 			// from the call unwinds the frame from there.
-			if e := s.cache[weak.Make(fn)]; e != nil {
+			if e := r.jitEntryOf(l.cl); e != nil {
 				jitHandlers(f, e.ssaProg, int(l.pc))
 			}
 		}
@@ -6029,7 +6029,7 @@ func (r *Runtime) jitPoolEmptied(l *jitNativeLevel) bool {
 	if l.kind != abi.ExitHost || int(l.pc) >= len(fn.Code) || fn.Code[l.pc].Op != bytecode.OpNew {
 		return false
 	}
-	e := r.jit.cache[weak.Make(fn)]
+	e := r.jitEntryOf(l.cl)
 	if e == nil {
 		return false
 	}

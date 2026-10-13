@@ -35,6 +35,22 @@ func jitLinksHeld(s *jitState) error {
 	return nil
 }
 
+// jitEntriesFound reports an entry the cache holds that entryFor does not
+// find by its function, or one entryFor keeps that the cache does not hold.
+func jitEntriesFound(s *jitState) error {
+	for key, e := range s.cache {
+		if fn := key.Value(); fn != nil && s.entryFor(fn) != e {
+			return fmt.Errorf("entryFor does not find %s's entry", fn.Name)
+		}
+	}
+	for _, x := range s.byFn {
+		if s.cache[x.key] != x.e {
+			return fmt.Errorf("byFn keeps an entry the cache does not hold")
+		}
+	}
+	return nil
+}
+
 // A function compiled for native callers is not the room its own compile
 // makes: its entry, a refusal the cache holds, is busy before the cache
 // looks for what to drop. Before, the cache could drop it, and the compile
@@ -239,6 +255,9 @@ func TestJITEvictionKeepsRunningCode(t *testing.T) {
 	var broken error
 	r.global.setOwnRaw(r.atoms.intern("check"), Obj(r.newNativeFunc("check", 0, func(rt *Runtime, _ Value, _ []Value) (Value, error) {
 		if err := jitLinksHeld(rt.jit); err != nil && broken == nil {
+			broken = err
+		}
+		if err := jitEntriesFound(rt.jit); err != nil && broken == nil {
 			broken = err
 		}
 		runtime.GC()

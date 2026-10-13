@@ -10805,7 +10805,12 @@ func TestJITPoolLookupsAllocateNothing(t *testing.T) {
 	pool := new(abi.ObjectPool)
 	e := &jitEntry{inlines: []jitInline{{pc: int32(pc), cl: ctor.fn().closure, obj: ctor, pool: pool}},
 		nativeCalls: []jitInline{{pc: int32(pc) + 1}}, link: &jitLink{}}
-	r.jit.cache[weak.Make(cl.fn)] = e
+	// In place of the entry f's call compiled, as the cache replaces one.
+	key := weak.Make(cl.fn)
+	if old := r.jit.cache[key]; old != nil {
+		r.jit.forget(key, old)
+	}
+	r.jit.remember(key, e)
 	l := &jitNativeLevel{cl: cl, pc: uint64(pc), kind: abi.ExitHost}
 	if !r.jitPoolEmptied(l) {
 		t.Fatal("the empty pool is not found")
