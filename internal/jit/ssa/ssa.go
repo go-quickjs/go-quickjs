@@ -196,6 +196,12 @@ const (
 	OpNotI32   //
 	OpI32ToF64 // signed
 	OpU32ToF64 // unsigned
+	// OpBoolToF64 and OpBoolToI32 are a boolean as a number, 1 or 0, as
+	// ToNumber has it: a comparison an arithmetic or bitwise operator
+	// takes, (a < b) | (c < d) -- what Emscripten's code does -- which
+	// had left native code at the operator, its operand's unbox failing.
+	OpBoolToF64 // bool -> f64
+	OpBoolToI32 // bool -> i32
 
 	// OpSameObject guards that an object is the one at Const.Bits, an
 	// address the VM keeps alive: an inlined call's function (inline).
@@ -332,6 +338,7 @@ var opNames = [...]string{
 	OpAddF64: "addf", OpSubF64: "subf", OpMulF64: "mulf", OpDivF64: "divf", OpModF64: "modf", OpNegF64: "negf", OpCmpF64: "cmpf",
 	OpNot: "not", OpStrictNullish: "strictnullish", OpLooseNullish: "loosenullish", OpEqTagged: "eqtagged", OpToInt32: "toi32", OpAndI32: "and", OpOrI32: "or", OpXorI32: "xor", OpShlI32: "shl",
 	OpSarI32: "sar", OpShrU32: "shr", OpNotI32: "noti", OpI32ToF64: "i2f", OpU32ToF64: "u2f",
+	OpBoolToF64: "b2f", OpBoolToI32: "b2i",
 	OpSameObject: "sameobject", OpFrameRoom: "frameroom", OpTailRoom: "tailroom", OpTailSelf: "tailself", OpSameSymbol: "samesymbol", OpIterClosed: "iterclosed", OpKeepRef: "keepref", OpKeep: "keep", OpKept: "kept",
 	OpCall: "call", OpCallCell: "callcell", OpSqrtF64: "sqrtf", OpAbsF64: "absf", OpInstanceOf: "instanceof", OpTypeIs: "typeis",
 	OpCheckTrue: "checktrue", OpConstCell: "constcell", OpUpvalueCell: "upvaluecell", OpUpvalueStale: "upvaluestale", OpLocalCell: "localcell", OpPowF64: "powf",

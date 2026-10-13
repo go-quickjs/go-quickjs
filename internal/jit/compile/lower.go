@@ -531,6 +531,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			}
 		}
 		stringConcats(p)
+		markBools(p)
 		p.UpvalueBase, p.Upvalues, p.Params = fn.LocalCount, len(fn.Upvalues), fn.ParamCount
 		if captured {
 			p.Captured = make([]bool, fn.LocalCount)
@@ -1785,4 +1786,86 @@ func stringKernel(fn *bytecode.Function) bool {
 		}
 	}
 	return false
+}
+
+// markBools sets the Bools of p's instructions (ir.Instruction's): the
+// operands a comparison or a Not wrote in the same block, found by walking
+// back over instructions that write slots alone, and through copies.
+func markBools(p *ir.Program) {
+	starts := make([]bool, len(p.Code)+1)
+	starts[0] = true
+	for _, e := range p.Entries {
+		if e >= 0 && e < len(starts) {
+			starts[e] = true
+		}
+	}
+	for _, h := range p.Handlers {
+		if int(h.PC) < len(starts) {
+			starts[h.PC] = true
+		}
+	}
+	for pc, in := range p.Code {
+		switch in.Op {
+		case ir.Jump, ir.Branch:
+			if in.Target >= 0 && in.Target < len(starts) {
+				starts[in.Target] = true
+			}
+			starts[pc+1] = true
+		case ir.Return:
+			starts[pc+1] = true
+		}
+	}
+	boolean := func(in *ir.Instruction) bool {
+		return in.Op == ir.Binary && in.Operator >= ir.Lt && in.Operator <= ir.Ne || in.Op == ir.Unary && in.Operator == ir.Not
+	}
+	// written reports whether slot s, read at pc, was written last, in its
+	// block, by a comparison or a Not, or a copy of what one wrote, with
+	// only instructions between that write slots alone: Binary, Unary and
+	// the copies.
+	written := func(pc, s int) bool {
+		for q := pc - 1; q >= 0 && !starts[q+1] && s >= 0; q-- {
+			in := &p.Code[q]
+			switch in.Op {
+			case ir.Nop:
+			case ir.Copy:
+				if in.Dest == s {
+					s = in.Left.Slot
+				}
+			case ir.CopyPair, ir.StoreLoad:
+				switch s {
+				case in.Dest:
+					s = in.Left.Slot
+				case in.Extra:
+					s = in.Right.Slot
+					if in.Op == ir.StoreLoad && s == in.Dest {
+						// Read after Dest is written: set_local_get's.
+						s = in.Left.Slot
+					}
+				}
+			case ir.Binary, ir.Unary:
+				if in.Dest == s {
+					return boolean(in)
+				}
+			default:
+				return false
+			}
+		}
+		return false
+	}
+	for pc := range p.Code {
+		in := &p.Code[pc]
+		switch {
+		case in.Op == ir.Binary && in.Operator != ir.Eq && in.Operator != ir.Ne:
+			if in.Left.Slot >= 0 && written(pc, in.Left.Slot) {
+				in.Bools |= 1
+			}
+			if in.Right.Slot >= 0 && written(pc, in.Right.Slot) {
+				in.Bools |= 2
+			}
+		case in.Op == ir.Unary && in.Operator != ir.Not:
+			if in.Left.Slot >= 0 && written(pc, in.Left.Slot) {
+				in.Bools |= 1
+			}
+		}
+	}
 }

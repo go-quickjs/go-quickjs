@@ -4468,6 +4468,18 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 	case ssa.OpI32ToF64:
 		c.a.Cvtsi2sd(xScratch0, c.gpr(arg(0), scratchA), false)
 		c.setX(v, xScratch0)
+	case ssa.OpBoolToI32, ssa.OpBoolToF64:
+		// Any word but 0 is true (boxBool): 1 or 0.
+		b := c.gpr(arg(0), scratchA)
+		c.a.Op(amd64.Test, b, b, false)
+		c.a.Setcc(amd64.CondNE, scratchA)
+		c.a.MovZX8(scratchA, scratchA)
+		if v.Op == ssa.OpBoolToI32 {
+			c.setG(v, scratchA)
+			break
+		}
+		c.a.Cvtsi2sd(xScratch0, scratchA, false)
+		c.setX(v, xScratch0)
 	case ssa.OpU32ToF64:
 		c.a.MovRR32(scratchA, c.gpr(arg(0), scratchA))
 		c.a.Cvtsi2sd(xScratch0, scratchA, true)

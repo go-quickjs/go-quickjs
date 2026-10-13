@@ -4129,6 +4129,16 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 	case ssa.OpI32ToF64:
 		c.a.Scvtf(a64F0, c.gpr(arg(0), a64A), false)
 		c.setF(v, a64F0)
+	case ssa.OpBoolToI32, ssa.OpBoolToF64:
+		// As amd64's: 1 or 0.
+		c.a.CmpImm(c.gpr(arg(0), a64A), 0, false)
+		c.a.Cset(a64A, arm64.NE)
+		if v.Op == ssa.OpBoolToI32 {
+			c.setG(v, a64A)
+			break
+		}
+		c.a.Scvtf(a64F0, a64A, false)
+		c.setF(v, a64F0)
 	case ssa.OpU32ToF64:
 		c.a.Ucvtf(a64F0, c.gpr(arg(0), a64A), false)
 		c.setF(v, a64F0)

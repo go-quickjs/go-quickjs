@@ -261,6 +261,16 @@ func apply(op Op, aux int, a, b val) val {
 		return val{f: float64(int32(a.i))}
 	case OpU32ToF64:
 		return val{f: float64(a.i)}
+	case OpBoolToF64:
+		if a.b {
+			return val{f: 1}
+		}
+		return val{f: 0}
+	case OpBoolToI32:
+		if a.b {
+			return val{i: 1}
+		}
+		return val{i: 0}
 	}
 	panic("ssa: apply " + op.String())
 }

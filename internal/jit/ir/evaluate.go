@@ -236,7 +236,14 @@ func (p *Program) EvaluateArrays(slots []Value, arrays []ArrayView, pc int, budg
 		case Swap:
 			slots[in.Dest], slots[in.Extra] = slots[in.Extra], slots[in.Dest]
 		case Binary:
-			v, ok := binary(in.Operator, read(in.Left), read(in.Right))
+			a, b := read(in.Left), read(in.Right)
+			if in.Bools&1 != 0 {
+				a = boolNumber(a)
+			}
+			if in.Bools&2 != 0 {
+				b = boolNumber(b)
+			}
+			v, ok := binary(in.Operator, a, b)
 			if !ok {
 				if in.Operator == Eq || in.Operator == Ne || in.Operator == Mod {
 					exit.Kind = HostExit
@@ -253,6 +260,9 @@ func (p *Program) EvaluateArrays(slots []Value, arrays []ArrayView, pc int, budg
 				}
 				slots[in.Dest] = Bool(!b)
 			} else {
+				if in.Bools&1 != 0 {
+					a = boolNumber(a)
+				}
 				if a.Kind != Number {
 					return exit, nil
 				}
@@ -401,4 +411,16 @@ func truth(v Value) (bool, bool) {
 		return n != 0 && !math.IsNaN(n), true
 	}
 	return false, false
+}
+
+// boolNumber is v, or, a boolean, its number: 1 or 0 (Instruction's
+// Bools).
+func boolNumber(v Value) Value {
+	if v.Kind == Boolean {
+		if v.Bits != 0 {
+			return Float(1)
+		}
+		return Float(0)
+	}
+	return v
 }

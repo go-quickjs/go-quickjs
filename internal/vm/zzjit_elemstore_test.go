@@ -153,3 +153,62 @@ func TestJITElementStoresTypedFromAnyValue(t *testing.T) {
 		t.Errorf("Go was called %d times for 3000 stores", calls)
 	}
 }
+
+// A comparison an arithmetic or bitwise operator takes is a number, 1 or
+// 0, natively (ssa.OpBoolToF64, OpBoolToI32): Emscripten's code combines
+// its comparisons with | and &, and Octane's zlib had left native code at
+// two such operators of every call of its hottest functions. Each answer
+// is the interpreter's, in every tier and under every stress setting.
+func TestJITBooleansAsNumbers(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const src = `
+		function f(a, b, c, d) {
+			const x = (a | 0) < (b | 0) | (c | 0) > (d | 0)
+			const y = (a === b) & (c !== d)
+			const z = ((a < c) + (b < d)) * 3 - (a > d)
+			const w = ((a <= b) ^ (c >= d)) << 2 | !(a & 1)
+			const u = ((a < b) >>> 0) + ((c < d) >> 1) - -(a === 0)
+			return x * 1000 + y * 100 + z * 10 + w + u * 7
+		}
+		let s = 0
+		for (let i = 0; i < 4000; i++) s = (s * 31 + f(i & 7, (i >> 3) & 7, i % 5, (i * 7) % 9)) | 0
+		String(s)`
+	jitDifferential(t, src)
+}
+
+// Comparisons combined by | and &, as Emscripten's code combines them,
+// run natively: the operator's operands, booleans, are taken as numbers
+// in its code, not by Go at an exit (TestJITBooleansAsNumbers' answers).
+func TestJITBooleansAsNumbersNative(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r := New(Config{JIT: true})
+	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	const setup = `
+		function f(a, b, c, d) { let n = 0; for (let i = 0; i < 100; i++) n = (n + ((a | 0) < (i | 0) | (c | 0) > (d | 0)) + ((a === i) & (c !== d))) | 0; return n }`
+	if _, err := r.Run(compileForTest(t, setup)); err != nil {
+		t.Fatal(err)
+	}
+	for range 20 {
+		if _, err := r.Run(compileForTest(t, `f(3, 4, 5, 6)`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e := jitNativeForTest(t, r, "f")
+	entries, hosts := e.ssaStats.entries, e.ssaStats.hosts
+	if _, err := r.Run(compileForTest(t, `for (let k = 0; k < 50; k++) f(k, 4, k & 7, 6)`)); err != nil {
+		t.Fatal(err)
+	}
+	// Entered at each call: one that left at each was judged not to pay,
+	// and the tree tier ran it.
+	if n := e.ssaStats.entries - entries; n < 50 {
+		t.Fatalf("f ran natively %d times of 50", n)
+	}
+	if n := e.ssaStats.hosts - hosts; n > 5 {
+		t.Errorf("f left native code %d times in 5,000 iterations", n)
+	}
+}
+

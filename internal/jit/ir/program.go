@@ -307,6 +307,15 @@ type Instruction struct {
 	Check     bool
 	CheckSlot int
 	Key       uint32
+	// Bools marks, bit 0 for Left and bit 1 for Right, an operand of a
+	// Binary that is no equality, or of a Unary but Not, that a comparison
+	// or a Not wrote in the same block -- with only Binary, Unary, Copy,
+	// CopyPair, StoreLoad and Nop instructions between -- a boolean: the operator takes its
+	// number, 1 or 0, as ToNumber has it, which the new pipeline makes
+	// natively (ssa.OpBoolToF64). Emscripten's code combines comparisons
+	// with | and &, and Octane's zlib had left native code at two such
+	// operators in every call of its hottest functions.
+	Bools uint8
 	// Strict marks an Eq or Ne that is === or !==. On numbers the two
 	// agree; the new pipeline compares with null and undefined natively,
 	// where they do not.

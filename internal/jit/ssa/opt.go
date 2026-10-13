@@ -224,6 +224,10 @@ func simplify(f *Func, v *Value) *Value {
 	case OpToInt32:
 		if a := arg(0); a.Op == OpI32ToF64 || a.Op == OpU32ToF64 {
 			return a.Args[0]
+		} else if a.Op == OpBoolToF64 {
+			b := a.Args[0]
+			v.Op, v.Args = OpBoolToI32, f.refsOf(1)
+			v.Args[0] = b
 		}
 	case OpNot:
 		if a := arg(0); a.Op == OpNot {

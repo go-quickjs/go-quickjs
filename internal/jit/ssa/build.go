@@ -2265,6 +2265,16 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		return guard(OpUnboxF64, Float64, kind, operand(o))
 	}
+	// numberOf is number, but for an operand that a comparison or a Not
+	// wrote (ir.Instruction's Bools), a boolean: its number.
+	numberOf := func(o ir.Operand, kind ir.ExitKind, boolean bool) *Value {
+		if boolean {
+			if v := operand(o); v.Op == OpBoxBool {
+				return f.newValue(blk, OpBoolToF64, Float64, v.Args[0])
+			}
+		}
+		return number(o, kind)
+	}
 	boxF := func(x *Value) *Value { return f.newValue(blk, OpBoxF64, Tagged, x) }
 	boxB := func(x *Value) *Value { return f.newValue(blk, OpBoxBool, Tagged, x) }
 	one := func() *Value {
@@ -2319,7 +2329,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 		if in.Operator == ir.Eq || in.Operator == ir.Ne || in.Operator == ir.Mod || b.generic(pc) {
 			kind = ir.HostExit
 		}
-		x, y := number(in.Left, kind), number(in.Right, kind)
+		x, y := numberOf(in.Left, kind, in.Bools&1 != 0), numberOf(in.Right, kind, in.Bools&2 != 0)
 		if in.Operator == ir.Mod {
 			b.assign(in.Dest, blk, boxF(guard(OpModF64, Float64, ir.HostExit, x, y)))
 			break
@@ -2331,7 +2341,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			b.assign(in.Dest, blk, boxB(f.newValue(blk, OpNot, Bool, t)))
 			break
 		}
-		x := number(in.Left, ir.GuardExit)
+		x := numberOf(in.Left, ir.GuardExit, in.Bools&1 != 0)
 		switch in.Operator {
 		case ir.Neg:
 			x = f.newValue(blk, OpNegF64, Float64, x)
