@@ -30,6 +30,7 @@ type engine struct{}
 var (
 	jitFlag       = flag.Bool("jit", false, "enable the optional native numeric tier")
 	jitReportFlag = flag.Bool("jitreport", false, "after each benchmark, print what the JIT compiled, refused and skipped (fixed mode, with -jit)")
+	jitMemFlag    = flag.Int("jitmem", 0, "the JIT's memory budget in MiB, with -jit; 0 for the default")
 )
 
 func (engine) Compile(name, src string) error {
@@ -44,6 +45,9 @@ func (engine) NewRuntime(host v8bench.Host) (v8bench.Runtime, error) {
 	var opts []quickjs.Option
 	if *jitFlag {
 		opts = append(opts, quickjs.WithJIT())
+		if *jitMemFlag > 0 {
+			opts = append(opts, quickjs.WithJITMemoryLimit(int64(*jitMemFlag)<<20))
+		}
 	}
 	rt := quickjs.New(opts...)
 	if err := rt.Set("print", host.Print); err != nil {
