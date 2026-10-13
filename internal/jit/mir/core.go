@@ -561,6 +561,48 @@ func (c *core) allocate() error {
 		}
 	}
 	c.locs, c.hasLoc = c.locList(nv), c.bools(nv)
+	// A phi and its arguments are given one register where they can be, as
+	// a linear scan's hints have it: the phi the register of an argument
+	// that is free when the phi begins, an argument the phi's if free when
+	// it begins. An edge's phi moves (phiMoves) are then no moves at all:
+	// given whichever register came free last, a fifth of a function's
+	// code had been the moves at its edges. phiOf is, by value ID, a phi
+	// the value is an argument of, or nil.
+	phiOf := c.valueList(nv)
+	for _, b := range c.order {
+		for _, v := range b.Values {
+			if v.Op != ssa.OpPhi {
+				break
+			}
+			for _, a := range v.Args {
+				if a != v && phiOf[a.ID] == nil {
+					phiOf[a.ID] = v
+				}
+			}
+		}
+	}
+	// hinted is the register free holds that v is to share, or -1.
+	hinted := func(v *ssa.Value, free []int) int {
+		want := func(x *ssa.Value) int {
+			if x == nil || !c.hasLoc[x.ID] {
+				return -1
+			}
+			if l := c.locAt(x); l.reg >= 0 {
+				if i := slices.Index(free, l.reg); i >= 0 {
+					return i
+				}
+			}
+			return -1
+		}
+		if v.Op == ssa.OpPhi {
+			for _, a := range v.Args {
+				if i := want(a); i >= 0 {
+					return i
+				}
+			}
+		}
+		return want(phiOf[v.ID])
+	}
 	// Spill slots are reused as registers are: a spilled interval's slot is
 	// free once it ends. Spilling an active interval puts all of it in the
 	// slot, from its start, so a slot is taken only where its last
@@ -631,7 +673,35 @@ func (c *core) allocate() error {
 			}
 			return k
 		}
-		slot := func(from int) (int, error) {
+		slot := func(from int, v *ssa.Value) (int, error) {
+			// The slot of a phi or an argument of it v is to share, if
+			// free (hinted).
+			related := func(x *ssa.Value) int {
+				if x == nil || !c.hasLoc[x.ID] {
+					return -1
+				}
+				if l := c.locAt(x); l.reg < 0 && l.spill >= 0 {
+					for i, f := range freeSlots {
+						if f.slot == l.spill && f.end < from {
+							return i
+						}
+					}
+				}
+				return -1
+			}
+			i := related(phiOf[v.ID])
+			if v.Op == ssa.OpPhi {
+				for _, a := range v.Args {
+					if i < 0 {
+						i = related(a)
+					}
+				}
+			}
+			if i >= 0 {
+				s := freeSlots[i].slot
+				freeSlots = append(freeSlots[:i], freeSlots[i+1:]...)
+				return s, nil
+			}
 			for i := len(freeSlots) - 1; i >= 0; i-- {
 				if f := freeSlots[i]; f.end < from {
 					freeSlots = append(freeSlots[:i], freeSlots[i+1:]...)
@@ -668,8 +738,12 @@ func (c *core) allocate() error {
 				freeSlots = append(freeSlots, freeSlot{c.locAt(a.v).spill, a.end})
 			}
 			if len(free) > 0 {
-				c.setLoc(it.v, loc{reg: free[len(free)-1], spill: -1})
-				free = free[:len(free)-1]
+				i := hinted(it.v, free)
+				if i < 0 {
+					i = len(free) - 1
+				}
+				c.setLoc(it.v, loc{reg: free[i], spill: -1})
+				free = append(free[:i], free[i+1:]...)
 				active = append(active, it)
 				continue
 			}
@@ -681,7 +755,7 @@ func (c *core) allocate() error {
 					victim, vi = a, i
 				}
 			}
-			s, err := slot(victim.start)
+			s, err := slot(victim.start, victim.v)
 			if err != nil {
 				return err
 			}
