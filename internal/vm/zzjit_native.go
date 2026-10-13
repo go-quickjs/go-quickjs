@@ -291,7 +291,11 @@ type jitEntry struct {
 	// polyPending that it is to be once polySettled exits in a row have
 	// found no other (jitPolySettle), and polyReopts counts the times it
 	// was.
-	poly        []jitPolySite
+	poly []jitPolySite
+	// typedReads are the element reads, by PC, whose result no native
+	// operation takes as a number, whose receivers have been typed arrays
+	// (ssa.ElementFeedback).
+	typedReads  []int32
 	polyReopt   bool
 	polyPending bool
 	polySettled uint8
@@ -732,7 +736,7 @@ func jitCompiledBytes(shapes []*shape, holders []*Object, fed []jitFedSite, fedI
 // more shapes, and the object pools of its literals and constructions,
 // with the objects made for them.
 func (e *jitEntry) learnedBytes() int {
-	n := jitCapBytes(e.failed) + jitCapBytes(e.failedEntries) + jitCapBytes(e.literals) + jitCapBytes(e.poly) +
+	n := jitCapBytes(e.failed) + jitCapBytes(e.failedEntries) + jitCapBytes(e.literals) + jitCapBytes(e.poly) + jitCapBytes(e.typedReads) +
 		jitCapBytes(e.strSites) + jitCapBytes(e.nativeCalls) + jitCapBytes(e.inlines) + jitCapBytes(e.notInline) +
 		jitCapBytes(e.nativeCallers) + jitCapBytes(e.callSites)
 	for i := range e.poly {
@@ -1604,7 +1608,11 @@ func (r *Runtime) tryJITFrame(f *frame) (Value, error, bool) {
 	if f.cl.jitRefused {
 		return Undefined, nil, false
 	}
-	if e := r.jit.hint(f.cl); e != nil && e.entrySlow && !e.reoptPending() {
+	if e := r.jit.hint(f.cl); e != nil && e.entrySlow && !e.reoptPending() && !e.feedReopt {
+		// Not while it is to be compiled again at its next invocation for
+		// what its exits taught it (feedReopt): judged slow for those
+		// exits, it was never entered again, and never compiled for what
+		// they taught.
 		e.slowCalls++
 		return Undefined, nil, false
 	}

@@ -238,3 +238,65 @@ func TestJITIndexedMethodCalls(t *testing.T) {
 	jitDifferential(t, src)
 }
 
+// An element read whose result no native operation takes as a number --
+// compared, passed to a call -- reads its element's cell (ir's Reference):
+// one whose receivers are typed arrays, which have no cells, reads their
+// number once it has met one (ssa.ElementFeedback), and Go reads any other
+// receiver's. Each answer is the interpreter's: a typed array, an array
+// of numbers and of objects at one site, past the end, a hole.
+func TestJITTypedReferenceReads(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const src = `
+		const h = new Int32Array(64), u = new Uint16Array(64), f = new Float32Array(64)
+		for (let i = 0; i < 64; i++) { h[i] = i * 7 - 100; u[i] = i * 1000; f[i] = i / 3 }
+		const plain = [1, 'x', null, , {v: 2}, 7]
+		function id(x) { return x }
+		function read(a, n) {
+			let s = 0, k = 0
+			for (let i = 0; i < n; i++) {
+				const x = a[i]
+				if (x !== 0) k++
+				const y = id(a[i + 1])
+				s += typeof y === 'number' ? y : String(y).length
+			}
+			return s * 1000 + k
+		}
+		const log = []
+		for (let r = 0; r < 30; r++) log.push(read(h, 63), read(u, 64), read(f, 40), read(plain, 8))
+		log.join()`
+	jitDifferential(t, src)
+}
+
+// The reads run natively once learned: Go reads none of a typed array's.
+func TestJITTypedReferenceReadsNative(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r := New(Config{JIT: true})
+	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	const setup = `
+		const h = new Int32Array(256)
+		for (let i = 0; i < 256; i++) h[i] = i & 3
+		function count(n) { let k = 0; for (let i = 0; i < n; i++) { const x = h[i & 255]; if (x !== 0) k++ } return k }`
+	if _, err := r.Run(compileForTest(t, setup)); err != nil {
+		t.Fatal(err)
+	}
+	for range 10 {
+		if _, err := r.Run(compileForTest(t, `count(1000)`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e := jitNativeForTest(t, r, "count")
+	entries, hosts := e.ssaStats.entries, e.ssaStats.hosts
+	if _, err := r.Run(compileForTest(t, `for (let k = 0; k < 20; k++) count(1000)`)); err != nil {
+		t.Fatal(err)
+	}
+	if n := e.ssaStats.entries - entries; n < 20 {
+		t.Fatalf("count ran natively %d times of 20", n)
+	}
+	if n := e.ssaStats.hosts - hosts; n > 2 {
+		t.Errorf("count left native code %d times in 20,000 reads", n)
+	}
+}

@@ -113,6 +113,23 @@ type StringFeedback interface {
 	StringProperty(pc int) (PropertySite, bool)
 }
 
+// ElementFeedback is Feedback that knows the element reads whose receivers
+// have been typed arrays (TypedRead): a read whose result no native
+// operation takes as a number (ir.Instruction's Reference) is made there
+// as a typed array's, its number boxed, rather than by an element's cell,
+// which a typed array has none of -- as V8's keyed loads follow their
+// feedback's elements kind. Any other receiver Go reads.
+type ElementFeedback interface {
+	TypedRead(pc int) bool
+}
+
+// typedRead reports whether the element read at pc has met typed arrays
+// (ElementFeedback).
+func (b *builder) typedRead(pc int) bool {
+	f, ok := b.fb.(ElementFeedback)
+	return ok && f.TypedRead(pc)
+}
+
 // stringProperty is the feedback for a method read at pc whose receivers
 // have been strings, if any.
 func (b *builder) stringProperty(pc int) (PropertySite, bool) {
@@ -2424,6 +2441,13 @@ func (b *builder) instruction(blk *Block, pc int) {
 				return old, updated
 			}
 			return updated, updated
+		}
+		if in.Reference && in.Op == ir.ArrayRead && b.typedRead(pc) {
+			// A typed array's number; Go reads any other's.
+			array := guard(OpIndexedOf, Ptr, ir.HostExit, operand(in.Left))
+			key, _ := keyOf(ir.HostExit)
+			b.assign(in.Dest, blk, boxF(guard(OpElemRead, Float64, ir.HostExit, array, key)))
+			break
 		}
 		if in.Reference {
 			// Whatever the element holds, by its cell; Go reads the rest,

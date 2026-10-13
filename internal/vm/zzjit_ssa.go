@@ -3549,6 +3549,42 @@ func (r *Runtime) jitCallTarget(f *frame, e *jitEntry, pc, sp int, in bytecode.I
 	}
 }
 
+// jitIndexSeen notes an element read at pc that left native code, its
+// receiver and key on the VM's stack below sp: one compiled to read an
+// element's cell (ir.Instruction's Reference) whose receiver is a typed
+// array, which has no cells, is compiled again to read a typed array's
+// number there (ssa.ElementFeedback). Mandreel's code reads its heap's
+// views so wherever it only compares what it read, and Go had read every
+// one.
+func (r *Runtime) jitIndexSeen(e *jitEntry, pc, sp int) {
+	p := e.ssaProg
+	// Not bounded by jitReoptimizations, which speculations that failed
+	// spend: each read is learned once, and the compile waits for the next
+	// invocation, taking every one met meanwhile.
+	if p == nil || pc >= len(p.Code) || sp < 2 {
+		return
+	}
+	if in := p.Code[pc]; in.Op != ir.ArrayRead || !in.Reference || slices.Contains(e.typedReads, int32(pc)) {
+		return
+	}
+	if o := r.stack[sp-2]; !o.IsObject() || o.Object().class != ClassTypedArray {
+		return
+	}
+	e.typedReads = append(e.typedReads, int32(pc))
+	if !e.feedReopt {
+		// At its next invocation, as for a property site's feedback
+		// (jitFed): its other reads learn theirs meanwhile, and one compile
+		// takes them all -- Mandreel's sorting reads its heap's views at a
+		// dozen sites.
+		e.feedReopt, e.feedStarts, e.feedWork = true, e.starts+e.link.in, e.ssaStats.work
+	}
+}
+
+// TypedRead is ssa.ElementFeedback's (jitIndexSeen).
+func (fb *jitFeedback) TypedRead(pc int) bool {
+	return fb.e != nil && fb.root == nil && slices.Contains(fb.e.typedReads, int32(pc))
+}
+
 // jitReadsUpvalues reports whether cl's code reads or assigns a binding it
 // captured.
 func jitReadsUpvalues(cl *closure) bool {
@@ -5486,6 +5522,8 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 				r.jitCallSeen(f, e, exitPC, f.base+int(ctx.ExitDepth), jitCallInstr(in))
 			case bytecode.OpGetProp, bytecode.OpGetPropThis:
 				r.jitPolySeen(f, e, exitPC, f.base+int(ctx.ExitDepth), in)
+			case bytecode.OpGetIndex:
+				r.jitIndexSeen(e, exitPC, f.base+int(ctx.ExitDepth))
 			case bytecode.OpGetPrivate, bytecode.OpSetPrivate, bytecode.OpPrivateIn:
 				r.jitPrivateSeen(f, e, exitPC, f.base+int(ctx.ExitDepth), in)
 			case bytecode.OpNewObject, bytecode.OpNewArray, bytecode.OpNewRegExp:
@@ -6245,6 +6283,8 @@ func (r *Runtime) jitFinishExit(f *frame, e *jitEntry, l *jitNativeLevel) (Value
 				r.jitCallSeen(f, e, pc, f.base+depth, jitCallInstr(in))
 			case bytecode.OpGetProp, bytecode.OpGetPropThis:
 				r.jitPolySeen(f, e, pc, f.base+depth, in)
+			case bytecode.OpGetIndex:
+				r.jitIndexSeen(e, pc, f.base+depth)
 			case bytecode.OpGetPrivate, bytecode.OpSetPrivate, bytecode.OpPrivateIn:
 				r.jitPrivateSeen(f, e, pc, f.base+depth, in)
 			case bytecode.OpNewObject, bytecode.OpNewArray, bytecode.OpNewRegExp:
@@ -6436,7 +6476,7 @@ func (r *Runtime) jitResume(f *frame) (Value, error, bool) {
 		return Undefined, nil, false
 	}
 	e := r.jit.hint(f.cl)
-	if e != nil && e.entrySlow && !e.reoptPending() {
+	if e != nil && e.entrySlow && !e.reoptPending() && !e.feedReopt {
 		e.slowCalls++
 		return Undefined, nil, false
 	}
