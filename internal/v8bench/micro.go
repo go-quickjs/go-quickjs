@@ -72,6 +72,7 @@ var microWork = []struct {
 	{"try_catch", 8388608}, {"try_throw", 4194304}, {"try_finally", 8388608}, {"iterator_for_of", 8192},
 	{"map_for_of", 32768}, {"using_scope", 8388608}, {"closure_make", 524288}, {"closure_counter", 4194304},
 	{"closure_callback", 262144}, {"tail_self", 4194304}, {"tail_mutual", 4194304},
+	{"private_field", 4194304}, {"private_method", 2097152},
 }
 
 // microLoop is the driver's loop: each test of __work whose name begins with

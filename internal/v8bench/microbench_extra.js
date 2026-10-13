@@ -377,3 +377,39 @@ function tail_mutual(n)
     global_res = s;
     return n;
 }
+
+/* a class's private field, read and written, and its private method,
+   called */
+class PrivateCounter
+{
+    #n = 0;
+    #get() { return this.#n; }
+    add(n)
+    {
+        var j;
+        for (j = 0; j < n; j++)
+            this.#n = (this.#n + j) | 0;
+        return this.#n;
+    }
+    sum(n)
+    {
+        var j, s = 0;
+        for (j = 0; j < n; j++)
+            s = (s + this.#get()) | 0;
+        return s;
+    }
+}
+
+function private_field(n)
+{
+    global_res = new PrivateCounter().add(n);
+    return n;
+}
+
+function private_method(n)
+{
+    var c = new PrivateCounter();
+    c.add(10);
+    global_res = c.sum(n);
+    return n;
+}
