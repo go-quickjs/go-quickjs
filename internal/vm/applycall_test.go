@@ -35,7 +35,7 @@ func TestApplyArgumentsCallsDirectly(t *testing.T) {
 		if err != nil {
 			t.Fatalf("tree=%v: %v", tree, err)
 		}
-		res := v.Object().elems
+		res := v.Object().elemsOf()
 		if got, want := res[0].String().Go(), "601,302,object,true,true,true,true"; got != want {
 			t.Errorf("tree=%v: got %s, want %s", tree, got, want)
 		}

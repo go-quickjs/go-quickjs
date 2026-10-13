@@ -79,7 +79,7 @@ func (r *Runtime) initSegmenter(intlObj *Object) {
 		}
 		o.locale = kept.String()
 		out := newObject(proto, ClassObject)
-		out.data = o
+		out.extOf().data = o
 		return Obj(out), nil
 	})
 	r.defValue(intlObj, "Segmenter", Obj(ctor))
@@ -102,7 +102,7 @@ func (r *Runtime) initSegmenter(intlObj *Object) {
 			return Undefined, err
 		}
 		out := newObject(segments, ClassObject)
-		out.data = o.breakUp(s)
+		out.extOf().data = o.breakUp(s)
 		return Obj(out), nil
 	})
 	r.defMethod(proto, "resolvedOptions", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -171,7 +171,7 @@ func (r *Runtime) newSegmentsProto() *Object {
 				return Undefined, err
 			}
 			out := newObject(rt.intlProtoOf("SegmentIterator"), ClassObject)
-			out.data = &segmentIterData{segments: d}
+			out.extOf().data = &segmentIterData{segments: d}
 			return Obj(out), nil
 		})
 	return p
@@ -182,7 +182,7 @@ func (r *Runtime) newSegmentIteratorProto() *Object {
 	r.defMethod(p, "next", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		var it *segmentIterData
 		if this.IsObject() {
-			it, _ = this.Object().data.(*segmentIterData)
+			it, _ = this.Object().dataOf().(*segmentIterData)
 		}
 		if it == nil {
 			return Undefined, rt.intlIncompatibleReceiver("%SegmentIterator.prototype%.next", this)
@@ -200,7 +200,7 @@ func (r *Runtime) newSegmentIteratorProto() *Object {
 
 func (r *Runtime) segmenterOf(this Value, method string) (*segmenterOptions, error) {
 	if o := this.Object(); o != nil {
-		if opts, ok := o.data.(*segmenterOptions); ok {
+		if opts, ok := o.dataOf().(*segmenterOptions); ok {
 			return opts, nil
 		}
 	}
@@ -209,7 +209,7 @@ func (r *Runtime) segmenterOf(this Value, method string) (*segmenterOptions, err
 
 func (r *Runtime) segmentsOf(this Value, method string) (*segmentsData, error) {
 	if o := this.Object(); o != nil {
-		if d, ok := o.data.(*segmentsData); ok {
+		if d, ok := o.dataOf().(*segmentsData); ok {
 			return d, nil
 		}
 	}

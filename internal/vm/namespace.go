@@ -32,10 +32,10 @@ func (r *Runtime) buildNamespace(m *Module, deferred bool) (*Object, error) {
 	// export its own namespace -- directly or round a cycle -- and building it
 	// twice would never finish.
 	ns := newObject(nil, ClassModuleNamespace)
-	ns.data = m
+	ns.extOf().data = m
 	tag := "Module"
 	if deferred {
-		ns.data = &deferredModule{m}
+		ns.extOf().data = &deferredModule{m}
 		tag = "Deferred Module"
 		m.deferredNS = ns
 	} else {

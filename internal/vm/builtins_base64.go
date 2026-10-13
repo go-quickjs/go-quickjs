@@ -277,15 +277,15 @@ func (r *Runtime) uint8ArrayWritable(this Value, name string) error {
 	if err := r.uint8ArraySlot(this, name); err != nil {
 		return err
 	}
-	return r.requireMutable(this.Object().data.(*typedArrayData))
+	return r.requireMutable(this.Object().dataOf().(*typedArrayData))
 }
 
 // newUint8ArrayFrom wraps bytes in a fresh Uint8Array.
 func (r *Runtime) newUint8ArrayFrom(b []byte) *Object {
 	buf := newObject(r.arrayBufferProto, ClassArrayBuffer)
-	buf.data = &arrayBufferData{bytes: b}
+	buf.extOf().data = &arrayBufferData{bytes: b}
 	o := newObject(r.uint8Proto, ClassTypedArray)
-	o.data = &typedArrayData{buffer: buf, kind: elemUint8, fixedLength: len(b)}
+	o.extOf().data = &typedArrayData{buffer: buf, kind: elemUint8, fixedLength: len(b)}
 	return o
 }
 

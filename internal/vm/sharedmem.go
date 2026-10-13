@@ -158,7 +158,7 @@ func (r *Runtime) SharedMemoryOf(v Value) (*SharedMemory, bool, error) {
 	if !v.IsObject() || v.Object().class != ClassArrayBuffer {
 		return nil, false, nil
 	}
-	b, ok := v.Object().data.(*arrayBufferData)
+	b, ok := v.Object().dataOf().(*arrayBufferData)
 	if !ok || b.block == nil {
 		return nil, false, nil
 	}
@@ -177,7 +177,7 @@ func (r *Runtime) NewSharedArrayBuffer(m *SharedMemory) Value {
 	if m.max >= 0 {
 		b.resizable, b.maxByteLength = true, m.max
 	}
-	o.data = b
+	o.extOf().data = b
 	return Obj(o)
 }
 

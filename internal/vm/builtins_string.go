@@ -31,7 +31,7 @@ func (r *Runtime) initStringBuiltins() {
 			return Str(s), nil
 		}
 		o := newObject(rt.proto.str, ClassStringWrapper)
-		o.data = s
+		o.extOf().data = s
 		return Obj(o), nil
 	})
 
@@ -124,7 +124,7 @@ func (r *Runtime) initStringBuiltins() {
 		case this.IsString():
 			return this.String(), nil
 		case this.IsObject() && this.Object().class == ClassStringWrapper:
-			if s, ok := this.Object().data.(*String); ok {
+			if s, ok := this.Object().dataOf().(*String); ok {
 				return s, nil
 			}
 		case this.IsNullish():
@@ -141,7 +141,7 @@ func (r *Runtime) initStringBuiltins() {
 		case this.IsString():
 			return this.String(), nil
 		case this.IsObject() && this.Object().class == ClassStringWrapper:
-			if s, ok := this.Object().data.(*String); ok {
+			if s, ok := this.Object().dataOf().(*String); ok {
 				return s, nil
 			}
 		}
@@ -854,7 +854,7 @@ func (r *Runtime) replacementFor(replVal Value, replText string, matched *String
 // newStringIterator iterates a string by code point.
 func (r *Runtime) newStringIterator(s *String) (Value, error) {
 	iter := newObject(r.proto.stringIter, ClassIterator)
-	iter.data = &stringIterData{s: s}
+	iter.extOf().data = &stringIterData{s: s}
 	return Obj(iter), nil
 }
 
@@ -871,7 +871,7 @@ func (r *Runtime) initStringIteratorProto() {
 	r.defMethod(p, "next", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		var d *stringIterData
 		if this.IsObject() {
-			d, _ = this.Object().data.(*stringIterData)
+			d, _ = this.Object().dataOf().(*stringIterData)
 		}
 		if d == nil {
 			return Undefined, rt.throwTypeError(

@@ -1799,7 +1799,7 @@ func (c *tctx) setIndexSlow(o, k, v Value, pc int, strict bool) Value {
 		// first case does, unless the buffer is immutable, whose refusal the
 		// long way words.
 		if t, i, ok := typedElemIndex(o.object(), k.num); ok {
-			if st, _ := t.buffer.data.(*arrayBufferData); st != nil && !st.immutable {
+			if st, _ := t.buffer.dataOf().(*arrayBufferData); st != nil && !st.immutable {
 				if err := c.r.setElem(t, i, v); err != nil {
 					c.throw(err)
 				}
@@ -2090,11 +2090,11 @@ func getIndexOperands(obj, key tentry, pc int) tval {
 		return func(c *tctx) Value {
 			o := c.locals[o]
 			if o.IsObject() {
-				if a := o.object(); uint(i) < uint(len(a.elems)) && a.flags&objMappedArguments == 0 {
-					if v := a.elems[i]; !isHole(v) {
+				if a := o.object(); uint(i) < uint(len(a.elemsOf())) && a.flags&objMappedArguments == 0 {
+					if v := a.elemsOf()[i]; !isHole(v) {
 						return v
 					}
-				} else if t, ok := a.data.(*typedArrayData); ok {
+				} else if t, ok := a.dataOf().(*typedArrayData); ok {
 					// A typed array's element, which getIndexSlow would
 					// read the same way after asking again what is asked
 					// here.

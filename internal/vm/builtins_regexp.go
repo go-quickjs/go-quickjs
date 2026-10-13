@@ -37,7 +37,7 @@ func (r *Runtime) regexpOf(this Value, name string) (*regexp.Regexp, error) {
 	if !this.IsObject() || this.Object().class != ClassRegExp {
 		return nil, r.throwTypeError("%s called on an incompatible receiver", name)
 	}
-	d, ok := this.Object().data.(*regexpData)
+	d, ok := this.Object().dataOf().(*regexpData)
 	if !ok {
 		return nil, r.throwTypeError("%s called on an uninitialized RegExp", name)
 	}
@@ -85,7 +85,8 @@ func (r *Runtime) newRegExpObject(re *regexp.Regexp) Value {
 	ro.props = ro.inline[:0]
 	re.CloneInto(&ro.re)
 	ro.rd = regexpData{re: &ro.re, legacy: true, realm: r.Realm}
-	ro.data = &ro.rd
+	ro.embedExt(&ro.side)
+	ro.side.data = &ro.rd
 	// lastIndex is writable but neither enumerable nor configurable.
 	ro.setOwnRaw(atomLastIndex, Int(0), propWritable)
 	return Obj(&ro.Object)
@@ -95,6 +96,7 @@ func (r *Runtime) newRegExpObject(re *regexp.Regexp) Value {
 // and room for lastIndex, its one own property, in the same allocation.
 type regexpObject struct {
 	Object
+	side   objectExt
 	rd     regexpData
 	re     regexp.Regexp
 	inline [1]Property
@@ -180,7 +182,7 @@ func (r *Runtime) initRegExpBuiltins() {
 		var source, flags string
 		switch {
 		case pattern.IsObject() && pattern.Object().class == ClassRegExp:
-			d := pattern.Object().data.(*regexpData)
+			d := pattern.Object().dataOf().(*regexpData)
 			source, flags = d.re.Source(), d.re.Flags().String()
 			if !flagsArg.IsUndefined() {
 				s, err := rt.toString(flagsArg)
@@ -233,7 +235,7 @@ func (r *Runtime) initRegExpBuiltins() {
 			return Undefined, err
 		}
 		if nt := rt.newTarget(); !nt.IsUndefined() && (!nt.IsObject() || nt.Object() != rt.proto.regexpCtor) {
-			v.Object().data.(*regexpData).legacy = false
+			v.Object().dataOf().(*regexpData).legacy = false
 		}
 		return v, nil
 	})
@@ -255,7 +257,7 @@ func (r *Runtime) initRegExpBuiltins() {
 			}
 			return Undefined, err
 		}
-		d := this.Object().data.(*regexpData)
+		d := this.Object().dataOf().(*regexpData)
 		if d.source == nil {
 			// An empty pattern reports "(?:)" so that the result can be fed
 			// back to the constructor.
@@ -475,7 +477,7 @@ func (r *Runtime) regexpMatch(this Value, s *String) ([]int, *regexp.Regexp, err
 			return nil, nil, err
 		}
 	}
-	r.recordLegacyMatch(o.data.(*regexpData), s, caps)
+	r.recordLegacyMatch(o.dataOf().(*regexpData), s, caps)
 	return caps, re, nil
 }
 
@@ -540,7 +542,7 @@ func (r *Runtime) builtinExecOf(rx Value) bool {
 	if !propsIntact(r.proto.regexp, r.regexpExecProps) {
 		return false
 	}
-	d, ok := rx.Object().data.(*regexpData)
+	d, ok := rx.Object().dataOf().(*regexpData)
 	return ok && len(d.re.GroupNames()) == 0
 }
 
@@ -553,7 +555,7 @@ func (r *Runtime) builtinExecOf(rx Value) bool {
 // match. Where one fails, lastIndex is left where that call found it.
 func (r *Runtime) execMatchAll(rx Value, s *String, fullUnicode bool, spans []int) ([]int, error) {
 	o := rx.Object()
-	d := o.data.(*regexpData)
+	d := o.dataOf().(*regexpData)
 	re := d.re
 	units := s.codeUnits()
 	i := len(r.argStack)
@@ -736,7 +738,7 @@ func (r *Runtime) buildMatchResult(re *regexp.Regexp, caps []int, input *String)
 	// them again.
 	hasIndices := re.Flags()&regexp.FlagHasIndices != 0
 	arr, room := newMatchResult(r.proto.array, n, hasIndices)
-	elems := arr.elems
+	elems := arr.elemsOf()
 	// What matched is always there, and is written in the room the array
 	// has for it.
 	elems[0] = Str(input.substringInto(room, caps[0], caps[1]))
@@ -1047,7 +1049,7 @@ func (r *Runtime) builtinFlagBits(rx Value) (regexp.Flags, bool) {
 		!propsIntact(o.proto, r.regexpFlagProps) {
 		return 0, false
 	}
-	d, ok := o.data.(*regexpData)
+	d, ok := o.dataOf().(*regexpData)
 	if !ok {
 		return 0, false
 	}

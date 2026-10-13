@@ -66,14 +66,16 @@ type iterState struct {
 // and array destructuring makes one.
 func (r *Runtime) newIterObject(st iterState) Value {
 	io := &iterObject{Object: Object{class: ClassIterator, flags: objExtensible}, st: st}
-	io.data = &io.st
+	io.embedExt(&io.side)
+	io.side.data = &io.st
 	return Obj(&io.Object)
 }
 
 // iterObject is a cursor's object and the cursor, made together.
 type iterObject struct {
 	Object
-	st iterState
+	side objectExt
+	st   iterState
 }
 
 // iterStateOf recovers the cursor from a stack slot.
@@ -81,7 +83,7 @@ func iterStateOf(v Value) *iterState {
 	if !v.IsObject() {
 		return nil
 	}
-	st, _ := v.Object().data.(*iterState)
+	st, _ := v.Object().dataOf().(*iterState)
 	return st
 }
 
@@ -175,7 +177,7 @@ func (r *Runtime) startForIn(v Value) (Value, error) {
 // An object with elements has keys of those as well, and is not one.
 func (r *Runtime) shapeKeys(o *Object) *forInKeys {
 	s := o.shape
-	if o.class != ClassObject || len(o.elems) != 0 || s == nil || s.unique {
+	if o.class != ClassObject || len(o.elemsOf()) != 0 || s == nil || s.unique {
 		return nil
 	}
 	if s.forIn == nil {
@@ -212,12 +214,12 @@ func elemKeysOnly(o *Object) (int, bool) {
 			return 0, false
 		}
 	}
-	for i := range o.elems {
-		if holeAt(&o.elems[i]) {
+	for i := range o.elemsOf() {
+		if holeAt(&o.extOf().elems[i]) {
 			return 0, false
 		}
 	}
-	return len(o.elems), true
+	return len(o.elemsOf()), true
 }
 
 // noEnumerableKeys reports whether an object has no enumerable own string key,
@@ -225,7 +227,7 @@ func elemKeysOnly(o *Object) (int, bool) {
 // without being asked: one whose keys are synthesized, or a proxy, which would
 // see itself asked, are not looked at.
 func noEnumerableKeys(o *Object) bool {
-	if o.class != ClassObject && o.class != ClassArray || len(o.elems) != 0 || proxyOf(o) != nil {
+	if o.class != ClassObject && o.class != ClassArray || len(o.elemsOf()) != 0 || proxyOf(o) != nil {
 		return false
 	}
 	for i := range o.props {
@@ -298,8 +300,8 @@ func (r *Runtime) iterNext(cursor Value) (Value, bool, error) {
 		}
 		i := st.idx
 		st.idx++
-		if i < len(st.arr.elems) {
-			if v := st.arr.elems[i]; !isHole(v) {
+		if i < len(st.arr.elemsOf()) {
+			if v := st.arr.elemsOf()[i]; !isHole(v) {
 				return v, true, nil
 			}
 		}
@@ -318,7 +320,7 @@ func (r *Runtime) iterNext(cursor Value) (Value, bool, error) {
 		for st.idx < st.indexKeys {
 			i := st.idx
 			st.idx++
-			if o := st.obj; i < len(o.elems) && !holeAt(&o.elems[i]) {
+			if o := st.obj; i < len(o.elemsOf()) && !holeAt(&o.extOf().elems[i]) {
 				return Str(r.keyString(r.atoms.indexAtom(uint32(i)))), true, nil
 			}
 			key := r.atoms.indexAtom(uint32(i))
@@ -388,7 +390,7 @@ func (r *Runtime) stepIter(iter, next Value) (Value, bool, error) {
 		if fd := n.fn(); fd != nil && fd.iterNext != 0 && (fd.realm == nil || fd.realm == r.Realm) {
 			switch fd.iterNext {
 			case iterNextMap:
-				if d, ok := it.data.(*mapIterData); ok {
+				if d, ok := it.dataOf().(*mapIterData); ok {
 					if err := r.tick(); err != nil {
 						return Undefined, false, err
 					}
@@ -400,7 +402,7 @@ func (r *Runtime) stepIter(iter, next Value) (Value, bool, error) {
 				// a typed array, a string's wrapper, entries() -- reads the
 				// length and the element as next does, which may run a
 				// getter, so next's frame is there for it to see.
-				if d, ok := it.data.(*arrayIterData); ok {
+				if d, ok := it.dataOf().(*arrayIterData); ok {
 					if err := r.pushNativeFrame(n, iter, nil, Undefined); err != nil {
 						return Undefined, false, err
 					}
@@ -409,7 +411,7 @@ func (r *Runtime) stepIter(iter, next Value) (Value, bool, error) {
 					return v, ok, err
 				}
 			case iterNextGenerator:
-				if g, ok := it.data.(*generator); ok && it.class == ClassGenerator {
+				if g, ok := it.dataOf().(*generator); ok && it.class == ClassGenerator {
 					// As pushNativeFrame, with the function already found.
 					if err := r.tick(); err != nil {
 						return Undefined, false, err
@@ -534,7 +536,7 @@ func (r *Runtime) iterToArray(src Value, want uint32) (Value, error) {
 		return Undefined, err
 	}
 	out := newObject(r.proto.array, ClassArray)
-	for want == bytecode.IterAll || uint32(len(out.elems)) < want {
+	for want == bytecode.IterAll || uint32(len(out.elemsOf())) < want {
 		v, ok, err := r.iterNext(cursor)
 		if err != nil {
 			return Undefined, err
@@ -542,7 +544,7 @@ func (r *Runtime) iterToArray(src Value, want uint32) (Value, error) {
 		if !ok {
 			break
 		}
-		out.elems = append(out.elems, v)
+		out.extOf().elems = append(out.elemsOf(), v)
 	}
 	// The pattern has what it needs, so anything still suspended upstream is
 	// told to stop.
@@ -554,20 +556,20 @@ func (r *Runtime) iterToArray(src Value, want uint32) (Value, error) {
 func (r *Runtime) spreadInto(arr *Object, src Value) error {
 	// What the spread adds is charged to the memory limit: spreading an
 	// array into itself, twice, doubles it in one step.
-	before := cap(arr.elems)
+	before := cap(arr.elemsOf())
 	// A plain dense array is copied directly, skipping the protocol entirely.
 	// This is by far the common case and avoids allocating an iterator and a
 	// result object per element.
 	if els, ok := r.plainDenseElems(src); ok {
-		arr.elems = append(arr.elems, els...)
+		arr.extOf().elems = append(arr.elemsOf(), els...)
 	} else if err := r.iterate(src, func(v Value) error {
-		arr.elems = append(arr.elems, v)
+		arr.extOf().elems = append(arr.elemsOf(), v)
 		return nil
 	}); err != nil {
 		return err
 	}
 	if r.meter != nil {
-		return r.chargeGrowth(arr, int64(cap(arr.elems)-before)*valueSize)
+		return r.chargeGrowth(arr, int64(cap(arr.elemsOf())-before)*valueSize)
 	}
 	return nil
 }
@@ -587,12 +589,12 @@ func (r *Runtime) plainDenseElems(src Value) ([]Value, bool) {
 	if !o.IsArray() || o.flags&objHasSparseElements != 0 || !r.usesIntrinsicArrayIterator(o) {
 		return nil, false
 	}
-	for _, el := range o.elems {
+	for _, el := range o.elemsOf() {
 		if isHole(el) {
 			return nil, false
 		}
 	}
-	return o.elems, true
+	return o.elemsOf(), true
 }
 
 // usesIntrinsicArrayIterator reports whether an array still iterates the way
@@ -805,7 +807,7 @@ func (r *Runtime) newArgumentsObject(f *frame) *Object {
 	// allocation, rather than in a table grown as each is added, and so are
 	// its first few elements.
 	o := newArgumentsStorage(r.proto.object, len(f.args))
-	o.elems = append(o.elems, f.args...)
+	o.extOf().elems = append(o.elemsOf(), f.args...)
 	mapped := f.cl != nil && f.cl.fn.MappedArguments
 	kind := 0
 	if mapped {
@@ -856,15 +858,31 @@ func (r *Runtime) newArgumentsObject(f *frame) *Object {
 // properties and its first few elements in its own allocation. Each room
 // fills one of Go's size classes on a 64-bit platform, but for 8 bytes.
 type argumentsObject[A [2]Value | [4]Value | [7]Value] struct {
-	literalObject
+	argumentsObject0
 	room A
+}
+
+// argumentsObject0 is an arguments object with room for its three
+// properties but none for its elements.
+type argumentsObject0 struct {
+	Object
+	side   objectExt
+	inline [3]Property
+}
+
+func newArgumentsObject0(proto *Object) *Object {
+	ao := &argumentsObject0{Object: Object{proto: proto, class: ClassArguments, flags: objExtensible | objInlineProps}}
+	ao.props = ao.inline[:0]
+	ao.embedExt(&ao.side)
+	return &ao.Object
 }
 
 func newArgumentsObjectOf[A [2]Value | [4]Value | [7]Value](proto *Object) *Object {
 	ao := &argumentsObject[A]{}
 	ao.Object = Object{proto: proto, class: ClassArguments, flags: objExtensible | objInlineProps}
 	ao.props = ao.inline[:0]
-	ao.elems = unsafe.Slice(&ao.room[0], len(ao.room))[:0]
+	ao.embedExt(&ao.side)
+	ao.side.elems = unsafe.Slice(&ao.room[0], len(ao.room))[:0]
 	return &ao.Object
 }
 
@@ -873,7 +891,7 @@ func newArgumentsObjectOf[A [2]Value | [4]Value | [7]Value](proto *Object) *Obje
 func newArgumentsStorage(proto *Object, n int) *Object {
 	switch {
 	case n == 0:
-		return newLiteralObject(proto, ClassArguments, 3)
+		return newArgumentsObject0(proto)
 	case n <= 2:
 		return newArgumentsObjectOf[[2]Value](proto)
 	case n <= 4:
@@ -881,7 +899,7 @@ func newArgumentsStorage(proto *Object, n int) *Object {
 	case n <= 7:
 		return newArgumentsObjectOf[[7]Value](proto)
 	}
-	return newLiteralObject(proto, ClassArguments, 3)
+	return newArgumentsObject0(proto)
 }
 
 // argsLayout is the layout of the three properties every object of a kind
@@ -943,7 +961,7 @@ func (r *Runtime) mapArguments(o *Object, f *frame) {
 		}
 		mapped[i] = u
 	}
-	o.data = &argumentsData{mapped: mapped}
+	o.extOf().data = &argumentsData{mapped: mapped}
 	o.flags |= objMappedArguments
 }
 
@@ -1176,7 +1194,7 @@ func (r *Runtime) iterRest(cursor Value) (Value, error) {
 		if !ok {
 			return Obj(out), nil
 		}
-		out.elems = append(out.elems, v)
+		out.extOf().elems = append(out.elemsOf(), v)
 	}
 }
 

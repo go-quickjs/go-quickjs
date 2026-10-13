@@ -21,7 +21,7 @@ package vm
 // sandbox's, and then its own.
 func (r *Runtime) Contextify(re *Realm, sandbox *Object) {
 	scope := newObject(nil, ClassProxy)
-	scope.data = &proxyData{target: re.global, sandbox: sandbox}
+	scope.extOf().data = &proxyData{target: re.global, sandbox: sandbox}
 	re.scope = scope
 	re.globalThis = Obj(scope)
 	re.global.setOwnRaw(r.atoms.intern("globalThis"), Obj(scope), propWritable|propConfigurable)

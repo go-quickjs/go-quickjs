@@ -129,8 +129,8 @@ func (r *Runtime) NewUint8ArrayOf(b []byte) Value {
 	buf := newObject(r.arrayBufferProto, ClassArrayBuffer)
 	storage := make([]byte, len(b))
 	copy(storage, b)
-	buf.data = &arrayBufferData{bytes: storage}
-	o.data = &typedArrayData{buffer: buf, kind: elemUint8, fixedLength: len(b)}
+	buf.extOf().data = &arrayBufferData{bytes: storage}
+	o.extOf().data = &typedArrayData{buffer: buf, kind: elemUint8, fixedLength: len(b)}
 	return Obj(o)
 }
 
@@ -141,7 +141,7 @@ func (r *Runtime) NewUint8ArrayOf(b []byte) Value {
 // transferred.
 func (r *Runtime) NewArrayBufferOf(b []byte, external, immutable bool) Value {
 	buf := newObject(r.arrayBufferProto, ClassArrayBuffer)
-	buf.data = &arrayBufferData{bytes: b, external: external, immutable: immutable}
+	buf.extOf().data = &arrayBufferData{bytes: b, external: external, immutable: immutable}
 	return Obj(buf)
 }
 
@@ -160,7 +160,7 @@ func (r *Runtime) NewTypedArrayOf(kind string, buffer Value) (Value, error) {
 	}
 	var b *arrayBufferData
 	if buffer.IsObject() && buffer.Object().class == ClassArrayBuffer {
-		b, _ = buffer.Object().data.(*arrayBufferData)
+		b, _ = buffer.Object().dataOf().(*arrayBufferData)
 	}
 	if b == nil || b.detached {
 		return Undefined, fmt.Errorf("a %s is made over an ArrayBuffer", kind)
@@ -170,7 +170,7 @@ func (r *Runtime) NewTypedArrayOf(kind string, buffer Value) (Value, error) {
 		return Undefined, fmt.Errorf("a %s over %d bytes would end part-way through an element", kind, len(b.bytes))
 	}
 	o := newObject(r.typedArrayProtoFor(elemType(k)), ClassTypedArray)
-	o.data = &typedArrayData{buffer: buffer.Object(), kind: elemType(k), fixedLength: len(b.bytes) / size}
+	o.extOf().data = &typedArrayData{buffer: buffer.Object(), kind: elemType(k), fixedLength: len(b.bytes) / size}
 	return Obj(o), nil
 }
 
@@ -187,7 +187,7 @@ func (r *Runtime) Bytes(v Value) ([]byte, bool) {
 		return nil, false
 	}
 	o := v.Object()
-	switch data := o.data.(type) {
+	switch data := o.dataOf().(type) {
 	case *arrayBufferData:
 		if data.detached {
 			return nil, false
@@ -270,7 +270,7 @@ func (r *Runtime) EnqueueJob(fn func()) { r.enqueueJob(fn) }
 // return, stop has been called and next answers done.
 func (r *Runtime) NewHostIterator(next func() (Value, bool, error), stop func()) Value {
 	o := newObject(r.hostIterProto(), ClassObject)
-	o.data = &hostIter{next: next, stop: stop}
+	o.extOf().data = &hostIter{next: next, stop: stop}
 	return Obj(o)
 }
 
@@ -300,7 +300,7 @@ func (r *Runtime) hostIterProto() *Object {
 	p := newObject(r.proto.iterator, ClassObject)
 	of := func(rt *Runtime, this Value, name string) (*hostIter, error) {
 		if this.IsObject() {
-			if h, ok := this.Object().data.(*hostIter); ok {
+			if h, ok := this.Object().dataOf().(*hostIter); ok {
 				if h.running {
 					return nil, rt.throwTypeError("the iterator is already running")
 				}
@@ -349,7 +349,7 @@ func (r *Runtime) PromiseResult(v Value) (result Value, settled, rejected, ok bo
 	if !v.IsObject() || v.Object().class != ClassPromise {
 		return Undefined, false, false, false
 	}
-	p, ok := v.Object().data.(*promiseData)
+	p, ok := v.Object().dataOf().(*promiseData)
 	if !ok {
 		return Undefined, false, false, false
 	}

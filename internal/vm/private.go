@@ -91,7 +91,7 @@ type privateMethod struct {
 // binding like any other value. Nothing a script can write reaches it.
 func (r *Runtime) newPrivateMethods() Value {
 	o := newObject(nil, ClassObject)
-	o.data = &privateMethods{}
+	o.extOf().data = &privateMethods{}
 	return Obj(o)
 }
 
@@ -99,7 +99,7 @@ func privateMethodsOf(v Value) *privateMethods {
 	if !v.IsObject() {
 		return nil
 	}
-	m, _ := v.Object().data.(*privateMethods)
+	m, _ := v.Object().dataOf().(*privateMethods)
 	return m
 }
 

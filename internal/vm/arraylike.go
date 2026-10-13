@@ -52,11 +52,11 @@ func (r *Runtime) commaString() *String {
 // or that could not be a string, is 0.
 func joinSize(a *arrayLike, sep *String) int {
 	o := a.o
-	if o.class != ClassArray || a.n == 0 || int64(len(o.elems)) != a.n || a.n > 1<<16 {
+	if o.class != ClassArray || a.n == 0 || int64(len(o.elemsOf())) != a.n || a.n > 1<<16 {
 		return 0
 	}
 	size := int64(guessBytes(sep)) * (a.n - 1)
-	for _, v := range o.elems {
+	for _, v := range o.elemsOf() {
 		if v.IsString() {
 			size += int64(guessBytes(v.String()))
 		} else {
@@ -154,7 +154,7 @@ func (r *Runtime) knownIndexKey(o *Object, i int64) (Atom, bool) {
 		return a, true
 	}
 	for p := o; p != nil; p = p.proto {
-		if p.class != ClassObject && p.class != ClassArray || p.data != nil {
+		if p.class != ClassObject && p.class != ClassArray || p.class == ClassObject && p.dataOf() != nil {
 			return r.atoms.intern(name), true
 		}
 	}
@@ -281,10 +281,10 @@ func (a *arrayLike) setLength(r *Runtime, n int64) error {
 // accessor has already been moved out of dense storage, so anything still here
 // is a plain data property that shadows whatever the prototype holds.
 func (a *arrayLike) dense(i int64) (Value, bool) {
-	if a.o.class != ClassArray || i < 0 || i >= int64(len(a.o.elems)) {
+	if a.o.class != ClassArray || i < 0 || i >= int64(len(a.o.elemsOf())) {
 		return Undefined, false
 	}
-	v := a.o.elems[i]
+	v := a.o.elemsOf()[i]
 	if isHole(v) {
 		return Undefined, false
 	}
@@ -299,12 +299,12 @@ func (a *arrayLike) dense(i int64) (Value, bool) {
 // object, nothing a lookup could run code for.
 func (a *arrayLike) holeAbsent(i int64) bool {
 	o := a.o
-	if o.class != ClassArray || i < 0 || i >= int64(len(o.elems)) || !isHole(o.elems[i]) ||
+	if o.class != ClassArray || i < 0 || i >= int64(len(o.elemsOf())) || !isHole(o.elemsOf()[i]) ||
 		o.flags&(objHasSparseElements|objMappedArguments) != 0 || !o.noIndexKeys() {
 		return false
 	}
 	for p := o.proto; p != nil; p = p.proto {
-		if p.class != ClassObject && p.class != ClassArray || len(p.elems) != 0 || !p.noIndexKeys() {
+		if p.class != ClassObject && p.class != ClassArray || len(p.elemsOf()) != 0 || !p.noIndexKeys() {
 			return false
 		}
 	}
@@ -317,7 +317,7 @@ func (r *Runtime) newArrayOfLength(n int64) *Object {
 		// A short result has its room in the array's own allocation, as a
 		// literal of that length does.
 		o := newArrayObject(r.proto.array, int(n))
-		o.elems = o.elems[:0]
+		o.extOf().elems = o.elemsOf()[:0]
 		return o
 	}
 	o := newObject(r.proto.array, ClassArray)
@@ -325,7 +325,7 @@ func (r *Runtime) newArrayOfLength(n int64) *Object {
 	// of 2**53-1 while holding nothing, and reserving for that would exhaust
 	// memory before the first element is read; append grows the rest.
 	if n > 0 && n <= 1<<16 {
-		o.elems = make([]Value, 0, n)
+		o.extOf().elems = make([]Value, 0, n)
 	}
 	return o
 }

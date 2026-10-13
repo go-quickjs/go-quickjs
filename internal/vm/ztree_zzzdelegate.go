@@ -49,7 +49,7 @@ func init() {
 			it.class != ClassGenerator {
 			return false
 		}
-		g, ok := it.data.(*generator)
+		g, ok := it.dataOf().(*generator)
 		if !ok {
 			return false
 		}

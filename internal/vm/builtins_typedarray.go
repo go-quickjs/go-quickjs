@@ -137,7 +137,7 @@ type typedArrayData struct {
 func (t *typedArrayData) info() elemInfo { return elemInfos[t.kind] }
 
 func (t *typedArrayData) storage() *arrayBufferData {
-	b, _ := t.buffer.data.(*arrayBufferData)
+	b, _ := t.buffer.dataOf().(*arrayBufferData)
 	if b != nil && b.block != nil {
 		b.sharedMemory()
 	}
@@ -230,7 +230,7 @@ func (r *Runtime) typedArrayDataOf(this Value, name string) (*typedArrayData, er
 	if !this.IsObject() || this.Object().class != ClassTypedArray {
 		return nil, r.throwTypeError("%s called on an incompatible receiver", name)
 	}
-	t, ok := this.Object().data.(*typedArrayData)
+	t, ok := this.Object().dataOf().(*typedArrayData)
 	if !ok {
 		return nil, r.throwTypeError("%s called on an uninitialized typed array", name)
 	}
@@ -292,7 +292,7 @@ func (r *Runtime) typedArraySlot(this Value, name string) (*typedArrayData, erro
 	if !this.IsObject() || this.Object().class != ClassTypedArray {
 		return nil, r.throwTypeError("%s called on an incompatible receiver", name)
 	}
-	t, ok := this.Object().data.(*typedArrayData)
+	t, ok := this.Object().dataOf().(*typedArrayData)
 	if !ok {
 		return nil, r.throwTypeError("%s called on an uninitialized typed array", name)
 	}
@@ -301,7 +301,7 @@ func (r *Runtime) typedArraySlot(this Value, name string) (*typedArrayData, erro
 
 // getElem reads one element as a JavaScript value.
 func (t *typedArrayData) getElem(i int) Value {
-	st, _ := t.buffer.data.(*arrayBufferData)
+	st, _ := t.buffer.dataOf().(*arrayBufferData)
 	shift := elemShifts[t.kind&15] & 7
 	var off int
 	if st != nil && !t.tracking && uint(i) < uint(t.fixedLength) && t.byteOffset+t.fixedLength<<shift <= len(st.bytes) {
@@ -371,7 +371,7 @@ func (r *Runtime) setElem(t *typedArrayData, i int, v Value) error {
 
 	// Re-measured after the conversion, because the conversion may have taken
 	// the buffer away.
-	st, _ := t.buffer.data.(*arrayBufferData)
+	st, _ := t.buffer.dataOf().(*arrayBufferData)
 	shift := elemShifts[t.kind&15] & 7
 	var off int
 	if st != nil && !t.tracking && uint(i) < uint(t.fixedLength) && t.byteOffset+t.fixedLength<<shift <= len(st.bytes) {
@@ -496,7 +496,7 @@ func (r *Runtime) initArrayBufferBuiltins() {
 		if max >= 0 {
 			b.resizable, b.maxByteLength = true, max
 		}
-		o.data = b
+		o.extOf().data = b
 		return Obj(o), nil
 	})
 	r.defSpecies(ctor)
@@ -647,7 +647,7 @@ func (r *Runtime) initArrayBufferBuiltins() {
 		if resizable {
 			nb.resizable, nb.maxByteLength = true, max
 		}
-		o.data = nb
+		o.extOf().data = nb
 		return Obj(o), nil
 	}
 	r.defMethod(abProto, "transfer", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -700,7 +700,7 @@ func (r *Runtime) initArrayBufferBuiltins() {
 		out := make([]byte, max(end-start, 0))
 		copy(out, b.bytes[start:max(start, end)])
 		o := newObject(abProto, ClassArrayBuffer)
-		o.data = &arrayBufferData{bytes: out, immutable: true}
+		o.extOf().data = &arrayBufferData{bytes: out, immutable: true}
 		return Obj(o), nil
 	})
 
@@ -739,7 +739,7 @@ func (r *Runtime) initArrayBufferBuiltins() {
 		if !res.IsObject() || res.Object().class != ClassArrayBuffer {
 			return Undefined, rt.throwTypeError("the species did not return an ArrayBuffer")
 		}
-		out, ok := res.Object().data.(*arrayBufferData)
+		out, ok := res.Object().dataOf().(*arrayBufferData)
 		if !ok || out.detached {
 			return Undefined, rt.throwTypeError("the species returned a detached ArrayBuffer")
 		}
@@ -778,7 +778,7 @@ func (r *Runtime) DetachArrayBuffer(v Value) error {
 	if !v.IsObject() || v.Object().class != ClassArrayBuffer {
 		return r.throwTypeError("an ArrayBuffer is required")
 	}
-	b, ok := v.Object().data.(*arrayBufferData)
+	b, ok := v.Object().dataOf().(*arrayBufferData)
 	if !ok {
 		return r.throwTypeError("the ArrayBuffer is uninitialized")
 	}
@@ -800,7 +800,7 @@ func (r *Runtime) bufferOf(this Value, name string) (*arrayBufferData, error) {
 	if !this.IsObject() || this.Object().class != ClassArrayBuffer {
 		return nil, r.throwTypeError("%s called on an incompatible receiver", name)
 	}
-	b, ok := this.Object().data.(*arrayBufferData)
+	b, ok := this.Object().dataOf().(*arrayBufferData)
 	if !ok {
 		return nil, r.throwTypeError("%s called on an uninitialized ArrayBuffer", name)
 	}
@@ -822,7 +822,7 @@ func (r *Runtime) initTypedArrayBuiltins() {
 	// to be the prototype of the nine concrete constructors, never to be
 	// called.
 	abstract := newObject(r.proto.function, ClassFunction)
-	abstract.data = &funcData{
+	abstract.extOf().data = &funcData{
 		name: "TypedArray", length: 0, ctorKind: ctorBase, realm: r.Realm,
 		native: func(rt *Runtime, this Value, args []Value) (Value, error) {
 			return Undefined, rt.throwTypeError("TypedArray is abstract and cannot be constructed")
@@ -904,7 +904,7 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 	case first.IsObject() && first.Object().class == ClassArrayBuffer:
 		// A view over an existing buffer, which aliases rather than copies.
 		buf := first.Object()
-		b := buf.data.(*arrayBufferData)
+		b := buf.dataOf().(*arrayBufferData)
 		// Measured as it is now: another agent may have grown it.
 		b.sharedMemory()
 		off, err := r.toIndex(arg(args, 1))
@@ -934,7 +934,7 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 		if explicit < 0 && b.resizable {
 			// No length of its own over a buffer that can change length: the
 			// view covers whatever the buffer holds past its offset.
-			o.data = &typedArrayData{buffer: buf, kind: kind, byteOffset: int(off), tracking: true}
+			o.extOf().data = &typedArrayData{buffer: buf, kind: kind, byteOffset: int(off), tracking: true}
 			return Obj(o), nil
 		}
 		if explicit < 0 && len(b.bytes)%info.size != 0 {
@@ -950,7 +950,7 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 			}
 			length = int(explicit)
 		}
-		o.data = &typedArrayData{buffer: buf, kind: kind, byteOffset: int(off), fixedLength: length}
+		o.extOf().data = &typedArrayData{buffer: buf, kind: kind, byteOffset: int(off), fixedLength: length}
 		return Obj(o), nil
 
 	case first.IsObject() && first.Object().class == ClassTypedArray:
@@ -1075,9 +1075,9 @@ func (r *Runtime) allocTypedArrayChecked(o *Object, kind elemType, n int64) (*ty
 // allocTypedArray gives a view its own freshly allocated buffer.
 func (r *Runtime) allocTypedArray(o *Object, kind elemType, length int) *typedArrayData {
 	buf := newObject(r.arrayBufferProto, ClassArrayBuffer)
-	buf.data = &arrayBufferData{bytes: make([]byte, length*elemInfos[kind].size)}
+	buf.extOf().data = &arrayBufferData{bytes: make([]byte, length*elemInfos[kind].size)}
 	t := &typedArrayData{buffer: buf, kind: kind, fixedLength: length}
-	o.data = t
+	o.extOf().data = t
 	return t
 }
 
@@ -1150,7 +1150,7 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 			// read before any is written: interleaving would let an early
 			// write change a later read. Its length is the view's own rather
 			// than a length property, which a script may have defined over it.
-			srcData := src.Object().data.(*typedArrayData)
+			srcData := src.Object().dataOf().(*typedArrayData)
 			items := make([]Value, srcData.count())
 			for i := range items {
 				items[i] = srcData.getElem(i)
@@ -1839,7 +1839,7 @@ func (r *Runtime) defineTypedArrayMethods(p *Object) {
 			if !this.IsObject() || this.Object().class != ClassTypedArray {
 				return Undefined, nil
 			}
-			t, ok := this.Object().data.(*typedArrayData)
+			t, ok := this.Object().dataOf().(*typedArrayData)
 			if !ok {
 				return Undefined, nil
 			}

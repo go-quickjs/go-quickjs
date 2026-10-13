@@ -165,7 +165,7 @@ func (r *Runtime) runCleanups() {
 			continue
 		}
 		p.cell.done = true
-		d, ok := p.registry.data.(*finalizationData)
+		d, ok := p.registry.dataOf().(*finalizationData)
 		if !ok || !isCallable(d.cleanup) {
 			continue
 		}

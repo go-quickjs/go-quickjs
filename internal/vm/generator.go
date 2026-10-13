@@ -298,14 +298,16 @@ func (r *Runtime) newGenerator(cl *closure, this Value, args []Value, callee *Ob
 		}
 	}
 	gobj.proto = proto
-	gobj.data = g
+	gobj.embedExt(&gobj.side)
+	gobj.side.data = g
 	return &gobj.Object, nil
 }
 
 // generatorObject is a generator's object and its state, made together.
 type generatorObject struct {
 	Object
-	g generator
+	side objectExt
+	g    generator
 }
 
 // generatorVals is a generatorObject and the arguments and locals of a
@@ -374,7 +376,7 @@ func (r *Runtime) generatorOf(this Value, name string) (*generator, error) {
 	if !this.IsObject() || this.Object().class != ClassGenerator {
 		return nil, r.throwTypeError("%s called on an incompatible receiver", name)
 	}
-	g, ok := this.Object().data.(*generator)
+	g, ok := this.Object().dataOf().(*generator)
 	if !ok {
 		return nil, r.throwTypeError("%s called on an uninitialized generator", name)
 	}

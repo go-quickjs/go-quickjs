@@ -112,15 +112,23 @@ const (
 	testStringShape = 0x7000
 )
 
-// testObject is an object's layout as far as native code reads it.
+// testObject is an object's layout as far as native code reads it: its
+// side fields are its own, which ext points to when it has them, as an
+// array always does.
 type testObject struct {
 	class    uint8
 	flags    uint8
 	arrayLen uint32
-	elems    []testValue
+	ext      *testObjectExt
 	shape    uintptr
 	props    []testProperty
 	proto    *testObject
+	testObjectExt
+}
+
+// testObjectExt is an object's side fields (abi.Encoding's ObjectExt).
+type testObjectExt struct {
+	elems []testValue
 }
 
 // testHolders are the prototypes test objects may have, which property
@@ -236,8 +244,10 @@ var testEncoding = abi.Encoding{
 	Uninitialized: testTagBase | 8, CanonicalNaN: 0x7FF8000000000000,
 	Object:      testTagBase | 7,
 	ObjectClass: int32(unsafe.Offsetof(testObject{}.class)), ObjectFlags: int32(unsafe.Offsetof(testObject{}.flags)),
-	ObjectArrayLen: int32(unsafe.Offsetof(testObject{}.arrayLen)), ObjectElems: int32(unsafe.Offsetof(testObject{}.elems)),
-	ClassArray: testClassArray, FlagSparse: testFlagSparse, FlagHTMLDDA: testFlagHTMLDDA,
+	ObjectExt: int32(unsafe.Offsetof(testObject{}.ext)), ExtElems: int32(unsafe.Offsetof(testObjectExt{}.elems)),
+	ObjectArrayLen: int32(unsafe.Offsetof(testObject{}.arrayLen)),
+	ObjectElems:    int32(unsafe.Offsetof(testObject{}.testObjectExt) + unsafe.Offsetof(testObjectExt{}.elems)),
+	ClassArray:     testClassArray, FlagSparse: testFlagSparse, FlagHTMLDDA: testFlagHTMLDDA,
 	UpvalueSlot: int32(unsafe.Offsetof(testUpvalue{}.slot)),
 	String:      testTagBase | 4, StringData: int32(unsafe.Offsetof(testString{}.s)),
 	StringLeft: int32(unsafe.Offsetof(testString{}.left)), StringLength: int32(unsafe.Offsetof(testString{}.length)),
@@ -386,6 +396,9 @@ func (h testHeap) native() *nativeHeap {
 		}
 		if a.length > uint64(len(a.cells)) {
 			o.flags, o.arrayLen = testFlagSparse, uint32(a.length)
+		}
+		if a.array || len(a.cells) > 0 || o.flags&testFlagSparse != 0 {
+			o.ext = &o.testObjectExt
 		}
 		if a.htmldda {
 			o.flags |= testFlagHTMLDDA

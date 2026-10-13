@@ -69,7 +69,7 @@ const (
 // none: the job resumes g itself, with no function called and no promise
 // made for nothing to read.
 func (r *Runtime) awaitPromise(p *Object, g *generator, k awaitKind) {
-	pd, ok := p.data.(*promiseData)
+	pd, ok := p.dataOf().(*promiseData)
 	if !ok {
 		return
 	}
@@ -131,7 +131,7 @@ func (r *Runtime) promiseOf(this Value, name string) (*promiseData, error) {
 	if !this.IsObject() || this.Object().class != ClassPromise {
 		return nil, r.throwTypeError("%s called on an incompatible receiver", name)
 	}
-	p, ok := this.Object().data.(*promiseData)
+	p, ok := this.Object().dataOf().(*promiseData)
 	if !ok {
 		return nil, r.throwTypeError("%s called on an uninitialized promise", name)
 	}
@@ -145,13 +145,15 @@ func (r *Runtime) newPromise() *Object {
 	po := &promiseObject{
 		Object: Object{proto: r.proto.promise, class: ClassPromise, flags: objExtensible},
 	}
-	po.Object.data = &po.state
+	po.embedExt(&po.side)
+	po.side.data = &po.state
 	return &po.Object
 }
 
 // promiseObject is a promise together with the state it settles into.
 type promiseObject struct {
 	Object
+	side  objectExt
 	state promiseData
 }
 
@@ -201,7 +203,7 @@ type resolvingPair struct {
 // makes this promise follow it, which is what lets `return somePromise` inside
 // a then callback flatten.
 func (r *Runtime) resolvePromise(o *Object, v Value) {
-	p, ok := o.data.(*promiseData)
+	p, ok := o.dataOf().(*promiseData)
 	if !ok || p.state != promisePending {
 		return
 	}
@@ -243,7 +245,7 @@ func (r *Runtime) resolvePromise(o *Object, v Value) {
 
 // rejectPromise settles a promise with a reason.
 func (r *Runtime) rejectPromise(o *Object, reason Value) {
-	p, ok := o.data.(*promiseData)
+	p, ok := o.dataOf().(*promiseData)
 	if !ok || p.state != promisePending {
 		return
 	}
@@ -280,7 +282,7 @@ func (r *Runtime) reportUnhandledRejections() {
 		return
 	}
 	for _, o := range pending {
-		p, ok := o.data.(*promiseData)
+		p, ok := o.dataOf().(*promiseData)
 		if !ok || p.state != promiseRejected || p.handled {
 			continue
 		}
@@ -483,7 +485,7 @@ func (r *Runtime) promiseThen(o *Object, onFulfilled, onRejected Value) *Object 
 // promiseThenInto registers a reaction that settles a promise the caller
 // already has, which is PerformPromiseThen with a result capability.
 func (r *Runtime) promiseThenInto(o *Object, onFulfilled, onRejected Value, result *Object) {
-	p, ok := o.data.(*promiseData)
+	p, ok := o.dataOf().(*promiseData)
 	if !ok {
 		return
 	}
@@ -629,7 +631,7 @@ func (r *Runtime) initPromiseBuiltins() {
 			return Undefined, err
 		}
 		o := newObject(proto, ClassPromise)
-		o.data = &promiseData{}
+		o.extOf().data = &promiseData{}
 		// The pair the executor is handed are anonymous, which a script can
 		// check.
 		resolveFn, rejectFn := rt.resolvingFunctions(o)

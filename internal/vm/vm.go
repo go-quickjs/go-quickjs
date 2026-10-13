@@ -298,8 +298,8 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			if obj.IsObject() && key.IsNumber() {
 				o := obj.Object()
 				if i := uint32(key.Number()); float64(i) == key.Number() &&
-					uint(i) < uint(len(o.elems)) && o.flags&objMappedArguments == 0 {
-					if v := o.elems[i]; !isHole(v) {
+					uint(i) < uint(len(o.elemsOf())) && o.flags&objMappedArguments == 0 {
+					if v := o.elemsOf()[i]; !isHole(v) {
 						sp = pushAt(stack, sp, v)
 						break
 					}
@@ -890,8 +890,8 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			if obj.IsObject() && key.IsNumber() {
 				o := obj.Object()
 				if i := uint32(key.Number()); float64(i) == key.Number() &&
-					uint(i) < uint(len(o.elems)) && o.flags&objMappedArguments == 0 {
-					if v := o.elems[i]; !isHole(v) {
+					uint(i) < uint(len(o.elemsOf())) && o.flags&objMappedArguments == 0 {
+					if v := o.elemsOf()[i]; !isHole(v) {
 						stack[sp-1] = v
 						break
 					}
@@ -929,8 +929,8 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			if obj.IsObject() && key.IsNumber() {
 				o := obj.Object()
 				if i := uint32(key.Number()); float64(i) == key.Number() &&
-					uint(i) < uint(len(o.elems)) && o.flags&objMappedArguments == 0 && !isHole(o.elems[i]) {
-					o.elems[i] = val
+					uint(i) < uint(len(o.elemsOf())) && o.flags&objMappedArguments == 0 && !isHole(o.elemsOf()[i]) {
+					o.extOf().elems[i] = val
 					break
 				}
 			}
@@ -1240,8 +1240,8 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			if obj.IsObject() && key.IsNumber() {
 				o := obj.Object()
 				if i := uint32(key.Number()); float64(i) == key.Number() &&
-					uint(i) < uint(len(o.elems)) && o.flags&objMappedArguments == 0 {
-					if v := o.elems[i]; !isHole(v) {
+					uint(i) < uint(len(o.elemsOf())) && o.flags&objMappedArguments == 0 {
+					if v := o.elemsOf()[i]; !isHole(v) {
 						sp = pushAt(stack, sp, v)
 						break
 					}
@@ -1642,7 +1642,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				sp--
 				recv = stack[sp]
 				if list.IsObject() {
-					args = list.Object().elems
+					args = list.Object().elemsOf()
 				}
 			} else {
 				argc := int(in.B)
@@ -1765,7 +1765,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			arr := stack[sp-1]
 			if arr.IsObject() {
 				o := arr.Object()
-				o.elems = append(o.elems, val)
+				o.extOf().elems = append(o.elemsOf(), val)
 			}
 		case bytecode.OpConcat:
 			n := int(in.A)
@@ -2069,11 +2069,11 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 
 		case bytecode.OpNewDisposeCapability:
 			o := newObject(nil, ClassObject)
-			o.data = &disposeCapability{}
+			o.extOf().data = &disposeCapability{}
 			sp = pushAt(stack, sp, Obj(o))
 		case bytecode.OpAddDisposable:
 			sp--
-			c := stack[sp].Object().data.(*disposeCapability)
+			c := stack[sp].Object().dataOf().(*disposeCapability)
 			if err := r.addDisposableResource(c, stack[sp-1], in.A == 1); err != nil {
 				vmErr = err
 				goto onError
@@ -2103,7 +2103,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				break
 			}
 			sp--
-			c := stack[sp].Object().data.(*disposeCapability)
+			c := stack[sp].Object().dataOf().(*disposeCapability)
 			// A finally clause knows from its record whether an exception is
 			// what is leaving the scope, which the disposal has to fold into
 			// whatever it throws itself.
@@ -2281,7 +2281,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			start := int(in.A)
 			var rest []Value
 			if src.IsObject() {
-				if el := src.Object().elems; start < len(el) {
+				if el := src.Object().elemsOf(); start < len(el) {
 					rest = el[start:]
 				}
 			}
@@ -2307,7 +2307,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			callee := stack[sp]
 			var callArgs []Value
 			if argsVal.IsObject() {
-				callArgs = argsVal.Object().elems
+				callArgs = argsVal.Object().elemsOf()
 			}
 			var v Value
 			var err error
@@ -2610,7 +2610,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 			target := stack[sp-1]
 			if target.IsObject() {
-				target.Object().elems = append(target.Object().elems, vals...)
+				target.Object().extOf().elems = append(target.Object().elemsOf(), vals...)
 			}
 		case bytecode.OpArraySpread:
 			sp--
@@ -2780,7 +2780,7 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 				// The spread form gathered the arguments into an array.
 				sp--
 				if a := stack[sp]; a.IsObject() {
-					args = a.Object().elems
+					args = a.Object().elemsOf()
 				}
 			} else {
 				argc := int(in.A)
@@ -3519,7 +3519,7 @@ func uncaptured(f *frame, descs []bytecode.UpvalueDesc) int {
 // newArrayFrom builds an array holding a copy of the given values.
 func (r *Runtime) newArrayFrom(vals []Value) *Object {
 	o := newArrayObject(r.proto.array, len(vals))
-	copy(o.elems, vals)
+	copy(o.elemsOf(), vals)
 	return o
 }
 
@@ -3537,8 +3537,8 @@ func (r *Runtime) getIndexed(obj, key Value) (Value, error) {
 		// A mapped arguments object's indices are not what its dense storage
 		// says, so it has no fast path.
 		if i := uint32(key.Number()); float64(i) == key.Number() &&
-			uint(i) < uint(len(o.elems)) && o.flags&objMappedArguments == 0 {
-			if v := o.elems[i]; !isHole(v) {
+			uint(i) < uint(len(o.elemsOf())) && o.flags&objMappedArguments == 0 {
+			if v := o.elemsOf()[i]; !isHole(v) {
 				return v, nil
 			}
 		}
@@ -3573,7 +3573,7 @@ func (r *Runtime) setIndexed(obj, key, val Value, strict bool) error {
 		// write to its buffer -- unless the buffer is immutable, whose refusal
 		// the long way words.
 		if t, i, ok := typedElemIndex(obj.Object(), key.num); ok {
-			if st, _ := t.buffer.data.(*arrayBufferData); st != nil && !st.immutable {
+			if st, _ := t.buffer.dataOf().(*arrayBufferData); st != nil && !st.immutable {
 				return r.setElem(t, i, val)
 			}
 		}
@@ -3621,18 +3621,18 @@ func (r *Runtime) argumentsLength(f *frame, slot uint32) (Value, error) {
 func appendElem(o *Object, n float64, v Value) bool {
 	const want = objExtensible | objArrayLengthWritable
 	i := uint32(n)
-	if o.class != ClassArray || float64(i) != n || uint(i) != uint(len(o.elems)) ||
+	if o.class != ClassArray || float64(i) != n || uint(i) != uint(len(o.elemsOf())) ||
 		o.flags&(want|objHasSparseElements|objMappedArguments) != want || !o.noIndexKeys() {
 		return false
 	}
 	for p := o.proto; p != nil; p = p.proto {
-		if p.class != ClassObject && p.class != ClassArray || len(p.elems) != 0 || !p.noIndexKeys() {
+		if p.class != ClassObject && p.class != ClassArray || len(p.elemsOf()) != 0 || !p.noIndexKeys() {
 			return false
 		}
 	}
 	// What setElem would do for an index at the length of an array that
 	// is not an arguments object.
-	o.elems = append(o.elems, v)
+	o.extOf().elems = append(o.elemsOf(), v)
 	return true
 }
 
@@ -4856,13 +4856,13 @@ func (r *Runtime) templateObject(fn *bytecode.Function, idx int) *Object {
 // receives have to be: the same object is handed out again on the next call, so
 // a tag that wrote to it would be writing to every later call's argument.
 func (r *Runtime) freezeArray(o *Object) *Object {
-	for i, el := range o.elems {
+	for i, el := range o.elemsOf() {
 		if !isHole(el) {
 			o.setOwnRaw(r.atoms.indexAtom(uint32(i)), el, propEnumerable)
 		}
 	}
 	o.markSparse()
-	o.elems = nil
+	o.extOf().elems = nil
 	// The length is synthesized rather than stored, so its writability is a
 	// flag rather than a property attribute.
 	o.flags &^= objExtensible | objArrayLengthWritable

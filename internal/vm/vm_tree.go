@@ -246,7 +246,7 @@ func elemAt(obj, key Value) (Value, bool) {
 		return Undefined, false
 	}
 	o := obj.object()
-	i, e := uint32(key.num), o.elems
+	i, e := uint32(key.num), o.elemsOf()
 	if float64(i) != key.num || uint(i) >= uint(len(e)) || o.flags&objMappedArguments != 0 {
 		return Undefined, false
 	}
@@ -267,7 +267,7 @@ func setElem(o, k, v Value) bool {
 		return false
 	}
 	a := o.object()
-	i, e := uint32(k.num), a.elems
+	i, e := uint32(k.num), a.elemsOf()
 	if float64(i) != k.num || uint(i) >= uint(len(e)) || a.flags&objMappedArguments != 0 {
 		return false
 	}

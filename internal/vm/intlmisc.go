@@ -34,7 +34,7 @@ func (r *Runtime) initCollator(intlObj *Object) {
 			return Undefined, err
 		}
 		out := newObject(proto, ClassObject)
-		out.data = o
+		out.extOf().data = o
 		return Obj(out), nil
 	})
 	r.defValue(intlObj, "Collator", Obj(ctor))
@@ -159,7 +159,7 @@ func (r *Runtime) collatorFor(args []Value) (*collatorOptions, error) {
 
 func (r *Runtime) collatorOf(this Value, method string) (*collatorOptions, error) {
 	if o := this.Object(); o != nil {
-		if opts, ok := o.data.(*collatorOptions); ok {
+		if opts, ok := o.dataOf().(*collatorOptions); ok {
 			return opts, nil
 		}
 	}
@@ -240,7 +240,7 @@ func (r *Runtime) initPluralRules(intlObj *Object) {
 			return Undefined, rt.intlInternal()
 		}
 		out := newObject(proto, ClassObject)
-		out.data = o
+		out.extOf().data = o
 		return Obj(out), nil
 	})
 	r.defValue(intlObj, "PluralRules", Obj(ctor))
@@ -317,7 +317,7 @@ func (r *Runtime) initPluralRules(intlObj *Object) {
 
 func (r *Runtime) pluralOf(this Value, method string) (*pluralOptions, error) {
 	if o := this.Object(); o != nil {
-		if opts, ok := o.data.(*pluralOptions); ok {
+		if opts, ok := o.dataOf().(*pluralOptions); ok {
 			return opts, nil
 		}
 	}
@@ -403,7 +403,7 @@ func (r *Runtime) initDisplayNames(intlObj *Object) {
 			return Undefined, rt.intlInternal()
 		}
 		out := newObject(proto, ClassObject)
-		out.data = o
+		out.extOf().data = o
 		return Obj(out), nil
 	})
 	r.defValue(intlObj, "DisplayNames", Obj(ctor))
@@ -514,7 +514,7 @@ func allDigits(s string) bool {
 
 func (r *Runtime) displayNamesOf(this Value, method string) (*displayOptions, error) {
 	if o := this.Object(); o != nil {
-		if opts, ok := o.data.(*displayOptions); ok {
+		if opts, ok := o.dataOf().(*displayOptions); ok {
 			return opts, nil
 		}
 	}
@@ -575,7 +575,7 @@ func (r *Runtime) initListFormat(intlObj *Object) {
 			return Undefined, rt.intlInternal()
 		}
 		out := newObject(proto, ClassObject)
-		out.data = o
+		out.extOf().data = o
 		return Obj(out), nil
 	})
 	r.defValue(intlObj, "ListFormat", Obj(ctor))
@@ -644,7 +644,7 @@ func (r *Runtime) stringList(v Value) ([]string, error) {
 
 func (r *Runtime) listFormatOf(this Value, method string) (*listOptions, error) {
 	if o := this.Object(); o != nil {
-		if opts, ok := o.data.(*listOptions); ok {
+		if opts, ok := o.dataOf().(*listOptions); ok {
 			return opts, nil
 		}
 	}
@@ -709,7 +709,7 @@ func (r *Runtime) initRelativeTimeFormat(intlObj *Object) {
 			return Undefined, rt.intlInternal()
 		}
 		out := newObject(proto, ClassObject)
-		out.data = o
+		out.extOf().data = o
 		return Obj(out), nil
 	})
 	r.defValue(intlObj, "RelativeTimeFormat", Obj(ctor))
@@ -789,7 +789,7 @@ var relativeUnitNames = map[string]bool{
 
 func (r *Runtime) relativeOf(this Value, method string) (*relativeOptions, error) {
 	if o := this.Object(); o != nil {
-		if opts, ok := o.data.(*relativeOptions); ok {
+		if opts, ok := o.dataOf().(*relativeOptions); ok {
 			return opts, nil
 		}
 	}

@@ -146,7 +146,7 @@ func temporalValueOf(v Value) any {
 	if !v.IsObject() {
 		return nil
 	}
-	switch x := v.Object().data.(type) {
+	switch x := v.Object().dataOf().(type) {
 	case temporal.PlainDate, temporal.PlainDateTime, temporal.PlainTime, temporal.PlainYearMonth,
 		temporal.PlainMonthDay, temporal.Instant, temporal.ZonedDateTime, temporal.Duration:
 		return x

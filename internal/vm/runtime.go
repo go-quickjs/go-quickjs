@@ -786,7 +786,7 @@ func (r *Runtime) throw(v Value) error {
 	// the same walk twice -- and most throws are caught by the script, which
 	// never looks at either.
 	if v.IsObject() && v.Object().class == ClassError {
-		if t, ok := v.Object().data.(*Thrown); ok {
+		if t, ok := v.Object().dataOf().(*Thrown); ok {
 			t.Value = v
 			t.Stack = t.Stack[:0]
 			return t

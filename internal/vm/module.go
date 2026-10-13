@@ -411,7 +411,7 @@ func (r *Runtime) loaderError(specifier string, err error) error {
 		return t
 	}
 	o := r.newError(errType, fmt.Sprintf("cannot resolve %q: %s", specifier, err.Error()))
-	o.data.(*Thrown).cause = err
+	o.dataOf().(*Thrown).cause = err
 	return r.throw(Obj(o))
 }
 
@@ -716,7 +716,7 @@ func (r *Runtime) executeAsyncModule(m *Module) error {
 	if err != nil {
 		return err
 	}
-	promise := r.runAsync(gen.data.(*generator))
+	promise := r.runAsync(gen.dataOf().(*generator))
 	onFulfilled := r.newNativeFunc("", 0, func(rt *Runtime, _ Value, _ []Value) (Value, error) {
 		rt.asyncModuleFulfilled(m)
 		return Undefined, nil
@@ -828,7 +828,7 @@ func (r *Runtime) ModuleResult(promise Value) error {
 	if !promise.IsObject() {
 		return nil
 	}
-	p, _ := promise.Object().data.(*promiseData)
+	p, _ := promise.Object().dataOf().(*promiseData)
 	if p == nil || p.state != promiseRejected {
 		return nil
 	}
@@ -1122,9 +1122,9 @@ func (r *Runtime) makeTypedModule(specifier, typ, source, resolved string) (*Mod
 		v = Str(NewString(source))
 	case "bytes":
 		buf := newObject(r.arrayBufferProto, ClassArrayBuffer)
-		buf.data = &arrayBufferData{bytes: []byte(source), immutable: true}
+		buf.extOf().data = &arrayBufferData{bytes: []byte(source), immutable: true}
 		o := newObject(r.typedArrayProtoFor(elemUint8), ClassTypedArray)
-		o.data = &typedArrayData{buffer: buf, kind: elemUint8, fixedLength: len(source)}
+		o.extOf().data = &typedArrayData{buffer: buf, kind: elemUint8, fixedLength: len(source)}
 		v = Obj(o)
 	}
 	m := r.newModule(key, nil)

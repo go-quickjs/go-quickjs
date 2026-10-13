@@ -33,7 +33,7 @@ func proxyOf(o *Object) *proxyData {
 	if o == nil || o.class != ClassProxy {
 		return nil
 	}
-	p, _ := o.data.(*proxyData)
+	p, _ := o.dataOf().(*proxyData)
 	return p
 }
 
@@ -814,7 +814,7 @@ func (r *Runtime) initProxyBuiltins() {
 			return nil, rt.throwTypeError("Proxy requires an object target and handler")
 		}
 		o := newObject(proxyProto, ClassProxy)
-		o.data = &proxyData{target: target.Object(), handler: handler.Object(),
+		o.extOf().data = &proxyData{target: target.Object(), handler: handler.Object(),
 			callable: target.Object().IsCallable(), constructor: isConstructor(target)}
 		// A proxy whose target is callable is itself callable, which is what
 		// makes the apply and construct traps reachable.
@@ -848,7 +848,7 @@ func (r *Runtime) initProxyBuiltins() {
 		if err != nil {
 			return Undefined, err
 		}
-		p := o.data.(*proxyData)
+		p := o.dataOf().(*proxyData)
 		// The revocation function is anonymous, which a script can check.
 		revoke := rt.newNativeFunc("", 0, func(rt *Runtime, _ Value, _ []Value) (Value, error) {
 			p.revoked = true

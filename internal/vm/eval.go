@@ -142,7 +142,7 @@ func IsCallable(v Value) bool { return isCallable(v) }
 func IsArray(v Value) bool { return v.IsObject() && v.Object().IsArray() }
 
 // ArrayElements exposes an array's dense storage for the marshalling layer.
-func ArrayElements(o *Object) []Value { return o.elems }
+func ArrayElements(o *Object) []Value { return o.elemsOf() }
 
 // IsHole reports whether an array element is absent.
 func IsHole(v Value) bool { return isHole(v) }
@@ -177,7 +177,7 @@ func (r *Runtime) ThrowError(err error) error {
 		return t
 	}
 	o := r.newError(errError, err.Error())
-	o.data.(*Thrown).cause = err
+	o.dataOf().(*Thrown).cause = err
 	return r.throw(Obj(o))
 }
 
@@ -277,7 +277,7 @@ func (r *Runtime) installEval() {
 	}
 	_ = fnProto
 	ctor := ctorVal.Object()
-	ctor.data = &funcData{
+	ctor.extOf().data = &funcData{
 		realm:    r.Realm,
 		name:     "Function",
 		length:   1,
@@ -338,7 +338,7 @@ func (r *Runtime) defDerivedFunctionCtor(name string, proto *Object, base *Objec
 		return
 	}
 	c := newObject(base, ClassFunction)
-	c.data = &funcData{
+	c.extOf().data = &funcData{
 		name: name, length: 1, ctorKind: ctorBase, realm: r.Realm,
 		native: func(rt *Runtime, this Value, args []Value) (Value, error) {
 			if rt.evaluator == nil {

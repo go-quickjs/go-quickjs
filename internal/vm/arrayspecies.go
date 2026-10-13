@@ -128,7 +128,7 @@ func (a *arrayOut) push(r *Runtime, v Value) error {
 		// becomes sparse and the element is defined as a property.
 		if a.holes <= maxHoleRun {
 			for ; a.holes > 0; a.holes-- {
-				a.o.elems = append(a.o.elems, elemHole)
+				a.o.extOf().elems = append(a.o.elemsOf(), elemHole)
 			}
 		} else {
 			a.plain = false
@@ -136,7 +136,7 @@ func (a *arrayOut) push(r *Runtime, v Value) error {
 		a.holes = 0
 	}
 	if a.plain {
-		a.o.elems = append(a.o.elems, v)
+		a.o.extOf().elems = append(a.o.elemsOf(), v)
 		a.n++
 		return nil
 	}
@@ -178,7 +178,7 @@ func (a *arrayOut) pushHole() error {
 func (a *arrayOut) setLength(r *Runtime, n int64) error {
 	if a.plain {
 		a.holes = 0
-		if int64(len(a.o.elems)) != n {
+		if int64(len(a.o.elemsOf())) != n {
 			a.o.setArrayLength(uint32(n))
 		}
 		return nil
@@ -189,7 +189,7 @@ func (a *arrayOut) setLength(r *Runtime, n int64) error {
 // value is the finished array, with any holes it ended with.
 func (a *arrayOut) value() Value {
 	if a.plain && a.holes > 0 {
-		a.o.setArrayLength(uint32(int64(len(a.o.elems)) + a.holes))
+		a.o.setArrayLength(uint32(int64(len(a.o.elemsOf())) + a.holes))
 		a.holes = 0
 	}
 	return Obj(a.o)

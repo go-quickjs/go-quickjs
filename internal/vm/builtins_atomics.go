@@ -19,7 +19,7 @@ import (
 // sharedBufferOf recovers a shared buffer from a receiver.
 func (r *Runtime) sharedBufferOf(this Value, name string) (*arrayBufferData, error) {
 	if this.IsObject() && this.Object().class == ClassArrayBuffer {
-		if b, ok := this.Object().data.(*arrayBufferData); ok && b.shared {
+		if b, ok := this.Object().dataOf().(*arrayBufferData); ok && b.shared {
 			b.sharedMemory()
 			return b, nil
 		}
@@ -74,7 +74,7 @@ func (r *Runtime) initSharedArrayBufferBuiltins() {
 		if max >= 0 {
 			b.resizable, b.maxByteLength = true, max
 		}
-		o.data = b
+		o.extOf().data = b
 		return Obj(o), nil
 	})
 	r.defSpecies(ctor)
@@ -165,7 +165,7 @@ func (r *Runtime) initSharedArrayBufferBuiltins() {
 		if !res.IsObject() || res.Object().class != ClassArrayBuffer {
 			return Undefined, rt.throwTypeError("the species did not return a SharedArrayBuffer")
 		}
-		out, ok := res.Object().data.(*arrayBufferData)
+		out, ok := res.Object().dataOf().(*arrayBufferData)
 		if !ok || !out.shared {
 			return Undefined, rt.throwTypeError("the species did not return a SharedArrayBuffer")
 		}

@@ -86,7 +86,7 @@ func (r *Runtime) thisBigInt(this Value, name string) (*BigInt, error) {
 		return this.BigInt(), nil
 	}
 	if this.IsObject() && this.Object().class == ClassBigIntWrapper {
-		if b, ok := this.Object().data.(*BigInt); ok {
+		if b, ok := this.Object().dataOf().(*BigInt); ok {
 			return b, nil
 		}
 	}

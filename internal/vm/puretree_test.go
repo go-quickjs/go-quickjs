@@ -34,7 +34,7 @@ func TestPureByTree(t *testing.T) {
 		if err != nil {
 			t.Fatalf("tree=%v: %v", tree, err)
 		}
-		res := v.Object().elems
+		res := v.Object().elemsOf()
 		if got := res[0].Number(); got != 300+149*3 {
 			t.Errorf("tree=%v: n = %v, want %v", tree, got, 300+149*3)
 		}

@@ -190,7 +190,7 @@ func temporalKindOf(v Value) (intl.TemporalKind, string, bool) {
 	if !v.IsObject() {
 		return 0, "", false
 	}
-	switch value := v.Object().data.(type) {
+	switch value := v.Object().dataOf().(type) {
 	case temporal.PlainDate:
 		return intl.TemporalPlainDate, value.Calendar().ID(), true
 	case temporal.PlainDateTime:
@@ -212,7 +212,7 @@ func temporalKindOf(v Value) (intl.TemporalKind, string, bool) {
 // Temporal value, whose calendar must be the formatter's.
 func (r *Runtime) forValue(d *dateTimeFormat, v Value) (*intl.DateTimeFormat, time.Time, error) {
 	if v.IsObject() {
-		if _, ok := v.Object().data.(temporal.ZonedDateTime); ok {
+		if _, ok := v.Object().dataOf().(temporal.ZonedDateTime); ok {
 			return nil, time.Time{}, r.throwTypeError("Invalid argument for Temporal %s", r.v8Describe(v))
 		}
 	}
@@ -246,7 +246,7 @@ func (r *Runtime) forValue(d *dateTimeFormat, v Value) (*intl.DateTimeFormat, ti
 // UTC, than the 8.64e15 milliseconds a Date may be.
 func beyondV8Instants(v Value) bool {
 	var at temporal.ISODateTime
-	switch value := v.Object().data.(type) {
+	switch value := v.Object().dataOf().(type) {
 	case temporal.PlainDate:
 		at.Date = value.ISO()
 	case temporal.PlainDateTime:
@@ -279,7 +279,7 @@ func (d *dateTimeFormat) forKind(kind intl.TemporalKind) (*intl.DateTimeFormat, 
 // instant's own, and the one go-intl makes of a plain value's fields.
 func (d *dateTimeFormat) temporalInstant(v Value) time.Time {
 	var at temporal.ISODateTime
-	switch value := v.Object().data.(type) {
+	switch value := v.Object().dataOf().(type) {
 	case temporal.Instant:
 		return temporalTime(value)
 	case temporal.PlainDate:
@@ -416,7 +416,7 @@ func (r *Runtime) dateTimeRange(this Value, args []Value, method string) (*range
 
 func (r *Runtime) dateTimeFormatOf(this Value, method string) (*dateTimeFormat, error) {
 	if this.IsObject() {
-		if d, ok := this.Object().data.(*dateTimeFormat); ok {
+		if d, ok := this.Object().dataOf().(*dateTimeFormat); ok {
 			return d, nil
 		}
 	}
@@ -424,14 +424,14 @@ func (r *Runtime) dateTimeFormatOf(this Value, method string) (*dateTimeFormat, 
 	// without new; the rest require one.
 	if method == "UnwrapDateTimeFormat" || method == "get Intl.DateTimeFormat.prototype.format" {
 		v, err := r.unwrapFormatter(this, r.intlProtoOf("DateTimeFormat"), func(o *Object) bool {
-			_, ok := o.data.(*dateTimeFormat)
+			_, ok := o.dataOf().(*dateTimeFormat)
 			return ok
 		})
 		if err != nil {
 			return nil, err
 		}
 		if v.IsObject() {
-			if d, ok := v.Object().data.(*dateTimeFormat); ok {
+			if d, ok := v.Object().dataOf().(*dateTimeFormat); ok {
 				return d, nil
 			}
 		}

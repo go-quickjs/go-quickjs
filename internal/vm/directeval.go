@@ -92,7 +92,7 @@ func (r *Runtime) evalIn(caller *frame, fn *bytecode.Function) (Value, error) {
 			fd.superCtor = outer.superCtor
 		}
 	}
-	callee.data = fd
+	callee.extOf().data = fd
 	return r.run(cl, caller.this, caller.args, caller.newTarget, callee)
 }
 

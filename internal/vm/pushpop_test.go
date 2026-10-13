@@ -69,10 +69,10 @@ func TestTruncateClearsSlot(t *testing.T) {
 		t.Fatal(err)
 	}
 	o := v.Object()
-	if len(o.elems) != 1 || !o.elems[0].IsObject() {
-		t.Fatalf("length %d", len(o.elems))
+	if len(o.elemsOf()) != 1 || !o.elemsOf()[0].IsObject() {
+		t.Fatalf("length %d", len(o.elemsOf()))
 	}
-	for i, e := range o.elems[:6][1:] {
+	for i, e := range o.elemsOf()[:6][1:] {
 		if e.ref != nil || e.num != 0 {
 			t.Errorf("slot %d still holds %v", i+1, e)
 		}

@@ -110,13 +110,13 @@ func (r *Runtime) getExoticNamed(o *Object, key Atom) (Value, bool, error) {
 		}
 	case ClassStringWrapper:
 		if key == atomLength {
-			if s, ok := o.data.(*String); ok {
+			if s, ok := o.dataOf().(*String); ok {
 				return Int(s.Len()), true, nil
 			}
 		}
 	case ClassTypedArray:
 		if key == atomLength && o.getOwn(atomLength) == nil {
-			if t, ok := o.data.(*typedArrayData); ok {
+			if t, ok := o.dataOf().(*typedArrayData); ok {
 				// A view over a buffer that has gone is empty, not eight
 				// elements of nothing. The answer comes from the prototype's
 				// getter, so a property a script defines under the name is
@@ -131,7 +131,7 @@ func (r *Runtime) getExoticNamed(o *Object, key Atom) (Value, bool, error) {
 			if !ix.valid {
 				return Undefined, true, nil
 			}
-			return o.data.(*typedArrayData).getElem(ix.i), true, nil
+			return o.dataOf().(*typedArrayData).getElem(ix.i), true, nil
 		}
 	case ClassFunction:
 		// name and length are materialized on first read rather than created
@@ -214,7 +214,7 @@ func (r *Runtime) materializeFunctionProp(o *Object, key Atom) {
 // the specification orders it before the range check, and a valueOf on the
 // value being written can see that it did.
 func (r *Runtime) toNumericForElement(o *Object, v Value) (Value, error) {
-	t, ok := o.data.(*typedArrayData)
+	t, ok := o.dataOf().(*typedArrayData)
 	if !ok {
 		return Undefined, nil
 	}
@@ -230,13 +230,13 @@ func (r *Runtime) toNumericForElement(o *Object, v Value) (Value, error) {
 func (r *Runtime) getExoticIndex(o *Object, idx uint32) (Value, bool, error) {
 	switch o.class {
 	case ClassStringWrapper:
-		if s, ok := o.data.(*String); ok && int(idx) < s.Len() {
+		if s, ok := o.dataOf().(*String); ok && int(idx) < s.Len() {
 			return Str(r.unitString(s, int(idx))), true, nil
 		}
 	case ClassTypedArray:
 		// A typed array's elements live in its buffer, so an index never
 		// reaches the property table.
-		if t, ok := o.data.(*typedArrayData); ok {
+		if t, ok := o.dataOf().(*typedArrayData); ok {
 			if t.storage().detached {
 				return Undefined, true, nil
 			}
@@ -383,7 +383,7 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 	// along it decides the rest for itself.
 	for o := obj; o != nil; o = o.proto {
 		if o != obj && key.IsIndex() && (o.class == ClassObject || o.class == ClassArray) &&
-			len(o.elems) == 0 && o.noIndexKeys() {
+			len(o.elemsOf()) == 0 && o.noIndexKeys() {
 			// A prototype with no element and no index in its table, as
 			// Array.prototype and Object.prototype are, has nothing to say
 			// about one: no setter, nothing read-only.
@@ -401,7 +401,7 @@ func (r *Runtime) setProp(obj *Object, key Atom, val Value, receiver Value, stri
 				"cannot assign to %q of a module namespace")
 		}
 		if key.IsIndex() {
-			if uint(key.Index()) < uint(len(o.elems)) && !isHole(o.elems[key.Index()]) {
+			if uint(key.Index()) < uint(len(o.elemsOf())) && !isHole(o.elemsOf()[key.Index()]) {
 				// A dense element is always a writable data property, so the
 				// assignment lands here.
 				if o == obj && rcv == obj {
@@ -567,7 +567,7 @@ func (r *Runtime) hasExoticOwn(o *Object, key Atom) bool {
 	case ClassArray:
 		return key == atomLength
 	case ClassStringWrapper:
-		s, ok := o.data.(*String)
+		s, ok := o.dataOf().(*String)
 		if !ok {
 			return false
 		}
@@ -621,7 +621,7 @@ func (r *Runtime) createOwnProp(o *Object, key Atom, val Value, strict bool) (bo
 			// conversion, which checks the index only once it is done: a
 			// valueOf that grows the buffer can bring an index into bounds,
 			// and one that shrinks it can take it out.
-			err := r.setElem(o.data.(*typedArrayData), ix.i, val)
+			err := r.setElem(o.dataOf().(*typedArrayData), ix.i, val)
 			return err == nil, err
 		}
 	}
@@ -667,7 +667,7 @@ func (r *Runtime) createOwnProp(o *Object, key Atom, val Value, strict bool) (bo
 			// property and remember that the array is no longer dense.
 			o.noteArrayIndex(ix)
 		}
-	} else if key.IsIndex() && uint(key.Index()) <= uint(len(o.elems)) && len(o.elems) > 0 &&
+	} else if key.IsIndex() && uint(key.Index()) <= uint(len(o.elemsOf())) && len(o.elemsOf()) > 0 &&
 		o.IsExtensible() {
 		// A non-array that already has dense storage keeps using it, if it
 		// may gain the element at all.
@@ -679,7 +679,7 @@ func (r *Runtime) createOwnProp(o *Object, key Atom, val Value, strict bool) (bo
 	// A string wrapper's length and its characters are synthesized too, and
 	// none of them may be written.
 	if o.class == ClassStringWrapper {
-		if s, ok := o.data.(*String); ok {
+		if s, ok := o.dataOf().(*String); ok {
 			if key == atomLength || (key.IsIndex() && int(key.Index()) < s.Len()) {
 				return false, r.assignFailed(key, strict,
 					"cannot assign to read-only property %q")
@@ -815,7 +815,7 @@ func (r *Runtime) hasOwnProp(o *Object, key Atom) bool {
 			return true
 		}
 		if o.class == ClassStringWrapper {
-			if s, ok := o.data.(*String); ok && int(key.Index()) < s.Len() {
+			if s, ok := o.dataOf().(*String); ok && int(key.Index()) < s.Len() {
 				return true
 			}
 		}
@@ -878,11 +878,11 @@ func (r *Runtime) deleteProp(o *Object, key Atom, strict bool) (bool, error) {
 	}
 	if key.IsIndex() {
 		i := key.Index()
-		if uint(i) < uint(len(o.elems)) && !isHole(o.elems[i]) {
+		if uint(i) < uint(len(o.elemsOf())) && !isHole(o.elemsOf()[i]) {
 			// Deleting leaves a hole wherever it happens, including at the
 			// end: an array's length is a number rather than a count of what
 			// is present, so `delete a[a.length - 1]` does not shorten it.
-			o.elems[i] = elemHole
+			o.extOf().elems[i] = elemHole
 			// A deleted index no longer names a parameter.
 			o.unmapArgument(i)
 			return true, nil
@@ -930,10 +930,10 @@ func (r *Runtime) defineOwnProp(o *Object, key Atom, val Value, flags propFlags)
 	}
 	// A dense element being redefined with non-default attributes must move out
 	// of dense storage, which cannot express attributes.
-	if key.IsIndex() && uint(key.Index()) < uint(len(o.elems)) && flags != propDefault {
+	if key.IsIndex() && uint(key.Index()) < uint(len(o.elemsOf())) && flags != propDefault {
 		i := key.Index()
 		o.markSparse()
-		o.elems[i] = elemHole
+		o.extOf().elems[i] = elemHole
 	}
 	o.setOwnRaw(key, val, flags)
 	return nil
@@ -950,9 +950,9 @@ func (r *Runtime) defineAccessor(o *Object, key Atom, getter, setter *Object, fl
 	// index being turned into one has to leave it. Everything that reads a
 	// dense element takes it as a data property with default attributes, which
 	// would otherwise shadow the accessor being defined here.
-	if key.IsIndex() && uint(key.Index()) < uint(len(o.elems)) {
+	if key.IsIndex() && uint(key.Index()) < uint(len(o.elemsOf())) {
 		o.markSparse()
-		o.elems[key.Index()] = elemHole
+		o.extOf().elems[key.Index()] = elemHole
 		// An accessor is not the parameter it replaced.
 		o.unmapArgument(key.Index())
 	}

@@ -12,7 +12,7 @@ func (r *Runtime) collectionOp(op uint8, this Value, args []Value, mayStore bool
 		return Undefined, false
 	}
 	o := this.Object()
-	m, ok := o.data.(*jsMap)
+	m, ok := o.dataOf().(*jsMap)
 	if !ok {
 		return Undefined, false
 	}

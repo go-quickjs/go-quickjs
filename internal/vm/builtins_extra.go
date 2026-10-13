@@ -292,7 +292,7 @@ func (r *Runtime) initArrayExtras2() {
 			if err != nil {
 				return Undefined, err
 			}
-			out.elems = append(out.elems, v)
+			out.extOf().elems = append(out.elemsOf(), v)
 		}
 		return Obj(out), nil
 	})
@@ -314,12 +314,12 @@ func (r *Runtime) initArrayExtras2() {
 			if err != nil {
 				return Undefined, err
 			}
-			out.elems = append(out.elems, v)
+			out.extOf().elems = append(out.elemsOf(), v)
 		}
 		// The copy is sorted as it is, not by calling its sort method: a
 		// script that replaces Array.prototype.sort has not changed toSorted.
 		// Holes were read as undefined, so there are none to keep.
-		if err := rt.sortValues(out.elems, arg(args, 0)); err != nil {
+		if err := rt.sortValues(out.elemsOf(), arg(args, 0)); err != nil {
 			return Undefined, err
 		}
 		return Obj(out), nil
@@ -362,15 +362,15 @@ func (r *Runtime) initArrayExtras2() {
 			if err != nil {
 				return Undefined, err
 			}
-			out.elems = append(out.elems, v)
+			out.extOf().elems = append(out.elemsOf(), v)
 		}
-		out.elems = append(out.elems, inserted...)
+		out.extOf().elems = append(out.elemsOf(), inserted...)
 		for i := start + removeCount; i < a.n; i++ {
 			v, err := a.get(rt, i)
 			if err != nil {
 				return Undefined, err
 			}
-			out.elems = append(out.elems, v)
+			out.extOf().elems = append(out.elemsOf(), v)
 		}
 		return Obj(out), nil
 	})
@@ -396,14 +396,14 @@ func (r *Runtime) initArrayExtras2() {
 		}
 		for k := int64(0); k < a.n; k++ {
 			if k == int64(i) {
-				out.elems = append(out.elems, arg(args, 1))
+				out.extOf().elems = append(out.elemsOf(), arg(args, 1))
 				continue
 			}
 			v, err := a.get(rt, k)
 			if err != nil {
 				return Undefined, err
 			}
-			out.elems = append(out.elems, v)
+			out.extOf().elems = append(out.elemsOf(), v)
 		}
 		return Obj(out), nil
 	})
@@ -530,7 +530,7 @@ func (r *Runtime) initObjectExtras() {
 			}
 			if group.value.IsObject() {
 				g := group.value.Object()
-				g.elems = append(g.elems, v)
+				g.extOf().elems = append(g.elemsOf(), v)
 			}
 			return nil
 		})

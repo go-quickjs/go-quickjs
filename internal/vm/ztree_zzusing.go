@@ -66,7 +66,7 @@ func init() {
 		case bytecode.OpNewDisposeCapability:
 			b.push(func(*tctx) Value {
 				o := newObject(nil, ClassObject)
-				o.data = &disposeCapability{}
+				o.extOf().data = &disposeCapability{}
 				return Obj(o)
 			})
 		case bytecode.OpAddDisposable:
@@ -77,7 +77,7 @@ func init() {
 			d, async := b.depth(), in.A == 1
 			b.pop()
 			return 0, b.stmt(func(c *tctx) {
-				cp := c.stack[d-1].Object().data.(*disposeCapability)
+				cp := c.stack[d-1].Object().dataOf().(*disposeCapability)
 				c.at(pc)
 				if err := c.r.addDisposableResource(cp, c.stack[d-2], async); err != nil {
 					c.throw(err)
@@ -107,7 +107,7 @@ func init() {
 			d := b.depth()
 			b.pop()
 			b.body = append(b.body, func(c *tctx) {
-				cp := c.stack[d-1].Object().data.(*disposeCapability)
+				cp := c.stack[d-1].Object().dataOf().(*disposeCapability)
 				c.at(pc)
 				var completion error
 				if record && completionKind(c.stack[d-2].Number()) == completionThrow {
@@ -191,7 +191,7 @@ func init() {
 	}
 
 	usingStep = func(r *Runtime, cp, a, b Value, mode uint32) (Value, bool, error) {
-		c := cp.Object().data.(*disposeCapability)
+		c := cp.Object().dataOf().(*disposeCapability)
 		switch {
 		case mode&bytecode.DisposeStart != 0:
 			c.walk, c.stack = c.stack, nil

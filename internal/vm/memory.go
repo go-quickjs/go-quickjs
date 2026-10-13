@@ -199,7 +199,7 @@ func (r *Runtime) chargeResult(v Value) error {
 			n += int64(s.length) * 2
 		}
 	case v.IsObject():
-		n = int64(cap(v.Object().elems)) * valueSize
+		n = int64(cap(v.Object().elemsOf())) * valueSize
 	default:
 		return nil
 	}
@@ -294,6 +294,8 @@ func stringBytes(s *String) int {
 // Sizes of the engine's own structures, as the walk counts them.
 var (
 	objectSize   = int64(unsafe.Sizeof(Object{}))
+	extSize      = int64(unsafe.Sizeof(objectExt{}))
+	keyedExtSize = int64(unsafe.Sizeof(keyedExt{}))
 	propertySize = int64(unsafe.Sizeof(Property{}))
 	valueSize    = int64(unsafe.Sizeof(Value{}))
 	stringSize   = int64(unsafe.Sizeof(String{}))
@@ -426,6 +428,13 @@ func (m *memoryMeter) addString(s *String) {
 // object counts an object and what it refers to.
 func (m *memoryMeter) object(o *Object) {
 	m.total += objectSize + int64(cap(o.props))*propertySize
+	switch {
+	case o.ext == nil:
+	case o.extEmbedded():
+		m.total += extSize
+	default:
+		m.total += keyedExtSize
+	}
 	// A shared layout's index is the layout's, not the object's, and so is
 	// one an object borrows from it.
 	if s := o.shape; s != nil && s.unique && s.index != nil && !s.borrowed {
@@ -437,12 +446,12 @@ func (m *memoryMeter) object(o *Object) {
 			m.value(o.props[i].value)
 		}
 	}
-	m.valueSlice(o.elems, true)
-	if refs := o.weakMapRefs; refs != nil {
+	m.valueSlice(o.elemsOf(), true)
+	if refs := o.weakMapRefsOf(); refs != nil {
 		m.weakMapRefs(refs)
 	}
-	if o.data != nil {
-		m.values = append(m.values, reflect.ValueOf(o.data))
+	if o.dataOf() != nil && o.class != ClassArray {
+		m.values = append(m.values, reflect.ValueOf(o.dataOf()))
 	}
 }
 

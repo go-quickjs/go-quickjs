@@ -537,7 +537,7 @@ func (r *Runtime) DebugProperties(o *Object) ([]DebugProperty, []DebugInternal) 
 		}
 		props = append(props, dp)
 	}
-	if pd, ok := o.data.(*promiseData); ok {
+	if pd, ok := o.dataOf().(*promiseData); ok {
 		state := map[promiseState]string{promisePending: "pending", promiseFulfilled: "fulfilled", promiseRejected: "rejected"}[pd.state]
 		internal = append(internal, DebugInternal{"[[PromiseState]]", Str(NewString(state))})
 		if pd.state != promisePending {
@@ -546,7 +546,7 @@ func (r *Runtime) DebugProperties(o *Object) ([]DebugProperty, []DebugInternal) 
 	}
 	switch o.class {
 	case ClassBooleanWrapper, ClassNumberWrapper, ClassStringWrapper, ClassSymbolWrapper, ClassBigIntWrapper:
-		if v, ok := o.data.(Value); ok {
+		if v, ok := o.dataOf().(Value); ok {
 			internal = append(internal, DebugInternal{"[[PrimitiveValue]]", v})
 		}
 	}

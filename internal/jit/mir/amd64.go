@@ -907,11 +907,7 @@ func (c *compiler) iterStep(v *ssa.Value, slow amd64.Label) {
 	c.a.LoadU8(scratchC, scratchC, 0)
 	c.a.Op(amd64.Test, scratchC, scratchC, false)
 	c.a.Jcc(amd64.CondNE, slow)
-	c.a.Load(scratchC, scratchB, c.enc.ObjectData)
-	c.movImm(scratchA, c.enc.IterState)
-	c.a.Op(amd64.Cmp, scratchC, scratchA, true)
-	c.a.Jcc(amd64.CondNE, slow)
-	c.a.Load(scratchB, scratchB, c.enc.ObjectData+8)
+	c.objectData(scratchB, scratchB, scratchC, c.enc.IterState, func(cond amd64.Cond) { c.a.Jcc(cond, slow) })
 	c.a.LoadU8(scratchC, scratchB, c.enc.IterDone)
 	c.a.Op(amd64.Test, scratchC, scratchC, false)
 	c.a.Jcc(amd64.CondNE, slow)
@@ -1061,11 +1057,7 @@ func (c *compiler) tailSelf(v *ssa.Value, guard func(amd64.Cond)) {
 	}
 	other := c.a.NewLabel()
 	c.a.Load(scratchC, regCtx, abi.OffCallCallee)
-	c.a.Load(scratchB, scratchC, c.enc.ObjectData)
-	c.movImm(scratchA, c.enc.FuncData)
-	c.a.Op(amd64.Cmp, scratchB, scratchA, true)
-	guard(amd64.CondNE)
-	c.a.Load(scratchB, scratchC, c.enc.ObjectData+8)
+	c.objectData(scratchB, scratchC, scratchC, c.enc.FuncData, guard)
 	c.a.Load(scratchB, scratchB, c.enc.FuncClosure)
 	c.a.Load(scratchA, regCtx, abi.OffClosure)
 	c.a.Op(amd64.Cmp, scratchA, scratchB, true)
@@ -1221,11 +1213,7 @@ func (c *compiler) byCode(t *ssa.CallSite, next amd64.Label) {
 	// A miss has the callee in scratchC again, for the next site to check.
 	miss, done := c.a.NewLabel(), c.a.NewLabel()
 	c.a.Store(regCtx, abi.OffCallCallee, scratchC)
-	c.a.Load(scratchB, scratchC, c.enc.ObjectData)
-	c.movImm(scratchA, c.enc.FuncData)
-	c.a.Op(amd64.Cmp, scratchB, scratchA, true)
-	c.a.Jcc(amd64.CondNE, miss)
-	c.a.Load(scratchB, scratchC, c.enc.ObjectData+8)
+	c.objectData(scratchB, scratchC, scratchC, c.enc.FuncData, func(cond amd64.Cond) { c.a.Jcc(cond, miss) })
 	c.a.Load(scratchB, scratchB, c.enc.FuncClosure)
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
 	c.a.Jcc(amd64.CondE, miss)
@@ -1246,6 +1234,21 @@ func (c *compiler) byCode(t *ssa.CallSite, next amd64.Label) {
 	c.a.Load(scratchC, regCtx, abi.OffCallCallee)
 	c.a.Jmp(next)
 	c.a.Bind(done)
+}
+
+// objectData has dst be the pointer word of the data (abi.Encoding's
+// ObjectData) of the object in obj, failing unless it has its side fields
+// (ObjectExt) and its data's type word is typ. It uses t, which may be
+// obj, and scratchA; dst must be neither.
+func (c *compiler) objectData(dst, obj, t amd64.Reg, typ uint64, fail func(amd64.Cond)) {
+	c.a.Load(dst, obj, c.enc.ObjectExt)
+	c.a.Op(amd64.Test, dst, dst, true)
+	fail(amd64.CondE)
+	c.a.Load(t, dst, c.enc.ObjectData)
+	c.movImm(scratchA, typ)
+	c.a.Op(amd64.Cmp, t, scratchA, true)
+	fail(amd64.CondNE)
+	c.a.Load(dst, dst, c.enc.ObjectData+8)
 }
 
 // callGo is a call of Go, op, its operands in the context's GoArgs: what
@@ -1418,9 +1421,16 @@ func (c *compiler) pushGuards(t *ssa.CallSite, recv *ssa.Value, guard func(amd64
 		c.movImm(scratchC, uint64(h.Shape))
 		c.a.Op(amd64.Cmp, scratchB, scratchC, true)
 		guard(amd64.CondNE)
-		c.a.Load(scratchB, scratchA, c.enc.ObjectElems+8)
+		// No elements: no side fields, or none there. It need not be an
+		// array.
+		none := c.a.NewLabel()
+		c.a.Load(scratchB, scratchA, c.enc.ObjectExt)
+		c.a.Op(amd64.Test, scratchB, scratchB, true)
+		c.a.Jcc(amd64.CondE, none)
+		c.a.Load(scratchB, scratchB, c.enc.ExtElems+8)
 		c.a.Op(amd64.Test, scratchB, scratchB, true)
 		guard(amd64.CondNE)
+		c.a.Bind(none)
 		c.a.LoadU8(scratchB, scratchA, c.enc.ObjectFlags)
 		c.a.OpImm(amd64.And, scratchB, int32(c.enc.FlagSparse), false)
 		guard(amd64.CondNE)
@@ -3519,11 +3529,7 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.pointerWord(x, c.gpr(x, scratchA))
 		c.a.Op(amd64.Test, scratchB, scratchB, true)
 		guard(amd64.CondE)
-		c.a.Load(scratchC, scratchB, c.enc.ObjectData)
-		c.movImm(scratchA, c.enc.IterState)
-		c.a.Op(amd64.Cmp, scratchC, scratchA, true)
-		guard(amd64.CondNE)
-		c.a.Load(scratchB, scratchB, c.enc.ObjectData+8)
+		c.objectData(scratchB, scratchB, scratchC, c.enc.IterState, guard)
 		c.a.LoadU8(scratchC, scratchB, c.enc.IterDone)
 		c.a.Op(amd64.Test, scratchC, scratchC, false)
 		c.a.Jcc(amd64.CondNE, ok)

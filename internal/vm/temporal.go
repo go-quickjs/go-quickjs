@@ -46,7 +46,7 @@ type temporalKind[T any] struct {
 // temporalThis is the receiver's value, or V8's TypeError for another.
 func temporalThis[T any](r *Runtime, this Value, method string) (T, error) {
 	if this.IsObject() {
-		if v, ok := this.Object().data.(T); ok {
+		if v, ok := this.Object().dataOf().(T); ok {
 			return v, nil
 		}
 	}
@@ -57,7 +57,7 @@ func temporalThis[T any](r *Runtime, this Value, method string) (T, error) {
 // temporalObject is a new object of a Temporal type holding a value.
 func temporalObject(proto *Object, v any) Value {
 	o := newObject(proto, ClassObject)
-	o.data = v
+	o.extOf().data = v
 	return Obj(o)
 }
 

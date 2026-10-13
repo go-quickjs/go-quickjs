@@ -74,9 +74,11 @@ var jitEncoding = abi.Encoding{
 
 	ObjectClass:        int32(unsafe.Offsetof(Object{}.class)),
 	ObjectFlags:        int32(unsafe.Offsetof(Object{}.flags)),
+	ObjectExt:          int32(unsafe.Offsetof(Object{}.ext)),
 	ObjectArrayLen:     int32(unsafe.Offsetof(Object{}.arrayLen)),
-	ObjectElems:        int32(unsafe.Offsetof(Object{}.elems)),
-	ObjectData:         int32(unsafe.Offsetof(Object{}.data)),
+	ObjectElems:        int32(unsafe.Sizeof(Object{}) + unsafe.Offsetof(objectExt{}.elems)),
+	ExtElems:           int32(unsafe.Offsetof(objectExt{}.elems)),
+	ObjectData:         int32(unsafe.Offsetof(objectExt{}.data)),
 	IterState:          jitTypeWord((*iterState)(nil)),
 	IterDone:           int32(unsafe.Offsetof(iterState{}.done)),
 	IterArr:            int32(unsafe.Offsetof(iterState{}.arr)),
@@ -813,7 +815,7 @@ func (r *Runtime) jitFillLiteral(l *jitLiteral) {
 	}
 	for i := range int(pool.Size) {
 		a := newArrayObject(r.proto.array, l.n)
-		a.elems = a.elems[:0]
+		a.extOf().elems = a.elemsOf()[:0]
 		r.ensureShape(a)
 		pool.Objects[i] = unsafe.Pointer(a)
 	}
@@ -2573,8 +2575,8 @@ func jitStoreElem(o *Object, n float64, v Value) bool {
 	if float64(i) != n || o.flags&objMappedArguments != 0 {
 		return false
 	}
-	if uint(i) < uint(len(o.elems)) && !isHole(o.elems[i]) {
-		o.elems[i] = v
+	if uint(i) < uint(len(o.elemsOf())) && !isHole(o.elemsOf()[i]) {
+		o.extOf().elems[i] = v
 		return true
 	}
 	const want = objExtensible | objArrayLengthWritable
@@ -2582,7 +2584,7 @@ func jitStoreElem(o *Object, n float64, v Value) bool {
 		return false
 	}
 	for p := o.proto; p != nil; p = p.proto {
-		if p.class != ClassObject && p.class != ClassArray || len(p.elems) != 0 || !p.noIndexKeys() {
+		if p.class != ClassObject && p.class != ClassArray || len(p.elemsOf()) != 0 || !p.noIndexKeys() {
 			return false
 		}
 	}
@@ -2606,14 +2608,14 @@ func jitElemAbsent(o *Object, n float64) bool {
 	if float64(i) != n || i == math.MaxUint32 {
 		return false
 	}
-	if uint(i) < uint(len(o.elems)) && !isHole(o.elems[i]) {
+	if uint(i) < uint(len(o.elemsOf())) && !isHole(o.elemsOf()[i]) {
 		return false
 	}
 	for p := o; p != nil; p = p.proto {
 		if p.class != ClassObject && p.class != ClassArray || p.flags&(objHasSparseElements|objMappedArguments) != 0 || !p.noIndexKeys() {
 			return false
 		}
-		if p != o && len(p.elems) != 0 {
+		if p != o && len(p.elemsOf()) != 0 {
 			return false
 		}
 	}

@@ -380,6 +380,24 @@ func TestJITCallByCodeSecondCandidate(t *testing.T) {
 	}
 }
 
+// An array made a WeakMap's key keeps its elements where native code reads
+// them, in the middle of a loop that reads them, and so do one made a key
+// before the code was compiled and a function called through a site that
+// knows its code.
+func TestJITWeakMapKeyArray(t *testing.T) {
+	setup := `function sum(a, m, n) { let s = 0; for (let i = 0; i < n; i++) { s += a[i % a.length]; if (i == 50) m.set(a, i); if (i == 70) a.push(i) } return s }
+		function each(a, fn) { let s = 0; for (let i = 0; i < a.length; i++) s += fn(a[i]); return s }
+		const keyed = [5, 6, 7], m = new WeakMap(), g = x => x * 3
+		m.set(keyed, 1); m.set(g, 2)`
+	r := jitAgreesForTest(t, setup,
+		`sum([1, 2, 3], new WeakMap(), 200)`, `sum([1, 2, 3], new WeakMap(), 200)`, `sum([1, 2, 3], new WeakMap(), 200)`,
+		`sum(keyed, m, 200) + m.get(keyed)`, `sum(keyed, m, 200) + m.get(keyed)`,
+		`each([1, 2, 3, 4], g) + m.get(g)`, `each([1, 2, 3, 4], g) + m.get(g)`, `each([1, 2, 3, 4], g) + m.get(g)`,
+	)
+	jitNativeForTest(t, r, "sum")
+	jitNativeForTest(t, r, "each")
+}
+
 func TestJITBoundaryDensityBudget(t *testing.T) {
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	v, err := r.Run(compileForTest(t, `function f(a,n){let s=0;for(let i=0;i<n;i++){s+=a[0]%3;a[0]+=3}return s}let a=[2];f(a,20000)===40000&&a[0]===60002`))
@@ -1017,7 +1035,7 @@ func TestJITSSACellsUnderGC(t *testing.T) {
 func TestJITObjectLayout(t *testing.T) {
 	var o Object
 	if unsafe.Sizeof(o.class) != 1 || unsafe.Sizeof(o.flags) != 1 || unsafe.Sizeof(o.arrayLen) != 4 ||
-		unsafe.Sizeof(o.elems) != 3*unsafe.Sizeof(uintptr(0)) || unsafe.Sizeof(Value{}) != 16 {
+		unsafe.Sizeof(o.elemsOf()) != 3*unsafe.Sizeof(uintptr(0)) || unsafe.Sizeof(Value{}) != 16 {
 		t.Fatal("an Object field native code reads changed its width; update jitEncoding and mir")
 	}
 	if int(ClassArray) > 255 || int(objHasSparseElements) > 255 {
@@ -1027,7 +1045,7 @@ func TestJITObjectLayout(t *testing.T) {
 	// data an interface, the type word then the pointer; the state's done
 	// a byte, its array a pointer, its index an int it adds one to.
 	var st iterState
-	if unsafe.Sizeof(o.data) != 2*unsafe.Sizeof(uintptr(0)) || unsafe.Sizeof(st.done) != 1 ||
+	if unsafe.Sizeof(o.dataOf()) != 2*unsafe.Sizeof(uintptr(0)) || unsafe.Sizeof(st.done) != 1 ||
 		unsafe.Sizeof(st.arr) != unsafe.Sizeof(uintptr(0)) || unsafe.Sizeof(st.idx) != 8 {
 		t.Fatal("an iteration state field native code reads changed its width; update jitEncoding and mir")
 	}
@@ -3779,11 +3797,11 @@ func BenchmarkJITCryptoLimb(b *testing.B) {
 				}
 				obj := r.global.getOwn(r.atoms.intern("rhs")).value.Object()
 				array, ok := plainOwn(obj, r.atoms.intern("array"))
-				if !ok || len(array.Object().elems) != n {
+				if !ok || len(array.Object().elemsOf()) != n {
 					b.Fatal("missing output limbs")
 				}
 				for i, want := range output {
-					if got := array.Object().elems[i]; !got.IsNumber() || got.Number() != float64(want) {
+					if got := array.Object().elemsOf()[i]; !got.IsNumber() || got.Number() != float64(want) {
 						b.Fatalf("limb %d: %v, want %v", i, got, want)
 					}
 				}
@@ -5399,10 +5417,10 @@ func TestJITSSANativePop(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := r.global.getOwn(r.atoms.intern("kept")).value.Object()
-	if len(a.elems) != 0 || cap(a.elems) < 300 {
-		t.Fatalf("kept: length %d, capacity %d", len(a.elems), cap(a.elems))
+	if len(a.elemsOf()) != 0 || cap(a.elemsOf()) < 300 {
+		t.Fatalf("kept: length %d, capacity %d", len(a.elemsOf()), cap(a.elemsOf()))
 	}
-	for i, v := range a.elems[:300] {
+	for i, v := range a.elemsOf()[:300] {
 		if !v.IsUndefined() || v.ref != nil {
 			t.Fatalf("kept[%d] still holds %#x, %p after its pop", i, math.Float64bits(v.num), v.ref)
 		}

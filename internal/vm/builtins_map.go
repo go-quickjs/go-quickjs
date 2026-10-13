@@ -356,7 +356,7 @@ func (r *Runtime) mapOf(this Value, class Class, name string) (*jsMap, error) {
 	if !this.IsObject() || this.Object().class != class {
 		return nil, r.throwTypeError("%s called on an incompatible receiver", name)
 	}
-	m, ok := this.Object().data.(*jsMap)
+	m, ok := this.Object().dataOf().(*jsMap)
 	if !ok {
 		return nil, r.throwTypeError("%s called on an uninitialized collection", name)
 	}
@@ -368,7 +368,7 @@ func (r *Runtime) weakMapOf(this Value, name string) (*weakMap, error) {
 	if !this.IsObject() || this.Object().class != ClassWeakMap {
 		return nil, r.throwTypeError("%s called on an incompatible receiver", name)
 	}
-	m, ok := this.Object().data.(*weakMap)
+	m, ok := this.Object().dataOf().(*weakMap)
 	if !ok {
 		return nil, r.throwTypeError("%s called on an uninitialized collection", name)
 	}
@@ -380,7 +380,7 @@ func (r *Runtime) weakSetOf(this Value, name string) (*weakSet, error) {
 	if !this.IsObject() || this.Object().class != ClassWeakSet {
 		return nil, r.throwTypeError("%s called on an incompatible receiver", name)
 	}
-	s, ok := this.Object().data.(*weakSet)
+	s, ok := this.Object().dataOf().(*weakSet)
 	if !ok {
 		return nil, r.throwTypeError("%s called on an uninitialized collection", name)
 	}
@@ -406,7 +406,7 @@ func (r *Runtime) initMapBuiltins() {
 			return Undefined, err
 		}
 		o := newObject(proto, ClassMap)
-		o.data = newJSMap()
+		o.extOf().data = newJSMap()
 		// An iterable argument seeds the map with its [key, value] pairs,
 		// through the object's own set method: a subclass that overrides it
 		// sees every entry go by.
@@ -440,7 +440,7 @@ func (r *Runtime) initMapBuiltins() {
 			}
 			if group.IsObject() {
 				g := group.Object()
-				g.elems = append(g.elems, v)
+				g.extOf().elems = append(g.elemsOf(), v)
 			}
 			return nil
 		})
@@ -448,7 +448,7 @@ func (r *Runtime) initMapBuiltins() {
 			return Undefined, err
 		}
 		o := newObject(rt.proto.mapProto, ClassMap)
-		o.data = m
+		o.extOf().data = m
 		return Obj(o), nil
 	})
 	_ = ctor
@@ -578,7 +578,7 @@ func (r *Runtime) initSetBuiltins() {
 			return Undefined, err
 		}
 		o := newObject(proto, ClassSet)
-		o.data = newJSMap()
+		o.extOf().data = newJSMap()
 		if err := rt.seedFromValues(o, arg(args, 0), "add"); err != nil {
 			return Undefined, err
 		}
@@ -673,7 +673,7 @@ func (r *Runtime) initWeakCollections() {
 			return Undefined, err
 		}
 		o := newObject(proto, ClassWeakMap)
-		o.data = newWeakMap()
+		o.extOf().data = newWeakMap()
 		// An iterable of [key, value] pairs populates it, exactly as for Map.
 		if err := rt.seedFromEntries(o, arg(args, 0), "set"); err != nil {
 			return Undefined, err
@@ -763,7 +763,7 @@ func (r *Runtime) initWeakCollections() {
 			return Undefined, err
 		}
 		o := newObject(proto, ClassWeakSet)
-		o.data = newWeakSet()
+		o.extOf().data = newWeakSet()
 		if err := rt.seedFromValues(o, arg(args, 0), "add"); err != nil {
 			return Undefined, err
 		}
@@ -847,7 +847,7 @@ type mapIterData struct {
 // and which is what makes the prototype worth having.
 func (r *Runtime) newMapIterator(m *jsMap, kind mapIterKind, proto *Object) Value {
 	iter := newObject(proto, ClassIterator)
-	iter.data = &mapIterData{m: m, kind: kind}
+	iter.extOf().data = &mapIterData{m: m, kind: kind}
 	return Obj(iter)
 }
 
@@ -891,7 +891,7 @@ func (r *Runtime) mapIterStep(d *mapIterData) (Value, bool) {
 // mapIterOf recovers an iterator's state, refusing anything else.
 func (r *Runtime) mapIterOf(this Value, tag string) (*mapIterData, error) {
 	if this.IsObject() {
-		if d, ok := this.Object().data.(*mapIterData); ok {
+		if d, ok := this.Object().dataOf().(*mapIterData); ok {
 			return d, nil
 		}
 	}

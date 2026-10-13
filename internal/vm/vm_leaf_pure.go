@@ -554,19 +554,19 @@ func (r *Runtime) pureElemOp(op uint8, this Value, args []Value, mayStore bool) 
 	switch op {
 	case elemPush:
 		if !r.noInheritedIndices(o) || o.flags&(objExtensible|objArrayLengthWritable) != objExtensible|objArrayLengthWritable ||
-			int64(len(o.elems))+int64(len(args)) > maxArrayLength {
+			int64(len(o.elemsOf()))+int64(len(args)) > maxArrayLength {
 			return Undefined, false
 		}
-		o.elems = append(o.elems, args...)
-		return Float(float64(len(o.elems))), true
+		o.extOf().elems = append(o.elemsOf(), args...)
+		return Float(float64(len(o.elemsOf()))), true
 	case elemPop:
-		n := len(o.elems) - 1
-		if n < 0 || o.flags&objArrayLengthWritable == 0 || isHole(o.elems[n]) {
+		n := len(o.elemsOf()) - 1
+		if n < 0 || o.flags&objArrayLengthWritable == 0 || isHole(o.elemsOf()[n]) {
 			return Undefined, false
 		}
-		v := o.elems[n]
-		o.elems[n] = Undefined
-		o.elems = o.elems[:n]
+		v := o.elemsOf()[n]
+		o.extOf().elems[n] = Undefined
+		o.extOf().elems = o.elemsOf()[:n]
 		return v, true
 	}
 	return Undefined, false

@@ -53,7 +53,7 @@ func TestPureRefusalIsTheCallersMiss(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fns := v.Object().elems
+	fns := v.Object().elemsOf()
 	for i, name := range []string{"mark", "add", "markIt", "addIt"} {
 		if n := fns[i].Object().fn().closure.pureMiss; n > 2 {
 			t.Errorf("%s missed %d times; a refusal is not its miss", name, n)

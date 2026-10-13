@@ -33,7 +33,7 @@ func (r *Runtime) initShadowRealm() {
 		o := newObject(p, ClassObject)
 		re := rt.NewRealm()
 		re.shadow = true
-		o.data = &shadowRealmData{realm: re}
+		o.extOf().data = &shadowRealmData{realm: re}
 		return Obj(o), nil
 	})
 
@@ -84,7 +84,7 @@ func (r *Runtime) initShadowRealm() {
 // shadowRealmOf is ValidateShadowRealmObject.
 func (r *Runtime) shadowRealmOf(v Value, method string) (*shadowRealmData, error) {
 	if v.IsObject() {
-		if sr, ok := v.Object().data.(*shadowRealmData); ok {
+		if sr, ok := v.Object().dataOf().(*shadowRealmData); ok {
 			return sr, nil
 		}
 	}

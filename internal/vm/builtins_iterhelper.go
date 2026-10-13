@@ -177,7 +177,7 @@ func (r *Runtime) initIteratorHelpers() {
 			items = append(items, concatItem{method: method, iterable: item})
 		}
 		o := newObject(rt.helperProto, ClassIteratorHelper)
-		o.data = &iterHelperData{kind: helperConcat, concat: items}
+		o.extOf().data = &iterHelperData{kind: helperConcat, concat: items}
 		return Obj(o), nil
 	})
 
@@ -229,7 +229,7 @@ func (r *Runtime) initIteratorHelpers() {
 			h.iter, h.next = iter, next
 
 			o := newObject(rt.helperProto, ClassIteratorHelper)
-			o.data = h
+			o.extOf().data = h
 			return Obj(o), nil
 		})
 	}
@@ -371,7 +371,7 @@ func (r *Runtime) helperOf(this Value, name string) (*iterHelperData, error) {
 	if !this.IsObject() || this.Object().class != ClassIteratorHelper {
 		return nil, r.throwTypeError("%s called on an incompatible receiver", name)
 	}
-	h, ok := this.Object().data.(*iterHelperData)
+	h, ok := this.Object().dataOf().(*iterHelperData)
 	if !ok {
 		return nil, r.throwTypeError("%s called on an uninitialized iterator helper", name)
 	}
@@ -600,7 +600,7 @@ func (r *Runtime) sizedHelper(this, size Value, name string, kind helperKind,
 		return Undefined, err
 	}
 	o := newObject(r.helperProto, ClassIteratorHelper)
-	o.data = &iterHelperData{kind: kind, iter: iter, next: next, size: int64(n), partial: partial}
+	o.extOf().data = &iterHelperData{kind: kind, iter: iter, next: next, size: int64(n), partial: partial}
 	return Obj(o), nil
 }
 
@@ -957,7 +957,7 @@ func (r *Runtime) iteratorFrom(v Value) (Value, error) {
 		return iter, nil
 	}
 	o := newObject(r.wrapProto, ClassIteratorWrap)
-	o.data = &wrapData{iter: iter, next: next}
+	o.extOf().data = &wrapData{iter: iter, next: next}
 	return Obj(o), nil
 }
 
@@ -983,7 +983,7 @@ func (r *Runtime) initWrapPrototype() {
 		if !this.IsObject() || this.Object().class != ClassIteratorWrap {
 			return nil, rt.throwTypeError("%s called on an incompatible receiver", name)
 		}
-		w, ok := this.Object().data.(*wrapData)
+		w, ok := this.Object().dataOf().(*wrapData)
 		if !ok {
 			return nil, rt.throwTypeError("%s called on an uninitialized wrapper", name)
 		}

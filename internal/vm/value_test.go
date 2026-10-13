@@ -130,7 +130,7 @@ func TestTruthy(t *testing.T) {
 
 func TestTypeOf(t *testing.T) {
 	fn := newObject(nil, ClassFunction)
-	fn.data = &funcData{}
+	fn.extOf().data = &funcData{}
 
 	tests := []struct {
 		v    Value

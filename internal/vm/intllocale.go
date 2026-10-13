@@ -29,7 +29,7 @@ func (r *Runtime) initLocale(namespace *Object) {
 			return Undefined, err
 		}
 		out := newObject(made, ClassObject)
-		out.data = &localeOptions{loc: loc}
+		out.extOf().data = &localeOptions{loc: loc}
 		return Obj(out), nil
 	})
 	r.defValue(namespace, "Locale", Obj(ctor))
@@ -219,7 +219,7 @@ func (r *Runtime) localeGetter(proto *Object, name string, get func(intl.Locale)
 
 func (r *Runtime) localeOf(this Value, method string) (*localeOptions, error) {
 	if o := this.Object(); o != nil {
-		if locale, ok := o.data.(*localeOptions); ok {
+		if locale, ok := o.dataOf().(*localeOptions); ok {
 			return locale, nil
 		}
 	}
@@ -228,7 +228,7 @@ func (r *Runtime) localeOf(this Value, method string) (*localeOptions, error) {
 
 func (r *Runtime) newLocale(loc intl.Locale) *Object {
 	o := newObject(r.intlProtoOf("Locale"), ClassObject)
-	o.data = &localeOptions{loc: loc}
+	o.extOf().data = &localeOptions{loc: loc}
 	return o
 }
 
@@ -331,7 +331,7 @@ func withKeyword(loc intl.Locale, key, value string) intl.Locale {
 
 func (r *Runtime) localeData(v Value) (*localeOptions, bool) {
 	if o := v.Object(); o != nil {
-		locale, ok := o.data.(*localeOptions)
+		locale, ok := o.dataOf().(*localeOptions)
 		return locale, ok
 	}
 	return nil, false

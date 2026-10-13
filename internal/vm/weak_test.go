@@ -63,7 +63,7 @@ func TestWeakMapValueRefersToKey(t *testing.T) {
 	func() {
 		key := newObject(nil, ClassObject)
 		value := newObject(nil, ClassObject)
-		value.data = key
+		value.extOf().data = key
 		objRef = weak.Make(key)
 		m.set(r, Obj(key), Obj(value))
 
@@ -117,7 +117,7 @@ func TestWeakMapReleasesValuesWhenMapDies(t *testing.T) {
 	if v, ok := live.get(r, key); !ok || v.Number() != 7 {
 		t.Errorf("the live WeakMap's entry = %v, %v; want 7, true", v, ok)
 	}
-	if kr := key.object().weakMapRefs; len(kr.more) != 0 {
+	if kr := key.object().weakMapRefsOf(); len(kr.more) != 0 {
 		t.Errorf("the key holds %d entries of maps that have gone", len(kr.more))
 	}
 	runtime.KeepAlive(key)
@@ -135,7 +135,7 @@ func TestWeakMapValueRefersToMapKeepsIt(t *testing.T) {
 	func() {
 		m := newWeakMap()
 		value := newObject(nil, ClassObject)
-		value.data = m
+		value.extOf().data = m
 		mapRef = weak.Make(m)
 		m.set(r, key, Obj(value))
 	}()
@@ -193,7 +193,7 @@ func TestWeakMapReleasedWhenClosed(t *testing.T) {
 	if !collected(r, deadValue) {
 		t.Error("a dead WeakMap's value outlived the closed runtime")
 	}
-	if refs := key.object().weakMapRefs; refs.first.m != nil || len(refs.more) != 0 {
+	if refs := key.object().weakMapRefsOf(); refs.first.m != nil || len(refs.more) != 0 {
 		t.Error("the key still holds entries")
 	}
 	runtime.KeepAlive(key)
@@ -220,7 +220,7 @@ func TestWeakMapKeptWhileClosingScriptRuns(t *testing.T) {
 		t.Fatalf("wm.get after closing = %v, %v; want 42", v, err)
 	}
 	r.ReleaseClosed()
-	wm := r.global.getOwn(r.atoms.intern("wm")).value.object().data.(*weakMap)
+	wm := r.global.getOwn(r.atoms.intern("wm")).value.object().dataOf().(*weakMap)
 	k := r.global.getOwn(r.atoms.intern("k")).value
 	if _, ok := wm.get(r, k); ok {
 		t.Error("the entry survived ReleaseClosed once the script had stopped")
@@ -480,4 +480,40 @@ func TestWeakSetAddressReuse(t *testing.T) {
 		t.Log("no address was reused, so this run did not test reuse")
 	}
 	runtime.KeepAlive(held)
+}
+
+// Where a key keeps its values in the WeakMaps it is a key of depends on
+// its kind: an array keeps them in its own side fields, which never move,
+// since native code reads its elements at a fixed offset from it; an object
+// of another kind that has side fields in its allocation moves them to a
+// keyedExt, its data with them; an ordinary object makes
+// one. Each goes on as it was.
+func TestWeakMapKeySideFields(t *testing.T) {
+	r := New(Config{})
+	defer r.Close()
+	v, err := r.Run(compileForTest(t, `
+		var a = [1, 2, 3], f = function (x) { return x * 2 }, o = {}, d = new Date(5)
+		f[0] = "e"
+		var m = new WeakMap([[a, "a"], [f, "f"], [o, "o"], [d, "d"]])
+		a.push(4)
+		;[m.get(a), m.get(f), m.get(o), m.get(d), a.join(), a.length, f(21), f[0], d.getTime(), Array.isArray(a)].join(" ")`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := v.String().Go(), "a f o d 1,2,3,4 4 42 e 5 true"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	get := func(name string) *Object { return r.global.getOwn(r.atoms.intern(name)).value.Object() }
+	a, f, o, d := get("a"), get("f"), get("o"), get("d")
+	if !a.extEmbedded() || a.weakMapRefsOf() == nil || a.dataOf() != a.weakMapRefsOf() {
+		t.Error("the array's side fields are not its own, holding its WeakMaps")
+	}
+	for name, x := range map[string]*Object{"function": f, "object": o, "Date": d} {
+		if x.ext == nil || x.extEmbedded() || x.weakMapRefsOf() == nil {
+			t.Errorf("the %s's WeakMaps are not in a keyedExt", name)
+		}
+	}
+	if f.fn() == nil {
+		t.Error("the function's data did not move with its side fields")
+	}
 }

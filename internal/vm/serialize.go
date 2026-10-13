@@ -72,10 +72,10 @@ func (r *Runtime) SetCloneBrand(v Value, b CloneBrand) bool {
 		return false
 	}
 	o := v.Object()
-	if o.class != ClassObject || o.data != nil && !isBrand(o.data) {
+	if o.class != ClassObject || o.dataOf() != nil && !isBrand(o.dataOf()) {
 		return false
 	}
-	o.data = b
+	o.extOf().data = b
 	return true
 }
 
@@ -188,7 +188,7 @@ func (r *Runtime) Serialize(v Value, transfer []Value, codec *Codec) (*Serialize
 			return nil, &DataCloneError{"Found invalid value in transferList."}
 		}
 		o := t.Object()
-		if b, ok := o.data.(*arrayBufferData); ok && o.class == ClassArrayBuffer && !b.shared {
+		if b, ok := o.dataOf().(*arrayBufferData); ok && o.class == ClassArrayBuffer && !b.shared {
 			if _, dup := s.memory[o]; dup {
 				return nil, &DataCloneError{"Transfer list contains duplicate ArrayBuffer"}
 			}
@@ -219,7 +219,7 @@ func (r *Runtime) Serialize(v Value, transfer []Value, codec *Codec) (*Serialize
 	// Only once everything is serialized are the buffers taken: a failure
 	// leaves them where they were.
 	for _, o := range buffers {
-		b := o.data.(*arrayBufferData)
+		b := o.dataOf().(*arrayBufferData)
 		n := &s.out.nodes[s.memory[o]]
 		n.bytes, n.resizable, n.max = b.bytes, b.resizable, b.maxByteLength
 		b.bytes, b.detached = nil, true
@@ -275,7 +275,7 @@ func (s *serializer) value(v Value) (int, error) {
 	}
 	// A host object is branded with how it clones, which its prototype --
 	// that a script may change -- cannot say.
-	brand, branded := o.data.(CloneBrand)
+	brand, branded := o.dataOf().(CloneBrand)
 	if branded && o.class == ClassObject {
 		switch brand {
 		case CloneUnsupported:
@@ -327,19 +327,19 @@ func (s *serializer) value(v Value) (int, error) {
 		return 0, &DataCloneError{"[object Symbol] could not be cloned."}
 	case ClassDate:
 		n.kind = snDate
-		d, ok := o.data.(*date.Date)
+		d, ok := o.dataOf().(*date.Date)
 		if !ok {
 			return 0, s.uncloneable(o)
 		}
 		n.num = d.Value()
 	case ClassRegExp:
-		d, ok := o.data.(*regexpData)
+		d, ok := o.dataOf().(*regexpData)
 		if !ok {
 			return 0, s.uncloneable(o)
 		}
 		n.kind, n.str, n.flag = snRegExp, d.re.Source(), d.re.Flags().String()
 	case ClassArrayBuffer:
-		b, ok := o.data.(*arrayBufferData)
+		b, ok := o.dataOf().(*arrayBufferData)
 		if !ok {
 			return 0, s.uncloneable(o)
 		}
@@ -359,7 +359,7 @@ func (s *serializer) value(v Value) (int, error) {
 		n.resizable, n.max = b.resizable, b.maxByteLength
 	case ClassTypedArray, ClassDataView:
 		var buf *Object
-		switch d := o.data.(type) {
+		switch d := o.dataOf().(type) {
 		case *typedArrayData:
 			buf, n.elem, n.offset, n.count, n.tracking = d.buffer, d.kind, d.byteOffset, d.fixedLength, d.tracking
 		case *dataViewData:
@@ -367,12 +367,12 @@ func (s *serializer) value(v Value) (int, error) {
 		default:
 			return 0, s.uncloneable(o)
 		}
-		if b, ok := buf.data.(*arrayBufferData); ok && b.detached {
+		if b, ok := buf.dataOf().(*arrayBufferData); ok && b.detached {
 			return 0, &DataCloneError{"An ArrayBuffer is detached and could not be cloned."}
 		}
 		// A view its buffer has shrunk out from under is refused, as V8
 		// refuses it, rather than cloned out of bounds.
-		switch d := o.data.(type) {
+		switch d := o.dataOf().(type) {
 		case *typedArrayData:
 			if d.outOfBounds() {
 				return 0, s.uncloneable(o)
@@ -389,7 +389,7 @@ func (s *serializer) value(v Value) (int, error) {
 		}
 		n.buffer = bi
 	case ClassMap, ClassSet:
-		m, ok := o.data.(*jsMap)
+		m, ok := o.dataOf().(*jsMap)
 		if !ok {
 			return 0, s.uncloneable(o)
 		}
@@ -439,7 +439,7 @@ func (s *serializer) value(v Value) (int, error) {
 		}
 	case ClassObject, ClassMathObject, ClassJSONObject:
 		// Math and JSON are ordinary objects, as far as a clone can tell.
-		if o.class == ClassObject && o.data != nil && !branded {
+		if o.class == ClassObject && o.dataOf() != nil && !branded {
 			return 0, s.uncloneable(o)
 		}
 		n.kind = snObject
@@ -640,7 +640,7 @@ func (d *deserializer) value(i int) (Value, error) {
 		if bytes == nil {
 			bytes = []byte{}
 		}
-		o.data = &arrayBufferData{bytes: bytes, resizable: n.resizable, maxByteLength: n.max}
+		o.extOf().data = &arrayBufferData{bytes: bytes, resizable: n.resizable, maxByteLength: n.max}
 		// Moved bytes belong to this buffer now, and nothing else.
 		n.bytes = nil
 	case snSharedArrayBuffer:
@@ -663,10 +663,10 @@ func (d *deserializer) value(i int) (Value, error) {
 		buf := bv.Object()
 		if n.dataView {
 			o = newObject(r.intrinsicNamed("DataView"), ClassDataView)
-			o.data = &dataViewData{buffer: buf, byteOffset: n.offset, byteLength: n.count, tracking: n.tracking}
+			o.extOf().data = &dataViewData{buffer: buf, byteOffset: n.offset, byteLength: n.count, tracking: n.tracking}
 		} else {
 			o = newObject(r.typedArrayProtos[n.elem], ClassTypedArray)
-			o.data = &typedArrayData{buffer: buf, kind: n.elem, byteOffset: n.offset, fixedLength: n.count, tracking: n.tracking}
+			o.extOf().data = &typedArrayData{buffer: buf, kind: n.elem, byteOffset: n.offset, fixedLength: n.count, tracking: n.tracking}
 		}
 	case snError:
 		o = newErrorObject(r.proto.nativeErrors[n.errKind])
@@ -678,10 +678,10 @@ func (d *deserializer) value(i int) (Value, error) {
 		}
 	case snMap:
 		o = newObject(r.proto.mapProto, ClassMap)
-		o.data = newJSMap()
+		o.extOf().data = newJSMap()
 	case snSet:
 		o = newObject(r.proto.setProto, ClassSet)
-		o.data = newJSMap()
+		o.extOf().data = newJSMap()
 	case snArray:
 		o = r.newArrayOfLength(0)
 	default:
@@ -701,7 +701,7 @@ func (d *deserializer) value(i int) (Value, error) {
 			o.setOwnRaw(r.atoms.intern("cause"), c, propWritable|propConfigurable)
 		}
 	case snMap, snSet:
-		m := o.data.(*jsMap)
+		m := o.dataOf().(*jsMap)
 		step := 1
 		if n.kind == snMap {
 			step = 2
@@ -761,7 +761,7 @@ func primitiveValue(n *snode) Value {
 
 // primitiveOf is the primitive a wrapper object holds.
 func primitiveOf(o *Object) Value {
-	switch d := o.data.(type) {
+	switch d := o.dataOf().(type) {
 	case *String:
 		return Str(d)
 	case float64:

@@ -20,7 +20,7 @@ func (r *Runtime) newCallSite(fr stackFrame) Value {
 		r.initCallSite()
 	}
 	o := newObject(r.proto.callSite, ClassObject)
-	o.data = &callSite{frame: fr}
+	o.extOf().data = &callSite{frame: fr}
 	return Obj(o)
 }
 
@@ -39,7 +39,7 @@ func (r *Runtime) initCallSite() {
 		r.defMethod(proto, name, 0, func(rt *Runtime, this Value, _ []Value) (Value, error) {
 			var cs *callSite
 			if this.IsObject() {
-				cs, _ = this.Object().data.(*callSite)
+				cs, _ = this.Object().dataOf().(*callSite)
 			}
 			if cs == nil {
 				return Undefined, rt.throwTypeError("CallSite method %s expects CallSite as receiver", name)

@@ -187,7 +187,13 @@ func weakRefsOf(k Value, create bool) *weakMapRefs {
 	var slot **weakMapRefs
 	switch {
 	case k.IsObject():
-		slot = &k.object().weakMapRefs
+		o := k.object()
+		refs := o.weakMapRefsOf()
+		if refs == nil && create {
+			refs = &weakMapRefs{key: makeWeak(k)}
+			o.setWeakMapRefs(refs)
+		}
+		return refs
 	case k.IsSymbol():
 		slot = &k.Symbol().weakMapRefs
 	default:

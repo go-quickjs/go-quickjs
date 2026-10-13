@@ -126,7 +126,7 @@ func (r *Runtime) initRegExpLegacyStatics(ctor *Object) {
 		if !this.IsObject() || this.Object().class != ClassRegExp {
 			return Undefined, rt.throwTypeError("RegExp.prototype.compile called on an incompatible receiver")
 		}
-		d, ok := this.Object().data.(*regexpData)
+		d, ok := this.Object().dataOf().(*regexpData)
 		if !ok {
 			return Undefined, rt.throwTypeError("RegExp.prototype.compile called on an uninitialized RegExp")
 		}
@@ -142,7 +142,7 @@ func (r *Runtime) initRegExpLegacyStatics(ctor *Object) {
 			if !flagsArg.IsUndefined() {
 				return Undefined, rt.throwTypeError("flags cannot be given with a RegExp to compile")
 			}
-			pd := pattern.Object().data.(*regexpData)
+			pd := pattern.Object().dataOf().(*regexpData)
 			source, flags = pd.re.Source(), pd.re.Flags().String()
 		} else {
 			if !pattern.IsUndefined() {
@@ -164,7 +164,7 @@ func (r *Runtime) initRegExpLegacyStatics(ctor *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		d.re = fresh.Object().data.(*regexpData).re
+		d.re = fresh.Object().dataOf().(*regexpData).re
 		d.source = nil
 		if _, err := rt.setProp(this.Object(), atomLastIndex, Int(0), this, true); err != nil {
 			return Undefined, err

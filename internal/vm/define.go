@@ -272,7 +272,7 @@ func (r *Runtime) currentDescriptor(o *Object, key Atom) (*propDesc, error) {
 			}
 			// An element of an immutable buffer is as fixed as a frozen
 			// property: it cannot be written or reconfigured.
-			t := o.data.(*typedArrayData)
+			t := o.dataOf().(*typedArrayData)
 			mutable := !t.storage().immutable
 			return &propDesc{
 				value: t.getElem(ix.i), hasValue: true,
@@ -286,7 +286,7 @@ func (r *Runtime) currentDescriptor(o *Object, key Atom) (*propDesc, error) {
 		// A String object's characters are own properties, read-only and not
 		// configurable: the object is a box round an immutable string, and its
 		// length says the same.
-		if s, ok := o.data.(*String); ok {
+		if s, ok := o.dataOf().(*String); ok {
 			if key.IsIndex() && int(key.Index()) < s.Len() {
 				i := int(key.Index())
 				return &propDesc{
@@ -415,9 +415,9 @@ func (r *Runtime) installProperty(o *Object, key Atom, d *propDesc, cur *propDes
 
 	if merged.hasGet || merged.hasSet {
 		// Vacate any dense slot, which cannot hold an accessor.
-		if key.IsIndex() && uint(key.Index()) < uint(len(o.elems)) {
+		if key.IsIndex() && uint(key.Index()) < uint(len(o.elemsOf())) {
 			o.markSparse()
-			o.elems[key.Index()] = elemHole
+			o.extOf().elems[key.Index()] = elemHole
 		}
 		o.setOwnRaw(key, accessorValue(&accessor{getter: merged.getter, setter: merged.setter}),
 			flags|propAccessor)
@@ -691,14 +691,14 @@ func (r *Runtime) preventExtensionsOf(o *Object) (bool, error) {
 	}
 	// Dense elements cannot express attributes, so an object about to have
 	// them constrained moves them into the property table first.
-	if len(o.elems) > 0 {
-		for i, el := range o.elems {
+	if len(o.elemsOf()) > 0 {
+		for i, el := range o.elemsOf() {
 			if !isHole(el) {
 				o.setOwnRaw(r.atoms.indexAtom(uint32(i)), el, propDefault)
 			}
 		}
 		o.markSparse()
-		o.elems = nil
+		o.extOf().elems = nil
 	}
 	o.flags &^= objExtensible
 	return true, nil

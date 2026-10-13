@@ -1325,11 +1325,7 @@ func (c *a64Compiler) byCode(t *ssa.CallSite, next arm64.Label) {
 	// A miss has the callee in C again, for the next site to check.
 	miss, done := c.a.NewLabel(), c.a.NewLabel()
 	c.a.Store(a64Ctx, abi.OffCallCallee, a64C)
-	c.a.Load(a64B, a64C, c.enc.ObjectData)
-	c.movImm(a64A, c.enc.FuncData)
-	c.a.Cmp(a64B, a64A, true)
-	c.a.BCond(arm64.NE, miss)
-	c.a.Load(a64B, a64C, c.enc.ObjectData+8)
+	c.objectData(a64B, a64C, a64C, c.enc.FuncData, func(cond arm64.Cond) { c.a.BCond(cond, miss) })
 	c.a.Load(a64B, a64B, c.enc.FuncClosure)
 	c.a.Cbz(a64B, miss, true)
 	for _, f := range [...]struct {
@@ -1349,6 +1345,20 @@ func (c *a64Compiler) byCode(t *ssa.CallSite, next arm64.Label) {
 	c.a.Load(a64C, a64Ctx, abi.OffCallCallee)
 	c.a.B(next)
 	c.a.Bind(done)
+}
+
+// objectData is amd64's: dst the pointer word of the data of the object in
+// obj, which has its side fields and data of type typ. It uses t, which
+// may be obj, and A; dst must be neither.
+func (c *a64Compiler) objectData(dst, obj, t arm64.Reg, typ uint64, fail func(arm64.Cond)) {
+	c.a.Load(dst, obj, c.enc.ObjectExt)
+	c.a.CmpImm(dst, 0, true)
+	fail(arm64.EQ)
+	c.a.Load(t, dst, c.enc.ObjectData)
+	c.movImm(a64A, typ)
+	c.a.Cmp(t, a64A, true)
+	fail(arm64.NE)
+	c.a.Load(dst, dst, c.enc.ObjectData+8)
 }
 
 // savingCall is the routine the code's calls of Go that save every register
@@ -2099,9 +2109,15 @@ func (c *a64Compiler) pushGuards(t *ssa.CallSite, recv *ssa.Value, guard func(ar
 		c.movImm(a64C, uint64(h.Shape))
 		c.a.Cmp(a64B, a64C, true)
 		guard(arm64.NE)
-		c.a.Load(a64B, a64A, c.enc.ObjectElems+8)
+		// No elements: no side fields, or none there. It need not be an
+		// array.
+		none := c.a.NewLabel()
+		c.a.Load(a64B, a64A, c.enc.ObjectExt)
+		c.a.Cbz(a64B, none, true)
+		c.a.Load(a64B, a64B, c.enc.ExtElems+8)
 		c.a.CmpImm(a64B, 0, true)
 		guard(arm64.NE)
+		c.a.Bind(none)
 		c.a.LoadU8(a64B, a64A, c.enc.ObjectFlags)
 		c.movImm(a64C, uint64(c.enc.FlagSparse))
 		c.a.Tst(a64B, a64C, false)
@@ -2343,11 +2359,7 @@ func (c *a64Compiler) iterStep(v *ssa.Value, slow arm64.Label) {
 	c.movImm(a64C, c.enc.WriteBarrier)
 	c.a.LoadU8(a64C, a64C, 0)
 	c.a.Cbnz(a64C, slow, false)
-	c.a.Load(a64C, a64B, c.enc.ObjectData)
-	c.movImm(a64A, c.enc.IterState)
-	c.a.Cmp(a64C, a64A, true)
-	c.a.BCond(arm64.NE, slow)
-	c.a.Load(a64D, a64B, c.enc.ObjectData+8)
+	c.objectData(a64D, a64B, a64C, c.enc.IterState, func(cond arm64.Cond) { c.a.BCond(cond, slow) })
 	c.a.LoadU8(a64C, a64D, c.enc.IterDone)
 	c.a.Cbnz(a64C, slow, false)
 	c.a.Load(a64A, a64D, c.enc.IterIdx)
@@ -2459,11 +2471,7 @@ func (c *a64Compiler) tailSelf(v *ssa.Value, guard func(arm64.Cond)) {
 	}
 	other := c.a.NewLabel()
 	c.a.Load(a64C, a64Ctx, abi.OffCallCallee)
-	c.a.Load(a64B, a64C, c.enc.ObjectData)
-	c.movImm(a64A, c.enc.FuncData)
-	c.a.Cmp(a64B, a64A, true)
-	guard(arm64.NE)
-	c.a.Load(a64B, a64C, c.enc.ObjectData+8)
+	c.objectData(a64B, a64C, a64C, c.enc.FuncData, guard)
 	c.a.Load(a64B, a64B, c.enc.FuncClosure)
 	c.a.Load(a64A, a64Ctx, abi.OffClosure)
 	c.a.Cmp(a64A, a64B, true)
@@ -3289,11 +3297,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.pointerWord(x, c.gpr(x, a64A))
 		c.a.CmpImm(a64B, 0, true)
 		guard(arm64.EQ)
-		c.a.Load(a64C, a64B, c.enc.ObjectData)
-		c.movImm(a64A, c.enc.IterState)
-		c.a.Cmp(a64C, a64A, true)
-		guard(arm64.NE)
-		c.a.Load(a64B, a64B, c.enc.ObjectData+8)
+		c.objectData(a64B, a64B, a64C, c.enc.IterState, guard)
 		c.a.LoadU8(a64C, a64B, c.enc.IterDone)
 		c.a.Cbnz(a64C, ok, false)
 		c.a.Load(a64C, a64B, c.enc.IterArr)

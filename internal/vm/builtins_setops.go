@@ -188,7 +188,7 @@ func (r *Runtime) newSetFrom(vals []Value) *Object {
 		m.set(r, v, v)
 	}
 	o := newObject(r.proto.setProto, ClassSet)
-	o.data = m
+	o.extOf().data = m
 	return o
 }
 
@@ -286,7 +286,7 @@ func (r *Runtime) initSetOps(p *Object) {
 		if err != nil {
 			return Undefined, err
 		}
-		rm := result.data.(*jsMap)
+		rm := result.dataOf().(*jsMap)
 		for _, v := range keys {
 			rm.delete(v)
 		}
@@ -306,7 +306,7 @@ func (r *Runtime) initSetOps(p *Object) {
 		// key is in the receiver is asked of it as it is then, which the
 		// iterator may have changed.
 		result := rt.newSetFrom(liveEntries(m))
-		rm := result.data.(*jsMap)
+		rm := result.dataOf().(*jsMap)
 		for {
 			v, done, err := cur.step(rt)
 			if err != nil {

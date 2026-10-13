@@ -48,7 +48,7 @@ func (r *Runtime) deferredNamespaceObject(m *Module) (*Object, error) {
 // being asked about is one that does: any string but "then". It does nothing
 // for any other object.
 func (r *Runtime) touchDeferred(o *Object, key Atom) error {
-	d, ok := o.data.(*deferredModule)
+	d, ok := o.dataOf().(*deferredModule)
 	if !ok || r.atoms.IsSymbol(key) || r.atoms.name(key) == "then" {
 		return nil
 	}
@@ -58,7 +58,7 @@ func (r *Runtime) touchDeferred(o *Object, key Atom) error {
 // touchDeferredKeys runs the module a deferred namespace stands for, because
 // its keys are being asked for -- which, unlike a single key, always does.
 func (r *Runtime) touchDeferredKeys(o *Object) error {
-	d, ok := o.data.(*deferredModule)
+	d, ok := o.dataOf().(*deferredModule)
 	if !ok {
 		return nil
 	}
@@ -76,7 +76,7 @@ func (r *Runtime) ensureDeferredEvaluation(m *Module) error {
 	if err != nil {
 		return err
 	}
-	if p, ok := done.Object().data.(*promiseData); ok && p.state == promiseRejected {
+	if p, ok := done.Object().dataOf().(*promiseData); ok && p.state == promiseRejected {
 		return r.throw(p.value)
 	}
 	return nil
@@ -112,7 +112,7 @@ func (r *Runtime) RequireModule(specifier, referrer string) (*Module, error) {
 	if err != nil {
 		return nil, err
 	}
-	if p, ok := done.Object().data.(*promiseData); ok && p.state == promiseRejected {
+	if p, ok := done.Object().dataOf().(*promiseData); ok && p.state == promiseRejected {
 		p.handled = true
 		return nil, r.throw(p.value)
 	}

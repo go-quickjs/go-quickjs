@@ -64,7 +64,7 @@ func (r *Runtime) requireViewInBounds(d *dataViewData) error {
 }
 
 func (d *dataViewData) storage() *arrayBufferData {
-	b, _ := d.buffer.data.(*arrayBufferData)
+	b, _ := d.buffer.dataOf().(*arrayBufferData)
 	if b != nil && b.block != nil {
 		// Another agent may have grown shared memory since it was last
 		// looked at here.
@@ -83,7 +83,7 @@ func (r *Runtime) dataViewOf(this Value, name string) (*dataViewData, error) {
 	if !this.IsObject() || this.Object().class != ClassDataView {
 		return nil, r.throwTypeError("%s called on an incompatible receiver", name)
 	}
-	d, ok := this.Object().data.(*dataViewData)
+	d, ok := this.Object().dataOf().(*dataViewData)
 	if !ok {
 		return nil, r.throwTypeError("%s called on an uninitialized DataView", name)
 	}
@@ -115,7 +115,7 @@ func (r *Runtime) initDataViewBuiltins() {
 			return Undefined, rt.throwTypeError("DataView requires an ArrayBuffer")
 		}
 		buf := bufArg.Object()
-		storage := buf.data.(*arrayBufferData)
+		storage := buf.dataOf().(*arrayBufferData)
 		storage.sharedMemory()
 
 		off, err := rt.toIndex(arg(args, 1))
@@ -169,7 +169,7 @@ func (r *Runtime) initDataViewBuiltins() {
 			return Undefined, rt.throwRangeError("the view extends past the end of the buffer")
 		}
 		o := newObject(viewProto, ClassDataView)
-		o.data = &dataViewData{buffer: buf, byteOffset: int(off), byteLength: int(length), tracking: tracking}
+		o.extOf().data = &dataViewData{buffer: buf, byteOffset: int(off), byteLength: int(length), tracking: tracking}
 		return Obj(o), nil
 	})
 
@@ -179,7 +179,7 @@ func (r *Runtime) initDataViewBuiltins() {
 		if !this.IsObject() || this.Object().class != ClassDataView {
 			return Undefined, rt.throwTypeError("DataView.prototype.buffer called on an incompatible receiver")
 		}
-		d, ok := this.Object().data.(*dataViewData)
+		d, ok := this.Object().dataOf().(*dataViewData)
 		if !ok {
 			return Undefined, rt.throwTypeError("DataView.prototype.buffer called on an uninitialized DataView")
 		}

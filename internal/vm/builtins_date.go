@@ -28,7 +28,7 @@ func (r *Runtime) dateOf(this Value, name string) (*date.Date, error) {
 	if !this.IsObject() || this.Object().class != ClassDate {
 		return nil, r.throwTypeError("%s called on an incompatible receiver", name)
 	}
-	d, ok := this.Object().data.(*date.Date)
+	d, ok := this.Object().dataOf().(*date.Date)
 	if !ok {
 		return nil, r.throwTypeError("%s called on an uninitialized Date", name)
 	}
@@ -69,13 +69,15 @@ func (r *Runtime) dateEnv() *date.Environment {
 // allocation.
 type dateObject struct {
 	Object
-	d date.Date
+	side objectExt
+	d    date.Date
 }
 
 // newDateObject is a Date object of prototype proto, and its date, to be set.
 func newDateObject(proto *Object) (*Object, *date.Date) {
 	x := &dateObject{Object: Object{proto: proto, class: ClassDate, flags: objExtensible}}
-	x.data = &x.d
+	x.embedExt(&x.side)
+	x.side.data = &x.d
 	return &x.Object, &x.d
 }
 
@@ -134,7 +136,7 @@ func (r *Runtime) initDateBuiltins() {
 			// whatever toString the object happens to carry.
 			if v := args[0]; v.IsObject() && v.Object().class == ClassDate {
 				t := math.NaN()
-				if d, ok := v.Object().data.(*date.Date); ok {
+				if d, ok := v.Object().dataOf().(*date.Date); ok {
 					t = d.Value()
 				}
 				return Obj(rt.newDateObjectAt(rt.proto.date, t)), nil

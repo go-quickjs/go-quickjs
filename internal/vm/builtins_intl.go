@@ -539,7 +539,7 @@ func (r *Runtime) initNumberFormat(intlObj *Object) {
 			return Undefined, err
 		}
 		out := newObject(made, ClassObject)
-		out.data = o
+		out.extOf().data = o
 		return rt.legacyFormatter(this, out), nil
 	})
 	r.defValue(intlObj, "NumberFormat", Obj(ctor))
@@ -929,7 +929,7 @@ func wellFormedUnit(unit string) bool {
 
 func (r *Runtime) numberFormatOf(this Value, method string) (*numberOptions, error) {
 	if this.IsObject() {
-		if opts, ok := this.Object().data.(*numberOptions); ok {
+		if opts, ok := this.Object().dataOf().(*numberOptions); ok {
 			return opts, nil
 		}
 	}
@@ -937,14 +937,14 @@ func (r *Runtime) numberFormatOf(this Value, method string) (*numberOptions, err
 	// without new; the rest require one.
 	if method == "UnwrapNumberFormat" || method == "get Intl.NumberFormat.prototype.format" {
 		v, err := r.unwrapFormatter(this, r.intlProtoOf("NumberFormat"), func(o *Object) bool {
-			_, ok := o.data.(*numberOptions)
+			_, ok := o.dataOf().(*numberOptions)
 			return ok
 		})
 		if err != nil {
 			return nil, err
 		}
 		if v.IsObject() {
-			if opts, ok := v.Object().data.(*numberOptions); ok {
+			if opts, ok := v.Object().dataOf().(*numberOptions); ok {
 				return opts, nil
 			}
 		}
@@ -971,7 +971,7 @@ func (r *Runtime) initDateTimeFormat(namespace *Object) {
 			return Undefined, err
 		}
 		out := newObject(made, ClassObject)
-		out.data = d
+		out.extOf().data = d
 		return rt.legacyFormatter(this, out), nil
 	})
 	r.defValue(namespace, "DateTimeFormat", Obj(ctor))
@@ -1051,7 +1051,7 @@ func temporalDateTimeKind(v Value) string {
 	if !v.IsObject() {
 		return ""
 	}
-	switch v.Object().data.(type) {
+	switch v.Object().dataOf().(type) {
 	case temporal.Instant:
 		return "instant"
 	case temporal.PlainDateTime:

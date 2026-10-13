@@ -179,22 +179,22 @@ func (r *Runtime) attachStack(o *Object, st stackTrace) {
 // setTrace stores an object's frames: in the error itself for an error, and
 // under a key no script can name for anything else.
 func (r *Runtime) setTrace(o *Object, st stackTrace) {
-	if t, ok := o.data.(*Thrown); ok && o.class == ClassError {
+	if t, ok := o.dataOf().(*Thrown); ok && o.class == ClassError {
 		t.trace = st
 		return
 	}
 	holder := newObject(nil, ClassObject)
-	holder.data = &st
+	holder.extOf().data = &st
 	o.setOwnRaw(r.stackSlot, Obj(holder), propPrivate)
 }
 
 // traceOf returns an object's frames, or nil when it has none.
 func (r *Runtime) traceOf(o *Object) *stackTrace {
-	if t, ok := o.data.(*Thrown); ok && o.class == ClassError && t.trace.set {
+	if t, ok := o.dataOf().(*Thrown); ok && o.class == ClassError && t.trace.set {
 		return &t.trace
 	}
 	if p := o.getOwn(r.stackSlot); p != nil && p.value.IsObject() {
-		st, _ := p.value.Object().data.(*stackTrace)
+		st, _ := p.value.Object().dataOf().(*stackTrace)
 		return st
 	}
 	return nil

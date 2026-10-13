@@ -46,8 +46,8 @@ func (r *Runtime) leafCall(cl *closure, o *Object, args []Value) (Value, bool) {
 		if v.IsObject() && key.IsNumber() {
 			a := v.Object()
 			if i := uint32(key.Number()); float64(i) == key.Number() &&
-				uint(i) < uint(len(a.elems)) && a.flags&objMappedArguments == 0 {
-				if e := a.elems[i]; !isHole(e) {
+				uint(i) < uint(len(a.elemsOf())) && a.flags&objMappedArguments == 0 {
+				if e := a.elemsOf()[i]; !isHole(e) {
 					return e, true
 				}
 			}

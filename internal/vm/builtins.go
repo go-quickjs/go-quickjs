@@ -522,12 +522,12 @@ func (r *Runtime) isEnumerable(o *Object, key Atom) (bool, error) {
 		// property table, but they are enumerable own properties. So are a
 		// String object's characters.
 		if o.class == ClassTypedArray {
-			if t, ok := o.data.(*typedArrayData); ok && int(key.Index()) < t.count() {
+			if t, ok := o.dataOf().(*typedArrayData); ok && int(key.Index()) < t.count() {
 				return true, nil
 			}
 		}
 		if o.class == ClassStringWrapper {
-			if str, ok := o.data.(*String); ok && int(key.Index()) < str.Len() {
+			if str, ok := o.dataOf().(*String); ok && int(key.Index()) < str.Len() {
 				return true, nil
 			}
 		}
@@ -750,7 +750,7 @@ func (r *Runtime) initFunctionBuiltins() {
 		}
 
 		o := newObject(rt.proto.function, ClassFunction)
-		o.data = &funcData{
+		o.extOf().data = &funcData{
 			bound:    true,
 			extra:    &funcExtra{boundTarget: target, boundThis: arg(args, 0), boundArgs: bound},
 			name:     boundName.prefix(maxShownName),
@@ -1074,13 +1074,13 @@ func (r *Runtime) initArrayBuiltins() {
 	r.defMethod(p, "push", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		if o := rt.plainArray(this); o != nil && rt.noInheritedIndices(o) &&
 			o.flags&(objExtensible|objArrayLengthWritable) == objExtensible|objArrayLengthWritable &&
-			int64(len(o.elems))+int64(len(args)) <= maxArrayLength {
+			int64(len(o.elemsOf()))+int64(len(args)) <= maxArrayLength {
 			// A dense array of its own, extensible and with its length
 			// writable, whose prototypes have no element a setter could be
 			// asked about: each value is an element added at the end, and the
 			// length is how many there are.
-			o.elems = append(o.elems, args...)
-			return Float(float64(len(o.elems))), nil
+			o.extOf().elems = append(o.elemsOf(), args...)
+			return Float(float64(len(o.elemsOf()))), nil
 		}
 		a, err := rt.viewArrayLike(this)
 		if err != nil {
@@ -1102,14 +1102,14 @@ func (r *Runtime) initArrayBuiltins() {
 	})
 
 	r.defMethod(p, "pop", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
-		if o := rt.plainArray(this); o != nil && len(o.elems) > 0 && o.flags&objArrayLengthWritable != 0 {
+		if o := rt.plainArray(this); o != nil && len(o.elemsOf()) > 0 && o.flags&objArrayLengthWritable != 0 {
 			// The last element of a dense array, its own, is read, deleted
 			// and the length shortened past it -- unless it is a hole,
 			// which the prototypes answer for.
-			n := len(o.elems) - 1
-			if v := o.elems[n]; !isHole(v) {
-				o.elems[n] = Undefined
-				o.elems = o.elems[:n]
+			n := len(o.elemsOf()) - 1
+			if v := o.elemsOf()[n]; !isHole(v) {
+				o.extOf().elems[n] = Undefined
+				o.extOf().elems = o.elemsOf()[:n]
 				return v, nil
 			}
 		}
@@ -1955,7 +1955,7 @@ func (r *Runtime) newArrayIteratorKind(target Value, kind arrayIterKind) (Value,
 		return Undefined, err
 	}
 	iter := newObject(r.proto.arrayIter, ClassIterator)
-	iter.data = &arrayIterData{a: arrayLike{o: o}, kind: kind}
+	iter.extOf().data = &arrayIterData{a: arrayLike{o: o}, kind: kind}
 	return Obj(iter), nil
 }
 
@@ -2036,7 +2036,7 @@ func arrayIterOf(v Value) (*arrayIterData, bool) {
 	if !v.IsObject() {
 		return nil, false
 	}
-	d, ok := v.Object().data.(*arrayIterData)
+	d, ok := v.Object().dataOf().(*arrayIterData)
 	return d, ok
 }
 
@@ -2072,7 +2072,7 @@ func (r *Runtime) initNumberBuiltins() {
 			return Float(n), nil
 		}
 		o := newObject(rt.proto.number, ClassNumberWrapper)
-		o.data = n
+		o.extOf().data = n
 		return Obj(o), nil
 	})
 
@@ -2162,7 +2162,7 @@ func (r *Runtime) thisNumber(this Value) (float64, error) {
 		return this.Number(), nil
 	}
 	if this.IsObject() && this.Object().class == ClassNumberWrapper {
-		if n, ok := this.Object().data.(float64); ok {
+		if n, ok := this.Object().dataOf().(float64); ok {
 			return n, nil
 		}
 	}
@@ -2183,7 +2183,7 @@ func (r *Runtime) initBooleanBuiltins() {
 		// Called with new, the result is a wrapper object whose valueOf gives
 		// the primitive back.
 		o := newObject(rt.proto.boolean, ClassBooleanWrapper)
-		o.data = b
+		o.extOf().data = b
 		return Obj(o), nil
 	})
 	r.defMethod(p, "toString", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
@@ -2210,7 +2210,7 @@ func (r *Runtime) thisBool(this Value) (bool, error) {
 		return this.BoolValue(), nil
 	}
 	if this.IsObject() && this.Object().class == ClassBooleanWrapper {
-		if b, ok := this.Object().data.(bool); ok {
+		if b, ok := this.Object().dataOf().(bool); ok {
 			return b, nil
 		}
 	}
@@ -2328,7 +2328,7 @@ func (r *Runtime) thisSymbol(this Value) (*Symbol, error) {
 		return this.Symbol(), nil
 	}
 	if this.IsObject() && this.Object().class == ClassSymbolWrapper {
-		if s, ok := this.Object().data.(*Symbol); ok {
+		if s, ok := this.Object().dataOf().(*Symbol); ok {
 			return s, nil
 		}
 	}
@@ -2945,7 +2945,7 @@ func (r *Runtime) noInheritedIndices(o *Object) bool {
 		return false
 	}
 	for _, p := range [2]*Object{ap, op} {
-		if len(p.elems) != 0 || p.flags&objHasSparseElements != 0 || !p.noIndexKeys() {
+		if len(p.elemsOf()) != 0 || p.flags&objHasSparseElements != 0 || !p.noIndexKeys() {
 			return false
 		}
 	}

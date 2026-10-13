@@ -533,9 +533,16 @@ type Encoding struct {
 	// ObjectClass is the class byte, ClassArray an array's. ObjectFlags is
 	// a flags byte, in which FlagSparse marks an array with elements kept as
 	// properties past its dense ones, whose length is then the uint32 at
-	// ObjectArrayLen when that is larger. ObjectElems is the dense elements'
-	// slice: a pointer to the first value, then the count.
+	// ObjectArrayLen when that is larger. ObjectElems is an array's dense
+	// elements' slice: a pointer to the first value, then the count.
+	//
+	// What only some objects have is in side fields the pointer at
+	// ObjectExt points to, or nil: an ordinary object most often has none.
+	// ExtElems is the elements' slice there, and ObjectData the data. An
+	// array has its own, in its allocation, for as long as it lives, which
+	// is how ObjectElems is an offset from the array itself.
 	ObjectClass, ObjectFlags, ObjectArrayLen, ObjectElems int32
+	ObjectExt, ExtElems                                   int32
 	ClassArray, FlagSparse                                uint8
 	// A for...of or for...in loop's cursor is an object whose data, an
 	// interface at ObjectData, is the VM's iteration state when its type

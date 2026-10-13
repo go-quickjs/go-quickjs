@@ -64,7 +64,7 @@ func (r *Runtime) initDurationFormat(intlObj *Object) {
 			return Undefined, err
 		}
 		out := newObject(made, ClassObject)
-		out.data = o
+		out.extOf().data = o
 		return Obj(out), nil
 	})
 	r.defValue(intlObj, "DurationFormat", Obj(ctor))
@@ -283,7 +283,7 @@ func (r *Runtime) durationFrom(v Value) ([len(durationUnits)]float64, error) {
 	if o == nil {
 		return out, r.intlTemporalType("Duration argument must be Duration or string.")
 	}
-	if duration, ok := o.data.(temporal.Duration); ok {
+	if duration, ok := o.dataOf().(temporal.Duration); ok {
 		return [10]float64(temporalDurationFields(duration)), nil
 	}
 	any := false
@@ -360,7 +360,7 @@ func validDuration(duration [len(durationUnits)]float64) bool {
 
 func (r *Runtime) durationFormatOf(this Value, method string) (*durationOptions, error) {
 	if o := this.Object(); o != nil {
-		if opts, ok := o.data.(*durationOptions); ok {
+		if opts, ok := o.dataOf().(*durationOptions); ok {
 			return opts, nil
 		}
 	}

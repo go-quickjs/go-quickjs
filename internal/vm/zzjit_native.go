@@ -694,7 +694,7 @@ func jitPoolBytes(pool *abi.ObjectPool) int {
 	n := jitPoolFixed
 	if c := pool.Count; c > 0 && c <= abi.PoolCapacity {
 		o := (*Object)(pool.Objects[c-1])
-		n += int(pool.Size) * (int(objectSize) + jitCapBytes(o.props) + jitCapBytes(o.elems))
+		n += int(pool.Size) * (int(objectSize) + jitCapBytes(o.props) + jitCapBytes(o.elemsOf()))
 	}
 	return n
 }
@@ -2327,15 +2327,15 @@ func (r *Runtime) jitUsing(f *frame, in bytecode.Instr, sp int) (int, Value, boo
 	switch in.Op {
 	case bytecode.OpNewDisposeCapability:
 		o := newObject(nil, ClassObject)
-		o.data = &disposeCapability{}
+		o.extOf().data = &disposeCapability{}
 		return sp, Obj(o), true, nil
 	case bytecode.OpAddDisposable:
 		sp--
-		c := stack[sp].Object().data.(*disposeCapability)
+		c := stack[sp].Object().dataOf().(*disposeCapability)
 		return sp, Undefined, false, r.addDisposableResource(c, stack[sp-1], in.A == 1)
 	}
 	sp--
-	c := stack[sp].Object().data.(*disposeCapability)
+	c := stack[sp].Object().dataOf().(*disposeCapability)
 	// A finally clause knows from its record whether an exception is what
 	// is leaving the scope, which the disposal folds into what it throws.
 	var completion error

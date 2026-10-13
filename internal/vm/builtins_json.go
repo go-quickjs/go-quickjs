@@ -111,7 +111,7 @@ func (r *Runtime) initJSONBuiltins() {
 			return Undefined, rt.throwSyntaxError("unexpected trailing content in JSON at position %d", p.pos)
 		}
 		o := newObject(nil, ClassObject)
-		o.data = rawJSON{}
+		o.extOf().data = rawJSON{}
 		o.setOwnRaw(rt.atoms.intern("rawJSON"), Str(s), propEnumerable)
 		o.flags &^= objExtensible
 		return Obj(o), nil
@@ -131,7 +131,7 @@ func isRawJSON(v Value) bool {
 	if !v.IsObject() {
 		return false
 	}
-	_, ok := v.Object().data.(rawJSON)
+	_, ok := v.Object().dataOf().(rawJSON)
 	return ok
 }
 
@@ -450,7 +450,7 @@ func (e *jsonEncoder) encode(buf []byte, v Value, prefix string) ([]byte, bool, 
 			}
 			v = Str(sv)
 		case ClassBooleanWrapper:
-			b, _ := v.Object().data.(bool)
+			b, _ := v.Object().dataOf().(bool)
 			v = Bool(b)
 		case ClassBigIntWrapper:
 			// It stands for the BigInt it wraps, which has no JSON form -- so

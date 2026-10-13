@@ -425,23 +425,23 @@ func (r *Runtime) toObject(v Value) (*Object, error) {
 		return v.Object(), nil
 	case KindString:
 		o := newObject(r.proto.str, ClassStringWrapper)
-		o.data = v.String()
+		o.extOf().data = v.String()
 		return o, nil
 	case KindNumber:
 		o := newObject(r.proto.number, ClassNumberWrapper)
-		o.data = v.Number()
+		o.extOf().data = v.Number()
 		return o, nil
 	case KindBool:
 		o := newObject(r.proto.boolean, ClassBooleanWrapper)
-		o.data = v.BoolValue()
+		o.extOf().data = v.BoolValue()
 		return o, nil
 	case KindSymbol:
 		o := newObject(r.proto.symbol, ClassSymbolWrapper)
-		o.data = v.Symbol()
+		o.extOf().data = v.Symbol()
 		return o, nil
 	case KindBigInt:
 		o := newObject(r.proto.bigint, ClassBigIntWrapper)
-		o.data = v.BigInt()
+		o.extOf().data = v.BigInt()
 		return o, nil
 	}
 	return nil, r.throwTypeError("cannot convert %s to an object", v.Kind())

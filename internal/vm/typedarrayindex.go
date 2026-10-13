@@ -51,7 +51,7 @@ func typedElemIndex(o *Object, key float64) (*typedArrayData, int, bool) {
 	if float64(i) != key || i > math.MaxInt32 {
 		return nil, 0, false
 	}
-	t, ok := o.data.(*typedArrayData)
+	t, ok := o.dataOf().(*typedArrayData)
 	return t, int(i), ok
 }
 
@@ -65,7 +65,7 @@ func typedElemIndex(o *Object, key float64) (*typedArrayData, int, bool) {
 // converts without running code, so nothing can change the view between the
 // check and the store.
 func typedWrite(o *Object, i uint32, v Value) bool {
-	t, ok := o.data.(*typedArrayData)
+	t, ok := o.dataOf().(*typedArrayData)
 	if !ok || uint(i) >= uint(t.fixedLength) || !v.IsNumber() {
 		return false
 	}
@@ -106,7 +106,7 @@ func typedWrite(o *Object, i uint32, v Value) bool {
 //
 //go:noinline
 func (t *typedArrayData) fixedStorage() *arrayBufferData {
-	st, _ := t.buffer.data.(*arrayBufferData)
+	st, _ := t.buffer.dataOf().(*arrayBufferData)
 	if st == nil || t.tracking {
 		return nil
 	}
@@ -116,7 +116,7 @@ func (t *typedArrayData) fixedStorage() *arrayBufferData {
 
 // typedArrayIndex classifies a key against a typed array.
 func (r *Runtime) typedArrayIndex(o *Object, key Atom) numericIndex {
-	t, ok := o.data.(*typedArrayData)
+	t, ok := o.dataOf().(*typedArrayData)
 	if !ok {
 		return numericIndex{}
 	}
@@ -149,7 +149,7 @@ func (r *Runtime) typedArrayIndex(o *Object, key Atom) numericIndex {
 // could gain elements later, and so refuses to promise it will not. A growable
 // shared buffer only grows, so a view of a fixed length over one keeps it.
 func canPreventExtensions(o *Object) bool {
-	t, ok := o.data.(*typedArrayData)
+	t, ok := o.dataOf().(*typedArrayData)
 	if !ok || o.class != ClassTypedArray {
 		return true
 	}
@@ -159,7 +159,7 @@ func canPreventExtensions(o *Object) bool {
 
 // typedArrayImmutable reports whether a typed array views an immutable buffer.
 func typedArrayImmutable(o *Object) bool {
-	t, ok := o.data.(*typedArrayData)
+	t, ok := o.dataOf().(*typedArrayData)
 	return ok && t.storage().immutable
 }
 
@@ -205,7 +205,7 @@ func (r *Runtime) typedArrayDefine(o *Object, ix numericIndex, d *propDesc) (boo
 		// property cannot be added.
 		return false, nil
 	}
-	t := o.data.(*typedArrayData)
+	t := o.dataOf().(*typedArrayData)
 	if t.storage().immutable {
 		// An element of an immutable buffer is a non-writable,
 		// non-configurable property, so a define succeeds only by asking for

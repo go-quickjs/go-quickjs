@@ -234,7 +234,7 @@ func init() {
 						c.throw(err)
 					}
 					if target.IsObject() {
-						target.Object().elems = append(target.Object().elems, vals...)
+						target.Object().extOf().elems = append(target.Object().elemsOf(), vals...)
 					}
 				}
 			})
@@ -312,7 +312,7 @@ func init() {
 				v := val(c)
 				if arr := c.stack[at]; arr.IsObject() {
 					o := arr.Object()
-					o.elems = append(o.elems, v)
+					o.extOf().elems = append(o.elemsOf(), v)
 				}
 			})
 		case bytecode.OpConcat:
@@ -370,7 +370,7 @@ func init() {
 			b.push(func(c *tctx) Value {
 				var args []Value
 				if a := c.stack[d-1]; a.IsObject() {
-					args = a.Object().elems
+					args = a.Object().elemsOf()
 				}
 				c.at(pc)
 				var v Value
@@ -404,7 +404,7 @@ func init() {
 				var args []Value
 				if spread {
 					if a := c.stack[d-1]; a.IsObject() {
-						args = a.Object().elems
+						args = a.Object().elemsOf()
 					}
 				} else {
 					args = append([]Value(nil), c.stack[d-n:d]...)

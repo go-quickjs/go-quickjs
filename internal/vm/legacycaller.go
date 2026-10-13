@@ -160,7 +160,7 @@ func (r *Runtime) legacyArguments(o *Object) Value {
 		}
 	}
 	a := newObject(r.proto.object, ClassArguments)
-	a.elems = args
+	a.extOf().elems = args
 	a.setOwnRaw(atomLength, Int(len(args)), propWritable|propConfigurable)
 	a.setOwnRaw(atomCallee, Obj(o), propWritable|propConfigurable)
 	a.setOwnRaw(r.atoms.internSymbol(r.wellKnown.iterator), Obj(r.arrayValuesFn), propWritable|propConfigurable)

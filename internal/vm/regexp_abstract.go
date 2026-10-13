@@ -166,7 +166,7 @@ func (r *Runtime) regExpSymbolMatch(rx Value, args []Value) (Value, error) {
 		if len(spans) == 0 {
 			return Null, nil
 		}
-		width := 2 * (rx.Object().data.(*regexpData).re.GroupCount() + 1)
+		width := 2 * (rx.Object().dataOf().(*regexpData).re.GroupCount() + 1)
 		out = make([]Value, 0, len(spans)/width)
 		for i := 0; i < len(spans); i += width {
 			out = append(out, Str(s.Substring(spans[i], spans[i+1])))
@@ -271,7 +271,7 @@ func (r *Runtime) regExpSymbolSplit(rx Value, args []Value) (Value, error) {
 			}
 			// The copy would have been the realm's RegExp's, whose matches
 			// are the legacy statics' whatever rx's are.
-			d := regexpData{re: rx.Object().data.(*regexpData).re, legacy: true, realm: r.Realm}
+			d := regexpData{re: rx.Object().dataOf().(*regexpData).re, legacy: true, realm: r.Realm}
 			return r.splitBuiltin(rx, &d, s, s.codeUnits(), limit,
 				fl&(regexp.FlagUnicode|regexp.FlagUnicodeSets) != 0)
 		}
@@ -322,7 +322,7 @@ func (r *Runtime) regExpSymbolSplit(rx Value, args []Value) (Value, error) {
 	// units, which for text that is all ASCII shares the bytes.
 	piece := func(lo, hi int) Value { return Str(s.Substring(lo, hi)) }
 	if r.builtinExec(splitter) {
-		return r.splitBuiltin(splitter, splitter.Object().data.(*regexpData), s, units, limit, fullUnicode)
+		return r.splitBuiltin(splitter, splitter.Object().dataOf().(*regexpData), s, units, limit, fullUnicode)
 	}
 	p, q := 0, 0
 	for q < size {
@@ -545,7 +545,7 @@ func (r *Runtime) regExpReplace(rx Value, args []Value, fl regexp.Flags, direct 
 	count := len(results)
 	width := 0
 	if fast {
-		width = 2 * (rx.Object().data.(*regexpData).re.GroupCount() + 1)
+		width = 2 * (rx.Object().dataOf().(*regexpData).re.GroupCount() + 1)
 		count = len(spans) / width
 	}
 	// Nothing matched: the result is the subject, whole, which is the string
@@ -856,7 +856,7 @@ func (r *Runtime) regExpSymbolMatchAll(rx Value, args []Value) (Value, error) {
 // matchAll be used on a long string without materializing every result.
 func (r *Runtime) newRegExpStringIterator(matcher Value, s *String, global, fullUnicode bool) Value {
 	iter := newObject(r.proto.regexpStringIter, ClassIterator)
-	iter.data = &regExpStringIterData{
+	iter.extOf().data = &regExpStringIterData{
 		matcher: matcher, s: s, units: s.codeUnits(),
 		global: global, fullUnicode: fullUnicode,
 	}
@@ -880,7 +880,7 @@ func (r *Runtime) initRegExpStringIteratorProto() {
 	r.defMethod(p, "next", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		var d *regExpStringIterData
 		if this.IsObject() {
-			d, _ = this.Object().data.(*regExpStringIterData)
+			d, _ = this.Object().dataOf().(*regExpStringIterData)
 		}
 		if d == nil {
 			return Undefined, rt.throwTypeError(

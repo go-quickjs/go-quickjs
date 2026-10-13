@@ -213,7 +213,7 @@ func (r *Runtime) initIntrinsics() {
 
 	// Function.prototype is itself callable and returns undefined.
 	r.proto.function = newObject(r.proto.object, ClassFunction)
-	r.proto.function.data = &funcData{
+	r.proto.function.extOf().data = &funcData{
 		name:  "",
 		realm: r.Realm,
 		native: func(*Runtime, Value, []Value) (Value, error) {
@@ -239,11 +239,11 @@ func (r *Runtime) initIntrinsics() {
 
 	r.proto.array = newObject(r.proto.object, ClassArray)
 	r.proto.str = newObject(r.proto.object, ClassStringWrapper)
-	r.proto.str.data = emptyString
+	r.proto.str.extOf().data = emptyString
 	r.proto.number = newObject(r.proto.object, ClassNumberWrapper)
-	r.proto.number.data = float64(0)
+	r.proto.number.extOf().data = float64(0)
 	r.proto.boolean = newObject(r.proto.object, ClassBooleanWrapper)
-	r.proto.boolean.data = false
+	r.proto.boolean.extOf().data = false
 	r.proto.symbol = newObject(r.proto.object, ClassObject)
 	r.proto.bigint = newObject(r.proto.object, ClassObject)
 	r.proto.iterator = newObject(r.proto.object, ClassObject)
@@ -286,10 +286,12 @@ func (r *Runtime) newNativeFuncPair(len1, len2 int, fn1, fn2 NativeFunc) (*Objec
 	pair := new(struct{ a, b funcObject })
 	proto := r.proto.function
 	pair.a.Object = Object{proto: proto, class: ClassFunction, flags: objExtensible}
-	pair.a.Object.data = &pair.a.fn
+	pair.a.embedExt(&pair.a.side)
+	pair.a.side.data = &pair.a.fn
 	pair.a.fn = funcData{native: fn1, length: len1, ctorKind: ctorNone, realm: r.Realm}
 	pair.b.Object = Object{proto: proto, class: ClassFunction, flags: objExtensible}
-	pair.b.Object.data = &pair.b.fn
+	pair.b.embedExt(&pair.b.side)
+	pair.b.side.data = &pair.b.fn
 	pair.b.fn = funcData{native: fn2, length: len2, ctorKind: ctorNone, realm: r.Realm}
 	return &pair.a.Object, &pair.b.Object
 }

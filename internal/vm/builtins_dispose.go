@@ -311,13 +311,13 @@ func (r *Runtime) initDisposableStack(async bool) {
 			return Undefined, err
 		}
 		o := newObject(p, ClassObject)
-		o.data = &disposableStackData{async: async, cap: &disposeCapability{}}
+		o.extOf().data = &disposableStackData{async: async, cap: &disposeCapability{}}
 		return Obj(o), nil
 	})
 
 	stackOf := func(rt *Runtime, this Value, method string) (*disposableStackData, error) {
 		if this.IsObject() {
-			if d, ok := this.Object().data.(*disposableStackData); ok && d.async == async {
+			if d, ok := this.Object().dataOf().(*disposableStackData); ok && d.async == async {
 				return d, nil
 			}
 		}
@@ -447,7 +447,7 @@ func (r *Runtime) initDisposableStack(async bool) {
 			return Undefined, err
 		}
 		o := newObject(proto, ClassObject)
-		o.data = &disposableStackData{async: async, cap: d.cap}
+		o.extOf().data = &disposableStackData{async: async, cap: d.cap}
 		d.cap = &disposeCapability{}
 		d.disposed = true
 		return Obj(o), nil
