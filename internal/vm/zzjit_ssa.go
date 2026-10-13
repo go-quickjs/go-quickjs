@@ -1024,12 +1024,12 @@ func (e *jitEntry) reoptPending() bool {
 // reoptDue reports whether e's code is to be compiled again now: for a
 // speculation that failed, or one that leaves too often, at once; for
 // what it has learned to make natively -- calls to inline or call, shapes
-// met, a callee that inlines more -- once the code has run
-// jitReoptBudget stretches since it was compiled, as V8 optimizes again
-// once a function has spent its budget again: what is learned meanwhile
-// is compiled for together, not each in a compile of its own. RayTrace
-// with construction on compiled its functions some 100 times in three
-// runs, a quarter of its time.
+// met, a callee that inlines more -- once the code has run its ticks
+// since it was compiled (reoptDueNow), as V8 optimizes again once a
+// function has spent its budget again: what is learned meanwhile is
+// compiled for together, not each in a compile of its own. RayTrace with
+// construction on compiled its functions some 100 times in three runs, a
+// quarter of its time.
 func (e *jitEntry) reoptDue() bool {
 	// Nothing pending, the usual answer, asked in line: a call of Go asks
 	// at every call.
@@ -1047,29 +1047,56 @@ func (e *jitEntry) reoptDueNow() bool {
 	if e.feedReopt && (e.starts+e.link.in > e.feedStarts || e.ssaStats.work-e.feedWork >= uint64(e.reoptBudget)*jitReoptPer*jitReoptWork) {
 		return true
 	}
-	budget := uint64(e.reoptBudget)
-	if e.polyReopt && !e.inlineReopt && !e.upgradeReopt {
-		// Shapes alone, met since: each compile for them waits twice as
-		// long as the last, so that a function's reads meeting a
-		// program's classes one by one -- Typescript's compiler walking
-		// its syntax trees -- cost compiles in proportion to what it runs,
-		// not one at each, as they had, thirteen and more; while one whose
-		// reads meet a few, as DeltaBlue's constraints' do, is compiled
-		// for them as soon.
-		budget <<= min(e.polyReopts, 20)
+	if !e.reoptPending() {
+		return false
 	}
-	return e.reoptPending() && (e.ssaStats.entries+e.ssaStats.hosts+e.ssaStats.goCalls+e.link.in+uint64(e.slowTries) >= budget ||
-		e.ssaStats.work >= budget*jitReoptPer*jitReoptWork)
+	if e.eager {
+		// Compiled at its first call (jitCallThreshold), as tests and
+		// stress do to reach every path soon: compiled again as soon,
+		// once its stretches or its work reach its budget.
+		st := &e.ssaStats
+		return st.entries+st.hosts+st.goCalls+e.link.in+uint64(e.slowTries) >= uint64(e.reoptBudget) ||
+			st.work >= uint64(e.reoptBudget)*jitReoptPer*jitReoptWork
+	}
+	// What it learned -- calls to inline, a callee that inlines more,
+	// shapes -- once it has run its ticks since it was compiled, as V8
+	// optimizes a function again only once its lower tiers have spent its
+	// budget again: a tick each jitTickExits times Go does work for the
+	// code -- an exit to Go, a call of Go, an invocation finished in the
+	// interpreter, a try to enter code Go does not -- not the code's own
+	// work, which optimizing again does not save; more ticks the larger
+	// the function is, which costs more to compile, and twice as many for
+	// each compile for what it learned before. A function learning for as
+	// long as it runs -- Typescript's compiler's, walking its syntax trees
+	// -- is compiled for it a number of times logarithmic in the work Go
+	// does for it; a small one, as EarleyBoyer's and Richards' are, after
+	// a few dozen of its exits. The budget had been the same for each
+	// compile and counted native entries and calls too: Typescript
+	// compiled its functions again some thousand times, three quarters
+	// of its time.
+	st := &e.ssaStats
+	ticks := (st.hosts + st.goCalls + st.ended + uint64(e.slowTries)) / jitTickExits
+	learned := uint(e.inlineReopts) + uint(e.upgradeReopts) + uint(e.polyReopts)
+	return ticks >= uint64(jitLearnTicks+int(e.instrs)/jitTickInstrs)<<min(learned, 24)
 }
 
-// jitReoptBudget is how many native stretches -- entries from Go, exits to
-// it, native calls in -- code runs before it is compiled again for what it
-// has learned (reoptDue), for each jitReoptPer instructions of its
-// function, as V8's budget grows with a function's bytecode: a small
-// function learns its callees' calls soon, a large one, which costs more
-// to compile, waits for more.
-// Or the work the code has done, in instructions (jitSSAProfit), reaches
-// jitReoptWork times its function's: a loop that runs long, entered once.
+// jitLearnTicks is how many ticks (reoptDueNow) code runs before it is
+// compiled again for what it learned, jitTickInstrs how many of its
+// function's instructions make one more, and jitTickExits how many times
+// Go does work for it make a tick.
+const (
+	jitLearnTicks = 3
+	jitTickInstrs = 50
+	jitTickExits  = 8
+)
+
+// jitReoptBudget is the least and jitReoptPer the instructions of its
+// function for each, of the budget that code compiled before a site it ran
+// had feedback runs before it is compiled again for it, when it has not
+// been invoked again (feedReopt): work, in instructions (jitSSAProfit),
+// jitReoptWork times the budget's -- a loop that runs long, entered once.
+// Eager code (jitEntry.eager) is compiled again for what it learned once
+// its native stretches reach the budget, or its work.
 const (
 	jitReoptBudget = 8
 	jitReoptPer    = 4
@@ -4053,6 +4080,7 @@ func (e *jitEntry) setSSA(s *jitState, fn *bytecode.Function, p *ir.Program, cod
 	e.ssaProg = p
 	e.ssaInlinedAt, e.definesUnfed, e.ssaCells = fb.inlinedAt, fb.definesUnfed, fb.cells
 	e.reoptBudget = uint32(max(jitReoptBudget, len(fn.Code)/jitReoptPer))
+	e.instrs = uint32(len(fn.Code))
 	e.ssaStrings, e.ssaInlined, e.ssaPools = fb.strings, fb.inlined, fb.pools
 	s.setLinks(e, fb.links)
 	e.ssaKeeps = max(e.ssaKeeps, fb.keeps)

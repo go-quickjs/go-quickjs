@@ -6067,11 +6067,13 @@ func TestJITSSACallSeenWhileCalleeLeaves(t *testing.T) {
 }
 
 // A function whose reads meet new shapes for as long as it runs, one read
-// after another, is compiled again for them less and less often: each
-// compile for shapes alone waits twice as long as the last (reoptDueNow),
-// so that it is compiled some ten times, not at each read's new shapes,
-// as Typescript's compiler's functions walking its syntax trees had been,
-// thirteen and more. Its answers are the interpreter's.
+// after another, is compiled again for them less and less often, at the
+// thresholds a runtime has unless it compiles eagerly: each compile for
+// what it learned waits for twice the work Go did for it before the last
+// (reoptDueNow), so that it is compiled some log2 of Go's work times, not
+// at each read's new shapes, as Typescript's compiler's functions walking
+// its syntax trees had been, thirteen and more. Its answers are the
+// interpreter's.
 func TestJITSSAPolymorphicReadsBackOff(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -6093,17 +6095,37 @@ func TestJITSSAPolymorphicReadsBackOff(t *testing.T) {
 	}
 	b.WriteString(") | 0; return t }\n")
 	// A phase gives one read a shape it has not met, then runs.
-	var rounds []string
-	for phase := 0; phase < sites*(kinds-1); phase++ {
-		j := phase % sites
-		rounds = append(rounds, fmt.Sprintf("(objs[%d] = new C%d(), sum(40))", j, j*kinds+1+phase/sites))
-		for i := 0; i < 8; i++ {
-			rounds = append(rounds, "sum(40)")
+	b.WriteString(`function phase(j, k) { objs[j] = new globalThis["C" + k](); let t = 0; for (let i = 0; i < 30; i++) t = (t + sum(40)) | 0; return t }`)
+	want := New(Config{})
+	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
+	r := New(Config{JIT: true})
+	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	if r.jitCallThreshold <= 1 {
+		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
+	}
+	for _, rt := range []*Runtime{want, r} {
+		if _, err := rt.Run(compileForTest(t, b.String())); err != nil {
+			t.Fatal(err)
 		}
 	}
-	r := jitAgreesForTest(t, b.String(), rounds...)
+	for phase := 0; phase < sites*(kinds-1); phase++ {
+		src := fmt.Sprintf("''+phase(%d, %d)", phase%sites, phase%sites*kinds+1+phase/sites)
+		wv, err := want.Run(compileForTest(t, src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		gv, err := r.Run(compileForTest(t, src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := gv.String().Go(), wv.String().Go(); got != want {
+			t.Fatalf("phase %d: got %s, interpreter %s", phase, got, want)
+		}
+	}
 	e := jitNativeForTest(t, r, "sum")
-	if e.polyReopts == 0 || e.polyReopts > 10 {
+	// Compiled for its shapes at each phase, it would be 36 times; in
+	// proportion to the work Go did for it, some log2 of its exits.
+	if e.polyReopts == 0 || e.polyReopts > sites*(kinds-1)/3 {
 		t.Errorf("compiled again %d times for %d phases of new shapes", e.polyReopts, sites*(kinds-1))
 	}
 }
@@ -10281,44 +10303,52 @@ func TestJITSSAInlinedNestedForwardingConstructions(t *testing.T) {
 }
 
 // What code learns to make natively -- calls, shapes, a callee that
-// inlines more -- it is compiled again for once it has run its budget
-// (reoptDue), as V8 optimizes again once a function spends its budget, so
-// that what it learns meanwhile is compiled for together: native
-// stretches, more for a larger function, or the instructions a long loop
-// runs. A speculation that failed, or code that leaves too often, is
+// inlines more -- it is compiled again for once Go has done work for it
+// (reoptDue), as V8 optimizes again once its lower tiers have spent a
+// function's budget: its exits, its calls of Go, its invocations finished
+// in the interpreter and the tries to enter it Go declined, jitTickExits
+// for each of jitLearnTicks ticks, one more tick for each jitTickInstrs
+// instructions of its function, and twice as many for each compile for
+// what it learned before. Its own work, entries and native calls do not
+// count. A speculation that failed, or code that leaves too often, is
 // compiled again at once.
 func TestJITReoptDue(t *testing.T) {
-	e := &jitEntry{reoptBudget: 25, link: &jitLink{}}
+	e := &jitEntry{instrs: 2 * jitTickInstrs, link: &jitLink{}}
+	need := uint64((jitLearnTicks + 2) * jitTickExits)
 	if e.reoptDue() {
 		t.Fatal("due with nothing to compile again for")
 	}
 	e.inlineReopt = true
-	e.ssaStats.entries, e.ssaStats.hosts, e.link.in = 10, 10, 4
+	e.ssaStats.entries, e.ssaStats.work, e.link.in = 1000, 1<<20, 1000
 	if e.reoptDue() {
-		t.Fatal("due after 24 stretches of 25")
+		t.Fatal("due for its own work")
 	}
-	e.link.in++
-	if !e.reoptDue() {
-		t.Fatal("not due after 25 stretches")
-	}
-	e.ssaStats.entries, e.ssaStats.hosts, e.link.in = 1, 0, 0
-	e.ssaStats.work = 25*jitReoptPer*jitReoptWork - 1
+	e.ssaStats.hosts, e.ssaStats.goCalls, e.ssaStats.ended = 10, 10, 10
+	e.slowTries = uint32(need - 31)
 	if e.reoptDue() {
-		t.Fatal("due before its work")
+		t.Fatalf("due after %d of %d", need-1, need)
 	}
-	e.ssaStats.work++
+	e.slowTries++
 	if !e.reoptDue() {
-		t.Fatal("not due after its work")
+		t.Fatalf("not due after %d", need)
+	}
+	e.inlineReopts = 1
+	if e.reoptDue() {
+		t.Fatalf("due after %d of %d, compiled for what it learned once", need, 2*need)
+	}
+	e.ssaStats.hosts += need
+	if !e.reoptDue() {
+		t.Fatalf("not due after %d, compiled for what it learned once", 2*need)
 	}
 	for _, f := range []func(*jitEntry){func(e *jitEntry) { e.reopt = true }, func(e *jitEntry) { e.unwindReopt = true }} {
-		e := &jitEntry{reoptBudget: 25, link: &jitLink{}}
+		e := &jitEntry{instrs: 100, link: &jitLink{}}
 		f(e)
 		if !e.reoptDue() {
 			t.Fatalf("not due at once: %+v", e)
 		}
 	}
 	for _, f := range []func(*jitEntry){func(e *jitEntry) { e.polyReopt = true }, func(e *jitEntry) { e.upgradeReopt = true }} {
-		e := &jitEntry{reoptBudget: 25, link: &jitLink{}}
+		e := &jitEntry{instrs: 100, link: &jitLink{}}
 		f(e)
 		if e.reoptDue() {
 			t.Fatalf("due at once: %+v", e)

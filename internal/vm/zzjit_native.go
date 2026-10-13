@@ -228,8 +228,16 @@ type jitEntry struct {
 	// the callee's leaving (jitCallSeen).
 	ssaInlinedAt []int32
 	// reoptBudget is how many native stretches the code runs before it is
-	// compiled again for what it has learned (reoptDue).
+	// compiled again for feedback a site it ran lacked (feedReopt).
 	reoptBudget uint32
+	// instrs is its function's length, which sets how long the code runs
+	// before it is compiled again for what it learned (reoptDueNow).
+	instrs uint32
+	// eager marks the entry of a runtime that compiles a function at its
+	// first call (jitCallThreshold), as tests and QJS_JIT_STRESS do to
+	// reach every path soon: what its code learns it is compiled again
+	// for as soon, rather than once Go has done its work (reoptDueNow).
+	eager bool
 	// feedReopt marks code compiled before a site it has run since had any
 	// feedback: compiled again at its next invocation (calls, by Go or
 	// native callers), or once the invocation it ran in has done
@@ -252,7 +260,7 @@ type jitEntry struct {
 	// compiled again for (jitPolySeen); polyReopt marks that it is to be,
 	// polyPending that it is to be once polySettled exits in a row have
 	// found no other (jitPolySettle), and polyReopts counts the times it
-	// was (reoptDueNow).
+	// was.
 	poly        []jitPolySite
 	polyReopt   bool
 	polyPending bool
@@ -339,8 +347,9 @@ type jitEntry struct {
 	ssaCallee bool
 	// slowTries counts the existing tiers' tries to enter code Go no
 	// longer enters (entrySlow) that has learned what to be compiled again
-	// for (reoptPending): its budget (reoptDue), which nothing native
-	// spends any more, as V8's interpreter spends a function's.
+	// for (reoptPending), a try at a loop jitTickExits: its budget
+	// (reoptDue), which nothing native spends any more, as V8's interpreter
+	// spends a function's.
 	slowTries uint32
 	// entrySlow marks code Go no longer enters (jitSSAProfit), and this
 	// code that reads its receiver.
@@ -1379,7 +1388,7 @@ func (r *Runtime) jitForFunction(fn *bytecode.Function, cl *closure) *jitEntry {
 		return nil
 	}
 	s.serial++
-	e := &jitEntry{used: s.epoch(), serial: s.serial}
+	e := &jitEntry{used: s.epoch(), serial: s.serial, eager: r.jitCallThreshold <= 1}
 	s.linkFor(fn, e)
 	p, err := r.jitLower(fn, jitLowerSSA)
 	if err != nil {
@@ -1567,7 +1576,12 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr bool) (Value, error, boo
 			e.inlinePending, e.inlineReopt = false, true
 		}
 		if e.entrySlow && e.reoptPending() {
+			// At a loop, the existing tiers have run a budget of its back
+			// edges: a tick of its own (reoptDueNow).
 			e.slowTries++
+			if osr {
+				e.slowTries += jitTickExits - 1
+			}
 		}
 		if !osr {
 			e.starts++
