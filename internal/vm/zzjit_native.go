@@ -1044,7 +1044,7 @@ func (s *jitState) reclaim(x *jitVictim, now uint64) bool {
 			return false
 		}
 		if holds {
-			s.ghost(e.fnAddr)
+			s.ghost(e.fnAddr, e)
 		}
 		if l := s.lowered[x.key]; l != nil {
 			if k := s.links[x.key]; k == nil || k.owner == nil {
@@ -1067,18 +1067,28 @@ func (s *jitState) reclaim(x *jitVictim, now uint64) bool {
 type jitGhost struct {
 	evictions uint8
 	asks      uint32
+	// What the code had learned that is a function's alone, by its PCs
+	// -- the guards that failed, the entries whose speculation did, the
+	// element reads of typed arrays -- which the next entry starts from,
+	// as V8's feedback outlives the code optimized from it: learned
+	// again, from exits, by each entry the cache dropped and compiled
+	// again, Mandreel's heap reads left native code millions of times.
+	failed        []int32
+	failedEntries []uint32
+	typedReads    []int32
 }
 
 // jitGhosts bounds the ghosts kept; past it they are forgotten.
 const jitGhosts = 1 << 14
 
 // ghost notes that the cache dropped the code of the function at addr.
-func (s *jitState) ghost(addr uintptr) {
+func (s *jitState) ghost(addr uintptr, e *jitEntry) {
 	if s.ghosts == nil || len(s.ghosts) >= jitGhosts {
 		s.ghosts = map[uintptr]jitGhost{}
 	}
 	g := s.ghosts[addr]
 	g.evictions, g.asks = min(g.evictions+1, 16), 0
+	g.failed, g.failedEntries, g.typedReads = e.failed, e.failedEntries, e.typedReads
 	s.ghosts[addr] = g
 }
 
@@ -1526,6 +1536,10 @@ func (r *Runtime) jitForFunction(fn *bytecode.Function, cl *closure) *jitEntry {
 	}
 	s.serial++
 	e := &jitEntry{used: s.epoch(), serial: s.serial, eager: r.jitCallThreshold <= 1}
+	if g, ok := s.ghosts[uintptr(unsafe.Pointer(fn))]; ok {
+		// What its code dropped before had learned (jitGhost).
+		e.failed, e.failedEntries, e.typedReads = g.failed, g.failedEntries, g.typedReads
+	}
 	s.linkFor(fn, e)
 	p, err := r.jitLower(fn, jitLowerSSA)
 	if err != nil {
