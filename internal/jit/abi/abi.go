@@ -259,8 +259,8 @@ const MaxGoArgs = 16
 // Go puts in the context once it has written the frame -- the frame as an
 // exit's code would have written it, records and all.
 type ExitDescriptor struct {
-	Kind, PC, Depth uint64
-	Site            int64
+	Kind, PC, Depth uint32
+	Site            int32
 	Slots           []ExitSlot
 	// Inline are the inlined callees' frames, the outermost first, each in
 	// a context of its own past the code's.
@@ -276,21 +276,21 @@ type ExitDescriptor struct {
 	// none takes a reference from another it writes, by its origin or a
 	// source that may be one's address.
 	Direct bool
+	// Words are the constant words its slots' values are (ExitConst).
+	Words []uint64
 }
 
 // ExitSlot is a slot an exit writes: its value's number word, from Value;
 // and its pointer word -- from Shadow, the source the value's reference
 // was read from, if it has one; from slot Origin's as the code was entered,
 // if that held the reference (Load: the value is that slot's load, so its
-// word need not match); none otherwise.
+// word need not match); none otherwise. Where a slot is, the description's
+// layout says. It is 28 bytes: a function's descriptions had been as much
+// as its code, at 64 a slot, the addresses of Slot and Origin among them.
 type ExitSlot struct {
-	Slot   int32
-	Origin int32
-	Load   bool
-	// At and OriginAt are where slots Slot and Origin are.
-	At, OriginAt ExitAddr
-	Value        ExitLoc
-	Shadow       ExitLoc
+	Slot, Origin  int32
+	Value, Shadow ExitLoc
+	Load          bool
 }
 
 // ExitAddr is where a slot is: Off bytes into the locals or the operands,
@@ -309,12 +309,12 @@ const (
 )
 
 // ExitLoc is where an exit finds a word: in a register or a spill slot as
-// it is, or boxed from a float or a boolean there; a constant; a slot's
-// address; or none (ExitNone).
+// it is, or boxed from a float or a boolean there; a constant, the
+// description's word N (Words), or 0 for an N below 0; a slot's address;
+// or none (ExitNone).
 type ExitLoc struct {
-	Kind uint8
 	N    int32
-	Word uint64
+	Kind uint8
 }
 
 // ExitLoc's kinds.

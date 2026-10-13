@@ -142,7 +142,7 @@ func footprint(code, entries int, exits []*abi.ExitDescriptor) int {
 	n := code + int(unsafe.Sizeof(SSACode{})) + entries*4 + cap(exits)*8
 	for _, x := range exits {
 		n += int(unsafe.Sizeof(*x)) + cap(x.Slots)*int(unsafe.Sizeof(abi.ExitSlot{})) +
-			cap(x.Inline)*int(unsafe.Sizeof(abi.ExitInline{}))
+			cap(x.Inline)*int(unsafe.Sizeof(abi.ExitInline{})) + cap(x.Words)*8
 	}
 	return n
 }

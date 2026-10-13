@@ -54,7 +54,7 @@ type core struct {
 	// saves[saveAt[2*ID]:saveAt[2*ID+1]] (savesOf), nil saveAt for none.
 	saves  []saved
 	saveAt []int
-	// exitEnc, exitDescs and exitSlots are what exitDescriptor's
+	// exitEnc, exitDescs, exitSlots and exitWords are what exitDescriptor's
 	// descriptions are made from, a compile's encoding shared and the
 	// rest carved from blocks, as the code keeps them all as long: each
 	// block twice the last, up to a limit, so a small function takes
@@ -62,6 +62,7 @@ type core struct {
 	exitEnc   *abi.Encoding
 	exitDescs []abi.ExitDescriptor
 	exitSlots []abi.ExitSlot
+	exitWords []uint64
 }
 
 // saved is a register a call saves, and the spill slot it saves it in.
@@ -1208,37 +1209,48 @@ func (c *core) exitDescriptor(s *ssa.FrameState, kind uint64, localsReg, stackRe
 		enc := c.enc
 		c.exitEnc = &enc
 	}
-	d := abi.ExitDescriptor{Kind: kind, PC: uint64(s.PC), Depth: uint64(s.Depth), Site: int64(s.Site),
+	d := abi.ExitDescriptor{Kind: uint32(kind), PC: uint32(s.PC), Depth: uint32(s.Depth), Site: int32(s.Site),
 		FrameLocals: int32(c.f.FrameLocals), ThisSlot: int32(c.f.ThisSlot), Locals: int32(c.f.Locals),
 		LocalsReg: localsReg, StackReg: stackReg, Enc: c.exitEnc}
 	written := func(i int, v *ssa.Value) bool {
 		return v != nil && (v.Op != ssa.OpLoadSlot || v.Aux != i) && !c.captured(i)
 	}
-	n := 0
+	n, words := 0, 0
 	for i, v := range s.Slots {
 		if written(i, v) {
 			n++
+			if v.Op == ssa.OpConst {
+				words++
+			}
 		}
 	}
 	if cap(c.exitSlots)-len(c.exitSlots) < n {
 		c.exitSlots = make([]abi.ExitSlot, 0, max(n, min(2*cap(c.exitSlots), 256), 16))
 	}
 	d.Slots = c.exitSlots[len(c.exitSlots) : len(c.exitSlots) : len(c.exitSlots)+n]
+	if cap(c.exitWords)-len(c.exitWords) < words {
+		c.exitWords = make([]uint64, 0, max(words, min(2*cap(c.exitWords), 256), 16))
+	}
+	d.Words = c.exitWords[len(c.exitWords) : len(c.exitWords) : len(c.exitWords)+words]
 	for i, v := range s.Slots {
 		if !written(i, v) {
 			continue
 		}
-		e := abi.ExitSlot{Slot: int32(i), Origin: -1, At: c.exitAddr(i)}
+		e := abi.ExitSlot{Slot: int32(i), Origin: -1}
 		var ok bool
 		if e.Value, ok = c.exitValue(v); !ok {
 			return nil
+		}
+		if e.Value.Kind == abi.ExitConst {
+			e.Value.N = int32(len(d.Words))
+			d.Words = append(d.Words, c.constWord(v.Const))
 		}
 		if v.Shadow != nil {
 			if e.Shadow, ok = c.exitSource(v.Shadow); !ok {
 				return nil
 			}
 		} else if o, has := c.origin.Of(v); has && o >= 0 {
-			e.Origin, e.Load, e.OriginAt = int32(o), v.Op == ssa.OpLoadSlot, c.exitAddr(o)
+			e.Origin, e.Load = int32(o), v.Op == ssa.OpLoadSlot
 		}
 		d.Slots = append(d.Slots, e)
 	}
@@ -1265,28 +1277,15 @@ func (c *core) exitDescriptor(s *ssa.FrameState, kind uint64, localsReg, stackRe
 				ThisSlot: uint64(in.ThisSlot + 1), Kind: k, PC: uint64(in.PC), Depth: uint64(in.Depth),
 				Site: int64(in.Site), Base: int64(in.Base)})
 		}
-		d.Kind = abi.ExitHost
+		d.Kind = uint32(abi.ExitHost)
 	}
 	c.exitSlots = c.exitSlots[:len(c.exitSlots)+n]
+	c.exitWords = c.exitWords[:len(c.exitWords)+words]
 	if len(c.exitDescs) == cap(c.exitDescs) {
 		c.exitDescs = make([]abi.ExitDescriptor, 0, max(min(2*cap(c.exitDescs), 32), 4))
 	}
 	c.exitDescs = append(c.exitDescs, d)
 	return &c.exitDescs[len(c.exitDescs)-1]
-}
-
-// exitAddr is where slot i is, as slotSource finds it.
-func (c *core) exitAddr(i int) abi.ExitAddr {
-	size := c.enc.ValueSize
-	switch {
-	case i < c.f.FrameLocals:
-		return abi.ExitAddr{Base: abi.ExitInLocals, Off: int32(i) * size}
-	case i == c.f.ThisSlot:
-		return abi.ExitAddr{Base: abi.ExitInThis}
-	case i < c.f.Locals:
-		return abi.ExitAddr{Base: abi.ExitInCell, Off: int32(i - c.f.FrameLocals)}
-	}
-	return abi.ExitAddr{Base: abi.ExitInStack, Off: int32(i-c.f.Locals) * size}
 }
 
 // exitValue is where an exit finds a tagged value's word: its register or
@@ -1304,7 +1303,8 @@ func (c *core) exitValue(v *ssa.Value) (abi.ExitLoc, bool) {
 	}
 	switch v.Op {
 	case ssa.OpConst:
-		return abi.ExitLoc{Kind: abi.ExitConst, Word: c.constWord(v.Const)}, true
+		// Its word is the description's (exitDescriptor).
+		return abi.ExitLoc{Kind: abi.ExitConst}, true
 	case ssa.OpBoxF64:
 		return at(v.Args[0], abi.ExitF64Reg, abi.ExitF64Spill)
 	case ssa.OpBoxBool:
@@ -1321,7 +1321,7 @@ func (c *core) exitValue(v *ssa.Value) (abi.ExitLoc, bool) {
 func (c *core) exitSource(s *ssa.Value) (abi.ExitLoc, bool) {
 	if s.Op == ssa.OpConstSource {
 		if s.Aux < 0 {
-			return abi.ExitLoc{Kind: abi.ExitConst}, true
+			return abi.ExitLoc{Kind: abi.ExitConst, N: -1}, true
 		}
 		return abi.ExitLoc{Kind: abi.ExitSlotAddr, N: int32(s.Aux)}, true
 	}

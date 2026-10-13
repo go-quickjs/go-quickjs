@@ -1232,7 +1232,8 @@ func TestCodeFootprint(t *testing.T) {
 		}
 		want := len(mc.Bytes)
 		for _, x := range mc.Exits {
-			want += int(unsafe.Sizeof(*x)) + len(x.Slots)*int(unsafe.Sizeof(abi.ExitSlot{})) + len(x.Inline)*int(unsafe.Sizeof(abi.ExitInline{}))
+			want += int(unsafe.Sizeof(*x)) + len(x.Slots)*int(unsafe.Sizeof(abi.ExitSlot{})) + len(x.Inline)*int(unsafe.Sizeof(abi.ExitInline{})) +
+				len(x.Words)*8
 		}
 		before := CodeFootprint(mc)
 		code, err := NewSSACode(arena, mc)

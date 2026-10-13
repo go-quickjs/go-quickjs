@@ -82,7 +82,7 @@ func (s *ExitScratch) Apply(ctx *abi.Context) (refs int) {
 		}
 	}
 	ctx.Records = 0
-	ctx.ExitKind, ctx.ExitPC, ctx.ExitDepth, ctx.ExitSite = d.Kind, d.PC, d.Depth, uint64(d.Site)
+	ctx.ExitKind, ctx.ExitPC, ctx.ExitDepth, ctx.ExitSite = uint64(d.Kind), uint64(d.PC), uint64(d.Depth), uint64(int64(d.Site))
 	return refs
 }
 
@@ -140,7 +140,10 @@ func (f *exitFrame) word(l abi.ExitLoc) uint64 {
 	case abi.ExitSpill:
 		return ctx.Spill[l.N]
 	case abi.ExitConst:
-		return l.Word
+		if l.N < 0 {
+			return 0
+		}
+		return f.d.Words[l.N]
 	case abi.ExitF64Reg, abi.ExitF64Spill:
 		bits := ctx.XRegs[l.N&31]
 		if l.Kind == abi.ExitF64Spill {
@@ -168,7 +171,7 @@ func (f *exitFrame) word(l abi.ExitLoc) uint64 {
 // value is where slot s is and what is written there -- its number and
 // pointer words -- or false where nothing is: it holds its value already.
 func (f *exitFrame) value(s *abi.ExitSlot) (at unsafe.Pointer, n uint64, r unsafe.Pointer, ok bool) {
-	at = f.addr(s.At)
+	at = f.slot(s.Slot)
 	w := f.word(s.Value)
 	n = w
 	switch {
@@ -187,7 +190,7 @@ func (f *exitFrame) value(s *abi.ExitSlot) (at unsafe.Pointer, n uint64, r unsaf
 		}
 	case s.Origin >= 0:
 		// The reference a slot held on entry, if it holds it still.
-		o := f.addr(s.OriginAt)
+		o := f.slot(s.Origin)
 		if p := f.ref(o); p != nil && (s.Load || w == f.num(o)) {
 			if s.Origin == s.Slot {
 				return nil, 0, nil, false
