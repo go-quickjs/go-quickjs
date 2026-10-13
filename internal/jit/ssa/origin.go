@@ -344,82 +344,230 @@ func storeChecksAt(f *Func, stores []*Value, live [][]*Value) {
 // phi, any of its arguments' -- and a keep's, while the collector marks,
 // its value's own (OpKeep). Elements, frame slots and the context's cells
 // are no property's, and a cell read through another key is another
-// property's. Answers are kept, by phi and key, in maps the Func's scratch
-// keeps from compile to compile.
+// property's.
 //
-// A phi round a loop is searched while it is being searched, and is taken
-// for no there; a no found so for another phi of the loop is kept only
-// once the search that started at the outermost has ended in no, when it
-// is one for every phi that search met (provisional). A yes then may be
-// one for them too, through the phi taken for no: theirs are dropped, and
-// asked again. They had been kept: asked first of a loop's body's phi, a
-// store's key was found to write its header's phi's, and asked of that
-// next, not -- a value read through it went unchecked at the store.
+// What a phi or a keep may be is the cells it reaches through phis and
+// keeps, which every query asks of the same way: so each has a summary of
+// them (aliasSum), made once, and a query of it is a look at that, not a
+// search. The summaries are found as Tarjan's algorithm finds a graph's
+// strongly connected components: the phis of a loop reach each other, and
+// have one summary, of every cell any of them reaches. A search for each
+// query, its answers kept by phi and key, had been most of a compile of a
+// function of many stores and loops: Typescript's compiler's took a quarter
+// of its time with the JIT, most of it in the maps the answers were kept
+// in.
 type aliases struct {
-	key, own, elem, call map[aliasKey]int
 	// assigned is the function's (Func's assigned).
 	assigned []bool
-	// depth is how many phis the search is in; provisional are the
-	// answers of no it kept meanwhile, by map.
-	depth       int
-	provisional []aliasNo
+	// sums are the summaries; of, by value ID, 1 plus the index of a phi's
+	// or a keep's, once found, or 0.
+	sums []aliasSum
+	of   []int32
+	// The search's state, by value ID: num is 1 plus the order a value was
+	// met in, while it is searched; low the least its search reached; and
+	// stack the values met whose components are not yet found.
+	num, low []int32
+	stack    []*Value
+	next     int32
 }
 
-// aliasNo is an answer of no kept in m, provisionally.
-type aliasNo struct {
-	m map[aliasKey]int
-	k aliasKey
+// aliasSum is what the cells a phi or a keep reaches through phis and keeps
+// are: all, a cell any store may write; any, one a store of anyKey -- a
+// call's -- may write, other than a call's result cell; anyCall, a call's
+// result cell; elem, an element's cell; keys, the keys of the cells only
+// stores of those keys write, sorted; calls, the IDs of the calls whose
+// result cells they are, sorted, or every call's if allCalls.
+type aliasSum struct {
+	all, any, anyCall, elem, allCalls bool
+	keys                              []uint32
+	calls                             []int32
 }
 
-// phi answers a query of a phi, s, for key, as its arguments do (arg),
-// keeping its answer in m: 1 while it is searched, round a loop; then 0
-// or 2, or none for a provisional no the search ended in yes for.
-func (a *aliases) phi(m map[aliasKey]int, s *Value, key uint32, arg func(*Value) bool) bool {
-	k := aliasKey{s, key}
-	if r, ok := m[k]; ok {
-		return r == 2
-	}
-	m[k] = 1
-	a.depth++
-	yes := slices.ContainsFunc(s.Args, arg)
-	a.depth--
-	if yes {
-		m[k] = 2
-	} else {
-		m[k] = 0
-		if a.depth != 0 {
-			a.provisional = append(a.provisional, aliasNo{m, k})
-		}
-	}
-	if a.depth == 0 {
-		if yes {
-			for _, n := range a.provisional {
-				delete(n.m, n.k)
-			}
-		}
-		clear(a.provisional)
-		a.provisional = a.provisional[:0]
-	}
-	return yes
-}
-
-type aliasKey struct {
-	v   *Value
-	key uint32
-}
+// aliasSetLimit bounds a summary's sets: past it, a summary says any key,
+// or any call, which only makes more checks and keeps.
+const aliasSetLimit = 64
 
 func newAliases(f *Func) *aliases {
 	a := &f.scr().aliases
-	if a.key == nil {
-		a.key, a.own, a.elem, a.call = map[aliasKey]int{}, map[aliasKey]int{}, map[aliasKey]int{}, map[aliasKey]int{}
+	for i := range a.sums {
+		a.sums[i].keys, a.sums[i].calls = a.sums[i].keys[:0], a.sums[i].calls[:0]
 	}
-	clear(a.key)
-	clear(a.own)
-	clear(a.elem)
-	clear(a.call)
-	a.depth, a.provisional = 0, a.provisional[:0]
+	a.sums = a.sums[:0]
+	a.of, a.num, a.low = a.grow(a.of, f.nextID), a.grow(a.num, f.nextID), a.grow(a.low, f.nextID)
+	clear(a.stack)
+	a.stack, a.next = a.stack[:0], 0
 	a.assigned = f.assigned
 	return a
+}
+
+// grow is s cleared, at least n long.
+func (a *aliases) grow(s []int32, n int) []int32 {
+	if cap(s) < n {
+		return make([]int32, n, n+n/2)
+	}
+	s = s[:n]
+	clear(s)
+	return s
+}
+
+// at makes the tables long enough for value ID id: values made since the
+// summaries began, keeps among them.
+func (a *aliases) at(id int) {
+	if id < len(a.of) {
+		return
+	}
+	n := max(id+1, 2*len(a.of))
+	for _, t := range []*[]int32{&a.of, &a.num, &a.low} {
+		*t = append(*t, make([]int32, n-len(*t))...)
+	}
+}
+
+// sum is the summary of a phi or a keep, s.
+func (a *aliases) sum(s *Value) *aliasSum {
+	a.at(s.ID)
+	if a.of[s.ID] == 0 {
+		a.search(s)
+	}
+	return &a.sums[a.of[s.ID]-1]
+}
+
+// edges are the phis and keeps s reaches in one step, and its leaves: a
+// phi's arguments, a keep's value's shadow.
+func aliasEdges(s *Value) []*Value {
+	if s.Op == OpKeep {
+		if x := s.Args[0]; x.Shadow != nil {
+			return []*Value{x.Shadow}
+		}
+		return nil
+	}
+	return s.Args
+}
+
+// search finds the summary of s's component, and those of the components
+// it reaches (Tarjan).
+func (a *aliases) search(s *Value) {
+	a.next++
+	a.num[s.ID], a.low[s.ID] = a.next, a.next
+	a.stack = append(a.stack, s)
+	for _, x := range aliasEdges(s) {
+		if x.Op != OpPhi && x.Op != OpKeep {
+			continue
+		}
+		a.at(x.ID)
+		switch {
+		case a.of[x.ID] != 0:
+		case a.num[x.ID] == 0:
+			a.search(x)
+			a.low[s.ID] = min(a.low[s.ID], a.low[x.ID])
+		default:
+			// On the stack: in s's component.
+			a.low[s.ID] = min(a.low[s.ID], a.num[x.ID])
+		}
+	}
+	if a.low[s.ID] != a.num[s.ID] {
+		return
+	}
+	// s is its component's first: the component is s and what is above it
+	// on the stack, and its summary is all their leaves' and the summaries
+	// of the components they reach.
+	at := len(a.stack) - 1
+	for a.stack[at] != s {
+		at--
+	}
+	if len(a.sums) < cap(a.sums) {
+		// The sets an earlier compile's summary here held, emptied.
+		a.sums = a.sums[:len(a.sums)+1]
+		old := &a.sums[len(a.sums)-1]
+		*old = aliasSum{keys: old.keys[:0], calls: old.calls[:0]}
+	} else {
+		a.sums = append(a.sums, aliasSum{})
+	}
+	n := int32(len(a.sums))
+	sum := &a.sums[n-1]
+	for _, v := range a.stack[at:] {
+		a.of[v.ID] = n
+	}
+	for _, v := range a.stack[at:] {
+		for _, x := range aliasEdges(v) {
+			if x.Op == OpPhi || x.Op == OpKeep {
+				if m := a.of[x.ID]; m != n {
+					a.merge(sum, &a.sums[m-1])
+				}
+				continue
+			}
+			a.leaf(sum, x)
+		}
+	}
+	slices.Sort(sum.keys)
+	sum.keys = slices.Compact(sum.keys)
+	slices.Sort(sum.calls)
+	sum.calls = slices.Compact(sum.calls)
+	a.limit(sum)
+	clear(a.stack[at:])
+	a.stack = a.stack[:at]
+}
+
+// leaf adds to sum a cell, x, that is neither a phi nor a keep: as may,
+// mayCall, mayOwnCell and mayElemCell answer of it.
+func (a *aliases) leaf(sum *aliasSum, x *Value) {
+	switch x.Op {
+	case OpPropCell, OpGlobalCell, OpLexCell, OpBindingCell, OpStringProp:
+		sum.any = true
+		sum.keys = append(sum.keys, x.Key)
+	case OpElemCell:
+		sum.any, sum.elem = true, true
+	case OpStringMethod, OpConstSource, OpConstCell:
+	case OpCallCell:
+		sum.anyCall = true
+		sum.calls = append(sum.calls, int32(x.Args[0].ID))
+	case OpUpvalueCell:
+		sum.any = true
+		sum.keys = append(sum.keys, upvalueKey)
+	case OpLocalCell:
+		sum.any = sum.any || x.Index < len(a.assigned) && a.assigned[x.Index]
+		sum.keys = append(sum.keys, localKey(x.Index))
+	default:
+		sum.all = true
+	}
+	if len(sum.keys) > 2*aliasSetLimit || len(sum.calls) > 2*aliasSetLimit {
+		a.limit(sum)
+	}
+}
+
+// merge adds the summary from to sum.
+func (a *aliases) merge(sum, from *aliasSum) {
+	sum.all, sum.any, sum.anyCall = sum.all || from.all, sum.any || from.any, sum.anyCall || from.anyCall
+	sum.elem, sum.allCalls = sum.elem || from.elem, sum.allCalls || from.allCalls
+	sum.keys = append(sum.keys, from.keys...)
+	sum.calls = append(sum.calls, from.calls...)
+	if len(sum.keys) > 2*aliasSetLimit || len(sum.calls) > 2*aliasSetLimit {
+		a.limit(sum)
+	}
+}
+
+// limit keeps sum's sets within aliasSetLimit, or says any key or call.
+func (a *aliases) limit(sum *aliasSum) {
+	if len(sum.keys) > aliasSetLimit {
+		slices.Sort(sum.keys)
+		if sum.keys = slices.Compact(sum.keys); len(sum.keys) > aliasSetLimit {
+			sum.all, sum.keys = true, sum.keys[:0]
+		}
+	}
+	if len(sum.calls) > aliasSetLimit {
+		slices.Sort(sum.calls)
+		if sum.calls = slices.Compact(sum.calls); len(sum.calls) > aliasSetLimit {
+			sum.allCalls, sum.calls = true, sum.calls[:0]
+		}
+	}
+}
+
+// hasCall reports whether sum's cells may be call's result cell.
+func (sum *aliasSum) hasCall(call *Value) bool {
+	if sum.allCalls {
+		return sum.anyCall
+	}
+	_, ok := slices.BinarySearch(sum.calls, int32(call.ID))
+	return ok
 }
 
 // anyKey is a call's key: a callee may write any property.
@@ -459,13 +607,16 @@ func (a *aliases) may(key uint32, s *Value) bool {
 	case OpLocalCell:
 		// A call writes one a closure assigns.
 		return key == anyKey && s.Index < len(a.assigned) && a.assigned[s.Index] || key == localKey(s.Index)
-	case OpKeep:
-		if x := s.Args[0]; x.Shadow != nil {
-			return a.may(key, x.Shadow)
+	case OpKeep, OpPhi:
+		sum := a.sum(s)
+		if sum.all {
+			return true
 		}
-		return false
-	case OpPhi:
-		return a.phi(a.key, s, key, func(x *Value) bool { return a.may(key, x) })
+		if key == anyKey {
+			return sum.any || sum.anyCall
+		}
+		_, ok := slices.BinarySearch(sum.keys, key)
+		return ok
 	}
 	return true
 }
@@ -478,13 +629,9 @@ func (a *aliases) mayCall(call, s *Value) bool {
 	switch s.Op {
 	case OpCallCell:
 		return s.Args[0] == call
-	case OpKeep:
-		if x := s.Args[0]; x.Shadow != nil {
-			return a.mayCall(call, x.Shadow)
-		}
-		return false
-	case OpPhi:
-		return a.phi(a.call, s, uint32(call.ID), func(x *Value) bool { return a.mayCall(call, x) })
+	case OpKeep, OpPhi:
+		sum := a.sum(s)
+		return sum.all || sum.any || sum.hasCall(call)
 	}
 	return a.may(anyKey, s)
 }
@@ -496,13 +643,8 @@ func (a *aliases) mayOwnCell(call, s *Value) bool {
 	switch s.Op {
 	case OpCallCell:
 		return s.Args[0] == call
-	case OpKeep:
-		if x := s.Args[0]; x.Shadow != nil {
-			return a.mayOwnCell(call, x.Shadow)
-		}
-		return false
-	case OpPhi:
-		return a.phi(a.own, s, uint32(call.ID), func(x *Value) bool { return a.mayOwnCell(call, x) })
+	case OpKeep, OpPhi:
+		return a.sum(s).hasCall(call)
 	}
 	return false
 }
@@ -515,13 +657,9 @@ func (a *aliases) mayElemCell(call, s *Value) bool {
 		return true
 	case OpCallCell:
 		return s.Args[0] == call
-	case OpKeep:
-		if x := s.Args[0]; x.Shadow != nil {
-			return a.mayElemCell(call, x.Shadow)
-		}
-		return false
-	case OpPhi:
-		return a.phi(a.elem, s, uint32(call.ID), func(x *Value) bool { return a.mayElemCell(call, x) })
+	case OpKeep, OpPhi:
+		sum := a.sum(s)
+		return sum.elem || sum.hasCall(call)
 	}
 	return false
 }
