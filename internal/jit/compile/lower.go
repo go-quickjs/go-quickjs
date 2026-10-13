@@ -77,6 +77,52 @@ func LowerSSAForward(fn *bytecode.Function) (*ir.Program, error) {
 	return lowerRecovered(fn, lowering{ssa: true, callee: true, forward: true})
 }
 
+// closureAssigned is, by local, whether a closure fn makes, or one a
+// closure of it makes in turn, assigns the local it captured; or nil if
+// none does. A nested function with a direct eval may assign any.
+func closureAssigned(fn *bytecode.Function) []bool {
+	var out []bool
+	var assigns func(t *bytecode.Function, up int) bool
+	assigns = func(t *bytecode.Function, up int) bool {
+		if t.HasDirectEval {
+			return true
+		}
+		for _, in := range t.Code {
+			switch in.Op {
+			case bytecode.OpSetUpvalue, bytecode.OpSetUpvalueCheck, bytecode.OpInitUpvalue:
+				if int(in.A) == up {
+					return true
+				}
+			}
+		}
+		for _, c := range t.Constants {
+			if c.Kind != bytecode.ConstFunction || c.Fn == nil {
+				continue
+			}
+			for j, d := range c.Fn.Upvalues {
+				if !d.FromParent && int(d.Index) == up && assigns(c.Fn, j) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	for _, c := range fn.Constants {
+		if c.Kind != bytecode.ConstFunction || c.Fn == nil {
+			continue
+		}
+		for j, d := range c.Fn.Upvalues {
+			if d.FromParent && int(d.Index) < fn.LocalCount && assigns(c.Fn, j) {
+				if out == nil {
+					out = make([]bool, fn.LocalCount)
+				}
+				out[d.Index] = true
+			}
+		}
+	}
+	return out
+}
+
 // lowering is how a function is lowered: for which entry points, and for
 // which pipeline.
 type lowering struct{ calls, callee, ssa, forward bool }
@@ -460,6 +506,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			for i, local := range fn.Locals {
 				p.Captured[i] = local.Captured
 			}
+			p.Assigned = closureAssigned(fn)
 		}
 		return p, nil
 	}

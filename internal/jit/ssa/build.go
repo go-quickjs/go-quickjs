@@ -537,6 +537,7 @@ func build(w *Workspace, p *ir.Program, fb Feedback) (*Func, error) {
 		f.KeepLimit = kf.KeepLimit()
 	}
 	f.written = f.bools(p.Locals + p.StackSize)
+	f.assigned = p.Assigned
 	b := &builder{p: p, fb: fb, f: f, nslots: p.Locals + p.StackSize}
 	b.root = &frame{p: p, fb: fb}
 	b.cur = b.root
@@ -724,7 +725,11 @@ func (b *builder) literal(pc int) (LiteralSite, int, bool) {
 //
 // A local an inner closure captures (ir.Program's Captured) is so too: the
 // closure reads and assigns it where the frame has it, which is its cell.
-func (b *builder) reloadUpvalues(blk *Block) {
+func (b *builder) reloadUpvalues(blk *Block) { b.reloadCells(blk, b.root.p.Captured) }
+
+// reloadCells is reloadUpvalues of the captured bindings and of locals,
+// those of the root's that locals marks.
+func (b *builder) reloadCells(blk *Block, locals []bool) {
 	p := b.root.p
 	if b.stale == nil {
 		b.stale = make([]*Value, p.UpvalueBase+p.Upvalues)
@@ -738,10 +743,19 @@ func (b *builder) reloadUpvalues(blk *Block) {
 	for i := range p.Upvalues {
 		mark(p.UpvalueBase + i)
 	}
-	for i, c := range p.Captured {
+	for i, c := range locals {
 		if c {
 			mark(i)
 		}
+	}
+}
+
+// reloadAfterCall is reloadUpvalues after a call, which may assign a
+// captured binding, or a local a closure assigns -- not one no closure
+// assigns (ir.Program's Assigned), which the call leaves as it is.
+func (b *builder) reloadAfterCall(blk *Block) {
+	if p := b.root.p; p.Upvalues != 0 || p.Assigned != nil {
+		b.reloadCells(blk, p.Assigned)
 	}
 }
 
@@ -1239,7 +1253,7 @@ func (b *builder) iterStep(blk *Block, in ir.Instruction, operand func(ir.Operan
 	// The step runs the iterator's next, which may assign a captured
 	// binding, as a native call's callee may.
 	if b.hasCells() {
-		b.reloadUpvalues(blk)
+		b.reloadAfterCall(blk)
 	}
 	done := b.f.newValue(blk, OpConst, Tagged)
 	done.Const = ir.Value{Kind: ir.Uninitialized}
@@ -2625,7 +2639,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			// after the call exits to the next instruction, as the site
 			// there fails: never again, once it has (Generic).
 			if b.hasCells() {
-				b.reloadUpvalues(blk)
+				b.reloadAfterCall(blk)
 			}
 			break
 		}

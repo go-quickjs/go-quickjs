@@ -69,6 +69,10 @@ func keepAcrossStores(f *Func) (bool, []*Value, [][]*Value) {
 				alias = alias || c.Op != OpKept && a.mayElemCell(s, c.Shadow)
 				continue
 			}
+			if s.Op == OpCall {
+				alias = alias || c.Op != OpKept && a.mayCall(s, c.Shadow)
+				continue
+			}
 			alias = alias || c.Op != OpKept && a.may(key, c.Shadow)
 		}
 		if !alias {

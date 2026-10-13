@@ -297,6 +297,10 @@ func TestJITCapturedLocals(t *testing.T) {
 			for (let w = 0; w < 50; w++) fill(w % 9);
 			function top(n) { let s = 0; for (let k = 0; k < n; k++) { const a = fill(k % 9), b = fill(k % 7); for (const f of a) s += f() * 10; for (const f of b) s += f() } return s }
 			let r = 0; for (let k = 0; k < 40; k++) r += top(k); r`},
+		// A local a closure assigns is read again after a call, whoever
+		// assigns it: a closure the closure makes too.
+		{"assigned two closures down", `function f(n) { let x = 0; const outer = () => { const inner = () => { x += 2 }; inner() }; let s = 0; for (let i = 0; i < n; i++) { outer(); s += x } return s }
+			let r = 0; for (let k = 0; k < 80; k++) r += f(k); r`},
 		{"sort comparator", `function f(a) { let calls = 0; const b = a.slice(); for (let i = 0; i < 3; i++) b.sort((x, y) => { calls++; return x - y }); return b[0] + b[b.length - 1] + calls * 0 }
 			const a = []; for (let i = 0; i < 50; i++) a.push((i * 37) % 101); let r = 0; for (let k = 0; k < 40; k++) r += f(a); r`},
 	}

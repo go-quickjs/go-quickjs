@@ -360,11 +360,19 @@ type Program struct {
 	// has it, so native code does too, as it does a captured binding in
 	// its cell (IsCaptured).
 	Captured []bool
+	// Assigned marks, of those, the locals a closure assigns, or is nil for
+	// none: a call may change those, which run no closure that assigns the
+	// others (IsAssigned).
+	Assigned []bool
 }
 
 // IsCaptured reports whether local i is one an inner closure captures
 // (Captured).
 func (p *Program) IsCaptured(i int) bool { return i >= 0 && i < len(p.Captured) && p.Captured[i] }
+
+// IsAssigned reports whether captured local i is one a closure assigns
+// (Assigned).
+func (p *Program) IsAssigned(i int) bool { return i >= 0 && i < len(p.Assigned) && p.Assigned[i] }
 
 // Handler is an exception handler, as push_catch or push_finally registers
 // it: the clause at PC, entered with the operand stack cut to Depth, a
@@ -384,7 +392,7 @@ func (p *Program) Footprint() int {
 		return 0
 	}
 	return int(unsafe.Sizeof(*p)) + cap(p.Globals)*4 + cap(p.Code)*int(unsafe.Sizeof(Instruction{})) +
-		cap(p.Maps)*int(unsafe.Sizeof(StateMap{})) + cap(p.Live)*8 + cap(p.Handlers)*int(unsafe.Sizeof(Handler{})) + cap(p.HandlerAt)*4 + cap(p.Captured)
+		cap(p.Maps)*int(unsafe.Sizeof(StateMap{})) + cap(p.Live)*8 + cap(p.Handlers)*int(unsafe.Sizeof(Handler{})) + cap(p.HandlerAt)*4 + cap(p.Captured) + cap(p.Assigned)
 }
 
 // LiveAt reports whether local i may be read from pc on before it is

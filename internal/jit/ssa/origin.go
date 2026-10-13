@@ -356,7 +356,9 @@ func storeChecksAt(f *Func, stores []*Value, live [][]*Value) {
 // store's key was found to write its header's phi's, and asked of that
 // next, not -- a value read through it went unchecked at the store.
 type aliases struct {
-	key, own, elem map[aliasKey]int
+	key, own, elem, call map[aliasKey]int
+	// assigned is the function's (Func's assigned).
+	assigned []bool
 	// depth is how many phis the search is in; provisional are the
 	// answers of no it kept meanwhile, by map.
 	depth       int
@@ -409,12 +411,14 @@ type aliasKey struct {
 func newAliases(f *Func) *aliases {
 	a := &f.scr().aliases
 	if a.key == nil {
-		a.key, a.own, a.elem = map[aliasKey]int{}, map[aliasKey]int{}, map[aliasKey]int{}
+		a.key, a.own, a.elem, a.call = map[aliasKey]int{}, map[aliasKey]int{}, map[aliasKey]int{}, map[aliasKey]int{}
 	}
 	clear(a.key)
 	clear(a.own)
 	clear(a.elem)
+	clear(a.call)
 	a.depth, a.provisional = 0, a.provisional[:0]
+	a.assigned = f.assigned
 	return a
 }
 
@@ -444,12 +448,17 @@ func (a *aliases) may(key uint32, s *Value) bool {
 		return key == anyKey
 	case OpStringMethod, OpConstSource, OpConstCell:
 		return false
+	case OpCallCell:
+		// A call's result's keep cell, which no store writes: a call may
+		// (mayCall).
+		return key == anyKey
 	case OpUpvalueCell:
 		// A call may assign it, or an assignment to a captured binding,
 		// any: two closures may capture one binding.
 		return key == anyKey || key == upvalueKey
 	case OpLocalCell:
-		return key == anyKey || key == localKey(s.Index)
+		// A call writes one a closure assigns.
+		return key == anyKey && s.Index < len(a.assigned) && a.assigned[s.Index] || key == localKey(s.Index)
 	case OpKeep:
 		if x := s.Args[0]; x.Shadow != nil {
 			return a.may(key, x.Shadow)
@@ -459,6 +468,25 @@ func (a *aliases) may(key uint32, s *Value) bool {
 		return a.phi(a.key, s, key, func(x *Value) bool { return a.may(key, x) })
 	}
 	return true
+}
+
+// mayCall reports whether call, a call of any key, may write the cell at s:
+// as may, but a call's result's keep cell is written by that call alone,
+// none other -- each call has its own -- so that a value another call
+// returned is kept across a call no more than one a property gave.
+func (a *aliases) mayCall(call, s *Value) bool {
+	switch s.Op {
+	case OpCallCell:
+		return s.Args[0] == call
+	case OpKeep:
+		if x := s.Args[0]; x.Shadow != nil {
+			return a.mayCall(call, x.Shadow)
+		}
+		return false
+	case OpPhi:
+		return a.phi(a.call, s, uint32(call.ID), func(x *Value) bool { return a.mayCall(call, x) })
+	}
+	return a.may(anyKey, s)
 }
 
 // mayOwnCell reports whether the cell at s may be the result cell of call,

@@ -551,7 +551,10 @@ type Func struct {
 	KeepLimit int
 	// written marks the slots some instruction writes (Written).
 	written []bool
-	nextID  int
+	// assigned marks the captured locals a closure assigns (ir.Program's
+	// Assigned): a call may write their cells, and no other.
+	assigned []bool
+	nextID   int
 	// nextState numbers the frame states (FrameState.id).
 	nextState int
 	// shadowed is whether the phis' shadows and the stores' checks are
