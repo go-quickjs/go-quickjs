@@ -255,9 +255,18 @@ type GoOp uint8
 //
 // GoElemWrite is a store of a number to an element native code does not
 // make (OpElemWrite): to a hole, or at the array's length, which grows it,
-// as V8's code calls its grow stub. The operands are the array's pointer
-// word, the key's and the value's number words; Go refuses a store that
-// could run a script or throw.
+// as V8's code calls its grow stub; or to a typed array's element where
+// native code does not find the view in its buffer -- before Go has looked
+// at it -- or does not convert to the element's type. The operands are the
+// array's pointer word, the key's and the value's number words; Go refuses
+// a store that could run a script or throw.
+//
+// GoTypedRead is a typed array's element native code does not read
+// (OpElemRead): before Go has looked at the view, or of a type native code
+// does not convert. Go writes it to the first operand's number word, the
+// typed array's pointer word, the key the second's number word; it refuses
+// an element that is not a number -- a BigInt, an index the view does not
+// have.
 //
 // GoElemCell is an element read as a reference that native code does not
 // find -- past the array's length, or a hole: Go says whether it is
@@ -305,6 +314,7 @@ const (
 	GoConcat
 	GoClosure
 	GoClose
+	GoTypedRead
 )
 
 // RefillsPools reports whether a call takes an object from a pool, which
@@ -2383,7 +2393,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 		// order is free; the key's update is written only once the read
 		// has succeeded, before the element, which wins if both name one
 		// slot.
-		array := guard(OpArrayOf, Ptr, ir.GuardExit, operand(in.Left))
+		array := guard(OpIndexedOf, Ptr, ir.GuardExit, operand(in.Left))
 		var key, updated *Value
 		if in.Op == ir.ArrayUpdate {
 			old := guard(OpUnboxF64, Float64, ir.GuardExit, operand(in.Right))
@@ -2412,7 +2422,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 	case ir.ArrayWrite:
 		// Go stores what native code does not: a value that is not a
 		// number, or into an element that does not hold one.
-		array := guard(OpArrayOf, Ptr, ir.HostExit, operand(in.Left))
+		array := guard(OpIndexedOf, Ptr, ir.HostExit, operand(in.Left))
 		key, value := number(in.Right, ir.HostExit), number(in.Third, ir.HostExit)
 		guard(OpElemWrite, None, ir.HostExit, array, key, value)
 	case ir.StringMethod:

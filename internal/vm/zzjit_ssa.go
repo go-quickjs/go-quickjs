@@ -91,6 +91,15 @@ var jitEncoding = abi.Encoding{
 	ClosureEnv:         int32(unsafe.Offsetof(closure{}.env)),
 	ClosureRealm:       int32(unsafe.Offsetof(closure{}.realm)),
 	ClassArray:         uint8(ClassArray),
+	ClassTypedArray:    uint8(ClassTypedArray),
+	TypedData:          jitTypeWord((*typedArrayData)(nil)),
+	TypedKind:          int32(unsafe.Offsetof(typedArrayData{}.kind)),
+	TypedOffset:        int32(unsafe.Offsetof(typedArrayData{}.byteOffset)),
+	TypedLength:        int32(unsafe.Offsetof(typedArrayData{}.fixedLength)),
+	TypedStorage:       int32(unsafe.Offsetof(typedArrayData{}.st)),
+	TypedEnd:           int32(unsafe.Offsetof(typedArrayData{}.end)),
+	BufferBytes:        int32(unsafe.Offsetof(arrayBufferData{}.bytes)),
+	BufferImmutable:    int32(unsafe.Offsetof(arrayBufferData{}.immutable)),
 	FlagSparse:         uint8(objHasSparseElements),
 	FlagHTMLDDA:        uint8(objHTMLDDA),
 	FlagExtensible:     uint8(objExtensible),
@@ -2061,6 +2070,13 @@ func jitHostCall(ctx *abi.Context) bool {
 		o := *(**Object)(unsafe.Pointer(&ctx.GoArgs[0].Ref))
 		k, v := math.Float64frombits(ctx.GoArgs[1].Num), Float(math.Float64frombits(ctx.GoArgs[2].Num))
 		return o != nil && jitStoreElem(o, k, v)
+	case ssa.GoTypedRead:
+		o := *(**Object)(unsafe.Pointer(&ctx.GoArgs[0].Ref))
+		v, ok := jitTypedRead(o, math.Float64frombits(ctx.GoArgs[1].Num))
+		if ok {
+			ctx.GoArgs[0].Num = math.Float64bits(v)
+		}
+		return ok
 	case ssa.GoTake:
 		// The pool's address, a constant of the code's, which keeps it;
 		// the call's checks found an object in it, made for the
@@ -2598,6 +2614,13 @@ func jitStoreElem(o *Object, n float64, v Value) bool {
 	if float64(i) != n || o.flags&objMappedArguments != 0 {
 		return false
 	}
+	if o.class == ClassTypedArray {
+		// What native code does not store: before the view's storage is
+		// looked at, which typedWrite does, for native code's next store;
+		// a Float16 element. A view out of its buffer, or past its length,
+		// leaves for Go.
+		return typedWrite(o, i, v)
+	}
 	if uint(i) < uint(len(o.elemsOf())) && !isHole(o.elemsOf()[i]) {
 		o.extOf().elems[i] = v
 		return true
@@ -2614,6 +2637,26 @@ func jitStoreElem(o *Object, n float64, v Value) bool {
 	// What setValueProp would do: setElem, unless the store is so far past
 	// the end that the element is to be a property of its own.
 	return o.setElem(i, v)
+}
+
+// jitTypedRead reads element n of the typed array o where native code did
+// not (ssa.GoTypedRead): before the view's storage was looked at, which it
+// looks at here, for native code's next read; a Float16 element. An
+// element that is not a number -- a BigInt, an index the view does not
+// have -- it leaves for an exit.
+func jitTypedRead(o *Object, n float64) (float64, bool) {
+	t, i, ok := typedElemIndex(o, n)
+	if !ok || t.tracking {
+		return 0, false
+	}
+	if t.st == nil && t.fixedStorage() == nil {
+		return 0, false
+	}
+	v := t.getElem(i)
+	if !v.IsNumber() {
+		return 0, false
+	}
+	return v.num, true
 }
 
 // jitUndefinedCell is the cell native code reads an absent element from
@@ -6345,6 +6388,17 @@ func (r *Runtime) jitCatch(f *frame, e *jitEntry, sp int, err error) (int, error
 // jitTypeWord is the type word an interface holding x has (abi.Encoding's
 // IterState): what native code compares an object's data with to know
 // what it holds.
+// The element types native code reads are the VM's: either difference
+// overflows, which does not compile, unless they are the same.
+const (
+	_ = uint8(elemInt8-abi.ElemInt8) + uint8(abi.ElemInt8-elemInt8)
+	_ = uint8(elemUint8Clamped-abi.ElemUint8Clamped) + uint8(abi.ElemUint8Clamped-elemUint8Clamped)
+	_ = uint8(elemUint16-abi.ElemUint16) + uint8(abi.ElemUint16-elemUint16)
+	_ = uint8(elemUint32-abi.ElemUint32) + uint8(abi.ElemUint32-elemUint32)
+	_ = uint8(elemFloat16-abi.ElemFloat16) + uint8(abi.ElemFloat16-elemFloat16)
+	_ = uint8(elemFloat64-abi.ElemFloat64) + uint8(abi.ElemFloat64-elemFloat64)
+)
+
 func jitTypeWord(x any) uint64 {
 	return uint64((*[2]uintptr)(unsafe.Pointer(&x))[0])
 }

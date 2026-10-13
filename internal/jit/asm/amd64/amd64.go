@@ -482,6 +482,56 @@ func (a *Asm) LoadU8(dst, base Reg, disp int32) {
 	a.modrmMem(byte(dst), base, disp)
 }
 
+// LoadS8, LoadS16 and LoadS32 are dst = [base + disp], a byte, 16 bits or
+// 32, sign-extended to 64 bits: a typed array's signed elements.
+func (a *Asm) LoadS8(dst, base Reg, disp int32) {
+	a.rex(true, byte(dst), byte(base), false)
+	a.emit2(0x0F, 0xBE)
+	a.modrmMem(byte(dst), base, disp)
+}
+
+func (a *Asm) LoadS16(dst, base Reg, disp int32) {
+	a.rex(true, byte(dst), byte(base), false)
+	a.emit2(0x0F, 0xBF)
+	a.modrmMem(byte(dst), base, disp)
+}
+
+func (a *Asm) LoadS32(dst, base Reg, disp int32) {
+	a.rex(true, byte(dst), byte(base), false)
+	a.emit(0x63)
+	a.modrmMem(byte(dst), base, disp)
+}
+
+// Store8, Store16 and Store32 are [base + disp] = src's low byte, 16 bits
+// or 32: a typed array's elements.
+func (a *Asm) Store8(base Reg, disp int32, src Reg) {
+	// SPL to DIL, not AH to BH, take a REX prefix.
+	a.rex(false, byte(src), byte(base), src >= 4)
+	a.emit(0x88)
+	a.modrmMem(byte(src), base, disp)
+}
+
+func (a *Asm) Store16(base Reg, disp int32, src Reg) {
+	a.emit(0x66)
+	a.rex(false, byte(src), byte(base), false)
+	a.emit(0x89)
+	a.modrmMem(byte(src), base, disp)
+}
+
+func (a *Asm) Store32(base Reg, disp int32, src Reg) {
+	a.rex(false, byte(src), byte(base), false)
+	a.emit(0x89)
+	a.modrmMem(byte(src), base, disp)
+}
+
+// CmpMem sets the flags for r - [base + disp], 64 bits if wide: a bound
+// compared where it is, which spares a register.
+func (a *Asm) CmpMem(r, base Reg, disp int32, wide bool) {
+	a.rex(wide, byte(r), byte(base), false)
+	a.emit(0x3B)
+	a.modrmMem(byte(r), base, disp)
+}
+
 // Store is [base + disp] = src, 64 bits.
 func (a *Asm) Store(base Reg, disp int32, src Reg) {
 	a.rex(true, byte(src), byte(base), false)
@@ -666,11 +716,13 @@ func (a *Asm) SSEOp(op SSE, dst, src XReg) {
 	a.modrmRR(byte(dst), byte(src))
 }
 
-// Rounding modes of RoundSD.
+// Rounding modes of RoundSD: to the nearest, ties to even, and down, up
+// and toward zero.
 const (
-	RoundFloor = 1
-	RoundCeil  = 2
-	RoundTrunc = 3
+	RoundNearest = 0
+	RoundFloor   = 1
+	RoundCeil    = 2
+	RoundTrunc   = 3
 )
 
 // RoundSD rounds src to an integer in dst, as mode says (RoundFloor...),

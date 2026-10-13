@@ -135,6 +135,14 @@ func TestAMD64Moves(t *testing.T) {
 				expectBytes(t, "LoadU32 "+name, encode(func(a *amd64.Asm) { a.LoadU32(d, s, disp) }), x86asm.MOV, 4, r32(d), mem{r64(s), int64(disp)})
 				expectBytes(t, "LoadU16 "+name, encode(func(a *amd64.Asm) { a.LoadU16(d, s, disp) }), x86asm.MOVZX, 2, r32(d), mem{r64(s), int64(disp)})
 				expectBytes(t, "LoadU8 "+name, encode(func(a *amd64.Asm) { a.LoadU8(d, s, disp) }), x86asm.MOVZX, 1, r32(d), mem{r64(s), int64(disp)})
+				expectBytes(t, "LoadS8 "+name, encode(func(a *amd64.Asm) { a.LoadS8(d, s, disp) }), x86asm.MOVSX, 1, r64(d), mem{r64(s), int64(disp)})
+				expectBytes(t, "LoadS16 "+name, encode(func(a *amd64.Asm) { a.LoadS16(d, s, disp) }), x86asm.MOVSX, 2, r64(d), mem{r64(s), int64(disp)})
+				expectBytes(t, "LoadS32 "+name, encode(func(a *amd64.Asm) { a.LoadS32(d, s, disp) }), x86asm.MOVSXD, 4, r64(d), mem{r64(s), int64(disp)})
+				expectBytes(t, "Store8 "+name, encode(func(a *amd64.Asm) { a.Store8(s, disp, d) }), x86asm.MOV, 1, mem{r64(s), int64(disp)}, r8(d))
+				expectBytes(t, "Store16 "+name, encode(func(a *amd64.Asm) { a.Store16(s, disp, d) }), x86asm.MOV, 2, mem{r64(s), int64(disp)}, x86asm.AX+x86asm.Reg(d))
+				expectBytes(t, "Store32 "+name, encode(func(a *amd64.Asm) { a.Store32(s, disp, d) }), x86asm.MOV, 4, mem{r64(s), int64(disp)}, r32(d))
+				expectBytes(t, "CmpMem "+name, encode(func(a *amd64.Asm) { a.CmpMem(d, s, disp, true) }), x86asm.CMP, 8, r64(d), mem{r64(s), int64(disp)})
+				expectBytes(t, "CmpMem32 "+name, encode(func(a *amd64.Asm) { a.CmpMem(d, s, disp, false) }), x86asm.CMP, 4, r32(d), mem{r64(s), int64(disp)})
 			}
 			expect(t, "MovZX8 "+name, encode(func(a *amd64.Asm) { a.MovZX8(d, s) }), x86asm.MOVZX, r32(d), r8(s))
 		}
@@ -214,7 +222,7 @@ func TestAMD64SSE(t *testing.T) {
 	}
 	for _, d := range xregs {
 		for _, s := range xregs {
-			for mode := uint8(1); mode <= 3; mode++ {
+			for mode := uint8(0); mode <= 3; mode++ {
 				expect(t, "RoundSD", encode(func(a *amd64.Asm) { a.RoundSD(d, s, mode) }), x86asm.ROUNDSD, xr(d), xr(s), int64(mode|8))
 			}
 			expect(t, "Cvtsd2ss", encode(func(a *amd64.Asm) { a.Cvtsd2ss(d, s) }), x86asm.CVTSD2SS, xr(d), xr(s))

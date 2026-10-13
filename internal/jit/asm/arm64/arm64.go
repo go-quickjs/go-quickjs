@@ -256,6 +256,39 @@ func (a *Asm) LoadU16(dst, base Reg, disp int32) { a.mem(0x79400000, 0x78400000,
 // LoadU8 is dst = [base + disp], a byte, zero-extended.
 func (a *Asm) LoadU8(dst, base Reg, disp int32) { a.mem(0x39400000, 0x38400000, b8, dst, base, disp) }
 
+// LoadS8, LoadS16 and LoadS32 are dst = [base + disp], a byte, 16 bits or
+// 32, sign-extended to 64 bits (LDRSB, LDRSH, LDRSW): a typed array's
+// signed elements.
+func (a *Asm) LoadS8(dst, base Reg, disp int32) { a.mem(0x39800000, 0x38800000, b8, dst, base, disp) }
+
+func (a *Asm) LoadS16(dst, base Reg, disp int32) { a.mem(0x79800000, 0x78800000, b16, dst, base, disp) }
+
+func (a *Asm) LoadS32(dst, base Reg, disp int32) { a.mem(0xB9800000, 0xB8800000, b32, dst, base, disp) }
+
+// Store8, Store16 and Store32 are [base + disp] = src's low byte, 16 bits
+// or 32 (STRB, STRH, STR of the W view): a typed array's elements.
+func (a *Asm) Store8(base Reg, disp int32, src Reg) {
+	a.mem(0x39000000, 0x38000000, b8, src, base, disp)
+}
+
+func (a *Asm) Store16(base Reg, disp int32, src Reg) {
+	a.mem(0x79000000, 0x78000000, b16, src, base, disp)
+}
+
+func (a *Asm) Store32(base Reg, disp int32, src Reg) {
+	a.mem(0xB9000000, 0xB8000000, b32, src, base, disp)
+}
+
+// LoadS and StoreS are dst = the float at [base + disp], and [base + disp]
+// = the float in src (the S views).
+func (a *Asm) LoadS(dst FReg, base Reg, disp int32) {
+	a.mem(0xBD400000, 0xBC400000, b32, Reg(dst), base, disp)
+}
+
+func (a *Asm) StoreS(base Reg, disp int32, src FReg) {
+	a.mem(0xBD000000, 0xBC000000, b32, Reg(src), base, disp)
+}
+
 // LoadF is dst = the double at [base + disp].
 func (a *Asm) LoadF(dst FReg, base Reg, disp int32) {
 	a.mem(0xFD400000, 0xFC400000, b64, Reg(dst), base, disp)
@@ -446,6 +479,7 @@ func (a *Asm) FAbs(dst, n FReg) { a.emit(0x1E60C000 | uint32(n)<<5 | uint32(dst)
 type FRound uint32
 
 const (
+	FRintN FRound = 0x1E644000 // to the nearest, ties to even
 	FRintM FRound = 0x1E654000 // toward -Inf
 	FRintP FRound = 0x1E64C000 // toward +Inf
 	FRintZ FRound = 0x1E65C000 // toward zero

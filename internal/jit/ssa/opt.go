@@ -98,7 +98,7 @@ func Optimize(f *Func) {
 				// is initialized still: its check is none.
 				if len(v.Args) == 1 {
 					switch v.Op {
-					case OpCheckInit, OpObjectOf, OpUnboxF64, OpArrayOf:
+					case OpCheckInit, OpObjectOf, OpUnboxF64, OpArrayOf, OpIndexedOf:
 						if v.Op == OpCheckInit {
 							if w := repeated(OpCheckInit, v.Args[0], b, v); w != nil {
 								subst[v.ID], replaced = w, true

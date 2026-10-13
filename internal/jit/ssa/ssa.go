@@ -75,6 +75,13 @@ const (
 	OpElemKey   // f64 -> none, if an index
 	OpElemRead  // ptr, f64 -> f64: the element, if the index's is a number
 	OpElemWrite // ptr, f64, f64 -> none: stores, if the index's is a number
+	// OpIndexedOf is OpArrayOf for an element read or written as a number
+	// (OpElemRead, OpElemWrite), which may be a typed array's too: an object
+	// of either class, which they tell apart as they run. A typed array's
+	// element is in its buffer, below its length; one of a type native
+	// code does not make -- Float16, a BigInt -- or a view out of its
+	// buffer, is the guard's failure, or the store's call of Go.
+	OpIndexedOf // tagged -> ptr, if an array or a typed array
 	// OpElemCell is an element read as a reference: the element's cell, if
 	// the index is an integer within the dense elements and the element is
 	// not a hole, whatever it holds. OpLoadCell reads it, with the cell as
@@ -312,7 +319,7 @@ const (
 var opNames = [...]string{
 	OpInvalid: "invalid", OpLoadSlot: "load", OpConst: "const", OpConstF64: "constf", OpConstSource: "consts", OpPhi: "phi",
 	OpUnboxF64: "unbox", OpTruth: "truth", OpCheckInit: "checkinit", OpBoxF64: "boxf", OpBoxBool: "boxb",
-	OpArrayOf: "arrayof", OpElemKey: "elemkey", OpElemRead: "elemread", OpElemWrite: "elemwrite", OpElemCell: "elemcell", OpLength: "length",
+	OpArrayOf: "arrayof", OpIndexedOf: "indexedof", OpElemKey: "elemkey", OpElemRead: "elemread", OpElemWrite: "elemwrite", OpElemCell: "elemcell", OpLength: "length",
 	OpObjectOf: "objectof", OpPropRead: "propread", OpPropWrite: "propwrite", OpPropCell: "propcell", OpLoadCell: "loadcell", OpGlobalCell: "globalcell", OpLexCell: "lexcell", OpBindingCell: "bindingcell",
 	OpStringMethod: "stringmethod", OpStringProp: "stringprop", OpStringCode: "stringcode",
 	OpAddF64: "addf", OpSubF64: "subf", OpMulF64: "mulf", OpDivF64: "divf", OpModF64: "modf", OpNegF64: "negf", OpCmpF64: "cmpf",
@@ -335,7 +342,7 @@ func (o Op) String() string {
 // isGuard reports whether an op exits when its operand is not what it needs.
 func (o Op) isGuard() bool {
 	switch o {
-	case OpUnboxF64, OpTruth, OpCheckInit, OpModF64, OpArrayOf, OpElemKey, OpElemRead, OpElemWrite, OpElemCell, OpLength,
+	case OpUnboxF64, OpTruth, OpCheckInit, OpModF64, OpArrayOf, OpIndexedOf, OpElemKey, OpElemRead, OpElemWrite, OpElemCell, OpLength,
 		OpObjectOf, OpPropRead, OpPropWrite, OpPropCell, OpGlobalCell, OpLexCell, OpBindingCell, OpStringMethod, OpStringProp, OpStringCode, OpLooseNullish, OpEqTagged,
 		OpSameObject, OpSameSymbol, OpIterClosed, OpFrameRoom, OpTailRoom, OpTailSelf, OpCall, OpInstanceOf, OpTypeIs, OpCheckTrue, OpPowF64:
 		return true

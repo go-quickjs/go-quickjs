@@ -554,6 +554,21 @@ type Encoding struct {
 	ObjectData                 int32
 	IterState                  uint64
 	IterDone, IterArr, IterIdx int32
+	// A typed array is an object of class ClassTypedArray whose data's
+	// type word is TypedData: a view, whose element type's byte is at
+	// TypedKind (the Elem constants), its first byte's offset in its
+	// buffer at TypedOffset and its length in elements at TypedLength, as
+	// ints. The pointer at TypedStorage is its buffer's storage, nil until
+	// Go has looked -- and for a view that tracks a resizable buffer's
+	// length, always -- and the int at TypedEnd the byte past its last
+	// element there: the view is in its buffer while that is no more than
+	// the length of the storage's bytes, a slice at BufferBytes, which a
+	// detached buffer's are not. BufferImmutable is the storage's byte that
+	// is set when the bytes may not be written.
+	ClassTypedArray                                             uint8
+	TypedData                                                   uint64
+	TypedKind, TypedOffset, TypedLength, TypedStorage, TypedEnd int32
+	BufferBytes, BufferImmutable                                int32
 	// A function object made from script is one whose data's type word is
 	// FuncData: the pointer at FuncClosure, in the data, is its closure,
 	// whose function's address is at ClosureFn, its captured bindings'
@@ -632,6 +647,22 @@ const MaxScan = 8
 // compares by their bytes: it does not poll, and a longer comparison is
 // Go's, which the collector can stop.
 const MaxEqualUnits = 256
+
+// The element types of a typed array, as its byte at TypedKind says: the
+// VM's, which native code reads and writes all but Float16's of. The two
+// BigInt types follow.
+const (
+	ElemInt8 = iota
+	ElemUint8
+	ElemUint8Clamped
+	ElemInt16
+	ElemUint16
+	ElemInt32
+	ElemUint32
+	ElemFloat16
+	ElemFloat32
+	ElemFloat64
+)
 
 // NumberLimit bounds number words: a word below it holds a number, and
 // every tag is at or above it.

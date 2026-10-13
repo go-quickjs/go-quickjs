@@ -549,7 +549,8 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 					return exit(v.State, ir.ExitKind(v.Aux))
 				}
 				vals[v.ID] = val{b: t}
-			case OpArrayOf:
+			case OpArrayOf, OpIndexedOf:
+				// The model's arrays are Arrays.
 				t := a.t
 				if t.Kind != ir.Opaque || t.Bits >= uint64(len(arrays)) || arrays[t.Bits].NumberLimit == 0 {
 					return exit(v.State, ir.ExitKind(v.Aux))

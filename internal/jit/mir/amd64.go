@@ -3428,6 +3428,212 @@ func (c *compiler) element(array *ssa.Value, fail func(amd64.Cond)) {
 	fail(amd64.CondAE)
 }
 
+// indexedOf finds an array or a typed array (OpIndexedOf), into v's
+// register: what an element read or written as a number takes, telling
+// the two apart as it runs (typedElement).
+func (c *compiler) indexedOf(v *ssa.Value, guard func(amd64.Cond)) {
+	if !c.objectOf(v, guard) {
+		return
+	}
+	ok := c.a.NewLabel()
+	c.a.LoadU8(scratchB, scratchC, c.enc.ObjectClass)
+	c.a.OpImm(amd64.Cmp, scratchB, int32(c.enc.ClassArray), false)
+	c.a.Jcc(amd64.CondE, ok)
+	c.a.OpImm(amd64.Cmp, scratchB, int32(c.enc.ClassTypedArray), false)
+	guard(amd64.CondNE)
+	c.a.Bind(ok)
+	c.setG(v, scratchC)
+}
+
+// typedArray jumps to typed unless the object array, from OpIndexedOf, is
+// an Array. It uses scratchB.
+func (c *compiler) typedArray(array *ssa.Value, typed amd64.Label) {
+	c.a.LoadU8(scratchB, c.gpr(array, scratchB), c.enc.ObjectClass)
+	c.a.OpImm(amd64.Cmp, scratchB, int32(c.enc.ClassArray), false)
+	c.a.Jcc(amd64.CondNE, typed)
+}
+
+// typedElement finds the element of the typed array array that key's
+// number names, as the VM's typedWrite does, failing unless the view is in
+// its buffer -- Go has looked at it, it does not track a resizable
+// buffer's length, its buffer is not detached and has not shrunk past it
+// -- and, for a store, its bytes may be written, and the key is an integer
+// below its length: the element's address in scratchA, and the view's
+// element type in scratchC. It uses every scratch register.
+func (c *compiler) typedElement(array, key *ssa.Value, store bool, fail func(amd64.Cond)) {
+	c.objectData(scratchC, c.gpr(array, scratchC), scratchB, c.enc.TypedData, fail)
+	c.a.Load(scratchB, scratchC, c.enc.TypedStorage)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	fail(amd64.CondE)
+	c.a.Load(scratchA, scratchC, c.enc.TypedEnd)
+	c.a.CmpMem(scratchA, scratchB, c.enc.BufferBytes+8, true)
+	fail(amd64.CondA)
+	if store {
+		c.a.LoadU8(scratchA, scratchB, c.enc.BufferImmutable)
+		c.a.Op(amd64.Test, scratchA, scratchA, false)
+		fail(amd64.CondNE)
+	}
+	c.a.Load(scratchB, scratchB, c.enc.BufferBytes)
+	c.a.Load(scratchA, scratchC, c.enc.TypedOffset)
+	c.a.Op(amd64.Add, scratchB, scratchA, true)
+	// The key an integer -- not NaN, which converts to 1<<63 -- below the
+	// length, compared unsigned: a negative one is past it.
+	k := c.xmm(key, xScratch0)
+	c.a.Cvttsd2si(scratchA, k)
+	c.a.Cvtsi2sd(xScratch1, scratchA, true)
+	c.a.SSEOp(amd64.UcomiSD, xScratch1, k)
+	fail(amd64.CondNE)
+	fail(amd64.CondP)
+	c.a.CmpMem(scratchA, scratchC, c.enc.TypedLength, true)
+	fail(amd64.CondAE)
+	c.a.LoadU8(scratchC, scratchC, c.enc.TypedKind)
+	// The address of the element, which the element type's size scales:
+	// its shift is the type's (elemShift), the shifted index added to the
+	// first element's address, in scratchB, at each type's case.
+}
+
+// typedKinds are the element types native code reads and writes, the most
+// common in compiled code first, and their sizes' shifts.
+var typedKinds = [...]struct {
+	kind  int32
+	shift uint8
+}{
+	{abi.ElemInt32, 2}, {abi.ElemUint8, 0}, {abi.ElemFloat64, 3}, {abi.ElemInt8, 0},
+	{abi.ElemUint16, 1}, {abi.ElemInt16, 1}, {abi.ElemUint32, 2}, {abi.ElemFloat32, 2},
+	{abi.ElemUint8Clamped, 0},
+}
+
+// typedCases emits, for each element type native code makes, a case of
+// the type in scratchC: the element's address into scratchA, then each's
+// own code, which ends where it goes on. Another type jumps to other.
+func (c *compiler) typedCases(other amd64.Label, each func(kind int32)) {
+	for _, t := range typedKinds {
+		next := c.a.NewLabel()
+		c.a.OpImm(amd64.Cmp, scratchC, t.kind, false)
+		c.a.Jcc(amd64.CondNE, next)
+		if t.shift != 0 {
+			c.a.ShiftImm(amd64.Shl, scratchA, t.shift, true)
+		}
+		c.a.Op(amd64.Add, scratchA, scratchB, true)
+		each(t.kind)
+		c.a.Bind(next)
+	}
+	c.a.Jmp(other)
+}
+
+// typedRead reads a typed array's element (OpElemRead) into xScratch0,
+// then jumps to done; Go reads one native code does not (ssa.GoTypedRead),
+// which, if it refuses, exits to v's state.
+func (c *compiler) typedRead(v *ssa.Value, done amd64.Label) {
+	stub := c.stubLabel(v.State, exitKind(v.Aux))
+	slow := stub
+	if c.enc.CallGo != 0 {
+		slow = c.a.NewLabel()
+	}
+	c.typedElement(v.Args[0], v.Args[1], false, func(cond amd64.Cond) { c.a.Jcc(cond, slow) })
+	c.typedCases(slow, func(kind int32) {
+		switch kind {
+		case abi.ElemInt8:
+			c.a.LoadS8(scratchA, scratchA, 0)
+		case abi.ElemUint8, abi.ElemUint8Clamped:
+			c.a.LoadU8(scratchA, scratchA, 0)
+		case abi.ElemInt16:
+			c.a.LoadS16(scratchA, scratchA, 0)
+		case abi.ElemUint16:
+			c.a.LoadU16(scratchA, scratchA, 0)
+		case abi.ElemInt32:
+			c.a.LoadS32(scratchA, scratchA, 0)
+		case abi.ElemUint32:
+			c.a.LoadU32(scratchA, scratchA, 0)
+		case abi.ElemFloat32:
+			c.a.LoadU32(scratchA, scratchA, 0)
+			c.a.MovQToX(xScratch0, scratchA)
+			c.a.Cvtss2sd(xScratch0, xScratch0)
+			c.a.Jmp(done)
+			return
+		case abi.ElemFloat64:
+			c.a.LoadSD(xScratch0, scratchA, 0)
+			c.a.Jmp(done)
+			return
+		}
+		c.a.Cvtsi2sd(xScratch0, scratchA, true)
+		c.a.Jmp(done)
+	})
+	if c.enc.CallGo == 0 {
+		return
+	}
+	c.a.Bind(slow)
+	size := int32(unsafe.Sizeof(abi.GoArg{}))
+	c.a.Store(regCtx, abi.OffGoArgs+c.enc.RefOffset, c.gpr(v.Args[0], scratchC))
+	c.a.MovQFromX(scratchA, c.xmm(v.Args[1], xScratch0))
+	c.a.Store(regCtx, abi.OffGoArgs+size+c.enc.NumOffset, scratchA)
+	c.goSaving(uint64(ssa.GoTypedRead), &stub)
+	c.a.LoadSD(xScratch0, regCtx, abi.OffGoArgs+c.enc.NumOffset)
+	c.a.Jmp(done)
+}
+
+// typedWrite stores a number in a typed array's element (OpElemWrite),
+// converted to its type, then jumps to done; what it does not store --
+// a conversion it does not make, a view it does not find in its buffer --
+// goes to slow.
+func (c *compiler) typedWrite(v *ssa.Value, done, slow amd64.Label) {
+	fail := func(cond amd64.Cond) { c.a.Jcc(cond, slow) }
+	c.typedElement(v.Args[0], v.Args[1], true, fail)
+	c.typedCases(slow, func(kind int32) {
+		x := c.xmm(v.Args[2], xScratch0)
+		switch kind {
+		case abi.ElemFloat64:
+			c.a.StoreSD(scratchA, 0, x)
+		case abi.ElemFloat32:
+			c.a.Cvtsd2ss(xScratch1, x)
+			c.a.MovQFromX(scratchB, xScratch1)
+			c.a.Store32(scratchA, 0, scratchB)
+		case abi.ElemUint8Clamped:
+			if !c.enc.Round {
+				c.a.Jmp(slow)
+				return
+			}
+			// Saturated, and rounded half to even: 0 for NaN and what is
+			// not above 0, 255 for what is not below it.
+			low, high, store := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+			c.a.SSEOp(amd64.XorPD, xScratch1, xScratch1)
+			c.a.SSEOp(amd64.UcomiSD, x, xScratch1)
+			c.a.Jcc(amd64.CondBE, low)
+			c.movImm(scratchB, math.Float64bits(255))
+			c.a.MovQToX(xScratch1, scratchB)
+			c.a.SSEOp(amd64.UcomiSD, x, xScratch1)
+			c.a.Jcc(amd64.CondAE, high)
+			c.a.RoundSD(xScratch1, x, amd64.RoundNearest)
+			c.a.Cvttsd2si(scratchB, xScratch1)
+			c.a.Jmp(store)
+			c.a.Bind(low)
+			c.a.Op(amd64.Xor, scratchB, scratchB, false)
+			c.a.Jmp(store)
+			c.a.Bind(high)
+			c.movImm(scratchB, 255)
+			c.a.Bind(store)
+			c.a.Store8(scratchA, 0, scratchB)
+		default:
+			// ToInt32's bits, whose low ones each integer type keeps:
+			// CVTTSD2SI's where |x| < 2**63, Go's beyond, and for NaN and
+			// the infinities.
+			c.a.Cvttsd2si(scratchB, x)
+			c.movImm(scratchC, 1<<63)
+			c.a.Op(amd64.Cmp, scratchB, scratchC, true)
+			fail(amd64.CondE)
+			switch kind {
+			case abi.ElemInt8, abi.ElemUint8:
+				c.a.Store8(scratchA, 0, scratchB)
+			case abi.ElemInt16, abi.ElemUint16:
+				c.a.Store16(scratchA, 0, scratchB)
+			default:
+				c.a.Store32(scratchA, 0, scratchB)
+			}
+		}
+		c.a.Jmp(done)
+	})
+}
+
 // elementCell turns the index in scratchA into the address of an array's
 // element there, in scratchA, failing unless it is within the dense
 // elements and not a hole (whose word is the uninitialized marker's). It
@@ -3515,6 +3721,8 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.truth(v, c.guardFor(v))
 	case ssa.OpArrayOf:
 		c.arrayOf(v, c.guardFor(v))
+	case ssa.OpIndexedOf:
+		c.indexedOf(v, c.guardFor(v))
 	case ssa.OpObjectOf:
 		if c.objectOf(v, c.guardFor(v)) {
 			c.setG(v, scratchC)
@@ -3697,9 +3905,16 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 
 		c.index(arg(0), c.guardFor(v))
 	case ssa.OpElemRead:
+		typed, done := c.a.NewLabel(), c.a.NewLabel()
+		c.typedArray(arg(0), typed)
 		c.index(arg(1), c.guardFor(v))
 		c.element(arg(0), c.guardFor(v))
 		c.a.MovQToX(xScratch0, scratchB)
+		c.a.Bind(done)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(typed)
+			c.typedRead(v, done)
+		})
 		c.setX(v, xScratch0)
 	case ssa.OpElemCell:
 		fail, done := c.guardFor(v), c.a.NewLabel()
@@ -3724,12 +3939,13 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Bind(done)
 		c.setG(v, scratchA)
 	case ssa.OpElemWrite:
-		fail, done := c.guardFor(v), c.a.NewLabel()
+		done, typed := c.a.NewLabel(), c.a.NewLabel()
+		slow := c.stubLabel(v.State, exitKind(v.Aux))
 		if c.enc.CallGo != 0 {
 			// Any other store Go makes if it can (ssa.GoElemWrite): the
 			// array, the key and the value in the context's GoArgs.
-			slow, stub := c.a.NewLabel(), c.stubLabel(v.State, exitKind(v.Aux))
-			fail = func(cond amd64.Cond) { c.a.Jcc(cond, slow) }
+			stub := slow
+			slow = c.a.NewLabel()
 			c.cold = append(c.cold, func() {
 				c.a.Bind(slow)
 				size := int32(unsafe.Sizeof(abi.GoArg{}))
@@ -3742,6 +3958,12 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 				c.a.Jmp(done)
 			})
 		}
+		fail := func(cond amd64.Cond) { c.a.Jcc(cond, slow) }
+		c.cold = append(c.cold, func() {
+			c.a.Bind(typed)
+			c.typedWrite(v, done, slow)
+		})
+		c.typedArray(arg(0), typed)
 		c.index(arg(1), fail)
 		c.element(arg(0), fail)
 		c.boxF64(c.xmm(arg(2), xScratch0), scratchB)

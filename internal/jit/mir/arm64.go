@@ -3193,6 +3193,182 @@ func (c *a64Compiler) element(array *ssa.Value, guard func(arm64.Cond)) {
 	guard(arm64.HS)
 }
 
+// indexedOf finds an array or a typed array (OpIndexedOf), as amd64's.
+func (c *a64Compiler) indexedOf(v *ssa.Value, guard func(arm64.Cond)) {
+	if !c.objectOf(v, guard) {
+		return
+	}
+	ok := c.a.NewLabel()
+	c.a.LoadU8(a64B, a64C, c.enc.ObjectClass)
+	c.a.CmpImm(a64B, int64(c.enc.ClassArray), false)
+	c.a.BCond(arm64.EQ, ok)
+	c.a.CmpImm(a64B, int64(c.enc.ClassTypedArray), false)
+	guard(arm64.NE)
+	c.a.Bind(ok)
+	c.setG(v, a64C)
+}
+
+// typedArray jumps to typed unless the object array, from OpIndexedOf, is
+// an Array. It uses B.
+func (c *a64Compiler) typedArray(array *ssa.Value, typed arm64.Label) {
+	c.a.LoadU8(a64B, c.gpr(array, a64B), c.enc.ObjectClass)
+	c.a.CmpImm(a64B, int64(c.enc.ClassArray), false)
+	c.a.BCond(arm64.NE, typed)
+}
+
+// typedElement finds a typed array's element, as amd64's: its address in
+// A, the view's element type in C. It uses A, B, C, D and F1.
+func (c *a64Compiler) typedElement(array, key *ssa.Value, store bool, fail func(arm64.Cond)) {
+	c.objectData(a64C, c.gpr(array, a64C), a64B, c.enc.TypedData, fail)
+	c.a.Load(a64B, a64C, c.enc.TypedStorage)
+	c.a.CmpImm(a64B, 0, true)
+	fail(arm64.EQ)
+	c.a.Load(a64A, a64C, c.enc.TypedEnd)
+	c.a.Load(a64D, a64B, c.enc.BufferBytes+8)
+	c.a.Cmp(a64A, a64D, true)
+	fail(arm64.HI)
+	if store {
+		c.a.LoadU8(a64A, a64B, c.enc.BufferImmutable)
+		c.a.CmpImm(a64A, 0, false)
+		fail(arm64.NE)
+	}
+	c.a.Load(a64B, a64B, c.enc.BufferBytes)
+	c.a.Load(a64A, a64C, c.enc.TypedOffset)
+	c.a.Op(arm64.Add, a64B, a64B, a64A, true)
+	// The key an integer -- FCMP of NaN is unordered, not equal -- below
+	// the length, compared unsigned.
+	k := c.fpr(key, a64F0)
+	c.a.Fcvtzs(a64A, k)
+	c.a.Scvtf(a64F1, a64A, true)
+	c.a.FCmp(a64F1, k)
+	fail(arm64.NE)
+	c.a.Load(a64D, a64C, c.enc.TypedLength)
+	c.a.Cmp(a64A, a64D, true)
+	fail(arm64.HS)
+	c.a.LoadU8(a64C, a64C, c.enc.TypedKind)
+}
+
+// typedCases is amd64's: for each element type native code makes, a case
+// of the type in C, the element's address into A first.
+func (c *a64Compiler) typedCases(other arm64.Label, each func(kind int32)) {
+	for _, t := range typedKinds {
+		next := c.a.NewLabel()
+		c.a.CmpImm(a64C, int64(t.kind), false)
+		c.a.BCond(arm64.NE, next)
+		if t.shift != 0 {
+			c.a.ShiftImm(arm64.Lsl, a64A, a64A, t.shift, true)
+		}
+		c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+		each(t.kind)
+		c.a.Bind(next)
+	}
+	c.a.B(other)
+}
+
+// typedRead reads a typed array's element into F0, as amd64's.
+func (c *a64Compiler) typedRead(v *ssa.Value, done arm64.Label) {
+	stub := c.stubLabel(v.State, exitKind(v.Aux))
+	slow := stub
+	if c.enc.CallGo != 0 {
+		slow = c.a.NewLabel()
+	}
+	c.typedElement(v.Args[0], v.Args[1], false, func(cond arm64.Cond) { c.a.BCond(cond, slow) })
+	c.typedCases(slow, func(kind int32) {
+		switch kind {
+		case abi.ElemInt8:
+			c.a.LoadS8(a64A, a64A, 0)
+		case abi.ElemUint8, abi.ElemUint8Clamped:
+			c.a.LoadU8(a64A, a64A, 0)
+		case abi.ElemInt16:
+			c.a.LoadS16(a64A, a64A, 0)
+		case abi.ElemUint16:
+			c.a.LoadU16(a64A, a64A, 0)
+		case abi.ElemInt32:
+			c.a.LoadS32(a64A, a64A, 0)
+		case abi.ElemUint32:
+			c.a.LoadU32(a64A, a64A, 0)
+		case abi.ElemFloat32:
+			c.a.LoadS(a64F0, a64A, 0)
+			c.a.FCvtFromSingle(a64F0, a64F0)
+			c.a.B(done)
+			return
+		case abi.ElemFloat64:
+			c.a.LoadF(a64F0, a64A, 0)
+			c.a.B(done)
+			return
+		}
+		c.a.Scvtf(a64F0, a64A, true)
+		c.a.B(done)
+	})
+	if c.enc.CallGo == 0 {
+		return
+	}
+	c.a.Bind(slow)
+	size := int32(unsafe.Sizeof(abi.GoArg{}))
+	c.a.Store(a64Ctx, abi.OffGoArgs+c.enc.RefOffset, c.gpr(v.Args[0], a64C))
+	c.a.FMovFromF(a64A, c.fpr(v.Args[1], a64F0))
+	c.a.Store(a64Ctx, abi.OffGoArgs+size+c.enc.NumOffset, a64A)
+	c.goSaving(uint64(ssa.GoTypedRead), &stub)
+	c.a.LoadF(a64F0, a64Ctx, abi.OffGoArgs+c.enc.NumOffset)
+	c.a.B(done)
+}
+
+// typedWrite stores a number in a typed array's element, as amd64's.
+func (c *a64Compiler) typedWrite(v *ssa.Value, done, slow arm64.Label) {
+	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+	c.typedElement(v.Args[0], v.Args[1], true, fail)
+	c.typedCases(slow, func(kind int32) {
+		x := c.fpr(v.Args[2], a64F0)
+		switch kind {
+		case abi.ElemFloat64:
+			c.a.StoreF(a64A, 0, x)
+		case abi.ElemFloat32:
+			c.a.FCvtToSingle(a64F1, x)
+			c.a.StoreS(a64A, 0, a64F1)
+		case abi.ElemUint8Clamped:
+			// Saturated, and rounded half to even: LE after FCMP holds for
+			// an unordered pair, NaN's.
+			low, high, store := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+			c.a.FMovToF(a64F1, arm64.ZR)
+			c.a.FCmp(x, a64F1)
+			c.a.BCond(arm64.LE, low)
+			c.movImm(a64B, math.Float64bits(255))
+			c.a.FMovToF(a64F1, a64B)
+			c.a.FCmp(x, a64F1)
+			c.a.BCond(arm64.GE, high)
+			c.a.FRint(arm64.FRintN, a64F1, x)
+			c.a.Fcvtzs(a64B, a64F1)
+			c.a.B(store)
+			c.a.Bind(low)
+			c.movImm(a64B, 0)
+			c.a.B(store)
+			c.a.Bind(high)
+			c.movImm(a64B, 255)
+			c.a.Bind(store)
+			c.a.Store8(a64A, 0, a64B)
+		default:
+			// ToInt32's bits: FCVTZS's where |x| < 2**63, NaN's 0 among
+			// them; Go's where it saturates.
+			c.a.Fcvtzs(a64B, x)
+			c.movImm(a64C, math.MaxInt64)
+			c.a.Cmp(a64B, a64C, true)
+			fail(arm64.EQ)
+			c.movImm(a64C, 1<<63)
+			c.a.Cmp(a64B, a64C, true)
+			fail(arm64.EQ)
+			switch kind {
+			case abi.ElemInt8, abi.ElemUint8:
+				c.a.Store8(a64A, 0, a64B)
+			case abi.ElemInt16, abi.ElemUint16:
+				c.a.Store16(a64A, 0, a64B)
+			default:
+				c.a.Store32(a64A, 0, a64B)
+			}
+		}
+		c.a.B(done)
+	})
+}
+
 // elementCell turns the index in A into the address of an array's element
 // there, in A, failing unless it is within the dense elements and not a
 // hole, as amd64's does. It uses B and C.
@@ -3287,6 +3463,8 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.truth(v, c.guardFor(v))
 	case ssa.OpArrayOf:
 		c.arrayOf(v, c.guardFor(v))
+	case ssa.OpIndexedOf:
+		c.indexedOf(v, c.guardFor(v))
 	case ssa.OpObjectOf:
 		if c.objectOf(v, c.guardFor(v)) {
 			c.setG(v, a64C)
@@ -3453,9 +3631,16 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 	case ssa.OpElemKey:
 		c.index(arg(0), c.guardFor(v))
 	case ssa.OpElemRead:
+		typed, done := c.a.NewLabel(), c.a.NewLabel()
+		c.typedArray(arg(0), typed)
 		c.index(arg(1), c.guardFor(v))
 		c.element(arg(0), c.guardFor(v))
 		c.a.FMovToF(a64F0, a64B)
+		c.a.Bind(done)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(typed)
+			c.typedRead(v, done)
+		})
 		c.setF(v, a64F0)
 	case ssa.OpElemCell:
 		fail, done := c.guardFor(v), c.a.NewLabel()
@@ -3480,11 +3665,12 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Bind(done)
 		c.setG(v, a64A)
 	case ssa.OpElemWrite:
-		fail, done := c.guardFor(v), c.a.NewLabel()
+		done, typed := c.a.NewLabel(), c.a.NewLabel()
+		slow := c.stubLabel(v.State, exitKind(v.Aux))
 		if c.enc.CallGo != 0 {
 			// Any other store Go makes if it can (ssa.GoElemWrite).
-			slow, stub := c.a.NewLabel(), c.stubLabel(v.State, exitKind(v.Aux))
-			fail = func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+			stub := slow
+			slow = c.a.NewLabel()
 			c.cold = append(c.cold, func() {
 				c.a.Bind(slow)
 				size := int32(unsafe.Sizeof(abi.GoArg{}))
@@ -3497,6 +3683,12 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 				c.a.B(done)
 			})
 		}
+		fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+		c.cold = append(c.cold, func() {
+			c.a.Bind(typed)
+			c.typedWrite(v, done, slow)
+		})
+		c.typedArray(arg(0), typed)
 		c.index(arg(1), fail)
 		c.element(arg(0), fail)
 		c.boxF64(c.fpr(arg(2), a64F0), a64B)
