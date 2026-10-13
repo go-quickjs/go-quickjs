@@ -861,7 +861,14 @@ func (s *jitState) listVictims(now uint64, need int) bool {
 			}
 			class = jitVictimCode
 		}
-		v = append(v, jitVictim{key: key, e: e, class: class, used: e.used, serial: e.serial, bytes: e.bytes})
+		// With its function's programs, which go with it (reclaim): a
+		// newcomer's room counts its own (learn), and an old entry's
+		// had made too little for it.
+		n := e.bytes
+		if l := s.lowered[key]; l != nil {
+			n += l.bytes
+		}
+		v = append(v, jitVictim{key: key, e: e, class: class, used: e.used, serial: e.serial, bytes: n})
 	}
 	if !s.compiling {
 		v = append(v, jitVictim{class: jitVictimWork, bytes: s.workBytes()})
@@ -910,6 +917,11 @@ func (s *jitState) reclaim(x *jitVictim, now uint64) bool {
 		}
 		if !s.dropEntry(x.key, e) {
 			return false
+		}
+		if l := s.lowered[x.key]; l != nil {
+			if k := s.links[x.key]; k == nil || k.owner == nil {
+				s.dropLowering(x.key, l)
+			}
 		}
 		s.evicted++
 	}
