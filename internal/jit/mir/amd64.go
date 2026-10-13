@@ -3791,6 +3791,13 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.movImm(scratchA, word)
 		c.a.Op(amd64.Cmp, w, scratchA, true)
 		c.a.Setcc(amd64.CondE, scratchA)
+		if v.Aux == 2 {
+			// Null, or undefined.
+			c.movImm(scratchC, c.enc.Undefined)
+			c.a.Op(amd64.Cmp, w, scratchC, true)
+			c.a.Setcc(amd64.CondE, scratchC)
+			c.a.Op(amd64.Or, scratchA, scratchC, false)
+		}
 		c.a.MovZX8(scratchA, scratchA)
 		c.setG(v, scratchA)
 	case ssa.OpLooseNullish:

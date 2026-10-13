@@ -178,6 +178,41 @@ func TestJITImport(t *testing.T) {
 	}
 }
 
+// ?? and ?. test a value for null and undefined natively, nothing
+// converted -- not 0, "", false or NaN, and no object -- keeping it on
+// either path.
+func TestJITNullish(t *testing.T) {
+	cases := []struct{ name, src string }{
+		{"??", `function f(a) { let s = ""; for (let i = 0; i < a.length; i++) s += (a[i] ?? "d") + ","; return s }
+			const a = [null, undefined, 0, "", false, NaN, "x", {}, [], 7]; let r = ""; for (let k = 0; k < 300; k++) r = f(a); r`},
+		{"?.", `function f(a) { let n = 0; for (let i = 0; i < a.length; i++) { const o = a[i]; n += (o?.x ?? 1) + (o?.f?.() ?? 2) + (o?.["y"]?.z ?? 3) } return n }
+			const a = [null, undefined, { x: 10 }, { f() { return 20 } }, { y: { z: 30 } }, { y: null }, 0]; let r = 0; for (let k = 0; k < 300; k++) r += f(a); r`},
+		{"numbers", `function f(n) { let s = 0; for (let i = 0; i < n; i++) { const v = i % 3 ? i : null; s += v ?? -1 } return s }
+			let r = 0; for (let k = 0; k < 100; k++) r += f(1000); r`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			run := func(opts ...quickjs.Option) (string, vm.JITStats) {
+				r := quickjs.New(opts...)
+				defer r.Close()
+				v, err := r.Eval(tc.src)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return v.String(), hostaccess.VM(r).JITStats()
+			}
+			want, _ := run()
+			got, st := run(quickjs.WithJIT())
+			if got != want {
+				t.Fatalf("jit: %s, interpreter: %s", got, want)
+			}
+			if st.Budget != 0 && st.SSAEntries == 0 {
+				t.Errorf("nothing ran natively: %+v", st)
+			}
+		})
+	}
+}
+
 // Destructuring from an iterator compiles: its cursor made by a call of Go,
 // each step natively over an array walked in place and by Go otherwise --
 // undefined once done, the iterator's next called no more -- and its end

@@ -162,8 +162,8 @@ func (p *Program) Validate() error {
 				return bad("invalid branch target")
 			}
 		case Branch:
-			left, right = true, in.Operator != Truth
-			if !target(in.Target) || in.Operator != Truth && (in.Operator < Lt || in.Operator > Ne) {
+			left, right = true, in.Operator != Truth && in.Operator != Nullish
+			if !target(in.Target) || in.Operator != Truth && in.Operator != Nullish && (in.Operator < Lt || in.Operator > Ne) {
 				return bad("invalid conditional branch")
 			}
 		case Return, Rethrow:

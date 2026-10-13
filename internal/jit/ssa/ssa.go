@@ -150,7 +150,8 @@ const (
 	OpNot    // bool -> bool
 	// Equality with null or undefined, whatever the other operand is, as
 	// JavaScript defines it. OpStrictNullish is x === null (Aux 0) or
-	// x === undefined (Aux 1): its word is that one. OpLooseNullish is
+	// x === undefined (Aux 1): its word is that one -- or either (Aux 2),
+	// as ?? and ?. test it (ir.Nullish). OpLooseNullish is
 	// x == null, as == undefined: the word is either, or an object's with
 	// Annex B's [[IsHTMLDDA]] (abi.Encoding.FlagHTMLDDA), which it reads
 	// through the object's origin, as OpObjectOf finds it, exiting to Go

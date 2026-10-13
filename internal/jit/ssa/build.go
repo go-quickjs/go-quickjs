@@ -2332,6 +2332,10 @@ func (b *builder) instruction(blk *Block, pc int) {
 		var c *Value
 		if in.Operator == ir.Truth {
 			c = guard(OpTruth, Bool, ir.GuardExit, operand(in.Left))
+		} else if in.Operator == ir.Nullish {
+			// ?? and ?.: null or undefined, no conversion.
+			c = f.newValue(blk, OpStrictNullish, Bool, operand(in.Left))
+			c.Aux = 2
 		} else if n := b.equality(blk, in, operand, guard); n != nil {
 			c = n
 		} else {

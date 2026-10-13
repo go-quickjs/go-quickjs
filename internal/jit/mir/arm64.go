@@ -3538,6 +3538,20 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 			word = c.enc.Undefined
 		}
 		w := c.gpr(arg(0), a64B)
+		if v.Aux == 2 {
+			// Null, or undefined: both compared before the result, which
+			// may be the operand's register, is written.
+			c.movImm(a64A, c.enc.Undefined)
+			c.a.Cmp(w, a64A, true)
+			c.a.Cset(a64C, arm64.EQ)
+			c.movImm(a64A, word)
+			c.a.Cmp(w, a64A, true)
+			c.a.Cset(a64A, arm64.EQ)
+			d := c.gdst(v)
+			c.a.Op(arm64.Orr, d, a64A, a64C, false)
+			c.setG(v, d)
+			break
+		}
 		c.movImm(a64A, word)
 		c.a.Cmp(w, a64A, true)
 		d := c.gdst(v)

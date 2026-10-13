@@ -265,6 +265,11 @@ const (
 	// Mod is JavaScript's % on numbers, C's fmod: only the new pipeline's
 	// lowering makes it, and a non-number exits to Go, as Eq does.
 	Mod
+	// Nullish is a Branch's condition that Left is null or undefined, as
+	// ?? and ?. test it: nothing converted, and no object with Annex B's
+	// [[IsHTMLDDA]], which == null alone takes for null. Only the new
+	// pipeline's lowering makes it.
+	Nullish
 )
 
 // Instruction reads Left and Right and writes Dest (and Extra for paired

@@ -288,6 +288,9 @@ func (p *Program) EvaluateArrays(slots []Value, arrays []ArrayView, pc int, budg
 			var ok bool
 			if in.Operator == Truth {
 				condition, ok = truth(read(in.Left))
+			} else if in.Operator == Nullish {
+				k := read(in.Left).Kind
+				condition, ok = k == Null || k == Undefined, true
 			} else {
 				var v Value
 				v, ok = binary(in.Operator, read(in.Left), read(in.Right))

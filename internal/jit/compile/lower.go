@@ -267,6 +267,10 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			iters = true
 		}
 		handlers = handlers || in.Op == bytecode.OpPushCatch || in.Op == bytecode.OpPushFinally
+		if (in.Op == bytecode.OpJumpIfNullish || in.Op == bytecode.OpJumpIfNotNullish) && !m.ssa {
+			// The new pipeline tests a value for null and undefined.
+			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
+		}
 		if in.Op == bytecode.OpThrow && !m.ssa {
 			// The new pipeline leaves a throw to the interpreter, which
 			// throws it, as V8's code calls the runtime to throw.
@@ -742,7 +746,7 @@ func selectNumericProperties(p *ir.Program, cells bool) {
 				read(in.Right, number)
 			}
 		case ir.Branch:
-			if in.Operator != ir.Truth && !(cells && (in.Operator == ir.Eq || in.Operator == ir.Ne)) {
+			if in.Operator != ir.Truth && in.Operator != ir.Nullish && !(cells && (in.Operator == ir.Eq || in.Operator == ir.Ne)) {
 				read(in.Left, number)
 				read(in.Right, number)
 			}
@@ -1196,6 +1200,16 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 			return effect{delta: 1}, nil
 		}
 		return effect{need: 1}, nil
+	case bytecode.OpJumpIfNullish, bytecode.OpJumpIfNotNullish:
+		// ?.: the value kept on either path; ??: kept where it jumps, the
+		// value not nullish, and popped where it goes on to the default.
+		if uint64(in.A) >= uint64(len(fn.Code)) {
+			return bad("branch target out of bounds")
+		}
+		if in.Op == bytecode.OpJumpIfNotNullish {
+			return effect{branch: true, need: 1, delta: -1, keep: true}, nil
+		}
+		return effect{branch: true, need: 1}, nil
 	case bytecode.OpJump, bytecode.OpJumpIfFalse, bytecode.OpJumpIfTrue,
 		bytecode.OpJumpIfFalseKeep, bytecode.OpJumpIfTrueKeep, bytecode.OpJumpIfCmpFalse:
 		if uint64(in.A) >= uint64(len(fn.Code)) {
@@ -1682,6 +1696,8 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this bool) ir.Instr
 		return ir.Instruction{Op: ir.Jump, Target: int(in.A)}
 	case bytecode.OpJumpIfTrue, bytecode.OpJumpIfFalse, bytecode.OpJumpIfTrueKeep, bytecode.OpJumpIfFalseKeep:
 		return ir.Instruction{Op: ir.Branch, Operator: ir.Truth, Target: int(in.A), Left: top, When: in.Op == bytecode.OpJumpIfTrue || in.Op == bytecode.OpJumpIfTrueKeep}
+	case bytecode.OpJumpIfNullish, bytecode.OpJumpIfNotNullish:
+		return ir.Instruction{Op: ir.Branch, Operator: ir.Nullish, Target: int(in.A), Left: top, When: in.Op == bytecode.OpJumpIfNullish}
 	case bytecode.OpJumpIfCmpFalse:
 		op, _ := operator(in.B)
 		return ir.Instruction{Op: ir.Branch, Operator: op, Target: int(in.A), Left: ir.Slot(sp - 2), Right: top, Strict: strictOp(in.B)}
