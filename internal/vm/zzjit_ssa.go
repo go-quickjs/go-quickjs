@@ -1495,7 +1495,9 @@ func (fb *jitFeedback) Inline(pc int) (ssa.InlineSite, bool) {
 			kind = jitLowerForward
 		}
 		p, err := fb.r.jitLower(in.cl.fn, kind)
-		if err != nil {
+		if err != nil || in.cl.fn.Kind == bytecode.KindArrow && p.This {
+			// An arrow's this is the one it captured, not the call's
+			// receiver, which inlined code would give it.
 			return ssa.InlineSite{}, false
 		}
 		call := jitCallInstr(fb.fn.Code[pc])
@@ -1591,6 +1593,12 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 			fb.holders, fb.pools = append(fb.holders, in.obj), append(fb.pools, in.pool)
 			sites = append(sites, ssa.CallSite{Callee: uintptr(unsafe.Pointer(in.obj)), ThisSlot: -1,
 				Pool: uintptr(unsafe.Pointer(in.pool)), Alloc: true})
+			continue
+		}
+		if in.cl.fn.Kind == bytecode.KindArrow && in.cl.fn.UsesThis {
+			// An arrow's this is the one it captured, which Go gives it,
+			// not the call's receiver, which a native call writes where the
+			// callee reads its this: Go makes the call.
 			continue
 		}
 		// Only looked up: a compile here would share the workspaces of the

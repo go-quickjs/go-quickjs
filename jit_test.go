@@ -370,6 +370,48 @@ func TestJITTailCalls(t *testing.T) {
 	}
 }
 
+// An arrow's this is the one it captured, however it is called: as a
+// method, through call, in tail position, by native code or inlined into
+// it. A native call or an inlined body would have read the call's receiver
+// there (Are We Fast Yet's Richards, whose task handlers are arrows a task
+// calls as its method, failed with the JIT).
+func TestJITArrowThis(t *testing.T) {
+	cases := []struct{ name, src string }{
+		{"as a method, in tail position", `class Owner { constructor() { this.tag = "owner"; this.task = new Task(() => this.tag) } }
+			class Task { constructor(f) { this.f = f; this.tag = "task" } run() { return this.f() } }
+			function loop(t, n) { let s = ""; for (let i = 0; i < n; i++) s = t.run(); return s }
+			const o = new Owner(); let r = ""; for (let k = 0; k < 200; k++) r = loop(o.task, 100); r`},
+		{"as a method", `class Owner { constructor() { this.tag = "owner"; this.task = new Task(() => this.tag) } }
+			class Task { constructor(f) { this.f = f; this.tag = "task" } run() { const v = this.f(); return v } }
+			function loop(t, n) { let s = ""; for (let i = 0; i < n; i++) s = t.run(); return s }
+			const o = new Owner(); let r = ""; for (let k = 0; k < 200; k++) r = loop(o.task, 100); r`},
+		{"through call", `const o = { v: 3, mk() { return (x) => this.v + x } }
+			const f = o.mk(); let s = 0; for (let i = 0; i < 20000; i++) s += f.call({ v: 100 }, i % 7); s`},
+		{"from a loop, closures made anew", `function mk(v) { return { v, f: () => this === undefined ? v : -1 } }
+			let s = 0; for (let i = 0; i < 20000; i++) { const o = mk(i % 5); s += o.f() } s`},
+		{"calling itself in tail position", `const o = { n: 7, mk() { const g = (k) => k === 0 ? this.n : g(k - 1); return g } }
+			const g = o.mk(); let s = 0; for (let i = 0; i < 2000; i++) s += g.call({ n: 100 }, 50); s`},
+	}
+	for _, tc := range cases {
+		for _, strict := range []string{"", `"use strict"; `} {
+			t.Run(tc.name+map[string]string{"": "", `"use strict"; `: ", strict"}[strict], func(t *testing.T) {
+				run := func(opts ...quickjs.Option) string {
+					r := quickjs.New(opts...)
+					defer r.Close()
+					v, err := r.Eval(strict + tc.src)
+					if err != nil {
+						t.Fatal(err)
+					}
+					return v.String()
+				}
+				if want, got := run(), run(quickjs.WithJIT()); got != want {
+					t.Fatalf("jit: %s, interpreter: %s", got, want)
+				}
+			})
+		}
+	}
+}
+
 // Top-level code -- a script's, a module's, an indirect eval's -- runs
 // natively from its loops, as V8 enters it by on-stack replacement: its
 // globals, script-level lexical bindings and a module's bindings read where
