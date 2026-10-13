@@ -1047,8 +1047,19 @@ func (e *jitEntry) reoptDueNow() bool {
 	if e.feedReopt && (e.starts+e.link.in > e.feedStarts || e.ssaStats.work-e.feedWork >= uint64(e.reoptBudget)*jitReoptPer*jitReoptWork) {
 		return true
 	}
-	return e.reoptPending() && (e.ssaStats.entries+e.ssaStats.hosts+e.ssaStats.goCalls+e.link.in+uint64(e.slowTries) >= uint64(e.reoptBudget) ||
-		e.ssaStats.work >= uint64(e.reoptBudget)*jitReoptPer*jitReoptWork)
+	budget := uint64(e.reoptBudget)
+	if e.polyReopt && !e.inlineReopt && !e.upgradeReopt {
+		// Shapes alone, met since: each compile for them waits twice as
+		// long as the last, so that a function's reads meeting a
+		// program's classes one by one -- Typescript's compiler walking
+		// its syntax trees -- cost compiles in proportion to what it runs,
+		// not one at each, as they had, thirteen and more; while one whose
+		// reads meet a few, as DeltaBlue's constraints' do, is compiled
+		// for them as soon.
+		budget <<= min(e.polyReopts, 20)
+	}
+	return e.reoptPending() && (e.ssaStats.entries+e.ssaStats.hosts+e.ssaStats.goCalls+e.link.in+uint64(e.slowTries) >= budget ||
+		e.ssaStats.work >= budget*jitReoptPer*jitReoptWork)
 }
 
 // jitReoptBudget is how many native stretches -- entries from Go, exits to
@@ -1087,6 +1098,9 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 		e.inlineReopts++
 	case e.upgradeReopt:
 		e.upgradeReopts++
+	}
+	if e.polyReopt {
+		e.polyReopts++
 	}
 	e.reopt, e.inlineReopt, e.polyReopt, e.upgradeReopt, e.unwindReopt, e.feedReopt = false, false, false, false, false, false
 	// The misses that count toward every entry are the new code's.

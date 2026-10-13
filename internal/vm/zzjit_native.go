@@ -251,11 +251,13 @@ type jitEntry struct {
 	// compiled for, each with up to jitPropertyCases of them, which it is
 	// compiled again for (jitPolySeen); polyReopt marks that it is to be,
 	// polyPending that it is to be once polySettled exits in a row have
-	// found no other (jitPolySettle).
+	// found no other (jitPolySettle), and polyReopts counts the times it
+	// was (reoptDueNow).
 	poly        []jitPolySite
 	polyReopt   bool
 	polyPending bool
 	polySettled uint8
+	polyReopts  uint8
 	// strSites are the method reads that met a string receiver, which the
 	// code reads off String.prototype once compiled again
 	// (jitFeedback.StringProperty).

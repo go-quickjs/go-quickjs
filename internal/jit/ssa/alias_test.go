@@ -1,6 +1,77 @@
 package ssa
 
-import "testing"
+import (
+	"math/rand"
+	"testing"
+)
+
+// A phi may be a cell if any phi it reaches through phis has an argument
+// that may be: over graphs of phis that make loops within loops, every
+// answer is reachability's, whichever phi is asked first, with the
+// answers kept from query to query.
+func TestAliasesLoops(t *testing.T) {
+	rng := rand.New(rand.NewSource(1))
+	for round := 0; round < 400; round++ {
+		f := &Func{ThisSlot: -1}
+		blk := f.newBlock(-1)
+		n := 2 + rng.Intn(30)
+		phis := make([]*Value, n)
+		for i := range phis {
+			phis[i] = f.newValue(blk, OpPhi, Source)
+		}
+		var cells []*Value
+		for i := 0; i < 3; i++ {
+			c := f.newValue(blk, OpPropCell, Source)
+			c.Key = uint32(i)
+			cells = append(cells, c)
+		}
+		none := f.newValue(blk, OpConstSource, Source)
+		none.Aux = -1
+		for _, p := range phis {
+			for j := 1 + rng.Intn(3); j > 0; j-- {
+				switch r := rng.Intn(40); {
+				case r < 30:
+					p.Args = append(p.Args, phis[rng.Intn(n)])
+				case r < 32:
+					p.Args = append(p.Args, cells[rng.Intn(len(cells))])
+				default:
+					p.Args = append(p.Args, none)
+				}
+			}
+		}
+		reaches := func(p *Value, key uint32) bool {
+			seen := map[*Value]bool{p: true}
+			work := []*Value{p}
+			for len(work) > 0 {
+				v := work[len(work)-1]
+				work = work[:len(work)-1]
+				for _, x := range v.Args {
+					switch {
+					case x.Op == OpPhi:
+						if !seen[x] {
+							seen[x] = true
+							work = append(work, x)
+						}
+					case x.Op == OpPropCell && x.Key == key:
+						return true
+					}
+				}
+			}
+			return false
+		}
+		a := newAliases(f)
+		for _, i := range rng.Perm(n) {
+			for key := uint32(0); key < 3; key++ {
+				if got, want := a.may(key, phis[i]), reaches(phis[i], key); got != want {
+					t.Fatalf("round %d: phi %d, key %d: %v, want %v", round, i, key, got, want)
+				}
+			}
+		}
+		if a.depth != 0 || len(a.provisional) != 0 {
+			t.Fatalf("round %d: a search left unfinished", round)
+		}
+	}
+}
 
 // An answer of no found for a phi while a phi of its loop was being
 // searched is kept only if the search ends in no. Round a loop, b's shadow

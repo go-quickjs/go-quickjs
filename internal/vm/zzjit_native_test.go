@@ -6066,6 +6066,48 @@ func TestJITSSACallSeenWhileCalleeLeaves(t *testing.T) {
 	}
 }
 
+// A function whose reads meet new shapes for as long as it runs, one read
+// after another, is compiled again for them less and less often: each
+// compile for shapes alone waits twice as long as the last (reoptDueNow),
+// so that it is compiled some ten times, not at each read's new shapes,
+// as Typescript's compiler's functions walking its syntax trees had been,
+// thirteen and more. Its answers are the interpreter's.
+func TestJITSSAPolymorphicReadsBackOff(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	runtime.GC()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	const sites, kinds = 12, 4
+	var b strings.Builder
+	for k := 0; k < sites*kinds; k++ {
+		fmt.Fprintf(&b, "function C%d(){}; C%d.prototype.v = %d;\n", k, k, k)
+	}
+	b.WriteString("var objs = [")
+	for j := 0; j < sites; j++ {
+		fmt.Fprintf(&b, "new C%d(),", j*kinds)
+	}
+	b.WriteString("];\nfunction sum(n) { let t = 0; for (let i = 0; i < n; i++) t = (t * 3")
+	for j := 0; j < sites; j++ {
+		fmt.Fprintf(&b, " + objs[%d].v", j)
+	}
+	b.WriteString(") | 0; return t }\n")
+	// A phase gives one read a shape it has not met, then runs.
+	var rounds []string
+	for phase := 0; phase < sites*(kinds-1); phase++ {
+		j := phase % sites
+		rounds = append(rounds, fmt.Sprintf("(objs[%d] = new C%d(), sum(40))", j, j*kinds+1+phase/sites))
+		for i := 0; i < 8; i++ {
+			rounds = append(rounds, "sum(40)")
+		}
+	}
+	r := jitAgreesForTest(t, b.String(), rounds...)
+	e := jitNativeForTest(t, r, "sum")
+	if e.polyReopts == 0 || e.polyReopts > 10 {
+		t.Errorf("compiled again %d times for %d phases of new shapes", e.polyReopts, sites*(kinds-1))
+	}
+}
+
 // A read whose receivers turn out to be of several shapes, met one after
 // another, has the code compiled again once for them all, after its exits
 // have found no other for a while (jitPolySettle), not once for each; the
