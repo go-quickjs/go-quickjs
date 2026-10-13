@@ -108,3 +108,48 @@ func TestJITGenericCallsNative(t *testing.T) {
 		t.Errorf("forEach called its callbacks through Go %d times in 14,000 calls", n)
 	}
 }
+
+// An arrow that reads this, called as a method -- as AWFY's Richards'
+// tasks call their handlers, this.fn(work) -- is called natively, given
+// the this it captured where it was made, from the closures made anew at
+// each call of their maker too; and its calls in tail position are made
+// natively. Go had made every such call, entering the arrow's code from
+// Go each time, and before that refused the arrow outright.
+func TestJITArrowCallsNative(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	runtime.GC()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	r := New(Config{JIT: true})
+	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	const setup = `
+		class Sched {
+			constructor() { this.n = 0 }
+			bump(w) { this.n += w; return w }
+			make(k) { return { k, fn: (w) => w === 0 ? this.n : this.bump(w + k) } }
+		}
+		const s = new Sched()
+		const tasks = [s.make(1), s.make(2), s.make(3)]
+		function runTask(t, w) { return t.fn(w) }
+		function round(n) { let x = 0; for (let i = 0; i < n; i++) x += runTask(tasks[i % 3], i & 3); return x }`
+	if _, err := r.Run(compileForTest(t, setup)); err != nil {
+		t.Fatal(err)
+	}
+	for range 50 {
+		if _, err := r.Run(compileForTest(t, `round(300)`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e := r.jitEntryOf(r.global.getOwn(r.atoms.intern("runTask")).value().Object().fn().closure)
+	if e == nil || e.ssa == nil {
+		t.Fatalf("runTask has no code: %+v", e)
+	}
+	goCalls, hosts := e.ssaStats.goCalls, e.ssaStats.hosts
+	if _, err := r.Run(compileForTest(t, `round(3000)`)); err != nil {
+		t.Fatal(err)
+	}
+	if n := e.ssaStats.goCalls - goCalls + e.ssaStats.hosts - hosts; n > 10 {
+		t.Errorf("runTask called the arrows through Go %d times in 3,000 calls", n)
+	}
+}

@@ -251,12 +251,6 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// has none of.
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
-		if (in.Op == bytecode.OpTailCall || in.Op == bytecode.OpTailCallMethod) && fn.Kind == bytecode.KindArrow && fn.UsesThis {
-			// An arrow's this is the one it captured, which a call of
-			// itself in tail position, made natively, would give the
-			// call's receiver in its place.
-			return nil, refuse(pc, "a call in tail position in an arrow that reads this")
-		}
 		if (in.Op == bytecode.OpPushCatch || in.Op == bytecode.OpPushFinally || in.Op == bytecode.OpPopCatch || in.Op == bytecode.OpRethrow) && (!m.ssa || m.callee) {
 			// Exception handlers are the new pipeline's, in a function's
 			// own code: a callee inlined has no frame of its own for Go to
@@ -402,7 +396,8 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		}
 	}
 	p := &ir.Program{Locals: fn.LocalCount + len(fn.Upvalues), StackSize: fn.MaxStack, This: this, Maps: maps, Code: make([]ir.Instruction, len(fn.Code)),
-		Handlers: table, HandlerAt: chains}
+		ArrowThis: fn.Kind == bytecode.KindArrow && fn.UsesThis,
+		Handlers:  table, HandlerAt: chains}
 	for pc, in := range fn.Code {
 		if to, ok := goBranch(in); ok && maps[pc].Depth >= 0 && !slices.Contains(p.Entries, to) {
 			p.Entries = append(p.Entries, to)

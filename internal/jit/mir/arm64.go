@@ -1361,6 +1361,29 @@ func (c *a64Compiler) byCode(t *ssa.CallSite, next arm64.Label) {
 	c.a.Bind(done)
 }
 
+// arrowThis is amd64's: the address of the this arrow t captured, the
+// callee in C unless t checks its function, or next, the callee in C again.
+func (c *a64Compiler) arrowThis(t *ssa.CallSite, next arm64.Label) {
+	miss, done := c.a.NewLabel(), c.a.NewLabel()
+	if t.ByCode == 0 {
+		c.a.Store(a64Ctx, abi.OffCallCallee, a64C)
+	}
+	c.a.Load(a64B, a64Ctx, abi.OffCallCallee)
+	c.a.Load(a64B, a64B, c.enc.ObjectExt)
+	c.a.Load(a64B, a64B, c.enc.ObjectData+8)
+	c.a.Load(a64B, a64B, c.enc.FuncExtra)
+	c.a.Cbz(a64B, miss, true)
+	c.a.Load(a64A, a64B, c.enc.ExtraLexThisRef)
+	c.a.Cbnz(a64A, miss, true)
+	c.a.AddImm(a64B, a64B, int64(c.enc.ExtraLexThis), true)
+	c.a.Store(a64Ctx, abi.OffCallThis, a64B)
+	c.a.B(done)
+	c.a.Bind(miss)
+	c.a.Load(a64C, a64Ctx, abi.OffCallCallee)
+	c.a.B(next)
+	c.a.Bind(done)
+}
+
 // genericCheck is amd64's: call v, of a function none of its sites is, the
 // callee in C, made through the function's link, or miss.
 func (c *a64Compiler) genericCheck(v *ssa.Value, site *ssa.CallSite, target int, checked, miss arm64.Label) {
@@ -1857,6 +1880,9 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		if t.Via != 0 {
 			c.viaGuards(t, v.Args[0], guard)
 		}
+		if t.ArrowThis {
+			c.arrowThis(t, next)
+		}
 		if t.Pop {
 			c.popGuards(t, v.Args[0], guard)
 			c.a.B(checked)
@@ -1932,7 +1958,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	}
 	// As amd64's: a call of one function writes its operands where the
 	// callee has them, unrecorded.
-	direct, ops := len(sites) == 1 && !gen && (site.ThisSlot < 0 || site.Method || site.Pool != 0), calleeSlot
+	direct, ops := len(sites) == 1 && !gen && !site.ArrowThis && (site.ThisSlot < 0 || site.Method || site.Pool != 0), calleeSlot
 	if site.Method {
 		ops--
 	}
@@ -2083,6 +2109,13 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 			c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, high2)
 			c.movImm(tmp, c.enc.Object)
 			c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, tmp)
+		} else if t.ArrowThis {
+			// As amd64's: the this it captured.
+			c.a.Load(high2, a64Ctx, abi.OffCallThis)
+			c.a.Load(top, high2, c.enc.NumOffset)
+			c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, top)
+			c.a.Load(top, high2, c.enc.RefOffset)
+			c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, top)
 		} else if (t.ThisSlot >= 0 || site.Method && site.Via == 0) && !direct {
 			nb, nd, rb, rd := words(calleeSlot - 1)
 			c.a.Load(top, nb, nd)

@@ -221,6 +221,10 @@ type Context struct {
 	// CallLink is the link of the function a generic call found
 	// (Encoding's Link fields), kept between its checks and its frame.
 	CallLink uintptr
+	// CallThis is the address of the this an arrow that reads it captured
+	// (Encoding's ExtraLexThis), which a native call of it gives it in
+	// place of the call's receiver (ssa.CallSite's ArrowThis).
+	CallThis uintptr
 	// Hints is the VM's hint table, shared by every context, which a
 	// generic call finds its callee's link in (HintTable).
 	Hints *HintTable
@@ -474,6 +478,7 @@ var (
 	OffOpen          = int32(unsafe.Offsetof(Context{}.Open))
 	OffCallTarget    = int32(unsafe.Offsetof(Context{}.CallTarget))
 	OffCallLink      = int32(unsafe.Offsetof(Context{}.CallLink))
+	OffCallThis      = int32(unsafe.Offsetof(Context{}.CallThis))
 	OffHints         = int32(unsafe.Offsetof(Context{}.Hints))
 	OffEnterCallee   = int32(unsafe.Offsetof(Context{}.EnterCallee))
 	OffInlineLocals  = int32(unsafe.Offsetof(Context{}.InlineLocals))
@@ -639,7 +644,12 @@ type Encoding struct {
 	// and locals and stack together at LinkParams, LinkLocals and
 	// LinkFrame; and its flags (LinkCoerce...) at LinkFlags -- each a
 	// uint64.
-	ClosureHint, HintSlotSize, HintSlotFn, HintSlotLink             int32
+	ClosureHint, HintSlotSize, HintSlotFn, HintSlotLink int32
+	// An arrow's function data has, at FuncExtra, a pointer to what it
+	// captured where it was made: the this at ExtraLexThis, a value, and,
+	// at ExtraLexThisRef, the binding of a derived constructor's this it
+	// shares, nil for none.
+	FuncExtra, ExtraLexThis, ExtraLexThisRef                        int32
 	LinkEntry, LinkIn, LinkParams, LinkLocals, LinkFrame, LinkFlags int32
 	// FlagHTMLDDA is the flags byte's bit for Annex B's [[IsHTMLDDA]],
 	// which makes an object == null and == undefined.

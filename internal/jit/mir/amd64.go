@@ -517,6 +517,9 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		if t.Via != 0 {
 			c.viaGuards(t, v.Args[0], guard)
 		}
+		if t.ArrowThis {
+			c.arrowThis(t, next)
+		}
 		if t.Pop {
 			// Array.prototype.pop, its fast path's.
 			c.popGuards(t, v.Args[0], guard)
@@ -614,7 +617,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	// them (directOperand), not recorded: Go never reads them, as a callee
 	// that leaves native code is finished from its own frame, and its
 	// result replaces them (the VM's jitCallResult).
-	direct, ops := len(sites) == 1 && !gen && (site.ThisSlot < 0 || site.Method || site.Pool != 0), calleeSlot
+	direct, ops := len(sites) == 1 && !gen && !site.ArrowThis && (site.ThisSlot < 0 || site.Method || site.Pool != 0), calleeSlot
 	if site.Method {
 		ops--
 	}
@@ -772,6 +775,13 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 			c.storeImm(top, abi.OffPoolObjects, 0, tmp)
 			c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, high2)
 			c.storeImm(calleeCtx, abi.OffThis+c.enc.NumOffset, c.enc.Object, tmp)
+		} else if t.ArrowThis {
+			// The this it captured (arrowThis).
+			c.a.Load(high2, regCtx, abi.OffCallThis)
+			c.a.Load(top, high2, c.enc.NumOffset)
+			c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, top)
+			c.a.Load(top, high2, c.enc.RefOffset)
+			c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, top)
 		} else if (t.ThisSlot >= 0 || site.Method && site.Via == 0) && !direct {
 			nb, nd, rb, rd := words(calleeSlot - 1)
 			c.a.Load(top, nb, nd)
@@ -1359,6 +1369,35 @@ func (c *compiler) byCode(t *ssa.CallSite, next amd64.Label) {
 	c.a.Store(regCtx, abi.OffCallClosure, scratchB)
 	c.a.Load(scratchA, scratchB, c.enc.ClosureUpvalues)
 	c.a.Store(regCtx, abi.OffCallUpvalues, scratchA)
+	c.a.Jmp(done)
+	c.a.Bind(miss)
+	c.a.Load(scratchC, regCtx, abi.OffCallCallee)
+	c.a.Jmp(next)
+	c.a.Bind(done)
+}
+
+// arrowThis has a call of site t, an arrow that reads this, which the
+// call's checks found, the callee in scratchC unless t checks the function
+// (ByCode), keep the address of the this the arrow captured (abi.Context's
+// CallThis), which its frame is given in place of the call's receiver --
+// or go to next, the callee in scratchC again, for an arrow that shares a
+// derived constructor's binding of this, which Go calls.
+func (c *compiler) arrowThis(t *ssa.CallSite, next amd64.Label) {
+	miss, done := c.a.NewLabel(), c.a.NewLabel()
+	if t.ByCode == 0 {
+		c.a.Store(regCtx, abi.OffCallCallee, scratchC)
+	}
+	c.a.Load(scratchB, regCtx, abi.OffCallCallee)
+	c.a.Load(scratchB, scratchB, c.enc.ObjectExt)
+	c.a.Load(scratchB, scratchB, c.enc.ObjectData+8)
+	c.a.Load(scratchB, scratchB, c.enc.FuncExtra)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	c.a.Jcc(amd64.CondE, miss)
+	c.a.Load(scratchA, scratchB, c.enc.ExtraLexThisRef)
+	c.a.Op(amd64.Test, scratchA, scratchA, true)
+	c.a.Jcc(amd64.CondNE, miss)
+	c.a.OpImm(amd64.Add, scratchB, c.enc.ExtraLexThis, true)
+	c.a.Store(regCtx, abi.OffCallThis, scratchB)
 	c.a.Jmp(done)
 	c.a.Bind(miss)
 	c.a.Load(scratchC, regCtx, abi.OffCallCallee)

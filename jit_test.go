@@ -391,6 +391,14 @@ func TestJITArrowThis(t *testing.T) {
 			let s = 0; for (let i = 0; i < 20000; i++) { const o = mk(i % 5); s += o.f() } s`},
 		{"calling itself in tail position", `const o = { n: 7, mk() { const g = (k) => k === 0 ? this.n : g(k - 1); return g } }
 			const g = o.mk(); let s = 0; for (let i = 0; i < 2000; i++) s += g.call({ n: 100 }, 50); s`},
+		// Compiled, its calls in tail position made as calls, and, deep
+		// in the stack, by Go, which gives its frame up: a hundred
+		// thousand deep, as the interpreter's strict code's.
+		{"calling itself in tail position, deeply", `const o = { n: 7, mk() { "use strict"; const g = (k) => k === 0 ? this.n : g(k - 1); return g } }
+			const g = o.mk(); let s = 0; for (let i = 0; i < 20; i++) s += g.call({ n: 100 }, 100000); s`},
+		{"calling methods in tail position, as Richards' tasks", `class Sched { constructor() { this.n = 0 } bump(x) { this.n += x; return this } hold() { return this.n }
+				task() { return (w) => w === 0 ? this.hold() : this.bump(w) } }
+			const sc = new Sched(), t = sc.task(); let s = 0; for (let i = 0; i < 20000; i++) { const r = t(i & 3); s += typeof r === "number" ? r : r.n } s`},
 	}
 	for _, tc := range cases {
 		for _, strict := range []string{"", `"use strict"; `} {

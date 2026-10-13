@@ -221,6 +221,12 @@ type CallSite struct {
 	// code the function object points to.
 	Generic                  bool
 	GenericEnv, GenericRealm uintptr
+	// ArrowThis marks a callee that is an arrow reading this: the call
+	// gives it the this it captured, read from its function object
+	// (abi.Encoding's FuncExtra), in place of its receiver, as the
+	// interpreter's call does; one that shares a derived constructor's
+	// binding the call leaves to Go.
+	ArrowThis bool
 }
 
 // GoOp is what a call of Go does (CallSite's Go).
@@ -2727,7 +2733,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			// one of a function the call is seen to call a jump to that
 			// function's code, its frame in place of this one (OpTailSelf);
 			// Go makes any other.
-			if p := b.root.p; b.cur == b.root && p.Captured == nil {
+			if p := b.root.p; b.cur == b.root && p.Captured == nil && !p.ArrowThis {
 				sp := p.Locals + p.Maps[pc].Depth
 				args := make([]*Value, in.Extra+1, in.Extra+2)
 				for i := range args {

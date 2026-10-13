@@ -351,6 +351,14 @@ type Program struct {
 	StackSize int
 	// This reserves a read-only receiver snapshot after captured bindings.
 	This bool
+	// ArrowThis marks an arrow that reads this, the one it captured: a call
+	// of itself in tail position, made a jump to its start (ssa's
+	// OpTailSelf), would give it the call's receiver in its place, so
+	// native code makes its calls in tail position as calls, and Go those
+	// deep in the stack, which give its frame up (OpTailRoom). It had been
+	// refused, and AWFY's Richards ran its task functions, all such arrows,
+	// in the tree tier.
+	ArrowThis bool
 	// Globals contains source-name indices for reserved binding-view slots,
 	// following captured bindings and the optional receiver snapshot.
 	Globals []uint32

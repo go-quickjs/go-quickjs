@@ -91,6 +91,9 @@ var jitEncoding = abi.Encoding{
 	ClosureEnv:         int32(unsafe.Offsetof(closure{}.env)),
 	ClosureRealm:       int32(unsafe.Offsetof(closure{}.realm)),
 	ClosureHint:        int32(unsafe.Offsetof(closure{}.jitHint)),
+	FuncExtra:          int32(unsafe.Offsetof(funcData{}.extra)),
+	ExtraLexThis:       int32(unsafe.Offsetof(funcExtra{}.lexThis)),
+	ExtraLexThisRef:    int32(unsafe.Offsetof(funcExtra{}.lexThisRef)),
 	HintSlotSize:       int32(unsafe.Sizeof(jitHintSlot{})),
 	HintSlotFn:         int32(unsafe.Offsetof(jitHintSlot{}.fn)),
 	HintSlotLink:       int32(unsafe.Offsetof(jitHintSlot{}.link)),
@@ -1670,10 +1673,13 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 				Pool: uintptr(unsafe.Pointer(in.pool)), Alloc: true})
 			continue
 		}
-		if in.cl.fn.Kind == bytecode.KindArrow && in.cl.fn.UsesThis {
-			// An arrow's this is the one it captured, which Go gives it,
-			// not the call's receiver, which a native call writes where the
-			// callee reads its this: Go makes the call.
+		arrowThis := in.cl.fn.Kind == bytecode.KindArrow && in.cl.fn.UsesThis
+		if fd := in.obj.fn(); arrowThis && (fd == nil || fd.extra == nil || fd.extra.lexThisRef != nil || in.via) {
+			// An arrow's this is the one it captured, which the call gives
+			// it (ssa.CallSite's ArrowThis): one that shares a derived
+			// constructor's binding, or called through
+			// Function.prototype.call, whose object the call's checks find,
+			// Go makes.
 			continue
 		}
 		// Only looked up: a compile here would share the workspaces of the
@@ -1703,6 +1709,7 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 			Argc: int(call.A), Method: call.Op == bytecode.OpCallMethod,
 			Params: fn.ParamCount, LocalCount: fn.LocalCount, MaxStack: fn.MaxStack, ThisSlot: this, Coerce: fn.CoerceThis,
 		}
+		site.ArrowThis = arrowThis
 		if fn.HasTailCall {
 			// Whether its calls in tail position may give its frame up, as
 			// the interpreter gives up a frame that is no construction's,
