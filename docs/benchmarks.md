@@ -252,9 +252,12 @@ What the gap is made of:
   - Go inlines only the smallest functions into a function of that size, so
     the common cases are written out by hand where they are used.
 
-  An instruction costs about twice what it costs QuickJS. Fusing common
-  instruction sequences into single instructions (`a[i]`, `a[++i]`,
-  `x & 0xff`, `local * local`) reduces how many are dispatched. Nearly
+  The interpreter takes about twice QuickJS's time for the same loop: 1.2
+  to 3.0 times over six loops of simple instructions (1.9 by their
+  geometric mean; v0.26.0 with the tree tier off, `QJS_NOTREE=1`), each
+  of its instructions 3.6 to 5.1 ns. Fusing common instruction sequences
+  into single instructions (`a[i]`, `a[++i]`, `x & 0xff`,
+  `local * local`) reduces how many are dispatched. Nearly
   every function runs instead as trees of Go closures, a node for every few
   instructions with no operand stack between them, and with locals and
   constants read in place (see the [design notes](design.md)). That is what
@@ -263,7 +266,8 @@ What the gap is made of:
   loops, rebuilt from its blocks, with the comparison that ends a loop and
   the `i++` that steps it made in place: the tests that are mostly a loop --
   `empty_loop` (0.96), `int_arith` (0.94), `float_arith` (0.76),
-  `array_update` -- are level with QuickJS or ahead of it. A loop whose body
+  `array_update` -- are level with QuickJS or ahead of it, and the six
+  loops above take 0.39 to 1.15 times QuickJS's time as trees. A loop whose body
   would need its branches chosen by a structure of their own, an `&&` or an
   else-if chain, still runs from block to block, which costs less.
 - **Calls.** A call from JavaScript to JavaScript fills in a frame record of
