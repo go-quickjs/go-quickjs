@@ -336,3 +336,44 @@ function closure_callback(n)
     global_res = s;
     return n * 8;
 }
+
+/* a function that calls itself in tail position, 1024 deep, past the depth
+   where a call in tail position gives up its frame */
+function tail_self_loop(n, acc)
+{
+    "use strict";
+    if (n === 0)
+        return acc;
+    return tail_self_loop(n - 1, (acc + n) | 0);
+}
+
+function tail_self(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j += 1024)
+        s = (s + tail_self_loop(1024, j)) | 0;
+    global_res = s;
+    return n;
+}
+
+/* two functions that call each other in tail position, 1024 deep */
+function tail_even(n)
+{
+    "use strict";
+    return n === 0 ? 1 : tail_odd(n - 1);
+}
+
+function tail_odd(n)
+{
+    "use strict";
+    return n === 0 ? 0 : tail_even(n - 1);
+}
+
+function tail_mutual(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j += 1024)
+        s = (s + tail_even(1024 + (j & 1))) | 0;
+    global_res = s;
+    return n;
+}
