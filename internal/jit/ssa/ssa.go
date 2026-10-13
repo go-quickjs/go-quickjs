@@ -644,6 +644,9 @@ type scratch struct {
 	originPhis []*Value
 	// aliases is the store passes' answers (newAliases).
 	aliases aliases
+	// reaching is reconstruct's: the definition of each kept value that
+	// reaches a block's start, by value and block, for those it has met.
+	reaching map[int]*Value
 }
 
 // guardSeen is a guard Optimize has met, keyed by its op, and the index

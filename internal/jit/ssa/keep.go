@@ -203,7 +203,17 @@ func reconstruct(f *Func, order []*Value, kept [][]*Value) {
 		}
 		return last
 	}
-	entry := f.refsOf(len(order) * nb)
+	// entry is the definition of the k'th value that reaches block b's
+	// start, by k*nb+b, for the blocks a use has walked back to: a table
+	// of every value by every block had been most of what a compile of a
+	// large function allocated, a few hundred kept values by a few
+	// thousand blocks, almost none of whose entries were ever met.
+	sc := f.scr()
+	if sc.reaching == nil {
+		sc.reaching = map[int]*Value{}
+	}
+	entry := sc.reaching
+	defer clear(entry)
 	// alias is the value each phi made here and found to merge one is, by
 	// its ID past the function's (base): nil until one is.
 	base := f.nextID
@@ -223,7 +233,7 @@ func reconstruct(f *Func, order []*Value, kept [][]*Value) {
 		return atStart(k, b)
 	}
 	atStart = func(k int, b *Block) *Value {
-		if v := entry[k*nb+b.ID]; v != nil {
+		if v, ok := entry[k*nb+b.ID]; ok {
 			return resolve(v)
 		}
 		switch len(b.Preds) {
