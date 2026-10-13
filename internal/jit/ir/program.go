@@ -305,6 +305,13 @@ type Instruction struct {
 	// as a number: the new pipeline reads the element's cell, whatever the
 	// element holds, as it reads a property's.
 	Reference bool
+	// Tail marks a Host that is a call in tail position, which gives up
+	// its frame deep enough in the stack: the new pipeline makes it as a
+	// call, but there, where it makes a call of the function itself a
+	// jump to its start, and Go makes any other as the interpreter does.
+	// Extra is its arguments' count; When marks a method's call, whose
+	// receiver is below the function.
+	Tail bool
 }
 
 // StateMap describes state immediately before a bytecode instruction. PC is
@@ -343,6 +350,9 @@ type Program struct {
 	// assigns in their cells (UpvalueRead, UpvalueWrite), their slots from
 	// UpvalueBase on.
 	UpvalueBase, Upvalues int
+	// Params is how many of the function's locals, from the first, are
+	// its parameters, which a call's arguments are.
+	Params int
 	// Handlers are the exception handlers the function registers, and
 	// HandlerAt, for each instruction, the innermost of those in force
 	// there, 1 plus its index, 0 for none: the interpreter's frame has them

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-quickjs/go-quickjs"
 	"github.com/go-quickjs/go-quickjs/internal/hostaccess"
@@ -174,6 +175,69 @@ func TestJITImport(t *testing.T) {
 	if st.Budget != 0 && (st.Compiled < 4 || st.SSAEntries == 0) {
 		// load, json, bad and meta among those compiled.
 		t.Errorf("the functions did not run natively: %+v", st)
+	}
+}
+
+// A call in tail position is an ordinary call where the stack is shallow
+// and gives its frame up deeper, as the interpreter's does (tailCallDepth):
+// native code makes a call of the function itself a jump to its start, and,
+// in a native callee's frame, one of another function a jump to that
+// function's code in this frame's place. Every answer, a stack trace's
+// too, is the interpreter's, and deep recursion in tail position runs in
+// constant space.
+func TestJITTailCalls(t *testing.T) {
+	cases := []struct{ name, src string }{
+		{"self", `function loop(n, acc) { if (n === 0) return acc; return loop(n - 1, acc + n) }
+			let r = 0; for (let k = 0; k < 20; k++) r += loop(100000, k); r`},
+		{"fewer and more arguments", `function few(n, x, y) { if (n === 0) return typeof x + typeof y; return few(n - 1, n) }
+			function more(n) { if (n === 0) return "done"; return more(n - 1, n, n) }
+			let r = ""; for (let k = 0; k < 20; k++) r = few(1000 + k) + more(1000 + k); r`},
+		{"a method reading this", `const o = { n: 0, step(k) { if (k === 0) return this.n; this.n++; return this.step(k - 1) } };
+			let r = 0; for (let k = 0; k < 20; k++) { o.n = 0; r += o.step(50000) } r`},
+		{"mutual", `function even(n) { return n === 0 ? true : odd(n - 1) } function odd(n) { return n === 0 ? false : even(n - 1) }
+			let r = 0; for (let k = 0; k < 20; k++) r += even(50000 + k) ? 1 : 0; r`},
+		{"stack traces", `function depth(n, f) { if (n === 0) return f(); return depth(n - 1, f) }
+			function other(n, f) { if (n === 0) return f(); return depth(n - 1, f) }
+			let r = ""; for (let k = 0; k < 30; k++) r = [depth(10, () => new Error("x").stack), depth(100, () => new Error("y").stack), other(100, () => new Error("z").stack)].join("|"); r`},
+		{"a construction", `function C(n) { if (n === 0) { this.v = 1; return } return C.call(this, n - 1) }
+			let r = 0; for (let k = 0; k < 30; k++) r += new C(40 + k).v; r`},
+		{"an arrow and closures made anew", `function mk(k) { let c = 0; const f = (n) => { if (n === 0) return c + k; c++; return f(n - 1) }; return f }
+			function each(n, g) { if (n === 0) return g(0); return each(n - 1, (x) => g(x + 1)) }
+			let r = 0; for (let k = 0; k < 20; k++) r += mk(k)(30000) + each(50, (x) => x); r`},
+		{"captured locals", `function cap(n, acc) { const get = () => n; if (n === 0) return acc; return cap(n - 1, acc + get()) }
+			let r = 0; for (let k = 0; k < 20; k++) r += cap(3000, k); r`},
+		{"a built-in", `function top(n, a) { if (n === 0) return Math.max(a, 7); return top(n - 1, a + 1) }
+			let r = 0; for (let k = 0; k < 20; k++) r += top(1000, k); r`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			run := func(opts ...quickjs.Option) (string, vm.JITStats) {
+				r := quickjs.New(opts...)
+				defer r.Close()
+				v, err := r.Eval(`"use strict"; ` + tc.src)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return v.String(), hostaccess.VM(r).JITStats()
+			}
+			want, _ := run()
+			got, st := run(quickjs.WithJIT())
+			if got != want {
+				t.Fatalf("jit: %s, interpreter: %s", got, want)
+			}
+			if st.Budget != 0 && st.SSAEntries == 0 {
+				t.Errorf("nothing ran natively: %+v", st)
+			}
+		})
+	}
+	// A loop of calls in tail position polls, as a loop's back-edge does:
+	// the host can stop it.
+	r := quickjs.New(quickjs.WithJIT())
+	defer r.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if _, err := r.EvalContext(ctx, `"use strict"; function inf(n) { return inf(n + 1) } inf(0)`); err == nil {
+		t.Fatal("an endless loop of calls in tail position ended")
 	}
 }
 

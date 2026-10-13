@@ -1213,7 +1213,7 @@ type jitFeedback struct {
 // itself, as V8 reduces such a call; the call checks it calls it.
 func (fb *jitFeedback) Intrinsic(pc int) (ssa.Intrinsic, bool) {
 	fn := fb.fn
-	if fb.cl == nil || pc < 2 || pc >= len(fn.Code) || fn.Code[pc].Op != bytecode.OpCallMethod || fn.Code[pc].A < 1 || fn.Code[pc].A > jitMathArgs {
+	if fb.cl == nil || pc < 2 || pc >= len(fn.Code) || jitCallOp(fn.Code[pc].Op) != bytecode.OpCallMethod || fn.Code[pc].A < 1 || fn.Code[pc].A > jitMathArgs {
 		return ssa.Intrinsic{}, false
 	}
 	if fb.prog == nil {
@@ -1428,7 +1428,7 @@ func (fb *jitFeedback) Inline(pc int) (ssa.InlineSite, bool) {
 		if err != nil {
 			return ssa.InlineSite{}, false
 		}
-		call := fb.fn.Code[pc]
+		call := jitCallInstr(fb.fn.Code[pc])
 		this := -1
 		if p.This {
 			this = in.cl.fn.LocalCount + len(in.cl.fn.Upvalues)
@@ -1533,7 +1533,7 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 			}
 			continue
 		}
-		call, fn := fb.fn.Code[pc], in.cl.fn
+		call, fn := jitCallInstr(fb.fn.Code[pc]), in.cl.fn
 		// The call is made through the function's link (jitLink), to
 		// whatever code it has then: what it writes for the callee is the
 		// function's -- its receiver if its body reads one -- not this
@@ -1549,6 +1549,14 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 			Entry: uintptr(unsafe.Pointer(&ce.link.entry)), Count: uintptr(unsafe.Pointer(&ce.link.in)),
 			Argc: int(call.A), Method: call.Op == bytecode.OpCallMethod,
 			Params: fn.ParamCount, LocalCount: fn.LocalCount, MaxStack: fn.MaxStack, ThisSlot: this, Coerce: fn.CoerceThis,
+		}
+		if fn.HasTailCall {
+			// Whether its calls in tail position may give its frame up, as
+			// the interpreter gives up a frame that is no construction's,
+			// nor an arrow's that shares a derived constructor's this.
+			fd := in.obj.fn()
+			site.Tail = true
+			site.TailFrame = call.Op != bytecode.OpNew && (fd == nil || !fd.arrow || fd.extra == nil || fd.extra.lexThisRef == nil)
 		}
 		if len(in.cl.upvalues) != 0 {
 			// Its captured bindings, which its code reads through its
@@ -1587,7 +1595,7 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 	if len(sites) == 0 {
 		// None it calls natively: Go makes it, called from native code
 		// (jitGoCall), as V8's code calls a function it has no code for.
-		call := fb.fn.Code[pc]
+		call := jitCallInstr(fb.fn.Code[pc])
 		n := int(call.A) + 1
 		if call.Op == bytecode.OpCallMethod {
 			n++
@@ -2803,6 +2811,7 @@ func (r *Runtime) jitSeedCalls(cl *closure, e *jitEntry, p *ir.Program) {
 	s.seedingFns = append(s.seedingFns, fn)
 	defer func() { s.seedingFns = s.seedingFns[:len(s.seedingFns)-1] }()
 	for pc, in := range fn.Code {
+		in = jitCallInstr(in)
 		switch in.Op {
 		case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew:
 		default:
@@ -2980,7 +2989,7 @@ func jitCountAt(calls []jitInline, pc int) int {
 // call checks its callee -- each a function jitCalled would take. Or none.
 func (r *Runtime) jitSeenCallees(cl *closure, p *ir.Program, pc int, o *Object) []jitCallee {
 	fn := cl.fn
-	if fn.Code[pc].Op != bytecode.OpCallMethod {
+	if jitCallOp(fn.Code[pc].Op) != bytecode.OpCallMethod {
 		return nil
 	}
 	depth := p.Maps[pc].Depth
@@ -3053,7 +3062,7 @@ func (r *Runtime) jitCalleeObjectAt(cl *closure, p *ir.Program, pc int) (*Object
 	depth := p.Maps[pc].Depth
 	slot := depth - int(fn.Code[pc].A) - 1
 	op := bytecode.OpGetGlobal
-	if fn.Code[pc].Op == bytecode.OpCallMethod {
+	if jitCallOp(fn.Code[pc].Op) == bytecode.OpCallMethod {
 		op = bytecode.OpGetPropThis
 	}
 	if depth < 0 || slot < 0 || op == bytecode.OpGetPropThis && slot < 1 {
@@ -4939,6 +4948,15 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 		ctx.Stack = unsafe.Pointer(&r.stack[f.base])
 		ctx.Upvalues = unsafe.Pointer(unsafe.SliceData(f.cl.upvalues))
 		ctx.Open = uint64(len(f.openUpvalues))
+		if f.cl.fn.HasTailCall {
+			// Its calls of itself in tail position, deep in the stack, give
+			// the frame up natively where the interpreter would
+			// (ssa.OpTailSelf): its closure, and whether it would.
+			ctx.Closure, ctx.TailFrame, ctx.FrameThis = unsafe.Pointer(f.cl), 0, unsafe.Pointer(&f.this)
+			if f.newTarget.IsUndefined() && f.thisRef == nil {
+				ctx.TailFrame = 1
+			}
+		}
 		if e.this {
 			this, bound := f.thisValue()
 			if !bound {
@@ -4981,7 +4999,15 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			// out, costs no call.
 			s.ssaRecords += uint64(s.exitScratch.Apply(c))
 		}
-		r.jitSSAProfit(e, ctx, start, edges)
+		if k == idx && ctx.ExitKind == abi.ExitHost && r.jitTailGivesUp(f, int(ctx.ExitPC)) {
+			// A call in tail position deep in the stack, which gives up a
+			// frame Go entered for another function's -- what only Go can
+			// do there, run's work, as the interpreter's -- says nothing of
+			// the code, as the collector's marking's exits do not.
+			e.ssaStats.entries--
+		} else {
+			r.jitSSAProfit(e, ctx, start, edges)
+		}
 		if c := s.ssaCtxs[idx+1]; c.Live == abi.LiveCall {
 			// A native call's callee left native code: Go finishes it
 			// (jitUnwindNative), then this code goes on natively where the
@@ -5129,17 +5155,32 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 					continue
 				}
 			}
-			switch in.Op {
+			switch jitCallOp(in.Op) {
 			case bytecode.OpYield, bytecode.OpAwait, bytecode.OpYieldStar:
 				return r.jitSuspend(f, in, f.base+int(ctx.ExitDepth))
 			case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew:
-				r.jitCallSeen(f, e, exitPC, f.base+int(ctx.ExitDepth), in)
+				r.jitCallSeen(f, e, exitPC, f.base+int(ctx.ExitDepth), jitCallInstr(in))
 			case bytecode.OpGetProp, bytecode.OpGetPropThis:
 				r.jitPolySeen(f, e, exitPC, f.base+int(ctx.ExitDepth), in)
 			case bytecode.OpNewObject, bytecode.OpNewArray, bytecode.OpNewRegExp:
 				r.jitRefillLiteral(f, e, exitPC)
 			case bytecode.OpDefineField:
 				jitDefineSeen(e, exitPC)
+			}
+			if r.jitTailGivesUp(f, exitPC) {
+				// Deep in the stack, a call in tail position gives up the
+				// frame for the callee's, as the interpreter's tail_call
+				// does: run makes it (errTailCall), not the interpreter.
+				if e.reoptDue() {
+					r.jitReoptimize(f.cl, e)
+				}
+				sp, argc := f.base+int(ctx.ExitDepth), int(in.A)
+				this := Undefined
+				if in.Op == bytecode.OpTailCallMethod {
+					this = r.stack[sp-argc-2]
+				}
+				r.pendingTail = tailCall{callee: r.stack[sp-argc-1], this: this, args: append([]Value(nil), r.stack[sp-argc:sp]...)}
+				return Undefined, errTailCall, true
 			}
 			o, before := jitWriteTarget(r.stack, f.base+int(ctx.ExitDepth), in)
 			sp, steps, err := r.jitHost(f, f.base+int(ctx.ExitDepth), 1)
@@ -5200,6 +5241,9 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 type jitShared struct {
 	global, lexNames, globalLex, strMethods, stackBase unsafe.Pointer
 	stackEnd, levelLimit                               uint64
+	// tailLevel is abi.Context's TailLevel: the level whose frame is
+	// tailCallDepth deep, the run's frame at idx.
+	tailLevel uint64
 	// charCodeAt is String.prototype.charCodeAt as native code calls it
 	// (jitStringMethod), which every level's code reads in its own
 	// context: written only into a run's own, a native callee's charCodeAt
@@ -5227,6 +5271,7 @@ func (r *Runtime) jitShareContexts(idx int, f *frame) {
 		global: unsafe.Pointer(f.cl.scope()), lexNames: unsafe.Pointer(&r.lexNames),
 		stackBase: unsafe.Pointer(unsafe.SliceData(r.stack)), stackEnd: uint64(len(r.stack)),
 		levelLimit: uint64(min(len(s.ssaCtxs), idx+max(0, r.maxFrames-r.frameDepth))),
+		tailLevel:  uint64(idx + max(0, tailCallDepth-r.frameDepth)),
 	}
 	if r.isGlobalScope(f.cl.scope()) {
 		// The interpreter reads a script's lexical bindings where the
@@ -5252,7 +5297,7 @@ func (r *Runtime) jitShareContexts(idx int, f *frame) {
 	}
 	for i := idx; i < len(s.ssaCtxs); i++ {
 		c := s.ssaCtxs[i]
-		c.Level, c.LevelLimit = uint64(i), sh.levelLimit
+		c.Level, c.LevelLimit, c.TailLevel = uint64(i), sh.levelLimit, sh.tailLevel
 		c.StackBase, c.StackEnd = sh.stackBase, sh.stackEnd
 		c.StackTop, c.StackHigh = &r.stackTop, &r.stackHigh
 		c.BackEdges = &r.backEdges
@@ -5317,7 +5362,7 @@ func (r *Runtime) jitGrowContexts() bool {
 	for i, c := range s.ssaCtxs {
 		switch {
 		case i >= old:
-			c.Level, c.LevelLimit = uint64(i), n
+			c.Level, c.LevelLimit, c.TailLevel = uint64(i), n, last.TailLevel
 			c.StackBase, c.StackEnd, c.StackTop, c.StackHigh = last.StackBase, last.StackEnd, last.StackTop, last.StackHigh
 			c.BackEdges, c.Global, c.LexNames, c.GlobalLex = last.BackEdges, last.Global, last.LexNames, last.GlobalLex
 			c.StringMethods = last.StringMethods
@@ -5587,6 +5632,14 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, code *bytecode.Function)
 			v = l.this
 		}
 		r.popFrameOf(f, l.top)
+		if err == errTailCall {
+			// It ended in a call in tail position, deep in the stack, its
+			// frame given up as run gives it up: the call is made here, the
+			// ordinary way, as jitEnterCallee makes one.
+			tc := r.pendingTail
+			r.pendingTail = tailCall{}
+			v, err = r.call(tc.callee, tc.this, tc.args)
+		}
 	}
 	return v, err
 }
@@ -5640,8 +5693,7 @@ func (r *Runtime) jitEnterCallee(f *frame, e *jitEntry, ctx int) (Value, error) 
 	}
 	if err == errTailCall {
 		// It ended in a tail call, its frame given up as run would: the
-		// call is made here, the ordinary way. (No callee native code
-		// calls has one now: the lowering takes none.)
+		// call is made here, the ordinary way.
 		tc := r.pendingTail
 		r.pendingTail = tailCall{}
 		v, err = r.call(tc.callee, tc.this, tc.args)
@@ -5840,9 +5892,9 @@ func (r *Runtime) jitFinishExit(f *frame, e *jitEntry, l *jitNativeLevel) (Value
 		in := f.cl.fn.Code[pc]
 		if e != nil && e.ssa != nil {
 			e.ssaStats.hosts++
-			switch in.Op {
+			switch jitCallOp(in.Op) {
 			case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew:
-				r.jitCallSeen(f, e, pc, f.base+depth, in)
+				r.jitCallSeen(f, e, pc, f.base+depth, jitCallInstr(in))
 			case bytecode.OpGetProp, bytecode.OpGetPropThis:
 				r.jitPolySeen(f, e, pc, f.base+depth, in)
 			case bytecode.OpNewObject, bytecode.OpNewArray, bytecode.OpNewRegExp:
@@ -5905,13 +5957,45 @@ func (r *Runtime) jitFinishExit(f *frame, e *jitEntry, l *jitNativeLevel) (Value
 	return v, err
 }
 
+// jitTailGivesUp reports whether the instruction at pc of the frame Go
+// entered native code with, f, is a call in tail position that gives up the
+// frame, as the interpreter's tail_call decides: deep in the stack, in a
+// frame no construction's, nor an arrow's sharing a derived constructor's
+// this. (The compiler emits none under a handler.)
+func (r *Runtime) jitTailGivesUp(f *frame, pc int) bool {
+	op := f.cl.fn.Code[pc].Op
+	return (op == bytecode.OpTailCall || op == bytecode.OpTailCallMethod) && r.frameDepth >= tailCallDepth &&
+		f.newTarget.IsUndefined() && f.thisRef == nil
+}
+
+// jitCallOp is a call's opcode as native code makes the call: a call in
+// tail position is an ordinary call where the stack is shallow, which is
+// the only place native code makes it (ssa.OpTailRoom); deeper, Go makes
+// it as the interpreter does (jitHost).
+func jitCallOp(op bytecode.Op) bytecode.Op {
+	switch op {
+	case bytecode.OpTailCall:
+		return bytecode.OpCall
+	case bytecode.OpTailCallMethod:
+		return bytecode.OpCallMethod
+	}
+	return op
+}
+
+// jitCallInstr is in with its opcode as native code makes the call
+// (jitCallOp).
+func jitCallInstr(in bytecode.Instr) bytecode.Instr {
+	in.Op = jitCallOp(in.Op)
+	return in
+}
+
 // jitCallResult has a frame whose state at the call at pc, depth operands
 // deep, is in its frame go on after the call, which returned v or threw
 // err: the call's operands go, its result comes, as when Go makes it
 // (jitHost). It returns the operands' top, and false for a throw, which
 // the interpreter takes from there.
 func (r *Runtime) jitCallResult(f *frame, pc, depth int, v Value, err error) (int, bool) {
-	in := f.cl.fn.Code[pc]
+	in := jitCallInstr(f.cl.fn.Code[pc])
 	if in.Op == bytecode.OpIterNextOrJump {
 		// A loop's step Go made (abi.GoCallStep): its cursor stays, and the
 		// next value goes on it; or, done, the loop's end is next.

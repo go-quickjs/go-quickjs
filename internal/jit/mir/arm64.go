@@ -1908,6 +1908,11 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		}
 		c.a.AddImm(top, locals, int64(t.LocalCount)*int64(vs), true)
 		c.a.Store(calleeCtx, abi.OffStack, top)
+		if t.Tail {
+			c.movImm(top, b2u(t.TailFrame))
+			c.a.Store(calleeCtx, abi.OffTailFrame, top)
+			c.a.Store(calleeCtx, abi.OffFrameThis, arm64.ZR)
+		}
 		for i := 0; i < t.LocalCount; i++ {
 			at := int32(i) * vs
 			// The arguments, past the receiver of a call through
@@ -2362,6 +2367,236 @@ func (c *a64Compiler) iterStep(v *ssa.Value, slow arm64.Label) {
 
 // goCallOp is goCall's, of the call of Go op, as amd64's, every
 // allocatable register saved across it if saving.
+// goArg writes x's words to the context's operand at at, as amd64's does.
+func (c *a64Compiler) goArg(at int32, x *ssa.Value) {
+	var w arm64.Reg
+	if remat(x) {
+		c.materialize(x, a64A)
+		w = a64A
+	} else {
+		w = c.gpr(x, a64A)
+	}
+	c.a.Store(a64Ctx, at+c.enc.NumOffset, w)
+	number, have := c.a.NewLabel(), c.a.NewLabel()
+	if x.Shadow != nil || c.origin.At(x) >= 0 {
+		c.movImm(a64B, abi.NumberLimit)
+		c.a.Cmp(w, a64B, true)
+		c.a.BCond(arm64.LO, number)
+	}
+	c.pointerWord(x, w)
+	c.a.B(have)
+	c.a.Bind(number)
+	c.movImm(a64B, 0)
+	c.a.Bind(have)
+	c.a.Store(a64Ctx, at+c.enc.RefOffset, a64B)
+}
+
+// tailSelf is a call in tail position, as amd64's: deep in the stack, a
+// call of the frame's own closure is a jump to the code's start, its
+// arguments the frame's parameters; in a native callee's frame, one of a
+// function the call has, a jump to its code, its frame in this one's
+// place (tailJump).
+func (c *a64Compiler) tailSelf(v *ssa.Value, guard func(arm64.Cond)) {
+	shallow := c.a.NewLabel()
+	c.a.Load(a64A, a64Ctx, abi.OffLevel)
+	c.a.Load(a64B, a64Ctx, abi.OffTailLevel)
+	c.a.Cmp(a64A, a64B, true)
+	c.a.BCond(arm64.LO, shallow)
+	defer c.a.Bind(shallow)
+	args, entry := v.Args[1:], c.entryAt(0)
+	var this *ssa.Value
+	if v.Key&1 != 0 {
+		args, this = args[:len(args)-1], args[len(args)-1]
+	}
+	stub := c.stubLabel(v.State, exitKind(v.Aux))
+	if entry == nil || len(args)+1 > abi.MaxGoArgs {
+		c.a.B(stub)
+		return
+	}
+	poll, polled := c.a.NewLabel(), c.a.NewLabel()
+	c.a.Load(a64B, a64Ctx, abi.OffBackEdges)
+	c.a.Load(a64A, a64B, 0)
+	c.a.AddImm(a64A, a64A, -1, true)
+	c.a.Store(a64B, 0, a64A)
+	c.a.CmpImm(a64A, 0, true)
+	c.a.BCond(arm64.LE, poll)
+	state := v.State
+	c.cold = append(c.cold, func() {
+		c.a.Bind(poll)
+		if c.enc.CallGo != 0 {
+			stub := c.stubLabel(state, abi.ExitPoll)
+			c.goSaving(uint64(ssa.GoPoll), &stub)
+			c.a.B(polled)
+			return
+		}
+		c.exitTo(state, abi.ExitPoll)
+	})
+	c.a.Bind(polled)
+	c.a.Load(a64A, a64Ctx, abi.OffTailFrame)
+	c.a.CmpImm(a64A, 0, true)
+	guard(arm64.EQ)
+	c.movImm(a64B, c.enc.WriteBarrier)
+	c.a.LoadU8(a64B, a64B, 0)
+	c.a.CmpImm(a64B, 0, false)
+	guard(arm64.NE)
+	if !c.reference(v, v.Args[0], c.enc.Object, guard) {
+		return
+	}
+	c.a.Store(a64Ctx, abi.OffCallCallee, a64C)
+	size := int32(unsafe.Sizeof(abi.GoArg{}))
+	for i, x := range args {
+		c.goArg(abi.OffGoArgs+int32(i)*size, x)
+	}
+	if this != nil {
+		c.goArg(abi.OffGoArgs+int32(len(args))*size, this)
+	}
+	other := c.a.NewLabel()
+	c.a.Load(a64C, a64Ctx, abi.OffCallCallee)
+	c.a.Load(a64B, a64C, c.enc.ObjectData)
+	c.movImm(a64A, c.enc.FuncData)
+	c.a.Cmp(a64B, a64A, true)
+	guard(arm64.NE)
+	c.a.Load(a64B, a64C, c.enc.ObjectData+8)
+	c.a.Load(a64B, a64B, c.enc.FuncClosure)
+	c.a.Load(a64A, a64Ctx, abi.OffClosure)
+	c.a.Cmp(a64A, a64B, true)
+	c.a.BCond(arm64.NE, other)
+	for i := range int(v.Const.Bits) {
+		nb, nd := c.slotAddr(i, false, a64C)
+		rb, rd := c.slotAddr(i, true, a64C)
+		if i < v.Index && i < len(args) {
+			at := abi.OffGoArgs + int32(i)*size
+			c.a.Load(a64A, a64Ctx, at+c.enc.NumOffset)
+			c.a.Store(nb, nd, a64A)
+			c.a.Load(a64A, a64Ctx, at+c.enc.RefOffset)
+			c.a.Store(rb, rd, a64A)
+			continue
+		}
+		c.movImm(a64A, c.enc.Undefined)
+		c.a.Store(nb, nd, a64A)
+		c.a.Store(rb, rd, arm64.ZR)
+	}
+	if v.Key&2 != 0 {
+		at := abi.OffGoArgs + int32(len(args))*size
+		none := c.a.NewLabel()
+		c.a.Load(a64A, a64Ctx, at+c.enc.NumOffset)
+		c.a.Load(a64B, a64Ctx, at+c.enc.RefOffset)
+		c.a.Store(a64Ctx, abi.OffThis+c.enc.NumOffset, a64A)
+		c.a.Store(a64Ctx, abi.OffThis+c.enc.RefOffset, a64B)
+		c.a.Load(a64C, a64Ctx, abi.OffFrameThis)
+		c.a.Cbz(a64C, none, true)
+		c.a.Store(a64C, c.enc.NumOffset, a64A)
+		c.a.Store(a64C, c.enc.RefOffset, a64B)
+		c.a.Bind(none)
+	}
+	c.a.B(c.labels[entry.ID])
+	c.a.Bind(other)
+	var sites []*ssa.CallSite
+	for _, t := range v.Calls() {
+		if t.Go == 0 && !t.Literal && !t.Push && !t.Pop && !t.Alloc && !t.Receiver && t.Via == 0 && t.Pool == 0 && !t.Coerce && t.Entry != 0 {
+			sites = append(sites, t)
+		}
+	}
+	if len(sites) == 0 {
+		c.a.B(stub)
+		return
+	}
+	c.a.Load(a64A, a64Ctx, abi.OffReturnTo)
+	c.a.Cbz(a64A, stub, true)
+	for _, t := range sites {
+		next := c.a.NewLabel()
+		c.a.Load(a64C, a64Ctx, abi.OffCallCallee)
+		if t.ByCode != 0 {
+			c.byCode(t, next)
+		} else {
+			c.movImm(a64B, uint64(t.Callee))
+			c.a.Cmp(a64C, a64B, true)
+			c.a.BCond(arm64.NE, next)
+		}
+		c.tailJump(t, len(args), this != nil, guard)
+		c.a.Bind(next)
+	}
+	c.a.B(stub)
+}
+
+// tailJump is tailSelf's call of t, as amd64's.
+func (c *a64Compiler) tailJump(t *ssa.CallSite, n int, this bool, guard func(arm64.Cond)) {
+	vs, size := int32(c.enc.ValueSize), int32(unsafe.Sizeof(abi.GoArg{}))
+	c.movImm(a64A, uint64(t.Entry))
+	c.a.Load(a64A, a64A, 0)
+	c.a.CmpImm(a64A, 0, true)
+	guard(arm64.EQ)
+	c.a.Load(a64B, a64Ctx, abi.OffBase)
+	c.a.AddImm(a64B, a64B, int64(t.LocalCount+t.MaxStack), true)
+	c.a.Load(a64A, a64Ctx, abi.OffStackEnd)
+	c.a.Cmp(a64B, a64A, true)
+	guard(arm64.HI)
+	for i := 0; i < t.LocalCount; i++ {
+		at := int32(i) * vs
+		if i < t.Params && i < n {
+			g := abi.OffGoArgs + int32(i)*size
+			c.a.Load(a64A, a64Ctx, g+c.enc.NumOffset)
+			c.a.Store(a64Locals, at+c.enc.NumOffset, a64A)
+			c.a.Load(a64A, a64Ctx, g+c.enc.RefOffset)
+			c.a.Store(a64Locals, at+c.enc.RefOffset, a64A)
+			continue
+		}
+		c.movImm(a64A, c.enc.Undefined)
+		c.a.Store(a64Locals, at+c.enc.NumOffset, a64A)
+		c.a.Store(a64Locals, at+c.enc.RefOffset, arm64.ZR)
+	}
+	if this {
+		g := abi.OffGoArgs + int32(n)*size
+		c.a.Load(a64A, a64Ctx, g+c.enc.NumOffset)
+		c.a.Store(a64Ctx, abi.OffThis+c.enc.NumOffset, a64A)
+		c.a.Load(a64A, a64Ctx, g+c.enc.RefOffset)
+		c.a.Store(a64Ctx, abi.OffThis+c.enc.RefOffset, a64A)
+	} else {
+		c.movImm(a64A, c.enc.Undefined)
+		c.a.Store(a64Ctx, abi.OffThis+c.enc.NumOffset, a64A)
+		c.a.Store(a64Ctx, abi.OffThis+c.enc.RefOffset, arm64.ZR)
+	}
+	if t.ByCode != 0 {
+		c.a.Load(a64A, a64Ctx, abi.OffCallClosure)
+		c.a.Store(a64Ctx, abi.OffClosure, a64A)
+		c.a.Load(a64A, a64Ctx, abi.OffCallUpvalues)
+		c.a.Store(a64Ctx, abi.OffUpvalues, a64A)
+	} else {
+		c.movImm(a64A, uint64(t.Closure))
+		c.a.Store(a64Ctx, abi.OffClosure, a64A)
+		c.movImm(a64A, uint64(t.Upvalues))
+		c.a.Store(a64Ctx, abi.OffUpvalues, a64A)
+	}
+	c.a.AddImm(a64A, a64Locals, int64(t.LocalCount)*int64(vs), true)
+	c.a.Store(a64Ctx, abi.OffStack, a64A)
+	c.a.Store(a64Ctx, abi.OffOpen, arm64.ZR)
+	c.a.Store(a64Ctx, abi.OffTailReturn, arm64.ZR)
+	if t.Tail {
+		c.movImm(a64A, b2u(t.TailFrame))
+		c.a.Store(a64Ctx, abi.OffTailFrame, a64A)
+	}
+	if t.Count != 0 {
+		c.movImm(a64A, uint64(t.Count))
+		c.a.Load(a64B, a64A, 0)
+		c.a.AddImm(a64B, a64B, 1, true)
+		c.a.Store(a64A, 0, a64B)
+	}
+	same := c.a.NewLabel()
+	c.a.Load(a64B, a64Ctx, abi.OffBase)
+	c.a.AddImm(a64B, a64B, int64(t.LocalCount+t.MaxStack), true)
+	c.a.Load(a64A, a64Ctx, abi.OffStackTop)
+	c.a.Store(a64A, 0, a64B)
+	c.a.Load(a64A, a64Ctx, abi.OffStackHigh)
+	c.a.Load(a64C, a64A, 0)
+	c.a.Cmp(a64B, a64C, true)
+	c.a.BCond(arm64.LS, same)
+	c.a.Store(a64A, 0, a64B)
+	c.a.Bind(same)
+	c.movImm(a64A, uint64(t.Entry))
+	c.a.Load(a64A, a64A, 0)
+	c.a.Br(a64A)
+}
+
 func (c *a64Compiler) goCallOp(v *ssa.Value, op uint64, saving bool) {
 	size := int32(unsafe.Sizeof(abi.GoArg{}))
 	defer func() {
@@ -2373,27 +2608,7 @@ func (c *a64Compiler) goCallOp(v *ssa.Value, op uint64, saving bool) {
 		c.setG(v, a64A)
 	}()
 	for i, x := range v.Args {
-		var w arm64.Reg
-		if remat(x) {
-			c.materialize(x, a64A)
-			w = a64A
-		} else {
-			w = c.gpr(x, a64A)
-		}
-		at := abi.OffGoArgs + int32(i)*size
-		c.a.Store(a64Ctx, at+c.enc.NumOffset, w)
-		number, have := c.a.NewLabel(), c.a.NewLabel()
-		if x.Shadow != nil || c.origin.At(x) >= 0 {
-			c.movImm(a64B, abi.NumberLimit)
-			c.a.Cmp(w, a64B, true)
-			c.a.BCond(arm64.LO, number)
-		}
-		c.pointerWord(x, w)
-		c.a.B(have)
-		c.a.Bind(number)
-		c.movImm(a64B, 0)
-		c.a.Bind(have)
-		c.a.Store(a64Ctx, at+c.enc.RefOffset, a64B)
+		c.goArg(abi.OffGoArgs+int32(i)*size, x)
 	}
 	if ssa.GoOp(op&0xff) == ssa.GoCall {
 		// Which call, as an exit at it says.
@@ -3053,6 +3268,13 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Load(a64A, a64Ctx, abi.OffLevel)
 		c.a.AddImm(a64A, a64A, int64(max(v.Const.Bits, 1)), true)
 		c.a.Load(a64B, a64Ctx, abi.OffLevelLimit)
+		c.a.Cmp(a64A, a64B, true)
+		guard(arm64.HS)
+	case ssa.OpTailSelf:
+		c.tailSelf(v, guard)
+	case ssa.OpTailRoom:
+		c.a.Load(a64A, a64Ctx, abi.OffLevel)
+		c.a.Load(a64B, a64Ctx, abi.OffTailLevel)
 		c.a.Cmp(a64A, a64B, true)
 		guard(arm64.HS)
 	case ssa.OpSameObject:

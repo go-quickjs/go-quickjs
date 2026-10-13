@@ -734,6 +734,8 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 				if a.t != ir.Bool(true) {
 					return exit(v.State, ir.ExitKind(v.Aux))
 				}
+			case OpTailRoom, OpTailSelf:
+				// The model's stack is shallow: the call is made.
 			default:
 				vals[v.ID] = apply(v.Op, v.Aux, a, b)
 			}

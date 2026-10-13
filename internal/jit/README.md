@@ -137,9 +137,24 @@ does not declare in the global object. An imported `const` is a constant.
 A direct eval's code, which reads its caller's scopes, stays in the
 interpreter.
 
-**Not compiled yet.** Destructuring from an iterator, tail calls and code
-using private fields run in the tree tier, which handles all of them; the
-JIT is to follow it there.
+**Tail calls.** A call in tail position gives up its frame for the
+callee's only deep in the stack, as the interpreter's does
+(`tailCallDepth`): a shallow one keeps its frame, as a stack trace shows,
+and native code makes it as any call (`ssa.OpTailRoom`, `OpTailSelf`, by
+`abi.Context`'s `TailLevel`). Deeper, a call of the closure the frame runs
+writes its arguments to the frame's parameters and enters the code at its
+start again, a loop in the frame, as a compiler turns tail recursion into
+one; in a native callee's frame, a call of another function the call has
+puts that function's frame in this one's place, its context this one's,
+and goes on in its code, returning where this frame would have. A frame Go
+entered the code with, which the VM's frame describes, is given up by Go
+(`errTailCall`), as the interpreter gives it up. Frames the interpreter
+keeps for such a call -- a construction's, an arrow's sharing a derived
+constructor's this -- native code keeps too (`TailFrame`).
+
+**Not compiled yet.** Destructuring from an iterator and code using
+private fields run in the tree tier, which handles both; the JIT is to
+follow it there.
 
 **Profitability.** Each native stretch's work is estimated, exits and
 calls of Go counted against it; code whose stretches do too little between

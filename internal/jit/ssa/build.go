@@ -197,6 +197,11 @@ type CallSite struct {
 	// pool's, with Alloc: no function, no operands; or an array literal's
 	// (ir.ArrayLiteral), whose Argc operands are its elements.
 	Literal bool
+	// Tail marks a callee whose function makes calls in tail position
+	// (OpTailSelf), for which the call sets the callee's context's
+	// TailFrame to TailFrame: false for a construction, or an arrow that
+	// shares a derived constructor's this.
+	Tail, TailFrame bool
 	// Go marks a call of Go, not of a function, as V8's code calls a
 	// runtime function: what Go does with the call's operands, which
 	// native code passes as their words (abi.Context's GoOp).
@@ -2626,6 +2631,43 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		b.assign(in.Dest, blk, boxB(v))
 	case ir.Host, ir.Call:
+		if in.Tail {
+			// Deep in the stack the frame is given up, where it holds no
+			// captured local: native code makes a call of the function
+			// itself a jump to its start, and, in a native callee's frame,
+			// one of a function the call is seen to call a jump to that
+			// function's code, its frame in place of this one (OpTailSelf);
+			// Go makes any other.
+			if p := b.root.p; b.cur == b.root && p.Captured == nil {
+				sp := p.Locals + p.Maps[pc].Depth
+				args := make([]*Value, in.Extra+1, in.Extra+2)
+				for i := range args {
+					args[i] = b.read(sp-in.Extra-1+i, blk)
+				}
+				if in.When || p.This {
+					// A method's receiver, below the function, or none.
+					this := f.newValue(blk, OpConst, Tagged)
+					this.Const = ir.Value{Kind: ir.Undefined}
+					if in.When {
+						this = b.read(sp-in.Extra-2, blk)
+					}
+					args = append(args, this)
+				}
+				v := guard(OpTailSelf, None, ir.HostExit, args...)
+				v.Index, v.Const = p.Params, ir.Value{Bits: uint64(p.UpvalueBase)}
+				if in.When || p.This {
+					v.Key |= 1
+				}
+				if p.This {
+					v.Key |= 2
+				}
+				if calls := b.calls[pc]; len(calls) != 0 && calls[0].Go == 0 {
+					b.f.cache(v).Calls = calls
+				}
+			} else {
+				guard(OpTailRoom, None, ir.HostExit)
+			}
+		}
 		if k, ok := b.intrinsic(pc); ok && in.Op == ir.Host {
 			b.intrinsicCall(blk, pc, k, guard, boxF)
 			break

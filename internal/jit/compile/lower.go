@@ -231,6 +231,12 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		if in.Op == bytecode.OpApplyArguments && !m.forward {
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
+		if (in.Op == bytecode.OpTailCall || in.Op == bytecode.OpTailCallMethod) && (!m.ssa || m.callee) {
+			// A tail call gives up its frame deep enough in the stack: a
+			// function's own, in the new pipeline, which a callee inlined
+			// has none of.
+			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
+		}
 		if (in.Op == bytecode.OpPushCatch || in.Op == bytecode.OpPushFinally || in.Op == bytecode.OpPopCatch || in.Op == bytecode.OpRethrow) && (!m.ssa || m.callee) {
 			// Exception handlers are the new pipeline's, in a function's
 			// own code: a callee inlined has no frame of its own for Go to
@@ -253,7 +259,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
 		host = host || str || iters || in.Op == bytecode.OpClosure || in.Op == bytecode.OpCloseUpvalues || in.Op == bytecode.OpImport || in.Op == bytecode.OpImportMeta || in.Op == bytecode.OpYield || in.Op == bytecode.OpAwait || in.Op == bytecode.OpThrow ||
-			in.Op == bytecode.OpNewDisposeCapability || in.Op == bytecode.OpAddDisposable || in.Op == bytecode.OpDispose || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpApplyArguments || in.Op == bytecode.OpNew || in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict || in.Op == bytecode.OpCheckGlobalRef || in.Op == bytecode.OpNewObject || in.Op == bytecode.OpNewRegExp || in.Op == bytecode.OpDefineField || in.Op == bytecode.OpPushEmptyString || in.Op == bytecode.OpConcat || in.Op == bytecode.OpNewArray || in.Op == bytecode.OpCall || in.Op == bytecode.OpCallMethod || in.Op == bytecode.OpGetGlobal || in.Op == bytecode.OpGetGlobalOpt || in.Op == bytecode.OpGetPropThis || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
+			in.Op == bytecode.OpNewDisposeCapability || in.Op == bytecode.OpAddDisposable || in.Op == bytecode.OpDispose || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpApplyArguments || in.Op == bytecode.OpNew || in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict || in.Op == bytecode.OpCheckGlobalRef || in.Op == bytecode.OpNewObject || in.Op == bytecode.OpNewRegExp || in.Op == bytecode.OpDefineField || in.Op == bytecode.OpPushEmptyString || in.Op == bytecode.OpConcat || in.Op == bytecode.OpNewArray || in.Op == bytecode.OpCall || in.Op == bytecode.OpCallMethod || in.Op == bytecode.OpTailCall || in.Op == bytecode.OpTailCallMethod || in.Op == bytecode.OpGetGlobal || in.Op == bytecode.OpGetGlobalOpt || in.Op == bytecode.OpGetPropThis || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		property = property || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		this = this || in.Op == bytecode.OpPushThis
 		raw := uint32(in.Op)
@@ -266,7 +272,9 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		op, _ := operator(raw)
 		host = host || raw == uint32(bytecode.OpMod)
 		bitwise = bitwise || op >= ir.BitAnd && op <= ir.UShr || in.Op == bytecode.OpBitNot
-		loop = loop || e.branch && e.target(in) <= pc
+		// A call in tail position may be the function's own, which native
+		// code makes a jump to its start deep in the stack: a loop.
+		loop = loop || e.branch && e.target(in) <= pc || in.Op == bytecode.OpTailCall || in.Op == bytecode.OpTailCallMethod
 		indexed = indexed || in.Op == bytecode.OpGetIndex || in.Op == bytecode.OpSetIndex || in.Op == bytecode.OpGetLocalIndex || in.Op == bytecode.OpGetLocalIndexUpdate
 	}
 	// Tiny host-only wrappers pay the bridge overhead without enough native work.
@@ -504,7 +512,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			}
 		}
 		stringConcats(p)
-		p.UpvalueBase, p.Upvalues = fn.LocalCount, len(fn.Upvalues)
+		p.UpvalueBase, p.Upvalues, p.Params = fn.LocalCount, len(fn.Upvalues), fn.ParamCount
 		if captured {
 			p.Captured = make([]bool, fn.LocalCount)
 			for i, local := range fn.Locals {
@@ -1016,12 +1024,12 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 		return effect{need: 2, delta: 1}, nil
 	case bytecode.OpInsert3:
 		return effect{need: 3, delta: 1}, nil
-	case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew:
+	case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew, bytecode.OpTailCall, bytecode.OpTailCallMethod:
 		if in.A > MaxSlots {
 			return bad("argument budget")
 		}
 		n := int(in.A) + 1
-		if in.Op == bytecode.OpCallMethod {
+		if in.Op == bytecode.OpCallMethod || in.Op == bytecode.OpTailCallMethod {
 			n++
 		}
 		return effect{need: n, delta: 1 - n}, nil
@@ -1405,6 +1413,10 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this bool) ir.Instr
 		return ir.Instruction{Op: ir.Host}
 	case bytecode.OpNewArray, bytecode.OpCall, bytecode.OpMod, bytecode.OpNew:
 		return ir.Instruction{Op: ir.Host}
+	case bytecode.OpTailCall, bytecode.OpTailCallMethod:
+		// A call, made as an ordinary one where the stack is shallow, as
+		// the interpreter makes it (tailCallDepth).
+		return ir.Instruction{Op: ir.Host, Tail: true, Extra: int(in.A), When: in.Op == bytecode.OpTailCallMethod}
 	case bytecode.OpConcat:
 		// Go converts the parts and joins them, as the interpreter does.
 		return ir.Instruction{Op: ir.Host}

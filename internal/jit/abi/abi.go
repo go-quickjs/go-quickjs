@@ -220,6 +220,24 @@ type Context struct {
 	// than GoArgs holds; Go makes the others while it marks (GoOpMarking).
 	// Go clears it before each entry.
 	ExitMarking uint64
+	// TailLevel is the first level whose code's calls in tail position
+	// give up its frame, as the interpreter's do from tailCallDepth frames
+	// deep: native code makes them as calls below it, and leaves for Go to
+	// make them at it and past (ssa.OpTailRoom). Go sets it before every
+	// entry.
+	TailLevel uint64
+	// TailFrame is 1 when the frame is one the interpreter gives up for a
+	// call in tail position -- no construction's, no arrow's sharing a
+	// derived constructor's this -- and 0 otherwise: Go sets it, with
+	// Closure, before every entry of a function that makes such a call,
+	// and a native call of one sets it for the callee (ssa.CallSite's
+	// Tail).
+	TailFrame uint64
+	// FrameThis is where the VM's frame keeps its receiver, which a call of
+	// the function itself in tail position gives anew, for a frame Go
+	// entered the code with; 0 for a native callee's, whose frame Go makes
+	// from This.
+	FrameThis unsafe.Pointer
 }
 
 // GoArg is an operand of a call of Go: a slot's two words, its pointer word
@@ -381,6 +399,9 @@ var (
 	OffBase       = int32(unsafe.Offsetof(Context{}.Base))
 	OffLevel      = int32(unsafe.Offsetof(Context{}.Level))
 	OffLevelLimit = int32(unsafe.Offsetof(Context{}.LevelLimit))
+	OffTailLevel  = int32(unsafe.Offsetof(Context{}.TailLevel))
+	OffTailFrame  = int32(unsafe.Offsetof(Context{}.TailFrame))
+	OffFrameThis  = int32(unsafe.Offsetof(Context{}.FrameThis))
 	OffStackBase  = int32(unsafe.Offsetof(Context{}.StackBase))
 	OffStackEnd   = int32(unsafe.Offsetof(Context{}.StackEnd))
 	OffStackTop   = int32(unsafe.Offsetof(Context{}.StackTop))

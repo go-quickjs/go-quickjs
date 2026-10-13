@@ -190,6 +190,23 @@ const (
 	// for an inlined callee's frame, and its callers' if they are inlined
 	// too, which an exit inside it writes there (InlineState).
 	OpFrameRoom // -> none
+	// OpTailRoom guards that a call in tail position is made where the
+	// stack is shallow (abi.Context's TailLevel): deeper, Go makes it,
+	// giving up the frame, as the interpreter's tail_call does.
+	OpTailRoom // -> none
+	// OpTailSelf is OpTailRoom where the call may be the function's own:
+	// deep in the stack, a call of the closure the frame runs (abi.Context's
+	// Closure), from a frame the interpreter gives up (TailFrame), makes
+	// its arguments, Args past the function, the frame's parameters --
+	// Index of them, the rest of its locals, to Const's, undefined -- and
+	// enters the code again at its start, as V8's code jumps to itself
+	// for a call in tail position: a loop, in the frame it had. Any other
+	// call there leaves for Go -- but, in a native callee's frame, a call
+	// of one of the functions it has (its CallSites), which takes the
+	// frame's place, its context the frame's, and goes on in its code,
+	// returning where the frame would have. Key's bit 1 says the last of
+	// Args is the receiver the call gives, bit 2 that the code reads it.
+	OpTailSelf // function, arguments -> none
 	// OpKeepRef is a tagged value's pointer word (Args[0]), read where it
 	// came from (origin.go), or 0 for a primitive's; 0 while the collector
 	// marks. Every keep at a store reads first (keep.go).
@@ -292,7 +309,7 @@ var opNames = [...]string{
 	OpAddF64: "addf", OpSubF64: "subf", OpMulF64: "mulf", OpDivF64: "divf", OpModF64: "modf", OpNegF64: "negf", OpCmpF64: "cmpf",
 	OpNot: "not", OpStrictNullish: "strictnullish", OpLooseNullish: "loosenullish", OpEqTagged: "eqtagged", OpToInt32: "toi32", OpAndI32: "and", OpOrI32: "or", OpXorI32: "xor", OpShlI32: "shl",
 	OpSarI32: "sar", OpShrU32: "shr", OpNotI32: "noti", OpI32ToF64: "i2f", OpU32ToF64: "u2f",
-	OpSameObject: "sameobject", OpFrameRoom: "frameroom", OpKeepRef: "keepref", OpKeep: "keep", OpKept: "kept",
+	OpSameObject: "sameobject", OpFrameRoom: "frameroom", OpTailRoom: "tailroom", OpTailSelf: "tailself", OpKeepRef: "keepref", OpKeep: "keep", OpKept: "kept",
 	OpCall: "call", OpCallCell: "callcell", OpSqrtF64: "sqrtf", OpAbsF64: "absf", OpInstanceOf: "instanceof", OpTypeIs: "typeis",
 	OpCheckTrue: "checktrue", OpConstCell: "constcell", OpUpvalueCell: "upvaluecell", OpUpvalueStale: "upvaluestale", OpLocalCell: "localcell", OpPowF64: "powf",
 	OpMaxF64: "maxf", OpMinF64: "minf", OpFloorF64: "floorf", OpCeilF64: "ceilf", OpTruncF64: "truncf", OpRoundF64: "roundf",
@@ -311,7 +328,7 @@ func (o Op) isGuard() bool {
 	switch o {
 	case OpUnboxF64, OpTruth, OpCheckInit, OpModF64, OpArrayOf, OpElemKey, OpElemRead, OpElemWrite, OpElemCell, OpLength,
 		OpObjectOf, OpPropRead, OpPropWrite, OpPropCell, OpGlobalCell, OpLexCell, OpBindingCell, OpStringMethod, OpStringProp, OpStringCode, OpLooseNullish, OpEqTagged,
-		OpSameObject, OpFrameRoom, OpCall, OpInstanceOf, OpTypeIs, OpCheckTrue, OpPowF64:
+		OpSameObject, OpFrameRoom, OpTailRoom, OpTailSelf, OpCall, OpInstanceOf, OpTypeIs, OpCheckTrue, OpPowF64:
 		return true
 	}
 	return false

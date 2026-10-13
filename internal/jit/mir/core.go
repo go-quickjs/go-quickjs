@@ -943,6 +943,24 @@ func inlineLevels(s *ssa.FrameState) []*ssa.InlineState {
 	return levels
 }
 
+// b2u is 1 for true, 0 for false.
+func b2u(b bool) uint64 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// entryAt is the entry block for pc, or nil if the code has none there.
+func (c *core) entryAt(pc int) *ssa.Block {
+	for _, e := range c.f.Entries {
+		if e.PC == pc {
+			return e.Block
+		}
+	}
+	return nil
+}
+
 // cellSource reports whether a shadow is a cell's address whatever happens
 // at run time -- a property's, an element's, a global binding's, the
 // context's -- and never a slot or -1, so that the value's pointer word is

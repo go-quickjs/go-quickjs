@@ -1784,7 +1784,13 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			steps++
 			continue
 		}
+		if (in.Op == bytecode.OpTailCall || in.Op == bytecode.OpTailCallMethod) && r.frameDepth >= tailCallDepth {
+			// A call in tail position deep in the stack gives up the frame:
+			// the interpreter makes it.
+			return sp, steps, nil
+		}
 		switch in.Op {
+		case bytecode.OpTailCall, bytecode.OpTailCallMethod:
 		case bytecode.OpPushThis, bytecode.OpGetProp, bytecode.OpSetProp, bytecode.OpCall,
 			bytecode.OpCallMethod, bytecode.OpGetGlobal, bytecode.OpGetGlobalOpt, bytecode.OpSetGlobal, bytecode.OpSetGlobalStrict,
 			bytecode.OpGetPropThis, bytecode.OpSetIndex, bytecode.OpNewArray,
@@ -1921,8 +1927,10 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 				}
 			}
 			continue
-		case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew:
-			v, sp, err = r.jitCallAt(in, sp)
+		case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew, bytecode.OpTailCall, bytecode.OpTailCallMethod:
+			// One in tail position is an ordinary call, shallow in the
+			// stack, as the interpreter's is.
+			v, sp, err = r.jitCallAt(jitCallInstr(in), sp)
 		case bytecode.OpGetGlobal:
 			c := tctx{r: r, f: f, cl: f.cl, locals: f.locals}
 			v, err = r.getGlobalAt(&c, in, pc)
