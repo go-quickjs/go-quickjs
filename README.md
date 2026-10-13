@@ -49,10 +49,10 @@ skipped because they require an unsupported feature or host facility, on
 test262 commit [`2e0a5676`](https://github.com/tc39/test262/commit/2e0a56762801e275a9fdf96dc49d90ba0cddcf63). See [Conformance](docs/status.md#conformance) for the
 measurement and [Not implemented](docs/status.md#not-implemented) for what is missing.
 
-On the V8 benchmark suite as a whole it is ahead of C QuickJS: it takes 0.63
-times QuickJS's time over the suite and has a 20% higher composite score.
+On the V8 benchmark suite as a whole it is ahead of C QuickJS: it takes 0.62
+times QuickJS's time over the suite and has a 19% higher composite score.
 Single operations cost about the same: QuickJS's own micro-benchmarks take
-0.98 times as long on average, though a few take two to over three times as
+0.99 times as long on average, though a few take two to over three times as
 long, the weak collections and BigInt arithmetic among them. See [Compared with C QuickJS](docs/benchmarks.md#compared-with-c-quickjs).
 
 ## Documentation
