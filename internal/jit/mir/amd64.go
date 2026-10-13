@@ -464,11 +464,12 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	sp := len(s.Slots)
 	calleeSlot := sp - site.Argc - 1
 	callee := v.Args[len(v.Args)-site.Argc-1]
+	join, generic := amd64.Label(0), false
 	if !site.Alloc && !site.Receiver {
 		// The collector is not marking: the records, the callee's context
 		// and its frame take pointers. While it marks, Go makes the call
 		// (markingCall).
-		if join, ok := c.markingCall(v, site, guard); ok {
+		if join, generic = c.markingCall(v, site, guard); generic {
 			defer c.a.Bind(join)
 		}
 	}
@@ -491,6 +492,10 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	guard(amd64.CondNE)
 	c.sourceRef(callee, guard)
 	checked := c.a.NewLabel()
+	// Past its sites, any other function, through its link
+	// (genericCheck).
+	gen := generic && site.Generic && site.Via == 0 && site.Pool == 0 && !site.Push && !site.Pop && !site.Alloc && !site.Receiver &&
+		!site.Literal && vs == 16 && c.enc.HintSlotSize == 32
 	for k, t := range sites {
 		next := c.a.NewLabel()
 		want := t.Callee
@@ -504,7 +509,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 			c.a.Op(amd64.Cmp, scratchC, scratchB, true)
 			c.a.Jcc(amd64.CondNE, next)
 		}
-		if len(sites) > 1 {
+		if len(sites) > 1 || gen {
 			// Which one, for its frame to be made for (abi.Context's
 			// CallTarget): a closure checked by its code is no one object.
 			c.a.StoreImm(regCtx, abi.OffCallTarget, int32(k))
@@ -562,7 +567,30 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		c.a.Jmp(checked)
 		c.a.Bind(next)
 	}
-	c.a.Jmp(c.stubLabel(s, exitKind(v.Aux)))
+	if gen {
+		// A function none of them is, at a call that has met as many as it
+		// calls natively: called natively all the same, through its link
+		// (genericCheck), as V8's code makes a call its feedback has seen
+		// too many functions at through the code the function points to;
+		// or, one a generic call does not make, by Go from native code
+		// (ssa.GoCall). Each had left native code: Vector's forEach, given
+		// more callbacks than jitCallTargets in AWFY's DeltaBlue, at each
+		// call of them. A miss at any other call leaves, as before: Go
+		// learns there what to call natively, and a call Go made in its
+		// place had AWFY's List run a tenth slower.
+		miss := c.a.NewLabel()
+		c.genericCheck(v, site, len(sites), checked, miss)
+		c.a.Bind(miss)
+		cold, op := c.a.NewLabel(), goOpWord(&ssa.CallSite{Go: ssa.GoCall, Argc: site.Argc, Method: site.Method, New: site.Pool != 0})
+		c.a.Jmp(cold)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(cold)
+			c.goCallOp(v, op, guard, true)
+			c.a.Jmp(join)
+		})
+	} else {
+		c.a.Jmp(c.stubLabel(s, exitKind(v.Aux)))
+	}
 	c.a.Bind(checked)
 	if site.Push {
 		c.push(v)
@@ -586,7 +614,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	// them (directOperand), not recorded: Go never reads them, as a callee
 	// that leaves native code is finished from its own frame, and its
 	// result replaces them (the VM's jitCallResult).
-	direct, ops := len(sites) == 1 && (site.ThisSlot < 0 || site.Method || site.Pool != 0), calleeSlot
+	direct, ops := len(sites) == 1 && !gen && (site.ThisSlot < 0 || site.Method || site.Pool != 0), calleeSlot
 	if site.Method {
 		ops--
 	}
@@ -695,7 +723,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	// Which one the checks found (abi.Context's CallTarget).
 	for i, t := range sites {
 		next := c.a.NewLabel()
-		if i < len(sites)-1 {
+		if i < len(sites)-1 || gen {
 			c.a.Load(top, regCtx, abi.OffCallTarget)
 			c.a.OpImm(amd64.Cmp, top, int32(i), true)
 			c.a.Jcc(amd64.CondNE, next)
@@ -812,6 +840,106 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		}
 		c.a.Jmp(c.enter)
 		c.a.Bind(next)
+	}
+	if gen {
+		// A function none of them is (genericCheck): its frame made as its
+		// link says, read from its link at run time.
+		c.a.Load(high2, regCtx, abi.OffCallLink)
+		c.a.Load(top, high2, c.enc.LinkLocals)
+		c.a.ShiftImm(amd64.Shl, top, 4, true)
+		c.a.Op(amd64.Add, top, locals, true)
+		c.a.Store(calleeCtx, abi.OffStack, top)
+		notail := c.a.NewLabel()
+		c.a.Load(top, high2, c.enc.LinkFlags)
+		c.a.OpImm(amd64.And, top, abi.LinkTail, true)
+		c.a.Jcc(amd64.CondE, notail)
+		// Not an arrow's, nor a construction's (abi.LinkNotGeneric): its
+		// frame is one a call in tail position gives up.
+		c.storeImm(calleeCtx, abi.OffTailFrame, 1, top)
+		c.storeImm(calleeCtx, abi.OffFrameThis, 0, top)
+		c.a.Bind(notail)
+		// The arguments, its parameters'.
+		fill := c.a.NewLabel()
+		first := sp - site.Argc
+		for i := 0; i < site.Argc; i++ {
+			c.a.Load(top, high2, c.enc.LinkParams)
+			c.a.OpImm(amd64.Cmp, top, int32(i), true)
+			c.a.Jcc(amd64.CondBE, fill)
+			nb, nd, rb, rd := words(first + i)
+			c.a.Load(top, nb, nd)
+			c.a.Store(locals, int32(i)*vs+c.enc.NumOffset, top)
+			c.a.Load(top, rb, rd)
+			c.a.Store(locals, int32(i)*vs+c.enc.RefOffset, top)
+		}
+		c.a.Bind(fill)
+		// Undefined in every other local, from the fewer of its parameters
+		// and the arguments on.
+		least, loop, filled := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+		c.a.Load(scratchA, high2, c.enc.LinkParams)
+		c.movImm(scratchB, uint64(site.Argc))
+		c.a.Op(amd64.Cmp, scratchA, scratchB, true)
+		c.a.Jcc(amd64.CondBE, least)
+		c.a.MovRR(scratchA, scratchB)
+		c.a.Bind(least)
+		c.a.Load(scratchB, high2, c.enc.LinkLocals)
+		c.a.Bind(loop)
+		c.a.Op(amd64.Cmp, scratchA, scratchB, true)
+		c.a.Jcc(amd64.CondAE, filled)
+		c.a.MovRR(top, scratchA)
+		c.a.ShiftImm(amd64.Shl, top, 4, true)
+		c.a.Op(amd64.Add, top, locals, true)
+		c.storeImm(top, c.enc.NumOffset, c.enc.Undefined, scratchC)
+		c.storeImm(top, c.enc.RefOffset, 0, scratchC)
+		c.a.OpImm(amd64.Add, scratchA, 1, true)
+		c.a.Jmp(loop)
+		c.a.Bind(filled)
+		// A method call's receiver, which its body may read; undefined for
+		// a plain call's, a function that would coerce it not called so
+		// (genericCheck).
+		if site.Method {
+			nb, nd, rb, rd := words(calleeSlot - 1)
+			c.a.Load(top, nb, nd)
+			c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, top)
+			c.a.Load(top, rb, rd)
+			c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, top)
+		} else {
+			c.storeImm(calleeCtx, abi.OffThis+c.enc.NumOffset, c.enc.Undefined, top)
+			c.storeImm(calleeCtx, abi.OffThis+c.enc.RefOffset, 0, top)
+		}
+		c.a.Load(top, regCtx, abi.OffCallClosure)
+		c.a.Store(calleeCtx, abi.OffClosure, top)
+		c.a.Load(top, regCtx, abi.OffCallUpvalues)
+		c.a.Store(calleeCtx, abi.OffUpvalues, top)
+		c.a.Load(high2, regCtx, abi.OffCallLink)
+		c.a.Load(top, high2, c.enc.LinkIn)
+		c.a.OpImm(amd64.Add, top, 1, true)
+		c.a.Store(high2, c.enc.LinkIn, top)
+		// The VM's stack's top past the callee's frame.
+		same := c.a.NewLabel()
+		c.a.Load(top, high2, c.enc.LinkFrame)
+		c.a.Op(amd64.Add, top, base, true)
+		c.a.Load(tmp, regCtx, abi.OffStackTop)
+		c.a.Store(tmp, 0, top)
+		c.a.Load(tmp, regCtx, abi.OffStackHigh)
+		c.a.Load(high2, tmp, 0)
+		c.a.Op(amd64.Cmp, top, high2, true)
+		c.a.Jcc(amd64.CondBE, same)
+		c.a.Store(tmp, 0, top)
+		c.a.Bind(same)
+		c.a.Load(high2, regCtx, abi.OffCallCallee)
+		c.a.Load(scratchA, regCtx, abi.OffCallLink)
+		c.a.Load(scratchA, scratchA, c.enc.LinkEntry)
+		c.a.MovRR(regCtx, calleeCtx)
+		enter := c.a.NewLabel()
+		c.a.Op(amd64.Test, scratchA, scratchA, true)
+		c.a.Jcc(amd64.CondE, enter)
+		c.a.JmpReg(scratchA)
+		c.a.Bind(enter)
+		c.a.MovRR(scratchA, high2)
+		if !c.enterUsed {
+			c.enter, c.enterUsed = c.a.NewLabel(), true
+		}
+		c.a.Jmp(c.enter)
 	}
 	// The callee returned (returnNative), its context in regCtx: its result
 	// is v, its pointer word kept (OpCallCell).
@@ -1236,6 +1364,78 @@ func (c *compiler) byCode(t *ssa.CallSite, next amd64.Label) {
 	c.a.Load(scratchC, regCtx, abi.OffCallCallee)
 	c.a.Jmp(next)
 	c.a.Bind(done)
+}
+
+// genericCheck has call v, of a function none of its sites is, the callee
+// in scratchC, make it through the function's link (ssa.CallSite's
+// Generic): the callee a closure of the caller's environment and realm,
+// whose hint names a slot of the hint table (abi.HintTable) holding its
+// function and its link, a function a generic call makes -- and, if it
+// coerces its receiver, a method call's receiver an object -- with room in
+// the VM's stack for its frame. Then it is the call's target, past its
+// sites; otherwise it goes to miss, where Go makes the call.
+func (c *compiler) genericCheck(v *ssa.Value, site *ssa.CallSite, target int, checked, miss amd64.Label) {
+	c.a.Store(regCtx, abi.OffCallCallee, scratchC)
+	c.objectData(scratchB, scratchC, scratchC, c.enc.FuncData, func(cond amd64.Cond) { c.a.Jcc(cond, miss) })
+	c.a.Load(scratchB, scratchB, c.enc.FuncClosure)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	c.a.Jcc(amd64.CondE, miss)
+	for _, f := range [...]struct {
+		off  int32
+		want uintptr
+	}{{c.enc.ClosureEnv, site.GenericEnv}, {c.enc.ClosureRealm, site.GenericRealm}} {
+		c.a.Load(scratchA, scratchB, f.off)
+		c.movImm(scratchC, uint64(f.want))
+		c.a.Op(amd64.Cmp, scratchA, scratchC, true)
+		c.a.Jcc(amd64.CondNE, miss)
+	}
+	c.a.Store(regCtx, abi.OffCallClosure, scratchB)
+	c.a.Load(scratchA, scratchB, c.enc.ClosureUpvalues)
+	c.a.Store(regCtx, abi.OffCallUpvalues, scratchA)
+	// Its hint's slot: its function's, holding its link.
+	c.a.LoadU32(scratchA, scratchB, c.enc.ClosureHint)
+	c.a.Load(scratchC, regCtx, abi.OffHints)
+	c.a.Load(scratchC, scratchC, abi.OffHintLen)
+	c.a.Op(amd64.Cmp, scratchA, scratchC, true)
+	c.a.Jcc(amd64.CondAE, miss)
+	c.a.ShiftImm(amd64.Shl, scratchA, 5, true)
+	c.a.Load(scratchC, regCtx, abi.OffHints)
+	c.a.Load(scratchC, scratchC, abi.OffHintSlots)
+	c.a.Op(amd64.Add, scratchC, scratchA, true)
+	c.a.Load(scratchA, scratchB, c.enc.ClosureFn)
+	c.a.Load(scratchB, scratchC, c.enc.HintSlotFn)
+	c.a.Op(amd64.Cmp, scratchA, scratchB, true)
+	c.a.Jcc(amd64.CondNE, miss)
+	c.a.Load(scratchC, scratchC, c.enc.HintSlotLink)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	c.a.Jcc(amd64.CondE, miss)
+	c.a.Store(regCtx, abi.OffCallLink, scratchC)
+	c.a.Load(scratchA, scratchC, c.enc.LinkFlags)
+	c.a.MovRR(scratchB, scratchA)
+	c.a.OpImm(amd64.And, scratchB, abi.LinkNotGeneric, true)
+	c.a.Jcc(amd64.CondNE, miss)
+	c.a.OpImm(amd64.And, scratchA, abi.LinkCoerce, true)
+	if site.Method {
+		object := c.a.NewLabel()
+		c.a.Jcc(amd64.CondE, object)
+		c.movImm(scratchB, c.enc.Object)
+		c.a.Op(amd64.Cmp, c.gpr(v.Args[0], scratchA), scratchB, true)
+		c.a.Jcc(amd64.CondNE, miss)
+		c.a.Bind(object)
+	} else {
+		c.a.Jcc(amd64.CondNE, miss)
+	}
+	// Room in the VM's stack.
+	c.a.Load(scratchA, regCtx, abi.OffStackTop)
+	c.a.Load(scratchA, scratchA, 0)
+	c.a.Load(scratchC, regCtx, abi.OffCallLink)
+	c.a.Load(scratchB, scratchC, c.enc.LinkFrame)
+	c.a.Op(amd64.Add, scratchA, scratchB, true)
+	c.a.Load(scratchB, regCtx, abi.OffStackEnd)
+	c.a.Op(amd64.Cmp, scratchA, scratchB, true)
+	c.a.Jcc(amd64.CondA, miss)
+	c.a.StoreImm(regCtx, abi.OffCallTarget, int32(target))
+	c.a.Jmp(checked)
 }
 
 // objectData has dst be the pointer word of the data (abi.Encoding's

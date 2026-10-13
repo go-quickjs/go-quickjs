@@ -144,6 +144,11 @@ func (c *jitClosureFields) setHint(h uint32) { binary.LittleEndian.PutUint32(c.j
 type jitHintSlot struct {
 	e  *jitEntry
 	fn uintptr
+	// link is e's function's link, which a generic call reads (abi's
+	// HintTable); the slot is padded to a power of two, which native code
+	// indexes it by.
+	link *jitLink
+	_    uintptr
 }
 
 // hint returns the entry cl's hint names, or nil if the hint is empty or
@@ -434,6 +439,9 @@ type jitLink struct {
 	owner *jitEntry
 	refs  int
 	key   weak.Pointer[bytecode.Function]
+	// The function's frame and flags (abi.LinkCoerce...), for a generic
+	// call (abi.Encoding's Link fields).
+	params, locals, frame, flags uint64
 }
 
 // Weak keys prevent a refusal or cached program from retaining a source graph.
@@ -463,6 +471,9 @@ type jitState struct {
 	// bounds are how deep the contexts' native calls may go, which they
 	// all point to (abi.Bounds), and jitShareContexts writes.
 	bounds abi.Bounds
+	// hintTable is hints for native code (abi.HintTable), which every
+	// context points to.
+	hintTable abi.HintTable
 	// arena holds the code of every entry: a few mappings, however many
 	// functions the runtime compiles.
 	arena *jit.Arena
@@ -1214,11 +1225,40 @@ func (s *jitState) linkFor(fn *bytecode.Function, e *jitEntry) {
 		if s.links == nil {
 			s.links = map[weak.Pointer[bytecode.Function]]*jitLink{}
 		}
-		l = &jitLink{key: key}
+		l = &jitLink{key: key, params: uint64(fn.ParamCount), locals: uint64(fn.LocalCount),
+			frame: uint64(fn.LocalCount + fn.MaxStack), flags: jitLinkFlags(fn)}
 		s.links[key] = l
 	}
 	l.owner, l.entry, l.in = e, 0, 0
 	e.link = l
+}
+
+// jitLinkFlags are fn's link's flags (abi.LinkCoerce...): a function a
+// generic call may not make is one native callers do not call natively
+// at a call compiled for it either -- an arrow that reads this, which is
+// its captured one, or makes calls in tail position, whose frame depends on
+// its object -- one whose call is not its body: a generator's, an async
+// function's, a class constructor's -- or one whose frame is not its
+// arguments in its parameters' locals: rest parameters, defaults,
+// destructuring. A link is a refused function's too, which a generic call
+// makes as a native call of code with no entry, Go running it from the
+// frame native code made (abi.ExitEnter): with its arguments cut to its
+// parameters, a rest parameter's would be lost.
+func jitLinkFlags(fn *bytecode.Function) uint64 {
+	var f uint64
+	if fn.CoerceThis {
+		f |= abi.LinkCoerce
+	}
+	if fn.HasTailCall {
+		f |= abi.LinkTail
+	}
+	if fn.Kind != bytecode.KindNormal && fn.Kind != bytecode.KindArrow && fn.Kind != bytecode.KindMethod ||
+		fn.Kind == bytecode.KindArrow && (fn.UsesThis || fn.HasTailCall) || fn.Async || fn.Generator || isGeneratorTemplate(fn) ||
+		fn.TopLevel || fn.IsModule || fn.UsesArguments || fn.MappedArguments || fn.HasDirectEval || len(fn.EvalScopes) != 0 ||
+		!fn.HasSimpleParams || fn.HasRest || fn.ParamsAreLexical {
+		f |= abi.LinkNotGeneric
+	}
+	return f
 }
 
 // setLinks has e's code call through links, those of the functions it
@@ -1310,7 +1350,8 @@ func (s *jitState) remember(key weak.Pointer[bytecode.Function], e *jitEntry) {
 		i = uint32(len(s.hints))
 		s.hints = append(s.hints, jitHintSlot{})
 	}
-	s.hints[i] = jitHintSlot{e: e, fn: uintptr(unsafe.Pointer(key.Value()))}
+	s.hints[i] = jitHintSlot{e: e, fn: uintptr(unsafe.Pointer(key.Value())), link: e.link}
+	s.hintTable = abi.HintTable{Slots: unsafe.Pointer(unsafe.SliceData(s.hints)), Len: uint64(len(s.hints))}
 	e.hint = i
 	s.account(e)
 }

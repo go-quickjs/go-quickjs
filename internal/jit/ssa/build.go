@@ -213,6 +213,14 @@ type CallSite struct {
 	// runtime function: what Go does with the call's operands, which
 	// native code passes as their words (abi.Context's GoOp).
 	Go GoOp
+	// Generic, on a call's first site, has a function none of its sites
+	// is called natively all the same, through its link, found from its
+	// closure's hint (abi.HintTable), where its closure's environment and
+	// realm are GenericEnv and GenericRealm, the caller's -- as V8's code
+	// makes a call its feedback saw too many functions at, through the
+	// code the function object points to.
+	Generic                  bool
+	GenericEnv, GenericRealm uintptr
 }
 
 // GoOp is what a call of Go does (CallSite's Go).

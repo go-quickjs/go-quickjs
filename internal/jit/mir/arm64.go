@@ -1361,6 +1361,70 @@ func (c *a64Compiler) byCode(t *ssa.CallSite, next arm64.Label) {
 	c.a.Bind(done)
 }
 
+// genericCheck is amd64's: call v, of a function none of its sites is, the
+// callee in C, made through the function's link, or miss.
+func (c *a64Compiler) genericCheck(v *ssa.Value, site *ssa.CallSite, target int, checked, miss arm64.Label) {
+	c.a.Store(a64Ctx, abi.OffCallCallee, a64C)
+	c.objectData(a64B, a64C, a64C, c.enc.FuncData, func(cond arm64.Cond) { c.a.BCond(cond, miss) })
+	c.a.Load(a64B, a64B, c.enc.FuncClosure)
+	c.a.Cbz(a64B, miss, true)
+	for _, f := range [...]struct {
+		off  int32
+		want uintptr
+	}{{c.enc.ClosureEnv, site.GenericEnv}, {c.enc.ClosureRealm, site.GenericRealm}} {
+		c.a.Load(a64A, a64B, f.off)
+		c.movImm(a64C, uint64(f.want))
+		c.a.Cmp(a64A, a64C, true)
+		c.a.BCond(arm64.NE, miss)
+	}
+	c.a.Store(a64Ctx, abi.OffCallClosure, a64B)
+	c.a.Load(a64A, a64B, c.enc.ClosureUpvalues)
+	c.a.Store(a64Ctx, abi.OffCallUpvalues, a64A)
+	c.a.LoadU32(a64A, a64B, c.enc.ClosureHint)
+	c.a.Load(a64C, a64Ctx, abi.OffHints)
+	c.a.Load(a64C, a64C, abi.OffHintLen)
+	c.a.Cmp(a64A, a64C, true)
+	c.a.BCond(arm64.HS, miss)
+	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 5, true)
+	c.a.Load(a64C, a64Ctx, abi.OffHints)
+	c.a.Load(a64C, a64C, abi.OffHintSlots)
+	c.a.Op(arm64.Add, a64C, a64C, a64A, true)
+	c.a.Load(a64A, a64B, c.enc.ClosureFn)
+	c.a.Load(a64B, a64C, c.enc.HintSlotFn)
+	c.a.Cmp(a64A, a64B, true)
+	c.a.BCond(arm64.NE, miss)
+	c.a.Load(a64C, a64C, c.enc.HintSlotLink)
+	c.a.Cbz(a64C, miss, true)
+	c.a.Store(a64Ctx, abi.OffCallLink, a64C)
+	c.a.Load(a64A, a64C, c.enc.LinkFlags)
+	c.movImm(a64B, abi.LinkNotGeneric)
+	c.a.Tst(a64A, a64B, true)
+	c.a.BCond(arm64.NE, miss)
+	c.movImm(a64B, abi.LinkCoerce)
+	c.a.Tst(a64A, a64B, true)
+	if site.Method {
+		object := c.a.NewLabel()
+		c.a.BCond(arm64.EQ, object)
+		c.movImm(a64B, c.enc.Object)
+		c.a.Cmp(c.gpr(v.Args[0], a64A), a64B, true)
+		c.a.BCond(arm64.NE, miss)
+		c.a.Bind(object)
+	} else {
+		c.a.BCond(arm64.NE, miss)
+	}
+	c.a.Load(a64A, a64Ctx, abi.OffStackTop)
+	c.a.Load(a64A, a64A, 0)
+	c.a.Load(a64C, a64Ctx, abi.OffCallLink)
+	c.a.Load(a64B, a64C, c.enc.LinkFrame)
+	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.Load(a64B, a64Ctx, abi.OffStackEnd)
+	c.a.Cmp(a64A, a64B, true)
+	c.a.BCond(arm64.HI, miss)
+	c.movImm(a64B, uint64(target))
+	c.a.Store(a64Ctx, abi.OffCallTarget, a64B)
+	c.a.B(checked)
+}
+
 // objectData is amd64's: dst the pointer word of the data of the object in
 // obj, which has its side fields and data of type typ. It uses t, which
 // may be obj, and A; dst must be neither.
@@ -1747,9 +1811,10 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	sp := len(s.Slots)
 	calleeSlot := sp - site.Argc - 1
 	callee := v.Args[len(v.Args)-site.Argc-1]
+	join, generic := arm64.Label(0), false
 	if !site.Alloc && !site.Receiver {
 		// As amd64's: while the collector marks, Go makes the call.
-		if join, ok := c.markingCall(v, site, stub); ok {
+		if join, generic = c.markingCall(v, site, stub); generic {
 			defer c.a.Bind(join)
 		}
 	}
@@ -1768,6 +1833,9 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	guard(arm64.NE)
 	c.sourceRef(callee, guard)
 	checked := c.a.NewLabel()
+	// As amd64's: past its sites, any other function (genericCheck).
+	gen := generic && site.Generic && site.Via == 0 && site.Pool == 0 && !site.Push && !site.Pop && !site.Alloc && !site.Receiver &&
+		!site.Literal && vs == 16 && c.enc.HintSlotSize == 32
 	for k, t := range sites {
 		next := c.a.NewLabel()
 		want := t.Callee
@@ -1781,7 +1849,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 			c.a.Cmp(a64C, a64B, true)
 			c.a.BCond(arm64.NE, next)
 		}
-		if len(sites) > 1 {
+		if len(sites) > 1 || gen {
 			// As amd64's: which one (abi.Context's CallTarget).
 			c.movImm(a64B, uint64(k))
 			c.a.Store(a64Ctx, abi.OffCallTarget, a64B)
@@ -1830,7 +1898,22 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		c.a.B(checked)
 		c.a.Bind(next)
 	}
-	c.a.B(stub)
+	if gen {
+		// As amd64's: a function none of them is, called through its link,
+		// or by Go from native code.
+		miss := c.a.NewLabel()
+		c.genericCheck(v, site, len(sites), checked, miss)
+		c.a.Bind(miss)
+		cold, op := c.a.NewLabel(), goOpWord(&ssa.CallSite{Go: ssa.GoCall, Argc: site.Argc, Method: site.Method, New: site.Pool != 0})
+		c.a.B(cold)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(cold)
+			c.goCallOp(v, op, true)
+			c.a.B(join)
+		})
+	} else {
+		c.a.B(stub)
+	}
 	c.a.Bind(checked)
 	if site.Push {
 		c.push(v)
@@ -1849,7 +1932,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	}
 	// As amd64's: a call of one function writes its operands where the
 	// callee has them, unrecorded.
-	direct, ops := len(sites) == 1 && (site.ThisSlot < 0 || site.Method || site.Pool != 0), calleeSlot
+	direct, ops := len(sites) == 1 && !gen && (site.ThisSlot < 0 || site.Method || site.Pool != 0), calleeSlot
 	if site.Method {
 		ops--
 	}
@@ -1952,7 +2035,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	c.a.Store(calleeCtx, abi.OffReturnTo, tmp)
 	for i, t := range sites {
 		next := c.a.NewLabel()
-		if i < len(sites)-1 {
+		if i < len(sites)-1 || gen {
 			c.a.Load(top, a64Ctx, abi.OffCallTarget)
 			c.a.CmpImm(top, int64(i), true)
 			c.a.BCond(arm64.NE, next)
@@ -2069,6 +2152,97 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		}
 		c.a.B(c.enter)
 		c.a.Bind(next)
+	}
+	if gen {
+		// As amd64's: its frame made as its link says.
+		c.a.Load(high2, a64Ctx, abi.OffCallLink)
+		c.a.Load(top, high2, c.enc.LinkLocals)
+		c.a.ShiftImm(arm64.Lsl, top, top, 4, true)
+		c.a.Op(arm64.Add, top, top, locals, true)
+		c.a.Store(calleeCtx, abi.OffStack, top)
+		notail := c.a.NewLabel()
+		c.a.Load(top, high2, c.enc.LinkFlags)
+		c.movImm(tmp, abi.LinkTail)
+		c.a.Tst(top, tmp, true)
+		c.a.BCond(arm64.EQ, notail)
+		c.movImm(top, 1)
+		c.a.Store(calleeCtx, abi.OffTailFrame, top)
+		c.a.Store(calleeCtx, abi.OffFrameThis, arm64.ZR)
+		c.a.Bind(notail)
+		fill := c.a.NewLabel()
+		first := sp - site.Argc
+		for i := 0; i < site.Argc; i++ {
+			c.a.Load(top, high2, c.enc.LinkParams)
+			c.a.CmpImm(top, int64(i), true)
+			c.a.BCond(arm64.LS, fill)
+			nb, nd, rb, rd := words(first + i)
+			c.a.Load(top, nb, nd)
+			c.a.Store(locals, int32(i)*vs+c.enc.NumOffset, top)
+			c.a.Load(top, rb, rd)
+			c.a.Store(locals, int32(i)*vs+c.enc.RefOffset, top)
+		}
+		c.a.Bind(fill)
+		least, loop, filled := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+		c.a.Load(a64A, high2, c.enc.LinkParams)
+		c.a.CmpImm(a64A, int64(site.Argc), true)
+		c.a.BCond(arm64.LS, least)
+		c.movImm(a64A, uint64(site.Argc))
+		c.a.Bind(least)
+		c.a.Load(a64B, high2, c.enc.LinkLocals)
+		c.movImm(tmp, c.enc.Undefined)
+		c.a.Bind(loop)
+		c.a.Cmp(a64A, a64B, true)
+		c.a.BCond(arm64.HS, filled)
+		c.a.ShiftImm(arm64.Lsl, top, a64A, 4, true)
+		c.a.Op(arm64.Add, top, top, locals, true)
+		c.a.Store(top, c.enc.NumOffset, tmp)
+		c.a.Store(top, c.enc.RefOffset, arm64.ZR)
+		c.a.AddImm(a64A, a64A, 1, true)
+		c.a.B(loop)
+		c.a.Bind(filled)
+		if site.Method {
+			nb, nd, rb, rd := words(calleeSlot - 1)
+			c.a.Load(top, nb, nd)
+			c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, top)
+			c.a.Load(top, rb, rd)
+			c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, top)
+		} else {
+			c.movImm(top, c.enc.Undefined)
+			c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, top)
+			c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, arm64.ZR)
+		}
+		c.a.Load(top, a64Ctx, abi.OffCallClosure)
+		c.a.Store(calleeCtx, abi.OffClosure, top)
+		c.a.Load(top, a64Ctx, abi.OffCallUpvalues)
+		c.a.Store(calleeCtx, abi.OffUpvalues, top)
+		c.a.Load(high2, a64Ctx, abi.OffCallLink)
+		c.a.Load(top, high2, c.enc.LinkIn)
+		c.a.AddImm(top, top, 1, true)
+		c.a.Store(high2, c.enc.LinkIn, top)
+		same := c.a.NewLabel()
+		c.a.Load(top, high2, c.enc.LinkFrame)
+		c.a.Op(arm64.Add, top, top, base, true)
+		c.a.Load(tmp, a64Ctx, abi.OffStackTop)
+		c.a.Store(tmp, 0, top)
+		c.a.Load(tmp, a64Ctx, abi.OffStackHigh)
+		c.a.Load(high2, tmp, 0)
+		c.a.Cmp(top, high2, true)
+		c.a.BCond(arm64.LS, same)
+		c.a.Store(tmp, 0, top)
+		c.a.Bind(same)
+		c.a.Load(high2, a64Ctx, abi.OffCallCallee)
+		c.a.Load(a64A, a64Ctx, abi.OffCallLink)
+		c.a.Load(a64A, a64A, c.enc.LinkEntry)
+		c.a.MovRR(a64Ctx, calleeCtx)
+		enter := c.a.NewLabel()
+		c.a.Cbz(a64A, enter, true)
+		c.a.Br(a64A)
+		c.a.Bind(enter)
+		c.a.MovRR(a64A, high2)
+		if !c.enterUsed {
+			c.enter, c.enterUsed = c.a.NewLabel(), true
+		}
+		c.a.B(c.enter)
 	}
 	c.a.Bind(back)
 	c.a.MovRR(calleeCtx, a64Ctx)

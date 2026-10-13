@@ -59,6 +59,35 @@ type Bounds struct {
 	LevelLimit, TailLevel uint64
 }
 
+// HintTable is where the VM's hint table's slots are, and how many: a
+// closure's hint, the uint32 at Encoding's ClosureHint, indexes it, and the
+// slot holds its function's address and its link, at HintSlotFn and
+// HintSlotLink, HintSlotSize bytes a slot -- what a generic call reads to
+// call a function no call site was compiled for (Context.CallTarget), as
+// V8's code calls a function through the code its object points to. Go
+// writes it as the table grows; native code only reads it.
+type HintTable struct {
+	Slots unsafe.Pointer
+	Len   uint64
+}
+
+// Offsets of HintTable's fields.
+const (
+	OffHintSlots = int32(unsafe.Offsetof(HintTable{}.Slots))
+	OffHintLen   = int32(unsafe.Offsetof(HintTable{}.Len))
+)
+
+// A link's flags (Encoding's LinkFlags): LinkCoerce, a function whose
+// receiver, if not an object, is made one, which Go does; LinkTail, one
+// that makes calls in tail position, whose frame they may give up
+// (Context.TailFrame); LinkNotGeneric, one a generic call does not make --
+// an arrow's this, an arguments object, a generator's body.
+const (
+	LinkCoerce = 1 << iota
+	LinkTail
+	LinkNotGeneric
+)
+
 // Offsets of Bounds' fields.
 const (
 	OffBoundsLevelLimit = int32(unsafe.Offsetof(Bounds{}.LevelLimit))
@@ -185,8 +214,16 @@ type Context struct {
 	// frame, while the callee's operands keep the object alive.
 	CallCallee, CallClosure, CallUpvalues uintptr
 	// CallTarget is which of a native call's functions its checks found,
-	// by its index among them, which its frame is made for.
+	// by its index among them, which its frame is made for: past them, a
+	// function none of them is, which the call makes through its link
+	// (CallLink), from the hint table (Hints).
 	CallTarget uint64
+	// CallLink is the link of the function a generic call found
+	// (Encoding's Link fields), kept between its checks and its frame.
+	CallLink uintptr
+	// Hints is the VM's hint table, shared by every context, which a
+	// generic call finds its callee's link in (HintTable).
+	Hints *HintTable
 	// Open counts what closures captured of the frame's locals and is not
 	// closed yet, which Go keeps, the frame's or, for a native callee's,
 	// its context's: a scope's end, and a return, call Go to close them
@@ -436,6 +473,8 @@ var (
 	OffCallUpvalues  = int32(unsafe.Offsetof(Context{}.CallUpvalues))
 	OffOpen          = int32(unsafe.Offsetof(Context{}.Open))
 	OffCallTarget    = int32(unsafe.Offsetof(Context{}.CallTarget))
+	OffCallLink      = int32(unsafe.Offsetof(Context{}.CallLink))
+	OffHints         = int32(unsafe.Offsetof(Context{}.Hints))
 	OffEnterCallee   = int32(unsafe.Offsetof(Context{}.EnterCallee))
 	OffInlineLocals  = int32(unsafe.Offsetof(Context{}.InlineLocals))
 	OffInlineThis    = int32(unsafe.Offsetof(Context{}.InlineThis))
@@ -593,6 +632,15 @@ type Encoding struct {
 	// not the object (ssa.CallSite's ByCode), reads.
 	FuncData                                                          uint64
 	FuncClosure, ClosureFn, ClosureUpvalues, ClosureEnv, ClosureRealm int32
+	// A closure's hint is the uint32 at ClosureHint, which indexes the hint
+	// table (HintTable). A link is a function's, in its runtime: the
+	// address of the code native callers call at LinkEntry, 0 for none; the
+	// count of their calls at LinkIn; the function's parameters, locals,
+	// and locals and stack together at LinkParams, LinkLocals and
+	// LinkFrame; and its flags (LinkCoerce...) at LinkFlags -- each a
+	// uint64.
+	ClosureHint, HintSlotSize, HintSlotFn, HintSlotLink             int32
+	LinkEntry, LinkIn, LinkParams, LinkLocals, LinkFrame, LinkFlags int32
 	// FlagHTMLDDA is the flags byte's bit for Annex B's [[IsHTMLDDA]],
 	// which makes an object == null and == undefined.
 	FlagHTMLDDA uint8

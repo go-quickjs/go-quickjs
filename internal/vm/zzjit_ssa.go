@@ -90,6 +90,16 @@ var jitEncoding = abi.Encoding{
 	ClosureUpvalues:    int32(unsafe.Offsetof(closure{}.upvalues)),
 	ClosureEnv:         int32(unsafe.Offsetof(closure{}.env)),
 	ClosureRealm:       int32(unsafe.Offsetof(closure{}.realm)),
+	ClosureHint:        int32(unsafe.Offsetof(closure{}.jitHint)),
+	HintSlotSize:       int32(unsafe.Sizeof(jitHintSlot{})),
+	HintSlotFn:         int32(unsafe.Offsetof(jitHintSlot{}.fn)),
+	HintSlotLink:       int32(unsafe.Offsetof(jitHintSlot{}.link)),
+	LinkEntry:          int32(unsafe.Offsetof(jitLink{}.entry)),
+	LinkIn:             int32(unsafe.Offsetof(jitLink{}.in)),
+	LinkParams:         int32(unsafe.Offsetof(jitLink{}.params)),
+	LinkLocals:         int32(unsafe.Offsetof(jitLink{}.locals)),
+	LinkFrame:          int32(unsafe.Offsetof(jitLink{}.frame)),
+	LinkFlags:          int32(unsafe.Offsetof(jitLink{}.flags)),
 	ClassArray:         uint8(ClassArray),
 	ClassTypedArray:    uint8(ClassTypedArray),
 	TypedData:          jitTypeWord((*typedArrayData)(nil)),
@@ -1735,6 +1745,12 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 		}
 		sites = append(sites, site)
 	}
+	if call := jitCallInstr(fb.fn.Code[pc]); len(sites) != 0 && call.Op != bytecode.OpNew && fb.cl != nil && jitCountAt(fb.e.nativeCalls, pc) >= jitCallTargets {
+		// As many as it calls natively: any other function it calls through
+		// its link (ssa.CallSite's Generic).
+		sites[0].Generic = true
+		sites[0].GenericEnv, sites[0].GenericRealm = uintptr(unsafe.Pointer(fb.cl.env)), uintptr(unsafe.Pointer(fb.cl.realm))
+	}
 	if len(sites) == 0 {
 		// None it calls natively: Go makes it, called from native code
 		// (jitGoCall), as V8's code calls a function it has no code for.
@@ -2850,6 +2866,15 @@ func (r *Runtime) jitCallMade(in bytecode.Instr, sp int) (Value, error) {
 					err = r.chargeResult(v)
 				}
 				return v, err
+			}
+			if fd := o.fn(); fd != nil && fd.closure != nil && fd.closure.hint() == 0 {
+				// A closure made since its function was compiled, which a
+				// generic call finds by its hint (ssa.CallSite's Generic):
+				// given its function's now, not after its warm-up, its next
+				// call is native.
+				if e := r.jit.entryFor(fd.closure.fn); e != nil {
+					fd.closure.setHint(e.hint)
+				}
 			}
 		}
 	}
@@ -5648,7 +5673,7 @@ func (r *Runtime) jitGrowContexts() bool {
 	for i := range chunk {
 		chunk[i].Host = unsafe.Pointer(r)
 		chunk[i].SetConsts(&jitEncoding)
-		chunk[i].Level, chunk[i].Bounds = uint64(old+i), &s.bounds
+		chunk[i].Level, chunk[i].Bounds, chunk[i].Hints = uint64(old+i), &s.bounds, &s.hintTable
 		s.ssaCtxs = append(s.ssaCtxs, &chunk[i])
 	}
 	for i := max(old, 1); i < len(s.ssaCtxs); i++ {
