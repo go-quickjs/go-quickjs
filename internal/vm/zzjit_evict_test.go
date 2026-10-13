@@ -10,6 +10,7 @@ import (
 	"unsafe"
 
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
+	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 )
 
 // jitLinksHeld reports a function's link whose entry -- what native callers
@@ -66,6 +67,34 @@ func TestJITNativeCalleeKeepsItsEntry(t *testing.T) {
 	}
 	if err := jitLinksHeld(s); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The entry a compile returns is the cache's: the room its compile's
+// workspaces then make is not made of it. Before, a compile that left the
+// JIT past its budget could drop the very entry it had compiled, to be run
+// as it was returned -- which, once a dropped entry was no longer run,
+// left top-level code trying at every loop and never running natively.
+func TestJITForKeepsWhatItCompiled(t *testing.T) {
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	if _, err := r.Run(compileForTest(t, `
+		function f(n) { let s = 0; for (let i = 0; i < n; i++) s += (i * 7) % 13 + (i * 5) % 11 + (i * 3) % 7; return s }`)); err != nil {
+		t.Fatal(err)
+	}
+	cl := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
+	now := jitEpochNow
+	var tick uint64
+	jitEpochNow = func() uint64 { tick += 10; return tick }
+	t.Cleanup(func() { jitEpochNow = now })
+	// As little as compiling it takes: placed, it leaves the JIT past its
+	// budget, and the room the compile then makes may only be its own.
+	r.jitMemoryLimit = int64(len(cl.fn.Code)*ir.MaxSlots*8 + 32<<10)
+	e := r.jitFor(cl)
+	if e == nil || e.ssa == nil {
+		t.Fatalf("not compiled in the budget: %+v", e)
+	}
+	if !e.owned() || r.jit.cache[e.link.key] != e {
+		t.Fatal("the compile dropped the entry it returns")
 	}
 }
 

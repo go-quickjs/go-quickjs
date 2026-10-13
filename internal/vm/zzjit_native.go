@@ -1387,7 +1387,11 @@ func (r *Runtime) jitForFunction(fn *bytecode.Function, cl *closure) *jitEntry {
 			e.setSSA(s, fn, p, code, fb)
 			s.compiled++
 			s.remember(key, e)
+			// Not dropped by the room its own compile's workspaces make:
+			// it is what is returned, to be run.
+			e.busy++
 			s.settle()
+			e.busy--
 			r.jitWantedCallees(e, fb)
 			return e
 		case errors.Is(err, jit.ErrUnavailable):
@@ -1433,8 +1437,10 @@ func (r *Runtime) jitForFunction(fn *bytecode.Function, cl *closure) *jitEntry {
 	}
 	s.remember(key, e)
 	// The compile's workspaces, kept only if there is the room, as after
-	// a compile that places its code.
+	// a compile that places its code -- but for e.
+	e.busy++
 	s.settle()
+	e.busy--
 	return e
 }
 
