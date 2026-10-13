@@ -879,7 +879,7 @@ func referenceReads(p *ir.Program, fb Feedback) *ir.Program {
 	}
 	var q *ir.Program
 	for pc, in := range p.Code {
-		if in.Op != ir.ArrayRead || in.Reference || !reachable(p, pc) || !fb.Generic(pc) {
+		if in.Op != ir.ArrayRead && in.Op != ir.ArrayUpdate || in.Reference || !reachable(p, pc) || !fb.Generic(pc) {
 			continue
 		}
 		if q == nil {
@@ -1619,13 +1619,13 @@ func (b *builder) plan() error {
 			}
 		}
 		switch in.Op {
-		case ir.ArrayRead:
+		case ir.ArrayRead, ir.ArrayUpdate:
 			if in.Reference && resumes(pc) {
 				// Go reads what native code does not, and resumes after it.
 				entries[pc+1] = true
 			}
 		case ir.Nop, ir.Copy, ir.CopyPair, ir.StoreLoad, ir.Swap, ir.Insert2, ir.Insert3,
-			ir.Unary, ir.Update, ir.Return, ir.ArrayUpdate, ir.ArrayLength, ir.ArrayKey:
+			ir.Unary, ir.Update, ir.Return, ir.ArrayLength, ir.ArrayKey:
 		case ir.UpvalueRead:
 			// The function's own captured binding is read natively, its
 			// check deoptimizing; an inlined callee's leaves at its call.
@@ -2380,12 +2380,35 @@ func (b *builder) instruction(blk *Block, pc int) {
 		blk.Control = v
 		v.Uses++
 	case ir.ArrayRead, ir.ArrayUpdate:
+		// The element's key, and an update's updated key: the key's own
+		// value before or after (Postfix).
+		keyOf := func(kind ir.ExitKind) (key, updated *Value) {
+			if in.Op != ir.ArrayUpdate {
+				return number(in.Right, kind), nil
+			}
+			old := guard(OpUnboxF64, Float64, kind, operand(in.Right))
+			op := OpAddF64
+			if in.Operator == ir.Sub {
+				op = OpSubF64
+			}
+			updated = f.newValue(blk, op, Float64, old, one())
+			if in.Postfix {
+				return old, updated
+			}
+			return updated, updated
+		}
 		if in.Reference {
-			// Whatever the element holds, by its cell; Go reads the rest.
+			// Whatever the element holds, by its cell; Go reads the rest,
+			// and makes an update's of its key. An update's key, a[i++],
+			// is written once the read has succeeded, before the element.
 			array := guard(OpArrayOf, Ptr, ir.HostExit, operand(in.Left))
-			cell := guard(OpElemCell, Source, ir.HostExit, array, number(in.Right, ir.HostExit))
+			key, updated := keyOf(ir.HostExit)
+			cell := guard(OpElemCell, Source, ir.HostExit, array, key)
 			v := f.newValue(blk, OpLoadCell, Tagged, cell)
 			v.Shadow = cell
+			if updated != nil {
+				b.assign(in.Extra, blk, boxF(updated))
+			}
 			b.assign(in.Dest, blk, v)
 			break
 		}
@@ -2394,21 +2417,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 		// has succeeded, before the element, which wins if both name one
 		// slot.
 		array := guard(OpIndexedOf, Ptr, ir.GuardExit, operand(in.Left))
-		var key, updated *Value
-		if in.Op == ir.ArrayUpdate {
-			old := guard(OpUnboxF64, Float64, ir.GuardExit, operand(in.Right))
-			op := OpAddF64
-			if in.Operator == ir.Sub {
-				op = OpSubF64
-			}
-			updated = f.newValue(blk, op, Float64, old, one())
-			key = updated
-			if in.Postfix {
-				key = old
-			}
-		} else {
-			key = number(in.Right, ir.GuardExit)
-		}
+		key, updated := keyOf(ir.GuardExit)
 		elem := guard(OpElemRead, Float64, ir.GuardExit, array, key)
 		if updated != nil {
 			b.assign(in.Extra, blk, boxF(updated))
