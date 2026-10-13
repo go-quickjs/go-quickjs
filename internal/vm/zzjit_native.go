@@ -476,8 +476,9 @@ type jitState struct {
 	// all point to (abi.Bounds), and jitShareContexts writes.
 	bounds abi.Bounds
 	// hintTable is hints for native code (abi.HintTable), which every
-	// context points to.
+	// context points to, as they do to mega (abi.MegaCache).
 	hintTable abi.HintTable
+	mega      *abi.MegaCache
 	// ghosts are the functions whose code the cache dropped to make room,
 	// by address, until compiled again (jitGhost).
 	ghosts map[uintptr]jitGhost

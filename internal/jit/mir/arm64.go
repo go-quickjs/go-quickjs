@@ -1385,6 +1385,59 @@ func (c *a64Compiler) arrowThis(t *ssa.CallSite, next arm64.Label) {
 	c.a.Bind(done)
 }
 
+// mega is amd64's: v's property found in the megamorphic cache, its
+// value's address in A, or a failure.
+func (c *a64Compiler) mega(v *ssa.Value, guard func(arm64.Cond), found arm64.Label) {
+	p := c.gpr(v.Args[0], a64A)
+	c.a.Load(a64B, p, c.enc.ObjectShape)
+	c.a.ShiftImm(arm64.Lsr, a64C, a64B, 4, true)
+	c.a.ShiftImm(arm64.Lsr, a64A, a64B, 15, true)
+	c.a.Op(arm64.Eor, a64C, a64C, a64A, true)
+	c.a.ShiftImm(arm64.Lsr, a64A, a64B, 26, true)
+	c.a.Op(arm64.Eor, a64C, a64C, a64A, true)
+	c.movImm(a64A, uint64(abi.MegaKeyHash(uint32(v.Key))))
+	c.a.Op(arm64.Eor, a64C, a64C, a64A, false)
+	c.movImm(a64A, abi.MegaSets-1)
+	c.a.Op(arm64.And, a64C, a64C, a64A, true)
+	c.a.ShiftImm(arm64.Lsl, a64C, a64C, 6, true)
+	c.a.Load(a64A, a64Ctx, abi.OffMega)
+	c.a.Op(arm64.Add, a64A, a64A, a64C, true)
+	// As amd64's: the set's ways, in turn; D holds the key.
+	hit, miss := c.a.NewLabel(), c.a.NewLabel()
+	c.movImm(a64D, uint64(uint32(v.Key)))
+	for w := int32(0); w < abi.MegaWays; w++ {
+		next := c.a.NewLabel()
+		c.a.Load(a64C, a64A, w*abi.MegaSize+abi.OffMegaShape)
+		c.a.Cmp(a64B, a64C, true)
+		c.a.BCond(arm64.NE, next)
+		c.a.LoadU32(a64C, a64A, w*abi.MegaSize+abi.OffMegaKey)
+		c.a.Cmp(a64C, a64D, false)
+		c.a.BCond(arm64.NE, next)
+		c.a.AddImm(a64A, a64A, int64(w*abi.MegaSize), true)
+		c.a.B(hit)
+		c.a.Bind(next)
+	}
+	c.a.B(miss)
+	c.a.Bind(miss)
+	// As amd64's: in none, a failure.
+	c.a.CmpImm(a64B, 0, true)
+	guard(arm64.NE)
+	c.a.Bind(hit)
+	c.a.LoadU32(a64C, a64A, abi.OffMegaIndex)
+	if v.Op == ssa.OpPropWrite {
+		c.movImm(a64B, abi.MegaWritable)
+		c.a.Tst(a64C, a64B, false)
+		guard(arm64.EQ)
+	}
+	c.movImm(a64B, ^uint64(abi.MegaWritable)&0xFFFFFFFF)
+	c.a.Op(arm64.And, a64C, a64C, a64B, false)
+	c.a.ShiftImm(arm64.Lsl, a64C, a64C, 4, true)
+	p = c.gpr(v.Args[0], a64A)
+	c.a.Load(a64A, p, c.enc.ObjectProps)
+	c.a.Op(arm64.Add, a64A, a64A, a64C, true)
+	c.a.B(found)
+}
+
 // genericCheck is amd64's: call v, of a function none of its sites is, the
 // callee in C, made through the function's link, or miss.
 func (c *a64Compiler) genericCheck(v *ssa.Value, site *ssa.CallSite, target int, checked, miss arm64.Label) {
@@ -1612,7 +1665,17 @@ func (c *a64Compiler) scan(v *ssa.Value, guard func(arm64.Cond), found arm64.Lab
 	}
 	c.a.Load(a64B, p, c.enc.ObjectProps+8)
 	c.a.CmpImm(a64B, abi.MaxScan, true)
-	guard(arm64.HI)
+	if c.enc.Mega {
+		// As amd64's: too large to search, the megamorphic cache's.
+		large := c.a.NewLabel()
+		c.a.BCond(arm64.HI, large)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(large)
+			c.mega(v, guard, found)
+		})
+	} else {
+		guard(arm64.HI)
+	}
 	// No properties, no shape.
 	c.a.CmpImm(a64B, 0, true)
 	guard(arm64.EQ)

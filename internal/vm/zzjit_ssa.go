@@ -91,6 +91,7 @@ var jitEncoding = abi.Encoding{
 	ClosureEnv:         int32(unsafe.Offsetof(closure{}.env)),
 	ClosureRealm:       int32(unsafe.Offsetof(closure{}.realm)),
 	ClosureHint:        int32(unsafe.Offsetof(closure{}.jitHint)),
+	Mega:               true,
 	FuncExtra:          int32(unsafe.Offsetof(funcData{}.extra)),
 	ExtraLexThis:       int32(unsafe.Offsetof(funcExtra{}.lexThis)),
 	ExtraLexThisRef:    int32(unsafe.Offsetof(funcExtra{}.lexThisRef)),
@@ -285,6 +286,7 @@ func (r *Runtime) jitPolySeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 	if !recv.IsObject() || int(in.A) >= len(f.cl.names) {
 		return
 	}
+	r.jit.megaFill(recv.Object(), f.cl.names[in.A])
 	var c propCache
 	r.fillPropCache(&c, recv.Object(), f.cl.names[in.A], false)
 	if c.shape == nil {
@@ -310,6 +312,45 @@ func (r *Runtime) jitPolySeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 		return
 	}
 	e.polyPending, e.polySettled = true, 0
+}
+
+// megaFill has the megamorphic cache (abi.MegaCache) name o's own data
+// property key, if it has one, for objects of its shape: a property
+// operation that met more shapes than it was compiled for, of an object
+// too large to search, finds it there natively. AST nodes of a dozen
+// fields and twenty kinds, Octane's Typescript's, had their every read
+// and write at such sites left to Go.
+func (s *jitState) megaFill(o *Object, key Atom) {
+	sh := o.shape
+	if s.mega == nil || sh == nil || sh.loose || o.class != ClassObject && o.class != ClassFunction || len(o.vals) <= abi.MaxScan {
+		return
+	}
+	i := o.findOwn(key)
+	if i < 0 || int(i) >= len(sh.keys) || int(i) >= len(o.vals) {
+		return
+	}
+	flags := sh.keys[i].flags
+	if flags&(propAccessor|propPrivate|propDeleted|propUninit) != 0 {
+		return
+	}
+	idx := uint32(i)
+	if flags&propWritable != 0 {
+		idx |= abi.MegaWritable
+	}
+	// Remembered, so that it never changes, as any cache's shape.
+	remember(sh)
+	// Into its set, first, the others moved down: an entry of the shape
+	// and key replaced, or, with none, the set's last let go.
+	set := s.mega[abi.MegaSet(uintptr(unsafe.Pointer(sh)), uint32(key)):][:abi.MegaWays]
+	at := len(set) - 1
+	for w := range set {
+		if set[w].Shape == unsafe.Pointer(sh) && set[w].Key == uint32(key) {
+			at = w
+			break
+		}
+	}
+	copy(set[1:at+1], set[:at])
+	set[0] = abi.MegaEntry{Shape: unsafe.Pointer(sh), Key: uint32(key), Index: idx}
 }
 
 // jitPrivateSeen notes a private member's read or write, or #x in o,
@@ -5719,6 +5760,10 @@ func (r *Runtime) jitGrowContexts() bool {
 		chunk[i].Host = unsafe.Pointer(r)
 		chunk[i].SetConsts(&jitEncoding)
 		chunk[i].Level, chunk[i].Bounds, chunk[i].Hints = uint64(old+i), &s.bounds, &s.hintTable
+		if s.mega == nil {
+			s.mega = new(abi.MegaCache)
+		}
+		chunk[i].Mega = s.mega
 		s.ssaCtxs = append(s.ssaCtxs, &chunk[i])
 	}
 	for i := max(old, 1); i < len(s.ssaCtxs); i++ {

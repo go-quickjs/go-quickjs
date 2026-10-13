@@ -3047,7 +3047,17 @@ func (c *compiler) scan(v *ssa.Value, guard func(amd64.Cond), found amd64.Label)
 	}
 	c.a.Load(scratchB, p, c.enc.ObjectProps+8)
 	c.a.OpImm(amd64.Cmp, scratchB, abi.MaxScan, true)
-	guard(amd64.CondA)
+	if c.enc.Mega {
+		// Too large to search: the megamorphic cache's (mega).
+		large := c.a.NewLabel()
+		c.a.Jcc(amd64.CondA, large)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(large)
+			c.mega(v, guard, found)
+		})
+	} else {
+		guard(amd64.CondA)
+	}
 	// No properties, no shape.
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
 	guard(amd64.CondE)
@@ -3080,6 +3090,59 @@ func (c *compiler) scan(v *ssa.Value, guard func(amd64.Cond), found amd64.Label)
 	p = c.gpr(v.Args[0], scratchC)
 	c.a.Load(scratchC, p, c.enc.ObjectProps+8)
 	c.a.Op(amd64.Sub, scratchC, scratchB, true)
+	c.a.ShiftImm(amd64.Shl, scratchC, 4, true)
+	p = c.gpr(v.Args[0], scratchA)
+	c.a.Load(scratchA, p, c.enc.ObjectProps)
+	c.a.Op(amd64.Add, scratchA, scratchC, true)
+	c.a.Jmp(found)
+}
+
+// mega looks the property v names up in the megamorphic cache
+// (abi.MegaCache) for the receiver's shape -- a property of its own, plain
+// data, and writable for a write -- and goes to found with the address of
+// its value in scratchA, or fails: Go fills the entry at the exit.
+func (c *compiler) mega(v *ssa.Value, guard func(amd64.Cond), found amd64.Label) {
+	p := c.gpr(v.Args[0], scratchA)
+	c.a.Load(scratchB, p, c.enc.ObjectShape)
+	// abi.MegaSlot's hash.
+	c.a.MovRR(scratchC, scratchB)
+	c.a.ShiftImm(amd64.Shr, scratchC, 4, true)
+	c.a.MovRR(scratchA, scratchB)
+	c.a.ShiftImm(amd64.Shr, scratchA, 15, true)
+	c.a.Op(amd64.Xor, scratchC, scratchA, true)
+	c.a.MovRR(scratchA, scratchB)
+	c.a.ShiftImm(amd64.Shr, scratchA, 26, true)
+	c.a.Op(amd64.Xor, scratchC, scratchA, true)
+	c.a.OpImm(amd64.Xor, scratchC, int32(abi.MegaKeyHash(uint32(v.Key))), false)
+	c.a.OpImm(amd64.And, scratchC, abi.MegaSets-1, false)
+	c.a.ShiftImm(amd64.Shl, scratchC, 6, true)
+	c.a.Load(scratchA, regCtx, abi.OffMega)
+	c.a.Op(amd64.Add, scratchA, scratchC, true)
+	// The set's ways, in turn.
+	hit := c.a.NewLabel()
+	for w := int32(0); w < abi.MegaWays; w++ {
+		next := c.a.NewLabel()
+		c.a.Load(scratchC, scratchA, w*abi.MegaSize+abi.OffMegaShape)
+		c.a.Op(amd64.Cmp, scratchB, scratchC, true)
+		c.a.Jcc(amd64.CondNE, next)
+		c.a.LoadU32(scratchC, scratchA, w*abi.MegaSize+abi.OffMegaKey)
+		c.a.OpImm(amd64.Cmp, scratchC, int32(v.Key), false)
+		c.a.Jcc(amd64.CondNE, next)
+		c.a.OpImm(amd64.Add, scratchA, w*abi.MegaSize, true)
+		c.a.Jmp(hit)
+		c.a.Bind(next)
+	}
+	// In none: the receiver's shape, which an object with properties has,
+	// is no nil.
+	c.a.OpImm(amd64.Cmp, scratchB, 0, true)
+	guard(amd64.CondNE)
+	c.a.Bind(hit)
+	c.a.LoadU32(scratchC, scratchA, abi.OffMegaIndex)
+	if v.Op == ssa.OpPropWrite {
+		c.a.Op(amd64.Test, scratchC, scratchC, false)
+		guard(amd64.CondNS)
+	}
+	c.a.OpImm(amd64.And, scratchC, abi.MegaWritable-1, false)
 	c.a.ShiftImm(amd64.Shl, scratchC, 4, true)
 	p = c.gpr(v.Args[0], scratchA)
 	c.a.Load(scratchA, p, c.enc.ObjectProps)

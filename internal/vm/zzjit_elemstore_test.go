@@ -6,6 +6,9 @@ import (
 	"runtime"
 	"runtime/debug"
 	"testing"
+	"unsafe"
+
+	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 )
 
 // An element is stored natively whatever the value -- an object, a string,
@@ -298,5 +301,95 @@ func TestJITTypedReferenceReadsNative(t *testing.T) {
 	}
 	if n := e.ssaStats.hosts - hosts; n > 2 {
 		t.Errorf("count left native code %d times in 20,000 reads", n)
+	}
+}
+
+// A property read or write whose site met more shapes than it is compiled
+// for, of objects too large to search, finds the property in the
+// megamorphic cache (abi.MegaCache), as V8's stub cache: shapes of many
+// properties each, the property at an index of each one's own, read and
+// written at one site, a read-only property, an accessor, one on a
+// prototype, one deleted, one frozen object. Each answer is the
+// interpreter's, in every tier and under every stress setting.
+func TestJITMegamorphicProperties(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const src = `
+		const objs = []
+		for (let k = 0; k < 24; k++) {
+			const o = {}
+			for (let j = 0; j < k; j++) o['e' + j] = 0
+			for (let j = 0; j < 12; j++) o['p' + ((j + k) % 12)] = j
+			o.kind = k
+			objs.push(o)
+		}
+		Object.defineProperty(objs[3], 'kind', { value: 3, writable: false })
+		Object.defineProperty(objs[4], 'kind', { get() { return 40 }, set(v) {} })
+		const proto = { kind: 50 }
+		const inh = Object.create(proto); for (let j = 0; j < 12; j++) inh['q' + j] = j
+		objs.push(inh)
+		delete objs[5].kind
+		Object.freeze(objs[6])
+		function sum(n) { let s = 0; for (let i = 0; i < n; i++) { const o = objs[i % objs.length]; s += (o.kind | 0) + (o.p3 | 0); o.kind = (o.kind | 0) + 1 } return s }
+		const log = []
+		for (let r = 0; r < 20; r++) log.push(sum(250))
+		log.push(objs.map(o => String(o.kind)).join(':'))
+		log.join()`
+	jitDifferential(t, src)
+}
+
+// The megamorphic cache names an object's own plain data property for its
+// shape, at the property's index, writable if it is; never an accessor's,
+// nor a small object's, which native code searches itself.
+func TestJITMegamorphicCacheFills(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r := New(Config{JIT: true})
+	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	v, err := r.Run(compileForTest(t, `
+		const big = {}; for (let j = 0; j < 12; j++) big['p' + j] = j
+		Object.defineProperty(big, 'ro', { value: 1, writable: false })
+		Object.defineProperty(big, 'acc', { get() { return 2 } })
+		const small = { a: 1 }
+		;[big, small]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.jitState()
+	if r.jit.mega == nil {
+		r.jit.mega = new(abi.MegaCache)
+	}
+	pair := v.Object().elemsOf()
+	big, small := pair[0].Object(), pair[1].Object()
+	find := func(o *Object, name string) (abi.MegaEntry, bool) {
+		key := r.atoms.intern(name)
+		set := r.jit.mega[abi.MegaSet(uintptr(unsafe.Pointer(o.shape)), uint32(key)):][:abi.MegaWays]
+		for _, m := range set {
+			if m.Shape == unsafe.Pointer(o.shape) && m.Key == uint32(key) {
+				return m, true
+			}
+		}
+		return abi.MegaEntry{}, false
+	}
+	for _, name := range []string{"p5", "ro", "acc"} {
+		r.jit.megaFill(big, r.atoms.intern(name))
+	}
+	r.jit.megaFill(small, r.atoms.intern("a"))
+	if m, ok := find(big, "p5"); !ok || m.Index != uint32(big.findOwn(r.atoms.intern("p5")))|abi.MegaWritable {
+		t.Errorf("p5: %+v, %v", m, ok)
+	}
+	if m, ok := find(big, "ro"); !ok || m.Index&abi.MegaWritable != 0 || m.Index != uint32(big.findOwn(r.atoms.intern("ro"))) {
+		t.Errorf("ro: %+v, %v", m, ok)
+	}
+	if _, ok := find(big, "acc"); ok {
+		t.Error("an accessor in the cache")
+	}
+	if _, ok := find(small, "a"); ok {
+		t.Error("a small object's property in the cache")
+	}
+	if !big.shape.seen {
+		t.Error("a shape the cache names not remembered")
 	}
 }

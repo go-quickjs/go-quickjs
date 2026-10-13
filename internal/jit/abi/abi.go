@@ -71,6 +71,58 @@ type HintTable struct {
 	Len   uint64
 }
 
+// MegaCache is a runtime's megamorphic property cache, as V8's stub cache
+// is: by a hash of a shape and a key (MegaSet), a set of MegaWays entries,
+// an entry naming the
+// object's own data property of that key in objects of that shape -- its
+// index in the shape's keys and the object's values, with MegaWritable
+// set if it may be written. A property read or write whose site met more
+// shapes than it was compiled for, of a receiver too large to search
+// (MaxScan), looks there before it leaves for Go, which fills the entry
+// when it reads or writes one; a shape it names is remembered (the VM's),
+// so it never changes, and the entry holds it, so its address is never
+// another's. Native code only reads it.
+type MegaCache [MegaEntries]MegaEntry
+
+// MegaEntry is an entry of a MegaCache.
+type MegaEntry struct {
+	Shape      unsafe.Pointer
+	Key, Index uint32
+}
+
+// MegaEntries is how many entries a MegaCache has, MegaWays to a set, both
+// powers of two: one entry for each hash, as the shapes of a few dozen
+// constructions are, had two of them share one, each displacing the other,
+// in four runs of five; MegaWritable the bit of an entry's Index set for a
+// writable property.
+const (
+	MegaEntries  = 2048
+	MegaWays     = 4
+	MegaSets     = MegaEntries / MegaWays
+	MegaWritable = 1 << 31
+)
+
+// Offsets of MegaEntry's fields, and its size.
+const (
+	OffMegaShape = int32(unsafe.Offsetof(MegaEntry{}.Shape))
+	OffMegaKey   = int32(unsafe.Offsetof(MegaEntry{}.Key))
+	OffMegaIndex = int32(unsafe.Offsetof(MegaEntry{}.Index))
+	MegaSize     = int32(unsafe.Sizeof(MegaEntry{}))
+)
+
+// MegaKeyHash is key's part of MegaSlot's hash, which native code knows
+// for a site's key as it is compiled.
+func MegaKeyHash(key uint32) uint32 { return key * 0x9E3779B1 }
+
+// MegaSet is the set of a MegaCache's entries for a shape, at address
+// shape, and a key, its first entry's index: the shape's address past its
+// alignment, folded, with the key's hash -- shifts and exclusive ors,
+// which native code makes as cheaply.
+func MegaSet(shape uintptr, key uint32) uint32 {
+	s := uint64(shape)
+	return (uint32(s>>4) ^ uint32(s>>15) ^ uint32(s>>26) ^ MegaKeyHash(key)) & (MegaSets - 1) * MegaWays
+}
+
 // Offsets of HintTable's fields.
 const (
 	OffHintSlots = int32(unsafe.Offsetof(HintTable{}.Slots))
@@ -228,6 +280,10 @@ type Context struct {
 	// Hints is the VM's hint table, shared by every context, which a
 	// generic call finds its callee's link in (HintTable).
 	Hints *HintTable
+	// Mega is the VM's megamorphic cache, shared by every context, which a
+	// property operation looks a receiver's property up in when the shapes
+	// it was compiled for are not the receiver's (MegaCache).
+	Mega *MegaCache
 	// Open counts what closures captured of the frame's locals and is not
 	// closed yet, which Go keeps, the frame's or, for a native callee's,
 	// its context's: a scope's end, and a return, call Go to close them
@@ -501,6 +557,7 @@ var (
 	OffCallLink      = int32(unsafe.Offsetof(Context{}.CallLink))
 	OffCallThis      = int32(unsafe.Offsetof(Context{}.CallThis))
 	OffHints         = int32(unsafe.Offsetof(Context{}.Hints))
+	OffMega          = int32(unsafe.Offsetof(Context{}.Mega))
 	OffEnterCallee   = int32(unsafe.Offsetof(Context{}.EnterCallee))
 	OffInlineLocals  = int32(unsafe.Offsetof(Context{}.InlineLocals))
 	OffInlineThis    = int32(unsafe.Offsetof(Context{}.InlineThis))
@@ -672,6 +729,8 @@ type Encoding struct {
 	// shares, nil for none.
 	FuncExtra, ExtraLexThis, ExtraLexThisRef                        int32
 	LinkEntry, LinkIn, LinkParams, LinkLocals, LinkFrame, LinkFlags int32
+	// Mega says contexts point to a megamorphic cache (Context.Mega).
+	Mega bool
 	// FlagHTMLDDA is the flags byte's bit for Annex B's [[IsHTMLDDA]],
 	// which makes an object == null and == undefined.
 	FlagHTMLDDA uint8
