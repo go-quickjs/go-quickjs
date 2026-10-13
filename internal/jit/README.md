@@ -164,8 +164,15 @@ the binding holds the key it was compiled for (`ssa.OpSameSymbol`). Go
 makes the rest -- a member's definition, an accessor, a key in a local,
 and a class's or an object literal's other members (`jitHost`).
 
-**Not compiled yet.** Destructuring from an iterator runs in the tree
-tier; the JIT is to follow it there.
+**Destructuring.** Destructuring from an iterator takes a cursor, as a
+for...of does: Go makes it, called from native code (`abi.GoCallForOf`).
+Each element is a step that goes on with undefined once the iterator is
+done (`ir.IterStep`'s `When`, `abi.GoCallFill`), native over an array
+walked in place and Go's otherwise, as a loop's step is. Its end closes the
+iterator natively where there is nothing to close -- the cursor done, or
+an array's -- and by Go where a return method must be called
+(`ssa.OpIterClosed`); a for...of's break closes it so too. What is left,
+for a rest element, is Go's.
 
 **Profitability.** Each native stretch's work is estimated, exits and
 calls of Go counted against it; code whose stretches do too little between

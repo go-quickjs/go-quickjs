@@ -738,6 +738,8 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 				// The model's stack is shallow: the call is made.
 			case OpSameSymbol:
 				return ir.Exit{}, fmt.Errorf("%w: a symbol", ErrUnsupported)
+			case OpIterClosed:
+				return ir.Exit{}, fmt.Errorf("%w: a cursor", ErrUnsupported)
 			default:
 				vals[v.ID] = apply(v.Op, v.Aux, a, b)
 			}

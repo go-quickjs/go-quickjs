@@ -1672,6 +1672,11 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 		// None it calls natively: Go makes it, called from native code
 		// (jitGoCall), as V8's code calls a function it has no code for.
 		call := jitCallInstr(fb.fn.Code[pc])
+		if call.Op == bytecode.OpForOfStart {
+			// Its cursor, which Go makes, called from native code: a
+			// destructuring makes one each time.
+			return []ssa.CallSite{{Go: ssa.GoCall, ForOf: true, ThisSlot: -1}}
+		}
 		n := int(call.A) + 1
 		if call.Op == bytecode.OpCallMethod {
 			n++
@@ -2210,7 +2215,7 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 	}
 	sp := top + n
 	r.stackTop, r.stackHigh = sp, max(r.stackHigh, sp)
-	step := in.Op == bytecode.OpIterNextOrJump
+	step := in.Op == bytecode.OpIterNextOrJump || in.Op == bytecode.OpIterStep || in.Op == bytecode.OpForOfStart
 	if ctx.GoOp&abi.GoOpMarking == 0 {
 		// A call made through Go only because the collector marks costs
 		// the code nothing it chose (abi.GoOpMarking). A loop's step Go
@@ -2454,7 +2459,7 @@ framed:
 		e.ssaStats.goCalls++
 	}
 	s.goCalls++
-	if in.Op != bytecode.OpIterNextOrJump && jitCallUnsettled(e, pc, in) {
+	if in.Op != bytecode.OpIterNextOrJump && in.Op != bytecode.OpIterStep && in.Op != bytecode.OpForOfStart && jitCallUnsettled(e, pc, in) {
 		r.jitCallSeen(f, e, pc, sp, in)
 	}
 	if !marking {
@@ -2674,6 +2679,12 @@ func jitGoCallInstr(op uint64) (bytecode.Instr, int) {
 	case abi.GoCallStep:
 		// A loop's step, its cursor the one operand.
 		return bytecode.Instr{Op: bytecode.OpIterNextOrJump}, 1
+	case abi.GoCallFill:
+		// A destructuring's step, its cursor the one operand.
+		return bytecode.Instr{Op: bytecode.OpIterStep}, 1
+	case abi.GoCallForOf:
+		// A cursor made, of the iterable, the one operand.
+		return bytecode.Instr{Op: bytecode.OpForOfStart}, 1
 	}
 	return in, n
 }
@@ -2694,6 +2705,15 @@ func jitCallUnsettled(e *jitEntry, pc int, in bytecode.Instr) bool {
 // as V8's code calls a builtin it knows through its own stub, not the
 // generic Call.
 func (r *Runtime) jitCallMade(in bytecode.Instr, sp int) (Value, error) {
+	if in.Op == bytecode.OpIterStep {
+		// A destructuring's step: its next value, or, the cursor done,
+		// undefined (abi.GoCallFill).
+		return r.iterStep(r.stack[sp-1])
+	}
+	if in.Op == bytecode.OpForOfStart {
+		// A for...of's or a destructuring's cursor (abi.GoCallForOf).
+		return r.startForOf(r.stack[sp-1])
+	}
 	if in.Op == bytecode.OpIterNextOrJump {
 		// A loop's step: its next value, or, the cursor done, the
 		// uninitialized value (abi.GoCallStep).
@@ -6081,6 +6101,17 @@ func jitCallInstr(in bytecode.Instr) bytecode.Instr {
 // the interpreter takes from there.
 func (r *Runtime) jitCallResult(f *frame, pc, depth int, v Value, err error) (int, bool) {
 	in := jitCallInstr(f.cl.fn.Code[pc])
+	if in.Op == bytecode.OpIterStep {
+		// A destructuring's step Go made (abi.GoCallFill): its cursor
+		// stays, and its value goes on top.
+		sp := f.base + depth
+		f.pc = uint32(pc + 1)
+		if err != nil {
+			return sp, false
+		}
+		r.stack[sp] = v
+		return sp + 1, true
+	}
 	if in.Op == bytecode.OpIterNextOrJump {
 		// A loop's step Go made (abi.GoCallStep): its cursor stays, and the
 		// next value goes on it; or, done, the loop's end is next.

@@ -209,6 +209,11 @@ const (
 	// captured of locals Key on is closed, the value kept for them. Go's,
 	// called from native code (ssa.GoClose), or left to it.
 	CloseUpvalues
+	// IterClose is iter_close_normal, a for...of's or a destructuring's
+	// end: the cursor at Left closed, which the new pipeline does natively
+	// where there is nothing to close -- the cursor done, or an array's
+	// walked in place -- and leaves to Go otherwise.
+	IterClose
 )
 
 // RethrowNormal is the kind a normal completion's record has (Rethrow).
@@ -305,6 +310,9 @@ type Instruction struct {
 	// as a number: the new pipeline reads the element's cell, whatever the
 	// element holds, as it reads a property's.
 	Reference bool
+	// An IterStep with When is a destructuring's step, which goes on with
+	// undefined once the iterator is done rather than branching to Target.
+	//
 	// Tail marks a Host that is a call in tail position, which gives up
 	// its frame deep enough in the stack: the new pipeline makes it as a
 	// call, but there, where it makes a call of the function itself a

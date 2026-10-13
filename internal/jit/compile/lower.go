@@ -259,7 +259,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		}
 		switch in.Op {
 		case bytecode.OpForOfStart, bytecode.OpForInStart, bytecode.OpIterNextOrJump, bytecode.OpIterClose, bytecode.OpIterCloseNormal,
-			bytecode.OpIterResume, bytecode.OpIterUnpackDelegate, bytecode.OpYieldStar:
+			bytecode.OpIterResume, bytecode.OpIterUnpackDelegate, bytecode.OpYieldStar, bytecode.OpIterStep, bytecode.OpIterRest:
 			if !m.ssa || m.callee {
 				// A loop's cursor is Go's, in the function's own frame.
 				return nil, refuse(pc, "unsupported opcode "+in.Op.String())
@@ -1246,6 +1246,13 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 		return effect{need: 1, delta: 1, branch: true, keep: true}, nil
 	case bytecode.OpIterClose:
 		return effect{need: 1}, nil
+	case bytecode.OpIterStep, bytecode.OpIterRest:
+		// A destructuring's: the cursor, A below the top, kept; its next
+		// value, or what is left, pushed.
+		if in.A > MaxSlots {
+			return bad("invalid cursor")
+		}
+		return effect{need: int(in.A) + 1, delta: 1}, nil
 	case bytecode.OpIterResume:
 		// yield*'s step of its delegate: the cursor, the value sent and
 		// the kind of resumption, for the delegate's result -- with which,
@@ -1703,7 +1710,17 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this bool) ir.Instr
 		// A call of Go from native code where it can, which branches on
 		// its answer; an exit otherwise.
 		return ir.Instruction{Op: ir.IterStep, Left: top, Dest: sp, Target: int(in.A)}
-	case bytecode.OpForOfStart, bytecode.OpForInStart, bytecode.OpIterClose, bytecode.OpIterCloseNormal,
+	case bytecode.OpIterStep:
+		// A destructuring's step, as a loop's, but going on with undefined
+		// once done (When).
+		return ir.Instruction{Op: ir.IterStep, Left: ir.Slot(sp - 1 - int(in.A)), Dest: sp, When: true}
+	case bytecode.OpIterRest:
+		// Go's (jitHost): the array of what is left.
+		return ir.Instruction{Op: ir.Host}
+	case bytecode.OpIterCloseNormal:
+		// Native where there is nothing to close, Go's otherwise.
+		return ir.Instruction{Op: ir.IterClose, Left: top}
+	case bytecode.OpForOfStart, bytecode.OpForInStart, bytecode.OpIterClose,
 		bytecode.OpIterResume, bytecode.OpIterUnpackDelegate, bytecode.OpYieldStar:
 		// A for...of or for...in loop's cursor, or yield*'s delegate, Go's
 		// (jitHost), which sets where native code goes on: past a step

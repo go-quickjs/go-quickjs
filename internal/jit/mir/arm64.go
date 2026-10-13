@@ -3272,6 +3272,27 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		guard(arm64.HS)
 	case ssa.OpTailSelf:
 		c.tailSelf(v, guard)
+	case ssa.OpIterClosed:
+		// As amd64's.
+		x, ok := v.Args[0], c.a.NewLabel()
+		if c.enc.IterState == 0 {
+			c.a.B(c.stubLabel(v.State, exitKind(v.Aux)))
+			break
+		}
+		c.pointerWord(x, c.gpr(x, a64A))
+		c.a.CmpImm(a64B, 0, true)
+		guard(arm64.EQ)
+		c.a.Load(a64C, a64B, c.enc.ObjectData)
+		c.movImm(a64A, c.enc.IterState)
+		c.a.Cmp(a64C, a64A, true)
+		guard(arm64.NE)
+		c.a.Load(a64B, a64B, c.enc.ObjectData+8)
+		c.a.LoadU8(a64C, a64B, c.enc.IterDone)
+		c.a.Cbnz(a64C, ok, false)
+		c.a.Load(a64C, a64B, c.enc.IterArr)
+		c.a.CmpImm(a64C, 0, true)
+		guard(arm64.EQ)
+		c.a.Bind(ok)
 	case ssa.OpSameSymbol:
 		if c.reference(v, v.Args[0], c.enc.Symbol, guard) {
 			c.movImm(a64B, v.Const.Bits)

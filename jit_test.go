@@ -178,6 +178,53 @@ func TestJITImport(t *testing.T) {
 	}
 }
 
+// Destructuring from an iterator compiles: its cursor made by a call of Go,
+// each step natively over an array walked in place and by Go otherwise --
+// undefined once done, the iterator's next called no more -- and its end
+// closing the iterator natively where there is nothing to close, by Go
+// where its return method must be called.
+func TestJITDestructuring(t *testing.T) {
+	cases := []struct{ name, src string }{
+		{"arrays", `function f(a) { let s = 0; for (let i = 0; i < a.length; i++) { const [x, y] = a[i]; s += x + y } return s }
+			const a = []; for (let i = 0; i < 500; i++) a.push([i, i * 2]); let r = 0; for (let k = 0; k < 50; k++) r += f(a); r`},
+		{"holes, defaults, rest", `function f(a) { let s = ""; for (let i = 0; i < a.length; i++) { const [x, y = "d", ...rest] = a[i]; s += x + y + rest.length + "," } return s }
+			const a = [[1], [1, 2, 3, 4], [, 5], [], [undefined, null]]; let r = ""; for (let k = 0; k < 500; k++) r = f(a); r`},
+		{"iterables", `function f(m, set, str) { let s = 0; for (const [k, v] of m) s += k * v; const [[a, b], [c]] = m; const [p, q] = set; const [c0, c1] = str; return s + a + b + c + p + q + c0 + c1 }
+			const m = new Map(), set = new Set([3, 4, 5]); for (let i = 0; i < 50; i++) m.set(i, i + 1); let r = ""; for (let k = 0; k < 300; k++) r = f(m, set, "xy"); r`},
+		{"generators", `function* g(n) { for (let i = 0; i < n; i++) yield i } function f(n) { let s = 0; for (let i = 0; i < n; i++) { const [x, y, z] = g(i % 5); s += (x ?? 7) + (y ?? 11) + (z ?? 13) } return s }
+			let r = 0; for (let k = 0; k < 50; k++) r += f(300); r`},
+		{"assignment targets", `function f(o, a) { let s = 0; for (let i = 0; i < a.length; i++) { [o.x, o["y"]] = a[i]; s += o.x - o.y } return s }
+			const a = []; for (let i = 0; i < 300; i++) a.push([i, 1]); let r = 0; for (let k = 0; k < 50; k++) r += f({}, a); r`},
+		{"closing", `let closed = 0, nexts = 0; function it(n) { let i = 0; return { [Symbol.iterator]() { return this }, next() { nexts++; return { value: i++, done: i > n } }, return() { closed++; return {} } } }
+			function f(n) { let s = 0; for (let i = 0; i < n; i++) { const [a = 0, b = 0] = it(i % 4); s += a + b } return s }
+			let r = 0; for (let k = 0; k < 50; k++) r += f(200); r + ":" + closed + ":" + nexts`},
+		{"throws", `function bad() { return { [Symbol.iterator]() { return this }, next() { throw new RangeError("n") }, return() { throw new Error("never") } } }
+			function f(n) { let c = 0; for (let i = 0; i < n; i++) { try { const [a] = i % 3 ? [i] : bad(); c += a } catch (e) { c += e instanceof RangeError ? 100 : -1 } } return c }
+			let r = 0; for (let k = 0; k < 50; k++) r += f(300); r`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			run := func(opts ...quickjs.Option) (string, vm.JITStats) {
+				r := quickjs.New(opts...)
+				defer r.Close()
+				v, err := r.Eval(tc.src)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return v.String(), hostaccess.VM(r).JITStats()
+			}
+			want, _ := run()
+			got, st := run(quickjs.WithJIT())
+			if got != want {
+				t.Fatalf("jit: %s, interpreter: %s", got, want)
+			}
+			if st.Budget != 0 && st.SSAEntries == 0 {
+				t.Errorf("nothing ran natively: %+v", st)
+			}
+		})
+	}
+}
+
 // A private member is read and written natively as a property of its key,
 // a symbol each evaluation of its class mints, in objects of the shapes the
 // site met; the code checks the key its binding holds is the one it was

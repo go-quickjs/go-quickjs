@@ -197,6 +197,13 @@ type CallSite struct {
 	// pool's, with Alloc: no function, no operands; or an array literal's
 	// (ir.ArrayLiteral), whose Argc operands are its elements.
 	Literal bool
+	// Fill, with Step, marks a destructuring's step (ir.IterStep's When),
+	// whose result is undefined once the iterator is done, not the
+	// uninitialized value a loop's step branches on.
+	Fill bool
+	// ForOf marks a for...of's or a destructuring's cursor made of the
+	// iterable, its one operand.
+	ForOf bool
 	// Tail marks a callee whose function makes calls in tail position
 	// (OpTailSelf), for which the call sets the callee's context's
 	// TailFrame to TailFrame: false for a construction, or an arrow that
@@ -1262,7 +1269,7 @@ func (b *builder) goAdd(blk *Block, in ir.Instruction, operand func(ir.Operand) 
 func (b *builder) iterStep(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
 	call := guard(OpCall, Tagged, ir.HostExit, operand(in.Left))
 	if b.f.Keeps < b.f.keepLimit() {
-		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoCall, Step: true, ThisSlot: -1}}, b.f.Keeps
+		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoCall, Step: true, Fill: in.When, ThisSlot: -1}}, b.f.Keeps
 		b.f.Keeps++
 	}
 	cell := b.f.newValue(blk, OpCallCell, Source, call)
@@ -1273,6 +1280,10 @@ func (b *builder) iterStep(blk *Block, in ir.Instruction, operand func(ir.Operan
 	// binding, as a native call's callee may.
 	if b.hasCells() {
 		b.reloadAfterCall(blk)
+	}
+	if in.When {
+		// A destructuring's: its value, undefined once done.
+		return
 	}
 	done := b.f.newValue(blk, OpConst, Tagged)
 	done.Const = ir.Value{Kind: ir.Uninitialized}
@@ -1574,6 +1585,7 @@ func (b *builder) plan() error {
 	resumes := func(pc int) bool {
 		switch op := p.Code[pc].Op; {
 		case b.host(pc), op == ir.ObjectLiteral, op == ir.ArrayLiteral, op == ir.StringAdd, op == ir.StringConcat, op == ir.ArrayWrite, op == ir.IterStep,
+			op == ir.IterClose,
 			op == ir.Closure, op == ir.CloseUpvalues:
 			return true
 		}
@@ -1607,10 +1619,16 @@ func (b *builder) plan() error {
 		case ir.UpvalueRead:
 			// The function's own captured binding is read natively, its
 			// check deoptimizing; an inlined callee's leaves at its call.
+		case ir.IterClose:
+			// Go goes on after a closing it made.
+			entries[pc+1] = true
 		case ir.IterStep:
 			// Go goes on after a step it made, past it or at the loop's
-			// end (ir.Program's Entries), where native code did not.
-			leaders[in.Target] = true
+			// end (ir.Program's Entries), where native code did not; a
+			// destructuring's step only past it.
+			if !in.When {
+				leaders[in.Target] = true
+			}
 			if resumes(pc) {
 				entries[pc+1] = true
 			}
@@ -1669,7 +1687,7 @@ func (b *builder) plan() error {
 			return fmt.Errorf("%w: %d at pc %d", ErrUnsupported, in.Op, pc)
 		}
 		switch {
-		case in.Op == ir.Jump || in.Op == ir.Branch || in.Op == ir.Return || in.Op == ir.IterStep || b.host(pc) && !b.goesOn(pc):
+		case in.Op == ir.Jump || in.Op == ir.Branch || in.Op == ir.Return || in.Op == ir.IterStep && !in.When || b.host(pc) && !b.goesOn(pc):
 			leaders[pc+1] = true
 		}
 	}
@@ -1697,7 +1715,7 @@ func (b *builder) plan() error {
 			end = starts[i+1] - 1
 		}
 		for q := pc; q <= end; q++ {
-			if op := p.Code[q].Op; op == ir.Jump || op == ir.Branch || op == ir.Return || op == ir.IterStep || b.host(q) && !b.goesOn(q) {
+			if in := p.Code[q]; in.Op == ir.Jump || in.Op == ir.Branch || in.Op == ir.Return || in.Op == ir.IterStep && !in.When || b.host(q) && !b.goesOn(q) {
 				end = q
 				break
 			}
@@ -1724,6 +1742,12 @@ func (b *builder) plan() error {
 		case ir.IterStep:
 			if b.host(end) {
 				blk.Kind = BlockExit
+				break
+			}
+			if last.When {
+				// A destructuring's step, which goes on.
+				blk.Kind = BlockPlain
+				b.edge(blk, b.blockAt[end+1])
 				break
 			}
 			// Done, to the loop's end; else on, with the value.
@@ -2526,6 +2550,11 @@ func (b *builder) instruction(blk *Block, pc int) {
 			break
 		}
 		b.iterStep(blk, in, operand, guard)
+	case ir.IterClose:
+		// A cursor closed as a destructuring or a loop ends: nothing to do
+		// for one done, or for an array walked in place; Go closes any
+		// other.
+		guard(OpIterClosed, None, ir.HostExit, operand(in.Left))
 	case ir.Closure, ir.CloseUpvalues:
 		if b.host(pc) || b.f.Keeps >= b.f.keepLimit() {
 			blk.ExitKind = ir.HostExit

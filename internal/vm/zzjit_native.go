@@ -1799,7 +1799,7 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			bytecode.OpPushEmptyString, bytecode.OpGetUpvalue, bytecode.OpGetUpvalueCheck, bytecode.OpSetUpvalue,
 			bytecode.OpInitUpvalue, bytecode.OpSetUpvalueCheck, bytecode.OpConcat, bytecode.OpNewDisposeCapability, bytecode.OpAddDisposable,
 			bytecode.OpForOfStart, bytecode.OpForInStart, bytecode.OpIterNextOrJump, bytecode.OpIterClose, bytecode.OpIterCloseNormal,
-			bytecode.OpIterResume, bytecode.OpIterUnpackDelegate, bytecode.OpImport, bytecode.OpImportMeta,
+			bytecode.OpIterResume, bytecode.OpIterUnpackDelegate, bytecode.OpImport, bytecode.OpImportMeta, bytecode.OpIterStep, bytecode.OpIterRest,
 			bytecode.OpInitGlobalLex, bytecode.OpInitModuleLex,
 			bytecode.OpNewClass, bytecode.OpSetHomeObject, bytecode.OpSetFieldInit, bytecode.OpDefineMethod,
 			bytecode.OpDefineIndex, bytecode.OpDefineGetter, bytecode.OpDefineSetter, bytecode.OpSetFuncName,
@@ -1925,6 +1925,11 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			sp--
 			r.jitInitLex(f.cl, in, stack[sp])
 			continue
+		case bytecode.OpIterStep:
+			// A destructuring's step, its cursor A below the top.
+			v, err = r.iterStep(stack[sp-1-int(in.A)])
+		case bytecode.OpIterRest:
+			v, err = r.iterRest(stack[sp-1-int(in.A)])
 		case bytecode.OpNewClass, bytecode.OpSetHomeObject, bytecode.OpSetFieldInit, bytecode.OpDefineMethod,
 			bytecode.OpDefineIndex, bytecode.OpDefineGetter, bytecode.OpDefineSetter, bytecode.OpSetFuncName,
 			bytecode.OpDefineGetterIndex, bytecode.OpDefineSetterIndex, bytecode.OpToPropertyKey, bytecode.OpToPropertyKeyOfBase:

@@ -635,7 +635,11 @@ func IsNumber(word uint64) bool { return word < NumberLimit }
 // arguments' count in the next, the kind in the next -- a method call's,
 // with its receiver below its function, or a construction's; or an
 // iterator's step (GoCallStep), its loop's cursor the one operand, the
-// result its next value or, done, the uninitialized value. GoOpMarking
+// result its next value or, done, the uninitialized value; or a
+// destructuring's step (GoCallFill), the result undefined once done; or a
+// for...of's or a destructuring's cursor made (GoCallForOf) of its one
+// operand, the iterable.
+// GoOpMarking
 // marks a call native code makes through Go only because the collector
 // marks -- a native call's, whose setup would store pointers without a
 // write barrier: Go makes it, and does not count it against the code's
@@ -651,5 +655,7 @@ const (
 	GoCallMethod   = 1
 	GoCallNew      = 2
 	GoCallStep     = 3
+	GoCallFill     = 4
+	GoCallForOf    = 5
 	GoOpMarking    = 1 << 24
 )

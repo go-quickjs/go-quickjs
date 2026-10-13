@@ -3502,6 +3502,28 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		guard(amd64.CondAE)
 	case ssa.OpTailSelf:
 		c.tailSelf(v, guard)
+	case ssa.OpIterClosed:
+		// The cursor's state: done, or an array's walked in place.
+		x, ok := v.Args[0], c.a.NewLabel()
+		if c.enc.IterState == 0 {
+			c.a.Jmp(c.stubLabel(v.State, exitKind(v.Aux)))
+			break
+		}
+		c.pointerWord(x, c.gpr(x, scratchA))
+		c.a.Op(amd64.Test, scratchB, scratchB, true)
+		guard(amd64.CondE)
+		c.a.Load(scratchC, scratchB, c.enc.ObjectData)
+		c.movImm(scratchA, c.enc.IterState)
+		c.a.Op(amd64.Cmp, scratchC, scratchA, true)
+		guard(amd64.CondNE)
+		c.a.Load(scratchB, scratchB, c.enc.ObjectData+8)
+		c.a.LoadU8(scratchC, scratchB, c.enc.IterDone)
+		c.a.Op(amd64.Test, scratchC, scratchC, false)
+		c.a.Jcc(amd64.CondNE, ok)
+		c.a.Load(scratchC, scratchB, c.enc.IterArr)
+		c.a.Op(amd64.Test, scratchC, scratchC, true)
+		guard(amd64.CondE)
+		c.a.Bind(ok)
 	case ssa.OpSameSymbol:
 		if c.reference(v, v.Args[0], c.enc.Symbol, guard) {
 			c.movImm(scratchB, v.Const.Bits)
