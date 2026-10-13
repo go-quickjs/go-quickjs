@@ -9294,11 +9294,12 @@ func TestJITSSAGoCallsFromNativeCallees(t *testing.T) {
 // one and two, box for mid ("Box.mid") -- where the frame Go made for a
 // level had shown whatever its context held last ("Number.one"). Native
 // code writes a callee's receiver into its context whether or not the
-// callee reads it. hook, a Go function one and two call, has the caller's
-// code compiled again while the call is suspended in it, two levels down,
-// and the old code stays open until the run's native code leaves -- one
-// and two alternate, so each is pinned anew, and again after it is
-// compiled again. Each answer, and each stack, is the interpreter's.
+// callee reads it. hook, a Go function one and two call, asks for the
+// caller's code to be compiled again while the call is suspended in it,
+// two levels down: it is not, while the call is in it, which returns
+// there and whose frame Go reads by that code -- it stays due, compiled
+// again once nothing is in it. Each answer, and each stack, is the
+// interpreter's.
 func TestJITSSAGoCallsFromNativeCalleesCallBack(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -9313,7 +9314,7 @@ func TestJITSSAGoCallsFromNativeCalleesCallBack(t *testing.T) {
 		Box.prototype.mid=function mid(s,i){let t=0;for(let j=0;j<1;j++)t=(i&1?one(s):two(s))+1;return t};
 		var box=new Box();
 		function outer(n){let t=0;for(let i=0;i<n;i++)t=(t*3+box.mid('abc'+(i&3),i))|0;return t+':'+c.last}`
-	recompiled, open := 0, 0
+	recompiled, kept := 0, 0
 	install := func(rt *Runtime) {
 		rt.global.setOwnRaw(rt.atoms.intern("hook"), rt.NewFunction("hook", 1,
 			func(rt *Runtime, _ Value, args []Value) (Value, error) {
@@ -9329,11 +9330,11 @@ func TestJITSSAGoCallsFromNativeCalleesCallBack(t *testing.T) {
 				code := e.ssa
 				e.reopt = true
 				rt.jitReoptimize(cl, e)
-				if e.ssa != code {
+				switch {
+				case e.ssa != code:
 					recompiled++
-					if code.Size() != 0 {
-						open++
-					}
+				case e.reopt:
+					kept++
 				}
 				return Str(NewString("")), nil
 			}), propDefault)
@@ -9377,8 +9378,8 @@ func TestJITSSAGoCallsFromNativeCalleesCallBack(t *testing.T) {
 			}
 		}
 	}
-	if recompiled == 0 || open != recompiled {
-		t.Fatalf("a level's code compiled again under its call of Go %d times, left open %d", recompiled, open)
+	if recompiled != 0 || kept == 0 {
+		t.Fatalf("a level's code compiled again under its call of Go %d times, kept due %d", recompiled, kept)
 	}
 	if len(r.jit.goPinned) != 0 || len(r.jit.retired) != 0 {
 		t.Fatalf("calls of Go left %d pinned, %d retired", len(r.jit.goPinned), len(r.jit.retired))
@@ -9671,9 +9672,10 @@ func TestJITSSAGoCallLeavesWithoutEntry(t *testing.T) {
 // A level's code is pinned by the code it runs, not by its entry alone: in
 // one native stretch of root's, leaf, called natively, calls Go (its code
 // pinned), root's own call of Go has leaf compiled again, and root calls
-// leaf again, now in its new code, which calls Go, under which leaf is
-// compiled once more -- the code that call returns to stays open until
-// root's native code leaves. Each answer is the interpreter's.
+// leaf again, now in its new code, which calls Go, its new code pinned --
+// under which leaf is not compiled again, a native call being in it
+// (otherwiseInUse). The code each call returns to stays open until root's
+// native code leaves. Each answer is the interpreter's.
 func TestJITSSAGoCallPinsALevelsNewCode(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")

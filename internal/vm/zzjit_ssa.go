@@ -1057,6 +1057,20 @@ const (
 )
 
 func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
+	if !e.owned() {
+		// The cache dropped it to make room while its code ran, which
+		// goes on for now. Code compiled for it would be called through
+		// the link its function's next entry holds, which the cache does
+		// not hold it for: once it is gone, its code is released, and
+		// native callers would call where the code was. Its function's
+		// next entry is compiled as it is called.
+		return
+	}
+	if r.jit.otherwiseInUse(e) {
+		// Another run of its code, or a native call of it, goes on in it
+		// later: compiled again once they have left it.
+		return
+	}
 	switch {
 	case e.reopt || e.feedReopt:
 		e.reopts++
@@ -3927,11 +3941,16 @@ func (r *Runtime) jitNativeCallee(cl *closure) *jitEntry {
 	}
 	s := r.jit
 	s.budget = r.jitBudget()
+	// Busy before room is made: the room is made from what the cache
+	// holds, e among it, which, dropped, would no longer be its function's
+	// -- its link no longer its -- but compiled all the same, its code
+	// published in the link, which nothing then held the code for: the
+	// collector released it, and native callers called where it had been.
+	e.busy++
+	defer func() { e.busy-- }()
 	if !s.makeRoom(len(fn.Code) * s.perInstr) {
 		return nil
 	}
-	e.busy++
-	defer func() { e.busy-- }()
 	r.jitSeedCalls(cl, e, p)
 	code, fb, err := r.compileSSA(fn, cl, p, e)
 	if code == nil {
@@ -5051,10 +5070,18 @@ func (r *Runtime) runSSA(f *frame, e *jitEntry, pc, depth int) (Value, error, bo
 // context, whose callee Go finished, its result and frame in the context
 // past (jitUnwindNative).
 func (r *Runtime) runSSAIn(f *frame, e *jitEntry, pc, depth, idx int, resume uintptr) (Value, error, bool) {
+	if !e.owned() {
+		// The cache dropped it to make room since it was found -- a
+		// compile Go made meanwhile -- before its run kept it (ssaRuns):
+		// its code is not its function's now, and what it calls through
+		// may be gone. The existing tiers run the frame.
+		return Undefined, nil, false
+	}
 	s := r.jit
 	top := s.ctxTop
 	s.ctxTop = idx + 1
 	e.ssaRuns++
+	s.runEntries = append(s.runEntries, e)
 	// One return, so that the defer is open-coded: a deferred call's record
 	// cost every entry more than the rest of entering.
 	defer r.jitRunDone(e, idx, top)
@@ -5075,6 +5102,8 @@ func (r *Runtime) runSSAIn(f *frame, e *jitEntry, pc, depth, idx int, resume uin
 func (r *Runtime) jitRunDone(e *jitEntry, idx, top int) {
 	s := r.jit
 	e.ssaRuns--
+	s.runEntries[len(s.runEntries)-1] = nil
+	s.runEntries = s.runEntries[:len(s.runEntries)-1]
 	s.ctxTop = top
 	if idx < len(s.goRuns) {
 		s.goRuns[idx] = jitGoRun{}
@@ -5772,10 +5801,13 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, code *bytecode.Function)
 		if k == n-1 {
 			v, err = r.jitFinishExit(f, e, &l)
 		} else if !l.inline && !next.inline && next.returnTo != 0 && err == nil && r.stopped == nil &&
-			e != nil && e.ssa != nil && e.ssa.Contains(next.returnTo) && !jit.Marking() {
+			e != nil && e.ssa != nil && e.ssa == next.code && e.ssa.Contains(next.returnTo) && !jit.Marking() {
 			// Its native code goes on where the call returns to, as runSSA's
 			// does after a callee leaves: its context, spills and keeps are
-			// as it left them, and its callee's, frame base included.
+			// as it left them, and its callee's, frame base included. The
+			// code must be the one the call was made from: compiled again
+			// meanwhile, the function's code may be where the old was, the
+			// old's return address in the middle of other instructions.
 			c := s.ssaCtxs[next.ctx]
 			c.Live, c.ReturnTo = 0, 0
 			*(*Value)(unsafe.Pointer(&c.RetValue)) = v
@@ -6023,6 +6055,10 @@ const (
 // enter, or calls without a frame, has only -- and has them call it again
 // after jitNativeRetry, counting its leaving afresh.
 func jitRetryNative(e *jitEntry) {
+	if !e.owned() {
+		// Dropped by the cache: its code is not its function's link's.
+		return
+	}
 	if e.nativeRetry++; e.nativeRetry >= jitNativeRetry<<(e.nativeBackoff-1) {
 		e.notNative, e.link.in, e.nativeOut = false, 0, 0
 		e.ssaStats.calleeGoCalls, e.ssaStats.calleeWork = 0, 0

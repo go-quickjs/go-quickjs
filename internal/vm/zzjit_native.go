@@ -511,7 +511,10 @@ type jitState struct {
 	// (jitGrowContexts).
 	ssaCtxs []*abi.Context
 	ctxTop  int
-	ssaCtx  *abi.Context
+	// runEntries are the entries Go runs the code of, innermost last
+	// (runSSAIn).
+	runEntries []*jitEntry
+	ssaCtx     *abi.Context
 	// goRuns are, by context, the frame, entry and code a run of native
 	// code began there runs (runSSALoop), which a call of Go it makes is
 	// made for (jitGoCall); goPinned the code calls of Go are suspended
@@ -745,6 +748,12 @@ func (s *jitState) account(e *jitEntry) {
 	e.bytes = n
 }
 
+// owned reports whether e is its function's link's: one the cache holds,
+// whose code native callers call.
+func (e *jitEntry) owned() bool {
+	return e.link != nil && e.link.owner == e
+}
+
 // dropEntry closes e's code and removes it from the cache, reporting false if
 // the OS would not release the code, which leaves e owned for a retry.
 func (s *jitState) dropEntry(key weak.Pointer[bytecode.Function], e *jitEntry) bool {
@@ -763,10 +772,47 @@ func (s *jitState) dropEntry(key weak.Pointer[bytecode.Function], e *jitEntry) b
 
 // inUse reports whether e's code runs, or may go on, below Go now: a run
 // of it, which goes on in its code after a native call whose callee Go
-// finishes. The cache does not drop it to make room then, as V8 keeps code
-// a frame is in: the run would find its code gone.
+// finishes; or a native call of it, from another function's code, whose
+// callee has not returned -- one that called Go, or called a function that
+// did. The cache does not drop it to make room then, as V8 keeps code a
+// frame is in: the run would find its code gone, and the call return into
+// code that is not there.
 func (s *jitState) inUse(e *jitEntry) bool {
-	return e.ssaRuns != 0
+	return e.ssaRuns != 0 || s.called(e)
+}
+
+// called reports whether a native call of e's code has not returned: a
+// context a call runs in (Live) is its function's. Native code marks the
+// context before the call and clears it after.
+func (s *jitState) called(e *jitEntry) bool {
+	if e.link == nil {
+		return false
+	}
+	fn := e.link.key.Value()
+	if fn == nil {
+		return false
+	}
+	for _, c := range s.ssaCtxs {
+		if c.Live == abi.LiveCall && c.Closure != nil && (*closure)(c.Closure).fn == fn {
+			return true
+		}
+	}
+	return false
+}
+
+// otherwiseInUse reports whether e's code runs, or may go on, below Go
+// other than in the innermost run Go is inside, if that is e's: that run's
+// code does not run while Go does, and goes on in the code compiled again,
+// where it is entered next; any other run's, or a native call's, would
+// return into the code it left, which compiling it again would release --
+// and what Go reads of a frame as it leaves, it reads by the code's entry,
+// which would then be the new code's.
+func (s *jitState) otherwiseInUse(e *jitEntry) bool {
+	runs := e.ssaRuns
+	if n := len(s.runEntries); n != 0 && s.runEntries[n-1] == e {
+		runs--
+	}
+	return runs != 0 || s.called(e)
 }
 
 // jitVictim is what the cache may reclaim to make room (makeRoom): a
