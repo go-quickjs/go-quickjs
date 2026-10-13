@@ -3229,13 +3229,18 @@ func (r *Runtime) jitInlinedCalls(e *jitEntry, pc int, o *Object, cl *closure, i
 	e.notInline = append(e.notInline, int32(pc))
 	e.callSites[pc] = jitCallNative
 	e.inlineReopt = true
+	same := false
 	for _, x := range e.inlines {
 		if int(x.pc) == pc && r.jitNativeCallee(x.cl) != nil {
-			// A construction's with its pool.
-			e.nativeCalls = append(e.nativeCalls, jitInline{pc: x.pc, cl: x.cl, obj: x.obj, pool: x.pool})
+			// A construction's with its pool. Another closure of the
+			// function inlined -- one its maker makes anew -- is called by
+			// its code (jitSameCode), decided now, not at a compile more.
+			byCode := x.obj != o && jitSameCode(x.cl, cl)
+			same = same || byCode
+			e.nativeCalls = append(e.nativeCalls, jitInline{pc: x.pc, cl: x.cl, obj: x.obj, pool: x.pool, byCode: byCode})
 		}
 	}
-	if (in.Op != bytecode.OpNew || r.jitConstructs(o)) && r.jitNativeCallee(cl) != nil {
+	if !same && (in.Op != bytecode.OpNew || r.jitConstructs(o)) && r.jitNativeCallee(cl) != nil {
 		e.nativeCalls = append(e.nativeCalls, r.jitNativeTarget(int32(pc), cl, o, in))
 	}
 }
@@ -3272,17 +3277,20 @@ func (r *Runtime) jitCallTarget(f *frame, e *jitEntry, pc, sp int, in bytecode.I
 		if int(x.pc) == pc {
 			if x.cl != nil && x.obj != o && jitSameCode(x.cl, cl) {
 				// Another closure of the function: called by its code from
-				// the next compile on.
-				if !x.byCode {
-					x.byCode, e.inlineReopt = true, true
+				// the next compile on -- unless the call checks it so
+				// already, a closure that captures bindings being called so
+				// from the first (NativeCalls), and left for another reason:
+				// its callee did, which a compile would not change.
+				if !x.byCode && len(x.cl.upvalues) == 0 {
+					e.inlineReopt = true
 				}
-				return
+				x.byCode = true
 			}
-			if x.obj == o || x.cl == nil {
+			if x.obj == o || x.cl == nil || x.byCode && jitSameCode(x.cl, cl) {
 				// One it calls, or a built-in's construction, which a site
 				// makes alone. One it calls whose code native callers do not
 				// call for now is called again after so many such calls.
-				if ce := r.jit.cache[weak.Make(cl.fn)]; x.obj == o && ce != nil && ce.notNative {
+				if ce := r.jit.cache[weak.Make(cl.fn)]; (x.obj == o || x.byCode) && ce != nil && ce.notNative {
 					jitRetryNative(ce)
 				}
 				return
