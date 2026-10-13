@@ -4,6 +4,7 @@ package vm
 
 import (
 	"errors"
+	"fmt"
 	"iter"
 	"math"
 	"runtime"
@@ -1138,7 +1139,7 @@ func (r *Runtime) compileSSA(fn *bytecode.Function, cl *closure, p *ir.Program, 
 		this = 1
 	}
 	if len(p.Globals) != 0 || p.Locals != fn.LocalCount+len(fn.Upvalues)+this {
-		return nil, nil, jitRefused
+		return nil, nil, fmt.Errorf("%w: a program of globals, or of another frame", jitRefused)
 	}
 	if e != nil && cl != nil {
 		r.jitSeenFeedback(cl, e)
@@ -1169,7 +1170,7 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 	defer s.mirWork.Rewind()
 	f, err := ssa.BuildIn(&s.ssaWork, p, fb)
 	if err != nil {
-		return nil, nil, jitRefused
+		return nil, nil, fmt.Errorf("%w: %v", jitRefused, err)
 	}
 	f.FrameLocals = fn.LocalCount
 	if p.This {
@@ -1186,7 +1187,7 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 		return nil, nil, err
 	}
 	if err != nil {
-		return nil, nil, jitRefused
+		return nil, nil, fmt.Errorf("%w: %v", jitRefused, err)
 	}
 	// The cells the backend gave the kept values (mir's keep cells).
 	fb.keeps = f.Keeps

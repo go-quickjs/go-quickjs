@@ -1,5 +1,6 @@
-// Package v8bench runs the V8 version 7 benchmark suite, as AreWeFastYet
-// publishes it, and QuickJS's micro-benchmarks on a JavaScript engine, for
+// Package v8bench runs benchmark suites -- the V8 suite's version 7, as
+// AreWeFastYet publishes it, by default; Octane 2.0; Are We Fast Yet (see
+// suites.go) -- and QuickJS's micro-benchmarks on a JavaScript engine, for
 // measuring and profiling it.
 //
 // It knows nothing of any engine: a command gives it an Engine and calls
@@ -7,20 +8,24 @@
 // internal/cmd/v8bench/goja, a module of its own so that go-quickjs does not
 // depend on goja, runs it on goja, for comparison. Both report the same way.
 //
-// The V8 suite is not part of this repository: some of its files are under
-// licenses this one's is not. -fetch downloads it, at the revision the
-// figures in docs/benchmarks.md were measured at, into -dir. QuickJS's
+// The suites are not part of this repository: some of their files are under
+// licenses this one's is not. -fetch downloads the one -bench names, at a
+// fixed revision -- the V8 suite's the figures in docs/benchmarks.md were
+// measured at -- into -dir. QuickJS's
 // tests/microbench.js is: microbench.js is QuickJS 2026-06-04's (92a3d4d),
 // as it is there, under its MIT license, and is built into the package, as
 // is microbench_extra.js, ours, written as its tests are.
 // Four modes measure four things:
 //
-//   - score runs the suite as its own run.js does, and prints its scores:
+//   - score runs the suite as its own run.js does, and prints its scores
+//     (the V8 suite and Octane):
 //     each benchmark runs for at least a second, so the work done depends
 //     on the speed, and the scores are what compare with other engines.
 //   - fixed runs each benchmark -n times after its setup, and prints the
 //     time and the allocations of each suite: the same work every time,
-//     which is what compares one build, or one engine, with another.
+//     which is what compares one build, or one engine, with another. An
+//     Are We Fast Yet benchmark's run is one of its harness's iterations,
+//     its result checked.
 //   - compile parses and compiles the suite's sources -n times, which is
 //     the parser and the compiler alone.
 //   - micro runs QuickJS's micro-benchmarks, and ours of generators and
@@ -49,15 +54,17 @@ type Engine interface {
 	// Compile parses and compiles a script without running it.
 	Compile(name, src string) error
 	// NewRuntime makes a runtime with the host's functions as globals of
-	// their names: print, load and now.
+	// their names: print, load, read and now.
 	NewRuntime(host Host) (Runtime, error)
 }
 
-// Host is the functions a runtime is given.
+// Host is the functions a runtime is given: print, load, read and now.
 type Host struct {
 	// Print writes a line.
 	Print func(string)
-	// Load reads one of the suite's files by its name, for load to run.
+	// Load reads one of the suite's files by its name, for load to run, and
+	// for read to give as a string, as d8's read does: Octane's zlib, built
+	// for d8, takes it to be there.
 	Load func(name string) (string, error)
 	// Now is the time in milliseconds, to the nanosecond, from a fixed
 	// point: what microbench.js's clock, performance.now, reads.
@@ -72,18 +79,17 @@ type Runtime interface {
 	EvalString(src string) (string, error)
 }
 
-// suiteURL is where the suite is fetched from: AreWeFastYet at the revision
-// the figures in docs/benchmarks.md were measured at.
-const suiteURL = "https://raw.githubusercontent.com/mozilla/arewefastyet/0e21608/benchmarks/v8-v7/"
-
-// files are the suite's sources, in the order run.js loads them.
-var files = []string{"base.js", "richards.js", "deltablue.js", "crypto.js", "raytrace.js",
-	"earley-boyer.js", "regexp.js", "splay.js", "navier-stokes.js"}
+// A Reporter is a Runtime with something to say of each benchmark the fixed
+// mode runs, after its line: go-quickjs's what its JIT did (-jitreport).
+type Reporter interface {
+	Report(name string)
+}
 
 // Main parses the command line and runs the suite on the engine, named in
 // what it prints.
 func Main(name string, e Engine) {
 	dir := flag.String("dir", "", "the directory the suite is in")
+	which := flag.String("bench", "v8", "the suite: v8, octane or awfy")
 	fetch := flag.Bool("fetch", false, "download the suite into -dir first")
 	mode := flag.String("mode", "fixed", "score, fixed, compile or micro")
 	n := flag.Int("n", 5, "runs of each benchmark (fixed, micro), or compiles of the suite (compile)")
@@ -91,17 +97,18 @@ func Main(name string, e Engine) {
 	cpu := flag.String("cpuprofile", "", "write a CPU profile to this file")
 	mem := flag.String("memprofile", "", "write an allocation profile to this file")
 	flag.Parse()
+	s := suiteNamed(*which)
 	src := map[string]string{}
 	if *mode != "micro" {
 		if *dir == "" {
 			fail(fmt.Errorf("-dir is required"))
 		}
 		if *fetch {
-			if err := download(*dir); err != nil {
+			if err := download(s, *dir); err != nil {
 				fail(err)
 			}
 		}
-		for _, f := range append(files, "run.js") {
+		for _, f := range append(s.files, s.extra...) {
 			b, err := os.ReadFile(filepath.Join(*dir, f))
 			if err != nil {
 				fail(fmt.Errorf("%w (run with -fetch to download the suite)", err))
@@ -123,7 +130,11 @@ func Main(name string, e Engine) {
 		defer pprof.StopCPUProfile()
 	}
 
-	fmt.Printf("%s, %s\n", name, *mode)
+	if *mode == "micro" || s.name == "v8" {
+		fmt.Printf("%s, %s\n", name, *mode)
+	} else {
+		fmt.Printf("%s, %s, %s\n", name, s.name, *mode)
+	}
 	// The runtime the suite ran in is kept to the end, so that what is live
 	// after the run is measured with it: a leak is what a live runtime keeps.
 	var rt Runtime
@@ -133,19 +144,26 @@ func Main(name string, e Engine) {
 	switch *mode {
 	case "compile":
 		for i := 0; i < *n; i++ {
-			for _, f := range files {
+			for _, f := range s.files {
 				if err := e.Compile(f, src[f]); err != nil {
 					fail(fmt.Errorf("%s: %w", f, err))
 				}
 			}
 		}
 	case "score":
+		if s.awfy {
+			fail(fmt.Errorf("Are We Fast Yet has no scores: run it in the fixed mode"))
+		}
 		rt = newRuntime(e, src)
 		if err := rt.Run("run.js", src["run.js"]); err != nil {
 			fail(err)
 		}
 	case "fixed":
-		rt = runFixed(e, src, *n, *only)
+		if s.awfy {
+			rt = runAWFY(e, s, src, *n, *only)
+		} else {
+			rt = runFixed(e, s, src, *n, *only)
+		}
 	case "micro":
 		rt = runMicro(e, *n, *only)
 	default:
@@ -178,9 +196,9 @@ func Main(name string, e Engine) {
 
 // runFixed loads the suite and runs each benchmark n times, reporting each
 // suite as it finishes, and returns the runtime it ran them in.
-func runFixed(e Engine, src map[string]string, n int, only string) Runtime {
+func runFixed(e Engine, s *suite, src map[string]string, n int, only string) Runtime {
 	rt := newRuntime(e, src)
-	for _, f := range files {
+	for _, f := range s.files {
 		if err := rt.Run(f, src[f]); err != nil {
 			fail(fmt.Errorf("%s: %w", f, err))
 		}
@@ -198,6 +216,9 @@ func runFixed(e Engine, src map[string]string, n int, only string) Runtime {
 		t0 := time.Now()
 		_, err := rt.EvalString(fmt.Sprintf(`(() => {
 			const s = BenchmarkSuite.suites.find(s => s.name === %q);
+			// Octane's Math.random, seeded again for each suite as its
+			// harness does, which its checksums assume.
+			if (BenchmarkSuite.ResetRNG) BenchmarkSuite.ResetRNG();
 			for (const b of s.benchmarks) {
 				b.Setup();
 				for (let i = 0; i < %d; i++) b.run();
@@ -211,6 +232,37 @@ func runFixed(e Engine, src map[string]string, n int, only string) Runtime {
 			fail(fmt.Errorf("%s: %w", name, err))
 		}
 		report(name, d, &m0, &m1)
+		if r, ok := rt.(Reporter); ok {
+			r.Report(name)
+		}
+	}
+	return rt
+}
+
+// runAWFY loads Are We Fast Yet and runs each of its benchmarks n times,
+// reporting each as it finishes, and returns the runtime it ran them in.
+func runAWFY(e Engine, s *suite, src map[string]string, n int, only string) Runtime {
+	rt := newRuntime(e, src)
+	if err := rt.Run("awfy.js", awfyModules(s, src)); err != nil {
+		fail(fmt.Errorf("awfy.js: %w", err))
+	}
+	for _, w := range awfyWork {
+		if only != "" && !strings.Contains(","+only+",", ","+w.name+",") {
+			continue
+		}
+		var m0, m1 runtime.MemStats
+		runtime.ReadMemStats(&m0)
+		t0 := time.Now()
+		_, err := rt.EvalString(awfyRun(w.module, w.inner, n))
+		d := time.Since(t0)
+		runtime.ReadMemStats(&m1)
+		if err != nil {
+			fail(fmt.Errorf("%s: %w", w.name, err))
+		}
+		report(w.name, d, &m0, &m1)
+		if r, ok := rt.(Reporter); ok {
+			r.Report(w.name)
+		}
 	}
 	return rt
 }
@@ -243,12 +295,12 @@ func newRuntime(e Engine, src map[string]string) Runtime {
 }
 
 // download fetches the suite's sources into dir.
-func download(dir string) error {
+func download(s *suite, dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	for _, f := range append(files, "run.js") {
-		resp, err := http.Get(suiteURL + f)
+	for _, f := range append(s.files, s.extra...) {
+		resp, err := http.Get(s.url + f)
 		if err != nil {
 			return err
 		}

@@ -35,6 +35,15 @@ func (engine) NewRuntime(host v8bench.Host) (v8bench.Runtime, error) {
 	if err := vm.Set("now", host.Now); err != nil {
 		return nil, err
 	}
+	if err := vm.Set("read", func(call goja.FunctionCall) goja.Value {
+		src, err := host.Load(call.Argument(0).String())
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		return vm.ToValue(src)
+	}); err != nil {
+		return nil, err
+	}
 	err := vm.Set("load", func(call goja.FunctionCall) goja.Value {
 		name := call.Argument(0).String()
 		src, err := host.Load(name)

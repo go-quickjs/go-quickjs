@@ -217,6 +217,20 @@ write profiles.
 go run ./internal/cmd/v8bench -dir /tmp/v8-v7 -fetch -mode fixed -n 5
 ```
 
+`-bench` picks another suite, fetched the same way into a directory of its
+own: `octane`, Octane 2.0 -- the V8 suite's benchmarks revised, and larger
+programs: TypeScript, pdf.js, a Game Boy emulator, Box2D, zlib, Mandreel --
+and `awfy`, Are We Fast Yet's fourteen benchmarks, written to compare
+language implementations alike; the goja and external runners below take
+`-bench` too. They reach far more of the JIT than the V8 suite does. With
+`-jit`, `-jitreport` prints after each benchmark what the
+JIT did: what it compiled, by how much each function ran natively, and what
+it refused or never tried, with why.
+
+```sh
+go run -tags quickjs_jit ./internal/cmd/v8bench -jit -jitreport -bench awfy -dir /tmp/awfy -fetch -mode fixed -n 1
+```
+
 `-mode micro` runs QuickJS's micro-benchmarks, `internal/v8bench/microbench.js`
 (QuickJS's `tests/microbench.js`, kept as it is there), and ours beside it,
 `microbench_extra.js`, of what it has none of -- generators, async

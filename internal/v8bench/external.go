@@ -24,6 +24,7 @@ var preludes = map[string]string{
 	// QuickJS's qjs, run with --std, which makes std a global.
 	"qjs": `var __dir = %q;
 globalThis.load = function (f) { std.loadScript(__dir + "/" + f); };
+globalThis.read = function (f) { return std.loadFile(__dir + "/" + f); };
 globalThis.__v8benchNow = function () { return Date.now(); };
 `,
 	// node, where a file is a module of its own: a script loaded into the
@@ -33,6 +34,7 @@ var __fs = require("fs"), __vm = require("vm");
 var __v8benchPerformance = require("perf_hooks").performance;
 globalThis.__v8benchNow = function () { return __v8benchPerformance.now(); };
 globalThis.load = function (f) { __vm.runInThisContext(__fs.readFileSync(__dir + "/" + f, "utf8"), { filename: f }); };
+globalThis.read = function (f) { return __fs.readFileSync(__dir + "/" + f, "utf8"); };
 globalThis.print = function (s) { console.log(s); };
 `,
 }
@@ -62,12 +64,32 @@ function __pad(s, n, left) { s = String(s); while (s.length < n) s = left ? " " 
 for (var s of BenchmarkSuite.suites) {
 	if (__only && ("," + __only + ",").indexOf("," + s.name + ",") < 0) continue;
 	var __t0 = __v8benchNow();
+	if (BenchmarkSuite.ResetRNG) BenchmarkSuite.ResetRNG();
 	for (var b of s.benchmarks) {
 		b.Setup();
 		for (var i = 0; i < %d; i++) b.run();
 		b.TearDown();
 	}
 	print(__pad(s.name, 13) + " " + __pad((__v8benchNow() - __t0).toFixed(1), 9, true) + " ms");
+}
+`
+
+// awfyDriver is the fixed mode of Are We Fast Yet in JavaScript: its
+// modules, then each benchmark n times, those a comma-separated list names,
+// or all.
+const awfyDriver = `%s
+%s
+var __work = %s;
+var __only = %q;
+function __pad(s, n, left) { s = String(s); while (s.length < n) s = left ? " " + s : s + " "; return s; }
+for (var w of __work) {
+	if (__only && ("," + __only + ",").indexOf("," + w[0] + ",") < 0) continue;
+	var __t0 = __v8benchNow();
+	var b = __awfyRequire("./" + w[1]).newInstance();
+	for (var i = 0; i < %d; i++) {
+		if (!b.innerBenchmarkLoop(w[2])) throw new Error(w[0] + ": the result is wrong");
+	}
+	print(__pad(w[0], 13) + " " + __pad((__v8benchNow() - __t0).toFixed(1), 9, true) + " ms");
 }
 `
 
@@ -79,6 +101,7 @@ func MainExternal() {
 	kind := flag.String("engine", "qjs", "the kind of program: qjs or node")
 	command := flag.String("cmd", "", "the program, qjs or node by default")
 	dir := flag.String("dir", "", "the directory the suite is in")
+	which := flag.String("bench", "v8", "the suite: v8, octane or awfy")
 	fetch := flag.Bool("fetch", false, "download the suite into -dir first")
 	mode := flag.String("mode", "fixed", "score, fixed or micro")
 	n := flag.Int("n", 5, "runs of each benchmark (fixed, micro)")
@@ -106,7 +129,7 @@ func MainExternal() {
 			fail(err)
 		}
 	} else {
-		script = suiteDriver(prelude, *dir, *fetch, *mode, *only, *n, tmp)
+		script = suiteDriver(suiteNamed(*which), prelude, *dir, *fetch, *mode, *only, *n, tmp)
 	}
 
 	program := *command
@@ -130,15 +153,15 @@ func MainExternal() {
 	fmt.Printf("%-13s %9.1f ms\n", "TOTAL", float64(time.Since(start).Microseconds())/1000)
 }
 
-// suiteDriver writes the driver of the V8 suite, in the fixed or the score
+// suiteDriver writes the driver of the suite, in the fixed or the score
 // mode, into tmp, and returns its path: the suite is read from dir,
 // downloaded into it first where fetch says so.
-func suiteDriver(prelude, dir string, fetch bool, mode, only string, n int, tmp string) string {
+func suiteDriver(s *suite, prelude, dir string, fetch bool, mode, only string, n int, tmp string) string {
 	if dir == "" {
 		fail(fmt.Errorf("-dir is required"))
 	}
 	if fetch {
-		if err := download(dir); err != nil {
+		if err := download(s, dir); err != nil {
 			fail(err)
 		}
 	}
@@ -148,12 +171,28 @@ func suiteDriver(prelude, dir string, fetch bool, mode, only string, n int, tmp 
 	}
 	prelude = fmt.Sprintf(prelude, filepath.ToSlash(abs))
 	var driver string
-	switch mode {
-	case "score":
+	switch {
+	case s.awfy && mode == "fixed":
+		src := map[string]string{}
+		for _, f := range s.files {
+			b, err := os.ReadFile(filepath.Join(dir, f))
+			if err != nil {
+				fail(fmt.Errorf("%w (run with -fetch to download the suite)", err))
+			}
+			src[f] = string(b)
+		}
+		work := make([]string, len(awfyWork))
+		for i, w := range awfyWork {
+			work[i] = fmt.Sprintf("[%q, %q, %d]", w.name, w.module, w.inner)
+		}
+		driver = fmt.Sprintf(awfyDriver, prelude, awfyModules(s, src), "["+strings.Join(work, ", ")+"]", only, n)
+	case s.awfy:
+		fail(fmt.Errorf("Are We Fast Yet has no scores: run it in the fixed mode"))
+	case mode == "score":
 		driver = prelude + `load("run.js");` + "\n"
-	case "fixed":
-		quoted := make([]string, len(files))
-		for i, f := range files {
+	case mode == "fixed":
+		quoted := make([]string, len(s.files))
+		for i, f := range s.files {
 			quoted[i] = strconv.Quote(f)
 		}
 		driver = fmt.Sprintf(fixedDriver, prelude, "["+strings.Join(quoted, ", ")+"]", only, n)

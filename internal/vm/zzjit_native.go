@@ -360,6 +360,9 @@ type jitEntry struct {
 	// enter its code (entrySlow): it is used all the same.
 	used, seen, serial uint64
 	slowCalls          uint64
+	// refusal is why the JIT does not compile the function, for a refusal
+	// (JITReport).
+	refusal string
 }
 
 // uses is how often e's code, or what e knows, was used: Go's entries,
@@ -402,7 +405,11 @@ type jitLink struct {
 type jitState struct {
 	// unavailable marks a runtime the OS will not give executable memory.
 	unavailable bool
-	cache       map[weak.Pointer[bytecode.Function]]*jitEntry
+	// reporting marks a runtime whose JIT notes the functions it does not
+	// try to compile, in skipped, for JITReport (SetJITReport).
+	reporting bool
+	skipped   map[weak.Pointer[bytecode.Function]]string
+	cache     map[weak.Pointer[bytecode.Function]]*jitEntry
 	// links are the functions' links (jitLink), by the same keys.
 	links map[weak.Pointer[bytecode.Function]]*jitLink
 	// resumed counts native calls whose callee Go finished, after which
@@ -1291,6 +1298,7 @@ func (r *Runtime) jitForFunction(fn *bytecode.Function, cl *closure) *jitEntry {
 		return nil
 	}
 	if len(fn.Code) > jitcompile.MaxInstructions {
+		r.jitSkipped(fn, "%d instructions, past the %d the JIT compiles", len(fn.Code), jitcompile.MaxInstructions)
 		return nil
 	}
 	key := weak.Make(fn)
@@ -1304,6 +1312,7 @@ func (r *Runtime) jitForFunction(fn *bytecode.Function, cl *closure) *jitEntry {
 	}
 	budget := r.jitBudget()
 	if !jitCompiles(fn, budget) {
+		r.jitSkipped(fn, "%d instructions, too many for the JIT's memory", len(fn.Code))
 		return nil
 	}
 	r.jitState()
@@ -1318,7 +1327,10 @@ func (r *Runtime) jitForFunction(fn *bytecode.Function, cl *closure) *jitEntry {
 	s.serial++
 	e := &jitEntry{used: s.epoch(), serial: s.serial}
 	s.linkFor(fn, e)
-	if p, err := r.jitLower(fn, jitLowerSSA); err == nil {
+	p, err := r.jitLower(fn, jitLowerSSA)
+	if err != nil {
+		e.refusal = err.Error()
+	} else {
 		if cl != nil {
 			// The calls its caches have met.
 			r.jitSeedCalls(cl, e, p)
@@ -1336,6 +1348,8 @@ func (r *Runtime) jitForFunction(fn *bytecode.Function, cl *closure) *jitEntry {
 			s.unavailable = true
 			s.disown(e)
 			return nil
+		case err != nil && !errors.Is(err, jit.ErrCodeBudget):
+			e.refusal = err.Error()
 		case errors.Is(err, jit.ErrCodeBudget):
 			// It may fit once the cache has released code. Until then the
 			// cached refusal spares a compile at every warm-up, and holds

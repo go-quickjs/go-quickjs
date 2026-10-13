@@ -27,7 +27,10 @@ func main() { v8bench.Main("go-quickjs", engine{}) }
 
 type engine struct{}
 
-var jitFlag = flag.Bool("jit", false, "enable the optional native numeric tier")
+var (
+	jitFlag       = flag.Bool("jit", false, "enable the optional native numeric tier")
+	jitReportFlag = flag.Bool("jitreport", false, "after each benchmark, print what the JIT compiled, refused and skipped (fixed mode, with -jit)")
+)
 
 func (engine) Compile(name, src string) error {
 	_, err := quickjs.Compile(name, src)
@@ -49,6 +52,9 @@ func (engine) NewRuntime(host v8bench.Host) (v8bench.Runtime, error) {
 	if err := rt.Set("now", host.Now); err != nil {
 		return nil, err
 	}
+	if err := rt.Set("read", host.Load); err != nil {
+		return nil, err
+	}
 	err := rt.Set("load", func(r *quickjs.Runtime, name string) error {
 		src, err := host.Load(name)
 		if err != nil {
@@ -57,6 +63,7 @@ func (engine) NewRuntime(host v8bench.Host) (v8bench.Runtime, error) {
 		_, err = r.EvalFile(name, src)
 		return err
 	})
+	reportStart(runtimeOf{rt})
 	return runtimeOf{rt}, err
 }
 
