@@ -11150,3 +11150,25 @@ func TestJITSSAConcatCallsGo(t *testing.T) {
 		}
 	}
 }
+
+// A for...of step a call of Go made, while its code was due to be compiled
+// again, Go applies at the step's exit (jitCallResult): a step that found
+// the cursor done goes on at the loop's end, any other with the value past
+// the step. The done marker is the uninitialized value, a NaN-boxed tag,
+// which == never finds equal to itself: the loop had gone on with it as
+// its next value, and a call of it threw "uninitialized is not a function".
+func TestJITCallResultStepDone(t *testing.T) {
+	fn := jitFunctionForTest(t, `function f(a) { let s = 0; for (const x of a) s += x; return s }`)
+	pc := slices.IndexFunc(fn.Code, func(in bytecode.Instr) bool { return in.Op == bytecode.OpIterNextOrJump })
+	if pc < 0 {
+		t.Fatal("no step")
+	}
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	f := &frame{cl: &closure{fn: fn}}
+	if sp, ok := r.jitCallResult(f, pc, 1, uninitialized, nil); !ok || sp != 1 || f.pc != fn.Code[pc].A {
+		t.Fatalf("done: sp %d, ok %v, pc %d, want the loop's end, %d", sp, ok, f.pc, fn.Code[pc].A)
+	}
+	if sp, ok := r.jitCallResult(f, pc, 1, Float(7), nil); !ok || sp != 2 || f.pc != uint32(pc+1) || r.stack[1].Number() != 7 {
+		t.Fatalf("a value: sp %d, ok %v, pc %d, value %v", sp, ok, f.pc, r.stack[1])
+	}
+}

@@ -5604,7 +5604,7 @@ func (r *Runtime) jitCallResult(f *frame, pc, depth int, v Value, err error) (in
 		switch {
 		case err != nil:
 			return sp, false
-		case v == uninitialized:
+		case v.IsUninitialized():
 			f.pc = in.A
 			return sp, true
 		}
