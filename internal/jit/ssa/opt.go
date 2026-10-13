@@ -192,6 +192,15 @@ func simplify(f *Func, v *Value) *Value {
 			same = a
 		}
 		return same
+	case OpElemStore:
+		// A number stored as one: its element's number word alone, the
+		// cells it was checked against no store of a pointer's.
+		if x := arg(2); x.Op == OpBoxF64 {
+			array, key := arg(0), arg(1)
+			v.Op, v.Args = OpElemWrite, f.refsOf(3)
+			v.Args[0], v.Args[1], v.Args[2] = array, key, x.Args[0]
+		}
+		return nil
 	case OpUnboxF64:
 		switch a := arg(0); {
 		case a.Op == OpBoxF64:

@@ -128,6 +128,12 @@ func compare(t *testing.T, p *ir.Program, f *Func, pc int, slots []ir.Value, pol
 	entry := pc
 	for round := 0; ; round++ {
 		got, err = EvaluateArrays(f, entry, y, hy.views, poll)
+		if errors.Is(err, ErrUnsupported) {
+			// A store SSA makes where the slot IR leaves it to Go, of a
+			// reference into an element, which the model does not make:
+			// the VM's tests check it.
+			return false
+		}
 		if err != nil {
 			t.Fatalf("ssa from pc %d: %v\n%s", entry, err, f)
 		}

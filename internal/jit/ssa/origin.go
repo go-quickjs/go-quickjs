@@ -287,7 +287,7 @@ func checkStoreChecks(f *Func) {
 	var made [][]*Value
 	for _, b := range f.Blocks {
 		for _, v := range b.Values {
-			if v.Op == OpPropWrite {
+			if storeChecked(v) != 0 {
 				made = append(made, slices.Clone(v.Args))
 			}
 		}
@@ -297,14 +297,26 @@ func checkStoreChecks(f *Func) {
 	i := 0
 	for _, b := range f.Blocks {
 		for _, v := range b.Values {
-			if v.Op == OpPropWrite {
+			if n := storeChecked(v); n != 0 {
 				if !slices.Equal(v.Args, made[i]) {
-					panic(fmt.Sprintf("ssa: %v's checks %v, made afresh %v", v, made[i][2:], v.Args[2:]))
+					panic(fmt.Sprintf("ssa: %v's checks %v, made afresh %v", v, made[i][n:], v.Args[n:]))
 				}
 				i++
 			}
 		}
 	}
+}
+
+// storeChecked is how many operands precede a store's checks: a store to
+// a heap cell (OpPropWrite, OpElemStore); 0 for any other value.
+func storeChecked(v *Value) int {
+	switch v.Op {
+	case OpPropWrite:
+		return 2
+	case OpElemStore:
+		return 3
+	}
+	return 0
 }
 
 // storeChecksAt is storeChecks with what is live across the stores.
@@ -314,20 +326,22 @@ func storeChecksAt(f *Func, stores []*Value, live [][]*Value) {
 	// plus its index: each is made once.
 	var added []int
 	for i, s := range stores {
-		if s.Op != OpPropWrite || len(live[i]) == 0 {
+		n := storeChecked(s)
+		if n == 0 || len(live[i]) == 0 {
 			continue
 		}
 		if added == nil {
 			added = f.ints(f.nextID)
 		}
-		for _, c := range s.Args[2:] {
+		for _, c := range s.Args[n:] {
 			if c.ID < len(added) {
 				added[c.ID] = i + 1
 			}
 		}
 		for _, c := range live[i] {
 			sh := c.Shadow
-			if !a.may(s.Key, sh) || sh.ID < len(added) && added[sh.ID] == i+1 || sh.ID >= len(added) && slices.Contains(s.Args[2:], sh) {
+			may := s.Op == OpElemStore && a.mayElem(sh) || s.Op == OpPropWrite && a.may(s.Key, sh)
+			if !may || sh.ID < len(added) && added[sh.ID] == i+1 || sh.ID >= len(added) && slices.Contains(s.Args[n:], sh) {
 				continue
 			}
 			s.Args = f.appendValue(s.Args, sh)
@@ -649,6 +663,23 @@ func (a *aliases) mayOwnCell(call, s *Value) bool {
 	return false
 }
 
+// mayElem reports whether a store to an element (OpElemStore) may write
+// the cell at s: an element's, which any element store may be, whatever
+// its array -- none but an element's, as a property store writes none.
+func (a *aliases) mayElem(s *Value) bool {
+	switch s.Op {
+	case OpElemCell:
+		return true
+	case OpPropCell, OpGlobalCell, OpLexCell, OpBindingCell, OpStringProp, OpStringMethod, OpConstSource, OpConstCell,
+		OpCallCell, OpUpvalueCell, OpLocalCell:
+		return false
+	case OpKeep, OpPhi:
+		sum := a.sum(s)
+		return sum.all || sum.elem
+	}
+	return true
+}
+
 // mayElemCell reports whether the cell at s may be an element's, or the
 // result cell of call, which pops an element (popsElement).
 func (a *aliases) mayElemCell(call, s *Value) bool {
@@ -695,7 +726,7 @@ func liveAcrossSets(f *Func) ([]*Value, [][]*Value) {
 	for _, b := range f.Blocks {
 		for _, v := range b.Values {
 			switch {
-			case v.Op == OpPropWrite, v.Op == OpCall && v.Calls() != nil:
+			case v.Op == OpPropWrite, v.Op == OpElemStore, v.Op == OpCall && v.Calls() != nil:
 				stores = append(stores, v)
 			case v.Type == Tagged && v.Shadow != nil:
 				// A kept value's too: while the collector marks, it is still
@@ -845,11 +876,11 @@ func liveAcrossSets(f *Func) ([]*Value, [][]*Value) {
 func clearStoreChecks(f *Func) {
 	for _, b := range f.Blocks {
 		for _, v := range b.Values {
-			if v.Op == OpPropWrite {
-				for _, a := range v.Args[2:] {
+			if n := storeChecked(v); n != 0 {
+				for _, a := range v.Args[n:] {
 					a.Uses--
 				}
-				v.Args = v.Args[:2]
+				v.Args = v.Args[:n]
 			}
 		}
 	}

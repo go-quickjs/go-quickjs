@@ -54,8 +54,11 @@ func keepAcrossStores(f *Func) (bool, []*Value, [][]*Value) {
 		// its operands' pointer words before the callee runs, as a store
 		// reads the value it stores.
 		key, read := anyKey, s.Args
-		if s.Op == OpPropWrite {
+		switch s.Op {
+		case OpPropWrite:
 			key, read = s.Key, s.Args[1:2]
+		case OpElemStore:
+			read = s.Args[2:3]
 		}
 		alias := false
 		for _, c := range live[i] {
@@ -71,6 +74,10 @@ func keepAcrossStores(f *Func) (bool, []*Value, [][]*Value) {
 			}
 			if s.Op == OpCall {
 				alias = alias || c.Op != OpKept && a.mayCall(s, c.Shadow)
+				continue
+			}
+			if s.Op == OpElemStore {
+				alias = alias || c.Op != OpKept && a.mayElem(c.Shadow)
 				continue
 			}
 			alias = alias || c.Op != OpKept && a.may(key, c.Shadow)

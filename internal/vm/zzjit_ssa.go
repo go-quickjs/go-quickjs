@@ -2111,6 +2111,10 @@ func jitHostCall(ctx *abi.Context) bool {
 		o := *(**Object)(unsafe.Pointer(&ctx.GoArgs[0].Ref))
 		k, v := math.Float64frombits(ctx.GoArgs[1].Num), Float(math.Float64frombits(ctx.GoArgs[2].Num))
 		return o != nil && jitStoreElem(o, k, v)
+	case ssa.GoElemStore:
+		// Any value, by its words, which its source keeps alive.
+		o := *(**Object)(unsafe.Pointer(&ctx.GoArgs[0].Ref))
+		return o != nil && jitStoreElem(o, math.Float64frombits(ctx.GoArgs[1].Num), jitGoArg(ctx, 2))
 	case ssa.GoTypedRead:
 		o := *(**Object)(unsafe.Pointer(&ctx.GoArgs[0].Ref))
 		v, ok := jitTypedRead(o, math.Float64frombits(ctx.GoArgs[1].Num))

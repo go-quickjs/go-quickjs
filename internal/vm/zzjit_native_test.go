@@ -5947,17 +5947,18 @@ func TestJITSSANativeCallResumes(t *testing.T) {
 
 // A value read from an element and used after a native call is kept across
 // it, as one read from a property is: the callee may write the element.
-// put leaves native code for Go to store, after which f goes on natively
-// with x, which a[0] no longer holds -- until put, which always leaves, is
-// left to Go; take pops natively the element g's x came from.
+// put stores natively into the element f's x came from, then leaves native
+// code at an accessor's read, after which f goes on natively with x, which
+// a[0] no longer holds -- until put, which always leaves, is left to Go;
+// take pops natively the element g's x came from.
 func TestJITSSAElementsKeptAcrossCalls(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	setup := `var A={v:3},B={v:5};
-		function put(a,i){a[0]=(i&1)?B:A;return i&1}
+	setup := `var A={v:3},B={v:5},L={a:0,get n(){return String(this.a).length}};
+		function put(a,i){a[0]=(i&1)?B:A;L.a=i;return L.n&1}
 		function f(a,n){let t=0;for(let i=0;i<n;i++){const x=a[0];t=(t+put(a,i))|0;t=(t*3+x.v)|0}return t}
 		function take(a){return a.pop()}
 		function g(a,n){let t=0;for(let i=0;i<n;i++){const x=a[a.length-1];const y=take(a);a.push((i&1)?A:B);t=(t*3+x.v+(x===y?1:0))|0}return t}`

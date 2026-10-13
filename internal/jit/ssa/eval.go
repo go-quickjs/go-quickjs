@@ -574,6 +574,25 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 					bits = canonicalNaN
 				}
 				*cell = bits
+			case OpElemStore:
+				// The model's elements are numbers' words: a number stored
+				// over one is modelled, a reference stored or overwritten
+				// is not, which native code stores.
+				view := arrays[a.p]
+				i, ok := index(b.f)
+				if !ok || i >= view.DenseLength || view.Data == nil {
+					return exit(v.State, ir.ExitKind(v.Aux))
+				}
+				cell := (*uint64)(unsafe.Add(view.Data, uintptr(i)*16))
+				x := vals[v.Args[2].ID].t
+				if *cell >= view.NumberLimit || x.Kind != ir.Number {
+					return ir.Exit{}, fmt.Errorf("%w: a reference stored in an element", ErrUnsupported)
+				}
+				bits := x.Bits
+				if math.IsNaN(math.Float64frombits(bits)) {
+					bits = canonicalNaN
+				}
+				*cell = bits
 			case OpElemCell:
 				view := arrays[a.p]
 				i, ok := index(b.f)

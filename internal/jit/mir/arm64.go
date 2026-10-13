@@ -3265,6 +3265,111 @@ func (c *a64Compiler) typedCases(other arm64.Label, each func(kind int32)) {
 	c.a.B(other)
 }
 
+// elemStore stores any value in an Array's element, as amd64's, the
+// value's pointer word in D while the element's cell is found. It uses A,
+// B, C, D, F0 and F1.
+func (c *a64Compiler) elemStore(v *ssa.Value) {
+	x := v.Args[2]
+	stub := c.stubLabel(v.State, exitKind(v.Aux))
+	slow, done := c.a.NewLabel(), c.a.NewLabel()
+	checked := len(v.Args) > 3
+	if c.enc.CallGo == 0 || checked {
+		slow = stub
+	}
+	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
+	typed := c.a.NewLabel()
+	c.typedArray(v.Args[0], typed)
+	words := func() {
+		var w arm64.Reg
+		if remat(x) {
+			c.materialize(x, a64A)
+			w = a64A
+		} else {
+			w = c.gpr(x, a64A)
+		}
+		number, have := c.a.NewLabel(), c.a.NewLabel()
+		if x.Shadow != nil || c.origin.At(x) >= 0 {
+			c.movImm(a64B, abi.NumberLimit)
+			c.a.Cmp(w, a64B, true)
+			c.a.BCond(arm64.LO, number)
+		}
+		c.pointerWord(x, w)
+		c.a.B(have)
+		c.a.Bind(number)
+		c.movImm(a64B, 0)
+		c.a.Bind(have)
+	}
+	words()
+	c.a.MovRR(a64D, a64B)
+	c.index(v.Args[1], fail)
+	c.elementCell(v.Args[0], fail)
+	for _, s := range v.Args[3:] {
+		// As amd64's: only a pointer word there is lost.
+		other := c.a.NewLabel()
+		c.a.Cmp(c.gpr(s, a64B), a64A, true)
+		c.a.BCond(arm64.NE, other)
+		c.a.Load(a64B, a64A, c.enc.RefOffset)
+		c.a.Cbnz(a64B, stub, true)
+		c.a.Bind(other)
+	}
+	scalar, viaGo := c.a.NewLabel(), c.a.NewLabel()
+	c.a.MovRR(a64C, a64D)
+	c.a.Load(a64B, a64A, c.enc.RefOffset)
+	c.a.Op(arm64.Orr, a64B, a64B, a64C, true)
+	c.a.Cbz(a64B, scalar, true)
+	// As amd64's: while the collector marks, Go stores it.
+	c.a.FMovToF(a64F0, c.gpr(x, a64B))
+	c.movImm(a64B, c.enc.WriteBarrier)
+	c.a.LoadU8(a64B, a64B, 0)
+	if c.enc.CallGo == 0 {
+		c.a.Cbnz(a64B, stub, false)
+	} else {
+		c.a.Cbnz(a64B, viaGo, false)
+	}
+	c.a.Bind(scalar)
+	c.a.Store(a64A, c.enc.NumOffset, c.gpr(x, a64B))
+	c.a.Store(a64A, c.enc.RefOffset, a64C)
+	c.a.Bind(done)
+	c.cold = append(c.cold, func() {
+		// A typed array's element: a number stored natively, as amd64's.
+		c.a.Bind(typed)
+		var tw arm64.Reg
+		if remat(x) {
+			c.materialize(x, a64A)
+			tw = a64A
+		} else {
+			tw = c.gpr(x, a64A)
+		}
+		c.movImm(a64B, abi.NumberLimit)
+		c.a.Cmp(tw, a64B, true)
+		c.a.BCond(arm64.HS, slow)
+		c.a.FMovToF(a64F2, tw)
+		c.typedWrite(v, done, slow, func() arm64.FReg { return a64F2 })
+	})
+	if c.enc.CallGo == 0 {
+		return
+	}
+	c.cold = append(c.cold, func() {
+		c.a.Bind(viaGo)
+		c.goStore(&stub)
+		c.a.B(done)
+		if checked {
+			return
+		}
+		// Any other store Go makes if it can (ssa.GoElemStore).
+		c.a.Bind(slow)
+		size := int32(unsafe.Sizeof(abi.GoArg{}))
+		c.a.Store(a64Ctx, abi.OffGoArgs+c.enc.RefOffset, c.gpr(v.Args[0], a64C))
+		c.a.FMovFromF(a64A, c.fpr(v.Args[1], a64F0))
+		c.a.Store(a64Ctx, abi.OffGoArgs+size+c.enc.NumOffset, a64A)
+		words()
+		c.a.Store(a64Ctx, abi.OffGoArgs+2*size+c.enc.RefOffset, a64B)
+		c.a.Store(a64Ctx, abi.OffGoArgs+2*size+c.enc.NumOffset, c.gpr(x, a64A))
+		c.goSaving(uint64(ssa.GoElemStore), &stub)
+		c.a.B(done)
+	})
+}
+
 // typedRead reads a typed array's element into F0, as amd64's.
 func (c *a64Compiler) typedRead(v *ssa.Value, done arm64.Label) {
 	stub := c.stubLabel(v.State, exitKind(v.Aux))
@@ -3314,11 +3419,12 @@ func (c *a64Compiler) typedRead(v *ssa.Value, done arm64.Label) {
 }
 
 // typedWrite stores a number in a typed array's element, as amd64's.
-func (c *a64Compiler) typedWrite(v *ssa.Value, done, slow arm64.Label) {
+// The value is in the register value gives, a double.
+func (c *a64Compiler) typedWrite(v *ssa.Value, done, slow arm64.Label, value func() arm64.FReg) {
 	fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
 	c.typedElement(v.Args[0], v.Args[1], true, fail)
 	c.typedCases(slow, func(kind int32) {
-		x := c.fpr(v.Args[2], a64F0)
+		x := value()
 		switch kind {
 		case abi.ElemFloat64:
 			c.a.StoreF(a64A, 0, x)
@@ -3664,6 +3770,8 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.elementCell(arg(0), fail)
 		c.a.Bind(done)
 		c.setG(v, a64A)
+	case ssa.OpElemStore:
+		c.elemStore(v)
 	case ssa.OpElemWrite:
 		done, typed := c.a.NewLabel(), c.a.NewLabel()
 		slow := c.stubLabel(v.State, exitKind(v.Aux))
@@ -3686,7 +3794,7 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		fail := func(cond arm64.Cond) { c.a.BCond(cond, slow) }
 		c.cold = append(c.cold, func() {
 			c.a.Bind(typed)
-			c.typedWrite(v, done, slow)
+			c.typedWrite(v, done, slow, func() arm64.FReg { return c.fpr(v.Args[2], a64F0) })
 		})
 		c.typedArray(arg(0), typed)
 		c.index(arg(1), fail)

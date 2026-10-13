@@ -3521,6 +3521,139 @@ func (c *compiler) typedCases(other amd64.Label, each func(kind int32)) {
 	c.a.Jmp(other)
 }
 
+// elemStore stores any value in an Array's element (OpElemStore), as
+// propStore stores one in a property: the element there and not a hole,
+// the cells the store's checks name compared with its cell first, a
+// pointer word written or overwritten left to Go while the collector
+// marks (goStore). What it does not store -- a typed array's element, a
+// hole, past the dense elements -- Go stores (ssa.GoElemStore), or, where
+// the store has checks, a reference live after it read from an element,
+// which Go's store could move as it grows the array, the store exits. It
+// uses every scratch register and xScratch0 to xScratch2.
+func (c *compiler) elemStore(v *ssa.Value) {
+	x := v.Args[2]
+	stub := c.stubLabel(v.State, exitKind(v.Aux))
+	slow, done := c.a.NewLabel(), c.a.NewLabel()
+	checked := len(v.Args) > 3
+	if c.enc.CallGo == 0 || checked {
+		slow = stub
+	}
+	fail := func(cond amd64.Cond) { c.a.Jcc(cond, slow) }
+	typed := c.a.NewLabel()
+	c.typedArray(v.Args[0], typed)
+	// The value's pointer word, as propStore finds it, in xScratch2.
+	var w amd64.Reg
+	if remat(x) {
+		c.materialize(x, scratchA)
+		w = scratchA
+	} else {
+		w = c.gpr(x, scratchA)
+	}
+	number, have := c.a.NewLabel(), c.a.NewLabel()
+	if x.Shadow != nil || c.origin.At(x) >= 0 {
+		c.movImm(scratchB, abi.NumberLimit)
+		c.a.Op(amd64.Cmp, w, scratchB, true)
+		c.a.Jcc(amd64.CondB, number)
+	}
+	c.pointerWord(x, w)
+	c.a.Jmp(have)
+	c.a.Bind(number)
+	c.movImm(scratchB, 0)
+	c.a.Bind(have)
+	c.a.MovQToX(xScratch2, scratchB)
+	// The element's cell, in scratchA.
+	c.index(v.Args[1], fail)
+	c.elementCell(v.Args[0], fail)
+	for _, s := range v.Args[3:] {
+		// A live value read from this cell keeps its pointer word there:
+		// unless it is none, a primitive's (storeChecks).
+		other := c.a.NewLabel()
+		c.a.Op(amd64.Cmp, c.gpr(s, scratchB), scratchA, true)
+		c.a.Jcc(amd64.CondNE, other)
+		c.a.Load(scratchB, scratchA, c.enc.RefOffset)
+		c.a.Op(amd64.Test, scratchB, scratchB, true)
+		c.a.Jcc(amd64.CondNE, stub)
+		c.a.Bind(other)
+	}
+	scalar, viaGo := c.a.NewLabel(), c.a.NewLabel()
+	c.a.MovQFromX(scratchC, xScratch2)
+	c.a.Load(scratchB, scratchA, c.enc.RefOffset)
+	c.a.Op(amd64.Or, scratchB, scratchC, true)
+	c.a.Jcc(amd64.CondE, scalar)
+	// A pointer word written or overwritten: while the collector marks,
+	// Go stores it, with its write barrier.
+	c.a.MovQToX(xScratch0, c.gpr(x, scratchB))
+	c.movImm(scratchB, c.enc.WriteBarrier)
+	c.a.LoadU8(scratchB, scratchB, 0)
+	c.a.Op(amd64.Test, scratchB, scratchB, false)
+	if c.enc.CallGo == 0 {
+		c.a.Jcc(amd64.CondNE, stub)
+	} else {
+		c.a.Jcc(amd64.CondNE, viaGo)
+	}
+	c.a.Bind(scalar)
+	c.a.Store(scratchA, c.enc.NumOffset, c.gpr(x, scratchB))
+	c.a.Store(scratchA, c.enc.RefOffset, scratchC)
+	c.a.Bind(done)
+	c.cold = append(c.cold, func() {
+		// A typed array's element: a number stored natively, converted to
+		// its type, as OpElemWrite stores one.
+		c.a.Bind(typed)
+		var tw amd64.Reg
+		if remat(x) {
+			c.materialize(x, scratchA)
+			tw = scratchA
+		} else {
+			tw = c.gpr(x, scratchA)
+		}
+		c.movImm(scratchB, abi.NumberLimit)
+		c.a.Op(amd64.Cmp, tw, scratchB, true)
+		c.a.Jcc(amd64.CondAE, slow)
+		c.a.MovQToX(xScratch2, tw)
+		c.typedWrite(v, done, slow, func() amd64.XReg { return xScratch2 })
+	})
+	if c.enc.CallGo == 0 {
+		return
+	}
+	c.cold = append(c.cold, func() {
+		c.a.Bind(viaGo)
+		c.goStore(&stub)
+		c.a.Jmp(done)
+		if checked {
+			return
+		}
+		// Any other store Go makes if it can (ssa.GoElemStore): the array,
+		// the key and the value's words in the context's GoArgs.
+		c.a.Bind(slow)
+		size := int32(unsafe.Sizeof(abi.GoArg{}))
+		c.a.Store(regCtx, abi.OffGoArgs+c.enc.RefOffset, c.gpr(v.Args[0], scratchC))
+		c.a.MovQFromX(scratchA, c.xmm(v.Args[1], xScratch0))
+		c.a.Store(regCtx, abi.OffGoArgs+size+c.enc.NumOffset, scratchA)
+		var w amd64.Reg
+		if remat(x) {
+			c.materialize(x, scratchA)
+			w = scratchA
+		} else {
+			w = c.gpr(x, scratchA)
+		}
+		c.a.Store(regCtx, abi.OffGoArgs+2*size+c.enc.NumOffset, w)
+		number, have := c.a.NewLabel(), c.a.NewLabel()
+		if x.Shadow != nil || c.origin.At(x) >= 0 {
+			c.movImm(scratchB, abi.NumberLimit)
+			c.a.Op(amd64.Cmp, w, scratchB, true)
+			c.a.Jcc(amd64.CondB, number)
+		}
+		c.pointerWord(x, w)
+		c.a.Jmp(have)
+		c.a.Bind(number)
+		c.movImm(scratchB, 0)
+		c.a.Bind(have)
+		c.a.Store(regCtx, abi.OffGoArgs+2*size+c.enc.RefOffset, scratchB)
+		c.goSaving(uint64(ssa.GoElemStore), &stub)
+		c.a.Jmp(done)
+	})
+}
+
 // typedRead reads a typed array's element (OpElemRead) into xScratch0,
 // then jumps to done; Go reads one native code does not (ssa.GoTypedRead),
 // which, if it refuses, exits to v's state.
@@ -3576,11 +3709,12 @@ func (c *compiler) typedRead(v *ssa.Value, done amd64.Label) {
 // converted to its type, then jumps to done; what it does not store --
 // a conversion it does not make, a view it does not find in its buffer --
 // goes to slow.
-func (c *compiler) typedWrite(v *ssa.Value, done, slow amd64.Label) {
+// The value is in the register value gives, a double.
+func (c *compiler) typedWrite(v *ssa.Value, done, slow amd64.Label, value func() amd64.XReg) {
 	fail := func(cond amd64.Cond) { c.a.Jcc(cond, slow) }
 	c.typedElement(v.Args[0], v.Args[1], true, fail)
 	c.typedCases(slow, func(kind int32) {
-		x := c.xmm(v.Args[2], xScratch0)
+		x := value()
 		switch kind {
 		case abi.ElemFloat64:
 			c.a.StoreSD(scratchA, 0, x)
@@ -3938,6 +4072,8 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.elementCell(arg(0), fail)
 		c.a.Bind(done)
 		c.setG(v, scratchA)
+	case ssa.OpElemStore:
+		c.elemStore(v)
 	case ssa.OpElemWrite:
 		done, typed := c.a.NewLabel(), c.a.NewLabel()
 		slow := c.stubLabel(v.State, exitKind(v.Aux))
@@ -3961,7 +4097,7 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		fail := func(cond amd64.Cond) { c.a.Jcc(cond, slow) }
 		c.cold = append(c.cold, func() {
 			c.a.Bind(typed)
-			c.typedWrite(v, done, slow)
+			c.typedWrite(v, done, slow, func() amd64.XReg { return c.xmm(v.Args[2], xScratch0) })
 		})
 		c.typedArray(arg(0), typed)
 		c.index(arg(1), fail)

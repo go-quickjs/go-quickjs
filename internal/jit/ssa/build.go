@@ -261,6 +261,9 @@ type GoOp uint8
 // array's pointer word, the key's and the value's number words; Go refuses
 // a store that could run a script or throw.
 //
+// GoElemStore is GoElemWrite for any value (OpElemStore): its third
+// operand is the value, both its words.
+//
 // GoTypedRead is a typed array's element native code does not read
 // (OpElemRead): before Go has looked at the view, or of a type native code
 // does not convert. Go writes it to the first operand's number word, the
@@ -315,6 +318,7 @@ const (
 	GoClosure
 	GoClose
 	GoTypedRead
+	GoElemStore
 )
 
 // RefillsPools reports whether a call takes an object from a pool, which
@@ -2429,11 +2433,15 @@ func (b *builder) instruction(blk *Block, pc int) {
 		guard(OpArrayOf, Ptr, ir.GuardExit, operand(in.Left))
 		guard(OpElemKey, None, ir.GuardExit, number(in.Right, ir.GuardExit))
 	case ir.ArrayWrite:
-		// Go stores what native code does not: a value that is not a
-		// number, or into an element that does not hold one.
+		// Any value, by its words; a number's, once it is known to be one,
+		// as a number (simplify). Go stores what native code does not.
 		array := guard(OpIndexedOf, Ptr, ir.HostExit, operand(in.Left))
-		key, value := number(in.Right, ir.HostExit), number(in.Third, ir.HostExit)
-		guard(OpElemWrite, None, ir.HostExit, array, key, value)
+		key := number(in.Right, ir.HostExit)
+		if o := in.Third; o.Slot < 0 && o.Literal.Kind == ir.Number {
+			guard(OpElemWrite, None, ir.HostExit, array, key, number(o, ir.HostExit))
+			break
+		}
+		guard(OpElemStore, None, ir.HostExit, array, key, operand(in.Third))
 	case ir.StringMethod:
 		cell := guard(OpStringMethod, Source, ir.HostExit, operand(in.Left))
 		v := f.newValue(blk, OpLoadCell, Tagged, cell)

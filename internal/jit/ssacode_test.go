@@ -955,6 +955,12 @@ func nativeMismatch(c *compiled, pc int, slots []ir.Value, poll int, heap testHe
 	}
 	want := append([]ir.Value(nil), slots...)
 	wantExit, err := ssa.EvaluateHeap(f, pc, want, eh.heap(), poll)
+	if errors.Is(err, ssa.ErrUnsupported) {
+		// A run the model does not make -- a reference stored in an
+		// element -- is not compared, as a program the builder refuses is
+		// not compiled; the VM's tests run such code.
+		return ""
+	}
 	if err != nil {
 		return err.Error()
 	}
