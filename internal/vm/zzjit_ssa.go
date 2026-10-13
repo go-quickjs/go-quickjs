@@ -3938,6 +3938,7 @@ func (fb *jitFeedback) EntryGeneric(pc int) bool {
 // code checks the key at that index, and, as the interpreter does, that no
 // script-level lexical binding of the name shadows it (lexShadows). A name
 // that one has, in the realm's global scope, is that binding's (lexGlobal).
+// A module's code reads where its environment's binding is (moduleGlobal).
 func (fb *jitFeedback) Global(pc int) (ssa.GlobalSite, bool) {
 	if fb.cl == nil || pc >= len(fb.fn.Code) {
 		return ssa.GlobalSite{}, false
@@ -3945,12 +3946,15 @@ func (fb *jitFeedback) Global(pc int) (ssa.GlobalSite, bool) {
 	in := fb.fn.Code[pc]
 	write := in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict
 	check := in.Op == bytecode.OpCheckGlobalRef
-	if in.Op != bytecode.OpGetGlobal && !write && !check || int(in.A) >= len(fb.cl.names) {
+	if in.Op != bytecode.OpGetGlobal && in.Op != bytecode.OpGetGlobalOpt && !write && !check || int(in.A) >= len(fb.cl.names) {
 		return ssa.GlobalSite{}, false
 	}
 	name, env := fb.cl.names[in.A], fb.cl.scope()
 	if env == nil {
 		return ssa.GlobalSite{}, false
+	}
+	if !fb.r.isGlobalScope(env) {
+		return fb.moduleGlobal(name, env, in, write, check)
 	}
 	if fb.r.lexShadows(name) {
 		return fb.lexGlobal(name, env, write)
@@ -3991,6 +3995,142 @@ func (fb *jitFeedback) Global(pc int) (ssa.GlobalSite, bool) {
 		}
 	}
 	return site, true
+}
+
+// moduleGlobal is Global's site for name in a module's code, whose scope,
+// env, is the module's environment, as V8 reads a module's variables in its
+// context and an import in its exporter's cell: the bindings are fixed once
+// the module is linked, none added or removed -- nothing but the module's
+// own code reaches the environment -- so a site reads the object that has
+// the binding, at its address (GlobalSite's Holder), with no check that
+// the scope is the one it was compiled for. A binding of the environment's
+// own is read there, before any of a script's lexical bindings, as the
+// interpreter reads it; an import, an accessor, where the binding it names
+// is (jitImportedBinding); and a name the module does not declare where the
+// global object, the environment's prototype, has it, if no script-level
+// lexical binding of the name shadows it. The rest is Go's.
+func (fb *jitFeedback) moduleGlobal(name Atom, env *Object, in bytecode.Instr, write, check bool) (ssa.GlobalSite, bool) {
+	i := int32(-1)
+	if int(in.B) < len(fb.cl.ic) {
+		i = fb.cl.ic[in.B].idx
+	}
+	if i < 0 || int(i) >= len(env.props) || env.props[i].key != name {
+		i = env.findOwn(name)
+	}
+	holder := env
+	shadowable := false
+	switch {
+	case i >= 0 && env.props[i].isAccessor():
+		// An import, which only a read reads: an assignment to one throws.
+		if write || check {
+			return ssa.GlobalSite{}, false
+		}
+		h, key, ok := fb.r.jitImportedBinding(env, name)
+		if !ok {
+			return ssa.GlobalSite{}, false
+		}
+		if i = h.findOwn(key); i < 0 || h.props[i].isAccessor() {
+			return ssa.GlobalSite{}, false
+		}
+		holder, name = h, key
+	case i < 0:
+		g := env.proto
+		if write || check || g == nil || fb.r.lexShadows(name) || proxyOf(g) != nil {
+			return ssa.GlobalSite{}, false
+		}
+		if i = g.findOwn(name); i < 0 || g.props[i].isAccessor() {
+			return ssa.GlobalSite{}, false
+		}
+		holder, shadowable = g, true
+	}
+	p := &holder.props[i]
+	if write && p.flags&propWritable == 0 {
+		return ssa.GlobalSite{}, false
+	}
+	site := ssa.GlobalSite{Key: uint32(name), Index: i, Holder: uintptr(unsafe.Pointer(holder)), Shadowable: shadowable}
+	if !write && !check && p.flags&(propWritable|propConfigurable) == 0 {
+		// A const, or an import of one, once it has its value; or a
+		// global that never changes, undefined, NaN or Infinity.
+		switch {
+		case p.value.IsUndefined() && p.flags&propUninit == 0:
+			site.Fixed, site.Constant = true, ir.Value{Kind: ir.Undefined}
+		case p.value.IsNumber():
+			site.Fixed, site.Constant = true, ir.Float(p.value.Number())
+		}
+	}
+	return site, true
+}
+
+// jitImportedBinding is where the import name binds in a module's
+// environment, env, reads its value: the binding of another module's
+// environment, and its name there, as linking resolved it (bindImport,
+// resolveExport) -- found again here, from the modules loaded already, and
+// asking the host nothing; or false where it is not one this finds, a
+// namespace's export or one a star re-exports, which Go reads.
+func (r *Runtime) jitImportedBinding(env *Object, name Atom) (*Object, Atom, bool) {
+	var m *Module
+	for _, x := range r.modules {
+		if x.env == env {
+			m = x
+			break
+		}
+	}
+	if m == nil {
+		return nil, 0, false
+	}
+	local := r.atoms.name(name)
+	// The binding local of m is an import: where its module exports what
+	// it names, re-exported along the way or not; and that is m's own
+	// binding, or another import, followed in turn. A cycle, or a chain
+	// past the steps, is Go's.
+	for range 16 {
+		i := slices.IndexFunc(m.imports, func(imp moduleImport) bool { return imp.local == local })
+		if i < 0 {
+			if m.env == env {
+				return nil, 0, false
+			}
+			return m.env, r.atoms.intern(local), true
+		}
+		imp := m.imports[i]
+		if imp.namespace {
+			return nil, 0, false
+		}
+		src, want := r.jitLoadedModule(m, imp.specifier), imp.imported
+		if imp.isDefault {
+			want = "default"
+		}
+		for range 16 {
+			if src == nil {
+				return nil, 0, false
+			}
+			exported, ok := src.exports[want]
+			if !ok || strings.HasPrefix(exported, nsExportPrefix) {
+				return nil, 0, false
+			}
+			spec, imported, indirect := indirectSource(exported)
+			if !indirect {
+				m, local = src, exported
+				break
+			}
+			// export { x } from "...".
+			src, want = r.jitLoadedModule(src, spec), imported
+		}
+		if src == nil || m != src {
+			return nil, 0, false
+		}
+	}
+	return nil, 0, false
+}
+
+// jitLoadedModule is the module m's request of specifier loaded, as
+// resolvedNameOf finds it without asking the host, or nil.
+func (r *Runtime) jitLoadedModule(m *Module, specifier string) *Module {
+	plain, _ := bytecode.SplitDeferRequest(specifier)
+	plain, _ = bytecode.SplitSourceRequest(plain)
+	if bare, typ := bytecode.SplitModuleRequest(plain); typ != "" || bare != specifier {
+		return nil
+	}
+	return r.requested[[2]string{m.Specifier, specifier}]
 }
 
 // lexGlobal is Global's site for a script-level lexical binding of name,

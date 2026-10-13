@@ -66,7 +66,8 @@ function read(o) { return o.x }`
 	p := printer{w: &out, jit: true}
 	p.function(fn, "")
 	for _, want := range []string{
-		"jit IR: refused: jit: top-level or module code",
+		// Top-level code is compiled for its loops, which this has none of.
+		"top level\n  jit IR: refused: jit: host operations without native loop or array work",
 		"jit IR: eligible (this tool does not compile or execute native code)",
 		"jit slots: 3 locals + 6 operands",
 		"jit exit: pc=6 depth=0",

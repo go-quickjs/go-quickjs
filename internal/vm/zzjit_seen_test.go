@@ -35,8 +35,13 @@ func TestJITSSADeepChainsSeenByTheInterpreter(t *testing.T) {
 		K0.prototype.w=5;
 		var ks=[K2,K3,K4,K2],objs=[];
 		function deep(n){let t=0;for(let i=0;i<n;i++){const o=objs[i];o.strength=i;t=(t+o.strength+o.w)|0}return t}`
-	// The objects, made at the top level, which is never compiled.
-	src := `objs=[];for(var i=0;i<6000;i++)objs.push(new ks[i&3]());String(deep(6000))`
+	// The objects, made at the top level, whose code is compiled for its
+	// loop and again for what it inlines: deep's compiles are what is
+	// counted. deep is called from a script of its own, which, with no
+	// loop, the interpreter runs: compiled top-level code would call it
+	// natively before the existing tiers had run it.
+	src := `objs=[];for(var i=0;i<6000;i++)objs.push(new ks[i&3]())`
+	call := `String(deep(6000))`
 	want := New(Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := New(Config{JIT: true})
@@ -48,13 +53,15 @@ func TestJITSSADeepChainsSeenByTheInterpreter(t *testing.T) {
 	}
 	cl := r.global.getOwn(r.atoms.intern("deep")).value.Object().fn().closure
 	for i := range 2 {
-		wv, err := want.Run(compileForTest(t, src))
-		if err != nil {
-			t.Fatal(err)
-		}
-		gv, err := r.Run(compileForTest(t, src))
-		if err != nil {
-			t.Fatal(err)
+		var wv, gv Value
+		for _, src := range []string{src, call} {
+			var err error
+			if wv, err = want.Run(compileForTest(t, src)); err != nil {
+				t.Fatal(err)
+			}
+			if gv, err = r.Run(compileForTest(t, src)); err != nil {
+				t.Fatal(err)
+			}
 		}
 		if got, want := gv.String().Go(), wv.String().Go(); got != want {
 			t.Fatalf("round %d: got %s, interpreter %s", i, got, want)
@@ -63,8 +70,14 @@ func TestJITSSADeepChainsSeenByTheInterpreter(t *testing.T) {
 		if e == nil || e.ssa == nil || e.entrySlow {
 			t.Fatalf("round %d: deep did not run natively", i)
 		}
-		if r.jit.reoptimized != 0 {
-			t.Fatalf("round %d: deep was compiled %d times more", i, r.jit.reoptimized)
+		top := uint64(0)
+		for k, x := range r.jit.cache {
+			if fn := k.Value(); fn != nil && fn.TopLevel {
+				top += uint64(x.reopts) + uint64(x.inlineReopts) + uint64(x.upgradeReopts)
+			}
+		}
+		if n := r.jit.reoptimized - top; n != 0 {
+			t.Fatalf("round %d: deep was compiled %d times more", i, n)
 		}
 		if n := e.ssaStats.hosts + e.ssaStats.guards; n != 0 {
 			t.Fatalf("round %d: deep left native code %d times", i, n)

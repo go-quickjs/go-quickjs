@@ -440,7 +440,7 @@ func localKey(slot int) uint32 { return ^uint32(2) - uint32(slot) }
 // may reports whether a store through key may write the cell at s.
 func (a *aliases) may(key uint32, s *Value) bool {
 	switch s.Op {
-	case OpPropCell, OpGlobalCell, OpLexCell, OpStringProp:
+	case OpPropCell, OpGlobalCell, OpLexCell, OpBindingCell, OpStringProp:
 		return key == anyKey || s.Key == key
 	case OpElemCell:
 		// No property store writes an element; a call's callee may, or

@@ -177,6 +177,100 @@ func TestJITImport(t *testing.T) {
 	}
 }
 
+// Top-level code -- a script's, a module's, an indirect eval's -- runs
+// natively from its loops, as V8 enters it by on-stack replacement: its
+// globals, script-level lexical bindings and a module's bindings read where
+// they are, an import in its exporter's binding. Declarations between loops
+// go on natively; a direct eval's code, which reads its caller's scopes,
+// stays in the interpreter.
+func TestJITTopLevel(t *testing.T) {
+	cases := []struct {
+		name    string
+		scripts []string
+		modules map[string]string
+	}{
+		{name: "globals", scripts: []string{`var g = 0; let l = 1; const c = 2;
+			for (let i = 0; i < 3000; i++) { g += i * c; l = (l + g) % 1000003 }
+			var out = g + ":" + l`}},
+		{name: "declarations between loops", scripts: []string{`let a = []; for (let i = 0; i < 3000; i++) a.push(i * 2);
+			let t = 0; for (const v of a) t += v;
+			class P { constructor(x) { this.x = x } }
+			const ps = []; for (let i = 0; i < 3000; i++) ps.push(new P(i));
+			let u = 0; for (const p of ps) u += p.x;
+			var out = t + ":" + u`}},
+		{name: "this and closures", scripts: []string{`this.k = 0; function f(x) { return x + 1 }
+			let t = 0; for (let i = 0; i < 3000; i++) { const h = () => i; this.k += h(); t = f(t) }
+			var out = this.k + ":" + t`}},
+		{name: "temporal dead zone", scripts: []string{`let caught = 0;
+			for (let i = 0; i < 3000; i++) { try { if (later > 0) caught-- } catch (e) { caught += e instanceof ReferenceError ? 1 : 0 } }
+			let later = 1; var out = caught`}},
+		{name: "throw and catch", scripts: []string{`let n = 0;
+			for (let i = 0; i < 3000; i++) { try { if (i % 7 == 0) throw new Error("x" + i); n++ } catch (e) { n += e.message.length } }
+			var out = n`}},
+		{name: "a later script's loop", scripts: []string{`let shared = 5; var base = 3;`,
+			`let s = 0; for (let i = 0; i < 3000; i++) s += shared * base + i; var out = s`}},
+		{name: "indirect and direct eval", scripts: []string{`var out = (0, eval)("var q = 0; for (let i = 0; i < 3000; i++) q += i; q");
+			function f() { var p = 1; eval("for (var i = 0; i < 3000; i++) p += i"); return p }
+			out += ":" + f()`}},
+		{name: "module bindings", modules: map[string]string{"main.mjs": `let m = 0; export let e = 1; var v = 2; const k = 3;
+			for (let i = 0; i < 3000; i++) { m += i * k; e = m % 7; v++ }
+			globalThis.out = m + ":" + e + ":" + v`}},
+		{name: "imports", modules: map[string]string{
+			"a.mjs": `export let counter = 0; export const K = 7; export function bump() { counter++ } export default 11;`,
+			"b.mjs": `export { counter as c, K } from "./a.mjs"; import d from "./a.mjs"; export { d };`,
+			"main.mjs": `import { counter, K, bump } from "./a.mjs"; import { c, K as K2, d } from "./b.mjs"; import def, * as ns from "./a.mjs";
+				let s = 0; for (let i = 0; i < 3000; i++) { s += K + K2 + d + def + ns.K + (i % 3); if (i % 100 == 0) bump(); s += counter + c }
+				globalThis.out = s + ":" + counter`}},
+		{name: "globals from a module", scripts: []string{`var fromScript = 4; let lexical = 6;`},
+			modules: map[string]string{"main.mjs": `let s = 0; for (let i = 0; i < 3000; i++) s += Math.max(i % 5, 2) + fromScript + lexical + (typeof undefined === "undefined" ? 1 : 0);
+				globalThis.out = s`}},
+		{name: "a cycle's binding before it is initialized", modules: map[string]string{
+			"a.mjs": `import "./b.mjs"; export let late = 1;`,
+			"b.mjs": `import { late } from "./a.mjs"; let caught = 0;
+				for (let i = 0; i < 3000; i++) { try { caught -= late } catch (e) { caught += e instanceof ReferenceError ? 1 : 0 } }
+				globalThis.out = caught;`,
+			"main.mjs": `import "./a.mjs";`}},
+		{name: "top-level await", modules: map[string]string{"main.mjs": `let s = 0;
+			for (let i = 0; i < 3000; i++) { s += i; if (i % 1000 == 0) s += await i }
+			globalThis.out = s`}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			run := func(opts ...quickjs.Option) (string, vm.JITStats) {
+				r := quickjs.New(opts...)
+				defer r.Close()
+				for _, src := range tc.scripts {
+					if _, err := r.Eval(src); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if tc.modules != nil {
+					r.SetModuleLoader(func(specifier, referrer string) (string, string, error) {
+						name := strings.TrimPrefix(specifier, "./")
+						return tc.modules[name], name, nil
+					})
+					ns, err := r.EvalModule("main.mjs", tc.modules["main.mjs"])
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err := ns.Await(context.Background()); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return evalString(t, r, "String(out)"), hostaccess.VM(r).JITStats()
+			}
+			want, _ := run()
+			got, st := run(quickjs.WithJIT())
+			if got != want {
+				t.Fatalf("jit: %s, interpreter: %s", got, want)
+			}
+			if st.Budget != 0 && st.SSAEntries == 0 {
+				t.Errorf("nothing ran natively: %+v", st)
+			}
+		})
+	}
+}
+
 // A for...of step the JIT makes by a call of Go runs the iterator's next,
 // which may assign a binding the loop's function captured: the loop reads
 // it again after each step, as the interpreter does, rather than the value

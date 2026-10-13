@@ -3286,25 +3286,32 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 	case ssa.OpPropCell:
 		c.property(v, c.guardFor(v))
 		c.setG(v, scratchA)
-	case ssa.OpGlobalCell:
+	case ssa.OpGlobalCell, ssa.OpBindingCell:
 		// No script-level lexical binding of the name, which would shadow
 		// it: its bit clear, or past the set's words. Then the binding
-		// where it was, the name's, and plain, initialized data.
-		unshadowed := c.a.NewLabel()
-		word := int32(v.Key >> 6)
-		c.a.Load(scratchB, regCtx, abi.OffLexNames)
-		c.a.Load(scratchA, scratchB, 8)
-		c.a.OpImm(amd64.Cmp, scratchA, word, true)
-		c.a.Jcc(amd64.CondBE, unshadowed)
-		c.a.Load(scratchB, scratchB, 0)
-		c.a.Load(scratchB, scratchB, word*8)
-		c.movImm(scratchA, 1<<(v.Key&63))
-		c.a.Op(amd64.Test, scratchB, scratchA, true)
-		guard(amd64.CondNE)
-		c.a.Bind(unshadowed)
-		c.a.Load(scratchA, regCtx, abi.OffGlobal)
-		c.a.Op(amd64.Test, scratchA, scratchA, true)
-		guard(amd64.CondE)
+		// where it was, the name's, and plain, initialized data: in the
+		// scope's object, or in the one the VM keeps at Const's address.
+		if v.Op == ssa.OpGlobalCell || v.Global {
+			unshadowed := c.a.NewLabel()
+			word := int32(v.Key >> 6)
+			c.a.Load(scratchB, regCtx, abi.OffLexNames)
+			c.a.Load(scratchA, scratchB, 8)
+			c.a.OpImm(amd64.Cmp, scratchA, word, true)
+			c.a.Jcc(amd64.CondBE, unshadowed)
+			c.a.Load(scratchB, scratchB, 0)
+			c.a.Load(scratchB, scratchB, word*8)
+			c.movImm(scratchA, 1<<(v.Key&63))
+			c.a.Op(amd64.Test, scratchB, scratchA, true)
+			guard(amd64.CondNE)
+			c.a.Bind(unshadowed)
+		}
+		if v.Op == ssa.OpBindingCell {
+			c.movImm(scratchA, v.Const.Bits)
+		} else {
+			c.a.Load(scratchA, regCtx, abi.OffGlobal)
+			c.a.Op(amd64.Test, scratchA, scratchA, true)
+			guard(amd64.CondE)
+		}
 		c.a.Load(scratchB, scratchA, c.enc.ObjectProps+8)
 		c.a.OpImm(amd64.Cmp, scratchB, int32(v.Index), true)
 		guard(amd64.CondBE)

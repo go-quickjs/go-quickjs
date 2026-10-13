@@ -424,12 +424,22 @@ func InlineCalls(p *ir.Program) ([]int, bool) {
 // Infinity are, or a const that holds its value -- and Constant is its
 // value then: the read checks the binding is still where it was, and uses
 // the constant.
+//
+// Holder, for a read, is the address of the object that has the binding,
+// where it is not the scope's (abi.Context's Global): the module an import
+// names its binding in, or the global object, for a global a module's code
+// reads, which its environment, whose bindings are fixed, does not have.
+// The VM keeps the object as long as the code. Shadowable says a
+// script-level lexical binding of the name would shadow it, as for the
+// global object's.
 type GlobalSite struct {
-	Key      uint32
-	Index    int32
-	Lexical  bool
-	Fixed    bool
-	Constant ir.Value
+	Key        uint32
+	Index      int32
+	Lexical    bool
+	Fixed      bool
+	Constant   ir.Value
+	Holder     uintptr
+	Shadowable bool
 }
 
 // PropertySite is a property site: its key, the VM's atom; and, if the
@@ -1489,10 +1499,24 @@ func shifted(in ir.Instruction, base int) ir.Instruction {
 
 // cell is the op that finds the site's binding.
 func (s GlobalSite) cell() Op {
-	if s.Lexical {
+	switch {
+	case s.Holder != 0:
+		return OpBindingCell
+	case s.Lexical:
 		return OpLexCell
 	}
 	return OpGlobalCell
+}
+
+// globalCell is the guard that finds the site's binding, exiting as kind
+// says where it is not there.
+func (b *builder) globalCell(site GlobalSite, guard func(Op, Type, ir.ExitKind, ...*Value) *Value, kind ir.ExitKind) *Value {
+	cell := guard(site.cell(), Source, kind)
+	cell.Index, cell.Key = int(site.Index), site.Key
+	if site.Holder != 0 {
+		cell.Const, cell.Global = ir.Value{Bits: uint64(site.Holder)}, site.Shadowable
+	}
+	return cell
 }
 
 // global is the feedback for a global read at pc, if any.
@@ -2374,8 +2398,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 		if site.Fixed {
 			kind = ir.GuardExit
 		}
-		cell := guard(site.cell(), Source, kind)
-		cell.Index, cell.Key = int(site.Index), site.Key
+		cell := b.globalCell(site, guard, kind)
 		if site.Fixed {
 			k := f.newValue(blk, OpConst, Tagged)
 			k.Const = site.Constant
@@ -2453,8 +2476,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			blk.State.addUse()
 			break
 		}
-		cell := guard(site.cell(), Source, ir.HostExit)
-		cell.Index, cell.Key = int(site.Index), site.Key
+		cell := b.globalCell(site, guard, ir.HostExit)
 		w := guard(OpPropWrite, None, ir.HostExit, cell, operand(in.Left))
 		w.Key, w.Global = site.Key, true
 	case ir.BindingCheck:
@@ -2466,8 +2488,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			blk.State.addUse()
 			break
 		}
-		cell := guard(site.cell(), Source, ir.HostExit)
-		cell.Index, cell.Key = int(site.Index), site.Key
+		b.globalCell(site, guard, ir.HostExit)
 		k := f.newValue(blk, OpConst, Tagged)
 		k.Const = ir.Bool(true)
 		b.assign(in.Dest, blk, k)

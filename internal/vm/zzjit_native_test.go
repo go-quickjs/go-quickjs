@@ -2587,10 +2587,12 @@ func jitFillForTest(t *testing.T, r *Runtime, copyOf func() *bytecode.Function) 
 // cache unchanged, until some is old. What holds no code goes first,
 // young or not: a function's lowering the cache has no entry for, then a
 // refusal remembered.
-// Top-level code is never compiled, and the cache remembers none of it: a
-// loop evaluating thousands of scripts, as test262's BMP tests do, had
-// left as many refusals, which made each compile's room-making scan them
-// all once the budget was full.
+// Top-level code is compiled for its loops, and the cache remembers it only
+// while its script lives: a loop evaluating thousands of scripts, as
+// test262's BMP tests do, had left as many refusals, which made each
+// compile's room-making scan them all once the budget was full. A refusal
+// of top-level code is its closure's, and code compiled for a script goes
+// with it.
 func TestJITNoEntryForTopLevelCode(t *testing.T) {
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	for i := range 300 {
@@ -2598,14 +2600,32 @@ func TestJITNoEntryForTopLevelCode(t *testing.T) {
 		if err != nil || v.Number() != float64(4950*i) {
 			t.Fatalf("script %d: %v, %v", i, v, err)
 		}
-	}
-	if r.jit == nil {
-		return
-	}
-	for k := range r.jit.cache {
-		if fn := k.Value(); fn != nil && (fn.TopLevel || fn.IsModule) {
-			t.Fatalf("an entry for top-level code: %d entries", len(r.jit.cache))
+		// A with statement's names, which lowering refuses.
+		v, err = r.Run(compileForTest(t, fmt.Sprintf(`var d=0;for(let i=0;i<100;i++)with({v:i})d+=v*%d;d`, i)))
+		if err != nil || v.Number() != float64(4950*i) {
+			t.Fatalf("refused script %d: %v, %v", i, v, err)
 		}
+	}
+	if r.jit == nil || r.jit.compiled == 0 {
+		t.Fatal("no top-level code compiled")
+	}
+	for k, e := range r.jit.cache {
+		if fn := k.Value(); fn != nil && fn.TopLevel && e.ssa == nil {
+			t.Fatalf("a refusal of top-level code remembered: %d entries", len(r.jit.cache))
+		}
+	}
+	// A context native code ran in last holds its closure (abi.Context's
+	// Closure) until the next run there: one level's, here.
+	runtime.GC()
+	r.jit.age(r.jit.agedAt + 1)
+	kept := 0
+	for k := range r.jit.cache {
+		if fn := k.Value(); fn != nil && fn.TopLevel {
+			kept++
+		}
+	}
+	if kept > 2 {
+		t.Fatalf("top-level code kept past its script: %d entries", kept)
 	}
 }
 

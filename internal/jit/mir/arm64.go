@@ -3067,21 +3067,29 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 	case ssa.OpPropCell:
 		c.property(v, c.guardFor(v))
 		c.setG(v, a64A)
-	case ssa.OpGlobalCell:
-		unshadowed := c.a.NewLabel()
-		word := int64(v.Key >> 6)
-		c.a.Load(a64B, a64Ctx, abi.OffLexNames)
-		c.a.Load(a64A, a64B, 8)
-		c.a.CmpImm(a64A, word, true)
-		c.a.BCond(arm64.LS, unshadowed)
-		c.a.Load(a64B, a64B, 0)
-		c.a.Load(a64B, a64B, int32(word*8))
-		c.movImm(a64A, 1<<(v.Key&63))
-		c.a.Tst(a64B, a64A, true)
-		guard(arm64.NE)
-		c.a.Bind(unshadowed)
-		c.a.Load(a64A, a64Ctx, abi.OffGlobal)
-		c.a.Cbz(a64A, c.stubLabel(v.State, exitKind(v.Aux)), true)
+	case ssa.OpGlobalCell, ssa.OpBindingCell:
+		// As amd64's: unshadowed, then the binding in the scope's object
+		// or the one at Const's address.
+		if v.Op == ssa.OpGlobalCell || v.Global {
+			unshadowed := c.a.NewLabel()
+			word := int64(v.Key >> 6)
+			c.a.Load(a64B, a64Ctx, abi.OffLexNames)
+			c.a.Load(a64A, a64B, 8)
+			c.a.CmpImm(a64A, word, true)
+			c.a.BCond(arm64.LS, unshadowed)
+			c.a.Load(a64B, a64B, 0)
+			c.a.Load(a64B, a64B, int32(word*8))
+			c.movImm(a64A, 1<<(v.Key&63))
+			c.a.Tst(a64B, a64A, true)
+			guard(arm64.NE)
+			c.a.Bind(unshadowed)
+		}
+		if v.Op == ssa.OpBindingCell {
+			c.movImm(a64A, v.Const.Bits)
+		} else {
+			c.a.Load(a64A, a64Ctx, abi.OffGlobal)
+			c.a.Cbz(a64A, c.stubLabel(v.State, exitKind(v.Aux)), true)
+		}
 		c.a.Load(a64B, a64A, c.enc.ObjectProps+8)
 		c.a.CmpImm(a64B, int64(v.Index), true)
 		guard(arm64.LS)

@@ -1264,12 +1264,6 @@ func (r *Runtime) jitBudget() int {
 // instruction, and the code it emits -- must. It costs a few comparisons
 // and never measures the heap, so a refusal can be cheaply repeated.
 func jitCompiles(fn *bytecode.Function, budget int) bool {
-	// Top-level and module code is never compiled (lowering refuses it):
-	// no entry remembers it, which each script a loop evaluates would
-	// otherwise be.
-	if fn.TopLevel || fn.IsModule {
-		return false
-	}
 	return len(fn.Code)*ir.MaxSlots*8+32<<10 <= budget
 }
 
@@ -1310,11 +1304,6 @@ func (r *Runtime) jitForFunction(fn *bytecode.Function, cl *closure) *jitEntry {
 	}
 	budget := r.jitBudget()
 	if !jitCompiles(fn, budget) {
-		if fn.TopLevel || fn.IsModule {
-			// Refused for good, as before any entry: the runtime has run
-			// the JIT, as a refusal the cache remembered had made it.
-			r.jitState()
-		}
 		return nil
 	}
 	r.jitState()
@@ -1360,6 +1349,22 @@ func (r *Runtime) jitForFunction(fn *bytecode.Function, cl *closure) *jitEntry {
 			}
 		}
 	}
+	if fn.TopLevel {
+		// Top-level code runs once: a refusal is its closure's, for good
+		// unless it is the budget's, not the cache's -- a loop evaluating
+		// thousands of scripts, as test262's BMP tests do, would fill it
+		// with them, and each compile's room-making scan them all once
+		// the budget was full.
+		if cl != nil && !e.deferred {
+			cl.jitRefused = true
+		}
+		if l := s.lowered[key]; l != nil {
+			s.dropLowering(key, l)
+		}
+		s.disown(e)
+		s.settle()
+		return nil
+	}
 	if !s.makeRoom(jitEntryFixed + s.hintGrowth()) {
 		// No room to remember the refusal in, for now.
 		s.disown(e)
@@ -1394,6 +1399,14 @@ func (r *Runtime) tryJITFrame(f *frame) (Value, error, bool) {
 		if f.cl.jitCalls < r.jitCallThreshold {
 			return Undefined, nil, false
 		}
+	}
+	if f.cl.fn.TopLevel {
+		// Top-level code is entered at its loops (tryJITLoop), as V8
+		// enters it only by on-stack replacement: it runs once, and an
+		// entry for each script that runs would be remembered. The
+		// runtime has run the JIT, as it had when the cache refused it.
+		r.jitState()
+		return Undefined, nil, false
 	}
 	return r.tryJITAt(f, 0, 0, false)
 }
@@ -1444,7 +1457,10 @@ func (s *jitState) backEdgeBudget() int {
 // The existing back-edge interrupt budget supplies coarse work feedback.
 // Promotion starts at the completed branch's target, never at function entry.
 func (r *Runtime) tryJITLoop(f *frame, pc uint32, sp int, fullBudget bool) (Value, error, bool) {
-	if !r.jitEnabled || !fullBudget || f.cl.jitRefused || int(r.jitDeoptDepth) == r.frameDepth || f.cl.fn.TopLevel || f.cl.fn.IsModule {
+	if !r.jitEnabled || !fullBudget || f.cl.jitRefused || int(r.jitDeoptDepth) == r.frameDepth || f.cl.fn.TopLevel && f.callee != nil {
+		// A direct eval's code, which runs as its caller's arrow (evalIn),
+		// reads names in its caller's scopes -- a with's object, what an
+		// eval declared -- which native code does not look in.
 		return Undefined, nil, false
 	}
 	if f.cl.jitLoopDelay != 0 {
@@ -1497,12 +1513,6 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr bool) (Value, error, boo
 		return r.runSSA(f, e, pc, depth)
 	}
 	if e == nil {
-		if f.cl.fn.TopLevel || f.cl.fn.IsModule {
-			// Never compiled (jitCompiles): refused for good, as a refusal
-			// the cache remembered was, without an entry.
-			f.cl.jitRefused = true
-			return Undefined, nil, false
-		}
 		// Resource and OS refusals may change. Retry after another warmup,
 		// rather than charging every call for an unsuccessful compilation.
 		f.cl.jitCalls = 0
@@ -1776,14 +1786,15 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 		}
 		switch in.Op {
 		case bytecode.OpPushThis, bytecode.OpGetProp, bytecode.OpSetProp, bytecode.OpCall,
-			bytecode.OpCallMethod, bytecode.OpGetGlobal, bytecode.OpSetGlobal, bytecode.OpSetGlobalStrict,
+			bytecode.OpCallMethod, bytecode.OpGetGlobal, bytecode.OpGetGlobalOpt, bytecode.OpSetGlobal, bytecode.OpSetGlobalStrict,
 			bytecode.OpGetPropThis, bytecode.OpSetIndex, bytecode.OpNewArray,
 			bytecode.OpGetIndex, bytecode.OpNew, bytecode.OpPushConst, bytecode.OpInstanceOf, bytecode.OpTypeOf,
 			bytecode.OpCheckGlobalRef, bytecode.OpAssertResolved, bytecode.OpNewObject, bytecode.OpNewRegExp, bytecode.OpDefineField,
 			bytecode.OpPushEmptyString, bytecode.OpGetUpvalue, bytecode.OpGetUpvalueCheck, bytecode.OpSetUpvalue,
 			bytecode.OpInitUpvalue, bytecode.OpSetUpvalueCheck, bytecode.OpConcat, bytecode.OpNewDisposeCapability, bytecode.OpAddDisposable,
 			bytecode.OpForOfStart, bytecode.OpForInStart, bytecode.OpIterNextOrJump, bytecode.OpIterClose, bytecode.OpIterCloseNormal,
-			bytecode.OpIterResume, bytecode.OpIterUnpackDelegate, bytecode.OpImport, bytecode.OpImportMeta:
+			bytecode.OpIterResume, bytecode.OpIterUnpackDelegate, bytecode.OpImport, bytecode.OpImportMeta,
+			bytecode.OpInitGlobalLex, bytecode.OpInitModuleLex:
 		case bytecode.OpDispose:
 		default:
 			return sp, steps, nil
@@ -1897,6 +1908,10 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 				return sp, steps, err
 			}
 			continue
+		case bytecode.OpInitGlobalLex, bytecode.OpInitModuleLex:
+			sp--
+			r.jitInitLex(f.cl, in, stack[sp])
+			continue
 		case bytecode.OpSetIndex:
 			sp -= 3
 			obj, key, value := stack[sp], stack[sp+1], stack[sp+2]
@@ -1911,6 +1926,8 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 		case bytecode.OpGetGlobal:
 			c := tctx{r: r, f: f, cl: f.cl, locals: f.locals}
 			v, err = r.getGlobalAt(&c, in, pc)
+		case bytecode.OpGetGlobalOpt:
+			v, err = getGlobalOpt(r, f, f.cl, f.cl.names[in.A])
 		case bytecode.OpGetPropThis:
 			recv := stack[sp-1]
 			if recv.IsObject() {
@@ -2010,6 +2027,25 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 		sp++
 	}
 	return sp, steps, nil
+}
+
+// jitInitLex gives a script's or a module's top-level let, const or class
+// its first value, as the interpreter does: top-level code declares one
+// between its loops, where native code goes on past it -- the rest of a
+// script's run would otherwise be the interpreter's.
+func (r *Runtime) jitInitLex(cl *closure, in bytecode.Instr, v Value) {
+	name := cl.names[in.A]
+	if in.Op == bytecode.OpInitGlobalLex {
+		r.globalLex.setOwnRaw(name, v, r.globalLex.getOwn(name).flags)
+		return
+	}
+	if env := cl.scope(); env.getOwn(name) != nil {
+		// Its attributes change, so its layout does.
+		env.layoutChanged()
+		p := env.getOwn(name)
+		p.value = v
+		p.flags &^= propUninit
+	}
 }
 
 // jitConcat is concat as the interpreter does it: every part converted

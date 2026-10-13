@@ -110,6 +110,13 @@ const (
 	// initialized. The bindings are never removed, nor their attributes
 	// changed.
 	OpLexCell // -> source
+	// A binding's cell in an object the VM keeps, at Const's address: the
+	// binding at Index of its table, if it is Key's and plain, initialized
+	// data -- another module's binding a module imported, or a global a
+	// module's code reads (ssa.GlobalSite's Holder). The first's object
+	// gains and loses no binding, the second's, the global object, may: if
+	// Global, no script-level lexical binding of the name shadows it.
+	OpBindingCell // -> source
 	// charCodeAt, as the slot IR's string kernels call it. OpStringMethod is
 	// a string's charCodeAt: the context's cell (abi.Context.CharCodeAt),
 	// if the receiver is a string and the cell holds the intrinsic.
@@ -280,7 +287,7 @@ var opNames = [...]string{
 	OpInvalid: "invalid", OpLoadSlot: "load", OpConst: "const", OpConstF64: "constf", OpConstSource: "consts", OpPhi: "phi",
 	OpUnboxF64: "unbox", OpTruth: "truth", OpCheckInit: "checkinit", OpBoxF64: "boxf", OpBoxBool: "boxb",
 	OpArrayOf: "arrayof", OpElemKey: "elemkey", OpElemRead: "elemread", OpElemWrite: "elemwrite", OpElemCell: "elemcell", OpLength: "length",
-	OpObjectOf: "objectof", OpPropRead: "propread", OpPropWrite: "propwrite", OpPropCell: "propcell", OpLoadCell: "loadcell", OpGlobalCell: "globalcell", OpLexCell: "lexcell",
+	OpObjectOf: "objectof", OpPropRead: "propread", OpPropWrite: "propwrite", OpPropCell: "propcell", OpLoadCell: "loadcell", OpGlobalCell: "globalcell", OpLexCell: "lexcell", OpBindingCell: "bindingcell",
 	OpStringMethod: "stringmethod", OpStringProp: "stringprop", OpStringCode: "stringcode",
 	OpAddF64: "addf", OpSubF64: "subf", OpMulF64: "mulf", OpDivF64: "divf", OpModF64: "modf", OpNegF64: "negf", OpCmpF64: "cmpf",
 	OpNot: "not", OpStrictNullish: "strictnullish", OpLooseNullish: "loosenullish", OpEqTagged: "eqtagged", OpToInt32: "toi32", OpAndI32: "and", OpOrI32: "or", OpXorI32: "xor", OpShlI32: "shl",
@@ -303,7 +310,7 @@ func (o Op) String() string {
 func (o Op) isGuard() bool {
 	switch o {
 	case OpUnboxF64, OpTruth, OpCheckInit, OpModF64, OpArrayOf, OpElemKey, OpElemRead, OpElemWrite, OpElemCell, OpLength,
-		OpObjectOf, OpPropRead, OpPropWrite, OpPropCell, OpGlobalCell, OpLexCell, OpStringMethod, OpStringProp, OpStringCode, OpLooseNullish, OpEqTagged,
+		OpObjectOf, OpPropRead, OpPropWrite, OpPropCell, OpGlobalCell, OpLexCell, OpBindingCell, OpStringMethod, OpStringProp, OpStringCode, OpLooseNullish, OpEqTagged,
 		OpSameObject, OpFrameRoom, OpCall, OpInstanceOf, OpTypeIs, OpCheckTrue, OpPowF64:
 		return true
 	}
@@ -315,7 +322,7 @@ func (o Op) isGuard() bool {
 // (An array's length and an object's shape change only in Go.)
 func (o Op) readsMemory() bool {
 	return o == OpElemRead || o == OpElemWrite || o == OpElemCell || o == OpPropRead || o == OpPropWrite || o == OpPropCell ||
-		o == OpGlobalCell || o == OpLexCell || o == OpStringProp || o == OpKeep || o == OpCall
+		o == OpGlobalCell || o == OpLexCell || o == OpBindingCell || o == OpStringProp || o == OpKeep || o == OpCall
 }
 
 // Value is one SSA value.

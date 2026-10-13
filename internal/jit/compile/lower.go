@@ -154,7 +154,10 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		return nil, refuse(-1, "nil function")
 	}
 	switch {
-	case fn.TopLevel || fn.IsModule:
+	case (fn.TopLevel || fn.IsModule) && (!m.ssa || m.callee):
+		// A script's, a module's or an eval's code is the new pipeline's,
+		// entered at its loops: nothing calls it, and its frame is the
+		// VM's, as V8 enters top-level code only by on-stack replacement.
 		return nil, refuse(-1, "top-level or module code")
 	case (fn.Async || fn.Generator) && (!m.ssa || m.callee):
 		// A generator's or an async function's body is the new pipeline's,
@@ -167,7 +170,8 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		return nil, refuse(-1, "direct eval")
 	case (fn.UsesArguments || fn.MappedArguments) && !m.forward:
 		return nil, refuse(-1, "arguments object")
-	case !fn.HasSimpleParams || fn.HasRest || fn.ParamsAreLexical:
+	case !fn.HasSimpleParams && !fn.TopLevel || fn.HasRest || fn.ParamsAreLexical:
+		// Top-level code has no parameter list, simple or not.
 		return nil, refuse(-1, "non-simple parameters")
 	case len(fn.Code) == 0 || len(fn.Code) > MaxInstructions:
 		return nil, refuse(-1, "instruction budget")
@@ -249,7 +253,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			return nil, refuse(pc, "unsupported opcode "+in.Op.String())
 		}
 		host = host || str || iters || in.Op == bytecode.OpClosure || in.Op == bytecode.OpCloseUpvalues || in.Op == bytecode.OpImport || in.Op == bytecode.OpImportMeta || in.Op == bytecode.OpYield || in.Op == bytecode.OpAwait || in.Op == bytecode.OpThrow ||
-			in.Op == bytecode.OpNewDisposeCapability || in.Op == bytecode.OpAddDisposable || in.Op == bytecode.OpDispose || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpApplyArguments || in.Op == bytecode.OpNew || in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict || in.Op == bytecode.OpCheckGlobalRef || in.Op == bytecode.OpNewObject || in.Op == bytecode.OpNewRegExp || in.Op == bytecode.OpDefineField || in.Op == bytecode.OpPushEmptyString || in.Op == bytecode.OpConcat || in.Op == bytecode.OpNewArray || in.Op == bytecode.OpCall || in.Op == bytecode.OpCallMethod || in.Op == bytecode.OpGetGlobal || in.Op == bytecode.OpGetPropThis || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
+			in.Op == bytecode.OpNewDisposeCapability || in.Op == bytecode.OpAddDisposable || in.Op == bytecode.OpDispose || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpApplyArguments || in.Op == bytecode.OpNew || in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict || in.Op == bytecode.OpCheckGlobalRef || in.Op == bytecode.OpNewObject || in.Op == bytecode.OpNewRegExp || in.Op == bytecode.OpDefineField || in.Op == bytecode.OpPushEmptyString || in.Op == bytecode.OpConcat || in.Op == bytecode.OpNewArray || in.Op == bytecode.OpCall || in.Op == bytecode.OpCallMethod || in.Op == bytecode.OpGetGlobal || in.Op == bytecode.OpGetGlobalOpt || in.Op == bytecode.OpGetPropThis || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		property = property || in.Op == bytecode.OpPushThis || in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 		this = this || in.Op == bytecode.OpPushThis
 		raw := uint32(in.Op)
@@ -1041,6 +1045,12 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 		return effect{delta: 1}, nil
 	case bytecode.OpPushThis, bytecode.OpPushEmptyString:
 		return effect{delta: 1}, nil
+	case bytecode.OpGetGlobalOpt:
+		// typeof's read of a name, which has no site of its own.
+		if uint64(in.A) >= uint64(len(fn.Names)) {
+			return bad("invalid name")
+		}
+		return effect{delta: 1}, nil
 	case bytecode.OpAssertResolved, bytecode.OpDefineField:
 		if uint64(in.A) >= uint64(len(fn.Names)) {
 			return bad("invalid name")
@@ -1273,6 +1283,18 @@ func describe(fn *bytecode.Function, pc int, in bytecode.Instr) (effect, error) 
 			return bad("invalid arguments slot")
 		}
 		return effect{need: 3, delta: -2}, nil
+	case bytecode.OpCheckGlobalVar, bytecode.OpCheckGlobalLex, bytecode.OpDefineGlobalVar, bytecode.OpDeclareGlobalLex, bytecode.OpDeclareModuleLex:
+		// A top-level declaration's: its check, or its binding made.
+		if !fn.TopLevel {
+			return bad("declaration outside top-level code")
+		}
+		return effect{}, nil
+	case bytecode.OpDefineGlobalFunc, bytecode.OpInitGlobalLex, bytecode.OpInitModuleLex:
+		// The function, or the binding's first value, popped.
+		if !fn.TopLevel {
+			return bad("declaration outside top-level code")
+		}
+		return effect{need: 1, delta: -1}, nil
 	}
 	return bad("unsupported opcode " + in.Op.String())
 }
@@ -1399,7 +1421,9 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this bool) ir.Instr
 		return ir.Instruction{Op: ir.ObjectLiteral, Dest: sp}
 	case bytecode.OpDefineField:
 		return ir.Instruction{Op: ir.FieldDefine, Left: ir.Slot(sp - 2), Right: top, Key: in.A}
-	case bytecode.OpGetGlobal:
+	case bytecode.OpGetGlobal, bytecode.OpGetGlobalOpt:
+		// typeof's read is a read where the name is there, Go's where it
+		// is not.
 		return ir.Instruction{Op: ir.BindingRead, Left: ir.Literal(ir.Value{Kind: ir.Opaque}), Dest: sp, Key: in.A}
 	case bytecode.OpPushThis:
 		if !this {
@@ -1563,6 +1587,11 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this bool) ir.Instr
 	case bytecode.OpImport, bytecode.OpImportMeta:
 		// Go's (jitHost): a dynamic import's promise, the module's
 		// import.meta.
+		return ir.Instruction{Op: ir.Host}
+	case bytecode.OpCheckGlobalVar, bytecode.OpCheckGlobalLex, bytecode.OpDefineGlobalVar, bytecode.OpDefineGlobalFunc,
+		bytecode.OpDeclareGlobalLex, bytecode.OpInitGlobalLex, bytecode.OpDeclareModuleLex, bytecode.OpInitModuleLex:
+		// The interpreter's (jitHost leaves it): top-level code's
+		// declarations run before its loops, where native code enters it.
 		return ir.Instruction{Op: ir.Host}
 	case bytecode.OpClosure:
 		// Go's: a closure made on the frame, capturing its locals where

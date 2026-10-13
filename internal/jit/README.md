@@ -119,10 +119,27 @@ the first time, past the parameters -- as the tree tier resumes a tree at
 the block there (`jitResume`, `runGeneratorTree`). A call of one makes its
 object, so none is called natively or inlined.
 
-**Not compiled yet.** Top-level and module code, destructuring from an
-iterator, tail calls and code using private fields run in the tree tier, which handles all of them; the JIT is to
-follow it there. Top-level code is refused before any entry is made
-(`jitCompiles`).
+**Top-level code.** A script's, a module's or an indirect eval's code runs
+once, so it is entered only at its loops, as V8 enters top-level code by
+on-stack replacement: never at its start, and no refusal of it is kept in
+the cache, which a loop evaluating thousands of scripts would fill. Its
+declarations, which come before its loops, are left to the interpreter,
+but for a `let`, `const` or `class` given its first value between two
+loops, which Go gives it and native code goes on. A script's globals and
+its top-level lexical bindings are read and assigned where they are, as a
+function reads them (`ssa.OpGlobalCell`, `OpLexCell`). A module's bindings
+are fixed once it is linked, so its code reads each one in the object that
+has it, at that object's address (`ssa.OpBindingCell`), as V8 reads a
+module's variables in its context and an import in its exporter's cell:
+its own bindings in its environment, an import where the binding it names
+is, found again from the modules already loaded, and a name the module
+does not declare in the global object. An imported `const` is a constant.
+A direct eval's code, which reads its caller's scopes, stays in the
+interpreter.
+
+**Not compiled yet.** Destructuring from an iterator, tail calls and code
+using private fields run in the tree tier, which handles all of them; the
+JIT is to follow it there.
 
 **Profitability.** Each native stretch's work is estimated, exits and
 calls of Go counted against it; code whose stretches do too little between
