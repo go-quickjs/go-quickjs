@@ -184,9 +184,12 @@ level on the rest. The table has the largest gaps either way.
 | `array_slice` | 10.0 ns | 27.3 ns | 0.37x |
 
 `regexp_ascii`, `regexp_utf16` and `bigint256_arith` are 9 to 23% slower
-than at `8d54f7e`, though none of their code changed up to this release.
-Alternated with a build of `775a65d`, one test at a time, they came out 0
-to 10% slower: the placement effect the next paragraph describes.
+than at `8d54f7e`. Their code has changed since only to charge what they
+make to the memory limit (`7906852`, `d98a96e`) and, for BigInts, in the
+trees' slow path (`fde2d78`). Alternated with a build of `775a65d`, one
+test at a time, `4753462` (their code as this release has it) came out 0
+to 10% slower: most of the difference is the placement effect the next
+paragraph describes.
 
 Some of these tests depend on where the linker places the code more than on
 the code, by more than eight placements can average out: those vary where
@@ -265,8 +268,9 @@ What the gap is made of:
   else-if chain, still runs from block to block, which costs less.
 - **Calls.** A call from JavaScript to JavaScript fills in a frame record of
   some fifteen fields, and each pointer it stores pays a write barrier's
-  check. A method call that makes a frame costs about 70 ns here, against
-  about 40 ns in QuickJS. Richards, DeltaBlue and EarleyBoyer are mostly
+  check. A method call whose body needs a frame -- one with a loop, even
+  an empty one -- costs about 76 ns here, against about 69 ns in QuickJS;
+  a method that only returns its argument costs about 55 ns, against 42. Richards, DeltaBlue and EarleyBoyer are mostly
   small calls. Two kinds of function are answered without a frame, where
   nothing they do could call code or throw:
   - one whose whole body is `return this.x`, `return this.x.length`,
@@ -284,9 +288,11 @@ What the gap is made of:
   setter, each global variable read and each `instanceof` remembers where it last found
   what it looked for. The cache is checked in a call rather than where the
   instruction runs, since the interpreter's loop grows slower with every line
-  added to it. A go-quickjs object keeps its keys beside its values, where a
-  QuickJS object holds only its values, but that matters little: making every
-  object 24 bytes larger moved Splay and EarleyBoyer by about 1%.
+  added to it. In this release a go-quickjs object keeps its keys beside
+  its values, where a QuickJS object holds only its values, but that
+  matters little: making every object 24 bytes larger moved Splay and
+  EarleyBoyer by about 1%. Since `944e2e8` the keys are in the shape, as
+  QuickJS keeps them.
 - **Memory management.** QuickJS counts references: an object is freed the
   moment the last reference to it goes, and a cycle collector handles the
   rest. go-quickjs relies on Go's garbage collector. It traces the live heap
@@ -339,9 +345,10 @@ Where go-quickjs is level or ahead:
   its body.
 
 Most of what remains is the cost of a call, which is most of the gap in
-Richards, DeltaBlue and EarleyBoyer, and the cost of a Go indirect call,
+Richards and what is left of it in DeltaBlue, and the cost of a Go indirect call,
 which every instruction or tree node pays. The ways around that which an
-engine in C or with a JIT has are not open to one in Go, as measured here:
+interpreter written in C has are not open to one written in Go, as
+measured here:
 - Running calls in the same loop, rather than a Go call each, made the loop
   slower than the calls it saved.
 - Turning each instruction into a Go closure, instead of a case of the switch,
