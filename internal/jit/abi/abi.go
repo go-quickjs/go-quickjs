@@ -319,23 +319,44 @@ const MaxGoArgs = 16
 type ExitDescriptor struct {
 	Kind, PC, Depth uint32
 	Site            int32
-	Slots           []ExitSlot
-	// Inline are the inlined callees' frames, the outermost first, each in
-	// a context of its own past the code's.
-	Inline []ExitInline
-	// The frame's layout: its locals, from LocalsReg's address; the
-	// receiver's slot, in the context; the captured bindings, through
-	// their cells; and the operands, from StackReg's address. Enc is the
-	// values' encoding, one for all the code's descriptions.
-	FrameLocals, ThisSlot, Locals int32
-	LocalsReg, StackReg           uint8
-	Enc                           *Encoding
+	// Frame is what every description of the code shares: its slots are
+	// Count of Frame's, those Frame.Index lists from Start on (Slot).
+	Frame *ExitFrame
+	Start uint32
+	Count uint16
+	// The frame's locals are at LocalsReg's address, its operands at
+	// StackReg's (ExitFrame's layout).
+	LocalsReg, StackReg uint8
 	// Direct marks a description whose slots may be written one by one:
 	// none takes a reference from another it writes, by its origin or a
 	// source that may be one's address.
 	Direct bool
-	// Words are the constant words its slots' values are (ExitConst).
-	Words []uint64
+	// Inline are the inlined callees' frames, the outermost first, each in
+	// a context of its own past the code's.
+	Inline []ExitInline
+}
+
+// Slot is the description's i'th slot.
+func (d *ExitDescriptor) Slot(i int) *ExitSlot {
+	return &d.Frame.Slots[d.Frame.Index[int(d.Start)+i]]
+}
+
+// ExitFrame is what a code's exit descriptions share: the frame's layout
+// -- its locals, from a description's LocalsReg's address; the receiver's
+// slot, in the context; the captured bindings, through their cells; the
+// operands, from its StackReg's address -- and the values' encoding; the
+// slots the descriptions write, each once, which Index lists for each
+// description by its index in Slots; and the constant words their values
+// are (ExitConst), each once. A function's slots repeat from exit to exit,
+// the same slot at the same register or spill, and its descriptions had
+// been as large as its code, each with every slot it writes and every
+// field of the layout: five slots in six were another's.
+type ExitFrame struct {
+	FrameLocals, ThisSlot, Locals int32
+	Enc                           *Encoding
+	Slots                         []ExitSlot
+	Index                         []uint16
+	Words                         []uint64
 }
 
 // ExitSlot is a slot an exit writes: its value's number word, from Value;

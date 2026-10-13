@@ -140,9 +140,14 @@ func CodeFootprint(c *mir.Code) int {
 
 func footprint(code, entries int, exits []*abi.ExitDescriptor) int {
 	n := code + int(unsafe.Sizeof(SSACode{})) + entries*4 + cap(exits)*8
+	var frame *abi.ExitFrame
 	for _, x := range exits {
-		n += int(unsafe.Sizeof(*x)) + cap(x.Slots)*int(unsafe.Sizeof(abi.ExitSlot{})) +
-			cap(x.Inline)*int(unsafe.Sizeof(abi.ExitInline{})) + cap(x.Words)*8
+		n += int(unsafe.Sizeof(*x)) + cap(x.Inline)*int(unsafe.Sizeof(abi.ExitInline{}))
+		if f := x.Frame; f != frame {
+			// One for the code's descriptions (mir's exitDescriptor).
+			frame = f
+			n += int(unsafe.Sizeof(*f)) + cap(f.Slots)*int(unsafe.Sizeof(abi.ExitSlot{})) + cap(f.Index)*2 + cap(f.Words)*8
+		}
 	}
 	return n
 }

@@ -177,6 +177,7 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 		// Where the jumps shortened before it moved it.
 		entries[pc] = c.a.Moved(at)
 	}
+	c.finishExits()
 	return &Code{Bytes: bytes, Entries: entries, Exits: c.exits, core: c.core}, nil
 }
 

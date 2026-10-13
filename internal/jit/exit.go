@@ -47,19 +47,19 @@ func (s *ExitScratch) Apply(ctx *abi.Context) (refs int) {
 	// The description, which the code keeps alive (Code.Exits), by its
 	// address: a word native code writes, not a pointer the collector sees.
 	d := (*abi.ExitDescriptor)(asPointer((*uint64)(unsafe.Pointer(&ctx.ExitDesc))))
-	f := exitFrame{ctx: ctx, d: d, enc: d.Enc,
+	f := exitFrame{ctx: ctx, d: d.Frame, enc: d.Frame.Enc,
 		locals: asPointer(&ctx.Regs[d.LocalsReg]), stack: asPointer(&ctx.Regs[d.StackReg])}
 	if d.Direct {
 		// No slot's reference comes from another written here.
-		for i := range d.Slots {
-			if at, n, r, ok := f.value(&d.Slots[i]); ok {
+		for i := range int(d.Count) {
+			if at, n, r, ok := f.value(d.Slot(i)); ok {
 				refs += f.write(at, n, r)
 			}
 		}
 	} else {
 		writes := s.writes[:0]
-		for i := range d.Slots {
-			if at, n, r, ok := f.value(&d.Slots[i]); ok {
+		for i := range int(d.Count) {
+			if at, n, r, ok := f.value(d.Slot(i)); ok {
 				writes = append(writes, exitWrite{at, n, r})
 			}
 		}
@@ -72,7 +72,7 @@ func (s *ExitScratch) Apply(ctx *abi.Context) (refs int) {
 	}
 	if len(d.Inline) != 0 {
 		// The callers' frames' first slot, in the VM's stack.
-		first := int64((uintptr(f.stack)-uintptr(ctx.StackBase))/uintptr(f.enc.ValueSize)) - int64(d.Locals)
+		first := int64((uintptr(f.stack)-uintptr(ctx.StackBase))/uintptr(f.enc.ValueSize)) - int64(d.Frame.Locals)
 		next := ctx
 		for _, in := range d.Inline {
 			next = (*abi.Context)(next.Next)
@@ -90,7 +90,7 @@ func (s *ExitScratch) Apply(ctx *abi.Context) (refs int) {
 // registers it saved find it.
 type exitFrame struct {
 	ctx           *abi.Context
-	d             *abi.ExitDescriptor
+	d             *abi.ExitFrame
 	enc           *abi.Encoding
 	locals, stack unsafe.Pointer
 }

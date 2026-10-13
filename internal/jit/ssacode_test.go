@@ -1206,7 +1206,8 @@ func TestWorkspaceCompileAllocations(t *testing.T) {
 
 // What code will hold once placed (CodeFootprint) is what it holds then
 // (SSACode's Footprint): its instructions, as placed, and what describes
-// its entries and every exit, each exit's slots and inlined frames. A
+// its entries and every exit, each exit's inlined frames and the slots
+// they write, each described once for the code. A
 // workspace counts what it keeps for the next compile (Bytes), and the
 // arena what it has mapped.
 func TestCodeFootprint(t *testing.T) {
@@ -1214,7 +1215,7 @@ func TestCodeFootprint(t *testing.T) {
 	var ws ssa.Workspace
 	var mws mir.Workspace
 	arena := NewArena()
-	placed := 0
+	placed, listed, distinct := 0, 0, 0
 	for attempt := 0; attempt < 2000 && placed < 50; attempt++ {
 		p, l := ssaTestProgram(r)
 		if p.Validate() != nil {
@@ -1237,9 +1238,18 @@ func TestCodeFootprint(t *testing.T) {
 			t.Fatal("a workspace in use counts nothing")
 		}
 		want := len(mc.Bytes)
+		var frame *abi.ExitFrame
 		for _, x := range mc.Exits {
-			want += int(unsafe.Sizeof(*x)) + len(x.Slots)*int(unsafe.Sizeof(abi.ExitSlot{})) + len(x.Inline)*int(unsafe.Sizeof(abi.ExitInline{})) +
-				len(x.Words)*8
+			want += int(unsafe.Sizeof(*x)) + len(x.Inline)*int(unsafe.Sizeof(abi.ExitInline{}))
+			listed += int(x.Count)
+			if x.Frame != nil && x.Frame != mc.Exits[0].Frame {
+				t.Fatal("a code's exit descriptions do not share one frame")
+			}
+			if x.Frame != frame {
+				distinct += len(x.Frame.Slots)
+				frame = x.Frame
+				want += int(unsafe.Sizeof(*frame)) + len(frame.Slots)*int(unsafe.Sizeof(abi.ExitSlot{})) + len(frame.Index)*2 + len(frame.Words)*8
+			}
 		}
 		before := CodeFootprint(mc)
 		code, err := NewSSACode(arena, mc)
@@ -1264,6 +1274,13 @@ func TestCodeFootprint(t *testing.T) {
 	}
 	if mapped, live := arena.Mapped(); mapped != 0 || live != 0 {
 		t.Fatalf("empty arena maps %d, %d live", mapped, live)
+	}
+	// Each slot an exit writes is described once in the code's frame
+	// (abi.ExitFrame): exits name the same slot at the same register over
+	// and over.
+	t.Logf("%d slots listed, %d described", listed, distinct)
+	if listed == 0 || 4*distinct > 3*listed {
+		t.Errorf("%d slots described for %d listed by the exits", distinct, listed)
 	}
 }
 

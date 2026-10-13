@@ -175,6 +175,7 @@ func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 	if err != nil {
 		return nil, err
 	}
+	c.finishExits()
 	return &Code{Bytes: bytes, Entries: entries, Exits: c.exits, core: c.core}, nil
 }
 

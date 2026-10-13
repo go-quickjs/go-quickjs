@@ -54,15 +54,15 @@ type core struct {
 	// saves[saveAt[2*ID]:saveAt[2*ID+1]] (savesOf), nil saveAt for none.
 	saves  []saved
 	saveAt []int
-	// exitEnc, exitDescs, exitSlots and exitWords are what exitDescriptor's
-	// descriptions are made from, a compile's encoding shared and the
-	// rest carved from blocks, as the code keeps them all as long: each
-	// block twice the last, up to a limit, so a small function takes
-	// little.
-	exitEnc   *abi.Encoding
+	// exitFrame is what exitDescriptor's descriptions share (abi.ExitFrame),
+	// its slots and words each once, found again by exitSlots and
+	// exitWords; exitDescs are the descriptions, carved from blocks, as
+	// the code keeps them all as long: each block twice the last, up to a
+	// limit, so a small function takes little.
+	exitFrame *abi.ExitFrame
+	exitSlots map[abi.ExitSlot]uint16
+	exitWords map[uint64]int32
 	exitDescs []abi.ExitDescriptor
-	exitSlots []abi.ExitSlot
-	exitWords []uint64
 }
 
 // saved is a register a call saves, and the spill slot it saves it in.
@@ -1205,33 +1205,43 @@ var TableExits = true
 // exitThen's code writes it; or nil where a value is where a description
 // cannot say, and the exit's code writes the frame itself.
 func (c *core) exitDescriptor(s *ssa.FrameState, kind uint64, localsReg, stackReg uint8) *abi.ExitDescriptor {
-	if c.exitEnc == nil {
+	if c.exitFrame == nil {
 		enc := c.enc
-		c.exitEnc = &enc
+		c.exitFrame = &abi.ExitFrame{FrameLocals: int32(c.f.FrameLocals), ThisSlot: int32(c.f.ThisSlot), Locals: int32(c.f.Locals), Enc: &enc}
+		if w := c.ws; w != nil {
+			// The workspace's, kept from compile to compile.
+			if w.exitSlots == nil {
+				w.exitSlots, w.exitWords = map[abi.ExitSlot]uint16{}, map[uint64]int32{}
+			}
+			clear(w.exitSlots)
+			clear(w.exitWords)
+			c.exitSlots, c.exitWords = w.exitSlots, w.exitWords
+			c.exitFrame.Slots, c.exitFrame.Index, c.exitFrame.Words = w.exitSlotsBuf[:0], w.exitIndexBuf[:0], w.exitWordsBuf[:0]
+		} else {
+			c.exitSlots, c.exitWords = map[abi.ExitSlot]uint16{}, map[uint64]int32{}
+		}
 	}
+	f := c.exitFrame
 	d := abi.ExitDescriptor{Kind: uint32(kind), PC: uint32(s.PC), Depth: uint32(s.Depth), Site: int32(s.Site),
-		FrameLocals: int32(c.f.FrameLocals), ThisSlot: int32(c.f.ThisSlot), Locals: int32(c.f.Locals),
-		LocalsReg: localsReg, StackReg: stackReg, Enc: c.exitEnc}
+		Frame: f, Start: uint32(len(f.Index)), LocalsReg: localsReg, StackReg: stackReg}
 	written := func(i int, v *ssa.Value) bool {
 		return v != nil && (v.Op != ssa.OpLoadSlot || v.Aux != i) && !c.captured(i)
 	}
-	n, words := 0, 0
-	for i, v := range s.Slots {
-		if written(i, v) {
-			n++
-			if v.Op == ssa.OpConst {
-				words++
-			}
+	// What it adds to the frame's, taken back where a slot cannot be
+	// described.
+	index, slots, words := len(f.Index), len(f.Slots), len(f.Words)
+	undo := func() *abi.ExitDescriptor {
+		for _, e := range f.Slots[slots:] {
+			delete(c.exitSlots, e)
 		}
+		for _, w := range f.Words[words:] {
+			delete(c.exitWords, w)
+		}
+		f.Index, f.Slots, f.Words = f.Index[:index], f.Slots[:slots], f.Words[:words]
+		return nil
 	}
-	if cap(c.exitSlots)-len(c.exitSlots) < n {
-		c.exitSlots = make([]abi.ExitSlot, 0, max(n, min(2*cap(c.exitSlots), 256), 16))
-	}
-	d.Slots = c.exitSlots[len(c.exitSlots) : len(c.exitSlots) : len(c.exitSlots)+n]
-	if cap(c.exitWords)-len(c.exitWords) < words {
-		c.exitWords = make([]uint64, 0, max(words, min(2*cap(c.exitWords), 256), 16))
-	}
-	d.Words = c.exitWords[len(c.exitWords) : len(c.exitWords) : len(c.exitWords)+words]
+	direct := true
+	writes := func(i int32) bool { return int(i) < len(s.Slots) && written(int(i), s.Slots[i]) }
 	for i, v := range s.Slots {
 		if !written(i, v) {
 			continue
@@ -1239,34 +1249,50 @@ func (c *core) exitDescriptor(s *ssa.FrameState, kind uint64, localsReg, stackRe
 		e := abi.ExitSlot{Slot: int32(i), Origin: -1}
 		var ok bool
 		if e.Value, ok = c.exitValue(v); !ok {
-			return nil
+			return undo()
 		}
 		if e.Value.Kind == abi.ExitConst {
-			e.Value.N = int32(len(d.Words))
-			d.Words = append(d.Words, c.constWord(v.Const))
+			w := c.constWord(v.Const)
+			k, ok := c.exitWords[w]
+			if !ok {
+				k = int32(len(f.Words))
+				f.Words = append(f.Words, w)
+				c.exitWords[w] = k
+			}
+			e.Value.N = k
 		}
 		if v.Shadow != nil {
 			if e.Shadow, ok = c.exitSource(v.Shadow); !ok {
-				return nil
+				return undo()
 			}
 		} else if o, has := c.origin.Of(v); has && o >= 0 {
 			e.Origin, e.Load = int32(o), v.Op == ssa.OpLoadSlot
 		}
-		d.Slots = append(d.Slots, e)
-	}
-	// Written one by one if no slot's reference may come from another
-	// slot written here: by its origin, or a source that is one's address
-	// -- a slot's, or one known only at run time.
-	writes := func(i int32) bool { return int(i) < len(s.Slots) && written(int(i), s.Slots[i]) }
-	d.Direct = true
-	for _, e := range d.Slots {
+		// Written one by one if no slot's reference may come from another
+		// slot written here: by its origin, or a source that is one's
+		// address -- a slot's, or one known only at run time.
 		switch {
 		case e.Shadow.Kind == abi.ExitReg || e.Shadow.Kind == abi.ExitSpill,
 			e.Shadow.Kind == abi.ExitSlotAddr && e.Shadow.N != e.Slot && writes(e.Shadow.N),
 			e.Origin >= 0 && e.Origin != e.Slot && writes(e.Origin):
-			d.Direct = false
+			direct = false
 		}
+		k, ok := c.exitSlots[e]
+		if !ok {
+			if len(f.Slots) > math.MaxUint16 {
+				// More than an index names: the exit's code writes it.
+				return undo()
+			}
+			k = uint16(len(f.Slots))
+			f.Slots = append(f.Slots, e)
+			c.exitSlots[e] = k
+		}
+		f.Index = append(f.Index, k)
 	}
+	if len(f.Index)-index > math.MaxUint16 {
+		return undo()
+	}
+	d.Count, d.Direct = uint16(len(f.Index)-index), direct
 	if s.Inline != nil {
 		for _, in := range inlineLevels(s) {
 			k := uint64(abi.ExitHost)
@@ -1279,13 +1305,32 @@ func (c *core) exitDescriptor(s *ssa.FrameState, kind uint64, localsReg, stackRe
 		}
 		d.Kind = uint32(abi.ExitHost)
 	}
-	c.exitSlots = c.exitSlots[:len(c.exitSlots)+n]
-	c.exitWords = c.exitWords[:len(c.exitWords)+words]
 	if len(c.exitDescs) == cap(c.exitDescs) {
 		c.exitDescs = make([]abi.ExitDescriptor, 0, max(min(2*cap(c.exitDescs), 32), 4))
 	}
 	c.exitDescs = append(c.exitDescs, d)
 	return &c.exitDescs[len(c.exitDescs)-1]
+}
+
+// finishExits gives the code's descriptions' frame (abi.ExitFrame) arrays
+// of their own, as long as what they hold: grown by doubling, they could
+// hold twice that, for as long as the code lives.
+func (c *core) finishExits() {
+	if f := c.exitFrame; f != nil {
+		if w := c.ws; w != nil {
+			// Its buffers, for the next compile.
+			w.exitSlotsBuf, w.exitIndexBuf, w.exitWordsBuf = f.Slots[:0], f.Index[:0], f.Words[:0]
+		}
+		f.Slots, f.Index, f.Words = exact(f.Slots), exact(f.Index), exact(f.Words)
+	}
+}
+
+// exact is s in an array of its length, or nil for none.
+func exact[T any](s []T) []T {
+	if len(s) == 0 {
+		return nil
+	}
+	return slices.Clone(s)
 }
 
 // exitValue is where an exit finds a tagged value's word: its register or

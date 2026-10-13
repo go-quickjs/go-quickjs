@@ -30,6 +30,13 @@ type Workspace struct {
 	saved     arena.Arena[saved]
 	sched     schedule
 	ready     bool
+	// What a compile's exit descriptions share (abi.ExitFrame) is built
+	// here, then copied out once at its length (core's finishExits).
+	exitSlots    map[abi.ExitSlot]uint16
+	exitWords    map[uint64]int32
+	exitSlotsBuf []abi.ExitSlot
+	exitIndexBuf []uint16
+	exitWordsBuf []uint64
 	// Each code generator's assembler and tables. A Code's Bytes from
 	// CompileIn are the assembler's: they hold until the workspace's next
 	// compile.
@@ -85,6 +92,8 @@ func (w *Workspace) Bytes() int {
 	n += w.arm64.a.Bytes() + capBytes(w.arm64.labels) + capBytes(w.arm64.stubFor) + capBytes(w.arm64.cold)
 	// A map's entries, as their keys and values, at least.
 	n += (len(w.amd64.stubs) + len(w.arm64.stubs)) * int(unsafe.Sizeof(stubKey{})+unsafe.Sizeof(amd64.Label(0)))
+	n += len(w.exitSlots)*int(unsafe.Sizeof(abi.ExitSlot{})+2) + len(w.exitWords)*12
+	n += capBytes(w.exitSlotsBuf) + capBytes(w.exitIndexBuf) + capBytes(w.exitWordsBuf)
 	return n
 }
 
