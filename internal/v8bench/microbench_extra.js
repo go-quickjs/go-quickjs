@@ -292,3 +292,47 @@ function using_scope(n)
     global_res = extra_using(n, extra_resource);
     return n;
 }
+
+/* a closure made each turn, capturing the turn's binding, and called */
+function closure_make(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++) {
+        let k = j;
+        var f = function () { return k; };
+        s = (s + f()) | 0;
+    }
+    global_res = s;
+    return n;
+}
+
+/* a local the loop assigns, which a closure reads, called each turn */
+function closure_counter(n)
+{
+    var j, x = 0, s = 0;
+    function get() { return x; }
+    for (j = 0; j < n; j++) {
+        x = j;
+        s = (s + get()) | 0;
+    }
+    global_res = s;
+    return n;
+}
+
+/* a function that calls its callback, given a new closure at each call */
+function closure_each(a, f)
+{
+    var i, s = 0;
+    for (i = 0; i < a.length; i++)
+        s = (s + f(a[i])) | 0;
+    return s;
+}
+
+function closure_callback(n)
+{
+    var j, s = 0, a = [1, 2, 3, 4, 5, 6, 7, 8];
+    for (j = 0; j < n; j++)
+        s = (s + closure_each(a, function (x) { return x * j; })) | 0;
+    global_res = s;
+    return n * 8;
+}
