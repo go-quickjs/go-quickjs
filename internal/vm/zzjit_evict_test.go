@@ -277,3 +277,35 @@ func TestJITEvictionKeepsRunningCode(t *testing.T) {
 		t.Fatal(broken)
 	}
 }
+
+// A program with more hot functions than the JIT's budget holds, run in
+// turn: a function whose code was dropped to make room waits, before it
+// is compiled again, twice as long each time (jitGhost), and the cache
+// stops trading one function's code for another's. Each had been
+// compiled again at its next call, dropping the next one's.
+func TestJITEvictedWaitToCompileAgain(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	var b strings.Builder
+	const funcs, rounds = 80, 40
+	for i := 0; i < funcs; i++ {
+		fmt.Fprintf(&b, "function f%d(a) { let s = 0; for (let k = 0; k < a.length; k++) s = (s + a[k] * %d + (a[k] >> 1)) | 0; return s }\n", i, i+1)
+	}
+	b.WriteString("const a = []; for (let i = 0; i < 50; i++) a.push(i);\n")
+	fmt.Fprintf(&b, "let r = 0; for (let k = 0; k < %d; k++) for (let i = 0; i < %d; i++) r = (r + this[\"f\" + i](a)) | 0; r", rounds, funcs)
+	now := jitEpochNow
+	var tick uint64
+	jitEpochNow = func() uint64 { tick++; return tick }
+	t.Cleanup(func() { jitEpochNow = now })
+	r := New(Config{JIT: true, JITMemoryLimit: 256 << 10})
+	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	if _, err := r.Run(compileForTest(t, b.String())); err != nil {
+		t.Fatal(err)
+	}
+	st := r.JITStats()
+	t.Logf("%d compiled, %d dropped", st.Compiled, st.Evicted)
+	if st.Compiled > 4*funcs {
+		t.Errorf("%d compiles of %d functions in %d rounds", st.Compiled, funcs, rounds)
+	}
+}

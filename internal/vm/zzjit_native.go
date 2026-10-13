@@ -474,6 +474,9 @@ type jitState struct {
 	// hintTable is hints for native code (abi.HintTable), which every
 	// context points to.
 	hintTable abi.HintTable
+	// ghosts are the functions whose code the cache dropped to make room,
+	// by address, until compiled again (jitGhost).
+	ghosts map[uintptr]jitGhost
 	// arena holds the code of every entry: a few mappings, however many
 	// functions the runtime compiles.
 	arena *jit.Arena
@@ -1032,8 +1035,12 @@ func (s *jitState) reclaim(x *jitVictim, now uint64) bool {
 			e.holdsCode() && e.used+jitCodeAge > now {
 			return true
 		}
+		holds := e.holdsCode()
 		if !s.dropEntry(x.key, e) {
 			return false
+		}
+		if holds {
+			s.ghost(e.fnAddr)
 		}
 		if l := s.lowered[x.key]; l != nil {
 			if k := s.links[x.key]; k == nil || k.owner == nil {
@@ -1042,6 +1049,49 @@ func (s *jitState) reclaim(x *jitVictim, now uint64) bool {
 		}
 		s.evicted++
 	}
+	return true
+}
+
+// jitGhost is a function whose code the cache dropped to make room:
+// dropped evictions times, it asks to be compiled 1<<evictions times, a
+// warm-up of its closure's each (tryJITAt), before it is (admit). A
+// function dropped was compiled again at its next call, its warm-up long
+// spent, and made room for itself by dropping another's code, which did
+// the same: Octane's Typescript, its hot functions more than the budget
+// holds, compiled each of them again and again, a third of its time,
+// more the more its budget held.
+type jitGhost struct {
+	evictions uint8
+	asks      uint32
+}
+
+// jitGhosts bounds the ghosts kept; past it they are forgotten.
+const jitGhosts = 1 << 14
+
+// ghost notes that the cache dropped the code of the function at addr.
+func (s *jitState) ghost(addr uintptr) {
+	if s.ghosts == nil || len(s.ghosts) >= jitGhosts {
+		s.ghosts = map[uintptr]jitGhost{}
+	}
+	g := s.ghosts[addr]
+	g.evictions, g.asks = min(g.evictions+1, 16), 0
+	s.ghosts[addr] = g
+}
+
+// admit reports whether fn, which the cache holds no entry of, is to be
+// compiled now (jitGhost).
+func (s *jitState) admit(fn *bytecode.Function) bool {
+	addr := uintptr(unsafe.Pointer(fn))
+	g, ok := s.ghosts[addr]
+	if !ok {
+		return true
+	}
+	if g.asks++; g.asks < 1<<g.evictions {
+		s.ghosts[addr] = g
+		return false
+	}
+	g.asks = 0
+	s.ghosts[addr] = g
 	return true
 }
 
@@ -1451,6 +1501,10 @@ func (r *Runtime) jitForFunction(fn *bytecode.Function, cl *closure) *jitEntry {
 			}
 			r.jit.forget(key, e)
 		}
+	}
+	if r.jit != nil && cl != nil && !r.jit.admit(fn) {
+		// Dropped to make room before: compiled once it has asked enough.
+		return nil
 	}
 	budget := r.jitBudget()
 	if !jitCompiles(fn, budget) {
