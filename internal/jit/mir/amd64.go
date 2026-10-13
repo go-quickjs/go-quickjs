@@ -475,7 +475,8 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	// A context.
 	c.a.Load(scratchB, regCtx, abi.OffLevel)
 	c.a.OpImm(amd64.Add, scratchB, 1, true)
-	c.a.Load(scratchC, regCtx, abi.OffLevelLimit)
+	c.a.Load(scratchC, regCtx, abi.OffBounds)
+	c.a.Load(scratchC, scratchC, abi.OffBoundsLevelLimit)
 	c.a.Op(amd64.Cmp, scratchB, scratchC, true)
 	guard(amd64.CondAE)
 	// The callee is one of the functions, which has native code. A call
@@ -1007,7 +1008,8 @@ func (c *compiler) goArg(at int32, x *ssa.Value) {
 func (c *compiler) tailSelf(v *ssa.Value, guard func(amd64.Cond)) {
 	shallow := c.a.NewLabel()
 	c.a.Load(scratchA, regCtx, abi.OffLevel)
-	c.a.Load(scratchB, regCtx, abi.OffTailLevel)
+	c.a.Load(scratchB, regCtx, abi.OffBounds)
+	c.a.Load(scratchB, scratchB, abi.OffBoundsTailLevel)
 	c.a.Op(amd64.Cmp, scratchA, scratchB, true)
 	c.a.Jcc(amd64.CondB, shallow)
 	defer c.a.Bind(shallow)
@@ -3892,7 +3894,8 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		guard(amd64.CondA)
 		c.a.Load(scratchA, regCtx, abi.OffLevel)
 		c.a.OpImm(amd64.Add, scratchA, int32(max(v.Const.Bits, 1)), true)
-		c.a.Load(scratchB, regCtx, abi.OffLevelLimit)
+		c.a.Load(scratchB, regCtx, abi.OffBounds)
+		c.a.Load(scratchB, scratchB, abi.OffBoundsLevelLimit)
 		c.a.Op(amd64.Cmp, scratchA, scratchB, true)
 		guard(amd64.CondAE)
 	case ssa.OpTailSelf:
@@ -3923,7 +3926,8 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		}
 	case ssa.OpTailRoom:
 		c.a.Load(scratchA, regCtx, abi.OffLevel)
-		c.a.Load(scratchB, regCtx, abi.OffTailLevel)
+		c.a.Load(scratchB, regCtx, abi.OffBounds)
+		c.a.Load(scratchB, scratchB, abi.OffBoundsTailLevel)
 		c.a.Op(amd64.Cmp, scratchA, scratchB, true)
 		guard(amd64.CondAE)
 	case ssa.OpPropRead:

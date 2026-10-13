@@ -455,11 +455,14 @@ type jitState struct {
 	// whose caller was itself a level Go was finishing (jitUnwindNative).
 	resumed, resumedLevels uint64
 	// ssaShared is what the contexts from ssaSharedFrom on hold of what
-	// they share (jitShareContexts); ssaSharedGen counts the times either
-	// changed, which a call of Go compares, not the struct.
+	// they share (jitShareContexts); ssaSharedGen counts the times either,
+	// or bounds, changed, which a call of Go compares, not the struct.
 	ssaShared     jitShared
 	ssaSharedFrom int
 	ssaSharedGen  uint64
+	// bounds are how deep the contexts' native calls may go, which they
+	// all point to (abi.Bounds), and jitShareContexts writes.
+	bounds abi.Bounds
 	// arena holds the code of every entry: a few mappings, however many
 	// functions the runtime compiles.
 	arena *jit.Arena

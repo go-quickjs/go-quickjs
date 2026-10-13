@@ -1755,7 +1755,8 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	}
 	c.a.Load(a64B, a64Ctx, abi.OffLevel)
 	c.a.AddImm(a64B, a64B, 1, true)
-	c.a.Load(a64C, a64Ctx, abi.OffLevelLimit)
+	c.a.Load(a64C, a64Ctx, abi.OffBounds)
+	c.a.Load(a64C, a64C, abi.OffBoundsLevelLimit)
 	c.a.Cmp(a64B, a64C, true)
 	guard(arm64.HS)
 	if callee.Shadow == nil && c.origin.At(callee) < 0 || site.Via != 0 && (len(sites) != 1 || !c.operandsLive(s, calleeSlot-1)) {
@@ -2452,7 +2453,8 @@ func (c *a64Compiler) goArg(at int32, x *ssa.Value) {
 func (c *a64Compiler) tailSelf(v *ssa.Value, guard func(arm64.Cond)) {
 	shallow := c.a.NewLabel()
 	c.a.Load(a64A, a64Ctx, abi.OffLevel)
-	c.a.Load(a64B, a64Ctx, abi.OffTailLevel)
+	c.a.Load(a64B, a64Ctx, abi.OffBounds)
+	c.a.Load(a64B, a64B, abi.OffBoundsTailLevel)
 	c.a.Cmp(a64A, a64B, true)
 	c.a.BCond(arm64.LO, shallow)
 	defer c.a.Bind(shallow)
@@ -3600,7 +3602,8 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		guard(arm64.HI)
 		c.a.Load(a64A, a64Ctx, abi.OffLevel)
 		c.a.AddImm(a64A, a64A, int64(max(v.Const.Bits, 1)), true)
-		c.a.Load(a64B, a64Ctx, abi.OffLevelLimit)
+		c.a.Load(a64B, a64Ctx, abi.OffBounds)
+		c.a.Load(a64B, a64B, abi.OffBoundsLevelLimit)
 		c.a.Cmp(a64A, a64B, true)
 		guard(arm64.HS)
 	case ssa.OpTailSelf:
@@ -3630,7 +3633,8 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		}
 	case ssa.OpTailRoom:
 		c.a.Load(a64A, a64Ctx, abi.OffLevel)
-		c.a.Load(a64B, a64Ctx, abi.OffTailLevel)
+		c.a.Load(a64B, a64Ctx, abi.OffBounds)
+		c.a.Load(a64B, a64B, abi.OffBoundsTailLevel)
 		c.a.Cmp(a64A, a64B, true)
 		guard(arm64.HS)
 	case ssa.OpSameObject:

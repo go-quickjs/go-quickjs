@@ -5526,13 +5526,11 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 
 // jitShared is what every context native code runs in shares with the one
 // it was called from (abi.Context): where the global names are, the
-// VM's stack, how deep calls may go.
+// VM's stack. How deep calls may go they share in one place
+// (jitState.bounds).
 type jitShared struct {
 	global, lexNames, globalLex, strMethods, stackBase unsafe.Pointer
-	stackEnd, levelLimit                               uint64
-	// tailLevel is abi.Context's TailLevel: the level whose frame is
-	// tailCallDepth deep, the run's frame at idx.
-	tailLevel uint64
+	stackEnd                                           uint64
 	// charCodeAt is String.prototype.charCodeAt as native code calls it
 	// (jitStringMethod), which every level's code reads in its own
 	// context: written only into a run's own, a native callee's charCodeAt
@@ -5550,17 +5548,26 @@ type jitShared struct {
 
 // jitShareContexts writes what the contexts share into context idx, which
 // code is entered in, and every one past it, which its native calls run
-// in, with each one's level, when it is not what they hold: a native call
-// then writes none of it. They hold it from the last time it was written
-// (jitSharedContexts), if that was from idx or before, as nothing else
-// writes it.
+// in, when it is not what they hold: a native call then writes none of it.
+// They hold it from the last time it was written (jitSharedContexts), if
+// that was from idx or before, as nothing else writes it. How deep the
+// calls may go from idx, which the VM's depth at the entry decides, is
+// written once for them all (abi.Bounds).
 func (r *Runtime) jitShareContexts(idx int, f *frame) {
 	s := r.jit
+	bounds := abi.Bounds{
+		LevelLimit: uint64(min(len(s.ssaCtxs), idx+max(0, r.maxFrames-r.frameDepth))),
+		// The level whose frame is tailCallDepth deep, the run's frame at
+		// idx.
+		TailLevel: uint64(idx + max(0, tailCallDepth-r.frameDepth)),
+	}
+	if bounds != s.bounds {
+		s.bounds = bounds
+		s.ssaSharedGen++
+	}
 	sh := jitShared{
 		global: unsafe.Pointer(f.cl.scope()), lexNames: unsafe.Pointer(&r.lexNames),
 		stackBase: unsafe.Pointer(unsafe.SliceData(r.stack)), stackEnd: uint64(len(r.stack)),
-		levelLimit: uint64(min(len(s.ssaCtxs), idx+max(0, r.maxFrames-r.frameDepth))),
-		tailLevel:  uint64(idx + max(0, tailCallDepth-r.frameDepth)),
 	}
 	if r.isGlobalScope(f.cl.scope()) {
 		// The interpreter reads a script's lexical bindings where the
@@ -5586,7 +5593,6 @@ func (r *Runtime) jitShareContexts(idx int, f *frame) {
 	}
 	for i := idx; i < len(s.ssaCtxs); i++ {
 		c := s.ssaCtxs[i]
-		c.Level, c.LevelLimit, c.TailLevel = uint64(i), sh.levelLimit, sh.tailLevel
 		c.StackBase, c.StackEnd = sh.stackBase, sh.stackEnd
 		c.StackTop, c.StackHigh = &r.stackTop, &r.stackHigh
 		c.BackEdges = &r.backEdges
@@ -5637,6 +5643,7 @@ func (r *Runtime) jitGrowContexts() bool {
 	for i := range chunk {
 		chunk[i].Host = unsafe.Pointer(r)
 		chunk[i].SetConsts(&jitEncoding)
+		chunk[i].Level, chunk[i].Bounds = uint64(old+i), &s.bounds
 		s.ssaCtxs = append(s.ssaCtxs, &chunk[i])
 	}
 	for i := max(old, 1); i < len(s.ssaCtxs); i++ {
@@ -5648,21 +5655,16 @@ func (r *Runtime) jitGrowContexts() bool {
 	}
 	n := uint64(len(s.ssaCtxs))
 	last := s.ssaCtxs[old-1]
-	for i, c := range s.ssaCtxs {
-		switch {
-		case i >= old:
-			c.Level, c.LevelLimit, c.TailLevel = uint64(i), n, last.TailLevel
-			c.StackBase, c.StackEnd, c.StackTop, c.StackHigh = last.StackBase, last.StackEnd, last.StackTop, last.StackHigh
-			c.BackEdges, c.Global, c.LexNames, c.GlobalLex = last.BackEdges, last.Global, last.LexNames, last.GlobalLex
-			c.StringMethods = last.StringMethods
-			c.CharCodeAt = last.CharCodeAt
-			c.StringProto, c.StringShape, c.CharCodeAtOffset = last.StringProto, last.StringShape, last.CharCodeAtOffset
-		case c.LevelLimit == uint64(old):
-			c.LevelLimit = n
-		}
+	for _, c := range s.ssaCtxs[old:] {
+		c.StackBase, c.StackEnd, c.StackTop, c.StackHigh = last.StackBase, last.StackEnd, last.StackTop, last.StackHigh
+		c.BackEdges, c.Global, c.LexNames, c.GlobalLex = last.BackEdges, last.Global, last.LexNames, last.GlobalLex
+		c.StringMethods = last.StringMethods
+		c.CharCodeAt = last.CharCodeAt
+		c.StringProto, c.StringShape, c.CharCodeAtOffset = last.StringProto, last.StringShape, last.CharCodeAtOffset
 	}
-	if s.ssaShared.levelLimit == uint64(old) {
-		s.ssaShared.levelLimit = n
+	if s.bounds.LevelLimit == uint64(old) {
+		// Calls the contexts limited may go as deep as the new ones allow.
+		s.bounds.LevelLimit = n
 		s.ssaSharedGen++
 	}
 	return true
@@ -5798,7 +5800,7 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, code *bytecode.Function)
 		// A call from the last context, which the contexts, not the
 		// frames the VM allows, limited: more of them.
 		l := &s.unwinding[start+n-1]
-		if c := s.ssaCtxs[l.ctx]; l.ctx == len(s.ssaCtxs)-1 && c.LevelLimit == uint64(len(s.ssaCtxs)) && l.kind == abi.ExitHost {
+		if l.ctx == len(s.ssaCtxs)-1 && s.bounds.LevelLimit == uint64(len(s.ssaCtxs)) && l.kind == abi.ExitHost {
 			r.jitGrowContexts()
 		}
 	}

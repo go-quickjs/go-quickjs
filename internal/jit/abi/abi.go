@@ -43,6 +43,28 @@ const (
 	RecordDirect = 1 << 61
 )
 
+// Bounds are how deep a run's native calls go, which depends on how deep
+// the VM's frames were where Go entered the code, and which Go sets before
+// every entry, once for every context, all of which point here
+// (Context.Bounds): rewritten in each, as they were, an entry from code the
+// tree tier runs recursively, its depth another at each call, wrote the
+// fields of every context there was -- 96 after a deep recursion -- and
+// AWFY's Towers spent a third of its time doing it. LevelLimit is the level
+// past the last a native call may run in. TailLevel is the first level
+// whose code's calls in tail position give up its frame, as the
+// interpreter's do from tailCallDepth frames deep: native code makes them as
+// calls below it, and leaves for Go to make them at it and past
+// (ssa.OpTailRoom).
+type Bounds struct {
+	LevelLimit, TailLevel uint64
+}
+
+// Offsets of Bounds' fields.
+const (
+	OffBoundsLevelLimit = int32(unsafe.Offsetof(Bounds{}.LevelLimit))
+	OffBoundsTailLevel  = int32(unsafe.Offsetof(Bounds{}.TailLevel))
+)
+
 // Context is the block native code reaches through its context register.
 // Go sets the frame's addresses before every entry; native code writes the
 // exit record and spills, and, for a native call, the callee's context. The
@@ -76,7 +98,8 @@ type Context struct {
 	// a native call runs in; Closure, Base and Level say whose
 	// frame it is -- the VM's closure, the frame's index in the VM's stack,
 	// and the context's in the array -- for Go to make the VM's frames from
-	// when a callee leaves native code; Level stays below LevelLimit.
+	// when a callee leaves native code; Level stays below Bounds'
+	// LevelLimit.
 	// StackBase and StackEnd are the VM's stack's first value and length,
 	// StackTop and StackHigh its next free and highest used indices, which
 	// a call moves. TailReturn is where the records' tail goes on, in a
@@ -104,7 +127,7 @@ type Context struct {
 	Closure    unsafe.Pointer
 	Base       uint64
 	Level      uint64
-	LevelLimit uint64
+	Bounds     *Bounds
 	StackBase  unsafe.Pointer
 	StackEnd   uint64
 	StackTop   *int
@@ -220,12 +243,6 @@ type Context struct {
 	// than GoArgs holds; Go makes the others while it marks (GoOpMarking).
 	// Go clears it before each entry.
 	ExitMarking uint64
-	// TailLevel is the first level whose code's calls in tail position
-	// give up its frame, as the interpreter's do from tailCallDepth frames
-	// deep: native code makes them as calls below it, and leaves for Go to
-	// make them at it and past (ssa.OpTailRoom). Go sets it before every
-	// entry.
-	TailLevel uint64
 	// TailFrame is 1 when the frame is one the interpreter gives up for a
 	// call in tail position -- no construction's, no arrow's sharing a
 	// derived constructor's this -- and 0 otherwise: Go sets it, with
@@ -398,8 +415,7 @@ var (
 	OffClosure    = int32(unsafe.Offsetof(Context{}.Closure))
 	OffBase       = int32(unsafe.Offsetof(Context{}.Base))
 	OffLevel      = int32(unsafe.Offsetof(Context{}.Level))
-	OffLevelLimit = int32(unsafe.Offsetof(Context{}.LevelLimit))
-	OffTailLevel  = int32(unsafe.Offsetof(Context{}.TailLevel))
+	OffBounds     = int32(unsafe.Offsetof(Context{}.Bounds))
 	OffTailFrame  = int32(unsafe.Offsetof(Context{}.TailFrame))
 	OffFrameThis  = int32(unsafe.Offsetof(Context{}.FrameThis))
 	OffStackBase  = int32(unsafe.Offsetof(Context{}.StackBase))

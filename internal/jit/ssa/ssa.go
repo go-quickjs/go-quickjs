@@ -206,7 +206,7 @@ const (
 	// too, which an exit inside it writes there (InlineState).
 	OpFrameRoom // -> none
 	// OpTailRoom guards that a call in tail position is made where the
-	// stack is shallow (abi.Context's TailLevel): deeper, Go makes it,
+	// stack is shallow (abi.Bounds' TailLevel): deeper, Go makes it,
 	// giving up the frame, as the interpreter's tail_call does.
 	OpTailRoom // -> none
 	// OpTailSelf is OpTailRoom where the call may be the function's own:
