@@ -4504,8 +4504,13 @@ func (fb *jitFeedback) Property(pc int) (ssa.PropertySite, bool) {
 		}
 	}
 	if ok && fb.root != nil && fb.fwd == nil && site.Shape == 0 && site.Add == nil && site.Holders[0].Object == 0 &&
-		int(fb.fn.Code[pc].B) < len(fb.cl.ic) && fb.cl.ic[fb.fn.Code[pc].B].fills < maxCacheFills {
-		// An inlined callee's site its cache knew nothing of (jitInlineFed).
+		int(fb.fn.Code[pc].B) < len(fb.cl.ic) && fb.cl.ic[fb.fn.Code[pc].B].fills < maxCacheFills &&
+		(fb.cl.ic[fb.fn.Code[pc].B].shape == nil || fb.cl.ic[fb.fn.Code[pc].B].shape == noShape) {
+		// An inlined callee's site its cache knew nothing of (jitInlineFed):
+		// not one whose cache holds what native code does not read with --
+		// a getter's -- which, recorded, had the code compiled again at
+		// each of its exits, the cache having "learned" what it already
+		// knew.
 		k := fb.keep()
 		k.fedInlined = append(k.fedInlined, jitFedInlined{cl: fb.cl, pc: uint32(pc)})
 	}
@@ -5778,6 +5783,15 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, code *bytecode.Function)
 		// jitCallSeen does not count at the call itself.
 		r.jitInlineLeft(left, leftPC)
 	}
+	if left != nil && left != e {
+		// An exit in what a native callee's code inlined: the code's, which
+		// it ticks for as its own exits do (reoptDueNow), and which is
+		// compiled again, if due, before it goes on (below). Counted for
+		// the inlined callee's code alone, a native callee inlining pop()
+		// compiled before pop's property reads had run left native code at
+		// them at every call, never compiled again for what they learned.
+		left.ssaStats.hosts++
+	}
 	if n != 0 {
 		// The innermost left -- but for one that never entered native code
 		// (ExitEnter), a call Go makes; the others only return through Go.
@@ -5888,6 +5902,10 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, code *bytecode.Function)
 		var next *jitNativeLevel
 		if k < n-1 {
 			next = &s.unwinding[start+k+1]
+		}
+		if k < n-1 && !l.inline && next.inline && e != nil && e.ssa != nil && e.reoptDue() && !jit.Marking() {
+			// The code an exit inside its inlined callees left (above).
+			r.jitReoptimize(f.cl, e)
 		}
 		if k == n-1 {
 			v, err = r.jitFinishExit(f, e, &l)

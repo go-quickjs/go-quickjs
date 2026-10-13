@@ -5882,8 +5882,17 @@ func TestJITSSANativeCallsGoOn(t *testing.T) {
 		}
 	}
 	cl := r.global.getOwn(r.atoms.intern("zero")).value().Object().fn().closure
-	if e := r.jit.cache[weak.Make(cl.fn)]; e == nil || e.link.in == 0 {
+	e := r.jit.cache[weak.Make(cl.fn)]
+	if e == nil || e.link.in == 0 {
 		t.Fatalf("zero was never called natively: %+v", e)
+	}
+	// tick's getter read, inlined in zero, leaves native code; its cache
+	// knows the getter, which is no feedback to compile again for: zero is
+	// compiled again for the shapes tick's other reads met after zero was
+	// compiled, before tick had run, and to call tick natively once its
+	// exits pass jitInlineExits -- not at each exit, eight times.
+	if e.inlineReopts > 2 {
+		t.Errorf("zero was compiled again %d times for what it inlined", e.inlineReopts)
 	}
 	if r.jit.unwound == 0 {
 		t.Fatal("tick never left native code inside a native call")
