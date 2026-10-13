@@ -98,6 +98,40 @@ func TestJITForKeepsWhatItCompiled(t *testing.T) {
 	}
 }
 
+// The room the cache makes is the workspaces' before it is code's: they
+// spare the next compile its allocations, code a compile. Before, they
+// went last, and a program whose compiles grew them past half the budget
+// had its hot code dropped and compiled again on every pass, as Octane's
+// zlib did hundreds of times a function.
+func TestJITDropsWorkspacesBeforeCode(t *testing.T) {
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	if _, err := r.Run(compileForTest(t, `
+		function f(n) { let s = 0; for (let i = 0; i < n; i++) s += (i * 7) % 13; return s }`)); err != nil {
+		t.Fatal(err)
+	}
+	cl := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
+	now := jitEpochNow
+	var tick uint64
+	jitEpochNow = func() uint64 { tick += 10; return tick }
+	t.Cleanup(func() { jitEpochNow = now })
+	e := r.jitFor(cl)
+	s := r.jit
+	if e == nil || e.ssa == nil || s.workBytes() == 0 {
+		t.Fatalf("f has no code, or the compile kept no workspaces: %+v", e)
+	}
+	// Old by now, and either would make the room.
+	s.budget = s.held() - 1
+	if !s.makeRoom(0) {
+		t.Fatal("no room made")
+	}
+	if !e.owned() || e.ssa == nil {
+		t.Error("dropped code for the workspaces")
+	}
+	if s.workBytes() != 0 {
+		t.Error("kept the workspaces")
+	}
+}
+
 // An entry the cache dropped since Go found it is not run: Go runs the
 // frame in the existing tiers. Before, a compile Go made between finding an
 // entry and running it could drop it, and its code ran though nothing held

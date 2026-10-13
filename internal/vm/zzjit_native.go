@@ -828,13 +828,18 @@ type jitVictim struct {
 
 // The classes of what the cache reclaims, in the order it does: a
 // function's programs, lowered again at a compile's cost of a few percent;
-// a refusal remembered, which spares a compile only; code, which costs a
-// compile to make again; then the workspaces, which every compile uses.
+// a refusal remembered, which spares a compile only; the workspaces, which
+// spare the next compile its allocations; then code, which costs a whole
+// compile to make again. The workspaces had come last, and a compile of a
+// large function grows them past half the budget: Octane's zlib, whose
+// hot functions are a thousand instructions or two, dropped code it ran
+// on every pass to keep them, and compiled each hot function hundreds of
+// times.
 const (
 	jitVictimLowering = iota
 	jitVictimRefusal
-	jitVictimCode
 	jitVictimWork
+	jitVictimCode
 )
 
 // makeRoom reclaims what the JIT holds, until it holds need bytes less
@@ -842,12 +847,13 @@ const (
 // all that describes it, by memory, reclaiming code by its age, not by how
 // many functions have it. It reclaims, in their order (jitVictim's
 // classes), the least recently used first: programs lowered for functions
-// the cache has no entry for; refusals remembered; code not used in this
+// the cache has no entry for; refusals remembered; the compiles'
+// workspaces, unless a compile is under way; and code not used in this
 // epoch or the one before (jitCodeAge), as V8 flushes only code old
-// enough; and the compiles' workspaces, unless a compile is under way. A
-// function's code is never dropped for another's while it is young: a
-// program with more hot functions than the budget holds had compiled each
-// at every pass, each dropping the next one run. Nor an entry whose code
+// enough. A function's code is never dropped for another's while it is
+// young: a program with more hot functions than the budget holds had
+// compiled each at every pass, each dropping the next one run. Nor an
+// entry whose code
 // runs (inUse), or that is being compiled (busy). If even all it may
 // reclaim would not make the room, it reclaims nothing, and the newcomer
 // runs in the existing tiers until some code is old.
