@@ -4799,8 +4799,8 @@ func TestJITSSAMarkingExitsNotJudged(t *testing.T) {
 	old := jitMarking
 	jitMarking = func() bool { return true }
 	defer func() { jitMarking = old }()
-	setup := `function g(a,b,c,d,e,f,h,k){let t=a;for(let j=0;j<2;j++)t=(t+b+c+d+e+f+h+k)|0;return t}
-		function lit(n){let s=0;for(let i=0;i<n;i++){s=(s+g(i,1,2,3,4,5,6,7))|0}return s}`
+	setup := `function g(a,b,c,d,e,f,h,k,l,m,o,p,q,u,w,x){let t=a;for(let j=0;j<2;j++)t=(t+b+c+d+e+f+h+k+l+m+o+p+q+u+w+x)|0;return t}
+		function lit(n){let s=0;for(let i=0;i<n;i++){s=(s+g(i,1,2,3,4,5,6,7,0,0,0,0,0,0,0,0))|0}return s}`
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	if _, err := r.Run(compileForTest(t, setup)); err != nil {
 		t.Fatal(err)
@@ -7167,8 +7167,8 @@ func TestJITSSAMarkingExitInNativeCallee(t *testing.T) {
 	marking := jitMarkingForTest(t)
 	*marking = 0
 	setup := `function add(a,b){let s=a;for(let i=0;i<3;i++)s=(s*3+b)|0;return s}
-		function g(a,b,c,d,e,f,h,k){let t=a;for(let j=0;j<2;j++)t=(t+b+c+d+e+f+h+k)|0;return t}
-		function mid(i,t,big){let s=0;for(let j=0;j<2;j++){s=(s+parseInt('7')+add(i+j,t&7))|0;if(big)s=(s+g(i,1,2,3,4,5,6,7))|0}return s}
+		function g(a,b,c,d,e,f,h,k,l,m,o,p,q,u,w,x){let t=a;for(let j=0;j<2;j++)t=(t+b+c+d+e+f+h+k+l+m+o+p+q+u+w+x)|0;return t}
+		function mid(i,t,big){let s=0;for(let j=0;j<2;j++){s=(s+parseInt('7')+add(i+j,t&7))|0;if(big)s=(s+g(i,1,2,3,4,5,6,7,0,0,0,0,0,0,0,0))|0}return s}
 		function sum(n){let t=0;for(let i=0;i<n;i++){t=(t+add(i,t&7))|0;t^=t>>>3;t=(t*5+mid(i,t,i<1))|0;t^=t>>>7}return t}`
 	want := New(Config{})
 	defer want.Close()

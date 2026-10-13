@@ -215,8 +215,10 @@ type GoArg struct {
 }
 
 // MaxGoArgs is how many operands a call of Go takes: a call's (ssa.GoCall)
-// function, receiver and up to six arguments.
-const MaxGoArgs = 8
+// function, receiver and up to fourteen arguments -- a function a script
+// compiled to JavaScript passes its state to, as EarleyBoyer's deriv_trees
+// takes nine, had left native code at every call with eight.
+const MaxGoArgs = 16
 
 // ExitDescriptor is an exit's frame state as data (an ExitTable exit): the
 // slots to write and where each one's value is, the inlined callees'
