@@ -66,6 +66,43 @@ func LowerSSA(fn *bytecode.Function) (*ir.Program, error) {
 	return lowerRecovered(fn, lowering{ssa: true})
 }
 
+// Hints are what the VM has seen its function's code do that its bytecode
+// does not say, which a lowering for the new pipeline takes (Lower*With).
+// StringAdds are the PCs of additions that have met a string: each is Go's
+// (ir.StringAdd), its operands read as they are, not as numbers -- as V8's
+// code follows an addition's feedback. A loop's `token += c`, whose token
+// is a string, had each character read as a number and leave native code.
+// ElementReads are the PCs of element reads that have met a receiver whose
+// elements are no numbers, a string: each is read as it is (ir's
+// Reference), whatever its uses take it for -- its first use that takes a
+// number then exits, and is a hint of its own.
+type Hints struct {
+	StringAdds, ElementReads []int32
+}
+
+// LowerSSAWith is LowerSSA with hints.
+func LowerSSAWith(fn *bytecode.Function, h Hints) (*ir.Program, error) {
+	return lowerRecovered(fn, lowering{ssa: true, hints: h})
+}
+
+// LowerSSAHotWith is LowerSSAHot with hints.
+func LowerSSAHotWith(fn *bytecode.Function, h Hints) (*ir.Program, error) {
+	return lowerRecovered(fn, lowering{ssa: true, hot: true, hints: h})
+}
+
+// LowerSSAInlineWith is LowerSSAInline with hints.
+func LowerSSAInlineWith(fn *bytecode.Function, h Hints) (*ir.Program, error) {
+	return lowerRecovered(fn, lowering{ssa: true, callee: true, hints: h})
+}
+
+// LowerSSAForwardWith is LowerSSAForward with hints.
+func LowerSSAForwardWith(fn *bytecode.Function, h Hints) (*ir.Program, error) {
+	if fn == nil || fn.Leaf != bytecode.LeafForward {
+		return nil, refuse(-1, "not a forwarding constructor")
+	}
+	return lowerRecovered(fn, lowering{ssa: true, callee: true, forward: true, hints: h})
+}
+
 // LowerSSAHot is LowerSSA for a function its callers have shown to be hot
 // -- called enough times, for its size, that V8 would have optimized it
 // (the VM's jitHotWork) -- which LowerSSA refuses for having no loop and no
@@ -146,7 +183,10 @@ func closureAssigned(fn *bytecode.Function) []bool {
 
 // lowering is how a function is lowered: for which entry points, and for
 // which pipeline.
-type lowering struct{ calls, callee, ssa, forward, hot bool }
+type lowering struct {
+	calls, callee, ssa, forward, hot bool
+	hints                            Hints
+}
 
 // lowerRecovered turns a panic in analysis into a refusal: an optional tier
 // must never take down its host, and the function then runs in the existing
@@ -468,8 +508,16 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			p.Code[pc] = lower(fn, in, p.Locals+maps[pc].Depth, p.This)
 		}
 	}
+	if m.ssa {
+		hintedStringAdds(p, m.hints.StringAdds)
+	}
 	selectNumericProperties(p, m.ssa)
 	if m.ssa {
+		for _, pc := range m.hints.ElementReads {
+			if pc >= 0 && int(pc) < len(p.Code) && p.Code[pc].Op == ir.ArrayRead {
+				p.Code[pc].Reference = true
+			}
+		}
 		liveLocals(fn, p, effects)
 		typeTests(fn, p, effects)
 		if p.Live != nil && chains != nil {
@@ -794,6 +842,21 @@ func selectNumericProperties(p *ir.Program, cells bool) {
 				needed[n+i] = needed[n+i+1]
 			}
 			needed[n+last], needed[n+last+1] = kind, 0
+		}
+	}
+}
+
+// hintedStringAdds makes the additions at pcs, which have met a string,
+// Go's (Hints.StringAdds), before the reads they take are decided
+// (selectNumericProperties): an operand is then read as it is, a string's
+// element included (ir's Reference), not as a number.
+func hintedStringAdds(p *ir.Program, pcs []int32) {
+	for _, pc := range pcs {
+		if pc < 0 || int(pc) >= len(p.Code) || p.Maps[pc].Depth < 0 {
+			continue
+		}
+		if in := p.Code[pc]; in.Op == ir.Binary && in.Operator == ir.Add {
+			p.Code[pc] = ir.Instruction{Op: ir.StringAdd, Left: in.Left, Right: in.Right, Dest: in.Dest}
 		}
 	}
 }

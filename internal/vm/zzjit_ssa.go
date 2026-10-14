@@ -3695,7 +3695,27 @@ func (r *Runtime) jitIndexSeen(e *jitEntry, pc, sp int) {
 	if p == nil || pc >= len(p.Code) || sp < 2 {
 		return
 	}
-	if in := p.Code[pc]; in.Op != ir.ArrayRead || !in.Reference || slices.Contains(e.typedReads, int32(pc)) || slices.Contains(e.stringReads, int32(pc)) {
+	in := p.Code[pc]
+	if in.Op != ir.ArrayRead || slices.Contains(e.typedReads, int32(pc)) || slices.Contains(e.stringReads, int32(pc)) {
+		return
+	}
+	if !in.Reference {
+		// Read as a number, for what its uses take it for: a string's
+		// element is none, and is read as it is from the next lowering on
+		// (jitcompile.Hints' ElementReads), and as a string's.
+		if !r.stack[sp-2].IsString() || !r.stack[sp-1].IsNumber() {
+			return
+		}
+		l := r.jit.lowering(e.link.key.Value())
+		before := jitCapBytes(l.hints.ElementReads)
+		l.hints.ElementReads = append(l.hints.ElementReads, int32(pc))
+		l.bytes += jitCapBytes(l.hints.ElementReads) - before
+		r.jit.lowerBytes += jitCapBytes(l.hints.ElementReads) - before
+		r.jit.relower(l)
+		e.stringReads = append(e.stringReads, int32(pc))
+		if !e.feedReopt {
+			e.feedReopt, e.feedStarts, e.feedWork = true, e.starts+e.link.in, e.ssaStats.work
+		}
 		return
 	}
 	switch o := r.stack[sp-2]; {
@@ -4328,6 +4348,10 @@ type jitLowering struct {
 	errs      [jitLowerKinds]error
 	bytes     int
 	used      uint64
+	// hints are what its code's exits have shown it does that its
+	// bytecode does not say (jitcompile.Hints): its programs are lowered
+	// with them.
+	hints jitcompile.Hints
 }
 
 // jitLowerKind is how a program is lowered: for a function's own code
@@ -4376,13 +4400,13 @@ func (r *Runtime) jitLower(fn *bytecode.Function, kind jitLowerKind) (*ir.Progra
 	if !l.done[kind] {
 		switch kind {
 		case jitLowerSSA:
-			l.progs[kind], l.errs[kind] = jitcompile.LowerSSA(fn)
+			l.progs[kind], l.errs[kind] = jitcompile.LowerSSAWith(fn, l.hints)
 		case jitLowerInline:
-			l.progs[kind], l.errs[kind] = jitcompile.LowerSSAInline(fn)
+			l.progs[kind], l.errs[kind] = jitcompile.LowerSSAInlineWith(fn, l.hints)
 		case jitLowerForward:
-			l.progs[kind], l.errs[kind] = jitcompile.LowerSSAForward(fn)
+			l.progs[kind], l.errs[kind] = jitcompile.LowerSSAForwardWith(fn, l.hints)
 		case jitLowerHot:
-			l.progs[kind], l.errs[kind] = jitcompile.LowerSSAHot(fn)
+			l.progs[kind], l.errs[kind] = jitcompile.LowerSSAHotWith(fn, l.hints)
 		}
 		l.done[kind] = true
 		n := l.progs[kind].Footprint()
@@ -4390,6 +4414,75 @@ func (r *Runtime) jitLower(fn *bytecode.Function, kind jitLowerKind) (*ir.Progra
 		s.lowerBytes += n
 	}
 	return l.progs[kind], l.errs[kind]
+}
+
+// jitStringAddSeen notes an exit at pc, an addition in e's code that met a
+// string -- the frame holding its operands as the exit wrote them -- which
+// its function's programs are lowered again for (jitcompile.Hints): Go
+// makes it (ir.StringAdd), and what it adds is read as it is. The code is
+// compiled again at its next invocation, as for an element read learned
+// (jitIndexSeen). PDF.js's font parser builds its tokens a character at a
+// time, token += c, and read each character as a number, which a string
+// left native code at.
+func (r *Runtime) jitStringAddSeen(f *frame, e *jitEntry, pc int) {
+	p := e.ssaProg
+	if p == nil || pc >= len(p.Code) {
+		return
+	}
+	in := p.Code[pc]
+	if in.Op != ir.Binary || in.Operator != ir.Add {
+		return
+	}
+	if a, b := r.jitOperand(f, p, in.Left), r.jitOperand(f, p, in.Right); !a.IsString() && !b.IsString() {
+		return
+	}
+	l := r.jit.lowering(f.cl.fn)
+	if slices.Contains(l.hints.StringAdds, int32(pc)) {
+		return
+	}
+	before := jitCapBytes(l.hints.StringAdds)
+	l.hints.StringAdds = append(l.hints.StringAdds, int32(pc))
+	l.bytes += jitCapBytes(l.hints.StringAdds) - before
+	r.jit.lowerBytes += jitCapBytes(l.hints.StringAdds) - before
+	r.jit.relower(l)
+	if !e.feedReopt {
+		e.feedReopt, e.feedStarts, e.feedWork = true, e.starts+e.link.in, e.ssaStats.work
+	}
+}
+
+// relower drops l's programs, which are lowered again with its hints as
+// they are asked for (jitLower): what was compiled from them holds them.
+func (s *jitState) relower(l *jitLowering) {
+	for k := range l.progs {
+		if l.done[k] {
+			n := l.progs[k].Footprint()
+			l.bytes -= n
+			s.lowerBytes -= n
+		}
+		l.done[k], l.progs[k], l.errs[k] = false, nil, nil
+	}
+	l.inlinable = 0
+}
+
+// jitOperand is the value of an operand of p's instruction in f's frame as
+// an exit wrote it: a literal, a local, or one on the frame's stack.
+func (r *Runtime) jitOperand(f *frame, p *ir.Program, o ir.Operand) Value {
+	switch {
+	case o.Slot < 0:
+		if o.Literal.Kind == ir.String {
+			return Str(emptyString)
+		}
+		return Undefined
+	case o.Slot < p.Locals:
+		if o.Slot < len(f.locals) {
+			return f.locals[o.Slot]
+		}
+		return Undefined
+	}
+	if i := f.base + o.Slot - p.Locals; i >= 0 && i < len(r.stack) {
+		return r.stack[i]
+	}
+	return Undefined
 }
 
 // jitInlinable reports whether fn may be inlined into a caller: it
@@ -5682,6 +5775,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 					continue
 				}
 			}
+			r.jitStringAddSeen(f, e, exitPC)
 			switch jitCallOp(in.Op) {
 			case bytecode.OpYield, bytecode.OpAwait, bytecode.OpYieldStar:
 				return r.jitSuspend(f, in, f.base+int(ctx.ExitDepth))
@@ -6456,6 +6550,7 @@ func (r *Runtime) jitFinishExit(f *frame, e *jitEntry, l *jitNativeLevel) (Value
 		in := f.cl.fn.Code[pc]
 		if e != nil && e.ssa != nil {
 			e.ssaStats.hosts++
+			r.jitStringAddSeen(f, e, pc)
 			switch jitCallOp(in.Op) {
 			case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew:
 				r.jitCallSeen(f, e, pc, f.base+depth, jitCallInstr(in))

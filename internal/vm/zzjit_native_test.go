@@ -2918,7 +2918,7 @@ func TestJITHeldCountsEachKind(t *testing.T) {
 	}
 	lowered := 0
 	for _, l := range s.lowered {
-		n := jitLoweringFixed
+		n := jitLoweringFixed + jitCapBytes(l.hints.StringAdds) + jitCapBytes(l.hints.ElementReads)
 		for _, p := range l.progs {
 			if p != nil {
 				n += p.Footprint()
