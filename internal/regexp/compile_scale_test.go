@@ -1,6 +1,7 @@
 package regexp
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -44,6 +45,33 @@ func TestCompilingIsLinear(t *testing.T) {
 		}
 		if d := time.Since(start); d > 3*time.Second {
 			t.Errorf("%s took %v", name, d)
+		}
+	}
+}
+
+// TestNestingIsBounded pins maxNesting: groups, lookarounds and v-mode
+// classes nest a hundred thousand deep and no deeper, past which the
+// pattern is a SyntaxError. Eight million nested groups overflowed the Go
+// stack, which ends the process: a pattern could kill its host.
+func TestNestingIsBounded(t *testing.T) {
+	nested := func(open, close string, n int) string {
+		return strings.Repeat(open, n) + "a" + strings.Repeat(close, n)
+	}
+	for _, tc := range []struct{ open, close, flags string }{
+		{"(", ")", ""},
+		{"(?:", ")", ""},
+		{"(?=", ")", ""},
+		{"[", "]", "v"},
+	} {
+		if _, err := Compile(nested(tc.open, tc.close, maxNesting), tc.flags); err != nil {
+			t.Errorf("%s nested %d deep: %v", tc.open, maxNesting, err)
+		}
+		for _, n := range []int{maxNesting + 1, 8_000_000} {
+			_, err := Compile(nested(tc.open, tc.close, n), tc.flags)
+			var se *SyntaxError
+			if !errors.As(err, &se) || !strings.Contains(se.Msg, "nests too deeply") {
+				t.Errorf("%s nested %d deep: %v, want nests too deeply", tc.open, n, err)
+			}
 		}
 	}
 }

@@ -53,7 +53,29 @@ type parser struct {
 	// inClass marks a position inside a character class, where an escape may
 	// stand for a character the grammar reserves only there.
 	inClass bool
+	// depth is how deeply the group or class being parsed is nested, which
+	// nest refuses past maxNesting.
+	depth int
 }
+
+// maxNesting is how deeply groups and classes may nest. The parser, the
+// compiler and the analyses over the tree recurse once a level, and a Go
+// stack that overflows ends the process: eight million nested groups did.
+// A hundred thousand compile in a second, more than V8's own tests nest and
+// ten times what C QuickJS accepts.
+const maxNesting = 100_000
+
+// nest enters a nested group or class, refusing one past maxNesting; the
+// caller leaves it with unnest.
+func (p *parser) nest() error {
+	if p.depth > maxNesting {
+		return p.errorf("regular expression nests too deeply")
+	}
+	p.depth++
+	return nil
+}
+
+func (p *parser) unnest() { p.depth-- }
 
 // patternUnits reads a pattern as the code units it is made of, splitting a
 // character beyond the basic plane into the surrogate pair that spells it.
@@ -306,6 +328,10 @@ func (t *placeTrie) add(place []groupPlace) bool {
 
 // parseAlternation parses a sequence of alternatives separated by '|'.
 func (p *parser) parseAlternation() (node, error) {
+	if err := p.nest(); err != nil {
+		return nil, err
+	}
+	defer p.unnest()
 	first, err := p.parseSequence()
 	if err != nil {
 		return nil, err

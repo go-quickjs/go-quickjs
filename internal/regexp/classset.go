@@ -242,6 +242,10 @@ func (p *parser) parseClassSet() (node, error) {
 
 // parseClassSetBody parses the contents of a class up to its closing bracket.
 func (p *parser) parseClassSetBody() (*classSetValue, error) {
+	if err := p.nest(); err != nil {
+		return nil, err
+	}
+	defer p.unnest()
 	acc, err := p.parseClassSetOperand()
 	if err != nil {
 		return nil, err
