@@ -4376,6 +4376,7 @@ func (fb *jitFeedback) Global(pc int) (ssa.GlobalSite, bool) {
 		}
 		return site, true
 	}
+	site.Typed = !env.shape.keys[i].isAccessor() && jitTypedArray(env.vals[i])
 	if p := env.shape.keys[i]; !p.isAccessor() && p.flags&(propWritable|propConfigurable) == 0 {
 		switch {
 		case env.vals[i].IsUndefined():
@@ -4438,6 +4439,7 @@ func (fb *jitFeedback) moduleGlobal(name Atom, env *Object, in bytecode.Instr, w
 		return ssa.GlobalSite{}, false
 	}
 	site := ssa.GlobalSite{Key: uint32(name), Index: i, Holder: uintptr(unsafe.Pointer(holder)), Shadowable: shadowable}
+	site.Typed = !write && !check && jitTypedArray(p.value)
 	if !write && !check && p.flags&(propWritable|propConfigurable) == 0 {
 		// A const, or an import of one, once it has its value; or a
 		// global that never changes, undefined, NaN or Infinity.
@@ -4449,6 +4451,12 @@ func (fb *jitFeedback) moduleGlobal(name Atom, env *Object, in bytecode.Instr, w
 		}
 	}
 	return site, true
+}
+
+// jitTypedArray reports whether v is a typed array (ssa.GlobalSite's
+// Typed).
+func jitTypedArray(v Value) bool {
+	return v.IsObject() && v.Object().class == ClassTypedArray
 }
 
 // jitImportedBinding is where the import name binds in a module's
@@ -4541,7 +4549,7 @@ func (fb *jitFeedback) lexGlobal(name Atom, env *Object, write bool) (ssa.Global
 	if write && p.flags&propWritable == 0 {
 		return ssa.GlobalSite{}, false
 	}
-	site := ssa.GlobalSite{Key: uint32(name), Index: i, Lexical: true}
+	site := ssa.GlobalSite{Key: uint32(name), Index: i, Lexical: true, Typed: !write && jitTypedArray(p.value)}
 	if !write && p.flags&propWritable == 0 && p.value.IsNumber() {
 		site.Fixed, site.Constant = true, ir.Float(p.value.Number())
 	}

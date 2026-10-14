@@ -3,6 +3,7 @@
 package vm
 
 import (
+	"fmt"
 	"runtime"
 	"runtime/debug"
 	"testing"
@@ -292,15 +293,106 @@ func TestJITTypedReferenceReadsNative(t *testing.T) {
 		}
 	}
 	e := jitNativeForTest(t, r, "count")
-	entries, hosts := e.ssaStats.entries, e.ssaStats.hosts
+	entries, in, hosts := e.ssaStats.entries, e.link.in, e.ssaStats.hosts
 	if _, err := r.Run(compileForTest(t, `for (let k = 0; k < 20; k++) count(1000)`)); err != nil {
 		t.Fatal(err)
 	}
-	if n := e.ssaStats.entries - entries; n < 20 {
+	// Entered by Go, or called by the loop's own native code.
+	if n := e.ssaStats.entries - entries + e.link.in - in; n < 20 {
 		t.Fatalf("count ran natively %d times of 20", n)
 	}
 	if n := e.ssaStats.hosts - hosts; n > 2 {
 		t.Errorf("count left native code %d times in 20,000 reads", n)
+	}
+}
+
+// Element reads of globals that hold typed arrays -- a var's, a let's --
+// read a typed array's number wherever the code compiled them, and Go's
+// read stands in once a binding holds something else: a plain array, an
+// array of holes and strings, a typed array of another type, a typed
+// array detached... Each answer is the interpreter's, in every tier and
+// under every stress setting.
+func TestJITTypedGlobals(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const src = `
+		var heap32 = new Int32Array(64), heapU16 = new Uint16Array(heap32.buffer)
+		let heapF = new Float64Array(16)
+		for (let i = 0; i < 64; i++) heap32[i] = i * 77 - 900
+		for (let i = 0; i < 16; i++) heapF[i] = i / 4
+		function step(k, n) {
+			let s = 0
+			for (let i = 0; i < n; i++) {
+				const j = (i + k) & 31
+				if (k === 0) { if (heap32[j] > 0) s++ }
+				else if (k === 1) { if (heapU16[j * 2] !== 0) s += 2 }
+				else if (k === 2) { const x = heapF[j & 15]; if (x === 1.5) s += 3 }
+				else s += String(heap32[j]).length
+			}
+			return s
+		}
+		const log = []
+		for (let r = 0; r < 12; r++) for (let k = 0; k < 4; k++) log.push(step(k, 40))
+		heap32 = [1, -2, 3]; heapU16 = new Float64Array(80).fill(0.5); heapF = ['a', , 1.5]
+		for (let r = 0; r < 4; r++) for (let k = 0; k < 4; k++) log.push(step(k, 40))
+		const buf = new ArrayBuffer(256); heap32 = new Int32Array(buf); heapU16 = new Uint16Array(buf)
+		for (let k = 0; k < 4; k++) log.push(step(k, 40))
+		buf.transfer()
+		for (let k = 0; k < 4; k++) log.push(step(k, 40))
+		log.join()`
+	jitDifferential(t, src)
+}
+
+// A function that reads a global's typed array in each of its branches,
+// one branch an invocation, is compiled for all of them at once: each read
+// is a typed array's from the first compile. Learned at each read's exit
+// instead, it had been compiled again once for each branch, as Mandreel's
+// sorts were, a dozen times each -- 40% of its time.
+func TestJITTypedGlobalsNative(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r := New(Config{JIT: true})
+	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	const setup = `
+		var heap32 = new Int32Array(256), heapU8 = new Uint8Array(heap32.buffer)
+		for (let i = 0; i < 256; i++) heap32[i] = i & 3
+		function branches(k, n) {
+			let s = 0
+			for (let i = 0; i < n; i++) {
+				switch (k) {
+				case 0: if (heap32[i & 255] !== 0) s++; break
+				case 1: if (heap32[(i * 3) & 255] === 2) s++; break
+				case 2: if (heapU8[i & 1023] === 1) s++; break
+				case 3: if (heap32[(i + 7) & 255] === heap32[i & 255]) s++; break
+				case 4: if (heapU8[(i * 5) & 1023] !== 3) s++; break
+				case 5: if (heap32[(i >> 1) & 255] === 1) s++; break
+				}
+			}
+			return s
+		}`
+	if _, err := r.Run(compileForTest(t, setup)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Run(compileForTest(t, `branches(0, 1000)`)); err != nil {
+		t.Fatal(err)
+	}
+	e := jitNativeForTest(t, r, "branches")
+	reopts, hosts := e.reopts, e.ssaStats.hosts
+	for k := 1; k < 6; k++ {
+		if _, err := r.Run(compileForTest(t, fmt.Sprintf(`branches(%d, 1000)`, k))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if e != jitNativeForTest(t, r, "branches") {
+		t.Fatal("branches' entry was made again")
+	}
+	if n := e.reopts - reopts; n != 0 {
+		t.Errorf("branches was compiled again %d times for its branches' reads", n)
+	}
+	if n := e.ssaStats.hosts - hosts; n > 2 {
+		t.Errorf("branches left native code %d times in 5,000 reads", n)
 	}
 }
 

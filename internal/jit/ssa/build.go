@@ -123,6 +123,14 @@ type ElementFeedback interface {
 	TypedRead(pc int) bool
 }
 
+// typedReceiver reports whether the element read at pc, of recv, is
+// compiled to read a typed array's number: one that has met typed arrays
+// (typedRead), or one of what a global read found holding a typed array
+// (GlobalSite's Typed).
+func (b *builder) typedReceiver(pc int, recv *Value) bool {
+	return b.typedArrays[recv] || b.typedRead(pc)
+}
+
 // typedRead reports whether the element read at pc has met typed arrays
 // (ElementFeedback).
 func (b *builder) typedRead(pc int) bool {
@@ -489,6 +497,15 @@ func InlineCalls(p *ir.Program) ([]int, bool) {
 // The VM keeps the object as long as the code. Shadowable says a
 // script-level lexical binding of the name would shadow it, as for the
 // global object's.
+//
+// Typed, for a read, says the binding held a typed array when the code was
+// compiled: an element read of what the read found, whatever native code
+// does with the element, reads a typed array's number (TypedRead's), and
+// Go reads any other's, as V8 compiles for a global cell's constant type.
+// Emscripten's code reads its heap through such globals, at every branch:
+// learned at each read's exit instead, in turn, a function was compiled
+// again for each, a dozen times, as each invocation of it came to one
+// more.
 type GlobalSite struct {
 	Key        uint32
 	Index      int32
@@ -497,6 +514,7 @@ type GlobalSite struct {
 	Constant   ir.Value
 	Holder     uintptr
 	Shadowable bool
+	Typed      bool
 }
 
 // PropertySite is a property site: its key, the VM's atom; and, if the
@@ -641,7 +659,10 @@ type builder struct {
 	calls map[int][]*CallSite
 	// callKeeps are, by PC, the keep cells of the calls' results (calls).
 	callKeeps map[int]int
-	frameOf   []*frame
+	// typedArrays are the global reads whose bindings held typed arrays
+	// (GlobalSite's Typed), which element reads of them read as such.
+	typedArrays map[*Value]bool
+	frameOf     []*frame
 	// literals are the literals made natively, by PC, each with the keep
 	// cell planning gave it (literal).
 	literals map[int]literalKeep
@@ -2442,7 +2463,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			}
 			return updated, updated
 		}
-		if in.Reference && in.Op == ir.ArrayRead && b.typedRead(pc) {
+		if in.Reference && in.Op == ir.ArrayRead && b.typedReceiver(pc, operand(in.Left)) {
 			// A typed array's number; Go reads any other's.
 			array := guard(OpIndexedOf, Ptr, ir.HostExit, operand(in.Left))
 			key, _ := keyOf(ir.HostExit)
@@ -2519,6 +2540,12 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		v := f.newValue(blk, OpLoadCell, Tagged, cell)
 		v.Shadow = cell
+		if site.Typed {
+			if b.typedArrays == nil {
+				b.typedArrays = map[*Value]bool{}
+			}
+			b.typedArrays[v] = true
+		}
 		b.assign(in.Dest, blk, v)
 	case ir.PropertyRead, ir.PropertyWrite, ir.ReferenceRead:
 		if s, ok := b.stringProperty(pc); ok {
