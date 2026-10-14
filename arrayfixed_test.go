@@ -84,3 +84,44 @@ func TestForOfArrayFastPath(t *testing.T) {
 		out.join(" | ")`,
 		"freeze 1,2,3 | sparse 11 undefined | accessor 1,2,g | shrink 1 | for-of next 3 | spread next 3 | call spread next 3")
 }
+
+// TestArrayFillFastPath pins that fill, which writes a plain dense array's
+// elements in place, answers as the property protocol does: holes made
+// properties, a range given or negative, an index an inherited setter
+// takes, a read-only element, a non-extensible or frozen array, a valueOf
+// that shortens or grows the array, a subclass, a primitive and an
+// array-like; and an array sparse only for its length, filled whole --
+// dense after -- or in part, one with an element in its table, and one
+// longer than an atom's indices. The answers are node's.
+func TestArrayFillFastPath(t *testing.T) {
+	checkEval(t, `const out = [];
+		const t = (name, f) => { try { out.push(name + ": " + f()) } catch (e) { out.push(name + ": " + e.constructor.name) } };
+		const show = (a) => Array.from({length: a.length}, (_, i) => (i in a) ? String(a[i]) : "_").join(",") + " len " + a.length;
+		t("holes", () => show(new Array(5).fill(1)));
+		t("keys", () => Object.keys(new Array(4).fill(0)).join(""));
+		t("part", () => show([,,,,].fill(7, 1, 3)));
+		t("neg", () => show([1,2,3,4,5].fill(0, -3, -1)));
+		t("over", () => show([1,2,3].fill(9, 1, 100)));
+		t("setter", () => { const log = []; Object.defineProperty(Array.prototype, "1", {set(v) { log.push(v) }, configurable: true}); try { const a = [,,,].fill(9); return show(a) + " log " + log } finally { delete Array.prototype[1] } });
+		t("own ro", () => { const a = [1,2,3]; Object.defineProperty(a, "1", {writable: false}); a.fill(5); return show(a) });
+		t("pe holes", () => { const a = [1,,3]; Object.preventExtensions(a); a.fill(5); return show(a) });
+		t("pe full", () => { const a = [1,2,3]; Object.preventExtensions(a); a.fill(5); return show(a) });
+		t("frozen", () => Object.freeze([1,2]).fill(3));
+		t("frozen empty range", () => show(Object.freeze([1,2]).fill(3, 2)));
+		t("shrunk", () => { const a = [1,2,3,4]; a.fill(0, {valueOf() { a.length = 1; return 0 }}); return show(a) });
+		t("grown", () => { const a = [1,2]; a.fill(0, 0, {valueOf() { a.push(8, 9); return 4 }}); return show(a) });
+		t("subclass", () => { class A extends Array {} const a = new A(3); a.fill(2); return show(a) + " " + (a instanceof A) });
+		t("primitive", () => typeof Array.prototype.fill.call("ab", 1));
+		t("object", () => { const o = {length: 2}; Array.prototype.fill.call(o, 4); return o[0] + "" + o[1] });
+		t("returns", () => { const a = [0]; return a.fill(1) === a });
+		t("long", () => { const a = new Array(3000).fill(1); let s = 0; for (const x of a) s += x; return s + " " + a.length + " " + Object.keys(a).length });
+		t("long push", () => { const a = new Array(2000).fill(0); a.push(7); return a.length + " " + a[2000] + " " + (1999 in a) });
+		t("long part", () => { const a = new Array(3000); a.fill(1, 0, 10); return a.length + " " + (9 in a) + " " + (10 in a) + " " + (2999 in a) + " " + Object.keys(a).length });
+		t("long middle", () => { const a = new Array(3000); a.fill(1, 100, 200); return (99 in a) + " " + (100 in a) + " " + (199 in a) + " " + (200 in a) + " " + Object.keys(a).length });
+		t("long with key", () => { const a = new Array(3000); a[2500] = 5; a.fill(2); return a[2500] + " " + Object.keys(a).length + " " + a.length });
+		t("long then length", () => { const a = new Array(3000).fill(3); a.length = 10; return a.length + " " + Object.keys(a).length + " " + a[9] });
+		t("huge", () => { const a = []; a.length = 2 ** 32 - 1; a.fill(1, 0, 3); return a.length + " " + Object.keys(a).join() });
+		t("big", () => { const a = []; a.length = 2 ** 31 + 5; a.fill(4, 2 ** 31, 2 ** 31 + 2); return Object.keys(a).join() });
+		t("sort after", () => { const a = new Array(1500).fill(2); a[3] = 1; a.sort(); return a[0] + " " + a[1499] + " " + a.length });
+		out.join("\n")`, "holes: 1,1,1,1,1 len 5\nkeys: 0123\npart: _,7,7,_ len 4\nneg: 1,2,0,0,5 len 5\nover: 1,9,9 len 3\nsetter: 9,undefined,9 len 3 log 9\nown ro: TypeError\npe holes: TypeError\npe full: 5,5,5 len 3\nfrozen: TypeError\nfrozen empty range: 1,2 len 2\nshrunk: 0,0,0,0 len 4\ngrown: 0,0,8,9 len 4\nsubclass: 2,2,2 len 3 true\nprimitive: TypeError\nobject: 44\nreturns: true\nlong: 3000 3000 3000\nlong push: 2001 7 true\nlong part: 3000 true false false 10\nlong middle: false true true false 100\nlong with key: 2 3000 3000\nlong then length: 10 10 3\nhuge: 4294967295 0,1,2\nbig: 2147483648,2147483649\nsort after: 1 2 1500")
+}

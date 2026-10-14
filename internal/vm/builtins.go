@@ -2806,6 +2806,9 @@ func (r *Runtime) initArrayExtras() {
 		if err != nil {
 			return Undefined, err
 		}
+		if start, err = rt.fillArray(a.o, start, end, v); err != nil {
+			return Undefined, err
+		}
 		for i := start; i < end && i < a.n; i++ {
 			// Through the property protocol, so that a read-only element is
 			// the TypeError it should be rather than a silent write.
@@ -2948,6 +2951,54 @@ func (r *Runtime) noInheritedIndices(o *Object) bool {
 		}
 	}
 	return true
+}
+
+// fillArray writes v to o's elements from start up to end in place, where
+// the property protocol would make them data properties and call nothing
+// -- an array of the realm's, extensible, whose prototypes have no element
+// a setter could be asked about (noInheritedIndices), as push's fast path
+// -- and returns where it stopped, or an interrupt, for fill to write the
+// rest through the protocol: past a dense array's elements, which a valueOf may have
+// shortened, or anywhere in one that is not such an array. A hole becomes
+// the element, as the protocol makes it. An array sparse only for its
+// length -- new Array(5000), past the holes a dense one holds -- whose
+// table has no index, holds nothing past its elements: they are appended,
+// and once they reach its length it is dense again. Through setProp, one
+// element at a time, AWFY's Sieve spent half its time filling a new
+// Array(5000).
+func (r *Runtime) fillArray(o *Object, start, end int64, v Value) (int64, error) {
+	if o.class != ClassArray || o.proto != r.proto.array || !r.noInheritedIndices(o) || o.flags&objExtensible == 0 {
+		return start, nil
+	}
+	sparse := o.flags&objHasSparseElements != 0
+	if sparse && (o.arrayLen >= 1<<31 || !o.noIndexKeys()) {
+		// An index past what an atom carries is a key noIndexKeys does
+		// not look for.
+		return start, nil
+	}
+	elems := o.elemsOf()
+	for ; start < end && start < int64(len(elems)); start++ {
+		if err := r.tick(); err != nil {
+			return start, err
+		}
+		elems[start] = v
+	}
+	if !sparse || start != int64(len(elems)) {
+		return start, nil
+	}
+	// Grown once, to what is filled: appended one at a time, a slice grows
+	// and is copied a dozen times on its way to thousands of elements.
+	o.extOf().elems = slices.Grow(elems, int(min(end, int64(o.arrayLen))-start))
+	for ; start < end && start < int64(o.arrayLen); start++ {
+		if err := r.tick(); err != nil {
+			return start, err
+		}
+		o.extOf().elems = append(o.elemsOf(), v)
+	}
+	if uint32(len(o.elemsOf())) == o.arrayLen {
+		o.flags &^= objHasSparseElements
+	}
+	return start, nil
 }
 
 // compareForSort reports whether x sorts before y.
