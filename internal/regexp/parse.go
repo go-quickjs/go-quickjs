@@ -2,6 +2,7 @@ package regexp
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"unicode"
@@ -442,19 +443,28 @@ func (p *parser) parseQuantifier() (min, max int, ok bool, err error) {
 	return 0, 0, false, nil
 }
 
+// maxDecimal is where parseDecimal saturates: a quantifier's count past it
+// is taken as it, as V8 (kMaxInt) and QuickJS (INT32_MAX) take one. It is
+// longer than any string, so as a maximum it is unbounded and as a minimum
+// never met; and it fits an int and a rune on every platform, where a
+// larger count, cut to 32 bits by the compiler, made {0,4294967296} a
+// maximum of none.
+const maxDecimal = math.MaxInt32
+
 func (p *parser) parseDecimal() (int, bool) {
 	start := p.pos
+	n := 0
 	for !p.atEnd() && p.peek() >= '0' && p.peek() <= '9' {
+		// Saturated before it is multiplied, which on 32 bits would overflow.
+		if d := int(p.peek() - '0'); n > (maxDecimal-d)/10 {
+			n = maxDecimal
+		} else {
+			n = n*10 + d
+		}
 		p.pos++
 	}
 	if p.pos == start {
 		return 0, false
-	}
-	n, err := strconv.Atoi(string(p.src[start:p.pos]))
-	if err != nil {
-		// A count too large to represent is treated as unbounded, which is the
-		// only sensible reading and what other engines do.
-		return 1 << 30, true
 	}
 	return n, true
 }

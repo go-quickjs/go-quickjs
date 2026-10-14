@@ -74,6 +74,30 @@ func TestQuantifiers(t *testing.T) {
 	checkNoMatch(t, "a{3}", "", "aa")
 }
 
+// TestQuantifierCountsSaturate pins that a count past 2**31-1 is taken as
+// 2**31-1, as V8 and QuickJS take it: as a maximum it is unbounded, as a
+// minimum never met, and two such counts are in order. A count that fitted
+// an int but not 32 bits was cut by the compiler, so {0,4294967296} matched
+// nothing and {0,4294967297} one character; one that fitted neither was
+// 2**30, and {2147483648,2147483647} was out of order. Answers checked
+// against Node and C QuickJS.
+func TestQuantifierCountsSaturate(t *testing.T) {
+	for _, max := range []string{"2147483647", "2147483648", "4294967296", "4294967297", "99999999999999999999"} {
+		checkMatch(t, "a{0,"+max+"}", "", "aaa", "aaa")
+		checkMatch(t, "a{2,"+max+"}", "", "aaa", "aaa")
+		checkNoMatch(t, "^a{"+max+"}$", "", "aaa")
+		checkNoMatch(t, "a{"+max+",}", "", "aaa")
+	}
+	for _, src := range []string{"a{4294967297,4294967296}", "a{2147483648,2147483647}", "a{99999999999999999999,99999999999999999998}"} {
+		checkNoMatch(t, src, "", "aaa")
+	}
+	for _, src := range []string{"a{3,2}", "a{2147483647,2147483646}"} {
+		if _, err := Compile(src, ""); err == nil {
+			t.Errorf("/%s/ compiled; want numbers out of order", src)
+		}
+	}
+}
+
 func TestLazyQuantifiers(t *testing.T) {
 	// A lazy quantifier prefers the shortest match, which is the whole point.
 	checkMatch(t, "a+?", "", "aaa", "a")
