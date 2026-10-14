@@ -3695,13 +3695,20 @@ func (r *Runtime) jitIndexSeen(e *jitEntry, pc, sp int) {
 	if p == nil || pc >= len(p.Code) || sp < 2 {
 		return
 	}
-	if in := p.Code[pc]; in.Op != ir.ArrayRead || !in.Reference || slices.Contains(e.typedReads, int32(pc)) {
+	if in := p.Code[pc]; in.Op != ir.ArrayRead || !in.Reference || slices.Contains(e.typedReads, int32(pc)) || slices.Contains(e.stringReads, int32(pc)) {
 		return
 	}
-	if o := r.stack[sp-2]; !o.IsObject() || o.Object().class != ClassTypedArray {
+	switch o := r.stack[sp-2]; {
+	case o.IsString() && r.stack[sp-1].IsNumber():
+		// A string's element, s[i], compiled for a string from then on
+		// (ssa.OpStringChar). PDF.js's font parsers read their programs
+		// so, every character leaving native code.
+		e.stringReads = append(e.stringReads, int32(pc))
+	case o.IsObject() && o.Object().class == ClassTypedArray:
+		e.typedReads = append(e.typedReads, int32(pc))
+	default:
 		return
 	}
-	e.typedReads = append(e.typedReads, int32(pc))
 	if !e.feedReopt {
 		// At its next invocation, as for a property site's feedback
 		// (jitFed): its other reads learn theirs meanwhile, and one compile
@@ -3709,6 +3716,11 @@ func (r *Runtime) jitIndexSeen(e *jitEntry, pc, sp int) {
 		// dozen sites.
 		e.feedReopt, e.feedStarts, e.feedWork = true, e.starts+e.link.in, e.ssaStats.work
 	}
+}
+
+// StringRead is ssa.StringElementFeedback's (jitIndexSeen).
+func (fb *jitFeedback) StringRead(pc int) bool {
+	return fb.e != nil && fb.root == nil && slices.Contains(fb.e.stringReads, int32(pc))
 }
 
 // TypedRead is ssa.ElementFeedback's (jitIndexSeen).
@@ -5870,8 +5882,15 @@ func (r *Runtime) jitGrowContexts() bool {
 		return false
 	}
 	chunk := make([]abi.Context, add)
+	if s.charStrings == nil {
+		s.charStrings = new([128]Value)
+		for b := range s.charStrings {
+			s.charStrings[b] = Str(r.asciiCharString(byte(b)))
+		}
+	}
 	for i := range chunk {
 		chunk[i].Host = unsafe.Pointer(r)
+		chunk[i].CharStrings = unsafe.Pointer(s.charStrings)
 		chunk[i].SetConsts(&jitEncoding)
 		chunk[i].Level, chunk[i].Bounds, chunk[i].Hints = uint64(old+i), &s.bounds, &s.hintTable
 		if s.mega == nil {

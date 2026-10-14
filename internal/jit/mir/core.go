@@ -1042,7 +1042,7 @@ func (c *core) entryAt(pc int) *ssa.Block {
 // read there with no decoding (sourceAddr).
 func cellSource(s *ssa.Value) bool {
 	switch s.Op {
-	case ssa.OpPropCell, ssa.OpElemCell, ssa.OpGlobalCell, ssa.OpLexCell, ssa.OpBindingCell, ssa.OpStringMethod, ssa.OpStringProp, ssa.OpCallCell, ssa.OpConstCell, ssa.OpUpvalueCell, ssa.OpLocalCell:
+	case ssa.OpPropCell, ssa.OpElemCell, ssa.OpGlobalCell, ssa.OpLexCell, ssa.OpBindingCell, ssa.OpStringMethod, ssa.OpStringChar, ssa.OpStringProp, ssa.OpCallCell, ssa.OpConstCell, ssa.OpUpvalueCell, ssa.OpLocalCell:
 		return true
 	}
 	return false

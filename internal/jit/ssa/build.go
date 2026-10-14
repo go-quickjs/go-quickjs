@@ -123,6 +123,21 @@ type ElementFeedback interface {
 	TypedRead(pc int) bool
 }
 
+// StringElementFeedback is Feedback that knows the element reads whose
+// receivers have been strings (OpStringChar): such a read is compiled for
+// a string, which native code makes the element of, and any other
+// receiver exits.
+type StringElementFeedback interface {
+	StringRead(pc int) bool
+}
+
+// stringReceiver reports whether the element read at pc is compiled for a
+// string's (StringElementFeedback).
+func (b *builder) stringReceiver(pc int) bool {
+	f, ok := b.fb.(StringElementFeedback)
+	return ok && f.StringRead(pc)
+}
+
 // typedReceiver reports whether the element read at pc, of recv, is
 // compiled to read a typed array's number: one that has met typed arrays
 // (typedRead), or one of what a global read found holding a typed array
@@ -2465,6 +2480,16 @@ func (b *builder) instruction(blk *Block, pc int) {
 				return old, updated
 			}
 			return updated, updated
+		}
+		if in.Reference && in.Op == ir.ArrayRead && b.stringReceiver(pc) {
+			// A string's element, a string of one ASCII character, as the
+			// runtime has it; Go reads any other's.
+			key, _ := keyOf(ir.HostExit)
+			cell := guard(OpStringChar, Source, ir.HostExit, operand(in.Left), key)
+			v := f.newValue(blk, OpLoadCell, Tagged, cell)
+			v.Shadow = cell
+			b.assign(in.Dest, blk, v)
+			break
 		}
 		if in.Reference && in.Op == ir.ArrayRead && b.typedReceiver(pc, operand(in.Left)) {
 			// A typed array's number; Go reads any other's.

@@ -295,8 +295,10 @@ type jitEntry struct {
 	poly []jitPolySite
 	// typedReads are the element reads, by PC, whose result no native
 	// operation takes as a number, whose receivers have been typed arrays
-	// (ssa.ElementFeedback).
+	// (ssa.ElementFeedback), and stringReads those whose receivers have
+	// been strings (ssa.StringElementFeedback).
 	typedReads  []int32
+	stringReads []int32
 	polyReopt   bool
 	polyPending bool
 	polySettled uint8
@@ -490,6 +492,10 @@ type jitState struct {
 	// ghosts are the functions whose code the cache dropped to make room,
 	// by address, until compiled again (jitGhost).
 	ghosts map[uintptr]jitGhost
+	// charStrings are the runtime's strings of one ASCII character, by code
+	// unit, which native code makes a string's elements of
+	// (abi.Context.CharStrings): the strings unitString hands out.
+	charStrings *[128]Value
 	// goCallDepth is the depth of the frame of the callee of a call Go
 	// makes for native code (jitGoCall, jitGoCallNested), while it makes
 	// it: native code's call, not the existing tiers' (jitHotWork).
@@ -753,7 +759,7 @@ func jitCompiledBytes(shapes []*shape, holders []*Object, fed []jitFedSite, fedI
 // with the objects made for them.
 func (e *jitEntry) learnedBytes() int {
 	n := jitCapBytes(e.failed) + jitCapBytes(e.failedEntries) + jitCapBytes(e.literals) + jitCapBytes(e.poly) + jitCapBytes(e.typedReads) +
-		jitCapBytes(e.strSites) + jitCapBytes(e.nativeCalls) + jitCapBytes(e.inlines) + jitCapBytes(e.notInline) +
+		jitCapBytes(e.stringReads) + jitCapBytes(e.strSites) + jitCapBytes(e.nativeCalls) + jitCapBytes(e.inlines) + jitCapBytes(e.notInline) +
 		jitCapBytes(e.nativeCallers) + jitCapBytes(e.callSites)
 	for i := range e.poly {
 		p := &e.poly[i]
@@ -1084,6 +1090,7 @@ type jitGhost struct {
 	failed        []int32
 	failedEntries []uint32
 	typedReads    []int32
+	stringReads   []int32
 }
 
 // jitGhosts bounds the ghosts kept; past it they are forgotten.
@@ -1096,7 +1103,7 @@ func (s *jitState) ghost(addr uintptr, e *jitEntry) {
 	}
 	g := s.ghosts[addr]
 	g.evictions, g.asks = min(g.evictions+1, 16), 0
-	g.failed, g.failedEntries, g.typedReads = e.failed, e.failedEntries, e.typedReads
+	g.failed, g.failedEntries, g.typedReads, g.stringReads = e.failed, e.failedEntries, e.typedReads, e.stringReads
 	s.ghosts[addr] = g
 }
 
@@ -1557,7 +1564,7 @@ func (r *Runtime) jitCompileFor(fn *bytecode.Function, cl *closure, kind jitLowe
 	e := &jitEntry{used: s.epoch(), serial: s.serial, eager: r.jitCallThreshold <= 1, hot: kind == jitLowerHot}
 	if g, ok := s.ghosts[uintptr(unsafe.Pointer(fn))]; ok {
 		// What its code dropped before had learned (jitGhost).
-		e.failed, e.failedEntries, e.typedReads = g.failed, g.failedEntries, g.typedReads
+		e.failed, e.failedEntries, e.typedReads, e.stringReads = g.failed, g.failedEntries, g.typedReads, g.stringReads
 	}
 	s.linkFor(fn, e)
 	p, err := r.jitLower(fn, kind)

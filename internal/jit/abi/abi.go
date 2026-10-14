@@ -229,6 +229,11 @@ type Context struct {
 	// found it still there before an entry of a function that reads it, and
 	// otherwise nothing (a nil pointer word).
 	CharCodeAt Slot
+	// CharStrings is the runtime's strings of one ASCII character, as values
+	// by code unit, 128 of them, which an element read of a string makes
+	// (ssa.OpStringChar), or nil. Go sets it as it makes the context; no
+	// one writes them.
+	CharStrings unsafe.Pointer
 	// StringProto is String.prototype, StringShape the address of the
 	// shape it had, which Go keeps alive, and CharCodeAtOffset where its
 	// charCodeAt's value is in its table, in bytes, when Go found the
@@ -509,6 +514,7 @@ var (
 	// OffStringMethods locates Context's StringMethods.
 	OffStringMethods = int32(unsafe.Offsetof(Context{}.StringMethods))
 	OffCharCode      = int32(unsafe.Offsetof(Context{}.CharCodeAt))
+	OffCharStrings   = int32(unsafe.Offsetof(Context{}.CharStrings))
 	// OffStringProto, OffStringShape and OffCharCodeAtOffset locate what a
 	// string's charCodeAt is read with (Context's StringProto).
 	OffStringProto      = int32(unsafe.Offsetof(Context{}.StringProto))

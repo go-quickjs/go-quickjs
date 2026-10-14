@@ -3408,13 +3408,37 @@ func (c *a64Compiler) stringCode(v *ssa.Value, guard func(arm64.Cond)) {
 	c.a.Load(a64B, a64Ctx, abi.OffCharCode+c.enc.RefOffset)
 	c.a.Cmp(a64C, a64B, true)
 	guard(arm64.NE)
-	if !c.reference(v, v.Args[1], c.enc.String, guard) {
+	if !c.stringUnit(v, v.Args[1], v.Args[2], guard) {
 		return
+	}
+	c.a.Scvtf(a64F0, a64A, true)
+	c.setF(v, a64F0)
+}
+
+// stringChar is s[i] (ssa.OpStringChar), as amd64's.
+func (c *a64Compiler) stringChar(v *ssa.Value, guard func(arm64.Cond)) {
+	if !c.stringUnit(v, v.Args[0], v.Args[1], guard) {
+		return
+	}
+	c.a.CmpImm(a64A, 128, true)
+	guard(arm64.HS)
+	c.a.Load(a64B, a64Ctx, abi.OffCharStrings)
+	c.a.Cbz(a64B, c.stubLabel(v.State, exitKind(v.Aux)), true)
+	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 4, true)
+	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.setG(v, a64A)
+}
+
+// stringUnit reads the code unit at index key of str, a flat string, into
+// A, as amd64's, and reports whether the code goes on. It uses B and C.
+func (c *a64Compiler) stringUnit(v, str, key *ssa.Value, guard func(arm64.Cond)) bool {
+	if !c.reference(v, str, c.enc.String, guard) {
+		return false
 	}
 	fail := c.stubLabel(v.State, exitKind(v.Aux))
 	c.a.Load(a64B, a64C, c.enc.StringLeft)
 	c.a.Cbnz(a64B, fail, true)
-	c.index(v.Args[2], guard)
+	c.index(key, guard)
 	c.a.Load(a64B, a64C, c.enc.StringLength)
 	c.a.Cmp(a64A, a64B, true)
 	guard(arm64.HS)
@@ -3432,8 +3456,7 @@ func (c *a64Compiler) stringCode(v *ssa.Value, guard func(arm64.Cond)) {
 	c.a.Op(arm64.Add, a64B, a64B, a64A, true)
 	c.a.LoadU16(a64A, a64B, 0)
 	c.a.Bind(done)
-	c.a.Scvtf(a64F0, a64A, true)
-	c.setF(v, a64F0)
+	return true
 }
 
 // index converts an element's key to an index in A, failing unless it is an
@@ -4001,6 +4024,8 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.setG(v, a64A)
 	case ssa.OpStringCode:
 		c.stringCode(v, c.guardFor(v))
+	case ssa.OpStringChar:
+		c.stringChar(v, c.guardFor(v))
 	case ssa.OpLoadCell:
 		d := c.gdst(v)
 		c.a.Load(d, c.gpr(arg(0), a64A), c.enc.NumOffset)

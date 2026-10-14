@@ -3670,13 +3670,41 @@ func (c *compiler) stringCode(v *ssa.Value, guard func(amd64.Cond)) {
 	c.a.Load(scratchB, regCtx, abi.OffCharCode+c.enc.RefOffset)
 	c.a.Op(amd64.Cmp, scratchC, scratchB, true)
 	guard(amd64.CondNE)
-	if !c.reference(v, v.Args[1], c.enc.String, guard) {
+	if !c.stringUnit(v, v.Args[1], v.Args[2], guard) {
 		return
+	}
+	c.a.Cvtsi2sd(xScratch0, scratchA, true)
+	c.setX(v, xScratch0)
+}
+
+// stringChar is s[i] (ssa.OpStringChar): the cell of the runtime's string
+// of the code unit at the index, if it is below 128, into v's register.
+func (c *compiler) stringChar(v *ssa.Value, guard func(amd64.Cond)) {
+	if !c.stringUnit(v, v.Args[0], v.Args[1], guard) {
+		return
+	}
+	c.a.OpImm(amd64.Cmp, scratchA, 128, true)
+	guard(amd64.CondAE)
+	c.a.Load(scratchB, regCtx, abi.OffCharStrings)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	guard(amd64.CondE)
+	c.a.ShiftImm(amd64.Shl, scratchA, 4, true)
+	c.a.Op(amd64.Add, scratchA, scratchB, true)
+	c.setG(v, scratchA)
+}
+
+// stringUnit reads the code unit at index key of str, a flat string, into
+// scratchA, failing for any other value, a string that is not flat, or an
+// index past its end, and reports whether the code goes on. It uses
+// scratchB and scratchC.
+func (c *compiler) stringUnit(v, str, key *ssa.Value, guard func(amd64.Cond)) bool {
+	if !c.reference(v, str, c.enc.String, guard) {
+		return false
 	}
 	c.a.Load(scratchB, scratchC, c.enc.StringLeft)
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
 	guard(amd64.CondNE)
-	c.index(v.Args[2], guard)
+	c.index(key, guard)
 	c.a.Load(scratchB, scratchC, c.enc.StringLength)
 	c.a.Op(amd64.Cmp, scratchA, scratchB, true)
 	guard(amd64.CondAE)
@@ -3696,8 +3724,7 @@ func (c *compiler) stringCode(v *ssa.Value, guard func(amd64.Cond)) {
 	c.a.Op(amd64.Add, scratchB, scratchA, true)
 	c.a.LoadU16(scratchA, scratchB, 0)
 	c.a.Bind(done)
-	c.a.Cvtsi2sd(xScratch0, scratchA, true)
-	c.setX(v, xScratch0)
+	return true
 }
 
 // index converts an element's key, a double, to an index in scratchA,
@@ -4334,6 +4361,8 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.setG(v, scratchA)
 	case ssa.OpStringCode:
 		c.stringCode(v, c.guardFor(v))
+	case ssa.OpStringChar:
+		c.stringChar(v, c.guardFor(v))
 	case ssa.OpLoadCell:
 		d := c.gdst(v)
 		c.a.Load(d, c.gpr(arg(0), scratchA), c.enc.NumOffset)
