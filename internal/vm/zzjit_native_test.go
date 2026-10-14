@@ -4494,9 +4494,10 @@ func BenchmarkJITHostRoundTrip(b *testing.B) {
 // comparison of what are not numbers goes to Go, which resumes after it,
 // and an entry whose slots were not numbers loads them as they are. The
 // loop then stays native, and no guard fails again. A function whose
-// speculations keep failing somewhere new is compiled again
-// jitReoptimizations times, and then keeps its code. Each answer, and each
-// valueOf call, is the interpreter's.
+// speculations keep failing somewhere new -- each call once, before its
+// loop, which a deoptimized invocation is taken back to natively -- is
+// compiled again jitReoptimizations times, and then keeps its code. Each
+// answer, and each valueOf call, is the interpreter's.
 func TestJITSSAReoptimize(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -4504,7 +4505,7 @@ func TestJITSSAReoptimize(t *testing.T) {
 	setup := `var calls=0,v={valueOf(){calls++;return 2}};
 		function scale(k,n){let s=0;for(let i=0;i<n;i++){s+=i*2;if(i==n-1)s=s+k}return s}
 		function cmp(a,b,n){let s=0;for(let i=0;i<n;i++){if(a<b)s+=1;s+=a*b}return s}
-		function many(a,b,c,d,e,f,n){let s=0;for(let i=0;i<n;i++){s+=a*3;s+=b*3;s+=c*3;s+=d*3;s+=e*3;s+=f*3}return s}`
+		function many(a,b,c,d,e,f,n){let s=a*3;s+=b*3;s+=c*3;s+=d*3;s+=e*3;s+=f*3;for(let i=0;i<n;i++){s=(s*7+i)|0}return s}`
 	rounds := []string{
 		`[scale(1,300),scale(2,300),cmp(1,2,300)].join()`,
 		`[scale('x',300),scale(v,300),cmp('1',2,300),cmp(v,3,300),calls].join()`,

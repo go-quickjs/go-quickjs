@@ -42,7 +42,11 @@ type jitFields struct {
 	jitEnabled       bool
 	jitCallThreshold uint8
 	jitDeoptDepth    uint32
-	jit              *jitState
+	// jitDeoptCode is the code a failed guard left the invocation the
+	// interpreter goes on with at jitDeoptDepth (jitDeoptInterpret), or
+	// nil for one it goes on with for any other reason (jitInterpret).
+	jitDeoptCode *jit.SSACode
+	jit          *jitState
 	// jitMemoryLimit is Config's JITMemoryLimit: the JIT's budget, if more
 	// than 0 (jitBudget).
 	jitMemoryLimit int64
@@ -1736,7 +1740,7 @@ func (s *jitState) backEdgeBudget() int {
 // The existing back-edge interrupt budget supplies coarse work feedback.
 // Promotion starts at the completed branch's target, never at function entry.
 func (r *Runtime) tryJITLoop(f *frame, pc uint32, sp int, fullBudget bool) (Value, error, bool) {
-	if !r.jitEnabled || !fullBudget || f.cl.jitRefused || int(r.jitDeoptDepth) == r.frameDepth || f.cl.fn.TopLevel && f.callee != nil {
+	if !r.jitEnabled || !fullBudget || f.cl.jitRefused || r.jitDeoptBlocks(f) || f.cl.fn.TopLevel && f.callee != nil {
 		// A direct eval's code, which runs as its caller's arrow (evalIn),
 		// reads names in its caller's scopes -- a with's object, what an
 		// eval declared -- which native code does not look in.
@@ -2748,11 +2752,45 @@ func (r *Runtime) jitInterpret(f *frame, sp int, pending error) (Value, error, b
 	if r.jit != nil {
 		r.jit.interpreted++
 	}
-	previous := r.jitDeoptDepth
-	r.jitDeoptDepth = uint32(r.frameDepth)
-	defer func() { r.jitDeoptDepth = previous }()
+	return r.jitInterpretAfter(f, sp, pending, nil)
+}
+
+// jitDeoptInterpret is jitInterpret for an invocation a failed guard in
+// code left: the code does not take it back at a loop until it is compiled
+// again (jitDeoptBlocks).
+func (r *Runtime) jitDeoptInterpret(f *frame, sp int, code *jit.SSACode) (Value, error, bool) {
+	if r.jit != nil {
+		r.jit.interpreted++
+	}
+	return r.jitInterpretAfter(f, sp, nil, code)
+}
+
+// jitInterpretAfter has the interpreter go on with f from sp, the code
+// that a failed guard left it, if any, kept from taking it back.
+func (r *Runtime) jitInterpretAfter(f *frame, sp int, pending error, code *jit.SSACode) (Value, error, bool) {
+	previous, previousCode := r.jitDeoptDepth, r.jitDeoptCode
+	r.jitDeoptDepth, r.jitDeoptCode = uint32(r.frameDepth), code
+	defer func() { r.jitDeoptDepth, r.jitDeoptCode = previous, previousCode }()
 	v, err := r.executeAt(f, sp, pending)
 	return v, err, true
+}
+
+// jitDeoptBlocks reports whether f is an invocation the interpreter goes
+// on with after its code left it (jitInterpret) that its code is not to
+// take back at a loop: code that does not pay (entrySlow), or the code a
+// guard failed in, not compiled again since, nor to be. Any other -- one
+// left where the code has no entry to go on at, a native callee's, or
+// after a throw native code did not catch -- the code takes back at the
+// loop's next budget, and code compiled again for what made it leave, its
+// guard generic now, the one deoptimized, as V8's code optimized again is
+// entered again at a loop's back edge: PDF.js's inflater, left once in a
+// long invocation, had decoded the rest of each stream in the interpreter.
+func (r *Runtime) jitDeoptBlocks(f *frame) bool {
+	if int(r.jitDeoptDepth) != r.frameDepth {
+		return false
+	}
+	e := r.jit.hint(f.cl)
+	return e == nil || e.ssa == nil || e.entrySlow || r.jitDeoptCode != nil && e.ssa == r.jitDeoptCode && !e.reoptDue()
 }
 
 // jitGlobalRef is strict mode's check_global_ref, as the interpreter makes

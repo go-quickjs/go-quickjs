@@ -5736,7 +5736,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			e.ssaStats.guardsAt[int32(int64(ctx.ExitSite))]++
 			jitDeoptimized(e, ctx, start)
 			f.pc = uint32(ctx.ExitPC)
-			return r.jitInterpret(f, f.base+int(ctx.ExitDepth), nil)
+			return r.jitDeoptInterpret(f, f.base+int(ctx.ExitDepth), e.ssa)
 		case abi.ExitHost:
 			// Go runs the one instruction, then native code goes on from the
 			// next entry, if there is one.
