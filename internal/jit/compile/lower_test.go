@@ -79,16 +79,18 @@ func TestStringPackingLayout(t *testing.T) {
 	}
 }
 
-// Only a call whose function a read of "charCodeAt" took is lowered as
-// String.prototype.charCodeAt's (charCodeCalls), its argument any
-// expression; every other call of one argument is Go's, though the
+// The old pipeline lowers as String.prototype.charCodeAt's only a call
+// whose function a read of "charCodeAt" took (charCodeCalls), its argument
+// any expression; every other call of one argument is Go's, though the
 // function reads "charCodeAt" elsewhere. Every one was lowered so, and its
 // check failed at every call: PDF.js's Type1Font_wrap's cff.push left
-// native code at every character, in both pipelines' lowerings.
+// native code at every character. The new pipeline lowers every call as
+// Go's, its read of the method still the intrinsic's: ssa makes one by
+// its target (CharCodeFeedback).
 func TestCharCodeCalls(t *testing.T) {
 	for _, c := range []struct {
 		source string
-		calls  []ir.Op // the call_methods', in order
+		calls  []ir.Op // the call_methods', in order, in the old pipeline
 	}{
 		{`function wrap(fields){var cff=[];for(var k in fields){var field=fields[k];
 			for(var i=0,ii=field.length;i<ii;i++)cff.push(field.charCodeAt(i))}return cff}`, []ir.Op{ir.StringCode, ir.Host}},
@@ -114,12 +116,24 @@ func TestCharCodeCalls(t *testing.T) {
 			}
 			var calls []ir.Op
 			for pc, in := range fn.Code {
-				if in.Op == bytecode.OpCallMethod {
+				switch in.Op {
+				case bytecode.OpCallMethod:
 					calls = append(calls, p.Code[pc].Op)
+				case bytecode.OpGetPropThis:
+					if fn.Names[in.A] == "charCodeAt" && p.Code[pc].Op != ir.StringMethod {
+						t.Errorf("%s: %s's read of charCodeAt at %d lowered to %v", lowering.name, fn.Name, pc, p.Code[pc].Op)
+					}
 				}
 			}
-			if !slices.Equal(calls, c.calls) {
-				t.Errorf("%s: %s's calls lowered to %v, want %v", lowering.name, fn.Name, calls, c.calls)
+			want := c.calls
+			if lowering.name == "LowerSSA" {
+				want = make([]ir.Op, len(c.calls))
+				for k := range want {
+					want[k] = ir.Host
+				}
+			}
+			if !slices.Equal(calls, want) {
+				t.Errorf("%s: %s's calls lowered to %v, want %v", lowering.name, fn.Name, calls, want)
 			}
 		}
 	}

@@ -84,6 +84,13 @@ type InstanceOfFeedback interface {
 	InstanceOf(pc int) (InstanceOfSite, bool)
 }
 
+// CharCodeFeedback is Feedback that knows a method call of one argument at
+// a PC calls String.prototype.charCodeAt, the realm's (abi.Context's
+// CharCodeAt): s.charCodeAt(i), by its target, whatever read it.
+type CharCodeFeedback interface {
+	CharCode(pc int) bool
+}
+
 // IntrinsicFeedback is Feedback that knows the calls at a PC of an
 // intrinsic (Intrinsic): a method call of one argument, Math.sqrt(x), or
 // two, Math.pow(x, y).
@@ -1425,8 +1432,33 @@ func (b *builder) nativeHost(pc int) bool {
 	if _, ok := b.intrinsic(pc); ok {
 		return true
 	}
-	_, ok := b.instanceOf(pc)
-	return ok
+	if _, ok := b.instanceOf(pc); ok {
+		return true
+	}
+	return b.charCode(pc)
+}
+
+// charCode reports whether the method call of one argument at pc calls
+// String.prototype.charCodeAt (CharCodeFeedback), which charCodeCall
+// makes.
+func (b *builder) charCode(pc int) bool {
+	if b.fb == nil || b.p.Code[pc].Op != ir.Host || pc+1 >= len(b.p.Code) || !reachable(b.p, pc+1) ||
+		b.p.Maps[pc].Depth < 3 || b.p.Maps[pc+1].Depth != b.p.Maps[pc].Depth-2 {
+		return false
+	}
+	f, ok := b.fb.(CharCodeFeedback)
+	return ok && f.CharCode(pc)
+}
+
+// charCodeCall makes the call of String.prototype.charCodeAt at pc: its
+// receiver a flat string, its argument an integer below its length, and
+// its function the intrinsic (OpStringCode), the code unit there is its
+// result, in the call's result slot; anything else leaves for Go.
+func (b *builder) charCodeCall(blk *Block, pc int, guard func(Op, Type, ir.ExitKind, ...*Value) *Value, boxF func(*Value) *Value) {
+	sp := b.cur.base + b.p.Locals + b.p.Maps[pc].Depth
+	key := guard(OpUnboxF64, Float64, ir.HostExit, b.read(sp-1, blk))
+	code := guard(OpStringCode, Float64, ir.HostExit, b.read(sp-2, blk), b.read(sp-3, blk), key)
+	b.assign(sp-3, blk, boxF(code))
 }
 
 // instanceOf is the instanceof at pc in the frame being translated, if the
@@ -2878,6 +2910,10 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		if k, ok := b.intrinsic(pc); ok && in.Op == ir.Host {
 			b.intrinsicCall(blk, pc, k, guard, boxF)
+			break
+		}
+		if in.Op == ir.Host && b.charCode(pc) {
+			b.charCodeCall(blk, pc, guard, boxF)
 			break
 		}
 		if k, ok := b.instanceOf(pc); ok && in.Op == ir.Host {

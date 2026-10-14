@@ -1422,6 +1422,64 @@ type jitFeedback struct {
 	prog *ir.Program
 }
 
+// CharCode is ssa.CharCodeFeedback's: whether the method call of one
+// argument at pc calls String.prototype.charCodeAt, the realm's own, known
+// by its target, whatever the method's name, as V8 reduces a call: the
+// call has been seen to call it, as Array.prototype.push's and pop's are
+// (jitCallSeen, jitSeedBuiltin) -- in fn's own code, or, for a callee
+// inlined, which has no feedback of its own, in the code of its entry --
+// or the method is read by the get_prop_this before it, the stack never
+// below it since, of a name String.prototype has the intrinsic at now,
+// as V8 folds a load from a string to the prototype's constant and the
+// call of it to the builtin's operation. The new pipeline reads a
+// string's charCodeAt so (ir.StringMethod). The code checks the receiver
+// is a string and the function the intrinsic.
+func (fb *jitFeedback) CharCode(pc int) bool {
+	fn, r := fb.fn, fb.r
+	if pc < 2 || pc >= len(fn.Code) || jitCallOp(fn.Code[pc].Op) != bytecode.OpCallMethod || fn.Code[pc].A != 1 || !r.jitCharCodeAt.IsObject() {
+		return false
+	}
+	e := fb.e
+	if fb.root != nil || e == nil {
+		e = r.jit.entryFor(fn)
+	}
+	if e != nil {
+		for _, x := range jitTargets(e) {
+			if int(x.pc) == pc && x.charCode {
+				return true
+			}
+		}
+	}
+	if fb.prog == nil {
+		p, err := r.jitLower(fn, jitLowerInline)
+		if err != nil {
+			return false
+		}
+		fb.prog = p
+	}
+	p := fb.prog
+	if len(p.Maps) != len(fn.Code) || p.Maps[pc].Depth < 3 {
+		return false
+	}
+	// The function's slot: the read is the instruction at its depth, the
+	// argument's above it.
+	slot := p.Maps[pc].Depth - 2
+	for k := pc - 1; k >= 0; k-- {
+		d := p.Maps[k].Depth
+		if d == slot && fn.Code[k].Op == bytecode.OpGetPropThis {
+			if fb.cl == nil || int(fn.Code[k].A) >= len(fb.cl.names) {
+				return false
+			}
+			m := r.proto.str.getOwn(fb.cl.names[fn.Code[k].A])
+			return m.ok() && m.flags()&^propDefault == 0 && m.value().StrictEquals(r.jitCharCodeAt)
+		}
+		if d < slot+1 {
+			return false
+		}
+	}
+	return false
+}
+
 // Intrinsic is ssa.IntrinsicFeedback's: a method call of one argument at
 // pc whose function is the realm's Math.sqrt or Math.abs, as its reads
 // give it now (jitChainValue) -- Math.sqrt(x) -- which the code makes
@@ -1710,6 +1768,11 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 			// Another object of a function the call checks by its code.
 			continue
 		}
+		if in.cl == nil && in.charCode {
+			// String.prototype.charCodeAt, which the code makes itself
+			// (CharCode) where it can, and Go otherwise.
+			continue
+		}
 		if in.cl == nil && in.pop {
 			// Array.prototype.pop, whose fast path the call's checks keep
 			// to: the array's own last element, of the realm's prototype.
@@ -1876,8 +1939,9 @@ type jitInline struct {
 	pool *abi.ObjectPool
 	via  bool
 	// push marks a call of Array.prototype.push (jitPushes), pop one of
-	// Array.prototype.pop (jitPops).
-	push, pop bool
+	// Array.prototype.pop (jitPops), charCode one of
+	// String.prototype.charCodeAt (jitCharCodes).
+	push, pop, charCode bool
 	// byCode marks a function the call met two objects of, closures its
 	// maker makes anew at each call: called by its code (jitSameCode).
 	byCode bool
@@ -2009,6 +2073,13 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 		if o := r.jitPushes(sp, in); o != nil {
 			// a.push(v), made natively where its fast path makes it.
 			e.nativeCalls = append(e.nativeCalls, jitInline{pc: int32(pc), obj: o, push: true})
+			e.callSites[pc] = jitCallNative
+			e.inlinePending = true
+			return
+		}
+		if o := r.jitCharCodes(sp, in); o != nil {
+			// s.charCodeAt(i), made natively (jitFeedback.CharCode).
+			e.nativeCalls = append(e.nativeCalls, jitInline{pc: int32(pc), obj: o, charCode: true})
 			e.callSites[pc] = jitCallNative
 			e.inlinePending = true
 			return
@@ -3047,11 +3118,13 @@ const jitInlineDepth = 3
 // jitInlinesCalls reports whether a function that makes calls may be
 // inlined with them, as V8 inlines a callee's callees: it may be but for
 // its calls (ssa.InlineCalls), and every one is an intrinsic, Math.sqrt
-// (jitFeedback.Intrinsic), or its own code inlines it, a function that may
-// be inlined, with its calls if depth allows. cl is one of its closures.
+// (jitFeedback.Intrinsic) or s.charCodeAt (jitFeedback.CharCode), which
+// is no call at any depth, or, depth allowing, its own code inlines it, a
+// function that may be inlined, with its calls if depth allows. cl is one
+// of its closures.
 func (r *Runtime) jitInlinesCalls(cl *closure, depth int) bool {
 	fn := cl.fn
-	if depth <= 0 || len(fn.Upvalues) != 0 || fn.TopLevel || fn.IsModule || fn.UsesArguments || fn.HasDirectEval || isGeneratorTemplate(fn) {
+	if len(fn.Upvalues) != 0 || fn.TopLevel || fn.IsModule || fn.UsesArguments || fn.HasDirectEval || isGeneratorTemplate(fn) {
 		return false
 	}
 	p, err := r.jitLower(fn, jitLowerInline)
@@ -3065,11 +3138,18 @@ func (r *Runtime) jitInlinesCalls(cl *closure, depth int) bool {
 	fb := &jitFeedback{r: r, fn: fn, cl: cl, prog: p}
 	var e *jitEntry
 	for _, pc := range calls {
+		// What the code makes itself, at any depth: no call.
 		if _, ok := fb.Intrinsic(pc); ok {
 			continue
 		}
 		if _, ok := fb.InstanceOf(pc); ok {
 			continue
+		}
+		if fb.CharCode(pc) {
+			continue
+		}
+		if depth <= 0 {
+			return false
 		}
 		if e == nil {
 			if e = r.jit.entryFor(fn); e == nil || e.callSites == nil {
@@ -3220,13 +3300,14 @@ func (r *Runtime) jitSeedCalls(cl *closure, e *jitEntry, p *ir.Program) {
 
 // jitSeedBuiltin decides, as jitSeedCalls does a script's function, a
 // call of a built-in native code makes itself whose target the existing
-// tiers have met: a.push(v) and a.pop(), the realm's own; new Array(); and
-// G.call(this, ...), G read before it -- each as jitCallSeen decides it
-// once the call has left native code, which, for calls the code had made
-// in the existing tiers every time, cost each function a compile after its
-// first: DeltaBlue's collections' and constraints' constructors. The call
-// checks what jitCallSeen finds out at its exit -- the receiver an array
-// the fast path takes, the function G -- and leaves for Go otherwise.
+// tiers have met: a.push(v), a.pop() and s.charCodeAt(i), the realm's own;
+// new Array(); and G.call(this, ...), G read before it -- each as
+// jitCallSeen decides it once the call has left native code, which, for
+// calls the code had made in the existing tiers every time, cost each
+// function a compile after its first: DeltaBlue's collections' and
+// constraints' constructors. The call checks what jitCallSeen finds out at
+// its exit -- the receiver an array the fast path takes, or a string, the
+// function G -- and leaves for Go otherwise.
 func (r *Runtime) jitSeedBuiltin(cl *closure, e *jitEntry, p *ir.Program, pc int, in bytecode.Instr, o *Object, read int) {
 	fd := o.fn()
 	var x jitInline
@@ -3239,6 +3320,8 @@ func (r *Runtime) jitSeedBuiltin(cl *closure, e *jitEntry, p *ir.Program, pc int
 		x = jitInline{pc: int32(pc), obj: o, pop: true}
 	case in.A == 1 && fd.elemOp == elemPush && fd.realm == r.Realm:
 		x = jitInline{pc: int32(pc), obj: o, push: true}
+	case in.A == 1 && r.jitCharCodeAt.IsObject() && o == r.jitCharCodeAt.Object():
+		x = jitInline{pc: int32(pc), obj: o, charCode: true}
 	case in.A >= 1 && o == r.callFn && read > 0 && (cl.fn.Code[read-1].Op == bytecode.OpGetProp || cl.fn.Code[read-1].Op == bytecode.OpGetGlobal):
 		v, ok := r.jitChainValue(cl, p, read-1, jitChainReads)
 		if !ok || !v.IsObject() {
@@ -4080,6 +4163,20 @@ func (r *Runtime) jitPushes(sp int, in bytecode.Instr) *Object {
 		return nil
 	}
 	if o := r.plainArray(recv); o == nil || !r.noInheritedIndices(o) {
+		return nil
+	}
+	return callee.Object()
+}
+
+// jitCharCodes is String.prototype.charCodeAt, the realm's own, if a
+// method call at the top of the stack calls it with one argument on a
+// string, or nil.
+func (r *Runtime) jitCharCodes(sp int, in bytecode.Instr) *Object {
+	if in.Op != bytecode.OpCallMethod || in.A != 1 || !r.jitCharCodeAt.IsObject() {
+		return nil
+	}
+	callee, recv := r.stack[sp-2], r.stack[sp-3]
+	if !callee.IsObject() || callee.Object() != r.jitCharCodeAt.Object() || !recv.IsString() {
 		return nil
 	}
 	return callee.Object()

@@ -197,3 +197,64 @@ func TestJITCallsBesideCharCodeAt(t *testing.T) {
 		t.Errorf("wrap left native code %d times for 20,000 characters (%d for 400)", hosts[0], hosts[1])
 	}
 }
+
+// A call of String.prototype.charCodeAt is made natively by its target,
+// as V8 reduces one, whatever its method's name (ssa's CharCodeFeedback):
+// under another name, and in a callee inlined into the loop calling it. Once compiled, each runs natively at every call, and
+// neither leaves native code nor has Go make a call nearly once a
+// character; and each
+// answer is the interpreter's, in every tier and stress setting, a
+// replaced charCodeAt and receivers that are not strings included.
+func TestJITCharCodeAtByTarget(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, c := range []struct{ name, setup string }{
+		{"renamed", `String.prototype.code = String.prototype.charCodeAt
+			function sum(s) { let t = 0; for (let i = 0; i < s.length; i++) t += s.code(i); return t }`},
+		{"inlined", `function at(s, i) { return s.charCodeAt(i) }
+			function sum(s) { let t = 0; for (let i = 0; i < s.length; i++) t += at(s, i); return t }`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			jitDifferential(t, c.setup+`
+				const s = 'abcdefghij'.repeat(30)
+				let r = 0
+				for (let k = 0; k < 5; k++) r += sum(s)
+				r += sum('\u1234x') + sum('')
+				const saved = String.prototype.charCodeAt
+				String.prototype.charCodeAt = function (i) { return 1 }
+				if (String.prototype.code) String.prototype.code = String.prototype.charCodeAt
+				r += sum(s)
+				String.prototype.charCodeAt = saved
+				r`)
+			r := New(Config{JIT: true})
+			t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+			if r.jitCallThreshold <= 1 {
+				t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
+			}
+			if _, err := r.Run(compileForTest(t, c.setup+`; const s = 'abcdefghij'.repeat(100)`)); err != nil {
+				t.Fatal(err)
+			}
+			for range 10 {
+				if _, err := r.Run(compileForTest(t, `sum(s)`)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			e := jitNativeForTest(t, r, "sum")
+			hosts, goCalls, entries := e.ssaStats.hosts, e.ssaStats.goCalls, r.JITStats().SSAEntries
+			v, err := r.Run(compileForTest(t, `(() => { let t = 0; for (let k = 0; k < 20; k++) t += sum(s); return t })()`))
+			if want := 20 * 100 * float64('a'+'b'+'c'+'d'+'e'+'f'+'g'+'h'+'i'+'j'); err != nil || v.Number() != want {
+				t.Fatalf("= %v, %v; want %v", v, err, want)
+			}
+			if n := r.JITStats().SSAEntries - entries; n < 20 {
+				t.Errorf("native code entered %d times in 20 calls", n)
+			}
+			if n := e.ssaStats.hosts - hosts; n >= 20*1000/10 {
+				t.Errorf("sum left native code %d times for 20,000 characters", n)
+			}
+			if n := e.ssaStats.goCalls - goCalls; n >= 20*1000/10 {
+				t.Errorf("Go made %d calls for 20,000 characters", n)
+			}
+		})
+	}
+}

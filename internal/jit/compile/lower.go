@@ -496,7 +496,14 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			p.Locals++
 		}
 	}
-	codes := charCodeCalls(fn, maps)
+	// The old pipeline finds the calls of charCodeAt by the name of the
+	// method they call; the new one by their target (ssa's
+	// CharCodeFeedback): a call whose method is read anyhow, and none
+	// that calls another.
+	codes := make([]bool, len(fn.Code))
+	if !m.ssa {
+		codes = charCodeCalls(fn, maps)
+	}
 	for pc, in := range fn.Code {
 		switch {
 		case maps[pc].Depth < 0:
@@ -539,17 +546,13 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			if in.Op != ir.Host || p.Maps[pc].Depth < 0 {
 				continue
 			}
-			// s.charCodeAt(i), in any function: the new pipeline finds the
+			// s.charCodeAt, in any function: the new pipeline finds the
 			// intrinsic in every context (the VM's jitShared), not at each
 			// entry, so a helper with no loop -- Crypto's intAt -- is worth
-			// it too (stringKernel). The call is the one whose method that
-			// read named, its argument pushed between them.
+			// it too (stringKernel). The call is made by its target.
 			sp := p.Locals + p.Maps[pc].Depth
-			switch b := fn.Code[pc]; {
-			case b.Op == bytecode.OpGetPropThis && fn.Names[b.A] == "charCodeAt":
+			if b := fn.Code[pc]; b.Op == bytecode.OpGetPropThis && fn.Names[b.A] == "charCodeAt" {
 				p.Code[pc] = ir.Instruction{Op: ir.StringMethod, Left: ir.Slot(sp - 1), Dest: sp}
-			case codes[pc]:
-				p.Code[pc] = ir.Instruction{Op: ir.StringCode, Left: ir.Slot(sp - 2), Right: ir.Slot(sp - 3), Third: ir.Slot(sp - 1), Dest: sp - 3}
 			}
 		}
 		for pc, in := range p.Code {
@@ -619,14 +622,14 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		}
 		return p, nil
 	}
-	selectPropertyLoops(fn, p, m.calls, m.callee)
-	selectGlobalSlots(fn, p)
+	selectPropertyLoops(fn, p, m.calls, m.callee, codes)
+	selectGlobalSlots(fn, p, codes)
 	return p, nil
 }
 
 // Numeric global reads borrow live cells, rather than snapshotting their values.
 // Reserve one handle per name; excess bindings retain the original host path.
-func selectGlobalSlots(fn *bytecode.Function, p *ir.Program) {
+func selectGlobalSlots(fn *bytecode.Function, p *ir.Program, codes []bool) {
 	base := p.Locals
 	for pc, in := range p.Code {
 		if in.Op != ir.BindingRead {
@@ -650,7 +653,6 @@ func selectGlobalSlots(fn *bytecode.Function, p *ir.Program) {
 		return
 	}
 	p.Locals += len(p.Globals)
-	codes := charCodeCalls(fn, p.Maps)
 	for pc, old := range p.Code {
 		if p.Maps[pc].Depth < 0 || old.Op == ir.Host {
 			continue
@@ -669,7 +671,7 @@ func selectGlobalSlots(fn *bytecode.Function, p *ir.Program) {
 // Borrowing object tables and another receiver root costs something on every
 // entry. Keep mixed loops on their existing bridge until their remaining host
 // operations are covered; a native field loop must amortize that preparation.
-func selectPropertyLoops(fn *bytecode.Function, p *ir.Program, calls, callee bool) bool {
+func selectPropertyLoops(fn *bytecode.Function, p *ir.Program, calls, callee bool, codes []bool) bool {
 	// Preparing a reference graph cannot amortize a read performed only once
 	// before the loop. Keep those entries on the existing cheap Go bridge.
 	loopReference := false
@@ -716,7 +718,6 @@ func selectPropertyLoops(fn *bytecode.Function, p *ir.Program, calls, callee boo
 	if p.This && !fields && hosts[len(p.Code)]+fieldCount != 0 {
 		p.This = false
 		p.Locals--
-		codes := charCodeCalls(fn, p.Maps)
 		for pc, in := range fn.Code {
 			if p.Maps[pc].Depth >= 0 {
 				p.Code[pc] = lower(fn, in, p.Locals+p.Maps[pc].Depth, false, codes[pc])
@@ -1870,11 +1871,10 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this, charCode bool
 	panic(fmt.Sprintf("jit: no lowering for %v", in.Op))
 }
 
-// An intrinsic snapshot and an extra root must amortize their entry cost.
-// One-off character helpers retain the existing call path.
 // charCodeCalls marks the calls of one argument in fn whose function is the
-// method a read of "charCodeAt" took (get_prop_this), which are lowered as
-// String.prototype.charCodeAt's (ir.StringCode): the instruction the call's
+// method a read of "charCodeAt" took (get_prop_this), which the old
+// pipeline lowers as String.prototype.charCodeAt's (ir.StringCode), the new
+// one making them by their target: the instruction the call's
 // stack, two below its depth, was last at, the stack none lower since --
 // s.charCodeAt(i), s.charCodeAt(i + 1), s.charCodeAt(c ? i : j). Every
 // call of one argument in a function that read "charCodeAt" anywhere was
@@ -1907,6 +1907,8 @@ func charCodeCalls(fn *bytecode.Function, maps []ir.StateMap) []bool {
 	return codes
 }
 
+// An intrinsic snapshot and an extra root must amortize their entry cost.
+// One-off character helpers retain the existing call path.
 func stringKernel(fn *bytecode.Function) bool {
 	if len(fn.Code) >= 64 {
 		return true
