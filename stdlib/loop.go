@@ -452,8 +452,18 @@ func (q *timerQueue) next() (time.Time, bool) {
 type timerHeap timerQueue
 
 func (h *timerHeap) Len() int { return len(h.entries) }
+
+// Less orders timers by when they are due and, among timers due at the
+// same time, by when they were armed, as the web and node run them: on
+// Windows the clock moves in steps, so timers armed one after another are
+// often due at the same time, and setTimeout(a, 0); setTimeout(b, 0) ran b
+// first as often as not.
 func (h *timerHeap) Less(i, j int) bool {
-	return h.entries[i].at.Before(h.entries[j].at)
+	a, b := h.entries[i], h.entries[j]
+	if a.at.Equal(b.at) {
+		return a.id < b.id
+	}
+	return a.at.Before(b.at)
 }
 func (h *timerHeap) Swap(i, j int) {
 	h.entries[i], h.entries[j] = h.entries[j], h.entries[i]

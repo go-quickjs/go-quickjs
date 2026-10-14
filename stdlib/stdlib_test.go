@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -132,6 +133,24 @@ func TestTimers(t *testing.T) {
 	`)
 	if want := "sync,micro,promise,t0,t20"; out != want {
 		t.Errorf("order = %q, want %q", out, want)
+	}
+}
+
+// TestTimersDueTogetherRunInOrder pins that timers due at the same time run
+// in the order they were armed, as the web's and node's do: the heap broke
+// no ties, and Windows' clock, which moves in steps, makes many.
+func TestTimersDueTogetherRunInOrder(t *testing.T) {
+	out, _ := run(t, stdlib.Config{}, `
+		const order = []
+		for (let i = 0; i < 50; i++) setTimeout(() => order.push(i), 0)
+		setTimeout(() => console.log(order.join(",")), 20)
+	`)
+	want := make([]string, 50)
+	for i := range want {
+		want[i] = strconv.Itoa(i)
+	}
+	if out != strings.Join(want, ",") {
+		t.Errorf("order = %q", out)
 	}
 }
 
