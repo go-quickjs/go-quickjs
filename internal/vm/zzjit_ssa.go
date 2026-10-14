@@ -1299,8 +1299,7 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 	// The compile's memory comes from the runtime's workspaces, taken back
 	// once its code is placed.
 	s := r.jit
-	s.compiling = true
-	defer func() { s.compiling = false }()
+	s.workAt = s.epoch() + 1
 	defer s.ssaWork.Rewind()
 	defer s.mirWork.Rewind()
 	f, err := ssa.BuildIn(&s.ssaWork, p, fb)

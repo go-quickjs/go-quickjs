@@ -116,6 +116,23 @@ func (w *Workspace) Rewind() {
 	w.ivRefs.Rewind()
 	w.locs.Rewind()
 	w.saved.Rewind()
+	// As ssa.Workspace's Rewind does its scratch tables: the move
+	// schedule's, the exit descriptions' and the assemblers' tables go
+	// once they hold more than the arenas keep, which is what the recent
+	// compiles needed.
+	if arenas := w.arenaBytes(); w.Bytes()-arenas > arenas {
+		w.sched = schedule{}
+		w.exitSlots, w.exitWords = nil, nil
+		w.exitSlotsBuf, w.exitIndexBuf, w.exitWordsBuf = nil, nil, nil
+		w.amd64.a, w.amd64.labels, w.amd64.stubs, w.amd64.stubFor, w.amd64.cold = amd64.Asm{}, nil, nil, nil, nil
+		w.arm64.a, w.arm64.labels, w.arm64.stubs, w.arm64.stubFor, w.arm64.cold = arm64.Asm{}, nil, nil, nil, nil
+	}
+}
+
+// arenaBytes is what the workspace's arenas keep.
+func (w *Workspace) arenaBytes() int {
+	return w.bools.Bytes() + w.ints.Bytes() + w.words.Bytes() + w.sets.Bytes() + w.values.Bytes() + w.blocks.Bytes() +
+		w.uses.Bytes() + w.intervals.Bytes() + w.ivRefs.Bytes() + w.locs.Bytes() + w.saved.Bytes()
 }
 
 // CompileIn is Compile, in w.

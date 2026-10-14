@@ -27,6 +27,7 @@ import (
 	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 	jitcompile "github.com/go-quickjs/go-quickjs/internal/jit/compile"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
+	"github.com/go-quickjs/go-quickjs/internal/jit/mir"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ssa"
 	"github.com/go-quickjs/go-quickjs/internal/parser"
 )
@@ -2249,9 +2250,7 @@ func TestJITBudgetRefusalWaitsForRelease(t *testing.T) {
 	copyOf := jitCopiesForTest(jitFunctionForTest(t, `function f(n) { let s=0,t=1; for(let i=0;i<n;i++){ s+=i*3; t=(t*3+s)|0; s=(s^t)+1; t=t-s; s=(s+t*7)|0; t=(t^s)>>1; } return s+t }`), &keep)
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	s := r.jitState()
-	// What the JIT holds apart from the compiles' workspaces, which it
-	// drops to make room.
-	held := func() int { return s.held() - s.workBytes() }
+	held := s.held
 	// Enough code for a budget a compile of f fits (jitCompiles), and what
 	// each compile of it adds.
 	refused := copyOf()
@@ -2686,18 +2685,17 @@ func TestJITCompileKeepsBudget(t *testing.T) {
 	var keep []*bytecode.Function
 	defer runtime.KeepAlive(&keep)
 	copyOf := jitCopiesForTest(jitFunctionForTest(t, `function f(n) { var s=0; for(var i=0;i<n;i++) s+=i; return s }`), &keep)
-	// What is held, the workspaces apart, when the table is next full, and
-	// what a compile adds.
+	// What is held when the table is next full, and what a compile adds.
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	full, grows := 0, 0
 	for i := 0; i < 1000 && full == 0; i++ {
-		before := r.jitState().held() - r.jit.workBytes()
+		before := r.jitState().held()
 		if e := r.jitForFunction(copyOf(), nil); e == nil || e.ssa == nil {
 			t.Fatal("native compilation refused")
 		}
-		grows = r.jit.held() - r.jit.workBytes() - before
+		grows = r.jit.held() - before
 		if s := r.jit; i > 8 && len(s.hints) == cap(s.hints) {
-			full = s.held() - s.workBytes()
+			full = s.held()
 		}
 	}
 	if full == 0 {
@@ -2847,8 +2845,9 @@ func TestJITCacheDropsLeastRecentlyUsed(t *testing.T) {
 // (jitState.held): each entry's code with what describes its entries and
 // exits, what it was compiled with and what it learned, its literals' and
 // constructions' pools with their objects; the programs it lowered; the
-// contexts native code ran in, the compiles' workspaces, the hint table and
-// the links. The sums the cache keeps are what measuring each afresh finds.
+// contexts native code ran in, the hint table and the links -- not the
+// compiles' workspaces (sharedBytes). The sums the cache keeps are what
+// measuring each afresh finds.
 func TestJITHeldCountsEachKind(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -2920,9 +2919,15 @@ func TestJITHeldCountsEachKind(t *testing.T) {
 	if len(s.ssaCtxs) == 0 || s.workBytes() == 0 || len(s.links) == 0 || len(s.hints) == 0 {
 		t.Fatalf("%d contexts, %d bytes of workspaces, %d links, %d hints", len(s.ssaCtxs), s.workBytes(), len(s.links), len(s.hints))
 	}
-	shared := len(s.ssaCtxs)*jitContextBytes + s.workBytes() + len(s.links)*jitLinkFixed + jitCapBytes(s.hints)
+	shared := len(s.ssaCtxs)*jitContextBytes + len(s.links)*jitLinkFixed + jitCapBytes(s.hints)
 	if s.sharedBytes() < shared || s.held() != s.entryBytes+s.lowerBytes+s.sharedBytes() {
 		t.Fatalf("shared %d counted, at least %d held", s.sharedBytes(), shared)
+	}
+	// The workspaces are not counted: without them, the JIT holds the same.
+	before := s.sharedBytes()
+	s.ssaWork, s.mirWork = ssa.Workspace{}, mir.Workspace{}
+	if s.workBytes() != 0 || s.sharedBytes() != before {
+		t.Fatalf("shared %d counted with the workspaces, %d without", before, s.sharedBytes())
 	}
 	if r.jitHeldBytes() > int64(r.jitBudget()) {
 		t.Fatalf("%d bytes held, past the budget's %d", r.jitHeldBytes(), r.jitBudget())
@@ -3057,8 +3062,7 @@ func TestJITRefusesRoomOnlyWhenNothingIsOld(t *testing.T) {
 	}
 	young()
 	// Compiles until one is refused: then nothing is old, and the refusal
-	// reclaims nothing -- not the lowerings without entries, not the
-	// workspaces.
+	// reclaims nothing -- not the lowerings without entries.
 	for i := 0; ; i++ {
 		evicted, refused, lowered, held := r.jit.evicted, r.jit.refusedRoom, len(r.jit.lowered), r.jitHeldBytes()
 		e := r.jitForFunction(copyOf(), nil)

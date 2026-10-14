@@ -141,11 +141,17 @@ func WithJIT() Option { return func(c *config) { c.jit = true } }
 
 // WithJITMemoryLimit bounds the memory the JIT (WithJIT) holds for the
 // Runtime: its machine code and all that describes it, what it has learned
-// of the functions it compiled, the programs it lowered, the contexts its
-// code runs in and its compiler's workspaces. It is apart from
-// WithMemoryLimit, which never counts the JIT's memory. Zero or less keeps
-// the default: 8 MB, or an eighth of WithMemoryLimit when that is set. It
-// does nothing in a build without the JIT, or a runtime without WithJIT.
+// of the functions it compiled, the programs it lowered and the contexts
+// its code runs in. It is apart from WithMemoryLimit, which never counts
+// the JIT's memory. Zero or less keeps the default: 8 MB, or an eighth of
+// WithMemoryLimit when that is set. It does nothing in a build without the
+// JIT, or a runtime without WithJIT.
+//
+// The compiler's working memory is not counted: what a compile needs while
+// it runs, and keeps for the next, is what the runtime's recent compiles
+// needed -- usually a megabyte or two; tens of megabytes while it compiles
+// functions of thousands of instructions, let go once it compiles them no
+// more.
 //
 // When the JIT's memory is full, it drops the code that has gone longest
 // unused, once it is old -- not used within the last two collections or

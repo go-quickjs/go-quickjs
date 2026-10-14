@@ -76,7 +76,7 @@ func TestJITNativeCalleeKeepsItsEntry(t *testing.T) {
 	var tick uint64
 	jitEpochNow = func() uint64 { tick += 10; return tick }
 	t.Cleanup(func() { jitEpochNow = now })
-	r.jitMemoryLimit = int64(s.roomHeld() + len(cl.fn.Code)*s.perInstr - 1)
+	r.jitMemoryLimit = int64(s.held() + len(cl.fn.Code)*s.perInstr - 1)
 	ce := r.jitNativeCallee(cl)
 	if ce != nil && !ce.owned() {
 		t.Fatal("compiled for an entry the cache dropped")
@@ -86,8 +86,8 @@ func TestJITNativeCalleeKeepsItsEntry(t *testing.T) {
 	}
 }
 
-// The entry a compile returns is the cache's: the room its compile's
-// workspaces then make is not made of it. Before, a compile that left the
+// The entry a compile returns is the cache's: the room the cache makes
+// after the compile is not made of it. Before, a compile that left the
 // JIT past its budget could drop the very entry it had compiled, to be run
 // as it was returned -- which, once a dropped entry was no longer run,
 // left top-level code trying at every loop and never running natively.
@@ -114,12 +114,13 @@ func TestJITForKeepsWhatItCompiled(t *testing.T) {
 	}
 }
 
-// The room the cache makes is the workspaces' before it is code's: they
-// spare the next compile its allocations, code a compile. Before, they
-// went last, and a program whose compiles grew them past half the budget
-// had its hot code dropped and compiled again on every pass, as Octane's
-// zlib did hundreds of times a function.
-func TestJITDropsWorkspacesBeforeCode(t *testing.T) {
+// The compiles' workspaces are their working memory, outside the budget:
+// a compile that grows them past it keeps its code, and the workspaces
+// are kept for the next compile, the room the cache makes never made of
+// them. Counted against the budget, they had code dropped for them, and
+// were let go themselves, for the next compile to make again: Octane's
+// Typescript allocated twice as much as with them kept, Box2D three times.
+func TestJITWorkspacesOutsideBudget(t *testing.T) {
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	if _, err := r.Run(compileForTest(t, `
 		function f(n) { let s = 0; for (let i = 0; i < n; i++) s += (i * 7) % 13; return s }`)); err != nil {
@@ -132,19 +133,56 @@ func TestJITDropsWorkspacesBeforeCode(t *testing.T) {
 	t.Cleanup(func() { jitEpochNow = now })
 	e := r.jitFor(cl)
 	s := r.jit
-	if e == nil || e.ssa == nil || s.workBytes() == 0 {
+	work := s.workBytes()
+	if e == nil || e.ssa == nil || work == 0 {
 		t.Fatalf("f has no code, or the compile kept no workspaces: %+v", e)
 	}
-	// Old by now, and either would make the room.
-	s.budget = s.held() - 1
-	if !s.makeRoom(0) {
-		t.Fatal("no room made")
+	// A budget the code fits, and the workspaces do not with it.
+	s.budget = s.held()
+	if work < s.budget/8 {
+		t.Fatalf("workspaces of %d bytes are small for the test, the budget %d", work, s.budget)
 	}
-	if !e.owned() || e.ssa == nil {
-		t.Error("dropped code for the workspaces")
+	if !s.makeRoom(0) || s.evicted != 0 {
+		t.Fatalf("room made of the code: %d evicted", s.evicted)
 	}
+	if !e.owned() || e.ssa == nil || s.workBytes() != work {
+		t.Errorf("code kept %v, workspaces %d of %d", e.owned() && e.ssa != nil, s.workBytes(), work)
+	}
+}
+
+// The workspaces are let go once the runtime has compiled nothing for
+// jitWorkAge epochs, at a back-edge check: kept, the collector marked them
+// at every cycle of a program that compiles no more.
+func TestJITWorkspacesLetGoWhenIdle(t *testing.T) {
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	if _, err := r.Run(compileForTest(t, `
+		function f(n) { let s = 0; for (let i = 0; i < n; i++) s += (i * 7) % 13; return s }`)); err != nil {
+		t.Fatal(err)
+	}
+	cl := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
+	now := jitEpochNow
+	epoch := uint64(100)
+	jitEpochNow = func() uint64 { return epoch }
+	t.Cleanup(func() { jitEpochNow = now })
+	e := r.jitFor(cl)
+	if e == nil || e.ssa == nil || r.jit.workBytes() == 0 {
+		t.Fatalf("f has no code, or the compile kept no workspaces: %+v", e)
+	}
+	s := r.jit
+	epoch += jitWorkAge - 1
+	s.backEdgeBudget()
+	if s.workBytes() == 0 {
+		t.Fatalf("let go %d epochs after a compile", jitWorkAge-1)
+	}
+	epoch++
+	s.backEdgeBudget()
 	if s.workBytes() != 0 {
-		t.Error("kept the workspaces")
+		t.Fatalf("%d bytes of workspaces kept %d epochs after the last compile", s.workBytes(), jitWorkAge)
+	}
+	// A compile after makes them again, and keeps them.
+	s.dropEntry(e.link.key, e)
+	if e := r.jitFor(cl); e == nil || e.ssa == nil || s.workBytes() == 0 {
+		t.Fatalf("compiled again with no workspaces kept: %+v", e)
 	}
 }
 

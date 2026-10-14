@@ -487,9 +487,12 @@ type jitState struct {
 	// functions the runtime compiles.
 	arena *jit.Arena
 	// ssaWork and mirWork are the memory the new pipeline compiles in,
-	// rewound after each compile (ssa.Workspace, mir.Workspace).
+	// rewound after each compile (ssa.Workspace, mir.Workspace); workAt is
+	// 1 plus the epoch of the last compile in them, or 0 once they are let
+	// go (idle).
 	ssaWork ssa.Workspace
 	mirWork mir.Workspace
+	workAt  uint64
 	// generation advances whenever the cache releases code, which is when a
 	// program refused for want of budget may fit.
 	generation uint64
@@ -509,9 +512,6 @@ type jitState struct {
 	// each instruction of its function's bytecode, from the last compiles:
 	// how much room a compile is likely to need (makeRoom).
 	perInstr int
-	// compiling marks a compile under way, in the workspaces, which the
-	// cache does not release meanwhile.
-	compiling bool
 	// victims is makeRoom's list of what it may reclaim, in the order it
 	// does, made at victimsAt (1 plus the epoch) and taken from at
 	// victimPos by the looks after it in the epoch; victimLeft is what the
@@ -779,14 +779,20 @@ func (s *jitState) held() int {
 
 // sharedBytes is what the JIT holds for the runtime apart from its entries
 // and lowerings: its state; the contexts native code runs in; its hint
-// table and links; the workspaces its compiles keep (workBytes); and code
-// compiled again or dropped that a call of Go is still suspended in
-// (retired).
+// table and links; and code compiled again or dropped that a call of Go is
+// still suspended in (retired). Not the workspaces its compiles keep
+// (workBytes), which are a compile's working memory, as V8's compile
+// zones are not its code space: they hold what the recent compiles needed
+// (ssa.Workspace's Rewind), and counted against the budget they had code
+// dropped for them and were let go themselves to make room, for the next
+// compile to make again -- Octane's Typescript, its median compile a
+// megabyte and its biggest forty, allocated twice as much as with them
+// kept, Box2D three times, and dropped dozens of functions' code.
 func (s *jitState) sharedBytes() int {
 	n := int(unsafe.Sizeof(*s)) + len(s.ssaCtxs)*jitContextBytes + jitCapBytes(s.ssaCtxs) + jitCapBytes(s.hints) +
 		jitCapBytes(s.hintFree) + len(s.links)*jitLinkFixed + jitCapBytes(s.victims) + jitCapBytes(s.goRuns) +
 		jitCapBytes(s.goPinned) + jitCapBytes(s.retired) + jitCapBytes(s.calleeOpen) + jitCapBytes(s.unwinding) + jitCapBytes(s.unwindingFrames) +
-		jitCapBytes(s.seedingFns) + s.workBytes()
+		jitCapBytes(s.seedingFns)
 	for _, x := range s.retired {
 		n += x.code.Footprint()
 	}
@@ -877,7 +883,7 @@ func (s *jitState) otherwiseInUse(e *jitEntry) bool {
 }
 
 // jitVictim is what the cache may reclaim to make room (makeRoom): a
-// lowering, an entry, or the compiles' workspaces, by its class.
+// lowering or an entry, by its class.
 type jitVictim struct {
 	key          weak.Pointer[bytecode.Function]
 	e            *jitEntry
@@ -889,17 +895,11 @@ type jitVictim struct {
 
 // The classes of what the cache reclaims, in the order it does: a
 // function's programs, lowered again at a compile's cost of a few percent;
-// a refusal remembered, which spares a compile only; the workspaces, which
-// spare the next compile its allocations; then code, which costs a whole
-// compile to make again. The workspaces had come last, and a compile of a
-// large function grows them past half the budget: Octane's zlib, whose
-// hot functions are a thousand instructions or two, dropped code it ran
-// on every pass to keep them, and compiled each hot function hundreds of
-// times.
+// a refusal remembered, which spares a compile only; then code, which
+// costs a whole compile to make again.
 const (
 	jitVictimLowering = iota
 	jitVictimRefusal
-	jitVictimWork
 	jitVictimCode
 )
 
@@ -908,8 +908,7 @@ const (
 // all that describes it, by memory, reclaiming code by its age, not by how
 // many functions have it. It reclaims, in their order (jitVictim's
 // classes), the least recently used first: programs lowered for functions
-// the cache has no entry for; refusals remembered; the compiles'
-// workspaces, unless a compile is under way; and code not used in this
+// the cache has no entry for; refusals remembered; and code not used in this
 // epoch or the one before (jitCodeAge), as V8 flushes only code old
 // enough. A function's code is never dropped for another's while it is
 // young: a program with more hot functions than the budget holds had
@@ -919,7 +918,7 @@ const (
 // reclaim would not make the room, it reclaims nothing, and the newcomer
 // runs in the existing tiers until some code is old.
 func (s *jitState) makeRoom(need int) bool {
-	held := s.roomHeld()
+	held := s.held()
 	if held+need <= s.budget {
 		return true
 	}
@@ -931,7 +930,7 @@ func (s *jitState) makeRoom(need int) bool {
 		return false
 	}
 	s.age(now)
-	if held = s.roomHeld(); held+need <= s.budget {
+	if held = s.held(); held+need <= s.budget {
 		return true
 	}
 	// The order listed at this epoch's first look, taken from where the
@@ -947,7 +946,7 @@ func (s *jitState) makeRoom(need int) bool {
 			return false
 		}
 	}
-	for s.victimPos < len(s.victims) && s.roomHeld()+need > s.budget {
+	for s.victimPos < len(s.victims) && s.held()+need > s.budget {
 		x := &s.victims[s.victimPos]
 		s.victimPos++
 		s.victimLeft -= x.bytes
@@ -960,7 +959,7 @@ func (s *jitState) makeRoom(need int) bool {
 		// what it held counted against the budget meanwhile.
 		s.victims, s.victimsAt, s.victimLeft = nil, 0, 0
 	}
-	return s.roomHeld()+need <= s.budget
+	return s.held()+need <= s.budget
 }
 
 // listVictims lists, in makeRoom's order, what the cache may reclaim at
@@ -996,13 +995,10 @@ func (s *jitState) listVictims(now uint64, need int) bool {
 		}
 		v = append(v, jitVictim{key: key, e: e, class: class, used: e.used, serial: e.serial, bytes: n})
 	}
-	if !s.compiling {
-		v = append(v, jitVictim{class: jitVictimWork, bytes: s.workBytes()})
-	}
 	for i := range v {
 		reclaimable += v[i].bytes
 	}
-	if floor := s.roomHeld() - reclaimable; floor+need > s.budget {
+	if floor := s.held() - reclaimable; floor+need > s.budget {
 		s.floor, s.floorAt = floor, now+1
 		s.victims, s.victimsAt, s.victimPos, s.victimLeft = nil, 0, 0, 0
 		return false
@@ -1030,10 +1026,6 @@ func (s *jitState) reclaim(x *jitVictim, now uint64) bool {
 			if k := s.links[x.key]; k == nil || k.owner == nil {
 				s.dropLowering(x.key, x.l)
 			}
-		}
-	case jitVictimWork:
-		if !s.compiling {
-			s.ssaWork, s.mirWork = ssa.Workspace{}, mir.Workspace{}
 		}
 	default:
 		e := s.cache[x.key]
@@ -1111,19 +1103,8 @@ func (s *jitState) admit(fn *bytecode.Function) bool {
 	return true
 }
 
-// roomHeld is what the JIT holds, as makeRoom counts it: the workspaces of
-// a compile under way are its own until it ends, when the JIT has the
-// room for them it needs (settle).
-func (s *jitState) roomHeld() int {
-	n := s.held()
-	if s.compiling {
-		n -= s.workBytes()
-	}
-	return n
-}
-
 // settle has the JIT hold no more than its budget once a compile has
-// ended, its workspaces kept for the next, if there is the room.
+// ended.
 func (s *jitState) settle() {
 	if s.held() > s.budget {
 		s.makeRoom(0)
@@ -1214,8 +1195,24 @@ const (
 	jitEpochTime = 50 * time.Millisecond
 )
 
+// jitWorkAge is how many epochs without a compile the compiles'
+// workspaces are kept for (idle).
+const jitWorkAge = 2
+
 // epoch is the cache's clock (jitEpochNow).
 func (s *jitState) epoch() uint64 { return jitEpochNow() }
+
+// idle lets the compiles' workspaces go once the runtime has compiled
+// nothing for jitWorkAge epochs, at a back-edge check (backEdgeBudget), as
+// V8 gives a compile's zone back once it is done: the budget does not
+// count them (sharedBytes), and kept, a program that compiles no more had
+// the collector mark them at every cycle, megabytes of tables with
+// pointers -- AWFY's Sieve took 5% longer.
+func (s *jitState) idle() {
+	if s.workAt != 0 && s.epoch() >= s.workAt-1+jitWorkAge {
+		s.ssaWork, s.mirWork, s.workAt = ssa.Workspace{}, mir.Workspace{}, 0
+	}
+}
 
 // jitGCEpoch counts the collector's cycles, process-wide: a finalizer the
 // collector runs once a cycle counts it and sets itself again
@@ -1458,7 +1455,8 @@ func (r *Runtime) releaseJIT() {
 
 // jitBudget bounds what the JIT holds (jitState.held): its code and all
 // that describes it, what it has learned, the programs it lowered, the
-// contexts its code runs in, its compiles' workspaces. The memory meter
+// contexts its code runs in -- not its compiles' working memory, which
+// what the recent compiles needed bounds (sharedBytes). The memory meter
 // never counts it: a script's memory, and so whether it fails with
 // ErrMemoryLimit, is the same with the JIT on and off. It is the runtime's
 // JIT memory limit (Config.JITMemoryLimit) if it has one; else a runtime
@@ -1557,8 +1555,8 @@ func (r *Runtime) jitForFunction(fn *bytecode.Function, cl *closure) *jitEntry {
 			e.setSSA(s, fn, p, code, fb)
 			s.compiled++
 			s.remember(key, e)
-			// Not dropped by the room its own compile's workspaces make:
-			// it is what is returned, to be run.
+			// Not dropped by the room its own code makes: it is what is
+			// returned, to be run.
 			e.busy++
 			s.settle()
 			e.busy--
@@ -1606,8 +1604,8 @@ func (r *Runtime) jitForFunction(fn *bytecode.Function, cl *closure) *jitEntry {
 		return nil
 	}
 	s.remember(key, e)
-	// The compile's workspaces, kept only if there is the room, as after
-	// a compile that places its code -- but for e.
+	// Within the budget, as after a compile that places its code -- but
+	// for e.
 	e.busy++
 	s.settle()
 	e.busy--
@@ -1679,6 +1677,7 @@ func (s *jitState) backEdgeBudget() int {
 	if s == nil {
 		return backEdgeCheckInterval
 	}
+	s.idle()
 	if s.stressBudget != 0 {
 		return s.stressBudget
 	}

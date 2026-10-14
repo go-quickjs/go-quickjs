@@ -49,11 +49,18 @@ func (w *Workspace) init() {
 
 // Bytes is the memory the workspace keeps between compiles: its arenas'
 // chunks and its passes' scratch tables.
-func (w *Workspace) Bytes() int {
-	n := w.values.Bytes() + w.refs.Bytes() + w.states.Bytes() + w.blocks.Bytes() + w.blockRefs.Bytes() +
+func (w *Workspace) Bytes() int { return w.arenaBytes() + w.scratchBytes() }
+
+// arenaBytes is what the workspace's arenas keep.
+func (w *Workspace) arenaBytes() int {
+	return w.values.Bytes() + w.refs.Bytes() + w.states.Bytes() + w.blocks.Bytes() + w.blockRefs.Bytes() +
 		w.refLists.Bytes() + w.bools.Bytes() + w.bytes.Bytes() + w.ints.Bytes() + w.caches.Bytes()
+}
+
+// scratchBytes is what the passes' scratch tables keep.
+func (w *Workspace) scratchBytes() int {
 	s := &w.scratch
-	n += capBytes(s.flags) + capBytes(s.vals) + capBytes(s.phis) + capBytes(s.ordered) + capBytes(s.front) +
+	n := capBytes(s.flags) + capBytes(s.vals) + capBytes(s.phis) + capBytes(s.ordered) + capBytes(s.front) +
 		capBytes(s.boxes) + capBytes(s.rest) + capBytes(s.work) + capBytes(s.first) + capBytes(s.last) +
 		capBytes(s.guards) + capBytes(s.liveStores) + capBytes(s.liveCands) + capBytes(s.liveFlat) +
 		capBytes(s.live) + capBytes(s.liveFrom) + capBytes(s.liveWords) + capBytes(s.subst) + capBytes(s.originPhis)
@@ -81,6 +88,14 @@ func (w *Workspace) Rewind() {
 	w.bytes.Rewind()
 	w.ints.Rewind()
 	w.caches.Rewind()
+	// The arenas keep what the recent compiles needed (arena's Rewind);
+	// the scratch tables, grown by value ID, the most any compile has. Once
+	// they hold more than the arenas, a compile bigger than the recent
+	// ones grew them, and they go with its chunks: what the workspace
+	// keeps is what the recent compiles needed, apart from any budget.
+	if w.scratchBytes() > w.arenaBytes() {
+		w.scratch = scratch{}
+	}
 }
 
 // BuildIn is BuildWith, building in w.
