@@ -179,7 +179,11 @@ func (p *Program) Validate() error {
 		if left && !source(in.Left) || right && !source(in.Right) || third && !source(in.Third) || write && !dest(in.Dest) || extra && !dest(in.Extra) {
 			return bad("invalid slot operand")
 		}
-		if in.Op != Return && in.Op != Jump && !target(pc+1) {
+		// What Go runs (Host) may end the code's flow there -- a throw, which
+		// nothing after it reaches: the instruction is the end of its block,
+		// which has no successor. A switch whose default throws had had every
+		// such function refused.
+		if in.Op != Return && in.Op != Jump && in.Op != Host && !target(pc+1) {
 			return bad("invalid fallthrough")
 		}
 	}

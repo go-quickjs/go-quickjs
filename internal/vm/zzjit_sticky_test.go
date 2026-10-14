@@ -95,3 +95,159 @@ func TestJITCallLeftToGoDecidedAgain(t *testing.T) {
 		t.Errorf("h's call, left to Go, not decided again for add: reopts %d inline %d callSites %v nativeCalls %d inlines %d failed %v", e.reopts, e.inlineReopts, e.callSites, len(e.nativeCalls), len(e.inlines), e.failed)
 	}
 }
+
+// A throw, which Go makes (ir.Host), ends the code's flow: what follows it
+// that nothing reaches -- a switch's after its default throws -- is no
+// fallthrough, and the function is compiled. Its lowering had been refused
+// ("invalid fallthrough"): AWFY's Json's readValue never ran natively. Each
+// answer is the interpreter's, in every tier and under every stress setting.
+func TestJITThrowEndsTheFlow(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const src = `
+		const P = {
+			current: 'n',
+			readValue() {
+				switch (this.current) {
+				case 'n': return 1
+				case 't': return 2
+				case '0': case '1': return this.current.charCodeAt(0)
+				default: throw new Error('value ' + this.current)
+				}
+			},
+		}
+		function run(cs, n) {
+			let s = 0
+			for (let i = 0; i < n; i++) {
+				P.current = cs[i % cs.length]
+				try { s = (s + P.readValue()) | 0 } catch (e) { s = (s + e.message.length) | 0 }
+			}
+			return s
+		}
+		const log = []
+		for (let r = 0; r < 20; r++) log.push(run(['n', 't', '0', '1'], 200), run(['n', 'x', '1'], 30))
+		log.join()`
+	jitDifferential(t, src)
+	r := New(Config{JIT: true})
+	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	if _, err := r.Run(compileForTest(t, `function f(c) { switch (c) { case 1: return 'a'; default: throw new Error('no') } }`)); err != nil {
+		t.Fatal(err)
+	}
+	cl := r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure
+	for _, kind := range []jitLowerKind{jitLowerInline, jitLowerHot} {
+		p, err := r.jitLower(cl.fn, kind)
+		if err == nil {
+			err = p.Validate()
+		}
+		if err != nil {
+			t.Errorf("a function whose switch's default throws was refused (kind %d): %v", kind, err)
+		}
+	}
+}
+
+// An inlined callee's concat (ir.StringConcat) joins its own parts: its
+// Extra counts them, which the inliner does not move as it moves the
+// callee's slots past the caller's (ssa's shifted). Moved, the concat read
+// its parts that far past them -- the caller's slots, or past every slot,
+// which panicked: test262's decodeURI tests, decimalToPercentHexString
+// inlined into their loops, here as test262 has them. The runtime has no
+// memory limit: under jitDifferential's, the JIT's budget refuses the
+// script's top level (jitCompiles), and nothing is inlined into its loops.
+func TestJITInlinedConcat(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const src = `
+		function Test262Error(m) { this.message = m }
+		function decimalToHexString(n) {
+		  var hex = "0123456789ABCDEF";
+		  n >>>= 0;
+		  var s = "";
+		  while (n) {
+		    s = hex[n & 0xf] + s;
+		    n >>>= 4;
+		  }
+		  while (s.length < 4) {
+		    s = "0" + s;
+		  }
+		  return s;
+		}
+
+		function decimalToPercentHexString(n) {
+		  var hex = "0123456789ABCDEF";
+		  return "%" + hex[(n >> 4) & 0xf] + hex[n & 0xf];
+		}
+		var errorCount = 0;
+		var count = 0;
+		var indexP;
+		var indexO = 0;
+
+		for (var indexB = 0xE0; indexB <= 0xEF; indexB++) {
+		  count++;
+		  var hexB = decimalToPercentHexString(indexB);
+		  var result = true;
+		  for (var indexC = 0xC0; indexC <= 0xFF; indexC++) {
+		    var hexC = decimalToPercentHexString(indexC);
+		    try {
+		      decodeURI(hexB + "%A0" + hexC);
+		    } catch (e) {
+		      if ((e instanceof URIError) === true) continue;
+		    }
+		    result = false;
+		  }
+		  if (result !== true) {
+		    if (indexO === 0) {
+		      indexO = indexB;
+		    } else {
+		      if ((indexB - indexP) !== 1) {
+		        if ((indexP - indexO) !== 0) {
+		          var hexP = decimalToHexString(indexP);
+		          var hexO = decimalToHexString(indexO);
+		          throw new Test262Error('#' + hexO + '-' + hexP + ' ');
+		        }
+		        else {
+		          var hexP = decimalToHexString(indexP);
+		          throw new Test262Error('#' + hexP + ' ');
+		        }
+		        indexO = indexB;
+		      }
+		    }
+		    indexP = indexB;
+		    errorCount++;
+		  }
+		}
+
+		if (errorCount > 0) {
+		  if ((indexP - indexO) !== 0) {
+		    var hexP = decimalToHexString(indexP);
+		    var hexO = decimalToHexString(indexO);
+		    throw new Test262Error('#' + hexO + '-' + hexP + ' ');
+		  } else {
+		    var hexP = decimalToHexString(indexP);
+		    throw new Test262Error('#' + hexP + ' ');
+		  }
+		  throw new Test262Error('Total error: ' + errorCount + ' bad Unicode character in ' + count + ' ');
+		}
+		errorCount + ':' + count`
+	for _, c := range []jitStressConfig{
+		{threshold: true},
+		{threshold: true, budget: 1},
+		{threshold: true, budget: 3, deopt: 7},
+	} {
+		r := New(Config{JIT: true})
+		r.jitCallThreshold = 1
+		r.jitStress = c
+		v, err := r.Run(compileForTest(t, src))
+		if err != nil {
+			t.Fatalf("%+v: %v", c, err)
+		}
+		if s, err := r.ToString(v); err != nil || s.Go() != "0:16" {
+			t.Errorf("%+v: %v %v, want 0:16", c, s, err)
+		}
+		if r.JITStats().SSAEntries == 0 {
+			t.Errorf("%+v: the script did not run natively", c)
+		}
+		r.Close()
+	}
+}

@@ -208,6 +208,9 @@ func jitDifferential(t *testing.T, src string) JITStats {
 		{threshold: true},
 		{threshold: true, budget: 1},
 		{threshold: true, budget: 5, deopt: 2},
+		// CI's test262 setting under stress (QJS_JIT_STRESS's
+		// threshold,budget=3,deopt=7).
+		{threshold: true, budget: 3, deopt: 7},
 	} {
 		got, st := run(true, true, c)
 		if got != want && !outOfMemory(got) {

@@ -1584,7 +1584,11 @@ func (b *builder) forwardCall(blk *Block, pc, sp int, fr *frame, guard func(Op, 
 }
 
 // shifted is a callee's instruction with its slots made the builder's,
-// base past its own.
+// base past its own. Extra is a slot but where it counts operands -- a
+// concat's parts, an array literal's elements, a call's arguments -- which
+// it does not move: shifted too, an inlined callee's concat, test262's
+// decimalToPercentHexString's, read its parts that far past them, the
+// caller's slots or none.
 func shifted(in ir.Instruction, base int) ir.Instruction {
 	for _, o := range []*ir.Operand{&in.Left, &in.Right, &in.Third} {
 		if o.Slot >= 0 {
@@ -1592,8 +1596,12 @@ func shifted(in ir.Instruction, base int) ir.Instruction {
 		}
 	}
 	in.Dest += base
-	if in.Extra >= 0 {
-		in.Extra += base
+	switch in.Op {
+	case ir.StringConcat, ir.ArrayLiteral, ir.Host, ir.Call:
+	default:
+		if in.Extra >= 0 {
+			in.Extra += base
+		}
 	}
 	if in.Check {
 		in.CheckSlot += base
