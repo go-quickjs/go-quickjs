@@ -55,42 +55,50 @@ func (a *argList) Set(s string) error {
 }
 
 // fixedDriver is the fixed mode in JavaScript: each benchmark n times, the
-// suites a comma-separated list names, or all.
+// suites a comma-separated list names, or all. Its names are a function's
+// own: qjs runs the driver as a classic script, where a var is a global
+// that the suite's files may assign -- box2d.js sets the global i to 22,
+// which had ended the loop loading the files before zlib's and
+// Typescript's -- while node runs it as a module of its own.
 const fixedDriver = `%s
-var __files = %s;
-for (var i = 0; i < __files.length; i++) load(__files[i]);
-var __only = %q;
-function __pad(s, n, left) { s = String(s); while (s.length < n) s = left ? " " + s : s + " "; return s; }
+(function () {
+var files = %s;
+for (var i = 0; i < files.length; i++) load(files[i]);
+var only = %q;
+function pad(s, n, left) { s = String(s); while (s.length < n) s = left ? " " + s : s + " "; return s; }
 for (var s of BenchmarkSuite.suites) {
-	if (__only && ("," + __only + ",").indexOf("," + s.name + ",") < 0) continue;
-	var __t0 = __v8benchNow();
+	if (only && ("," + only + ",").indexOf("," + s.name + ",") < 0) continue;
+	var t0 = __v8benchNow();
 	if (BenchmarkSuite.ResetRNG) BenchmarkSuite.ResetRNG();
 	for (var b of s.benchmarks) {
 		b.Setup();
-		for (var i = 0; i < %d; i++) b.run();
+		for (var k = 0; k < %d; k++) b.run();
 		b.TearDown();
 	}
-	print(__pad(s.name, 13) + " " + __pad((__v8benchNow() - __t0).toFixed(1), 9, true) + " ms");
+	print(pad(s.name, 13) + " " + pad((__v8benchNow() - t0).toFixed(1), 9, true) + " ms");
 }
+})();
 `
 
 // awfyDriver is the fixed mode of Are We Fast Yet in JavaScript: its
 // modules, then each benchmark n times, those a comma-separated list names,
-// or all.
+// or all; its names a function's own, as fixedDriver's are.
 const awfyDriver = `%s
 %s
-var __work = %s;
-var __only = %q;
-function __pad(s, n, left) { s = String(s); while (s.length < n) s = left ? " " + s : s + " "; return s; }
-for (var w of __work) {
-	if (__only && ("," + __only + ",").indexOf("," + w[0] + ",") < 0) continue;
-	var __t0 = __v8benchNow();
+(function () {
+var work = %s;
+var only = %q;
+function pad(s, n, left) { s = String(s); while (s.length < n) s = left ? " " + s : s + " "; return s; }
+for (var w of work) {
+	if (only && ("," + only + ",").indexOf("," + w[0] + ",") < 0) continue;
+	var t0 = __v8benchNow();
 	var b = __awfyRequire("./" + w[1]).newInstance();
-	for (var i = 0; i < %d; i++) {
+	for (var k = 0; k < %d; k++) {
 		if (!b.innerBenchmarkLoop(w[2])) throw new Error(w[0] + ": the result is wrong");
 	}
-	print(__pad(w[0], 13) + " " + __pad((__v8benchNow() - __t0).toFixed(1), 9, true) + " ms");
+	print(pad(w[0], 13) + " " + pad((__v8benchNow() - t0).toFixed(1), 9, true) + " ms");
 }
+})();
 `
 
 // MainExternal parses the command line and runs the suite on a program of
