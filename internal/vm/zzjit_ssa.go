@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"iter"
 	"math"
+	"math/bits"
 	"runtime"
 	"slices"
 	"strings"
@@ -4763,8 +4764,10 @@ type jitLowering struct {
 	used      uint64
 	// hints are what its code's exits have shown it does that its
 	// bytecode does not say (jitcompile.Hints): its programs are lowered
-	// with them.
-	hints jitcompile.Hints
+	// with them. treeAdds is how many additions its tree had marked
+	// (treeSeen) when they were last taken into hints.
+	hints    jitcompile.Hints
+	treeAdds int32
 }
 
 // jitLowerKind is how a program is lowered: for a function's own code
@@ -4810,6 +4813,28 @@ func (r *Runtime) jitLower(fn *bytecode.Function, kind jitLowerKind) (*ir.Progra
 		s = &jitState{}
 	}
 	l := s.lowering(fn)
+	if t := (*tree)(atomic.LoadPointer(&fn.VMCode)); t != nil {
+		// The additions the tree tier has seen add strings, Go's from the
+		// first compile (ztree_zzzzseen.go).
+		if seen := t.seen.Load(); seen != nil && seen.n.Load() != l.treeAdds {
+			l.treeAdds = seen.n.Load()
+			before := jitCapBytes(l.hints.StringAdds)
+			grown := false
+			for i := range seen.adds {
+				for w := seen.adds[i].Load(); w != 0; w &= w - 1 {
+					pc := int32(i*32 + bits.TrailingZeros32(w))
+					if !slices.Contains(l.hints.StringAdds, pc) {
+						l.hints.StringAdds, grown = append(l.hints.StringAdds, pc), true
+					}
+				}
+			}
+			l.bytes += jitCapBytes(l.hints.StringAdds) - before
+			s.lowerBytes += jitCapBytes(l.hints.StringAdds) - before
+			if grown {
+				s.relower(l)
+			}
+		}
+	}
 	if !l.done[kind] {
 		switch kind {
 		case jitLowerSSA:
@@ -5863,6 +5888,7 @@ func jitLoopLength(fn *bytecode.Function) uint32 {
 // had been, and Go goes on in it at pc.
 func (r *Runtime) jitGoOn(f *frame, e *jitEntry, pc, sp int) (v Value, err error, done, again bool) {
 	if e.entrySlow {
+		defer r.jitBackInCode(e, r.jitLeaveCode(e))
 		v, err, done = r.jitInterpret(f, sp, nil)
 		return v, err, done, false
 	}
@@ -5892,6 +5918,11 @@ func (r *Runtime) jitGoOn(f *frame, e *jitEntry, pc, sp int) (v Value, err error
 	defer func(f *frame) { s.goOn = f }(s.goOn)
 	s.goOn = f
 	r.backEdges = 1
+	// Out of its code, the run goes on natively at an entry of the code as
+	// it is when the interpreter offers one (jitLeaveCode): a run of it
+	// that a back edge with no entry in this one began meanwhile, which
+	// deoptimized, is compiled again for it.
+	defer r.jitBackInCode(e, r.jitLeaveCode(e))
 	v, err = r.executeAt(f, sp, nil)
 	if err == errGoOnNatively {
 		s.wentOn++

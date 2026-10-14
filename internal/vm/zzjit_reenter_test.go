@@ -2,7 +2,10 @@
 
 package vm
 
-import "testing"
+import (
+	"sync"
+	"testing"
+)
 
 // jitLongRunForTest runs setup, warms what it defines by running warm ten
 // times, and runs src once, returning its result as a string and what the
@@ -209,4 +212,138 @@ func TestJITGenericOperatorsAnswers(t *testing.T) {
 			for (const y of vals) for (const f of binary) out.push(show(f(x, y)))
 		}
 		out.join()`)
+}
+
+// A run whose frame Go goes on with in the interpreter (jitGoOn) -- code
+// judged not to pay (entrySlow), the rest of the invocation interpreted --
+// is no run of its code meanwhile (jitLeaveCode), as a deoptimized one is
+// not: it goes on natively, if at all, at an entry of the code as it is
+// then, and the code may be compiled again for a run that begins
+// meanwhile. Counted, a run of PDF.js's font parsers had blocked their
+// compiles again for the rest of each call.
+func TestJITRunOutOfCodeInInterpreter(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r := New(Config{JIT: true})
+	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	if r.jitCallThreshold <= 1 {
+		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
+	}
+	var e *jitEntry
+	var runs []int32
+	r.global.setOwnRaw(r.atoms.intern("slow"), r.NewFunction("slow", 1, func(_ *Runtime, _ Value, args []Value) (Value, error) {
+		if e != nil && args[0].Truthy() {
+			e.entrySlow = true
+		}
+		return Undefined, nil
+	}), propDefault)
+	r.global.setOwnRaw(r.atoms.intern("probe"), r.NewFunction("probe", 1, func(_ *Runtime, _ Value, args []Value) (Value, error) {
+		if e != nil && args[0].Truthy() {
+			runs = append(runs, e.ssaRuns)
+		}
+		return Undefined, nil
+	}), propDefault)
+	const setup = `
+		function f(n, o, go) {
+			let t = 0
+			for (let i = 0; i < n; i++) {
+				if (i === 50) slow(go)
+				if (i === 100) t += o.x | 0
+				if (i === 200) probe(go)
+				t += i
+			}
+			return t
+		}`
+	if _, err := r.Run(compileForTest(t, setup)); err != nil {
+		t.Fatal(err)
+	}
+	for range 10 {
+		if _, err := r.Run(compileForTest(t, `f(3000, 1, false)`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e = jitNativeForTest(t, r, "f")
+	entries := e.ssaStats.entries
+	v, err := r.Run(compileForTest(t, `f(3000, 1, true)`))
+	if err != nil || v.Number() != 3000*2999/2 {
+		t.Fatalf("= %v, %v", v, err)
+	}
+	if e.ssaStats.entries == entries {
+		t.Fatal("f's code never ran")
+	}
+	if len(runs) != 1 || runs[0] != 0 {
+		t.Errorf("runs of f's code while the interpreter went on with its frame: %v", runs)
+	}
+	if e.ssaRuns != 0 {
+		t.Errorf("f's code has %d runs after it returned", e.ssaRuns)
+	}
+}
+
+// An addition the tree tier has seen add a string is compiled as one from
+// the JIT's first compile (treeSeen, jitcompile.Hints' StringAdds): the
+// code made at a loop's back edge, after the tree tier ran the loop's
+// first turns, does not leave at it. Compiled blind, it had, at every such
+// addition once, and been compiled again for it -- 21 of the 24 of PDF.js's
+// additions that deoptimized.
+func TestJITTreeSeenStringAdds(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	if !treeTier.Load() {
+		t.Skip("the tree tier is off (QJS_NOTREE)")
+	}
+	got, st := jitLongRunForTest(t, `
+		function cat(a, n) {
+			let s = '', k = 0
+			for (let i = 0; i < n; i++) {
+				s = s + a[i % a.length]
+				if (s.length > 100) { k += s.length; s = '' }
+			}
+			return k + s.length
+		}
+		const strs = ['x', 'yy', 'zzz']`, `0`, `cat(strs, 30000)`)
+	if got != "60000" {
+		t.Fatalf("= %s", got)
+	}
+	if st.Guards != 0 {
+		t.Errorf("a loop over strings, compiled after the tree tier ran it, deoptimized %d times", st.Guards)
+	}
+}
+
+// The marks are the function's tree's, which every runtime running its
+// bytecode shares: runtimes that mark and lower it at once agree, and race
+// on nothing (go test -race).
+func TestJITTreeSeenSharedAcrossRuntimes(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	if !treeTier.Load() {
+		t.Skip("the tree tier is off (QJS_NOTREE)")
+	}
+	code := compileForTest(t, `
+		function cat(a, n) {
+			let s = '', k = 0
+			for (let i = 0; i < n; i++) {
+				s = s + a[i % a.length]
+				if (s.length > 100) { k += s.length; s = '' }
+			}
+			return k + s.length
+		}
+		;(() => { let t = 0; for (let r = 0; r < 5; r++) t += cat(['x', 'yy', 'zzz'], 3000); return t })()`)
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r := New(Config{JIT: true})
+			defer func() { r.Close(); r.ReleaseClosed() }()
+			for range 4 {
+				if v, err := r.Run(code); err != nil || v.Number() != 30000 {
+					t.Errorf("= %v, %v; want 30000", v, err)
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }

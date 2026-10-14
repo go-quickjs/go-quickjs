@@ -2802,28 +2802,44 @@ func (r *Runtime) jitDeoptInterpret(f *frame, sp int, code *jit.SSACode) (Value,
 // jitDeoptRun is jitDeoptInterpret for the run of e's code Go is inside,
 // the innermost, which a failed guard left: the run is over, its frame
 // going on in the interpreter and never in this code again, and is no run
-// of it meanwhile (ssaRuns, runEntries), so that the code is compiled again
-// for what made it leave -- at a loop's next back edge, where the
-// interpreter enters it again (tryJITAt), as V8 enters code optimized
-// again at a loop. Counted a run, the code had been entered again as it
-// was (otherwiseInUse), failing again, each failure one run deeper:
-// PDF.js's font decryption, for each font, deoptimized seven times, and
-// ran its loop in the interpreter thousands of back edges after that,
-// its code waiting for the next call. The run is counted again before it
-// ends (jitRunDone), however the interpreter leaves.
+// of it meanwhile (jitLeaveCode), so that the code is compiled again for
+// what made it leave -- at a loop's next back edge, where the interpreter
+// enters it again (tryJITAt), as V8 enters code optimized again at a loop.
+// Counted a run, the code had been entered again as it was
+// (otherwiseInUse), failing again, each failure one run deeper: PDF.js's
+// font decryption, for each font, deoptimized seven times, and ran its
+// loop in the interpreter thousands of back edges after that, its code
+// waiting for the next call.
 func (r *Runtime) jitDeoptRun(f *frame, e *jitEntry, sp int) (Value, error, bool) {
+	defer r.jitBackInCode(e, r.jitLeaveCode(e))
+	return r.jitDeoptInterpret(f, sp, e.ssa)
+}
+
+// jitLeaveCode takes the innermost run of e's code Go is inside, which has
+// left the code for the interpreter, out of its runs (ssaRuns,
+// runEntries): its frame goes on in the interpreter, and native code
+// again, if at all, at an entry of e's code as it is then (jitGoOn), never
+// where the code left it, so that compiling the code again meanwhile takes
+// nothing from it. It reports the run's place for jitBackInCode, which
+// counts it again before it ends (jitRunDone), however the interpreter
+// leaves; -1 if Go is inside no run of e's.
+func (r *Runtime) jitLeaveCode(e *jitEntry) int {
 	s := r.jit
 	n := len(s.runEntries) - 1
 	if n < 0 || s.runEntries[n] != e {
-		return r.jitDeoptInterpret(f, sp, e.ssa)
+		return -1
 	}
 	e.ssaRuns--
 	s.runEntries[n] = nil
-	defer func() {
+	return n
+}
+
+// jitBackInCode counts the run jitLeaveCode took out at n again.
+func (r *Runtime) jitBackInCode(e *jitEntry, n int) {
+	if n >= 0 {
 		e.ssaRuns++
-		s.runEntries[n] = e
-	}()
-	return r.jitDeoptInterpret(f, sp, e.ssa)
+		r.jit.runEntries[n] = e
+	}
 }
 
 // jitInterpretAfter has the interpreter go on with f from sp, the code

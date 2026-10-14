@@ -79,6 +79,9 @@ type tree struct {
 	// gen is a generator's or an async function's, for its resumptions
 	// (see ztree_zyield.go), and nil for any other function's.
 	gen *tgen
+	// seen is what its slow paths took that native code would not, for
+	// the JIT (see ztree_zzzzseen.go), or nil for nothing yet.
+	seen atomic.Pointer[treeSeen]
 }
 
 // treeThrow carries an exception out of a tree, to runTree.

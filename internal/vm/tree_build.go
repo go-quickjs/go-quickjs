@@ -1607,6 +1607,9 @@ func (c *tctx) arithSlow(op bytecode.Op, a, b Value, pc int) Value {
 		}
 	}
 	c.at(pc)
+	if jitBuilt && op == bytecode.OpAdd && (a.IsString() || b.IsString()) {
+		treeStringAdd(c, pc)
+	}
 	var v Value
 	var err error
 	switch op {
