@@ -2285,6 +2285,12 @@ func jitHostCall(ctx *abi.Context) bool {
 	case ssa.GoElemCell:
 		o := *(**Object)(unsafe.Pointer(&ctx.GoArgs[0].Ref))
 		return o != nil && jitElemAbsent(o, math.Float64frombits(ctx.GoArgs[1].Num))
+	case ssa.GoIndex:
+		v, ok := r.jitKeyedRead(jitGoArg(ctx, 0), jitGoArg(ctx, 1))
+		if ok {
+			*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+		}
+		return ok
 	case ssa.GoElemWrite:
 		o := *(**Object)(unsafe.Pointer(&ctx.GoArgs[0].Ref))
 		k, v := math.Float64frombits(ctx.GoArgs[1].Num), Float(math.Float64frombits(ctx.GoArgs[2].Num))
@@ -3871,14 +3877,21 @@ func (r *Runtime) jitIndexSeen(e *jitEntry, pc int, o, k Value) {
 		return
 	}
 	in := p.Code[pc]
-	if in.Op != ir.ArrayRead || slices.Contains(e.typedReads, int32(pc)) || slices.Contains(e.stringReads, int32(pc)) {
+	if in.Op != ir.ArrayRead || slices.Contains(e.typedReads, int32(pc)) || slices.Contains(e.stringReads, int32(pc)) || slices.Contains(e.keyedReads, int32(pc)) {
 		return
 	}
 	if !in.Reference {
 		// Read as a number, for what its uses take it for: a string's
-		// element is none, and is read as it is from the next lowering on
-		// (jitcompile.Hints' ElementReads), and as a string's.
-		if !o.IsString() || !k.IsNumber() {
+		// element is none, nor an object's property by its name, as a rule
+		// -- PDF.js's map[command], stored to an array's element -- and is
+		// read as it is from the next lowering on (jitcompile.Hints'
+		// ElementReads), and as a string's, or by Go (keyedReads).
+		keyed := o.IsObject() && k.IsString()
+		if keyed {
+			if _, ok := r.jitKeyedRead(o, k); !ok {
+				return
+			}
+		} else if !o.IsString() || !k.IsNumber() {
 			return
 		}
 		l := r.jit.lowering(e.link.key.Value())
@@ -3887,7 +3900,11 @@ func (r *Runtime) jitIndexSeen(e *jitEntry, pc int, o, k Value) {
 		l.bytes += jitCapBytes(l.hints.ElementReads) - before
 		r.jit.lowerBytes += jitCapBytes(l.hints.ElementReads) - before
 		r.jit.relower(l)
-		e.stringReads = append(e.stringReads, int32(pc))
+		if keyed {
+			e.keyedReads = append(e.keyedReads, int32(pc))
+		} else {
+			e.stringReads = append(e.stringReads, int32(pc))
+		}
 		if !e.feedReopt {
 			e.feedReopt, e.feedStarts, e.feedWork = true, e.starts+e.link.in, e.ssaStats.work
 		}
@@ -3901,6 +3918,15 @@ func (r *Runtime) jitIndexSeen(e *jitEntry, pc int, o, k Value) {
 		e.stringReads = append(e.stringReads, int32(pc))
 	case o.IsObject() && o.Object().class == ClassTypedArray:
 		e.typedReads = append(e.typedReads, int32(pc))
+	case o.IsObject() && k.IsString():
+		// An object's property by its name, obj[name], which Go reads from
+		// native code from then on (ssa.GoIndex), if it would have read
+		// this one: PDF.js's Type1 fonts look their commands up so, map[command],
+		// every invocation left there for the interpreter.
+		if _, ok := r.jitKeyedRead(o, k); !ok {
+			return
+		}
+		e.keyedReads = append(e.keyedReads, int32(pc))
 	default:
 		return
 	}
@@ -3921,6 +3947,51 @@ func (fb *jitFeedback) StringRead(pc int) bool {
 // TypedRead is ssa.ElementFeedback's (jitIndexSeen).
 func (fb *jitFeedback) TypedRead(pc int) bool {
 	return fb.e != nil && fb.root == nil && slices.Contains(fb.e.typedReads, int32(pc))
+}
+
+// KeyedRead is ssa.KeyedFeedback's (jitIndexSeen).
+func (fb *jitFeedback) KeyedRead(pc int) bool {
+	return fb.e != nil && fb.root == nil && slices.Contains(fb.e.keyedReads, int32(pc))
+}
+
+// jitKeyedRead is o[k] where reading it runs nothing (ssa.GoIndex): an
+// object's data property by a string key, which the runtime's shared
+// property cache finds -- no getter, no proxy, no class that answers keys
+// itself -- or a dense array's element, or a typed array's, by an
+// integer; and false for any other, which Go reads after an exit.
+func (r *Runtime) jitKeyedRead(o, k Value) (Value, bool) {
+	if !o.IsObject() {
+		return Undefined, false
+	}
+	obj := o.Object()
+	if k.IsNumber() {
+		if i := uint32(k.Number()); float64(i) == k.Number() && uint(i) < uint(len(obj.elemsOf())) && obj.flags&objMappedArguments == 0 {
+			if v := obj.elemsOf()[i]; !isHole(v) {
+				return v, true
+			}
+		}
+		if t, i, ok := typedElemIndex(obj, k.num); ok {
+			return t.getElem(i), true
+		}
+		return Undefined, false
+	}
+	if !k.IsString() {
+		return Undefined, false
+	}
+	// A string's name, found as it is: no conversion runs anything, and no
+	// atom is made -- a key no atom has is no property's.
+	n, err := r.toPropertyName(k)
+	if err != nil {
+		return Undefined, false
+	}
+	a, ok := n.atom, n.hasAtom
+	if !ok {
+		a, ok = r.atoms.lookup(n.name)
+	}
+	if !ok || a.IsIndex() {
+		return Undefined, false
+	}
+	return r.sharedProp(obj, a)
 }
 
 // jitReadsUpvalues reports whether cl's code reads or assigns a binding it

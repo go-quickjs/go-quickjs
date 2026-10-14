@@ -130,6 +130,14 @@ type ElementFeedback interface {
 	TypedRead(pc int) bool
 }
 
+// KeyedFeedback is Feedback that knows the element reads, read as they
+// are (ir.Instruction's Reference), whose receivers have been objects
+// read by a key native code does not find -- obj[name], a property by its
+// name's string -- which Go makes from native code (GoIndex).
+type KeyedFeedback interface {
+	KeyedRead(pc int) bool
+}
+
 // StringElementFeedback is Feedback that knows the element reads whose
 // receivers have been strings (OpStringChar): such a read is compiled for
 // a string, which native code makes the element of, and any other
@@ -158,6 +166,17 @@ func (b *builder) typedReceiver(pc int, recv *Value) bool {
 func (b *builder) typedRead(pc int) bool {
 	f, ok := b.fb.(ElementFeedback)
 	return ok && f.TypedRead(pc)
+}
+
+// keyedRead reports whether the element read at pc is made by Go from
+// native code (KeyedFeedback, GoIndex).
+func (b *builder) keyedRead(pc int) bool {
+	in := b.p.Code[pc]
+	if in.Op != ir.ArrayRead || !in.Reference || !b.goCalls() {
+		return false
+	}
+	f, ok := b.fb.(KeyedFeedback)
+	return ok && f.KeyedRead(pc)
 }
 
 // stringProperty is the feedback for a method read at pc whose receivers
@@ -358,6 +377,14 @@ type GoOp uint8
 // strings and joins them, as GoAdd adds; what could run code or throw it
 // leaves to an exit, after which Go makes it.
 //
+// GoIndex is an element read as it is (ir.Instruction's Reference) of
+// any receiver and key, the first operand and the second, as V8's code
+// calls its generic keyed load: Go reads an object's property by a string
+// key, or its element by an integer, where that runs nothing -- a data
+// property, found by the runtime's shared property cache, or a dense
+// array's or a typed array's element -- and refuses any other, which
+// leaves for Go to read after an exit, native code going on after it.
+//
 // GoClosure makes the function of constant Argc on the code's own frame
 // (ir.Closure), capturing its locals there, and GoClose closes what
 // closures captured of locals Argc on (ir.CloseUpvalues): both Go's, on
@@ -383,6 +410,7 @@ const (
 	GoClose
 	GoTypedRead
 	GoElemStore
+	GoIndex
 )
 
 // RefillsPools reports whether a call takes an object from a pool, which
@@ -1351,6 +1379,20 @@ func (b *builder) goAdd(blk *Block, in ir.Instruction, operand func(ir.Operand) 
 	b.assign(in.Dest, blk, r)
 }
 
+// goIndex makes in, an element read as it is, by a call of Go from native
+// code (GoIndex), as goAdd makes an addition.
+func (b *builder) goIndex(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+	call := guard(OpCall, Tagged, ir.HostExit, operand(in.Left), operand(in.Right))
+	if b.f.Keeps < b.f.keepLimit() {
+		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoIndex, ThisSlot: -1}}, b.f.Keeps
+		b.f.Keeps++
+	}
+	cell := b.f.newValue(blk, OpCallCell, Source, call)
+	r := b.f.newValue(blk, OpKept, Tagged, cell, call)
+	r.Shadow = cell
+	b.assign(in.Dest, blk, r)
+}
+
 // iterStep makes in, a loop's step, by a call of Go from native code
 // (GoCall, Step) -- as the tree tier's step calls iterNext, where an exit
 // and an entry at every turn had cost a small loop's body four times over
@@ -1708,7 +1750,7 @@ func (b *builder) plan() error {
 	// go on without one too often is compiled with them (EntryFeedback).
 	resumes := func(pc int) bool {
 		switch op := p.Code[pc].Op; {
-		case b.host(pc), op == ir.ObjectLiteral, op == ir.ArrayLiteral, op == ir.StringAdd, op == ir.StringConcat, op == ir.ArrayWrite, op == ir.IterStep,
+		case b.host(pc), b.keyedRead(pc), op == ir.ObjectLiteral, op == ir.ArrayLiteral, op == ir.StringAdd, op == ir.StringConcat, op == ir.ArrayWrite, op == ir.IterStep,
 			op == ir.IterClose,
 			op == ir.Closure, op == ir.CloseUpvalues:
 			return true
@@ -2542,6 +2584,12 @@ func (b *builder) instruction(blk *Block, pc int) {
 			array := guard(OpIndexedOf, Ptr, ir.HostExit, operand(in.Left))
 			key, _ := keyOf(ir.HostExit)
 			b.assign(in.Dest, blk, boxF(guard(OpElemRead, Float64, ir.HostExit, array, key)))
+			break
+		}
+		if in.Reference && in.Op == ir.ArrayRead && b.keyedRead(pc) {
+			// Any receiver's, by Go from native code; what Go does not read
+			// leaves, and native code goes on after it.
+			b.goIndex(blk, in, operand, guard)
 			break
 		}
 		if in.Reference {

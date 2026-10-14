@@ -73,7 +73,8 @@ func LowerSSA(fn *bytecode.Function) (*ir.Program, error) {
 // code follows an addition's feedback. A loop's `token += c`, whose token
 // is a string, had each character read as a number and leave native code.
 // ElementReads are the PCs of element reads that have met a receiver whose
-// elements are no numbers, a string: each is read as it is (ir's
+// elements are no numbers, a string, or an object read by a name: each is
+// read as it is (ir's
 // Reference), whatever its uses take it for -- its first use that takes a
 // number then exits, and is a hint of its own.
 type Hints struct {

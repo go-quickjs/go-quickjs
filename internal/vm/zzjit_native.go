@@ -299,10 +299,12 @@ type jitEntry struct {
 	poly []jitPolySite
 	// typedReads are the element reads, by PC, whose result no native
 	// operation takes as a number, whose receivers have been typed arrays
-	// (ssa.ElementFeedback), and stringReads those whose receivers have
-	// been strings (ssa.StringElementFeedback).
+	// (ssa.ElementFeedback), stringReads those whose receivers have been
+	// strings (ssa.StringElementFeedback), and keyedReads those Go makes,
+	// whose receivers have been objects read by a name (ssa.KeyedFeedback).
 	typedReads  []int32
 	stringReads []int32
+	keyedReads  []int32
 	polyReopt   bool
 	polyPending bool
 	polySettled uint8
@@ -768,7 +770,7 @@ func jitCompiledBytes(shapes []*shape, holders []*Object, fed []jitFedSite, fedI
 // with the objects made for them.
 func (e *jitEntry) learnedBytes() int {
 	n := jitCapBytes(e.failed) + jitCapBytes(e.failedEntries) + jitCapBytes(e.literals) + jitCapBytes(e.poly) + jitCapBytes(e.typedReads) +
-		jitCapBytes(e.stringReads) + jitCapBytes(e.strSites) + jitCapBytes(e.nativeCalls) + jitCapBytes(e.inlines) + jitCapBytes(e.notInline) +
+		jitCapBytes(e.stringReads) + jitCapBytes(e.keyedReads) + jitCapBytes(e.strSites) + jitCapBytes(e.nativeCalls) + jitCapBytes(e.inlines) + jitCapBytes(e.notInline) +
 		jitCapBytes(e.nativeCallers) + jitCapBytes(e.callSites)
 	for i := range e.poly {
 		p := &e.poly[i]
@@ -1100,6 +1102,7 @@ type jitGhost struct {
 	failedEntries []uint32
 	typedReads    []int32
 	stringReads   []int32
+	keyedReads    []int32
 }
 
 // jitGhosts bounds the ghosts kept; past it they are forgotten.
@@ -1112,7 +1115,7 @@ func (s *jitState) ghost(addr uintptr, e *jitEntry) {
 	}
 	g := s.ghosts[addr]
 	g.evictions, g.asks = min(g.evictions+1, 16), 0
-	g.failed, g.failedEntries, g.typedReads, g.stringReads = e.failed, e.failedEntries, e.typedReads, e.stringReads
+	g.failed, g.failedEntries, g.typedReads, g.stringReads, g.keyedReads = e.failed, e.failedEntries, e.typedReads, e.stringReads, e.keyedReads
 	s.ghosts[addr] = g
 }
 
@@ -1589,7 +1592,7 @@ func (r *Runtime) jitCompileFor(fn *bytecode.Function, cl *closure, kind jitLowe
 	e := &jitEntry{used: s.epoch(), serial: s.serial, eager: r.jitCallThreshold <= 1, hot: kind == jitLowerHot}
 	if g, ok := s.ghosts[uintptr(unsafe.Pointer(fn))]; ok {
 		// What its code dropped before had learned (jitGhost).
-		e.failed, e.failedEntries, e.typedReads, e.stringReads = g.failed, g.failedEntries, g.typedReads, g.stringReads
+		e.failed, e.failedEntries, e.typedReads, e.stringReads, e.keyedReads = g.failed, g.failedEntries, g.typedReads, g.stringReads, g.keyedReads
 	}
 	s.linkFor(fn, e)
 	p, err := r.jitLower(fn, kind)

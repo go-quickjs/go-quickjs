@@ -2,7 +2,10 @@
 
 package vm
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // A string's element, s[i], a string of one character: native code makes
 // an ASCII one from the runtime's strings of one character, once the read
@@ -303,6 +306,71 @@ func TestJITLocalTypedReadsLearned(t *testing.T) {
 	}
 	if n := e.ssaStats.hosts - hosts; n > 2 {
 		t.Errorf("count left native code %d times in 20 calls", n)
+	}
+	if n := r.JITStats().Interpreted - interpreted; n > 2 {
+		t.Errorf("%d of 20 calls finished in the interpreter", n)
+	}
+}
+
+// An object's property read by its name's string, obj[name], is made by Go
+// from native code once the read has met one (ssa.GoIndex, jitKeyedRead):
+// where reading it runs nothing -- a data property, own or inherited, found
+// by the runtime's shared property cache -- and otherwise after an exit,
+// native code going on after it: a getter, a proxy, a key that is an
+// index, a missing property, a number key of an array. It had left native
+// code at every invocation, the rest of each by the interpreter: PDF.js's
+// Type1 fonts' map[command]. Each answer is the interpreter's in every
+// tier and stress setting; and, once compiled, 20 calls of plain keys
+// finish in the interpreter at most twice.
+func TestJITKeyedReadsByGo(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const setup = `
+		let hits = 0
+		function count(map, keys) {
+			let c = 0, s = ''
+			for (let i = 0; i < keys.length; i++) {
+				const key = keys[i], cmd = map[key]
+				if (cmd === 1) c++
+				else s += typeof cmd
+			}
+			return c + s
+		}
+		const proto = { inherited: 1 }
+		const map = Object.create(proto)
+		map.a = 1; map.b = 2; map.c = 1; map[0] = 1
+		const plain = ['a', 'b', 'c', 'inherited', 'a', 'c']`
+	jitDifferential(t, setup+`
+		Object.defineProperty(map, 'g', { get() { hits++; return 1 }, configurable: true })
+		const px = new Proxy(map, { get(t, k) { hits++; return t[k] } })
+		let r = ''
+		for (let k = 0; k < 6; k++) r += count(map, plain) + ';'
+		r += count(map, ['a', 'missing', '0', 'g', 'inherited', 'toString']) + ';'
+		r += count(px, plain) + ';'
+		r += count([1, 2, 1], [0, 1, 2, 'length', 1.5]) + ';'
+		proto.inherited = 2
+		delete map.c
+		r += count(map, plain) + ';'
+		r + hits`)
+	r := New(Config{JIT: true})
+	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	if r.jitCallThreshold <= 1 {
+		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
+	}
+	if _, err := r.Run(compileForTest(t, setup+`; const many = []; for (let i = 0; i < 1000; i++) many.push(plain[i % 6])`)); err != nil {
+		t.Fatal(err)
+	}
+	for range 10 {
+		if _, err := r.Run(compileForTest(t, `count(map, many)`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	jitNativeForTest(t, r, "count")
+	interpreted := r.JITStats().Interpreted
+	v, err := r.Run(compileForTest(t, `(() => { let t = ''; for (let k = 0; k < 20; k++) t = count(map, many); return t })()`))
+	if want := "833" + strings.Repeat("number", 167); err != nil || v.String().Go() != want {
+		t.Fatalf("= %v, %v", v, err)
 	}
 	if n := r.JITStats().Interpreted - interpreted; n > 2 {
 		t.Errorf("%d of 20 calls finished in the interpreter", n)
