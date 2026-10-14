@@ -154,6 +154,24 @@ func TestTimersDueTogetherRunInOrder(t *testing.T) {
 	}
 }
 
+// TestTimerDelaysPastTheMaximum pins that a delay past 2**31-1 ms runs as
+// soon as possible, as node runs it (TIMEOUT_MAX) and the web does: 2**31
+// waited 24.8 days, and Infinity, made a Duration, never fired on arm64.
+func TestTimerDelaysPastTheMaximum(t *testing.T) {
+	out, _ := run(t, stdlib.Config{}, `
+		const order = []
+		setTimeout(() => { order.push("t50"); console.log(order.join(",")) }, 50)
+		setTimeout(() => order.push("2**31"), 2 ** 31)
+		setTimeout(() => order.push("Infinity"), Infinity)
+		setTimeout(() => order.push("1e300"), 1e300)
+		setTimeout(() => order.push("max"), 2 ** 31 - 1 - 2 ** 31 + 1)
+		const i = setInterval(() => { order.push("interval"); clearInterval(i) }, Infinity)
+	`)
+	if want := "2**31,Infinity,1e300,max,interval,t50"; out != want {
+		t.Errorf("order = %q, want %q", out, want)
+	}
+}
+
 func TestIntervalAndClear(t *testing.T) {
 	out, _ := run(t, stdlib.Config{}, `
 		let n = 0

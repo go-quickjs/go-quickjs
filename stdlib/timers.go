@@ -15,15 +15,22 @@ import (
 //
 // The identifiers handed back are numbers, as on the web, and are not reused
 // while the timer they name is armed.
+// maxTimeoutMS is the longest delay a timer keeps, 2**31-1 milliseconds,
+// as the web and node keep it.
+const maxTimeoutMS = 1<<31 - 1
+
 func Timers(rt *quickjs.Runtime, loop *Loop) error {
 	arm := func(fn quickjs.Value, delayMS float64, repeat bool, args []any) (float64, error) {
 		if !fn.IsFunction() {
 			return 0, rt.Throw(rt.NewError("TypeError",
 				"the first argument must be a function"))
 		}
-		if !(delayMS >= 0) || delayMS != delayMS {
+		if !(delayMS >= 0) || delayMS > maxTimeoutMS {
 			// A negative or missing delay means as soon as possible, which is
-			// what a browser does with it.
+			// what a browser does with it; so does one past what the web's
+			// 32-bit timeout and node's TIMEOUT_MAX hold, which both run at
+			// once. Infinity made a Duration is implementation-defined: on
+			// arm64 such a timer never fired.
 			delayMS = 0
 		}
 		d := time.Duration(delayMS * float64(time.Millisecond))
