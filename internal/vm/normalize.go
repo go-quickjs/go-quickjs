@@ -54,3 +54,63 @@ func normalizeString(n *intl.Normalizer, s string, form intl.NormalizationForm) 
 	b.WriteString(n.Normalize(s[start:], form))
 	return b.String()
 }
+
+// maxDecomposition is the most UTF-16 code units one code unit of a string
+// becomes in any normal form: U+FDFA's compatibility decomposition, 18
+// characters (TestNormalizeExpansionBound checks every code point).
+const maxDecomposition = 18
+
+// normalizedTooLong reports whether s in form would be longer than
+// maxStringLength, before anything is built: normalize's result can be
+// eighteen times its string, which a string near the limit would make
+// gigabytes of. Each character is decomposed alone (canonically for NFC and
+// NFD, by compatibility for NFKC and NFKD) and the lengths summed, which is
+// the decomposition forms' length exactly -- reordering keeps it -- and
+// at least the composition forms', which only compose what decomposing
+// made. A string short enough that no form can take it past the limit is
+// not walked.
+func normalizedTooLong(n *intl.Normalizer, s *String, form intl.NormalizationForm) bool {
+	if s.length <= maxStringLength/maxDecomposition {
+		return false
+	}
+	decompose := intl.NFD
+	if form == intl.NFKC || form == intl.NFKD {
+		decompose = intl.NFKD
+	}
+	units := make(map[rune]int)
+	total := 0
+	str := s.Go()
+	for i := 0; i < len(str); {
+		r, size := wtf8.DecodeRune(str[i:])
+		i += size
+		switch {
+		case r < 0x80, wtf8.IsSurrogate(r):
+			// What has no decomposition, a lone surrogate among it, is
+			// itself.
+			total++
+		default:
+			u, ok := units[r]
+			if !ok {
+				u = utf16Length(n.Normalize(string(r), decompose))
+				units[r] = u
+			}
+			total += u
+		}
+		if total > maxStringLength {
+			return true
+		}
+	}
+	return false
+}
+
+// utf16Length is how many UTF-16 code units the UTF-8 string s is.
+func utf16Length(s string) int {
+	n := 0
+	for _, r := range s {
+		if r >= 0x10000 {
+			n++
+		}
+		n++
+	}
+	return n
+}

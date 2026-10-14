@@ -22,6 +22,9 @@ func TestStringLengthLimit(t *testing.T) {
 		"String.raw":  `const s = "x".repeat(2 ** 26); String.raw({raw: [s, s, s, s, s]}, s, s, s, s)`,
 		"typed join":  `new Uint8Array(2 ** 12).join("y".repeat(2 ** 18))`,
 		"regexp repl": `"x".repeat(2 ** 12).replace(/x/g, "y".repeat(2 ** 18))`,
+		// Each U+FDFA is eighteen characters by compatibility: the limit is
+		// found before anything is built.
+		"normalize": `"\uFDFA".repeat(3e7).normalize("NFKD")`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			// What the last case built is let go of first: on a 32-bit

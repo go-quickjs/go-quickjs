@@ -763,7 +763,10 @@ func (r *Runtime) initStringExtras() {
 		if err != nil {
 			return Undefined, err
 		}
-		return Str(NewString(normalizeString(n, s.Go(), form))), nil
+		if normalizedTooLong(n, s, form) {
+			return Undefined, rt.throwStringLength()
+		}
+		return rt.builtString(normalizeString(n, s.Go(), form))
 	})
 
 	r.defMethod(p, "localeCompare", 1, func(rt *Runtime, this Value, args []Value) (Value, error) {
