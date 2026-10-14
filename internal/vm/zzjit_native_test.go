@@ -2865,6 +2865,12 @@ func TestJITHeldCountsEachKind(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
+	// The clock stopped: the workspaces, let go once the runtime has
+	// compiled nothing for jitWorkAge epochs (idle), are held to be
+	// counted -- under checkptr, the script ran past them.
+	now := jitEpochNow
+	jitEpochNow = func() uint64 { return 100 }
+	t.Cleanup(func() { jitEpochNow = now })
 	r := jitRuntimeForTest(t, Config{JIT: true})
 	if _, err := r.Run(compileForTest(t, `function P(x){this.x=x}
 		function mk(n){let s=0;for(let i=0;i<n;i++){const o={a:i,b:i+1};s=(s+new P(o.a).x+o.b)|0}return s}
