@@ -950,7 +950,13 @@ func (r *Runtime) constructTypedArray(kind elemType, proto *Object, args []Value
 			}
 			length = int(explicit)
 		}
-		o.extOf().data = &typedArrayData{buffer: buf, kind: kind, byteOffset: int(off), fixedLength: length}
+		t := &typedArrayData{buffer: buf, kind: kind, byteOffset: int(off), fixedLength: length}
+		// Its storage at once, as Go's first access would fill it in: the
+		// JIT's native code reads a view's length and elements through it,
+		// and a view only ever read, as PDF.js's subarrays are, had had
+		// every read of its length leave native code.
+		t.fixedStorage()
+		o.extOf().data = t
 		return Obj(o), nil
 
 	case first.IsObject() && first.Object().class == ClassTypedArray:
@@ -1077,6 +1083,8 @@ func (r *Runtime) allocTypedArray(o *Object, kind elemType, length int) *typedAr
 	buf := newObject(r.arrayBufferProto, ClassArrayBuffer)
 	buf.extOf().data = &arrayBufferData{bytes: make([]byte, length*elemInfos[kind].size)}
 	t := &typedArrayData{buffer: buf, kind: kind, fixedLength: length}
+	// Its storage at once (constructTypedArray).
+	t.fixedStorage()
 	o.extOf().data = t
 	return t
 }

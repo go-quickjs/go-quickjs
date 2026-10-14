@@ -431,3 +431,41 @@ func TestJITStringAddChainsLearnedAtOnce(t *testing.T) {
 		t.Errorf("%d guards failed in 20 calls once warm", n)
 	}
 }
+
+// A typed array's length is read natively from the view's first read, its
+// storage filled in when it is made (constructTypedArray,
+// allocTypedArray): before, only Go's first access to it filled it in, and
+// every length of a view only ever read -- PDF.js's subarrays -- left
+// native code. Once compiled, 20 calls over 50 fresh subarrays each leave
+// native code at most twice.
+func TestJITFreshViewLengthsNative(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r := New(Config{JIT: true})
+	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	if r.jitCallThreshold <= 1 {
+		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
+	}
+	const setup = `
+		const buf = new Uint8Array(1000)
+		function total(views) { let t = 0; for (let i = 0; i < views.length; i++) t += views[i].length; return t }
+		function views() { const vs = []; for (let i = 0; i < 50; i++) vs.push(buf.subarray(i, i + 7)); return vs }`
+	if _, err := r.Run(compileForTest(t, setup)); err != nil {
+		t.Fatal(err)
+	}
+	for range 10 {
+		if _, err := r.Run(compileForTest(t, `total(views())`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e := jitNativeForTest(t, r, "total")
+	hosts, guards := e.ssaStats.hosts, e.ssaStats.guards
+	v, err := r.Run(compileForTest(t, `(() => { let t = 0; for (let k = 0; k < 20; k++) t += total(views()); return t })()`))
+	if err != nil || v.Number() != 20*50*7 {
+		t.Fatalf("= %v, %v", v, err)
+	}
+	if n := e.ssaStats.hosts - hosts + e.ssaStats.guards - guards; n > 2 {
+		t.Errorf("total left native code %d times in 20 calls", n)
+	}
+}
