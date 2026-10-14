@@ -3,6 +3,7 @@ package stdlib
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"strings"
@@ -37,6 +38,44 @@ type Workers struct {
 	// imports against -- and whether it is a module. Nil loads nothing, and
 	// only code passed with eval can start a worker.
 	Load func(specifier string) (source, name string, module bool, err error)
+
+	// Max is the most workers that may run at once, every worker a worker
+	// starts counted with the rest: past it, new Worker throws. Zero means
+	// 64; a negative value, no limit. Without one a script could start
+	// workers -- each a runtime and a goroutine, which no memory limit
+	// counts -- until the process ran out.
+	Max int
+}
+
+// defaultMaxWorkers is what a zero Workers.Max means.
+const defaultMaxWorkers = 64
+
+// takeWorker counts one more worker running, reporting false, and counting
+// none, where Max are running already.
+func (c *Config) takeWorker() bool {
+	max := c.Workers.Max
+	if max == 0 {
+		max = defaultMaxWorkers
+	}
+	if max < 0 || c.running == nil {
+		return true
+	}
+	for {
+		n := c.running.Load()
+		if n >= int64(max) {
+			return false
+		}
+		if c.running.CompareAndSwap(n, n+1) {
+			return true
+		}
+	}
+}
+
+// releaseWorker counts a worker takeWorker counted as no longer running.
+func (c *Config) releaseWorker() {
+	if c.running != nil && c.Workers.Max >= 0 {
+		c.running.Add(-1)
+	}
 }
 
 // threadIDs numbers the workers the process starts, as node's threadId does;
@@ -239,6 +278,22 @@ func (h *workerHost) start(obj quickjs.Value, specifier string, data quickjs.Val
 	if h.cfg.Workers == nil || h.loop == nil {
 		return quickjs.Value{}, h.rt.Throw(h.rt.NewError("Error", "this runtime may not start workers"))
 	}
+	if !h.cfg.takeWorker() {
+		max := h.cfg.Workers.Max
+		if max == 0 {
+			max = defaultMaxWorkers
+		}
+		return quickjs.Value{}, h.rt.Throw(h.rt.NewError("Error",
+			fmt.Sprintf("too many workers: at most %d may run at once", max)))
+	}
+	// The worker is counted until its goroutine ends, or, if it never
+	// starts, until this returns.
+	started := false
+	defer func() {
+		if !started {
+			h.cfg.releaseWorker()
+		}
+	}()
 	var o workerOptions
 	if err := opts.Decode(&o); err != nil {
 		return quickjs.Value{}, err
@@ -269,8 +324,10 @@ func (h *workerHost) start(obj quickjs.Value, specifier string, data quickjs.Val
 	w := &workerContext{threadID: wh.thread, name: o.Name, web: o.Web, port: child, data: serialized, ports: ports, ctx: ctx}
 	w.exit = func(code int) { wh.terminate(code) }
 	cfg := h.childConfig(w, specifier, o)
+	started = true
 	go func() {
 		defer close(wh.done)
+		defer h.cfg.releaseWorker()
 		runWorker(ctx, cfg, w, wh, specifier, o)
 	}()
 

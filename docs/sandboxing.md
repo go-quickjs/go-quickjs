@@ -137,6 +137,17 @@ a second, with a `SyntaxError` ("regular expression is too complex"). A
 host that sets a context without a deadline, as one that only listens for
 signals does, has given it no limit: give the runtime a deadline for one.
 
+What the standard library gives a script is the host's to bound, beyond the
+runtime's memory limit, which counts the script's heap and nothing else:
+
+- `Workers.Max` caps the workers running at once, those a worker starts
+  counted with the rest: 64 unless the host says otherwise.
+- A program started through `child_process` runs until it ends, as in Node,
+  unless the script passes a timeout or the host sets `Run.Timeout`; a
+  sandbox that runs programs should set one.
+- `Fetch.Allow` is asked about every request, each a redirect leads to
+  included, and `Fetch.MaxBodyBytes` caps a response.
+
 A runtime a sandbox runs should not be made `WithDebugger`: whoever attaches a
 debugger to it can read and change anything the script can, and run code of
 their own in it, code generation turned off or not. The inspector listens on

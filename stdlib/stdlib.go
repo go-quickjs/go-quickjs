@@ -3,6 +3,7 @@ package stdlib
 import (
 	"errors"
 	"io"
+	"sync/atomic"
 
 	quickjs "github.com/go-quickjs/go-quickjs"
 )
@@ -81,6 +82,10 @@ type Config struct {
 
 	// worker is set in the Config a worker's runtime is installed with.
 	worker *workerContext
+	// running counts the workers running, against Workers.Max: Install
+	// makes it for a runtime, and a worker's Config, a copy of its
+	// parent's, shares it, so that the workers a worker starts count too.
+	running *atomic.Int64
 }
 
 // Install gives a runtime everything the configuration asks for.
@@ -108,6 +113,9 @@ func Install(rt *quickjs.Runtime, cfg Config) error {
 		// The console and process.stdout are written to from the workers'
 		// goroutines too.
 		cfg.shareWriters()
+		if cfg.running == nil {
+			cfg.running = new(atomic.Int64)
+		}
 	}
 	if err := Console(rt, cfg.Stdout, cfg.Stderr); err != nil {
 		return err

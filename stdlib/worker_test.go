@@ -407,3 +407,42 @@ func TestWorkersLikeNode(t *testing.T) {
 		t.Errorf("got\n%s\nwant\n%s", out, want)
 	}
 }
+
+// TestWorkersMax pins Workers.Max: at most so many workers run at once,
+// those a worker starts counted with the rest, a worker that ends gives its
+// place back, and past it new Worker throws. There was no limit, and a
+// worker could start workers of its own without one.
+func TestWorkersMax(t *testing.T) {
+	files := map[string]string{
+		"./idle.mjs": `
+			import { parentPort } from "node:worker_threads";
+			parentPort.on("message", () => process.exit(0));
+			parentPort.postMessage("up");`,
+		"./nest.mjs": `
+			import { Worker, parentPort } from "node:worker_threads";
+			let said;
+			try { new Worker("./idle.mjs"); said = "nested started" } catch (e) { said = "nested: " + e.message }
+			parentPort.on("message", () => process.exit(0));
+			parentPort.postMessage(said);`,
+	}
+	workers := workerFiles(files)
+	workers.Max = 2
+	out, _ := run(t, stdlib.Config{Workers: workers, Process: &stdlib.Process{}}, `
+		const { Worker } = require_worker_threads;
+		const first = (w, event) => new Promise((resolve) => { let done = false; w.on(event, (m) => { if (!done) { done = true; resolve(m) } }) });
+		(async () => {
+			const a = new Worker("./idle.mjs"); await first(a, "message");
+			const b = new Worker("./nest.mjs"); console.log(await first(b, "message"));
+			try { new Worker("./idle.mjs"); console.log("third started") } catch (e) { console.log("third: " + e.message) }
+			a.postMessage("bye"); await first(a, "exit");
+			const c = new Worker("./idle.mjs"); await first(c, "message"); console.log("after one ended: started");
+			b.postMessage("bye"); c.postMessage("bye");
+		})();
+	`)
+	want := "nested: too many workers: at most 2 may run at once\n" +
+		"third: too many workers: at most 2 may run at once\n" +
+		"after one ended: started"
+	if out != want {
+		t.Errorf("got %q, want %q", out, want)
+	}
+}
