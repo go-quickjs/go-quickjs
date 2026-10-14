@@ -506,7 +506,9 @@ Paths are relative to this repository; `go-intl:` paths are in
 - A primitive in a transfer list, and bad `ports` for `MessageEvent`, are
   reported unlike Node.
 - **Status:** fixed, as Node has each. A listener's exception is reported
-  after the dispatch, as `queueMicrotask`'s now are (they were dropped).
+  after the dispatch, as the standard library's `queueMicrotask`'s now are
+  (they were dropped); the engine's own `queueMicrotask` hands what its
+  callback throws to `OnUncaughtException`, or drops it without one.
   A port in transit already heard its peer close, since KI-23. Node starts
   a port on `addEventListener("message")`, where the HTML standard does
   not; this engine keeps the standard's.

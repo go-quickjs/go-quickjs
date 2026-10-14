@@ -1321,9 +1321,11 @@ func (r *Runtime) initURIFunctions() {
 			return Undefined, rt.throwTypeError("queueMicrotask requires a function")
 		}
 		rt.enqueueJob(func() {
-			// A microtask that throws has nowhere to report, so the error is
-			// dropped rather than propagated into an unrelated turn.
-			_, _ = rt.call(fn, Undefined, nil)
+			// What it throws has no caller to reach, so it goes to the host
+			// (OnUncaughtException) rather than into an unrelated turn.
+			if _, err := rt.call(fn, Undefined, nil); err != nil {
+				rt.reportUncaught(err)
+			}
 		})
 		return Undefined, nil
 	})

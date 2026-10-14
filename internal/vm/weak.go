@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"errors"
 	"runtime"
 	"sync"
 	"unsafe"
@@ -174,7 +175,7 @@ func (r *Runtime) runCleanups() {
 		_, err := r.call(d.cleanup, Undefined, []Value{p.held})
 		r.asyncCtx = prev
 		if err != nil {
-			r.reportCleanupError(err)
+			r.reportUncaught(err)
 		}
 	}
 	if len(pending) > 0 {
@@ -182,10 +183,13 @@ func (r *Runtime) runCleanups() {
 	}
 }
 
-// reportCleanupError hands a callback's failure to the host.
-func (r *Runtime) reportCleanupError(err error) {
-	if r.onCleanupError != nil {
-		r.onCleanupError(err)
+// reportUncaught hands the host an exception a job threw that nothing can
+// catch. What stops the script -- an interrupt, a limit -- is not an
+// exception, and stops the queue as it is.
+func (r *Runtime) reportUncaught(err error) {
+	var thrown *Thrown
+	if r.onUncaughtException != nil && errors.As(err, &thrown) {
+		r.onUncaughtException(err)
 	}
 }
 

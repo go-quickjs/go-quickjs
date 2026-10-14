@@ -425,6 +425,30 @@ func (r *Runtime) OnUnhandledRejection(fn func(reason Value)) {
 	})
 }
 
+// OnUncaughtException installs what to call with an exception nothing in
+// the script can catch: one thrown by a queueMicrotask callback or by a
+// FinalizationRegistry's cleanup callback, each of which runs as a job of
+// its own, with no caller to throw at. The error is an *Error, as an
+// exception that reaches Go from Eval is. It is called as the job queue
+// drains, and the queue goes on after it.
+//
+// Without a handler such an exception is dropped. The standard library's
+// queueMicrotask (stdlib.Timers) does not reach here: what its callback
+// throws ends the loop, as it ends a Node program.
+func (r *Runtime) OnUncaughtException(fn func(err error)) {
+	if r.closed {
+		return
+	}
+	if fn == nil {
+		r.rt.OnUncaughtException(nil)
+		return
+	}
+	rt := r.rt
+	r.rt.OnUncaughtException(func(err error) {
+		fn(wrapThrown(rt, err))
+	})
+}
+
 // OnImportMeta installs what fills in a module's import.meta.
 //
 // It is called once per module, the first time that module mentions

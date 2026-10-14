@@ -182,9 +182,11 @@ type Runtime struct {
 	// registrations is kept alive by the cleanups it armed, and one with none
 	// has nothing left to prune.
 	registries []weakTarget
-	// onCleanupError reports a finalization callback's failure to the host,
-	// since a callback belongs to no script and there is nothing to throw at.
-	onCleanupError func(error)
+	// onUncaughtException reports to the host an exception nothing in the
+	// script can catch -- one a queueMicrotask callback or a finalization
+	// callback throws, which runs as a job of its own with nothing to throw
+	// at (see OnUncaughtException).
+	onUncaughtException func(error)
 
 	// maybeUnhandled holds the promises rejected with nothing waiting for
 	// them, which the end of the turn decides about.

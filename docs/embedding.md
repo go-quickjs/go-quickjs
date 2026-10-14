@@ -384,7 +384,9 @@ method made, as in `p.RejectError(rt.ThrowTypeError("not a file: %s", name))`.
 
 `NewObject`, `NewArray`, `NewBytes`, `NewError` and `Throw` build the values a
 marshalled Go value cannot express; `Value.Bytes` reads a typed array back.
-`OnUnhandledRejection` reports a promise nobody took.
+`OnUnhandledRejection` reports a promise nobody took, and
+`OnUncaughtException` an exception nothing in the script can catch: one a
+`queueMicrotask` or `FinalizationRegistry` callback throws.
 
 ### Typed arrays over Go memory
 

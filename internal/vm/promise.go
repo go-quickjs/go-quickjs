@@ -271,6 +271,13 @@ func (r *Runtime) OnUnhandledRejection(fn func(reason Value, promise Value)) {
 	r.onUnhandledRejection = fn
 }
 
+// OnUncaughtException installs what to call with an exception nothing in
+// the script can catch: one a queueMicrotask callback or a finalization
+// callback throws. Without one, such an exception is dropped.
+func (r *Runtime) OnUncaughtException(fn func(err error)) {
+	r.onUncaughtException = fn
+}
+
 // reportUnhandledRejections tells the host about the rejections nothing took.
 func (r *Runtime) reportUnhandledRejections() {
 	if len(r.maybeUnhandled) == 0 {
