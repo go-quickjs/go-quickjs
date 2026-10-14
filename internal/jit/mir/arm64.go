@@ -3471,7 +3471,19 @@ func (c *a64Compiler) stringChar(v *ssa.Value, guard func(arm64.Cond)) {
 	if !c.stringUnit(v, v.Args[0], v.Args[1], guard) {
 		return
 	}
-	c.a.CmpImm(a64A, 128, true)
+	c.charCell(v, guard)
+}
+
+// codeChar is String.fromCharCode(c) (ssa.OpCodeChar), as amd64's.
+func (c *a64Compiler) codeChar(v *ssa.Value, guard func(arm64.Cond)) {
+	c.index(v.Args[0], guard)
+	c.charCell(v, guard)
+}
+
+// charCell is the cell of the runtime's string of the code unit in A,
+// below 256, as amd64's.
+func (c *a64Compiler) charCell(v *ssa.Value, guard func(arm64.Cond)) {
+	c.a.CmpImm(a64A, 256, true)
 	guard(arm64.HS)
 	c.a.Load(a64B, a64Ctx, abi.OffCharStrings)
 	c.a.Cbz(a64B, c.stubLabel(v.State, exitKind(v.Aux)), true)
@@ -4077,6 +4089,8 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.stringCode(v, c.guardFor(v))
 	case ssa.OpStringChar:
 		c.stringChar(v, c.guardFor(v))
+	case ssa.OpCodeChar:
+		c.codeChar(v, c.guardFor(v))
 	case ssa.OpLoadCell:
 		d := c.gdst(v)
 		c.a.Load(d, c.gpr(arg(0), a64A), c.enc.NumOffset)

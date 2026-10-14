@@ -118,11 +118,14 @@ func (r *Runtime) jitStressDeopt(s *jitState) bool {
 }
 
 type jitRealmFields struct {
-	jitCharCodeAt Value
+	jitCharCodeAt, jitFromCharCode Value
 }
 
-func (r *Runtime) recordJITStringIntrinsic() {
+// recordJITStringIntrinsic notes the realm's String.prototype.charCodeAt and
+// String.fromCharCode, of String, ctor, which native code makes itself.
+func (r *Runtime) recordJITStringIntrinsic(ctor *Object) {
 	r.jitCharCodeAt = r.proto.str.getOwn(r.atoms.intern("charCodeAt")).value()
+	r.jitFromCharCode = ctor.getOwn(r.atoms.intern("fromCharCode")).value()
 }
 
 // A closure belongs to one runtime. Hotness and permanent selection refusals
@@ -503,10 +506,11 @@ type jitState struct {
 	// ghosts are the functions whose code the cache dropped to make room,
 	// by address, until compiled again (jitGhost).
 	ghosts map[uintptr]jitGhost
-	// charStrings are the runtime's strings of one ASCII character, by code
-	// unit, which native code makes a string's elements of
-	// (abi.Context.CharStrings): the strings unitString hands out.
-	charStrings *[128]Value
+	// charStrings are the runtime's strings of one character below 256, by
+	// code unit, which native code makes a string's elements and
+	// String.fromCharCode's of (abi.Context.CharStrings): the strings
+	// unitString hands out.
+	charStrings *[256]Value
 	// goCallDepth is the depth of the frame of the callee of a call Go
 	// makes for native code (jitGoCall, jitGoCallNested), while it makes
 	// it: native code's call, not the existing tiers' (jitHotWork).

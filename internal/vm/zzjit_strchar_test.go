@@ -469,3 +469,58 @@ func TestJITFreshViewLengthsNative(t *testing.T) {
 		t.Errorf("total left native code %d times in 20 calls", n)
 	}
 }
+
+// String.fromCharCode(c) of one integer below 256 is made natively, by its
+// target (ssa.OpCodeChar, jitFeedback.FromCharCode): the runtime's own
+// string of the character, from the table s[i] reads too, now of 256, with
+// nothing made and no call of Go -- PDF.js's fonts build their strings so,
+// a character at a time. Each answer is the interpreter's in every tier and
+// stress setting: codes past 255, negative, fractional and NaN, a valueOf,
+// two arguments, and String.fromCharCode replaced, which Go makes. Once
+// compiled, 20 calls of 1,000 characters each make next to no calls of Go.
+func TestJITFromCharCodeNative(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const setup = `
+		function build(b) { let s = ''; for (let i = 0; i < b.length; i++) s += String.fromCharCode(b[i]); return s }
+		function sum(s) { let t = 0; for (let i = 0; i < s.length; i++) t += s[i] === 'é' ? 1000 : s[i].length; return t }
+		const bytes = []
+		for (let i = 0; i < 1000; i++) bytes.push(i * 37 % 256)`
+	jitDifferential(t, setup+`
+		let r = ''
+		for (let k = 0; k < 4; k++) r += build(bytes).length + ':' + sum(build(bytes)) + ';'
+		r += build([65, 300, -1, 66.7, NaN, 233, 0x10000 + 67]) + ';'
+		r += build([{ valueOf() { return 68 } }, 69]) + ';'
+		r += String.fromCharCode(70, 71) + ';'
+		const saved = String.fromCharCode
+		String.fromCharCode = c => '<' + c + '>'
+		r += build([72, 73]) + ';'
+		String.fromCharCode = saved
+		r + build([74, 233])`)
+	r := New(Config{JIT: true})
+	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	if r.jitCallThreshold <= 1 {
+		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
+	}
+	if _, err := r.Run(compileForTest(t, setup)); err != nil {
+		t.Fatal(err)
+	}
+	for range 10 {
+		if _, err := r.Run(compileForTest(t, `sum(build(bytes))`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e := jitNativeForTest(t, r, "build")
+	goCalls, hosts, entries := e.ssaStats.goCalls, e.ssaStats.hosts, e.ssaStats.entries
+	v, err := r.Run(compileForTest(t, `(() => { let t = 0; for (let k = 0; k < 20; k++) t += build(bytes).length; return t })()`))
+	if err != nil || v.Number() != 20*1000 {
+		t.Fatalf("= %v, %v", v, err)
+	}
+	if n := e.ssaStats.entries - entries; n < 20 {
+		t.Errorf("build's code entered %d times in 20 calls", n)
+	}
+	if n := e.ssaStats.goCalls - goCalls + e.ssaStats.hosts - hosts; n > 20*1000/10 {
+		t.Errorf("build made %d calls of Go and exits for 20,000 characters", n)
+	}
+}

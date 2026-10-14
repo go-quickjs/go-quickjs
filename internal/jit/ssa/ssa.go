@@ -145,8 +145,12 @@ const (
 	OpStringCode // tagged callee, tagged string, f64 index -> f64
 	// OpStringChar is s[i], an element read of a string: the cell of the
 	// runtime's string of the code unit at an index of a flat string
-	// (abi.Context.CharStrings), if it is below 128, which no store writes.
+	// (abi.Context.CharStrings), if it is below 256, which no store writes.
 	OpStringChar // tagged string, f64 index -> source
+	// OpCodeChar is String.fromCharCode(c) once its function is checked:
+	// the cell of the runtime's string of code unit c, if it is an integer
+	// below 256 (abi.Context.CharStrings), which no store writes.
+	OpCodeChar // f64 code -> source
 
 	// Boxing: a typed value as a slot value.
 	OpBoxF64
@@ -338,7 +342,7 @@ var opNames = [...]string{
 	OpUnboxF64: "unbox", OpTruth: "truth", OpCheckInit: "checkinit", OpBoxF64: "boxf", OpBoxBool: "boxb",
 	OpArrayOf: "arrayof", OpIndexedOf: "indexedof", OpElemKey: "elemkey", OpElemRead: "elemread", OpElemWrite: "elemwrite", OpElemCell: "elemcell", OpElemStore: "elemstore", OpLength: "length",
 	OpObjectOf: "objectof", OpPropRead: "propread", OpPropWrite: "propwrite", OpPropCell: "propcell", OpLoadCell: "loadcell", OpGlobalCell: "globalcell", OpLexCell: "lexcell", OpBindingCell: "bindingcell",
-	OpStringMethod: "stringmethod", OpStringProp: "stringprop", OpStringCode: "stringcode", OpStringChar: "stringchar",
+	OpStringMethod: "stringmethod", OpStringProp: "stringprop", OpStringCode: "stringcode", OpStringChar: "stringchar", OpCodeChar: "codechar",
 	OpAddF64: "addf", OpSubF64: "subf", OpMulF64: "mulf", OpDivF64: "divf", OpModF64: "modf", OpNegF64: "negf", OpCmpF64: "cmpf",
 	OpNot: "not", OpStrictNullish: "strictnullish", OpLooseNullish: "loosenullish", OpEqTagged: "eqtagged", OpToInt32: "toi32", OpAndI32: "and", OpOrI32: "or", OpXorI32: "xor", OpShlI32: "shl",
 	OpSarI32: "sar", OpShrU32: "shr", OpNotI32: "noti", OpI32ToF64: "i2f", OpU32ToF64: "u2f",
@@ -361,7 +365,7 @@ func (o Op) String() string {
 func (o Op) isGuard() bool {
 	switch o {
 	case OpUnboxF64, OpTruth, OpCheckInit, OpModF64, OpArrayOf, OpIndexedOf, OpElemKey, OpElemRead, OpElemWrite, OpElemCell, OpElemStore, OpLength,
-		OpObjectOf, OpPropRead, OpPropWrite, OpPropCell, OpGlobalCell, OpLexCell, OpBindingCell, OpStringMethod, OpStringProp, OpStringCode, OpStringChar, OpLooseNullish, OpEqTagged,
+		OpObjectOf, OpPropRead, OpPropWrite, OpPropCell, OpGlobalCell, OpLexCell, OpBindingCell, OpStringMethod, OpStringProp, OpStringCode, OpStringChar, OpCodeChar, OpLooseNullish, OpEqTagged,
 		OpSameObject, OpSameSymbol, OpIterClosed, OpFrameRoom, OpTailRoom, OpTailSelf, OpCall, OpInstanceOf, OpTypeIs, OpCheckTrue, OpPowF64:
 		return true
 	}

@@ -91,6 +91,13 @@ type CharCodeFeedback interface {
 	CharCode(pc int) bool
 }
 
+// FromCharCodeFeedback is Feedback that knows a method call of one argument
+// at a PC calls String.fromCharCode, the realm's, at the address it
+// returns.
+type FromCharCodeFeedback interface {
+	FromCharCode(pc int) (uintptr, bool)
+}
+
 // IntrinsicFeedback is Feedback that knows the calls at a PC of an
 // intrinsic (Intrinsic): a method call of one argument, Math.sqrt(x), or
 // two, Math.pow(x, y).
@@ -1477,7 +1484,41 @@ func (b *builder) nativeHost(pc int) bool {
 	if _, ok := b.instanceOf(pc); ok {
 		return true
 	}
+	if _, ok := b.fromCharCode(pc); ok {
+		return true
+	}
 	return b.charCode(pc)
+}
+
+// fromCharCode is the address of String.fromCharCode if the method call of
+// one argument at pc calls it (FromCharCodeFeedback), which fromCharCodeCall
+// makes.
+func (b *builder) fromCharCode(pc int) (uintptr, bool) {
+	if b.fb == nil || b.p.Code[pc].Op != ir.Host || pc+1 >= len(b.p.Code) || !reachable(b.p, pc+1) ||
+		b.p.Maps[pc].Depth < 3 || b.p.Maps[pc+1].Depth != b.p.Maps[pc].Depth-2 {
+		return 0, false
+	}
+	f, ok := b.fb.(FromCharCodeFeedback)
+	if !ok {
+		return 0, false
+	}
+	return f.FromCharCode(pc)
+}
+
+// fromCharCodeCall makes the call of String.fromCharCode at pc, at address
+// fn: checked to call it, its argument an integer below 256, the result is
+// the runtime's string of that code unit (OpCodeChar), in the call's result
+// slot, with nothing made; anything else leaves for Go.
+func (b *builder) fromCharCodeCall(blk *Block, pc int, fn uintptr, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) {
+	sp := b.cur.base + b.p.Locals + b.p.Maps[pc].Depth
+	object := guard(OpObjectOf, Ptr, ir.HostExit, b.read(sp-2, blk))
+	same := guard(OpSameObject, None, ir.HostExit, object)
+	same.Const = ir.Value{Bits: uint64(fn)}
+	code := guard(OpUnboxF64, Float64, ir.HostExit, b.read(sp-1, blk))
+	cell := guard(OpCodeChar, Source, ir.HostExit, code)
+	v := b.f.newValue(blk, OpLoadCell, Tagged, cell)
+	v.Shadow = cell
+	b.assign(sp-3, blk, v)
 }
 
 // charCode reports whether the method call of one argument at pc calls
@@ -2962,6 +3003,10 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		if in.Op == ir.Host && b.charCode(pc) {
 			b.charCodeCall(blk, pc, guard, boxF)
+			break
+		}
+		if fn, ok := b.fromCharCode(pc); ok && in.Op == ir.Host {
+			b.fromCharCodeCall(blk, pc, fn, guard)
 			break
 		}
 		if k, ok := b.instanceOf(pc); ok && in.Op == ir.Host {

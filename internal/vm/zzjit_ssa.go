@@ -1480,6 +1480,49 @@ func (fb *jitFeedback) CharCode(pc int) bool {
 	return false
 }
 
+// FromCharCode is ssa.FromCharCodeFeedback's: the address of
+// String.fromCharCode, the realm's own, if the method call of one argument
+// at pc calls it, known as push's and pop's are -- the call seen to call it
+// (jitCallSeen, jitSeedBuiltin), in fn's own code or, for a callee inlined,
+// its entry's -- or as Math's are, the method its read finds now
+// (jitCalleeObjectAt). The code checks it calls it.
+func (fb *jitFeedback) FromCharCode(pc int) (uintptr, bool) {
+	fn, r := fb.fn, fb.r
+	if pc < 2 || pc >= len(fn.Code) || jitCallOp(fn.Code[pc].Op) != bytecode.OpCallMethod || fn.Code[pc].A != 1 || !r.jitFromCharCode.IsObject() {
+		return 0, false
+	}
+	o := r.jitFromCharCode.Object()
+	addr := uintptr(unsafe.Pointer(o))
+	e := fb.e
+	if fb.root != nil || e == nil {
+		e = r.jit.entryFor(fn)
+	}
+	if e != nil {
+		for _, x := range jitTargets(e) {
+			if int(x.pc) == pc && x.fromChar {
+				return addr, true
+			}
+		}
+	}
+	if fb.cl == nil {
+		return 0, false
+	}
+	if fb.prog == nil {
+		p, err := r.jitLower(fn, jitLowerInline)
+		if err != nil {
+			return 0, false
+		}
+		fb.prog = p
+	}
+	if len(fb.prog.Maps) != len(fn.Code) {
+		return 0, false
+	}
+	if c, _ := r.jitCalleeObjectAt(fb.cl, fb.prog, pc); c != o {
+		return 0, false
+	}
+	return addr, true
+}
+
 // Intrinsic is ssa.IntrinsicFeedback's: a method call of one argument at
 // pc whose function is the realm's Math.sqrt or Math.abs, as its reads
 // give it now (jitChainValue) -- Math.sqrt(x) -- which the code makes
@@ -1768,9 +1811,10 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 			// Another object of a function the call checks by its code.
 			continue
 		}
-		if in.cl == nil && in.charCode {
-			// String.prototype.charCodeAt, which the code makes itself
-			// (CharCode) where it can, and Go otherwise.
+		if in.cl == nil && (in.charCode || in.fromChar) {
+			// String.prototype.charCodeAt or String.fromCharCode, which the
+			// code makes itself (CharCode, FromCharCode) where it can, and Go
+			// otherwise.
 			continue
 		}
 		if in.cl == nil && in.pop {
@@ -1940,8 +1984,9 @@ type jitInline struct {
 	via  bool
 	// push marks a call of Array.prototype.push (jitPushes), pop one of
 	// Array.prototype.pop (jitPops), charCode one of
-	// String.prototype.charCodeAt (jitCharCodes).
-	push, pop, charCode bool
+	// String.prototype.charCodeAt (jitCharCodes), fromChar one of
+	// String.fromCharCode (jitFromCharCodes).
+	push, pop, charCode, fromChar bool
 	// byCode marks a function the call met two objects of, closures its
 	// maker makes anew at each call: called by its code (jitSameCode).
 	byCode bool
@@ -2080,6 +2125,13 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 		if o := r.jitCharCodes(sp, in); o != nil {
 			// s.charCodeAt(i), made natively (jitFeedback.CharCode).
 			e.nativeCalls = append(e.nativeCalls, jitInline{pc: int32(pc), obj: o, charCode: true})
+			e.callSites[pc] = jitCallNative
+			e.inlinePending = true
+			return
+		}
+		if o := r.jitFromCharCodes(sp, in); o != nil {
+			// String.fromCharCode(c), made natively (jitFeedback.FromCharCode).
+			e.nativeCalls = append(e.nativeCalls, jitInline{pc: int32(pc), obj: o, fromChar: true})
 			e.callSites[pc] = jitCallNative
 			e.inlinePending = true
 			return
@@ -3154,6 +3206,9 @@ func (r *Runtime) jitInlinesCalls(cl *closure, depth int) bool {
 		if fb.CharCode(pc) {
 			continue
 		}
+		if _, ok := fb.FromCharCode(pc); ok {
+			continue
+		}
 		if depth <= 0 {
 			return false
 		}
@@ -3328,6 +3383,8 @@ func (r *Runtime) jitSeedBuiltin(cl *closure, e *jitEntry, p *ir.Program, pc int
 		x = jitInline{pc: int32(pc), obj: o, push: true}
 	case in.A == 1 && r.jitCharCodeAt.IsObject() && o == r.jitCharCodeAt.Object():
 		x = jitInline{pc: int32(pc), obj: o, charCode: true}
+	case in.A == 1 && r.jitFromCharCode.IsObject() && o == r.jitFromCharCode.Object():
+		x = jitInline{pc: int32(pc), obj: o, fromChar: true}
 	case in.A >= 1 && o == r.callFn && read > 0 && (cl.fn.Code[read-1].Op == bytecode.OpGetProp || cl.fn.Code[read-1].Op == bytecode.OpGetGlobal):
 		v, ok := r.jitChainValue(cl, p, read-1, jitChainReads)
 		if !ok || !v.IsObject() {
@@ -4271,6 +4328,20 @@ func (r *Runtime) jitCharCodes(sp int, in bytecode.Instr) *Object {
 	}
 	callee, recv := r.stack[sp-2], r.stack[sp-3]
 	if !callee.IsObject() || callee.Object() != r.jitCharCodeAt.Object() || !recv.IsString() {
+		return nil
+	}
+	return callee.Object()
+}
+
+// jitFromCharCodes is String.fromCharCode, the realm's own, if a method
+// call at the top of the stack calls it with one argument, a number, or
+// nil.
+func (r *Runtime) jitFromCharCodes(sp int, in bytecode.Instr) *Object {
+	if in.Op != bytecode.OpCallMethod || in.A != 1 || !r.jitFromCharCode.IsObject() {
+		return nil
+	}
+	callee := r.stack[sp-2]
+	if !callee.IsObject() || callee.Object() != r.jitFromCharCode.Object() || !r.stack[sp-1].IsNumber() {
 		return nil
 	}
 	return callee.Object()
@@ -6286,9 +6357,13 @@ func (r *Runtime) jitGrowContexts() bool {
 	}
 	chunk := make([]abi.Context, add)
 	if s.charStrings == nil {
-		s.charStrings = new([128]Value)
+		s.charStrings = new([256]Value)
 		for b := range s.charStrings {
-			s.charStrings[b] = Str(r.asciiCharString(byte(b)))
+			if b < 128 {
+				s.charStrings[b] = Str(r.asciiCharString(byte(b)))
+			} else {
+				s.charStrings[b] = Str(r.latin1CharString(byte(b)))
+			}
 		}
 	}
 	for i := range chunk {

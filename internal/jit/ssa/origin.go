@@ -534,7 +534,7 @@ func (a *aliases) leaf(sum *aliasSum, x *Value) {
 		sum.keys = append(sum.keys, x.Key)
 	case OpElemCell:
 		sum.any, sum.elem = true, true
-	case OpStringMethod, OpStringChar, OpConstSource, OpConstCell:
+	case OpStringMethod, OpStringChar, OpCodeChar, OpConstSource, OpConstCell:
 	case OpCallCell:
 		sum.anyCall = true
 		sum.calls = append(sum.calls, int32(x.Args[0].ID))
@@ -612,7 +612,7 @@ func (a *aliases) may(key uint32, s *Value) bool {
 		// No property store writes an element; a call's callee may, or
 		// pop it.
 		return key == anyKey
-	case OpStringMethod, OpStringChar, OpConstSource, OpConstCell:
+	case OpStringMethod, OpStringChar, OpCodeChar, OpConstSource, OpConstCell:
 		return false
 	case OpCallCell:
 		// A call's result's keep cell, which no store writes: a call may
@@ -674,7 +674,7 @@ func (a *aliases) mayElem(s *Value) bool {
 	switch s.Op {
 	case OpElemCell:
 		return true
-	case OpPropCell, OpGlobalCell, OpLexCell, OpBindingCell, OpStringProp, OpStringMethod, OpStringChar, OpConstSource, OpConstCell,
+	case OpPropCell, OpGlobalCell, OpLexCell, OpBindingCell, OpStringProp, OpStringMethod, OpStringChar, OpCodeChar, OpConstSource, OpConstCell,
 		OpCallCell, OpUpvalueCell, OpLocalCell:
 		return false
 	case OpKeep, OpPhi:
