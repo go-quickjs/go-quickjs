@@ -92,7 +92,24 @@ var (
 	promiseType = reflect.TypeOf((*Promise)(nil))
 )
 
+// maxConvertDepth is how deeply a value Encode or Decode converts may nest,
+// as JSON's may (jsonMaxDepth): the conversion recurses once a level, and a
+// Go stack that overflows ends the process, which a value that refers to
+// itself -- a map holding itself, an object its own property -- made it do.
+const maxConvertDepth = 10000
+
+// errConvertDepth reports a value nested past maxConvertDepth.
+var errConvertDepth = fmt.Errorf("quickjs: a value nests more than %d levels deep, or refers to itself", maxConvertDepth)
+
 func encodeReflect(rt *vm.Runtime, rv reflect.Value) (vm.Value, error) {
+	return encodeAt(rt, rv, 0)
+}
+
+// encodeAt is encodeReflect of a value depth levels down.
+func encodeAt(rt *vm.Runtime, rv reflect.Value, depth int) (vm.Value, error) {
+	if depth > maxConvertDepth {
+		return vm.Undefined, errConvertDepth
+	}
 	if !rv.IsValid() {
 		return vm.Null, nil
 	}
@@ -113,7 +130,7 @@ func encodeReflect(rt *vm.Runtime, rv reflect.Value) (vm.Value, error) {
 		if rv.IsNil() {
 			return vm.Null, nil
 		}
-		return encodeReflect(rt, rv.Elem())
+		return encodeAt(rt, rv.Elem(), depth+1)
 
 	case reflect.Bool:
 		return vm.Bool(rv.Bool()), nil
@@ -132,7 +149,7 @@ func encodeReflect(rt *vm.Runtime, rv reflect.Value) (vm.Value, error) {
 		}
 		vals := make([]vm.Value, rv.Len())
 		for i := 0; i < rv.Len(); i++ {
-			el, err := encodeReflect(rt, rv.Index(i))
+			el, err := encodeAt(rt, rv.Index(i), depth+1)
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -150,7 +167,7 @@ func encodeReflect(rt *vm.Runtime, rv reflect.Value) (vm.Value, error) {
 			// Keys are stringified, since a JavaScript property key is a
 			// string or a symbol.
 			key := fmt.Sprint(iter.Key().Interface())
-			val, err := encodeReflect(rt, iter.Value())
+			val, err := encodeAt(rt, iter.Value(), depth+1)
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -176,7 +193,7 @@ func encodeReflect(rt *vm.Runtime, rv reflect.Value) (vm.Value, error) {
 			if omitEmpty && fv.IsZero() {
 				continue
 			}
-			val, err := encodeReflect(rt, fv)
+			val, err := encodeAt(rt, fv, depth+1)
 			if err != nil {
 				return vm.Undefined, err
 			}
@@ -402,6 +419,14 @@ func (v Value) Decode(dst any) error {
 // the zero Value, which is the number zero: decoding a number needs no
 // runtime but to make its string.
 func decodeInto(rt *vm.Runtime, val vm.Value, dst reflect.Value) error {
+	return decodeAt(rt, val, dst, 0)
+}
+
+// decodeAt is decodeInto of a value depth levels down.
+func decodeAt(rt *vm.Runtime, val vm.Value, dst reflect.Value, depth int) error {
+	if depth > maxConvertDepth {
+		return errConvertDepth
+	}
 	// A destination of type Value or any takes the value as-is.
 	switch dst.Type() {
 	case reflect.TypeOf(Value{}):
@@ -409,7 +434,7 @@ func decodeInto(rt *vm.Runtime, val vm.Value, dst reflect.Value) error {
 		return nil
 	}
 	if dst.Kind() == reflect.Interface && dst.NumMethod() == 0 {
-		natural, err := toNatural(rt, val)
+		natural, err := naturalAt(rt, val, depth)
 		if err != nil {
 			return err
 		}
@@ -428,7 +453,7 @@ func decodeInto(rt *vm.Runtime, val vm.Value, dst reflect.Value) error {
 			return nil
 		}
 		p := reflect.New(dst.Type().Elem())
-		if err := decodeInto(rt, val, p.Elem()); err != nil {
+		if err := decodeAt(rt, val, p.Elem(), depth+1); err != nil {
 			return err
 		}
 		dst.Set(p)
@@ -500,8 +525,8 @@ func decodeInto(rt *vm.Runtime, val vm.Value, dst reflect.Value) error {
 			if vm.IsHole(el) {
 				continue
 			}
-			if err := decodeInto(rt, el, out.Index(i)); err != nil {
-				return fmt.Errorf("index %d: %w", i, err)
+			if err := decodeAt(rt, el, out.Index(i), depth+1); err != nil {
+				return located(err, "index %d", i)
 			}
 		}
 		dst.Set(out)
@@ -525,8 +550,8 @@ func decodeInto(rt *vm.Runtime, val vm.Value, dst reflect.Value) error {
 				return err
 			}
 			ev := reflect.New(dst.Type().Elem()).Elem()
-			if err := decodeInto(rt, pv, ev); err != nil {
-				return fmt.Errorf("key %q: %w", rt.AtomName(k), err)
+			if err := decodeAt(rt, pv, ev, depth+1); err != nil {
+				return located(err, "key %q", rt.AtomName(k))
 			}
 			out.SetMapIndex(reflect.ValueOf(rt.AtomName(k)).Convert(dst.Type().Key()), ev)
 		}
@@ -559,8 +584,8 @@ func decodeInto(rt *vm.Runtime, val vm.Value, dst reflect.Value) error {
 			if pv.IsUndefined() {
 				continue
 			}
-			if err := decodeInto(rt, pv, dst.Field(i)); err != nil {
-				return fmt.Errorf("field %s: %w", f.Name, err)
+			if err := decodeAt(rt, pv, dst.Field(i), depth+1); err != nil {
+				return located(err, "field %s", f.Name)
 			}
 		}
 		return nil
@@ -568,8 +593,26 @@ func decodeInto(rt *vm.Runtime, val vm.Value, dst reflect.Value) error {
 	return fmt.Errorf("quickjs: cannot decode into %s", dst.Type())
 }
 
+// located is err with where in the value it arose, as "field Name: ...";
+// but the depth error as it is, which would otherwise carry thousands of
+// places, one for each level of a value that refers to itself.
+func located(err error, format string, args ...any) error {
+	if errors.Is(err, errConvertDepth) {
+		return err
+	}
+	return fmt.Errorf(format+": %w", append(args, err)...)
+}
+
 // toNatural converts a value to the Go form a *any destination receives.
 func toNatural(rt *vm.Runtime, val vm.Value) (any, error) {
+	return naturalAt(rt, val, 0)
+}
+
+// naturalAt is toNatural of a value depth levels down.
+func naturalAt(rt *vm.Runtime, val vm.Value, depth int) (any, error) {
+	if depth > maxConvertDepth {
+		return nil, errConvertDepth
+	}
 	switch val.Kind() {
 	case vm.KindUndefined, vm.KindNull:
 		return nil, nil
@@ -591,7 +634,7 @@ func toNatural(rt *vm.Runtime, val vm.Value) (any, error) {
 			if vm.IsHole(el) {
 				continue
 			}
-			nv, err := toNatural(rt, el)
+			nv, err := naturalAt(rt, el, depth+1)
 			if err != nil {
 				return nil, err
 			}
@@ -609,7 +652,7 @@ func toNatural(rt *vm.Runtime, val vm.Value) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		nv, err := toNatural(rt, pv)
+		nv, err := naturalAt(rt, pv, depth+1)
 		if err != nil {
 			return nil, err
 		}

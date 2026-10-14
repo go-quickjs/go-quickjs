@@ -750,6 +750,79 @@ func TestDecodeIntoAny(t *testing.T) {
 	}
 }
 
+// cyclicNode is a Go type a value of which can refer to itself.
+type cyclicNode struct {
+	Name string
+	Next *cyclicNode
+}
+
+// TestConvertingValuesThatReferToThemselves pins that Encode and Decode
+// refuse a value nested past 10,000 levels, as JSON does, with an error:
+// a Go map holding itself, a slice holding itself and a struct pointing at
+// itself, and a JavaScript object or array that is its own property or
+// element, decoded into any or into a struct, overflowed the Go stack,
+// which ends the process. A value nested a few hundred deep converts.
+func TestConvertingValuesThatReferToThemselves(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	refuses := func(what string, err error) {
+		t.Helper()
+		if err == nil || !strings.Contains(err.Error(), "refers to itself") || len(err.Error()) > 200 {
+			t.Errorf("%s: %v, want a short error saying the value refers to itself", what, err)
+		}
+	}
+
+	m := map[string]any{}
+	m["self"] = m
+	_, err := rt.Encode(m)
+	refuses("Encode of a map holding itself", err)
+	s := []any{nil}
+	s[0] = s
+	_, err = rt.Encode(s)
+	refuses("Encode of a slice holding itself", err)
+	n := &cyclicNode{Name: "a"}
+	n.Next = n
+	_, err = rt.Encode(n)
+	refuses("Encode of a struct pointing at itself", err)
+
+	for _, src := range []string{`var o = {}; o.self = o; o`, `var a = []; a.push(a); a`} {
+		v, err := rt.Eval(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out any
+		refuses("Decode of "+src+" into any", v.Decode(&out))
+	}
+	v, err := rt.Eval(`var c = {Name: "c"}; c.Next = c; c`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var node cyclicNode
+	refuses("Decode of an object that is its own Next into a struct", v.Decode(&node))
+
+	// What nests deeply but ends converts both ways.
+	deep := map[string]any{}
+	for i := 0; i < 500; i++ {
+		deep = map[string]any{"in": deep}
+	}
+	dv, err := rt.Encode(deep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back any
+	if err := dv.Decode(&back); err != nil {
+		t.Fatal(err)
+	}
+	levels := 0
+	for back != nil {
+		bm, _ := back.(map[string]any)
+		back, levels = bm["in"], levels+1
+	}
+	if levels != 501 {
+		t.Errorf("a map 501 deep came back %d deep", levels)
+	}
+}
+
 func TestCallJavaScriptFunctionFromGo(t *testing.T) {
 	rt := quickjs.New()
 	defer rt.Close()
