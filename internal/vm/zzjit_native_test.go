@@ -9567,6 +9567,84 @@ func TestJITSSAGoCallsReuseLevelFrames(t *testing.T) {
 	}
 }
 
+// Calls of Go from native callees seven levels deep take the frames the
+// last call made for the levels they share with it, however many
+// (jitLevels): a call at level 7 after one at level 6, one at level 6
+// after one at level 7, and one from another function at level 7, e7
+// after d7, whose level 6 is shared. Every stack probe takes there, and
+// every Error's stack a callback of map's takes at level 4, is the
+// interpreter's.
+func TestJITSSAGoCallsReuseDeepLevelFrames(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	runtime.GC()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	setup := `function work(i){let w=i;for(let j=0;j<40;j++)w=(w*31+j)^(w>>>3);return w}
+		function d7(i){let s=work(i);for(let j=0;j<1;j++)s=(s+probe(i))|0;return s}
+		function e7(i){let s=work(i);for(let j=0;j<1;j++)s=(s+probe(i)*3)|0;return s}
+		function d6(i){let s=work(i);for(let j=0;j<1;j++)s=(s+d7(i)+probe(i+1)+e7(i)+d7(i+2))|0;return s}
+		function d5(i){let s=work(i);for(let j=0;j<1;j++)s=(s+d6(i))|0;return s}
+		var log=[];function capture(x){if(log.length<3000)log.push(new Error('c').stack);return x}
+		function d4(i){let s=work(i);for(let j=0;j<1;j++)s=(s+d5(i)+[1].map(capture)[0]+d5(i+1))|0;return s}
+		function d3(i){let s=work(i);for(let j=0;j<1;j++)s=(s+d4(i))|0;return s}
+		function d2(i){let s=work(i);for(let j=0;j<1;j++)s=(s+d3(i))|0;return s}
+		function d1(i){let s=work(i);for(let j=0;j<1;j++)s=(s+d2(i)+probe(-i))|0;return s}
+		function outer(n){let t=0;for(let i=0;i<n;i++)t=(t+d1(i))|0;return t}`
+	var stacks [2][]string
+	install := func(rt *Runtime, k int) {
+		rt.global.setOwnRaw(rt.atoms.intern("probe"), rt.NewFunction("probe", 1,
+			func(rt *Runtime, _ Value, args []Value) (Value, error) {
+				var names []string
+				for _, e := range rt.captureStack() {
+					names = append(names, fmt.Sprintf("%s:%d:%d", e.Function, e.Line, e.Column))
+				}
+				if len(stacks[k]) < 6000 {
+					stacks[k] = append(stacks[k], strings.Join(names, " "))
+				}
+				return Int(len(names)), nil
+			}), propDefault)
+	}
+	want := New(Config{})
+	defer func() { want.Close(); want.ReleaseClosed() }()
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	install(want, 0)
+	install(r, 1)
+	for _, rt := range []*Runtime{want, r} {
+		if _, err := rt.Run(compileForTest(t, setup)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deepest := 0
+	for i := range 4 {
+		stacks = [2][]string{}
+		src := `log=[];String(outer(200))+log.join('|')`
+		wv, err := want.Run(compileForTest(t, src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		gv, err := r.Run(compileForTest(t, src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := gv.String().Go(), wv.String().Go(); got != want {
+			t.Fatalf("round %d: got %s, interpreter %s", i, got, want)
+		}
+		if len(stacks[1]) != len(stacks[0]) {
+			t.Fatalf("round %d: %d probes, interpreter's %d", i, len(stacks[1]), len(stacks[0]))
+		}
+		for j := range stacks[0] {
+			if stacks[1][j] != stacks[0][j] {
+				t.Fatalf("round %d, probe %d: stack %q, interpreter's %q", i, j, stacks[1][j], stacks[0][j])
+			}
+		}
+		deepest = max(deepest, len(r.jit.levels.at))
+	}
+	if deepest <= 4 {
+		t.Fatalf("calls of Go made frames for at most %d levels", deepest)
+	}
+}
+
 // A built-in a call of Go calls is called as callDirect calls one
 // (jitCallMade), without its other cases first: its frame for a stack
 // trace -- a RangeError's from String.prototype.repeat, through a native

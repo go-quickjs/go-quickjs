@@ -2583,25 +2583,30 @@ func (r *Runtime) jitGoCallNested(ctx *abi.Context, idx int) bool {
 	var f *frame
 	var e *jitEntry
 	lv := &s.levels
-	if lv.serial == serial && lv.root == root && lv.idx == idx && lv.depth == depthBefore && lv.n == idx-root {
-		// The frames the last call made for these levels, as they are
-		// still: each level the same call's, only past another call.
-		for k := range lv.n {
-			c := ctxs[root+1+k]
-			if c.Closure != lv.at[k].cl || c.Base != lv.at[k].base || c.This != lv.at[k].this {
-				goto made
+	// The frames the last call made for the levels these share with its,
+	// from the run's on, as they are still: each level the same call's,
+	// only past another call. Those past them are made.
+	k := 0
+	if lv.serial == serial && lv.root == root && lv.depth == depthBefore {
+		for k < min(lv.n, idx-root) {
+			c, at := ctxs[root+1+k], &lv.at[k]
+			if c.Closure != at.cl || c.Base != at.base || c.This != at.this {
+				break
 			}
+			at.f.pc = uint32(c.ExitPC) + 1
+			k++
 		}
-		for k := range lv.n {
-			lv.at[k].f.pc = uint32(ctxs[root+1+k].ExitPC) + 1
-		}
-		f, e = lv.at[lv.n-1].f, lv.e
-		r.frameDepth = depthBefore + lv.n
+	}
+	r.frameDepth = depthBefore + k
+	if k == idx-root {
+		f, e = lv.at[k-1].f, lv.at[k-1].e
 		goto framed
 	}
-made:
+	// Made past them, the frames the last call made deeper are no more,
+	// and, should a level not be given one, the unwind that follows makes
+	// its own where these are.
 	lv.serial = 0
-	for i := root + 1; i <= idx; i++ {
+	for i := root + 1 + k; i <= idx; i++ {
 		c := ctxs[i]
 		lcl := (*closure)(c.Closure)
 		if lcl == nil {
@@ -2627,14 +2632,18 @@ made:
 		f.this, f.newTarget, f.callee, f.args = *(*Value)(unsafe.Pointer(&c.This)), Undefined, nil, nil
 		f.openUpvalues, f.handlers = f.openUpvalues[:0], f.handlers[:0]
 		f.thisRef, f.withScopes, f.evalVars, f.native, f.savedSP = nil, nil, nil, "", 0
+		at := jitLevelFrame{f: f, e: e, cl: c.Closure, base: c.Base, this: c.This}
 		if k := i - root - 1; k < len(lv.at) {
-			lv.at[k] = jitLevelFrame{f: f, cl: c.Closure, base: c.Base, this: c.This}
+			lv.at[k] = at
+		} else {
+			lv.at = append(lv.at, at)
 		}
 	}
-	if idx-root <= len(lv.at) {
-		lv.serial, lv.root, lv.idx, lv.depth, lv.n, lv.e = serial, root, idx, depthBefore, idx-root, e
-	}
+	lv.serial, lv.root, lv.depth = serial, root, depthBefore
 framed:
+	// What the call runs makes its frames past these levels', where a
+	// deeper call's had been.
+	lv.n = idx - root
 	code := e.ssa
 	// The run's frame past the call it makes.
 	runF.pc = uint32(ctxs[root].ExitPC) + 1
@@ -2687,24 +2696,26 @@ framed:
 }
 
 // jitLevels is the frames the last call of Go from a native callee made
-// for its levels (jitGoCallNested), at most four, which the next call from
-// the same levels takes as they are, but for their PCs: in the run whose
-// pins serial names (0 for none), from context root up to idx, n of them,
-// above depth; e the innermost level's entry. Nothing else makes a frame
-// there while native code runs: a call of Go at the run's own level, which
-// makes the built-in's there, forgets them (serial 0), as does the run's
-// native code leaving; what a call runs makes its frames above them.
+// for its levels (jitGoCallNested), which the next call from the same
+// levels, or from those of them it shares, takes as they are, but for
+// their PCs: in the run whose pins serial names (0 for none), from context
+// root on, n of them, above depth. Nothing else makes a frame there while
+// native code runs: a call of Go at the run's own level, which makes the
+// built-in's there, forgets them (serial 0), as does the run's native code
+// leaving; what a call runs makes its frames above them. Any number of
+// levels: limited to four, every call of AWFY's Json's parser, its
+// readValue native, made a frame for each of its six to twelve levels.
 type jitLevels struct {
-	serial              uint64
-	root, idx, depth, n int
-	e                   *jitEntry
-	at                  [4]jitLevelFrame
+	serial         uint64
+	root, depth, n int
+	at             []jitLevelFrame
 }
 
-// jitLevelFrame is a level's frame, and the closure, stack base and
-// receiver its context had when it was made.
+// jitLevelFrame is a level's frame and entry, and the closure, stack base
+// and receiver its context had when it was made.
 type jitLevelFrame struct {
 	f    *frame
+	e    *jitEntry
 	cl   unsafe.Pointer
 	base uint64
 	this abi.Slot
