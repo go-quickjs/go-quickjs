@@ -773,3 +773,44 @@ func TestJITFlag(t *testing.T) {
 		t.Fatalf("supported %v, warned %v: %q", jit.Supported(), warned, errOut)
 	}
 }
+
+// TestRunPolicy pins --allow-run's matching: a listed name is allowed as it
+// is and as the file PATH finds for it, a listed path as it is, and nothing
+// for its base name alone -- --allow-run=prog allowed ./prog and any other
+// file named prog, one the script wrote itself included.
+func TestRunPolicy(t *testing.T) {
+	file := "prog"
+	if runtime.GOOS == "windows" {
+		file = "prog.exe"
+	}
+	write := func(dir string) string {
+		path := filepath.Join(dir, file)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	bin, elsewhere := t.TempDir(), t.TempDir()
+	onPath, written := write(bin), write(elsewhere)
+	t.Setenv("PATH", bin)
+
+	allow := runPolicy([]string{"prog"})
+	for _, name := range []string{"prog", onPath} {
+		if err := allow(name, nil); err != nil {
+			t.Errorf("--allow-run=prog refused %s: %v", name, err)
+		}
+	}
+	for _, name := range []string{written, "./prog", "." + string(filepath.Separator) + file, "other"} {
+		if err := allow(name, nil); err == nil {
+			t.Errorf("--allow-run=prog allowed %s", name)
+		}
+	}
+	// A listed path is allowed as it is listed.
+	if err := runPolicy([]string{written})(written, nil); err != nil {
+		t.Errorf("--allow-run=%s refused it: %v", written, err)
+	}
+	// An empty list allows everything.
+	if err := runPolicy(nil)(written, nil); err != nil {
+		t.Errorf("--allow-run refused %s: %v", written, err)
+	}
+}

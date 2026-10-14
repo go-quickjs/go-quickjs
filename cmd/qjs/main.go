@@ -35,6 +35,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	osexec "os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
@@ -471,24 +472,11 @@ func install(rt *quickjs.Runtime, loop *stdlib.Loop, opts *options, stdin io.Rea
 		// A program is given the environment the script was given, which is
 		// none unless --allow-env said otherwise: a capability that was
 		// withheld must not be reachable through a program.
-		runnable := opts.runnable
 		cfg.Run = &stdlib.Run{
-			Loop: loop,
-			Dir:  cwd(),
-			Env:  cfg.Process.Env,
-			Allow: func(name string, args []string) error {
-				if len(runnable) == 0 {
-					return nil
-				}
-				base := filepath.Base(name)
-				for _, allowed := range runnable {
-					if allowed == name || allowed == base {
-						return nil
-					}
-				}
-				return fmt.Errorf(
-					"running %s is not allowed: pass --allow-run=%s", name, base)
-			},
+			Loop:  loop,
+			Dir:   cwd(),
+			Env:   cfg.Process.Env,
+			Allow: runPolicy(opts.runnable),
 		}
 	}
 	if len(opts.allowNet) > 0 {
@@ -1118,6 +1106,53 @@ Editing, on a terminal:
 // ---------------------------------------------------------------------------
 // Modules
 // ---------------------------------------------------------------------------
+
+// runPolicy is --allow-run's: every program where runnable is empty, and
+// otherwise one runnable names. A bare name is allowed as it is listed,
+// and is found on PATH, never in the current directory. A path is allowed
+// as it is listed, or where it is the very file a listed name or path is,
+// so --allow-run=git allows /usr/bin/git and --allow-run=sh the /bin/sh a
+// shell command runs. A path is never allowed for its base name alone:
+// --allow-run=git had allowed ./git, a program the script could write
+// itself.
+func runPolicy(runnable []string) func(name string, args []string) error {
+	if len(runnable) == 0 {
+		return func(string, []string) error { return nil }
+	}
+	// The files the list names, found now: a name on PATH, a path from the
+	// directory qjs was started in.
+	var files []os.FileInfo
+	for _, allowed := range runnable {
+		path := allowed
+		if !strings.ContainsAny(allowed, `/\`) {
+			found, err := osexec.LookPath(allowed)
+			if err != nil {
+				continue
+			}
+			path = found
+		}
+		if fi, err := os.Stat(path); err == nil {
+			files = append(files, fi)
+		}
+	}
+	return func(name string, args []string) error {
+		for _, allowed := range runnable {
+			if allowed == name || runtime.GOOS == "windows" && strings.EqualFold(allowed, name) {
+				return nil
+			}
+		}
+		if filepath.IsAbs(name) {
+			if fi, err := os.Stat(name); err == nil {
+				for _, allowed := range files {
+					if os.SameFile(fi, allowed) {
+						return nil
+					}
+				}
+			}
+		}
+		return fmt.Errorf("running %s is not allowed: pass --allow-run=%s", name, name)
+	}
+}
 
 func cwd() string {
 	dir, err := os.Getwd()

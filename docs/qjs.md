@@ -48,6 +48,10 @@ qjs --allow-run=git release.js           start programs, or only some
 qjs -A script.js                         all of it, for code you trust
 ```
 
+`--allow-run=git` lets a script start `git` as `PATH` finds it, by that name
+or by its path; it does not let it start another file named `git`, such as
+one the script wrote. A path in the list is allowed as it is written.
+
 A worker is started as in node -- `new Worker("./work.mjs")` from
 `node:worker_threads`, or the web's `new Worker(url)` -- and is given what the
 program was given: the same flags hold for it.
