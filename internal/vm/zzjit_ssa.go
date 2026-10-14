@@ -1144,6 +1144,22 @@ const (
 	jitTickExits  = 8
 )
 
+// jitValuesPerInstr is how many SSA values a compile makes of an
+// instruction of its function, at the median, inlining nothing.
+const jitValuesPerInstr = 3
+
+// jitCompiledInstrs is the size of fn's code compiled with fb, in its
+// function's instructions, as the ticks before it is compiled again count
+// it (jitEntry's instrs): its own, or as many as the compile's values
+// would be of a function that inlines nothing, if more -- a compile costs
+// what it compiles, its inlined callees too. Octane's Typescript's
+// parseTerm, a thousand instructions and eight callees inlined, sixteen
+// values each, was compiled eleven times in a run, at 30 ms and as many
+// megabytes each, judged slow at the end.
+func jitCompiledInstrs(fn *bytecode.Function, fb *jitFeedback) uint32 {
+	return uint32(max(len(fn.Code), fb.values/jitValuesPerInstr))
+}
+
 // jitReoptBudget is the least and jitReoptPer the instructions of its
 // function for each, of the budget that code compiled before a site it ran
 // had feedback runs before it is compiled again for it, when it has not
@@ -1220,6 +1236,7 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 	e.ssa, e.ssaShapes, e.ssaHolders, e.fed, e.fedInlined, e.ssaStats = code, fb.shapes, fb.holders, fb.fed, fb.fedInlined, jitSSAStats{}
 	e.ssaInlinedAt, e.definesUnfed, e.ssaCells = fb.inlinedAt, fb.definesUnfed, fb.cells
 	e.ssaStrings, e.ssaInlined, e.ssaPools = e.ssaStrings || fb.strings, fb.inlined, fb.pools
+	e.instrs = jitCompiledInstrs(fn, fb)
 	r.jit.setLinks(e, fb.links)
 	e.ssaKeeps = max(e.ssaKeeps, fb.keeps)
 	// What it leaves on is counted afresh: it may have left on what it was
@@ -1309,6 +1326,7 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 	}
 	// The cells the backend gave the kept values (mir's keep cells).
 	fb.keeps = f.Keeps
+	fb.values = f.NumValues()
 	s.ssaKeeps = max(s.ssaKeeps, f.Keeps)
 	need := jitEntryFixed + jit.CodeFootprint(mc) + fb.compiledBytes()
 	if e != nil {
@@ -1381,6 +1399,9 @@ type jitFeedback struct {
 	// instead -- past its budget (ssa's maxInlines) -- which had no code
 	// for native callers: compiled after it (jitWantedCallees).
 	wanted []*closure
+	// values is how many values the compile made (ssa.Func.NumValues),
+	// which its entry's instrs measures it by (jitCompiledInstrs).
+	values int
 	// keeps is how many keep cells the code uses (ssa.Func.Keeps), and
 	// keepLimit how many the build may number (ssa.KeepFeedback), or 0.
 	keeps, keepLimit int
@@ -4193,7 +4214,7 @@ func (e *jitEntry) setSSA(s *jitState, fn *bytecode.Function, p *ir.Program, cod
 	e.ssaProg = p
 	e.ssaInlinedAt, e.definesUnfed, e.ssaCells = fb.inlinedAt, fb.definesUnfed, fb.cells
 	e.reoptBudget = uint32(max(jitReoptBudget, len(fn.Code)/jitReoptPer))
-	e.instrs = uint32(len(fn.Code))
+	e.instrs = jitCompiledInstrs(fn, fb)
 	e.ssaStrings, e.ssaInlined, e.ssaPools = fb.strings, fb.inlined, fb.pools
 	s.setLinks(e, fb.links)
 	e.ssaKeeps = max(e.ssaKeeps, fb.keeps)

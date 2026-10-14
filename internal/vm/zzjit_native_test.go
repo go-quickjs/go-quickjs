@@ -10366,6 +10366,52 @@ func TestJITReoptDue(t *testing.T) {
 	}
 }
 
+// The ticks before code is compiled again count its size as compiled
+// (jitCompiledInstrs): its function's instructions, or, for a compile
+// that made more values than a function inlining nothing would, as many
+// instructions as its values make -- a function whose callees are
+// inlined waits as long as its compile costs, theirs included.
+func TestJITCompiledInstrs(t *testing.T) {
+	fn := &bytecode.Function{Code: make([]bytecode.Instr, 100)}
+	for _, c := range []struct {
+		values int
+		want   uint32
+	}{{0, 100}, {200, 100}, {3 * 100, 100}, {3*100 + 3, 101}, {3 * 1600, 1600}} {
+		if got := jitCompiledInstrs(fn, &jitFeedback{values: c.values}); got != c.want {
+			t.Errorf("%d values: %d instructions, want %d", c.values, got, c.want)
+		}
+	}
+	if !jitSSABackend {
+		return
+	}
+	// A loop calling a callee it inlines: its code's size counts the
+	// callee's values.
+	r := New(Config{JIT: true})
+	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	var b strings.Builder
+	b.WriteString("function work(o, i) { return 0")
+	for k := 0; k < 4; k++ {
+		fmt.Fprintf(&b, " + o.a * %d + (i - %d) * o.b", k+1, k)
+	}
+	b.WriteString(" }\nfunction drive(n) { const o = {a: 3, b: 2}; let t = 0; for (let i = 0; i < n; i++) t += work(o, i); return t }")
+	if _, err := r.Run(compileForTest(t, b.String())); err != nil {
+		t.Fatal(err)
+	}
+	for range 4 {
+		if _, err := r.Run(compileForTest(t, `drive(2000)`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e := jitNativeForTest(t, r, "drive")
+	cl := r.global.getOwn(r.atoms.intern("drive")).value().Object().fn().closure
+	if len(e.ssaInlined) == 0 {
+		t.Fatalf("drive inlines nothing: inlines %d, nativeCalls %d, notInline %v, reopts %d/%d", len(e.inlines), len(e.nativeCalls), e.notInline, e.reopts, e.inlineReopts)
+	}
+	if int(e.instrs) <= len(cl.fn.Code) {
+		t.Errorf("drive's code counts %d instructions, its own %d, inlining work's %d", e.instrs, len(cl.fn.Code), len(e.ssaInlined))
+	}
+}
+
 // An object literal is made natively: its object from the site's pool
 // (jitFeedback.Literal), made as new_object makes it, its fields defined
 // along the shapes' transitions (Define), its prototypes not looked at --

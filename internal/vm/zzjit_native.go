@@ -260,8 +260,9 @@ type jitEntry struct {
 	// reoptBudget is how many native stretches the code runs before it is
 	// compiled again for feedback a site it ran lacked (feedReopt).
 	reoptBudget uint32
-	// instrs is its function's length, which sets how long the code runs
-	// before it is compiled again for what it learned (reoptDueNow).
+	// instrs is its code's size, in its function's instructions
+	// (jitCompiledInstrs), which sets how long the code runs before it is
+	// compiled again for what it learned (reoptDueNow).
 	instrs uint32
 	// eager marks the entry of a runtime that compiles a function at its
 	// first call (jitCallThreshold), as tests and QJS_JIT_STRESS do to
