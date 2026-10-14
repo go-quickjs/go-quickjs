@@ -4050,8 +4050,9 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 	case ssa.OpElemWrite:
 		done, typed := c.a.NewLabel(), c.a.NewLabel()
 		slow := c.stubLabel(v.State, exitKind(v.Aux))
-		if c.enc.CallGo != 0 {
-			// Any other store Go makes if it can (ssa.GoElemWrite).
+		if c.enc.CallGo != 0 && len(v.Args) == 3 {
+			// Any other store Go makes if it can (ssa.GoElemWrite), but
+			// for one with checks, as amd64's.
 			stub := slow
 			slow = c.a.NewLabel()
 			c.cold = append(c.cold, func() {

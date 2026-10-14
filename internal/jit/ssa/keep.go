@@ -59,6 +59,9 @@ func keepAcrossStores(f *Func) (bool, []*Value, [][]*Value) {
 			key, read = s.Key, s.Args[1:2]
 		case OpElemStore:
 			read = s.Args[2:3]
+		case OpElemWrite:
+			// A number's: no pointer word to read.
+			read = nil
 		}
 		alias := false
 		for _, c := range live[i] {
@@ -76,7 +79,7 @@ func keepAcrossStores(f *Func) (bool, []*Value, [][]*Value) {
 				alias = alias || c.Op != OpKept && a.mayCall(s, c.Shadow)
 				continue
 			}
-			if s.Op == OpElemStore {
+			if s.Op == OpElemStore || s.Op == OpElemWrite {
 				alias = alias || c.Op != OpKept && a.mayElem(c.Shadow)
 				continue
 			}

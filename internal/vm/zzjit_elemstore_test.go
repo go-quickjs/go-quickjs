@@ -306,6 +306,38 @@ func TestJITTypedReferenceReadsNative(t *testing.T) {
 	}
 }
 
+// A string read from an element, then a number written over that element
+// (ssa.OpElemWrite), the string used after: native code holds the
+// string's number word, its pointer word in the element's cell until an
+// exit reads it. The write leaves to Go what native code does not do --
+// an element that is no number, an array to grow -- and Go's store wrote
+// over the cell, or moved the elements as it grew the array, so the next
+// exit made a string with no pointer, which the interpreter's + met in
+// concat. FuzzJITDifferential found it in CI; it predated the stores'
+// checks (storeChecks), which this write had none of. Each answer is the
+// interpreter's, in every tier and under every stress setting.
+func TestJITNumberWriteOverReadString(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, src := range []string{
+		`function f(a,n){let t='';let r='';for(let i=0;i<n;i++){t=a[i];a[i]=i;r=r+t;}return r}
+		const out=[];for(let k=0;k<6;k++)out.push(f(['a','b','c','d','e','f','g','h'],8));out.join('|')`,
+		// A fraction and the string: + converts both (concat).
+		`const log=[];
+		function f(a,o,n){let s=0.5,t=1;for(let i=0;i<n;i++){t=a[i];a[i]=i;s=s+t;}return [s,t]}
+		function run(a,o,n){try{const r=f(a,o,n);log.push(String(r[0])+','+String(r[1]))}catch(e){log.push(e.name)}log.push(a.join(','))}
+		for(let k=0;k<4;k++)run(['3','3','3','3','3','3','3','3'],{x:1},8);
+		log.join('|')`,
+		// The array grown past its capacity by the write, the string read
+		// from it before.
+		`function f(a,n){let t='';let r=0.5;for(let i=0;i<n;i++){t=a[i>>2];a[a.length]=i;r=r+t;}return r}
+		const out=[];for(let k=0;k<20;k++)out.push(f(['x','y','z'],300).length);out.join('|')`,
+	} {
+		jitDifferential(t, src)
+	}
+}
+
 // Element reads of globals that hold typed arrays -- a var's, a let's --
 // read a typed array's number wherever the code compiled them, and Go's
 // read stands in once a binding holds something else: a plain array, an

@@ -298,7 +298,10 @@ type GoOp uint8
 // native code does not find the view in its buffer -- before Go has looked
 // at it -- or does not convert to the element's type. The operands are the
 // array's pointer word, the key's and the value's number words; Go refuses
-// a store that could run a script or throw.
+// a store that could run a script or throw. Not a write with checks
+// (storeChecks): Go's store writes over any element and grows the array,
+// moving its elements, under a reference live after it that was read from
+// one; such a write exits instead.
 //
 // GoElemStore is GoElemWrite for any value (OpElemStore): its third
 // operand is the value, both its words.

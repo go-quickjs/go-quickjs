@@ -308,12 +308,16 @@ func checkStoreChecks(f *Func) {
 }
 
 // storeChecked is how many operands precede a store's checks: a store to
-// a heap cell (OpPropWrite, OpElemStore); 0 for any other value.
+// a heap cell (OpPropWrite, OpElemStore, OpElemWrite); 0 for any other
+// value. An element write of a number (OpElemWrite) natively writes only
+// over a number, but what it leaves to Go (GoElemWrite) writes over any
+// element and grows the array, moving its elements: with checks, it
+// exits instead.
 func storeChecked(v *Value) int {
 	switch v.Op {
 	case OpPropWrite:
 		return 2
-	case OpElemStore:
+	case OpElemStore, OpElemWrite:
 		return 3
 	}
 	return 0
@@ -340,7 +344,7 @@ func storeChecksAt(f *Func, stores []*Value, live [][]*Value) {
 		}
 		for _, c := range live[i] {
 			sh := c.Shadow
-			may := s.Op == OpElemStore && a.mayElem(sh) || s.Op == OpPropWrite && a.may(s.Key, sh)
+			may := (s.Op == OpElemStore || s.Op == OpElemWrite) && a.mayElem(sh) || s.Op == OpPropWrite && a.may(s.Key, sh)
 			if !may || sh.ID < len(added) && added[sh.ID] == i+1 || sh.ID >= len(added) && slices.Contains(s.Args[n:], sh) {
 				continue
 			}
@@ -726,7 +730,7 @@ func liveAcrossSets(f *Func) ([]*Value, [][]*Value) {
 	for _, b := range f.Blocks {
 		for _, v := range b.Values {
 			switch {
-			case v.Op == OpPropWrite, v.Op == OpElemStore, v.Op == OpCall && v.Calls() != nil:
+			case v.Op == OpPropWrite, v.Op == OpElemStore, v.Op == OpElemWrite, v.Op == OpCall && v.Calls() != nil:
 				stores = append(stores, v)
 			case v.Type == Tagged && v.Shadow != nil:
 				// A kept value's too: while the collector marks, it is still

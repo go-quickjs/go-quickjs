@@ -4384,9 +4384,13 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 	case ssa.OpElemWrite:
 		done, typed := c.a.NewLabel(), c.a.NewLabel()
 		slow := c.stubLabel(v.State, exitKind(v.Aux))
-		if c.enc.CallGo != 0 {
+		if c.enc.CallGo != 0 && len(v.Args) == 3 {
 			// Any other store Go makes if it can (ssa.GoElemWrite): the
-			// array, the key and the value in the context's GoArgs.
+			// array, the key and the value in the context's GoArgs. Not
+			// one with checks (ssa's storeChecks): a reference live after
+			// it read from an element, which Go's store could write over,
+			// or move as it grows the array -- the store exits, as
+			// elemStore's does.
 			stub := slow
 			slow = c.a.NewLabel()
 			c.cold = append(c.cold, func() {

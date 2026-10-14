@@ -74,7 +74,7 @@ const (
 	OpArrayOf   // tagged -> ptr, if an array
 	OpElemKey   // f64 -> none, if an index
 	OpElemRead  // ptr, f64 -> f64: the element, if the index's is a number
-	OpElemWrite // ptr, f64, f64 -> none: stores, if the index's is a number
+	OpElemWrite // ptr, f64, f64, source... -> none: stores, if the index's is a number
 	// OpIndexedOf is OpArrayOf for an element read or written as a number
 	// (OpElemRead, OpElemWrite), which may be a typed array's too: an object
 	// of either class, which they tell apart as they run. A typed array's
