@@ -409,6 +409,13 @@ type jitEntry struct {
 	// refusal is why the JIT does not compile the function, for a refusal
 	// (JITReport).
 	refusal string
+	// coldWork counts, for a function LowerSSA refused for having no loop
+	// and no array work but LowerSSAHot lowers (hostOnly), the work of
+	// Go's calls of it -- its instructions at each -- until it is hot
+	// enough to compile (jitHotWork); hot marks its code then, which is
+	// compiled again from LowerSSAHot's program too.
+	hostOnly, hot bool
+	coldWork      uint64
 }
 
 // uses is how often e's code, or what e knows, was used: Go's entries,
@@ -483,6 +490,13 @@ type jitState struct {
 	// ghosts are the functions whose code the cache dropped to make room,
 	// by address, until compiled again (jitGhost).
 	ghosts map[uintptr]jitGhost
+	// goCallDepth is the depth of the frame of the callee of a call Go
+	// makes for native code (jitGoCall, jitGoCallNested), while it makes
+	// it: native code's call, not the existing tiers' (jitHotWork).
+	// goCallMarking is whether Go makes it only because the collector
+	// marks (abi.GoOpMarking).
+	goCallDepth   int
+	goCallMarking bool
 	// arena holds the code of every entry: a few mappings, however many
 	// functions the runtime compiles.
 	arena *jit.Arena
@@ -1500,6 +1514,11 @@ func (r *Runtime) jitFor(cl *closure) *jitEntry {
 // program the new pipeline does not compile is a refusal the cache keeps,
 // for good; one past the budget, until the cache releases code.
 func (r *Runtime) jitForFunction(fn *bytecode.Function, cl *closure) *jitEntry {
+	return r.jitCompileFor(fn, cl, jitLowerSSA)
+}
+
+// jitCompileFor is jitForFunction, the program lowered as kind says.
+func (r *Runtime) jitCompileFor(fn *bytecode.Function, cl *closure, kind jitLowerKind) *jitEntry {
 	if r.jit != nil && r.jit.unavailable {
 		return nil
 	}
@@ -1535,15 +1554,22 @@ func (r *Runtime) jitForFunction(fn *bytecode.Function, cl *closure) *jitEntry {
 		return nil
 	}
 	s.serial++
-	e := &jitEntry{used: s.epoch(), serial: s.serial, eager: r.jitCallThreshold <= 1}
+	e := &jitEntry{used: s.epoch(), serial: s.serial, eager: r.jitCallThreshold <= 1, hot: kind == jitLowerHot}
 	if g, ok := s.ghosts[uintptr(unsafe.Pointer(fn))]; ok {
 		// What its code dropped before had learned (jitGhost).
 		e.failed, e.failedEntries, e.typedReads = g.failed, g.failedEntries, g.typedReads
 	}
 	s.linkFor(fn, e)
-	p, err := r.jitLower(fn, jitLowerSSA)
+	p, err := r.jitLower(fn, kind)
 	if err != nil {
 		e.refusal = err.Error()
+		if jitcompile.HostOnly(err) && cl != nil {
+			// Compiled once Go's calls show it hot (jitHotWork), if it
+			// makes calls.
+			if _, err := r.jitLower(fn, jitLowerHot); err == nil {
+				e.hostOnly = true
+			}
+		}
 	} else {
 		if cl != nil {
 			// The calls its caches have met.
@@ -1627,6 +1653,13 @@ func (r *Runtime) tryJITFrame(f *frame) (Value, error, bool) {
 		// what its exits taught it (feedReopt): judged slow for those
 		// exits, it was never entered again, and never compiled for what
 		// they taught.
+		if e.hostOnly && e.ssaCallee && !f.cl.fn.TopLevel {
+			// Code for native callers alone, of a function Go calls as
+			// well: compiled for Go to enter too once hot (jitHotEntry).
+			if ne := r.jitHotEntry(f, e); ne != nil {
+				return r.runSSA(f, ne, 0, 0)
+			}
+		}
 		e.slowCalls++
 		return Undefined, nil, false
 	}
@@ -1771,9 +1804,74 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr bool) (Value, error, boo
 		f.cl.jitLoopDelay = jitHotCalls
 		return Undefined, nil, false
 	}
+	if e.hostOnly && !osr {
+		if ne := r.jitHotEntry(f, e); ne != nil {
+			return r.runSSA(f, ne, pc, depth)
+		}
+		if e.hostOnly {
+			// Not hot yet.
+			return Undefined, nil, false
+		}
+	}
 	f.cl.jitRefused = true
 	return Undefined, nil, false
 }
+
+// jitHotEntry is the entry of f's function compiled once hot for Go to
+// enter (LowerSSAHot), or nil for now: a function of no loop and no array
+// work but calls, which the entry e of its LowerSSA refused, or which has
+// code for native callers alone (ssaCallee) that Go does not enter, as V8
+// optimizes a function once it has spent its budget, its calls made
+// natively then -- a recursion, AWFY's Towers' moveDisks, which the tree
+// tier ran for good while no native caller called it. Compiled once Go's
+// calls of it have done jitHotWork, if a call it makes would be native
+// (jitCallsNatively); its code, if any, is dropped for it, unless it runs.
+func (r *Runtime) jitHotEntry(f *frame, e *jitEntry) *jitEntry {
+	s := r.jit
+	if r.frameDepth == s.goCallDepth && !e.calleeRefused {
+		// A call native code made, through Go -- a call site of too many
+		// functions: its callee is compiled for native callers
+		// (jitNativeCallee), which call it natively where they may; one
+		// that cannot be, a function that makes a closure, is compiled once
+		// hot for Go to enter as any other.
+		return nil
+	}
+	if e.coldWork += uint64(len(f.cl.fn.Code)); e.coldWork < jitHotWork {
+		return nil
+	}
+	if !r.jitCallsNatively(f.cl) {
+		// Its calls would all be made by Go, from native code Go entered:
+		// asked again once as hot again, its callees' code as it is then.
+		e.coldWork = 0
+		return nil
+	}
+	key := weak.Make(f.cl.fn)
+	if s.entryFor(f.cl.fn) == e {
+		switch {
+		case e.ssa == nil:
+			s.forget(key, e)
+		case s.inUse(e) || e.busy != 0 || !s.dropEntry(key, e):
+			// Its callers' code runs it now: asked again once hot again.
+			e.coldWork = 0
+			return nil
+		}
+	}
+	e.hostOnly = false
+	ne := r.jitCompileFor(f.cl.fn, f.cl, jitLowerHot)
+	f.cl.setHint(hintFor(ne))
+	if ne != nil && ne.ssa != nil {
+		return ne
+	}
+	return nil
+}
+
+// jitHotWork is how much work Go's calls of a function with no loop and no
+// array work do -- its instructions, at each call -- before it is compiled
+// (LowerSSAHot): a hundredth of what V8 counts before it optimizes, the
+// tree tier's instruction being some hundred of Ignition's bytes of
+// budget. Richards' setup methods, called twice in each of its runs, are
+// not; Towers' recursion, eight thousand calls in each, is in its first.
+const jitHotWork = 16 << 10
 
 type jitBinary struct {
 	left, right, dest, delta int

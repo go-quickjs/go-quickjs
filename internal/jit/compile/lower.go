@@ -35,6 +35,17 @@ func (e *Refusal) Error() string {
 
 func refuse(pc int, why string) error { return &Refusal{PC: pc, Reason: why} }
 
+// hostOnly is the reason LowerSSA refuses a function that does nothing
+// native code saves time on (HostOnly).
+const hostOnly = "host operations without native loop or array work"
+
+// HostOnly reports whether err is LowerSSA's refusal of a function for
+// having no loop and no array work, which LowerSSAHot may lower.
+func HostOnly(err error) bool {
+	r, ok := err.(*Refusal)
+	return ok && r.Reason == hostOnly
+}
+
 // Lower checks eligibility, validates control-flow stack depths, and produces
 // one atomic IR instruction and pre-instruction map per bytecode instruction:
 // the slot IR without the new pipeline's additions (LowerSSA), which the SSA
@@ -53,6 +64,16 @@ func Lower(fn *bytecode.Function) (*ir.Program, error) {
 // binding-view slots.
 func LowerSSA(fn *bytecode.Function) (*ir.Program, error) {
 	return lowerRecovered(fn, lowering{ssa: true})
+}
+
+// LowerSSAHot is LowerSSA for a function its callers have shown to be hot
+// -- called enough times, for its size, that V8 would have optimized it
+// (the VM's jitHotWork) -- which LowerSSA refuses for having no loop and no
+// array work (HostOnly): one that makes calls is lowered, as they are made
+// natively where their callees have code, a recursion or a run of calls
+// that native code makes, however little the function does itself.
+func LowerSSAHot(fn *bytecode.Function) (*ir.Program, error) {
+	return lowerRecovered(fn, lowering{ssa: true, hot: true})
 }
 
 // LowerSSAInline is LowerSSA for a callee the new pipeline inlines into its
@@ -125,7 +146,7 @@ func closureAssigned(fn *bytecode.Function) []bool {
 
 // lowering is how a function is lowered: for which entry points, and for
 // which pipeline.
-type lowering struct{ calls, callee, ssa, forward bool }
+type lowering struct{ calls, callee, ssa, forward, hot bool }
 
 // lowerRecovered turns a panic in analysis into a refusal: an optional tier
 // must never take down its host, and the function then runs in the existing
@@ -198,6 +219,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 	}
 	effects := make([]effect, len(fn.Code))
 	host, loop, indexed, property, bitwise, this, handlers, iters := false, false, false, false, false, false, false, false
+	calls := false
 	for pc, in := range fn.Code {
 		e, err := describe(fn, pc, in)
 		if err != nil {
@@ -298,11 +320,13 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		// A call in tail position may be the function's own, which native
 		// code makes a jump to its start deep in the stack: a loop.
 		loop = loop || e.branch && e.target(in) <= pc || in.Op == bytecode.OpTailCall || in.Op == bytecode.OpTailCallMethod
+		calls = calls || in.Op == bytecode.OpCall || in.Op == bytecode.OpCallMethod || in.Op == bytecode.OpNew
 		indexed = indexed || in.Op == bytecode.OpGetIndex || in.Op == bytecode.OpGetIndexThis || in.Op == bytecode.OpSetIndex || in.Op == bytecode.OpGetLocalIndex || in.Op == bytecode.OpGetLocalIndexUpdate
 	}
-	// Tiny host-only wrappers pay the bridge overhead without enough native work.
-	if host && !loop && !indexed && !m.callee {
-		return nil, refuse(-1, "host operations without native loop or array work")
+	// Tiny host-only wrappers pay the bridge overhead without enough native
+	// work -- but for one shown to be hot that makes calls (LowerSSAHot).
+	if host && !loop && !indexed && !m.callee && !(m.hot && calls) {
+		return nil, refuse(-1, hostOnly)
 	}
 	if property && !indexed && !bitwise && !m.callee && !m.ssa {
 		return nil, refuse(-1, "property operations without native array or bitwise work")
