@@ -3643,7 +3643,24 @@ func (c *compiler) length(v *ssa.Value, guard func(amd64.Cond)) {
 	c.reference(v, a, c.enc.Object, guard)
 	c.a.LoadU8(scratchB, scratchC, c.enc.ObjectClass)
 	c.a.OpImm(amd64.Cmp, scratchB, int32(c.enc.ClassArray), false)
-	guard(amd64.CondNE)
+	typed := c.a.NewLabel()
+	c.a.Jcc(amd64.CondNE, typed)
+	c.cold = append(c.cold, func() {
+		// A typed array's, its length in elements, where its view is in its
+		// buffer, as an element read finds it (typedElement).
+		c.a.Bind(typed)
+		c.a.OpImm(amd64.Cmp, scratchB, int32(c.enc.ClassTypedArray), false)
+		guard(amd64.CondNE)
+		c.objectData(scratchC, scratchC, scratchB, c.enc.TypedData, guard)
+		c.a.Load(scratchB, scratchC, c.enc.TypedStorage)
+		c.a.Op(amd64.Test, scratchB, scratchB, true)
+		guard(amd64.CondE)
+		c.a.Load(scratchA, scratchC, c.enc.TypedEnd)
+		c.a.CmpMem(scratchA, scratchB, c.enc.BufferBytes+8, true)
+		guard(amd64.CondA)
+		c.a.Load(scratchC, scratchC, c.enc.TypedLength)
+		c.a.Jmp(have)
+	})
 	p := scratchA
 	c.a.MovRR(p, scratchC)
 	c.a.Load(scratchC, p, c.enc.ObjectElems+8)

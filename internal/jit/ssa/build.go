@@ -1698,8 +1698,14 @@ func (b *builder) plan() error {
 				// Go reads what native code does not, and resumes after it.
 				entries[pc+1] = true
 			}
+		case ir.ArrayLength:
+			if b.fb != nil && b.fb.Generic(pc) && resumes(pc) {
+				// A length native code did not read is Go's once its guard
+				// has failed, which resumes after it.
+				entries[pc+1] = true
+			}
 		case ir.Nop, ir.Copy, ir.CopyPair, ir.StoreLoad, ir.Swap, ir.Insert2, ir.Insert3,
-			ir.Unary, ir.Update, ir.Return, ir.ArrayLength, ir.ArrayKey:
+			ir.Unary, ir.Update, ir.Return, ir.ArrayKey:
 		case ir.UpvalueRead:
 			// The function's own captured binding is read natively, its
 			// check deoptimizing; an inlined callee's leaves at its call.
@@ -2525,7 +2531,17 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		b.assign(in.Dest, blk, boxF(elem))
 	case ir.ArrayLength:
-		b.assign(in.Dest, blk, boxF(guard(OpLength, Float64, ir.GuardExit, operand(in.Left))))
+		// An array's, a typed array's or a string's; another receiver's, or
+		// a typed array native code does not find in its buffer, leaves.
+		// Once that has failed it is Go's, which goes on after it: there
+		// is no more generic form, and the guard had failed at every
+		// invocation, the rest of each run by the interpreter -- PDF.js's
+		// inflater, its tables' lengths.
+		kind := ir.GuardExit
+		if b.fb != nil && b.fb.Generic(pc) {
+			kind = ir.HostExit
+		}
+		b.assign(in.Dest, blk, boxF(guard(OpLength, Float64, kind, operand(in.Left))))
 	case ir.ArrayKey:
 		guard(OpArrayOf, Ptr, ir.GuardExit, operand(in.Left))
 		guard(OpElemKey, None, ir.GuardExit, number(in.Right, ir.GuardExit))

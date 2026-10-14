@@ -76,3 +76,35 @@ func TestJITStringElementsNative(t *testing.T) {
 		t.Errorf("count left native code %d times in 20,000 reads", n)
 	}
 }
+
+// x.length: an array's, a string's and a typed array's natively -- the
+// last where its view is in its buffer -- and any other receiver's Go's,
+// which goes on after it once the guard has failed (ssa.OpLength), rather
+// than leave the rest of each invocation to the interpreter. Each answer is
+// the interpreter's, in every tier and under every stress setting: arrays,
+// strings, typed arrays of each kind, a view on a detached buffer, a
+// subarray, and objects with a length of their own.
+func TestJITLengths(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const src = `
+		const views = [new Uint8Array(7), new Int32Array(13), new Float64Array(3), new Uint16Array(new ArrayBuffer(16), 2, 5)]
+		const sub = new Uint8Array(20).subarray(4, 9)
+		const gone = new Uint8Array(new ArrayBuffer(8))
+		function total(xs, n) {
+			let s = 0
+			for (let i = 0; i < n; i++) {
+				const x = xs[i % xs.length]
+				s = (s * 3 + x.length) | 0
+			}
+			return s
+		}
+		const log = []
+		for (let r = 0; r < 25; r++) {
+			log.push(total(views, 40), total([sub, 'hello', [1, 2, 3]], 30), total([{length: r}, 'ab', gone], 9))
+			if (r === 15 && typeof gone.buffer.transfer === 'function') gone.buffer.transfer()
+		}
+		log.join()`
+	jitDifferential(t, src)
+}
