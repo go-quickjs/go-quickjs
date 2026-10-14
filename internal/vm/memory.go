@@ -195,7 +195,7 @@ func (r *Runtime) chargeResult(v Value) error {
 			return nil
 		}
 		n = int64(len(s.s))
-		if s.u16 != nil {
+		if s.units16() != nil {
 			n += int64(s.length) * 2
 		}
 	case v.IsObject():
@@ -462,11 +462,13 @@ func (m *memoryMeter) object(o *Object) {
 // string counts a string: a flat one's bytes, or a rope's nodes.
 func (m *memoryMeter) string(s *String) {
 	m.total += stringSize + int64(len(s.s))
-	if s.u16 != nil {
+	if s.units16() != nil {
 		m.total += int64(s.length) * 2
 	}
 	m.addString(s.left)
-	m.addString(s.right)
+	if s.left != nil {
+		m.addString(s.rightSide())
+	}
 }
 
 // generic visits anything else the engine holds, by reflection: its own

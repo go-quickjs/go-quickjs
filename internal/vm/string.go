@@ -29,8 +29,15 @@ import (
 type String struct {
 	// s is the flattened UTF-8 form. It is valid only when left is nil.
 	s string
-	// left and right are non-nil for an unflattened rope.
-	left, right *String
+	// left is non-nil for an unflattened rope, whose right side is aux's
+	// (rightSide).
+	left *String
+	// aux is a rope's right side, *String, or a flat string's code units,
+	// *uint16, once units or codeUnits has made them, length of them
+	// (units16): one word for the two, which no string has both of. Kept
+	// apart, a String took 56 bytes, Go's size class of 64; one word, 48,
+	// the class below -- every string, and the node every += makes.
+	aux unsafe.Pointer
 	// length is the length in UTF-16 code units, and is always valid, rope or
 	// not, so that .length never forces a flatten.
 	length int
@@ -47,12 +54,18 @@ type String struct {
 	endsHigh, startsLow bool
 	// mark is the memory meter's, which it sets on a string it has counted.
 	mark uint16
-	// u16 caches the UTF-16 code units, length of them, once units or
-	// codeUnits has made them. It is the first of them rather than a slice,
-	// whose length and capacity would only say length again: that keeps a
-	// String at 56 bytes, a size class below what a slice made it, and
-	// every string a short one carries in its own allocation one too.
-	u16 *uint16
+}
+
+// rightSide is a rope's right side.
+func (s *String) rightSide() *String { return (*String)(s.aux) }
+
+// units16 is a flat string's code units, if made, or nil, and nil for a
+// rope, whose aux is its right side.
+func (s *String) units16() *uint16 {
+	if s.left != nil {
+		return nil
+	}
+	return (*uint16)(s.aux)
 }
 
 // emptyString is shared, since scripts produce it constantly.
@@ -166,11 +179,11 @@ func (s *String) flatten() {
 	end := len(b)
 	n := s
 	for ; n.left != nil; n = n.left {
-		end -= n.right.writeTo(b[:end])
+		end -= n.rightSide().writeTo(b[:end])
 	}
 	copy(b, n.s)
 	s.s = unsafe.String(unsafe.SliceData(b), len(b))
-	s.left, s.right = nil, nil
+	s.left, s.aux = nil, nil
 }
 
 // writeTo writes s at the end of b, which has room for it, and reports how
@@ -190,7 +203,7 @@ func (s *String) writeTo(b []byte) int {
 			end -= copy(b[end-len(n.s):end], n.s)
 			continue
 		}
-		stack = append(stack, n.left, n.right)
+		stack = append(stack, n.left, n.rightSide())
 	}
 	return len(b) - end
 }
@@ -203,7 +216,7 @@ func (s *String) byteLen() int {
 	total := 0
 	n := s
 	for ; n.left != nil; n = n.left {
-		r := n.right
+		r := n.rightSide()
 		if r.left == nil {
 			total += len(r.s)
 			continue
@@ -217,7 +230,7 @@ func (s *String) byteLen() int {
 				total += len(m.s)
 				continue
 			}
-			stack = append(stack, m.right, m.left)
+			stack = append(stack, m.rightSide(), m.left)
 		}
 	}
 	return total + len(n.s)
@@ -260,44 +273,44 @@ func (s *String) Concat(t *String) *String {
 	}
 	out := &String{length: length, ascii: ascii,
 		endsHigh: t.endsHigh, startsLow: s.startsLow}
-	out.left, out.right = s, t
+	out.left, out.aux = s, unsafe.Pointer(t)
 	return out
 }
 
 // newStringBytes makes a String with room for n bytes in the same
-// allocation, n at most 72, and returns them to be filled before the String
+// allocation, n at most 80, and returns them to be filled before the String
 // is given them: a short string is then one allocation rather than two. Each
 // room fills its String up to one of Go's size classes, on a 64-bit platform.
 func newStringBytes(n int) (*String, []byte) {
 	switch {
-	case n <= 8:
+	case n <= 16:
 		x := new(struct {
 			String
-			b [8]byte
+			b [16]byte
 		})
 		return &x.String, x.b[:n]
-	case n <= 24:
+	case n <= 32:
 		x := new(struct {
 			String
-			b [24]byte
+			b [32]byte
 		})
 		return &x.String, x.b[:n]
-	case n <= 40:
+	case n <= 48:
 		x := new(struct {
 			String
-			b [40]byte
+			b [48]byte
 		})
 		return &x.String, x.b[:n]
-	case n <= 56:
+	case n <= 64:
 		x := new(struct {
 			String
-			b [56]byte
+			b [64]byte
 		})
 		return &x.String, x.b[:n]
 	}
 	x := new(struct {
 		String
-		b [72]byte
+		b [80]byte
 	})
 	return &x.String, x.b[:n]
 }
@@ -308,7 +321,7 @@ func newStringBytes(n int) (*String, []byte) {
 // lastLeaf is the piece of a rope its last code unit is in.
 func (s *String) lastLeaf() *String {
 	for s.left != nil {
-		s = s.right
+		s = s.rightSide()
 	}
 	return s
 }
@@ -324,7 +337,7 @@ func (s *String) firstLeaf() *String {
 // withoutLast is s without the lone high surrogate it ends with.
 func (s *String) withoutLast() *String {
 	var spine []*String
-	for n := s; n.left != nil; n = n.right {
+	for n := s; n.left != nil; n = n.rightSide() {
 		spine = append(spine, n)
 	}
 	leaf := s.lastLeaf().s
@@ -343,7 +356,7 @@ func (s *String) withoutFirst() *String {
 	}
 	out := NewString(s.firstLeaf().s[3:])
 	for i := len(spine) - 1; i >= 0; i-- {
-		out = out.Concat(spine[i].right)
+		out = out.Concat(spine[i].rightSide())
 	}
 	return out
 }
@@ -363,7 +376,7 @@ func (s *String) prefix(max int) string {
 			sb.WriteString(n.s[:min(len(n.s), max-sb.Len())])
 			continue
 		}
-		stack = append(stack, n.right, n.left)
+		stack = append(stack, n.rightSide(), n.left)
 	}
 	// A character cut short is left out.
 	out := sb.String()
@@ -700,11 +713,11 @@ func (s *String) units() []uint16 {
 // cachedUnits is the string's code units, which are made the first time
 // they are asked for and kept. The string is not empty.
 func (s *String) cachedUnits() []uint16 {
-	if s.u16 == nil {
+	if s.units16() == nil {
 		u := wtf8.ToUTF16(s.Go())
-		s.u16 = unsafe.SliceData(u)
+		s.aux = unsafe.Pointer(unsafe.SliceData(u))
 	}
-	return unsafe.Slice(s.u16, s.length)
+	return unsafe.Slice(s.units16(), s.length)
 }
 
 // codeUnits returns the UTF-16 code units of the string, caching them.

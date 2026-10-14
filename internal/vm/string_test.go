@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf16"
+	"unsafe"
 )
 
 func TestStringLengthIsInCodeUnits(t *testing.T) {
@@ -624,5 +625,27 @@ func TestLatin1CharactersShared(t *testing.T) {
 		out.every(x => x)`))
 	if err != nil || !v.Truthy() {
 		t.Fatalf("= %v, %v", v, err)
+	}
+}
+
+// A String is 48 bytes on a 64-bit platform, Go's size class below 64, a
+// rope's right side and a flat string's code units sharing one word (aux):
+// a rope has no units, and a flat string no right side. A rope of non-ASCII
+// pieces answers its units only once flat, its right side gone.
+func TestStringSharesItsLastWord(t *testing.T) {
+	if is64Bit == 1 && unsafe.Sizeof(String{}) != 48 {
+		t.Errorf("a String is %d bytes, want 48", unsafe.Sizeof(String{}))
+	}
+	a := NewString(strings.Repeat("é", 40))
+	r := a.Concat(NewString(strings.Repeat("ü", 40)))
+	if r.left == nil || r.units16() != nil || r.rightSide() == nil {
+		t.Fatal("a long join is not a rope with a right side and no units")
+	}
+	u := r.codeUnits()
+	if r.left != nil || r.units16() == nil || len(u) != 80 || u[0] != 'é' || u[79] != 'ü' {
+		t.Fatalf("flattened units: rope %v, %d units", r.left != nil, len(u))
+	}
+	if r.Go() != strings.Repeat("é", 40)+strings.Repeat("ü", 40) {
+		t.Error("the flattened string is wrong")
 	}
 }

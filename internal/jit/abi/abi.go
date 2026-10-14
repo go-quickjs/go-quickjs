@@ -748,7 +748,8 @@ type Encoding struct {
 	// pointer is at StringData, valid only when the pointer at StringLeft is
 	// nil (a rope's halves); StringLength is its length in UTF-16 code
 	// units, an int; a true byte at StringASCII says each byte is a code
-	// unit; and StringU16, when not nil, points to its code units.
+	// unit; and StringU16, when not nil, points to its code units -- a flat
+	// string's: a rope's word there is its right half.
 	String                                                       uint64
 	StringData, StringLeft, StringLength, StringASCII, StringU16 int32
 	// Symbol is every symbol's number word, its pointer word the symbol.

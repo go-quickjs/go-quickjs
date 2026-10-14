@@ -95,7 +95,7 @@ func (r *Runtime) newDateObjectAt(proto *Object, t float64) *Object {
 // a copy of its own that the string would then keep. A string that has its
 // units already is read in them.
 func (r *Runtime) parseDate(s *String) float64 {
-	if !s.ascii || s.length > 64 || s.u16 != nil {
+	if !s.ascii || s.length > 64 || s.units16() != nil {
 		return r.dateEnv().Parse(s.codeUnits())
 	}
 	s.flatten()

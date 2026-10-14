@@ -71,7 +71,7 @@ var jitEncoding = abi.Encoding{
 	StringLeft:   int32(unsafe.Offsetof(String{}.left)),
 	StringLength: int32(unsafe.Offsetof(String{}.length)),
 	StringASCII:  int32(unsafe.Offsetof(String{}.ascii)),
-	StringU16:    int32(unsafe.Offsetof(String{}.u16)),
+	StringU16:    int32(unsafe.Offsetof(String{}.aux)),
 
 	ObjectClass:        int32(unsafe.Offsetof(Object{}.class)),
 	ObjectFlags:        int32(unsafe.Offsetof(Object{}.flags)),
