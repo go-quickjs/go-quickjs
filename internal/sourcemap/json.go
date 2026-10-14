@@ -2,6 +2,7 @@ package sourcemap
 
 import (
 	"errors"
+	"math"
 	"strconv"
 	"unicode/utf16"
 	"unicode/utf8"
@@ -231,9 +232,28 @@ func str(v value) string {
 	return s
 }
 
+// num is a number field as an int, 0 where it is not a whole number a
+// 32-bit int holds: a float past an int converts to whatever the platform
+// makes of it.
 func num(v value) int {
 	f, _ := v.(float64)
+	if f != math.Trunc(f) || f < math.MinInt32 || f > math.MaxInt32 {
+		return 0
+	}
 	return int(f)
+}
+
+// offset is a section's line or column: a whole number from 0 to 2**31-1,
+// which a mapping's positions start from.
+func offset(v value) (int, error) {
+	f, ok := v.(float64)
+	if !ok && v == nil {
+		return 0, nil
+	}
+	if !ok || f != math.Trunc(f) || f < 0 || f > math.MaxInt32 {
+		return 0, errors.New("sourcemap: a section's offset is not a line or column")
+	}
+	return int(f), nil
 }
 
 func stringsOf(v value) []*string {
@@ -270,7 +290,13 @@ func payloadOf(v value) (*payload, error) {
 			}
 			var s section
 			if off, ok := so["offset"].(map[string]any); ok {
-				s.Offset.Line, s.Offset.Column = num(off["line"]), num(off["column"])
+				var err error
+				if s.Offset.Line, err = offset(off["line"]); err != nil {
+					return nil, err
+				}
+				if s.Offset.Column, err = offset(off["column"]); err != nil {
+					return nil, err
+				}
 			}
 			if mv, ok := so["map"]; ok && mv != nil {
 				m, err := payloadOf(mv)

@@ -6,6 +6,7 @@ package sourcemap
 import (
 	"encoding/base64"
 	"errors"
+	"math"
 	"net/url"
 	"path/filepath"
 	"runtime"
@@ -97,14 +98,15 @@ func (m *Map) parse(p *payload, base string, line, col int) error {
 			sources[i] = absolute(p.SourceRoot+*s, base)
 		}
 	}
-	src, srcLine, srcCol, name := 0, 0, 0, 0
+	var src, srcLine, srcCol, name int64
+	at := int64(col)
 	r := strings.NewReader(p.Mappings)
 	for r.Len() > 0 {
 		c, _ := r.ReadByte()
 		switch c {
 		case ';':
 			line++
-			col = 0
+			at = 0
 			continue
 		case ',':
 			continue
@@ -125,21 +127,27 @@ func (m *Map) parse(p *payload, base string, line, col int) error {
 			fields[n] = v
 			n++
 		}
-		col += fields[0]
+		if err := add(&at, fields[0]); err != nil {
+			return err
+		}
 		if n < 4 {
-			m.entries = append(m.entries, entry{line: line, col: col})
+			m.entries = append(m.entries, entry{line: line, col: int(at)})
 			continue
 		}
-		src += fields[1]
-		srcLine += fields[2]
-		srcCol += fields[3]
-		e := entry{line: line, col: col, srcLine: srcLine, srcCol: srcCol, mapped: true}
-		if src >= 0 && src < len(sources) {
+		for i, v := range []*int64{&src, &srcLine, &srcCol} {
+			if err := add(v, fields[1+i]); err != nil {
+				return err
+			}
+		}
+		e := entry{line: line, col: int(at), srcLine: int(srcLine), srcCol: int(srcCol), mapped: true}
+		if src >= 0 && src < int64(len(sources)) {
 			e.source = sources[src]
 		}
 		if n == 5 {
-			name += fields[4]
-			if name >= 0 && name < len(p.Names) {
+			if err := add(&name, fields[4]); err != nil {
+				return err
+			}
+			if name >= 0 && name < int64(len(p.Names)) {
 				e.name = p.Names[name]
 			}
 		}
@@ -150,10 +158,17 @@ func (m *Map) parse(p *payload, base string, line, col int) error {
 
 const base64Digits = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
-// vlq reads one base64 VLQ value.
+// errTooLarge reports a value, or a position values add up to, past the
+// 32-bit signed integers a source map's are.
+var errTooLarge = errors.New("sourcemap: a value is too large")
+
+// vlq reads one base64 VLQ value, a 32-bit signed integer as a source map's
+// are: seven digits at most, and a value past 2**31-1 an error, where shifts
+// of up to 60 bits had let thirteen digits wrap -- and an int of 32 bits
+// lose all but the first seven.
 func vlq(r *strings.Reader) (int, error) {
-	result, shift := 0, 0
-	for {
+	var result uint64
+	for shift := 0; ; shift += 5 {
 		c, err := r.ReadByte()
 		if err != nil {
 			return 0, errors.New("sourcemap: a value ends early")
@@ -162,19 +177,33 @@ func vlq(r *strings.Reader) (int, error) {
 		if d < 0 {
 			return 0, errors.New("sourcemap: a mapping holds a character that is no base64 digit")
 		}
-		if shift > 60 {
-			return 0, errors.New("sourcemap: a value is too large")
+		if shift > 30 {
+			return 0, errTooLarge
 		}
-		result += (d & 31) << shift
-		shift += 5
+		result |= uint64(d&31) << shift
 		if d&32 == 0 {
 			break
 		}
 	}
-	if result&1 != 0 {
-		return -(result >> 1), nil
+	if result>>1 > math.MaxInt32 {
+		return 0, errTooLarge
 	}
-	return result >> 1, nil
+	v := int(result >> 1)
+	if result&1 != 0 {
+		return -v, nil
+	}
+	return v, nil
+}
+
+// add adds a field's delta to the position it moves, which stays a 32-bit
+// signed integer: deltas in range add up past it soon enough on a 32-bit
+// int.
+func add(at *int64, delta int) error {
+	*at += int64(delta)
+	if *at > math.MaxInt32 || *at < math.MinInt32 {
+		return errTooLarge
+	}
+	return nil
 }
 
 // Find is the mapping a position in the compiled script, its line and

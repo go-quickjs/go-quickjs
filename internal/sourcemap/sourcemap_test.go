@@ -111,6 +111,69 @@ func TestBadMaps(t *testing.T) {
 	}
 }
 
+// encodeVLQ is v as base64 VLQ, for any v an int64 holds.
+func encodeVLQ(v int64) string {
+	u := uint64(v) << 1
+	if v < 0 {
+		u = uint64(-v)<<1 | 1
+	}
+	var b strings.Builder
+	for {
+		d := u & 31
+		if u >>= 5; u != 0 {
+			d |= 32
+		}
+		b.WriteByte(base64Digits[d])
+		if u == 0 {
+			return b.String()
+		}
+	}
+}
+
+// TestValuesAre32Bit pins that a mapping's values, and the positions they
+// add up to, are 32-bit signed integers, as a source map's are: past that a
+// map is refused rather than wrapped. Shifts of up to 60 bits let thirteen
+// digits of 31 decode to 1, and an int of 32 bits lost all but seven.
+func TestValuesAre32Bit(t *testing.T) {
+	parse := func(mappings string) error {
+		_, err := Parse([]byte(`{"version":3,"sources":["a.js"],"mappings":"`+mappings+`"}`), "file:///x.map")
+		return err
+	}
+	for _, v := range []int64{1<<31 - 1, -(1<<31 - 1), 12345} {
+		if err := parse(encodeVLQ(v) + "AAA"); err != nil {
+			t.Errorf("%d: %v", v, err)
+		}
+	}
+	for _, mappings := range []string{
+		encodeVLQ(1<<31) + "AAA",
+		encodeVLQ(-(1 << 31) - 1),
+		strings.Repeat("/", 12) + "f", // thirteen digits of 31
+		encodeVLQ(1<<35) + "AAA",
+		// In range alone, past it together: the column adds up.
+		encodeVLQ(1<<31-1) + "AAA," + encodeVLQ(1) + "AAA",
+		// And the source line does.
+		"AA" + encodeVLQ(1<<31-1) + "A,AA" + encodeVLQ(1) + "A",
+	} {
+		if err := parse(mappings); err == nil {
+			t.Errorf("%q: no error", mappings)
+		}
+	}
+	m, err := Parse([]byte(`{"version":3,"sources":["a.js"],"mappings":"`+encodeVLQ(1<<31-1)+`AAA"}`), "file:///x.map")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := find(m, 0, 1<<31-1), "file:///a.js:0:0 "; got != want {
+		t.Errorf("at column 2**31-1: %s, want %s", got, want)
+	}
+	// A section's offset is a line or a column, or the map is refused.
+	for _, off := range []string{`{"line":-1,"column":0}`, `{"line":0.5,"column":0}`, `{"line":0,"column":4294967296}`, `{"line":"1","column":0}`} {
+		data := `{"version":3,"sections":[{"offset":` + off + `,"map":{"version":3,"sources":["a.js"],"mappings":"AAAA"}}]}`
+		if _, err := Parse([]byte(data), "file:///x.map"); err == nil {
+			t.Errorf("offset %s: no error", off)
+		}
+	}
+}
+
 // TestDataURL pins the data URLs a map is inline in: application/json,
 // base64 or percent-encoded, and nothing else.
 func TestDataURL(t *testing.T) {
