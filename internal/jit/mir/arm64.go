@@ -2105,6 +2105,9 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 			c.a.Store(a64Ctx, c.spillDisp(sv.slot), arm64.Reg(sv.reg))
 		}
 	}
+	if generic {
+		c.noEntryCall(v, site, sites, gen, join)
+	}
 	const calleeCtx, base, locals, tmp, top, high2 = arm64.Reg(3), arm64.Reg(4), arm64.Reg(5), arm64.Reg(6), arm64.Reg(7), arm64.Reg(8)
 	c.a.Load(calleeCtx, a64Ctx, abi.OffNext)
 	c.a.Load(base, a64Ctx, abi.OffStackTop)
@@ -3008,6 +3011,37 @@ func (c *a64Compiler) markingCall(v *ssa.Value, site *ssa.CallSite, stub arm64.L
 		c.a.B(join)
 	})
 	return join, true
+}
+
+// noEntryCall is amd64's: Go makes call v where its target has no code
+// native callers may call, and native code goes on at join.
+func (c *a64Compiler) noEntryCall(v *ssa.Value, site *ssa.CallSite, sites []*ssa.CallSite, gen bool, join arm64.Label) {
+	none, used := c.a.NewLabel(), false
+	for i, t := range sites {
+		if t.Entry == 0 {
+			continue
+		}
+		next := c.a.NewLabel()
+		if len(sites) > 1 || gen {
+			c.a.Load(a64A, a64Ctx, abi.OffCallTarget)
+			c.a.CmpImm(a64A, int64(i), true)
+			c.a.BCond(arm64.NE, next)
+		}
+		c.movImm(a64A, uint64(t.Entry))
+		c.a.Load(a64A, a64A, 0)
+		c.a.Cbz(a64A, none, true)
+		c.a.Bind(next)
+		used = true
+	}
+	if !used {
+		return
+	}
+	op := goOpWord(&ssa.CallSite{Go: ssa.GoCall, Argc: site.Argc, Method: site.Method, New: site.Pool != 0})
+	c.cold = append(c.cold, func() {
+		c.a.Bind(none)
+		c.goCallOp(v, op, true)
+		c.a.B(join)
+	})
 }
 
 // markingTake is amd64's, stub the call's exit: while the collector

@@ -7704,10 +7704,12 @@ func TestJITSSANativeCalleeRefusalKept(t *testing.T) {
 
 // A native call whose callee has no code native callers may call -- one
 // they stopped calling natively for leaving too often (notNative), as the
-// test marks them -- has Go run the callee from its start and goes on
-// natively after the call (abi.ExitEnter), its own frame never written: a
-// call, a method call with its receiver, constructions whose callee
-// returns nothing or a primitive, and a callee that throws.
+// test marks them -- is Go's, which makes it, native code going on after it
+// (mir's noEntryCall): a call, a method call with its receiver,
+// constructions whose callee returns nothing or a primitive, and a callee
+// that throws. One whose operands Go's arguments cannot hold has Go run
+// the callee from its start, and goes on natively after the call
+// (abi.ExitEnter), its own frame never written.
 func TestJITSSAEntersCalleesWithoutCode(t *testing.T) {
 	// Native calls are Go's while the collector marks: it does not, so that
 	// what the test counts is the calls'.
@@ -7723,16 +7725,20 @@ func TestJITSSAEntersCalleesWithoutCode(t *testing.T) {
 		function methods(o,n){let s=0;for(let i=0;i<n;i++)s=(s+o.m(i))|0;return s}
 		function constructs(n){let s=0;for(let i=0;i<n;i++){s=(s+new C(i).v.length+new P(i).v.length)|0}return s}
 		function throws(n){let s=0;for(let i=0;i<n;i++)s=(s+bad(i))|0;return s}
+		function wide(a,b,c,d,e,f,g,h,i,j,k,l,m,n,o,p){return String(a).length+b+c+d+e+f+g+h+i+j+k+l+m+n+o+p}
+		function wides(n){let s=0;for(let i=0;i<n;i++)s=(s+wide(i,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15))|0;return s}
 		var o=new M(3)`
 	for _, tc := range []struct {
 		name, run string
 		caller    string
 		construct bool
+		entered   bool
 	}{
-		{"call", `[calls(300),calls(300)]`, "calls", false},
-		{"method", `[methods(o,300),methods(o,300)]`, "methods", false},
-		{"construct", `[constructs(300),constructs(300)]`, "constructs", true},
-		{"throw", `var r=[];for(let k=0;k<3;k++){try{r.push(throws(300))}catch(e){r.push(e.message)}}r`, "throws", false},
+		{"call", `[calls(300),calls(300)]`, "calls", false, false},
+		{"method", `[methods(o,300),methods(o,300)]`, "methods", false, false},
+		{"construct", `[constructs(300),constructs(300)]`, "constructs", true, false},
+		{"throw", `var r=[];for(let k=0;k<3;k++){try{r.push(throws(300))}catch(e){r.push(e.message)}}r`, "throws", false, false},
+		{"wide", `[wides(300),wides(300)]`, "wides", false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			defer func(c bool) { jitcompile.SSAConstruct = c }(jitcompile.SSAConstruct)
@@ -7765,7 +7771,7 @@ func TestJITSSAEntersCalleesWithoutCode(t *testing.T) {
 					ce.notNative, ce.link.entry, ce.nativeRetry = true, 0, 0
 				}
 			}
-			entered := r.jit.entered
+			entered, goCalls := r.jit.entered, r.jit.goCalls
 			gv, err := r.Run(compileForTest(t, tc.run+".map(String).join()"))
 			if err != nil {
 				t.Fatal(err)
@@ -7773,8 +7779,11 @@ func TestJITSSAEntersCalleesWithoutCode(t *testing.T) {
 			if got, want := gv.String().Go(), wv.String().Go(); got != want {
 				t.Fatalf("got %s, interpreter %s", got, want)
 			}
-			if r.jit.entered == entered {
+			switch {
+			case tc.entered && r.jit.entered == entered:
 				t.Fatalf("no native call ran its callee from its start: %+v", r.JITStats())
+			case !tc.entered && (r.jit.goCalls == goCalls || r.jit.entered != entered):
+				t.Fatalf("Go made %d of the calls, %d ran from their callees' start: %+v", r.jit.goCalls-goCalls, r.jit.entered-entered, r.JITStats())
 			}
 		})
 	}

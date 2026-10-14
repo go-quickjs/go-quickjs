@@ -704,6 +704,9 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 			c.a.Store(regCtx, c.spillDisp(sv.slot), amd64.Reg(sv.reg))
 		}
 	}
+	if generic {
+		c.noEntryCall(v, site, sites, gen, guard, join)
+	}
 	const calleeCtx, base, locals, tmp, top, high2 = amd64.R8, amd64.R9, amd64.R10, amd64.RBX, amd64.R12, amd64.R13
 	c.a.Load(calleeCtx, regCtx, abi.OffNext)
 	c.a.Load(base, regCtx, abi.OffStackTop)
@@ -1564,6 +1567,45 @@ func (c *compiler) markingCall(v *ssa.Value, site *ssa.CallSite, guard func(amd6
 		c.a.Jmp(join)
 	})
 	return join, true
+}
+
+// noEntryCall has Go make call v where the target the call's checks found
+// (abi.Context's CallTarget) has no code native callers may call -- its
+// link's entry 0: one not compiled yet, or that native callers no longer
+// call (the VM's notNative) -- as while the collector marks (markingCall),
+// and native code goes on after it, at join. Entered from Go at its start
+// instead (enterExit), the callee had Go make the frame of every native
+// level below it and finish each, a call a few levels deep costing what
+// all of them do. A target past the sites, a generic call's, is entered so
+// still.
+func (c *compiler) noEntryCall(v *ssa.Value, site *ssa.CallSite, sites []*ssa.CallSite, gen bool, guard func(amd64.Cond), join amd64.Label) {
+	none, used := c.a.NewLabel(), false
+	for i, t := range sites {
+		if t.Entry == 0 {
+			continue
+		}
+		next := c.a.NewLabel()
+		if len(sites) > 1 || gen {
+			c.a.Load(scratchA, regCtx, abi.OffCallTarget)
+			c.a.OpImm(amd64.Cmp, scratchA, int32(i), true)
+			c.a.Jcc(amd64.CondNE, next)
+		}
+		c.movImm(scratchA, uint64(t.Entry))
+		c.a.Load(scratchA, scratchA, 0)
+		c.a.Op(amd64.Test, scratchA, scratchA, true)
+		c.a.Jcc(amd64.CondE, none)
+		c.a.Bind(next)
+		used = true
+	}
+	if !used {
+		return
+	}
+	op := goOpWord(&ssa.CallSite{Go: ssa.GoCall, Argc: site.Argc, Method: site.Method, New: site.Pool != 0})
+	c.cold = append(c.cold, func() {
+		c.a.Bind(none)
+		c.goCallOp(v, op, guard, true)
+		c.a.Jmp(join)
+	})
 }
 
 // markingTake tests the collector's flag before call v takes its pool's

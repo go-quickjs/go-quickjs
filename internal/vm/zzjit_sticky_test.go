@@ -3,8 +3,10 @@
 package vm
 
 import (
+	"runtime/debug"
 	"slices"
 	"testing"
+	"weak"
 )
 
 // Code judged not to pay on its first stretches (entrySlow) -- here
@@ -143,6 +145,49 @@ func TestJITThrowEndsTheFlow(t *testing.T) {
 		if err != nil {
 			t.Errorf("a function whose switch's default throws was refused (kind %d): %v", kind, err)
 		}
+	}
+}
+
+// A native callee's call of a function native callers no longer call
+// (notNative) is Go's, native code going on after it (mir's noEntryCall):
+// no native level is unwound, where Go had run the callee from its start
+// (abi.ExitEnter) and made and finished the frame of every native level
+// below -- AWFY's Json, its readValue native, at each null, eight levels
+// deep. Each answer is the interpreter's.
+func TestJITCallsOfNotNativeCalleesAreGos(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	const setup = `
+		function leaf(x) { return String(x).length + x }
+		function mid(x) { let s = 0; for (let j = 0; j < 2; j++) s = (s + leaf(x + j)) | 0; return s }
+		function outer(n) { let s = 0; for (let i = 0; i < n; i++) s = (s + mid(i)) | 0; return s }`
+	want := New(Config{})
+	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	for _, rt := range []*Runtime{want, r} {
+		if _, err := rt.Run(compileForTest(t, setup+`; outer(300); outer(300)`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	leaf := r.jit.cache[weak.Make(r.global.getOwn(r.atoms.intern("leaf")).value().Object().fn().closure.fn)]
+	mid := r.jit.cache[weak.Make(r.global.getOwn(r.atoms.intern("mid")).value().Object().fn().closure.fn)]
+	if leaf == nil || leaf.ssa == nil || mid == nil || mid.ssa == nil || mid.link.in == 0 {
+		t.Skipf("mid not called natively, or leaf without code: %+v %+v", mid, leaf)
+	}
+	leaf.notNative, leaf.link.entry, leaf.nativeRetry = true, 0, 0
+	unwound, goCalls := r.jit.unwound, r.jit.goCalls
+	wv, err := want.Run(compileForTest(t, `outer(300)`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gv, err := r.Run(compileForTest(t, `outer(300)`))
+	if err != nil || gv.Number() != wv.Number() {
+		t.Fatalf("outer(300) = %v, %v; interpreter %v", gv, err, wv)
+	}
+	if n := r.jit.unwound - unwound; n != 0 || r.jit.goCalls == goCalls {
+		t.Errorf("leaf's calls unwound %d native levels, Go made %d", n, r.jit.goCalls-goCalls)
 	}
 }
 
