@@ -388,6 +388,9 @@ func (c *compiler) compileStatement(s ast.Stmt) {
 		c.compileForOf(n)
 
 	case *ast.ReturnStmt:
+		if _, this := n.Arg.(*ast.This); !this {
+			c.fn.ReturnsReceiver = false
+		}
 		if n.Arg != nil {
 			if c.tailCallsAllowed() {
 				c.compileTailExpr(n.Arg)

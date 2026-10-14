@@ -235,22 +235,27 @@ func TestJITNumericGlobalMutation(t *testing.T) {
 // A script's let, const and class bindings, read and written by native
 // code where they are (ssa.OpLexCell): each answer the interpreter's, and
 // those that need no Go read natively. A binding in its temporal dead zone
-// leaves to Go, which throws, as does a write to a const.
+// leaves to Go, which throws, as does a write to a const. A class's
+// constructor is inlined in the loop that constructs with it, which leaves
+// for Go at its first constructions -- its pool filled, the transition its
+// store adds x by learned -- as a function's is (learning): it had been
+// refused, and each construction was a call of Go.
 func TestJITLexicalGlobals(t *testing.T) {
 	for _, tc := range []struct {
-		source string
-		native bool
+		source   string
+		native   bool
+		learning uint64
 	}{
-		{`let k=3;function f(n){let s=0;for(let i=0;i<n;i++)s+=k;return s}f(100)`, true},
-		{`const k=2.5;function f(n){let s=0;for(let i=0;i<n;i++)s+=k;return s}f(100)`, true},
-		{`let c=0;function f(n){for(let i=0;i<n;i++)c+=i;return c}f(100)+c`, true},
-		{`'use strict';let c=0;function f(n){for(let i=0;i<n;i++)c=c*3+i|0;return c}f(100)+c`, true},
-		{`class P{constructor(x){this.x=x}}function f(n){let s=0;for(let i=0;i<n;i++)s+=new P(i).x;return s}f(100)`, true},
-		{`const g=x=>x*2;function f(n){let s=0;for(let i=0;i<n;i++)s+=g(i);return s}f(100)`, true},
-		{`function f(n){let s=0;for(let i=0;i<n;i++)s+=i;return s+late}let r=0;try{f(10)}catch(e){r=e instanceof ReferenceError?1:2}let late=5;r*1000+f(10)`, false},
-		{`function f(n){for(let i=0;i<n;i++)late=i;return late}let r=0;try{f(10)}catch(e){r=e instanceof ReferenceError?1:2}let late=5;r*1000+f(10)`, false},
-		{`const K=1;function f(n){let s=0;for(let i=0;i<n;i++){s+=i;if(i===n-1)K=s}return s}let r=0;try{f(10)}catch(e){r=e instanceof TypeError?1:2}r*1000+K+f.length`, false},
-		{`let k=1;function f(n){let s=0;for(let i=0;i<n;i++){s+=k;if(i===50)k='x'}return s}f(100)`, false},
+		{`let k=3;function f(n){let s=0;for(let i=0;i<n;i++)s+=k;return s}f(100)`, true, 0},
+		{`const k=2.5;function f(n){let s=0;for(let i=0;i<n;i++)s+=k;return s}f(100)`, true, 0},
+		{`let c=0;function f(n){for(let i=0;i<n;i++)c+=i;return c}f(100)+c`, true, 0},
+		{`'use strict';let c=0;function f(n){for(let i=0;i<n;i++)c=c*3+i|0;return c}f(100)+c`, true, 0},
+		{`class P{constructor(x){this.x=x}}function f(n){let s=0;for(let i=0;i<n;i++)s+=new P(i).x;return s}f(100)`, true, 3},
+		{`const g=x=>x*2;function f(n){let s=0;for(let i=0;i<n;i++)s+=g(i);return s}f(100)`, true, 0},
+		{`function f(n){let s=0;for(let i=0;i<n;i++)s+=i;return s+late}let r=0;try{f(10)}catch(e){r=e instanceof ReferenceError?1:2}let late=5;r*1000+f(10)`, false, 0},
+		{`function f(n){for(let i=0;i<n;i++)late=i;return late}let r=0;try{f(10)}catch(e){r=e instanceof ReferenceError?1:2}let late=5;r*1000+f(10)`, false, 0},
+		{`const K=1;function f(n){let s=0;for(let i=0;i<n;i++){s+=i;if(i===n-1)K=s}return s}let r=0;try{f(10)}catch(e){r=e instanceof TypeError?1:2}r*1000+K+f.length`, false, 0},
+		{`let k=1;function f(n){let s=0;for(let i=0;i<n;i++){s+=k;if(i===50)k='x'}return s}f(100)`, false, 0},
 	} {
 		want := New(Config{})
 		wv, err := want.Run(compileForTest(t, tc.source))
@@ -268,8 +273,16 @@ func TestJITLexicalGlobals(t *testing.T) {
 		if gs.Go() != ws.Go() {
 			t.Fatalf("JIT %s, interpreter %s; %s", gs.Go(), ws.Go(), tc.source)
 		}
-		if r.jit == nil || r.jit.ssaEntries == 0 || tc.native && (r.jit.hosts != 0 || r.jit.guards != 0 || r.jit.interpreted != 0) {
+		if r.jit == nil || r.jit.ssaEntries == 0 || tc.native && (r.jit.hosts > tc.learning || r.jit.guards != 0 || r.jit.interpreted > tc.learning) {
 			t.Fatalf("not native: %+v; %s", r.JITStats(), tc.source)
+		}
+		if tc.learning != 0 {
+			// What it learned, it learned: the constructor inlined, run
+			// natively after.
+			e := r.jit.hint(r.global.getOwn(r.atoms.intern("f")).value().Object().fn().closure)
+			if e == nil || len(e.ssaInlined) == 0 {
+				t.Fatalf("P not inlined in f: %+v; %s", e, tc.source)
+			}
 		}
 	}
 }

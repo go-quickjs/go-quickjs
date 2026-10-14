@@ -3119,7 +3119,7 @@ func (r *Runtime) jitSeedCalls(cl *closure, e *jitEntry, p *ir.Program) {
 		if obj == nil {
 			continue
 		}
-		o, callee := r.jitCallableClosure(cl, obj)
+		o, callee := r.jitClosureFor(cl, obj, in.Op == bytecode.OpNew)
 		if callee == nil {
 			r.jitSeedBuiltin(cl, e, p, pc, in, obj, read)
 			continue
@@ -3443,12 +3443,26 @@ func (r *Runtime) jitCalleeObjectAt(cl *closure, p *ir.Program, pc int) (*Object
 // jitCallableClosure is o and its closure, if a call in cl's code may make
 // it natively or inline it, as jitCalled has a callee; or nil.
 func (r *Runtime) jitCallableClosure(cl *closure, o *Object) (*Object, *closure) {
-	fd := o.fn()
-	if fd == nil || fd.native != nil || fd.bound || fd.closure == nil || isGeneratorTemplate(fd.closure.fn) || fd.closure.realm != r.Realm ||
-		fd.closure.scope() != cl.scope() {
+	return r.jitClosureFor(cl, o, false)
+}
+
+// jitClosureFor is jitCallableClosure for a call, or for a construction
+// (jitNativeTargetOf).
+func (r *Runtime) jitClosureFor(cl *closure, o *Object, construct bool) (*Object, *closure) {
+	if !r.jitNativeTargetOf(o.fn(), cl, construct) {
 		return nil, nil
 	}
-	return o, fd.closure
+	return o, o.fn().closure
+}
+
+// jitNativeTargetOf reports whether native code of cl's may call fd's
+// function, or construct with it: one of the script's, unbound, no
+// generator's or async function's template, of cl's realm and scope; and
+// a class's constructor only for a construction, as a call of one throws,
+// which Go does -- a call, through call or apply too, had run its body.
+func (r *Runtime) jitNativeTargetOf(fd *funcData, cl *closure, construct bool) bool {
+	return fd != nil && fd.native == nil && !fd.bound && fd.closure != nil && !isGeneratorTemplate(fd.closure.fn) && fd.closure.realm == r.Realm &&
+		fd.closure.scope() == cl.scope() && (construct || !isClassConstructorKind(fd.closure.fn.Kind))
 }
 
 // jitChainReads is how many reads jitChainValue follows: a global and the
@@ -3557,12 +3571,10 @@ func (r *Runtime) jitCalled(f *frame, sp int, in bytecode.Instr) (*Object, *clos
 		return nil, nil
 	}
 	o := callee.Object()
-	fd := o.fn()
-	if fd == nil || fd.native != nil || fd.bound || fd.closure == nil || isGeneratorTemplate(fd.closure.fn) || fd.closure.realm != r.Realm ||
-		fd.closure.scope() != f.cl.scope() {
+	if !r.jitNativeTargetOf(o.fn(), f.cl, in.Op == bytecode.OpNew) {
 		return nil, nil
 	}
-	return o, fd.closure
+	return o, o.fn().closure
 }
 
 // jitCallTarget notes a call made natively that left for Go at pc: a
@@ -3687,8 +3699,10 @@ func (r *Runtime) jitInlinesAt(cl *closure, o *Object, in bytecode.Instr) bool {
 		// closure made anew at each call of its maker is a new object.
 		return false
 	}
-	return in.Op != bytecode.OpNew || r.jitConstructs(o) &&
-		!slices.ContainsFunc(cl.fn.Code, func(x bytecode.Instr) bool { return x.Op == bytecode.OpReturn })
+	// A constructor whose returns all return its receiver, as a base
+	// class's own does, or that has none: the object is the result either
+	// way.
+	return in.Op != bytecode.OpNew || r.jitConstructs(o) && cl.fn.ReturnsReceiver
 }
 
 // jitForwardTarget is the closure of the method a forwarding constructor,
@@ -3740,8 +3754,7 @@ func (r *Runtime) jitForwardMethod(cl *closure, o *Object) *Object {
 		return nil
 	}
 	t := m.value().Object()
-	fd := t.fn()
-	if fd == nil || fd.native != nil || fd.bound || fd.closure == nil || isGeneratorTemplate(fd.closure.fn) || fd.closure.realm != r.Realm || fd.closure.scope() != cl.scope() {
+	if !r.jitNativeTargetOf(t.fn(), cl, false) {
 		return nil
 	}
 	return t
@@ -3867,12 +3880,10 @@ func (r *Runtime) jitCalledVia(f *frame, sp int, in bytecode.Instr) (*Object, *c
 		return nil, nil
 	}
 	o := recv.Object()
-	fd := o.fn()
-	if fd == nil || fd.native != nil || fd.bound || fd.closure == nil || isGeneratorTemplate(fd.closure.fn) || fd.closure.realm != r.Realm ||
-		fd.closure.scope() != f.cl.scope() {
+	if !r.jitNativeTargetOf(o.fn(), f.cl, false) {
 		return nil, nil
 	}
-	return o, fd.closure
+	return o, o.fn().closure
 }
 
 // jitPops is Array.prototype.pop, the realm's own, if a method call at the

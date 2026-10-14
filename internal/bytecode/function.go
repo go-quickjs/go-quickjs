@@ -337,6 +337,11 @@ type Function struct {
 	// function's, which make an object first, nor a class constructor's,
 	// which a call refuses.
 	DirectCall bool
+	// ReturnsReceiver says each return statement of the body returns this
+	// -- none another value, nor nothing -- as a base class constructor's
+	// own return does: a construction's result is its receiver whichever
+	// return it takes, as one that inlines it may take it.
+	ReturnsReceiver bool
 	// HasTailCall says the body has a call in tail position, OpTailCall,
 	// OpTailCallMethod or OpTailDirectEval, which can end its frame for the
 	// callee's.

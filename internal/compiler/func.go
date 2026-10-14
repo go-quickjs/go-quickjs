@@ -171,6 +171,8 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 		}
 	}
 
+	// Until a return statement of the body returns anything but this.
+	c.fn.ReturnsReceiver = true
 	c.compileStatements(fn.Body)
 	// A constructor returns its `this` rather than undefined. That matters
 	// for a derived class, where super() may replace `this` with the object

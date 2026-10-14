@@ -2797,7 +2797,7 @@ func (b *builder) instruction(blk *Block, pc int) {
 			// one of a function the call is seen to call a jump to that
 			// function's code, its frame in place of this one (OpTailSelf);
 			// Go makes any other.
-			if p := b.root.p; b.cur == b.root && p.Captured == nil && !p.ArrowThis {
+			if p := b.root.p; b.cur == b.root && p.Captured == nil && !p.ArrowThis && !p.ClassConstructor {
 				sp := p.Locals + p.Maps[pc].Depth
 				args := make([]*Value, in.Extra+1, in.Extra+2)
 				for i := range args {

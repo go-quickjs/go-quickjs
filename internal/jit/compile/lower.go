@@ -164,7 +164,12 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		// in its own code: a call of one makes its object, and inlining
 		// its body would run it as a call does.
 		return nil, refuse(-1, "async or generator function")
-	case fn.Kind != bytecode.KindNormal && fn.Kind != bytecode.KindArrow && fn.Kind != bytecode.KindMethod:
+	case fn.Kind != bytecode.KindNormal && fn.Kind != bytecode.KindArrow && fn.Kind != bytecode.KindMethod && fn.Kind != bytecode.KindConstructor:
+		// A base class's constructor is a function's body, constructed as
+		// one is (the VM's jitConstructs), and called by no native call:
+		// a call without new throws. A derived class's, whose this super()
+		// binds, a getter's, a setter's and a class's field initializers
+		// are not.
 		return nil, refuse(-1, "special function kind")
 	case fn.HasDirectEval || len(fn.EvalScopes) != 0:
 		return nil, refuse(-1, "direct eval")
@@ -396,8 +401,9 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		}
 	}
 	p := &ir.Program{Locals: fn.LocalCount + len(fn.Upvalues), StackSize: fn.MaxStack, This: this, Maps: maps, Code: make([]ir.Instruction, len(fn.Code)),
-		ArrowThis: fn.Kind == bytecode.KindArrow && fn.UsesThis,
-		Handlers:  table, HandlerAt: chains}
+		ArrowThis:        fn.Kind == bytecode.KindArrow && fn.UsesThis,
+		ClassConstructor: fn.Kind == bytecode.KindConstructor,
+		Handlers:         table, HandlerAt: chains}
 	for pc, in := range fn.Code {
 		if to, ok := goBranch(in); ok && maps[pc].Depth >= 0 && !slices.Contains(p.Entries, to) {
 			p.Entries = append(p.Entries, to)

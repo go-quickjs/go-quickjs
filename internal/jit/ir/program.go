@@ -368,6 +368,10 @@ type Program struct {
 	// refused, and AWFY's Richards ran its task functions, all such arrows,
 	// in the tree tier.
 	ArrowThis bool
+	// ClassConstructor marks a class's constructor, which a call without
+	// new throws on: a call of itself in tail position is made as a call,
+	// for Go to throw, not a jump to its start (ssa's OpTailSelf).
+	ClassConstructor bool
 	// Globals contains source-name indices for reserved binding-view slots,
 	// following captured bindings and the optional receiver snapshot.
 	Globals []uint32
