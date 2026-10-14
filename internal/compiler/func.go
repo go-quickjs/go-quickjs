@@ -85,6 +85,10 @@ func (c *compiler) compileFunctionBody(fn *ast.FuncLit) {
 		c.withDepth++
 	}
 
+	if c.fn.Strict && !c.opts.Debug && !c.fn.HasDirectEval {
+		c.reused = reusedClosures(fn)
+	}
+
 	// A function that mentions `arguments`, directly or through an arrow that
 	// captures it, materializes the object into a slot. It exists before the
 	// parameters are initialized, so a default may refer to it, and the slot

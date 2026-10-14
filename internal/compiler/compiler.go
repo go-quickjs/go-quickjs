@@ -303,6 +303,9 @@ type compiler struct {
 	constIndex map[constKey]uint32
 
 	loops []loopCtx
+	// reused are the function expressions of the function's var declarations
+	// in a loop that are made once per invocation (reusedClosures).
+	reused map[*ast.FuncLit]bool
 	// finallys is the stack of enclosing finally clauses, which return, break
 	// and continue all have to account for.
 	finallys []finallyCtx

@@ -483,6 +483,17 @@ func (c *compiler) compileVarDecl(n *ast.VarDecl) {
 			c.emit(bytecode.OpDrop, 0, 0)
 			continue
 		}
+		if fn, ok := d.Init.(*ast.FuncLit); ok && c.reused[fn] && c.inLoop() {
+			// A function nothing can tell from the one the last iteration
+			// made, which the var holds then: made the first time, and
+			// left after that (reusedClosures).
+			c.compileIdentRead(d.Target.(*ast.Ident))
+			skip := c.emitJump(bytecode.OpJumpIfTrue)
+			c.compileExprNamed(d.Init, nameOf(d.Target))
+			c.initBinding(d.Target, n.Kind)
+			c.patchJump(skip)
+			continue
+		}
 		c.compileExprNamed(d.Init, nameOf(d.Target))
 		if n.Kind.IsUsing() {
 			// The value is added to the scope's resources first, and a value
@@ -491,6 +502,16 @@ func (c *compiler) compileVarDecl(n *ast.VarDecl) {
 		}
 		c.initBinding(d.Target, n.Kind)
 	}
+}
+
+// inLoop reports whether the code being compiled is in a loop's body.
+func (c *compiler) inLoop() bool {
+	for _, l := range c.loops {
+		if l.isLoop {
+			return true
+		}
+	}
+	return false
 }
 
 // initBinding stores the value on the stack into a declaration's target.
