@@ -3141,8 +3141,11 @@ func (r *Runtime) jitSeedCalls(cl *closure, e *jitEntry, p *ir.Program) {
 		default:
 			continue
 		}
-		if e.callSites != nil && e.callSites[pc] >= jitCallNative {
-			// Decided; one still counted toward its decision is not.
+		if e.callSites != nil && (e.callSites[pc] == jitCallNative || e.callSites[pc] == jitCallInlined) {
+			// Decided; one still counted toward its decision is not, nor
+			// one left to Go (jitCallDone), which was decided from what one
+			// call met then -- a callee with no code, a target not seen
+			// since -- and is decided again from what the caches know now.
 			continue
 		}
 		obj, read := r.jitCalleeObjectAt(cl, p, pc)
@@ -5376,6 +5379,10 @@ type jitSSAStats struct {
 	// native calls Go made while the collector marked, which it does not
 	// judge it by: runs of the code, counted among its entries all the same.
 	judged, marked uint64
+	// workBase and stretchBase are work and the stretches when Go last
+	// began entering the code again (jitRetrySlow): it is judged by what
+	// it has done since.
+	workBase, stretchBase uint64
 	// guardsAt counts failed guards by their site (abi.Context.ExitSite:
 	// the slot IR PC of the operation, or -1 for an entry's speculation);
 	// nil until one fails.
@@ -5454,11 +5461,31 @@ func (r *Runtime) jitSSAProfit(e *jitEntry, f *frame, ctx *abi.Context, start, e
 		return
 	}
 	st.judged = stretches
-	if st.work < stretches*jitSSAMinWork {
+	if st.work-st.workBase < (stretches-st.stretchBase)*jitSSAMinWork {
 		// Go stops entering it; native callers, which pay neither, go on
 		// calling it (NativeCalls).
 		e.entrySlow = true
 	}
+}
+
+// jitRetrySlow counts a call the existing tiers made of code Go does not
+// enter (entrySlow), and has Go enter it again after jitNativeRetry calls,
+// doubled each time it was found not to pay, up to jitNativeBackoffs times,
+// judging it by what it does from then on (jitSSAProfit): code judged on its
+// first stretches -- its calls not yet decided, made by Go; its sites
+// without feedback -- may pay once it has learned, as a native callee does
+// (jitRetryNative). Judged once, for good, AWFY's Richards' runTask had
+// every call made by Go after its one call's target was learned. Code
+// compiled for native callers alone (ssaCallee) Go does not enter.
+func jitRetrySlow(e *jitEntry) {
+	if e.ssaCallee || e.ssa == nil || e.slowCalls-e.slowSince < jitNativeRetry<<e.slowBackoff {
+		return
+	}
+	st := &e.ssaStats
+	e.entrySlow = false
+	e.slowSince, e.slowBackoff = e.slowCalls, min(e.slowBackoff+1, jitNativeBackoffs)
+	st.judged = st.entries - st.marked + st.goCalls
+	st.workBase, st.stretchBase = st.work, st.judged
 }
 
 // jitLoopLength is the mean length of fn's loops, in instructions: the
@@ -6820,6 +6847,7 @@ func (r *Runtime) jitResume(f *frame) (Value, error, bool) {
 	e := r.jit.hint(f.cl)
 	if e != nil && e.entrySlow && !e.reoptPending() && !e.feedReopt {
 		e.slowCalls++
+		jitRetrySlow(e)
 		return Undefined, nil, false
 	}
 	if f.cl.jitCalls < r.jitCallThreshold {

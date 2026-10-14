@@ -412,6 +412,11 @@ type jitEntry struct {
 	// enter its code (entrySlow): it is used all the same.
 	used, seen, serial uint64
 	slowCalls          uint64
+	// slowSince is slowCalls when Go last stopped entering the code, and
+	// slowBackoff how many times it has: Go enters it again after
+	// jitNativeRetry<<slowBackoff calls, judging it afresh (jitRetrySlow).
+	slowSince   uint64
+	slowBackoff uint8
 	// refusal is why the JIT does not compile the function, for a refusal
 	// (JITReport).
 	refusal string
@@ -1688,6 +1693,7 @@ func (r *Runtime) tryJITFrame(f *frame) (Value, error, bool) {
 			}
 		}
 		e.slowCalls++
+		jitRetrySlow(e)
 		return Undefined, nil, false
 	}
 	// Cold calls stay in the existing tiers without allocating native state.
