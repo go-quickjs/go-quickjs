@@ -32,6 +32,14 @@ type SSACode struct {
 // NewSSACode publishes compiled code in a, a runtime's arena (nil gives it
 // one of its own): written, then sealed executable.
 func NewSSACode(a *Arena, c *mir.Code) (*SSACode, error) {
+	if len(c.Bytes) > MaxCodeBytes {
+		// Too much for one placement: the function's, which others' code
+		// placed after it does not share. Wrapped as the host's failure
+		// to place code, it had the runtime place no more: TypeScript's
+		// compiler, one of its functions 1.1 MB of code, ran the rest in
+		// the existing tiers.
+		return nil, fmt.Errorf("%w: %d bytes", ErrCodeSize, len(c.Bytes))
+	}
 	if a == nil {
 		a = NewArena()
 	}

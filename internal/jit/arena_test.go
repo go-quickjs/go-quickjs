@@ -3,6 +3,7 @@
 package jit
 
 import (
+	"errors"
 	"math"
 	"runtime"
 	"testing"
@@ -46,6 +47,30 @@ func valueCode(t *testing.T, v float64, n int) *mir.Code {
 		}
 	}
 	return mc
+}
+
+// Code past MaxCodeBytes is refused as the function's own (ErrCodeSize), not
+// as the host's failure to place code (ErrUnavailable), which has a runtime
+// place no more: the arena places the next function's code, and runs it.
+func TestCodePastMaxCodeBytes(t *testing.T) {
+	a := NewArena()
+	big := valueCode(t, 1, MaxCodeBytes)
+	if len(big.Bytes) <= MaxCodeBytes {
+		t.Fatalf("%d bytes of code, not past %d", len(big.Bytes), MaxCodeBytes)
+	}
+	if c, err := NewSSACode(a, big); c != nil || !errors.Is(err, ErrCodeSize) || errors.Is(err, ErrUnavailable) {
+		t.Fatalf("NewSSACode(%d bytes) = %v, %v", len(big.Bytes), c, err)
+	}
+	c, err := NewSSACode(a, valueCode(t, 2, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	var ctx abi.Context
+	ctx.SetConsts(&testEncoding)
+	if err := c.Run(0, &ctx); err != nil || ctx.ExitKind != abi.ExitReturn || ctx.Ret != math.Float64bits(2) {
+		t.Fatalf("the code placed after returned %+v, %v", ctx.Ret, err)
+	}
 }
 
 // An arena packs a runtime's functions into a few mappings: each placed
