@@ -39,8 +39,10 @@ type Fetch struct {
 	// Client makes the requests. Nil uses a client with a sensible timeout
 	// rather than http.DefaultClient, which has none.
 	Client *http.Client
-	// Allow is asked about every request before it is made. Returning an error
-	// refuses it, and the script sees the refusal as a failed fetch.
+	// Allow is asked about every request before it is made, each a redirect
+	// leads to included: req.Response is the redirect for one that follows
+	// one, and req.Response.Request the request it answered. Returning an
+	// error refuses it, and the script sees the refusal as a failed fetch.
 	Allow func(req *http.Request) error
 	// MaxBodyBytes caps how much of a response is read. Zero means 32 MB; a
 	// negative value means no limit at all.
@@ -66,6 +68,9 @@ func Network(rt *quickjs.Runtime, cfg *Fetch) error {
 	client := cfg.Client
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
+	}
+	if cfg.Allow != nil {
+		client = allowRedirects(client, cfg.Allow)
 	}
 	limit := cfg.MaxBodyBytes
 	if limit == 0 {
@@ -158,6 +163,8 @@ type fetchResult struct {
 	status     int
 	statusText string
 	url        string
+	// redirected says the response is to a request a redirect led to.
+	redirected bool
 	headers    [][2]string
 	body       []byte
 	stream     *bodyReader
@@ -198,6 +205,29 @@ func readRequest(req quickjs.Value) (*requestSpec, error) {
 	return spec, nil
 }
 
+// allowRedirects is client, asking allow about each request a redirect leads
+// to before its own CheckRedirect -- or, without one, the ten redirects
+// net/http follows -- decides: a request Allow passed was otherwise free to
+// be redirected anywhere, an address Allow refuses included. The client is
+// a copy, so the host's is not changed.
+func allowRedirects(client *http.Client, allow func(*http.Request) error) *http.Client {
+	c := *client
+	next := client.CheckRedirect
+	c.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if err := allow(req); err != nil {
+			return err
+		}
+		if next != nil {
+			return next(req, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+	return &c
+}
+
 // doFetch makes the request. It touches no JavaScript value at all, which is
 // what lets it run on another goroutine.
 //
@@ -234,6 +264,9 @@ func doFetch(client *http.Client, cfg *Fetch, spec *requestSpec, limit int64, lo
 		status:     res.StatusCode,
 		statusText: strings.TrimSpace(strings.TrimPrefix(res.Status, res.Proto)),
 		url:        res.Request.URL.String(),
+		// net/http gives a request a redirect led to the redirect it
+		// followed.
+		redirected: res.Request.Response != nil,
 	}
 	if loop == nil {
 		// Nothing to deliver the rest on, so the rest is read now.
@@ -406,6 +439,7 @@ func deliver(rt *quickjs.Runtime, p *quickjs.Promise, res *fetchResult, err erro
 		o.Set("status", res.status),
 		o.Set("statusText", res.statusText),
 		o.Set("url", res.url),
+		o.Set("redirected", res.redirected),
 		o.Set("headers", headers),
 	}
 	if res.stream != nil {
@@ -852,6 +886,7 @@ const fetchJS = `(function (host) {
       headers: raw.headers,
       url: raw.url,
     });
+    response.redirected = raw.redirected;
     return response;
   }
 

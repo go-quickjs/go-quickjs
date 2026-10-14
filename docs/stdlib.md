@@ -69,7 +69,7 @@ Workers: &stdlib.Workers{
 
 A root is a boundary: a path that climbs out of it, or a symbolic link that
 points out of it, is refused rather than followed. `Fetch.Allow` sees every
-request before it is made, `Serve.Allow` every address before it is listened on,
+request before it is made, each a redirect leads to included, `Serve.Allow` every address before it is listened on,
 `DNS.Allow` every name before it is looked up, and `Run.Allow` every program
 before it is started. What is not installed cannot
 be reached.

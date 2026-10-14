@@ -645,6 +645,57 @@ func TestFetchAllow(t *testing.T) {
 	}
 }
 
+// TestFetchAllowSeesRedirects pins that Allow is asked about every request a
+// redirect leads to, with the redirect it follows: it saw only the first,
+// so a request to an allowed address could be redirected to any other --
+// localhost included.
+func TestFetchAllowSeesRedirects(t *testing.T) {
+	inside := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "inside")
+	}))
+	defer inside.Close()
+	outside := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, inside.URL+"/admin", http.StatusFound)
+	}))
+	defer outside.Close()
+
+	var seen []string
+	out, _ := run(t, stdlib.Config{Fetch: &stdlib.Fetch{
+		Allow: func(req *http.Request) error {
+			hop := req.URL.Path
+			if req.Response != nil {
+				hop += " after " + strconv.Itoa(req.Response.StatusCode) + " from " + req.Response.Request.URL.Path
+			}
+			seen = append(seen, hop)
+			if req.URL.Path == "/admin" {
+				return errors.New("not allowed")
+			}
+			return nil
+		},
+	}}, `
+		;(async () => {
+			try { console.log(await (await fetch("`+outside.URL+`/redirect")).text()) }
+			catch (e) { console.log("refused: " + (e instanceof TypeError) + " " + /not allowed/.test(e.cause.message)) }
+		})()
+	`)
+	if want := "refused: true true"; out != want {
+		t.Errorf("output = %q, want %q", out, want)
+	}
+	if want := "/redirect|/admin after 302 from /redirect"; strings.Join(seen, "|") != want {
+		t.Errorf("Allow saw %q, want %q", strings.Join(seen, "|"), want)
+	}
+
+	// Where Allow allows every hop, the redirect is followed.
+	out, _ = run(t, stdlib.Config{Fetch: &stdlib.Fetch{
+		Allow: func(req *http.Request) error { return nil },
+	}}, `
+		;(async () => { const r = await fetch("`+outside.URL+`/redirect"); console.log(await r.text(), r.redirected) })()
+	`)
+	if want := "inside true"; out != want {
+		t.Errorf("followed: %q, want %q", out, want)
+	}
+}
+
 // The request and response objects work on their own, which is what code that
 // builds a request before sending it needs.
 func TestFetchTypes(t *testing.T) {
