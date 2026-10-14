@@ -53,6 +53,7 @@ type matcherASCII struct {
 	emptyMarks []int
 	steps      int
 	check      func() error
+	checkAt    int
 	busy       bool
 }
 
@@ -149,7 +150,8 @@ func (m *matcherASCII) run(code []instr, pos int) (bool, error) {
 	for {
 		m.steps++
 		if m.check != nil {
-			if m.steps%checkInterval == 0 {
+			if m.steps >= m.checkAt {
+				m.checkAt = m.steps + checkInterval
 				if err := m.check(); err != nil {
 					return false, err
 				}
@@ -294,6 +296,7 @@ func (m *matcherASCII) run(code []instr, pos int) (bool, error) {
 			} else if pos+n > m.in.length() {
 				goto backtrack
 			}
+			m.steps += n
 			if !m.compareRange(start, at, n, in.op == opBackrefFold) {
 				goto backtrack
 			}
@@ -501,12 +504,12 @@ func (m *matcherASCII) compareRange(a, b, n int, fold bool) bool {
 func (m *matcherASCII) runLook(idx, pos int) (bool, error) {
 	look := m.prog.looks[idx]
 	base := len(m.trail)
-	sub := &matcherASCII{prog: m.prog, in: m.in, caps: m.caps, trail: m.trail, counters: make([]int, m.prog.counters), emptyMarks: make([]int, m.prog.emptyChecks), steps: m.steps, check: m.check}
+	sub := &matcherASCII{prog: m.prog, in: m.in, caps: m.caps, trail: m.trail, counters: make([]int, m.prog.counters), emptyMarks: make([]int, m.prog.emptyChecks), steps: m.steps, checkAt: m.checkAt, check: m.check}
 	for i := range sub.emptyMarks {
 		sub.emptyMarks[i] = -1
 	}
 	ok, err := sub.run(look.code, pos)
-	m.steps = sub.steps
+	m.steps, m.checkAt = sub.steps, sub.checkAt
 	if err != nil {
 		m.trail = sub.trail
 		return false, err

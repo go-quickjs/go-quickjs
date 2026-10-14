@@ -18,6 +18,7 @@ type matcherUTF8 struct {
 	emptyMarks []int
 	steps      int
 	check      func() error
+	checkAt    int
 	busy       bool
 }
 
@@ -114,7 +115,8 @@ func (m *matcherUTF8) run(code []instr, pos int) (bool, error) {
 	for {
 		m.steps++
 		if m.check != nil {
-			if m.steps%checkInterval == 0 {
+			if m.steps >= m.checkAt {
+				m.checkAt = m.steps + checkInterval
 				if err := m.check(); err != nil {
 					return false, err
 				}
@@ -249,6 +251,7 @@ func (m *matcherUTF8) run(code []instr, pos int) (bool, error) {
 				pc++
 				break
 			}
+			m.steps += end - start
 			if p, ok := m.backref(start, end, pos, in.rev, in.op == opBackrefFold); ok {
 				pos = p
 			} else {
@@ -454,12 +457,12 @@ func (m *matcherUTF8) compareRange(a, b, n int, fold bool) bool {
 func (m *matcherUTF8) runLook(idx, pos int) (bool, error) {
 	look := m.prog.looks[idx]
 	base := len(m.trail)
-	sub := &matcherUTF8{prog: m.prog, in: m.in, caps: m.caps, trail: m.trail, counters: make([]int, m.prog.counters), emptyMarks: make([]int, m.prog.emptyChecks), steps: m.steps, check: m.check}
+	sub := &matcherUTF8{prog: m.prog, in: m.in, caps: m.caps, trail: m.trail, counters: make([]int, m.prog.counters), emptyMarks: make([]int, m.prog.emptyChecks), steps: m.steps, checkAt: m.checkAt, check: m.check}
 	for i := range sub.emptyMarks {
 		sub.emptyMarks[i] = -1
 	}
 	ok, err := sub.run(look.code, pos)
-	m.steps = sub.steps
+	m.steps, m.checkAt = sub.steps, sub.checkAt
 	if err != nil {
 		m.trail = sub.trail
 		return false, err

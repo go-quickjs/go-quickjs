@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-quickjs/go-quickjs/internal/wtf8"
 )
@@ -352,6 +353,54 @@ func TestCatastrophicBacktrackingIsBounded(t *testing.T) {
 	}
 	if !errors.Is(err, ErrComplexity) {
 		t.Errorf("error = %v, want ErrComplexity", err)
+	}
+}
+
+// TestBackreferencesChargeTheirLength pins that a backreference's comparison
+// costs a step for each character it reads, in each matcher: charged as one
+// step, (a+)\1b against ten thousand a's ran 24 seconds before its budget
+// ran out, where the budget is meant to stop a match in well under one. A
+// check is asked as often as the work warrants, however many steps one
+// instruction charges.
+func TestBackreferencesChargeTheirLength(t *testing.T) {
+	re, err := Compile(`(a+)\1b`, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	re8, err := CompileUTF8(`(a+)b`, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := strings.Repeat("a", 10000)
+	units := make([]uint16, len(s))
+	for i := range s {
+		units[i] = uint16(s[i])
+	}
+	for name, match := range map[string]func(check func() error) error{
+		"utf16": func(check func() error) error { _, err := re.MatchChecked(units, 0, check); return err },
+		"ascii": func(check func() error) error { _, err := re.MatchASCIIInto(nil, s, 0, check); return err },
+		"utf8":  func(check func() error) error { _, err := re8.MatchUTF8Into(nil, s, 0, check); return err },
+	} {
+		start := time.Now()
+		if err := match(nil); !errors.Is(err, ErrComplexity) {
+			t.Errorf("%s: %v, want ErrComplexity", name, err)
+		}
+		if d := time.Since(start); d > 5*time.Second {
+			t.Errorf("%s: the budget ran out after %v", name, d)
+		}
+		// With a check, the work it is asked after is the budget's.
+		stop, calls := errors.New("stop"), 0
+		if err := match(func() error {
+			if calls++; calls == maxSteps/checkInterval {
+				return stop
+			}
+			return nil
+		}); !errors.Is(err, stop) {
+			t.Errorf("%s with a check: %v, want the check's error", name, err)
+		}
+		if d := time.Since(start); d > 10*time.Second {
+			t.Errorf("%s: the check was asked too seldom: %v", name, d)
+		}
 	}
 }
 

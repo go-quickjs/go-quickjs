@@ -80,6 +80,10 @@ var UTF8 = Variant{
 			} else if pos+n > m.in.length() {
 				goto backtrack
 			}
+			// The comparison reads n characters, which is n steps of work:
+			// charged as one, a backreference let a pattern run for many
+			// times its budget.
+			m.steps += n
 			if !m.compareRange(start, at, n, in.op == opBackrefFold) {
 				goto backtrack
 			}
@@ -88,7 +92,9 @@ var UTF8 = Variant{
 				pos = pos + n
 			}
 `,
-			New: `			if p, ok := m.backref(start, end, pos, in.rev, in.op == opBackrefFold); ok {
+			New: `			// The comparison reads what the group captured: so many steps.
+			m.steps += end - start
+			if p, ok := m.backref(start, end, pos, in.rev, in.op == opBackrefFold); ok {
 				pos = p
 			} else {
 				goto backtrack

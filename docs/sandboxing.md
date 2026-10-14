@@ -126,8 +126,16 @@ stack traces call it: `at main (app.js:12:5)` rather than `<eval>`.
 (see [Deadlines](embedding.md#deadlines)).
 
 An interruption is deliberately **not** catchable from script, so a sandboxed
-program cannot defeat its own timeout with `try`/`catch`. A catastrophically
-backtracking regular expression fails with an error rather than stalling.
+program cannot defeat its own timeout with `try`/`catch`. A regular
+expression that backtracks catastrophically is stopped as any other long
+computation is: where the host can stop it -- a context with a deadline or
+a cancel, an abort -- a match runs, as in V8, until the host does, and is
+asked whether to stop every few thousand steps of its work, a backreference
+counting a step for each character it compares. Where the host can stop
+nothing, the match gives up on its own after a hundred million steps, about
+a second, with a `SyntaxError` ("regular expression is too complex"). A
+host that sets a context without a deadline, as one that only listens for
+signals does, has given it no limit: give the runtime a deadline for one.
 
 A runtime a sandbox runs should not be made `WithDebugger`: whoever attaches a
 debugger to it can read and change anything the script can, and run code of

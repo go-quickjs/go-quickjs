@@ -30,7 +30,10 @@ var ErrComplexity = errors.New("regular expression is too complex")
 //
 // The figure is large enough that no reasonable pattern reaches it -- matching
 // a megabyte of text with a linear pattern costs a few million steps -- and
-// small enough that a pathological one fails in well under a second.
+// small enough that a pathological one fails within a second: /(a+)+b/
+// against a hundred a's in 0.6 s. A step is an instruction, or a character
+// a run or a backreference reads, so that one instruction cannot do many
+// steps' work for the price of one.
 const maxSteps = 100_000_000
 
 // checkInterval is how many steps a matcher with a check takes between asking
@@ -128,10 +131,15 @@ type matcher struct {
 	// began an iteration.
 	emptyMarks []int
 
+	// steps is the work done, a step for each instruction and one for each
+	// character a run or a backreference reads at once.
 	steps int
 	// check, when there is one, is asked every checkInterval steps whether to
-	// stop, and the step budget does not apply.
-	check func() error
+	// stop, and the step budget does not apply. checkAt is the step count it
+	// is next asked at: steps grows by more than one at a time, so a count
+	// it divides may be stepped over.
+	check   func() error
+	checkAt int
 	// busy marks the matcher a pattern lends out, so that a pattern used again
 	// while a match is running does not have its state overwritten.
 	busy bool
@@ -218,7 +226,7 @@ func (re *Regexp) exec(dst []int, units []uint16, start int, check func() error,
 	// The budget is what this attempt may spend, so it starts again here: a
 	// matcher is lent out over and over, and a pattern that had spent its
 	// budget once would have been refused for the rest of the program.
-	m.steps = 0
+	m.steps, m.checkAt = 0, checkInterval
 	m.busy = true
 	defer func() {
 		m.busy = false
@@ -366,7 +374,8 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 	for {
 		m.steps++
 		if m.check != nil {
-			if m.steps%checkInterval == 0 {
+			if m.steps >= m.checkAt {
+				m.checkAt = m.steps + checkInterval
 				if err := m.check(); err != nil {
 					return false, err
 				}
@@ -535,6 +544,10 @@ func (m *matcher) run(code []instr, pos int) (bool, error) {
 			} else if pos+n > m.in.length() {
 				goto backtrack
 			}
+			// The comparison reads n characters, which is n steps of work:
+			// charged as one, a backreference let a pattern run for many
+			// times its budget.
+			m.steps += n
 			if !m.compareRange(start, at, n, in.op == opBackrefFold) {
 				goto backtrack
 			}
@@ -804,6 +817,7 @@ func (m *matcher) runLook(idx, pos int) (bool, error) {
 		counters:   make([]int, m.prog.counters),
 		emptyMarks: make([]int, m.prog.emptyChecks),
 		steps:      m.steps,
+		checkAt:    m.checkAt,
 		check:      m.check,
 	}
 	for i := range sub.emptyMarks {
@@ -814,7 +828,7 @@ func (m *matcher) runLook(idx, pos int) (bool, error) {
 	// lookbehind's position like any other sub-program and walks back from
 	// there.
 	ok, err := sub.run(look.code, pos)
-	m.steps = sub.steps
+	m.steps, m.checkAt = sub.steps, sub.checkAt
 	if err != nil {
 		m.trail = sub.trail
 		return false, err
