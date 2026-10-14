@@ -45,6 +45,27 @@ type arrayOut struct {
 	holes int64
 }
 
+// plainSpecies reports whether ArraySpeciesCreate would make a plain array
+// for o, an array of the realm's (plainArray), without asking anything that
+// could run code: o has no constructor of its own, Array.prototype's is the
+// realm's Array, and Array's Symbol.species is its getter as it was made,
+// which answers Array. The lookup it saves reads the constructor and calls
+// the getter at every call of a method that makes an array.
+func (r *Runtime) plainSpecies(o *Object) bool {
+	if o.findOwn(atomConstructor) >= 0 {
+		return false
+	}
+	if c := r.proto.array.getOwn(atomConstructor); !c.ok() || c.flags()&propAccessor != 0 || !c.value().IsObject() || c.value().Object() != r.proto.arrayCtor {
+		return false
+	}
+	sp := r.proto.arrayCtor.getOwn(r.atoms.internSymbol(r.wellKnown.species))
+	if !sp.ok() || sp.flags()&propAccessor == 0 {
+		return false
+	}
+	a := sp.value().accessorPair()
+	return a != nil && a.getter == r.proto.arraySpecies
+}
+
 // arraySpeciesCreate makes the array a method's result goes into.
 //
 // It is small enough to be inlined, so that the result of a method that

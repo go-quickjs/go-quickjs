@@ -578,11 +578,13 @@ func (r *Runtime) speciesConstructor(o *Object, fallback *Object) (Value, error)
 }
 
 // defSpecies gives a constructor the Symbol.species accessor, which by default
-// simply hands back the constructor a method was reached through.
-func (r *Runtime) defSpecies(ctor *Object) {
+// simply hands back the constructor a method was reached through, and
+// returns its getter.
+func (r *Runtime) defSpecies(ctor *Object) *Object {
 	get := r.newNativeFunc("get [Symbol.species]", 0,
 		func(rt *Runtime, this Value, args []Value) (Value, error) { return this, nil })
 	r.defineAccessor(ctor, r.atoms.internSymbol(r.wellKnown.species), get, nil, propConfigurable)
+	return get
 }
 
 // promiseThenSpecies is then with the result built by the species constructor,

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"math"
 	"math/bits"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -37,6 +38,9 @@ func (r *Runtime) initArrayExtras2() {
 	p := r.proto.array
 
 	r.defMethod(p, "splice", 2, func(rt *Runtime, this Value, args []Value) (Value, error) {
+		if v, ok := rt.spliceDense(this, args); ok {
+			return v, nil
+		}
 		a, err := rt.viewArrayLike(this)
 		if err != nil {
 			return Undefined, err
@@ -1517,4 +1521,41 @@ func (r *Runtime) arrayLikeToLocaleString(this Value, n int64, locale []Value) (
 		sb.WriteString(s.Go())
 	}
 	return Str(NewString(sb.String())), nil
+}
+
+// spliceDense is splice where it is a move of a dense array's elements: an
+// array of the realm's (plainArray), extensible and with its length
+// writable, whose prototypes have no element a setter could be asked about
+// (noInheritedIndices), whose species makes a plain array (plainSpecies),
+// and whose start and count are numbers, which converting runs nothing.
+// What it removes is the new array's elements, holes as they were, and the
+// rest move over by as many as it inserts, in one copy: element by element
+// through the property protocol, each of PDF.js's charstring splices, which
+// replace one element with two or three, had cost a couple of
+// microseconds. It reports false for any other, which the protocol makes.
+func (r *Runtime) spliceDense(this Value, args []Value) (Value, bool) {
+	o := r.plainArray(this)
+	if o == nil || len(args) < 2 || !args[0].IsNumber() || !args[1].IsNumber() ||
+		o.flags&(objExtensible|objArrayLengthWritable) != objExtensible|objArrayLengthWritable ||
+		!r.noInheritedIndices(o) || !r.plainSpecies(o) {
+		return Undefined, false
+	}
+	elems := o.elemsOf()
+	n := int64(len(elems))
+	start, err := r.relativeIndex64(args[0], n, 0)
+	if err != nil {
+		return Undefined, false
+	}
+	c, err := r.toInteger(args[1])
+	if err != nil {
+		return Undefined, false
+	}
+	remove := int64(clampFloatIndex(c, int(n-start)))
+	inserted := args[2:]
+	if n+int64(len(inserted))-remove > maxArrayLength {
+		return Undefined, false
+	}
+	out := r.newArrayFrom(elems[start : start+remove])
+	o.extOf().elems = slices.Replace(elems, int(start), int(start+remove), inserted...)
+	return Obj(out), true
 }
