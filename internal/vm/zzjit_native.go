@@ -1321,6 +1321,22 @@ func (s *jitState) linkFor(fn *bytecode.Function, e *jitEntry) {
 	e.link = l
 }
 
+// linkOf is fn's link, made, with no entry, if it has none: what a caller's
+// code calls fn through before fn has code (ExitEnter until then).
+func (s *jitState) linkOf(fn *bytecode.Function) *jitLink {
+	key := weak.Make(fn)
+	if l := s.links[key]; l != nil {
+		return l
+	}
+	if s.links == nil {
+		s.links = map[weak.Pointer[bytecode.Function]]*jitLink{}
+	}
+	l := &jitLink{key: key, params: uint64(fn.ParamCount), locals: uint64(fn.LocalCount),
+		frame: uint64(fn.LocalCount + fn.MaxStack), flags: jitLinkFlags(fn)}
+	s.links[key] = l
+	return l
+}
+
 // jitLinkFlags are fn's link's flags (abi.LinkCoerce...): a function a
 // generic call may not make is one native callers do not call natively
 // at a call compiled for it either -- an arrow that reads this, which is

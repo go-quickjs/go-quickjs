@@ -1399,8 +1399,11 @@ type jitFeedback struct {
 	pools   []*abi.ObjectPool
 	// wanted are callees of calls to inline that the compile made calls
 	// instead -- past its budget (ssa's maxInlines) -- which had no code
-	// for native callers: compiled after it (jitWantedCallees).
-	wanted []*closure
+	// for native callers: compiled after it (jitWantedCallees). linked
+	// are the callees it calls through their links before they have code,
+	// compiled after it too, which native code then calls, the caller's code
+	// as it is.
+	wanted, linked []*closure
 	// values is how many values the compile made (ssa.Func.NumValues),
 	// which its entry's instrs measures it by (jitCompiledInstrs).
 	values int
@@ -1749,12 +1752,29 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 		// Only looked up: a compile here would share the workspaces of the
 		// one asking. jitCallSeen compiled it.
 		ce := fb.r.jit.entryFor(in.cl.fn)
-		if ce == nil || ce.ssa == nil {
-			if (ce == nil || ce.ssa == nil) && !slices.Contains(fb.wanted, in.cl) {
+		var link *jitLink
+		switch {
+		case ce != nil && ce.ssa != nil:
+			link = ce.link
+		case ce != nil && (ce.calleeRefused || ce.ssaCallee):
+			// Refused for good: Go makes its calls.
+			if !slices.Contains(fb.wanted, in.cl) {
 				k := fb.keep()
 				k.wanted = append(k.wanted, in.cl)
 			}
 			continue
+		case !fb.r.jitLinkable(in.cl):
+			// Go makes its calls until it has code.
+			if !slices.Contains(fb.wanted, in.cl) {
+				k := fb.keep()
+				k.wanted = append(k.wanted, in.cl)
+			}
+			continue
+		default:
+			link = fb.r.jit.linkOf(in.cl.fn)
+			if k := fb.keep(); !slices.Contains(k.linked, in.cl) {
+				k.linked = append(k.linked, in.cl)
+			}
 		}
 		call, fn := jitCallInstr(fb.fn.Code[pc]), in.cl.fn
 		// The call is made through the function's link (jitLink), to
@@ -1765,11 +1785,11 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 		if fn.UsesThis {
 			this = fn.LocalCount + len(fn.Upvalues)
 		}
-		fb.links = append(fb.links, ce.link)
+		fb.links = append(fb.links, link)
 		fb.holders = append(fb.holders, in.obj)
 		site := ssa.CallSite{
 			Callee: uintptr(unsafe.Pointer(in.obj)), Closure: uintptr(unsafe.Pointer(in.cl)),
-			Entry: uintptr(unsafe.Pointer(&ce.link.entry)), Count: uintptr(unsafe.Pointer(&ce.link.in)),
+			Entry: uintptr(unsafe.Pointer(&link.entry)), Count: uintptr(unsafe.Pointer(&link.in)),
 			Argc: int(call.A), Method: call.Op == bytecode.OpCallMethod,
 			Params: fn.ParamCount, LocalCount: fn.LocalCount, MaxStack: fn.MaxStack, ThisSlot: this, Coerce: fn.CoerceThis,
 		}
@@ -2014,7 +2034,7 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 	if in.Op == bytecode.OpNew && !r.jitConstructs(o) {
 		return
 	}
-	if r.jitNativeCallee(cl) != nil {
+	if r.jitNativeOrLinked(cl) {
 		e.nativeCalls = append(e.nativeCalls, r.jitNativeTarget(int32(pc), cl, o, in))
 		e.callSites[pc] = jitCallNative
 		e.inlinePending = true
@@ -3164,6 +3184,10 @@ func (r *Runtime) jitSeedCalls(cl *closure, e *jitEntry, p *ir.Program) {
 			// (jitSeedCallee). How often it was called is not known: the
 			// tree tier may run a call without one (closure.jitCalls).
 			if ce = r.jitSeedCallee(callee); ce == nil {
+				if r.jitLinkable(callee) {
+					e.nativeCalls = append(e.nativeCalls, r.jitNativeTarget(int32(pc), callee, o, in))
+					e.callSites[pc] = jitCallNative
+				}
 				continue
 			}
 			if callee.fn != fn && r.jitInlinesAt(callee, o, in) {
@@ -3306,7 +3330,7 @@ func (r *Runtime) jitSeedNativeCalls(e *jitEntry, fn *bytecode.Function, pc int,
 		}
 		ce := r.jit.entryFor(cf)
 		if ce == nil || ce.ssa == nil {
-			if ce = r.jitSeedCallee(t.cl); ce == nil {
+			if ce = r.jitSeedCallee(t.cl); ce == nil && !r.jitLinkable(t.cl) {
 				continue
 			}
 		}
@@ -3606,7 +3630,7 @@ func (r *Runtime) jitInlinedCalls(e *jitEntry, pc int, o *Object, cl *closure, i
 			e.nativeCalls = append(e.nativeCalls, jitInline{pc: x.pc, cl: x.cl, obj: x.obj, pool: x.pool, byCode: byCode})
 		}
 	}
-	if !same && (in.Op != bytecode.OpNew || r.jitConstructs(o)) && r.jitNativeCallee(cl) != nil {
+	if !same && (in.Op != bytecode.OpNew || r.jitConstructs(o)) && r.jitNativeOrLinked(cl) {
 		e.nativeCalls = append(e.nativeCalls, r.jitNativeTarget(int32(pc), cl, o, in))
 	}
 }
@@ -3674,10 +3698,41 @@ func (r *Runtime) jitCallTarget(f *frame, e *jitEntry, pc, sp int, in bytecode.I
 	if n >= jitCallTargets || in.Op == bytecode.OpNew && !r.jitConstructs(o) {
 		return
 	}
-	if ce := r.jitNativeCallee(cl); ce != nil {
+	if r.jitNativeOrLinked(cl) {
 		e.nativeCalls = append(e.nativeCalls, r.jitNativeTarget(int32(pc), cl, o, in))
 		e.inlineReopt = true
 	}
+}
+
+// jitNativeOrLinked compiles cl's function for native callers, or reports
+// whether a native call may call it through its link before it has code:
+// one not refused for good, which native code calls with ExitEnter until
+// it is compiled (jitEnterCallee).
+func (r *Runtime) jitNativeOrLinked(cl *closure) bool {
+	return r.jitNativeCallee(cl) != nil || r.jitLinkable(cl)
+}
+
+// jitLinkable reports whether native callers may call cl's function
+// through its link with no code yet: one Go runs from the frame native code
+// made (abi.ExitEnter), its arguments in its parameters' locals, as a
+// generic call makes it (jitLinkFlags) -- not one whose frame is more, an
+// arguments object's or a rest parameter's, which that frame would lose.
+func (r *Runtime) jitLinkable(cl *closure) bool {
+	fn := cl.fn
+	if fn.TopLevel || fn.IsModule || fn.UsesArguments || fn.HasDirectEval || isGeneratorTemplate(fn) ||
+		jitLinkFlags(fn)&abi.LinkNotGeneric != 0 {
+		return false
+	}
+	ce := r.jit.entryFor(fn)
+	if ce != nil && (ce.ssa != nil || ce.calleeRefused) {
+		return ce != nil && ce.ssa != nil
+	}
+	// Nor one whose program native callers' code cannot be compiled from
+	// (LowerSSAInline), for good: a call through its link would have Go
+	// make its frame at every call (ExitEnter), not the call -- AWFY's
+	// Json's readValue, which the lowering refuses, so 60,000 times.
+	_, err := r.jitLower(fn, jitLowerInline)
+	return err == nil
 }
 
 // jitIndexSeen notes an element read at pc that left native code, its
@@ -4295,11 +4350,25 @@ func (r *Runtime) jitNativeCallee(cl *closure) *jitEntry {
 // budget for upgrades (jitInlineReoptimizations). Not inside another
 // compile, whose workspaces a compile would share, nor a compile of these.
 func (r *Runtime) jitWantedCallees(e *jitEntry, fb *jitFeedback) {
-	if len(fb.wanted) == 0 || r.jit.seeding != 0 || e.upgradeReopts >= jitInlineReoptimizations {
+	if len(fb.wanted) == 0 && len(fb.linked) == 0 || r.jit.seeding != 0 {
 		return
 	}
 	r.jit.seeding = jitSeedDepth
 	defer func() { r.jit.seeding = 0 }()
+	for _, cl := range fb.linked {
+		// Called through its link: native from its first compile on, which
+		// is now, as for a callee wanted, but with no compile of the
+		// caller's. One that does not compile, for good, Go calls: the
+		// caller is compiled again for that, a call through a link with no
+		// code having Go make its frame (ExitEnter) at every call -- AWFY's
+		// Json, its callees' calls so, had left native code 60,000 times.
+		if r.jitNativeCallee(cl) == nil && !r.jitLinkable(cl) {
+			e.upgradeReopt = true
+		}
+	}
+	if e.upgradeReopts >= jitInlineReoptimizations {
+		return
+	}
 	for _, cl := range fb.wanted {
 		if r.jitNativeCallee(cl) != nil {
 			e.upgradeReopt = true

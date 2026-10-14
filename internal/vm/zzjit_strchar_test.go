@@ -108,3 +108,38 @@ func TestJITLengths(t *testing.T) {
 		log.join()`
 	jitDifferential(t, src)
 }
+
+// A native call links to its callee before the callee has code: native code
+// calls it with abi.ExitEnter, Go running it from the frame native code
+// made, until it is compiled, and natively from then on, the caller not
+// compiled again. Not a callee whose frame is more than its arguments in
+// its parameters -- an arguments object, a rest parameter, defaults,
+// destructuring -- which that frame would lose: Go makes those calls. Each
+// answer is the interpreter's, in every tier and under every stress
+// setting, the loop compiled before any callee is called.
+func TestJITCallsLinkedBeforeCode(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const src = `
+		function plain(a, b) { return a * 3 + b }
+		function args() { let s = 0; for (let i = 0; i < arguments.length; i++) s += arguments[i]; return s }
+		function rest(a, ...xs) { return a + xs.length * 10 + (xs[1] | 0) }
+		function defaults(a, b = 7) { return a - b }
+		function destructures({x, y}, [z]) { return x * y + z }
+		function loop(n, late) {
+			let s = 0
+			for (let i = 0; i < n; i++) {
+				s = (s + plain(i, 1)) | 0
+				if (i >= late) {
+					s = (s + args(i, 2, 3) + rest(i, 4, 5, 6) + defaults(i) + defaults(i, 1)) | 0
+					s = (s + destructures({x: i, y: 2}, [3])) | 0
+				}
+			}
+			return s
+		}
+		const log = []
+		for (let r = 0; r < 12; r++) log.push(loop(400, r < 6 ? 1000 : 200))
+		log.join()`
+	jitDifferential(t, src)
+}
