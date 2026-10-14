@@ -3480,6 +3480,42 @@ func (c *a64Compiler) codeChar(v *ssa.Value, guard func(arm64.Cond)) {
 	c.charCell(v, guard)
 }
 
+// oddball is ssa.OpOddballF64, as amd64's. It uses A.
+func (c *a64Compiler) oddball(v *ssa.Value, fail func(arm64.Cond)) {
+	r := c.gpr(v.Args[0], a64B)
+	d := c.fdst(v)
+	done, tagged, zero := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	c.a.ShiftImm(arm64.Lsr, a64A, r, 51, true)
+	c.a.CmpImm(a64A, 0x1FFF, false)
+	c.a.BCond(arm64.EQ, tagged)
+	c.a.FMovToF(d, r)
+	c.a.B(done)
+	c.a.Bind(tagged)
+	for _, k := range []struct {
+		word, bits uint64
+	}{{c.enc.Undefined, 0x7FF8000000000000}, {c.enc.True, 0x3FF0000000000000}} {
+		next := c.a.NewLabel()
+		c.movImm(a64A, k.word)
+		c.a.Cmp(r, a64A, true)
+		c.a.BCond(arm64.NE, next)
+		c.movImm(a64A, k.bits)
+		c.a.FMovToF(d, a64A)
+		c.a.B(done)
+		c.a.Bind(next)
+	}
+	c.movImm(a64A, c.enc.Null)
+	c.a.Cmp(r, a64A, true)
+	c.a.BCond(arm64.EQ, zero)
+	c.movImm(a64A, c.enc.False)
+	c.a.Cmp(r, a64A, true)
+	fail(arm64.NE)
+	c.a.Bind(zero)
+	c.movImm(a64A, 0)
+	c.a.FMovToF(d, a64A)
+	c.a.Bind(done)
+	c.setF(v, d)
+}
+
 // freeze is ssa.OpFreeze, as amd64's. It uses A to C.
 func (c *a64Compiler) freeze(v *ssa.Value) {
 	x := v.Args[0]
@@ -3935,6 +3971,8 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		d := c.fdst(v)
 		c.a.FMovToF(d, r)
 		c.setF(v, d)
+	case ssa.OpOddballF64:
+		c.oddball(v, guard)
 	case ssa.OpCheckInit:
 		r := c.gpr(arg(0), a64B)
 		c.movImm(a64A, c.enc.Uninitialized)

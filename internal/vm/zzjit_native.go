@@ -2799,6 +2799,33 @@ func (r *Runtime) jitDeoptInterpret(f *frame, sp int, code *jit.SSACode) (Value,
 	return r.jitInterpretAfter(f, sp, nil, code)
 }
 
+// jitDeoptRun is jitDeoptInterpret for the run of e's code Go is inside,
+// the innermost, which a failed guard left: the run is over, its frame
+// going on in the interpreter and never in this code again, and is no run
+// of it meanwhile (ssaRuns, runEntries), so that the code is compiled again
+// for what made it leave -- at a loop's next back edge, where the
+// interpreter enters it again (tryJITAt), as V8 enters code optimized
+// again at a loop. Counted a run, the code had been entered again as it
+// was (otherwiseInUse), failing again, each failure one run deeper:
+// PDF.js's font decryption, for each font, deoptimized seven times, and
+// ran its loop in the interpreter thousands of back edges after that,
+// its code waiting for the next call. The run is counted again before it
+// ends (jitRunDone), however the interpreter leaves.
+func (r *Runtime) jitDeoptRun(f *frame, e *jitEntry, sp int) (Value, error, bool) {
+	s := r.jit
+	n := len(s.runEntries) - 1
+	if n < 0 || s.runEntries[n] != e {
+		return r.jitDeoptInterpret(f, sp, e.ssa)
+	}
+	e.ssaRuns--
+	s.runEntries[n] = nil
+	defer func() {
+		e.ssaRuns++
+		s.runEntries[n] = e
+	}()
+	return r.jitDeoptInterpret(f, sp, e.ssa)
+}
+
 // jitInterpretAfter has the interpreter go on with f from sp, the code
 // that a failed guard left it, if any, kept from taking it back.
 func (r *Runtime) jitInterpretAfter(f *frame, sp int, pending error, code *jit.SSACode) (Value, error, bool) {

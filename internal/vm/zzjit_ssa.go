@@ -2261,6 +2261,28 @@ func jitHostCall(ctx *abi.Context) bool {
 		}
 		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
 		return true
+	case ssa.GoCompare:
+		// A relational comparison of primitives, which converts them
+		// without calling anything (jitPlainOperand): its boolean.
+		a, b := jitGoArg(ctx, 0), jitGoArg(ctx, 1)
+		if !jitPlainOperand(a) || !jitPlainOperand(b) {
+			return false
+		}
+		c, err := r.compare(a, b)
+		if err != nil {
+			return false
+		}
+		op := bytecode.OpGe
+		switch ir.Operator(ctx.GoOp >> abi.GoOpIndexShift) {
+		case ir.Lt:
+			op = bytecode.OpLt
+		case ir.Le:
+			op = bytecode.OpLe
+		case ir.Gt:
+			op = bytecode.OpGt
+		}
+		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = Bool(relationalResult(op, c))
+		return true
 	case ssa.GoAppend:
 		// A loop's string builder's s += x (jitAppend): what GoAdd takes,
 		// a string's grown in place or made a builder of.
@@ -3974,23 +3996,38 @@ func (r *Runtime) jitIndexSeen(e *jitEntry, pc int, o, k Value) {
 		// -- PDF.js's map[command], stored to an array's element -- and is
 		// read as it is from the next lowering on (jitcompile.Hints'
 		// ElementReads), and as a string's, or by Go (keyedReads).
+		// A string read so, a string's character or an array's element,
+		// is a hint of its own (StringReads): the additions of it are Go's
+		// from the same lowering on, not learned an exit each.
 		keyed := o.IsObject() && k.IsString()
-		if keyed {
+		chars := o.IsString() && k.IsNumber()
+		l := r.jit.lowering(e.link.key.Value())
+		switch {
+		case keyed:
 			if _, ok := r.jitKeyedRead(o, k); !ok {
 				return
 			}
-		} else if !o.IsString() || !k.IsNumber() {
+		case o.IsObject() && k.IsNumber():
+			// An array's element that is a string, read as it is from the
+			// next compile on anyway, its guard having failed.
+			if v, ok := r.jitKeyedRead(o, k); !ok || !v.IsString() || slices.Contains(l.hints.StringReads, int32(pc)) {
+				return
+			}
+		case !chars:
 			return
 		}
-		l := r.jit.lowering(e.link.key.Value())
-		before := jitCapBytes(l.hints.ElementReads)
-		l.hints.ElementReads = append(l.hints.ElementReads, int32(pc))
-		l.bytes += jitCapBytes(l.hints.ElementReads) - before
-		r.jit.lowerBytes += jitCapBytes(l.hints.ElementReads) - before
+		hint := &l.hints.ElementReads
+		if !keyed {
+			hint = &l.hints.StringReads
+		}
+		before := jitCapBytes(*hint)
+		*hint = append(*hint, int32(pc))
+		l.bytes += jitCapBytes(*hint) - before
+		r.jit.lowerBytes += jitCapBytes(*hint) - before
 		r.jit.relower(l)
 		if keyed {
 			e.keyedReads = append(e.keyedReads, int32(pc))
-		} else {
+		} else if chars {
 			e.stringReads = append(e.stringReads, int32(pc))
 		}
 		if !e.feedReopt {
@@ -6148,9 +6185,22 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			// time, until none were left: PDF.js's createTableEntry then
 			// deoptimized at every invocation.
 			r.jitStringAddSeen(f, e, int(ctx.ExitPC))
+			// So is an element read that met a string, or an object's
+			// property by its name, as at a host exit (jitIndexSeen): a read
+			// compiled before it ran, as a typed array's or an array's, had
+			// been compiled again a guard at a time -- an array's element
+			// as a number, then as it is, then a string's -- each failure
+			// leaving the rest of its invocation to the interpreter: PDF.js's
+			// font decryption's tokenizer, compiled before it ran, at each
+			// font.
+			if in := f.cl.fn.Code[ctx.ExitPC]; in.Op == bytecode.OpGetIndex || in.Op == bytecode.OpGetIndexThis || in.Op == bytecode.OpGetLocalIndex {
+				if o, k, ok := r.jitIndexOperands(f, in, f.base+int(ctx.ExitDepth)); ok {
+					r.jitIndexSeen(e, int(ctx.ExitPC), o, k)
+				}
+			}
 			jitDeoptimized(e, ctx, start)
 			f.pc = uint32(ctx.ExitPC)
-			return r.jitDeoptInterpret(f, f.base+int(ctx.ExitDepth), e.ssa)
+			return r.jitDeoptRun(f, e, f.base+int(ctx.ExitDepth))
 		case abi.ExitHost:
 			// Go runs the one instruction, then native code goes on from the
 			// next entry, if there is one.

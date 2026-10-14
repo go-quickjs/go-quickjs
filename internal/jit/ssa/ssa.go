@@ -156,6 +156,12 @@ const (
 	// that nothing appends to it in place after this, where a loop's
 	// builder is used outside the loop (stringBuilders). It writes no cell.
 	OpFreeze // tagged -> none
+	// OpOddballF64 is OpUnboxF64 that converts undefined, null and the
+	// booleans too, as ToNumber does -- NaN, 0, 0 and 1 -- and exits for
+	// anything else: an arithmetic, relational, bitwise or unary operator's
+	// operand once its guard has failed, as V8's code truncates a number
+	// or an oddball. Not equality's, for which undefined == null.
+	OpOddballF64 // tagged -> f64
 
 	// Boxing: a typed value as a slot value.
 	OpBoxF64
@@ -347,7 +353,7 @@ var opNames = [...]string{
 	OpUnboxF64: "unbox", OpTruth: "truth", OpCheckInit: "checkinit", OpBoxF64: "boxf", OpBoxBool: "boxb",
 	OpArrayOf: "arrayof", OpIndexedOf: "indexedof", OpElemKey: "elemkey", OpElemRead: "elemread", OpElemWrite: "elemwrite", OpElemCell: "elemcell", OpElemStore: "elemstore", OpLength: "length",
 	OpObjectOf: "objectof", OpPropRead: "propread", OpPropWrite: "propwrite", OpPropCell: "propcell", OpLoadCell: "loadcell", OpGlobalCell: "globalcell", OpLexCell: "lexcell", OpBindingCell: "bindingcell",
-	OpStringMethod: "stringmethod", OpStringProp: "stringprop", OpStringCode: "stringcode", OpStringChar: "stringchar", OpCodeChar: "codechar", OpFreeze: "freeze",
+	OpStringMethod: "stringmethod", OpStringProp: "stringprop", OpStringCode: "stringcode", OpStringChar: "stringchar", OpCodeChar: "codechar", OpFreeze: "freeze", OpOddballF64: "oddball",
 	OpAddF64: "addf", OpSubF64: "subf", OpMulF64: "mulf", OpDivF64: "divf", OpModF64: "modf", OpNegF64: "negf", OpCmpF64: "cmpf",
 	OpNot: "not", OpStrictNullish: "strictnullish", OpLooseNullish: "loosenullish", OpEqTagged: "eqtagged", OpToInt32: "toi32", OpAndI32: "and", OpOrI32: "or", OpXorI32: "xor", OpShlI32: "shl",
 	OpSarI32: "sar", OpShrU32: "shr", OpNotI32: "noti", OpI32ToF64: "i2f", OpU32ToF64: "u2f",
@@ -369,7 +375,7 @@ func (o Op) String() string {
 // isGuard reports whether an op exits when its operand is not what it needs.
 func (o Op) isGuard() bool {
 	switch o {
-	case OpUnboxF64, OpTruth, OpCheckInit, OpModF64, OpArrayOf, OpIndexedOf, OpElemKey, OpElemRead, OpElemWrite, OpElemCell, OpElemStore, OpLength,
+	case OpUnboxF64, OpOddballF64, OpTruth, OpCheckInit, OpModF64, OpArrayOf, OpIndexedOf, OpElemKey, OpElemRead, OpElemWrite, OpElemCell, OpElemStore, OpLength,
 		OpObjectOf, OpPropRead, OpPropWrite, OpPropCell, OpGlobalCell, OpLexCell, OpBindingCell, OpStringMethod, OpStringProp, OpStringCode, OpStringChar, OpCodeChar, OpLooseNullish, OpEqTagged,
 		OpSameObject, OpSameSymbol, OpIterClosed, OpFrameRoom, OpTailRoom, OpTailSelf, OpCall, OpInstanceOf, OpTypeIs, OpCheckTrue, OpPowF64:
 		return true

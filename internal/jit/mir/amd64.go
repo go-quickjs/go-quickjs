@@ -3753,6 +3753,45 @@ func (c *compiler) codeChar(v *ssa.Value, guard func(amd64.Cond)) {
 	c.charCell(v, guard)
 }
 
+// oddball is ssa.OpOddballF64: v's operand's number, an oddball's as
+// ToNumber makes it -- NaN for undefined, 0 for null and false, 1 for true
+// -- into xScratch0 and v's register; anything else fails. It uses
+// scratchA.
+func (c *compiler) oddball(v *ssa.Value, fail func(amd64.Cond)) {
+	r := c.gpr(v.Args[0], scratchB)
+	done, tagged, zero := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+	c.a.MovRR(scratchA, r)
+	c.a.ShiftImm(amd64.Shr, scratchA, 51, true)
+	c.a.OpImm(amd64.Cmp, scratchA, 0x1FFF, false)
+	c.a.Jcc(amd64.CondE, tagged)
+	c.a.MovQToX(xScratch0, r)
+	c.a.Jmp(done)
+	c.a.Bind(tagged)
+	for _, k := range []struct {
+		word, bits uint64
+	}{{c.enc.Undefined, 0x7FF8000000000000}, {c.enc.True, 0x3FF0000000000000}} {
+		next := c.a.NewLabel()
+		c.movImm(scratchA, k.word)
+		c.a.Op(amd64.Cmp, r, scratchA, true)
+		c.a.Jcc(amd64.CondNE, next)
+		c.movImm(scratchA, k.bits)
+		c.a.MovQToX(xScratch0, scratchA)
+		c.a.Jmp(done)
+		c.a.Bind(next)
+	}
+	c.movImm(scratchA, c.enc.Null)
+	c.a.Op(amd64.Cmp, r, scratchA, true)
+	c.a.Jcc(amd64.CondE, zero)
+	c.movImm(scratchA, c.enc.False)
+	c.a.Op(amd64.Cmp, r, scratchA, true)
+	fail(amd64.CondNE)
+	c.a.Bind(zero)
+	c.movImm(scratchA, 0)
+	c.a.MovQToX(xScratch0, scratchA)
+	c.a.Bind(done)
+	c.setX(v, xScratch0)
+}
+
 // freeze is ssa.OpFreeze: the building byte of the string v's operand is,
 // if it is one, cleared; nothing else is touched. It uses scratchA to
 // scratchC.
@@ -4270,6 +4309,8 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		guard(amd64.CondE)
 		c.a.MovQToX(xScratch0, r)
 		c.setX(v, xScratch0)
+	case ssa.OpOddballF64:
+		c.oddball(v, guard)
 	case ssa.OpCheckInit:
 		r := c.gpr(arg(0), scratchB)
 		c.movImm(scratchA, c.enc.Uninitialized)

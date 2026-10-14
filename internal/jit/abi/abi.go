@@ -849,8 +849,9 @@ func IsNumber(word uint64) bool { return word < NumberLimit }
 // profit, as it does not count an exit the marking made (ExitMarking).
 //
 // GoOpIndexShift is where a closure's (ssa.GoClosure) is the index of its
-// function's constant, and a scope's end's (ssa.GoClose) the first local it
-// closes, in the high half.
+// function's constant, a scope's end's (ssa.GoClose) the first local it
+// closes, and a comparison's (ssa.GoCompare) its ir.Operator, in the high
+// half.
 const (
 	GoOpArgcShift  = 8
 	GoOpKindShift  = 16

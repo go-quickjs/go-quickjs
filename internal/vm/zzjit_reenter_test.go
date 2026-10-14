@@ -1,0 +1,212 @@
+//go:build quickjs_jit && !android && !ios && ((linux && amd64) || (windows && amd64) || (darwin && arm64))
+
+package vm
+
+import "testing"
+
+// jitLongRunForTest runs setup, warms what it defines by running warm ten
+// times, and runs src once, returning its result as a string and what the
+// JIT counted meanwhile: Guards, the deoptimizations, and Hosts, the exits
+// Go ran an instruction at.
+func jitLongRunForTest(t *testing.T, setup, warm, src string) (string, JITStats) {
+	t.Helper()
+	r := New(Config{JIT: true})
+	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	if r.jitCallThreshold <= 1 {
+		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
+	}
+	if _, err := r.Run(compileForTest(t, setup)); err != nil {
+		t.Fatal(err)
+	}
+	for range 10 {
+		if _, err := r.Run(compileForTest(t, warm)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	code := compileForTest(t, src)
+	before := r.JITStats()
+	v, err := r.Run(code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := r.JITStats()
+	s, err := r.ToString(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s.Go(), JITStats{Guards: after.Guards - before.Guards, Hosts: after.Hosts - before.Hosts}
+}
+
+// A long invocation whose loop fails a guard its code was compiled with
+// goes on in code compiled again for what failed, entered at the loop's
+// next back edge, as V8 enters code optimized again: the run that left is
+// no run of the code while the interpreter goes on with its frame. Counted
+// one, the code had been entered again as it was, failing again at every
+// back edge the interpreter offered it, each failure one run deeper.
+func TestJITDeoptRecompilesWithinTheInvocation(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	got, st := jitLongRunForTest(t, `
+		function f(a, n) {
+			let s = 0
+			for (let i = 0; i < n; i++) s += a[i % a.length]
+			return typeof s + ':' + (typeof s === 'string' ? s.length : s)
+		}`, `f([1, 2, 3], 3000)`, `f(['ab', 'c'], 200000)`)
+	if got != "string:300001" {
+		t.Fatalf("= %s", got)
+	}
+	// Compiled again at most jitReoptimizations times for what failed;
+	// left at a failed guard about once a compile.
+	if st.Guards > 2*jitReoptimizations {
+		t.Errorf("200,000 iterations of one invocation deoptimized %d times", st.Guards)
+	}
+}
+
+// An element read compiled before it ran, as a number for an addition
+// with no feedback yet, that meets a string learns at the deoptimization
+// that it reads a string's character (jitIndexSeen), as a host exit does,
+// and is compiled so next, where the compiles that made it generic a guard
+// at a time had taken one each -- an array's element as a number, then as
+// it is, then a string's. PDF.js's font decryption builds a string in one
+// loop, compiled at its back edge, and tokenizes it in the next, which
+// the code was compiled for before it ran.
+func TestJITStringReadLearnedAtDeopt(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	got, st := jitLongRunForTest(t, `
+		function tokens(bytes) {
+			let s = ''
+			for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i])
+			let token = '', n = 0
+			for (let i = 0; i < s.length; i++) {
+				const c = s[i]
+				if (c === ' ') { n += token.length; token = '' } else token += c
+			}
+			return n + token.length
+		}
+		const bytes = []
+		for (let i = 0; i < 100000; i++) bytes.push(i % 7 ? 160 + i % 90 : 32)`, `0`, `tokens(bytes)`)
+	if got != "85714" {
+		t.Fatalf("= %s", got)
+	}
+	// Read natively once learned; read by Go, paced by the code's profit,
+	// the loop had run mostly in the interpreter.
+	if st.Guards > 4 || st.Hosts > 8 {
+		t.Errorf("tokenizing 100,000 characters deoptimized %d times and left for Go %d", st.Guards, st.Hosts)
+	}
+}
+
+// A unary operator -- x | 0, -x, ~x -- or an update, x++, whose operand
+// was not a number once is Go's from the next compile on, at a host exit,
+// as a binary operator's is: guarded again at each compile, it had failed
+// at every call, compiled again for nothing -- s[i] | 0 of a string's
+// character, after the read was learned as a string's.
+func TestJITUnaryGenericOnceFailed(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	for _, c := range []struct{ name, body, want string }{
+		{"int32", `t += a[i % a.length] | 0`, "300000"},
+		{"neg", `t -= -a[i % a.length]`, "300000"},
+		{"bitnot", `t += ~a[i % a.length]`, "-500000"},
+		{"update", `let x = a[i % a.length]; x++; t += x`, "500000"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			setup := `function u(a, n) { let t = 0; for (let i = 0; i < n; i++) { ` + c.body + ` } return t }`
+			// Compiled for numbers, then given strings, call after call.
+			got, st := jitLongRunForTest(t, setup, `u([1, 2, 3], 3000)`,
+				`let r; for (let k = 0; k < 20; k++) r = u(['1', '2'], 10000); r * 20`)
+			if got != c.want {
+				t.Fatalf("= %s, want %s", got, c.want)
+			}
+			if st.Guards > 2*jitReoptimizations {
+				t.Errorf("20 calls deoptimized %d times", st.Guards)
+			}
+		})
+	}
+}
+
+// A function reading a table of strings at several sites, adding what each
+// reads, learns each read's string with the additions of it, at one
+// failed guard (jitcompile.Hints' StringReads): learned one at a time, a
+// read and then each addition, its compiles for what failed had run out
+// before its last site -- PDF.js's btoa -- which then left native code at
+// every call.
+func TestJITStringTableReadsSettle(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r := New(Config{JIT: true})
+	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	if r.jitCallThreshold <= 1 {
+		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
+	}
+	const setup = `
+		const table = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'.split('')
+		function enc(data) {
+			let r = ''
+			for (let i = 0; i < data.length; i++) {
+				const b = data[i]
+				r += table[b >> 2]
+				if (b & 1) r += table[b & 63] + '='
+				else r += table[(b >> 1) & 63] + table[(b >> 2) & 63]
+				r += table[(b * 7) & 63]
+			}
+			return r.length
+		}
+		const data = []
+		for (let i = 0; i < 2000; i++) data.push(i * 37 & 255)`
+	if _, err := r.Run(compileForTest(t, setup)); err != nil {
+		t.Fatal(err)
+	}
+	code := compileForTest(t, `enc(data)`)
+	for range 20 {
+		if v, err := r.Run(code); err != nil || v.Number() != 8000 {
+			t.Fatalf("= %v, %v", v, err)
+		}
+	}
+	jitNativeForTest(t, r, "enc")
+	before := r.JITStats()
+	for range 10 {
+		if v, err := r.Run(code); err != nil || v.Number() != 8000 {
+			t.Fatalf("= %v, %v", v, err)
+		}
+	}
+	if n := r.JITStats().Guards - before.Guards; n != 0 {
+		t.Errorf("10 calls after 20 deoptimized %d times", n)
+	}
+}
+
+// Operators whose guards have failed, made generic -- an oddball's number
+// natively (ssa.OpOddballF64), a relational comparison by Go
+// (ssa.GoCompare), anything else Go's at a host exit -- answer as the
+// interpreter does for every kind of operand, -0, NaN and equality's
+// undefined == null among them, compiled for numbers first.
+func TestJITGenericOperatorsAnswers(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	// A function an operator, each site of which fails once: a function's
+	// compiles for what failed are few.
+	jitDifferential(t, `
+		const show = v => Object.is(v, -0) ? '-0' : typeof v + ':' + String(v)
+		const unary = [x => x | 0, x => -x, x => +x, x => ~x, x => x >> 1, x => x * 2, x => x - 1, x => x % 3,
+			x => { let a = x; a++; return a }, x => { let a = x; return a++ }, x => { let a = x; return --a }]
+		const binary = [(x, y) => x < y, (x, y) => x <= y, (x, y) => x > y, (x, y) => x >= y, (x, y) => x == y,
+			(x, y) => x != y, (x, y) => x + y, (x, y) => x * y, (x, y) => x - y,
+			(x, y) => { let n = 0; if (x < y) n++; return n }, (x, y) => { let n = 0; if (x >= y) n++; return n }]
+		const nums = [1, -0, 2.5, NaN, -3, 0x7fffffff]
+		const vals = nums.concat([undefined, null, true, false, '', '0', '12', 'abc', 'é', ' 3 '])
+		const out = []
+		for (let r = 0; r < 20; r++) for (const x of nums) {
+			for (const f of unary) f(x)
+			for (const y of nums) for (const f of binary) f(x, y)
+		}
+		for (let r = 0; r < 3; r++) for (const x of vals) {
+			for (const f of unary) out.push(show(f(x)))
+			for (const y of vals) for (const f of binary) out.push(show(f(x, y)))
+		}
+		out.join()`)
+}

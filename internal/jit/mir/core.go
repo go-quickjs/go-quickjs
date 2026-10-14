@@ -1459,8 +1459,9 @@ func (c *core) exitSource(s *ssa.Value) (abi.ExitLoc, bool) {
 // otherwise read from the bytecode.
 func goOpWord(site *ssa.CallSite) uint64 {
 	op := uint64(site.Go)
-	if site.Go == ssa.GoClosure || site.Go == ssa.GoClose {
-		// The template's constant, or the first local closed (abi.GoOpIndexShift).
+	if site.Go == ssa.GoClosure || site.Go == ssa.GoClose || site.Go == ssa.GoCompare {
+		// The template's constant, the first local closed, or the operator
+		// compared with (abi.GoOpIndexShift).
 		op |= uint64(uint32(site.Argc)) << abi.GoOpIndexShift
 	}
 	if site.Go == ssa.GoConcat {

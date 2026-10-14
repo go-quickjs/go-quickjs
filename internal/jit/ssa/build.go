@@ -401,6 +401,13 @@ type GoOp uint8
 // string of the two, the first its left side, copied nowhere. Its result
 // is the string, the same one each time. What GoAdd refuses it refuses.
 //
+// GoCompare is a relational comparison, <, <=, > or >= -- ir's Operator
+// in Argc -- of two primitives, whose answer is a boolean, as V8's code
+// calls its StringLessThan builtin: one whose guard has failed, an operand
+// not a number -- a lexer's c >= 'a' of a string's character, which had
+// left native code at every turn for Go to compare -- and what Go refuses,
+// an operand converted by calling something, leaves for Go after an exit.
+//
 // GoClosure makes the function of constant Argc on the code's own frame
 // (ir.Closure), capturing its locals there, and GoClose closes what
 // closures captured of locals Argc on (ir.CloseUpvalues): both Go's, on
@@ -428,6 +435,7 @@ const (
 	GoElemStore
 	GoIndex
 	GoAppend
+	GoCompare
 )
 
 // RefillsPools reports whether a call takes an object from a pool, which
@@ -1055,7 +1063,8 @@ func (b *builder) wantsEntry(pc int) bool {
 // which resumes after it, as they do for == and %.
 func (b *builder) generic(pc int) bool {
 	switch in := b.p.Code[pc]; {
-	case in.Op == ir.Binary, in.Op == ir.Branch && in.Operator != ir.Truth, in.Op == ir.Rethrow:
+	case in.Op == ir.Binary, in.Op == ir.Branch && in.Operator != ir.Truth, in.Op == ir.Rethrow,
+		in.Op == ir.Unary && in.Operator != ir.Not, in.Op == ir.Update:
 		return b.fb != nil && b.fb.Generic(pc)
 	}
 	return false
@@ -1394,6 +1403,25 @@ func (b *builder) goAdd(blk *Block, in ir.Instruction, operand func(ir.Operand) 
 	r := b.f.newValue(blk, OpKept, Tagged, cell, call)
 	r.Shadow = cell
 	b.assign(in.Dest, blk, r)
+}
+
+// goCompare is in, a relational comparison whose guard has failed, by a
+// call of Go from native code (GoCompare): its result, a boolean.
+func (b *builder) goCompare(blk *Block, in ir.Instruction, operand func(ir.Operand) *Value, guard func(Op, Type, ir.ExitKind, ...*Value) *Value) *Value {
+	call := guard(OpCall, Tagged, ir.HostExit, operand(in.Left), operand(in.Right))
+	if b.f.Keeps < b.f.keepLimit() {
+		b.f.cache(call).Calls, call.Index = []*CallSite{{Go: GoCompare, Argc: int(in.Operator), ThisSlot: -1}}, b.f.Keeps
+		b.f.Keeps++
+	}
+	cell := b.f.newValue(blk, OpCallCell, Source, call)
+	r := b.f.newValue(blk, OpKept, Tagged, cell, call)
+	r.Shadow = cell
+	return r
+}
+
+// relational reports whether op is <, <=, > or >=.
+func relational(op ir.Operator) bool {
+	return op == ir.Lt || op == ir.Le || op == ir.Gt || op == ir.Ge
 }
 
 // goIndex makes in, an element read as it is, by a call of Go from native
@@ -1837,8 +1865,14 @@ func (b *builder) plan() error {
 				// has failed, which resumes after it.
 				entries[pc+1] = true
 			}
+		case ir.Unary, ir.Update:
+			if b.generic(pc) && resumes(pc) {
+				// An operand not a number once its guard has failed: Go
+				// converts it, as for a binary operator's, and resumes after.
+				entries[pc+1] = true
+			}
 		case ir.Nop, ir.Copy, ir.CopyPair, ir.StoreLoad, ir.Swap, ir.Insert2, ir.Insert3,
-			ir.Unary, ir.Update, ir.Return, ir.ArrayKey:
+			ir.Return, ir.ArrayKey:
 		case ir.UpvalueRead:
 			// The function's own captured binding is read natively, its
 			// check deoptimizing; an inlined callee's leaves at its call.
@@ -2470,6 +2504,21 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		return number(o, kind)
 	}
+	// numeric is numberOf for an operator not equality's, generic once its
+	// guard failed: an oddball converted natively (OpOddballF64), anything
+	// else Go's at a host exit.
+	numeric := func(o ir.Operand, generic, boolean bool) *Value {
+		if !generic {
+			return numberOf(o, ir.GuardExit, boolean)
+		}
+		if v := operand(o); boolean && v.Op == OpBoxBool {
+			return f.newValue(blk, OpBoolToF64, Float64, v.Args[0])
+		}
+		if o.Slot < 0 && o.Literal.Kind == ir.Number {
+			return number(o, ir.HostExit)
+		}
+		return guard(OpOddballF64, Float64, ir.HostExit, operand(o))
+	}
 	boxF := func(x *Value) *Value { return f.newValue(blk, OpBoxF64, Tagged, x) }
 	boxB := func(x *Value) *Value { return f.newValue(blk, OpBoxBool, Tagged, x) }
 	one := func() *Value {
@@ -2520,11 +2569,20 @@ func (b *builder) instruction(blk *Block, pc int) {
 			b.goAdd(blk, in, operand, guard)
 			break
 		}
+		if relational(in.Operator) && b.generic(pc) && b.goCalls() {
+			b.assign(in.Dest, blk, b.goCompare(blk, in, operand, guard))
+			break
+		}
 		kind := ir.GuardExit
 		if in.Operator == ir.Eq || in.Operator == ir.Ne || in.Operator == ir.Mod || b.generic(pc) {
 			kind = ir.HostExit
 		}
-		x, y := numberOf(in.Left, kind, in.Bools&1 != 0), numberOf(in.Right, kind, in.Bools&2 != 0)
+		var x, y *Value
+		if in.Operator != ir.Eq && in.Operator != ir.Ne && b.generic(pc) {
+			x, y = numeric(in.Left, true, in.Bools&1 != 0), numeric(in.Right, true, in.Bools&2 != 0)
+		} else {
+			x, y = numberOf(in.Left, kind, in.Bools&1 != 0), numberOf(in.Right, kind, in.Bools&2 != 0)
+		}
 		if in.Operator == ir.Mod {
 			b.assign(in.Dest, blk, boxF(guard(OpModF64, Float64, ir.HostExit, x, y)))
 			break
@@ -2536,7 +2594,11 @@ func (b *builder) instruction(blk *Block, pc int) {
 			b.assign(in.Dest, blk, boxB(f.newValue(blk, OpNot, Bool, t)))
 			break
 		}
-		x := numberOf(in.Left, ir.GuardExit, in.Bools&1 != 0)
+		// An operand not a number, once its guard has failed, is converted
+		// natively, an oddball, or by Go at a host exit: guarded again, the
+		// code had failed there at every compile -- s[i] | 0 of a string's
+		// character, o.x | 0 of an undefined property.
+		x := numeric(in.Left, b.generic(pc), in.Bools&1 != 0)
 		switch in.Operator {
 		case ir.Neg:
 			x = f.newValue(blk, OpNegF64, Float64, x)
@@ -2548,7 +2610,12 @@ func (b *builder) instruction(blk *Block, pc int) {
 		b.assign(in.Dest, blk, boxF(x))
 	case ir.Update:
 		old := operand(in.Left)
-		x := guard(OpUnboxF64, Float64, ir.GuardExit, old)
+		generic := b.generic(pc)
+		x := numeric(in.Left, generic, false)
+		if generic {
+			// A postfix's value is the old one's number: an oddball's too.
+			old = boxF(x)
+		}
 		op := OpAddF64
 		if in.Operator == ir.Sub {
 			op = OpSubF64
@@ -2571,12 +2638,21 @@ func (b *builder) instruction(blk *Block, pc int) {
 			c.Aux = 2
 		} else if n := b.equality(blk, in, operand, guard); n != nil {
 			c = n
+		} else if relational(in.Operator) && b.generic(pc) && b.goCalls() {
+			// Go's comparison's boolean, which native code branches on.
+			c = guard(OpTruth, Bool, ir.GuardExit, b.goCompare(blk, in, operand, guard))
 		} else {
 			kind := ir.GuardExit
 			if in.Operator == ir.Eq || in.Operator == ir.Ne || b.generic(pc) {
 				kind = ir.HostExit
 			}
-			c = f.newValue(blk, OpCmpF64, Bool, number(in.Left, kind), number(in.Right, kind))
+			var x, y *Value
+			if in.Operator != ir.Eq && in.Operator != ir.Ne && b.generic(pc) {
+				x, y = numeric(in.Left, true, false), numeric(in.Right, true, false)
+			} else {
+				x, y = number(in.Left, kind), number(in.Right, kind)
+			}
+			c = f.newValue(blk, OpCmpF64, Bool, x, y)
 			c.Aux = int(in.Operator)
 		}
 		blk.Control = c

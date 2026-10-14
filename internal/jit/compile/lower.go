@@ -76,9 +76,15 @@ func LowerSSA(fn *bytecode.Function) (*ir.Program, error) {
 // elements are no numbers, a string, or an object read by a name: each is
 // read as it is (ir's
 // Reference), whatever its uses take it for -- its first use that takes a
-// number then exits, and is a hint of its own.
+// number then exits, and is a hint of its own. StringReads are those whose
+// element was a string -- a string's, or an array's of strings -- read as
+// they are too, the additions their results reach Go's, as StringAdds'
+// (stringConcats): learned one at a time, a read and then each addition of
+// it, a function's compiles for what failed had run out before its last,
+// btoa's, of a table of characters, which then left native code at every
+// call.
 type Hints struct {
-	StringAdds, ElementReads []int32
+	StringAdds, ElementReads, StringReads []int32
 }
 
 // LowerSSAWith is LowerSSA with hints.
@@ -522,9 +528,11 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 	}
 	selectNumericProperties(p, m.ssa)
 	if m.ssa {
-		for _, pc := range m.hints.ElementReads {
-			if pc >= 0 && int(pc) < len(p.Code) && p.Code[pc].Op == ir.ArrayRead {
-				p.Code[pc].Reference = true
+		for _, pcs := range [][]int32{m.hints.ElementReads, m.hints.StringReads} {
+			for _, pc := range pcs {
+				if pc >= 0 && int(pc) < len(p.Code) && p.Code[pc].Op == ir.ArrayRead {
+					p.Code[pc].Reference = true
+				}
 			}
 		}
 		liveLocals(fn, p, effects)
@@ -611,7 +619,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 				p.Code[pc] = ir.Instruction{Op: ir.ReferenceRead, Left: ir.Slot(sp - 1), Dest: sp, Key: b.A}
 			}
 		}
-		stringConcats(p)
+		stringConcats(p, m.hints.StringReads)
 		markBools(p)
 		p.UpvalueBase, p.Upvalues, p.Params = fn.LocalCount, len(fn.Upvalues), fn.ParamCount
 		if captured {
@@ -865,13 +873,15 @@ func hintedStringAdds(p *ir.Program, pcs []int32) {
 }
 
 // stringConcats has Go make an addition an operand of which is a string
-// constant, or such an addition's result -- 'key ' + tag + ' in leaf' --
-// rather than speculate it adds numbers: a string constant read natively
+// constant, such an addition's result -- 'key ' + tag + ' in leaf' -- or
+// the result of an element read at one of reads, which have read strings
+// (Hints' StringReads), rather than speculate it adds numbers: a string
+// constant read natively
 // (ir.StringConst) made the code take every such operand for a number, at
 // the entry too, and leave there at every call. What a slot holds is
 // followed forward through straight code: a jump's target, a host
 // operation's results and anything else written forget it.
-func stringConcats(p *ir.Program) {
+func stringConcats(p *ir.Program, reads []int32) {
 	str := make([]bool, p.Locals+p.StackSize)
 	targets := make([]bool, len(p.Code)+1)
 	for _, in := range p.Code {
@@ -906,6 +916,8 @@ func stringConcats(p *ir.Program) {
 			set(in.Dest, false)
 		case ir.StringAdd, ir.StringConcat:
 			set(in.Dest, true)
+		case ir.ArrayRead:
+			set(in.Dest, in.Reference && slices.Contains(reads, int32(pc)))
 		case ir.Host, ir.Call:
 			// Its results, past what it leaves below them.
 			if pc+1 < len(p.Maps) && p.Maps[pc+1].Depth > 0 {

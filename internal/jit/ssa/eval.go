@@ -533,6 +533,19 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 					return exit(v.State, ir.ExitKind(v.Aux))
 				}
 				vals[v.ID] = val{f: math.Float64frombits(a.t.Bits)}
+			case OpOddballF64:
+				switch {
+				case a.t.Kind == ir.Number:
+					vals[v.ID] = val{f: math.Float64frombits(a.t.Bits)}
+				case a.t.Kind == ir.Undefined:
+					vals[v.ID] = val{f: math.NaN()}
+				case a.t.Kind == ir.Null || a.t.Kind == ir.Boolean && a.t.Bits == 0:
+					vals[v.ID] = val{f: 0}
+				case a.t.Kind == ir.Boolean:
+					vals[v.ID] = val{f: 1}
+				default:
+					return exit(v.State, ir.ExitKind(v.Aux))
+				}
 			case OpEqTagged:
 				r, ok := eqTagged(a.t, b.t, v.Index == 1, heap.Strings, heap.Objects)
 				if !ok {
