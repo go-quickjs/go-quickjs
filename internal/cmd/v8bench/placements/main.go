@@ -87,7 +87,7 @@ func main() {
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
   placements build -label NAME [-k 8] [-out DIR]
-  placements compare -dir SUITE [-k 8] [-rounds 3] [-suite NAMES] [-jit] [-v] [-out DIR] A B`)
+  placements compare -dir SUITE [-bench NAME] [-k 8] [-rounds 3] [-suite NAMES] [-jit] [-v] [-out DIR] A B`)
 	os.Exit(2)
 }
 
@@ -301,6 +301,7 @@ func compareCmd(args []string) error {
 	k := fs.Int("k", 8, "how many placements")
 	rounds := fs.Int("rounds", 3, "runs of each placement of each label")
 	suite := fs.String("suite", "", "comma-separated suites to run, all by default")
+	bench := fs.String("bench", "", "the benchmark collection, as v8bench's -bench: v8 by default, octane, awfy")
 	jitEnabled := fs.Bool("jit", false, "enable the optional native tier in both tagged builds")
 	verbose := fs.Bool("v", false, "print each placement's figure")
 	out := fs.String("out", defaultOut(), "where the builds are")
@@ -324,7 +325,7 @@ func compareCmd(args []string) error {
 	for range *rounds {
 		for n := range *k {
 			for l := range labels {
-				got, err := runPlacement(exePath(*out, labels[l], n), *dir, *suite, n, *jitEnabled)
+				got, err := runPlacement(exePath(*out, labels[l], n), *dir, *bench, *suite, n, *jitEnabled)
 				if err != nil {
 					return err
 				}
@@ -368,9 +369,12 @@ type named struct {
 
 // runPlacement runs one build once and reads its times, in the order it
 // printed them.
-func runPlacement(exe, dir, suite string, n int, jitEnabled bool) ([]named, error) {
+func runPlacement(exe, dir, bench, suite string, n int, jitEnabled bool) ([]named, error) {
 	run := func(args ...string) ([]named, error) {
 		base := []string{"-dir", dir}
+		if bench != "" {
+			base = append(base, "-bench", bench)
+		}
 		if jitEnabled {
 			base = append(base, "-jit")
 		}
