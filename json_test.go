@@ -172,6 +172,29 @@ func TestJSONBigInt(t *testing.T) {
 	}
 }
 
+// TestJSONPrimitivesHaveNoToJSON pins that JSON.stringify asks only an
+// object or a BigInt for a toJSON (SerializeJSONProperty): a toJSON on
+// String.prototype, Number.prototype or Boolean.prototype is never called,
+// though a String object, an object, still finds one. Strings were asked:
+// JSON.stringify("s") gave what String.prototype.toJSON returned.
+func TestJSONPrimitivesHaveNoToJSON(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`String.prototype.toJSON = () => "X"
+		  var out = [JSON.stringify("s"), JSON.stringify({a: "s"}), JSON.stringify(["s"]), JSON.stringify(new String("s"))].join(" ")
+		  delete String.prototype.toJSON
+		  out`, `"s" {"a":"s"} ["s"] "X"`},
+		{`Number.prototype.toJSON = () => "X"; Boolean.prototype.toJSON = () => "Y"
+		  var out = [JSON.stringify(1), JSON.stringify([true])].join(" ")
+		  delete Number.prototype.toJSON; delete Boolean.prototype.toJSON
+		  out`, `1 [true]`},
+		// A replacer still sees every string.
+		{`JSON.stringify({a: "s"}, (k, v) => typeof v === "string" ? v + "!" : v)`, `{"a":"s!"}`},
+	}
+	for _, tc := range cases {
+		checkEval(t, tc.src, tc.want)
+	}
+}
+
 // TestJSONStringifyFinite pins that every finite number is written as one,
 // up to Number.MAX_VALUE: the test for infinity once took 1.7e308 as its
 // bound, and wrote the largest doubles as null (test262's value-number).
