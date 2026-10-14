@@ -919,6 +919,20 @@ func (r *Runtime) initArrayBuiltins() {
 				return Undefined, err
 			}
 			a := rt.newArrayFrom(nil)
+			if n > maxHoleRun && n <= 1<<16 {
+				// Its holes in dense storage, up to the modest length
+				// newArrayOfLength preallocates, as V8 makes new Array(n)
+				// holey rather than a dictionary: past a run of holes,
+				// setArrayLength makes the array sparse, and every element
+				// written to it after a property -- AWFY's Havlak sizes its
+				// tables so, and Dictionary its buckets.
+				elems := make([]Value, n)
+				for i := range elems {
+					elems[i] = elemHole
+				}
+				a.extOf().elems = elems
+				return Obj(a), nil
+			}
 			a.setArrayLength(n)
 			return Obj(a), nil
 		}

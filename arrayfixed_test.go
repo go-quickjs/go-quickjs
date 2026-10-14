@@ -125,3 +125,31 @@ func TestArrayFillFastPath(t *testing.T) {
 		t("sort after", () => { const a = new Array(1500).fill(2); a[3] = 1; a.sort(); return a[0] + " " + a[1499] + " " + a.length });
 		out.join("\n")`, "holes: 1,1,1,1,1 len 5\nkeys: 0123\npart: _,7,7,_ len 4\nneg: 1,2,0,0,5 len 5\nover: 1,9,9 len 3\nsetter: 9,undefined,9 len 3 log 9\nown ro: TypeError\npe holes: TypeError\npe full: 5,5,5 len 3\nfrozen: TypeError\nfrozen empty range: 1,2 len 2\nshrunk: 0,0,0,0 len 4\ngrown: 0,0,8,9 len 4\nsubclass: 2,2,2 len 3 true\nprimitive: TypeError\nobject: 44\nreturns: true\nlong: 3000 3000 3000\nlong push: 2001 7 true\nlong part: 3000 true false false 10\nlong middle: false true true false 100\nlong with key: 2 3000 3000\nlong then length: 10 10 3\nhuge: 4294967295 0,1,2\nbig: 2147483648,2147483649\nsort after: 1 2 1500")
 }
+
+// TestArrayHolesInDenseStorage pins that the holes new Array(n) makes, and
+// those a length at most doubled adds, which dense storage now holds, are
+// holes as before: absent to in, keys, forEach, JSON, join, sort; shadowed
+// by nothing but an inherited index; and those past the bounds -- a length
+// of 70000, of 2**32-1, a length more than doubled -- as well. The answers
+// are node's.
+func TestArrayHolesInDenseStorage(t *testing.T) {
+	checkEval(t, `const out = [];
+		const t = (name, f) => { try { out.push(name + ": " + f()) } catch (e) { out.push(name + ": " + e.constructor.name) } };
+		t("ctor", () => { const a = new Array(5000); return a.length + " " + (0 in a) + " " + Object.keys(a).length + " " + a.indexOf(undefined) + " " + a.includes(undefined) });
+		t("ctor write", () => { const a = new Array(5000); a[4999] = 1; a[7] = 2; return Object.keys(a).join() + " " + a.length });
+		t("ctor call", () => { const a = Array(3000); return a.length + " " + (2999 in a) });
+		t("ctor forEach", () => { const a = new Array(2000); a[5] = 1; let n = 0; a.forEach(() => n++); return n });
+		t("ctor json", () => JSON.stringify(new Array(1100)).length);
+		t("ctor join", () => new Array(1500).join("-").length);
+		t("ctor big", () => { const a = new Array(70000); a[69999] = 3; return a.length + " " + Object.keys(a).join() });
+		t("ctor huge", () => { const a = new Array(2 ** 32 - 1); return a.length + " " + (0 in a) });
+		t("ctor proto index", () => { Array.prototype[3] = "p"; try { const a = new Array(2000); return a[3] + " " + (3 in a) + " " + a.hasOwnProperty(3) } finally { delete Array.prototype[3] } });
+		t("double", () => { const a = []; for (let i = 0; i < 2000; i++) a.push(i); a.length = 4000; return (1999 in a) + " " + (2000 in a) + " " + (3999 in a) + " " + Object.keys(a).length + " " + a.length });
+		t("double write", () => { const a = []; for (let i = 0; i < 2000; i++) a.push(i); a.length = 4000; a[3999] = "z"; a[2500] = "y"; return Object.keys(a).length + " " + a[2500] + a[3999] + " " + a.lastIndexOf("z") });
+		t("triple", () => { const a = []; for (let i = 0; i < 2000; i++) a.push(i); a.length = 7000; return (5000 in a) + " " + Object.keys(a).length + " " + a.length });
+		t("shrink after", () => { const a = Array.from({length: 2000}, (_, i) => i); a.length = 4000; a.length = 10; return a.length + " " + Object.keys(a).length });
+		t("vector", () => { let s = Array.from({length: 1500}, (_, i) => i); for (let k = 0; k < 3; k++) { s = s.slice(); s.length = s.length * 2; } return s.length + " " + Object.keys(s).length + " " + (s[1499]) + " " + (1500 in s) });
+		t("sort holes", () => { const a = new Array(1200); a[3] = 2; a[1] = 1; a.sort(); return a[0] + " " + a[1] + " " + (2 in a) + " " + a.length });
+		t("frozen", () => { const a = new Array(1100); Object.freeze(a); try { "use strict"; a[0] = 1 } catch (e) { return e.constructor.name } return (0 in a) });
+		out.join("\n")`, "ctor: 5000 false 0 -1 true\nctor write: 7,4999 5000\nctor call: 3000 false\nctor forEach: 1\nctor json: 5501\nctor join: 1499\nctor big: 70000 69999\nctor huge: 4294967295 false\nctor proto index: p true false\ndouble: true false false 2000 4000\ndouble write: 2002 yz 3999\ntriple: false 2000 7000\nshrink after: 10 10\nvector: 12000 1500 1499 false\nsort holes: 1 2 false 1200\nfrozen: false")
+}

@@ -1353,8 +1353,13 @@ func (o *Object) setArrayLength(n uint32) {
 	case uint(n) > uint(len(o.elemsOf())):
 		// Extending an array only makes it longer; the new slots are holes.
 		// Beyond a short run they are not materialized at all, since a length
-		// of four billion is a number rather than four billion holes.
-		if o.flags&objHasSparseElements == 0 && uint(n)-uint(len(o.elemsOf())) <= maxHoleRun {
+		// of four billion is a number rather than four billion holes -- unless
+		// the array keeps at least as many elements as holes, as V8 keeps an
+		// array's elements fast while they are at least half used: a vector
+		// that doubles its storage by its length, as AWFY's Vector does past
+		// a thousand elements, had become sparse at each doubling, and every
+		// element written to it after a property.
+		if holes := uint(n) - uint(len(o.elemsOf())); o.flags&objHasSparseElements == 0 && holes <= max(maxHoleRun, uint(len(o.elemsOf()))) {
 			for uint(len(o.elemsOf())) < uint(n) {
 				o.extOf().elems = append(o.elemsOf(), elemHole)
 			}
