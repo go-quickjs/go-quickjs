@@ -249,8 +249,11 @@ func (r *Runtime) wordString(i int) *String {
 // asked for -- s[i], charAt and split("") make them over and over -- and a
 // substring otherwise.
 func (r *Runtime) unitString(s *String, i int) *String {
-	if u := s.CharCodeAt(i); u < 128 {
+	switch u := s.CharCodeAt(i); {
+	case u < 128:
 		return r.asciiCharString(byte(u))
+	case u < 256:
+		return r.latin1CharString(byte(u))
 	}
 	return s.Substring(i, i+1)
 }
@@ -264,6 +267,23 @@ func (r *Runtime) asciiCharString(b byte) *String {
 	if s == nil {
 		s = asciiString([]byte{b})
 		r.charStrings[b] = s
+	}
+	return s
+}
+
+// latin1CharString is the runtime's string of one Latin-1 character past
+// ASCII, code unit u from 128 to 255, as V8 keeps its single-character
+// strings: a script that makes strings of bytes, a character at a time --
+// PDF.js's decrypted fonts, String.fromCharCode(eexec[i]) -- had a string
+// made for each.
+func (r *Runtime) latin1CharString(u byte) *String {
+	if r.latin1Strings == nil {
+		r.latin1Strings = new([128]*String)
+	}
+	s := r.latin1Strings[u-128]
+	if s == nil {
+		s = fromUnits([]uint16{uint16(u)})
+		r.latin1Strings[u-128] = s
 	}
 	return s
 }

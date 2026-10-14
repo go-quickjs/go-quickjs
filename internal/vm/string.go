@@ -152,50 +152,75 @@ func (s *String) Go() string {
 //
 // The tree is walked iteratively rather than recursively, because a rope built
 // by repeated appends is a left-leaning chain as deep as the number of appends,
-// and recursion would overflow the goroutine stack on a long enough loop.
+// and recursion would overflow the goroutine stack on a long enough loop. Such
+// a chain is walked down its left spine, its buffer filled from the end, each
+// node's right side written before its left: a stack of the nodes still to be
+// written, which held every right side the spine had passed, had cost 40
+// bytes a character of a string built a character at a time, and byteLen's
+// as much again. Only a right side that is a rope itself is walked with one.
 func (s *String) flatten() {
 	if s.left == nil {
 		return
 	}
-	var sb strings.Builder
-	sb.Grow(s.byteLen())
-
-	// An explicit stack, holding nodes still to be emitted in order.
-	stack := make([]*String, 0, 16)
-	stack = append(stack, s)
-	for len(stack) > 0 {
-		n := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		if n.left == nil {
-			sb.WriteString(n.s)
-			continue
-		}
-		// Push right first so that left is emitted first.
-		stack = append(stack, n.right, n.left)
+	b := make([]byte, s.byteLen())
+	end := len(b)
+	n := s
+	for ; n.left != nil; n = n.left {
+		end -= n.right.writeTo(b[:end])
 	}
-	s.s = sb.String()
+	copy(b, n.s)
+	s.s = unsafe.String(unsafe.SliceData(b), len(b))
 	s.left, s.right = nil, nil
 }
 
-// byteLen returns the number of UTF-8 bytes the string occupies, walking a rope
-// without flattening it so that flatten can size its buffer exactly.
-func (s *String) byteLen() int {
+// writeTo writes s at the end of b, which has room for it, and reports how
+// many bytes it wrote.
+func (s *String) writeTo(b []byte) int {
 	if s.left == nil {
-		return len(s.s)
+		return copy(b[len(b)-len(s.s):], s.s)
 	}
-	total := 0
+	// From its last piece back: right before left.
+	end := len(b)
 	stack := make([]*String, 0, 16)
 	stack = append(stack, s)
 	for len(stack) > 0 {
 		n := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 		if n.left == nil {
-			total += len(n.s)
+			end -= copy(b[end-len(n.s):end], n.s)
 			continue
 		}
-		stack = append(stack, n.right, n.left)
+		stack = append(stack, n.left, n.right)
 	}
-	return total
+	return len(b) - end
+}
+
+// byteLen returns the number of UTF-8 bytes the string occupies, walking a rope
+// without flattening it so that flatten can size its buffer exactly: down its
+// left spine, a right side that is a rope itself walked with a stack
+// (flatten).
+func (s *String) byteLen() int {
+	total := 0
+	n := s
+	for ; n.left != nil; n = n.left {
+		r := n.right
+		if r.left == nil {
+			total += len(r.s)
+			continue
+		}
+		stack := make([]*String, 0, 16)
+		stack = append(stack, r)
+		for len(stack) > 0 {
+			m := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if m.left == nil {
+				total += len(m.s)
+				continue
+			}
+			stack = append(stack, m.right, m.left)
+		}
+	}
+	return total + len(n.s)
 }
 
 // ropeThreshold is the length in bytes from which a concatenation is a rope

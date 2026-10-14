@@ -534,3 +534,95 @@ func TestPrefixCutsWhereACharacterBegins(t *testing.T) {
 		}
 	}
 }
+
+// A rope of any shape flattens to its pieces in order: built by appends (a
+// left spine, which flatten walks without a stack, filling its buffer from
+// the end), by prepends, by joining ropes, and by appending ropes, with
+// non-ASCII pieces and surrogate halves that the joins make code points of.
+func TestRopesOfEveryShapeFlatten(t *testing.T) {
+	rng := rand.New(rand.NewSource(7))
+	units := func(s string) []uint16 { return utf16.Encode([]rune(s)) }
+	pieces := [][]uint16{units("a"), units("bc"), units(strings.Repeat("d", 70)), units("é"), units("𝄞"),
+		{0xd83d}, {0xde00}, units("xyz"), units(strings.Repeat("é", 40))}
+	for round := range 300 {
+		var build func(depth int) (*String, []uint16)
+		build = func(depth int) (*String, []uint16) {
+			if depth == 0 || rng.Intn(4) == 0 {
+				p := pieces[rng.Intn(len(pieces))]
+				return fromUnits(p), slices.Clone(p)
+			}
+			switch rng.Intn(3) {
+			case 0:
+				// Appends: a left spine.
+				s, u := build(depth - 1)
+				for range 1 + rng.Intn(30) {
+					t, tu := build(0)
+					s, u = s.Concat(t), append(u, tu...)
+				}
+				return s, u
+			case 1:
+				// Prepends: a right spine.
+				s, u := build(depth - 1)
+				for range 1 + rng.Intn(30) {
+					t, tu := build(0)
+					s, u = t.Concat(s), append(slices.Clone(tu), u...)
+				}
+				return s, u
+			}
+			a, au := build(depth - 1)
+			b, bu := build(depth - 1)
+			return a.Concat(b), append(au, bu...)
+		}
+		s, want := build(4)
+		if s.Len() != len(want) {
+			t.Fatalf("round %d: length %d, want %d", round, s.Len(), len(want))
+		}
+		if got := s.codeUnits(); !slices.Equal(got, want) {
+			t.Fatalf("round %d: flattened to %q, want %q", round, string(utf16.Decode(got)), string(utf16.Decode(want)))
+		}
+	}
+}
+
+// Flattening a rope built by appends makes its buffer and nothing else: a
+// stack of the pieces still to write had cost 40 bytes a character, and
+// sizing the buffer as much again.
+func TestAppendedRopeFlattensInOneAllocation(t *testing.T) {
+	ropes := make([]*String, 0, 101)
+	for range 101 {
+		s := NewString(strings.Repeat("a", 64))
+		for range 5000 {
+			s = s.Concat(NewString("b"))
+		}
+		ropes = append(ropes, s)
+	}
+	i := 0
+	if n := testing.AllocsPerRun(100, func() {
+		ropes[i].flatten()
+		i++
+	}); n > 1 {
+		t.Errorf("flattening a rope of 5,000 appends made %v allocations", n)
+	}
+	if got := ropes[0].Go(); got != strings.Repeat("a", 64)+strings.Repeat("b", 5000) {
+		t.Errorf("flattened to %d bytes, wrong", len(got))
+	}
+}
+
+// A string of one character from 128 to 255 is the runtime's own, as an
+// ASCII one is (latin1CharString): String.fromCharCode, indexing and charAt
+// make none, and each answer is the character.
+func TestLatin1CharactersShared(t *testing.T) {
+	r := New(Config{})
+	defer r.Close()
+	if a, b := r.latin1CharString(0xe9), r.latin1CharString(0xe9); a != b || a.Len() != 1 || a.CharCodeAt(0) != 0xe9 || a.Go() != "é" {
+		t.Fatalf("latin1CharString(0xe9) = %q, %v", a.Go(), a == b)
+	}
+	v, err := r.Run(compileForTest(t, `
+		const s = 'aéÿĀ'
+		let out = []
+		for (let c = 120; c < 260; c += 7) out.push(String.fromCharCode(c).charCodeAt(0) === c && String.fromCharCode(c).length === 1)
+		out.push(s[1] === 'é', s.charAt(2) === 'ÿ', s[3] === 'Ā', String.fromCharCode(233, 233) === 'éé')
+		out.every(x => x)`))
+	if err != nil || !v.Truthy() {
+		t.Fatalf("= %v, %v", v, err)
+	}
+}

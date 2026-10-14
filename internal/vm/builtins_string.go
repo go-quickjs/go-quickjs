@@ -48,8 +48,11 @@ func (r *Runtime) initStringBuiltins() {
 			units[i] = uint16(n)
 			ascii = ascii && uint16(n) < 128
 		}
-		if ascii && len(units) == 1 {
-			return Str(rt.asciiCharString(byte(units[0]))), nil
+		if len(units) == 1 && units[0] < 256 {
+			if ascii {
+				return Str(rt.asciiCharString(byte(units[0]))), nil
+			}
+			return Str(rt.latin1CharString(byte(units[0]))), nil
 		}
 		return Str(fromUnits(units)), nil
 	})

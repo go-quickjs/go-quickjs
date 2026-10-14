@@ -164,7 +164,10 @@ type Runtime struct {
 	// those of undefined, null, false and true, made the first time each is
 	// asked for: see unitString and wordString.
 	charStrings *[128]*String
-	wordStrings [4]*String
+	// latin1Strings are those of one character from 128 to 255
+	// (latin1CharString).
+	latin1Strings *[128]*String
+	wordStrings   [4]*String
 
 	// keptAlive holds the values a WeakRef has handed out during the current
 	// job. Two calls to deref in one turn have to answer the same way, so the
