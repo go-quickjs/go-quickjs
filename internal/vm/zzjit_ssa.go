@@ -6032,6 +6032,15 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 				e.ssaStats.guardsAt = map[int32]uint64{}
 			}
 			e.ssaStats.guardsAt[int32(int64(ctx.ExitSite))]++
+			// An addition speculated to add numbers that met a string is
+			// learned as at a host exit (jitStringAddSeen), whatever the
+			// compiles left for failed speculations: Go's from the next
+			// lowering on, with every addition of its result after it, so
+			// that a chain, tag + a + b + c, is learned at once. Its sites
+			// had been learned one deoptimization, and one compile, at a
+			// time, until none were left: PDF.js's createTableEntry then
+			// deoptimized at every invocation.
+			r.jitStringAddSeen(f, e, int(ctx.ExitPC))
 			jitDeoptimized(e, ctx, start)
 			f.pc = uint32(ctx.ExitPC)
 			return r.jitDeoptInterpret(f, f.base+int(ctx.ExitDepth), e.ssa)
@@ -6904,6 +6913,7 @@ func (r *Runtime) jitFinishExit(f *frame, e *jitEntry, l *jitNativeLevel) (Value
 			// A speculation that failed, learned as runSSA learns one: a
 			// function only native callers run had kept failing it, at its
 			// entry at every call, never compiled again generic.
+			r.jitStringAddSeen(f, e, pc)
 			jitDeoptimized(e, &abi.Context{ExitSite: l.site}, 0)
 			if e.reoptDue() {
 				r.jitReoptimize(f.cl, e)
