@@ -3832,19 +3832,42 @@ func (r *Runtime) jitLinkable(cl *closure) bool {
 	return err == nil
 }
 
-// jitIndexSeen notes an element read at pc that left native code, its
-// receiver and key on the VM's stack below sp: one compiled to read an
+// jitIndexOperands is the receiver and key of the element read in at an
+// exit, sp past its operands: a[i]'s, its receiver's kept beneath
+// (get_index_this) or not, on the stack; a local's element by a local
+// (get_local_index), in the frame. Each is an ir.ArrayRead, which
+// jitIndexSeen learns: only a[i]'s had been, so a local's typed array's
+// left native code at every invocation -- PDF.js's Huffman tables',
+// lengths[val], the rest of each by the interpreter.
+func (r *Runtime) jitIndexOperands(f *frame, in bytecode.Instr, sp int) (o, k Value, ok bool) {
+	switch in.Op {
+	case bytecode.OpGetIndex, bytecode.OpGetIndexThis:
+		if sp < 2 || sp > len(r.stack) {
+			return Value{}, Value{}, false
+		}
+		return r.stack[sp-2], r.stack[sp-1], true
+	case bytecode.OpGetLocalIndex:
+		if int(in.A) >= len(f.locals) || int(in.B) >= len(f.locals) {
+			return Value{}, Value{}, false
+		}
+		return f.locals[in.A], f.locals[in.B], true
+	}
+	return Value{}, Value{}, false
+}
+
+// jitIndexSeen notes an element read at pc that left native code, of
+// receiver o at key k (jitIndexOperands): one compiled to read an
 // element's cell (ir.Instruction's Reference) whose receiver is a typed
 // array, which has no cells, is compiled again to read a typed array's
 // number there (ssa.ElementFeedback). Mandreel's code reads its heap's
 // views so wherever it only compares what it read, and Go had read every
 // one.
-func (r *Runtime) jitIndexSeen(e *jitEntry, pc, sp int) {
+func (r *Runtime) jitIndexSeen(e *jitEntry, pc int, o, k Value) {
 	p := e.ssaProg
 	// Not bounded by jitReoptimizations, which speculations that failed
 	// spend: each read is learned once, and the compile waits for the next
 	// invocation, taking every one met meanwhile.
-	if p == nil || pc >= len(p.Code) || sp < 2 {
+	if p == nil || pc >= len(p.Code) {
 		return
 	}
 	in := p.Code[pc]
@@ -3855,7 +3878,7 @@ func (r *Runtime) jitIndexSeen(e *jitEntry, pc, sp int) {
 		// Read as a number, for what its uses take it for: a string's
 		// element is none, and is read as it is from the next lowering on
 		// (jitcompile.Hints' ElementReads), and as a string's.
-		if !r.stack[sp-2].IsString() || !r.stack[sp-1].IsNumber() {
+		if !o.IsString() || !k.IsNumber() {
 			return
 		}
 		l := r.jit.lowering(e.link.key.Value())
@@ -3870,8 +3893,8 @@ func (r *Runtime) jitIndexSeen(e *jitEntry, pc, sp int) {
 		}
 		return
 	}
-	switch o := r.stack[sp-2]; {
-	case o.IsString() && r.stack[sp-1].IsNumber():
+	switch {
+	case o.IsString() && k.IsNumber():
 		// A string's element, s[i], compiled for a string from then on
 		// (ssa.OpStringChar). PDF.js's font parsers read their programs
 		// so, every character leaving native code.
@@ -5987,8 +6010,10 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 				r.jitCallSeen(f, e, exitPC, f.base+int(ctx.ExitDepth), jitCallInstr(in))
 			case bytecode.OpGetProp, bytecode.OpGetPropThis:
 				r.jitPolySeen(f, e, exitPC, f.base+int(ctx.ExitDepth), in)
-			case bytecode.OpGetIndex:
-				r.jitIndexSeen(e, exitPC, f.base+int(ctx.ExitDepth))
+			case bytecode.OpGetIndex, bytecode.OpGetIndexThis, bytecode.OpGetLocalIndex:
+				if o, k, ok := r.jitIndexOperands(f, in, f.base+int(ctx.ExitDepth)); ok {
+					r.jitIndexSeen(e, exitPC, o, k)
+				}
 			case bytecode.OpGetPrivate, bytecode.OpSetPrivate, bytecode.OpPrivateIn:
 				r.jitPrivateSeen(f, e, exitPC, f.base+int(ctx.ExitDepth), in)
 			case bytecode.OpNewObject, bytecode.OpNewArray, bytecode.OpNewRegExp:
@@ -6760,8 +6785,10 @@ func (r *Runtime) jitFinishExit(f *frame, e *jitEntry, l *jitNativeLevel) (Value
 				r.jitCallSeen(f, e, pc, f.base+depth, jitCallInstr(in))
 			case bytecode.OpGetProp, bytecode.OpGetPropThis:
 				r.jitPolySeen(f, e, pc, f.base+depth, in)
-			case bytecode.OpGetIndex:
-				r.jitIndexSeen(e, pc, f.base+depth)
+			case bytecode.OpGetIndex, bytecode.OpGetIndexThis, bytecode.OpGetLocalIndex:
+				if o, k, ok := r.jitIndexOperands(f, in, f.base+depth); ok {
+					r.jitIndexSeen(e, pc, o, k)
+				}
 			case bytecode.OpGetPrivate, bytecode.OpSetPrivate, bytecode.OpPrivateIn:
 				r.jitPrivateSeen(f, e, pc, f.base+depth, in)
 			case bytecode.OpNewObject, bytecode.OpNewArray, bytecode.OpNewRegExp:

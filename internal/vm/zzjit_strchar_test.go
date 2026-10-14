@@ -258,3 +258,53 @@ func TestJITCharCodeAtByTarget(t *testing.T) {
 		})
 	}
 }
+
+// An element of a typed array a local holds, read by a local key
+// (get_local_index) as it is, for ==, is learned at its exit as a[i]'s is
+// (jitIndexOperands): read as a typed array's number from the next compile
+// on. It had left native code at every invocation, the rest of each run by
+// the interpreter: PDF.js's Huffman tables, lengths[val] == len. Once
+// compiled, 20 calls neither leave native code nor finish in the
+// interpreter more than twice; each answer is the interpreter's in every
+// tier and stress setting, a plain array's included.
+func TestJITLocalTypedReadsLearned(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const setup = `
+		function count(lengths, len) {
+			let n = lengths.length, c = 0
+			for (let val = 0; val < n; ++val) if (lengths[val] == len) c++
+			return c
+		}
+		const lengths = new Uint8Array(4096).map((_, i) => i % 7)`
+	jitDifferential(t, setup+`
+		let r = 0
+		for (let k = 0; k < 6; k++) r += count(lengths, k % 7) + count(lengths.subarray(5, 900), 3)
+		r + count([1, 3, 3, '3', null], 3)`)
+	r := New(Config{JIT: true})
+	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	if r.jitCallThreshold <= 1 {
+		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
+	}
+	if _, err := r.Run(compileForTest(t, setup)); err != nil {
+		t.Fatal(err)
+	}
+	for range 10 {
+		if _, err := r.Run(compileForTest(t, `count(lengths, 3)`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e := jitNativeForTest(t, r, "count")
+	hosts, interpreted := e.ssaStats.hosts, r.JITStats().Interpreted
+	v, err := r.Run(compileForTest(t, `(() => { let t = 0; for (let k = 0; k < 20; k++) t += count(lengths, 3); return t })()`))
+	if err != nil || v.Number() != 20*585 {
+		t.Fatalf("= %v, %v", v, err)
+	}
+	if n := e.ssaStats.hosts - hosts; n > 2 {
+		t.Errorf("count left native code %d times in 20 calls", n)
+	}
+	if n := r.JITStats().Interpreted - interpreted; n > 2 {
+		t.Errorf("%d of 20 calls finished in the interpreter", n)
+	}
+}
