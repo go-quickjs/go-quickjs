@@ -3753,6 +3753,30 @@ func (c *compiler) codeChar(v *ssa.Value, guard func(amd64.Cond)) {
 	c.charCell(v, guard)
 }
 
+// freeze is ssa.OpFreeze: the building byte of the string v's operand is,
+// if it is one, cleared; nothing else is touched. It uses scratchA to
+// scratchC.
+func (c *compiler) freeze(v *ssa.Value) {
+	x := v.Args[0]
+	var w amd64.Reg
+	if remat(x) {
+		c.materialize(x, scratchA)
+		w = scratchA
+	} else {
+		w = c.gpr(x, scratchA)
+	}
+	done := c.a.NewLabel()
+	c.movImm(scratchB, c.enc.String)
+	c.a.Op(amd64.Cmp, w, scratchB, true)
+	c.a.Jcc(amd64.CondNE, done)
+	c.pointerWord(x, w)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	c.a.Jcc(amd64.CondE, done)
+	c.movImm(scratchC, 0)
+	c.a.Store8(scratchB, c.enc.StringBuilding, scratchC)
+	c.a.Bind(done)
+}
+
 // charCell is the cell of the runtime's string of the code unit in
 // scratchA, below 256 (abi.Context.CharStrings), into v's register.
 func (c *compiler) charCell(v *ssa.Value, guard func(amd64.Cond)) {
@@ -4438,6 +4462,8 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.stringChar(v, c.guardFor(v))
 	case ssa.OpCodeChar:
 		c.codeChar(v, c.guardFor(v))
+	case ssa.OpFreeze:
+		c.freeze(v)
 	case ssa.OpLoadCell:
 		d := c.gdst(v)
 		c.a.Load(d, c.gpr(arg(0), scratchA), c.enc.NumOffset)

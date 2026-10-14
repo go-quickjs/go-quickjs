@@ -3480,6 +3480,27 @@ func (c *a64Compiler) codeChar(v *ssa.Value, guard func(arm64.Cond)) {
 	c.charCell(v, guard)
 }
 
+// freeze is ssa.OpFreeze, as amd64's. It uses A to C.
+func (c *a64Compiler) freeze(v *ssa.Value) {
+	x := v.Args[0]
+	var w arm64.Reg
+	if remat(x) {
+		c.materialize(x, a64A)
+		w = a64A
+	} else {
+		w = c.gpr(x, a64A)
+	}
+	done := c.a.NewLabel()
+	c.movImm(a64B, c.enc.String)
+	c.a.Cmp(w, a64B, true)
+	c.a.BCond(arm64.NE, done)
+	c.pointerWord(x, w)
+	c.a.Cbz(a64B, done, true)
+	c.movImm(a64C, 0)
+	c.a.Store8(a64B, c.enc.StringBuilding, a64C)
+	c.a.Bind(done)
+}
+
 // charCell is the cell of the runtime's string of the code unit in A,
 // below 256, as amd64's.
 func (c *a64Compiler) charCell(v *ssa.Value, guard func(arm64.Cond)) {
@@ -4091,6 +4112,8 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.stringChar(v, c.guardFor(v))
 	case ssa.OpCodeChar:
 		c.codeChar(v, c.guardFor(v))
+	case ssa.OpFreeze:
+		c.freeze(v)
 	case ssa.OpLoadCell:
 		d := c.gdst(v)
 		c.a.Load(d, c.gpr(arg(0), a64A), c.enc.NumOffset)

@@ -392,6 +392,15 @@ type GoOp uint8
 // array's or a typed array's element -- and refuses any other, which
 // leaves for Go to read after an exit, native code going on after it.
 //
+// GoAppend is GoAdd of a loop's string builder (stringBuilders): its
+// first operand is the string the loop builds, which nothing but its
+// appends uses in the loop. Go appends the second operand, a primitive, to
+// it in place where it is a building string -- one an append made, which
+// nothing has frozen (OpFreeze) or seen since, Go freezing every one
+// native code leaves for it with -- and otherwise makes it a building
+// string of the two, the first its left side, copied nowhere. Its result
+// is the string, the same one each time. What GoAdd refuses it refuses.
+//
 // GoClosure makes the function of constant Argc on the code's own frame
 // (ir.Closure), capturing its locals there, and GoClose closes what
 // closures captured of locals Argc on (ir.CloseUpvalues): both Go's, on
@@ -418,6 +427,7 @@ const (
 	GoTypedRead
 	GoElemStore
 	GoIndex
+	GoAppend
 )
 
 // RefillsPools reports whether a call takes an object from a pool, which

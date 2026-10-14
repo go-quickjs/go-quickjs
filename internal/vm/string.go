@@ -52,6 +52,11 @@ type String struct {
 	// comparing them by bytes would say they differ. Both are always valid,
 	// rope or not, so the check costs nothing on the ordinary path.
 	endsHigh, startsLow bool
+	// building marks a string an append makes (GoAppend, jitAppend), which
+	// appends grow in place while nothing else can see it: native code's
+	// loop that builds it, until it freezes it (OpFreeze), or Go does, at
+	// any exit from native code (jitFreezeBuilders).
+	building bool
 	// mark is the memory meter's, which it sets on a string it has counted.
 	mark uint16
 }

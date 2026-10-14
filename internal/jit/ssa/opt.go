@@ -142,6 +142,7 @@ func Optimize(f *Func) {
 	if rematerializeUpvalues(f) {
 		removeDead(f)
 	}
+	stringBuilders(f)
 	shadowMerges(f)
 	if kept, stores, live := keepAcrossStores(f); kept {
 		// The phis' shadows again, for the phis the keeps made; those
@@ -663,7 +664,7 @@ func removeDead(f *Func) bool {
 		markState(b.State)
 		markState(b.Header)
 		for _, v := range b.Values {
-			if v.Op.isGuard() {
+			if v.Op.isGuard() || v.Op == OpFreeze {
 				mark(v)
 			}
 		}

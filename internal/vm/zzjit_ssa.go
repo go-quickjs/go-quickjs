@@ -65,13 +65,14 @@ var jitEncoding = abi.Encoding{
 	PropWritable:    uint8(propWritable),
 	PropUninit:      uint8(propUninit),
 
-	String:       math.Float64bits(mkTag(KindString, 0)),
-	Symbol:       math.Float64bits(mkTag(KindSymbol, 0)),
-	StringData:   int32(unsafe.Offsetof(String{}.s)),
-	StringLeft:   int32(unsafe.Offsetof(String{}.left)),
-	StringLength: int32(unsafe.Offsetof(String{}.length)),
-	StringASCII:  int32(unsafe.Offsetof(String{}.ascii)),
-	StringU16:    int32(unsafe.Offsetof(String{}.aux)),
+	String:         math.Float64bits(mkTag(KindString, 0)),
+	Symbol:         math.Float64bits(mkTag(KindSymbol, 0)),
+	StringData:     int32(unsafe.Offsetof(String{}.s)),
+	StringLeft:     int32(unsafe.Offsetof(String{}.left)),
+	StringLength:   int32(unsafe.Offsetof(String{}.length)),
+	StringASCII:    int32(unsafe.Offsetof(String{}.ascii)),
+	StringU16:      int32(unsafe.Offsetof(String{}.aux)),
+	StringBuilding: int32(unsafe.Offsetof(String{}.building)),
 
 	ObjectClass:        int32(unsafe.Offsetof(Object{}.class)),
 	ObjectFlags:        int32(unsafe.Offsetof(Object{}.flags)),
@@ -2257,6 +2258,36 @@ func jitHostCall(ctx *abi.Context) bool {
 		v, err := r.add(a, b)
 		if err != nil {
 			return false
+		}
+		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
+		return true
+	case ssa.GoAppend:
+		// A loop's string builder's s += x (jitAppend): what GoAdd takes,
+		// a string's grown in place or made a builder of.
+		a, b := jitGoArg(ctx, 0), jitGoArg(ctx, 1)
+		if !jitPlainOperand(a) || !jitPlainOperand(b) || r.meter != nil {
+			return false
+		}
+		var v Value
+		if a.IsString() {
+			x := b
+			if !b.IsString() {
+				s, err := r.toString(b)
+				if err != nil {
+					return false
+				}
+				x = Str(s)
+			}
+			s, ok := r.jitAppend(a.String(), x.String())
+			if !ok {
+				return false
+			}
+			v = Str(s)
+		} else {
+			var err error
+			if v, err = r.add(a, b); err != nil {
+				return false
+			}
 		}
 		*(*Value)(unsafe.Pointer(&ctx.Keep[ctx.GoKeep])) = v
 		return true
@@ -5963,6 +5994,11 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			err, resume = e.ssa.Resume(resume, s.ssaCtxs[idx+1]), 0
 		} else {
 			err = e.ssa.Run(pc, ctx)
+		}
+		if len(s.builders) != 0 {
+			// Whatever native code left, Go may now see its strings in a
+			// frame: none grows in place from here.
+			r.jitFreezeBuilders()
 		}
 		if s.goRuns[idx].pinned {
 			r.jitGoUnpin(idx)
