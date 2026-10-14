@@ -143,3 +143,57 @@ func TestJITCallsLinkedBeforeCode(t *testing.T) {
 		log.join()`
 	jitDifferential(t, src)
 }
+
+// A call of one argument in a function that reads "charCodeAt" is made as
+// any other, natively or by Go, unless its function is the method that
+// read took (jitcompile's charCodeCalls): PDF.js's Type1Font_wrap's
+// cff.push(field.charCodeAt(i)) had been lowered as a charCodeAt too,
+// which left native code at every character, and its code was judged not
+// to pay. Once compiled, wrap runs natively at every call, and leaves it
+// far less often than once a character.
+func TestJITCallsBesideCharCodeAt(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r := New(Config{JIT: true})
+	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	if r.jitCallThreshold <= 1 {
+		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
+	}
+	const setup = `
+		const long = { a: 'abcdefghij'.repeat(50), b: '0123456789'.repeat(50) }
+		const short = { a: 'abcdefghij', b: '0123456789' }
+		function wrap(fields) {
+			var cff = []
+			for (var k in fields) { var field = fields[k]; for (var i = 0, ii = field.length; i < ii; i++) cff.push(field.charCodeAt(i)) }
+			return cff
+		}`
+	if _, err := r.Run(compileForTest(t, setup)); err != nil {
+		t.Fatal(err)
+	}
+	for range 10 {
+		if _, err := r.Run(compileForTest(t, `wrap(long)`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e := jitNativeForTest(t, r, "wrap")
+	var hosts [2]uint64
+	for k, c := range []struct {
+		fields string
+		want   float64
+	}{{"long", 20 * (1000 + 'h' + '9')}, {"short", 20 * (20 + 'h' + '9')}} {
+		h, entries := e.ssaStats.hosts, r.JITStats().SSAEntries
+		v, err := r.Run(compileForTest(t, `(() => { let t = 0; for (let k = 0; k < 20; k++) { const c = wrap(`+c.fields+`); t += c.length + c[7] + c[c.length/2 + 9] } return t })()`))
+		if err != nil || v.Number() != c.want {
+			t.Fatalf("%s: = %v, %v; want %v", c.fields, v, err, c.want)
+		}
+		if n := r.JITStats().SSAEntries - entries; n < 20 {
+			t.Errorf("%s: native code entered %d times in 20 calls", c.fields, n)
+		}
+		hosts[k] = e.ssaStats.hosts - h
+	}
+	// Its for...in's steps, and its loops' budgets: not a character's.
+	if hosts[0] >= 20*1000/10 {
+		t.Errorf("wrap left native code %d times for 20,000 characters (%d for 400)", hosts[0], hosts[1])
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -75,6 +76,52 @@ func TestStringPackingLayout(t *testing.T) {
 	}
 	if seen != [4]bool{true, true, true, true} {
 		t.Fatal(seen)
+	}
+}
+
+// Only a call whose function a read of "charCodeAt" took is lowered as
+// String.prototype.charCodeAt's (charCodeCalls), its argument any
+// expression; every other call of one argument is Go's, though the
+// function reads "charCodeAt" elsewhere. Every one was lowered so, and its
+// check failed at every call: PDF.js's Type1Font_wrap's cff.push left
+// native code at every character, in both pipelines' lowerings.
+func TestCharCodeCalls(t *testing.T) {
+	for _, c := range []struct {
+		source string
+		calls  []ir.Op // the call_methods', in order
+	}{
+		{`function wrap(fields){var cff=[];for(var k in fields){var field=fields[k];
+			for(var i=0,ii=field.length;i<ii;i++)cff.push(field.charCodeAt(i))}return cff}`, []ir.Op{ir.StringCode, ir.Host}},
+		{`function f(s){let t=0;for(let i=0;i+1<s.length;i++)t+=s.charCodeAt(i+1)+s.codePointAt(i)+s.charCodeAt(t>3?i:0);return t}`,
+			[]ir.Op{ir.StringCode, ir.Host, ir.StringCode}},
+		{`function g(a,s){let t=0;for(let i=0;i<64;i++){a.push(i);t+=s.charCodeAt(i)}return t}`, []ir.Op{ir.Host, ir.StringCode}},
+	} {
+		fn := compiledFunction(t, c.source)
+		for _, lowering := range []struct {
+			name  string
+			lower func(*bytecode.Function) (*ir.Program, error)
+		}{{"Lower", Lower}, {"LowerSSA", LowerSSA}} {
+			p, err := lowering.lower(fn)
+			if err != nil && lowering.name == "Lower" {
+				// The old pipeline's lowering takes no for...in.
+				continue
+			}
+			if err != nil {
+				t.Fatalf("%s: %s: %v", lowering.name, fn.Name, err)
+			}
+			if err := p.Validate(); err != nil {
+				t.Fatalf("%s: %s: %v", lowering.name, fn.Name, err)
+			}
+			var calls []ir.Op
+			for pc, in := range fn.Code {
+				if in.Op == bytecode.OpCallMethod {
+					calls = append(calls, p.Code[pc].Op)
+				}
+			}
+			if !slices.Equal(calls, c.calls) {
+				t.Errorf("%s: %s's calls lowered to %v, want %v", lowering.name, fn.Name, calls, c.calls)
+			}
+		}
 	}
 }
 
@@ -591,7 +638,7 @@ func TestLowerCoversDescribedOpcodes(t *testing.T) {
 							t.Errorf("%v (A=%d B=%d) is described but not lowered: %v", code, a, b, v)
 						}
 					}()
-					lower(fn, in, 8, false)
+					lower(fn, in, 8, false, false)
 				}()
 			}
 		}

@@ -496,6 +496,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			p.Locals++
 		}
 	}
+	codes := charCodeCalls(fn, maps)
 	for pc, in := range fn.Code {
 		switch {
 		case maps[pc].Depth < 0:
@@ -505,7 +506,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			// closes them (closeIteratorsReturning).
 			p.Code[pc] = ir.Instruction{Op: ir.Host}
 		default:
-			p.Code[pc] = lower(fn, in, p.Locals+maps[pc].Depth, p.This)
+			p.Code[pc] = lower(fn, in, p.Locals+maps[pc].Depth, p.This, codes[pc])
 		}
 	}
 	if m.ssa {
@@ -547,10 +548,8 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			switch b := fn.Code[pc]; {
 			case b.Op == bytecode.OpGetPropThis && fn.Names[b.A] == "charCodeAt":
 				p.Code[pc] = ir.Instruction{Op: ir.StringMethod, Left: ir.Slot(sp - 1), Dest: sp}
-			case b.Op == bytecode.OpCallMethod && b.A == 1 && pc >= 2 && p.Maps[pc-2].Depth >= 0 && p.Maps[pc].Depth == p.Maps[pc-2].Depth+2:
-				if r := fn.Code[pc-2]; r.Op == bytecode.OpGetPropThis && fn.Names[r.A] == "charCodeAt" {
-					p.Code[pc] = ir.Instruction{Op: ir.StringCode, Left: ir.Slot(sp - 2), Right: ir.Slot(sp - 3), Third: ir.Slot(sp - 1), Dest: sp - 3}
-				}
+			case codes[pc]:
+				p.Code[pc] = ir.Instruction{Op: ir.StringCode, Left: ir.Slot(sp - 2), Right: ir.Slot(sp - 3), Third: ir.Slot(sp - 1), Dest: sp - 3}
 			}
 		}
 		for pc, in := range p.Code {
@@ -651,11 +650,12 @@ func selectGlobalSlots(fn *bytecode.Function, p *ir.Program) {
 		return
 	}
 	p.Locals += len(p.Globals)
+	codes := charCodeCalls(fn, p.Maps)
 	for pc, old := range p.Code {
 		if p.Maps[pc].Depth < 0 || old.Op == ir.Host {
 			continue
 		}
-		in := lower(fn, fn.Code[pc], p.Locals+p.Maps[pc].Depth, p.This)
+		in := lower(fn, fn.Code[pc], p.Locals+p.Maps[pc].Depth, p.This, codes[pc])
 		if old.Op == ir.BindingRead {
 			in.Left = old.Left
 		}
@@ -716,9 +716,10 @@ func selectPropertyLoops(fn *bytecode.Function, p *ir.Program, calls, callee boo
 	if p.This && !fields && hosts[len(p.Code)]+fieldCount != 0 {
 		p.This = false
 		p.Locals--
+		codes := charCodeCalls(fn, p.Maps)
 		for pc, in := range fn.Code {
 			if p.Maps[pc].Depth >= 0 {
-				p.Code[pc] = lower(fn, in, p.Locals+p.Maps[pc].Depth, false)
+				p.Code[pc] = lower(fn, in, p.Locals+p.Maps[pc].Depth, false, codes[pc])
 			}
 		}
 		selectNumericProperties(p, false)
@@ -1587,7 +1588,10 @@ func lowerMod(in bytecode.Instr, sp int) (ir.Instruction, bool) {
 	return ir.Instruction{}, false
 }
 
-func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this bool) ir.Instruction {
+// lower is instruction in of fn, sp its stack's top past the locals; this
+// whether the receiver has a slot, and charCode whether in is a call of
+// String.prototype.charCodeAt's (charCodeCalls).
+func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this, charCode bool) ir.Instruction {
 	copyTo := func(dest int, source ir.Operand) ir.Instruction {
 		return ir.Instruction{Op: ir.Copy, Dest: dest, Left: source}
 	}
@@ -1618,12 +1622,8 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this bool) ir.Instr
 	case bytecode.OpInsert3:
 		return ir.Instruction{Op: ir.Insert3, Dest: sp - 3}
 	case bytecode.OpCallMethod:
-		if in.A == 1 && stringKernel(fn) {
-			for _, name := range fn.Names {
-				if name == "charCodeAt" {
-					return ir.Instruction{Op: ir.StringCode, Left: ir.Slot(sp - 2), Right: ir.Slot(sp - 3), Third: top, Dest: sp - 3}
-				}
-			}
+		if charCode && stringKernel(fn) {
+			return ir.Instruction{Op: ir.StringCode, Left: ir.Slot(sp - 2), Right: ir.Slot(sp - 3), Third: top, Dest: sp - 3}
 		}
 		return ir.Instruction{Op: ir.Host}
 	case bytecode.OpGetPropThis:
@@ -1872,6 +1872,41 @@ func lower(fn *bytecode.Function, in bytecode.Instr, sp int, this bool) ir.Instr
 
 // An intrinsic snapshot and an extra root must amortize their entry cost.
 // One-off character helpers retain the existing call path.
+// charCodeCalls marks the calls of one argument in fn whose function is the
+// method a read of "charCodeAt" took (get_prop_this), which are lowered as
+// String.prototype.charCodeAt's (ir.StringCode): the instruction the call's
+// stack, two below its depth, was last at, the stack none lower since --
+// s.charCodeAt(i), s.charCodeAt(i + 1), s.charCodeAt(c ? i : j). Every
+// call of one argument in a function that read "charCodeAt" anywhere was
+// lowered so: its check that the function is the intrinsic failed at every
+// call of another, which left native code, and it was never a call native
+// code makes (PDF.js's Type1Font_wrap, its cff.push(field.charCodeAt(i)),
+// at every character). A call wrongly marked is still checked.
+func charCodeCalls(fn *bytecode.Function, maps []ir.StateMap) []bool {
+	codes := make([]bool, len(fn.Code))
+	// at[d] is the last instruction the stack was at depth d before, none
+	// lower since; -1 for none.
+	var at []int
+	for pc, in := range fn.Code {
+		d := maps[pc].Depth
+		if d < 0 {
+			at = at[:0]
+			continue
+		}
+		if in.Op == bytecode.OpCallMethod && in.A == 1 && d >= 2 && d-2 < len(at) {
+			if q := at[d-2]; q >= 0 && fn.Code[q].Op == bytecode.OpGetPropThis && fn.Names[fn.Code[q].A] == "charCodeAt" {
+				codes[pc] = true
+			}
+		}
+		at = at[:min(len(at), d)]
+		for len(at) < d {
+			at = append(at, -1)
+		}
+		at = append(at, pc)
+	}
+	return codes
+}
+
 func stringKernel(fn *bytecode.Function) bool {
 	if len(fn.Code) >= 64 {
 		return true
