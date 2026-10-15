@@ -63,10 +63,32 @@ func tailCallNode(p, n, this, pc int) tval {
 			r.treeTail = true
 			return Undefined
 		}
-		v, err := r.callDirect(c.stack[p], recv, args)
+		v, err := r.tailCallShallow(c.stack[p], recv, args)
 		if err != nil {
 			c.throw(err)
 		}
 		return v
 	}
+}
+
+// tailCallShallow is a call in tail position shallower than the depth a
+// frame is given up at, an ordinary call, made as a call node makes one: a
+// callee planTreeCall has given a tree on it, any other by callRest. A
+// recursion through tail calls, each frame its own, had been made through
+// callDirect and runFD down to the depth. It is called where tailCallNode
+// had called callDirect, a call as long, so that the node's code, which
+// the closures after it are laid out by, is as long as it was.
+func (r *Runtime) tailCallShallow(callee, this Value, args []Value) (Value, error) {
+	if !callee.IsObject() {
+		return r.callDirect(callee, this, args)
+	}
+	o := callee.object()
+	fd := o.fn()
+	if fd != nil && fd.treeCall != nil && fd.closure.realm == r.Realm {
+		if err := r.tick(); err != nil {
+			return Undefined, err
+		}
+		return r.callTree(o, fd, this, args, true)
+	}
+	return r.callRest(o, fd, this, args)
 }

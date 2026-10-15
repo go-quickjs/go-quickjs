@@ -3661,6 +3661,9 @@ func isConstructor(v Value) bool {
 // The two differ whenever a subclass is involved: `new D()` on a class derived
 // from B eventually runs B's constructor, but the object is a D, so the
 // prototype comes from D. Reflect.construct exposes the same split directly.
+//
+// A constructor planTreeCall has given a tree is run on it, as callTree runs
+// a call's (callTreeWith).
 func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Value) (Value, error) {
 	if !callee.IsObject() || callee.Object() == nil {
 		return Undefined, r.throwTypeError("%s is not a constructor", r.describe(callee))
@@ -3764,10 +3767,15 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 			default:
 				res, done = r.leafCall(fd.closure, obj, args)
 			}
-			if !done {
+			if !done && fd.treeCall != nil {
+				res, err = r.callTreeWith(o, fd, fd.treeCall, this, args, newTarget, false)
+			} else if !done {
 				res, err = r.runFD(fd.closure, this, args, newTarget, o, fd)
 				if err == errNoSuper {
 					err = r.throwError(errReference, "%s", errNoSuper.Error())
+				}
+				if !fd.treePlanned {
+					planTreeCall(fd)
 				}
 			}
 		}

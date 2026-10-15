@@ -1441,6 +1441,10 @@ type funcData struct {
 	bound bool
 	// treePlanned records that planTreeCall has decided about the function.
 	treePlanned bool
+	// treeRest marks a function whose calls callRest makes on its tree
+	// (callTreeWith), which callTree does not: one that ends in a tail
+	// call, or an arrow; see planTreeCall.
+	treeRest bool
 
 	// extra is what only some functions have -- an arrow's surroundings, a
 	// bound function's target, the scopes of one made inside a `with` body
