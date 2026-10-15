@@ -1122,6 +1122,11 @@ type Symbol struct {
 	// Registered marks a symbol obtained from Symbol.for, which
 	// Symbol.keyFor can look up.
 	Registered bool
+	// atom is the symbol's atom in atoms, the table that interned it
+	// first, which internSymbol gives without its map: a private name is
+	// a symbol, interned at every read and write of the member.
+	atom  Atom
+	atoms *atomTable
 }
 
 // NewSymbol returns a fresh symbol.

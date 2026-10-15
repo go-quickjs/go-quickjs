@@ -233,12 +233,18 @@ func (t *atomTable) internCopy(name string) Atom {
 
 // internSymbol returns the atom for a symbol key.
 func (t *atomTable) internSymbol(s *Symbol) Atom {
+	if s.atoms == t {
+		return s.atom
+	}
 	if a, ok := t.bySymbol[s]; ok {
 		return a
 	}
 	a := t.next()
 	t.entries = append(t.entries, atomEntry{sym: s})
 	t.bySymbol[s] = a
+	if s.atoms == nil {
+		s.atom, s.atoms = a, t
+	}
 	return a
 }
 
