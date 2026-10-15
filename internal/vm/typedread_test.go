@@ -142,3 +142,48 @@ func TestTreeTypedArrayWrites(t *testing.T) {
 		}
 	}
 }
+
+// An array's length set longer, by new Array(n) or by length itself, gives
+// holes up to it, grown at once (setArrayLength): no index is present, the
+// elements read undefined, what is written after is an element, and a
+// length past the holes an array keeps in its storage makes it sparse, as
+// before.
+func TestArrayLengthGrowsWithHoles(t *testing.T) {
+	const src = `
+		const out = []
+		for (const n of [0, 1, 4, 10, 1000, 2000]) {
+			const a = new Array(n)
+			out.push([a.length, 0 in a, (n - 1) in a, a[n - 1], Object.keys(a).length].join())
+		}
+		const b = [1, 2, 3]
+		b.length = 7
+		b[6] = 'x'
+		out.push([b.length, 3 in b, 6 in b, b.join('-')].join())
+		const c = [1, , 3]
+		c.length = 5
+		c.push(9)
+		out.push([c.length, 1 in c, 4 in c, c.join('-')].join())
+		const d = []
+		d.length = 1e6
+		d[5] = 5
+		out.push([d.length, 5 in d, 4 in d, Object.keys(d).join()].join())
+		const e = Object.freeze([1])
+		try { e.length = 3 } catch (err) {}
+		out.push(e.length)
+		out.join(' | ')`
+	const want = "0,false,false,,0 | 1,false,false,,0 | 4,false,false,,0 | 10,false,false,,0 | 1000,false,false,,0 | 2000,false,false,,0 | " +
+		"7,false,true,1-2-3----x | 6,false,false,1--3---9 | 1000000,true,false,5 | 1"
+	for _, tree := range []bool{true, false} {
+		previous := treeTier.Swap(tree)
+		r := New(Config{})
+		v, err := r.Run(compileForTest(t, src))
+		r.Close()
+		treeTier.Store(previous)
+		if err != nil {
+			t.Fatalf("tree %v: %v", tree, err)
+		}
+		if got := v.String().Go(); got != want {
+			t.Errorf("tree %v:\n%s\nwant\n%s", tree, got, want)
+		}
+	}
+}

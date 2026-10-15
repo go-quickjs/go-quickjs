@@ -1360,9 +1360,15 @@ func (o *Object) setArrayLength(n uint32) {
 		// a thousand elements, had become sparse at each doubling, and every
 		// element written to it after a property.
 		if holes := uint(n) - uint(len(o.elemsOf())); o.flags&objHasSparseElements == 0 && holes <= max(maxHoleRun, uint(len(o.elemsOf()))) {
-			for uint(len(o.elemsOf())) < uint(n) {
-				o.extOf().elems = append(o.elemsOf(), elemHole)
+			// Grown once to the length, the holes written in: appended one
+			// at a time, new Array(4) -- AWFY's Storage makes its trees of
+			// them -- had grown its storage three times.
+			old := len(o.elemsOf())
+			e := slices.Grow(o.elemsOf(), int(holes))[:old+int(holes)]
+			for i := old; i < len(e); i++ {
+				e[i] = elemHole
 			}
+			o.extOf().elems = e
 		} else {
 			o.markSparse()
 			o.arrayLen = n
