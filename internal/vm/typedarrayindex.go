@@ -65,6 +65,24 @@ func typedElemIndex(o *Object, key float64) (*typedArrayData, int, bool) {
 // converts without running code, so nothing can change the view between the
 // check and the store.
 func typedWrite(o *Object, i uint32, v Value) bool {
+	return typedStore(Obj(o), float64(i), v)
+}
+
+// typedStore is typedWrite of key, a number, into obj, any value: false for
+// what is no typed array, or a key that is no index, its checks its own as
+// typedRead's are.
+func typedStore(obj Value, key float64, v Value) bool {
+	if !obj.IsObject() {
+		return false
+	}
+	o := obj.object()
+	if o.class != ClassTypedArray {
+		return false
+	}
+	i := uint32(key)
+	if float64(i) != key {
+		return false
+	}
 	t, ok := o.dataOf().(*typedArrayData)
 	if !ok || uint(i) >= uint(t.fixedLength) || !v.IsNumber() {
 		return false
@@ -98,6 +116,66 @@ func typedWrite(o *Object, i uint32, v Value) bool {
 		return false
 	}
 	return true
+}
+
+// typedRead is element key of obj, a typed array of a fixed length that is
+// inside its buffer, read straight from the buffer as typedStore stores
+// there, or false where getElem has to -- a view that tracks its buffer's
+// length, one whose buffer has been detached or has shrunk past its end, a
+// key that is no index below its length, a BigInt or Float16 element --
+// or for any other value. Its every check is its own, so that the tree
+// tier's nodes, which ask it where elemAt has found no element, make one
+// call for it: the inliner gives a node of the tree builder's none of the
+// calls it would inline elsewhere.
+// Through typedElemIndex and getElem, a read took two calls, two type
+// assertions and the buffer's storage looked up anew each time: Mandreel's
+// heap, and the Game Boy's memory, are read so at every turn.
+func typedRead(obj Value, key float64) (Value, bool) {
+	if !obj.IsObject() {
+		return Undefined, false
+	}
+	o := obj.object()
+	if o.class != ClassTypedArray {
+		return Undefined, false
+	}
+	t, ok := o.dataOf().(*typedArrayData)
+	if !ok {
+		return Undefined, false
+	}
+	i := uint32(key)
+	if float64(i) != key || uint(i) >= uint(t.fixedLength) {
+		return Undefined, false
+	}
+	st := t.st
+	if st == nil {
+		if st = t.fixedStorage(); st == nil {
+			return Undefined, false
+		}
+	}
+	if t.end > len(st.bytes) {
+		return Undefined, false
+	}
+	// Below fixedLength, the index fits an int, shifted as one.
+	b, j := st.bytes[t.byteOffset:t.end], int(i)
+	switch t.kind {
+	case elemInt8:
+		return Int(int(int8(b[j]))), true
+	case elemUint8, elemUint8Clamped:
+		return Int(int(b[j])), true
+	case elemInt16:
+		return Int(int(int16(binary.LittleEndian.Uint16(b[j<<1:])))), true
+	case elemUint16:
+		return Int(int(binary.LittleEndian.Uint16(b[j<<1:]))), true
+	case elemInt32:
+		return Int32(int32(binary.LittleEndian.Uint32(b[j<<2:]))), true
+	case elemUint32:
+		return Uint32(binary.LittleEndian.Uint32(b[j<<2:])), true
+	case elemFloat32:
+		return Float(float64(math.Float32frombits(binary.LittleEndian.Uint32(b[j<<2:])))), true
+	case elemFloat64:
+		return Float(math.Float64frombits(binary.LittleEndian.Uint64(b[j<<3:]))), true
+	}
+	return Undefined, false
 }
 
 // fixedStorage fills in st and end for a view of a fixed length, and gives

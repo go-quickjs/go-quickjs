@@ -3540,6 +3540,9 @@ func (r *Runtime) getIndexed(obj, key Value) (Value, error) {
 				return v, nil
 			}
 		}
+		if v, ok := typedRead(obj, key.num); ok {
+			return v, nil
+		}
 		if t, i, ok := typedElemIndex(o, key.num); ok {
 			return t.getElem(i), nil
 		}

@@ -1327,7 +1327,17 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			if env := s.p1; env != nil && c.f.evalVars == nil {
 				if r := c.r; len(r.globalLex.vals) == 0 || !r.lexShadows(c.cl.names[name]) {
 					if i := uint(s.idx); i < uint(len(env.vals)) {
-						if p := env.shape.keys[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
+						// The layout the site last read the slot in, which it
+						// remembers, so that a change of an attribute gives the
+						// object another (noteGlobalShape): the slot's is as it
+						// was, without a load from the global object's table of
+						// keys, of thousands in Mandreel's.
+						sh := env.shape
+						if sh == s.shape {
+							return env.vals[i]
+						}
+						if p := sh.keys[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
+							noteGlobalShape(s, sh)
 							return env.vals[i]
 						}
 					}
@@ -1703,8 +1713,30 @@ func getIndexNode(obj, key tval, pc int) tval {
 		if v, ok := elemAt(o, k); ok {
 			return v
 		}
+		// A typed array's element, from its buffer: the object here a
+		// tree's, as Mandreel's heap is, a global's.
+		if v, ok := typedRead(o, k.num); ok {
+			return v
+		}
 		return c.getIndexSlow(o, k, pc)
 	}
+}
+
+// getIndexMiss is obj[key] where elemAt has found no element, for the
+// tree tier's element reads: a typed array's, from its buffer (typedRead),
+// and anything else as getIndexSlow reads it. A node calls it, a small
+// function, rather than getIndexSlow, whose frame and checks had cost a
+// typed array's read as much again -- Mandreel's heap is read so -- and
+// rather than calling typedRead itself, which would make the node's code
+// longer: a node's length moves the nodes after it, and a 4% slower
+// NavierStokes followed. A call is as long whatever it calls.
+//
+//go:noinline
+func (c *tctx) getIndexMiss(o, k Value, pc int) Value {
+	if v, ok := typedRead(o, k.num); ok {
+		return v
+	}
+	return c.getIndexSlow(o, k, pc)
 }
 
 // getIndexSlow is obj[key] where elemAt cannot read it.
@@ -1713,6 +1745,9 @@ func (c *tctx) getIndexSlow(o, k Value, pc int) Value {
 	// getIndexed would after asking what elemAt asked: reading one can
 	// neither throw nor run code, so there is no position to record.
 	if o.IsObject() && k.IsNumber() {
+		if v, ok := typedRead(o, k.num); ok {
+			return v
+		}
 		if t, i, ok := typedElemIndex(o.object(), k.num); ok {
 			return t.getElem(i)
 		}
@@ -1779,8 +1814,20 @@ func setIndexNode(obj, key, val tval, pc int, strict bool) tval {
 		if setElem(o, k, v) {
 			return v
 		}
-		return c.setIndexSlow(o, k, v, pc, strict)
+		return c.setIndexMiss(o, k, v, pc, strict)
 	}
+}
+
+// setIndexMiss is obj[key] = val where setElem has not stored it, for the
+// tree tier's element writes, as getIndexMiss reads: a number into a typed
+// array's buffer (typedStore), anything else as setIndexSlow stores it.
+//
+//go:noinline
+func (c *tctx) setIndexMiss(o, k, v Value, pc int, strict bool) Value {
+	if typedStore(o, k.num, v) {
+		return v
+	}
+	return c.setIndexSlow(o, k, v, pc, strict)
 }
 
 // setIndexSlow is obj[key] = val where setElem cannot store it.
@@ -1792,7 +1839,7 @@ func (c *tctx) setIndexSlow(o, k, v Value, pc int, strict bool) Value {
 		if appendElem(o.object(), k.num, v) {
 			return v
 		}
-		if i := uint32(k.num); float64(i) == k.num && typedWrite(o.object(), i, v) {
+		if typedStore(o, k.num, v) {
 			return v
 		}
 	}
@@ -2097,11 +2144,10 @@ func getIndexOperands(obj, key tentry, pc int) tval {
 					if v := a.elemsOf()[i]; !isHole(v) {
 						return v
 					}
-				} else if t, ok := a.dataOf().(*typedArrayData); ok {
-					// A typed array's element, which getIndexSlow would
-					// read the same way after asking again what is asked
-					// here.
-					return t.getElem(int(i))
+				} else if v, ok := typedRead(o, kv.num); ok {
+					// A typed array's element, from its buffer; getIndexSlow
+					// reads the rest.
+					return v
 				}
 			}
 			return c.getIndexSlow(o, kv, pc)
@@ -2112,7 +2158,7 @@ func getIndexOperands(obj, key tentry, pc int) tval {
 			if v, ok := elemAt(o, k); ok {
 				return v
 			}
-			return c.getIndexSlow(o, k, pc)
+			return c.getIndexMiss(o, k, pc)
 		}
 	case obj.local:
 		key := key.tree()
@@ -2122,7 +2168,7 @@ func getIndexOperands(obj, key tentry, pc int) tval {
 			if v, ok := elemAt(o, k); ok {
 				return v
 			}
-			return c.getIndexSlow(o, k, pc)
+			return c.getIndexMiss(o, k, pc)
 		}
 	}
 	return getIndexNode(obj.tree(), key.tree(), pc)
@@ -2139,7 +2185,7 @@ func setIndexOperands(obj, key tentry, val tval, pc int, strict bool) tval {
 			if setElem(o, k, v) {
 				return v
 			}
-			return c.setIndexSlow(o, k, v, pc, strict)
+			return c.setIndexMiss(o, k, v, pc, strict)
 		}
 	case obj.local:
 		key := key.tree()
@@ -2150,7 +2196,7 @@ func setIndexOperands(obj, key tentry, val tval, pc int, strict bool) tval {
 			if setElem(o, k, v) {
 				return v
 			}
-			return c.setIndexSlow(o, k, v, pc, strict)
+			return c.setIndexMiss(o, k, v, pc, strict)
 		}
 	}
 	return setIndexNode(obj.tree(), key.tree(), val, pc, strict)
@@ -2223,7 +2269,7 @@ func setIndexStmt(obj, key tentry, val tval, pc int, strict bool) tstmt {
 		return func(c *tctx) {
 			o, k := c.locals[o], c.locals[k]
 			if v := val(c); !setElem(o, k, v) {
-				c.setIndexSlow(o, k, v, pc, strict)
+				c.setIndexMiss(o, k, v, pc, strict)
 			}
 		}
 	case obj.local && key.number:
@@ -2247,7 +2293,7 @@ func setIndexStmt(obj, key tentry, val tval, pc int, strict bool) tstmt {
 			o := c.locals[o]
 			k := key(c)
 			if v := val(c); !setElem(o, k, v) {
-				c.setIndexSlow(o, k, v, pc, strict)
+				c.setIndexMiss(o, k, v, pc, strict)
 			}
 		}
 	case obj.slot >= 0 && key.slot >= 0:
@@ -2257,14 +2303,16 @@ func setIndexStmt(obj, key tentry, val tval, pc int, strict bool) tstmt {
 		return func(c *tctx) {
 			v := val(c)
 			if o, k := c.stack[o], c.stack[k]; !setElem(o, k, v) {
-				c.setIndexSlow(o, k, v, pc, strict)
+				c.setIndexMiss(o, k, v, pc, strict)
 			}
 		}
 	}
 	x, y := obj.tree(), key.tree()
 	return func(c *tctx) {
 		o, k := x(c), y(c)
-		if v := val(c); !setElem(o, k, v) {
+		// A typed array's number, straight into its buffer: the object
+		// here a tree's, as Mandreel's heap is, a global's.
+		if v := val(c); !setElem(o, k, v) && !typedStore(o, k.num, v) {
 			c.setIndexSlow(o, k, v, pc, strict)
 		}
 	}

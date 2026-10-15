@@ -793,6 +793,22 @@ func noteGlobalSlot(site *propCache, env *Object, i int32) {
 	site.p1 = env
 }
 
+// noteGlobalShape remembers, at a global read's site, the layout of the
+// global object it read a plain data property's slot in (propCache's shape,
+// which a global read's site has no other use for): an object of a layout a
+// cache has remembered is given another before an attribute of its
+// properties changes, or one is deleted or added (layoutChanged,
+// shapeAdded), so the slot's attributes are as they were while the layout
+// is. A loose layout, which changes in place, is not remembered, and the
+// site reads the key's attributes each time.
+//
+//go:noinline
+func noteGlobalShape(site *propCache, sh *shape) {
+	if sh != nil && !sh.loose {
+		site.shape = remember(sh)
+	}
+}
+
 // hasOwnGlobal reports whether a global object that is no proxy has a name in
 // its table, which is the first place HasProperty looks and where a global
 // variable is: the answer needs no walk when it is yes.
