@@ -5520,6 +5520,45 @@ func TestJITSSANativePush(t *testing.T) {
 	}
 }
 
+// A setter for an index Object.prototype already has where a.push is
+// compiled is asked for that index, as the interpreter asks it: the call
+// is not made natively, whose checks compare the prototype's shape, which
+// had been taken with the setter in it.
+func TestJITSSANativePushPastAPrototypeSetter(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const setup = `var hits=0;
+		Object.defineProperty(Object.prototype,'250',{set(v){hits++},get(){return 'proto'},configurable:true});
+		function fill(a,n){let t=0;for(let i=0;i<n;i++)t=(t+a.push(i))|0;return t}
+		function show(a){return [a.length,a[250],Object.keys(a).length,hits].join()}`
+	const src = `{const a=[];[fill(a,300),show(a)].join()}`
+	want := New(Config{})
+	defer func() { want.Close(); want.ReleaseClosed() }()
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	for _, rt := range []*Runtime{want, r} {
+		if _, err := rt.Run(compileForTest(t, setup)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range 6 {
+		wv, err := want.Run(compileForTest(t, src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		gv, err := r.Run(compileForTest(t, src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := gv.String().Go(), wv.String().Go(); got != want {
+			t.Fatalf("run %d: got %s, interpreter %s", i, got, want)
+		}
+	}
+	if e := r.jit.hint(r.global.getOwn(r.atoms.intern("fill")).value().Object().fn().closure); e == nil || e.ssa == nil {
+		t.Fatal("fill was not compiled")
+	}
+}
+
 // A write whose cache adds its property adds it natively, as V8's stores do
 // along a map's transition: fill never leaves for its fresh objects. One
 // that may not -- a prototype's setter intercepts the name, the object is

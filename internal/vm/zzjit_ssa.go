@@ -1829,9 +1829,14 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 		}
 		if in.cl == nil && in.push {
 			// Array.prototype.push, whose fast path the call's checks
-			// keep to: the prototypes as they are now.
+			// keep to: the prototypes as they are now, with no index in
+			// their tables -- what the shapes the checks compare settle,
+			// a shape remembered being replaced before a key is added to
+			// it. Object.prototype's had been taken as it was, a setter
+			// for an index there included, which native code then passed.
 			ap, op := fb.r.proto.array, fb.r.proto.object
-			if ap.shape == nil || op.shape == nil || ap.proto != op || op.proto != nil {
+			if ap.shape == nil || op.shape == nil || ap.proto != op || op.proto != nil ||
+				!ap.noIndexKeys() || !op.noIndexKeys() {
 				continue
 			}
 			k := fb.keep()
