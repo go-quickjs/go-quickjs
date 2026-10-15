@@ -1,4 +1,4 @@
-package main
+package cpuset
 
 import (
 	"errors"
@@ -13,17 +13,38 @@ var (
 	kernel32                   = syscall.NewLazyDLL("kernel32.dll")
 	getLogicalProcessorInfoEx  = kernel32.NewProc("GetLogicalProcessorInformationEx")
 	setProcessAffinityMaskProc = kernel32.NewProc("SetProcessAffinityMask")
+	getProcessAffinityMaskProc = kernel32.NewProc("GetProcessAffinityMask")
 )
 
-// canPin says whether startPinned gives a process its CPUs.
-const canPin = true
+// Allowed is the CPUs this process may run on, as
+// GetProcessAffinityMask reports them.
+func Allowed() (Set, error) {
+	h, err := syscall.GetCurrentProcess()
+	if err != nil {
+		return nil, err
+	}
+	var mask, system uintptr
+	if r, _, err := getProcessAffinityMaskProc.Call(uintptr(h), uintptr(unsafe.Pointer(&mask)), uintptr(unsafe.Pointer(&system))); r == 0 {
+		return nil, err
+	}
+	var set Set
+	for c := range 64 {
+		if uint64(mask)&(1<<c) != 0 {
+			set = append(set, c)
+		}
+	}
+	return set, nil
+}
+
+// CanPin says whether Start gives a process its CPUs.
+const CanPin = true
 
 // cacheGroups is the logical CPUs of each level 3 cache, as
 // GetLogicalProcessorInformationEx reports the caches, or nil. A cache's
 // record is a SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX of RelationCache: its
 // CACHE_RELATIONSHIP's level at 8 and its first GROUP_AFFINITY at 40, the
 // mask then the group, in every Windows' layout of it.
-func cacheGroups() []cpuSet {
+func cacheGroups() []Set {
 	const relationCache = 2
 	var n uint32
 	getLogicalProcessorInfoEx.Call(relationCache, 0, uintptr(unsafe.Pointer(&n)))
@@ -34,7 +55,7 @@ func cacheGroups() []cpuSet {
 	if r, _, _ := getLogicalProcessorInfoEx.Call(relationCache, uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&n))); r == 0 {
 		return nil
 	}
-	var groups []cpuSet
+	var groups []Set
 	for off := 0; off+50 <= int(n); {
 		size := int(*(*uint32)(unsafe.Pointer(&buf[off+4])))
 		if size <= 0 {
@@ -45,19 +66,19 @@ func cacheGroups() []cpuSet {
 		mask := *(*uint64)(unsafe.Pointer(&buf[off+40]))
 		group := *(*uint16)(unsafe.Pointer(&buf[off+48]))
 		if rel == relationCache && level == 3 && group == 0 {
-			var set cpuSet
+			var set Set
 			for c := range 64 {
 				if mask&(1<<c) != 0 {
 					set = append(set, c)
 				}
 			}
-			if len(set) > 0 && !slices.ContainsFunc(groups, func(g cpuSet) bool { return slices.Equal(g, set) }) {
+			if len(set) > 0 && !slices.ContainsFunc(groups, func(g Set) bool { return slices.Equal(g, set) }) {
 				groups = append(groups, set)
 			}
 		}
 		off += size
 	}
-	slices.SortFunc(groups, func(a, b cpuSet) int { return a[0] - b[0] })
+	slices.SortFunc(groups, func(a, b Set) int { return a[0] - b[0] })
 	return groups
 }
 
@@ -67,7 +88,7 @@ func cacheGroups() []cpuSet {
 // its NUMA_NODE_RELATIONSHIP's first GROUP_AFFINITY at 32. A process's
 // memory comes from the node its threads run on, so a group of CPUs inside
 // one has its memory there.
-func numaNodes() []cpuSet {
+func numaNodes() []Set {
 	const relationNumaNode = 1
 	var n uint32
 	getLogicalProcessorInfoEx.Call(relationNumaNode, 0, uintptr(unsafe.Pointer(&n)))
@@ -78,7 +99,7 @@ func numaNodes() []cpuSet {
 	if r, _, _ := getLogicalProcessorInfoEx.Call(relationNumaNode, uintptr(unsafe.Pointer(&buf[0])), uintptr(unsafe.Pointer(&n))); r == 0 {
 		return nil
 	}
-	var nodes []cpuSet
+	var nodes []Set
 	for off := 0; off+42 <= int(n); {
 		size := int(*(*uint32)(unsafe.Pointer(&buf[off+4])))
 		if size <= 0 {
@@ -87,7 +108,7 @@ func numaNodes() []cpuSet {
 		if rel := *(*uint32)(unsafe.Pointer(&buf[off])); rel == relationNumaNode {
 			mask := *(*uint64)(unsafe.Pointer(&buf[off+32]))
 			if group := *(*uint16)(unsafe.Pointer(&buf[off+40])); group == 0 {
-				var set cpuSet
+				var set Set
 				for c := range 64 {
 					if mask&(1<<c) != 0 {
 						set = append(set, c)
@@ -100,7 +121,7 @@ func numaNodes() []cpuSet {
 		}
 		off += size
 	}
-	slices.SortFunc(nodes, func(a, b cpuSet) int { return a[0] - b[0] })
+	slices.SortFunc(nodes, func(a, b Set) int { return a[0] - b[0] })
 	return nodes
 }
 
@@ -143,9 +164,9 @@ func coreClasses() map[int]int {
 	return classes
 }
 
-// startPinned starts cmd on set: Windows gives a process its CPUs once it
+// Start starts cmd on set: Windows gives a process its CPUs once it
 // is running, which it has been for the moment that takes.
-func startPinned(cmd *exec.Cmd, set cpuSet) error {
+func Start(cmd *exec.Cmd, set Set) error {
 	var mask uint64
 	for _, c := range set {
 		if c >= 64 {

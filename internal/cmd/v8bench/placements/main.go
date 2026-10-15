@@ -82,6 +82,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/go-quickjs/go-quickjs/internal/cmd/v8bench/internal/cpuset"
 )
 
 func main() {
@@ -350,9 +352,9 @@ func compareCmd(args []string) error {
 		return errors.New("-k is from 1 to 8, the design's placements")
 	}
 	ns := placementsOf(*k)
-	var groups []cpuSet
+	var groups []cpuset.Set
 	if *parallel {
-		g, how, err := parseCPUs(*cpus)
+		g, how, err := cpuset.Parse(*cpus)
 		if err != nil {
 			return err
 		}
@@ -361,7 +363,7 @@ func compareCmd(args []string) error {
 		}
 		groups = g[:2]
 		pinned := "each pinned to its group"
-		if !canPin {
+		if !cpuset.CanPin {
 			pinned = "unpinned: this OS gives a process no CPUs of its own"
 		}
 		fmt.Printf("in parallel, on CPUs %s and %s -- %s; %s\n", groups[0], groups[1], how, pinned)
@@ -475,7 +477,7 @@ type named struct {
 // in the order it printed them, then the total of theirs: every benchmark
 // once, then those shorter than longRun again, in a process for each of
 // repeats that one needs. On cpus, if any, with GOMAXPROCS as many.
-func runPlacement(exe, dir, bench, suite string, n int, jitEnabled bool, cpus cpuSet) ([]named, error) {
+func runPlacement(exe, dir, bench, suite string, n int, jitEnabled bool, cpus cpuset.Set) ([]named, error) {
 	run := func(reps int, only string) ([]named, error) {
 		args := []string{"-dir", dir, "-n", strconv.Itoa(reps)}
 		if bench != "" {
@@ -493,7 +495,7 @@ func runPlacement(exe, dir, bench, suite string, n int, jitEnabled bool, cpus cp
 		cmd.Stdout = &outb
 		if cpus != nil {
 			cmd.Env = append(cmd.Env, "GOMAXPROCS="+strconv.Itoa(len(cpus)))
-			if err := startPinned(cmd, cpus); err != nil {
+			if err := cpuset.Start(cmd, cpus); err != nil {
 				return nil, fmt.Errorf("%s: %w", exe, err)
 			}
 		} else if err := cmd.Start(); err != nil {

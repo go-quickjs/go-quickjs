@@ -1,4 +1,4 @@
-package main
+package cpuset
 
 import (
 	"fmt"
@@ -9,46 +9,64 @@ import (
 	"strings"
 )
 
-// canPin says whether startPinned gives a process its CPUs.
-const canPin = true
+// CanPin says whether Start gives a process its CPUs.
+const CanPin = true
 
 // cacheGroups is the logical CPUs of each level 3 cache, as sysfs lists
 // what shares each CPU's, or nil.
-func cacheGroups() []cpuSet {
+func cacheGroups() []Set {
 	paths, _ := filepath.Glob("/sys/devices/system/cpu/cpu[0-9]*/cache/index3/shared_cpu_list")
-	var groups []cpuSet
+	var groups []Set
 	for _, p := range paths {
 		b, err := os.ReadFile(p)
 		if err != nil {
 			continue
 		}
-		g, _, err := parseCPUs(strings.TrimSpace(string(b)))
+		g, _, err := Parse(strings.TrimSpace(string(b)))
 		if err != nil || len(g) != 1 {
 			continue
 		}
-		if !slices.ContainsFunc(groups, func(h cpuSet) bool { return slices.Equal(h, g[0]) }) {
+		if !slices.ContainsFunc(groups, func(h Set) bool { return slices.Equal(h, g[0]) }) {
 			groups = append(groups, g[0])
 		}
 	}
-	slices.SortFunc(groups, func(a, b cpuSet) int { return a[0] - b[0] })
+	slices.SortFunc(groups, func(a, b Set) int { return a[0] - b[0] })
 	return groups
+}
+
+// Allowed is the CPUs this process may run on, as /proc lists them.
+func Allowed() (Set, error) {
+	b, err := os.ReadFile("/proc/self/status")
+	if err != nil {
+		return nil, err
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if list, ok := strings.CutPrefix(line, "Cpus_allowed_list:"); ok {
+			g, _, err := Parse(strings.TrimSpace(list))
+			if err != nil || len(g) != 1 {
+				return nil, fmt.Errorf("Cpus_allowed_list %q: %v", list, err)
+			}
+			return g[0], nil
+		}
+	}
+	return nil, fmt.Errorf("no Cpus_allowed_list in /proc/self/status")
 }
 
 // numaNodes is the logical CPUs of each NUMA node, as sysfs lists them, or
 // nil.
-func numaNodes() []cpuSet {
+func numaNodes() []Set {
 	paths, _ := filepath.Glob("/sys/devices/system/node/node[0-9]*/cpulist")
-	var nodes []cpuSet
+	var nodes []Set
 	for _, p := range paths {
 		b, err := os.ReadFile(p)
 		if err != nil {
 			continue
 		}
-		if g, _, err := parseCPUs(strings.TrimSpace(string(b))); err == nil && len(g) == 1 {
+		if g, _, err := Parse(strings.TrimSpace(string(b))); err == nil && len(g) == 1 {
 			nodes = append(nodes, g[0])
 		}
 	}
-	slices.SortFunc(nodes, func(a, b cpuSet) int { return a[0] - b[0] })
+	slices.SortFunc(nodes, func(a, b Set) int { return a[0] - b[0] })
 	return nodes
 }
 
@@ -62,7 +80,7 @@ func coreClasses() map[int]int {
 		if atom, err := os.ReadFile("/sys/devices/cpu_atom/cpus"); err == nil {
 			classes := map[int]int{}
 			for class, list := range [][]byte{atom, core} {
-				if g, _, err := parseCPUs(strings.TrimSpace(string(list))); err == nil && len(g) == 1 {
+				if g, _, err := Parse(strings.TrimSpace(string(list))); err == nil && len(g) == 1 {
 					for _, c := range g[0] {
 						classes[c] = class
 					}
@@ -95,11 +113,11 @@ func coreClasses() map[int]int {
 	return nil
 }
 
-// startPinned starts cmd on set, so that every thread the process makes is
+// Start starts cmd on set, so that every thread the process makes is
 // on it from its start: through numactl, its memory then the set's node's
 // (--localalloc), as the kernel would give it anyway unless told
 // otherwise, else through taskset.
-func startPinned(cmd *exec.Cmd, set cpuSet) error {
+func Start(cmd *exec.Cmd, set Set) error {
 	if numactl, err := exec.LookPath("numactl"); err == nil {
 		cmd.Args = append([]string{numactl, "--physcpubind=" + set.String(), "--localalloc"}, cmd.Args...)
 		cmd.Path = numactl
@@ -107,7 +125,7 @@ func startPinned(cmd *exec.Cmd, set cpuSet) error {
 	}
 	taskset, err := exec.LookPath("taskset")
 	if err != nil {
-		return fmt.Errorf("-parallel needs numactl or taskset: %w", err)
+		return fmt.Errorf("giving a process its CPUs needs numactl or taskset: %w", err)
 	}
 	cmd.Args = append([]string{taskset, "-c", set.String()}, cmd.Args...)
 	cmd.Path = taskset

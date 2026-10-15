@@ -1,4 +1,8 @@
-package main
+// Package cpuset finds groups of a machine's CPUs that measure alike --
+// the fastest kind of core, a level 3 cache's, one NUMA node's -- and
+// starts a process on one, so that two benchmark runs at once each have a
+// group of their own (internal/cmd/v8bench's placements and matrix).
+package cpuset
 
 import (
 	"fmt"
@@ -9,10 +13,11 @@ import (
 	"strings"
 )
 
-// A cpuSet is the logical CPUs one side of a parallel comparison runs on.
-type cpuSet []int
+// A Set is logical CPUs, ascending: a group a run is given.
+type Set []int
 
-func (s cpuSet) String() string {
+// String is s as Parse reads one group: "0-5", "0-2,6-8".
+func (s Set) String() string {
 	var parts []string
 	for i := 0; i < len(s); {
 		j := i
@@ -29,12 +34,13 @@ func (s cpuSet) String() string {
 	return strings.Join(parts, ",")
 }
 
-// parseCPUs reads -cpus: "auto", the groups of the fastest cores' CPUs
-// that share a level 3 cache, each in one NUMA node, as the OS reports
-// them (autoGroups), else those CPUs by node, or in halves; "halves", all the CPUs in halves; or the groups
+// Parse reads a -cpus flag, saying how it found the groups: "auto", the
+// groups of the fastest cores' CPUs that share a level 3 cache, each in
+// one NUMA node, as the OS reports them (autoGroups), else those CPUs by
+// node, or in halves; "halves", all the CPUs in halves; or the groups
 // themselves, separated by semicolons, each a list of CPUs and ranges --
 // "0-5;6-11", "0-2,6-8;3-5,9-11".
-func parseCPUs(spec string) ([]cpuSet, string, error) {
+func Parse(spec string) ([]Set, string, error) {
 	switch spec {
 	case "", "auto":
 		g, how := autoGroups(cacheGroups(), numaNodes(), coreClasses(), allCPUs())
@@ -42,9 +48,9 @@ func parseCPUs(spec string) ([]cpuSet, string, error) {
 	case "halves":
 		return halveSet(allCPUs()), "the CPUs in halves", nil
 	}
-	var groups []cpuSet
+	var groups []Set
 	for _, g := range strings.Split(spec, ";") {
-		var set cpuSet
+		var set Set
 		for _, part := range strings.Split(g, ",") {
 			part = strings.TrimSpace(part)
 			if part == "" {
@@ -84,8 +90,8 @@ func parseCPUs(spec string) ([]cpuSet, string, error) {
 }
 
 // allCPUs is the machine's logical CPUs.
-func allCPUs() cpuSet {
-	all := make(cpuSet, runtime.NumCPU())
+func allCPUs() Set {
+	all := make(Set, runtime.NumCPU())
 	for c := range all {
 		all[c] = c
 	}
@@ -94,8 +100,8 @@ func allCPUs() cpuSet {
 
 // halveSet is set in two halves, as most CPUs number theirs: a core's
 // threads next to each other, the cores of a cache's group in a run.
-func halveSet(set cpuSet) []cpuSet {
-	return []cpuSet{set[:len(set)/2], set[len(set)/2:]}
+func halveSet(set Set) []Set {
+	return []Set{set[:len(set)/2], set[len(set)/2:]}
 }
 
 // autoGroups is -cpus auto: of the CPUs, the fastest cores' alone, where
@@ -109,7 +115,7 @@ func halveSet(set cpuSet) []cpuSet {
 // swap the groups, so that one node's being nearer a device costs neither
 // more). The first two are cut to the smaller one's size, so that each
 // label has as many CPUs.
-func autoGroups(cache, nodes []cpuSet, classes map[int]int, all cpuSet) ([]cpuSet, string) {
+func autoGroups(cache, nodes []Set, classes map[int]int, all Set) ([]Set, string) {
 	fast, how := all, ""
 	if len(classes) > 0 {
 		top, low := math.MinInt, math.MaxInt
@@ -126,9 +132,9 @@ func autoGroups(cache, nodes []cpuSet, classes map[int]int, all cpuSet) ([]cpuSe
 			how = ", the fastest cores' alone"
 		}
 	}
-	var groups []cpuSet
+	var groups []Set
 	for _, g := range cache {
-		var in cpuSet
+		var in Set
 		for _, c := range g {
 			if slices.Contains(fast, c) {
 				in = append(in, c)
@@ -138,11 +144,11 @@ func autoGroups(cache, nodes []cpuSet, classes map[int]int, all cpuSet) ([]cpuSe
 			groups = append(groups, in)
 		}
 	}
-	inNodes := func(groups []cpuSet) []cpuSet {
+	inNodes := func(groups []Set) []Set {
 		if len(nodes) < 2 {
 			return groups
 		}
-		var split []cpuSet
+		var split []Set
 		for _, g := range groups {
 			for _, n := range nodes {
 				if in := intersect(g, n); len(in) > 0 {
@@ -156,8 +162,8 @@ func autoGroups(cache, nodes []cpuSet, classes map[int]int, all cpuSet) ([]cpuSe
 	case len(groups) >= 2:
 		groups = inNodes(groups)
 		how = "the groups that share a level 3 cache" + how
-	case len(inNodes([]cpuSet{fast})) >= 2:
-		groups = inNodes([]cpuSet{fast})
+	case len(inNodes([]Set{fast})) >= 2:
+		groups = inNodes([]Set{fast})
 		how = "the NUMA nodes" + how + ": no two level 3 caches were found"
 	default:
 		groups = halveSet(fast)
@@ -167,7 +173,7 @@ func autoGroups(cache, nodes []cpuSet, classes map[int]int, all cpuSet) ([]cpuSe
 		}
 	}
 	// The labels' two: the first, then the first of another node, if any.
-	nodeOf := func(g cpuSet) int {
+	nodeOf := func(g Set) int {
 		for i, n := range nodes {
 			if slices.Contains(n, g[0]) {
 				return i
@@ -190,8 +196,8 @@ func autoGroups(cache, nodes []cpuSet, classes map[int]int, all cpuSet) ([]cpuSe
 }
 
 // intersect is the CPUs of a also in b, in a's order.
-func intersect(a, b cpuSet) cpuSet {
-	var in cpuSet
+func intersect(a, b Set) Set {
+	var in Set
 	for _, c := range a {
 		if slices.Contains(b, c) {
 			in = append(in, c)
