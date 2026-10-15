@@ -385,10 +385,13 @@ func (o Op) isGuard() bool {
 
 // readsMemory reports whether a guard's result or exit depends on elements
 // or properties, which writes change: two of them are not the same guard.
-// (An array's length and an object's shape change only in Go.)
+// An array's length is one: an element written at it grows the array
+// (OpElemWrite, OpElemStore, by Go or natively), as a push does, and a
+// length read after was the one read before it, a.length one short.
+// (An object's shape changes only in Go.)
 func (o Op) readsMemory() bool {
 	return o == OpElemRead || o == OpElemWrite || o == OpElemCell || o == OpElemStore || o == OpPropRead || o == OpPropWrite || o == OpPropCell ||
-		o == OpGlobalCell || o == OpLexCell || o == OpBindingCell || o == OpStringProp || o == OpKeep || o == OpCall
+		o == OpGlobalCell || o == OpLexCell || o == OpBindingCell || o == OpStringProp || o == OpKeep || o == OpCall || o == OpLength
 }
 
 // Value is one SSA value.

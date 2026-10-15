@@ -5520,6 +5520,53 @@ func TestJITSSANativePush(t *testing.T) {
 	}
 }
 
+// An array's length read after an element is written at it is the length
+// the write made, as the interpreter has it: the optimizer had taken the
+// length read before the write for it (ssa's readsMemory), a.length short,
+// whether the element was a number, a reference or a string, and made at
+// the length or past it -- in each function inlined into a loop, where
+// both reads are of the one array the call was given.
+func TestJITSSALengthAfterAppend(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	const setup = `var o={k:1};
+		function num(a){const s=a.length;a[s]=1;return s*1000+a.length}
+		function ref(a){const s=a.length;a[s]=o;return s*1000+a.length}
+		function str(a){const s=a.length;a[s]='x';return s*1000+a.length}
+		function past(a){const s=a.length;a[s+1]=2;return s*1000+a.length}
+		function loop(a,n){let t=0;for(let i=0;i<n;i++){const s=a.length;a[s]=i;t+=a.length-s}return t*1000+a.length}
+		function drive(n){let r;for(let k=0;k<n;k++)r=[num([1,2,3]),ref([1,2]),str([]),past([1]),loop([],40)].join();return r}`
+	// Each called on its own, and inlined into drive's loop.
+	const src = `[num([1,2,3]),ref([1,2]),str([]),past([1]),loop([],40),drive(300)].join()`
+	want := New(Config{})
+	defer func() { want.Close(); want.ReleaseClosed() }()
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	for _, rt := range []*Runtime{want, r} {
+		if _, err := rt.Run(compileForTest(t, setup)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range 6 {
+		wv, err := want.Run(compileForTest(t, src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		gv, err := r.Run(compileForTest(t, src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := gv.String().Go(), wv.String().Go(); got != want {
+			t.Fatalf("run %d: got %s, interpreter %s", i, got, want)
+		}
+	}
+	for _, name := range []string{"num", "ref", "str", "past", "loop", "drive"} {
+		if e := r.jit.hint(r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure); e == nil || e.ssa == nil {
+			t.Errorf("%s was not compiled", name)
+		}
+	}
+}
+
 // A setter for an index Object.prototype already has where a.push is
 // compiled is asked for that index, as the interpreter asks it: the call
 // is not made natively, whose checks compare the prototype's shape, which
