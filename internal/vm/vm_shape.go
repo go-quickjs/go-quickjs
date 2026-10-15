@@ -130,6 +130,9 @@ type shapeTree struct {
 	// shared is the cache of the reads that have given up their own, made
 	// when one first does.
 	shared *sharedCache
+	// deep is the cache of the additions made at the sites that have given
+	// up their own (deepStore), made when one first is.
+	deep *deepAdds
 }
 
 const (
@@ -711,6 +714,90 @@ func (r *Runtime) sharedProp(o *Object, key Atom) (Value, bool) {
 	return c.holder(o).vals[c.idx], true
 }
 
+// deepAdd is an addition of key along the shared transition from from to
+// next, to an object whose prototype chain is the n objects of up, each
+// with the shape in shapes, none of which intercepts the write: what
+// fillStoreCache keeps in a site's cache, for a chain of up to
+// deepAddDepth, which a site's, holding two, cannot.
+type deepAdd struct {
+	key        Atom
+	n          int32
+	from, next *shape
+	up         [deepAddDepth]*Object
+	shapes     [deepAddDepth]*shape
+}
+
+// deepAddDepth is how deep a prototype chain deepAdds holds additions past.
+const deepAddDepth = 8
+
+// deepAdds is a runtime's cache of additions, by the shape added to and the
+// key, as sharedCache is of reads.
+type deepAdds [sharedCacheSize]deepAdd
+
+// deepStore is an addition of v as o's key at a site whose cache has given
+// up, made as the runtime's cache of additions says (deepAdds), or false
+// where it says nothing of o's shape and key, or o's prototypes are not
+// the ones it says. An object of a class of a hierarchy three to seven
+// deep -- each of Typescript's syntax tree's nodes -- had been given each
+// property the long way, every prototype asked for the name, and the
+// prototypes asked again by the site's cache, which could not hold the
+// chain.
+func (r *Runtime) deepStore(o *Object, key Atom, v Value) bool {
+	s, t := o.shape, r.shapes.deep
+	if s == nil || t == nil {
+		return false
+	}
+	e := &t[(uintptr(unsafe.Pointer(s))>>4^uintptr(key)*0x9e3779b1)%sharedCacheSize]
+	if e.key != key || e.from != s || o.flags&objExtensible == 0 {
+		return false
+	}
+	p := o.proto
+	for i := range int(e.n) {
+		if p != e.up[i] || p.shape != e.shapes[i] {
+			return false
+		}
+		p = p.proto
+	}
+	if p != nil {
+		return false
+	}
+	if verifyShapes {
+		r.verifyStoreCache(&propCache{shape: s, next: e.next}, o, key)
+	}
+	o.appendTransition(v, e.next)
+	return true
+}
+
+// fillDeepStore remembers in the runtime's cache of additions the addition
+// of key a write just made to o, of shape before then, if it took a shared
+// transition along a chain of up to deepAddDepth prototypes none of which
+// intercepts it -- what fillStoreCache requires of a site's.
+func (r *Runtime) fillDeepStore(o *Object, before *shape, key Atom) {
+	const plain = propAccessor | propPrivate | propDeleted | propUninit
+	next := o.shape
+	if before.unique || next == nil || next == before || next.unique || next.loose || next.parent != before ||
+		next.key != key || next.flags&(plain|propWritable) != propWritable {
+		return
+	}
+	var e deepAdd
+	for p := o.proto; p != nil; p = p.proto {
+		if e.n == deepAddDepth {
+			return
+		}
+		if r.ensureProtoShape(p) == nil || !shapeClass(p.class) || synthesized(p.class, key) || !passesWrite(p, key) {
+			return
+		}
+		e.up[e.n], e.shapes[e.n] = p, remember(p.shape)
+		e.n++
+	}
+	e.key, e.from, e.next = key, remember(before), next
+	t := r.shapes
+	if t.deep == nil {
+		t.deep = new(deepAdds)
+	}
+	t.deep[(uintptr(unsafe.Pointer(before))>>4^uintptr(key)*0x9e3779b1)%sharedCacheSize] = e
+}
+
 // maxCacheFills is how many times a cache is filled before it gives up.
 const maxCacheFills = 16
 
@@ -807,18 +894,33 @@ func (r *Runtime) setPropCached(c *propCache, o *Object, key Atom, v Value, stri
 			return nil
 		}
 	}
+	gaveUp := c.fills >= maxCacheFills
+	if gaveUp && !key.IsIndex() && r.deepStore(o, key, v) {
+		return nil
+	}
 	before := o.shape
-	if before == nil && c.fills < maxCacheFills {
+	if before == nil && !gaveUp {
 		before = r.ensureShape(o)
 	}
 	if _, err := r.setProp(o, key, v, Obj(o), strict); err != nil {
 		return err
 	}
-	if before != nil && c.fills < maxCacheFills && !key.IsIndex() && shapeClass(o.class) && !synthesized(o.class, key) {
+	if before != nil && !key.IsIndex() && shapeClass(o.class) && !synthesized(o.class, key) {
+		if gaveUp {
+			r.fillDeepStore(o, before, key)
+			return nil
+		}
 		if o.shape == before && r.fillSetterCache(c, o, key, before) {
 			return nil
 		}
-		r.fillStoreCache(c, o, before, key)
+		if r.fillStoreCache(c, o, before, key); c.shape != before && c.fills < maxCacheFills {
+			// A write no cache holds -- an addition past more prototypes
+			// than a cache keeps, as Typescript's classes' objects have --
+			// counts as a fill too, so that the site gives up asking: it
+			// had walked the chain again at every write, after the write's
+			// own walk.
+			c.fills++
+		}
 	}
 	return nil
 }
