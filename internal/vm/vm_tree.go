@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"encoding/binary"
 	"math"
 	"os"
 	"sync/atomic"
@@ -234,7 +235,7 @@ func truthy(v Value) bool {
 }
 
 // elemAt is an element in an array's dense storage, as get_index reads one
-// first thing, or false.
+// first thing, or a typed array's in its buffer, or false.
 //
 // The key is not asked whether it is a number: every other value's num is
 // a NaN, which the round trip through uint32 never gives back, so the test
@@ -251,6 +252,40 @@ func elemAt(obj, key Value) (Value, bool) {
 	o := obj.object()
 	i, e := uint32(key.num), o.elemsOf()
 	if float64(i) != key.num || uint(i) >= uint(len(e)) || o.flags&objMappedArguments != 0 {
+		if o.class != ClassTypedArray || float64(i) != key.num {
+			return Undefined, false
+		}
+		// A typed array's element, read from the storage its view keeps
+		// once typedRead has filled it in, as typedRead reads it: written
+		// here, not called, as a call would give elemAt, which every
+		// array's read makes, a check of the stack's room.
+		t, ok := o.dataOf().(*typedArrayData)
+		if !ok || uint(i) >= uint(t.fixedLength) {
+			return Undefined, false
+		}
+		st := t.st
+		if st == nil || t.end > len(st.bytes) {
+			return Undefined, false
+		}
+		b, j := st.bytes[t.byteOffset:t.end], int(i)
+		switch t.kind {
+		case elemInt8:
+			return Int(int(int8(b[j]))), true
+		case elemUint8, elemUint8Clamped:
+			return Int(int(b[j])), true
+		case elemInt16:
+			return Int(int(int16(binary.LittleEndian.Uint16(b[j<<1:])))), true
+		case elemUint16:
+			return Int(int(binary.LittleEndian.Uint16(b[j<<1:]))), true
+		case elemInt32:
+			return Int32(int32(binary.LittleEndian.Uint32(b[j<<2:]))), true
+		case elemUint32:
+			return Uint32(binary.LittleEndian.Uint32(b[j<<2:])), true
+		case elemFloat32:
+			return Float(float64(math.Float32frombits(binary.LittleEndian.Uint32(b[j<<2:])))), true
+		case elemFloat64:
+			return Float(math.Float64frombits(binary.LittleEndian.Uint64(b[j<<3:]))), true
+		}
 		return Undefined, false
 	}
 	p := &e[i]
@@ -261,7 +296,7 @@ func elemAt(obj, key Value) (Value, bool) {
 }
 
 // setElem stores v in an array's dense storage, as set_index does first
-// thing, or reports false. The key is a number when it is an index, as in
+// thing, or a number in a typed array's buffer, or reports false. The key is a number when it is an index, as in
 // elemAt.
 //
 //go:noinline
@@ -272,7 +307,50 @@ func setElem(o, k, v Value) bool {
 	a := o.object()
 	i, e := uint32(k.num), a.elemsOf()
 	if float64(i) != k.num || uint(i) >= uint(len(e)) || a.flags&objMappedArguments != 0 {
-		return false
+		if a.class != ClassTypedArray || float64(i) != k.num || !v.IsNumber() {
+			return false
+		}
+		// A number stored in a typed array's buffer, as typedStore stores
+		// it, through the storage its view keeps once typedStore has filled
+		// it in, and written here for the reason elemAt's read is. A
+		// Uint8Clamped element, rounded by a call, is typedStore's.
+		t, ok := a.dataOf().(*typedArrayData)
+		if !ok || uint(i) >= uint(t.fixedLength) {
+			return false
+		}
+		st := t.st
+		if st == nil || t.end > len(st.bytes) || st.immutable {
+			return false
+		}
+		// An integer element takes a number that is an int32, as toInt32
+		// does first; another is typedStore's, as toInt32's slow path is a
+		// call.
+		b, n, j := st.bytes[t.byteOffset:t.end], v.num, int(i)
+		x := int32(n)
+		switch t.kind {
+		case elemInt8, elemUint8:
+			if float64(x) != n {
+				return false
+			}
+			b[j] = byte(x)
+		case elemInt16, elemUint16:
+			if float64(x) != n {
+				return false
+			}
+			binary.LittleEndian.PutUint16(b[j<<1:], uint16(x))
+		case elemInt32, elemUint32:
+			if float64(x) != n {
+				return false
+			}
+			binary.LittleEndian.PutUint32(b[j<<2:], uint32(x))
+		case elemFloat32:
+			binary.LittleEndian.PutUint32(b[j<<2:], math.Float32bits(float32(n)))
+		case elemFloat64:
+			binary.LittleEndian.PutUint64(b[j<<3:], math.Float64bits(n))
+		default:
+			return false
+		}
+		return true
 	}
 	p := &e[i]
 	if holeAt(p) {

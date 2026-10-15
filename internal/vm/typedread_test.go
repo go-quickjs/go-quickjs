@@ -61,7 +61,7 @@ func TestTreeTypedArrayWrites(t *testing.T) {
 		const out = []
 		function put(a, k, v) { a[k] = v; return a[k] }
 		function show(v) { return typeof v === 'bigint' ? v + 'n' : Object.is(v, -0) ? '-0' : String(v) }
-		const vals = [1, -1, 300.7, -0, NaN, Infinity, '7', true, { valueOf() { return 9 } }]
+		const vals = [1, -1, 300.7, -0, NaN, Infinity, 2147483647, 2147483648, -2147483649, 4294967301, 2 ** 63, '7', true, { valueOf() { return 9 } }]
 		for (const C of [Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array,
 			Float32Array, Float64Array]) {
 			const a = new C(4)
