@@ -14,23 +14,24 @@ import (
 // y that runs only where x does not decide and one that throws only then,
 // comparisons, a ternary whose else is an && the then's jump ends at too,
 // which stays blocks, and this read in a derived constructor before super().
-// On the trees -- each function is one -- and in the interpreter, three
-// rounds alike.
+// On the trees -- each function is one, declaring a local, which keeps it
+// from being a pure body pureCall would evaluate instead -- and in the
+// interpreter, three rounds alike.
 func TestLogicalExpressions(t *testing.T) {
 	const src = `
 		const r = []
 		let log = ''
 		const o = { get a() { log += 'a'; return this.av }, get b() { log += 'b'; return this.bv }, get t() { log += 't'; throw new Error('thrown') }, av: 0, bv: 0, arr: [0, 1, '', 'x', null, NaN, -0, 2n, 0n] }
-		function and(o, i, j) { return o.arr[i] && o.arr[j] }
-		function or(o, i, j) { return o.arr[i] || o.arr[j] }
-		function chain(o, i) { return o.arr[i] && o.arr[i + 1] && o.arr[i + 2] }
-		function mix(o, i) { return (o.arr[i] || o.arr[i + 1]) && (o.arr[i + 2] || o.arr[i + 3]) }
-		function nest(o, i) { return o.arr[i] && (o.arr[i + 1] || o.arr[i + 2]) }
-		function gets(o) { return o.a && o.b }
-		function getsOr(o) { return o.a || o.b }
-		function throws(o) { return o.av && o.t }
-		function tern(o, c, i, j) { return c ? o.arr[i] : o.arr[i] && o.arr[j] }
-		function cmp(x, y) { return x < y && y < 10 || x === y }
+		function and(o, i, j) { let _k = 0; return o.arr[i] && o.arr[j] }
+		function or(o, i, j) { let _k = 0; return o.arr[i] || o.arr[j] }
+		function chain(o, i) { let _k = 0; return o.arr[i] && o.arr[i + 1] && o.arr[i + 2] }
+		function mix(o, i) { let _k = 0; return (o.arr[i] || o.arr[i + 1]) && (o.arr[i + 2] || o.arr[i + 3]) }
+		function nest(o, i) { let _k = 0; return o.arr[i] && (o.arr[i + 1] || o.arr[i + 2]) }
+		function gets(o) { let _k = 0; return o.a && o.b }
+		function getsOr(o) { let _k = 0; return o.a || o.b }
+		function throws(o) { let _k = 0; return o.av && o.t }
+		function tern(o, c, i, j) { let _k = 0; return c ? o.arr[i] : o.arr[i] && o.arr[j] }
+		function cmp(x, y) { let _k = 0; return x < y && y < 10 || x === y }
 		for (let round = 0; round < 3; round++) {
 			const s = []
 			for (let i = 0; i < 9; i++) for (let j = 0; j < 9; j++) s.push(String(and(o, i, j)) + '/' + String(or(o, i, j)))

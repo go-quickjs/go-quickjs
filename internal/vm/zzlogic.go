@@ -19,8 +19,15 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 // after every closure of the tree tier's (see AGENTS.md).
 
 var (
-	logicalNode func(x, y tval, or bool) tval
+	logicalNode func(x, y tval, kind uint8) tval
 	ternaryNode func(test func(*tctx) bool, a, b tval) tval
+)
+
+// The kinds of logicalNode: x && y, x || y, x ?? y.
+const (
+	logicAnd = iota
+	logicOr
+	logicNullish
 )
 
 func init() {
@@ -32,10 +39,20 @@ func init() {
 			return b(c)
 		}
 	}
-	logicalNode = func(x, y tval, or bool) tval {
-		if or {
+	logicalNode = func(x, y tval, kind uint8) tval {
+		switch kind {
+		case logicOr:
 			return func(c *tctx) Value {
 				if v := x(c); truthy(v) {
+					return v
+				}
+				return y(c)
+			}
+		case logicNullish:
+			// Null or undefined itself: document.all, which == null, is not
+			// nullish to ??.
+			return func(c *tctx) Value {
+				if v := x(c); !v.IsNullish() {
 					return v
 				}
 				return y(c)
@@ -55,9 +72,14 @@ func init() {
 // for which test is set: at is the jump past b until a is built, then
 // end, where b ends.
 type tlogic struct {
-	at int
-	x  tentry
-	or bool
+	at   int
+	x    tentry
+	kind uint8
+	// jump is the instruction it starts at, and body how long the block's
+	// statements were there: a y, an a or a b that adds one -- a call
+	// whose receiver is spilled -- is not an expression of its own, and the
+	// tree is built again with jump ending a block (buildTree).
+	jump, body int
 
 	test func(*tctx) bool
 	a    tval
@@ -81,7 +103,7 @@ const maxLogical = 64
 // instructions alone, and then each is let go whose instructions another
 // jump goes to, until none is, as letting one go leaves those around it
 // with a jump that is not one of them.
-func logicalJumps(code []bytecode.Instr, targets []int) map[int]int {
+func logicalJumps(code []bytecode.Instr, targets []int, skip map[int]bool) map[int]int {
 	var out map[int]int
 	// fits reports whether code[from:to] is all logicalOp's and the && and
 	// || and ternaries in out, which end at to or before.
@@ -122,6 +144,9 @@ func logicalJumps(code []bytecode.Instr, targets []int) map[int]int {
 	}
 	for pc := len(code) - 1; pc >= 0; pc-- {
 		in := code[pc]
+		if skip[pc] {
+			continue
+		}
 		switch in.Op {
 		case bytecode.OpJumpIfFalse, bytecode.OpJumpIfTrue, bytecode.OpJumpIfCmpFalse:
 			// c ? a : b: a from pc+1 to the jump past b at els-1, b from
@@ -137,7 +162,7 @@ func logicalJumps(code []bytecode.Instr, targets []int) map[int]int {
 			if fits(pc+1, els-1) && fits(els, end) {
 				add(pc, els)
 			}
-		case bytecode.OpJumpIfFalseKeep, bytecode.OpJumpIfTrueKeep:
+		case bytecode.OpJumpIfFalseKeep, bytecode.OpJumpIfTrueKeep, bytecode.OpJumpIfNotNullish:
 			to := int(in.A)
 			if to <= pc+1 || to >= len(code) || to-pc > maxLogical {
 				continue
@@ -177,8 +202,9 @@ func logicalJumps(code []bytecode.Instr, targets []int) map[int]int {
 }
 
 // logicalOp reports whether op is one an && or ||'s y may be made of: one
-// the tier builds as a tree it pushes, with no statement and nothing
-// spilled, and that is no jump.
+// the tier builds as a tree it pushes, mostly with no statement and
+// nothing spilled -- where it does, buildBlock finds so -- and that is no
+// jump.
 func logicalOp(op bytecode.Op) bool {
 	switch op {
 	case bytecode.OpPushConst, bytecode.OpPushUndef, bytecode.OpPushNull,
@@ -192,7 +218,11 @@ func logicalOp(op bytecode.Op) bool {
 		bytecode.OpShl, bytecode.OpShr, bytecode.OpUShr,
 		bytecode.OpEq, bytecode.OpNe, bytecode.OpStrictEq, bytecode.OpStrictNe,
 		bytecode.OpLt, bytecode.OpLe, bytecode.OpGt, bytecode.OpGe,
-		bytecode.OpNot, bytecode.OpTypeOf:
+		bytecode.OpNot, bytecode.OpTypeOf, bytecode.OpIn, bytecode.OpInstanceOf,
+		bytecode.OpGetGlobal, bytecode.OpGetLocalCheck,
+		// A call is mostly built without a statement: one that is not
+		// is found as it is built.
+		bytecode.OpGetPropThis, bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew:
 		return true
 	}
 	return false

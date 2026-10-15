@@ -94,6 +94,9 @@ type tbuilder struct {
 	// has got into, innermost last.
 	logical map[int]int
 	logic   []tlogic
+	// badLogic is the jump of an && or || or ternary that the block being
+	// built found its y, a or b add a statement to, or -1.
+	badLogic int
 }
 
 // target records a way from the block being built to the one at pc, whose
@@ -124,7 +127,15 @@ func (b *tbuilder) takeBody() []tstmt {
 
 // buildTree builds a function's tree, or reports nil where the function has
 // an instruction the tier does not build, or code it cannot follow.
-func buildTree(fn *bytecode.Function) *tree {
+func buildTree(fn *bytecode.Function) *tree { return buildTreeSkipping(fn, nil) }
+
+// maxBadLogic is how many of a function's && and || and ternaries a tree
+// is built again for (see tbuilder.badLogic) before it is given up.
+const maxBadLogic = 8
+
+// buildTreeSkipping is buildTree with the jumps of skipLogical each ending a
+// block, though logicalJumps would have them not.
+func buildTreeSkipping(fn *bytecode.Function, skipLogical map[int]bool) *tree {
 	if !treeTier.Load() || fn.HasDirectEval || fn.MaxStack > 64 {
 		return nil
 	}
@@ -196,7 +207,7 @@ func buildTree(fn *bytecode.Function) *tree {
 	}
 	// An && or || whose y is an expression nothing else jumps into is built
 	// as one node, in the block it is in.
-	logical := logicalJumps(code, targets)
+	logical := logicalJumps(code, targets, skipLogical)
 	for pc, to := range logical {
 		leader[pc+1], leader[to] = false, false
 		if end := ternaryEnd(code, pc, to); end > 0 {
@@ -233,7 +244,7 @@ func buildTree(fn *bytecode.Function) *tree {
 	if back {
 		flow = takeFlow(len(starts))
 	}
-	b := &tbuilder{fn: fn, index: index, depths: depth, protected: handlers, iters: iters, logical: logical}
+	b := &tbuilder{fn: fn, index: index, depths: depth, protected: handlers, iters: iters, logical: logical, badLogic: -1}
 	if handlers {
 		b.entryHandlers = make([][]thandlerEntry, len(starts))
 	}
@@ -254,6 +265,14 @@ func buildTree(fn *bytecode.Function) *tree {
 		if !ok {
 			if flow != nil {
 				flowPool.Put(flow)
+			}
+			if b.badLogic >= 0 && len(skipLogical) < maxBadLogic {
+				// Built again, with that jump ending a block.
+				if skipLogical == nil {
+					skipLogical = map[int]bool{}
+				}
+				skipLogical[b.badLogic] = true
+				return buildTreeSkipping(fn, skipLogical)
 			}
 			return nil
 		}
@@ -369,6 +388,10 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 		passed := false
 		for n := len(b.logic); n > 0 && b.logic[n-1].at == pc; n = len(b.logic) {
 			l := &b.logic[n-1]
+			if len(b.body) != l.body {
+				b.badLogic = l.jump
+				return nil, false
+			}
 			if l.test != nil && l.a == nil {
 				l.a, l.at, passed = b.pop().tree(), l.end, true
 				break
@@ -378,7 +401,7 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 			if l.test != nil {
 				b.push(ternaryNode(l.test, l.a, y))
 			} else {
-				b.push(logicalNode(l.x.tree(), y, l.or))
+				b.push(logicalNode(l.x.tree(), y, l.kind))
 			}
 		}
 		if passed {
@@ -387,10 +410,18 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 		in := code[pc]
 		if to, ok := b.logical[pc]; ok {
 			if end := ternaryEnd(code, pc, to); end > 0 {
-				b.logic = append(b.logic, tlogic{at: to - 1, end: end, test: b.ternaryTest(pc, in)})
+				test := b.ternaryTest(pc, in)
+				b.logic = append(b.logic, tlogic{at: to - 1, end: end, test: test, jump: pc, body: len(b.body)})
 				continue
 			}
-			b.logic = append(b.logic, tlogic{at: to, x: b.pop(), or: in.Op == bytecode.OpJumpIfTrueKeep})
+			kind := uint8(logicAnd)
+			switch in.Op {
+			case bytecode.OpJumpIfTrueKeep:
+				kind = logicOr
+			case bytecode.OpJumpIfNotNullish:
+				kind = logicNullish
+			}
+			b.logic = append(b.logic, tlogic{at: to, x: b.pop(), kind: kind, jump: pc, body: len(b.body)})
 			continue
 		}
 		switch in.Op {
@@ -626,7 +657,8 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 		}
 		if n := len(b.logic); n > 0 && i+skip+1 > b.logic[n-1].at {
 			// What an instruction took in with it ran past where a y
-			// ends, which a y's instructions never do.
+			// ends: it is not an expression of its own.
+			b.badLogic = b.logic[n-1].jump
 			return nil, false
 		}
 		i += skip

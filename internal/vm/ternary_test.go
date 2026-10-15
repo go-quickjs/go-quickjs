@@ -20,17 +20,17 @@ func TestTernaryExpressions(t *testing.T) {
 		const r = []
 		let log = ''
 		const o = { get a() { log += 'a'; return 1 }, get b() { log += 'b'; return 2 }, get t() { log += 't'; throw new Error('thrown') }, vals: [0, 1, '', 'x', null, undefined, NaN, -0, 2n, 0n, {}, []] }
-		function t1(o, i) { return o.vals[i] ? 'T' : 'F' }
-		function lt(x, y) { return x < y ? x : y }
-		function ge(x, y) { return x >= y ? 'ge' : 'lt' }
-		function seq(x, y) { return x === y ? 1 : x !== y + 1 ? 2 : 3 }
-		function nestThen(x, y) { return x ? (y ? 'xy' : 'x') : 'none' }
-		function nestElse(x, y) { return x ? 'x' : y ? 'y' : 'none' }
-		function inAnd(x, y, z) { return x && (y ? z : -z) }
-		function andIn(x, y, z) { return x ? y && z : y || z }
-		function gets(o, c) { return c ? o.a : o.b }
-		function throws(o, c) { return c ? o.t : o.a }
-		function call(o, c) { return c ? Math.max(o.vals.length, 3) : o.vals.length }
+		function t1(o, i) { let _k = 0; return o.vals[i] ? 'T' : 'F' }
+		function lt(x, y) { let _k = 0; return x < y ? x : y }
+		function ge(x, y) { let _k = 0; return x >= y ? 'ge' : 'lt' }
+		function seq(x, y) { let _k = 0; return x === y ? 1 : x !== y + 1 ? 2 : 3 }
+		function nestThen(x, y) { let _k = 0; return x ? (y ? 'xy' : 'x') : 'none' }
+		function nestElse(x, y) { let _k = 0; return x ? 'x' : y ? 'y' : 'none' }
+		function inAnd(x, y, z) { let _k = 0; return x && (y ? z : -z) }
+		function andIn(x, y, z) { let _k = 0; return x ? y && z : y || z }
+		function gets(o, c) { let _k = 0; return c ? o.a : o.b }
+		function throws(o, c) { let _k = 0; return c ? o.t : o.a }
+		function call(o, c) { let _k = 0; return c ? Math.max(o.vals.length, 3) : o.vals.length }
 		for (let round = 0; round < 3; round++) {
 			const s = []
 			for (let i = 0; i < o.vals.length; i++) s.push(t1(o, i))
@@ -110,7 +110,7 @@ func TestLogicalJumpsFound(t *testing.T) {
 		{"end jumped to", []bytecode.Instr{local(0), op(bytecode.OpJumpIfFalse, 6), local(1), op(bytecode.OpJumpIfFalseKeep, 5),
 			local(2), op(bytecode.OpJump, 7), local(3), ret, op(bytecode.OpJump, 7)}, map[int]int{3: 5}},
 	} {
-		if got := logicalJumps(c.code, count(c.code)); !maps.Equal(got, c.want) {
+		if got := logicalJumps(c.code, count(c.code), nil); !maps.Equal(got, c.want) {
 			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
 		}
 	}
