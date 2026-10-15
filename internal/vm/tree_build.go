@@ -31,6 +31,9 @@ type tentry struct {
 	this    bool
 	// literal is set for undefined, null, true or false, in n.
 	literal bool
+	// method is set for a get_prop_this of a receiver read in place, which
+	// is the entry beneath (see zzmethod.go).
+	method *methodOf
 	// arith is, for a tree that is an arithmetic or bitwise node over
 	// operands, what it is of: a store of it to a local can then be one
 	// statement (see storeArith).
@@ -1030,6 +1033,12 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		}
 		b.push(getPropOperand(b.pop(), in, pc))
 	case bytecode.OpGetPropThis:
+		// A receiver read in place is read again in place: the method's
+		// call builds both into one node (see zzmethod.go).
+		if top := b.stack[len(b.stack)-1]; (top.local || top.this) && top.v == nil && top.slot < 0 {
+			b.pushEntry(tentry{v: methodRead(top, in, pc), slot: -1, method: &methodOf{in: in, pc: pc}})
+			return 0, true
+		}
 		// The receiver stays beneath the method: it is read from its slot
 		// twice rather than evaluated twice.
 		if !b.spill() {
@@ -1041,6 +1050,12 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		val, obj := b.pop(), b.pop()
 		return 0, b.stmt(setPropStmt(obj, val.tree(), in, pc, fn.Strict))
 	case bytecode.OpCall, bytecode.OpCallMethod, bytecode.OpNew:
+		if k := len(b.stack) - int(in.A) - 1; in.Op == bytecode.OpCallMethod && k > 0 {
+			if m := b.stack[k].method; m != nil {
+				b.push(b.methodCall(int(in.A), m, pc))
+				return 0, true
+			}
+		}
 		// The callee and the arguments go to their slots, which is where a
 		// call takes its arguments from.
 		if !b.spill() {
