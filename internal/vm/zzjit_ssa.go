@@ -4767,9 +4767,8 @@ func (e *jitEntry) setSSA(s *jitState, fn *bytecode.Function, p *ir.Program, cod
 // compile asks for its function's and for each callee's it inlines, and a
 // function is compiled again as it learns, and inlined into each of its
 // callers -- lowering them again had been some 8% of a compile. A program
-// is never changed once lowered. construct is jitcompile.SSAConstruct when
-// they were. inlinable is jitInlinable's answer, once asked: 1 if the
-// function may be inlined, 2 if not.
+// is never changed once lowered. inlinable is jitInlinable's answer, once
+// asked: 1 if the function may be inlined, 2 if not.
 //
 // bytes is what the lowering holds, its programs' (ir.Program's
 // Footprint), which the JIT counts (jitState.lowerBytes); used the epoch
@@ -4777,7 +4776,6 @@ func (e *jitEntry) setSSA(s *jitState, fn *bytecode.Function, p *ir.Program, cod
 // drops the lowerings of functions it has no entry for to make room
 // (makeRoom), the least recently used first, before any code.
 type jitLowering struct {
-	construct bool
 	inlinable uint8
 	done      [jitLowerKinds]bool
 	progs     [jitLowerKinds]*ir.Program
@@ -4811,14 +4809,11 @@ const (
 func (s *jitState) lowering(fn *bytecode.Function) *jitLowering {
 	key := weak.Make(fn)
 	l := s.lowered[key]
-	if l == nil || l.construct != jitcompile.SSAConstruct {
+	if l == nil {
 		if s.lowered == nil {
 			s.lowered = map[weak.Pointer[bytecode.Function]]*jitLowering{}
 		}
-		if l != nil {
-			s.dropLowering(key, l)
-		}
-		l = &jitLowering{construct: jitcompile.SSAConstruct, bytes: jitLoweringFixed}
+		l = &jitLowering{bytes: jitLoweringFixed}
 		s.lowered[key] = l
 		s.lowerBytes += l.bytes
 	}

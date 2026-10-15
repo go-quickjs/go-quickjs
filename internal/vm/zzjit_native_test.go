@@ -5160,8 +5160,6 @@ func TestJITSSANativeConstruct(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer func(was bool) { jitcompile.SSAConstruct = was }(jitcompile.SSAConstruct)
-	jitcompile.SSAConstruct = true
 	setup := `function V(x,y){this.x=x;this.y=y}
 		V.prototype.len=function(){return this.x+this.y};
 		function R(x){this.x=x;return {boxed:x}}
@@ -5249,8 +5247,6 @@ func TestJITSSANativeArrayConstruct(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer func(was bool) { jitcompile.SSAConstruct = was }(jitcompile.SSAConstruct)
-	jitcompile.SSAConstruct = true
 	setup := `function arrays(n){let s=0,prev=null,same=0,a;for(let i=0;i<n;i++){a=new Array();a.push(i);if(a===prev)same++;s+=a.length+a[0]+(prev===null?0:1);prev=a}
 			return [s,same,Array.isArray(a),Object.getPrototypeOf(a)===Array.prototype,a.length].join()}`
 	src := `arrays(400)`
@@ -5308,8 +5304,6 @@ func TestJITSSANativeCallThroughCall(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer func(was bool) { jitcompile.SSAConstruct = was }(jitcompile.SSAConstruct)
-	jitcompile.SSAConstruct = true
 	setup := `function add(a,b){this.j=a;return (this.k|0)+this.j+b}
 		function other(a,b){return this.k*a-b}
 		function viaRun(o,n,f){let t=0;for(let i=0;i<n;i++)t=(t+f.call(o,i,1))|0;return t}
@@ -6497,8 +6491,6 @@ func TestJITSSASeedsConstructions(t *testing.T) {
 	// as calls leaving native code.
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	defer func(was bool) { jitcompile.SSAConstruct = was }(jitcompile.SSAConstruct)
-	jitcompile.SSAConstruct = true
 	setup := `function V(x){this.x=x;this.y=x+1}
 		function mk1(n){let t=0;for(let i=0;i<n;i++){const v=new V(i);t=(t+v.y)|0}return t}
 		function mk2(n){let t=0;for(let i=0;i<n;i++){const v=new V(i&15);t=(t*3+v.x)|0}return t}`
@@ -6840,8 +6832,6 @@ func TestJITSSAAssignsGlobals(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer func(was bool) { jitcompile.SSAConstruct = was }(jitcompile.SSAConstruct)
-	jitcompile.SSAConstruct = true
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	setup := `var count=0;let lex=0;function P(x){this.x=x}
@@ -6964,8 +6954,6 @@ func TestJITSSAResumesEveryLevel(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer func(was bool) { jitcompile.SSAConstruct = was }(jitcompile.SSAConstruct)
-	jitcompile.SSAConstruct = true
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	setup := `var G={get g(){return 1}};
@@ -7900,18 +7888,15 @@ func TestJITSSAEntersCalleesWithoutCode(t *testing.T) {
 	for _, tc := range []struct {
 		name, run string
 		caller    string
-		construct bool
 		entered   bool
 	}{
-		{"call", `[calls(300),calls(300)]`, "calls", false, false},
-		{"method", `[methods(o,300),methods(o,300)]`, "methods", false, false},
-		{"construct", `[constructs(300),constructs(300)]`, "constructs", true, false},
-		{"throw", `var r=[];for(let k=0;k<3;k++){try{r.push(throws(300))}catch(e){r.push(e.message)}}r`, "throws", false, false},
-		{"wide", `[wides(300),wides(300)]`, "wides", false, true},
+		{"call", `[calls(300),calls(300)]`, "calls", false},
+		{"method", `[methods(o,300),methods(o,300)]`, "methods", false},
+		{"construct", `[constructs(300),constructs(300)]`, "constructs", false},
+		{"throw", `var r=[];for(let k=0;k<3;k++){try{r.push(throws(300))}catch(e){r.push(e.message)}}r`, "throws", false},
+		{"wide", `[wides(300),wides(300)]`, "wides", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			defer func(c bool) { jitcompile.SSAConstruct = c }(jitcompile.SSAConstruct)
-			jitcompile.SSAConstruct = tc.construct
 			src := setup + ";" + tc.run + ".map(String).join()"
 			want := New(Config{})
 			defer func() { want.Close(); want.ReleaseClosed() }()
@@ -8150,8 +8135,6 @@ func TestJITSSAInlinedConstructions(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer func(was bool) { jitcompile.SSAConstruct = was }(jitcompile.SSAConstruct)
-	jitcompile.SSAConstruct = true
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	setup := `function W(x){this.a=x;this.b=x*2}
@@ -8217,8 +8200,6 @@ func TestJITSSAInlinedForwardingConstructions(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer func(was bool) { jitcompile.SSAConstruct = was }(jitcompile.SSAConstruct)
-	jitcompile.SSAConstruct = true
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	setup := `var Class={create:function(){return function(){this.initialize.apply(this,arguments)}}};
@@ -8462,9 +8443,6 @@ func TestJITSSAPoolsRefilledByGo(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	old := jitcompile.SSAConstruct
-	jitcompile.SSAConstruct = true
-	defer func() { jitcompile.SSAConstruct = old }()
 	runtime.GC()
 	// The collector runs only when the calls of Go run it, and has done
 	// marking when they return: one that marked through a round, as it
@@ -8551,9 +8529,6 @@ func TestJITSSAPolymorphicStores(t *testing.T) {
 	// GOMAXPROCS=1, would count as the adds' exits.
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	old := jitcompile.SSAConstruct
-	jitcompile.SSAConstruct = true
-	defer func() { jitcompile.SSAConstruct = old }()
 	setup := `function mk(k,i){if(k==0)return {a:i};if(k==1)return {b:i,a:i};if(k==2)return {c:i};return {d:i,e:i}}
 		function adds(n){let t=0;for(let i=0;i<n;i++){const o=mk(i&3,i);o.s=i;t=(t+o.s)|0}return t}
 		function big(k){const o={p0:0,p1:1,p2:2,p3:3,p4:4,p5:5,p6:6,p7:7,p8:8};if(k)o.q=1;return o}
@@ -8704,9 +8679,6 @@ func TestJITSSAGoCalls(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	old := jitcompile.SSAConstruct
-	jitcompile.SSAConstruct = true
-	defer func() { jitcompile.SSAConstruct = old }()
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	calls := 0
@@ -8933,9 +8905,6 @@ func TestJITSSASeedsGlobalsNativeCodeRead(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	old := jitcompile.SSAConstruct
-	jitcompile.SSAConstruct = true
-	defer func() { jitcompile.SSAConstruct = old }()
 	src := `function V(a){this.a=a;this.b=a*2}
 		var o={w:3};
 		function f(n,k){let s=0;for(let i=0;i<n;i++){s=(s*3+i)|0;if(i>=k){const v=new V(i);s=(s+v.a+v.b+o.w)|0}}return s}`
@@ -10545,8 +10514,6 @@ func TestJITSSAInlinedNestedForwardingConstructions(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer func(was bool) { jitcompile.SSAConstruct = was }(jitcompile.SSAConstruct)
-	jitcompile.SSAConstruct = true
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	setup := `var Class={create:function(){return function(){this.initialize.apply(this,arguments)}}};
@@ -11269,8 +11236,6 @@ func TestJITSSAInlinedCalleeLearns(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
-	defer func(was bool) { jitcompile.SSAConstruct = was }(jitcompile.SSAConstruct)
-	jitcompile.SSAConstruct = true
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	setup := `var Class={create:function(){return function(){this.initialize.apply(this,arguments)}}};

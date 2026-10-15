@@ -8,8 +8,6 @@ import (
 	"slices"
 	"testing"
 	"weak"
-
-	jitcompile "github.com/go-quickjs/go-quickjs/internal/jit/compile"
 )
 
 // A write that adds its property, and a read that finds its property, along
@@ -101,8 +99,6 @@ func TestJITSSASeedsBuiltinsAndCalleesCalls(t *testing.T) {
 	// as calls leaving native code.
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	defer func(was bool) { jitcompile.SSAConstruct = was }(jitcompile.SSAConstruct)
-	jitcompile.SSAConstruct = true
 	setup := `function G(x){this.x=x}
 		function H(x){G.call(this,x);this.y=x+1}
 		function work(n){const a=new Array();let t=0;for(let i=0;i<n;i++){a.push(i);if(a.length>8)t=(t+a.pop())|0;const h=new H(i);t=(t+h.x+h.y)|0}return t}`

@@ -210,13 +210,6 @@ func lowerRecovered(fn *bytecode.Function, m lowering) (p *ir.Program, err error
 // lowerImpl is lowerFunction, or a test's replacement for it.
 var lowerImpl = lowerFunction
 
-// SSAConstruct has the new pipeline compile functions that construct, `new
-// C(...)`, which its code makes natively where it can and leaves to Go
-// otherwise. Tests turn it off to compare; with it the V8 suite runs some
-// 18% faster at -n 5, RayTrace 43% and EarleyBoyer 36%, DeltaBlue's warm-up
-// paying 12% more for its larger compiles.
-var SSAConstruct = true
-
 func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 	if fn == nil {
 		return nil, refuse(-1, "nil function")
@@ -273,7 +266,7 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 			return nil, err
 		}
 		effects[pc] = e
-		if in.Op == bytecode.OpNew && (!m.ssa || !SSAConstruct) || (in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict ||
+		if in.Op == bytecode.OpNew && !m.ssa || (in.Op == bytecode.OpSetGlobal || in.Op == bytecode.OpSetGlobalStrict ||
 			in.Op == bytecode.OpCheckGlobalRef || in.Op == bytecode.OpAssertResolved ||
 			in.Op == bytecode.OpNewObject || in.Op == bytecode.OpNewRegExp || in.Op == bytecode.OpDefineField || in.Op == bytecode.OpPushEmptyString ||
 			in.Op == bytecode.OpConcat || in.Op == bytecode.OpSetUpvalue || in.Op == bytecode.OpSetUpvalueCheck || in.Op == bytecode.OpInitUpvalue) && !m.ssa {
