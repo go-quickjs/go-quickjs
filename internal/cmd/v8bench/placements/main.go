@@ -362,6 +362,10 @@ func compareCmd(args []string) error {
 	return nil
 }
 
+// shortRuns is the time, in milliseconds, under which a benchmark's three
+// runs are run again three hundred times (runPlacement).
+const shortRuns = 150
+
 type named struct {
 	name string
 	ms   float64
@@ -399,13 +403,26 @@ func runPlacement(exe, dir, bench, suite string, n int, jitEnabled bool) ([]name
 		return nil, err
 	}
 	// The short ones again, three hundred runs in a process of their own,
-	// scaled back to three; the total follows.
-	short, err := run("-n", "300", "-suite", "Richards,DeltaBlue")
+	// scaled back to three; the total follows. Short is what took less than
+	// shortRuns' time in its three runs -- the V8 suite's Richards and
+	// DeltaBlue, a few milliseconds each -- not a name: Are We Fast Yet's
+	// Richards and DeltaBlue take a second a run, and three hundred of them
+	// had made each placement's run of that suite ten minutes long.
+	var names []string
+	for _, g := range got {
+		if g.name != "TOTAL" && g.ms < shortRuns {
+			names = append(names, g.name)
+		}
+	}
+	if len(names) == 0 {
+		return got, nil
+	}
+	short, err := run("-n", "300", "-suite", strings.Join(names, ","))
 	if err != nil {
 		return nil, err
 	}
 	for _, s := range short {
-		if s.name != "Richards" && s.name != "DeltaBlue" {
+		if !slices.Contains(names, s.name) {
 			continue
 		}
 		v := s.ms / 100
