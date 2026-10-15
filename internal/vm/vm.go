@@ -3245,9 +3245,9 @@ func pointsAtOrAbove(p *Value, locals []Value, slot int) bool {
 	return false
 }
 
-// makeClosure builds a closure from a nested function template, capturing the
-// upvalues its descriptor names.
-func (r *Runtime) makeClosure(f *frame, c Value) *Object {
+// newClosure builds a closure from a nested function template, capturing the
+// upvalues its descriptor names (makeClosure).
+func (r *Runtime) newClosure(f *frame, c Value) *Object {
 	tmpl := c.template()
 
 	// The object, its function data, its closure and the bindings that closure

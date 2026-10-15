@@ -58,6 +58,21 @@ func planTreeCall(fd *funcData) {
 	fd.treePlanned = true
 }
 
+// makeClosure builds a closure from a nested function template
+// (newClosure), and plans its calls (planTreeCall) where its function's
+// tree is built: what planTreeCall asks of it is settled when it is made.
+// A closure had been planned after its first call, which runFD made: a
+// function made anew at every call of its maker -- a callback, an arrow
+// for a forEach, as Havlak's loops make them -- had every first call made
+// so, half a million of Are We Fast Yet's.
+func (r *Runtime) makeClosure(f *frame, c Value) *Object {
+	o := r.newClosure(f, c)
+	if fd := o.fn(); fd != nil && atomic.LoadPointer(&fd.closure.fn.VMCode) != nil {
+		planTreeCall(fd)
+	}
+	return o
+}
+
 // callTree calls o, whose funcData planTreeCall has given a tree, with this
 // and args, once callDirect has found it a compiled function of this
 // realm and made its interrupt check: runFD's call for a function with no
