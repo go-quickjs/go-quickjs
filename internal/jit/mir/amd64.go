@@ -65,6 +65,11 @@ type compiler struct {
 	savingUsed  bool
 	storing     amd64.Label
 	storingUsed bool
+	// appending is the routine the element writes Go makes share where a
+	// number at an array's length may be appended natively (appendingCall),
+	// which goes on to saving for the rest.
+	appending     amd64.Label
+	appendingUsed bool
 }
 
 type stub struct {
@@ -160,6 +165,10 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 	if c.enterUsed {
 		c.a.Bind(c.enter)
 		c.enterExit()
+	}
+	if c.appendingUsed {
+		c.a.Bind(c.appending)
+		c.appendingCall()
 	}
 	if c.storingUsed {
 		c.a.Bind(c.storing)
@@ -1699,7 +1708,17 @@ func (c *compiler) pushGuards(t *ssa.CallSite, recv *ssa.Value, guard func(amd64
 	c.movImm(scratchA, uint64(t.Protos[0].Object))
 	c.a.Op(amd64.Cmp, scratchB, scratchA, true)
 	guard(amd64.CondNE)
-	for i, h := range t.Protos {
+	c.protoGuards(t.Protos, guard)
+}
+
+// protoGuards checks an array's prototypes, protos, the first of which is
+// its own, are as they were: each with its shape, with no elements, the
+// second the first's prototype and the last of the chain -- none, then,
+// with an indexed property a setter could be asked about (the VM gives
+// protos only where neither has an index in its table). It uses every
+// scratch register.
+func (c *compiler) protoGuards(protos [2]ssa.Holder, guard func(amd64.Cond)) {
+	for i, h := range protos {
 		c.movImm(scratchA, uint64(h.Object))
 		c.a.Load(scratchB, scratchA, c.enc.ObjectShape)
 		c.movImm(scratchC, uint64(h.Shape))
@@ -1721,7 +1740,7 @@ func (c *compiler) pushGuards(t *ssa.CallSite, recv *ssa.Value, guard func(amd64
 		// Its prototype: the next, or none.
 		c.a.Load(scratchB, scratchA, c.enc.ObjectProto)
 		if i == 0 {
-			c.movImm(scratchC, uint64(t.Protos[1].Object))
+			c.movImm(scratchC, uint64(protos[1].Object))
 			c.a.Op(amd64.Cmp, scratchB, scratchC, true)
 		} else {
 			c.a.Op(amd64.Test, scratchB, scratchB, true)
@@ -2875,6 +2894,100 @@ func (c *compiler) storingCall() {
 	c.a.Store(regCtx, abi.OffGoArgs+c.enc.RefOffset, scratchC)
 	c.a.Store(regCtx, abi.OffGoArgs+size+c.enc.RefOffset, scratchA)
 	c.storeImm(regCtx, abi.OffGoOp, uint64(ssa.GoStore), scratchA)
+	c.storeImm(regCtx, abi.OffGoKeep, 0, scratchA)
+	if !c.savingUsed {
+		c.saving, c.savingUsed = c.a.NewLabel(), true
+	}
+	c.a.Jmp(c.saving)
+}
+
+// goAppending is goSaving of an element write's store (ssa.GoElemWrite),
+// its operands in the context's GoArgs, through appendingCall, which
+// appends a number at an array's length natively where it may and calls
+// Go for the rest: if Go refuses, stub.
+func (c *compiler) goAppending(stub *amd64.Label) {
+	if !c.appendingUsed {
+		c.appending, c.appendingUsed = c.a.NewLabel(), true
+	}
+	back := c.a.NewLabel()
+	c.a.LeaLabel(scratchA, back)
+	c.a.Store(regCtx, abi.OffGoSite, scratchA)
+	c.a.Jmp(c.appending)
+	c.a.Bind(back)
+	c.a.Load(scratchB, regCtx, abi.OffGoStatus)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	c.a.Jcc(amd64.CondNE, *stub)
+}
+
+// appendingCall is the routine the element writes Go makes share
+// (goAppending), their array, key and number in the context's GoArgs: a
+// number at its array's length it appends, as Go's jitStoreElem would and
+// a push does natively (pushGuards, push), where the array has room, is
+// extensible, its length writable and dense, and its prototypes are the
+// function's (ssa.Func's ArrayProtos), as they were -- the element's words
+// the number's and a nil pointer, the length one more, neither a pointer
+// written, so no barrier -- and goes back to the site, at GoSite, with
+// nothing refused; anything else Go stores, through savingCall, which goes
+// back there. Go had made each such append, a call of it from native code
+// for every element an array was filled with: one routine of the code's
+// makes them, as savingCall makes its calls of Go, so that a site, which
+// any element write, a typed array's included, has, is no longer.
+func (c *compiler) appendingCall() {
+	size := int32(unsafe.Sizeof(abi.GoArg{}))
+	protos := c.f.ArrayProtos
+	toGo := c.a.NewLabel()
+	fail := func(cond amd64.Cond) { c.a.Jcc(cond, toGo) }
+	// The key, an index in [0, 2**32), as index makes it, and the array's
+	// length.
+	c.a.Load(scratchA, regCtx, abi.OffGoArgs+size+c.enc.NumOffset)
+	c.a.MovQToX(xScratch0, scratchA)
+	c.a.Cvttsd2si(scratchA, xScratch0)
+	c.a.Cvtsi2sd(xScratch1, scratchA, true)
+	c.a.SSEOp(amd64.UcomiSD, xScratch1, xScratch0)
+	fail(amd64.CondNE)
+	fail(amd64.CondP)
+	c.a.MovRR(scratchB, scratchA)
+	c.a.ShiftImm(amd64.Shr, scratchB, 32, true)
+	fail(amd64.CondNE)
+	c.a.Load(scratchC, regCtx, abi.OffGoArgs+c.enc.RefOffset)
+	c.a.Load(scratchB, scratchC, c.enc.ObjectElems+8)
+	c.a.Op(amd64.Cmp, scratchA, scratchB, true)
+	fail(amd64.CondNE)
+	c.a.Load(scratchB, scratchC, c.enc.ObjectElems+16)
+	c.a.Op(amd64.Cmp, scratchA, scratchB, true)
+	fail(amd64.CondAE)
+	c.a.LoadU8(scratchB, scratchC, c.enc.ObjectClass)
+	c.a.OpImm(amd64.Cmp, scratchB, int32(c.enc.ClassArray), false)
+	fail(amd64.CondNE)
+	c.a.LoadU8(scratchB, scratchC, c.enc.ObjectFlags)
+	want := c.enc.FlagExtensible | c.enc.FlagLengthWritable
+	c.a.OpImm(amd64.And, scratchB, int32(want|c.enc.FlagSparse), false)
+	c.a.OpImm(amd64.Cmp, scratchB, int32(want), false)
+	fail(amd64.CondNE)
+	c.a.Load(scratchB, scratchC, c.enc.ObjectProto)
+	c.movImm(scratchA, uint64(protos[0].Object))
+	c.a.Op(amd64.Cmp, scratchB, scratchA, true)
+	fail(amd64.CondNE)
+	c.protoGuards(protos, fail)
+	// The length one more, then the element at the old one: the address
+	// past it, less a value.
+	c.a.Load(scratchC, regCtx, abi.OffGoArgs+c.enc.RefOffset)
+	c.a.Load(scratchA, scratchC, c.enc.ObjectElems+8)
+	c.a.OpImm(amd64.Add, scratchA, 1, true)
+	c.a.Store(scratchC, c.enc.ObjectElems+8, scratchA)
+	c.a.ShiftImm(amd64.Shl, scratchA, 4, true)
+	c.a.Load(scratchB, scratchC, c.enc.ObjectElems)
+	c.a.Op(amd64.Add, scratchA, scratchB, true)
+	c.a.Load(scratchB, regCtx, abi.OffGoArgs+2*size+c.enc.NumOffset)
+	c.a.MovQToX(xScratch0, scratchB)
+	c.boxF64(xScratch0, scratchB)
+	c.a.Store(scratchA, c.enc.NumOffset-16, scratchB)
+	c.storeImm(scratchA, c.enc.RefOffset-16, 0, scratchB)
+	c.storeImm(regCtx, abi.OffGoStatus, 0, scratchB)
+	c.a.Load(scratchA, regCtx, abi.OffGoSite)
+	c.a.JmpReg(scratchA)
+	c.a.Bind(toGo)
+	c.storeImm(regCtx, abi.OffGoOp, uint64(ssa.GoElemWrite), scratchA)
 	c.storeImm(regCtx, abi.OffGoKeep, 0, scratchA)
 	if !c.savingUsed {
 		c.saving, c.savingUsed = c.a.NewLabel(), true
@@ -4572,7 +4685,11 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 				c.a.Store(regCtx, abi.OffGoArgs+size+c.enc.NumOffset, scratchA)
 				c.a.MovQFromX(scratchA, c.xmm(v.Args[2], xScratch0))
 				c.a.Store(regCtx, abi.OffGoArgs+2*size+c.enc.NumOffset, scratchA)
-				c.goSaving(uint64(ssa.GoElemWrite), &stub)
+				if c.f.ArrayProtos[0].Object != 0 && c.enc.ValueSize == 16 {
+					c.goAppending(&stub)
+				} else {
+					c.goSaving(uint64(ssa.GoElemWrite), &stub)
+				}
 				c.a.Jmp(done)
 			})
 		}

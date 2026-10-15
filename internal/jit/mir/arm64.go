@@ -65,6 +65,11 @@ type a64Compiler struct {
 	// amd64's.
 	storing     arm64.Label
 	storingUsed bool
+	// appending is the routine the element writes Go makes share where a
+	// number at an array's length may be appended natively
+	// (appendingCall), as amd64's.
+	appending     arm64.Label
+	appendingUsed bool
 }
 
 type a64Stub struct {
@@ -162,6 +167,10 @@ func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 	if c.enterUsed {
 		c.a.Bind(c.enter)
 		c.enterExit()
+	}
+	if c.appendingUsed {
+		c.a.Bind(c.appending)
+		c.appendingCall()
 	}
 	if c.storingUsed {
 		c.a.Bind(c.storing)
@@ -1302,6 +1311,88 @@ func (c *a64Compiler) storingCall() {
 	c.a.B(c.saving)
 }
 
+// goAppending is amd64's: an element write's store, its operands in the
+// context's GoArgs, through appendingCall; if Go refuses, stub.
+func (c *a64Compiler) goAppending(stub *arm64.Label) {
+	if !c.appendingUsed {
+		c.appending, c.appendingUsed = c.a.NewLabel(), true
+	}
+	back := c.a.NewLabel()
+	c.a.Adr(a64A, back)
+	c.a.Store(a64Ctx, abi.OffGoSite, a64A)
+	c.a.B(c.appending)
+	c.a.Bind(back)
+	c.a.Load(a64B, a64Ctx, abi.OffGoStatus)
+	c.a.Cbnz(a64B, *stub, true)
+}
+
+// appendingCall is the routine goAppending's sites share, as amd64's: a
+// number at its array's length appended natively where the array and its
+// prototypes let it, anything else Go's, through savingCall. It uses A, B,
+// C, D, F0 and F1.
+func (c *a64Compiler) appendingCall() {
+	size := int32(unsafe.Sizeof(abi.GoArg{}))
+	protos := c.f.ArrayProtos
+	toGo := c.a.NewLabel()
+	fail := func(cond arm64.Cond) { c.a.BCond(cond, toGo) }
+	// The key, an index in [0, 2**32), as index makes it, and the array's
+	// length.
+	c.a.Load(a64A, a64Ctx, abi.OffGoArgs+size+c.enc.NumOffset)
+	c.a.FMovToF(a64F0, a64A)
+	c.a.Fcvtzs(a64A, a64F0)
+	c.a.Scvtf(a64F1, a64A, true)
+	c.a.FCmp(a64F1, a64F0)
+	fail(arm64.NE)
+	c.a.ShiftImm(arm64.Lsr, a64B, a64A, 32, true)
+	c.a.CmpImm(a64B, 0, true)
+	fail(arm64.NE)
+	c.a.Load(a64C, a64Ctx, abi.OffGoArgs+c.enc.RefOffset)
+	c.a.Load(a64B, a64C, c.enc.ObjectElems+8)
+	c.a.Cmp(a64A, a64B, true)
+	fail(arm64.NE)
+	c.a.Load(a64B, a64C, c.enc.ObjectElems+16)
+	c.a.Cmp(a64A, a64B, true)
+	fail(arm64.HS)
+	c.a.LoadU8(a64B, a64C, c.enc.ObjectClass)
+	c.a.CmpImm(a64B, int64(c.enc.ClassArray), false)
+	fail(arm64.NE)
+	c.a.LoadU8(a64B, a64C, c.enc.ObjectFlags)
+	want := c.enc.FlagExtensible | c.enc.FlagLengthWritable
+	c.movImm(a64A, uint64(want|c.enc.FlagSparse))
+	c.a.Op(arm64.And, a64B, a64B, a64A, false)
+	c.a.CmpImm(a64B, int64(want), false)
+	fail(arm64.NE)
+	c.a.Load(a64B, a64C, c.enc.ObjectProto)
+	c.movImm(a64A, uint64(protos[0].Object))
+	c.a.Cmp(a64B, a64A, true)
+	fail(arm64.NE)
+	c.protoGuards(protos, fail)
+	// The element at the length, then the length one more.
+	c.a.Load(a64C, a64Ctx, abi.OffGoArgs+c.enc.RefOffset)
+	c.a.Load(a64B, a64C, c.enc.ObjectElems+8)
+	c.a.AddImm(a64D, a64B, 1, true)
+	c.a.Store(a64C, c.enc.ObjectElems+8, a64D)
+	c.a.ShiftImm(arm64.Lsl, a64B, a64B, 4, true)
+	c.a.Load(a64A, a64C, c.enc.ObjectElems)
+	c.a.Op(arm64.Add, a64A, a64A, a64B, true)
+	c.a.Load(a64B, a64Ctx, abi.OffGoArgs+2*size+c.enc.NumOffset)
+	c.a.FMovToF(a64F0, a64B)
+	c.boxF64(a64F0, a64B)
+	c.a.Store(a64A, c.enc.NumOffset, a64B)
+	c.a.Store(a64A, c.enc.RefOffset, arm64.ZR)
+	c.a.Store(a64Ctx, abi.OffGoStatus, arm64.ZR)
+	c.a.Load(a64A, a64Ctx, abi.OffGoSite)
+	c.a.Br(a64A)
+	c.a.Bind(toGo)
+	c.movImm(a64A, uint64(ssa.GoElemWrite))
+	c.a.Store(a64Ctx, abi.OffGoOp, a64A)
+	c.a.Store(a64Ctx, abi.OffGoKeep, arm64.ZR)
+	if !c.savingUsed {
+		c.saving, c.savingUsed = c.a.NewLabel(), true
+	}
+	c.a.B(c.saving)
+}
+
 // goSaving calls Go, op, every allocatable register saved, as amd64's
 // does.
 func (c *a64Compiler) goSaving(op uint64, stub *arm64.Label) {
@@ -2411,7 +2502,13 @@ func (c *a64Compiler) pushGuards(t *ssa.CallSite, recv *ssa.Value, guard func(ar
 	c.movImm(a64A, uint64(t.Protos[0].Object))
 	c.a.Cmp(a64B, a64A, true)
 	guard(arm64.NE)
-	for i, h := range t.Protos {
+	c.protoGuards(t.Protos, guard)
+}
+
+// protoGuards checks an array's prototypes are as they were, as amd64's
+// does. It uses A, B and C.
+func (c *a64Compiler) protoGuards(protos [2]ssa.Holder, guard func(arm64.Cond)) {
+	for i, h := range protos {
 		c.movImm(a64A, uint64(h.Object))
 		c.a.Load(a64B, a64A, c.enc.ObjectShape)
 		c.movImm(a64C, uint64(h.Shape))
@@ -2432,7 +2529,7 @@ func (c *a64Compiler) pushGuards(t *ssa.CallSite, recv *ssa.Value, guard func(ar
 		guard(arm64.NE)
 		c.a.Load(a64B, a64A, c.enc.ObjectProto)
 		if i == 0 {
-			c.movImm(a64C, uint64(t.Protos[1].Object))
+			c.movImm(a64C, uint64(protos[1].Object))
 			c.a.Cmp(a64B, a64C, true)
 		} else {
 			c.a.CmpImm(a64B, 0, true)
@@ -4214,7 +4311,11 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 				c.a.Store(a64Ctx, abi.OffGoArgs+size+c.enc.NumOffset, a64A)
 				c.a.FMovFromF(a64A, c.fpr(v.Args[2], a64F0))
 				c.a.Store(a64Ctx, abi.OffGoArgs+2*size+c.enc.NumOffset, a64A)
-				c.goSaving(uint64(ssa.GoElemWrite), &stub)
+				if c.f.ArrayProtos[0].Object != 0 && c.enc.ValueSize == 16 {
+					c.goAppending(&stub)
+				} else {
+					c.goSaving(uint64(ssa.GoElemWrite), &stub)
+				}
 				c.a.B(done)
 			})
 		}

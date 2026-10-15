@@ -625,6 +625,13 @@ type Func struct {
 	Keeps int
 	// KeepLimit bounds Keeps before the backend: VirtualKeeps if 0.
 	KeepLimit int
+	// ArrayProtos are the realm's Array.prototype and Object.prototype,
+	// each with its shape, where a number written at an array's length
+	// (OpElemWrite) may be appended natively, as a push is (CallSite's
+	// Push): to a dense array of the first, extensible, its length
+	// writable, with room, the prototypes with those shapes and no
+	// elements. Zero where Go appends (AppendFeedback).
+	ArrayProtos [2]Holder
 	// written marks the slots some instruction writes (Written).
 	written []bool
 	// assigned marks the captured locals a closure assigns (ir.Program's

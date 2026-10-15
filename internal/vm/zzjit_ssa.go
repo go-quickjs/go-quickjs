@@ -3077,6 +3077,23 @@ var jitGoCallWork func()
 // the default (ssa.VirtualKeeps).
 func (fb *jitFeedback) KeepLimit() int { return fb.keepLimit }
 
+// ArrayProtos is ssa.AppendFeedback's: the realm's Array.prototype and
+// Object.prototype, as a push the code makes natively checks them, where
+// neither has an index in its table (jitStoreElem's walk up the chain,
+// which native code's checks of their shapes stand for).
+func (fb *jitFeedback) ArrayProtos() ([2]ssa.Holder, bool) {
+	ap, op := fb.r.proto.array, fb.r.proto.object
+	if ap.shape == nil || op.shape == nil || ap.shape.loose || op.shape.loose || ap.proto != op || op.proto != nil ||
+		!ap.noIndexKeys() || !op.noIndexKeys() {
+		return [2]ssa.Holder{}, false
+	}
+	k := fb.keep()
+	k.shapes = append(k.shapes, remember(ap.shape), remember(op.shape))
+	k.holders = append(k.holders, ap, op)
+	return [2]ssa.Holder{{Object: uintptr(unsafe.Pointer(ap)), Shape: uintptr(unsafe.Pointer(ap.shape))},
+		{Object: uintptr(unsafe.Pointer(op)), Shape: uintptr(unsafe.Pointer(op.shape))}}, true
+}
+
 // GoCalls is ssa.GoFeedback's: the VM answers calls of Go (jitHostCall).
 func (fb *jitFeedback) GoCalls() bool { return true }
 

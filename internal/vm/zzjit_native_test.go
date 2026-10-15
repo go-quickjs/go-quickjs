@@ -5520,6 +5520,86 @@ func TestJITSSANativePush(t *testing.T) {
 	}
 }
 
+// a[i] = n at an array's length appends natively where Go's jitStoreElem
+// would append, as a push does (ssa.Func's ArrayProtos): native code
+// leaves only for the array to grow. One whose array or prototypes it may
+// not -- a setter for an index on Object.prototype, an array that is not
+// extensible, or whose length is not writable, of another prototype, a
+// write past the length -- is Go's, and answers as the interpreter does.
+func TestJITSSANativeAppend(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	// Each case its own copy of fill, compiled first: what one leaves to
+	// Go must not have another demoted.
+	const fill = `function(a,n,d){let t=0;for(let i=0;i<n;i++){a[a.length+d]=i;t=(t+a.length)|0}return t}`
+	const strictFill = `function(a,n,d){'use strict';let t=0;for(let i=0;i<n;i++){a[a.length+d]=i;t=(t+a.length)|0}return t}`
+	setup := `var hits=0,P=[];
+		function show(a){let t=0;for(let i=0;i<a.length;i++)t=(t+(a[i]===undefined?-1:a[i]))|0;return [t,a.length,Object.keys(a).length,hits].join()}
+		var plain=` + fill + `, setter=` + fill + `, stopped=` + fill + `, fixed=` + fill + `, other=` + fill + `, gap=` + fill +
+		`, strict=` + strictFill + `;`
+	cases := []struct{ name, fn, src string }{
+		{"plain", "plain", `{const a=[];[plain(a,300,0),show(a)].join()}`},
+		{"not extensible", "stopped", `{const a=[1];Object.preventExtensions(a);[stopped(a,10,0),show(a)].join()}`},
+		{"not extensible, strict", "strict", `{const a=[1];Object.preventExtensions(a);try{strict(a,10,0)}catch(e){e.constructor.name+a.length}}`},
+		{"length not writable", "fixed", `{const a=[1];Object.defineProperty(a,'length',{writable:false});[fixed(a,10,0),show(a)].join()}`},
+		{"another prototype", "other", `{const a=Object.setPrototypeOf([],P);[other(a,300,0),show(a)].join()}`},
+		{"past the length", "gap", `{const a=[];[gap(a,300,1),show(a)].join()}`},
+		// Last: once a prototype has had an index, its fast path, the VM's
+		// and native code's, is not taken again.
+		{"a setter for an index on Object.prototype", "setter",
+			`Object.defineProperty(Object.prototype,'250',{set(v){hits++},configurable:true});` +
+				`try{const a=[];[setter(a,300,0),show(a)].join()}finally{delete Object.prototype['250']}`},
+	}
+	want := New(Config{})
+	defer func() { want.Close(); want.ReleaseClosed() }()
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	for _, rt := range []*Runtime{want, r} {
+		if _, err := rt.Run(compileForTest(t, setup)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runtime.GC()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	defer func() { jitGoCallWork = nil }()
+	run := func(name, src string) {
+		t.Helper()
+		wv, err := want.Run(compileForTest(t, src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		gv, err := r.Run(compileForTest(t, src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := gv.String().Go(), wv.String().Go(); got != want {
+			t.Fatalf("%s: got %s, interpreter %s", name, got, want)
+		}
+	}
+	for _, c := range cases {
+		warm := `{const a=[];[` + c.fn + `(a,300,0),show(a)].join()}`
+		for range 4 {
+			run(c.name, warm)
+		}
+		e := r.jit.hint(r.global.getOwn(r.atoms.intern(c.fn)).value().Object().fn().closure)
+		if e == nil || e.ssa == nil {
+			t.Fatalf("%s: %s was not compiled", c.name, c.fn)
+		}
+		hosts, entries, reoptimized, calls := e.ssaStats.hosts, e.ssaStats.entries, r.jit.reoptimized, 0
+		jitGoCallWork = func() { calls++ }
+		run(c.name, c.src)
+		jitGoCallWork = nil
+		if c.fn == "plain" && r.jit.reoptimized == reoptimized {
+			// The array grows a doubling at a time: a dozen times for 300,
+			// each a call of Go; Go had made each append.
+			left := e.ssaStats.hosts - hosts + uint64(calls)
+			if e.entrySlow || e.ssaStats.entries == entries || left > 16 {
+				t.Fatalf("plain entered %d times, left %d for 300 appends", e.ssaStats.entries-entries, left)
+			}
+		}
+	}
+}
+
 // An array's length read after an element is written at it is the length
 // the write made, as the interpreter has it: the optimizer had taken the
 // length read before the write for it (ssa's readsMemory), a.length short,
@@ -5567,10 +5647,10 @@ func TestJITSSALengthAfterAppend(t *testing.T) {
 	}
 }
 
-// A setter for an index Object.prototype already has where a.push is
-// compiled is asked for that index, as the interpreter asks it: the call
-// is not made natively, whose checks compare the prototype's shape, which
-// had been taken with the setter in it.
+// A setter for an index Object.prototype already has where a.push, or
+// a[a.length] = n, is compiled is asked for that index, as the interpreter
+// asks it: neither is made natively, whose checks compare the prototype's
+// shape, which had been taken with the setter in it.
 func TestJITSSANativePushPastAPrototypeSetter(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -5578,8 +5658,9 @@ func TestJITSSANativePushPastAPrototypeSetter(t *testing.T) {
 	const setup = `var hits=0;
 		Object.defineProperty(Object.prototype,'250',{set(v){hits++},get(){return 'proto'},configurable:true});
 		function fill(a,n){let t=0;for(let i=0;i<n;i++)t=(t+a.push(i))|0;return t}
+		function put(a,n){let t=0;for(let i=0;i<n;i++){a[a.length]=i;t=(t+a.length)|0}return t}
 		function show(a){return [a.length,a[250],Object.keys(a).length,hits].join()}`
-	const src = `{const a=[];[fill(a,300),show(a)].join()}`
+	const src = `{const a=[],b=[];[fill(a,300),show(a),put(b,300),show(b)].join()}`
 	want := New(Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
@@ -5601,8 +5682,10 @@ func TestJITSSANativePushPastAPrototypeSetter(t *testing.T) {
 			t.Fatalf("run %d: got %s, interpreter %s", i, got, want)
 		}
 	}
-	if e := r.jit.hint(r.global.getOwn(r.atoms.intern("fill")).value().Object().fn().closure); e == nil || e.ssa == nil {
-		t.Fatal("fill was not compiled")
+	for _, name := range []string{"fill", "put"} {
+		if e := r.jit.hint(r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure); e == nil || e.ssa == nil {
+			t.Fatalf("%s was not compiled", name)
+		}
 	}
 }
 
