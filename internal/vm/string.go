@@ -922,6 +922,15 @@ func (s *String) Equals(t *String) bool {
 	if t == nil || s.length != t.length {
 		return false
 	}
+	// Two flat strings, as a character a parser compares with a literal
+	// mostly is, are compared as they are: Json's tokenizer had spent half
+	// its comparisons calling flatten to find nothing to flatten.
+	if s.left == nil && t.left == nil {
+		if len(s.s) == 1 && len(t.s) == 1 {
+			return s.s[0] == t.s[0]
+		}
+		return s.s == t.s
+	}
 	// Both are flattened for the comparison, which is what any subsequent use
 	// would force anyway.
 	return s.Go() == t.Go()

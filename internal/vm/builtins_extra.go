@@ -732,6 +732,9 @@ func (r *Runtime) initStringExtras() {
 			// int at all.
 			length = int(math.Max(0, math.Min(n, float64(s.Len()-start))))
 		}
+		if length == 1 {
+			return Str(rt.unitString(s, start)), nil
+		}
 		return Str(s.Substring(start, start+length)), nil
 	})
 

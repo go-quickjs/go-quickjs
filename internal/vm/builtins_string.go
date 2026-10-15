@@ -340,6 +340,9 @@ func (r *Runtime) initStringBuiltins() {
 		if start >= end {
 			return Str(emptyString), nil
 		}
+		if end-start == 1 {
+			return Str(rt.unitString(s, start)), nil
+		}
 		return Str(s.Substring(start, end)), nil
 	})
 
@@ -361,6 +364,11 @@ func (r *Runtime) initStringBuiltins() {
 		// slice, which returns empty.
 		if start > end {
 			start, end = end, start
+		}
+		// One character, as a tokenizer takes them, is the runtime's string
+		// of it (unitString), as s[i] is: Json's had made a string for each.
+		if end-start == 1 {
+			return Str(rt.unitString(s, start)), nil
 		}
 		return Str(s.Substring(start, end)), nil
 	})
