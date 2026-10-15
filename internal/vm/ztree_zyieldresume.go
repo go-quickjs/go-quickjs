@@ -88,6 +88,7 @@ func init() {
 
 		c := &f.tc
 		c.r, c.f, c.cl, c.locals = r, f, cl, locals
+		c.closureCode = cl.closureCode
 		c.stack = r.stack[base:top]
 		if t.gen.iters {
 			// As runGenerator: an exception looks for cursors in every

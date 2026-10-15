@@ -734,7 +734,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 	switch in.Op {
 	case bytecode.OpPushConst:
 		k := in.A
-		b.push(func(c *tctx) Value { return c.cl.consts[k] })
+		b.push(func(c *tctx) Value { return c.consts[k] })
 	case bytecode.OpPushUndef:
 		b.pushEntry(tentry{slot: -1, literal: true, n: Undefined})
 	case bytecode.OpPushNull:
@@ -958,7 +958,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		b.push(func(c *tctx) Value {
 			o, k := x(c), y(c)
 			c.at(pc)
-			ok, err := c.r.instanceOfAt(&c.cl.ic[site], o, k)
+			ok, err := c.r.instanceOfAt(&c.ic[site], o, k)
 			if err != nil {
 				c.throw(err)
 			}
@@ -1108,7 +1108,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			x := v(c)
 			if !ok.Truthy() {
 				c.at(pc)
-				c.throw(c.r.throwReferenceError("%s is not defined", c.r.atoms.name(c.cl.names[name])))
+				c.throw(c.r.throwReferenceError("%s is not defined", c.r.atoms.name(c.names[name])))
 			}
 			return x
 		})
@@ -1250,7 +1250,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			// The site's objects are made with the room they came to need,
 			// as a constructor's are, where the literal says less: an
 			// object built as {} and then filled in is the common case.
-			root := c.r.shapes.siteRoot(&c.cl.ic[site])
+			root := c.r.shapes.siteRoot(&c.ic[site])
 			m := n
 			if root != nil && int(root.slack) > m {
 				m = int(root.slack)
@@ -1273,7 +1273,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			if !obj.IsObject() {
 				return
 			}
-			key := c.cl.names[name]
+			key := c.names[name]
 			if o := obj.Object(); o.class == ClassObject && o.flags&objExtensible != 0 {
 				if next := o.transition(key, propDefault); next != nil {
 					o.appendTransition(v, next)
@@ -1329,7 +1329,7 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		b.push(func(c *tctx) Value { return Str(c.r.typeofString(x(c))) })
 	case bytecode.OpClosure:
 		k := in.A
-		b.push(func(c *tctx) Value { return Obj(c.r.makeClosure(c.f, c.cl.consts[k])) })
+		b.push(func(c *tctx) Value { return Obj(c.r.makeClosure(c.f, c.consts[k])) })
 	case bytecode.OpGetGlobal:
 		if skip, ok := b.placeUpdate(pc, in); ok {
 			return skip, true
@@ -1341,9 +1341,9 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			// script's lexical binding of the name, which getGlobalAt asks
 			// first. The site keeps the environment it found the slot in,
 			// which holds the name there or a tombstone (see propCache).
-			s := &c.cl.ic[site]
+			s := &c.ic[site]
 			if env := s.p1; env != nil && c.f.evalVars == nil {
-				if r := c.r; len(r.globalLex.vals) == 0 || !r.lexShadows(c.cl.names[name]) {
+				if r := c.r; len(r.globalLex.vals) == 0 || !r.lexShadows(c.names[name]) {
 					if i := uint(s.idx); i < uint(len(env.vals)) {
 						// The layout the site last read the slot in, which it
 						// remembers, so that a change of an attribute gives the
@@ -1375,9 +1375,9 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 		v, name, site := b.pop().tree(), in.A, in.B
 		return 0, b.stmt(func(c *tctx) {
 			value := v(c)
-			s := &c.cl.ic[site]
+			s := &c.ic[site]
 			if env := s.p1; env != nil && c.f.evalVars == nil {
-				if r := c.r; len(r.globalLex.vals) == 0 || !r.lexShadows(c.cl.names[name]) {
+				if r := c.r; len(r.globalLex.vals) == 0 || !r.lexShadows(c.names[name]) {
 					if i := uint(s.idx); i < uint(len(env.vals)) {
 						if p := env.shape.keys[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) == propWritable {
 							env.vals[i] = value
@@ -1402,9 +1402,9 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 			// the slot is the binding itself, and one in its dead zone, a
 			// constant or an import is none of these, and goes the long way
 			// to its error.
-			s := &c.cl.ic[site]
+			s := &c.ic[site]
 			if env := s.p1; env != nil && c.f.evalVars == nil {
-				if r := c.r; len(r.globalLex.vals) == 0 || !r.lexShadows(c.cl.names[name]) {
+				if r := c.r; len(r.globalLex.vals) == 0 || !r.lexShadows(c.names[name]) {
 					if i := uint(s.idx); i < uint(len(env.vals)) {
 						if p := env.shape.keys[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) == propWritable {
 							env.vals[i] = value
@@ -1891,10 +1891,10 @@ func getPropOperand(obj tentry, in bytecode.Instr, pc int) tval {
 			o := c.f.this
 			if o.IsObject() {
 				ob := o.object()
-				if v, ok := c.cl.ic[site].own(ob); ok {
+				if v, ok := c.ic[site].own(ob); ok {
 					return v
 				}
-				if v, ok := ownScan(&c.cl.ic[site], ob, c.cl.names[name]); ok {
+				if v, ok := ownScan(&c.ic[site], ob, c.names[name]); ok {
 					return v
 				}
 			}
@@ -1906,10 +1906,10 @@ func getPropOperand(obj tentry, in bytecode.Instr, pc int) tval {
 			o := c.locals[k]
 			if o.IsObject() {
 				ob := o.object()
-				if v, ok := c.cl.ic[site].own(ob); ok {
+				if v, ok := c.ic[site].own(ob); ok {
 					return v
 				}
-				if v, ok := ownScan(&c.cl.ic[site], ob, c.cl.names[name]); ok {
+				if v, ok := ownScan(&c.ic[site], ob, c.names[name]); ok {
 					return v
 				}
 			}
@@ -1921,10 +1921,10 @@ func getPropOperand(obj tentry, in bytecode.Instr, pc int) tval {
 		o := x(c)
 		if o.IsObject() {
 			ob := o.object()
-			if v, ok := c.cl.ic[site].own(ob); ok {
+			if v, ok := c.ic[site].own(ob); ok {
 				return v
 			}
-			if v, ok := ownScan(&c.cl.ic[site], ob, c.cl.names[name]); ok {
+			if v, ok := ownScan(&c.ic[site], ob, c.names[name]); ok {
 				return v
 			}
 		}
@@ -1937,14 +1937,14 @@ func getPropOperand(obj tentry, in bytecode.Instr, pc int) tval {
 func (c *tctx) getPropSlow(o Value, name, site uint32, pc int) Value {
 	c.at(pc)
 	if o.IsObject() {
-		if v, ok, err := c.r.cachedGet(&c.cl.ic[site], o.object(), c.cl.names[name]); ok {
+		if v, ok, err := c.r.cachedGet(&c.ic[site], o.object(), c.names[name]); ok {
 			if err != nil {
 				c.throw(err)
 			}
 			return v
 		}
 	}
-	v, err := c.r.getValueProp(o, c.cl.names[name])
+	v, err := c.r.getValueProp(o, c.names[name])
 	if err != nil {
 		c.throw(err)
 	}
@@ -1965,12 +1965,12 @@ func getPropThisNode(d int, in bytecode.Instr, pc int) tval {
 	return func(c *tctx) Value {
 		recv := c.stack[d]
 		if recv.IsObject() {
-			if v, ok := c.r.cachedProp(&c.cl.ic[site], recv.object(), c.cl.names[name]); ok {
+			if v, ok := c.r.cachedProp(&c.ic[site], recv.object(), c.names[name]); ok {
 				return v
 			}
 		}
 		c.at(pc)
-		v, err := c.r.getValueProp(recv, c.cl.names[name])
+		v, err := c.r.getValueProp(recv, c.names[name])
 		if err != nil {
 			c.throw(err)
 		}
@@ -1986,7 +1986,7 @@ func setPropOperand(obj tentry, val tval, in bytecode.Instr, pc int, strict bool
 		return func(c *tctx) Value {
 			o := c.f.this
 			v := val(c)
-			if o.IsObject() && c.cl.ic[site].storeOwn(o.object(), v) {
+			if o.IsObject() && c.ic[site].storeOwn(o.object(), v) {
 				return v
 			}
 			c.setProp(o, v, name, site, pc, strict)
@@ -1997,7 +1997,7 @@ func setPropOperand(obj tentry, val tval, in bytecode.Instr, pc int, strict bool
 		return func(c *tctx) Value {
 			o := c.locals[k]
 			v := val(c)
-			if o.IsObject() && c.cl.ic[site].storeOwn(o.object(), v) {
+			if o.IsObject() && c.ic[site].storeOwn(o.object(), v) {
 				return v
 			}
 			c.setProp(o, v, name, site, pc, strict)
@@ -2008,7 +2008,7 @@ func setPropOperand(obj tentry, val tval, in bytecode.Instr, pc int, strict bool
 	return func(c *tctx) Value {
 		o := x(c)
 		v := val(c)
-		if o.IsObject() && c.cl.ic[site].storeOwn(o.object(), v) {
+		if o.IsObject() && c.ic[site].storeOwn(o.object(), v) {
 			return v
 		}
 		c.setProp(o, v, name, site, pc, strict)
@@ -2023,7 +2023,7 @@ func setPropStmt(obj tentry, val tval, in bytecode.Instr, pc int, strict bool) t
 		return func(c *tctx) {
 			o := c.f.this
 			v := val(c)
-			if o.IsObject() && c.cl.ic[site].storeOwn(o.object(), v) {
+			if o.IsObject() && c.ic[site].storeOwn(o.object(), v) {
 				return
 			}
 			c.setProp(o, v, name, site, pc, strict)
@@ -2033,7 +2033,7 @@ func setPropStmt(obj tentry, val tval, in bytecode.Instr, pc int, strict bool) t
 		return func(c *tctx) {
 			o := c.locals[k]
 			v := val(c)
-			if o.IsObject() && c.cl.ic[site].storeOwn(o.object(), v) {
+			if o.IsObject() && c.ic[site].storeOwn(o.object(), v) {
 				return
 			}
 			c.setProp(o, v, name, site, pc, strict)
@@ -2043,7 +2043,7 @@ func setPropStmt(obj tentry, val tval, in bytecode.Instr, pc int, strict bool) t
 	return func(c *tctx) {
 		o := x(c)
 		v := val(c)
-		if o.IsObject() && c.cl.ic[site].storeOwn(o.object(), v) {
+		if o.IsObject() && c.ic[site].storeOwn(o.object(), v) {
 			return
 		}
 		c.setProp(o, v, name, site, pc, strict)
@@ -2054,12 +2054,12 @@ func setPropStmt(obj tentry, val tval, in bytecode.Instr, pc int, strict bool) t
 func (c *tctx) setProp(o, v Value, name, site uint32, pc int, strict bool) {
 	c.at(pc)
 	if o.IsObject() {
-		if err := c.r.setPropCached(&c.cl.ic[site], o.object(), c.cl.names[name], v, strict); err != nil {
+		if err := c.r.setPropCached(&c.ic[site], o.object(), c.names[name], v, strict); err != nil {
 			c.throw(err)
 		}
 		return
 	}
-	if err := c.r.setValueProp(o, c.cl.names[name], v, strict); err != nil {
+	if err := c.r.setValueProp(o, c.names[name], v, strict); err != nil {
 		c.throw(err)
 	}
 }

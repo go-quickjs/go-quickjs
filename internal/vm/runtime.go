@@ -570,12 +570,8 @@ type wellKnownSymbols struct {
 	asyncDispose       *Symbol
 }
 
-// closure is a function template paired with the upvalues it captured.
-type closure struct {
-	fn *bytecode.Function
-	// upvalues are the captured bindings, shared with the frames that own them
-	// until those frames return.
-	upvalues []*upvalue
+// closureCode is the part of a closure its template's closures share.
+type closureCode struct {
 	// names maps the template's name table to atoms, resolved once when the
 	// template is first used so that property access needs no interning.
 	names []Atom
@@ -584,6 +580,18 @@ type closure struct {
 	// ic is the caches of the template's property reads, shared by every
 	// closure made from it in the runtime; see propCache.
 	ic []propCache
+}
+
+// closure is a function template paired with the upvalues it captured.
+type closure struct {
+	fn *bytecode.Function
+	// upvalues are the captured bindings, shared with the frames that own them
+	// until those frames return.
+	upvalues []*upvalue
+	// closureCode is what every closure made from the template shares, held
+	// once: each had kept its own copy of the three slices, 72 bytes of a
+	// closure that DeltaBlue and Havlak make one of for each forEach.
+	*closureCode
 	// realm is the realm the closure belongs to.
 	realm *Realm
 	// env is the environment an unqualified name resolves against. It is nil

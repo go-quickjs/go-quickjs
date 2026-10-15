@@ -220,6 +220,7 @@ func init() {
 		g := t.gen
 		c := &f.tc
 		c.r, c.f, c.cl, c.locals = r, f, f.cl, f.locals
+		c.closureCode = f.cl.closureCode
 		c.stack = r.stack[base : base+fn.MaxStack]
 		if g.iters {
 			// An exception looks for cursors in every slot of the frame's,

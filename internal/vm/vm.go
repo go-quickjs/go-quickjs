@@ -3260,7 +3260,7 @@ func (r *Runtime) newClosure(f *frame, c Value) *Object {
 	// The environment is inherited, so a function declared in a module sees
 	// the module's bindings rather than only the globals.
 	*child = closure{
-		fn: tmpl.fn, names: tmpl.names, consts: tmpl.consts, ic: tmpl.ic,
+		fn: tmpl.fn, closureCode: tmpl.closureCode,
 		realm: r.Realm, env: f.cl.env, upvalues: upvalues,
 	}
 	// The bindings it is the first to capture share one allocation: a

@@ -49,7 +49,7 @@ func init() {
 		switch in.Op {
 		case bytecode.OpCheckGlobalVar:
 			return 0, b.stmt(func(c *tctx) {
-				r, name := c.r, c.cl.names[a]
+				r, name := c.r, c.names[a]
 				if c.cl.scope() != r.global {
 					return
 				}
@@ -67,7 +67,7 @@ func init() {
 			})
 		case bytecode.OpCheckGlobalLex:
 			return 0, b.stmt(func(c *tctx) {
-				r, name := c.r, c.cl.names[a]
+				r, name := c.r, c.names[a]
 				if r.globalLex.getOwn(name).ok() {
 					c.at(pc)
 					c.throw(r.throwError(errSyntax, "%q has already been declared", r.atoms.name(name)))
@@ -83,7 +83,7 @@ func init() {
 			})
 		case bytecode.OpDefineGlobalVar:
 			return 0, b.stmt(func(c *tctx) {
-				r, name := c.r, c.cl.names[a]
+				r, name := c.r, c.names[a]
 				if ev := c.f.evalVars; ev != nil {
 					// The evaluated code is inside a function, so what it
 					// declares belongs to that function rather than to the
@@ -124,7 +124,7 @@ func init() {
 			v := b.pop().tree()
 			return 0, b.stmt(func(c *tctx) {
 				fn := v(c)
-				r, name := c.r, c.cl.names[a]
+				r, name := c.r, c.names[a]
 				if ev := c.f.evalVars; ev != nil {
 					ev.setOwnRaw(name, fn, propWritable|propConfigurable)
 					return
@@ -162,17 +162,17 @@ func init() {
 			if k != 0 {
 				flags |= propWritable
 			}
-			return 0, b.stmt(func(c *tctx) { c.r.declareGlobalLex(c.cl.names[a], flags) })
+			return 0, b.stmt(func(c *tctx) { c.r.declareGlobalLex(c.names[a], flags) })
 		case bytecode.OpInitGlobalLex:
 			v := b.pop().tree()
 			return 0, b.stmt(func(c *tctx) {
 				x := v(c)
-				r, name := c.r, c.cl.names[a]
+				r, name := c.r, c.names[a]
 				r.globalLex.setOwnRaw(name, x, r.globalLex.getOwn(name).flags())
 			})
 		case bytecode.OpDeclareModuleLex:
 			return 0, b.stmt(func(c *tctx) {
-				name := c.cl.names[a]
+				name := c.names[a]
 				flags := propUninit | moduleBindingFlags(c.r.atoms.name(name))
 				if k != 0 {
 					flags |= propWritable
@@ -183,7 +183,7 @@ func init() {
 			v := b.pop().tree()
 			return 0, b.stmt(func(c *tctx) {
 				x := v(c)
-				name := c.cl.names[a]
+				name := c.names[a]
 				if p := c.cl.scope().getOwn(name); p.ok() {
 					// Its attributes change, so its layout does.
 					p.setValue(x)

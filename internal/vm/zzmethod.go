@@ -163,12 +163,12 @@ func init() {
 				o = c.locals[k]
 			}
 			if o.IsObject() {
-				if v, ok := c.r.cachedProp(&c.cl.ic[site], o.object(), c.cl.names[name]); ok {
+				if v, ok := c.r.cachedProp(&c.ic[site], o.object(), c.names[name]); ok {
 					return v
 				}
 			}
 			c.at(pc)
-			v, err := c.r.getValueProp(o, c.cl.names[name])
+			v, err := c.r.getValueProp(o, c.names[name])
 			if err != nil {
 				c.throw(err)
 			}
@@ -187,12 +187,12 @@ func init() {
 			var m Value
 			ok := false
 			if o.IsObject() {
-				m, ok = c.r.cachedProp(&c.cl.ic[site], o.object(), c.cl.names[name])
+				m, ok = c.r.cachedProp(&c.ic[site], o.object(), c.names[name])
 			}
 			if !ok {
 				c.at(gpc)
 				var err error
-				if m, err = c.r.getValueProp(o, c.cl.names[name]); err != nil {
+				if m, err = c.r.getValueProp(o, c.names[name]); err != nil {
 					c.throw(err)
 				}
 			}

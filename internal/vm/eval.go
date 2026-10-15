@@ -19,7 +19,7 @@ func (r *Runtime) prepare(fn *bytecode.Function) *closure {
 	if r.debug != nil && fn.TopLevel && fn.Debug != nil {
 		r.debugLoad(fn)
 	}
-	cl := &closure{fn: fn, realm: r.Realm}
+	cl := &closure{fn: fn, realm: r.Realm, closureCode: &closureCode{}}
 
 	cl.names = make([]Atom, len(fn.Names))
 	for i, n := range fn.Names {

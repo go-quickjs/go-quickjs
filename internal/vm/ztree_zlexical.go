@@ -54,7 +54,7 @@ func init() {
 			// assignment may sit in a function that is never called.
 			return 0, b.stmt(func(c *tctx) {
 				c.at(pc)
-				c.throw(c.r.throwTypeError("assignment to constant variable %q", c.r.atoms.name(c.cl.names[k])))
+				c.throw(c.r.throwTypeError("assignment to constant variable %q", c.r.atoms.name(c.names[k])))
 			})
 		case bytecode.OpGetLocalCheck:
 			if int(k) >= len(fn.Locals) {

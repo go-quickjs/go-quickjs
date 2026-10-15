@@ -43,9 +43,13 @@ import (
 
 // tctx is a running tree's state, which every node is given.
 type tctx struct {
-	r      *Runtime
-	f      *frame
-	cl     *closure
+	r  *Runtime
+	f  *frame
+	cl *closure
+	// closureCode is cl's, which a node reads its names, constants and
+	// caches from as c.names, c.consts and c.ic: through cl they would be
+	// a load more, as the closures of a template share them.
+	*closureCode
 	locals []Value
 	// stack is the frame's operand window, where what a block leaves on the
 	// stack, and a call's arguments, are written.
@@ -134,6 +138,7 @@ func (r *Runtime) runTree(f *frame, t *tree) (v Value, err error) {
 	}
 	c := &f.tc
 	c.r, c.f, c.cl, c.locals = r, f, f.cl, f.locals
+	c.closureCode = f.cl.closureCode
 	c.stack = r.stack[f.base : f.base+f.cl.fn.MaxStack]
 	depth := r.frameDepth
 	defer func() {

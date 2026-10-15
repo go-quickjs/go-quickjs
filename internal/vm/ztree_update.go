@@ -425,7 +425,7 @@ func propValueUpdate(u *rmw) tval {
 			ov = c.locals[o]
 		}
 		if ob := objectAt(&ov); ob != nil {
-			if p := storeSlot(&c.cl.ic[site], ob); p != nil && numberAt(p) {
+			if p := storeSlot(&c.ic[site], ob); p != nil && numberAt(p) {
 				b := y
 				if yl >= 0 {
 					v := &c.locals[yl]
@@ -603,7 +603,7 @@ func propLocalUpdate(u *rmw) tstmt {
 	if yl >= 0 {
 		return func(c *tctx) {
 			if ob := objectAt(&c.locals[o]); ob != nil {
-				if p := storeSlot(&c.cl.ic[site], ob); p != nil && numberAt(p) {
+				if p := storeSlot(&c.ic[site], ob); p != nil && numberAt(p) {
 					if b := &c.locals[yl]; numberAt(b) {
 						p.num = Float(updateNum(op, p.num, b.num)).num
 						return
@@ -615,7 +615,7 @@ func propLocalUpdate(u *rmw) tstmt {
 	}
 	return func(c *tctx) {
 		if ob := objectAt(&c.locals[o]); ob != nil {
-			if p := storeSlot(&c.cl.ic[site], ob); p != nil && numberAt(p) {
+			if p := storeSlot(&c.ic[site], ob); p != nil && numberAt(p) {
 				p.num = Float(updateNum(op, p.num, y)).num
 				return
 			}
@@ -632,7 +632,7 @@ func propThisUpdate(u *rmw) tstmt {
 	if yl >= 0 {
 		return func(c *tctx) {
 			if ob := objectAt(&c.f.this); ob != nil {
-				if p := storeSlot(&c.cl.ic[site], ob); p != nil && numberAt(p) {
+				if p := storeSlot(&c.ic[site], ob); p != nil && numberAt(p) {
 					if b := &c.locals[yl]; numberAt(b) {
 						p.num = Float(updateNum(op, p.num, b.num)).num
 						return
@@ -644,7 +644,7 @@ func propThisUpdate(u *rmw) tstmt {
 	}
 	return func(c *tctx) {
 		if ob := objectAt(&c.f.this); ob != nil {
-			if p := storeSlot(&c.cl.ic[site], ob); p != nil && numberAt(p) {
+			if p := storeSlot(&c.ic[site], ob); p != nil && numberAt(p) {
 				p.num = Float(updateNum(op, p.num, y)).num
 				return
 			}
@@ -725,9 +725,9 @@ func elemIndexUpdate(u *rmw) tstmt {
 func globalUpdateStmt(u *rmw) tstmt {
 	name, site, op, y, yl := u.name, u.set, u.op, u.y.n.num, u.yLocal
 	return func(c *tctx) {
-		s := &c.cl.ic[site]
+		s := &c.ic[site]
 		if env := s.p1; env != nil && c.f.evalVars == nil {
-			if r := c.r; len(r.globalLex.vals) == 0 || !r.lexShadows(c.cl.names[name]) {
+			if r := c.r; len(r.globalLex.vals) == 0 || !r.lexShadows(c.names[name]) {
 				if i := uint(s.idx); i < uint(len(env.vals)) {
 					if p := env.shape.keys[i]; p.flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) == propWritable && numberAt(&env.vals[i]) {
 						b := y
@@ -785,7 +785,7 @@ func propTreeUpdate(u *rmw) tstmt {
 			ov = c.locals[o]
 		}
 		if ob := objectAt(&ov); ob != nil {
-			s := &c.cl.ic[site]
+			s := &c.ic[site]
 			if p := storeSlot(s, ob); p != nil && numberAt(p) {
 				old := *p
 				y := yv(c)
@@ -891,11 +891,11 @@ func (c *tctx) rmwAt(u *rmw, o, k Value) Value {
 	case placeProp:
 		if o.IsObject() {
 			ob := o.object()
-			if v, ok := c.cl.ic[u.site].own(ob); ok {
+			if v, ok := c.ic[u.site].own(ob); ok {
 				old = v
 				break
 			}
-			if v, ok := ownScan(&c.cl.ic[u.site], ob, c.cl.names[u.name]); ok {
+			if v, ok := ownScan(&c.ic[u.site], ob, c.names[u.name]); ok {
 				old = v
 				break
 			}
@@ -968,7 +968,7 @@ func (c *tctx) rmwOp(u *rmw, old, y Value) Value {
 func (c *tctx) rmwSet(u *rmw, o, k, r Value) {
 	switch u.kind {
 	case placeProp:
-		if !o.IsObject() || !c.cl.ic[u.set].storeOwn(o.object(), r) {
+		if !o.IsObject() || !c.ic[u.set].storeOwn(o.object(), r) {
 			c.setProp(o, r, u.name, u.set, u.setPC, u.strict)
 		}
 	case placeElem:
@@ -992,9 +992,9 @@ func (c *tctx) rmwSet(u *rmw, o, k, r Value) {
 // write's site remembers for name, where nothing can shadow it -- a direct
 // eval's variables or a script's lexical binding of the name -- or nil.
 func (c *tctx) globalSite(site, name uint32) ownProp {
-	s := &c.cl.ic[site]
+	s := &c.ic[site]
 	if env := s.p1; env != nil && c.f.evalVars == nil {
-		if r := c.r; len(r.globalLex.vals) == 0 || !r.lexShadows(c.cl.names[name]) {
+		if r := c.r; len(r.globalLex.vals) == 0 || !r.lexShadows(c.names[name]) {
 			if i := uint(s.idx); i < uint(len(env.vals)) {
 				return ownProp{env, int32(i)}
 			}

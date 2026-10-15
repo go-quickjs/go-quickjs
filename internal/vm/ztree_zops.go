@@ -266,7 +266,7 @@ func init() {
 				}
 				b.push(func(c *tctx) Value {
 					c.at(pc)
-					v, err := c.r.getValueProp(c.stack[at], c.cl.names[a])
+					v, err := c.r.getValueProp(c.stack[at], c.names[a])
 					if err != nil {
 						c.throw(err)
 					}
@@ -418,7 +418,7 @@ func init() {
 		case bytecode.OpGetSuperProp:
 			b.push(func(c *tctx) Value {
 				c.at(pc)
-				v, err := c.r.superGet(c.f, c.cl.names[a])
+				v, err := c.r.superGet(c.f, c.names[a])
 				if err != nil {
 					c.throw(err)
 				}
@@ -429,7 +429,7 @@ func init() {
 			return 0, b.stmt(func(c *tctx) {
 				v := val(c)
 				c.at(pc)
-				if err := c.r.superSet(c.f, c.cl.names[a], v, c.cl.fn.Strict); err != nil {
+				if err := c.r.superSet(c.f, c.names[a], v, c.cl.fn.Strict); err != nil {
 					c.throw(err)
 				}
 			})
@@ -519,9 +519,9 @@ func init() {
 				var v Value
 				var err error
 				if op == bytecode.OpDeleteVar {
-					v, err = deleteVar(c.r, c.f, c.cl, c.cl.names[a])
+					v, err = deleteVar(c.r, c.f, c.cl, c.names[a])
 				} else {
-					v, err = getGlobalOpt(c.r, c.f, c.cl, c.cl.names[a])
+					v, err = getGlobalOpt(c.r, c.f, c.cl, c.names[a])
 				}
 				if err != nil {
 					c.throw(err)
@@ -597,7 +597,7 @@ func init() {
 					// A class method is not enumerable, unlike an object
 					// literal's.
 					if obj.IsObject() {
-						key := c.cl.names[a]
+						key := c.names[a]
 						// A static member named after a function's synthesized
 						// length or name replaces it in place, so it has to
 						// exist first.
@@ -606,7 +606,7 @@ func init() {
 					}
 				default:
 					if obj.IsObject() && v.IsObject() {
-						c.r.defineHalfAccessor(obj.Object(), c.cl.names[a], v.Object(),
+						c.r.defineHalfAccessor(obj.Object(), c.names[a], v.Object(),
 							op == bytecode.OpDefineGetter, memberFlags(k))
 					}
 				}
@@ -641,7 +641,7 @@ func init() {
 			return 0, b.stmt(func(c *tctx) {
 				if v := c.stack[at]; v.IsObject() {
 					if fd := v.Object().fn(); fd != nil && fd.name == "" {
-						fd.name = c.r.atoms.name(c.cl.names[a])
+						fd.name = c.r.atoms.name(c.names[a])
 					}
 				}
 			})
@@ -808,7 +808,7 @@ func init() {
 	privateOp = func(b *tbuilder, pc int, in bytecode.Instr, a, k uint32) (int, bool) {
 		switch in.Op {
 		case bytecode.OpPrivateName:
-			b.push(func(c *tctx) Value { return c.r.newPrivateName(c.cl.names[a]) })
+			b.push(func(c *tctx) Value { return c.r.newPrivateName(c.names[a]) })
 		case bytecode.OpGetPrivate:
 			obj := b.pop().tree()
 			b.push(func(c *tctx) Value {
@@ -817,7 +817,7 @@ func init() {
 				if !o.IsObject() {
 					c.throw(c.r.throwTypeError("cannot read a private member of %s", c.r.describe(o)))
 				}
-				v, err := c.r.getPrivate(o.Object(), privateKey(c.f, c.cl, k), c.cl.names[a])
+				v, err := c.r.getPrivate(o.Object(), privateKey(c.f, c.cl, k), c.names[a])
 				if err != nil {
 					c.throw(err)
 				}
@@ -832,7 +832,7 @@ func init() {
 				if !o.IsObject() {
 					c.throw(c.r.throwTypeError("cannot write a private member of %s", c.r.describe(o)))
 				}
-				if err := c.r.setPrivate(o.Object(), privateKey(c.f, c.cl, k), c.cl.names[a], v); err != nil {
+				if err := c.r.setPrivate(o.Object(), privateKey(c.f, c.cl, k), c.names[a], v); err != nil {
 					c.throw(err)
 				}
 			})

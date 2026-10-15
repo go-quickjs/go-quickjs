@@ -12,8 +12,8 @@ import (
 // empty last field would add padding).
 func TestJITFieldLayout(t *testing.T) {
 	if unsafe.Sizeof(uintptr(0)) == 8 {
-		if size := unsafe.Sizeof(closure{}); size != 128 {
-			t.Errorf("closure is %d bytes, want 128 (its size class)", size)
+		if size := unsafe.Sizeof(closure{}); size != 64 {
+			t.Errorf("closure is %d bytes, want 64 (its size class)", size)
 		}
 	}
 	for _, tc := range []struct {

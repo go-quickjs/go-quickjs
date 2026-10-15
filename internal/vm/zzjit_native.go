@@ -2352,7 +2352,7 @@ func (r *Runtime) jitHost(f *frame, sp, limit int) (int, int, error) {
 			// stack, as the interpreter's is.
 			v, sp, err = r.jitCallAt(jitCallInstr(in), sp)
 		case bytecode.OpGetGlobal:
-			c := tctx{r: r, f: f, cl: f.cl, locals: f.locals}
+			c := tctx{r: r, f: f, cl: f.cl, closureCode: f.cl.closureCode, locals: f.locals}
 			v, err = r.getGlobalAt(&c, in, pc)
 		case bytecode.OpGetGlobalOpt:
 			v, err = getGlobalOpt(r, f, f.cl, f.cl.names[in.A])

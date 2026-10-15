@@ -183,6 +183,7 @@ func (r *Runtime) runTreeNested(f *frame, t *tree) (Value, error) {
 		c.throw(r.stopped)
 	}
 	c.r, c.f, c.cl, c.locals = r, f, f.cl, f.locals
+	c.closureCode = f.cl.closureCode
 	c.stack = r.stack[f.base : f.base+f.cl.fn.MaxStack]
 	blocks := t.blocks
 	b := 0
