@@ -1844,7 +1844,7 @@ func setIndexNode(obj, key, val tval, pc int, strict bool) tval {
 //
 //go:noinline
 func (c *tctx) setIndexMiss(o, k, v Value, pc int, strict bool) Value {
-	if o.IsObject() && appendElem(o.object(), k.num, v) {
+	if o.IsObject() && (appendElem(o.object(), k.num, v) || fillHole(o.object(), k.num, v)) {
 		return v
 	}
 	return c.setIndexSlow(o, k, v, pc, strict)

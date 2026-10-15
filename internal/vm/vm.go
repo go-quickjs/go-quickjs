@@ -3578,7 +3578,7 @@ func (r *Runtime) setIndexed(obj, key, val Value, strict bool) error {
 				return r.setElem(t, i, val)
 			}
 		}
-		if appendElem(obj.Object(), key.num, val) {
+		if appendElem(obj.Object(), key.num, val) || fillHole(obj.Object(), key.num, val) {
 			return nil
 		}
 	}
@@ -3634,6 +3634,27 @@ func appendElem(o *Object, n float64, v Value) bool {
 	// What setElem would do for an index at the length of an array that
 	// is not an arguments object.
 	o.extOf().elems = append(o.elemsOf(), v)
+	return true
+}
+
+// fillHole stores v at index n of an array whose element n is a hole, as an
+// assignment would, and reports whether it did: what appendElem asks of
+// the array but a writable length, and of its chain, makes the assignment
+// a new element's -- new Array(n) leaves n holes to be filled.
+func fillHole(o *Object, n float64, v Value) bool {
+	// A length that is not writable does not stop it: the length stays.
+	const want = objExtensible
+	i := uint32(n)
+	if o.class != ClassArray || float64(i) != n || uint(i) >= uint(len(o.elemsOf())) || !isHole(o.elemsOf()[i]) ||
+		o.flags&(want|objHasSparseElements|objMappedArguments) != want || !o.noIndexKeys() {
+		return false
+	}
+	for p := o.proto; p != nil; p = p.proto {
+		if p.class != ClassObject && p.class != ClassArray || len(p.elemsOf()) != 0 || !p.noIndexKeys() {
+			return false
+		}
+	}
+	o.elemsOf()[i] = v
 	return true
 }
 
