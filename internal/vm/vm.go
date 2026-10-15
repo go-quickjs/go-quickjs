@@ -4631,9 +4631,12 @@ func (r *Runtime) superCall(f *frame, args []Value) error {
 	// because an Error needs a stack and an Array needs array storage -- hands
 	// it back instead of writing into the `this` passed in. The derived
 	// constructor adopts it, keeping the prototype that newTarget chose so
-	// that the result is still an instance of the derived class.
+	// that the result is still an instance of the derived class. An object a
+	// script's constructor returns is its own, with the prototype it has, as
+	// super() binds this to whatever the parent's construction gave: class
+	// R extends P, P's constructor returning {}, makes no R.
 	if res.IsObject() && (!f.this.IsObject() || res.Object() != f.this.Object()) {
-		if f.this.IsObject() {
+		if pfd := parent.fn(); f.this.IsObject() && (pfd == nil || pfd.closure == nil || pfd.bound) {
 			res.Object().proto = f.this.Object().proto
 			// Fields the derived constructor set before super() would be lost,
 			// but writing to `this` before super() is already an error, so
