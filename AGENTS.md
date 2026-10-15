@@ -265,6 +265,18 @@ go run ./internal/cmd/v8bench/placements compare -dir /tmp/v8-v7 base change
 `-v` prints each placement's figure: a change that is slower at some
 placements and level at the others is placement, not the change.
 
+`-parallel` runs both labels at once, each on a group of CPUs of its own
+-- the fastest cores', a level 3 cache's, one NUMA node's, found by
+`-cpus auto` or given as `-cpus "0-5;6-11"` -- the groups swapped from one
+run to the next, and `-k 4` takes four of the eight placements. Screen a
+change so, in minutes, and confirm a batch of them with the eight before
+pushing; compare a label with itself in parallel first on a machine new to
+it, to see that its groups measure alike.
+
+```sh
+go run ./internal/cmd/v8bench/placements compare -parallel -k 4 -bench octane -dir /tmp/octane base change
+```
+
 `internal/cmd/v8bench/goja` runs the same suite the same way on goja, for
 comparing the two engines. It is a module of its own, run from its
 directory, so that go-quickjs never depends on goja; `TestNoGojaDependency`
@@ -284,6 +296,22 @@ go run ./internal/cmd/v8bench/external -engine qjs -cmd /path/to/qjs -dir /tmp/v
 
 `-arg` passes the program an argument of its own, once for each:
 `-engine node -arg --jitless` runs Node with its JIT compilers off.
+
+`internal/cmd/v8bench/matrix` makes the tables comparing the engines --
+go-quickjs without and with the JIT, QuickJS, Node without and with its
+JIT, goja -- from every runner above, built from the checkout: the V8
+suite, Octane and Are We Fast Yet as milliseconds for the fixed work, each
+the median of three fresh-process runs, with go-quickjs's time over
+QuickJS's; the V8 suite's own scores; the micro-benchmarks' largest gaps.
+Where the OS gives a process CPUs of its own it runs two at once, on groups
+as `placements -parallel` finds them (`-parallel=false` one at a time).
+It keeps every run's output, what the machine and the engines were, and
+the tables, which `-report DIR` prints again without running anything.
+Use it rather than a script of one's own.
+
+```sh
+go run ./internal/cmd/v8bench/matrix -qjs /path/to/qjs -v8 /tmp/v8-v7 -octane /tmp/octane -awfy /tmp/awfy -fetch
+```
 
 Each Go runner ends with the live heap after a collection, with the runtime
 still alive: one that grows with `-n` is a leak.
