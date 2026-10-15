@@ -89,6 +89,11 @@ type tbuilder struct {
 	// was added, say so (see tstep).
 	step   tstep
 	stepAt int
+	// logical is the && and || jumps that end no block (logicalJumps),
+	// with where they go, and logic the ones whose y the block being built
+	// has got into, innermost last.
+	logical map[int]int
+	logic   []tlogic
 }
 
 // target records a way from the block being built to the one at pc, whose
@@ -126,6 +131,8 @@ func buildTree(fn *bytecode.Function) *tree {
 	code := fn.Code
 	leader := make([]bool, len(code)+1)
 	leader[0] = true
+	// targets counts the jumps to each instruction, for logicalJumps.
+	targets := make([]int, len(code)+1)
 	// back says a jump goes back, as only a loop's does: structureTree has
 	// nothing to do without one.
 	back := false
@@ -143,6 +150,7 @@ func buildTree(fn *bytecode.Function) *tree {
 				return nil
 			}
 			leader[in.A] = true
+			targets[in.A]++
 			handlers = true
 		case bytecode.OpForOfStart, bytecode.OpForAwaitOfStart:
 			iters = true
@@ -154,6 +162,7 @@ func buildTree(fn *bytecode.Function) *tree {
 			}
 			leader[in.A] = true
 			leader[pc+1] = true
+			targets[in.A]++
 			back = back || int(in.A) <= pc
 		case bytecode.OpIterResume:
 			if int(in.B) > len(code) {
@@ -161,6 +170,7 @@ func buildTree(fn *bytecode.Function) *tree {
 			}
 			leader[in.B] = true
 			leader[pc+1] = true
+			targets[in.B]++
 		case bytecode.OpAsyncIterClose:
 			if in.B == 0 {
 				if int(in.A) > len(code) {
@@ -168,6 +178,7 @@ func buildTree(fn *bytecode.Function) *tree {
 				}
 				leader[in.A] = true
 				leader[pc+1] = true
+				targets[in.A]++
 			}
 		case bytecode.OpDispose:
 			if in.B&bytecode.DisposeStep != 0 && in.B&bytecode.DisposeFinish == 0 {
@@ -176,11 +187,18 @@ func buildTree(fn *bytecode.Function) *tree {
 				}
 				leader[in.A] = true
 				leader[pc+1] = true
+				targets[in.A]++
 			}
 		case bytecode.OpReturn, bytecode.OpReturnUndef, bytecode.OpThrow, bytecode.OpRethrow,
 			bytecode.OpEndParams, bytecode.OpYield, bytecode.OpAwait, bytecode.OpYieldStar:
 			leader[pc+1] = true
 		}
+	}
+	// An && or || whose y is an expression nothing else jumps into is built
+	// as one node, in the block it is in.
+	logical := logicalJumps(code, targets)
+	for pc, to := range logical {
+		leader[pc+1], leader[to] = false, false
 	}
 	if fn.TopLevel && !back {
 		// Top-level code runs once: only a loop makes its tree pay for
@@ -211,7 +229,7 @@ func buildTree(fn *bytecode.Function) *tree {
 	if back {
 		flow = takeFlow(len(starts))
 	}
-	b := &tbuilder{fn: fn, index: index, depths: depth, protected: handlers, iters: iters}
+	b := &tbuilder{fn: fn, index: index, depths: depth, protected: handlers, iters: iters, logical: logical}
 	if handlers {
 		b.entryHandlers = make([][]thandlerEntry, len(starts))
 	}
@@ -331,6 +349,7 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 	b.stack, b.body, b.succ = b.stack[:0], b.body[:0], b.succ[:0]
 	b.handlerSucc = b.handlerSucc[:0]
 	b.end, b.how, b.cmp, b.step = end, 0, tcmp{}, tstep{}
+	b.logic = b.logic[:0]
 	for d := 0; d < entry; d++ {
 		b.pushSlot(d)
 	}
@@ -340,7 +359,18 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 	// would be moved to the heap at every instruction.
 	for i := start; i < end; i++ {
 		pc := i
+		// An && or || ends where its jump goes: its x and y are one node.
+		for n := len(b.logic); n > 0 && b.logic[n-1].at == pc; n = len(b.logic) {
+			l := b.logic[n-1]
+			b.logic = b.logic[:n-1]
+			y := b.pop().tree()
+			b.push(logicalNode(l.x.tree(), y, l.or))
+		}
 		in := code[pc]
+		if to, ok := b.logical[pc]; ok {
+			b.logic = append(b.logic, tlogic{at: to, x: b.pop(), or: in.Op == bytecode.OpJumpIfTrueKeep})
+			continue
+		}
 		switch in.Op {
 		case bytecode.OpRethrow:
 			return b.rethrow(t, bi, pc)
@@ -570,6 +600,11 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 		}
 		skip, ok := b.op(pc, in, code, pc+1 < end)
 		if !ok {
+			return nil, false
+		}
+		if n := len(b.logic); n > 0 && i+skip+1 > b.logic[n-1].at {
+			// What an instruction took in with it ran past where a y
+			// ends, which a y's instructions never do.
 			return nil, false
 		}
 		i += skip
