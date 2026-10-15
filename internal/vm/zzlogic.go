@@ -11,12 +11,27 @@ import "github.com/go-quickjs/go-quickjs/internal/bytecode"
 // the jump does not end a block (logicalJumps), and x and y are one node
 // (logicalNode): x, and y where x does not decide.
 //
-// The node is a variable, assigned a closure in this file's init, laid out
+// c ? a : b as a value is so too, where a and b are such expressions:
+// the test's jump and the jump past b end no block, and the three are one
+// node (ternaryNode).
+//
+// The nodes are variables, assigned closures in this file's init, laid out
 // after every closure of the tree tier's (see AGENTS.md).
 
-var logicalNode func(x, y tval, or bool) tval
+var (
+	logicalNode func(x, y tval, or bool) tval
+	ternaryNode func(test func(*tctx) bool, a, b tval) tval
+)
 
 func init() {
+	ternaryNode = func(test func(*tctx) bool, a, b tval) tval {
+		return func(c *tctx) Value {
+			if test(c) {
+				return a(c)
+			}
+			return b(c)
+		}
+	}
 	logicalNode = func(x, y tval, or bool) tval {
 		if or {
 			return func(c *tctx) Value {
@@ -36,11 +51,17 @@ func init() {
 }
 
 // tlogic is an && or || whose y is being built: at is where the jump
-// goes, where y ends, and x is what the jump kept.
+// goes, where y ends, and x is what the jump kept. Or it is a c ? a : b,
+// for which test is set: at is the jump past b until a is built, then
+// end, where b ends.
 type tlogic struct {
 	at int
 	x  tentry
 	or bool
+
+	test func(*tctx) bool
+	a    tval
+	end  int
 }
 
 // maxLogical is the most instructions a y may take: what is longer stays
@@ -49,37 +70,107 @@ const maxLogical = 64
 
 // logicalJumps is which of code's jump_if_false_keep and jump_if_true_keep
 // need not end a block, with where each goes: one whose y, the code from
-// it to where it goes, is all logicalOp's, or an && or || that is one
-// itself and ends there or before, and whose y and target nothing else
-// jumps to. targets counts the jumps to each instruction.
+// it to where it goes, is all logicalOp's and && and || and ternaries
+// that are such themselves, ending there or before. A c ? a : b's test --
+// jump_if_false, jump_if_true or jump_if_cmp_false to b, whose instruction
+// before is the jump past it -- is one, with where b starts, where a and b
+// are such code. And no jump that is not one of them may go into any of
+// them or to where one ends: targets counts the jumps to each
+// instruction. Nested ones end where those around them do -- x ? a : y ?
+// b : c, x && (y ? a : b) -- so those are found first, from the
+// instructions alone, and then each is let go whose instructions another
+// jump goes to, until none is, as letting one go leaves those around it
+// with a jump that is not one of them.
 func logicalJumps(code []bytecode.Instr, targets []int) map[int]int {
 	var out map[int]int
-	for pc := len(code) - 1; pc >= 0; pc-- {
-		in := code[pc]
-		if in.Op != bytecode.OpJumpIfFalseKeep && in.Op != bytecode.OpJumpIfTrueKeep {
-			continue
-		}
-		to := int(in.A)
-		if to <= pc+1 || to >= len(code) || to-pc > maxLogical {
-			continue
-		}
-		ok := true
-		inner := map[int]int{}
-		for q := pc + 1; q < to && ok; q++ {
-			if t, ok2 := out[q]; ok2 && t <= to {
-				inner[t]++
+	// fits reports whether code[from:to] is all logicalOp's and the && and
+	// || and ternaries in out, which end at to or before.
+	fits := func(from, to int) bool {
+		pass := map[int]bool{}
+		for q := from; q < to; q++ {
+			if t, ok := out[q]; ok {
+				e := ternaryEnd(code, q, t)
+				if e > 0 {
+					// Its jump past its b is its own.
+					pass[t-1] = true
+				} else {
+					e = t
+				}
+				if e > to {
+					return false
+				}
 				continue
 			}
-			ok = logicalOp(code[q].Op)
-		}
-		for q := pc + 1; q < to && ok; q++ {
-			ok = targets[q] == inner[q]
-		}
-		if ok && targets[to] == 1+inner[to] {
-			if out == nil {
-				out = map[int]int{}
+			if !pass[q] && !logicalOp(code[q].Op) {
+				return false
 			}
-			out[pc] = to
+		}
+		return true
+	}
+	// span is where the one at pc ends: past its y, or past its b.
+	span := func(pc int) int {
+		if e := ternaryEnd(code, pc, out[pc]); e > 0 {
+			return e
+		}
+		return out[pc]
+	}
+	add := func(pc, to int) {
+		if out == nil {
+			out = map[int]int{}
+		}
+		out[pc] = to
+	}
+	for pc := len(code) - 1; pc >= 0; pc-- {
+		in := code[pc]
+		switch in.Op {
+		case bytecode.OpJumpIfFalse, bytecode.OpJumpIfTrue, bytecode.OpJumpIfCmpFalse:
+			// c ? a : b: a from pc+1 to the jump past b at els-1, b from
+			// els to where that jump goes.
+			els := int(in.A)
+			if els <= pc+2 || els >= len(code) || code[els-1].Op != bytecode.OpJump {
+				continue
+			}
+			end := int(code[els-1].A)
+			if end <= els || end >= len(code) || end-pc > maxLogical {
+				continue
+			}
+			if fits(pc+1, els-1) && fits(els, end) {
+				add(pc, els)
+			}
+		case bytecode.OpJumpIfFalseKeep, bytecode.OpJumpIfTrueKeep:
+			to := int(in.A)
+			if to <= pc+1 || to >= len(code) || to-pc > maxLogical {
+				continue
+			}
+			if fits(pc+1, to) {
+				add(pc, to)
+			}
+		}
+	}
+	for changed := true; changed && len(out) > 0; {
+		changed = false
+		// own counts the jumps to each instruction of the ones in out.
+		own := map[int]int{}
+		for pc, t := range out {
+			own[t]++
+			if e := ternaryEnd(code, pc, t); e > 0 {
+				own[e]++
+			}
+		}
+		for pc, t := range out {
+			e := span(pc)
+			ok := fits(pc+1, e)
+			if e != t {
+				// A ternary is its a and its b, apart.
+				ok = fits(pc+1, t-1) && fits(t, e)
+			}
+			for q := pc + 1; q <= e && ok; q++ {
+				ok = targets[q] == own[q]
+			}
+			if !ok {
+				delete(out, pc)
+				changed = true
+			}
 		}
 	}
 	return out
@@ -105,4 +196,29 @@ func logicalOp(op bytecode.Op) bool {
 		return true
 	}
 	return false
+}
+
+// ternaryEnd is, for a c ? a : b found at pc whose b starts at els, where
+// b ends; 0 for an && or ||, whose jump is no test.
+func ternaryEnd(code []bytecode.Instr, pc, els int) int {
+	switch code[pc].Op {
+	case bytecode.OpJumpIfFalse, bytecode.OpJumpIfTrue, bytecode.OpJumpIfCmpFalse:
+		return int(code[els-1].A)
+	}
+	return 0
+}
+
+// ternaryTest is the test of the c ? a : b whose jump at pc, in, the block
+// being built has got to, taken from the stack: a is taken where it holds.
+func (b *tbuilder) ternaryTest(pc int, in bytecode.Instr) func(*tctx) bool {
+	switch in.Op {
+	case bytecode.OpJumpIfCmpFalse:
+		y, x := b.pop(), b.pop()
+		return compareNode(bytecode.Op(in.B), x.tree(), y.tree(), pc)
+	case bytecode.OpJumpIfFalse:
+		v := b.pop().tree()
+		return func(c *tctx) bool { return truthy(v(c)) }
+	}
+	v := b.pop().tree()
+	return func(c *tctx) bool { return !truthy(v(c)) }
 }

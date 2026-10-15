@@ -199,6 +199,10 @@ func buildTree(fn *bytecode.Function) *tree {
 	logical := logicalJumps(code, targets)
 	for pc, to := range logical {
 		leader[pc+1], leader[to] = false, false
+		if end := ternaryEnd(code, pc, to); end > 0 {
+			// The jump past b, before it, and where that goes.
+			leader[end] = false
+		}
 	}
 	if fn.TopLevel && !back {
 		// Top-level code runs once: only a loop makes its tree pay for
@@ -360,14 +364,32 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 	for i := start; i < end; i++ {
 		pc := i
 		// An && or || ends where its jump goes: its x and y are one node.
+		// A c ? a : b has built a at its jump past b, which is not built,
+		// and is one node where b ends.
+		passed := false
 		for n := len(b.logic); n > 0 && b.logic[n-1].at == pc; n = len(b.logic) {
-			l := b.logic[n-1]
+			l := &b.logic[n-1]
+			if l.test != nil && l.a == nil {
+				l.a, l.at, passed = b.pop().tree(), l.end, true
+				break
+			}
 			b.logic = b.logic[:n-1]
 			y := b.pop().tree()
-			b.push(logicalNode(l.x.tree(), y, l.or))
+			if l.test != nil {
+				b.push(ternaryNode(l.test, l.a, y))
+			} else {
+				b.push(logicalNode(l.x.tree(), y, l.or))
+			}
+		}
+		if passed {
+			continue
 		}
 		in := code[pc]
 		if to, ok := b.logical[pc]; ok {
+			if end := ternaryEnd(code, pc, to); end > 0 {
+				b.logic = append(b.logic, tlogic{at: to - 1, end: end, test: b.ternaryTest(pc, in)})
+				continue
+			}
 			b.logic = append(b.logic, tlogic{at: to, x: b.pop(), or: in.Op == bytecode.OpJumpIfTrueKeep})
 			continue
 		}
