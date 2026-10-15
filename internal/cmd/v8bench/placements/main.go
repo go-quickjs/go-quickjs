@@ -34,10 +34,29 @@
 // compare runs two labels' builds, placement by placement, for several
 // rounds: each placement of each label is taken at its fastest round,
 // since what the machine adds only ever adds time, and a label's figure is
-// the mean over its placements. Placement n runs n*5 frames of 64 bytes
-// deeper in the stack (V8BENCH_STACKPAD). Richards and DeltaBlue, whose
-// runs take milliseconds, run 300 times in a process of their own and are
-// scaled to three.
+// the mean over its placements, in milliseconds a run. Placement n runs
+// n*5 frames of 64 bytes deeper in the stack (V8BENCH_STACKPAD). Each
+// benchmark runs once, and one whose run took less than a second runs
+// again in a process of its own as many times as fill about one -- 3, 10,
+// 30, 100 or 300 -- so that a long one, Octane's zlib, takes its run's
+// time and no more, and a short one, the V8 suite's Richards, more than
+// the timer's grain.
+//
+// -k 4 takes placements 0, 3, 5 and 6 of the eight, over which the first
+// three targets are each at each phase twice (the closures' at one): a
+// comparison to screen a change with, in half the time, before the eight
+// confirm it.
+//
+// -parallel runs both labels at once, each on a group of CPUs of its own,
+// the groups swapped from one placement and round to the next: by default
+// the groups that share a level 3 cache, as the OS reports them -- a
+// Ryzen's core complexes, whose caches are their own -- else the CPUs in
+// halves, of the fastest cores alone where the cores differ, a hybrid's
+// P-cores; -cpus gives them ("0-5;6-11"). Each run has GOMAXPROCS as many
+// as its group's CPUs. Windows and Linux give a process its CPUs; macOS
+// does not, and there the two run unpinned. It halves a comparison's time:
+// compare a label with itself so, first, to see that the groups measure
+// alike on the machine.
 //
 // Build both sides in the same directory, one after the other: the same
 // source built in another checkout has measured differently.
@@ -86,8 +105,9 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, `usage:
-  placements build -label NAME [-k 8] [-out DIR]
-  placements compare -dir SUITE [-bench NAME] [-k 8] [-rounds 3] [-suite NAMES] [-jit] [-v] [-out DIR] A B`)
+  placements build -label NAME [-k 8|4] [-out DIR]
+  placements compare -dir SUITE [-bench NAME] [-k 8|4] [-rounds 3] [-suite NAMES] [-jit]
+                     [-parallel] [-cpus auto|halves|LIST;LIST] [-v] [-out DIR] A B`)
 	os.Exit(2)
 }
 
@@ -117,6 +137,20 @@ const (
 	// case, times its number.
 	inner = 3
 )
+
+// placementsOf is the placements -k takes: placements 0, 3, 5 and 6 for
+// four, over which the first three targets are each at each phase twice;
+// otherwise the first k.
+func placementsOf(k int) []int {
+	if k == 4 {
+		return []int{0, 3, 5, 6}
+	}
+	ns := make([]int, k)
+	for i := range ns {
+		ns[i] = i
+	}
+	return ns
+}
 
 // design is the phase, in units of 32 bytes, that placement n gives each
 // target: a 2^(4-1) design, the fourth the parity of the other three.
@@ -198,7 +232,7 @@ func buildCmd(args []string) error {
 		os.Exit(1)
 	}()
 
-	for n := range *k {
+	for _, n := range placementsOf(*k) {
 		exe := exePath(*out, *label, n)
 		ref, err := buildAt(src, [4]int{}, inner*n, exe)
 		if err != nil {
@@ -303,6 +337,8 @@ func compareCmd(args []string) error {
 	suite := fs.String("suite", "", "comma-separated suites to run, all by default")
 	bench := fs.String("bench", "", "the benchmark collection, as v8bench's -bench: v8 by default, octane, awfy")
 	jitEnabled := fs.Bool("jit", false, "enable the optional native tier in both tagged builds")
+	parallel := fs.Bool("parallel", false, "run both labels at once, each on a group of CPUs (-cpus)")
+	cpus := fs.String("cpus", "auto", "the groups of CPUs -parallel runs on: auto, halves, or lists separated by ';' (0-5;6-11)")
 	verbose := fs.Bool("v", false, "print each placement's figure")
 	out := fs.String("out", defaultOut(), "where the builds are")
 	fs.Parse(args)
@@ -310,40 +346,86 @@ func compareCmd(args []string) error {
 		usage()
 	}
 	labels := [2]string{fs.Arg(0), fs.Arg(1)}
-	// res[label][n][benchmark] is each round's time.
+	if *k < 1 || *k > 8 {
+		return errors.New("-k is from 1 to 8, the design's placements")
+	}
+	ns := placementsOf(*k)
+	var groups []cpuSet
+	if *parallel {
+		g, how, err := parseCPUs(*cpus)
+		if err != nil {
+			return err
+		}
+		if len(g) < 2 || len(g[0]) == 0 || len(g[1]) == 0 {
+			return fmt.Errorf("-parallel needs two groups of CPUs, -cpus %q gives %v", *cpus, g)
+		}
+		groups = g[:2]
+		pinned := "each pinned to its group"
+		if !canPin {
+			pinned = "unpinned: this OS gives a process no CPUs of its own"
+		}
+		fmt.Printf("in parallel, on CPUs %s and %s -- %s; %s\n", groups[0], groups[1], how, pinned)
+	}
+	// res[label][i][benchmark] is each round's time of placement ns[i].
 	res := [2][]map[string][]float64{}
 	for l := range labels {
-		res[l] = make([]map[string][]float64, *k)
-		for n := range *k {
-			res[l][n] = map[string][]float64{}
+		res[l] = make([]map[string][]float64, len(ns))
+		for i, n := range ns {
+			res[l][i] = map[string][]float64{}
 			if _, err := os.Stat(exePath(*out, labels[l], n)); err != nil {
 				return fmt.Errorf("no placement %d of %s: build it first", n, labels[l])
 			}
 		}
 	}
 	var names []string
-	for range *rounds {
-		for n := range *k {
-			for l := range labels {
-				got, err := runPlacement(exePath(*out, labels[l], n), *dir, *bench, *suite, n, *jitEnabled)
-				if err != nil {
-					return err
-				}
-				for _, nv := range got {
-					if !slices.Contains(names, nv.name) {
-						names = append(names, nv.name)
+	add := func(l, i int, got []named) {
+		for _, nv := range got {
+			if !slices.Contains(names, nv.name) {
+				names = append(names, nv.name)
+			}
+			res[l][i][nv.name] = append(res[l][i][nv.name], nv.ms)
+		}
+	}
+	for round := range *rounds {
+		for i, n := range ns {
+			if !*parallel {
+				for l := range labels {
+					got, err := runPlacement(exePath(*out, labels[l], n), *dir, *bench, *suite, n, *jitEnabled, nil)
+					if err != nil {
+						return err
 					}
-					res[l][n][nv.name] = append(res[l][n][nv.name], nv.ms)
+					add(l, i, got)
 				}
+				continue
+			}
+			// Each label on each group as often: the groups swap with the
+			// placement and with the round.
+			var got [2][]named
+			var errs [2]error
+			done := make(chan struct{}, 2)
+			for l := range labels {
+				g := groups[(l+i+round)%2]
+				go func() {
+					got[l], errs[l] = runPlacement(exePath(*out, labels[l], n), *dir, *bench, *suite, n, *jitEnabled, g)
+					done <- struct{}{}
+				}()
+			}
+			<-done
+			<-done
+			for l := range labels {
+				if errs[l] != nil {
+					return errs[l]
+				}
+				add(l, i, got[l])
 			}
 		}
 	}
-	fmt.Printf("%-14s%12s%12s   change  (spread of %s over placements)\n", "", labels[0], labels[1], labels[1])
+	fmt.Printf("%-14s%12s%12s   change  (spread of %s over placements; ms a run)\n", "", labels[0], labels[1], labels[1])
 	for _, name := range names {
 		var per [2][]float64
 		for l := range labels {
-			for n := range *k {
-				per[l] = append(per[l], slices.Min(res[l][n][name]))
+			for i := range ns {
+				per[l] = append(per[l], slices.Min(res[l][i][name]))
 			}
 		}
 		ma, mb := mean(per[0]), mean(per[1])
@@ -362,82 +444,110 @@ func compareCmd(args []string) error {
 	return nil
 }
 
-// shortRuns is the time, in milliseconds, under which a benchmark's three
-// runs are run again three hundred times (runPlacement).
-const shortRuns = 150
+// longRun is the time, in milliseconds, past which a benchmark's one run
+// is its figure; repeats are the runs a shorter one is run again with, as
+// many as fill about a second of it (runPlacement).
+const longRun = 1000
+
+var repeats = []int{3, 10, 30, 100, 300}
+
+// repsFor is the runs a benchmark whose one run took ms runs again with:
+// the fewest of repeats that fill longRun, at most the last, or 0 for one
+// that is long already.
+func repsFor(ms float64) int {
+	if ms >= longRun {
+		return 0
+	}
+	for _, r := range repeats {
+		if ms*float64(r) >= longRun {
+			return r
+		}
+	}
+	return repeats[len(repeats)-1]
+}
 
 type named struct {
 	name string
 	ms   float64
 }
 
-// runPlacement runs one build once and reads its times, in the order it
-// printed them.
-func runPlacement(exe, dir, bench, suite string, n int, jitEnabled bool) ([]named, error) {
-	run := func(args ...string) ([]named, error) {
-		base := []string{"-dir", dir}
+// runPlacement runs one build and reads its times, in milliseconds a run,
+// in the order it printed them, then the total of theirs: every benchmark
+// once, then those shorter than longRun again, in a process for each of
+// repeats that one needs. On cpus, if any, with GOMAXPROCS as many.
+func runPlacement(exe, dir, bench, suite string, n int, jitEnabled bool, cpus cpuSet) ([]named, error) {
+	run := func(reps int, only string) ([]named, error) {
+		args := []string{"-dir", dir, "-n", strconv.Itoa(reps)}
 		if bench != "" {
-			base = append(base, "-bench", bench)
+			args = append(args, "-bench", bench)
 		}
 		if jitEnabled {
-			base = append(base, "-jit")
+			args = append(args, "-jit")
 		}
-		cmd := exec.Command(exe, append(base, args...)...)
+		if only != "" {
+			args = append(args, "-suite", only)
+		}
+		cmd := exec.Command(exe, args...)
 		cmd.Env = append(os.Environ(), "V8BENCH_STACKPAD="+strconv.Itoa(5*n))
-		outb, err := cmd.Output()
-		if err != nil {
+		var outb bytes.Buffer
+		cmd.Stdout = &outb
+		if cpus != nil {
+			cmd.Env = append(cmd.Env, "GOMAXPROCS="+strconv.Itoa(len(cpus)))
+			if err := startPinned(cmd, cpus); err != nil {
+				return nil, fmt.Errorf("%s: %w", exe, err)
+			}
+		} else if err := cmd.Start(); err != nil {
+			return nil, fmt.Errorf("%s: %w", exe, err)
+		}
+		if err := cmd.Wait(); err != nil {
 			return nil, fmt.Errorf("%s: %w", exe, err)
 		}
 		var got []named
-		for _, m := range timeLine.FindAllStringSubmatch(string(outb), -1) {
+		for _, m := range timeLine.FindAllStringSubmatch(outb.String(), -1) {
+			if m[1] == "TOTAL" {
+				continue
+			}
 			v, _ := strconv.ParseFloat(m[2], 64)
-			got = append(got, named{m[1], v})
+			got = append(got, named{m[1], v / float64(reps)})
 		}
 		return got, nil
 	}
-	if suite != "" {
-		return run("-n", "3", "-suite", suite)
-	}
-	got, err := run("-n", "3")
+	got, err := run(1, suite)
 	if err != nil {
 		return nil, err
 	}
-	// The short ones again, three hundred runs in a process of their own,
-	// scaled back to three; the total follows. Short is what took less than
-	// shortRuns' time in its three runs -- the V8 suite's Richards and
-	// DeltaBlue, a few milliseconds each -- not a name: Are We Fast Yet's
-	// Richards and DeltaBlue take a second a run, and three hundred of them
-	// had made each placement's run of that suite ten minutes long.
-	var names []string
+	// The short ones again, grouped by the runs each needs.
+	byReps := map[int][]string{}
 	for _, g := range got {
-		if g.name != "TOTAL" && g.ms < shortRuns {
-			names = append(names, g.name)
+		if reps := repsFor(g.ms); reps > 0 {
+			byReps[reps] = append(byReps[reps], g.name)
 		}
 	}
-	if len(names) == 0 {
-		return got, nil
-	}
-	short, err := run("-n", "300", "-suite", strings.Join(names, ","))
-	if err != nil {
-		return nil, err
-	}
-	for _, s := range short {
-		if !slices.Contains(names, s.name) {
+	for _, reps := range repeats {
+		names := byReps[reps]
+		if len(names) == 0 {
 			continue
 		}
-		v := s.ms / 100
-		for i := range got {
-			if got[i].name == s.name {
-				for j := range got {
-					if got[j].name == "TOTAL" {
-						got[j].ms += v - got[i].ms
-					}
+		again, err := run(reps, strings.Join(names, ","))
+		if err != nil {
+			return nil, err
+		}
+		for _, a := range again {
+			if !slices.Contains(names, a.name) {
+				continue
+			}
+			for i := range got {
+				if got[i].name == a.name {
+					got[i].ms = a.ms
 				}
-				got[i].ms = v
 			}
 		}
 	}
-	return got, nil
+	total := 0.0
+	for _, g := range got {
+		total += g.ms
+	}
+	return append(got, named{"TOTAL", total}), nil
 }
 
 func mean(xs []float64) float64 {
