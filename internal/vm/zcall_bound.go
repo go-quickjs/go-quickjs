@@ -18,16 +18,16 @@ func (r *Runtime) callBound(fd *funcData, args []Value) (Value, error) {
 		return Undefined, err
 	}
 	x := fd.extra
-	if len(x.boundArgs) == 0 {
-		v, err := r.callDirect(Obj(x.boundTarget), x.boundThis, args)
+	if len(x.rare.boundArgs) == 0 {
+		v, err := r.callDirect(Obj(x.rare.boundTarget), x.rare.boundThis, args)
 		r.unnest()
 		return v, err
 	}
 	i := len(r.argStack)
-	r.argStack = append(r.argStack, x.boundArgs...)
+	r.argStack = append(r.argStack, x.rare.boundArgs...)
 	r.argStack = append(r.argStack, args...)
 	n := len(r.argStack)
-	v, err := r.callDirect(Obj(x.boundTarget), x.boundThis, r.argStack[i:n:n])
+	v, err := r.callDirect(Obj(x.rare.boundTarget), x.rare.boundThis, r.argStack[i:n:n])
 	clear(r.argStack[i:n])
 	r.argStack = r.argStack[:i]
 	r.unnest()

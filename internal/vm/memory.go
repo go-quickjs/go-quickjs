@@ -562,6 +562,15 @@ func (m *memoryMeter) generic(v reflect.Value) {
 			return
 		}
 		elem := v.Type().Elem()
+		// A backing array is counted once, as a pointer's target is: the
+		// closures of one function share its names, constants and caches
+		// (closure.ic), which had been counted for each.
+		if p := v.UnsafePointer(); v.Cap() > 0 {
+			if _, ok := m.seen[p]; ok {
+				return
+			}
+			m.seen[p] = struct{}{}
+		}
 		m.total += int64(v.Cap()) * int64(elem.Size())
 		if mayHoldHeap(elem.Kind()) {
 			for i := 0; i < v.Len(); i++ {

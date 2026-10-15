@@ -190,7 +190,7 @@ func (r *Runtime) functionRealm(o *Object) (*Realm, error) {
 		case fd == nil:
 			return r.Realm, nil
 		case fd.bound:
-			o = fd.extra.boundTarget
+			o = fd.extra.rare.boundTarget
 			continue
 		case fd.closure != nil:
 			return fd.closure.realm, nil

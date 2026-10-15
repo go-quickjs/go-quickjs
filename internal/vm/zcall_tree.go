@@ -46,7 +46,7 @@ func planTreeCall(fd *funcData) {
 		// An arrow with nothing of its surroundings but its this and its
 		// new.target: not one inside a with, beside an eval, or sharing a
 		// derived constructor's this.
-		if x := fd.extra; x != nil && len(x.lexWith) == 0 && x.lexEvalVars == nil && x.lexThisRef == nil {
+		if x := fd.extra; x != nil && len(x.with()) == 0 && x.evalVars() == nil && x.lexThisRef == nil {
 			fd.treeRest = true
 		}
 	case fd.extra != nil:

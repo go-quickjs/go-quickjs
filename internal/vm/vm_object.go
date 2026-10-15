@@ -1401,8 +1401,7 @@ type funcData struct {
 
 	// name and length back the eponymous properties, which are created lazily
 	// because most functions are never asked for them.
-	name   string
-	length int
+	name string
 
 	// realm is the realm a built-in belongs to, which it runs in whoever
 	// calls it. A compiled function's is its closure's; a bound function has
@@ -1414,6 +1413,11 @@ type funcData struct {
 	// ctorShape is the empty shape the objects the function constructs start
 	// from, made when it first constructs one; see siteRoot.
 	ctorShape *shape
+	// length is the function's length, as its own length property, before
+	// one is made, says (propsMaterialized). It is an int32 beside the
+	// flags, in what their padding had been: a parameter list, or a
+	// built-in's declared length, is never longer.
+	length int32
 	// ctorKind says how the function responds to `new`. It sits with the
 	// flags below, which share its word.
 	ctorKind ctorKind
@@ -1488,6 +1492,17 @@ type funcExtra struct {
 	// lexThisRef is the binding an arrow captured when it was created inside a
 	// derived constructor, where `this` is not a value until super() runs.
 	lexThisRef *thisBinding
+	// rare is what few functions have: the scopes of a function made in a
+	// with body or after a direct eval, and what a bound function calls.
+	// It is apart, so that an arrow, which has a funcExtra in its own
+	// allocation, does not carry it: an arrow capturing a binding of its
+	// maker's had been 464 bytes, in Go's 480-byte size class, and DeltaBlue
+	// and Havlak make one for each forEach and each loop over a set.
+	rare *funcRare
+}
+
+// funcRare is the part of a funcExtra that only a few functions have.
+type funcRare struct {
 	// lexEvalVars is where a direct eval had put the bindings it declared in
 	// the function this one was created inside, which this one can still see.
 	lexEvalVars *Object
@@ -1501,6 +1516,38 @@ type funcExtra struct {
 	boundTarget *Object
 	boundThis   Value
 	boundArgs   []Value
+}
+
+// with is lexWith, for a function that has any.
+func (x *funcExtra) with() []*Object {
+	if x == nil || x.rare == nil {
+		return nil
+	}
+	return x.rare.lexWith
+}
+
+// evalVars is lexEvalVars, for a function that has them.
+func (x *funcExtra) evalVars() *Object {
+	if x == nil || x.rare == nil {
+		return nil
+	}
+	return x.rare.lexEvalVars
+}
+
+// scopesOf is the funcRare of a function made where the with objects and a
+// direct eval's bindings are these, or nil where there are none.
+func scopesOf(with []*Object, evalVars *Object) *funcRare {
+	if with == nil && evalVars == nil {
+		return nil
+	}
+	return &funcRare{lexWith: with, lexEvalVars: evalVars}
+}
+
+// boundExtra is a bound function's funcExtra and funcRare, made in one
+// allocation.
+type boundExtra struct {
+	funcExtra
+	r funcRare
 }
 
 type ctorKind uint8

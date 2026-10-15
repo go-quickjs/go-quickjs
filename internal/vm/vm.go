@@ -3289,7 +3289,7 @@ func (r *Runtime) newClosure(f *frame, c Value) *Object {
 	*fd = funcData{
 		closure:  child,
 		name:     tmpl.fn.Name,
-		length:   tmpl.fn.Length,
+		length:   int32(tmpl.fn.Length),
 		ctorKind: kind,
 	}
 	// A function created inside a `with` body keeps the objects: the names
@@ -3300,7 +3300,7 @@ func (r *Runtime) newClosure(f *frame, c Value) *Object {
 		if extra == nil {
 			extra = &funcExtra{}
 		}
-		extra.lexWith, extra.lexEvalVars = f.withScopes, f.evalVars
+		extra.rare = scopesOf(f.withScopes, f.evalVars)
 	}
 	fd.extra = extra
 	if arrow {
@@ -3707,9 +3707,9 @@ func (r *Runtime) constructWithTarget(callee Value, args []Value, newTarget Valu
 			break
 		}
 		if newTarget.IsObject() && newTarget.Object() == at {
-			newTarget = Obj(fd.extra.boundTarget)
+			newTarget = Obj(fd.extra.rare.boundTarget)
 		}
-		at = fd.extra.boundTarget
+		at = fd.extra.rare.boundTarget
 	}
 
 	// The new object's prototype comes from new.target's .prototype property,

@@ -276,7 +276,7 @@ func (r *Runtime) initIntrinsics() {
 // newNativeFunc creates a callable object wrapping a Go function.
 func (r *Runtime) newNativeFunc(name string, length int, fn NativeFunc) *Object {
 	o, fd := r.newSlabFuncObject(r.proto.function, ClassFunction)
-	*fd = funcData{native: fn, name: name, length: length, ctorKind: ctorNone, realm: r.Realm}
+	*fd = funcData{native: fn, name: name, length: int32(length), ctorKind: ctorNone, realm: r.Realm}
 	return o
 }
 
@@ -289,11 +289,11 @@ func (r *Runtime) newNativeFuncPair(len1, len2 int, fn1, fn2 NativeFunc) (*Objec
 	pair.a.Object = Object{proto: proto, class: ClassFunction, flags: objExtensible}
 	pair.a.embedExt(&pair.a.side)
 	pair.a.side.data = &pair.a.fn
-	pair.a.fn = funcData{native: fn1, length: len1, ctorKind: ctorNone, realm: r.Realm}
+	pair.a.fn = funcData{native: fn1, length: int32(len1), ctorKind: ctorNone, realm: r.Realm}
 	pair.b.Object = Object{proto: proto, class: ClassFunction, flags: objExtensible}
 	pair.b.embedExt(&pair.b.side)
 	pair.b.side.data = &pair.b.fn
-	pair.b.fn = funcData{native: fn2, length: len2, ctorKind: ctorNone, realm: r.Realm}
+	pair.b.fn = funcData{native: fn2, length: int32(len2), ctorKind: ctorNone, realm: r.Realm}
 	return &pair.a.Object, &pair.b.Object
 }
 
@@ -359,7 +359,7 @@ func (r *Runtime) newCtor(name string, length int, proto *Object, fn NativeFunc)
 // member of a namespace, as Intl's are, which the caller puts there.
 func (r *Runtime) newMemberCtor(name string, length int, proto *Object, fn NativeFunc) *Object {
 	c, fd := r.newSlabFuncObject(r.proto.function, ClassFunction)
-	*fd = funcData{native: fn, name: name, length: length, ctorKind: ctorBase, realm: r.Realm}
+	*fd = funcData{native: fn, name: name, length: int32(length), ctorKind: ctorBase, realm: r.Realm}
 	// Both are about to be given their methods.
 	c.reserveProps(8)
 	proto.reserveProps(8)

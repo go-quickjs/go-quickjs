@@ -49,12 +49,12 @@ func (r *Runtime) callObject(o *Object, this Value, args []Value, newTarget Valu
 			return r.callBound(fd, args)
 		}
 		merged := args
-		if len(fd.extra.boundArgs) > 0 {
-			merged = make([]Value, 0, len(fd.extra.boundArgs)+len(args))
-			merged = append(merged, fd.extra.boundArgs...)
+		if len(fd.extra.rare.boundArgs) > 0 {
+			merged = make([]Value, 0, len(fd.extra.rare.boundArgs)+len(args))
+			merged = append(merged, fd.extra.rare.boundArgs...)
 			merged = append(merged, args...)
 		}
-		boundThis := fd.extra.boundThis
+		boundThis := fd.extra.rare.boundThis
 		if !newTarget.IsUndefined() {
 			boundThis = this
 		}
@@ -64,7 +64,7 @@ func (r *Runtime) callObject(o *Object, this Value, args []Value, newTarget Valu
 		if err := r.nest(); err != nil {
 			return Undefined, err
 		}
-		v, err := r.callObject(fd.extra.boundTarget, boundThis, merged, newTarget)
+		v, err := r.callObject(fd.extra.rare.boundTarget, boundThis, merged, newTarget)
 		r.unnest()
 		return v, err
 	}
@@ -543,13 +543,13 @@ start:
 			// binding, so calling one before super() is the same error.
 			f.thisRef = fd.extra.lexThisRef
 		}
-		if fd.extra != nil && len(fd.extra.lexWith) > 0 {
-			f.withScopes = fd.extra.lexWith[:len(fd.extra.lexWith):len(fd.extra.lexWith)]
+		if w := fd.extra.with(); len(w) > 0 {
+			f.withScopes = w[:len(w):len(w)]
 		}
 		// What an eval declared in an enclosing function is still in scope
 		// here, whether or not this one has anything of its own.
-		if fd.extra != nil && fd.extra.lexEvalVars != nil {
-			f.evalVars = fd.extra.lexEvalVars
+		if ev := fd.extra.evalVars(); ev != nil {
+			f.evalVars = ev
 		}
 	}
 	if fn.HasDirectEval {
@@ -664,12 +664,12 @@ func (r *Runtime) tailTarget(tc tailCall) (*closure, Value, []Value, *Object, bo
 			return nil, Undefined, nil, nil, false, nil
 		}
 		if fd.bound {
-			if len(fd.extra.boundArgs) > 0 {
-				merged := make([]Value, 0, len(fd.extra.boundArgs)+len(args))
-				merged = append(merged, fd.extra.boundArgs...)
+			if len(fd.extra.rare.boundArgs) > 0 {
+				merged := make([]Value, 0, len(fd.extra.rare.boundArgs)+len(args))
+				merged = append(merged, fd.extra.rare.boundArgs...)
 				args = append(merged, args...)
 			}
-			o, this = fd.extra.boundTarget, fd.extra.boundThis
+			o, this = fd.extra.rare.boundTarget, fd.extra.rare.boundThis
 			continue
 		}
 		// A function of another realm is called the ordinary way, which is

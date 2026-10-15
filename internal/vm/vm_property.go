@@ -145,7 +145,7 @@ func (r *Runtime) getExoticNamed(o *Object, key Atom) (Value, bool, error) {
 				switch key {
 				case atomLength:
 					if !o.getOwn(atomLength).ok() {
-						return Int(fd.length), true, nil
+						return Int(int(fd.length)), true, nil
 					}
 				case atomName:
 					if !o.getOwn(atomName).ok() {
@@ -201,7 +201,7 @@ func (r *Runtime) materializeFunctionProp(o *Object, key Atom) {
 	var head [2]Property
 	n := 0
 	if !o.getOwn(atomLength).ok() {
-		head[n] = Property{key: atomLength, value: Int(fd.length), flags: propConfigurable}
+		head[n] = Property{key: atomLength, value: Int(int(fd.length)), flags: propConfigurable}
 		n++
 	}
 	if !o.getOwn(atomName).ok() {

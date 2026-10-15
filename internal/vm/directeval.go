@@ -82,8 +82,7 @@ func (r *Runtime) evalIn(caller *frame, fn *bytecode.Function) (Value, error) {
 			lexThis:      caller.this,
 			lexThisRef:   caller.thisRef,
 			lexNewTarget: caller.newTarget,
-			lexWith:      caller.withScopes,
-			lexEvalVars:  caller.evalVars,
+			rare:         scopesOf(caller.withScopes, caller.evalVars),
 		},
 	}
 	if caller.callee != nil {

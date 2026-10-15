@@ -750,9 +750,11 @@ func (r *Runtime) initFunctionBuiltins() {
 		}
 
 		o := newObject(rt.proto.function, ClassFunction)
+		be := &boundExtra{r: funcRare{boundTarget: target, boundThis: arg(args, 0), boundArgs: bound}}
+		be.rare = &be.r
 		o.extOf().data = &funcData{
 			bound:    true,
-			extra:    &funcExtra{boundTarget: target, boundThis: arg(args, 0), boundArgs: bound},
+			extra:    &be.funcExtra,
 			name:     boundName.prefix(maxShownName),
 			ctorKind: target.fn().ctorKind,
 			// Both are settled here rather than synthesized on demand, because
@@ -802,7 +804,7 @@ func (r *Runtime) initFunctionBuiltins() {
 			// the function it was bound from, asked afresh so that a
 			// Symbol.hasInstance there is honoured.
 			if fd := this.Object().fn(); fd != nil && fd.bound {
-				yes, err := rt.instanceOf(v, Obj(fd.extra.boundTarget))
+				yes, err := rt.instanceOf(v, Obj(fd.extra.rare.boundTarget))
 				return Bool(yes), err
 			}
 			if !v.IsObject() {
