@@ -1658,9 +1658,15 @@ func stackEffect(op bytecode.Op, a, b uint32) int {
 	case bytecode.OpObjectRest:
 		return -int(a)
 	case bytecode.OpSuperCall:
-		// Pops the arguments, or the argument array in the spread form.
-		if b != 0 {
-			return -1
+		// Pops the arguments, or the argument array in the spread form, and
+		// pushes this; the forwarding form pops nothing.
+		switch b {
+		case bytecode.SuperSpread:
+			// It had been -1, which counted the array popped and not this
+			// pushed: one slot under, where an estimate is to be over.
+			return 0
+		case bytecode.SuperForward:
+			return 1
 		}
 		return -int(a) + 1
 	case bytecode.OpNewClass:

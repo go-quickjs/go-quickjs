@@ -1404,6 +1404,10 @@ func (c *compiler) compileCall(n *ast.Call) {
 	}
 	// super(...) invokes the parent constructor with the current `this`.
 	if _, isSuper := n.Callee.(*ast.Super); isSuper {
+		if n.Forward {
+			c.emitAt(callPos(n), bytecode.OpSuperCall, 0, bytecode.SuperForward)
+			return
+		}
 		if hasSpread(n.Args) {
 			c.compileSpreadArguments(n.Args)
 			c.emitAt(callPos(n), bytecode.OpSuperCall, 0, 1)

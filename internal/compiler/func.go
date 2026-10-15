@@ -1144,17 +1144,18 @@ func constructorKind(cls *ast.ClassLit) ast.FuncKind {
 	return ast.FuncConstructor
 }
 
-// implicitSuperCall builds `super(...arguments)` for a derived class that
-// declares no constructor.
+// implicitSuperCall builds the super call of a derived class that declares
+// no constructor, which constructs the parent with the arguments it was
+// given (ast.Call.Forward). It had been super(...arguments): an arguments
+// object made at every construction and spread through the array
+// iterator, which a replaced %ArrayIteratorPrototype%.next saw, though the
+// default constructor takes its arguments as they are and iterates nothing.
 func implicitSuperCall(pos int) ast.Stmt {
 	return &ast.ExprStmt{
 		X: &ast.Call{
-			Callee: &ast.Super{Start: pos},
-			Args: []ast.Expr{&ast.Spread{
-				Arg:   &ast.Ident{Name: "arguments", Start: pos},
-				Start: pos,
-			}},
-			Start: pos,
+			Callee:  &ast.Super{Start: pos},
+			Forward: true,
+			Start:   pos,
 		},
 		Start: pos,
 	}

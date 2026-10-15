@@ -388,9 +388,13 @@ func init() {
 		case bytecode.OpSuperCall:
 			// super(...): its value is the object it bound.
 			n := int(a)
-			if k != 0 {
+			switch k {
+			case bytecode.SuperSpread:
 				// The spread form gathered the arguments into an array.
 				n = 1
+			case bytecode.SuperForward:
+				// The implicit constructor's passes on its own.
+				n = 0
 			}
 			if !b.spill() || b.depth() < n {
 				return 0, false
@@ -399,10 +403,12 @@ func init() {
 			for range n {
 				b.pop()
 			}
-			spread := k != 0
+			spread, forward := k == bytecode.SuperSpread, k == bytecode.SuperForward
 			b.push(func(c *tctx) Value {
 				var args []Value
-				if spread {
+				if forward {
+					args = c.f.args
+				} else if spread {
 					if a := c.stack[d-1]; a.IsObject() {
 						args = a.Object().elemsOf()
 					}

@@ -2774,7 +2774,10 @@ func (r *Runtime) executeAt(f *frame, startSP int, pending error) (Value, error)
 			}
 		case bytecode.OpSuperCall:
 			var args []Value
-			if in.B != 0 {
+			if in.B == bytecode.SuperForward {
+				// The implicit constructor's: the arguments it was given.
+				args = f.args
+			} else if in.B != 0 {
 				// The spread form gathered the arguments into an array.
 				sp--
 				if a := stack[sp]; a.IsObject() {

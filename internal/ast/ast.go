@@ -354,6 +354,10 @@ type Call struct {
 	Start    int
 	// Open is where the argument list's parenthesis is.
 	Open int
+	// Forward marks the super call of the constructor a derived class that
+	// declares none is given, which passes on the arguments it was called
+	// with, as they are, rather than spreading anything: Args is empty.
+	Forward bool
 }
 
 // New is `new Callee(Args)`.

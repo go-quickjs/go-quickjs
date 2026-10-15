@@ -267,6 +267,10 @@ const (
 	// a spread element is compiled.
 	OpCallSpread
 	OpNewSpread
+	// OpSuperCall is super(...), which pushes the this it binds: of the A
+	// arguments on the stack, or, as B says, of an argument array
+	// (SuperSpread) or of the arguments the constructor was called with
+	// (SuperForward).
 	OpSuperCall
 	OpReturn
 	OpReturnUndef
@@ -567,6 +571,17 @@ const (
 	ImportEvaluate = iota // import(): the module, evaluated
 	ImportDefer           // import.defer(): its deferred namespace
 	ImportSource          // import.source(): its source
+)
+
+// What OpSuperCall's B operand says the call's arguments are.
+const (
+	// SuperArgs is the A arguments on the stack.
+	SuperArgs = 0
+	// SuperSpread is an array of them on the stack, a spread's.
+	SuperSpread = 1
+	// SuperForward is the arguments the constructor was called with: the
+	// super call of a derived class's implicit constructor.
+	SuperForward = 2
 )
 
 // The flags OpUpdateLocal's B operand carries.
