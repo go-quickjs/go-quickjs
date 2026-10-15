@@ -196,6 +196,24 @@ func TestThrownValueStackHasColumns(t *testing.T) {
 	}
 }
 
+// TestThrownValueStackThroughNative pins the trace a Go host gets for a
+// value thrown from a callback of a built-in, every frame of which is made
+// a line only when the trace is asked for: the callback's, the built-in's,
+// its caller's and the script's.
+func TestThrownValueStackThroughNative(t *testing.T) {
+	rt := quickjs.New()
+	defer rt.Close()
+	_, err := rt.EvalFile("main.js", "function g() {\n  [1].forEach(function h() {\n    throw 7\n  })\n}\ng()")
+	var jsErr *quickjs.Error
+	if err == nil || !errors.As(err, &jsErr) {
+		t.Fatalf("err = %v, want a *quickjs.Error", err)
+	}
+	want := "7\n    at h (main.js:3:5)\n    at forEach (native:0)\n    at g (main.js:2:7)\n    at <main> (main.js:6:1)"
+	if got := jsErr.Stack(); got != want {
+		t.Errorf("Stack() = %q, want %q", got, want)
+	}
+}
+
 // TestEvalFileContext pins that a script run with a name is called that in
 // its stack, and still stops when its context is done.
 func TestEvalFileContext(t *testing.T) {

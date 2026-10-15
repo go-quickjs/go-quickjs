@@ -158,17 +158,24 @@ func (b *tbuilder) throwToHandler(t *tree, bi, pc int, v tval) ([]int, bool) {
 	t.blocks[bi] = tblock{body: b.takeBody(), next: func(c *tctx) int {
 		e := v(c)
 		c.at(pc)
-		err := c.r.throw(e)
 		if hs := c.f.handlers; len(hs) != 0 && hs[len(hs)-1].pc == h.pc {
 			sp := c.f.base + hs[len(hs)-1].stackDepth
 			if top >= 0 {
 				sp = c.f.base + top
 			}
+			if c.r.debug == nil {
+				// The value goes to the handler as it is: nothing is made
+				// of it that the handler would not take straight back out.
+				throwValueToHandler(c.r, c.f, sp, e)
+				return index[c.f.pc]
+			}
+			err := c.r.throw(e)
 			if _, ok := c.r.unwindToHandler(c.f, sp, err); ok {
 				return index[c.f.pc]
 			}
+			c.throw(err)
 		}
-		c.throw(err)
+		c.throw(c.r.throw(e))
 		return -1
 	}}
 	return b.succ, true

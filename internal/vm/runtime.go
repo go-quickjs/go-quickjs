@@ -732,9 +732,9 @@ var errorKindNames = [errorKindCount]string{
 // through a Go implementation of a built-in.
 type Thrown struct {
 	Value Value
-	// stack is captured at throw time, because the frames are gone by the time
-	// a handler runs.
-	Stack []StackEntry
+	// frames are captured at throw time, because they are gone by the time a
+	// handler runs, and made a trace by Stack.
+	frames []thrownFrame
 	// trace is an error's own stack: the frames it was made in, until its
 	// stack property is first read.
 	trace stackTrace
@@ -749,6 +749,35 @@ type Thrown struct {
 // function's error was thrown as it; nil for anything else. The object keeps
 // it however often the script catches and rethrows it.
 func (t *Thrown) Cause() error { return t.cause }
+
+// thrownFrame is a frame a value was thrown in: its code and the
+// instruction it was at, or the name of a function implemented in Go.
+type thrownFrame struct {
+	fn     *bytecode.Function
+	native string
+	pc     uint32
+}
+
+// Stack is the JavaScript stack trace at the point of the throw, innermost
+// first. Its lines and columns are found when it is asked for, not when the
+// value is thrown: most throws are caught, and finding a position reads the
+// function's table of them, which was most of the cost of a throw of
+// anything but an error object.
+func (t *Thrown) Stack() []StackEntry {
+	if len(t.frames) == 0 {
+		return nil
+	}
+	out := make([]StackEntry, len(t.frames))
+	for i, fr := range t.frames {
+		if fr.fn == nil {
+			out[i] = StackEntry{Function: fr.native, Source: "native"}
+			continue
+		}
+		line, col := fr.fn.PositionAt(fr.pc)
+		out[i] = StackEntry{Function: fr.fn.Name, Source: fr.fn.Source, Line: line, Column: col}
+	}
+	return out
+}
 
 // StackEntry is one line of a JavaScript stack trace.
 type StackEntry struct {
@@ -795,12 +824,12 @@ func (r *Runtime) throw(v Value) error {
 	if v.IsObject() && v.Object().class == ClassError {
 		if t, ok := v.Object().dataOf().(*Thrown); ok {
 			t.Value = v
-			t.Stack = t.Stack[:0]
+			t.frames = t.frames[:0]
 			return t
 		}
 		return &Thrown{Value: v}
 	}
-	return &Thrown{Value: v, Stack: r.captureStack()}
+	return &Thrown{Value: v, frames: r.captureFrames()}
 }
 
 // throwError constructs and throws one of the standard error types, its
@@ -853,20 +882,20 @@ func (r *Runtime) newError(kind errorKind, msg string) *Object {
 
 // captureStack snapshots the current call stack.
 func (r *Runtime) captureStack() []StackEntry {
+	return (&Thrown{frames: r.captureFrames()}).Stack()
+}
+
+// captureFrames records each frame of the call stack, innermost first, for
+// Thrown.Stack.
+func (r *Runtime) captureFrames() []thrownFrame {
 	if r.frameDepth == 0 {
 		return nil
 	}
-	out := make([]StackEntry, 0, r.frameDepth)
-	r.walkStack(func(e StackEntry) { out = append(out, e) })
-	return out
-}
-
-// walkStack reports each frame of the call stack, innermost first.
-func (r *Runtime) walkStack(visit func(StackEntry)) {
+	out := make([]thrownFrame, 0, r.frameDepth)
 	for i := r.frameDepth - 1; i >= 0; i-- {
 		f := r.frameAt(i)
 		if f.native != "" {
-			visit(StackEntry{Function: f.native, Source: "native"})
+			out = append(out, thrownFrame{native: f.native})
 			continue
 		}
 		if f.cl == nil {
@@ -877,14 +906,9 @@ func (r *Runtime) walkStack(visit func(StackEntry)) {
 			// The saved pc is past the instruction the frame is at.
 			pc--
 		}
-		line, col := f.cl.fn.PositionAt(pc)
-		visit(StackEntry{
-			Function: f.cl.fn.Name,
-			Source:   f.cl.fn.Source,
-			Line:     line,
-			Column:   col,
-		})
+		out = append(out, thrownFrame{fn: f.cl.fn, pc: pc})
 	}
+	return out
 }
 
 func itoa32(v int32) string {

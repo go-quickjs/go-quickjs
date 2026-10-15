@@ -371,7 +371,7 @@ type Error struct {
 func wrapThrown(rt *vm.Runtime, err error) error {
 	var thrown *vm.Thrown
 	if errors.As(err, &thrown) {
-		return &Error{value: Value{v: thrown.Value, rt: rt}, stack: thrown.Stack, thrown: thrown}
+		return &Error{value: Value{v: thrown.Value, rt: rt}, stack: thrown.Stack(), thrown: thrown}
 	}
 	return err
 }
