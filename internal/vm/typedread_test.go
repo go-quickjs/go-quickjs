@@ -51,6 +51,53 @@ func TestTreeTypedArrayReads(t *testing.T) {
 	}
 }
 
+// The tree tier appends an element at an array's length where setElem has
+// none to store (setIndexMiss, appendElem), and leaves the rest to the slow
+// path: an index a setter up the chain takes, a frozen array, a length made
+// read-only, a prototype with an element, a sparse array and a strict
+// function's refusals answer as the interpreter has them.
+func TestTreeArrayAppends(t *testing.T) {
+	const src = `
+		const out = []
+		function put(a, k, v) { a[k] = v; return a.length }
+		function putStrict(a, k, v) { 'use strict'; try { a[k] = v; return a.length } catch (e) { return e.name } }
+		function fill(a, n) { for (let i = a.length; i < n; i++) put(a, i, i); return a.join() }
+		for (let r = 0; r < 3; r++) {
+			out.push(fill([], 6), fill([9], 4))
+			const frozen = Object.freeze([1, 2])
+			out.push(put(frozen, 2, 3), putStrict(frozen, 2, 3), frozen.join())
+			const fixed = [1, 2]
+			Object.defineProperty(fixed, 'length', { writable: false })
+			out.push(put(fixed, 2, 3), putStrict(fixed, 2, 3), fixed.join())
+			const sparse = [1]; sparse[5] = 5
+			out.push(put(sparse, 6, 6), sparse.join())
+			const proto = [7, 8, 9], child = Object.setPrototypeOf([1], proto)
+			out.push(put(child, 1, 2), child.join(), Object.keys(child).join())
+			const log = []
+			Object.defineProperty(Array.prototype, '3', { set(v) { log.push(v) }, configurable: true })
+			const viaSetter = [0, 1, 2]
+			const got = [put(viaSetter, 3, 'x'), viaSetter.length, log.join()]
+			delete Array.prototype[3]
+			out.push(got.join(), put(viaSetter, 3, 'y'), viaSetter.join())
+		}
+		out.join(' | ')`
+	const want = "0,1,2,3,4,5 | 9,1,2,3 | 2 | TypeError | 1,2 | 2 | TypeError | 1,2 | 7 | 1,,,,,5,6 | " +
+		"2 | 1,2 | 0,1 | 3,3,x | 4 | 0,1,2,y"
+	for _, tree := range []bool{false, true} {
+		previous := treeTier.Swap(tree)
+		r := New(Config{})
+		v, err := r.Run(compileForTest(t, src))
+		r.Close()
+		treeTier.Store(previous)
+		if err != nil {
+			t.Fatalf("tree %v: %v", tree, err)
+		}
+		if got := v.String().Go(); got != want+" | "+want+" | "+want {
+			t.Errorf("tree %v:\n%s\nwant three of\n%s", tree, got, want)
+		}
+	}
+}
+
 // The tree tier stores a number into a typed array's buffer as it finds
 // one (setElem, typedWrite), and leaves the rest to the slow path: every
 // kind of element, keys past the end, fractions and NaN, values that are

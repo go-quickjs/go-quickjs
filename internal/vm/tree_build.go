@@ -1819,12 +1819,14 @@ func setIndexNode(obj, key, val tval, pc int, strict bool) tval {
 }
 
 // setIndexMiss is obj[key] = val where setElem has not stored it, for the
-// tree tier's element writes, as getIndexMiss reads: a number into a typed
-// array's buffer (typedStore), anything else as setIndexSlow stores it.
+// tree tier's element writes, as getIndexMiss reads: an element appended
+// at an array's length (appendElem), anything else as setIndexSlow stores
+// it. A number setElem has not put in a typed array's buffer is one
+// typedStore would find the long way first, which setIndexSlow asks.
 //
 //go:noinline
 func (c *tctx) setIndexMiss(o, k, v Value, pc int, strict bool) Value {
-	if typedStore(o, k.num, v) {
+	if o.IsObject() && appendElem(o.object(), k.num, v) {
 		return v
 	}
 	return c.setIndexSlow(o, k, v, pc, strict)
