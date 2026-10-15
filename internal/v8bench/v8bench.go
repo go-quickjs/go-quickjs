@@ -140,7 +140,7 @@ func Main(name string, e Engine) {
 	var rt Runtime
 	var before runtime.MemStats
 	runtime.ReadMemStats(&before)
-	start := time.Now()
+	start, cpu0 := time.Now(), processCPU()
 	switch *mode {
 	case "compile":
 		for i := 0; i < *n; i++ {
@@ -171,7 +171,7 @@ func Main(name string, e Engine) {
 	}
 	var after runtime.MemStats
 	runtime.ReadMemStats(&after)
-	report("TOTAL", time.Since(start), &before, &after)
+	report("TOTAL", time.Since(start), processCPU()-cpu0, &before, &after)
 	// What is live once a collection has run: after a suite's teardown,
 	// anything a run left behind that grows with the runs is a leak. The
 	// allocation profile's in-use figures are as of this collection too.
@@ -213,7 +213,7 @@ func runFixed(e Engine, s *suite, src map[string]string, n int, only string) Run
 		}
 		var m0, m1 runtime.MemStats
 		runtime.ReadMemStats(&m0)
-		t0 := time.Now()
+		t0, c0 := time.Now(), processCPU()
 		_, err := rt.EvalString(fmt.Sprintf(`(() => {
 			const s = BenchmarkSuite.suites.find(s => s.name === %q);
 			// Octane's Math.random, seeded again for each suite as its
@@ -226,12 +226,12 @@ func runFixed(e Engine, s *suite, src map[string]string, n int, only string) Run
 			}
 			return "";
 		})()`, name, n))
-		d := time.Since(t0)
+		d, c := time.Since(t0), processCPU()-c0
 		runtime.ReadMemStats(&m1)
 		if err != nil {
 			fail(fmt.Errorf("%s: %w", name, err))
 		}
-		report(name, d, &m0, &m1)
+		report(name, d, c, &m0, &m1)
 		if r, ok := rt.(Reporter); ok {
 			r.Report(name)
 		}
@@ -252,14 +252,14 @@ func runAWFY(e Engine, s *suite, src map[string]string, n int, only string) Runt
 		}
 		var m0, m1 runtime.MemStats
 		runtime.ReadMemStats(&m0)
-		t0 := time.Now()
+		t0, c0 := time.Now(), processCPU()
 		_, err := rt.EvalString(awfyRun(w.module, w.inner, n))
-		d := time.Since(t0)
+		d, c := time.Since(t0), processCPU()-c0
 		runtime.ReadMemStats(&m1)
 		if err != nil {
 			fail(fmt.Errorf("%s: %w", w.name, err))
 		}
-		report(w.name, d, &m0, &m1)
+		report(w.name, d, c, &m0, &m1)
 		if r, ok := rt.(Reporter); ok {
 			r.Report(w.name)
 		}
@@ -267,9 +267,13 @@ func runAWFY(e Engine, s *suite, src map[string]string, n int, only string) Runt
 	return rt
 }
 
-func report(name string, d time.Duration, m0, m1 *runtime.MemStats) {
-	fmt.Printf("%-13s %9.1f ms %10.1f MB %11d allocs\n", name,
-		float64(d.Microseconds())/1000, float64(m1.TotalAlloc-m0.TotalAlloc)/(1<<20), m1.Mallocs-m0.Mallocs)
+// report prints a benchmark's time, the CPU time the process spent on it --
+// the collector's on other threads included, which the time does not show
+// on a machine with cores to spare -- and what it allocated.
+func report(name string, d, cpu time.Duration, m0, m1 *runtime.MemStats) {
+	fmt.Printf("%-13s %9.1f ms %9.1f cpu %10.1f MB %11d allocs\n", name,
+		float64(d.Microseconds())/1000, float64(cpu.Microseconds())/1000,
+		float64(m1.TotalAlloc-m0.TotalAlloc)/(1<<20), m1.Mallocs-m0.Mallocs)
 }
 
 // clockStart is the point the host's clock counts from.

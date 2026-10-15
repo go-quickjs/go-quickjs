@@ -316,6 +316,13 @@ go run ./internal/cmd/v8bench/matrix -qjs /path/to/qjs -v8 /tmp/v8-v7 -octane /t
 Each Go runner ends with the live heap after a collection, with the runtime
 still alive: one that grows with `-n` is a leak.
 
+The fixed mode prints, beside each benchmark's time, the CPU time the
+process spent on it (`cpu`), the collector's on other threads included,
+and the external runner its engine's whole: on a machine with cores to
+spare the time does not show what collecting costs, which an embedder
+running a runtime on each core pays. A change that moves what is
+allocated is compared by both.
+
 `internal/cmd/disasm` prints the bytecode a script or module compiles to,
 each function's instructions under the source lines they come from; `-tree`
 says whether the tree tier builds each function and, where it does not,

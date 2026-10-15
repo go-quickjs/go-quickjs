@@ -158,7 +158,11 @@ func MainExternal() {
 	if err := cmd.Run(); err != nil {
 		fail(err)
 	}
-	fmt.Printf("%-13s %9.1f ms\n", "TOTAL", float64(time.Since(start).Microseconds())/1000)
+	// The engine's CPU time is its process's, whole: what its collector or
+	// its threads spent beside the work, as report gives go-quickjs's.
+	cpu := cmd.ProcessState.UserTime() + cmd.ProcessState.SystemTime()
+	fmt.Printf("%-13s %9.1f ms %9.1f cpu\n", "TOTAL", float64(time.Since(start).Microseconds())/1000,
+		float64(cpu.Microseconds())/1000)
 }
 
 // suiteDriver writes the driver of the suite, in the fixed or the score
