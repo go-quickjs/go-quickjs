@@ -1056,6 +1056,9 @@ func (b *tbuilder) op(pc int, in bytecode.Instr, code []bytecode.Instr, more boo
 				return 0, true
 			}
 		}
+		if b.callAll(in.Op, int(in.A), pc) {
+			return 0, true
+		}
 		// The callee and the arguments go to their slots, which is where a
 		// call takes its arguments from.
 		if !b.spill() {

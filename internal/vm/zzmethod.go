@@ -33,12 +33,104 @@ var (
 	// p+1..., and the call_method at pc.
 	methodCall func(recv tentry, get bytecode.Instr, gpc int, args []tval, p, pc int) tval
 
+	// callOperands is call or new at pc of the callee f, evaluated, with
+	// the arguments to evaluate into slots p+1..., or call_method of the
+	// method f and the receiver in slot p-1: callNode, but that it
+	// evaluates what it calls with, rather than a spill before it.
+	callOperands func(op bytecode.Op, f tval, args []tval, p, pc int) tval
+
 	// leafRest is what callRest does with a call of the leaf fd's that
 	// leafCall or pureCall has not answered, once it has ticked.
 	leafRest func(r *Runtime, o *Object, fd *funcData, this Value, args []Value) (Value, error)
 )
 
 func init() {
+	callOperands = func(op bytecode.Op, f tval, args []tval, p, pc int) tval {
+		n := len(args)
+		switch op {
+		case bytecode.OpNew:
+			return func(c *tctx) Value {
+				fv := f(c)
+				for i, a := range args {
+					c.stack[p+1+i] = a(c)
+				}
+				c.at(pc)
+				v, err := c.r.construct(fv, c.stack[p+1:p+1+n])
+				if err != nil {
+					c.throw(err)
+				}
+				return v
+			}
+		case bytecode.OpCallMethod:
+			return func(c *tctx) Value {
+				fv := f(c)
+				for i, a := range args {
+					c.stack[p+1+i] = a(c)
+				}
+				c.at(pc)
+				recv, as := c.stack[p-1], c.stack[p+1:p+1+n]
+				if fv.IsObject() {
+					o := fv.object()
+					fd := o.fn()
+					if fd != nil && fd.treeCall != nil && fd.closure.realm == c.r.Realm {
+						r := c.r
+						if err := r.tick(); err != nil {
+							c.throw(err)
+						}
+						v, err := r.callTree(o, fd, recv, as, true)
+						if err != nil {
+							c.throw(err)
+						}
+						return v
+					}
+					v, err := c.r.callRest(o, fd, recv, as)
+					if err != nil {
+						c.throw(err)
+					}
+					return v
+				}
+				v, err := c.r.call(fv, recv, as)
+				if err != nil {
+					c.throw(err)
+				}
+				return v
+			}
+		}
+		return func(c *tctx) Value {
+			fv := f(c)
+			for i, a := range args {
+				c.stack[p+1+i] = a(c)
+			}
+			c.at(pc)
+			as := c.stack[p+1 : p+1+n]
+			if fv.IsObject() {
+				o := fv.object()
+				fd := o.fn()
+				if fd != nil && fd.treeCall != nil && fd.closure.realm == c.r.Realm {
+					r := c.r
+					if err := r.tick(); err != nil {
+						c.throw(err)
+					}
+					v, err := r.callTree(o, fd, Undefined, as, true)
+					if err != nil {
+						c.throw(err)
+					}
+					return v
+				}
+				v, err := c.r.callRest(o, fd, Undefined, as)
+				if err != nil {
+					c.throw(err)
+				}
+				return v
+			}
+			v, err := c.r.call(fv, Undefined, as)
+			if err != nil {
+				c.throw(err)
+			}
+			return v
+		}
+	}
+
 	leafRest = func(r *Runtime, o *Object, fd *funcData, this Value, args []Value) (Value, error) {
 		fn := fd.closure.fn
 		newTarget := Undefined
@@ -184,4 +276,26 @@ func (b *tbuilder) methodCall(n int, m *methodOf, pc int) tval {
 	b.pop()
 	recv := b.pop()
 	return methodCall(recv, m.in, m.pc, args, b.depth()+1, pc)
+}
+
+// callAll builds call, call_method or new at pc of n arguments into
+// callOperands's node, which evaluates the callee and the arguments as
+// methodCall's does, without a spill; for call_method, the receiver is
+// in its slot, beneath the method, as get_prop_this or get_index_this
+// leaves it. It reports false for a receiver that is not.
+func (b *tbuilder) callAll(op bytecode.Op, n, pc int) bool {
+	p := len(b.stack) - n - 1
+	if op == bytecode.OpCallMethod && (p < 1 || b.stack[p-1].slot != p-1) {
+		return false
+	}
+	args := make([]tval, n)
+	for i := n - 1; i >= 0; i-- {
+		args[i] = b.pop().tree()
+	}
+	f := b.pop().tree()
+	if op == bytecode.OpCallMethod {
+		b.pop()
+	}
+	b.push(callOperands(op, f, args, p, pc))
+	return true
 }

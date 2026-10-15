@@ -3,8 +3,8 @@ package vm
 import "testing"
 
 // recv.name(args) on a local or this receiver is one node of the tree tier
-// (methodCall in zzmethod.go), which leaves what is steady beneath it
-// unread, and calls a leaf itself. It answers as the interpreter and Node
+// (methodCall in zzmethod.go), which spills nothing beneath it, and calls
+// a leaf itself; and so are call and new (callOperands). It answers as the interpreter and Node
 // do, each case in a function whose loop gives it a tree, called three
 // times:
 //   - a local a closure has captured and the call writes, and a parameter
@@ -18,7 +18,10 @@ import "testing"
 //   - a primitive receiver, a built-in's, a bound function as a method;
 //   - an undefined method, an undefined receiver, a method of a number;
 //   - an optional call, a polymorphic site, recursion through this, an
-//     arrow as a method.
+//     arrow as a method;
+//   - a plain call beneath which a captured local the call writes is, a
+//     callee called after its own expression and before its arguments, a
+//     construction, and methods of a property and of an element.
 func TestTreeMethodCalls(t *testing.T) {
 	const src = `
 		const out = []
@@ -101,14 +104,30 @@ func TestTreeMethodCalls(t *testing.T) {
 			for (let i = 0; i < 2; i++) t += o.f() + o.g(i)
 			return t
 		}
+		function plains() {
+			let s = 1, log = ''
+			const f = () => { s += 10; return 2 }
+			const pick = k => { log += 'c' + k; return x => x * k }
+			const arg = v => { log += 'a' + v; return v }
+			function C(x) { this.x = x }
+			const o = { in: { m(x) { return this === o.in ? x + 1 : -1 } } }, k = 'm', arr = [o.in]
+			let t = 0
+			for (let i = 0; i < 3;) {
+				t += s + f()
+				t += pick(i)(arg(i))
+				t += new C(i++).x
+				t += o.in.m(i) + o.in[k](i) + arr[0].m(i)
+			}
+			return t + ':' + s + ':' + log
+		}
 		const g = new P(5)
 		Object.defineProperty(g, 'a', { get() { return 50 } })
 		Object.defineProperty(g, 'arr', { get() { return [1, 2, 3, 4] } })
 		for (let k = 0; k < 3; k++) {
 			out.push(captured({}), mapped(0), updates(new P(0)), getters(), leaves(new P(1), g), prims(), errs(new P(1)),
-				optional(new P(4)), poly([{ m: x => x }, { m(x) { return 2 * x } }, { m() { return 1 } }]), self(new P(2)), arrows())
+				optional(new P(4)), poly([{ m: x => x }, { m(x) { return 2 * x } }, { m() { return 1 } }]), self(new P(2)), arrows(), plains())
 		}
-		out.slice(0, 11).join('\n') + '\n' + (out.slice(0, 11).join() === out.slice(11, 22).join() && out.slice(11, 22).join() === out.slice(22).join())`
+		out.slice(0, 12).join('\n') + '\n' + (out.slice(0, 12).join() === out.slice(12, 24).join() && out.slice(12, 24).join() === out.slice(24).join())`
 	const want = "3/13/23:31\n" +
 		"6:100\n" +
 		"0,2,4,\n" +
@@ -120,6 +139,7 @@ func TestTreeMethodCalls(t *testing.T) {
 		"241\n" +
 		"186\n" +
 		"object0object1\n" +
+		"74:31:c0a0c1a1c2a2\n" +
 		"true"
 	r := New(Config{})
 	defer r.Close()
