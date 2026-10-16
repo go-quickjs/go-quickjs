@@ -91,6 +91,11 @@ type weakMapState struct {
 	// that have been collected, twice what was left the last time, so that
 	// pruning costs a constant per key added.
 	pruneAt int
+	// pruned is the collector's cycle (gcEpoch) the keys were last pruned
+	// in, or the map made in. Only a collection takes keys, so keys are not
+	// pruned again until one has run: a map given a thousand keys between
+	// two collections had looked at each of them twice, to find none gone.
+	pruned uint32
 }
 
 // weakMapRefs is a key's values, one for each WeakMap it is a key of. It is
@@ -328,7 +333,7 @@ func (m *weakMap) get(_ *Runtime, k Value) (Value, bool) {
 func (m *weakMap) set(r *Runtime, k, v Value) {
 	s := m.state
 	if s == nil {
-		s = &weakMapState{id: weakMapIDs.Add(1)}
+		s = &weakMapState{id: weakMapIDs.Add(1), pruned: gcEpoch.Load()}
 		m.state = s
 		reg := r.weakMapRegistry()
 		reg.live[s] = struct{}{}
@@ -352,7 +357,8 @@ func (m *weakMap) delete(k Value) bool {
 
 // track records that the key k refers to has been given its first entry.
 func (s *weakMapState) track(k weakTarget) {
-	if len(s.keys) >= s.pruneAt {
+	if len(s.keys) >= s.pruneAt && gcEpoch.Load() != s.pruned {
+		s.pruned = gcEpoch.Load()
 		kept := s.keys[:0]
 		for _, q := range s.keys {
 			if q.pointer() != nil {

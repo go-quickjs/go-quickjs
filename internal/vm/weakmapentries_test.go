@@ -2,7 +2,10 @@ package vm
 
 import (
 	"math/rand/v2"
+	"runtime"
+	"runtime/debug"
 	"testing"
+	"time"
 )
 
 // A key keeps its entries in the order of their maps' ids (weakMapRefs.more)
@@ -111,4 +114,31 @@ func TestWeakMapKeyEntriesInOrder(t *testing.T) {
 	if refs().more != nil || refs().first.m != nil {
 		t.Errorf("released from every map, the key holds %d entries", len(more().entries))
 	}
+}
+
+// Only a collection takes a map's keys, so a map given keys while none
+// runs does not look through them for any it has taken (weakMapState.pruned):
+// it had, at each doubling, found none gone.
+func TestWeakMapPrunesOnlyAfterCollection(t *testing.T) {
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	// A collection that ran before has its count still to come, which a
+	// collection now and the wait for its count settle.
+	e := gcEpoch.Load()
+	runtime.GC()
+	for deadline := time.Now().Add(5 * time.Second); gcEpoch.Load() == e; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the collector's cycles are not counted")
+		}
+	}
+	r := New(Config{})
+	m := newWeakMap()
+	keys := make([]Value, 100)
+	for i := range keys {
+		keys[i] = Obj(newObject(nil, ClassObject))
+		m.set(r, keys[i], Int(i))
+	}
+	if m.state.pruneAt != 0 {
+		t.Errorf("the map was pruned with no collection run: pruneAt = %d", m.state.pruneAt)
+	}
+	runtime.KeepAlive(keys)
 }
