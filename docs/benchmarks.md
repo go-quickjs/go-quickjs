@@ -1,54 +1,57 @@
 # Benchmarks
 
-On an Apple M5 Max with Go 1.27.0, taking the median of five fresh-process
-runs at go-quickjs `6c3dd16`, with 30 seconds between runs:
+On an Apple M5 Max with Go 1.27.0 and the native JIT disabled, taking
+per-metric medians of five fresh-process runs at go-quickjs `6099e8c` on
+2026-10-16, with 30 seconds between runs and AC power throughout:
 
 ```
-BenchmarkEvalArithmetic-18  1.17µs/op   3938 B/op    20 allocs/op
-BenchmarkFibonacci-18        425µs/op     16 B/op     1 allocs/op
-BenchmarkPropertyAccess-18  1.45µs/op   4916 B/op    23 allocs/op
-BenchmarkCallGoFunction-18  1.49µs/op   5556 B/op    31 allocs/op
+BenchmarkEvalArithmetic-18  1.25µs/op   4114 B/op    22 allocs/op
+BenchmarkFibonacci-18        439µs/op     17 B/op     1 allocs/op
+BenchmarkPropertyAccess-18  1.54µs/op   5140 B/op    26 allocs/op
+BenchmarkCallGoFunction-18  1.60µs/op   5844 B/op    33 allocs/op
 ```
 
 `fib(20)` costs one allocation because the interpreter loop allocates nothing
 per call; the other benchmarks include parsing and compiling their source each
 iteration.
 
-`go test -bench . -benchmem` also runs compile-once interpreter workloads,
-plus compilation, runtime construction, and a recursive factorial workload.
-That complete set is:
+`go test -run '^$' -bench . -benchmem .` also runs compile-once interpreter
+workloads, plus compilation, runtime construction, and a recursive factorial
+workload. The remaining root-package benchmarks are:
 
 ```
-BenchmarkLoopArithmetic-18         57.8µs/op        1 B/op     0 allocs/op
-BenchmarkDateUTC-18                 370µs/op        1 B/op     0 allocs/op
-BenchmarkLoopPropertyAccess-18      206µs/op        0 B/op     0 allocs/op
-BenchmarkLoopArrayIndex-18         11.1µs/op        0 B/op     0 allocs/op
-BenchmarkLoopFunctionCall-18        181µs/op        0 B/op     0 allocs/op
-BenchmarkLoopMethodCall-18          270µs/op        0 B/op     0 allocs/op
-BenchmarkAllocObjects-18           93.2µs/op   352 KB/op  2000 allocs/op
-BenchmarkAllocArrays-18            67.9µs/op   320 KB/op  2000 allocs/op
-BenchmarkStringConcat-18           42.0µs/op   129 KB/op  1999 allocs/op
-BenchmarkClosureCreateAndCall-18    366µs/op  1.76 MB/op  5001 allocs/op
-BenchmarkArrayCallbacks-18         45.8µs/op  36.7 KB/op    24 allocs/op
-BenchmarkMapOperations-18           163µs/op   311 KB/op    25 allocs/op
-BenchmarkRegExpExec-18              299µs/op   448 KB/op  4000 allocs/op
-BenchmarkThrowCatch-18              285µs/op   768 KB/op  6000 allocs/op
-BenchmarkJSONRoundTrip-18           490µs/op   748 KB/op  9500 allocs/op
-BenchmarkFactorial-18              21.0ms/op   377 KB/op  1294 allocs/op
-BenchmarkCompileScript-18          20.6µs/op  40.2 KB/op   301 allocs/op
-BenchmarkNewRuntime-18             58.7µs/op   267 KB/op  1222 allocs/op
-BenchmarkNewRuntimeSmallStack-18   61.1µs/op   265 KB/op  1222 allocs/op
+BenchmarkLoopArithmetic-18         58.4µs/op        1 B/op     0 allocs/op
+BenchmarkDateUTC-18                 384µs/op        1 B/op     0 allocs/op
+BenchmarkLoopPropertyAccess-18      204µs/op        0 B/op     0 allocs/op
+BenchmarkLoopArrayIndex-18         11.8µs/op        0 B/op     0 allocs/op
+BenchmarkLoopFunctionCall-18        185µs/op        0 B/op     0 allocs/op
+BenchmarkLoopMethodCall-18          248µs/op        0 B/op     0 allocs/op
+BenchmarkAllocObjects-18           78.1µs/op   224 KB/op  2000 allocs/op
+BenchmarkAllocArrays-18            68.2µs/op   320 KB/op  2000 allocs/op
+BenchmarkStringConcat-18           33.5µs/op  97.2 KB/op  1999 allocs/op
+BenchmarkClosureCreateAndCall-18    319µs/op  1.44 MB/op  5001 allocs/op
+BenchmarkArrayCallbacks-18         44.6µs/op  36.4 KB/op    18 allocs/op
+BenchmarkMapOperations-18           126µs/op   311 KB/op    25 allocs/op
+BenchmarkRegExpExec-18              304µs/op   384 KB/op  3000 allocs/op
+BenchmarkThrowCatch-18              230µs/op   704 KB/op  6000 allocs/op
+BenchmarkJSONRoundTrip-18           474µs/op   612 KB/op  8500 allocs/op
+BenchmarkFactorial-18              20.4ms/op   376 KB/op  1692 allocs/op
+BenchmarkCompileScript-18          25.0µs/op  49.8 KB/op   440 allocs/op
+BenchmarkNewRuntime-18             61.0µs/op   265 KB/op  1574 allocs/op
+BenchmarkNewRuntimeSmallStack-18   65.0µs/op   263 KB/op  1574 allocs/op
 ```
 
 Each compile-once benchmark runs its workload many times: the main loop
 benchmarks use 10,000 iterations, the object and array benchmarks allocate
 2,000 values, and the callback, collection, regexp, exception and JSON
 benchmarks exercise their operation hundreds or thousands of times.
-`CompileScript` compiles one program per operation, while the runtime
-benchmarks construct and close one runtime per operation.
+`CompileScript` parses, compiles and evaluates one program per operation,
+while the runtime benchmarks construct and close one runtime per operation.
 `Factorial` constructs one runtime and evaluates 100,000 calls to
 `factorial(10)` per operation, totaling one million recursive calls
-(21.0 ns/call).
+(20.4 ns/call). Each of the five samples came from a separate invocation,
+with one second per benchmark and `-benchmem`, not repeated measurements
+inside a single test process.
 
 ## V8 version 7 benchmark suite
 
@@ -64,36 +67,51 @@ each: `-engine node -arg --jitless` runs Node without its JIT compilers.
 For a comparison with another pure-Go JavaScript engine, the Mozilla
 [AreWeFastYet V8 version 7 suite][v8-v7] was run against go-quickjs and
 [goja]. The figures below are the median of three alternating-order,
-fresh-process runs on an Apple M5 Max with Go 1.27.0, with 30 seconds between
-runs. Higher suite scores are better.
+fresh-process runs on an Apple M5 Max with Go 1.27.0 on 2026-10-16, with
+30 seconds between runs and AC power throughout. go-quickjs was built without
+the `quickjs_jit` tag, so its native JIT was disabled. Higher suite scores are
+better.
 
 | Workload | go-quickjs | goja | Relative result |
 |---|---:|---:|---:|
-| Richards | 2,003 | 527 | go-quickjs 3.80x |
-| DeltaBlue | 2,420 | 639 | go-quickjs 3.79x |
-| Crypto | 3,002 | 332 | go-quickjs 9.04x |
-| RayTrace | 4,726 | 793 | go-quickjs 5.96x |
-| EarleyBoyer | 5,830 | 1,437 | go-quickjs 4.06x |
-| RegExp | 4,083 | 584 | go-quickjs 6.99x |
-| Splay | 7,717 | 2,556 | go-quickjs 3.02x |
-| NavierStokes | 6,183 | 556 | go-quickjs 11.12x |
-| **Composite score** | **4,094** | **752** | **go-quickjs 5.44x** |
+| Richards | 2,150 | 523 | go-quickjs 4.11x |
+| DeltaBlue | 2,688 | 627 | go-quickjs 4.29x |
+| Crypto | 2,933 | 329 | go-quickjs 8.91x |
+| RayTrace | 5,465 | 799 | go-quickjs 6.84x |
+| EarleyBoyer | 6,485 | 1,417 | go-quickjs 4.58x |
+| RegExp | 4,411 | 580 | go-quickjs 7.61x |
+| Splay | 9,266 | 2,518 | go-quickjs 3.68x |
+| NavierStokes | 5,895 | 554 | go-quickjs 10.64x |
+| **Composite score** | **4,404** | **747** | **go-quickjs 5.90x** |
 
-The complete fresh-process run includes runtime construction, parsing,
-compilation, the suite's warmups and its measured iterations:
+The runner's timed suite interval includes runtime construction, parsing,
+compilation, the suite's warmups and its measured iterations, but excludes
+reading the source files and the final forced garbage collection. CPU time
+includes work on other threads, including the collector:
 
 | Metric | go-quickjs | goja | Relative result |
 |---|---:|---:|---:|
-| Wall time | 22.41 s | 51.65 s | go-quickjs 2.30x faster |
-| Total allocation | 13.60 GiB | 32.00 GiB | go-quickjs 57.5% less |
+| Suite wall time | 22.33 s | 51.04 s | go-quickjs 2.29x faster |
+| Suite CPU time | 27.08 s | 71.85 s | go-quickjs 62.3% less |
+| Total allocation | 11.49 GiB | 31.03 GiB | go-quickjs 63.0% less |
+
+Score mode does different amounts of work as throughput changes, so the CPU
+and allocation totals are not equal-work efficiency measurements. The
+composite is the median of the three printed composite scores, not a
+composite calculated from the workload medians.
 
 The suite warms every workload for at least one second, then measures for at
 least another second and continues until it has 32 measured iterations. Both
-engines evaluated the same concatenated benchmark sources and validation code.
-The measured revisions were go-quickjs `6c3dd16`, goja `793a2a6`, and
+engines evaluated the same benchmark sources and validation code.
+The measured revisions were go-quickjs `6099e8c`, goja `793a2a6`, and
 AreWeFastYet `0e21608`. These results characterize this older interpreter
 workload suite rather than every application; go-quickjs leads all eight of
 its workloads in this comparison.
+
+The comparison used `internal/cmd/v8bench/matrix`, selecting `gq` and `goja`
+with `-suites score -parallel=false`. Each sample was run separately with
+`-runs 1` to allow the 30-second pauses and alternating engine order;
+`-report` combined the saved outputs into the median score table.
 
 ## Compared with C QuickJS
 
