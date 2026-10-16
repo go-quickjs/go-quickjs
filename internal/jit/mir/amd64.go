@@ -548,6 +548,9 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 			// A built-in's construction with nothing to run: its object;
 			// or an inlined construction's receiver.
 			c.constructGuards(t, guard)
+			if t.Alloc && t.Argc == 1 {
+				c.lengthGuards(t, v.Args[len(v.Args)-1], guard)
+			}
 			c.a.Jmp(checked)
 			c.a.Bind(next)
 			continue
@@ -616,10 +619,14 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	if site.Alloc || site.Receiver {
 		// Its checks made, nothing written: while the collector marks, Go
 		// takes the object.
-		if join, ok := c.markingTake(v, site); ok {
-			defer c.a.Bind(join)
-		}
+		join, ok := c.markingTake(v, site)
 		c.poolTake(v, site)
+		if ok {
+			c.a.Bind(join)
+		}
+		if site.Alloc && site.Argc == 1 {
+			c.allocLength(v, v.Args[len(v.Args)-1])
+		}
 		return
 	}
 	// A call of one function has its operands -- the function, the
@@ -1981,6 +1988,82 @@ func (c *compiler) poolTake(v *ssa.Value, site *ssa.CallSite) {
 	c.movImm(scratchA, c.enc.Object)
 	c.a.Store(regCtx, at+c.enc.NumOffset, scratchA)
 	c.setG(v, scratchA)
+}
+
+// lengthGuards checks a `new Array(n)` can take its array from its pool:
+// n, the operand x, a number that is an integer in [0, the pool's Room]
+// (abi.ObjectPool). One past Room, up to abi.PoolRoomLimit, has Go fill
+// the pool again with arrays of more room (Want), and the call is made
+// again from its start, every check again, as an empty pool is
+// (refillOnEmpty); any other n fails the guard: Go makes the array, as
+// V8's code calls the Array constructor past the length it allocates
+// inline. It uses every scratch register.
+func (c *compiler) lengthGuards(t *ssa.CallSite, x *ssa.Value, guard func(amd64.Cond)) {
+	var w amd64.Reg
+	if remat(x) {
+		c.materialize(x, scratchA)
+		w = scratchA
+	} else {
+		w = c.gpr(x, scratchA)
+	}
+	if x.Shadow != nil || c.origin.At(x) >= 0 {
+		// It may hold a reference, whose word is no number's.
+		c.movImm(scratchB, abi.NumberLimit)
+		c.a.Op(amd64.Cmp, w, scratchB, true)
+		guard(amd64.CondAE)
+	}
+	c.a.MovQToX(xScratch0, w)
+	c.a.Cvttsd2si(scratchA, xScratch0)
+	c.a.Cvtsi2sd(xScratch1, scratchA, true)
+	c.a.SSEOp(amd64.UcomiSD, xScratch1, xScratch0)
+	guard(amd64.CondNE)
+	guard(amd64.CondP)
+	c.movImm(scratchB, uint64(t.Pool))
+	c.a.Load(scratchC, scratchB, abi.OffPoolRoom)
+	c.a.Op(amd64.Cmp, scratchA, scratchC, true)
+	fits := c.a.NewLabel()
+	c.a.Jcc(amd64.CondBE, fits)
+	// Past its room: a negative n, unsigned, is past every room.
+	c.a.OpImm(amd64.Cmp, scratchA, abi.PoolRoomLimit, true)
+	guard(amd64.CondA)
+	v, top := c.callV, c.callTop
+	if v == nil {
+		// No call to make again: Go makes it. n is at most the limit, as
+		// the flags still say.
+		guard(amd64.CondBE)
+	} else {
+		grow := c.a.NewLabel()
+		c.a.Jmp(grow)
+		pool := t.Pool
+		c.cold = append(c.cold, func() {
+			c.a.Bind(grow)
+			c.a.Store(scratchB, abi.OffPoolWant, scratchA)
+			c.storeImm(regCtx, abi.OffGoArgs+c.enc.RefOffset, uint64(pool), scratchA)
+			c.callGo(v, uint64(ssa.GoRefill), 0)
+			c.a.Load(scratchB, regCtx, abi.OffGoStatus)
+			c.a.Op(amd64.Test, scratchB, scratchB, true)
+			c.a.Jcc(amd64.CondNE, c.stubLabel(v.State, exitKind(v.Aux)))
+			c.a.Jmp(top)
+		})
+	}
+	c.a.Bind(fits)
+}
+
+// allocLength makes the length of `new Array(n)`'s array, call v's
+// result, n, the operand x lengthGuards checked: its element count, the
+// elements below it holes already. It uses every scratch register.
+func (c *compiler) allocLength(v, x *ssa.Value) {
+	var w amd64.Reg
+	if remat(x) {
+		c.materialize(x, scratchA)
+		w = scratchA
+	} else {
+		w = c.gpr(x, scratchA)
+	}
+	c.a.MovQToX(xScratch0, w)
+	c.a.Cvttsd2si(scratchB, xScratch0)
+	c.a.Load(scratchC, regCtx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.RefOffset)
+	c.a.Store(scratchC, c.enc.ObjectElems+8, scratchB)
 }
 
 // constructGuards checks a construction can take its receiver from its

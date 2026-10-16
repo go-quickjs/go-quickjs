@@ -599,6 +599,13 @@ type ObjectPool struct {
 	// does not read: one that has it is filled by a call of Go when it runs
 	// out (Context's GoOp), native code going on.
 	Source unsafe.Pointer
+	// Room, for a pool of `new Array(n)`'s arrays, is how many elements
+	// each has storage for, holes all, its length 0: native code takes one
+	// for an n up to Room and makes n its length. Want is an n past Room
+	// that native code asks Go to fill the pool for, at a refill, as V8's
+	// code allocates a holey array of a length it checks; both are 0 in
+	// any other pool.
+	Room, Want uint64
 }
 
 // PoolSize is how many objects an ObjectPool is filled with at first, and
@@ -616,7 +623,13 @@ const (
 	OffPoolObjects = int32(unsafe.Offsetof(ObjectPool{}.Objects))
 	OffPoolCount   = int32(unsafe.Offsetof(ObjectPool{}.Count))
 	OffPoolProto   = int32(unsafe.Offsetof(ObjectPool{}.Proto))
+	OffPoolRoom    = int32(unsafe.Offsetof(ObjectPool{}.Room))
+	OffPoolWant    = int32(unsafe.Offsetof(ObjectPool{}.Want))
 )
+
+// PoolRoomLimit is the most elements a pooled array has storage for
+// (ObjectPool's Room): a `new Array(n)` of a longer n is made by Go.
+const PoolRoomLimit = 16
 
 // What a context's Live says: a native call's callee runs in it, or an
 // inlined callee's frame is described in it.

@@ -1848,10 +1848,16 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 			continue
 		}
 		if in.cl == nil {
-			// A built-in's construction with nothing to run.
+			// A built-in's construction with nothing to run: new Array(),
+			// or new Array(n), its length the one argument, with a pool
+			// of arrays with room (abi.ObjectPool's Room).
+			argc := int(jitCallInstr(fb.fn.Code[pc]).A)
+			if argc != 0 && (argc != 1 || in.pool.Room == 0) {
+				continue
+			}
 			fb.holders, fb.pools = append(fb.holders, in.obj), append(fb.pools, in.pool)
 			sites = append(sites, ssa.CallSite{Callee: uintptr(unsafe.Pointer(in.obj)), ThisSlot: -1,
-				Pool: uintptr(unsafe.Pointer(in.pool)), Alloc: true})
+				Pool: uintptr(unsafe.Pointer(in.pool)), Alloc: true, Argc: argc})
 			continue
 		}
 		arrowThis := in.cl.fn.Kind == bytecode.KindArrow && in.cl.fn.UsesThis
@@ -2143,10 +2149,13 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 			e.inlinePending = true
 			return
 		}
-		if o := r.jitAllocates(sp, in); o != nil {
+		if o, room := r.jitAllocates(sp, in); o != nil {
 			// A built-in's construction with nothing to run: made from a
 			// pool.
 			pool := r.jitNewPool(o)
+			if in.A == 1 {
+				pool = r.jitNewArrayPool(o, room)
+			}
 			e.nativeCalls = append(e.nativeCalls, jitInline{pc: int32(pc), obj: o, pool: pool})
 			e.callSites[pc] = jitCallNative
 			e.inlinePending = true
@@ -3451,6 +3460,10 @@ func (r *Runtime) jitSeedBuiltin(cl *closure, e *jitEntry, p *ir.Program, pc int
 	switch {
 	case in.Op == bytecode.OpNew && in.A == 0 && o == r.proto.arrayCtor:
 		x = jitInline{pc: int32(pc), obj: o, pool: r.jitNewPool(o)}
+	case in.Op == bytecode.OpNew && in.A == 1 && o == r.proto.arrayCtor:
+		// new Array(n): its arrays with room for the fewest elements a
+		// length asks for, more at a refill once one asks for more.
+		x = jitInline{pc: int32(pc), obj: o, pool: r.jitNewArrayPool(o, jitArrayRoom(0))}
 	case in.Op != bytecode.OpCallMethod || fd == nil:
 		return
 	case in.A == 0 && fd.elemOp == elemPop && fd.realm == r.Realm:
@@ -4440,15 +4453,49 @@ func (r *Runtime) jitFromCharCodes(sp int, in bytecode.Instr) *Object {
 
 // jitAllocates is the built-in a construction at the top of the stack
 // makes with nothing to run, which native code makes from a pool: `new
-// Array()`, the realm's own; or nil.
-func (r *Runtime) jitAllocates(sp int, in bytecode.Instr) *Object {
-	if in.Op != bytecode.OpNew || in.A != 0 {
-		return nil
+// Array()`, the realm's own, or `new Array(n)` of a length native code
+// makes (jitArrayRoom), and the room its pool's arrays are given for that
+// length; or nil.
+func (r *Runtime) jitAllocates(sp int, in bytecode.Instr) (*Object, int) {
+	if in.Op != bytecode.OpNew || in.A > 1 {
+		return nil, 0
 	}
-	if c := r.stack[sp-1]; c.IsObject() && c.Object() == r.proto.arrayCtor {
-		return c.Object()
+	room := 0
+	if in.A == 1 {
+		n := r.stack[sp-1]
+		if !n.IsNumber() || n.Number() < 0 || n.Number() != math.Trunc(n.Number()) {
+			return nil, 0
+		}
+		if room = jitArrayRoom(n.Number()); room == 0 {
+			return nil, 0
+		}
 	}
-	return nil
+	if c := r.stack[sp-1-int(in.A)]; c.IsObject() && c.Object() == r.proto.arrayCtor {
+		return c.Object(), room
+	}
+	return nil, 0
+}
+
+// jitArrayRoom is the room a pooled array of `new Array(n)` is given for a
+// length n (abi.ObjectPool's Room): the least of the sizes newArrayStorage
+// makes an array's elements in its own allocation that n fits, as the
+// existing tiers would make it; or 0 past abi.PoolRoomLimit, an n Go
+// makes.
+func jitArrayRoom(n float64) int {
+	for _, room := range [...]int{4, 6, 8, 10, 12, 16} {
+		if n <= float64(room) {
+			return min(room, abi.PoolRoomLimit)
+		}
+	}
+	return 0
+}
+
+// jitNewArrayPool is jitNewPool's for new Array(n): its arrays with room
+// for room elements (abi.ObjectPool's Room), each a hole.
+func (r *Runtime) jitNewArrayPool(o *Object, room int) *abi.ObjectPool {
+	pool := &abi.ObjectPool{Source: unsafe.Pointer(&jitPoolSource{ctor: o}), Room: uint64(room)}
+	r.jitFillPool(pool, o)
+	return pool
 }
 
 // jitConstructs reports whether native code may construct with o, `new
@@ -4477,9 +4524,23 @@ func (r *Runtime) jitFillPool(pool *abi.ObjectPool, o *Object) {
 		// `new Array()`: an empty array, of the realm's prototype, with the
 		// layout a property cache gives an array it meets (ensureShape),
 		// which native code compares receivers' with: a method read on one
-		// it made, a.push, would leave for Go to give it.
+		// it made, a.push, would leave for Go to give it. `new Array(n)`'s
+		// has room for pool.Room elements, holes, in its own allocation, as
+		// the existing tiers make one (newArrayObject), its length 0 until
+		// native code makes it n.
+		room := int(pool.Room)
 		for i := range n {
-			a := r.newArrayFrom(nil)
+			var a *Object
+			if room == 0 {
+				a = r.newArrayFrom(nil)
+			} else {
+				a = newArrayObject(r.proto.array, room)
+				e := a.elemsOf()
+				for j := range e {
+					e[j] = elemHole
+				}
+				a.extOf().elems = e[:0]
+			}
 			r.ensureShape(a)
 			pool.Objects[i] = unsafe.Pointer(a)
 		}
@@ -4592,6 +4653,18 @@ type jitPoolSource struct {
 // object leaves it empty, and the site to Go.
 func (r *Runtime) jitRefillPool(pool *abi.ObjectPool) bool {
 	src := (*jitPoolSource)(pool.Source)
+	if want := pool.Want; want != 0 && src != nil && src.ctor != nil {
+		// A new Array(n) of an n past its arrays' room: filled again,
+		// whatever it holds, with arrays of more.
+		pool.Want = 0
+		room := jitArrayRoom(float64(want))
+		if room == 0 || uint64(room) <= pool.Room {
+			return false
+		}
+		pool.Room = uint64(room)
+		r.jitFillPool(pool, src.ctor)
+		return pool.Count != 0
+	}
 	if src == nil || pool.Count != 0 {
 		return pool.Count != 0
 	}

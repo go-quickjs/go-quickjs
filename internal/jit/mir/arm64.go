@@ -2052,6 +2052,9 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		}
 		if t.Alloc || t.Receiver {
 			c.constructGuards(t, guard)
+			if t.Alloc && t.Argc == 1 {
+				c.lengthGuards(t, v.Args[len(v.Args)-1], guard)
+			}
 			c.a.B(checked)
 			c.a.Bind(next)
 			continue
@@ -2105,10 +2108,14 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		return
 	}
 	if site.Alloc || site.Receiver {
-		if join, ok := c.markingTake(v, site, stub); ok {
-			defer c.a.Bind(join)
-		}
+		join, ok := c.markingTake(v, site, stub)
 		c.poolTake(v, site)
+		if ok {
+			c.a.Bind(join)
+		}
+		if site.Alloc && site.Argc == 1 {
+			c.allocLength(v, v.Args[len(v.Args)-1])
+		}
 		return
 	}
 	// As amd64's: a call of one function writes its operands where the
@@ -2661,6 +2668,76 @@ func (c *a64Compiler) viaGuards(t *ssa.CallSite, recv *ssa.Value, guard func(arm
 	c.movImm(a64B, uint64(t.Callee))
 	c.a.Cmp(a64C, a64B, true)
 	guard(arm64.NE)
+}
+
+// lengthGuards checks a `new Array(n)` can take its array from its pool,
+// as amd64's does: n, x, an integer in [0, the pool's Room], or up to
+// abi.PoolRoomLimit once Go has filled the pool again with arrays of more
+// room. It uses A, B, C, F0 and F1.
+func (c *a64Compiler) lengthGuards(t *ssa.CallSite, x *ssa.Value, guard func(arm64.Cond)) {
+	var w arm64.Reg
+	if remat(x) {
+		c.materialize(x, a64A)
+		w = a64A
+	} else {
+		w = c.gpr(x, a64A)
+	}
+	if x.Shadow != nil || c.origin.At(x) >= 0 {
+		c.movImm(a64B, abi.NumberLimit)
+		c.a.Cmp(w, a64B, true)
+		guard(arm64.HS)
+	}
+	c.a.FMovToF(a64F0, w)
+	c.a.Fcvtzs(a64A, a64F0)
+	c.a.Scvtf(a64F1, a64A, true)
+	c.a.FCmp(a64F1, a64F0)
+	guard(arm64.NE)
+	c.movImm(a64B, uint64(t.Pool))
+	c.a.Load(a64C, a64B, abi.OffPoolRoom)
+	c.a.Cmp(a64A, a64C, true)
+	fits := c.a.NewLabel()
+	c.a.BCond(arm64.LS, fits)
+	// Past its room: a negative n, unsigned, is past every room.
+	c.a.CmpImm(a64A, abi.PoolRoomLimit, true)
+	guard(arm64.HI)
+	v, top := c.callV, c.callTop
+	if v == nil {
+		// No call to make again: Go makes it. n is at most the limit, as
+		// the flags still say.
+		guard(arm64.LS)
+	} else {
+		grow := c.a.NewLabel()
+		c.a.B(grow)
+		pool := t.Pool
+		stub := c.stubLabel(v.State, exitKind(v.Aux))
+		c.cold = append(c.cold, func() {
+			c.a.Bind(grow)
+			c.a.Store(a64B, abi.OffPoolWant, a64A)
+			c.movImm(a64A, uint64(pool))
+			c.a.Store(a64Ctx, abi.OffGoArgs+c.enc.RefOffset, a64A)
+			c.callGo(v, uint64(ssa.GoRefill), 0)
+			c.a.Load(a64B, a64Ctx, abi.OffGoStatus)
+			c.a.Cbnz(a64B, stub, true)
+			c.a.B(top)
+		})
+	}
+	c.a.Bind(fits)
+}
+
+// allocLength makes the length of `new Array(n)`'s array, call v's
+// result, n, as amd64's does. It uses A, B, C and F0.
+func (c *a64Compiler) allocLength(v, x *ssa.Value) {
+	var w arm64.Reg
+	if remat(x) {
+		c.materialize(x, a64A)
+		w = a64A
+	} else {
+		w = c.gpr(x, a64A)
+	}
+	c.a.FMovToF(a64F0, w)
+	c.a.Fcvtzs(a64B, a64F0)
+	c.a.Load(a64C, a64Ctx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.RefOffset)
+	c.a.Store(a64C, c.enc.ObjectElems+8, a64B)
 }
 
 // constructGuards checks a construction can take its receiver from its
