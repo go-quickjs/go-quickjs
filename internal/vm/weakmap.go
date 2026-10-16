@@ -2,6 +2,7 @@ package vm
 
 import (
 	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 )
@@ -70,13 +71,16 @@ func newWeakMap() *weakMap { return &weakMap{} }
 // weakMapState is what releasing a map needs once the map has gone. It is the
 // cleanup's argument, so it must not reach the map, and it does not: nothing
 // in it refers to the map at all.
-//
-// It is also what names the map's entries on its keys. A key's entry holds
-// it, so it lives until the last entry naming it is gone, and no other map
-// can be given its address meanwhile. The map's own weak pointer would do as
-// well, but costs the collector a record on the map, and records on objects
-// of one size share a list it searches whenever one is added.
 type weakMapState struct {
+	// id names the map's entries on its keys. The maps' ids are given out in
+	// the order the maps are given their first entries, and are never given
+	// out again, so a key keeps its entries in the order of their maps' ids,
+	// and finds a map's by a search rather than a Go map of its own -- one
+	// that every map not yet released, a gone map's included, made larger:
+	// a script that makes a WeakMap after another over the same keys left
+	// each key a Go map of a hundred and eighty entries, and a set of a new
+	// key three times as long as QuickJS's.
+	id uint64
 	// keys holds a weak reference to every key that has, or has had, an
 	// entry in the map: those whose values the map's death has to release.
 	// A key is added when it is first given an entry, and a deleted entry
@@ -94,32 +98,92 @@ type weakMapState struct {
 // as the key does.
 type weakMapRefs struct {
 	// first is the entry of the first map, which for most keys is the only
-	// one, without a Go map of their own. Its m is nil while it is empty.
-	first weakMapEntry
-	// more holds the entries of other maps.
-	more map[*weakMapState]Value
+	// one, without more. Its m is nil while it is empty.
+	first weakMapFirst
+	// more holds the entries of other maps, nil while there are none. It is
+	// a pointer, so that a key of one map is given 56 bytes rather than 80.
+	more *weakMapMore
 	// key is the weak reference to the key, made once, which the maps of its
 	// entries keep.
 	key weakTarget
+}
+
+// weakMapFirst is a key's value in its first map, the map named by its
+// state, which the entry holds.
+type weakMapFirst struct {
+	m     *weakMapState
+	value Value
+}
+
+// weakMapMore is a key's values in the maps other than its first.
+type weakMapMore struct {
+	// entries are in the order of their maps' ids, so that the entry of the
+	// newest map, the one most often given new keys, is added at the end.
+	// The entry of a map that has gone stays, its value weakMapGone, until
+	// gone says it is as many as the rest: then the entries are compacted,
+	// which costs a constant for each that has gone.
+	entries []weakMapEntry
+	// gone counts the entries of the maps that have gone.
+	gone int
 }
 
 // weakMapDeleted is the value of a deleted entry. It is no value a script can
 // hold, so get never answers with it.
 var weakMapDeleted = Value{num: mkTag(KindUninitialized, 2)}
 
-// weakMapEntry is a key's value in one map.
+// weakMapGone is the value of an entry in more of a map that has gone.
+var weakMapGone = Value{num: mkTag(KindUninitialized, 3)}
+
+// weakMapIDs gives the maps their ids. It is the process's rather than a
+// runtime's, so that no two maps' entries on a key share an id, whatever
+// runtime the key came from.
+var weakMapIDs atomic.Uint64
+
+// weakMapEntry is a key's value in one map, the map named by its id.
 type weakMapEntry struct {
-	m     *weakMapState
+	id    uint64
 	value Value
 }
 
-// get is the key's value in the map p.
-func (refs *weakMapRefs) get(p *weakMapState) (Value, bool) {
-	v, ok := refs.first.value, refs.first.m == p
-	if !ok {
-		v, ok = refs.more[p]
+// find is the index in more's entries of the entry of the map with the id,
+// or where it would go, and whether it is there. more may be nil.
+func (more *weakMapMore) find(id uint64) (int, bool) {
+	if more == nil {
+		return 0, false
 	}
-	if !ok || v.sameBits(weakMapDeleted) {
+	e := more.entries
+	n := len(e)
+	if n == 0 || e[n-1].id < id {
+		return n, false
+	}
+	lo, hi := 0, n-1
+	for lo < hi {
+		m := int(uint(lo+hi) >> 1)
+		if e[m].id < id {
+			lo = m + 1
+		} else {
+			hi = m
+		}
+	}
+	return lo, e[lo].id == id
+}
+
+// get is the key's value in the map p.
+// The map's get asks first whether the entry is the key's first, and
+// calls this only when it is not, or is deleted.
+func (refs *weakMapRefs) get(p *weakMapState) (Value, bool) {
+	if refs.first.m == p {
+		if v := refs.first.value; !v.sameBits(weakMapDeleted) {
+			return v, true
+		}
+		return Undefined, false
+	}
+	i, ok := refs.more.find(p.id)
+	if !ok {
+		return Undefined, false
+	}
+	v := refs.more.entries[i].value
+	if v.sameBits(weakMapDeleted) || v.sameBits(weakMapGone) {
 		return Undefined, false
 	}
 	return v, true
@@ -132,19 +196,49 @@ func (refs *weakMapRefs) set(p *weakMapState, v Value) bool {
 		refs.first.value = v
 		return false
 	}
-	if refs.first.m == nil {
-		if _, ok := refs.more[p]; !ok {
-			refs.first = weakMapEntry{m: p, value: v}
-			return true
-		}
-	} else if refs.more == nil {
-		refs.more = make(map[*weakMapState]Value)
+	return refs.setMore(p, v)
+}
+
+// setMore is set for a key whose entry in p, if any, is not its first.
+func (refs *weakMapRefs) setMore(p *weakMapState, v Value) bool {
+	more := refs.more
+	if refs.first.m == nil && more == nil {
+		refs.first = weakMapFirst{p, v}
+		return true
 	}
-	// One assignment, which says by the length whether it added the entry,
-	// where a lookup first would hash the key twice.
-	n := len(refs.more)
-	refs.more[p] = v
-	return len(refs.more) > n
+	i, ok := more.find(p.id)
+	if ok {
+		e := &more.entries[i]
+		gone := e.value.sameBits(weakMapGone)
+		if gone {
+			more.gone--
+		}
+		e.value = v
+		return gone
+	}
+	if refs.first.m == nil {
+		refs.first = weakMapFirst{p, v}
+		return true
+	}
+	if more == nil {
+		more = &weakMapMore{}
+		refs.more = more
+	}
+	if more.gone > 0 && 2*more.gone >= len(more.entries) {
+		more.compact()
+		i, _ = more.find(p.id)
+	}
+	more.entries = slices.Insert(more.entries, i, weakMapEntry{p.id, v})
+	return true
+}
+
+// compact takes the entries of the maps that have gone out of more.
+func (more *weakMapMore) compact() {
+	e := slices.DeleteFunc(more.entries, func(e weakMapEntry) bool { return e.value.sameBits(weakMapGone) })
+	if cap(e) > 4*len(e) {
+		e = slices.Clone(e)
+	}
+	more.entries, more.gone = e, 0
 }
 
 // delete marks the key's entry in the map p deleted, and reports whether
@@ -152,32 +246,40 @@ func (refs *weakMapRefs) set(p *weakMapState, v Value) bool {
 // in its list to forget it, nor add it again if it is set again; it costs
 // the key a value's room until the key or the map has gone.
 func (refs *weakMapRefs) delete(p *weakMapState) bool {
-	if refs.first.m == p {
-		if refs.first.value.sameBits(weakMapDeleted) {
+	v := &refs.first.value
+	if refs.first.m != p {
+		i, ok := refs.more.find(p.id)
+		if !ok {
 			return false
 		}
-		refs.first.value = weakMapDeleted
-		return true
+		v = &refs.more.entries[i].value
 	}
-	if v, ok := refs.more[p]; ok && !v.sameBits(weakMapDeleted) {
-		refs.more[p] = weakMapDeleted
-		return true
+	if v.sameBits(weakMapDeleted) || v.sameBits(weakMapGone) {
+		return false
 	}
-	return false
+	*v = weakMapDeleted
+	return true
 }
 
 // remove removes the key's entry in the map p, deleted or not, once the map
-// has gone, and reports whether there was one.
+// has gone, and reports whether there was one. An entry in more is left
+// marked, as gone counts it, and more is dropped once every entry in it
+// has gone.
 func (refs *weakMapRefs) remove(p *weakMapState) bool {
 	if refs.first.m == p {
-		refs.first = weakMapEntry{}
+		refs.first = weakMapFirst{}
 		return true
 	}
-	if _, ok := refs.more[p]; ok {
-		delete(refs.more, p)
-		return true
+	more := refs.more
+	i, ok := more.find(p.id)
+	if !ok || more.entries[i].value.sameBits(weakMapGone) {
+		return false
 	}
-	return false
+	more.entries[i].value = weakMapGone
+	if more.gone++; more.gone == len(more.entries) {
+		refs.more = nil
+	}
+	return true
 }
 
 // weakRefsOf is the weakMapRefs of a key, made if create is set and there is
@@ -215,6 +317,9 @@ func (m *weakMap) get(_ *Runtime, k Value) (Value, bool) {
 	if refs == nil {
 		return Undefined, false
 	}
+	if v := refs.first.value; refs.first.m == m.state && !v.sameBits(weakMapDeleted) {
+		return v, true
+	}
 	return refs.get(m.state)
 }
 
@@ -223,7 +328,7 @@ func (m *weakMap) get(_ *Runtime, k Value) (Value, bool) {
 func (m *weakMap) set(r *Runtime, k, v Value) {
 	s := m.state
 	if s == nil {
-		s = &weakMapState{}
+		s = &weakMapState{id: weakMapIDs.Add(1)}
 		m.state = s
 		reg := r.weakMapRegistry()
 		reg.live[s] = struct{}{}

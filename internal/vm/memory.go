@@ -399,13 +399,16 @@ func (m *memoryMeter) valueSlice(vs []Value, owned bool) {
 // weakMapRefs counts a key's WeakMap values, which the key holds rather than
 // the maps (see weakmap.go). A symbol's are found by reflection.
 func (m *memoryMeter) weakMapRefs(refs *weakMapRefs) {
-	m.total += int64(unsafe.Sizeof(*refs)) + int64(len(refs.more))*(8+valueSize)*3/2
+	m.total += int64(unsafe.Sizeof(*refs))
 	if refs.first.value.ref != nil {
 		m.value(refs.first.value)
 	}
-	for _, v := range refs.more {
-		if v.ref != nil {
-			m.value(v)
+	if more := refs.more; more != nil {
+		m.total += int64(unsafe.Sizeof(*more)) + int64(cap(more.entries))*int64(unsafe.Sizeof(weakMapEntry{}))
+		for _, e := range more.entries {
+			if e.value.ref != nil {
+				m.value(e.value)
+			}
 		}
 	}
 }

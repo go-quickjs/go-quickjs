@@ -117,8 +117,8 @@ func TestWeakMapReleasesValuesWhenMapDies(t *testing.T) {
 	if v, ok := live.get(r, key); !ok || v.Number() != 7 {
 		t.Errorf("the live WeakMap's entry = %v, %v; want 7, true", v, ok)
 	}
-	if kr := key.object().weakMapRefsOf(); len(kr.more) != 0 {
-		t.Errorf("the key holds %d entries of maps that have gone", len(kr.more))
+	if kr := key.object().weakMapRefsOf(); kr.more != nil {
+		t.Errorf("the key holds %d entries of maps that have gone", len(kr.more.entries))
 	}
 	runtime.KeepAlive(key)
 	runtime.KeepAlive(live)
@@ -193,7 +193,7 @@ func TestWeakMapReleasedWhenClosed(t *testing.T) {
 	if !collected(r, deadValue) {
 		t.Error("a dead WeakMap's value outlived the closed runtime")
 	}
-	if refs := key.object().weakMapRefsOf(); refs.first.m != nil || len(refs.more) != 0 {
+	if refs := key.object().weakMapRefsOf(); refs.first.m != nil || refs.more != nil {
 		t.Error("the key still holds entries")
 	}
 	runtime.KeepAlive(key)
