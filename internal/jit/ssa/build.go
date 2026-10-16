@@ -258,6 +258,12 @@ type CallSite struct {
 	// Upvalues is the address of the callee closure's captured bindings'
 	// cells, its context's (abi.Context.Upvalues), or 0 for none.
 	Upvalues uintptr
+	// Parent, for a construction with a class whose constructor is the
+	// one a class without one has, is the class it extends, whose
+	// function Closure is: the call checks the callee's prototype is still
+	// it, as super() reads it, and constructs as a construction with it
+	// does, its receiver from Pool, made as the callee makes one.
+	Parent uintptr
 	// ByCode, where not 0, has the call check the function the callee's
 	// closure runs, the address of its bytecode, and that the closure's
 	// environment and realm are Env and Realm, rather than that the callee

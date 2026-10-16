@@ -577,6 +577,14 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		c.a.Load(scratchA, regCtx, abi.OffStackEnd)
 		c.a.Op(amd64.Cmp, scratchB, scratchA, true)
 		guard(amd64.CondA)
+		if t.Parent != 0 {
+			// A derived class's, made with its parent's code: the parent
+			// super() would read, the callee's prototype, still that one.
+			c.a.Load(scratchB, scratchC, c.enc.ObjectProto)
+			c.movImm(scratchA, uint64(t.Parent))
+			c.a.Op(amd64.Cmp, scratchB, scratchA, true)
+			guard(amd64.CondNE)
+		}
 		if t.Pool != 0 {
 			c.constructGuards(t, guard)
 		}

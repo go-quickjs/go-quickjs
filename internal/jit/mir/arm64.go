@@ -2076,6 +2076,13 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		c.a.Load(a64A, a64Ctx, abi.OffStackEnd)
 		c.a.Cmp(a64B, a64A, true)
 		guard(arm64.HI)
+		if t.Parent != 0 {
+			// As amd64's: the callee's prototype still the parent.
+			c.a.Load(a64B, a64C, c.enc.ObjectProto)
+			c.movImm(a64A, uint64(t.Parent))
+			c.a.Cmp(a64B, a64A, true)
+			guard(arm64.NE)
+		}
 		if t.Pool != 0 {
 			c.constructGuards(t, guard)
 		}

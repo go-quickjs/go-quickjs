@@ -1940,6 +1940,11 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 			site.Pool, site.ProtoIndex, site.ProtoKey = uintptr(unsafe.Pointer(in.pool)), int(i), uint32(atomPrototype)
 			site.Coerce = false
 			fb.pools = append(fb.pools, in.pool)
+			if in.parent != nil {
+				// A derived class's, with its parent's code.
+				site.Parent = uintptr(unsafe.Pointer(in.parent))
+				fb.holders = append(fb.holders, in.parent)
+			}
 		}
 		byCode := len(in.cl.upvalues) != 0 || in.byCode
 		for _, y := range targets {
@@ -2007,6 +2012,11 @@ type jitInline struct {
 	// (bytecode.LeafForward), is the method it forwards to, as the code was
 	// last compiled for (jitForwardMethod).
 	fwd *Object
+	// parent, for a construction with a class whose constructor is the
+	// one a class without one has (jitDerivedBase), is the class it
+	// extends, whose constructor cl is: the call checks obj's prototype is
+	// still it (ssa.CallSite's Parent).
+	parent *Object
 }
 
 // jitCallsToInline is how often a call leaves native code before it is
@@ -2169,9 +2179,14 @@ func (r *Runtime) jitCallSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 		return
 	}
 	// One that is not inlined is called natively, if its code allows it
-	// (NativeCalls), the call itself for a recursive one.
+	// (NativeCalls), the call itself for a recursive one; a derived class
+	// with no constructor of its own is constructed with its parent's code.
 	if in.Op == bytecode.OpNew && !r.jitConstructs(o) {
-		return
+		p := r.jitDerivedBase(o)
+		if p == nil {
+			return
+		}
+		cl = p.fn().closure
 	}
 	if r.jitNativeOrLinked(cl) {
 		e.nativeCalls = append(e.nativeCalls, r.jitNativeTarget(int32(pc), cl, o, in))
@@ -3395,7 +3410,13 @@ func (r *Runtime) jitSeedCalls(cl *closure, e *jitEntry, p *ir.Program) {
 			continue
 		}
 		if in.Op == bytecode.OpNew && !r.jitConstructs(o) {
-			continue
+			// A derived class with no constructor of its own: constructed
+			// with its parent's code (jitDerivedBase), never inlined.
+			p := r.jitDerivedBase(o)
+			if p == nil {
+				continue
+			}
+			callee = p.fn().closure
 		}
 		if e.callSites == nil {
 			e.callSites = make([]uint8, len(fn.Code))
@@ -4360,8 +4381,44 @@ func (r *Runtime) jitNativeTarget(pc int32, cl *closure, o *Object, in bytecode.
 	x := jitInline{pc: pc, cl: cl, obj: o}
 	if in.Op == bytecode.OpNew {
 		x.pool = r.jitNewPool(o)
+		if fd := o.fn(); fd != nil && fd.closure != cl {
+			// A derived class's, constructed with its parent's code
+			// (jitDerivedBase).
+			x.parent = o.proto
+		}
 	}
 	return x
+}
+
+// jitDerivedBase is the class a class o extends, if o's constructor is the
+// one a class without one has -- constructor(...args) { super(...args) },
+// which hands its arguments on (bytecode.SuperForward) -- o has no fields
+// to give its instances, and native code may construct with the class it
+// extends (jitConstructs); or nil. new o(...) then does what a
+// construction with that class does, its object made as o makes one --
+// o's prototype, o's root shape and room, as constructWithTarget makes it
+// for super() to hand on -- and its result o's, as V8 skips a default
+// derived constructor (FindNonDefaultConstructorOrConstruct). AWFY's
+// Havlak constructs a DictIdEntry, a DictEntry's subclass, for each entry
+// of its dictionaries: each had been a call of Go.
+func (r *Runtime) jitDerivedBase(o *Object) *Object {
+	fd := o.fn()
+	if fd == nil || fd.closure == nil || fd.native != nil || fd.bound || fd.ctorKind != ctorDerived || fd.fieldInit != nil ||
+		fd.closure.realm != r.Realm || o.class != ClassFunction || o.findOwn(atomPrototype) < 0 || !jitForwardsSuper(fd.closure.fn) {
+		return nil
+	}
+	if p := o.proto; p != nil && r.jitConstructs(p) {
+		return p
+	}
+	return nil
+}
+
+// jitForwardsSuper reports whether fn is the constructor a derived class
+// without one has: super(...args), its this then the result.
+func jitForwardsSuper(fn *bytecode.Function) bool {
+	c := fn.Code
+	return len(c) == 3 && c[0].Op == bytecode.OpSuperCall && c[0].A == 0 && c[0].B == bytecode.SuperForward &&
+		c[1].Op == bytecode.OpDrop && c[2].Op == bytecode.OpReturnUndef
 }
 
 // jitCalledVia is the function a method call at the top of the stack
