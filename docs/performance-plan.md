@@ -6,27 +6,47 @@ code area by area -- the interpreter and call path, the tree tier, objects and
 property access, the built-ins, the compiler, and allocation -- and tied each
 item to the code that costs. None of the estimates below was measured when
 the list was written; each item is measured as it is done, and its row says
-what came of it.
+what came of it. Every item has been taken up. The rounds after the review,
+and what is still open, are in [After the review](#after-the-review).
 
-Where go-quickjs stands is in [benchmarks.md](benchmarks.md#compared-with-c-quickjs):
-level with C QuickJS over the V8 suite, about 1.4 times its time over
-QuickJS's own micro-benchmarks. The figures here are from that page's runs
-unless an item says otherwise.
+When the review was written, go-quickjs was level with C QuickJS over the V8
+suite and took about 1.4 times its time over QuickJS's own micro-benchmarks.
+At v0.27.0 it takes 0.60 times QuickJS's time over the V8 suite, 0.93 times
+by the geometric mean of the micro-benchmarks and 0.97 times over
+`microbench_extra.js`; see
+[benchmarks.md](benchmarks.md#compared-with-c-quickjs). The figures in an
+item are from the runs of its time unless it says otherwise.
 
 ## How an item is measured
 
-- Code placement moves the V8 suite's figures by a few per cent, and Richards
-  and DeltaBlue by up to a tenth, with no change in the code that runs. A
-  change is compared with its parent over eight builds that place the code
-  differently, three rounds each, taking each placement's fastest round, with
-  Richards and DeltaBlue run 300 times a process.
-- A change to the tree builder (`internal/vm/tree_build.go`) also gets the
-  long check: Crypto and NavierStokes, 20 runs on each of the eight
-  placements. The tree's closures move with any code added among them, and
-  have cost those two benchmarks up to 8% on their own.
+- Code placement moves the V8 suite's figures by a few per cent, and single
+  benchmarks by up to a tenth, with no change in the code that runs. The
+  cause is AMD Zen 2's op cache, which holds the decoded code at one offset
+  in every 4 KB in one set of eight: hot code that lands on the same sets is
+  decoded again on every pass. A change is compared with its parent by
+  `internal/cmd/v8bench/placements` (see AGENTS.md): eight builds of each
+  side, placing `executeAt`, the call path, `runTree` and the tree's
+  closures differently in a balanced design, each placement's fastest round
+  taken, and the short benchmarks run 300 times a process. `-parallel -k 4`
+  screens a change in minutes; a batch is confirmed with all eight, over
+  the V8 suite, Octane and Are We Fast Yet.
+- Before measuring, the interpreter's hot functions are checked to be
+  unchanged (`internal/cmd/hotdiff`) and the sizes of package vm's closures
+  compared (`go tool nm -size`): a closure that grows moves every closure
+  after it, and has cost Crypto and NavierStokes up to 11% on its own. Four
+  placements keep the closures' phase fixed, so a change to their sizes
+  needs all eight.
 - A micro-benchmark is timed on the paths the change touches, against its
   parent, before the suite is.
-- Allocation counts are deterministic, and are compared exactly.
+- Allocation counts are deterministic, and are compared exactly. A change
+  that moves what is allocated is also compared by CPU time, which the fixed
+  mode prints beside each benchmark (`cpu`): the collector runs on other
+  threads, which hides its cost from the wall time of an idle machine but
+  not from an embedder running a runtime on each core.
+- JIT code has the same op-cache limit: one AWFY benchmark, all of it
+  native, runs 495 or 600 ms depending only on where its code lands (81%
+  against 43% of its operations from the op cache). A comparison of JIT
+  builds has to vary where the JIT's first code is placed as well.
 - Ideas already measured and rejected are listed at the end, so they are not
   tried again without a new angle.
 
@@ -239,12 +259,15 @@ Allocated bytes over the suite -4.0%, allocations -1.8%. V8 suite over eight
 placements: total -1.1%, Splay -5.1%, RegExp -2.2%; DeltaBlue +2% at most
 placements, in every variant measured, with or without the constructor's
 room -- it does almost no string work, and is the benchmark placement moves
-most. Not done: compiling `"lit" + x + "lit"` to one `OpConcat`. Exact, it
-needs a conversion with the default hint after each operand, a length check
-at each, the memory limit's reservation, ropes kept for long results, and
-the new instructions in the frameless evaluator and the tree tier (the
-evaluator takes `add`, so functions using `+` would otherwise lose it) --
-a project for a few of Splay's allocations.
+most. Not done then: compiling `"lit" + x + "lit"` to one `OpConcat`.
+
+**Then (2026-10-12, `152bea0`):** an addition chain in which a string literal
+has made every addition from there on a concatenation compiles to one
+`concat` of its parts, each operand after the literal converted as it is
+evaluated, by adding it to the empty string, so the order of conversions is
+unchanged. It needs no new instruction: both tiers already ran `concat` for
+template literals, and the JIT makes it by a call of Go. Splay 1.34M to
+1.08M allocations a run (-19%).
 
 ## B. Specific gaps
 
@@ -278,7 +301,10 @@ a project for a few of Splay's allocations.
   closures adds code where its placement has cost Crypto and NavierStokes
   before, to save one direct call, a nanosecond or two. `isHole` is now one
   comparison of the value's bits with the hole's, which every hole test
-  gains by.
+  gains by. They stay calls; later rounds made them leaner (`5586641`: no
+  number test, early returns) and gave them typed arrays' elements inline
+  (`3fe6d9f`: Octane -4.4%), keeping them frameless leaves: a call added to
+  either gives it a frame and a stack check that every element access pays.
 - **B3.** A typed array's element goes through `getIndexSlow`,
   `typedElemIndex`, two interface assertions and the element-size table. A
   view of fixed length can keep its buffer, element shift and end, which a
@@ -287,7 +313,11 @@ a project for a few of Splay's allocations.
   can neither throw nor run code) and write one without `setIndexed`:
   `typed_array_read` -13 to -17%, `typed_array_write` -9 to -12%. Keeping
   the buffer and bounds in the view was left: every place that makes a
-  view would have to keep them.
+  view would have to keep them. **Then** done: a view of a fixed length
+  keeps its buffer's storage and end from when it is made (`9442ec8`),
+  which a detached buffer's empty bytes fail, and the tree tier reads and
+  writes elements from them (`a12fd25`). A view that tracks a resizable
+  buffer's length still has none.
 - **B4.** Appending at `length` tries `setElem`, then `setIndexed`, then
   `appendElem`, which walks the prototypes each time; try `appendElem` first.
   `arr.length = n` on a dense, writable array with a Number that is its own
@@ -382,10 +412,10 @@ matter to hosts running classes, modules and async code.
 |---|---|---|
 | C1 | Strict `return f()` (a tail call) takes the generic call path, and keeps its function out of the tree tier and the frameless evaluator | Done |
 | C2 | An `await` makes about nine allocations: two functions, a promise nothing can reach, a job, an argument list | Done |
-| C3 | A generator or async call makes four allocations, and resuming copies its whole frame | Done, in part |
+| C3 | A generator or async call makes four allocations, and resuming copies its whole frame | Done |
 | C4 | A bound function always takes the slow call path, and allocates its arguments when it has bound ones | Done |
 | C5 | Every `for-of`, spread and array destructuring allocates an iterator object | Done |
-| C6 | An arrow function is 448 to 480 bytes, most of it fields only bound or `with` functions use | Deferred |
+| C6 | An arrow function is 448 to 480 bytes, most of it fields only bound or `with` functions use | Done |
 | C7 | A closure reads a `let` or `const` it captured after its initialization with a dead-zone check, which keeps arrows out of the frameless evaluator | Done |
 
 **C1, done:** the tree tier builds `tail_call`, giving the frame up as the
@@ -394,7 +424,13 @@ the frameless evaluator. A method's tail call stays out of the frameless
 evaluator, and the interpreter's own `tail_call` is as it was: either change
 moved Crypto by 2 to 4%, which runs neither. The builder is in the package's
 last file, as inside `op` it moved NavierStokes by 6 to 10%. Strict
-`return f()` -45%, a method's -8%, a deep chain of them -9%.
+`return f()` -45%, a method's -8%, a deep chain of them -9%. Later, class
+methods and arrows calling in tail position were given `callTree` too
+(`05aedb9`); a tail call's arguments go into a buffer the runtime keeps
+rather than a slice of their own (`3291414`: `tail_self` 129 to 83 ns); and
+a function calling itself in tail position starts again in its own frame
+(`6099e8c`). Two functions calling each other in tail position still make a
+frame for each call (`tail_mutual` 2.7 times QuickJS's time).
 
 **C2, done:** an await's reaction names the generator it resumes and how,
 and its job resumes it: no functions, no promise for nothing to read. A
@@ -412,7 +448,12 @@ suspension -- a returning call leaves its own for `endTurn`. A generator
 made and run -10%, an async call -7%, a yield -3%, a spread of one -4%.
 Taking the suspension's signal from the runtime instead of allocating it
 made a yield 14% faster, but is a change to `executeAt`, which cost Crypto
-4%: left.
+4%: left. **Then** done for trees, without touching `executeAt` (`54e2794`):
+a tree's yield or await writes the runtime's one signal, and a resumption
+builds its frame in place and returns through fewer functions; a for-of over
+a generator went from about 2,300 instructions a value to a fraction of
+that. `27b720c` kept a resumed loop a Go loop and stepped `yield*` over a
+generator directly, and made a small generator one allocation of 184 bytes.
 
 **C4, done:** `callObject` hands a bound function's call to `callBound`,
 which merges its arguments on the runtime's stack and calls the target the
@@ -429,10 +470,14 @@ those placements.
 **C5, done:** a cursor and its object are one allocation. A for-of over a
 small array -15%, array destructuring -14%, a for-in -8%.
 
-**C6, deferred:** an arrow is already one allocation -- object, data,
-closure, captures and its `funcExtra` -- and what is left is the size of
-`funcExtra`, whose bound-function fields an arrow does not use. Moving them
-out means editing the bound path in `callObject`, which is C4's problem.
+**C6, done (2026-10-15):** an arrow is one allocation -- object, data,
+closure, captures and its `funcExtra` -- and what was left was its size.
+Moving the bound-function fields alone out of `funcExtra` changed
+`callObject` for a size class, 480 to 448 bytes, with time level, and was
+dropped. Instead the rarely used fields went into one pointer
+(`funcExtra.rare`) and a function's length became an `int32` (`a37ea45`:
+480 to 384 bytes), and a template's closures share one `closureCode` of
+names, constants and caches (`196118f`: 320 or 352 bytes).
 
 **C7, done:** a function is compiled where it is made, so a `let` or
 `const` its maker has initialized by then is read without a dead-zone
@@ -455,8 +500,71 @@ again.
   it a trade between integer and float code, not a win.
 - Fusing `push_this` and `get_prop` (twice); operand fusion and a fused
   `o.m()` in the frameless evaluator; constant `objectBits`; `isTag` as one
-  compare; equality fast paths at the top of `StrictEquals`.
-- A `.length` node and a fused `obj.k op=` read in the tree tier: their
-  code's placement cost Crypto 2.5% or NavierStokes 8%.
-- Leaner objects (values only, keys in the layout); GOGC tuning; PGO, since
-  the engine is a library.
+  compare; equality fast paths at the top of `StrictEquals`. (The tree tier
+  later called `o.m()` on a local or `this` in one node, `a5813af`.)
+- A `.length` node in the tree tier: its code's placement cost Crypto 2.5%.
+  A fused `obj.k op=` read, which cost NavierStokes 8% as a node of its own,
+  was done later as one node for every update of a place (`055a53f`).
+- GOGC tuning; PGO, since the engine is a library. (Leaner objects, values
+  only with the keys in the layout, were once on this list and were done in
+  `944e2e8`.)
+- A nursery, a young generation for the interpreter's objects: 40% of
+  EarleyBoyer's small objects die within 4K allocations, but nearly all of
+  Splay's survive, and the tree tier keeps temporaries in Go locals, which a
+  collector of its own cannot see. Smaller objects did what it was for.
+- Structuring every tree's control flow eagerly: build cost made the V8
+  suite 1.5% slower. Structuring only loops, done (`8d54f7e`), pays.
+- Steady reads and calls taking their own operands in the tree builder
+  (410 lines, V8 level), before the invariant that made spills unneeded was
+  found; `elemAt` over the value's raw bits; pure functions as trees, or a
+  closure evaluator of pure bodies, slower than `pureCallAt`'s switch (91
+  against 82 ns); a 1.5x growth of `appendElem`'s own.
+- A self tail call as a loop inside the tree's call node: every version
+  moved the closures after it, by up to 11%. A function calling itself
+  starts again in its frame instead, from a closure in a last-sorting file
+  (`6099e8c`).
+- A derived constructor's `this` binding in the frame, and `super(a, b)`
+  without copying its arguments: 12.6% fewer allocations in DeltaBlue, but
+  slower over Are We Fast Yet at most placements, for 24 bytes more a frame.
+- Holding an outgrown creation site's objects in a table sized to its
+  largest object, up to 32 properties: one large outlier makes every small
+  object take 1.6 times the memory.
+
+## After the review
+
+The rounds that followed, each measured as above. The commit says more.
+
+| When | Commit | What | Effect |
+|---|---|---|---|
+| 2026-10-05 | `0820228` | `callTree`, a call needing only the frame | V8 -1.4% |
+| 2026-10-07 | `055a53f` | Every update of a place -- local, upvalue, global, property, element -- as one tree node | V8 -1.2%; updates -19 to -36% |
+| 2026-10-07 | v0.24.1 | Tree builders out of the big function's inlining budget, tree calls through `callTree`, nested trees without `recover`, global sites keeping their environment | V8 -4.5% |
+| 2026-10-08 | `8d54f7e` | A tree's loops as Go loops, structured from its block graph | micro-benchmarks -9.4% |
+| 2026-10-12 | `b03617f`..`152bea0` | Property reads, tree calls, deletes, spreads, generators, RegExp, Date, string chains | V8 -0.8%, micro-benchmarks -6.1% |
+| 2026-10-13 | `6e5ce1f`, `944e2e8` | An object 96 to 56 bytes, what only some have kept apart; keys in the shape, values in the object | bytes -18%, a two-property object 144 to 96 bytes |
+| 2026-10-14 | `e019ec8`..`96eab49` | Deep prototype chains' additions cached, typed arrays in `elemAt`, stacks of throws resolved lazily | Octane -9% without the JIT; `try_throw` 297 to 34 ns |
+| 2026-10-15 | `a5813af`, `7f06603` | A call evaluates its callee and arguments in its node, without spills | AWFY -2.7% |
+| 2026-10-15 | `3ed2f6f`, `60888ee`, `d1805f2` | `new Array(n)` filled in place; `&&`, `\|\|` and `?:` as one node | AWFY -3.9%, -1.1%, -1.4% |
+
+### What is open
+
+- **Allocation, judged by CPU.** Over Are We Fast Yet go-quickjs is 1.07
+  times QuickJS's wall time but 1.21 times its CPU time (2026-10-15):
+  Havlak, DeltaBlue and Storage pay most for the collector. DeltaBlue, the
+  furthest behind, spends about a quarter of its other time in property
+  access through the caches.
+- **Micro-benchmarks still about twice QuickJS's time** (v0.27.0): an
+  array's growth by index (`array_prop_create` 2.39x), BigInts past 64
+  bits (`bigint256_arith` 2.19x), `WeakMap` set and delete (2.1x, which
+  `weak.Make` sets a floor under), two functions in mutual tail calls
+  (`tail_mutual` 2.74x), and generators made and run by for-of (1.7 to
+  1.9x). Global reads (1.70x, a top-level `let` or `const` about 10 ns more
+  than a `var`) and element reads (1.40x) are the common ones.
+- **RegExp:** a run of literal characters inside a pattern as one
+  instruction (B6) is still left; `regexp_ascii` and `regexp_utf16` take
+  1.4 times QuickJS's time.
+- **The JIT** (`-tags quickjs_jit`): its hot code is too large for the op
+  cache. Calls are most of it, about 630 bytes of hot code a call site over
+  AWFY, where V8's callee builds its own frame and keeps what a deopt needs
+  in tables; work on a smaller call sequence and on keeping slow paths out
+  of the hot code is in progress.
