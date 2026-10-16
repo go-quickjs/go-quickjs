@@ -294,6 +294,10 @@ type Runtime struct {
 	// can suspend again, so one serves them all, and a suspension allocates
 	// nothing.
 	treeSig suspendSignal
+	// tailArgs is where a tree's call in tail position copies its
+	// arguments out of its frame's window, for a callee that reads them
+	// only as it starts (tailArgsOf).
+	tailArgs []Value
 	// jitFields is the optional native tier's state, empty in builds
 	// without it. It comes after everything the interpreter reads, so that
 	// a build with the tier moves none of their offsets, and before the last
