@@ -624,7 +624,7 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 				return nil, false
 			}
 			d := len(b.stack)
-			t.blocks[bi] = tblock{body: b.takeBody(), next: func(c *tctx) int {
+			next := func(c *tctx) int {
 				res := v(c)
 				if d > 0 {
 					c.at(pc)
@@ -641,7 +641,12 @@ func (b *tbuilder) buildBlock(t *tree, bi, start, end, entry int) ([]int, bool) 
 				}
 				c.ret = res
 				return -1
-			}}
+			}
+			if b.fn.HasTailCall {
+				// It may start the function again: see ztree_zkself.go.
+				next = restartReturn(v, d, pc)
+			}
+			t.blocks[bi] = tblock{body: b.takeBody(), next: next}
 			return b.succ, true
 		}
 		if in.Op == bytecode.OpTailCall || in.Op == bytecode.OpTailCallMethod {
