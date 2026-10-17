@@ -7,7 +7,19 @@ package vm
 // Math's functions and push. It reports false for any other receiver, which
 // the built-in is left to refuse, and, from a pure body that may not store,
 // for an addition. It is in the package's last files, after the hot ones.
+//
+// Math.random (elemRandom) is applied so too, whatever its receiver: the
+// next number of the runtime's cache, which a call takes as a store, only
+// where its body may store -- a body that missed after it would be run
+// again, and draw again.
 func (r *Runtime) collectionOp(op uint8, this Value, args []Value, mayStore bool) (Value, bool) {
+	if op == elemRandom {
+		if !mayStore {
+			r.pureRefused = true
+			return Undefined, false
+		}
+		return Float(r.random()), true
+	}
 	if !this.IsObject() {
 		return Undefined, false
 	}

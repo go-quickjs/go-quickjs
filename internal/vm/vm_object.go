@@ -1434,8 +1434,9 @@ type funcData struct {
 	// to numbers: one of one number by its place in unaryMath, or max and
 	// min of two (mathMax, mathMin); see mathCall.
 	mathOp uint8
-	// elemOp marks the built-in Array.prototype.push or pop, which a pure
-	// body may call without a frame; see pureElemOp.
+	// elemOp marks a built-in a call applies without a frame, as it calls
+	// nothing and cannot throw: Array.prototype.push or pop, a Map's or a
+	// Set's lookup or addition, Math.random; see pureElemOp.
 	elemOp uint8
 	// iterNext marks a built-in iterator's next -- a Map or Set iterator's,
 	// or a generator's -- which a loop over the iterator steps itself,

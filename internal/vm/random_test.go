@@ -55,6 +55,42 @@ func TestMathRandomSequence(t *testing.T) {
 	}
 }
 
+// A call applies Math.random without a frame (collectionOp), as it does
+// Math's other functions, from the interpreter, a tree and a pure body
+// alike, and each call takes one number. A pure body that draws where it
+// could still miss -- first's, at a getter read after the draw -- is run
+// again in a frame when it misses, so it is not let draw there; one that
+// draws where nothing can miss after (last's, scaled's) draws without a
+// frame. Each call takes the next number, its body run pure or not.
+func TestMathRandomFramelessOnce(t *testing.T) {
+	r := New(Config{})
+	defer r.Close()
+	const s0, s1 = 0x452821e638d01377, 0xbe5466cf34e90c6c
+	seedRandomForTest(r, s0, s1)
+	v, err := r.Run(compileForTest(t, `function first(o) { return Math.random() + o.k; }
+		function last(o) { return o.k + Math.random(); }
+		function scaled(n) { return Math.random() * n / n; }
+		function framed(o) { var x = Math.random(); return o.k + x; }
+		var plain = {k: 0}, getter = {get k() { return 0; }};
+		let out = [];
+		for (let i = 0; i < 300; i++) {
+			const o = i % 3 ? plain : getter;
+			out.push([first, last, scaled, framed][i % 4](i % 4 == 2 ? 4 : o));
+		}
+		out.join(',')`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Split(v.String().Go(), ",")
+	made := xorshift128(s0, s1, 320)
+	for i, g := range got {
+		block, k := i/mathRandomCache, i%mathRandomCache
+		if want := made[block*mathRandomCache+mathRandomCache-1-k]; parseFloatForTest(t, g) != want {
+			t.Fatalf("call %d: %s, want %v: a call took other than one number", i, g, want)
+		}
+	}
+}
+
 func parseFloatForTest(t *testing.T, s string) float64 {
 	t.Helper()
 	f, err := strconv.ParseFloat(s, 64)

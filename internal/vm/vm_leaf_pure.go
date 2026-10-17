@@ -533,6 +533,7 @@ const (
 	elemMapSet
 	elemSetHas
 	elemSetAdd
+	elemRandom
 )
 
 // pureElemOp is the built-in push or pop called from a pure body, where it

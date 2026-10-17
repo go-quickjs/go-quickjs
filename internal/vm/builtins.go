@@ -2537,6 +2537,9 @@ func (r *Runtime) initMathBuiltins() {
 	r.randomFn = r.defMethod(m, "random", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		return Float(rt.random()), nil
 	})
+	// It calls nothing and cannot throw: a call applies it without a frame
+	// (collectionOp).
+	r.randomFn.fn().elemOp = elemRandom
 }
 
 // coerceAll converts every argument to a number, in the order they were
