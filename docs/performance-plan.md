@@ -45,8 +45,17 @@ item are from the runs of its time unless it says otherwise.
   not from an embedder running a runtime on each core.
 - JIT code has the same op-cache limit: one AWFY benchmark, all of it
   native, runs 495 or 600 ms depending only on where its code lands (81%
-  against 43% of its operations from the op cache). A comparison of JIT
-  builds has to vary where the JIT's first code is placed as well.
+  against 43% of its operations from the op cache). `placements -jit`
+  varies where the JIT places its first code (`V8BENCH_JITPAD`), but only
+  its first 64 KB chunk: code compiled later, a benchmark's late in a
+  suite, lands where the code before it ends, at the same place in every
+  placement, and neither is the JIT's Go side moved. A change that resizes
+  earlier code can then look like an eight-placement regression of a later
+  benchmark. Before calling one real, compare its native code's bytes per
+  operation, its exits and compiles, run it alone (`-suite`) over the
+  placements and at several first offsets, and count its retired
+  instructions (AMDuProfPcm): Towers' +7.5% and the V8 suite's +1.7% at
+  `d4e1855` were the same code, byte for byte.
 - Ideas already measured and rejected are listed at the end, so they are not
   tried again without a new angle.
 
@@ -545,6 +554,9 @@ The rounds that followed, each measured as above. The commit says more.
 | 2026-10-14 | `e019ec8`..`96eab49` | Deep prototype chains' additions cached, typed arrays in `elemAt`, stacks of throws resolved lazily | Octane -9% without the JIT; `try_throw` 297 to 34 ns |
 | 2026-10-15 | `a5813af`, `7f06603` | A call evaluates its callee and arguments in its node, without spills | AWFY -2.7% |
 | 2026-10-15 | `3ed2f6f`, `60888ee`, `d1805f2` | `new Array(n)` filled in place; `&&`, `\|\|` and `?:` as one node | AWFY -3.9%, -1.1%, -1.4% |
+| 2026-10-16 | `6193edc`..`cb7f7b8` | JIT: the callee makes its own frame; a native call's state and calls of Go described statically, as V8's deopt data; constants compared in one instruction; smaller equality and truthiness | with the JIT AWFY -3.2%, Octane -1.3%, V8 -1.0%; hot code -16% |
+| 2026-10-17 | `7668123`..`d27ce77` | `Math.random()` from a per-runtime cache of 64 xorshift128+ numbers, as V8's: a load in native code, a frameless call in the interpreter | with the JIT 49 to 3.7 ns (Node 6.3), without -13.6% |
+| 2026-10-17 | `897895c`..`d4e1855` | JIT: getters and setters called natively, prototype reads at megamorphic sites, loose `==` of booleans, recompiles that wait for room | Octane with the JIT -2.0% (Box2D -33%, PdfJS -7%, Typescript -5%) |
 
 ### What is open
 
@@ -560,47 +572,24 @@ The rounds that followed, each measured as above. The commit says more.
   (`tail_mutual` 2.74x), and generators made and run by for-of (1.7 to
   1.9x). Global reads (1.70x, a top-level `let` or `const` about 10 ns more
   than a `var`) and element reads (1.40x) are the common ones.
-- **`Math.random()`, never measured.** None of the suites reaches the
-  engine's own: the V8 suite's and Octane's `base.js` replace it with a
-  seeded generator written in JavaScript, Are We Fast Yet has its own
-  `Random`, and only `microbench.js`'s `sort_bench`, left out of the
-  comparison, calls it, to fill its arrays. Yet games, simulations and
-  shuffles call it in their inner loops. Today it is a built-in like any
-  other: the interpreter calls it through the native-call path, and
-  `random` (`builtins.go`) asks a `rand.Rand`, whose PCG source sits behind
-  an interface. The JIT makes it a call of Go from native code: its
-  `Intrinsic` takes a method call of at least one argument, and `random`
-  has no `mathOp`, so `Math.random()` does not become code of its own the
-  way `Math.sqrt(x)` and `Math.floor(x)` do.
-
-  V8's design is the one to follow. Each native context has a cache of 64
-  doubles and an index into it. `Math.random()`, in its builtin and in
-  optimized code alike, takes the next number from the cache. Only when
-  the cache is empty does it call the runtime, which makes 64 more with
-  xorshift128+, seeded once per context. The common case is a load and a
-  decrement: no call, and almost no code, which also suits the op cache
-  (see "How an item is measured"). The standard leaves the algorithm to
-  the engine.
-  - First, a micro-benchmark of `Math.random()` in a loop, in both tiers,
-    against QuickJS and Node, before anything is changed.
-  - In Go: the runtime keeps xorshift128+'s two words and a cache of 64
-    doubles with its index, refilled by one function. The function seeds
-    the generator at its first use, from the process-wide source, so that
-    runtimes do not share a sequence and building a runtime still does no
-    work for it. Each number is made from the generator's bits as V8 makes
-    it: 52 of them as a double's mantissa in [1, 2), less one. The
-    built-in reads the cache.
-  - In the JIT: the realm's `Math.random` with no arguments as an
-    intrinsic, guarded as the others are. Its code reads the runtime's
-    cache at a fixed offset (abi), decrements the index and loads the
-    double. An empty cache is a call of Go that refills it, as a
-    concatenation is. Both tiers take from one cache, so the sequence is
-    the same whichever tier draws.
 - **RegExp:** a run of literal characters inside a pattern as one
   instruction (B6) is still left; `regexp_ascii` and `regexp_utf16` take
   1.4 times QuickJS's time.
-- **The JIT** (`-tags quickjs_jit`): its hot code is too large for the op
-  cache. Calls are most of it, about 630 bytes of hot code a call site over
-  AWFY, where V8's callee builds its own frame and keeps what a deopt needs
-  in tables; work on a smaller call sequence and on keeping slow paths out
-  of the hot code is in progress.
+- **The JIT** (`-tags quickjs_jit`):
+  - Compiling costs too much for what it saves in large programs. With the
+    JIT, Octane's Typescript takes twice the interpreter's time, a third of
+    it compiling, most of that compiles again for what a function learned,
+    1.5 to 4.6 ms each as they inline more. Compiled code whose exits cost
+    more than it saves is not always given up: a stretch is judged by 20
+    instructions of work against an exit (`jitSSAMinWork`), far less than
+    an exit costs. More room for code (`WithJITMemoryLimit`) must never be
+    slower, and was: with 16 MB Typescript took 18% longer than with 8.
+    The default stays 8 MB until compiles cost less.
+  - Box2D's exits left: comparisons of two objects, which need `valueOf`;
+    `instanceof` against a constructor passed as a parameter; additions of
+    properties across many shapes.
+  - A native call site still spends about 300 bytes on its guards and on
+    writing its arguments, which a callee checking its own frame's room
+    and the context's level could shed.
+  - `placements -jit` to vary the offsets of later code chunks and the
+    JIT's Go-side code (see "How an item is measured").
