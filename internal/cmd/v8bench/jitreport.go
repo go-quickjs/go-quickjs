@@ -5,11 +5,18 @@ package main
 import (
 	"cmp"
 	"fmt"
+	"os"
 	"slices"
+	"strconv"
 
 	"github.com/go-quickjs/go-quickjs/internal/hostaccess"
+	"github.com/go-quickjs/go-quickjs/internal/jit"
 	"github.com/go-quickjs/go-quickjs/internal/vm"
 )
+
+// V8BENCH_JITPAD is where the JIT places its first code in its arena
+// (jit.FirstOffset).
+func init() { jit.FirstOffset, _ = strconv.Atoi(os.Getenv("V8BENCH_JITPAD")) }
 
 // jitReport is the report's state: what the JIT had done when the last
 // benchmark ended, the counters and each function's.

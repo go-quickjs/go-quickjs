@@ -35,7 +35,9 @@
 // rounds: each placement of each label is taken at its fastest round,
 // since what the machine adds only ever adds time, and a label's figure is
 // the mean over its placements, in milliseconds a run. Placement n runs
-// n*5 frames of 64 bytes deeper in the stack (V8BENCH_STACKPAD). Each
+// n*5 frames of 64 bytes deeper in the stack (V8BENCH_STACKPAD), and with
+// -jit has the JIT place its code from jitPads[n] into its arena
+// (V8BENCH_JITPAD). Each
 // benchmark runs once, and one whose run took less than a second runs
 // again in a process of its own as many times as fill about one -- 3, 10,
 // 30, 100 or 300 -- so that a long one, Octane's zlib, takes its run's
@@ -490,7 +492,7 @@ func runPlacement(exe, dir, bench, suite string, n int, jitEnabled bool, cpus cp
 			args = append(args, "-suite", only)
 		}
 		cmd := exec.Command(exe, args...)
-		cmd.Env = append(os.Environ(), "V8BENCH_STACKPAD="+strconv.Itoa(5*n))
+		cmd.Env = append(os.Environ(), "V8BENCH_STACKPAD="+strconv.Itoa(5*n), "V8BENCH_JITPAD="+strconv.Itoa(jitPads[n%len(jitPads)]))
 		var outb bytes.Buffer
 		cmd.Stdout = &outb
 		if cpus != nil {
@@ -551,6 +553,16 @@ func runPlacement(exe, dir, bench, suite string, n int, jitEnabled bool, cpus cp
 	}
 	return append(got, named{"TOTAL", total}), nil
 }
+
+// jitPads is where each placement has the JIT place its first code in its
+// arena (V8BENCH_JITPAD, jit.FirstOffset), which decides how the hot code
+// falls on the op cache's sets: AWFY's Towers, its code all native, ran 20%
+// faster at some offsets than at others, its ops from the op cache 81%
+// against 43% (jit.FirstOffset). Towers' 60 KB fills a 64 KB chunk, so an
+// offset of 32 KiB or more puts what comes last in a second chunk: bit 15
+// is set at half of the eight, and at half of -k 4's (0, 3, 5, 6), and
+// bits 10 to 14 vary.
+var jitPads = [8]int{0, 44 << 10, 10 << 10, 33 << 10, 21 << 10, 50 << 10, 27 << 10, 37 << 10}
 
 func mean(xs []float64) float64 {
 	s := 0.0

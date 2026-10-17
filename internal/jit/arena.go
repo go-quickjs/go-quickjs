@@ -48,6 +48,19 @@ const (
 // NewArena returns an empty arena; it maps nothing until code is placed.
 func NewArena() *Arena { return &Arena{} }
 
+// FirstOffset is where in its first chunk an arena places its first code,
+// codeAlign-rounded: 0 but for a benchmark, which varies it (v8bench's
+// V8BENCH_JITPAD) because where native code is decides how fast it runs.
+// A program whose hot code is larger than a few kilobytes spreads it over
+// the op cache's sets (64 of 8 ways on AMD's Zen 2, by address bits 6 to
+// 11) as it happens to lie: AWFY's Towers, its 60 KB of code all native,
+// had 81% of its ops from the op cache and an IPC of 3.5 at some offsets,
+// 43% and 2.8 at others (AMDuProfPcm), the same instructions retired at
+// the same rate of mispredictions, and ran 20% faster. A comparison of two
+// builds that placed each at one offset compared those offsets as much as
+// the builds.
+var FirstOffset int
+
 // Mapped reports how many bytes of code the arena has mapped, and how many
 // of them functions own: the rest is space their release left in chunks
 // that others still hold.
@@ -98,6 +111,9 @@ func (a *Arena) place(instructions []byte) ([]byte, error) {
 			return nil, fmt.Errorf("allocate code: %w", err)
 		}
 		c = &chunk{mem: mem}
+		if pad := alignUp(FirstOffset, codeAlign); len(a.chunks) == 0 && pad > 0 && pad+n <= len(mem) {
+			c.used = pad
+		}
 		a.chunks = append(a.chunks, c)
 	}
 	start := c.used
