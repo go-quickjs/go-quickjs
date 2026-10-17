@@ -5274,8 +5274,9 @@ func (c *compiler) eqTagged(v *ssa.Value, guard func(amd64.Cond)) {
 	c.a.Jmp(yes)
 	// Two words: two numbers compare as numbers; anything else is
 	// strictly unequal. Loosely, null and undefined equal each other and
-	// an object with [[IsHTMLDDA]] alone, with nothing converted; any
-	// other two are Go's -- out of line.
+	// an object with [[IsHTMLDDA]] alone, with nothing converted, and two
+	// booleans are as strictly: x == false of a boolean x, which had left
+	// for Go each time x was true; any other two are Go's -- out of line.
 	c.a.Bind(differ)
 	other := no
 	if v.Index != 1 {
@@ -5291,6 +5292,19 @@ func (c *compiler) eqTagged(v *ssa.Value, guard func(amd64.Cond)) {
 				c.a.Jcc(amd64.CondE, xNullish)
 				c.a.Op(amd64.Cmp, wy, scratchC, true)
 				c.a.Jcc(amd64.CondE, yNullish)
+			}
+			xBool := c.a.NewLabel()
+			for _, w := range []uint64{c.enc.True, c.enc.False} {
+				c.cmpWord(wx, w)
+				c.a.Jcc(amd64.CondE, xBool)
+			}
+			c.a.Jmp(exit)
+			// x a boolean, and y the other boolean -- the words differ --
+			// or what converts.
+			c.a.Bind(xBool)
+			for _, w := range []uint64{c.enc.True, c.enc.False} {
+				c.cmpWord(wy, w)
+				c.a.Jcc(amd64.CondE, no)
 			}
 			c.a.Jmp(exit)
 			// One is null or undefined, the other of another word.

@@ -1491,7 +1491,7 @@ func TestSSANativeEquality(t *testing.T) {
 		for _, tc := range []struct {
 			x, y   ir.Value
 			equal  bool
-			native bool // strictly; loosely, different words go to Go
+			native bool // strictly; loosely, different words go to Go, but two booleans'
 		}{
 			{ir.Float(0), negZero, true, true}, {ir.Float(1), ir.Float(1), true, true}, {ir.Float(1), ir.Float(2), false, true},
 			{nan, nan, false, true}, {nan, ir.Float(1), false, true},
@@ -1510,7 +1510,10 @@ func TestSSANativeEquality(t *testing.T) {
 			sameWord := tc.x.Kind == tc.y.Kind && (tc.x.Kind == ir.Opaque || tc.x.Kind == ir.String || tc.x.Bits == tc.y.Bits)
 			bothNumbers := tc.x.Kind == ir.Number && tc.y.Kind == ir.Number
 			nullish := func(v ir.Value) bool { return v.Kind == ir.Null || v.Kind == ir.Undefined }
-			loosely := !strict && (nullish(tc.x) || nullish(tc.y))
+			// Loosely: null or undefined against anything, and two
+			// booleans, unequal as strictly.
+			booleans := tc.x.Kind == ir.Boolean && tc.y.Kind == ir.Boolean
+			loosely := !strict && (nullish(tc.x) || nullish(tc.y) || booleans)
 			native := tc.native && (strict || sameWord || bothNumbers || loosely)
 			if got := exit.Kind == ir.Returned; got != native {
 				t.Fatalf("strict %v, %v == %v: native %v, want %v", strict, tc.x, tc.y, got, native)

@@ -1095,7 +1095,8 @@ func (c *a64Compiler) eqTagged(v *ssa.Value, guard func(arm64.Cond)) {
 	other := no
 	if v.Index != 1 {
 		// Loosely, null and undefined equal each other and an object with
-		// [[IsHTMLDDA]] alone, as amd64's.
+		// [[IsHTMLDDA]] alone, and two booleans are as strictly, as
+		// amd64's.
 		other = exit
 		numbers, xNullish, yNullish := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
 		for _, w := range []uint64{c.enc.Null, c.enc.Undefined} {
@@ -1104,6 +1105,19 @@ func (c *a64Compiler) eqTagged(v *ssa.Value, guard func(arm64.Cond)) {
 			c.a.BCond(arm64.EQ, xNullish)
 			c.a.Cmp(wy, a64C, true)
 			c.a.BCond(arm64.EQ, yNullish)
+		}
+		xBool := c.a.NewLabel()
+		for _, w := range []uint64{c.enc.True, c.enc.False} {
+			c.movImm(a64C, w)
+			c.a.Cmp(wx, a64C, true)
+			c.a.BCond(arm64.EQ, xBool)
+		}
+		c.a.B(numbers)
+		c.a.Bind(xBool)
+		for _, w := range []uint64{c.enc.True, c.enc.False} {
+			c.movImm(a64C, w)
+			c.a.Cmp(wy, a64C, true)
+			c.a.BCond(arm64.EQ, no)
 		}
 		c.a.B(numbers)
 		for _, k := range []struct {

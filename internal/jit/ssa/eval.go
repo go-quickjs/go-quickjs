@@ -161,6 +161,9 @@ func eqTagged(x, y ir.Value, strict bool, strings map[uint64]String, objects []O
 			return htmldda(x), true
 		case nullish(x) || nullish(y):
 			return false, true
+		case x.Kind == ir.Boolean && y.Kind == ir.Boolean:
+			// Two booleans, the words differing: as strictly.
+			return false, true
 		}
 	}
 	return false, strict
