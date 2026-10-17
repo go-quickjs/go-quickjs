@@ -406,6 +406,18 @@ func (a *Asm) LoadLabel(dst Reg, l Label) {
 	a.imm32(0)
 }
 
+// CmpLabel compares r with the word at the address l is bound at,
+// RIP-relative (cmp r, [l]): the flags are r's less the word's.
+func (a *Asm) CmpLabel(r Reg, l Label) {
+	rex := byte(0x48)
+	if r >= 8 {
+		rex |= 0x04
+	}
+	a.emit3(rex, 0x3B, byte(r&7)<<3|5)
+	a.fixups = append(a.fixups, fixup{len(a.buf), l, fixLea})
+	a.imm32(0)
+}
+
 // Quad emits the word v as data.
 func (a *Asm) Quad(v uint64) { a.buf = binary.LittleEndian.AppendUint64(a.buf, v) }
 

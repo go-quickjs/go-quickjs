@@ -309,5 +309,22 @@ func TestAMD64IndirectJumps(t *testing.T) {
 		if inst.Op != x86asm.LEA || inst.Args[0] != r64(r) || !ok || m.Base != x86asm.RIP || m.Disp != 1 {
 			t.Fatalf("LeaLabel %v: % x is %v", r, code, inst)
 		}
+		for _, op := range []struct {
+			name string
+			emit func(*amd64.Asm, amd64.Reg, amd64.Label)
+			want x86asm.Op
+		}{{"LoadLabel", (*amd64.Asm).LoadLabel, x86asm.MOV}, {"CmpLabel", (*amd64.Asm).CmpLabel, x86asm.CMP}} {
+			code := encode(func(a *amd64.Asm) {
+				l := a.NewLabel()
+				op.emit(a, r, l)
+				a.Ret()
+				a.Bind(l)
+			})
+			inst := decodeOne(t, op.name, code[:7])
+			m, ok := inst.Args[1].(x86asm.Mem)
+			if inst.Op != op.want || inst.Args[0] != r64(r) || !ok || m.Base != x86asm.RIP || m.Disp != 1 {
+				t.Fatalf("%s %v: % x is %v", op.name, r, code, inst)
+			}
+		}
 	}
 }
