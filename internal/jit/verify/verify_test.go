@@ -204,6 +204,8 @@ func TestMirEmitted(t *testing.T) {
 		if err != nil {
 			return false
 		}
+		// Its call entry, which native callers jump to, as the VM asks.
+		f.CallEntry = true
 		ssa.Optimize(f)
 		for _, b := range f.Blocks {
 			for _, v := range b.Values {
@@ -219,7 +221,8 @@ func TestMirEmitted(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s, %s: %v", name, arch, err)
 			}
-			if err := check(arch, mc.Bytes); err != nil {
+			// Past Text, the code's constants, which are data.
+			if err := check(arch, mc.Bytes[:mc.Text]); err != nil {
 				t.Fatalf("%s, %s: %v", name, arch, err)
 			}
 		}

@@ -130,6 +130,16 @@ var ErrUnsupported = errors.New("mir: unsupported")
 type Code struct {
 	Bytes   []byte
 	Entries map[int]int
+	// CallEntry is the offset of the code's call entry, where native
+	// callers jump (abi.Context's ReturnTo says how), or -1 for none: the
+	// frame and the context the function runs in made once, here, not at
+	// every call. Resume is the offset of the routine Go goes on after a
+	// native call through (jit's SSACode.Resume), or -1 for code that makes
+	// none.
+	CallEntry, Resume int
+	// Text is how many of Bytes are instructions: past them are the code's
+	// own constants (amd64's movImm), data.
+	Text int
 	// Exits are the descriptions the code's exits name by address
 	// (abi.ExitDescriptor), which whoever holds the code keeps alive.
 	Exits []*abi.ExitDescriptor

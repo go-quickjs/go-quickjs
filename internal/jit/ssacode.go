@@ -22,6 +22,9 @@ type SSACode struct {
 	// entries is each slot IR PC's code offset, or -1: a slice, since every
 	// exit to Go looks one up.
 	entries []int32
+	// callEntry and resume are the offsets of the code's call entry and
+	// resume routine, or -1 (mir's Code).
+	callEntry, resume int32
 	// exits are the descriptions the code's exits name by address.
 	exits []*abi.ExitDescriptor
 	// footprint is what the code holds (Footprint), which never changes
@@ -58,7 +61,7 @@ func NewSSACode(a *Arena, c *mir.Code) (*SSACode, error) {
 	for pc, off := range c.Entries {
 		entries[pc] = int32(off)
 	}
-	s := &SSACode{code: code, arena: a, entries: entries, exits: c.Exits}
+	s := &SSACode{code: code, arena: a, entries: entries, callEntry: int32(c.CallEntry), resume: int32(c.Resume), exits: c.Exits}
 	s.footprint = footprint(len(code), cap(entries), c.Exits)
 	runtime.SetFinalizer(s, func(s *SSACode) { _ = s.Close() })
 	return s, nil
@@ -76,6 +79,15 @@ func (s *SSACode) EntryAddress(pc int) uintptr {
 		return 0
 	}
 	return uintptr(unsafe.Pointer(&s.code[s.entries[pc]]))
+}
+
+// CallEntry is the address of the code's call entry, where its native
+// callers jump (abi.Context's ReturnTo), or 0 for none.
+func (s *SSACode) CallEntry() uintptr {
+	if s == nil || len(s.code) == 0 || s.callEntry < 0 {
+		return 0
+	}
+	return uintptr(unsafe.Pointer(&s.code[s.callEntry]))
 }
 
 // Run enters at a slot IR PC with ctx, which must hold the frame's addresses
@@ -99,16 +111,20 @@ func (s *SSACode) Run(pc int, ctx *abi.Context) error {
 // Resume goes on in s's code at addr, where a native call returns to after
 // its callee (abi.Context.ReturnTo), with ctx, the callee's context, which
 // holds the call's result (RetValue) and where its frame began (Base): a
-// caller's code goes on after a callee Go finished. It returns as Run does.
+// caller's code goes on after a callee Go finished. Its resume routine
+// (mir's Code.Resume) takes the result from ctx as a native callee's return
+// leaves it, and goes on at addr, which it finds in ctx's ReturnTo. It
+// returns as Run does.
 func (s *SSACode) Resume(addr uintptr, ctx *abi.Context) error {
 	if s == nil || len(s.code) == 0 {
 		return ErrClosed
 	}
 	base := uintptr(unsafe.Pointer(&s.code[0]))
-	if addr < base || addr >= base+uintptr(len(s.code)) {
+	if addr < base || addr >= base+uintptr(len(s.code)) || s.resume < 0 {
 		return fmt.Errorf("jit: %#x is not in the code", addr)
 	}
-	enterSSA(&s.code[addr-base], ctx)
+	ctx.ReturnTo = addr
+	enterSSA(&s.code[s.resume], ctx)
 	runtime.KeepAlive(s)
 	runtime.KeepAlive(ctx)
 	return nil

@@ -7862,7 +7862,7 @@ func TestJITSSANativeCalleeRefusalKept(t *testing.T) {
 // A native call whose callee has no code native callers may call -- one
 // they stopped calling natively for leaving too often (notNative), as the
 // test marks them -- is Go's, which makes it, native code going on after it
-// (mir's noEntryCall): a call, a method call with its receiver,
+// (mir's call): a call, a method call with its receiver,
 // constructions whose callee returns nothing or a primitive, and a callee
 // that throws. One whose operands Go's arguments cannot hold has Go run
 // the callee from its start, and goes on natively after the call

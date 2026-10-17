@@ -463,6 +463,10 @@ func (e *jitEntry) uses() uint64 {
 // (refs); then it is dropped.
 type jitLink struct {
 	entry uintptr
+	// body is the code's entry at its start, past its call entry, where a
+	// call in tail position goes on in the frame it gives up (mir's
+	// tailJump): 0 whenever entry is.
+	body  uintptr
 	in    uint64
 	owner *jitEntry
 	refs  int
@@ -470,6 +474,17 @@ type jitLink struct {
 	// The function's frame and flags (abi.LinkCoerce...), for a generic
 	// call (abi.Encoding's Link fields).
 	params, locals, frame, flags uint64
+}
+
+// setCode has native callers call code through l: its call entry, which
+// makes the callee's frame (abi.Context's ReturnTo), and its start, where
+// a call in tail position goes on. Code with no call entry has Go run the
+// function at each native call (abi.ExitEnter).
+func (l *jitLink) setCode(code *jit.SSACode) {
+	l.entry, l.body = code.CallEntry(), code.EntryAddress(0)
+	if l.entry == 0 {
+		l.body = 0
+	}
 }
 
 // Weak keys prevent a refusal or cached program from retaining a source graph.
@@ -865,7 +880,7 @@ func (e *jitEntry) owned() bool {
 // the OS would not release the code, which leaves e owned for a retry.
 func (s *jitState) dropEntry(key weak.Pointer[bytecode.Function], e *jitEntry) bool {
 	held := e.ssa.Size() != 0
-	e.link.entry = 0
+	e.link.entry, e.link.body = 0, 0
 	if s.closeSSA(e.ssa, e) != nil {
 		return false
 	}
@@ -1312,7 +1327,7 @@ func (s *jitState) forget(key weak.Pointer[bytecode.Function], e *jitEntry) {
 // disown has e's link no longer e's: an entry the cache does not hold.
 func (s *jitState) disown(e *jitEntry) {
 	if l := e.link; l != nil && l.owner == e {
-		l.owner, l.entry = nil, 0
+		l.owner, l.entry, l.body = nil, 0, 0
 		s.unlink(l)
 		// Its function's lowering is now one makeRoom may reclaim: the
 		// floor noted before counted it as held for good.
@@ -1334,7 +1349,7 @@ func (s *jitState) linkFor(fn *bytecode.Function, e *jitEntry) {
 			frame: uint64(fn.LocalCount + fn.MaxStack), flags: jitLinkFlags(fn)}
 		s.links[key] = l
 	}
-	l.owner, l.entry, l.in = e, 0, 0
+	l.owner, l.entry, l.body, l.in = e, 0, 0, 0
 	e.link = l
 }
 

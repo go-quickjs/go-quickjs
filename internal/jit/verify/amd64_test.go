@@ -165,6 +165,7 @@ func TestAMD64Moves(t *testing.T) {
 		}
 		for _, disp := range disps {
 			expect(t, "DecMem", encode(func(a *amd64.Asm) { a.DecMem(d, disp) }), x86asm.DEC, mem{r64(d), int64(disp)})
+			expect(t, "IncMem", encode(func(a *amd64.Asm) { a.IncMem(d, disp) }), x86asm.INC, mem{r64(d), int64(disp)})
 			for _, imm := range []int32{0, 1, -1, 0x7fffffff, -0x80000000} {
 				expect(t, "StoreImm", encode(func(a *amd64.Asm) { a.StoreImm(d, disp, imm) }), x86asm.MOV, mem{r64(d), int64(disp)}, int64(imm))
 			}
@@ -294,6 +295,9 @@ func TestAMD64Branches(t *testing.T) {
 func TestAMD64IndirectJumps(t *testing.T) {
 	for _, r := range regs {
 		expect(t, "JmpReg", encode(func(a *amd64.Asm) { a.JmpReg(r) }), x86asm.JMP, r64(r))
+		for _, disp := range []int32{0, 8, -8, 127, 128, -129, 4096} {
+			expect(t, "JmpMem", encode(func(a *amd64.Asm) { a.JmpMem(r, disp) }), x86asm.JMP, mem{r64(r), int64(disp)})
+		}
 		code := encode(func(a *amd64.Asm) {
 			l := a.NewLabel()
 			a.LeaLabel(r, l)

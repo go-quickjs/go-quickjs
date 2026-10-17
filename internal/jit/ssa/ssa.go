@@ -615,6 +615,10 @@ type Func struct {
 	// to it.
 	Params    int
 	StartOnly bool
+	// CallEntry asks for a call entry, where native callers jump, which
+	// makes the frame and the context of a call of the function, once for
+	// all its callers (mir's Code.CallEntry, abi.Context's ReturnTo).
+	CallEntry bool
 	// FrameLocals is how many of the Locals are the frame's own; the rest,
 	// up to Locals, are captured bindings, which native code reads through
 	// their cells (abi.Context.Upvalues) and never writes. Build sets it to

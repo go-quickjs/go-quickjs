@@ -25,6 +25,20 @@ const (
 	xScratch2 = amd64.XReg(15)
 )
 
+// A native call's registers (abi.Context's ReturnTo): at its callee's call
+// entry (callEntry), where it returns to, the callee's closure and its
+// link -- and, for enterExit, the callee's function object in callObject;
+// at its return (returnNative), the result's words, and where it goes on in
+// callLink.
+const (
+	callRet     = scratchA
+	callClosure = scratchC
+	callLink    = scratchB
+	callObject  = amd64.R9
+	retNum      = scratchA
+	retRef      = scratchC
+)
+
 // compiler is amd64's code generator over the shared core.
 type compiler struct {
 	*core
@@ -61,6 +75,11 @@ type compiler struct {
 	// (enterExit), if any does.
 	enter     amd64.Label
 	enterUsed bool
+	// ret is the code's return (returnNative), which its first return
+	// makes and every other jumps to; resume is where Go goes on after a
+	// native call it finished (resumeCall), if the code makes any.
+	ret                 amd64.Label
+	retUsed, resumeUsed bool
 	// saving is the routine every call of Go that saves every register
 	// shares (goSaving), if any makes one; storing, the routine the stores
 	// Go makes share (goStore), which goes on to saving.
@@ -126,7 +145,14 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 	for _, b := range c.order {
 		c.labels[b.ID] = c.a.NewLabel()
 	}
+	callAt, resumeAt := -1, -1
 	for i, b := range c.order {
+		if f.CallEntry && b == c.entryAt(0) {
+			// Native callers' entry, which makes the frame and goes on at
+			// the start.
+			callAt = c.a.Len()
+			c.callEntry()
+		}
 		c.a.Bind(c.labels[b.ID])
 		if b.PC < 0 {
 			for _, e := range f.Entries {
@@ -169,6 +195,10 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 		c.a.Bind(c.enter)
 		c.enterExit()
 	}
+	if c.resumeUsed {
+		resumeAt = c.a.Len()
+		c.resumeCall()
+	}
 	if c.appendingUsed {
 		c.a.Bind(c.appending)
 		c.appendingCall()
@@ -182,6 +212,7 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 		c.savingCall()
 	}
 	// Last: the code's own constants (movImm), past every instruction.
+	text := c.a.Len()
 	for _, k := range c.pool {
 		c.a.Bind(k.label)
 		c.a.Quad(k.v)
@@ -194,8 +225,14 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 		// Where the jumps shortened before it moved it.
 		entries[pc] = c.a.Moved(at)
 	}
+	if callAt >= 0 {
+		callAt = c.a.Moved(callAt)
+	}
+	if resumeAt >= 0 {
+		resumeAt = c.a.Moved(resumeAt)
+	}
 	c.finishExits()
-	return &Code{Bytes: bytes, Entries: entries, Exits: c.exits, core: c.core}, nil
+	return &Code{Bytes: bytes, Entries: entries, CallEntry: callAt, Resume: resumeAt, Text: c.a.Moved(text), Exits: c.exits, core: c.core}, nil
 }
 
 // movImm sets dst to the word v: a load of the context's copy where v is
@@ -432,28 +469,108 @@ func (c *compiler) stubLabel(s *ssa.FrameState, kind uint64) amd64.Label {
 	return l
 }
 
-// returnNative returns to a native caller, if one called (nativeCall),
-// with the value in the context's RetValue, both words: its pointer word
-// from where RetFrom says the reference is. A native call was made with the
-// collector not marking, and no Go has run since, so the pointer may be
-// stored. Otherwise it falls through to the return to Go.
+// returnNative returns, the result in the context's Ret and RetFrom: to a
+// native caller, if one called (call), with the result's words in retNum
+// and retRef -- its pointer word from where RetFrom says the reference is
+// -- its frame gone (returnTail); otherwise to Go. The code's first return
+// makes it; the others jump there.
 func (c *compiler) returnNative() {
+	if c.retUsed {
+		c.a.Jmp(c.ret)
+		return
+	}
+	c.ret, c.retUsed = c.a.NewLabel(), true
+	c.a.Bind(c.ret)
 	toGo, word := c.a.NewLabel(), c.a.NewLabel()
-	c.a.Load(scratchA, regCtx, abi.OffReturnTo)
-	c.a.Op(amd64.Test, scratchA, scratchA, true)
+	c.a.Load(callLink, regCtx, abi.OffReturnTo)
+	c.a.Op(amd64.Test, callLink, callLink, true)
 	c.a.Jcc(amd64.CondE, toGo)
-	c.a.Load(scratchA, regCtx, abi.OffRet)
-	c.a.Store(regCtx, abi.OffRetValue+c.enc.NumOffset, scratchA)
-	c.storeImm(regCtx, abi.OffRetValue+c.enc.RefOffset, 0, scratchB)
-	c.a.Load(scratchC, regCtx, abi.OffRetFrom)
-	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	c.a.Load(retNum, regCtx, abi.OffRet)
+	c.a.Load(retRef, regCtx, abi.OffRetFrom)
+	c.a.Op(amd64.Test, retRef, retRef, true)
 	c.a.Jcc(amd64.CondE, word)
-	c.a.Load(scratchC, scratchC, c.enc.RefOffset)
-	c.a.Store(regCtx, abi.OffRetValue+c.enc.RefOffset, scratchC)
+	c.a.Load(retRef, retRef, c.enc.RefOffset)
 	c.a.Bind(word)
-	c.a.Load(scratchA, regCtx, abi.OffReturnTo)
-	c.a.JmpReg(scratchA)
+	c.returnTail()
 	c.a.Bind(toGo)
+	c.a.Ret()
+}
+
+// returnTail ends a native call, from the callee's context, the result in
+// retNum and retRef, as its caller's code goes on: the VM's stack's top
+// back where the callee's frame began, the context no call's, the caller's
+// context and frame's registers; then to where the call returns, in
+// callLink. A native call was made with the collector not marking, and no
+// Go has run since, so the caller may store the result's pointer.
+func (c *compiler) returnTail() {
+	c.a.Load(regStack, regCtx, abi.OffStackTop)
+	c.a.Load(regLocals, regCtx, abi.OffBase)
+	c.a.Store(regStack, 0, regLocals)
+	c.a.StoreImm(regCtx, abi.OffLive, 0)
+	c.a.StoreImm(regCtx, abi.OffReturnTo, 0)
+	c.a.Load(regCtx, regCtx, abi.OffPrev)
+	c.a.Load(regLocals, regCtx, abi.OffLocals)
+	c.a.Load(regStack, regCtx, abi.OffStack)
+	c.a.JmpReg(callLink)
+}
+
+// resumeCall is where Go goes on in the code after a native call whose
+// callee it finished (jit's SSACode.Resume), in the callee's context: the
+// result from its RetValue, and on as a callee's return goes on, to its
+// ReturnTo.
+func (c *compiler) resumeCall() {
+	c.a.Load(callLink, regCtx, abi.OffReturnTo)
+	c.a.Load(retNum, regCtx, abi.OffRetValue+c.enc.NumOffset)
+	c.a.Load(retRef, regCtx, abi.OffRetValue+c.enc.RefOffset)
+	c.returnTail()
+}
+
+// callEntry is the function's call entry, where its native callers jump
+// (call), which makes its frame and its context, as V8's callee makes its
+// own: the context the caller's next, which a call of the function runs
+// in; the frame past the VM's stack's top, which the caller wrote the
+// arguments to, the stack's top and high water past it; where the call
+// returns to and the callee's closure, in callRet and callClosure, and the
+// closure's captured bindings; the call counted in the function's link,
+// in callLink; and the locals past the parameters undefined, unless the
+// start does it (ssa.Func's StartOnly). It goes on at the start, laid out
+// next. It uses every register.
+func (c *compiler) callEntry() {
+	vs := int32(c.enc.ValueSize)
+	const base, at, top = amd64.R8, amd64.R9, amd64.R10
+	c.a.Load(regCtx, regCtx, abi.OffNext)
+	c.a.Store(regCtx, abi.OffReturnTo, callRet)
+	c.a.Store(regCtx, abi.OffClosure, callClosure)
+	c.a.Load(callClosure, callClosure, c.enc.ClosureUpvalues)
+	c.a.Store(regCtx, abi.OffUpvalues, callClosure)
+	c.a.Load(at, regCtx, abi.OffStackTop)
+	c.a.Load(base, at, 0)
+	c.a.Store(regCtx, abi.OffBase, base)
+	c.a.Lea(top, base, int32(c.f.FrameLocals+c.f.StackSize))
+	c.a.Store(at, 0, top)
+	same := c.a.NewLabel()
+	c.a.Load(at, regCtx, abi.OffStackHigh)
+	c.a.CmpMem(top, at, 0, true)
+	c.a.Jcc(amd64.CondBE, same)
+	c.a.Store(at, 0, top)
+	c.a.Bind(same)
+	c.a.ShiftImm(amd64.Shl, base, 4, true)
+	c.a.Load(at, regCtx, abi.OffStackBase)
+	c.a.Op(amd64.Add, base, at, true)
+	c.a.Store(regCtx, abi.OffLocals, base)
+	c.a.Lea(at, base, int32(c.f.FrameLocals)*vs)
+	c.a.Store(regCtx, abi.OffStack, at)
+	c.a.StoreImm(regCtx, abi.OffOpen, 0)
+	c.a.StoreImm(regCtx, abi.OffLive, abi.LiveCall)
+	c.a.IncMem(callLink, c.enc.LinkIn)
+	if !c.f.StartOnly && c.f.Params < c.f.FrameLocals {
+		c.movImm(scratchA, c.enc.Undefined)
+		c.movImm(scratchB, 0)
+		for i := c.f.Params; i < c.f.FrameLocals; i++ {
+			c.a.Store(base, int32(i)*vs+c.enc.NumOffset, scratchA)
+			c.a.Store(base, int32(i)*vs+c.enc.RefOffset, scratchB)
+		}
+	}
 }
 
 // call calls natively the function a call calls, if it is one of those it
@@ -758,59 +875,62 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 			c.a.Store(regCtx, c.spillDisp(sv.slot), amd64.Reg(sv.reg))
 		}
 	}
-	if generic {
-		c.noEntryCall(v, site, sites, gen, guard, join)
-	}
-	const calleeCtx, base, locals, tmp, top, high2 = amd64.R8, amd64.R9, amd64.R10, amd64.RBX, amd64.R12, amd64.R13
-	c.a.Load(calleeCtx, regCtx, abi.OffNext)
-	c.a.Load(base, regCtx, abi.OffStackTop)
-	c.a.Load(base, base, 0)
-	c.a.Load(locals, regCtx, abi.OffStackBase)
-	c.a.MovRR(tmp, base)
-	c.a.ShiftImm(amd64.Shl, tmp, 4, true)
-	c.a.Op(amd64.Add, locals, tmp, true)
-	c.a.Store(calleeCtx, abi.OffLocals, locals)
-	// The callee's context's own; what it shares with this one, and its
-	// level, Go wrote (abi.Context).
-	c.movImm(tmp, 0)
-	c.a.Store(calleeCtx, abi.OffUpvalues, tmp)
-	c.a.Store(calleeCtx, abi.OffOpen, tmp)
-	c.a.Store(calleeCtx, abi.OffTailReturn, tmp)
-	c.a.Store(calleeCtx, abi.OffBase, base)
-	c.storeImm(calleeCtx, abi.OffLive, 1, tmp)
+	// The callee makes its own frame and context at its call entry
+	// (callEntry): the call writes what only it knows -- the arguments not
+	// written yet, the receiver, a construction's, whether a call in tail
+	// position may give the frame up -- and jumps there, with where it
+	// returns to, the callee's closure and its link (abi.Context's
+	// ReturnTo). A callee with no call entry (its link's entry 0: one not
+	// compiled yet, or that native callers no longer call, the VM's
+	// notNative) Go makes: called from native code, in code that calls Go,
+	// as while the collector marks (markingCall), native code going on
+	// after it at join -- entered from Go at its start instead, the callee
+	// had Go make the frame of every native level below it and finish each,
+	// a call a few levels deep costing what all of them do; otherwise, and
+	// for a generic call's, once its frame is made (enterExit).
+	const calleeCtx, locals, tmp, top, high2 = amd64.R8, amd64.R10, amd64.RBX, amd64.R12, amd64.R13
 	back := c.a.NewLabel()
-	c.a.LeaLabel(tmp, back)
-	c.a.Store(calleeCtx, abi.OffReturnTo, tmp)
-	// Which one the checks found (abi.Context's CallTarget).
-	for i, t := range sites {
-		next := c.a.NewLabel()
-		if i < len(sites)-1 || gen {
-			c.a.Load(top, regCtx, abi.OffCallTarget)
-			c.a.OpImm(amd64.Cmp, top, int32(i), true)
-			c.a.Jcc(amd64.CondNE, next)
+	c.resumeUsed = true
+	op := goOpWord(&ssa.CallSite{Go: ssa.GoCall, Argc: site.Argc, Method: site.Method, New: site.Pool != 0})
+	enter := func() {
+		if !c.enterUsed {
+			c.enter, c.enterUsed = c.a.NewLabel(), true
 		}
-		c.a.MovRR(top, locals)
-		c.a.OpImm(amd64.Add, top, int32(t.LocalCount)*vs, true)
-		c.a.Store(calleeCtx, abi.OffStack, top)
-		if t.Tail {
-			// Whether its calls in tail position may give its frame up;
-			// its frame Go makes, from its context, if it leaves.
-			c.storeImm(calleeCtx, abi.OffTailFrame, b2u(t.TailFrame), top)
-			c.storeImm(calleeCtx, abi.OffFrameThis, 0, top)
+		c.a.Jmp(c.enter)
+	}
+	// frame has locals be the callee's frame's address, past the VM's
+	// stack's top.
+	frame := func() {
+		if direct {
+			c.a.MovQFromX(locals, xScratch2)
+			return
 		}
-		// The arguments, its parameters'; undefined in every other local.
-		for i := 0; i < t.LocalCount; i++ {
+		c.a.Load(locals, regCtx, abi.OffStackTop)
+		c.a.Load(locals, locals, 0)
+		c.a.ShiftImm(amd64.Shl, locals, 4, true)
+		c.a.Load(tmp, regCtx, abi.OffStackBase)
+		c.a.Op(amd64.Add, locals, tmp, true)
+	}
+	// setup writes what the call of t knows of its callee's frame and
+	// context. It keeps callLink, the callee's link.
+	setup := func(t *ssa.CallSite) {
+		framed := false
+		// The arguments, its parameters', past the receiver of a call
+		// through Function.prototype.call; undefined in the others.
+		argc, first := t.Argc, sp-t.Argc
+		if t.Via != 0 {
+			argc, first = argc-1, first+1
+		}
+		for i := 0; i < t.Params && i < t.LocalCount; i++ {
 			at := int32(i) * vs
-			// The arguments, past the receiver of a call through
-			// Function.prototype.call.
-			argc, first := t.Argc, sp-t.Argc
-			if t.Via != 0 {
-				argc, first = argc-1, first+1
-			}
-			if i < t.Params && i < argc && direct {
+			if i < argc && direct {
 				continue
 			}
-			if i < t.Params && i < argc {
+			if !framed {
+				frame()
+				framed = true
+			}
+			if i < argc {
 				nb, nd, rb, rd := words(first + i)
 				c.a.Load(top, nb, nd)
 				c.a.Store(locals, at+c.enc.NumOffset, top)
@@ -818,12 +938,17 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 				c.a.Store(locals, at+c.enc.RefOffset, top)
 				continue
 			}
-			if t.StartOnly && i >= t.Params {
-				// The callee's code makes it undefined as it starts.
-				continue
-			}
 			c.storeImm(locals, at+c.enc.NumOffset, c.enc.Undefined, top)
 			c.storeImm(locals, at+c.enc.RefOffset, 0, top)
+		}
+		if t.Tail || t.Pool != 0 || t.ArrowThis || (t.ThisSlot >= 0 || site.Method && site.Via == 0) && !direct || !receiver {
+			c.a.Load(calleeCtx, regCtx, abi.OffNext)
+		}
+		if t.Tail {
+			// Whether its calls in tail position may give its frame up;
+			// its frame Go makes, from its context, if it leaves.
+			c.storeImm(calleeCtx, abi.OffTailFrame, b2u(t.TailFrame), top)
+			c.storeImm(calleeCtx, abi.OffFrameThis, 0, top)
 		}
 		if t.Pool != 0 {
 			// The receiver: the pool's last object, its cell cleared.
@@ -837,6 +962,8 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 			c.storeImm(top, abi.OffPoolObjects, 0, tmp)
 			c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, high2)
 			c.storeImm(calleeCtx, abi.OffThis+c.enc.NumOffset, c.enc.Object, tmp)
+			// A construction's new.target, for Go to make its frame with.
+			c.storeImm(calleeCtx, abi.OffNewTarget, uint64(t.Callee), top)
 		} else if t.ArrowThis {
 			// The this it captured (arrowThis).
 			c.a.Load(high2, regCtx, abi.OffCallThis)
@@ -856,195 +983,145 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 			c.storeImm(calleeCtx, abi.OffThis+c.enc.NumOffset, c.enc.Undefined, top)
 			c.storeImm(calleeCtx, abi.OffThis+c.enc.RefOffset, 0, top)
 		}
+		// The closure the checks found, or t's.
 		if t.ByCode != 0 {
-			// The closure the checks found, and its captured bindings.
-			c.a.Load(top, regCtx, abi.OffCallClosure)
-			c.a.Store(calleeCtx, abi.OffClosure, top)
-			c.a.Load(top, regCtx, abi.OffCallUpvalues)
-			c.a.Store(calleeCtx, abi.OffUpvalues, top)
+			c.a.Load(callClosure, regCtx, abi.OffCallClosure)
 		} else {
-			c.storeImm(calleeCtx, abi.OffClosure, uint64(t.Closure), top)
-			if t.Upvalues != 0 {
-				// Its closure's captured bindings (OpUpvalueCell).
-				c.storeImm(calleeCtx, abi.OffUpvalues, uint64(t.Upvalues), top)
-			}
+			c.movImm(callClosure, uint64(t.Closure))
 		}
-		if t.Pool != 0 {
-			// A construction's new.target, for Go to make its frame with.
-			c.storeImm(calleeCtx, abi.OffNewTarget, uint64(t.Callee), top)
+		c.a.LeaLabel(callRet, back)
+	}
+	// Which one the checks found (abi.Context's CallTarget).
+	for i, t := range sites {
+		next := c.a.NewLabel()
+		if i < len(sites)-1 || gen {
+			c.a.Load(scratchA, regCtx, abi.OffCallTarget)
+			c.a.OpImm(amd64.Cmp, scratchA, int32(i), true)
+			c.a.Jcc(amd64.CondNE, next)
 		}
-		if t.Count != 0 {
-			c.movImm(top, uint64(t.Count))
-			c.a.Load(high2, top, 0)
-			c.a.OpImm(amd64.Add, high2, 1, true)
-			c.a.Store(top, 0, high2)
+		if t.Entry == 0 {
+			// Not a function's (push, pop, a construction with nothing to
+			// run), which the checks do not send here.
+			c.a.Jmp(c.stubLabel(s, exitKind(v.Aux)))
+			c.a.Bind(next)
+			continue
 		}
-		// The VM's stack's top past the callee's frame.
-		same := c.a.NewLabel()
-		c.a.MovRR(top, base)
-		c.a.OpImm(amd64.Add, top, int32(t.LocalCount+t.MaxStack), true)
-		c.a.Load(tmp, regCtx, abi.OffStackTop)
-		c.a.Store(tmp, 0, top)
-		c.a.Load(tmp, regCtx, abi.OffStackHigh)
-		c.a.Load(high2, tmp, 0)
-		c.a.Op(amd64.Cmp, top, high2, true)
-		c.a.Jcc(amd64.CondBE, same)
-		c.a.Store(tmp, 0, top)
-		c.a.Bind(same)
-		if t.ByCode != 0 {
-			c.a.Load(high2, regCtx, abi.OffCallCallee)
-		}
-		c.movImm(scratchA, uint64(t.Entry))
-		c.a.Load(scratchA, scratchA, 0)
-		c.a.MovRR(regCtx, calleeCtx)
-		enter := c.a.NewLabel()
+		none := c.a.NewLabel()
+		c.movImm(callLink, uint64(t.Entry)-uint64(c.enc.LinkEntry))
+		c.a.Load(scratchA, callLink, c.enc.LinkEntry)
 		c.a.Op(amd64.Test, scratchA, scratchA, true)
-		c.a.Jcc(amd64.CondE, enter)
-		c.a.JmpReg(scratchA)
-		c.a.Bind(enter)
-		if t.ByCode != 0 {
-			c.a.MovRR(scratchA, high2)
-		} else {
-			c.movImm(scratchA, uint64(t.Callee))
-		}
-		if !c.enterUsed {
-			c.enter, c.enterUsed = c.a.NewLabel(), true
-		}
-		c.a.Jmp(c.enter)
+		c.a.Jcc(amd64.CondE, none)
+		setup(t)
+		c.a.JmpMem(callLink, c.enc.LinkEntry)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(none)
+			if generic {
+				c.goCallOp(v, op, guard, true)
+				c.a.Jmp(join)
+				return
+			}
+			setup(t)
+			if t.ByCode != 0 {
+				c.a.Load(callObject, regCtx, abi.OffCallCallee)
+			} else {
+				c.movImm(callObject, uint64(t.Callee))
+			}
+			enter()
+		})
 		c.a.Bind(next)
 	}
 	if gen {
 		// A function none of them is (genericCheck): its frame made as its
 		// link says, read from its link at run time.
-		c.a.Load(high2, regCtx, abi.OffCallLink)
-		c.a.Load(top, high2, c.enc.LinkLocals)
-		c.a.ShiftImm(amd64.Shl, top, 4, true)
-		c.a.Op(amd64.Add, top, locals, true)
-		c.a.Store(calleeCtx, abi.OffStack, top)
-		notail := c.a.NewLabel()
-		c.a.Load(top, high2, c.enc.LinkFlags)
-		c.a.OpImm(amd64.And, top, abi.LinkTail, true)
-		c.a.Jcc(amd64.CondE, notail)
-		// Not an arrow's, nor a construction's (abi.LinkNotGeneric): its
-		// frame is one a call in tail position gives up.
-		c.storeImm(calleeCtx, abi.OffTailFrame, 1, top)
-		c.storeImm(calleeCtx, abi.OffFrameThis, 0, top)
-		c.a.Bind(notail)
-		// The arguments, its parameters'.
-		fill := c.a.NewLabel()
-		first := sp - site.Argc
-		for i := 0; i < site.Argc; i++ {
-			c.a.Load(top, high2, c.enc.LinkParams)
-			c.a.OpImm(amd64.Cmp, top, int32(i), true)
-			c.a.Jcc(amd64.CondBE, fill)
-			nb, nd, rb, rd := words(first + i)
-			c.a.Load(top, nb, nd)
-			c.a.Store(locals, int32(i)*vs+c.enc.NumOffset, top)
-			c.a.Load(top, rb, rd)
-			c.a.Store(locals, int32(i)*vs+c.enc.RefOffset, top)
+		setupGen := func() {
+			frame()
+			c.a.Load(calleeCtx, regCtx, abi.OffNext)
+			notail := c.a.NewLabel()
+			c.a.Load(top, callLink, c.enc.LinkFlags)
+			c.a.OpImm(amd64.And, top, abi.LinkTail, true)
+			c.a.Jcc(amd64.CondE, notail)
+			// Not an arrow's, nor a construction's (abi.LinkNotGeneric): its
+			// frame is one a call in tail position gives up.
+			c.storeImm(calleeCtx, abi.OffTailFrame, 1, top)
+			c.storeImm(calleeCtx, abi.OffFrameThis, 0, top)
+			c.a.Bind(notail)
+			// The arguments, its parameters'.
+			fill := c.a.NewLabel()
+			first := sp - site.Argc
+			for i := 0; i < site.Argc; i++ {
+				c.a.Load(top, callLink, c.enc.LinkParams)
+				c.a.OpImm(amd64.Cmp, top, int32(i), true)
+				c.a.Jcc(amd64.CondBE, fill)
+				nb, nd, rb, rd := words(first + i)
+				c.a.Load(top, nb, nd)
+				c.a.Store(locals, int32(i)*vs+c.enc.NumOffset, top)
+				c.a.Load(top, rb, rd)
+				c.a.Store(locals, int32(i)*vs+c.enc.RefOffset, top)
+			}
+			c.a.Bind(fill)
+			// Undefined in its other parameters, from the arguments on; its
+			// call entry makes its other locals undefined.
+			loop, filled := c.a.NewLabel(), c.a.NewLabel()
+			c.movImm(scratchA, uint64(site.Argc))
+			c.a.Bind(loop)
+			c.a.Load(tmp, callLink, c.enc.LinkParams)
+			c.a.Op(amd64.Cmp, scratchA, tmp, true)
+			c.a.Jcc(amd64.CondAE, filled)
+			c.a.MovRR(top, scratchA)
+			c.a.ShiftImm(amd64.Shl, top, 4, true)
+			c.a.Op(amd64.Add, top, locals, true)
+			c.storeImm(top, c.enc.NumOffset, c.enc.Undefined, high2)
+			c.storeImm(top, c.enc.RefOffset, 0, high2)
+			c.a.OpImm(amd64.Add, scratchA, 1, true)
+			c.a.Jmp(loop)
+			c.a.Bind(filled)
+			// A method call's receiver, which its body may read; undefined for
+			// a plain call's, a function that would coerce it not called so
+			// (genericCheck).
+			if site.Method {
+				nb, nd, rb, rd := words(calleeSlot - 1)
+				c.a.Load(top, nb, nd)
+				c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, top)
+				c.a.Load(top, rb, rd)
+				c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, top)
+			} else {
+				c.storeImm(calleeCtx, abi.OffThis+c.enc.NumOffset, c.enc.Undefined, top)
+				c.storeImm(calleeCtx, abi.OffThis+c.enc.RefOffset, 0, top)
+			}
+			c.a.Load(callClosure, regCtx, abi.OffCallClosure)
+			c.a.LeaLabel(callRet, back)
 		}
-		c.a.Bind(fill)
-		// Undefined in every other local, from the fewer of its parameters
-		// and the arguments on.
-		least, loop, filled := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
-		c.a.Load(scratchA, high2, c.enc.LinkParams)
-		c.movImm(scratchB, uint64(site.Argc))
-		c.a.Op(amd64.Cmp, scratchA, scratchB, true)
-		c.a.Jcc(amd64.CondBE, least)
-		c.a.MovRR(scratchA, scratchB)
-		c.a.Bind(least)
-		c.a.Load(scratchB, high2, c.enc.LinkLocals)
-		c.a.Bind(loop)
-		c.a.Op(amd64.Cmp, scratchA, scratchB, true)
-		c.a.Jcc(amd64.CondAE, filled)
-		c.a.MovRR(top, scratchA)
-		c.a.ShiftImm(amd64.Shl, top, 4, true)
-		c.a.Op(amd64.Add, top, locals, true)
-		c.storeImm(top, c.enc.NumOffset, c.enc.Undefined, scratchC)
-		c.storeImm(top, c.enc.RefOffset, 0, scratchC)
-		c.a.OpImm(amd64.Add, scratchA, 1, true)
-		c.a.Jmp(loop)
-		c.a.Bind(filled)
-		// A method call's receiver, which its body may read; undefined for
-		// a plain call's, a function that would coerce it not called so
-		// (genericCheck).
-		if site.Method {
-			nb, nd, rb, rd := words(calleeSlot - 1)
-			c.a.Load(top, nb, nd)
-			c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, top)
-			c.a.Load(top, rb, rd)
-			c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, top)
-		} else {
-			c.storeImm(calleeCtx, abi.OffThis+c.enc.NumOffset, c.enc.Undefined, top)
-			c.storeImm(calleeCtx, abi.OffThis+c.enc.RefOffset, 0, top)
-		}
-		c.a.Load(top, regCtx, abi.OffCallClosure)
-		c.a.Store(calleeCtx, abi.OffClosure, top)
-		c.a.Load(top, regCtx, abi.OffCallUpvalues)
-		c.a.Store(calleeCtx, abi.OffUpvalues, top)
-		c.a.Load(high2, regCtx, abi.OffCallLink)
-		c.a.Load(top, high2, c.enc.LinkIn)
-		c.a.OpImm(amd64.Add, top, 1, true)
-		c.a.Store(high2, c.enc.LinkIn, top)
-		// The VM's stack's top past the callee's frame.
-		same := c.a.NewLabel()
-		c.a.Load(top, high2, c.enc.LinkFrame)
-		c.a.Op(amd64.Add, top, base, true)
-		c.a.Load(tmp, regCtx, abi.OffStackTop)
-		c.a.Store(tmp, 0, top)
-		c.a.Load(tmp, regCtx, abi.OffStackHigh)
-		c.a.Load(high2, tmp, 0)
-		c.a.Op(amd64.Cmp, top, high2, true)
-		c.a.Jcc(amd64.CondBE, same)
-		c.a.Store(tmp, 0, top)
-		c.a.Bind(same)
-		c.a.Load(high2, regCtx, abi.OffCallCallee)
-		c.a.Load(scratchA, regCtx, abi.OffCallLink)
-		c.a.Load(scratchA, scratchA, c.enc.LinkEntry)
-		c.a.MovRR(regCtx, calleeCtx)
-		enter := c.a.NewLabel()
+		none := c.a.NewLabel()
+		c.a.Load(callLink, regCtx, abi.OffCallLink)
+		c.a.Load(scratchA, callLink, c.enc.LinkEntry)
 		c.a.Op(amd64.Test, scratchA, scratchA, true)
-		c.a.Jcc(amd64.CondE, enter)
-		c.a.JmpReg(scratchA)
-		c.a.Bind(enter)
-		c.a.MovRR(scratchA, high2)
-		if !c.enterUsed {
-			c.enter, c.enterUsed = c.a.NewLabel(), true
-		}
-		c.a.Jmp(c.enter)
+		c.a.Jcc(amd64.CondE, none)
+		setupGen()
+		c.a.JmpMem(callLink, c.enc.LinkEntry)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(none)
+			setupGen()
+			c.a.Load(callObject, regCtx, abi.OffCallCallee)
+			enter()
+		})
 	}
-	// The callee returned (returnNative), its context in regCtx: its result
-	// is v, its pointer word kept (OpCallCell).
+	// The callee returned (returnNative), its result's words in retNum and
+	// retRef: v, its pointer word kept (OpCallCell).
 	c.a.Bind(back)
-	c.a.MovRR(calleeCtx, regCtx)
-	c.a.Load(regCtx, regCtx, abi.OffPrev)
-	c.a.Load(regLocals, regCtx, abi.OffLocals)
-	c.a.Load(regStack, regCtx, abi.OffStack)
 	at := abi.OffKeep + int32(v.Index)*vs
-	result := abi.OffRetValue
 	if site.Pool != 0 {
 		// A construction's result, if not an object, is its receiver.
 		object := c.a.NewLabel()
-		c.a.Load(scratchA, calleeCtx, abi.OffRetValue+c.enc.NumOffset)
 		c.movImm(scratchB, c.enc.Object)
-		c.a.Op(amd64.Cmp, scratchA, scratchB, true)
+		c.a.Op(amd64.Cmp, retNum, scratchB, true)
 		c.a.Jcc(amd64.CondE, object)
-		c.a.Load(tmp, calleeCtx, abi.OffThis+c.enc.RefOffset)
-		c.a.Store(calleeCtx, abi.OffRetValue+c.enc.RefOffset, tmp)
-		c.a.Load(tmp, calleeCtx, abi.OffThis+c.enc.NumOffset)
-		c.a.Store(calleeCtx, abi.OffRetValue+c.enc.NumOffset, tmp)
+		c.a.MovRR(retNum, scratchB)
+		c.a.Load(retRef, regCtx, abi.OffNext)
+		c.a.Load(retRef, retRef, abi.OffThis+c.enc.RefOffset)
 		c.a.Bind(object)
 	}
-	c.a.Load(tmp, calleeCtx, result+c.enc.RefOffset)
-	c.a.Store(regCtx, at+c.enc.RefOffset, tmp)
-	c.a.Load(scratchA, calleeCtx, result+c.enc.NumOffset)
-	c.a.Store(regCtx, at+c.enc.NumOffset, scratchA)
-	c.a.Load(tmp, regCtx, abi.OffStackTop)
-	c.a.Load(top, calleeCtx, abi.OffBase)
-	c.a.Store(tmp, 0, top)
-	c.movImm(tmp, 0)
-	c.a.Store(calleeCtx, abi.OffLive, tmp)
-	c.a.Store(calleeCtx, abi.OffReturnTo, tmp)
+	c.a.Store(regCtx, at+c.enc.RefOffset, retRef)
+	c.a.Store(regCtx, at+c.enc.NumOffset, retNum)
 	for _, sv := range c.savesOf(v) {
 		if sv.float {
 			c.a.LoadSD(amd64.XReg(sv.reg), regCtx, c.spillDisp(sv.slot))
@@ -1052,7 +1129,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 			c.a.Load(amd64.Reg(sv.reg), regCtx, c.spillDisp(sv.slot))
 		}
 	}
-	c.setG(v, scratchA)
+	c.setG(v, retNum)
 }
 
 // goCall calls Go (ssa.CallSite's Go), as V8's code calls a runtime
@@ -1329,9 +1406,10 @@ func (c *compiler) tailSelf(v *ssa.Value, guard func(amd64.Cond)) {
 
 // tailJump is tailSelf's call of t, its n arguments, and its receiver if
 // this, in the context's operands: its code, which native callers may call,
-// is entered with its frame in this one's place -- the arguments its
-// parameters, undefined its other locals -- and this context its own, as a
-// native call makes them (call), returning where this frame would have.
+// is entered at its start (its link's body, past its call entry) with its
+// frame in this one's place -- the arguments its parameters, undefined its
+// other locals -- and this context its own, as a native call's call entry
+// makes them (callEntry), returning where this frame would have.
 func (c *compiler) tailJump(t *ssa.CallSite, n int, this bool, guard func(amd64.Cond)) {
 	vs, size := int32(c.enc.ValueSize), int32(unsafe.Sizeof(abi.GoArg{}))
 	c.movImm(scratchA, uint64(t.Entry))
@@ -1400,9 +1478,8 @@ func (c *compiler) tailJump(t *ssa.CallSite, n int, this bool, guard func(amd64.
 	c.a.Jcc(amd64.CondBE, same)
 	c.a.Store(scratchA, 0, scratchB)
 	c.a.Bind(same)
-	c.movImm(scratchA, uint64(t.Entry))
-	c.a.Load(scratchA, scratchA, 0)
-	c.a.JmpReg(scratchA)
+	c.movImm(scratchA, uint64(t.Entry)-uint64(c.enc.LinkEntry))
+	c.a.JmpMem(scratchA, c.enc.LinkBody)
 }
 
 // byCode checks that the callee, the function object whose pointer word is
@@ -1625,45 +1702,6 @@ func (c *compiler) markingCall(v *ssa.Value, site *ssa.CallSite, guard func(amd6
 		c.a.Jmp(join)
 	})
 	return join, true
-}
-
-// noEntryCall has Go make call v where the target the call's checks found
-// (abi.Context's CallTarget) has no code native callers may call -- its
-// link's entry 0: one not compiled yet, or that native callers no longer
-// call (the VM's notNative) -- as while the collector marks (markingCall),
-// and native code goes on after it, at join. Entered from Go at its start
-// instead (enterExit), the callee had Go make the frame of every native
-// level below it and finish each, a call a few levels deep costing what
-// all of them do. A target past the sites, a generic call's, is entered so
-// still.
-func (c *compiler) noEntryCall(v *ssa.Value, site *ssa.CallSite, sites []*ssa.CallSite, gen bool, guard func(amd64.Cond), join amd64.Label) {
-	none, used := c.a.NewLabel(), false
-	for i, t := range sites {
-		if t.Entry == 0 {
-			continue
-		}
-		next := c.a.NewLabel()
-		if len(sites) > 1 || gen {
-			c.a.Load(scratchA, regCtx, abi.OffCallTarget)
-			c.a.OpImm(amd64.Cmp, scratchA, int32(i), true)
-			c.a.Jcc(amd64.CondNE, next)
-		}
-		c.movImm(scratchA, uint64(t.Entry))
-		c.a.Load(scratchA, scratchA, 0)
-		c.a.Op(amd64.Test, scratchA, scratchA, true)
-		c.a.Jcc(amd64.CondE, none)
-		c.a.Bind(next)
-		used = true
-	}
-	if !used {
-		return
-	}
-	op := goOpWord(&ssa.CallSite{Go: ssa.GoCall, Argc: site.Argc, Method: site.Method, New: site.Pool != 0})
-	c.cold = append(c.cold, func() {
-		c.a.Bind(none)
-		c.goCallOp(v, op, guard, true)
-		c.a.Jmp(join)
-	})
 }
 
 // markingTake tests the collector's flag before call v takes its pool's
@@ -2321,13 +2359,44 @@ func (c *compiler) tableExit() {
 	c.a.Ret()
 }
 
-// enterExit is where a native call goes whose callee, its function object
-// in scratchA, has no native code native callers may call: in the callee's
-// context, its frame made, it returns to Go with abi.ExitEnter, for Go to
-// run the callee and resume the caller after the call (ReturnTo) -- not a
-// host exit, which writes the caller's frame and has Go make the call.
+// enterExit is where a native call goes whose callee has no call entry
+// (callEntry): with the call entry's registers, and the callee's function
+// object in callObject, it makes the callee's frame and context as a call
+// entry does, from the callee's link, and returns to Go with
+// abi.ExitEnter, for Go to run the callee and resume the caller after the
+// call (ReturnTo) -- not a host exit, which writes the caller's frame and
+// has Go make the call.
 func (c *compiler) enterExit() {
-	c.a.Store(regCtx, abi.OffEnterCallee, scratchA)
+	const base, at, top = amd64.R8, amd64.R10, amd64.R12
+	c.a.Load(regCtx, regCtx, abi.OffNext)
+	c.a.Store(regCtx, abi.OffReturnTo, callRet)
+	c.a.Store(regCtx, abi.OffClosure, callClosure)
+	c.a.Load(callClosure, callClosure, c.enc.ClosureUpvalues)
+	c.a.Store(regCtx, abi.OffUpvalues, callClosure)
+	c.a.Store(regCtx, abi.OffEnterCallee, callObject)
+	c.a.Load(at, regCtx, abi.OffStackTop)
+	c.a.Load(base, at, 0)
+	c.a.Store(regCtx, abi.OffBase, base)
+	c.a.Load(top, callLink, c.enc.LinkFrame)
+	c.a.Op(amd64.Add, top, base, true)
+	c.a.Store(at, 0, top)
+	same := c.a.NewLabel()
+	c.a.Load(at, regCtx, abi.OffStackHigh)
+	c.a.CmpMem(top, at, 0, true)
+	c.a.Jcc(amd64.CondBE, same)
+	c.a.Store(at, 0, top)
+	c.a.Bind(same)
+	c.a.ShiftImm(amd64.Shl, base, 4, true)
+	c.a.Load(at, regCtx, abi.OffStackBase)
+	c.a.Op(amd64.Add, base, at, true)
+	c.a.Store(regCtx, abi.OffLocals, base)
+	c.a.Load(at, callLink, c.enc.LinkLocals)
+	c.a.ShiftImm(amd64.Shl, at, 4, true)
+	c.a.Op(amd64.Add, at, base, true)
+	c.a.Store(regCtx, abi.OffStack, at)
+	c.a.StoreImm(regCtx, abi.OffOpen, 0)
+	c.a.StoreImm(regCtx, abi.OffLive, abi.LiveCall)
+	c.a.IncMem(callLink, c.enc.LinkIn)
 	c.movImm(scratchA, 0)
 	for _, off := range []int32{abi.OffRecords, abi.OffExitPC, abi.OffExitDepth} {
 		c.a.Store(regCtx, off, scratchA)
@@ -2545,7 +2614,6 @@ func (c *compiler) block(b *ssa.Block, next *ssa.Block) {
 		// the stretch did (the VM's jitSSAProfit).
 		c.storeImm(regCtx, abi.OffExitSite, uint64(b.PC), scratchA)
 		c.returnNative()
-		c.a.Ret()
 	case ssa.BlockExit:
 		c.exitTo(b.State, exitKind(int(b.ExitKind)))
 	}

@@ -66,7 +66,13 @@ once its cache knows the site, at the function's next invocation.
 natively: the callee's frame is made in the VM's stack, its context is the
 next one, and its code is entered through a link (`jitLink`) that holds the
 function's current code, so callers keep working when the callee is
-compiled again or its code is dropped. Small callees are inlined, with
+compiled again or its code is dropped. As V8's callee builds its own
+frame, the callee's code makes its frame and context at its call entry
+(`mir`'s `Code.CallEntry`), once for all its callers: a call writes only
+what it knows -- the arguments, the receiver -- and jumps there with where
+it returns to, the callee's closure and its link in registers, and the
+callee's return hands the result back in registers (`abi.Context`'s
+`ReturnTo`). Small callees are inlined, with
 their own frames made at an exit. A call of a built-in, or of anything the
 code does not call natively, is a call of Go (`ssa.GoCall`): native code
 calls into Go and goes on after it, without leaving.

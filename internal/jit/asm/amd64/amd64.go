@@ -375,6 +375,13 @@ func (a *Asm) JmpReg(r Reg) {
 	a.emit2(0xFF, 0xE0|byte(r&7))
 }
 
+// JmpMem jumps to the address at [base + disp].
+func (a *Asm) JmpMem(base Reg, disp int32) {
+	a.rex(false, 0, byte(base), false)
+	a.emit(0xFF)
+	a.modrmMem(4, base, disp)
+}
+
 // LeaLabel is dst = the address l is bound at, RIP-relative.
 func (a *Asm) LeaLabel(dst Reg, l Label) {
 	rex := byte(0x48)
@@ -561,6 +568,13 @@ func (a *Asm) StoreImm(base Reg, disp int32, imm int32) {
 	a.emit(0xC7)
 	a.modrmMem(0, base, disp)
 	a.imm32(imm)
+}
+
+// IncMem increments the 64-bit integer at [base + disp].
+func (a *Asm) IncMem(base Reg, disp int32) {
+	a.rex(true, 0, byte(base), false)
+	a.emit(0xFF)
+	a.modrmMem(0, base, disp)
 }
 
 // DecMem decrements the 64-bit integer at [base + disp], setting the flags.

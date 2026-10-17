@@ -101,6 +101,7 @@ var jitEncoding = abi.Encoding{
 	HintSlotFn:         int32(unsafe.Offsetof(jitHintSlot{}.fn)),
 	HintSlotLink:       int32(unsafe.Offsetof(jitHintSlot{}.link)),
 	LinkEntry:          int32(unsafe.Offsetof(jitLink{}.entry)),
+	LinkBody:           int32(unsafe.Offsetof(jitLink{}.body)),
 	LinkIn:             int32(unsafe.Offsetof(jitLink{}.in)),
 	LinkParams:         int32(unsafe.Offsetof(jitLink{}.params)),
 	LinkLocals:         int32(unsafe.Offsetof(jitLink{}.locals)),
@@ -1255,7 +1256,7 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 	if !e.ssaCallee {
 		e.entrySlow = false
 	}
-	e.link.entry = code.EntryAddress(0)
+	e.link.setCode(code)
 	r.jit.closeSSA(old, oldKeep)
 	r.jit.reoptimized++
 	// Compiled for what it does now: young again.
@@ -1313,6 +1314,11 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 	}
 	f.FrameLocals = fn.LocalCount
 	f.Params, f.StartOnly = fn.ParamCount, jitcompile.StartOnly(fn)
+	// Native callers call a function's code at its call entry, which makes
+	// its frame (mir's callEntry): code a call makes no frame of its own
+	// for -- top-level code's, a generator's, an async function's -- has
+	// none.
+	f.CallEntry = !fn.TopLevel && !fn.IsModule && !fn.Async && !fn.Generator && !isGeneratorTemplate(fn)
 	if p.This {
 		f.ThisSlot = fn.LocalCount + len(fn.Upvalues)
 	}
@@ -2980,7 +2986,7 @@ func (r *Runtime) jitCalleeProfit(e *jitEntry, serial uint64, pc int) {
 	}
 	if st.calleeWork < (st.calleeGoCalls-e.link.in)*jitSSAMinWork {
 		e.entrySlow = true
-		e.notNative, e.link.entry, e.nativeRetry = true, 0, 0
+		e.notNative, e.link.entry, e.link.body, e.nativeRetry = true, 0, 0, 0
 		e.nativeBackoff = min(e.nativeBackoff+1, jitNativeBackoffs)
 	}
 }
@@ -4886,7 +4892,7 @@ func (e *jitEntry) setSSA(s *jitState, fn *bytecode.Function, p *ir.Program, cod
 	e.ssaStrings, e.ssaInlined, e.ssaPools = fb.strings, fb.inlined, fb.pools
 	s.setLinks(e, fb.links)
 	e.ssaKeeps = max(e.ssaKeeps, fb.keeps)
-	e.link.entry = code.EntryAddress(0)
+	e.link.setCode(code)
 	e.ssaLoop = jitLoopLength(fn)
 	for _, in := range p.Code {
 		e.ssaStrings = e.ssaStrings || in.Op == ir.StringMethod || in.Op == ir.StringCode
@@ -7042,13 +7048,12 @@ func (r *Runtime) jitEnterOne(c *abi.Context, i int, code *bytecode.Function, ca
 }
 
 // jitStartLocals makes the locals of a frame a native call made for fn, its
-// code not run (abi.ExitEnter), undefined past its parameters, as fn's code
-// would have as it started (compile.StartOnly), which the call left to it.
+// code not run (abi.ExitEnter), undefined past its parameters, as fn's
+// code's call entry would have, which the call left to it (mir's
+// callEntry).
 func jitStartLocals(fn *bytecode.Function, locals []Value) {
-	if jitcompile.StartOnly(fn) {
-		for i := min(fn.ParamCount, len(locals)); i < len(locals); i++ {
-			locals[i] = Undefined
-		}
+	for i := min(fn.ParamCount, len(locals)); i < len(locals); i++ {
+		locals[i] = Undefined
 	}
 }
 
@@ -7128,7 +7133,7 @@ func (r *Runtime) jitUnwound(e *jitEntry) {
 		e.ssaStats.calleeGoCalls, e.ssaStats.calleeWork = 0, 0
 		return
 	}
-	e.notNative, e.link.entry, e.nativeRetry = true, 0, 0
+	e.notNative, e.link.entry, e.link.body, e.nativeRetry = true, 0, 0, 0
 	e.nativeBackoff = min(e.nativeBackoff+1, jitNativeBackoffs)
 }
 
@@ -7178,7 +7183,7 @@ func jitRetryNative(e *jitEntry) {
 	if e.nativeRetry++; e.nativeRetry >= jitNativeRetry<<(e.nativeBackoff-1) {
 		e.notNative, e.link.in, e.nativeOut = false, 0, 0
 		e.ssaStats.calleeGoCalls, e.ssaStats.calleeWork = 0, 0
-		e.link.entry = e.ssa.EntryAddress(0)
+		e.link.setCode(e.ssa)
 	}
 }
 

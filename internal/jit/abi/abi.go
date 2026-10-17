@@ -172,7 +172,8 @@ type Context struct {
 	// the VM's stack, and its context, the next (Next), and jumps to its
 	// code. ReturnTo is where a
 	// return goes in its caller's code, or 0 for Run's caller in Go;
-	// RetValue is the value it returns there, both words. Next and Prev
+	// RetValue (below) is the value a call Go finished returns there.
+	// Next and Prev
 	// are the contexts a call from this one runs in and this one's caller
 	// ran in, which Go links and never moves, adding more as calls need
 	// them, as V8's frames take a stack that grows. Live marks a context
@@ -184,14 +185,37 @@ type Context struct {
 	// StackBase and StackEnd are the VM's stack's first value and length,
 	// StackTop and StackHigh its next free and highest used indices, which
 	// a call moves. TailReturn is where the records' tail goes on, in a
-	// caller's code, instead of returning to Go: 0 but during a call.
+	// caller's code, instead of returning to Go: 0 but during a call, and
+	// no native code sets it now.
+	//
+	// The callee makes its own frame, as V8's does, at its call entry: the
+	// code its link's LinkEntry holds (mir's Code.CallEntry). Its caller
+	// writes the arguments to its parameters, past the VM's stack's top,
+	// and what only the caller knows to the next context -- the receiver,
+	// a construction's new.target, TailFrame -- then jumps there with its
+	// own context in the context register, where the call returns to, the
+	// callee's closure and its link in registers of their own (mir's
+	// conventions). The callee's code takes the next context, sets Locals,
+	// Stack, Base, Live, Open, ReturnTo, Closure and Upvalues there, moves
+	// the VM's stack's top and high water past its frame, counts the call
+	// (LinkIn), makes its locals past its parameters undefined and goes on
+	// at its start. Its return puts the stack's top back at Base, clears
+	// Live and ReturnTo, and jumps to ReturnTo in its caller's context, the
+	// result's words in registers. Go goes on after a call it finished
+	// through the caller's code's resume routine (mir's Code.Resume), which
+	// reads the result from the callee's context's RetValue.
 	ReturnTo uintptr
-	RetValue Slot
 	// Consts are the words native code makes most, the tags of Encoding's
 	// that ConstWords lists, which a load from here makes in four bytes
 	// where a move of the constant takes ten. Go fills them in every
 	// context it makes (SetConsts), and native code only reads them.
 	Consts [NumConsts]uint64
+	// CallState is the address of the description of a native call's state
+	// (a *CallState, which the code holds), which the call writes before
+	// it jumps to its callee: for Go to make the frame from if the callee
+	// leaves native code (ExpandCall), what each call had written as
+	// records and an exit's fields. Go clears it as it expands it.
+	CallState uintptr
 	// The rest of the exit record. ExitSite is the slot IR PC of the
 	// operation whose guard or exit this was, or -1 (all ones) for a
 	// block's entry or loop header state -- an entry's speculation, or a
@@ -201,6 +225,9 @@ type Context struct {
 	ExitPC    uint64
 	ExitDepth uint64
 	ExitSite  uint64
+	// RetValue is the value a call Go finished returns to its native
+	// caller (ReturnTo), both words.
+	RetValue Slot
 	// BackEdges is the interpreter's back-edge counter, which every native
 	// back-edge decrements; at zero or below native code polls.
 	BackEdges  *int
@@ -371,6 +398,35 @@ type GoArg struct {
 // compiled to JavaScript passes its state to, as EarleyBoyer's deriv_trees
 // takes nine, had left native code at every call with eight.
 const MaxGoArgs = 16
+
+// CallState is a native call's state as data, as V8's deoptimization data
+// describes a call's frame where a safepoint table says what is where: the
+// state's PC, depth and site, and the records Go writes the frame with if
+// the callee leaves native code (Context.CallState), each found where the
+// caller's code keeps it still -- a spill slot, a constant of Frame's, a
+// slot of the frame -- or where the call wrote it. The call writes only
+// what is nowhere else; Go expands the rest (ExpandCall) into the
+// abi.RecordDirect records and the exit's fields the call had written.
+type CallState struct {
+	PC, Depth uint32
+	Site      int32
+	// Frame is the frame's layout and the constant words (ExitFrame),
+	// which the code's exit descriptions share.
+	Frame   *ExitFrame
+	Records []CallRecord
+}
+
+// CallRecord is a CallState's record of one slot, its i'th: its value's
+// number word where Num says -- or, for ExitNone, the Word of the
+// context's Record[i], which the call wrote -- and its pointer word the
+// context's RecordRef[i], which the call wrote, if Ref; else that of slot
+// Origin, if Origin is not -1 and that slot holds a reference, and the
+// value is that slot's load (Load) or has its number word; else none.
+type CallRecord struct {
+	Slot, Origin int32
+	Num          ExitLoc
+	Load, Ref    bool
+}
 
 // ExitDescriptor is an exit's frame state as data (an ExitTable exit): the
 // slots to write and where each one's value is, the inlined callees'
@@ -580,6 +636,7 @@ var (
 	OffGoArgs   = int32(unsafe.Offsetof(Context{}.GoArgs))
 
 	OffExitMarking = int32(unsafe.Offsetof(Context{}.ExitMarking))
+	OffCallState   = int32(unsafe.Offsetof(Context{}.CallState))
 )
 
 // ObjectPool is the objects a construction site native code makes, `new
@@ -738,18 +795,20 @@ type Encoding struct {
 	FuncClosure, ClosureFn, ClosureUpvalues, ClosureEnv, ClosureRealm int32
 	// A closure's hint is the uint32 at ClosureHint, which indexes the hint
 	// table (HintTable). A link is a function's, in its runtime: the
-	// address of the code native callers call at LinkEntry, 0 for none; the
-	// count of their calls at LinkIn; the function's parameters, locals,
-	// and locals and stack together at LinkParams, LinkLocals and
-	// LinkFrame; and its flags (LinkCoerce...) at LinkFlags -- each a
-	// uint64.
+	// address of the code native callers call at LinkEntry, its call entry
+	// (CallEntry), 0 for none; the address of its entry at its start,
+	// which a call in tail position goes on at in the frame it gives up, at
+	// LinkBody, 0 with LinkEntry; the count of their calls at LinkIn; the
+	// function's parameters, locals, and locals and stack together at
+	// LinkParams, LinkLocals and LinkFrame; and its flags (LinkCoerce...)
+	// at LinkFlags -- each a uint64.
 	ClosureHint, HintSlotSize, HintSlotFn, HintSlotLink int32
 	// An arrow's function data has, at FuncExtra, a pointer to what it
 	// captured where it was made: the this at ExtraLexThis, a value, and,
 	// at ExtraLexThisRef, the binding of a derived constructor's this it
 	// shares, nil for none.
-	FuncExtra, ExtraLexThis, ExtraLexThisRef                        int32
-	LinkEntry, LinkIn, LinkParams, LinkLocals, LinkFrame, LinkFlags int32
+	FuncExtra, ExtraLexThis, ExtraLexThisRef                                  int32
+	LinkEntry, LinkBody, LinkIn, LinkParams, LinkLocals, LinkFrame, LinkFlags int32
 	// Mega says contexts point to a megamorphic cache (Context.Mega).
 	Mega bool
 	// FlagHTMLDDA is the flags byte's bit for Annex B's [[IsHTMLDDA]],
