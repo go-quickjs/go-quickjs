@@ -215,3 +215,54 @@ func (f *exitFrame) write(at unsafe.Pointer, n uint64, r unsafe.Pointer) (refs i
 // asPointer is the address a word holds, as a pointer: native code's words
 // are addresses Go's memory holds still (ssa's origin.go).
 func asPointer(w *uint64) unsafe.Pointer { return *(*unsafe.Pointer)(unsafe.Pointer(w)) }
+
+// ExpandCall writes the state of the native call ctx's code is making, if
+// it described it (abi.Context's CallState), into ctx as the call's code had
+// written it: the abi.RecordDirect records Go makes the caller's frame from
+// if the callee leaves native code -- each value's words where the
+// description finds them, the frame and the spill slots as the call left
+// them -- and the exit's kind (abi.ExitHost), PC, depth and site. Go
+// expands every context below the one native code left from before it
+// reads any of them. It does nothing for a context already expanded.
+func ExpandCall(ctx *abi.Context) {
+	if ctx.CallState == 0 {
+		return
+	}
+	// The description, which the code keeps alive (Code.Calls), by its
+	// address.
+	st := (*abi.CallState)(asPointer((*uint64)(unsafe.Pointer(&ctx.CallState))))
+	ctx.CallState = 0
+	f := exitFrame{ctx: ctx, d: st.Frame, enc: st.Frame.Enc, locals: ctx.Locals, stack: ctx.Stack}
+	for i := range st.Records {
+		rec := &st.Records[i]
+		n := ctx.Record[i].Word
+		if rec.Num.Kind != abi.ExitNone {
+			n = f.word(rec.Num)
+		}
+		var r unsafe.Pointer
+		switch {
+		case rec.Ref:
+			r = ctx.RecordRef[i]
+		case rec.Origin >= 0:
+			o := f.slot(rec.Origin)
+			if p := f.ref(o); p != nil && (rec.Load || n == f.num(o)) {
+				r = p
+			}
+		}
+		ctx.Record[i] = abi.Record{Slot: uint64(rec.Slot) | abi.RecordDirect, Word: n}
+		ctx.RecordRef[i] = r
+	}
+	n := uint64(len(st.Records))
+	ctx.Records, ctx.RecordHigh = n, max(ctx.RecordHigh, n)
+	ctx.ExitKind, ctx.ExitPC, ctx.ExitDepth, ctx.ExitSite = abi.ExitHost, uint64(st.PC), uint64(st.Depth), uint64(int64(st.Site))
+}
+
+// CallPC is the PC and depth of the native call ctx's code is making: its
+// description's (abi.Context's CallState), or, expanded, ctx's.
+func CallPC(ctx *abi.Context) (pc, depth uint64) {
+	if ctx.CallState != 0 {
+		st := (*abi.CallState)(asPointer((*uint64)(unsafe.Pointer(&ctx.CallState))))
+		return uint64(st.PC), uint64(st.Depth)
+	}
+	return ctx.ExitPC, ctx.ExitDepth
+}

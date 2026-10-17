@@ -63,6 +63,9 @@ type core struct {
 	exitSlots map[abi.ExitSlot]uint16
 	exitWords map[uint64]int32
 	exitDescs []abi.ExitDescriptor
+	// calls are the descriptions of the native calls' states (callState),
+	// which the code keeps (Code.Calls).
+	calls []*abi.CallState
 }
 
 // saved is a register a call saves, and the spill slot it saves it in.
@@ -140,6 +143,12 @@ type Code struct {
 	// Text is how many of Bytes are instructions: past them are the code's
 	// own constants (amd64's movImm), data.
 	Text int
+	// Calls are the descriptions of its native calls' states, which the
+	// calls name by address (abi.Context's CallState), as Exits; CallRefs
+	// bounds the pointer words a call writes itself (abi.CallRecord's Ref),
+	// the context's RecordRef[:CallRefs].
+	Calls    []*abi.CallState
+	CallRefs int
 	// Exits are the descriptions the code's exits name by address
 	// (abi.ExitDescriptor), which whoever holds the code keeps alive.
 	Exits []*abi.ExitDescriptor
@@ -1289,23 +1298,7 @@ var TableExits = true
 // exitThen's code writes it; or nil where a value is where a description
 // cannot say, and the exit's code writes the frame itself.
 func (c *core) exitDescriptor(s *ssa.FrameState, kind uint64, localsReg, stackReg uint8) *abi.ExitDescriptor {
-	if c.exitFrame == nil {
-		enc := c.enc
-		c.exitFrame = &abi.ExitFrame{FrameLocals: int32(c.f.FrameLocals), ThisSlot: int32(c.f.ThisSlot), Locals: int32(c.f.Locals), Enc: &enc}
-		if w := c.ws; w != nil {
-			// The workspace's, kept from compile to compile.
-			if w.exitSlots == nil {
-				w.exitSlots, w.exitWords = map[abi.ExitSlot]uint16{}, map[uint64]int32{}
-			}
-			clear(w.exitSlots)
-			clear(w.exitWords)
-			c.exitSlots, c.exitWords = w.exitSlots, w.exitWords
-			c.exitFrame.Slots, c.exitFrame.Index, c.exitFrame.Words = w.exitSlotsBuf[:0], w.exitIndexBuf[:0], w.exitWordsBuf[:0]
-		} else {
-			c.exitSlots, c.exitWords = map[abi.ExitSlot]uint16{}, map[uint64]int32{}
-		}
-	}
-	f := c.exitFrame
+	f := c.exitLayout()
 	d := abi.ExitDescriptor{Kind: uint32(kind), PC: uint32(s.PC), Depth: uint32(s.Depth), Site: int32(s.Site),
 		Frame: f, Start: uint32(len(f.Index)), LocalsReg: localsReg, StackReg: stackReg}
 	written := func(i int, v *ssa.Value) bool {
@@ -1336,14 +1329,7 @@ func (c *core) exitDescriptor(s *ssa.FrameState, kind uint64, localsReg, stackRe
 			return undo()
 		}
 		if e.Value.Kind == abi.ExitConst {
-			w := c.constWord(v.Const)
-			k, ok := c.exitWords[w]
-			if !ok {
-				k = int32(len(f.Words))
-				f.Words = append(f.Words, w)
-				c.exitWords[w] = k
-			}
-			e.Value.N = k
+			e.Value.N = c.exitWord(c.constWord(v.Const))
 		}
 		if v.Shadow != nil {
 			if e.Shadow, ok = c.exitSource(v.Shadow); !ok {
@@ -1394,6 +1380,152 @@ func (c *core) exitDescriptor(s *ssa.FrameState, kind uint64, localsReg, stackRe
 	}
 	c.exitDescs = append(c.exitDescs, d)
 	return &c.exitDescs[len(c.exitDescs)-1]
+}
+
+// exitLayout is what the code's descriptions share (abi.ExitFrame), made
+// at the first.
+func (c *core) exitLayout() *abi.ExitFrame {
+	if c.exitFrame == nil {
+		enc := c.enc
+		c.exitFrame = &abi.ExitFrame{FrameLocals: int32(c.f.FrameLocals), ThisSlot: int32(c.f.ThisSlot), Locals: int32(c.f.Locals), Enc: &enc}
+		if w := c.ws; w != nil {
+			// The workspace's, kept from compile to compile.
+			if w.exitSlots == nil {
+				w.exitSlots, w.exitWords = map[abi.ExitSlot]uint16{}, map[uint64]int32{}
+			}
+			clear(w.exitSlots)
+			clear(w.exitWords)
+			c.exitSlots, c.exitWords = w.exitSlots, w.exitWords
+			c.exitFrame.Slots, c.exitFrame.Index, c.exitFrame.Words = w.exitSlotsBuf[:0], w.exitIndexBuf[:0], w.exitWordsBuf[:0]
+		} else {
+			c.exitSlots, c.exitWords = map[abi.ExitSlot]uint16{}, map[uint64]int32{}
+		}
+	}
+	return c.exitFrame
+}
+
+// exitWord is the index of word w among the descriptions' constants
+// (abi.ExitFrame's Words), added if it is not one.
+func (c *core) exitWord(w uint64) int32 {
+	f := c.exitLayout()
+	k, ok := c.exitWords[w]
+	if !ok {
+		k = int32(len(f.Words))
+		f.Words = append(f.Words, w)
+		c.exitWords[w] = k
+	}
+	return k
+}
+
+// callRecord is how call v records a slot of its state (callState): the
+// slot, its value x, and whether the call writes its number word (num) and
+// its pointer word (ref) -- what a description cannot find where the
+// caller's code keeps it.
+type callRecord struct {
+	slot     int
+	x        *ssa.Value
+	num, ref bool
+}
+
+// callState describes native call v's state s, every slot the frame does
+// not hold as it is but those skip says (abi.CallState), as V8's
+// deoptimization data does a call's: Go expands it into the records it
+// makes the frame from if the callee leaves native code (jit.ExpandCall).
+// A value is where the caller keeps it: a constant; a spill slot -- one
+// the allocator spilled, or one a register live past the call is saved to
+// (savesOf); for its pointer word, a slot of the frame that held it on
+// entry, which nothing writes while the call runs. The call writes the
+// rest, records' returns says which: a register's word dead past the
+// call; a pointer word from a cell, or a slot a closure may assign; and
+// every word of the slots from operands on, if not -1, which the call
+// reads its callee's arguments from. Those whose pointer words it writes
+// come first.
+func (c *core) callState(v *ssa.Value, s *ssa.FrameState, skip func(int) bool, operands int) (*abi.CallState, []callRecord) {
+	saves := c.savesOf(v)
+	st := &abi.CallState{PC: uint32(s.PC), Depth: uint32(s.Depth), Site: int32(s.Site), Frame: c.exitLayout()}
+	var refs, rest []callRecord
+	var refRecs, restRecs []abi.CallRecord
+	for i, x := range s.Slots {
+		if x == nil || x.Op == ssa.OpLoadSlot && x.Aux == i || c.captured(i) || skip(i) {
+			continue
+		}
+		rec, r := abi.CallRecord{Slot: int32(i), Origin: -1}, callRecord{slot: i, x: x}
+		full := operands >= 0 && i >= operands
+		if l, ok := c.callWord(x, saves); ok && !full {
+			rec.Num = l
+		} else {
+			r.num = true
+		}
+		o, static := c.origin.Of(x)
+		switch {
+		case full || x.Shadow != nil:
+			r.ref = true
+		case static && o >= 0 && c.stableSlot(o):
+			rec.Origin, rec.Load = int32(o), x.Op == ssa.OpLoadSlot
+		case static && o >= 0:
+			r.ref = true
+		}
+		rec.Ref = r.ref
+		if r.ref {
+			refs, refRecs = append(refs, r), append(refRecs, rec)
+		} else {
+			rest, restRecs = append(rest, r), append(restRecs, rec)
+		}
+	}
+	st.Records = append(refRecs, restRecs...)
+	c.calls = append(c.calls, st)
+	return st, append(refs, rest...)
+}
+
+// callRefs bounds the pointer words the code's calls write themselves
+// (Code's CallRefs).
+func (c *core) callRefs() int {
+	n := 0
+	for _, st := range c.calls {
+		k := 0
+		for k < len(st.Records) && st.Records[k].Ref {
+			k++
+		}
+		n = max(n, k)
+	}
+	return n
+}
+
+// callWord is where a call's description finds the number word of x, a
+// value of its state, after the call (callState): a constant, or a spill
+// slot, if it is in one.
+func (c *core) callWord(x *ssa.Value, saves []saved) (abi.ExitLoc, bool) {
+	l, ok := c.exitValue(x)
+	if !ok {
+		return l, false
+	}
+	switch l.Kind {
+	case abi.ExitConst:
+		l.N = c.exitWord(c.constWord(x.Const))
+		return l, true
+	case abi.ExitSpill, abi.ExitF64Spill, abi.ExitBoolSpill:
+		return l, true
+	}
+	float, kind := l.Kind == abi.ExitF64Reg, abi.ExitSpill
+	switch l.Kind {
+	case abi.ExitF64Reg:
+		kind = abi.ExitF64Spill
+	case abi.ExitBoolReg:
+		kind = abi.ExitBoolSpill
+	}
+	for _, sv := range saves {
+		if sv.reg == int(l.N) && sv.float == float {
+			return abi.ExitLoc{Kind: kind, N: int32(sv.slot)}, true
+		}
+	}
+	return l, false
+}
+
+// stableSlot reports whether nothing writes slot o while a native call
+// runs: an operand's, the receiver, or a local no closure assigns -- the
+// frame's slots are written only at its exits.
+func (c *core) stableSlot(o int) bool {
+	return o >= c.f.Locals || o == c.f.ThisSlot || o >= 0 && o < c.f.FrameLocals && !c.f.Assigned(o)
 }
 
 // finishExits gives the code's descriptions' frame (abi.ExitFrame) arrays

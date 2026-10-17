@@ -232,7 +232,8 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 		resumeAt = c.a.Moved(resumeAt)
 	}
 	c.finishExits()
-	return &Code{Bytes: bytes, Entries: entries, CallEntry: callAt, Resume: resumeAt, Text: c.a.Moved(text), Exits: c.exits, core: c.core}, nil
+	return &Code{Bytes: bytes, Entries: entries, CallEntry: callAt, Resume: resumeAt, Text: c.a.Moved(text), Exits: c.exits,
+		Calls: c.calls, CallRefs: c.callRefs(), core: c.core}, nil
 }
 
 // movImm sets dst to the word v: a load of the context's copy where v is
@@ -794,42 +795,40 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		ops--
 	}
 	direct = direct && c.operandsLive(s, ops)
-	// The state, recorded: every slot the frame does not hold as it is.
+	// The state, described (callState): every slot the frame does not hold
+	// as it is, for Go to make the frame from if the callee leaves; the
+	// call writes only the words of its records the caller's code keeps
+	// nowhere else -- all of a call's operands' it does not write straight
+	// where the callee has them, which it copies from there (words) -- and
+	// the description's address.
+	operands := -1
+	if !direct {
+		operands = calleeSlot - 1
+	}
+	st, recs := c.callState(v, s, func(i int) bool { return direct && i >= ops }, operands)
 	record := map[int]int32{}
-	k := int32(0)
-	for i, x := range s.Slots {
-		if x == nil || x.Op == ssa.OpLoadSlot && x.Aux == i || c.captured(i) || direct && i >= ops {
-			continue
+	for k, r := range recs {
+		at := abi.OffRecord + int32(k)*32
+		record[r.slot] = int32(k)
+		w := scratchA
+		switch {
+		case !r.num && (!r.ref || r.x.Shadow != nil):
+			// Its pointer word from its source, which needs no number word.
+		case remat(r.x):
+			c.materialize(r.x, scratchA)
+		default:
+			w = c.gpr(r.x, scratchA)
 		}
-		var w amd64.Reg
-		if remat(x) {
-			c.materialize(x, scratchA)
-			w = scratchA
-		} else {
-			w = c.gpr(x, scratchA)
+		if r.num {
+			c.a.Store(regCtx, at+16, w)
 		}
-		at := abi.OffRecord + k*32
-		c.a.Store(regCtx, at+16, w)
-		c.pointerWord(x, w)
-		c.a.Store(regCtx, abi.OffRecordRef+k*8, scratchB)
-		c.storeImm(regCtx, at, uint64(i)|abi.RecordDirect, scratchB)
-		record[i] = k
-		k++
+		if r.ref {
+			c.pointerWord(r.x, w)
+			c.a.Store(regCtx, abi.OffRecordRef+int32(k)*8, scratchB)
+		}
 	}
-	high := c.a.NewLabel()
-	c.movImm(scratchA, uint64(k))
-	c.a.Store(regCtx, abi.OffRecords, scratchA)
-	c.a.Load(scratchB, regCtx, abi.OffRecordHi)
-	c.a.Op(amd64.Cmp, scratchB, scratchA, true)
-	c.a.Jcc(amd64.CondAE, high)
-	c.a.Store(regCtx, abi.OffRecordHi, scratchA)
-	c.a.Bind(high)
-	for _, f := range []struct {
-		off int32
-		v   uint64
-	}{{abi.OffExitKind, abi.ExitHost}, {abi.OffExitPC, uint64(s.PC)}, {abi.OffExitDepth, uint64(s.Depth)}, {abi.OffExitSite, uint64(int64(s.Site))}} {
-		c.storeImm(regCtx, f.off, f.v, scratchA)
-	}
+	c.movImm(scratchA, uint64(uintptr(unsafe.Pointer(st))))
+	c.a.Store(regCtx, abi.OffCallState, scratchA)
 	args, this := sp-site.Argc, calleeSlot-1
 	if site.Via != 0 {
 		// Through Function.prototype.call: the first argument is the

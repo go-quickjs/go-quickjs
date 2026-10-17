@@ -25,8 +25,12 @@ type SSACode struct {
 	// callEntry and resume are the offsets of the code's call entry and
 	// resume routine, or -1 (mir's Code).
 	callEntry, resume int32
-	// exits are the descriptions the code's exits name by address.
-	exits []*abi.ExitDescriptor
+	// exits are the descriptions the code's exits name by address, calls
+	// those its native calls do (abi.Context's CallState); callRefs bounds
+	// the pointer words its calls write themselves (mir's Code).
+	exits    []*abi.ExitDescriptor
+	calls    []*abi.CallState
+	callRefs int
 	// footprint is what the code holds (Footprint), which never changes
 	// while it is open.
 	footprint int
@@ -61,8 +65,9 @@ func NewSSACode(a *Arena, c *mir.Code) (*SSACode, error) {
 	for pc, off := range c.Entries {
 		entries[pc] = int32(off)
 	}
-	s := &SSACode{code: code, arena: a, entries: entries, callEntry: int32(c.CallEntry), resume: int32(c.Resume), exits: c.Exits}
-	s.footprint = footprint(len(code), cap(entries), c.Exits)
+	s := &SSACode{code: code, arena: a, entries: entries, callEntry: int32(c.CallEntry), resume: int32(c.Resume), exits: c.Exits,
+		calls: c.Calls, callRefs: c.CallRefs}
+	s.footprint = footprint(len(code), cap(entries), c.Exits, c.Calls)
 	runtime.SetFinalizer(s, func(s *SSACode) { _ = s.Close() })
 	return s, nil
 }
@@ -79,6 +84,16 @@ func (s *SSACode) EntryAddress(pc int) uintptr {
 		return 0
 	}
 	return uintptr(unsafe.Pointer(&s.code[s.entries[pc]]))
+}
+
+// CallRefs bounds the pointer words the code's native calls write
+// themselves to their context's RecordRef (abi.CallRecord's Ref), which Go
+// clears as it ends a run.
+func (s *SSACode) CallRefs() int {
+	if s == nil {
+		return 0
+	}
+	return s.callRefs
 }
 
 // CallEntry is the address of the code's call entry, where its native
@@ -159,19 +174,26 @@ func CodeFootprint(c *mir.Code) int {
 	for pc := range c.Entries {
 		n = max(n, pc+1)
 	}
-	return footprint(alignUp(len(c.Bytes), codeAlign), n, c.Exits)
+	return footprint(alignUp(len(c.Bytes), codeAlign), n, c.Exits, c.Calls)
 }
 
-func footprint(code, entries int, exits []*abi.ExitDescriptor) int {
-	n := code + int(unsafe.Sizeof(SSACode{})) + entries*4 + cap(exits)*8
+func footprint(code, entries int, exits []*abi.ExitDescriptor, calls []*abi.CallState) int {
+	n := code + int(unsafe.Sizeof(SSACode{})) + entries*4 + cap(exits)*8 + cap(calls)*8
 	var frame *abi.ExitFrame
-	for _, x := range exits {
-		n += int(unsafe.Sizeof(*x)) + cap(x.Inline)*int(unsafe.Sizeof(abi.ExitInline{}))
-		if f := x.Frame; f != frame {
+	frameOf := func(f *abi.ExitFrame) {
+		if f != frame {
 			// One for the code's descriptions (mir's exitDescriptor).
 			frame = f
 			n += int(unsafe.Sizeof(*f)) + cap(f.Slots)*int(unsafe.Sizeof(abi.ExitSlot{})) + cap(f.Index)*2 + cap(f.Words)*8
 		}
+	}
+	for _, x := range exits {
+		n += int(unsafe.Sizeof(*x)) + cap(x.Inline)*int(unsafe.Sizeof(abi.ExitInline{}))
+		frameOf(x.Frame)
+	}
+	for _, st := range calls {
+		n += int(unsafe.Sizeof(*st)) + cap(st.Records)*int(unsafe.Sizeof(abi.CallRecord{}))
+		frameOf(st.Frame)
 	}
 	return n
 }

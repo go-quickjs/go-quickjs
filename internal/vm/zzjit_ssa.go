@@ -1257,6 +1257,7 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 		e.entrySlow = false
 	}
 	e.link.setCode(code)
+	r.jit.callRefs = max(r.jit.callRefs, uint64(code.CallRefs()))
 	r.jit.closeSSA(old, oldKeep)
 	r.jit.reoptimized++
 	// Compiled for what it does now: young again.
@@ -1357,8 +1358,10 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 	if err != nil {
 		return nil, nil, err
 	}
-	// What the entry holds, and its function's program.
-	s.learn(len(fn.Code), need+p.Footprint())
+	// What the entry holds, its function's program, and its link, which
+	// the entry makes before it is compiled (linkFor): the room a compile
+	// asks for first, which had come short of all three at a full budget.
+	s.learn(len(fn.Code), need+p.Footprint()+jitLinkFixed)
 	return code, fb, nil
 }
 
@@ -2791,6 +2794,17 @@ func (r *Runtime) jitGoCallNested(ctx *abi.Context, idx int) bool {
 	if n > abi.MaxGoArgs || depth < n || top+n > len(r.stack) {
 		return false
 	}
+	// Where each level is: at the native call it makes, as its code
+	// described it (abi.Context's CallState); this one at this call of Go,
+	// which its code wrote -- a description its context holds is an
+	// earlier call's.
+	levelPC := func(i int) uint64 {
+		if i == idx {
+			return ctxs[i].ExitPC
+		}
+		pc, _ := jit.CallPC(ctxs[i])
+		return pc
+	}
 	// The run's code pinned, and each level's, which is given a frame:
 	// one walk, the levels' entries found once. A level's code pinned for
 	// this run before is known by its entry (pinSerial), not searched for.
@@ -2813,7 +2827,7 @@ func (r *Runtime) jitGoCallNested(ctx *abi.Context, idx int) bool {
 			if c.Closure != at.cl || c.Base != at.base || c.This != at.this {
 				break
 			}
-			at.f.pc = uint32(c.ExitPC) + 1
+			at.f.pc = uint32(levelPC(root+1+k)) + 1
 			k++
 		}
 	}
@@ -2833,7 +2847,8 @@ func (r *Runtime) jitGoCallNested(ctx *abi.Context, idx int) bool {
 			r.frameDepth = depthBefore
 			return false
 		}
-		if e = r.jitEntryOf(lcl); e == nil || e.ssa == nil || int(c.ExitPC) >= len(lcl.fn.Code) {
+		callPC := levelPC(i)
+		if e = r.jitEntryOf(lcl); e == nil || e.ssa == nil || int(callPC) >= len(lcl.fn.Code) {
 			r.frameDepth = depthBefore
 			return false
 		}
@@ -2848,7 +2863,7 @@ func (r *Runtime) jitGoCallNested(ctx *abi.Context, idx int) bool {
 		f.cl = lcl
 		f.locals = r.stack[base : base+lcl.fn.LocalCount : base+lcl.fn.LocalCount]
 		f.base = base + lcl.fn.LocalCount
-		f.pc = uint32(c.ExitPC) + 1
+		f.pc = uint32(callPC) + 1
 		f.this, f.newTarget, f.callee, f.args = *(*Value)(unsafe.Pointer(&c.This)), Undefined, nil, nil
 		f.openUpvalues, f.handlers = f.openUpvalues[:0], f.handlers[:0]
 		f.thisRef, f.withScopes, f.evalVars, f.native, f.savedSP = nil, nil, nil, "", 0
@@ -2866,7 +2881,7 @@ framed:
 	lv.n = idx - root
 	code := e.ssa
 	// The run's frame past the call it makes.
-	runF.pc = uint32(ctxs[root].ExitPC) + 1
+	runF.pc = uint32(levelPC(root)) + 1
 	for i := range n {
 		r.stack[top+i] = jitGoArg(ctx, i)
 	}
@@ -4893,6 +4908,7 @@ func (e *jitEntry) setSSA(s *jitState, fn *bytecode.Function, p *ir.Program, cod
 	s.setLinks(e, fb.links)
 	e.ssaKeeps = max(e.ssaKeeps, fb.keeps)
 	e.link.setCode(code)
+	s.callRefs = max(s.callRefs, uint64(code.CallRefs()))
 	e.ssaLoop = jitLoopLength(fn)
 	for _, in := range p.Code {
 		e.ssaStrings = e.ssaStrings || in.Op == ir.StringMethod || in.Op == ir.StringCode
@@ -6156,8 +6172,10 @@ func (r *Runtime) jitRunDone(e *jitEntry, idx, top int) {
 	c := s.ssaCtxs[idx]
 	clear(c.Keep[:e.ssaKeeps])
 	c.This, c.Upvalues = abi.Slot{}, nil
-	if c.RecordHigh != 0 {
-		clear(c.RecordRef[:c.RecordHigh])
+	// Past RecordHigh, the pointer words native calls wrote themselves,
+	// which Go did not expand (abi.CallRecord's Ref).
+	if n := max(c.RecordHigh, s.callRefs); n != 0 {
+		clear(c.RecordRef[:n])
 		c.RecordHigh = 0
 	}
 	for i := idx + 1; i < len(s.ssaCtxs); i++ {
@@ -6165,8 +6183,8 @@ func (r *Runtime) jitRunDone(e *jitEntry, idx, top int) {
 		if c.Closure == nil {
 			break
 		}
-		if c.RecordHigh != 0 {
-			clear(c.RecordRef[:c.RecordHigh])
+		if n := max(c.RecordHigh, s.callRefs); n != 0 {
+			clear(c.RecordRef[:n])
 			c.RecordHigh = 0
 		}
 		clear(c.Keep[:s.ssaKeeps])
@@ -6233,6 +6251,10 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 		// code's, after a resume, or its deepest native callee's.
 		k := idx
 		for k+1 < len(s.ssaCtxs) && s.ssaCtxs[k+1].Live == abi.LiveCall {
+			// A level making a native call, its state as its code
+			// described it (abi.Context's CallState), which what follows
+			// reads.
+			jit.ExpandCall(s.ssaCtxs[k])
 			k++
 		}
 		if c := s.ssaCtxs[k]; k != idx && c.ExitMarking != 0 {

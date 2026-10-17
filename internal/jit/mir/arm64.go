@@ -211,7 +211,8 @@ func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 		return nil, err
 	}
 	c.finishExits()
-	return &Code{Bytes: bytes, Entries: entries, CallEntry: callAt, Resume: resumeAt, Text: len(bytes), Exits: c.exits, core: c.core}, nil
+	return &Code{Bytes: bytes, Entries: entries, CallEntry: callAt, Resume: resumeAt, Text: len(bytes), Exits: c.exits,
+		Calls: c.calls, CallRefs: c.callRefs(), core: c.core}, nil
 }
 
 // slotAddr is the base register and displacement of a frame slot's word.
@@ -2269,43 +2270,35 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		ops--
 	}
 	direct = direct && c.operandsLive(s, ops)
+	// As amd64's: the state, described (callState), the call writing only
+	// what the caller's code keeps nowhere else.
+	operands := -1
+	if !direct {
+		operands = calleeSlot - 1
+	}
+	st, recs := c.callState(v, s, func(i int) bool { return direct && i >= ops }, operands)
 	record := map[int]int32{}
-	k := int32(0)
-	for i, x := range s.Slots {
-		if x == nil || x.Op == ssa.OpLoadSlot && x.Aux == i || c.captured(i) || direct && i >= ops {
-			continue
+	for k, r := range recs {
+		at := abi.OffRecord + int32(k)*32
+		record[r.slot] = int32(k)
+		w := a64A
+		switch {
+		case !r.num && (!r.ref || r.x.Shadow != nil):
+		case remat(r.x):
+			c.materialize(r.x, a64A)
+		default:
+			w = c.gpr(r.x, a64A)
 		}
-		var w arm64.Reg
-		if remat(x) {
-			c.materialize(x, a64A)
-			w = a64A
-		} else {
-			w = c.gpr(x, a64A)
+		if r.num {
+			c.a.Store(a64Ctx, at+16, w)
 		}
-		at := abi.OffRecord + k*32
-		c.a.Store(a64Ctx, at+16, w)
-		c.pointerWord(x, w)
-		c.a.Store(a64Ctx, abi.OffRecordRef+k*8, a64B)
-		c.movImm(a64B, uint64(i)|abi.RecordDirect)
-		c.a.Store(a64Ctx, at, a64B)
-		record[i] = k
-		k++
+		if r.ref {
+			c.pointerWord(r.x, w)
+			c.a.Store(a64Ctx, abi.OffRecordRef+int32(k)*8, a64B)
+		}
 	}
-	high := c.a.NewLabel()
-	c.movImm(a64A, uint64(k))
-	c.a.Store(a64Ctx, abi.OffRecords, a64A)
-	c.a.Load(a64B, a64Ctx, abi.OffRecordHi)
-	c.a.Cmp(a64B, a64A, true)
-	c.a.BCond(arm64.HS, high)
-	c.a.Store(a64Ctx, abi.OffRecordHi, a64A)
-	c.a.Bind(high)
-	for _, f := range []struct {
-		off int32
-		v   uint64
-	}{{abi.OffExitKind, abi.ExitHost}, {abi.OffExitPC, uint64(s.PC)}, {abi.OffExitDepth, uint64(s.Depth)}, {abi.OffExitSite, uint64(int64(s.Site))}} {
-		c.movImm(a64A, f.v)
-		c.a.Store(a64Ctx, f.off, a64A)
-	}
+	c.movImm(a64A, uint64(uintptr(unsafe.Pointer(st))))
+	c.a.Store(a64Ctx, abi.OffCallState, a64A)
 	args, this := sp-site.Argc, calleeSlot-1
 	if site.Via != 0 {
 		args, this = args+1, args

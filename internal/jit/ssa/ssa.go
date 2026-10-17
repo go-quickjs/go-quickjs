@@ -822,6 +822,10 @@ func (s *FrameState) ID() int { return s.id }
 // instruction writes holds its value from entry in every frame state.
 func (f *Func) Written(slot int) bool { return f.written[slot] }
 
+// Assigned reports whether local i is one a closure assigns (ir.Program's
+// Assigned): a call may change it.
+func (f *Func) Assigned(i int) bool { return i >= 0 && i < len(f.assigned) && f.assigned[i] }
+
 // EntryFor returns the entry for a bytecode PC.
 func (f *Func) EntryFor(pc int) (Entry, bool) {
 	for _, e := range f.Entries {

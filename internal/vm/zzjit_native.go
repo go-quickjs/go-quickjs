@@ -501,6 +501,10 @@ type jitState struct {
 	byFn map[uintptr]jitFnEntry
 	// links are the functions' links (jitLink), by the same keys.
 	links map[weak.Pointer[bytecode.Function]]*jitLink
+	// callRefs bounds the pointer words any code's native calls write
+	// themselves to their contexts' RecordRef (jit.SSACode's CallRefs),
+	// which a run's end clears (jitRunDone).
+	callRefs uint64
 	// resumed counts native calls whose callee Go finished, after which
 	// their callers' code went on natively (runSSA); resumedLevels those
 	// whose caller was itself a level Go was finishing (jitUnwindNative).
@@ -1195,9 +1199,11 @@ func (s *jitState) roomFor(e *jitEntry, links []*jitLink, need int) bool {
 }
 
 // learn has perInstr follow what an entry of a function of instructions
-// instructions came to hold, bytes.
+// instructions came to hold, bytes: rounded up, so that a compile asks for
+// no less room than an entry like it took.
 func (s *jitState) learn(instructions, bytes int) {
-	x := bytes / max(instructions, 1)
+	n := max(instructions, 1)
+	x := (bytes + n - 1) / n
 	if s.perInstr == 0 {
 		s.perInstr = x
 	} else {
