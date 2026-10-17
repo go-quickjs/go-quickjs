@@ -6,6 +6,7 @@ import (
 	"errors"
 	"math"
 	"runtime"
+	"slices"
 	"testing"
 	"unsafe"
 
@@ -144,5 +145,78 @@ func TestArenaPacksCode(t *testing.T) {
 	runAll("placed again")
 	if err := codes[0].Close(); err != nil || a.Chunks() != 0 {
 		t.Fatalf("released: %v, %d mappings", err, a.Chunks())
+	}
+}
+
+// With a layout seed, an arena varies where code lands past its first
+// offset, as placements has a benchmark do (LayoutSeed): each chunk after
+// the first begins within 4 KiB of its start, and each function placed
+// after a chunk's first follows the one before by 0 to 3 cache lines more
+// than its size. Two seeds lay the same code out differently, and every
+// function runs wherever it is.
+func TestArenaLayoutSeed(t *testing.T) {
+	defer func(was uint64) { LayoutSeed = was }(LayoutSeed)
+	layout := func(seed uint64) []int {
+		LayoutSeed = seed
+		a := NewArena()
+		var codes []*SSACode
+		defer func() {
+			for _, c := range codes {
+				c.Close()
+			}
+		}()
+		var offsets []int
+		gaps := map[int]bool{}
+		for i := 0; i < 300; i++ {
+			n := 0
+			if i%40 == 20 {
+				n = chunkBytes / 2
+			}
+			c, err := NewSSACode(a, valueCode(t, float64(i), n))
+			if err != nil {
+				t.Fatal(err)
+			}
+			codes = append(codes, c)
+			at := uintptr(unsafe.Pointer(&c.code[0]))
+			for k, ch := range a.chunks {
+				base := uintptr(unsafe.Pointer(unsafe.SliceData(ch.mem)))
+				if at < base || at >= base+uintptr(len(ch.mem)) {
+					continue
+				}
+				off := int(at - base)
+				offsets = append(offsets, off)
+				if len(codes) > 1 {
+					prev := codes[len(codes)-2]
+					pat := uintptr(unsafe.Pointer(&prev.code[0]))
+					if pat >= base && pat < at {
+						gap := int(at-pat) - prev.Size()
+						if gap < 0 || gap >= layoutGapLines*codeAlign || gap%codeAlign != 0 {
+							t.Fatalf("seed %d: function %d is %d bytes past the one before", seed, i, gap)
+						}
+						gaps[gap] = true
+					} else if k > 0 && off >= layoutChunkSpan {
+						t.Fatalf("seed %d: chunk %d's first code at %d", seed, k, off)
+					}
+				}
+			}
+		}
+		if len(gaps) < 2 {
+			t.Fatalf("seed %d: one gap between functions, %v", seed, gaps)
+		}
+		if a.Chunks() < 3 {
+			t.Fatalf("seed %d: %d chunks", seed, a.Chunks())
+		}
+		for i, c := range codes {
+			var ctx abi.Context
+			ctx.SetConsts(&testEncoding)
+			if err := c.Run(0, &ctx); err != nil || ctx.ExitKind != abi.ExitReturn || ctx.Ret != math.Float64bits(float64(i)) {
+				t.Fatalf("seed %d: code %d returned %+v, %v", seed, i, ctx.Ret, err)
+			}
+		}
+		return offsets
+	}
+	one, two := layout(1), layout(2)
+	if slices.Equal(one, two) {
+		t.Fatal("two seeds laid the code out alike")
 	}
 }

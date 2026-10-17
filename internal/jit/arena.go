@@ -27,6 +27,9 @@ import (
 type Arena struct {
 	mu     sync.Mutex
 	chunks []*chunk
+	// mapped and placed count the chunks mapped and the functions placed,
+	// which choose LayoutSeed's offsets.
+	mapped, placed uint64
 }
 
 type chunk struct {
@@ -60,6 +63,39 @@ func NewArena() *Arena { return &Arena{} }
 // builds that placed each at one offset compared those offsets as much as
 // the builds.
 var FirstOffset int
+
+// LayoutSeed, when not 0, has an arena vary where it places code past its
+// first offset, as a benchmark does (v8bench's V8BENCH_JITSEED): each
+// chunk after the first begins at an offset under 4 KiB, and a gap of 0 to
+// 3 cache lines comes before each function placed after a chunk's first,
+// each as the seed and the chunk's or the function's number choose.
+// FirstOffset moves only what goes in the first chunk: code compiled
+// later -- a benchmark's late in a suite, past a few megabytes of others'
+// -- lands where the code before it ends, at the same place for every
+// FirstOffset, and its op-cache sets were the same in every placement of
+// a comparison. An offset under 4 KiB moves a chunk's code across all of
+// the op cache's sets (address bits 6 to 11), and the gaps move functions
+// against each other. 0 packs code as it comes.
+var LayoutSeed uint64
+
+// layoutDraw is LayoutSeed's choice for the k-th thing of a kind (salt):
+// splitmix64 of the seed, the salt and k.
+func layoutDraw(salt, k uint64) uint64 {
+	x := LayoutSeed ^ salt*0x9e3779b97f4a7c15 ^ k*0xbf58476d1ce4e5b9
+	x ^= x >> 30
+	x *= 0xbf58476d1ce4e5b9
+	x ^= x >> 27
+	x *= 0x94d049bb133111eb
+	return x ^ x>>31
+}
+
+// layoutChunkSpan and layoutGapLines bound LayoutSeed's offsets: a chunk's
+// first code within 4 KiB of its start, a function within 3 cache lines of
+// the one before it.
+const (
+	layoutChunkSpan = 4 << 10
+	layoutGapLines  = 4
+)
 
 // Mapped reports how many bytes of code the arena has mapped, and how many
 // of them functions own: the rest is space their release left in chunks
@@ -102,8 +138,13 @@ func (a *Arena) place(instructions []byte) ([]byte, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	n := alignUp(len(instructions), codeAlign)
+	gap := 0
+	if LayoutSeed != 0 {
+		a.placed++
+		gap = int(layoutDraw(1, a.placed)%layoutGapLines) * codeAlign
+	}
 	var c *chunk
-	if k := len(a.chunks); k > 0 && a.chunks[k-1].used+n <= len(a.chunks[k-1].mem) {
+	if k := len(a.chunks); k > 0 && a.chunks[k-1].used+gap+n <= len(a.chunks[k-1].mem) {
 		c = a.chunks[k-1]
 	} else {
 		mem, err := mapCode(alignUp(n, chunkBytes))
@@ -111,12 +152,18 @@ func (a *Arena) place(instructions []byte) ([]byte, error) {
 			return nil, fmt.Errorf("allocate code: %w", err)
 		}
 		c = &chunk{mem: mem}
+		gap = 0
 		if pad := alignUp(FirstOffset, codeAlign); len(a.chunks) == 0 && pad > 0 && pad+n <= len(mem) {
 			c.used = pad
+		} else if LayoutSeed != 0 && len(a.chunks) > 0 {
+			a.mapped++
+			if pad := int(layoutDraw(2, a.mapped)%layoutChunkSpan) / codeAlign * codeAlign; pad+n <= len(mem) {
+				c.used = pad
+			}
 		}
 		a.chunks = append(a.chunks, c)
 	}
-	start := c.used
+	start := c.used + gap
 	page := os.Getpagesize()
 	pages := c.mem[start/page*page : min(alignUp(start+n, page), len(c.mem))]
 	code := c.mem[start : start+n : start+n]
@@ -128,7 +175,7 @@ func (a *Arena) place(instructions []byte) ([]byte, error) {
 		}
 		return nil, err
 	}
-	c.used += n
+	c.used = start + n
 	c.live += n
 	return code, nil
 }

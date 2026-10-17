@@ -9,8 +9,10 @@
 // V8BENCH_STACKPAD=n runs every script n frames of 64 bytes deeper in the
 // goroutine's stack, which moves where the engine's frames and spill slots
 // fall against the heap; V8BENCH_JITPAD=n, in a JIT build, has the JIT
-// place its first code n bytes into its arena (jit.FirstOffset), which
-// moves where its code falls against the op cache's sets.
+// place its first code n bytes into its arena (jit.FirstOffset), and
+// V8BENCH_JITSEED=s has it vary where the rest falls, each later chunk's
+// start and the gaps between functions (jit.LayoutSeed): together they
+// move where its code falls against the op cache's sets.
 // internal/cmd/v8bench/placements varies both from placement to placement.
 package main
 

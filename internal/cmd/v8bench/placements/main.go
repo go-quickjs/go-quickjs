@@ -37,7 +37,11 @@
 // the mean over its placements, in milliseconds a run. Placement n runs
 // n*5 frames of 64 bytes deeper in the stack (V8BENCH_STACKPAD), and with
 // -jit has the JIT place its code from jitPads[n] into its arena
-// (V8BENCH_JITPAD). Each
+// (V8BENCH_JITPAD), and lay out its later chunks and the gaps between its
+// functions by seed n+1 (V8BENCH_JITSEED): code compiled late in a suite
+// had been where the code before it ended, at one place in every
+// placement, and a change that resized earlier code had looked like a
+// regression of a later benchmark at all eight. Each
 // benchmark runs once, and one whose run took less than a second runs
 // again in a process of its own as many times as fill about one -- 3, 10,
 // 30, 100 or 300 -- so that a long one, Octane's zlib, takes its run's
@@ -492,7 +496,7 @@ func runPlacement(exe, dir, bench, suite string, n int, jitEnabled bool, cpus cp
 			args = append(args, "-suite", only)
 		}
 		cmd := exec.Command(exe, args...)
-		cmd.Env = append(os.Environ(), "V8BENCH_STACKPAD="+strconv.Itoa(5*n), "V8BENCH_JITPAD="+strconv.Itoa(jitPads[n%len(jitPads)]))
+		cmd.Env = append(os.Environ(), "V8BENCH_STACKPAD="+strconv.Itoa(5*n), "V8BENCH_JITPAD="+strconv.Itoa(jitPads[n%len(jitPads)]), "V8BENCH_JITSEED="+strconv.Itoa(n+1))
 		var outb bytes.Buffer
 		cmd.Stdout = &outb
 		if cpus != nil {

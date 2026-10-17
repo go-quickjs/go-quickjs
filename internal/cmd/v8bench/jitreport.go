@@ -15,8 +15,12 @@ import (
 )
 
 // V8BENCH_JITPAD is where the JIT places its first code in its arena
-// (jit.FirstOffset).
-func init() { jit.FirstOffset, _ = strconv.Atoi(os.Getenv("V8BENCH_JITPAD")) }
+// (jit.FirstOffset), and V8BENCH_JITSEED how it varies where it places the
+// rest (jit.LayoutSeed).
+func init() {
+	jit.FirstOffset, _ = strconv.Atoi(os.Getenv("V8BENCH_JITPAD"))
+	jit.LayoutSeed, _ = strconv.ParseUint(os.Getenv("V8BENCH_JITSEED"), 10, 64)
+}
 
 // jitReport is the report's state: what the JIT had done when the last
 // benchmark ended, the counters and each function's.
