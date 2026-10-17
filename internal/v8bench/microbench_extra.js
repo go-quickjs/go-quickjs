@@ -413,3 +413,32 @@ function private_method(n)
     global_res = c.sum(n);
     return n;
 }
+
+/* Math.random called in a loop, its numbers summed */
+function math_random(n)
+{
+    var j, s = 0;
+    for (j = 0; j < n; j++)
+        s += Math.random();
+    global_res = s;
+    return n;
+}
+
+/* an array of 1000 shuffled again and again, as Fisher and Yates do: a
+   Math.random and a swap for each element */
+function random_shuffle(n)
+{
+    var a = [], i, j, k, t, r;
+    for (i = 0; i < 1000; i++)
+        a.push(i);
+    for (r = 0; r < n; r += 999) {
+        for (j = a.length - 1; j > 0; j--) {
+            k = Math.floor(Math.random() * (j + 1));
+            t = a[j];
+            a[j] = a[k];
+            a[k] = t;
+        }
+    }
+    global_res = a[0];
+    return r;
+}
