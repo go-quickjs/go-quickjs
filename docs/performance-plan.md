@@ -560,6 +560,42 @@ The rounds that followed, each measured as above. The commit says more.
   (`tail_mutual` 2.74x), and generators made and run by for-of (1.7 to
   1.9x). Global reads (1.70x, a top-level `let` or `const` about 10 ns more
   than a `var`) and element reads (1.40x) are the common ones.
+- **`Math.random()`, never measured.** None of the suites reaches the
+  engine's own: the V8 suite's and Octane's `base.js` replace it with a
+  seeded generator written in JavaScript, Are We Fast Yet has its own
+  `Random`, and only `microbench.js`'s `sort_bench`, left out of the
+  comparison, calls it, to fill its arrays. Yet games, simulations and
+  shuffles call it in their inner loops. Today it is a built-in like any
+  other: the interpreter calls it through the native-call path, and
+  `random` (`builtins.go`) asks a `rand.Rand`, whose PCG source sits behind
+  an interface. The JIT makes it a call of Go from native code: its
+  `Intrinsic` takes a method call of at least one argument, and `random`
+  has no `mathOp`, so `Math.random()` does not become code of its own the
+  way `Math.sqrt(x)` and `Math.floor(x)` do.
+
+  V8's design is the one to follow. Each native context has a cache of 64
+  doubles and an index into it. `Math.random()`, in its builtin and in
+  optimized code alike, takes the next number from the cache. Only when
+  the cache is empty does it call the runtime, which makes 64 more with
+  xorshift128+, seeded once per context. The common case is a load and a
+  decrement: no call, and almost no code, which also suits the op cache
+  (see "How an item is measured"). The standard leaves the algorithm to
+  the engine.
+  - First, a micro-benchmark of `Math.random()` in a loop, in both tiers,
+    against QuickJS and Node, before anything is changed.
+  - In Go: the runtime keeps xorshift128+'s two words and a cache of 64
+    doubles with its index, refilled by one function. The function seeds
+    the generator at its first use, from the process-wide source, so that
+    runtimes do not share a sequence and building a runtime still does no
+    work for it. Each number is made from the generator's bits as V8 makes
+    it: 52 of them as a double's mantissa in [1, 2), less one. The
+    built-in reads the cache.
+  - In the JIT: the realm's `Math.random` with no arguments as an
+    intrinsic, guarded as the others are. Its code reads the runtime's
+    cache at a fixed offset (abi), decrements the index and loads the
+    double. An empty cache is a call of Go that refills it, as a
+    concatenation is. Both tiers take from one cache, so the sequence is
+    the same whichever tier draws.
 - **RegExp:** a run of literal characters inside a pattern as one
   instruction (B6) is still left; `regexp_ascii` and `regexp_utf16` take
   1.4 times QuickJS's time.
