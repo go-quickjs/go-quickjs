@@ -61,6 +61,10 @@ type Intrinsic struct {
 	// for GoMath, which of the VM's functions of one number.
 	Go GoOp
 	Fn int
+	// Random, for OpRandomF64, is the runtime's Math.random cache, which
+	// the code takes its numbers from (Encoding's RandomCount and
+	// RandomNumbers).
+	Random uintptr
 }
 
 // maxIntrinsicArgs is the most arguments an intrinsic call is made with.
@@ -418,6 +422,10 @@ type GoOp uint8
 // left native code at every turn for Go to compare -- and what Go refuses,
 // an operand converted by calling something, leaves for Go after an exit.
 //
+// GoRandom fills Math.random's cache again (OpRandomF64), which native
+// code found empty, as V8's code calls its runtime to: Go writes the next
+// number to the first operand's number word.
+//
 // GoClosure makes the function of constant Argc on the code's own frame
 // (ir.Closure), capturing its locals there, and GoClose closes what
 // closures captured of locals Argc on (ir.CloseUpvalues): both Go's, on
@@ -446,6 +454,7 @@ const (
 	GoIndex
 	GoAppend
 	GoCompare
+	GoRandom
 )
 
 // RefillsPools reports whether a call takes an object from a pool, which
@@ -1672,10 +1681,14 @@ func (b *builder) intrinsic(pc int) (Intrinsic, bool) {
 		if k.Go != GoMath && k.Go != GoAtan2 && k.Go != GoHypot || !b.goCalls() {
 			return Intrinsic{}, false
 		}
+	case OpRandomF64:
+		if k.Random == 0 || !b.goCalls() {
+			return Intrinsic{}, false
+		}
 	default:
 		return Intrinsic{}, false
 	}
-	if n := k.args(); n < 1 || n > maxIntrinsicArgs || b.p.Maps[pc+1].Depth != b.p.Maps[pc].Depth-n-1 || b.p.Maps[pc].Depth < n+2 {
+	if n := k.args(); n < 0 || n == 0 && k.Op != OpRandomF64 || n > maxIntrinsicArgs || b.p.Maps[pc+1].Depth != b.p.Maps[pc].Depth-n-1 || b.p.Maps[pc].Depth < n+2 {
 		return Intrinsic{}, false
 	}
 	return k, true
@@ -1684,6 +1697,8 @@ func (b *builder) intrinsic(pc int) (Intrinsic, bool) {
 // args is how many arguments the intrinsic takes.
 func (k Intrinsic) args() int {
 	switch {
+	case k.Op == OpRandomF64:
+		return 0
 	case k.Args != 0:
 		return k.Args
 	case k.Op == OpPowF64 || k.Op == OpMaxF64 || k.Op == OpMinF64 || k.Op == OpMathCall && k.Go != GoMath:
@@ -1718,6 +1733,9 @@ func (b *builder) intrinsicCall(blk *Block, pc int, k Intrinsic, guard func(Op, 
 	case OpMathCall:
 		r = b.f.newValue(blk, OpMathCall, Float64, xs[:n]...)
 		r.Index, r.Aux = int(k.Go), k.Fn
+	case OpRandomF64:
+		r = b.f.newValue(blk, OpRandomF64, Float64)
+		r.Const = ir.Value{Bits: uint64(k.Random)}
 	default:
 		r = b.f.newValue(blk, k.Op, Float64, xs[0])
 	}

@@ -47,6 +47,8 @@ var jitEncoding = abi.Encoding{
 	UndefinedCell: uint64(uintptr(unsafe.Pointer(&jitUndefinedCell))),
 	Object:        objectBits,
 	UpvalueSlot:   int32(unsafe.Offsetof(upvalue{}.slot)),
+	RandomCount:   int32(unsafe.Offsetof(mathRandom{}.count)),
+	RandomNumbers: int32(unsafe.Offsetof(mathRandom{}.numbers)),
 	ObjectShape:   int32(unsafe.Offsetof(Object{}.shape)),
 	ObjectProps:   int32(unsafe.Offsetof(Object{}.vals)),
 	ObjectProto:   int32(unsafe.Offsetof(Object{}.proto)),
@@ -1535,13 +1537,14 @@ func (fb *jitFeedback) FromCharCode(pc int) (uintptr, bool) {
 	return addr, true
 }
 
-// Intrinsic is ssa.IntrinsicFeedback's: a method call of one argument at
-// pc whose function is the realm's Math.sqrt or Math.abs, as its reads
-// give it now (jitChainValue) -- Math.sqrt(x) -- which the code makes
-// itself, as V8 reduces such a call; the call checks it calls it.
+// Intrinsic is ssa.IntrinsicFeedback's: a method call at pc whose function
+// is one of the realm's Math functions, as its reads give it now
+// (jitChainValue) -- Math.sqrt(x), or Math.random() of no arguments --
+// which the code makes itself, as V8 reduces such a call; the call checks
+// it calls it.
 func (fb *jitFeedback) Intrinsic(pc int) (ssa.Intrinsic, bool) {
 	fn := fb.fn
-	if fb.cl == nil || pc < 2 || pc >= len(fn.Code) || jitCallOp(fn.Code[pc].Op) != bytecode.OpCallMethod || fn.Code[pc].A < 1 || fn.Code[pc].A > jitMathArgs {
+	if fb.cl == nil || pc < 2 || pc >= len(fn.Code) || jitCallOp(fn.Code[pc].Op) != bytecode.OpCallMethod || fn.Code[pc].A > jitMathArgs {
 		return ssa.Intrinsic{}, false
 	}
 	if fb.prog == nil {
@@ -1584,6 +1587,13 @@ func (fb *jitFeedback) Intrinsic(pc int) (ssa.Intrinsic, bool) {
 	// other by Go called from there, the VM's very function.
 	fd, n := o.fn(), int(fn.Code[pc].A)
 	switch {
+	case n == 0:
+		// Only Math.random takes none: the next number of the runtime's
+		// cache, which the code reads, made now if it is not yet.
+		if o != fb.r.randomFn {
+			return ssa.Intrinsic{}, false
+		}
+		k.Op, k.Random = ssa.OpRandomF64, uintptr(unsafe.Pointer(fb.r.mathRandom()))
 	case o == fb.r.powFn && n == 2:
 		k.Op = ssa.OpPowF64
 	case o == fb.r.atan2Fn && n == 2:
@@ -2491,6 +2501,11 @@ func jitHostCall(ctx *abi.Context) bool {
 		s.pollCredit += r.backEdges - old
 		s.budgets++
 		return r.checkInterruptNow() == nil
+	case ssa.GoRandom:
+		// Math.random's cache, found empty: filled again, its next number
+		// the result.
+		ctx.GoArgs[0].Num = math.Float64bits(r.random())
+		return true
 	case ssa.GoPow, ssa.GoMath, ssa.GoAtan2, ssa.GoHypot, ssa.GoMod:
 		// Two numbers' bits -- or one, and which function of it -- the
 		// result's in the first's place.

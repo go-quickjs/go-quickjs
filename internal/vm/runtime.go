@@ -3,7 +3,6 @@ package vm
 import (
 	"context"
 	"fmt"
-	"math/rand/v2"
 	"strings"
 	"sync"
 	"time"
@@ -211,8 +210,8 @@ type Runtime struct {
 	// asyncWaits are the runtime's waiters in Atomics.waitAsync.
 	asyncWaits asyncWaits
 
-	// rng backs Math.random, created on first use.
-	rng *rand.Rand
+	// rnd is Math.random's cache and generator, made at its first use.
+	rnd *mathRandom
 
 	// Host is the embedding API's handle on this runtime, which a Go function
 	// called from script is given back.
@@ -298,6 +297,10 @@ type Runtime struct {
 	// arguments out of its frame's window, for a callee that reads them
 	// only as it starts (tailArgsOf).
 	tailArgs []Value
+	// randomFn is Math.random, which native code makes itself (a native
+	// tier's intrinsic): at the end, so that no field the interpreter reads
+	// moves.
+	randomFn *Object
 	// jitFields is the optional native tier's state, empty in builds
 	// without it. It comes after everything the interpreter reads, so that
 	// a build with the tier moves none of their offsets, and before the last

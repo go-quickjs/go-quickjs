@@ -2534,7 +2534,7 @@ func (r *Runtime) initMathBuiltins() {
 		return Float(jsHypot(nums)), nil
 	})
 
-	r.defMethod(m, "random", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
+	r.randomFn = r.defMethod(m, "random", 0, func(rt *Runtime, this Value, args []Value) (Value, error) {
 		return Float(rt.random()), nil
 	})
 }
@@ -2767,16 +2767,69 @@ func (r *Runtime) globalParseFloat(args []Value) (Value, error) {
 // wtf8 is used by the string built-ins.
 var _ = wtf8.Count
 
-// random returns a pseudo-random number in [0, 1).
-//
-// The generator is per-runtime and seeded from the process-wide source, so that
-// two runtimes in the same process do not produce identical sequences while
-// each stays deterministic with respect to its own calls.
+// mathRandomCache is how many numbers Math.random's cache holds, as V8's.
+const mathRandomCache = 64
+
+// mathRandom is Math.random's state, kept as V8 keeps it for each context:
+// the numbers xorshift128+ made last, taken from the end of the cache, and
+// the generator's two words. Native code takes a number from the cache
+// itself (abi.Encoding's RandomCount and RandomNumbers) and calls Go only
+// to fill it again (refillRandom).
+type mathRandom struct {
+	// count is how many numbers are left: numbers[count-1] is the next.
+	count   int64
+	s0, s1  uint64
+	numbers [mathRandomCache]float64
+}
+
+// random returns a pseudo-random number in [0, 1): the next in the cache,
+// filled again when it is empty.
 func (r *Runtime) random() float64 {
-	if r.rng == nil {
-		r.rng = rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
+	m := r.rnd
+	if m == nil || m.count == 0 {
+		m = r.refillRandom()
 	}
-	return r.rng.Float64()
+	m.count--
+	return m.numbers[m.count]
+}
+
+// refillRandom fills Math.random's cache with the generator's next
+// mathRandomCache numbers, as V8's MathRandom::RefillCache does, making
+// the state at the first use. The generator is seeded from the
+// process-wide source, so that two runtimes in a process do not draw the
+// same sequence, and building a runtime does nothing for it.
+func (r *Runtime) refillRandom() *mathRandom {
+	m := r.mathRandom()
+	s0, s1 := m.s0, m.s1
+	for i := range m.numbers {
+		// xorshift128+, V8's XorShift128.
+		x, y := s0, s1
+		s0 = y
+		x ^= x << 23
+		x ^= x >> 17
+		x ^= y
+		x ^= y >> 26
+		s1 = x
+		// 52 of its bits as a double's in [1, 2), less one: V8's ToDouble.
+		m.numbers[i] = math.Float64frombits(s0>>12|0x3FF0000000000000) - 1
+	}
+	m.s0, m.s1 = s0, s1
+	m.count = mathRandomCache
+	return m
+}
+
+// mathRandom is the runtime's Math.random state, made and seeded the first
+// time it is needed, its cache empty.
+func (r *Runtime) mathRandom() *mathRandom {
+	if r.rnd == nil {
+		m := new(mathRandom)
+		// xorshift128+ never leaves a state of two zero words.
+		for m.s0 == 0 && m.s1 == 0 {
+			m.s0, m.s1 = rand.Uint64(), rand.Uint64()
+		}
+		r.rnd = m
+	}
+	return r.rnd
 }
 
 // initArrayExtras defines the array methods that take a relative index or are

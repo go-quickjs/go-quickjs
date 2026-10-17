@@ -3968,6 +3968,31 @@ func (c *compiler) sign(v *ssa.Value) {
 	c.setX(v, xScratch0)
 }
 
+// random is Math.random() (ssa.OpRandomF64), as V8's code takes it: the
+// count of the runtime's cache, at Const, less one, and the number there.
+// An empty cache has Go fill it (ssa.GoRandom), out of line, its next
+// number Go's result.
+func (c *compiler) random(v *ssa.Value) {
+	fill, done := c.a.NewLabel(), c.a.NewLabel()
+	c.movImm(scratchC, v.Const.Bits)
+	c.a.Load(scratchA, scratchC, c.enc.RandomCount)
+	c.a.Op(amd64.Test, scratchA, scratchA, true)
+	c.a.Jcc(amd64.CondE, fill)
+	c.a.OpImm(amd64.Sub, scratchA, 1, true)
+	c.a.Store(scratchC, c.enc.RandomCount, scratchA)
+	c.a.ShiftImm(amd64.Shl, scratchA, 3, true)
+	c.a.Op(amd64.Add, scratchA, scratchC, true)
+	c.a.LoadSD(xScratch0, scratchA, c.enc.RandomNumbers)
+	c.a.Bind(done)
+	c.setX(v, xScratch0)
+	c.cold = append(c.cold, func() {
+		c.a.Bind(fill)
+		c.goSaving(uint64(ssa.GoRandom), nil)
+		c.a.LoadSD(xScratch0, regCtx, abi.OffGoArgs+c.enc.NumOffset)
+		c.a.Jmp(done)
+	})
+}
+
 // mathCall has Go compute a Math function of numbers (ssa.OpMathCall), as
 // V8's code calls its ieee754 functions: the operands' bits in the
 // context's GoArgs and, for ssa.GoMath, which function in the second's
@@ -5020,6 +5045,8 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.setX(v, xScratch0)
 	case ssa.OpMathCall:
 		c.mathCall(v)
+	case ssa.OpRandomF64:
+		c.random(v)
 	case ssa.OpNegF64:
 		x := c.xmm(arg(0), xScratch0)
 		if x != xScratch0 {

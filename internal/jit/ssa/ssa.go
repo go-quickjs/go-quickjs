@@ -346,6 +346,13 @@ const (
 	// Go (GoMath, GoAtan2, GoHypot); Aux, for GoMath, which of the VM's
 	// functions of one number (Intrinsic's Fn).
 	OpMathCall // f64[, f64] -> f64
+	// OpRandomF64 is Math.random() (Intrinsic): the next number of the
+	// runtime's cache, whose address is Const, as V8's code takes it --
+	// the cache's count, less one, and the number there -- and, the cache
+	// empty, a call of Go that fills it (GoRandom). Not a guard, but
+	// nothing merges it, and one whose result is unused stays
+	// (removeDead): it takes a number as the interpreter's call does.
+	OpRandomF64 // -> f64
 )
 
 var opNames = [...]string{
@@ -362,7 +369,7 @@ var opNames = [...]string{
 	OpCall: "call", OpCallCell: "callcell", OpSqrtF64: "sqrtf", OpAbsF64: "absf", OpInstanceOf: "instanceof", OpTypeIs: "typeis",
 	OpCheckTrue: "checktrue", OpConstCell: "constcell", OpUpvalueCell: "upvaluecell", OpUpvalueStale: "upvaluestale", OpLocalCell: "localcell", OpPowF64: "powf",
 	OpMaxF64: "maxf", OpMinF64: "minf", OpFloorF64: "floorf", OpCeilF64: "ceilf", OpTruncF64: "truncf", OpRoundF64: "roundf",
-	OpSignF64: "signf", OpFroundF64: "froundf", OpMathCall: "mathcall",
+	OpSignF64: "signf", OpFroundF64: "froundf", OpMathCall: "mathcall", OpRandomF64: "randomf",
 }
 
 func (o Op) String() string {

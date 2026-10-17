@@ -3642,6 +3642,27 @@ func (c *a64Compiler) mathCall(v *ssa.Value) {
 	c.setF(v, a64F0)
 }
 
+// random is Math.random(), as amd64's is.
+func (c *a64Compiler) random(v *ssa.Value) {
+	fill, done := c.a.NewLabel(), c.a.NewLabel()
+	c.movImm(a64C, v.Const.Bits)
+	c.a.Load(a64A, a64C, c.enc.RandomCount)
+	c.a.Cbz(a64A, fill, true)
+	c.a.AddImm(a64A, a64A, -1, true)
+	c.a.Store(a64C, c.enc.RandomCount, a64A)
+	c.a.ShiftImm(arm64.Lsl, a64A, a64A, 3, true)
+	c.a.Op(arm64.Add, a64A, a64A, a64C, true)
+	c.a.LoadF(a64F0, a64A, c.enc.RandomNumbers)
+	c.a.Bind(done)
+	c.setF(v, a64F0)
+	c.cold = append(c.cold, func() {
+		c.a.Bind(fill)
+		c.goSaving(uint64(ssa.GoRandom), nil)
+		c.a.LoadF(a64F0, a64Ctx, abi.OffGoArgs+c.enc.NumOffset)
+		c.a.B(done)
+	})
+}
+
 // power is Math.pow(x, y) where its answer is exact, as amd64's is.
 func (c *a64Compiler) power(v *ssa.Value, guard func(arm64.Cond)) {
 	if x := c.fpr(v.Args[0], a64F0); x != a64F0 {
@@ -4584,6 +4605,8 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.setF(v, d)
 	case ssa.OpMathCall:
 		c.mathCall(v)
+	case ssa.OpRandomF64:
+		c.random(v)
 	case ssa.OpMaxF64, ssa.OpMinF64:
 		// FMAX and FMIN are Math.max's and Math.min's, NaN and zeros alike.
 		op := arm64.FMax

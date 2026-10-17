@@ -900,6 +900,11 @@ type Encoding struct {
 	// pointer to its value (Context.Upvalues).
 	UpvalueSlot int32
 
+	// Math.random's cache (ssa.OpRandomF64): RandomCount is the offset of
+	// how many numbers are left in it, an int64, and RandomNumbers of the
+	// numbers, float64s, the next at that count less one.
+	RandomCount, RandomNumbers int32
+
 	// An object's properties: ObjectShape is the offset of its shape
 	// pointer, which says where each property is and what it is, and
 	// ObjectProps of the slice of their values, a value each, in order. An

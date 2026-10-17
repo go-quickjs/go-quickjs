@@ -664,7 +664,10 @@ func removeDead(f *Func) bool {
 		markState(b.State)
 		markState(b.Header)
 		for _, v := range b.Values {
-			if v.Op.isGuard() || v.Op == OpFreeze {
+			// A Math.random() takes its number from the cache whether or
+			// not the number is used, as the interpreter's does: both
+			// take from the one cache, in the same order.
+			if v.Op.isGuard() || v.Op == OpFreeze || v.Op == OpRandomF64 {
 				mark(v)
 			}
 		}

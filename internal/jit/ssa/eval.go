@@ -651,7 +651,7 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 				default:
 					return exit(v.State, ir.ExitKind(v.Aux))
 				}
-			case OpMathCall:
+			case OpMathCall, OpRandomF64:
 				// The VM's functions are not the model's.
 				return ir.Exit{}, fmt.Errorf("%w: a Math function", ErrUnsupported)
 			case OpPowF64:
