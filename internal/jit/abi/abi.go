@@ -73,42 +73,71 @@ type HintTable struct {
 
 // MegaCache is a runtime's megamorphic property cache, as V8's stub cache
 // is: by a hash of a shape and a key (MegaSet), a set of MegaWays entries,
-// an entry naming the
-// object's own data property of that key in objects of that shape -- its
-// index in the shape's keys and the object's values, with MegaWritable
-// set if it may be written. A property read or write whose site met more
-// shapes than it was compiled for, of a receiver too large to search
-// (MaxScan), looks there before it leaves for Go, which fills the entry
-// when it reads or writes one; a shape it names is remembered (the VM's),
-// so it never changes, and the entry holds it, so its address is never
-// another's. Native code only reads it.
+// an entry naming the data property of that key that objects of that shape
+// have -- their own, with MegaWritable set if it may be written, or, with a
+// Chain, a prototype's -- by its index in the table of the object that has
+// it. A property operation whose site met more shapes than it was compiled
+// for, of a receiver whose own table does not have it, or too large to
+// search (MaxScan), looks there before it leaves for Go, which fills the
+// entry when it reads or writes one; a shape it names is remembered (the
+// VM's), so it never changes, and the entry holds it, so its address is
+// never another's. Native code only reads it.
 type MegaCache [MegaEntries]MegaEntry
 
-// MegaEntry is an entry of a MegaCache.
+// MegaEntry is an entry of a MegaCache. Chain, for a property a prototype
+// has, is the prototypes from the receiver's on to the one that has it,
+// each with the shape it must have; nil for the receiver's own. An Index
+// with MegaAbsent set names a property none of them has, the chain all
+// of the receiver's prototypes, the last's prototype none: a read finds
+// undefined (Encoding's UndefinedCell), as V8's loads of a nonexistent
+// property do.
 type MegaEntry struct {
 	Shape      unsafe.Pointer
+	Chain      *MegaChain
 	Key, Index uint32
+	_          [32 - 2*unsafe.Sizeof(uintptr(0)) - 8]byte
 }
+
+// MegaChain is a prototype chain a MegaEntry was found along: the objects
+// from the receiver's prototype on, each with its shape, up to the one
+// that has the property, after which an Object of nil ends it. Its
+// address, held by the entry, is never another's.
+type MegaChain [MegaDepth + 1]MegaLink
+
+// MegaLink is a prototype of a MegaChain, with its shape.
+type MegaLink struct{ Object, Shape unsafe.Pointer }
 
 // MegaEntries is how many entries a MegaCache has, MegaWays to a set, both
 // powers of two: one entry for each hash, as the shapes of a few dozen
 // constructions are, had two of them share one, each displacing the other,
-// in four runs of five; MegaWritable the bit of an entry's Index set for a
-// writable property.
+// in four runs of five; a set is 1<<MegaSetShift bytes. MegaWritable is the
+// bit of an entry's Index set for a writable property, MegaAbsent for none,
+// and MegaDepth how many prototypes a chain may hold.
 const (
 	MegaEntries  = 2048
 	MegaWays     = 4
 	MegaSets     = MegaEntries / MegaWays
+	MegaSetShift = 7
 	MegaWritable = 1 << 31
+	MegaAbsent   = 1 << 30
+	MegaDepth    = 6
 )
 
-// Offsets of MegaEntry's fields, and its size.
+// Offsets of MegaEntry's fields, and its size; of MegaLink's, and its.
 const (
-	OffMegaShape = int32(unsafe.Offsetof(MegaEntry{}.Shape))
-	OffMegaKey   = int32(unsafe.Offsetof(MegaEntry{}.Key))
-	OffMegaIndex = int32(unsafe.Offsetof(MegaEntry{}.Index))
-	MegaSize     = int32(unsafe.Sizeof(MegaEntry{}))
+	OffMegaShape  = int32(unsafe.Offsetof(MegaEntry{}.Shape))
+	OffMegaChain  = int32(unsafe.Offsetof(MegaEntry{}.Chain))
+	OffMegaKey    = int32(unsafe.Offsetof(MegaEntry{}.Key))
+	OffMegaIndex  = int32(unsafe.Offsetof(MegaEntry{}.Index))
+	MegaSize      = int32(unsafe.Sizeof(MegaEntry{}))
+	OffLinkObject = int32(unsafe.Offsetof(MegaLink{}.Object))
+	OffLinkShape  = int32(unsafe.Offsetof(MegaLink{}.Shape))
+	MegaLinkSize  = int32(unsafe.Sizeof(MegaLink{}))
 )
+
+// A set is MegaWays entries, 1<<MegaSetShift bytes: native code finds one
+// by a shift.
+var _ = [1]struct{}{}[MegaWays*MegaSize-1<<MegaSetShift]
 
 // MegaKeyHash is key's part of MegaSlot's hash, which native code knows
 // for a site's key as it is compiled.
@@ -316,6 +345,12 @@ type Context struct {
 	// property operation looks a receiver's property up in when the shapes
 	// it was compiled for are not the receiver's (MegaCache).
 	Mega *MegaCache
+	// ProbeKey, ProbeHash and ProbeBack are a megamorphic probe's, which the
+	// sites of a function's code share (mir's mega): the key a site looks
+	// up, the key's part of the hash (MegaKeyHash), and where it goes back
+	// to with the value's address, 0 for none found.
+	ProbeKey, ProbeHash uint64
+	ProbeBack           uintptr
 	// Open counts what closures captured of the frame's locals and is not
 	// closed yet, which Go keeps, the frame's or, for a native callee's,
 	// its context's: a scope's end, and a return, call Go to close them
@@ -686,6 +721,9 @@ var (
 	OffCallThis      = int32(unsafe.Offsetof(Context{}.CallThis))
 	OffHints         = int32(unsafe.Offsetof(Context{}.Hints))
 	OffMega          = int32(unsafe.Offsetof(Context{}.Mega))
+	OffProbeKey      = int32(unsafe.Offsetof(Context{}.ProbeKey))
+	OffProbeHash     = int32(unsafe.Offsetof(Context{}.ProbeHash))
+	OffProbeBack     = int32(unsafe.Offsetof(Context{}.ProbeBack))
 	OffEnterCallee   = int32(unsafe.Offsetof(Context{}.EnterCallee))
 	OffInlineLocals  = int32(unsafe.Offsetof(Context{}.InlineLocals))
 	OffInlineThis    = int32(unsafe.Offsetof(Context{}.InlineThis))
@@ -905,6 +943,13 @@ type Encoding struct {
 	// numbers, float64s, the next at that count less one.
 	RandomCount, RandomNumbers int32
 
+	// An accessor property's value (ssa.OpAccessorIs) is a slot whose number
+	// word is Accessor and whose pointer word points to its pair: the
+	// getter's function object at AccessorGetter, the setter's at
+	// AccessorSetter, nil for none.
+	Accessor                       uint64
+	AccessorGetter, AccessorSetter int32
+
 	// An object's properties: ObjectShape is the offset of its shape
 	// pointer, which says where each property is and what it is, and
 	// ObjectProps of the slice of their values, a value each, in order. An
@@ -985,7 +1030,10 @@ func IsNumber(word uint64) bool { return word < NumberLimit }
 // result its next value or, done, the uninitialized value; or a
 // destructuring's step (GoCallFill), the result undefined once done; or a
 // for...of's or a destructuring's cursor made (GoCallForOf) of its one
-// operand, the iterable.
+// operand, the iterable; or a property's read (GoCallGet), of its one
+// operand, or write (GoCallSet), of its two, the object and the value,
+// which Go makes as the instruction at the call's PC does, its key's atom
+// in the high half (GoOpIndexShift).
 // GoOpMarking
 // marks a call native code makes through Go only because the collector
 // marks -- a native call's, whose setup would store pointers without a
@@ -1005,5 +1053,7 @@ const (
 	GoCallStep     = 3
 	GoCallFill     = 4
 	GoCallForOf    = 5
+	GoCallGet      = 6
+	GoCallSet      = 7
 	GoOpMarking    = 1 << 24
 )

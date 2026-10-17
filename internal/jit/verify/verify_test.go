@@ -187,6 +187,20 @@ func (globals) EntryGeneric(int) bool             { return false }
 func (globals) Inline(int) (ssa.InlineSite, bool) { return ssa.InlineSite{}, false }
 func (globals) NativeCalls(int) []ssa.CallSite    { return nil }
 
+// Accessor has every property read and write call an accessor found on a
+// prototype, natively, so that the code of its checks and its call is
+// checked: a getter's at even PCs, a setter's at odd ones, which the
+// builder takes where the operation is a read or a write.
+func (globals) Accessor(pc int) (ssa.AccessorSite, bool) {
+	site := ssa.PropertySite{Key: 9, Shape: 0x20000 + uintptr(pc), Index: int32(pc % 5),
+		Holders: [2]ssa.Holder{{Object: 0x30000, Shape: 0x40000}}}
+	if pc%3 == 0 {
+		site.Cases = []ssa.PropertyCase{{Shape: 0x28000, Index: 2, Holders: [2]ssa.Holder{{Object: 0x30000, Shape: 0x40000}, {Object: 0x31000, Shape: 0x41000}}}}
+	}
+	call := &ssa.CallSite{Callee: 0x50000, Closure: 0x51000, Entry: 0x52000, Count: 0x53000, Params: 1, LocalCount: 2, MaxStack: 4, ThisSlot: 2}
+	return ssa.AccessorSite{Property: site, Function: 0x50000, Setter: pc%2 == 1, Call: call}, true
+}
+
 // StringProperty has every method read take its receivers for strings.
 func (globals) StringProperty(pc int) (ssa.PropertySite, bool) {
 	return ssa.PropertySite{Key: 9, Shape: 0x10000 + uintptr(pc), Index: int32(pc % 7)}, true
@@ -197,7 +211,8 @@ func (globals) StringProperty(pc int) (ssa.PropertySite, bool) {
 func TestMirEmitted(t *testing.T) {
 	enc := abi.Encoding{ValueSize: 16, NumOffset: 0, RefOffset: 8,
 		Undefined: 0xFFF8000000000001, Null: 0xFFF8000000000002, True: 0xFFF8000000000103,
-		False: 0xFFF8000000000003, Uninitialized: 0xFFF8000000000008, CanonicalNaN: 0x7FF8000000000000}
+		False: 0xFFF8000000000003, Uninitialized: 0xFFF8000000000008, CanonicalNaN: 0x7FF8000000000000,
+		Mega: true, UndefinedCell: 0x60000}
 	cells := map[ssa.Op]int{}
 	compile := func(name string, p *ir.Program, fb ssa.Feedback) bool {
 		f, err := ssa.BuildWith(p, fb)
@@ -250,7 +265,8 @@ func TestMirEmitted(t *testing.T) {
 		t.Fatalf("only %d functions compiled", n)
 	}
 	t.Logf("%d functions; checked %v bytes, %v instructions", n, checkedBytes, checkedInsts)
-	if cells[ssa.OpGlobalCell] == 0 || cells[ssa.OpLexCell] == 0 || cells[ssa.OpStringProp] == 0 {
-		t.Fatalf("global cells %d, lexical cells %d, string methods %d", cells[ssa.OpGlobalCell], cells[ssa.OpLexCell], cells[ssa.OpStringProp])
+	if cells[ssa.OpGlobalCell] == 0 || cells[ssa.OpLexCell] == 0 || cells[ssa.OpStringProp] == 0 || cells[ssa.OpAccessorIs] == 0 {
+		t.Fatalf("global cells %d, lexical cells %d, string methods %d, accessors %d", cells[ssa.OpGlobalCell], cells[ssa.OpLexCell],
+			cells[ssa.OpStringProp], cells[ssa.OpAccessorIs])
 	}
 }

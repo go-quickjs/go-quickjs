@@ -1701,6 +1701,14 @@ func (c *core) exitSource(s *ssa.Value) (abi.ExitLoc, bool) {
 // goOpWord is what a call of Go stores as its operation (abi.Context's
 // GoOp): a call's with its arguments' count and kind, which Go would
 // otherwise read from the bytecode.
+func goCallWord(site *ssa.CallSite) uint64 {
+	if site.Accessor != ssa.AccessorNone {
+		return goOpWord(&ssa.CallSite{Go: ssa.GoCall, Argc: site.Argc, Accessor: site.Accessor, Key: site.Key})
+	}
+	return goOpWord(&ssa.CallSite{Go: ssa.GoCall, Argc: site.Argc, Method: site.Method, New: site.Pool != 0})
+}
+
+// goOpWord is the word a call of Go, site, passes Go (abi.Context's GoOp).
 func goOpWord(site *ssa.CallSite) uint64 {
 	op := uint64(site.Go)
 	if site.Go == ssa.GoClosure || site.Go == ssa.GoClose || site.Go == ssa.GoCompare {
@@ -1724,7 +1732,19 @@ func goOpWord(site *ssa.CallSite) uint64 {
 			op |= abi.GoCallFill << abi.GoOpKindShift
 		case site.Step:
 			op |= abi.GoCallStep << abi.GoOpKindShift
+		case site.Accessor == ssa.AccessorGet:
+			op |= abi.GoCallGet<<abi.GoOpKindShift | uint64(site.Key)<<abi.GoOpIndexShift
+		case site.Accessor == ssa.AccessorSet:
+			op |= abi.GoCallSet<<abi.GoOpKindShift | uint64(site.Key)<<abi.GoOpIndexShift
 		}
 	}
 	return op
+}
+
+// b2i is 1 for true, 0 for false.
+func b2i(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

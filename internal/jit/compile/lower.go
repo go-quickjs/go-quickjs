@@ -225,12 +225,14 @@ func lowerFunction(fn *bytecode.Function, m lowering) (*ir.Program, error) {
 		// in its own code: a call of one makes its object, and inlining
 		// its body would run it as a call does.
 		return nil, refuse(-1, "async or generator function")
-	case fn.Kind != bytecode.KindNormal && fn.Kind != bytecode.KindArrow && fn.Kind != bytecode.KindMethod && fn.Kind != bytecode.KindConstructor:
+	case fn.Kind != bytecode.KindNormal && fn.Kind != bytecode.KindArrow && fn.Kind != bytecode.KindMethod && fn.Kind != bytecode.KindConstructor &&
+		fn.Kind != bytecode.KindGetter && fn.Kind != bytecode.KindSetter:
 		// A base class's constructor is a function's body, constructed as
 		// one is (the VM's jitConstructs), and called by no native call:
-		// a call without new throws. A derived class's, whose this super()
-		// binds, a getter's, a setter's and a class's field initializers
-		// are not.
+		// a call without new throws. A getter's and a setter's are a
+		// method's, called with the receiver as their this by a read or a
+		// write (ssa.AccessorSite). A derived class's, whose this super()
+		// binds, and a class's field initializers are not.
 		return nil, refuse(-1, "special function kind")
 	case fn.HasDirectEval || len(fn.EvalScopes) != 0:
 		return nil, refuse(-1, "direct eval")

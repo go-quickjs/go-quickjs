@@ -353,6 +353,13 @@ const (
 	// nothing merges it, and one whose result is unused stays
 	// (removeDead): it takes a number as the interpreter's call does.
 	OpRandomF64 // -> f64
+	// OpAccessorIs guards that the accessor in a property's cell (Args[0],
+	// OpPropCell's) has as its getter -- or, Index 1, its setter -- the
+	// function at Const's address, which the VM keeps alive: the one an
+	// accessor's read or write was compiled to call or inline
+	// (AccessorSite). The pair is the holder's, which a redefinition
+	// changes in place, without a new shape.
+	OpAccessorIs // source -> none
 )
 
 var opNames = [...]string{
@@ -369,7 +376,7 @@ var opNames = [...]string{
 	OpCall: "call", OpCallCell: "callcell", OpSqrtF64: "sqrtf", OpAbsF64: "absf", OpInstanceOf: "instanceof", OpTypeIs: "typeis",
 	OpCheckTrue: "checktrue", OpConstCell: "constcell", OpUpvalueCell: "upvaluecell", OpUpvalueStale: "upvaluestale", OpLocalCell: "localcell", OpPowF64: "powf",
 	OpMaxF64: "maxf", OpMinF64: "minf", OpFloorF64: "floorf", OpCeilF64: "ceilf", OpTruncF64: "truncf", OpRoundF64: "roundf",
-	OpSignF64: "signf", OpFroundF64: "froundf", OpMathCall: "mathcall", OpRandomF64: "randomf",
+	OpSignF64: "signf", OpFroundF64: "froundf", OpMathCall: "mathcall", OpRandomF64: "randomf", OpAccessorIs: "accessoris",
 }
 
 func (o Op) String() string {
@@ -384,7 +391,7 @@ func (o Op) isGuard() bool {
 	switch o {
 	case OpUnboxF64, OpOddballF64, OpTruth, OpCheckInit, OpModF64, OpArrayOf, OpIndexedOf, OpElemKey, OpElemRead, OpElemWrite, OpElemCell, OpElemStore, OpLength,
 		OpObjectOf, OpPropRead, OpPropWrite, OpPropCell, OpGlobalCell, OpLexCell, OpBindingCell, OpStringMethod, OpStringProp, OpStringCode, OpStringChar, OpCodeChar, OpLooseNullish, OpEqTagged,
-		OpSameObject, OpSameSymbol, OpIterClosed, OpFrameRoom, OpTailRoom, OpTailSelf, OpCall, OpInstanceOf, OpTypeIs, OpCheckTrue, OpPowF64:
+		OpSameObject, OpSameSymbol, OpIterClosed, OpFrameRoom, OpTailRoom, OpTailSelf, OpCall, OpInstanceOf, OpTypeIs, OpCheckTrue, OpPowF64, OpAccessorIs:
 		return true
 	}
 	return false
@@ -398,7 +405,8 @@ func (o Op) isGuard() bool {
 // (An object's shape changes only in Go.)
 func (o Op) readsMemory() bool {
 	return o == OpElemRead || o == OpElemWrite || o == OpElemCell || o == OpElemStore || o == OpPropRead || o == OpPropWrite || o == OpPropCell ||
-		o == OpGlobalCell || o == OpLexCell || o == OpBindingCell || o == OpStringProp || o == OpKeep || o == OpCall || o == OpLength
+		o == OpGlobalCell || o == OpLexCell || o == OpBindingCell || o == OpStringProp || o == OpKeep || o == OpCall || o == OpLength ||
+		o == OpAccessorIs
 }
 
 // Value is one SSA value.
@@ -454,7 +462,13 @@ type InlineCache struct {
 	Adds []*PropertyAdd
 	// Calls, for a call, are the functions it may call natively (OpCall).
 	Calls []*CallSite
+	// Mega, for a read, is its site's Megamorphic (PropertySite).
+	Mega bool
 }
+
+// Megamorphic reports whether v, a read, looks in the megamorphic cache
+// for a property a receiver's own table does not have (InlineCache).
+func (v *Value) Megamorphic() bool { return v.IC != nil && v.IC.Mega }
 
 // Holders are v's cache's prototypes (InlineCache), or nil.
 func (v *Value) Holders() *HolderChain {

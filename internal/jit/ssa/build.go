@@ -83,6 +83,34 @@ type InstanceOfSite struct {
 	Prototype     PropertySite
 }
 
+// AccessorSite is a property read or write (ir.PropertyRead,
+// PropertyWrite) whose site found an accessor, as V8's code calls a getter
+// or setter its feedback knows: Property is where -- the receiver's shape,
+// the prototypes up to the holder with theirs, and the accessor's index in
+// the holder's table, as a read found on a prototype has them -- and
+// Function the getter, or, Setter, the setter, its function object, which
+// the VM keeps alive. The read is a call of the getter with the receiver
+// as its this and no arguments; the write a call of the setter with the
+// value, its result dropped. Inline is the callee to inline, if it may be
+// (InlineSite: its program and feedback, Argc 0 or 1, Method), else Call
+// the native call to make, through its link (CallSite, with Accessor),
+// else Go makes the read or the write, called from native code (GoCall).
+// Any other receiver, or an accessor whose function is no longer
+// Function, Go reads or writes at an exit.
+type AccessorSite struct {
+	Property PropertySite
+	Function uintptr
+	Setter   bool
+	Inline   *InlineSite
+	Call     *CallSite
+}
+
+// AccessorFeedback is Feedback that knows the property reads and writes
+// whose sites found accessors (AccessorSite).
+type AccessorFeedback interface {
+	Accessor(pc int) (AccessorSite, bool)
+}
+
 // InstanceOfFeedback is Feedback that knows instanceof's constructors.
 type InstanceOfFeedback interface {
 	InstanceOf(pc int) (InstanceOfSite, bool)
@@ -314,7 +342,26 @@ type CallSite struct {
 	// interpreter's call does; one that shares a derived constructor's
 	// binding the call leaves to Go.
 	ArrowThis bool
+	// Accessor marks a property's read (AccessorGet) or write (AccessorSet)
+	// whose site found an accessor (AccessorSite), at its PC: a call of the
+	// getter, or of the setter with the value, its result dropped. Its
+	// operands are the receiver and, for a write, the value: no function,
+	// which the guards before the call found is Callee's. With Go (GoCall),
+	// Go makes the read or the write of Key, the property's atom, as the
+	// interpreter would, whatever it finds.
+	Accessor AccessorKind
+	Key      uint32
 }
+
+// AccessorKind is the kind of a call an accessor's read or write makes
+// (CallSite's Accessor): none, a getter's or a setter's.
+type AccessorKind uint8
+
+const (
+	AccessorNone AccessorKind = iota
+	AccessorGet
+	AccessorSet
+)
 
 // GoOp is what a call of Go does (CallSite's Go).
 type GoOp uint8
@@ -649,6 +696,12 @@ type PropertySite struct {
 	// Cases are the own properties others have.
 	Add  *PropertyAdd
 	Adds []*PropertyAdd
+	// Megamorphic, for a read, says it has met more than its cases hold:
+	// a receiver of another shape, whose own table does not have the
+	// property, is looked for in the megamorphic cache (abi.MegaCache)
+	// rather than leave for Go, as V8's megamorphic loads do. A read that
+	// may yet learn a case leaves, to learn it.
+	Megamorphic bool
 }
 
 // PropertyAdd is a write that adds its property, as the VM's cache has it
@@ -833,6 +886,11 @@ func (b *builder) hostOf(pc int) bool {
 	case ir.PropertyRead, ir.PropertyWrite, ir.ReferenceRead:
 		if _, ok := b.stringProperty(pc); ok {
 			return false
+		}
+		if _, ok := b.accessor(pc); ok {
+			// A call of its getter or setter (AccessorSite), as a call is
+			// left to Go but where it is made natively.
+			return true
 		}
 		_, ok := b.property(pc)
 		return !ok
@@ -1140,6 +1198,10 @@ type frame struct {
 	nest int
 	// hosts are host's answers, by PC: 0 for none yet, 1 for no, 2 for yes.
 	hosts []uint8
+	// asked are accessor's answers, by PC: 0 for none yet, 1 for no, 2 for
+	// one of accessors.
+	asked     []uint8
+	accessors map[int]*AccessorSite
 }
 
 // inlinedAt is the callee inlined at pc in the frame being translated.
@@ -1168,10 +1230,21 @@ func (b *builder) frameAt(blk *Block) *frame {
 // failures have not made it generic, within inlining's bounds; with the
 // calls it makes inlined in it, every one, or it is not.
 func (b *builder) inlineAt(pc int, total *int) (*frame, bool) {
-	if b.fb == nil || b.p.Code[pc].Op != ir.Host || b.inlines >= maxInlines || b.cur.nest >= maxInlineDepth || b.fb.Generic(pc) {
+	accessor, isAccessor := b.accessor(pc)
+	if b.fb == nil || b.p.Code[pc].Op != ir.Host && !isAccessor || b.inlines >= maxInlines || b.cur.nest >= maxInlineDepth || !isAccessor && b.fb.Generic(pc) {
 		return nil, false
 	}
-	site, ok := b.fb.Inline(pc)
+	var site InlineSite
+	ok := false
+	if isAccessor {
+		// A getter or a setter, called with the receiver and, for a setter,
+		// the value (AccessorSite).
+		if accessor.Inline != nil {
+			site, ok = *accessor.Inline, true
+		}
+	} else {
+		site, ok = b.fb.Inline(pc)
+	}
 	var calls []int
 	if ok {
 		calls, ok = InlineCalls(site.Program)
@@ -1185,6 +1258,11 @@ func (b *builder) inlineAt(pc int, total *int) (*frame, bool) {
 	if site.Method {
 		callee++
 	}
+	if isAccessor && (site.Construct || site.Restart || site.Forward || !site.Method || site.Argc != b2i(accessor.Setter)) {
+		// Its operands are the receiver and the value, the instruction's
+		// own, no function; a getter's result is the instruction's.
+		return nil, false
+	}
 	if site.Forward {
 		// f, apply and the receiver; the arguments are the frame's own.
 		callee = 3
@@ -1192,7 +1270,7 @@ func (b *builder) inlineAt(pc int, total *int) (*frame, bool) {
 			return nil, false
 		}
 	}
-	if depth < callee || after != depth-callee+1 || site.ThisSlot >= 0 && !site.Method && !site.Construct && !site.Forward {
+	if !isAccessor && (depth < callee || after != depth-callee+1 || site.ThisSlot >= 0 && !site.Method && !site.Construct && !site.Forward) {
 		return nil, false
 	}
 	if site.Construct {
@@ -1217,6 +1295,13 @@ func (b *builder) inlineAt(pc int, total *int) (*frame, bool) {
 	*total += len(site.Program.Code)
 	fr := &frame{p: q, fb: site.Feedback, site: site, result: b.cur.base + b.p.Locals + after - 1, base: b.nslots,
 		parent: b.cur, depth: b.cur.depth + 1, nest: b.cur.nest + 1, keep: -1}
+	if isAccessor {
+		// A getter's result is the read's; a setter's is dropped.
+		fr.result = b.cur.base + b.p.Code[pc].Dest
+		if accessor.Setter {
+			fr.result = -1
+		}
+	}
 	if site.Construct {
 		// Its receiver's keep cell, taken now, as a literal's is
 		// (literal): the inlining is decided now.
@@ -1250,6 +1335,7 @@ func (b *builder) inlineAt(pc int, total *int) (*frame, bool) {
 		}
 		b.enter(cur)
 	}
+	b.inlineAccessors(fr, total)
 	return fr, true
 }
 
@@ -2705,7 +2791,9 @@ func (b *builder) instruction(blk *Block, pc int) {
 			if b.cur.receiver != nil {
 				v = b.cur.receiver
 			}
-			b.assign(b.cur.result, blk, v)
+			if b.cur.result >= 0 {
+				b.assign(b.cur.result, blk, v)
+			}
 			break
 		}
 		if b.p.Captured != nil && b.f.Keeps < b.f.keepLimit() {
@@ -2846,6 +2934,10 @@ func (b *builder) instruction(blk *Block, pc int) {
 		}
 		b.assign(in.Dest, blk, v)
 	case ir.PropertyRead, ir.PropertyWrite, ir.ReferenceRead:
+		if a, ok := b.accessor(pc); ok {
+			b.accessorOp(blk, pc, in, a, operand, state)
+			break
+		}
 		if s, ok := b.stringProperty(pc); ok {
 			// A string's method, read where String.prototype has it, as
 			// V8 reads one off the String map's prototype.
@@ -2901,6 +2993,9 @@ func (b *builder) instruction(blk *Block, pc int) {
 			cell := guard(OpPropCell, Source, ir.HostExit, object)
 			cell.Const, cell.Index, cell.Key = ir.Value{Bits: uint64(site.Shape)}, int(site.Index), site.Key
 			f.setProperty(cell, holders, cases, nil, nil)
+			if site.Megamorphic {
+				f.cache(cell).Mega = true
+			}
 			v := f.newValue(blk, OpLoadCell, Tagged, cell)
 			v.Shadow = cell
 			b.assign(in.Dest, blk, v)
@@ -2910,6 +3005,9 @@ func (b *builder) instruction(blk *Block, pc int) {
 			v := guard(OpPropRead, Float64, ir.HostExit, object)
 			v.Const, v.Index, v.Key = ir.Value{Bits: uint64(site.Shape)}, int(site.Index), site.Key
 			f.setProperty(v, holders, cases, nil, nil)
+			if site.Megamorphic {
+				f.cache(v).Mega = true
+			}
 			b.assign(in.Dest, blk, boxF(v))
 			break
 		}
@@ -3181,6 +3279,9 @@ func (b *builder) instruction(blk *Block, pc int) {
 func (b *builder) nativeCalls(pc int) []*CallSite {
 	if b.fb == nil || pc+1 >= len(b.p.Code) || !reachable(b.p, pc+1) {
 		return nil
+	}
+	if a, ok := b.accessor(pc); ok {
+		return b.accessorCalls(a)
 	}
 	generic := b.fb.Generic(pc)
 	var calls []*CallSite

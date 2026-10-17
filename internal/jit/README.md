@@ -164,6 +164,29 @@ entered the code with, which the VM's frame describes, is given up by Go
 keeps for such a call -- a construction's, an arrow's sharing a derived
 constructor's this -- native code keeps too (`TailFrame`).
 
+**Accessors.** A read whose site found a getter on its receivers'
+prototypes, or a write a setter -- a class's accessor, or one
+`Object.defineProperty` put on a prototype -- is a call of it, as V8's
+code calls an accessor its feedback knows (`ssa.AccessorSite`): the
+receiver is checked as a read found on a prototype is, the accessor in
+the holder's cell checked to be the function compiled for
+(`ssa.OpAccessorIs`, since a redefinition changes the pair in place), and
+the getter is inlined, called natively through its link, or, where it
+has no code, Go makes the read from native code (`abi.GoCallGet`,
+`GoCallSet`), through the site's cache. The receiver is the getter's
+this; a setter's result is dropped. Frames Go makes for such a call show
+the accessor as the interpreter's do.
+
+**Megamorphic reads.** A read compiled for up to five shapes that meets
+another looks in the runtime's megamorphic cache (`abi.MegaCache`) before
+it leaves, as V8's megamorphic loads probe its stub cache: an entry, by
+the receiver's shape and the key, names the receiver's own data
+property, or a prototype's along a chain the code checks object by
+object and shape by shape (`abi.MegaChain`), or that none of the
+prototypes has it, the read's value undefined (`abi.MegaAbsent`). Go
+fills an entry at a read's exit. A read whose receiver's prototypes are
+no longer its case's -- a method added to one -- looks there too.
+
 **Private members.** A private member is a property under a key each
 evaluation of its class mints, a symbol, which a binding the class's
 methods capture holds. A read or a write of one is a property's (an

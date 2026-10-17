@@ -86,6 +86,10 @@ type compiler struct {
 	calling     amd64.Label
 	callingUsed bool
 	goFails     []goFail
+	// probe is the megamorphic probe of the code's reads, and of its
+	// writes, which its sites share (megaProbe), if any uses one.
+	probe     [2]amd64.Label
+	probeUsed [2]bool
 	// live is the routine of the calls of Go that save what they need
 	// themselves (goCallingLive).
 	live     amd64.Label
@@ -678,7 +682,15 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	}
 	sp := len(s.Slots)
 	calleeSlot := sp - site.Argc - 1
-	callee := v.Args[len(v.Args)-site.Argc-1]
+	var callee *ssa.Value
+	if site.Accessor != ssa.AccessorNone {
+		// An accessor's getter or setter (ssa.AccessorSite): no function
+		// among the operands, which are the receiver and a setter's value
+		// -- the guards before the call found it is Callee's.
+		calleeSlot = sp - site.Argc
+	} else {
+		callee = v.Args[len(v.Args)-site.Argc-1]
+	}
 	join, generic := amd64.Label(0), false
 	if !site.Alloc && !site.Receiver {
 		// The collector is not marking: the records, the callee's context
@@ -698,13 +710,17 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	// The callee is one of the functions, which has native code. A call
 	// through Function.prototype.call is made of its one function, its
 	// operands written where the callee has them (directOperand).
-	if callee.Shadow == nil && c.origin.At(callee) < 0 || site.Via != 0 && (len(sites) != 1 || !c.operandsLive(s, calleeSlot-1)) {
-		c.a.Jmp(c.stubLabel(s, exitKind(v.Aux)))
-		return
+	if callee == nil {
+		c.movImm(scratchC, uint64(site.Callee))
+	} else {
+		if callee.Shadow == nil && c.origin.At(callee) < 0 || site.Via != 0 && (len(sites) != 1 || !c.operandsLive(s, calleeSlot-1)) {
+			c.a.Jmp(c.stubLabel(s, exitKind(v.Aux)))
+			return
+		}
+		c.cmpWord(c.gpr(callee, scratchA), c.enc.Object)
+		guard(amd64.CondNE)
+		c.sourceRef(callee, guard)
 	}
-	c.cmpWord(c.gpr(callee, scratchA), c.enc.Object)
-	guard(amd64.CondNE)
-	c.sourceRef(callee, guard)
 	checked := c.a.NewLabel()
 	// Past its sites, any other function, through its link
 	// (genericCheck).
@@ -806,7 +822,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 		miss := c.a.NewLabel()
 		c.genericCheck(v, site, len(sites), checked, miss)
 		c.a.Bind(miss)
-		cold, op := c.a.NewLabel(), goOpWord(&ssa.CallSite{Go: ssa.GoCall, Argc: site.Argc, Method: site.Method, New: site.Pool != 0})
+		cold, op := c.a.NewLabel(), goCallWord(site)
 		c.a.Jmp(cold)
 		c.cold = append(c.cold, func() {
 			c.a.Bind(cold)
@@ -943,7 +959,7 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 	const calleeCtx, locals, tmp, top, high2 = amd64.R8, amd64.R10, amd64.RBX, amd64.R12, amd64.R13
 	back := c.a.NewLabel()
 	c.resumeUsed = true
-	op := goOpWord(&ssa.CallSite{Go: ssa.GoCall, Argc: site.Argc, Method: site.Method, New: site.Pool != 0})
+	op := goCallWord(site)
 	enter := func() {
 		if !c.enterUsed {
 			c.enter, c.enterUsed = c.a.NewLabel(), true
@@ -1735,7 +1751,7 @@ func (c *compiler) markingCall(v *ssa.Value, site *ssa.CallSite, guard func(amd6
 	}
 	marked, join := c.a.NewLabel(), c.a.NewLabel()
 	c.a.Jcc(amd64.CondNE, marked)
-	op := goOpWord(&ssa.CallSite{Go: ssa.GoCall, Argc: site.Argc, Method: site.Method, New: site.Pool != 0}) | abi.GoOpMarking
+	op := goCallWord(site) | abi.GoOpMarking
 	c.cold = append(c.cold, func() {
 		c.a.Bind(marked)
 		c.goCallOp(v, op, guard, true)
@@ -3458,12 +3474,12 @@ func (c *compiler) property(v *ssa.Value, guard func(amd64.Cond)) {
 		c.a.OpImm(amd64.Add, scratchA, int32(v.Index)*c.enc.ValueSize, true)
 		c.cold = append(c.cold, func() {
 			c.a.Bind(scan)
-			c.scan(v, guard, found)
+			c.scan(v, guard, found, 0)
 		})
 		c.a.Bind(found)
 		return
 	}
-	c.scan(v, guard, found)
+	c.scan(v, guard, found, 0)
 	c.a.Bind(found)
 }
 
@@ -3476,7 +3492,12 @@ func (c *compiler) property(v *ssa.Value, guard func(amd64.Cond)) {
 // left native code at every call. A property the VM makes on demand, which
 // the table may not hold yet, is not found, and Go reads it. Anything else
 // fails.
-func (c *compiler) scan(v *ssa.Value, guard func(amd64.Cond), found amd64.Label) {
+//
+// Too large to search, the megamorphic cache's (mega) -- at mega, if not
+// 0, the site's probe -- and, for a read that has met more than its cases
+// hold (ssa.Value's Megamorphic), not its own either: one that may yet
+// learn a case leaves, to learn it.
+func (c *compiler) scan(v *ssa.Value, guard func(amd64.Cond), found, mega amd64.Label) {
 	p := c.gpr(v.Args[0], scratchA)
 	c.a.LoadU8(scratchB, p, c.enc.ObjectClass)
 	c.a.OpImm(amd64.Cmp, scratchB, int32(c.enc.ClassObject), false)
@@ -3491,14 +3512,16 @@ func (c *compiler) scan(v *ssa.Value, guard func(amd64.Cond), found amd64.Label)
 	}
 	c.a.Load(scratchB, p, c.enc.ObjectProps+8)
 	c.a.OpImm(amd64.Cmp, scratchB, abi.MaxScan, true)
-	if c.enc.Mega {
-		// Too large to search: the megamorphic cache's (mega).
-		large := c.a.NewLabel()
-		c.a.Jcc(amd64.CondA, large)
+	if c.enc.Mega && mega == 0 {
+		mega = c.a.NewLabel()
 		c.cold = append(c.cold, func() {
-			c.a.Bind(large)
+			c.a.Bind(mega)
 			c.mega(v, guard, found)
 		})
+	}
+	if mega != 0 {
+		// Too large to search: the megamorphic cache's (mega).
+		c.a.Jcc(amd64.CondA, mega)
 	} else {
 		guard(amd64.CondA)
 	}
@@ -3517,7 +3540,16 @@ func (c *compiler) scan(v *ssa.Value, guard func(amd64.Cond), found amd64.Label)
 	loop, hit := c.a.NewLabel(), c.a.NewLabel()
 	c.a.Bind(loop)
 	c.a.Op(amd64.Test, scratchB, scratchB, true)
-	guard(amd64.CondE)
+	if mega != 0 && v.Op != ssa.OpPropWrite && v.Megamorphic() {
+		// Not its own: a prototype's, which the megamorphic cache may
+		// have, as V8's megamorphic loads look further rather than
+		// deoptimize. Box2D's contacts, of seven classes, each read
+		// IsSensor of their base class's prototype, and the read left
+		// native code for the shapes past its cases.
+		c.a.Jcc(amd64.CondE, mega)
+	} else {
+		guard(amd64.CondE)
+	}
 	c.a.LoadU32(scratchC, scratchA, c.enc.PropertyKey)
 	c.a.OpImm(amd64.Cmp, scratchC, int32(v.Key), false)
 	c.a.Jcc(amd64.CondE, hit)
@@ -3542,13 +3574,48 @@ func (c *compiler) scan(v *ssa.Value, guard func(amd64.Cond), found amd64.Label)
 }
 
 // mega looks the property v names up in the megamorphic cache
-// (abi.MegaCache) for the receiver's shape -- a property of its own, plain
-// data, and writable for a write -- and goes to found with the address of
-// its value in scratchA, or fails: Go fills the entry at the exit.
+// (abi.MegaCache) for the receiver's shape, by the probe the code's sites
+// share (megaProbe), and goes to found with the address of its value in
+// scratchA, or fails: Go fills the entry at the exit. A probe of its own
+// at every site, unrolled, had been a few hundred bytes of each read's.
 func (c *compiler) mega(v *ssa.Value, guard func(amd64.Cond), found amd64.Label) {
-	p := c.gpr(v.Args[0], scratchA)
-	c.a.Load(scratchB, p, c.enc.ObjectShape)
-	// abi.MegaSlot's hash.
+	write := b2i(v.Op == ssa.OpPropWrite)
+	if !c.probeUsed[write] {
+		c.probe[write], c.probeUsed[write] = c.a.NewLabel(), true
+		c.cold = append(c.cold, func() {
+			c.a.Bind(c.probe[write])
+			c.megaProbe(write == 1)
+		})
+	}
+	back := c.a.NewLabel()
+	c.a.StoreImm(regCtx, abi.OffProbeKey, int32(v.Key))
+	c.a.StoreImm(regCtx, abi.OffProbeHash, int32(abi.MegaKeyHash(uint32(v.Key))))
+	c.a.LeaLabel(scratchC, back)
+	c.a.Store(regCtx, abi.OffProbeBack, scratchC)
+	if p := c.gpr(v.Args[0], scratchA); p != scratchA {
+		c.a.MovRR(scratchA, p)
+	}
+	c.a.Jmp(c.probe[write])
+	c.a.Bind(back)
+	c.a.Op(amd64.Test, scratchA, scratchA, true)
+	guard(amd64.CondE)
+	c.a.Jmp(found)
+}
+
+// megaProbe is the probe of the megamorphic cache a function's sites share
+// (mega), for a read or a write: the receiver in scratchA, the key and its
+// hash's part in the context (abi.Context's ProbeKey, ProbeHash), it goes
+// back (ProbeBack) with the address of the value in scratchA -- the
+// receiver's own data property, plain, and writable for a write; or, for a
+// read, a prototype's, along the entry's chain, each prototype the one it
+// names with its shape, or none of them, the value undefined
+// (abi.MegaAbsent) -- or 0. It uses every scratch register, xScratch2, and
+// for a read xScratch1.
+func (c *compiler) megaProbe(write bool) {
+	fail := c.a.NewLabel()
+	c.a.MovQToX(xScratch2, scratchA)
+	c.a.Load(scratchB, scratchA, c.enc.ObjectShape)
+	// abi.MegaSet's hash.
 	c.a.MovRR(scratchC, scratchB)
 	c.a.ShiftImm(amd64.Shr, scratchC, 4, true)
 	c.a.MovRR(scratchA, scratchB)
@@ -3557,9 +3624,10 @@ func (c *compiler) mega(v *ssa.Value, guard func(amd64.Cond), found amd64.Label)
 	c.a.MovRR(scratchA, scratchB)
 	c.a.ShiftImm(amd64.Shr, scratchA, 26, true)
 	c.a.Op(amd64.Xor, scratchC, scratchA, true)
-	c.a.OpImm(amd64.Xor, scratchC, int32(abi.MegaKeyHash(uint32(v.Key))), false)
+	c.a.LoadU32(scratchA, regCtx, abi.OffProbeHash)
+	c.a.Op(amd64.Xor, scratchC, scratchA, false)
 	c.a.OpImm(amd64.And, scratchC, abi.MegaSets-1, false)
-	c.a.ShiftImm(amd64.Shl, scratchC, 6, true)
+	c.a.ShiftImm(amd64.Shl, scratchC, abi.MegaSetShift, true)
 	c.a.Load(scratchA, regCtx, abi.OffMega)
 	c.a.Op(amd64.Add, scratchA, scratchC, true)
 	// The set's ways, in turn.
@@ -3570,28 +3638,78 @@ func (c *compiler) mega(v *ssa.Value, guard func(amd64.Cond), found amd64.Label)
 		c.a.Op(amd64.Cmp, scratchB, scratchC, true)
 		c.a.Jcc(amd64.CondNE, next)
 		c.a.LoadU32(scratchC, scratchA, w*abi.MegaSize+abi.OffMegaKey)
-		c.a.OpImm(amd64.Cmp, scratchC, int32(v.Key), false)
+		c.a.CmpMem(scratchC, regCtx, abi.OffProbeKey, false)
 		c.a.Jcc(amd64.CondNE, next)
 		c.a.OpImm(amd64.Add, scratchA, w*abi.MegaSize, true)
 		c.a.Jmp(hit)
 		c.a.Bind(next)
 	}
-	// In none: the receiver's shape, which an object with properties has,
-	// is no nil.
-	c.a.OpImm(amd64.Cmp, scratchB, 0, true)
-	guard(amd64.CondNE)
+	c.a.Jmp(fail)
 	c.a.Bind(hit)
 	c.a.LoadU32(scratchC, scratchA, abi.OffMegaIndex)
-	if v.Op == ssa.OpPropWrite {
+	if write {
 		c.a.Op(amd64.Test, scratchC, scratchC, false)
-		guard(amd64.CondNS)
+		c.a.Jcc(amd64.CondNS, fail)
+	} else {
+		// A prototype's: the chain's objects, each of its shape, from the
+		// receiver's prototype on, the last the holder; or, absent, all of
+		// them, the last's prototype none.
+		own, loop, holder, absent, end := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+		c.a.MovQToX(xScratch1, scratchC)
+		c.a.Load(scratchA, scratchA, abi.OffMegaChain)
+		c.a.Op(amd64.Test, scratchA, scratchA, true)
+		c.a.Jcc(amd64.CondE, own)
+		c.a.MovQFromX(scratchB, xScratch2)
+		c.a.Load(scratchB, scratchB, c.enc.ObjectProto)
+		c.a.OpImm(amd64.Cmp, scratchC, abi.MegaAbsent, false)
+		c.a.Jcc(amd64.CondAE, absent)
+		c.a.Bind(loop)
+		c.a.CmpMem(scratchB, scratchA, abi.OffLinkObject, true)
+		c.a.Jcc(amd64.CondNE, fail)
+		c.a.Load(scratchC, scratchB, c.enc.ObjectShape)
+		c.a.CmpMem(scratchC, scratchA, abi.OffLinkShape, true)
+		c.a.Jcc(amd64.CondNE, fail)
+		c.a.Load(scratchC, scratchA, abi.MegaLinkSize+abi.OffLinkObject)
+		c.a.Op(amd64.Test, scratchC, scratchC, true)
+		c.a.Jcc(amd64.CondE, holder)
+		c.a.OpImm(amd64.Add, scratchA, abi.MegaLinkSize, true)
+		c.a.Load(scratchB, scratchB, c.enc.ObjectProto)
+		c.a.Jmp(loop)
+		c.a.Bind(holder)
+		c.a.MovQFromX(scratchC, xScratch1)
+		c.a.ShiftImm(amd64.Shl, scratchC, 4, true)
+		c.a.Load(scratchA, scratchB, c.enc.ObjectProps)
+		c.a.Op(amd64.Add, scratchA, scratchC, true)
+		c.a.JmpMem(regCtx, abi.OffProbeBack)
+		c.a.Bind(absent)
+		c.a.Load(scratchC, scratchA, abi.OffLinkObject)
+		c.a.Op(amd64.Test, scratchC, scratchC, true)
+		c.a.Jcc(amd64.CondE, end)
+		c.a.Op(amd64.Cmp, scratchB, scratchC, true)
+		c.a.Jcc(amd64.CondNE, fail)
+		c.a.Load(scratchC, scratchB, c.enc.ObjectShape)
+		c.a.CmpMem(scratchC, scratchA, abi.OffLinkShape, true)
+		c.a.Jcc(amd64.CondNE, fail)
+		c.a.Load(scratchB, scratchB, c.enc.ObjectProto)
+		c.a.OpImm(amd64.Add, scratchA, abi.MegaLinkSize, true)
+		c.a.Jmp(absent)
+		c.a.Bind(end)
+		c.a.Op(amd64.Test, scratchB, scratchB, true)
+		c.a.Jcc(amd64.CondNE, fail)
+		c.movImm(scratchA, c.enc.UndefinedCell)
+		c.a.JmpMem(regCtx, abi.OffProbeBack)
+		c.a.Bind(own)
+		c.a.MovQFromX(scratchC, xScratch1)
 	}
 	c.a.OpImm(amd64.And, scratchC, abi.MegaWritable-1, false)
 	c.a.ShiftImm(amd64.Shl, scratchC, 4, true)
-	p = c.gpr(v.Args[0], scratchA)
-	c.a.Load(scratchA, p, c.enc.ObjectProps)
+	c.a.MovQFromX(scratchA, xScratch2)
+	c.a.Load(scratchA, scratchA, c.enc.ObjectProps)
 	c.a.Op(amd64.Add, scratchA, scratchC, true)
-	c.a.Jmp(found)
+	c.a.JmpMem(regCtx, abi.OffProbeBack)
+	c.a.Bind(fail)
+	c.movImm(scratchA, 0)
+	c.a.JmpMem(regCtx, abi.OffProbeBack)
 }
 
 // keyAt checks that the object in scratchA has a property at v's index
@@ -3767,19 +3885,32 @@ func (c *compiler) holder(v *ssa.Value, guard func(amd64.Cond)) {
 	// deoptimize, and leaves only if the property is not its own: RayTrace's
 	// IntersectionInfo, given its properties in more orders than the cases
 	// hold, some on its prototype, left its readers at every one.
-	done := c.a.NewLabel()
+	// A receiver whose prototypes are no longer the case's -- a method
+	// added to one, or taken off -- is searched so too, rather than leave:
+	// the megamorphic cache has the chain as it is now (mega).
+	done, scan, mega := c.a.NewLabel(), c.a.NewLabel(), amd64.Label(0)
+	stale := scan
+	if c.enc.Mega && v.Op != ssa.OpPropWrite {
+		// Prototypes no longer the case's, the megamorphic cache's chain;
+		// the receiver's own table, the case's shape says, has no key.
+		mega = c.a.NewLabel()
+		stale = mega
+		c.cold = append(c.cold, func() {
+			c.a.Bind(mega)
+			c.mega(v, guard, done)
+		})
+	}
+	c.cold = append(c.cold, func() {
+		c.a.Bind(scan)
+		c.scan(v, guard, done, mega)
+	})
 	for i, k := range cases {
 		next := c.a.NewLabel()
 		p := c.gpr(v.Args[0], scratchA)
 		c.a.Load(scratchB, p, c.enc.ObjectShape)
 		c.cmpWord(scratchB, uint64(k.Shape))
 		if i == len(cases)-1 {
-			scan := c.a.NewLabel()
 			c.a.Jcc(amd64.CondNE, scan)
-			c.cold = append(c.cold, func() {
-				c.a.Bind(scan)
-				c.scan(v, guard, done)
-			})
 		} else {
 			c.a.Jcc(amd64.CondNE, next)
 		}
@@ -3801,10 +3932,10 @@ func (c *compiler) holder(v *ssa.Value, guard func(amd64.Cond)) {
 			}
 			c.movImm(scratchA, uint64(h.Object))
 			c.a.Op(amd64.Cmp, scratchB, scratchA, true)
-			guard(amd64.CondNE)
+			c.a.Jcc(amd64.CondNE, stale)
 			c.a.Load(scratchB, scratchA, c.enc.ObjectShape)
 			c.cmpWord(scratchB, uint64(h.Shape))
-			guard(amd64.CondNE)
+			c.a.Jcc(amd64.CondNE, stale)
 			c.a.Load(scratchB, scratchA, c.enc.ObjectProto)
 		}
 		c.a.Load(scratchA, scratchA, c.enc.ObjectProps)
@@ -4751,6 +4882,21 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.typeIs(v, c.guardFor(v))
 	case ssa.OpSameObject:
 		c.cmpWord(c.gpr(arg(0), scratchA), v.Const.Bits)
+		guard(amd64.CondNE)
+	case ssa.OpAccessorIs:
+		// The cell's accessor pair, and its getter's or its setter's
+		// function.
+		p := c.gpr(arg(0), scratchA)
+		c.a.Load(scratchB, p, c.enc.NumOffset)
+		c.cmpWord(scratchB, c.enc.Accessor)
+		guard(amd64.CondNE)
+		c.a.Load(scratchB, p, c.enc.RefOffset)
+		at := c.enc.AccessorGetter
+		if v.Index == 1 {
+			at = c.enc.AccessorSetter
+		}
+		c.a.Load(scratchB, scratchB, at)
+		c.cmpWord(scratchB, v.Const.Bits)
 		guard(amd64.CondNE)
 	case ssa.OpCall:
 		c.call(v, c.guardFor(v))

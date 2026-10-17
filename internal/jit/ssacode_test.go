@@ -166,14 +166,77 @@ var testHolders = func() *[2]testObject {
 	h := new([2]testObject)
 	h[0] = testObject{shape: newTestShape([]uint32{12, 13}, []uint8{testWritable, 0}), proto: &h[1],
 		vals: []testValue{{num: math.Float64bits(7)}, {num: testEncoding.True}}}
-	h[1] = testObject{shape: newTestShape([]uint32{11}, []uint8{testWritable}),
-		vals: []testValue{{num: math.Float64bits(-2)}}}
+	h[1] = testObject{shape: newTestShape([]uint32{11, testAccessorKey}, []uint8{testWritable, testAccessor}),
+		vals: []testValue{{num: math.Float64bits(-2)}, {num: testTagBase | 9, ref: unsafe.Pointer(&testPair)}}}
 	return h
 }()
 
 // testHolderValues are testHolders' properties' values, as the SSA
-// evaluator has them.
-var testHolderValues = [2][]ir.Value{{ir.Float(7), ir.Bool(true)}, {ir.Float(-2)}}
+// evaluator has them: the second's second is its accessor, whose pair the
+// evaluator knows by its cell (ssa.Heap's Accessors).
+var testHolderValues = [2][]ir.Value{{ir.Float(7), ir.Bool(true)}, {ir.Float(-2), {Kind: ir.Opaque, Bits: 98}}}
+
+// testAccessorKey is the key of testHolders[1]'s accessor, testPair, whose
+// getter and setter are testGetter and testSetter: objects of no kind,
+// which native code only compares (ssa.OpAccessorIs).
+const testAccessorKey = 16
+
+type testAccessorPair struct{ getter, setter unsafe.Pointer }
+
+var (
+	testGetter, testSetter, testOther byte
+	testPair                          = testAccessorPair{unsafe.Pointer(&testGetter), unsafe.Pointer(&testSetter)}
+)
+
+// testAccessorSite is an accessor's site (ssa.AccessorSite): a read of
+// testHolders[1]'s accessor, or a write, from a receiver of one of
+// testShapes whose prototype is testHolders[0], sometimes compiled for
+// another function than the pair has; inlined, the getter returning a
+// number or its receiver, the setter nothing -- callees with nothing to
+// leave for, whose frames an exit never makes.
+func testAccessorSite(g *rand.Rand, write bool) ssa.AccessorSite {
+	h0 := ssa.Holder{Object: uintptr(unsafe.Pointer(&testHolders[0])), Shape: testHolders[0].shapeID()}
+	h1 := ssa.Holder{Object: uintptr(unsafe.Pointer(&testHolders[1])), Shape: testHolders[1].shapeID()}
+	site := ssa.PropertySite{Key: testAccessorKey, Shape: testShapes[g.IntN(len(testShapes))].shape, Index: 1,
+		Holders: [2]ssa.Holder{h0, h1}}
+	if g.IntN(3) == 0 {
+		o := testShapes[g.IntN(len(testShapes))].shape
+		if o != site.Shape {
+			site.Cases = []ssa.PropertyCase{{Shape: o, Index: 1, Holders: site.Holders}}
+		}
+	}
+	fn := &testGetter
+	if write {
+		fn = &testSetter
+	}
+	if g.IntN(4) == 0 {
+		fn = &testOther
+	}
+	ret := ir.Literal(ir.Float(5))
+	callee := &ir.Program{Locals: 1}
+	this := -1
+	switch {
+	case write:
+		// The value, its one parameter, is not returned: its result is
+		// dropped anyway.
+		ret = ir.Literal(ir.Value{Kind: ir.Undefined})
+	case g.IntN(2) == 0:
+		ret, this = ir.Slot(0), 0
+	}
+	callee.Code = []ir.Instruction{{Op: ir.Return, Left: ret}}
+	callee.Maps = []ir.StateMap{{PC: 0}}
+	in := &ssa.InlineSite{Program: callee, Feedback: layout{}, Callee: uintptr(unsafe.Pointer(fn)), Argc: b2i(write), Method: true,
+		Params: b2i(write), ThisSlot: this}
+	return ssa.AccessorSite{Property: site, Function: uintptr(unsafe.Pointer(fn)), Setter: write, Inline: in}
+}
+
+// b2i is 1 for true, 0 for false.
+func b2i(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
 
 // testHolderSite is a site found on a prototype: the receiver of one of
 // testShapes, then one or two of testHolders, the last sometimes of a
@@ -286,7 +349,94 @@ var testEncoding = abi.Encoding{
 	ClassObject: testClassObject, PropNotData: testAccessor | testDeleted | testPrivate,
 	PropNotWritable: testAccessor | testDeleted | testPrivate | testUninit | testWritable, PropWritable: testWritable,
 	PropUninit: testUninit,
+	Mega:       true,
+	// The cell a read of a property no object has finds (abi.MegaAbsent).
+	UndefinedCell: uint64(uintptr(unsafe.Pointer(&testUndefinedCell))),
+	Accessor:      testTagBase | 9, AccessorGetter: int32(unsafe.Offsetof(testAccessorPair{}.getter)),
+	AccessorSetter: int32(unsafe.Offsetof(testAccessorPair{}.setter)),
 }
+
+// testUndefinedCell holds undefined, which nothing writes.
+var testUndefinedCell = testValue{num: testTagBase | 1}
+
+// testMegaOverride, if not nil, is the megamorphic cache every heap's code
+// probes, a test's own.
+var testMegaOverride *abi.MegaCache
+
+// testStaleShape is a shape no object has, which a stale cache entry
+// names for a prototype.
+var testStaleShape testShape
+
+// testMegas are megamorphic caches (abi.MegaCache) the harness's code
+// probes, as the VM's Go fills its: an empty one; and, for receivers of
+// testShapes, entries of their own data properties, writable or not, and
+// of testHolders' along the chains to them, some of them stale -- a
+// prototype's shape not the one it has now -- each placed in its set as
+// the VM places it (megaPut). A heap's code runs with the one its spec
+// says (nativeHeap.mega), and the SSA evaluator reads the same.
+var testMegas = func() [3]*abi.MegaCache {
+	var out [3]*abi.MegaCache
+	g := rand.New(rand.NewPCG(7, 8))
+	put := func(m *abi.MegaCache, n abi.MegaEntry) {
+		set := m[abi.MegaSet(uintptr(n.Shape), n.Key):][:abi.MegaWays]
+		at := len(set) - 1
+		for w := range set {
+			if set[w].Shape == n.Shape && set[w].Key == n.Key {
+				at = w
+				break
+			}
+		}
+		copy(set[1:at+1], set[:at])
+		set[0] = n
+	}
+	link := func(i int, stale bool) abi.MegaLink {
+		l := abi.MegaLink{Object: unsafe.Pointer(&testHolders[i]), Shape: unsafe.Pointer(testHolders[i].shape)}
+		if stale {
+			l.Shape = unsafe.Pointer(&testStaleShape)
+		}
+		return l
+	}
+	for v := range out {
+		m := new(abi.MegaCache)
+		out[v] = m
+		if v == 0 {
+			continue
+		}
+		for _, spec := range testShapes {
+			for i, key := range spec.keys {
+				if g.IntN(2) == 0 && spec.flags[i]&testEncoding.PropNotData == 0 {
+					idx := uint32(i)
+					if spec.flags[i]&testEncoding.PropNotWritable == testWritable {
+						idx |= abi.MegaWritable
+					}
+					put(m, abi.MegaEntry{Shape: unsafe.Pointer(spec.s), Key: key, Index: idx})
+				}
+			}
+			for j, k := range testHolders[0].shape.keys {
+				if g.IntN(2) == 0 {
+					put(m, abi.MegaEntry{Shape: unsafe.Pointer(spec.s), Key: k.key, Index: uint32(j),
+						Chain: &abi.MegaChain{link(0, g.IntN(4) == 0)}})
+				}
+			}
+			if g.IntN(2) == 0 {
+				put(m, abi.MegaEntry{Shape: unsafe.Pointer(spec.s), Key: testHolders[1].shape.keys[0].key, Index: 0,
+					Chain: &abi.MegaChain{link(0, false), link(1, g.IntN(4) == 0)}})
+			}
+			// Key 14, which nothing has: absent along no prototype, along
+			// the second holder, or along both.
+			switch g.IntN(4) {
+			case 0:
+				put(m, abi.MegaEntry{Shape: unsafe.Pointer(spec.s), Key: 14, Index: abi.MegaAbsent, Chain: &abi.MegaChain{}})
+			case 1:
+				put(m, abi.MegaEntry{Shape: unsafe.Pointer(spec.s), Key: 14, Index: abi.MegaAbsent, Chain: &abi.MegaChain{link(1, g.IntN(4) == 0)}})
+			case 2:
+				put(m, abi.MegaEntry{Shape: unsafe.Pointer(spec.s), Key: 14, Index: abi.MegaAbsent,
+					Chain: &abi.MegaChain{link(0, g.IntN(4) == 0), link(1, false)}})
+			}
+		}
+	}
+	return out
+}()
 
 // testHeap is what handles 0 to 4 name, as in package ssa's tests: an
 // array of numbers, an array with holes and other tags among them, an
@@ -405,12 +555,21 @@ type nativeHeap struct {
 	// lexNames is the names script-level lexical bindings have, a bit for
 	// each key: those of the global object's spec's length's bits.
 	lexNames []uint64
+	// mega is the megamorphic cache its code probes, of testMegas.
+	mega *abi.MegaCache
 }
 
 func (h testHeap) native() *nativeHeap {
 	// The objects are made first, at the addresses they keep, so that
 	// properties can refer to them.
 	n := &nativeHeap{objects: make([]testObject, len(h))}
+	if len(h) > 0 {
+		// Chosen by the spec, which draws nothing more.
+		n.mega = testMegas[len(h[0].cells)%len(testMegas)]
+	}
+	if testMegaOverride != nil {
+		n.mega = testMegaOverride
+	}
 	for i, a := range h {
 		o := &n.objects[i]
 		o.elems = make([]testValue, len(a.cells))
@@ -487,10 +646,17 @@ func (h testHeap) native() *nativeHeap {
 // heap is what the SSA evaluator reads: views of the arrays' cells, and the
 // objects' shapes with its own copy of their property words.
 func (n *nativeHeap) heap() ssa.Heap {
-	h := ssa.Heap{Arrays: n.views(), Word: testWordValue, Holders: map[uintptr]*ssa.Object{}, WriteBarrier: testBarrier != 0}
+	h := ssa.Heap{Arrays: n.views(), Word: testWordValue, Holders: map[uintptr]*ssa.Object{}, WriteBarrier: testBarrier != 0, Mega: n.mega}
+	h.Accessors = map[*ir.Value]ssa.Accessor{}
 	for i := range testHolders {
 		o := &testHolders[i]
-		h.Holders[uintptr(unsafe.Pointer(o))] = &ssa.Object{Shape: o.shapeID(), Proto: uintptr(unsafe.Pointer(o.proto)), Props: slices.Clone(testHolderValues[i])}
+		m := &ssa.Object{Shape: o.shapeID(), Proto: uintptr(unsafe.Pointer(o.proto)), Props: slices.Clone(testHolderValues[i])}
+		h.Holders[uintptr(unsafe.Pointer(o))] = m
+		for j, k := range o.shape.keys {
+			if k.flags&testAccessor != 0 {
+				h.Accessors[&m.Props[j]] = ssa.Accessor{Getter: uintptr(unsafe.Pointer(&testGetter)), Setter: uintptr(unsafe.Pointer(&testSetter))}
+			}
+		}
 	}
 	for i := range n.objects {
 		o := &n.objects[i]
@@ -717,6 +883,15 @@ type layout struct {
 	// (ssa.EntryFeedback), as code that met too many without is
 	// compiled; otherwise only calls and what is left to Go whole do.
 	entries bool
+	// accessors are the property sites that found an accessor, by PC
+	// (ssa.AccessorFeedback).
+	accessors map[int]ssa.AccessorSite
+}
+
+// Accessor is ssa.AccessorFeedback's.
+func (l layout) Accessor(pc int) (ssa.AccessorSite, bool) {
+	s, ok := l.accessors[pc]
+	return s, ok
 }
 
 // WantsEntry is ssa.EntryFeedback's.
@@ -798,6 +973,11 @@ func ssaTestProgram(r *rand.Rand) (*ir.Program, layout) {
 			// VM's caches remember -- or a shape no object has.
 			if r.IntN(4) != 0 {
 				s := site{Key: 10 + uint32(r.IntN(4))}
+				if s.Key == 13 && pc%3 == 0 {
+					// A key no object has, which the megamorphic cache may
+					// say none of a receiver's prototypes has (abi.MegaAbsent).
+					s.Key = 14
+				}
 				switch r.IntN(3) {
 				case 0:
 					sh := testShapes[r.IntN(len(testShapes))]
@@ -872,7 +1052,24 @@ func ssaTestProgram(r *rand.Rand) (*ir.Program, layout) {
 			genericEntries[pc] = true
 		}
 	}
-	return p, layout{frameLocals, this, sites, globals, generic, genericEntries, g.IntN(2) == 0}
+	entries := g.IntN(2) == 0
+	// Some property sites found an accessor, drawn last, so that what was
+	// drawn before is as it was.
+	accessors := map[int]ssa.AccessorSite{}
+	for pc := range p.Code {
+		// Some reads have met more shapes than their cases hold, and look
+		// in the megamorphic cache past their own tables.
+		if s, ok := sites[pc]; ok && g.IntN(2) == 0 {
+			s.Megamorphic = true
+			sites[pc] = s
+		}
+	}
+	for pc, in := range p.Code {
+		if (in.Op == ir.PropertyRead || in.Op == ir.PropertyWrite || in.Op == ir.ReferenceRead) && g.IntN(4) == 0 {
+			accessors[pc] = testAccessorSite(g, in.Op == ir.PropertyWrite)
+		}
+	}
+	return p, layout{frameLocals, this, sites, globals, generic, genericEntries, entries, accessors}
 }
 
 var exitNames = map[uint64]ir.ExitKind{abi.ExitReturn: ir.Returned, abi.ExitDeopt: ir.GuardExit,
@@ -925,7 +1122,9 @@ func compileNative(p *ir.Program, l layout) (*compiled, error) {
 func nativeMismatch(c *compiled, pc int, slots []ir.Value, poll int, heap testHeap) string {
 	f := c.f
 	nh, eh := heap.native(), heap.native()
-	frame := make([]testValue, len(slots))
+	// One more value past the slots, the address of the stack's top within
+	// the frame's allocation where there are no operands.
+	frame := make([]testValue, len(slots), len(slots)+1)
 	// Captured bindings live in cells, and the receiver in the context;
 	// their numbers' entries in the frame are poison.
 	ctx := &abi.Context{}
@@ -971,10 +1170,14 @@ func nativeMismatch(c *compiled, pc int, slots []ir.Value, poll int, heap testHe
 	if poll > 0 {
 		counter = poll
 	}
-	ctx.Locals, ctx.BackEdges = unsafe.Pointer(&frame[0]), &counter
+	ctx.Locals, ctx.BackEdges, ctx.Mega = unsafe.Pointer(&frame[0]), &counter, nh.mega
 	if f.StackSize > 0 {
 		ctx.Stack = unsafe.Pointer(&frame[f.Locals])
 	}
+	// Room past the frame for an inlined callee's (ssa.OpFrameRoom), and
+	// contexts past this one: the VM's stack, as the harness's, is ample.
+	ctx.Stack = unsafe.Add(unsafe.Pointer(unsafe.SliceData(frame)), f.Locals*16)
+	ctx.StackBase, ctx.StackEnd, ctx.Bounds = unsafe.Pointer(unsafe.SliceData(frame)), uint64(len(frame)+1024), &abi.Bounds{LevelLimit: 64}
 	if len(cells) > 0 {
 		ctx.Upvalues = unsafe.Pointer(&cells[0])
 	}
@@ -1162,7 +1365,13 @@ func TestSSANativeMatchesEvaluator(t *testing.T) {
 // (its exits' descriptions): a runtime compiles at run time, and what a
 // compile leaves the collector is paid by the program. The budget is a
 // little over what random programs take now, so that a pass allocating per
-// value again shows here.
+// value again shows here: 49 a compile (51.5 with Go 1.24) without accessor
+// sites; 56.2 (59.0) since a quarter of their property sites are
+// accessors' and megamorphic -- each inlined getter or setter a frame of
+// its own, each site's out-of-line paths a closure (mir's cold), which
+// are per site, not per value. Their sites' feedback and their guards'
+// operands come from the workspace (accessorSite, guardOf): 58.6 (61.3)
+// before.
 func TestWorkspaceCompileAllocations(t *testing.T) {
 	r := rand.New(rand.NewPCG(41, 42))
 	var ws ssa.Workspace
@@ -1199,7 +1408,7 @@ func TestWorkspaceCompileAllocations(t *testing.T) {
 		}
 	}) / float64(len(jobs))
 	t.Logf("%.1f allocations a compile", allocs)
-	if allocs > 55 {
+	if allocs > 62 {
 		t.Fatalf("%.1f allocations a compile", allocs)
 	}
 }
@@ -1378,7 +1587,7 @@ func TestSSANativeCapturedShadow(t *testing.T) {
 	for pc := range p.Maps {
 		p.Maps[pc].PC = uint32(pc)
 	}
-	c, err := compileNative(p, layout{3, -1, nil, nil, nil, nil, true})
+	c, err := compileNative(p, layout{3, -1, nil, nil, nil, nil, true, nil})
 	if err != nil || c == nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -1421,7 +1630,7 @@ func TestSSANativeStrings(t *testing.T) {
 	for pc := range p.Maps {
 		p.Maps[pc].PC = uint32(pc)
 	}
-	c, err := compileNative(p, layout{4, -1, nil, nil, nil, nil, true})
+	c, err := compileNative(p, layout{4, -1, nil, nil, nil, nil, true, nil})
 	if err != nil || c == nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -1484,7 +1693,7 @@ func TestSSANativeEquality(t *testing.T) {
 		for pc := range p.Maps {
 			p.Maps[pc].PC = uint32(pc)
 		}
-		c, err := compileNative(p, layout{3, -1, nil, nil, nil, nil, true})
+		c, err := compileNative(p, layout{3, -1, nil, nil, nil, nil, true, nil})
 		if err != nil || c == nil {
 			t.Fatalf("compile: %v", err)
 		}
@@ -1592,7 +1801,7 @@ func TestSSANativeElementCells(t *testing.T) {
 	for pc := range p.Maps {
 		p.Maps[pc].PC = uint32(pc)
 	}
-	c, err := compileNative(p, layout{3, -1, nil, nil, nil, nil, true})
+	c, err := compileNative(p, layout{3, -1, nil, nil, nil, nil, true, nil})
 	if err != nil || c == nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -1630,7 +1839,7 @@ func TestSSANativeRemainder(t *testing.T) {
 	for pc := range p.Maps {
 		p.Maps[pc].PC = uint32(pc)
 	}
-	c, err := compileNative(p, layout{3, -1, nil, nil, nil, nil, true})
+	c, err := compileNative(p, layout{3, -1, nil, nil, nil, nil, true, nil})
 	if err != nil || c == nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -1669,7 +1878,7 @@ func TestSSANativeRemainder(t *testing.T) {
 		{Op: ir.Host},
 		{Op: ir.Return, Left: ir.Slot(2)},
 	}, Maps: []ir.StateMap{{PC: 0}, {PC: 1, Depth: 1}, {PC: 2, Depth: 1}}}
-	d, err := compileNative(q, layout{2, -1, nil, nil, nil, nil, true})
+	d, err := compileNative(q, layout{2, -1, nil, nil, nil, nil, true, nil})
 	if err != nil || d == nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -1716,7 +1925,7 @@ func TestSSANativeFromJavaScript(t *testing.T) {
 			if err != nil {
 				continue
 			}
-			if checkNative(t, r, p, layout{c.Fn.LocalCount, -1, nil, nil, nil, nil, true}) {
+			if checkNative(t, r, p, layout{c.Fn.LocalCount, -1, nil, nil, nil, nil, true, nil}) {
 				compiled++
 			}
 		}
@@ -1734,7 +1943,7 @@ func BenchmarkSSARoundTrip(b *testing.B) {
 		b.Run(fmt.Sprintf("%d-locals", locals), func(b *testing.B) {
 			p := &ir.Program{Locals: locals, Code: []ir.Instruction{{Op: ir.Host}, {Op: ir.Return, Left: ir.Slot(0)}},
 				Maps: []ir.StateMap{{PC: 0}, {PC: 1}}}
-			c, err := compileNative(p, layout{locals, -1, nil, nil, nil, nil, true})
+			c, err := compileNative(p, layout{locals, -1, nil, nil, nil, nil, true, nil})
 			if err != nil || c == nil {
 				b.Fatal(err)
 			}
@@ -1788,7 +1997,7 @@ func TestSSANativeStores(t *testing.T) {
 		{"store, read", program(write, read(0)), "stored"},
 		{"read another, store, use", program(read(2), write), "other"},
 	} {
-		c, err := compileNative(tc.p, layout{4, -1, map[int]site{0: cached, 1: cached}, nil, nil, nil, true})
+		c, err := compileNative(tc.p, layout{4, -1, map[int]site{0: cached, 1: cached}, nil, nil, nil, true, nil})
 		if err != nil || c == nil {
 			t.Fatalf("%s: compile: %v", tc.name, err)
 		}
@@ -1859,7 +2068,7 @@ func TestSSANativeStoresPastTheKeeps(t *testing.T) {
 	for pc := range p.Maps {
 		p.Maps[pc].PC = uint32(pc)
 	}
-	c, err := compileNative(p, layout{p.Locals, -1, sites, nil, nil, nil, true})
+	c, err := compileNative(p, layout{p.Locals, -1, sites, nil, nil, nil, true, nil})
 	if err != nil || c == nil {
 		t.Fatalf("compile: %v", err)
 	}
@@ -1928,7 +2137,7 @@ func TestSSAKeepsManyValues(t *testing.T) {
 		for pc := range p.Maps {
 			p.Maps[pc].PC = uint32(pc)
 		}
-		c, err := compileNative(p, layout{p.Locals, -1, sites, nil, nil, nil, true})
+		c, err := compileNative(p, layout{p.Locals, -1, sites, nil, nil, nil, true, nil})
 		if err != nil || c == nil {
 			t.Fatalf("%d reads: compile: %v", tc.reads, err)
 		}
@@ -1959,3 +2168,75 @@ func TestSSAKeepsManyValues(t *testing.T) {
 
 // isTestReference reports a value with a pointer word.
 func isTestReference(v ir.Value) bool { return v.Kind == ir.Opaque || v.Kind == ir.String }
+
+// A read whose receiver's own table does not have the key looks in the
+// megamorphic cache only where it has met more than its cases hold
+// (ssa.PropertySite's Megamorphic): a prototype's property, found along
+// the entry's chain, each object and shape checked; one nothing has,
+// undefined; a chain the receiver's prototypes are not, or a stale shape
+// in it, Go's. A read that may yet learn a case leaves, to learn it. Each
+// as the SSA evaluator says.
+func TestSSANativeMegamorphic(t *testing.T) {
+	s0, s1 := testShapes[0], testShapes[1]
+	link := func(i int, shape unsafe.Pointer) abi.MegaLink {
+		if shape == nil {
+			shape = unsafe.Pointer(testHolders[i].shape)
+		}
+		return abi.MegaLink{Object: unsafe.Pointer(&testHolders[i]), Shape: shape}
+	}
+	m := new(abi.MegaCache)
+	for _, e := range []abi.MegaEntry{
+		{Shape: unsafe.Pointer(s1.s), Key: 12, Index: 0, Chain: &abi.MegaChain{link(0, nil)}},
+		{Shape: unsafe.Pointer(s1.s), Key: 13, Index: 1, Chain: &abi.MegaChain{link(0, unsafe.Pointer(&testStaleShape))}},
+		{Shape: unsafe.Pointer(s1.s), Key: 14, Index: abi.MegaAbsent, Chain: &abi.MegaChain{link(0, nil), link(1, nil)}},
+	} {
+		set := m[abi.MegaSet(uintptr(e.Shape), e.Key):][:abi.MegaWays]
+		copy(set[1:], set)
+		set[0] = e
+	}
+	testMegaOverride = m
+	defer func() { testMegaOverride = nil }()
+	for _, tc := range []struct {
+		key   uint32
+		proto int
+		mega  bool
+		want  ir.Value // its value, or Undefined's Kind 0 for an exit
+		exits bool
+	}{
+		{12, 0, true, ir.Float(7), false},
+		{12, 0, false, ir.Value{}, true},
+		{14, 0, true, ir.Value{Kind: ir.Undefined}, false},
+		{14, 1, true, ir.Value{}, true},
+		{13, 0, true, ir.Value{}, true},
+		{12, -1, true, ir.Value{}, true},
+		{11, 0, true, ir.Float(4), false},
+	} {
+		p := &ir.Program{Locals: 4, Code: []ir.Instruction{{Op: ir.ReferenceRead, Dest: 3, Left: ir.Slot(0), Key: tc.key},
+			{Op: ir.Return, Left: ir.Slot(3)}}}
+		p.Maps = make([]ir.StateMap, len(p.Code))
+		for pc := range p.Maps {
+			p.Maps[pc].PC = uint32(pc)
+		}
+		ps := ssa.PropertySite{Key: tc.key, Shape: s0.shape, Index: 0, Megamorphic: tc.mega}
+		c, err := compileNative(p, layout{4, -1, map[int]site{0: ps}, nil, nil, nil, true, nil})
+		if err != nil || c == nil {
+			t.Fatalf("%+v: compile: %v", tc, err)
+		}
+		heap := randomTestHeap(rand.New(rand.NewPCG(3, 4)))
+		heap[2].shape, heap[2].proto = 1, tc.proto
+		heap[2].keys, heap[2].flags = s1.keys, s1.flags
+		heap[2].props = []ir.Value{ir.Float(4)}
+		slots := []ir.Value{{Kind: ir.Opaque, Bits: 2}, ir.Float(1), ir.Float(2), ir.Float(0)}
+		if why := nativeMismatch(c, 0, slots, 0, heap); why != "" {
+			t.Fatalf("%+v: %s", tc, why)
+		}
+		exit, err := ssa.EvaluateHeap(c.f, 0, slices.Clone(slots), heap.native().heap(), 0)
+		if err != nil {
+			t.Fatalf("%+v: %v", tc, err)
+		}
+		if got := exit.Kind != ir.Returned; got != tc.exits || !tc.exits && exit.Value != tc.want {
+			t.Fatalf("%+v: %+v", tc, exit)
+		}
+		c.code.Close()
+	}
+}

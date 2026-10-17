@@ -7,6 +7,7 @@ import (
 	"slices"
 	"unsafe"
 
+	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 	"github.com/go-quickjs/go-quickjs/internal/jit/ir"
 )
 
@@ -338,7 +339,19 @@ type Heap struct {
 	// Address is an object's address, which OpSameObject compares; nil if
 	// no object is any particular one.
 	Address func(object int) uintptr
+	// Accessors are the accessor properties' pairs, by the cells that hold
+	// them in Objects' and Holders' tables (OpAccessorIs); any other cell
+	// holds data.
+	Accessors map[*ir.Value]Accessor
+	// Mega is the megamorphic cache native code probes (abi.MegaCache),
+	// its shapes and prototypes those of Objects and Holders; nil for
+	// none.
+	Mega *abi.MegaCache
 }
+
+// Accessor is an accessor property's pair, as OpAccessorIs reads it: its
+// getter's and its setter's addresses, 0 for none.
+type Accessor struct{ Getter, Setter uintptr }
 
 // String is a string as charCodeAt sees it.
 type String struct {
@@ -371,35 +384,46 @@ type Object struct {
 // site without them or a shape none of its cases has.
 func (h *Heap) holder(o *Object, v *Value) (*Object, int) {
 	if v.Holders() == nil && v.Cases() == nil {
-		return o, o.property(v)
+		return h.property(o, v)
 	}
+	mega := h.Mega != nil && v.Op != OpPropWrite
 	var first HolderChain
 	if v.Holders() != nil {
 		first = *v.Holders()
 	}
 	cases := append([]PropertyCase{{Shape: uintptr(v.Const.Bits), Index: int32(v.Index), Holders: first.Holders, More: first.More}}, v.Cases()...)
+	recv := o
 	for _, c := range cases {
 		if o.Shape != c.Shape {
 			continue
 		}
+		found := true
 		for _, p := range append(c.Holders[:], c.More...) {
 			if p.Object == 0 {
 				break
 			}
 			next := h.Holders[p.Object]
 			if o.Proto != p.Object || next == nil || next.Shape != p.Shape {
-				return nil, -1
+				found = false
+				break
 			}
 			o = next
 		}
-		return o, int(c.Index)
+		if found {
+			return o, int(c.Index)
+		}
+		// Prototypes no longer the case's: the megamorphic cache's chain,
+		// the receiver's own table having no key, as its shape says; or,
+		// with no cache, its table, as mir's scan searches it.
+		if mega {
+			return h.mega(recv, v)
+		}
+		o = recv
+		break
 	}
 	// A shape none of the cases has: the receiver's own table, as for a
 	// site without them (mir's scan).
-	if i := o.property(v); i >= 0 {
-		return o, i
-	}
-	return nil, -1
+	return h.search(o, v)
 }
 
 // isReference reports a value whose pointer word is not empty: an object or
@@ -413,25 +437,98 @@ const (
 )
 
 // property finds the property a property operation names in o, as the
-// operation's semantics say (OpPropRead), or -1.
-func (o *Object) property(v *Value) int {
+// operation's semantics say (OpPropRead), and the object that has it --
+// o, or for a read the prototype the megamorphic cache says -- or -1.
+func (h *Heap) property(o *Object, v *Value) (*Object, int) {
 	if v.Const.Bits != 0 && o.Shape == uintptr(v.Const.Bits) {
-		return v.Index
+		return o, v.Index
 	}
-	if !o.Ordinary || len(o.Keys) > maxScan {
-		return -1
+	return h.search(o, v)
+}
+
+// search finds the property a property operation names as mir's scan
+// does: in o's own table, if o is an ordinary object whose table is small
+// enough to search, plain data -- and writable, for a write -- and, where
+// o's table does not have it, or is too large to search, in the
+// megamorphic cache (mega). Or -1.
+func (h *Heap) search(o *Object, v *Value) (*Object, int) {
+	if !o.Ordinary {
+		return nil, -1
+	}
+	if len(o.Keys) > maxScan {
+		return h.mega(o, v)
+	}
+	if len(o.Keys) == 0 {
+		return nil, -1
 	}
 	for i, k := range o.Keys {
 		if k != v.Key {
 			continue
 		}
 		if !o.Data[i] || v.Op == OpPropWrite && !o.Writable[i] {
-			return -1
+			return nil, -1
 		}
-		return i
+		return o, i
 	}
-	return -1
+	if v.Op == OpPropWrite || !v.Megamorphic() {
+		// Not its own: a read that has met no more than its cases hold
+		// leaves, to learn the shape (PropertySite's Megamorphic).
+		return nil, -1
+	}
+	return h.mega(o, v)
 }
+
+// mega is the property a megamorphic cache entry names for o's shape and
+// the operation's key, as mir's mega finds it: o's own, writable for a
+// write; or, for a read, the last of the prototypes along the entry's
+// chain, each the one it names with the shape it names. Or -1.
+func (h *Heap) mega(o *Object, v *Value) (*Object, int) {
+	if h.Mega == nil || o.Shape == 0 {
+		return nil, -1
+	}
+	for _, e := range h.Mega[abi.MegaSet(o.Shape, v.Key):][:abi.MegaWays] {
+		if uintptr(e.Shape) != o.Shape || e.Key != v.Key {
+			continue
+		}
+		i := int(e.Index &^ abi.MegaWritable)
+		if v.Op == OpPropWrite {
+			if e.Index&abi.MegaWritable == 0 {
+				return nil, -1
+			}
+			return o, i
+		}
+		if e.Chain == nil {
+			return o, i
+		}
+		p := o
+		for _, l := range e.Chain {
+			if l.Object == nil {
+				break
+			}
+			next := h.Holders[uintptr(l.Object)]
+			if p.Proto != uintptr(l.Object) || next == nil || next.Shape != uintptr(l.Shape) {
+				return nil, -1
+			}
+			p = next
+		}
+		if e.Index&abi.MegaAbsent != 0 {
+			// On none of them, the last's prototype none: undefined.
+			if p.Proto != 0 {
+				return nil, -1
+			}
+			return nil, absent
+		}
+		return p, i
+	}
+	return nil, -1
+}
+
+// absent is the index a read finds a property at that its receiver's
+// prototypes do not have (abi.MegaAbsent): its value is undefined, in a
+// cell of its own (undefinedCell), which no store writes.
+const absent = -2
+
+var undefinedCell = ir.Value{Kind: ir.Undefined}
 
 // EvaluateHeap is Evaluate with a heap.
 func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (ir.Exit, error) {
@@ -693,8 +790,7 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 				// Any value, unless it changes a reference while the
 				// collector marks, or the cell is one a live reference was
 				// loaded from (storeChecks).
-				o := &heap.Objects[a.p]
-				i := o.property(v)
+				o, i := heap.property(&heap.Objects[a.p], v)
 				if i < 0 || i >= len(o.Props) {
 					return exit(v.State, ir.ExitKind(v.Aux))
 				}
@@ -715,8 +811,21 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 				if heap.Address == nil || heap.Address(a.p) != uintptr(v.Const.Bits) {
 					return exit(v.State, ir.ExitKind(v.Aux))
 				}
+			case OpAccessorIs:
+				pair, ok := heap.Accessors[a.cell]
+				fn := pair.Getter
+				if v.Index == 1 {
+					fn = pair.Setter
+				}
+				if !ok || fn != uintptr(v.Const.Bits) {
+					return exit(v.State, ir.ExitKind(v.Aux))
+				}
 			case OpPropCell:
 				o, i := heap.holder(&heap.Objects[a.p], v)
+				if i == absent {
+					vals[v.ID] = val{cell: &undefinedCell}
+					break
+				}
 				if i < 0 || i >= len(o.Props) {
 					return exit(v.State, ir.ExitKind(v.Aux))
 				}
@@ -782,6 +891,8 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 				if a.t != ir.Bool(true) {
 					return exit(v.State, ir.ExitKind(v.Aux))
 				}
+			case OpFrameRoom:
+				// The model's stack has room for an inlined callee's frame.
 			case OpTailRoom, OpTailSelf:
 				// The model's stack is shallow: the call is made.
 			case OpSameSymbol:

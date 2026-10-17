@@ -70,6 +70,9 @@ type a64Compiler struct {
 	// (enterExit), if any does.
 	enter     arm64.Label
 	enterUsed bool
+	// probe and probeUsed are amd64's.
+	probe     [2]arm64.Label
+	probeUsed [2]bool
 	// ret and resume are amd64's.
 	ret                 arm64.Label
 	retUsed, resumeUsed bool
@@ -1705,26 +1708,60 @@ func (c *a64Compiler) arrowThis(t *ssa.CallSite, next arm64.Label) {
 	c.a.Bind(done)
 }
 
-// mega is amd64's: v's property found in the megamorphic cache, its
-// value's address in A, or a failure.
+// mega is amd64's: v's property looked up by the probe the code's sites
+// share (megaProbe), its value's address in A, or a failure.
 func (c *a64Compiler) mega(v *ssa.Value, guard func(arm64.Cond), found arm64.Label) {
-	p := c.gpr(v.Args[0], a64A)
-	c.a.Load(a64B, p, c.enc.ObjectShape)
+	write := b2i(v.Op == ssa.OpPropWrite)
+	if !c.probeUsed[write] {
+		c.probe[write], c.probeUsed[write] = c.a.NewLabel(), true
+		c.cold = append(c.cold, func() {
+			c.a.Bind(c.probe[write])
+			c.megaProbe(write == 1)
+		})
+	}
+	back := c.a.NewLabel()
+	c.movImm(a64C, uint64(uint32(v.Key)))
+	c.a.Store(a64Ctx, abi.OffProbeKey, a64C)
+	c.movImm(a64C, uint64(abi.MegaKeyHash(uint32(v.Key))))
+	c.a.Store(a64Ctx, abi.OffProbeHash, a64C)
+	c.a.Adr(a64C, back)
+	c.a.Store(a64Ctx, abi.OffProbeBack, a64C)
+	if p := c.gpr(v.Args[0], a64A); p != a64A {
+		c.a.MovRR(a64A, p)
+	}
+	c.a.B(c.probe[write])
+	c.a.Bind(back)
+	c.a.CmpImm(a64A, 0, true)
+	guard(arm64.EQ)
+	c.a.B(found)
+}
+
+// megaProbe is amd64's: the probe a function's sites share, the receiver in
+// A, back with the value's address in A, or 0. It uses every scratch
+// register, F2, and for a read F1.
+func (c *a64Compiler) megaProbe(write bool) {
+	fail := c.a.NewLabel()
+	back := func() {
+		c.a.Load(a64B, a64Ctx, abi.OffProbeBack)
+		c.a.Br(a64B)
+	}
+	c.a.FMovToF(a64F2, a64A)
+	c.a.Load(a64B, a64A, c.enc.ObjectShape)
 	c.a.ShiftImm(arm64.Lsr, a64C, a64B, 4, true)
 	c.a.ShiftImm(arm64.Lsr, a64A, a64B, 15, true)
 	c.a.Op(arm64.Eor, a64C, a64C, a64A, true)
 	c.a.ShiftImm(arm64.Lsr, a64A, a64B, 26, true)
 	c.a.Op(arm64.Eor, a64C, a64C, a64A, true)
-	c.movImm(a64A, uint64(abi.MegaKeyHash(uint32(v.Key))))
+	c.a.Load(a64A, a64Ctx, abi.OffProbeHash)
 	c.a.Op(arm64.Eor, a64C, a64C, a64A, false)
 	c.movImm(a64A, abi.MegaSets-1)
 	c.a.Op(arm64.And, a64C, a64C, a64A, true)
-	c.a.ShiftImm(arm64.Lsl, a64C, a64C, 6, true)
+	c.a.ShiftImm(arm64.Lsl, a64C, a64C, abi.MegaSetShift, true)
 	c.a.Load(a64A, a64Ctx, abi.OffMega)
 	c.a.Op(arm64.Add, a64A, a64A, a64C, true)
 	// As amd64's: the set's ways, in turn; D holds the key.
-	hit, miss := c.a.NewLabel(), c.a.NewLabel()
-	c.movImm(a64D, uint64(uint32(v.Key)))
+	hit := c.a.NewLabel()
+	c.a.Load(a64D, a64Ctx, abi.OffProbeKey)
 	for w := int32(0); w < abi.MegaWays; w++ {
 		next := c.a.NewLabel()
 		c.a.Load(a64C, a64A, w*abi.MegaSize+abi.OffMegaShape)
@@ -1737,25 +1774,74 @@ func (c *a64Compiler) mega(v *ssa.Value, guard func(arm64.Cond), found arm64.Lab
 		c.a.B(hit)
 		c.a.Bind(next)
 	}
-	c.a.B(miss)
-	c.a.Bind(miss)
-	// As amd64's: in none, a failure.
-	c.a.CmpImm(a64B, 0, true)
-	guard(arm64.NE)
+	c.a.B(fail)
 	c.a.Bind(hit)
 	c.a.LoadU32(a64C, a64A, abi.OffMegaIndex)
-	if v.Op == ssa.OpPropWrite {
+	if write {
 		c.movImm(a64B, abi.MegaWritable)
 		c.a.Tst(a64C, a64B, false)
-		guard(arm64.EQ)
+		c.a.BCond(arm64.EQ, fail)
+	} else {
+		// As amd64's: a prototype's, along the chain, the last the holder;
+		// or, absent, all of them, the last's prototype none. D holds the
+		// object, B the link's word to compare.
+		own, loop, holder, absent, end := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
+		c.a.FMovToF(a64F1, a64C)
+		c.a.Load(a64A, a64A, abi.OffMegaChain)
+		c.a.Cbz(a64A, own, true)
+		c.a.FMovFromF(a64D, a64F2)
+		c.a.Load(a64D, a64D, c.enc.ObjectProto)
+		c.movImm(a64B, abi.MegaAbsent)
+		c.a.Cmp(a64C, a64B, false)
+		c.a.BCond(arm64.HS, absent)
+		c.a.Bind(loop)
+		c.a.Load(a64B, a64A, abi.OffLinkObject)
+		c.a.Cmp(a64D, a64B, true)
+		c.a.BCond(arm64.NE, fail)
+		c.a.Load(a64C, a64D, c.enc.ObjectShape)
+		c.a.Load(a64B, a64A, abi.OffLinkShape)
+		c.a.Cmp(a64C, a64B, true)
+		c.a.BCond(arm64.NE, fail)
+		c.a.Load(a64B, a64A, abi.MegaLinkSize+abi.OffLinkObject)
+		c.a.Cbz(a64B, holder, true)
+		c.a.AddImm(a64A, a64A, int64(abi.MegaLinkSize), true)
+		c.a.Load(a64D, a64D, c.enc.ObjectProto)
+		c.a.B(loop)
+		c.a.Bind(holder)
+		c.a.FMovFromF(a64C, a64F1)
+		c.a.ShiftImm(arm64.Lsl, a64C, a64C, 4, true)
+		c.a.Load(a64A, a64D, c.enc.ObjectProps)
+		c.a.Op(arm64.Add, a64A, a64A, a64C, true)
+		back()
+		c.a.Bind(absent)
+		c.a.Load(a64B, a64A, abi.OffLinkObject)
+		c.a.Cbz(a64B, end, true)
+		c.a.Cmp(a64D, a64B, true)
+		c.a.BCond(arm64.NE, fail)
+		c.a.Load(a64C, a64D, c.enc.ObjectShape)
+		c.a.Load(a64B, a64A, abi.OffLinkShape)
+		c.a.Cmp(a64C, a64B, true)
+		c.a.BCond(arm64.NE, fail)
+		c.a.Load(a64D, a64D, c.enc.ObjectProto)
+		c.a.AddImm(a64A, a64A, int64(abi.MegaLinkSize), true)
+		c.a.B(absent)
+		c.a.Bind(end)
+		c.a.Cbnz(a64D, fail, true)
+		c.movImm(a64A, c.enc.UndefinedCell)
+		back()
+		c.a.Bind(own)
+		c.a.FMovFromF(a64C, a64F1)
 	}
 	c.movImm(a64B, ^uint64(abi.MegaWritable)&0xFFFFFFFF)
 	c.a.Op(arm64.And, a64C, a64C, a64B, false)
 	c.a.ShiftImm(arm64.Lsl, a64C, a64C, 4, true)
-	p = c.gpr(v.Args[0], a64A)
-	c.a.Load(a64A, p, c.enc.ObjectProps)
+	c.a.FMovFromF(a64A, a64F2)
+	c.a.Load(a64A, a64A, c.enc.ObjectProps)
 	c.a.Op(arm64.Add, a64A, a64A, a64C, true)
-	c.a.B(found)
+	back()
+	c.a.Bind(fail)
+	c.movImm(a64A, 0)
+	back()
 }
 
 // genericCheck is amd64's: call v, of a function none of its sites is, the
@@ -1958,18 +2044,18 @@ func (c *a64Compiler) property(v *ssa.Value, guard func(arm64.Cond)) {
 		c.a.AddImm(a64A, a64A, int64(int32(v.Index)*c.enc.ValueSize), true)
 		c.cold = append(c.cold, func() {
 			c.a.Bind(scan)
-			c.scan(v, guard, found)
+			c.scan(v, guard, found, 0)
 		})
 		c.a.Bind(found)
 		return
 	}
-	c.scan(v, guard, found)
+	c.scan(v, guard, found, 0)
 	c.a.Bind(found)
 }
 
 // scan searches an object's small table for the key a property operation
 // names, as amd64's does, going to found with the value's address in A.
-func (c *a64Compiler) scan(v *ssa.Value, guard func(arm64.Cond), found arm64.Label) {
+func (c *a64Compiler) scan(v *ssa.Value, guard func(arm64.Cond), found, mega arm64.Label) {
 	p := c.gpr(v.Args[0], a64A)
 	c.a.LoadU8(a64B, p, c.enc.ObjectClass)
 	c.a.CmpImm(a64B, int64(c.enc.ClassObject), false)
@@ -1985,14 +2071,16 @@ func (c *a64Compiler) scan(v *ssa.Value, guard func(arm64.Cond), found arm64.Lab
 	}
 	c.a.Load(a64B, p, c.enc.ObjectProps+8)
 	c.a.CmpImm(a64B, abi.MaxScan, true)
-	if c.enc.Mega {
-		// As amd64's: too large to search, the megamorphic cache's.
-		large := c.a.NewLabel()
-		c.a.BCond(arm64.HI, large)
+	if c.enc.Mega && mega == 0 {
+		mega = c.a.NewLabel()
 		c.cold = append(c.cold, func() {
-			c.a.Bind(large)
+			c.a.Bind(mega)
 			c.mega(v, guard, found)
 		})
+	}
+	if mega != 0 {
+		// As amd64's: too large to search, the megamorphic cache's.
+		c.a.BCond(arm64.HI, mega)
 	} else {
 		guard(arm64.HI)
 	}
@@ -2010,7 +2098,13 @@ func (c *a64Compiler) scan(v *ssa.Value, guard func(arm64.Cond), found arm64.Lab
 	loop, hit := c.a.NewLabel(), c.a.NewLabel()
 	c.a.Bind(loop)
 	c.a.CmpImm(a64B, 0, true)
-	guard(arm64.EQ)
+	if mega != 0 && v.Op != ssa.OpPropWrite && v.Megamorphic() {
+		// As amd64's: not its own, a prototype's, which the megamorphic
+		// cache may have.
+		c.a.BCond(arm64.EQ, mega)
+	} else {
+		guard(arm64.EQ)
+	}
 	c.a.LoadU32(a64C, a64A, c.enc.PropertyKey)
 	c.a.CmpImm(a64C, int64(v.Key), false)
 	c.a.BCond(arm64.EQ, hit)
@@ -2217,7 +2311,13 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	}
 	sp := len(s.Slots)
 	calleeSlot := sp - site.Argc - 1
-	callee := v.Args[len(v.Args)-site.Argc-1]
+	var callee *ssa.Value
+	if site.Accessor != ssa.AccessorNone {
+		// As amd64's: an accessor's, no function among the operands.
+		calleeSlot = sp - site.Argc
+	} else {
+		callee = v.Args[len(v.Args)-site.Argc-1]
+	}
 	join, generic := arm64.Label(0), false
 	if !site.Alloc && !site.Receiver {
 		// As amd64's: while the collector marks, Go makes the call.
@@ -2231,14 +2331,18 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	c.a.Load(a64C, a64C, abi.OffBoundsLevelLimit)
 	c.a.Cmp(a64B, a64C, true)
 	guard(arm64.HS)
-	if callee.Shadow == nil && c.origin.At(callee) < 0 || site.Via != 0 && (len(sites) != 1 || !c.operandsLive(s, calleeSlot-1)) {
-		c.a.B(stub)
-		return
+	if callee == nil {
+		c.movImm(a64C, uint64(site.Callee))
+	} else {
+		if callee.Shadow == nil && c.origin.At(callee) < 0 || site.Via != 0 && (len(sites) != 1 || !c.operandsLive(s, calleeSlot-1)) {
+			c.a.B(stub)
+			return
+		}
+		c.movImm(a64B, c.enc.Object)
+		c.a.Cmp(c.gpr(callee, a64A), a64B, true)
+		guard(arm64.NE)
+		c.sourceRef(callee, guard)
 	}
-	c.movImm(a64B, c.enc.Object)
-	c.a.Cmp(c.gpr(callee, a64A), a64B, true)
-	guard(arm64.NE)
-	c.sourceRef(callee, guard)
 	checked := c.a.NewLabel()
 	// As amd64's: past its sites, any other function (genericCheck).
 	gen := generic && site.Generic && site.Via == 0 && site.Pool == 0 && !site.Push && !site.Pop && !site.Alloc && !site.Receiver &&
@@ -2324,7 +2428,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 		miss := c.a.NewLabel()
 		c.genericCheck(v, site, len(sites), checked, miss)
 		c.a.Bind(miss)
-		cold, op := c.a.NewLabel(), goOpWord(&ssa.CallSite{Go: ssa.GoCall, Argc: site.Argc, Method: site.Method, New: site.Pool != 0})
+		cold, op := c.a.NewLabel(), goCallWord(site)
 		c.a.B(cold)
 		c.cold = append(c.cold, func() {
 			c.a.Bind(cold)
@@ -2438,7 +2542,7 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 	const calleeCtx, locals, tmp, top, high2 = arm64.Reg(3), arm64.Reg(5), arm64.Reg(6), arm64.Reg(7), arm64.Reg(8)
 	back := c.a.NewLabel()
 	c.resumeUsed = true
-	op := goOpWord(&ssa.CallSite{Go: ssa.GoCall, Argc: site.Argc, Method: site.Method, New: site.Pool != 0})
+	op := goCallWord(site)
 	enter := func() {
 		if !c.enterUsed {
 			c.enter, c.enterUsed = c.a.NewLabel(), true
@@ -3353,7 +3457,7 @@ func (c *a64Compiler) markingCall(v *ssa.Value, site *ssa.CallSite, stub arm64.L
 	}
 	marked, join := c.a.NewLabel(), c.a.NewLabel()
 	c.a.Cbnz(a64B, marked, false)
-	op := goOpWord(&ssa.CallSite{Go: ssa.GoCall, Argc: site.Argc, Method: site.Method, New: site.Pool != 0}) | abi.GoOpMarking
+	op := goCallWord(site) | abi.GoOpMarking
 	c.cold = append(c.cold, func() {
 		c.a.Bind(marked)
 		c.goCallOp(v, op, true)
@@ -3495,8 +3599,24 @@ func (c *a64Compiler) holder(v *ssa.Value, guard func(arm64.Cond)) {
 	}
 	cases := append([]ssa.PropertyCase{{Shape: uintptr(v.Const.Bits), Index: int32(v.Index), Holders: first.Holders, More: first.More}}, v.Cases()...)
 	// As amd64's: a receiver of a shape not among the cases has its own
-	// table searched.
-	done := c.a.NewLabel()
+	// table searched, and so does one whose prototypes are no longer the
+	// case's.
+	done, scan, mega := c.a.NewLabel(), c.a.NewLabel(), arm64.Label(0)
+	stale := scan
+	if c.enc.Mega && v.Op != ssa.OpPropWrite {
+		// As amd64's: prototypes no longer the case's, the megamorphic
+		// cache's chain.
+		mega = c.a.NewLabel()
+		stale = mega
+		c.cold = append(c.cold, func() {
+			c.a.Bind(mega)
+			c.mega(v, guard, done)
+		})
+	}
+	c.cold = append(c.cold, func() {
+		c.a.Bind(scan)
+		c.scan(v, guard, done, mega)
+	})
 	for i, k := range cases {
 		next := c.a.NewLabel()
 		p := c.gpr(v.Args[0], a64A)
@@ -3504,12 +3624,7 @@ func (c *a64Compiler) holder(v *ssa.Value, guard func(arm64.Cond)) {
 		c.movImm(a64C, uint64(k.Shape))
 		c.a.Cmp(a64B, a64C, true)
 		if i == len(cases)-1 {
-			scan := c.a.NewLabel()
 			c.a.BCond(arm64.NE, scan)
-			c.cold = append(c.cold, func() {
-				c.a.Bind(scan)
-				c.scan(v, guard, done)
-			})
 		} else {
 			c.a.BCond(arm64.NE, next)
 		}
@@ -3529,11 +3644,11 @@ func (c *a64Compiler) holder(v *ssa.Value, guard func(arm64.Cond)) {
 			}
 			c.movImm(a64A, uint64(h.Object))
 			c.a.Cmp(a64B, a64A, true)
-			guard(arm64.NE)
+			c.a.BCond(arm64.NE, stale)
 			c.a.Load(a64B, a64A, c.enc.ObjectShape)
 			c.movImm(a64C, uint64(h.Shape))
 			c.a.Cmp(a64B, a64C, true)
-			guard(arm64.NE)
+			c.a.BCond(arm64.NE, stale)
 			c.a.Load(a64B, a64A, c.enc.ObjectProto)
 		}
 		c.a.Load(a64A, a64A, c.enc.ObjectProps)
@@ -4395,6 +4510,23 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 	case ssa.OpSameObject:
 		c.movImm(a64B, v.Const.Bits)
 		c.a.Cmp(c.gpr(arg(0), a64A), a64B, true)
+		guard(arm64.NE)
+	case ssa.OpAccessorIs:
+		// The cell's accessor pair, and its getter's or its setter's
+		// function.
+		p := c.gpr(arg(0), a64A)
+		c.a.Load(a64C, p, c.enc.NumOffset)
+		c.movImm(a64B, c.enc.Accessor)
+		c.a.Cmp(a64C, a64B, true)
+		guard(arm64.NE)
+		c.a.Load(a64C, p, c.enc.RefOffset)
+		at := c.enc.AccessorGetter
+		if v.Index == 1 {
+			at = c.enc.AccessorSetter
+		}
+		c.a.Load(a64C, a64C, at)
+		c.movImm(a64B, v.Const.Bits)
+		c.a.Cmp(a64C, a64B, true)
 		guard(arm64.NE)
 	case ssa.OpPropRead:
 		c.property(v, c.guardFor(v))

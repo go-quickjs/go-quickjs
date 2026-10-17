@@ -25,6 +25,7 @@ type Workspace struct {
 	bytes     arena.Arena[uint8]
 	ints      arena.Arena[int]
 	caches    arena.Arena[InlineCache]
+	accessors arena.Arena[AccessorSite]
 	scratch   scratch
 	ready     bool
 }
@@ -45,6 +46,7 @@ func (w *Workspace) init() {
 	w.bytes.KeepBig()
 	w.ints.KeepBig()
 	w.caches.KeepBig()
+	w.accessors.KeepBig()
 }
 
 // Bytes is the memory the workspace keeps between compiles: its arenas'
@@ -54,7 +56,7 @@ func (w *Workspace) Bytes() int { return w.arenaBytes() + w.scratchBytes() }
 // arenaBytes is what the workspace's arenas keep.
 func (w *Workspace) arenaBytes() int {
 	return w.values.Bytes() + w.refs.Bytes() + w.states.Bytes() + w.blocks.Bytes() + w.blockRefs.Bytes() +
-		w.refLists.Bytes() + w.bools.Bytes() + w.bytes.Bytes() + w.ints.Bytes() + w.caches.Bytes()
+		w.refLists.Bytes() + w.bools.Bytes() + w.bytes.Bytes() + w.ints.Bytes() + w.caches.Bytes() + w.accessors.Bytes()
 }
 
 // scratchBytes is what the passes' scratch tables keep.
@@ -88,6 +90,7 @@ func (w *Workspace) Rewind() {
 	w.bytes.Rewind()
 	w.ints.Rewind()
 	w.caches.Rewind()
+	w.accessors.Rewind()
 	// The arenas keep what the recent compiles needed (arena's Rewind);
 	// the scratch tables, grown by value ID, the most any compile has. Once
 	// they hold more than the arenas, a compile bigger than the recent
