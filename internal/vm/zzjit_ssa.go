@@ -1378,10 +1378,13 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 	if err != nil {
 		return nil, nil, err
 	}
-	// What the entry holds, its function's program, and its link, which
-	// the entry makes before it is compiled (linkFor): the room a compile
-	// asks for first, which had come short of all three at a full budget.
-	s.learn(len(fn.Code), need+p.Footprint()+jitLinkFixed)
+	// What the entry holds, its function's program and the lowering that
+	// holds it (jitLowering, its own bytes too), and its link, which the
+	// entry makes before it is compiled (linkFor): the room a compile asks
+	// for first, which had come short of all three at a full budget, and
+	// then of the lowering's own bytes -- a compile that met a budget
+	// within them was made and thrown away.
+	s.learn(len(fn.Code), need+p.Footprint()+jitLoweringFixed+jitLinkFixed)
 	return code, fb, nil
 }
 

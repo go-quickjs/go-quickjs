@@ -69,3 +69,46 @@ func TestJITReoptWaitsForRoom(t *testing.T) {
 		t.Fatal(v, err)
 	}
 }
+
+// The room a first compile asks for before it compiles (jitState's
+// perInstr) is all its entry comes to hold: its code and what describes
+// it, its function's lowered program and the lowering that holds it, and
+// its link. Filled with copies of one function at any budget, the cache
+// takes each compile or refuses it before compiling, and throws none away
+// once compiled: the lowering's own bytes, left out, had made a compile
+// meeting a budget within them -- at 8 of 257 budgets here, and on arm64
+// at TestJITCacheDropsLeastRecentlyUsed's -- compiled for nothing.
+func TestJITFillDiscardsNothing(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	epoch := uint64(0)
+	defer func(was func() uint64) { jitEpochNow = was }(jitEpochNow)
+	jitEpochNow = func() uint64 { return epoch }
+	var keep []*bytecode.Function
+	defer runtime.KeepAlive(&keep)
+	copyOf := jitCopiesForTest(jitFunctionForTest(t, `function f(n) { var s=0; for(var i=0;i<n;i++) s+=i; return s }`), &keep)
+	step := int64(16 << 10)
+	if testing.Short() {
+		step = 64 << 10
+	}
+	for limit := int64(6 << 20); limit <= 10<<20; limit += step {
+		r := New(Config{JIT: true, MemoryLimit: limit})
+		r.jitCallThreshold = 1
+		for n := 0; ; n++ {
+			if n > 1<<14 {
+				t.Fatalf("limit %d: the budget never filled", limit)
+			}
+			e := r.jitForFunction(copyOf(), nil)
+			if e == nil {
+				break
+			}
+			if e.ssa == nil || r.jit.discarded != 0 {
+				t.Fatalf("limit %d: compile %d made and refused room: %d discarded, %d of %d held",
+					limit, n, r.jit.discarded, r.jit.held(), r.jit.budget)
+			}
+		}
+		r.Close()
+		r.ReleaseClosed()
+	}
+}
