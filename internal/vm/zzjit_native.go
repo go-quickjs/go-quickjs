@@ -104,7 +104,8 @@ func (r *Runtime) JITStats() JITStats {
 	}
 	return JITStats{Compiled: s.compiled, Entries: s.entries, Guards: s.guards,
 		Hosts: s.hosts, Budgets: s.budgets, Interpreted: s.interpreted, SSAEntries: s.ssaEntries, SSARecords: s.ssaRecords,
-		Held: int64(s.held()), Budget: int64(r.jitBudget()), Evicted: s.evicted, Refused: s.refusedRoom}
+		Held: int64(s.held()), Budget: int64(r.jitBudget()), Evicted: s.evicted, Refused: s.refusedRoom,
+		Discarded: s.discarded}
 }
 
 // jitStressDeopt reports whether this budget exit should finish the
@@ -409,6 +410,10 @@ type jitEntry struct {
 	deferred      bool
 	generation    uint64
 	calleeRefused bool
+	// reoptRoom is how many bytes more than it holds the entry's last
+	// compile needed and was refused, for want of room in the budget: the
+	// room a compile again asks for before it compiles (jitReoptimize).
+	reoptRoom int
 	// used is the cache's epoch (jitState.epoch) at which the entry was
 	// last found used -- its uses (uses) other than at the look before,
 	// seen -- or made; serial orders entries by when they were made. The
@@ -673,17 +678,18 @@ type jitState struct {
 	// (abi.Context.ExitMarking), a native callee's included.
 	markingExits uint64
 	// scans counts the cache's looks for what to reclaim (makeRoom), serial
-	// the entries made, evicted those dropped to make room, and
-	// refusedRoom the times there was none to be made. floor is what the
+	// the entries made, evicted those dropped to make room, refusedRoom
+	// the times there was none to be made, and discarded the compiles
+	// made and then refused it (compileSSAKeeping). floor is what the
 	// JIT held at the last look that it could not reclaim -- young code,
 	// code that runs, what the runtime's JIT needs -- and floorAt 1 plus the
 	// epoch of that look, or 0 once something it held has gone since: until
 	// then, the floor only rises, and a need past the budget above it is
 	// refused without another look. agedAt is 1 plus the epoch the cache
 	// last found its entries' uses in (age).
-	scans, serial, evicted, refusedRoom uint64
-	floor                               int
-	floorAt, agedAt                     uint64
+	scans, serial, evicted, refusedRoom, discarded uint64
+	floor                                          int
+	floorAt, agedAt                                uint64
 }
 
 // Only selected own reference fields are prepared. The receiver bound keeps

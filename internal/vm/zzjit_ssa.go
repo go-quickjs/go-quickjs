@@ -1209,6 +1209,15 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 	e.entryMisses = 0
 	// What it compiles for, the reads' shapes met since included.
 	e.polyPending, e.polySettled = false, 0
+	if e.reoptRoom > 0 && !r.jit.roomFor(e, nil, e.bytes+e.reoptRoom) {
+		// Its last compile was refused the room its code needed, the
+		// budget full of code too young to drop: not compiled again until
+		// there is that much, as a first compile asks for its room before
+		// it compiles. A compile thrown away takes as long as one kept --
+		// Typescript's, inlining more each time, a few milliseconds each,
+		// had been an eighth of its run.
+		return
+	}
 	fn := cl.fn
 	r.jitInlineNativeCalls(e)
 	kind := jitLowerSSA
@@ -1354,7 +1363,16 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 	// placed (setLinks).
 	need += s.callersGrowth(e, fb.links)
 	if !s.roomFor(e, fb.links, need) {
+		// Compiled for nothing: the room it was short of is what a compile
+		// of it again asks for first (jitReoptimize).
+		s.discarded++
+		if e != nil {
+			e.reoptRoom = max(need-e.bytes, 1)
+		}
 		return nil, nil, jit.ErrCodeBudget
+	}
+	if e != nil {
+		e.reoptRoom = 0
 	}
 	code, err := jit.NewSSACode(r.jit.arena, mc)
 	if err != nil {
