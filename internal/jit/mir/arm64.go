@@ -703,6 +703,15 @@ func (c *a64Compiler) block(b *ssa.Block, next *ssa.Block) {
 	if b.PC < 0 {
 		c.a.Load(a64Locals, a64Ctx, abi.OffLocals)
 		c.a.Load(a64Stack, a64Ctx, abi.OffStack)
+		if c.f.StartOnly && c.f.Params < c.f.FrameLocals && b == c.entryAt(0) {
+			// As amd64's: the frame's locals past its parameters, undefined.
+			vs := int32(c.enc.ValueSize)
+			c.movImm(a64A, c.enc.Undefined)
+			for i := c.f.Params; i < c.f.FrameLocals; i++ {
+				c.a.Store(a64Locals, int32(i)*vs+c.enc.NumOffset, a64A)
+				c.a.Store(a64Locals, int32(i)*vs+c.enc.RefOffset, arm64.ZR)
+			}
+		}
 	}
 	for _, v := range b.Values {
 		if v.Op == ssa.OpPhi || c.isLazy(v) {
@@ -2262,6 +2271,10 @@ func (c *a64Compiler) call(v *ssa.Value, guard func(arm64.Cond)) {
 				c.a.Store(locals, at+c.enc.NumOffset, top)
 				c.a.Load(top, rb, rd)
 				c.a.Store(locals, at+c.enc.RefOffset, top)
+				continue
+			}
+			if t.StartOnly && i >= t.Params {
+				// The callee's code makes it undefined as it starts.
 				continue
 			}
 			c.movImm(top, c.enc.Undefined)

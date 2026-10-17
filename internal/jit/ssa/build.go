@@ -258,6 +258,10 @@ type CallSite struct {
 	// Upvalues is the address of the callee closure's captured bindings'
 	// cells, its context's (abi.Context.Upvalues), or 0 for none.
 	Upvalues uintptr
+	// StartOnly says the callee's code makes its locals past its
+	// parameters undefined as it starts (Func's StartOnly): the call leaves
+	// them to it.
+	StartOnly bool
 	// Parent, for a construction with a class whose constructor is the
 	// one a class without one has, is the class it extends, whose
 	// function Closure is: the call checks the callee's prototype is still

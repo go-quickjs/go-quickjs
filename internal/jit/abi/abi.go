@@ -480,13 +480,15 @@ type ExitInline struct {
 
 // NumConsts is how many words a context holds as constants
 // (Context.Consts).
-const NumConsts = 7
+const NumConsts = 8
 
 // ConstWords are the words a context holds as constants, in Consts'
 // order: the tags native code makes most, by how many sites a corpus of
-// npm packages' code makes each at.
+// npm packages' code makes each at; then the write-barrier flag's address,
+// which every store and keep of a pointer reads before it writes, ten bytes
+// of instruction each as an immediate, among the code's hottest.
 func (e *Encoding) ConstWords() [NumConsts]uint64 {
-	return [NumConsts]uint64{e.Object, e.String, e.Uninitialized, NumberLimit, e.Undefined, e.True, e.False}
+	return [NumConsts]uint64{e.Object, e.String, e.Uninitialized, NumberLimit, e.Undefined, e.True, e.False, e.WriteBarrier}
 }
 
 // SetConsts fills c's constants from e, which the code run in c was

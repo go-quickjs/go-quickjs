@@ -1062,6 +1062,29 @@ type effect struct {
 	jump  int
 }
 
+// StartOnly reports whether fn's code is entered at its first instruction
+// only at its start: no branch of it goes there, nor anywhere Go goes on
+// (goBranch). Its code then makes the frame's locals past its parameters
+// undefined at its start (ssa.Func's StartOnly), which its native callers
+// leave to it, as V8's callee makes its own frame: each call had written
+// every one, the callee's every other local an immediate pair at each of
+// its calls.
+func StartOnly(fn *bytecode.Function) bool {
+	for pc, in := range fn.Code {
+		e, err := describe(fn, pc, in)
+		if err != nil {
+			return false
+		}
+		if e.branch && e.target(in) == 0 {
+			return false
+		}
+		if to, ok := goBranch(in); ok && to == 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // goBranch is where Go may go on at, past in, an instruction it runs
 // (jitHost) and that may jump: a loop's end, where its cursor is done; a
 // delegation's; an await using scope's disposal's, where nothing is left

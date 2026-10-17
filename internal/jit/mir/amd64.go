@@ -31,6 +31,9 @@ type compiler struct {
 	a *amd64.Asm
 	// consts are the words every context holds (abi.Context's Consts).
 	consts [abi.NumConsts]uint64
+	// pool is the code's own constants, placed after its last instruction
+	// (movImm).
+	pool []poolConst
 	// label of each block's code.
 	labels []amd64.Label // by block ID
 	// stubs: one exit per frame state and kind, by state ID and kind
@@ -178,6 +181,11 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 		c.a.Bind(c.saving)
 		c.savingCall()
 	}
+	// Last: the code's own constants (movImm), past every instruction.
+	for _, k := range c.pool {
+		c.a.Bind(k.label)
+		c.a.Quad(k.v)
+	}
 	bytes, err := c.a.Finish()
 	if err != nil {
 		return nil, err
@@ -201,8 +209,30 @@ func (c *compiler) movImm(dst amd64.Reg, v uint64) {
 				return
 			}
 		}
+		// Any other, from the code's own constants, after its last
+		// instruction: seven bytes, read through the data cache, where ten
+		// bytes of instruction had filled the op cache -- a shape's or a
+		// prototype's address in each guard, a tenth of the code's hottest
+		// bytes, whose size decides how much of it the op cache holds.
+		for _, k := range c.pool {
+			if k.v == v {
+				c.a.LoadLabel(dst, k.label)
+				return
+			}
+		}
+		k := poolConst{v: v, label: c.a.NewLabel()}
+		c.pool = append(c.pool, k)
+		c.a.LoadLabel(dst, k.label)
+		return
 	}
 	c.a.MovImm(dst, v)
+}
+
+// poolConst is a constant of a function's code, a word placed after its
+// last instruction, at label (movImm).
+type poolConst struct {
+	v     uint64
+	label amd64.Label
 }
 
 // storeImm stores the word v at [base + disp]: as an immediate, in one
@@ -786,6 +816,10 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 				c.a.Store(locals, at+c.enc.NumOffset, top)
 				c.a.Load(top, rb, rd)
 				c.a.Store(locals, at+c.enc.RefOffset, top)
+				continue
+			}
+			if t.StartOnly && i >= t.Params {
+				// The callee's code makes it undefined as it starts.
 				continue
 			}
 			c.storeImm(locals, at+c.enc.NumOffset, c.enc.Undefined, top)
@@ -2467,6 +2501,17 @@ func (c *compiler) block(b *ssa.Block, next *ssa.Block) {
 	if b.PC < 0 {
 		c.a.Load(regLocals, regCtx, abi.OffLocals)
 		c.a.Load(regStack, regCtx, abi.OffStack)
+		if c.f.StartOnly && c.f.Params < c.f.FrameLocals && b == c.entryAt(0) {
+			// The frame's locals past its parameters, undefined, which
+			// native callers leave to the code (ssa.Func's StartOnly).
+			vs := int32(c.enc.ValueSize)
+			c.movImm(scratchA, c.enc.Undefined)
+			c.movImm(scratchB, 0)
+			for i := c.f.Params; i < c.f.FrameLocals; i++ {
+				c.a.Store(regLocals, int32(i)*vs+c.enc.NumOffset, scratchA)
+				c.a.Store(regLocals, int32(i)*vs+c.enc.RefOffset, scratchB)
+			}
+		}
 	}
 	for _, v := range b.Values {
 		if v.Op == ssa.OpPhi || c.isLazy(v) {
@@ -4995,7 +5040,12 @@ func (c *compiler) looseNullish(v *ssa.Value, guard func(amd64.Cond)) {
 }
 
 // eqTagged is OpEqTagged: x == y or x === y by the two words, and for two
-// objects by their pointers, found as objectOf finds an object's.
+// objects by their pointers, found as objectOf finds an object's. What
+// most comparisons meet is inline -- one word, a number or an object; two
+// words, numbers or not -- and the rest out of line: two strings, the
+// constants a word may be, loose equality's null and undefined. All of it
+// inline had made the comparison 500 bytes a site, of the code's hottest,
+// whose size decides how much of it the op cache holds.
 func (c *compiler) eqTagged(v *ssa.Value, guard func(amd64.Cond)) {
 	x, y := v.Args[0], v.Args[1]
 	yes, no, done, differ, number := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
@@ -5003,22 +5053,15 @@ func (c *compiler) eqTagged(v *ssa.Value, guard func(amd64.Cond)) {
 	wx, wy := c.gpr(x, scratchA), c.gpr(y, scratchB)
 	c.a.Op(amd64.Cmp, wx, wy, true)
 	c.a.Jcc(amd64.CondNE, differ)
-	// One word: a number (NaN unequal to itself), a primitive, or objects.
+	// One word: a number (NaN unequal to itself), objects, or, out of
+	// line, a primitive or strings.
 	c.movImm(scratchC, abi.NumberLimit)
 	c.a.Op(amd64.Cmp, wx, scratchC, true)
 	c.a.Jcc(amd64.CondB, number)
-	for _, w := range []uint64{c.enc.Null, c.enc.Undefined, c.enc.True, c.enc.False} {
-		c.movImm(scratchC, w)
-		c.a.Op(amd64.Cmp, wx, scratchC, true)
-		c.a.Jcc(amd64.CondE, yes)
-	}
-	strings := c.a.NewLabel()
-	c.movImm(scratchC, c.enc.String)
-	c.a.Op(amd64.Cmp, wx, scratchC, true)
-	c.a.Jcc(amd64.CondE, strings)
+	notObject := c.a.NewLabel()
 	c.movImm(scratchC, c.enc.Object)
 	c.a.Op(amd64.Cmp, wx, scratchC, true)
-	c.a.Jcc(amd64.CondNE, exit)
+	c.a.Jcc(amd64.CondNE, notObject)
 	if c.reference(v, x, c.enc.Object, guard) {
 		c.a.MovQToX(xScratch1, scratchC)
 		if c.reference(v, y, c.enc.Object, guard) {
@@ -5028,22 +5071,47 @@ func (c *compiler) eqTagged(v *ssa.Value, guard func(amd64.Cond)) {
 			c.a.Jmp(no)
 		}
 	}
-	// Two strings: one string, or of different lengths; Go compares the
-	// rest.
-	c.a.Bind(strings)
+	// Two strings, inline as far as one string, which an interned
+	// property name or literal compared with itself is; their lengths and
+	// units out of line, with every other word's constants.
+	c.a.Bind(notObject)
+	for _, w := range []uint64{c.enc.Null, c.enc.Undefined} {
+		// x === undefined, which most tests of a value against one are.
+		c.movImm(scratchC, w)
+		c.a.Op(amd64.Cmp, wx, scratchC, true)
+		c.a.Jcc(amd64.CondE, yes)
+	}
+	notString, units := c.a.NewLabel(), c.a.NewLabel()
+	c.movImm(scratchC, c.enc.String)
+	c.a.Op(amd64.Cmp, wx, scratchC, true)
+	c.a.Jcc(amd64.CondNE, notString)
 	if c.reference(v, x, c.enc.String, guard) {
 		c.a.MovQToX(xScratch1, scratchC)
 		if c.reference(v, y, c.enc.String, guard) {
 			c.a.MovQFromX(scratchA, xScratch1)
 			c.a.Op(amd64.Cmp, scratchA, scratchC, true)
 			c.a.Jcc(amd64.CondE, yes)
-			c.a.Load(scratchA, scratchA, c.enc.StringLength)
-			c.a.Load(scratchB, scratchC, c.enc.StringLength)
-			c.a.Op(amd64.Cmp, scratchA, scratchB, true)
-			c.a.Jcc(amd64.CondNE, no)
-			c.stringBytes(exit, yes, no)
+			c.a.Jmp(units)
+			c.cold = append(c.cold, func() {
+				c.a.Bind(units)
+				c.a.Load(scratchA, scratchA, c.enc.StringLength)
+				c.a.Load(scratchB, scratchC, c.enc.StringLength)
+				c.a.Op(amd64.Cmp, scratchA, scratchB, true)
+				c.a.Jcc(amd64.CondNE, no)
+				c.stringBytes(exit, yes, no)
+			})
 		}
 	}
+	c.cold = append(c.cold, func() {
+		c.a.Bind(notString)
+		wx := c.gpr(x, scratchA)
+		for _, w := range []uint64{c.enc.True, c.enc.False} {
+			c.movImm(scratchC, w)
+			c.a.Op(amd64.Cmp, wx, scratchC, true)
+			c.a.Jcc(amd64.CondE, yes)
+		}
+		c.a.Jmp(exit)
+	})
 	c.a.Bind(number)
 	c.a.MovQToX(xScratch0, wx)
 	c.a.SSEOp(amd64.UcomiSD, xScratch0, xScratch0)
@@ -5052,43 +5120,47 @@ func (c *compiler) eqTagged(v *ssa.Value, guard func(amd64.Cond)) {
 	// Two words: two numbers compare as numbers; anything else is
 	// strictly unequal. Loosely, null and undefined equal each other and
 	// an object with [[IsHTMLDDA]] alone, with nothing converted; any
-	// other two are Go's.
+	// other two are Go's -- out of line.
 	c.a.Bind(differ)
 	other := no
 	if v.Index != 1 {
-		other = exit
-		numbers, xNullish, yNullish := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
-		for _, w := range []uint64{c.enc.Null, c.enc.Undefined} {
-			c.movImm(scratchC, w)
-			c.a.Op(amd64.Cmp, wx, scratchC, true)
-			c.a.Jcc(amd64.CondE, xNullish)
-			c.a.Op(amd64.Cmp, wy, scratchC, true)
-			c.a.Jcc(amd64.CondE, yNullish)
-		}
-		c.a.Jmp(numbers)
-		// One is null or undefined, the other of another word.
-		for _, k := range []struct {
-			at    amd64.Label
-			other *ssa.Value
-			w     amd64.Reg
-		}{{xNullish, y, wy}, {yNullish, x, wx}} {
-			c.a.Bind(k.at)
+		loose := c.a.NewLabel()
+		other = loose
+		c.cold = append(c.cold, func() {
+			c.a.Bind(loose)
+			wx, wy := c.gpr(x, scratchA), c.gpr(y, scratchB)
+			xNullish, yNullish := c.a.NewLabel(), c.a.NewLabel()
 			for _, w := range []uint64{c.enc.Null, c.enc.Undefined} {
 				c.movImm(scratchC, w)
+				c.a.Op(amd64.Cmp, wx, scratchC, true)
+				c.a.Jcc(amd64.CondE, xNullish)
+				c.a.Op(amd64.Cmp, wy, scratchC, true)
+				c.a.Jcc(amd64.CondE, yNullish)
+			}
+			c.a.Jmp(exit)
+			// One is null or undefined, the other of another word.
+			for _, k := range []struct {
+				at    amd64.Label
+				other *ssa.Value
+				w     amd64.Reg
+			}{{xNullish, y, wy}, {yNullish, x, wx}} {
+				c.a.Bind(k.at)
+				for _, w := range []uint64{c.enc.Null, c.enc.Undefined} {
+					c.movImm(scratchC, w)
+					c.a.Op(amd64.Cmp, k.w, scratchC, true)
+					c.a.Jcc(amd64.CondE, yes)
+				}
+				c.movImm(scratchC, c.enc.Object)
 				c.a.Op(amd64.Cmp, k.w, scratchC, true)
-				c.a.Jcc(amd64.CondE, yes)
+				c.a.Jcc(amd64.CondNE, no)
+				if c.reference(v, k.other, c.enc.Object, guard) {
+					c.a.LoadU8(scratchC, scratchC, c.enc.ObjectFlags)
+					c.a.OpImm(amd64.And, scratchC, int32(c.enc.FlagHTMLDDA), false)
+					c.a.Jcc(amd64.CondNE, yes)
+				}
+				c.a.Jmp(no)
 			}
-			c.movImm(scratchC, c.enc.Object)
-			c.a.Op(amd64.Cmp, k.w, scratchC, true)
-			c.a.Jcc(amd64.CondNE, no)
-			if c.reference(v, k.other, c.enc.Object, guard) {
-				c.a.LoadU8(scratchC, scratchC, c.enc.ObjectFlags)
-				c.a.OpImm(amd64.And, scratchC, int32(c.enc.FlagHTMLDDA), false)
-				c.a.Jcc(amd64.CondNE, yes)
-			}
-			c.a.Jmp(no)
-		}
-		c.a.Bind(numbers)
+		})
 	}
 	c.movImm(scratchC, abi.NumberLimit)
 	c.a.Op(amd64.Cmp, wx, scratchC, true)
@@ -5110,7 +5182,8 @@ func (c *compiler) eqTagged(v *ssa.Value, guard func(amd64.Cond)) {
 }
 
 // truth computes JavaScript truthiness for the kinds the slot IR decides it
-// for, exiting for the rest.
+// for, exiting for the rest: a number, an object, a boolean and null inline,
+// as most tests meet them, the rest out of line.
 func (c *compiler) truth(v *ssa.Value, guard func(amd64.Cond)) {
 	r := c.gpr(v.Args[0], scratchB)
 	number, yes, no, done := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
@@ -5118,18 +5191,17 @@ func (c *compiler) truth(v *ssa.Value, guard func(amd64.Cond)) {
 	c.a.ShiftImm(amd64.Shr, scratchA, 51, true)
 	c.a.OpImm(amd64.Cmp, scratchA, 0x1FFF, false)
 	c.a.Jcc(amd64.CondNE, number)
+	// A boolean, which most tests meet that are not of numbers; an object,
+	// true unless it is Annex B's [[IsHTMLDDA]], through its pointer, where
+	// it came from; null.
 	for _, w := range []struct {
 		word uint64
 		to   amd64.Label
-	}{{c.enc.True, yes}, {c.enc.False, no}, {c.enc.Undefined, no}, {c.enc.Null, no}} {
+	}{{c.enc.True, yes}, {c.enc.False, no}} {
 		c.movImm(scratchA, w.word)
 		c.a.Op(amd64.Cmp, r, scratchA, true)
 		c.a.Jcc(amd64.CondE, w.to)
 	}
-	// An object is true unless it is Annex B's [[IsHTMLDDA]], and a string
-	// unless it is empty: each through its pointer, where it came from.
-	// Anything else -- the uninitialized marker, a symbol, a BigInt -- is
-	// not decided here.
 	notObject := c.a.NewLabel()
 	c.movImm(scratchA, c.enc.Object)
 	c.a.Op(amd64.Cmp, r, scratchA, true)
@@ -5141,15 +5213,29 @@ func (c *compiler) truth(v *ssa.Value, guard func(amd64.Cond)) {
 		c.a.Jmp(yes)
 	}
 	c.a.Bind(notObject)
-	c.movImm(scratchA, c.enc.String)
+	other := c.a.NewLabel()
+	c.movImm(scratchA, c.enc.Null)
 	c.a.Op(amd64.Cmp, r, scratchA, true)
-	guard(amd64.CondNE)
-	if c.reference(v, v.Args[0], c.enc.String, guard) {
-		c.a.Load(scratchA, scratchC, c.enc.StringLength)
-		c.a.Op(amd64.Test, scratchA, scratchA, true)
-		c.a.Jcc(amd64.CondNE, yes)
-		c.a.Jmp(no)
-	}
+	c.a.Jcc(amd64.CondE, no)
+	c.a.Jmp(other)
+	// Undefined, and a string, true unless it is empty; anything else --
+	// the uninitialized marker, a symbol, a BigInt -- is not decided here.
+	c.cold = append(c.cold, func() {
+		c.a.Bind(other)
+		r := c.gpr(v.Args[0], scratchB)
+		c.movImm(scratchA, c.enc.Undefined)
+		c.a.Op(amd64.Cmp, r, scratchA, true)
+		c.a.Jcc(amd64.CondE, no)
+		c.movImm(scratchA, c.enc.String)
+		c.a.Op(amd64.Cmp, r, scratchA, true)
+		guard(amd64.CondNE)
+		if c.reference(v, v.Args[0], c.enc.String, guard) {
+			c.a.Load(scratchA, scratchC, c.enc.StringLength)
+			c.a.Op(amd64.Test, scratchA, scratchA, true)
+			c.a.Jcc(amd64.CondNE, yes)
+			c.a.Jmp(no)
+		}
+	})
 	c.a.Bind(number)
 	// A number is true unless zero or NaN: ucomisd sets ZF for zero and for
 	// NaN, and PF only for NaN.

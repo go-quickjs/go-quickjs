@@ -1312,6 +1312,7 @@ func (r *Runtime) compileSSAKeeping(fn *bytecode.Function, cl *closure, p *ir.Pr
 		return nil, nil, fmt.Errorf("%w: %v", jitRefused, err)
 	}
 	f.FrameLocals = fn.LocalCount
+	f.Params, f.StartOnly = fn.ParamCount, jitcompile.StartOnly(fn)
 	if p.This {
 		f.ThisSlot = fn.LocalCount + len(fn.Upvalues)
 	}
@@ -1928,6 +1929,7 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 			// object, which keeps them.
 			site.Upvalues = uintptr(unsafe.Pointer(unsafe.SliceData(in.cl.upvalues)))
 		}
+		site.StartOnly = jitcompile.StartOnly(in.cl.fn)
 		if in.via {
 			site.Via = uintptr(unsafe.Pointer(fb.r.callFn))
 			fb.holders = append(fb.holders, fb.r.callFn)
@@ -6852,6 +6854,9 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, code *bytecode.Function)
 		}
 		f.cl = l.cl
 		f.locals = r.stack[l.base : l.base+fn.LocalCount : l.base+fn.LocalCount]
+		if l.kind == abi.ExitEnter && !l.inline {
+			jitStartLocals(fn, f.locals)
+		}
 		f.base = l.base + fn.LocalCount
 		f.pc = uint32(l.pc)
 		if k < n-1 {
@@ -7022,6 +7027,7 @@ func (r *Runtime) jitEnterOne(c *abi.Context, i int, code *bytecode.Function, ca
 	f := r.pushFrame()
 	f.cl = cl
 	f.locals = r.stack[base : base+fn.LocalCount : base+fn.LocalCount]
+	jitStartLocals(fn, f.locals)
 	f.base = base + fn.LocalCount
 	f.pc = 0
 	f.this, f.newTarget, f.callee, f.args = this, newTarget, nil, nil
@@ -7033,6 +7039,17 @@ func (r *Runtime) jitEnterOne(c *abi.Context, i int, code *bytecode.Function, ca
 	}
 	r.popFrameOf(f, base)
 	return v, err
+}
+
+// jitStartLocals makes the locals of a frame a native call made for fn, its
+// code not run (abi.ExitEnter), undefined past its parameters, as fn's code
+// would have as it started (compile.StartOnly), which the call left to it.
+func jitStartLocals(fn *bytecode.Function, locals []Value) {
+	if jitcompile.StartOnly(fn) {
+		for i := min(fn.ParamCount, len(locals)); i < len(locals); i++ {
+			locals[i] = Undefined
+		}
+	}
 }
 
 // jitPoolEmptied reports whether level l left native code at a construction

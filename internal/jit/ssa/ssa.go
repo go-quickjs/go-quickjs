@@ -608,6 +608,13 @@ type Func struct {
 	Entries []Entry
 	// Locals and StackSize are the slot IR program's: the frame's shape.
 	Locals, StackSize int
+	// Params is how many of the frame's locals are its parameters, and
+	// StartOnly says its first instruction is entered only at its start
+	// (compile.StartOnly): the code's entry there makes the frame's other
+	// locals, up to FrameLocals, undefined, which its native callers leave
+	// to it.
+	Params    int
+	StartOnly bool
 	// FrameLocals is how many of the Locals are the frame's own; the rest,
 	// up to Locals, are captured bindings, which native code reads through
 	// their cells (abi.Context.Upvalues) and never writes. Build sets it to

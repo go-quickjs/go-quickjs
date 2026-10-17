@@ -386,6 +386,22 @@ func (a *Asm) LeaLabel(dst Reg, l Label) {
 	a.imm32(0)
 }
 
+// LoadLabel is dst = the word at the address l is bound at, RIP-relative:
+// a constant of the code's own, seven bytes where a 64-bit immediate takes
+// ten.
+func (a *Asm) LoadLabel(dst Reg, l Label) {
+	rex := byte(0x48)
+	if dst >= 8 {
+		rex |= 0x04
+	}
+	a.emit3(rex, 0x8B, byte(dst&7)<<3|5)
+	a.fixups = append(a.fixups, fixup{len(a.buf), l, fixLea})
+	a.imm32(0)
+}
+
+// Quad emits the word v as data.
+func (a *Asm) Quad(v uint64) { a.buf = binary.LittleEndian.AppendUint64(a.buf, v) }
+
 // Jcc jumps to l if c holds.
 func (a *Asm) Jcc(c Cond, l Label) {
 	a.emit2(0x0F, 0x80|byte(c))
