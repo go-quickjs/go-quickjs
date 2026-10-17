@@ -100,6 +100,9 @@ func (a *Asm) Bind(l Label) {
 	a.labels[l] = len(a.buf)
 }
 
+// Offset is where label l is bound, in bytes from the start.
+func (a *Asm) Offset(l Label) int { return 4 * a.labels[l] }
+
 // Finish resolves the labels and returns the code.
 func (a *Asm) Finish() ([]byte, error) {
 	for _, f := range a.fixups {

@@ -266,3 +266,82 @@ func CallPC(ctx *abi.Context) (pc, depth uint64) {
 	}
 	return ctx.ExitPC, ctx.ExitDepth
 }
+
+// ExpandGoCall reads into ctx the call of Go its code is making, if it
+// described it (abi.Context's GoState), as the call's code had written it
+// -- GoOp, GoKeep, a call's exit PC and depth, the operands -- from where
+// the code keeps them as the call starts: the registers its routine saved,
+// spill slots, constants, the frame, the sources of pointer words, which
+// nothing has changed since. It returns how far past where it goes on
+// (GoSite) the call goes on if Go does nothing (abi.GoCallState's Fail),
+// or 0. It reads what the description's operands say, offsets into ctx and
+// the frame, and no more: every call of Go from native code makes it.
+func ExpandGoCall(ctx *abi.Context) int32 {
+	if ctx.GoState == 0 {
+		return 0
+	}
+	// The description, which the code keeps alive (Code.GoCalls), by its
+	// address.
+	st := (*abi.GoCallState)(asPointer((*uint64)(unsafe.Pointer(&ctx.GoState))))
+	ctx.GoState = 0
+	ctx.GoOp, ctx.GoKeep = st.Op, st.Keep
+	if st.SetsPC {
+		ctx.ExitPC, ctx.ExitDepth = uint64(st.PC), uint64(st.Depth)
+	}
+	base := unsafe.Pointer(ctx)
+	for i := range st.Args {
+		a := &st.Args[i]
+		var n uint64
+		switch a.Kind {
+		case abi.GoArgNone:
+			continue
+		case abi.GoArgConst:
+			n = a.Word
+		case abi.GoArgWord:
+			n = *(*uint64)(unsafe.Add(base, a.At))
+		case abi.GoArgF64:
+			n = *(*uint64)(unsafe.Add(base, a.At))
+			if f := math.Float64frombits(n); f != f {
+				n = st.NaN
+			}
+		case abi.GoArgBool:
+			n = st.False
+			if *(*uint32)(unsafe.Add(base, a.At)) != 0 {
+				n = st.True
+			}
+		}
+		var r unsafe.Pointer
+		if a.Ref != abi.GoRefNone && !(a.Number && n < abi.NumberLimit) {
+			switch a.Ref {
+			case abi.GoRefSource:
+				if from := *(*unsafe.Pointer)(unsafe.Add(base, a.From)); from != nil {
+					r = *(*unsafe.Pointer)(unsafe.Add(from, st.RefOffset))
+				}
+			case abi.GoRefSlotSource:
+				r = *(*unsafe.Pointer)(unsafe.Add(goSlot(ctx, st, a), st.RefOffset))
+			case abi.GoRefOrigin:
+				o := goSlot(ctx, st, a)
+				if p := *(*unsafe.Pointer)(unsafe.Add(o, st.RefOffset)); p != nil && (a.Load || n == *(*uint64)(unsafe.Add(o, st.NumOffset))) {
+					r = p
+				}
+			}
+		}
+		ctx.GoArgs[i] = abi.GoArg{Num: n, Ref: uintptr(r)}
+	}
+	return st.Fail
+}
+
+// goSlot is the address of the frame's slot operand a names (abi.GoCallArg's
+// Base and From), as an exit's frame finds it (exitFrame's addr).
+func goSlot(ctx *abi.Context, st *abi.GoCallState, a *abi.GoCallArg) unsafe.Pointer {
+	switch a.Base {
+	case abi.ExitInLocals:
+		return unsafe.Add(ctx.Locals, int(a.From))
+	case abi.ExitInStack:
+		return unsafe.Add(ctx.Stack, int(a.From))
+	case abi.ExitInThis:
+		return unsafe.Add(unsafe.Pointer(&ctx.This), -int(st.NumOffset))
+	}
+	cell := *(*unsafe.Pointer)(unsafe.Add(ctx.Upvalues, int(a.From)*8))
+	return *(*unsafe.Pointer)(unsafe.Add(cell, int(st.UpvalueSlot)))
+}

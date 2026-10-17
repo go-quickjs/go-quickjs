@@ -64,8 +64,10 @@ type core struct {
 	exitWords map[uint64]int32
 	exitDescs []abi.ExitDescriptor
 	// calls are the descriptions of the native calls' states (callState),
-	// which the code keeps (Code.Calls).
-	calls []*abi.CallState
+	// which the code keeps (Code.Calls); goCalls its calls of Go's
+	// (goState).
+	calls   []*abi.CallState
+	goCalls []*abi.GoCallState
 }
 
 // saved is a register a call saves, and the spill slot it saves it in.
@@ -149,6 +151,9 @@ type Code struct {
 	// the context's RecordRef[:CallRefs].
 	Calls    []*abi.CallState
 	CallRefs int
+	// GoCalls are the descriptions of its calls of Go, which the calls name
+	// by address (abi.Context's GoState).
+	GoCalls []*abi.GoCallState
 	// Exits are the descriptions the code's exits name by address
 	// (abi.ExitDescriptor), which whoever holds the code keeps alive.
 	Exits []*abi.ExitDescriptor
@@ -1475,6 +1480,103 @@ func (c *core) callState(v *ssa.Value, s *ssa.FrameState, skip func(int) bool, o
 	st.Records = append(refRecs, restRecs...)
 	c.calls = append(c.calls, st)
 	return st, append(refs, rest...)
+}
+
+// goState describes a call of Go, op, with Go's result to keep cell keep
+// (abi.GoCallState) -- for a call (ssa.GoCall), the PC and depth of v's
+// state -- and its operands args, each where the code keeps it as the call
+// starts, as an exit's description does (exitDescriptor), the registers
+// the call's routine saves (goSaving) among them. It reports which
+// operands the call writes itself: those a description cannot find.
+func (c *core) goState(op uint64, keep int, v *ssa.Value, args []*ssa.Value) (*abi.GoCallState, []bool) {
+	enc := c.enc
+	st := &abi.GoCallState{Op: op, Keep: uint64(keep), NumOffset: enc.NumOffset, RefOffset: enc.RefOffset,
+		UpvalueSlot: enc.UpvalueSlot, True: enc.True, False: enc.False, NaN: enc.CanonicalNaN}
+	if v != nil && ssa.GoOp(op&0xff) == ssa.GoCall {
+		st.SetsPC, st.PC, st.Depth = true, uint32(v.State.PC), uint32(v.State.Depth)
+	}
+	c.goCalls = append(c.goCalls, st)
+	if len(args) == 0 {
+		return st, nil
+	}
+	written := make([]bool, len(args))
+	st.Args = make([]abi.GoCallArg, len(args))
+	for i, x := range args {
+		a, ok := c.goArgOf(x)
+		if !ok {
+			written[i], a = true, abi.GoCallArg{}
+		}
+		st.Args[i] = a
+	}
+	return st, written
+}
+
+// goArgOf is where Go finds operand x of a call of Go (abi.GoCallArg), as
+// an exit's description finds a slot's value (exitValue, exitSource), as
+// offsets: or false, where it cannot say.
+func (c *core) goArgOf(x *ssa.Value) (abi.GoCallArg, bool) {
+	var a abi.GoCallArg
+	l, ok := c.exitValue(x)
+	if !ok {
+		return a, false
+	}
+	switch l.Kind {
+	case abi.ExitConst:
+		a.Kind, a.Word = abi.GoArgConst, c.constWord(x.Const)
+	case abi.ExitReg:
+		a.Kind, a.At = abi.GoArgWord, abi.OffRegs+l.N*8
+	case abi.ExitSpill:
+		a.Kind, a.At = abi.GoArgWord, abi.OffSpill+l.N*8
+	case abi.ExitF64Reg:
+		a.Kind, a.At = abi.GoArgF64, abi.OffXRegs+(l.N&31)*8
+	case abi.ExitF64Spill:
+		a.Kind, a.At = abi.GoArgF64, abi.OffSpill+l.N*8
+	case abi.ExitBoolReg:
+		a.Kind, a.At = abi.GoArgBool, abi.OffRegs+(l.N&31)*8
+	case abi.ExitBoolSpill:
+		a.Kind, a.At = abi.GoArgBool, abi.OffSpill+l.N*8
+	default:
+		return a, false
+	}
+	a.Number = x.Shadow != nil || c.origin.At(x) >= 0
+	o, static := c.origin.Of(x)
+	switch {
+	case x.Shadow != nil:
+		src, ok := c.exitSource(x.Shadow)
+		switch {
+		case !ok:
+			return a, false
+		case src.Kind == abi.ExitReg:
+			a.Ref, a.From = abi.GoRefSource, abi.OffRegs+src.N*8
+		case src.Kind == abi.ExitSpill:
+			a.Ref, a.From = abi.GoRefSource, abi.OffSpill+src.N*8
+		case src.Kind == abi.ExitSlotAddr:
+			a.Ref = abi.GoRefSlotSource
+			a.Base, a.From = c.slotPlace(int(src.N))
+		case src.Kind == abi.ExitConst:
+			// No source: no pointer word.
+		default:
+			return a, false
+		}
+	case static && o >= 0:
+		a.Ref, a.Load = abi.GoRefOrigin, x.Op == ssa.OpLoadSlot
+		a.Base, a.From = c.slotPlace(o)
+	}
+	return a, true
+}
+
+// slotPlace is where slot i is, as abi.GoCallArg's Base and From say it.
+func (c *core) slotPlace(i int) (uint8, int32) {
+	vs := c.enc.ValueSize
+	switch {
+	case i < c.f.FrameLocals:
+		return abi.ExitInLocals, int32(i) * vs
+	case i == c.f.ThisSlot:
+		return abi.ExitInThis, 0
+	case i < c.f.Locals:
+		return abi.ExitInCell, int32(i - c.f.FrameLocals)
+	}
+	return abi.ExitInStack, int32(i-c.f.Locals) * vs
 }
 
 // callRefs bounds the pointer words the code's calls write themselves

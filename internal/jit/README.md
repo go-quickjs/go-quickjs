@@ -75,7 +75,13 @@ callee's return hands the result back in registers (`abi.Context`'s
 `ReturnTo`). Small callees are inlined, with
 their own frames made at an exit. A call of a built-in, or of anything the
 code does not call natively, is a call of Go (`ssa.GoCall`): native code
-calls into Go and goes on after it, without leaving.
+calls into Go and goes on after it, without leaving. As V8's deoptimization
+data describes a call's frame, a call's state and a call of Go's operands
+are static descriptions (`abi.CallState`, `abi.GoCallState`) of where the
+code keeps each value -- a register its shared routine saved, a spill
+slot, a constant, the frame -- which Go reads only when it needs them
+(`jit.ExpandCall`, `jit.ExpandGoCall`): a site writes little more than the
+description's address.
 
 **Allocation.** Object, array and regular expression literals, and the
 receivers of constructions, are taken from pools of objects the VM makes

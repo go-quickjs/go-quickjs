@@ -80,6 +80,16 @@ type compiler struct {
 	// native call it finished (resumeCall), if the code makes any.
 	ret                 amd64.Label
 	retUsed, resumeUsed bool
+	// calling is where every call of Go goes (goCalling), which goes on
+	// to saving; goFails are the calls whose refusals Go sends to a label
+	// of their own (abi.GoCallState's Fail), set once the code is laid out.
+	calling     amd64.Label
+	callingUsed bool
+	goFails     []goFail
+	// live is the routine of the calls of Go that save what they need
+	// themselves (goCallingLive).
+	live     amd64.Label
+	liveUsed bool
 	// saving is the routine every call of Go that saves every register
 	// shares (goSaving), if any makes one; storing, the routine the stores
 	// Go makes share (goStore), which goes on to saving.
@@ -92,6 +102,13 @@ type compiler struct {
 	// which goes on to saving for the rest.
 	appending     amd64.Label
 	appendingUsed bool
+}
+
+// goFail is a call of Go's description, where it goes on (back), and
+// where Go sends it if it does nothing (to).
+type goFail struct {
+	st       *abi.GoCallState
+	back, to amd64.Label
 }
 
 type stub struct {
@@ -207,6 +224,16 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 		c.a.Bind(c.storing)
 		c.storingCall()
 	}
+	if c.liveUsed {
+		c.a.Bind(c.live)
+		c.liveCall()
+	}
+	if c.callingUsed {
+		// Laid out just before saving, which it goes on to.
+		c.a.Bind(c.calling)
+		c.a.Store(regCtx, abi.OffGoState, scratchC)
+		c.a.Store(regCtx, abi.OffGoSite, scratchA)
+	}
 	if c.savingUsed {
 		c.a.Bind(c.saving)
 		c.savingCall()
@@ -228,12 +255,16 @@ func compileAMD64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 	if callAt >= 0 {
 		callAt = c.a.Moved(callAt)
 	}
+	for _, g := range c.goFails {
+		// Finish moved the labels where the code has them.
+		g.st.Fail = int32(c.a.Offset(g.to) - c.a.Offset(g.back))
+	}
 	if resumeAt >= 0 {
 		resumeAt = c.a.Moved(resumeAt)
 	}
 	c.finishExits()
 	return &Code{Bytes: bytes, Entries: entries, CallEntry: callAt, Resume: resumeAt, Text: c.a.Moved(text), Exits: c.exits,
-		Calls: c.calls, CallRefs: c.callRefs(), core: c.core}, nil
+		Calls: c.calls, CallRefs: c.callRefs(), GoCalls: c.goCalls, core: c.core}, nil
 }
 
 // movImm sets dst to the word v: a load of the context's copy where v is
@@ -1214,35 +1245,30 @@ func (c *compiler) iterStep(v *ssa.Value, slow amd64.Label) {
 }
 
 // goCallOp is goCall's, of the call of Go op (ssa.CallSite's Go, and what
-// goOpWord adds). saving, it saves every allocatable register across the
-// call (goSavingKeep), not only what lives past it: a native call's state,
-// which its exit reads, has its operands in registers that need not live
-// past it (allocate), as a call of Go's state does.
+// goOpWord adds), described (goState). saving -- a native call's, made by
+// Go -- it goes through the routine that saves every allocatable register
+// across it (goCalling), not only what lives past it: a native call's
+// state, which its exit reads, has its operands in registers that need not
+// live past it (allocate), as a call of Go's state does not. Otherwise it
+// saves what lives past it itself (goCallingLive), which costs a call
+// less.
 func (c *compiler) goCallOp(v *ssa.Value, op uint64, guard func(amd64.Cond), saving bool) {
 	size := int32(unsafe.Sizeof(abi.GoArg{}))
-	defer func() {
-		if !saving {
-			c.a.Load(scratchB, regCtx, abi.OffGoStatus)
-			c.a.Op(amd64.Test, scratchB, scratchB, true)
-			guard(amd64.CondNE)
-		}
-		c.a.Load(scratchA, regCtx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
-		c.setG(v, scratchA)
-	}()
+	// Its operands, which it writes: a description's, which Go would read
+	// at every call (goState), had cost more than the stores they save.
+	st, _ := c.goState(op, v.Index, v, nil)
 	for i, x := range v.Args {
 		c.goArg(abi.OffGoArgs+int32(i)*size, x)
 	}
-	if ssa.GoOp(op&0xff) == ssa.GoCall {
-		// Which call, as an exit at it says.
-		c.storeImm(regCtx, abi.OffExitPC, uint64(v.State.PC), scratchA)
-		c.storeImm(regCtx, abi.OffExitDepth, uint64(v.State.Depth), scratchA)
-	}
+	// Refused, it leaves, as its guard does: Go sends it there.
+	stub := c.stubLabel(v.State, exitKind(v.Aux))
 	if saving {
-		stub := c.stubLabel(v.State, exitKind(v.Aux))
-		c.goSavingKeep(op, v.Index, &stub)
-		return
+		c.goCalling(st, &stub)
+	} else {
+		c.goCallingLive(v, st, stub)
 	}
-	c.callGo(v, op, v.Index)
+	c.a.Load(scratchA, regCtx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
+	c.setG(v, scratchA)
 }
 
 // goArg writes x's words to the context's operand at at (abi.GoArg): its
@@ -3207,25 +3233,90 @@ func (c *compiler) goSaving(op uint64, stub *amd64.Label) {
 
 // goSavingKeep is goSaving whose result Go writes to keep cell keep.
 func (c *compiler) goSavingKeep(op uint64, keep int, stub *amd64.Label) {
-	c.storeImm(regCtx, abi.OffGoOp, op, scratchA)
-	c.storeImm(regCtx, abi.OffGoKeep, uint64(keep), scratchA)
-	// The routine the code's calls of Go share (savingCall), which comes
-	// back here: a site is its operands, not every register's save and
-	// restore, as V8's code calls its RecordWrite and CallRuntime
-	// builtins -- 360 bytes a site had been, the most of all the code made.
+	st, _ := c.goState(op, keep, nil, nil)
+	c.goCalling(st, stub)
+}
+
+// goCalling calls Go as st describes it (abi.GoCallState): through the
+// routine the code's calls of Go share (calling, then savingCall), which
+// comes back here, the description's address in scratchC and where it
+// comes back in scratchA -- a site is little more than its description, not
+// every register's save and restore, nor its GoOp, GoKeep and operands'
+// stores, as V8's code calls its RecordWrite and CallRuntime builtins. If
+// Go does nothing, it goes on at stub instead, if not nil, which Go sends
+// it to (Fail): no site tests GoStatus.
+func (c *compiler) goCalling(st *abi.GoCallState, stub *amd64.Label) {
+	if !c.callingUsed {
+		c.calling, c.callingUsed = c.a.NewLabel(), true
+	}
 	if !c.savingUsed {
 		c.saving, c.savingUsed = c.a.NewLabel(), true
 	}
 	back := c.a.NewLabel()
+	c.movImm(scratchC, uint64(uintptr(unsafe.Pointer(st))))
 	c.a.LeaLabel(scratchA, back)
-	c.a.Store(regCtx, abi.OffGoSite, scratchA)
-	c.a.Jmp(c.saving)
+	c.a.Jmp(c.calling)
 	c.a.Bind(back)
 	if stub != nil {
-		c.a.Load(scratchB, regCtx, abi.OffGoStatus)
-		c.a.Op(amd64.Test, scratchB, scratchB, true)
-		c.a.Jcc(amd64.CondNE, *stub)
+		c.goFails = append(c.goFails, goFail{st, back, *stub})
 	}
+}
+
+// goCallingLive calls Go as st describes it, for call v, whose state's
+// values live past it (allocate): what is live in registers saved and
+// restored here, through the routine such calls share (goLive), which
+// saves nothing. Refused, it goes to stub once it has restored them.
+func (c *compiler) goCallingLive(v *ssa.Value, st *abi.GoCallState, stub amd64.Label) {
+	saves := c.savesOf(v)
+	for _, sv := range saves {
+		if sv.float {
+			c.a.StoreSD(regCtx, c.spillDisp(sv.slot), amd64.XReg(sv.reg))
+		} else {
+			c.a.Store(regCtx, c.spillDisp(sv.slot), amd64.Reg(sv.reg))
+		}
+	}
+	if !c.liveUsed {
+		c.live, c.liveUsed = c.a.NewLabel(), true
+	}
+	back, fail := c.a.NewLabel(), c.a.NewLabel()
+	c.movImm(scratchC, uint64(uintptr(unsafe.Pointer(st))))
+	c.a.LeaLabel(scratchA, back)
+	c.a.Jmp(c.live)
+	c.a.Bind(back)
+	restore := func() {
+		for _, sv := range saves {
+			if sv.float {
+				c.a.LoadSD(amd64.XReg(sv.reg), regCtx, c.spillDisp(sv.slot))
+			} else {
+				c.a.Load(amd64.Reg(sv.reg), regCtx, c.spillDisp(sv.slot))
+			}
+		}
+	}
+	restore()
+	c.goFails = append(c.goFails, goFail{st, back, fail})
+	c.cold = append(c.cold, func() {
+		c.a.Bind(fail)
+		restore()
+		c.a.Jmp(stub)
+	})
+}
+
+// liveCall is the routine of goCallingLive's calls: the description and
+// where the call goes on (GoSite) in the context, Go called, its return
+// to the code's resumeLive -- the frame's registers read again -- and on to
+// GoSite.
+func (c *compiler) liveCall() {
+	resume := c.a.NewLabel()
+	c.a.Store(regCtx, abi.OffGoState, scratchC)
+	c.a.Store(regCtx, abi.OffGoSite, scratchA)
+	c.a.LeaLabel(scratchA, resume)
+	c.a.Store(regCtx, abi.OffGoResume, scratchA)
+	c.movImm(scratchA, c.enc.CallGo)
+	c.a.JmpReg(scratchA)
+	c.a.Bind(resume)
+	c.a.Load(regLocals, regCtx, abi.OffLocals)
+	c.a.Load(regStack, regCtx, abi.OffStack)
+	c.a.JmpMem(regCtx, abi.OffGoSite)
 }
 
 // savingCall is the routine the code's calls of Go that save every register

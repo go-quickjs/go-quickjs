@@ -73,6 +73,12 @@ type a64Compiler struct {
 	// ret and resume are amd64's.
 	ret                 arm64.Label
 	retUsed, resumeUsed bool
+	// calling and goFails are amd64's.
+	calling     arm64.Label
+	callingUsed bool
+	goFails     []a64GoFail
+	live        arm64.Label
+	liveUsed    bool
 	// saving is the routine every call of Go that saves every register
 	// shares (goSaving), if any makes one.
 	saving     arm64.Label
@@ -86,6 +92,12 @@ type a64Compiler struct {
 	// (appendingCall), as amd64's.
 	appending     arm64.Label
 	appendingUsed bool
+}
+
+// a64GoFail is amd64's goFail.
+type a64GoFail struct {
+	st       *abi.GoCallState
+	back, to arm64.Label
 }
 
 type a64Stub struct {
@@ -202,9 +214,22 @@ func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 		c.a.Bind(c.storing)
 		c.storingCall()
 	}
+	if c.liveUsed {
+		c.a.Bind(c.live)
+		c.liveCall()
+	}
+	if c.callingUsed {
+		// As amd64's: laid out just before saving.
+		c.a.Bind(c.calling)
+		c.a.Store(a64Ctx, abi.OffGoState, a64C)
+		c.a.Store(a64Ctx, abi.OffGoSite, a64A)
+	}
 	if c.savingUsed {
 		c.a.Bind(c.saving)
 		c.savingCall()
+	}
+	for _, g := range c.goFails {
+		g.st.Fail = int32(c.a.Offset(g.to) - c.a.Offset(g.back))
 	}
 	bytes, err := c.a.Finish()
 	if err != nil {
@@ -212,7 +237,7 @@ func compileARM64(w *Workspace, f *ssa.Func, enc abi.Encoding) (code *Code, err 
 	}
 	c.finishExits()
 	return &Code{Bytes: bytes, Entries: entries, CallEntry: callAt, Resume: resumeAt, Text: len(bytes), Exits: c.exits,
-		Calls: c.calls, CallRefs: c.callRefs(), core: c.core}, nil
+		Calls: c.calls, CallRefs: c.callRefs(), GoCalls: c.goCalls, core: c.core}, nil
 }
 
 // slotAddr is the base register and displacement of a frame slot's word.
@@ -1539,26 +1564,78 @@ func (c *a64Compiler) goSaving(op uint64, stub *arm64.Label) {
 
 // goSavingKeep is goSaving whose result Go writes to keep cell keep.
 func (c *a64Compiler) goSavingKeep(op uint64, keep int, stub *arm64.Label) {
-	c.movImm(a64A, op)
-	c.a.Store(a64Ctx, abi.OffGoOp, a64A)
-	if keep == 0 {
-		c.a.Store(a64Ctx, abi.OffGoKeep, arm64.ZR)
-	} else {
-		c.movImm(a64A, uint64(keep))
-		c.a.Store(a64Ctx, abi.OffGoKeep, a64A)
+	st, _ := c.goState(op, keep, nil, nil)
+	c.goCalling(st, stub)
+}
+
+// goCallingLive is amd64's.
+func (c *a64Compiler) goCallingLive(v *ssa.Value, st *abi.GoCallState, stub arm64.Label) {
+	saves := c.savesOf(v)
+	for _, sv := range saves {
+		if sv.float {
+			c.a.StoreF(a64Ctx, c.spillDisp(sv.slot), arm64.FReg(sv.reg))
+		} else {
+			c.a.Store(a64Ctx, c.spillDisp(sv.slot), arm64.Reg(sv.reg))
+		}
 	}
-	// The routine the code's calls of Go share (savingCall), as amd64's.
+	if !c.liveUsed {
+		c.live, c.liveUsed = c.a.NewLabel(), true
+	}
+	back, fail := c.a.NewLabel(), c.a.NewLabel()
+	c.movImm(a64C, uint64(uintptr(unsafe.Pointer(st))))
+	c.a.Adr(a64A, back)
+	c.a.B(c.live)
+	c.a.Bind(back)
+	restore := func() {
+		for _, sv := range saves {
+			if sv.float {
+				c.a.LoadF(arm64.FReg(sv.reg), a64Ctx, c.spillDisp(sv.slot))
+			} else {
+				c.a.Load(arm64.Reg(sv.reg), a64Ctx, c.spillDisp(sv.slot))
+			}
+		}
+	}
+	restore()
+	c.goFails = append(c.goFails, a64GoFail{st, back, fail})
+	c.cold = append(c.cold, func() {
+		c.a.Bind(fail)
+		restore()
+		c.a.B(stub)
+	})
+}
+
+// liveCall is amd64's.
+func (c *a64Compiler) liveCall() {
+	resume := c.a.NewLabel()
+	c.a.Store(a64Ctx, abi.OffGoState, a64C)
+	c.a.Store(a64Ctx, abi.OffGoSite, a64A)
+	c.a.Adr(a64A, resume)
+	c.a.Store(a64Ctx, abi.OffGoResume, a64A)
+	c.movImm(a64A, c.enc.CallGo)
+	c.a.Br(a64A)
+	c.a.Bind(resume)
+	c.a.Load(a64Locals, a64Ctx, abi.OffLocals)
+	c.a.Load(a64Stack, a64Ctx, abi.OffStack)
+	c.a.Load(a64A, a64Ctx, abi.OffGoSite)
+	c.a.Br(a64A)
+}
+
+// goCalling is amd64's: the description's address in C, where the call
+// comes back in A, through the routine the calls of Go share.
+func (c *a64Compiler) goCalling(st *abi.GoCallState, stub *arm64.Label) {
+	if !c.callingUsed {
+		c.calling, c.callingUsed = c.a.NewLabel(), true
+	}
 	if !c.savingUsed {
 		c.saving, c.savingUsed = c.a.NewLabel(), true
 	}
 	back := c.a.NewLabel()
+	c.movImm(a64C, uint64(uintptr(unsafe.Pointer(st))))
 	c.a.Adr(a64A, back)
-	c.a.Store(a64Ctx, abi.OffGoSite, a64A)
-	c.a.B(c.saving)
+	c.a.B(c.calling)
 	c.a.Bind(back)
 	if stub != nil {
-		c.a.Load(a64B, a64Ctx, abi.OffGoStatus)
-		c.a.Cbnz(a64B, *stub, true)
+		c.goFails = append(c.goFails, a64GoFail{st, back, *stub})
 	}
 }
 
@@ -3193,30 +3270,19 @@ func (c *a64Compiler) tailJump(t *ssa.CallSite, n int, this bool, guard func(arm
 
 func (c *a64Compiler) goCallOp(v *ssa.Value, op uint64, saving bool) {
 	size := int32(unsafe.Sizeof(abi.GoArg{}))
-	defer func() {
-		if !saving {
-			c.a.Load(a64B, a64Ctx, abi.OffGoStatus)
-			c.a.Cbnz(a64B, c.stubLabel(v.State, exitKind(v.Aux)), true)
-		}
-		c.a.Load(a64A, a64Ctx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
-		c.setG(v, a64A)
-	}()
+	// As amd64's: its operands written, the rest described.
+	st, _ := c.goState(op, v.Index, v, nil)
 	for i, x := range v.Args {
 		c.goArg(abi.OffGoArgs+int32(i)*size, x)
 	}
-	if ssa.GoOp(op&0xff) == ssa.GoCall {
-		// Which call, as an exit at it says.
-		c.movImm(a64A, uint64(v.State.PC))
-		c.a.Store(a64Ctx, abi.OffExitPC, a64A)
-		c.movImm(a64A, uint64(v.State.Depth))
-		c.a.Store(a64Ctx, abi.OffExitDepth, a64A)
-	}
+	stub := c.stubLabel(v.State, exitKind(v.Aux))
 	if saving {
-		stub := c.stubLabel(v.State, exitKind(v.Aux))
-		c.goSavingKeep(op, v.Index, &stub)
-		return
+		c.goCalling(st, &stub)
+	} else {
+		c.goCallingLive(v, st, stub)
 	}
-	c.callGo(v, op, v.Index)
+	c.a.Load(a64A, a64Ctx, abi.OffKeep+int32(v.Index)*int32(c.enc.ValueSize)+c.enc.NumOffset)
+	c.setG(v, a64A)
 }
 
 // callGo is a call of Go, as amd64's is.

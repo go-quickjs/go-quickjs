@@ -30,6 +30,7 @@ type SSACode struct {
 	// the pointer words its calls write themselves (mir's Code).
 	exits    []*abi.ExitDescriptor
 	calls    []*abi.CallState
+	goCalls  []*abi.GoCallState
 	callRefs int
 	// footprint is what the code holds (Footprint), which never changes
 	// while it is open.
@@ -66,8 +67,8 @@ func NewSSACode(a *Arena, c *mir.Code) (*SSACode, error) {
 		entries[pc] = int32(off)
 	}
 	s := &SSACode{code: code, arena: a, entries: entries, callEntry: int32(c.CallEntry), resume: int32(c.Resume), exits: c.Exits,
-		calls: c.Calls, callRefs: c.CallRefs}
-	s.footprint = footprint(len(code), cap(entries), c.Exits, c.Calls)
+		calls: c.Calls, goCalls: c.GoCalls, callRefs: c.CallRefs}
+	s.footprint = footprint(len(code), cap(entries), c)
 	runtime.SetFinalizer(s, func(s *SSACode) { _ = s.Close() })
 	return s, nil
 }
@@ -174,11 +175,12 @@ func CodeFootprint(c *mir.Code) int {
 	for pc := range c.Entries {
 		n = max(n, pc+1)
 	}
-	return footprint(alignUp(len(c.Bytes), codeAlign), n, c.Exits, c.Calls)
+	return footprint(alignUp(len(c.Bytes), codeAlign), n, c)
 }
 
-func footprint(code, entries int, exits []*abi.ExitDescriptor, calls []*abi.CallState) int {
-	n := code + int(unsafe.Sizeof(SSACode{})) + entries*4 + cap(exits)*8 + cap(calls)*8
+func footprint(code, entries int, c *mir.Code) int {
+	exits, calls := c.Exits, c.Calls
+	n := code + int(unsafe.Sizeof(SSACode{})) + entries*4 + cap(exits)*8 + cap(calls)*8 + cap(c.GoCalls)*8
 	var frame *abi.ExitFrame
 	frameOf := func(f *abi.ExitFrame) {
 		if f != frame {
@@ -194,6 +196,9 @@ func footprint(code, entries int, exits []*abi.ExitDescriptor, calls []*abi.Call
 	for _, st := range calls {
 		n += int(unsafe.Sizeof(*st)) + cap(st.Records)*int(unsafe.Sizeof(abi.CallRecord{}))
 		frameOf(st.Frame)
+	}
+	for _, st := range c.GoCalls {
+		n += int(unsafe.Sizeof(*st)) + cap(st.Args)*int(unsafe.Sizeof(abi.GoCallArg{}))
 	}
 	return n
 }
@@ -239,9 +244,13 @@ var HostCall func(ctx *abi.Context) bool
 // goCall is what callGo calls: HostCall, whose answer it puts in
 // ctx.GoStatus; it returns where the code goes on.
 func goCall(ctx *abi.Context) uintptr {
+	fail := ExpandGoCall(ctx)
 	ctx.GoStatus = 1
 	if HostCall != nil && HostCall(ctx) {
 		ctx.GoStatus = 0
+	} else if fail != 0 {
+		// Where the call goes if Go did nothing, its code testing nothing.
+		ctx.GoSite += uintptr(int64(fail))
 	}
 	return ctx.GoResume
 }

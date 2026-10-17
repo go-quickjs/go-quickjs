@@ -364,8 +364,13 @@ type Context struct {
 	// the code that made it: the routine its code shares for such calls
 	// (mir's goSaving) returns there.
 	GoSite uintptr
-	GoArgs [MaxGoArgs]GoArg
-	Host   unsafe.Pointer
+	// GoState is the address of the description of the call of Go being
+	// made (a *GoCallState, which the code holds), or 0: what the call's
+	// code had written itself -- GoOp, GoKeep, the exit's PC and depth,
+	// the operands -- Go reads there (jit.ExpandGoCall), and clears it.
+	GoState uintptr
+	GoArgs  [MaxGoArgs]GoArg
+	Host    unsafe.Pointer
 	// ExitMarking is 1 when the exit was the collector's marking's: a
 	// native call or a pool's object, which take no pointer while it
 	// marks, in code that calls no Go, or a native call with more operands
@@ -398,6 +403,65 @@ type GoArg struct {
 // compiled to JavaScript passes its state to, as EarleyBoyer's deriv_trees
 // takes nine, had left native code at every call with eight.
 const MaxGoArgs = 16
+
+// GoCallState is a call of Go from native code as data (Context.GoState):
+// its GoOp and GoKeep; for a call (GoCall), the exit's PC and depth it
+// had written (SetsPC); and its operands, which Go reads into GoArgs as
+// the call starts, where its code keeps them still -- the registers the
+// call's routine saved (Context.Regs, XRegs), spill slots, constants, the
+// sources their pointer words come from, the frame's slots -- but for
+// those Args says the call wrote itself (GoCallArg). If Go does nothing
+// (GoStatus 1) and Fail is not 0, the call goes on Fail bytes past where
+// it would have (GoSite): at its refusal's code, so that the call tests
+// nothing. NumOffset, RefOffset and UpvalueSlot are the encoding's, and
+// True, False and NaN its words for booleans and the canonical NaN, for
+// Go to read the operands with no more than the description.
+type GoCallState struct {
+	Op, Keep                          uint64
+	PC, Depth                         uint32
+	SetsPC                            bool
+	Fail                              int32
+	NumOffset, RefOffset, UpvalueSlot int32
+	True, False, NaN                  uint64
+	Args                              []GoCallArg
+}
+
+// GoCallArg is a GoCallState's operand, the i'th, laid out for Go to read
+// at once. Its number word is, by Kind: GoArgNone, the one the call wrote
+// to GoArgs[i] itself (its pointer word too); GoArgConst, Word; GoArgWord,
+// the word At bytes into the Context (a saved register, a spill slot);
+// GoArgF64 and GoArgBool, the double or the boolean there, boxed. Its
+// pointer word, unless Number says a number word below NumberLimit has
+// none, is by Ref: GoRefSource, the reference at the address the word From
+// bytes into the Context holds, if that is not 0; GoRefSlotSource, the one
+// in the frame's slot Base and From say; GoRefOrigin, that slot's if it
+// holds a reference and the value is its load (Load) or has its number
+// word; GoRefNone, none. A slot is From bytes past the frame's locals or
+// its operands (ExitInLocals, ExitInStack), the receiver (ExitInThis), or
+// the cell of captured binding From (ExitInCell).
+type GoCallArg struct {
+	Word            uint64
+	At, From        int32
+	Kind, Ref, Base uint8
+	Load, Number    bool
+}
+
+// GoCallArg's kinds and its pointer words' sources.
+const (
+	GoArgNone uint8 = iota
+	GoArgConst
+	GoArgWord
+	GoArgF64
+	GoArgBool
+)
+
+// GoCallArg's pointer words' sources.
+const (
+	GoRefNone uint8 = iota
+	GoRefSource
+	GoRefSlotSource
+	GoRefOrigin
+)
 
 // CallState is a native call's state as data, as V8's deoptimization data
 // describes a call's frame where a safepoint table says what is where: the
@@ -637,6 +701,7 @@ var (
 
 	OffExitMarking = int32(unsafe.Offsetof(Context{}.ExitMarking))
 	OffCallState   = int32(unsafe.Offsetof(Context{}.CallState))
+	OffGoState     = int32(unsafe.Offsetof(Context{}.GoState))
 )
 
 // ObjectPool is the objects a construction site native code makes, `new
