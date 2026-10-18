@@ -658,6 +658,25 @@ faster: its loss is its steady state's.
   29,000 and Gameboy's 12,000; method calls (`call_method`, `call`),
   Typescript's 7,500, Havlak's 5,800, CD's 1,500; constructions
   (`new`), Sieve's 2,100 and Bounce's 1,500.
+  Of the element reads since: Typescript's was its token table read by
+  names its keyword table answers, `staticTokens["44"]`, which Go's keyed
+  read for native code refused -- read as by the index since (`27e49c4`,
+  Typescript 66,268 exits to 49,862); Gameboy's were `memoryReadNormal`'s
+  typed-array read inlined, compiled as an array's because an inlined
+  callee's element feedback was the root's -- its own since (`bffbc73`,
+  Gameboy 28,591 to 12,736).
+- **The lower tiers gather no element feedback.** V8's keyed loads and
+  stores record the maps and elements kinds they meet in the interpreter
+  (KeyedLoadIC), so optimized code is compiled for a typed array from its
+  first compile. Ours learn an element's kind only at the code's own
+  exits (`jitIndexSeen`): a site the first compile took for an array's
+  meets typed arrays at host exits, and the code, learning, runs on
+  until a budget restarted by every cache change is spent (`e2d731e`) --
+  Gameboy's `executeIteration` read `TICKTable[op]` as an array's for
+  3,076 exits a run. The fix is V8's: the interpreter's and the tree
+  tier's element reads note the kinds they meet per site, kept where only
+  sites that meet more than an array's pay, and the first compile takes
+  them. Left for later, with the interpreter's hot paths to measure.
 - **Compiling in the background, last.** V8 compiles on a thread of its
   own while the function runs on in its lower tier; ours compiles on the
   runtime's goroutine, so that each compile's whole cost is paid where it
