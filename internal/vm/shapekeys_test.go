@@ -1,6 +1,10 @@
 package vm
 
-import "testing"
+import (
+	"fmt"
+	"strings"
+	"testing"
+)
 
 // A shape's keys are shared: by every object of a shared layout, by a
 // layout and the first one grown from it (whose keys extend its array in
@@ -40,5 +44,65 @@ func TestShapeKeysShared(t *testing.T) {
 	}
 	for _, name := range []string{"x", "y", "z", "s1", "s2", "a1", "a2", "a3"} {
 		checkShape(r.global.getOwn(r.atoms.intern(name)).value().Object())
+	}
+}
+
+// Objects a constructor builds alike share a layout past 64 properties, as
+// V8's share a map up to its 1,020 descriptors: Octane's Gameboy emulator,
+// of 215, had had a shape of its own at each construction, which every
+// cache met anew. The layouts along the chain share one index, as V8's
+// maps share a descriptor array, each the prefix of its own count: an
+// object stopped part way finds none of the keys past its own, and a
+// layout branching off the chain -- its keys a copy -- an index of its
+// own, which leaves the chain's as it was.
+func TestShapeChainsPastSixtyFour(t *testing.T) {
+	var src strings.Builder
+	src.WriteString("function C(stop, alt) {\n")
+	for i := 0; i < 215; i++ {
+		if i == 50 {
+			src.WriteString("if (alt) this.q = -1;\n")
+		}
+		fmt.Fprintf(&src, "if (stop === %d) return; this.p%d = %d;\n", i, i, i)
+	}
+	src.WriteString(`}
+		var a = new C(-1, false), b = new C(-1, false), y = new C(100, false), z = new C(-1, true)
+		;[y.p99, y.p100, y.p150, "p150" in y, Object.keys(y).length,
+			z.q, z.p50, z.p214, Object.keys(z)[50], a.q,
+			a["p" + 50], a["p" + 214], Object.keys(a).length].join()`)
+	r := New(Config{})
+	defer r.Close()
+	v, err := r.Run(compileForTest(t, src.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := v.String().Go(), "99,,,false,100,-1,50,214,q,,50,214,215"; got != want {
+		t.Fatalf("got  %s\nwant %s", got, want)
+	}
+	obj := func(name string) *Object { return r.global.getOwn(r.atoms.intern(name)).value().Object() }
+	a, b, y, z := obj("a"), obj("b"), obj("y"), obj("z")
+	if a.shape != b.shape || a.shape.unique || a.shape.n != 215 {
+		t.Fatalf("a and b do not share a layout of 215: %p %p unique %v n %d", a.shape, b.shape, a.shape.unique, a.shape.n)
+	}
+	indexes := func(s *shape) int {
+		seen := map[*propIndex]bool{}
+		for ; s != nil; s = s.parent {
+			if s.index != nil {
+				seen[s.index] = true
+			}
+		}
+		return len(seen)
+	}
+	onChain := false
+	for s := a.shape; s != nil; s = s.parent {
+		onChain = onChain || s == y.shape
+	}
+	if !onChain || y.shape.unique {
+		t.Fatal("an object stopped part way is not on its chain")
+	}
+	if n := indexes(a.shape); n != 1 {
+		t.Fatalf("a's chain has %d indexes, not one", n)
+	}
+	if n := indexes(z.shape); z.shape.unique || n != 2 {
+		t.Fatalf("the branch has %d indexes along its chain, unique %v: not its own after the chain's", n, z.shape.unique)
 	}
 }

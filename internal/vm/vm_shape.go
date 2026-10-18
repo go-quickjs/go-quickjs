@@ -136,9 +136,12 @@ type shapeTree struct {
 }
 
 const (
-	// maxShapeDepth is the most properties a shared layout has; a larger
-	// object's is unique.
-	maxShapeDepth = 64
+	// maxShapeDepth is the most properties a shared layout has, V8's most
+	// descriptors in a map (kMaxNumberOfDescriptors); a larger object's is
+	// unique. At 64, an object built alike by a constructor of more -- the
+	// 215 of Octane's Gameboy emulator -- had a shape of its own each time,
+	// and every cache met a new shape with each.
+	maxShapeDepth = 1020
 	// maxShapeFanout is the most transitions out of one shape. More means
 	// keys chosen at run time, which a cache would not keep up with.
 	maxShapeFanout = 64
@@ -301,7 +304,18 @@ func (s *shape) child(e shapeEdge) *shape {
 	if s.n >= maxShapeDepth || t.count >= maxShapes || len(s.more) >= maxShapeFanout {
 		return nil
 	}
+	inPlace := !s.extended
 	c := &shape{tree: t, parent: s, key: e.key, flags: e.flags, n: s.n + 1, keys: s.extendKeys(propKey(e))}
+	if inPlace && s.index != nil {
+		// Its keys extend s's in place, and its index s's, as V8's maps
+		// along a transition chain share one descriptor array, each the
+		// prefix of its own count: the index then names keys past a
+		// shape's own, which every lookup checks against the table.
+		// Built anew for each shape, a 215-property layout's indexes had
+		// cost the square of its length.
+		c.index = s.index
+		c.index.add(e.key, s.n)
+	}
 	t.count++
 	if s.next == nil {
 		s.next, s.nextEdge = c, e
@@ -1086,6 +1100,22 @@ func checkShape(o *Object) {
 	}
 	if int(s.n) != len(o.vals) || len(s.keys) < len(o.vals) {
 		panic("shape size disagrees with table")
+	}
+	if x := s.index; x != nil {
+		// An index may be shared along a chain of layouts, or borrowed from
+		// one: it names each live key at its position, and may name keys
+		// past the table, or ones deleted where a tombstone is.
+		keys := s.keys[:s.n]
+		for i, k := range keys {
+			if j, ok := x.slots[k.key]; k.flags&propDeleted == 0 && (!ok || j != int32(i)) {
+				panic("index disagrees with table")
+			}
+		}
+		for key, j := range x.slots {
+			if j < s.n && keys[j].key != key && keys[j].flags&propDeleted == 0 {
+				panic("index names another key in the table")
+			}
+		}
 	}
 	if s.unique || s.loose {
 		return
