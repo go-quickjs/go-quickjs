@@ -260,6 +260,16 @@ func (fb *jitFeedback) megamorphic(pc int, site ssa.PropertySite) bool {
 	if in := fb.fn.Code[pc]; int(in.B) < len(fb.cl.ic) && fb.cl.ic[in.B].fills >= maxCacheFills {
 		return true
 	}
+	if in := fb.fn.Code[pc]; int(in.B) < len(fb.cl.ic) {
+		if c := &fb.cl.ic[in.B]; c.shape == dictShape || c.cell != nil {
+			// A cache of dictionary objects (dictShape), or of a chain's
+			// cell (protoCell) -- a property up a long chain, or one
+			// nothing has: native code reads the receiver's own table and
+			// the megamorphic cache, whose entries name a chain's holder,
+			// or that the chain has none (abi.MegaChain, MegaAbsent).
+			return true
+		}
+	}
 	e := fb.e
 	if fb.root != nil {
 		e = fb.r.jit.entryFor(fb.fn)

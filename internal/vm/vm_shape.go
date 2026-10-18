@@ -1256,12 +1256,21 @@ func (r *Runtime) fillChainCache(c *propCache, o *Object, h *Object, depth int, 
 			break
 		}
 	}
+	if holder == absentHolder && c.shape != noShape && c.cell == nil && c.shape != o.shape {
+		// A site whose objects have the property: one that has none does
+		// not take its entry, as V8's polymorphic cache would keep both
+		// and a monomorphic one would trade them at each.
+		return
+	}
 	cell := r.chainCell(o.proto)
 	if cell == nil {
 		return
 	}
 	n := propCache{shape: remember(o.shape), idx: idx, fills: c.fills + 1, p1: o.proto, p2: holder, cell: cell}
 	c.refill(n, false)
+	if jitBuilt && r.jitOn() {
+		r.jitNoteChainRead(o, key)
+	}
 }
 
 // setPropCached is setValueProp for an object, with the site's cache: a write

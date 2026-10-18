@@ -157,9 +157,19 @@ func TestJITExceptionHandlers(t *testing.T) {
 	// has not: megamorphic, the read of q off undefined made by Go, which
 	// throws, and that of p off the empty object, which the VM gives no
 	// shape until a cache asks, by Go the first time -- the interpreter
-	// going on to the loop's header, once a run.)
-	if _, err := r.Run(compileForTest(t, `operation({}, 100)`)); err != nil {
-		t.Fatal(err)
+	// going on to the loop's header, once a run. The read of p off the
+	// empty object, which nothing on its chain has, is answered natively
+	// once its cache remembers it by the chain's cell, and q's read off
+	// undefined then deoptimizes once, and is compiled again megamorphic:
+	// the runs until no code is compiled again.)
+	for i := 0; i < 4; i++ {
+		reoptimized := r.jit.reoptimized
+		if _, err := r.Run(compileForTest(t, `operation({}, 100)`)); err != nil {
+			t.Fatal(err)
+		}
+		if i > 0 && r.jit.reoptimized == reoptimized {
+			break
+		}
 	}
 	for _, c := range []struct {
 		src         string

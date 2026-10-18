@@ -576,6 +576,21 @@ func (s *jitState) megaPut(n abi.MegaEntry) {
 	set[0] = n
 }
 
+// jitNoteChainRead has the megamorphic cache name what a read of key from o
+// found up its chain, or that nothing on it has the key, as an interpreter
+// cache remembers the read by the chain's cell (fillChainCache): native
+// code reads such a site megamorphically (jitFeedback.megamorphic), and
+// finds it there from its first run, rather than after its first exit.
+func (r *Runtime) jitNoteChainRead(o *Object, key Atom) {
+	if r.jit == nil {
+		return
+	}
+	if r.jit.mega == nil {
+		r.jit.mega = new(abi.MegaCache)
+	}
+	r.jitMegaFillProto(o, key)
+}
+
 // jitMegaFillProto has the megamorphic cache name the data property key a
 // prototype of o has, or that none has, o having none of its own, for
 // objects of o's shape:

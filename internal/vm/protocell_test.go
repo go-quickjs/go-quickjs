@@ -93,3 +93,28 @@ func TestProtoCellAbsentReads(t *testing.T) {
 		t.Error("a receiver with no prototype is not remembered by the empty chain's cell")
 	}
 }
+
+// A read of a property some of a site's objects have does not give up
+// their entry for one of an object that has none: a monomorphic cache
+// would otherwise trade them at each, as V8's polymorphic one would keep
+// both. One whose receivers' layout is the same, its chain changed, does.
+func TestProtoCellAbsentKeepsPresent(t *testing.T) {
+	r := New(Config{})
+	defer r.Close()
+	if _, err := r.Run(compileForTest(t, `
+		function L(x) { this.x = x; for (var i = 0; i < 1; i++) {} if (x % 2 === 0) this.s = "s" + x }
+		function get(o) { return o.s }
+		var out = 0
+		for (var i = 0; i < 20; i++) if (get(new L(i)) === undefined) out++`)); err != nil {
+		t.Fatal(err)
+	}
+	cl := globalObject(r, "get").fn().closure
+	for i := range cl.ic {
+		if c := &cl.ic[i]; c.shape != noShape && (c.cell != nil || c.fills > 2) {
+			t.Fatalf("the site traded its entries: cell %v, %d fills", c.cell != nil, c.fills)
+		}
+	}
+	if v := r.global.getOwn(r.atoms.intern("out")).value(); v.Number() != 10 {
+		t.Fatalf("%v reads of undefined, want 10", v)
+	}
+}

@@ -23,6 +23,7 @@ func jitNoteSeen(seen jitCacheSeen, _, _ propCache) jitCacheSeen { return seen }
 func jitNoteDeepAdd(*propCache, *shape, *shape, *Object) {}
 
 func (*Runtime) jitNoteDeepRead(*propCache, *Object, Atom) {}
+func (*Runtime) jitNoteChainRead(*Object, Atom)            {}
 
 func (*Runtime) recordJITStringIntrinsic(*Object) {}
 
