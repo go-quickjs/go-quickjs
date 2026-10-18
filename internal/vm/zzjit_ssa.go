@@ -4571,17 +4571,34 @@ func (r *Runtime) jitIndexSeen(e *jitEntry, pc int, o, k Value) {
 
 // StringRead is ssa.StringElementFeedback's (jitIndexSeen).
 func (fb *jitFeedback) StringRead(pc int) bool {
-	return fb.e != nil && fb.root == nil && slices.Contains(fb.e.stringReads, int32(pc))
+	e := fb.ownEntry()
+	return e != nil && slices.Contains(e.stringReads, int32(pc))
 }
 
 // TypedRead is ssa.ElementFeedback's (jitIndexSeen).
 func (fb *jitFeedback) TypedRead(pc int) bool {
-	return fb.e != nil && fb.root == nil && slices.Contains(fb.e.typedReads, int32(pc))
+	e := fb.ownEntry()
+	return e != nil && slices.Contains(e.typedReads, int32(pc))
 }
 
 // KeyedRead is ssa.KeyedFeedback's (jitIndexSeen).
 func (fb *jitFeedback) KeyedRead(pc int) bool {
-	return fb.e != nil && fb.root == nil && slices.Contains(fb.e.keyedReads, int32(pc))
+	e := fb.ownEntry()
+	return e != nil && slices.Contains(e.keyedReads, int32(pc))
+}
+
+// ownEntry is the entry whose code met what fb's function's element reads
+// met (jitIndexSeen): the function's own, for an inlined callee too, as an
+// inlined callee's property sites are what its own code found. An inlined
+// callee's had been the root's alone, nothing: Gameboy's memoryReadNormal,
+// parentObj.memory[address] of a typed array, inlined into its callers,
+// read it as an array's, which left native code at each read, though its
+// own code had learned it.
+func (fb *jitFeedback) ownEntry() *jitEntry {
+	if fb.root != nil {
+		return fb.r.jit.entryFor(fb.fn)
+	}
+	return fb.e
 }
 
 // jitKeyedRead is o[k] where reading it runs nothing (ssa.GoIndex): an
