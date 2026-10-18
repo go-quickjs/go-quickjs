@@ -3083,7 +3083,7 @@ func TestJITRefusesRoomOnlyWhenNothingIsOld(t *testing.T) {
 	// Compiles until one is refused: then nothing is old, and the refusal
 	// reclaims nothing -- not the lowerings without entries.
 	for i := 0; ; i++ {
-		evicted, refused, lowered, held := r.jit.evicted, r.jit.refusedRoom, len(r.jit.lowered), r.jitHeldBytes()
+		evicted, refused, lowered, held := r.jit.evicted, r.jit.refusedRoom, len(r.jit.lowered), jitHeldButScratch(r)
 		e := r.jitForFunction(copyOf(), nil)
 		young()
 		if e != nil {
@@ -3092,14 +3092,16 @@ func TestJITRefusesRoomOnlyWhenNothingIsOld(t *testing.T) {
 			}
 			continue
 		}
-		if r.jit.refusedRoom == refused || r.jit.evicted != evicted || len(r.jit.lowered) != lowered || r.jitHeldBytes() != held {
+		if r.jit.refusedRoom == refused || r.jit.evicted != evicted || len(r.jit.lowered) != lowered || jitHeldButScratch(r) != held {
 			t.Fatalf("a refusal reclaimed: %d evicted of %d, %d lowerings of %d, %d bytes held of %d",
-				r.jit.evicted, evicted, len(r.jit.lowered), lowered, r.jitHeldBytes(), held)
+				r.jit.evicted, evicted, len(r.jit.lowered), lowered, jitHeldButScratch(r), held)
 		}
 		break
 	}
-	if entries[0].hint != 0 || entries[1].hint != 0 {
-		t.Fatal("old code stayed while a compile was refused")
+	// Old code stays only where reclaiming it too would not make the room:
+	// the refusal counted it (jitState's floor).
+	if e := jitOldStaysUncounted(r, entries[:2]); e != nil {
+		t.Fatalf("old code of %d bytes stayed, not counted reclaimable: floor %d, %d held", e.bytes, r.jit.floor, jitHeldButScratch(r))
 	}
 }
 
