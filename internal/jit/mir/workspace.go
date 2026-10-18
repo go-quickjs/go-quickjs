@@ -32,8 +32,9 @@ type Workspace struct {
 	ready     bool
 	// What a compile's exit descriptions share (abi.ExitFrame) is built
 	// here, then copied out once at its length (core's finishExits).
-	exitSlots    map[abi.ExitSlot]uint16
 	exitWords    map[uint64]int32
+	exitHeadBuf  []int32
+	exitNextBuf  []int32
 	exitSlotsBuf []abi.ExitSlot
 	exitIndexBuf []uint16
 	exitWordsBuf []uint64
@@ -92,8 +93,8 @@ func (w *Workspace) Bytes() int {
 	n += w.arm64.a.Bytes() + capBytes(w.arm64.labels) + capBytes(w.arm64.stubFor) + capBytes(w.arm64.cold)
 	// A map's entries, as their keys and values, at least.
 	n += (len(w.amd64.stubs) + len(w.arm64.stubs)) * int(unsafe.Sizeof(stubKey{})+unsafe.Sizeof(amd64.Label(0)))
-	n += len(w.exitSlots)*int(unsafe.Sizeof(abi.ExitSlot{})+2) + len(w.exitWords)*12
-	n += capBytes(w.exitSlotsBuf) + capBytes(w.exitIndexBuf) + capBytes(w.exitWordsBuf)
+	n += len(w.exitWords) * 12
+	n += capBytes(w.exitSlotsBuf) + capBytes(w.exitIndexBuf) + capBytes(w.exitWordsBuf) + capBytes(w.exitHeadBuf) + capBytes(w.exitNextBuf)
 	return n
 }
 
@@ -122,8 +123,8 @@ func (w *Workspace) Rewind() {
 	// compiles needed.
 	if arenas := w.arenaBytes(); w.Bytes()-arenas > arenas {
 		w.sched = schedule{}
-		w.exitSlots, w.exitWords = nil, nil
-		w.exitSlotsBuf, w.exitIndexBuf, w.exitWordsBuf = nil, nil, nil
+		w.exitWords = nil
+		w.exitSlotsBuf, w.exitIndexBuf, w.exitWordsBuf, w.exitHeadBuf, w.exitNextBuf = nil, nil, nil, nil, nil
 		w.amd64.a, w.amd64.labels, w.amd64.stubs, w.amd64.stubFor, w.amd64.cold = amd64.Asm{}, nil, nil, nil, nil
 		w.arm64.a, w.arm64.labels, w.arm64.stubs, w.arm64.stubFor, w.arm64.cold = arm64.Asm{}, nil, nil, nil, nil
 	}

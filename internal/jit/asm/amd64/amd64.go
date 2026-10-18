@@ -81,6 +81,8 @@ type Asm struct {
 	// past it (Finish's).
 	bound []Label
 	at    []int32
+	// open are the fixups whose jumps Finish may yet shorten, in order.
+	open []int32
 }
 
 type fixup struct {
@@ -127,12 +129,14 @@ func (a *Asm) Len() int { return len(a.buf) }
 func (a *Asm) Reset() {
 	a.buf, a.labels, a.fixups = a.buf[:0], a.labels[:0], a.fixups[:0]
 	a.short, a.never, a.removed, a.past, a.bound, a.at = a.short[:0], a.never[:0], a.removed[:0], a.past[:0], a.bound[:0], a.at[:0]
+	a.open = a.open[:0]
 }
 
 // Bytes is the memory the assembler keeps for the next function.
 func (a *Asm) Bytes() int {
 	return cap(a.buf)*int(unsafe.Sizeof(a.buf[:1][0])) + cap(a.labels)*int(unsafe.Sizeof(0)) + cap(a.fixups)*int(unsafe.Sizeof(fixup{})) +
-		cap(a.short) + cap(a.never) + cap(a.removed)*int(unsafe.Sizeof(0)) + cap(a.past)*4 + cap(a.out) + cap(a.bound)*int(unsafe.Sizeof(Label(0))) + cap(a.at)*4
+		cap(a.short) + cap(a.never) + cap(a.removed)*int(unsafe.Sizeof(0)) + cap(a.past)*4 + cap(a.out) + cap(a.bound)*int(unsafe.Sizeof(Label(0))) + cap(a.at)*4 +
+		cap(a.open)*4
 }
 
 // NewLabel makes an unbound label.
@@ -199,13 +203,21 @@ func (a *Asm) Finish() ([]byte, error) {
 		}
 		a.never[i] = d-4*max(between, 0)-4 > 127
 	}
+	// The rounds look at the jumps still open, each until it is shortened;
+	// the last, which shortens none, leaves removed as it is to be.
+	open := a.open[:0]
+	for i := range a.fixups {
+		if !a.never[i] {
+			open = append(open, int32(i))
+		}
+	}
 	for changed := true; changed; {
 		changed = false
 		a.count()
-		for i, f := range a.fixups {
-			if a.short[i] || a.never[i] {
-				continue
-			}
+		kept := open[:0]
+		for _, j := range open {
+			i := int(j)
+			f := a.fixups[i]
 			start := f.at - opLen(f.kind)
 			from := start + 2
 			if i > 0 {
@@ -218,10 +230,13 @@ func (a *Asm) Finish() ([]byte, error) {
 			}
 			if d >= -128 && d <= 127 {
 				a.short[i], changed = true, true
+			} else {
+				kept = append(kept, j)
 			}
 		}
+		open = kept
 	}
-	a.count()
+	a.open = open[:0]
 	out := a.out[:0]
 	last := 0
 	for i, f := range a.fixups {

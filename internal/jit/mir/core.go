@@ -55,12 +55,17 @@ type core struct {
 	saves  []saved
 	saveAt []int
 	// exitFrame is what exitDescriptor's descriptions share (abi.ExitFrame),
-	// its slots and words each once, found again by exitSlots and
+	// its slots and words each once, found again by exitHead and
 	// exitWords; exitDescs are the descriptions, carved from blocks, as
 	// the code keeps them all as long: each block twice the last, up to a
-	// limit, so a small function takes little.
+	// limit, so a small function takes little. exitHead is, by slot, 1
+	// plus the index in the frame's Slots of its latest entry, or 0, and
+	// exitNext, by entry, 1 plus that of the one before it of its slot:
+	// a slot's entries, few, are compared one by one, where a map had
+	// hashed every one -- a twentieth of a compile's time in the backend.
 	exitFrame *abi.ExitFrame
-	exitSlots map[abi.ExitSlot]uint16
+	exitHead  []int32
+	exitNext  []int32
 	exitWords map[uint64]int32
 	exitDescs []abi.ExitDescriptor
 	// calls are the descriptions of the native calls' states (callState),
@@ -738,16 +743,24 @@ func (c *core) allocate() error {
 			spills++
 			return spills - 1, nil
 		}
+		// minEnd is at most the soonest an active interval ends: none
+		// ends before an interval that starts no later, and the active
+		// are looked at only once one may.
+		minEnd := math.MaxInt
 		for _, it := range classes[class] {
-			kept := active[:0]
-			for _, a := range active {
-				if a.end < it.start {
-					free = append(free, c.locAt(a.v).reg)
-				} else {
-					kept = append(kept, a)
+			if minEnd < it.start {
+				kept := active[:0]
+				minEnd = math.MaxInt
+				for _, a := range active {
+					if a.end < it.start {
+						free = append(free, c.locAt(a.v).reg)
+					} else {
+						kept = append(kept, a)
+						minEnd = min(minEnd, a.end)
+					}
 				}
+				active = kept
 			}
-			active = kept
 			done = done[:0]
 			for len(ends) > 0 && spilled[ends[0]].end < it.start {
 				k := pop()
@@ -769,6 +782,7 @@ func (c *core) allocate() error {
 				c.setLoc(it.v, loc{reg: free[i], spill: -1})
 				free = append(free[:i], free[i+1:]...)
 				active = append(active, it)
+				minEnd = min(minEnd, it.end)
 				continue
 			}
 			// Spill whichever interval ends last.
@@ -789,6 +803,7 @@ func (c *core) allocate() error {
 				c.setLoc(it.v, loc{reg: c.locAt(victim.v).reg, spill: -1})
 				c.setLoc(victim.v, loc{reg: -1, spill: s})
 				active[vi] = it
+				minEnd = min(minEnd, it.end)
 			}
 			spilled = append(spilled, victim)
 			push(len(spilled) - 1)
@@ -912,25 +927,31 @@ func (c *core) colorKeeps(iv []interval, pos []int) error {
 		}
 	}
 	// The cells each phi of addresses may be the address of: its
-	// arguments', through phis of phis, until none grows.
-	var merged map[int][]int
+	// arguments', through phis of phis, until none grows. phiAt is, by
+	// value ID, 1 plus a phi's index in phis, or 0; merged, by that index,
+	// its cells.
+	var phiAt []int
+	var merged [][]int
 	if len(phis) != 0 {
-		merged = map[int][]int{}
+		phiAt, merged = c.ints(f.NumValues()), make([][]int, len(phis))
+		for i, p := range phis {
+			phiAt[p.ID] = i + 1
+		}
 		for grew := true; grew; {
 			grew = false
-			for _, p := range phis {
+			for i, p := range phis {
 				for _, a := range p.Args {
 					add := func(k int) {
-						if !slices.Contains(merged[p.ID], k) {
-							merged[p.ID] = append(merged[p.ID], k)
+						if !slices.Contains(merged[i], k) {
+							merged[i] = append(merged[i], k)
 							grew = true
 						}
 					}
 					if k := cell[a.ID]; k != 0 {
 						add(k - 1)
 					}
-					if a.Op == ssa.OpPhi && a.Type == ssa.Source {
-						for _, k := range merged[a.ID] {
+					if j := phiAt[a.ID]; j != 0 {
+						for _, k := range merged[j-1] {
 							add(k)
 						}
 					}
@@ -945,8 +966,12 @@ func (c *core) colorKeeps(iv []interval, pos []int) error {
 		if k := cell[x.ID]; k != 0 {
 			each(k - 1)
 		}
-		for _, k := range merged[x.ID] {
-			each(k)
+		if phiAt != nil {
+			if j := phiAt[x.ID]; j != 0 {
+				for _, k := range merged[j-1] {
+					each(k)
+				}
+			}
 		}
 	}
 	for i := range iv {
@@ -1313,9 +1338,10 @@ func (c *core) exitDescriptor(s *ssa.FrameState, kind uint64, localsReg, stackRe
 	// described.
 	index, slots, words := len(f.Index), len(f.Slots), len(f.Words)
 	undo := func() *abi.ExitDescriptor {
-		for _, e := range f.Slots[slots:] {
-			delete(c.exitSlots, e)
+		for i := len(f.Slots) - 1; i >= slots; i-- {
+			c.exitHead[f.Slots[i].Slot] = c.exitNext[i]
 		}
+		c.exitNext = c.exitNext[:slots]
 		for _, w := range f.Words[words:] {
 			delete(c.exitWords, w)
 		}
@@ -1352,17 +1378,24 @@ func (c *core) exitDescriptor(s *ssa.FrameState, kind uint64, localsReg, stackRe
 			e.Origin >= 0 && e.Origin != e.Slot && writes(e.Origin):
 			direct = false
 		}
-		k, ok := c.exitSlots[e]
-		if !ok {
+		for int(e.Slot) >= len(c.exitHead) {
+			c.exitHead = append(c.exitHead, 0)
+		}
+		k := c.exitHead[e.Slot]
+		for k != 0 && f.Slots[k-1] != e {
+			k = c.exitNext[k-1]
+		}
+		if k == 0 {
 			if len(f.Slots) > math.MaxUint16 {
 				// More than an index names: the exit's code writes it.
 				return undo()
 			}
-			k = uint16(len(f.Slots))
 			f.Slots = append(f.Slots, e)
-			c.exitSlots[e] = k
+			c.exitNext = append(c.exitNext, c.exitHead[e.Slot])
+			k = int32(len(f.Slots))
+			c.exitHead[e.Slot] = k
 		}
-		f.Index = append(f.Index, k)
+		f.Index = append(f.Index, uint16(k-1))
 	}
 	if len(f.Index)-index > math.MaxUint16 {
 		return undo()
@@ -1395,15 +1428,15 @@ func (c *core) exitLayout() *abi.ExitFrame {
 		c.exitFrame = &abi.ExitFrame{FrameLocals: int32(c.f.FrameLocals), ThisSlot: int32(c.f.ThisSlot), Locals: int32(c.f.Locals), Enc: &enc}
 		if w := c.ws; w != nil {
 			// The workspace's, kept from compile to compile.
-			if w.exitSlots == nil {
-				w.exitSlots, w.exitWords = map[abi.ExitSlot]uint16{}, map[uint64]int32{}
+			if w.exitWords == nil {
+				w.exitWords = map[uint64]int32{}
 			}
-			clear(w.exitSlots)
 			clear(w.exitWords)
-			c.exitSlots, c.exitWords = w.exitSlots, w.exitWords
+			c.exitWords = w.exitWords
+			c.exitHead, c.exitNext = w.exitHeadBuf[:0], w.exitNextBuf[:0]
 			c.exitFrame.Slots, c.exitFrame.Index, c.exitFrame.Words = w.exitSlotsBuf[:0], w.exitIndexBuf[:0], w.exitWordsBuf[:0]
 		} else {
-			c.exitSlots, c.exitWords = map[abi.ExitSlot]uint16{}, map[uint64]int32{}
+			c.exitWords = map[uint64]int32{}
 		}
 	}
 	return c.exitFrame
@@ -1638,6 +1671,7 @@ func (c *core) finishExits() {
 		if w := c.ws; w != nil {
 			// Its buffers, for the next compile.
 			w.exitSlotsBuf, w.exitIndexBuf, w.exitWordsBuf = f.Slots[:0], f.Index[:0], f.Words[:0]
+			w.exitHeadBuf, w.exitNextBuf = c.exitHead[:0], c.exitNext[:0]
 		}
 		f.Slots, f.Index, f.Words = exact(f.Slots), exact(f.Index), exact(f.Words)
 	}
