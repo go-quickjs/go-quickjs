@@ -258,7 +258,8 @@ const (
 	OpSameSymbol // value -> none
 	// OpIterClosed guards that a cursor has nothing to close: its loop or
 	// destructuring done, or an array's walked in place (the VM's
-	// iterCloseNormal), which no return method ends.
+	// iterCloseNormal) while the cell at the word at Const's address is
+	// valid, which says no return method ends it (WalkedCloseFeedback).
 	OpIterClosed // cursor -> none
 	// OpKeepRef is a tagged value's pointer word (Args[0]), read where it
 	// came from (origin.go), or 0 for a primitive's; 0 while the collector

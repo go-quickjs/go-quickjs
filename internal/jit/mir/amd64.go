@@ -5033,6 +5033,20 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Load(scratchC, scratchB, c.enc.IterArr)
 		c.a.Op(amd64.Test, scratchC, scratchC, true)
 		guard(amd64.CondE)
+		// An array's, while nothing up its iterator's chain has a return
+		// method: the chain's validity cell, found at Const's address, is
+		// there and valid (ssa.WalkedCloseFeedback).
+		if v.Const.Bits == 0 {
+			c.a.Jmp(c.stubLabel(v.State, exitKind(v.Aux)))
+			break
+		}
+		c.movImm(scratchC, v.Const.Bits)
+		c.a.Load(scratchC, scratchC, 0)
+		c.a.Op(amd64.Test, scratchC, scratchC, true)
+		guard(amd64.CondE)
+		c.a.LoadU8(scratchC, scratchC, 0)
+		c.a.Op(amd64.Test, scratchC, scratchC, false)
+		guard(amd64.CondE)
 		c.a.Bind(ok)
 	case ssa.OpSameSymbol:
 		if c.reference(v, v.Args[0], c.enc.Symbol, guard) {

@@ -1529,6 +1529,18 @@ type GoFeedback interface {
 	GoCalls() bool
 }
 
+// WalkedCloseFeedback is Feedback whose VM says where native code finds
+// the validity cell (abi's chain cells) that says, while it is valid, that
+// closing an array walked in place runs nothing -- nothing up the array
+// iterator's chain has a return method: the address of a word holding the
+// cell's, or nil, the cell's first byte its valid flag. OpIterClosed
+// closes such an array where it is valid, as V8's load of a property
+// nothing has is kept by its chain's validity cell, and leaves any other
+// for Go.
+type WalkedCloseFeedback interface {
+	WalkedCloseCell() uintptr
+}
+
 // goCalls reports whether the code may call Go (GoFeedback).
 func (b *builder) goCalls() bool {
 	f, ok := b.fb.(GoFeedback)
@@ -3234,9 +3246,13 @@ func (b *builder) instruction(blk *Block, pc int) {
 		b.iterStep(blk, in, operand, guard)
 	case ir.IterClose:
 		// A cursor closed as a destructuring or a loop ends: nothing to do
-		// for one done, or for an array walked in place; Go closes any
-		// other.
-		guard(OpIterClosed, None, ir.HostExit, operand(in.Left))
+		// for one done, or for an array walked in place while nothing up
+		// its iterator's chain has a return method (WalkedCloseFeedback);
+		// Go closes any other.
+		c := guard(OpIterClosed, None, ir.HostExit, operand(in.Left))
+		if w, ok := b.fb.(WalkedCloseFeedback); ok {
+			c.Const.Bits = uint64(w.WalkedCloseCell())
+		}
 	case ir.Closure, ir.CloseUpvalues:
 		if b.host(pc) || b.f.Keeps >= b.f.keepLimit() {
 			blk.ExitKind = ir.HostExit

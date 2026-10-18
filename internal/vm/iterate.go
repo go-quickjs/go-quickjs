@@ -468,8 +468,7 @@ func (r *Runtime) stepIter(iter, next Value) (Value, bool, error) {
 // how a generator learns that nothing more will be requested of it.
 func (r *Runtime) closeIter(cursor Value) {
 	st := iterStateOf(cursor)
-	if st == nil || st.forIn || st.done || st.arr != nil {
-		// A directly-walked array has no return method to call.
+	if st == nil || st.forIn || st.done || st.arr != nil && !r.unwalkToClose(st) {
 		return
 	}
 	st.done = true
@@ -491,7 +490,7 @@ func (r *Runtime) closeIter(cursor Value) {
 func (r *Runtime) closeIteratorsIn(from, to int) {
 	for i := to - 1; i >= from; i-- {
 		st := iterStateOf(r.stack[i])
-		if st == nil || st.forIn || st.done || st.arr != nil || st.delegation {
+		if st == nil || st.forIn || st.done || st.delegation || st.arr != nil && !r.unwalkToClose(st) {
 			continue
 		}
 		st.done = true
@@ -1234,7 +1233,7 @@ func (r *Runtime) iterRest(cursor Value) (Value, error) {
 // checks that.
 func (r *Runtime) iterCloseNormal(cursor Value) error {
 	st := iterStateOf(cursor)
-	if st == nil || st.forIn || st.done || st.arr != nil {
+	if st == nil || st.forIn || st.done || st.arr != nil && !r.unwalkToClose(st) {
 		return nil
 	}
 	st.done = true
@@ -1261,6 +1260,52 @@ func (r *Runtime) iterCloseNormal(cursor Value) error {
 	return nil
 }
 
+// unwalk makes st, an array walked in place (iterState's arr), the
+// iterator the walk stands for -- an Array Iterator where the walk had got
+// to, stepped through its next from then on -- for what the protocol asks
+// of an iterator that the walk does not answer: a close, which looks up
+// its return method, or a delegation's throw or return.
+func (r *Runtime) unwalk(st *iterState) {
+	iter := newObject(r.proto.arrayIter, ClassIterator)
+	iter.extOf().data = &arrayIterData{a: arrayLike{o: st.arr}, kind: iterValues, i: int64(st.idx)}
+	st.iter, st.next, st.arr = Obj(iter), Obj(r.arrayIterNextFn), nil
+}
+
+// unwalkToClose reports whether closing st, an array walked in place left
+// before its end, runs anything, and if so unwalks it for the protocol to
+// close: the iterator's return method is looked up, as IteratorClose looks
+// it up, and %ArrayIteratorPrototype% or what it inherits from may have
+// one a script gave it, which is called -- with the iterator, where the
+// walk had got to -- as V8 calls one.
+func (r *Runtime) unwalkToClose(st *iterState) bool {
+	if r.arrayIterNoReturn() {
+		return false
+	}
+	r.unwalk(st)
+	return true
+}
+
+// arrayIterNoReturn reports whether nothing up %ArrayIteratorPrototype%'s
+// chain has a return method, nor could be asked for one without running
+// anything -- a proxy's trap, an exotic object's lookup. Once found, the
+// answer is kept as long as the chain's validity cell (protoCell) is
+// valid, which a change of any object on it ends, as V8's load of a
+// property nothing has is kept by its prototype chain's validity cell
+// (arrayIterCell), which native code checks too.
+func (r *Runtime) arrayIterNoReturn() bool {
+	if c := r.arrayIterCell; c != nil && c.valid {
+		return true
+	}
+	r.arrayIterCell = nil
+	for o := r.proto.arrayIter; o != nil; o = o.proto {
+		if !shapeClass(o.class) || synthesized(o.class, atomReturn) || o.findOwn(atomReturn) >= 0 {
+			return false
+		}
+	}
+	r.arrayIterCell = r.chainCell(r.proto.arrayIter)
+	return true
+}
+
 // iterResume drives one step of a `yield*`.
 //
 // How the outer generator was resumed decides which of the delegate's methods
@@ -1282,10 +1327,10 @@ func (r *Runtime) iterResume(cursor Value, sent Value, mode resumeMode,
 	switch mode {
 	case resumeThrow:
 		if st.arr != nil {
-			// A directly-walked array has no throw, so the delegation fails
-			// with the exception it was given.
-			st.done = true
-			return Undefined, false, r.throw(sent)
+			// The array's iterator, whose throw and return methods are
+			// looked up as any delegate's: none of the intrinsics gives it
+			// either, but a script may have.
+			r.unwalk(st)
 		}
 		method, err := r.getValueProp(st.iter, r.atoms.intern("throw"))
 		if err != nil {
@@ -1311,7 +1356,7 @@ func (r *Runtime) iterResume(cursor Value, sent Value, mode resumeMode,
 
 	case resumeReturn:
 		if st.arr != nil {
-			return sent, true, nil
+			r.unwalk(st)
 		}
 		method, err := r.getValueProp(st.iter, atomReturn)
 		if err != nil {

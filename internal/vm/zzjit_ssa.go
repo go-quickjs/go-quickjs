@@ -3538,6 +3538,19 @@ func (fb *jitFeedback) ArrayProtos() ([2]ssa.Holder, bool) {
 // GoCalls is ssa.GoFeedback's: the VM answers calls of Go (jitHostCall).
 func (fb *jitFeedback) GoCalls() bool { return true }
 
+// WalkedCloseCell is where native code finds the validity cell that says
+// closing an array walked in place runs nothing (arrayIterNoReturn): the
+// runtime's arrayIterCell, whose first byte is its valid flag. Asked now,
+// so that the code finds a cell from its first run if there is one.
+func (fb *jitFeedback) WalkedCloseCell() uintptr {
+	fb.r.arrayIterNoReturn()
+	return uintptr(unsafe.Pointer(&fb.r.arrayIterCell))
+}
+
+// A protoCell's valid flag is its first byte, which native code reads
+// (WalkedCloseCell).
+var _ [0]struct{} = [unsafe.Offsetof(protoCell{}.valid)]struct{}{}
+
 // jitGoCallInstr is the call a call of Go makes (abi.Context's GoOp, which
 // native code writes): its instruction, as the bytecode has it at the
 // call, and how many operands it takes from the stack. Read from the

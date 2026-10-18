@@ -50,3 +50,47 @@ func TestJITForOfArrayNative(t *testing.T) {
 		}
 	}
 }
+
+// Native code closes an array walked in place, left before its end, by
+// nothing only while nothing up its iterator's chain has a return method
+// (arrayIterNoReturn's validity cell): one a script gives
+// %IteratorPrototype% is called, as the interpreter calls it, and once it
+// is gone again the code closes natively with no exit, Go's close having
+// found the chain without one again.
+func TestJITWalkedArrayClose(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		var log = [], IP = Object.getPrototypeOf(Object.getPrototypeOf([][Symbol.iterator]()))
+		var arr = [1, 2, 3, 4, 5, 6, 7, 8]
+		function brk(n) { let s = 0; for (let i = 0; i < n; i++) for (const x of arr) { if (x === 3) break; s += x } return s }
+		function pair(n) { let s = 0; for (let i = 0; i < n; i++) { const [a, b] = arr; s += a + b } return s }
+		function on() { IP.return = function () { log.push(this.next().value); return {} } }
+		function off() { delete IP.return }
+		function take() { const l = log.length + ':' + log.slice(0, 3).join(); log = []; return l }
+	`
+	warm := []string{}
+	for range 6 {
+		warm = append(warm, `brk(40)`, `pair(40)`)
+	}
+	rounds := append(append([]string{}, warm...), `on()`, `brk(40) + take()`, `pair(40) + take()`, `off()`, `brk(40) + take()`, `pair(40) + take()`)
+	r := jitAgreesForTest(t, setup, rounds...)
+	type counts struct{ hosts, guards uint64 }
+	before := map[string]counts{}
+	for _, name := range []string{"brk", "pair"} {
+		e := jitNativeForTest(t, r, name)
+		before[name] = counts{e.ssaStats.hosts, e.ssaStats.guards}
+	}
+	for _, src := range []string{`brk(40)`, `pair(40)`} {
+		if _, err := r.Run(compileForTest(t, src)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"brk", "pair"} {
+		e := jitNativeForTest(t, r, name)
+		if h, g := e.ssaStats.hosts-before[name].hosts, e.ssaStats.guards-before[name].guards; h != 0 || g != 0 {
+			t.Errorf("%s left native code %d times for Go and failed %d guards, its closes' chain without a return again", name, h, g)
+		}
+	}
+}

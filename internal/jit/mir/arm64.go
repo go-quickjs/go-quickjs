@@ -4568,6 +4568,17 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.Load(a64C, a64B, c.enc.IterArr)
 		c.a.CmpImm(a64C, 0, true)
 		guard(arm64.EQ)
+		if v.Const.Bits == 0 {
+			c.a.B(c.stubLabel(v.State, exitKind(v.Aux)))
+			break
+		}
+		c.movImm(a64C, v.Const.Bits)
+		c.a.Load(a64C, a64C, 0)
+		c.a.CmpImm(a64C, 0, true)
+		guard(arm64.EQ)
+		c.a.LoadU8(a64C, a64C, 0)
+		c.a.CmpImm(a64C, 0, false)
+		guard(arm64.EQ)
 		c.a.Bind(ok)
 	case ssa.OpSameSymbol:
 		if c.reference(v, v.Args[0], c.enc.Symbol, guard) {

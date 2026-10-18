@@ -449,6 +449,11 @@ type Realm struct {
 	// arrayIterNextFn is %ArrayIteratorPrototype%.next, which for-of's fast
 	// path stands in for only while it is still there.
 	arrayIterNextFn *Object
+	// arrayIterCell is the validity cell of %ArrayIteratorPrototype%'s
+	// chain as it was when nothing on it had a return method, or nil
+	// (arrayIterNoReturn): while it is valid, closing an array walked in
+	// place runs nothing.
+	arrayIterCell *protoCell
 	// uint8Proto is Uint8Array.prototype, which the base64 conversions need in
 	// order to build their results.
 	uint8Proto *Object
