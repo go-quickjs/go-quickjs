@@ -280,6 +280,10 @@ type jitEntry struct {
 	tierBudget int64
 	tierMark   uint64
 	deopts     uint16
+	// tierSpends counts the invocations jitTierUp was given, which tells a
+	// call Go makes whether the call's frame counted its invocation
+	// (jitInvokedFrameless).
+	tierSpends uint32
 	// starts counts Go's entries at a function's start, not into a loop.
 	starts uint64
 	// literals are the object literals the code makes natively, each with
@@ -2100,17 +2104,25 @@ func jitTreeResult(p any) (Value, error, bool) {
 
 // jitCallAt makes the call, method call or construction in, its operands
 // on the VM's stack up to sp, as the interpreter makes it: its result,
-// and where on the stack the result goes.
+// and where on the stack the result goes. A call of a function whose code
+// is invalid spends its budget, as any invocation the existing tiers run
+// does (jitInvokedFrameless).
 func (r *Runtime) jitCallAt(in bytecode.Instr, sp int) (Value, int, error) {
 	stack := r.stack
 	argc := int(in.A)
 	args := stack[sp-argc : sp]
 	callee := stack[sp-argc-1]
 	sp -= argc + 1
+	ce, cl := r.jitInvalidCallee(callee)
+	var spends uint32
+	if ce != nil {
+		spends = ce.tierSpends
+	}
 	if in.Op == bytecode.OpNew {
 		// A construction native code did not make, as the interpreter
 		// makes it.
 		v, err := r.construct(callee, args)
+		r.jitInvokedFrameless(cl, ce, spends)
 		if err == nil && v.IsObject() && callee.IsObject() && callee.Object() == r.proto.arrayCtor {
 			// With the layout the arrays native code makes have
 			// (jitFillPool): one made at an exit for its pool is used
@@ -2125,7 +2137,46 @@ func (r *Runtime) jitCallAt(in bytecode.Instr, sp int) (Value, int, error) {
 		this = stack[sp]
 	}
 	v, err := r.callDirect(callee, this, args)
+	r.jitInvokedFrameless(cl, ce, spends)
 	return v, sp, err
+}
+
+// jitInvalidCallee is the entry of the function callee calls, and its
+// closure, if its code is invalid (jitInvalidate); or nil.
+func (r *Runtime) jitInvalidCallee(callee Value) (*jitEntry, *closure) {
+	if !callee.IsObject() {
+		return nil, nil
+	}
+	fd := callee.Object().fn()
+	if fd == nil || fd.native != nil || fd.closure == nil {
+		return nil, nil
+	}
+	if e := r.jitEntryOf(fd.closure); e != nil && e.invalid {
+		return e, fd.closure
+	}
+	return nil, nil
+}
+
+// jitInvokedFrameless spends an invocation of the budget of e's invalid
+// code, cl's function's, for a call Go made of the function for native
+// code (jitCallAt) that no frame of the function counted -- spends is
+// e.tierSpends before the call: one the call path answered without a
+// frame, a pure body's (pureCall), a leaf's or a forwarding
+// construction's, which the existing tiers ran all the same. One run with
+// a frame counted itself at its entry (tryJITAt). Every invocation in the
+// existing tiers spends the budget, as every one in V8's lower tiers does;
+// those a frameless call makes in the tree tier would never have run
+// native code, which only native callers call it for. Uncounted, AWFY's
+// CD's Vector2D.plus and minus, invalidated to inline their
+// constructions, were never compiled again: each call their native
+// caller made of them was made by Go from then on, and that caller,
+// recurse, its stretches cut short at each, ran in the tree tier, at
+// twice the time, as did DeltaBlue's constraints' callbacks.
+func (r *Runtime) jitInvokedFrameless(cl *closure, e *jitEntry, spends uint32) {
+	if e == nil || !e.invalid || e.tierSpends != spends {
+		return
+	}
+	r.jitTierUp(cl, e, int64(len(cl.fn.Code)))
 }
 
 // jitHost runs an explicitly lowered host operation with normal VM ordering.

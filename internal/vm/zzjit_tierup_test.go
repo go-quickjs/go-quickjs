@@ -5,6 +5,8 @@ package vm
 import (
 	"fmt"
 	"testing"
+
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 )
 
 // jitTierSetup has f read x off its receivers' prototypes, which a site that
@@ -187,5 +189,57 @@ func TestJITDeoptTiersUpByOSR(t *testing.T) {
 	run(`g(20000)`)
 	if r.jit.guards != guards || e.invalid {
 		t.Fatalf("g compiled again by on-stack replacement deoptimized %d times", r.jit.guards-guards)
+	}
+}
+
+// Every invocation the existing tiers run of a function whose code is
+// invalid spends its budget, a frameless one too: plus, a pure body the
+// call path answers without a frame (pureCall), which reads what it
+// captured and so is called natively, not inlined, compiled for its
+// native caller, loop, and invalidated, is called by Go at each of loop's
+// calls, and compiled again once four of those have spent its budget, as
+// a frame of it would have been; loop then calls it natively. Uncounted,
+// it was never compiled again, each call made by Go -- as AWFY's CD's
+// Vector2D.plus was, invalidated to inline its construction.
+func TestJITFramelessCallsSpendTheBudget(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r, run := jitTierRuntimeForTest(t, 4, `var m=(function(){
+			function V(x){this.x=x}
+			function plus(o){return new V(this.x+o.x)}
+			V.prototype.plus=plus;
+			return {V,plus};
+		})(), V=m.V, plus=m.plus, one=new V(1);
+		function loop(n){let v=new V(0);for(let i=0;i<n;i++)v=v.plus(one);return v.x}`)
+	pcl := r.global.getOwn(r.atoms.intern("plus")).value().Object().fn().closure
+	if pcl.fn.Leaf != bytecode.LeafPure {
+		t.Fatalf("plus is no pure body: %v", pcl.fn.Leaf)
+	}
+	var pe *jitEntry
+	for range 16 {
+		run(`loop(100)`)
+		if pe = r.jit.entryFor(pcl.fn); pe != nil && pe.ssa != nil && !pe.invalid {
+			break
+		}
+	}
+	jitNativeForTest(t, r, "loop")
+	if pe == nil || pe.ssa == nil || pe.invalid {
+		t.Fatalf("plus has no valid code for its native caller: compiled %v", pe != nil && pe.ssa != nil)
+	}
+	serial := pe.ssaSerial
+	r.jitInvalidate(pcl, pe, true)
+	run(`loop(3)`)
+	if !pe.invalid || pe.ssaSerial != serial {
+		t.Fatalf("plus compiled again after three calls: invalid %v, compiles %d", pe.invalid, pe.ssaSerial-serial)
+	}
+	run(`loop(1)`)
+	if pe.invalid || pe.ssaSerial != serial+1 || pe.link.entry == 0 {
+		t.Fatalf("plus not compiled again at its budget's end: invalid %v, compiles %d", pe.invalid, pe.ssaSerial-serial)
+	}
+	in := pe.link.in
+	run(`loop(100)`)
+	if pe.link.in-in < 100 {
+		t.Fatalf("loop called plus natively %d times of 100", pe.link.in-in)
 	}
 }

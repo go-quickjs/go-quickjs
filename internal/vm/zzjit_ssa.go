@@ -1330,6 +1330,7 @@ func (r *Runtime) jitTierBudget(fn *bytecode.Function, e *jitEntry) int64 {
 // its sites meet settles where it is gathered, and one compile takes it
 // all. Past jitMaxDeopts it is compiled no more.
 func (r *Runtime) jitTierUp(cl *closure, e *jitEntry, work int64) bool {
+	e.tierSpends++
 	if e.deopts > jitMaxDeopts {
 		return false
 	}

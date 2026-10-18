@@ -71,7 +71,10 @@ compile the function first (`jitCallThreshold`), each its bytecode's
 length (`jitTierBudget`), as V8's interrupt budget is invocations times
 bytecode length -- an invocation spends its length, a loop that ran a full
 budget of back edges all of it, the code then entered by on-stack
-replacement. A change of the function's caches' feedback meanwhile -- what
+replacement. Every invocation the existing tiers run spends it, those the
+call path answers without a frame (a pure body's, a leaf's) included when
+Go makes them for native code (`jitInvokedFrameless`): a function only
+native callers call is compiled again by their calls. A change of the function's caches' feedback meanwhile -- what
 they hold, not how often they were filled (`jitFeedbackMark`) -- delays
 the compile by another budget, as V8's `NotifyICChanged` does: feedback
 settles where it is gathered, and one compile takes it all. Past
