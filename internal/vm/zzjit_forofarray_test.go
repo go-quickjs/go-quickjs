@@ -94,3 +94,38 @@ func TestJITWalkedArrayClose(t *testing.T) {
 		}
 	}
 }
+
+// An element read by a canonical index's name, toks["44"], reads the
+// element its number names when Go makes the read for native code
+// (GoIndex, jitKeyedRead), as V8's keyed loads take a string's array
+// index: Typescript's scanner reads its token table by the strings its
+// keyword table answers, which had left native code at every read. A name
+// that is no canonical index -- "01", "-0", "4294967295" -- is a property's
+// as before. Each answer is the interpreter's.
+func TestJITKeyedReadIndexName(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		var toks = []; for (var i = 0; i < 106; i++) toks.push('t' + i)
+		var ids = []; for (var i = 0; i < 50; i++) ids.push(String((i * 7) % 106))
+		var u8 = new Uint8Array(64); for (var i = 0; i < 64; i++) u8[i] = i * 3
+		var odd = ['01', '-0', '4294967295', '3', 'length']
+		function scan(n) { let s = ''; for (let k = 0; k < n; k++) for (let i = 0; i < ids.length; i++) s = toks[ids[i]]; return s }
+		function mixed(a) { let s = ''; for (const k of odd) s += a[k] + ','; return s }
+	`
+	rounds := []string{}
+	for range 6 {
+		rounds = append(rounds, `scan(20)`)
+	}
+	rounds = append(rounds, `mixed(toks)`, `mixed(u8)`, `mixed(toks)`)
+	r := jitAgreesForTest(t, setup, rounds...)
+	e := jitNativeForTest(t, r, "scan")
+	hosts, guards := e.ssaStats.hosts, e.ssaStats.guards
+	if _, err := r.Run(compileForTest(t, `scan(20)`)); err != nil {
+		t.Fatal(err)
+	}
+	if h, g := e.ssaStats.hosts-hosts, e.ssaStats.guards-guards; h != 0 || g != 0 {
+		t.Errorf("scan left native code %d times for Go and failed %d guards", h, g)
+	}
+}

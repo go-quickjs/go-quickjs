@@ -4618,8 +4618,15 @@ func (r *Runtime) jitKeyedRead(o, k Value) (Value, bool) {
 	if !ok {
 		a, ok = r.atoms.lookup(n.name)
 	}
-	if !ok || a.IsIndex() {
+	if !ok {
 		return Undefined, false
+	}
+	if a.IsIndex() {
+		// A canonical index's name, "44": the element its number names,
+		// read as by the number -- as V8's keyed loads take a string's
+		// array index -- where a table of tokens indexed by the strings a
+		// keyword table answers had left native code at every read.
+		return r.jitKeyedRead(o, Uint32(a.Index()))
 	}
 	return r.sharedProp(obj, a)
 }
