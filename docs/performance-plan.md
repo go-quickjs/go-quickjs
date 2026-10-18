@@ -583,6 +583,18 @@ faster: its loss is its steady state's.
   table scans included (`ownScan`). Left: the JIT's record of the shapes
   a site met (`propSeen`) still keeps entries of its own beside them,
   where one record would do.
+  Measured, one build of each against `573dae7` (a quick check, not
+  placements): without the JIT DeltaBlue 63% faster on Octane and 54% on
+  the V8 suite, Box2D, RayTrace and Splay about 10%; with it Octane 3.4%
+  faster in all, Crypto and Richards faster. What the JIT decides changed
+  where a site its code had taken megamorphic is polymorphic now:
+  DeltaBlue's `Plan.prototype.execute`, whose `c.execute()` has several
+  targets, leaves native code at each call (a call without a native
+  target) and is judged slow, `ScaleConstraint`'s `execute` never
+  entered; Box2D leaves native code 11 times rather than 68, but its
+  small `set` methods are judged slow; RayTrace deoptimizes 4 times
+  rather than none. A polymorphic call, V8's check of each target, is
+  what the first needs.
 - **`get_prop` in `executeAt` never fills a small table's cache**: it reads
   a plain own property of up to `linearScanLimit` keys directly
   (`plainOwn`), which is as quick as a hit. The JIT therefore learns such
