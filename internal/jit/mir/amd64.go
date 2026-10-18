@@ -1108,8 +1108,9 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 			c.a.Load(top, callLink, c.enc.LinkFlags)
 			c.a.OpImm(amd64.And, top, abi.LinkTail, true)
 			c.a.Jcc(amd64.CondE, notail)
-			// Not an arrow's, nor a construction's (abi.LinkNotGeneric): its
-			// frame is one a call in tail position gives up.
+			// No construction's (abi.LinkNotGeneric), nor an arrow's that
+			// shares a derived constructor's this (genericCheck): its frame is
+			// one a call in tail position gives up.
 			c.storeImm(calleeCtx, abi.OffTailFrame, 1, top)
 			c.storeImm(calleeCtx, abi.OffFrameThis, 0, top)
 			c.a.Bind(notail)
@@ -1145,7 +1146,11 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 			c.a.Bind(filled)
 			// A method call's receiver, which its body may read; undefined for
 			// a plain call's, a function that would coerce it not called so
-			// (genericCheck).
+			// (genericCheck); an arrow's, the this it captured.
+			arrow, thisDone := c.a.NewLabel(), c.a.NewLabel()
+			c.a.Load(top, callLink, c.enc.LinkFlags)
+			c.a.OpImm(amd64.And, top, abi.LinkArrow, true)
+			c.a.Jcc(amd64.CondNE, arrow)
 			if site.Method {
 				nb, nd, rb, rd := words(calleeSlot - 1)
 				c.a.Load(top, nb, nd)
@@ -1156,6 +1161,14 @@ func (c *compiler) call(v *ssa.Value, guard func(amd64.Cond)) {
 				c.storeImm(calleeCtx, abi.OffThis+c.enc.NumOffset, c.enc.Undefined, top)
 				c.storeImm(calleeCtx, abi.OffThis+c.enc.RefOffset, 0, top)
 			}
+			c.a.Jmp(thisDone)
+			c.a.Bind(arrow)
+			c.a.Load(tmp, regCtx, abi.OffCallThis)
+			c.a.Load(top, tmp, c.enc.NumOffset)
+			c.a.Store(calleeCtx, abi.OffThis+c.enc.NumOffset, top)
+			c.a.Load(top, tmp, c.enc.RefOffset)
+			c.a.Store(calleeCtx, abi.OffThis+c.enc.RefOffset, top)
+			c.a.Bind(thisDone)
 			c.a.Load(callClosure, regCtx, abi.OffCallClosure)
 			c.a.LeaLabel(callRet, back)
 		}
@@ -1650,6 +1663,28 @@ func (c *compiler) genericCheck(v *ssa.Value, site *ssa.CallSite, target int, ch
 	c.a.MovRR(scratchB, scratchA)
 	c.a.OpImm(amd64.And, scratchB, abi.LinkNotGeneric, true)
 	c.a.Jcc(amd64.CondNE, miss)
+	// An arrow, given the this it captured (CallThis), as a call of one the
+	// VM has seen gives it (arrowThis): one that shares a derived
+	// constructor's binding, Go calls. Arrows that read this, or whose
+	// bodies end in a call, had been no generic call's, their calls past a
+	// site's targets each made by Go: AWFY's DeltaBlue's forEach, of
+	// (c) => c.execute(), at each.
+	notArrow := c.a.NewLabel()
+	c.a.MovRR(scratchB, scratchA)
+	c.a.OpImm(amd64.And, scratchB, abi.LinkArrow, true)
+	c.a.Jcc(amd64.CondE, notArrow)
+	c.a.Load(scratchB, regCtx, abi.OffCallCallee)
+	c.a.Load(scratchB, scratchB, c.enc.ObjectExt)
+	c.a.Load(scratchB, scratchB, c.enc.ObjectData+8)
+	c.a.Load(scratchB, scratchB, c.enc.FuncExtra)
+	c.a.Op(amd64.Test, scratchB, scratchB, true)
+	c.a.Jcc(amd64.CondE, miss)
+	c.a.Load(scratchC, scratchB, c.enc.ExtraLexThisRef)
+	c.a.Op(amd64.Test, scratchC, scratchC, true)
+	c.a.Jcc(amd64.CondNE, miss)
+	c.a.OpImm(amd64.Add, scratchB, c.enc.ExtraLexThis, true)
+	c.a.Store(regCtx, abi.OffCallThis, scratchB)
+	c.a.Bind(notArrow)
 	c.a.OpImm(amd64.And, scratchA, abi.LinkCoerce, true)
 	if site.Method {
 		object := c.a.NewLabel()

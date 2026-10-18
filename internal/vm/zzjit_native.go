@@ -1451,8 +1451,11 @@ func jitLinkFlags(fn *bytecode.Function) uint64 {
 	if fn.HasTailCall {
 		f |= abi.LinkTail
 	}
+	if fn.Kind == bytecode.KindArrow {
+		f |= abi.LinkArrow
+	}
 	if fn.Kind != bytecode.KindNormal && fn.Kind != bytecode.KindArrow && fn.Kind != bytecode.KindMethod ||
-		fn.Kind == bytecode.KindArrow && (fn.UsesThis || fn.HasTailCall) || fn.Async || fn.Generator || isGeneratorTemplate(fn) ||
+		fn.Async || fn.Generator || isGeneratorTemplate(fn) ||
 		fn.TopLevel || fn.IsModule || fn.UsesArguments || fn.MappedArguments || fn.HasDirectEval || len(fn.EvalScopes) != 0 ||
 		!fn.HasSimpleParams || fn.HasRest || fn.ParamsAreLexical {
 		f |= abi.LinkNotGeneric

@@ -154,3 +154,77 @@ func TestJITArrowCallsNative(t *testing.T) {
 		t.Errorf("runTask called the arrows through Go %d times in 3,000 calls", n)
 	}
 }
+
+// A call past the functions it calls natively calls arrows natively too,
+// through their links, as V8's generic Call does any function: one whose
+// body is a call in tail position, e => add(e), as DeltaBlue's planner's
+// (c) => c.execute(), and one that reads the this it captured, given it.
+// Go had made each such call, the arrows no generic call's, and the
+// arrow, entered from Go at every call, was judged slow and left to the
+// tree tier. One that shares a derived constructor's this, D's, Go still
+// calls, its this the binding.
+func TestJITGenericCallsOfArrows(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	runtime.GC()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	r := New(Config{JIT: true})
+	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	jitFewCallsForTest(r)
+	const setup = `'use strict'
+		function forEach(a, f) { for (let i = 0; i < a.length; i++) f(a[i]) }
+		const a = []
+		for (let i = 0; i < 100; i++) a.push({ v: i })
+		let s = 0
+		function add(e) { s += e.v; return s }
+		function sub(e) { s -= e.v & 3; return s }
+		const o = { k: 3, f6() { forEach(a, e => { s += this.k + e.v }) } }
+		function f1() { forEach(a, e => { s += 2 * e.v }) }
+		function f2() { forEach(a, e => { s ^= e.v }) }
+		function f3() { forEach(a, e => { s += e.v & 1 }) }
+		function f4() { forEach(a, e => { s += e.v >> 1 }) }
+		function f5() { forEach(a, e => add(e)) }
+		function f7() { forEach(a, e => sub(e)) }
+		class B { constructor() { this.k = 2 } }
+		class D extends B { constructor() { const f = e => { s += this.k }; super(); forEach(a, f) } }
+		function warm() { f1(); f2(); f3(); f4(); return s }
+		function round() { f1(); f2(); f3(); f4(); f5(); o.f6(); f7(); new D(); return s }`
+	if _, err := r.Run(compileForTest(t, setup)); err != nil {
+		t.Fatal(err)
+	}
+	// The four a call calls natively first, the arrows past them after.
+	for range 100 {
+		if _, err := r.Run(compileForTest(t, `warm()`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 100 {
+		if _, err := r.Run(compileForTest(t, `round()`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e := jitNativeForTest(t, r, "forEach")
+	goCalls, hosts := e.ssaStats.goCalls, e.ssaStats.hosts
+	v, err := r.Run(compileForTest(t, `for (let k = 0; k < 20; k++) round(); s`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 20 rounds of eight forEach calls of 100 elements each; D's arrow's
+	// Go's, 2,000.
+	if n := e.ssaStats.goCalls - goCalls + e.ssaStats.hosts - hosts; n > 2000+160 {
+		t.Errorf("forEach called its callbacks through Go %d times in 16,000 calls", n)
+	}
+	want := New(Config{})
+	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
+	if _, err := want.Run(compileForTest(t, setup)); err != nil {
+		t.Fatal(err)
+	}
+	wv, err := want.Run(compileForTest(t, `for (let k = 0; k < 100; k++) warm(); for (let k = 0; k < 120; k++) round(); s`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Number() != wv.Number() {
+		t.Fatalf("s is %v, the interpreter's %v", v.Number(), wv.Number())
+	}
+}

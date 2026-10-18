@@ -162,11 +162,14 @@ const (
 // receiver, if not an object, is made one, which Go does; LinkTail, one
 // that makes calls in tail position, whose frame they may give up
 // (Context.TailFrame); LinkNotGeneric, one a generic call does not make --
-// an arrow's this, an arguments object, a generator's body.
+// an arguments object, a generator's body; LinkArrow, an arrow, which a
+// generic call gives the this it captured (Encoding's FuncExtra), and
+// leaves to Go where it shares a derived constructor's binding.
 const (
 	LinkCoerce = 1 << iota
 	LinkTail
 	LinkNotGeneric
+	LinkArrow
 )
 
 // Offsets of Bounds' fields.

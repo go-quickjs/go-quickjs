@@ -4386,7 +4386,7 @@ func (r *Runtime) jitNativeOrLinked(cl *closure) bool {
 func (r *Runtime) jitLinkable(cl *closure) bool {
 	fn := cl.fn
 	if fn.TopLevel || fn.IsModule || fn.UsesArguments || fn.HasDirectEval || isGeneratorTemplate(fn) ||
-		jitLinkFlags(fn)&abi.LinkNotGeneric != 0 {
+		jitLinkFlags(fn)&abi.LinkNotGeneric != 0 || fn.Kind == bytecode.KindArrow && (fn.UsesThis || fn.HasTailCall) {
 		return false
 	}
 	ce := r.jit.entryFor(fn)
