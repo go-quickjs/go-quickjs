@@ -637,13 +637,34 @@ faster: its loss is its steady state's.
   (`GoNumber`, `4e1cf4e`, a remainder's included), == and === native
   code does not compare (`GoEqual`, `84e1734`), typeof and an unknown
   instanceof (`1806772`).
-- **Still open, of the above:** megamorphic reads' misses; callees whose
-  lowering for native callers refuses a captured local, every call of
-  them made by Go (DeltaBlue's `inputsKnown` 64K, `satisfy` 35K,
-  `constraintsConsuming` 10K a run); calls, and writes, inside inlined
-  callees. New: RayTrace's small methods
-  (`add`, `multiplyScalar`, `initialize`) judged slow early in a short
-  run; Box2D's steady state 14% slower with the JIT (above).
+- **Still open, of the above:** callees whose lowering for native
+  callers refuses a captured local, every call of them made by Go
+  (DeltaBlue's `inputsKnown` 64K, `satisfy` 35K, `constraintsConsuming`
+  10K a run); calls, and writes, inside inlined callees (below). New:
+  RayTrace's small methods (`add`, `multiplyScalar`, `initialize`)
+  judged slow early in a short run; Box2D's steady state 14% slower with
+  the JIT (above). A megamorphic site's read of an object is a call of Go
+  on a branch of its own since (`bbcd42e`); one of a primitive's method,
+  whose receiver is no object (`OpObjectOf`), still leaves:
+  Typescript's `this.value.toString()` of a number (typescript-compiler.js
+  1607), 3,754 exits in five runs, PdfJS's `command.charAt` of a string
+  (pdfjs.js 17374), 327 -- a branch on the receiver's kind before the
+  cell's search would make it Go's too.
+- **Exits inside inlined callees** (2026-10-18, every suite, five runs of
+  each, after `bbcd42e`): Typescript's array literals 14,067 -- native
+  since (`c06f622`: an inlined callee's literals from pools its inliner
+  keeps) -- and its keyed reads, StringHashTable's `this.table[key]`
+  (typescript-compiler.js 519, 569), 11,466, which are Go's keyed read
+  refusing, as it does in the root, not the inlining; then the calls and
+  writes inside them: Typescript's megamorphic write at 754, 3,978, and
+  Gameboy's `this.memoryHighWriter[address](...)` (gbemu-part2.js 7916),
+  869 -- some 5,000 in all, everything else two or fewer each. Making
+  them calls of Go needs two pieces, held for that: the backends to write
+  each inlined level's context at a call of Go, as an exit's code writes
+  them from its description's inlined frames (`ExitInline`); and Go to
+  make those levels' frames for the call, as `jitGoCallNested` makes a
+  native call's levels', so that the call's stack trace has them and a
+  property's call reads the callee's caches at the callee's PC.
 - **Host exits counted by instruction** (2026-10-18, one run of each
   suite with the JIT, after `d3ec102`): of the generic operations above,
   `==` left native code 179 times in all three suites, `typeof` 28, `%`
