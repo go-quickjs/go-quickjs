@@ -133,6 +133,11 @@ type shapeTree struct {
 	// deep is the cache of the additions made at the sites that have given
 	// up their own (deepStore), made when one first is.
 	deep *deepAdds
+	// keyed is the object a keyed store -- o[k] = v -- is adding to, for
+	// the store's length (setIndexed): past fastPropertiesSoftLimit of
+	// them beyond its layout's room, the object is a dictionary
+	// (shapeAdded).
+	keyed *Object
 }
 
 const (
@@ -147,10 +152,119 @@ const (
 	maxShapeFanout = 64
 	// maxShapes is the most shapes a tree holds.
 	maxShapes = 1 << 16
+	// fastPropertiesSoftLimit is how many properties a keyed store adds
+	// to an object beyond its layout's room before the object is a
+	// dictionary, V8's fast_properties_soft_limit (Map's
+	// TooManyFastProperties, for keyed stores only): an object used as a
+	// table of keys of the program's own would otherwise grow a chain of
+	// shared layouts for each set of keys, and fill the tree.
+	fastPropertiesSoftLimit = 12
 )
 
 // noShape is what an empty cache entry holds: no object has it.
 var noShape = &shape{}
+
+// dictShape is what a cache remembers for dictionary objects: ordinary
+// objects whose layout is their own -- a key deleted, a keyed store past
+// the soft limit, a tree full -- or holds no tree, a null prototype's.
+// It is V8's normalized map, which such objects share
+// (NormalizedMapCache), so that a read meeting many of them stays
+// monomorphic: no object has it, so no inline test of a shape takes it,
+// and an entry of it answers by a lookup in the object's own table
+// (dictRead), as V8's handler for a dictionary-mode receiver does. Each
+// had been remembered by its own layout, a site meeting many of them
+// polymorphic, then megamorphic, and the layout's identity was replaced
+// at each change of a table a cache had remembered.
+var dictShape = &shape{}
+
+// dictObject reports whether o is a dictionary object (dictShape). The
+// global object is not, whose globals built when first read are not in
+// its table until then.
+func (r *Runtime) dictObject(o *Object) bool {
+	s := o.shape
+	return s != nil && (s.unique || s.loose) && o.class == ClassObject && o != r.global
+}
+
+// dictRead is the read of key from dictionary object o that c's entry for
+// dictionary objects answers: an own plain data property, found in o's
+// table; or, where the entry names prototypes, the property it found on
+// them, o having none of the name.
+func (r *Runtime) dictRead(c *propCache, o *Object, key Atom) (Value, bool) {
+	if !r.dictObject(o) {
+		return Undefined, false
+	}
+	i := o.findOwn(key)
+	if c.p1 == nil {
+		if i < 0 || o.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit) != 0 {
+			return Undefined, false
+		}
+		return o.vals[i], true
+	}
+	if i >= 0 || o.proto != c.p1 || c.p1.shape != c.s1 {
+		return Undefined, false
+	}
+	h := c.p1
+	if c.p2 != nil {
+		if h.proto != c.p2 || c.p2.shape != c.s2 {
+			return Undefined, false
+		}
+		h = c.p2
+	}
+	return h.vals[c.idx], true
+}
+
+// dictSite reports whether a site's cache c, meeting dictionary object o,
+// is to remember dictionary objects rather than o's layout: it already
+// does, or it remembers another such layout -- a second dictionary object,
+// or o's own replaced -- or o's layout no cache may hold.
+func dictSite(c *propCache, o *Object) bool {
+	if c.shape == nil {
+		// A cache of no site's, which the JIT fills to learn o's layout:
+		// a site's starts at noShape (newPropCaches).
+		return false
+	}
+	if o.shape.loose || c.shape == dictShape {
+		return true
+	}
+	s := c.shape
+	return c.fills > 0 && s != nil && s != noShape && s != o.shape && (s.unique || s.loose)
+}
+
+// fillDictCache is fillPropCache for a dictionary object at a site that
+// remembers them (dictSite): an own plain data property, or one found on
+// its first two prototypes, which the entry checks as any entry does.
+// The entry is no shape the JIT's code is compiled for.
+func (r *Runtime) fillDictCache(c *propCache, o *Object, key Atom) {
+	if i := o.findOwn(key); i >= 0 {
+		if o.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit) == 0 {
+			c.refill(propCache{shape: dictShape, idx: -1, fills: c.fills + 1}, false)
+		}
+		return
+	}
+	var up [2]*Object
+	h := o
+	for depth := 0; depth < 2; depth++ {
+		if h = h.proto; h == nil {
+			return
+		}
+		r.ensureProtoShape(h)
+		if h.cacheShape() == nil || !shapeClass(h.class) || synthesized(h.class, key) {
+			return
+		}
+		up[depth] = h
+		if j := h.findOwn(key); j >= 0 {
+			if h.shape.keys[j].flags&(propAccessor|propPrivate|propDeleted|propUninit) != 0 {
+				return
+			}
+			n := propCache{shape: dictShape, idx: j, fills: c.fills + 1, p1: up[0], s1: remember(up[0].shape)}
+			if depth == 1 {
+				n.p2, n.s2 = up[1], remember(up[1].shape)
+			}
+			c.refill(n, false)
+			return
+		}
+	}
+}
 
 // shapeClass reports whether objects of a class may have a shape: whether a
 // cache that has found a property on one can find it on another of the same
@@ -328,6 +442,30 @@ func (s *shape) child(e shapeEdge) *shape {
 	return c
 }
 
+// reconfigured is the shared layout s would be with the property at
+// position i given flags, or nil where the tree will not hold it: the one
+// reached from s's ancestor before that key by the key with its new
+// flags, then by s's keys after it, as V8's MapUpdater replays a map's
+// transitions past the descriptor it reconfigures. The positions are
+// s's, so an object's values stay where they are; objects that make the
+// same change -- Object.freeze of a class's instances, a defineProperty
+// in a constructor -- share the layout it makes, where each had been
+// given one of its own, which every cache met anew.
+func (s *shape) reconfigured(i int32, flags propFlags) *shape {
+	if s.unique || s.loose || s.tree == nil || s.tree.building {
+		return nil
+	}
+	a := s
+	for a.n > i {
+		a = a.parent
+	}
+	c := a.child(shapeEdge{key: s.keys[i].key, flags: flags})
+	for j := i + 1; c != nil && j < s.n; j++ {
+		c = c.child(shapeEdge(s.keys[j]))
+	}
+	return c
+}
+
 // shapeIndex is the lookup index of the object's table, or nil for one small
 // enough to scan.
 func (o *Object) shapeIndex() *propIndex {
@@ -402,6 +540,14 @@ func (o *Object) shapeAdded(k propKey) {
 			// object's own is made of its table.
 			o.buildIndex()
 		}
+		return
+	}
+	if s.tree.keyed == o && int(s.n) >= fastPropertiesSoftLimit && int(s.n) >= fastPropertiesSoftLimit+int(s.root().slack) {
+		// A keyed store's past the soft limit: a dictionary, as V8's
+		// TooManyFastProperties has it, rather than a chain of layouts
+		// for each set of keys a program makes up.
+		o.shape = newUniqueShape(s.tree, append(s.keys[:s.n:s.n], k), nil)
+		o.buildIndex()
 		return
 	}
 	if c := s.child(shapeEdge(k)); c != nil {
@@ -554,7 +700,9 @@ func ownOf(n *propCache) *shape {
 // remembered before is kept among the entries it has seen (jitNoteSeen).
 func (c *propCache) refill(n propCache, jit bool) {
 	seen := c.seen
-	if jit {
+	if jit && c.shape != dictShape {
+		// Not an entry for dictionary objects, which no code is compiled
+		// for.
 		seen = jitNoteSeen(seen, *c, n)
 	}
 	n.ownShape = ownOf(&n)
@@ -571,6 +719,11 @@ func (r *Runtime) cachedProp(c *propCache, o *Object, key Atom) (Value, bool) {
 			r.verifyPropCache(o, h, c, key)
 		}
 		return h.vals[c.idx], true
+	}
+	if c.shape == dictShape {
+		if v, ok := r.dictRead(c, o, key); ok {
+			return v, true
+		}
 	}
 	if c.fills >= maxCacheFills {
 		return r.sharedProp(o, key)
@@ -606,6 +759,11 @@ func (r *Runtime) cachedGet(c *propCache, o *Object, key Atom) (Value, bool, err
 		}
 		v, err := r.callDirect(Obj(a.getter), Obj(o), nil)
 		return v, true, err
+	}
+	if c.shape == dictShape {
+		if v, ok := r.dictRead(c, o, key); ok {
+			return v, true, nil
+		}
 	}
 	if c.fills >= maxCacheFills {
 		v, ok := r.sharedProp(o, key)
@@ -647,6 +805,14 @@ func (c *propCache) storeOwn(o *Object, v Value) bool {
 // table, for own to answer the next object of its shape -- unless the site
 // has met too many shapes to keep trying.
 func (c *propCache) noteOwn(o *Object, i int32) {
+	if s := o.shape; c.fills < maxCacheFills && s != nil && (s.unique || s.loose) && dictSite(c, o) {
+		// A site meeting dictionary objects remembers them all (dictShape),
+		// rather than each one's layout until it gives up.
+		if c.shape != dictShape {
+			c.refill(propCache{shape: dictShape, idx: -1, fills: c.fills + 1}, false)
+		}
+		return
+	}
 	if c.fills < maxCacheFills && o.cacheShape() != nil {
 		// Native code searches a small object's own table itself.
 		c.refill(propCache{shape: remember(o.shape), idx: i, fills: c.fills + 1}, false)
@@ -846,7 +1012,14 @@ func synthesized(c Class, key Atom) bool {
 //
 // With accessors set, an accessor property is remembered too, for cachedGet.
 func (r *Runtime) fillPropCache(c *propCache, o *Object, key Atom, accessors bool) {
-	if c.fills >= maxCacheFills || key.IsIndex() || r.ensureShape(o) == nil {
+	if c.fills >= maxCacheFills || key.IsIndex() {
+		return
+	}
+	if r.dictObject(o) && dictSite(c, o) {
+		r.fillDictCache(c, o, key)
+		return
+	}
+	if r.ensureShape(o) == nil {
 		return
 	}
 	var up [2]*Object
@@ -908,6 +1081,14 @@ func (r *Runtime) setPropCached(c *propCache, o *Object, key Atom, v Value, stri
 			return nil
 		}
 	}
+	if c.shape == dictShape && r.dictObject(o) {
+		// An entry for dictionary objects: a plain writable property the
+		// object has, written in its table (dictShape).
+		if i := o.findOwn(key); i >= 0 && o.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) == propWritable {
+			o.vals[i] = v
+			return nil
+		}
+	}
 	gaveUp := c.fills >= maxCacheFills
 	if gaveUp && !key.IsIndex() && r.deepStore(o, key, v) {
 		return nil
@@ -922,6 +1103,12 @@ func (r *Runtime) setPropCached(c *propCache, o *Object, key Atom, v Value, stri
 	if before != nil && !key.IsIndex() && shapeClass(o.class) && !synthesized(o.class, key) {
 		if gaveUp {
 			r.fillDeepStore(o, before, key)
+			return nil
+		}
+		if r.dictObject(o) && dictSite(c, o) {
+			if i := o.findOwn(key); i >= 0 && o.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit|propWritable) == propWritable {
+				c.refill(propCache{shape: dictShape, idx: -1, fills: c.fills + 1}, false)
+			}
 			return nil
 		}
 		if o.shape == before && r.fillSetterCache(c, o, key, before) {
@@ -981,6 +1168,11 @@ func (r *Runtime) cachedData(c *propCache, o *Object, key Atom) (Value, bool) {
 			r.verifyPropCache(o, h, c, key)
 		}
 		return h.vals[c.idx], true
+	}
+	if c.shape == dictShape {
+		if v, ok := r.dictRead(c, o, key); ok {
+			return v, true
+		}
 	}
 	if c.fills >= maxCacheFills {
 		return r.sharedProp(o, key)

@@ -3589,6 +3589,15 @@ func (r *Runtime) setIndexed(obj, key, val Value, strict bool) error {
 	if err != nil {
 		return err
 	}
+	if t := r.shapes; t != nil && obj.IsObject() && !k.IsIndex() {
+		// A keyed store: what it adds to the object past the soft limit
+		// makes it a dictionary (shapeAdded).
+		was := t.keyed
+		t.keyed = obj.Object()
+		err := r.setValueProp(obj, k, val, strict)
+		t.keyed = was
+		return err
+	}
 	return r.setValueProp(obj, k, val, strict)
 }
 

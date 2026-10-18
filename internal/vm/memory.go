@@ -297,8 +297,11 @@ var (
 	extSize      = int64(unsafe.Sizeof(objectExt{}))
 	keyedExtSize = int64(unsafe.Sizeof(keyedExt{}))
 	propKeySize  = int64(unsafe.Sizeof(propKey{}))
-	valueSize    = int64(unsafe.Sizeof(Value{}))
-	stringSize   = int64(unsafe.Sizeof(String{}))
+	shapeSize    = int64(unsafe.Sizeof(shape{}))
+	// propIndexSize is an index's own struct and its map's header.
+	propIndexSize = int64(unsafe.Sizeof(propIndex{})) + 48
+	valueSize     = int64(unsafe.Sizeof(Value{}))
+	stringSize    = int64(unsafe.Sizeof(String{}))
 )
 
 // Types the walk treats specially.
@@ -441,11 +444,12 @@ func (m *memoryMeter) object(o *Object) {
 	// A shared layout's index is the layout's, not the object's, and so is
 	// one an object borrows from it.
 	if s := o.shape; s != nil && s.unique && s.index != nil && !s.borrowed {
-		m.total += int64(len(s.index.slots)) * 16
+		m.total += propIndexSize + int64(len(s.index.slots))*16
 	}
-	// So are a shared layout's keys; the object's own layout's are its.
+	// So are a shared layout's keys, and the layout; the object's own
+	// layout is its, a dictionary object's (dictShape).
 	if s := o.shape; s != nil && s.unique {
-		m.total += int64(cap(s.keys)) * propKeySize
+		m.total += shapeSize + int64(cap(s.keys))*propKeySize
 	}
 	m.addObject(o.proto)
 	for _, v := range o.vals {

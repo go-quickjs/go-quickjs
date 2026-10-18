@@ -714,9 +714,30 @@ func (r *Runtime) copyDataProps(target *Object, src Value) error {
 		}
 		return nil
 	}
+	if r.dictObject(o) && o.noIndexKeys() && r.dictCopyable(o) {
+		// A dictionary object's table, in order: with no index keys and no
+		// symbols, its order is the keys' order, and with no accessors
+		// nothing a getter could see is read.
+		if target.class == ClassObject && len(o.vals) > 1 {
+			target.reserveProps(len(target.vals) + len(o.vals))
+		}
+		for i, k := range o.keys() {
+			if k.flags&propDeleted != 0 || k.flags&propEnumerable == 0 {
+				continue
+			}
+			if err := r.defineOwnProp(target, k.key, o.vals[i], propDefault); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	keys, err := r.ownKeysOf(o, true)
 	if err != nil {
 		return err
+	}
+	if target.class == ClassObject && len(keys) > 1 {
+		// The table grows once rather than at every doubling.
+		target.reserveProps(len(target.vals) + len(keys))
 	}
 	for _, k := range keys {
 		enumerable, err := r.isEnumerable(o, k)
@@ -1340,4 +1361,22 @@ func (r *Runtime) delegateResult(st *iterState, res Value, async bool) (Value, b
 		return Undefined, false, r.throwTypeError("an iterator result must be an object")
 	}
 	return res, false, nil
+}
+
+// dictCopyable reports whether a spread copies dictionary object o's table
+// as it is (copyDataProps): no key of it a symbol, an array index or
+// private, and no property an accessor.
+func (r *Runtime) dictCopyable(o *Object) bool {
+	for _, k := range o.keys() {
+		if k.flags&propDeleted != 0 {
+			continue
+		}
+		if k.flags&(propAccessor|propPrivate) != 0 || r.atoms.IsSymbol(k.key) {
+			return false
+		}
+		if _, isIndex := r.atoms.arrayIndex(k.key); isIndex {
+			return false
+		}
+	}
+	return true
 }

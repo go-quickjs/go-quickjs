@@ -864,6 +864,16 @@ func (o *Object) setFlagsAt(i int32, flags propFlags) {
 	if o.shape.keys[i].flags == flags {
 		return
 	}
+	if t := o.shape.reconfigured(i, flags); t != nil {
+		o.shape = t
+		if t.index == nil && len(o.vals) > linearScanLimit {
+			o.buildIndex()
+		}
+		if verifyShapes {
+			checkShape(o)
+		}
+		return
+	}
 	o.layoutChanged()
 	o.shape.keys[i].flags = flags
 }
@@ -1046,6 +1056,18 @@ func (o *Object) deleteOwn(key Atom) bool {
 	}
 	if o.shape.keys[i].flags&propConfigurable == 0 {
 		return false
+	}
+	if s := o.shape; !s.unique && !s.loose && s.parent != nil && i == s.n-1 {
+		// The key last added to a shared layout: the object goes back to
+		// the layout it had before, as V8 rolls a map back along its
+		// transition, rather than to one of its own.
+		o.vals[i] = Value{}
+		o.vals = o.vals[:i]
+		o.shape = s.parent
+		if verifyShapes {
+			checkShape(o)
+		}
+		return true
 	}
 	o.tombstone(i)
 	return true

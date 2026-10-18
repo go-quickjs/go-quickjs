@@ -5942,7 +5942,9 @@ func (fb *jitFeedback) siteOf(key Atom, write bool, c *propCache) (ssa.PropertyS
 		site.Add = fb.add(c)
 		return site, true
 	}
-	if c.shape == nil || c.shape == noShape || c.getter || c.next != nil || c.idx < 0 {
+	if c.shape == nil || c.shape == noShape || c.shape == dictShape || c.getter || c.next != nil || c.idx < 0 {
+		// Nothing native code is compiled for: an entry for dictionary
+		// objects (dictShape) answers by a lookup in the object's table.
 		return site, true
 	}
 	if c.p1 == nil {
