@@ -3491,8 +3491,12 @@ func (b *builder) nativeCalls(pc int) []*CallSite {
 			operands++
 		}
 		// A callee that reads its receiver gets the method call's, or a
-		// construction's, from its pool.
-		if site.Argc < 0 || depth < operands || after != depth-operands+1 || site.ThisSlot >= 0 && !site.Method && site.Pool == 0 {
+		// construction's, from its pool -- or, an arrow, the this it
+		// captured (ArrowThis), which the call reads from its function
+		// object: left out, an arrow reading its this, learned at a miss,
+		// missed at every call -- AWFY CD's Vector.forEach, 45,000 exits a
+		// run.
+		if site.Argc < 0 || depth < operands || after != depth-operands+1 || site.ThisSlot >= 0 && !site.Method && site.Pool == 0 && !site.ArrowThis {
 			continue
 		}
 		if site.ThisSlot < 0 {

@@ -194,3 +194,45 @@ func TestJITInlinedTypedRead(t *testing.T) {
 		}
 	}
 }
+
+// A call whose callee is an arrow reading the this it captured is made
+// natively as any callee's (ssa.CallSite's ArrowThis), the call giving it
+// that this: the builder had left such a site out, so a call the arrow
+// was learned at missed it at every call after, leaving native code --
+// AWFY CD's Vector.forEach, given (e) => this.state.remove(e) and others,
+// 45,000 exits a run. Each answer is the interpreter's.
+func TestJITArrowThisCallee(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		class Vec { constructor(n) { this.s = []; for (let i = 0; i < n; i++) this.s.push(i) }
+			forEach(fn) { for (let i = 0; i < this.s.length; i++) fn(this.s[i]) } }
+		class Acc { constructor() { this.sum = 0; this.v = new Vec(64) }
+			add() { this.v.forEach((e) => { this.sum += e }) }
+			sub() { this.v.forEach((e) => { this.sum -= e >> 1 }) } }
+		var acc = new Acc(), plain = 0
+		function run(n) { for (let k = 0; k < n; k++) { acc.add(); acc.sub(); acc.v.forEach((e) => { plain += e }) } return acc.sum + ':' + plain }
+	`
+	rounds := []string{}
+	for range 8 {
+		rounds = append(rounds, `run(20)`)
+	}
+	r := jitAgreesForTest(t, setup, rounds...)
+	var e *jitEntry
+	for k, x := range r.jit.cache {
+		if fn := k.Value(); fn != nil && fn.Name == "forEach" {
+			e = x
+		}
+	}
+	if e == nil || e.ssa == nil {
+		t.Fatal("forEach was not compiled")
+	}
+	hosts, guards := e.ssaStats.hosts, e.ssaStats.guards
+	if _, err := r.Run(compileForTest(t, `run(20)`)); err != nil {
+		t.Fatal(err)
+	}
+	if h, g := e.ssaStats.hosts-hosts, e.ssaStats.guards-guards; h != 0 || g != 0 {
+		t.Errorf("forEach left native code %d times for Go and failed %d guards", h, g)
+	}
+}
