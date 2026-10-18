@@ -10702,7 +10702,9 @@ func TestJITSSAObjectLiterals(t *testing.T) {
 		}
 		if i == 3 {
 			e := r.jit.cache[weak.Make(cl.fn)]
-			if e == nil || e.ssa == nil || e.entrySlow || len(e.literals) != 2 {
+			// Its own: an inlined callee's, which it makes from pools of
+			// its own too, aside.
+			if e == nil || e.ssa == nil || e.entrySlow || len(slices.DeleteFunc(slices.Clone(e.literals), func(l jitLiteral) bool { return l.fn != cl.fn })) != 2 {
 				t.Fatalf("run does not make its literals natively: %+v", e)
 			}
 			// Only for the pools to be filled again.
@@ -10969,8 +10971,12 @@ func TestJITSSAArrayLiterals(t *testing.T) {
 		}
 		if i == 3 {
 			e := r.jit.cache[weak.Make(cl.fn)]
-			if e == nil || e.ssa == nil || e.entrySlow || len(e.literals) != 1 {
-				t.Fatalf("run does not make its array literal natively: %+v", e)
+			if e == nil || e.ssa == nil || e.entrySlow {
+				t.Fatalf("run does not run natively: %+v", e)
+			}
+			// Its own, and mk's, inlined, from pools of its own too.
+			if own := len(slices.DeleteFunc(slices.Clone(e.literals), func(l jitLiteral) bool { return l.fn != cl.fn })); own != 1 || len(e.literals) == own {
+				t.Fatalf("run does not make its array literals, and mk's, natively: %+v", e)
 			}
 			if n := e.ssaStats.hosts - hosts; n > 2*300/abi.PoolCapacity+4 {
 				t.Fatalf("run left native code %d times", n)

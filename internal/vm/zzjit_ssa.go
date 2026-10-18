@@ -1040,19 +1040,23 @@ type jitLiteral struct {
 	// lit is a regular expression literal's pattern (new_regexp), whose
 	// objects are its RegExps.
 	lit *bytecode.Constant
+	// fn is the function the literal is of: e's, or a callee's e's code
+	// inlines.
+	fn *bytecode.Function
 }
 
-// jitLiteralAt is e's literal at pc, made for cl's site if it has none, or
-// nil if the literal's objects have no shape to start from.
+// jitLiteralAt is e's literal at pc of cl's function -- e's, or a callee's
+// its code inlines -- made for cl's site if it has none, or nil if the
+// literal's objects have no shape to start from.
 func (r *Runtime) jitLiteralAt(e *jitEntry, cl *closure, pc int) *jitLiteral {
 	for i := range e.literals {
-		if int(e.literals[i].pc) == pc {
+		if int(e.literals[i].pc) == pc && e.literals[i].fn == cl.fn {
 			return &e.literals[i]
 		}
 	}
 	in := cl.fn.Code[pc]
 	if in.Op == bytecode.OpNewArray && in.A <= ir.MaxArrayLiteral {
-		e.literals = append(e.literals, jitLiteral{pc: int32(pc), pool: new(abi.ObjectPool), array: true, n: int(in.A)})
+		e.literals = append(e.literals, jitLiteral{pc: int32(pc), pool: new(abi.ObjectPool), array: true, n: int(in.A), fn: cl.fn})
 		l := &e.literals[len(e.literals)-1]
 		l.pool.Source = unsafe.Pointer(&jitPoolSource{array: true, n: l.n})
 		r.jitFillLiteral(l)
@@ -1067,7 +1071,7 @@ func (r *Runtime) jitLiteralAt(e *jitEntry, cl *closure, pc int) *jitLiteral {
 		if _, err := r.newRegExpLiteral(lit); err != nil {
 			return nil
 		}
-		e.literals = append(e.literals, jitLiteral{pc: int32(pc), pool: new(abi.ObjectPool), lit: lit})
+		e.literals = append(e.literals, jitLiteral{pc: int32(pc), pool: new(abi.ObjectPool), lit: lit, fn: cl.fn})
 		l := &e.literals[len(e.literals)-1]
 		l.pool.Source = unsafe.Pointer(&jitPoolSource{lit: lit})
 		r.jitFillLiteral(l)
@@ -1080,7 +1084,7 @@ func (r *Runtime) jitLiteralAt(e *jitEntry, cl *closure, pc int) *jitLiteral {
 	if root == nil {
 		return nil
 	}
-	e.literals = append(e.literals, jitLiteral{pc: int32(pc), root: root, pool: new(abi.ObjectPool), n: int(in.A)})
+	e.literals = append(e.literals, jitLiteral{pc: int32(pc), root: root, pool: new(abi.ObjectPool), n: int(in.A), fn: cl.fn})
 	l := &e.literals[len(e.literals)-1]
 	l.pool.Source = unsafe.Pointer(&jitPoolSource{root: root, n: l.n})
 	r.jitFillLiteral(l)
@@ -1142,7 +1146,7 @@ func jitDefineSeen(e *jitEntry, pc int) {
 // at pc that native code left at, its pool run out.
 func (r *Runtime) jitRefillLiteral(f *frame, e *jitEntry, pc int) {
 	for i := range e.literals {
-		if l := &e.literals[i]; int(l.pc) == pc && l.pool.Count == 0 {
+		if l := &e.literals[i]; int(l.pc) == pc && l.fn == f.cl.fn && l.pool.Count == 0 {
 			l.pool.Size = min(2*max(l.pool.Size, abi.PoolSize), abi.PoolCapacity)
 			r.jitFillLiteral(l)
 		}
@@ -1175,10 +1179,18 @@ func (fb *jitFeedback) StringCell(pc int) (uintptr, bool) {
 // Literal is ssa.LiteralFeedback's: the object literal at pc, made natively
 // from its pool, in the function's own code.
 func (fb *jitFeedback) Literal(pc int) (ssa.LiteralSite, bool) {
-	if fb.e == nil || fb.root != nil || fb.fwd != nil || fb.cl == nil || pc >= len(fb.fn.Code) {
+	// An inlined callee's too, from pools the code that inlines it keeps
+	// (the root's entry), as it keeps its own: inlined, Typescript's
+	// errorSink = [] and commentStack = [] had left native code at every
+	// one.
+	e := fb.e
+	if fb.root != nil {
+		e = fb.root.e
+	}
+	if e == nil || fb.fwd != nil || fb.cl == nil || pc >= len(fb.fn.Code) {
 		return ssa.LiteralSite{}, false
 	}
-	l := fb.r.jitLiteralAt(fb.e, fb.cl, pc)
+	l := fb.r.jitLiteralAt(e, fb.cl, pc)
 	if l == nil {
 		return ssa.LiteralSite{}, false
 	}
@@ -7953,6 +7965,14 @@ func (r *Runtime) jitFinishExit(f *frame, e *jitEntry, l *jitNativeLevel) (Value
 				r.jitRefillLiteral(f, e, pc)
 			case bytecode.OpDefineField:
 				jitDefineSeen(e, pc)
+			}
+		}
+		if l.inline && l.owner != nil {
+			switch in.Op {
+			case bytecode.OpNewObject, bytecode.OpNewArray, bytecode.OpNewRegExp:
+				// An inlined callee's literal, whose pool the code that
+				// inlined it keeps (jitFeedback's Literal).
+				r.jitRefillLiteral(f, l.owner, pc)
 			}
 		}
 		o, before := jitWriteTarget(r.stack, f.base+depth, in)

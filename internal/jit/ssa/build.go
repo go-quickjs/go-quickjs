@@ -889,9 +889,6 @@ type builder struct {
 	// (GlobalSite's Typed), which element reads of them read as such.
 	typedArrays map[*Value]bool
 	frameOf     []*frame
-	// literals are the literals made natively, by PC, each with the keep
-	// cell planning gave it (literal).
-	literals map[int]literalKeep
 	// stale are the captured bindings' and captured locals' markers
 	// (OpUpvalueStale), by slot; here is the block of the instruction
 	// being built, at herePC, whose state a read there loads a binding
@@ -1024,18 +1021,17 @@ type literalKeep struct {
 	keep int
 }
 
-// literal is the site of the object literal at pc (LiteralFeedback), if
-// its code may make it natively, and the keep cell its object is kept in.
+// literal is the site of the object literal at pc of the frame being
+// translated (LiteralFeedback), if its code may make it natively, and the
+// keep cell its object is kept in.
 // The cell is taken the first time planning asks (host), and the answer
 // kept: planning and building must agree, and a cell taken only when the
 // literal was built -- after the calls before it had taken theirs -- could
 // be one too many, the literal then left to Go where planning had made no
 // exit for it, and the literal not made at all.
 func (b *builder) literal(pc int) (LiteralSite, int, bool) {
-	if b.cur != b.root {
-		return LiteralSite{}, -1, false
-	}
-	if k, ok := b.literals[pc]; ok {
+	fr := b.cur
+	if k, ok := fr.literals[pc]; ok {
 		return k.site, k.keep, k.keep >= 0
 	}
 	k := literalKeep{keep: -1}
@@ -1045,10 +1041,10 @@ func (b *builder) literal(pc int) (LiteralSite, int, bool) {
 			b.f.Keeps++
 		}
 	}
-	if b.literals == nil {
-		b.literals = map[int]literalKeep{}
+	if fr.literals == nil {
+		fr.literals = map[int]literalKeep{}
 	}
-	b.literals[pc] = k
+	fr.literals[pc] = k
 	return k.site, k.keep, k.keep >= 0
 }
 
@@ -1282,6 +1278,10 @@ type frame struct {
 	// answers found again.
 	answers  []siteAnswer
 	answerAt []int
+	// literals are the literals the frame's code makes natively, by PC,
+	// each with the keep cell planning gave it (literal): an inlined
+	// callee's too, from its own code's pools.
+	literals map[int]literalKeep
 }
 
 // siteAnswer is a property site, if the feedback has one, and a string

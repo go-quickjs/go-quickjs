@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"runtime"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
+	"github.com/go-quickjs/go-quickjs/internal/jit/abi"
 )
 
 // jitTierSetup has f read x off its receivers' prototypes, which a site that
@@ -680,4 +682,38 @@ func TestJITMegamorphicMethodReadsByGo(t *testing.T) {
 		}
 	}
 	run(`JSON.stringify(shapes.map(o=>call(o)))`)
+}
+
+// An inlined callee's array and object literals are made natively, from
+// pools the code inlining it keeps (jitFeedback's Literal), as its own
+// are: reset, inlined into each, makes an empty array and an empty object
+// at every call, and each, native, leaves only for the pools to be filled
+// again. Inlined, they had been Go's, at every one:
+// Typescript's errorSink = [] and commentStack = [], fourteen thousand
+// times in five runs. Each answer is the interpreter's.
+func TestJITInlinedLiterals(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	runtime.GC()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	r, run := jitTierRuntimeForTest(t, 1, `function Sink(){this.errors=[];this.box={}}
+		Sink.prototype.reset=function(){this.errors=[];this.box={};return this.errors};
+		var s=new Sink;
+		function warm(n){let t=0;for(let i=0;i<n;i++)t+=s.reset().length;return t}
+		function each(n){let t=0;for(let i=0;i<n;i++){const a=s.reset();a.push(i);s.box.v=i;t=(t+a.length+s.errors.length+s.box.v)|0}return t}`)
+	for range 4 {
+		run(`warm(64)`)
+		run(`each(64)`)
+	}
+	e := jitNativeForTest(t, r, "each")
+	reset := r.global.getOwn(r.atoms.intern("s")).value().Object().proto.getOwn(r.atoms.intern("reset")).value().Object().fn().closure
+	if !slices.Contains(e.ssaInlined, reset) {
+		t.Fatal("each does not inline reset: no test of an inlined callee's literals")
+	}
+	hosts := e.ssaStats.hosts
+	run(`each(600)`)
+	if n := e.ssaStats.hosts - hosts; n > 2*600/abi.PoolCapacity+4 {
+		t.Errorf("each left native code %d times", n)
+	}
 }
