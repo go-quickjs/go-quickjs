@@ -561,6 +561,47 @@ at invocations that D5 and D7 replace. With them, against the commit
 before them, Octane with the JIT took 4.2% less time (Typescript -10.2%,
 Box2D -6.0%) and Gameboy alone 1.9% more.
 
+### Found while doing D5 to D7, left for later
+
+- **The interpreter's caches hold one shape.** Each refill of a site's
+  cache counts as a fill, so a site that the lower tiers run with two
+  shapes in turn gives up on its cache (`maxCacheFills`, 16) after 16
+  alternations and reads through the runtime's shared cache, where V8's
+  inline caches hold four maps. One JIT test works around it.
+- **`get_prop` in `executeAt` never fills a small table's cache**: it reads
+  a plain own property of up to `linearScanLimit` keys directly
+  (`plainOwn`), which is as quick as a hit. The JIT therefore learns such
+  a site at its first deoptimization (`jitDeoptSeen`), and a site whose
+  cache is empty, though it may have run, scans the receiver's own small
+  table natively and deoptimizes only where that fails
+  (`ssa.PropertySite.Scan`) -- a deviation from D6's rule that a site
+  without feedback deoptimizes, which would otherwise cost each such site
+  a deoptimization and a budget.
+- **The profit check stays** (`jitSSAProfit`, `entrySlow`): it prices Go
+  entering and leaving native code, a cost V8's tiers do not have.
+- **Host instructions left in hot code**, each ending its block with an
+  entry after it where Go resumes the code, which V8 would make a call of
+  its runtime:
+  - calls without a native target: generic or polymorphic ones, ones of
+    more than 16 operands, calls inside an inlined callee, `apply` not
+    forwarded;
+  - megamorphic property reads and writes;
+  - global sites with no feedback;
+  - generic `==`, `%` and arithmetic, unary operators and updates;
+  - `typeof` not compared with a constant;
+  - `instanceof` with a constructor the code does not know;
+  - literals without a pool.
+- **Making them calls of Go (`ssa.GoCall`)**, as V8's code calls its
+  runtime, by what each would take:
+  - small: generic calls (a GoCall site offered in `nativeCalls` and the
+    VM's `NativeCalls`), megamorphic reads and writes (`jitPropertyMade`
+    already makes the generic access), and `typeof`;
+  - moderate: `instanceof`, a new GoCall kind, since it may run script;
+    generic `==` and `%`;
+  - hard: calls inside an inlined callee: a GoCall needs the root frame
+    (`b.cur == b.root`), and an inlined level has no frame state to give
+    Go.
+
 ## Rejected
 
 Measured and dropped earlier; each needs a new angle before it is tried
