@@ -544,10 +544,10 @@ What V8 does instead, from its source (`src/objects`, `src/execution`):
 
 | ID | Item | Status |
 |---|---|---|
-| D1 | Transition chains past 64 properties, up to V8's 1,020, the shapes along a chain sharing one keys array and one index (`findOwn` already checks an index entry against the object's own table) | Open |
-| D2 | Dictionary mode as V8's: keyed additions past a soft limit and deletes turn an object's table into its own, under a shape shared by the dictionary objects of its prototype, so caches stay monomorphic on them | Open |
-| D3 | Prototype validity cells: a read found on a prototype checks one cell, not each holder's shape (today two, then the deep-read cases) | Open |
-| D4 | Slack from the constructor's `this.x =` count, as V8's expected properties, refined over its first objects | Open |
+| D1 | Transition chains past 64 properties, up to V8's 1,020, the shapes along a chain sharing one keys array and one index (`findOwn` already checks an index entry against the object's own table) | Done (`ca95576`), measurement pending |
+| D2 | Dictionary mode as V8's: keyed additions past a soft limit and deletes turn an object's table into its own, under a shape shared by the dictionary objects of its prototype, so caches stay monomorphic on them | Done (`23356b3`): the last key's delete rolls back, attribute changes are shared transitions, keyed adds past 12 make a dictionary, and dictionary objects share one cache identity (`dictShape`); measurement pending |
+| D3 | Prototype validity cells: a read found on a prototype checks one cell, not each holder's shape (today two, then the deep-read cases) | Done (`82dc853`) for reads past two prototypes and of absent properties; reads one or two up keep their holder checks, which native code is compiled for; measurement pending |
+| D4 | Slack from the constructor's `this.x =` count, as V8's expected properties, refined over its first objects | Done (`a88e64e`): counted up to 252, tracked over the first seven objects; measurement pending |
 | D5 | JIT entries at a function's start and its loops' headers only; a deopt leaves the rest of the invocation to the interpreter and the tree tier, which go on natively by OSR at a loop. Replaces `allEntries` and the learned entries | Open |
 | D6 | A shape native code was not compiled for deopts, as V8's map checks do; a read is megamorphic in native code only where its cache is | Open |
 | D7 | Compiled again on the lower tiers' budget, reset when a cache's feedback changes, as V8's tier-up; replaces the settling on exits, the ticks of Go's work and the profit check's stretches | Open |
