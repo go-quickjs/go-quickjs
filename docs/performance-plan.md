@@ -632,12 +632,16 @@ faster: its loss is its steady state's.
   of arrows (`ac6c73e`); code the profit check judges slow entered by OSR
   at a long loop (`dddc1d4`); a megamorphic write's miss a call of Go on
   a branch of its own in the SSA (`87da7ab`), RayTrace's exits at
-  `best.hitCount`.
+  `best.hitCount`; the generic operations, each a call of Go from native
+  code where it had left: an arithmetic operand that is a string
+  (`GoNumber`, `4e1cf4e`, a remainder's included), == and === native
+  code does not compare (`GoEqual`, `84e1734`), typeof and an unknown
+  instanceof (`1806772`).
 - **Still open, of the above:** megamorphic reads' misses; callees whose
   lowering for native callers refuses a captured local, every call of
   them made by Go (DeltaBlue's `inputsKnown` 64K, `satisfy` 35K,
   `constraintsConsuming` 10K a run); calls, and writes, inside inlined
-  callees; generic `==`, `%`, `typeof` and `instanceof`. New: RayTrace's small methods
+  callees. New: RayTrace's small methods
   (`add`, `multiplyScalar`, `initialize`) judged slow early in a short
   run; Box2D's steady state 14% slower with the JIT (above).
 - **Host exits counted by instruction** (2026-10-18, one run of each
