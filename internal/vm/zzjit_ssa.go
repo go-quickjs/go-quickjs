@@ -5628,7 +5628,7 @@ func (fb *jitFeedback) Property(pc int) (ssa.PropertySite, bool) {
 		// A read its cache could not hold, the property past the two
 		// prototypes it holds: compiled for the first of the shapes it met,
 		// the others its cases.
-		if in := fb.fn.Code[pc]; in.Op != bytecode.OpSetProp && int(in.B) < len(fb.cl.ic) && (fb.cl.ic[in.B].shape == nil || fb.cl.ic[in.B].shape == noShape) {
+		if in := fb.fn.Code[pc]; in.Op != bytecode.OpSetProp && int(in.B) < len(fb.cl.ic) && (fb.cl.ic[in.B].shape == nil || fb.cl.ic[in.B].shape == noShape || fb.cl.ic[in.B].cell != nil) {
 			if cases := fb.deepCases(pc); len(cases) != 0 {
 				k := cases[0]
 				site.Shape, site.Index, site.Holders, site.More, site.Cases = k.Shape, k.Index, k.Holders, k.More, cases[1:]
@@ -5638,7 +5638,7 @@ func (fb *jitFeedback) Property(pc int) (ssa.PropertySite, bool) {
 	}
 	if ok && fb.root != nil && fb.fwd == nil && site.Shape == 0 && site.Add == nil && site.Holders[0].Object == 0 &&
 		int(fb.fn.Code[pc].B) < len(fb.cl.ic) && fb.cl.ic[fb.fn.Code[pc].B].fills < maxCacheFills &&
-		(fb.cl.ic[fb.fn.Code[pc].B].shape == nil || fb.cl.ic[fb.fn.Code[pc].B].shape == noShape) {
+		(fb.cl.ic[fb.fn.Code[pc].B].shape == nil || fb.cl.ic[fb.fn.Code[pc].B].shape == noShape || fb.cl.ic[fb.fn.Code[pc].B].cell != nil) {
 		// An inlined callee's site its cache knew nothing of (jitInlineFed):
 		// not one whose cache holds what native code does not read with --
 		// a getter's -- which, recorded, had the code compiled again at
@@ -5942,9 +5942,10 @@ func (fb *jitFeedback) siteOf(key Atom, write bool, c *propCache) (ssa.PropertyS
 		site.Add = fb.add(c)
 		return site, true
 	}
-	if c.shape == nil || c.shape == noShape || c.shape == dictShape || c.getter || c.next != nil || c.idx < 0 {
+	if c.shape == nil || c.shape == noShape || c.shape == dictShape || c.cell != nil || c.getter || c.next != nil || c.idx < 0 {
 		// Nothing native code is compiled for: an entry for dictionary
-		// objects (dictShape) answers by a lookup in the object's table.
+		// objects (dictShape) answers by a lookup in the object's table,
+		// and one of a chain's cell (protoCell) by the cell.
 		return site, true
 	}
 	if c.p1 == nil {

@@ -743,6 +743,11 @@ func setProtoOf(o *Object, proto Value) bool {
 	if !o.IsExtensible() {
 		return proto.SameValue(protoValue(o))
 	}
+	if s := o.shape; s != nil && s.info != nil {
+		// The chains through o change: their cells are invalid, and o is
+		// registered with its new prototype when next asked (chainCell).
+		s.info.invalidate()
+	}
 	switch {
 	case proto.IsObject():
 		o.proto = proto.Object()

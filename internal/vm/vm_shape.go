@@ -3,6 +3,7 @@ package vm
 import (
 	"slices"
 	"unsafe"
+	"weak"
 )
 
 // A shape is an object's layout -- the keys of its property table, their
@@ -94,6 +95,108 @@ type shape struct {
 	// forIn is what a for-in loop visits on an object of a shared shape,
 	// made the first time one is walked; see startForIn.
 	forIn *forInKeys
+	// info is, on the layout of an object a cache has found a property
+	// past as a prototype, its validity cell and the prototypes below it
+	// (protoInfo); such an object's layout is its own, as V8 gives a
+	// prototype a map of its own (OptimizeAsPrototype).
+	info *protoInfo
+}
+
+// protoCell is a prototype chain's validity cell, as V8's: valid while no
+// object on the chain from the prototype it is made for up has changed its
+// layout or its prototype. A read cache entry for a property found past
+// two prototypes, or found nowhere, checks the receiver's layout, its
+// prototype and the cell, however long the chain (propCache.holder).
+type protoCell struct{ valid bool }
+
+// protoInfo is what an object used as a prototype by such an entry keeps,
+// on its layout: its chain's cell, and the prototypes whose chains go
+// through it, whose cells its change invalidates too, weakly held as V8's
+// prototype users are.
+type protoInfo struct {
+	cell  *protoCell
+	users []weak.Pointer[Object]
+	// up is the prototype the object is registered with as a user, which
+	// a change of its prototype leaves behind.
+	up *Object
+}
+
+// nullChain is the cell of the empty chain, a receiver's with no
+// prototype, which nothing invalidates.
+var nullChain = &protoCell{valid: true}
+
+// absentHolder holds what an entry for a property found nowhere on the
+// chain answers: a read of it is undefined. Its one key is a tombstone, so
+// that what reads an entry's holder for the key finds it is not there.
+var absentHolder = &Object{
+	vals:  []Value{Undefined},
+	shape: &shape{unique: true, n: 1, keys: []propKey{{key: atomEmpty, flags: propDeleted}}},
+}
+
+// invalidate makes the cell of the chain from info's object, and of every
+// chain through it, invalid, each object given a new one: what an entry
+// checked no longer holds.
+func (info *protoInfo) invalidate() {
+	info.cell.valid = false
+	info.cell = &protoCell{valid: true}
+	users := info.users[:0]
+	for _, w := range info.users {
+		u := w.Value()
+		if u == nil {
+			continue
+		}
+		users = append(users, w)
+		if us := u.shape; us != nil && us.info != nil {
+			us.info.invalidate()
+		}
+	}
+	clear(info.users[len(users):])
+	info.users = users
+}
+
+// protoChanged is called before o's layout or prototype changes: the cells
+// of the chains through o, if any, are invalid.
+func (s *shape) protoChanged() {
+	if s != nil && s.info != nil {
+		s.info.invalidate()
+	}
+}
+
+// chainCell is the validity cell of the prototype chain from p up, or nil
+// if one cannot be kept: each object on it given a layout of its own and
+// its info, and registered with the one above it.
+func (r *Runtime) chainCell(p *Object) *protoCell {
+	if p == nil {
+		return nullChain
+	}
+	s := p.shape
+	switch {
+	case s == nil:
+		if !shapeClass(p.class) || r.shapes.building {
+			return nil
+		}
+		p.shape = newUniqueShape(r.shapes, nil, nil)
+	case s.loose:
+		if r.ensureProtoShape(p); p.shape.loose {
+			return nil
+		}
+	case !s.unique:
+		p.layoutChanged()
+	}
+	s = p.shape
+	if s.info == nil || s.info.up != p.proto {
+		if r.chainCell(p.proto) == nil {
+			return nil
+		}
+		if s.info == nil {
+			s.info = &protoInfo{cell: &protoCell{valid: true}}
+		}
+		if q := p.proto; q != nil {
+			q.shape.info.users = append(q.shape.info.users, weak.Make(p))
+		}
+		s.info.up = p.proto
+	}
+	return s.info.cell
 }
 
 // forInKeys is the keys a for-in loop visits, as the strings it hands out
@@ -524,10 +627,11 @@ func (o *Object) shapeAdded(k propKey) {
 		return
 	}
 	if s.unique {
+		s.protoChanged()
 		if s.seen && (s.tree == nil || !s.tree.building) {
 			// A new identity, so that what was cached of the old one misses.
 			ns := newUniqueShape(s.tree, s.keys[:s.n], s.index)
-			ns.borrowed = s.borrowed
+			ns.borrowed, ns.info = s.borrowed, s.info
 			s = ns
 			o.shape = s
 		}
@@ -601,6 +705,7 @@ func (o *Object) layoutChanged() {
 	if s == nil {
 		return
 	}
+	s.protoChanged()
 	if s.loose {
 		if !s.unique {
 			o.shape = newLooseShape(slices.Clone(s.keys[:s.n]))
@@ -628,6 +733,10 @@ func (o *Object) layoutChanged() {
 	// borrows it rather than copying it, its table's positions being the
 	// layout's until it adds a key (see borrowed).
 	ns.borrowed = s.borrowed || !s.unique && index != nil
+	if s.unique {
+		// A prototype's cell and users go with its layout.
+		ns.info = s.info
+	}
 	o.shape = ns
 	if index == nil && len(o.vals) > linearScanLimit {
 		o.buildIndex()
@@ -661,6 +770,11 @@ type propCache struct {
 	next   *shape
 	p1, p2 *Object
 	s1, s2 *shape
+	// cell is, for a read found past two prototypes or found nowhere, the
+	// validity cell of the chain from p1, o's prototype, up (protoCell);
+	// p2 is then the object holding the property, or absentHolder, and s1
+	// and s2 are nil. Native code is compiled for no such entry.
+	cell *protoCell
 	// seen, with the JIT on, holds the entries the site had before, the
 	// last few, of other shapes, which no read or write here uses: the
 	// shapes the optimizing tier compiles the site for besides this one,
@@ -690,7 +804,7 @@ type propCache struct {
 
 // ownOf is the ownShape of a cache entry n: see propCache.
 func ownOf(n *propCache) *shape {
-	if n.shape != nil && n.p1 == nil && !n.getter && n.next == nil {
+	if n.shape != nil && n.p1 == nil && n.cell == nil && !n.getter && n.next == nil {
 		return n.shape
 	}
 	return noShape
@@ -700,7 +814,7 @@ func ownOf(n *propCache) *shape {
 // remembered before is kept among the entries it has seen (jitNoteSeen).
 func (c *propCache) refill(n propCache, jit bool) {
 	seen := c.seen
-	if jit && c.shape != dictShape {
+	if jit && c.shape != dictShape && c.cell == nil {
 		// Not an entry for dictionary objects, which no code is compiled
 		// for.
 		seen = jitNoteSeen(seen, *c, n)
@@ -836,6 +950,14 @@ func (c *propCache) holder(o *Object) *Object {
 		return nil
 	}
 	p := c.p1
+	if c.cell != nil {
+		// Past two prototypes, or nowhere (absentHolder): the chain from o's
+		// prototype up as it was (protoCell).
+		if o.proto != p || !c.cell.valid {
+			return nil
+		}
+		return c.p2
+	}
 	if p == nil {
 		return o
 	}
@@ -1045,6 +1167,10 @@ func (r *Runtime) fillPropCache(c *propCache, o *Object, key Atom, accessors boo
 			return
 		}
 		if depth == 2 || h.proto == nil {
+			// The chain's cell first, which gives each prototype on it a
+			// layout of its own, so that the JIT notes the layouts the
+			// chain keeps.
+			r.fillChainCache(c, o, h, depth, key)
 			if depth == 2 && h.proto != nil && jitBuilt && r.jitOn() {
 				// Deeper than the cache holds: noted for the JIT's code.
 				r.jitNoteDeepRead(c, o, key)
@@ -1055,6 +1181,48 @@ func (r *Runtime) fillPropCache(c *propCache, o *Object, key Atom, accessors boo
 		r.ensureProtoShape(h)
 		up[depth] = h
 	}
+}
+
+// maxChainDepth bounds how far up a read's cache follows a prototype chain
+// for a property (fillChainCache).
+const maxChainDepth = 32
+
+// fillChainCache remembers a read of key on o found past its second
+// prototype, or found nowhere, h being the last object the read's walk
+// looked in, depth up: by the validity cell of o's prototype chain, as
+// V8's loads of a property up a long chain, or of one nothing has, check
+// one cell rather than each holder (protoCell).
+func (r *Runtime) fillChainCache(c *propCache, o *Object, h *Object, depth int, key Atom) {
+	if c.shape == nil {
+		// A cache of no site's, which the JIT fills to learn o's layout,
+		// learning a deep read its own way (jitDeepReadOf).
+		return
+	}
+	holder := absentHolder
+	idx := int32(0)
+	for h.proto != nil {
+		if depth++; depth > maxChainDepth {
+			return
+		}
+		h = h.proto
+		r.ensureProtoShape(h)
+		if h.cacheShape() == nil || !shapeClass(h.class) || synthesized(h.class, key) {
+			return
+		}
+		if i := h.findOwn(key); i >= 0 {
+			if h.shape.keys[i].flags&(propAccessor|propPrivate|propDeleted|propUninit) != 0 {
+				return
+			}
+			holder, idx = h, i
+			break
+		}
+	}
+	cell := r.chainCell(o.proto)
+	if cell == nil {
+		return
+	}
+	n := propCache{shape: remember(o.shape), idx: idx, fills: c.fills + 1, p1: o.proto, p2: holder, cell: cell}
+	c.refill(n, false)
 }
 
 // setPropCached is setValueProp for an object, with the site's cache: a write
@@ -1272,7 +1440,9 @@ func (r *Runtime) fillStoreCache(c *propCache, o *Object, before *shape, key Ato
 // catch a table changed without its shape.
 func (r *Runtime) verifyPropCache(o, h *Object, c *propCache, key Atom) {
 	checkShape(o)
-	checkShape(h)
+	if h != absentHolder {
+		checkShape(h)
+	}
 	want, err := r.getValueProp(Obj(o), key)
 	got := h.vals[c.idx]
 	if err != nil || !want.sameBits(got) {

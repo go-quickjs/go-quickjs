@@ -120,7 +120,8 @@ func TestShapeDictionarySites(t *testing.T) {
 		function getK(m) { return m.k }
 		var ks = 0
 		for (var round = 0; round < 3; round++) for (var i = 0; i < maps.length; i++) ks += getK(maps[i])
-		;[sum, calls, after, ks, getK({}) === undefined].join()`))
+		function absentK(m) { return m.k }
+		;[sum, calls, after, ks, absentK({}) === undefined].join()`))
 	if err != nil {
 		t.Fatal(err)
 	}
