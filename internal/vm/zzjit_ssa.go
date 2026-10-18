@@ -920,7 +920,7 @@ func jitNoteSeen(s *propSeen, old, n propCache) *propSeen {
 	if old.shape == nil || old.shape == noShape || old.shape == n.shape {
 		return s
 	}
-	old.seen = nil
+	old.seen, old.poly = nil, nil
 	if s == nil {
 		s = &propSeen{}
 	}
@@ -941,7 +941,7 @@ func jitNoteSeen(s *propSeen, old, n propCache) *propSeen {
 }
 
 // jitSeenFeedback adds to e's sites what cl's caches have seen besides
-// what they remember now (propCache.seen): the shapes the interpreter and
+// their entries (propCache.poly, propCache.seen): the shapes the interpreter and
 // the tree tier met at each property read and write, which the code is
 // compiled for from the first, as V8's optimizing compiler takes the maps
 // its inline caches met, not learned one exit and one compile at a time.
@@ -949,11 +949,27 @@ func jitNoteSeen(s *propSeen, old, n propCache) *propSeen {
 func (r *Runtime) jitSeenFeedback(cl *closure, e *jitEntry) {
 	for pc, in := range cl.fn.Code {
 		write := in.Op == bytecode.OpSetProp
-		if !write && in.Op != bytecode.OpGetProp && in.Op != bytecode.OpGetPropThis || int(in.B) >= len(cl.ic) || cl.ic[in.B].seen == nil {
+		if !write && in.Op != bytecode.OpGetProp && in.Op != bytecode.OpGetPropThis || int(in.B) >= len(cl.ic) || cl.ic[in.B].seen == nil && cl.ic[in.B].poly == nil {
 			continue
 		}
 		seen, now := cl.ic[in.B].seen, cl.ic[in.B].shape
-		for _, c := range seen.entries[:seen.n] {
+		// What the site remembers besides its entry (poly), which every
+		// tier's reads and writes fill -- the tree's scans of an object's
+		// own table too, which note nothing in seen -- and what it met
+		// before that (seen). A chain's cell is no entry the code is
+		// compiled for (megamorphic).
+		var met []propCache
+		if seen != nil {
+			met = append(met, seen.entries[:seen.n]...)
+		}
+		if p := cl.ic[in.B].poly; p != nil {
+			for _, c := range p.entries[:p.n] {
+				if c.cell == nil {
+					met = append(met, c)
+				}
+			}
+		}
+		for _, c := range met {
 			if c.shape == nil || c.shape == noShape || c.getter || c.idx < 0 || write && (c.next == setterNext || c.next == nil && c.p1 != nil) {
 				continue
 			}
@@ -976,6 +992,9 @@ func (r *Runtime) jitSeenFeedback(cl *closure, e *jitEntry) {
 				continue
 			}
 			p.cases = append(p.cases, c)
+		}
+		if seen == nil {
+			continue
 		}
 		if !write {
 			// The reads a cache could not hold, past its two prototypes.
@@ -1436,7 +1455,7 @@ func jitFeedbackMark(cl *closure) uint64 {
 		if c.fills >= maxCacheFills {
 			m += 0x9e3779b97f4a7c15 * uint64(i+1)
 		}
-		var held [4]*shape
+		var held [1 + maxPolyEntries + len(propSeen{}.entries)]*shape
 		n := 0
 		entry := func(x *propCache) {
 			if x.shape == nil || x.shape == noShape {
@@ -1460,6 +1479,11 @@ func jitFeedbackMark(cl *closure) uint64 {
 			m += h * uint64(i+1)
 		}
 		entry(c)
+		if p := c.poly; p != nil {
+			for k := range p.entries[:p.n] {
+				entry(&p.entries[k])
+			}
+		}
 		if c.seen != nil {
 			for k := range c.seen.entries[:c.seen.n] {
 				entry(&c.seen.entries[k])

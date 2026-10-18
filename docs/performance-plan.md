@@ -577,7 +577,12 @@ faster: its loss is its steady state's.
   cache counts as a fill, so a site that the lower tiers run with two
   shapes in turn gives up on its cache (`maxCacheFills`, 16) after 16
   alternations and reads through the runtime's shared cache, where V8's
-  inline caches hold four maps. One JIT test works around it.
+  inline caches hold four maps. Done since: a site keeps the entries of up
+  to three shapes besides its own (`propCache.poly`), which every tier's
+  reads and writes answer from, the frameless calls' and the tree's own
+  table scans included (`ownScan`). Left: the JIT's record of the shapes
+  a site met (`propSeen`) still keeps entries of its own beside them,
+  where one record would do.
 - **`get_prop` in `executeAt` never fills a small table's cache**: it reads
   a plain own property of up to `linearScanLimit` keys directly
   (`plainOwn`), which is as quick as a hit. The JIT therefore learns such
@@ -620,8 +625,7 @@ faster: its loss is its steady state's.
   lowering for native callers refuses a captured local, every call of
   them made by Go (DeltaBlue's `inputsKnown` 64K, `satisfy` 35K,
   `constraintsConsuming` 10K a run); calls, and writes, inside inlined
-  callees; generic `==`, `%`, `typeof` and `instanceof`; the
-  interpreter's caches holding one shape. New: RayTrace's small methods
+  callees; generic `==`, `%`, `typeof` and `instanceof`. New: RayTrace's small methods
   (`add`, `multiplyScalar`, `initialize`) judged slow early in a short
   run; Box2D's steady state 14% slower with the JIT (above).
 - **Compiling in the background, last.** V8 compiles on a thread of its

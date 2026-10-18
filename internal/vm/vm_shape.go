@@ -814,6 +814,11 @@ type propCache struct {
 	// p2 is then the object holding the property, or absentHolder, and s1
 	// and s2 are nil. Native code is compiled for no such entry.
 	cell *protoCell
+	// poly holds the entries the site remembered before for objects of
+	// other shapes, up to maxPolyEntries: V8's polymorphic inline cache,
+	// of four maps (polyEntry). Made when a site first meets a second
+	// shape.
+	poly *propPoly
 	// seen, with the JIT on, holds the entries the site had before, the
 	// last few, of other shapes, which no read or write here uses: the
 	// shapes the optimizing tier compiles the site for besides this one,
@@ -858,9 +863,68 @@ func (c *propCache) refill(n propCache, jit bool) {
 		// for.
 		seen = jitNoteSeen(seen, *c, n)
 	}
+	poly := notePoly(c.poly, *c, n)
 	n.ownShape = ownOf(&n)
 	*c = n
-	c.seen = seen
+	c.seen, c.poly = seen, poly
+}
+
+// propPoly is a site's entries for objects of shapes other than its
+// entry's (propCache.poly).
+type propPoly struct {
+	n       uint8
+	entries [maxPolyEntries]propCache
+}
+
+// maxPolyEntries is how many shapes a site remembers besides its entry's:
+// V8's polymorphic inline caches hold four maps (DEFAULT_MAX_POLYMORPHIC_
+// MAP_COUNT) before they are megamorphic.
+const maxPolyEntries = 3
+
+// notePoly keeps old, the entry a site remembered before it remembers n,
+// among its others, if it was of another shape: replacing the one of its
+// shape, or the oldest when they are full. An entry for dictionary
+// objects is kept by none: it is the entry of every such object.
+func notePoly(p *propPoly, old, n propCache) *propPoly {
+	if old.shape == nil || old.shape == noShape || old.shape == dictShape || old.shape == n.shape {
+		return p
+	}
+	var none jitCacheSeen
+	old.seen, old.poly = none, nil
+	if p == nil {
+		p = &propPoly{}
+	}
+	for i := range p.n {
+		if p.entries[i].shape == old.shape && p.entries[i].next == old.next {
+			p.entries[i] = old
+			return p
+		}
+	}
+	if int(p.n) < len(p.entries) {
+		p.entries[p.n] = old
+		p.n++
+		return p
+	}
+	copy(p.entries[:], p.entries[1:])
+	p.entries[len(p.entries)-1] = old
+	return p
+}
+
+// polyEntry is the entry among the site's others (poly) that answers a
+// read of o, or nil: a site whose objects are of a few shapes in turn --
+// a list's two node classes -- reads each from its entry, rather than
+// filling again at each, which had counted as a fill each time, the site
+// giving up its cache (maxCacheFills) after sixteen.
+func (c *propCache) polyEntry(o *Object) (*propCache, *Object) {
+	if p := c.poly; p != nil {
+		for i := range p.n {
+			e := &p.entries[i]
+			if h := e.holder(o); h != nil {
+				return e, h
+			}
+		}
+	}
+	return nil, nil
 }
 
 // cachedProp is a property read of o that its cache answers. It reports false
@@ -877,6 +941,12 @@ func (r *Runtime) cachedProp(c *propCache, o *Object, key Atom) (Value, bool) {
 		if v, ok := r.dictRead(c, o, key); ok {
 			return v, true
 		}
+	}
+	if e, h := c.polyEntry(o); e != nil && !e.getter {
+		if verifyShapes {
+			r.verifyPropCache(o, h, e, key)
+		}
+		return h.vals[e.idx], true
 	}
 	if c.fills >= maxCacheFills {
 		return r.sharedProp(o, key)
@@ -917,6 +987,21 @@ func (r *Runtime) cachedGet(c *propCache, o *Object, key Atom) (Value, bool, err
 		if v, ok := r.dictRead(c, o, key); ok {
 			return v, true, nil
 		}
+	}
+	if e, h := c.polyEntry(o); e != nil {
+		v := h.vals[e.idx]
+		if !e.getter {
+			if verifyShapes {
+				r.verifyPropCache(o, h, e, key)
+			}
+			return v, true, nil
+		}
+		a := v.accessorPair()
+		if a == nil || a.getter == nil {
+			return Undefined, true, nil
+		}
+		v, err := r.callDirect(Obj(a.getter), Obj(o), nil)
+		return v, true, err
 	}
 	if c.fills >= maxCacheFills {
 		v, ok := r.sharedProp(o, key)
@@ -973,8 +1058,14 @@ func (c *propCache) noteOwn(o *Object, i int32) {
 }
 
 // ownScan is a plain own property of an ordinary object's small table, which
-// the cache then remembers for objects of o's shape.
+// the cache then remembers for objects of o's shape -- unless one of the
+// site's other entries (poly) already does, which answers.
 func ownScan(c *propCache, o *Object, key Atom) (Value, bool) {
+	if c.poly != nil {
+		if e, h := c.polyEntry(o); h == o && !e.getter {
+			return o.vals[e.idx], true
+		}
+	}
 	v, i, ok := plainOwnAt(o, key)
 	if ok {
 		c.noteOwn(o, i)
@@ -1278,23 +1369,18 @@ func (r *Runtime) fillChainCache(c *propCache, o *Object, h *Object, depth int, 
 // remembered where it can be.
 func (r *Runtime) setPropCached(c *propCache, o *Object, key Atom, v Value, strict bool) error {
 	if s := o.shape; s == c.shape {
-		if c.next == nil {
-			if verifyShapes {
-				checkShape(o)
-			}
-			o.vals[c.idx] = v
-			return nil
+		if done, err := r.storeCached(c, o, key, v); done {
+			return err
 		}
-		if c.next == setterNext {
-			if done, err := r.cachedSetter(c, o, key, v); done {
-				return err
+	}
+	if p := c.poly; p != nil && o.shape != nil {
+		// The site's entries for its other shapes (poly).
+		for i := range p.n {
+			if e := &p.entries[i]; e.shape == o.shape {
+				if done, err := r.storeCached(e, o, key, v); done {
+					return err
+				}
 			}
-		} else if c.adds(o) {
-			if verifyShapes {
-				r.verifyStoreCache(c, o, key)
-			}
-			o.appendTransition(v, c.next)
-			return nil
 		}
 	}
 	if c.shape == dictShape && r.dictObject(o) {
@@ -1340,6 +1426,31 @@ func (r *Runtime) setPropCached(c *propCache, o *Object, key Atom, v Value, stri
 		}
 	}
 	return nil
+}
+
+// storeCached is the write of v to o's key that entry c of a write site
+// answers, o being of c's shape: a plain writable property o has, a setter
+// its prototypes have, or an addition along c's transition. It reports
+// whether it made the write.
+func (r *Runtime) storeCached(c *propCache, o *Object, key Atom, v Value) (bool, error) {
+	if c.next == nil {
+		if verifyShapes {
+			checkShape(o)
+		}
+		o.vals[c.idx] = v
+		return true, nil
+	}
+	if c.next == setterNext {
+		return r.cachedSetter(c, o, key, v)
+	}
+	if c.adds(o) {
+		if verifyShapes {
+			r.verifyStoreCache(c, o, key)
+		}
+		o.appendTransition(v, c.next)
+		return true, nil
+	}
+	return false, nil
 }
 
 // adds reports whether the property a write cache says is added may be
@@ -1389,6 +1500,12 @@ func (r *Runtime) cachedData(c *propCache, o *Object, key Atom) (Value, bool) {
 		if v, ok := r.dictRead(c, o, key); ok {
 			return v, true
 		}
+	}
+	if e, h := c.polyEntry(o); e != nil && !e.getter {
+		if verifyShapes {
+			r.verifyPropCache(o, h, e, key)
+		}
+		return h.vals[e.idx], true
 	}
 	if c.fills >= maxCacheFills {
 		return r.sharedProp(o, key)

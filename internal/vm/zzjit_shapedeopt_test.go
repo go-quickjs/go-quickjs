@@ -83,10 +83,8 @@ func jitReadSite(t *testing.T, r *Runtime, name, key string) (siteMega bool, c *
 // deoptimizes once at a prototype's property, which a site that knew
 // nothing searches no receiver's own table for; met with a second shape,
 // once more; and never leaves after, its receivers of the two shapes mixed
-// too, each answer the interpreter's. (Mixed while the interpreter runs
-// the read, its cache, which holds one shape at a time and counts each
-// refill, would give up and be megamorphic: the receivers come one shape
-// at a time until the code is compiled for both.)
+// too, each answer the interpreter's. (TestJITShapesMixedDeoptimizeOnce
+// mixes them from the first call.)
 func TestJITShapeMissesDeoptimize(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -103,6 +101,32 @@ func TestJITShapeMissesDeoptimize(t *testing.T) {
 	mega, c := jitReadSite(t, r, "sum", "x")
 	if mega || c.shape == nil || c.shape == noShape || c.seen == nil || c.seen.n == 0 {
 		t.Fatalf("the read's cache did not learn its two shapes: megamorphic %v, %+v", mega, c)
+	}
+}
+
+// Receivers of two shapes mixed from the first call: the code, compiled
+// before the read ran, deoptimizes once, and the interpreter, running the
+// rest of that invocation, keeps an entry for each shape in the read's
+// cache, as V8's polymorphic inline caches hold four maps, rather than
+// trading one for the other at each receiver until the cache gave up. The
+// second entry, made after the deoptimization, has the code wait a budget
+// more (jitTierUp), as V8's NotifyICChanged does; compiled again, it reads
+// both natively and never leaves.
+func TestJITShapesMixedDeoptimizeOnce(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `function A(){} A.prototype.x=1; function B(){this.y=0} B.prototype.x=2;
+		var mixed=[new A(),new B()];
+		function sum(os,n){let s=0;for(let i=0;i<n;i++)s=(s+os[i&1].x)|0;return s}`
+	r, rounds := jitShapeRunForTest(t, setup, "sum", `sum(mixed,100)`, `sum(mixed,100)`, `sum(mixed,100)`, `sum(mixed,100)`)
+	for i, want := range []jitShapeRound{{1, 0, 0}, {0, 0, 0}, {0, 0, 1}, {0, 0, 0}} {
+		if got := rounds[i]; got != want {
+			t.Errorf("round %d: %d map checks deoptimized, %d exits left to Go and %d compiles, want %+v", i, got.deopts, got.hosts, got.compiles, want)
+		}
+	}
+	if mega, c := jitReadSite(t, r, "sum", "x"); mega || c.fills > 2 {
+		t.Fatalf("the read's cache did not keep its two shapes: megamorphic %v, %d fills", mega, c.fills)
 	}
 }
 
