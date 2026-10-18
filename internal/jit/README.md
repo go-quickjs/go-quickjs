@@ -244,8 +244,12 @@ shape it never met -- is a call of Go (`ssa.GoCall`, `jitPropertyMade`) on
 a branch the builder makes within the instruction (`splitOn`), the write
 true where it stored nothing, native code going on where the two ways
 meet, as V8's megamorphic stores call the runtime on a miss; the analyses
-see the call on its branch alone. In an inlined callee, whose frame Go
-cannot make, it leaves.
+see the call on its branch alone. A read of an object there is so too,
+its two ways each making a value (`split`): its cell none where it finds
+no property (`OpCellNone`), the value loaded from the cell on one branch
+and Go's on the other, which a phi takes, the call filling the
+megamorphic cache as an exit would (`jitPolySeen`). In an inlined
+callee, whose frame Go cannot make, either leaves.
 
 **Private members.** A private member is a property under a key each
 evaluation of its class mints, a symbol, which a binding the class's

@@ -5082,7 +5082,27 @@ func (c *compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.MovQToX(xScratch0, scratchB)
 		c.setX(v, xScratch0)
 	case ssa.OpPropCell:
+		if v.Tries() {
+			// A megamorphic read's cell: none where it finds no
+			// property, for Go to read on a branch of its own.
+			none, found := c.a.NewLabel(), c.a.NewLabel()
+			c.property(v, func(cond amd64.Cond) { c.a.Jcc(cond, none) })
+			c.a.Bind(found)
+			c.setG(v, scratchA)
+			c.cold = append(c.cold, func() {
+				c.a.Bind(none)
+				c.movImm(scratchA, 0)
+				c.a.Jmp(found)
+			})
+			break
+		}
 		c.property(v, c.guardFor(v))
+		c.setG(v, scratchA)
+	case ssa.OpCellNone:
+		r := c.gpr(arg(0), scratchB)
+		c.a.Op(amd64.Test, r, r, true)
+		c.a.Setcc(amd64.CondE, scratchA)
+		c.a.MovZX8(scratchA, scratchA)
 		c.setG(v, scratchA)
 	case ssa.OpGlobalCell, ssa.OpBindingCell:
 		// No script-level lexical binding of the name, which would shadow

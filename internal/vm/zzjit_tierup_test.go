@@ -583,3 +583,101 @@ func jitSetPropPC(t *testing.T, fn *bytecode.Function) int {
 	t.Fatal("no set_prop")
 	return -1
 }
+
+// A megamorphic site's read that neither the receiver's own table nor the
+// megamorphic cache has -- a shape it never met, a property up a chain, a
+// getter -- Go makes, called from native code (ssa.GoCall) on a branch of
+// its own, and the code goes on with its value, as V8's megamorphic loads
+// call the runtime: look, of objects of a dozen shapes, some too large to
+// search, some with the property their own, some their prototype's, data
+// or a getter, and some with none, never leaves its code, entered from Go
+// and called natively alike, and each answer is the interpreter's. Each
+// such read had left native code, the rest of the invocation in the
+// interpreter: Typescript's at typescript-compiler.js:1607, nearly four
+// thousand times in five runs.
+func TestJITMegamorphicReadsByGo(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r, run := jitTierRuntimeForTest(t, 1, `var data={hit:7}, getter={get hit(){return this.p0+100}}, shapes=[];
+		for(let k=0;k<12;k++){const o=Object.create(k%3==1?data:k%3==2?getter:Object.prototype);
+			for(let j=0;j<=k;j++)o['p'+j]=j;if(k%4==0)o.hit=k;shapes.push(o)}
+		function look(o){let s=0;for(let i=0;i<2;i++)s+=i;const h=o.hit;return (h===undefined?-1:h)+s}
+		function each(n){let t=0;for(let i=0;i<n;i++){const s=shapes[i%12],o=Object.create(Object.getPrototypeOf(s));Object.assign(o,s);t+=look(o)}return t}`)
+	for range 4 {
+		run(`each(96)`)
+	}
+	e := jitNativeForTest(t, r, "look")
+	if p := r.global.getOwn(r.atoms.intern("look")).value().Object().fn().closure; !r.jitSiteMegamorphic(p, e, jitGetPropPC(t, p.fn)) {
+		t.Fatal("look's read is not megamorphic: no test of its misses")
+	}
+	ee := jitNativeForTest(t, r, "each")
+	hosts, ehosts, interpreted := e.ssaStats.hosts, ee.ssaStats.hosts, r.jit.interpreted
+	run(`each(600)`)
+	run(`JSON.stringify(shapes.map(o=>look(o)))`)
+	if n := e.ssaStats.hosts - hosts + ee.ssaStats.hosts - ehosts; n != 0 {
+		t.Errorf("look, or each calling it, left native code %d times", n)
+	}
+	if n := r.jit.interpreted - interpreted; n != 0 {
+		t.Errorf("the interpreter finished %d invocations", n)
+	}
+}
+
+// jitGetPropPC is the PC of fn's first get_prop.
+func jitGetPropPC(t *testing.T, fn *bytecode.Function) int {
+	t.Helper()
+	for pc, in := range fn.Code {
+		if in.Op == bytecode.OpGetProp {
+			return pc
+		}
+	}
+	t.Fatal("no get_prop")
+	return -1
+}
+
+// A megamorphic site's method read whose miss Go makes (ssa.GoCall) leaves
+// the site's cache as the interpreter reads a method (get_prop_this, by
+// cachedProp, whose entries are data): a getter's read of the method there
+// had filled the cache as a property read's (cachedGet), its entry the
+// getter's, which the interpreter then took for the method itself -- the
+// getter's pair, an object no call could make: Intl's format, a getter of
+// the bound function, read and called by test262's NumberFormat tests.
+func TestJITMegamorphicMethodReadsByGo(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r, run := jitTierRuntimeForTest(t, 1, `var own={}, getter={get m(){return function(k){return this.p0+k+100}}}, shapes=[];
+		own.m=function(k){return this.p0+k};
+		for(let k=0;k<12;k++){const o=Object.create(k%2?getter:own);for(let j=0;j<=k;j++)o['p'+j]=j;shapes.push(o)}
+		function call(o){let s=0;for(let i=0;i<2;i++)s+=i;return o.m(s)}
+		function each(n){let t=0;for(let i=0;i<n;i++)t+=call(shapes[i%12]);return t}`)
+	for range 4 {
+		run(`each(96)`)
+	}
+	e := jitNativeForTest(t, r, "call")
+	cl := r.global.getOwn(r.atoms.intern("call")).value().Object().fn().closure
+	pc := -1
+	for i, in := range cl.fn.Code {
+		if in.Op == bytecode.OpGetPropThis {
+			pc = i
+		}
+	}
+	if pc < 0 || !r.jitSiteMegamorphic(cl, e, pc) {
+		t.Fatal("call's method read is not megamorphic: no test of its misses")
+	}
+	run(`each(600)`)
+	// What the site's cache answers for each receiver is what a read finds.
+	in := cl.fn.Code[pc]
+	shapes := r.global.getOwn(r.atoms.intern("shapes")).value().Object()
+	for i, s := range shapes.elemsOf() {
+		got, ok := r.cachedProp(&cl.ic[in.B], s.Object(), cl.names[in.A])
+		want, err := r.getValueProp(s, cl.names[in.A])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok && !got.sameBits(want) {
+			t.Errorf("shape %d: the cache of call's method read answers other than a read", i)
+		}
+	}
+	run(`JSON.stringify(shapes.map(o=>call(o)))`)
+}

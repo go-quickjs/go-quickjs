@@ -3070,6 +3070,13 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 	var err error
 	switch {
 	case prop:
+		if in.Op == bytecode.OpGetProp && r.jitSiteMegamorphic(f.cl, e, pc) {
+			// A megamorphic site's read that native code did not find,
+			// learned as at an exit (jitPolySeen): the megamorphic cache
+			// filled for the receiver's shape, which the next such read
+			// finds natively, as V8's miss handler fills its stub cache.
+			r.jitPolySeen(f, e, pc, sp, f.cl.fn.Code[pc])
+		}
 		v, err = r.jitPropertyMade(f.cl, pc, sp)
 	case in.Op == bytecode.OpSuperCall:
 		// A derived constructor's super(...) (abi.GoCallSuper), on the
@@ -3382,6 +3389,13 @@ framed:
 	var v Value
 	var err error
 	if prop {
+		if in.Op == bytecode.OpGetProp && r.jitSiteMegamorphic(f.cl, e, pc) {
+			// A megamorphic site's read that native code did not find,
+			// learned as at an exit (jitPolySeen): the megamorphic cache
+			// filled for the receiver's shape, which the next such read
+			// finds natively, as V8's miss handler fills its stub cache.
+			r.jitPolySeen(f, e, pc, sp, f.cl.fn.Code[pc])
+		}
 		v, err = r.jitPropertyMade(f.cl, pc, sp)
 	} else {
 		v, err = r.jitCallMade(in, sp)

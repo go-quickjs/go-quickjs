@@ -6145,8 +6145,9 @@ func TestJITSSANativeCallsGoOn(t *testing.T) {
 // returned to (runSSA's resume), as V8's lazy deoptimization leaves the
 // caller's frame alone: s, t and p, live across the call in registers and
 // a keep cell, are as they were: tick, whose loop keeps it from being
-// inlined, leaves at its read of L's own getter, megamorphic, once in fifty
-// calls. A callee that throws (boom, through raise) is finished as before,
+// inlined, leaves at its addition of an object, L, whose conversion Go
+// makes, once in fifty calls (a megamorphic read of a getter, Go's now
+// without leaving, had been it). A callee that throws (boom, through raise) is finished as before,
 // the throw going through its caller; as is one while the collector marks.
 // Each answer is the interpreter's.
 func TestJITSSANativeCallResumes(t *testing.T) {
@@ -6156,7 +6157,7 @@ func TestJITSSANativeCallResumes(t *testing.T) {
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	setup := `var A={v:3},B={v:5},o={p:A},c={n:0},L={get n(){return String(c.n).length}};
-		function tick(){let k=0;for(let j=0;j<1;j++)k++;c.n++;o.p=(c.n&1)?B:A;if(c.n%50===0)return L.n+k;return (c.n&3)+k}
+		function tick(){let k=0;for(let j=0;j<1;j++)k++;c.n++;o.p=(c.n&1)?B:A;if(c.n%50===0)return (L+"").length+k;return (c.n&3)+k}
 		function f(n){let s=0.5,t=0,p=o.p;for(let i=0;i<n;i++){s=s*1.0001+tick();t=(t+p.v)|0;s+=i*0.5}return [s,t,p.v,c.n].join()}
 		function raise(s){throw new Error("e"+s)}
 		function boom(i){let s=i;for(let j=0;j<2;j++)s=s*2;if(c.n++%97===0)raise(s);return s}
@@ -6202,7 +6203,7 @@ func TestJITSSANativeCallResumes(t *testing.T) {
 // A value read from an element and used after a native call is kept across
 // it, as one read from a property is: the callee may write the element.
 // put stores natively into the element f's x came from, then leaves native
-// code at an accessor's read, after which f goes on natively with x, which
+// code at an addition of an object, after which f goes on natively with x, which
 // a[0] no longer holds -- until put, which always leaves, is left to Go;
 // take pops natively the element g's x came from.
 func TestJITSSAElementsKeptAcrossCalls(t *testing.T) {
@@ -6212,7 +6213,7 @@ func TestJITSSAElementsKeptAcrossCalls(t *testing.T) {
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	setup := `var A={v:3},B={v:5},L={a:0,get n(){return String(this.a).length}};
-		function put(a,i){a[0]=(i&1)?B:A;L.a=i;return L.n&1}
+		function put(a,i){a[0]=(i&1)?B:A;L.a=i;return (L+String(L.a)).length&1}
 		function f(a,n){let t=0;for(let i=0;i<n;i++){const x=a[0];t=(t+put(a,i))|0;t=(t*3+x.v)|0}return t}
 		function take(a){return a.pop()}
 		function g(a,n){let t=0;for(let i=0;i<n;i++){const x=a[a.length-1];const y=take(a);a.push((i&1)?A:B);t=(t*3+x.v+(x===y?1:0))|0}return t}`
@@ -7657,9 +7658,9 @@ func TestJITSSANativeCallTargets(t *testing.T) {
 		function leaf(x){return inc(x)+inc(x)}
 		function useLeaf(o,n){let t=0;for(let i=0;i<n;i++)t=(t+leaf(o))|0;return t}
 		var L={a:0,get n(){return String(this.a).length}};
-		function leave(i){L.a=i;return L.n}
+		function leave(i){L.a=i;return (L+String(L.a)).length}
 		function useLeave(n){let t=0;for(let i=0;i<n;i++)t=(t+leave(i))|0;return t}
-		function two(n,k){if(n===0){if(k%16!==0)return 1;L.a=k;return L.n}let a=two(n-1,k);let b=two(n-1,k);return a+b}
+		function two(n,k){if(n===0){if(k%16!==0)return 1;L.a=k;return (L+String(L.a)).length}let a=two(n-1,k);let b=two(n-1,k);return a+b}
 		function drive(n){let t=0;for(let i=0;i<n;i++)t=(t+two(4,i))|0;return t}
 		var four=[new A(1),new B(2),new C(3),new D],five=[new A(4),new B(5),new C(6),new D,new E],lo={c:0};`
 	src := `[poly(four,400),useLeaf(lo,300),useLeave(300),drive(64)].join()`
@@ -8015,9 +8016,10 @@ func TestJITSSACallerDroppedWhileItsCalleeLeaves(t *testing.T) {
 	// Native calls are Go's while the collector marks.
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	for _, tc := range []struct{ name, setup, run, last string }{
-		// The callee leaves at its read of a getter, which drops the
-		// caller's code.
-		{"call", `var H={get g(){host();return 0}};function leave(x){let y=x;for(let j=0;j<1;j++)y=y*3+1;if(x===200)H.g;return y}
+		// The callee leaves at an addition of an object, whose conversion
+		// Go makes, and the interpreter, finishing it, calls host, which
+		// drops the caller's code.
+		{"call", `var H={};function leave(x){let y=x;for(let j=0;j<1;j++)y=y*3+1;if(x===200){y+=(H+"").length;host()}return y}
 			function caller(n){let s=0;for(let i=0;i<n;i++)s=(s+leave(i)*2)|0;return s}`,
 			`[caller(300),caller(300)].join()`, `[caller(300),caller(300)].join()`},
 		// The inlined callee leaves at its read of v, which meets a getter

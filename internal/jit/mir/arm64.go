@@ -4649,7 +4649,24 @@ func (c *a64Compiler) value(v *ssa.Value, b *ssa.Block) {
 		c.a.FMovToF(a64F0, a64B)
 		c.setF(v, a64F0)
 	case ssa.OpPropCell:
+		if v.Tries() {
+			// As amd64's: none where it finds no property.
+			none, found := c.a.NewLabel(), c.a.NewLabel()
+			c.property(v, func(cond arm64.Cond) { c.a.BCond(cond, none) })
+			c.a.Bind(found)
+			c.setG(v, a64A)
+			c.cold = append(c.cold, func() {
+				c.a.Bind(none)
+				c.movImm(a64A, 0)
+				c.a.B(found)
+			})
+			break
+		}
 		c.property(v, c.guardFor(v))
+		c.setG(v, a64A)
+	case ssa.OpCellNone:
+		c.a.CmpImm(c.gpr(arg(0), a64B), 0, true)
+		c.a.Cset(a64A, arm64.EQ)
 		c.setG(v, a64A)
 	case ssa.OpGlobalCell, ssa.OpBindingCell:
 		// As amd64's: unshadowed, then the binding in the scope's object

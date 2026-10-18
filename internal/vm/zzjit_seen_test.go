@@ -154,7 +154,8 @@ func TestJITSSASeedsBuiltinsAndCalleesCalls(t *testing.T) {
 }
 
 // Code called natively that leaves too often is compiled again only if its
-// exits taught it something (jitLearning): w's read of a getter is Go's
+// exits taught it something (jitLearning): w's addition of an object, whose
+// conversion may run anything, is Go's
 // at every call, which no compile changes, and native callers stop
 // calling it at once, not after three compiles of the same code. Each
 // answer is the interpreter's.
@@ -166,7 +167,7 @@ func TestJITSSAUnwoundCompiledAgainOnlyForWhatItLearned(t *testing.T) {
 	// as calls leaving native code.
 	runtime.GC()
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
-	setup := `var o={get g(){return 2}};function w(x){let s=0;for(let i=0;i<2;i++)s+=o.g*x;return s}
+	setup := `var o={};function w(x){let s=0;for(let i=0;i<2;i++)s+=(o+"").length*x;return s}
 		function run(n){let t=0;for(let i=0;i<n;i++)t+=w(i+0.25);return t}`
 	want := New(Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()

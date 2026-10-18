@@ -404,6 +404,16 @@ func (r *Runtime) jitPropertyMade(cl *closure, pc, sp int) (Value, error) {
 	obj := r.stack[sp-1]
 	if obj.IsObject() && int(in.B) < len(cl.ic) {
 		o := obj.Object()
+		if in.Op == bytecode.OpGetPropThis {
+			// As the interpreter reads a method: through its cache, which
+			// holds no getter (cachedProp), where cachedGet's entry for one
+			// had been taken by the interpreter for the getter's pair as the
+			// property's value, the method an object no call could make.
+			if v, ok := r.cachedProp(&cl.ic[in.B], o, key); ok {
+				return v, nil
+			}
+			return r.getValueProp(obj, key)
+		}
 		if v, ok := plainOwn(o, key); ok {
 			return v, nil
 		}

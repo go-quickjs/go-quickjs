@@ -2711,6 +2711,15 @@ func (b *builder) fill(blk *Block) {
 // native store and, where that finds no property to store to, a call of
 // Go, which only the branch that makes it has.
 func (b *builder) splitOn(blk *Block, cond *Value) (other, cont *Block) {
+	other, _, cont = b.split(blk, cond, false)
+	return other, cont
+}
+
+// split is splitOn, or, both, splitOn with a block of its own for the
+// false edge too, no, which goes to cont: an instruction whose two ways
+// each make a value, which cont's phi takes -- a megamorphic site's read,
+// the value loaded from its cell where it finds one and Go's otherwise.
+func (b *builder) split(blk *Block, cond *Value, both bool) (yes, no, cont *Block) {
 	f := b.f
 	mk := func() *Block {
 		nb := f.newBlock(blk.PC)
@@ -2740,10 +2749,17 @@ func (b *builder) splitOn(blk *Block, cond *Value) (other, cont *Block) {
 		}
 		return nb
 	}
-	other, cont = mk(), mk()
+	yes = mk()
+	made := []*Block{yes}
+	if both {
+		no = mk()
+		made = append(made, no)
+	}
+	cont = mk()
+	made = append(made, cont)
 	// After blk, in the order the blocks are filled and kept in: a block
-	// after its dominator, cont after other.
-	f.Blocks = f.Blocks[:len(f.Blocks)-2]
+	// after its dominator, cont after the others.
+	f.Blocks = f.Blocks[:len(f.Blocks)-len(made)]
 	at := 0
 	for i, x := range f.Blocks {
 		if x == blk {
@@ -2751,7 +2767,7 @@ func (b *builder) splitOn(blk *Block, cond *Value) (other, cont *Block) {
 			break
 		}
 	}
-	rest := append([]*Block{other, cont}, f.Blocks[at:]...)
+	rest := append(made, f.Blocks[at:]...)
 	f.Blocks = append(f.Blocks[:at], rest...)
 	cont.Kind, cont.Control, cont.Succs, cont.State, cont.ExitKind = blk.Kind, blk.Control, blk.Succs, blk.State, blk.ExitKind
 	for _, s := range cont.Succs {
@@ -2763,15 +2779,22 @@ func (b *builder) splitOn(blk *Block, cond *Value) (other, cont *Block) {
 	}
 	b.endOf[cont.ID] = b.endOf[blk.ID]
 	blk.Kind, blk.Control, blk.State, blk.ExitKind = BlockIf, cond, nil, 0
-	blk.Succs = []*Block{other, cont}
 	cond.Uses++
-	other.Kind, other.Succs, other.Preds, other.Backedge = BlockPlain, []*Block{cont}, []*Block{blk}, []bool{false}
-	cont.Preds, cont.Backedge = []*Block{blk, other}, []bool{false, false}
-	b.seal(other)
-	b.seal(cont)
-	b.splits = append(b.splits, other, cont)
+	yes.Kind, yes.Succs, yes.Preds, yes.Backedge = BlockPlain, []*Block{cont}, []*Block{blk}, []bool{false}
+	if both {
+		no.Kind, no.Succs, no.Preds, no.Backedge = BlockPlain, []*Block{cont}, []*Block{blk}, []bool{false}
+		blk.Succs = []*Block{yes, no}
+		cont.Preds, cont.Backedge = []*Block{yes, no}, []bool{false, false}
+	} else {
+		blk.Succs = []*Block{yes, cont}
+		cont.Preds, cont.Backedge = []*Block{blk, yes}, []bool{false, false}
+	}
+	for _, x := range made {
+		b.seal(x)
+	}
+	b.splits = append(b.splits, made...)
 	b.next = cont
-	return other, cont
+	return yes, no, cont
 }
 
 func (f *Func) entryForBlock(blk *Block) (Entry, bool) {
@@ -3226,6 +3249,46 @@ func (b *builder) instruction(blk *Block, pc int) {
 			k := f.newValue(blk, OpConst, Tagged)
 			k.Const = ir.Bool(true)
 			b.assign(in.Dest, blk, k)
+			break
+		}
+		if (in.Op == ir.ReferenceRead || in.Op == ir.PropertyRead) && site.Megamorphic && !in.Private && b.cur == b.root && b.goCalls() && f.Keeps < f.keepLimit() {
+			// A megamorphic site's read: what neither the receiver's own
+			// table nor the megamorphic cache has -- a shape the site never
+			// met, a property found where the code does not look -- Go
+			// reads, on a branch of its own (split): the property's cell
+			// is none there (Try), and a call of Go (GoCall) reads it as
+			// the interpreter does, native code going on after it, the
+			// value the one loaded from the cell where there is one, as
+			// V8's megamorphic loads call the runtime on a miss rather
+			// than leave. A number's read is a value's so, which its uses
+			// unbox.
+			cell := guard(OpPropCell, Source, kind, object)
+			cell.Const, cell.Index, cell.Key = ir.Value{Bits: uint64(site.Shape)}, int(site.Index), site.Key
+			f.setProperty(cell, holders, cases, nil, nil)
+			f.cache(cell).Mega, f.cache(cell).Try = true, true
+			if site.Scan && site.Shape == 0 && cases == nil && holders == nil {
+				f.cache(cell).Scan = true
+			}
+			st, recv := cell.State, operand(in.Left)
+			none := f.newValue(blk, OpCellNone, Bool, cell)
+			miss, hit, _ := b.split(blk, none, true)
+			v := f.newValue(hit, OpLoadCell, Tagged, cell)
+			v.Shadow = cell
+			b.assign(in.Dest, hit, v)
+			call := f.newValue(miss, OpCall, Tagged, recv)
+			call.Aux, call.State = int(ir.HostExit), st
+			st.addUse()
+			f.cache(call).Calls, call.Index = []*CallSite{{Go: GoCall, Accessor: AccessorGet, Key: site.Key, ThisSlot: -1}}, f.Keeps
+			f.Keeps++
+			kept := f.newValue(miss, OpCallCell, Source, call)
+			r := f.newValue(miss, OpKept, Tagged, kept, call)
+			r.Shadow = kept
+			b.assign(in.Dest, miss, r)
+			// A getter Go calls may assign a captured binding, as a callee
+			// may (ir.Host's calls).
+			if b.hasCells() {
+				b.reloadAfterCall(miss)
+			}
 			break
 		}
 		if in.Op == ir.ReferenceRead || in.Op == ir.PropertyRead && b.fb != nil && b.fb.Generic(pc) {

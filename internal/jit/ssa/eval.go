@@ -854,6 +854,11 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 					return exit(v.State, ir.ExitKind(v.Aux))
 				}
 			case OpPropCell:
+				if v.Tries() {
+					// A megamorphic read whose miss Go makes, on a branch of
+					// its own.
+					return ir.Exit{}, fmt.Errorf("%w: a read whose miss Go makes", ErrUnsupported)
+				}
 				o, i := heap.holder(&heap.Objects[a.p], v)
 				if i == absent {
 					vals[v.ID] = val{cell: &undefinedCell}

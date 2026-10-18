@@ -370,6 +370,9 @@ const (
 	// (AccessorSite). The pair is the holder's, which a redefinition
 	// changes in place, without a new shape.
 	OpAccessorIs // source -> none
+	// OpCellNone is whether a cell, a megamorphic read's that may find no
+	// property (InlineCache's Try), is none.
+	OpCellNone // source -> bool
 )
 
 var opNames = [...]string{
@@ -387,6 +390,7 @@ var opNames = [...]string{
 	OpCheckTrue: "checktrue", OpConstCell: "constcell", OpUpvalueCell: "upvaluecell", OpUpvalueStale: "upvaluestale", OpLocalCell: "localcell", OpPowF64: "powf",
 	OpMaxF64: "maxf", OpMinF64: "minf", OpFloorF64: "floorf", OpCeilF64: "ceilf", OpTruncF64: "truncf", OpRoundF64: "roundf",
 	OpSignF64: "signf", OpFroundF64: "froundf", OpMathCall: "mathcall", OpRandomF64: "randomf", OpAccessorIs: "accessoris",
+	OpCellNone: "cellnone",
 }
 
 func (o Op) String() string {
@@ -473,9 +477,16 @@ type InlineCache struct {
 	// Calls, for a call, are the functions it may call natively (OpCall).
 	Calls []*CallSite
 	// Mega, for a read, is its site's Megamorphic (PropertySite); Scan its
-	// Scan.
-	Mega, Scan bool
+	// Scan. Try, for a megamorphic read's cell (OpPropCell), makes it none
+	// where it finds no property -- the receiver's own table and the
+	// megamorphic cache have none -- for a call of Go on a branch of its
+	// own to read (OpCellNone), where that had left native code.
+	Mega, Scan, Try bool
 }
+
+// Tries reports whether v, a property's cell, is none where it finds no
+// property, rather than exiting (InlineCache's Try).
+func (v *Value) Tries() bool { return v.IC != nil && v.IC.Try }
 
 // Megamorphic reports whether v, a read, looks in the megamorphic cache
 // for a property a receiver's own table does not have (InlineCache).
