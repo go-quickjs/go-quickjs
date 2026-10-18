@@ -128,9 +128,8 @@ func TestEntriesLoadLiveLocals(t *testing.T) {
 	}
 }
 
-// sitesFeedback knows every property site, by key alone, and asks for an
-// entry after every exit Go resumes after if all is set (EntryFeedback).
-type sitesFeedback struct{ all bool }
+// sitesFeedback knows every property site, by key alone.
+type sitesFeedback struct{}
 
 func (sitesFeedback) Property(int) (PropertySite, bool) { return PropertySite{Key: 1}, true }
 func (sitesFeedback) Global(int) (GlobalSite, bool)     { return GlobalSite{}, false }
@@ -138,14 +137,12 @@ func (sitesFeedback) Generic(int) bool                  { return false }
 func (sitesFeedback) EntryGeneric(int) bool             { return false }
 func (sitesFeedback) Inline(int) (InlineSite, bool)     { return InlineSite{}, false }
 func (sitesFeedback) NativeCalls(int) []CallSite        { return nil }
-func (s sitesFeedback) WantsEntry(int) bool             { return s.all }
 
 // Code has an entry at its start, at each loop's header and after what
 // Go is sure to run -- a call, an instruction left to it whole -- but not
 // after a property read it makes natively, whose guard's exit the
-// interpreter goes on from, unless the VM asks for an entry after every
-// exit (EntryFeedback): then after the reads too. A read left to Go whole
-// has one either way.
+// interpreter goes on from to the loop's header, as from V8's
+// deoptimizations. A read left to Go whole has one.
 func TestEntriesAfterGuards(t *testing.T) {
 	fn := compiledFunctionForTest(t, `function f(o,n){let s=0;for(let i=0;i<n;i++){s=(s+o.x)|0;g()}return s}`)
 	p, err := jitcompile.LowerSSA(fn)
@@ -183,7 +180,7 @@ func TestEntriesAfterGuards(t *testing.T) {
 	for _, c := range []struct {
 		fb   Feedback
 		read bool
-	}{{sitesFeedback{}, false}, {sitesFeedback{all: true}, true}, {nil, true}} {
+	}{{sitesFeedback{}, false}, {nil, true}} {
 		at := entries(c.fb)
 		if !at[0] || !at[header] || !at[call+1] || at[read+1] != c.read {
 			t.Errorf("feedback %#v: entries %v; want 0, %d, %d and, %v, %d", c.fb, at, header, call+1, c.read, read+1)
@@ -257,13 +254,6 @@ func (goCallsFeedback) NativeCalls(int) []CallSite {
 }
 func (goCallsFeedback) GoCalls() bool { return true }
 
-// entriesFeedback is goCallsFeedback that asks for an entry everywhere
-// (EntryFeedback), as code Go has had to go on without one is compiled:
-// an entry after each call of Go too.
-type entriesFeedback struct{ goCallsFeedback }
-
-func (entriesFeedback) WantsEntry(int) bool { return true }
-
 // A captured binding is loaded from its cell where it is read, not after
 // every call that may have assigned it: a function reading each of a
 // hundred bindings between a hundred calls loads each once, where loading
@@ -326,7 +316,7 @@ func TestBuildLoadsCapturedBindingsWhereRead(t *testing.T) {
 	}
 }
 
-// An entry -- one after each call of Go here -- loads the frame's live
+// An entry -- one after each call left to Go whole here -- loads the frame's live
 // slots, not the captured bindings' slots: a binding is in its cell, read
 // there where it is read (stale at the entry), and the VM's frame has no
 // slot for it. Loaded at every entry, each binding's slot made a value no
@@ -358,7 +348,7 @@ func TestBuildEntriesLeaveCapturedBindingsInCells(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f, err := BuildWith(p, entriesFeedback{})
+	f, err := BuildWith(p, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -388,7 +378,8 @@ func TestBuildEntriesLeaveCapturedBindingsInCells(t *testing.T) {
 }
 
 // A chain of phis that only merge -- a loop's numbers at the entry after
-// each of hundreds of calls of Go -- is unboxed when the last of them has
+// each of hundreds of element writes, which native code goes on past and
+// Go after -- is unboxed when the last of them has
 // an unboxed use: the evidence flows back through every one (unboxPhis's
 // worklist), where a pass over the phis until none grew took a pass a
 // phi.
@@ -396,14 +387,14 @@ func TestOptimizeUnboxesLongPhiChains(t *testing.T) {
 	var src strings.Builder
 	src.WriteString("function f(g,n){let s=0;for(let i=0;i<n;i++){")
 	for range 300 {
-		src.WriteString("g();")
+		src.WriteString("g[0]=0;")
 	}
 	src.WriteString("s=s+i}return s}")
 	p, err := jitcompile.LowerSSA(compiledFunctionForTest(t, src.String()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	f, err := BuildWith(p, entriesFeedback{})
+	f, err := BuildWith(p, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -422,7 +413,7 @@ func TestOptimizeUnboxesLongPhiChains(t *testing.T) {
 			}
 		}
 	}
-	// n's, s's and i's at each of the 301 joins unboxed; g's, a function,
+	// n's, s's and i's at each of the 301 joins unboxed; g's, an array,
 	// tagged.
 	if tagged > 301 || float < 900 {
 		t.Fatalf("%d tagged and %d float phis, want g's 301 tagged and the numbers' 900 or more float", tagged, float)
@@ -436,8 +427,7 @@ func TestOptimizeUnboxesLongPhiChains(t *testing.T) {
 // An entry after each had been a join of every live value, a block, and a
 // header's loads: a third of the compile of RegExp's run blocks, which
 // call built-ins and little else. Nor does it end its block: it is a value
-// as any other is. Code that asks for entries everywhere (EntryFeedback)
-// still has one after each.
+// as any other is.
 func TestBuildNoEntriesAfterCallsOfGo(t *testing.T) {
 	src := "function f(g,n){let s=0;for(let i=0;i<n;i++){g();g();g();g();s=s+i}return s}"
 	p, err := jitcompile.LowerSSA(compiledFunctionForTest(t, src))
@@ -469,12 +459,5 @@ func TestBuildNoEntriesAfterCallsOfGo(t *testing.T) {
 	Optimize(f)
 	if err := Check(f); err != nil {
 		t.Fatal(err)
-	}
-	all, err := BuildWith(p, entriesFeedback{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(all.Entries) < 6 {
-		t.Fatalf("asked for entries everywhere, %d entries", len(all.Entries))
 	}
 }

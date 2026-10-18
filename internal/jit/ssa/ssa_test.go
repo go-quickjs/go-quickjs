@@ -179,24 +179,22 @@ func compare(t *testing.T, p *ir.Program, f *Func, pc int, slots []ir.Value, pol
 // optimizeAll makes checkProgram run every function through Optimize.
 var optimizeAll bool
 
-// allEntries is Feedback that knows nothing, as none does, but has every
-// exit Go resumes after come back at an entry (EntryFeedback): half the
-// programs are built so.
-type allEntries struct{}
+// knowsNothing is Feedback that knows nothing, as none does, but is
+// Feedback all the same: half the programs are built so.
+type knowsNothing struct{}
 
-func (allEntries) Property(int) (PropertySite, bool) { return PropertySite{}, false }
-func (allEntries) Global(int) (GlobalSite, bool)     { return GlobalSite{}, false }
-func (allEntries) Generic(int) bool                  { return false }
-func (allEntries) EntryGeneric(int) bool             { return false }
-func (allEntries) Inline(int) (InlineSite, bool)     { return InlineSite{}, false }
-func (allEntries) NativeCalls(int) []CallSite        { return nil }
-func (allEntries) WantsEntry(int) bool               { return true }
+func (knowsNothing) Property(int) (PropertySite, bool) { return PropertySite{}, false }
+func (knowsNothing) Global(int) (GlobalSite, bool)     { return GlobalSite{}, false }
+func (knowsNothing) Generic(int) bool                  { return false }
+func (knowsNothing) EntryGeneric(int) bool             { return false }
+func (knowsNothing) Inline(int) (InlineSite, bool)     { return InlineSite{}, false }
+func (knowsNothing) NativeCalls(int) []CallSite        { return nil }
 
 func checkProgram(t *testing.T, r *rand.Rand, p *ir.Program) (*Func, int) {
 	t.Helper()
 	f, err := Build(p)
 	if len(p.Code)%2 == 0 {
-		f, err = BuildWith(p, allEntries{})
+		f, err = BuildWith(p, knowsNothing{})
 	}
 	if errors.Is(err, ErrUnsupported) {
 		return nil, 0

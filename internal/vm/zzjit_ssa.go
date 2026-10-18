@@ -1320,11 +1320,6 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 		e.polyReopts++
 	}
 	e.reopt, e.inlineReopt, e.polyReopt, e.upgradeReopt, e.unwindReopt, e.feedReopt = false, false, false, false, false, false
-	// The misses that count toward every entry are the new code's, and it
-	// is compiled with an entry at each PC Go went on at so far
-	// (WantsEntry): one where none can be made does not have it compiled
-	// again at every miss.
-	e.entryMisses, e.entriesAsked = 0, len(e.missedEntries)
 	// What it compiles for, the reads' shapes met since included.
 	e.polyPending, e.polySettled = false, 0
 	if e.reoptRoom > 0 && !r.jit.roomFor(e, nil, e.bytes+e.reoptRoom) {
@@ -5325,12 +5320,6 @@ func (fb *jitFeedback) Generic(pc int) bool {
 	return fb.e != nil && slices.Contains(fb.e.failed, int32(pc))
 }
 
-// WantsEntry is ssa.EntryFeedback's: Go has gone on in the interpreter at
-// pc, having found no entry, in the function's own code (jitGoOn).
-func (fb *jitFeedback) WantsEntry(pc int) bool {
-	return fb.e != nil && fb.root == nil && fb.fwd == nil && slices.Contains(fb.e.missedEntries, uint32(pc))
-}
-
 func (fb *jitFeedback) EntryGeneric(pc int) bool {
 	return fb.e != nil && slices.Contains(fb.e.failedEntries, uint32(pc))
 }
@@ -6256,55 +6245,48 @@ func jitLoopLength(fn *bytecode.Function) uint32 {
 	return uint32(total / loops)
 }
 
-// jitGoOn has the interpreter run the rest of an invocation whose native
-// code Go goes on in at pc no more: code that does not pay (entrySlow),
-// as a deoptimized invocation is run; or code with no entry at pc, which
-// is compiled for none after a guard, which seldom fails (ssa's
-// EntryFeedback). The interpreter then runs only to the next backward
-// jump of the frame's own, the interpreter's check made due there, where
-// Go goes on natively, at the loop's header, in this run (again, at
-// goOnPC with goOnDepth operands; tryJITLoop): an iteration that left as
-// V8's code deoptimizes leaves the rest of that iteration to the
-// interpreter, not the rest of the loop. Code Go has gone on without an
-// entry in at one PC jitEntryMisses times is compiled again at once with an
-// entry at each such PC (missedEntries), and Go goes on in it at pc --
-// again only for a PC it had not been compiled for: an entry where Go does
-// not go on is no use. It had been compiled with an entry after every
-// guard that may leave for Go: Typescript's 3,148-instruction function had
-// 1,666 entries, each loading its live slots and merging with phis, two
-// thirds of its 145,000 values, and its compile 200 ms, for the few places
-// Go went on at.
-func (r *Runtime) jitGoOn(f *frame, e *jitEntry, pc, sp int) (v Value, err error, done, again bool) {
+// jitGoOn has the interpreter run f from pc, sp operands high, where e's
+// native code has no entry: after an exit that Go ran the instruction at,
+// or after a native call Go finished, as V8's code is entered only at a
+// function's start and by on-stack replacement at a loop. The interpreter
+// runs only to the next backward jump of the frame's own, the
+// interpreter's check made due there, where Go goes on natively, at the
+// loop's header, in this run (again, at goOnPC with goOnDepth operands;
+// tryJITLoop): an iteration that left as V8's code deoptimizes leaves the
+// rest of that iteration to the interpreter, not the rest of the loop.
+// Code that does not pay (entrySlow) leaves the interpreter the rest of the
+// invocation, as a deoptimized invocation is run. run says whether f is
+// the frame of the innermost run of e's code Go is inside, which is taken
+// out of its runs meanwhile (jitLeaveCode); a frame native code called
+// natively, which Go finishes (jitFinishExit), is in none -- the caller's
+// run, which may be e's own, goes on in its code after the call.
+//
+// Code was compiled with entries in the middle of loops' bodies: after
+// every guard that may leave for Go -- Typescript's 3,148-instruction
+// function had 1,666, each loading its live slots and merging with phis,
+// two thirds of its 145,000 values, its compile 200 ms -- and then where
+// Go had gone on: Gameboy's instruction dispatch, with 46, ran natively
+// 40% longer, each a join where what the loop had proved held no longer.
+func (r *Runtime) jitGoOn(f *frame, e *jitEntry, pc, sp int, run bool) (v Value, err error, done, again bool) {
+	f.pc = uint32(pc)
+	n := -1
+	if run {
+		// Out of its code, the run goes on natively at an entry of the
+		// code as it is when the interpreter offers one: a run of it that a
+		// back edge with no entry in this one began meanwhile, which
+		// deoptimized, is compiled again for it.
+		n = r.jitLeaveCode(e)
+	}
+	defer r.jitBackInCode(e, n)
 	if e.entrySlow {
-		defer r.jitBackInCode(e, r.jitLeaveCode(e))
 		v, err, done = r.jitInterpret(f, sp, nil)
 		return v, err, done, false
 	}
 	s := r.jit
-	// A miss that taught the code what it is to be compiled again for --
-	// a shape, a call's target -- says little of the misses to come: the
-	// guard it left at may never fail again.
-	if e.entriesDue(pc) {
-		stats := e.ssaStats
-		r.jitReoptimize(f.cl, e)
-		e.ssaStats = stats
-		// Calls in are counted afresh (jitLink's in), and the calls of Go
-		// they are weighed against with them (jitCalleeProfit).
-		e.ssaStats.calleeGoCalls, e.ssaStats.calleeWork = 0, 0
-		if e.ssa.HasEntry(pc) && !e.entrySlow {
-			s.goOnPC, s.goOnDepth = pc, sp-f.base
-			return Undefined, nil, false, true
-		}
-	}
 	s.interpreted++
 	defer func(f *frame) { s.goOn = f }(s.goOn)
 	s.goOn = f
 	r.backEdges = 1
-	// Out of its code, the run goes on natively at an entry of the code as
-	// it is when the interpreter offers one (jitLeaveCode): a run of it
-	// that a back edge with no entry in this one began meanwhile, which
-	// deoptimized, is compiled again for it.
-	defer r.jitBackInCode(e, r.jitLeaveCode(e))
 	v, err = r.executeAt(f, sp, nil)
 	if err == errGoOnNatively {
 		s.wentOn++
@@ -6312,80 +6294,6 @@ func (r *Runtime) jitGoOn(f *frame, e *jitEntry, pc, sp int) (v Value, err error
 	}
 	return v, err, true, false
 }
-
-// entriesDue notes that Go went on in the interpreter at pc, having found
-// no entry, and reports whether the code is to be compiled again for its
-// entries now: once it has missed jitEntryMisses times since it was last
-// compiled, at a PC it was not compiled for -- an entry where none can be
-// made does not have it compiled again at every miss -- and nothing else
-// it learned is pending, which a compile for it takes the PCs with.
-// Compiled again for its entries alone, the code does what it did: its
-// stretches end where they did, and it is judged by them as by those to
-// come (jitSSAProfit). Twice as many misses each time: a function that
-// misses at many PCs, as Gameboy's instruction dispatch does, is compiled
-// again a few times for all of them, not at every two -- each compile with
-// every PC so far.
-func (e *jitEntry) entriesDue(pc int) bool {
-	if !slices.Contains(e.missedEntries, uint32(pc)) && len(e.missedEntries) < jitMissedEntries {
-		e.wentOn(uint32(pc))
-	}
-	if len(e.missedEntries) <= e.entriesAsked || e.reoptPending() || e.feedReopt || e.polyPending || e.inlinePending {
-		return false
-	}
-	if e.entryMisses++; e.entryMisses < jitEntryMisses<<min(e.entryReopts, jitEntryBackoffs) {
-		return false
-	}
-	e.entriesAsked = len(e.missedEntries)
-	e.entryMisses = 0
-	e.entryReopts++
-	return true
-}
-
-// jitGoneOn is a PC Go went on in the interpreter at, having found no
-// entry, and how many times (jitEntry's goneOn).
-type jitGoneOn struct {
-	pc uint32
-	n  uint8
-}
-
-// wentOn counts a time Go went on at pc, which the code is to be compiled
-// with an entry at once it has gone on there jitEntryMisses times
-// (missedEntries): a PC Go goes on at again is a path the code takes,
-// which an entry has it take natively; one it went on at once is a
-// speculation that failed once, which V8's code too leaves to the
-// interpreter until the loop's next iteration. An entry is not free: its
-// live slots are loaded and merged with phis at its PC, where what the
-// code had proved before -- a read hoisted, a shape checked, a callee's
-// target -- holds no longer, on every iteration after. Given an entry at
-// each PC Go went on at once, Gameboy's instruction dispatch had 46,
-// some 30 of them for one miss each, and ran natively 40% longer.
-func (e *jitEntry) wentOn(pc uint32) {
-	i := slices.IndexFunc(e.goneOn, func(g jitGoneOn) bool { return g.pc == pc })
-	if i < 0 {
-		if len(e.goneOn) >= jitMissedEntries {
-			return
-		}
-		e.goneOn = append(e.goneOn, jitGoneOn{pc: pc})
-		i = len(e.goneOn) - 1
-	}
-	if e.goneOn[i].n++; e.goneOn[i].n < jitEntryMisses {
-		return
-	}
-	e.goneOn = slices.Delete(e.goneOn, i, i+1)
-	e.missedEntries = append(e.missedEntries, pc)
-}
-
-// jitEntryMisses is how often Go goes on in the interpreter at a PC,
-// having found no entry, before the code is to have an entry there, and
-// how often anywhere before a function's code is compiled with entries
-// where it did (jitGoOn), doubled at each such compile; jitMissedEntries
-// is the most PCs a function remembers of each.
-const (
-	jitEntryMisses   = 2
-	jitMissedEntries = 256
-	// jitEntryBackoffs bounds how many times the misses wanted double.
-	jitEntryBackoffs = 6
-)
 
 // errGoOnNatively ends the interpreter's run of a frame Go goes on in
 // natively, at a loop's header (jitGoOn).
@@ -6601,7 +6509,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 				r.jitReoptimize(f.cl, e)
 			}
 			if !e.ssa.HasEntry(pc) || e.entrySlow {
-				v, err, done, again := r.jitGoOn(f, e, pc, sp)
+				v, err, done, again := r.jitGoOn(f, e, pc, sp, true)
 				if !again {
 					return v, err, done
 				}
@@ -6638,7 +6546,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 				r.jitReoptimize(f.cl, e)
 			}
 			if !e.ssa.HasEntry(pc) || e.entrySlow {
-				v, err, done, again := r.jitGoOn(f, e, pc, sp)
+				v, err, done, again := r.jitGoOn(f, e, pc, sp, true)
 				if !again {
 					return v, err, done
 				}
@@ -6719,7 +6627,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 						r.jitReoptimize(f.cl, e)
 					}
 					if !e.ssa.HasEntry(pc) || e.entrySlow {
-						v, err, done, again := r.jitGoOn(f, e, pc, sp)
+						v, err, done, again := r.jitGoOn(f, e, pc, sp, true)
 						if !again {
 							return v, err, done
 						}
@@ -6789,7 +6697,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			if !e.ssa.HasEntry(pc) || e.entrySlow {
 				// No entry here; or native code does not pay (jitSSAProfit),
 				// and the interpreter runs the rest of this invocation.
-				v, err, done, again := r.jitGoOn(f, e, pc, sp)
+				v, err, done, again := r.jitGoOn(f, e, pc, sp, true)
 				if !again {
 					return v, err, done
 				}
@@ -7245,12 +7153,23 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, code *bytecode.Function)
 			// whatever Go's entries to it cost (entrySlow).
 			sp, ok := r.jitCallResult(f, int(l.pc), int(l.depth), v, err)
 			switch {
-			case !ok || r.stopped != nil || e == nil || e.ssa == nil || !e.ssa.HasEntry(int(f.pc)):
+			case !ok || r.stopped != nil || e == nil || e.ssa == nil:
 				v, err, _ = r.jitInterpret(f, sp, err)
 			default:
-				var native bool
-				if v, err, native = r.runSSA(f, e, int(f.pc), sp-f.base); !native {
-					v, err, _ = r.jitInterpret(f, sp, nil)
+				pc, depth, native := int(f.pc), sp-f.base, true
+				if !e.ssa.HasEntry(pc) {
+					// No entry after the call: the interpreter goes on to
+					// the next loop header, native code from there
+					// (jitGoOn), not for the rest of the invocation.
+					var again bool
+					if v, err, _, again = r.jitGoOn(f, e, pc, sp, false); !again {
+						break
+					}
+					pc, depth = r.jit.goOnPC, r.jit.goOnDepth
+					f.pc = uint32(pc)
+				}
+				if v, err, native = r.runSSA(f, e, pc, depth); !native {
+					v, err, _ = r.jitInterpret(f, f.base+depth, nil)
 				}
 			}
 		}
@@ -7595,6 +7514,20 @@ func (r *Runtime) jitFinishExit(f *frame, e *jitEntry, l *jitNativeLevel) (Value
 		}
 		v, err, _ := r.jitInterpret(f, f.base+depth, nil)
 		return v, err
+	}
+	f.pc = uint32(pc)
+	if e != nil && e.ssa != nil && !e.ssa.HasEntry(pc) {
+		// No entry here, as after a guard's exit: the interpreter goes on
+		// to the next loop header, and native code from there, as runSSA
+		// has it go on (jitGoOn), not for the rest of the invocation. The
+		// frame is no run's of e's code: its caller's run, which may be,
+		// goes on after the call.
+		v, err, _, again := r.jitGoOn(f, e, pc, f.base+depth, false)
+		if !again {
+			return v, err
+		}
+		pc, depth = r.jit.goOnPC, r.jit.goOnDepth
+		f.pc = uint32(pc)
 	}
 	if e != nil && e.ssa != nil && e.ssa.HasEntry(pc) {
 		if v, err, native := r.runSSA(f, e, pc, depth); native {

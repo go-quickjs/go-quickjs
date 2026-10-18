@@ -325,6 +325,13 @@ into the frame.
   generic, at most four times (`jitReoptimizations`).
 - A host exit (`ExitHost`) leaves one instruction to Go, which runs it, and
   the code goes on at the next entry.
+- Code is entered only at a function's start, at its loops' headers, and
+  after what Go is sure to run (an instruction left to it whole, a call),
+  as V8's code is entered only at a function's start and by on-stack
+  replacement at a loop. Where Go goes on at a PC with no entry -- after a
+  guard's exit, or a frame native code called natively that Go finishes --
+  the interpreter runs only to the next loop header, and native code from
+  there (`jitGoOn`).
 - A native callee that cannot go on leaves its frame to Go (`ExitTable`),
   which finishes the call in the interpreter, and its caller's code goes on
   after the call.

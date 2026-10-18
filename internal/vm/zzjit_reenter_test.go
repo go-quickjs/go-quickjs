@@ -3,6 +3,8 @@
 package vm
 
 import (
+	"runtime"
+	"runtime/debug"
 	"sync"
 	"testing"
 )
@@ -346,4 +348,64 @@ func TestJITTreeSeenSharedAcrossRuntimes(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// A frame native code made -- a native call's callee -- whose code Go
+// finishes after it left at a PC with no entry (jitFinishExit) goes on in
+// the interpreter only to its loop's next header, and natively from there
+// (jitGoOn), as a frame Go entered the code with does: not in the
+// interpreter for the rest of its invocation, until the next back-edge
+// budget ran out. callee leaves at its one read of a primitive in one of
+// every five of caller's native calls of it -- leaving at more than one in
+// four, it would not be called natively (jitUnwound) -- and goes on
+// natively at its header each time. Each answer is the interpreter's.
+func TestJITNativeCalleeGoesOnAtLoops(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	// Native calls are Go's while the collector marks (mir's markingCall):
+	// it does not, so that what the test counts is the calls'. A
+	// collection during a round had made one of its calls Go's, and the
+	// round not counted -- three of four on a CI runner.
+	runtime.GC()
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	setup := `var obj={x:2};
+		function callee(n,k){let t=0;for(let i=0;i<n;i++){const o=i===k?1:obj;t=(t+(o.x|0))|0}return t}
+		function caller(m){let s=0;for(let j=0;j<m;j++){s=(s+callee(100,j%5===0?j:-1))|0}return s}`
+	want := New(Config{})
+	defer func() { want.Close(); want.ReleaseClosed() }()
+	r := jitRuntimeForTest(t, Config{JIT: true})
+	for _, rt := range []*Runtime{want, r} {
+		if _, err := rt.Run(compileForTest(t, setup)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cl := r.global.getOwn(r.atoms.intern("callee")).value().Object().fn().closure
+	checked := 0
+	for round := 0; round < 8; round++ {
+		wv, err := want.Run(compileForTest(t, `caller(50)`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var in uint64
+		if e := r.jit.entryFor(cl.fn); e != nil && e.link != nil {
+			in = e.link.in
+		}
+		wentOn, unwound, interpreted := r.jit.wentOn, r.jit.unwound, r.jit.interpreted
+		gv, err := r.Run(compileForTest(t, `caller(50)`))
+		if err != nil || gv.Number() != wv.Number() {
+			t.Fatalf("round %d: got %v, %v; interpreter %v", round, gv, err, wv)
+		}
+		if e := r.jit.entryFor(cl.fn); e == nil || e.link == nil || e.link.in-in != 50 || r.jit.unwound-unwound != 10 {
+			// Not yet called natively at each call, each leaving.
+			continue
+		}
+		checked++
+		if n, i := r.jit.wentOn-wentOn, r.jit.interpreted-interpreted; n != 10 || i != 10 {
+			t.Errorf("round %d: callee went on natively at its loop %d times in %d runs of the interpreter, want 10", round, n, i)
+		}
+	}
+	if checked < 4 {
+		t.Errorf("callee was called natively at each call, leaving, in %d rounds", checked)
+	}
 }

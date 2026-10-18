@@ -114,15 +114,18 @@ func TestJITFillDiscardsNothing(t *testing.T) {
 	}
 }
 
-// Code Go went on without an entry in is compiled again with an entry where
-// Go went on (jitEntry's missedEntries), not after every guard that may
-// leave for Go: a loop whose one read of a primitive leaves gets an entry
-// there, and none after its twelve other reads, which never leave. Every
-// entry loads its live slots and merges with phis; Typescript's
+// Code Go goes on in the interpreter in, after an exit with no entry to go
+// on natively at, is entered at its start and its loop's header alone, as
+// V8's code is -- never compiled with an entry where Go went on, nor after
+// every guard that may leave for Go: a loop whose one read of a primitive
+// leaves at every other iteration goes on natively at its header each
+// time, its twelve other reads, which never leave, compiled as they were.
+// Every entry loads its live slots and merges with phis; Typescript's
 // 3,148-instruction function, given one after every guard, had 1,666, two
-// thirds of its 145,000 values, its compile 200 ms. Each answer is the
-// interpreter's.
-func TestJITEntriesWhereGoWentOn(t *testing.T) {
+// thirds of its 145,000 values, its compile 200 ms, and Gameboy's
+// instruction dispatch, given one at each PC Go had gone on at, ran
+// natively 40% longer with 46. Each answer is the interpreter's.
+func TestJITEntriesAtStartAndLoopsOnly(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
 	}
@@ -137,66 +140,27 @@ func TestJITEntriesWhereGoWentOn(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	cl := r.global.getOwn(r.atoms.intern("many")).value().Object().fn().closure
 	for round := 0; round < 6; round++ {
 		wv, err := want.Run(compileForTest(t, `many(500)`))
 		if err != nil {
 			t.Fatal(err)
 		}
+		wentOn := r.jit.wentOn
 		gv, err := r.Run(compileForTest(t, `many(500)`))
 		if err != nil || gv.Number() != wv.Number() {
 			t.Fatalf("round %d: got %v, %v; interpreter %v", round, gv, err, wv)
 		}
-	}
-	cl := r.global.getOwn(r.atoms.intern("many")).value().Object().fn().closure
-	e := r.jit.hint(cl)
-	if e == nil || e.ssa == nil || len(e.missedEntries) == 0 || e.entriesAsked != len(e.missedEntries) {
-		t.Fatalf("many was not compiled again with the entries Go went on at: %+v", e)
-	}
-	var entries []int
-	for pc := range cl.fn.Code {
-		if e.ssa.HasEntry(pc) {
-			entries = append(entries, pc)
+		e := r.jit.hint(cl)
+		if e == nil || e.ssa == nil || e.entrySlow {
+			t.Fatalf("round %d: many is not native: %+v", round, e)
 		}
-	}
-	for _, pc := range e.missedEntries {
-		if !e.ssa.HasEntry(int(pc)) {
-			t.Fatalf("no entry at %d, where Go went on", pc)
+		if pcs, want := jitEntryPCs(e, cl.fn), jitLoopHeadersOf(cl.fn); !slices.Equal(pcs, want) {
+			t.Fatalf("round %d: entries at %v; want its start and loop header, %v", round, pcs, want)
 		}
-	}
-	// Its start, its loop's header, where Go goes on to, and the PCs it
-	// went on at.
-	if limit := 2 + len(e.missedEntries); len(entries) > limit {
-		t.Fatalf("entries at %v, where Go went on at %v", entries, e.missedEntries)
-	}
-}
-
-// A PC Go went on at once is no entry's (jitEntry's wentOn): Gameboy's
-// instruction dispatch, given one at each PC it had gone on at, most of
-// them once, had 46, and ran natively 40% longer. Misses at 33 PCs once
-// each ask for no compile and want no entry; a PC Go goes on at again is
-// wanted, and its next miss asks for the compile.
-func TestJITEntriesWhereGoGoesOnAgain(t *testing.T) {
-	e := &jitEntry{}
-	for k := 0; k < 33; k++ {
-		if e.entriesDue(100 + k) {
-			t.Fatalf("a compile asked for at the first miss at %d", 100+k)
+		if n := r.jit.wentOn - wentOn; round > 0 && n != 250 {
+			t.Fatalf("round %d: went on natively at the header %d times, want 250", round, n)
 		}
-	}
-	if len(e.missedEntries) != 0 || len(e.goneOn) != 33 {
-		t.Fatalf("entries wanted at %v after one miss each; %d PCs counted", e.missedEntries, len(e.goneOn))
-	}
-	misses := 0
-	for !e.entriesDue(105) {
-		if misses++; misses > jitEntryMisses {
-			t.Fatalf("no compile asked for after %d more misses at 105: %v", misses, e.missedEntries)
-		}
-	}
-	if !slices.Equal(e.missedEntries, []uint32{105}) || len(e.goneOn) != 32 || e.entriesAsked != 1 {
-		t.Fatalf("entries wanted at %v, %d PCs counted, %d asked", e.missedEntries, len(e.goneOn), e.entriesAsked)
-	}
-	fb := &jitFeedback{e: e}
-	if !fb.WantsEntry(105) || fb.WantsEntry(106) {
-		t.Fatal("WantsEntry does not follow the PCs Go went on at again")
 	}
 }
 
@@ -220,6 +184,7 @@ func TestJITOneMissNoEntry(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	wentOn := r.jit.wentOn
 	for round, src := range []string{`rare(500)`, `rare(500)`, `flip=250; rare(500)`, `flip=-1; rare(500)`, `rare(500)`} {
 		wv, err := want.Run(compileForTest(t, src))
 		if err != nil {
@@ -235,40 +200,11 @@ func TestJITOneMissNoEntry(t *testing.T) {
 	if e == nil || e.ssa == nil || e.entrySlow {
 		t.Fatalf("rare did not stay native: %+v", e)
 	}
-	if len(e.missedEntries) != 0 || len(e.goneOn) != 1 || e.goneOn[0].n != 1 {
-		t.Fatalf("Go went on at %v, entries wanted at %v", e.goneOn, e.missedEntries)
+	if n := r.jit.wentOn - wentOn; n != 1 {
+		t.Fatalf("went on natively at the header %d times, want once", n)
 	}
-	if pc := int(e.goneOn[0].pc); e.ssa.HasEntry(pc) {
-		t.Fatalf("an entry at %d, where Go went on once", pc)
-	}
-}
-
-// Code that Go goes on without an entry in at many PCs -- as Gameboy's
-// instruction dispatch does -- is compiled again for its entries a few
-// times, each with every PC so far, twice as many misses apart each time
-// (jitEntryBackoffs), rather than at every two misses (entriesDue): misses
-// at sixteen PCs in turn, two hundred of them, make no more than six such
-// compiles, where one every two misses at a new PC makes eight, and
-// Gameboy's churn of compiles had cost it 8.7% over eight placements. A
-// miss at a PC the code was already compiled for asks for none.
-func TestJITEntriesBackOff(t *testing.T) {
-	e := &jitEntry{}
-	compiles := 0
-	for k := 0; k < 200; k++ {
-		if e.entriesDue(100 + k%16) {
-			compiles++
-			// A compile takes every PC so far, as jitReoptimize's does.
-			e.entryMisses, e.entriesAsked = 0, len(e.missedEntries)
-		}
-	}
-	if len(e.missedEntries) != 16 || compiles == 0 || compiles > 6 {
-		t.Fatalf("%d compiles for %d PCs", compiles, len(e.missedEntries))
-	}
-	// Every PC compiled for: misses at them ask for none.
-	for k := 0; k < 1000; k++ {
-		if e.entriesDue(100 + k%16) {
-			t.Fatalf("a compile asked for at a PC compiled for, miss %d", k)
-		}
+	if pcs, want := jitEntryPCs(e, cl.fn), jitLoopHeadersOf(cl.fn); !slices.Equal(pcs, want) {
+		t.Fatalf("entries at %v; want its start and loop header, %v", pcs, want)
 	}
 }
 

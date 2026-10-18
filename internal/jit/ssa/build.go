@@ -1132,20 +1132,6 @@ type KeepFeedback interface {
 	KeepLimit() int
 }
 
-// EntryFeedback is Feedback that may ask for an entry at a PC after an
-// exit Go resumes after -- a guard's, which code is otherwise compiled
-// with no entry after (plan): the VM asks once Go has had to go on in the
-// interpreter too often, having found none.
-type EntryFeedback interface {
-	WantsEntry(pc int) bool
-}
-
-// wantsEntry reports whether the VM asks for an entry at pc (EntryFeedback).
-func (b *builder) wantsEntry(pc int) bool {
-	f, ok := b.fb.(EntryFeedback)
-	return ok && pc < len(b.p.Code) && f.WantsEntry(pc)
-}
-
 // generic reports an arithmetic operation or a comparison at pc whose
 // speculation failed (Feedback's Generic): what are not numbers go to Go,
 // which resumes after it, as they do for == and %.
@@ -1950,8 +1936,13 @@ func (b *builder) plan() error {
 	// there, as from V8's deoptimizations: an entry is a block whose loads
 	// merge with what native code computed, in phis, and in shadows, at
 	// every merge after it, and entries had been most of what a compile
-	// made -- a guard's after nearly every instruction. Code Go has had to
-	// go on without one too often is compiled with them (EntryFeedback).
+	// made -- a guard's after nearly every instruction. Nor is code
+	// compiled with an entry where Go went on in the interpreter after a
+	// guard's exit: as V8's code is entered only at a function's start and
+	// by on-stack replacement at a loop, the interpreter goes on to the
+	// next loop header, and native code from there. Entries Go had asked
+	// for so, each a join where what the loop had proved held no longer,
+	// had Gameboy's instruction dispatch run natively 40% longer with 46.
 	resumes := func(pc int) bool {
 		switch op := p.Code[pc].Op; {
 		case b.host(pc), b.keyedRead(pc), op == ir.ObjectLiteral, op == ir.ArrayLiteral, op == ir.StringAdd, op == ir.StringConcat, op == ir.ArrayWrite, op == ir.IterStep,
@@ -1959,7 +1950,7 @@ func (b *builder) plan() error {
 			op == ir.Closure, op == ir.CloseUpvalues:
 			return true
 		}
-		return b.wantsEntry(pc + 1)
+		return false
 	}
 	for pc, in := range p.Code {
 		if !reachable(p, pc) {
@@ -2051,17 +2042,12 @@ func (b *builder) plan() error {
 			if in.Target <= pc {
 				entries[in.Target] = true
 			}
-			if in.Operator == ir.Eq || in.Operator == ir.Ne || b.generic(pc) {
-				entries[pc+1] = entries[pc+1] || b.wantsEntry(pc+1)
-				entries[in.Target] = entries[in.Target] || b.wantsEntry(in.Target)
-			}
 		case ir.Host, ir.Call:
 			if b.goesOn(pc) {
 				// A call Go makes goes on natively: Go leaves it only for
 				// a throw, the runtime stopping, or the code to be compiled
 				// again -- then the interpreter runs on to the next loop
 				// header, as from V8's deoptimizations.
-				entries[pc+1] = entries[pc+1] || b.wantsEntry(pc+1)
 			} else if resumes(pc) {
 				entries[pc+1] = true
 			}

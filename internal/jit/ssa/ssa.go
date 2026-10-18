@@ -6,8 +6,9 @@
 // (where a poll returns and on-stack replacement enters), and the instruction
 // after each instruction left to Go whole and each call (where Go resumes it
 // after running that instruction). After a guard's exit to Go the
-// interpreter goes on, unless the VM asks for an entry after every one
-// (EntryFeedback). Every exit names the exact interpreter state to resume,
+// interpreter goes on to the next loop header, as after V8's
+// deoptimizations: nothing enters the code in a loop's body but where Go
+// ran an instruction. Every exit names the exact interpreter state to resume,
 // so deoptimization stays exact by construction, as it is in the slot IR.
 //
 // Values are typed. A slot holds a Tagged value -- an ir.Value, a kind and

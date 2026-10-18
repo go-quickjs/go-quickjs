@@ -11469,8 +11469,10 @@ func TestJITSSATypeOf(t *testing.T) {
 // of its loop's iteration to the interpreter, which goes on natively at the
 // header, in the same run (jitGoOn): one read of a primitive in a
 // thousand iterations leaves once, and the loop's stretches go on. Code
-// that leaves so too often is compiled with an entry where Go went on
-// (missedEntries), and Go goes on natively after each such exit then.
+// that leaves so at every other iteration does the same each time, and is
+// never compiled with an entry where Go went on: as V8's code, it is
+// entered at its start and its loop's header alone. Each answer is the
+// interpreter's.
 func TestJITSSAGoesOnNatively(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -11486,9 +11488,8 @@ func TestJITSSAGoesOnNatively(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	entry := func(name string) *jitEntry {
-		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
-		return r.jit.hint(cl)
+	closure := func(name string) *closure {
+		return r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
 	}
 	checked := 0
 	for i := 0; i < 4; i++ {
@@ -11497,8 +11498,9 @@ func TestJITSSAGoesOnNatively(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			cl := closure(src[:len(src)-6])
 			var before jitSSAStats
-			if e := entry("once"); e != nil {
+			if e := r.jit.hint(cl); e != nil {
 				before = e.ssaStats
 			}
 			interpreted, wentOn := r.jit.interpreted, r.jit.wentOn
@@ -11509,39 +11511,62 @@ func TestJITSSAGoesOnNatively(t *testing.T) {
 			if got, want := gv.Number(), wv.Number(); got != want {
 				t.Fatalf("round %d, %s: got %v, interpreter %v", i, src, got, want)
 			}
-			e := entry("once")
-			if src != `once(1000)` || e == nil || e.ssa == nil || e.entriesAsked != 0 {
+			e := r.jit.hint(cl)
+			if e == nil || e.ssa == nil || before.entries == 0 {
 				continue
 			}
 			checked++
-			// The read of 1 left once, the iteration went on in the
-			// interpreter, and the loop natively: a stretch of its own.
-			if n := e.ssaStats.hosts - before.hosts; n != 1 {
-				t.Errorf("round %d: once left native code %d times", i, n)
+			if pcs, want := jitEntryPCs(e, cl.fn), jitLoopHeadersOf(cl.fn); !slices.Equal(pcs, want) {
+				t.Fatalf("round %d: %s entered at %v; want its start and loop header, %v", i, src, pcs, want)
 			}
-			if n := e.ssaStats.entries - before.entries; n < 2 {
-				t.Errorf("round %d: once ran %d stretches; the loop did not go on natively", i, n)
+			// The read of 1 left once (or at every other iteration), the
+			// iteration went on in the interpreter, and the loop natively:
+			// a stretch of its own each time.
+			leaves := uint64(1)
+			if src == `every(1000)` {
+				leaves = 500
 			}
-			if n, on := r.jit.interpreted-interpreted, r.jit.wentOn-wentOn; n != 1 || on != 1 {
-				t.Errorf("round %d: %d runs of the interpreter, %d gone on from natively in the same run", i, n, on)
+			if n := e.ssaStats.hosts - before.hosts; n != leaves {
+				t.Errorf("round %d: %s left native code %d times, want %d", i, src, n, leaves)
+			}
+			if n := e.ssaStats.entries - before.entries; n < leaves+1 {
+				t.Errorf("round %d: %s ran %d stretches; the loop did not go on natively", i, src, n)
+			}
+			if n, on := r.jit.interpreted-interpreted, r.jit.wentOn-wentOn; n != leaves || on != leaves {
+				t.Errorf("round %d: %s: %d runs of the interpreter, %d gone on from natively in the same run, want %d", i, src, n, on, leaves)
 			}
 		}
 	}
-	if checked == 0 {
-		t.Fatal("once was never compiled without every entry")
+	if checked < 4 {
+		t.Fatalf("checked %d runs of compiled code", checked)
 	}
-	e := entry("every")
-	if e == nil || e.ssa == nil || e.entriesAsked == 0 || e.entrySlow {
-		t.Fatalf("every is not compiled with the entries Go went on at: %+v", e)
-	}
-	for _, pc := range e.missedEntries {
-		if !e.ssa.HasEntry(int(pc)) {
-			t.Fatalf("every has no entry at %d, where Go went on", pc)
+}
+
+// jitEntryPCs is where e's code may be entered, by fn's PCs.
+func jitEntryPCs(e *jitEntry, fn *bytecode.Function) []int {
+	var pcs []int
+	for pc := range fn.Code {
+		if e.ssa.HasEntry(pc) {
+			pcs = append(pcs, pc)
 		}
 	}
-	if e := entry("once"); e == nil || e.ssa == nil || e.entrySlow {
-		t.Fatalf("once did not stay native: %+v", e)
+	return pcs
+}
+
+// jitLoopHeadersOf is fn's start and its loops' headers, the targets of its
+// backward jumps, in order.
+func jitLoopHeadersOf(fn *bytecode.Function) []int {
+	pcs := []int{0}
+	for pc, in := range fn.Code {
+		switch in.Op {
+		case bytecode.OpJump, bytecode.OpJumpIfFalse, bytecode.OpJumpIfTrue, bytecode.OpJumpIfCmpFalse:
+			if int(in.A) <= pc && !slices.Contains(pcs, int(in.A)) {
+				pcs = append(pcs, int(in.A))
+			}
+		}
 	}
+	slices.Sort(pcs)
+	return pcs
 }
 
 // concat (a string chain's, or a template's) is made by Go, called from
