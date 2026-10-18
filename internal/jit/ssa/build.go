@@ -486,6 +486,14 @@ type GoOp uint8
 // symbol, a BigInt, which leaves for Go to make the operation after an
 // exit.
 //
+// GoEqual is == or ===, strictly if the operation's index is 1, of the
+// first and second operands where native code does not compare them
+// (OpEqTagged): strings it does not compare inline, a number and a string,
+// a BigInt and a string -- what equality converts runs nothing -- as V8's
+// code calls its Equal builtin. Go writes 1 or 0 to the first operand's
+// number word, and refuses an object compared loosely with a primitive
+// that is not null or undefined, whose conversion may run code.
+//
 // GoClosure makes the function of constant Argc on the code's own frame
 // (ir.Closure), capturing its locals there, and GoClose closes what
 // closures captured of locals Argc on (ir.CloseUpvalues): both Go's, on
@@ -516,6 +524,7 @@ const (
 	GoCompare
 	GoRandom
 	GoNumber
+	GoEqual
 )
 
 // RefillsPools reports whether a call takes an object from a pool, which

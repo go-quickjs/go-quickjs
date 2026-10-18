@@ -2805,6 +2805,28 @@ func jitHostCall(ctx *abi.Context) bool {
 		// Any value, by its words, which its source keeps alive.
 		o := *(**Object)(unsafe.Pointer(&ctx.GoArgs[0].Ref))
 		return o != nil && jitStoreElem(o, math.Float64frombits(ctx.GoArgs[1].Num), jitGoArg(ctx, 2))
+	case ssa.GoEqual:
+		// == or ===, what native code does not compare (OpEqTagged): no
+		// conversion equality makes runs code but an object's to a
+		// primitive, compared loosely with one not null or undefined.
+		a, b := jitGoArg(ctx, 0), jitGoArg(ctx, 1)
+		var eq bool
+		if ctx.GoOp>>abi.GoOpIndexShift&1 != 0 {
+			eq = a.StrictEquals(b)
+		} else {
+			if a.IsObject() != b.IsObject() && !a.IsNullish() && !b.IsNullish() {
+				return false
+			}
+			var err error
+			if eq, err = r.looseEquals(a, b); err != nil {
+				return false
+			}
+		}
+		ctx.GoArgs[0].Num = 0
+		if eq {
+			ctx.GoArgs[0].Num = 1
+		}
+		return true
 	case ssa.GoNumber:
 		// An arithmetic operand's number (OpOddballF64): a primitive's,
 		// whose conversion runs nothing and does not throw -- a string's,

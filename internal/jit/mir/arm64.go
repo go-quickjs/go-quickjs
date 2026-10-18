@@ -1048,6 +1048,22 @@ func (c *a64Compiler) eqTagged(v *ssa.Value, guard func(arm64.Cond)) {
 	x, y := v.Args[0], v.Args[1]
 	yes, no, done, differ, number := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
 	exit := c.stubLabel(v.State, exitKind(v.Aux))
+	if c.enc.CallGo != 0 && exitKind(v.Aux) == abi.ExitHost {
+		// As amd64's: what native code does not compare, Go does
+		// (ssa.GoEqual).
+		stub := exit
+		exit = c.a.NewLabel()
+		c.cold = append(c.cold, func() {
+			c.a.Bind(exit)
+			size := int32(unsafe.Sizeof(abi.GoArg{}))
+			c.goArg(abi.OffGoArgs, x)
+			c.goArg(abi.OffGoArgs+size, y)
+			c.goSaving(uint64(ssa.GoEqual)|uint64(v.Index&1)<<abi.GoOpIndexShift, &stub)
+			c.a.Load(a64A, a64Ctx, abi.OffGoArgs+c.enc.NumOffset)
+			c.a.Cbnz(a64A, yes, true)
+			c.a.B(no)
+		})
+	}
 	wx, wy := c.gpr(x, a64A), c.gpr(y, a64B)
 	c.a.Cmp(wx, wy, true)
 	c.a.BCond(arm64.NE, differ)

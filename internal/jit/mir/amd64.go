@@ -5472,6 +5472,23 @@ func (c *compiler) eqTagged(v *ssa.Value, guard func(amd64.Cond)) {
 	x, y := v.Args[0], v.Args[1]
 	yes, no, done, differ, number := c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel(), c.a.NewLabel()
 	exit := c.stubLabel(v.State, exitKind(v.Aux))
+	if c.enc.CallGo != 0 && exitKind(v.Aux) == abi.ExitHost {
+		// What native code does not compare Go does (ssa.GoEqual), out
+		// of line; what it refuses leaves.
+		stub := exit
+		exit = c.a.NewLabel()
+		c.cold = append(c.cold, func() {
+			c.a.Bind(exit)
+			size := int32(unsafe.Sizeof(abi.GoArg{}))
+			c.goArg(abi.OffGoArgs, x)
+			c.goArg(abi.OffGoArgs+size, y)
+			c.goSaving(uint64(ssa.GoEqual)|uint64(v.Index&1)<<abi.GoOpIndexShift, &stub)
+			c.a.Load(scratchA, regCtx, abi.OffGoArgs+c.enc.NumOffset)
+			c.a.Op(amd64.Test, scratchA, scratchA, true)
+			c.a.Jcc(amd64.CondNE, yes)
+			c.a.Jmp(no)
+		})
+	}
 	wx, wy := c.gpr(x, scratchA), c.gpr(y, scratchB)
 	c.a.Op(amd64.Cmp, wx, wy, true)
 	c.a.Jcc(amd64.CondNE, differ)

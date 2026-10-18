@@ -272,3 +272,43 @@ func TestJITGoNumber(t *testing.T) {
 		t.Errorf("arith left native code %d times for Go and failed %d guards", h, g)
 	}
 }
+
+// == and === of what native code does not compare inline (OpEqTagged) --
+// a number and a string, a BigInt and a string, strings longer than it
+// compares, ropes -- are Go's, called from native code (ssa.GoEqual), as
+// V8's code calls its Equal builtin, rather than left at an exit each
+// time. An object compared loosely with a primitive, whose conversion may
+// run its valueOf, leaves for Go as before. Each answer is the
+// interpreter's.
+func TestJITGoEqual(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		var long = 'abcdefghij'.repeat(20), long2 = 'abcdefghij'.repeat(19) + 'abcdefghij'
+		var vals = ['1', 1, 1n, '1.0', long, long2, long + 'x', true, 'true', null, undefined, 0, '', -0, NaN, 'NaN']
+		// Native work around each, as code has, which the profit check
+		// weighs Go's calls against: a function of Go's calls alone is
+		// judged slow on some machines, and left to the tree tier.
+		function eqs(a) { let n = 0, m = 0; for (const x of a) for (const y of a) { if (x == y) n++; if (x === y) m++; if (x != y) n += 2; for (let k = 0; k < 40; k++) n = (n * 7 + k) & 0xffff } return n + ':' + m }
+		var o = { valueOf() { return 1 } }
+		function objEq(a) { let n = 0; for (const x of a) if (x == o) n++; return n }
+	`
+	rounds := []string{}
+	for range 6 {
+		rounds = append(rounds, `eqs(vals)`)
+	}
+	rounds = append(rounds, `objEq(vals)`, `objEq(vals)`)
+	r := jitAgreesForTest(t, setup, rounds...)
+	e := jitNativeForTest(t, r, "eqs")
+	hosts, guards, entries := e.ssaStats.hosts, e.ssaStats.guards, e.ssaStats.entries
+	if _, err := r.Run(compileForTest(t, `eqs(vals)`)); err != nil {
+		t.Fatal(err)
+	}
+	if e.ssaStats.entries == entries {
+		t.Fatalf("eqs's code was not entered: slow %v", e.entrySlow)
+	}
+	if h, g := e.ssaStats.hosts-hosts, e.ssaStats.guards-guards; h != 0 || g != 0 {
+		t.Errorf("eqs left native code %d times for Go and failed %d guards", h, g)
+	}
+}
