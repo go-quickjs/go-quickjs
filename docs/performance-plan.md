@@ -706,6 +706,17 @@ faster: its loss is its steady state's.
   function is warming, too, it has no entry to note in: `r.jit` is made
   at the first compile. Do it with the nodes' layout measured, or give
   `elemAt` the site.
+- **Code is not compiled again while another run of it goes on**
+  (`jitReoptimize`'s `otherwiseInUse`): a recursive function, due to be
+  compiled again for what it learned, is refused at every call of Go its
+  inner runs make, each left for Go to finish at an exit for a compile
+  that does not happen -- Typescript's `AstWalker.walk`, 6,215 times a
+  run. Not leaving there (tried 2026-10-18, not kept) was worse: those
+  exits are what let its runs unwind to where it is compiled again, and
+  without them it ran on in its old code, missing at its call of
+  `this.pre` 240,000 times a run in two of three runs. V8 installs new
+  code at once, old frames going on in the old code until they return;
+  that needs the old code kept by its frames, not by the entry.
 - **Compiling in the background, last.** V8 compiles on a thread of its
   own while the function runs on in its lower tier; ours compiles on the
   runtime's goroutine, so that each compile's whole cost is paid where it
