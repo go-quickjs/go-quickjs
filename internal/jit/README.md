@@ -61,9 +61,13 @@ at the guard's bytecode PC if it fails. The failure is noted, and the code,
 the function's current, is invalidated (`jitInvalidate`), as V8's
 deoptimizer invalidates a function's code: Go enters it no more, native
 callers no longer call it (its link is cleared), and the interpreter and
-the tree tier run the function. Code that learned what it is to be
-compiled again for -- a call to inline, a getter, a callee that inlines
-more -- is invalidated so too (`jitTierDown`).
+the tree tier run the function. Code that learned at its exits what it
+is to be compiled again for -- a call's target at a call of Go, a
+getter, an element's kind, a callee that inlines more -- is not
+invalidated, as V8 never invalidates code for feedback: only it learns
+those, which the existing tiers' caches do not note. It runs on, and is
+compiled again in place once it has spent a budget as invalidated code
+does, nothing more learned meanwhile (`jitLearnedDue`).
 
 **Tier-up.** Invalidated code is compiled again once the existing tiers
 have spent a fresh budget (`jitTierUp`): as many invocations as it took to

@@ -228,7 +228,7 @@ func TestJITFramelessCallsSpendTheBudget(t *testing.T) {
 		t.Fatalf("plus has no valid code for its native caller: compiled %v", pe != nil && pe.ssa != nil)
 	}
 	serial := pe.ssaSerial
-	r.jitInvalidate(pcl, pe, true)
+	r.jitInvalidate(pcl, pe)
 	run(`loop(3)`)
 	if !pe.invalid || pe.ssaSerial != serial {
 		t.Fatalf("plus compiled again after three calls: invalid %v, compiles %d", pe.invalid, pe.ssaSerial-serial)
@@ -242,4 +242,59 @@ func TestJITFramelessCallsSpendTheBudget(t *testing.T) {
 	if pe.link.in-in < 100 {
 		t.Fatalf("loop called plus natively %d times of 100", pe.link.in-in)
 	}
+}
+
+// Code that learns at its exits what to be compiled again for is not
+// invalidated, as V8 never invalidates code for feedback: it is the tier
+// that learns it -- the existing tiers' caches note no call's target --
+// and runs on, compiled again once it has spent a budget since it began
+// to learn (jitLearnedDue): apply, compiled at its fourth call, learns at
+// its calls of Go that its callback is inc, keeps its code, Go entering
+// it, and is compiled again, inc inlined, only once a budget of its
+// invocations has passed, Go making no call of inc after.
+func TestJITLearnedCodeRunsOn(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r, run := jitTierRuntimeForTest(t, 4, `function inc(x){return x+1}
+		function apply(fn,n){let s=0;for(let i=0;i<n;i++)s=fn(s);return s}`)
+	for range 4 {
+		run(`apply(inc,3)`)
+	}
+	e := jitNativeForTest(t, r, "apply")
+	k := 0
+	for ; k < 16 && !e.reoptPending(); k++ {
+		run(`apply(inc,3)`)
+	}
+	if !e.reoptPending() || e.ssaSerial != 1 {
+		t.Fatalf("apply learned nothing to compile again for in %d calls: compiled %d times", k, e.ssaSerial)
+	}
+	starts := e.starts
+	for k = 0; k < 64 && e.ssaSerial == 1; k++ {
+		if e.invalid || e.link.entry == 0 {
+			t.Fatalf("call %d after apply learned: its code invalidated", k)
+		}
+		run(`apply(inc,3)`)
+	}
+	if e.ssaSerial != 2 || e.invalid {
+		t.Fatalf("apply not compiled again for what it learned: compiled %d times, invalid %v", e.ssaSerial, e.invalid)
+	}
+	if k < 2 || e.starts-starts < 2 {
+		t.Fatalf("apply compiled again %d calls after it learned, entered %d times meanwhile: no budget spent", k, e.starts-starts)
+	}
+	calls := r.jit.goCalls
+	run(`apply(inc,100)`)
+	if r.jit.goCalls != calls {
+		t.Fatalf("apply compiled again made %d calls of Go", r.jit.goCalls-calls)
+	}
+
+	// What it learns counts in the mark that delays the compile: a call
+	// decided, as a cache's new shape does.
+	cl := r.global.getOwn(r.atoms.intern("apply")).value().Object().fn().closure
+	m := jitLearnedMark(cl, e)
+	e.nativeCalls = append(e.nativeCalls, jitInline{pc: 0})
+	if jitLearnedMark(cl, e) == m {
+		t.Fatal("mark unchanged by a call learned")
+	}
+	e.nativeCalls = e.nativeCalls[:len(e.nativeCalls)-1]
 }

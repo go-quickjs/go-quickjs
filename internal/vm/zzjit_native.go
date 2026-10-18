@@ -263,8 +263,7 @@ type jitEntry struct {
 	// for inlining since leaves from code compiled before, which is not
 	// the callee's leaving (jitCallSeen).
 	ssaInlinedAt []int32
-	// invalid marks code an eager deoptimization invalidated, or that is to
-	// be compiled again for what it learned (reoptPending): Go enters it no
+	// invalid marks code an eager deoptimization invalidated: Go enters it no
 	// more, nor do native callers call it (its link), and the existing
 	// tiers run the function until they have spent a fresh budget,
 	// tierBudget, when it is compiled again (jitTierUp) -- as V8's
@@ -284,6 +283,11 @@ type jitEntry struct {
 	// call Go makes whether the call's frame counted its invocation
 	// (jitInvokedFrameless).
 	tierSpends uint32
+	// learning marks valid code that learned at its exits what to be
+	// compiled again for, which it is once it has spent tierBudget past
+	// tierBase, with tierMark unchanged (jitLearnedDue).
+	learning bool
+	tierBase int64
 	// starts counts Go's entries at a function's start, not into a loop.
 	starts uint64
 	// literals are the object literals the code makes natively, each with
@@ -1859,7 +1863,7 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, err
 		// a full budget of back edges all of it, as the first compile
 		// waits for either (jitCallThreshold) -- but a check jitGoOn made
 		// due at once, no full budget.
-		r.jitTierDown(f.cl, e)
+		r.jitRecompileLearned(f.cl, e)
 		if e.invalid {
 			work := int64(len(f.cl.fn.Code))
 			if osr {

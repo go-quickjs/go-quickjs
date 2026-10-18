@@ -10048,8 +10048,10 @@ func TestJITSSAGoCallLeavesWithoutEntry(t *testing.T) {
 // pinned), root's own call of Go has leaf compiled again, and root calls
 // leaf again, now in its new code, which calls Go, its new code pinned --
 // under which leaf is not compiled again, a native call being in it
-// (otherwiseInUse). The code each call returns to stays open until root's
-// native code leaves. Each answer is the interpreter's.
+// (otherwiseInUse). The code each call returns to -- pinned -- stays open
+// until root's native code leaves; code leaf was compiled again for in
+// between, which nothing ran since, is closed when replaced. Each answer
+// is the interpreter's.
 func TestJITSSAGoCallPinsALevelsNewCode(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -10072,9 +10074,10 @@ func TestJITSSAGoCallPinsALevelsNewCode(t *testing.T) {
 					return Str(NewString("")), nil
 				}
 				code := e.ssa
+				pinned := slices.Contains(rt.jit.goPinned, code)
 				e.reopt = true
 				rt.jitReoptimize(cl, e)
-				if e.ssa != code {
+				if e.ssa != code && pinned {
 					recompiled++
 					if code.Size() != 0 {
 						open++
@@ -10113,7 +10116,7 @@ func TestJITSSAGoCallPinsALevelsNewCode(t *testing.T) {
 		t.Fatalf("leaf did not call Go as a native callee: %+v", e)
 	}
 	if recompiled == 0 || open != recompiled {
-		t.Fatalf("leaf compiled again %d times under calls of Go, its code left open %d", recompiled, open)
+		t.Fatalf("leaf's pinned code compiled again %d times under calls of Go, left open %d", recompiled, open)
 	}
 	if len(r.jit.goPinned) != 0 || len(r.jit.retired) != 0 {
 		t.Fatalf("calls of Go left %d pinned, %d retired", len(r.jit.goPinned), len(r.jit.retired))

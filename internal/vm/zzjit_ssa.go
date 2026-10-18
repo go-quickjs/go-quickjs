@@ -1259,9 +1259,10 @@ func (fb *jitFeedback) Define(pc int) (*ssa.PropertyAdd, bool) {
 // of the reasons jitReoptimize takes: what it learned at its exits to make
 // natively -- a speculation that failed, a shape, a call to inline, a
 // callee that inlines more -- or that it leaves too often called natively.
-// Such code is invalidated (jitTierDown), and compiled again on the
-// existing tiers' budget, as V8 optimizes a function again only once its
-// lower tiers have spent its budget, its feedback gathered meanwhile.
+// Code whose guard failed is invalidated (jitInvalidate) and compiled
+// again on the existing tiers' budget (jitTierUp); code that learned
+// runs on, and is compiled again once it has spent a budget itself
+// (jitLearnedDue).
 func (e *jitEntry) reoptPending() bool {
 	return e.reopt || e.inlineReopt || e.polyReopt || e.upgradeReopt || e.unwindReopt
 }
@@ -1271,29 +1272,89 @@ func (e *jitEntry) reoptPending() bool {
 // run code invalidated (jitInvalidate).
 func (e *jitEntry) native() bool { return !e.entrySlow && !e.invalid }
 
-// jitTierDown invalidates e's code, cl's function's, if it learned what to
-// be compiled again for (reoptPending).
-func (r *Runtime) jitTierDown(cl *closure, e *jitEntry) {
-	if e != nil && !e.invalid && e.ssa != nil && e.reoptPending() {
-		r.jitInvalidate(cl, e, false)
+// jitRecompileLearned compiles e's code, cl's function's, again for what
+// it learned at its exits, if that is due (jitLearnedDue).
+func (r *Runtime) jitRecompileLearned(cl *closure, e *jitEntry) {
+	if e != nil && r.jitLearnedDue(cl, e) {
+		r.jitReoptimize(cl, e)
 	}
 }
 
+// jitLearnedDue reports whether e's code, cl's function's, valid, is due
+// to be compiled again for what it learned at its exits (reoptPending):
+// once it has spent a budget (jitTierBudget) since it began to learn, with
+// nothing learned meanwhile (jitLearnedMark), as invalidated code waits
+// for one (jitTierUp). It is not invalidated for it, as V8 never
+// invalidates code for feedback: what it learns at its exits -- a call's
+// target at a call of Go, an element's kind at a host exit -- only it
+// learns, as V8's baseline code gathers feedback, and the existing tiers,
+// whose caches note no such thing, would not learn it in its place. So it
+// runs on until its budget is spent, and is replaced by code compiled for
+// all it learned. Invalidated for it, a function learned a call a
+// compile, each after a budget of the existing tiers: AWFY's CD's recurse
+// ran out of compiles with two of its calls still made by Go, judged
+// slow, its recursion in the tree tier.
+func (r *Runtime) jitLearnedDue(cl *closure, e *jitEntry) bool {
+	if e.invalid || e.ssa == nil {
+		return false
+	}
+	if !e.reoptPending() {
+		e.learning = false
+		return false
+	}
+	spent := jitLearnedSpent(cl.fn, e)
+	if !e.learning {
+		e.learning, e.tierBase, e.tierMark = true, spent, jitLearnedMark(cl, e)
+		e.tierBudget = r.jitTierBudget(cl.fn, e)
+		return false
+	}
+	if spent-e.tierBase < e.tierBudget {
+		return false
+	}
+	if m := jitLearnedMark(cl, e); m != e.tierMark {
+		// Learned more meanwhile: another budget, for it all.
+		e.tierBase, e.tierMark = spent, m
+		return false
+	}
+	return true
+}
+
+// jitLearnedSpent is the work e's code has done since it was compiled, as
+// the existing tiers' budget counts it (jitTierBudget): its invocations,
+// each fn's length -- Go's entries, native callers' calls, calls of it the
+// existing tiers ran for code Go does not enter -- and the work its native
+// stretches did, their loops' included (jitSSAProfit, jitCalleeProfit).
+func jitLearnedSpent(fn *bytecode.Function, e *jitEntry) int64 {
+	st := &e.ssaStats
+	calls := e.starts + e.link.in + e.slowCalls
+	return int64(calls)*int64(max(len(fn.Code), 1)) + int64(st.work+st.calleeWork)
+}
+
+// jitLearnedMark is jitFeedbackMark of cl's caches with what e's code has
+// learned at its exits counted in: a change of either delays the compile
+// for it (jitLearnedDue), as V8's NotifyICChanged does.
+func jitLearnedMark(cl *closure, e *jitEntry) uint64 {
+	n := len(e.failed) + len(e.failedEntries) + len(e.poly) + len(e.typedReads) + len(e.stringReads) +
+		len(e.keyedReads) + len(e.strSites) + len(e.nativeCalls) + len(e.inlines) + len(e.notInline) +
+		len(e.literals) + len(e.definesUnfed)
+	return jitFeedbackMark(cl) + uint64(n)*0x9e3779b97f4a7c15
+}
+
 // jitInvalidate invalidates e's code, cl's function's, for an eager
-// deoptimization (deopt) or what it learned to be compiled again for: Go
-// enters it no more (native), nor do native callers call it, its link
-// cleared, but Go calls the function, as V8's deoptimizer invalidates a
+// deoptimization: Go enters it no more (native), nor do native callers
+// call it, its link cleared, but Go calls the function, as V8's
+// deoptimizer invalidates a
 // function's current code -- "only invalidated code affects tiering
 // decisions" -- its tiering requests reset and its interrupt budget with
 // them. The existing tiers run the function until they have spent a fresh
 // budget (jitTierUp). Runs of the code under way go on in it until they
 // next leave it, as V8's frames of invalidated code deoptimize lazily, at
 // their next return to it.
-func (r *Runtime) jitInvalidate(cl *closure, e *jitEntry, deopt bool) {
+func (r *Runtime) jitInvalidate(cl *closure, e *jitEntry) {
 	if e == nil || e.ssa == nil {
 		return
 	}
-	if deopt && e.deopts < ^uint16(0) {
+	if e.deopts < ^uint16(0) {
 		e.deopts++
 	}
 	if e.invalid {
@@ -1488,7 +1549,7 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 	// again by what it does then; its backoff (nativeBackoff) stays. Code
 	// compiled for native callers alone (ssaCallee) Go does not enter.
 	e.link.in, e.nativeOut = 0, 0
-	e.notNative, e.nativeRetry, e.invalid = false, 0, false
+	e.notNative, e.nativeRetry, e.invalid, e.learning = false, 0, false, false
 	if !e.ssaCallee {
 		e.entrySlow = false
 	}
@@ -2912,7 +2973,7 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 		// this one, which this code's calls run in.
 		r.jitShareContexts(idx, f)
 	}
-	if err != nil || r.stopped != nil || e.invalid || e.reoptPending() || e.ssa != code {
+	if err != nil || r.stopped != nil || e.invalid || r.jitLearnedDue(f.cl, e) || e.ssa != code {
 		s.goPending = jitGoPending{set: true, pc: pc, ctx: idx, v: v, err: err}
 		return false
 	}
@@ -3207,7 +3268,7 @@ framed:
 		// the run's, which its levels' calls run in.
 		r.jitShareContexts(root, runF)
 	}
-	if err != nil || r.stopped != nil || e.invalid || e.reoptPending() || e.ssa != code {
+	if err != nil || r.stopped != nil || e.invalid || r.jitLearnedDue(f.cl, e) || e.ssa != code {
 		s.goPending = jitGoPending{set: true, pc: pc, ctx: idx, v: v, err: err}
 		return false
 	}
@@ -6647,7 +6708,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 				continue
 			}
 			pc, depth = int(f.pc), sp-f.base
-			r.jitTierDown(f.cl, e)
+			r.jitRecompileLearned(f.cl, e)
 			if !e.ssa.HasEntry(pc) || !e.native() {
 				v, err, done, again := r.jitGoOn(f, e, pc, sp, true)
 				if !again {
@@ -6682,7 +6743,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 				continue
 			}
 			pc, depth = int(f.pc), sp-f.base
-			r.jitTierDown(f.cl, e)
+			r.jitRecompileLearned(f.cl, e)
 			if !e.ssa.HasEntry(pc) || !e.native() {
 				v, err, done, again := r.jitGoOn(f, e, pc, sp, true)
 				if !again {
@@ -6721,7 +6782,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 				// makes the operation, its cache learning the shape.
 				s.shapeDeopts++
 				if e.ssa == ran {
-					r.jitInvalidate(f.cl, e, true)
+					r.jitInvalidate(f.cl, e)
 				}
 				f.pc = uint32(exitPC)
 				return r.jitDeoptRun(f, e, sp)
@@ -6750,7 +6811,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			}
 			jitDeoptimized(e, ctx, start)
 			if e.ssa == ran {
-				r.jitInvalidate(f.cl, e, true)
+				r.jitInvalidate(f.cl, e)
 			}
 			f.pc = uint32(ctx.ExitPC)
 			return r.jitDeoptRun(f, e, f.base+int(ctx.ExitDepth))
@@ -6779,7 +6840,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 						continue
 					}
 					pc, depth = int(f.pc), sp-f.base
-					r.jitTierDown(f.cl, e)
+					r.jitRecompileLearned(f.cl, e)
 					if !e.ssa.HasEntry(pc) || !e.native() {
 						v, err, done, again := r.jitGoOn(f, e, pc, sp, true)
 						if !again {
@@ -6813,7 +6874,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 				// Deep in the stack, a call in tail position gives up the
 				// frame for the callee's, as the interpreter's tail_call
 				// does: run makes it (errTailCall), not the interpreter.
-				r.jitTierDown(f.cl, e)
+				r.jitRecompileLearned(f.cl, e)
 				sp, argc := f.base+int(ctx.ExitDepth), int(in.A)
 				this := Undefined
 				if in.Op == bytecode.OpTailCallMethod {
@@ -6836,7 +6897,7 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 				continue
 			}
 			pc, depth = int(f.pc), sp-f.base
-			r.jitTierDown(f.cl, e)
+			r.jitRecompileLearned(f.cl, e)
 			if !e.ssa.HasEntry(pc) || !e.native() {
 				// No entry here; or native code does not pay (jitSSAProfit),
 				// and the interpreter runs the rest of this invocation.
@@ -7277,7 +7338,7 @@ func (r *Runtime) jitUnwindNative(idx int, e *jitEntry, root *closure) (Value, e
 		}
 		if k < n-1 && !l.inline && next.inline && e != nil && e.ssa != nil {
 			// The code an exit inside its inlined callees left (above).
-			r.jitTierDown(f.cl, e)
+			r.jitRecompileLearned(f.cl, e)
 		}
 		if k == n-1 {
 			v, err = r.jitFinishExit(f, e, &l)
@@ -7606,7 +7667,7 @@ func (r *Runtime) jitFinishExit(f *frame, e *jitEntry, l *jitNativeLevel) (Value
 					v, err, _ := r.jitInterpret(f, sp, p.err)
 					return v, err
 				}
-				r.jitTierDown(f.cl, e)
+				r.jitRecompileLearned(f.cl, e)
 				pc, depth = int(f.pc), sp-f.base
 				break
 			}
@@ -7628,7 +7689,7 @@ func (r *Runtime) jitFinishExit(f *frame, e *jitEntry, l *jitNativeLevel) (Value
 			if e != nil {
 				r.jit.account(e)
 			}
-			r.jitInvalidate(l.ownerCl, l.owner, true)
+			r.jitInvalidate(l.ownerCl, l.owner)
 		}
 		if e != nil && e.ssa != nil {
 			e.ssaStats.hosts++
@@ -7663,7 +7724,7 @@ func (r *Runtime) jitFinishExit(f *frame, e *jitEntry, l *jitNativeLevel) (Value
 			if e.inlinePending && e.inlineReopts < 2*jitInlineReoptimizations {
 				e.inlinePending, e.inlineReopt = false, true
 			}
-			r.jitTierDown(f.cl, e)
+			r.jitRecompileLearned(f.cl, e)
 		}
 		pc, depth = int(f.pc), sp-f.base
 	case abi.ExitPoll:
@@ -7691,7 +7752,7 @@ func (r *Runtime) jitFinishExit(f *frame, e *jitEntry, l *jitNativeLevel) (Value
 		if l.kind == abi.ExitDeopt {
 			// Invalidated, as runSSA's deoptimizations invalidate the code:
 			// the interpreter runs the rest of the frame.
-			r.jitInvalidate(ownerCl, owner, true)
+			r.jitInvalidate(ownerCl, owner)
 		}
 		v, err, _ := r.jitInterpret(f, f.base+depth, nil)
 		return v, err
