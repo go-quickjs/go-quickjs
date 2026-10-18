@@ -495,6 +495,72 @@ block's start, before the block's bindings, and keeps the check. An arrow
 reading such a binding may then be pure: `a.map(x => x * k)` -27%, a sort
 comparator -28%, a call -26%.
 
+## D. V8's model for objects and tiering
+
+Two of our designs differ from V8's where real programs meet them all the
+time, and each heuristic built on them has been a patch on a symptom. Found
+on Octane's Gameboy (2026-10-17) with a CPU profile whose samples are mapped
+to the JIT code holding them (every placement logged, freed code never
+reused):
+
+- Its emulator object has 215 properties. A layout shared by the objects
+  built alike holds at most 64 (`maxShapeDepth`), so each run's emulator has
+  a shape of its own, and every cache meets a new shape at every run: some
+  twenty reads of the instruction dispatch leave native code at each run,
+  and the code is compiled again for each.
+- Go going on in the interpreter after an exit, at a PC with no entry, had
+  the code compiled with entries in the middle of the loop's body, first
+  after every guard, then at each PC Go went on at (learned entries). Each
+  entry is a join where what the loop proved before holds no longer: the
+  dispatch's native code ran 40% longer with 46 of them.
+- What a read met settles into a compile only after exits that meet
+  nothing new; a read that met a shape is served by the megamorphic cache
+  natively after its one exit, so the code may make no exit to settle on.
+
+What V8 does instead, from its source (`src/objects`, `src/execution`):
+
+- **Maps.** Objects that add the same named properties in the same order
+  share a map, up to 1,020 descriptors (`kMaxNumberOfDescriptors`), the
+  maps along a transition chain sharing one descriptor array. Only keyed
+  stores (`StoreOrigin::kMaybeKeyed`) beyond `fast_properties_soft_limit`
+  out-of-object fields, and never a prototype's, send an object to
+  dictionary mode (`Map::TooManyFastProperties`). Dictionary-mode objects
+  share their maps through `NormalizedMapCache` -- "a typical program needs
+  very limited number of distinct normalized maps" -- so caches stay
+  monomorphic on them.
+- **Prototypes.** A prototype map's validity cell guards every prototype
+  chain through it: a load found on a prototype checks one cell, which any
+  change to a prototype on the chain invalidates, however long the chain.
+- **Entries.** Optimized code is entered at a function's start or by
+  on-stack replacement at a loop's back edge, from a lower-tier frame
+  running a long loop. A deopt hands the frame to the interpreter for the
+  rest of the invocation; nothing enters optimized code in a loop's body.
+- **Feedback.** Feedback lives in the lower tiers' inline caches. A change
+  of one delays tier-up until a fresh interrupt budget -- at least
+  `minimum_invocations_after_ic_update` (500) invocations' worth, the
+  budget being invocations times bytecode length -- is spent in the lower
+  tiers (`TieringManager::NotifyICChanged`): feedback settles where it is
+  gathered, not at exits.
+
+| ID | Item | Status |
+|---|---|---|
+| D1 | Transition chains past 64 properties, up to V8's 1,020, the shapes along a chain sharing one keys array and one index (`findOwn` already checks an index entry against the object's own table) | Open |
+| D2 | Dictionary mode as V8's: keyed additions past a soft limit and deletes turn an object's table into its own, under a shape shared by the dictionary objects of its prototype, so caches stay monomorphic on them | Open |
+| D3 | Prototype validity cells: a read found on a prototype checks one cell, not each holder's shape (today two, then the deep-read cases) | Open |
+| D4 | Slack from the constructor's `this.x =` count, as V8's expected properties, refined over its first objects | Open |
+| D5 | JIT entries at a function's start and its loops' headers only; a deopt leaves the rest of the invocation to the interpreter and the tree tier, which go on natively by OSR at a loop. Replaces `allEntries` and the learned entries | Open |
+| D6 | A shape native code was not compiled for deopts, as V8's map checks do; a read is megamorphic in native code only where its cache is | Open |
+| D7 | Compiled again on the lower tiers' budget, reset when a cache's feedback changes, as V8's tier-up; replaces the settling on exits, the ticks of Go's work and the profit check's stretches | Open |
+
+The order is D1 and D2 first: they remove the churn of feedback at its
+source and help the interpreter and the tree tier as much as the JIT. Then
+D3, then D5 to D7 together, which depend on one another. Each is measured
+as above, without and with the JIT, against the baseline: zk's
+`jit-layout-sq` (`79c9eee`), which has the learned entries and the settling
+at invocations that D5 and D7 replace. With them, against the commit
+before them, Octane with the JIT took 4.2% less time (Typescript -10.2%,
+Box2D -6.0%) and Gameboy alone 1.9% more.
+
 ## Rejected
 
 Measured and dropped earlier; each needs a new angle before it is tried
