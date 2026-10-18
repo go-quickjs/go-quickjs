@@ -353,3 +353,38 @@ func jitOldStaysUncounted(r *Runtime, old []*jitEntry) *jitEntry {
 func jitHeldButScratch(r *Runtime) int64 {
 	return r.jitHeldBytes() - int64(jitCapBytes(r.jit.victims))
 }
+
+// Shapes a read met settle once the function is invoked again, from Go or
+// by a native caller, as well as after jitPolySettle exits that met
+// nothing new (jitEntry's polyMet): a read that met a shape leaves native
+// code once and reads through the megamorphic cache after, so the code may
+// make no other exit to settle on -- Gameboy's instruction dispatch ran so
+// for 87 invocations. Within the invocation that met it, nothing settles.
+func TestJITPolySettlesAtTheNextInvocation(t *testing.T) {
+	for _, next := range []string{"go", "native"} {
+		e := &jitEntry{link: &jitLink{}}
+		e.polyMet()
+		e.reoptDue()
+		if e.polyReopt || !e.polyPending {
+			t.Fatalf("%s: settled within the invocation that met the shape", next)
+		}
+		if next == "go" {
+			e.starts++
+		} else {
+			e.link.in++
+		}
+		e.reoptDue()
+		if !e.polyReopt || e.polyPending {
+			t.Fatalf("%s: not settled at the next invocation: reopt %v, pending %v", next, e.polyReopt, e.polyPending)
+		}
+	}
+	// Exits meeting nothing new settle it as before.
+	e := &jitEntry{link: &jitLink{}}
+	e.polyMet()
+	for i := 0; i < jitPolySettle; i++ {
+		jitPolySettled(e)
+	}
+	if !e.polyReopt || e.polyPending {
+		t.Fatal("not settled after exits that met nothing new")
+	}
+}

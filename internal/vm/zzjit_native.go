@@ -298,8 +298,9 @@ type jitEntry struct {
 	// compiled for, each with up to jitPropertyCases of them, which it is
 	// compiled again for (jitPolySeen); polyReopt marks that it is to be,
 	// polyPending that it is to be once polySettled exits in a row have
-	// found no other (jitPolySettle), and polyReopts counts the times it
-	// was.
+	// found no other (jitPolySettle), or once it has been invoked again
+	// since one was met, its invocations then polyAt (polyMet), and
+	// polyReopts counts the times it was.
 	poly []jitPolySite
 	// typedReads are the element reads, by PC, whose result no native
 	// operation takes as a number, whose receivers have been typed arrays
@@ -312,6 +313,7 @@ type jitEntry struct {
 	polyReopt   bool
 	polyPending bool
 	polySettled uint8
+	polyAt      uint64
 	polyReopts  uint8
 	// strSites are the method reads that met a string receiver, which the
 	// code reads off String.prototype once compiled again

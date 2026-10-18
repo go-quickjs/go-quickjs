@@ -248,7 +248,7 @@ func (r *Runtime) jitPolyWriteSeen(f *frame, e *jitEntry, pc int, in bytecode.In
 		// the shape the object had, which the setter may have changed.
 		if a, ok := r.jitAccessorCaseOf(o, before, f.cl.names[in.A], true); ok {
 			if jitAddAccessorCase(p, a) {
-				e.polyPending, e.polySettled = true, 0
+				e.polyMet()
 			}
 			return
 		}
@@ -268,14 +268,14 @@ func (r *Runtime) jitPolyWriteSeen(f *frame, e *jitEntry, pc int, in bytecode.In
 			return
 		}
 		p.adds = append(p.adds, a)
-		e.polyPending, e.polySettled = true, 0
+		e.polyMet()
 		return
 	}
 	if slices.ContainsFunc(p.cases, func(k propCache) bool { return k.shape == c.shape }) {
 		return
 	}
 	p.cases = append(p.cases, c)
-	e.polyPending, e.polySettled = true, 0
+	e.polyMet()
 }
 
 // jitWriteTarget is the object a set_prop about to be made writes, its
@@ -306,7 +306,7 @@ func (r *Runtime) jitPolySeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 		// A string's method: read off String.prototype by the code
 		// compiled again, as for a shape the read had not met.
 		e.strSites = append(e.strSites, uint32(pc))
-		e.polyPending, e.polySettled = true, 0
+		e.polyMet()
 		return
 	}
 	if !recv.IsObject() || int(in.A) >= len(f.cl.names) {
@@ -318,7 +318,7 @@ func (r *Runtime) jitPolySeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 		// Accessor).
 		if a, ok := r.jitAccessorCaseOf(recv.Object(), recv.Object().shape, f.cl.names[in.A], false); ok {
 			if jitAddAccessorCase(jitPolySiteAt(e, pc), a) {
-				e.polyPending, e.polySettled = true, 0
+				e.polyMet()
 			}
 			return
 		}
@@ -330,14 +330,14 @@ func (r *Runtime) jitPolySeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 	if c.shape == nil {
 		// One a cache cannot hold, found past its two prototypes.
 		if d, ok := r.jitDeepReadOf(recv.Object(), f.cl.names[in.A]); ok && jitAddDeepRead(jitPolySiteAt(e, pc), d) {
-			e.polyPending, e.polySettled = true, 0
+			e.polyMet()
 		} else if p := jitPolySiteAt(e, pc); absent && !p.mega {
 			// None its cases could hold -- a property nothing has, a leaf's
 			// child -- which the megamorphic cache now says: the code is
 			// compiled again to look there (ssa.PropertySite's
 			// Megamorphic), rather than leave at every such read.
 			p.mega = true
-			e.polyPending, e.polySettled = true, 0
+			e.polyMet()
 		}
 		return
 	}
@@ -356,7 +356,7 @@ func (r *Runtime) jitPolySeen(f *frame, e *jitEntry, pc, sp int, in bytecode.Ins
 	if !jitAddReadCase(jitPolySiteAt(e, pc), c) {
 		return
 	}
-	e.polyPending, e.polySettled = true, 0
+	e.polyMet()
 }
 
 // megaFill has the megamorphic cache (abi.MegaCache) name o's own data
@@ -483,7 +483,7 @@ func (r *Runtime) jitPrivateSeen(f *frame, e *jitEntry, pc, sp int, in bytecode.
 		jitNumberMissed(e, pc)
 	}
 	if jitAddReadCase(jitPolySiteAt(e, pc), propCache{shape: sh, idx: i}) {
-		e.polyPending, e.polySettled = true, 0
+		e.polyMet()
 	}
 }
 
@@ -834,6 +834,21 @@ func jitPolySettled(e *jitEntry) {
 			e.polyPending, e.polySettled, e.polyReopt = false, 0, true
 		}
 	}
+}
+
+// polyMet notes that a read of e's code met what it was not compiled for
+// -- a shape, an accessor, a string's method -- which the code is compiled
+// again for once that has settled: after jitPolySettle exits in a row
+// meeting nothing new (jitPolySettled), or once the function has been
+// invoked again since (reoptDueNow), as code compiled before a site ran
+// is compiled again at its next invocation (feedReopt). A read that met a
+// shape leaves native code once, the megamorphic cache filled for it
+// (megaFill), and reads it there natively after: once every read had, the
+// code made no exit to settle on. Gameboy's instruction dispatch, its
+// emulator's new object at each run read at some twenty sites, had run so
+// for 87 invocations, a sixth of its runs, before an exit came.
+func (e *jitEntry) polyMet() {
+	e.polyPending, e.polySettled, e.polyAt = true, 0, e.starts+e.link.in
 }
 
 // jitWrongShapeExits is how often a site compiled for one shape leaves
@@ -1188,7 +1203,7 @@ func (e *jitEntry) reoptPending() bool {
 func (e *jitEntry) reoptDue() bool {
 	// Nothing pending, the usual answer, asked in line: a call of Go asks
 	// at every call.
-	if e.reopt || e.inlineReopt || e.polyReopt || e.upgradeReopt || e.unwindReopt || e.feedReopt {
+	if e.reopt || e.inlineReopt || e.polyReopt || e.upgradeReopt || e.unwindReopt || e.feedReopt || e.polyPending {
 		return e.reoptDueNow()
 	}
 	return false
@@ -1201,6 +1216,10 @@ func (e *jitEntry) reoptDueNow() bool {
 	}
 	if e.feedReopt && (e.starts+e.link.in > e.feedStarts || e.ssaStats.work-e.feedWork >= uint64(e.reoptBudget)*jitReoptPer*jitReoptWork) {
 		return true
+	}
+	if e.polyPending && e.starts+e.link.in > e.polyAt {
+		// Invoked again since a read last met a shape (polyMet): settled.
+		e.polyPending, e.polySettled, e.polyReopt = false, 0, true
 	}
 	if !e.reoptPending() {
 		return false
