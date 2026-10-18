@@ -4036,7 +4036,21 @@ func (c *a64Compiler) oddball(v *ssa.Value, fail func(arm64.Cond)) {
 	c.a.BCond(arm64.EQ, zero)
 	c.movImm(a64A, c.enc.False)
 	c.a.Cmp(r, a64A, true)
-	fail(arm64.NE)
+	if v.Index == 1 && c.enc.CallGo != 0 && exitKind(v.Aux) == abi.ExitHost {
+		// As amd64's: anything else converted by Go (ssa.GoNumber).
+		slow := c.a.NewLabel()
+		c.a.BCond(arm64.NE, slow)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(slow)
+			stub := c.stubLabel(v.State, exitKind(v.Aux))
+			c.goArg(abi.OffGoArgs, v.Args[0])
+			c.goSaving(uint64(ssa.GoNumber), &stub)
+			c.a.LoadF(d, a64Ctx, abi.OffGoArgs+c.enc.NumOffset)
+			c.a.B(done)
+		})
+	} else {
+		fail(arm64.NE)
+	}
 	c.a.Bind(zero)
 	c.movImm(a64A, 0)
 	c.a.FMovToF(d, a64A)

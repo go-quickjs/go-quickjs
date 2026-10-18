@@ -2782,6 +2782,21 @@ func jitHostCall(ctx *abi.Context) bool {
 		// Any value, by its words, which its source keeps alive.
 		o := *(**Object)(unsafe.Pointer(&ctx.GoArgs[0].Ref))
 		return o != nil && jitStoreElem(o, math.Float64frombits(ctx.GoArgs[1].Num), jitGoArg(ctx, 2))
+	case ssa.GoNumber:
+		// An arithmetic operand's number (OpOddballF64): a primitive's,
+		// whose conversion runs nothing and does not throw -- a string's,
+		// parsed. An object's, a symbol's or a BigInt's, Go makes the
+		// operation of after the code leaves.
+		v := jitGoArg(ctx, 0)
+		if !jitPlainOperand(v) {
+			return false
+		}
+		n, err := r.toNumber(v)
+		if err != nil {
+			return false
+		}
+		ctx.GoArgs[0].Num = math.Float64bits(n)
+		return true
 	case ssa.GoTypedRead:
 		o := *(**Object)(unsafe.Pointer(&ctx.GoArgs[0].Ref))
 		v, ok := jitTypedRead(o, math.Float64frombits(ctx.GoArgs[1].Num))

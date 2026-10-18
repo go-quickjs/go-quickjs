@@ -236,3 +236,39 @@ func TestJITArrowThisCallee(t *testing.T) {
 		t.Errorf("forEach left native code %d times for Go and failed %d guards", h, g)
 	}
 }
+
+// An arithmetic operator's operand that is no number nor an oddball, once
+// the site is generic, is converted by Go from native code (ssa.GoNumber),
+// as V8's code calls its NonNumberToNumber builtin: '2.5' * 2 runs
+// natively, where it had left native code at each such operation. Go
+// refuses what could run code or throws -- an object's valueOf, a
+// symbol's, a BigInt's -- which leave for Go to make the operation, as
+// before. A relational comparison of strings is not converted (Go
+// compares it, GoCompare). Each answer is the interpreter's.
+func TestJITGoNumber(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		var mixed = ['1', '2.5', 3, ' 4 ', true, null, '0x10', '', 'x', undefined, 7]
+		function arith(a) { let s = 0, p = 1; for (const x of a) { s += x * 2 - (x % 3 | 0); p = (p ^ (x >> 1)) | 0; s += -x || 0; let y = x; y++; s += y || 0 } return s + ':' + p }
+		function rel(a) { let n = 0; for (const x of a) for (const y of a) if (x < y) n++; return n }
+		var odd = [{ valueOf() { return 5 } }, 3n]
+		function oddArith(a) { let s = ''; for (const x of a) s += (x * 2) + ','; return s }
+		function sym() { try { return Symbol() * 2 } catch (e) { return e.constructor.name } }
+	`
+	rounds := []string{}
+	for range 6 {
+		rounds = append(rounds, `arith(mixed)`, `rel(['10', '9', '1', '2'])`)
+	}
+	rounds = append(rounds, `oddArith(odd)`, `oddArith(odd)`, `sym()`, `sym()`)
+	r := jitAgreesForTest(t, setup, rounds...)
+	e := jitNativeForTest(t, r, "arith")
+	hosts, guards := e.ssaStats.hosts, e.ssaStats.guards
+	if _, err := r.Run(compileForTest(t, `arith(mixed)`)); err != nil {
+		t.Fatal(err)
+	}
+	if h, g := e.ssaStats.hosts-hosts, e.ssaStats.guards-guards; h != 0 || g != 0 {
+		t.Errorf("arith left native code %d times for Go and failed %d guards", h, g)
+	}
+}

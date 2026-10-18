@@ -165,7 +165,11 @@ const (
 	// booleans too, as ToNumber does -- NaN, 0, 0 and 1 -- and exits for
 	// anything else: an arithmetic, relational, bitwise or unary operator's
 	// operand once its guard has failed, as V8's code truncates a number
-	// or an oddball. Not equality's, for which undefined == null.
+	// or an oddball. Not equality's, for which undefined == null. With
+	// Index 1, which the builder sets where code calls Go -- where a
+	// relational operator's operands are compared by Go (GoCompare), not
+	// converted here -- anything else is converted by Go (GoNumber),
+	// leaving only for what Go refuses.
 	OpOddballF64 // tagged -> f64
 
 	// Boxing: a typed value as a slot value.

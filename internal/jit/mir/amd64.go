@@ -4424,7 +4424,22 @@ func (c *compiler) oddball(v *ssa.Value, fail func(amd64.Cond)) {
 	c.cmpWord(r, c.enc.Null)
 	c.a.Jcc(amd64.CondE, zero)
 	c.cmpWord(r, c.enc.False)
-	fail(amd64.CondNE)
+	if v.Index == 1 && c.enc.CallGo != 0 && exitKind(v.Aux) == abi.ExitHost {
+		// Anything else -- a string -- converted by Go (ssa.GoNumber),
+		// out of line; what it refuses leaves.
+		slow := c.a.NewLabel()
+		c.a.Jcc(amd64.CondNE, slow)
+		c.cold = append(c.cold, func() {
+			c.a.Bind(slow)
+			stub := c.stubLabel(v.State, exitKind(v.Aux))
+			c.goArg(abi.OffGoArgs, v.Args[0])
+			c.goSaving(uint64(ssa.GoNumber), &stub)
+			c.a.LoadSD(xScratch0, regCtx, abi.OffGoArgs+c.enc.NumOffset)
+			c.a.Jmp(done)
+		})
+	} else {
+		fail(amd64.CondNE)
+	}
 	c.a.Bind(zero)
 	c.movImm(scratchA, 0)
 	c.a.MovQToX(xScratch0, scratchA)

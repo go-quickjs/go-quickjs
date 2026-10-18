@@ -668,6 +668,10 @@ func EvaluateHeap(f *Func, pc int, slots []ir.Value, heap Heap, pollEvery int) (
 					vals[v.ID] = val{f: 0}
 				case a.t.Kind == ir.Boolean:
 					vals[v.ID] = val{f: 1}
+				case v.Index == 1 && a.t.Kind == ir.String:
+					// Go's number for it (GoNumber), which the model does
+					// not make.
+					return ir.Exit{}, fmt.Errorf("%w: a string's number", ErrUnsupported)
 				default:
 					return exit(v.State, ir.ExitKind(v.Aux))
 				}

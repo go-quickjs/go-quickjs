@@ -473,6 +473,14 @@ type GoOp uint8
 // code found empty, as V8's code calls its runtime to: Go writes the next
 // number to the first operand's number word.
 //
+// GoNumber is ToNumber of an arithmetic operation's operand that is no
+// number nor an oddball (OpOddballF64 at a site whose guard has failed),
+// as V8's code calls its NonNumberToNumber builtin: Go writes the
+// first operand's number to its number word -- a string's, parsed -- and
+// refuses one whose conversion could run code or throws, an object, a
+// symbol, a BigInt, which leaves for Go to make the operation after an
+// exit.
+//
 // GoClosure makes the function of constant Argc on the code's own frame
 // (ir.Closure), capturing its locals there, and GoClose closes what
 // closures captured of locals Argc on (ir.CloseUpvalues): both Go's, on
@@ -502,6 +510,7 @@ const (
 	GoAppend
 	GoCompare
 	GoRandom
+	GoNumber
 )
 
 // RefillsPools reports whether a call takes an object from a pool, which
@@ -2780,7 +2789,13 @@ func (b *builder) instruction(blk *Block, pc int) {
 		if o.Slot < 0 && o.Literal.Kind == ir.Number {
 			return number(o, ir.HostExit)
 		}
-		return guard(OpOddballF64, Float64, ir.HostExit, operand(o))
+		v := guard(OpOddballF64, Float64, ir.HostExit, operand(o))
+		if b.goCalls() {
+			// A string's number by Go (GoNumber): an arithmetic operator's
+			// operand, as a relational one is compared by Go here.
+			v.Index = 1
+		}
+		return v
 	}
 	boxF := func(x *Value) *Value { return f.newValue(blk, OpBoxF64, Tagged, x) }
 	boxB := func(x *Value) *Value { return f.newValue(blk, OpBoxBool, Tagged, x) }
@@ -2841,7 +2856,10 @@ func (b *builder) instruction(blk *Block, pc int) {
 			kind = ir.HostExit
 		}
 		var x, y *Value
-		if in.Operator != ir.Eq && in.Operator != ir.Ne && b.generic(pc) {
+		if in.Operator != ir.Eq && in.Operator != ir.Ne && (b.generic(pc) || in.Operator == ir.Mod && b.goCalls()) {
+			// A remainder's operands too, which leave for Go, not
+			// deoptimize, from the first: one that is no number, a
+			// string's, had left at every remainder, learning nothing.
 			x, y = numeric(in.Left, true, in.Bools&1 != 0), numeric(in.Right, true, in.Bools&2 != 0)
 		} else {
 			x, y = numberOf(in.Left, kind, in.Bools&1 != 0), numberOf(in.Right, kind, in.Bools&2 != 0)
