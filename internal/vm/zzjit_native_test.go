@@ -11469,8 +11469,8 @@ func TestJITSSATypeOf(t *testing.T) {
 // of its loop's iteration to the interpreter, which goes on natively at the
 // header, in the same run (jitGoOn): one read of a primitive in a
 // thousand iterations leaves once, and the loop's stretches go on. Code
-// that leaves so too often is compiled with an entry after every guard
-// (allEntries), and Go goes on natively after each exit then.
+// that leaves so too often is compiled with an entry where Go went on
+// (missedEntries), and Go goes on natively after each such exit then.
 func TestJITSSAGoesOnNatively(t *testing.T) {
 	if !jitSSABackend {
 		t.Skip("no SSA backend on this architecture")
@@ -11510,7 +11510,7 @@ func TestJITSSAGoesOnNatively(t *testing.T) {
 				t.Fatalf("round %d, %s: got %v, interpreter %v", i, src, got, want)
 			}
 			e := entry("once")
-			if src != `once(1000)` || e == nil || e.ssa == nil || e.allEntries {
+			if src != `once(1000)` || e == nil || e.ssa == nil || e.entriesAsked != 0 {
 				continue
 			}
 			checked++
@@ -11530,8 +11530,14 @@ func TestJITSSAGoesOnNatively(t *testing.T) {
 	if checked == 0 {
 		t.Fatal("once was never compiled without every entry")
 	}
-	if e := entry("every"); e == nil || e.ssa == nil || !e.allEntries || e.entrySlow {
-		t.Fatalf("every is not compiled with every entry: %+v", e)
+	e := entry("every")
+	if e == nil || e.ssa == nil || e.entriesAsked == 0 || e.entrySlow {
+		t.Fatalf("every is not compiled with the entries Go went on at: %+v", e)
+	}
+	for _, pc := range e.missedEntries {
+		if !e.ssa.HasEntry(int(pc)) {
+			t.Fatalf("every has no entry at %d, where Go went on", pc)
+		}
 	}
 	if e := entry("once"); e == nil || e.ssa == nil || e.entrySlow {
 		t.Fatalf("once did not stay native: %+v", e)

@@ -1301,8 +1301,11 @@ func (r *Runtime) jitReoptimize(cl *closure, e *jitEntry) {
 		e.polyReopts++
 	}
 	e.reopt, e.inlineReopt, e.polyReopt, e.upgradeReopt, e.unwindReopt, e.feedReopt = false, false, false, false, false, false
-	// The misses that count toward every entry are the new code's.
-	e.entryMisses = 0
+	// The misses that count toward every entry are the new code's, and it
+	// is compiled with an entry at each PC Go went on at so far
+	// (WantsEntry): one where none can be made does not have it compiled
+	// again at every miss.
+	e.entryMisses, e.entriesAsked = 0, len(e.missedEntries)
 	// What it compiles for, the reads' shapes met since included.
 	e.polyPending, e.polySettled = false, 0
 	if e.reoptRoom > 0 && !r.jit.roomFor(e, nil, e.bytes+e.reoptRoom) {
@@ -5306,10 +5309,10 @@ func (fb *jitFeedback) Generic(pc int) bool {
 	return fb.e != nil && slices.Contains(fb.e.failed, int32(pc))
 }
 
-// WantsEntry is ssa.EntryFeedback's: Go has gone on in the interpreter,
-// having found no entry, too often in the function's own code (jitGoOn).
-func (fb *jitFeedback) WantsEntry(int) bool {
-	return fb.e != nil && fb.root == nil && fb.fwd == nil && fb.e.allEntries
+// WantsEntry is ssa.EntryFeedback's: Go has gone on in the interpreter at
+// pc, having found no entry, in the function's own code (jitGoOn).
+func (fb *jitFeedback) WantsEntry(pc int) bool {
+	return fb.e != nil && fb.root == nil && fb.fwd == nil && slices.Contains(fb.e.missedEntries, uint32(pc))
 }
 
 func (fb *jitFeedback) EntryGeneric(pc int) bool {
@@ -6244,9 +6247,14 @@ func jitLoopLength(fn *bytecode.Function) uint32 {
 // goOnPC with goOnDepth operands; tryJITLoop): an iteration that left as
 // V8's code deoptimizes leaves the rest of that iteration to the
 // interpreter, not the rest of the loop. Code Go has gone on without an
-// entry in jitEntryMisses times is compiled again at once with an entry
-// after every guard that may leave for Go (allEntries), as every entry
-// had been, and Go goes on in it at pc.
+// entry in at one PC jitEntryMisses times is compiled again at once with an
+// entry at each such PC (missedEntries), and Go goes on in it at pc --
+// again only for a PC it had not been compiled for: an entry where Go does
+// not go on is no use. It had been compiled with an entry after every
+// guard that may leave for Go: Typescript's 3,148-instruction function had
+// 1,666 entries, each loading its live slots and merging with phis, two
+// thirds of its 145,000 values, and its compile 200 ms, for the few places
+// Go went on at.
 func (r *Runtime) jitGoOn(f *frame, e *jitEntry, pc, sp int) (v Value, err error, done, again bool) {
 	if e.entrySlow {
 		defer r.jitBackInCode(e, r.jitLeaveCode(e))
@@ -6257,22 +6265,16 @@ func (r *Runtime) jitGoOn(f *frame, e *jitEntry, pc, sp int) (v Value, err error
 	// A miss that taught the code what it is to be compiled again for --
 	// a shape, a call's target -- says little of the misses to come: the
 	// guard it left at may never fail again.
-	if !e.allEntries && !e.reoptPending() && !e.feedReopt && !e.polyPending && !e.inlinePending {
-		if e.entryMisses++; e.entryMisses >= jitEntryMisses {
-			// Compiled again for its entries alone, the code does what it
-			// did: its stretches end where they did, and it is judged by
-			// them as by those to come (jitSSAProfit).
-			e.allEntries = true
-			stats := e.ssaStats
-			r.jitReoptimize(f.cl, e)
-			e.ssaStats = stats
-			// Calls in are counted afresh (jitLink's in), and the calls of Go
-			// they are weighed against with them (jitCalleeProfit).
-			e.ssaStats.calleeGoCalls, e.ssaStats.calleeWork = 0, 0
-			if e.ssa.HasEntry(pc) && !e.entrySlow {
-				s.goOnPC, s.goOnDepth = pc, sp-f.base
-				return Undefined, nil, false, true
-			}
+	if e.entriesDue(pc) {
+		stats := e.ssaStats
+		r.jitReoptimize(f.cl, e)
+		e.ssaStats = stats
+		// Calls in are counted afresh (jitLink's in), and the calls of Go
+		// they are weighed against with them (jitCalleeProfit).
+		e.ssaStats.calleeGoCalls, e.ssaStats.calleeWork = 0, 0
+		if e.ssa.HasEntry(pc) && !e.entrySlow {
+			s.goOnPC, s.goOnDepth = pc, sp-f.base
+			return Undefined, nil, false, true
 		}
 	}
 	s.interpreted++
@@ -6292,9 +6294,79 @@ func (r *Runtime) jitGoOn(f *frame, e *jitEntry, pc, sp int) (v Value, err error
 	return v, err, true, false
 }
 
-// jitEntryMisses is how often Go goes on in the interpreter, having found
-// no entry, before a function's code is compiled with every one (jitGoOn).
-const jitEntryMisses = 2
+// entriesDue notes that Go went on in the interpreter at pc, having found
+// no entry, and reports whether the code is to be compiled again for its
+// entries now: once it has missed jitEntryMisses times since it was last
+// compiled, at a PC it was not compiled for -- an entry where none can be
+// made does not have it compiled again at every miss -- and nothing else
+// it learned is pending, which a compile for it takes the PCs with.
+// Compiled again for its entries alone, the code does what it did: its
+// stretches end where they did, and it is judged by them as by those to
+// come (jitSSAProfit). Twice as many misses each time: a function that
+// misses at many PCs, as Gameboy's instruction dispatch does, is compiled
+// again a few times for all of them, not at every two -- each compile with
+// every PC so far.
+func (e *jitEntry) entriesDue(pc int) bool {
+	if !slices.Contains(e.missedEntries, uint32(pc)) && len(e.missedEntries) < jitMissedEntries {
+		e.wentOn(uint32(pc))
+	}
+	if len(e.missedEntries) <= e.entriesAsked || e.reoptPending() || e.feedReopt || e.polyPending || e.inlinePending {
+		return false
+	}
+	if e.entryMisses++; e.entryMisses < jitEntryMisses<<min(e.entryReopts, jitEntryBackoffs) {
+		return false
+	}
+	e.entriesAsked = len(e.missedEntries)
+	e.entryMisses = 0
+	e.entryReopts++
+	return true
+}
+
+// jitGoneOn is a PC Go went on in the interpreter at, having found no
+// entry, and how many times (jitEntry's goneOn).
+type jitGoneOn struct {
+	pc uint32
+	n  uint8
+}
+
+// wentOn counts a time Go went on at pc, which the code is to be compiled
+// with an entry at once it has gone on there jitEntryMisses times
+// (missedEntries): a PC Go goes on at again is a path the code takes,
+// which an entry has it take natively; one it went on at once is a
+// speculation that failed once, which V8's code too leaves to the
+// interpreter until the loop's next iteration. An entry is not free: its
+// live slots are loaded and merged with phis at its PC, where what the
+// code had proved before -- a read hoisted, a shape checked, a callee's
+// target -- holds no longer, on every iteration after. Given an entry at
+// each PC Go went on at once, Gameboy's instruction dispatch had 46,
+// some 30 of them for one miss each, and ran natively 40% longer.
+func (e *jitEntry) wentOn(pc uint32) {
+	i := slices.IndexFunc(e.goneOn, func(g jitGoneOn) bool { return g.pc == pc })
+	if i < 0 {
+		if len(e.goneOn) >= jitMissedEntries {
+			return
+		}
+		e.goneOn = append(e.goneOn, jitGoneOn{pc: pc})
+		i = len(e.goneOn) - 1
+	}
+	if e.goneOn[i].n++; e.goneOn[i].n < jitEntryMisses {
+		return
+	}
+	e.goneOn = slices.Delete(e.goneOn, i, i+1)
+	e.missedEntries = append(e.missedEntries, pc)
+}
+
+// jitEntryMisses is how often Go goes on in the interpreter at a PC,
+// having found no entry, before the code is to have an entry there, and
+// how often anywhere before a function's code is compiled with entries
+// where it did (jitGoOn), doubled at each such compile; jitMissedEntries
+// is the most PCs a function remembers of each.
+const (
+	jitEntryMisses   = 2
+	jitMissedEntries = 256
+	// jitEntryBackoffs bounds how many times the misses wanted double.
+	jitEntryBackoffs = 6
+)
 
 // errGoOnNatively ends the interpreter's run of a frame Go goes on in
 // natively, at a loop's header (jitGoOn).
