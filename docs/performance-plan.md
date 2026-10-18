@@ -665,6 +665,24 @@ faster: its loss is its steady state's.
   typed-array read inlined, compiled as an array's because an inlined
   callee's element feedback was the root's -- its own since (`bffbc73`,
   Gameboy 28,591 to 12,736).
+- **Placements of the round since `573dae7`** (to `0c82eb3`: the
+  polymorphic caches, for...of, the walked array's close, element reads
+  by name and an inlined callee's, arrow callees, the compiler's backend
+  steps; eight placements, means): with the JIT Octane -1.3% (Gameboy
+  -18.9%, Splay -3.7%, Mandreel -1.8%; Box2D +6.7%, every placement
+  slower), AWFY -1.0% (Bounce -9.9%, Sieve -7.5%, CD -3.7%, DeltaBlue
+  -3.4%), the V8 suite -0.5% (DeltaBlue -6.9%, Splay -6.0%); without it
+  all three level (+0.6%, 0.0%, +1.1%, within the placements' ranges).
+  Box2D's loss is the polymorphic caches' (`d3ec102`): its guard failures
+  went from 46 to 103 a run of ten, entries from 107,135 to 48,713. Sites
+  the interpreter's one-shape caches had given up on, megamorphic in
+  native code and never deoptimizing, are polymorphic now, and each
+  deoptimizes, once or twice, as its objects take the fields Box2D adds
+  after construction, waiting a budget in the tree tier and compiled
+  again each time -- V8's model, whose recompiles cost less and run in
+  the background. No site met a fifth shape (V8's megamorphic rule,
+  tried: no change). What makes it up is the compiler's speed (D's
+  follow-up, under way) and the element feedback below.
 - **The lower tiers gather no element feedback.** V8's keyed loads and
   stores record the maps and elements kinds they meet in the interpreter
   (KeyedLoadIC), so optimized code is compiled for a typed array from its
