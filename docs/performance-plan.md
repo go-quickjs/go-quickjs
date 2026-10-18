@@ -695,6 +695,17 @@ faster: its loss is its steady state's.
   tier's element reads note the kinds they meet per site, kept where only
   sites that meet more than an array's pay, and the first compile takes
   them. Left for later, with the interpreter's hot paths to measure.
+  Tried (2026-10-18, not kept): the tree tier noting, per site, a typed
+  array's read, a string's and a read by name, kept on the function's
+  warming entry -- which a compile must carry over, `jitFor` making a new
+  entry -- and its first compile taking them. A string's and a name's
+  are noted in the nodes' slow paths, cheaply; a typed array's element
+  is read in `elemAt`, the fast path every array read's node inlines,
+  which knows no site, so noting it means a check after `elemAt` in every
+  node, the tree tier's hottest code, in builds with the JIT. Before a
+  function is warming, too, it has no entry to note in: `r.jit` is made
+  at the first compile. Do it with the nodes' layout measured, or give
+  `elemAt` the site.
 - **Compiling in the background, last.** V8 compiles on a thread of its
   own while the function runs on in its lower tier; ours compiles on the
   runtime's goroutine, so that each compile's whole cost is paid where it
