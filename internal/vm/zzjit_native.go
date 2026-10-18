@@ -33,14 +33,50 @@ const (
 	jitCacheBytes = 8 << 20
 	maxJITBudget  = 1 << 50
 )
-const jitHotCalls = 8
+
+// The tiering budgets are V8's (src/flags/flag-definitions.h), counted
+// as its TieringManager counts them: invocations of a function, each its
+// bytecode's length (jitTierBudget), the interpreter's and the tree tier's
+// back edges spending it too, each its loop's length (jitTierWork). Our
+// one optimizing tier is the closest to Maglev, V8's first: TurboFan's
+// invocation_count_for_turbofan (3000) has no counterpart here.
+const (
+	// jitInvocationsForFeedback is invocation_count_for_feedback_allocation:
+	// a function is given its entry, which holds its budget and its
+	// caches' mark as V8's feedback vector holds its budget, after so many
+	// invocations; one called fewer times costs no native state.
+	jitInvocationsForFeedback = 8
+	// jitInvocationsForMaglev is invocation_count_for_maglev: a function is
+	// compiled once the existing tiers have spent so many invocations'
+	// worth of its budget, and compiled again so after an eager
+	// deoptimization invalidated its code (jitTierUp) or after its code
+	// learned at its exits (jitLearnedDue).
+	jitInvocationsForMaglev = 400
+	// jitInvocationsAfterICUpdate is minimum_invocations_after_ic_update:
+	// a change of the function's caches' feedback raises what is left of
+	// its budget to so many invocations' worth, never lowering it, as
+	// TieringManager::NotifyICChanged does.
+	jitInvocationsAfterICUpdate = 500
+)
+
+// jitLoopRetryDelay is how many full back-edge budgets a loop of a function
+// whose compile was refused for a reason that may change -- the OS's, the
+// code budget's -- runs before it is asked again: another warm-up's worth.
+const jitLoopRetryDelay = jitInvocationsForFeedback
 
 // jitBuilt guards the JIT's hooks in the interpreter; see zzjit_disabled.go.
 const jitBuilt = true
 
 type jitFields struct {
-	jitEnabled       bool
-	jitCallThreshold uint8
+	jitEnabled bool
+	// jitCallThreshold is how many invocations' worth of a function's
+	// budget the existing tiers spend before it is compiled, or compiled
+	// again (jitInvocationsForMaglev), and jitICThreshold what a change of
+	// its caches' feedback raises the rest to (jitInvocationsAfterICUpdate):
+	// 1 each under QJS_JIT_STRESS's threshold and in the tests that compile
+	// at once.
+	jitCallThreshold uint16
+	jitICThreshold   uint16
 	jitDeoptDepth    uint32
 	// jitDeoptCode is the code a failed guard left the invocation the
 	// interpreter goes on with at jitDeoptDepth (jitDeoptInterpret), or
@@ -279,6 +315,10 @@ type jitEntry struct {
 	tierBudget int64
 	tierMark   uint64
 	deopts     uint16
+	// warming marks an entry made before its function is compiled
+	// (jitWarmFor), which holds its budget, tierBudget, and its caches'
+	// mark, tierMark, while the existing tiers spend it (jitWarmUp).
+	warming bool
 	// tierSpends counts the invocations jitTierUp was given, which tells a
 	// call Go makes whether the call's frame counted its invocation
 	// (jitInvokedFrameless).
@@ -604,6 +644,9 @@ type jitState struct {
 	// stressBudget under QJS_JIT_STRESS's budget.
 	budgetSeed   uint32
 	stressBudget int
+	// edgesNext is the back-edge budget last given, and edgesSpent the one
+	// before it, which the last check found spent (jitTierWork).
+	edgesNext, edgesSpent int
 	// charCodeAtKey is the atom jitStringMethod looks charCodeAt up by,
 	// once charCodeAtKnown.
 	charCodeAtKey   Atom
@@ -708,10 +751,10 @@ func (r *Runtime) initJIT(enabled bool, memoryLimit int64) {
 	// Debugger interrupt callbacks may evaluate code and mutate frames or arrays.
 	// Native budget exits retain borrowed views, so debugger runtimes stay in Go.
 	r.jitEnabled = enabled && r.debug == nil
-	r.jitCallThreshold = jitHotCalls
+	r.jitCallThreshold, r.jitICThreshold = jitInvocationsForMaglev, jitInvocationsAfterICUpdate
 	r.jitStress = jitStressDefault
 	if r.jitStress.threshold {
-		r.jitCallThreshold = 1
+		r.jitCallThreshold, r.jitICThreshold = 1, 1
 	}
 }
 
@@ -726,7 +769,7 @@ func (r *Runtime) jitTreeRecovery(f *frame) bool {
 		return false
 	}
 	e := r.jit.hint(f.cl)
-	return e == nil || e.deferred || e.ssa != nil
+	return e == nil || e.deferred || e.warming || e.ssa != nil
 }
 
 // jitCodeBytes is the machine code the JIT's entries hold. What the JIT
@@ -1608,9 +1651,12 @@ func (r *Runtime) jitCompileFor(fn *bytecode.Function, cl *closure, kind jitLowe
 	key := weak.Make(fn)
 	if r.jit != nil {
 		if e := r.jit.cache[key]; e != nil {
-			if !e.deferred || e.generation == r.jit.generation {
+			if !e.warming && (!e.deferred || e.generation == r.jit.generation) {
 				return e
 			}
+			// Deferred for a generation past, or warming up (jitWarmFor):
+			// compiled now, its budget spent or a native caller's call
+			// asking for it, as before it had an entry.
 			r.jit.forget(key, e)
 		}
 	}
@@ -1742,11 +1788,12 @@ func (r *Runtime) tryJITFrame(f *frame) (Value, error, bool) {
 		jitRetrySlow(e)
 		return Undefined, nil, false
 	}
-	// Cold calls stay in the existing tiers without allocating native state.
-	// Saturating the counter keeps hot selection independent of call overflow.
-	if f.cl.jitCalls < r.jitCallThreshold {
+	// Cold calls stay in the existing tiers without allocating native state
+	// (jitFeedbackCalls). Saturating the counter keeps hot selection
+	// independent of call overflow.
+	if a := r.jitFeedbackCalls(); f.cl.jitCalls < a {
 		f.cl.jitCalls++
-		if f.cl.jitCalls < r.jitCallThreshold {
+		if f.cl.jitCalls < a {
 			return Undefined, nil, false
 		}
 	}
@@ -1790,7 +1837,10 @@ func (s *jitState) backEdgeBudget() int {
 		return backEdgeCheckInterval
 	}
 	s.idle()
+	// The budget that ran out, which tiering counts (jitTierWork).
+	s.edgesSpent = s.edgesNext
 	if s.stressBudget != 0 {
+		s.edgesNext = s.stressBudget
 		return s.stressBudget
 	}
 	// xorshift32, never 0.
@@ -1802,7 +1852,8 @@ func (s *jitState) backEdgeBudget() int {
 	x ^= x >> 17
 	x ^= x << 5
 	s.budgetSeed = x
-	return backEdgeCheckInterval/2 + int(x%backEdgeCheckInterval)
+	s.edgesNext = backEdgeCheckInterval/2 + int(x%backEdgeCheckInterval)
+	return s.edgesNext
 }
 
 // The existing back-edge interrupt budget supplies coarse work feedback.
@@ -1824,7 +1875,7 @@ func (r *Runtime) tryJITLoop(f *frame, pc uint32, sp int, fullBudget bool) (Valu
 		f.cl.jitLoopDelay--
 		return Undefined, nil, false
 	}
-	f.cl.jitCalls = r.jitCallThreshold
+	f.cl.jitCalls = r.jitFeedbackCalls()
 	if s := r.jit; s != nil && s.goOn == f {
 		// The frame whose native code Go goes on in, at an entry it has:
 		// in that run, not a run of its own (jitGoOn).
@@ -1837,11 +1888,22 @@ func (r *Runtime) tryJITLoop(f *frame, pc uint32, sp int, fullBudget bool) (Valu
 }
 
 // tryJITAt enters f's code at pc, with depth operands, compiling it if it
-// has none: at the function's start, or, osr, at a loop's header, the
-// existing tiers having run a full budget of its back edges if spent.
+// has none once the existing tiers have spent its budget (jitWarmUp): at
+// the function's start, or, osr, at a loop's header, the existing tiers
+// having run a full budget of back edges if spent -- a loop's frame still
+// running when the budget is spent entered by on-stack replacement, as
+// V8's MaybeOptimizeFrame has it: "OSR kicks in only once we've
+// previously decided to tier up, but we are still in a lower-tier frame".
 func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, error, bool) {
 	e := r.jit.hint(f.cl)
 	if e == nil || e.ssa != nil && e.ssa.Size() == 0 {
+		e = r.jitWarmFor(f.cl)
+		f.cl.setHint(hintFor(e))
+	}
+	if e != nil && e.warming {
+		if !r.jitWarmUp(f.cl, e, r.jitTierWork(f.cl.fn, e, osr, spent)) {
+			return Undefined, nil, false
+		}
 		e = r.jitFor(f.cl)
 		f.cl.setHint(hintFor(e))
 	}
@@ -1857,22 +1919,15 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, err
 		} else {
 			r.jit.osrs++
 		}
-		// Code that learned what to be compiled again for is invalidated,
-		// and is, once the existing tiers have spent a budget: an
-		// invocation spends its function's length of it, a loop that ran
-		// a full budget of back edges all of it, as the first compile
-		// waits for either (jitCallThreshold) -- but a check jitGoOn made
-		// due at once, no full budget.
+		// Code that learned what to be compiled again for is, once it has
+		// spent a budget (jitLearnedDue); invalidated code, once the
+		// existing tiers have: an invocation spends its function's length
+		// of it, a full budget of back edges its loop's length for each
+		// (jitTierWork), as the first compile waits for -- but a check
+		// jitGoOn made due at once, nothing.
 		r.jitRecompileLearned(f.cl, e)
 		if e.invalid {
-			work := int64(len(f.cl.fn.Code))
-			if osr {
-				work = 0
-				if spent {
-					work = max(e.tierBudget, 1)
-				}
-			}
-			if !r.jitTierUp(f.cl, e, work) {
+			if !r.jitTierUp(f.cl, e, r.jitTierWork(f.cl.fn, e, osr, spent)) {
 				return Undefined, nil, false
 			}
 		}
@@ -1887,7 +1942,7 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, err
 		// Resource and OS refusals may change. Retry after another warmup,
 		// rather than charging every call for an unsuccessful compilation.
 		f.cl.jitCalls = 0
-		f.cl.jitLoopDelay = jitHotCalls
+		f.cl.jitLoopDelay = jitLoopRetryDelay
 		return Undefined, nil, false
 	}
 	if e.deferred {
@@ -1895,7 +1950,7 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, err
 		// costs a cache lookup until the cache releases code.
 		f.cl.setHint(0)
 		f.cl.jitCalls = 0
-		f.cl.jitLoopDelay = jitHotCalls
+		f.cl.jitLoopDelay = jitLoopRetryDelay
 		return Undefined, nil, false
 	}
 	if e.hostOnly && !osr {
@@ -1909,6 +1964,104 @@ func (r *Runtime) tryJITAt(f *frame, pc, depth int, osr, spent bool) (Value, err
 	}
 	f.cl.jitRefused = true
 	return Undefined, nil, false
+}
+
+// SetJITWarmUp has r compile a function once calls invocations' worth of
+// its budget are spent, and wait afterICUpdate invocations' worth after a
+// change of its caches' feedback, in place of V8's counts
+// (jitInvocationsForMaglev, jitInvocationsAfterICUpdate): for tests of
+// what native code does once compiled, which run a function a few times.
+// QJS_JIT_STRESS's threshold, compiling at once, stays.
+func (r *Runtime) SetJITWarmUp(calls, afterICUpdate int) {
+	if r.jitStress.threshold {
+		return
+	}
+	r.jitCallThreshold = uint16(min(max(calls, 1), 0xffff))
+	r.jitICThreshold = uint16(min(max(afterICUpdate, 1), 0xffff))
+}
+
+// jitFeedbackCalls is how many invocations a closure's function is called
+// before it is given an entry (jitInvocationsForFeedback), or fewer, if it
+// is compiled before then (jitCallThreshold): the closure's own count,
+// which costs no native state.
+func (r *Runtime) jitFeedbackCalls() uint8 {
+	return uint8(min(r.jitCallThreshold, jitInvocationsForFeedback))
+}
+
+// jitWarmFor is the entry of cl's function: the one the cache holds, or,
+// for a function it holds none of, one made to hold its budget while the
+// existing tiers spend it (jitWarmUp) -- its invocations so far counted,
+// each its length -- as V8 allocates a function's feedback vector, its
+// budget's, once it has been invoked a few times. A function compiled at
+// once (jitCallThreshold no more than those invocations) is compiled now.
+func (r *Runtime) jitWarmFor(cl *closure) *jitEntry {
+	fn := cl.fn
+	r.jitState()
+	s := r.jit
+	if e := s.entryFor(fn); e != nil {
+		if e.warming {
+			return e
+		}
+		return r.jitFor(cl)
+	}
+	calls := int64(max(cl.jitCalls, 1))
+	if int64(r.jitCallThreshold) <= calls || len(fn.Code) > jitcompile.MaxInstructions || s.unavailable {
+		return r.jitFor(cl)
+	}
+	s.budget = r.jitBudget()
+	s.age(s.epoch())
+	if !s.makeRoom(jitEntryFixed + s.hintGrowth()) {
+		return nil
+	}
+	s.serial++
+	e := &jitEntry{used: s.epoch(), serial: s.serial, warming: true}
+	e.ssaLoop = jitLoopLength(fn)
+	e.tierBudget = r.jitTierBudget(fn, e) - (calls-1)*int64(max(len(fn.Code), 1))
+	e.tierMark = jitFeedbackMark(cl)
+	s.linkFor(fn, e)
+	s.remember(weak.Make(fn), e)
+	e.busy++
+	s.settle()
+	e.busy--
+	return e
+}
+
+// jitWarmUp spends work of the budget of e, cl's function's entry with no
+// code yet (warming), and reports whether it is to be compiled now: the
+// budget spent, and the function's caches' feedback unchanged since it
+// was last looked at (jitFeedbackMark). A change raises what is left of
+// the budget to jitICThreshold invocations' worth, never lowering it, as
+// TieringManager::NotifyICChanged raises V8's -- noticed here when the
+// budget is spent, which waits for at least that much after it.
+func (r *Runtime) jitWarmUp(cl *closure, e *jitEntry, work int64) bool {
+	if e.tierBudget -= work; e.tierBudget > 0 {
+		return false
+	}
+	if m := jitFeedbackMark(cl); m != e.tierMark {
+		e.tierBudget, e.tierMark = max(e.tierBudget, r.jitICBudget(cl.fn)), m
+		return false
+	}
+	return true
+}
+
+// jitTierWork is the work of e's budget, fn's entry's, that an invocation
+// spends -- fn's length -- or, osr, a full budget of the existing tiers'
+// back edges in one of its loops, if spent: as many back edges as the
+// budget had (jitState.edgesSpent), each its loops' mean length
+// (jitLoopLength), as V8's JumpLoop spends its bytecodes' distance. A
+// check jitGoOn made due at once spends nothing.
+func (r *Runtime) jitTierWork(fn *bytecode.Function, e *jitEntry, osr, spent bool) int64 {
+	if !osr {
+		return int64(max(len(fn.Code), 1))
+	}
+	if !spent {
+		return 0
+	}
+	edges := backEdgeCheckInterval
+	if r.jit != nil && r.jit.edgesSpent != 0 {
+		edges = r.jit.edgesSpent
+	}
+	return int64(edges) * int64(max(e.ssaLoop, 1))
 }
 
 // jitHotEntry is the entry of f's function compiled once hot for Go to

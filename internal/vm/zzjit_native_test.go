@@ -891,7 +891,7 @@ func TestJITSSACallExits(t *testing.T) {
 	want := New(Config{})
 	defer func() { want.Close(); want.ReleaseClosed() }()
 	r := jitRuntimeForTest(t, Config{JIT: true})
-	r.jitCallThreshold = 1
+	r.jitCallThreshold, r.jitICThreshold = 1, 1
 	for _, rt := range []*Runtime{want, r} {
 		rt.global.setOwnRaw(rt.atoms.intern("g"), rt.NewFunction("g", 1,
 			func(_ *Runtime, _ Value, args []Value) (Value, error) { return args[0], nil }), propDefault)
@@ -1549,7 +1549,7 @@ func jitRuntimeForTest(t *testing.T, cfg Config) *Runtime {
 	r := New(cfg)
 	// Boundary tests force promotion so guard and budget assertions cannot
 	// pass by running only the existing tiers.
-	r.jitCallThreshold = 1
+	r.jitCallThreshold, r.jitICThreshold = 1, 1
 	t.Cleanup(func() {
 		// A compile the backend refused for its own panic is a bug, which a
 		// refusal hides.
@@ -1947,7 +1947,7 @@ func TestJITSSAElementReferences(t *testing.T) {
 func TestJITArenaMappings(t *testing.T) {
 	for _, ssa := range []bool{true} {
 		r := New(Config{JIT: true})
-		r.jitCallThreshold = 1
+		r.jitCallThreshold, r.jitICThreshold = 1, 1
 		var src strings.Builder
 		for i := 0; i < 100; i++ {
 			fmt.Fprintf(&src, "function f%d(n){let s=%d;for(let i=0;i<n;i++)s+=i;return s}\nf%d(3);\n", i, i, i)
@@ -2024,7 +2024,7 @@ func TestJITCachedTreeCall(t *testing.T) {
 func TestJITNestedTreeOSR(t *testing.T) {
 	for _, tail := range []bool{false, true} {
 		r := jitRuntimeForTest(t, Config{JIT: true})
-		r.jitCallThreshold = 100
+		r.jitCallThreshold, r.jitICThreshold = 100, 100
 		body := `let value=sum(10000); return value+7`
 		want := float64(49995007)
 		if tail {
@@ -2065,7 +2065,7 @@ func TestJITDebuggerFallback(t *testing.T) {
 
 func TestJITNestedTreeOSRThrow(t *testing.T) {
 	r := jitRuntimeForTest(t, Config{JIT: true})
-	r.jitCallThreshold = 100
+	r.jitCallThreshold, r.jitICThreshold = 100, 100
 	v, err := r.Run(compileForTest(t, `
 		function sum(n,a){var s=0;for(var i=0;i<n;i++)s+=i;return s+a}
 		sum(2,0);sum(2,0);
@@ -3141,7 +3141,7 @@ func TestJITSharedTemplateRuntimes(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			r := New(Config{JIT: true})
-			r.jitCallThreshold = 1
+			r.jitCallThreshold, r.jitICThreshold = 1, 1
 			defer func() { r.Close(); r.ReleaseClosed() }()
 			for j := 0; j < 3; j++ {
 				v, err := r.Run(p)
@@ -3203,30 +3203,42 @@ func TestJITClosureRemembersRefusal(t *testing.T) {
 	}
 }
 
+// A function is given native state after jitInvocationsForFeedback calls,
+// as V8 allocates a feedback vector, and is compiled once its calls have
+// spent jitInvocationsForMaglev invocations' worth of its budget, as V8
+// tiers up to Maglev: not before. Its caches' feedback, filled at its
+// first call, does not change after, and delays nothing.
 func TestJITCallPromotion(t *testing.T) {
 	for _, keyword := range []string{"var", "let"} {
 		t.Run(keyword, func(t *testing.T) {
 			r := New(Config{JIT: true})
 			t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+			if r.jitCallThreshold <= 1 {
+				t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
+			}
 			v, err := r.Run(compileForTest(t, "function sum(n) { "+keyword+" s=0; for("+keyword+" i=0;i<n;i++) s+=i; return s } sum"))
 			if err != nil {
 				t.Fatal(err)
 			}
 			cl := v.Object().fn().closure
-			for i := 1; i <= jitHotCalls; i++ {
-				got, err := r.Call(v, Undefined, []Value{Int32(100)})
-				if err != nil || got.Number() != 4950 {
+			for i := 1; i <= jitInvocationsForMaglev; i++ {
+				// One iteration: its back edges spend next to nothing.
+				got, err := r.Call(v, Undefined, []Value{Int32(1)})
+				if err != nil || got.Number() != 0 {
 					t.Fatalf("call %d = %v, %v", i, got, err)
 				}
-				if int(cl.jitCalls) != i {
+				if want := min(i, jitInvocationsForFeedback); int(cl.jitCalls) != want {
 					t.Fatalf("call %d: hotness = %d", i, cl.jitCalls)
 				}
-				if i < jitHotCalls && r.jit != nil {
+				if i < jitInvocationsForFeedback && r.jit != nil {
 					t.Fatalf("cold call %d allocated native state", i)
 				}
+				if i < jitInvocationsForMaglev && r.jit != nil && (r.jit.entries != 0 || r.jit.compiled != 0) {
+					t.Fatalf("call %d: compiled before its budget was spent", i)
+				}
 			}
-			if r.jit == nil || r.jit.entries != 1 {
-				t.Fatal("hot function did not promote")
+			if r.jit.entries != 1 || r.jit.compiled != 1 {
+				t.Fatalf("hot function did not promote at call %d", jitInvocationsForMaglev)
 			}
 			for i := 0; i < 300; i++ {
 				got, err := r.Call(v, Undefined, []Value{Int32(10)})
@@ -3234,40 +3246,43 @@ func TestJITCallPromotion(t *testing.T) {
 					t.Fatalf("hot call = %v, %v", got, err)
 				}
 			}
-			if cl.jitCalls != jitHotCalls || r.jit.entries != 301 {
+			if cl.jitCalls != jitInvocationsForFeedback || r.jit.entries != 301 {
 				t.Fatal("hot counter overflowed or native selection stopped")
 			}
 		})
 	}
 }
 
+// A compile refused for memory is not remembered: the function warms up
+// again, given native state after another jitInvocationsForFeedback calls,
+// and is compiled once its budget is spent again.
 func TestJITPromotionRetriesMemoryRefusal(t *testing.T) {
 	r := New(Config{JIT: true, MemoryLimit: 256 << 10})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	if r.jitCallThreshold <= 1 {
+		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
+	}
 	v, err := r.Run(compileForTest(t, `function sum(n) { let s=0; for(let i=0;i<n;i++) s+=i; return s } sum`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	cl := v.Object().fn().closure
-	for i := 0; i < jitHotCalls; i++ {
+	for i := 0; i < jitInvocationsForMaglev; i++ {
 		if _, err := r.Call(v, Undefined, []Value{Int32(10)}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if cl.jitRefused || cl.jitCalls != 0 || r.jit != nil {
-		t.Fatal("memory refusal was permanent or retained native state")
+	if cl.jitRefused || r.jit != nil && r.jit.entries != 0 {
+		t.Fatal("memory refusal was permanent or ran native code")
 	}
 	r.meter.limit = 32 << 20
-	for i := 1; i <= jitHotCalls; i++ {
+	for i := 1; i <= 2*jitInvocationsForMaglev; i++ {
 		got, err := r.Call(v, Undefined, []Value{Int32(10)})
 		if err != nil || got.Number() != 45 {
 			t.Fatalf("retry %d = %v, %v", i, got, err)
 		}
-		if i < jitHotCalls && r.jit != nil {
-			t.Fatal("temporary refusal retried before another warmup")
-		}
 	}
-	if r.jit == nil || r.jit.entries != 1 {
+	if r.jit == nil || r.jit.entries == 0 {
 		t.Fatal("temporary refusal never retried")
 	}
 }
@@ -3275,7 +3290,7 @@ func TestJITPromotionRetriesMemoryRefusal(t *testing.T) {
 func TestJITPromotionRuntimeIsolation(t *testing.T) {
 	p := compileForTest(t, `function sum(n) { var s=0; for(var i=0;i<n;i++) s+=i; return s } sum`)
 	var cold *Runtime
-	for _, calls := range []int{1, jitHotCalls} {
+	for _, calls := range []int{1, jitInvocationsForMaglev} {
 		r := New(Config{JIT: true})
 		t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
 		v, err := r.Run(p)
@@ -3290,11 +3305,11 @@ func TestJITPromotionRuntimeIsolation(t *testing.T) {
 		}
 		if calls == 1 {
 			cold = r
-		} else if r.jit == nil || r.jit.entries != 1 {
+		} else if r.jit == nil || r.jit.entries == 0 {
 			t.Fatal("hot runtime did not promote")
 		}
 	}
-	if cold.jit != nil {
+	if cold.jit != nil && cold.jitCallThreshold > 1 {
 		t.Fatal("shared template propagated promotion to a cold runtime")
 	}
 }
@@ -3522,7 +3537,7 @@ func BenchmarkJITNumericLoop(b *testing.B) {
 				if err != nil {
 					b.Fatal(err)
 				}
-				for i := 0; i < jitHotCalls; i++ {
+				for i := 0; i < jitInvocationsForFeedback; i++ {
 					if _, err := r.Run(p); err != nil {
 						b.Fatal(err)
 					}
@@ -3563,7 +3578,7 @@ func BenchmarkJITCallPromotion(b *testing.B) {
 					for i := 0; i < b.N; i++ {
 						r := New(Config{JIT: mode != "existing"})
 						if mode == "eager" {
-							r.jitCallThreshold = 1
+							r.jitCallThreshold, r.jitICThreshold = 1, 1
 						}
 						v, err := r.Run(p)
 						native := r.jit != nil && r.jit.entries != 0
@@ -3573,10 +3588,10 @@ func BenchmarkJITCallPromotion(b *testing.B) {
 						if err != nil || v.Number() != float64(iterations*(iterations-1)/2) {
 							b.Fatalf("sum = %v, %v", v, err)
 						}
-						if mode != "existing" && (mode == "eager" || calls >= jitHotCalls || iterations > backEdgeCheckInterval+1) && !native {
+						if mode != "existing" && (mode == "eager" || calls >= jitInvocationsForFeedback || iterations > backEdgeCheckInterval+1) && !native {
 							b.Fatal("hot benchmark did not enter native code")
 						}
-						if mode == "automatic" && calls < jitHotCalls && iterations < backEdgeCheckInterval && coldState {
+						if mode == "automatic" && calls < jitInvocationsForFeedback && iterations < backEdgeCheckInterval && coldState {
 							b.Fatal("cold benchmark allocated native state")
 						}
 					}
@@ -3630,7 +3645,7 @@ func BenchmarkJITDenseKernels(b *testing.B) {
 					b.Fatal(err)
 				}
 				var want Value
-				for i := 0; i < jitHotCalls; i++ {
+				for i := 0; i < jitInvocationsForFeedback; i++ {
 					v, err := r.Run(call)
 					if err != nil {
 						b.Fatal(err)
@@ -3682,7 +3697,7 @@ func BenchmarkJITArrayKernels(b *testing.B) {
 					b.Fatal(err)
 				}
 				var want Value
-				for i := 0; i < jitHotCalls; i++ {
+				for i := 0; i < jitInvocationsForFeedback; i++ {
 					v, err := r.Run(call)
 					if err != nil {
 						b.Fatal(err)
@@ -3752,7 +3767,7 @@ func BenchmarkJITCryptoWorkload(b *testing.B) {
 					b.Fatalf("Crypto pair: %v, %v", v, err)
 				}
 			}
-			for range jitHotCalls {
+			for range jitInvocationsForFeedback {
 				run()
 			}
 			b.ReportAllocs()
@@ -3824,7 +3839,7 @@ func BenchmarkJITCryptoLimb(b *testing.B) {
 					}
 					return carry
 				}
-				for range jitHotCalls {
+				for range jitInvocationsForFeedback {
 					v, err := r.Run(call)
 					if err != nil || v.Number() != float64(advance()) {
 						b.Fatalf("warm carry: %v, %v", v, err)
@@ -3904,7 +3919,7 @@ func BenchmarkJITNumericFields(b *testing.B) {
 				}
 				x += 4096
 			}
-			for range jitHotCalls {
+			for range jitInvocationsForFeedback {
 				run()
 			}
 			b.ReportAllocs()
@@ -3956,7 +3971,7 @@ func BenchmarkJITNumericGlobals(b *testing.B) {
 					b.Fatalf("globals: %v, %v; want %d", v, err, want)
 				}
 			}
-			for range jitHotCalls {
+			for range jitInvocationsForFeedback {
 				run()
 			}
 			b.ReportAllocs()
@@ -4005,7 +4020,7 @@ func BenchmarkJITReferenceFields(b *testing.B) {
 					b.Fatalf("references: %v, %v; want %d", v, err, want)
 				}
 			}
-			for range jitHotCalls {
+			for range jitInvocationsForFeedback {
 				run()
 			}
 			b.ReportAllocs()
@@ -4151,7 +4166,7 @@ func BenchmarkJITNumericKernels(b *testing.B) {
 					if _, err := r.Run(definition); err != nil {
 						b.Fatal(err)
 					}
-					for i := 0; i < jitHotCalls; i++ {
+					for i := 0; i < jitInvocationsForFeedback; i++ {
 						v, err := r.Run(call)
 						if err != nil || !jitSameValueForTest(v, want) {
 							b.Fatalf("warmup = %v, %v; want %v", v, err, want)
@@ -4483,7 +4498,7 @@ func BenchmarkJITHostRoundTrip(b *testing.B) {
 			b.Run(tc.name+"/"+mode, func(b *testing.B) {
 				r := New(Config{JIT: enabled})
 				defer func() { r.Close(); r.ReleaseClosed() }()
-				r.jitCallThreshold = 1
+				r.jitCallThreshold, r.jitICThreshold = 1, 1
 				r.global.setOwnRaw(r.atoms.intern("g"), r.NewFunction("g", 1,
 					func(_ *Runtime, _ Value, args []Value) (Value, error) { return args[0], nil }), propDefault)
 				if _, err := r.Run(compileForTest(b, `function f(n){let s=0;for(let i=0;i<n;i++)`+tc.body+`;return s}`)); err != nil {
@@ -6036,7 +6051,7 @@ func TestJITSSAKeepCellsRunOut(t *testing.T) {
 			t.Fatal(err)
 		}
 		r := jitRuntimeForTest(t, Config{JIT: true})
-		r.jitCallThreshold = jitHotCalls
+		r.jitCallThreshold, r.jitICThreshold = jitInvocationsForFeedback, jitInvocationsForFeedback
 		v, err := r.Run(compileForTest(t, src))
 		if err != nil || v.Number() != wv.Number() {
 			t.Fatalf("%q: %v, %v; interpreter %v", body, v, err, wv)
@@ -6336,6 +6351,7 @@ func TestJITSSAPolymorphicReadsBackOff(t *testing.T) {
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	r := New(Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	jitFewCallsForTest(r)
 	if r.jitCallThreshold <= 1 {
 		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
 	}

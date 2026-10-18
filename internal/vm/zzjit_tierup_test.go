@@ -4,6 +4,7 @@ package vm
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/go-quickjs/go-quickjs/internal/bytecode"
@@ -17,15 +18,24 @@ const jitTierSetup = `function A(){} A.prototype.x=1; function B(){this.y=0} B.p
 	var a=new A(), b=new B(), c=new C(), d=new D();
 	function f(o,n){let s=0;for(let i=0;i<n;i++)s=(s+o.x)|0;return s}`
 
+// jitFewCallsForTest has r compile a function after a few calls, the
+// warm-up of tests of what native code does once compiled, rather than
+// V8's budgets (jitInvocationsForMaglev), unless it compiles at once.
+func jitFewCallsForTest(r *Runtime) {
+	if r.jitCallThreshold > jitInvocationsForFeedback {
+		r.jitCallThreshold, r.jitICThreshold = jitInvocationsForFeedback, jitInvocationsForFeedback
+	}
+}
+
 // jitTierRuntimeForTest runs setup in a runtime that compiles a function at
 // its threshold's call, and in an interpreter, and returns a run that has
 // both run src, failing on an answer that differs.
-func jitTierRuntimeForTest(t *testing.T, threshold uint8, setup string) (*Runtime, func(src string)) {
+func jitTierRuntimeForTest(t *testing.T, threshold uint16, setup string) (*Runtime, func(src string)) {
 	t.Helper()
 	want := New(Config{})
 	t.Cleanup(func() { want.Close(); want.ReleaseClosed() })
 	r := jitRuntimeForTest(t, Config{JIT: true})
-	r.jitCallThreshold = threshold
+	r.jitCallThreshold, r.jitICThreshold = threshold, threshold
 	for _, rt := range []*Runtime{want, r} {
 		if _, err := rt.Run(compileForTest(t, setup)); err != nil {
 			t.Fatal(err)
@@ -297,4 +307,148 @@ func TestJITLearnedCodeRunsOn(t *testing.T) {
 		t.Fatal("mark unchanged by a call learned")
 	}
 	e.nativeCalls = e.nativeCalls[:len(e.nativeCalls)-1]
+}
+
+// v8TierRuntimeForTest is a runtime with V8's budgets (jitInvocationsForMaglev,
+// jitInvocationsAfterICUpdate), and an interpreter beside it, as
+// jitTierRuntimeForTest's.
+func v8TierRuntimeForTest(t *testing.T, setup string) (*Runtime, func(src string)) {
+	t.Helper()
+	r, run := jitTierRuntimeForTest(t, jitInvocationsForMaglev, setup)
+	r.jitICThreshold = jitInvocationsAfterICUpdate
+	if r.jitStress.threshold {
+		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
+	}
+	return r, run
+}
+
+// A function is compiled once the existing tiers have spent
+// invocation_count_for_maglev invocations' worth of its budget, each its
+// bytecode's length, as V8 tiers up to Maglev: k, whose caches meet one
+// shape from its first call on, is compiled at its 400th call, not at its
+// 399th. A change of its caches' feedback raises what is left to
+// minimum_invocations_after_ic_update invocations' worth, as
+// NotifyICChanged does: g, the same, meeting a second shape at its 100th
+// call, is compiled at its 900th, the change found when its budget was
+// spent at its 400th, not before. Neither has a loop, whose back edges
+// would spend their budget too (jitTierWork).
+func TestJITV8Budgets(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r, run := v8TierRuntimeForTest(t, jitTierSetup+`
+		function k(o){const p=[o];return p[0].x}
+		function g(o){const p=[o];return p[0].x}`)
+	fe := func(name string) *jitEntry {
+		cl := r.global.getOwn(r.atoms.intern(name)).value().Object().fn().closure
+		return r.jit.entryFor(cl.fn)
+	}
+	for n := 1; n < jitInvocationsForMaglev; n++ {
+		run(`k(a)`)
+		if e := fe("k"); e != nil && e.ssa != nil {
+			t.Fatalf("k compiled at call %d", n)
+		}
+	}
+	run(`k(a)`)
+	if e := fe("k"); e == nil || e.ssa == nil || e.ssaStats.entries == 0 {
+		t.Fatalf("k not compiled at call %d", jitInvocationsForMaglev)
+	}
+
+	want := jitInvocationsForMaglev + jitInvocationsAfterICUpdate
+	for k := 1; k < want; k++ {
+		o := "a"
+		if k >= 100 && k&1 == 0 {
+			o = "b"
+		}
+		run(`g(` + o + `)`)
+		if e := fe("g"); e != nil && e.ssa != nil {
+			t.Fatalf("g compiled at call %d, its feedback changed at the 100th", k)
+		}
+	}
+	run(`g(a)`)
+	if e := fe("g"); e == nil || e.ssa == nil {
+		t.Fatalf("g not compiled at call %d", want)
+	}
+	guards := r.jit.guards
+	run(`[g(a),g(b)].join()`)
+	if r.jit.guards != guards {
+		t.Fatal("g, compiled for both shapes, deoptimized")
+	}
+}
+
+// A long-running loop is entered by on-stack replacement once its
+// function's budget is spent while the loop still runs, as V8's
+// MaybeOptimizeFrame has it, not after a fixed number of back-edge
+// budgets: each full budget of back edges spends its count of them, each
+// the loop's length (jitTierWork). h, long, with a short loop, has spent
+// part of its budget after a run of a quarter of it, and is compiled and
+// entered at its loop in its second run, a long one, its first call
+// spending next to none of it.
+func TestJITV8LoopTierUp(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	var b strings.Builder
+	b.WriteString(`function h(n){let s=0;for(let i=0;i<n;i++)s=(s+i)|0;`)
+	for k := 0; k < 40; k++ {
+		fmt.Fprintf(&b, "if(n===%d)s=(s+%d)|0;", -k-1, k)
+	}
+	b.WriteString(`return s}`)
+	r, run := v8TierRuntimeForTest(t, b.String())
+	cl := r.global.getOwn(r.atoms.intern("h")).value().Object().fn().closure
+	e0 := jitTierWorkForTest(r, cl)
+	budget := r.jitTierBudget(cl.fn, nil)
+	quarter := int(budget / 4 / e0)
+	run(fmt.Sprintf(`h(%d)`, quarter*backEdgeCheckInterval))
+	e := r.jit.entryFor(cl.fn)
+	if e != nil && e.ssa != nil {
+		t.Fatalf("h compiled within a quarter of its budget")
+	}
+	if e == nil || !e.warming || e.tierBudget >= budget {
+		t.Fatalf("h's loop spent none of its budget: %+v", e)
+	}
+	osrs := r.jit.osrs
+	run(fmt.Sprintf(`h(%d)`, 8*quarter*backEdgeCheckInterval))
+	e = r.jit.entryFor(cl.fn)
+	if e == nil || e.ssa == nil || r.jit.osrs == osrs || e.starts != 0 {
+		t.Fatalf("h's long loop was not entered by on-stack replacement: osrs %d, entry %+v", r.jit.osrs-osrs, e != nil && e.ssa != nil)
+	}
+}
+
+// jitTierWorkForTest is the work a full budget of back edges in cl's loops
+// spends at the least: half the interval, as backEdgeBudget varies it.
+func jitTierWorkForTest(r *Runtime, cl *closure) int64 {
+	return int64(backEdgeCheckInterval/2) * int64(jitLoopLength(cl.fn))
+}
+
+// A function warming up (jitWarmFor) that a native caller's call asks for
+// is compiled at once, as one with no entry is (jitFor): g, a loop whose captured
+// local its lowering for native callers refuses, has been called a few
+// times, its budget far from spent, when its caller learns the call, and
+// is compiled for Go to enter and its callers to call -- not refused for
+// native callers for good, its warming entry taken for a compile that had
+// been tried. So AWFY's Richards' runTask, compiled first, had made every
+// call of its tasks' functions by Go, at three and a half times the time.
+func TestJITWarmingCalleeCompiledOnDemand(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	r, run := v8TierRuntimeForTest(t, `function g(x){let y=x;const h=()=>y;let s=0;for(let i=0;i<2;i++)s+=h();return s}`)
+	for range 2 * jitInvocationsForFeedback {
+		run(`g(1)`)
+	}
+	cl := r.global.getOwn(r.atoms.intern("g")).value().Object().fn().closure
+	if _, err := r.jitLower(cl.fn, jitLowerInline); err == nil {
+		t.Fatal("g is lowered for native callers: no test of a refusal")
+	}
+	e := r.jit.entryFor(cl.fn)
+	if e == nil || !e.warming || e.ssa != nil {
+		t.Fatalf("g is not warming up: %+v", e)
+	}
+	if !r.jitNativeOrLinked(cl) {
+		t.Fatal("a native caller may not call g")
+	}
+	if e = r.jit.entryFor(cl.fn); e == nil || e.ssa == nil || e.warming || e.calleeRefused {
+		t.Fatalf("g not compiled at its native caller's call: %+v", e != nil && e.ssa != nil)
+	}
 }

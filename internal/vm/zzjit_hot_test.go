@@ -150,6 +150,7 @@ func TestJITHotCallsOfGoOnly(t *testing.T) {
 	}
 	r := New(Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	jitFewCallsForTest(r)
 	const setup = `
 		var o = { s: 'abcdefgh', i: 0, cur: 'a' }
 		function read(o) { let k = 0; for (let j = 0; j < 1; j++) k += j; o.i = (o.i + 1) & 7; o.cur = o.s.substring(o.i, o.i + 1) }

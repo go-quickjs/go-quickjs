@@ -182,7 +182,7 @@ func jitDifferential(t *testing.T, src string) JITStats {
 		// over the limit may end either way (see outOfMemory).
 		r := New(Config{JIT: jit, MemoryLimit: 16 << 20})
 		defer func() { r.Close(); r.ReleaseClosed() }()
-		r.jitCallThreshold = 1
+		r.jitCallThreshold, r.jitICThreshold = 1, 1
 		r.jitStress = c
 		// Each tier compiles its own bytecode: a function's tree decision is
 		// cached in it.

@@ -95,7 +95,7 @@ func TestJITFillDiscardsNothing(t *testing.T) {
 	}
 	for limit := int64(6 << 20); limit <= 10<<20; limit += step {
 		r := New(Config{JIT: true, MemoryLimit: limit})
-		r.jitCallThreshold = 1
+		r.jitCallThreshold, r.jitICThreshold = 1, 1
 		for n := 0; ; n++ {
 			if n > 1<<14 {
 				t.Fatalf("limit %d: the budget never filled", limit)

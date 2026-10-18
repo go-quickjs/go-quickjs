@@ -74,6 +74,7 @@ func TestJITGenericCallsNative(t *testing.T) {
 	defer debug.SetGCPercent(debug.SetGCPercent(-1))
 	r := New(Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	jitFewCallsForTest(r)
 	const setup = `
 		function forEach(a, f) { for (let i = 0; i < a.length; i++) f(a[i]) }
 		const a = []

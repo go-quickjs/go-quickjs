@@ -281,7 +281,7 @@ func TestJITInlinedConcat(t *testing.T) {
 		{threshold: true, budget: 3, deopt: 7},
 	} {
 		r := New(Config{JIT: true})
-		r.jitCallThreshold = 1
+		r.jitCallThreshold, r.jitICThreshold = 1, 1
 		r.jitStress = c
 		v, err := r.Run(compileForTest(t, src))
 		if err != nil {

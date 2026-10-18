@@ -11,7 +11,7 @@ import "testing"
 // have none.
 func builderDifferential(t *testing.T, src string) {
 	t.Helper()
-	run := func(jit bool, threshold uint8) string {
+	run := func(jit bool, threshold uint16) string {
 		r := New(Config{JIT: jit})
 		defer func() { r.Close(); r.ReleaseClosed() }()
 		if jit && r.jitCallThreshold <= 1 && threshold > 1 {
@@ -19,7 +19,7 @@ func builderDifferential(t *testing.T, src string) {
 			threshold = 1
 		}
 		if jit {
-			r.jitCallThreshold = threshold
+			r.jitCallThreshold, r.jitICThreshold = threshold, threshold
 		}
 		v, err := r.Run(compileForTest(t, src))
 		if err != nil {
@@ -32,7 +32,7 @@ func builderDifferential(t *testing.T, src string) {
 		return s.Go()
 	}
 	want := run(false, 0)
-	for _, threshold := range []uint8{1, 10} {
+	for _, threshold := range []uint16{1, 10} {
 		if got := run(true, threshold); got != want {
 			t.Errorf("threshold %d: got\n%.400s\nwant\n%.400s", threshold, got, want)
 		}

@@ -1312,7 +1312,9 @@ func (r *Runtime) jitLearnedDue(cl *closure, e *jitEntry) bool {
 		return false
 	}
 	if m := jitLearnedMark(cl, e); m != e.tierMark {
-		// Learned more meanwhile: another budget, for it all.
+		// Learned more meanwhile: what is left raised, as at a change of
+		// the caches' feedback (jitICBudget), for it all.
+		e.tierBudget = max(e.tierBudget-(spent-e.tierBase), r.jitICBudget(cl.fn))
 		e.tierBase, e.tierMark = spent, m
 		return false
 	}
@@ -1373,12 +1375,18 @@ func (r *Runtime) jitInvalidate(cl *closure, e *jitEntry) {
 }
 
 // jitTierBudget is the work the existing tiers do with fn, e's function,
-// before e's invalidated code is compiled again: as many invocations as a
-// function is called before it is first compiled (jitCallThreshold), each
-// worth its instructions -- as V8's interrupt budget is so many
-// invocations of its bytecode's length.
+// before it is compiled, or compiled again: jitCallThreshold invocations
+// (jitInvocationsForMaglev), each worth its instructions -- as V8's
+// interrupt budget is so many invocations of its bytecode's length.
 func (r *Runtime) jitTierBudget(fn *bytecode.Function, e *jitEntry) int64 {
 	return int64(max(r.jitCallThreshold, 1)) * int64(max(len(fn.Code), 1))
+}
+
+// jitICBudget is what a change of fn's caches' feedback raises what is
+// left of its budget to (jitICThreshold invocations' worth), as
+// TieringManager::NotifyICChanged raises V8's.
+func (r *Runtime) jitICBudget(fn *bytecode.Function) int64 {
+	return int64(max(r.jitICThreshold, 1)) * int64(max(len(fn.Code), 1))
 }
 
 // jitTierUp spends work of the budget of e's invalidated code, cl's
@@ -1399,7 +1407,7 @@ func (r *Runtime) jitTierUp(cl *closure, e *jitEntry, work int64) bool {
 		return false
 	}
 	if m := jitFeedbackMark(cl); m != e.tierMark {
-		e.tierBudget, e.tierMark = r.jitTierBudget(cl.fn, e), m
+		e.tierBudget, e.tierMark = max(e.tierBudget, r.jitICBudget(cl.fn)), m
 		return false
 	}
 	r.jitReoptimize(cl, e)
@@ -5260,6 +5268,7 @@ func (r *Runtime) jitWantedCallees(e *jitEntry, fb *jitFeedback) {
 // setSSA gives e the code the new pipeline compiled for fn from p, which
 // native callers call through its link.
 func (e *jitEntry) setSSA(s *jitState, fn *bytecode.Function, p *ir.Program, code *jit.SSACode, fb *jitFeedback) {
+	e.warming = false
 	e.ssa, e.this, e.ssaShapes, e.ssaHolders = code, p.This, fb.shapes, fb.holders
 	e.ssaSerial++
 	e.ssaProg = p
@@ -7938,9 +7947,9 @@ func (r *Runtime) jitResume(f *frame) (Value, error, bool) {
 		jitRetrySlow(e)
 		return Undefined, nil, false
 	}
-	if f.cl.jitCalls < r.jitCallThreshold {
+	if a := r.jitFeedbackCalls(); f.cl.jitCalls < a {
 		f.cl.jitCalls++
-		if f.cl.jitCalls < r.jitCallThreshold {
+		if f.cl.jitCalls < a {
 			return Undefined, nil, false
 		}
 	}

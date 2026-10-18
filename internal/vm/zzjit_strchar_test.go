@@ -288,6 +288,7 @@ func TestJITLocalTypedReadsLearned(t *testing.T) {
 		r + count([1, 3, 3, '3', null], 3)`)
 	r := New(Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	jitFewCallsForTest(r)
 	if r.jitCallThreshold <= 1 {
 		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
 	}
@@ -356,6 +357,7 @@ func TestJITKeyedReadsByGo(t *testing.T) {
 		r + hits`)
 	r := New(Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	jitFewCallsForTest(r)
 	if r.jitCallThreshold <= 1 {
 		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
 	}
@@ -407,6 +409,7 @@ func TestJITStringAddChainsLearnedAtOnce(t *testing.T) {
 		file.text`)
 	r := New(Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	jitFewCallsForTest(r)
 	if r.jitCallThreshold <= 1 {
 		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
 	}
@@ -444,6 +447,7 @@ func TestJITFreshViewLengthsNative(t *testing.T) {
 	}
 	r := New(Config{JIT: true})
 	t.Cleanup(func() { r.Close(); r.ReleaseClosed() })
+	jitFewCallsForTest(r)
 	if r.jitCallThreshold <= 1 {
 		t.Skip("the runtime compiles eagerly (QJS_JIT_STRESS)")
 	}

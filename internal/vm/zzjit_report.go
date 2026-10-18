@@ -16,7 +16,8 @@ import (
 // function is; Status is native (its code runs), slow (it has code, which
 // Go stopped entering: its exits cost more than it saved), refused (the
 // JIT does not compile it, for Reason), deferred (out of the JIT's memory
-// for now) or skipped (never tried, for Reason).
+// for now), warming (not compiled yet, its budget not spent) or skipped
+// (never tried, for Reason).
 //
 // Native counts the times its code ran -- Go's entries, at its start or
 // into a loop, and native callers' calls -- and Declined the calls the
@@ -65,6 +66,8 @@ func (r *Runtime) JITReport() []JITFunction {
 			f.Status = "native"
 		case e.deferred:
 			f.Status = "deferred"
+		case e.warming:
+			f.Status = "warming"
 		default:
 			f.Status, f.Reason = "refused", e.refusal
 		}

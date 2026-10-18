@@ -22,6 +22,8 @@ func TestJITOption(t *testing.T) {
 			opts = append(opts, quickjs.WithNodeQuirks())
 		}
 		r := quickjs.New(opts...)
+		// A few calls warm a function up, as these tests run it.
+		hostaccess.VM(r).SetJITWarmUp(8, 8)
 		defer r.Close()
 		for _, tc := range []struct{ source, want string }{
 			{`function f(n) { let s=0; for(let i=0;i<n;i++) s+=i; return s } f(10000)`, "49995000"},
@@ -77,6 +79,8 @@ func TestJITMemoryLimitOption(t *testing.T) {
 		{"no jit", []quickjs.Option{quickjs.WithJITMemoryLimit(256 << 10)}, 0},
 	} {
 		r := quickjs.New(tc.opts...)
+		// A few calls warm a function up, as these tests run it.
+		hostaccess.VM(r).SetJITWarmUp(8, 8)
 		if got := evalString(t, r, src); got != want {
 			t.Fatalf("%s: %s, want %s", tc.name, got, want)
 		}
@@ -104,6 +108,8 @@ func TestJITMemoryLimitOption(t *testing.T) {
 	// the JIT's.
 	for _, opts := range [][]quickjs.Option{nil, {quickjs.WithJIT(), quickjs.WithJITMemoryLimit(64 << 20)}} {
 		r := quickjs.New(append(opts, quickjs.WithMemoryLimit(1<<20))...)
+		// A few calls warm a function up, as these tests run it.
+		hostaccess.VM(r).SetJITWarmUp(8, 8)
 		_, err := r.Eval(`new ArrayBuffer(2 << 20)`)
 		r.Close()
 		if !errors.Is(err, quickjs.ErrMemoryLimit) {
@@ -120,6 +126,8 @@ func TestJITMemoryLimitOption(t *testing.T) {
 func TestJITImport(t *testing.T) {
 	run := func(opts ...quickjs.Option) (string, vm.JITStats) {
 		rt := quickjs.New(opts...)
+		// A few calls warm a function up, as these tests run it.
+		hostaccess.VM(rt).SetJITWarmUp(8, 8)
 		defer rt.Close()
 		var got []string
 		rt.SetModuleLoader(func(specifier, referrer string) (string, string, error) {
@@ -194,6 +202,8 @@ func TestJITNullish(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			run := func(opts ...quickjs.Option) (string, vm.JITStats) {
 				r := quickjs.New(opts...)
+				// A few calls warm a function up, as these tests run it.
+				hostaccess.VM(r).SetJITWarmUp(8, 8)
 				defer r.Close()
 				v, err := r.Eval(tc.src)
 				if err != nil {
@@ -241,6 +251,8 @@ func TestJITDestructuring(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			run := func(opts ...quickjs.Option) (string, vm.JITStats) {
 				r := quickjs.New(opts...)
+				// A few calls warm a function up, as these tests run it.
+				hostaccess.VM(r).SetJITWarmUp(8, 8)
 				defer r.Close()
 				v, err := r.Eval(tc.src)
 				if err != nil {
@@ -288,6 +300,8 @@ func TestJITPrivateMembers(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			run := func(opts ...quickjs.Option) (string, vm.JITStats) {
 				r := quickjs.New(opts...)
+				// A few calls warm a function up, as these tests run it.
+				hostaccess.VM(r).SetJITWarmUp(8, 8)
 				defer r.Close()
 				v, err := r.Eval(tc.src)
 				if err != nil {
@@ -342,6 +356,8 @@ func TestJITTailCalls(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			run := func(opts ...quickjs.Option) (string, vm.JITStats) {
 				r := quickjs.New(opts...)
+				// A few calls warm a function up, as these tests run it.
+				hostaccess.VM(r).SetJITWarmUp(8, 8)
 				defer r.Close()
 				v, err := r.Eval(`"use strict"; ` + tc.src)
 				if err != nil {
@@ -362,6 +378,8 @@ func TestJITTailCalls(t *testing.T) {
 	// A loop of calls in tail position polls, as a loop's back-edge does:
 	// the host can stop it.
 	r := quickjs.New(quickjs.WithJIT())
+	// A few calls warm a function up, as these tests run it.
+	hostaccess.VM(r).SetJITWarmUp(8, 8)
 	defer r.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
@@ -405,6 +423,8 @@ func TestJITArrowThis(t *testing.T) {
 			t.Run(tc.name+map[string]string{"": "", `"use strict"; `: ", strict"}[strict], func(t *testing.T) {
 				run := func(opts ...quickjs.Option) string {
 					r := quickjs.New(opts...)
+					// A few calls warm a function up, as these tests run it.
+					hostaccess.VM(r).SetJITWarmUp(8, 8)
 					defer r.Close()
 					v, err := r.Eval(strict + tc.src)
 					if err != nil {
@@ -481,6 +501,8 @@ func TestJITTopLevel(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			run := func(opts ...quickjs.Option) (string, vm.JITStats) {
 				r := quickjs.New(opts...)
+				// A few calls warm a function up, as these tests run it.
+				hostaccess.VM(r).SetJITWarmUp(8, 8)
 				defer r.Close()
 				for _, src := range tc.scripts {
 					if _, err := r.Eval(src); err != nil {
@@ -532,6 +554,8 @@ func TestJITUpvalueAfterIteratorStep(t *testing.T) {
 	})()`
 	run := func(opts ...quickjs.Option) (string, vm.JITStats) {
 		r := quickjs.New(opts...)
+		// A few calls warm a function up, as these tests run it.
+		hostaccess.VM(r).SetJITWarmUp(8, 8)
 		defer r.Close()
 		return evalString(t, r, src), hostaccess.VM(r).JITStats()
 	}
@@ -645,6 +669,8 @@ func TestJITCapturedLocals(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			run := func(opts ...quickjs.Option) (string, vm.JITStats) {
 				r := quickjs.New(opts...)
+				// A few calls warm a function up, as these tests run it.
+				hostaccess.VM(r).SetJITWarmUp(8, 8)
 				defer r.Close()
 				if _, err := r.Eval(tc.src); err != nil {
 					t.Fatal(err)

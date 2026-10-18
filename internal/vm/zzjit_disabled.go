@@ -32,6 +32,9 @@ func (*Runtime) jitOn() bool { return false }
 // JITStats is zero: a build without the JIT runs none of it.
 func (*Runtime) JITStats() JITStats { return JITStats{} }
 
+// SetJITWarmUp does nothing: there is no JIT to warm up.
+func (*Runtime) SetJITWarmUp(int, int) {}
+
 func (*Runtime) initJIT(bool, int64)                                  {}
 func (*Runtime) tryJITFrame(*frame) (Value, error, bool)              { return Value{}, nil, false }
 func (*Runtime) jitResume(*frame) (Value, error, bool)                { return Value{}, nil, false }

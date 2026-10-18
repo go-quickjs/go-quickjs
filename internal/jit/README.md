@@ -69,21 +69,31 @@ those, which the existing tiers' caches do not note. It runs on, and is
 compiled again in place once it has spent a budget as invalidated code
 does, nothing more learned meanwhile (`jitLearnedDue`).
 
-**Tier-up.** Invalidated code is compiled again once the existing tiers
-have spent a fresh budget (`jitTierUp`): as many invocations as it took to
-compile the function first (`jitCallThreshold`), each its bytecode's
-length (`jitTierBudget`), as V8's interrupt budget is invocations times
-bytecode length -- an invocation spends its length, a loop that ran a full
-budget of back edges all of it, the code then entered by on-stack
-replacement. Every invocation the existing tiers run spends it, those the
-call path answers without a frame (a pure body's, a leaf's) included when
-Go makes them for native code (`jitInvokedFrameless`): a function only
-native callers call is compiled again by their calls. A change of the function's caches' feedback meanwhile -- what
-they hold, not how often they were filled (`jitFeedbackMark`) -- delays
-the compile by another budget, as V8's `NotifyICChanged` does: feedback
-settles where it is gathered, and one compile takes it all. Past
-`jitMaxDeopts` eager deoptimizations a function is compiled no more, as
-V8 gives up optimizing one that keeps deoptimizing.
+**Tier-up.** The budgets are V8's, named after its flags. A function is
+given its entry, which holds its budget and its caches' mark as V8's
+feedback vector does, after `invocation_count_for_feedback_allocation` (8)
+calls (`jitInvocationsForFeedback`), and is compiled once the existing
+tiers have spent `invocation_count_for_maglev` (400) invocations' worth
+of it (`jitInvocationsForMaglev`; our one optimizing tier is the closest
+to Maglev), each its bytecode's length (`jitTierBudget`): an invocation
+spends its length, a full budget of back edges its count of them times
+the loop's length (`jitTierWork`), as V8's JumpLoop spends its distance.
+A loop still running when the budget is spent is entered by on-stack
+replacement, as V8's `MaybeOptimizeFrame` does it, not after a fixed
+number of back-edge budgets. Invalidated code waits for a fresh budget
+the same way (`jitTierUp`), and code that learned at its exits too
+(`jitLearnedDue`). Every invocation the existing tiers run spends it,
+those the call path answers without a frame (a pure body's, a leaf's)
+included when Go makes them for native code (`jitInvokedFrameless`): a
+function only native callers call is compiled again by their calls. A
+change of the function's caches' feedback -- what they hold, not how
+often they were filled (`jitFeedbackMark`) -- raises what is left of the
+budget to `minimum_invocations_after_ic_update` (500) invocations' worth
+(`jitInvocationsAfterICUpdate`), never lowering it, as V8's
+`NotifyICChanged` does; the change is found when the budget is spent.
+Past `jitMaxDeopts` eager deoptimizations a function is compiled no more,
+as V8 gives up optimizing one that keeps deoptimizing. `QJS_JIT_STRESS`'s
+threshold compiles at once, as tests do (`jitCallThreshold` 1).
 
 **Calls.** A call the VM has seen call a compiled function is made
 natively: the callee's frame is made in the VM's stack, its context is the
