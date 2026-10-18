@@ -4,6 +4,7 @@ package vm
 
 import (
 	"fmt"
+	"github.com/go-quickjs/go-quickjs/internal/bytecode"
 	"strings"
 	"testing"
 )
@@ -352,6 +353,72 @@ func TestJITGoTypeOfInstanceOf(t *testing.T) {
 		}
 		if h, g := e.ssaStats.hosts-hosts, e.ssaStats.guards-guards; h != 0 || g != 0 {
 			t.Errorf("%s left native code %d times for Go and failed %d guards", name, h, g)
+		}
+	}
+}
+
+// A derived class's constructor is compiled, its super(...) Go's from
+// native code on the code's own frame (ssa.CallSite's Super), which binds
+// its this, and its this read after (push_this's check) natively; a this
+// read before super() and a second super() throw as the interpreter's, a
+// constructor returning an object or a primitive answers as the
+// interpreter's, and class fields are initialized by super() as there.
+// Before, a derived class's constructor was never compiled: each `new` of
+// one ran it in the tree tier -- AWFY DeltaBlue's constraints, a quarter
+// of its time with the JIT -- a quarter that is the construction's
+// machinery, not the constructors' own: compiled, those with only a store
+// after their super() saved nothing measured, and are left to the tree
+// tier as any function of host operations alone is (hostOnly). Each
+// answer is the interpreter's.
+func TestJITDerivedConstructor(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		// Each constructor does work of its own after its super(), a loop,
+		// as one compiled for itself does (jitcompile's hostOnly).
+		class A { constructor(x) { this.x = x } }
+		class B extends A { constructor(x, y) { super(x); let h = 0; for (let k = 0; k < 8; k++) h = (h * 31 + k) | 0; this.y = y + this.x + (h & 1) } }
+		class C extends B { constructor(x) { super(x, 2); let h = 0; for (let k = 0; k < 8; k++) h = (h + this.y) | 0; this.z = this.x * this.y + h } }
+		class F { a = 1 } class G extends F { b = 2; constructor(c) { super(); let h = 0; for (let k = 0; k < 8; k++) h ^= k; this.c = c + this.a + this.b + h } }
+		class Imp extends A {}
+		function make(n) { let s = 0; for (let i = 0; i < n; i++) { const b = new B(i, 1), c = new C(i), g = new G(i), m = new Imp(i); s = (s + b.y + c.z + g.c + m.x) | 0 } return s }
+		class Early extends A { constructor() { this.q = 1; super(1) } }
+		class Twice extends A { constructor() { super(1); super(2) } }
+		class RetObj extends A { constructor() { super(1); return { other: true } } }
+		class RetPrim extends A { constructor() { super(1); return 5 } }
+		function err(K) { try { const o = new K(); return JSON.stringify(o) } catch (e) { return e.constructor.name } }
+	`
+	rounds := []string{}
+	for range 10 {
+		rounds = append(rounds, `make(500)`)
+	}
+	for range 3 {
+		rounds = append(rounds, `err(Early)`, `err(Twice)`, `err(RetObj)`, `err(RetPrim)`)
+	}
+	r := jitAgreesForTest(t, setup, rounds...)
+	for _, name := range []string{"B", "C", "G"} {
+		// A class is a lexical binding, not the global object's: its
+		// constructor's entry, by its name.
+		var e *jitEntry
+		for k, x := range r.jit.cache {
+			if fn := k.Value(); fn != nil && fn.Name == name && fn.Kind == bytecode.KindDerivedConstructor {
+				e = x
+			}
+		}
+		if e == nil || e.ssa == nil || e.ssaStats.entries == 0 {
+			t.Fatalf("%s never ran natively: %+v", name, e)
+		}
+		if e.ssaStats.hosts+e.ssaStats.guards != 0 {
+			t.Errorf("%s left native code %d times for Go and failed %d guards", name, e.ssaStats.hosts, e.ssaStats.guards)
+		}
+	}
+	// An implicit constructor, super(...arguments) alone, which native
+	// code would only leave for at its super(), is left to the tree tier
+	// as any function of host operations alone is (jitcompile's hostOnly).
+	for k, x := range r.jit.cache {
+		if fn := k.Value(); fn != nil && fn.Name == "Imp" && x.ssa != nil {
+			t.Errorf("Imp, an implicit constructor, was compiled: it left native code %d times", x.ssaStats.hosts)
 		}
 	}
 }

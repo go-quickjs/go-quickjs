@@ -362,6 +362,12 @@ type CallSite struct {
 	// Go makes it, as the interpreter does -- an instanceof may run code,
 	// a Symbol.hasInstance method or a proxy's trap.
 	TypeOf, InstanceOf bool
+	// Super marks a call of Go (GoCall) that is a derived constructor's
+	// super(...) of its Argc operands, the arguments -- no function among
+	// them -- as V8's code calls the parent constructor: Go makes it on
+	// the code's own frame, binding its this, which is the result and
+	// which the this slot takes.
+	Super bool
 }
 
 // AccessorKind is the kind of a call an accessor's read or write makes
@@ -3523,6 +3529,9 @@ func (b *builder) instruction(blk *Block, pc int) {
 			if calls[0].Method {
 				n++
 			}
+			if calls[0].Super {
+				n = calls[0].Argc
+			}
 			sp := b.p.Locals + b.p.Maps[pc].Depth
 			args := make([]*Value, n)
 			for i := range args {
@@ -3534,6 +3543,12 @@ func (b *builder) instruction(blk *Block, pc int) {
 			r := f.newValue(blk, OpKept, Tagged, cell, call)
 			r.Shadow = cell
 			b.write(b.p.Locals+b.p.Maps[pc+1].Depth-1, blk, r)
+			if calls[0].Super && b.p.This {
+				// The this it bound, which the frame's this slot, the
+				// program's last local, holds from here (jitcompile's
+				// push_this checks it is bound).
+				b.write(b.p.Locals-1, blk, r)
+			}
 			// The callee may have assigned a captured binding. A guard
 			// after the call exits to the next instruction, as the site
 			// there fails: never again, once it has (Generic).
@@ -3569,6 +3584,10 @@ func (b *builder) nativeCalls(pc int) []*CallSite {
 		operands := site.Argc + 1
 		if site.Method {
 			operands++
+		}
+		if site.Super {
+			// Its arguments alone.
+			operands = site.Argc
 		}
 		// A callee that reads its receiver gets the method call's, or a
 		// construction's, from its pool -- or, an arrow, the this it

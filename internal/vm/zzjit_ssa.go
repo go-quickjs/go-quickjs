@@ -2359,6 +2359,13 @@ func (fb *jitFeedback) NativeCalls(pc int) []ssa.CallSite {
 			// An instanceof whose constructor native code does not know
 			// (ssa.InstanceOfSite): Go's, from native code.
 			return []ssa.CallSite{{Go: ssa.GoCall, InstanceOf: true, Argc: 1, ThisSlot: -1}}
+		case bytecode.OpSuperCall:
+			// A derived constructor's super(...) of its arguments on the
+			// stack: Go's, on the code's own frame (jitGoCall).
+			if call.B == bytecode.SuperArgs && int(call.A) <= abi.MaxGoArgs {
+				return []ssa.CallSite{{Go: ssa.GoCall, Super: true, Argc: int(call.A), ThisSlot: -1}}
+			}
+			return nil
 		}
 		n := int(call.A) + 1
 		if call.Op == bytecode.OpCallMethod {
@@ -3035,7 +3042,7 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 	}
 	sp := top + n
 	r.stackTop, r.stackHigh = sp, max(r.stackHigh, sp)
-	step := in.Op == bytecode.OpIterNextOrJump || in.Op == bytecode.OpIterStep || in.Op == bytecode.OpForOfStart || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpInstanceOf
+	step := in.Op == bytecode.OpIterNextOrJump || in.Op == bytecode.OpIterStep || in.Op == bytecode.OpForOfStart || in.Op == bytecode.OpTypeOf || in.Op == bytecode.OpInstanceOf || in.Op == bytecode.OpSuperCall
 	prop := in.Op == bytecode.OpGetProp || in.Op == bytecode.OpSetProp
 	marking := ctx.GoOp&abi.GoOpMarking != 0
 	if !marking {
@@ -3061,9 +3068,16 @@ func (r *Runtime) jitGoCall(ctx *abi.Context) bool {
 	s.goCallDepth, s.goCallMarking = r.frameDepth+1, marking
 	var v Value
 	var err error
-	if prop {
+	switch {
+	case prop:
 		v, err = r.jitPropertyMade(f.cl, pc, sp)
-	} else {
+	case in.Op == bytecode.OpSuperCall:
+		// A derived constructor's super(...) (abi.GoCallSuper), on the
+		// code's frame, as executeAt's case makes it: the this it binds.
+		if err = r.superCall(f, slices.Clone(r.stack[sp-n:sp])); err == nil {
+			v = f.this
+		}
+	default:
 		v, err = r.jitCallMade(in, sp)
 	}
 	s.goCallDepth, s.goCallMarking = goCallDepth, goCallMarking
@@ -3655,6 +3669,8 @@ func jitGoCallInstr(op uint64) (bytecode.Instr, int) {
 		return bytecode.Instr{Op: bytecode.OpTypeOf}, 1
 	case abi.GoCallInstanceOf:
 		return bytecode.Instr{Op: bytecode.OpInstanceOf}, 2
+	case abi.GoCallSuper:
+		return bytecode.Instr{Op: bytecode.OpSuperCall, A: argc}, int(argc)
 	}
 	return in, n
 }
@@ -6927,10 +6943,18 @@ func (r *Runtime) runSSALoop(f *frame, e *jitEntry, pc, depth, idx int, resume u
 			continue
 		}
 		if ctx.ExitKind == abi.ExitReturn {
+			v := Value{num: math.Float64frombits(ctx.Ret)}
 			if s := jitSource(&ctx.RetFrom); s != nil && s.ref != nil {
-				return *s, nil, true
+				v = *s
 			}
-			return Value{num: math.Float64frombits(ctx.Ret)}, nil, true
+			if f.thisRef != nil {
+				// A derived constructor's: undefined is the this its
+				// super() bound, or, unbound, a ReferenceError, as
+				// executeAt's return makes it (derivedResult).
+				v, err := r.derivedResult(f, f.cl, v)
+				return v, err, true
+			}
+			return v, nil, true
 		}
 		e.ssaStats.records += ctx.Records
 		r.jitApplyRecords(f, e, ctx)
@@ -8050,6 +8074,9 @@ func (r *Runtime) jitCallResult(f *frame, pc, depth int, v Value, err error) (in
 	case bytecode.OpInstanceOf:
 		// The object and the constructor (abi.GoCallInstanceOf).
 		sp = f.base + depth - 2
+	case bytecode.OpSuperCall:
+		// Its arguments (abi.GoCallSuper); the this it bound comes.
+		sp = f.base + depth - int(in.A)
 	case bytecode.OpCallMethod:
 		sp--
 	case bytecode.OpApplyArguments:

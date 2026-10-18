@@ -1038,7 +1038,9 @@ func IsNumber(word uint64) bool { return word < NumberLimit }
 // which Go makes as the instruction at the call's PC does, its key's atom
 // in the high half (GoOpIndexShift); or a typeof's (GoCallTypeOf), of its
 // one operand, the result its name; or an instanceof's
-// (GoCallInstanceOf), of its two, the object and the constructor.
+// (GoCallInstanceOf), of its two, the object and the constructor; or a
+// derived constructor's super(...) (GoCallSuper), of its arguments, the
+// result the this it binds.
 // GoOpMarking
 // marks a call native code makes through Go only because the collector
 // marks -- a native call's, whose setup would store pointers without a
@@ -1062,5 +1064,6 @@ const (
 	GoCallSet        = 7
 	GoCallTypeOf     = 8
 	GoCallInstanceOf = 9
+	GoCallSuper      = 10
 	GoOpMarking      = 1 << 24
 )
