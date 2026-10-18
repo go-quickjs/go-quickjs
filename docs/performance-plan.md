@@ -601,6 +601,15 @@ Box2D -6.0%) and Gameboy alone 1.9% more.
   - hard: calls inside an inlined callee: a GoCall needs the root frame
     (`b.cur == b.root`), and an inlined level has no frame state to give
     Go.
+- **Compiling in the background, last.** V8 compiles on a thread of its
+  own while the function runs on in its lower tier; ours compiles on the
+  runtime's goroutine, so that each compile's whole cost is paid where it
+  is asked for -- with D6 and D7, Typescript's compiles again took 3.2 s
+  of a run against 1.2 s before them. It is to be built at a very late
+  stage, after compiles are cheap: done now, it would hide how slow they
+  are, the time spent off the measured thread. It needs a snapshot of the
+  feedback a compile reads (V8's JSHeapBroker), a `Runtime` being unsafe
+  for concurrent use, and a safe point to install the code at.
 
 ## Rejected
 
