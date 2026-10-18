@@ -422,3 +422,58 @@ func TestJITDerivedConstructor(t *testing.T) {
 		}
 	}
 }
+
+// A keyed read of a name the object and its chain do not have -- a name
+// some other object has, or one no atom has -- is undefined when Go reads
+// it for native code (jitAbsentKey): each object up the chain ordinary,
+// none answering the name itself. Typescript's StringHashTable, read by
+// keys it has not got, this.table[key], had left native code at each.
+// A proxy up the chain, or a getter there, is read as before. Each answer
+// is the interpreter's.
+func TestJITKeyedReadAbsent(t *testing.T) {
+	if !jitSSABackend {
+		t.Skip("no SSA backend on this architecture")
+	}
+	setup := `
+		function Table() { this.table = Object.create(null); this.n = 0 }
+		Table.prototype.add = function (k, v) { if (this.table[k] != undefined) return false; this.table[k] = v; this.n++; return true }
+		Table.prototype.lookup = function (k) { const d = this.table[k]; return d != undefined ? d : null }
+		var t = new Table(); for (var i = 0; i < 100; i++) t.add('k' + i, i)
+		var other = { present: 1, toString: 2 }
+		var keys = []; for (var i = 0; i < 200; i += 3) keys.push('k' + i); keys.push('present', 'toString', 'zz' + 'q' + 7)
+		function hits(n) { let s = 0; for (let j = 0; j < n; j++) for (const k of keys) { const d = t.lookup(k); if (d !== null) s = (s + d) | 0; else s = (s + 1) | 0 } return s }
+		var trap = 0, viaProxy = Object.create(new Proxy({}, { get(o, k) { trap++; return 7 } }))
+		var getterProto = Object.create({ get missing() { return 9 } })
+		function odd(o) { let s = 0; for (const k of ['missing', 'gone']) s += o[k] === undefined ? 1 : o[k]; return s + ':' + trap }
+	`
+	rounds := []string{}
+	for range 6 {
+		rounds = append(rounds, `hits(20)`)
+	}
+	rounds = append(rounds, `odd(viaProxy)`, `odd(getterProto)`, `odd(viaProxy)`, `odd(getterProto)`)
+	r := jitAgreesForTest(t, setup, rounds...)
+	var e *jitEntry
+	for k, x := range r.jit.cache {
+		if fn := k.Value(); fn != nil && fn.Name == "lookup" {
+			e = x
+		}
+	}
+	h := jitNativeForTest(t, r, "hits")
+	hosts, entries := h.ssaStats.hosts, h.ssaStats.entries
+	var lookupHosts uint64
+	if e != nil {
+		lookupHosts = e.ssaStats.hosts
+	}
+	if _, err := r.Run(compileForTest(t, `hits(20)`)); err != nil {
+		t.Fatal(err)
+	}
+	if h.ssaStats.entries == entries {
+		t.Fatalf("hits's code was not entered: slow %v", h.entrySlow)
+	}
+	if n := h.ssaStats.hosts - hosts; n != 0 {
+		t.Errorf("hits left native code %d times for Go", n)
+	}
+	if e != nil && e.ssaStats.hosts != lookupHosts {
+		t.Errorf("lookup left native code %d times for Go", e.ssaStats.hosts-lookupHosts)
+	}
+}

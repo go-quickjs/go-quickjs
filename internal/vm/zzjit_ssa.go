@@ -4750,6 +4750,11 @@ func (r *Runtime) jitKeyedRead(o, k Value) (Value, bool) {
 		a, ok = r.atoms.lookup(n.name)
 	}
 	if !ok {
+		// A name no atom has, which no property has: undefined, if
+		// nothing up the chain could answer it itself.
+		if jitAbsentKey(obj, 0, false) {
+			return Undefined, true
+		}
 		return Undefined, false
 	}
 	if a.IsIndex() {
@@ -4759,7 +4764,31 @@ func (r *Runtime) jitKeyedRead(o, k Value) (Value, bool) {
 		// keyword table answers had left native code at every read.
 		return r.jitKeyedRead(o, Uint32(a.Index()))
 	}
-	return r.sharedProp(obj, a)
+	if v, ok := r.sharedProp(obj, a); ok {
+		return v, true
+	}
+	if jitAbsentKey(obj, a, true) {
+		return Undefined, true
+	}
+	return Undefined, false
+}
+
+// jitAbsentKey reports whether o's property of a name -- a, or, named
+// false, a name no atom has -- is absent from o and from every object up
+// its chain, each an ordinary object whose properties are its table's,
+// none answering the name itself (synthesized): reading it is undefined,
+// with nothing run. A table of strings read by keys it does not have --
+// Typescript's StringHashTable, this.table[key] -- had left native code at
+// each such read; V8's keyed loads answer a name nothing has through its
+// chain's validity cell. Dictionary objects, as such tables become, are
+// searched as any are (findOwn).
+func jitAbsentKey(o *Object, a Atom, named bool) bool {
+	for h, depth := o, 0; h != nil; h, depth = h.proto, depth+1 {
+		if depth > maxChainDepth || !shapeClass(h.class) || named && (synthesized(h.class, a) || h.findOwn(a) >= 0) {
+			return false
+		}
+	}
+	return true
 }
 
 // jitReadsUpvalues reports whether cl's code reads or assigns a binding it
